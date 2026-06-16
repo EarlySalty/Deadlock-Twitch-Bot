@@ -5,7 +5,8 @@
 //!
 //! # Ablauf (Python-Parität)
 //! Bei `invoice.payment_succeeded` (siehe Hook im Stripe-Webhook):
-//! 1. Streamer aus `twitch_billing_subscriptions` per `stripe_customer_id` lösen.
+//! 1. Streamer aus `twitch_billing_subscriptions` per `stripe_customer_id` lösen
+//!    (Identifier ist `customer_reference`, ein Twitch-Login).
 //! 2. Werbenden Affiliate aus `affiliate_streamer_claims` lösen.
 //! 3. 30 % des bezahlten Brutto als `commission_cents` (Floor) berechnen.
 //! 4. Unter Affiliate-Advisory-Lock idempotent in `affiliate_commissions`
@@ -106,9 +107,12 @@ pub async fn process_commission(
     stripe: Option<&StripeClient>,
     invoice: &InvoicePayment<'_>,
 ) -> Result<CommissionOutcome, sqlx::Error> {
-    // 1. Streamer aus dem Abo lösen.
+    // 1. Streamer aus dem Abo lösen. Der Streamer-Identifier ist
+    // `customer_reference` (ein Twitch-Login, siehe stripe/webhook_apply.rs:351);
+    // eine `twitch_login`-Spalte hat `twitch_billing_subscriptions` nie gehabt.
+    // Normalisierung wie Python: `str(...).strip().lower()`.
     let streamer_login: Option<String> = sqlx::query_scalar(
-        "SELECT LOWER(COALESCE(twitch_login, '')) \
+        "SELECT LOWER(TRIM(COALESCE(customer_reference, ''))) \
          FROM twitch_billing_subscriptions WHERE stripe_customer_id = $1",
     )
     .bind(invoice.stripe_customer_id)
@@ -130,7 +134,8 @@ pub async fn process_commission(
         return Ok(CommissionOutcome::NoAffiliate);
     };
 
-    // 3. Provision (Floor von 30 %).
+    // 3. Provision (Floor von 30 %). Arithmetik in i64 (wie Pythons unbeschränktes
+    // int), gespeichert wird in INTEGER-Spalten (siehe `commission_cents_i32`).
     if invoice.amount_paid_cents <= 0 {
         return Ok(CommissionOutcome::Skipped);
     }
@@ -138,6 +143,10 @@ pub async fn process_commission(
     if commission_cents <= 0 {
         return Ok(CommissionOutcome::Skipped);
     }
+    // `brutto_cents`/`commission_cents` sind INTEGER (INT4) → für den Bind nach
+    // i32 verengen. Cent-Beträge realer Invoices passen weit in i32.
+    let brutto_cents_i32 = i32::try_from(invoice.amount_paid_cents).unwrap_or(i32::MAX);
+    let commission_cents_i32 = i32::try_from(commission_cents).unwrap_or(i32::MAX);
     let now = chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Micros, false);
 
     // 4. Unter Advisory-Lock idempotent einfügen.
@@ -190,8 +199,8 @@ pub async fn process_commission(
     .bind(invoice.stripe_event_id)
     .bind(invoice.invoice_id)
     .bind(invoice.stripe_customer_id)
-    .bind(invoice.amount_paid_cents)
-    .bind(commission_cents)
+    .bind(brutto_cents_i32)
+    .bind(commission_cents_i32)
     .bind(invoice.currency)
     .bind(initial_status)
     .bind(invoice.period_start)
@@ -232,7 +241,8 @@ pub async fn process_commission(
 struct PendingCommission {
     id: i32,
     stripe_event_id: Option<String>,
-    commission_cents: Option<i64>,
+    // INTEGER-Spalte (INT4) → i32.
+    commission_cents: Option<i32>,
     currency: Option<String>,
 }
 
@@ -282,7 +292,7 @@ async fn transfer_commission(
     stripe_account_id: &str,
     commission_id: i32,
     stripe_event_id: &str,
-    commission_cents: i64,
+    commission_cents: i32,
     currency: &str,
 ) -> Result<(), sqlx::Error> {
     let idempotency_key = format!("affiliate-transfer:{commission_id}");
@@ -383,11 +393,24 @@ mod tests {
         admin.close().await;
         let opts = PgConnectOptions::from_str(&dsn).unwrap().options([("search_path", schema)]);
         let pool = PgPoolOptions::new().max_connections(3).connect_with(opts).await.unwrap();
+        // Schema TREU zur echten Migration:
+        //   - twitch_billing_subscriptions: Streamer-Identifier ist `customer_reference`
+        //     (kein `twitch_login`!), Quelle migrations/20260601000000_baseline_schema.sql.
+        //   - affiliate_*: Spalten/Typen aus migrations/20260617030000_baseline_missing_tables.sql
+        //     (commission_cents/brutto_cents = INTEGER, id = INTEGER IDENTITY,
+        //     stripe_event_id UNIQUE). FK-REFERENCES auf affiliate_accounts hier
+        //     weggelassen — orthogonal zum Geld-Pfad und unnötige Fixture-Last.
         sqlx::query(
-            "CREATE TABLE twitch_billing_subscriptions (stripe_customer_id TEXT, twitch_login TEXT)",
+            "CREATE TABLE twitch_billing_subscriptions (\
+                stripe_subscription_id TEXT PRIMARY KEY, stripe_customer_id TEXT, \
+                customer_reference TEXT, status TEXT NOT NULL DEFAULT 'unknown', \
+                updated_at TEXT)",
         ).execute(&pool).await.unwrap();
         sqlx::query(
-            "CREATE TABLE affiliate_streamer_claims (affiliate_twitch_login TEXT, claimed_streamer_login TEXT)",
+            "CREATE TABLE affiliate_streamer_claims (\
+                id INTEGER GENERATED ALWAYS AS IDENTITY PRIMARY KEY, \
+                affiliate_twitch_login TEXT NOT NULL, claimed_streamer_login TEXT NOT NULL, \
+                claimed_at TEXT, UNIQUE (claimed_streamer_login))",
         ).execute(&pool).await.unwrap();
         sqlx::query(
             "CREATE TABLE affiliate_accounts (twitch_login TEXT PRIMARY KEY, stripe_account_id TEXT)",
@@ -419,9 +442,11 @@ mod tests {
     }
 
     async fn seed_claim(pool: &PgPool) {
-        sqlx::query("INSERT INTO twitch_billing_subscriptions (stripe_customer_id, twitch_login) VALUES ('cus_1', 'StreamerX')")
+        // customer_reference trägt den Streamer-Login (gemischte Groß-/Kleinschreibung
+        // → der Code normalisiert per LOWER/TRIM auf 'streamerx').
+        sqlx::query("INSERT INTO twitch_billing_subscriptions (stripe_subscription_id, stripe_customer_id, customer_reference, updated_at) VALUES ('sub_1', 'cus_1', 'StreamerX', '2026-06-01')")
             .execute(pool).await.unwrap();
-        sqlx::query("INSERT INTO affiliate_streamer_claims (affiliate_twitch_login, claimed_streamer_login) VALUES ('aff1', 'streamerx')")
+        sqlx::query("INSERT INTO affiliate_streamer_claims (affiliate_twitch_login, claimed_streamer_login, claimed_at) VALUES ('aff1', 'streamerx', '2026-06-01')")
             .execute(pool).await.unwrap();
     }
 
@@ -435,7 +460,7 @@ mod tests {
     #[tokio::test]
     async fn no_affiliate_when_unclaimed() {
         let Some(pool) = connect("comm_noaff").await else { return };
-        sqlx::query("INSERT INTO twitch_billing_subscriptions (stripe_customer_id, twitch_login) VALUES ('cus_1', 'StreamerX')")
+        sqlx::query("INSERT INTO twitch_billing_subscriptions (stripe_subscription_id, stripe_customer_id, customer_reference, updated_at) VALUES ('sub_1', 'cus_1', 'StreamerX', '2026-06-01')")
             .execute(&pool).await.unwrap();
         let out = process_commission(&pool, None, &invoice("evt", "cus_1", 1000)).await.unwrap();
         assert_eq!(out, CommissionOutcome::NoAffiliate);
@@ -448,7 +473,8 @@ mod tests {
         // 1000 Cent → 30 % = 300 Cent, kein Connect-Konto → pending.
         let out = process_commission(&pool, None, &invoice("evt_1", "cus_1", 1000)).await.unwrap();
         assert_eq!(out, CommissionOutcome::Recorded("pending".into()));
-        let (status, commission): (String, i64) = sqlx::query_as(
+        // commission_cents ist INTEGER (INT4) → i32.
+        let (status, commission): (String, i32) = sqlx::query_as(
             "SELECT status, commission_cents FROM affiliate_commissions WHERE stripe_event_id = 'evt_1'",
         ).fetch_one(&pool).await.unwrap();
         assert_eq!(status, "pending");
@@ -461,7 +487,8 @@ mod tests {
         seed_claim(&pool).await;
         // 999 Cent → 30 % = 299.7 → Floor 299.
         process_commission(&pool, None, &invoice("evt_f", "cus_1", 999)).await.unwrap();
-        let commission: i64 = sqlx::query_scalar(
+        // commission_cents ist INTEGER (INT4) → i32.
+        let commission: i32 = sqlx::query_scalar(
             "SELECT commission_cents FROM affiliate_commissions WHERE stripe_event_id = 'evt_f'",
         ).fetch_one(&pool).await.unwrap();
         assert_eq!(commission, 299);
