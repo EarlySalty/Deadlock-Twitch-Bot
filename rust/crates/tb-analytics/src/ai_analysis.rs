@@ -67,7 +67,10 @@ pub async fn collect_ai_context(
     game_filter: &str,
 ) -> Result<Value, sqlx::Error> {
     let gf = if game_filter == "deadlock" {
-        " AND had_deadlock_in_session = true"
+        // had_deadlock_in_session ist INTEGER (0/1, via i32::from(bool) geschrieben).
+        // `= true` wäre `integer = boolean` → Postgres-Fehler (CI-maskiert durch
+        // BOOLEAN-Fixtures). `= 1` ist der korrekte Integer-Vergleich.
+        " AND had_deadlock_in_session = 1"
     } else {
         ""
     };
@@ -187,7 +190,7 @@ pub async fn collect_ai_context(
                 COALESCE(SUM(CASE WHEN follower_delta > 0 THEN follower_delta ELSE 0 END), 0)::bigint \
            FROM twitch_stream_sessions \
           WHERE LOWER(streamer_login) = $1 AND started_at >= $2 AND ended_at IS NOT NULL \
-            AND had_deadlock_in_session = true",
+            AND had_deadlock_in_session = 1",
     )
     .bind(streamer)
     .bind(since)
@@ -613,7 +616,7 @@ mod tests {
             .unwrap()
             .options([("search_path", schema), ("timezone", "UTC")]);
         let pool = PgPoolOptions::new().max_connections(2).connect_with(opts).await.unwrap();
-        sqlx::query("CREATE TABLE twitch_stream_sessions (id BIGSERIAL PRIMARY KEY, streamer_login TEXT, started_at TIMESTAMPTZ, ended_at TIMESTAMPTZ, duration_seconds INTEGER, avg_viewers REAL, peak_viewers INTEGER, follower_delta INTEGER, retention_10m REAL, dropoff_pct REAL, unique_chatters INTEGER, stream_title TEXT, had_deadlock_in_session BOOLEAN, game_name TEXT, samples INTEGER)")
+        sqlx::query("CREATE TABLE twitch_stream_sessions (id BIGSERIAL PRIMARY KEY, streamer_login TEXT, started_at TIMESTAMPTZ, ended_at TIMESTAMPTZ, duration_seconds INTEGER, avg_viewers REAL, peak_viewers INTEGER, follower_delta INTEGER, retention_10m REAL, dropoff_pct REAL, unique_chatters INTEGER, stream_title TEXT, had_deadlock_in_session INTEGER, game_name TEXT, samples INTEGER)")
             .execute(&pool).await.unwrap();
         Some(pool)
     }
@@ -697,8 +700,8 @@ mod tests {
         let Some(pool) = make_pool("t_ai_ctx").await else { return };
         sqlx::query(
             "INSERT INTO twitch_stream_sessions (streamer_login, started_at, ended_at, duration_seconds, avg_viewers, peak_viewers, follower_delta, retention_10m, dropoff_pct, unique_chatters, stream_title, had_deadlock_in_session, game_name, samples) VALUES \
-            ('nani', TIMESTAMPTZ '2026-06-10 14:00+00', TIMESTAMPTZ '2026-06-10 16:00+00', 7200, 50, 100, 20, 0.8, 0.1, 10, 'Deadlock Grind', true, 'Deadlock', 5), \
-            ('nani', TIMESTAMPTZ '2026-06-11 18:00+00', TIMESTAMPTZ '2026-06-11 19:00+00', 3600, 30, 60, 5, 0.6, 0.2, 8, 'Chill', false, 'Just Chatting', 1)",
+            ('nani', TIMESTAMPTZ '2026-06-10 14:00+00', TIMESTAMPTZ '2026-06-10 16:00+00', 7200, 50, 100, 20, 0.8, 0.1, 10, 'Deadlock Grind', 1, 'Deadlock', 5), \
+            ('nani', TIMESTAMPTZ '2026-06-11 18:00+00', TIMESTAMPTZ '2026-06-11 19:00+00', 3600, 30, 60, 5, 0.6, 0.2, 8, 'Chill', 0, 'Just Chatting', 1)",
         )
         .execute(&pool)
         .await
@@ -745,8 +748,8 @@ mod tests {
         let Some(pool) = make_pool("t_ai_ctx_dl").await else { return };
         sqlx::query(
             "INSERT INTO twitch_stream_sessions (streamer_login, started_at, ended_at, duration_seconds, avg_viewers, peak_viewers, follower_delta, retention_10m, dropoff_pct, unique_chatters, stream_title, had_deadlock_in_session, game_name, samples) VALUES \
-            ('nani', NOW()-INTERVAL '1 day', NOW(), 7200, 50, 100, 20, 0.8, 0.1, 10, 'A', true, 'Deadlock', 5), \
-            ('nani', NOW()-INTERVAL '2 day', NOW(), 3600, 30, 60, 5, 0.6, 0.2, 8, 'B', false, 'Just Chatting', 1)",
+            ('nani', NOW()-INTERVAL '1 day', NOW(), 7200, 50, 100, 20, 0.8, 0.1, 10, 'A', 1, 'Deadlock', 5), \
+            ('nani', NOW()-INTERVAL '2 day', NOW(), 3600, 30, 60, 5, 0.6, 0.2, 8, 'B', 0, 'Just Chatting', 1)",
         )
         .execute(&pool)
         .await
