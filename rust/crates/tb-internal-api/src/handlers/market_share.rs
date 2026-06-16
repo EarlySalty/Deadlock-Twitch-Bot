@@ -333,7 +333,7 @@ mod tests {
                 ts_utc       TIMESTAMPTZ NOT NULL,
                 streamer     TEXT NOT NULL,
                 viewer_count INTEGER,
-                is_partner   BOOLEAN DEFAULT FALSE,
+                is_partner   INTEGER DEFAULT 0,
                 game_name    TEXT,
                 stream_title TEXT,
                 tags         TEXT,
@@ -393,8 +393,8 @@ mod tests {
             INSERT INTO twitch_stats_category
                 (ts_utc, streamer, viewer_count, is_partner, tags, language)
             VALUES
-                (NOW(), 'partner_a', 25, TRUE,  '["Deutsch"]', 'de'),
-                (NOW(), 'big_intl',  75, FALSE, '["English"]', 'en')
+                (NOW(), 'partner_a', 25, 1, '["Deutsch"]', 'de'),
+                (NOW(), 'big_intl',  75, 0, '["English"]', 'en')
             "#,
         )
         .execute(&pool)
