@@ -2473,6 +2473,7 @@ dependencies = [
 name = "tb-engagement"
 version = "0.1.0"
 dependencies = [
+ "async-trait",
  "chrono",
  "rand 0.8.6",
  "regex",
@@ -2481,6 +2482,7 @@ dependencies = [
  "sqlx",
  "tb-crypto",
  "tb-llm",
+ "thiserror 1.0.69",
  "tokio",
  "tracing",
  "wiremock",

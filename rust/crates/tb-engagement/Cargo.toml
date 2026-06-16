@@ -4,11 +4,13 @@ version = "0.1.0"
 edition.workspace = true
 
 [dependencies]
+async-trait = { workspace = true }
 chrono     = { workspace = true }
 regex      = { workspace = true }
 reqwest    = { workspace = true, features = ["multipart"] }
 serde_json = { workspace = true }
 sqlx       = { workspace = true }
+thiserror  = { workspace = true }
 tracing    = { workspace = true }
 rand       = { workspace = true }
 tokio      = { workspace = true, features = ["time", "rt", "net", "io-util", "process", "fs"] }
