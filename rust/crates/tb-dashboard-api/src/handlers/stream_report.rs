@@ -117,7 +117,7 @@ pub async fn stream_report_handler(
         DashboardAuthLevel::None => {
             return (StatusCode::UNAUTHORIZED, Json(json!({"error": "unauthorized"}))).into_response();
         }
-        DashboardAuthLevel::Localhost | DashboardAuthLevel::Admin => {}
+        DashboardAuthLevel::Localhost | DashboardAuthLevel::Admin { .. } => {}
         DashboardAuthLevel::Partner { twitch_login, .. } => {
             if streamer != twitch_login.to_lowercase() {
                 return (StatusCode::FORBIDDEN, Json(json!({"error": "forbidden"}))).into_response();
@@ -323,7 +323,7 @@ pub async fn stream_report_rate_handler(
     // `twitch_login or auth_level or "unknown"`); None → 401.
     let rated_by = match &auth {
         DashboardAuthLevel::Partner { twitch_login, .. } => twitch_login.trim().to_lowercase(),
-        DashboardAuthLevel::Admin => "admin".to_string(),
+        DashboardAuthLevel::Admin { .. } => "admin".to_string(),
         DashboardAuthLevel::Localhost => "localhost".to_string(),
         DashboardAuthLevel::None => {
             return (StatusCode::UNAUTHORIZED, Json(json!({"error": "unauthorized"}))).into_response();
@@ -520,7 +520,7 @@ pub async fn stream_report_ab_vote_post(
 
     let voted_by = match &auth {
         DashboardAuthLevel::Partner { twitch_login, .. } => twitch_login.trim().to_lowercase(),
-        DashboardAuthLevel::Admin => "admin".to_string(),
+        DashboardAuthLevel::Admin { .. } => "admin".to_string(),
         DashboardAuthLevel::Localhost => "localhost".to_string(),
         DashboardAuthLevel::None => {
             return (StatusCode::UNAUTHORIZED, Json(json!({"error": "unauthorized"}))).into_response();

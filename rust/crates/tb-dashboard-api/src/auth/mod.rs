@@ -108,7 +108,7 @@ pub async fn has_extended_entitlement(pool: &PgPool, login: &str, user_id: &str)
 /// 403 trägt `error=plan_required` + `required_entitlements`.
 pub async fn extended_gate(pool: &PgPool, auth: &DashboardAuthLevel) -> Option<Response> {
     match auth {
-        DashboardAuthLevel::Localhost | DashboardAuthLevel::Admin => None,
+        DashboardAuthLevel::Localhost | DashboardAuthLevel::Admin { .. } => None,
         DashboardAuthLevel::None => Some(unauthorized_v2_response()),
         DashboardAuthLevel::Partner { twitch_login, twitch_user_id, .. } => {
             if has_extended_entitlement(pool, twitch_login, twitch_user_id).await {

@@ -57,7 +57,7 @@ pub async fn ai_history_handler(
         }
     };
     // AI-Plan-Gate: Localhost/Admin bypass; sonst muss der Streamer einen AI-Plan haben.
-    let privileged = matches!(auth, DashboardAuthLevel::Localhost | DashboardAuthLevel::Admin);
+    let privileged = matches!(auth, DashboardAuthLevel::Localhost | DashboardAuthLevel::Admin { .. });
     if !privileged && ai_plan_model(&pool, &streamer).await.is_none() {
         return (
             StatusCode::FORBIDDEN,

@@ -88,7 +88,7 @@ pub async fn ai_analysis_handler(
     }
 
     // Modellwahl: Localhost/Admin → Opus; sonst Plan des Streamers.
-    let ai_model: &str = if matches!(auth, DashboardAuthLevel::Localhost | DashboardAuthLevel::Admin) {
+    let ai_model: &str = if matches!(auth, DashboardAuthLevel::Localhost | DashboardAuthLevel::Admin { .. }) {
         AI_MODEL_OPUS
     } else {
         match plan_ai_model(&pool, &streamer).await {

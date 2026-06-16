@@ -75,7 +75,7 @@ pub fn build_public_router(pool: PgPool) -> Router {
 /// Auth-Level wird per Extension eingesetzt — `AuthLevel` als `FromRequestParts`
 /// liest den Token selbst aus der Extension.
 pub fn build_authed_router(pool: PgPool, token: String) -> Router {
-    use handlers::{ads_schedule, ai_analysis, ai_chat, ai_history, audience, audience_demographics, auth_status, billing, category_activity, category_comparison, category_leaderboard, category_timings, chat_analytics, chat_content_analysis, chat_deep_minimax, chat_hype_timeline, chat_social_graph, coaching, engagement_settings, exp_analytics, follower_funnel, internal_home, leaderboard, loyalty_curve, lurker_analysis, lurker_tax_settings, monetization, overview, performance, raid_analytics, rankings, retention_curve, session_detail, silent_settings, social_media, spa, stream_report, streamers, tag_analysis, title_performance, viewer_timeline, viewers, watch_time};
+    use handlers::{ads_schedule, ai_analysis, ai_chat, ai_history, audience, audience_demographics, auth_status, billing, category_activity, category_comparison, category_leaderboard, category_timings, chat_analytics, chat_content_analysis, chat_deep_minimax, chat_hype_timeline, chat_social_graph, coaching, engagement_mode, engagement_settings, exp_analytics, follower_funnel, internal_home, leaderboard, loyalty_curve, lurker_analysis, lurker_tax_settings, monetization, overview, performance, raid_analytics, rankings, retention_curve, session_detail, silent_settings, social_media, spa, stream_report, streamers, tag_analysis, title_performance, viewer_timeline, viewers, watch_time};
 
     Router::new()
         .route(
@@ -185,6 +185,14 @@ pub fn build_authed_router(pool: PgPool, token: String) -> Router {
         .route(
             "/twitch/api/v2/engagement/log",
             get(engagement_settings::get_log_handler),
+        )
+        // B19-dash-mode-toggle: Output-Modus der Engagement-KI (off/shadow/live) auf
+        // twitch_engagement_settings.output_mode. Partner setzt den eigenen Kanal,
+        // Admin/Localhost via ?channel=. Orthogonal zum enabled-Toggle (shadow/live
+        // greift erst bei enabled=TRUE).
+        .route(
+            "/twitch/api/v2/engagement/mode",
+            get(engagement_mode::get_handler).post(engagement_mode::post_handler),
         )
         // Onboarding des Engagement-Sende-Accounts (Smoke-Account): start =
         // Admin-only Authorize-Link, callback = öffentlich (Security via

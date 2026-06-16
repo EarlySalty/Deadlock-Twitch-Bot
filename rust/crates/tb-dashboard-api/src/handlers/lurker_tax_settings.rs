@@ -48,7 +48,7 @@ fn resolve_target(
         DashboardAuthLevel::Partner { twitch_login, twitch_user_id, .. } => {
             Ok((twitch_login.to_lowercase(), twitch_user_id.trim().to_string()))
         }
-        DashboardAuthLevel::Admin | DashboardAuthLevel::Localhost => {
+        DashboardAuthLevel::Admin { .. } | DashboardAuthLevel::Localhost => {
             match streamer.as_deref().map(str::trim).filter(|s| !s.is_empty()) {
                 Some(s) => Ok((s.to_lowercase(), String::new())),
                 None => Err((
@@ -251,7 +251,7 @@ mod tests {
         assert_eq!(s, StatusCode::UNAUTHORIZED);
         // Admin ohne ?streamer= → 400.
         let (s, _) = body_of(
-            get_handler(DashboardAuthLevel::Admin, State(pool), Query(LurkerTaxQuery::default())).await,
+            get_handler(DashboardAuthLevel::admin(), State(pool), Query(LurkerTaxQuery::default())).await,
         )
         .await;
         assert_eq!(s, StatusCode::BAD_REQUEST);

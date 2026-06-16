@@ -43,6 +43,7 @@ pub mod coaching;
 pub mod demo;
 pub mod discord_link;
 pub mod leaderboard;
+pub mod engagement_mode;
 pub mod engagement_settings;
 pub mod exp_analytics;
 pub mod loyalty_curve;

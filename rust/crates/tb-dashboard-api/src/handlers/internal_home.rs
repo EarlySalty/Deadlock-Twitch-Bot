@@ -169,7 +169,7 @@ fn resolve_identity(
                 display_name: display,
             })
         }
-        DashboardAuthLevel::Localhost | DashboardAuthLevel::Admin => {
+        DashboardAuthLevel::Localhost | DashboardAuthLevel::Admin { .. } => {
             if override_login.is_empty() {
                 // Python: keine Twitch-Session vorhanden → auth_required/streamer_session_required.
                 return Err(unauthorized_json(
@@ -1964,7 +1964,7 @@ pub async fn changelog_handler(
 ) -> Response {
     // Auth (api_v2.py:1295-1315): none → 401, partner → 403, priv → ok.
     match auth {
-        DashboardAuthLevel::Localhost | DashboardAuthLevel::Admin => {}
+        DashboardAuthLevel::Localhost | DashboardAuthLevel::Admin { .. } => {}
         DashboardAuthLevel::None => {
             return (
                 StatusCode::UNAUTHORIZED,

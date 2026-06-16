@@ -41,7 +41,7 @@ fn window_for_entitlements(entitlements: &[&str]) -> &'static str {
 /// Lesefenster auflösen: Localhost/Admin → `full`; sonst Plan des Streamers prüfen.
 /// Bei Plan-Lookup-Fehler konservativ `last_stream` (nie mehr Daten zeigen als erlaubt).
 async fn resolve_read_window(pool: &PgPool, auth: &DashboardAuthLevel, streamer: &str) -> &'static str {
-    if matches!(auth, DashboardAuthLevel::Localhost | DashboardAuthLevel::Admin) {
+    if matches!(auth, DashboardAuthLevel::Localhost | DashboardAuthLevel::Admin { .. }) {
         return "full";
     }
     match tb_analytics::plan::resolve_plan_snapshot(pool, streamer, "").await {

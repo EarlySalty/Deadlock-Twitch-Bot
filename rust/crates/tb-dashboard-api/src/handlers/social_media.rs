@@ -100,7 +100,7 @@ pub fn resolve_streamer_scope(
             }
             Ok(Some(session))
         }
-        DashboardAuthLevel::Localhost | DashboardAuthLevel::Admin => {
+        DashboardAuthLevel::Localhost | DashboardAuthLevel::Admin { .. } => {
             if required && requested.is_none() {
                 return Err((StatusCode::BAD_REQUEST, "streamer parameter required").into_response());
             }
@@ -399,7 +399,7 @@ pub async fn apply_template_handler(
 /// None → 401.
 fn require_admin(auth: &DashboardAuthLevel) -> Result<(), Response> {
     match auth {
-        DashboardAuthLevel::Localhost | DashboardAuthLevel::Admin => Ok(()),
+        DashboardAuthLevel::Localhost | DashboardAuthLevel::Admin { .. } => Ok(()),
         DashboardAuthLevel::Partner { .. } => Err(forbidden("Admin access required.")),
         DashboardAuthLevel::None => Err(unauthorized()),
     }
@@ -1879,7 +1879,7 @@ mod tests {
             display_name: "NaNi".into(),
         };
         assert_eq!(editor_user_id(&p).as_deref(), Some("777"));
-        assert_eq!(editor_user_id(&DashboardAuthLevel::Admin), None);
+        assert_eq!(editor_user_id(&DashboardAuthLevel::admin()), None);
         assert_eq!(editor_user_id(&DashboardAuthLevel::Localhost), None);
         assert_eq!(editor_user_id(&DashboardAuthLevel::None), None);
         // Leere/whitespace user_id → None.
@@ -1898,8 +1898,8 @@ mod tests {
         assert_eq!(resolve_streamer_scope(&partner("Nani"), Some("nani"), false).unwrap(), Some("nani".to_string()));
         assert!(resolve_streamer_scope(&partner("Nani"), Some("other"), false).is_err());
         // Admin: frei wählbar / None.
-        assert_eq!(resolve_streamer_scope(&DashboardAuthLevel::Admin, None, false).unwrap(), None);
-        assert_eq!(resolve_streamer_scope(&DashboardAuthLevel::Admin, Some("xyz"), false).unwrap(), Some("xyz".to_string()));
+        assert_eq!(resolve_streamer_scope(&DashboardAuthLevel::admin(), None, false).unwrap(), None);
+        assert_eq!(resolve_streamer_scope(&DashboardAuthLevel::admin(), Some("xyz"), false).unwrap(), Some("xyz".to_string()));
         // required ohne requested → 400.
         assert!(resolve_streamer_scope(&DashboardAuthLevel::Localhost, None, true).is_err());
         // None-Auth → Fehler (401).
@@ -1909,7 +1909,7 @@ mod tests {
     #[test]
     fn index_render_label() {
         // Admin → „nicht gesetzt".
-        let html = render_index(&DashboardAuthLevel::Admin).unwrap();
+        let html = render_index(&DashboardAuthLevel::admin()).unwrap();
         assert!(html.contains("nicht gesetzt"));
         // Partner → @login (kleingeschrieben).
         let html = render_index(&partner("Nani")).unwrap();
@@ -1994,7 +1994,7 @@ mod tests {
 
         // Happy-Path: Admin sieht den Clip.
         let resp = clips_handler(
-            DashboardAuthLevel::Admin,
+            DashboardAuthLevel::admin(),
             State(pool.clone()),
             Query(ClipsQuery { streamer: None, status: None, limit: None }),
         )
@@ -2007,7 +2007,7 @@ mod tests {
 
         // Ungültiges Limit → 400.
         let resp = clips_handler(
-            DashboardAuthLevel::Admin,
+            DashboardAuthLevel::admin(),
             State(pool.clone()),
             Query(ClipsQuery { streamer: None, status: None, limit: Some("999".into()) }),
         )
@@ -2052,7 +2052,7 @@ mod tests {
 
         // Admin ohne streamer (required) → 400.
         let resp = create_template_handler(
-            DashboardAuthLevel::Admin,
+            DashboardAuthLevel::admin(),
             State(pool.clone()),
             Json(CreateTemplateBody { streamer: None, template_name: Some("X".into()), description: Some("Y".into()), hashtags: vec![], is_default: false }),
         )
@@ -2107,14 +2107,14 @@ mod tests {
         sqlx::query("INSERT INTO clip_templates_streamer (streamer_login, template_name, description_template, hashtags, is_default) VALUES ('nani', 'S1', 'd', '[\"x\"]', 1), ('nani', 'S2', 'd', '[]', 0)").execute(&pool).await.unwrap();
 
         // global: alle 2, hashtags als Array.
-        let resp = templates_global_handler(DashboardAuthLevel::Admin, State(pool.clone()), Query(CategoryQuery { category: None })).await;
+        let resp = templates_global_handler(DashboardAuthLevel::admin(), State(pool.clone()), Query(CategoryQuery { category: None })).await;
         let v = body_json(resp).await;
         assert_eq!(v["templates"].as_array().unwrap().len(), 2);
         let g1 = &v["templates"][0]; // usage_count DESC → G1 (5) zuerst
         assert_eq!(g1["template_name"], "G1");
         assert_eq!(g1["hashtags"], json!(["a", "b"]));
         // Kategorie-Filter.
-        let resp = templates_global_handler(DashboardAuthLevel::Admin, State(pool.clone()), Query(CategoryQuery { category: Some("gaming".into()) })).await;
+        let resp = templates_global_handler(DashboardAuthLevel::admin(), State(pool.clone()), Query(CategoryQuery { category: Some("gaming".into()) })).await;
         assert_eq!(body_json(resp).await["templates"].as_array().unwrap().len(), 1);
 
         // streamer: Partner nani sieht 2, is_default als int (1/0), default zuerst.
@@ -2146,7 +2146,7 @@ mod tests {
         sqlx::query("INSERT INTO twitch_streamers (twitch_login, twitch_user_id) VALUES ('nani', '1')").execute(&pool).await.unwrap();
 
         // GET ohne gespeichertes Layout → Default + is_default true.
-        let resp = streamer_layout_get_handler(DashboardAuthLevel::Admin, State(pool.clone()), Query(StreamerLoginQuery { streamer_login: Some("nani".into()) })).await;
+        let resp = streamer_layout_get_handler(DashboardAuthLevel::admin(), State(pool.clone()), Query(StreamerLoginQuery { streamer_login: Some("nani".into()) })).await;
         assert_eq!(resp.status(), StatusCode::OK);
         let v = body_json(resp).await;
         assert_eq!(v["is_default"], true);
@@ -2154,7 +2154,7 @@ mod tests {
 
         // PUT setzt ein Layout (mode stacked).
         let resp = streamer_layout_put_handler(
-            DashboardAuthLevel::Admin,
+            DashboardAuthLevel::admin(),
             State(pool.clone()),
             Json(json!({ "streamer_login": "nani", "layout": valid_layout(), "mode": "stacked", "cam_enabled": false })),
         )
@@ -2163,20 +2163,20 @@ mod tests {
         assert_eq!(body_json(resp).await["mode"], "stacked");
 
         // GET jetzt → is_default false, mode stacked.
-        let resp = streamer_layout_get_handler(DashboardAuthLevel::Admin, State(pool.clone()), Query(StreamerLoginQuery { streamer_login: Some("nani".into()) })).await;
+        let resp = streamer_layout_get_handler(DashboardAuthLevel::admin(), State(pool.clone()), Query(StreamerLoginQuery { streamer_login: Some("nani".into()) })).await;
         let v = body_json(resp).await;
         assert_eq!(v["is_default"], false);
         assert_eq!(v["mode"], "stacked");
         assert_eq!(v["cam_enabled"], false);
 
         // Unbekannter Streamer → 404.
-        let resp = streamer_layout_get_handler(DashboardAuthLevel::Admin, State(pool.clone()), Query(StreamerLoginQuery { streamer_login: Some("ghost".into()) })).await;
+        let resp = streamer_layout_get_handler(DashboardAuthLevel::admin(), State(pool.clone()), Query(StreamerLoginQuery { streamer_login: Some("ghost".into()) })).await;
         assert_eq!(resp.status(), StatusCode::NOT_FOUND);
         // Partner → 403.
         let resp = streamer_layout_get_handler(partner("nani"), State(pool.clone()), Query(StreamerLoginQuery { streamer_login: Some("nani".into()) })).await;
         assert_eq!(resp.status(), StatusCode::FORBIDDEN);
         // PUT ohne layout-Key → 400 invalid_layout.
-        let resp = streamer_layout_put_handler(DashboardAuthLevel::Admin, State(pool.clone()), Json(json!({ "streamer_login": "nani" }))).await;
+        let resp = streamer_layout_put_handler(DashboardAuthLevel::admin(), State(pool.clone()), Json(json!({ "streamer_login": "nani" }))).await;
         assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
     }
 
@@ -2186,22 +2186,22 @@ mod tests {
         let clip: i32 = sqlx::query_scalar("INSERT INTO twitch_clips_social_media (clip_id, streamer_login) VALUES ('c1', 'nani') RETURNING id").fetch_one(&pool).await.unwrap();
 
         // Override setzen.
-        let resp = clip_layout_put_handler(DashboardAuthLevel::Admin, State(pool.clone()), Path(clip.to_string()), Json(json!({ "layout": valid_layout() }))).await;
+        let resp = clip_layout_put_handler(DashboardAuthLevel::admin(), State(pool.clone()), Path(clip.to_string()), Json(json!({ "layout": valid_layout() }))).await;
         assert_eq!(resp.status(), StatusCode::OK);
         let v = body_json(resp).await;
         assert!(!v["layout_override"].is_null());
         assert!(v["effective_layout"]["version"] == 1);
 
         // Override löschen (layout null).
-        let resp = clip_layout_put_handler(DashboardAuthLevel::Admin, State(pool.clone()), Path(clip.to_string()), Json(json!({ "layout": Value::Null }))).await;
+        let resp = clip_layout_put_handler(DashboardAuthLevel::admin(), State(pool.clone()), Path(clip.to_string()), Json(json!({ "layout": Value::Null }))).await;
         assert_eq!(resp.status(), StatusCode::OK);
         assert!(body_json(resp).await["layout_override"].is_null());
 
         // Ungültige clip_db_id (Pfad) → 400.
-        let resp = clip_layout_put_handler(DashboardAuthLevel::Admin, State(pool.clone()), Path("abc".into()), Json(json!({}))).await;
+        let resp = clip_layout_put_handler(DashboardAuthLevel::admin(), State(pool.clone()), Path("abc".into()), Json(json!({}))).await;
         assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
         // Nicht existierender Clip → 404.
-        let resp = clip_layout_put_handler(DashboardAuthLevel::Admin, State(pool.clone()), Path("99999".into()), Json(json!({}))).await;
+        let resp = clip_layout_put_handler(DashboardAuthLevel::admin(), State(pool.clone()), Path("99999".into()), Json(json!({}))).await;
         assert_eq!(resp.status(), StatusCode::NOT_FOUND);
     }
 
@@ -2211,7 +2211,7 @@ mod tests {
 
         // Upsert: gültiger Eintrag (Kategorie hero).
         let resp = vocab_upsert_handler(
-            DashboardAuthLevel::Admin,
+            DashboardAuthLevel::admin(),
             State(pool.clone()),
             Json(json!({ "term": "Haze", "canonical": "Haze", "category": "hero", "aliases": ["hayz"], "weight": 3 })),
         )
@@ -2222,29 +2222,29 @@ mod tests {
         assert_eq!(v["weight"], 3);
 
         // Ungültige Kategorie → 400 invalid_vocab.
-        let resp = vocab_upsert_handler(DashboardAuthLevel::Admin, State(pool.clone()), Json(json!({ "term": "x", "canonical": "X", "category": "bogus" }))).await;
+        let resp = vocab_upsert_handler(DashboardAuthLevel::admin(), State(pool.clone()), Json(json!({ "term": "x", "canonical": "X", "category": "bogus" }))).await;
         assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
         // Nicht-Objekt-Body → 400 invalid_payload.
-        let resp = vocab_upsert_handler(DashboardAuthLevel::Admin, State(pool.clone()), Json(json!([1, 2]))).await;
+        let resp = vocab_upsert_handler(DashboardAuthLevel::admin(), State(pool.clone()), Json(json!([1, 2]))).await;
         assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
 
         // List: findet den Eintrag.
-        let resp = vocab_list_handler(DashboardAuthLevel::Admin, State(pool.clone()), Query(VocabListQuery { page: None, page_size: None, category: None, q: None })).await;
+        let resp = vocab_list_handler(DashboardAuthLevel::admin(), State(pool.clone()), Query(VocabListQuery { page: None, page_size: None, category: None, q: None })).await;
         let v = body_json(resp).await;
         assert_eq!(v["total"], 1);
         assert_eq!(v["items"][0]["term"], "haze");
         // Ungültige Pagination → 400.
-        let resp = vocab_list_handler(DashboardAuthLevel::Admin, State(pool.clone()), Query(VocabListQuery { page: Some("abc".into()), page_size: None, category: None, q: None })).await;
+        let resp = vocab_list_handler(DashboardAuthLevel::admin(), State(pool.clone()), Query(VocabListQuery { page: Some("abc".into()), page_size: None, category: None, q: None })).await;
         assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
 
         // Delete: vorhanden → 204, dann → 404.
-        let resp = vocab_delete_handler(DashboardAuthLevel::Admin, State(pool.clone()), Path("haze".into())).await;
+        let resp = vocab_delete_handler(DashboardAuthLevel::admin(), State(pool.clone()), Path("haze".into())).await;
         assert_eq!(resp.status(), StatusCode::NO_CONTENT);
-        let resp = vocab_delete_handler(DashboardAuthLevel::Admin, State(pool.clone()), Path("haze".into())).await;
+        let resp = vocab_delete_handler(DashboardAuthLevel::admin(), State(pool.clone()), Path("haze".into())).await;
         assert_eq!(resp.status(), StatusCode::NOT_FOUND);
 
         // Seed nur Slang (include_api=false → kein Netzwerk) → 25 geschrieben.
-        let resp = vocab_seed_handler(DashboardAuthLevel::Admin, State(pool.clone()), "{\"include_api\": false}".to_string()).await;
+        let resp = vocab_seed_handler(DashboardAuthLevel::admin(), State(pool.clone()), "{\"include_api\": false}".to_string()).await;
         assert_eq!(resp.status(), StatusCode::OK);
         let v = body_json(resp).await;
         assert_eq!(v["written"], 25);
@@ -2300,7 +2300,7 @@ mod tests {
         let clip: i32 = sqlx::query_scalar("INSERT INTO twitch_clips_social_media (clip_id, streamer_login) VALUES ('c1', 'nani') RETURNING id").fetch_one(&pool).await.unwrap();
 
         // Admin, eine Plattform → ein queue_id.
-        let resp = queue_upload_handler(DashboardAuthLevel::Admin, State(pool.clone()), Query(StreamerQuery { streamer: None }), Json(queue_body(clip, json!(["tiktok"])))).await;
+        let resp = queue_upload_handler(DashboardAuthLevel::admin(), State(pool.clone()), Query(StreamerQuery { streamer: None }), Json(queue_body(clip, json!(["tiktok"])))).await;
         assert_eq!(resp.status(), StatusCode::OK);
         let v = body_json(resp).await;
         assert_eq!(v["queued"].as_array().unwrap().len(), 1);
@@ -2308,15 +2308,15 @@ mod tests {
         assert!(v["queued"][0]["queue_id"].is_number());
 
         // "all" → 3 Plattformen.
-        let resp = queue_upload_handler(DashboardAuthLevel::Admin, State(pool.clone()), Query(StreamerQuery { streamer: None }), Json(queue_body(clip, json!("all")))).await;
+        let resp = queue_upload_handler(DashboardAuthLevel::admin(), State(pool.clone()), Query(StreamerQuery { streamer: None }), Json(queue_body(clip, json!("all")))).await;
         assert_eq!(body_json(resp).await["queued"].as_array().unwrap().len(), 3);
 
         // Ungültige Plattform → error queue_failed (kein Crash).
-        let resp = queue_upload_handler(DashboardAuthLevel::Admin, State(pool.clone()), Query(StreamerQuery { streamer: None }), Json(queue_body(clip, json!(["snapchat"])))).await;
+        let resp = queue_upload_handler(DashboardAuthLevel::admin(), State(pool.clone()), Query(StreamerQuery { streamer: None }), Json(queue_body(clip, json!(["snapchat"])))).await;
         assert_eq!(body_json(resp).await["queued"][0]["error"], "queue_failed");
 
         // Fehlende clip_id → 400.
-        let resp = queue_upload_handler(DashboardAuthLevel::Admin, State(pool.clone()), Query(StreamerQuery { streamer: None }), Json(QueueUploadBody { clip_id: None, platforms: json!(["tiktok"]), title: None, description: None, hashtags: None, priority: 0, streamer: None })).await;
+        let resp = queue_upload_handler(DashboardAuthLevel::admin(), State(pool.clone()), Query(StreamerQuery { streamer: None }), Json(QueueUploadBody { clip_id: None, platforms: json!(["tiktok"]), title: None, description: None, hashtags: None, priority: 0, streamer: None })).await;
         assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
 
         // Partner mit fremdem Clip → 403.
@@ -2339,17 +2339,17 @@ mod tests {
         sqlx::query("INSERT INTO twitch_clips_social_media (clip_id, streamer_login, status, created_at, discarded_at) VALUES ('b', 'nani', 'discarded', '2026-06-09', NOW())").execute(&pool).await.unwrap();
 
         // Liste: total 2, neuester (A) zuerst.
-        let resp = admin_clips_handler(DashboardAuthLevel::Admin, State(pool.clone()), Query(clips_query(None))).await;
+        let resp = admin_clips_handler(DashboardAuthLevel::admin(), State(pool.clone()), Query(clips_query(None))).await;
         let v = body_json(resp).await;
         assert_eq!(v["total"], 2);
         assert_eq!(v["items"][0]["clip_db_id"], a);
 
         // Status-Filter "discarded" → nur B.
-        let resp = admin_clips_handler(DashboardAuthLevel::Admin, State(pool.clone()), Query(clips_query(Some("discarded")))).await;
+        let resp = admin_clips_handler(DashboardAuthLevel::admin(), State(pool.clone()), Query(clips_query(Some("discarded")))).await;
         assert_eq!(body_json(resp).await["total"], 1);
 
         // Detail von A: Merge aus Enrichment + Approval + platform_status + effective_layout.
-        let resp = admin_clip_detail_handler(DashboardAuthLevel::Admin, State(pool.clone()), Path(a.to_string())).await;
+        let resp = admin_clip_detail_handler(DashboardAuthLevel::admin(), State(pool.clone()), Path(a.to_string())).await;
         let v = body_json(resp).await;
         assert_eq!(v["enrichment_status"], "done");
         assert_eq!(v["enrichment_summary"]["top_hashtags"], json!(["a", "b", "c"])); // dedup
@@ -2360,14 +2360,14 @@ mod tests {
         assert!(v["effective_layout"]["version"] == 1);
 
         // Discard von A → discarded_at gesetzt im zurückgegebenen Record.
-        let resp = admin_clip_discard_handler(DashboardAuthLevel::Admin, State(pool.clone()), Path(a.to_string())).await;
+        let resp = admin_clip_discard_handler(DashboardAuthLevel::admin(), State(pool.clone()), Path(a.to_string())).await;
         assert_eq!(resp.status(), StatusCode::OK);
         assert!(!body_json(resp).await["discarded_at"].is_null());
 
         // Fehlerpfade.
-        assert_eq!(admin_clip_detail_handler(DashboardAuthLevel::Admin, State(pool.clone()), Path("abc".into())).await.status(), StatusCode::BAD_REQUEST);
-        assert_eq!(admin_clip_detail_handler(DashboardAuthLevel::Admin, State(pool.clone()), Path("99999".into())).await.status(), StatusCode::NOT_FOUND);
-        assert_eq!(admin_clip_discard_handler(DashboardAuthLevel::Admin, State(pool.clone()), Path("99999".into())).await.status(), StatusCode::NOT_FOUND);
+        assert_eq!(admin_clip_detail_handler(DashboardAuthLevel::admin(), State(pool.clone()), Path("abc".into())).await.status(), StatusCode::BAD_REQUEST);
+        assert_eq!(admin_clip_detail_handler(DashboardAuthLevel::admin(), State(pool.clone()), Path("99999".into())).await.status(), StatusCode::NOT_FOUND);
+        assert_eq!(admin_clip_discard_handler(DashboardAuthLevel::admin(), State(pool.clone()), Path("99999".into())).await.status(), StatusCode::NOT_FOUND);
         // Partner → 403.
         assert_eq!(admin_clips_handler(partner("nani"), State(pool.clone()), Query(clips_query(None))).await.status(), StatusCode::FORBIDDEN);
     }
@@ -2379,11 +2379,11 @@ mod tests {
         sqlx::query("INSERT INTO social_media_clip_enrichment (clip_db_id, title_tiktok) VALUES ($1, 'TT')").bind(clip).execute(&pool).await.unwrap();
 
         // approval-get vor Entscheidung → approval null.
-        let resp = approval_get_handler(DashboardAuthLevel::Admin, State(pool.clone()), Path(clip.to_string())).await;
+        let resp = approval_get_handler(DashboardAuthLevel::admin(), State(pool.clone()), Path(clip.to_string())).await;
         assert!(body_json(resp).await["approval"].is_null());
 
         // decision approve mit tiktok → state approved + Queue.
-        let resp = approval_decision_handler(DashboardAuthLevel::Admin, State(pool.clone()), Path(clip.to_string()), "{\"decision\":\"approve\",\"platforms\":[\"tiktok\"]}".into()).await;
+        let resp = approval_decision_handler(DashboardAuthLevel::admin(), State(pool.clone()), Path(clip.to_string()), "{\"decision\":\"approve\",\"platforms\":[\"tiktok\"]}".into()).await;
         assert_eq!(resp.status(), StatusCode::OK);
         let v = body_json(resp).await;
         assert_eq!(v["approval"]["state"], "approved");
@@ -2391,25 +2391,25 @@ mod tests {
         assert!(!v["clip"].is_null());
 
         // decision approve ohne Plattform + ohne Auto-Approve → 400 invalid_decision.
-        let resp = approval_decision_handler(DashboardAuthLevel::Admin, State(pool.clone()), Path(clip.to_string()), "{\"decision\":\"approve\",\"platforms\":[]}".into()).await;
+        let resp = approval_decision_handler(DashboardAuthLevel::admin(), State(pool.clone()), Path(clip.to_string()), "{\"decision\":\"approve\",\"platforms\":[]}".into()).await;
         assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
         // platforms kein Array → 400.
-        let resp = approval_decision_handler(DashboardAuthLevel::Admin, State(pool.clone()), Path(clip.to_string()), "{\"decision\":\"approve\",\"platforms\":\"tiktok\"}".into()).await;
+        let resp = approval_decision_handler(DashboardAuthLevel::admin(), State(pool.clone()), Path(clip.to_string()), "{\"decision\":\"approve\",\"platforms\":\"tiktok\"}".into()).await;
         assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
 
         // auto-approve get (Defaults false) → put → get.
-        let resp = auto_approve_get_handler(DashboardAuthLevel::Admin, State(pool.clone())).await;
+        let resp = auto_approve_get_handler(DashboardAuthLevel::admin(), State(pool.clone())).await;
         let v = body_json(resp).await;
         assert_eq!(v, json!({ "youtube": false, "tiktok": false, "instagram": false }));
-        let resp = auto_approve_put_handler(DashboardAuthLevel::Admin, State(pool.clone()), "{\"youtube\":true,\"tiktok\":\"on\"}".into()).await;
+        let resp = auto_approve_put_handler(DashboardAuthLevel::admin(), State(pool.clone()), "{\"youtube\":true,\"tiktok\":\"on\"}".into()).await;
         let v = body_json(resp).await;
         assert_eq!(v, json!({ "youtube": true, "tiktok": true, "instagram": false })); // missing instagram → false
-        let resp = auto_approve_get_handler(DashboardAuthLevel::Admin, State(pool.clone())).await;
+        let resp = auto_approve_get_handler(DashboardAuthLevel::admin(), State(pool.clone())).await;
         assert_eq!(body_json(resp).await["youtube"], true);
 
         // Partner → 403, invalid clip → 400.
         assert_eq!(auto_approve_get_handler(partner("nani"), State(pool.clone())).await.status(), StatusCode::FORBIDDEN);
-        assert_eq!(approval_get_handler(DashboardAuthLevel::Admin, State(pool.clone()), Path("abc".into())).await.status(), StatusCode::BAD_REQUEST);
+        assert_eq!(approval_get_handler(DashboardAuthLevel::admin(), State(pool.clone()), Path("abc".into())).await.status(), StatusCode::BAD_REQUEST);
     }
 
     #[tokio::test]
@@ -2418,7 +2418,7 @@ mod tests {
         let clip: i32 = sqlx::query_scalar("INSERT INTO twitch_clips_social_media (clip_id, streamer_login) VALUES ('a', 'nani') RETURNING id").fetch_one(&pool).await.unwrap();
 
         // enrichment-get: ensure_enrichment_row legt pending an.
-        let resp = enrichment_get_handler(DashboardAuthLevel::Admin, State(pool.clone()), Path(clip.to_string())).await;
+        let resp = enrichment_get_handler(DashboardAuthLevel::admin(), State(pool.clone()), Path(clip.to_string())).await;
         assert_eq!(resp.status(), StatusCode::OK);
         let v = body_json(resp).await;
         assert_eq!(v["clip_db_id"], clip);
@@ -2427,7 +2427,7 @@ mod tests {
 
         // analytics-get: zwei Snapshots.
         sqlx::query("INSERT INTO twitch_clips_social_analytics (clip_id, platform, bucket, views, likes, engagement_rate, provider, synced_at) VALUES ($1, 'tiktok', '24h', 100, 10, 12.5, 'tiktok_open_api_v2', NOW())").bind(clip).execute(&pool).await.unwrap();
-        let resp = clip_analytics_get_handler(DashboardAuthLevel::Admin, State(pool.clone()), Path(clip.to_string())).await;
+        let resp = clip_analytics_get_handler(DashboardAuthLevel::admin(), State(pool.clone()), Path(clip.to_string())).await;
         let v = body_json(resp).await;
         assert_eq!(v["clip_db_id"], clip);
         assert_eq!(v["items"].as_array().unwrap().len(), 1);
@@ -2436,30 +2436,30 @@ mod tests {
 
         // reports-list: insert + Filter.
         sqlx::query("INSERT INTO social_media_reports (kind, streamer_login, period_start, period_end, content_md) VALUES ('streamer', 'nani', NOW()-INTERVAL '7 days', NOW(), '# R')").execute(&pool).await.unwrap();
-        let resp = reports_list_handler(DashboardAuthLevel::Admin, State(pool.clone()), Query(ReportsQuery { kind: None, streamer: None, limit: None })).await;
+        let resp = reports_list_handler(DashboardAuthLevel::admin(), State(pool.clone()), Query(ReportsQuery { kind: None, streamer: None, limit: None })).await;
         assert_eq!(body_json(resp).await["items"].as_array().unwrap().len(), 1);
         // invalid_kind → 400.
-        let resp = reports_list_handler(DashboardAuthLevel::Admin, State(pool.clone()), Query(ReportsQuery { kind: Some("bogus".into()), streamer: None, limit: None })).await;
+        let resp = reports_list_handler(DashboardAuthLevel::admin(), State(pool.clone()), Query(ReportsQuery { kind: Some("bogus".into()), streamer: None, limit: None })).await;
         assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
         // invalid_limit → 400.
-        let resp = reports_list_handler(DashboardAuthLevel::Admin, State(pool.clone()), Query(ReportsQuery { kind: None, streamer: None, limit: Some("x".into()) })).await;
+        let resp = reports_list_handler(DashboardAuthLevel::admin(), State(pool.clone()), Query(ReportsQuery { kind: None, streamer: None, limit: Some("x".into()) })).await;
         assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
 
         // Fehlerpfade: nicht existierender Clip → 404, Partner → 403.
-        assert_eq!(enrichment_get_handler(DashboardAuthLevel::Admin, State(pool.clone()), Path("99999".into())).await.status(), StatusCode::NOT_FOUND);
+        assert_eq!(enrichment_get_handler(DashboardAuthLevel::admin(), State(pool.clone()), Path("99999".into())).await.status(), StatusCode::NOT_FOUND);
         assert_eq!(reports_list_handler(partner("nani"), State(pool.clone()), Query(ReportsQuery { kind: None, streamer: None, limit: None })).await.status(), StatusCode::FORBIDDEN);
 
         // enrichment-PUT: Titel setzen + hashtags (#-Präfix/dedup).
-        let resp = enrichment_put_handler(DashboardAuthLevel::Admin, State(pool.clone()), Path(clip.to_string()), "{\"title_youtube\":\"YT\",\"hashtags_youtube\":[\"a\",\"#a\",\"b\"]}".into()).await;
+        let resp = enrichment_put_handler(DashboardAuthLevel::admin(), State(pool.clone()), Path(clip.to_string()), "{\"title_youtube\":\"YT\",\"hashtags_youtube\":[\"a\",\"#a\",\"b\"]}".into()).await;
         assert_eq!(resp.status(), StatusCode::OK);
         let v = body_json(resp).await;
         assert_eq!(v["title_youtube"], "YT");
         assert_eq!(v["hashtags_youtube"], json!(["#a", "#b"])); // #-Präfix + dedup
         // ungültiges Feld (Zahl) → 400 invalid_field.
-        let resp = enrichment_put_handler(DashboardAuthLevel::Admin, State(pool.clone()), Path(clip.to_string()), "{\"title_youtube\":5}".into()).await;
+        let resp = enrichment_put_handler(DashboardAuthLevel::admin(), State(pool.clone()), Path(clip.to_string()), "{\"title_youtube\":5}".into()).await;
         assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
         // nicht existierender Clip → 404.
-        assert_eq!(enrichment_put_handler(DashboardAuthLevel::Admin, State(pool.clone()), Path("99999".into()), "{}".into()).await.status(), StatusCode::NOT_FOUND);
+        assert_eq!(enrichment_put_handler(DashboardAuthLevel::admin(), State(pool.clone()), Path("99999".into()), "{}".into()).await.status(), StatusCode::NOT_FOUND);
     }
 
     #[tokio::test]
@@ -2471,7 +2471,7 @@ mod tests {
         // Pipeline endet bei skipped_no_key.
         let clip: i32 = sqlx::query_scalar("INSERT INTO twitch_clips_social_media (clip_id, streamer_login) VALUES ('r', 'nani') RETURNING id").fetch_one(&pool).await.unwrap();
 
-        let resp = enrichment_run_handler(DashboardAuthLevel::Admin, State(pool.clone()), Path(clip.to_string()), String::new()).await;
+        let resp = enrichment_run_handler(DashboardAuthLevel::admin(), State(pool.clone()), Path(clip.to_string()), String::new()).await;
         assert_eq!(resp.status(), StatusCode::OK);
         let v = body_json(resp).await;
         assert_eq!(v["clip_db_id"], clip);
@@ -2479,12 +2479,12 @@ mod tests {
         assert_eq!(v["enrichment"]["clip_db_id"], clip);
 
         // force im Body wird akzeptiert (kein Parse-Fehler) → weiterhin OK.
-        let resp = enrichment_run_handler(DashboardAuthLevel::Admin, State(pool.clone()), Path(clip.to_string()), "{\"force\":true}".into()).await;
+        let resp = enrichment_run_handler(DashboardAuthLevel::admin(), State(pool.clone()), Path(clip.to_string()), "{\"force\":true}".into()).await;
         assert_eq!(resp.status(), StatusCode::OK);
 
         // Fehlerpfade: ungültige ID → 400, fehlender Clip → 404, Partner → 403.
-        assert_eq!(enrichment_run_handler(DashboardAuthLevel::Admin, State(pool.clone()), Path("x".into()), String::new()).await.status(), StatusCode::BAD_REQUEST);
-        assert_eq!(enrichment_run_handler(DashboardAuthLevel::Admin, State(pool.clone()), Path("99999".into()), String::new()).await.status(), StatusCode::NOT_FOUND);
+        assert_eq!(enrichment_run_handler(DashboardAuthLevel::admin(), State(pool.clone()), Path("x".into()), String::new()).await.status(), StatusCode::BAD_REQUEST);
+        assert_eq!(enrichment_run_handler(DashboardAuthLevel::admin(), State(pool.clone()), Path("99999".into()), String::new()).await.status(), StatusCode::NOT_FOUND);
         assert_eq!(enrichment_run_handler(partner("nani"), State(pool.clone()), Path(clip.to_string()), String::new()).await.status(), StatusCode::FORBIDDEN);
     }
 
@@ -2494,7 +2494,7 @@ mod tests {
         std::env::set_var("OLLAMA_HOST", "127.0.0.1:59999"); // LLM → Fallback (schnell)
 
         // kind=streamer → erzeugt einen Streamer-Report (No-Data-Fallback).
-        let resp = reports_run_handler(DashboardAuthLevel::Admin, State(pool.clone()), "{\"kind\":\"streamer\",\"streamer\":\"nani\"}".into()).await;
+        let resp = reports_run_handler(DashboardAuthLevel::admin(), State(pool.clone()), "{\"kind\":\"streamer\",\"streamer\":\"nani\"}".into()).await;
         assert_eq!(resp.status(), StatusCode::OK);
         let v = body_json(resp).await;
         assert_eq!(v["kind"], "streamer");
@@ -2502,14 +2502,14 @@ mod tests {
         assert!(v["id"].is_number());
 
         // kind=cross → Cross-Report.
-        let resp = reports_run_handler(DashboardAuthLevel::Admin, State(pool.clone()), "{\"kind\":\"cross\"}".into()).await;
+        let resp = reports_run_handler(DashboardAuthLevel::admin(), State(pool.clone()), "{\"kind\":\"cross\"}".into()).await;
         assert_eq!(body_json(resp).await["kind"], "cross");
 
         // ungültiger kind → 400 invalid_kind.
-        let resp = reports_run_handler(DashboardAuthLevel::Admin, State(pool.clone()), "{\"kind\":\"admin\"}".into()).await;
+        let resp = reports_run_handler(DashboardAuthLevel::admin(), State(pool.clone()), "{\"kind\":\"admin\"}".into()).await;
         assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
         // streamer ohne streamer-Feld → 400 streamer_required.
-        let resp = reports_run_handler(DashboardAuthLevel::Admin, State(pool.clone()), "{\"kind\":\"streamer\"}".into()).await;
+        let resp = reports_run_handler(DashboardAuthLevel::admin(), State(pool.clone()), "{\"kind\":\"streamer\"}".into()).await;
         assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
         // Partner → 403.
         assert_eq!(reports_run_handler(partner("nani"), State(pool.clone()), "{\"kind\":\"cross\"}".into()).await.status(), StatusCode::FORBIDDEN);
@@ -2524,9 +2524,9 @@ mod tests {
         let Some(pool) = make_pool("t_dash_sm_oauth").await else { return };
 
         // start: ungültige Plattform → 400.
-        assert_eq!(oauth_start_handler(DashboardAuthLevel::Admin, State(pool.clone()), Path("snapchat".into()), Query(StreamerQuery { streamer: None })).await.status(), StatusCode::BAD_REQUEST);
+        assert_eq!(oauth_start_handler(DashboardAuthLevel::admin(), State(pool.clone()), Path("snapchat".into()), Query(StreamerQuery { streamer: None })).await.status(), StatusCode::BAD_REQUEST);
         // start: gültige Plattform → 302 (Auth-URL oder oauth_error-Redirect, je nach Env).
-        assert_eq!(oauth_start_handler(DashboardAuthLevel::Admin, State(pool.clone()), Path("tiktok".into()), Query(StreamerQuery { streamer: None })).await.status(), StatusCode::FOUND);
+        assert_eq!(oauth_start_handler(DashboardAuthLevel::admin(), State(pool.clone()), Path("tiktok".into()), Query(StreamerQuery { streamer: None })).await.status(), StatusCode::FOUND);
         // start: None-Auth → 401, Partner-Cross-Account → 403.
         assert_eq!(oauth_start_handler(DashboardAuthLevel::None, State(pool.clone()), Path("tiktok".into()), Query(StreamerQuery { streamer: None })).await.status(), StatusCode::UNAUTHORIZED);
         assert_eq!(oauth_start_handler(partner("nani"), State(pool.clone()), Path("tiktok".into()), Query(StreamerQuery { streamer: Some("other".into()) })).await.status(), StatusCode::FORBIDDEN);
@@ -2540,13 +2540,13 @@ mod tests {
 
         // disconnect: setzt enabled=0 (kein Cipher nötig).
         sqlx::query("INSERT INTO social_media_platform_auth (platform, streamer_login, enabled) VALUES ('tiktok', 'nani', 1)").execute(&pool).await.unwrap();
-        let resp = oauth_disconnect_handler(DashboardAuthLevel::Admin, State(pool.clone()), Path("tiktok".into()), Query(StreamerQuery { streamer: Some("nani".into()) })).await;
+        let resp = oauth_disconnect_handler(DashboardAuthLevel::admin(), State(pool.clone()), Path("tiktok".into()), Query(StreamerQuery { streamer: Some("nani".into()) })).await;
         assert_eq!(resp.status(), StatusCode::OK);
         assert_eq!(body_json(resp).await["success"], true);
         let enabled: i32 = sqlx::query_scalar("SELECT enabled FROM social_media_platform_auth WHERE platform='tiktok' AND streamer_login='nani'").fetch_one(&pool).await.unwrap();
         assert_eq!(enabled, 0);
         // disconnect: ungültige Plattform → 400.
-        assert_eq!(oauth_disconnect_handler(DashboardAuthLevel::Admin, State(pool.clone()), Path("snap".into()), Query(StreamerQuery { streamer: None })).await.status(), StatusCode::BAD_REQUEST);
+        assert_eq!(oauth_disconnect_handler(DashboardAuthLevel::admin(), State(pool.clone()), Path("snap".into()), Query(StreamerQuery { streamer: None })).await.status(), StatusCode::BAD_REQUEST);
     }
 
     fn mark_body(clip_id: Option<i32>, platforms: Value) -> MarkUploadedBody {
@@ -2560,15 +2560,15 @@ mod tests {
         let clip: i32 = sqlx::query_scalar("INSERT INTO twitch_clips_social_media (clip_id, streamer_login) VALUES ('c1', 'nani') RETURNING id").fetch_one(&pool).await.unwrap();
 
         // Erfolg.
-        let resp = mark_uploaded_handler(DashboardAuthLevel::Admin, State(pool.clone()), Query(StreamerQuery { streamer: None }), Json(mark_body(Some(clip), json!(["tiktok"])))).await;
+        let resp = mark_uploaded_handler(DashboardAuthLevel::admin(), State(pool.clone()), Query(StreamerQuery { streamer: None }), Json(mark_body(Some(clip), json!(["tiktok"])))).await;
         assert_eq!(resp.status(), StatusCode::OK);
         assert_eq!(body_json(resp).await["success"], true);
         let up: i32 = sqlx::query_scalar("SELECT uploaded_tiktok FROM twitch_clips_social_media WHERE id = $1").bind(clip).fetch_one(&pool).await.unwrap();
         assert_eq!(up, 1);
 
         // Fehlende clip_id → 400, leere platforms → 400.
-        assert_eq!(mark_uploaded_handler(DashboardAuthLevel::Admin, State(pool.clone()), Query(StreamerQuery { streamer: None }), Json(mark_body(None, json!(["tiktok"])))).await.status(), StatusCode::BAD_REQUEST);
-        assert_eq!(mark_uploaded_handler(DashboardAuthLevel::Admin, State(pool.clone()), Query(StreamerQuery { streamer: None }), Json(mark_body(Some(clip), json!([])))).await.status(), StatusCode::BAD_REQUEST);
+        assert_eq!(mark_uploaded_handler(DashboardAuthLevel::admin(), State(pool.clone()), Query(StreamerQuery { streamer: None }), Json(mark_body(None, json!(["tiktok"])))).await.status(), StatusCode::BAD_REQUEST);
+        assert_eq!(mark_uploaded_handler(DashboardAuthLevel::admin(), State(pool.clone()), Query(StreamerQuery { streamer: None }), Json(mark_body(Some(clip), json!([])))).await.status(), StatusCode::BAD_REQUEST);
         // Partner mit fremdem Clip → 403.
         assert_eq!(mark_uploaded_handler(partner("other"), State(pool.clone()), Query(StreamerQuery { streamer: None }), Json(mark_body(Some(clip), json!(["tiktok"])))).await.status(), StatusCode::FORBIDDEN);
     }
@@ -2624,7 +2624,7 @@ mod tests {
 
         // Admin mit streamer + tiktok → 1 eingereiht.
         let resp = batch_upload_handler(
-            DashboardAuthLevel::Admin,
+            DashboardAuthLevel::admin(),
             State(pool.clone()),
             Query(StreamerQuery { streamer: None }),
             Json(BatchUploadBody { streamer: Some("nani".into()), platforms: json!(["tiktok"]), apply_default_template: None }),
@@ -2636,10 +2636,10 @@ mod tests {
         assert_eq!(v["stats"]["queued"], 1);
 
         // platforms leer → 400.
-        let resp = batch_upload_handler(DashboardAuthLevel::Admin, State(pool.clone()), Query(StreamerQuery { streamer: None }), Json(BatchUploadBody { streamer: Some("nani".into()), platforms: json!([]), apply_default_template: None })).await;
+        let resp = batch_upload_handler(DashboardAuthLevel::admin(), State(pool.clone()), Query(StreamerQuery { streamer: None }), Json(BatchUploadBody { streamer: Some("nani".into()), platforms: json!([]), apply_default_template: None })).await;
         assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
         // Admin ohne streamer (required) → 400.
-        let resp = batch_upload_handler(DashboardAuthLevel::Admin, State(pool.clone()), Query(StreamerQuery { streamer: None }), Json(BatchUploadBody { streamer: None, platforms: json!(["tiktok"]), apply_default_template: None })).await;
+        let resp = batch_upload_handler(DashboardAuthLevel::admin(), State(pool.clone()), Query(StreamerQuery { streamer: None }), Json(BatchUploadBody { streamer: None, platforms: json!(["tiktok"]), apply_default_template: None })).await;
         assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
         // Partner cross-account → 403.
         let resp = batch_upload_handler(partner("nani"), State(pool.clone()), Query(StreamerQuery { streamer: None }), Json(BatchUploadBody { streamer: Some("other".into()), platforms: json!(["tiktok"]), apply_default_template: None })).await;
@@ -2652,7 +2652,7 @@ mod tests {
         // None-Auth → 401 (vor Scope/Helix).
         assert_eq!(fetch_clips_handler(DashboardAuthLevel::None, State(pool.clone()), Json(FetchClipsBody { streamer: Some("nani".into()), limit: None, days: None })).await.status(), StatusCode::UNAUTHORIZED);
         // Admin ohne streamer (required) → 400.
-        assert_eq!(fetch_clips_handler(DashboardAuthLevel::Admin, State(pool.clone()), Json(FetchClipsBody { streamer: None, limit: None, days: None })).await.status(), StatusCode::BAD_REQUEST);
+        assert_eq!(fetch_clips_handler(DashboardAuthLevel::admin(), State(pool.clone()), Json(FetchClipsBody { streamer: None, limit: None, days: None })).await.status(), StatusCode::BAD_REQUEST);
         // Partner cross-account → 403.
         assert_eq!(fetch_clips_handler(partner("nani"), State(pool.clone()), Json(FetchClipsBody { streamer: Some("other".into()), limit: None, days: None })).await.status(), StatusCode::FORBIDDEN);
     }
