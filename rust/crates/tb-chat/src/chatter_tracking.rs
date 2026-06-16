@@ -14,7 +14,9 @@
 //! 2. Chatter-Login vorhanden (sonst: nur Health-Heartbeat)
 //! 3. Known-Bot-Filter (sonst: nur Health-Heartbeat)
 //! 4. Session-Resolver (`twitch_stream_sessions` offene Session, 60s-Cache)
-//! 5. Target-Game-Gate (`twitch_live_state`, Fallback offene Session)
+//! 5. Target-Game-Gate (`twitch_live_state`, Fallback offene Session) —
+//!    standardmäßig übersprungen (Chat aller Spiele wird gespeichert), siehe
+//!    `TB_CHAT_PERSIST_ALL_GAMES`.
 //!
 //! Kein Partner-Gate: Daten werden für alle Kanäle gesammelt, in denen der Bot
 //! aktiv ist. Die Trennung Partner/Nicht-Partner erfolgt beim Abfragen, nicht
@@ -73,13 +75,24 @@ pub struct ChatterTracker {
     /// login → (session_id oder None, Unix-Sekunden des Cache-Eintrags).
     /// Python cached auch None-Ergebnisse (bot.py Z. 2170–2176).
     session_cache: DashMap<String, (Option<i64>, i64)>,
+    /// Wenn `true` (Default), wird das Target-Game-Gate (Gate 6) übersprungen
+    /// und Chat aller Spiele persistiert — nötig, damit Scam-Accounts auch
+    /// außerhalb von Deadlock-Sessions erfasst werden. Abschaltbar über
+    /// `TB_CHAT_PERSIST_ALL_GAMES=0` (zurück zum Deadlock-only-Verhalten).
+    persist_all_games: bool,
 }
 
 impl ChatterTracker {
     pub fn new(pool: PgPool) -> Self {
+        Self::with_persist_all_games(pool, persist_all_games_from_env())
+    }
+
+    /// Wie [`Self::new`], aber mit explizitem Game-Gate-Flag (Tests/Konfig).
+    pub fn with_persist_all_games(pool: PgPool, persist_all_games: bool) -> Self {
         Self {
             pool,
             session_cache: DashMap::new(),
+            persist_all_games,
         }
     }
 
@@ -123,16 +136,21 @@ impl ChatterTracker {
         };
 
         // Gate 6: Target-Game-Gate (moderation.py Z. 2191 + 2008–2080).
-        match self.is_target_game_live(&login, session_id).await {
-            Ok(true) => {}
-            Ok(false) => {
-                self.persist_health(&login, Some(&ts_iso), None, None, None).await;
-                debug!(channel = %login, "chatter_tracking: target-game gate blocked — skip");
-                return;
-            }
-            Err(e) => {
-                warn!(channel = %login, "chatter_tracking: game-gate DB-Fehler — {e}");
-                return;
+        // Standardmäßig übersprungen (persist_all_games=true): Chat wird für jedes
+        // Spiel gespeichert, damit Scam-Accounts auch außerhalb von Deadlock erfasst
+        // werden. Mit TB_CHAT_PERSIST_ALL_GAMES=0 gilt wieder Deadlock-only.
+        if !self.persist_all_games {
+            match self.is_target_game_live(&login, session_id).await {
+                Ok(true) => {}
+                Ok(false) => {
+                    self.persist_health(&login, Some(&ts_iso), None, None, None).await;
+                    debug!(channel = %login, "chatter_tracking: target-game gate blocked — skip");
+                    return;
+                }
+                Err(e) => {
+                    warn!(channel = %login, "chatter_tracking: game-gate DB-Fehler — {e}");
+                    return;
+                }
             }
         }
 
@@ -422,6 +440,17 @@ impl ChatterTracker {
 // Hilfsfunktionen
 // ---------------------------------------------------------------------------
 
+/// Liest `TB_CHAT_PERSIST_ALL_GAMES` — Default `true` (Chat aller Spiele
+/// speichern). Nur `0`/`false` (case-insensitive) schaltet auf Deadlock-only.
+fn persist_all_games_from_env() -> bool {
+    std::env::var("TB_CHAT_PERSIST_ALL_GAMES")
+        .map(|v| {
+            let v = v.trim();
+            !(v == "0" || v.eq_ignore_ascii_case("false"))
+        })
+        .unwrap_or(true)
+}
+
 /// ISO-Timestamp mit Sekunden-Auflösung — exakt Python
 /// `datetime.now(UTC).isoformat(timespec="seconds")` (TEXT-Spalten!).
 fn iso_seconds(ts: &DateTime<Utc>) -> String {
@@ -556,5 +585,150 @@ mod tests {
         // is_command = getrimmter Content startet mit "!" (Python Z. 2171)
         assert!("  !invite".trim_start().starts_with('!'));
         assert!(!"hallo !invite".trim_start().starts_with('!'));
+    }
+
+    #[test]
+    fn persist_all_games_env_parsing() {
+        // Default (unset) → true; "0"/"false" → false; alles andere → true.
+        assert!(persist_all_games_from_env()); // TB_CHAT_PERSIST_ALL_GAMES nicht gesetzt
+    }
+}
+
+// ---------------------------------------------------------------------------
+// DB-Tests (gegen TB_TEST_DATABASE_URL) — verifizieren das Game-Gate-Verhalten
+// ---------------------------------------------------------------------------
+
+#[cfg(test)]
+mod db_tests {
+    use super::*;
+    use crate::types::ChatMessageBody;
+    use sqlx::postgres::{PgConnectOptions, PgPoolOptions};
+    use std::str::FromStr;
+
+    macro_rules! pool_or_skip {
+        ($schema:expr) => {{
+            let Some(dsn) = std::env::var("TB_TEST_DATABASE_URL").ok() else {
+                if std::env::var("TB_TEST_REQUIRE_DB").as_deref() == Ok("1") {
+                    panic!("TB_TEST_REQUIRE_DB=1 gesetzt, aber TB_TEST_DATABASE_URL fehlt");
+                }
+                eprintln!("SKIP: TB_TEST_DATABASE_URL nicht gesetzt");
+                return;
+            };
+            setup_schema(&dsn, $schema).await
+        }};
+    }
+
+    /// Frisches Schema mit genau den Tabellen, die `track()` liest/schreibt.
+    async fn setup_schema(dsn: &str, schema: &str) -> PgPool {
+        let admin = PgPoolOptions::new()
+            .max_connections(1)
+            .connect(dsn)
+            .await
+            .unwrap();
+        sqlx::query(&format!("DROP SCHEMA IF EXISTS {schema} CASCADE"))
+            .execute(&admin)
+            .await
+            .unwrap();
+        sqlx::query(&format!("CREATE SCHEMA {schema}"))
+            .execute(&admin)
+            .await
+            .unwrap();
+        admin.close().await;
+
+        let opts = PgConnectOptions::from_str(dsn)
+            .unwrap()
+            .options([("search_path", schema)]);
+        let pool = PgPoolOptions::new()
+            .max_connections(4)
+            .connect_with(opts)
+            .await
+            .unwrap();
+
+        for ddl in [
+            "CREATE TABLE twitch_stream_sessions (id BIGINT PRIMARY KEY, streamer_login TEXT, \
+             started_at TIMESTAMPTZ DEFAULT now(), ended_at TIMESTAMPTZ, game_name TEXT)",
+            "CREATE TABLE twitch_live_state (streamer_login TEXT PRIMARY KEY, is_live INT, \
+             last_game TEXT)",
+            "CREATE TABLE twitch_chat_messages (session_id BIGINT, streamer_login TEXT, \
+             chatter_login TEXT, chatter_id TEXT, message_id TEXT, message_ts TIMESTAMPTZ, \
+             is_command BOOL, content TEXT)",
+            "CREATE TABLE twitch_session_chatters (session_id BIGINT, streamer_login TEXT, \
+             chatter_login TEXT, chatter_id TEXT, first_message_at TIMESTAMPTZ, messages INT, \
+             is_first_time_streamer BOOL, seen_via_chatters_api BOOL, last_seen_at TIMESTAMPTZ)",
+            "CREATE TABLE twitch_chatter_rollup (streamer_login TEXT, chatter_login TEXT, \
+             chatter_id TEXT, first_seen_at TIMESTAMPTZ, last_seen_at TIMESTAMPTZ, \
+             total_messages INT, total_sessions INT)",
+            "CREATE TABLE twitch_raw_chat_ingest_health (streamer_login TEXT PRIMARY KEY, \
+             last_raw_chat_message_at TEXT, last_raw_chat_insert_ok_at TEXT, \
+             last_raw_chat_insert_error_at TEXT, last_raw_chat_error TEXT, \
+             raw_chat_lag_seconds INT, updated_at TEXT)",
+        ] {
+            sqlx::query(ddl).execute(&pool).await.unwrap();
+        }
+        pool
+    }
+
+    fn event(channel: &str, chatter: &str, text: &str) -> ChatMessageEvent {
+        ChatMessageEvent {
+            broadcaster_user_id: "b1".into(),
+            broadcaster_user_login: channel.into(),
+            chatter_user_id: "c1".into(),
+            chatter_user_login: chatter.into(),
+            message_id: "m1".into(),
+            message: ChatMessageBody {
+                text: text.into(),
+                fragments: vec![],
+            },
+            ..Default::default()
+        }
+    }
+
+    /// Offene Session, die NICHT im Zielspiel läuft (Arc Raiders statt Deadlock)
+    /// und keinen `twitch_live_state`-Eintrag hat → Fallback auf Session-Game.
+    async fn open_session_non_deadlock(pool: &PgPool) {
+        sqlx::query(
+            "INSERT INTO twitch_stream_sessions (id, streamer_login, ended_at, game_name) \
+             VALUES (1, 'cheazycrust', NULL, 'Arc Raiders')",
+        )
+        .execute(pool)
+        .await
+        .unwrap();
+    }
+
+    async fn msg_count(pool: &PgPool) -> i64 {
+        sqlx::query_scalar("SELECT COUNT(*) FROM twitch_chat_messages")
+            .fetch_one(pool)
+            .await
+            .unwrap()
+    }
+
+    #[tokio::test]
+    async fn persistiert_nicht_deadlock_wenn_flag_an() {
+        let pool = pool_or_skip!("ct_persist_all");
+        open_session_non_deadlock(&pool).await;
+        let tracker = ChatterTracker::with_persist_all_games(pool.clone(), true);
+        tracker
+            .track(&event("cheazycrust", "sophiaa_star", "Howdy Howdy"))
+            .await;
+        assert_eq!(
+            msg_count(&pool).await,
+            1,
+            "Nachricht muss trotz Nicht-Deadlock-Game gespeichert werden"
+        );
+    }
+
+    #[tokio::test]
+    async fn skippt_nicht_deadlock_wenn_flag_aus() {
+        let pool = pool_or_skip!("ct_persist_deadlock_only");
+        open_session_non_deadlock(&pool).await;
+        let tracker = ChatterTracker::with_persist_all_games(pool.clone(), false);
+        tracker
+            .track(&event("cheazycrust", "sophiaa_star", "Howdy Howdy"))
+            .await;
+        assert_eq!(
+            msg_count(&pool).await,
+            0,
+            "Deadlock-only: Nicht-Deadlock-Game darf NICHT gespeichert werden"
+        );
     }
 }
