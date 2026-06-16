@@ -142,6 +142,14 @@ impl StreamSource for HelixStreamSource {
     async fn category_id(&self, game_name: &str) -> Result<Option<String>, SourceError> {
         Ok(self.helix.search_category_id(game_name).await?)
     }
+
+    /// Speist das Poll-Tick-Circuit-Breaker-Gate (engine.rs): im App-Auth-
+    /// Cooldown (invalid_client → 15min, B18-3) überspringt der Tick Helix-
+    /// Requests, statt sie weiter ins offene Messer laufen zu lassen.
+    /// `HelixClient::is_auth_blocked` ist synchron + lock-frei.
+    fn is_auth_blocked(&self) -> bool {
+        self.helix.is_auth_blocked()
+    }
 }
 
 #[async_trait::async_trait]
