@@ -33,6 +33,10 @@ struct RecordingHooks {
     went_live: AtomicU64,
     score_refresh: AtomicU64,
     stream_offline: AtomicU64,
+    /// Engagement-Auto-Off (läuft VOR dem Offline-Throttle, auch bei Duplikat).
+    stream_offline_engagement: AtomicU64,
+    /// Global-Ban-Sweep-Scheduling (läuft NACH dem Throttle, vor State-Finalize).
+    stream_offline_global_ban: AtomicU64,
     channel_raid: AtomicU64,
     chat_raid: AtomicU64,
     chat_unraid: AtomicU64,
@@ -55,6 +59,12 @@ impl EventSubHooks for RecordingHooks {
         _trigger: &'static str,
     ) {
         self.score_refresh.fetch_add(1, Ordering::SeqCst);
+    }
+    async fn on_stream_offline_engagement(&self, _twitch_user_id: &str, _login: Option<&str>) {
+        self.stream_offline_engagement.fetch_add(1, Ordering::SeqCst);
+    }
+    async fn on_stream_offline_global_ban(&self, _twitch_user_id: &str, _login: Option<&str>) {
+        self.stream_offline_global_ban.fetch_add(1, Ordering::SeqCst);
     }
     async fn on_stream_offline(&self, _twitch_user_id: &str, _login: Option<&str>) {
         self.stream_offline.fetch_add(1, Ordering::SeqCst);
@@ -312,6 +322,9 @@ async fn stream_offline_finalisiert_session_mit_throttle() {
     assert!(ended.is_some());
     assert_eq!(notes.as_deref(), Some("offline"));
     assert_eq!(hooks.stream_offline.load(Ordering::SeqCst), 1);
+    // Erster Offline: Engagement (vor Throttle) + Global-Ban (nach Throttle) laufen.
+    assert_eq!(hooks.stream_offline_engagement.load(Ordering::SeqCst), 1);
+    assert_eq!(hooks.stream_offline_global_ban.load(Ordering::SeqCst), 1);
 
     // Zweites Offline-Event (andere Message) im 120s-Fenster → gedrosselt.
     let outcome = dispatcher
@@ -324,7 +337,20 @@ async fn stream_offline_finalisiert_session_mit_throttle() {
     assert_eq!(
         hooks.stream_offline.load(Ordering::SeqCst),
         1,
-        "Offline-Throttle verhindert Doppel-Trigger"
+        "Offline-Throttle verhindert Doppel-Trigger (Auto-Raid)"
+    );
+    // B5-09 Parität: Engagement-Auto-Off läuft VOR dem Throttle und damit auch
+    // beim gedrosselten Duplikat (Python `eventsub_mixin.py`:1861).
+    assert_eq!(
+        hooks.stream_offline_engagement.load(Ordering::SeqCst),
+        2,
+        "Engagement-Auto-Off läuft auch beim gedrosselten Duplikat"
+    );
+    // Global-Ban-Sweep läuft NACH dem Throttle → nur einmal (kein Duplikat).
+    assert_eq!(
+        hooks.stream_offline_global_ban.load(Ordering::SeqCst),
+        1,
+        "Global-Ban-Sweep nur nach bestandenem Throttle"
     );
 }
 
