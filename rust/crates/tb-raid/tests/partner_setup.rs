@@ -126,7 +126,7 @@ async fn apply_ddl(pool: &PgPool) {
             ts_utc TIMESTAMPTZ NOT NULL,
             streamer TEXT NOT NULL,
             viewer_count INTEGER,
-            is_partner BOOLEAN DEFAULT FALSE,
+            is_partner INTEGER DEFAULT 0,
             game_name TEXT,
             stream_title TEXT,
             tags TEXT
@@ -135,7 +135,7 @@ async fn apply_ddl(pool: &PgPool) {
             ts_utc TIMESTAMPTZ NOT NULL,
             streamer TEXT NOT NULL,
             viewer_count INTEGER,
-            is_partner BOOLEAN DEFAULT FALSE,
+            is_partner INTEGER DEFAULT 0,
             game_name TEXT,
             stream_title TEXT,
             tags TEXT
