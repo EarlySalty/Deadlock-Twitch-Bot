@@ -22,6 +22,7 @@
 //! hier (`spawn_refresh_loop`). Bei 401 auf einem Helix-Call erzwingen die
 //! Aufrufer `force_refresh()` und wiederholen einmal (2-Attempt-Muster).
 
+use std::path::Path;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -31,6 +32,93 @@ use tokio::sync::RwLock;
 
 const VALIDATE_URL: &str = "https://id.twitch.tv/oauth2/validate";
 const TOKEN_URL: &str = "https://id.twitch.tv/oauth2/token";
+
+/// Seed-Tokens für den Boot-Pfad — Resultat des Provider-Chains.
+///
+/// `access_token` darf `None`/veraltet sein (Infisical-Snapshot altert);
+/// der `refresh_token` trägt den Boot.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct SeedTokens {
+    pub access_token: Option<String>,
+    pub refresh_token: Option<String>,
+}
+
+/// Resolviert die Bot-Seed-Tokens aus dem Provider-Chain — Port von
+/// `bot/chat/tokens.py::load_bot_tokens`.
+///
+/// Reihenfolge (Python-Parität):
+/// 1. `TWITCH_BOT_TOKEN` (Env) — wenn nach Trim nicht leer, ist das der Access-Seed.
+/// 2. sonst `TWITCH_BOT_TOKEN_FILE` (Env) — Pfad wird gelesen, Inhalt getrimmt;
+///    nicht-leer → Access-Seed. Leere/unlesbare Datei → still ignoriert (kein Leak).
+///
+/// Der `refresh_token` kommt in beiden Fällen aus `TWITCH_BOT_REFRESH_TOKEN`
+/// (getrimmt, leer → `None`).
+///
+/// Der keyring-Pfad (`bot/secret_store.py`) ist Windows-only und entfällt im
+/// Linux-Cutover — die Tokens leben hier ausschließlich in Env/Infisical/Datei.
+pub fn load_seed_tokens() -> SeedTokens {
+    resolve_seed_tokens(
+        std::env::var("TWITCH_BOT_TOKEN").ok().as_deref(),
+        std::env::var("TWITCH_BOT_REFRESH_TOKEN").ok().as_deref(),
+        std::env::var("TWITCH_BOT_TOKEN_FILE").ok().as_deref(),
+    )
+}
+
+/// Reine Provider-Logik (env-frei → testbar ohne globalen Prozess-State).
+fn resolve_seed_tokens(
+    env_token: Option<&str>,
+    env_refresh: Option<&str>,
+    token_file: Option<&str>,
+) -> SeedTokens {
+    let refresh_token = env_refresh
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .map(str::to_string);
+
+    let env_access = env_token
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .map(str::to_string);
+    if env_access.is_some() {
+        return SeedTokens {
+            access_token: env_access,
+            refresh_token,
+        };
+    }
+
+    let access_token = token_file
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .and_then(read_token_file);
+
+    SeedTokens {
+        access_token,
+        refresh_token,
+    }
+}
+
+/// Liest die Token-Datei und trimmt; leer/unlesbar → `None` (mit Warn-Log
+/// ohne Inhalt). Python loggt hier ebenfalls nur den Fehlertyp, nie den Wert.
+fn read_token_file(path: &str) -> Option<String> {
+    match std::fs::read_to_string(Path::new(path)) {
+        Ok(raw) => {
+            let trimmed = raw.trim();
+            if trimmed.is_empty() {
+                tracing::warn!("Konfigurierte Bot-Auth-Datei ist leer.");
+                None
+            } else {
+                Some(trimmed.to_string())
+            }
+        }
+        Err(e) => {
+            tracing::warn!(
+                kind = %e.kind(),
+                "Konfigurierte Bot-Auth-Datei konnte nicht gelesen werden."
+            );
+            None
+        }
+    }
+}
 /// Python: Refresh-Schwelle 1 h vor Ablauf.
 const REFRESH_THRESHOLD: chrono::Duration = chrono::Duration::hours(1);
 /// Python: Loop-Intervall 30 min.
@@ -404,6 +492,73 @@ mod tests {
         let m = manager(&server).await;
         m.initialize(Some("seed-token"), "refresh-seed").await.unwrap();
         assert_eq!(m.access_token().await.unwrap(), "rotated");
+    }
+
+    // --- Provider-Chain (load_seed_tokens / resolve_seed_tokens) ---
+
+    #[test]
+    fn env_access_token_hat_vorrang_vor_datei() {
+        let got = resolve_seed_tokens(
+            Some("  env-access  "),
+            Some(" env-refresh "),
+            Some("/does/not/matter"),
+        );
+        assert_eq!(got.access_token.as_deref(), Some("env-access"));
+        assert_eq!(got.refresh_token.as_deref(), Some("env-refresh"));
+    }
+
+    /// Schreibt eine eindeutige Temp-Datei (kein tempfile-Dep nötig) und gibt
+    /// einen RAII-Guard zurück, der sie beim Drop wieder entfernt.
+    struct TempTokenFile(std::path::PathBuf);
+    impl TempTokenFile {
+        fn new(content: &str) -> Self {
+            let nonce = format!(
+                "tb-chat-token-{}-{:?}.tmp",
+                std::process::id(),
+                std::thread::current().id()
+            );
+            let path = std::env::temp_dir().join(nonce);
+            std::fs::write(&path, content).unwrap();
+            Self(path)
+        }
+        fn path(&self) -> &str {
+            self.0.to_str().unwrap()
+        }
+    }
+    impl Drop for TempTokenFile {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_file(&self.0);
+        }
+    }
+
+    #[test]
+    fn datei_greift_wenn_env_token_leer() {
+        let f = TempTokenFile::new("  file-access\n");
+        let got = resolve_seed_tokens(Some("   "), Some("env-refresh"), Some(f.path()));
+        assert_eq!(got.access_token.as_deref(), Some("file-access"));
+        assert_eq!(got.refresh_token.as_deref(), Some("env-refresh"));
+    }
+
+    #[test]
+    fn leere_datei_ergibt_keinen_access_token() {
+        let f = TempTokenFile::new("   \n");
+        let got = resolve_seed_tokens(None, Some("env-refresh"), Some(f.path()));
+        assert_eq!(got.access_token, None);
+        assert_eq!(got.refresh_token.as_deref(), Some("env-refresh"));
+    }
+
+    #[test]
+    fn unlesbare_datei_ergibt_keinen_access_token() {
+        let got =
+            resolve_seed_tokens(None, Some("env-refresh"), Some("/nonexistent/bot.token"));
+        assert_eq!(got.access_token, None);
+        assert_eq!(got.refresh_token.as_deref(), Some("env-refresh"));
+    }
+
+    #[test]
+    fn ohne_quellen_bleibt_alles_leer() {
+        let got = resolve_seed_tokens(Some(""), Some("  "), None);
+        assert_eq!(got, SeedTokens::default());
     }
 
     #[tokio::test]

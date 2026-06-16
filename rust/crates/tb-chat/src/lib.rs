@@ -70,5 +70,5 @@ pub use promos::{
 pub use scam_pitch::{AccountAgePort, PitchDecision, ScamPitchDetector, SpamAiReviewer};
 pub use timeout_tracking::{is_bot_timeout_drop, CombinedSuppression, TimeoutTrackingChatApi};
 pub use spam_filter::{LearnedPatterns, SpamAction, SpamContext, SpamFilter, SpamVerdict};
-pub use token::{BotTokenManager, TokenError};
+pub use token::{load_seed_tokens, BotTokenManager, SeedTokens, TokenError};
 pub use types::{ChatMessageEvent, SendOutcome};
