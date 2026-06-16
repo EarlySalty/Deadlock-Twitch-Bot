@@ -67,6 +67,19 @@ fn bool_int(value: Option<i64>, default: i32) -> i32 {
     }
 }
 
+/// Python `_HARD_PAUSE_REASONS = frozenset({"blocked", "bot_banned"})`:
+/// Hard-Kills, die ein OAuth-Followup NICHT aufheben darf.
+const HARD_PAUSE_REASONS: [&str; 2] = ["blocked", "bot_banned"];
+
+/// Normalisierter Hard-Kill-Grund (`strip().lower()`), falls die Pause ein
+/// Hard-Kill ist; sonst `None`. Python `pause_reason in _HARD_PAUSE_REASONS`.
+fn hard_pause_reason(technical_pause_reason: Option<&str>) -> Option<String> {
+    let normalized = technical_pause_reason?.trim().to_lowercase();
+    HARD_PAUSE_REASONS
+        .contains(&normalized.as_str())
+        .then_some(normalized)
+}
+
 /// Trim + leere Strings zu None (Python `str(x or "").strip() or None`).
 fn non_empty(value: Option<&str>) -> Option<String> {
     value
@@ -154,6 +167,9 @@ struct ActivePartnerRow {
     live_ping_role_id: Option<i64>,
     live_ping_enabled: Option<i32>,
     partnered_at: Option<String>,
+    /// B11-PR-7: Hard-Kill-Grund. `{blocked, bot_banned}` darf NICHT durch einen
+    /// OAuth-Followup aufgehoben werden (Python `_HARD_PAUSE_REASONS`).
+    technical_pause_reason: Option<String>,
 }
 
 /// Ergebnis der Promotion (Python-Rückgabe-Dict von
@@ -165,6 +181,13 @@ pub struct PromotedIdentity {
     pub discord_user_id: Option<String>,
     pub discord_display_name: Option<String>,
     pub is_on_discord: Option<i32>,
+    /// B11-PR-7: `false`, wenn die Promotion durch einen Hard-Kill
+    /// (`technical_pause_reason` ∈ {blocked, bot_banned}) als No-op abgewiesen
+    /// wurde (Python `reactivate_partner_after_valid_auth` → `reactivated: False`).
+    pub reactivated: bool,
+    /// Gesetzter Hard-Kill-Grund bei abgewiesener Promotion, sonst `None`
+    /// (Python-Rückgabefeld `reason`).
+    pub hard_pause_reason: Option<String>,
 }
 
 /// Argumente für `promote_streamer_to_partner` — exakt die Parameter, die der
@@ -262,7 +285,8 @@ async fn load_active_partner_row(
             p.silent_raid,
             p.live_ping_role_id,
             COALESCE(p.live_ping_enabled, 1) AS live_ping_enabled,
-            p.partnered_at
+            p.partnered_at,
+            p.technical_pause_reason
         FROM twitch_partners p
         WHERE (($1 <> '' AND p.twitch_user_id = $1)
             OR ($2 <> '' AND LOWER(p.twitch_login) = $2))
@@ -497,6 +521,25 @@ pub async fn promote_streamer_to_partner(
     let active_row = load_active_partner_row(tx, &normalized_user_id, &normalized_login).await?;
     let active = active_row.as_ref();
 
+    // B11-PR-7: Hard-Pause-Guard (Python `reactivate_partner_after_valid_auth`,
+    // `partner_registry.py:1366`). Ein OAuth-Followup darf einen Hard-Kill
+    // ({blocked, bot_banned}) NICHT reaktivieren — sonst würde der UPDATE unten
+    // `technical_pause_reason = NULL` setzen und den Bann bedingungslos aufheben.
+    // No-op: keine Schreibzugriffe, Pause + Deaktivierung bleiben unangetastet.
+    if let Some(reason) =
+        hard_pause_reason(active.and_then(|a| a.technical_pause_reason.as_deref()))
+    {
+        return Ok(PromotedIdentity {
+            twitch_login: normalized_login,
+            twitch_user_id: normalized_user_id,
+            discord_user_id: None,
+            discord_display_name: None,
+            is_on_discord: None,
+            reactivated: false,
+            hard_pause_reason: Some(reason),
+        });
+    }
+
     // Partner-Werte: explizite Parameter des Followup-Pfads + Zeilen-Fallbacks.
     // Für require_discord_link/silent_ban/silent_raid/live_ping_* gilt der im
     // Modul-Header dokumentierte Bugfix: aktiven Wert bewahren statt wipen.
@@ -661,6 +704,8 @@ pub async fn promote_streamer_to_partner(
         discord_user_id: identity_discord_user_id,
         discord_display_name: identity_display_name,
         is_on_discord: identity_is_on_discord,
+        reactivated: true,
+        hard_pause_reason: None,
     })
 }
 
