@@ -16,5 +16,5 @@ pub use moderation::AddModeratorOutcome;
 pub use streams::{
     AdSchedule, BroadcasterSubscriptions, HelixChannelInfo, HelixStream, Subscription,
 };
-pub use token::{AppToken, TokenError};
+pub use token::{AppToken, AppTokenManager, TokenError};
 pub use user_token::{TokenOwner, UserTokenError, UserTokenResponse};

@@ -3,7 +3,7 @@
 //! Hält einen geteilten Arc<reqwest::Client> und erneuert den App-Token
 //! automatisch bei Bedarf (in-memory, kein persistenter Cache).
 
-use crate::token::{fetch_app_token, AppToken, TokenError};
+use crate::token::{AppTokenManager, TokenError};
 use reqwest::{Client, RequestBuilder};
 use serde::de::DeserializeOwned;
 use std::sync::Arc;
@@ -62,7 +62,9 @@ impl HelixConfig {
 pub struct HelixClient {
     http: Arc<Client>,
     config: HelixConfig,
-    token: Arc<Mutex<Option<AppToken>>>,
+    /// Zentraler App-Token-Manager: Cache + In-Flight-Dedupe (B18-5) +
+    /// `invalid_client`-Circuit-Breaker (B18-3).
+    token: AppTokenManager,
     /// Kategorie-Name (lowercase) → game_id (Python: `_category_cache`).
     pub(crate) category_cache: Arc<Mutex<std::collections::HashMap<String, String>>>,
 }
@@ -70,37 +72,33 @@ pub struct HelixClient {
 impl HelixClient {
     /// Erstellt einen neuen HelixClient.
     pub fn new(config: HelixConfig) -> Result<Self, reqwest::Error> {
-        let http = Client::builder().timeout(REQUEST_TIMEOUT).build()?;
+        let http = Arc::new(Client::builder().timeout(REQUEST_TIMEOUT).build()?);
+        let token = AppTokenManager::new(
+            http.clone(),
+            config.token_url.clone(),
+            config.client_id.clone(),
+            config.client_secret.clone(),
+        );
         Ok(Self {
-            http: Arc::new(http),
+            http,
             config,
-            token: Arc::new(Mutex::new(None)),
+            token,
             category_cache: Arc::new(Mutex::new(std::collections::HashMap::new())),
         })
     }
 
     /// Gibt den aktuellen Access-Token zurück, holt bei Bedarf einen neuen.
     pub async fn access_token(&self) -> Result<String, HelixError> {
-        let mut guard = self.token.lock().await;
-        let now = crate::token::unix_now();
+        Ok(self.token.access_token().await?)
+    }
 
-        if let Some(ref t) = *guard {
-            if !t.needs_refresh(now) {
-                return Ok(t.access_token.clone());
-            }
-        }
-
-        let fresh = fetch_app_token(
-            &self.http,
-            &self.config.token_url,
-            &self.config.client_id,
-            &self.config.client_secret,
-        )
-        .await?;
-
-        let token_str = fresh.access_token.clone();
-        *guard = Some(fresh);
-        Ok(token_str)
+    /// Ist die App-Auth nach einer `invalid_client`-Ablehnung gesperrt
+    /// (15-Min-Cooldown)? Synchron + lock-frei, damit der `tb-bot`-Adapter es
+    /// direkt im synchronen `StreamSource::is_auth_blocked`-Trait-Gate des
+    /// Pollers (monitoring.py:1207) verdrahten kann, sodass der Tick
+    /// Helix-Requests überspringt.
+    pub fn is_auth_blocked(&self) -> bool {
+        self.token.is_auth_blocked()
     }
 
     /// Erstellt einen vorbereiteten GET-Request an einen Helix-Endpunkt.
