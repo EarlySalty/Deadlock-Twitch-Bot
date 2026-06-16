@@ -502,6 +502,46 @@ async fn chat_notification_demuxt_nach_notice_type() {
     );
 }
 
+/// 65.3 Readiness-Gate: `ensure_dispatch_ready` lehnt VOR dem Dispatch ab,
+/// wenn (a) der Dispatch deaktiviert ist oder (b) kein Handler für den Sub-Typ
+/// registriert ist. Beide Fälle → der Webhook-Receiver antwortet 503.
+#[tokio::test]
+async fn ensure_dispatch_ready_gate() {
+    use tb_monitoring::DispatchNotReady;
+
+    let pool = pool_or_skip!("t4d_ready_gate");
+    let hooks = Arc::new(RecordingHooks::default());
+    let (dispatcher, runtime, _store) = build_stack(&pool, hooks.clone());
+
+    // Default: aktiv → registrierter Typ passiert das Gate.
+    assert!(dispatcher.is_dispatch_active());
+    assert_eq!(dispatcher.ensure_dispatch_ready("stream.online"), Ok(()));
+    // Normalisierung greift auch im Gate.
+    assert_eq!(dispatcher.ensure_dispatch_ready("  Channel.Raid  "), Ok(()));
+
+    // Unbekannter Sub-Typ → CallbackNotRegistered (Python
+    // EventSubCallbackNotRegistered), Receiver → 503.
+    assert_eq!(
+        dispatcher.ensure_dispatch_ready("channel.unbekannt"),
+        Err(DispatchNotReady::CallbackNotRegistered("channel.unbekannt".into()))
+    );
+
+    // Deaktiviert → jede Notification scheitert am Aktiv-Check, auch eine, die
+    // sonst einen Handler hätte (Python `_notification_dispatch_active`).
+    dispatcher.set_dispatch_active(false);
+    assert!(!dispatcher.is_dispatch_active());
+    assert_eq!(
+        dispatcher.ensure_dispatch_ready("stream.online"),
+        Err(DispatchNotReady::DispatchInactive)
+    );
+
+    // Wieder aktiv → Gate offen.
+    dispatcher.set_dispatch_active(true);
+    assert_eq!(dispatcher.ensure_dispatch_ready("stream.online"), Ok(()));
+
+    runtime.shutdown().await;
+}
+
 // ── Hype-Train NULL-Bug (started_at nicht parsebar) ──────────────────────────
 
 /// Normalfall: begin → end mit gültigem started_at → genau eine Zeile, phase='begin'

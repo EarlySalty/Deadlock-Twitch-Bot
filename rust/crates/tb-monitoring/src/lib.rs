@@ -45,8 +45,8 @@ pub use announce::{
     LivePingRoleProvider, NoVodPreview, VodPreviewSource,
 };
 pub use dispatch::{
-    classify_chat_notification, ChatNotificationKind, DispatchOutcome, EventSubDispatcher,
-    EventSubHooks, NoopEventSubHooks,
+    classify_chat_notification, has_registered_handler, ChatNotificationKind, DispatchNotReady,
+    DispatchOutcome, EventSubDispatcher, EventSubHooks, NoopEventSubHooks,
 };
 pub use exp_sessions::{ExpSessionStore, ExpSessionTracker};
 pub use guard::{GuardKind, GuardStore};
