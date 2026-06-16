@@ -1248,7 +1248,7 @@ mod tests {
                 authorized_at TIMESTAMPTZ, token_expires_at TIMESTAMPTZ )"#,
             r#"CREATE TABLE IF NOT EXISTS twitch_stream_sessions (
                 id BIGSERIAL PRIMARY KEY, stream_id TEXT, streamer_login TEXT,
-                game_name TEXT, had_deadlock_in_session BOOLEAN DEFAULT FALSE,
+                game_name TEXT, had_deadlock_in_session INTEGER DEFAULT 0,
                 started_at TIMESTAMPTZ, ended_at TIMESTAMPTZ,
                 duration_seconds BIGINT, avg_viewers FLOAT8, peak_viewers BIGINT,
                 follower_delta BIGINT, followers_start BIGINT, followers_end BIGINT,

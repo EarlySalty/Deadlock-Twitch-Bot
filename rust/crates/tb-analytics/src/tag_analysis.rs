@@ -231,12 +231,17 @@ pub async fn load_tag_analysis_extended(
     // samples >= 3, sortiert nach (median(viewers), samples) absteigend.
     let mut filtered: Vec<(String, TagBucket)> =
         tag_stats.into_iter().filter(|(_, d)| d.samples >= 3).collect();
-    filtered.sort_by(|(_, a), (_, b)| {
+    filtered.sort_by(|(ka, a), (kb, b)| {
         let ma = median(&a.viewers);
         let mb = median(&b.viewers);
         mb.partial_cmp(&ma)
             .unwrap_or(std::cmp::Ordering::Equal)
             .then(b.samples.cmp(&a.samples))
+            // Deterministischer Tiebreaker: bei identischem (Median-Viewers, Samples)
+            // entschied sonst die HashMap-Iterationsreihenfolge → categoryRank flackerte
+            // (z.B. zwei Tags mit gleicher Performance). Tag-Name aufsteigend macht den
+            // Rang stabil — in Prod (reproduzierbare Ränge) wie im Test.
+            .then(ka.cmp(kb))
     });
 
     let tags: Vec<Value> = filtered
