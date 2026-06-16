@@ -8,6 +8,7 @@
 //! 2. Stripe-Abo in `twitch_billing_subscriptions` (Status active/trialing/past_due)
 //! 3. Default: `raid_free`
 
+use serde_json::{json, Value};
 use sqlx::PgPool;
 
 // ── Statischer Katalog ──────────────────────────────────────────────────────
@@ -159,6 +160,12 @@ fn is_known_plan_id(raw: &str) -> bool {
 // ── Ergebnis-Typ ────────────────────────────────────────────────────────────
 
 /// Aufgelöster Plan-Snapshot für einen Streamer.
+///
+/// Voll-Port von Pythons `build_plan_snapshot` (repository.py:194-242) inkl. der
+/// vier zuvor fehlenden Felder (B20-ent-3): `status`, `customer_reference`,
+/// `manual_override`, `billing_subscription`. Die beiden letztgenannten sind die
+/// kompletten Quell-Sub-Dicts (oder `Value::Null`) — identisch zu Pythons
+/// `manual_override`/`billing_subscription`-Payloads.
 #[derive(Debug, Clone)]
 pub struct PlanSnapshot {
     pub plan_id: &'static str,
@@ -166,21 +173,75 @@ pub struct PlanSnapshot {
     pub tier: &'static str,
     pub is_extended: bool,
     pub entitlements: Vec<&'static str>,
+    /// Abo-/Plan-Status: "active" (Default + Manual-Override), sonst der Stripe-
+    /// Status (`active`/`trialing`/`past_due`) wenn `source == billing_subscription`.
+    pub status: String,
+    /// Normalisierter Ablauf-Zeitstempel (ISO-8601 UTC) oder `None`.
     pub expires_at: Option<String>,
     pub source: &'static str,
+    /// Bevorzugt Login, sonst user_id, sonst Fallback-Ref (Python-Reihenfolge).
+    pub customer_reference: String,
+    /// Quell-Sub-Dict des Manual-Overrides (`Value::Null` wenn keiner griff).
+    pub manual_override: Value,
+    /// Quell-Sub-Dict des Stripe-Abos (`Value::Null` wenn keins griff).
+    pub billing_subscription: Value,
 }
 
 impl PlanSnapshot {
-    fn from_plan(plan_id: &'static str, source: &'static str, expires_at: Option<String>) -> Self {
+    /// Default-/Manual-Snapshot ohne Stripe-Status (`status = "active"`).
+    fn from_plan(
+        plan_id: &'static str,
+        source: &'static str,
+        expires_at: Option<String>,
+        customer_reference: String,
+        manual_override: Value,
+        billing_subscription: Value,
+    ) -> Self {
+        Self::with_status(
+            plan_id,
+            source,
+            "active".to_string(),
+            expires_at,
+            customer_reference,
+            manual_override,
+            billing_subscription,
+        )
+    }
+
+    fn with_status(
+        plan_id: &'static str,
+        source: &'static str,
+        status: String,
+        expires_at: Option<String>,
+        customer_reference: String,
+        manual_override: Value,
+        billing_subscription: Value,
+    ) -> Self {
         PlanSnapshot {
             plan_id,
             plan_name: plan_display_name(plan_id),
             tier: plan_tier(plan_id),
             is_extended: plan_is_extended(plan_id),
             entitlements: plan_entitlements(plan_id).to_vec(),
+            status,
             expires_at,
             source,
+            customer_reference,
+            manual_override,
+            billing_subscription,
         }
+    }
+
+    /// Default-Snapshot (`raid_free`, kein Override/Abo) mit Fallback-Ref.
+    fn default_basic(fallback_ref: &str) -> Self {
+        Self::from_plan(
+            "raid_free",
+            "default_basic",
+            None,
+            fallback_ref.trim().to_string(),
+            Value::Null,
+            Value::Null,
+        )
     }
 }
 
@@ -188,14 +249,21 @@ impl PlanSnapshot {
 
 #[derive(sqlx::FromRow)]
 struct ManualOverrideRow {
+    twitch_user_id: Option<String>,
+    twitch_login: Option<String>,
     manual_plan_id: Option<String>,
     manual_plan_expires_at: Option<String>,
+    manual_plan_notes: Option<String>,
+    manual_plan_updated_at: Option<String>,
 }
 
 #[derive(sqlx::FromRow)]
 struct BillingRow {
+    customer_reference: Option<String>,
     plan_id: Option<String>,
+    status: Option<String>,
     current_period_end: Option<String>,
+    updated_at: Option<String>,
 }
 
 const ACTIVE_BILLING_STATUSES: [&str; 3] = ["active", "trialing", "past_due"];
@@ -210,8 +278,10 @@ pub async fn resolve_plan_snapshot(
 ) -> Result<PlanSnapshot, sqlx::Error> {
     let login = login.trim().to_lowercase();
     let user_id = user_id.trim();
+    // Fallback-Ref (Python `fallback_ref`): bevorzugt Login, sonst user_id.
+    let fallback_ref = if !login.is_empty() { login.clone() } else { user_id.to_string() };
     if login.is_empty() && user_id.is_empty() {
-        return Ok(PlanSnapshot::from_plan("raid_free", "default_basic", None));
+        return Ok(PlanSnapshot::default_basic(&fallback_ref));
     }
 
     // 24h-Grace-Auto-Grant des Analytics-Trials VOR der Auflösung (Python
@@ -229,7 +299,13 @@ pub async fn resolve_plan_snapshot(
     // gefunden → Streamer verlor seinen bezahlten/gecompten Plan.
     let manual: Option<ManualOverrideRow> = sqlx::query_as(
         r#"
-        SELECT manual_plan_id, manual_plan_expires_at::text
+        SELECT
+            COALESCE(twitch_user_id, '') AS twitch_user_id,
+            COALESCE(twitch_login, '')   AS twitch_login,
+            manual_plan_id,
+            manual_plan_expires_at::text,
+            COALESCE(manual_plan_notes, '')      AS manual_plan_notes,
+            manual_plan_updated_at::text         AS manual_plan_updated_at
         FROM streamer_plans
         WHERE LOWER(COALESCE(twitch_login, '')) = LOWER($1)
            OR ($2 <> '' AND TRIM(COALESCE(twitch_user_id, '')) = $2)
@@ -245,28 +321,52 @@ pub async fn resolve_plan_snapshot(
     .await?;
 
     if let Some(row) = manual {
-        let pid_raw = row.manual_plan_id.as_deref().unwrap_or("");
+        let pid_raw = row.manual_plan_id.as_deref().unwrap_or("").trim().to_string();
         // Strikt-kanonisch wie Python `manual_override_from_row` (repository.py:82):
         // ein `manual_plan_id`, der NICHT in KNOWN_PLAN_IDS liegt (Case-Mismatch,
         // Legacy-Alias, Tippfehler), macht den Override ungültig → Fall-Through zu
         // Billing/Default. Vorher normalisierte Rust hier lowercased + Legacy-Aliase
         // und behandelte Müll als raid_free-Override (Migrations-Divergenz).
-        if is_known_plan_id(pid_raw) {
-            let pid = normalize_plan_id(pid_raw);
-            // Ablauf prüfen
+        if is_known_plan_id(&pid_raw) {
+            let pid = normalize_plan_id(&pid_raw);
+            // expires_at via parse_datetime_value normalisieren (B20-ent-2): die
+            // DB liefert manual_plan_expires_at als Roh-TEXT (auch Date-only) —
+            // Python legt es als `.isoformat()` ab, nicht roh.
+            let expires_norm = normalize_expires_at(row.manual_plan_expires_at.as_deref());
             let expired = row
                 .manual_plan_expires_at
                 .as_deref()
                 .map(is_expired_timestamp)
                 .unwrap_or(false);
+            let is_active = !expired;
+
+            let mo_login = row.twitch_login.as_deref().unwrap_or("").trim().to_string();
+            let mo_user_id = row.twitch_user_id.as_deref().unwrap_or("").trim().to_string();
+            // customer_reference (Python build_plan_snapshot:209): login || user_id || fallback.
+            let customer_reference = first_non_empty(&[&mo_login, &mo_user_id, &fallback_ref]);
+            // Voll-Sub-Dict identisch zu Pythons `manual_override_from_row`.
+            let manual_override = json!({
+                "twitch_user_id": mo_user_id,
+                "twitch_login": mo_login,
+                "plan_id": pid_raw,
+                "expires_at": expires_norm.clone(),
+                "notes": row.manual_plan_notes.as_deref().unwrap_or("").trim(),
+                "updated_at": non_empty_or_null(row.manual_plan_updated_at.as_deref()),
+                "is_active": is_active,
+                "is_expired": !is_active,
+            });
+
             // Ein aktiver (nicht abgelaufener) expliziter Override ist terminal —
             // auch ein bewusster Admin-Downgrade auf raid_free sperrt den Billing-
             // Fallthrough (Python repository.py: jeder aktive Override gewinnt).
-            if !expired {
+            if is_active {
                 return Ok(PlanSnapshot::from_plan(
                     pid,
                     "manual_override",
-                    row.manual_plan_expires_at,
+                    expires_norm,
+                    customer_reference,
+                    manual_override,
+                    Value::Null,
                 ));
             }
         }
@@ -277,7 +377,12 @@ pub async fn resolve_plan_snapshot(
     // sonst bleibt ein per user_id referenziertes Stripe-Abo unsichtbar.
     let billing: Option<BillingRow> = sqlx::query_as(
         r#"
-        SELECT plan_id, current_period_end::text
+        SELECT
+            COALESCE(customer_reference, '') AS customer_reference,
+            plan_id,
+            COALESCE(status, '')             AS status,
+            current_period_end::text,
+            updated_at::text                 AS updated_at
         FROM twitch_billing_subscriptions
         WHERE (LOWER(customer_reference) = LOWER($1)
                OR ($2 <> '' AND LOWER(customer_reference) = LOWER($2)))
@@ -295,35 +400,107 @@ pub async fn resolve_plan_snapshot(
     if let Some(row) = billing {
         // Strikt-kanonisch wie Python `load_billing_subscription` (repository.py:186):
         // `normalize_plan_id(plan_id, default="raid_free")` ohne Lowercasing/Legacy.
-        let pid = normalize_plan_id(row.plan_id.as_deref().unwrap_or("raid_free"));
-        return Ok(PlanSnapshot::from_plan(pid, "billing_subscription", row.current_period_end));
+        let plan_raw = row.plan_id.as_deref().unwrap_or("raid_free");
+        let pid = normalize_plan_id(plan_raw);
+        // status: leerer Wert → "active" (Python build_plan_snapshot:219).
+        let status_raw = row.status.as_deref().unwrap_or("").trim();
+        let status = if status_raw.is_empty() { "active".to_string() } else { status_raw.to_string() };
+        // current_period_end normalisiert → expires_at (Python:223-228).
+        let expires_norm = normalize_expires_at(row.current_period_end.as_deref());
+        // customer_reference: row-Wert || fallback (Python:220-222).
+        let cust_raw = row.customer_reference.as_deref().unwrap_or("").trim();
+        let customer_reference =
+            if cust_raw.is_empty() { fallback_ref.clone() } else { cust_raw.to_string() };
+        // Voll-Sub-Dict identisch zu Pythons `load_billing_subscription`-Payload.
+        let billing_subscription = json!({
+            "customer_reference": customer_reference.clone(),
+            "plan_id": pid,
+            "status": status.clone(),
+            "current_period_end": expires_norm.clone(),
+            "updated_at": non_empty_or_null(row.updated_at.as_deref()),
+        });
+        return Ok(PlanSnapshot::with_status(
+            pid,
+            "billing_subscription",
+            status,
+            expires_norm,
+            customer_reference,
+            Value::Null,
+            billing_subscription,
+        ));
     }
 
-    Ok(PlanSnapshot::from_plan("raid_free", "default_basic", None))
+    Ok(PlanSnapshot::default_basic(&fallback_ref))
+}
+
+/// Erster getrimmt-nichtleerer Wert aus der Kandidatenliste (sonst `""`).
+/// Spiegelt Pythons `str(a or b or c or "").strip()`-Idiom.
+fn first_non_empty(candidates: &[&str]) -> String {
+    candidates
+        .iter()
+        .map(|c| c.trim())
+        .find(|c| !c.is_empty())
+        .unwrap_or("")
+        .to_string()
+}
+
+/// `Some(trimmed)` wenn nichtleer, sonst `None` (für JSON-`null`). Spiegelt
+/// Pythons `str(...).strip() or None`.
+fn non_empty_or_null(raw: Option<&str>) -> Option<String> {
+    raw.map(str::trim).filter(|s| !s.is_empty()).map(str::to_string)
+}
+
+/// Parst einen Roh-Zeitstempel nach UTC — Port von Pythons `parse_datetime_value`
+/// (repository.py:44-62).
+///
+/// Reihenfolge wie Python:
+/// 1. leer → `None`
+/// 2. Date-only (`YYYY-MM-DD`) → als `…T23:59:59+00:00` (Tagesende)
+/// 3. `Z` → `+00:00`
+/// 4. ISO-8601 parsen (mit oder ohne Offset; naiv ⇒ UTC angenommen)
+/// 5. nach UTC konvertieren
+///
+/// Bei Parse-Fehler → `None` (fail-open wie Pythons `except ValueError: return None`).
+fn parse_datetime_value(raw: &str) -> Option<chrono::DateTime<chrono::Utc>> {
+    let mut text = raw.trim().to_string();
+    if text.is_empty() {
+        return None;
+    }
+    // Date-only-Fallback (Python: len==10 && text[4]=='-' && text[7]=='-').
+    if text.len() == 10 && text.as_bytes().get(4) == Some(&b'-') && text.as_bytes().get(7) == Some(&b'-') {
+        text = format!("{text}T23:59:59+00:00");
+    }
+    let normalized = text.replace('Z', "+00:00");
+    // Mit Offset (`fromisoformat` mit tzinfo → astimezone(UTC)).
+    if let Ok(dt) = chrono::DateTime::parse_from_rfc3339(&normalized) {
+        return Some(dt.with_timezone(&chrono::Utc));
+    }
+    // Naive ISO-Timestamps (kein Offset) — Python nimmt UTC an.
+    for fmt in ["%Y-%m-%dT%H:%M:%S%.f", "%Y-%m-%dT%H:%M:%S", "%Y-%m-%d %H:%M:%S%.f", "%Y-%m-%d %H:%M:%S"] {
+        if let Ok(naive) = chrono::NaiveDateTime::parse_from_str(&normalized, fmt) {
+            return Some(chrono::DateTime::from_naive_utc_and_offset(naive, chrono::Utc));
+        }
+    }
+    None
+}
+
+/// Normalisierter ISO-8601-String (`parse_datetime_value(...).isoformat()`), oder
+/// `None` bei unparsbarem/leerem Wert. Spiegelt Pythons `expires_at.isoformat()`
+/// (B20-ent-2): die DB liefert `manual_plan_expires_at` als Roh-TEXT (auch
+/// Date-only); Python normalisiert es VOR der Snapshot-Ablage.
+fn normalize_expires_at(raw: Option<&str>) -> Option<String> {
+    parse_datetime_value(raw?).map(|dt| dt.to_rfc3339_opts(chrono::SecondsFormat::Micros, false))
 }
 
 /// Einfacher Ablauf-Check: ISO-Zeitstempel in der Vergangenheit?
 ///
-/// Robuster Parse: lehnt nur eindeutig abgelaufene Timestamps ab; bei Parse-
-/// Fehler → nicht abgelaufen (fail-open, wie Python).
+/// Nutzt denselben Parser wie die Snapshot-Normalisierung; bei Parse-Fehler →
+/// nicht abgelaufen (fail-open, wie Pythons `is_active = not (expires_at && …)`).
 fn is_expired_timestamp(raw: &str) -> bool {
-    let raw = raw.trim();
-    if raw.is_empty() {
-        return false;
+    match parse_datetime_value(raw) {
+        Some(ts) => ts < chrono::Utc::now(),
+        None => false,
     }
-    // Normalisierung: Z → +00:00
-    let normalized = raw.replace('Z', "+00:00");
-    if let Ok(ts) = chrono::DateTime::parse_from_rfc3339(&normalized) {
-        return ts < chrono::Utc::now();
-    }
-    // Fallback: nur Datum (YYYY-MM-DD) → als Mitternacht UTC
-    if raw.len() == 10 && raw.as_bytes().get(4) == Some(&b'-') {
-        let with_time = format!("{raw}T23:59:59+00:00");
-        if let Ok(ts) = chrono::DateTime::parse_from_rfc3339(&with_time) {
-            return ts < chrono::Utc::now();
-        }
-    }
-    false
 }
 
 #[cfg(test)]
@@ -393,5 +570,143 @@ mod tests {
         assert!(!is_known_plan_id("free"));
         assert!(!is_known_plan_id(""));
         assert!(!is_known_plan_id("garbage"));
+    }
+
+    // ── B20-ent-2: expiresAt isoformat-normalisiert ─────────────────────────
+
+    #[test]
+    fn normalize_expires_at_leer_und_unparsbar_ist_none() {
+        assert_eq!(normalize_expires_at(None), None);
+        assert_eq!(normalize_expires_at(Some("")), None);
+        assert_eq!(normalize_expires_at(Some("   ")), None);
+        assert_eq!(normalize_expires_at(Some("garbage")), None);
+    }
+
+    #[test]
+    fn normalize_expires_at_date_only_wird_tagesende_utc() {
+        // Python parse_datetime_value: "YYYY-MM-DD" → 23:59:59 UTC, dann isoformat.
+        let got = normalize_expires_at(Some("2026-06-30")).unwrap();
+        assert!(got.starts_with("2026-06-30T23:59:59"), "got={got}");
+        assert!(got.ends_with("+00:00"), "muss UTC-Offset tragen: {got}");
+    }
+
+    #[test]
+    fn normalize_expires_at_z_und_offset_nach_utc() {
+        // Z → +00:00; bereits-UTC bleibt UTC.
+        let got = normalize_expires_at(Some("2026-06-30T12:00:00Z")).unwrap();
+        assert!(got.starts_with("2026-06-30T12:00:00"), "got={got}");
+        assert!(got.ends_with("+00:00"), "got={got}");
+        // Nicht-UTC-Offset wird nach UTC konvertiert (Python astimezone(UTC)).
+        let got2 = normalize_expires_at(Some("2026-06-30T12:00:00+02:00")).unwrap();
+        assert!(got2.starts_with("2026-06-30T10:00:00"), "Offset→UTC: {got2}");
+    }
+
+    #[test]
+    fn normalize_expires_at_naiv_wird_als_utc_interpretiert() {
+        // Naiver Timestamp ohne Offset → Python nimmt UTC an.
+        let got = normalize_expires_at(Some("2026-06-30T12:00:00")).unwrap();
+        assert!(got.starts_with("2026-06-30T12:00:00"), "got={got}");
+        assert!(got.ends_with("+00:00"), "naiv→UTC: {got}");
+    }
+
+    #[test]
+    fn is_expired_date_only_und_fail_open() {
+        // Date-only in der Vergangenheit → abgelaufen.
+        assert!(is_expired_timestamp("2000-01-01"));
+        // Weit in der Zukunft → nicht abgelaufen.
+        assert!(!is_expired_timestamp("2999-01-01"));
+        // Unparsbar → fail-open (nicht abgelaufen).
+        assert!(!is_expired_timestamp("kaputt"));
+        assert!(!is_expired_timestamp(""));
+    }
+
+    // ── B20-ent-3: PlanSnapshot-Felder ──────────────────────────────────────
+
+    #[test]
+    fn default_basic_snapshot_hat_alle_felder() {
+        let snap = PlanSnapshot::default_basic("Nani");
+        assert_eq!(snap.plan_id, "raid_free");
+        assert_eq!(snap.source, "default_basic");
+        assert_eq!(snap.status, "active");
+        assert_eq!(snap.customer_reference, "Nani"); // getrimmt durchgereicht
+        assert_eq!(snap.expires_at, None);
+        assert!(snap.manual_override.is_null());
+        assert!(snap.billing_subscription.is_null());
+    }
+
+    // ── DB-Integration: voller resolve_plan_snapshot (skip ohne DB) ─────────
+
+    use sqlx::postgres::{PgConnectOptions, PgPoolOptions};
+    use std::str::FromStr;
+
+    async fn snapshot_pool(schema: &str) -> Option<PgPool> {
+        let dsn = std::env::var("TB_TEST_DATABASE_URL").ok()?;
+        let admin = PgPoolOptions::new().max_connections(1).connect(&dsn).await.unwrap();
+        sqlx::query(&format!("DROP SCHEMA IF EXISTS {schema} CASCADE")).execute(&admin).await.unwrap();
+        sqlx::query(&format!("CREATE SCHEMA {schema}")).execute(&admin).await.unwrap();
+        admin.close().await;
+        let opts = PgConnectOptions::from_str(&dsn).unwrap().options([("search_path", schema)]);
+        let pool = PgPoolOptions::new().max_connections(2).connect_with(opts).await.unwrap();
+        // PK auf twitch_user_id + first_login_at, damit der Trial-Auto-Grant-Pfad
+        // sauber durchläuft (er bleibt mangels first_login_at ein No-op).
+        sqlx::query(
+            "CREATE TABLE streamer_plans (twitch_user_id TEXT PRIMARY KEY, twitch_login TEXT, \
+             manual_plan_id TEXT, manual_plan_expires_at TEXT, manual_plan_notes TEXT, \
+             manual_plan_updated_at TEXT, first_login_at TEXT, \
+             trial_ever_granted INTEGER DEFAULT 0)",
+        ).execute(&pool).await.unwrap();
+        sqlx::query(
+            "CREATE TABLE twitch_billing_subscriptions (customer_reference TEXT, plan_id TEXT, \
+             status TEXT, current_period_end TEXT, updated_at TEXT)",
+        ).execute(&pool).await.unwrap();
+        Some(pool)
+    }
+
+    #[tokio::test]
+    async fn resolve_manual_override_full_snapshot() {
+        let Some(pool) = snapshot_pool("plan_manual").await else { return };
+        sqlx::query(
+            "INSERT INTO streamer_plans (twitch_user_id, twitch_login, manual_plan_id, \
+             manual_plan_expires_at, manual_plan_notes, manual_plan_updated_at) \
+             VALUES ('42', 'nani', 'raid_boost', '2999-01-15', 'comped', '2026-06-01T10:00:00Z')",
+        ).execute(&pool).await.unwrap();
+
+        let snap = resolve_plan_snapshot(&pool, "nani", "42").await.unwrap();
+        assert_eq!(snap.plan_id, "raid_boost");
+        assert_eq!(snap.source, "manual_override");
+        assert_eq!(snap.status, "active");
+        assert_eq!(snap.customer_reference, "nani"); // login bevorzugt
+        // expires_at normalisiert (Date-only → Tagesende UTC).
+        let exp = snap.expires_at.as_deref().unwrap();
+        assert!(exp.starts_with("2999-01-15T23:59:59"), "exp={exp}");
+        // manual_override-Sub-Dict gefüllt, billing leer.
+        assert_eq!(snap.manual_override["plan_id"], "raid_boost");
+        assert_eq!(snap.manual_override["twitch_login"], "nani");
+        assert_eq!(snap.manual_override["is_active"], true);
+        assert_eq!(snap.manual_override["notes"], "comped");
+        assert!(snap.billing_subscription.is_null());
+    }
+
+    #[tokio::test]
+    async fn resolve_billing_full_snapshot_with_status() {
+        let Some(pool) = snapshot_pool("plan_billing").await else { return };
+        // Kein Manual-Override; aktives Stripe-Abo mit trialing-Status.
+        sqlx::query(
+            "INSERT INTO twitch_billing_subscriptions (customer_reference, plan_id, status, \
+             current_period_end, updated_at) \
+             VALUES ('nani', 'analysis_dashboard', 'trialing', '2030-03-01T00:00:00Z', '2026-06-01T00:00:00Z')",
+        ).execute(&pool).await.unwrap();
+
+        let snap = resolve_plan_snapshot(&pool, "nani", "42").await.unwrap();
+        assert_eq!(snap.plan_id, "analysis_dashboard");
+        assert_eq!(snap.source, "billing_subscription");
+        // status kommt aus dem Abo, nicht hartem "active".
+        assert_eq!(snap.status, "trialing");
+        assert_eq!(snap.customer_reference, "nani");
+        assert!(snap.manual_override.is_null());
+        assert_eq!(snap.billing_subscription["plan_id"], "analysis_dashboard");
+        assert_eq!(snap.billing_subscription["status"], "trialing");
+        let exp = snap.expires_at.as_deref().unwrap();
+        assert!(exp.starts_with("2030-03-01T00:00:00"), "exp={exp}");
     }
 }
