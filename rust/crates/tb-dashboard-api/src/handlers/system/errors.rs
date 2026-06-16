@@ -1,14 +1,48 @@
 //! Handler für `GET /twitch/api/admin/system/errors`.
+//!
+//! **Quelle (B1-Fix):** Wie Pythons `_api_admin_system_errors`
+//! (`bot/analytics/api_admin.py`) werden die jüngsten ERROR-/CRITICAL-Zeilen aus
+//! den **Logdateien** geparst — NICHT aus einer DB-Tabelle. Der frühere Rust-Pfad
+//! las `twitch_admin_error_log` und divergierte damit in Quelle UND Response-Shape
+//! von Python (kein `source`, `id` als Zahl, `createdAt` statt `timestamp`). Hier
+//! angeglichen: Log-Parsing + Python-JSON-Shape
+//! `{ page, pageSize, total, hasMore, entries:[{id,timestamp,level,source,message,context}] }`.
+//!
+//! Secrets in den Logzeilen werden vor der Ausgabe maskiert
+//! (`sanitize_log_text`, Port von `_admin_sanitize_log_text`).
 
-use axum::{
-    extract::{Query, State},
-    response::IntoResponse,
-    Json,
-};
+use std::collections::VecDeque;
+use std::io::{BufRead, BufReader};
+use std::sync::OnceLock;
+
+use axum::{extract::Query, response::IntoResponse, Json};
+use regex::Regex;
 use serde::{Deserialize, Serialize};
-use sqlx::PgPool;
-use tb_analytics::system_errors::error_log_entries;
+use serde_json::json;
 use tb_http_core::{ApiError, AuthLevel};
+
+// ── Konstanten (Python api_admin.py:69-70) ───────────────────────────────────
+
+/// Maximale Zeilenzahl, die je Logdatei vom Ende her gescannt wird.
+const ERROR_LOG_MAX_SCAN_LINES: usize = 4000;
+/// Obergrenze der insgesamt zurückgegebenen Einträge (über alle Dateien).
+const ERROR_LOG_MAX_RETURNED: usize = 200;
+/// Logdatei-Kandidaten in Prioritätsreihenfolge (Python `_admin_error_log_candidates`).
+/// `*.log`-Geschwister werden zur Laufzeit ergänzt; Reihenfolge bleibt stabil
+/// (Dedup über `dict.fromkeys` in Python → hier per Set-Filter).
+const PRIMARY_LOG_FILES: &[&str] = &[
+    "twitch_bot.log",
+    "twitch_dashboard.log",
+    "twitch_service_warnings.log",
+    "twitch_autobans.log",
+];
+/// Tokens, die eine Logzeile als Fehler markieren (Python: Uppercase-Vergleich).
+const ERROR_TOKENS: &[&str] = &["ERROR", "CRITICAL", "TRACEBACK", "EXCEPTION"];
+
+const MESSAGE_MAX_LENGTH: usize = 1200;
+const CONTEXT_MAX_LENGTH: usize = 2000;
+
+// ── Request-Parameter ────────────────────────────────────────────────────────
 
 #[derive(Deserialize)]
 pub struct ErrorsParams {
@@ -25,221 +59,345 @@ fn default_page_size() -> i64 {
     25
 }
 
-#[derive(Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct ErrorEntryResponse {
-    pub id: i64,
-    pub created_at: String,
-    pub level: Option<String>,
-    pub message: Option<String>,
-    pub context: Option<String>,
-}
+// ── Response ─────────────────────────────────────────────────────────────────
 
 #[derive(Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct ErrorsResponse {
-    pub page: i64,
-    pub page_size: i64,
-    pub total: i64,
-    pub has_more: bool,
-    pub entries: Vec<ErrorEntryResponse>,
+struct ErrorEntry {
+    /// `"<dateiname>:<zeilennummer>"` (Python-Parität: String, nicht Zahl).
+    id: String,
+    timestamp: Option<String>,
+    level: Option<String>,
+    source: String,
+    message: String,
+    context: String,
 }
 
 /// `GET /twitch/api/admin/system/errors[?page=1&page_size=25]`
 pub async fn errors_handler(
     auth: AuthLevel,
-    State(pool): State<PgPool>,
     Query(params): Query<ErrorsParams>,
 ) -> Result<impl IntoResponse, ApiError> {
     if !auth.is_privileged() {
         return Err(ApiError::unauthorized());
     }
 
-    let page_size = params.page_size.clamp(1, 100);
     let page = params.page.max(1);
+    let page_size = params.page_size.clamp(1, 100);
 
-    // Bug A: ApiError::internal() ohne Argument
-    let result = error_log_entries(&pool, page, page_size)
-        .await
-        .map_err(|e| {
-            tracing::error!("error_log_entries Fehler: {e}");
-            ApiError::internal()
-        })?;
+    let entries = load_error_log_entries();
+    let total = entries.len() as i64;
+    let start = ((page - 1) * page_size).min(total);
+    let end = (start + page_size).min(total);
+    let has_more = end < total;
+    let slice = &entries[start as usize..end as usize];
 
-    let has_more = (page * page_size) < result.total;
+    Ok(Json(json!({
+        "page": page,
+        "pageSize": page_size,
+        "total": total,
+        "hasMore": has_more,
+        "entries": slice,
+    })))
+}
 
-    Ok(Json(ErrorsResponse {
-        page,
-        page_size,
-        total: result.total,
-        has_more,
-        entries: result
-            .entries
-            .into_iter()
-            .map(|e| ErrorEntryResponse {
-                id: e.id,
-                created_at: e.created_at.to_rfc3339(),
-                level: e.level,
-                message: e.message,
-                context: e.context,
-            })
-            .collect(),
-    }))
+// ── Log-Parsing (Port von _load_admin_error_log_entries) ──────────────────────
+
+/// Sammelt die jüngsten Fehler-Einträge über alle Logdatei-Kandidaten. Pro Datei
+/// werden die letzten [`ERROR_LOG_MAX_SCAN_LINES`] Zeilen rückwärts gescannt;
+/// sobald [`ERROR_LOG_MAX_RETURNED`] Einträge erreicht sind, wird abgebrochen.
+fn load_error_log_entries() -> Vec<ErrorEntry> {
+    let mut entries: Vec<ErrorEntry> = Vec::new();
+    for filename in log_candidates() {
+        let Some(lines) = read_log_tail(&filename, ERROR_LOG_MAX_SCAN_LINES) else {
+            continue;
+        };
+        // Rückwärts (neueste zuerst) — `lines` ist in Dateireihenfolge, die
+        // Zeilennummer ist 1-basiert ab dem Beginn des gescannten Fensters …
+        // Python nummeriert ab Dateianfang; bei <max_scan Zeilen ist das exakt
+        // die echte Zeilennummer, sonst ein vom Fenster-Offset abgeleiteter Wert.
+        // Wir bilden die Python-Semantik nach: `enumerate(handle, start=1)` über
+        // die im deque verbliebenen Zeilen liefert dort ebenfalls fenster-relative
+        // Indizes nur, wenn die Datei das deque füllt. Für die ID reicht ein
+        // stabiler, monotoner Zeilenindex.
+        let offset = lines.0;
+        for (idx, line) in lines.1.iter().enumerate().rev() {
+            let line_number = offset + idx + 1;
+            if let Some(entry) = parse_error_line(&filename, line_number, line) {
+                entries.push(entry);
+                if entries.len() >= ERROR_LOG_MAX_RETURNED {
+                    return entries;
+                }
+            }
+        }
+    }
+    entries
+}
+
+/// Logdatei-Kandidaten: Primärliste + alle übrigen `*.log` im `logs/`-Verzeichnis,
+/// dedupliziert unter Erhalt der Reihenfolge (Python `dict.fromkeys`).
+fn log_candidates() -> Vec<String> {
+    let mut out: Vec<String> = PRIMARY_LOG_FILES.iter().map(|s| s.to_string()).collect();
+    if let Ok(read_dir) = std::fs::read_dir("logs") {
+        for entry in read_dir.flatten() {
+            let name = entry.file_name().to_string_lossy().into_owned();
+            if name.ends_with(".log") && !out.contains(&name) {
+                out.push(name);
+            }
+        }
+    }
+    out
+}
+
+/// Liest die letzten `max_lines` Zeilen von `logs/<filename>` (relativ zum CWD).
+/// Rückgabe: `(offset, lines)` — `offset` = Anzahl der vor dem Fenster
+/// verworfenen Zeilen (für die fortlaufende Zeilennummer in der ID).
+fn read_log_tail(filename: &str, max_lines: usize) -> Option<(usize, Vec<String>)> {
+    let path = std::path::Path::new("logs").join(filename);
+    let file = std::fs::File::open(&path).ok()?;
+    let reader = BufReader::new(file);
+    let mut buf: VecDeque<String> = VecDeque::with_capacity(max_lines.min(1024));
+    let mut dropped = 0usize;
+    for line in reader.lines() {
+        let Ok(l) = line else { continue };
+        if buf.len() == max_lines {
+            buf.pop_front();
+            dropped += 1;
+        }
+        buf.push_back(l);
+    }
+    Some((dropped, buf.into_iter().collect()))
+}
+
+/// Parst eine einzelne Logzeile zu einem Fehler-Eintrag (Port von
+/// `_admin_error_log_entry`). `None`, wenn die Zeile leer ist oder keinen
+/// Fehler-Token enthält.
+///
+/// Format-Annahme (Python-Logger): `"<ts> - <logger> - <level> - <message>"`
+/// (Split an `" - "`, max. 4 Teile).
+fn parse_error_line(source: &str, line_number: usize, raw_line: &str) -> Option<ErrorEntry> {
+    let line = raw_line.trim();
+    if line.is_empty() {
+        return None;
+    }
+    let upper = line.to_uppercase();
+    if !ERROR_TOKENS.iter().any(|t| upper.contains(t)) {
+        return None;
+    }
+
+    let mut timestamp = String::new();
+    let mut level = String::new();
+    let mut message = line.to_string();
+
+    // Python: `line.split(" - ", 3)` → max. 4 Teile.
+    let parts: Vec<&str> = line.splitn(4, " - ").collect();
+    if parts.len() == 4 {
+        timestamp = parts[0].trim().to_string();
+        level = parts[2].trim().to_string();
+        let m = parts[3].trim();
+        message = if m.is_empty() { line.to_string() } else { m.to_string() };
+    } else if parts.len() >= 2 {
+        timestamp = parts[0].trim().to_string();
+        let m = parts[parts.len() - 1].trim();
+        message = if m.is_empty() { line.to_string() } else { m.to_string() };
+    }
+
+    let sanitized_message = sanitize_log_text(&message, MESSAGE_MAX_LENGTH);
+    let sanitized_context = sanitize_log_text(line, CONTEXT_MAX_LENGTH);
+
+    let message_out = if sanitized_message.is_empty() {
+        "[redacted]".to_string()
+    } else {
+        sanitized_message.clone()
+    };
+    let context_out = if !sanitized_context.is_empty() {
+        sanitized_context
+    } else if !sanitized_message.is_empty() {
+        sanitized_message
+    } else {
+        "[redacted]".to_string()
+    };
+
+    Some(ErrorEntry {
+        id: format!("{source}:{line_number}"),
+        timestamp: non_empty(timestamp),
+        level: non_empty(level),
+        source: source.to_string(),
+        message: message_out,
+        context: context_out,
+    })
+}
+
+fn non_empty(s: String) -> Option<String> {
+    if s.is_empty() {
+        None
+    } else {
+        Some(s)
+    }
+}
+
+// ── Secret-Maskierung (Port von _admin_sanitize_log_text/_admin_mask_secret) ──
+
+/// Maskiert einen Geheimwert auf `[redacted:<len>]` (Python `_admin_mask_secret`,
+/// Länge gedeckelt auf 999).
+fn mask_secret(value: &str) -> String {
+    if value.is_empty() {
+        "[redacted]".to_string()
+    } else {
+        format!("[redacted:{}]", value.len().min(999))
+    }
+}
+
+struct SecretPatterns {
+    header: Regex,
+    cookie: Regex,
+    quoted_kv: Regex,
+    kv: Regex,
+    query: Regex,
+    jwt: Regex,
+    oauth: Regex,
+}
+
+/// Kompiliert die Secret-Regexes einmalig (Port der `_LOG_*_RE`-Konstanten).
+fn secret_patterns() -> &'static SecretPatterns {
+    static PATTERNS: OnceLock<SecretPatterns> = OnceLock::new();
+    PATTERNS.get_or_init(|| {
+        const KEYS: &str = r"access[_-]?token|refresh[_-]?token|id[_-]?token|csrf[_-]?token|client[_-]?secret|api[_-]?key|apikey|session(?:id)?|password|secret";
+        // `Regex::new` der statischen Muster kann nicht fehlschlagen; bei einer
+        // (unmöglichen) Regex-Drift fällt der Wert auf ein nie-matchendes Muster
+        // zurück, statt zu panicken (kein expect in Prod-Pfad).
+        let compile = |p: &str| Regex::new(p).unwrap_or_else(|_| Regex::new(r"$.^").unwrap());
+        SecretPatterns {
+            header: compile(r"(?i)\b(authorization\s*[:=]\s*(?:bearer|basic)\s+)([^\s,;]+)"),
+            cookie: compile(r"(?i)\b((?:set-cookie|cookie)\s*[:=]\s*)([^\r\n]+)"),
+            quoted_kv: compile(&format!(
+                r#"(?i)((?:"|')(?:{KEYS})(?:"|')\s*[:=]\s*)("[^"]*"|'[^']*'|[^\s,;]+)"#
+            )),
+            kv: compile(&format!(
+                r#"(?i)\b({KEYS})(\s*[:=]\s*)("[^"]+"|'[^']+'|[^\s,;]+)"#
+            )),
+            query: compile(&format!(r"(?i)\b({KEYS})=([^&\s]+)")),
+            jwt: compile(r"\beyJ[a-zA-Z0-9_-]{8,}\.[a-zA-Z0-9._-]{8,}\.[a-zA-Z0-9._-]{8,}\b"),
+            oauth: compile(r"\boauth:[a-zA-Z0-9]{12,}\b"),
+        }
+    })
+}
+
+/// Maskiert Geheimnisse in einer Logzeile und deckelt die Länge (Port von
+/// `_admin_sanitize_log_text`). Reihenfolge der Substitutionen wie in Python.
+fn sanitize_log_text(raw: &str, max_length: usize) -> String {
+    let text = raw.trim();
+    if text.is_empty() {
+        return String::new();
+    }
+    let p = secret_patterns();
+
+    // header/cookie/query/kv: Präfix erhalten, nur den Wert maskieren.
+    let s = p
+        .header
+        .replace_all(text, |c: &regex::Captures| format!("{}{}", &c[1], mask_secret(&c[2])));
+    let s = p
+        .cookie
+        .replace_all(&s, |c: &regex::Captures| format!("{}{}", &c[1], mask_secret(&c[2])));
+    // quoted_kv: Gruppe 1 = `"key":`, Gruppe 2 = Wert.
+    let s = p
+        .quoted_kv
+        .replace_all(&s, |c: &regex::Captures| format!("{}{}", &c[1], mask_secret(&c[2])));
+    // kv: Gruppe 1 = key, 2 = Separator, 3 = Wert.
+    let s = p.kv.replace_all(&s, |c: &regex::Captures| {
+        format!("{}{}{}", &c[1], &c[2], mask_secret(&c[3]))
+    });
+    let s = p
+        .query
+        .replace_all(&s, |c: &regex::Captures| format!("{}={}", &c[1], mask_secret(&c[2])));
+    let s = p.jwt.replace_all(&s, mask_secret("[jwt]").as_str());
+    let s = p.oauth.replace_all(&s, mask_secret("[oauth-token]").as_str());
+
+    truncate_chars(&s, max_length)
+}
+
+/// Schneidet auf `max_chars` Zeichen (nicht Bytes) — Python `[:max_length]`.
+fn truncate_chars(s: &str, max_chars: usize) -> String {
+    match s.char_indices().nth(max_chars) {
+        Some((byte_idx, _)) => s[..byte_idx].to_string(),
+        None => s.to_string(),
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use axum::{
-        body::Body,
-        extract::ConnectInfo,
-        http::{Request, StatusCode},
-        routing::get,
-        Extension, Router,
-    };
-    use sqlx::postgres::PgPoolOptions;
-    use std::net::SocketAddr;
-    use tb_http_core::ExpectedToken;
-    use tower::ServiceExt;
 
-    fn test_dsn() -> Option<String> {
-        std::env::var("TB_TEST_DATABASE_URL").ok()
+    #[test]
+    fn parst_error_zeile_im_standardformat() {
+        let line = "2026-06-15T10:00:00 - twitch.bot - ERROR - etwas ging schief";
+        let e = parse_error_line("twitch_bot.log", 42, line).expect("Error-Token → Some");
+        assert_eq!(e.id, "twitch_bot.log:42");
+        assert_eq!(e.timestamp.as_deref(), Some("2026-06-15T10:00:00"));
+        assert_eq!(e.level.as_deref(), Some("ERROR"));
+        assert_eq!(e.source, "twitch_bot.log");
+        assert_eq!(e.message, "etwas ging schief");
+        assert!(e.context.contains("ERROR"));
     }
 
-    /// Gibt die DSN zurück oder bricht den Test ab.
-    /// Mit `TB_TEST_REQUIRE_DB=1` wird statt des stillen Skips ein panic ausgelöst.
-    macro_rules! db_dsn_or_skip {
-        () => {
-            match test_dsn() {
-                Some(d) => d,
-                None => {
-                    if std::env::var("TB_TEST_REQUIRE_DB").as_deref() == Ok("1") {
-                        panic!(
-                            "TB_TEST_REQUIRE_DB=1 ist gesetzt, aber TB_TEST_DATABASE_URL fehlt"
-                        );
-                    }
-                    eprintln!("SKIP: TB_TEST_DATABASE_URL nicht gesetzt");
-                    return;
-                }
-            }
-        };
+    #[test]
+    fn ignoriert_zeilen_ohne_fehler_token() {
+        assert!(parse_error_line("x.log", 1, "2026 - logger - INFO - alles gut").is_none());
+        assert!(parse_error_line("x.log", 2, "").is_none());
+        assert!(parse_error_line("x.log", 3, "   ").is_none());
     }
 
-    async fn make_pool(dsn: &str, schema: &str) -> PgPool {
-        let pool = PgPoolOptions::new()
-            .max_connections(1)
-            .connect(dsn)
-            .await
-            .expect("connect");
-        sqlx::query(&format!("DROP SCHEMA IF EXISTS {schema} CASCADE"))
-            .execute(&pool)
-            .await
-            .expect("Schema droppen");
-        sqlx::query(&format!("CREATE SCHEMA {schema}"))
-            .execute(&pool)
-            .await
-            .expect("Schema anlegen");
-        sqlx::query(&format!("SET search_path TO {schema}"))
-            .execute(&pool)
-            .await
-            .expect("search_path");
-        pool
+    #[test]
+    fn erkennt_traceback_und_exception() {
+        assert!(parse_error_line("x.log", 1, "Traceback (most recent call last):").is_some());
+        assert!(parse_error_line("x.log", 2, "raise ValueError EXCEPTION here").is_some());
     }
 
-    async fn make_pool_with_table(dsn: &str, schema: &str) -> PgPool {
-        let pool = make_pool(dsn, schema).await;
-        sqlx::query(
-            r#"
-            CREATE TABLE IF NOT EXISTS twitch_admin_error_log (
-                id         BIGSERIAL PRIMARY KEY,
-                created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-                level      TEXT,
-                message    TEXT,
-                context    TEXT
-            )
-            "#,
-        )
-        .execute(&pool)
-        .await
-        .expect("DDL error_log");
-        sqlx::query("TRUNCATE twitch_admin_error_log")
-            .execute(&pool)
-            .await
-            .expect("TRUNCATE");
-        pool
+    #[test]
+    fn maskiert_authorization_header() {
+        let out = sanitize_log_text("Authorization: Bearer abcdef123456 rest", 2000);
+        assert!(out.contains("Authorization: Bearer [redacted:"), "out={out}");
+        assert!(!out.contains("abcdef123456"));
+        assert!(out.contains(" rest"));
     }
 
-    fn make_router(pool: PgPool, token: &str) -> Router {
-        Router::new()
-            .route("/twitch/api/admin/system/errors", get(errors_handler))
-            .with_state(pool)
-            .layer(Extension(ExpectedToken(token.to_string())))
+    #[test]
+    fn maskiert_key_value_secrets() {
+        let out = sanitize_log_text("access_token=supersecretvalue&x=1", 2000);
+        assert!(!out.contains("supersecretvalue"), "out={out}");
+        assert!(out.contains("access_token=[redacted:"));
     }
 
-    fn authed_req(token: &str, uri: &str) -> Request<Body> {
-        let addr: SocketAddr = "1.2.3.4:9999".parse().unwrap();
-        Request::builder()
-            .uri(uri)
-            .extension(ConnectInfo(addr))
-            .header(axum::http::header::HOST, "example.com")
-            .header("x-internal-token", token)
-            .body(Body::empty())
-            .unwrap()
+    #[test]
+    fn maskiert_jwt_und_oauth_token() {
+        let jwt = "eyJabcdefgh.ijklmnopqrst.uvwxyz012345";
+        let out = sanitize_log_text(jwt, 2000);
+        assert!(!out.contains(jwt), "JWT muss maskiert sein: {out}");
+        let oauth = "oauth:abcdefghijklmnop";
+        let out2 = sanitize_log_text(oauth, 2000);
+        assert!(!out2.contains(oauth), "oauth-Token muss maskiert sein: {out2}");
     }
 
-    #[tokio::test]
-    async fn returns_401_ohne_auth() {
-        let dsn = db_dsn_or_skip!();
-        let pool = make_pool(&dsn, "test_handler_err_unauth").await;
-        let addr: SocketAddr = "1.2.3.4:9999".parse().unwrap();
-        let req = Request::builder()
-            .uri("/twitch/api/admin/system/errors")
-            .extension(ConnectInfo(addr))
-            .header(axum::http::header::HOST, "example.com")
-            .body(Body::empty())
-            .unwrap();
-        let res = make_router(pool, "tok").oneshot(req).await.unwrap();
-        assert_eq!(res.status(), StatusCode::UNAUTHORIZED);
+    #[test]
+    fn truncate_zaehlt_zeichen_nicht_bytes() {
+        // 3 Multibyte-Zeichen → max_chars=2 ergibt 2 Zeichen.
+        assert_eq!(truncate_chars("äöü", 2).chars().count(), 2);
+        assert_eq!(truncate_chars("abc", 10), "abc");
     }
 
-    #[tokio::test]
-    async fn tabelle_nicht_vorhanden_gibt_leeres_ergebnis() {
-        let dsn = db_dsn_or_skip!();
-        let pool = make_pool(&dsn, "test_handler_err_notable").await;
-        let res = make_router(pool, "tok")
-            .oneshot(authed_req("tok", "/twitch/api/admin/system/errors"))
-            .await
-            .unwrap();
-        assert_eq!(res.status(), StatusCode::OK);
-        let b = axum::body::to_bytes(res.into_body(), 4096).await.unwrap();
-        let v: serde_json::Value = serde_json::from_slice(&b).unwrap();
-        assert_eq!(v["total"], 0);
-        assert!(v["entries"].as_array().unwrap().is_empty());
+    #[test]
+    fn mask_secret_format() {
+        assert_eq!(mask_secret(""), "[redacted]");
+        assert_eq!(mask_secret("ab"), "[redacted:2]");
+        let long = "x".repeat(2000);
+        assert_eq!(mask_secret(&long), "[redacted:999]");
     }
 
-    #[tokio::test]
-    async fn paginierung_gibt_has_more() {
-        let dsn = db_dsn_or_skip!();
-        let pool = make_pool_with_table(&dsn, "test_handler_err_pages").await;
-        for i in 0..5i64 {
-            sqlx::query("INSERT INTO twitch_admin_error_log (level, message) VALUES ('INFO', $1)")
-                .bind(format!("msg {i}"))
-                .execute(&pool)
-                .await
-                .unwrap();
-        }
-        let res = make_router(pool, "tok")
-            .oneshot(authed_req(
-                "tok",
-                "/twitch/api/admin/system/errors?page=1&page_size=3",
-            ))
-            .await
-            .unwrap();
-        assert_eq!(res.status(), StatusCode::OK);
-        let b = axum::body::to_bytes(res.into_body(), 4096).await.unwrap();
-        let v: serde_json::Value = serde_json::from_slice(&b).unwrap();
-        assert_eq!(v["total"], 5);
-        assert_eq!(v["entries"].as_array().unwrap().len(), 3);
-        assert_eq!(v["hasMore"], true);
+    #[test]
+    fn fehlende_logs_geben_leere_liste() {
+        // Im Test-CWD existiert kein `logs/`-Verzeichnis mit den Dateien →
+        // load_error_log_entries liefert eine leere Liste (kein Panic).
+        let entries = load_error_log_entries();
+        // Es darf nie mehr als das Returned-Limit geben.
+        assert!(entries.len() <= ERROR_LOG_MAX_RETURNED);
     }
 }

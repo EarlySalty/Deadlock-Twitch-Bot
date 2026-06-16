@@ -444,6 +444,11 @@ pub fn build_admin_system_router(pool: PgPool, token: String) -> Router {
 }
 
 /// Baut den Router für Admin-Streamer-Endpoints.
+///
+/// Lesend: Liste + Detail. Schreibend (B11-PR-4): verify/archive/block/
+/// discord-flag als POST-Routen — CRUD in [`tb_analytics::streamers_crud`]. Die
+/// Writes laufen wie der Admin-Config-Router durch den CSRF-Schutz (GET/HEAD
+/// passieren, Localhost-Bypass für interne Tools).
 pub fn build_admin_streamers_router(pool: PgPool, token: String) -> Router {
     use handlers::admin_streamers;
 
@@ -456,8 +461,25 @@ pub fn build_admin_streamers_router(pool: PgPool, token: String) -> Router {
             "/twitch/api/admin/streamers/:login",
             get(admin_streamers::detail_handler),
         )
+        .route(
+            "/twitch/api/admin/streamers/:login/verify",
+            post(admin_streamers::verify_handler),
+        )
+        .route(
+            "/twitch/api/admin/streamers/:login/archive",
+            post(admin_streamers::archive_handler),
+        )
+        .route(
+            "/twitch/api/admin/streamers/:login/block",
+            post(admin_streamers::block_handler),
+        )
+        .route(
+            "/twitch/api/admin/streamers/:login/discord-flag",
+            post(admin_streamers::discord_flag_handler),
+        )
         .with_state(pool)
         .layer(Extension(ExpectedToken(token)))
+        .layer(axum::middleware::from_fn(crate::auth::csrf::csrf_protect))
 }
 
 /// Baut den Router für Admin-Config-Endpoints (Schreib-Seite).
