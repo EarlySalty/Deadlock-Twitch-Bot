@@ -1,7 +1,9 @@
 //! Gemeinsame Test-Infrastruktur der hermetischen tb-monitoring-Tests:
 //! Schema pro Test (Isolation bei parallelem Lauf) + prod-verifiziertes DDL
-//! (Stand 2026-06-09): Sessions timestamptz/boolean/bigint, Live-State und
-//! exp_* mit TEXT-Timestamps.
+//! (Stand 2026-06-09): Sessions timestamptz/bigint, Bool-benannte Flags
+//! (is_mature/had_deadlock_in_session/is_gift/is_automatic/is_partner) sind
+//! INTEGER (0/1, SQLite-Erbe) wie im echten Schema, Live-State und exp_* mit
+//! TEXT-Timestamps.
 
 use std::str::FromStr;
 
@@ -80,8 +82,8 @@ pub async fn pool_in_schema(schema: &str) -> Option<PgPool> {
             returning_chatters INTEGER DEFAULT 0,
             followers_start INTEGER, followers_end INTEGER, follower_delta INTEGER,
             stream_title TEXT, notification_text TEXT, language TEXT,
-            is_mature BOOLEAN DEFAULT FALSE, tags TEXT,
-            had_deadlock_in_session BOOLEAN DEFAULT FALSE,
+            is_mature INTEGER DEFAULT 0, tags TEXT,
+            had_deadlock_in_session INTEGER DEFAULT 0,
             game_name TEXT, notes TEXT
         )",
         "CREATE TABLE twitch_session_viewers (
@@ -96,12 +98,12 @@ pub async fn pool_in_schema(schema: &str) -> Option<PgPool> {
         )",
         "CREATE TABLE twitch_stats_tracked (
             ts_utc TIMESTAMPTZ, streamer TEXT, viewer_count INTEGER,
-            is_partner BOOLEAN, game_name TEXT, stream_title TEXT, tags TEXT,
+            is_partner INTEGER DEFAULT 0, game_name TEXT, stream_title TEXT, tags TEXT,
             language TEXT
         )",
         "CREATE TABLE twitch_stats_category (
             ts_utc TIMESTAMPTZ, streamer TEXT, viewer_count INTEGER,
-            is_partner BOOLEAN, game_name TEXT, stream_title TEXT, tags TEXT,
+            is_partner INTEGER DEFAULT 0, game_name TEXT, stream_title TEXT, tags TEXT,
             language TEXT
         )",
         "CREATE TABLE exp_sessions (
@@ -182,13 +184,13 @@ pub async fn pool_in_schema(schema: &str) -> Option<PgPool> {
         // Telemetrie-Event-Tabellen (Prod-Typen verifiziert 2026-06-09).
         "CREATE TABLE twitch_subscription_events (
             id BIGSERIAL PRIMARY KEY, session_id BIGINT, twitch_user_id TEXT,
-            event_type TEXT, user_login TEXT, tier TEXT, is_gift BOOLEAN,
+            event_type TEXT, user_login TEXT, tier TEXT, is_gift INTEGER DEFAULT 0,
             gifter_login TEXT, cumulative_months INTEGER, streak_months INTEGER,
             message TEXT, total_gifted INTEGER, received_at TIMESTAMPTZ
         )",
         "CREATE TABLE twitch_ad_break_events (
             id BIGSERIAL PRIMARY KEY, session_id BIGINT, twitch_user_id TEXT,
-            duration_seconds INTEGER, is_automatic BOOLEAN, started_at TIMESTAMPTZ
+            duration_seconds INTEGER, is_automatic INTEGER DEFAULT 0, started_at TIMESTAMPTZ
         )",
         "CREATE TABLE twitch_bits_events (
             id BIGSERIAL PRIMARY KEY, session_id BIGINT, twitch_user_id TEXT,

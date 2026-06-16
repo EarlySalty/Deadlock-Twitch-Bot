@@ -218,7 +218,7 @@ async fn session_lifecycle_start_sample_finalize() {
         first_time_chatters: i32,
         follower_delta: Option<i32>,
         notes: String,
-        had_deadlock_in_session: bool,
+        had_deadlock_in_session: i32,
     }
     let row: FinalizedRow = sqlx::query_as(
         "SELECT ended_at, end_viewers, peak_viewers, avg_viewers, samples,
@@ -242,8 +242,8 @@ async fn session_lifecycle_start_sample_finalize() {
     );
     assert_eq!(row.follower_delta, Some(15), "follower_delta 25-10");
     assert_eq!(row.notes, "done");
-    assert!(
-        row.had_deadlock_in_session,
+    assert_eq!(
+        row.had_deadlock_in_session, 1,
         "had_deadlock aus Live-State/Game"
     );
 
@@ -412,15 +412,12 @@ async fn stats_batch_inserts() {
         .unwrap();
     store.log_category(ts, &[sample("c", false)]).await.unwrap();
 
-    let tracked: Vec<(String, bool)> =
+    let tracked: Vec<(String, i32)> =
         sqlx::query_as("SELECT streamer, is_partner FROM twitch_stats_tracked ORDER BY streamer")
             .fetch_all(&pool)
             .await
             .unwrap();
-    assert_eq!(
-        tracked,
-        vec![("a".to_string(), true), ("b".to_string(), false)]
-    );
+    assert_eq!(tracked, vec![("a".to_string(), 1), ("b".to_string(), 0)]);
     let category: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM twitch_stats_category")
         .fetch_one(&pool)
         .await

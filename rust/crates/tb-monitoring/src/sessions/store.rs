@@ -1,7 +1,8 @@
 //! DB-Zugriff auf `twitch_stream_sessions` / `twitch_session_viewers` /
 //! `twitch_session_chatters` (nur Count-Read). Prod-Typen verifiziert:
 //! `id` bigint, `started_at`/`ended_at` timestamptz, `is_mature`/
-//! `had_deadlock_in_session` boolean, `avg_viewers` double precision.
+//! `had_deadlock_in_session` INTEGER (0/1, SQLite-Erbe — Bind/Decode als `i32`,
+//! nicht bool), `avg_viewers` double precision.
 //!
 //! Bewusste Fixes gegenüber Python (Plan-Doc Schritt 4):
 //! - `start_session` hält einen Advisory-Lock pro Login und prüft offene
@@ -182,10 +183,10 @@ impl SessionStore {
         .bind(new.followers_start)
         .bind(&new.title)
         .bind(&new.language)
-        .bind(new.is_mature)
+        .bind(i32::from(new.is_mature))
         .bind(&new.tags)
         .bind(&new.game_name)
-        .bind(new.had_deadlock)
+        .bind(i32::from(new.had_deadlock))
         .fetch_one(&mut *tx)
         .await?;
         sqlx::query(
@@ -293,14 +294,14 @@ impl SessionStore {
             UPDATE twitch_stream_sessions
                SET start_viewers = $1,
                    peak_viewers = GREATEST(peak_viewers, $1),
-                   had_deadlock_in_session = COALESCE(had_deadlock_in_session, $2) OR $2,
+                   had_deadlock_in_session = GREATEST(COALESCE(had_deadlock_in_session, 0), $2),
                    game_name = COALESCE(game_name, $3),
                    stream_title = COALESCE(stream_title, $4)
              WHERE id = $5 AND samples = 0 AND start_viewers = 0
             "#,
         )
         .bind(viewer_count)
-        .bind(had_deadlock)
+        .bind(i32::from(had_deadlock))
         .bind(game_name)
         .bind(stream_title)
         .bind(session_id)
@@ -419,7 +420,7 @@ impl SessionStore {
         .bind(update.followers_end)
         .bind(update.follower_delta)
         .bind(&update.notes)
-        .bind(update.had_deadlock_in_session)
+        .bind(i32::from(update.had_deadlock_in_session))
         .bind(&update.fallback_game_name)
         .bind(update.session_id)
         .execute(&mut *tx)
