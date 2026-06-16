@@ -710,11 +710,13 @@ async fn main() {
     // 30-min-Subscription-Reconcile.
     let eventsub_hooks: Arc<dyn EventSubHooks> = match chat_api_handle {
         Some(handle) => {
-            // !clip: Broadcaster-Token-Clip-Port, nur mit Helix + Krypto-Key.
+            // !clip: Broadcaster-Token-Clip-Port (Fallback: Bot-Token), nur mit
+            // Helix + Krypto-Key.
             let clip_port = chat_wiring::build_clip_port(
                 helix.as_ref().clone().map(Arc::new),
                 FieldCipher::from_env().ok().map(Arc::new),
                 pool.clone(),
+                handle.bot_token_manager(),
             );
             let runtime = chat_wiring::build_runtime(
                 handle,
