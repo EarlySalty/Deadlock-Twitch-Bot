@@ -183,6 +183,21 @@ async fn run_migrations_builds_full_schema_on_fresh_db() {
     .await;
     assert_eq!(lb, 2, "beide Leaderboard-Indizes müssen existieren");
 
+    // M12-3: Auto-Approve-Settings-Seed (Python-Orakel `_ensure_auto_approve_settings`).
+    // Drei Keys mit JSONB-`false`, damit eine frische DB die gleiche Schema-Parität
+    // wie das gewachsene Prod-Schema hat — get_auto_approve_settings() liefert sonst
+    // erst nach erstem Dashboard-PUT konsistente Zeilen.
+    let auto_approve = scalar_i64(
+        "SELECT count(*) FROM social_media_settings \
+         WHERE key IN ('auto_approve_youtube', 'auto_approve_tiktok', 'auto_approve_instagram') \
+           AND value = 'false'::jsonb",
+    )
+    .await;
+    assert_eq!(
+        auto_approve, 3,
+        "alle drei Auto-Approve-Settings-Keys müssen mit value=false geseedet sein"
+    );
+
     pool.close().await;
     sqlx::query(&format!("DROP DATABASE IF EXISTS {dbname} WITH (FORCE)"))
         .execute(&admin)
