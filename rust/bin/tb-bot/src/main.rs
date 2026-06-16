@@ -29,6 +29,9 @@
 //!                                   benötigt Helix-Client)
 //!   TB_SCOUT_ENABLED              — "1" startet den Scout-Task für live Deadlock-DE-Streams
 //!                                   (default aus; benötigt Helix-Client)
+//!   ENGAGEMENT_SHADOW_REVIEW_CHANNEL_ID — Discord-Kanal-ID für den Shadow-KI-
+//!                                   Review-Ausgang (B19). Fehlt sie, bleibt der
+//!                                   Forward-Loop aus (default aus, opt-in)
 
 mod auto_raid;
 mod chat_wiring;
@@ -46,6 +49,7 @@ mod raid_oauth_impl;
 mod reauth_reminder;
 mod score_refresh;
 mod scout_chat;
+mod shadow_review_wiring;
 mod token_lifecycle_wiring;
 mod wiring;
 
@@ -1074,6 +1078,12 @@ async fn main() {
     // (stündlich) und Blacklist-Cleanup >30 Tage (3,5 h) — alles über den
     // F4-Master-Broker, da der Twitch-Bot keinen Discord-Zugang hat.
     token_lifecycle_wiring::spawn_token_lifecycle_schedulers(pool.clone(), &settings.broker);
+
+    // Shadow-Review-Ausgang (B19): leitet gestagte Shadow-KI-Antworten periodisch
+    // in den Engagement-Review-Discord-Kanal weiter (Master-Broker). Default AUS —
+    // startet nur mit gesetztem ENGAGEMENT_SHADOW_REVIEW_CHANNEL_ID; ohne opt-in
+    // output_mode='shadow' ist die Queue ohnehin leer (no-op).
+    shadow_review_wiring::spawn_shadow_review_scheduler(pool.clone(), &settings.broker);
 
     // Streamer-Link-Matcher: verknüpft neue Twitch-Partner mit ihrem Discord-Account.
     // Läuft alle 6h, ist still wenn keine neuen Kandidaten vorhanden.
