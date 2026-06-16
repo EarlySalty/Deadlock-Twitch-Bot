@@ -201,6 +201,13 @@ pub fn build_internal_router(
             get(streamers::analytics_comparison_handler),
         )
         .route(&format!("{base}/stats"), get(stats_native::stats_handler))
+        // /stats/extended: B13-1 — vier Zusatz-Sektionen (retention/chat/
+        // discovery/content_performance) als Datenquelle fürs Web-Dashboard-
+        // Leaderboard. Bewusst getrennt vom Python-treuen /stats-Vertrag.
+        .route(
+            &format!("{base}/stats/extended"),
+            get(stats_native::extended_stats_handler),
+        )
         .route(
             &format!("{base}/analytics/streamer/:login"),
             get(streamer_analytics_native::streamer_analytics_native_handler),

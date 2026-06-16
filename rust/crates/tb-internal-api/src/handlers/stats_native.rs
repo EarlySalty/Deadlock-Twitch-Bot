@@ -1455,6 +1455,279 @@ async fn fetch_streamer_subs_and_audience(
     Ok((subs, shared))
 }
 
+// ── B13-1: Extended-Stats (Dashboard-Leaderboard) ──────────────────────────────
+//
+// Vier Zusatz-Sektionen aus `leaderboard.py:_compute_stats` (Zeilen 1024–1256):
+// `retention`, `chat`, `discovery`, `content_performance`. Sie leben bewusst
+// NICHT im `/stats`-Vertrag (der den Python-Internal-API-Vertrag 1:1 spiegelt),
+// sondern unter `GET /stats/extended` als Datenquelle für das neue Web-Dashboard-
+// Leaderboard (Grillme-Block-13: „Leaderboard sauber neu im Dashboard").
+//
+// Python-Parität: Der gesamte Block steht in einem try/except — schlägt eine
+// Query fehl, fehlen ALLE vier Sektionen (graceful-degrade). Hier abgebildet,
+// indem ein Query-Fehler propagiert wird; der Handler fängt ihn ab.
+
+/// Durchschnitt einer Werteliste, `None` bei leerer Liste (Python `_avg`).
+fn avg_or_none(values: &[f64]) -> Value {
+    if values.is_empty() {
+        Value::Null
+    } else {
+        json!(values.iter().sum::<f64>() / values.len() as f64)
+    }
+}
+
+/// `started_at` (TIMESTAMPTZ) als Python-isoformat-String; `null` wenn leer.
+fn session_started_at(row: &sqlx::postgres::PgRow) -> Value {
+    row_ts_opt(row, "started_at")
+        .map(|dt| json!(format_ts_python(dt)))
+        .unwrap_or(Value::Null)
+}
+
+/// `GET /internal/twitch/v1/stats/extended` — die vier Dashboard-Leaderboard-
+/// Sektionen (`retention`/`chat`/`discovery`/`content_performance`).
+pub async fn extended_stats_handler(
+    auth: AuthLevel,
+    State(pool): State<PgPool>,
+) -> Result<impl IntoResponse, ApiError> {
+    if !auth.is_privileged() {
+        return Err(ApiError::unauthorized());
+    }
+
+    // Python-Parität: bei DB-Fehler bleiben die Sektionen schlicht leer.
+    // Wir liefern dann ein leeres Objekt statt 500 (graceful-degrade).
+    let result = compute_extended_stats(&pool).await.unwrap_or_else(|e| {
+        tracing::debug!("Konnte erweiterte Twitch-Metriken nicht berechnen: {e}");
+        json!({})
+    });
+
+    Ok(Json(result))
+}
+
+/// Berechnet die vier Extended-Stats-Sektionen aus `twitch_stream_sessions`,
+/// `twitch_chat_messages` und `twitch_chatter_rollup`.
+async fn compute_extended_stats(pool: &PgPool) -> Result<Value, BoxError> {
+    // 30-Tage-Fenster, max. 400 abgeschlossene Sessions (Python LIMIT 400).
+    let session_rows = sqlx::query(
+        r#"
+        SELECT id, streamer_login, started_at, duration_seconds, start_viewers, peak_viewers,
+               end_viewers, avg_viewers, samples, retention_5m, retention_10m, retention_20m,
+               dropoff_pct, dropoff_label, unique_chatters, first_time_chatters,
+               returning_chatters, follower_delta, followers_start, followers_end,
+               stream_title, notification_text
+          FROM twitch_stream_sessions
+         WHERE started_at >= NOW() - INTERVAL '30 days'
+           AND ended_at IS NOT NULL
+         ORDER BY started_at DESC
+         LIMIT 400
+        "#,
+    )
+    .fetch_all(pool)
+    .await?;
+
+    let chat_peak_rows = sqlx::query(
+        r#"
+        SELECT cm.session_id,
+               s.streamer_login,
+               s.started_at,
+               TO_CHAR(
+                   date_trunc('minute', cm.message_ts AT TIME ZONE 'UTC'),
+                   'YYYY-MM-DD"T"HH24:MI:00"Z"'
+               ) AS minute_bucket,
+               COUNT(*) AS messages
+          FROM twitch_chat_messages cm
+          JOIN twitch_stream_sessions s ON s.id = cm.session_id
+         WHERE cm.message_ts >= NOW() - INTERVAL '30 days'
+         GROUP BY cm.session_id, s.streamer_login, s.started_at, minute_bucket
+         ORDER BY messages DESC
+         LIMIT 5
+        "#,
+    )
+    .fetch_all(pool)
+    .await?;
+
+    let count_since = |interval: &str| -> String {
+        format!(
+            "SELECT CAST(COUNT(*) AS BIGINT) FROM twitch_chatter_rollup \
+             WHERE last_seen_at >= NOW() - INTERVAL '{interval}'"
+        )
+    };
+    let returning_since = |interval: &str| -> String {
+        format!(
+            "SELECT CAST(COUNT(*) AS BIGINT) FROM twitch_chatter_rollup \
+             WHERE first_seen_at < NOW() - INTERVAL '{interval}' \
+               AND last_seen_at >= NOW() - INTERVAL '{interval}'"
+        )
+    };
+    let active_7: i64 = sqlx::query_scalar(&count_since("7 days")).fetch_one(pool).await?;
+    let returning_7: i64 = sqlx::query_scalar(&returning_since("7 days")).fetch_one(pool).await?;
+    let active_30: i64 = sqlx::query_scalar(&count_since("30 days")).fetch_one(pool).await?;
+    let returning_30: i64 = sqlx::query_scalar(&returning_since("30 days")).fetch_one(pool).await?;
+
+    let sessions_count = session_rows.len() as i64;
+
+    // ── Retention ──────────────────────────────────────────────────────────────
+    let collect_opt = |col: &str| -> Vec<f64> {
+        session_rows
+            .iter()
+            .filter_map(|r| r.try_get::<Option<f64>, _>(col).ok().flatten())
+            .collect()
+    };
+    let ret5 = collect_opt("retention_5m");
+    let ret10 = collect_opt("retention_10m");
+    let ret20 = collect_opt("retention_20m");
+    let drops = collect_opt("dropoff_pct");
+
+    let mut dropoff_examples: Vec<(f64, Value)> = session_rows
+        .iter()
+        .filter_map(|r| {
+            r.try_get::<Option<f64>, _>("dropoff_pct").ok().flatten().map(|pct| {
+                (
+                    pct,
+                    json!({
+                        "streamer": row_str_opt(r, "streamer_login").unwrap_or_default(),
+                        "started_at": session_started_at(r),
+                        "dropoff_pct": pct,
+                        "label": row_str_opt(r, "dropoff_label").unwrap_or_default(),
+                        "start_viewers": row_i64(r, "start_viewers"),
+                        "peak_viewers": row_i64(r, "peak_viewers"),
+                    }),
+                )
+            })
+        })
+        .collect();
+    dropoff_examples.sort_by(|a, b| b.0.partial_cmp(&a.0).unwrap_or(std::cmp::Ordering::Equal));
+    let examples: Vec<Value> = dropoff_examples.into_iter().take(5).map(|(_, v)| v).collect();
+
+    let retention = json!({
+        "sessions": sessions_count,
+        "ret5": avg_or_none(&ret5),
+        "ret10": avg_or_none(&ret10),
+        "ret20": avg_or_none(&ret20),
+        "avg_drop": avg_or_none(&drops),
+        "examples": examples,
+    });
+
+    // ── Discovery ──────────────────────────────────────────────────────────────
+    let peak_vals: Vec<f64> = session_rows.iter().map(|r| row_i64(r, "peak_viewers") as f64).collect();
+    let follower_deltas: Vec<f64> = session_rows
+        .iter()
+        .filter_map(|r| r.try_get::<Option<i32>, _>("follower_delta").ok().flatten().map(|v| v as f64))
+        .collect();
+    let follower_per_hour: Vec<f64> = session_rows
+        .iter()
+        .filter_map(|r| {
+            let delta = r.try_get::<Option<i32>, _>("follower_delta").ok().flatten()?;
+            let duration = row_i64(r, "duration_seconds");
+            if duration == 0 {
+                return None;
+            }
+            let hours = (duration as f64 / 3600.0).max(0.1);
+            Some(delta as f64 / hours)
+        })
+        .collect();
+    let followers_total_delta: i64 = follower_deltas.iter().map(|v| *v as i64).sum();
+
+    let discovery = json!({
+        "sessions": sessions_count,
+        "unique_viewers_estimate": avg_or_none(&peak_vals),
+        "followers_total_delta": followers_total_delta,
+        "followers_per_session": avg_or_none(&follower_deltas),
+        "followers_per_hour": avg_or_none(&follower_per_hour),
+        "returning_7d": { "total": active_7, "returning": returning_7 },
+        "returning_30d": { "total": active_30, "returning": returning_30 },
+    });
+
+    // ── Chat ───────────────────────────────────────────────────────────────────
+    let unique_sessions: Vec<&sqlx::postgres::PgRow> =
+        session_rows.iter().filter(|r| row_i64(r, "unique_chatters") > 0).collect();
+    let total_unique: i64 = unique_sessions.iter().map(|r| row_i64(r, "unique_chatters")).sum();
+    let total_first: i64 = unique_sessions.iter().map(|r| row_i64(r, "first_time_chatters")).sum();
+    let total_returning: i64 = unique_sessions.iter().map(|r| row_i64(r, "returning_chatters")).sum();
+
+    let unique_per_100 = if unique_sessions.is_empty() {
+        Value::Null
+    } else {
+        let ratios: Vec<f64> = unique_sessions
+            .iter()
+            .map(|r| {
+                let avg = row_f64(r, "avg_viewers");
+                let base = if avg > 0.0 { avg } else { row_i64(r, "start_viewers") as f64 };
+                (row_i64(r, "unique_chatters") as f64 / base.max(1.0)) * 100.0
+            })
+            .collect();
+        avg_or_none(&ratios)
+    };
+
+    let chat_peaks: Vec<Value> = chat_peak_rows
+        .iter()
+        .map(|r| {
+            json!({
+                "session_id": row_i64(r, "session_id"),
+                "streamer": row_str_opt(r, "streamer_login").unwrap_or_default(),
+                "minute": row_str_opt(r, "minute_bucket").unwrap_or_default(),
+                "messages": row_i64(r, "messages"),
+                "started_at": session_started_at(r),
+            })
+        })
+        .collect();
+
+    let share = |part: i64| -> Value {
+        if total_unique > 0 {
+            json!(part as f64 / total_unique as f64)
+        } else {
+            Value::Null
+        }
+    };
+    let chat = json!({
+        "unique_per_100": unique_per_100,
+        "first_share": share(total_first),
+        "returning_share": share(total_returning),
+        "peaks": chat_peaks,
+        "total_unique": total_unique,
+    });
+
+    // ── Content-Performance (Top 20 nach peak_viewers) ──────────────────────────
+    let mut content: Vec<(i64, Value)> = session_rows
+        .iter()
+        .filter_map(|r| {
+            let title = row_str_opt(r, "stream_title").unwrap_or_default();
+            let notify = row_str_opt(r, "notification_text").unwrap_or_default();
+            if title.is_empty() && notify.is_empty() {
+                return None;
+            }
+            let followers_start = row_i64(r, "followers_start");
+            let peak = row_i64(r, "peak_viewers");
+            let engagement_ratio = if followers_start > 0 {
+                json!((peak as f64 / followers_start as f64) * 100.0)
+            } else {
+                Value::Null
+            };
+            Some((
+                peak,
+                json!({
+                    "streamer": row_str_opt(r, "streamer_login").unwrap_or_default(),
+                    "started_at": session_started_at(r),
+                    "title": title,
+                    "notification": notify,
+                    "peak_viewers": peak,
+                    "avg_viewers": row_f64(r, "avg_viewers"),
+                    "followers_start": followers_start,
+                    "engagement_ratio": engagement_ratio,
+                }),
+            ))
+        })
+        .collect();
+    content.sort_by_key(|(peak, _)| std::cmp::Reverse(*peak));
+    let content_performance: Vec<Value> = content.into_iter().take(20).map(|(_, v)| v).collect();
+
+    Ok(json!({
+        "retention": retention,
+        "chat": chat,
+        "discovery": discovery,
+        "content_performance": content_performance,
+    }))
+}
+
 // ── Tests ─────────────────────────────────────────────────────────────────────
 
 #[cfg(test)]
@@ -1915,5 +2188,94 @@ mod tests {
         assert!(max_v.is_i64() || max_v.is_u64(),
             "max_viewers muss Integer sein, ist: {max_v:?}");
         assert_eq!(max_v.as_i64().unwrap(), 19);
+    }
+
+    // ── B13-1: Extended-Stats (retention/chat/discovery/content_performance) ──
+
+    /// Leere DB → alle vier Sektionen vorhanden, mit Null/0-Defaults.
+    /// Spiegelt `leaderboard.py:_compute_stats` (Sektionen werden im else-Zweig
+    /// nach erfolgreichen Queries immer gesetzt — auch ohne Sessions).
+    #[tokio::test]
+    async fn extended_stats_leer_liefert_alle_vier_sektionen() {
+        let dsn = db_dsn_or_skip!();
+        let pool = make_pool(&dsn, "test_ext_stats_leer").await;
+        let result = compute_extended_stats(&pool).await.expect("compute_extended_stats");
+
+        for k in &["retention", "chat", "discovery", "content_performance"] {
+            assert!(result.get(*k).is_some(), "Sektion fehlt: {k}");
+        }
+        assert_eq!(result["retention"]["sessions"], 0);
+        assert!(result["retention"]["ret5"].is_null());
+        assert_eq!(result["discovery"]["followers_total_delta"], 0);
+        assert!(result["content_performance"].as_array().unwrap().is_empty());
+        assert_eq!(result["chat"]["total_unique"], 0);
+    }
+
+    /// Sessions mit Retention/Follower/Title → Aggregate werden korrekt berechnet.
+    #[tokio::test]
+    async fn extended_stats_aggregiert_sessions() {
+        let dsn = db_dsn_or_skip!();
+        let pool = make_pool(&dsn, "test_ext_stats_agg").await;
+
+        // Zwei abgeschlossene Sessions innerhalb 30 Tagen.
+        sqlx::query(
+            "INSERT INTO twitch_stream_sessions \
+             (streamer_login, started_at, ended_at, duration_seconds, start_viewers, \
+              peak_viewers, end_viewers, avg_viewers, samples, retention_5m, retention_10m, \
+              retention_20m, dropoff_pct, dropoff_label, unique_chatters, first_time_chatters, \
+              returning_chatters, follower_delta, followers_start, followers_end, stream_title, \
+              notification_text) VALUES \
+             ('alpha', NOW() - INTERVAL '2 days', NOW() - INTERVAL '2 days' + INTERVAL '2 hours', \
+              7200, 10, 50, 40, 30.0, 100, 0.8, 0.6, 0.4, 0.2, 'mild', 30, 10, 20, 12, 100, 112, \
+              'Deadlock Ranked', 'Wir gehen live'), \
+             ('beta', NOW() - INTERVAL '1 day', NOW() - INTERVAL '1 day' + INTERVAL '1 hour', \
+              3600, 20, 80, 60, 50.0, 60, 0.6, 0.4, 0.2, 0.4, 'steep', 40, 25, 15, 8, 200, 208, \
+              'Chill Stream', '')",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+
+        let result = compute_extended_stats(&pool).await.expect("compute_extended_stats");
+
+        // Retention: 2 Sessions, ret5 = avg(0.8, 0.6) = 0.7
+        assert_eq!(result["retention"]["sessions"], 2);
+        let ret5 = result["retention"]["ret5"].as_f64().expect("ret5 f64");
+        assert!((ret5 - 0.7).abs() < 1e-9, "ret5 falsch: {ret5}");
+        // Dropoff-Examples nach dropoff_pct absteigend → beta (0.4) zuerst.
+        let examples = result["retention"]["examples"].as_array().unwrap();
+        assert_eq!(examples.len(), 2);
+        assert_eq!(examples[0]["streamer"], "beta");
+
+        // Discovery: follower_delta-Summe = 12 + 8 = 20
+        assert_eq!(result["discovery"]["followers_total_delta"], 20);
+        assert_eq!(result["discovery"]["sessions"], 2);
+
+        // Content-Performance: beide Sessions (haben title) → nach peak absteigend (beta 80 > alpha 50)
+        let cp = result["content_performance"].as_array().unwrap();
+        assert_eq!(cp.len(), 2);
+        assert_eq!(cp[0]["streamer"], "beta");
+        assert_eq!(cp[0]["peak_viewers"], 80);
+        // engagement_ratio = peak/followers_start*100 = 80/200*100 = 40.0
+        let er = cp[0]["engagement_ratio"].as_f64().expect("engagement_ratio");
+        assert!((er - 40.0).abs() < 1e-9, "engagement_ratio falsch: {er}");
+
+        // Chat: total_unique = 30 + 40 = 70
+        assert_eq!(result["chat"]["total_unique"], 70);
+    }
+
+    /// Der bestehende `/stats`-Vertrag darf die vier Sektionen NICHT enthalten
+    /// (sie leben separat unter `/stats/extended`). Gegenprobe zum Top-Level-Key-Test.
+    #[tokio::test]
+    async fn extended_sektionen_nicht_im_stats_vertrag() {
+        let dsn = db_dsn_or_skip!();
+        let pool = make_pool(&dsn, "test_ext_not_in_stats").await;
+        let hf = HourFilter::None;
+        let ext = EventSubStatsExt(None);
+        let stats = compute_stats(&pool, &ext, &hf, None).await.expect("compute_stats");
+        let obj = stats.as_object().unwrap();
+        for k in &["retention", "chat", "discovery", "content_performance"] {
+            assert!(!obj.contains_key(*k), "/stats darf {k} nicht enthalten");
+        }
     }
 }
