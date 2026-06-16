@@ -45,6 +45,7 @@ mod raid_arrival_wiring;
 mod raid_oauth_impl;
 mod reauth_reminder;
 mod score_refresh;
+mod scout_chat;
 mod token_lifecycle_wiring;
 mod wiring;
 
@@ -230,6 +231,15 @@ impl PollHooks for SubscriptionPollHooks {
             }
         }
     }
+
+    /// B5-08: jeden Poll-Tick die EventSub-Capacity-Zeitreihe fortschreiben.
+    /// Die Sample-/Retention-Drosselung sitzt im `SubscriptionManager`
+    /// (`record_capacity_snapshot_periodic`); der Tick gibt nur den Takt vor.
+    async fn on_capacity_tick(&self) {
+        self.manager
+            .record_capacity_snapshot_periodic("poll_tick")
+            .await;
+    }
 }
 
 /// Sprachfilter fürs Kategorie-Sampling/Scout. Python hartkodiert
@@ -340,6 +350,10 @@ async fn main() {
         ))),
     );
     tracker.rehydrate().await;
+    // Session-Tracker-Clone für den Scout-Task FRÜH ziehen: der Poll-Loop
+    // konsumiert das `tracker`-Arc weiter unten (PollEngine::new), die
+    // Scout-Konstruktion liegt danach und hätte sonst keinen Zugriff mehr.
+    let scout_tracker = tracker.clone();
 
     let webhook_secret = std::env::var("TWITCH_WEBHOOK_SECRET")
         .ok()
@@ -1043,6 +1057,15 @@ async fn main() {
             scout_game,
             scout_lang_filters,
         )
+        // Session-Priming neu entdeckter Kanäle (Python
+        // `_prime_monitored_only_sessions`) — der wertschöpfende Hook, voll
+        // verdrahtet über den bestehenden SessionTracker.
+        .with_session_tracker(scout_tracker)
+        // Chat-Sync-Port: hält die Heal-Prädikate (monitoring-only ⇒ kein Heal)
+        // und meldet den fehlenden anonymen Read-Membership-Handle als Handoff
+        // (EventSub-Modell, s. scout_chat.rs). Kein Override der Defaults ⇒ kein
+        // An/Aus-Zustandswechsel ggü. dem bisherigen NoopScoutChatSink.
+        .with_chat_sink(std::sync::Arc::new(scout_chat::ScoutChatAdapter::new()))
         .start_if_enabled();
     }
 
