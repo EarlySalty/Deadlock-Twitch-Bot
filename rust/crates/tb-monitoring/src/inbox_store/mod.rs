@@ -11,6 +11,10 @@
 use sqlx::PgPool;
 use uuid::Uuid;
 
+mod retry;
+
+use retry::{with_write_retry, RetryPolicy};
+
 /// Fehlertexte werden wie in Python auf 500 Zeichen gekürzt.
 const MAX_ERROR_LEN: usize = 500;
 
@@ -56,11 +60,16 @@ pub struct DeadLetterEntry {
 #[derive(Clone)]
 pub struct ProcessingInboxStore {
     pool: PgPool,
+    /// Retry-Politik der Schreiboperationen (Python-Parität: `40001`/`40P01`).
+    retry: RetryPolicy,
 }
 
 impl ProcessingInboxStore {
     pub fn new(pool: PgPool) -> Self {
-        Self { pool }
+        Self {
+            pool,
+            retry: RetryPolicy::from_env(),
+        }
     }
 
     /// Legt einen Auftrag an, sofort fällig (`next_attempt_at = now`).
@@ -74,21 +83,26 @@ impl ProcessingInboxStore {
     ) -> Result<String, sqlx::Error> {
         let work_id = Uuid::new_v4().simple().to_string();
         let message_id = message_id.map(str::trim).filter(|m| !m.is_empty());
-        sqlx::query(
-            r#"
-            INSERT INTO twitch_eventsub_processing_inbox (
-                work_id, work_type, message_id, payload_json,
-                queued_at, next_attempt_at, attempt_count, last_error
+        let work_type = work_type.trim();
+        let payload_json = payload.to_string();
+        with_write_retry(self.retry, || async {
+            sqlx::query(
+                r#"
+                INSERT INTO twitch_eventsub_processing_inbox (
+                    work_id, work_type, message_id, payload_json,
+                    queued_at, next_attempt_at, attempt_count, last_error
+                )
+                VALUES ($1, $2, $3, $4, $5, $5, 0, NULL)
+                "#,
             )
-            VALUES ($1, $2, $3, $4, $5, $5, 0, NULL)
-            "#,
-        )
-        .bind(&work_id)
-        .bind(work_type.trim())
-        .bind(message_id)
-        .bind(payload.to_string())
-        .bind(now)
-        .execute(&self.pool)
+            .bind(&work_id)
+            .bind(work_type)
+            .bind(message_id)
+            .bind(&payload_json)
+            .bind(now)
+            .execute(&self.pool)
+            .await
+        })
         .await?;
         Ok(work_id)
     }
@@ -130,10 +144,13 @@ impl ProcessingInboxStore {
 
     /// Erfolgreich verarbeitet → Auftrag löschen.
     pub async fn mark_delivered(&self, work_id: &str) -> Result<(), sqlx::Error> {
-        sqlx::query("DELETE FROM twitch_eventsub_processing_inbox WHERE work_id = $1")
-            .bind(work_id)
-            .execute(&self.pool)
-            .await?;
+        with_write_retry(self.retry, || async {
+            sqlx::query("DELETE FROM twitch_eventsub_processing_inbox WHERE work_id = $1")
+                .bind(work_id)
+                .execute(&self.pool)
+                .await
+        })
+        .await?;
         Ok(())
     }
 
@@ -145,20 +162,24 @@ impl ProcessingInboxStore {
         error_message: &str,
         next_attempt_at: f64,
     ) -> Result<(), sqlx::Error> {
-        sqlx::query(
-            r#"
-            UPDATE twitch_eventsub_processing_inbox
-               SET attempt_count = $1,
-                   next_attempt_at = $2,
-                   last_error = $3
-             WHERE work_id = $4
-            "#,
-        )
-        .bind(attempt_count.max(1))
-        .bind(next_attempt_at)
-        .bind(truncate_error(error_message))
-        .bind(work_id)
-        .execute(&self.pool)
+        let last_error = truncate_error(error_message);
+        with_write_retry(self.retry, || async {
+            sqlx::query(
+                r#"
+                UPDATE twitch_eventsub_processing_inbox
+                   SET attempt_count = $1,
+                       next_attempt_at = $2,
+                       last_error = $3
+                 WHERE work_id = $4
+                "#,
+            )
+            .bind(attempt_count.max(1))
+            .bind(next_attempt_at)
+            .bind(last_error.as_deref())
+            .bind(work_id)
+            .execute(&self.pool)
+            .await
+        })
         .await?;
         Ok(())
     }
@@ -171,44 +192,51 @@ impl ProcessingInboxStore {
         error_message: &str,
         dead_lettered_at: f64,
     ) -> Result<(), sqlx::Error> {
-        let mut tx = self.pool.begin().await?;
-        sqlx::query(
-            r#"
-            INSERT INTO twitch_eventsub_processing_dead_letter (
-                work_id, work_type, message_id, payload_json,
-                queued_at, dead_lettered_at, attempt_count, last_error
+        let message_id = work
+            .message_id
+            .as_deref()
+            .map(str::trim)
+            .filter(|m| !m.is_empty());
+        let last_error = truncate_error(error_message);
+        // Die ganze Transaktion ist die retrybare Einheit: ein Serialisierungs-
+        // Abbruch rollt sie serverseitig zurück, daher öffnet jeder Versuch eine
+        // frische Transaktion.
+        with_write_retry(self.retry, || async {
+            let mut tx = self.pool.begin().await?;
+            sqlx::query(
+                r#"
+                INSERT INTO twitch_eventsub_processing_dead_letter (
+                    work_id, work_type, message_id, payload_json,
+                    queued_at, dead_lettered_at, attempt_count, last_error
+                )
+                VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+                ON CONFLICT (work_id) DO UPDATE
+                   SET work_type = EXCLUDED.work_type,
+                       message_id = EXCLUDED.message_id,
+                       payload_json = EXCLUDED.payload_json,
+                       queued_at = EXCLUDED.queued_at,
+                       dead_lettered_at = EXCLUDED.dead_lettered_at,
+                       attempt_count = EXCLUDED.attempt_count,
+                       last_error = EXCLUDED.last_error
+                "#,
             )
-            VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
-            ON CONFLICT (work_id) DO UPDATE
-               SET work_type = EXCLUDED.work_type,
-                   message_id = EXCLUDED.message_id,
-                   payload_json = EXCLUDED.payload_json,
-                   queued_at = EXCLUDED.queued_at,
-                   dead_lettered_at = EXCLUDED.dead_lettered_at,
-                   attempt_count = EXCLUDED.attempt_count,
-                   last_error = EXCLUDED.last_error
-            "#,
-        )
-        .bind(&work.work_id)
-        .bind(&work.work_type)
-        .bind(
-            work.message_id
-                .as_deref()
-                .map(str::trim)
-                .filter(|m| !m.is_empty()),
-        )
-        .bind(&work.payload_json)
-        .bind(work.queued_at)
-        .bind(dead_lettered_at)
-        .bind(attempt_count.max(1))
-        .bind(truncate_error(error_message))
-        .execute(&mut *tx)
-        .await?;
-        sqlx::query("DELETE FROM twitch_eventsub_processing_inbox WHERE work_id = $1")
             .bind(&work.work_id)
+            .bind(&work.work_type)
+            .bind(message_id)
+            .bind(&work.payload_json)
+            .bind(work.queued_at)
+            .bind(dead_lettered_at)
+            .bind(attempt_count.max(1))
+            .bind(last_error.as_deref())
             .execute(&mut *tx)
             .await?;
-        tx.commit().await?;
+            sqlx::query("DELETE FROM twitch_eventsub_processing_inbox WHERE work_id = $1")
+                .bind(&work.work_id)
+                .execute(&mut *tx)
+                .await?;
+            tx.commit().await
+        })
+        .await?;
         Ok(())
     }
 
@@ -251,38 +279,41 @@ impl ProcessingInboxStore {
         if work_id.is_empty() {
             return Ok(false);
         }
-        let mut tx = self.pool.begin().await?;
-        let row: Option<(String, String, Option<String>, String)> = sqlx::query_as(
-            r#"
-            DELETE FROM twitch_eventsub_processing_dead_letter
-             WHERE work_id = $1
-         RETURNING work_id, work_type, message_id, payload_json
-            "#,
-        )
-        .bind(work_id)
-        .fetch_optional(&mut *tx)
-        .await?;
-        let Some((work_id, work_type, message_id, payload_json)) = row else {
-            return Ok(false);
-        };
-        sqlx::query(
-            r#"
-            INSERT INTO twitch_eventsub_processing_inbox (
-                work_id, work_type, message_id, payload_json,
-                queued_at, next_attempt_at, attempt_count, last_error
+        with_write_retry(self.retry, || async {
+            let mut tx = self.pool.begin().await?;
+            let row: Option<(String, String, Option<String>, String)> = sqlx::query_as(
+                r#"
+                DELETE FROM twitch_eventsub_processing_dead_letter
+                 WHERE work_id = $1
+             RETURNING work_id, work_type, message_id, payload_json
+                "#,
             )
-            VALUES ($1, $2, $3, $4, $5, $5, 0, NULL)
-            "#,
-        )
-        .bind(&work_id)
-        .bind(&work_type)
-        .bind(&message_id)
-        .bind(&payload_json)
-        .bind(now)
-        .execute(&mut *tx)
-        .await?;
-        tx.commit().await?;
-        Ok(true)
+            .bind(work_id)
+            .fetch_optional(&mut *tx)
+            .await?;
+            let Some((work_id, work_type, message_id, payload_json)) = row else {
+                return Ok(false);
+            };
+            sqlx::query(
+                r#"
+                INSERT INTO twitch_eventsub_processing_inbox (
+                    work_id, work_type, message_id, payload_json,
+                    queued_at, next_attempt_at, attempt_count, last_error
+                )
+                VALUES ($1, $2, $3, $4, $5, $5, 0, NULL)
+                "#,
+            )
+            .bind(&work_id)
+            .bind(&work_type)
+            .bind(&message_id)
+            .bind(&payload_json)
+            .bind(now)
+            .execute(&mut *tx)
+            .await?;
+            tx.commit().await?;
+            Ok(true)
+        })
+        .await
     }
 }
 

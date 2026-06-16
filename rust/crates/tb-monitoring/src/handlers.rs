@@ -255,9 +255,13 @@ impl MonitoringEventHandler {
         Ok(())
     }
 
-    /// stream.offline (Python `_on_eventsub_stream_offline`): Offline-Throttle,
-    /// Session-Finalize + Live-State offline (exactly-once), dann Hooks
-    /// (Score-Refresh, Auto-Raid & Co. via on_stream_offline).
+    /// stream.offline (Python `_on_eventsub_stream_offline`). Reihenfolge der
+    /// Seiteneffekte 1:1 zum Orakel (`eventsub_mixin.py`):
+    /// 1. **Engagement-Auto-Off** — VOR dem Throttle (läuft auch bei Duplikat).
+    /// 2. **Offline-Throttle** (120s) — Duplikat → früher Ausstieg.
+    /// 3. **Global-Ban-Sweep** — nach Throttle, VOR State-Finalize.
+    /// 4. **State-Finalize** (Session + Live-State offline, exactly-once).
+    /// 5. **Score-Refresh + Auto-Raid + Post-Stream** via on_stream_offline.
     async fn handle_stream_offline(&self, work: &WorkPayload) -> Result<(), HandlerError> {
         if work.broadcaster_id.is_empty() {
             return Ok(());
@@ -273,6 +277,14 @@ impl MonitoringEventHandler {
                 .unwrap_or_default(),
             l => l,
         };
+        let login_opt = Some(&login).filter(|l| !l.is_empty()).map(|l| l.as_str());
+
+        // (1) Engagement-Auto-Off VOR dem Throttle: idempotentes UPDATE, das
+        // den Engagement-Layer auch bei einem gedrosselten Duplikat-Offline ans
+        // Stream-Leben koppelt (Python `eventsub_mixin.py`:1861).
+        self.hooks
+            .on_stream_offline_engagement(&work.broadcaster_id, login_opt)
+            .await;
 
         let claimed = self
             .guard
@@ -291,6 +303,12 @@ impl MonitoringEventHandler {
             );
             return Ok(());
         }
+
+        // (3) Global-Ban-Sweep nach bestandenem Throttle, VOR State-Finalize
+        // (Python `eventsub_mixin.py`:1901).
+        self.hooks
+            .on_stream_offline_global_ban(&work.broadcaster_id, login_opt)
+            .await;
 
         run_business_effect_once(
             &self.guard,
@@ -318,11 +336,7 @@ impl MonitoringEventHandler {
             epoch,
             || async {
                 self.hooks
-                    .on_score_refresh(
-                        &work.broadcaster_id,
-                        Some(&login).filter(|l| !l.is_empty()).map(|l| l.as_str()),
-                        "eventsub_stream_offline",
-                    )
+                    .on_score_refresh(&work.broadcaster_id, login_opt, "eventsub_stream_offline")
                     .await;
                 Ok(())
             },
@@ -336,10 +350,7 @@ impl MonitoringEventHandler {
             epoch,
             || async {
                 self.hooks
-                    .on_stream_offline(
-                        &work.broadcaster_id,
-                        Some(&login).filter(|l| !l.is_empty()).map(|l| l.as_str()),
-                    )
+                    .on_stream_offline(&work.broadcaster_id, login_opt)
                     .await;
                 Ok(())
             },

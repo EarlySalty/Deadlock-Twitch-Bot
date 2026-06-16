@@ -185,8 +185,20 @@ pub trait EventSubHooks: Send + Sync {
         _trigger: &'static str,
     ) {
     }
-    /// stream.offline-Folgeeffekte: Auto-Raid, Global-Ban-Sweep,
-    /// Engagement-Auto-Off, Post-Stream-Analyse (Cutover-Kopplungen).
+    /// stream.offline-Vor-Throttle-Effekt: **Engagement-Auto-Off**. Python führt
+    /// `auto_disable_on_offline` VOR dem 120s-Throttle aus (`eventsub_mixin.py`
+    /// :1861) — der Engagement-Layer muss auch bei einem als Duplikat
+    /// gedrosselten Offline ans Stream-Leben gekoppelt bleiben. Default no-op.
+    async fn on_stream_offline_engagement(&self, _twitch_user_id: &str, _login: Option<&str>) {}
+
+    /// stream.offline-Nach-Throttle-Effekt: **Global-Ban-Sweep** planen. Python
+    /// ruft `schedule_global_ban_sweep` NACH bestandenem Throttle, aber VOR der
+    /// State-Finalisierung (`eventsub_mixin.py`:1901). Default no-op.
+    async fn on_stream_offline_global_ban(&self, _twitch_user_id: &str, _login: Option<&str>) {}
+
+    /// stream.offline-Folgeeffekte nach State-Finalize: Auto-Raid + Partner-
+    /// Score-Refresh + Post-Stream-Analyse (Python `eventsub_mixin.py`:1953+).
+    /// Engagement-Off und Global-Ban-Sweep laufen früher (siehe oben).
     async fn on_stream_offline(&self, _twitch_user_id: &str, _login: Option<&str>) {}
     /// `channel.chat.message` (Welle B: nativer Chat-Bot — Moderation,
     /// Commands, Promos). Default no-op bis zur Chat-Verdrahtung.

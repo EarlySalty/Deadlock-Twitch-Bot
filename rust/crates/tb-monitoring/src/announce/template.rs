@@ -444,9 +444,10 @@ pub fn render_announcement(
             .unwrap_or_default(),
         _ => String::new(),
     };
-    let image_url = match config.image_mode.as_str() {
-        "custom" => render_placeholders(&config.image_url_template, context),
-        "stream_thumbnail" => stream_thumbnail_url(
+    // Stream-Thumbnail als gemeinsamer Fallback (Python-Legacy `embeds_mixin.py`
+    // :704: leeres/abwesendes image_cfg zeigt trotzdem das Stream-Preview).
+    let stream_thumbnail = || {
+        stream_thumbnail_url(
             context
                 .get("stream_thumbnail_url")
                 .map(String::as_str)
@@ -455,8 +456,21 @@ pub fn render_announcement(
             config.cache_buster,
             now,
             cache_buster_seed,
-        ),
-        _ => String::new(),
+        )
+    };
+    let image_url = match config.image_mode.as_str() {
+        "stream_thumbnail" => stream_thumbnail(),
+        // Custom mit gesetztem Template gewinnt; leeres Template fällt zurück.
+        "custom" => {
+            let custom = render_placeholders(&config.image_url_template, context);
+            if custom.is_empty() {
+                stream_thumbnail()
+            } else {
+                custom
+            }
+        }
+        // image_mode=none/unbekannt: B18-7-Fallback aufs Stream-Thumbnail.
+        _ => stream_thumbnail(),
     };
 
     let timestamp = match config.footer_timestamp_mode.as_str() {
@@ -660,6 +674,81 @@ mod tests {
         // Footer-Timestamp = started_at (Default-Modus).
         assert_eq!(rendered.embed["timestamp"], "2026-06-09T17:30:00+00:00");
         assert_eq!(rendered.button_label, "Auf Twitch ansehen");
+    }
+
+    /// B18-7 (`embeds_mixin-2`): Steht kein explizites Bild zur Verfügung
+    /// (`image_mode != "stream_thumbnail"` und kein Custom-URL), fällt der
+    /// Renderer auf das Stream-Thumbnail zurück — wie der Legacy-Pfad in Python
+    /// (`embeds_mixin.py`:704, leeres image_cfg → Stream-Preview).
+    #[test]
+    fn image_mode_none_faellt_auf_stream_thumbnail_zurueck() {
+        let now = parse_dt_utc("2026-06-09T18:00:00Z").unwrap();
+        let stream = StreamSnapshot {
+            user_login: "drag".to_string(),
+            user_name: "Drag".to_string(),
+            title: "Ranked Grind".to_string(),
+            game_name: "Deadlock".to_string(),
+            ..Default::default()
+        };
+        let ctx = build_context(
+            "drag",
+            &stream,
+            "https://www.twitch.tv/drag",
+            "",
+            now,
+            Some("https://cdn/{width}x{height}.jpg"),
+        );
+
+        // image_mode="none": Python-Legacy zeigt trotzdem das Stream-Thumbnail.
+        let config = AnnouncementConfig::from_json(&serde_json::json!({
+            "images": { "image_mode": "none", "cache_buster": false }
+        }));
+        let rendered = render_announcement(&config, &ctx, now, Some("seed"));
+        assert_eq!(
+            rendered.embed["image"]["url"], "https://cdn/1280x720.jpg",
+            "image_mode=none → Stream-Thumbnail-Fallback"
+        );
+
+        // image_mode="custom" mit leerem Template: ebenfalls Fallback.
+        let config = AnnouncementConfig::from_json(&serde_json::json!({
+            "images": { "image_mode": "custom", "image_url_template": "", "cache_buster": false }
+        }));
+        let rendered = render_announcement(&config, &ctx, now, Some("seed"));
+        assert_eq!(
+            rendered.embed["image"]["url"], "https://cdn/1280x720.jpg",
+            "image_mode=custom (leer) → Stream-Thumbnail-Fallback"
+        );
+
+        // Explizites Custom-Bild bleibt unangetastet (kein Fallback).
+        let config = AnnouncementConfig::from_json(&serde_json::json!({
+            "images": {
+                "image_mode": "custom",
+                "image_url_template": "https://custom/banner.png",
+                "cache_buster": false
+            }
+        }));
+        let rendered = render_announcement(&config, &ctx, now, Some("seed"));
+        assert_eq!(rendered.embed["image"]["url"], "https://custom/banner.png");
+    }
+
+    /// Fehlt das Stream-Thumbnail komplett, bleibt das Bild leer (kein Fallback
+    /// auf einen leeren Wert, der ein kaputtes Embed-Feld erzeugen würde).
+    #[test]
+    fn fallback_ohne_thumbnail_laesst_image_leer() {
+        let now = parse_dt_utc("2026-06-09T18:00:00Z").unwrap();
+        let stream = StreamSnapshot {
+            user_login: "drag".to_string(),
+            ..Default::default()
+        };
+        let ctx = build_context("drag", &stream, "https://t/drag", "", now, None);
+        let config = AnnouncementConfig::from_json(&serde_json::json!({
+            "images": { "image_mode": "none" }
+        }));
+        let rendered = render_announcement(&config, &ctx, now, Some("seed"));
+        assert!(
+            rendered.embed.get("image").is_none(),
+            "ohne Stream-Thumbnail kein Image-Feld"
+        );
     }
 
     #[test]
