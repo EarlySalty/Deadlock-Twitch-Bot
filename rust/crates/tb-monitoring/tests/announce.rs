@@ -188,6 +188,31 @@ async fn announce_live_default_config_und_mentions() {
     );
 }
 
+/// #222 Verify: `live_ping_enabled = false` muss den Streamer-Rollen-Ping
+/// vollständig unterdrücken (Python `_ensure_live_ping_role` → frühes
+/// `("", None)`). Trotz gesetzter `live_ping_role_id` darf weder die Mention
+/// im Content noch die Rollen-ID in `allowed_role_ids` landen; die statische
+/// Alert-Mention (`<@&777>`) bleibt unberührt.
+#[tokio::test]
+async fn announce_live_ping_disabled_unterdrueckt_streamer_rolle() {
+    let pool = pool_or_skip!("t4e_ping_disabled");
+    let transport = Arc::new(StubTransport::default());
+    let sink = sink_with(&pool, transport.clone());
+
+    let mut request = live_request("drag");
+    request.entry.live_ping_enabled = false; // Rolle gesetzt, aber Ping aus.
+
+    let result = sink.announce_live(request).await.expect("gesendet");
+
+    // Nur die statische Alert-Mention, kein Streamer-Rollen-Ping.
+    assert!(result.notification_text.starts_with("<@&777>"));
+    assert!(!result.notification_text.contains("<@&999>"));
+    let sends = transport.sends.lock().unwrap();
+    let (_, _, _, roles, _) = &sends[0];
+    assert!(roles.contains(&777));
+    assert!(!roles.contains(&999), "Streamer-Rolle bei disabled Ping verboten");
+}
+
 #[tokio::test]
 async fn announce_live_nutzt_streamer_config_und_retry_token() {
     let pool = pool_or_skip!("t4e_config_retry");
