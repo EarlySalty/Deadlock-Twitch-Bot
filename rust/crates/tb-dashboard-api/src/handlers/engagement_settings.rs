@@ -8,7 +8,9 @@
 //!
 //! Permission-Modell (Python `_resolve_actor`):
 //! - **Admin** = Localhost/Admin-Auth-Level ODER `super_mod` (twitch_admin_roles)
-//!   → sieht/togglet ALLE Kanäle.
+//!   → sieht/togglet ALLE Kanäle. Ein per Twitch-OAuth eingeloggter Admin
+//!   (`earlysalty`) behält seine Session-Identität für die Audit-Attribution
+//!   (`enabled_by`); Discord-Admin/Localhost haben keine (senderauth-01).
 //! - **Partner** (normaler User) → nur den eigenen Kanal (Session-`twitch_login`).
 //! - **None** → 401.
 //!
@@ -52,14 +54,23 @@ async fn is_super_mod(pool: &PgPool, user_id: &str) -> bool {
     .is_some()
 }
 
-/// Akteur aus dem Auth-Level ableiten. Localhost/Admin → admin=true (kein
-/// konkreter User). Partner → eigener Login/ID, admin nur wenn super_mod.
-/// None → 401.
+/// Akteur aus dem Auth-Level ableiten. Localhost → admin=true ohne Identität
+/// (reiner Loopback, keine Session). Admin → admin=true; die Session-Identität
+/// (actor_id/actor_login) wird beibehalten, falls vorhanden — ein per Twitch-OAuth
+/// eingeloggter Admin (`earlysalty`) trägt sie für die Audit-Attribution
+/// (`enabled_by`). Python (`dashboard_api.py:214`) extrahiert die Session-Identität
+/// IMMER zuerst, auch bei auth_level='admin'. Partner → eigener Login/ID, admin nur
+/// wenn super_mod. None → 401.
 async fn resolve_actor(auth: &DashboardAuthLevel, pool: &PgPool) -> Result<Actor, Response> {
     match auth {
-        DashboardAuthLevel::Localhost | DashboardAuthLevel::Admin => Ok(Actor {
+        DashboardAuthLevel::Localhost => Ok(Actor {
             actor_id: None,
             actor_login: None,
+            admin: true,
+        }),
+        DashboardAuthLevel::Admin { actor } => Ok(Actor {
+            actor_id: actor.as_ref().map(|a| a.twitch_user_id.clone()),
+            actor_login: actor.as_ref().map(|a| a.twitch_login.clone()),
             admin: true,
         }),
         DashboardAuthLevel::Partner { twitch_login, twitch_user_id, .. } => {
@@ -615,5 +626,47 @@ mod tests {
             .unwrap();
         assert!(is_super_mod(&pool, "7").await);
         assert!(!is_super_mod(&pool, "").await); // leere ID
+    }
+
+    // === senderauth-01: Admin-Actor-Attribution ===
+
+    /// Ein per Twitch-OAuth eingeloggter Admin (Login z. B. `earlysalty`) wird vom
+    /// Extractor zu `Admin { actor: Some(..) }` promoted. `resolve_actor` MUSS die
+    /// Session-Identität (actor_id/actor_login) behalten, damit Audit-Spalten wie
+    /// `enabled_by` den realen Admin tragen — Python (`dashboard_api.py:214`)
+    /// extrahiert die Session-Identität IMMER, auch bei auth_level='admin'.
+    #[tokio::test]
+    async fn twitch_admin_behaelt_actor_attribution() {
+        let Some(pool) = make_pool("t_eng_dash_admin_attr").await else { return };
+        let auth = DashboardAuthLevel::Admin {
+            actor: Some(crate::auth::level::AdminActor {
+                twitch_user_id: "555".into(),
+                twitch_login: "earlysalty".into(),
+            }),
+        };
+        let actor = resolve_actor(&auth, &pool).await.expect("resolve ok");
+        assert!(actor.admin);
+        assert_eq!(actor.actor_id.as_deref(), Some("555"));
+        assert_eq!(actor.actor_login.as_deref(), Some("earlysalty")); // bereits klein
+    }
+
+    /// Discord-Admin / Localhost ohne Twitch-Session-Identität → admin, aber
+    /// keine Attribution (Python: `_extract_session_user({})` → None,None).
+    #[tokio::test]
+    async fn discord_admin_und_localhost_ohne_attribution() {
+        let Some(pool) = make_pool("t_eng_dash_admin_noattr").await else { return };
+        let admin = resolve_actor(&DashboardAuthLevel::Admin { actor: None }, &pool)
+            .await
+            .expect("resolve ok");
+        assert!(admin.admin);
+        assert_eq!(admin.actor_id, None);
+        assert_eq!(admin.actor_login, None);
+
+        let local = resolve_actor(&DashboardAuthLevel::Localhost, &pool)
+            .await
+            .expect("resolve ok");
+        assert!(local.admin);
+        assert_eq!(local.actor_id, None);
+        assert_eq!(local.actor_login, None);
     }
 }

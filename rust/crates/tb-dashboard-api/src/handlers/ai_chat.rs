@@ -143,7 +143,7 @@ pub async fn ai_chat_handler(
     }
 
     // Plan-Gate für Nicht-Admin/Localhost.
-    if !matches!(auth, DashboardAuthLevel::Localhost | DashboardAuthLevel::Admin) {
+    if !matches!(auth, DashboardAuthLevel::Localhost | DashboardAuthLevel::Admin { .. }) {
         match plan_ai_model(&pool, &streamer).await {
             Ok(Some(_)) => {}
             Ok(None) => {

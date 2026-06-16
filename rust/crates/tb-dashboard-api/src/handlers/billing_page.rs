@@ -506,7 +506,7 @@ fn customer_reference_for(auth: &DashboardAuthLevel) -> Option<String> {
             }
         }
         // Admin/Localhost haben keinen Partner-Kontext → kein eigenes Abo.
-        DashboardAuthLevel::Admin | DashboardAuthLevel::Localhost => None,
+        DashboardAuthLevel::Admin { .. } | DashboardAuthLevel::Localhost => None,
         DashboardAuthLevel::None => None,
     }
 }
@@ -613,7 +613,7 @@ mod tests {
         assert_eq!(customer_reference_for(&partner("Streamer", "42")).as_deref(), Some("Streamer"));
         assert_eq!(customer_reference_for(&partner("  ", "42")).as_deref(), Some("42"));
         assert_eq!(customer_reference_for(&partner("", "")), None);
-        assert_eq!(customer_reference_for(&DashboardAuthLevel::Admin), None);
+        assert_eq!(customer_reference_for(&DashboardAuthLevel::admin()), None);
         assert_eq!(customer_reference_for(&DashboardAuthLevel::None), None);
     }
 

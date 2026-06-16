@@ -71,7 +71,7 @@ pub async fn auth_status_handler(
     match &auth {
         DashboardAuthLevel::None => unauth_response().await,
         DashboardAuthLevel::Localhost => admin_response("localhost"),
-        DashboardAuthLevel::Admin => admin_response("admin"),
+        DashboardAuthLevel::Admin { .. } => admin_response("admin"),
         DashboardAuthLevel::Partner { twitch_login, twitch_user_id, .. } => {
             partner_response(&pool, twitch_login, twitch_user_id).await
         }

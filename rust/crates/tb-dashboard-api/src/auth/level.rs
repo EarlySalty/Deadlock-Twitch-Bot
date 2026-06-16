@@ -21,13 +21,29 @@
 use axum::{async_trait, extract::FromRequestParts, http::request::Parts};
 use std::net::{IpAddr, SocketAddr};
 
+/// Twitch-Session-Identität eines per OAuth eingeloggten Admins (senderauth-01).
+///
+/// Wird gesetzt, wenn ein Twitch-Login mit Admin-Rechten (`TWITCH_ADMIN_LOGINS`,
+/// z. B. `earlysalty`) zum `DashboardAuthLevel::Admin` promoted wird. Trägt die
+/// Session-Identität weiter, damit Handler sie für die Audit-Attribution
+/// (z. B. `enabled_by`) nutzen können — analog zu Pythons `_extract_session_user`,
+/// das `actor_id`/`actor_login` IMMER aus der Session liest, auch bei `admin`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AdminActor {
+    pub twitch_user_id: String,
+    /// Twitch-Login, bereits kleingeschrieben.
+    pub twitch_login: String,
+}
+
 /// Auth-Level eines eingehenden Dashboard-Requests.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum DashboardAuthLevel {
     /// Loopback-IP UND Loopback-Host (kein Session-Lookup nötig).
     Localhost,
-    /// Gültige `master_dash_session`-Cookie (Discord-Admin).
-    Admin,
+    /// Admin-Zugang. `actor = None` für Discord-Admin (`master_dash_session`,
+    /// keine Twitch-Identität) bzw. interne Aufrufe; `actor = Some(..)` für einen
+    /// per Twitch-OAuth eingeloggten Admin (Login-Promotion, senderauth-01).
+    Admin { actor: Option<AdminActor> },
     /// Gültige `twitch_dash_session`-Cookie + Partner in DB + nicht blacklisted.
     Partner {
         twitch_login: String,
@@ -40,9 +56,15 @@ pub enum DashboardAuthLevel {
 }
 
 impl DashboardAuthLevel {
+    /// Admin-Level ohne Twitch-Session-Identität (Discord-Admin / Localhost-Tools /
+    /// Tests). Kurzform für `Admin { actor: None }`.
+    pub fn admin() -> Self {
+        Self::Admin { actor: None }
+    }
+
     /// `true` wenn Localhost oder Admin.
     pub fn is_privileged(&self) -> bool {
-        matches!(self, Self::Localhost | Self::Admin)
+        matches!(self, Self::Localhost | Self::Admin { .. })
     }
 
     /// `true` wenn Localhost, Admin oder Partner.
@@ -53,7 +75,7 @@ impl DashboardAuthLevel {
     pub fn as_str(&self) -> &'static str {
         match self {
             Self::Localhost => "localhost",
-            Self::Admin => "admin",
+            Self::Admin { .. } => "admin",
             Self::Partner { .. } => "partner",
             Self::None => "none",
         }
@@ -166,8 +188,17 @@ const TWITCH_ADMIN_LOGINS: &[&str] = &["earlysalty"];
 /// (Python api_v2.py:1339-1342) — loggt sich ein Admin per Twitch-OAuth statt
 /// Discord ein, bekommt er Admin-Rechte (canViewAllStreamers), sonst Partner.
 fn partner_or_admin(partner: crate::auth::session::PartnerSession) -> DashboardAuthLevel {
-    if TWITCH_ADMIN_LOGINS.contains(&partner.twitch_login.trim().to_lowercase().as_str()) {
-        return DashboardAuthLevel::Admin;
+    let login = partner.twitch_login.trim().to_lowercase();
+    if TWITCH_ADMIN_LOGINS.contains(&login.as_str()) {
+        // senderauth-01: Twitch-Session-Identität an den Admin durchreichen, damit
+        // Handler sie für die Audit-Attribution nutzen können (Python liest
+        // actor_id/actor_login IMMER aus der Session, auch bei auth_level='admin').
+        return DashboardAuthLevel::Admin {
+            actor: Some(AdminActor {
+                twitch_user_id: partner.twitch_user_id,
+                twitch_login: login,
+            }),
+        };
     }
     DashboardAuthLevel::Partner {
         twitch_login: partner.twitch_login,
@@ -205,7 +236,8 @@ where
         if let Some(session_id) = extract_cookie(parts, "master_dash_session") {
             if !session_id.is_empty() {
                 if let Ok(Some(_)) = state.load_admin_session(session_id).await {
-                    return Ok(DashboardAuthLevel::Admin);
+                    // Discord-Admin: keine Twitch-Session-Identität → keine Attribution.
+                    return Ok(DashboardAuthLevel::admin());
                 }
             }
         }
@@ -299,7 +331,17 @@ mod tests {
     #[test]
     fn auth_level_as_str() {
         assert_eq!(DashboardAuthLevel::Localhost.as_str(), "localhost");
-        assert_eq!(DashboardAuthLevel::Admin.as_str(), "admin");
+        assert_eq!(DashboardAuthLevel::admin().as_str(), "admin");
+        assert_eq!(
+            DashboardAuthLevel::Admin {
+                actor: Some(AdminActor {
+                    twitch_user_id: "1".into(),
+                    twitch_login: "earlysalty".into()
+                })
+            }
+            .as_str(),
+            "admin"
+        );
         assert_eq!(
             DashboardAuthLevel::Partner {
                 twitch_login: "x".into(),
@@ -315,7 +357,7 @@ mod tests {
     #[test]
     fn is_privileged_korrekt() {
         assert!(DashboardAuthLevel::Localhost.is_privileged());
-        assert!(DashboardAuthLevel::Admin.is_privileged());
+        assert!(DashboardAuthLevel::admin().is_privileged());
         assert!(!DashboardAuthLevel::Partner {
             twitch_login: "x".into(),
             twitch_user_id: "1".into(),

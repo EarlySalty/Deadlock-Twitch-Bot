@@ -296,7 +296,7 @@ mod tests {
     #[test]
     fn partner_identity_nur_fuer_partner() {
         assert_eq!(partner_identity(&partner("Nani", "42")), Some(("nani".into(), "42".into())));
-        assert_eq!(partner_identity(&DashboardAuthLevel::Admin), None);
+        assert_eq!(partner_identity(&DashboardAuthLevel::admin()), None);
         assert_eq!(partner_identity(&DashboardAuthLevel::None), None);
     }
 

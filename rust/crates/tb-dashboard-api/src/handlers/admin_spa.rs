@@ -248,7 +248,7 @@ mod tests {
 
     #[tokio::test]
     async fn root_privilegiert_geht_zu_admin() {
-        let resp = root_handler(DashboardAuthLevel::Admin).await;
+        let resp = root_handler(DashboardAuthLevel::admin()).await;
         assert_eq!(resp.status(), StatusCode::SEE_OTHER);
         assert_eq!(resp.headers().get(header::LOCATION).unwrap(), "/twitch/admin");
     }
@@ -287,7 +287,7 @@ mod tests {
     async fn admin_index_admin_liefert_shell_kein_proxy() {
         // Mit echtem Dist liefert es die Shell (200), ohne gebauten Dist 404 —
         // in BEIDEN Fällen KEIN 401/502/Proxy. Der Auth-Gate ist passiert.
-        let resp = admin_index_handler(DashboardAuthLevel::Admin).await;
+        let resp = admin_index_handler(DashboardAuthLevel::admin()).await;
         assert!(
             resp.status() == StatusCode::OK || resp.status() == StatusCode::NOT_FOUND,
             "Admin darf die Shell sehen (200) oder 404 bei fehlendem Build — nie 401/502, war {}",

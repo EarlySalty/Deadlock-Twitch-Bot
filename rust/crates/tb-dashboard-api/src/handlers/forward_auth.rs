@@ -80,7 +80,7 @@ mod tests {
 
     #[tokio::test]
     async fn admin_session_gibt_200() {
-        let resp = validate_admin_session(DashboardAuthLevel::Admin).await;
+        let resp = validate_admin_session(DashboardAuthLevel::admin()).await;
         assert_eq!(resp.status(), StatusCode::OK);
         assert_eq!(
             resp.headers().get("X-Admin-User").unwrap(),

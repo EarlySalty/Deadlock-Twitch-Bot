@@ -456,8 +456,8 @@ mod tests {
     fn reference_und_default_name() {
         assert_eq!(customer_reference_for(&partner("nani")).as_deref(), Some("nani"));
         assert_eq!(display_name_for(&partner("nani")), "Nani");
-        assert_eq!(display_name_for(&DashboardAuthLevel::Admin), "Streamer Partner");
-        assert_eq!(customer_reference_for(&DashboardAuthLevel::Admin), None);
+        assert_eq!(display_name_for(&DashboardAuthLevel::admin()), "Streamer Partner");
+        assert_eq!(customer_reference_for(&DashboardAuthLevel::admin()), None);
     }
 
     #[test]
