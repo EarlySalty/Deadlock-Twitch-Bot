@@ -15,13 +15,15 @@ use serde_json::json;
 use sqlx::PgPool;
 
 use crate::auth::level::DashboardAuthLevel;
+use crate::query_int::parse_bounded_query_int;
 
 #[derive(Deserialize)]
 pub struct ChatAnalyticsQuery {
     #[serde(default)]
     pub streamer: Option<String>,
+    // Rohwert: nicht-numerisches `days` → Python-konformes 400-JSON, siehe query_int.
     #[serde(default)]
-    pub days: Option<i32>,
+    pub days: Option<String>,
     #[serde(default)]
     pub timezone: Option<String>,
 }
@@ -36,13 +38,17 @@ pub async fn chat_analytics_handler(
     if matches!(auth, DashboardAuthLevel::None) {
         return (StatusCode::UNAUTHORIZED, Json(json!({ "error": "unauthorized" }))).into_response();
     }
+    // days VOR streamer-Pflicht (Python-Reihenfolge in _api_v2_chat_analytics).
+    let days = match parse_bounded_query_int(params.days.as_deref(), "days", 30, 7, 365) {
+        Ok(d) => d,
+        Err(resp) => return resp.into_response(),
+    };
     let streamer = match params.streamer.as_deref().map(str::trim).filter(|s| !s.is_empty()) {
         Some(s) => s.to_lowercase(),
         None => {
             return (StatusCode::BAD_REQUEST, Json(json!({ "error": "Streamer required" }))).into_response();
         }
     };
-    let days = params.days.unwrap_or(30).clamp(7, 365) as i64;
     let timezone = params.timezone.as_deref();
 
     match tb_analytics::chat_analytics::load_chat_analytics_payload(&pool, &streamer, days, timezone).await {
@@ -113,10 +119,26 @@ mod tests {
         let resp = chat_analytics_handler(
             DashboardAuthLevel::Localhost,
             State(pool),
-            Query(ChatAnalyticsQuery { streamer: Some("nani".into()), days: Some(30), timezone: None }),
+            Query(ChatAnalyticsQuery { streamer: Some("nani".into()), days: Some("30".into()), timezone: None }),
         )
         .await
         .into_response();
         assert_eq!(resp.status(), StatusCode::OK);
+    }
+
+    #[tokio::test]
+    async fn nicht_numerische_days_400_python_shape() {
+        let Some(pool) = make_pool("t_ca_h4").await else { return };
+        let resp = chat_analytics_handler(
+            DashboardAuthLevel::Localhost,
+            State(pool),
+            Query(ChatAnalyticsQuery { streamer: Some("nani".into()), days: Some("x".into()), timezone: None }),
+        )
+        .await
+        .into_response();
+        assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+        let bytes = axum::body::to_bytes(resp.into_body(), usize::MAX).await.unwrap();
+        let body: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+        assert_eq!(body, json!({ "error": "days must be an integer" }));
     }
 }

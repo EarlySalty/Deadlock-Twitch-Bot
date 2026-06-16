@@ -21,6 +21,7 @@ use serde_json::json;
 use sqlx::{PgPool, Row};
 
 use crate::auth::level::DashboardAuthLevel;
+use crate::query_int::parse_bounded_query_int;
 
 // ── Request-Parameter ────────────────────────────────────────────────────────
 
@@ -35,22 +36,18 @@ pub struct StreamerQuery {
 pub struct MonthlyQuery {
     #[serde(default)]
     pub streamer: Option<String>,
+    // Rohwert: nicht-numerisches `months` → Python-konformes 400-JSON, siehe query_int.
     #[serde(default)]
-    pub months: Option<i32>,
+    pub months: Option<String>,
 }
 
 #[derive(Deserialize)]
 pub struct DaysQuery {
     #[serde(default)]
     pub streamer: Option<String>,
+    // Rohwert: nicht-numerisches `days` → Python-konformes 400-JSON, siehe query_int.
     #[serde(default)]
-    pub days: Option<i32>,
-}
-
-// ── Hilfsroutinen ────────────────────────────────────────────────────────────
-
-fn clamp(v: i32, min: i32, max: i32) -> i32 {
-    v.max(min).min(max)
+    pub days: Option<String>,
 }
 
 /// Python-`_require_v2_auth`-Parität: None → 401.
@@ -74,7 +71,10 @@ pub async fn monthly_stats_handler(
 ) -> impl IntoResponse {
     if let Err(e) = require_auth(&auth) { return e.into_response(); }
 
-    let months = clamp(params.months.unwrap_or(12), 1, 24);
+    let months = match parse_bounded_query_int(params.months.as_deref(), "months", 12, 1, 24) {
+        Ok(m) => m,
+        Err(resp) => return resp.into_response(),
+    };
     let since: DateTime<Utc> = Utc::now() - Duration::days((months as f64 * 30.44) as i64);
     let streamer = params.streamer.as_deref()
         .map(|s| s.trim().to_lowercase())
@@ -147,8 +147,11 @@ pub async fn weekly_stats_handler(
 ) -> impl IntoResponse {
     if let Err(e) = require_auth(&auth) { return e.into_response(); }
 
-    let days = clamp(params.days.unwrap_or(30), 7, 365);
-    let since: DateTime<Utc> = Utc::now() - Duration::days(days as i64);
+    let days = match parse_bounded_query_int(params.days.as_deref(), "days", 30, 7, 365) {
+        Ok(d) => d,
+        Err(resp) => return resp.into_response(),
+    };
+    let since: DateTime<Utc> = Utc::now() - Duration::days(days);
     let streamer = params.streamer.as_deref()
         .map(|s| s.trim().to_lowercase())
         .filter(|s| !s.is_empty());
@@ -211,8 +214,11 @@ pub async fn hourly_heatmap_handler(
 ) -> impl IntoResponse {
     if let Err(e) = require_auth(&auth) { return e.into_response(); }
 
-    let days = clamp(params.days.unwrap_or(30), 7, 365);
-    let since: DateTime<Utc> = Utc::now() - Duration::days(days as i64);
+    let days = match parse_bounded_query_int(params.days.as_deref(), "days", 30, 7, 365) {
+        Ok(d) => d,
+        Err(resp) => return resp.into_response(),
+    };
+    let since: DateTime<Utc> = Utc::now() - Duration::days(days);
     let streamer = params.streamer.as_deref()
         .map(|s| s.trim().to_lowercase())
         .filter(|s| !s.is_empty());
@@ -265,8 +271,11 @@ pub async fn calendar_heatmap_handler(
 ) -> impl IntoResponse {
     if let Err(e) = require_auth(&auth) { return e.into_response(); }
 
-    let days = clamp(params.days.unwrap_or(365), 30, 365);
-    let since: DateTime<Utc> = Utc::now() - Duration::days(days as i64);
+    let days = match parse_bounded_query_int(params.days.as_deref(), "days", 365, 30, 365) {
+        Ok(d) => d,
+        Err(resp) => return resp.into_response(),
+    };
+    let since: DateTime<Utc> = Utc::now() - Duration::days(days);
     let streamer = params.streamer.as_deref()
         .map(|s| s.trim().to_lowercase())
         .filter(|s| !s.is_empty());

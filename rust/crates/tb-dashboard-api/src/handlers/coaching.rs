@@ -16,13 +16,17 @@ use serde_json::json;
 use sqlx::PgPool;
 
 use crate::auth::level::DashboardAuthLevel;
+use crate::query_int::parse_bounded_query_int;
 
 #[derive(Deserialize)]
 pub struct CoachingQuery {
     #[serde(default)]
     pub streamer: Option<String>,
+    // Rohwert statt Option<i32>: nicht-numerisches `days` muss Python-konform
+    // 400-JSON liefern ({"error":"days must be an integer"}), nicht den
+    // generischen serde-Plaintext-400. Siehe crate::query_int.
     #[serde(default)]
-    pub days: Option<i32>,
+    pub days: Option<String>,
 }
 
 /// `GET /twitch/api/v2/coaching?streamer=&days=30`
@@ -34,6 +38,12 @@ pub async fn coaching_handler(
     if let Some(resp) = crate::auth::extended_gate(&pool, &auth).await {
         return resp;
     }
+    // days VOR der streamer-Pflichtprüfung (Python-Reihenfolge in _api_v2_coaching:
+    // erst _parse_bounded_query_int → 400, dann streamer-Check).
+    let days = match parse_bounded_query_int(params.days.as_deref(), "days", 30, 7, 365) {
+        Ok(d) => d,
+        Err(resp) => return resp.into_response(),
+    };
     // streamer NICHT kleinschreiben: get_coaching_data echot ihn original und
     // lowercased nur intern für die Queries.
     let streamer = match params.streamer.as_deref().map(str::trim).filter(|s| !s.is_empty()) {
@@ -42,7 +52,6 @@ pub async fn coaching_handler(
             return (StatusCode::BAD_REQUEST, Json(json!({ "error": "Streamer required" }))).into_response();
         }
     };
-    let days = params.days.unwrap_or(30).clamp(7, 365) as i64;
 
     match tb_analytics::coaching::get_coaching_data(&pool, &streamer, days).await {
         Ok(v) => Json(v).into_response(),
@@ -92,10 +101,28 @@ mod tests {
         let resp = coaching_handler(
             DashboardAuthLevel::Localhost,
             State(pool),
-            Query(CoachingQuery { streamer: Some("Nani".into()), days: Some(30) }),
+            Query(CoachingQuery { streamer: Some("Nani".into()), days: Some("30".into()) }),
         )
         .await
         .into_response();
         assert_eq!(resp.status(), StatusCode::OK);
+    }
+
+    #[tokio::test]
+    async fn nicht_numerische_days_400_python_shape() {
+        let Some(pool) = make_pool("t_coaching_h3").await else { return };
+        // Python: _parse_bounded_query_int → {"error":"days must be an integer"}, 400.
+        // days-Check läuft VOR streamer-Pflicht (deshalb streamer: None ok).
+        let resp = coaching_handler(
+            DashboardAuthLevel::Localhost,
+            State(pool),
+            Query(CoachingQuery { streamer: None, days: Some("abc".into()) }),
+        )
+        .await
+        .into_response();
+        assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+        let bytes = axum::body::to_bytes(resp.into_body(), usize::MAX).await.unwrap();
+        let body: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+        assert_eq!(body, json!({ "error": "days must be an integer" }));
     }
 }

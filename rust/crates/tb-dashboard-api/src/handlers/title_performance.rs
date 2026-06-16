@@ -15,19 +15,17 @@ use serde_json::json;
 use sqlx::{PgPool, Row};
 
 use crate::auth::level::DashboardAuthLevel;
+use crate::query_int::parse_bounded_query_int;
 
 #[derive(Deserialize)]
 pub struct TitleQuery {
     #[serde(default)]
     pub streamer: Option<String>,
+    // Rohwerte: nicht-numerisch → Python-konformes 400-JSON, siehe query_int.
     #[serde(default)]
-    pub days: Option<i32>,
+    pub days: Option<String>,
     #[serde(default)]
-    pub limit: Option<i32>,
-}
-
-fn clamp(v: i32, min: i32, max: i32) -> i32 {
-    v.max(min).min(max)
+    pub limit: Option<String>,
 }
 
 /// Python `_extract_title_keywords` — Stop-Word-Filter + 3+-Zeichen-Wörter, max 5.
@@ -62,13 +60,20 @@ pub async fn title_performance_handler(
         return resp;
     }
 
+    // days/limit VOR streamer-Pflicht (Python-Reihenfolge in _api_v2_title_performance).
+    let days = match parse_bounded_query_int(params.days.as_deref(), "days", 30, 7, 365) {
+        Ok(d) => d,
+        Err(resp) => return resp.into_response(),
+    };
+    let limit = match parse_bounded_query_int(params.limit.as_deref(), "limit", 20, 5, 50) {
+        Ok(l) => l,
+        Err(resp) => return resp.into_response(),
+    };
     let streamer = match params.streamer.as_deref().map(str::trim).filter(|s| !s.is_empty()) {
         Some(s) => s.to_lowercase(),
         None => return (StatusCode::BAD_REQUEST, Json(json!({"error":"Streamer required"}))).into_response(),
     };
-    let days = clamp(params.days.unwrap_or(30), 7, 365);
-    let limit = clamp(params.limit.unwrap_or(20), 5, 50) as i64;
-    let since: DateTime<Utc> = Utc::now() - Duration::days(days as i64);
+    let since: DateTime<Utc> = Utc::now() - Duration::days(days);
 
     let rows = sqlx::query(
         r#"SELECT

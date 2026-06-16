@@ -15,6 +15,7 @@ use serde_json::json;
 use sqlx::{PgPool, Row};
 
 use crate::auth::level::DashboardAuthLevel;
+use crate::query_int::parse_bounded_query_int;
 
 const EXTERNAL_REACH_AVG_THRESHOLD: f64 = 100.0;
 
@@ -55,7 +56,8 @@ fn safe_median(sorted: &[f64]) -> Option<f64> {
 #[derive(Deserialize)]
 pub struct ComparisonQuery {
     pub streamer: Option<String>,
-    pub days: Option<i32>,
+    // Rohwert: nicht-numerisches `days` → Python-konformes 400-JSON, siehe query_int.
+    pub days: Option<String>,
     pub exclude_external: Option<String>,
 }
 
@@ -72,13 +74,17 @@ pub async fn category_comparison_handler(
     if matches!(auth, DashboardAuthLevel::None) {
         return (StatusCode::UNAUTHORIZED, Json(json!({"error":"unauthorized"}))).into_response();
     }
+    // days VOR streamer-Pflicht (Python-Reihenfolge in _api_v2_category_comparison).
+    let days = match parse_bounded_query_int(params.days.as_deref(), "days", 30, 7, 365) {
+        Ok(d) => d,
+        Err(resp) => return resp.into_response(),
+    };
     let streamer = match params.streamer.as_deref().map(str::trim).filter(|s| !s.is_empty()) {
         Some(s) => s.to_lowercase(),
         None => {
             return (StatusCode::BAD_REQUEST, Json(json!({"error":"Streamer required"}))).into_response();
         }
     };
-    let days = params.days.unwrap_or(30).clamp(7, 365) as i64;
     let exclude_external = params.exclude_external.as_deref() == Some("1");
     let since: DateTime<Utc> = Utc::now() - Duration::days(days);
 

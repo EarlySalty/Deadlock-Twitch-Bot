@@ -8,6 +8,7 @@ pub mod ai_state;
 pub mod auth;
 pub mod handlers;
 pub mod process_info;
+pub mod query_int;
 /// Strangler-Fig-Fallback-Proxy (→ Python 8765), siehe Modul-Doku.
 pub mod proxy;
 

@@ -17,6 +17,7 @@ use serde_json::json;
 use sqlx::{PgPool, Row};
 
 use crate::auth::level::DashboardAuthLevel;
+use crate::query_int::parse_bounded_query_int;
 
 const EXTERNAL_REACH_AVG_THRESHOLD: f64 = 100.0;
 
@@ -24,16 +25,13 @@ const EXTERNAL_REACH_AVG_THRESHOLD: f64 = 100.0;
 pub struct RankingsQuery {
     #[serde(default)]
     pub metric: Option<String>,
+    // Rohwerte: nicht-numerisch → Python-konformes 400-JSON, siehe query_int.
     #[serde(default)]
-    pub days: Option<i32>,
+    pub days: Option<String>,
     #[serde(default)]
-    pub limit: Option<i32>,
+    pub limit: Option<String>,
     #[serde(default)]
     pub exclude_external: Option<String>,
-}
-
-fn clamp(v: i32, min: i32, max: i32) -> i32 {
-    v.max(min).min(max)
 }
 
 fn require_auth(auth: &DashboardAuthLevel) -> Result<(), (StatusCode, Json<serde_json::Value>)> {
@@ -55,10 +53,16 @@ pub async fn rankings_handler(
     }
 
     let metric = params.metric.as_deref().unwrap_or("viewers");
-    let days = clamp(params.days.unwrap_or(30), 7, 365);
-    let limit = clamp(params.limit.unwrap_or(20), 5, 50) as i64;
+    let days = match parse_bounded_query_int(params.days.as_deref(), "days", 30, 7, 365) {
+        Ok(d) => d,
+        Err(resp) => return resp.into_response(),
+    };
+    let limit = match parse_bounded_query_int(params.limit.as_deref(), "limit", 20, 5, 50) {
+        Ok(l) => l,
+        Err(resp) => return resp.into_response(),
+    };
     let exclude_external = params.exclude_external.as_deref() == Some("1");
-    let since: DateTime<Utc> = Utc::now() - Duration::days(days as i64);
+    let since: DateTime<Utc> = Utc::now() - Duration::days(days);
 
     // Jede der 6 Kombinationen (3 metrics × 2 threshold-Varianten) bekommt ihr eigenes SQL.
     // $1 = since, $2 = limit [, $3 = threshold wenn exclude_external=1].

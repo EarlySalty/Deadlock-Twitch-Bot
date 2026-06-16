@@ -15,11 +15,13 @@ use serde_json::json;
 use sqlx::PgPool;
 
 use crate::auth::level::DashboardAuthLevel;
+use crate::query_int::parse_bounded_query_int;
 
 #[derive(Deserialize)]
 pub struct ActivityQuery {
+    // Rohwert: nicht-numerisches `days` → Python-konformes 400-JSON, siehe query_int.
     #[serde(default)]
-    pub days: Option<i32>,
+    pub days: Option<String>,
 }
 
 /// `GET /twitch/api/v2/category-activity-series?days=30`
@@ -32,7 +34,10 @@ pub async fn category_activity_series_handler(
     if let Some(resp) = crate::auth::extended_gate(&pool, &auth).await {
         return resp;
     }
-    let days = params.days.unwrap_or(30).clamp(7, 365) as i64;
+    let days = match parse_bounded_query_int(params.days.as_deref(), "days", 30, 7, 365) {
+        Ok(d) => d,
+        Err(resp) => return resp.into_response(),
+    };
 
     match tb_analytics::category_activity::load_category_activity_series(&pool, days).await {
         Ok(v) => Json(v).into_response(),
