@@ -233,7 +233,10 @@ impl GlobalBanSweeper {
             let target_id = match entry.chatter_id.as_deref().filter(|s| !s.is_empty()) {
                 Some(id) => Some(id.to_string()),
                 None => {
-                    // Helix-Lookup + zurückschreiben wenn erfolgreich
+                    // Helix-Lookup. Erfolgreich aufgelöste IDs werden in die
+                    // global-ban-Tabelle zurückgeschrieben (Rust-Erweiterung
+                    // gegenüber Python, das nur im Speicher auflöst — Grillme
+                    // `ban-sweep-lurker-01`: numerisches Matching ist robuster).
                     match self.api.resolve_user_id(&login_lower).await {
                         Ok(Some(id)) => {
                             write_back_chatter_id(&self.pool, &login_lower, &id).await;
@@ -412,7 +415,14 @@ async fn delete_sweep_due(pool: &PgPool, broadcaster_login: &str) {
     }
 }
 
-/// Schreibt aufgelöste `chatter_id` zurück. `global_ban_sweep.py:224–226`.
+/// Schreibt eine per Helix aufgelöste `chatter_id` in `twitch_chatter_global_ban`
+/// zurück (nur wenn die Spalte noch `NULL` ist).
+///
+/// Bewusste Rust-Erweiterung: `global_ban_sweep.py` (`_resolve_user_id`, Z. 31–60)
+/// löst den Login nur im Speicher auf und verwirft die ID nach dem Bann. Wir
+/// persistieren sie, damit künftige Sweeps die ID direkt nutzen (kein erneuter
+/// Helix-Call) und das Matching numerisch statt über den veränderlichen Login
+/// läuft (Grillme `ban-sweep-lurker-01` — „behalten, robusteres Matching").
 async fn write_back_chatter_id(pool: &PgPool, login: &str, chatter_id: &str) {
     let result = sqlx::query(
         r#"
