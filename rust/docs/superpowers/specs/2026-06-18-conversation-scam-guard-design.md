@@ -163,6 +163,77 @@ Migration nach `rust/migrations/`. Settings-Default `enabled=TRUE` setzt das Opt
 
 ---
 
+## 6a. Roh-Korpus (echte Fälle — Few-Shot + Test-Fixtures)
+
+Diese Transkripte sind **echte** Chat-Verläufe. Verwendung: (a) verdichtet als Few-Shot-Beispiele im Judge-Prompt (von Claude beim Füllen eingearbeitet), (b) als **Test-Fixtures** — der Judge MUSS Fall 1 & 2 als `scam` einstufen, die Kontrast-Fälle als `clean`. Sprache der Scammer: durchgehend Englisch im deutschsprachigen Kanal.
+
+### Fall 1 — `sophiaa_star` (POSITIV/scam, Kanal `cheazycrust`)
+Erstschreiberin, einseitiges Kennenlern-Skript über ~50 Nachrichten, Pivot am Ende.
+```
+sophiaa_star: Howdy Howdy
+sophiaa_star: how's the day going?
+[Streamer] cheazycrust: still on lunch break, brb
+sophiaa_star: Okay Okay no problem
+sophiaa_star: i'm waiting <3
+sophiaa_star: welcome back <3
+sophiaa_star: Wow this game is awesome
+sophiaa_star: i'm doing great
+sophiaa_star: thanks for asking <3
+sophiaa_star: What do you think of this game? Since you're playing it I'd love to know I really like this game and I hope I get a chance to play it someday
+sophiaa_star: so what other games are you play into?
+sophiaa_star: wow you have good taste in games
+sophiaa_star: i play mostly story games
+sophiaa_star: but this game is my most fav game
+sophiaa_star: just drop you a followeew
+sophiaa_star: no problem you deserve it
+sophiaa_star: No I haven't played it but I really feel like playing this game
+sophiaa_star: For one I really like this game's graphics and secondly its smoothness is amazing I mean this is a very good game in every respect
+sophiaa_star: Right now I don't have money to buy this game but I will definitely try it
+sophiaa_star: By the way are you playing it on PS5 or on PC?
+sophiaa_star: By the way PC has its own fun. Once someone plays on PC they don't really enjoy it on PS5 anymore
+sophiaa_star: By the way i'm from USA
+sophiaa_star: and you?
+sophiaa_star: i'm from Chicago
+sophiaa_star: So do you stream daily?
+sophiaa_star: Ohh okay okay so what do you do beside streaming
+sophiaa_star: like job or something?
+sophiaa_star: It's 8:02 here
+sophiaa_star: i'm in IT field
+sophiaa_star: by the way how long have you been streaming? in general?
+sophiaa_star: Okay by the way we've had a pretty good conversation can we connect with each other?
+[Streamer] cheazycrust: <discord-invite>
+sophiaa_star: Oh so this is your Discord?
+sophiaa_star: okay i will join you
+sophiaa_star: okay just sent you a friend req
+```
+**Tells:** generischer Beziehungsaufbau ohne Spielsubstanz, schleimiges Dauerlob („you deserve it", „good taste"), Mitleids-Haken („no money but I'll try"), Recon (PS5/PC, USA/Chicago, Job, Uhrzeit, Streaming-Dauer), Pivot („can we connect?", Friend-Request).
+
+### Fall 2 — `minniepearl19` (POSITIV/scam, deutschsprachiger Kanal)
+```
+minniepearl19: Heya @<streamer>
+minniepearl19: How's it going?
+minniepearl19: If possible can we talk on chat now?
+... (später)
+minniepearl19: I'm back
+minniepearl19: How's your day been?
+```
+**Tells:** englischer Erstschreiber in deutschem Kanal, sofortiger generischer Smalltalk + früher Pivot („can we talk on chat now?"), kein Spielbezug.
+
+### Kontrast A — `charlie03q` (KEYWORD-Spam, NICHT unser Fall)
+Plumpe Discord-Werbung, von `sery_bot` per Keyword sofort gebannt — **gehört `scam_pitch`, nicht uns**.
+```
+charlie03q: Yo bro ... I'd love to connect you with a top Twitch streamer who pulls thousands of live viewers and has over 3M followers ... add him on Discord lirikk_1 and tell him Charlie sent you ...
+```
+
+### Kontrast B — echter neuer Zuschauer (NEGATIV/clean, Referenz)
+```
+viewer_de: lohnt sich Haze grad? oder eher nerf gekriegt
+viewer_de: gg, was baust du auf McGinnis?
+```
+**Warum clean:** konkrete Spiel-/Build-Fragen, Deutsch, kein Beziehungs-Skript, kein Off-Platform-Pivot.
+
+---
+
 ## 7. Sicherheit / False-Positive
 
 Mehrfach abgesichert: Trigger nur Erstschreiber; Mods/VIPs/Subs/Known-Bots aus; Ban nur bei `confidence ≥ 0.90`; „unsure → nie bannen"; Sprach-Prior schützt deutsche Viewer; Override per `!unban` + Dashboard; vollständiges Verdict-Log. Parse-Fehler/LLM-Ausfall → `unsure` (nie Ban). Kein Auto-Chat-Post (verrät die Masche nicht, verschmutzt Chat nicht); Begründung nur Dashboard/Audit + on-demand `!explain`.
