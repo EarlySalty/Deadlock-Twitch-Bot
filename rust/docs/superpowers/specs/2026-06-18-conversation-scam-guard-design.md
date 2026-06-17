@@ -10,7 +10,7 @@
 
 Streamer im Partner-Netzwerk — besonders neue, untrainierte — vor **Social-Engineering-Scammern** schützen, die **Keyword-Filter überleben**, indem ein LLM (MiniMax) den Chat mitliest, das Muster semantisch erkennt und bei hoher Sicherheit **kanal-lokal bannt** — plus eine **verständliche Begründung**, damit der Streamer lernt, die Masche selbst zu erkennen.
 
-Es geht **nicht** um den plumpen Keyword-Spam („add him on Discord lirikk_1") — den fängt `scam_pitch` schon. Es geht um die getarnte Variante: ein Erstschreiber, der eine **aufgesetzte Kennenlern-Konversation** fährt.
+Primär die **getarnte Variante**: ein Erstschreiber, der eine **aufgesetzte Kennenlern-Konversation** fährt (sophiaa_star, minniepearl19). Den plumpen Keyword-Pitch fängt `scam_pitch`. **ABER** der Judge ist auch das **Sicherheitsnetz für Wachstums-/Clout-Pitches, die den Keyword-Filter umgehen** — z. B. via **Unicode-Obfuskation** (Small-Caps/Confusables), wie `sam_09995`, der manuell gebannt werden musste. Solche evadierenden Pitches soll der Judge ebenfalls erkennen.
 
 ### Kanonische Beispiele (Fake-Accounts)
 
@@ -78,10 +78,10 @@ channel.chat.message (EventSub, Partner-Kanal)
 Geprüft wird nur, wer **erstmals in diesem Partner-Kanal** schreibt (`is_first_time_streamer`). Ausgeschlossen: Mods, VIPs, Subs (badges), Known-Bots (`KNOWN_CHAT_BOTS`), der Bot selbst. `is_first_global` ist **kein** Trigger, wird aber als **Zusatz-Hinweis** an den Judge gegeben (brandneu im Netzwerk = verdächtiger). Account-Alter spielt **keine** Rolle. Kein Token-Spar-Gate — der Erstschreiber-Trigger ist scharf genug.
 
 ### 4.2 Dialog-State (pro Kanal+Chatter)
-In-Memory `HashMap<(channel, chatter), DialogState>` (Verlust bei Neustart unkritisch — Persistenz liegt in DB). `DialogState` hält das **wachsende MiniMax-`messages`-Array**: `[system(Judge-Prompt), user(msgs…), assistant(letztes JSON), user(neue msgs), …]`. Bewertung startet erst, wenn **genug Daten** da sind (Default: ab der **3.** substanziellen Nachricht des Chatters), danach bei **jeder** weiteren Nachricht erneut. `clean` → State auf „erledigt", keine weiteren Calls. Triviale Nachrichten (Emote-only, 1 Wort) zählen nicht als „substanziell".
+In-Memory `HashMap<(channel, chatter), DialogState>` (Verlust bei Neustart unkritisch — Persistenz liegt in DB). `DialogState` hält das **wachsende MiniMax-`messages`-Array**: `[system(Judge-Prompt), user(msgs…), assistant(letztes JSON), user(neue msgs), …]`. Bewertung startet, sobald **genug Substanz** da ist: entweder mehrere (Default ~3) substanzielle Nachrichten **ODER eine bereits substanzielle/werbliche Erstnachricht** (langer Pitch, Link/Discord-Aufforderung — fängt den Single-Message-Pitch wie `sam_09995`). Danach bei **jeder** weiteren Nachricht erneut; der Judge gibt `unsure`, wenn es noch nicht reicht. `clean` → State auf „erledigt", keine weiteren Calls. Triviale Nachrichten (Emote-only, 1 Wort) zählen nicht als „substanziell".
 
 ### 4.3 MiniMax-Judge
-Trait `ScamJudge { async fn judge(&self, dialog: &mut DialogState) -> Verdict }`. Prod-Impl nutzt das vorhandene MiniMax-Plumbing, **ohne Token-Limit** (voller Verlauf + volle Begründung, kein `max_answer_len`-Truncate). **Output-Vertrag** — strikt JSON:
+Trait `ScamJudge { async fn judge(&self, dialog: &mut DialogState) -> Verdict }`. Prod-Impl nutzt das vorhandene MiniMax-Plumbing, **ohne Token-Limit** (voller Verlauf + volle Begründung, kein `max_answer_len`-Truncate). **Anti-Evasion:** vor der Bewertung Fancy-Unicode/Confusables (Small-Caps etc.) zu ASCII normalisieren (verhindert Keyword-Evasion wie bei `sam_09995`); die Obfuskation selbst ist ein **Verdachtssignal** und wird dem Judge mitgegeben. **Output-Vertrag** — strikt JSON:
 
 ```json
 { "verdict": "scam|clean|unsure", "confidence": 0.0, "category": "…", "reasoning": "…" }
@@ -152,6 +152,8 @@ Migration nach `rust/migrations/`. Settings-Default `enabled=TRUE` setzt das Opt
 >
 > **Typische Indizien:** generischer Beziehungsaufbau statt Spielbezug („Heya", „How's it going?", „How's your day been?", „Welcome back <3"); übertrieben schleimiges, unnatürliches Dauerlob ohne Anlass; einseitiges, vorgefertigt wirkendes Skript unabhängig von den Antworten des Streamers; Recon-Fragen ohne Spielbezug (Wohnort, Job, Alter, Uhrzeit bei dir, PC/PS5, „wie lange streamst du schon"); der **Pivot** zu Off-Platform-Kontakt („can we talk on chat now?", „can we connect?", Discord, Freundschaftsanfrage); Mitleids-Haken („hab grad kein Geld, probier's aber").
 >
+> **Zweite Masche — Wachstums-/Clout-Pitch (oft EINE lange Nachricht):** unaufgefordertes Angebot, den Kanal „wachsen" zu lassen oder dich mit einem „großen Streamer" zu verbinden, mit Aufforderung, jemanden auf **Discord hinzuzufügen** („add him on Discord …, tell him X sent you", „real viewers, donate and sub regularly"). Häufig in **verfremdeter Schrift** (Small-Caps/Sonderzeichen wie ʏᴏ ʙʀᴏ), um Filter zu umgehen — die Verfremdung selbst ist ein **starkes** Verdachtssignal.
+>
 > **Sprache als Indiz (kein Alleinkriterium):** Diese Scammer schreiben praktisch immer **Englisch**, obwohl der Kanal deutschsprachig ist. Englischer Erstschreiber mit sofortigem Beziehungs-Smalltalk = deutlich verdächtiger. **Deutschsprachige** Erstschreiber sind selten diese Masche — im Zweifel „clean" oder „unsure".
 >
 > **Echte neue Zuschauer** unterscheiden sich klar: konkrete Spiel-/Stream-Fragen („lohnt sich Haze?", „welcher Rang?"), echte Reaktion aufs Geschehen, kein Beziehungs-Skript.
@@ -218,6 +220,13 @@ minniepearl19: I'm back
 minniepearl19: How's your day been?
 ```
 **Tells:** englischer Erstschreiber in deutschem Kanal, sofortiger generischer Smalltalk + früher Pivot („can we talk on chat now?"), kein Spielbezug.
+
+### Fall 3 — `sam_09995` (POSITIV/scam, Wachstums-Pitch + Unicode-Evasion, manuell gebannt)
+Original in **Small-Caps-Unicode** (ʏᴏ ʙʀᴏ …), um Keyword-Filter zu umgehen — `scam_pitch` hat ihn NICHT erwischt, earlysalty musste manuell bannen. **Eine** Nachricht. ASCII-normalisiert:
+```
+sam_09995: Yo bro, I just came across your stream and dropped a follow before heading out I respect the hustle. I actually know a big twitch streamer with around 435+ followers who helps streamers grow with real viewers, active chat, and supporters who donate and sub regularly if you're serious about taking your channel to the next level add him on Discord :point_right: implusesv_001 and tell him SAM sent you opportunities like this don't come around often
+```
+**Tells:** unaufgeforderter Wachstums-/Clout-Pitch, „add him on Discord … tell him SAM sent you", Single-Message, **Unicode-Verfremdung** als Filter-Evasion. Erwartung: Judge erkennt `scam` trotz Obfuskation und trotz nur einer Nachricht.
 
 ### Kontrast A — `charlie03q` (KEYWORD-Spam, NICHT unser Fall)
 Plumpe Discord-Werbung, von `sery_bot` per Keyword sofort gebannt — **gehört `scam_pitch`, nicht uns**.
@@ -290,3 +299,4 @@ Test zuerst (Red→Green→Refactor), MiniMax/ChatApi gemockt (wiremock-Muster w
 12. **Sprach-Prior:** Englisch = verdächtiger, Deutsch = entlastend (Indiz, kein Alleinkriterium).
 13. User-sichtbare Texte → **Claude** schreibt, Codex setzt Platzhalter.
 14. **Stufen-Modell:** ≥ 0.90 → Auto-Aktion je Modus; 0.70–<0.90 (Scam) → **Moderationsvorschlag** (Dashboard: Ban-Button + Begründung + Ignorieren, kein Auto-Eingriff); < 0.70 / unsure → weiter sammeln.
+15. **Zwei Maschen + Evasion:** Judge erkennt sowohl Beziehungs-Konversation (multi-message) als auch Wachstums-/Clout-Pitch (oft Single-Message); fängt auch keyword-evadierende Pitches via **Unicode→ASCII-Normalisierung**, Obfuskation = Verdachtssignal. „Genug Daten" auch bei einer substanziellen Pitch-Erstnachricht erfüllt.
