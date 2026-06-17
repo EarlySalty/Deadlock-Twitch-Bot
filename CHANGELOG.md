@@ -1,3 +1,11 @@
+## #230 — Channel Intelligence: Freemium-Zugang für Partner entsperrt
+
+**Problem:** Der Übersicht-Endpoint (`/twitch/api/v2/overview`) warf für alle Partner-Sessions 401 „unauthorized" zurück, obwohl die Freemium-Paywall-Logik im Code bereits vollständig implementiert war. Ursache: Der Handler verwendete `AuthLevel` (versteht nur den internen `X-Internal-Token`) statt `DashboardAuthLevel` (versteht Partner-Cookie, Admin-Cookie, Localhost). Partner kamen nie bis zur Plan-Prüfung — sie wurden am Eingang abgeblockt.
+
+**Änderung:** Handler-Auth auf `DashboardAuthLevel` umgestellt. Gate von `is_privileged()` auf `is_authenticated()` gesenkt — Partner dürfen jetzt rein. Partner-Security-Fence eingebaut: Partner sehen nur ihre eigenen Daten (Login wird aus der Session erzwungen, nicht aus dem Query-Param gelesen). Admins/Localhost bleiben uneingeschränkt. Tests auf Loopback-Auth umgestellt.
+
+**Ergebnis:** Free-Partner sehen die Übersicht mit dem letzten Stream als Zeitfenster (keine Trends, keine Zeitraumauswahl). Paid-Partner (`analytics.basic`/`analytics.extended`) bekommen das volle Rolling-Window mit Trends — Freemium-Paywall greift wie geplant.
+
 ## #229 — Raid-OAuth: Partner-Promotion jetzt zuverlässig + korrekte Block-Guards
 
 **Problem (1) — Stille Promotion-Blockade:** `sync_partner_state_after_auth` führte Partner-Promotion und Stats-Backfill in einer einzigen Postgres-Transaktion durch. Schlug der Backfill fehl (z. B. Constraint-Konflikt oder Tabellensperre), rollte die gesamte Transaktion zurück — die neu angelegte `twitch_partners`-Zeile verschwand lautlos, ohne dass der Streamer davon erfuhr. Erkennbares Symptom: `twitch_raid_auth`-Eintrag vorhanden (Token gespeichert), aber kein `twitch_partners`-Eintrag.

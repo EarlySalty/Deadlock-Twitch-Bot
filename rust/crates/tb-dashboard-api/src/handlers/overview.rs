@@ -1,6 +1,6 @@
 //! Handler für `GET /twitch/api/v2/overview`.
 //!
-//! Admin-only. Kein Partner-Session-Auth (deferred, ADR 0003).
+//! Auth: Partner (eigene Daten) + Admin/Localhost (beliebiger Streamer).
 
 use axum::{
     extract::{Query, State},
@@ -15,7 +15,9 @@ use tb_analytics::overview::{
     overview_monetization_counts, overview_network_stats, overview_session_count,
     overview_sessions, OverviewMonetization, OverviewNetworkStats, OverviewSession,
 };
-use tb_http_core::{ApiError, AuthLevel};
+use tb_http_core::ApiError;
+
+use crate::auth::level::DashboardAuthLevel;
 
 #[derive(Deserialize)]
 pub struct OverviewParams {
@@ -455,21 +457,26 @@ async fn window_since_dates(
 
 /// `GET /twitch/api/v2/overview?streamer=<login>[&days=30]`
 pub async fn overview_handler(
-    auth: AuthLevel,
+    auth: DashboardAuthLevel,
     State(pool): State<PgPool>,
     Query(params): Query<OverviewParams>,
 ) -> Result<impl IntoResponse, ApiError> {
-    if !auth.is_privileged() {
+    if !auth.is_authenticated() {
         return Err(ApiError::unauthorized());
     }
 
     // days: clip to [7, 365]
     let days = params.days.clamp(7, 365);
-    let login = params
-        .streamer
-        .as_deref()
-        .map(|s| s.trim().to_lowercase())
-        .filter(|s| !s.is_empty());
+    // Partner darf nur eigene Daten sehen. Admin/Localhost kann beliebigen
+    // Streamer über den Query-Param abfragen.
+    let login = match &auth {
+        DashboardAuthLevel::Partner { twitch_login, .. } => Some(twitch_login.to_lowercase()),
+        _ => params
+            .streamer
+            .as_deref()
+            .map(|s| s.trim().to_lowercase())
+            .filter(|s| !s.is_empty()),
+    };
     let login_ref = login.as_deref();
 
     // B16-FIX-OVERVIEW-WINDOW: Lesefenster serverseitig auflösen. Free-Streamer
@@ -642,11 +649,10 @@ mod tests {
         extract::ConnectInfo,
         http::{Request, StatusCode},
         routing::get,
-        Extension, Router,
+        Router,
     };
     use sqlx::postgres::PgPoolOptions;
     use std::net::SocketAddr;
-    use tb_http_core::ExpectedToken;
     use tower::ServiceExt;
 
     fn test_dsn() -> Option<String> {
@@ -756,20 +762,19 @@ mod tests {
         pool
     }
 
-    fn make_router(pool: PgPool, token: &str) -> Router {
+    fn make_router(pool: PgPool) -> Router {
         Router::new()
             .route("/twitch/api/v2/overview", get(overview_handler))
             .with_state(pool)
-            .layer(Extension(ExpectedToken(token.to_string())))
     }
 
-    fn admin_req(token: &str, streamer: &str) -> Request<Body> {
-        let addr: SocketAddr = "1.2.3.4:9999".parse().unwrap();
+    /// Localhost-Auth: Loopback-Peer + Loopback-Host → DashboardAuthLevel::Localhost.
+    fn admin_req(streamer: &str) -> Request<Body> {
+        let addr: SocketAddr = "127.0.0.1:9999".parse().unwrap();
         Request::builder()
             .uri(format!("/twitch/api/v2/overview?streamer={streamer}"))
             .extension(ConnectInfo(addr))
-            .header(axum::http::header::HOST, "example.com")
-            .header("x-internal-token", token)
+            .header(axum::http::header::HOST, "127.0.0.1")
             .body(Body::empty())
             .unwrap()
     }
@@ -778,6 +783,7 @@ mod tests {
     async fn returns_401_without_auth() {
         let dsn = db_dsn_or_skip!();
         let pool = make_pool(&dsn, "test_handler_overview_unauth").await;
+        // Nicht-Loopback-IP + kein Cookie → DashboardAuthLevel::None → 401.
         let addr: SocketAddr = "1.2.3.4:9999".parse().unwrap();
         let req = Request::builder()
             .uri("/twitch/api/v2/overview?streamer=x")
@@ -785,7 +791,7 @@ mod tests {
             .header(axum::http::header::HOST, "example.com")
             .body(Body::empty())
             .unwrap();
-        let res = make_router(pool, "tok").oneshot(req).await.unwrap();
+        let res = make_router(pool).oneshot(req).await.unwrap();
         assert_eq!(res.status(), StatusCode::UNAUTHORIZED);
     }
 
@@ -793,8 +799,8 @@ mod tests {
     async fn returns_empty_for_unknown_streamer() {
         let dsn = db_dsn_or_skip!();
         let pool = make_pool(&dsn, "test_handler_overview_empty").await;
-        let res = make_router(pool, "tok")
-            .oneshot(admin_req("tok", "nobody"))
+        let res = make_router(pool)
+            .oneshot(admin_req("nobody"))
             .await
             .unwrap();
         assert_eq!(res.status(), StatusCode::OK);
@@ -840,8 +846,8 @@ mod tests {
         .await
         .unwrap();
 
-        let res = make_router(pool, "tok")
-            .oneshot(admin_req("tok", "streamer_x"))
+        let res = make_router(pool)
+            .oneshot(admin_req("streamer_x"))
             .await
             .unwrap();
         assert_eq!(res.status(), StatusCode::OK);
@@ -978,11 +984,11 @@ mod tests {
     async fn resolve_window_privilegiert_und_kein_streamer() {
         let dsn = db_dsn_or_skip!();
         let pool = make_pool(&dsn, "test_overview_window_resolve").await;
-        // Privilegiert → Full, egal welcher Streamer.
+        // Localhost/Admin (privilegiert) → Full, egal welcher Streamer.
         assert_eq!(resolve_read_window(&pool, true, Some("nani")).await, WindowMode::Full);
         // Kein Streamer-Kontext → Full.
         assert_eq!(resolve_read_window(&pool, false, None).await, WindowMode::Full);
-        // Nicht privilegiert + unbekannter Streamer (kein Plan) → LastStream.
+        // Partner ohne Plan (unbekannter Streamer) → LastStream (Paywall).
         assert_eq!(resolve_read_window(&pool, false, Some("ghost_free")).await, WindowMode::LastStream);
     }
 
