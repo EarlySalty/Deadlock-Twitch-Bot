@@ -1,12 +1,14 @@
 //! Handler für `GET /twitch/api/v2/streamers`.
 //!
-//! Admin-only: gibt 401 zurück wenn AuthLevel == None.
+//! Admin-only: gibt 401 zurück wenn DashboardAuthLevel nicht privileged (Localhost/Admin).
 
 use axum::{extract::State, response::IntoResponse, Json};
 use serde::Serialize;
 use sqlx::PgPool;
 use tb_analytics::streamers::{active_streamers, StreamerListRow};
-use tb_http_core::{ApiError, AuthLevel};
+use tb_http_core::ApiError;
+
+use crate::auth::level::DashboardAuthLevel;
 
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -30,7 +32,7 @@ impl From<StreamerListRow> for StreamerJson {
 
 /// `GET /twitch/api/v2/streamers`
 pub async fn streamers_handler(
-    auth: AuthLevel,
+    auth: DashboardAuthLevel,
     State(pool): State<PgPool>,
 ) -> Result<impl IntoResponse, ApiError> {
     if !auth.is_privileged() {
@@ -52,19 +54,16 @@ mod tests {
         extract::ConnectInfo,
         http::{Request, StatusCode},
         routing::get,
-        Extension, Router,
+        Router,
     };
     use sqlx::postgres::PgPoolOptions;
     use std::net::SocketAddr;
-    use tb_http_core::ExpectedToken;
     use tower::ServiceExt;
 
     fn test_dsn() -> Option<String> {
         std::env::var("TB_TEST_DATABASE_URL").ok()
     }
 
-    /// Gibt die DSN zurück oder bricht den Test ab.
-    /// Mit `TB_TEST_REQUIRE_DB=1` wird statt des stillen Skips ein panic ausgelöst.
     macro_rules! db_dsn_or_skip {
         () => {
             match test_dsn() {
@@ -124,20 +123,19 @@ mod tests {
         pool
     }
 
-    fn make_router(pool: PgPool, token: &str) -> Router {
+    fn make_router(pool: PgPool) -> Router {
         Router::new()
             .route("/twitch/api/v2/streamers", get(streamers_handler))
             .with_state(pool)
-            .layer(Extension(ExpectedToken(token.to_string())))
     }
 
-    fn admin_req(token: &str) -> Request<Body> {
-        let addr: SocketAddr = "1.2.3.4:9999".parse().unwrap();
+    // Localhost-Anfrage → DashboardAuthLevel::Localhost → is_privileged() = true
+    fn localhost_req() -> Request<Body> {
+        let addr: SocketAddr = "127.0.0.1:9999".parse().unwrap();
         Request::builder()
             .uri("/twitch/api/v2/streamers")
             .extension(ConnectInfo(addr))
-            .header(axum::http::header::HOST, "example.com")
-            .header("x-internal-token", token)
+            .header(axum::http::header::HOST, "127.0.0.1:8769")
             .body(Body::empty())
             .unwrap()
     }
@@ -156,7 +154,7 @@ mod tests {
     async fn returns_401_without_auth() {
         let dsn = db_dsn_or_skip!();
         let pool = make_pool(&dsn, "test_handler_streamers_unauth").await;
-        let res = make_router(pool, "tok")
+        let res = make_router(pool)
             .oneshot(unauth_req())
             .await
             .unwrap();
@@ -164,7 +162,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn returns_streamers_for_admin() {
+    async fn returns_streamers_for_localhost() {
         let dsn = db_dsn_or_skip!();
         let pool = make_pool(&dsn, "test_handler_streamers_admin").await;
         sqlx::query(
@@ -178,8 +176,8 @@ mod tests {
         .await
         .unwrap();
 
-        let res = make_router(pool, "tok")
-            .oneshot(admin_req("tok"))
+        let res = make_router(pool)
+            .oneshot(localhost_req())
             .await
             .unwrap();
         assert_eq!(res.status(), StatusCode::OK);

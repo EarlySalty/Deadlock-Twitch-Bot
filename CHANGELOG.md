@@ -1,3 +1,11 @@
+## #228 — Admin-Ansicht zeigte "Kein Partner auswählbar" trotz aktiver Partner
+
+**Problem:** Der Endpoint `/twitch/api/v2/streamers`, der dem Dashboard die Liste aktiver Partner für die Admin-Partnerauswahl liefert, prüfte die Berechtigung nur anhand des internen Service-Tokens (`X-Internal-Token`). Browser schicken diesen Header nicht — die Anfrage wurde mit 401 abgelehnt, das Frontend erhielt eine leere Liste und zeigte den Fehler-Bildschirm.
+
+**Änderung:** Der Handler nutzt jetzt `DashboardAuthLevel` statt `AuthLevel`. Damit erkennt er sowohl Localhost-Zugriffe als auch Twitch-Admin-Sessions (Cookie-basiert), genauso wie alle anderen v2-Endpunkte. Die Tests wurden entsprechend auf Localhost-Simulation umgestellt.
+
+**Ergebnis:** Admins, die sich per Twitch-OAuth einloggen, können die Partnerliste laden und zwischen Partnern wechseln. Der `earlysalty`-Account wird korrekt zu `DashboardAuthLevel::Admin` promoted und hat Zugriff.
+
 ## #227 — Geteilten Twitch-Callback für Dashboard und Raid wiederhergestellt
 
 **Problem:** Nach der Umstellung des Streamer-Dashboards nutzte der Login eine Rücksprung-Adresse, die bei Twitch nicht registriert ist. Twitch brach die Anmeldung deshalb vor dem eigentlichen Login ab. Gleichzeitig darf die registrierte Adresse nicht einfach exklusiv dem Dashboard gehören, weil auch die Raid-Autorisierung denselben öffentlichen Rücksprung und dieselbe Twitch-Anwendung nutzt.
