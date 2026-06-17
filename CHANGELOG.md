@@ -1,3 +1,11 @@
+## #226 — Streamer-Dashboard-Login nach Cutover repariert (OAuth war stumm deaktiviert)
+
+**Ausgangslage:** Seit der Umstellung des Streamer-Dashboards auf die neue Plattform brach der Twitch-Login mit der Meldung „Twitch OAuth ist aktuell nicht konfiguriert" ab — niemand kam mehr ins Dashboard. Ursache: Der Login braucht drei Angaben (Client-ID, Client-Secret und die öffentliche Rücksprung-Adresse). Die ersten beiden lagen wie gewohnt im Secret-Speicher, die Rücksprung-Adresse wurde in der alten Version aber aus einem eingebauten Standardwert abgeleitet. Die neue Version verlangt sie explizit und schaltet den Login bewusst komplett ab, sobald eine der drei Angaben fehlt — statt mit halber Konfiguration zu raten. Beim Umzug ist diese eine Adresse nirgends mehr gesetzt worden.
+
+**Was geändert wurde:** Die öffentliche Rücksprung-Adresse des Logins wird beim Dienststart wieder fest gesetzt (kein Geheimnis, eine reine Web-Adresse). Sie zeigt auf die kanonische Domain und entspricht exakt der bei Twitch hinterlegten Adresse, damit Twitch den Rücksprung akzeptiert. Liegt der Wert später einmal im zentralen Secret-Speicher, hat dieser Vorrang.
+
+**Wie es jetzt läuft:** Der native Twitch-Login ist beim Start wieder aktiv; das Dashboard leitet Streamer korrekt zur Twitch-Anmeldung und nach erfolgreicher Freigabe zurück ins Dashboard. Fehlt die Adresse erneut, bleibt das fail-closed-Verhalten erhalten — lieber sauber deaktiviert als mit kaputter Anmeldung.
+
 ## #225 — Schema-Cleanup: twitch_streamers auf reine Identitätstabelle reduziert + is_partner BOOLEAN-Fix
 
 **Ausgangslage:** `twitch_streamers` enthielt seit der SQLite-Migration mehrere Felder die dort konzeptionell nicht hingehörten: `is_monitored_only` als Flag für "in Streamers aber kein Partner", `discord_user_id` obwohl das bereits vollständig in `twitch_streamer_identities` lag, und `archived_at` als Dashboard-Flag für Partner. Das führte immer wieder zu der falschen Annahme, `twitch_streamers ≈ twitch_partners` — zuletzt konkret in den Stats-Logging-Queries, die `is_partner` als `INTEGER` (0/1) statt als `BOOLEAN` behandelten und damit 6 Fehler/Minute in Prod produzierten. Dazu fehlte eine saubere Abbildung für Opt-out-Streamer und hard-gebannte Kanäle.
