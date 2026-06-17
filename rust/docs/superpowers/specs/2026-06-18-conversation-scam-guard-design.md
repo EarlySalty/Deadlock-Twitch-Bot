@@ -89,13 +89,17 @@ Trait `ScamJudge { async fn judge(&self, dialog: &mut DialogState) -> Verdict }`
 
 Robustes Parsing (JSON ggf. aus Fließtext extrahieren; bei Parse-Fehler → `unsure`, nie crashen, nie bannen). Der **System-Prompt** (§6) ist user-sichtbarer deutscher Text → **Claude liefert ihn**, Codex setzt eine `const SCAM_JUDGE_SYSTEM_PROMPT: &str = "<<PLATZHALTER>>";` und meldet Datei:Zeile.
 
-### 4.4 Decision-Engine
-- `scam` & `confidence ≥ threshold` (default 0.90) → Aktion je `mode`.
-- `mode = auto_ban` → `auto_ban_and_cleanup`, `reason_text = reasoning`. Bei `Forbidden`/Fehler → **kein** stiller Ausfall: als `alert_only` behandeln + Verdict mit `action_taken='ban_failed_no_mod'` persistieren.
-- `mode = timeout` → `timeout_user`, gleiche Begründung.
-- `mode = alert_only` → nur persistieren + Dashboard-Alert.
-- `unsure` / `scam<threshold` → kein Eingriff, weiter sammeln.
-- Jede Aktion + Verdict → `twitch_scam_guard_verdicts`.
+### 4.4 Decision-Engine (Stufen-Modell)
+Konfidenz-Bänder bei `verdict = scam`:
+- **`confidence ≥ threshold`** (default 0.90) → **Auto-Aktion** je `mode`:
+  - `mode = auto_ban` → `auto_ban_and_cleanup`, `reason_text = reasoning`. Bei `Forbidden`/Fehler → **kein** stiller Ausfall: zu `suggested` herabstufen + Verdict `action_taken='ban_failed_no_mod'`.
+  - `mode = timeout` → `timeout_user`, gleiche Begründung.
+  - `mode = alert_only` → kein Eingriff, als **Moderationsvorschlag** (`suggested`, „starker Vorschlag") ins Dashboard.
+- **`suggestion_floor ≤ confidence < threshold`** (default Floor 0.70) → **Moderationsvorschlag** (`suggested`), **unabhängig vom Modus**: Dashboard-Eintrag mit **Ban-Button + Begründung + Ignorieren**, **kein** Auto-Eingriff. Klick auf Ban → derselbe `auto_ban_and_cleanup`-Pfad (reason = reasoning); Klick auf Ignorieren → `dismissed`.
+- **`confidence < suggestion_floor`** oder `verdict = unsure` → kein Eingriff, **weiter sammeln**.
+- `verdict = clean` → erledigt, Dialog beenden.
+
+Jeder Übergang + Verdict → `twitch_scam_guard_verdicts` (Status siehe §5).
 
 ### 4.5 Chat-Commands (Mod/Broadcaster-only)
 - **`!unban [@user]`** — Override: `unban_user` + Verdict als `overturned` markieren (False-Positive-Spur). Ohne `@user` → letzter Scam-Guard-Ban im Kanal.
@@ -103,7 +107,10 @@ Robustes Parsing (JSON ggf. aus Fließtext extrahieren; bei Parse-Fehler → `un
 - Command-Antworttexte = user-sichtbar → **Platzhalter** durch Codex, Claude füllt.
 
 ### 4.6 Dashboard
-Verdict-Detailansicht (verdict, confidence, category, reasoning, Verlaufs-Snapshot, action_taken, Zeit) + **Override-Button** (→ unban). Modus-/Schwellen-/Enable-Umschalter pro Kanal. Alle UI-Strings = **Platzhalter** durch Codex, Claude füllt.
+- **Moderationsvorschläge-Queue:** offene `suggested`-Verdicts (verdict, confidence, category, reasoning, Verlaufs-Snapshot) mit **Ban**-Button (→ `auto_ban_and_cleanup`) und **Ignorieren**-Button (→ `dismissed`).
+- **Verdict-Detail/-Historie:** alle Verdicts inkl. `action_taken`, Zeit; bei gebannten ein **Override**-Button (→ `unban` + `overturned`).
+- Modus-/Schwellen-/Floor-/Enable-Umschalter pro Kanal.
+- Alle UI-Strings = **Platzhalter** durch Codex, Claude füllt.
 
 ---
 
@@ -115,7 +122,8 @@ Verdict-Detailansicht (verdict, confidence, category, reasoning, Verlaufs-Snapsh
 | `channel_login` | TEXT PK | |
 | `enabled` | BOOLEAN | `TRUE` |
 | `mode` | TEXT | `'auto_ban'` (`auto_ban`\|`timeout`\|`alert_only`) |
-| `threshold` | REAL | `0.90` |
+| `threshold` | REAL | `0.90` (Auto-Aktion ab hier) |
+| `suggestion_floor` | REAL | `0.70` (Moderationsvorschlag ab hier bis < threshold) |
 
 **`twitch_scam_guard_verdicts`** (Audit + Override):
 | Spalte | Typ |
@@ -129,7 +137,7 @@ Verdict-Detailansicht (verdict, confidence, category, reasoning, Verlaufs-Snapsh
 | `category` | TEXT |
 | `reasoning` | TEXT |
 | `transcript_snapshot` | TEXT |
-| `action_taken` | TEXT (`banned`\|`timed_out`\|`alerted`\|`ban_failed_no_mod`\|`overturned`) |
+| `action_taken` | TEXT (`banned`\|`timed_out`\|`suggested`\|`dismissed`\|`ban_failed_no_mod`\|`overturned`) |
 | `created_at` | TIMESTAMPTZ DEFAULT NOW() |
 
 Migration nach `rust/migrations/`. Settings-Default `enabled=TRUE` setzt das Opt-out-Modell um (default an).
@@ -210,3 +218,4 @@ Test zuerst (Red→Green→Refactor), MiniMax/ChatApi gemockt (wiremock-Muster w
 11. Schwelle: **0.90**.
 12. **Sprach-Prior:** Englisch = verdächtiger, Deutsch = entlastend (Indiz, kein Alleinkriterium).
 13. User-sichtbare Texte → **Claude** schreibt, Codex setzt Platzhalter.
+14. **Stufen-Modell:** ≥ 0.90 → Auto-Aktion je Modus; 0.70–<0.90 (Scam) → **Moderationsvorschlag** (Dashboard: Ban-Button + Begründung + Ignorieren, kein Auto-Eingriff); < 0.70 / unsure → weiter sammeln.
