@@ -4,7 +4,7 @@
 //! (`POST /twitch/api/admin/config/promo`). Validiert die rohe Config und
 //! persistiert sie als Singleton (`twitch_global_promo_modes`). Die Auswertung
 //! + der Chat-Konsum liegen in [`tb_analytics::promo_mode`] (geteilte Logik mit
-//! `tb-chat::promos`).
+//!   `tb-chat::promos`).
 //!
 //! CSRF wird — wie im übrigen Rust-Dashboard (s. `internal_home.rs`, `auth_status`
 //! liefert `csrfToken: null`) — bewusst NICHT geprüft; der Admin-Zugriff ist

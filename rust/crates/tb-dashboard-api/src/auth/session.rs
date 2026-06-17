@@ -41,6 +41,7 @@
 use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
 
+use chrono::Utc;
 use sqlx::PgPool;
 use tokio::sync::Mutex;
 use tracing::{debug, warn};
@@ -216,6 +217,10 @@ pub const PARTNER_ACCESS_SESSION_TYPE: &str = "partner_token";
 /// Der CSRF-State des Twitch-OAuth-Login-Flows wird als eigene Row mit diesem Typ
 /// abgelegt — atomar einmal verbraucht (DELETE … RETURNING) beim Callback.
 pub const OAUTH_STATE_SESSION_TYPE: &str = "oauth_state:twitch";
+
+/// Plattform-Discriminator des geteilten Raid-OAuth-State-Stores
+/// (`oauth_state_tokens`), Python `_OAUTH_STATE_PLATFORM_RAID`.
+const RAID_OAUTH_STATE_PLATFORM: &str = "twitch_raid";
 
 /// Gültigkeit eines OAuth-Login-State-Tokens (Python: `server_v2.py:189`,
 /// `_oauth_state_ttl_seconds = 600`). Hartkodiert — kein Env-Override.
@@ -466,6 +471,31 @@ impl DashboardAuthState {
             return Ok(None);
         }
         Ok(Some(OAuthLoginState { next_path, redirect_uri }))
+    }
+
+    /// Prüft, ob ein noch gültiger Raid-OAuth-State existiert, ohne ihn zu
+    /// verbrauchen. Das ist das Rust-Pendant zu Pythons `has_state_details`
+    /// beim geteilten `/callback/twitch`-Dispatch.
+    pub async fn has_raid_oauth_state(&self, state_token: &str) -> Result<bool, sqlx::Error> {
+        let row: Option<(String,)> = sqlx::query_as(
+            r#"
+            SELECT streamer_login
+            FROM oauth_state_tokens
+            WHERE state_token = $1
+              AND platform = $2
+              AND expires_at > $3
+            LIMIT 1
+            "#,
+        )
+        .bind(state_token)
+        .bind(RAID_OAUTH_STATE_PLATFORM)
+        .bind(Utc::now())
+        .fetch_optional(&self.pool)
+        .await?;
+
+        Ok(row
+            .map(|(login,)| !login.trim().is_empty())
+            .unwrap_or(false))
     }
 
     /// Persistiert einen Partner-Einmal-Login-State (B3-8). `state_id` = `sid` aus

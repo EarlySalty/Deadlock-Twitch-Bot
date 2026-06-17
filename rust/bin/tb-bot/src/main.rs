@@ -1174,6 +1174,7 @@ async fn main() {
 /// 2. `cleanup_stale` — veraltete Twitch-Subs für entfernte Partner löschen
 /// 3. `ensure_core_subscriptions` — stream.online/offline/channel.update für
 ///    alle aktiven Partner sicherstellen (fängt neue Kanäle + revoked Subs)
+///
 /// Baut die Auth-Bausteine für die Broadcaster-Telemetrie-Subs (B9):
 /// `TokenProvider` für den Broadcaster-User-Token (refresht bei Ablauf) +
 /// `RaidAuthStore` für dessen Scopes. `None`, wenn `DB_MASTER_KEY_V1` fehlt —

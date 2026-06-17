@@ -600,6 +600,7 @@ pub fn build_auth_router() -> Router {
     Router::new()
         .route("/twitch/auth/login", get(auth_login::login_handler))
         .route("/twitch/auth/callback", get(auth_login::callback_handler))
+        .route("/callback/twitch", get(auth_login::shared_callback_handler))
         .route("/twitch/auth/logout", get(auth_login::logout_handler))
 }
 

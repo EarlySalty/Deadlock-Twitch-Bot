@@ -1,3 +1,11 @@
+## #227 — Geteilten Twitch-Callback für Dashboard und Raid wiederhergestellt
+
+**Problem:** Nach der Umstellung des Streamer-Dashboards nutzte der Login eine Rücksprung-Adresse, die bei Twitch nicht registriert ist. Twitch brach die Anmeldung deshalb vor dem eigentlichen Login ab. Gleichzeitig darf die registrierte Adresse nicht einfach exklusiv dem Dashboard gehören, weil auch die Raid-Autorisierung denselben öffentlichen Rücksprung und dieselbe Twitch-Anwendung nutzt.
+
+**Änderung:** Der Dashboard-Login verwendet wieder die registrierte Rücksprung-Adresse. Der gemeinsame Rücksprung wird jetzt im neuen Dashboard angenommen und anhand des gespeicherten OAuth-States entschieden: Gehört der State zum Dashboard, läuft der normale Dashboard-Login; gehört er zur Raid-Autorisierung, wird die bestehende interne Raid-Verarbeitung aufgerufen.
+
+**Ergebnis:** Der Streamer-Dashboard-Login passt wieder zur Twitch-Konfiguration, ohne die Raid-Autorisierung umzuhängen oder die Anbieter-Konsole zu ändern. Die alte Dashboard-Rücksprung-Adresse bleibt als Kompatibilitätspfad erhalten, während die gemeinsame Adresse künftig über den neuen Dashboard-Dienst laufen kann.
+
 ## #226 — Streamer-Dashboard-Login nach Cutover repariert (OAuth war stumm deaktiviert)
 
 **Ausgangslage:** Seit der Umstellung des Streamer-Dashboards auf die neue Plattform brach der Twitch-Login mit der Meldung „Twitch OAuth ist aktuell nicht konfiguriert" ab — niemand kam mehr ins Dashboard. Ursache: Der Login braucht drei Angaben (Client-ID, Client-Secret und die öffentliche Rücksprung-Adresse). Die ersten beiden lagen wie gewohnt im Secret-Speicher, die Rücksprung-Adresse wurde in der alten Version aber aus einem eingebauten Standardwert abgeleitet. Die neue Version verlangt sie explizit und schaltet den Login bewusst komplett ab, sobald eine der drei Angaben fehlt — statt mit halber Konfiguration zu raten. Beim Umzug ist diese eine Adresse nirgends mehr gesetzt worden.

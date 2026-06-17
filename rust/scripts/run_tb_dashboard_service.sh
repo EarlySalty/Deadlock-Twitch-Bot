@@ -64,7 +64,7 @@ export RUST_LOG="${RUST_LOG:-info}"
 # Secret) — muss exakt der in der Twitch-Developer-Console registrierten
 # Redirect-URI entsprechen. Liegt der Wert in Infisical, gewinnt dieser (wird
 # vor diesem Block exportiert); sonst greift der kanonische Default.
-export TWITCH_DASHBOARD_AUTH_REDIRECT_URI="${TWITCH_DASHBOARD_AUTH_REDIRECT_URI:-https://deutsche-deadlock-community.de/twitch/auth/callback}"
+export TWITCH_DASHBOARD_AUTH_REDIRECT_URI="${TWITCH_DASHBOARD_AUTH_REDIRECT_URI:-https://deutsche-deadlock-community.de/callback/twitch}"
 # Welle D: Strangler-Fallback — nicht portierte Dashboard-Routen gehen an
 # Python (8765) weiter. Leer setzen ("") deaktiviert den Proxy (404 statt
 # Weiterleitung). Wird erst wirksam, wenn Caddy v2-Pfade auf 8769 flippt.

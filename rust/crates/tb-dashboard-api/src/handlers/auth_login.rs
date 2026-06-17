@@ -13,7 +13,7 @@
 //! **Secrets:** `TWITCH_CLIENT_ID`/`TWITCH_CLIENT_SECRET` werden NUR aus Env
 //! gelesen (Infisical) und NIE geloggt. Fehler werden generisch geloggt.
 
-use std::sync::Arc;
+use std::{sync::Arc, time::Duration};
 
 use axum::{
     extract::{Extension, Query},
@@ -21,6 +21,8 @@ use axum::{
     response::{IntoResponse, Redirect, Response},
 };
 use serde::Deserialize;
+use serde_json::json;
+use tb_http_core::{IDEMPOTENCY_KEY_HEADER, INTERNAL_API_BASE_PATH, INTERNAL_TOKEN_HEADER};
 use tracing::{info, warn};
 
 use crate::auth::oauth_login::{
@@ -33,6 +35,12 @@ use crate::auth::session::{
 
 /// Logout-Redirect-Ziel (Python `auth_logout`: 302 → `/analyse`).
 const LOGOUT_REDIRECT: &str = "/analyse";
+/// Default-Ziel nach erfolgreicher Raid-OAuth-Autorisierung (Python-Konstante).
+const DEFAULT_RAID_OAUTH_SUCCESS_REDIRECT_URL: &str =
+    "https://deutsche-deadlock-community.de/twitch/dashboard";
+/// Interner Worker-Endpoint, der den nativen Raid-OAuth-Callback verarbeitet.
+const RAID_OAUTH_CALLBACK_PATH: &str = "/raid/oauth-callback";
+const RAID_OAUTH_CALLBACK_TIMEOUT: Duration = Duration::from_secs(20);
 
 /// Laufzeit-Konfiguration des nativen Logins (als Extension injiziert).
 ///
@@ -48,6 +56,18 @@ pub struct OAuthLoginConfig {
     /// `true` → Cookies mit `Secure`-Flag (hinter HTTPS-Proxy in Prod).
     pub cookie_secure: bool,
     pub client: Arc<dyn TwitchOAuthClient>,
+    /// Optionaler Dispatch für Raid-OAuth-States auf dem geteilten
+    /// `/callback/twitch`-Pfad. Fehlt die interne API-Konfiguration, bleibt
+    /// der Dashboard-Login aktiv; nur Raid-Delegation liefert dann 503.
+    pub raid_callback: Option<RaidOAuthCallbackConfig>,
+}
+
+/// Konfiguration für den internen Hop zum `tb-bot`-Raid-OAuth-Callback.
+#[derive(Clone)]
+pub struct RaidOAuthCallbackConfig {
+    endpoint_url: String,
+    internal_token: String,
+    client: reqwest::Client,
 }
 
 /// `?next=` für den Login-Start.
@@ -62,6 +82,14 @@ pub struct CallbackQuery {
     pub code: Option<String>,
     pub state: Option<String>,
     pub error: Option<String>,
+}
+
+#[derive(Debug, Default, Deserialize)]
+struct RaidOAuthCallbackPayload {
+    status: Option<i64>,
+    title: Option<String>,
+    body_html: Option<String>,
+    redirect_url: Option<String>,
 }
 
 fn oauth_unconfigured() -> Response {
@@ -122,29 +150,40 @@ pub async fn callback_handler(
     config: Option<Extension<OAuthLoginConfig>>,
     Query(query): Query<CallbackQuery>,
 ) -> Response {
+    callback_handler_inner(state, config, query, false).await
+}
+
+/// `GET /callback/twitch` — geteilter Twitch-OAuth-Callback.
+///
+/// Wie Python entscheidet dieser Pfad nach dem Dashboard-State-Lookup per
+/// State-Store, ob der Callback zum Dashboard-Login oder zum Raid-OAuth-Flow
+/// gehört.
+pub async fn shared_callback_handler(
+    state: Option<Extension<DashboardAuthState>>,
+    config: Option<Extension<OAuthLoginConfig>>,
+    Query(query): Query<CallbackQuery>,
+) -> Response {
+    callback_handler_inner(state, config, query, true).await
+}
+
+async fn callback_handler_inner(
+    state: Option<Extension<DashboardAuthState>>,
+    config: Option<Extension<OAuthLoginConfig>>,
+    query: CallbackQuery,
+    allow_raid_delegate: bool,
+) -> Response {
     let (Some(Extension(state)), Some(Extension(config))) = (state, config) else {
         return oauth_unconfigured();
     };
 
     let error = query.error.as_deref().map(str::trim).unwrap_or("");
-    if !error.is_empty() {
-        let safe: String = error
-            .chars()
-            .filter(|c| c.is_ascii_alphanumeric() || *c == '_' || *c == '-')
-            .take(64)
-            .collect();
-        return no_store(
-            (
-                StatusCode::UNAUTHORIZED,
-                format!("OAuth-Fehler: {safe}. Bitte Login erneut starten."),
-            )
-                .into_response(),
-        );
-    }
-
     let code = query.code.as_deref().map(str::trim).unwrap_or("");
     let state_token = query.state.as_deref().map(str::trim).unwrap_or("");
-    if code.is_empty() || state_token.is_empty() {
+
+    if state_token.is_empty() {
+        if !error.is_empty() {
+            return oauth_error_response(error);
+        }
         return no_store((StatusCode::BAD_REQUEST, "Fehlender OAuth state/code.").into_response());
     }
 
@@ -152,17 +191,48 @@ pub async fn callback_handler(
     let login_state = match state.consume_oauth_login_state(state_token).await {
         Ok(Some(s)) => s,
         Ok(None) => {
+            if allow_raid_delegate {
+                if let Some(response) =
+                    maybe_delegate_raid_oauth_callback(&state, &config, code, state_token, error)
+                        .await
+                {
+                    return response;
+                }
+            }
+            if !error.is_empty() {
+                return oauth_error_response(error);
+            }
+            if code.is_empty() {
+                return no_store(
+                    (StatusCode::BAD_REQUEST, "Fehlender OAuth state/code.").into_response(),
+                );
+            }
             return no_store(
                 (StatusCode::BAD_REQUEST, "OAuth state ungültig oder abgelaufen.").into_response(),
             )
         }
-        Err(error) => {
-            warn!(%error, "OAuth-State-Lookup fehlgeschlagen");
+        Err(db_error) => {
+            warn!(%db_error, "OAuth-State-Lookup fehlgeschlagen");
+            if allow_raid_delegate {
+                if let Some(response) =
+                    maybe_delegate_raid_oauth_callback(&state, &config, code, state_token, error)
+                        .await
+                {
+                    return response;
+                }
+            }
             return no_store(
                 (StatusCode::BAD_REQUEST, "OAuth state ungültig oder abgelaufen.").into_response(),
             );
         }
     };
+
+    if !error.is_empty() {
+        return oauth_error_response(error);
+    }
+    if code.is_empty() {
+        return no_store((StatusCode::BAD_REQUEST, "Fehlender OAuth state/code.").into_response());
+    }
 
     // Code→Token→User. redirect_uri MUSS die beim Authorize gespeicherte sein.
     let identity = match config
@@ -256,6 +326,198 @@ pub async fn callback_handler(
     redirect_with_cookie(&login_state.next_path, &cookie)
 }
 
+async fn maybe_delegate_raid_oauth_callback(
+    state: &DashboardAuthState,
+    config: &OAuthLoginConfig,
+    code: &str,
+    state_token: &str,
+    error: &str,
+) -> Option<Response> {
+    match state.has_raid_oauth_state(state_token).await {
+        Ok(false) => None,
+        Ok(true) => {
+            let Some(raid_config) = config.raid_callback.as_ref() else {
+                warn!("Raid-OAuth-State erkannt, aber interner Raid-Callback ist nicht konfiguriert");
+                return Some(raid_oauth_unavailable_response());
+            };
+            Some(call_raid_oauth_callback(raid_config, code, state_token, error).await)
+        }
+        Err(error) => {
+            warn!(%error, "Raid-OAuth-State-Lookup fehlgeschlagen");
+            None
+        }
+    }
+}
+
+async fn call_raid_oauth_callback(
+    config: &RaidOAuthCallbackConfig,
+    code: &str,
+    state_token: &str,
+    error: &str,
+) -> Response {
+    let payload = json!({
+        "code": code,
+        "state": state_token,
+        "error": error,
+    });
+    let response = config
+        .client
+        .post(&config.endpoint_url)
+        .header(INTERNAL_TOKEN_HEADER, &config.internal_token)
+        .header(IDEMPOTENCY_KEY_HEADER, raid_oauth_idempotency_key(state_token))
+        .json(&payload)
+        .send()
+        .await;
+
+    let response = match response {
+        Ok(response) => response,
+        Err(error) => {
+            warn!(%error, "Raid-OAuth-Callback-Hop fehlgeschlagen");
+            return raid_oauth_unavailable_response();
+        }
+    };
+    if !response.status().is_success() {
+        let status = response.status().as_u16();
+        warn!(status, "Raid-OAuth-Callback-Hop lieferte Fehlerstatus");
+        return raid_oauth_unavailable_response();
+    }
+
+    match response.json::<RaidOAuthCallbackPayload>().await {
+        Ok(payload) => raid_oauth_payload_response(payload),
+        Err(error) => {
+            warn!(%error, "Raid-OAuth-Callback-Antwort war kein gueltiges JSON");
+            raid_oauth_unavailable_response()
+        }
+    }
+}
+
+fn raid_oauth_payload_response(payload: RaidOAuthCallbackPayload) -> Response {
+    let status = clamp_raid_status(payload.status);
+    let redirect_candidate = payload.redirect_url.unwrap_or_default();
+    if status.as_u16() < 400 && !redirect_candidate.trim().is_empty() {
+        return no_store(
+            Redirect::to(&normalize_raid_success_redirect_url(&redirect_candidate))
+                .into_response(),
+        );
+    }
+
+    let title = payload
+        .title
+        .filter(|v| !v.trim().is_empty())
+        .unwrap_or_else(|| "Autorisierung".to_string());
+    let body_html = payload
+        .body_html
+        .filter(|v| !v.trim().is_empty())
+        .unwrap_or_else(|| "<p>Unbekannte Antwort.</p>".to_string());
+    no_store(
+        (
+            status,
+            [(axum::http::header::CONTENT_TYPE, "text/html; charset=utf-8")],
+            render_oauth_page(&title, &body_html),
+        )
+            .into_response(),
+    )
+}
+
+fn raid_oauth_unavailable_response() -> Response {
+    raid_oauth_payload_response(RaidOAuthCallbackPayload {
+        status: Some(503),
+        title: Some("Twitch OAuth nicht verfügbar".to_string()),
+        body_html: Some("<p>Der interne Bot-Service ist aktuell nicht verfügbar.</p>".to_string()),
+        redirect_url: None,
+    })
+}
+
+fn oauth_error_response(error: &str) -> Response {
+    let safe: String = error
+        .chars()
+        .filter(|c| c.is_ascii_alphanumeric() || *c == '_' || *c == '-')
+        .take(64)
+        .collect();
+    no_store(
+        (
+            StatusCode::UNAUTHORIZED,
+            format!("OAuth-Fehler: {safe}. Bitte Login erneut starten."),
+        )
+            .into_response(),
+    )
+}
+
+fn clamp_raid_status(status: Option<i64>) -> StatusCode {
+    let raw = status.unwrap_or(200).clamp(200, 599) as u16;
+    StatusCode::from_u16(raw).unwrap_or(StatusCode::OK)
+}
+
+fn raid_oauth_idempotency_key(state_token: &str) -> String {
+    let suffix: String = state_token
+        .chars()
+        .filter(|c| c.is_ascii_alphanumeric() || *c == '_' || *c == '-')
+        .take(96)
+        .collect();
+    if suffix.is_empty() {
+        "dashboard-raid-oauth".to_string()
+    } else {
+        format!("dashboard-raid-oauth-{suffix}")
+    }
+}
+
+fn normalize_raid_success_redirect_url(candidate: &str) -> String {
+    let fallback = DEFAULT_RAID_OAUTH_SUCCESS_REDIRECT_URL.to_string();
+    let Ok(mut url) = url::Url::parse(candidate.trim()) else {
+        return fallback;
+    };
+    if !url.username().is_empty() || url.password().is_some() {
+        return fallback;
+    }
+    let scheme = url.scheme().to_ascii_lowercase();
+    let Some(host) = url.host_str().map(str::to_ascii_lowercase) else {
+        return fallback;
+    };
+    if scheme != "https" && scheme != "http" {
+        return fallback;
+    }
+    if scheme == "http" && !matches!(host.as_str(), "127.0.0.1" | "localhost" | "::1") {
+        return fallback;
+    }
+    url.set_fragment(None);
+    url.to_string()
+}
+
+fn render_oauth_page(title: &str, body_html: &str) -> String {
+    let title_attr = html_escape(title);
+    let title_text = html_escape(title);
+    format!(
+        "<!doctype html><html lang='de'><head><meta charset='utf-8'>\
+         <meta name='viewport' content='width=device-width,initial-scale=1'>\
+         <title>{title_attr}</title>\
+         <style>\
+         body{{font-family:Segoe UI,Arial,sans-serif;background:#0f172a;color:#e2e8f0;margin:0;}}\
+         .wrap{{max-width:760px;margin:0 auto;padding:36px 18px;}}\
+         .card{{background:#111827;border:1px solid #1f2937;border-radius:12px;padding:20px;}}\
+         h1{{margin:0 0 12px 0;font-size:24px;}}\
+         p{{line-height:1.5;margin:10px 0;}}\
+         code{{background:#0b1220;border:1px solid #23304a;padding:2px 6px;border-radius:6px;}}\
+         a{{color:#93c5fd;}}\
+         </style></head><body><div class='wrap'><div class='card'>\
+         <h1>{title_text}</h1>{body_html}</div></div></body></html>"
+    )
+}
+
+fn html_escape(value: &str) -> String {
+    let mut out = String::with_capacity(value.len());
+    for ch in value.chars() {
+        match ch {
+            '&' => out.push_str("&amp;"),
+            '<' => out.push_str("&lt;"),
+            '>' => out.push_str("&gt;"),
+            '"' => out.push_str("&quot;"),
+            '\'' => out.push_str("&#x27;"),
+            _ => out.push(ch),
+        }
+    }
+    out
+}
+
 /// `GET /twitch/auth/logout` — invalidiert die Partner-Session.
 ///
 /// Löscht die Session-Row + Cache (`invalidate_session`), entfernt das Cookie
@@ -334,7 +596,37 @@ pub fn oauth_login_config_from_env() -> Option<OAuthLoginConfig> {
         redirect_uri,
         cookie_secure,
         client: Arc::new(client),
+        raid_callback: raid_oauth_callback_config_from_env(),
     })
+}
+
+fn raid_oauth_callback_config_from_env() -> Option<RaidOAuthCallbackConfig> {
+    let internal_token = non_empty_env("TWITCH_INTERNAL_API_TOKEN")?;
+    let endpoint_url = format!(
+        "{}{}{}",
+        worker_internal_base_url(),
+        INTERNAL_API_BASE_PATH,
+        RAID_OAUTH_CALLBACK_PATH
+    );
+    let client = reqwest::Client::builder()
+        .timeout(RAID_OAUTH_CALLBACK_TIMEOUT)
+        .redirect(reqwest::redirect::Policy::none())
+        .build()
+        .ok()?;
+    Some(RaidOAuthCallbackConfig {
+        endpoint_url,
+        internal_token,
+        client,
+    })
+}
+
+fn worker_internal_base_url() -> String {
+    if let Some(explicit) = non_empty_env("TWITCH_INTERNAL_API_BASE_URL") {
+        return explicit.trim_end_matches('/').to_string();
+    }
+    let host = non_empty_env("TWITCH_INTERNAL_API_HOST").unwrap_or_else(|| "127.0.0.1".to_string());
+    let port = non_empty_env("TWITCH_INTERNAL_API_PORT").unwrap_or_else(|| "8776".to_string());
+    format!("http://{host}:{port}")
 }
 
 fn non_empty_env(key: &str) -> Option<String> {
@@ -408,6 +700,7 @@ mod tests {
             redirect_uri: "https://x.test/twitch/auth/callback".to_string(),
             cookie_secure: false,
             client: Arc::new(FakeOAuth { identity }),
+            raid_callback: None,
         }
     }
 
@@ -452,6 +745,56 @@ mod tests {
         .await;
         // Ohne DashboardAuthState-Extension → 503 (fail-closed), nie eine Session.
         assert_eq!(resp.status(), StatusCode::SERVICE_UNAVAILABLE);
+    }
+
+    #[test]
+    fn raid_success_redirect_wird_wie_python_sanitized() {
+        assert_eq!(
+            normalize_raid_success_redirect_url("https://example.test/a/b?q=1#frag"),
+            "https://example.test/a/b?q=1"
+        );
+        assert_eq!(
+            normalize_raid_success_redirect_url("http://localhost:8769/twitch/dashboard"),
+            "http://localhost:8769/twitch/dashboard"
+        );
+        assert_eq!(
+            normalize_raid_success_redirect_url("http://example.test/unsicher"),
+            DEFAULT_RAID_OAUTH_SUCCESS_REDIRECT_URL
+        );
+        assert_eq!(
+            normalize_raid_success_redirect_url("https://user:pass@example.test/"),
+            DEFAULT_RAID_OAUTH_SUCCESS_REDIRECT_URL
+        );
+    }
+
+    #[tokio::test]
+    async fn raid_payload_redirectet_bei_erfolg_und_rendert_fehlerseite() {
+        let redirect = raid_oauth_payload_response(RaidOAuthCallbackPayload {
+            status: Some(200),
+            title: Some("ok".to_string()),
+            body_html: Some("<p>ok</p>".to_string()),
+            redirect_url: Some("https://example.test/dash#x".to_string()),
+        });
+        assert_eq!(redirect.status(), StatusCode::SEE_OTHER);
+        assert_eq!(
+            redirect.headers().get(axum::http::header::LOCATION).unwrap(),
+            "https://example.test/dash"
+        );
+
+        let page = raid_oauth_payload_response(RaidOAuthCallbackPayload {
+            status: Some(503),
+            title: Some("Titel".to_string()),
+            body_html: Some("<p>Body</p>".to_string()),
+            redirect_url: None,
+        });
+        assert_eq!(page.status(), StatusCode::SERVICE_UNAVAILABLE);
+        assert_eq!(
+            page.headers().get(axum::http::header::CACHE_CONTROL).unwrap(),
+            "no-store, max-age=0"
+        );
+        let body = axum::body::to_bytes(page.into_body(), 65536).await.unwrap();
+        let html = String::from_utf8(body.to_vec()).unwrap();
+        assert!(html.contains("<h1>Titel</h1><p>Body</p>"));
     }
 
     // ── DB-gestützte Vollläufe (nur mit TB_TEST_REQUIRE_DB=1) ────────────────

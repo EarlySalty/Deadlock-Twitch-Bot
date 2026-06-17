@@ -35,8 +35,8 @@ fn normalize_admin_bool(value: Option<&Value>) -> Option<bool> {
             Some(0) => Some(false),
             Some(1) => Some(true),
             _ => match n.as_f64() {
-                Some(f) if f == 0.0 => Some(false),
-                Some(f) if f == 1.0 => Some(true),
+                Some(0.0) => Some(false),
+                Some(1.0) => Some(true),
                 _ => None,
             },
         },

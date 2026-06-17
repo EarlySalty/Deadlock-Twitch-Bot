@@ -1,3 +1,5 @@
+#![allow(clippy::result_large_err)]
+
 //! Social-Media-Dashboard (`/social-media/*`) — Port von
 //! `bot/social_media/dashboard.py`.
 //!
@@ -2470,6 +2472,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[allow(clippy::await_holding_lock)]
     async fn enrichment_run_skips_without_transcriber_and_llm() {
         let _env_guard = ENV_LOCK.lock().unwrap_or_else(|p| p.into_inner());
         let Some(pool) = make_pool("t_dash_sm_enrich_run").await else { return };
@@ -2497,6 +2500,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[allow(clippy::await_holding_lock)]
     async fn reports_run_kinds() {
         let _env_guard = ENV_LOCK.lock().unwrap_or_else(|p| p.into_inner());
         let Some(pool) = make_pool("t_dash_sm_reports_run").await else { return };
