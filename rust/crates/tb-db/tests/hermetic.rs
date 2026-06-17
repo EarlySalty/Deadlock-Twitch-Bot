@@ -216,6 +216,49 @@ async fn run_migrations_builds_full_schema_on_fresh_db() {
         "alle drei Auto-Approve-Settings-Keys müssen mit value=false geseedet sein"
     );
 
+    // Conversation-Scam-Guard: Settings-Defaults und vollständiges Audit-Schema.
+    let scam_guard_tables = scalar_i64(
+        "SELECT count(*) FROM information_schema.tables \
+         WHERE table_schema = 'public' \
+           AND table_name IN ('twitch_scam_guard_settings', 'twitch_scam_guard_verdicts')",
+    )
+    .await;
+    assert_eq!(
+        scam_guard_tables, 2,
+        "beide Conversation-Scam-Guard-Tabellen müssen existieren"
+    );
+
+    sqlx::query("INSERT INTO twitch_scam_guard_settings (channel_login) VALUES ('fresh_channel')")
+        .execute(&pool)
+        .await
+        .expect("insert scam guard settings defaults");
+    let settings_defaults: (bool, String, f64, f64) = sqlx::query_as(
+        "SELECT enabled, mode, threshold::float8, suggestion_floor::float8 \
+         FROM twitch_scam_guard_settings WHERE channel_login = 'fresh_channel'",
+    )
+    .fetch_one(&pool)
+    .await
+    .expect("load scam guard settings defaults");
+    assert!(settings_defaults.0);
+    assert_eq!(settings_defaults.1, "auto_ban");
+    assert!((settings_defaults.2 - 0.90).abs() < 0.000_001);
+    assert!((settings_defaults.3 - 0.70).abs() < 0.000_001);
+
+    let verdict_columns = scalar_i64(
+        "SELECT count(*) FROM information_schema.columns \
+         WHERE table_name = 'twitch_scam_guard_verdicts' \
+           AND column_name IN ( \
+             'id', 'channel_login', 'chatter_login', 'chatter_id', 'verdict', \
+             'confidence', 'category', 'reasoning', 'transcript_snapshot', \
+             'action_taken', 'created_at' \
+           )",
+    )
+    .await;
+    assert_eq!(
+        verdict_columns, 11,
+        "Conversation-Scam-Guard-Verdict-Schema ist unvollständig"
+    );
+
     pool.close().await;
     sqlx::query(&format!("DROP DATABASE IF EXISTS {dbname} WITH (FORCE)"))
         .execute(&admin)

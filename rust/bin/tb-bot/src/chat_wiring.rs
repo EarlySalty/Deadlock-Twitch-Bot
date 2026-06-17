@@ -23,15 +23,16 @@ use tb_chat::commands::{
     AutobanEntry, ClipOutcome, ClipPort, CommandEngine, DiscordLinkPort, InvitePort,
     LastAutobanStore, RaidCommandPort, RaidStatusInfo, SuperModPort,
 };
+use tb_chat::conversation_scam::{ConversationScamGuard, MiniMaxScamJudge};
 use tb_chat::moderation::{
     HelixChatClient, ModerationEngine, OutboundSuppressionStore, TimeoutGuard, WERBEFREI_PITCH_MSG,
 };
 use tb_chat::promos::{InviteResolver, PartnerChannelCheck, PromoEngine};
+use tb_chat::scam_pitch::{AccountAgePort, ScamPitchDetector, SpamAiReviewer};
+use tb_chat::spam_filter::{LearnedPatterns, SpamFilter};
 use tb_chat::timeout_tracking::{
     BotBannedChannelHandler, CombinedSuppression, TimeoutTrackingChatApi,
 };
-use tb_chat::scam_pitch::{AccountAgePort, ScamPitchDetector, SpamAiReviewer};
-use tb_chat::spam_filter::{LearnedPatterns, SpamFilter};
 use tb_chat::token::BotTokenManager;
 use tb_chat::types::ChatMessageEvent;
 use tb_chat::{
@@ -80,7 +81,11 @@ struct ChatClipAdapter {
 
 #[async_trait::async_trait]
 impl ClipPort for ChatClipAdapter {
-    async fn create_clip(&self, broadcaster_user_id: &str, _broadcaster_login: &str) -> ClipOutcome {
+    async fn create_clip(
+        &self,
+        broadcaster_user_id: &str,
+        _broadcaster_login: &str,
+    ) -> ClipOutcome {
         // Ungated + Auto-Refresh: Streamer mit deaktivierten Raids dürfen clippen,
         // und ein abgelaufener Token wird erneuert statt 401 zu produzieren.
         let access_token = match self
@@ -287,7 +292,11 @@ impl ChatActionPort for ChatActionAdapter {
         } else {
             match self.api.send_message(&broadcaster_id, &send_text).await {
                 Ok(SendOutcome::Sent) => {
-                    let label = if mode == "action" { "Action" } else { "Nachricht" };
+                    let label = if mode == "action" {
+                        "Action"
+                    } else {
+                        "Nachricht"
+                    };
                     ChatActionResult::Sent {
                         label: format!("{label} an {login} gesendet"),
                     }
@@ -356,7 +365,9 @@ pub async fn try_build_api(helix: Option<HelixClient>) -> Option<ChatApiHandle> 
         .map(|v| v.trim() == "1")
         .unwrap_or(false);
     if !enabled {
-        tracing::info!("TB_CHAT_ENABLED nicht gesetzt — nativer Chat bleibt aus (Python-Chat aktiv)");
+        tracing::info!(
+            "TB_CHAT_ENABLED nicht gesetzt — nativer Chat bleibt aus (Python-Chat aktiv)"
+        );
         return None;
     }
 
@@ -454,6 +465,15 @@ pub async fn build_runtime(
         .unwrap_or_default();
 
     let moderation = Arc::new(ModerationEngine::new(Arc::clone(&api), pool.clone()));
+    let conversation_scam = Arc::new(ConversationScamGuard::new(
+        pool.clone(),
+        bot_user_id.clone(),
+        Arc::new(MiniMaxScamJudge::new(EngagementMinimaxClient::new(
+            None, None, None, None,
+        ))),
+        Arc::clone(&api),
+        Arc::clone(&moderation),
+    ));
     // Promo-Suppression kombiniert die bestehende DB-Suppression
     // (twitch_outbound_chat_suppressions, Quelle "promo") mit dem In-Memory-
     // TimeoutGuard: der Promo-Pfad sendet weder in DB-stummgeschaltete noch in
@@ -522,6 +542,7 @@ pub async fn build_runtime(
             }),
             pool.clone(),
         )),
+        conversation_scam,
         spam_filter: Arc::clone(&spam_filter),
         ai_reviewer: Arc::new(SpamAiReviewer::new(pool.clone(), http.clone())),
         moderation,
@@ -681,7 +702,9 @@ async fn reconcile_chat_subscriptions(
 
     let has_moderate = scopes.iter().any(|s| s == "channel:moderate");
     if !has_moderate {
-        tracing::debug!("channel.moderate-Reconcile übersprungen: Bot-Token ohne channel:moderate-Scope");
+        tracing::debug!(
+            "channel.moderate-Reconcile übersprungen: Bot-Token ohne channel:moderate-Scope"
+        );
     }
     let mut mod_ok = 0usize;
     let mut first_msg_ok = 0usize;
@@ -790,10 +813,14 @@ impl ChatHooks {
             };
             match &stealth {
                 Some(sender) if sender.send(&broadcaster_id, &text).await.is_none() => {
-                    tracing::info!("Engagement: kein Sende-Account onboarded, AI-Antwort verworfen");
+                    tracing::info!(
+                        "Engagement: kein Sende-Account onboarded, AI-Antwort verworfen"
+                    );
                 }
                 Some(_) => {}
-                None => tracing::debug!("Engagement: Stealth-Sender nicht verfügbar, Antwort verworfen"),
+                None => {
+                    tracing::debug!("Engagement: Stealth-Sender nicht verfügbar, Antwort verworfen")
+                }
             }
         });
     }
@@ -864,7 +891,9 @@ impl EventSubHooks for ChatHooks {
     // Demux in tb-monitoring klassifiziert vorab nach notice_type). Sub-Telemetrie
     // (B8-01) bleibt vorerst der Default-No-op des inneren Hooks.
     async fn on_chat_raid_notification(&self, event: &Value, message_id: Option<&str>) {
-        self.inner.on_chat_raid_notification(event, message_id).await;
+        self.inner
+            .on_chat_raid_notification(event, message_id)
+            .await;
     }
     async fn on_chat_unraid_notification(&self, event: &Value, message_id: Option<&str>) {
         self.inner
@@ -931,15 +960,14 @@ impl RaidCommandPort for RaidCommandAdapter {
 
     async fn raid_status(&self, broadcaster_id: &str) -> Result<RaidStatusInfo, String> {
         // raid_enabled = boolean, authorized_at = timestamptz (Prod-Schema).
-        let auth: Option<(Option<bool>, Option<chrono::DateTime<chrono::Utc>>)> =
-            sqlx::query_as(
-                "SELECT raid_enabled, authorized_at FROM twitch_raid_auth \
+        let auth: Option<(Option<bool>, Option<chrono::DateTime<chrono::Utc>>)> = sqlx::query_as(
+            "SELECT raid_enabled, authorized_at FROM twitch_raid_auth \
                  WHERE twitch_user_id = $1",
-            )
-            .bind(broadcaster_id)
-            .fetch_optional(&self.pool)
-            .await
-            .map_err(|e| e.to_string())?;
+        )
+        .bind(broadcaster_id)
+        .fetch_optional(&self.pool)
+        .await
+        .map_err(|e| e.to_string())?;
 
         let (total, successful): (i64, i64) = sqlx::query_as(
             "SELECT COUNT(*), COUNT(*) FILTER (WHERE success IS TRUE) \
@@ -950,16 +978,19 @@ impl RaidCommandPort for RaidCommandAdapter {
         .await
         .map_err(|e| e.to_string())?;
 
-        let last: Option<(Option<String>, Option<i32>, Option<chrono::DateTime<chrono::Utc>>)> =
-            sqlx::query_as(
-                "SELECT to_broadcaster_login, viewer_count, executed_at \
+        let last: Option<(
+            Option<String>,
+            Option<i32>,
+            Option<chrono::DateTime<chrono::Utc>>,
+        )> = sqlx::query_as(
+            "SELECT to_broadcaster_login, viewer_count, executed_at \
                  FROM twitch_raid_history WHERE from_broadcaster_id = $1 \
                  ORDER BY executed_at DESC LIMIT 1",
-            )
-            .bind(broadcaster_id)
-            .fetch_optional(&self.pool)
-            .await
-            .map_err(|e| e.to_string())?;
+        )
+        .bind(broadcaster_id)
+        .fetch_optional(&self.pool)
+        .await
+        .map_err(|e| e.to_string())?;
 
         let (raid_enabled, authorized_at) = auth.unwrap_or((None, None));
         let (last_login, last_viewers, last_at) = last.unwrap_or((None, None, None));
@@ -986,11 +1017,7 @@ impl RaidCommandPort for RaidCommandAdapter {
 /// Toggle eines INTEGER-Flags auf dem aktiven Partner (`status = 'active'`,
 /// jüngste Zeile — wie `load_active_partner` + `set_partner_silent_flags`,
 /// partner_registry.py Z. 1808). Gibt den neuen Wert zurück.
-async fn toggle_partner_flag(
-    pool: &PgPool,
-    twitch_login: &str,
-    flag: &str,
-) -> Result<i32, String> {
+async fn toggle_partner_flag(pool: &PgPool, twitch_login: &str, flag: &str) -> Result<i32, String> {
     // flag ist eine interne Konstante ("silent_ban"/"silent_raid") — kein Injection-Risiko.
     let sql = format!(
         "UPDATE twitch_partners SET {flag} = CASE WHEN COALESCE({flag}, 0) = 0 THEN 1 ELSE 0 END \

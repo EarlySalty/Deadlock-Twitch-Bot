@@ -91,7 +91,8 @@ pub fn sanitize_chat_text(text: &str, max_len: usize) -> String {
 
 /// Die „Soul" — Charakter/Stimme/Haltung (von MiniMax selbst geschrieben,
 /// vom User als v1 freigegeben). Die Fakten-Guardrails bleiben darunter.
-pub const SOUL: &str = "ich bin einfach ständig da. einer von denen die schon im chat sitzen bevor der \
+pub const SOUL: &str =
+    "ich bin einfach ständig da. einer von denen die schon im chat sitzen bevor der \
 stream richtig anfängt und einfach mitschaut. kein mod, kein nix, \
 einer der das game feiert und die meiste zeit nur mitliest.\n\
 ich zock deadlock selbst, daily, also kenn ich was sich gerade hart anfühlt und \
@@ -365,6 +366,19 @@ impl EngagementMinimaxClient {
         Ok(raw_text)
     }
 
+    /// Completion über ein vollständiges `messages`-Array ohne `max_tokens`
+    /// im Request.
+    pub async fn messages_completion_uncapped(
+        &self,
+        messages: serde_json::Value,
+        temperature: f64,
+    ) -> Result<String, GenerateError> {
+        let (raw_text, _, _, _) = self
+            .post_completion_with_limit(messages, None, temperature)
+            .await?;
+        Ok(raw_text)
+    }
+
     /// POST an `/chat/completions`; gibt (Roh-Text, prompt_tokens,
     /// completion_tokens, Latenz) zurück. Gemeinsame Basis von [`Self::generate`]
     /// und [`Self::raw_completion`].
@@ -374,15 +388,29 @@ impl EngagementMinimaxClient {
         max_output_tokens: i64,
         temperature: f64,
     ) -> Result<(String, Option<i64>, Option<i64>, i64), GenerateError> {
+        self.post_completion_with_limit(messages, Some(max_output_tokens), temperature)
+            .await
+    }
+
+    async fn post_completion_with_limit(
+        &self,
+        messages: serde_json::Value,
+        max_output_tokens: Option<i64>,
+        temperature: f64,
+    ) -> Result<(String, Option<i64>, Option<i64>, i64), GenerateError> {
         let api_key = self.api_key.as_deref().ok_or_else(|| {
-            GenerateError::Unavailable(LlmProviderUnavailable("MINIMAX_API_KEY not set".to_string()))
+            GenerateError::Unavailable(LlmProviderUnavailable(
+                "MINIMAX_API_KEY not set".to_string(),
+            ))
         })?;
-        let body = serde_json::json!({
+        let mut body = serde_json::json!({
             "model": self.model,
             "messages": messages,
-            "max_tokens": max_output_tokens,
             "temperature": temperature,
         });
+        if let Some(max_output_tokens) = max_output_tokens {
+            body["max_tokens"] = serde_json::json!(max_output_tokens);
+        }
         let client = reqwest::Client::builder()
             .timeout(self.timeout)
             .build()
@@ -470,7 +498,10 @@ mod tests {
 
     #[test]
     fn sanitize_collapse_und_command_strip() {
-        assert_eq!(sanitize_chat_text("hallo   welt\nzeile", 480), "hallo welt zeile");
+        assert_eq!(
+            sanitize_chat_text("hallo   welt\nzeile", 480),
+            "hallo welt zeile"
+        );
         assert_eq!(sanitize_chat_text("/me winkt", 480), "me winkt");
         assert_eq!(sanitize_chat_text("..punkt", 480), "punkt");
         assert_eq!(sanitize_chat_text("hi @everyone du", 480), "hi everyone du");
@@ -487,7 +518,10 @@ mod tests {
     #[test]
     fn process_silent_und_think() {
         // <think> wird entfernt, danach bleibt <silent> → None.
-        assert_eq!(process_response_text("<think>hmm</think> <silent>", 480), None);
+        assert_eq!(
+            process_response_text("<think>hmm</think> <silent>", 480),
+            None
+        );
         // leer → None.
         assert_eq!(process_response_text("   ", 480), None);
         // echter Text bleibt (think-Block raus).
