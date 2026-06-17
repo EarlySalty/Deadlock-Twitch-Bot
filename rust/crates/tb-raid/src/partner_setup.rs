@@ -301,6 +301,54 @@ async fn load_active_partner_row(
     .await
 }
 
+/// Prüft, ob eine **nicht-aktive** Partner-Zeile den OAuth-Followup dauerhaft
+/// blockiert: `technical_pause_reason` ∈ {blocked, bot_banned} oder
+/// `admin_archived_at IS NOT NULL` (ausgeschieden/archiviert).
+///
+/// Dient als zweite Schranke in `promote_streamer_to_partner`: der
+/// aktive-Zeile-Guard (`hard_pause_reason` auf `active_row`) deckt nur den Fall
+/// ab, in dem noch eine aktive Zeile existiert. Ist der Partner hingegen
+/// ausgeschieden (status ≠ 'active'), gibt es keine aktive Zeile, und ein
+/// Re-OAuth würde ohne diesen Guard fälschlich eine neue aktive Zeile anlegen.
+async fn load_inactive_block_reason(
+    tx: &mut Transaction<'_, Postgres>,
+    twitch_user_id: &str,
+    twitch_login: &str,
+) -> Result<Option<String>, sqlx::Error> {
+    // Gibt `technical_pause_reason` zurück — NULL bei reiner Archivierung.
+    // Das WHERE filtert bereits auf genau die Block-Fälle, die uns interessieren;
+    // eine Some(None)-Zeile bedeutet "durch admin_archived_at geblockt".
+    let row: Option<Option<String>> = sqlx::query_scalar(
+        r#"
+        SELECT technical_pause_reason
+          FROM twitch_partners
+         WHERE (($1 <> '' AND twitch_user_id = $1)
+             OR ($2 <> '' AND LOWER(twitch_login) = $2))
+           AND status <> 'active'
+           AND (
+               LOWER(TRIM(COALESCE(technical_pause_reason, ''))) = ANY(ARRAY['blocked', 'bot_banned'])
+               OR admin_archived_at IS NOT NULL
+           )
+         ORDER BY id DESC
+         LIMIT 1
+        "#,
+    )
+    .bind(twitch_user_id)
+    .bind(twitch_login)
+    .fetch_optional(&mut **tx)
+    .await?;
+
+    Ok(row.map(|pause_reason| {
+        if let Some(p) = pause_reason {
+            let lower = p.trim().to_lowercase();
+            if HARD_PAUSE_REASONS.contains(&lower.as_str()) {
+                return lower;
+            }
+        }
+        "admin_archived".to_string()
+    }))
+}
+
 /// Python `upsert_streamer_identity` (`partner_registry.py:499`).
 async fn upsert_streamer_identity(
     tx: &mut Transaction<'_, Postgres>,
@@ -443,6 +491,9 @@ async fn normalize_related_tables(
 
 /// Python `backfill_tracked_stats_from_category` (`pg.py:1404`) — idempotent
 /// via NOT-EXISTS-Guard. Gibt die Anzahl kopierter Zeilen zurück.
+///
+/// Intern genutzt über [`backfill_tracked_stats_best_effort`], damit ein Fehler
+/// hier nie die Partner-Promotion-Transaktion zurückrollt.
 async fn backfill_tracked_stats_from_category(
     tx: &mut Transaction<'_, Postgres>,
     login: &str,
@@ -471,6 +522,32 @@ async fn backfill_tracked_stats_from_category(
     .execute(&mut **tx)
     .await?;
     Ok(result.rows_affected())
+}
+
+/// Best-Effort-Wrapper: startet eine eigene Transaktion, damit ein Backfill-Fehler
+/// die bereits committete Partner-Promotion nicht berührt.
+async fn backfill_tracked_stats_best_effort(pool: &PgPool, login: &str) -> u64 {
+    let mut tx = match pool.begin().await {
+        Ok(t) => t,
+        Err(e) => {
+            tracing::warn!("backfill_tracked_stats: pool.begin() fehlgeschlagen für {login}: {e}");
+            return 0;
+        }
+    };
+    match backfill_tracked_stats_from_category(&mut tx, login).await {
+        Ok(n) => {
+            if let Err(e) = tx.commit().await {
+                tracing::warn!("backfill_tracked_stats: commit fehlgeschlagen für {login}: {e}");
+                0
+            } else {
+                n
+            }
+        }
+        Err(e) => {
+            tracing::warn!("backfill_tracked_stats_from_category nicht-fatal für {login}: {e}");
+            0
+        }
+    }
 }
 
 /// Python `_record_first_login` (`partner_setup_service.py:211`):
@@ -521,7 +598,7 @@ pub async fn promote_streamer_to_partner(
     let active_row = load_active_partner_row(tx, &normalized_user_id, &normalized_login).await?;
     let active = active_row.as_ref();
 
-    // B11-PR-7: Hard-Pause-Guard (Python `reactivate_partner_after_valid_auth`,
+    // B11-PR-7: Hard-Pause-Guard — aktive Zeile (Python `reactivate_partner_after_valid_auth`,
     // `partner_registry.py:1366`). Ein OAuth-Followup darf einen Hard-Kill
     // ({blocked, bot_banned}) NICHT reaktivieren — sonst würde der UPDATE unten
     // `technical_pause_reason = NULL` setzen und den Bann bedingungslos aufheben.
@@ -529,6 +606,28 @@ pub async fn promote_streamer_to_partner(
     if let Some(reason) =
         hard_pause_reason(active.and_then(|a| a.technical_pause_reason.as_deref()))
     {
+        return Ok(PromotedIdentity {
+            twitch_login: normalized_login,
+            twitch_user_id: normalized_user_id,
+            discord_user_id: None,
+            discord_display_name: None,
+            is_on_discord: None,
+            reactivated: false,
+            hard_pause_reason: Some(reason),
+        });
+    }
+
+    // Nicht-aktive-Zeile-Guard: ausgeschiedene / archivierte / gebannte Partner
+    // haben keine aktive Zeile mehr — der Guard oben greift dort nicht.
+    // Ein Re-OAuth darf NICHT heimlich eine neue aktive Zeile anlegen.
+    if let Some(reason) =
+        load_inactive_block_reason(tx, &normalized_user_id, &normalized_login).await?
+    {
+        tracing::warn!(
+            login = %normalized_login,
+            %reason,
+            "promote_streamer_to_partner: blockiert durch nicht-aktive Partner-Zeile (ausgeschieden/gebannt)"
+        );
         return Ok(PromotedIdentity {
             twitch_login: normalized_login,
             twitch_user_id: normalized_user_id,
@@ -848,24 +947,30 @@ impl PartnerSetupService {
         };
         let is_on_discord_value = i32::from(final_discord_id.is_some());
 
-        let mut tx = self.pool.begin().await?;
-        promote_streamer_to_partner(
-            &mut tx,
-            &PromotePartnerArgs {
-                twitch_login: twitch_login.to_string(),
-                twitch_user_id: twitch_user_id.to_string(),
-                discord_user_id: final_discord_id.clone(),
-                discord_display_name: final_display_name,
-                is_on_discord: is_on_discord_value,
-                manual_verified_at: now_iso(Utc::now()),
-                activate_partner_features,
-                clear_source: true,
-            },
-            Utc::now(),
-        )
-        .await?;
-        let copied = backfill_tracked_stats_from_category(&mut tx, twitch_login).await?;
-        tx.commit().await?;
+        // Promotion in eigener Transaktion — isoliert von Backfill, damit ein
+        // Backfill-Fehler die Partner-Zeile nicht zurückrollt.
+        {
+            let mut tx = self.pool.begin().await?;
+            promote_streamer_to_partner(
+                &mut tx,
+                &PromotePartnerArgs {
+                    twitch_login: twitch_login.to_string(),
+                    twitch_user_id: twitch_user_id.to_string(),
+                    discord_user_id: final_discord_id.clone(),
+                    discord_display_name: final_display_name,
+                    is_on_discord: is_on_discord_value,
+                    manual_verified_at: now_iso(Utc::now()),
+                    activate_partner_features,
+                    clear_source: true,
+                },
+                Utc::now(),
+            )
+            .await?;
+            tx.commit().await?;
+        }
+
+        // Stats-Backfill best-effort in eigener Transaktion (kein Rollback der Promotion).
+        let copied = backfill_tracked_stats_best_effort(&self.pool, twitch_login).await;
         if copied > 0 {
             tracing::info!(
                 "Backfilled {copied} category samples into tracked for {twitch_login} during partner sync"

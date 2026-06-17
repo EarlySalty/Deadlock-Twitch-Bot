@@ -1,3 +1,15 @@
+## #229 — Raid-OAuth: Partner-Promotion jetzt zuverlässig + korrekte Block-Guards
+
+**Problem (1) — Stille Promotion-Blockade:** `sync_partner_state_after_auth` führte Partner-Promotion und Stats-Backfill in einer einzigen Postgres-Transaktion durch. Schlug der Backfill fehl (z. B. Constraint-Konflikt oder Tabellensperre), rollte die gesamte Transaktion zurück — die neu angelegte `twitch_partners`-Zeile verschwand lautlos, ohne dass der Streamer davon erfuhr. Erkennbares Symptom: `twitch_raid_auth`-Eintrag vorhanden (Token gespeichert), aber kein `twitch_partners`-Eintrag.
+
+**Änderung (1):** Promotion läuft jetzt in einer eigenen Transaktion (commit bevor Backfill startet). Der Backfill nutzt einen best-effort-Wrapper mit eigener Mini-Transaktion — Fehler werden geloggt, rollen die Promotion aber nie zurück.
+
+**Problem (2) — Guard-Lücke bei ausgeschiedenen/gesperrten Partnern:** Der bestehende Hard-Pause-Guard prüfte nur die *aktive* Partner-Zeile auf `technical_pause_reason ∈ {blocked, bot_banned}`. Hatte ein Partner keine aktive Zeile mehr (departnered, archiviert), griff der Guard nicht — ein Re-OAuth reaktivierte ihn unbeabsichtigt.
+
+**Änderung (2):** Vor dem aktiven-Zeile-Guard prüft `promote_streamer_to_partner` jetzt zusätzlich alle nicht-aktiven Zeilen. Block-Bedingungen: `technical_pause_reason ∈ {blocked, bot_banned}` **oder** `admin_archived_at IS NOT NULL` (ausgeschieden). Trifft eine zu, wird die Promotion mit `reactivated=false` und dem passenden Grund abgebrochen — kein Schreibzugriff.
+
+**Ergebnis:** Erstmalige Raid-OAuth-Autorisierungen erzeugen zuverlässig einen `twitch_partners`-Eintrag. Banned und ausgeschiedene Partner werden via Re-OAuth nicht reaktiviert.
+
 ## #228 — Admin-Ansicht zeigte "Kein Partner auswählbar" trotz aktiver Partner
 
 **Problem:** Der Endpoint `/twitch/api/v2/streamers`, der dem Dashboard die Liste aktiver Partner für die Admin-Partnerauswahl liefert, prüfte die Berechtigung nur anhand des internen Service-Tokens (`X-Internal-Token`). Browser schicken diesen Header nicht — die Anfrage wurde mit 401 abgelehnt, das Frontend erhielt eine leere Liste und zeigte den Fehler-Bildschirm.
