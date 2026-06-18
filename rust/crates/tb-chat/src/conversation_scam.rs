@@ -1,4 +1,5 @@
 use std::sync::Arc;
+use std::time::Duration;
 
 use async_trait::async_trait;
 use dashmap::DashMap;
@@ -136,10 +137,26 @@ pub struct DialogState {
 
 impl DialogState {
     pub fn new(is_first_global: bool) -> Self {
+        Self::with_learnings(is_first_global, None)
+    }
+
+    /// Wie [`DialogState::new`], hängt aber die netzwerkweit destillierten
+    /// Self-Learning-Erkenntnisse als Zusatzhinweis an den System-Prompt an
+    /// (`None`/leer → unverändert).
+    pub fn with_learnings(is_first_global: bool, learnings: Option<&str>) -> Self {
+        let mut system = SCAM_JUDGE_SYSTEM_PROMPT.to_string();
+        if let Some(learnings) = learnings.map(str::trim).filter(|l| !l.is_empty()) {
+            system.push_str(
+                "\n\nZusätzliche Erkenntnisse aus zuletzt bestätigten Fällen und \
+                 aufgehobenen Fehlalarmen (als Hilfestellung — sie ersetzen dein \
+                 eigenes Urteil nicht):\n",
+            );
+            system.push_str(learnings);
+        }
         Self {
             messages: vec![DialogMessage {
                 role: "system".to_string(),
-                content: SCAM_JUDGE_SYSTEM_PROMPT.to_string(),
+                content: system,
             }],
             transcript: Vec::new(),
             substantial_messages: 0,
@@ -429,6 +446,12 @@ pub trait ScamGuardStore: Send + Sync {
         chatter_login: &str,
     ) -> Result<Option<FirstTimeContext>, String>;
     async fn persist_verdict(&self, record: &VerdictRecord) -> Result<(), String>;
+
+    /// Netzwerkweit destillierte Self-Learning-Erkenntnisse (oder `None`, solange
+    /// noch keine vorliegen). Default: keine — Mocks müssen nichts liefern.
+    async fn load_learnings(&self) -> Result<Option<String>, String> {
+        Ok(None)
+    }
 }
 
 #[async_trait]
@@ -552,6 +575,10 @@ impl ScamGuardStore for PgScamGuardStore {
         .map_err(|error| error.to_string())?;
         Ok(())
     }
+
+    async fn load_learnings(&self) -> Result<Option<String>, String> {
+        load_learnings(&self.pool).await
+    }
 }
 
 pub struct ConversationScamGuard {
@@ -640,11 +667,23 @@ impl ConversationScamGuard {
         }
 
         let key = (channel_login.clone(), chatter_login.clone());
-        let state = self
-            .states
-            .entry(key)
-            .or_insert_with(|| Arc::new(Mutex::new(DialogState::new(context.is_first_global))))
-            .clone();
+        let state = match self.states.get(&key) {
+            Some(existing) => existing.clone(),
+            None => {
+                // Erkenntnisse nur einmal pro Chatter laden (beim ersten Treffer),
+                // nicht bei jeder Folgenachricht.
+                let learnings = self.store.load_learnings().await.ok().flatten();
+                self.states
+                    .entry(key)
+                    .or_insert_with(|| {
+                        Arc::new(Mutex::new(DialogState::with_learnings(
+                            context.is_first_global,
+                            learnings.as_deref(),
+                        )))
+                    })
+                    .clone()
+            }
+        };
         let mut dialog = state.lock().await;
         if dialog.completed {
             return;
@@ -897,6 +936,177 @@ impl crate::commands::ScamGuardCommandPort for ScamGuardCommands {
     }
 }
 
+// ---- Self-Learning ----------------------------------------------------------
+//
+// Analog zum SpamAiReviewer, aber für den LLM-Judge: ein Hintergrundjob lässt
+// MiniMax periodisch aus den jüngsten bestätigten Scams und den vom Streamer
+// aufgehobenen Fehlalarmen kompakte Erkenntnisse destillieren. Diese fließen als
+// Zusatzhinweis in den Judge-System-Prompt ein (`DialogState::with_learnings`),
+// sodass der Wächter mit der Zeit treffsicherer wird, ohne Codeänderung.
+
+/// Intervall des Self-Learning-Jobs (alle 6 Stunden).
+const SCAM_LEARNINGS_INTERVAL: Duration = Duration::from_secs(6 * 60 * 60);
+/// Maximale Fälle je Klasse (bestätigt / aufgehoben) pro Destillation.
+const LEARNINGS_SAMPLE_LIMIT: i64 = 40;
+/// Untergrenze: erst ab so vielen Gesamtfällen lohnt eine Destillation.
+const LEARNINGS_MIN_SAMPLES: usize = 3;
+
+const SCAM_LEARNING_SYSTEM_PROMPT: &str = r#"Du wertest die jüngsten Entscheidungen eines automatischen Twitch-Chat-Wächters aus, der aufgesetzte Betrugs-Konversationen von Erstschreibern erkennt. Dein Ziel: kompakte, konkrete Erkenntnisse destillieren, die einem Prüfer künftig helfen, schneller und treffsicherer zu urteilen.
+
+Du bekommst zwei Listen. "bestaetigte_faelle" = Konversationen, die zu Recht als Betrug eingestuft wurden. "aufgehobene_faelle" = Fälle, die der Streamer als Fehlalarm zurückgenommen hat — also harmlose Zuschauer, die fälschlich getroffen wurden. Jeder Eintrag hat eine Kategorie, eine Begründung und den Nachrichtenverlauf.
+
+Leite daraus ab: Welche konkreten Formulierungen, Gesprächsmuster oder Abläufe tauchen bei echten Maschen wiederholt auf und sind verlässliche Warnzeichen? Und welche Merkmale haben zu Fehlalarmen geführt, sodass man dort vorsichtiger sein und NICHT vorschnell bannen sollte?
+
+Schreibe höchstens etwa 180 Wörter, als kurze Stichpunkte oder knappen Fließtext, nüchtern und konkret auf Deutsch. Keine Zahlen, keine Scores, keine Anrede, keine Einleitung — nur die Erkenntnisse selbst. Sind die Fälle zu dünn für belastbare Muster, fasse nur das Offensichtliche knapp zusammen."#;
+
+/// Ein einzelner Fall aus dem Lern-Korpus.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct LearningSample {
+    pub category: String,
+    pub reasoning: String,
+    pub transcript_snapshot: String,
+}
+
+/// Lern-Korpus: bestätigte Scams + aufgehobene Fehlalarme.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct LearningCorpus {
+    pub confirmed: Vec<LearningSample>,
+    pub false_positives: Vec<LearningSample>,
+}
+
+impl LearningCorpus {
+    pub fn total(&self) -> usize {
+        self.confirmed.len() + self.false_positives.len()
+    }
+}
+
+async fn fetch_samples(pool: &PgPool, actions: &[&str], limit: i64) -> Vec<LearningSample> {
+    sqlx::query_as::<_, (String, String, String)>(
+        "SELECT category, reasoning, transcript_snapshot \
+         FROM twitch_scam_guard_verdicts \
+         WHERE verdict = 'scam' AND action_taken = ANY($1) \
+         ORDER BY created_at DESC, id DESC LIMIT $2",
+    )
+    .bind(actions)
+    .bind(limit)
+    .fetch_all(pool)
+    .await
+    .unwrap_or_default()
+    .into_iter()
+    .map(
+        |(category, reasoning, transcript_snapshot)| LearningSample {
+            category,
+            reasoning,
+            transcript_snapshot,
+        },
+    )
+    .collect()
+}
+
+/// Lädt die jüngsten bestätigten Scams (gebannt/getimeoutet/vorgeschlagen) und
+/// die aufgehobenen Fehlalarme als Lern-Korpus.
+pub async fn fetch_learning_corpus(pool: &PgPool, limit: i64) -> LearningCorpus {
+    LearningCorpus {
+        confirmed: fetch_samples(pool, &["banned", "timed_out", "suggested"], limit).await,
+        false_positives: fetch_samples(pool, &["overturned"], limit).await,
+    }
+}
+
+/// Baut die MiniMax-Nachrichten für die Destillation. Reiner, testbarer Aufbau.
+pub fn build_distill_messages(corpus: &LearningCorpus) -> Value {
+    fn render(samples: &[LearningSample]) -> Vec<Value> {
+        samples
+            .iter()
+            .map(|sample| {
+                serde_json::json!({
+                    "kategorie": sample.category,
+                    "begruendung": sample.reasoning,
+                    "verlauf": sample.transcript_snapshot,
+                })
+            })
+            .collect()
+    }
+    let user = serde_json::json!({
+        "bestaetigte_faelle": render(&corpus.confirmed),
+        "aufgehobene_faelle": render(&corpus.false_positives),
+    });
+    serde_json::json!([
+        {"role": "system", "content": SCAM_LEARNING_SYSTEM_PROMPT},
+        {"role": "user", "content": user.to_string()},
+    ])
+}
+
+/// Speichert die destillierten Erkenntnisse als Singleton-Zeile (UPSERT).
+pub async fn persist_learnings(
+    pool: &PgPool,
+    guidance: &str,
+    source_count: i32,
+) -> Result<(), String> {
+    sqlx::query(
+        "INSERT INTO twitch_scam_guard_learnings (id, guidance, source_count, updated_at) \
+         VALUES (TRUE, $1, $2, NOW()) \
+         ON CONFLICT (id) DO UPDATE SET guidance = EXCLUDED.guidance, \
+           source_count = EXCLUDED.source_count, updated_at = EXCLUDED.updated_at",
+    )
+    .bind(guidance)
+    .bind(source_count)
+    .execute(pool)
+    .await
+    .map_err(|error| error.to_string())?;
+    Ok(())
+}
+
+/// Lädt die aktuell gültigen Erkenntnisse (oder `None`, solange noch keine
+/// destilliert wurden bzw. leer).
+pub async fn load_learnings(pool: &PgPool) -> Result<Option<String>, String> {
+    sqlx::query_scalar::<_, String>(
+        "SELECT guidance FROM twitch_scam_guard_learnings WHERE id = TRUE",
+    )
+    .fetch_optional(pool)
+    .await
+    .map_err(|error| error.to_string())
+    .map(|opt| opt.filter(|guidance| !guidance.trim().is_empty()))
+}
+
+/// Ein Durchlauf des Self-Learning-Jobs: Korpus laden, von MiniMax destillieren
+/// lassen, Ergebnis ablegen. Best-effort — Fehler werden geloggt, nicht
+/// propagiert; zu dünne Datenlage wird übersprungen (keine Überschreibung).
+pub async fn run_scam_learnings_once(pool: &PgPool, client: &EngagementMinimaxClient) {
+    let corpus = fetch_learning_corpus(pool, LEARNINGS_SAMPLE_LIMIT).await;
+    if corpus.total() < LEARNINGS_MIN_SAMPLES {
+        debug!(
+            "Scam-Self-Learning: zu wenige Fälle ({}), übersprungen",
+            corpus.total()
+        );
+        return;
+    }
+    let messages = build_distill_messages(&corpus);
+    let guidance = match client.messages_completion_uncapped(messages, 0.2).await {
+        Ok(text) if !text.trim().is_empty() => text.trim().to_string(),
+        Ok(_) => {
+            debug!("Scam-Self-Learning: leere Antwort, übersprungen");
+            return;
+        }
+        Err(error) => {
+            debug!("Scam-Self-Learning: MiniMax nicht verfügbar: {error}");
+            return;
+        }
+    };
+    if let Err(error) = persist_learnings(pool, &guidance, corpus.total() as i32).await {
+        warn!("Scam-Self-Learning: Erkenntnisse nicht gespeichert: {error}");
+    }
+}
+
+/// Endlos-Loop: einmal nach `initial_delay_secs`, danach alle 6 Stunden.
+pub async fn schedule_scam_learnings(pool: PgPool, initial_delay_secs: u64) {
+    tokio::time::sleep(Duration::from_secs(initial_delay_secs)).await;
+    let client = EngagementMinimaxClient::new(None, None, None, None);
+    loop {
+        run_scam_learnings_once(&pool, &client).await;
+        tokio::time::sleep(SCAM_LEARNINGS_INTERVAL).await;
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -997,6 +1207,50 @@ mod tests {
         trivial.push_user_message("Kappa");
         trivial.push_user_message("lol");
         assert!(!trivial.has_enough_substance());
+    }
+
+    #[test]
+    fn learnings_werden_in_system_prompt_eingebettet() {
+        let ohne = DialogState::new(true);
+        assert_eq!(ohne.messages()[0].content, SCAM_JUDGE_SYSTEM_PROMPT);
+
+        // Leere/whitespace-Erkenntnisse ändern den Prompt nicht.
+        let leer = DialogState::with_learnings(true, Some("   "));
+        assert_eq!(leer.messages()[0].content, SCAM_JUDGE_SYSTEM_PROMPT);
+
+        // Echte Erkenntnisse werden angehängt, der Basis-Prompt bleibt erhalten.
+        let mit = DialogState::with_learnings(true, Some("MERKMAL_XYZ taucht oft auf"));
+        let system = &mit.messages()[0].content;
+        assert!(system.starts_with(SCAM_JUDGE_SYSTEM_PROMPT));
+        assert!(system.contains("MERKMAL_XYZ taucht oft auf"));
+        assert!(system.len() > SCAM_JUDGE_SYSTEM_PROMPT.len());
+    }
+
+    #[test]
+    fn build_distill_messages_enthaelt_beide_klassen() {
+        let corpus = LearningCorpus {
+            confirmed: vec![LearningSample {
+                category: "growth_pitch".to_string(),
+                reasoning: "BESTAETIGT_GRUND".to_string(),
+                transcript_snapshot: "[\"add him on discord\"]".to_string(),
+            }],
+            false_positives: vec![LearningSample {
+                category: "recon_smalltalk".to_string(),
+                reasoning: "FEHLALARM_GRUND".to_string(),
+                transcript_snapshot: "[\"welcher rang bist du\"]".to_string(),
+            }],
+        };
+        assert_eq!(corpus.total(), 2);
+
+        let messages = build_distill_messages(&corpus);
+        let array = messages.as_array().expect("messages ist ein Array");
+        assert_eq!(array[0]["role"], "system");
+        assert_eq!(array[0]["content"], SCAM_LEARNING_SYSTEM_PROMPT);
+        let user = array[1]["content"].as_str().expect("user content ist String");
+        assert!(user.contains("BESTAETIGT_GRUND"));
+        assert!(user.contains("FEHLALARM_GRUND"));
+        assert!(user.contains("bestaetigte_faelle"));
+        assert!(user.contains("aufgehobene_faelle"));
     }
 
     #[test]

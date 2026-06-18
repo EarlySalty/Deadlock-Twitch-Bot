@@ -7,7 +7,8 @@ use sqlx::postgres::{PgConnectOptions, PgPoolOptions};
 use sqlx::PgPool;
 use tb_chat::api::{BanOutcome, ChatApi};
 use tb_chat::conversation_scam::{
-    ConversationScamGuard, DialogState, ScamJudge, Verdict, VerdictKind,
+    fetch_learning_corpus, load_learnings, persist_learnings, ConversationScamGuard, DialogState,
+    ScamJudge, Verdict, VerdictKind,
 };
 use tb_chat::moderation::ModerationEngine;
 use tb_chat::types::{ChatMessageBody, ChatMessageEvent, SendOutcome};
@@ -72,6 +73,11 @@ async fn apply_ddl(pool: &PgPool) {
             is_first_time_streamer BOOLEAN)",
         "CREATE TABLE twitch_chatter_rollup (\
             streamer_login TEXT NOT NULL, chatter_login TEXT NOT NULL)",
+        "CREATE TABLE twitch_scam_guard_learnings (\
+            id BOOLEAN PRIMARY KEY DEFAULT TRUE, guidance TEXT NOT NULL, \
+            source_count INTEGER NOT NULL DEFAULT 0, \
+            updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(), \
+            CONSTRAINT learnings_singleton CHECK (id))",
     ] {
         sqlx::query(ddl).execute(pool).await.unwrap();
     }
@@ -198,4 +204,69 @@ async fn guard_laedt_settings_trigger_und_persistiert_verdict() {
     assert_eq!(row.1, "suggested");
     assert!(row.2.contains("yo bro"));
     assert!((row.3 - 0.95).abs() < f32::EPSILON);
+}
+
+#[tokio::test]
+async fn self_learning_korpus_und_persistenz() {
+    let pool = pool_or_skip!("tb_conversation_scam_learning");
+
+    // Anfangs noch keine Erkenntnisse hinterlegt.
+    assert_eq!(load_learnings(&pool).await.unwrap(), None);
+
+    // Drei Verdicts: bestätigt (banned), Vorschlag (suggested), Fehlalarm (overturned).
+    // Ein 'clean'/'none' darf NICHT in den Korpus geraten.
+    for (chatter, verdict, action) in [
+        ("scammer_a", "scam", "banned"),
+        ("scammer_b", "scam", "suggested"),
+        ("falsepos_c", "scam", "overturned"),
+        ("legit_d", "clean", "none"),
+    ] {
+        sqlx::query(
+            "INSERT INTO twitch_scam_guard_verdicts \
+             (channel_login, chatter_login, chatter_id, verdict, confidence, category, \
+              reasoning, transcript_snapshot, action_taken) \
+             VALUES ($1, $2, $3, $4, 0.9, 'cat', $5, '[\"msg\"]', $6)",
+        )
+        .bind("testchannel")
+        .bind(chatter)
+        .bind(format!("{chatter}-id"))
+        .bind(verdict)
+        .bind(format!("grund-{chatter}"))
+        .bind(action)
+        .execute(&pool)
+        .await
+        .unwrap();
+    }
+
+    let corpus = fetch_learning_corpus(&pool, 40).await;
+    assert_eq!(corpus.confirmed.len(), 2, "banned + suggested = bestätigt");
+    assert_eq!(corpus.false_positives.len(), 1, "overturned = Fehlalarm");
+    assert_eq!(corpus.total(), 3);
+    assert!(corpus
+        .false_positives
+        .iter()
+        .any(|s| s.reasoning == "grund-falsepos_c"));
+
+    // Persistenz + UPSERT (zweiter Schreibvorgang überschreibt die Singleton-Zeile).
+    persist_learnings(&pool, "ERSTE ERKENNTNIS", corpus.total() as i32)
+        .await
+        .unwrap();
+    assert_eq!(
+        load_learnings(&pool).await.unwrap().as_deref(),
+        Some("ERSTE ERKENNTNIS")
+    );
+    persist_learnings(&pool, "AKTUALISIERTE ERKENNTNIS", 5)
+        .await
+        .unwrap();
+    assert_eq!(
+        load_learnings(&pool).await.unwrap().as_deref(),
+        Some("AKTUALISIERTE ERKENNTNIS")
+    );
+
+    // Genau eine Zeile (Singleton-Constraint).
+    let count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM twitch_scam_guard_learnings")
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    assert_eq!(count, 1);
 }

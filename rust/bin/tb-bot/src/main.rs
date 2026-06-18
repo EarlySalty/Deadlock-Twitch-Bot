@@ -821,6 +821,12 @@ async fn main() {
             pool.clone(),
             600,
         ));
+        // Self-Learning des Conversation-Scam-Guards: erstmals nach 900s, danach
+        // alle 6h aus bestätigten Scams + aufgehobenen Fehlalarmen destillieren.
+        tokio::spawn(tb_chat::conversation_scam::schedule_scam_learnings(
+            pool.clone(),
+            900,
+        ));
     }
 
     // Highlight-Clipper (Port von bot/highlight_clipper): pollt aktive Partner
