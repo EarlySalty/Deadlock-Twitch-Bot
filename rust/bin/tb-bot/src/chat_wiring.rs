@@ -23,7 +23,9 @@ use tb_chat::commands::{
     AutobanEntry, ClipOutcome, ClipPort, CommandEngine, DiscordLinkPort, InvitePort,
     LastAutobanStore, RaidCommandPort, RaidStatusInfo, SuperModPort,
 };
-use tb_chat::conversation_scam::{ConversationScamGuard, MiniMaxScamJudge, ScamGuardCommands};
+use tb_chat::conversation_scam::{
+    ConversationScamGuard, MiniMaxScamJudge, ScamGuardCommands, ScamGuardNotifier,
+};
 use tb_chat::moderation::{
     HelixChatClient, ModerationEngine, OutboundSuppressionStore, TimeoutGuard, WERBEFREI_PITCH_MSG,
 };
@@ -435,6 +437,7 @@ pub async fn build_runtime(
     manual_raid: Option<Arc<dyn tb_internal_api::ManualRaidPort>>,
     clip_port: Option<Arc<dyn ClipPort>>,
     bot_ban_handler: Option<Arc<dyn BotBannedChannelHandler>>,
+    scam_notifier: Option<Arc<dyn ScamGuardNotifier>>,
     inner_hooks: Arc<dyn EventSubHooks>,
 ) -> ChatRuntime {
     let ChatApiHandle {
@@ -465,7 +468,7 @@ pub async fn build_runtime(
         .unwrap_or_default();
 
     let moderation = Arc::new(ModerationEngine::new(Arc::clone(&api), pool.clone()));
-    let conversation_scam = Arc::new(ConversationScamGuard::new(
+    let mut conversation_scam = ConversationScamGuard::new(
         pool.clone(),
         bot_user_id.clone(),
         Arc::new(MiniMaxScamJudge::new(EngagementMinimaxClient::new(
@@ -473,7 +476,11 @@ pub async fn build_runtime(
         ))),
         Arc::clone(&api),
         Arc::clone(&moderation),
-    ));
+    );
+    if let Some(notifier) = scam_notifier {
+        conversation_scam = conversation_scam.with_notifier(notifier);
+    }
+    let conversation_scam = Arc::new(conversation_scam);
     // Promo-Suppression kombiniert die bestehende DB-Suppression
     // (twitch_outbound_chat_suppressions, Quelle "promo") mit dem In-Memory-
     // TimeoutGuard: der Promo-Pfad sendet weder in DB-stummgeschaltete noch in

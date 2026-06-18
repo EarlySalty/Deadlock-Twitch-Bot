@@ -380,6 +380,26 @@ async fn revoke_verdict_entbannt_bei_ban_und_markiert_overturned() {
         "ein Vorschlag darf keinen Unban auslösen"
     );
 
+    // Timeout zählt wie ein Ban: muss ebenfalls entbannen + markieren.
+    recorder.lock().unwrap().clear();
+    let timed_id: i64 = sqlx::query_scalar(
+        "INSERT INTO twitch_scam_guard_verdicts \
+         (channel_login, chatter_login, chatter_id, verdict, confidence, category, \
+          reasoning, transcript_snapshot, action_taken) \
+         VALUES ('testchannel', 'timed', 'timed-uid', 'scam', 0.9, 'cat', \
+                 'grund', '[\"msg\"]', 'timed_out') RETURNING id",
+    )
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    let outcome = revoke_verdict(&pool, api.as_ref(), timed_id).await;
+    assert!(outcome.was_banned, "timed_out zählt als Ban");
+    assert!(outcome.unbanned);
+    assert_eq!(
+        recorder.lock().unwrap().clone(),
+        vec![("testchannel-id".to_string(), "timed-uid".to_string())]
+    );
+
     // Unbekannte ID → not_found.
     let missing = revoke_verdict(&pool, api.as_ref(), 9_999_999).await;
     assert_eq!(missing.status, "not_found");

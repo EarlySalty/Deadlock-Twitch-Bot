@@ -46,6 +46,7 @@ mod raid_adapters;
 mod raid_arrival_wiring;
 mod raid_oauth_impl;
 mod reauth_reminder;
+mod scam_notify_impl;
 mod scam_revoke_impl;
 mod score_refresh;
 mod scout_chat;
@@ -726,6 +727,16 @@ async fn main() {
                 pool.clone(),
                 handle.bot_token_manager(),
             );
+            // Discord-Sichtbarkeit des Scam-Wächters: postet Bans/Vorschläge in
+            // den Aufsichts-Channel (Default 1374364800817303632, per Env
+            // überschreibbar) mit Revoke-Button. Ohne Broker → None (kein Post).
+            let scam_notifier = scam_notify_impl::build_scam_notifier(
+                &settings.broker,
+                std::env::var("SCAM_GUARD_DISCORD_CHANNEL_ID")
+                    .ok()
+                    .and_then(|v| v.parse().ok())
+                    .unwrap_or(1374364800817303632),
+            );
             let runtime = chat_wiring::build_runtime(
                 handle,
                 pool.clone(),
@@ -735,6 +746,7 @@ async fn main() {
                     pool.clone(),
                     &settings.broker,
                 )),
+                scam_notifier,
                 eventsub_hooks.clone(),
             )
             .await;

@@ -445,7 +445,8 @@ pub trait ScamGuardStore: Send + Sync {
         channel_login: &str,
         chatter_login: &str,
     ) -> Result<Option<FirstTimeContext>, String>;
-    async fn persist_verdict(&self, record: &VerdictRecord) -> Result<(), String>;
+    /// Persistiert das Urteil und liefert dessen neue ID (für den Discord-Feed).
+    async fn persist_verdict(&self, record: &VerdictRecord) -> Result<i64, String>;
 
     /// Netzwerkweit destillierte Self-Learning-Erkenntnisse (oder `None`, solange
     /// noch keine vorliegen). Default: keine — Mocks müssen nichts liefern.
@@ -464,6 +465,28 @@ impl ScamModeration for ModerationEngine {
     async fn auto_ban_and_cleanup(&self, request: AutoBanRequest<'_>) -> bool {
         ModerationEngine::auto_ban_and_cleanup(self, request).await
     }
+}
+
+/// Benachrichtigung über eine getroffene Wächter-Entscheidung — Datengrundlage
+/// für den Discord-Feed (Sichtbarkeit + Revoke-Button). Bewusst sprach- und
+/// layoutfrei; die konkrete deutsche Darstellung (Embed + `scam_revoke`-
+/// view_spec) liegt im Notifier in der tb-bot-Composition-Root.
+#[derive(Debug, Clone)]
+pub struct ScamNotification {
+    pub verdict_id: i64,
+    pub channel_login: String,
+    pub chatter_login: String,
+    pub category: String,
+    pub reasoning: String,
+    pub confidence: f32,
+    pub action_taken: String,
+}
+
+/// Port für die Discord-Sichtbarkeit (Dependency-Inversion: tb-chat kennt kein
+/// Discord). Implementierung in tb-bot über das DiscordBackend/den Broker.
+#[async_trait]
+pub trait ScamGuardNotifier: Send + Sync {
+    async fn notify(&self, notification: ScamNotification);
 }
 
 struct PgScamGuardStore {
@@ -554,12 +577,12 @@ impl ScamGuardStore for PgScamGuardStore {
         }))
     }
 
-    async fn persist_verdict(&self, record: &VerdictRecord) -> Result<(), String> {
-        sqlx::query(
+    async fn persist_verdict(&self, record: &VerdictRecord) -> Result<i64, String> {
+        let id: i64 = sqlx::query_scalar(
             "INSERT INTO twitch_scam_guard_verdicts \
              (channel_login, chatter_login, chatter_id, verdict, confidence, category, \
               reasoning, transcript_snapshot, action_taken) \
-             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)",
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9) RETURNING id",
         )
         .bind(&record.channel_login)
         .bind(&record.chatter_login)
@@ -570,10 +593,10 @@ impl ScamGuardStore for PgScamGuardStore {
         .bind(&record.reasoning)
         .bind(&record.transcript_snapshot)
         .bind(&record.action_taken)
-        .execute(&self.pool)
+        .fetch_one(&self.pool)
         .await
         .map_err(|error| error.to_string())?;
-        Ok(())
+        Ok(id)
     }
 
     async fn load_learnings(&self) -> Result<Option<String>, String> {
@@ -587,6 +610,7 @@ pub struct ConversationScamGuard {
     judge: Arc<dyn ScamJudge>,
     api: Arc<dyn ChatApi>,
     moderation: Arc<dyn ScamModeration>,
+    notifier: Option<Arc<dyn ScamGuardNotifier>>,
     states: DashMap<(String, String), Arc<Mutex<DialogState>>>,
 }
 
@@ -620,8 +644,16 @@ impl ConversationScamGuard {
             judge,
             api,
             moderation,
+            notifier: None,
             states: DashMap::new(),
         }
+    }
+
+    /// Optionaler Discord-Notifier (Sichtbarkeit + Revoke). Ohne ihn postet der
+    /// Wächter nichts nach Discord — Tests und der headless-Betrieb laufen so.
+    pub fn with_notifier(mut self, notifier: Arc<dyn ScamGuardNotifier>) -> Self {
+        self.notifier = Some(notifier);
+        self
     }
 
     pub fn observe(self: &Arc<Self>, event: &ChatMessageEvent) {
@@ -706,10 +738,39 @@ impl ConversationScamGuard {
             transcript_snapshot: dialog.transcript_snapshot(),
             action_taken,
         };
-        if let Err(error) = self.store.persist_verdict(&record).await {
-            warn!("Conversation-Scam-Verdict nicht persistiert: {error}");
+        match self.store.persist_verdict(&record).await {
+            Ok(verdict_id) => self.maybe_notify(verdict_id, &record),
+            Err(error) => warn!("Conversation-Scam-Verdict nicht persistiert: {error}"),
         }
         dialog.completed = completed;
+    }
+
+    /// Postet bestätigte Aktionen (Ban/Timeout/Vorschlag) fire-and-forget in den
+    /// Discord-Aufsichts-Feed. „none"/„ban_failed_no_mod" werden nicht gepostet
+    /// (keine zurücknehmbare Aktion). Ohne Notifier passiert nichts.
+    fn maybe_notify(&self, verdict_id: i64, record: &VerdictRecord) {
+        let Some(notifier) = &self.notifier else {
+            return;
+        };
+        if !matches!(
+            record.action_taken.as_str(),
+            "banned" | "timed_out" | "suggested"
+        ) {
+            return;
+        }
+        let notifier = Arc::clone(notifier);
+        let notification = ScamNotification {
+            verdict_id,
+            channel_login: record.channel_login.clone(),
+            chatter_login: record.chatter_login.clone(),
+            category: record.category.clone(),
+            reasoning: record.reasoning.clone(),
+            confidence: record.confidence,
+            action_taken: record.action_taken.clone(),
+        };
+        tokio::spawn(async move {
+            notifier.notify(notification).await;
+        });
     }
 
     async fn apply_decision(
@@ -1524,9 +1585,10 @@ mod tests {
             Ok(*self.context.lock().unwrap())
         }
 
-        async fn persist_verdict(&self, record: &VerdictRecord) -> Result<(), String> {
-            self.records.lock().unwrap().push(record.clone());
-            Ok(())
+        async fn persist_verdict(&self, record: &VerdictRecord) -> Result<i64, String> {
+            let mut records = self.records.lock().unwrap();
+            records.push(record.clone());
+            Ok(records.len() as i64)
         }
     }
 
@@ -1635,6 +1697,18 @@ mod tests {
         }
     }
 
+    #[derive(Default)]
+    struct RecordingNotifier {
+        seen: StdMutex<Vec<ScamNotification>>,
+    }
+
+    #[async_trait]
+    impl ScamGuardNotifier for RecordingNotifier {
+        async fn notify(&self, notification: ScamNotification) {
+            self.seen.lock().unwrap().push(notification);
+        }
+    }
+
     fn build_guard(
         settings: GuardSettings,
         verdicts: impl IntoIterator<Item = Verdict>,
@@ -1714,6 +1788,121 @@ mod tests {
                 Some("suggested")
             );
         }
+    }
+
+    #[tokio::test]
+    async fn notifier_postet_bestaetigte_aktion_mit_verdict_id() {
+        let settings = GuardSettings {
+            mode: GuardMode::AlertOnly,
+            ..GuardSettings::default()
+        };
+        let (guard, _store, _, _, _) = build_guard(settings, [verdict(VerdictKind::Scam, 0.95)]);
+        let notifier = Arc::new(RecordingNotifier::default());
+        let guard = guard.with_notifier(Arc::clone(&notifier) as Arc<dyn ScamGuardNotifier>);
+
+        feed(
+            &guard,
+            "sam_09995",
+            &[
+                "yo bro add him on discord and grow with real viewers",
+                "real supporters who donate and sub, tell him sam sent you",
+                "just add him quick, he connects you to a big streamer",
+                "you deserve it, you have good taste",
+            ],
+        )
+        .await;
+
+        // notify() läuft fire-and-forget via tokio::spawn → kurz auf den Task warten.
+        let seen = tokio::time::timeout(std::time::Duration::from_secs(1), async {
+            loop {
+                {
+                    let guard = notifier.seen.lock().unwrap();
+                    if !guard.is_empty() {
+                        break guard.clone();
+                    }
+                }
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .expect("Notifier wurde nicht aufgerufen");
+
+        assert_eq!(seen.len(), 1, "genau eine bestätigte Aktion → ein Discord-Post");
+        assert_eq!(seen[0].action_taken, "suggested");
+        assert_eq!(seen[0].verdict_id, 1);
+        assert_eq!(seen[0].chatter_login, "sam_09995");
+    }
+
+    #[tokio::test]
+    async fn clean_verdict_postet_nichts_nach_discord() {
+        let (guard, store, _, _, _) =
+            build_guard(GuardSettings::default(), [verdict(VerdictKind::Clean, 0.98)]);
+        let notifier = Arc::new(RecordingNotifier::default());
+        let guard = guard.with_notifier(Arc::clone(&notifier) as Arc<dyn ScamGuardNotifier>);
+
+        feed(
+            &guard,
+            "viewer_de",
+            &[
+                "lohnt sich Haze grad? oder eher nerf gekriegt",
+                "gg, was baust du auf McGinnis?",
+                "welches Item kaufst du danach?",
+                "noch eine konkrete Build-Frage zum Schluss",
+            ],
+        )
+        .await;
+
+        // „none" spawnt erst gar keinen notify-Task — der Recorder ist
+        // deterministisch leer (kein Timing-Rennen).
+        assert_eq!(store.records.lock().unwrap()[0].action_taken, "none");
+        assert!(
+            notifier.seen.lock().unwrap().is_empty(),
+            "ein sauberer Zuschauer darf nie im Discord-Feed landen"
+        );
+    }
+
+    #[tokio::test]
+    async fn auto_ban_postet_mit_action_banned() {
+        let settings = GuardSettings {
+            mode: GuardMode::AutoBan,
+            ..GuardSettings::default()
+        };
+        let (guard, store, _, _, moderation) =
+            build_guard(settings, [verdict(VerdictKind::Scam, 0.97)]);
+        let notifier = Arc::new(RecordingNotifier::default());
+        let guard = guard.with_notifier(Arc::clone(&notifier) as Arc<dyn ScamGuardNotifier>);
+
+        feed(
+            &guard,
+            "sam_09995",
+            &[
+                "yo bro add him on discord and grow with real viewers",
+                "real supporters who donate and sub, tell him sam sent you",
+                "just add him quick, he connects you to a big streamer",
+                "trust me you deserve it, you have good taste",
+            ],
+        )
+        .await;
+
+        // Der Ban lief wirklich über die Moderation, und genau ein Post ging raus.
+        assert_eq!(moderation.reasons.lock().unwrap().len(), 1);
+        assert_eq!(store.records.lock().unwrap()[0].action_taken, "banned");
+        let seen = tokio::time::timeout(std::time::Duration::from_secs(1), async {
+            loop {
+                {
+                    let g = notifier.seen.lock().unwrap();
+                    if !g.is_empty() {
+                        break g.clone();
+                    }
+                }
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .expect("Notifier wurde nach Auto-Ban nicht aufgerufen");
+        assert_eq!(seen.len(), 1);
+        assert_eq!(seen[0].action_taken, "banned");
+        assert_eq!(seen[0].chatter_login, "sam_09995");
     }
 
     #[tokio::test]
