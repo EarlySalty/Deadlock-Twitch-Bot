@@ -738,6 +738,165 @@ impl ConversationScamGuard {
     }
 }
 
+/// Maximale Zeichen pro Twitch-Chat-Nachricht für gesplittete `!explain`-Antworten
+/// (konservativ unter dem 500er-Hardlimit).
+pub const TWITCH_MAX_MESSAGE_CHARS: usize = 480;
+
+const SCAM_EXPLAIN_SYSTEM_PROMPT: &str = r#"Du erklärst einem Twitch-Streamer — oft unerfahren — in einfachen Worten, warum der automatische Chat-Wächter einen Account als Betrugsversuch eingestuft hat. Du bekommst die gespeicherte Einschätzung (Kategorie, Begründung) und den Nachrichtenverlauf dieses Accounts.
+
+Erkläre ausführlich, ruhig und lehrreich auf Deutsch: Was ist die Masche? An welchen konkreten Stellen im Verlauf erkennt man sie? Und woran kann der Streamer so etwas in Zukunft selbst erkennen? Schreibe als zusammenhängenden Fließtext, ohne Aufzählungszeichen, ohne Markdown, ohne Emojis. Nenne keine Zahlenwerte oder Scores. Du darfst ausführlich sein — der Text wird automatisch in mehrere Chat-Nachrichten aufgeteilt."#;
+
+/// Zerlegt einen langen Text in Twitch-taugliche Häppchen (höchstens `max_len`
+/// Zeichen), bevorzugt an Wortgrenzen. Kein Mengen-Limit.
+pub fn chunk_for_twitch(text: &str, max_len: usize) -> Vec<String> {
+    let max_len = max_len.max(1);
+    let mut chunks: Vec<String> = Vec::new();
+    let mut current = String::new();
+    for word in text.split_whitespace() {
+        if word.chars().count() > max_len {
+            if !current.is_empty() {
+                chunks.push(std::mem::take(&mut current));
+            }
+            let mut piece = String::new();
+            for ch in word.chars() {
+                if piece.chars().count() >= max_len {
+                    chunks.push(std::mem::take(&mut piece));
+                }
+                piece.push(ch);
+            }
+            current = piece;
+            continue;
+        }
+        let separator = usize::from(!current.is_empty());
+        if current.chars().count() + separator + word.chars().count() > max_len && !current.is_empty()
+        {
+            chunks.push(std::mem::take(&mut current));
+        }
+        if !current.is_empty() {
+            current.push(' ');
+        }
+        current.push_str(word);
+    }
+    if !current.is_empty() {
+        chunks.push(current);
+    }
+    chunks
+}
+
+/// Gespeichertes Scam-Urteil als Grundlage für `!explain` / `!unban`.
+#[derive(Debug, Clone, PartialEq)]
+pub struct StoredVerdict {
+    pub id: i64,
+    pub chatter_login: String,
+    pub category: String,
+    pub reasoning: String,
+    pub transcript_snapshot: String,
+}
+
+/// Backing für die Chat-Commands `!explain` und die `overturned`-Markierung bei
+/// `!unban`. Hält eigene DB-/MiniMax-Zugriffe, unabhängig vom Live-Detektor.
+pub struct ScamGuardCommands {
+    pool: PgPool,
+    client: EngagementMinimaxClient,
+}
+
+impl ScamGuardCommands {
+    pub fn new(pool: PgPool, client: EngagementMinimaxClient) -> Self {
+        Self { pool, client }
+    }
+
+    async fn latest_scam_verdict(
+        &self,
+        channel_login: &str,
+        target: Option<&str>,
+    ) -> Result<Option<StoredVerdict>, String> {
+        let target = target.map(|t| t.trim().trim_start_matches('@').to_lowercase());
+        let row = sqlx::query_as::<_, (i64, String, String, String, String)>(
+            "SELECT id, chatter_login, category, reasoning, transcript_snapshot \
+             FROM twitch_scam_guard_verdicts \
+             WHERE channel_login = $1 AND verdict = 'scam' \
+               AND ($2::text IS NULL OR chatter_login = $2) \
+             ORDER BY created_at DESC, id DESC LIMIT 1",
+        )
+        .bind(channel_login.to_lowercase())
+        .bind(target.as_deref())
+        .fetch_optional(&self.pool)
+        .await
+        .map_err(|error| error.to_string())?;
+        Ok(row.map(
+            |(id, chatter_login, category, reasoning, transcript_snapshot)| StoredVerdict {
+                id,
+                chatter_login,
+                category,
+                reasoning,
+                transcript_snapshot,
+            },
+        ))
+    }
+
+    /// Liefert eine ausführliche, in Twitch-Häppchen gesplittete Erklärung des
+    /// jüngsten Scam-Urteils. Leerer Vektor = kein Fall gefunden. Fällt bei
+    /// MiniMax-Ausfall auf die gespeicherte Begründung zurück.
+    pub async fn explain(&self, channel_login: &str, target: Option<&str>) -> Vec<String> {
+        let verdict = match self.latest_scam_verdict(channel_login, target).await {
+            Ok(Some(verdict)) => verdict,
+            Ok(None) => return Vec::new(),
+            Err(error) => {
+                warn!("Scam-Explain DB-Fehler: {error}");
+                return Vec::new();
+            }
+        };
+
+        let messages = serde_json::json!([
+            {"role": "system", "content": SCAM_EXPLAIN_SYSTEM_PROMPT},
+            {"role": "user", "content": serde_json::json!({
+                "kategorie": verdict.category,
+                "begruendung": verdict.reasoning,
+                "verlauf": verdict.transcript_snapshot,
+            }).to_string()},
+        ]);
+
+        let text = match self.client.messages_completion_uncapped(messages, 0.3).await {
+            Ok(text) if !text.trim().is_empty() => text,
+            _ => verdict.reasoning.clone(),
+        };
+        chunk_for_twitch(text.trim(), TWITCH_MAX_MESSAGE_CHARS)
+    }
+
+    /// Markiert das jüngste Scam-Urteil dieses Accounts als aufgehoben
+    /// (False-Positive-Spur für `!unban`). Match über `chatter_id`. Liefert
+    /// `true`, wenn eine Zeile aktualisiert wurde.
+    pub async fn overturn(&self, channel_login: &str, chatter_id: &str) -> bool {
+        if chatter_id.is_empty() {
+            return false;
+        }
+        sqlx::query(
+            "UPDATE twitch_scam_guard_verdicts SET action_taken = 'overturned' \
+             WHERE id = ( \
+               SELECT id FROM twitch_scam_guard_verdicts \
+               WHERE channel_login = $1 AND chatter_id = $2 AND verdict = 'scam' \
+               ORDER BY created_at DESC, id DESC LIMIT 1 )",
+        )
+        .bind(channel_login.to_lowercase())
+        .bind(chatter_id)
+        .execute(&self.pool)
+        .await
+        .map(|result| result.rows_affected() > 0)
+        .unwrap_or(false)
+    }
+}
+
+#[async_trait]
+impl crate::commands::ScamGuardCommandPort for ScamGuardCommands {
+    async fn explain(&self, channel_login: &str, target: Option<&str>) -> Vec<String> {
+        ScamGuardCommands::explain(self, channel_login, target).await
+    }
+
+    async fn overturn(&self, channel_login: &str, chatter_id: &str) -> bool {
+        ScamGuardCommands::overturn(self, channel_login, chatter_id).await
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -849,6 +1008,27 @@ mod tests {
             normalized.text,
             "yo bro, i just came across your stream. add him on discord."
         );
+    }
+
+    #[test]
+    fn chunk_for_twitch_haelt_grenze_und_splittet_an_wortgrenzen() {
+        let chunks = chunk_for_twitch("alpha beta gamma delta", 11);
+        assert!(chunks.iter().all(|c| c.chars().count() <= 11));
+        assert_eq!(chunks.join(" "), "alpha beta gamma delta");
+        assert_eq!(chunks.len(), 2);
+
+        // Kein Mengen-Cap: langer Text ergibt viele Häppchen, alle <= Grenze.
+        let long = "wort ".repeat(300);
+        let many = chunk_for_twitch(long.trim(), 480);
+        assert!(many.len() > 1);
+        assert!(many.iter().all(|c| c.chars().count() <= 480));
+
+        // Überlanges Einzelwort wird hart auf Zeichengrenzen gesplittet.
+        let hard = chunk_for_twitch(&"x".repeat(25), 10);
+        assert_eq!(hard.len(), 3);
+        assert!(hard.iter().all(|c| c.chars().count() <= 10));
+
+        assert!(chunk_for_twitch("", 480).is_empty());
     }
 
     #[test]

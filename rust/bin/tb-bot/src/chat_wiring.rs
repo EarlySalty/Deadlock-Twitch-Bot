@@ -23,7 +23,7 @@ use tb_chat::commands::{
     AutobanEntry, ClipOutcome, ClipPort, CommandEngine, DiscordLinkPort, InvitePort,
     LastAutobanStore, RaidCommandPort, RaidStatusInfo, SuperModPort,
 };
-use tb_chat::conversation_scam::{ConversationScamGuard, MiniMaxScamJudge};
+use tb_chat::conversation_scam::{ConversationScamGuard, MiniMaxScamJudge, ScamGuardCommands};
 use tb_chat::moderation::{
     HelixChatClient, ModerationEngine, OutboundSuppressionStore, TimeoutGuard, WERBEFREI_PITCH_MSG,
 };
@@ -506,6 +506,10 @@ pub async fn build_runtime(
     if let Some(cp) = clip_port {
         command_engine = command_engine.set_clip_port(cp);
     }
+    command_engine = command_engine.set_scam_port(Arc::new(ScamGuardCommands::new(
+        pool.clone(),
+        EngagementMinimaxClient::new(None, None, None, None),
+    )));
     let commands = Arc::new(command_engine);
 
     let review_log_dir =
