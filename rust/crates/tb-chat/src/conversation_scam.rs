@@ -1107,6 +1107,143 @@ pub async fn schedule_scam_learnings(pool: PgPool, initial_delay_secs: u64) {
     }
 }
 
+// ---- Revoke (Discord-Button / Dashboard-Override) ---------------------------
+//
+// Eine bereits getroffene Entscheidung gezielt zurücknehmen — angestoßen per
+// Discord-Button oder Dashboard. Anders als der Chat-Command `!unban` (jüngster
+// Fall je Chatter) adressiert der Revoke EXAKT eine `verdict_id`, weil die
+// Discord-Nachricht genau diesen Fall referenziert. War tatsächlich gebannt
+// worden, wird auf Twitch entbannt; in jedem Fall wird der Fall als
+// `overturned` markiert (False-Positive-Signal fürs Self-Learning).
+
+/// Adressdaten eines Urteils, das zurückgenommen werden soll.
+#[derive(Debug, Clone)]
+pub struct RevokeTarget {
+    pub channel_login: String,
+    pub chatter_login: String,
+    pub chatter_id: Option<String>,
+    pub action_taken: String,
+}
+
+/// Ergebnis eines Revoke — serialisiert direkt als Port-/API-Antwort.
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct RevokeOutcome {
+    pub status: &'static str,
+    pub channel_login: String,
+    pub chatter_login: String,
+    /// Ob ursprünglich tatsächlich gebannt/getimeoutet wurde.
+    pub was_banned: bool,
+    /// Ob der Twitch-Unban erfolgreich war (nur bei `was_banned` relevant).
+    pub unbanned: bool,
+}
+
+impl RevokeOutcome {
+    fn not_found() -> Self {
+        Self {
+            status: "not_found",
+            channel_login: String::new(),
+            chatter_login: String::new(),
+            was_banned: false,
+            unbanned: false,
+        }
+    }
+}
+
+/// Lädt die Zieldaten eines Urteils anhand seiner ID.
+pub async fn load_revoke_target(
+    pool: &PgPool,
+    verdict_id: i64,
+) -> Result<Option<RevokeTarget>, String> {
+    let row = sqlx::query_as::<_, (String, String, Option<String>, String)>(
+        "SELECT channel_login, chatter_login, chatter_id, action_taken \
+         FROM twitch_scam_guard_verdicts WHERE id = $1",
+    )
+    .bind(verdict_id)
+    .fetch_optional(pool)
+    .await
+    .map_err(|error| error.to_string())?;
+    Ok(
+        row.map(|(channel_login, chatter_login, chatter_id, action_taken)| RevokeTarget {
+            channel_login,
+            chatter_login,
+            chatter_id,
+            action_taken,
+        }),
+    )
+}
+
+/// Markiert genau dieses Urteil als `overturned` (False-Positive-Spur fürs
+/// Self-Learning). Liefert `true`, wenn eine Zeile aktualisiert wurde.
+pub async fn mark_overturned_by_id(pool: &PgPool, verdict_id: i64) -> Result<bool, String> {
+    sqlx::query("UPDATE twitch_scam_guard_verdicts SET action_taken = 'overturned' WHERE id = $1")
+        .bind(verdict_id)
+        .execute(pool)
+        .await
+        .map(|result| result.rows_affected() > 0)
+        .map_err(|error| error.to_string())
+}
+
+/// Nimmt das Urteil `verdict_id` zurück: war es ein echter Ban/Timeout, wird auf
+/// Twitch entbannt; in jedem Fall wird der Fall als `overturned` markiert.
+/// Best-effort — ein fehlgeschlagener Unban verhindert die Markierung nicht
+/// (das Urteil war trotzdem falsch). Unbekannte ID → `status = "not_found"`.
+pub async fn revoke_verdict(pool: &PgPool, api: &dyn ChatApi, verdict_id: i64) -> RevokeOutcome {
+    let target = match load_revoke_target(pool, verdict_id).await {
+        Ok(Some(target)) => target,
+        Ok(None) => return RevokeOutcome::not_found(),
+        Err(error) => {
+            warn!("Scam-Revoke DB-Fehler beim Laden ({verdict_id}): {error}");
+            return RevokeOutcome::not_found();
+        }
+    };
+
+    let was_banned = matches!(target.action_taken.as_str(), "banned" | "timed_out");
+    let unbanned = if was_banned {
+        try_unban(api, &target).await
+    } else {
+        false
+    };
+
+    if let Err(error) = mark_overturned_by_id(pool, verdict_id).await {
+        warn!("Scam-Revoke: Markierung overturned fehlgeschlagen ({verdict_id}): {error}");
+    }
+
+    RevokeOutcome {
+        status: "revoked",
+        channel_login: target.channel_login,
+        chatter_login: target.chatter_login,
+        was_banned,
+        unbanned,
+    }
+}
+
+/// Löst Broadcaster- und Chatter-ID auf und entbannt. Die im Urteil gespeicherte
+/// Chatter-ID hat Vorrang; fehlt sie, wird sie über den Login aufgelöst.
+async fn try_unban(api: &dyn ChatApi, target: &RevokeTarget) -> bool {
+    let Some(broadcaster_id) = api
+        .resolve_user_id(&target.channel_login)
+        .await
+        .ok()
+        .flatten()
+    else {
+        return false;
+    };
+    let chatter_id = match &target.chatter_id {
+        Some(id) if !id.is_empty() => Some(id.clone()),
+        _ => api
+            .resolve_user_id(&target.chatter_login)
+            .await
+            .ok()
+            .flatten(),
+    };
+    let Some(chatter_id) = chatter_id else {
+        return false;
+    };
+    api.unban_user(&broadcaster_id, &chatter_id)
+        .await
+        .unwrap_or(false)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

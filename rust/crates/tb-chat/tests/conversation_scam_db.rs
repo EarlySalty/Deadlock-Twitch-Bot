@@ -7,8 +7,8 @@ use sqlx::postgres::{PgConnectOptions, PgPoolOptions};
 use sqlx::PgPool;
 use tb_chat::api::{BanOutcome, ChatApi};
 use tb_chat::conversation_scam::{
-    fetch_learning_corpus, load_learnings, persist_learnings, ConversationScamGuard, DialogState,
-    ScamJudge, Verdict, VerdictKind,
+    fetch_learning_corpus, load_learnings, persist_learnings, revoke_verdict, ConversationScamGuard,
+    DialogState, ScamJudge, Verdict, VerdictKind,
 };
 use tb_chat::moderation::ModerationEngine;
 use tb_chat::types::{ChatMessageBody, ChatMessageEvent, SendOutcome};
@@ -127,6 +127,54 @@ impl ChatApi for NoopApi {
     }
     async fn resolve_user_id(&self, _: &str) -> Result<Option<String>, String> {
         Ok(None)
+    }
+    async fn bot_user_id(&self) -> String {
+        "bot-id".to_string()
+    }
+}
+
+/// ChatApi-Stub für den Revoke-Pfad: löst Logins zu `<login>-id` auf und
+/// protokolliert jeden Unban-Aufruf (broadcaster_id, target_user_id).
+struct RecordingApi {
+    unbans: Arc<std::sync::Mutex<Vec<(String, String)>>>,
+}
+
+#[async_trait]
+impl ChatApi for RecordingApi {
+    async fn send_message(&self, _: &str, _: &str) -> Result<SendOutcome, String> {
+        Ok(SendOutcome::Sent)
+    }
+    async fn send_announcement(&self, _: &str, _: &str, _: &str) -> Result<bool, String> {
+        Ok(true)
+    }
+    async fn ban_user(&self, _: &str, _: &str, _: &str) -> Result<BanOutcome, String> {
+        Ok(BanOutcome::Banned)
+    }
+    async fn timeout_user(&self, _: &str, _: &str, _: u32, _: &str) -> Result<BanOutcome, String> {
+        Ok(BanOutcome::Banned)
+    }
+    async fn unban_user(
+        &self,
+        broadcaster_id: &str,
+        target_user_id: &str,
+    ) -> Result<bool, String> {
+        self.unbans
+            .lock()
+            .unwrap()
+            .push((broadcaster_id.to_string(), target_user_id.to_string()));
+        Ok(true)
+    }
+    async fn delete_message(&self, _: &str, _: &str) -> Result<bool, String> {
+        Ok(true)
+    }
+    async fn user_created_at(
+        &self,
+        _: &str,
+    ) -> Result<Option<chrono::DateTime<chrono::Utc>>, String> {
+        Ok(None)
+    }
+    async fn resolve_user_id(&self, login: &str) -> Result<Option<String>, String> {
+        Ok(Some(format!("{login}-id")))
     }
     async fn bot_user_id(&self) -> String {
         "bot-id".to_string()
@@ -269,4 +317,70 @@ async fn self_learning_korpus_und_persistenz() {
         .await
         .unwrap();
     assert_eq!(count, 1);
+}
+
+#[tokio::test]
+async fn revoke_verdict_entbannt_bei_ban_und_markiert_overturned() {
+    let pool = pool_or_skip!("tb_conversation_scam_revoke");
+
+    // Echter Ban: muss entbannen UND als overturned markieren.
+    let banned_id: i64 = sqlx::query_scalar(
+        "INSERT INTO twitch_scam_guard_verdicts \
+         (channel_login, chatter_login, chatter_id, verdict, confidence, category, \
+          reasoning, transcript_snapshot, action_taken) \
+         VALUES ('testchannel', 'scammer', 'scammer-uid', 'scam', 0.95, 'cat', \
+                 'grund', '[\"msg\"]', 'banned') RETURNING id",
+    )
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+
+    let recorder = Arc::new(std::sync::Mutex::new(Vec::<(String, String)>::new()));
+    let api: Arc<dyn ChatApi> = Arc::new(RecordingApi {
+        unbans: recorder.clone(),
+    });
+
+    let outcome = revoke_verdict(&pool, api.as_ref(), banned_id).await;
+    assert_eq!(outcome.status, "revoked");
+    assert!(outcome.was_banned);
+    assert!(outcome.unbanned);
+    // Unban lief mit aufgelöster Broadcaster-ID + gespeicherter Chatter-ID.
+    assert_eq!(
+        recorder.lock().unwrap().clone(),
+        vec![("testchannel-id".to_string(), "scammer-uid".to_string())]
+    );
+
+    let action: String =
+        sqlx::query_scalar("SELECT action_taken FROM twitch_scam_guard_verdicts WHERE id = $1")
+            .bind(banned_id)
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+    assert_eq!(action, "overturned");
+
+    // Vorschlag (kein Ban): KEIN Unban, trotzdem overturned.
+    let suggested_id: i64 = sqlx::query_scalar(
+        "INSERT INTO twitch_scam_guard_verdicts \
+         (channel_login, chatter_login, chatter_id, verdict, confidence, category, \
+          reasoning, transcript_snapshot, action_taken) \
+         VALUES ('testchannel', 'maybe', 'maybe-uid', 'scam', 0.8, 'cat', \
+                 'grund', '[\"msg\"]', 'suggested') RETURNING id",
+    )
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    recorder.lock().unwrap().clear();
+
+    let outcome = revoke_verdict(&pool, api.as_ref(), suggested_id).await;
+    assert_eq!(outcome.status, "revoked");
+    assert!(!outcome.was_banned);
+    assert!(!outcome.unbanned);
+    assert!(
+        recorder.lock().unwrap().is_empty(),
+        "ein Vorschlag darf keinen Unban auslösen"
+    );
+
+    // Unbekannte ID → not_found.
+    let missing = revoke_verdict(&pool, api.as_ref(), 9_999_999).await;
+    assert_eq!(missing.status, "not_found");
 }

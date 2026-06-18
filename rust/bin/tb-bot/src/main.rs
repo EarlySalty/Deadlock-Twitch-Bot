@@ -46,6 +46,7 @@ mod raid_adapters;
 mod raid_arrival_wiring;
 mod raid_oauth_impl;
 mod reauth_reminder;
+mod scam_revoke_impl;
 mod score_refresh;
 mod scout_chat;
 mod shadow_review_wiring;
@@ -400,6 +401,11 @@ async fn main() {
     // Handle weiter unten beim Pipeline-Aufbau konsumiert wird. Der Send läuft
     // über den live rotierten Bot-User-Token (ChatApi → BotTokenManager).
     let chat_action_api: Option<Arc<dyn tb_chat::ChatApi>> =
+        chat_api_handle.as_ref().map(|h| h.api.clone());
+    // ChatApi-Clone für den Scam-Guard-Revoke-Port der internen API
+    // (POST /scam-guard/revoke): der Unban läuft über den live rotierten
+    // Bot-User-Token, identisch zum Auto-Ban-Pfad des Wächters.
+    let scam_revoke_api: Option<Arc<dyn tb_chat::ChatApi>> =
         chat_api_handle.as_ref().map(|h| h.api.clone());
 
     // Raid-Verdrahtung: mit Manager + Helix + Krypto-Key sind alle vier
@@ -1126,6 +1132,8 @@ async fn main() {
     // → der Handler antwortet 503 statt stumm zu scheitern.
     let chat_action: Option<Arc<dyn tb_internal_api::ChatActionPort>> =
         chat_wiring::build_chat_action_port(chat_action_api, pool.clone());
+    let scam_revoke: Option<Arc<dyn tb_internal_api::ScamRevokePort>> =
+        scam_revoke_impl::build_scam_revoke_port(scam_revoke_api, pool.clone());
     let app = build_internal_router(
         pool,
         token,
@@ -1136,6 +1144,7 @@ async fn main() {
         eventsub_stats,
         discord_role,
         chat_action,
+        scam_revoke,
         legacy_proxy,
     );
 
