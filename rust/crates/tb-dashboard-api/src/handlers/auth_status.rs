@@ -8,7 +8,7 @@
 
 use axum::{
     extract::State,
-    http::header,
+    http::{header, HeaderMap},
     response::{IntoResponse, Response},
     Json,
 };
@@ -70,19 +70,47 @@ fn now_secs() -> u64 {
 pub async fn auth_status_handler(
     auth: DashboardAuthLevel,
     State(pool): State<PgPool>,
+    headers: HeaderMap,
 ) -> Response {
     match &auth {
         DashboardAuthLevel::None => unauth_response().await,
         DashboardAuthLevel::Localhost => admin_response("localhost", false, true),
-        // HOTFIX: Admin-Modus-Routing vorübergehend deaktiviert. Das
-        // partner_response-Default brach internal-home (verlangt für Admin-Level
-        // einen Streamer-Override) → 401 → Login-Loop. Admin sieht wieder die
-        // volle Admin-Präsentation, bis das Feature sauber neu verdrahtet ist.
-        DashboardAuthLevel::Admin { .. } => admin_response("admin", false, true),
-        DashboardAuthLevel::Partner { twitch_login, twitch_user_id, .. } => {
-            partner_response(&pool, twitch_login, twitch_user_id, false, false).await
+        DashboardAuthLevel::Admin { actor: Some(actor) } => {
+            if admin_mode_cookie_active(&headers) {
+                admin_response("admin", true, true)
+            } else {
+                partner_response(
+                    &pool,
+                    &actor.twitch_login,
+                    &actor.twitch_user_id,
+                    true,
+                    false,
+                )
+                .await
+            }
         }
+        DashboardAuthLevel::Admin { actor: None } => admin_response("admin", false, true),
+        DashboardAuthLevel::Partner {
+            twitch_login,
+            twitch_user_id,
+            ..
+        } => partner_response(&pool, twitch_login, twitch_user_id, false, false).await,
     }
+}
+
+fn admin_mode_cookie_active(headers: &HeaderMap) -> bool {
+    headers
+        .get(header::COOKIE)
+        .and_then(|value| value.to_str().ok())
+        .map(|raw| {
+            raw.split(';').any(|pair| {
+                pair.trim()
+                    .split_once('=')
+                    .map(|(name, value)| name.trim() == ADMIN_MODE_COOKIE && value.trim() == "1")
+                    .unwrap_or(false)
+            })
+        })
+        .unwrap_or(false)
 }
 
 // ── Unauthentifiziert ───────────────────────────────────────────────────────
@@ -289,6 +317,7 @@ pub struct AuthStatusFields {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::auth::level::AdminActor;
     use axum::{
         body::Body,
         extract::ConnectInfo,
@@ -296,7 +325,6 @@ mod tests {
         routing::get,
         Extension, Router,
     };
-    use crate::auth::level::AdminActor;
     use sqlx::postgres::{PgConnectOptions, PgPoolOptions};
     use std::net::SocketAddr;
     use std::time::Duration;
