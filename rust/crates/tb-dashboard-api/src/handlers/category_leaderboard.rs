@@ -17,6 +17,7 @@ use sqlx::{PgPool, Row};
 use crate::auth::level::DashboardAuthLevel;
 
 const EXTERNAL_REACH_AVG_THRESHOLD: f64 = 100.0;
+const PARTNER_AGGREGATE_SQL: &str = "BOOL_OR(COALESCE(c.is_partner, FALSE)) AS is_partner";
 
 fn get_tier(avg: f64) -> &'static str {
     if avg < 15.0 { "starter" }
@@ -69,14 +70,15 @@ pub async fn category_leaderboard_handler(
     let exclude_external = params.exclude_external.as_deref() == Some("1");
     let since: DateTime<Utc> = Utc::now() - Duration::days(days);
 
-    // Conditional HAVING clause for external-reach threshold
+    // Conditional HAVING clause for external-reach threshold.
+    // is_partner is BOOLEAN in Postgres; comparing it to 0 breaks the endpoint.
     let sql = if exclude_external {
         let order = if sort_peak { "peak_vc DESC" } else { "avg_vc DESC" };
         format!(r#"
             SELECT c.streamer,
                    AVG(c.viewer_count)::float8  AS avg_vc,
                    MAX(c.viewer_count)::float8  AS peak_vc,
-                   BOOL_OR(c.is_partner <> 0) AS is_partner
+                   {PARTNER_AGGREGATE_SQL}
             FROM twitch_stats_category c
             WHERE c.ts_utc >= $1
             GROUP BY c.streamer
@@ -89,7 +91,7 @@ pub async fn category_leaderboard_handler(
             SELECT c.streamer,
                    AVG(c.viewer_count)::float8  AS avg_vc,
                    MAX(c.viewer_count)::float8  AS peak_vc,
-                   BOOL_OR(c.is_partner <> 0) AS is_partner
+                   {PARTNER_AGGREGATE_SQL}
             FROM twitch_stats_category c
             WHERE c.ts_utc >= $1
             GROUP BY c.streamer
@@ -203,4 +205,18 @@ pub async fn category_leaderboard_handler(
         "yourRank": your_rank,
         "yourTier": your_tier,
     })).into_response()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn partner_aggregate_uses_boolean_schema() {
+        assert_eq!(
+            PARTNER_AGGREGATE_SQL,
+            "BOOL_OR(COALESCE(c.is_partner, FALSE)) AS is_partner"
+        );
+        assert!(!PARTNER_AGGREGATE_SQL.contains("<> 0"));
+    }
 }

@@ -1,3 +1,11 @@
+## #239 — Twitch-Dashboards laden schneller und robuster
+
+**Problem:** Die Dashboard-Seiten luden viele statische Dateien ohne brauchbare Browser-Zwischenspeicherung und ohne HTTP-Kompression. Zusätzlich startete die Chat-Auswertung direkt eine Detailabfrage, obwohl noch keine Session ausgewählt war; fehlerhafte Detailantworten wurden unnötig erneut versucht. Ein Kategorien-Ranking konnte zudem durch einen Datenbank-Typfehler mit Serverfehler abbrechen.
+
+**Änderung:** Statische Dashboard-Dateien werden jetzt mit langfristigem Cache ausgeliefert und Antworten des Rust-Dashboards können komprimiert werden. Die Chat-Hype-Zeitlinie startet erst nach einer echten Session-Auswahl, Client-Fehler werden nicht mehr blind wiederholt und das Kategorien-Ranking nutzt den korrekten Bool-Typ der gespeicherten Partnerdaten.
+
+**Ergebnis:** Wiederholte Dashboard-Aufrufe müssen große Assets nicht mehr neu laden, unnötige Hintergrund-Requests fallen weg und das Ranking bricht nicht mehr wegen des Partner-Flags ab. Das reduziert Wartezeit im Browser und vermeidet vermeidbare Last im Backend.
+
 ## #238 — Admin-Modus vollständig zwischen Nutzer- und Admin-Ansicht umschaltbar
 
 **Problem:** Die ersten beiden Umsetzungen waren jeweils nur teilweise konsistent: Zuerst wechselte die Statusanzeige in die Nutzeransicht, während die Startseite weiterhin einen Admin-Parameter verlangte und dadurch eine Login-Schleife auslöste. Danach wurde der Admin-Status fest erzwungen, wodurch „Beenden“ wirkungslos blieb. Ein weiterer Versuch ließ Status- und Startseitenabfragen gleichzeitig wechseln und konnte einen leeren Bildschirm erzeugen.

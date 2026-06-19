@@ -427,7 +427,7 @@ export function useChatHypeTimeline(streamer: string | null, sessionId?: number)
     queryKey: ['chat-hype-timeline', streamer, sessionId],
     queryFn: () => fetchChatHypeTimeline(streamer, sessionId),
     staleTime: STALE_TIME,
-    enabled: !!streamer,
+    enabled: !!streamer && !!sessionId,
   });
 }
 

@@ -5,6 +5,7 @@ import {
   isPreviewLocalhost,
   isPreviewModeEnabled,
 } from '../preview/routes';
+import { ApiHttpError } from './httpError';
 
 const API_BASE = dashboardRuntimeConfig.apiBase;
 const INTERNAL_REDIRECT_PREFIX = '/twitch';
@@ -20,6 +21,8 @@ interface ApiErrorPayload {
   message?: string;
   loginUrl?: string;
 }
+
+export { ApiHttpError } from './httpError';
 
 export interface FetchJsonOptions {
   loginFallback?: string;
@@ -116,7 +119,7 @@ async function handleUnauthorizedResponse(
     window.location.href = sanitizeInternalRedirectUrl(unauthorized.loginUrl, loginFallback);
     throw new Error('Redirecting to Twitch login');
   }
-  throw new Error(unauthorized?.error || 'Unauthorized');
+  throw new ApiHttpError(unauthorized?.error || 'Unauthorized', response.status);
 }
 
 export async function fetchJson<T>(
@@ -131,12 +134,15 @@ export async function fetchJson<T>(
   }
 
   if (options.notFoundMessage && response.status === 404) {
-    throw new Error(options.notFoundMessage);
+    throw new ApiHttpError(options.notFoundMessage, response.status);
   }
 
   if (!response.ok) {
     const error = await readErrorPayload(response);
-    throw new Error(error?.message || error?.error || `Server-Fehler (HTTP ${response.status})`);
+    throw new ApiHttpError(
+      error?.message || error?.error || `Server-Fehler (HTTP ${response.status})`,
+      response.status
+    );
   }
 
   return response.json() as Promise<T>;

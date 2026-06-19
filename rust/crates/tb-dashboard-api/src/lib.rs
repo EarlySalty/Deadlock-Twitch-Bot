@@ -31,7 +31,7 @@ use axum::{
 };
 use sqlx::PgPool;
 use tb_http_core::ExpectedToken;
-use tower_http::cors::CorsLayer;
+use tower_http::{compression::CompressionLayer, cors::CorsLayer};
 
 /// Baut den axum-Router für alle public Analytics-GET-Endpoints.
 ///
@@ -834,6 +834,7 @@ pub fn build_router(pool: PgPool, token: String) -> Router {
         .merge(handlers::admin_mode::build_admin_mode_router())
         .merge(handlers::legal::build_legal_router())
         .merge(handlers::roadmap_page::build_roadmap_page_router())
+        .layer(CompressionLayer::new())
 }
 
 #[cfg(test)]

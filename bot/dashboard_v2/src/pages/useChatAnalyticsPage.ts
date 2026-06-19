@@ -9,6 +9,7 @@ import {
   useChatSocialGraph,
 } from '@/hooks/useAnalytics';
 import type { ChatAnalytics as ChatAnalyticsType, TimeRange } from '@/types/analytics';
+import { shouldFetchChatHypeTimeline } from './chatAnalyticsQueries';
 
 const CHAT_SOCIAL_GRAPH_ENABLED = false;
 
@@ -21,7 +22,10 @@ export function useChatAnalyticsPage(streamer: string, days: TimeRange) {
 
   const { data: coachingData } = useCoaching(streamer, days);
   const [selectedSessionId, setSelectedSessionId] = useState<number | undefined>(undefined);
-  const { data: hypeData } = useChatHypeTimeline(streamer, selectedSessionId);
+  const hypeStreamer = shouldFetchChatHypeTimeline(streamer, selectedSessionId)
+    ? streamer
+    : null;
+  const { data: hypeData } = useChatHypeTimeline(hypeStreamer, selectedSessionId);
   const { data: contentData } = useChatContentAnalysis(streamer, days);
   const socialGraphStreamer = CHAT_SOCIAL_GRAPH_ENABLED ? streamer : null;
   const { data: socialData } = useChatSocialGraph(socialGraphStreamer, days);

@@ -29,6 +29,7 @@ import {
   PREVIEW_PRICING_ROUTE,
   PREVIEW_VERWALTUNG_ROUTE,
 } from '@/preview/routes';
+import { shouldRetryApiQuery } from '@/api/httpError';
 import { dashboardRuntimeConfig, resolveEffectiveDemoMode } from '@/runtimeConfig';
 import {
   AlertTriangle,
@@ -90,7 +91,7 @@ class ErrorBoundary extends Component<ErrorBoundaryProps, ErrorBoundaryState> {
 const queryClient = new QueryClient({
   defaultOptions: {
     queries: {
-      retry: 2,
+      retry: shouldRetryApiQuery,
       refetchOnWindowFocus: false,
     },
   },

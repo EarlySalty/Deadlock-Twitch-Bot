@@ -83,7 +83,10 @@ pub async fn analyse_handler(
     let html = html.replacen("</head>", &format!("{RUNTIME_SCRIPT}\n  </head>"), 1);
 
     (
-        [(header::CONTENT_TYPE, "text/html; charset=utf-8")],
+        [
+            (header::CONTENT_TYPE, "text/html; charset=utf-8"),
+            (header::CACHE_CONTROL, "no-cache"),
+        ],
         html,
     )
         .into_response()
@@ -308,8 +311,10 @@ pub(crate) fn dist_root() -> PathBuf {
 /// Jedes Segment wird gegen `.`, `..` und `\` geprüft (Python-Parität).
 /// Symlink-Angriffe sind bei eigenem Build-Output kein reales Angriffsszenario.
 pub(crate) async fn serve_asset(raw_path: &str) -> Response {
-    let dist = dist_root();
+    serve_asset_from_root(dist_root(), raw_path).await
+}
 
+async fn serve_asset_from_root(dist: PathBuf, raw_path: &str) -> Response {
     // Segmentweise Validierung — verhindert Path-Traversal
     let mut candidate = dist.clone();
     for segment in raw_path.split('/') {
@@ -325,7 +330,21 @@ pub(crate) async fn serve_asset(raw_path: &str) -> Response {
     };
 
     let mime = mime_for_path(&candidate);
-    ([( header::CONTENT_TYPE, mime)], data).into_response()
+    (
+        [
+            (header::CONTENT_TYPE, mime),
+            (header::CACHE_CONTROL, cache_control_for_asset(raw_path)),
+        ],
+        data,
+    ).into_response()
+}
+
+fn cache_control_for_asset(raw_path: &str) -> &'static str {
+    if raw_path.starts_with("assets/") {
+        "public, max-age=31536000, immutable"
+    } else {
+        "public, max-age=3600"
+    }
 }
 
 fn mime_for_path(path: &std::path::Path) -> &'static str {
@@ -351,6 +370,8 @@ fn mime_for_path(path: &std::path::Path) -> &'static str {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use axum::{body, http::HeaderValue};
+    use std::time::{SystemTime, UNIX_EPOCH};
 
     #[test]
     fn host_header_normalisierung() {
@@ -448,5 +469,38 @@ mod tests {
         let mut user = HeaderMap::new();
         user.insert(header::HOST, "deutsche-deadlock-community.de".parse().unwrap());
         assert!(admin_dashboard_host_page_gate(&user).is_none());
+    }
+
+    #[tokio::test]
+    async fn asset_handler_setzt_cache_header() {
+        let unique = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_nanos();
+        let root = std::env::temp_dir().join(format!("tb_spa_asset_test_{unique}"));
+        let assets = root.join("assets");
+        tokio::fs::create_dir_all(&assets).await.unwrap();
+        tokio::fs::write(assets.join("index-abc123.js"), b"console.log('ok');").await.unwrap();
+
+        let resp = serve_asset_from_root(root.clone(), "assets/index-abc123.js").await;
+        assert_eq!(resp.status(), StatusCode::OK);
+        assert_eq!(
+            resp.headers().get(header::CACHE_CONTROL),
+            Some(&HeaderValue::from_static("public, max-age=31536000, immutable"))
+        );
+        assert_eq!(
+            resp.headers().get(header::CONTENT_TYPE),
+            Some(&HeaderValue::from_static("application/javascript; charset=utf-8"))
+        );
+        let body = body::to_bytes(resp.into_body(), 1024).await.unwrap();
+        assert_eq!(&body[..], b"console.log('ok');");
+
+        tokio::fs::remove_dir_all(root).await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn asset_handler_blockiert_traversal() {
+        let root = std::env::temp_dir().join("tb_spa_asset_traversal_test");
+        tokio::fs::create_dir_all(&root).await.unwrap();
+        let resp = serve_asset_from_root(root.clone(), "../secret.txt").await;
+        assert_eq!(resp.status(), StatusCode::NOT_FOUND);
+        tokio::fs::remove_dir_all(root).await.unwrap();
     }
 }
