@@ -235,6 +235,38 @@ pub async fn insert_insight(
     Ok(())
 }
 
+/// Neuesten wöchentlichen Insight-Datensatz laden.
+pub async fn get_latest_insight(
+    pool: &PgPool,
+    streamer_id: &str,
+) -> Result<Option<serde_json::Value>, sqlx::Error> {
+    let row = sqlx::query_as::<_, (
+        Option<String>,
+        Option<String>,
+        Option<String>,
+        Option<String>,
+        Option<DateTime<Utc>>,
+    )>(
+        "SELECT strengths, weaknesses, patterns, recommendations, generated_at \
+         FROM title_generator_insights \
+         WHERE streamer_id = $1 \
+         ORDER BY generated_at DESC LIMIT 1",
+    )
+    .bind(streamer_id)
+    .fetch_optional(pool)
+    .await?;
+
+    Ok(row.map(|(strengths, weaknesses, patterns, recommendations, generated_at)| {
+        serde_json::json!({
+            "strengths": strengths.unwrap_or_default(),
+            "weaknesses": weaknesses.unwrap_or_default(),
+            "patterns": patterns.unwrap_or_default(),
+            "recommendations": recommendations.unwrap_or_default(),
+            "generated_at": generated_at,
+        })
+    }))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -360,6 +392,30 @@ mod tests {
         .execute(&pool).await.unwrap();
         assert_eq!(get_streamer_session_count(&pool, "900").await, 3);
         assert_eq!(get_streamer_session_count(&pool, "404").await, 0); // unbekannte ID
+    }
+
+    #[tokio::test]
+    async fn latest_insight_liefert_neuesten_datensatz() {
+        let pool = pool_or_skip!("t6e_title_latest_insight");
+        sqlx::query(
+            "CREATE TABLE title_generator_insights (streamer_id TEXT, strengths TEXT, \
+             weaknesses TEXT, patterns TEXT, recommendations TEXT, generated_at TIMESTAMPTZ)",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+        sqlx::query(
+            "INSERT INTO title_generator_insights VALUES \
+             ('900','alt','w','p','r','2026-06-01T00:00:00+00'), \
+             ('900','neu','w2','p2','r2','2026-06-10T00:00:00+00')",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+
+        let insight = get_latest_insight(&pool, "900").await.unwrap().unwrap();
+        assert_eq!(insight["strengths"], "neu");
+        assert_eq!(insight["recommendations"], "r2");
     }
 
     #[tokio::test]

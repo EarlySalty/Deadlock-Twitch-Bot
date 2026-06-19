@@ -32,8 +32,11 @@ pub const BASE_STREAMER_SCOPES: &[&str] = &[
 ];
 
 /// Zusätzliche Scopes für Dashboard-Features (Python: `DASHBOARD_UPGRADE_SCOPES`).
-pub const DASHBOARD_UPGRADE_SCOPES: &[&str] =
-    &["channel:read:subscriptions", "channel:read:hype_train"];
+pub const DASHBOARD_UPGRADE_SCOPES: &[&str] = &[
+    "channel:read:subscriptions",
+    "channel:read:hype_train",
+    "channel:manage:broadcast",
+];
 
 /// Vollständiger Satz = Basis + Dashboard-Upgrade
 /// (Python: `FULL_STREAMER_SCOPES`).
@@ -47,6 +50,7 @@ pub const FULL_STREAMER_SCOPES: &[&str] = &[
     "channel:read:redemptions",
     "channel:read:subscriptions",
     "channel:read:hype_train",
+    "channel:manage:broadcast",
 ];
 
 /// Kritische Basis-Scopes, deren Fehlen den Bot-Betrieb verhindert
@@ -178,5 +182,6 @@ mod tests {
             FULL_STREAMER_SCOPES.len(),
             BASE_STREAMER_SCOPES.len() + DASHBOARD_UPGRADE_SCOPES.len()
         );
+        assert!(FULL_STREAMER_SCOPES.contains(&"channel:manage:broadcast"));
     }
 }

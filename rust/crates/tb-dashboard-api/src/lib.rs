@@ -40,7 +40,7 @@ use tower_http::cors::CorsLayer;
 /// (`api_public.py:52-58`). Authed/Admin-Routen bleiben ohne CORS-Header,
 /// sonst wäre die Token-API cross-origin per Browser ansprechbar.
 pub fn build_public_router(pool: PgPool) -> Router {
-    use handlers::{bans, network, raids, self_explainer, social_media};
+    use handlers::{bans, network, raids, roadmap, self_explainer, social_media};
 
     Router::new()
         .route(
@@ -60,6 +60,7 @@ pub fn build_public_router(pool: PgPool) -> Router {
             "/twitch/api/v2/public/network",
             get(network::network_handler),
         )
+        .route("/twitch/api/v2/roadmap", get(roadmap::get_handler))
         // Social-Media Rechtstexte — öffentlich für die Plattform-OAuth-Reviews.
         .route("/social-media/terms", get(social_media::terms_handler))
         .route("/social-media/privacy", get(social_media::privacy_handler))
@@ -75,7 +76,7 @@ pub fn build_public_router(pool: PgPool) -> Router {
 /// Auth-Level wird per Extension eingesetzt — `AuthLevel` als `FromRequestParts`
 /// liest den Token selbst aus der Extension.
 pub fn build_authed_router(pool: PgPool, token: String) -> Router {
-    use handlers::{ads_schedule, ai_analysis, ai_chat, ai_history, audience, audience_demographics, auth_status, billing, category_activity, category_comparison, category_leaderboard, category_timings, chat_analytics, chat_content_analysis, chat_deep_minimax, chat_hype_timeline, chat_social_graph, coaching, engagement_mode, engagement_settings, exp_analytics, follower_funnel, internal_home, leaderboard, loyalty_curve, lurker_analysis, lurker_tax_settings, monetization, overview, performance, raid_analytics, rankings, retention_curve, session_detail, silent_settings, social_media, spa, stream_report, streamers, tag_analysis, title_performance, viewer_timeline, viewers, watch_time};
+    use handlers::{ads_schedule, affiliate_portal, ai_analysis, ai_chat, ai_history, audience, audience_demographics, auth_status, billing, category_activity, category_comparison, category_leaderboard, category_timings, chat_analytics, chat_content_analysis, chat_deep_minimax, chat_hype_timeline, chat_social_graph, coaching, engagement_mode, engagement_settings, exp_analytics, follower_funnel, internal_home, leaderboard, loyalty_curve, lurker_analysis, lurker_tax_settings, monetization, overview, performance, raid_analytics, rankings, retention_curve, session_detail, silent_settings, social_media, spa, stream_report, streamers, tag_analysis, title, title_performance, viewer_timeline, viewers, watch_time};
 
     Router::new()
         .route(
@@ -214,6 +215,22 @@ pub fn build_authed_router(pool: PgPool, token: String) -> Router {
             "/twitch/api/v2/streamers",
             get(streamers::streamers_handler),
         )
+        .route(
+            "/twitch/api/v2/title/suggest",
+            post(title::suggest_handler),
+        )
+        .route(
+            "/twitch/api/v2/title/insights",
+            get(title::insights_handler),
+        )
+        .route(
+            "/twitch/api/v2/channel/title",
+            axum::routing::patch(title::update_channel_title_handler),
+        )
+        .route(
+            "/twitch/api/v2/affiliate/portal",
+            get(affiliate_portal::portal_handler),
+        )
         .route("/twitch/api/v2/overview", get(overview::overview_handler))
         // Post-Stream-A/B-Report (B11): liest twitch_stream_ai_reports für die
         // Dashboard-Anzeige (Partner → eigener Login, Admin/Localhost → frei).
@@ -246,6 +263,10 @@ pub fn build_authed_router(pool: PgPool, token: String) -> Router {
         .route(
             "/twitch/api/v2/calendar-heatmap",
             get(performance::calendar_heatmap_handler),
+        )
+        .route(
+            "/twitch/api/v2/viewer-timeline",
+            get(performance::viewer_count_timeline_handler),
         )
         .route(
             "/twitch/api/v2/rankings",

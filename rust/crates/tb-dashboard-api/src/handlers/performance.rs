@@ -319,3 +319,80 @@ pub async fn calendar_heatmap_handler(
         }
     }
 }
+
+/// `GET /twitch/api/v2/viewer-timeline?streamer=&days=7`
+pub async fn viewer_count_timeline_handler(
+    auth: DashboardAuthLevel,
+    State(pool): State<PgPool>,
+    Query(params): Query<DaysQuery>,
+) -> impl IntoResponse {
+    if let Some(resp) = crate::auth::extended_gate(&pool, &auth).await {
+        return resp;
+    }
+
+    let days = match parse_bounded_query_int(params.days.as_deref(), "days", 7, 1, 365) {
+        Ok(d) => d,
+        Err(resp) => return resp.into_response(),
+    };
+    let Some(streamer) = params.streamer.as_deref()
+        .map(|s| s.trim().to_lowercase())
+        .filter(|s| !s.is_empty())
+    else {
+        return (StatusCode::BAD_REQUEST, Json(json!({"error":"Streamer required"}))).into_response();
+    };
+    let since = Utc::now() - Duration::days(days);
+    let bucket_sql = viewer_timeline_bucket_sql(days);
+    let query = format!(
+        "SELECT TO_CHAR({bucket_sql}, 'YYYY-MM-DD HH24:MI') AS bucket, \
+                ROUND(AVG(viewer_count)::numeric, 1)::float8 AS avg_vc, \
+                MAX(viewer_count)::bigint AS peak_vc, \
+                MIN(viewer_count)::bigint AS min_vc, \
+                COUNT(*)::bigint AS samples \
+         FROM twitch_stats_tracked \
+         WHERE ts_utc >= $1 AND LOWER(streamer) = $2 \
+         GROUP BY 1 ORDER BY 1"
+    );
+
+    match sqlx::query(&query).bind(since).bind(streamer).fetch_all(&pool).await {
+        Err(e) => {
+            tracing::error!("viewer-timeline DB-Fehler: {e}");
+            (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({"error":"internal_error"}))).into_response()
+        }
+        Ok(rows) => {
+            let items: Vec<serde_json::Value> = rows.iter().map(|r| json!({
+                "timestamp": r.try_get::<String,_>("bucket").unwrap_or_default(),
+                "avgViewers": r.try_get::<f64,_>("avg_vc").unwrap_or(0.0),
+                "peakViewers": r.try_get::<i64,_>("peak_vc").unwrap_or(0),
+                "minViewers": r.try_get::<i64,_>("min_vc").unwrap_or(0),
+                "samples": r.try_get::<i64,_>("samples").unwrap_or(0),
+            })).collect();
+            Json(json!(items)).into_response()
+        }
+    }
+}
+
+fn viewer_timeline_bucket_sql(days: i64) -> &'static str {
+    if days <= 7 {
+        "DATE_TRUNC('hour', ts_utc) \
+         + FLOOR(EXTRACT(MINUTE FROM ts_utc) / 5) * INTERVAL '5 minutes'"
+    } else if days <= 30 {
+        "DATE_TRUNC('hour', ts_utc) \
+         + CASE WHEN EXTRACT(MINUTE FROM ts_utc) < 30 \
+                THEN INTERVAL '0 minutes' ELSE INTERVAL '30 minutes' END"
+    } else {
+        "DATE_TRUNC('hour', ts_utc)"
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::viewer_timeline_bucket_sql;
+
+    #[test]
+    fn viewer_timeline_bucket_grenzen_entsprechen_python() {
+        assert!(viewer_timeline_bucket_sql(7).contains("5 minutes"));
+        assert!(viewer_timeline_bucket_sql(8).contains("30 minutes"));
+        assert!(viewer_timeline_bucket_sql(30).contains("30 minutes"));
+        assert_eq!(viewer_timeline_bucket_sql(31), "DATE_TRUNC('hour', ts_utc)");
+    }
+}

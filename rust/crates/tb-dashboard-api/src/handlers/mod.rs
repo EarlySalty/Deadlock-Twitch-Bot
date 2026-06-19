@@ -1,5 +1,6 @@
 //! Handler-Module: je ein Modul pro Endpoint.
 pub mod admin_affiliate;
+pub mod affiliate_portal;
 pub mod admin_announcements;
 pub mod admin_audit_log;
 pub mod admin_billing;
@@ -59,6 +60,7 @@ pub mod partner_login;
 pub mod performance;
 pub mod rankings;
 pub mod retention_curve;
+pub mod roadmap;
 pub mod roadmap_page;
 pub mod self_explainer;
 pub mod session_detail;
@@ -67,6 +69,7 @@ pub mod social_media;
 pub mod spa;
 pub mod stream_report;
 pub mod tag_analysis;
+pub mod title;
 pub mod watch_time;
 pub mod title_performance;
 pub mod system;
