@@ -109,6 +109,8 @@ pub async fn demo_auth_status() -> Response {
         "authLevel": "partner",
         "demoMode": true,
         "isAdmin": false,
+        "adminEligible": false,
+        "adminMode": false,
         "isLocalhost": false,
         "canViewAllStreamers": false,
         "twitchLogin": DEMO_LOGIN,

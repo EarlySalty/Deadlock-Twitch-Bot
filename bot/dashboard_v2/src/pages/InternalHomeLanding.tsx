@@ -1,12 +1,13 @@
 import { useEffect, useMemo, useState } from 'react';
 import { motion } from 'framer-motion';
-import { useQuery } from '@tanstack/react-query';
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { Line, LineChart, ResponsiveContainer } from 'recharts';
 import {
   fetchInternalHome,
   type InternalHomeActionEntry,
   type InternalHomeChangelogEntry,
 } from '@/api/home';
+import { setAdminMode } from '@/api/auth';
 import { useStreamerList, useAuthStatus } from '@/hooks/useAnalytics';
 import {
   PREVIEW_CHANGELOG_ROUTE,
@@ -28,6 +29,7 @@ import {
   MessageSquare,
   RotateCcw,
   Settings,
+  ShieldCheck,
   Sparkles,
   TrendingUp,
   Users,
@@ -634,6 +636,21 @@ export function InternalHomeLanding() {
 
   const planName = authStatus?.plan?.planName || 'Free';
 
+  const queryClient = useQueryClient();
+  const adminEligible = Boolean(authStatus?.adminEligible);
+  const adminMode = Boolean(authStatus?.adminMode);
+  const adminModeMutation = useMutation({
+    mutationFn: (enabled: boolean) =>
+      setAdminMode(enabled, authStatus?.csrfToken ?? authStatus?.csrf_token ?? null),
+    onSuccess: () => {
+      // Auth-Status treibt das gesamte Gating; Streamer-Scope + Home-Daten
+      // hängen am Admin-Modus und müssen mitziehen.
+      void queryClient.invalidateQueries({ queryKey: ['auth-status'] });
+      void queryClient.invalidateQueries({ queryKey: ['internal-home'] });
+      void queryClient.invalidateQueries({ queryKey: ['streamers'] });
+    },
+  });
+
   useEffect(() => {
     if (loadingAuth || !isAdminView || loadingStreamers) return;
     if (normalizedSelectedStreamer && partnerLoginSet.has(normalizedSelectedStreamer)) return;
@@ -913,6 +930,40 @@ export function InternalHomeLanding() {
                 </div>
               </div>
 
+              {adminEligible ? (
+                <>
+                  <div className="border-t border-border" />
+                  <div className="space-y-2">
+                    <div className="text-[11px] font-semibold uppercase tracking-[0.18em] text-text-secondary">
+                      Admin
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() => adminModeMutation.mutate(!adminMode)}
+                      disabled={adminModeMutation.isPending}
+                      aria-pressed={adminMode}
+                      className={`flex w-full items-center gap-2 rounded-xl border px-3 py-2 text-sm font-medium transition-colors disabled:cursor-not-allowed disabled:opacity-60 ${
+                        adminMode
+                          ? 'border-warning/40 bg-warning/10 text-warning hover:border-warning/60'
+                          : 'border-border bg-background/60 text-text-secondary hover:border-border-hover hover:text-white'
+                      }`}
+                    >
+                      {adminModeMutation.isPending ? (
+                        <Loader2 className="h-4 w-4 shrink-0 animate-spin" />
+                      ) : (
+                        <ShieldCheck className="h-4 w-4 shrink-0" />
+                      )}
+                      {adminMode ? 'Admin-Modus beenden' : 'Admin-Modus aktivieren'}
+                    </button>
+                    <p className="text-[11px] leading-snug text-text-secondary">
+                      {adminMode
+                        ? 'Voller Zugriff aktiv — nicht die echte Nutzer-Ansicht.'
+                        : 'Du siehst das Dashboard wie ein normaler Nutzer.'}
+                    </p>
+                  </div>
+                </>
+              ) : null}
+
               {isAdminView ? (
                 <>
                   <div className="border-t border-border" />
@@ -972,6 +1023,27 @@ export function InternalHomeLanding() {
           </motion.aside>
 
           <main className="space-y-4 md:space-y-5">
+            {adminMode ? (
+              <motion.div
+                initial={{ opacity: 0, y: -8 }}
+                animate={{ opacity: 1, y: 0 }}
+                transition={{ duration: 0.24 }}
+                className="flex flex-wrap items-center justify-between gap-3 rounded-2xl border border-warning/40 bg-warning/10 px-4 py-3"
+              >
+                <div className="flex items-center gap-2 text-sm font-medium text-warning">
+                  <ShieldCheck className="h-4 w-4 shrink-0" />
+                  Admin-Modus aktiv — du siehst alle Inhalte entsperrt, nicht die echte Nutzer-Ansicht.
+                </div>
+                <button
+                  type="button"
+                  onClick={() => adminModeMutation.mutate(false)}
+                  disabled={adminModeMutation.isPending}
+                  className="rounded-lg border border-warning/40 bg-warning/15 px-3 py-1 text-xs font-semibold text-warning transition-colors hover:bg-warning/25 disabled:cursor-not-allowed disabled:opacity-60"
+                >
+                  Beenden
+                </button>
+              </motion.div>
+            ) : null}
             <motion.section
               data-tour-id="tour-intro"
               className="panel-card card-glow card-glow-accent hero-aura flex flex-col gap-4 rounded-2xl px-5 py-4 md:flex-row md:items-center md:justify-between"

@@ -831,6 +831,7 @@ pub fn build_router(pool: PgPool, token: String) -> Router {
         .merge(build_admin_system_router(pool.clone(), token.clone()))
         .merge(build_admin_streamers_router(pool.clone(), token.clone()))
         .merge(build_admin_config_router(pool, token))
+        .merge(handlers::admin_mode::build_admin_mode_router())
         .merge(handlers::legal::build_legal_router())
         .merge(handlers::roadmap_page::build_roadmap_page_router())
 }

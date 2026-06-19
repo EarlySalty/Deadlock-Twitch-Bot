@@ -32,6 +32,7 @@ use crate::auth::session::{
     build_session_cookie, clear_session_cookie, DashboardAuthState, OAuthLoginState, SameSite,
     PARTNER_COOKIE_NAME, SESSION_CREATE_TTL_SECS,
 };
+use crate::handlers::auth_status::ADMIN_MODE_COOKIE;
 
 /// Logout-Redirect-Ziel (Python `auth_logout`: 302 → `/analyse`).
 const LOGOUT_REDIRECT: &str = "/analyse";
@@ -540,7 +541,13 @@ pub async fn logout_handler(
     }
 
     let cookie = clear_session_cookie(PARTNER_COOKIE_NAME, cookie_secure, SameSite::Lax);
-    redirect_with_cookie(LOGOUT_REDIRECT, &cookie)
+    let mut response = redirect_with_cookie(LOGOUT_REDIRECT, &cookie);
+    let admin_mode_cookie =
+        clear_session_cookie(ADMIN_MODE_COOKIE, cookie_secure, SameSite::Lax);
+    if let Ok(value) = HeaderValue::from_str(&admin_mode_cookie) {
+        response.headers_mut().append(SET_COOKIE, value);
+    }
+    response
 }
 
 /// Liest einen Cookie-Wert direkt aus den Request-Headern (für Handler ohne
@@ -673,6 +680,24 @@ mod tests {
             resp.headers().get(axum::http::header::CACHE_CONTROL).unwrap(),
             "no-store, max-age=0"
         );
+    }
+
+    #[tokio::test]
+    async fn logout_loescht_partner_und_admin_mode_cookie_ohne_state() {
+        let resp = logout_handler(None, None, HeaderMap::new()).await;
+        assert_eq!(resp.status(), StatusCode::SEE_OTHER);
+        let cookies: Vec<&str> = resp
+            .headers()
+            .get_all(SET_COOKIE)
+            .iter()
+            .filter_map(|value| value.to_str().ok())
+            .collect();
+        assert!(cookies.iter().any(|cookie| {
+            cookie.starts_with("twitch_dash_session=") && cookie.contains("Max-Age=0")
+        }));
+        assert!(cookies.iter().any(|cookie| {
+            cookie.starts_with("tb_admin_mode=") && cookie.contains("Max-Age=0")
+        }));
     }
 
     // ── Fake-OAuth-Client (kein echter Twitch-Call, keine Secrets) ───────────
@@ -1035,8 +1060,18 @@ mod tests {
         let resp = logout_handler(Some(Extension(state.clone())), Some(Extension(cfg)), headers).await;
         assert_eq!(resp.status(), StatusCode::SEE_OTHER);
         assert_eq!(resp.headers().get(axum::http::header::LOCATION).unwrap(), "/analyse");
-        let cookie = resp.headers().get(SET_COOKIE).unwrap().to_str().unwrap();
-        assert!(cookie.contains("Max-Age=0"));
+        let cookies: Vec<&str> = resp
+            .headers()
+            .get_all(SET_COOKIE)
+            .iter()
+            .filter_map(|value| value.to_str().ok())
+            .collect();
+        assert!(cookies.iter().any(|cookie| {
+            cookie.starts_with("twitch_dash_session=") && cookie.contains("Max-Age=0")
+        }));
+        assert!(cookies.iter().any(|cookie| {
+            cookie.starts_with("tb_admin_mode=") && cookie.contains("Max-Age=0")
+        }));
         // Session ist invalidiert.
         assert!(state.load_partner_session(&created.session_id).await.unwrap().is_none());
 

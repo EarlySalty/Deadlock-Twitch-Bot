@@ -8,7 +8,7 @@
 
 use axum::{
     extract::State,
-    http::header,
+    http::{header, HeaderMap},
     response::{IntoResponse, Response},
     Json,
 };
@@ -33,6 +33,9 @@ const UNAUTH_CACHE_TTL_SECS: u64 = 5;
 /// Wird beim Admin-Login als `adminDefaultStreamer` zurückgegeben damit das
 /// Dashboard auf den eigenen Kanal defaultet statt auf den ersten Partner.
 const ADMIN_DEFAULT_STREAMER: &str = "earlysalty";
+
+/// Browser-Session-Cookie für die explizit aktivierte Admin-Präsentation.
+pub(crate) const ADMIN_MODE_COOKIE: &str = "tb_admin_mode";
 
 // ── Unauth-Cache ────────────────────────────────────────────────────────────
 
@@ -67,15 +70,47 @@ fn now_secs() -> u64 {
 pub async fn auth_status_handler(
     auth: DashboardAuthLevel,
     State(pool): State<PgPool>,
+    headers: HeaderMap,
 ) -> Response {
     match &auth {
         DashboardAuthLevel::None => unauth_response().await,
-        DashboardAuthLevel::Localhost => admin_response("localhost"),
-        DashboardAuthLevel::Admin { .. } => admin_response("admin"),
+        DashboardAuthLevel::Localhost => admin_response("localhost", false, true),
+        DashboardAuthLevel::Admin { actor: Some(actor) } => {
+            if admin_mode_cookie_active(&headers) {
+                admin_response("admin", true, true)
+            } else {
+                partner_response(
+                    &pool,
+                    &actor.twitch_login,
+                    &actor.twitch_user_id,
+                    true,
+                    false,
+                )
+                .await
+            }
+        }
+        DashboardAuthLevel::Admin { actor: None } => admin_response("admin", false, true),
         DashboardAuthLevel::Partner { twitch_login, twitch_user_id, .. } => {
-            partner_response(&pool, twitch_login, twitch_user_id).await
+            partner_response(&pool, twitch_login, twitch_user_id, false, false).await
         }
     }
+}
+
+fn admin_mode_cookie_active(headers: &HeaderMap) -> bool {
+    headers
+        .get(header::COOKIE)
+        .and_then(|value| value.to_str().ok())
+        .map(|raw| {
+            raw.split(';').any(|pair| {
+                pair.trim()
+                    .split_once('=')
+                    .map(|(name, value)| {
+                        name.trim() == ADMIN_MODE_COOKIE && value.trim() == "1"
+                    })
+                    .unwrap_or(false)
+            })
+        })
+        .unwrap_or(false)
 }
 
 // ── Unauthentifiziert ───────────────────────────────────────────────────────
@@ -103,6 +138,8 @@ fn unauth_payload() -> serde_json::Value {
         "authLevel": "none",
         "demoMode": false,
         "isAdmin": false,
+        "adminEligible": false,
+        "adminMode": false,
         "isLocalhost": false,
         "canViewAllStreamers": false,
         "twitchLogin": null,
@@ -131,7 +168,7 @@ fn unauth_payload() -> serde_json::Value {
 
 // ── Admin / Localhost ───────────────────────────────────────────────────────
 
-fn admin_response(level: &'static str) -> Response {
+fn admin_response(level: &'static str, admin_eligible: bool, admin_mode: bool) -> Response {
     let plan = json!({
         "planId": "analysis_dashboard",
         "planName": "Erweitert (Admin)",
@@ -148,6 +185,8 @@ fn admin_response(level: &'static str) -> Response {
         "authLevel": level,
         "demoMode": false,
         "isAdmin": true,
+        "adminEligible": admin_eligible,
+        "adminMode": admin_mode,
         "isLocalhost": is_localhost,
         "canViewAllStreamers": true,
         "twitchLogin": null,
@@ -177,7 +216,13 @@ fn admin_response(level: &'static str) -> Response {
 
 // ── Partner-Session ─────────────────────────────────────────────────────────
 
-async fn partner_response(pool: &PgPool, login: &str, user_id: &str) -> Response {
+async fn partner_response(
+    pool: &PgPool,
+    login: &str,
+    user_id: &str,
+    admin_eligible: bool,
+    admin_mode: bool,
+) -> Response {
     let access = tb_analytics::partner_access::load_partner_access_state(pool, login, user_id)
         .await
         .unwrap_or_else(|e| {
@@ -214,6 +259,8 @@ async fn partner_response(pool: &PgPool, login: &str, user_id: &str) -> Response
         "authLevel": "partner",
         "demoMode": false,
         "isAdmin": false,
+        "adminEligible": admin_eligible,
+        "adminMode": admin_mode,
         "isLocalhost": false,
         "canViewAllStreamers": false,
         "twitchLogin": login,
@@ -273,11 +320,14 @@ mod tests {
     use axum::{
         body::Body,
         extract::ConnectInfo,
-        http::{Request, StatusCode},
+        http::{HeaderMap, HeaderValue, Request, StatusCode},
         routing::get,
         Extension, Router,
     };
+    use crate::auth::level::AdminActor;
+    use sqlx::postgres::{PgConnectOptions, PgPoolOptions};
     use std::net::SocketAddr;
+    use std::time::Duration;
     use tb_http_core::ExpectedToken;
     use tower::ServiceExt;
 
@@ -303,6 +353,68 @@ mod tests {
             b = b.header("x-internal-token", t);
         }
         b.body(Body::empty()).unwrap()
+    }
+
+    fn unavailable_pool() -> PgPool {
+        PgPoolOptions::new()
+            .acquire_timeout(Duration::from_millis(10))
+            .connect_lazy_with(
+                PgConnectOptions::new()
+                    .host("127.0.0.1")
+                    .port(1)
+                    .database("tb_dashboard_api_auth_status_test"),
+            )
+    }
+
+    fn twitch_admin() -> DashboardAuthLevel {
+        DashboardAuthLevel::Admin {
+            actor: Some(AdminActor {
+                twitch_user_id: "42".to_string(),
+                twitch_login: "earlysalty".to_string(),
+            }),
+        }
+    }
+
+    async fn json_body(response: Response) -> serde_json::Value {
+        let body = axum::body::to_bytes(response.into_body(), 16 * 1024)
+            .await
+            .unwrap();
+        serde_json::from_slice(&body).unwrap()
+    }
+
+    #[tokio::test]
+    async fn twitch_admin_ohne_mode_cookie_sieht_partner_praesentation() {
+        let response = auth_status_handler(
+            twitch_admin(),
+            State(unavailable_pool()),
+            HeaderMap::new(),
+        )
+        .await;
+        let value = json_body(response).await;
+
+        assert_eq!(value["isAdmin"], false);
+        assert_eq!(value["adminEligible"], true);
+        assert_eq!(value["adminMode"], false);
+        assert_ne!(value["plan"]["tier"], "extended");
+        assert_ne!(value["plan"]["planName"], "Erweitert (Admin)");
+    }
+
+    #[tokio::test]
+    async fn twitch_admin_mit_mode_cookie_sieht_admin_praesentation() {
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            axum::http::header::COOKIE,
+            HeaderValue::from_static("other=abc; tb_admin_mode=1"),
+        );
+        let response =
+            auth_status_handler(twitch_admin(), State(unavailable_pool()), headers).await;
+        let value = json_body(response).await;
+
+        assert_eq!(value["isAdmin"], true);
+        assert_eq!(value["adminEligible"], true);
+        assert_eq!(value["adminMode"], true);
+        assert_eq!(value["plan"]["tier"], "extended");
+        assert_eq!(value["plan"]["planName"], "Erweitert (Admin)");
     }
 
     #[tokio::test]
@@ -342,6 +454,8 @@ mod tests {
         assert_eq!(v["level"], "localhost");
         assert_eq!(v["isLocalhost"], true);
         assert_eq!(v["isAdmin"], true);
+        assert_eq!(v["adminEligible"], false);
+        assert_eq!(v["adminMode"], true);
         assert_eq!(v["canViewAllStreamers"], true);
     }
 
@@ -354,6 +468,7 @@ mod tests {
         // Alle erwarteten Felder müssen vorhanden sein
         for field in &[
             "authenticated", "level", "authLevel", "demoMode", "isAdmin",
+            "adminEligible", "adminMode",
             "isLocalhost", "canViewAllStreamers", "twitchLogin", "adminDefaultStreamer",
             "displayName", "partnerStatus", "technicalPauseReason", "operationalState",
             "canAccessAnalyticsDashboard", "tokenErrorGraceExpiresAt", "csrfToken",

@@ -126,6 +126,27 @@ pub fn build_session_cookie(
     cookie
 }
 
+/// Baut ein Browser-Session-Cookie ohne persistente Ablaufzeit.
+///
+/// Ohne `Max-Age`/`Expires` verwirft der Browser das Cookie beim Ende der
+/// Browser-Session. Die übrigen Sicherheitsattribute entsprechen den normalen
+/// Dashboard-Session-Cookies.
+pub fn build_transient_session_cookie(
+    name: &str,
+    value: &str,
+    secure: bool,
+    same_site: SameSite,
+) -> String {
+    let mut cookie = format!(
+        "{name}={value}; Path=/; HttpOnly; SameSite={}",
+        same_site.as_str()
+    );
+    if secure {
+        cookie.push_str("; Secure");
+    }
+    cookie
+}
+
 /// Baut einen `Set-Cookie`-Header-Wert, der eine Session-Cookie **löscht**
 /// (Logout). `Max-Age=0` + leerer Wert (Python: `clear_session_cookie`).
 pub fn clear_session_cookie(name: &str, secure: bool, same_site: SameSite) -> String {
@@ -1455,6 +1476,18 @@ mod tests {
         let c = build_session_cookie(PARTNER_COOKIE_NAME, "v", false, SameSite::Lax, 21600);
         assert!(!c.contains("Secure"), "kein Secure bei secure=false");
         assert!(c.contains("HttpOnly"));
+    }
+
+    #[test]
+    fn transient_session_cookie_hat_keine_ablaufzeit() {
+        let c = build_transient_session_cookie("tb_admin_mode", "1", true, SameSite::Lax);
+        assert!(c.starts_with("tb_admin_mode=1;"));
+        assert!(c.contains("Path=/"));
+        assert!(c.contains("HttpOnly"));
+        assert!(c.contains("SameSite=Lax"));
+        assert!(c.contains("Secure"));
+        assert!(!c.contains("Max-Age"));
+        assert!(!c.contains("Expires"));
     }
 
     #[test]

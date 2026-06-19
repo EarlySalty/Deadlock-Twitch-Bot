@@ -1,3 +1,11 @@
+## #235 — Admin sieht das Dashboard jetzt standardmäßig wie ein normaler Nutzer
+
+**Ausgangslage:** Wer als Administrator eingeloggt war, bekam im Streamer-Dashboard automatisch alles freigeschaltet — den höchsten Tarif und jede Funktion, unabhängig vom tatsächlichen Plan. Das war bequem, verdeckte aber die echte Nutzersicht: War für reguläre Nutzer etwas gesperrt, leer oder kaputt, fiel das nicht auf, weil die Admin-Ansicht alles überschrieb.
+
+**Was geändert wurde:** Das eigene Kanal-Dashboard zeigt einem Admin jetzt standardmäßig genau das, was ein normaler Nutzer sieht — den echten Tarif samt der zugehörigen Sperren und Hinweise. Der volle Admin-Zugriff lässt sich bei Bedarf über einen neuen Schalter „Admin-Modus" in der Seitenleiste gezielt einschalten; ist er aktiv, erinnert ein Hinweisband oben daran. Der Modus gilt nur für die laufende Sitzung und schaltet sich nach dem Abmelden oder Schließen des Browsers von selbst wieder ab. Die separaten Admin-Werkzeuge bleiben unverändert erreichbar.
+
+**Wie es jetzt läuft:** Nach dem Login landet ein Admin in der normalen Nutzeransicht und erkennt damit sofort, wenn für echte Nutzer etwas nicht stimmt. Ein Klick auf „Admin-Modus aktivieren" schaltet den vollen Zugriff frei, „Admin-Modus beenden" oder das Hinweisband führen zurück. So bleibt der Blick auf die tatsächliche Nutzererfahrung erhalten, ohne dass Admin-Rechte verloren gehen.
+
 ## #234 — Rust-Cutover stabilisiert und fehlerhafte Hintergrundpfade gestoppt
 
 **Problem:** Nach der Umstellung des Twitch-Bots liefen mehrere Hintergrundfunktionen entgegen der getroffenen Entscheidungen automatisch weiter. Gleichzeitig scheiterten Event-Daten und Clip-Metadaten an abweichenden Datenbanktypen, Diagnose-Endpunkte lieferten nur Scheinantworten und dauerhaft blockierte Chat-Abonnements wurden bei jedem Abgleich erneut als Fehler gezählt.

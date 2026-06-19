@@ -7,6 +7,7 @@ pub mod admin_billing;
 pub mod admin_config;
 pub mod admin_legal;
 pub mod admin_manual_plan;
+pub mod admin_mode;
 pub mod admin_roadmap;
 pub mod billing_profile;
 pub mod billing_stripe_sync;
