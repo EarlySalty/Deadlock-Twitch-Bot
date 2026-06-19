@@ -46,6 +46,7 @@ use crate::api::ChatApi;
 use crate::channel_classifier::ChannelClassifier;
 use crate::chatter_tracking::ChatterTracker;
 use crate::commands::CommandEngine;
+use crate::conversation_scam::ConversationScamGuard;
 use crate::fun_responses::FunResponses;
 use crate::global_chatter_ban::GlobalChatterBanEnforcer;
 use crate::mention_scoring::{score_mention_patterns, MentionResolver, WHITELISTED_BOTS};
@@ -116,7 +117,11 @@ impl ReviewLog {
         let safe_content: String = content.replace('\n', " ").chars().take(500).collect();
         let line = format!(
             "{ts}\t[{status}]\t{channel}\t{}\t{chatter_id}\t{}\t{safe_content}\n",
-            if chatter_login.is_empty() { "-" } else { chatter_login },
+            if chatter_login.is_empty() {
+                "-"
+            } else {
+                chatter_login
+            },
             if reason.is_empty() { "-" } else { reason },
         );
         if let Some(parent) = target.parent() {
@@ -175,7 +180,10 @@ impl ModAlerter {
             "global_ban" => ("🚫 Global-Ban ausgeführt", 0xED4245),
             "sus_invite" => ("⚠️ Verdächtiger Discord-Link", 0xFEE75C),
             "sus_spam" => ("👀 Verdächtige Nachricht", 0xFEE75C),
-            "scam_pitch_timeout" => ("🛡️ Account-Takeover erkannt — Quarantäne (reversibel)", 0xFEE75C),
+            "scam_pitch_timeout" => (
+                "🛡️ Account-Takeover erkannt — Quarantäne (reversibel)",
+                0xFEE75C,
+            ),
             "scam_pitch_warn" => ("⚠️ Scam-Pitch erkannt — Verwarnung", 0xFEE75C),
             _ => ("ℹ️ Moderation", 0x5865F2),
         };
@@ -191,7 +199,11 @@ impl ModAlerter {
             lines.push(format!("**Grund:** {reason}"));
         }
         if !content.is_empty() {
-            let safe: String = content.chars().take(300).collect::<String>().replace('`', "'");
+            let safe: String = content
+                .chars()
+                .take(300)
+                .collect::<String>()
+                .replace('`', "'");
             lines.push(format!("**Nachricht:** `{safe}`"));
         }
 
@@ -370,6 +382,7 @@ pub struct ChatPipelineParts {
     pub tracker: Arc<ChatterTracker>,
     pub global_ban: Arc<GlobalChatterBanEnforcer>,
     pub scam_pitch: Arc<ScamPitchDetector>,
+    pub conversation_scam: Arc<ConversationScamGuard>,
     pub spam_filter: Arc<SpamFilter>,
     pub ai_reviewer: Arc<SpamAiReviewer>,
     pub moderation: Arc<ModerationEngine>,
@@ -434,6 +447,11 @@ impl ChatPipeline {
             p.tracker.track(event).await;
             return;
         }
+
+        // Conversation-Scam-Guard: eigener, fehlertoleranter Hintergrundpfad.
+        // Der Guard lädt sein per-Kanal-Opt-out selbst und blockiert die übrige
+        // Chat-Pipeline weder durch DB- noch durch MiniMax-Latenz.
+        p.conversation_scam.observe(event);
 
         // Schritt 5: Global-Chatter-Ban (Z. 1589–1595) — Aktion über die
         // ModerationEngine, exakt wie Python via _auto_ban_and_cleanup.
@@ -513,7 +531,10 @@ impl ChatPipeline {
         }
 
         // Schritt 7: Spam-Score + Auto-Ban (Z. 1602–1737)
-        if self.run_spam_check(event, &channel_login, &chatter_login).await {
+        if self
+            .run_spam_check(event, &channel_login, &chatter_login)
+            .await
+        {
             return;
         }
 
@@ -799,10 +820,30 @@ mod tests {
     use super::*;
 
     #[test]
+    fn conversation_scam_guard_wird_nach_partner_gate_fire_and_forget_aufgerufen() {
+        let source = include_str!("pipeline.rs");
+        let partner_gate = source
+            .find("if !class.is_partner")
+            .expect("Partner-Gate fehlt");
+        let call_needle = ["p.conversation_scam", ".observe(event);"].concat();
+        let guard_call = source
+            .find(&call_needle)
+            .expect("Conversation-Scam-Guard-Wiring fehlt");
+        assert!(guard_call > partner_gate);
+    }
+
+    #[test]
     fn review_log_zeile_format() {
         let dir = std::env::temp_dir().join(format!("tb_chat_reviewlog_{}", std::process::id()));
         let log = ReviewLog::new(&dir);
-        log.record("kanal1", "spammer", "123", "böser\ninhalt", "SUSPICIOUS(2)", "Phrase(x)");
+        log.record(
+            "kanal1",
+            "spammer",
+            "123",
+            "böser\ninhalt",
+            "SUSPICIOUS(2)",
+            "Phrase(x)",
+        );
         log.record("kanal1", "spammer", "123", "inhalt", "BANNED", "");
 
         let sus = std::fs::read_to_string(dir.join("twitch_suspicious.log")).unwrap();
@@ -832,7 +873,10 @@ mod tests {
             ("global_ban", "🚫 Global-Ban ausgeführt"),
             ("sus_invite", "⚠️ Verdächtiger Discord-Link"),
             ("sus_spam", "👀 Verdächtige Nachricht"),
-            ("scam_pitch_timeout", "🛡️ Account-Takeover erkannt — Quarantäne (reversibel)"),
+            (
+                "scam_pitch_timeout",
+                "🛡️ Account-Takeover erkannt — Quarantäne (reversibel)",
+            ),
             ("scam_pitch_warn", "⚠️ Scam-Pitch erkannt — Verwarnung"),
             ("anderes", "ℹ️ Moderation"),
         ] {
@@ -841,7 +885,10 @@ mod tests {
                 "global_ban" => ("🚫 Global-Ban ausgeführt", 0xED4245),
                 "sus_invite" => ("⚠️ Verdächtiger Discord-Link", 0xFEE75C),
                 "sus_spam" => ("👀 Verdächtige Nachricht", 0xFEE75C),
-                "scam_pitch_timeout" => ("🛡️ Account-Takeover erkannt — Quarantäne (reversibel)", 0xFEE75C),
+                "scam_pitch_timeout" => (
+                    "🛡️ Account-Takeover erkannt — Quarantäne (reversibel)",
+                    0xFEE75C,
+                ),
                 "scam_pitch_warn" => ("⚠️ Scam-Pitch erkannt — Verwarnung", 0xFEE75C),
                 _ => ("ℹ️ Moderation", 0x5865F2),
             };
