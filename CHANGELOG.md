@@ -1,3 +1,11 @@
+## #233 — Scam-Schutz jetzt im Dashboard steuerbar
+
+**Ausgangslage:** Der KI-Scam-Wächter prüft Erstschreiber im Chat auf aufgesetzte Betrugsmaschen (etwa Beziehungs- oder Wachstums-Pitches), die einfache Wortfilter durchrutschen. Er lief bereits im Hintergrund und konnte je nach Vorgabe automatisch bannen, Fälle zur Sichtung sammeln oder nur melden — aber Partner hatten keine Oberfläche, um dieses Verhalten einzustellen oder gemeldete Fälle nachzusehen. Steuern ließ sich das nur über Chat-Befehle und interne Schalter.
+
+**Was geändert wurde:** In der Verwaltung gibt es jetzt einen Bereich „Scam-Schutz". Dort lässt sich der Schutz an- und abschalten, das Verhalten bei sehr hoher Sicherheit wählen (automatisch bannen, automatisch Timeout oder nur melden) und über zwei Schwellen festlegen, ab welcher eingeschätzten Sicherheit automatisch gehandelt und ab welcher ein Fall überhaupt zur Sichtung vorgeschlagen wird. Darunter listet eine Queue die offenen Verdachtsfälle.
+
+**Wie es läuft:** Jeder Verdachtsfall zeigt den betroffenen Account, die eingeschätzte Sicherheit, die Kategorie und die Begründung des Wächters; auf Wunsch klappt der zugrunde liegende Chat-Auszug auf. Pro Fall kann der Partner direkt bannen oder ihn als harmlos abhaken; ein versehentlicher oder automatischer Bann lässt sich mit einem Klick zurücknehmen — das entsperrt den Account wieder und fließt dem Wächter als Fehlalarm ins Lernen ein. Die Vorschlagsschwelle ist an die Auto-Schwelle gekoppelt und kann nie über ihr liegen.
+
 ## #232 — Bestehende Twitch-Admin-Sessions automatisch ins gemeinsame SSO übernommen
 
 **Problem:** Bereits vor der SSO-Korrektur ausgestellte Twitch-Admin-Cookies waren im Python-Dashboard weiterhin gültig, im zentralen Auth-Dienst aber unbekannt. Dadurch blieb Twitch geöffnet, während das Discord-Admin-Dashboard trotz identischem Cookie erneut zur Anmeldung leitete.
