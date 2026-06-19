@@ -31,7 +31,8 @@ export interface TitleInsight {
 }
 
 export async function fetchTitleSuggestion(
-  body: TitleSuggestRequest
+  body: TitleSuggestRequest,
+  csrfToken?: string | null
 ): Promise<TitleSuggestResult> {
   if (isPreviewLocalhost()) {
     return getPreviewTitleSuggestion() as TitleSuggestResult;
@@ -40,7 +41,10 @@ export async function fetchTitleSuggestion(
   const url = buildApiUrl('/title/suggest');
   return fetchJson<TitleSuggestResult>(url, withCookieCredentials({
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    headers: {
+      'Content-Type': 'application/json',
+      ...(csrfToken ? { 'X-CSRF-Token': csrfToken } : {}),
+    },
     body: JSON.stringify(body),
     signal: AbortSignal.timeout(120_000),
   }));

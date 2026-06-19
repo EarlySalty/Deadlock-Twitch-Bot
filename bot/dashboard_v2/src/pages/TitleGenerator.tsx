@@ -19,6 +19,7 @@ import {
   type TitleHistoryEntry,
   type TitleSuggestResult,
 } from '@/api/title';
+import { useAuthStatus } from '@/hooks/useAnalytics';
 import { isPreviewLocalhost } from '@/preview/routes';
 
 interface TitleGeneratorProps {
@@ -62,6 +63,7 @@ function CopyButton({ text }: { text: string }) {
 }
 
 export function TitleGenerator({ streamer }: TitleGeneratorProps) {
+  const { data: authStatus } = useAuthStatus();
   const [keywords, setKeywords] = useState('');
   const [includeLive, setIncludeLive] = useState(false);
   const [result, setResult] = useState<TitleSuggestResult | null>(null);
@@ -79,7 +81,7 @@ export function TitleGenerator({ streamer }: TitleGeneratorProps) {
       keywords: keywords.trim(),
       include_live: includeLive,
       streamer,
-    }),
+    }, authStatus?.csrfToken ?? authStatus?.csrf_token),
     onSuccess: (data) => setResult(data),
   });
 
@@ -95,10 +97,16 @@ export function TitleGenerator({ streamer }: TitleGeneratorProps) {
     }
 
     try {
-      const res = await fetch('/twitch/api/v2/channel/title', {
+      const params = new URLSearchParams();
+      if (streamer) params.set('streamer', streamer);
+      const csrfToken = authStatus?.csrfToken ?? authStatus?.csrf_token;
+      const res = await fetch(`/twitch/api/v2/channel/title?${params.toString()}`, {
         method: 'PATCH',
         credentials: 'same-origin',
-        headers: { 'Content-Type': 'application/json' },
+        headers: {
+          'Content-Type': 'application/json',
+          ...(csrfToken ? { 'X-CSRF-Token': csrfToken } : {}),
+        },
         body: JSON.stringify({ title }),
       });
       if (res.status === 403) {
