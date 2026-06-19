@@ -521,6 +521,34 @@ class DashboardOAuthStateBindingTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(ctx.exception.location, "/twitch/admin")
         self.assertEqual(handler.delegated_discord_authorize_calls, [])
 
+    async def test_discord_auth_login_migrates_existing_local_session_to_central_store(self) -> None:
+        handler = _AuthHarness()
+        handler._discord_admin_sessions["legacy-session"] = {
+            "auth_type": "discord_admin",
+            "user_id": 42,
+            "username": "legacy",
+            "display_name": "Legacy Admin",
+            "expires_at": time.time() + 3600,
+        }
+        request = _make_request(
+            query={"next": "/twitch/admin"},
+            cookies={handler._discord_admin_cookie_name: "legacy-session"},
+            path_qs="/twitch/auth/discord/login?next=%2Ftwitch%2Fadmin",
+        )
+
+        with self.assertRaises(web.HTTPFound) as ctx:
+            await handler.discord_auth_login(request)
+
+        self.assertEqual(ctx.exception.location, "/twitch/admin")
+        self.assertEqual(handler.delegated_discord_authorize_calls, [])
+        self.assertEqual(
+            handler.registered_central_sessions[0]["session_id"],
+            "legacy-session",
+        )
+        refreshed = ctx.exception.cookies.get(handler._discord_admin_cookie_name)
+        self.assertEqual(refreshed.value, "legacy-session")
+        self.assertEqual(refreshed["domain"], "deutsche-deadlock-community.de")
+
     async def test_discord_auth_login_rejects_malicious_next_variants(self) -> None:
         handler = _AuthHarness()
 

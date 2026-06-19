@@ -1461,11 +1461,35 @@ class _DashboardAuthMixin:
                 existing = await self._fetch_discord_dashboard_session(session_id)
         next_path = self._normalize_discord_admin_next_path(request.query.get("next"))
         if existing:
+            session_id = (
+                (request.cookies.get(self._discord_admin_cookie_name) or "").strip()
+            )
+            if session_id and existing.get("source") != "discord_dashboard":
+                registered = await self._register_session_in_discord_dashboard(
+                    session_id=session_id,
+                    user_id=int(existing.get("user_id") or 0),
+                    username=str(existing.get("username") or "").strip(),
+                    display_name=str(existing.get("display_name") or "").strip(),
+                    expires_at=float(
+                        existing.get("expires_at")
+                        or time.time() + self._discord_admin_session_ttl
+                    ),
+                )
+                if not registered:
+                    response = web.Response(
+                        text="Die bestehende Admin-Session konnte nicht zentral übernommen werden.",
+                        status=503,
+                    )
+                    self._set_no_store_headers(response)
+                    return response
             destination = self._safe_internal_redirect(
                 self._canonical_discord_admin_post_login_path(next_path),
                 fallback="/twitch/admin",
             )
-            raise web.HTTPFound(destination)  # lgtm[py/url-redirection]
+            response = web.HTTPFound(destination)  # lgtm[py/url-redirection]
+            if session_id:
+                self._set_discord_admin_cookie(response, request, session_id)
+            raise response
 
         complete_url = self._build_discord_admin_route_url("/twitch/auth/discord/complete")
         authorize_url, _state_id = await self._fetch_delegated_discord_authorize_url(

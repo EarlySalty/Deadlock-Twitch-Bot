@@ -1,3 +1,11 @@
+## #232 — Bestehende Twitch-Admin-Sessions automatisch ins gemeinsame SSO übernommen
+
+**Problem:** Bereits vor der SSO-Korrektur ausgestellte Twitch-Admin-Cookies waren im Python-Dashboard weiterhin gültig, im zentralen Auth-Dienst aber unbekannt. Dadurch blieb Twitch geöffnet, während das Discord-Admin-Dashboard trotz identischem Cookie erneut zur Anmeldung leitete.
+
+**Änderung:** Beim Twitch-Admin-Login wird eine vorhandene lokale Admin-Session jetzt synchron in den zentralen Session-Store übernommen. Gleichzeitig wird derselbe Cookie-Wert erneut für die gemeinsame Domain ausgestellt.
+
+**Ergebnis:** Bestehende funktionierende Twitch-Admin-Sessions schalten ohne erneuten Discord-Login auch das Discord-Admin-Dashboard frei. Neue Sessions verwenden weiterhin direkt den zentralen 14-Tage-Store.
+
 ## #231 — Twitch-Admin an die gemeinsame langlebige Admin-Session gebunden
 
 **Problem:** Das Twitch-Admin-Dashboard verwendete denselben Cookie-Namen wie das zentrale Discord-Admin-Dashboard, erzeugte die Session aber zunächst nur in seinem eigenen Store und kopierte sie anschließend unverbindlich im Hintergrund. Bei Neustarts oder einem fehlgeschlagenen Kopiervorgang zeigte derselbe Cookie deshalb je nach Dashboard auf eine unbekannte Session und der Login begann erneut.
