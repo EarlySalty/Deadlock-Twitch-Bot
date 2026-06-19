@@ -119,7 +119,7 @@ export function CategoryTimingsChart({ data }: CategoryTimingsChartProps) {
 
       <div className="h-72">
         <ResponsiveContainer width="100%" height="100%">
-          <ComposedChart data={rows} margin={{ top: 10, right: 10, bottom: 0, left: 0 }}>
+          <ComposedChart data={rows as object[]} margin={{ top: 10, right: 10, bottom: 0, left: 0 }}>
             <CartesianGrid strokeDasharray="3 3" stroke="#2d3139" vertical={false} />
             <XAxis
               dataKey="label"

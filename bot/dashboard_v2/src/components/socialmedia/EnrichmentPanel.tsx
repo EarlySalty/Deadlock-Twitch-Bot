@@ -9,9 +9,9 @@ import {
   Save,
   Sparkles,
   X,
-  Youtube,
+  Video,
   Music2,
-  Instagram,
+  Camera,
   ScrollText,
   Wand2,
 } from 'lucide-react';
@@ -49,9 +49,9 @@ const PLATFORMS: Array<{
   titleLimit: number;
   hashtagTarget: string;
 }> = [
-  { id: 'youtube', label: 'YouTube Shorts', Icon: Youtube, tone: 'text-[#ff5b5b]', titleLimit: 100, hashtagTarget: '5–10' },
+  { id: 'youtube', label: 'YouTube Shorts', Icon: Video, tone: 'text-[#ff5b5b]', titleLimit: 100, hashtagTarget: '5–10' },
   { id: 'tiktok', label: 'TikTok', Icon: Music2, tone: 'text-[#69e1ff]', titleLimit: 150, hashtagTarget: '8–12' },
-  { id: 'instagram', label: 'Instagram Reels', Icon: Instagram, tone: 'text-[#ff8acc]', titleLimit: 125, hashtagTarget: '8–15' },
+  { id: 'instagram', label: 'Instagram Reels', Icon: Camera, tone: 'text-[#ff8acc]', titleLimit: 125, hashtagTarget: '8–15' },
 ];
 
 interface EnrichmentPanelProps {

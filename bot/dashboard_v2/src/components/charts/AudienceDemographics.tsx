@@ -154,7 +154,7 @@ export function AudienceDemographics({ data }: AudienceDemographicsProps) {
                         border: '1px solid #374151',
                         borderRadius: '8px',
                       }}
-                      formatter={(value?: number) => [`${(value ?? 0).toFixed(1)}%`, 'Anteil']}
+                      formatter={(value) => [`${((value as number) ?? 0).toFixed(1)}%`, 'Anteil']}
                     />
                   </PieChart>
                 </ResponsiveContainer>
