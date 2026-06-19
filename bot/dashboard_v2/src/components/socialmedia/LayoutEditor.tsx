@@ -145,6 +145,8 @@ function SourcePreview({ layout, camEnabled, mode, onChange, selectedBox, onSele
     return (
       <div
         key={boxId}
+        // Pointer-Handler liest Refs erst beim tatsächlichen Event, nicht beim Rendern.
+        // eslint-disable-next-line react-hooks/refs
         onPointerDown={(e) => handlePointerDown(e, boxId, 'move')}
         className={`absolute cursor-move select-none transition-shadow ${isSelected ? 'z-20' : 'z-10'}`}
         style={{

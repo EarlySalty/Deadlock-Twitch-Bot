@@ -646,12 +646,15 @@ async fn reconcile_chat_subscriptions(
 
     let mut ok = 0usize;
     let mut failed = 0usize;
+    let mut blocked = 0usize;
     for (login, broadcaster_id) in &rows {
         if manager
             .ensure_chat_subscriptions(broadcaster_id, bot_user_id, login)
             .await
         {
             ok += 1;
+        } else if manager.chat_subscriptions_permanently_blocked(broadcaster_id) {
+            blocked += 1;
         } else {
             failed += 1;
         }
@@ -659,6 +662,7 @@ async fn reconcile_chat_subscriptions(
     tracing::info!(
         kanäle = rows.len(),
         ok,
+        blocked,
         failed,
         "chat-sub-reconcile abgeschlossen"
     );

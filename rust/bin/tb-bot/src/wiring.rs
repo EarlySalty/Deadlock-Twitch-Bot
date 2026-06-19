@@ -1,6 +1,7 @@
 //! Composition-Root des Monitorings: Adapter zwischen tb-monitoring-Ports
 //! und den Transport-Crates (Hexagonal — die Ports kennen kein Helix).
 
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 
 use serde_json::Value;
@@ -351,6 +352,8 @@ pub struct LivePingRoleAuto {
     pub guild_id: u64,
 }
 
+static ROLE_CREATE_UNSUPPORTED: AtomicBool = AtomicBool::new(false);
+
 /// Rollenname wie Python `_sanitize_live_ping_role_name`
 /// (`embeds_mixin.py:79-86`): nur `[A-Za-z0-9 _-]` behalten, Whitespace
 /// kollabieren, leer → "STREAMER", Suffix " ist live", auf 100 Zeichen cappen.
@@ -373,19 +376,41 @@ impl LivePingRoleProvider for LivePingRoleAuto {
     async fn ensure_role(&self, login: &str, _twitch_user_id: &str) -> Option<i64> {
         let name = sanitize_live_ping_role_name(login);
         let reason = format!("Auto-created Twitch live ping role for {login}");
-        let role_id = match self
+        let existing = self
             .relay
-            .create_role(self.guild_id, &name, true, &reason)
+            .find_role_by_name(self.guild_id, &name)
             .await
-        {
-            Ok(id) if id > 0 => id,
-            Ok(_) => {
-                tracing::warn!(login, "Live-Ping-Rolle angelegt, aber role_id == 0");
-                return None;
-            }
-            Err(error) => {
-                tracing::warn!(%error, login, "Auto-Anlage der Live-Ping-Rolle fehlgeschlagen");
-                return None;
+            .unwrap_or_else(|error| {
+                tracing::debug!(%error, login, "Bestehende Live-Ping-Rolle nicht ladbar");
+                None
+            });
+        let role_id = if let Some(role_id) = existing {
+            role_id
+        } else if ROLE_CREATE_UNSUPPORTED.load(Ordering::Relaxed) {
+            return None;
+        } else {
+            match self
+                .relay
+                .create_role(self.guild_id, &name, true, &reason)
+                .await
+            {
+                Ok(id) if id > 0 => id,
+                Ok(_) => {
+                    tracing::warn!(login, "Live-Ping-Rolle angelegt, aber role_id == 0");
+                    return None;
+                }
+                Err(tb_transport_discord::DiscordError::BrokerError { status: 404, .. }) => {
+                    ROLE_CREATE_UNSUPPORTED.store(true, Ordering::Relaxed);
+                    tracing::warn!(
+                        "Live-Ping-Rollenanlage vom laufenden Broker nicht unterstützt; \
+                     weitere Anlageversuche bis zum Neustart ausgesetzt"
+                    );
+                    return None;
+                }
+                Err(error) => {
+                    tracing::warn!(%error, login, "Auto-Anlage der Live-Ping-Rolle fehlgeschlagen");
+                    return None;
+                }
             }
         };
 

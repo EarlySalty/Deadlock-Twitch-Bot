@@ -1,3 +1,11 @@
+## #234 — Rust-Cutover stabilisiert und fehlerhafte Hintergrundpfade gestoppt
+
+**Problem:** Nach der Umstellung des Twitch-Bots liefen mehrere Hintergrundfunktionen entgegen der getroffenen Entscheidungen automatisch weiter. Gleichzeitig scheiterten Event-Daten und Clip-Metadaten an abweichenden Datenbanktypen, Diagnose-Endpunkte lieferten nur Scheinantworten und dauerhaft blockierte Chat-Abonnements wurden bei jedem Abgleich erneut als Fehler gezählt.
+
+**Änderung:** Highlight-Erstellung, Clip-Abruf und Stream-Transkription sind jetzt standardmäßig aus und benötigen ein ausdrückliches Opt-in. Die betroffenen Datenbanktypen und Schreibpfade wurden vereinheitlicht, Dead-Letter-Einträge können tatsächlich erneut eingeplant werden und Diagnoseansichten lesen den echten persistenten Zustand. Dauerhaft blockierte Chat-Abonnements werden separat ausgewiesen. Die Live-Rollenlogik verwendet vorhandene Rollen wieder und unterdrückt wiederholte fehlgeschlagene Anlageversuche.
+
+**Ergebnis:** Der Bot startet mit den vereinbarten deaktivierten Funktionen, erzeugt keine wiederkehrenden Typfehler mehr und liefert bei Diagnose und Wiederanlauf belastbare Ergebnisse. Die reparierten Clip-Pfade bleiben vorhanden und getestet, werden aber bis zu einer bewussten Freigabe nicht ausgeführt.
+
 ## #232 — Bestehende Twitch-Admin-Sessions automatisch ins gemeinsame SSO übernommen
 
 **Problem:** Bereits vor der SSO-Korrektur ausgestellte Twitch-Admin-Cookies waren im Python-Dashboard weiterhin gültig, im zentralen Auth-Dienst aber unbekannt. Dadurch blieb Twitch geöffnet, während das Discord-Admin-Dashboard trotz identischem Cookie erneut zur Anmeldung leitete.

@@ -1,4 +1,4 @@
-const PREVIEW_MODE = import.meta.env.MODE === 'preview';
+const PREVIEW_MODE = import.meta.env?.MODE === 'preview';
 const LOCALHOST_HOSTNAMES = new Set(['localhost', '127.0.0.1']);
 
 export const PREVIEW_ANALYTICS_ROUTE = PREVIEW_MODE ? '/' : '/analyse';

@@ -21,6 +21,7 @@ const REMOVE_ROLE_PATH: &str = "/internal/master/v1/discord/member/remove-role";
 const CREATE_ROLE_PATH: &str = "/internal/master/v1/discord/role/create";
 const SEND_DM_PATH: &str = "/internal/master/v1/discord/send-dm";
 const MEMBERS_PATH: &str = "/internal/master/v1/discord/members";
+const ROLES_PATH: &str = "/internal/master/v1/discord/roles";
 const TIMEOUT: Duration = Duration::from_secs(10);
 const RETRY_WAIT: Duration = Duration::from_secs(2);
 const MAX_ATTEMPTS: u32 = 2;
@@ -103,6 +104,19 @@ struct CreateRoleRequest {
 struct CreateRoleResponse {
     #[serde(deserialize_with = "deserialize_u64_flexible")]
     role_id: u64,
+}
+
+#[derive(Debug, serde::Deserialize)]
+struct RoleInfo {
+    #[serde(deserialize_with = "deserialize_u64_flexible")]
+    id: u64,
+    name: String,
+}
+
+#[derive(Debug, serde::Deserialize)]
+struct RolesResponse {
+    #[serde(default)]
+    roles: Vec<RoleInfo>,
 }
 
 /// Akzeptiert eine u64 sowohl als JSON-Number als auch als dezimalen String.
@@ -201,9 +215,7 @@ impl BrokerRelay {
             return Err(DiscordError::BrokerError { status, body });
         }
         let envelope: BrokerEnvelope<ResolvedDiscordUser> = resp.json().await?;
-        Ok(envelope
-            .result
-            .filter(|user| envelope.ok && user.found))
+        Ok(envelope.result.filter(|user| envelope.ok && user.found))
     }
 
     /// Fügt einem Guild-Mitglied eine Rolle hinzu
@@ -287,6 +299,35 @@ impl BrokerRelay {
         Ok(parsed.role_id)
     }
 
+    /// Sucht eine bestehende Rolle über den read-only Diagnose-Endpunkt.
+    /// Unterstützt den laufenden Python-Broker, der Rollen lesen, aber noch
+    /// nicht selbst erstellen kann.
+    pub async fn find_role_by_name(
+        &self,
+        guild_id: u64,
+        name: &str,
+    ) -> Result<Option<u64>, DiscordError> {
+        let url = format!("{}{}", self.base_url, ROLES_PATH);
+        let resp = self
+            .client
+            .get(&url)
+            .query(&[("guild_id", guild_id.to_string())])
+            .timeout(Duration::from_secs(15))
+            .send()
+            .await?;
+        if !resp.status().is_success() {
+            let status = resp.status().as_u16();
+            let body = resp.text().await.unwrap_or_default();
+            return Err(DiscordError::BrokerError { status, body });
+        }
+        let parsed: RolesResponse = resp.json().await?;
+        Ok(parsed
+            .roles
+            .into_iter()
+            .find(|role| role.name.eq_ignore_ascii_case(name.trim()))
+            .map(|role| role.id))
+    }
+
     /// Holt alle nicht-Bot-Guild-Member vom Broker (loopback, kein Token).
     /// `GET /internal/master/v1/discord/members`
     pub async fn list_members(&self) -> Result<Vec<GuildMember>, DiscordError> {
@@ -356,10 +397,7 @@ impl DiscordBackend for BrokerRelay {
         Ok(result)
     }
 
-    async fn send_alert_embed(
-        &self,
-        payload: SendAlertEmbed,
-    ) -> Result<SendResult, DiscordError> {
+    async fn send_alert_embed(&self, payload: SendAlertEmbed) -> Result<SendResult, DiscordError> {
         let key = Self::idempotency_key("alert-embed", &payload);
         let resp = self.post_with_retry(SEND_PATH, &payload, &key).await?;
 
@@ -639,6 +677,28 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(role_id, 42);
+    }
+
+    #[tokio::test]
+    async fn find_role_by_name_findet_python_broker_shape() {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/internal/master/v1/discord/roles"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "ok": true,
+                "guild_id": "1",
+                "roles": [
+                    {"id": "42", "name": "nani ist live", "position": 4, "member_count": 0}
+                ]
+            })))
+            .mount(&server)
+            .await;
+
+        let relay = BrokerRelay::new(&test_config(&server.uri())).unwrap();
+        assert_eq!(
+            relay.find_role_by_name(1, "NANI IST LIVE").await.unwrap(),
+            Some(42)
+        );
     }
 
     #[tokio::test]

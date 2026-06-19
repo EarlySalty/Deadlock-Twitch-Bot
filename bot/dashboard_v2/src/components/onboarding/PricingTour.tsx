@@ -376,6 +376,7 @@ export function PricingTour({ onComplete }: PricingTourProps) {
   );
 }
 
+// eslint-disable-next-line react-refresh/only-export-components
 export function resetPricingTour() {
   localStorage.removeItem(STORAGE_KEY);
   localStorage.removeItem(PENDING_KEY);

@@ -36,11 +36,12 @@ const CHANNEL_PROFILE_INTERVAL: f64 = 4.0 * 60.0 * 60.0;
 const TRANSCRIPT_TRIM_INTERVAL: Duration = Duration::from_secs(15 * 60);
 const AI_TIMEOUT: Duration = Duration::from_secs(180);
 
-/// `ENGAGEMENT_STREAM_TRANSCRIPTS_ENABLED` (Default an). Aus → kein Capture.
+/// Stream-Transkription ist nach Grillme Block 19 standardmäßig AUS.
+/// Ein späterer, bewusst gewählter Nicht-OpenAI-Weg kann denselben Gate nutzen.
 fn stream_transcripts_enabled() -> bool {
     match std::env::var("ENGAGEMENT_STREAM_TRANSCRIPTS_ENABLED") {
-        Ok(v) => !matches!(v.trim().to_lowercase().as_str(), "" | "0" | "false" | "no" | "off"),
-        Err(_) => true,
+        Ok(v) => v.trim() == "1",
+        Err(_) => false,
     }
 }
 
@@ -250,7 +251,7 @@ pub async fn schedule_stream_transcripts(pool: PgPool) {
                     for (channel, _steam) in load_enabled_channels(&pool).await {
                         run_transcribe_capture(&pool, &channel, &capturer, t).await;
                     }
-                    if last_trim.map_or(true, |t| t.elapsed() >= TRANSCRIPT_TRIM_INTERVAL) {
+                    if last_trim.is_none_or(|t| t.elapsed() >= TRANSCRIPT_TRIM_INTERVAL) {
                         last_trim = Some(Instant::now());
                         let _ = StreamTranscripts::new(pool.clone()).trim_segments(None, None).await;
                     }
@@ -273,12 +274,29 @@ pub fn spawn_all(pool: PgPool) {
     tokio::spawn(schedule_global_sentiment(pool.clone()));
     tokio::spawn(schedule_soul_anchor(pool.clone()));
     tokio::spawn(schedule_channel_profile(pool.clone()));
-    tokio::spawn(schedule_stream_transcripts(pool));
+    if stream_transcripts_enabled() {
+        tokio::spawn(schedule_stream_transcripts(pool));
+    } else {
+        tracing::info!("Engagement-Stream-Transkription deaktiviert");
+    }
     tracing::info!(
         "Engagement-Background-Jobs gestartet (thread-extractor=15min, match-poller=30s, \
          auto-closer=1h, conv-trim=24h, global-sentiment=20min, soul-anchor=3h, \
          channel-profile=4h, stream-transcripts=poll)"
     );
+}
+
+#[cfg(test)]
+mod gate_tests {
+    use super::stream_transcripts_enabled;
+
+    #[test]
+    fn transkription_ist_ohne_explizites_opt_in_aus() {
+        unsafe {
+            std::env::remove_var("ENGAGEMENT_STREAM_TRANSCRIPTS_ENABLED");
+        }
+        assert!(!stream_transcripts_enabled());
+    }
 }
 
 #[cfg(test)]

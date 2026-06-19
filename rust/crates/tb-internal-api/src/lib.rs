@@ -211,12 +211,12 @@ pub fn build_internal_router(
             &format!("{base}/sessions/:session_id"),
             get(session_detail::session_detail_handler),
         )
-        // Stubs für ehemalige Python-only-Routen — Python läuft nicht mehr.
-        // observability + chatters: leere Antworten (Python-in-Process-State entfällt).
-        // eventsub/requeue: Rust verarbeitet nativ, kein manuelles Requeue nötig.
+        // Native Diagnose- und Recovery-Routen:
+        // Observability/Chatters lesen persistenten Zustand, Requeue verdrahtet
+        // den echten Dead-Letter-Store.
         // chat-action: echtes Senden über den ChatActionPort (Bot-Token-Bridge,
         //   tb-bot-Composition-Root); ohne Port (Chat aus) antwortet der Handler 503.
-        // raid/requirements: 503 bis Discord-DM via Master-Broker (8770) steht.
+        // raid/requirements: bewusst entfernt (410), keine Discord-DM.
         .route(
             &format!("{base}/debug/observability"),
             get(python_stubs::observability_handler),

@@ -43,6 +43,7 @@ interface ViewersProps {
   days: TimeRange;
 }
 
+// eslint-disable-next-line react-refresh/only-export-components
 export const SEGMENT_CONFIG: Record<string, { label: string; color: string; bgClass: string }> = {
   dedicated: { label: 'Dedicated', color: '#22c55e', bgClass: 'bg-success/10 text-success border-success/20' },
   regular: { label: 'Regular', color: '#3b82f6', bgClass: 'bg-primary/10 text-primary border-primary/20' },

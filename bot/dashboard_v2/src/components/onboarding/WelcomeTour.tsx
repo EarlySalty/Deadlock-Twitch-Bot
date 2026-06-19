@@ -523,6 +523,7 @@ export function WelcomeTour({ onComplete, completionLabel = 'Fertig' }: WelcomeT
   );
 }
 
+// eslint-disable-next-line react-refresh/only-export-components
 export function resetWelcomeTour() {
   localStorage.removeItem(STORAGE_KEY);
 }

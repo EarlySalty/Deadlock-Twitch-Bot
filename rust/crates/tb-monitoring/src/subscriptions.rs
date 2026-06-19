@@ -398,6 +398,18 @@ impl SubscriptionManager {
         ok
     }
 
+    pub fn chat_subscriptions_permanently_blocked(&self, broadcaster_id: &str) -> bool {
+        let broadcaster_id = broadcaster_id.trim();
+        ["channel.chat.message", "channel.chat.notification"]
+            .into_iter()
+            .any(|sub_type| {
+                self.perm_failed
+                    .lock()
+                    .expect("perm_failed lock")
+                    .contains(&(sub_type.to_string(), broadcaster_id.to_string()))
+            })
+    }
+
     /// `true`, wenn der Kanal ein passiver Lurker ist — monitored-only **und**
     /// kein aktiver Partner **und** ohne Raid-Auth. Lädt die drei Flags aus
     /// `twitch_streamers`, `twitch_streamers_partner_state` und `twitch_raid_auth`
