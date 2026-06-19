@@ -132,14 +132,10 @@ struct IdentityRow {
 
 /// Quell-Zeile aus `twitch_streamers` (Python `_load_streamer_row`).
 ///
-/// Die in Python als Literale mitgelieferten Partner-Spalten
-/// (`require_discord_link`=0, `next_link_check_at`=NULL, `raid_bot_enabled`=0,
-/// `silent_ban`=0, `silent_raid`=0, `live_ping_role_id`=NULL,
-/// `live_ping_enabled`=1) sind hier Konstanten in der Promote-Logik.
+/// Prod enthält hier nur Twitch-Identität + `created_at`; Discord-Identität
+/// liegt in `twitch_streamer_identities` und wird vor der Promotion geladen.
 #[derive(sqlx::FromRow, Debug)]
 struct SourceStreamerRow {
-    discord_user_id: Option<String>,
-    discord_display_name: Option<String>,
     /// `created_at` ist TIMESTAMPTZ — als `::text` selektiert, damit der
     /// `partnered_at`-Fallback dasselbe DB-Rendering erhält wie Pythons
     /// datetime-Bind in eine TEXT-Spalte.
@@ -248,8 +244,7 @@ async fn load_streamer_source_row(
 ) -> Result<Option<SourceStreamerRow>, sqlx::Error> {
     sqlx::query_as::<_, SourceStreamerRow>(
         r#"
-        SELECT discord_user_id, discord_display_name,
-               created_at::text AS created_at
+        SELECT created_at::text AS created_at
         FROM twitch_streamers
         WHERE ($1 <> '' AND twitch_user_id = $1)
            OR ($2 <> '' AND LOWER(twitch_login) = $2)
@@ -642,8 +637,10 @@ pub async fn promote_streamer_to_partner(
     // Partner-Werte: explizite Parameter des Followup-Pfads + Zeilen-Fallbacks.
     // Für require_discord_link/silent_ban/silent_raid/live_ping_* gilt der im
     // Modul-Header dokumentierte Bugfix: aktiven Wert bewahren statt wipen.
-    let require_discord_link =
-        bool_int(active.and_then(|a| a.require_discord_link).map(i64::from), 0);
+    let require_discord_link = bool_int(
+        active.and_then(|a| a.require_discord_link).map(i64::from),
+        0,
+    );
     let last_description = active.and_then(|a| a.last_description.clone());
     let last_link_ok = active.and_then(|a| a.last_link_ok);
     let added_by = active.and_then(|a| a.added_by.clone());
@@ -656,30 +653,23 @@ pub async fn promote_streamer_to_partner(
         (0i32, 1i32)
     } else {
         (
-            bool_int(active.and_then(|a| a.manual_partner_opt_out).map(i64::from), 0),
+            bool_int(
+                active.and_then(|a| a.manual_partner_opt_out).map(i64::from),
+                0,
+            ),
             bool_int(active.and_then(|a| a.raid_bot_enabled).map(i64::from), 0),
         )
     };
     let silent_ban = bool_int(active.and_then(|a| a.silent_ban).map(i64::from), 0);
     let silent_raid = bool_int(active.and_then(|a| a.silent_raid).map(i64::from), 0);
     let live_ping_role_id = active.and_then(|a| a.live_ping_role_id);
-    let live_ping_enabled =
-        bool_int(active.and_then(|a| a.live_ping_enabled).map(i64::from), 1);
+    let live_ping_enabled = bool_int(active.and_then(|a| a.live_ping_enabled).map(i64::from), 1);
 
-    // Identitäts-Präzedenz (Python Z. 901-923): expliziter Parameter →
-    // Quell-Zeile als Fallback wenn leer.
-    let mut identity_discord_user_id = non_empty(args.discord_user_id.as_deref());
-    if identity_discord_user_id.is_none() {
-        if let Some(ref source) = source_row {
-            identity_discord_user_id = non_empty(source.discord_user_id.as_deref());
-        }
-    }
-    let mut identity_display_name = non_empty(args.discord_display_name.as_deref());
-    if identity_display_name.is_none() {
-        if let Some(ref source) = source_row {
-            identity_display_name = non_empty(source.discord_display_name.as_deref());
-        }
-    }
+    // Identität kommt aus expliziten Followup-Parametern. Der Sync-Pfad liest
+    // bestehende Werte vorher aus `twitch_streamer_identities`; `twitch_streamers`
+    // trägt in Prod keine Discord-Spalten mehr.
+    let identity_discord_user_id = non_empty(args.discord_user_id.as_deref());
+    let identity_display_name = non_empty(args.discord_display_name.as_deref());
     let identity_is_on_discord = Some(bool_int(Some(i64::from(args.is_on_discord)), 0));
 
     upsert_streamer_identity(
@@ -1003,7 +993,12 @@ impl PartnerSetupService {
 
         // Schritt 1: Partner-State-Sync.
         if let Err(e) = self
-            .sync_partner_state_after_auth(twitch_user_id, twitch_login, state_discord_user_id, true)
+            .sync_partner_state_after_auth(
+                twitch_user_id,
+                twitch_login,
+                state_discord_user_id,
+                true,
+            )
             .await
         {
             tracing::error!("sync_partner_state_after_auth failed for {twitch_login}: {e}");
