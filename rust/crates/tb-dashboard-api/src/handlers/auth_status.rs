@@ -106,7 +106,7 @@ fn admin_mode_cookie_active(headers: &HeaderMap) -> bool {
             raw.split(';').any(|pair| {
                 pair.trim()
                     .split_once('=')
-                    .map(|(name, value)| name.trim() == ADMIN_MODE_COOKIE && value.trim() == "1")
+                    .map(|(name, value)| name.trim() == ADMIN_MODE_COOKIE && value.trim() == "2")
                     .unwrap_or(false)
             })
         })
@@ -404,7 +404,7 @@ mod tests {
         let mut headers = HeaderMap::new();
         headers.insert(
             axum::http::header::COOKIE,
-            HeaderValue::from_static("other=abc; tb_admin_mode=1"),
+            HeaderValue::from_static("other=abc; tb_admin_mode=2"),
         );
         let response =
             auth_status_handler(twitch_admin(), State(unavailable_pool()), headers).await;
@@ -415,6 +415,21 @@ mod tests {
         assert_eq!(value["adminMode"], true);
         assert_eq!(value["plan"]["tier"], "extended");
         assert_eq!(value["plan"]["planName"], "Erweitert (Admin)");
+    }
+
+    #[tokio::test]
+    async fn alter_mode_cookie_wird_nicht_uebernommen() {
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            axum::http::header::COOKIE,
+            HeaderValue::from_static("tb_admin_mode=1"),
+        );
+        let response =
+            auth_status_handler(twitch_admin(), State(unavailable_pool()), headers).await;
+        let value = json_body(response).await;
+
+        assert_eq!(value["isAdmin"], false);
+        assert_eq!(value["adminMode"], false);
     }
 
     #[tokio::test]

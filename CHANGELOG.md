@@ -2,7 +2,7 @@
 
 **Problem:** Die ersten beiden Umsetzungen waren jeweils nur teilweise konsistent: Zuerst wechselte die Statusanzeige in die Nutzeransicht, während die Startseite weiterhin einen Admin-Parameter verlangte und dadurch eine Login-Schleife auslöste. Danach wurde der Admin-Status fest erzwungen, wodurch „Beenden“ wirkungslos blieb. Ein weiterer Versuch ließ Status- und Startseitenabfragen gleichzeitig wechseln und konnte einen leeren Bildschirm erzeugen.
 
-**Änderung:** Die eigene Twitch-Identität gilt nun in beiden Darstellungen als stabile Grundlage. Beim Umschalten wird zuerst der neue Status bestätigt und erst danach werden die davon abhängigen Startseiten- und Partnerdaten neu geladen. Während des Wechsels bleiben alte Abfragen angehalten, damit kein Request mit gemischtem Admin-/Nutzerzustand entsteht.
+**Änderung:** Die eigene Twitch-Identität gilt nun in beiden Darstellungen als stabile Grundlage. Beim Umschalten wird zuerst der neue Status bestätigt und erst danach werden die davon abhängigen Startseiten- und Partnerdaten neu geladen. Während des Wechsels bleiben alte Abfragen angehalten, damit kein Request mit gemischtem Admin-/Nutzerzustand entsteht. Alte Sitzungsschalter aus den fehlerhaften Vorversionen werden nicht übernommen; ein Vollzugriff muss nach diesem Update bewusst neu aktiviert werden.
 
 **Ergebnis:** Das Dashboard startet in der echten Nutzeransicht des eigenen Kanals. „Admin-Modus aktivieren“ schaltet den Vollzugriff für die aktuelle Browser-Sitzung ein; „Beenden“ kehrt ohne Umleitung, Login-Schleife oder leeren Bildschirm zur Nutzeransicht zurück.
 

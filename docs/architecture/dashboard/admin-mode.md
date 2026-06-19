@@ -19,8 +19,11 @@ entsperrte.
   **echten** Plan (via `resolve_plan_snapshot`, i. d. R. `Free`), inkl. echter
   Sperren/Upgrade-Hinweise wie ein normaler Partner.
 - Per Schalter aktiviert er den Admin-Vollzugriff. Das setzt ein **Session-Cookie**
-  `tb_admin_mode=1` (kein Max-Age → stirbt beim Browser-Close; wird beim Logout
+  `tb_admin_mode=2` (kein Max-Age → stirbt beim Browser-Close; wird beim Logout
   gelöscht). „Pro Session" — nach Ablauf/Logout ist wieder Default aktiv.
+  Der Wert ist versioniert: alte `=1`-Cookies aus den fehlerhaften Vorversionen
+  gelten bewusst als inaktiv, damit ein bestehender Browser nicht ungefragt im
+  Override startet.
 
 Der **Admin-Host** (`admin.*`, Discord-Admin via `master_dash_session`) und
 **Localhost** bleiben unberührt voll-Admin: dort gibt es keinen Schalter
@@ -47,7 +50,7 @@ benötigen weiterhin `?streamer=`.
 ### Backend (`tb-dashboard-api`)
 
 `handlers/auth_status.rs` — Verzweigung nach Auth-Level **und** Cookie
-`tb_admin_mode` (aktiv = vorhanden und `== "1"`). Jede Payload trägt zwei neue
+`tb_admin_mode` (aktiv = vorhanden und `== "2"`). Jede Payload trägt zwei neue
 Felder:
 
 | Level | Cookie | Antwort | `adminEligible` | `adminMode` |
@@ -61,7 +64,7 @@ Felder:
 
 `handlers/admin_mode.rs` — `POST /twitch/api/v2/admin-mode`, Body `{ "enabled": bool }`.
 - Gate: nur `Admin { actor: Some(_) }`, sonst `403`.
-- `enabled:true` → Set-Cookie `tb_admin_mode=1` (HttpOnly, SameSite=Lax, Path=/,
+- `enabled:true` → Set-Cookie `tb_admin_mode=2` (HttpOnly, SameSite=Lax, Path=/,
   Secure in prod, **kein Max-Age**). `enabled:false` → Cookie löschen.
 - Antwort `{ "adminMode": bool }`.
 
