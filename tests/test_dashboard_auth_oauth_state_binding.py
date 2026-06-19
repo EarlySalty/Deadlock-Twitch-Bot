@@ -83,6 +83,9 @@ class _AuthHarness(_DashboardAuthMixin):
             "display_name": "Partner One",
         }
         self.saved_discord_profiles: list[dict[str, object]] = []
+        self.registered_central_sessions: list[dict[str, object]] = []
+        self.central_registration_ok = True
+        self.central_session_payload: dict[str, object] | None = None
         self._state_repo = _InMemoryAuthStateRepo(self)
 
     def _safe_discord_admin_login_redirect(self, raw_url: str | None) -> str:
@@ -124,6 +127,17 @@ class _AuthHarness(_DashboardAuthMixin):
 
     def _peer_host(self, request):
         return str(getattr(request, "remote", "") or "")
+
+    async def _register_session_in_discord_dashboard(self, **payload) -> bool:
+        self.registered_central_sessions.append(dict(payload))
+        return self.central_registration_ok
+
+    async def _fetch_discord_dashboard_session(self, session_id: str):
+        if self.central_session_payload is None:
+            return None
+        payload = dict(self.central_session_payload)
+        payload["session_id"] = session_id
+        return payload
 
     def _effective_client_host(self, request, peer_host):
         del request
@@ -489,6 +503,24 @@ class DashboardOAuthStateBindingTests(unittest.IsolatedAsyncioTestCase):
         )
         self.assertEqual(ctx.exception.cookies, {})
 
+    async def test_discord_auth_login_reuses_central_cookie_without_second_oauth(self) -> None:
+        handler = _AuthHarness()
+        handler.central_session_payload = {
+            "auth_type": "discord_admin",
+            "user_id": "42",
+        }
+        request = _make_request(
+            query={"next": "/twitch/admin"},
+            path_qs="/twitch/auth/discord/login?next=%2Ftwitch%2Fadmin",
+        )
+        request.cookies = {handler._discord_admin_cookie_name: "shared-session"}
+
+        with self.assertRaises(web.HTTPFound) as ctx:
+            await handler.discord_auth_login(request)
+
+        self.assertEqual(ctx.exception.location, "/twitch/admin")
+        self.assertEqual(handler.delegated_discord_authorize_calls, [])
+
     async def test_discord_auth_login_rejects_malicious_next_variants(self) -> None:
         handler = _AuthHarness()
 
@@ -622,6 +654,7 @@ class DashboardOAuthStateBindingTests(unittest.IsolatedAsyncioTestCase):
             path="/",
             max_age=str(handler._discord_admin_session_ttl),
         )
+        self.assertEqual(admin_cookie["domain"], "deutsche-deadlock-community.de")
         discord_session_cache = handler._dashboard_auth_state_cache("_discord_admin_sessions")
         self.assertIn("discord-session-123", discord_session_cache.data())
         self.assertEqual(
@@ -632,6 +665,27 @@ class DashboardOAuthStateBindingTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(
             discord_session_cache.get("discord-session-123").get("post_fp_destination"),
             "/twitch/admin",
+        )
+        self.assertEqual(
+            handler.registered_central_sessions[0]["session_id"],
+            "discord-session-123",
+        )
+
+    async def test_discord_auth_complete_sets_no_cookie_when_central_registration_fails(self) -> None:
+        handler = _AuthHarness()
+        handler.central_registration_ok = False
+        request = _make_request(
+            query={"state_id": "delegated-state"},
+            path_qs="/twitch/auth/discord/complete",
+        )
+
+        response = await handler.discord_auth_complete(request)
+
+        self.assertEqual(response.status, 503)
+        self.assertEqual(response.cookies, {})
+        self.assertEqual(
+            handler._dashboard_auth_state_cache("_discord_admin_sessions").data(),
+            {},
         )
 
 

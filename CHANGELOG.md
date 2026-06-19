@@ -1,3 +1,11 @@
+## #231 — Twitch-Admin an die gemeinsame langlebige Admin-Session gebunden
+
+**Problem:** Das Twitch-Admin-Dashboard verwendete denselben Cookie-Namen wie das zentrale Discord-Admin-Dashboard, erzeugte die Session aber zunächst nur in seinem eigenen Store und kopierte sie anschließend unverbindlich im Hintergrund. Bei Neustarts oder einem fehlgeschlagenen Kopiervorgang zeigte derselbe Cookie deshalb je nach Dashboard auf eine unbekannte Session und der Login begann erneut.
+
+**Änderung:** Das Twitch-Admin-Dashboard registriert eine neue Session jetzt synchron beim zentralen Auth-Dienst, bevor es das gemeinsame Cookie setzt. Das Cookie gilt für die gesamte Community-Domain. Existiert bereits eine zentrale Session, wird sie beim Twitch-Login direkt wiederverwendet statt einen zweiten Discord-OAuth-Lauf zu starten.
+
+**Ergebnis:** Ein Login entsperrt beide Admin-Dashboards für 14 Tage. Die Session bleibt nach Neustarts gültig; kann der zentrale Store eine neue Session nicht speichern, wird kein halbgültiges Cookie mehr ausgegeben.
+
 ## #230 — Channel Intelligence: Freemium-Zugang für Partner entsperrt
 
 **Problem:** Der Übersicht-Endpoint (`/twitch/api/v2/overview`) warf für alle Partner-Sessions 401 „unauthorized" zurück, obwohl die Freemium-Paywall-Logik im Code bereits vollständig implementiert war. Ursache: Der Handler verwendete `AuthLevel` (versteht nur den internen `X-Internal-Token`) statt `DashboardAuthLevel` (versteht Partner-Cookie, Admin-Cookie, Localhost). Partner kamen nie bis zur Plan-Prüfung — sie wurden am Eingang abgeblockt.

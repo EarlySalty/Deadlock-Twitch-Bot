@@ -42,6 +42,10 @@ TWITCH_PUBLIC_DASHBOARD_BASE_URL = (
     os.getenv("TWITCH_PUBLIC_DASHBOARD_BASE_URL")
     or "https://deutsche-deadlock-community.de"
 ).strip().rstrip("/")
+SHARED_ADMIN_COOKIE_DOMAIN = (
+    os.getenv("SHARED_ADMIN_COOKIE_DOMAIN")
+    or "deutsche-deadlock-community.de"
+).strip().lstrip(".").lower()
 _DDC_PENTEST_DISABLE_RATE_LIMITS = str(
     os.getenv("DDC_PENTEST_DISABLE_RATE_LIMITS", "0")
 ).strip().lower() not in {"", "0", "false", "no", "off"}
@@ -940,6 +944,7 @@ class _DashboardAuthMixin:
             secure=self._is_secure_request(request),
             samesite="Lax",
             path="/",
+            domain=SHARED_ADMIN_COOKIE_DOMAIN or None,
         )
 
     def _clear_discord_admin_cookie(
@@ -951,6 +956,7 @@ class _DashboardAuthMixin:
             httponly=True,
             samesite="Lax",
             secure=self._is_secure_request(request),
+            domain=SHARED_ADMIN_COOKIE_DOMAIN or None,
         )
 
     def _get_discord_admin_session(self, request: web.Request) -> dict[str, Any] | None:
@@ -1447,6 +1453,12 @@ class _DashboardAuthMixin:
                 status=503,
             )
         existing = self._get_discord_admin_session(request)
+        if not existing:
+            session_id = (
+                (request.cookies.get(self._discord_admin_cookie_name) or "").strip()
+            )
+            if session_id:
+                existing = await self._fetch_discord_dashboard_session(session_id)
         next_path = self._normalize_discord_admin_next_path(request.query.get("next"))
         if existing:
             destination = self._safe_internal_redirect(
@@ -1570,6 +1582,24 @@ class _DashboardAuthMixin:
             "fp_pending": True,
             "post_fp_destination": destination,
         }
+        registered = await self._register_session_in_discord_dashboard(
+            session_id=session_id,
+            user_id=user_id,
+            username=username,
+            display_name=display_name,
+            expires_at=now + self._discord_admin_session_ttl,
+        )
+        if not registered:
+            log.error(
+                "AUDIT twitch-dashboard discord login failed: central session registration unavailable"
+            )
+            response = web.Response(
+                text="Die gemeinsame Admin-Session konnte nicht gespeichert werden.",
+                status=503,
+            )
+            self._set_no_store_headers(response)
+            return response
+
         self._dashboard_auth_state_cache("_discord_admin_sessions").put(
             session_id,
             discord_session_data,
@@ -1583,16 +1613,6 @@ class _DashboardAuthMixin:
             )
         except Exception as _exc:
             log.debug("Could not persist discord admin session to DB: %s", _exc)
-
-        asyncio.ensure_future(
-            self._register_session_in_discord_dashboard(
-                session_id=session_id,
-                user_id=user_id,
-                username=username,
-                display_name=display_name,
-                expires_at=now + self._discord_admin_session_ttl,
-            )
-        )
 
         log.info(
             "AUDIT twitch-dashboard discord login success: user=%s reason=%s peer=%s",
@@ -1613,16 +1633,16 @@ class _DashboardAuthMixin:
         username: str,
         display_name: str,
         expires_at: float,
-    ) -> None:
-        """Best-effort: registriert die Session auch im Discord Dashboard (Gegenrichtung)."""
+    ) -> bool:
+        """Registriert die gemeinsame Session synchron beim zentralen Dashboard."""
         base_url = self._discord_admin_base_url
         token = self._discord_oauth_internal_api_token()
         if not base_url or not token:
-            return
+            return False
         url = f"{base_url}/internal/twitch/v1/discord/import-session"
         try:
             async with aiohttp.ClientSession() as client:
-                await client.post(
+                async with client.post(
                     url,
                     json={
                         "session_id": session_id,
@@ -1633,9 +1653,13 @@ class _DashboardAuthMixin:
                     },
                     headers={"X-Internal-Token": token},
                     timeout=aiohttp.ClientTimeout(total=3.0),
-                )
+                ) as response:
+                    if response.status != 200:
+                        return False
+                    payload = await response.json()
+                    return bool(payload.get("ok"))
         except Exception:
-            pass
+            return False
 
     async def discord_link_auth_login(self, request: web.Request) -> web.StreamResponse:
         if not self._check_rate_limit(request, max_requests=10, window_seconds=60.0):
