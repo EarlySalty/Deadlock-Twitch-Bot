@@ -1,3 +1,11 @@
+## #236 — Admin-Modus vorübergehend zurückgenommen (Lade-Schleife behoben)
+
+**Problem:** Der in #235 eingeführte Admin-Modus führte beim Admin-Login zu einer Lade-Schleife: Das Dashboard sprang ununterbrochen zwischen Ladeanzeige und Anmeldung hin und her und ließ sich nicht öffnen. Ursache war eine Inkonsistenz — die Startseite forderte für die zugrunde liegende Sitzung zwingend die Angabe eines Kanals, die in der neuen Standard-Ansicht nicht mitgeschickt wurde, was wiederholt zu einer Neuanmeldung führte.
+
+**Änderung:** Die automatische Umschaltung auf die Nutzer-Ansicht wurde vorerst deaktiviert; ein Admin sieht wieder die vollständige Admin-Ansicht wie zuvor. Zusätzlich wurde ein versteckter Datenbank-Typfehler beim Laden des Partner-Zugangsstatus korrigiert.
+
+**Ergebnis:** Das Dashboard öffnet wieder normal. Der dedizierte Admin-Modus wird überarbeitet und kommt sauber verdrahtet zurück.
+
 ## #235 — Admin sieht das Dashboard jetzt standardmäßig wie ein normaler Nutzer
 
 **Ausgangslage:** Wer als Administrator eingeloggt war, bekam im Streamer-Dashboard automatisch alles freigeschaltet — den höchsten Tarif und jede Funktion, unabhängig vom tatsächlichen Plan. Das war bequem, verdeckte aber die echte Nutzersicht: War für reguläre Nutzer etwas gesperrt, leer oder kaputt, fiel das nicht auf, weil die Admin-Ansicht alles überschrieb.

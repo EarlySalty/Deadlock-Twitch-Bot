@@ -69,7 +69,9 @@ pub struct AccessState {
 struct PartnerRow {
     status: Option<String>,
     archived_at: Option<String>,
-    manual_partner_opt_out: Option<i64>,
+    // DB-Spalte ist INT4 (vgl. admin_streamers.rs); Option<i64> brach das Decode
+    // und ließ auth-status für jeden Partner-Lookup fail-open laufen.
+    manual_partner_opt_out: Option<i32>,
     technical_pause_reason: Option<String>,
 }
 
