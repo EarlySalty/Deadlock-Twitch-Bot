@@ -5,6 +5,7 @@ import { useAuthStatus } from '@/hooks/useAnalytics';
 import { PREVIEW_HOME_ROUTE, isPreviewModeEnabled } from '@/preview/routes';
 import { AIEngagementSection } from '@/components/verwaltung/AIEngagementSection';
 import { SilentNotificationsSection } from '@/components/verwaltung/SilentNotificationsSection';
+import { ScamGuardSection } from '@/components/verwaltung/ScamGuardSection';
 import {
   ArrowLeft,
   ArrowRight,
@@ -328,6 +329,8 @@ export function VerwaltungPage() {
         </motion.section>
 
         <SilentNotificationsSection />
+
+        <ScamGuardSection />
 
         <AIEngagementSection />
 

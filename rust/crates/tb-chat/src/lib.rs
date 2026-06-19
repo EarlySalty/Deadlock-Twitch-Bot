@@ -26,6 +26,7 @@ pub mod api;
 pub mod channel_classifier;
 pub mod chatter_tracking;
 pub mod commands;
+pub mod conversation_scam;
 pub mod fun_responses;
 pub mod global_ban_sweep;
 pub mod global_chatter_ban;
@@ -48,33 +49,37 @@ pub mod types;
 pub use api::{BanOutcome, ChatApi};
 pub use channel_classifier::{ChannelClass, ChannelClassifier};
 pub use chatter_tracking::ChatterTracker;
-pub use fun_responses::FunResponses;
-pub use global_chatter_ban::GlobalChatterBanEnforcer;
-pub use mention_scoring::{score_mention_patterns, MentionResolver, WHITELISTED_BOTS};
-pub use pipeline::{
-    ChatPipeline, ChatPipelineParts, ModAlerter, PgHelixMentionResolver, ReviewLog,
-    SCAM_PITCH_TIMEOUT_REASON,
-};
-pub use sus_invite::{SusInviteCheck, SusInviteHit};
 pub use commands::{
     AutobanEntry, CommandEngine, DiscordLinkPort, InvitePort, LastAutobanStore, RaidCommandPort,
     RaidStatusInfo, SuperModPort,
 };
+pub use conversation_scam::{
+    ConversationScamGuard, DialogState, GuardMode, GuardSettings, MiniMaxScamJudge, ScamJudge,
+    Verdict, VerdictKind,
+};
+pub use fun_responses::FunResponses;
 pub use global_ban_sweep::{GlobalBanSweeper, PartnerRoster};
+pub use global_chatter_ban::GlobalChatterBanEnforcer;
 pub use lurker_policy::{
     is_passive_lurker_channel, should_attempt_runtime_heal, PASSIVE_LURKER_DETAIL,
     PASSIVE_LURKER_STATE,
 };
+pub use mention_scoring::{score_mention_patterns, MentionResolver, WHITELISTED_BOTS};
 pub use moderation::{
     AutoBanRequest, ChannelGuardPort, HelixChatClient, ModerationEngine, OutboundSuppressionCheck,
     OutboundSuppressionStore, TimeoutGuard,
+};
+pub use pipeline::{
+    ChatPipeline, ChatPipelineParts, ModAlerter, PgHelixMentionResolver, ReviewLog,
+    SCAM_PITCH_TIMEOUT_REASON,
 };
 pub use promos::{
     NoopSuppressionCheck, PartnerChannelCheck, PresetPicker, PromoEngine, RandomPresetPicker,
     StaticInviteResolver,
 };
 pub use scam_pitch::{AccountAgePort, PitchDecision, ScamPitchDetector, SpamAiReviewer};
-pub use timeout_tracking::{is_bot_timeout_drop, CombinedSuppression, TimeoutTrackingChatApi};
 pub use spam_filter::{LearnedPatterns, SpamAction, SpamContext, SpamFilter, SpamVerdict};
+pub use sus_invite::{SusInviteCheck, SusInviteHit};
+pub use timeout_tracking::{is_bot_timeout_drop, CombinedSuppression, TimeoutTrackingChatApi};
 pub use token::{load_seed_tokens, BotTokenManager, SeedTokens, TokenError};
 pub use types::{ChatMessageEvent, SendOutcome};

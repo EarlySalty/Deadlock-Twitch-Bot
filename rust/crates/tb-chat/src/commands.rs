@@ -224,6 +224,17 @@ struct PartnerRow {
 // ---------------------------------------------------------------------------
 
 /// Haupt-Engine für alle Chat-Commands.
+/// Port für die Scam-Guard-Chat-Commands (`!explain`, plus `overturned`-
+/// Markierung bei `!unban`). Backing: [`crate::conversation_scam::ScamGuardCommands`].
+#[async_trait]
+pub trait ScamGuardCommandPort: Send + Sync {
+    /// Ausführliche, in Twitch-Häppchen gesplittete Erklärung des jüngsten
+    /// Scam-Falls. Leerer Vektor = kein Fall gefunden.
+    async fn explain(&self, channel_login: &str, target: Option<&str>) -> Vec<String>;
+    /// Markiert den jüngsten Scam-Ban dieses Accounts als aufgehoben.
+    async fn overturn(&self, channel_login: &str, chatter_id: &str) -> bool;
+}
+
 pub struct CommandEngine {
     pool: PgPool,
     api: Arc<dyn ChatApi>,
@@ -234,6 +245,8 @@ pub struct CommandEngine {
     autoban: Arc<dyn LastAutobanStore>,
     /// Optionaler Clip-Port (`!clip`). `None` → Migrations-Hinweis.
     clip: Option<Arc<dyn ClipPort>>,
+    /// Optionaler Scam-Guard-Port (`!explain` / `!unban`-overturn). `None` → inaktiv.
+    scam: Option<Arc<dyn ScamGuardCommandPort>>,
     /// In-memory Cooldown-Tabelle für `!invite`.
     /// `bot.py:781` — 1h pro (channel_login, chatter_login).
     invite_cooldowns: Mutex<HashMap<(String, String), Instant>>,
@@ -260,6 +273,7 @@ impl CommandEngine {
             super_mod,
             autoban,
             clip: None,
+            scam: None,
             invite_cooldowns: Mutex::new(HashMap::new()),
             title_rate_limiter: Arc::new(crate::title_ai::TitleRateLimiter::default()),
         }
@@ -269,6 +283,13 @@ impl CommandEngine {
     /// Konstruktor und die Tests unverändert bleiben.
     pub fn set_clip_port(mut self, clip: Arc<dyn ClipPort>) -> Self {
         self.clip = Some(clip);
+        self
+    }
+
+    /// Setzt den optionalen Scam-Guard-Port (`!explain` / `!unban`-overturn).
+    /// Builder-Style, damit Konstruktor und Tests unverändert bleiben.
+    pub fn set_scam_port(mut self, scam: Arc<dyn ScamGuardCommandPort>) -> Self {
+        self.scam = Some(scam);
         self
     }
 
@@ -306,6 +327,14 @@ impl CommandEngine {
             "!uban" | "!unban" => {
                 if event.is_mod_or_broadcaster() {
                     self.cmd_uban(event).await;
+                } else {
+                    self.reply(event, "Nur der Broadcaster oder Mods.").await;
+                }
+                true
+            }
+            "!explain" => {
+                if event.is_mod_or_broadcaster() {
+                    self.cmd_explain(event, args).await;
                 } else {
                     self.reply(event, "Nur der Broadcaster oder Mods.").await;
                 }
@@ -840,6 +869,10 @@ impl CommandEngine {
             .await
         {
             Ok(true) => {
+                if let Some(scam) = self.scam.as_ref() {
+                    scam.overturn(&event.broadcaster_user_login, &entry.user_id)
+                        .await;
+                }
                 self.reply(event, &format!("Unban ausgeführt für {}.", entry.login))
                     .await;
             }
@@ -847,6 +880,31 @@ impl CommandEngine {
                 self.reply(event, &format!("Unban fehlgeschlagen für {}.", entry.login))
                     .await;
             }
+        }
+    }
+
+    /// `!explain [@user]` — lässt das LLM den jüngsten Scam-Fall des Kanals (oder
+    /// eines genannten Accounts) ausführlich erklären, gesplittet in mehrere
+    /// Chat-Nachrichten (≤480 Zeichen, kein Mengen-Limit).
+    async fn cmd_explain(&self, event: &ChatMessageEvent, args: &str) {
+        let Some(scam) = self.scam.as_ref() else {
+            self.reply(event, "Die Scam-Erklärung ist auf diesem Kanal nicht aktiv.")
+                .await;
+            return;
+        };
+        let trimmed = args.trim();
+        let target = (!trimmed.is_empty()).then_some(trimmed);
+        let chunks = scam.explain(&event.broadcaster_user_login, target).await;
+        if chunks.is_empty() {
+            self.reply(
+                event,
+                "Ich habe keinen passenden Scam-Fall zum Erklären gefunden.",
+            )
+            .await;
+            return;
+        }
+        for chunk in chunks {
+            self.reply_plain(event, &chunk).await;
         }
     }
 

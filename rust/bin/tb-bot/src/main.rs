@@ -46,6 +46,9 @@ mod raid_adapters;
 mod raid_arrival_wiring;
 mod raid_oauth_impl;
 mod reauth_reminder;
+mod scam_notify_impl;
+mod scam_revoke_impl;
+mod scam_enforce_impl;
 mod score_refresh;
 mod scout_chat;
 mod shadow_review_wiring;
@@ -401,6 +404,13 @@ async fn main() {
     // über den live rotierten Bot-User-Token (ChatApi → BotTokenManager).
     let chat_action_api: Option<Arc<dyn tb_chat::ChatApi>> =
         chat_api_handle.as_ref().map(|h| h.api.clone());
+    // ChatApi-Clone für den Scam-Guard-Revoke-Port der internen API
+    // (POST /scam-guard/revoke): der Unban läuft über den live rotierten
+    // Bot-User-Token, identisch zum Auto-Ban-Pfad des Wächters.
+    let scam_revoke_api: Option<Arc<dyn tb_chat::ChatApi>> =
+        chat_api_handle.as_ref().map(|h| h.api.clone());
+    let scam_enforce_api: Option<Arc<dyn tb_chat::ChatApi>> =
+        chat_api_handle.as_ref().map(|h| h.api.clone());
 
     // Raid-Verdrahtung: mit Manager + Helix + Krypto-Key sind alle vier
     // Raid-Kopplungen echt (Auto-Raid, Arrival, Score-Refresh, Blacklist-Guard).
@@ -720,6 +730,16 @@ async fn main() {
                 pool.clone(),
                 handle.bot_token_manager(),
             );
+            // Discord-Sichtbarkeit des Scam-Wächters: postet Bans/Vorschläge in
+            // den Aufsichts-Channel (Default 1374364800817303632, per Env
+            // überschreibbar) mit Revoke-Button. Ohne Broker → None (kein Post).
+            let scam_notifier = scam_notify_impl::build_scam_notifier(
+                &settings.broker,
+                std::env::var("SCAM_GUARD_DISCORD_CHANNEL_ID")
+                    .ok()
+                    .and_then(|v| v.parse().ok())
+                    .unwrap_or(1374364800817303632),
+            );
             let runtime = chat_wiring::build_runtime(
                 handle,
                 pool.clone(),
@@ -729,6 +749,7 @@ async fn main() {
                     pool.clone(),
                     &settings.broker,
                 )),
+                scam_notifier,
                 eventsub_hooks.clone(),
             )
             .await;
@@ -820,6 +841,12 @@ async fn main() {
         tokio::spawn(tb_chat::title_jobs::schedule_weekly_insight_job(
             pool.clone(),
             600,
+        ));
+        // Self-Learning des Conversation-Scam-Guards: erstmals nach 900s, danach
+        // alle 6h aus bestätigten Scams + aufgehobenen Fehlalarmen destillieren.
+        tokio::spawn(tb_chat::conversation_scam::schedule_scam_learnings(
+            pool.clone(),
+            900,
         ));
     }
 
@@ -1120,6 +1147,10 @@ async fn main() {
     // → der Handler antwortet 503 statt stumm zu scheitern.
     let chat_action: Option<Arc<dyn tb_internal_api::ChatActionPort>> =
         chat_wiring::build_chat_action_port(chat_action_api, pool.clone());
+    let scam_revoke: Option<Arc<dyn tb_internal_api::ScamRevokePort>> =
+        scam_revoke_impl::build_scam_revoke_port(scam_revoke_api, pool.clone());
+    let scam_enforce: Option<Arc<dyn tb_internal_api::ScamEnforcePort>> =
+        scam_enforce_impl::build_scam_enforce_port(scam_enforce_api, pool.clone());
     let app = build_internal_router(
         pool,
         token,
@@ -1130,6 +1161,8 @@ async fn main() {
         eventsub_stats,
         discord_role,
         chat_action,
+        scam_revoke,
+        scam_enforce,
         legacy_proxy,
     );
 
