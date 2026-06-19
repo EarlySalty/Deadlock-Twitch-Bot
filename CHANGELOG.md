@@ -1,3 +1,11 @@
+## #237 — Admin-Modus lässt sich wieder zuverlässig beenden
+
+**Problem:** Der Admin-Modus blieb nach einem Klick auf „Beenden“ sichtbar aktiv. Der Ausschalter löschte zwar den Sitzungsschalter im Browser, die Statusabfrage meldete danach aber weiterhin fest den vollen Admin-Zugriff. Der vorherige Reparaturversuch hatte diese feste Antwort als Schutz gegen eine Login-Schleife eingebaut und damit den Ausschalter wirkungslos gemacht.
+
+**Änderung:** Die Statusabfrage wertet den Sitzungsschalter wieder aus. Gleichzeitig kann die Startseite eine Twitch-Admin-Sitzung ohne zusätzliche Partnerauswahl über den eigenen Twitch-Account auflösen. Damit ist die Ursache der früheren Login-Schleife beseitigt, ohne den Admin-Modus dauerhaft zu erzwingen.
+
+**Ergebnis:** Ohne Admin-Modus lädt direkt die echte Ansicht des eigenen Kanals. Aktivieren schaltet den Vollzugriff für die Browser-Sitzung ein; „Beenden“ entfernt ihn wieder und lädt anschließend die echte Nutzeransicht. Eine explizite Partnerauswahl bleibt im aktiven Admin-Modus möglich.
+
 ## #236 — Admin-Modus vorübergehend zurückgenommen (Lade-Schleife behoben)
 
 **Problem:** Der in #235 eingeführte Admin-Modus führte beim Admin-Login zu einer Lade-Schleife: Das Dashboard sprang ununterbrochen zwischen Ladeanzeige und Anmeldung hin und her und ließ sich nicht öffnen. Ursache war eine Inkonsistenz — die Startseite forderte für die zugrunde liegende Sitzung zwingend die Angabe eines Kanals, die in der neuen Standard-Ansicht nicht mitgeschickt wurde, was wiederholt zu einer Neuanmeldung führte.
