@@ -1,7 +1,10 @@
 import { useState, useEffect } from 'react';
-import { Menu, X, MonitorPlay } from 'lucide-react';
+import { Menu, X, MessageCircle } from 'lucide-react';
 import { useScrollSpy } from '@/hooks/useScrollSpy';
 import { AFFILIATE_PROGRAM_PATH } from '@/data/sitePaths';
+import { DISCORD_INVITE_URL } from '@/data/externalLinks';
+import { openSiteChatbot } from '@/components/layout/SiteChatbot';
+import { DiscordLogo } from '@/components/ui/DiscordLogo';
 
 interface NavLink {
   label: string;
@@ -87,19 +90,22 @@ export function Navbar() {
         {/* Right actions – desktop only */}
         <div className="hidden xl:flex items-center gap-2.5 shrink-0">
           <a
-            href="https://deutsche-deadlock-community.de/demo/twitch/demo/"
+            href={DISCORD_INVITE_URL}
             target="_blank"
             rel="noopener noreferrer"
-            className="inline-flex items-center gap-2 whitespace-nowrap border border-border bg-white/[0.03] rounded-lg px-4 py-2 text-sm text-text-secondary hover:text-text-primary hover:border-border-hover hover:bg-white/[0.07] transition-colors duration-200"
+            className="inline-flex items-center gap-2 whitespace-nowrap rounded-lg border border-[#5865F2]/50 bg-[#5865F2]/10 px-4 py-2 text-sm text-text-primary transition-colors duration-200 hover:border-[#5865F2] hover:bg-[#5865F2]/20"
           >
-            <MonitorPlay size={16} />
-            Demo ansehen
+            <DiscordLogo size={17} className="text-[#8b95ff]" />
+            Community-Discord
           </a>
           <button
-            onClick={() => scrollToId('cta')}
+            onClick={openSiteChatbot}
             className="gradient-accent whitespace-nowrap rounded-lg px-4 py-2 text-sm font-semibold text-white cursor-pointer border-none transition-opacity duration-200 hover:opacity-90"
           >
-            Partner werden
+            <span className="inline-flex items-center gap-2">
+              <MessageCircle size={16} />
+              Hilfe bekommen
+            </span>
           </button>
         </div>
 
@@ -146,23 +152,26 @@ export function Navbar() {
             )}
             <div className="flex flex-col gap-2 mt-3 pt-3 border-t border-border">
               <a
-                href="https://deutsche-deadlock-community.de/demo/twitch/demo/"
+                href={DISCORD_INVITE_URL}
                 target="_blank"
                 rel="noopener noreferrer"
-                className="inline-flex items-center justify-center gap-2 border border-border bg-white/[0.03] rounded-lg px-4 py-2 text-sm text-text-secondary hover:text-text-primary hover:border-border-hover transition-colors duration-200 text-center"
+                className="inline-flex items-center justify-center gap-2 rounded-lg border border-[#5865F2]/50 bg-[#5865F2]/10 px-4 py-2 text-center text-sm text-text-primary transition-colors duration-200 hover:border-[#5865F2] hover:bg-[#5865F2]/20"
                 onClick={() => setMenuOpen(false)}
               >
-                <MonitorPlay size={16} />
-                Demo ansehen
+                <DiscordLogo size={17} className="text-[#8b95ff]" />
+                Community-Discord
               </a>
               <button
                 onClick={() => {
-                  scrollToId('cta');
+                  openSiteChatbot();
                   setMenuOpen(false);
                 }}
                 className="gradient-accent rounded-lg px-4 py-2 text-sm font-semibold text-white cursor-pointer border-none transition-opacity duration-200 hover:opacity-90"
               >
-                Partner werden
+                <span className="inline-flex items-center justify-center gap-2">
+                  <MessageCircle size={16} />
+                  Hilfe bekommen
+                </span>
               </button>
             </div>
           </div>

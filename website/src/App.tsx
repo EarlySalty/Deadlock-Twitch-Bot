@@ -11,6 +11,7 @@ import { ClipManager } from '@/components/sections/ClipManager'
 import { Community } from '@/components/sections/Community'
 import { Security } from '@/components/sections/Security'
 import { CTA } from '@/components/sections/CTA'
+import { SiteChatbot } from '@/components/layout/SiteChatbot'
 
 export default function App() {
   return (
@@ -30,6 +31,7 @@ export default function App() {
         <CTA />
       </main>
       <Footer />
+      <SiteChatbot />
     </>
   )
 }
