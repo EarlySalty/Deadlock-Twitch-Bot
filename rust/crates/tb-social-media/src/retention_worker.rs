@@ -104,14 +104,14 @@ mod tests {
         // Clip A: abgelaufen + verworfen + reale Datei → wird gelöscht.
         let file_a = std::env::temp_dir().join("tb_retention_a.mp4");
         tokio::fs::write(&file_a, b"x").await.unwrap();
-        let a: i32 = sqlx::query_scalar("INSERT INTO twitch_clips_social_media (clip_id, streamer_login, upload_local_path, discarded_at, retention_until) VALUES ('a', 'nani', $1, NOW(), NOW() - INTERVAL '1 day') RETURNING id")
+        let _a: i32 = sqlx::query_scalar("INSERT INTO twitch_clips_social_media (clip_id, streamer_login, upload_local_path, discarded_at, retention_until) VALUES ('a', 'nani', $1, NOW(), NOW() - INTERVAL '1 day') RETURNING id")
             .bind(file_a.to_string_lossy().into_owned()).fetch_one(&pool).await.unwrap();
 
         // Clip B: abgelaufen, NICHT verworfen, tiktok aktiv aber nicht hochgeladen → behalten.
         let b: i32 = sqlx::query_scalar("INSERT INTO twitch_clips_social_media (clip_id, streamer_login, retention_until) VALUES ('b', 'nani', NOW() - INTERVAL '1 day') RETURNING id").fetch_one(&pool).await.unwrap();
 
         // Clip C: abgelaufen, NICHT verworfen, tiktok hochgeladen → voll veröffentlicht → gelöscht.
-        let c: i32 = sqlx::query_scalar("INSERT INTO twitch_clips_social_media (clip_id, streamer_login, retention_until, uploaded_tiktok) VALUES ('c', 'nani', NOW() - INTERVAL '1 day', 1) RETURNING id").fetch_one(&pool).await.unwrap();
+        let _c: i32 = sqlx::query_scalar("INSERT INTO twitch_clips_social_media (clip_id, streamer_login, retention_until, uploaded_tiktok) VALUES ('c', 'nani', NOW() - INTERVAL '1 day', 1) RETURNING id").fetch_one(&pool).await.unwrap();
 
         // Clip D: in der Zukunft → gar kein Kandidat.
         let d: i32 = sqlx::query_scalar("INSERT INTO twitch_clips_social_media (clip_id, streamer_login, retention_until) VALUES ('d', 'nani', NOW() + INTERVAL '5 days') RETURNING id").fetch_one(&pool).await.unwrap();

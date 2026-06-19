@@ -299,8 +299,8 @@ mod tests {
     /// Muster: schema-pro-Test (wie in `tb-monitoring/tests/hermetic.rs`).
     /// Parallele Tests kollidieren nicht, da jedes Schema einmalig benannt ist.
     async fn setup_db(schema: &str) -> sqlx::PgPool {
-        let url =
-            std::env::var("TB_TEST_DATABASE_URL").expect("TB_TEST_DATABASE_URL muss gesetzt sein");
+        let url = std::env::var("TB_TEST_DATABASE_URL")
+            .unwrap_or_else(|_| "postgres://postgres:tbtest@127.0.0.1:5434/postgres".to_string());
 
         // Zunächst ohne search_path verbinden, um das Schema anzulegen.
         let admin = sqlx::PgPool::connect(&url)

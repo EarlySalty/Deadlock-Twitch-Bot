@@ -70,17 +70,20 @@ impl ClipRepository {
     /// Der frühere Rust-Fetch-Pfad rief das nie auf → per-Fetch eingelesene Clips
     /// hatten `layout_override_json = NULL` statt des Defaults (social_media-1).
     ///
-    /// Migrationsbug-Fix: `twitch_clips_social_media.id` ist im Baseline-Schema
-    /// `integer` (INT4); der frühere `i64`-Decode hätte in Prod einen
-    /// sqlx-ColumnDecode-Fehler (INT4→i64) geworfen. Rückgabetyp ist daher `i32`
-    /// (passend zum Schema, identisch zu `clip_manager`).
+    /// Der Live-Bestand enthält sowohl INT4- als auch BIGINT-Varianten der ID.
+    /// Der SQL-Cast hält den bestehenden i32-API-Vertrag kompatibel.
     pub async fn register_clip(&self, rec: &ClipRecord) -> Result<(i32, bool), sqlx::Error> {
+        let created_at = chrono::DateTime::parse_from_rfc3339(&rec.created_at)
+            .map(|value| value.with_timezone(&chrono::Utc))
+            .map_err(|error| sqlx::Error::Decode(Box::new(error)))?;
+
         // Prüfe ob der Clip bereits existiert.
-        let existing: Option<i32> =
-            sqlx::query_scalar("SELECT id FROM twitch_clips_social_media WHERE clip_id = $1")
-                .bind(&rec.clip_id)
-                .fetch_optional(&self.pool)
-                .await?;
+        let existing: Option<i32> = sqlx::query_scalar(
+            "SELECT id::integer FROM twitch_clips_social_media WHERE clip_id = $1",
+        )
+        .bind(&rec.clip_id)
+        .fetch_optional(&self.pool)
+        .await?;
 
         if let Some(id) = existing {
             self.apply_layout(id, &rec.streamer_login).await;
@@ -94,7 +97,7 @@ impl ClipRepository {
                  streamer_login, twitch_user_id, created_at, duration_seconds,
                  view_count, game_name, status)
             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, 'pending')
-            RETURNING id
+            RETURNING id::integer
             "#,
         )
         .bind(&rec.clip_id)
@@ -103,7 +106,7 @@ impl ClipRepository {
         .bind(&rec.thumbnail_url)
         .bind(&rec.streamer_login)
         .bind(&rec.twitch_user_id)
-        .bind(&rec.created_at)
+        .bind(created_at)
         .bind(rec.duration_seconds)
         .bind(rec.view_count)
         .bind(&rec.game_name)
@@ -188,7 +191,7 @@ mod tests {
             .unwrap();
         for ddl in [
             "CREATE TABLE twitch_streamers (twitch_login TEXT PRIMARY KEY, twitch_user_id TEXT)",
-            "CREATE TABLE twitch_clips_social_media (id SERIAL PRIMARY KEY, clip_id TEXT UNIQUE, clip_url TEXT, clip_title TEXT, clip_thumbnail_url TEXT, streamer_login TEXT, twitch_user_id TEXT, created_at TEXT, duration_seconds DOUBLE PRECISION, view_count BIGINT DEFAULT 0, game_name TEXT, status TEXT DEFAULT 'pending', layout_override_json JSONB)",
+            "CREATE TABLE twitch_clips_social_media (id BIGSERIAL PRIMARY KEY, clip_id TEXT UNIQUE, clip_url TEXT, clip_title TEXT, clip_thumbnail_url TEXT, streamer_login TEXT, twitch_user_id TEXT, created_at TIMESTAMPTZ, duration_seconds DOUBLE PRECISION, view_count BIGINT DEFAULT 0, game_name TEXT, status TEXT DEFAULT 'pending', layout_override_json JSONB)",
             "CREATE TABLE social_media_streamer_layout (streamer_login TEXT PRIMARY KEY, layout_json JSONB NOT NULL, cam_enabled BOOLEAN NOT NULL DEFAULT TRUE, mode TEXT NOT NULL DEFAULT 'pip', updated_at TIMESTAMPTZ DEFAULT NOW(), updated_by TEXT)",
         ] {
             sqlx::query(ddl).execute(&pool).await.unwrap();
@@ -248,6 +251,28 @@ mod tests {
             layout_override(&pool, id2).await.is_some(),
             "existierender Clip behält layout_override"
         );
+    }
+
+    #[tokio::test]
+    async fn register_clip_akzeptiert_live_typen_bigint_und_timestamptz() {
+        let Some(pool) = make_pool("t_sm_repo_live_types").await else {
+            return;
+        };
+        let repo = ClipRepository::new(pool.clone());
+
+        let (id, is_new) = repo
+            .register_clip(&rec("live-types", "nani"))
+            .await
+            .unwrap();
+        assert!(is_new);
+        assert!(id > 0);
+        let created_at: chrono::DateTime<chrono::Utc> =
+            sqlx::query_scalar("SELECT created_at FROM twitch_clips_social_media WHERE id = $1")
+                .bind(i64::from(id))
+                .fetch_one(&pool)
+                .await
+                .unwrap();
+        assert_eq!(created_at.to_rfc3339(), "2026-06-15T00:00:00+00:00");
     }
 
     // social_media-5: ensure_monitored_streamer backfillt twitch_user_id eines

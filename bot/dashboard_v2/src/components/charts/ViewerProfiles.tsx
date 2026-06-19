@@ -63,7 +63,7 @@ export function ViewerProfiles({ data }: ViewerProfilesProps) {
                     borderRadius: '8px',
                   }}
                   formatter={(value) => {
-                    const numericValue = typeof value === 'number' ? value : Number((value as string | undefined) ?? 0);
+                    const numericValue = Array.isArray(value) ? Number(value[0] ?? 0) : Number(value ?? 0);
                     return [numericValue, 'Zuschauer'];
                   }}
                 />
@@ -128,7 +128,7 @@ export function ViewerProfiles({ data }: ViewerProfilesProps) {
                     borderRadius: '8px',
                   }}
                   formatter={(value) => {
-                    const numericValue = typeof value === 'number' ? value : Number((value as string | undefined) ?? 0);
+                    const numericValue = Array.isArray(value) ? Number(value[0] ?? 0) : Number(value ?? 0);
                     return [numericValue, 'Zuschauer'];
                   }}
                   labelFormatter={(label: React.ReactNode, _payload) =>

@@ -96,11 +96,6 @@ export function AudienceSharing({ data }: AudienceSharingProps) {
                     border: '1px solid rgba(194, 221, 240, 0.25)',
                     borderRadius: '8px',
                   }}
-                  formatter={(value, name) => {
-                    const numericValue = typeof value === 'number' ? value : Number((value as string | undefined) ?? 0);
-                    const displayName = name === 'sharedViewers' ? 'Geteilte Zuschauer' : name ?? '';
-                    return [numericValue, displayName];
-                  }}
                   labelFormatter={(label: React.ReactNode, _payload) =>
                     typeof label === 'string' || typeof label === 'number' ? String(label) : ''
                   }

@@ -38,17 +38,11 @@ pub fn retention_at(samples: &[ViewerSample], minutes: i32, start_viewers: i32) 
     }
     // Stream endete vor der Ziel-Minute → letzter Datenpunkt.
     let best = best.unwrap_or_else(|| samples.last().expect("samples nicht leer"));
-    let raw = f64::from(best.viewer_count) / f64::from(peak_before);
-    if raw > 1.0 {
-        tracing::warn!(
-            minutes,
-            current = best.viewer_count,
-            baseline = peak_before,
-            raw,
-            "Retention über 100% — auf 1.0 geklemmt"
-        );
-    }
-    Some(raw.clamp(0.0, 1.0))
+    // Zuschauerwachstum nach der Zielminute ist kein Fehler. Für die
+    // Retention-Kennzahl bleibt 100 % die Obergrenze, deshalb fließt der
+    // aktuelle Wert in die Baseline ein.
+    let denominator = peak_before.max(best.viewer_count);
+    Some((f64::from(best.viewer_count) / f64::from(denominator)).clamp(0.0, 1.0))
 }
 
 /// Größter prozentualer Einbruch zwischen zwei aufeinanderfolgenden Samples.

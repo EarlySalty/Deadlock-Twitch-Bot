@@ -390,6 +390,7 @@ export function AnalyticsTour({ onComplete }: AnalyticsTourProps) {
   );
 }
 
+// eslint-disable-next-line react-refresh/only-export-components
 export function resetAnalyticsTour() {
   localStorage.removeItem(STORAGE_KEY);
   localStorage.removeItem(PENDING_KEY);

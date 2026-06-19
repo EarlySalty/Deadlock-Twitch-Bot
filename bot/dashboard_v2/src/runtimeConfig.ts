@@ -71,7 +71,7 @@ function readRuntimeConfig(): DashboardRuntimeConfig {
   // be undefined even though the backend injected it. Without this fallback the
   // SPA defaults to the live API base, gets a 401, and redirects to Twitch login.
   // isDemoDashboardPath is a function declaration and therefore hoisted.
-  const onDemoPath = isDemoDashboardPath(window.location.pathname);
+  const onDemoPath = isDemoDashboardPath(window.location?.pathname ?? '');
 
   const allowedDemoProfiles = sanitizeProfiles(raw.allowedDemoProfiles);
   const defaultDemoProfileRaw =

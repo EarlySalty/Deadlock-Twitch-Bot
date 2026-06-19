@@ -25,8 +25,10 @@
 //!                                   interne-API-Routen werden dorthin
 //!                                   geproxyt, leer = 404 wie bisher
 //!   PORT                          — optional, default 8776
-//!   TB_CLIP_FETCHER_ENABLED       — "1" startet den Clip-Fetch-Task (default aus;
-//!                                   benötigt Helix-Client)
+//!   TB_HIGHLIGHT_CLIPPER_ENABLED  — "1" startet die Highlight-Erstellung
+//!                                   (default aus; benötigt Helix-Client)
+//!   TB_CLIP_FETCHER_ENABLED       — "1" startet den Clip-Fetch-Task
+//!                                   (default aus; benötigt Helix-Client)
 //!   TB_SCOUT_ENABLED              — "1" startet den Scout-Task für live Deadlock-DE-Streams
 //!                                   (default aus; benötigt Helix-Client)
 //!   ENGAGEMENT_SHADOW_REVIEW_CHANNEL_ID — Discord-Kanal-ID für den Shadow-KI-
@@ -55,6 +57,12 @@ mod shadow_review_wiring;
 mod streamer_link;
 mod token_lifecycle_wiring;
 mod wiring;
+
+fn opt_in_enabled(name: &str) -> bool {
+    std::env::var(name)
+        .map(|value| value.trim() == "1")
+        .unwrap_or(false)
+}
 
 use std::net::SocketAddr;
 use std::sync::Arc;
@@ -850,35 +858,36 @@ async fn main() {
         ));
     }
 
-    // Highlight-Clipper (Port von bot/highlight_clipper): pollt aktive Partner
-    // auf neue Deadlock-Matches, schneidet Highlight-Clips aus dem Twitch-VOD und
-    // postet sie über den lokalen Relay. In Python via `_hc_start` bedingungslos
-    // AN; hier an die Helix-Verfügbarkeit gebunden (ohne Helix kein VOD-Lookup).
-    // boon- und yt-dlp-Pfade relativ zum Service-WorkingDirectory (Repo-Root).
-    if let Some(helix_client) = helix.as_ref().clone() {
-        let cwd = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
-        let hc_config = tb_highlight::worker::HighlightClipperConfig::new(
-            cwd.join("tools/boon"),
-            cwd.join(".venv/bin/yt-dlp"),
-        );
-        let hc_worker = tb_highlight::worker::HighlightClipperWorker::new(
-            pool.clone(),
-            Arc::new(HelixVodSource {
-                helix: helix_client,
-            }),
-            hc_config,
-        );
-        tokio::spawn(async move {
-            loop {
-                hc_worker.run_once().await;
-                tokio::time::sleep(std::time::Duration::from_secs(
-                    tb_highlight::config::POLL_INTERVAL_SECONDS,
-                ))
-                .await;
-            }
-        });
+    // Highlight-Erstellung bleibt nach Grillme Block 15/20 standardmäßig AUS.
+    // Der Port bleibt testbar und kann später bewusst per Opt-in aktiviert werden.
+    if opt_in_enabled("TB_HIGHLIGHT_CLIPPER_ENABLED") {
+        if let Some(helix_client) = helix.as_ref().clone() {
+            let cwd = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
+            let hc_config = tb_highlight::worker::HighlightClipperConfig::new(
+                cwd.join("tools/boon"),
+                cwd.join(".venv/bin/yt-dlp"),
+            );
+            let hc_worker = tb_highlight::worker::HighlightClipperWorker::new(
+                pool.clone(),
+                Arc::new(HelixVodSource {
+                    helix: helix_client,
+                }),
+                hc_config,
+            );
+            tokio::spawn(async move {
+                loop {
+                    hc_worker.run_once().await;
+                    tokio::time::sleep(std::time::Duration::from_secs(
+                        tb_highlight::config::POLL_INTERVAL_SECONDS,
+                    ))
+                    .await;
+                }
+            });
+        } else {
+            tracing::warn!("HighlightClipper: aktiviert, aber kein HelixClient verfügbar");
+        }
     } else {
-        tracing::warn!("HighlightClipper: kein HelixClient — Worker nicht gestartet");
+        tracing::info!("HighlightClipper deaktiviert (TB_HIGHLIGHT_CLIPPER_ENABLED != 1)");
     }
 
     // Social-Media-Posting-Pipeline (Port von bot/social_media): sechs
@@ -1055,16 +1064,17 @@ async fn main() {
         None
     };
 
-    // Clip-Fetch-Task: füttert die Social-Media-Pipeline mit neuen Twitch-Clips
-    // aktiver Partner (alle 6h). In Python (ClipFetcher.__init__) bedingungslos
-    // AN; hier — wie der Highlight-Clipper — an die Helix-Verfügbarkeit gebunden
-    // (ohne Helix keine Clip-Reads). Auto-Uploads bleiben datengetrieben über
-    // social_media_settings (Consent + Auto-Approve) gegated, 1:1 zu Python.
-    if let Some(ref h) = *helix {
-        tb_social_media::build_clip_fetch_task(pool.clone(), std::sync::Arc::new(h.clone()))
-            .start();
+    // Auch der Twitch-Clip-Fetch bleibt vorerst deaktiviert. Der reparierte
+    // Datenpfad kann später mit explizitem Opt-in wieder aufgenommen werden.
+    if opt_in_enabled("TB_CLIP_FETCHER_ENABLED") {
+        if let Some(ref h) = *helix {
+            tb_social_media::build_clip_fetch_task(pool.clone(), std::sync::Arc::new(h.clone()))
+                .start();
+        } else {
+            tracing::warn!("clip_fetch: aktiviert, aber kein HelixClient verfügbar");
+        }
     } else {
-        tracing::warn!("clip_fetch: kein HelixClient — Clip-Fetcher nicht gestartet");
+        tracing::info!("clip_fetch deaktiviert (TB_CLIP_FETCHER_ENABLED != 1)");
     }
 
     // Scout-Task: entdeckt live Deadlock-Streamer und registriert sie als monitoring-only.

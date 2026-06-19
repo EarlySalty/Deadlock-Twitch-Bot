@@ -8,7 +8,7 @@ export default defineConfig(({ mode }) => {
   const isPreviewMode = mode === 'preview'
 
   return {
-    plugins: [react(), tailwindcss()],
+    plugins: [react(), tailwindcss()].flat(),
     resolve: {
       alias: {
         '@': path.resolve(__dirname, './src'),
@@ -21,10 +21,17 @@ export default defineConfig(({ mode }) => {
       chunkSizeWarningLimit: 1000,
       rollupOptions: {
         output: {
-          manualChunks: (id) => {
-            if (id.includes('react') || id.includes('react-dom')) return 'react'
-            if (id.includes('recharts')) return 'charts'
-            if (id.includes('@tanstack/react-query')) return 'query'
+          manualChunks(id: string) {
+            if (id.includes('/node_modules/react') || id.includes('/node_modules/react-dom')) {
+              return 'react'
+            }
+            if (id.includes('/node_modules/recharts')) {
+              return 'charts'
+            }
+            if (id.includes('/node_modules/@tanstack/react-query')) {
+              return 'query'
+            }
+            return undefined
           },
         },
       },

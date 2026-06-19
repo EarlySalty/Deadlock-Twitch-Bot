@@ -93,7 +93,7 @@ impl TelemetryStore {
         .bind(event_type)
         .bind(user_login)
         .bind(tier)
-        .bind(i32::from(is_gift))
+        .bind(is_gift)
         .bind(gifter_login)
         .bind(cumulative_months)
         .bind(streak_months)
@@ -126,7 +126,7 @@ impl TelemetryStore {
         .bind(session_id)
         .bind(broadcaster_user_id)
         .bind(duration_seconds)
-        .bind(i32::from(is_automatic))
+        .bind(is_automatic)
         .bind(now)
         .execute(&self.pool)
         .await?;

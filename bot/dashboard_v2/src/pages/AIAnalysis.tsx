@@ -639,12 +639,13 @@ function AIChatPanel({
   onInputChange,
   onSend,
 }: AIChatPanelProps) {
+  const [renderedAt] = useState(() => Date.now());
   const limitLabel = model === 'opus'
     ? `Noch ${followUpsRemaining} Rückfragen verfügbar`
     : `Noch ${followUpsRemaining}/10 Rückfragen in dieser Stunde`;
 
   const rateLimitLabel = rateLimitReset
-    ? `Limit erreicht. Wieder verfügbar in ${Math.max(1, Math.ceil((rateLimitReset * 1000 - Date.now()) / 60000))} Minuten.`
+    ? `Limit erreicht. Wieder verfügbar in ${Math.max(1, Math.ceil((rateLimitReset * 1000 - renderedAt) / 60000))} Minuten.`
     : null;
 
   return (

@@ -90,7 +90,7 @@ impl AudioCapturer {
             return Err(CaptureError(format!("duration_seconds zu klein: {duration_seconds}")));
         }
 
-        let workdir = make_workdir(workdir_root).await.map_err(|e| CaptureError(e))?;
+        let workdir = make_workdir(workdir_root).await.map_err(CaptureError)?;
         let media_path = workdir.join("audio.ts");
         let target_url = format!("https://twitch.tv/{normalized}");
         let args: Vec<String> = vec![

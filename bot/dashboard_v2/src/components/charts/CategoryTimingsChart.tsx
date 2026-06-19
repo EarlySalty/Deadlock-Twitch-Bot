@@ -11,7 +11,7 @@ import {
   YAxis,
 } from 'recharts';
 import { Clock, Calendar, Info } from 'lucide-react';
-import type { CategoryActivitySeries } from '@/types/analytics';
+import type { CategoryActivitySeries, CategoryActivitySeriesRow } from '@/types/analytics';
 
 interface CategoryTimingsChartProps {
   data: CategoryActivitySeries;
@@ -39,7 +39,7 @@ function tickFmt(value: number) {
 
 export function CategoryTimingsChart({ data }: CategoryTimingsChartProps) {
   const [view, setView] = useState<'hourly' | 'weekly'>('hourly');
-  const rows = view === 'hourly' ? data.hourly : data.weekly;
+  const rows: CategoryActivitySeriesRow[] = view === 'hourly' ? data.hourly : data.weekly;
 
   const hasPeakSeries = useMemo(
     () => rows.some(row => row.categoryPeak !== null || row.trackedPeak !== null),

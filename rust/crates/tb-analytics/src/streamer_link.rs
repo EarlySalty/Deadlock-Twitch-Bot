@@ -189,7 +189,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn mit_discord_id_in_identities_wird_ausgeblendet() {
+    async fn weitere_discord_id_in_identities_wird_ausgeblendet() {
         let dsn = db_dsn_or_skip!();
         let pool = make_pool(&dsn, "test_sl_discord_in_streamers").await;
 

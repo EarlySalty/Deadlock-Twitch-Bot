@@ -1,34 +1,139 @@
 //! Stub-Handler für Routen die früher an den Python-Legacy-Proxy weitergeleitet
 //! wurden. Python läuft nicht mehr — diese Handler ersetzen die Legacy-Routen.
 
-use axum::{extract::Path, http::StatusCode, response::IntoResponse, Extension, Json};
+use axum::{
+    extract::{Path, State},
+    http::StatusCode,
+    response::IntoResponse,
+    Extension, Json,
+};
+use chrono::Utc;
 use serde::Deserialize;
+use sqlx::{PgPool, Row};
 
 use crate::handlers::streamers::{ChatActionExt, ChatActionResult};
 use tb_domain::normalize_twitch_login;
 use tb_http_core::AuthLevel;
+use tb_monitoring::ProcessingInboxStore;
 
 // ---------------------------------------------------------------------------
 // GET /internal/twitch/v1/debug/observability
 // ---------------------------------------------------------------------------
 
-pub async fn observability_handler() -> impl IntoResponse {
-    Json(serde_json::json!({
-        "note": "Python process not running — Rust handles all bot state natively.",
-        "processes": {}
-    }))
+pub async fn observability_handler(State(pool): State<PgPool>) -> impl IntoResponse {
+    let store = ProcessingInboxStore::new(pool.clone());
+    let pending = store.list_pending(20).await;
+    let dead_letters = store.list_dead_letters(20).await;
+    let active_sessions: i64 =
+        sqlx::query_scalar("SELECT COUNT(*) FROM twitch_stream_sessions WHERE ended_at IS NULL")
+            .fetch_one(&pool)
+            .await
+            .unwrap_or(0);
+
+    match (pending, dead_letters) {
+        (Ok(pending), Ok(dead_letters)) => (
+            StatusCode::OK,
+            Json(serde_json::json!({
+                "generatedAt": Utc::now().to_rfc3339(),
+                "runtime": "rust",
+                "activeSessionCount": active_sessions,
+                "eventsubProcessing": {
+                    "pendingCount": pending.len(),
+                    "deadLetterCount": dead_letters.len(),
+                    "pending": pending.into_iter().map(|entry| serde_json::json!({
+                        "workId": entry.work_id,
+                        "workType": entry.work_type,
+                        "messageId": entry.message_id,
+                        "queuedAt": entry.queued_at,
+                        "nextAttemptAt": entry.next_attempt_at,
+                        "attemptCount": entry.attempt_count,
+                        "lastError": entry.last_error,
+                    })).collect::<Vec<_>>(),
+                    "deadLetters": dead_letters.into_iter().map(|entry| serde_json::json!({
+                        "workId": entry.work_id,
+                        "workType": entry.work_type,
+                        "messageId": entry.message_id,
+                        "queuedAt": entry.queued_at,
+                        "deadLetteredAt": entry.dead_lettered_at,
+                        "attemptCount": entry.attempt_count,
+                        "lastError": entry.last_error,
+                    })).collect::<Vec<_>>(),
+                }
+            })),
+        ),
+        (Err(error), _) | (_, Err(error)) => {
+            tracing::error!(%error, "Observability-Snapshot konnte nicht geladen werden");
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(serde_json::json!({"error": "internal_error"})),
+            )
+        }
+    }
 }
 
 // ---------------------------------------------------------------------------
 // GET /internal/twitch/v1/debug/chatters/:login
 // ---------------------------------------------------------------------------
 
-pub async fn chatters_debug_handler(Path(login): Path<String>) -> impl IntoResponse {
-    Json(serde_json::json!({
-        "login": login,
-        "chatters": [],
-        "note": "Python process not running — chatter tracking lives in Rust."
-    }))
+pub async fn chatters_debug_handler(
+    State(pool): State<PgPool>,
+    Path(login): Path<String>,
+) -> impl IntoResponse {
+    let Some(login) = normalize_twitch_login(&login) else {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({"error": "invalid_login"})),
+        );
+    };
+    let session_id: Option<i32> = sqlx::query_scalar(
+        "SELECT id FROM twitch_stream_sessions \
+         WHERE LOWER(streamer_login) = $1 AND ended_at IS NULL \
+         ORDER BY started_at DESC LIMIT 1",
+    )
+    .bind(&login)
+    .fetch_optional(&pool)
+    .await
+    .unwrap_or(None);
+    let rows = match sqlx::query(
+        "SELECT chatter_login, chatter_id, messages, last_seen_at::text AS last_seen_at \
+         FROM twitch_session_chatters \
+         WHERE LOWER(streamer_login) = $1 \
+           AND ($2::integer IS NULL OR session_id = $2) \
+         ORDER BY messages DESC, chatter_login ASC LIMIT 200",
+    )
+    .bind(&login)
+    .bind(session_id)
+    .fetch_all(&pool)
+    .await
+    {
+        Ok(rows) => rows,
+        Err(error) => {
+            tracing::error!(%error, login, "Chatters-Debug konnte nicht geladen werden");
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(serde_json::json!({"error": "internal_error"})),
+            );
+        }
+    };
+    let chatters = rows
+        .into_iter()
+        .map(|row| {
+            serde_json::json!({
+                "login": row.try_get::<String, _>("chatter_login").unwrap_or_default(),
+                "userId": row.try_get::<Option<String>, _>("chatter_id").unwrap_or(None),
+                "messages": row.try_get::<Option<i32>, _>("messages").unwrap_or(None).unwrap_or(0),
+                "lastSeenAt": row.try_get::<Option<String>, _>("last_seen_at").unwrap_or(None),
+            })
+        })
+        .collect::<Vec<_>>();
+    (
+        StatusCode::OK,
+        Json(serde_json::json!({
+            "login": login,
+            "sessionId": session_id,
+            "chatters": chatters,
+        })),
+    )
 }
 
 // ---------------------------------------------------------------------------
@@ -42,15 +147,36 @@ pub struct RequeueBody {
 }
 
 pub async fn eventsub_requeue_handler(
+    State(pool): State<PgPool>,
     body: Option<Json<RequeueBody>>,
 ) -> impl IntoResponse {
     let work_id = body.and_then(|b| b.work_id.clone()).unwrap_or_default();
-    Json(serde_json::json!({
-        "ok": true,
-        "requeued": 0,
-        "work_id": work_id,
-        "note": "Rust processes EventSub events natively — manual requeue not needed."
-    }))
+    if work_id.trim().is_empty() {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({"ok": false, "error": "work_id_required"})),
+        );
+    }
+    match ProcessingInboxStore::new(pool)
+        .requeue_dead_letter(&work_id, Utc::now().timestamp_millis() as f64 / 1000.0)
+        .await
+    {
+        Ok(true) => (
+            StatusCode::OK,
+            Json(serde_json::json!({"ok": true, "requeued": 1, "work_id": work_id})),
+        ),
+        Ok(false) => (
+            StatusCode::NOT_FOUND,
+            Json(serde_json::json!({"ok": false, "requeued": 0, "work_id": work_id})),
+        ),
+        Err(error) => {
+            tracing::error!(%error, work_id, "Dead-Letter-Requeue fehlgeschlagen");
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(serde_json::json!({"ok": false, "error": "internal_error"})),
+            )
+        }
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -119,7 +245,10 @@ pub async fn chat_action_handler(
     }
 
     let Some(port) = port else {
-        tracing::warn!(login, "chat-action ohne ChatActionPort — Bot-Token-Bridge nicht aktiv");
+        tracing::warn!(
+            login,
+            "chat-action ohne ChatActionPort — Bot-Token-Bridge nicht aktiv"
+        );
         return (
             StatusCode::SERVICE_UNAVAILABLE,
             Json(serde_json::json!({
@@ -135,7 +264,10 @@ pub async fn chat_action_handler(
             StatusCode::OK,
             Json(serde_json::json!({"ok": true, "login": login, "message": label})),
         ),
-        ChatActionResult::Dropped { code, message: drop_msg } => {
+        ChatActionResult::Dropped {
+            code,
+            message: drop_msg,
+        } => {
             tracing::info!(login, code, "chat-action von Twitch verworfen");
             (
                 StatusCode::OK,
@@ -187,15 +319,15 @@ pub async fn raid_requirements_handler(
     let login = body
         .and_then(|b| b.login.clone())
         .unwrap_or_else(|| "unknown".to_string());
-    tracing::warn!(
+    tracing::info!(
         login,
-        "raid/requirements aufgerufen — Discord-DM noch nicht via Rust implementiert"
+        "raid/requirements ist gemäß Cutover-Entscheidung entfernt"
     );
     (
-        StatusCode::SERVICE_UNAVAILABLE,
+        StatusCode::GONE,
         Json(serde_json::json!({
             "ok": false,
-            "error": "Discord DM nicht verfügbar — Python Bridge entfernt. Zu implementieren via Master-Broker (8770).",
+            "error": "feature_removed",
             "login": login
         })),
     )
@@ -286,7 +418,11 @@ mod chat_action_tests {
         .await;
         assert_eq!(status, StatusCode::OK);
         assert_eq!(body["ok"], serde_json::json!(true));
-        assert_eq!(port.calls.load(Ordering::SeqCst), 1, "genau 1 Send erwartet");
+        assert_eq!(
+            port.calls.load(Ordering::SeqCst),
+            1,
+            "genau 1 Send erwartet"
+        );
         let last = port.last.lock().unwrap().clone().unwrap();
         // Login normalisiert (lowercase), Defaults message/purple.
         assert_eq!(last.0, "nani");
@@ -309,8 +445,15 @@ mod chat_action_tests {
         )
         .await;
         assert_eq!(status, StatusCode::OK);
-        assert_eq!(body["ok"], serde_json::json!(false), "Drop darf NIE ok=true sein");
-        assert_eq!(body["drop_reason"]["code"], serde_json::json!("channel_settings"));
+        assert_eq!(
+            body["ok"],
+            serde_json::json!(false),
+            "Drop darf NIE ok=true sein"
+        );
+        assert_eq!(
+            body["drop_reason"]["code"],
+            serde_json::json!("channel_settings")
+        );
     }
 
     #[tokio::test]
