@@ -1,10 +1,10 @@
-## #237 — Dashboard-Darstellung nach Weißbildschirm stabilisiert
+## #238 — Admin-Modus vollständig zwischen Nutzer- und Admin-Ansicht umschaltbar
 
-**Problem:** Die erneute Aktivierung der umschaltbaren Nutzeransicht führte bei einer echten Twitch-Admin-Sitzung zu einem leeren Dashboard. Die isolierten API-Tests waren erfolgreich, deckten den vollständigen Browser-Ablauf mit der bestehenden Sitzung aber nicht ab.
+**Problem:** Die ersten beiden Umsetzungen waren jeweils nur teilweise konsistent: Zuerst wechselte die Statusanzeige in die Nutzeransicht, während die Startseite weiterhin einen Admin-Parameter verlangte und dadurch eine Login-Schleife auslöste. Danach wurde der Admin-Status fest erzwungen, wodurch „Beenden“ wirkungslos blieb. Ein weiterer Versuch ließ Status- und Startseitenabfragen gleichzeitig wechseln und konnte einen leeren Bildschirm erzeugen.
 
-**Änderung:** Die Umschaltung auf die Nutzeransicht wurde erneut zurückgenommen. Der Dashboard-Status liefert für Twitch-Admins vorerst wieder durchgehend die bekannte Admin-Darstellung, bis der komplette Anmelde-, Startseiten- und Renderablauf in einem Browsertest abgesichert ist.
+**Änderung:** Die eigene Twitch-Identität gilt nun in beiden Darstellungen als stabile Grundlage. Beim Umschalten wird zuerst der neue Status bestätigt und erst danach werden die davon abhängigen Startseiten- und Partnerdaten neu geladen. Während des Wechsels bleiben alte Abfragen angehalten, damit kein Request mit gemischtem Admin-/Nutzerzustand entsteht.
 
-**Ergebnis:** Das Dashboard lädt wieder im stabilen Admin-Zustand. Der Ausschalter bleibt vorerst ohne Wirkung; die echte Nutzeransicht wird erst wieder aktiviert, wenn der gesamte Ablauf einschließlich bestehender Browser-Sitzungen verifiziert ist.
+**Ergebnis:** Das Dashboard startet in der echten Nutzeransicht des eigenen Kanals. „Admin-Modus aktivieren“ schaltet den Vollzugriff für die aktuelle Browser-Sitzung ein; „Beenden“ kehrt ohne Umleitung, Login-Schleife oder leeren Bildschirm zur Nutzeransicht zurück.
 
 ## #236 — Admin-Modus vorübergehend zurückgenommen (Lade-Schleife behoben)
 

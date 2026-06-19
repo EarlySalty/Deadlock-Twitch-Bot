@@ -640,14 +640,21 @@ export function InternalHomeLanding() {
   const adminEligible = Boolean(authStatus?.adminEligible);
   const adminMode = Boolean(authStatus?.adminMode);
   const adminModeMutation = useMutation({
-    mutationFn: (enabled: boolean) =>
-      setAdminMode(enabled, authStatus?.csrfToken ?? authStatus?.csrf_token ?? null),
-    onSuccess: () => {
-      // Auth-Status treibt das gesamte Gating; Streamer-Scope + Home-Daten
-      // hängen am Admin-Modus und müssen mitziehen.
-      void queryClient.invalidateQueries({ queryKey: ['auth-status'] });
-      void queryClient.invalidateQueries({ queryKey: ['internal-home'] });
-      void queryClient.invalidateQueries({ queryKey: ['streamers'] });
+    mutationFn: async (enabled: boolean) => {
+      // Der alte Home-Query-Key darf nach dem Cookie-Wechsel nicht noch einmal
+      // im neuen Sicherheitskontext laufen. Besonders beim Aktivieren wäre
+      // ['internal-home', null] sonst ein Admin-Request ohne Streamer und würde
+      // mit 401 zur Login-Seite navigieren.
+      await queryClient.cancelQueries({ queryKey: ['internal-home'] });
+      const result = await setAdminMode(
+        enabled,
+        authStatus?.csrfToken ?? authStatus?.csrf_token ?? null
+      );
+      await queryClient.refetchQueries(
+        { queryKey: ['auth-status'], exact: true, type: 'active' },
+        { throwOnError: true }
+      );
+      return result;
     },
   });
 
