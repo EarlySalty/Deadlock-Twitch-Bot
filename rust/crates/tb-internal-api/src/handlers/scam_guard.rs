@@ -57,6 +57,44 @@ pub async fn scam_revoke_handler(
     Ok(Json(result))
 }
 
+/// Port zum Promoten eines Scam-Guard-Vorschlags zu einem Twitch-Ban.
+#[async_trait::async_trait]
+pub trait ScamEnforcePort: Send + Sync {
+    async fn enforce(&self, verdict_id: i64) -> serde_json::Value;
+}
+
+/// Extension-Wrapper (None = Scam-Guard-Enforce nicht verdrahtet → 503).
+#[derive(Clone)]
+pub struct ScamEnforceExt(pub Option<Arc<dyn ScamEnforcePort>>);
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ScamEnforceRequest {
+    pub verdict_id: i64,
+}
+
+pub async fn scam_enforce_handler(
+    auth: AuthLevel,
+    Extension(port): Extension<ScamEnforceExt>,
+    Json(body): Json<ScamEnforceRequest>,
+) -> Result<impl IntoResponse, ApiError> {
+    if !auth.is_privileged() {
+        return Err(ApiError::unauthorized());
+    }
+    let Some(port) = port.0 else {
+        return Err(ApiError::unavailable());
+    };
+    if body.verdict_id <= 0 {
+        return Err(ApiError::bad_request_with_body(serde_json::json!({
+            "ok": false,
+            "error": "verdictId must be a positive integer"
+        })));
+    }
+
+    let result = port.enforce(body.verdict_id).await;
+    Ok(Json(result))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -150,6 +188,89 @@ mod tests {
         let bytes = axum::body::to_bytes(resp.into_body(), 4096).await.unwrap();
         let v: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
         assert_eq!(v["status"], "revoked");
+        assert_eq!(v["chatter_login"], "scammer");
+    }
+
+    #[derive(Default)]
+    struct StubEnforcePort {
+        seen: AtomicI64,
+    }
+
+    #[async_trait::async_trait]
+    impl ScamEnforcePort for StubEnforcePort {
+        async fn enforce(&self, verdict_id: i64) -> serde_json::Value {
+            self.seen.store(verdict_id, Ordering::SeqCst);
+            serde_json::json!({"status": "enforced", "chatter_login": "scammer"})
+        }
+    }
+
+    fn enforce_router(port: Option<Arc<dyn ScamEnforcePort>>) -> Router {
+        let base = INTERNAL_API_BASE_PATH;
+        Router::new()
+            .route(
+                &format!("{base}/scam-guard/enforce"),
+                post(scam_enforce_handler),
+            )
+            .layer(Extension(ScamEnforceExt(port)))
+            .layer(Extension(ExpectedToken("tok".to_string())))
+            .layer(middleware::from_fn_with_state(
+                "tok".to_string(),
+                internal_auth,
+            ))
+            .layer(middleware::from_fn(loopback_only))
+    }
+
+    fn enforce_req(token: Option<&str>, body: &str) -> Request<Body> {
+        let mut builder = Request::builder()
+            .method("POST")
+            .uri(format!("{INTERNAL_API_BASE_PATH}/scam-guard/enforce"))
+            .header("content-type", "application/json")
+            .extension(ConnectInfo("127.0.0.1:55555".parse::<SocketAddr>().unwrap()));
+        if let Some(t) = token {
+            builder = builder.header("x-internal-token", t);
+        }
+        builder.body(Body::from(body.to_string())).unwrap()
+    }
+
+    #[tokio::test]
+    async fn enforce_ohne_token_401() {
+        let resp = enforce_router(Some(Arc::new(StubEnforcePort::default())))
+            .oneshot(enforce_req(None, r#"{"verdictId":42}"#))
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::UNAUTHORIZED);
+    }
+
+    #[tokio::test]
+    async fn enforce_ohne_port_503() {
+        let resp = enforce_router(None)
+            .oneshot(enforce_req(Some("tok"), r#"{"verdictId":42}"#))
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::SERVICE_UNAVAILABLE);
+    }
+
+    #[tokio::test]
+    async fn enforce_ungueltige_id_400() {
+        let resp = enforce_router(Some(Arc::new(StubEnforcePort::default())))
+            .oneshot(enforce_req(Some("tok"), r#"{"verdictId":0}"#))
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+    }
+
+    #[tokio::test]
+    async fn enforce_delegiert_an_port_mit_verdict_id() {
+        let port = Arc::new(StubEnforcePort::default());
+        let resp = enforce_router(Some(port.clone()))
+            .oneshot(enforce_req(Some("tok"), r#"{"verdictId":42}"#))
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::OK);
+        assert_eq!(port.seen.load(Ordering::SeqCst), 42);
+        let bytes = axum::body::to_bytes(resp.into_body(), 4096).await.unwrap();
+        let v: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+        assert_eq!(v["status"], "enforced");
         assert_eq!(v["chatter_login"], "scammer");
     }
 }

@@ -24,7 +24,7 @@ pub use handlers::eventsub::EventSubDispatcherExt;
 pub use handlers::legacy_proxy::{LegacyProxy, LegacyProxyExt};
 pub use handlers::raid::{ManualRaidExt, ManualRaidPort};
 pub use handlers::raid_oauth::{RaidOAuthExt, RaidOAuthPort};
-pub use handlers::scam_guard::{ScamRevokeExt, ScamRevokePort};
+pub use handlers::scam_guard::{ScamEnforceExt, ScamEnforcePort, ScamRevokeExt, ScamRevokePort};
 pub use handlers::stats_native::{EventSubCurrentSnapshot, EventSubStatsExt, EventSubStatsSource};
 pub use handlers::streamers::{
     ChatActionExt, ChatActionPort, ChatActionResult, DiscordRoleExt, DiscordRolePort,
@@ -58,6 +58,7 @@ pub fn build_internal_router(
     discord_role: Option<Arc<dyn handlers::streamers::DiscordRolePort>>,
     chat_action: Option<Arc<dyn handlers::streamers::ChatActionPort>>,
     scam_revoke: Option<Arc<dyn handlers::scam_guard::ScamRevokePort>>,
+    scam_enforce: Option<Arc<dyn handlers::scam_guard::ScamEnforcePort>>,
     legacy_proxy: Option<Arc<LegacyProxy>>,
 ) -> Router {
     use handlers::{
@@ -155,6 +156,10 @@ pub fn build_internal_router(
         .route(
             &format!("{base}/scam-guard/revoke"),
             post(scam_guard::scam_revoke_handler),
+        )
+        .route(
+            &format!("{base}/scam-guard/enforce"),
+            post(scam_guard::scam_enforce_handler),
         )
         // Raid-OAuth-Strecke (Welle B): nativ via RaidOAuthPort +
         // Composition-Root in tb-bot (raid_oauth_impl.rs). auth-url schreibt
@@ -287,6 +292,7 @@ pub fn build_internal_router(
         .layer(Extension(handlers::streamers::DiscordRoleExt(discord_role)))
         .layer(Extension(handlers::streamers::ChatActionExt(chat_action)))
         .layer(Extension(handlers::scam_guard::ScamRevokeExt(scam_revoke)))
+        .layer(Extension(handlers::scam_guard::ScamEnforceExt(scam_enforce)))
         .layer(Extension(idempotency::IdempotencyState::new()))
         .layer(Extension(LegacyProxyExt(legacy_proxy)))
         .layer(Extension(ExpectedToken(token.clone())))

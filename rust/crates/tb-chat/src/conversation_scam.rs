@@ -1305,6 +1305,145 @@ async fn try_unban(api: &dyn ChatApi, target: &RevokeTarget) -> bool {
         .unwrap_or(false)
 }
 
+/// Adress- und Begründungsdaten eines vorgeschlagenen Bans.
+#[derive(Debug, Clone)]
+pub struct EnforceTarget {
+    pub channel_login: String,
+    pub chatter_login: String,
+    pub chatter_id: Option<String>,
+    pub action_taken: String,
+    pub reasoning: String,
+}
+
+/// Ergebnis eines Enforce — serialisiert direkt als Port-/API-Antwort.
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct EnforceOutcome {
+    pub status: &'static str,
+    pub channel_login: String,
+    pub chatter_login: String,
+    pub banned: bool,
+}
+
+impl EnforceOutcome {
+    fn not_found() -> Self {
+        Self {
+            status: "not_found",
+            channel_login: String::new(),
+            chatter_login: String::new(),
+            banned: false,
+        }
+    }
+
+    fn not_eligible() -> Self {
+        Self {
+            status: "not_eligible",
+            channel_login: String::new(),
+            chatter_login: String::new(),
+            banned: false,
+        }
+    }
+}
+
+/// Lädt die Zieldaten eines vorgeschlagenen Bans anhand seiner Verdict-ID.
+pub async fn load_enforce_target(
+    pool: &PgPool,
+    verdict_id: i64,
+) -> Result<Option<EnforceTarget>, String> {
+    let row = sqlx::query_as::<_, (String, String, Option<String>, String, String)>(
+        "SELECT channel_login, chatter_login, chatter_id, action_taken, reasoning \
+         FROM twitch_scam_guard_verdicts WHERE id = $1",
+    )
+    .bind(verdict_id)
+    .fetch_optional(pool)
+    .await
+    .map_err(|error| error.to_string())?;
+    Ok(row.map(
+        |(channel_login, chatter_login, chatter_id, action_taken, reasoning)| EnforceTarget {
+            channel_login,
+            chatter_login,
+            chatter_id,
+            action_taken,
+            reasoning,
+        },
+    ))
+}
+
+/// Promotet genau einen noch wartenden Vorschlag zum gespeicherten Ban.
+pub async fn mark_banned_by_id(pool: &PgPool, verdict_id: i64) -> Result<bool, String> {
+    sqlx::query(
+        "UPDATE twitch_scam_guard_verdicts SET action_taken = 'banned' \
+         WHERE id = $1 AND action_taken = 'suggested'",
+    )
+    .bind(verdict_id)
+    .execute(pool)
+    .await
+    .map(|result| result.rows_affected() > 0)
+    .map_err(|error| error.to_string())
+}
+
+/// Führt einen wartenden Scam-Guard-Ban-Vorschlag auf Twitch aus.
+pub async fn enforce_verdict(pool: &PgPool, api: &dyn ChatApi, verdict_id: i64) -> EnforceOutcome {
+    let target = match load_enforce_target(pool, verdict_id).await {
+        Ok(Some(target)) => target,
+        Ok(None) => return EnforceOutcome::not_found(),
+        Err(error) => {
+            warn!("Scam-Enforce DB-Fehler beim Laden ({verdict_id}): {error}");
+            return EnforceOutcome::not_found();
+        }
+    };
+
+    if target.action_taken != "suggested" {
+        return EnforceOutcome::not_eligible();
+    }
+
+    let banned = try_ban(api, &target).await;
+    if banned {
+        if let Err(error) = mark_banned_by_id(pool, verdict_id).await {
+            warn!("Scam-Enforce: Markierung banned fehlgeschlagen ({verdict_id}): {error}");
+        }
+    }
+
+    EnforceOutcome {
+        status: if banned {
+            "enforced"
+        } else {
+            "ban_failed_no_mod"
+        },
+        channel_login: target.channel_login,
+        chatter_login: target.chatter_login,
+        banned,
+    }
+}
+
+/// Löst Broadcaster- und Chatter-ID auf und führt den Ban aus. Die gespeicherte
+/// Chatter-ID hat Vorrang; fehlt sie, wird sie über den Login aufgelöst.
+async fn try_ban(api: &dyn ChatApi, target: &EnforceTarget) -> bool {
+    let Some(broadcaster_id) = api
+        .resolve_user_id(&target.channel_login)
+        .await
+        .ok()
+        .flatten()
+    else {
+        return false;
+    };
+    let chatter_id = match &target.chatter_id {
+        Some(id) if !id.is_empty() => Some(id.clone()),
+        _ => api
+            .resolve_user_id(&target.chatter_login)
+            .await
+            .ok()
+            .flatten(),
+    };
+    let Some(chatter_id) = chatter_id else {
+        return false;
+    };
+    matches!(
+        api.ban_user(&broadcaster_id, &chatter_id, &target.reasoning)
+            .await,
+        Ok(BanOutcome::Banned | BanOutcome::AlreadyBanned)
+    )
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

@@ -48,6 +48,7 @@ mod raid_oauth_impl;
 mod reauth_reminder;
 mod scam_notify_impl;
 mod scam_revoke_impl;
+mod scam_enforce_impl;
 mod score_refresh;
 mod scout_chat;
 mod shadow_review_wiring;
@@ -407,6 +408,8 @@ async fn main() {
     // (POST /scam-guard/revoke): der Unban läuft über den live rotierten
     // Bot-User-Token, identisch zum Auto-Ban-Pfad des Wächters.
     let scam_revoke_api: Option<Arc<dyn tb_chat::ChatApi>> =
+        chat_api_handle.as_ref().map(|h| h.api.clone());
+    let scam_enforce_api: Option<Arc<dyn tb_chat::ChatApi>> =
         chat_api_handle.as_ref().map(|h| h.api.clone());
 
     // Raid-Verdrahtung: mit Manager + Helix + Krypto-Key sind alle vier
@@ -1146,6 +1149,8 @@ async fn main() {
         chat_wiring::build_chat_action_port(chat_action_api, pool.clone());
     let scam_revoke: Option<Arc<dyn tb_internal_api::ScamRevokePort>> =
         scam_revoke_impl::build_scam_revoke_port(scam_revoke_api, pool.clone());
+    let scam_enforce: Option<Arc<dyn tb_internal_api::ScamEnforcePort>> =
+        scam_enforce_impl::build_scam_enforce_port(scam_enforce_api, pool.clone());
     let app = build_internal_router(
         pool,
         token,
@@ -1157,6 +1162,7 @@ async fn main() {
         discord_role,
         chat_action,
         scam_revoke,
+        scam_enforce,
         legacy_proxy,
     );
 

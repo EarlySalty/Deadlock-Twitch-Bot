@@ -61,6 +61,7 @@ pub mod rankings;
 pub mod retention_curve;
 pub mod roadmap_page;
 pub mod scam_guard_queue;
+pub mod scam_guard_enforce;
 pub mod scam_guard_settings;
 pub mod self_explainer;
 pub mod session_detail;

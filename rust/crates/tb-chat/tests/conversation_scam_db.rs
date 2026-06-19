@@ -10,6 +10,7 @@ use tb_chat::conversation_scam::{
     fetch_learning_corpus, load_learnings, persist_learnings, revoke_verdict, ConversationScamGuard,
     DialogState, ScamJudge, Verdict, VerdictKind,
 };
+use tb_chat::conversation_scam::enforce_verdict;
 use tb_chat::moderation::ModerationEngine;
 use tb_chat::types::{ChatMessageBody, ChatMessageEvent, SendOutcome};
 
@@ -162,6 +163,54 @@ impl ChatApi for RecordingApi {
             .lock()
             .unwrap()
             .push((broadcaster_id.to_string(), target_user_id.to_string()));
+        Ok(true)
+    }
+    async fn delete_message(&self, _: &str, _: &str) -> Result<bool, String> {
+        Ok(true)
+    }
+    async fn user_created_at(
+        &self,
+        _: &str,
+    ) -> Result<Option<chrono::DateTime<chrono::Utc>>, String> {
+        Ok(None)
+    }
+    async fn resolve_user_id(&self, login: &str) -> Result<Option<String>, String> {
+        Ok(Some(format!("{login}-id")))
+    }
+    async fn bot_user_id(&self) -> String {
+        "bot-id".to_string()
+    }
+}
+
+struct EnforceRecordingApi {
+    bans: Arc<std::sync::Mutex<Vec<(String, String, String)>>>,
+}
+
+#[async_trait]
+impl ChatApi for EnforceRecordingApi {
+    async fn send_message(&self, _: &str, _: &str) -> Result<SendOutcome, String> {
+        Ok(SendOutcome::Sent)
+    }
+    async fn send_announcement(&self, _: &str, _: &str, _: &str) -> Result<bool, String> {
+        Ok(true)
+    }
+    async fn ban_user(
+        &self,
+        broadcaster_id: &str,
+        target_user_id: &str,
+        reason: &str,
+    ) -> Result<BanOutcome, String> {
+        self.bans.lock().unwrap().push((
+            broadcaster_id.to_string(),
+            target_user_id.to_string(),
+            reason.to_string(),
+        ));
+        Ok(BanOutcome::Banned)
+    }
+    async fn timeout_user(&self, _: &str, _: &str, _: u32, _: &str) -> Result<BanOutcome, String> {
+        Ok(BanOutcome::Banned)
+    }
+    async fn unban_user(&self, _: &str, _: &str) -> Result<bool, String> {
         Ok(true)
     }
     async fn delete_message(&self, _: &str, _: &str) -> Result<bool, String> {
@@ -403,4 +452,70 @@ async fn revoke_verdict_entbannt_bei_ban_und_markiert_overturned() {
     // Unbekannte ID → not_found.
     let missing = revoke_verdict(&pool, api.as_ref(), 9_999_999).await;
     assert_eq!(missing.status, "not_found");
+}
+
+#[tokio::test]
+async fn conversation_scam_enforce_verdict_bannt_vorschlag_mit_gespeicherter_begruendung() {
+    let pool = pool_or_skip!("tb_conversation_scam_enforce");
+    let verdict_id: i64 = sqlx::query_scalar(
+        "INSERT INTO twitch_scam_guard_verdicts \
+         (channel_login, chatter_login, chatter_id, verdict, confidence, category, \
+          reasoning, transcript_snapshot, action_taken) \
+         VALUES ('testchannel', 'scammer', 'scammer-uid', 'scam', 0.85, 'cat', \
+                 'gespeicherte begruendung', '[\"msg\"]', 'suggested') RETURNING id",
+    )
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    let recorder = Arc::new(std::sync::Mutex::new(Vec::<(String, String, String)>::new()));
+    let api: Arc<dyn ChatApi> = Arc::new(EnforceRecordingApi {
+        bans: recorder.clone(),
+    });
+
+    let outcome = enforce_verdict(&pool, api.as_ref(), verdict_id).await;
+
+    assert_eq!(outcome.status, "enforced");
+    assert_eq!(outcome.channel_login, "testchannel");
+    assert_eq!(outcome.chatter_login, "scammer");
+    assert!(outcome.banned);
+    assert_eq!(
+        recorder.lock().unwrap().clone(),
+        vec![(
+            "testchannel-id".to_string(),
+            "scammer-uid".to_string(),
+            "gespeicherte begruendung".to_string()
+        )]
+    );
+    let action: String =
+        sqlx::query_scalar("SELECT action_taken FROM twitch_scam_guard_verdicts WHERE id = $1")
+            .bind(verdict_id)
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+    assert_eq!(action, "banned");
+}
+
+#[tokio::test]
+async fn conversation_scam_enforce_verdict_lehnt_bearbeitetes_urteil_ohne_ban_ab() {
+    let pool = pool_or_skip!("tb_conversation_scam_enforce_not_eligible");
+    let verdict_id: i64 = sqlx::query_scalar(
+        "INSERT INTO twitch_scam_guard_verdicts \
+         (channel_login, chatter_login, chatter_id, verdict, confidence, category, \
+          reasoning, transcript_snapshot, action_taken) \
+         VALUES ('testchannel', 'scammer', 'scammer-uid', 'scam', 0.95, 'cat', \
+                 'grund', '[\"msg\"]', 'banned') RETURNING id",
+    )
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    let recorder = Arc::new(std::sync::Mutex::new(Vec::<(String, String, String)>::new()));
+    let api: Arc<dyn ChatApi> = Arc::new(EnforceRecordingApi {
+        bans: recorder.clone(),
+    });
+
+    let outcome = enforce_verdict(&pool, api.as_ref(), verdict_id).await;
+
+    assert_eq!(outcome.status, "not_eligible");
+    assert!(!outcome.banned);
+    assert!(recorder.lock().unwrap().is_empty());
 }
