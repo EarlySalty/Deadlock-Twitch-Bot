@@ -751,13 +751,16 @@ async fn main() {
             let runtime = chat_wiring::build_runtime(
                 handle,
                 pool.clone(),
-                manual_raid_port.clone(),
-                clip_port,
-                Some(token_lifecycle_wiring::build_bot_ban_handler(
-                    pool.clone(),
-                    &settings.broker,
-                )),
-                scam_notifier,
+                chat_wiring::ChatRuntimePorts {
+                    manual_raid: manual_raid_port.clone(),
+                    clip_port,
+                    bot_ban_handler: Some(token_lifecycle_wiring::build_bot_ban_handler(
+                        pool.clone(),
+                        &settings.broker,
+                    )),
+                    invite_relay: BrokerRelay::new(&settings.broker).ok(),
+                    scam_notifier,
+                },
                 eventsub_hooks.clone(),
             )
             .await;

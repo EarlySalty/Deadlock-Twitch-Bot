@@ -19,6 +19,7 @@ const RESOLVE_USER_PATH: &str = "/internal/master/v1/discord/resolve-user";
 const ADD_ROLE_PATH: &str = "/internal/master/v1/discord/member/add-role";
 const REMOVE_ROLE_PATH: &str = "/internal/master/v1/discord/member/remove-role";
 const CREATE_ROLE_PATH: &str = "/internal/master/v1/discord/role/create";
+const CREATE_INVITE_PATH: &str = "/internal/master/v1/discord/create-invite";
 const SEND_DM_PATH: &str = "/internal/master/v1/discord/send-dm";
 const MEMBERS_PATH: &str = "/internal/master/v1/discord/members";
 const ROLES_PATH: &str = "/internal/master/v1/discord/roles";
@@ -53,6 +54,17 @@ pub struct ResolvedDiscordUser {
     pub global_name: Option<String>,
     #[serde(default)]
     pub display_name: Option<String>,
+}
+
+/// Ergebnis von `POST /discord/create-invite`.
+#[derive(Debug, Clone, serde::Deserialize)]
+pub struct InviteInfo {
+    pub invite_url: String,
+    pub code: String,
+    #[serde(deserialize_with = "deserialize_u64_flexible")]
+    pub channel_id: u64,
+    #[serde(deserialize_with = "deserialize_u64_flexible")]
+    pub guild_id: u64,
 }
 
 impl ResolvedDiscordUser {
@@ -94,6 +106,12 @@ struct CreateRoleRequest {
     guild_id: String,
     name: String,
     mentionable: bool,
+    reason: String,
+}
+
+#[derive(serde::Serialize)]
+struct CreateInviteRequest {
+    channel_id: u64,
     reason: String,
 }
 
@@ -269,6 +287,34 @@ impl BrokerRelay {
             return Err(DiscordError::BrokerError { status, body });
         }
         Ok(())
+    }
+
+    /// Erstellt einen permanenten Discord-Invite für den angegebenen Kanal.
+    pub async fn create_invite(
+        &self,
+        channel_id: u64,
+        reason: &str,
+    ) -> Result<InviteInfo, DiscordError> {
+        let payload = CreateInviteRequest {
+            channel_id,
+            reason: reason.to_string(),
+        };
+        let key = Self::idempotency_key("create-invite", &payload);
+        let resp = self
+            .post_with_retry(CREATE_INVITE_PATH, &payload, &key)
+            .await?;
+        if !resp.status().is_success() {
+            let status = resp.status().as_u16();
+            let body = resp.text().await.unwrap_or_default();
+            return Err(DiscordError::BrokerError { status, body });
+        }
+        let envelope: BrokerEnvelope<InviteInfo> = resp.json().await?;
+        envelope.result.filter(|_| envelope.ok).ok_or_else(|| {
+            DiscordError::BrokerError {
+                status: 502,
+                body: "missing create-invite result".to_string(),
+            }
+        })
     }
 
     /// Legt eine Discord-Rolle über den Broker an
@@ -805,6 +851,37 @@ mod tests {
         let add = BrokerRelay::idempotency_key("add-role", &payload);
         let remove = BrokerRelay::idempotency_key("remove-role", &payload);
         assert_ne!(add, remove);
+    }
+
+    #[tokio::test]
+    async fn create_invite_sendet_payload_und_parst_antwort() {
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/internal/master/v1/discord/create-invite"))
+            .and(header("X-Internal-Token", "test-token"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "ok": true,
+                "result": {
+                    "invite_url": "https://discord.gg/abc",
+                    "code": "abc",
+                    "channel_id": "123",
+                    "guild_id": "456"
+                }
+            })))
+            .mount(&server)
+            .await;
+
+        let relay = BrokerRelay::new(&test_config(&server.uri())).unwrap();
+        let invite = relay.create_invite(123, "streamer-invite:test").await.unwrap();
+        assert_eq!(invite.invite_url, "https://discord.gg/abc");
+        assert_eq!(invite.code, "abc");
+        assert_eq!(invite.channel_id, 123);
+        assert_eq!(invite.guild_id, 456);
+        let received = server.received_requests().await.unwrap();
+        assert!(received[0].headers.contains_key("x-idempotency-key"));
+        let body: serde_json::Value = serde_json::from_slice(&received[0].body).unwrap();
+        assert_eq!(body["channel_id"], 123);
+        assert_eq!(body["reason"], "streamer-invite:test");
     }
 
     #[tokio::test]

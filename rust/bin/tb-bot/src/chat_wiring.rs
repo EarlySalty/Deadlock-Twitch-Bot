@@ -40,7 +40,7 @@ use tb_chat::types::ChatMessageEvent;
 use tb_chat::{
     ChannelClassifier, ChatApi, ChatPipeline, ChatPipelineParts, ChatterTracker, FunResponses,
     GlobalBanSweeper, GlobalChatterBanEnforcer, ModAlerter, PartnerRoster, PgHelixMentionResolver,
-    ReviewLog, SusInviteCheck,
+    ReviewLog, SusInviteCheck, promo_invite_fallback,
 };
 use tb_crypto::FieldCipher;
 use tb_engagement::irc_reader::EngagementIrcReader;
@@ -51,6 +51,7 @@ use tb_engagement::stealth_sender::StealthSender;
 use tb_engagement::types::IncomingMessage;
 use tb_monitoring::{EventSubHooks, SubscriptionManager};
 use tb_raid::{RaidAuthStore, RaidTokenRefresher, TokenBlacklistStore, TokenProvider};
+use tb_transport_discord::BrokerRelay;
 use tb_transport_twitch::HelixClient;
 
 use crate::raid_adapters::HelixTokenClient;
@@ -431,15 +432,27 @@ pub async fn try_build_api(helix: Option<HelixClient>) -> Option<ChatApiHandle> 
 }
 
 /// Phase 2: baut die komplette Pipeline auf der gebooteten ChatApi.
+pub struct ChatRuntimePorts {
+    pub manual_raid: Option<Arc<dyn tb_internal_api::ManualRaidPort>>,
+    pub clip_port: Option<Arc<dyn ClipPort>>,
+    pub bot_ban_handler: Option<Arc<dyn BotBannedChannelHandler>>,
+    pub invite_relay: Option<BrokerRelay>,
+    pub scam_notifier: Option<Arc<dyn ScamGuardNotifier>>,
+}
+
 pub async fn build_runtime(
     handle: ChatApiHandle,
     pool: PgPool,
-    manual_raid: Option<Arc<dyn tb_internal_api::ManualRaidPort>>,
-    clip_port: Option<Arc<dyn ClipPort>>,
-    bot_ban_handler: Option<Arc<dyn BotBannedChannelHandler>>,
-    scam_notifier: Option<Arc<dyn ScamGuardNotifier>>,
+    ports: ChatRuntimePorts,
     inner_hooks: Arc<dyn EventSubHooks>,
 ) -> ChatRuntime {
+    let ChatRuntimePorts {
+        manual_raid,
+        clip_port,
+        bot_ban_handler,
+        invite_relay,
+        scam_notifier,
+    } = ports;
     let ChatApiHandle {
         api,
         bot_user_id,
@@ -492,7 +505,11 @@ pub async fn build_runtime(
     ));
     let promos = Arc::new(
         PromoEngine::new(pool.clone(), Arc::clone(&api), suppression)
-            .set_invite_resolver(Arc::new(DbInviteResolver { pool: pool.clone() }))
+            .set_invite_resolver(Arc::new(DbInviteResolver {
+                pool: pool.clone(),
+                relay: invite_relay,
+                invite_channel_id: invite_channel_id_from_env(),
+            }))
             .set_partner_check(Arc::new(DbPartnerCheck { pool: pool.clone() })),
     );
 
@@ -613,6 +630,13 @@ pub async fn build_runtime(
         pool,
         bot_user_id,
     }
+}
+
+fn invite_channel_id_from_env() -> Option<u64> {
+    std::env::var("TWITCH_NOTIFY_CHANNEL_ID")
+        .ok()
+        .and_then(|value| value.trim().parse::<u64>().ok())
+        .filter(|&value| value > 0)
 }
 
 impl ChatRuntime {
@@ -1195,9 +1219,11 @@ impl PartnerChannelCheck for DbPartnerCheck {
     }
 }
 
-/// Promo-Invite: streamer-spezifisch → (url, true), sonst Env-Fallback → (env, false).
+/// Promo-Invite: streamer-spezifisch → Broker-Erstellung → globaler Fallback.
 struct DbInviteResolver {
     pool: PgPool,
+    relay: Option<BrokerRelay>,
+    invite_channel_id: Option<u64>,
 }
 
 #[async_trait::async_trait]
@@ -1217,10 +1243,85 @@ impl InviteResolver for DbInviteResolver {
                 return (url, true);
             }
         }
+        if let Some(url) = self.create_and_store_streamer_invite(channel_login).await {
+            return (url, true);
+        }
         (
-            std::env::var(PROMO_DISCORD_INVITE_ENV).unwrap_or_default(),
+            promo_invite_fallback(std::env::var(PROMO_DISCORD_INVITE_ENV).ok().as_deref()),
             false,
         )
+    }
+}
+
+impl DbInviteResolver {
+    async fn create_and_store_streamer_invite(&self, channel_login: &str) -> Option<String> {
+        let login = channel_login.trim().to_lowercase();
+        if login.is_empty() {
+            return None;
+        }
+        let relay = self.relay.as_ref()?;
+        let channel_id = self.invite_channel_id?;
+        let reason = format!("streamer-invite:{login}");
+        let invite = match relay.create_invite(channel_id, &reason).await {
+            Ok(invite) => invite,
+            Err(error) => {
+                tracing::warn!(%error, login, "Promo-Invite-Erstellung via Broker fehlgeschlagen");
+                return None;
+            }
+        };
+        let invite_url = invite.invite_url.trim().to_string();
+        let invite_code = invite.code.trim().to_string();
+        if invite_url.is_empty() || invite_code.is_empty() || invite.guild_id == 0 || invite.channel_id == 0 {
+            tracing::warn!(login, "Promo-Invite-Erstellung lieferte unvollständige Broker-Antwort");
+            return None;
+        }
+        let Ok(guild_id) = i64::try_from(invite.guild_id) else {
+            tracing::warn!(login, "Promo-Invite-Guild-ID passt nicht in i64");
+            return None;
+        };
+        let Ok(channel_id) = i64::try_from(invite.channel_id) else {
+            tracing::warn!(login, "Promo-Invite-Channel-ID passt nicht in i64");
+            return None;
+        };
+        let now = chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
+        let stored = sqlx::query(
+            "INSERT INTO twitch_streamer_invites \
+             (streamer_login, guild_id, channel_id, invite_code, invite_url, created_at, last_sent_at) \
+             VALUES ($1, $2, $3, $4, $5, $6, NULL) \
+             ON CONFLICT(streamer_login) DO UPDATE SET \
+                guild_id = excluded.guild_id, \
+                channel_id = excluded.channel_id, \
+                invite_code = excluded.invite_code, \
+                invite_url = excluded.invite_url, \
+                created_at = excluded.created_at",
+        )
+        .bind(&login)
+        .bind(guild_id)
+        .bind(channel_id)
+        .bind(&invite_code)
+        .bind(&invite_url)
+        .bind(&now)
+        .execute(&self.pool)
+        .await;
+        if let Err(error) = stored {
+            tracing::warn!(%error, login, "Promo-Invite konnte nicht gespeichert werden");
+            return Some(invite_url);
+        }
+        if let Err(error) = sqlx::query(
+            "INSERT INTO discord_invite_codes (guild_id, invite_code, created_at, last_seen_at) \
+             VALUES ($1, $2, $3, $3) \
+             ON CONFLICT(guild_id, invite_code) DO UPDATE SET last_seen_at = excluded.last_seen_at",
+        )
+        .bind(guild_id)
+        .bind(&invite_code)
+        .bind(&now)
+        .execute(&self.pool)
+        .await
+        {
+            tracing::debug!(%error, login, "discord_invite_codes konnte nicht aktualisiert werden");
+        }
+        tracing::info!(login, "Promo-Invite für Streamer erstellt und gespeichert");
+        Some(invite_url)
     }
 }
 

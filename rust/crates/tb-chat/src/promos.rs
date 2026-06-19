@@ -99,7 +99,15 @@ const PROMO_RUNTIME_STATE_MAX_AGE_SEC: u64 = 86400;
 /// Prune-Takt in Sekunden (promos.py:68: _PROMO_RUNTIME_PRUNE_INTERVAL_SEC).
 const PROMO_RUNTIME_PRUNE_INTERVAL_SEC: u64 = 60;
 /// Fallback-Discord-Invite (constants.py: PROMO_DISCORD_INVITE).
-const PROMO_DISCORD_INVITE: &str = "https://discord.gg/z5TfVHuQq2";
+pub const DEFAULT_PROMO_DISCORD_INVITE: &str = "https://discord.gg/z5TfVHuQq2";
+
+/// Liefert den konfigurierten globalen Promo-Invite oder den Python-paritären
+/// Default. Ein fehlendes/leeres Secret darf keinen leeren `{invite}`-Text
+/// erzeugen.
+pub fn promo_invite_fallback(configured: Option<&str>) -> String {
+    let configured = configured.map(str::trim).filter(|value| !value.is_empty());
+    configured.unwrap_or(DEFAULT_PROMO_DISCORD_INVITE).to_string()
+}
 /// Stammgast: mind. 10 Messages in 30 Tagen (targeted_promo.py:33–34).
 const STAMMGAST_MIN_MESSAGES: i64 = 10;
 const STAMMGAST_DAYS: i64 = 30;
@@ -357,7 +365,7 @@ pub struct StaticInviteResolver;
 #[async_trait]
 impl InviteResolver for StaticInviteResolver {
     async fn resolve_invite(&self, _channel_login: &str) -> (String, bool) {
-        (PROMO_DISCORD_INVITE.to_string(), false)
+        (DEFAULT_PROMO_DISCORD_INVITE.to_string(), false)
     }
 }
 
@@ -1758,10 +1766,8 @@ impl PromoEngine {
                         state.last_promo_attempt = mono_restored;
                     }
                 }
-                "viewer_spike" => {
-                    if state.last_promo_viewer_spike.is_none() {
-                        state.last_promo_viewer_spike = mono_restored;
-                    }
+                "viewer_spike" if state.last_promo_viewer_spike.is_none() => {
+                    state.last_promo_viewer_spike = mono_restored;
                 }
                 _ => {}
             }
@@ -1827,6 +1833,17 @@ mod tests {
     use crate::types::SendOutcome;
     use std::sync::atomic::{AtomicUsize, Ordering};
     use tokio::sync::Mutex as TokioMutex;
+
+    #[test]
+    fn promo_invite_fallback_nutzt_default_bei_fehlender_oder_leerer_config() {
+        assert_eq!(promo_invite_fallback(None), DEFAULT_PROMO_DISCORD_INVITE);
+        assert_eq!(promo_invite_fallback(Some("")), DEFAULT_PROMO_DISCORD_INVITE);
+        assert_eq!(promo_invite_fallback(Some("   ")), DEFAULT_PROMO_DISCORD_INVITE);
+        assert_eq!(
+            promo_invite_fallback(Some(" https://discord.gg/custom ")),
+            "https://discord.gg/custom"
+        );
+    }
 
     // -----------------------------------------------------------------------
     // Mock-ChatApi
@@ -2087,7 +2104,7 @@ mod tests {
         // wenn der letzte gesetzt ist und Pool groß genug ist.
         let engine = make_engine_no_db();
         // Erster Aufruf: kein last_text.
-        let text1 = engine.build_promo_text("kanal", PROMO_DISCORD_INVITE, "promo").await;
+        let text1 = engine.build_promo_text("kanal", DEFAULT_PROMO_DISCORD_INVITE, "promo").await;
         // last_text setzen.
         {
             let state_ref = engine.channel_states.entry("kanal".to_string()).or_insert_with(|| Mutex::new(ChannelState::new()));
@@ -2098,7 +2115,7 @@ mod tests {
         // Wir wiederholen mehrmals um Flakiness zu minimieren.
         let mut different = false;
         for _ in 0..20 {
-            let text2 = engine.build_promo_text("kanal", PROMO_DISCORD_INVITE, "promo").await;
+            let text2 = engine.build_promo_text("kanal", DEFAULT_PROMO_DISCORD_INVITE, "promo").await;
             if text2 != text1 {
                 different = true;
                 break;

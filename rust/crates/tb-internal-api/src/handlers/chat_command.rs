@@ -7,7 +7,7 @@
 //!   - Nur aktiv, wenn der Kanal Deadlock streamt (last_game ILIKE 'deadlock',
 //!     is_live = 1).
 //!   - Invite-URL: zuerst streamer-spezifisch aus `twitch_streamer_invites`,
-//!     dann Fallback auf Env-Var `PROMO_DISCORD_INVITE`.
+//!     dann Env-Var `PROMO_DISCORD_INVITE` oder globaler Default.
 
 use axum::{extract::State, response::IntoResponse, Json};
 use serde::{Deserialize, Serialize};
@@ -16,6 +16,8 @@ use tb_http_core::ApiError;
 
 /// Env-Var-Name für den globalen Discord-Invite-Fallback.
 const PROMO_DISCORD_INVITE_ENV: &str = "PROMO_DISCORD_INVITE";
+/// Python-paritärer Default-Fallback für den globalen Discord-Invite.
+const DEFAULT_PROMO_DISCORD_INVITE: &str = "https://discord.gg/z5TfVHuQq2";
 
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -112,8 +114,12 @@ async fn get_invite_url(pool: &PgPool, channel_login: &str) -> Result<Option<Str
         }
     }
 
-    // 2. Globaler Fallback aus Env.
-    Ok(std::env::var(PROMO_DISCORD_INVITE_ENV)
-        .ok()
-        .filter(|v| !v.trim().is_empty()))
+    // 2. Globaler Fallback aus Env oder Python-paritärem Default.
+    let configured = std::env::var(PROMO_DISCORD_INVITE_ENV).ok();
+    let invite = configured
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .unwrap_or(DEFAULT_PROMO_DISCORD_INVITE);
+    Ok(Some(invite.to_string()))
 }

@@ -131,7 +131,7 @@ pub async fn run_knowledge_job(pool: &PgPool) {
             }
             let title = sess.title.trim();
             let len = title.chars().count();
-            if len < 10 || len > 140 {
+            if !(10..=140).contains(&len) {
                 continue;
             }
             let keywords = extract_keywords(title);

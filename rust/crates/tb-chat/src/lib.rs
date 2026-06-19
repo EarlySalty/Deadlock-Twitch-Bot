@@ -75,7 +75,7 @@ pub use pipeline::{
 };
 pub use promos::{
     NoopSuppressionCheck, PartnerChannelCheck, PresetPicker, PromoEngine, RandomPresetPicker,
-    StaticInviteResolver,
+    StaticInviteResolver, promo_invite_fallback, DEFAULT_PROMO_DISCORD_INVITE,
 };
 pub use scam_pitch::{AccountAgePort, PitchDecision, ScamPitchDetector, SpamAiReviewer};
 pub use spam_filter::{LearnedPatterns, SpamAction, SpamContext, SpamFilter, SpamVerdict};
