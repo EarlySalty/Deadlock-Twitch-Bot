@@ -38,6 +38,12 @@ Daten-Endpunkte und die Frontend-Gate-Logik bleiben unangetastet.
 > aus seinen eigenen Daten aussperren (er steht evtl. nicht in `twitch_partners`).
 > Das Auth-Level bleibt `Admin`; nur die ausgelieferte Payload wechselt.
 
+Die Startseite löst `Admin { actor: Some(..) }` ohne `?streamer=` über die
+Twitch-Identität des Admin-Actors auf. Das ist nötig, weil die Nutzer-Präsentation
+bewusst keinen Admin-Streamer-Override mitsendet. Im aktiven Admin-Modus bleibt
+ein expliziter Override möglich. Localhost und Admin-Sessions ohne Twitch-Actor
+benötigen weiterhin `?streamer=`.
+
 ### Backend (`tb-dashboard-api`)
 
 `handlers/auth_status.rs` — Verzweigung nach Auth-Level **und** Cookie
@@ -69,12 +75,19 @@ Felder:
   liefert).
 - `pages/InternalHomeLanding.tsx` (Home-Sidebar): Sektion **Admin** mit Toggle-Button
   (sichtbar nur bei `adminEligible`) + Warn-Banner im Hauptbereich bei aktivem Modus.
-  Nach dem Umschalten werden `['auth-status']`, `['internal-home']`, `['streamers']`
-  invalidiert — der Streamer-Scope hängt an `isAdmin`.
+  Beim Umschalten wird zuerst eine laufende Startseitenabfrage abgebrochen, dann
+  das Session-Cookie geändert und anschließend ausschließlich `['auth-status']`
+  synchron neu geladen. Der daraus folgende Wechsel von `isAdmin` ändert den
+  Startseiten-Query-Key automatisch (`streamer` ↔ eigener Account). Eine
+  parallele Invalidierung wäre falsch: Beim Aktivieren könnte sonst noch der
+  Nutzer-Query ohne `streamer` im bereits aktiven Admin-Kontext laufen und durch
+  seine korrekte `401`-Antwort zur Login-Seite navigieren.
 
 ## Verifikation
 
 - Default: Admin loggt ein → Badge zeigt echten Plan (z. B. `Free`), Feature-Gates
   greifen wie bei Partnern; Streamer-Switcher ausgeblendet.
 - Toggle an → voller Zugriff, Warn-Banner sichtbar, Switcher erscheint.
+- Toggle aus und danach wieder an → kein Login-Redirect, kein leerer Root-Knoten,
+  keine unbehandelte Browser-Exception (Firefox-WebDriver-Regressionstest).
 - Logout/Browser-Close → wieder Default.
