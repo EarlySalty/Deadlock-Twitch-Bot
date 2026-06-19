@@ -53,3 +53,4 @@ rust/bin/tb-bot/tb-bot
 # Added by ggshield
 .cache_ggshield
 .claude/worktrees/*
+*.mp4
