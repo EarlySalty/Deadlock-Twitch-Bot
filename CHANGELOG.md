@@ -1,10 +1,10 @@
-## #237 — Admin-Modus lässt sich wieder zuverlässig beenden
+## #237 — Dashboard-Darstellung nach Weißbildschirm stabilisiert
 
-**Problem:** Der Admin-Modus blieb nach einem Klick auf „Beenden“ sichtbar aktiv. Der Ausschalter löschte zwar den Sitzungsschalter im Browser, die Statusabfrage meldete danach aber weiterhin fest den vollen Admin-Zugriff. Der vorherige Reparaturversuch hatte diese feste Antwort als Schutz gegen eine Login-Schleife eingebaut und damit den Ausschalter wirkungslos gemacht.
+**Problem:** Die erneute Aktivierung der umschaltbaren Nutzeransicht führte bei einer echten Twitch-Admin-Sitzung zu einem leeren Dashboard. Die isolierten API-Tests waren erfolgreich, deckten den vollständigen Browser-Ablauf mit der bestehenden Sitzung aber nicht ab.
 
-**Änderung:** Die Statusabfrage wertet den Sitzungsschalter wieder aus. Gleichzeitig kann die Startseite eine Twitch-Admin-Sitzung ohne zusätzliche Partnerauswahl über den eigenen Twitch-Account auflösen. Damit ist die Ursache der früheren Login-Schleife beseitigt, ohne den Admin-Modus dauerhaft zu erzwingen.
+**Änderung:** Die Umschaltung auf die Nutzeransicht wurde erneut zurückgenommen. Der Dashboard-Status liefert für Twitch-Admins vorerst wieder durchgehend die bekannte Admin-Darstellung, bis der komplette Anmelde-, Startseiten- und Renderablauf in einem Browsertest abgesichert ist.
 
-**Ergebnis:** Ohne Admin-Modus lädt direkt die echte Ansicht des eigenen Kanals. Aktivieren schaltet den Vollzugriff für die Browser-Sitzung ein; „Beenden“ entfernt ihn wieder und lädt anschließend die echte Nutzeransicht. Eine explizite Partnerauswahl bleibt im aktiven Admin-Modus möglich.
+**Ergebnis:** Das Dashboard lädt wieder im stabilen Admin-Zustand. Der Ausschalter bleibt vorerst ohne Wirkung; die echte Nutzeransicht wird erst wieder aktiviert, wenn der gesamte Ablauf einschließlich bestehender Browser-Sitzungen verifiziert ist.
 
 ## #236 — Admin-Modus vorübergehend zurückgenommen (Lade-Schleife behoben)
 

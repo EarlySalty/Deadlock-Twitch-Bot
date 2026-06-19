@@ -104,10 +104,8 @@ struct ResolvedIdentity {
 /// - `None` → 401 `auth_required`
 /// - `Partner` → eigener Login/User-Id; `?streamer=` nur == eigener Login,
 ///   sonst 403 `streamer_override_requires_admin`. Bei Override → user_id="".
-/// - `Admin { actor: Some }` → ohne Override eigener Twitch-Account, mit
-///   Override der gewählte Streamer.
-/// - `Localhost`/`Admin { actor: None }` → `?streamer=` Pflicht (sonst 401
-///   `streamer_session_required`, weil keine Twitch-Identität vorhanden ist).
+/// - `Localhost`/`Admin` → `?streamer=` Pflicht (sonst 401
+///   `streamer_session_required`, Python-Parität: kein Twitch-Session-Login).
 #[allow(clippy::result_large_err)]
 fn resolve_identity(
     auth: &DashboardAuthLevel,
@@ -171,36 +169,7 @@ fn resolve_identity(
                 display_name: display,
             })
         }
-        DashboardAuthLevel::Admin { actor: Some(actor) } => {
-            if !override_login.is_empty() {
-                return Ok(ResolvedIdentity {
-                    twitch_login: override_login.clone(),
-                    twitch_user_id: String::new(),
-                    display_name: override_login,
-                });
-            }
-
-            let own_login = actor.twitch_login.trim().to_lowercase();
-            let own_user_id = actor.twitch_user_id.trim().to_string();
-            if own_login.is_empty() && own_user_id.is_empty() {
-                return Err(unauthorized_json(
-                    "streamer_session_required",
-                    "The dashboard session must be bound to a Twitch streamer account.",
-                ));
-            }
-
-            let display_name = actor.twitch_login.trim();
-            Ok(ResolvedIdentity {
-                twitch_login: own_login,
-                twitch_user_id: own_user_id.clone(),
-                display_name: if display_name.is_empty() {
-                    own_user_id
-                } else {
-                    display_name.to_string()
-                },
-            })
-        }
-        DashboardAuthLevel::Localhost | DashboardAuthLevel::Admin { actor: None } => {
+        DashboardAuthLevel::Localhost | DashboardAuthLevel::Admin { .. } => {
             if override_login.is_empty() {
                 // Python: keine Twitch-Session vorhanden → auth_required/streamer_session_required.
                 return Err(unauthorized_json(
@@ -2137,7 +2106,6 @@ mod identity_tests {
     //! B16-FIX-INTERNALHOME-DISPLAYNAME: `resolve_identity` muss den echten
     //! Twitch-display_name aus der Partner-Session liefern (nicht den Login).
     use super::*;
-    use crate::auth::level::AdminActor;
 
     fn partner(login: &str, display: &str) -> DashboardAuthLevel {
         DashboardAuthLevel::Partner {
@@ -2166,37 +2134,5 @@ mod identity_tests {
         let id = resolve_identity(&partner("nani", "NaNiAdm"), &Some("NANI".into())).unwrap();
         assert_eq!(id.twitch_login, "nani");
         assert_eq!(id.display_name, "NaNiAdm");
-    }
-
-    #[test]
-    fn twitch_admin_ohne_override_nutzt_actor_identitaet() {
-        let auth = DashboardAuthLevel::Admin {
-            actor: Some(AdminActor {
-                twitch_user_id: "42".into(),
-                twitch_login: "EarlySalty".into(),
-            }),
-        };
-
-        let id = resolve_identity(&auth, &None).unwrap();
-
-        assert_eq!(id.twitch_login, "earlysalty");
-        assert_eq!(id.twitch_user_id, "42");
-        assert_eq!(id.display_name, "EarlySalty");
-    }
-
-    #[test]
-    fn twitch_admin_mit_override_nutzt_gewaehlten_streamer() {
-        let auth = DashboardAuthLevel::Admin {
-            actor: Some(AdminActor {
-                twitch_user_id: "42".into(),
-                twitch_login: "earlysalty".into(),
-            }),
-        };
-
-        let id = resolve_identity(&auth, &Some("AndererPartner".into())).unwrap();
-
-        assert_eq!(id.twitch_login, "andererpartner");
-        assert!(id.twitch_user_id.is_empty());
-        assert_eq!(id.display_name, "andererpartner");
     }
 }

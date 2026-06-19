@@ -38,12 +38,6 @@ Daten-Endpunkte und die Frontend-Gate-Logik bleiben unangetastet.
 > aus seinen eigenen Daten aussperren (er steht evtl. nicht in `twitch_partners`).
 > Das Auth-Level bleibt `Admin`; nur die ausgelieferte Payload wechselt.
 
-Die Startseite löst `Admin { actor: Some(..) }` ohne `?streamer=` über die
-Twitch-Identität des Admin-Actors auf. Das ist nötig, weil die Nutzer-Präsentation
-bewusst keinen Admin-Streamer-Override mitsendet. Im aktiven Admin-Modus bleibt
-ein expliziter Override möglich. Localhost und Admin-Sessions ohne Twitch-Actor
-benötigen weiterhin `?streamer=`.
-
 ### Backend (`tb-dashboard-api`)
 
 `handlers/auth_status.rs` — Verzweigung nach Auth-Level **und** Cookie
