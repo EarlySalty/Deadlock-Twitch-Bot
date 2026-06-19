@@ -1480,8 +1480,8 @@ mod tests {
 
     #[test]
     fn transient_session_cookie_hat_keine_ablaufzeit() {
-        let c = build_transient_session_cookie("tb_admin_mode", "1", true, SameSite::Lax);
-        assert!(c.starts_with("tb_admin_mode=1;"));
+        let c = build_transient_session_cookie("tb_admin_mode", "2", true, SameSite::Lax);
+        assert!(c.starts_with("tb_admin_mode=2;"));
         assert!(c.contains("Path=/"));
         assert!(c.contains("HttpOnly"));
         assert!(c.contains("SameSite=Lax"));

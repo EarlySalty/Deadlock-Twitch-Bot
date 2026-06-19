@@ -50,7 +50,7 @@ pub async fn set_admin_mode_handler(
         .map(|extension| extension.0.cookie_secure)
         .unwrap_or(true);
     let cookie = if body.enabled {
-        build_transient_session_cookie(ADMIN_MODE_COOKIE, "1", cookie_secure, SameSite::Lax)
+        build_transient_session_cookie(ADMIN_MODE_COOKIE, "2", cookie_secure, SameSite::Lax)
     } else {
         clear_session_cookie(ADMIN_MODE_COOKIE, cookie_secure, SameSite::Lax)
     };
@@ -120,7 +120,7 @@ mod tests {
             .get(SET_COOKIE)
             .and_then(|value| value.to_str().ok())
             .unwrap();
-        assert!(cookie.starts_with("tb_admin_mode=1;"));
+        assert!(cookie.starts_with("tb_admin_mode=2;"));
         assert!(cookie.contains("Path=/"));
         assert!(cookie.contains("HttpOnly"));
         assert!(cookie.contains("SameSite=Lax"));
