@@ -1,3 +1,11 @@
+## #241 — Bot läuft auch ohne internen Zusatz-Token weiter
+
+**Problem:** Fehlte dem Bot die interne Zusatz-Berechtigung für den Versand von Chat-Begrüßungen, ließ sich der Begrüßungs-Dienst nicht aufbauen — und damit schaltete der Bot bisher den **gesamten** Nachlauf einer Streamer-Anmeldung ab: Partner-Abgleich, Rollenvergabe und Moderatoren-Einrichtung entfielen mit. Eine einzige fehlende Berechtigung legte also weit mehr lahm als nötig.
+
+**Änderung:** Fehlt die Berechtigung jetzt, springt ein stiller Ersatz-Begrüßer ein. Die eigentliche Chat-Begrüßung wird in diesem Fall übersprungen und nur vermerkt; der gesamte übrige Anmelde-Nachlauf läuft unverändert weiter.
+
+**Ergebnis:** Partner-Verknüpfung, Rollen und Moderatoren-Setup greifen auch in Umgebungen ohne den internen Zusatz-Token. Lediglich die Begrüßungsnachricht im Chat entfällt dort — alles andere bleibt vollständig funktionsfähig.
+
 ## #240 — Bot-Anmeldung übersteht Neustarts und Token-Wechsel zuverlässig
 
 **Problem:** Nach jeder Token-Erneuerung behielt der Chat-Bot seinen frischen Zugangs-Token nur im Arbeitsspeicher; der zentrale Geheimnis-Speicher blieb auf einem veralteten Stand. Bei jedem Neustart prüfte der Bot deshalb erst den alten Token, bekam eine Ablehnung und heilte sich still über den Erneuerungs-Token — harmlos, aber Lärm in den Protokollen. Gefährlicher war der versteckte Fall: Tauscht der Anbieter beim Erneuern auch den langlebigen Erneuerungs-Token aus, ging dessen neue Fassung verloren. Hätte der Anbieter den alten je für ungültig erklärt, wäre der Bot nach einem Neustart ausgesperrt gewesen.
