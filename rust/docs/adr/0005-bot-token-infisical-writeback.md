@@ -56,10 +56,18 @@ Technisch:
 - **Graceful Degradation:** Fehlt das Write-Token/Config, ist der Sink `None`;
   der Bot loggt einmal `Token-Write-Back deaktiviert` und verhält sich **exakt
   wie heute**. Der Code geht dormant live und wird scharf, sobald das Token da ist.
-- **Sicherheit:** Niemals Token-Werte loggen. Das `INFISICAL_WRITE_TOKEN` ist eine
-  eigene Machine Identity, die **nur** auf `TWITCH_BOT_TOKEN` +
-  `TWITCH_BOT_REFRESH_TOKEN` im richtigen Environment/Path schreiben darf
-  (Least-Privilege, kleiner Blast-Radius). Standing-Read-Token bleibt read-only.
+- **Sicherheit / Credential-Wahl:** Niemals Token-Werte loggen. Idealfall wäre ein
+  reiner Write-Token mit Per-Key-Scope auf die 2 Bot-Secrets gewesen (kleinster
+  Blast-Radius). In diesem Infisical-Setup **nicht baubar**: ein Write-Token lässt
+  sich nicht ohne Read erzeugen, und die Granularität isoliert die 2 Keys nicht.
+  Entscheidung daher: **ein Token mit vollen Rechten** (read+write), der ohnehin
+  schon für das Secret-Laden im Linux-Tresor (systemd-creds) liegt und vom Wrapper
+  in die Bot-Env exec't wird. Der Service-Wrapper spiegelt ihn als
+  `INFISICAL_WRITE_TOKEN` (`export INFISICAL_WRITE_TOKEN="${INFISICAL_WRITE_TOKEN:-$INFISICAL_SERVICE_TOKEN}"`),
+  sodass der Bot autonom zurückschreibt — ohne neues Secret. Abwägung: der
+  Blast-Radius des bestehenden Lese-Tokens wächst um Schreibrechte; mitigiert
+  dadurch, dass es derselbe, schon vertraute Tresor-/Trust-Boundary ist und der
+  Wert nur im Service-Prozess landet (kein Log, keine Datei).
 
 ### Env-Variablen
 
@@ -69,7 +77,7 @@ Technisch:
 | `INFISICAL_PROJECT_ID` | workspaceId (vorhanden) |
 | `INFISICAL_ENV` | Environment-Slug (vorhanden) |
 | `INFISICAL_SECRET_PATH` | Secret-Pfad, Default `/` (vorhanden) |
-| `INFISICAL_WRITE_TOKEN` | **neu** — scoped read+write; fehlt → Sink disabled |
+| `INFISICAL_WRITE_TOKEN` | **neu** — write-fähiger Token; im Service vom Wrapper aus dem all-rights `INFISICAL_SERVICE_TOKEN` (Tresor) gespiegelt; fehlt/leer → Sink dormant |
 
 ## Alternativen
 
@@ -86,7 +94,10 @@ Technisch:
 
 - Boot-WARN verschwindet (nach erstem scharfen Lauf), Logs spiegeln echte Fehler.
 - Refresh-Token-Rotation kann den Bot nicht mehr aussperren.
-- Der Bot hält ein (eng gescoptes) Write-Token — bewusste, mitigierte Abwägung.
+- Der Bot schreibt mit dem all-rights Tresor-Token — bewusste, mitigierte Abwägung
+  (reiner Write-Scope in diesem Infisical-Setup nicht baubar, s. o.).
+- **Scharfschalten** = bestehenden Tresor-Token auf read+write heben + Service neu
+  starten. Kein neues Secret, keine Rust-Änderung — der Wrapper-Alias genügt.
 - ~6–8 Infisical-Writes/Tag (Access-Token-Lebensdauer ≈ 4 h). Vernachlässigbar.
 - Der Wächtertest `zwei_sequenzielle_boots_nutzen_writeback_snapshot_ohne_zweiten_refresh`
   koppelt zwei Prozessstarts über einen Fake-SecretStore: Boot 1 muss den frischen

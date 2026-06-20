@@ -75,5 +75,9 @@ export TWITCH_BOT_USER_ID="${TWITCH_BOT_USER_ID:-1422558159}"
 # Worker-Drop-in), sonst Dual-Refresh-Race auf dem Bot-Token.
 export TB_CHAT_ENABLED="${TB_CHAT_ENABLED:-0}"
 export RUST_LOG="${RUST_LOG:-info}"
+# Bot-Token-Write-Back (ADR 0005): mangels reinem Write-Token in Infisical
+# nutzt der Bot den ohnehin vorhandenen all-rights Service-Token. Ein explizit
+# gesetztes INFISICAL_WRITE_TOKEN (z. B. künftige dedizierte Identity) gewinnt.
+export INFISICAL_WRITE_TOKEN="${INFISICAL_WRITE_TOKEN:-$INFISICAL_SERVICE_TOKEN}"
 
 exec "$ROOT_DIR/rust/target/release/tb-bot"
