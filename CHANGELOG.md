@@ -1,3 +1,11 @@
+## #240 — Bot-Anmeldung übersteht Neustarts und Token-Wechsel zuverlässig
+
+**Problem:** Nach jeder Token-Erneuerung behielt der Chat-Bot seinen frischen Zugangs-Token nur im Arbeitsspeicher; der zentrale Geheimnis-Speicher blieb auf einem veralteten Stand. Bei jedem Neustart prüfte der Bot deshalb erst den alten Token, bekam eine Ablehnung und heilte sich still über den Erneuerungs-Token — harmlos, aber Lärm in den Protokollen. Gefährlicher war der versteckte Fall: Tauscht der Anbieter beim Erneuern auch den langlebigen Erneuerungs-Token aus, ging dessen neue Fassung verloren. Hätte der Anbieter den alten je für ungültig erklärt, wäre der Bot nach einem Neustart ausgesperrt gewesen.
+
+**Änderung:** Der Bot schreibt seinen erneuerten Zugangs-Token — und bei einem Wechsel auch den Erneuerungs-Token — jetzt zurück in den zentralen Geheimnis-Speicher. Das geschieht nach besten Kräften: Schlägt das Zurückschreiben fehl, läuft der Chat mit dem im Speicher gültigen Token unbeeinträchtigt weiter, es wird nur ein Fehler vermerkt. Fehlt die dafür nötige, eng begrenzte Schreib-Berechtigung, verhält sich der Bot exakt wie bisher. Token-Werte landen dabei zu keinem Zeitpunkt in Protokollen.
+
+**Ergebnis:** Der nächste Start findet einen gültigen Token vor, die wiederkehrende Start-Warnung verschwindet, und ein Wechsel des Erneuerungs-Tokens kann den Bot nicht mehr aussperren. Ein dauerhafter Kontrolltest koppelt zwei aufeinanderfolgende Starts und stellt sicher, dass genau diese Fehlerklasse künftig sofort auffällt, statt sich hinter der stillen Selbstheilung zu verstecken.
+
 ## #239 — Twitch-Dashboards laden schneller und robuster
 
 **Problem:** Die Dashboard-Seiten luden viele statische Dateien ohne brauchbare Browser-Zwischenspeicherung und ohne HTTP-Kompression. Zusätzlich startete die Chat-Auswertung direkt eine Detailabfrage, obwohl noch keine Session ausgewählt war; fehlerhafte Detailantworten wurden unnötig erneut versucht. Ein Kategorien-Ranking konnte zudem durch einen Datenbank-Typfehler mit Serverfehler abbrechen.

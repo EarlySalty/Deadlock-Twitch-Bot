@@ -392,7 +392,17 @@ pub async fn try_build_api(helix: Option<HelixClient>) -> Option<ChatApiHandle> 
 
     // Token-Boot: Access-Seed darf tot sein (Infisical-Stand), Refresh trägt.
     let token_manager = match BotTokenManager::new(client_id, client_secret) {
-        Ok(m) => Arc::new(m),
+        Ok(m) => {
+            let m = if let Some(writer) = tb_chat::InfisicalWriter::from_env() {
+                m.with_sink(Arc::new(writer))
+            } else {
+                tracing::warn!(
+                    "Bot-Token-Write-Back deaktiviert: INFISICAL_WRITE_TOKEN/Config fehlt — Env-Snapshot veraltet weiter"
+                );
+                m
+            };
+            Arc::new(m)
+        }
         Err(e) => {
             tracing::error!("BotTokenManager nicht initialisierbar: {e}");
             return None;

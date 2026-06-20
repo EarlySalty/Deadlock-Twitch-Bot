@@ -457,6 +457,45 @@ mod tests {
         }
     }
 
+    /// In-memory SecretStore fuer Boot-Regressionen: simuliert den Infisical-
+    /// Snapshot, aus dem der naechste Prozessstart seine Seed-Tokens liest.
+    #[derive(Clone)]
+    struct FakeSecretStore {
+        inner: std::sync::Arc<std::sync::Mutex<FakeSecretStoreState>>,
+    }
+
+    struct FakeSecretStoreState {
+        access_token: Option<String>,
+        refresh_token: String,
+    }
+
+    impl FakeSecretStore {
+        fn new(access_token: Option<&str>, refresh_token: &str) -> Self {
+            Self {
+                inner: std::sync::Arc::new(std::sync::Mutex::new(FakeSecretStoreState {
+                    access_token: access_token.map(str::to_string),
+                    refresh_token: refresh_token.to_string(),
+                })),
+            }
+        }
+
+        fn snapshot(&self) -> (Option<String>, String) {
+            let guard = self.inner.lock().unwrap();
+            (guard.access_token.clone(), guard.refresh_token.clone())
+        }
+    }
+
+    #[async_trait::async_trait]
+    impl SecretSink for FakeSecretStore {
+        async fn persist_bot_tokens(&self, access_token: &str, refresh_token: Option<&str>) {
+            let mut guard = self.inner.lock().unwrap();
+            guard.access_token = Some(access_token.to_string());
+            if let Some(refresh) = refresh_token {
+                guard.refresh_token = refresh.to_string();
+            }
+        }
+    }
+
     fn validate_ok(expires_in: i64) -> ResponseTemplate {
         ResponseTemplate::new(200).set_body_json(serde_json::json!({
             "login": "deutschedeadlockcommunity",
@@ -476,7 +515,9 @@ mod tests {
             .mount(&server)
             .await;
         let m = manager(&server).await;
-        m.initialize(Some("seed-token"), "refresh-seed").await.unwrap();
+        m.initialize(Some("seed-token"), "refresh-seed")
+            .await
+            .unwrap();
         assert_eq!(m.access_token().await.unwrap(), "seed-token");
         assert_eq!(m.bot_user_id().await, "1422558159");
     }
@@ -509,7 +550,9 @@ mod tests {
             .await;
 
         let m = manager(&server).await;
-        m.initialize(Some("dead-token"), "refresh-seed").await.unwrap();
+        m.initialize(Some("dead-token"), "refresh-seed")
+            .await
+            .unwrap();
         assert_eq!(m.access_token().await.unwrap(), "fresh-token");
     }
 
@@ -543,7 +586,9 @@ mod tests {
         let m = manager(&server)
             .await
             .with_sink(std::sync::Arc::new(sink.clone()));
-        m.initialize(Some("dead-token"), "refresh-seed").await.unwrap();
+        m.initialize(Some("dead-token"), "refresh-seed")
+            .await
+            .unwrap();
 
         let calls = sink.calls.lock().unwrap();
         assert_eq!(calls.len(), 1, "genau ein Write-Back beim Boot-Refresh");
@@ -553,6 +598,240 @@ mod tests {
             Some("fresh-refresh"),
             "rotierter Refresh-Token muss mitgeschrieben werden"
         );
+    }
+
+    /// Waechtertest fuer ADR 0005: Ein erster Boot mit altem Access-Snapshot
+    /// muss den frischen Access-Token so persistieren, dass der zweite Boot
+    /// validate-gruen startet und nicht wieder den 401/Refresh-Boot-Pfad nimmt.
+    #[tokio::test]
+    async fn zwei_sequenzielle_boots_nutzen_writeback_snapshot_ohne_zweiten_refresh() {
+        let store = FakeSecretStore::new(Some("dead-token"), "refresh-seed");
+
+        let boot1 = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/validate"))
+            .and(header("Authorization", "OAuth dead-token"))
+            .respond_with(ResponseTemplate::new(401).set_body_string("invalid"))
+            .expect(1)
+            .mount(&boot1)
+            .await;
+        Mock::given(method("POST"))
+            .and(path("/token"))
+            .and(body_string_contains("refresh_token=refresh-seed"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "access_token": "fresh-after-boot-1",
+                "expires_in": 14000
+            })))
+            .expect(1)
+            .mount(&boot1)
+            .await;
+        Mock::given(method("GET"))
+            .and(path("/validate"))
+            .and(header("Authorization", "OAuth fresh-after-boot-1"))
+            .respond_with(validate_ok(14000))
+            .expect(1)
+            .mount(&boot1)
+            .await;
+
+        let (boot1_access, boot1_refresh) = store.snapshot();
+        let m1 = manager(&boot1)
+            .await
+            .with_sink(std::sync::Arc::new(store.clone()));
+        m1.initialize(boot1_access.as_deref(), &boot1_refresh)
+            .await
+            .unwrap();
+        assert_eq!(m1.access_token().await.unwrap(), "fresh-after-boot-1");
+
+        let boot2 = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/validate"))
+            .and(header("Authorization", "OAuth fresh-after-boot-1"))
+            .respond_with(validate_ok(14000))
+            .expect(1)
+            .mount(&boot2)
+            .await;
+        Mock::given(method("POST"))
+            .and(path("/token"))
+            .respond_with(ResponseTemplate::new(500))
+            .expect(0)
+            .mount(&boot2)
+            .await;
+
+        let (boot2_access, boot2_refresh) = store.snapshot();
+        assert_eq!(boot2_access.as_deref(), Some("fresh-after-boot-1"));
+        let m2 = manager(&boot2)
+            .await
+            .with_sink(std::sync::Arc::new(store.clone()));
+        m2.initialize(boot2_access.as_deref(), &boot2_refresh)
+            .await
+            .unwrap();
+        assert_eq!(m2.access_token().await.unwrap(), "fresh-after-boot-1");
+    }
+
+    #[tokio::test]
+    async fn refresh_rotation_wird_fuer_folgeboot_persistiert() {
+        let store = FakeSecretStore::new(Some("dead-before-rotation"), "old-refresh");
+
+        let boot1 = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/validate"))
+            .and(header("Authorization", "OAuth dead-before-rotation"))
+            .respond_with(ResponseTemplate::new(401).set_body_string("invalid"))
+            .expect(1)
+            .mount(&boot1)
+            .await;
+        Mock::given(method("POST"))
+            .and(path("/token"))
+            .and(body_string_contains("refresh_token=old-refresh"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "access_token": "access-after-rotation",
+                "refresh_token": "rotated-refresh",
+                "expires_in": 14000
+            })))
+            .expect(1)
+            .mount(&boot1)
+            .await;
+        Mock::given(method("GET"))
+            .and(path("/validate"))
+            .and(header("Authorization", "OAuth access-after-rotation"))
+            .respond_with(validate_ok(14000))
+            .expect(1)
+            .mount(&boot1)
+            .await;
+
+        let (boot1_access, boot1_refresh) = store.snapshot();
+        manager(&boot1)
+            .await
+            .with_sink(std::sync::Arc::new(store.clone()))
+            .initialize(boot1_access.as_deref(), &boot1_refresh)
+            .await
+            .unwrap();
+        assert_eq!(
+            store.snapshot(),
+            (
+                Some("access-after-rotation".to_string()),
+                "rotated-refresh".to_string()
+            )
+        );
+
+        let boot2 = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/validate"))
+            .and(header("Authorization", "OAuth access-after-rotation"))
+            .respond_with(ResponseTemplate::new(401).set_body_string("expired"))
+            .expect(1)
+            .mount(&boot2)
+            .await;
+        Mock::given(method("POST"))
+            .and(path("/token"))
+            .and(body_string_contains("refresh_token=rotated-refresh"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "access_token": "access-from-rotated-refresh",
+                "expires_in": 14000
+            })))
+            .expect(1)
+            .mount(&boot2)
+            .await;
+        Mock::given(method("POST"))
+            .and(path("/token"))
+            .and(body_string_contains("refresh_token=old-refresh"))
+            .respond_with(ResponseTemplate::new(500))
+            .expect(0)
+            .mount(&boot2)
+            .await;
+        Mock::given(method("GET"))
+            .and(path("/validate"))
+            .and(header("Authorization", "OAuth access-from-rotated-refresh"))
+            .respond_with(validate_ok(14000))
+            .expect(1)
+            .mount(&boot2)
+            .await;
+
+        let (boot2_access, boot2_refresh) = store.snapshot();
+        manager(&boot2)
+            .await
+            .with_sink(std::sync::Arc::new(store))
+            .initialize(boot2_access.as_deref(), &boot2_refresh)
+            .await
+            .unwrap();
+    }
+
+    #[tokio::test]
+    async fn infisical_writeback_fehler_bleibt_best_effort() {
+        let twitch = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/validate"))
+            .and(header("Authorization", "OAuth dead-token"))
+            .respond_with(ResponseTemplate::new(401).set_body_string("invalid"))
+            .mount(&twitch)
+            .await;
+        Mock::given(method("POST"))
+            .and(path("/token"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "access_token": "fresh-despite-sink-error",
+                "expires_in": 14000
+            })))
+            .mount(&twitch)
+            .await;
+        Mock::given(method("GET"))
+            .and(path("/validate"))
+            .and(header("Authorization", "OAuth fresh-despite-sink-error"))
+            .respond_with(validate_ok(14000))
+            .mount(&twitch)
+            .await;
+
+        let infisical = MockServer::start().await;
+        Mock::given(method("PATCH"))
+            .and(path("/api/v3/secrets/raw/TWITCH_BOT_TOKEN"))
+            .respond_with(ResponseTemplate::new(500))
+            .expect(1)
+            .mount(&infisical)
+            .await;
+
+        let sink = crate::secret_sink::InfisicalWriter::new(
+            infisical.uri(),
+            "proj-1".into(),
+            "prod".into(),
+            "/".into(),
+            "write-token".into(),
+        );
+        let m = manager(&twitch).await.with_sink(std::sync::Arc::new(sink));
+        m.initialize(Some("dead-token"), "refresh-seed")
+            .await
+            .unwrap();
+        assert_eq!(m.access_token().await.unwrap(), "fresh-despite-sink-error");
+    }
+
+    #[tokio::test]
+    async fn ohne_sink_bleibt_boot_refresh_graceful() {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/validate"))
+            .and(header("Authorization", "OAuth dead-token"))
+            .respond_with(ResponseTemplate::new(401).set_body_string("invalid"))
+            .mount(&server)
+            .await;
+        Mock::given(method("POST"))
+            .and(path("/token"))
+            .and(body_string_contains("refresh_token=refresh-seed"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "access_token": "fresh-without-sink",
+                "expires_in": 14000
+            })))
+            .mount(&server)
+            .await;
+        Mock::given(method("GET"))
+            .and(path("/validate"))
+            .and(header("Authorization", "OAuth fresh-without-sink"))
+            .respond_with(validate_ok(14000))
+            .mount(&server)
+            .await;
+
+        let m = manager(&server).await;
+        m.initialize(Some("dead-token"), "refresh-seed")
+            .await
+            .unwrap();
+        assert_eq!(m.access_token().await.unwrap(), "fresh-without-sink");
     }
 
     #[tokio::test]
@@ -615,7 +894,9 @@ mod tests {
             .await;
 
         let m = manager(&server).await;
-        m.initialize(Some("seed-token"), "refresh-seed").await.unwrap();
+        m.initialize(Some("seed-token"), "refresh-seed")
+            .await
+            .unwrap();
         assert_eq!(m.access_token().await.unwrap(), "rotated");
     }
 
@@ -674,8 +955,7 @@ mod tests {
 
     #[test]
     fn unlesbare_datei_ergibt_keinen_access_token() {
-        let got =
-            resolve_seed_tokens(None, Some("env-refresh"), Some("/nonexistent/bot.token"));
+        let got = resolve_seed_tokens(None, Some("env-refresh"), Some("/nonexistent/bot.token"));
         assert_eq!(got.access_token, None);
         assert_eq!(got.refresh_token.as_deref(), Some("env-refresh"));
     }
@@ -708,5 +988,139 @@ mod tests {
         m.force_refresh().await.unwrap();
         let state = m.state.read().await;
         assert_eq!(state.as_ref().unwrap().refresh_token, "stable-refresh");
+    }
+
+    #[tokio::test]
+    async fn whitespace_seed_access_wird_ignoriert_und_refresh_getrimmt() {
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/token"))
+            .and(body_string_contains("refresh_token=refresh-seed"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "access_token": "fresh-from-trimmed-refresh",
+                "expires_in": 14000
+            })))
+            .expect(1)
+            .mount(&server)
+            .await;
+        Mock::given(method("GET"))
+            .and(path("/validate"))
+            .and(header("Authorization", "OAuth fresh-from-trimmed-refresh"))
+            .respond_with(validate_ok(14000))
+            .expect(1)
+            .mount(&server)
+            .await;
+
+        let m = manager(&server).await;
+        m.initialize(Some(" \t\n"), "  refresh-seed \n")
+            .await
+            .unwrap();
+        assert_eq!(
+            m.access_token().await.unwrap(),
+            "fresh-from-trimmed-refresh"
+        );
+    }
+
+    #[tokio::test]
+    async fn leerer_rotierter_refresh_token_wird_nicht_persistiert() {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/validate"))
+            .respond_with(validate_ok(14000))
+            .mount(&server)
+            .await;
+        Mock::given(method("POST"))
+            .and(path("/token"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "access_token": "fresh",
+                "refresh_token": "   ",
+                "expires_in": 14000
+            })))
+            .mount(&server)
+            .await;
+
+        let sink = CapturingSink::default();
+        let m = manager(&server)
+            .await
+            .with_sink(std::sync::Arc::new(sink.clone()));
+        m.initialize(None, "stable-refresh").await.unwrap();
+
+        let calls = sink.calls.lock().unwrap();
+        assert_eq!(calls.len(), 1);
+        assert_eq!(calls[0].0, "fresh");
+        assert_eq!(calls[0].1, None);
+        let state = m.state.read().await;
+        assert_eq!(state.as_ref().unwrap().refresh_token, "stable-refresh");
+    }
+
+    #[tokio::test]
+    async fn expires_in_null_oder_negativ_bekommt_floor() {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/validate"))
+            .respond_with(validate_ok(14000))
+            .mount(&server)
+            .await;
+        Mock::given(method("POST"))
+            .and(path("/token"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "access_token": "fresh-floor",
+                "expires_in": -5
+            })))
+            .mount(&server)
+            .await;
+
+        let m = manager(&server).await;
+        m.initialize(None, "stable-refresh").await.unwrap();
+        let state = m.state.read().await;
+        let remaining = state.as_ref().unwrap().expires_at - Utc::now();
+        assert!(
+            remaining >= chrono::Duration::seconds(50),
+            "expires_in<=0 muss auf rund 60s gefloort werden, remaining={remaining:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn parallele_force_refreshes_lassen_konsistenten_state_zurueck() {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/validate"))
+            .and(header("Authorization", "OAuth seed-token"))
+            .respond_with(validate_ok(14000))
+            .expect(1)
+            .mount(&server)
+            .await;
+        Mock::given(method("POST"))
+            .and(path("/token"))
+            .and(body_string_contains("refresh_token=refresh-seed"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "access_token": "parallel-fresh",
+                "refresh_token": "parallel-refresh",
+                "expires_in": 14000
+            })))
+            .expect(2)
+            .mount(&server)
+            .await;
+        Mock::given(method("GET"))
+            .and(path("/validate"))
+            .and(header("Authorization", "OAuth parallel-fresh"))
+            .respond_with(validate_ok(14000))
+            .expect(2)
+            .mount(&server)
+            .await;
+
+        let m = manager(&server).await;
+        m.initialize(Some("seed-token"), "refresh-seed")
+            .await
+            .unwrap();
+        let (a, b) = tokio::join!(m.force_refresh(), m.force_refresh());
+        a.unwrap();
+        b.unwrap();
+
+        let state = m.state.read().await;
+        let state = state.as_ref().unwrap();
+        assert_eq!(state.access_token, "parallel-fresh");
+        assert_eq!(state.refresh_token, "parallel-refresh");
+        assert!(state.expires_at > Utc::now());
     }
 }

@@ -88,3 +88,7 @@ Technisch:
 - Refresh-Token-Rotation kann den Bot nicht mehr aussperren.
 - Der Bot hält ein (eng gescoptes) Write-Token — bewusste, mitigierte Abwägung.
 - ~6–8 Infisical-Writes/Tag (Access-Token-Lebensdauer ≈ 4 h). Vernachlässigbar.
+- Der Wächtertest `zwei_sequenzielle_boots_nutzen_writeback_snapshot_ohne_zweiten_refresh`
+  koppelt zwei Prozessstarts über einen Fake-SecretStore: Boot 1 muss den frischen
+  Access-Token persistieren, Boot 2 muss damit ohne erneuten `/token`-Refresh
+  validieren. Diese Regression wird damit früh sichtbar.

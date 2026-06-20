@@ -143,7 +143,10 @@ impl InfisicalWriter {
 impl SecretSink for InfisicalWriter {
     async fn persist_bot_tokens(&self, access_token: &str, refresh_token: Option<&str>) {
         match self.set_secret(SECRET_BOT_TOKEN, access_token).await {
-            Ok(()) => tracing::info!(secret = SECRET_BOT_TOKEN, "Bot-Token nach Infisical geschrieben"),
+            Ok(()) => tracing::info!(
+                secret = SECRET_BOT_TOKEN,
+                "Bot-Token nach Infisical geschrieben"
+            ),
             Err(e) => tracing::error!(
                 secret = SECRET_BOT_TOKEN,
                 error = %e,
@@ -153,7 +156,10 @@ impl SecretSink for InfisicalWriter {
         if let Some(refresh) = refresh_token {
             match self.set_secret(SECRET_BOT_REFRESH, refresh).await {
                 Ok(()) => {
-                    tracing::info!(secret = SECRET_BOT_REFRESH, "Bot-Refresh-Token nach Infisical geschrieben")
+                    tracing::info!(
+                        secret = SECRET_BOT_REFRESH,
+                        "Bot-Refresh-Token nach Infisical geschrieben"
+                    )
                 }
                 Err(e) => tracing::error!(
                     secret = SECRET_BOT_REFRESH,
@@ -176,8 +182,51 @@ fn non_empty_env(key: &str) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use wiremock::matchers::{header, method, path};
+    use std::sync::{Mutex, MutexGuard};
+    use wiremock::matchers::{body_partial_json, header, method, path};
     use wiremock::{Mock, MockServer, ResponseTemplate};
+
+    static ENV_LOCK: Mutex<()> = Mutex::new(());
+    const INFISICAL_ENV_KEYS: [&str; 5] = [
+        "INFISICAL_API_URL",
+        "INFISICAL_PROJECT_ID",
+        "INFISICAL_ENV",
+        "INFISICAL_SECRET_PATH",
+        "INFISICAL_WRITE_TOKEN",
+    ];
+
+    struct EnvGuard {
+        _lock: MutexGuard<'static, ()>,
+        saved: Vec<(&'static str, Option<String>)>,
+    }
+
+    impl EnvGuard {
+        fn clean_with(overrides: &[(&'static str, &str)]) -> Self {
+            let lock = ENV_LOCK.lock().unwrap();
+            let saved = INFISICAL_ENV_KEYS
+                .iter()
+                .map(|key| (*key, std::env::var(key).ok()))
+                .collect::<Vec<_>>();
+            for key in INFISICAL_ENV_KEYS {
+                std::env::remove_var(key);
+            }
+            for (key, value) in overrides {
+                std::env::set_var(key, value);
+            }
+            Self { _lock: lock, saved }
+        }
+    }
+
+    impl Drop for EnvGuard {
+        fn drop(&mut self) {
+            for (key, value) in &self.saved {
+                match value {
+                    Some(value) => std::env::set_var(key, value),
+                    None => std::env::remove_var(key),
+                }
+            }
+        }
+    }
 
     fn writer(base_url: String) -> InfisicalWriter {
         InfisicalWriter::new(
@@ -195,6 +244,12 @@ mod tests {
         Mock::given(method("PATCH"))
             .and(path("/api/v3/secrets/raw/TWITCH_BOT_TOKEN"))
             .and(header("authorization", "Bearer write-tok"))
+            .and(body_partial_json(serde_json::json!({
+                "workspaceId": "proj-1",
+                "environment": "prod",
+                "secretPath": "/",
+                "secretValue": "access-xyz"
+            })))
             .respond_with(ResponseTemplate::new(200))
             .expect(1)
             .mount(&server)
@@ -212,12 +267,26 @@ mod tests {
         let server = MockServer::start().await;
         Mock::given(method("PATCH"))
             .and(path("/api/v3/secrets/raw/TWITCH_BOT_REFRESH_TOKEN"))
+            .and(header("authorization", "Bearer write-tok"))
+            .and(body_partial_json(serde_json::json!({
+                "workspaceId": "proj-1",
+                "environment": "prod",
+                "secretPath": "/",
+                "secretValue": "refresh-xyz"
+            })))
             .respond_with(ResponseTemplate::new(404))
             .expect(1)
             .mount(&server)
             .await;
         Mock::given(method("POST"))
             .and(path("/api/v3/secrets/raw/TWITCH_BOT_REFRESH_TOKEN"))
+            .and(header("authorization", "Bearer write-tok"))
+            .and(body_partial_json(serde_json::json!({
+                "workspaceId": "proj-1",
+                "environment": "prod",
+                "secretPath": "/",
+                "secretValue": "refresh-xyz"
+            })))
             .respond_with(ResponseTemplate::new(200))
             .expect(1)
             .mount(&server)
@@ -242,6 +311,75 @@ mod tests {
             .await
             .unwrap_err();
         assert!(matches!(err, SecretWriteError::Rejected { status: 403 }));
+    }
+
+    #[tokio::test]
+    async fn serverfehler_liefert_fehler() {
+        let server = MockServer::start().await;
+        Mock::given(method("PATCH"))
+            .respond_with(ResponseTemplate::new(500))
+            .mount(&server)
+            .await;
+
+        let err = writer(server.uri())
+            .set_secret("TWITCH_BOT_TOKEN", "x")
+            .await
+            .unwrap_err();
+        assert!(matches!(err, SecretWriteError::Rejected { status: 500 }));
+    }
+
+    #[test]
+    fn from_env_liefert_none_wenn_pflicht_env_fehlt() {
+        for missing in [
+            "INFISICAL_API_URL",
+            "INFISICAL_PROJECT_ID",
+            "INFISICAL_ENV",
+            "INFISICAL_WRITE_TOKEN",
+        ] {
+            let mut vars = vec![
+                ("INFISICAL_API_URL", "http://127.0.0.1:8080"),
+                ("INFISICAL_PROJECT_ID", "proj-1"),
+                ("INFISICAL_ENV", "prod"),
+                ("INFISICAL_WRITE_TOKEN", "write-token"),
+            ];
+            vars.retain(|(key, _)| *key != missing);
+            let _env = EnvGuard::clean_with(&vars);
+            assert!(
+                InfisicalWriter::from_env().is_none(),
+                "{missing} muss Pflichtfeld bleiben"
+            );
+        }
+    }
+
+    #[test]
+    fn from_env_trimmt_und_nutzt_secret_path_default() {
+        let _env = EnvGuard::clean_with(&[
+            ("INFISICAL_API_URL", " http://127.0.0.1:8080/ "),
+            ("INFISICAL_PROJECT_ID", " proj-1 "),
+            ("INFISICAL_ENV", " prod "),
+            ("INFISICAL_WRITE_TOKEN", " write-token "),
+        ]);
+
+        let writer = InfisicalWriter::from_env().unwrap();
+        assert_eq!(writer.base_url, "http://127.0.0.1:8080");
+        assert_eq!(writer.project_id, "proj-1");
+        assert_eq!(writer.environment, "prod");
+        assert_eq!(writer.secret_path, "/");
+        assert_eq!(writer.write_token, "write-token");
+    }
+
+    #[test]
+    fn from_env_trimmt_expliziten_secret_path() {
+        let _env = EnvGuard::clean_with(&[
+            ("INFISICAL_API_URL", "http://127.0.0.1:8080"),
+            ("INFISICAL_PROJECT_ID", "proj-1"),
+            ("INFISICAL_ENV", "prod"),
+            ("INFISICAL_SECRET_PATH", " /bot "),
+            ("INFISICAL_WRITE_TOKEN", "write-token"),
+        ]);
+
+        let writer = InfisicalWriter::from_env().unwrap();
+        assert_eq!(writer.secret_path, "/bot");
     }
 
     #[tokio::test]
