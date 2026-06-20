@@ -79,7 +79,7 @@ struct PartnerRow {
 struct BlacklistRow {
     grace_expires_at: Option<String>,
     error_count: Option<i64>,
-    role_removed: Option<bool>,
+    role_removed: Option<i32>,
 }
 
 // ── Haupt-Funktion ──────────────────────────────────────────────────────────
@@ -217,7 +217,7 @@ pub async fn load_partner_access_state(
     if let Some(ref bl) = blacklist_row {
         let grace_raw = bl.grace_expires_at.as_deref().unwrap_or("").trim().to_string();
         let error_count = bl.error_count.unwrap_or(0);
-        let role_removed = bl.role_removed.unwrap_or(false);
+        let role_removed = bl.role_removed.unwrap_or(0) != 0;
 
         // Python _parse_access_state_datetime: ISO parsen (Z→+00:00, naive→UTC).
         let grace_parsed = parse_access_state_datetime(&grace_raw);
