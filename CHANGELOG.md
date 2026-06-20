@@ -1,3 +1,11 @@
+## #244 — Automatische Scam-Bans im Dashboard sichtbar und mit einem Klick rücknehmbar
+
+**Problem:** Der Scam-Schutz konnte verdächtige Erstschreiber bei hoher Sicherheit automatisch bannen oder timeouten. Diese automatischen Eingriffe tauchten im Dashboard aber nirgends auf — die Fall-Liste zeigte nur manuell zu prüfende Vorschläge. Ein versehentlich getroffener Zuschauer ließ sich darum nicht bequem über das Dashboard zurückholen.
+
+**Änderung:** Die Fall-Liste zeigt jetzt auch automatisch gebannte und getimeoutete Fälle, jeweils klar gekennzeichnet (Auto-gebannt bzw. Auto-Timeout). Zu jedem dieser Fälle gibt es eine Rücknahme-Schaltfläche, die den Bann oder Timeout mit einem Klick aufhebt. Die Entbannung wird dabei echt im Kanal ausgeführt — über den Bot, der den dafür nötigen, laufend erneuerten Zugang besitzt — und nicht bloß im Dashboard vermerkt.
+
+**Ergebnis:** Streamer sehen alle Eingriffe des Scam-Schutzes an einer Stelle und können einen Fehlalarm sofort und vollständig korrigieren, ohne in die Twitch-Einstellungen wechseln zu müssen.
+
 ## #243 — Bestenlisten und Statistiken brechen nicht mehr am Partner-Kennzeichen ab
 
 **Problem:** Die Auswertung der Bestenlisten und Streamer-Statistiken verglich das Partner-Kennzeichen — in der Datenbank ein Ja/Nein-Wert — fälschlich mit einer Zahl. In der produktiven Datenbank ist dieser Vergleich ungültig, sodass die betroffene Abfrage mit einem Serverfehler abbrechen konnte. Die automatischen Tests bemerkten das nie, weil ihre Test-Datenbank dieselbe Spalte als Zahl anlegte und damit das echte Schema gar nicht abbildete.
