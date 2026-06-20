@@ -10,6 +10,7 @@ use serde_json::json;
 use sqlx::PgPool;
 
 use crate::auth::level::DashboardAuthLevel;
+use crate::handlers::scam_guard_enforce::{proxy_owned_verdict_by_login, REVOKE_PATH};
 
 #[derive(Deserialize, Default)]
 pub struct ScamGuardQuery {
@@ -25,6 +26,7 @@ struct QueueRow {
     confidence: f64,
     category: String,
     reasoning: String,
+    action_taken: String,
     created_at: DateTime<Utc>,
 }
 
@@ -80,10 +82,10 @@ pub async fn queue_handler(
 
     match sqlx::query_as::<_, QueueRow>(
         "SELECT id, chatter_login, chatter_id, confidence::float8 AS confidence, \
-                category, reasoning, created_at \
+                category, reasoning, action_taken, created_at \
            FROM twitch_scam_guard_verdicts \
-          WHERE channel_login = $1 AND action_taken = 'suggested' \
-          ORDER BY created_at DESC \
+          WHERE channel_login = $1 AND action_taken IN ('suggested', 'banned', 'timed_out') \
+          ORDER BY created_at DESC, id DESC \
           LIMIT 100",
     )
     .bind(&login)
@@ -101,6 +103,7 @@ pub async fn queue_handler(
                         "confidence": row.confidence,
                         "category": row.category,
                         "reasoning": row.reasoning,
+                        "action_taken": row.action_taken,
                         "created_at": row.created_at.to_rfc3339()
                     })
                 })
@@ -169,6 +172,30 @@ pub async fn ignore_handler(
         Err(response) => return response,
     };
 
+    let action_taken = match sqlx::query_scalar::<_, String>(
+        "SELECT action_taken FROM twitch_scam_guard_verdicts \
+          WHERE id = $1 AND channel_login = $2 \
+            AND action_taken IN ('suggested', 'banned', 'timed_out')",
+    )
+    .bind(id)
+    .bind(&login)
+    .fetch_optional(&pool)
+    .await
+    {
+        Ok(Some(action_taken)) => action_taken,
+        Ok(None) => return error_response(StatusCode::NOT_FOUND, "not found"),
+        Err(error) => {
+            tracing::error!(%error, "scam-guard queue ignore lookup database error");
+            return error_response(StatusCode::INTERNAL_SERVER_ERROR, "db");
+        }
+    };
+
+    if matches!(action_taken.as_str(), "banned" | "timed_out") {
+        // Echte Moderationsaktionen muessen ueber den Bot laufen: nur dort gibt
+        // es den live rotierten Bot-Token und den zentralen Twitch-Unban-Pfad.
+        return proxy_owned_verdict_by_login(pool, &login, id, REVOKE_PATH).await;
+    }
+
     match sqlx::query(
         "UPDATE twitch_scam_guard_verdicts \
             SET action_taken = 'overturned' \
@@ -179,9 +206,7 @@ pub async fn ignore_handler(
     .execute(&pool)
     .await
     {
-        Ok(result) if result.rows_affected() > 0 => {
-            Json(json!({ "ok": true })).into_response()
-        }
+        Ok(result) if result.rows_affected() > 0 => Json(json!({ "ok": true })).into_response(),
         Ok(_) => error_response(StatusCode::NOT_FOUND, "not found"),
         Err(error) => {
             tracing::error!(%error, "scam-guard queue ignore POST database error");
@@ -200,6 +225,41 @@ mod tests {
         Row,
     };
     use std::str::FromStr;
+    use std::sync::OnceLock;
+    use wiremock::matchers::{body_string_contains, header, method, path};
+    use wiremock::{Mock, MockServer, ResponseTemplate};
+
+    static INTERNAL_ENV_LOCK: OnceLock<tokio::sync::Mutex<()>> = OnceLock::new();
+
+    struct EnvGuard {
+        key: &'static str,
+        old: Option<String>,
+    }
+
+    impl EnvGuard {
+        fn set(key: &'static str, value: &str) -> Self {
+            let old = std::env::var(key).ok();
+            std::env::set_var(key, value);
+            Self { key, old }
+        }
+    }
+
+    impl Drop for EnvGuard {
+        fn drop(&mut self) {
+            if let Some(old) = &self.old {
+                std::env::set_var(self.key, old);
+            } else {
+                std::env::remove_var(self.key);
+            }
+        }
+    }
+
+    async fn internal_env_guard() -> tokio::sync::MutexGuard<'static, ()> {
+        INTERNAL_ENV_LOCK
+            .get_or_init(|| tokio::sync::Mutex::new(()))
+            .lock()
+            .await
+    }
 
     async fn make_pool(schema: &str) -> Option<PgPool> {
         let dsn = std::env::var("TB_TEST_DATABASE_URL").ok()?;
@@ -288,12 +348,15 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn queue_lists_only_own_suggested_verdicts() {
+    async fn queue_lists_own_actionable_verdicts() {
         let Some(pool) = make_pool("t_scam_guard_queue_filter").await else {
             return;
         };
-        let expected_id = insert_verdict(&pool, "nani", "queued", "suggested").await;
-        insert_verdict(&pool, "nani", "already_banned", "banned").await;
+        let suggested_id = insert_verdict(&pool, "nani", "queued", "suggested").await;
+        let banned_id = insert_verdict(&pool, "nani", "already_banned", "banned").await;
+        let timed_id = insert_verdict(&pool, "nani", "timed", "timed_out").await;
+        insert_verdict(&pool, "nani", "overturned", "overturned").await;
+        insert_verdict(&pool, "nani", "none", "none").await;
         insert_verdict(&pool, "other", "foreign", "suggested").await;
 
         let (status, body) = body_of(
@@ -311,12 +374,31 @@ mod tests {
             body,
             json!({
                 "queue": [{
-                    "id": expected_id,
+                    "id": timed_id,
+                    "chatter_login": "timed",
+                    "chatter_id": "timed-id",
+                    "confidence": 0.8799999952316284_f64,
+                    "category": "impersonation",
+                    "reasoning": "reason",
+                    "action_taken": "timed_out",
+                    "created_at": "2026-06-19T10:00:00+00:00"
+                }, {
+                    "id": banned_id,
+                    "chatter_login": "already_banned",
+                    "chatter_id": "already_banned-id",
+                    "confidence": 0.8799999952316284_f64,
+                    "category": "impersonation",
+                    "reasoning": "reason",
+                    "action_taken": "banned",
+                    "created_at": "2026-06-19T10:00:00+00:00"
+                }, {
+                    "id": suggested_id,
                     "chatter_login": "queued",
                     "chatter_id": "queued-id",
                     "confidence": 0.8799999952316284_f64,
                     "category": "impersonation",
                     "reasoning": "reason",
+                    "action_taken": "suggested",
                     "created_at": "2026-06-19T10:00:00+00:00"
                 }]
             })
@@ -376,13 +458,32 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn ignore_overturns_suggested_and_rejects_banned_or_foreign() {
+    async fn ignore_overturns_suggested_allows_enacted_and_rejects_foreign() {
         let Some(pool) = make_pool("t_scam_guard_ignore").await else {
             return;
         };
         let suggested_id = insert_verdict(&pool, "nani", "suggested", "suggested").await;
         let banned_id = insert_verdict(&pool, "nani", "banned", "banned").await;
+        let timed_id = insert_verdict(&pool, "nani", "timed", "timed_out").await;
         let foreign_id = insert_verdict(&pool, "other", "foreign", "suggested").await;
+        let _env_lock = internal_env_guard().await;
+        let server = MockServer::start().await;
+        let _base_url = EnvGuard::set("TWITCH_INTERNAL_API_BASE_URL", &server.uri());
+        let _token = EnvGuard::set("TWITCH_INTERNAL_API_TOKEN", "tok");
+        for id in [banned_id, timed_id] {
+            Mock::given(method("POST"))
+                .and(path("/internal/twitch/v1/scam-guard/revoke"))
+                .and(header("x-internal-token", "tok"))
+                .and(body_string_contains(format!("\"verdictId\":{id}")))
+                .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                    "status": "revoked",
+                    "was_banned": true,
+                    "unbanned": true
+                })))
+                .expect(1)
+                .mount(&server)
+                .await;
+        }
 
         let (status, body) = body_of(
             ignore_handler(
@@ -397,16 +498,14 @@ mod tests {
         assert_eq!(status, StatusCode::OK);
         assert_eq!(body, json!({ "ok": true }));
 
-        let row = sqlx::query(
-            "SELECT action_taken FROM twitch_scam_guard_verdicts WHERE id = $1",
-        )
-        .bind(suggested_id)
-        .fetch_one(&pool)
-        .await
-        .unwrap();
+        let row = sqlx::query("SELECT action_taken FROM twitch_scam_guard_verdicts WHERE id = $1")
+            .bind(suggested_id)
+            .fetch_one(&pool)
+            .await
+            .unwrap();
         assert_eq!(row.get::<String, _>("action_taken"), "overturned");
 
-        for id in [banned_id, foreign_id] {
+        for id in [banned_id, timed_id] {
             let (status, body) = body_of(
                 ignore_handler(
                     partner("nani"),
@@ -417,8 +516,22 @@ mod tests {
                 .await,
             )
             .await;
-            assert_eq!(status, StatusCode::NOT_FOUND);
-            assert_eq!(body, json!({ "error": "not found" }));
+            assert_eq!(status, StatusCode::OK);
+            assert_eq!(body["status"], "revoked");
+            assert_eq!(body["unbanned"], true);
         }
+
+        let (status, body) = body_of(
+            ignore_handler(
+                partner("nani"),
+                State(pool.clone()),
+                Query(ScamGuardQuery::default()),
+                Path(foreign_id),
+            )
+            .await,
+        )
+        .await;
+        assert_eq!(status, StatusCode::NOT_FOUND);
+        assert_eq!(body, json!({ "error": "not found" }));
     }
 }

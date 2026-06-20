@@ -14,7 +14,7 @@ use sqlx::PgPool;
 use crate::auth::level::DashboardAuthLevel;
 
 const ENFORCE_PATH: &str = "/internal/twitch/v1/scam-guard/enforce";
-const REVOKE_PATH: &str = "/internal/twitch/v1/scam-guard/revoke";
+pub(crate) const REVOKE_PATH: &str = "/internal/twitch/v1/scam-guard/revoke";
 
 #[derive(Deserialize, Default)]
 pub struct ScamGuardQuery {
@@ -76,6 +76,15 @@ async fn proxy_for_owned_verdict(
         Err(response) => return response,
     };
 
+    proxy_owned_verdict_by_login(pool, &login, id, path).await
+}
+
+pub(crate) async fn proxy_owned_verdict_by_login(
+    pool: PgPool,
+    login: &str,
+    id: i64,
+    path: &'static str,
+) -> Response {
     let owner = match sqlx::query_scalar::<_, String>(
         "SELECT channel_login FROM twitch_scam_guard_verdicts WHERE id = $1",
     )
@@ -89,7 +98,7 @@ async fn proxy_for_owned_verdict(
             return error_response(StatusCode::INTERNAL_SERVER_ERROR, "db");
         }
     };
-    if owner.as_deref() != Some(login.as_str()) {
+    if owner.as_deref() != Some(login) {
         return error_response(StatusCode::NOT_FOUND, "not found");
     }
 
@@ -114,8 +123,8 @@ async fn proxy_for_owned_verdict(
             return error_response(StatusCode::BAD_GATEWAY, "upstream");
         }
     };
-    let status = StatusCode::from_u16(upstream.status().as_u16())
-        .unwrap_or(StatusCode::BAD_GATEWAY);
+    let status =
+        StatusCode::from_u16(upstream.status().as_u16()).unwrap_or(StatusCode::BAD_GATEWAY);
     let body = match upstream.bytes().await {
         Ok(body) => body,
         Err(error) => {

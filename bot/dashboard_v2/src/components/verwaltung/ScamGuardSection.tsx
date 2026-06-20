@@ -263,16 +263,31 @@ function SettingsBlock() {
 
 // ── Queue-Eintrag ────────────────────────────────────────────────────────────
 
-type ItemState = 'open' | 'banned' | 'ignored' | 'revoked';
+type ItemState = 'open' | 'banned' | 'timed_out' | 'ignored' | 'revoked';
+
+/** Karten-Anfangszustand aus dem bereits durchgeführten Aktionstyp ableiten. */
+function initialItemState(action: string): ItemState {
+  if (action === 'banned') return 'banned';
+  if (action === 'timed_out') return 'timed_out';
+  return 'open';
+}
+
+/** Badge für bereits automatisch durchgesetzte Fälle (Vorschlag = kein Badge). */
+function actionBadge(action: string): { label: string; tone: string } | null {
+  if (action === 'banned') return { label: 'Auto-gebannt', tone: 'border-error/40 bg-error/10 text-error' };
+  if (action === 'timed_out') return { label: 'Auto-Timeout', tone: 'border-warning/40 bg-warning/10 text-warning' };
+  return null;
+}
 
 function QueueItemCard({ item }: { item: ScamQueueItem }) {
-  const [state, setState] = useState<ItemState>('open');
+  const [state, setState] = useState<ItemState>(() => initialItemState(item.action_taken));
   const [busy, setBusy] = useState<null | 'ban' | 'ignore' | 'revoke'>(null);
   const [note, setNote] = useState<string | null>(null);
   const [expanded, setExpanded] = useState(false);
   const [detail, setDetail] = useState<ScamVerdictDetail | null>(null);
   const [detailLoading, setDetailLoading] = useState(false);
   const [detailError, setDetailError] = useState<string | null>(null);
+  const badge = actionBadge(item.action_taken);
 
   const toggleDetail = async () => {
     const next = !expanded;
@@ -331,13 +346,18 @@ function QueueItemCard({ item }: { item: ScamQueueItem }) {
   };
 
   const onRevoke = async () => {
+    const wasTimeout = state === 'timed_out';
     setBusy('revoke');
     setNote(null);
     try {
       const result = await revokeScamVerdict(item.id);
       if (result.status === 'revoked') {
         setState('revoked');
-        setNote('Bann zurückgenommen, Account wieder entbannt.');
+        setNote(
+          wasTimeout
+            ? 'Timeout aufgehoben, Account wieder entbannt.'
+            : 'Bann zurückgenommen, Account wieder entbannt.',
+        );
       } else {
         setNote('Urteil nicht gefunden.');
       }
@@ -362,6 +382,11 @@ function QueueItemCard({ item }: { item: ScamQueueItem }) {
             <span className="rounded-full border border-border bg-background/40 px-2 py-0.5 text-[11px] font-medium text-text-secondary">
               {item.category}
             </span>
+            {badge && (
+              <span className={`rounded-full border px-2 py-0.5 text-[11px] font-semibold ${badge.tone}`}>
+                {badge.label}
+              </span>
+            )}
           </div>
           <p className="text-xs text-text-secondary mt-0.5">{formatDate(item.created_at)}</p>
         </div>
@@ -431,7 +456,7 @@ function QueueItemCard({ item }: { item: ScamQueueItem }) {
               </button>
             </>
           ) : (
-            // state === 'banned' → Rücknahme anbieten
+            // state === 'banned' | 'timed_out' → Rücknahme anbieten (echter Twitch-Unban via Bot)
             <button
               type="button"
               disabled={busy !== null}
@@ -439,7 +464,7 @@ function QueueItemCard({ item }: { item: ScamQueueItem }) {
               className="inline-flex items-center gap-2 rounded-lg border border-border bg-background/40 px-4 py-2 text-sm font-semibold text-text-secondary transition-colors hover:border-border-hover hover:text-white disabled:opacity-40 disabled:cursor-not-allowed"
             >
               {busy === 'revoke' ? <Loader2 className="h-4 w-4 animate-spin" /> : <RotateCcw className="h-4 w-4" />}
-              Bann rückgängig machen
+              {state === 'timed_out' ? 'Timeout aufheben' : 'Bann zurücknehmen'}
             </button>
           )}
         </div>
@@ -473,8 +498,8 @@ function QueueBlock() {
 
   return (
     <div>
-      <div className="flex items-center justify-between gap-3 mb-3 flex-wrap">
-        <h3 className="text-lg font-bold text-white">Offene Vorschläge</h3>
+      <div className="flex items-center justify-between gap-3 mb-1 flex-wrap">
+        <h3 className="text-lg font-bold text-white">Gemeldete Fälle</h3>
         <button
           type="button"
           onClick={() => void load()}
@@ -485,6 +510,10 @@ function QueueBlock() {
           Aktualisieren
         </button>
       </div>
+      <p className="text-xs text-text-secondary mb-3">
+        Vorgeschlagene Fälle arbeitest du hier ab; bereits automatisch gebannte oder getimeoutete Fälle
+        kannst du mit einem Klick wieder zurücknehmen — das hebt den Bann auch im Kanal auf.
+      </p>
 
       {error && (
         <div className="rounded-lg border border-danger/40 bg-danger/10 px-3 py-2 text-sm text-danger">
@@ -499,7 +528,7 @@ function QueueBlock() {
         </div>
       ) : items.length === 0 ? (
         <div className="rounded-xl border border-border/60 bg-background/40 px-4 py-6 text-center text-sm text-text-secondary">
-          Keine offenen Vorschläge. Der Scam-Schutz meldet sich, sobald ein verdächtiger Erstschreiber auftaucht.
+          Keine offenen Fälle. Der Scam-Schutz meldet sich, sobald ein verdächtiger Erstschreiber auftaucht.
         </div>
       ) : (
         <div className="space-y-3">
