@@ -513,6 +513,7 @@ async fn process_link_click(pool: &PgPool, body: LinkClickRequest) -> Result<Val
 // ── Tests ─────────────────────────────────────────────────────────────────────
 
 #[cfg(test)]
+#[allow(clippy::await_holding_lock)]
 mod tests {
     use super::*;
     use axum::{

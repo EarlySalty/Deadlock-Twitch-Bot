@@ -2320,7 +2320,7 @@ mod db_tests {
                 ts_utc TIMESTAMPTZ NOT NULL DEFAULT NOW(),
                 streamer TEXT NOT NULL,
                 viewer_count INTEGER DEFAULT 0,
-                is_partner INTEGER DEFAULT 0,
+                is_partner BOOLEAN DEFAULT FALSE,
                 game_name TEXT,
                 stream_title TEXT
             )"#,

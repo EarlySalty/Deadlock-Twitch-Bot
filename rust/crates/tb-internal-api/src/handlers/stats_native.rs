@@ -334,7 +334,7 @@ fn build_top_sql(table: &str, is_tracked: bool, streamer_filter: bool) -> String
                CAST(AVG(viewer_count) AS DOUBLE PRECISION) AS avg_viewers,
                CAST(MAX(viewer_count) AS BIGINT)           AS max_viewers,
                CAST(COUNT(*) AS BIGINT)                    AS samples,
-               MAX(CASE WHEN is_partner <> 0 THEN 1 ELSE 0 END) AS is_partner
+               MAX(CASE WHEN COALESCE(is_partner, FALSE) THEN 1 ELSE 0 END) AS is_partner
           FROM {table}
          WHERE ts_utc >= NOW() - INTERVAL '30 days'
 {streamer_cond}{partition_filter}           AND (
@@ -1983,18 +1983,18 @@ mod tests {
             manual_verified_until TEXT
         )"#).execute(&pool).await.expect("DDL partner_state");
 
-        // Prod-Schema: is_partner ist INTEGER (0/1), nicht BOOLEAN — Fixture spiegelt das,
-        // sonst maskiert sie den int4/bool-Typ-Drift im Aggregat-SQL.
+        // Prod-Schema: is_partner ist BOOLEAN. Die Fixture muss das spiegeln,
+        // sonst maskiert sie bool/int-Typ-Drift im Aggregat-SQL.
         sqlx::query(r#"CREATE TABLE twitch_stats_tracked (
             id BIGSERIAL PRIMARY KEY, streamer TEXT NOT NULL,
             viewer_count INTEGER NOT NULL DEFAULT 0,
-            is_partner INTEGER NOT NULL DEFAULT 0, ts_utc TIMESTAMPTZ NOT NULL DEFAULT NOW()
+            is_partner BOOLEAN NOT NULL DEFAULT FALSE, ts_utc TIMESTAMPTZ NOT NULL DEFAULT NOW()
         )"#).execute(&pool).await.expect("DDL stats_tracked");
 
         sqlx::query(r#"CREATE TABLE twitch_stats_category (
             id BIGSERIAL PRIMARY KEY, streamer TEXT NOT NULL,
             viewer_count INTEGER NOT NULL DEFAULT 0,
-            is_partner INTEGER NOT NULL DEFAULT 0, ts_utc TIMESTAMPTZ NOT NULL DEFAULT NOW()
+            is_partner BOOLEAN NOT NULL DEFAULT FALSE, ts_utc TIMESTAMPTZ NOT NULL DEFAULT NOW()
         )"#).execute(&pool).await.expect("DDL stats_category");
 
         sqlx::query(r#"CREATE TABLE twitch_stream_sessions (
@@ -2077,7 +2077,7 @@ mod tests {
         sqlx::query("INSERT INTO twitch_streamers_partner_state (twitch_login, is_partner_active, manual_verified_permanent) VALUES ('helmi', 1, 1), ('dragscope', 1, 0)")
             .execute(&pool).await.unwrap();
 
-        sqlx::query("INSERT INTO twitch_stats_tracked (streamer, viewer_count, is_partner, ts_utc) VALUES ('helmi', 100, 1, NOW()), ('helmi', 200, 1, NOW()), ('dragscope', 50, 0, NOW())")
+        sqlx::query("INSERT INTO twitch_stats_tracked (streamer, viewer_count, is_partner, ts_utc) VALUES ('helmi', 100, TRUE, NOW()), ('helmi', 200, TRUE, NOW()), ('dragscope', 50, FALSE, NOW())")
             .execute(&pool).await.unwrap();
 
         let hf = HourFilter::None;
@@ -2104,7 +2104,7 @@ mod tests {
         sqlx::query("INSERT INTO twitch_streamers_partner_state (twitch_login, is_partner_active) VALUES ('helmi', 1)")
             .execute(&pool).await.unwrap();
 
-        sqlx::query("INSERT INTO twitch_stats_tracked (streamer, viewer_count, is_partner, ts_utc) VALUES ('helmi', 120, 1, NOW())")
+        sqlx::query("INSERT INTO twitch_stats_tracked (streamer, viewer_count, is_partner, ts_utc) VALUES ('helmi', 120, TRUE, NOW())")
             .execute(&pool).await.unwrap();
 
         let hf = HourFilter::None;
@@ -2177,7 +2177,7 @@ mod tests {
 
         sqlx::query("INSERT INTO twitch_streamers_partner_state (twitch_login, is_partner_active, manual_verified_permanent) VALUES ('helmi', 1, 1)")
             .execute(&pool).await.unwrap();
-        sqlx::query("INSERT INTO twitch_stats_tracked (streamer, viewer_count, is_partner, ts_utc) VALUES ('helmi', 19, 1, NOW()), ('helmi', 15, 1, NOW())")
+        sqlx::query("INSERT INTO twitch_stats_tracked (streamer, viewer_count, is_partner, ts_utc) VALUES ('helmi', 19, TRUE, NOW()), ('helmi', 15, TRUE, NOW())")
             .execute(&pool).await.unwrap();
 
         let hf = HourFilter::None;

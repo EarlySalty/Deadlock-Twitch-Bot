@@ -337,7 +337,8 @@ impl IrcLurkerTracker {
     }
 
     async fn serve(&self, mut reader: BufReader<OwnedReadHalf>, mut writer: OwnedWriteHalf, rx: &mut mpsc::UnboundedReceiver<Cmd>) {
-        for ch in self.channels.lock().unwrap().iter() {
+        let channels: Vec<String> = self.channels.lock().unwrap().iter().cloned().collect();
+        for ch in channels {
             let _ = writer.write_all(format!("JOIN #{ch}\r\n").as_bytes()).await;
         }
         let _ = writer.flush().await;

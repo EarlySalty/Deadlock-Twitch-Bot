@@ -177,7 +177,7 @@ async fn load_category(pool: &PgPool, tracked: bool) -> Result<Vec<TopRow>, sqlx
                    AVG(s.viewer_count)::float8 AS avg_viewers,
                    MAX(s.viewer_count)::int8   AS max_viewers,
                    COUNT(*)::int8              AS samples,
-                   MAX(CASE WHEN s.is_partner <> 0 THEN 1 ELSE 0 END)::int8 AS is_partner
+                   MAX(CASE WHEN COALESCE(s.is_partner, FALSE) THEN 1 ELSE 0 END)::int8 AS is_partner
               FROM source_rows s
              WHERE s.ts_utc::timestamptz >= NOW() - INTERVAL '30 days'
                AND {membership}
@@ -346,8 +346,8 @@ mod tests {
         let opts = PgConnectOptions::from_str(&dsn).unwrap().options([("search_path", schema)]);
         let pool = PgPoolOptions::new().max_connections(2).connect_with(opts).await.unwrap();
         for ddl in [
-            "CREATE TABLE twitch_stats_tracked (ts_utc TEXT, streamer TEXT, viewer_count INTEGER, is_partner INTEGER DEFAULT 0)",
-            "CREATE TABLE twitch_stats_category (ts_utc TEXT, streamer TEXT, viewer_count INTEGER, is_partner INTEGER DEFAULT 0)",
+            "CREATE TABLE twitch_stats_tracked (ts_utc TEXT, streamer TEXT, viewer_count INTEGER, is_partner BOOLEAN DEFAULT FALSE)",
+            "CREATE TABLE twitch_stats_category (ts_utc TEXT, streamer TEXT, viewer_count INTEGER, is_partner BOOLEAN DEFAULT FALSE)",
             // Vereinfachte Partner-State-Tabelle (Ersatz der View für den Test).
             "CREATE TABLE twitch_streamers_partner_state (twitch_login TEXT, is_partner_active INTEGER, \
                  is_on_discord INTEGER, discord_user_id TEXT, discord_display_name TEXT)",
@@ -369,12 +369,12 @@ mod tests {
             ("twitch_stats_tracked", "nani", 200),
             ("twitch_stats_category", "rando", 40),
         ] {
-            sqlx::query(&format!("INSERT INTO {tbl} (ts_utc, streamer, viewer_count, is_partner) VALUES ($1, $2, $3, 0)"))
+            sqlx::query(&format!("INSERT INTO {tbl} (ts_utc, streamer, viewer_count, is_partner) VALUES ($1, $2, $3, FALSE)"))
                 .bind(&now).bind(streamer).bind(vc).execute(&pool).await.unwrap();
         }
         // Alte Zeile (>30 Tage) wird ausgefenstert.
         let old = (chrono::Utc::now() - chrono::Duration::days(40)).to_rfc3339();
-        sqlx::query("INSERT INTO twitch_stats_tracked (ts_utc, streamer, viewer_count, is_partner) VALUES ($1, 'nani', 9999, 0)")
+        sqlx::query("INSERT INTO twitch_stats_tracked (ts_utc, streamer, viewer_count, is_partner) VALUES ($1, 'nani', 9999, FALSE)")
             .bind(&old).execute(&pool).await.unwrap();
 
         let tracked = load_category(&pool, true).await.unwrap();

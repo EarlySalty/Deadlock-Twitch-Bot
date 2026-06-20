@@ -1232,10 +1232,10 @@ mod tests {
         for ddl in [
             r#"CREATE TABLE IF NOT EXISTS twitch_stats_category (
                 ts_utc TIMESTAMPTZ, streamer TEXT, viewer_count INTEGER,
-                is_partner INTEGER, game_name TEXT, stream_title TEXT, tags TEXT )"#,
+                is_partner BOOLEAN DEFAULT FALSE, game_name TEXT, stream_title TEXT, tags TEXT )"#,
             r#"CREATE TABLE IF NOT EXISTS twitch_stats_tracked (
                 ts_utc TIMESTAMPTZ, streamer TEXT, viewer_count INTEGER,
-                is_partner INTEGER, game_name TEXT, stream_title TEXT, tags TEXT )"#,
+                is_partner BOOLEAN DEFAULT FALSE, game_name TEXT, stream_title TEXT, tags TEXT )"#,
         ] {
             sqlx::query(ddl).execute(&pool).await.expect("DDL stats");
         }
