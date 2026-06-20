@@ -1,3 +1,19 @@
+## #243 — Bestenlisten und Statistiken brechen nicht mehr am Partner-Kennzeichen ab
+
+**Problem:** Die Auswertung der Bestenlisten und Streamer-Statistiken verglich das Partner-Kennzeichen — in der Datenbank ein Ja/Nein-Wert — fälschlich mit einer Zahl. In der produktiven Datenbank ist dieser Vergleich ungültig, sodass die betroffene Abfrage mit einem Serverfehler abbrechen konnte. Die automatischen Tests bemerkten das nie, weil ihre Test-Datenbank dieselbe Spalte als Zahl anlegte und damit das echte Schema gar nicht abbildete.
+
+**Änderung:** Die Auswertung nutzt jetzt durchgängig echte Ja/Nein-Logik — so, wie es eine bereits zuvor korrigierte Stelle vormacht. Zusätzlich legen die Test-Vorlagen das Kennzeichen jetzt selbst als Ja/Nein-Wert an und spiegeln damit das Produktionsschema. Dadurch wird genau dieser Typ-Konflikt im Test reproduziert, statt ihn zu verstecken.
+
+**Ergebnis:** Bestenlisten und Statistiken laufen stabil durch, ohne am Partner-Kennzeichen abzubrechen. Und weil die Tests nun das echte Schema verwenden, kann dieselbe Fehlerklasse nicht unbemerkt zurückkehren.
+
+## #242 — Partner-Zugriffsstatus lädt wieder zuverlässig
+
+**Problem:** Beim Ermitteln des Partner-Zugriffsstatus wurde ein Datenbank-Kennzeichen im falschen Werttyp gelesen. In der produktiven Datenbank führte das zu einem Laufzeitfehler, der den Abruf dieses Status abbrechen ließ.
+
+**Änderung:** Das Kennzeichen wird jetzt im korrekten Typ eingelesen — identisch zu einer anderen Stelle, die dasselbe Feld bereits richtig auswertet — und der Ja/Nein-Zustand daraus abgeleitet.
+
+**Ergebnis:** Der Partner-Zugriffsstatus wird wieder zuverlässig geladen; der Laufzeitfehler kann an dieser Stelle nicht mehr auftreten.
+
 ## #241 — Bot läuft auch ohne internen Zusatz-Token weiter
 
 **Problem:** Fehlte dem Bot die interne Zusatz-Berechtigung für den Versand von Chat-Begrüßungen, ließ sich der Begrüßungs-Dienst nicht aufbauen — und damit schaltete der Bot bisher den **gesamten** Nachlauf einer Streamer-Anmeldung ab: Partner-Abgleich, Rollenvergabe und Moderatoren-Einrichtung entfielen mit. Eine einzige fehlende Berechtigung legte also weit mehr lahm als nötig.
