@@ -30,6 +30,8 @@ use chrono::{DateTime, Utc};
 use serde::Deserialize;
 use tokio::sync::RwLock;
 
+use crate::secret_sink::SecretSink;
+
 const VALIDATE_URL: &str = "https://id.twitch.tv/oauth2/validate";
 const TOKEN_URL: &str = "https://id.twitch.tv/oauth2/token";
 
@@ -190,6 +192,9 @@ pub struct BotTokenManager {
     /// URLs für Tests überschreibbar.
     validate_url: String,
     token_url: String,
+    /// Optionale Persistenz-Senke (Infisical-Write-Back). `None` = deaktiviert,
+    /// Verhalten dann exakt wie vor ADR 0005.
+    sink: Option<Arc<dyn SecretSink>>,
 }
 
 impl BotTokenManager {
@@ -205,7 +210,15 @@ impl BotTokenManager {
             state: RwLock::new(None),
             validate_url: VALIDATE_URL.to_string(),
             token_url: TOKEN_URL.to_string(),
+            sink: None,
         })
+    }
+
+    /// Hängt eine Persistenz-Senke an (Builder). Ohne Aufruf bleibt der Manager
+    /// reine In-Memory-Verwaltung wie bisher.
+    pub fn with_sink(mut self, sink: Arc<dyn SecretSink>) -> Self {
+        self.sink = Some(sink);
+        self
     }
 
     #[cfg(test)]
@@ -377,8 +390,23 @@ impl BotTokenManager {
             .refresh_token
             .filter(|t| !t.trim().is_empty())
             .unwrap_or_else(|| refresh_token.to_string());
+        let access_token = refreshed.access_token;
+        // Refresh-Token nur zurückschreiben, wenn Twitch ihn tatsächlich rotiert
+        // hat — spart Infisical-Versionen und deckt das echte Lockout-Risiko ab.
+        let refresh_changed = new_refresh != refresh_token;
+
+        // Persist-Argumente nur klonen, wenn überhaupt eine Senke hängt; der
+        // State-Pfad selbst übernimmt die Werte ohne Klon.
+        let persist = self.sink.as_ref().map(|sink| {
+            (
+                Arc::clone(sink),
+                access_token.clone(),
+                refresh_changed.then(|| new_refresh.clone()),
+            )
+        });
+
         *self.state.write().await = Some(TokenState {
-            access_token: refreshed.access_token,
+            access_token,
             refresh_token: new_refresh,
             expires_at: Utc::now() + chrono::Duration::seconds(refreshed.expires_in.max(60)),
             scopes: validate.scopes,
@@ -388,6 +416,12 @@ impl BotTokenManager {
             expires_in = refreshed.expires_in,
             "Bot-Token refresht"
         );
+
+        // Best-effort Write-Back: ein Schreibfehler wird in der Senke geloggt,
+        // kippt aber weder diesen Refresh noch den Chat (State steht bereits).
+        if let Some((sink, access, refresh)) = persist {
+            sink.persist_bot_tokens(&access, refresh.as_deref()).await;
+        }
         Ok(())
     }
 }
@@ -405,6 +439,22 @@ mod tests {
                 format!("{}/validate", server.uri()),
                 format!("{}/token", server.uri()),
             )
+    }
+
+    /// Test-Senke: hält jeden persist-Aufruf fest (Access + optionaler Refresh).
+    #[derive(Clone, Default)]
+    struct CapturingSink {
+        calls: std::sync::Arc<std::sync::Mutex<Vec<(String, Option<String>)>>>,
+    }
+
+    #[async_trait::async_trait]
+    impl SecretSink for CapturingSink {
+        async fn persist_bot_tokens(&self, access_token: &str, refresh_token: Option<&str>) {
+            self.calls
+                .lock()
+                .unwrap()
+                .push((access_token.to_string(), refresh_token.map(str::to_string)));
+        }
     }
 
     fn validate_ok(expires_in: i64) -> ResponseTemplate {
@@ -461,6 +511,81 @@ mod tests {
         let m = manager(&server).await;
         m.initialize(Some("dead-token"), "refresh-seed").await.unwrap();
         assert_eq!(m.access_token().await.unwrap(), "fresh-token");
+    }
+
+    #[tokio::test]
+    async fn boot_refresh_persistiert_access_und_rotierten_refresh() {
+        // Toter Seed-Token → Boot über Refresh; Twitch rotiert den Refresh-Token.
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/validate"))
+            .and(header("Authorization", "OAuth dead-token"))
+            .respond_with(ResponseTemplate::new(401).set_body_string("invalid"))
+            .mount(&server)
+            .await;
+        Mock::given(method("POST"))
+            .and(path("/token"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "access_token": "fresh-token",
+                "refresh_token": "fresh-refresh",
+                "expires_in": 14000
+            })))
+            .mount(&server)
+            .await;
+        Mock::given(method("GET"))
+            .and(path("/validate"))
+            .and(header("Authorization", "OAuth fresh-token"))
+            .respond_with(validate_ok(14000))
+            .mount(&server)
+            .await;
+
+        let sink = CapturingSink::default();
+        let m = manager(&server)
+            .await
+            .with_sink(std::sync::Arc::new(sink.clone()));
+        m.initialize(Some("dead-token"), "refresh-seed").await.unwrap();
+
+        let calls = sink.calls.lock().unwrap();
+        assert_eq!(calls.len(), 1, "genau ein Write-Back beim Boot-Refresh");
+        assert_eq!(calls[0].0, "fresh-token");
+        assert_eq!(
+            calls[0].1.as_deref(),
+            Some("fresh-refresh"),
+            "rotierter Refresh-Token muss mitgeschrieben werden"
+        );
+    }
+
+    #[tokio::test]
+    async fn refresh_ohne_rotation_schreibt_refresh_nicht() {
+        // Twitch liefert keinen neuen Refresh-Token → nur Access persistieren.
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/validate"))
+            .respond_with(validate_ok(14000))
+            .mount(&server)
+            .await;
+        Mock::given(method("POST"))
+            .and(path("/token"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "access_token": "fresh",
+                "expires_in": 14000
+            })))
+            .mount(&server)
+            .await;
+
+        let sink = CapturingSink::default();
+        let m = manager(&server)
+            .await
+            .with_sink(std::sync::Arc::new(sink.clone()));
+        m.initialize(None, "stable-refresh").await.unwrap();
+
+        let calls = sink.calls.lock().unwrap();
+        assert_eq!(calls.len(), 1);
+        assert_eq!(calls[0].0, "fresh");
+        assert_eq!(
+            calls[0].1, None,
+            "unveränderter Refresh-Token darf nicht erneut geschrieben werden"
+        );
     }
 
     #[tokio::test]

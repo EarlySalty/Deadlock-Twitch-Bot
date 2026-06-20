@@ -36,6 +36,7 @@ pub mod moderation;
 pub mod pipeline;
 pub mod promos;
 pub mod scam_pitch;
+pub mod secret_sink;
 pub mod spam_filter;
 pub mod steam_lookup;
 pub mod sus_invite;
@@ -78,6 +79,7 @@ pub use promos::{
     StaticInviteResolver, promo_invite_fallback, DEFAULT_PROMO_DISCORD_INVITE,
 };
 pub use scam_pitch::{AccountAgePort, PitchDecision, ScamPitchDetector, SpamAiReviewer};
+pub use secret_sink::{InfisicalWriter, SecretSink, SecretWriteError};
 pub use spam_filter::{LearnedPatterns, SpamAction, SpamContext, SpamFilter, SpamVerdict};
 pub use sus_invite::{SusInviteCheck, SusInviteHit};
 pub use timeout_tracking::{is_bot_timeout_drop, CombinedSuppression, TimeoutTrackingChatApi};
