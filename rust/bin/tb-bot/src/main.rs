@@ -465,8 +465,7 @@ async fn main() {
                 );
                 if partner_setup.is_none() {
                     tracing::warn!(
-                        "PartnerSetupService nicht konstruierbar (TWITCH_INTERNAL_API_TOKEN fehlt) \
-                         — OAuth-Followups entfallen"
+                        "PartnerSetupService nicht konstruierbar — OAuth-Followups entfallen"
                     );
                 }
                 raid_oauth_port = Some(Arc::new(raid_oauth_impl::TbRaidOAuthImpl::new(

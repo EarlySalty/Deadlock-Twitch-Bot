@@ -194,6 +194,23 @@ pub struct LegacyChatGreeter {
     token: String,
 }
 
+/// No-Op Greeter für Umgebungen ohne `TWITCH_INTERNAL_API_TOKEN`.
+/// Der Follow-up-Flow (Partner-Sync, Rollen, Mod-Setup) bleibt aktiv; nur
+/// Chat-Nachrichten werden nicht zugestellt.
+pub struct NoopChatGreeter;
+
+#[async_trait]
+impl ChatGreeterPort for NoopChatGreeter {
+    async fn send_partner_chat_message(
+        &self,
+        twitch_login: &str,
+        _message: &str,
+    ) -> Result<bool, String> {
+        tracing::warn!("Chat-Begrüßung übersprungen: Kein Chat-Greeter verfügbar für {twitch_login}");
+        Ok(false)
+    }
+}
+
 impl LegacyChatGreeter {
     /// `base_url` = `TB_INTERNAL_API_LEGACY_FALLBACK_URL` (Python-Seitenport
     /// 8779), `token` = `TWITCH_INTERNAL_API_TOKEN` (gleicher Token wie die
@@ -292,9 +309,9 @@ impl ChatGreeterPort for LegacyChatGreeter {
 // Builder
 // ---------------------------------------------------------------------------
 
-/// Baut den `PartnerSetupService` aus Env + Transporten. `None` nur, wenn der
-/// Chat-Greeter mangels `TWITCH_INTERNAL_API_TOKEN` nicht konstruierbar ist
-/// (dann wäre auch die interne API selbst nicht nutzbar — praktisch nie).
+/// Baut den `PartnerSetupService` aus Env + Transporten.
+/// Der Service selbst wird selbst ohne Chat-Greeter erstellt; dann läuft die
+/// Folge-Logik mit einem No-Op-Greeter weiter.
 pub fn build_partner_setup_service(
     pool: PgPool,
     helix: HelixClient,
@@ -305,7 +322,15 @@ pub fn build_partner_setup_service(
     // Chat (TB_CHAT_ENABLED=0) bleibt der Legacy-Weg über Python 8779.
     let greeter: Arc<dyn ChatGreeterPort> = match native_chat {
         Some(api) => Arc::new(NativeChatGreeter::new(api)),
-        None => Arc::new(LegacyChatGreeter::from_env()?),
+        None => LegacyChatGreeter::from_env()
+            .map(|g| Arc::new(g) as Arc<dyn ChatGreeterPort>)
+            .unwrap_or_else(|| {
+                tracing::warn!(
+                    "Kein Chat-Greeter konfiguriert (TWITCH_INTERNAL_API_TOKEN fehlt); \
+                     Chat-Begrüßung wird übersprungen"
+                );
+                Arc::new(NoopChatGreeter) as Arc<dyn ChatGreeterPort>
+            }),
     };
     let bot_user_id = std::env::var("TWITCH_BOT_USER_ID")
         .ok()
