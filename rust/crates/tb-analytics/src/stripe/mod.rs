@@ -14,7 +14,8 @@ pub mod webhook_sig;
 
 pub use client::{form_pairs, StripeClient, StripeError};
 pub use webhook_apply::{
-    apply_event, ensure_event_table, plan_name_from_id, record_event_once,
-    subscription_payload_from_object, SubscriptionState, WebhookAction,
+    affected_login_for_billing_refresh, apply_event, ensure_event_table, plan_name_from_id,
+    record_event_once, refresh_partner_raid_score_for_login, subscription_payload_from_object,
+    SubscriptionState, WebhookAction,
 };
 pub use webhook_sig::{verify_signature, WebhookError, DEFAULT_TOLERANCE_SECONDS};

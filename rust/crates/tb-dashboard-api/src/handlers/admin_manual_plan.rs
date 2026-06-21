@@ -233,6 +233,12 @@ async fn set_manual_plan(
         ManualPlanError::SaveFailed
     })?;
 
+    // P2.129: Partner-Raid-Score sofort neu berechnen (raid_boost-Tier ist
+    // plan-abhängig). Best-effort wie Pythons fire-and-forget Hook
+    // (_billing_refresh_partner_raid_score_cache): Fehler werden geloggt, nicht
+    // an den Admin-Response durchgereicht.
+    refresh_partner_raid_score(pool, &canonical_login).await;
+
     Ok(effective_plan_id(pool, &canonical_login, &twitch_user_id).await)
 }
 
@@ -264,7 +270,22 @@ async fn clear_manual_plan(pool: &PgPool, login: &str) -> Result<String, ManualP
         ManualPlanError::SaveFailed
     })?;
 
+    // P2.129: Score-Refresh auch nach dem Entfernen (entfernter Boost darf den
+    // Score nicht weiter aufblähen).
+    refresh_partner_raid_score(pool, &canonical_login).await;
+
     Ok(effective_plan_id(pool, &canonical_login, &twitch_user_id).await)
+}
+
+/// Best-effort Partner-Raid-Score-Refresh nach einer Plan-Änderung (P2.129).
+///
+/// Delegiert an [`tb_analytics::stripe::refresh_partner_raid_score_for_login`]
+/// (gemeinsame Funktion mit dem Webhook-Pfad P2.127/P2.128). Fehler werden nur
+/// geloggt — der Admin-Response hängt nicht davon ab.
+async fn refresh_partner_raid_score(pool: &PgPool, login: &str) {
+    if let Err(err) = tb_analytics::stripe::refresh_partner_raid_score_for_login(pool, login).await {
+        tracing::warn!("manual_plan raid-score refresh fehlgeschlagen für {login}: {err}");
+    }
 }
 
 /// Löst `(twitch_user_id, canonical_login)` aus `twitch_streamers_partner_state`.
@@ -497,5 +518,83 @@ mod tests {
         let Some(pool) = make_pool("t_manplan_badplan").await else { return };
         let err = set_manual_plan(&pool, "nanistream", "Premium_XXL", "", "").await.unwrap_err();
         assert!(matches!(err, ManualPlanError::UnknownPlanId));
+    }
+
+    /// Pool mit dem VOLLEN Schema, das der Score-Refresher braucht (P2.129).
+    /// `search_path` per `after_connect`, damit der vom Refresher genutzte Pool
+    /// (derselbe) auf das Test-Schema zeigt.
+    async fn make_pool_with_scores(schema: &str) -> Option<PgPool> {
+        let dsn = std::env::var("TB_TEST_DATABASE_URL").ok()?;
+        let admin = PgPoolOptions::new().max_connections(1).connect(&dsn).await.unwrap();
+        sqlx::query(&format!("DROP SCHEMA IF EXISTS {schema} CASCADE")).execute(&admin).await.unwrap();
+        sqlx::query(&format!("CREATE SCHEMA {schema}")).execute(&admin).await.unwrap();
+        admin.close().await;
+        let schema_owned = schema.to_string();
+        let pool = PgPoolOptions::new()
+            .max_connections(4)
+            .after_connect(move |conn, _| {
+                let schema = schema_owned.clone();
+                Box::pin(async move {
+                    sqlx::query(&format!("SET search_path TO {schema}")).execute(conn).await.map(|_| ())
+                })
+            })
+            .connect(&dsn)
+            .await
+            .unwrap();
+        for ddl in [
+            "CREATE TABLE twitch_streamers_partner_state (twitch_user_id TEXT, twitch_login TEXT, is_partner_active INTEGER NOT NULL DEFAULT 1)",
+            "CREATE TABLE streamer_plans (twitch_user_id TEXT PRIMARY KEY, twitch_login TEXT, \
+                 manual_plan_id TEXT, manual_plan_expires_at TEXT, manual_plan_notes TEXT DEFAULT '', \
+                 manual_plan_updated_at TEXT, raid_boost_enabled INTEGER NOT NULL DEFAULT 0)",
+            "CREATE TABLE twitch_billing_subscriptions (stripe_subscription_id TEXT PRIMARY KEY, \
+                 customer_reference TEXT, status TEXT, plan_id TEXT, updated_at TEXT, \
+                 current_period_end TEXT, cancel_at_period_end INTEGER DEFAULT 0)",
+            "CREATE TABLE twitch_stream_sessions (streamer_login TEXT, started_at TIMESTAMPTZ, duration_seconds BIGINT)",
+            "CREATE TABLE twitch_raid_history (from_broadcaster_id TEXT, to_broadcaster_id TEXT, executed_at TIMESTAMPTZ, success BOOLEAN)",
+            "CREATE TABLE twitch_live_state (twitch_user_id TEXT, is_live INTEGER, last_started_at TIMESTAMPTZ)",
+            "CREATE TABLE twitch_partner_raid_scores ( \
+                 twitch_user_id TEXT PRIMARY KEY, twitch_login TEXT, avg_duration_sec INTEGER, \
+                 time_pattern_score_base DOUBLE PRECISION, received_successful_raids_total INTEGER, \
+                 is_new_partner_preferred INTEGER, new_partner_multiplier DOUBLE PRECISION, \
+                 raid_boost_multiplier DOUBLE PRECISION, is_live INTEGER, current_started_at TEXT, \
+                 current_uptime_sec INTEGER, duration_score DOUBLE PRECISION, time_pattern_score DOUBLE PRECISION, \
+                 readiness_score DOUBLE PRECISION, fairness_score DOUBLE PRECISION, base_score DOUBLE PRECISION, \
+                 final_score DOUBLE PRECISION, today_received_raids INTEGER, last_computed_at TEXT, \
+                 internal_sent_raids_30d INTEGER, internal_received_raids_7d INTEGER, internal_received_raids_30d INTEGER)",
+        ] {
+            sqlx::query(ddl).execute(&pool).await.unwrap();
+        }
+        sqlx::query("INSERT INTO twitch_streamers_partner_state (twitch_user_id, twitch_login, is_partner_active) VALUES ('77','BoostStreamer',1)")
+            .execute(&pool).await.unwrap();
+        Some(pool)
+    }
+
+    /// P2.129: Setzt man einen raid_boost-Plan, muss der Partner-Raid-Score sofort
+    /// neu berechnet werden (Boost-Multiplikator > 1.0 sofort wirksam).
+    #[tokio::test]
+    async fn set_manual_plan_refreshes_raid_score() {
+        let Some(pool) = make_pool_with_scores("t_manplan_score").await else { return };
+        // raid_boost greift im Refresher über streamer_plans.raid_boost_enabled.
+        // set_manual_plan setzt manual_plan_id; für den Boost-Flag im Refresher
+        // setzen wir raid_boost_enabled direkt (Entitlement-Auflösung ist eigene
+        // Slice, siehe partner_score_refresh.rs:load_boost_flag).
+        let plan = set_manual_plan(&pool, "booststreamer", "raid_boost", "", "")
+            .await
+            .expect("set ok");
+        assert_eq!(plan, "raid_boost");
+        sqlx::query("UPDATE streamer_plans SET raid_boost_enabled = 1 WHERE twitch_user_id = '77'")
+            .execute(&pool).await.unwrap();
+        // Refresh erneut auslösen (clear→set würde Score erneut schreiben); wir
+        // rufen den Refresh-Pfad direkt über einen zweiten set auf.
+        let _ = set_manual_plan(&pool, "booststreamer", "raid_boost", "", "").await.unwrap();
+
+        let row: (String, f64) = sqlx::query_as(
+            "SELECT last_computed_at, raid_boost_multiplier FROM twitch_partner_raid_scores WHERE twitch_user_id='77'",
+        )
+        .fetch_one(&pool)
+        .await
+        .expect("score row geschrieben (Refresh lief)");
+        assert!(!row.0.is_empty());
+        assert!(row.1 > 1.0, "raid_boost_multiplier > 1.0, war {}", row.1);
     }
 }
