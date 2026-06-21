@@ -1,11 +1,21 @@
 //! Affiliate-Portal für den eingeloggten Twitch-Account.
+//!
+//! - `portal_handler` — JSON-API (`/twitch/api/v2/affiliate/portal`).
+//! - `portal_page_handler` — HTML-Seite (`/twitch/affiliate/portal`, P1.26):
+//!   serviert die dashboard_v2-SPA-Shell nativ statt via Python-Fallback.
 
-use axum::{extract::State, http::StatusCode, response::IntoResponse, Json};
+use axum::{
+    extract::State,
+    http::{header, StatusCode},
+    response::{IntoResponse, Response},
+    Json,
+};
 use chrono::{Datelike, Utc};
 use serde_json::json;
 use sqlx::PgPool;
 
 use crate::auth::level::DashboardAuthLevel;
+use crate::handlers::spa::dist_root;
 
 fn authenticated_login(auth: &DashboardAuthLevel) -> Option<String> {
     match auth {
@@ -147,6 +157,28 @@ pub async fn portal_handler(
     .into_response()
 }
 
+/// `GET /twitch/affiliate/portal` (P1.26) — serviert die Portal-HTML-Seite
+/// (dashboard_v2-SPA-Shell) nativ. Die JSON-API bleibt unter
+/// `/twitch/api/v2/affiliate/portal`.
+pub async fn portal_page_handler() -> Response {
+    let index = dist_root().join("index.html");
+    let html = match tokio::fs::read_to_string(&index).await {
+        Ok(s) => s,
+        Err(_) => {
+            // Platzhalter: finaler deutscher Hinweistext schreibt Claude.
+            return (StatusCode::NOT_FOUND, "Platzhalter").into_response();
+        }
+    };
+    (
+        [
+            (header::CONTENT_TYPE, "text/html; charset=utf-8"),
+            (header::CACHE_CONTROL, "no-cache"),
+        ],
+        html,
+    )
+        .into_response()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -250,5 +282,28 @@ mod tests {
         assert_eq!(value["stats"]["total_claims"], 1);
         assert_eq!(value["stats"]["pending_payout"], 3.0);
         assert_eq!(value["recent_claims"][0]["customer_display_name"], "Kunde");
+    }
+
+    // P1.26: Portal-HTML-Seite wird nativ aus dem dist-Verzeichnis serviert.
+    #[tokio::test]
+    async fn portal_page_serviert_html() {
+        use std::time::{SystemTime, UNIX_EPOCH};
+        let unique = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_nanos();
+        let root = std::env::temp_dir().join(format!("tb_affiliate_portal_{unique}"));
+        tokio::fs::create_dir_all(&root).await.unwrap();
+        tokio::fs::write(root.join("index.html"), b"<html>portal</html>")
+            .await
+            .unwrap();
+        std::env::set_var("DASHBOARD_V2_DIST_PATH", &root);
+
+        let res = portal_page_handler().await;
+        assert_eq!(res.status(), StatusCode::OK);
+        assert_eq!(
+            res.headers().get(header::CONTENT_TYPE).unwrap(),
+            "text/html; charset=utf-8"
+        );
+
+        std::env::remove_var("DASHBOARD_V2_DIST_PATH");
+        tokio::fs::remove_dir_all(root).await.ok();
     }
 }
