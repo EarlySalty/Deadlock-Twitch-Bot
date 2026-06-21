@@ -14,12 +14,14 @@ const SUGGESTIONS = [
 interface AskResponse {
   answer?: string;
   parts?: string[];
+  sources?: string[];
 }
 
 interface ChatMessage {
   id: number;
   role: "user" | "bot";
   text: string;
+  sources?: string[];
 }
 
 export function openSiteChatbot() {
@@ -52,11 +54,11 @@ export function SiteChatbot() {
     return () => window.removeEventListener("keydown", handleKeyDown);
   }, [open]);
 
-  function addMessage(role: ChatMessage["role"], text: string) {
+  function addMessage(role: ChatMessage["role"], text: string, sources?: string[]) {
     messageId.current += 1;
     setMessages((current) => [
       ...current,
-      { id: messageId.current, role, text },
+      { id: messageId.current, role, text, sources },
     ]);
   }
 
@@ -92,13 +94,16 @@ export function SiteChatbot() {
       const data: AskResponse = await response.json();
       const answerParts =
         data.parts?.length ? data.parts : data.answer ? [data.answer] : [];
+      const sources: string[] = Array.isArray(data.sources) ? data.sources : [];
 
       if (!answerParts.length) {
         setError("Der Bot hat keine Antwort geliefert.");
         return;
       }
 
-      for (const part of answerParts) addMessage("bot", part);
+      answerParts.forEach((part, index) => {
+        addMessage("bot", part, index === answerParts.length - 1 ? sources : undefined);
+      });
     } catch {
       setError("Verbindung fehlgeschlagen. Probier es noch einmal.");
     } finally {
@@ -180,7 +185,12 @@ export function SiteChatbot() {
                       : "rounded-tl-sm border border-border bg-white/[0.05] text-text-primary"
                   }`}
                 >
-                  {message.text}
+                  <p>{message.text}</p>
+                  {message.sources?.length ? (
+                    <p className="mt-2 border-t border-border/60 pt-2 text-xs text-text-secondary">
+                      Quelle: {message.sources.join(", ")}
+                    </p>
+                  ) : null}
                 </div>
               </div>
             ))}

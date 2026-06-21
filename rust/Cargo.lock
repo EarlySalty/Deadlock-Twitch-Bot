@@ -2544,6 +2544,7 @@ dependencies = [
  "tb-engagement",
  "tb-error",
  "tb-http-core",
+ "tb-knowledge",
  "tb-raid",
  "tb-social-media",
  "tb-transport-twitch",
@@ -2658,6 +2659,14 @@ dependencies = [
  "tracing",
  "url",
  "uuid",
+]
+
+[[package]]
+name = "tb-knowledge"
+version = "0.1.0"
+dependencies = [
+ "regex",
+ "thiserror 1.0.69",
 ]
 
 [[package]]
