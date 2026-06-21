@@ -2783,6 +2783,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "tb-tips"
+version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "chrono",
+ "sqlx",
+ "tb-knowledge",
+ "tokio",
+ "tracing",
+]
+
+[[package]]
 name = "tb-transport-discord"
 version = "0.1.0"
 dependencies = [

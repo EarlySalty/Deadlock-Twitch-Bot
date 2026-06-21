@@ -20,6 +20,7 @@ members = [
     "crates/tb-highlight",
     "crates/tb-engagement",
     "crates/tb-knowledge",
+    "crates/tb-tips",
     "crates/tb-llm",
     "bin/tb-dashboard",
     "bin/tb-bot",
@@ -78,6 +79,7 @@ tb-social-media  = { path = "crates/tb-social-media" }
 tb-highlight     = { path = "crates/tb-highlight" }
 tb-engagement    = { path = "crates/tb-engagement" }
 tb-knowledge     = { path = "crates/tb-knowledge" }
+tb-tips          = { path = "crates/tb-tips" }
 tb-llm           = { path = "crates/tb-llm" }
 url = "2"
 regex = "1"

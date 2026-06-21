@@ -23,6 +23,14 @@ impl KnowledgeBase {
         &self.docs
     }
 
+    /// Alle als Tipp ausspielbaren Dokumente (tip_eligible + nicht-leerer tip_text).
+    pub fn eligible_tips(&self) -> Vec<&KnowledgeDoc> {
+        self.docs
+            .iter()
+            .filter(|d| d.tip_eligible && !d.tip_text.trim().is_empty())
+            .collect()
+    }
+
     /// Lädt `root/bot/*.md` + `root/deadlock/*.md`. Fehlt `root` oder ein
     /// Namespace-Unterordner, wird er übersprungen (kein Fehler). Ein
     /// **Parse-Fehler** in einer vorhandenen `.md` ist strikt ein `Err`
@@ -187,5 +195,30 @@ mod select_tests {
         let kb = kb();
         let hits = kb.select("bot verbinden dashboard raidet", Namespace::Bot, None, 1);
         assert_eq!(hits.len(), 1);
+    }
+
+    #[test]
+    fn eligible_tips_filtert_korrekt() {
+        let a = parse_doc(
+            "---\ntitle: A\nnamespace: bot\ntip_eligible: true\ntip_text: Tipp A\n---\nx",
+            "a",
+        )
+        .unwrap();
+        let b = parse_doc(
+            "---\ntitle: B\nnamespace: bot\ntip_eligible: false\n---\nx",
+            "b",
+        )
+        .unwrap();
+        let c = parse_doc(
+            "---\ntitle: C\nnamespace: bot\ntip_eligible: true\n---\nx",
+            "c",
+        )
+        .unwrap();
+        let kb = KnowledgeBase {
+            docs: vec![a, b, c],
+        };
+        let tips = kb.eligible_tips();
+        assert_eq!(tips.len(), 1);
+        assert_eq!(tips[0].slug, "a");
     }
 }
