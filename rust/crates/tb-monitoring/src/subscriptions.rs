@@ -19,6 +19,55 @@ use tb_chat::{is_passive_lurker_channel, PASSIVE_LURKER_DETAIL, PASSIVE_LURKER_S
 use crate::inbox_runtime::{epoch_clock, ClockFn};
 use crate::poller::source::SourceError;
 
+/// Core-Subscription-Typen (Python `_EVENTSUB_WEBHOOK_CORE_SUB_TYPES`): bei
+/// Revocation dieser Typen heilt der Reconcile-Loop die Live-Event-Zustellung
+/// (Go-Live/Offline/Title) durch Resubscribe; nicht-Core-Typen werden ebenfalls
+/// untracked, hängen aber nicht am Go-Live-Pfad.
+pub const EVENTSUB_CORE_SUB_TYPES: &[&str] =
+    &["stream.online", "stream.offline", "channel.update"];
+
+/// Chat-Subscription-Typen, deren 403 sich durch Re-Modding des Bots heilen
+/// lässt (Python `_subscribe_missing_chat_subscriptions`). Nur für diese Typen
+/// läuft der 403-Mod-Retry; andere 403 (z. B. externe Telemetrie) bleiben perm.
+const CHAT_MOD_RETRY_SUB_TYPES: &[&str] = &[
+    "channel.chat.message",
+    "channel.chat.notification",
+    "channel.chat.user_first_message",
+];
+
+/// Cooldown nach fehlgeschlagenem 403-Mod-Retry (Python `_mod_retry_cooldown`,
+/// 10 Minuten). Solange aktiv wird der Subscribe-Versuch übersprungen; nach
+/// Ablauf läuft er automatisch erneut (laufzeit-clearbar statt Neustart-Pflicht).
+const MOD_RETRY_COOLDOWN_SECONDS: f64 = 600.0;
+
+/// Stellt den Bot zur Laufzeit als Moderator eines Kanals wieder her (Port von
+/// Pythons `_ensure_bot_is_mod`). Implementierung lebt in `tb-transport-twitch`
+/// (`HelixClient::add_channel_moderator`, Broadcaster-Token) und wird von außen
+/// injiziert, damit tb-monitoring nicht aufs Transport-Crate verweisen muss.
+#[async_trait::async_trait]
+pub trait ModeratorProvisioner: Send + Sync {
+    /// `true`, wenn der Bot (wieder) Mod im Kanal ist. `broadcaster_id` = Ziel-
+    /// Kanal, `login` = dessen Login (für Logging/Token-Auflösung).
+    async fn ensure_bot_is_mod(&self, broadcaster_id: &str, login: &str) -> bool;
+}
+
+/// Senke für Webhook-Revocations: entkoppelt den `WebhookReceiver` vom
+/// `SubscriptionManager`, ohne dass tb-monitoring auf das Binary verweisen muss.
+/// Der Empfänger ruft [`RevocationSink::on_revocation`], die Implementierung
+/// (der `SubscriptionManager`) untrackt die Sub, damit der nächste Reconcile-
+/// Zyklus sie neu anlegt (Selbstheilung statt stillem Event-Verlust).
+pub trait RevocationSink: Send + Sync {
+    /// Reagiert auf eine widerrufene Subscription. `true`, wenn ein Tracking-
+    /// Eintrag entfernt wurde (→ Resubscribe beim nächsten Reconcile fällig).
+    fn on_revocation(&self, sub_type: &str, broadcaster_id: &str) -> bool;
+}
+
+impl RevocationSink for SubscriptionManager {
+    fn on_revocation(&self, sub_type: &str, broadcaster_id: &str) -> bool {
+        self.untrack(sub_type, broadcaster_id)
+    }
+}
+
 // ── Capacity-Snapshot-Konfiguration (Env, Python-Clamps) ───────────────────────
 
 /// Default-Sampling-Intervall der Capacity-Zeitreihe (Sekunden).
@@ -230,6 +279,13 @@ pub struct SubscriptionManager {
     capacity_throttle: Mutex<CapacityThrottle>,
     /// Monotone Uhr (Epoch-Sek.) für die Throttle-Fenster — in Tests injizierbar.
     clock: ClockFn,
+    /// Optionaler Mod-Provisioner für die 403-Selbstheilung im Chat-Pfad
+    /// (Python `_ensure_bot_is_mod`). `None` → Alt-Verhalten (403 = perm_failed).
+    moderator_provisioner: Option<Arc<dyn ModeratorProvisioner>>,
+    /// 403-Mod-Retry-Cooldown je (sub_type, broadcaster_id) als Ablauf-Epoch-Sek.
+    /// (Python `_mod_retry_cooldown`). Ersetzt den permanenten perm_failed-Eintrag
+    /// im Chat-Pfad: nach Ablauf wird automatisch erneut versucht.
+    mod_retry_cooldown: Mutex<HashMap<(String, String), f64>>,
 }
 
 impl SubscriptionManager {
@@ -249,6 +305,8 @@ impl SubscriptionManager {
             subscription_state: Mutex::new(HashMap::new()),
             capacity_throttle: Mutex::new(CapacityThrottle::default()),
             clock: Arc::new(epoch_clock),
+            moderator_provisioner: None,
+            mod_retry_cooldown: Mutex::new(HashMap::new()),
         }
     }
 
@@ -257,6 +315,50 @@ impl SubscriptionManager {
     pub fn with_clock(mut self, clock: ClockFn) -> Self {
         self.clock = clock;
         self
+    }
+
+    /// Verdrahtet den Mod-Provisioner für die 403-Selbstheilung im Chat-Pfad
+    /// (Python `_ensure_bot_is_mod`). Ohne ihn bleibt es beim Alt-Verhalten
+    /// (403 → permanenter perm_failed-Eintrag, kein Retry bis Neustart).
+    ///
+    /// WIRING-TODO(P1.2): In `bin/tb-bot` beim Aufbau des `SubscriptionManager`
+    /// einen `ModeratorProvisioner` durchreichen, der
+    /// `tb_transport_twitch::HelixClient::add_channel_moderator` (Broadcaster-
+    /// Token) aufruft — sonst heilt ein Laufzeit-403 (Bot demoddet) den Chat-Join
+    /// nicht selbst.
+    #[must_use]
+    pub fn with_moderator_provisioner(
+        mut self,
+        provisioner: Arc<dyn ModeratorProvisioner>,
+    ) -> Self {
+        self.moderator_provisioner = Some(provisioner);
+        self
+    }
+
+    /// `true`, wenn für (sub_type, broadcaster_id) ein noch nicht abgelaufener
+    /// Mod-Retry-Cooldown aktiv ist. Abgelaufene Einträge werden entfernt
+    /// (laufzeit-clearbar — kein Neustart nötig).
+    fn mod_retry_cooldown_active(&self, sub_type: &str, broadcaster_id: &str) -> bool {
+        let key = (sub_type.to_string(), broadcaster_id.to_string());
+        let now = (self.clock)();
+        let mut cd = self.mod_retry_cooldown.lock().expect("mod_retry_cooldown lock");
+        match cd.get(&key) {
+            Some(&until) if until > now => true,
+            Some(_) => {
+                cd.remove(&key);
+                false
+            }
+            None => false,
+        }
+    }
+
+    /// Setzt den 10-Minuten-Cooldown (Python `_mod_retry_cooldown`).
+    fn set_mod_retry_cooldown(&self, sub_type: &str, broadcaster_id: &str) {
+        let until = (self.clock)() + MOD_RETRY_COOLDOWN_SECONDS;
+        self.mod_retry_cooldown
+            .lock()
+            .expect("mod_retry_cooldown lock")
+            .insert((sub_type.to_string(), broadcaster_id.to_string()), until);
     }
 
     fn is_tracked(&self, sub_type: &str, broadcaster_id: &str) -> bool {
@@ -750,6 +852,17 @@ impl SubscriptionManager {
             tracing::debug!(sub_type, login, "EventSub: 403-gebannt, überspringe");
             return false;
         }
+        // Chat-Pfad-Selbstheilung (P1.2): während des 10-Min-Cooldowns nach
+        // einem fehlgeschlagenen Mod-Retry wird der Versuch übersprungen, nach
+        // Ablauf aber automatisch erneut gestartet (kein Neustart nötig).
+        if self.mod_retry_cooldown_active(sub_type, broadcaster_id) {
+            tracing::debug!(
+                sub_type,
+                login,
+                "EventSub: Mod-Retry-Cooldown aktiv — überspringe (Retry nach Ablauf)"
+            );
+            return false;
+        }
         match self
             .transport
             .create(
@@ -783,6 +896,25 @@ impl SubscriptionManager {
             Err(error) => {
                 let msg = error.to_string();
                 if msg.contains("403") {
+                    // P1.2: Chat-Pfad heilt einen Laufzeit-403 (Bot demoddet)
+                    // selbst: Bot re-modden, 1s warten, ein Re-Subscribe.
+                    // Gelingt das, ist der Kanal sofort wieder live; scheitert
+                    // es, greift ein 10-Min-Cooldown (clearbar) STATT eines
+                    // permanenten perm_failed-Eintrags.
+                    if CHAT_MOD_RETRY_SUB_TYPES.contains(&sub_type)
+                        && self.moderator_provisioner.is_some()
+                    {
+                        return self
+                            .retry_chat_subscription_after_mod(
+                                sub_type,
+                                version,
+                                &condition,
+                                broadcaster_id,
+                                login,
+                                bearer_override,
+                            )
+                            .await;
+                    }
                     self.perm_failed
                         .lock()
                         .expect("perm_failed lock")
@@ -818,6 +950,80 @@ impl SubscriptionManager {
                 } else {
                     tracing::warn!(%error, sub_type, login, "EventSub: Subscription fehlgeschlagen");
                 }
+                false
+            }
+        }
+    }
+
+    /// 403-Selbstheilung im Chat-Pfad (Python `connection.py:1558-1624`): Bot
+    /// als Mod setzen, 1s auf die Twitch-Propagation warten, einmal
+    /// re-subscriben. Bei Erfolg wird die Sub getrackt und `true` geliefert;
+    /// scheitert Re-Mod ODER der Re-Subscribe, wird ein 10-Min-Cooldown gesetzt
+    /// (clearbar, kein permanenter perm_failed) und `false` geliefert.
+    async fn retry_chat_subscription_after_mod(
+        &self,
+        sub_type: &str,
+        version: &str,
+        condition: &serde_json::Value,
+        broadcaster_id: &str,
+        login: &str,
+        bearer_override: Option<&str>,
+    ) -> bool {
+        let Some(provisioner) = self.moderator_provisioner.as_ref() else {
+            // Defensive: ohne Provisioner gibt es keinen Mod-Retry — Cooldown
+            // statt perm_failed, damit der nächste Zyklus es erneut versucht.
+            self.set_mod_retry_cooldown(sub_type, broadcaster_id);
+            return false;
+        };
+        tracing::info!(
+            sub_type,
+            login,
+            "EventSub 403: versuche Bot automatisch als Mod zu setzen"
+        );
+        if !provisioner.ensure_bot_is_mod(broadcaster_id, login).await {
+            self.set_mod_retry_cooldown(sub_type, broadcaster_id);
+            tracing::warn!(
+                sub_type,
+                login,
+                "EventSub 403: Re-Mod fehlgeschlagen — 10-Min-Cooldown (Retry danach)"
+            );
+            return false;
+        }
+        // Kurze Pause, damit Twitch den Mod-Status propagiert (Python: sleep 1s).
+        tokio::time::sleep(std::time::Duration::from_secs(1)).await;
+        match self
+            .transport
+            .create(
+                sub_type,
+                version,
+                condition,
+                &self.config.callback_url,
+                &self.config.secret,
+                bearer_override,
+            )
+            .await
+        {
+            Ok(_) => {
+                self.track(sub_type, broadcaster_id);
+                self.mod_retry_cooldown
+                    .lock()
+                    .expect("mod_retry_cooldown lock")
+                    .remove(&(sub_type.to_string(), broadcaster_id.to_string()));
+                tracing::info!(
+                    sub_type,
+                    login,
+                    "EventSub: Re-Subscribe nach Mod-Autorisierung erfolgreich"
+                );
+                true
+            }
+            Err(error) => {
+                self.set_mod_retry_cooldown(sub_type, broadcaster_id);
+                tracing::warn!(
+                    %error,
+                    sub_type,
+                    login,
+                    "EventSub 403: Re-Subscribe nach Re-Mod fehlgeschlagen — 10-Min-Cooldown"
+                );
                 false
             }
         }
@@ -876,6 +1082,35 @@ impl SubscriptionManager {
             .iter()
             .cloned()
             .collect()
+    }
+
+    /// Entfernt eine Subscription aus dem In-Memory-Tracking (und löscht einen
+    /// etwaigen `perm_failed`-Eintrag), sodass der nächste Reconcile-Zyklus
+    /// (`ensure_core_subscriptions`/`ensure_chat_subscriptions`) sie neu anlegt
+    /// statt sie wegen `is_tracked` zu überspringen.
+    ///
+    /// Port des Python-`_eventsub_untrack_sub` (eventsub_mixin.py:1318-1344):
+    /// reine Laufzeit-Selbstheilung bei Webhook-Revocation — ohne dieses Untrack
+    /// bliebe eine von Twitch widerrufene Sub bis zum Prozess-Neustart als
+    /// „subscribed" markiert und Events gingen still verloren. Liefert `true`,
+    /// wenn ein Tracking-Eintrag tatsächlich entfernt wurde.
+    pub fn untrack(&self, sub_type: &str, broadcaster_id: &str) -> bool {
+        let key = (sub_type.to_string(), broadcaster_id.to_string());
+        // 403-Bann zurücksetzen: nach einer Revocation ist die alte Sperre
+        // hinfällig, der Re-Subscribe-Versuch soll wieder laufen dürfen.
+        self.perm_failed
+            .lock()
+            .expect("perm_failed lock")
+            .remove(&key);
+        let removed = self.tracked.lock().expect("tracked lock").remove(&key);
+        if removed {
+            tracing::info!(
+                sub_type,
+                broadcaster_id,
+                "EventSub: Subscription nach Revocation untracked → Resubscribe beim nächsten Reconcile"
+            );
+        }
+        removed
     }
 
     /// Kapazitäts-Snapshot fürs Admin-Dashboard. Webhook-Modus: keine

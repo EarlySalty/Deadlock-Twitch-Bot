@@ -140,6 +140,17 @@ pub async fn pool_in_schema(schema: &str) -> Option<PgPool> {
             twitch_login TEXT PRIMARY KEY,
             twitch_user_id TEXT
         )",
+        // Discord-Identitäts-Join der Tracking-Query (poller/tracked.rs) — muss
+        // im Fixture existieren, sonst schlägt der LEFT JOIN mit 42P01 fehl.
+        "CREATE TABLE twitch_streamer_identities (
+            twitch_user_id TEXT NOT NULL,
+            twitch_login TEXT NOT NULL,
+            discord_user_id TEXT,
+            discord_display_name TEXT,
+            is_on_discord INTEGER DEFAULT 0,
+            created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+            updated_at TEXT DEFAULT CURRENT_TIMESTAMP
+        )",
         "CREATE TABLE twitch_exclusions (
             twitch_user_id TEXT PRIMARY KEY,
             kind TEXT NOT NULL CHECK (kind IN ('opt_out', 'banned')),
@@ -186,15 +197,19 @@ pub async fn pool_in_schema(schema: &str) -> Option<PgPool> {
             last_error        TEXT
         )",
         // Telemetrie-Event-Tabellen (Prod-Typen verifiziert 2026-06-09).
+        // is_gift/is_automatic = BOOLEAN gemäß Produktionsvertrag
+        // (migrations/20260619010000_runtime_type_contract.sql) — die Rust-
+        // Schreibpfade binden bool. Fixtures dürfen hier NICHT auf INTEGER lügen
+        // (P1.25 „Fixtures lügen gg. Baseline").
         "CREATE TABLE twitch_subscription_events (
             id BIGSERIAL PRIMARY KEY, session_id BIGINT, twitch_user_id TEXT,
-            event_type TEXT, user_login TEXT, tier TEXT, is_gift INTEGER DEFAULT 0,
+            event_type TEXT, user_login TEXT, tier TEXT, is_gift BOOLEAN DEFAULT FALSE,
             gifter_login TEXT, cumulative_months INTEGER, streak_months INTEGER,
             message TEXT, total_gifted INTEGER, received_at TIMESTAMPTZ
         )",
         "CREATE TABLE twitch_ad_break_events (
             id BIGSERIAL PRIMARY KEY, session_id BIGINT, twitch_user_id TEXT,
-            duration_seconds INTEGER, is_automatic INTEGER DEFAULT 0, started_at TIMESTAMPTZ
+            duration_seconds INTEGER, is_automatic BOOLEAN DEFAULT FALSE, started_at TIMESTAMPTZ
         )",
         "CREATE TABLE twitch_bits_events (
             id BIGSERIAL PRIMARY KEY, session_id BIGINT, twitch_user_id TEXT,

@@ -8,8 +8,8 @@ use std::sync::{Arc, Mutex};
 use chrono::Utc;
 use tb_monitoring::poller::source::SourceError;
 use tb_monitoring::{
-    CapacitySnapshotStore, RemoteSubscription, SubscriptionConfig, SubscriptionManager,
-    SubscriptionTransport,
+    CapacitySnapshotStore, ModeratorProvisioner, RemoteSubscription, RevocationSink,
+    SubscriptionConfig, SubscriptionManager, SubscriptionTransport,
 };
 
 mod support;
@@ -34,6 +34,12 @@ struct StubTransport {
     bearers: Mutex<Vec<(String, Option<String>)>>,
     deletes: Mutex<Vec<String>>,
     listing: Mutex<Vec<RemoteSubscription>>,
+    /// Anzahl der `create`-Aufrufe, die zuerst mit „403" scheitern (danach Ok).
+    /// Steuert den P1.2-Mod-Retry-Pfad (erster 403, dann Erfolg).
+    fail_403_count: AtomicU64,
+    /// Sub-Typen, deren JEWEILS erster Create mit „403" scheitert (Re-Subscribe
+    /// danach gelingt). Modelliert „erster Join-Versuch 403, Retry nach Re-Mod ok".
+    fail_403_first_per_type: Mutex<HashSet<String>>,
 }
 
 #[async_trait::async_trait]
@@ -47,6 +53,20 @@ impl SubscriptionTransport for StubTransport {
         _secret: &str,
         bearer_override: Option<&str>,
     ) -> Result<bool, SourceError> {
+        // Programmierter 403 (P1.2): die ersten N Creates scheitern mit 403.
+        if self.fail_403_count.load(Ordering::SeqCst) > 0 {
+            self.fail_403_count.fetch_sub(1, Ordering::SeqCst);
+            return Err(SourceError::from("HTTP 403 subscription missing proper authorization"));
+        }
+        // Jeweils erster Create eines Sub-Typs → 403 (Retry danach gelingt).
+        if self
+            .fail_403_first_per_type
+            .lock()
+            .unwrap()
+            .remove(sub_type)
+        {
+            return Err(SourceError::from("HTTP 403 subscription missing proper authorization"));
+        }
         self.versions
             .lock()
             .unwrap()
@@ -87,6 +107,175 @@ fn sub(id: &str, sub_type: &str, callback: &str, bid: &str) -> RemoteSubscriptio
         callback: Some(callback.to_string()),
         broadcaster_user_id: Some(bid.to_string()),
     }
+}
+
+/// Mock-Provisioner: zählt Re-Mod-Aufrufe, liefert ein konfiguriertes Ergebnis.
+struct StubProvisioner {
+    succeed: bool,
+    calls: AtomicU64,
+}
+#[async_trait::async_trait]
+impl ModeratorProvisioner for StubProvisioner {
+    async fn ensure_bot_is_mod(&self, _broadcaster_id: &str, _login: &str) -> bool {
+        self.calls.fetch_add(1, Ordering::SeqCst);
+        self.succeed
+    }
+}
+
+#[tokio::test]
+async fn chat_403_mod_retry_erfolg_trackt_statt_perm_failed() {
+    // P1.2: Erster 403 beim Chat-Join → Bot re-modden, Re-Subscribe gelingt →
+    // Kanal getrackt, NICHT permanent perm_failed.
+    let pool = pool_or_skip!("t_chat_403_retry_ok");
+    let transport = Arc::new(StubTransport::default());
+    // Beide Chat-Subs scheitern beim ERSTEN Versuch mit 403, der Re-Subscribe
+    // nach Re-Mod gelingt dann.
+    {
+        let mut f = transport.fail_403_first_per_type.lock().unwrap();
+        f.insert("channel.chat.message".to_string());
+        f.insert("channel.chat.notification".to_string());
+    }
+    let provisioner = Arc::new(StubProvisioner { succeed: true, calls: AtomicU64::new(0) });
+    let manager = SubscriptionManager::new(
+        transport.clone(),
+        SubscriptionConfig { callback_url: "https://cb/x".into(), secret: "s".into() },
+        CapacitySnapshotStore::new(pool.clone()),
+    )
+    .with_moderator_provisioner(provisioner.clone());
+
+    let ok = manager.ensure_chat_subscriptions("555", "bot1", "partner").await;
+    assert!(ok, "Re-Subscribe nach Re-Mod erfolgreich → join ok");
+    // Re-Mod wurde je Sub-Typ einmal versucht (2 Chat-Subs).
+    assert_eq!(provisioner.calls.load(Ordering::SeqCst), 2);
+    // Kanal ist NICHT permanent blockiert.
+    assert!(
+        !manager.chat_subscriptions_permanently_blocked("555"),
+        "kein perm_failed nach erfolgreichem Mod-Retry"
+    );
+    // Beide Chat-Subs getrackt.
+    let tracked: Vec<String> = manager
+        .tracked_pairs()
+        .into_iter()
+        .filter(|(_, bid)| bid == "555")
+        .map(|(t, _)| t)
+        .collect();
+    assert!(tracked.contains(&"channel.chat.message".to_string()));
+    assert!(tracked.contains(&"channel.chat.notification".to_string()));
+}
+
+#[tokio::test]
+async fn chat_403_mod_retry_fehlschlag_setzt_cooldown_statt_perm_failed() {
+    // P1.2: Re-Mod scheitert → 10-Min-Cooldown (clearbar) STATT permanentem
+    // perm_failed; nach Ablauf des Cooldowns wird erneut versucht.
+    let pool = pool_or_skip!("t_chat_403_retry_cooldown");
+    let transport = Arc::new(StubTransport::default());
+    transport.fail_403_count.store(2, Ordering::SeqCst);
+    let provisioner = Arc::new(StubProvisioner { succeed: false, calls: AtomicU64::new(0) });
+
+    // Steuerbare Uhr: erlaubt das Testen des Cooldown-Ablaufs.
+    let now = Arc::new(AtomicU64::new(1_000));
+    let now_clk = now.clone();
+    let manager = SubscriptionManager::new(
+        transport.clone(),
+        SubscriptionConfig { callback_url: "https://cb/x".into(), secret: "s".into() },
+        CapacitySnapshotStore::new(pool.clone()),
+    )
+    .with_moderator_provisioner(provisioner.clone())
+    .with_clock(Arc::new(move || now_clk.load(Ordering::SeqCst) as f64));
+
+    let ok = manager.ensure_chat_subscriptions("777", "bot1", "partner").await;
+    assert!(!ok, "Re-Mod fehlgeschlagen → join scheitert (vorerst)");
+    // NICHT permanent blockiert — der entscheidende Unterschied zu vorher.
+    assert!(
+        !manager.chat_subscriptions_permanently_blocked("777"),
+        "403 im Chat-Pfad darf NICHT permanent perm_failed setzen"
+    );
+
+    // Innerhalb des Cooldowns: kein neuer Create-Versuch (Gate greift).
+    transport.fail_403_count.store(0, Ordering::SeqCst); // ab jetzt würde Create gelingen
+    let creates_before = transport.creates.lock().unwrap().len();
+    let ok_during = manager.ensure_chat_subscriptions("777", "bot1", "partner").await;
+    assert!(!ok_during, "während Cooldown übersprungen");
+    assert_eq!(
+        transport.creates.lock().unwrap().len(),
+        creates_before,
+        "kein Create-Versuch während Cooldown"
+    );
+
+    // Uhr über den 10-Min-Cooldown hinaus → automatischer Retry, jetzt Erfolg.
+    now.store(1_000 + 601, Ordering::SeqCst);
+    let ok_after = manager.ensure_chat_subscriptions("777", "bot1", "partner").await;
+    assert!(ok_after, "nach Cooldown-Ablauf automatischer Retry erfolgreich");
+    assert!(manager.tracked_pairs().iter().any(|(t, bid)| t == "channel.chat.message" && bid == "777"));
+}
+
+#[tokio::test]
+async fn revocation_untrackt_und_loest_resubscribe_aus() {
+    // P1.17/P1.18/P1.20: Wird eine getrackte Core-Sub von Twitch widerrufen,
+    // muss sie aus `tracked` entfernt werden, damit der nächste Reconcile-Zyklus
+    // (ensure_core_subscriptions) sie NEU anlegt — statt wegen is_tracked-Skip
+    // dauerhaft tot zu bleiben.
+    let pool = pool_or_skip!("t_subs_revocation");
+    let transport = Arc::new(StubTransport::default());
+    let manager = SubscriptionManager::new(
+        transport.clone(),
+        SubscriptionConfig {
+            callback_url: "https://cb/x".to_string(),
+            secret: "geheim".to_string(),
+        },
+        CapacitySnapshotStore::new(pool.clone()),
+    );
+
+    // Core-Subs für Broadcaster 99 anlegen → 3 Creates, danach getrackt.
+    manager.ensure_core_subscriptions("99", "drag").await;
+    let first = transport
+        .creates
+        .lock()
+        .unwrap()
+        .iter()
+        .filter(|(_, bid)| bid == "99")
+        .count();
+    assert_eq!(first, 3, "drei Core-Subs initial angelegt");
+
+    // Re-Ensure ohne Revocation → kein neuer Create (is_tracked-Dedup greift).
+    manager.ensure_core_subscriptions("99", "drag").await;
+    let after_dedup = transport
+        .creates
+        .lock()
+        .unwrap()
+        .iter()
+        .filter(|(_, bid)| bid == "99")
+        .count();
+    assert_eq!(after_dedup, 3, "ohne Revocation kein Resubscribe");
+
+    // Revocation für stream.online → untrack (via RevocationSink-Trait).
+    let removed = RevocationSink::on_revocation(&manager, "stream.online", "99");
+    assert!(removed, "stream.online war getrackt → untrack entfernt es");
+    // Unbekannte Sub → nichts zu entfernen.
+    assert!(!RevocationSink::on_revocation(&manager, "channel.raid", "99"));
+
+    // Nächster Reconcile legt NUR die widerrufene Sub neu an (die anderen zwei
+    // bleiben getrackt) → genau ein zusätzlicher stream.online-Create.
+    manager.ensure_core_subscriptions("99", "drag").await;
+    let online_creates = transport
+        .creates
+        .lock()
+        .unwrap()
+        .iter()
+        .filter(|(t, bid)| t == "stream.online" && bid == "99")
+        .count();
+    assert_eq!(
+        online_creates, 2,
+        "stream.online nach Revocation neu angelegt (Resubscribe)"
+    );
+    let total_99 = transport
+        .creates
+        .lock()
+        .unwrap()
+        .iter()
+        .filter(|(_, bid)| bid == "99")
+        .count();
+    assert_eq!(total_99, 4, "nur die widerrufene Sub wurde neu erstellt");
 }
 
 #[tokio::test]
