@@ -123,13 +123,23 @@ pub struct StreamerStats {
 #[serde(rename_all = "camelCase")]
 pub struct StreamerSession {
     pub id: i64,
+    /// P1.34: Frontend-Alias zu `id` (admin_dashboard StreamerDetail).
+    pub session_id: i64,
     pub started_at: String,
     pub ended_at: Option<String>,
     pub stream_title: Option<String>,
+    /// P1.34: Frontend-Alias zu `stream_title`.
+    pub title: Option<String>,
     pub game_name: Option<String>,
+    /// P1.34: Frontend-Alias zu `game_name`.
+    pub category: Option<String>,
     pub avg_viewers: Option<f64>,
+    /// P1.34: Frontend-Alias zu `avg_viewers`.
+    pub average_viewers: Option<f64>,
     pub peak_viewers: Option<i64>,
     pub duration_seconds: Option<i64>,
+    /// P1.34: gerundete Stunden aus `duration_seconds` (Python `watchTimeHours`).
+    pub watch_time_hours: f64,
     pub follower_delta: Option<i64>,
 }
 
@@ -159,6 +169,8 @@ pub struct StreamerSettings {
     pub archived_at: Option<String>,
     pub operational_state: Option<String>,
     pub technical_pause_reason: Option<String>,
+    /// P3.20: manueller Partner-Opt-Out (Python settings.manualPartnerOptOut).
+    pub manual_partner_opt_out: bool,
 }
 
 #[derive(Serialize)]
@@ -191,13 +203,15 @@ pub async fn list_handler(
         return Err(ApiError::unauthorized());
     }
 
-    let view_str = params.view.as_deref().unwrap_or("all");
-    let view = StreamerView::parse(view_str).ok_or_else(|| {
+    // P2.80: Default-View ist "active" (Python _admin_parse_streamer_view),
+    // nicht "all". Fehlender/leerer Param → Active.
+    let view = StreamerView::parse_or_default(params.view.as_deref()).ok_or_else(|| {
         ApiError::bad_request_with_body(serde_json::json!({
             "error": "invalid_view",
             "supported": StreamerView::all_names(),
         }))
     })?;
+    let view_str = view.canonical_name();
 
     let rows = list_streamers(&pool, view).await.map_err(|e| {
         tracing::error!("list_streamers Fehler: {e}");
@@ -235,7 +249,10 @@ pub async fn list_handler(
                 discord_user_id: r.discord_user_id,
                 discord_display_name: r.discord_display_name,
                 verified: r.is_verified != 0,
-                archived: r.archived_at.is_some(),
+                // P3.21: leerer archived_at-String gilt NICHT als archiviert
+                // (konsistent mit detail_handler + partner_status; Python
+                // admin_streamer_queries.py:385 `bool(archived_at)`).
+                archived: r.archived_at.as_deref().is_some_and(|s| !s.trim().is_empty()),
                 archived_at: r.archived_at,
                 created_at: r.created_at,
                 is_live: r.is_live != 0,
@@ -314,16 +331,26 @@ pub async fn detail_handler(
 
     let sessions = session_rows
         .into_iter()
-        .map(|s| StreamerSession {
-            id: s.id,
-            started_at: fmt_dt(s.started_at),
-            ended_at: s.ended_at.map(fmt_dt),
-            stream_title: s.stream_title,
-            game_name: s.game_name,
-            avg_viewers: s.avg_viewers,
-            peak_viewers: s.peak_viewers,
-            duration_seconds: s.duration_seconds,
-            follower_delta: s.follower_delta,
+        .map(|s| {
+            // P1.34: watchTimeHours = round(duration_seconds/3600, 2), 0.0 ohne Dauer.
+            let watch_time_hours =
+                ((s.duration_seconds.unwrap_or(0) as f64 / 3600.0) * 100.0).round() / 100.0;
+            StreamerSession {
+                id: s.id,
+                session_id: s.id,
+                started_at: fmt_dt(s.started_at),
+                ended_at: s.ended_at.map(fmt_dt),
+                title: s.stream_title.clone(),
+                stream_title: s.stream_title,
+                category: s.game_name.clone(),
+                game_name: s.game_name,
+                average_viewers: s.avg_viewers,
+                avg_viewers: s.avg_viewers,
+                peak_viewers: s.peak_viewers,
+                duration_seconds: s.duration_seconds,
+                watch_time_hours,
+                follower_delta: s.follower_delta,
+            }
         })
         .collect();
 
@@ -408,6 +435,7 @@ pub async fn detail_handler(
             archived_at: row.archived_at,
             operational_state: row.operational_state,
             technical_pause_reason: row.technical_pause_reason,
+            manual_partner_opt_out: row.manual_partner_opt_out.unwrap_or(0) != 0,
         },
         oauth: StreamerOAuth {
             connected: snap.connected,
@@ -848,6 +876,70 @@ mod tests {
         assert_eq!(v["view"], "all");
     }
 
+    #[tokio::test]
+    async fn list_default_view_ist_active() {
+        // P2.80: ohne ?view= ist der Default 'active' (nicht 'all'); nur aktive
+        // Partner erscheinen, archivierte/departnered nicht.
+        let dsn = db_dsn_or_skip!();
+        let pool = make_pool(&dsn, "test_admin_h_list_default_active").await;
+        sqlx::query(
+            "INSERT INTO twitch_partners_all_state (twitch_login, status, archived_at) VALUES \
+             ('aktiv1', 'active', NULL), \
+             ('archiviert1', 'archived', '2024-01-01T00:00:00Z'), \
+             ('departnered1', 'departnered', NULL)",
+        )
+        .execute(&pool)
+        .await
+        .expect("insert");
+        let req = Request::builder()
+            .uri("/twitch/api/admin/streamers") // KEIN view-Param
+            .extension(ConnectInfo(addr()))
+            .header(axum::http::header::HOST, "example.com")
+            .header("x-internal-token", "tok")
+            .body(Body::empty())
+            .unwrap();
+        let res = make_list_router(pool, "tok").oneshot(req).await.unwrap();
+        assert_eq!(res.status(), StatusCode::OK);
+        let b = axum::body::to_bytes(res.into_body(), 8192).await.unwrap();
+        let v: serde_json::Value = serde_json::from_slice(&b).unwrap();
+        assert_eq!(v["view"], "active");
+        let logins: Vec<&str> = v["items"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|i| i["login"].as_str().unwrap())
+            .collect();
+        assert_eq!(logins, vec!["aktiv1"]);
+    }
+
+    #[tokio::test]
+    async fn list_archived_leerer_string_ist_false() {
+        // P3.21: archived_at='' (leerer TEXT) → archived=false, konsistent mit Detail.
+        let dsn = db_dsn_or_skip!();
+        let pool = make_pool(&dsn, "test_admin_h_list_archived_empty").await;
+        sqlx::query(
+            "INSERT INTO twitch_partners_all_state (twitch_login, status, archived_at) \
+             VALUES ('leerarchiv', 'active', '')",
+        )
+        .execute(&pool)
+        .await
+        .expect("insert");
+        let req = Request::builder()
+            .uri("/twitch/api/admin/streamers?view=all")
+            .extension(ConnectInfo(addr()))
+            .header(axum::http::header::HOST, "example.com")
+            .header("x-internal-token", "tok")
+            .body(Body::empty())
+            .unwrap();
+        let res = make_list_router(pool, "tok").oneshot(req).await.unwrap();
+        assert_eq!(res.status(), StatusCode::OK);
+        let b = axum::body::to_bytes(res.into_body(), 8192).await.unwrap();
+        let v: serde_json::Value = serde_json::from_slice(&b).unwrap();
+        let item = &v["items"][0];
+        assert_eq!(item["login"], "leerarchiv");
+        assert_eq!(item["archived"], false);
+    }
+
     // ── Detail-Tests ────────────────────────────────────────────────────────
 
     #[tokio::test]
@@ -918,6 +1010,54 @@ mod tests {
         assert!(v["sessions"].is_array());
         assert!(v["settings"].is_object());
         assert!(v["oauth"].is_object());
+    }
+
+    #[tokio::test]
+    async fn detail_session_keys_und_settings_opt_out() {
+        // P1.34: sessions[] trägt sessionId/title/category/averageViewers/watchTimeHours
+        // (zusätzlich zu id/streamTitle/...). P3.20: settings.manualPartnerOptOut.
+        let dsn = db_dsn_or_skip!();
+        let pool = make_pool(&dsn, "test_admin_h_detail_session_keys").await;
+        sqlx::query(
+            "INSERT INTO twitch_partners_all_state \
+             (twitch_login, status, created_at, manual_partner_opt_out) \
+             VALUES ('keystreamer', 'active', NOW(), 1)",
+        )
+        .execute(&pool)
+        .await
+        .expect("insert partner");
+        sqlx::query(
+            "INSERT INTO twitch_stream_sessions \
+             (streamer_login, started_at, ended_at, stream_title, game_name, avg_viewers, \
+              peak_viewers, duration_seconds, follower_delta) \
+             VALUES ('keystreamer', NOW(), NOW(), 'Mein Titel', 'Deadlock', 123.5, 400, 7200, 12)",
+        )
+        .execute(&pool)
+        .await
+        .expect("insert session");
+        let req = Request::builder()
+            .uri("/twitch/api/admin/streamers/keystreamer")
+            .extension(ConnectInfo(addr()))
+            .header(axum::http::header::HOST, "example.com")
+            .header("x-internal-token", "tok")
+            .body(Body::empty())
+            .unwrap();
+        let res = make_detail_router(pool, "tok").oneshot(req).await.unwrap();
+        assert_eq!(res.status(), StatusCode::OK);
+        let b = axum::body::to_bytes(res.into_body(), 16384).await.unwrap();
+        let v: serde_json::Value = serde_json::from_slice(&b).unwrap();
+        let s = &v["sessions"][0];
+        // P1.34 Frontend-Keys vorhanden + korrekt.
+        assert_eq!(s["sessionId"], s["id"]);
+        assert_eq!(s["title"], "Mein Titel");
+        assert_eq!(s["category"], "Deadlock");
+        assert_eq!(s["averageViewers"], 123.5);
+        assert_eq!(s["watchTimeHours"], 2.0); // 7200s = 2.0h
+        // Bestehende Keys bleiben (additiv).
+        assert_eq!(s["streamTitle"], "Mein Titel");
+        assert_eq!(s["gameName"], "Deadlock");
+        // P3.20: settings.manualPartnerOptOut.
+        assert_eq!(v["settings"]["manualPartnerOptOut"], true);
     }
 
     // ── Mutations-Tests (B11-PR-4) ──────────────────────────────────────────
