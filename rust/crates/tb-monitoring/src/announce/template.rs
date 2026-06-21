@@ -550,20 +550,46 @@ pub fn render_announcement(
     }
 }
 
-/// `@everyone`/`@here` neutralisieren (Python `_sanitize_live_content`).
+/// `@everyone`/`@here` neutralisieren (Python `_sanitize_live_content`,
+/// `re.sub(r"@everyone", ..., flags=re.IGNORECASE)`).
+///
+/// Wirkt case-insensitiv über JEDE Schreibweise (`@EveryOne`, `@hErE`, …): ein
+/// Zero-Width-Space wird zwischen `@` und das Schlüsselwort gesetzt, sodass
+/// Discord den Mention nicht mehr auflöst, die Original-Schreibweise aber
+/// erhalten bleibt. Bewusst dependency-frei (manueller ASCII-Scan), da die
+/// Suchbegriffe reines ASCII sind.
 pub fn sanitize_live_content(content: &str) -> String {
-    let mut out = content.to_string();
-    for (needle, replacement) in [
-        ("@everyone", "@\u{200b}everyone"),
-        ("@Everyone", "@\u{200b}Everyone"),
-        ("@EVERYONE", "@\u{200b}EVERYONE"),
-        ("@here", "@\u{200b}here"),
-        ("@Here", "@\u{200b}Here"),
-        ("@HERE", "@\u{200b}HERE"),
-    ] {
-        out = out.replace(needle, replacement);
+    /// Fügt nach jedem `@<keyword>` (case-insensitiv) ein Zero-Width-Space ein.
+    fn neutralize(input: &str, keyword: &str) -> String {
+        let bytes = input.as_bytes();
+        let kw = keyword.as_bytes();
+        let mut out = String::with_capacity(input.len());
+        let mut i = 0;
+        while i < bytes.len() {
+            // Treffer nur, wenn `@` direkt vom Keyword (egal welche Schreibweise)
+            // gefolgt wird.
+            if bytes[i] == b'@'
+                && i + 1 + kw.len() <= bytes.len()
+                && bytes[i + 1..i + 1 + kw.len()].eq_ignore_ascii_case(kw)
+            {
+                out.push('@');
+                out.push('\u{200b}');
+                // Original-Schreibweise des Keywords beibehalten.
+                out.push_str(&input[i + 1..i + 1 + kw.len()]);
+                i += 1 + kw.len();
+            } else {
+                // Einzelnes UTF-8-Zeichen kopieren (Byte-Index ist Char-Grenze,
+                // weil wir nur an `@`/ASCII-Treffern voranspringen).
+                let ch = input[i..].chars().next().expect("char boundary");
+                out.push(ch);
+                i += ch.len_utf8();
+            }
+        }
+        out
     }
-    out
+
+    let out = neutralize(content, "everyone");
+    neutralize(&out, "here")
 }
 
 /// Offline-/VOD-Embed (Python `_build_offline_embed` — gleicher Stil, klar
@@ -776,6 +802,27 @@ mod tests {
         assert_eq!(
             sanitize_live_content("Hey @everyone und @here!"),
             "Hey @\u{200b}everyone und @\u{200b}here!"
+        );
+    }
+
+    #[test]
+    fn sanitize_neutralisiert_mixed_case_everyone_here() {
+        // P1.16/P1.48: Python `re.IGNORECASE` neutralisiert JEDE Schreibweise.
+        let out = sanitize_live_content("@EveryOne @hErE @eVeRyOnE");
+        // Kein rohes @everyone/@here (case-insensitiv) darf durchrutschen.
+        let lower = out.to_lowercase();
+        assert!(
+            !lower.contains("@everyone"),
+            "rohes @everyone (mixed-case) nicht neutralisiert: {out}"
+        );
+        assert!(
+            !lower.contains("@here"),
+            "rohes @here (mixed-case) nicht neutralisiert: {out}"
+        );
+        // Die Original-Schreibweise bleibt erhalten, nur mit Zero-Width-Joiner.
+        assert_eq!(
+            out,
+            "@\u{200b}EveryOne @\u{200b}hErE @\u{200b}eVeRyOnE"
         );
     }
 

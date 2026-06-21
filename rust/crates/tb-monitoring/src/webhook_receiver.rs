@@ -33,6 +33,7 @@ use serde_json::Value;
 use sha2::Sha256;
 
 use crate::dispatch::EventSubDispatcher;
+use crate::subscriptions::RevocationSink;
 
 type HmacSha256 = Hmac<Sha256>;
 
@@ -49,6 +50,10 @@ const MAX_MESSAGE_AGE_SECONDS: i64 = 600;
 pub struct WebhookReceiver {
     secret: String,
     dispatcher: Arc<EventSubDispatcher>,
+    /// Optionale Revocation-Senke (`SubscriptionManager`): bei Webhook-Revocation
+    /// wird die Sub untracked, damit der Reconcile-Loop sie neu anlegt. `None`
+    /// → Revocation wird nur geloggt (Alt-Verhalten, kein Selbstheilen).
+    revocation_sink: Option<Arc<dyn RevocationSink>>,
 }
 
 impl WebhookReceiver {
@@ -56,7 +61,24 @@ impl WebhookReceiver {
         Self {
             secret: secret.into(),
             dispatcher,
+            revocation_sink: None,
         }
+    }
+
+    /// Verdrahtet die Revocation-Senke (Port von Pythons
+    /// `set_revocation_callback`). Wird beim Aufbau in `bin/tb-bot` mit dem
+    /// `SubscriptionManager` gefüttert, damit widerrufene Subs zur Laufzeit
+    /// untracked + beim nächsten Reconcile neu angelegt werden.
+    ///
+    /// WIRING-TODO(P1.17/P1.18/P1.20): In `bin/tb-bot/src/main.rs:810`
+    /// (`WebhookReceiver::new`) den vorhandenen `SubscriptionManager`-`Arc`
+    /// via `.with_revocation_sink(subscription_manager.clone())` durchreichen,
+    /// damit Core-Sub-Revocations (stream.online/offline/channel.update) zur
+    /// Laufzeit selbstheilen statt erst beim Prozess-Neustart.
+    #[must_use]
+    pub fn with_revocation_sink(mut self, sink: Arc<dyn RevocationSink>) -> Self {
+        self.revocation_sink = Some(sink);
+        self
     }
 
     /// Router mit dem Twitch-Callback-Pfad (identisch zur public URL, damit
@@ -116,6 +138,59 @@ fn is_timestamp_too_old(timestamp: &str, now: chrono::DateTime<chrono::Utc>) -> 
     // Akzeptiert wird nur das Fenster [-600s, +600s]: alles außerhalb ist zu
     // alt (Replay) oder zu weit in der Zukunft (Skew).
     !(-MAX_MESSAGE_AGE_SECONDS..=MAX_MESSAGE_AGE_SECONDS).contains(&age.num_seconds())
+}
+
+/// Verarbeitet eine Webhook-Revocation (Python `_handle_eventsub_webhook_revocation`):
+/// extrahiert Sub-Typ + Ziel-Broadcaster aus dem Payload und untrackt die Sub
+/// über die [`RevocationSink`], damit der nächste Reconcile-Zyklus sie neu
+/// anlegt (Selbstheilung statt stillem Event-Verlust). Ohne Sink bleibt es beim
+/// reinen Logging (Alt-Verhalten).
+fn handle_revocation(
+    parsed: &Value,
+    header_sub_type: &str,
+    sink: Option<&dyn RevocationSink>,
+) {
+    let reason = parsed
+        .pointer("/subscription/status")
+        .and_then(Value::as_str)
+        .unwrap_or("unknown");
+    // Sub-Typ + Ziel-Broadcaster aus dem Revocation-Payload ziehen (Header-Typ
+    // als Fallback). Twitch liefert die Condition unter `subscription.condition`;
+    // der Broadcaster steckt je nach Sub-Typ in `broadcaster_user_id` oder
+    // `to_broadcaster_user_id` (z. B. channel.raid-Arrival).
+    let sub_type = parsed
+        .pointer("/subscription/type")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|t| !t.is_empty())
+        .unwrap_or(header_sub_type);
+    let broadcaster_id = parsed
+        .pointer("/subscription/condition/broadcaster_user_id")
+        .and_then(Value::as_str)
+        .or_else(|| {
+            parsed
+                .pointer("/subscription/condition/to_broadcaster_user_id")
+                .and_then(Value::as_str)
+        })
+        .unwrap_or("")
+        .trim();
+    tracing::warn!(
+        sub_type,
+        broadcaster_id,
+        reason,
+        "eventsub_receiver: Subscription widerrufen"
+    );
+    let Some(sink) = sink else {
+        return;
+    };
+    if broadcaster_id.is_empty() {
+        tracing::warn!(
+            sub_type,
+            "eventsub_receiver: Revocation ohne broadcaster_user_id — kein Untrack möglich"
+        );
+        return;
+    }
+    sink.on_revocation(sub_type, broadcaster_id);
 }
 
 fn header<'h>(headers: &'h HeaderMap, name: &str) -> &'h str {
@@ -183,15 +258,7 @@ async fn handle_callback(
             (StatusCode::OK, challenge.to_string()).into_response()
         }
         MSG_TYPE_REVOCATION => {
-            let reason = parsed
-                .pointer("/subscription/status")
-                .and_then(Value::as_str)
-                .unwrap_or("unknown");
-            tracing::warn!(
-                sub_type = %header_sub_type,
-                reason,
-                "eventsub_receiver: Subscription widerrufen"
-            );
+            handle_revocation(&parsed, &header_sub_type, receiver.revocation_sink.as_deref());
             StatusCode::NO_CONTENT.into_response()
         }
         MSG_TYPE_NOTIFICATION => {
@@ -246,6 +313,63 @@ async fn handle_callback(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::Mutex;
+
+    /// Mock-Senke: zeichnet jede Revocation auf (sub_type, broadcaster_id).
+    #[derive(Default)]
+    struct RecordingSink {
+        calls: Mutex<Vec<(String, String)>>,
+    }
+    impl RevocationSink for RecordingSink {
+        fn on_revocation(&self, sub_type: &str, broadcaster_id: &str) -> bool {
+            self.calls
+                .lock()
+                .unwrap()
+                .push((sub_type.to_string(), broadcaster_id.to_string()));
+            true
+        }
+    }
+
+    #[test]
+    fn revocation_untrackt_ueber_sink() {
+        // P1.17/P1.18/P1.20: Revocation-Payload → Sink mit (Typ, Broadcaster).
+        let sink = RecordingSink::default();
+        let payload = serde_json::json!({
+            "subscription": {
+                "type": "stream.online",
+                "status": "authorization_revoked",
+                "condition": { "broadcaster_user_id": "12345" }
+            }
+        });
+        handle_revocation(&payload, "stream.online", Some(&sink));
+        assert_eq!(
+            *sink.calls.lock().unwrap(),
+            vec![("stream.online".to_string(), "12345".to_string())]
+        );
+
+        // Raid-Arrival: Broadcaster steckt in to_broadcaster_user_id.
+        let sink2 = RecordingSink::default();
+        let raid = serde_json::json!({
+            "subscription": {
+                "type": "channel.raid",
+                "status": "user_removed",
+                "condition": { "to_broadcaster_user_id": "999" }
+            }
+        });
+        handle_revocation(&raid, "channel.raid", Some(&sink2));
+        assert_eq!(
+            *sink2.calls.lock().unwrap(),
+            vec![("channel.raid".to_string(), "999".to_string())]
+        );
+
+        // Ohne broadcaster_user_id → kein Untrack-Versuch (still geloggt).
+        let sink3 = RecordingSink::default();
+        let no_bid = serde_json::json!({
+            "subscription": { "type": "stream.offline", "condition": {} }
+        });
+        handle_revocation(&no_bid, "stream.offline", Some(&sink3));
+        assert!(sink3.calls.lock().unwrap().is_empty());
+    }
 
     fn sign(secret: &str, message_id: &str, timestamp: &str, body: &[u8]) -> String {
         let mut mac = HmacSha256::new_from_slice(secret.as_bytes()).unwrap();

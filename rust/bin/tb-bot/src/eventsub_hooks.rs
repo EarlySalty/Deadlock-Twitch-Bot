@@ -18,14 +18,14 @@ use std::sync::{Arc, Mutex};
 use chrono::Utc;
 use serde_json::Value;
 use sqlx::PgPool;
-use tb_monitoring::{EventSubHooks, LiveStateStore, SubscriptionManager};
+use tb_monitoring::{EventSubHooks, LiveStateStore, ModeratorProvisioner, SubscriptionManager};
 use tb_raid::pending_raids::normalize_broadcaster_login;
 use tb_raid::signal_correlation::{ChatNotificationInput, ChatUnraidInput};
 use tb_raid::{
     classify_partner_raid_arrival, PendingRaidStore, RaidArrivalInput, RaidArrivalRuntime,
     RaidBlacklistStore, RaidSignalCorrelationService, RaidSignalOutcome, TokenProvider,
 };
-use tb_transport_twitch::HelixClient;
+use tb_transport_twitch::{AddModeratorOutcome, HelixClient};
 
 use crate::auto_raid::OfflineRaidHandler;
 use crate::offline_side_effects::OfflineSideEffects;
@@ -417,6 +417,106 @@ impl BlacklistRaidGuard {
             }
             Err(error) => {
                 tracing::warn!(broadcaster_id, %error, "Cancel-Raid-Request fehlgeschlagen");
+                false
+            }
+        }
+    }
+}
+
+// ─── 403-Selbstheilung: Bot als Moderator nachsetzen (P1.2) ──────────────────
+
+/// Setzt den Bot zur Laufzeit (wieder) als Moderator eines Kanals ein, wenn ein
+/// Chat-Join/Sub-Create mit 403 fehlschlägt. Port von Pythons
+/// `_ensure_bot_is_mod` (chat/connection.py:961): Streamer-Token auflösen
+/// (`get_tokens_for_user` → [`TokenProvider::get_valid_token_unrestricted`]),
+/// dann `POST /moderation/moderators` mit Bot-User-ID. Ohne gültigen
+/// Streamer-Token oder Bot-ID heilt der Join nicht (`false`).
+pub struct HelixModeratorProvisioner {
+    token_provider: Arc<TokenProvider>,
+    helix: HelixClient,
+    bot_user_id: String,
+}
+
+impl HelixModeratorProvisioner {
+    pub fn new(
+        token_provider: Arc<TokenProvider>,
+        helix: HelixClient,
+        bot_user_id: String,
+    ) -> Self {
+        Self {
+            token_provider,
+            helix,
+            bot_user_id,
+        }
+    }
+}
+
+#[async_trait::async_trait]
+impl ModeratorProvisioner for HelixModeratorProvisioner {
+    async fn ensure_bot_is_mod(&self, broadcaster_id: &str, login: &str) -> bool {
+        // Python connection.py:975-978: ohne Bot-ID kein Remod.
+        if self.bot_user_id.trim().is_empty() {
+            tracing::debug!(channel = login, "ensure_bot_is_mod: keine Bot-ID verfügbar");
+            return false;
+        }
+        // Streamer-Token auflösen (connection.py:986 `get_tokens_for_user`) —
+        // unrestricted, da der Remod auch bei deaktivierten Raids greifen muss.
+        let token = match self
+            .token_provider
+            .get_valid_token_unrestricted(broadcaster_id, Utc::now())
+            .await
+        {
+            Ok(Some(token)) => token,
+            Ok(None) => {
+                tracing::warn!(
+                    channel = login,
+                    "ensure_bot_is_mod: keine gültige Streamer-Autorisierung verfügbar"
+                );
+                return false;
+            }
+            Err(error) => {
+                tracing::error!(
+                    %error,
+                    channel = login,
+                    "ensure_bot_is_mod: Streamer-Token-Lookup fehlgeschlagen"
+                );
+                return false;
+            }
+        };
+        match self
+            .helix
+            .add_channel_moderator(broadcaster_id, &self.bot_user_id, &token)
+            .await
+        {
+            // 200/204 (Added) und 422/"already a mod" (AlreadyModerator) gelten
+            // beide als Erfolg (connection.py:1013-1027).
+            Ok(AddModeratorOutcome::Added) => {
+                tracing::info!(
+                    channel = login,
+                    bot_user_id = %self.bot_user_id,
+                    "ensure_bot_is_mod: Bot wieder als Moderator gesetzt"
+                );
+                true
+            }
+            Ok(AddModeratorOutcome::AlreadyModerator) => {
+                tracing::info!(channel = login, "ensure_bot_is_mod: Bot ist bereits Moderator");
+                true
+            }
+            Ok(AddModeratorOutcome::Failed { status, body }) => {
+                tracing::warn!(
+                    channel = login,
+                    status,
+                    body = %body,
+                    "ensure_bot_is_mod: Remod fehlgeschlagen"
+                );
+                false
+            }
+            Err(error) => {
+                tracing::error!(
+                    %error,
+                    channel = login,
+                    "ensure_bot_is_mod: Remod-Request fehlgeschlagen"
+                );
                 false
             }
         }

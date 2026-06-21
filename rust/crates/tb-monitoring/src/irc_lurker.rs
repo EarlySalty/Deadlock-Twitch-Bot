@@ -181,6 +181,52 @@ pub async fn upsert_names_batch(
     (inserts, updates)
 }
 
+/// Schreibt pro Poll-Tick einen Presence-Tick je Chatter
+/// (Python `bot/analytics/mixin.py:1647-1658`). Liefert die Roh-Zeitreihe für
+/// Anwesenheits-/Watchtime-Analysen (`viewer_timeline`).
+///
+/// `ON CONFLICT (session_id, viewer_login, tick_at) DO NOTHING` → idempotent,
+/// falls derselbe Tick (gleicher `tick_at`) doppelt verarbeitet wird. `tick_at`
+/// ist `TIMESTAMPTZ` (clean-SQL — kein TEXT-Timestamp). Liefert die Anzahl
+/// tatsächlich neu eingefügter Zeilen.
+///
+/// WIRING-TODO(P1.23): Aus dem produktiven Chatters-Poll-Tick aufrufen — pro
+/// laufender Session einmal je 30s-Tick mit den aktuellen Chatter-Logins
+/// (Bot-Filter erfolgt bereits upstream beim Befüllen von
+/// `twitch_session_chatters`). In `bin/tb-bot` neben den 300s-Jobs verdrahten.
+pub async fn record_presence_ticks(
+    pool: &PgPool,
+    session_id: i64,
+    streamer_login: &str,
+    viewer_logins: &[String],
+    tick_at: DateTime<Utc>,
+) -> u64 {
+    if viewer_logins.is_empty() {
+        return 0;
+    }
+    let streamer = streamer_login.to_lowercase();
+    let mut inserted = 0u64;
+    for viewer in viewer_logins {
+        let viewer = viewer.to_lowercase();
+        let res = sqlx::query(
+            "INSERT INTO twitch_viewer_presence_ticks \
+             (session_id, streamer_login, viewer_login, tick_at) \
+             VALUES ($1, $2, $3, $4) \
+             ON CONFLICT (session_id, viewer_login, tick_at) DO NOTHING",
+        )
+        .bind(session_id)
+        .bind(&streamer)
+        .bind(&viewer)
+        .bind(tick_at)
+        .execute(pool)
+        .await;
+        if let Ok(done) = res {
+            inserted += done.rows_affected();
+        }
+    }
+    inserted
+}
+
 // ---- Async-Tracker (Verbindungs-Loop + dynamisches Channel-Tracking) -------
 //
 // HINWEIS zum An/Aus-Zustand: In Python ist `experimental_irc_lurker_enabled`
@@ -456,6 +502,13 @@ mod tests {
              PRIMARY KEY (session_id, chatter_login))",
         )
         .execute(&pool).await.unwrap();
+        sqlx::query(
+            "CREATE TABLE twitch_viewer_presence_ticks (\
+             session_id BIGINT NOT NULL, streamer_login TEXT NOT NULL, \
+             viewer_login TEXT NOT NULL, tick_at TIMESTAMPTZ NOT NULL, \
+             PRIMARY KEY (session_id, viewer_login, tick_at))",
+        )
+        .execute(&pool).await.unwrap();
         Some(pool)
     }
 
@@ -489,6 +542,40 @@ mod tests {
         upsert_chatter_seen(&pool, "nani", "StreamElements", later).await;
         let n3: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM twitch_session_chatters").fetch_one(&pool).await.unwrap();
         assert_eq!(n3, 4);
+    }
+
+    #[tokio::test]
+    async fn presence_ticks_pro_tick_und_idempotent() {
+        // P1.23: pro Poll-Tick eine Presence-Tick-Row je aktivem Chatter,
+        // ON CONFLICT idempotent beim Re-Tick (gleicher tick_at).
+        let Some(pool) = make_pool("t_presence_ticks").await else { return };
+        sqlx::query("INSERT INTO twitch_live_state (twitch_user_id, streamer_login, is_live, active_session_id) VALUES ('1', 'nani', 1, 42)")
+            .execute(&pool).await.unwrap();
+        let tick = Utc::now();
+        let chatters = vec!["Alice".to_string(), "Bob".to_string()];
+
+        // Erster Tick: 2 aktive Chatter → 2 Rows.
+        let n = record_presence_ticks(&pool, 42, "nani", &chatters, tick).await;
+        assert_eq!(n, 2);
+        let rows: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM twitch_viewer_presence_ticks WHERE session_id = 42")
+            .fetch_one(&pool).await.unwrap();
+        assert_eq!(rows, 2);
+        // Logins normalisiert (lowercase).
+        let exists: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM twitch_viewer_presence_ticks WHERE viewer_login = 'alice'")
+            .fetch_one(&pool).await.unwrap();
+        assert_eq!(exists, 1);
+
+        // Re-Tick mit identischem tick_at → idempotent (0 neue Rows).
+        let n2 = record_presence_ticks(&pool, 42, "nani", &chatters, tick).await;
+        assert_eq!(n2, 0);
+        let rows2: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM twitch_viewer_presence_ticks WHERE session_id = 42")
+            .fetch_one(&pool).await.unwrap();
+        assert_eq!(rows2, 2);
+
+        // Nächster Tick (anderer tick_at) → neue Rows.
+        let later = tick + chrono::Duration::seconds(30);
+        let n3 = record_presence_ticks(&pool, 42, "nani", &chatters, later).await;
+        assert_eq!(n3, 2);
     }
 
     #[tokio::test]

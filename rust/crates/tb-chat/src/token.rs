@@ -35,6 +35,18 @@ use crate::secret_sink::SecretSink;
 const VALIDATE_URL: &str = "https://id.twitch.tv/oauth2/validate";
 const TOKEN_URL: &str = "https://id.twitch.tv/oauth2/token";
 
+/// Entfernt das IRC-style `oauth:`-Präfix und trimmt — Port von
+/// `token_manager.py:135` (`.replace("oauth:","").strip()`).
+///
+/// Legacy-Seeds trugen teils `oauth:abc…`; ein solcher Wert würde im
+/// `OAuth …`/`Bearer`-Header bzw. der Refresh-Form roh landen → 401 bei
+/// validate, fehlgeschlagener Refresh → Bot kann sich nicht authentisieren.
+/// Wir strippen daher überall am Konsum-Punkt (Header/Form/Rückgabe/Seed),
+/// genau wie Python.
+fn strip_oauth_prefix(token: &str) -> String {
+    token.replace("oauth:", "").trim().to_string()
+}
+
 /// Seed-Tokens für den Boot-Pfad — Resultat des Provider-Chains.
 ///
 /// `access_token` darf `None`/veraltet sein (Infisical-Snapshot altert);
@@ -73,14 +85,12 @@ fn resolve_seed_tokens(
     token_file: Option<&str>,
 ) -> SeedTokens {
     let refresh_token = env_refresh
-        .map(str::trim)
-        .filter(|s| !s.is_empty())
-        .map(str::to_string);
+        .map(strip_oauth_prefix)
+        .filter(|s| !s.is_empty());
 
     let env_access = env_token
-        .map(str::trim)
-        .filter(|s| !s.is_empty())
-        .map(str::to_string);
+        .map(strip_oauth_prefix)
+        .filter(|s| !s.is_empty());
     if env_access.is_some() {
         return SeedTokens {
             access_token: env_access,
@@ -91,7 +101,9 @@ fn resolve_seed_tokens(
     let access_token = token_file
         .map(str::trim)
         .filter(|s| !s.is_empty())
-        .and_then(read_token_file);
+        .and_then(read_token_file)
+        .map(|t| strip_oauth_prefix(&t))
+        .filter(|s| !s.is_empty());
 
     SeedTokens {
         access_token,
@@ -235,7 +247,8 @@ impl BotTokenManager {
         seed_access_token: Option<&str>,
         seed_refresh_token: &str,
     ) -> Result<(), TokenError> {
-        if let Some(access) = seed_access_token.map(str::trim).filter(|s| !s.is_empty()) {
+        let stripped_access = seed_access_token.map(strip_oauth_prefix);
+        if let Some(access) = stripped_access.as_deref().filter(|s| !s.is_empty()) {
             match self.validate(access).await {
                 Ok(v) => {
                     tracing::info!(
@@ -247,7 +260,7 @@ impl BotTokenManager {
                     *self.bot_login.write().await = v.login.clone();
                     *self.state.write().await = Some(TokenState {
                         access_token: access.to_string(),
-                        refresh_token: seed_refresh_token.trim().to_string(),
+                        refresh_token: strip_oauth_prefix(seed_refresh_token),
                         expires_at: Utc::now() + chrono::Duration::seconds(v.expires_in),
                         scopes: v.scopes,
                     });
@@ -345,6 +358,7 @@ impl BotTokenManager {
     }
 
     async fn validate(&self, access_token: &str) -> Result<ValidateResponse, TokenError> {
+        let access_token = strip_oauth_prefix(access_token);
         let resp = self
             .client
             .get(&self.validate_url)
@@ -363,6 +377,8 @@ impl BotTokenManager {
     }
 
     async fn refresh_with(&self, refresh_token: &str) -> Result<(), TokenError> {
+        let refresh_token = strip_oauth_prefix(refresh_token);
+        let refresh_token = refresh_token.as_str();
         let resp = self
             .client
             .post(&self.token_url)
@@ -1078,6 +1094,64 @@ mod tests {
             remaining >= chrono::Duration::seconds(50),
             "expires_in<=0 muss auf rund 60s gefloort werden, remaining={remaining:?}"
         );
+    }
+
+    #[test]
+    fn strip_oauth_prefix_entfernt_praefix_und_trimmt() {
+        assert_eq!(strip_oauth_prefix("oauth:abc"), "abc");
+        assert_eq!(strip_oauth_prefix("  oauth:abc  "), "abc");
+        assert_eq!(strip_oauth_prefix("abc"), "abc");
+        assert_eq!(strip_oauth_prefix("  abc  "), "abc");
+    }
+
+    #[test]
+    fn resolve_seed_tokens_strippt_oauth_praefix() {
+        let got = resolve_seed_tokens(Some("oauth:env-access"), Some("oauth:env-refresh"), None);
+        assert_eq!(got.access_token.as_deref(), Some("env-access"));
+        assert_eq!(got.refresh_token.as_deref(), Some("env-refresh"));
+    }
+
+    /// P1.6: Ein `oauth:`-präfixierter Seed darf NIE roh in Header/Form landen.
+    /// Mock akzeptiert nur den gestrippten `OAuth abc`-Header bzw. das
+    /// Refresh-Formular ohne Präfix; ein roher Forward würde 401/404 erzeugen.
+    #[tokio::test]
+    async fn oauth_praefix_wird_aus_header_und_refresh_form_gestrippt() {
+        let server = MockServer::start().await;
+        // Header muss "OAuth abc" sein (kein "OAuth oauth:abc").
+        Mock::given(method("GET"))
+            .and(path("/validate"))
+            .and(header("Authorization", "OAuth abc"))
+            .respond_with(validate_ok(14000))
+            .expect(1..)
+            .mount(&server)
+            .await;
+        let m = manager(&server).await;
+        m.initialize(Some("oauth:abc"), "oauth:refresh-seed")
+            .await
+            .unwrap();
+        // Rückgabe ist der gestrippte Access-Token.
+        assert_eq!(m.access_token().await.unwrap(), "abc");
+
+        // Refresh-Form trägt den gestrippten Refresh-Token (ohne "oauth:").
+        let refresh_server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/token"))
+            .and(body_string_contains("refresh_token=refresh-seed"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "access_token": "fresh",
+                "expires_in": 14000
+            })))
+            .expect(1)
+            .mount(&refresh_server)
+            .await;
+        Mock::given(method("GET"))
+            .and(path("/validate"))
+            .respond_with(validate_ok(14000))
+            .mount(&refresh_server)
+            .await;
+        let m2 = manager(&refresh_server).await;
+        m2.initialize(None, "oauth:refresh-seed").await.unwrap();
+        assert_eq!(m2.access_token().await.unwrap(), "fresh");
     }
 
     #[tokio::test]

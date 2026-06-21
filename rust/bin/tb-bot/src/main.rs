@@ -102,8 +102,8 @@ use raid_arrival_wiring::RaidArrivalSinkImpl;
 use reauth_reminder::ReauthReminder;
 use score_refresh::ScoreRefreshResolver;
 use wiring::{
-    BrokerAnnouncementTransport, HelixFollowerSource, HelixStreamSource,
-    HelixSubscriptionTransport, HelixVodPreview, HelixVodSource, LivePingRoleAuto,
+    BotFollowerTokenSource, BrokerAnnouncementTransport, FollowerTokenSource, HelixFollowerSource,
+    HelixStreamSource, HelixSubscriptionTransport, HelixVodPreview, HelixVodSource, LivePingRoleAuto,
     SubscriptionEventSubHooks,
 };
 
@@ -324,9 +324,23 @@ async fn main() {
     let guard = GuardStore::new(pool.clone());
     let telemetry = TelemetryStore::new(pool.clone());
     let live_state = LiveStateStore::new(pool.clone());
+    // Welle B Phase 1: Bot-Token booten + ChatApi bauen (TB_CHAT_ENABLED=1).
+    // Früh gezogen (vor Follower-Source + Hooks-Komposition): die Follower-Total-
+    // Quelle (P1.7) braucht den Bot-Token mit `moderator:read:followers`, und die
+    // OAuth-Followup-Begrüßung den nativen Send statt des Python-Umwegs (8779).
+    // Es gibt nur DIESEN einen BotTokenManager (kein zweiter Refresher).
+    let chat_api_handle = chat_wiring::try_build_api(helix.as_ref().clone()).await;
+    // P1.7: Bot-Token-Quelle für den Follower-Total-Abruf (moderator:read:followers).
+    let follower_token_source: Option<Arc<dyn FollowerTokenSource>> =
+        chat_api_handle.as_ref().map(|h| {
+            Arc::new(BotFollowerTokenSource {
+                token_manager: h.bot_token_manager(),
+            }) as Arc<dyn FollowerTokenSource>
+        });
     let followers: Arc<dyn FollowerCountSource> = match helix.as_ref().clone() {
         Some(helix_client) => Arc::new(HelixFollowerSource {
             helix: helix_client,
+            token_source: follower_token_source,
         }),
         None => Arc::new(NoFollowerSource),
     };
@@ -362,7 +376,7 @@ async fn main() {
     let subscription_manager: Option<Arc<SubscriptionManager>> =
         match (webhook_secret, callback_url, helix.as_ref().clone()) {
             (Some(secret), Some(callback_url), Some(helix_client)) => {
-                let manager = Arc::new(SubscriptionManager::new(
+                let mut manager_builder = SubscriptionManager::new(
                     Arc::new(HelixSubscriptionTransport {
                         helix: helix_client.clone(),
                     }),
@@ -371,7 +385,36 @@ async fn main() {
                         secret,
                     },
                     CapacitySnapshotStore::new(pool.clone()),
-                ));
+                );
+                // P1.2: Mod-Provisioner für die 403-Selbstheilung im Chat-/Sub-Pfad
+                // (Python `_ensure_bot_is_mod`). Braucht den Streamer-Token-Resolver
+                // (cipher-gated) + die Bot-User-ID aus dem gebooteten Chat-Handle.
+                // Fehlt eines, bleibt es beim Alt-Verhalten (403 → perm_failed).
+                let bot_user_id = chat_api_handle
+                    .as_ref()
+                    .map(|h| h.bot_user_id.clone())
+                    .unwrap_or_default();
+                if !bot_user_id.trim().is_empty() {
+                    if let Some(token_provider) =
+                        build_moderator_token_provider(pool.clone(), helix_client.clone())
+                    {
+                        manager_builder = manager_builder.with_moderator_provisioner(Arc::new(
+                            eventsub_hooks::HelixModeratorProvisioner::new(
+                                token_provider,
+                                helix_client.clone(),
+                                bot_user_id,
+                            ),
+                        ));
+                        tracing::info!(
+                            "Mod-Provisioner aktiv (403-Selbstheilung: Bot-Remod via Streamer-Token)"
+                        );
+                    } else {
+                        tracing::info!(
+                            "DB_MASTER_KEY_V1 fehlt — Mod-Provisioner aus (403 → perm_failed)"
+                        );
+                    }
+                }
+                let manager = Arc::new(manager_builder);
                 manager.rehydrate().await;
                 tracing::info!("EventSub-Subscription-Verwaltung aktiv (Webhook-Modus)");
                 // Startup-Cleanup + periodischer Core-Sub-Reconcile:
@@ -397,10 +440,6 @@ async fn main() {
                 None
             }
         };
-    // Welle B Phase 1: Bot-Token booten + ChatApi bauen (TB_CHAT_ENABLED=1).
-    // Muss VOR der Hooks-Komposition passieren, damit die OAuth-Followup-
-    // Begrüßung den nativen Send statt des Python-Umwegs (8779) nutzt.
-    let chat_api_handle = chat_wiring::try_build_api(helix.as_ref().clone()).await;
     // ChatApi-Clone für den Partner-Recruiting-Outreach FRÜH ziehen — das Handle
     // wird weiter unten (Pipeline-Aufbau) konsumiert und ist bei der
     // SubscriptionPollHooks-Konstruktion sonst nicht mehr im Scope.
@@ -807,10 +846,17 @@ async fn main() {
                 .ok()
                 .and_then(|v| v.parse().ok())
                 .unwrap_or(8786);
-            let receiver = Arc::new(tb_monitoring::WebhookReceiver::new(
-                secret,
-                dispatcher.clone(),
-            ));
+            // P1.17/18/20: Revocation-Sink verdrahten. Bei EventSub-Revocation
+            // (z. B. stream.online/offline/channel.update widerrufen) untrackt der
+            // SubscriptionManager die Sub, sodass der nächste Reconcile-Zyklus sie
+            // neu anlegt — Selbstheilung zur Laufzeit statt erst beim Neustart.
+            // Ohne aktiven Manager (Webhook-Modus aus) bleibt es beim reinen Logging.
+            let mut receiver_builder =
+                tb_monitoring::WebhookReceiver::new(secret, dispatcher.clone());
+            if let Some(manager) = subscription_manager.as_ref() {
+                receiver_builder = receiver_builder.with_revocation_sink(manager.clone());
+            }
+            let receiver = Arc::new(receiver_builder);
             let router = receiver.router();
             tokio::spawn(async move {
                 let addr = SocketAddr::from(([127, 0, 0, 1], receiver_port));
@@ -1252,6 +1298,38 @@ fn build_telemetry_sub_auth(
         token_blacklist,
     ));
     Some((token_provider, raid_auth))
+}
+
+/// Baut den `TokenProvider` für den Mod-Provisioner (P1.2): löst den
+/// Streamer-Token (`get_valid_token_unrestricted`) für den Bot-Remod auf.
+/// `None`, wenn `DB_MASTER_KEY_V1` fehlt — dann bleibt der 403-Pfad beim
+/// Alt-Verhalten. Eigene Instanz mit Arc-Clones; derselbe Advisory-Lock
+/// serialisiert den Refresh cross-process wie der Raid-Pfad (kein Dual-Refresh).
+fn build_moderator_token_provider(
+    pool: sqlx::PgPool,
+    helix_client: tb_transport_twitch::HelixClient,
+) -> Option<Arc<TokenProvider>> {
+    let cipher = Arc::new(FieldCipher::from_env().ok()?);
+    let redirect_uri = std::env::var("TWITCH_RAID_REDIRECT_URI")
+        .ok()
+        .map(|v| v.trim().to_string())
+        .filter(|v| !v.is_empty())
+        .unwrap_or_else(|| "https://deutsche-deadlock-community.de/callback/twitch".to_string());
+    let token_blacklist = Arc::new(TokenBlacklistStore::new(pool.clone()));
+    let refresher = RaidTokenRefresher::new(
+        pool.clone(),
+        cipher.clone(),
+        Arc::new(HelixTokenClient {
+            helix: helix_client,
+            redirect_uri,
+        }),
+        token_blacklist.clone(),
+    );
+    Some(Arc::new(TokenProvider::new(
+        RaidAuthStore::new(pool, cipher),
+        refresher,
+        token_blacklist,
+    )))
 }
 
 async fn subscription_maintenance_loop(

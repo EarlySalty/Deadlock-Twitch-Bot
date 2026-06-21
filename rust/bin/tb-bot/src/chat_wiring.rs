@@ -515,6 +515,16 @@ pub async fn build_runtime(
     ));
     let promos = Arc::new(
         PromoEngine::new(pool.clone(), Arc::clone(&api), suppression)
+            // P1.1: Schreibseite der Outbound-Suppression — derselbe Store, der
+            // bereits als Read-Seite in CombinedSuppression hängt. channel_settings-
+            // Drops werden so 7d/3d persistiert (promo/recruitment 7d, partner_raid 3d).
+            .set_suppression_writer(Arc::new(OutboundSuppressionStore::new(pool.clone())))
+            // P1.4: Bot-Token-Scope-Quelle für den Lurker-Tax-Fallback. Der zentrale
+            // BotTokenManager implementiert BotScopeProvider — bot-zentrierter
+            // moderator:read:chatters-Scope greift, wenn der Streamer-Scope fehlt.
+            .set_bot_scope_provider(
+                Arc::clone(&token_manager) as Arc<dyn tb_chat::promos::BotScopeProvider>,
+            )
             .set_invite_resolver(Arc::new(DbInviteResolver {
                 pool: pool.clone(),
                 relay: invite_relay,

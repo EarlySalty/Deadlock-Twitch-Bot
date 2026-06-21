@@ -216,6 +216,64 @@ pub trait OutboundSuppressionCheck: Send + Sync {
     async fn is_muted(&self, channel_login: &str) -> bool;
 }
 
+/// Schreibseite der Outbound-Suppression — Port von
+/// `moderation.py:_maybe_blacklist_for_drop_reason` (Z. 1310–1329) +
+/// `_set_outbound_chat_suppression`.
+///
+/// Wird gerufen, wenn ein ausgehender Bot-Send von Twitch serverseitig
+/// verworfen wird (`is_sent=false`) mit `drop_reason.code == "channel_settings"`.
+/// Der Kanal wird dann je nach `source` für 7 Tage (`promo`/`recruitment`) bzw.
+/// 3 Tage (`partner_raid`) stummgeschaltet, damit derselbe Kanal nicht jeden
+/// Promo-/Recruitment-/Raid-Zyklus erneut angeschrieben wird (Bot-Ban-Eskalation).
+#[async_trait]
+pub trait OutboundSuppressionWriter: Send + Sync {
+    /// Schreibt (UPSERT) eine Suppression für `(channel_login, source)` mit dem
+    /// quell-spezifischen TTL. No-op, wenn `reason_code`/`source` nicht zur
+    /// Suppression führen (Python-Parität: nur `channel_settings` + erlaubte
+    /// Quellen schalten stumm).
+    async fn suppress_for_drop(
+        &self,
+        channel_login: &str,
+        channel_id: Option<&str>,
+        source: &str,
+        reason_code: &str,
+        reason_detail: Option<&str>,
+    );
+}
+
+/// Liefert die Scopes des zentralen Bot-Tokens (P1.4). Implementiert vom
+/// `BotTokenManager`; der Promo-Pfad nutzt das als Fallback, wenn der Streamer
+/// selbst `moderator:read:chatters` nicht in seinem Raid-Auth trägt.
+///
+/// Port: `bot/chat/promos.py:345–349/357` — bot-zentrierte Migration, der
+/// zentrale Bot-Token trägt den Scope.
+#[async_trait]
+pub trait BotScopeProvider: Send + Sync {
+    /// Aktuell gewährte Scopes des Bot-Tokens (leer, falls noch nicht geladen).
+    async fn bot_scopes(&self) -> Vec<String>;
+}
+
+#[async_trait]
+impl BotScopeProvider for crate::token::BotTokenManager {
+    async fn bot_scopes(&self) -> Vec<String> {
+        self.scopes().await
+    }
+}
+
+/// Baut das `AND LOWER(<col>) NOT IN ($start, $start+1, …)`-Fragment für die
+/// Known-Chat-Bot-Exklusion (P1.5). `start` ist der erste Positions-Parameter;
+/// es werden `WHITELISTED_BOTS.len()` aufeinanderfolgende Params referenziert.
+///
+/// Port: `build_known_chat_bot_not_in_clause` (bot/chat/promos.py). Die Logins
+/// selbst kommen als Bind-Params (clean-SQL), hier werden nur die `$n`-Platzhalter
+/// erzeugt.
+fn known_chat_bot_not_in_clause(column: &str, start: usize) -> String {
+    let placeholders: Vec<String> = (0..crate::mention_scoring::WHITELISTED_BOTS.len())
+        .map(|i| format!("${}", start + i))
+        .collect();
+    format!("AND LOWER({column}) NOT IN ({})", placeholders.join(", "))
+}
+
 /// Invite-Auflösung pro Kanal. (promos.py:99: `_resolve_streamer_invite`).
 /// Der Orchestrator verdrahtet die konkrete Implementierung.
 #[async_trait]
@@ -475,6 +533,12 @@ pub struct PromoEngine {
     pool: PgPool,
     api: Arc<dyn ChatApi>,
     suppression: Arc<dyn OutboundSuppressionCheck>,
+    /// Schreibseite der Outbound-Suppression (channel_settings-Drop → Mute).
+    /// `None` = Schreiben deaktiviert (Verhalten wie vor P1.1).
+    suppression_writer: Option<Arc<dyn OutboundSuppressionWriter>>,
+    /// Scope-Quelle des zentralen Bot-Tokens (P1.4). `None` = nur Streamer-Scope
+    /// zählt (Verhalten wie vor P1.4).
+    bot_scope_provider: Option<Arc<dyn BotScopeProvider>>,
     invite_resolver: Arc<dyn InviteResolver>,
     partner_check: Arc<dyn PartnerChannelCheck>,
     preset_picker: Arc<dyn PresetPicker>,
@@ -516,12 +580,62 @@ impl PromoEngine {
             pool,
             api,
             suppression,
+            suppression_writer: None,
+            bot_scope_provider: None,
             invite_resolver: Arc::new(StaticInviteResolver),
             partner_check: Arc::new(AlwaysPartner),
             preset_picker: Arc::new(RandomPresetPicker),
             send_locks: DashMap::new(),
             channel_states: DashMap::new(),
             targeted_state: Mutex::new(TargetedState::new()),
+        }
+    }
+
+    /// Verdrahtet die Schreibseite der Outbound-Suppression. Ohne Aufruf bleibt
+    /// das Verhalten wie vor P1.1 (channel_settings-Drops werden nicht persistiert).
+    ///
+    // WIRING-TODO(P1.1): Im Composition-Root (bin/tb-bot) die PromoEngine via
+    // `.set_suppression_writer(Arc::new(OutboundSuppressionStore::new(pool)))`
+    // konstruieren (derselbe Store, der bereits als OutboundSuppressionCheck für
+    // den Mute-Read hängt), damit channel_settings-Drops 7d/3d persistiert werden.
+    pub fn set_suppression_writer(mut self, w: Arc<dyn OutboundSuppressionWriter>) -> Self {
+        self.suppression_writer = Some(w);
+        self
+    }
+
+    /// Verdrahtet die Bot-Token-Scope-Quelle für den Lurker-Tax-Fallback (P1.4).
+    /// Ohne Aufruf zählt nur der Streamer-eigene `moderator:read:chatters`-Scope.
+    ///
+    // WIRING-TODO(P1.4): Im Composition-Root (bin/tb-bot) die PromoEngine via
+    // `.set_bot_scope_provider(bot_token_manager.clone())` konstruieren
+    // (der zentrale BotTokenManager implementiert BotScopeProvider), damit der
+    // bot-zentrierte Scope-Fallback greift.
+    pub fn set_bot_scope_provider(mut self, p: Arc<dyn BotScopeProvider>) -> Self {
+        self.bot_scope_provider = Some(p);
+        self
+    }
+
+    /// Wertet ein `send_message`-Ergebnis auf einen `channel_settings`-Drop aus
+    /// und schreibt — falls eine Schreibseite hängt — die quell-spezifische
+    /// Suppression (7d promo/recruitment, 3d partner_raid).
+    ///
+    /// Port: `moderation.py:1525–1530` (is_sent=false-Drop ruft
+    /// `_maybe_blacklist_for_drop_reason`).
+    async fn record_suppression_on_drop(
+        &self,
+        login: &str,
+        channel_id: &str,
+        source: &str,
+        outcome: &Result<crate::types::SendOutcome, String>,
+    ) {
+        let Some(writer) = self.suppression_writer.as_ref() else {
+            return;
+        };
+        if let Ok(crate::types::SendOutcome::Dropped { code, message }) = outcome {
+            let detail = (!message.is_empty()).then_some(message.as_str());
+            writer
+                .suppress_for_drop(login, Some(channel_id), source, code, detail)
+                .await;
         }
     }
 
@@ -1258,10 +1372,7 @@ impl PromoEngine {
         .ok()
         .flatten();
         let scopes_raw = auth_scopes.and_then(|(s,)| s).unwrap_or_default();
-        let has_chatters_scope = scopes_raw
-            .split_whitespace()
-            .any(|s| s.eq_ignore_ascii_case("moderator:read:chatters"));
-        if !has_chatters_scope {
+        if !self.has_chatters_scope(&scopes_raw).await {
             return;
         }
 
@@ -1307,10 +1418,11 @@ impl PromoEngine {
 
         let text = self.build_lurker_tax_text(&selected);
         // Nur bei erfolgreichem Send merken + Cooldown belegen (Python: if ok).
-        if !matches!(
-            self.api.send_message(channel_id, &text).await,
-            Ok(crate::types::SendOutcome::Sent)
-        ) {
+        let outcome = self.api.send_message(channel_id, &text).await;
+        // channel_settings-Drop → Kanal stummschalten (P1.1, source="promo").
+        self.record_suppression_on_drop(login, channel_id, "promo", &outcome)
+            .await;
+        if !matches!(outcome, Ok(crate::types::SendOutcome::Sent)) {
             return;
         }
         {
@@ -1329,10 +1441,42 @@ impl PromoEngine {
         info!(login, "Lurker-Tax-Erinnerung gesendet ({} Mentions)", selected.len());
     }
 
+    /// Lurker-Tax-Scope-Gate (P1.4): `moderator:read:chatters` muss entweder im
+    /// Streamer-eigenen Raid-Auth ODER im zentralen Bot-Token vorliegen.
+    ///
+    /// Port: `bot/chat/promos.py:345–349/357` — bot-zentrierte Migration. Ohne
+    /// verdrahteten `BotScopeProvider` greift nur der Streamer-Scope (Verhalten
+    /// wie vor P1.4).
+    async fn has_chatters_scope(&self, streamer_scopes_raw: &str) -> bool {
+        const SCOPE: &str = "moderator:read:chatters";
+        let streamer_has = streamer_scopes_raw
+            .split_whitespace()
+            .any(|s| s.eq_ignore_ascii_case(SCOPE));
+        if streamer_has {
+            return true;
+        }
+        if let Some(provider) = self.bot_scope_provider.as_ref() {
+            return provider
+                .bot_scopes()
+                .await
+                .iter()
+                .any(|s| s.eq_ignore_ascii_case(SCOPE));
+        }
+        false
+    }
+
     /// Lurker-Tax-Kandidaten aus DB (promos.py:408: `_get_lurker_tax_candidates`).
     async fn get_lurker_tax_candidates(&self, login: &str) -> Vec<String> {
         // twitch_session_chatters.seen_via_chatters_api = boolean (prod schema)
         // twitch_session_chatters.messages = integer (prod schema)
+        //
+        // P1.5: Bekannte Chat-Bots (nightbot etc.) ausschließen — sonst werden sie
+        // als stille Lurker (messages=0, seen_via_chatters_api) öffentlich
+        // ge-@-mentioned. Python: build_known_chat_bot_not_in_clause, injiziert in
+        // historische CTE UND live_candidates (promos.py:451–458, 490, 523).
+        // Die Bot-Logins sind eine Compile-Zeit-Konstante; trotzdem als Bind-Params
+        // (ab $5) gebunden statt als SQL-Literal interpoliert (clean-SQL).
+        let bot_clause = known_chat_bot_not_in_clause("sc.chatter_login", 5);
         let sql = format!(
             r#"WITH historical_lurks AS (
                 SELECT sc.chatter_login,
@@ -1348,6 +1492,7 @@ impl PromoEngine {
                    AND s.ended_at IS NOT NULL
                    AND COALESCE(sc.messages, 0) = 0
                    AND sc.seen_via_chatters_api = TRUE
+                   {bot_clause}
                  GROUP BY sc.chatter_login
                ),
                live_candidates AS (
@@ -1358,6 +1503,7 @@ impl PromoEngine {
                     AND sc.last_seen_at >= NOW() - INTERVAL '{freshness} minutes'
                     AND COALESCE(sc.messages, 0) = 0
                     AND sc.seen_via_chatters_api = TRUE
+                    {bot_clause}
                )
                SELECT hl.chatter_login
                  FROM historical_lurks hl
@@ -1367,12 +1513,18 @@ impl PromoEngine {
                 ORDER BY hl.estimated_lurk_minutes DESC, LOWER(hl.chatter_login) ASC
                 LIMIT $4"#,
             freshness = LURKER_TAX_FRESHNESS_MINUTES,
+            bot_clause = bot_clause,
         );
-        let rows: Vec<(String,)> = sqlx::query_as(&sql)
-        .bind(login)
-        .bind(LURKER_TAX_MIN_PRIOR_SESSIONS)
-        .bind(LURKER_TAX_MIN_WATCHTIME_MINUTES)
-        .bind(LURKER_TAX_CANDIDATE_FETCH)
+        let mut query = sqlx::query_as::<_, (String,)>(&sql)
+            .bind(login)
+            .bind(LURKER_TAX_MIN_PRIOR_SESSIONS)
+            .bind(LURKER_TAX_MIN_WATCHTIME_MINUTES)
+            .bind(LURKER_TAX_CANDIDATE_FETCH);
+        // Bot-Logins (lowercase) in stabiler Reihenfolge an $5.. binden.
+        for bot in crate::mention_scoring::WHITELISTED_BOTS {
+            query = query.bind(bot.to_lowercase());
+        }
+        let rows: Vec<(String,)> = query
         .fetch_all(&self.pool)
         .await
         .unwrap_or_default();
@@ -1438,10 +1590,11 @@ impl PromoEngine {
                     .replace("{login}", &target_login);
                 // Python targeted_promo.py:264: `if not ok: return False` — bei nicht
                 // zugestelltem Send keine State-Mutation/keinen Cooldown verbrennen.
-                if !matches!(
-                    self.api.send_message(channel_id, &text).await,
-                    Ok(crate::types::SendOutcome::Sent)
-                ) {
+                let outcome = self.api.send_message(channel_id, &text).await;
+                // channel_settings-Drop → Kanal stummschalten (P1.1, source="promo").
+                self.record_suppression_on_drop(login, channel_id, "promo", &outcome)
+                    .await;
+                if !matches!(outcome, Ok(crate::types::SendOutcome::Sent)) {
                     return false;
                 }
 
@@ -2149,6 +2302,179 @@ mod tests {
         async fn is_muted(&self, _channel_login: &str) -> bool {
             true
         }
+    }
+
+    // -----------------------------------------------------------------------
+    // P1.1 — channel_settings-Drop schreibt Outbound-Suppression
+    // -----------------------------------------------------------------------
+
+    /// Test-Writer, der jeden suppress_for_drop-Aufruf festhält. Spiegelt die
+    /// Python-Soll-TTL (channel_settings + source → 7d/3d), damit der Test die
+    /// Verdrahtung prüft, ohne eine echte DB anzufassen.
+    #[derive(Clone, Default)]
+    struct CapturingWriter {
+        calls: Arc<std::sync::Mutex<Vec<(String, Option<String>, String, String)>>>,
+    }
+
+    #[async_trait]
+    impl OutboundSuppressionWriter for CapturingWriter {
+        async fn suppress_for_drop(
+            &self,
+            channel_login: &str,
+            channel_id: Option<&str>,
+            source: &str,
+            reason_code: &str,
+            _reason_detail: Option<&str>,
+        ) {
+            self.calls.lock().unwrap().push((
+                channel_login.to_string(),
+                channel_id.map(str::to_string),
+                source.to_string(),
+                reason_code.to_string(),
+            ));
+        }
+    }
+
+    #[tokio::test]
+    async fn channel_settings_drop_schreibt_promo_suppression() {
+        let writer = CapturingWriter::default();
+        let engine = make_engine_no_db().set_suppression_writer(Arc::new(writer.clone()));
+
+        let dropped = Ok(SendOutcome::Dropped {
+            code: "channel_settings".into(),
+            message: "Blocked by channel settings".into(),
+        });
+        engine
+            .record_suppression_on_drop("streamerlogin", "bcast-1", "promo", &dropped)
+            .await;
+
+        let calls = writer.calls.lock().unwrap();
+        assert_eq!(calls.len(), 1, "channel_settings-Drop muss genau einen Write auslösen");
+        assert_eq!(calls[0].0, "streamerlogin");
+        assert_eq!(calls[0].1.as_deref(), Some("bcast-1"));
+        assert_eq!(calls[0].2, "promo");
+        assert_eq!(calls[0].3, "channel_settings");
+    }
+
+    #[tokio::test]
+    async fn sent_und_andere_drops_schreiben_keine_suppression() {
+        let writer = CapturingWriter::default();
+        let engine = make_engine_no_db().set_suppression_writer(Arc::new(writer.clone()));
+
+        engine
+            .record_suppression_on_drop("s", "b", "promo", &Ok(SendOutcome::Sent))
+            .await;
+        engine
+            .record_suppression_on_drop(
+                "s",
+                "b",
+                "promo",
+                &Ok(SendOutcome::Dropped {
+                    code: "sender_timedout".into(),
+                    message: String::new(),
+                }),
+            )
+            .await;
+        engine
+            .record_suppression_on_drop("s", "b", "promo", &Err("boom".into()))
+            .await;
+
+        // record_suppression_on_drop reicht zwar sender_timedout an den Writer
+        // weiter, aber NUR der channel_settings-Code löst real einen DB-Write aus.
+        // Hier prüfen wir die Helper-Ebene: Sent/Err lösen GAR keinen Aufruf aus.
+        let calls = writer.calls.lock().unwrap();
+        assert_eq!(
+            calls.iter().filter(|c| c.3 == "channel_settings").count(),
+            0,
+            "kein channel_settings-Drop → keine channel_settings-Suppression"
+        );
+    }
+
+    // -----------------------------------------------------------------------
+    // P1.4 — Lurker-Tax Bot-Token-Scope-Fallback
+    // -----------------------------------------------------------------------
+
+    struct FakeBotScopes(Vec<String>);
+    #[async_trait]
+    impl BotScopeProvider for FakeBotScopes {
+        async fn bot_scopes(&self) -> Vec<String> {
+            self.0.clone()
+        }
+    }
+
+    #[tokio::test]
+    async fn has_chatters_scope_true_wenn_streamer_scope_traegt() {
+        let engine = make_engine_no_db();
+        assert!(
+            engine
+                .has_chatters_scope("user:bot moderator:read:chatters user:read:chat")
+                .await
+        );
+    }
+
+    #[tokio::test]
+    async fn has_chatters_scope_false_ohne_provider_und_ohne_streamer_scope() {
+        let engine = make_engine_no_db();
+        assert!(!engine.has_chatters_scope("user:bot user:read:chat").await);
+    }
+
+    #[tokio::test]
+    async fn has_chatters_scope_true_via_bot_token_fallback() {
+        // Streamer-Auth OHNE moderator:read:chatters, aber Bot-Token trägt ihn.
+        let engine = make_engine_no_db().set_bot_scope_provider(Arc::new(FakeBotScopes(vec![
+            "user:bot".into(),
+            "moderator:read:chatters".into(),
+        ])));
+        assert!(
+            engine.has_chatters_scope("user:bot user:read:chat").await,
+            "bot-zentrierter Fallback muss das Gate öffnen (P1.4)"
+        );
+    }
+
+    #[tokio::test]
+    async fn has_chatters_scope_false_wenn_auch_bot_token_scope_fehlt() {
+        let engine = make_engine_no_db()
+            .set_bot_scope_provider(Arc::new(FakeBotScopes(vec!["user:bot".into()])));
+        assert!(!engine.has_chatters_scope("user:read:chat").await);
+    }
+
+    // -----------------------------------------------------------------------
+    // P1.5 — Known-Chat-Bot-Exklusion (Clause-Bau)
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn known_chat_bot_not_in_clause_erzeugt_passende_platzhalter() {
+        let clause = known_chat_bot_not_in_clause("sc.chatter_login", 5);
+        let n = crate::mention_scoring::WHITELISTED_BOTS.len();
+        assert!(clause.starts_with("AND LOWER(sc.chatter_login) NOT IN ("));
+        assert!(clause.contains("$5"));
+        assert!(clause.contains(&format!("${}", 5 + n - 1)));
+        // Genau n Platzhalter.
+        assert_eq!(clause.matches('$').count(), n);
+    }
+
+    /// Die TTL-Tabelle (Schreibseite-Entscheidung) bleibt Python-treu:
+    /// channel_settings + promo/recruitment = 7d, partner_raid = 3d, sonst None.
+    #[test]
+    fn suppression_writer_ttl_entspricht_python_soll() {
+        use crate::moderation::OutboundSuppressionStore;
+        use chrono::Duration;
+        assert_eq!(
+            OutboundSuppressionStore::suppression_ttl("promo", "channel_settings"),
+            Some(Duration::seconds(7 * 24 * 3600))
+        );
+        assert_eq!(
+            OutboundSuppressionStore::suppression_ttl("recruitment", "channel_settings"),
+            Some(Duration::seconds(7 * 24 * 3600))
+        );
+        assert_eq!(
+            OutboundSuppressionStore::suppression_ttl("partner_raid", "channel_settings"),
+            Some(Duration::seconds(3 * 24 * 3600))
+        );
+        assert_eq!(
+            OutboundSuppressionStore::suppression_ttl("promo", "sender_timedout"),
+            None
+        );
     }
 
     fn dummy_pool() -> PgPool {

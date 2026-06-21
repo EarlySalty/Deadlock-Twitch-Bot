@@ -39,7 +39,9 @@ pub mod manual_suppression;
 pub mod oauth_flow;
 pub mod offline_eligibility;
 pub mod outreach_boost;
+pub mod partner_raid_delivery;
 pub mod partner_roster;
+pub mod partner_score_refresh;
 pub mod partner_setup;
 pub mod pending_raids;
 pub mod raid_blacklist;
@@ -63,15 +65,23 @@ pub mod token_store;
 pub mod util;
 
 pub use arrival_confirmation::{
-    classify_partner_raid_arrival, ArrivalConfirmationDecision, ArrivalConfirmationService,
-    ArrivalSignalContext, FollowUpKind, KnownStreamerLookup, PartnerLookup,
-    PartnerRaidArrivalResolution,
+    classify_partner_raid_arrival, classify_partner_raid_arrival_with_expectation,
+    ArrivalConfirmationDecision, ArrivalConfirmationService, ArrivalSignalContext, FollowUpKind,
+    KnownStreamerLookup, PartnerLookup, PartnerRaidArrivalResolution,
 };
 pub use arrival_runtime::{RaidArrivalRuntime, RaidArrivalSink};
 pub use arrival_tracking_store::{
     serialize_confirmation_signals, ArrivalTrackingStore, RecordArrivalInput,
 };
 pub use auth_writer::{AuthWriteError, AuthWriter, NewAuth};
+pub use partner_raid_delivery::{
+    plan_partner_raid_delivery, PartnerRaidDeliveryConfig, PartnerRaidDeliveryPlan,
+    PartnerRaidDeliveryRequest, PartnerRaidDeliveryStatus, PARTNER_RAID_DELAY_SECONDS,
+};
+pub use partner_score_refresh::{
+    build_score_upsert, ExistingCache, LiveState, PartnerScoreRefresher, ScoreBuildInput,
+    SessionRow, LOOKBACK_DAYS, MIN_RELIABLE_SESSIONS,
+};
 pub use raid_messaging::build_partner_raid_message;
 pub use recruitment_messaging::{
     build_recruitment_message, plan_recruitment_delivery, RecruitmentDeliveryConfig,
