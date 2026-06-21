@@ -129,6 +129,82 @@ pub fn classify_partner_raid_arrival(
     partner_lookup: &dyn PartnerLookup,
     known_streamer_lookup: &dyn KnownStreamerLookup,
 ) -> PartnerRaidArrivalResolution {
+    classify_partner_raid_arrival_with_expectation(
+        from_broadcaster_login,
+        from_broadcaster_id,
+        to_broadcaster_id,
+        to_broadcaster_login,
+        partner_lookup,
+        known_streamer_lookup,
+        false,
+    )
+}
+
+/// Wie [`classify_partner_raid_arrival`], aber mit `expected_partner`-Override.
+///
+/// Port von `PartnerArrivalTrackingService.classify_partner_raid_arrival`
+/// (partner_arrival_tracking.py Z. 116–152): Wenn der erste Klassifikations-Pass
+/// `classification == None` liefert UND `expected_partner == true`, wird ein
+/// zweiter Pass mit einem synthetischen Partner-Lookup (immer truthy, Quelle
+/// `pending_partner_override`) durchgeführt. Damit wird ein als Partner-Raid
+/// markiertes Ziel auch dann als Partner behandelt, wenn es (noch) nicht in der
+/// Partner-Tabelle steht — Ergebnis ist ein `*_to_partner`-Wert mit
+/// `target_is_partner == true` statt `non_partner_target`.
+///
+/// `expected_partner` entspricht `bool(pending_raid.is_partner_raid)`
+/// (runtime_factories.py Z. 551).
+pub fn classify_partner_raid_arrival_with_expectation(
+    from_broadcaster_login: Option<&str>,
+    from_broadcaster_id: Option<&str>,
+    to_broadcaster_id: Option<&str>,
+    to_broadcaster_login: Option<&str>,
+    partner_lookup: &dyn PartnerLookup,
+    known_streamer_lookup: &dyn KnownStreamerLookup,
+    expected_partner: bool,
+) -> PartnerRaidArrivalResolution {
+    let result = classify_partner_raid_arrival_inner(
+        from_broadcaster_login,
+        from_broadcaster_id,
+        to_broadcaster_id,
+        to_broadcaster_login,
+        partner_lookup,
+        known_streamer_lookup,
+    );
+
+    // Zweiter Pass: kein Partner-Ziel erkannt, aber als Partner-Raid erwartet
+    // → synthetischer Partner-Lookup erzwingt target_is_partner (Z. 140–151).
+    if result.classification.is_none() && expected_partner {
+        return classify_partner_raid_arrival_inner(
+            from_broadcaster_login,
+            from_broadcaster_id,
+            to_broadcaster_id,
+            to_broadcaster_login,
+            &AlwaysPartnerOverride,
+            known_streamer_lookup,
+        );
+    }
+    result
+}
+
+/// Synthetischer Partner-Lookup, der immer `true` liefert — Python-Pendant
+/// `lambda **_kwargs: {"source": "pending_partner_override"}`
+/// (partner_arrival_tracking.py Z. 146).
+struct AlwaysPartnerOverride;
+impl PartnerLookup for AlwaysPartnerOverride {
+    fn lookup_partner(&self, _id: Option<&str>, _login: Option<&str>) -> bool {
+        true
+    }
+}
+
+/// Reiner Klassifikations-Pass ohne `expected_partner`-Override.
+fn classify_partner_raid_arrival_inner(
+    from_broadcaster_login: Option<&str>,
+    from_broadcaster_id: Option<&str>,
+    to_broadcaster_id: Option<&str>,
+    to_broadcaster_login: Option<&str>,
+    partner_lookup: &dyn PartnerLookup,
+    known_streamer_lookup: &dyn KnownStreamerLookup,
+) -> PartnerRaidArrivalResolution {
     // Normalisierung identisch zu partner_resolution.py Z. 92–95
     let normalized_from_login = normalize_login(from_broadcaster_login);
     let normalized_to_login = normalize_login(to_broadcaster_login);
@@ -345,6 +421,15 @@ impl ArrivalConfirmationService {
     /// - `source_resolution_override` — Analog zu `classification_override`.
     /// - `target_is_partner_override` — Falls `Some(bool)`, überschreibt den
     ///   Lookup-Wert (Z. 77). `None` = Lookup-Ergebnis verwenden.
+    ///
+    // WIRING-TODO(P1.13): bin/tb-bot raid_arrival_wiring.rs:704 ruft confirm aktuell
+    // mit (None, None, None). Für den expected_partner-Override (Partner-Raid zu
+    // noch nicht eingetragenem Partner-Ziel) muss der Aufrufer — wie
+    // runtime_factories.py Z. 546–563 — vorab
+    // `classify_partner_raid_arrival_with_expectation(.., expected_partner=pending.is_partner_raid)`
+    // aufrufen und das Ergebnis als classification_override=Some(classification),
+    // source_resolution_override=Some(Some(source_resolution)),
+    // target_is_partner_override=Some(classification.is_some()) durchreichen.
     pub fn confirm_pending_raid_arrival(
         &self,
         pending_raid: PendingRaid,
@@ -362,6 +447,14 @@ impl ArrivalConfirmationService {
         // WICHTIG: Quell-/Ziel-Identität kommt aus dem SIGNAL-Kontext (Python
         // reicht from_broadcaster_id/to_broadcaster_login vom Aufrufer durch) —
         // der `from_broadcaster_id`-Zweig (known_streamer_id) braucht das.
+        //
+        // Der `expected_partner`-Override (Partner-Raid zu noch NICHT
+        // eingetragenem Partner-Ziel, P1.13) wird — wie in Python
+        // (runtime_factories.py Z. 546–563) — vom AUFRUFER berechnet und über
+        // `classification_override` / `source_resolution_override` /
+        // `target_is_partner_override` durchgereicht. Der Aufrufer nutzt dafür
+        // `classify_partner_raid_arrival_with_expectation(.., raid.is_partner_raid)`.
+        // Siehe WIRING-TODO(P1.13).
         let raw_resolution = classify_partner_raid_arrival(
             Some(ctx.from_broadcaster_login),
             ctx.from_broadcaster_id,
@@ -974,6 +1067,111 @@ mod tests {
             .confirm_pending_raid_arrival(raid2, &sig_ctx("src", "target"), "sig", None, None, None)
             .unwrap();
         assert!(dec2.should_delete_external_recruitment_blacklist_pending);
+    }
+
+    // -----------------------------------------------------------------------
+    // P1.13: expected_partner-Override für (noch) nicht eingetragene Partner-Ziele
+    // (partner_arrival_tracking.py Z. 76–90, 140–151)
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn classify_expected_partner_override_macht_non_partner_zu_partner() {
+        // Erster Pass: Ziel kein Partner (NeverPartner) + Quelle unbekannt
+        // → classification=None. expected_partner=true erzwingt zweiten Pass mit
+        // synthetischem Partner-Lookup → unknown_source_to_partner, target=true.
+        let res = classify_partner_raid_arrival_with_expectation(
+            None,
+            None,
+            Some("to_id"),
+            Some("not_registered_partner"),
+            &NeverPartner,
+            &NeverKnown,
+            true,
+        );
+        assert_eq!(
+            res.classification.as_deref(),
+            Some("unknown_source_to_partner")
+        );
+        assert!(res.target_is_partner);
+    }
+
+    #[test]
+    fn classify_expected_partner_false_bleibt_non_partner_target() {
+        // Ohne expected_partner bleibt es bei non_partner_target (kein zweiter Pass).
+        let res = classify_partner_raid_arrival_with_expectation(
+            None,
+            None,
+            Some("to_id"),
+            Some("not_registered_partner"),
+            &NeverPartner,
+            &NeverKnown,
+            false,
+        );
+        assert_eq!(res.classification, None);
+        assert_eq!(res.source_resolution, "non_partner_target");
+        assert!(!res.target_is_partner);
+    }
+
+    #[test]
+    fn confirm_partner_raid_zu_nicht_eingetragenem_partner_ist_partner_nicht_suppressed() {
+        // KERN-CONTRACT P1.13: Pending-Raid is_partner_raid=true, Ziel NICHT in
+        // Partner-Tabelle (NeverPartner), Quelle unbekannt (NeverKnown).
+        //
+        // Dieser Test modelliert exakt den AUFRUFER-Pfad aus
+        // runtime_factories.py Z. 546–563 (künftig bin/tb-bot raid_arrival_wiring,
+        // siehe WIRING-TODO(P1.13)):
+        //   1. classify_partner_raid_arrival_with_expectation(.., expected_partner=is_partner_raid)
+        //   2. confirm_pending_raid_arrival(..,
+        //        classification_override=Some(classification),
+        //        source_resolution_override=Some(source_resolution),
+        //        target_is_partner_override=Some(classification.is_some()))
+        //
+        // Erwartung: ours_to_partner, target_is_partner=true, follow_up_kind=Partner
+        // — NICHT suppressed_external (der alte fehlerhafte Pfad).
+        let svc = svc_never_partner();
+        let raid = make_partner_pending("our_src", "unregistered_partner_id");
+
+        // Schritt 1: Aufrufer-seitige Klassifikation mit expected_partner.
+        let resolution = classify_partner_raid_arrival_with_expectation(
+            Some("our_src"),
+            None,
+            Some("unregistered_partner_id"),
+            Some("unregistered_partner_login"),
+            &NeverPartner,
+            &NeverKnown,
+            raid.is_partner_raid, // expected_partner = is_partner_raid
+        );
+        let target_is_partner_override = resolution.classification.is_some();
+
+        // Schritt 2: confirm mit den durchgereichten Overrides.
+        let dec = svc
+            .confirm_pending_raid_arrival(
+                raid,
+                &ArrivalSignalContext {
+                    from_broadcaster_login: "our_src",
+                    from_broadcaster_id: None,
+                    to_broadcaster_id: "unregistered_partner_id",
+                    to_broadcaster_login: Some("unregistered_partner_login"),
+                },
+                "channel.chat.notification",
+                Some(resolution.classification.clone()),
+                Some(Some(resolution.source_resolution.clone())),
+                Some(target_is_partner_override),
+            )
+            .unwrap();
+
+        assert!(target_is_partner_override, "Klassifikation darf nicht None sein");
+        assert_ne!(dec.follow_up_kind, FollowUpKind::SuppressedExternal);
+        assert!(dec.target_is_partner, "expected_partner muss target erzwingen");
+        assert_eq!(
+            dec.classification.as_deref(),
+            Some("ours_to_partner"),
+            "is_partner_raid + expected_partner-Pass + arrival-Override → ours_to_partner"
+        );
+        assert_eq!(dec.follow_up_kind, FollowUpKind::Partner);
+        assert!(dec.should_track_confirmed_partner_raid);
+        assert!(dec.should_send_partner_raid_message);
+        assert!(dec.should_refresh_partner_score_cache);
     }
 
     #[test]
