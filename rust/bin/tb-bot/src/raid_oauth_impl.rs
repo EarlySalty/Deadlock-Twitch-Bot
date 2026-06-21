@@ -41,10 +41,12 @@
 //! # StreamerContextResolver-Impl
 //!
 //! `build_state_info` (oauth_flow) braucht `has_existing_streamer_context` +
-//! `linked_twitch_identity_for_discord_user`. Beide werden via SQL auf
-//! `twitch_raid_auth` und `twitch_streamers_partner_state` aufgelöst — identisch
-//! zu Pythons `_has_existing_streamer_context` und
-//! `_linked_twitch_identity_for_discord_user` in `RaidAuthManager`.
+//! `linked_twitch_identity_for_discord_user`. `has_existing_streamer_context`
+//! prüft aktiven Partner (`twitch_partners`) ODER eine filterlose Auth-Zeile
+//! (`twitch_raid_auth`), mit `discord:<id>`-Identitätsauflösung vorab.
+//! `linked_twitch_identity_for_discord_user` liest direkt
+//! `twitch_streamer_identities` (neueste zuerst) — identisch zu Pythons
+//! `_has_existing_streamer_context`/`load_streamer_identity` in `RaidAuthManager`.
 
 use std::collections::HashSet;
 use std::sync::Arc;
@@ -151,53 +153,146 @@ struct PgStreamerContextResolver {
     pool: PgPool,
 }
 
-#[async_trait]
-impl StreamerContextResolver for PgStreamerContextResolver {
-    /// Gibt `true` zurück, wenn für `login` bereits ein aktiver Auth-Eintrag
-    /// in `twitch_raid_auth` existiert (raid_enabled=TRUE oder authorized_at IS NOT NULL).
+impl PgStreamerContextResolver {
+    /// Filterlose Existenzprüfung in `twitch_raid_auth`: zählt JEDE Zeile, die
+    /// per `twitch_user_id` ODER `twitch_login` passt — ohne raid_enabled/
+    /// authorized_at-Filter.
     ///
-    /// Python: `_has_existing_streamer_context` in `RaidAuthManager`.
-    async fn has_existing_streamer_context(&self, login: &str) -> bool {
-        let result: Result<Option<bool>, _> = sqlx::query_scalar(
+    /// Python: `RaidAuthManager._has_existing_auth_row` (auth.py:406-431).
+    async fn has_existing_auth_row(
+        &self,
+        twitch_user_id: Option<&str>,
+        twitch_login: Option<&str>,
+    ) -> bool {
+        let normalized_user_id = twitch_user_id.map(str::trim).unwrap_or("").to_string();
+        let normalized_login = twitch_login
+            .and_then(normalize_login_db)
+            .unwrap_or_default();
+        if normalized_user_id.is_empty() && normalized_login.is_empty() {
+            return false;
+        }
+        let result: Result<Option<i32>, _> = sqlx::query_scalar(
             r#"
-            SELECT (raid_enabled IS TRUE OR authorized_at IS NOT NULL)
+            SELECT 1
             FROM twitch_raid_auth
-            WHERE LOWER(twitch_login) = LOWER($1)
+            WHERE ($1 <> '' AND twitch_user_id = $1)
+               OR ($2 <> '' AND LOWER(COALESCE(twitch_login, '')) = $2)
             LIMIT 1
             "#,
         )
-        .bind(login)
+        .bind(&normalized_user_id)
+        .bind(&normalized_login)
         .fetch_optional(&self.pool)
         .await;
-        result.ok().flatten().unwrap_or(false)
+        matches!(result, Ok(Some(_)))
+    }
+
+    /// Gibt `true` zurück, wenn ein AKTIVER Partner-Eintrag (status='active')
+    /// per `twitch_user_id` ODER `twitch_login` existiert.
+    ///
+    /// Python: `load_active_partner` → `_load_partner_row` mit
+    /// `status=PARTNER_STATUS_ACTIVE` (partner_registry.py:181-271).
+    async fn has_active_partner(
+        &self,
+        twitch_user_id: Option<&str>,
+        twitch_login: Option<&str>,
+    ) -> bool {
+        let normalized_user_id = twitch_user_id.map(str::trim).unwrap_or("").to_string();
+        let normalized_login = twitch_login
+            .and_then(normalize_login_db)
+            .unwrap_or_default();
+        if normalized_user_id.is_empty() && normalized_login.is_empty() {
+            return false;
+        }
+        let result: Result<Option<i32>, _> = sqlx::query_scalar(
+            r#"
+            SELECT 1
+            FROM twitch_partners p
+            WHERE p.status = 'active'
+              AND (($1 <> '' AND p.twitch_user_id = $1)
+                OR ($2 <> '' AND LOWER(p.twitch_login) = $2))
+            LIMIT 1
+            "#,
+        )
+        .bind(&normalized_user_id)
+        .bind(&normalized_login)
+        .fetch_optional(&self.pool)
+        .await;
+        matches!(result, Ok(Some(_)))
+    }
+}
+
+#[async_trait]
+impl StreamerContextResolver for PgStreamerContextResolver {
+    /// Gibt `true` zurück, wenn für `login` bereits ein Streamer-Kontext existiert:
+    /// aktiver Partner-Eintrag ODER eine beliebige Auth-Zeile (filterlos).
+    ///
+    /// Sonderfall `discord:<id>`: die verknüpfte Twitch-Identität wird zuerst aus
+    /// `twitch_streamer_identities` aufgelöst, dann gegen Partner/Auth geprüft.
+    ///
+    /// Python: `RaidAuthManager._has_existing_streamer_context` (auth.py:433-482).
+    async fn has_existing_streamer_context(&self, login: &str) -> bool {
+        let normalized_login = login.trim().to_ascii_lowercase();
+        if normalized_login.is_empty() {
+            return false;
+        }
+
+        if let Some(discord_user_id) = normalized_login
+            .strip_prefix("discord:")
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+        {
+            let (identity_login, identity_user_id) =
+                self.linked_twitch_identity_for_discord_user(discord_user_id).await;
+            if identity_login.is_none() && identity_user_id.is_none() {
+                return false;
+            }
+            return self
+                .has_active_partner(identity_user_id.as_deref(), identity_login.as_deref())
+                .await
+                || self
+                    .has_existing_auth_row(identity_user_id.as_deref(), identity_login.as_deref())
+                    .await;
+        }
+
+        self.has_active_partner(None, Some(&normalized_login)).await
+            || self
+                .has_existing_auth_row(None, Some(&normalized_login))
+                .await
     }
 
     /// Liefert `(twitch_login, twitch_user_id)` für eine Discord-User-ID aus
-    /// der Partner-State-View.
+    /// `twitch_streamer_identities` (neueste zuerst).
     ///
-    /// Python: `_linked_twitch_identity_for_discord_user` in `RaidAuthManager`.
+    /// Python: `load_streamer_identity` via
+    /// `RaidAuthManager._linked_twitch_identity_for_discord_user`
+    /// (partner_registry.py:455-496) — liest direkt die Identitäts-Tabelle, NICHT
+    /// die Partner-State-View, damit auch onboarding-vor-Partner-Fälle greifen.
     async fn linked_twitch_identity_for_discord_user(
         &self,
         discord_user_id: &str,
     ) -> (Option<String>, Option<String>) {
+        let normalized = discord_user_id.trim();
+        if normalized.is_empty() {
+            return (None, None);
+        }
         let result: Result<Option<(Option<String>, Option<String>)>, _> = sqlx::query_as(
             r#"
             SELECT twitch_login, twitch_user_id
-            FROM twitch_streamers_partner_state
+            FROM twitch_streamer_identities
             WHERE discord_user_id = $1
-            ORDER BY
-                CASE WHEN manual_verified_at IS NULL THEN 1 ELSE 0 END,
-                manual_verified_at DESC,
-                CASE WHEN created_at IS NULL THEN 1 ELSE 0 END,
-                created_at DESC
+            ORDER BY updated_at DESC
             LIMIT 1
             "#,
         )
-        .bind(discord_user_id)
+        .bind(normalized)
         .fetch_optional(&self.pool)
         .await;
         match result.ok().flatten() {
-            Some((login, uid)) => (login, uid),
+            Some((login, uid)) => (
+                login.and_then(|l| normalize_login_db(&l)),
+                uid.map(|u| u.trim().to_string()).filter(|s| !s.is_empty()),
+            ),
             None => (None, None),
         }
     }
@@ -428,12 +523,20 @@ async fn resolve_integration_state(
     let mut auth_user_id: Option<String> = None;
 
     // Erst per user_id, dann per login.
+    //
+    // P2.39: Die by-login-Abfrage darf NUR laufen, wenn die by-user_id-Abfrage
+    // KEINE Zeile fand (Python `integration_state.py:191`: `if auth_row is None`).
+    // Eine vorhandene, aber unautorisierte uid-Zeile schließt den Login-Fallback
+    // aus — sonst könnte eine fremde autorisierte login-Zeile `authorized`
+    // fälschlich auf true kippen und fremde Kandidaten injizieren.
+    let mut uid_auth_row_found = false;
     if let Some(ref uid) = result_user_id {
         let auth = query_auth_by_user_id(pool, uid).await.map_err(|e| {
             tracing::error!("resolve_integration_state DB-Fehler (auth by uid): {e}");
             RaidOAuthError::Internal
         })?;
         if let Some(row) = auth {
+            uid_auth_row_found = true;
             let au = str::trim(row.twitch_user_id.as_deref().unwrap_or(""));
             if !au.is_empty() {
                 auth_user_id = Some(au.to_string());
@@ -442,7 +545,7 @@ async fn resolve_integration_state(
                 || row.authorized_at.is_some();
         }
     }
-    if !authorized {
+    if !uid_auth_row_found {
         let login_to_try = result_login
             .as_deref()
             .or(twitch_login)
@@ -1388,6 +1491,24 @@ mod db_tests {
         .await
         .expect("DDL VIEW twitch_streamers_partner_state");
 
+        // twitch_streamer_identities — discord<->twitch identity (P2.32-Quelle)
+        sqlx::query(
+            r#"
+            CREATE TABLE twitch_streamer_identities (
+                twitch_user_id        TEXT PRIMARY KEY,
+                twitch_login          TEXT NOT NULL,
+                discord_user_id       TEXT,
+                discord_display_name  TEXT,
+                is_on_discord         INTEGER DEFAULT 0,
+                created_at            TEXT DEFAULT CURRENT_TIMESTAMP,
+                updated_at            TEXT DEFAULT CURRENT_TIMESTAMP
+            )
+            "#,
+        )
+        .execute(pool)
+        .await
+        .expect("DDL twitch_streamer_identities");
+
         // twitch_token_blacklist
         sqlx::query(
             r#"
@@ -1480,6 +1601,143 @@ mod db_tests {
         .expect("insert");
         let resolver = PgStreamerContextResolver { pool };
         assert!(resolver.has_existing_streamer_context("streamer_b").await);
+    }
+
+    // P1.8: active partner ohne qualifizierende Auth-Zeile → Kontext vorhanden.
+    #[tokio::test]
+    async fn streamer_context_active_partner_ohne_auth_true() {
+        let dsn = db_dsn_or_skip!();
+        let pool = make_pool(&dsn, "test_ro_ctx_partner").await;
+        sqlx::query(
+            "INSERT INTO twitch_partners (twitch_login, twitch_user_id, status) VALUES ($1, $2, 'active')",
+        )
+        .bind("partneronly")
+        .bind("uid_po")
+        .execute(&pool)
+        .await
+        .expect("partner insert");
+        let resolver = PgStreamerContextResolver { pool };
+        assert!(
+            resolver.has_existing_streamer_context("partneronly").await,
+            "active partner ohne Auth-Zeile muss Kontext liefern"
+        );
+    }
+
+    // P1.8: pending/disabled Auth-Zeile (raid_enabled=false UND authorized_at NULL)
+    // zählt als existierender Kontext (filterlose Existenzprüfung).
+    #[tokio::test]
+    async fn streamer_context_pending_auth_row_true() {
+        let dsn = db_dsn_or_skip!();
+        let pool = make_pool(&dsn, "test_ro_ctx_pending").await;
+        sqlx::query(
+            "INSERT INTO twitch_raid_auth (twitch_user_id, twitch_login, raid_enabled) VALUES ($1, $2, FALSE)",
+        )
+        .bind("uid_pending")
+        .bind("pendingstreamer")
+        .execute(&pool)
+        .await
+        .expect("auth insert");
+        let resolver = PgStreamerContextResolver { pool };
+        assert!(
+            resolver.has_existing_streamer_context("pendingstreamer").await,
+            "pending/disabled Auth-Zeile muss als Kontext zählen"
+        );
+    }
+
+    // P1.8 + P2.32: discord:<id> Login löst Identität auf und prüft Partner/Auth.
+    #[tokio::test]
+    async fn streamer_context_discord_identity_partner_true() {
+        let dsn = db_dsn_or_skip!();
+        let pool = make_pool(&dsn, "test_ro_ctx_discord").await;
+        sqlx::query(
+            "INSERT INTO twitch_streamer_identities (twitch_user_id, twitch_login, discord_user_id) \
+             VALUES ($1, $2, $3)",
+        )
+        .bind("uid_disc")
+        .bind("discstreamer")
+        .bind("123450000")
+        .execute(&pool)
+        .await
+        .expect("identity insert");
+        sqlx::query(
+            "INSERT INTO twitch_partners (twitch_login, twitch_user_id, status) VALUES ($1, $2, 'active')",
+        )
+        .bind("discstreamer")
+        .bind("uid_disc")
+        .execute(&pool)
+        .await
+        .expect("partner insert");
+        let resolver = PgStreamerContextResolver { pool };
+        assert!(
+            resolver.has_existing_streamer_context("discord:123450000").await,
+            "discord:<id> mit verknüpftem aktivem Partner muss Kontext liefern"
+        );
+    }
+
+    // P1.8: discord:<id> ohne Identitätszeile → kein Kontext.
+    #[tokio::test]
+    async fn streamer_context_discord_ohne_identity_false() {
+        let dsn = db_dsn_or_skip!();
+        let pool = make_pool(&dsn, "test_ro_ctx_discord_none").await;
+        let resolver = PgStreamerContextResolver { pool };
+        assert!(!resolver.has_existing_streamer_context("discord:999111000").await);
+    }
+
+    // P2.32: linked identity wird aus twitch_streamer_identities gelesen, auch wenn
+    // KEINE aktive twitch_partners-Zeile existiert (onboarding-before-partner).
+    #[tokio::test]
+    async fn linked_identity_aus_identities_ohne_partner() {
+        let dsn = db_dsn_or_skip!();
+        let pool = make_pool(&dsn, "test_ro_linked_identity").await;
+        sqlx::query(
+            "INSERT INTO twitch_streamer_identities (twitch_user_id, twitch_login, discord_user_id) \
+             VALUES ($1, $2, $3)",
+        )
+        .bind("uid_only_ident")
+        .bind("identlogin")
+        .bind("555000111")
+        .execute(&pool)
+        .await
+        .expect("identity insert");
+        let resolver = PgStreamerContextResolver { pool };
+        let (login, uid) = resolver
+            .linked_twitch_identity_for_discord_user("555000111")
+            .await;
+        assert_eq!(login.as_deref(), Some("identlogin"));
+        assert_eq!(uid.as_deref(), Some("uid_only_ident"));
+    }
+
+    // P2.32: neueste Identität gewinnt (ORDER BY updated_at DESC).
+    #[tokio::test]
+    async fn linked_identity_neueste_gewinnt() {
+        let dsn = db_dsn_or_skip!();
+        let pool = make_pool(&dsn, "test_ro_linked_newest").await;
+        sqlx::query(
+            "INSERT INTO twitch_streamer_identities (twitch_user_id, twitch_login, discord_user_id, updated_at) \
+             VALUES ($1, $2, $3, '2024-01-01T00:00:00')",
+        )
+        .bind("uid_old")
+        .bind("oldlogin")
+        .bind("666000222")
+        .execute(&pool)
+        .await
+        .expect("old insert");
+        sqlx::query(
+            "INSERT INTO twitch_streamer_identities (twitch_user_id, twitch_login, discord_user_id, updated_at) \
+             VALUES ($1, $2, $3, '2025-06-01T00:00:00')",
+        )
+        .bind("uid_new")
+        .bind("newlogin")
+        .bind("666000222")
+        .execute(&pool)
+        .await
+        .expect("new insert");
+        let resolver = PgStreamerContextResolver { pool };
+        let (login, uid) = resolver
+            .linked_twitch_identity_for_discord_user("666000222")
+            .await;
+        assert_eq!(login.as_deref(), Some("newlogin"));
+        assert_eq!(uid.as_deref(), Some("uid_new"));
     }
 
     // ── is_token_blacklisted ──────────────────────────────────────────────────
@@ -1664,6 +1922,57 @@ mod db_tests {
             .expect("resolve");
         assert!(result.raid_blacklisted, "raid_blacklisted sollte true sein");
         assert!(result.blocked, "sollte geblockt sein");
+    }
+
+    // P2.39: unautorisierte uid-Zeile vorhanden → by-login darf NICHT laufen.
+    // Eine separate autorisierte login-Zeile (anderer user_id) darf authorized
+    // NICHT auf true kippen und keine fremden Kandidaten injizieren.
+    #[tokio::test]
+    async fn integration_state_unauthorized_uid_row_keine_login_fallback() {
+        let dsn = db_dsn_or_skip!();
+        let pool = make_pool(&dsn, "test_ro_is_uid_gate").await;
+
+        // Partner verknüpft Discord -> primärer user_id + login.
+        sqlx::query(
+            "INSERT INTO twitch_partners (twitch_login, twitch_user_id, discord_user_id) VALUES ($1, $2, $3)",
+        )
+        .bind("primarylogin")
+        .bind("uid_primary")
+        .bind("100200300")
+        .execute(&pool)
+        .await
+        .expect("partner insert");
+
+        // Unautorisierte Auth-Zeile unter primärem user_id.
+        sqlx::query(
+            "INSERT INTO twitch_raid_auth (twitch_user_id, twitch_login, raid_enabled) VALUES ($1, $2, FALSE)",
+        )
+        .bind("uid_primary")
+        .bind("primarylogin")
+        .execute(&pool)
+        .await
+        .expect("primary auth insert");
+
+        // Separate AUTORISIERTE Auth-Zeile, deren Login zufällig ebenfalls
+        // 'primarylogin' wäre — aber unter ANDEREM user_id. Python würde diese
+        // by-login-Zeile nie konsultieren, weil die uid-Zeile existiert.
+        sqlx::query(
+            "INSERT INTO twitch_raid_auth (twitch_user_id, twitch_login, raid_enabled) VALUES ($1, $2, TRUE)",
+        )
+        .bind("uid_other")
+        .bind("otherlogin")
+        .execute(&pool)
+        .await
+        .expect("other auth insert");
+
+        let result = resolve_integration_state(&pool, Some("100200300"), None)
+            .await
+            .expect("resolve");
+        assert!(
+            !result.authorized,
+            "uid-Zeile unautorisiert -> authorized muss false bleiben (kein by-login-Fallback)"
+        );
+        assert_eq!(result.twitch_user_id.as_deref(), Some("uid_primary"));
     }
 }
 
