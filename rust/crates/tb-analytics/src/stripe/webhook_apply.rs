@@ -19,6 +19,7 @@
 use chrono::{DateTime, Utc};
 use serde_json::Value;
 use sqlx::PgPool;
+use tb_raid::PartnerScoreRefresher;
 
 use crate::billing::normalize_billing_cycle;
 
@@ -386,6 +387,143 @@ async fn sync_plan_to_streamer_plans(
     Ok(())
 }
 
+/// Verlängert `manual_plan_expires_at` um `bonus_months` über das Abo-Ende
+/// hinaus (Port von `_billing_grant_bonus_access_months`, billing_mixin.py:589-630).
+///
+/// `period_end_iso` ist das ISO-8601-Abo-Ende (`current_period_end`). Ein Bonus
+/// von N Monaten verschiebt das Ablaufdatum um `N*31` Tage. Ungültiges/leeres
+/// `period_end_iso` oder `bonus_months <= 0` → No-op (wie Python). Der Login wird
+/// über `twitch_streamers_partner_state` auf `twitch_user_id` aufgelöst.
+async fn grant_bonus_access_months(
+    tx: &mut sqlx::PgConnection,
+    customer_reference: &str,
+    plan_id: &str,
+    period_end_iso: &str,
+    bonus_months: i64,
+) -> Result<(), sqlx::Error> {
+    let reference = customer_reference.trim();
+    let period_end_iso = period_end_iso.trim();
+    if reference.is_empty() || period_end_iso.is_empty() || bonus_months <= 0 {
+        return Ok(());
+    }
+    // Abo-Ende parsen; ungültig → No-op (Python schluckt den Fehler).
+    let Ok(period_end) = DateTime::parse_from_rfc3339(period_end_iso) else {
+        tracing::debug!(period_end_iso, "billing bonus grant: invalid period_end_iso");
+        return Ok(());
+    };
+    let bonus_expires_at = period_end.with_timezone(&Utc) + chrono::Duration::days(bonus_months * 31);
+    let bonus_expires_iso = bonus_expires_at.to_rfc3339();
+    let today = Utc::now().date_naive();
+    // Hinweis: rein technischer Audit-Vermerk, kein user-sichtbarer Text.
+    let notes = format!("bonus {bonus_months}mo: annual (auto {today})");
+    let updated_at = Utc::now().to_rfc3339();
+
+    sqlx::query(
+        r#"UPDATE streamer_plans
+           SET manual_plan_id = $1,
+               manual_plan_expires_at = $2,
+               manual_plan_notes = $3,
+               manual_plan_updated_at = $4
+           WHERE twitch_user_id = (
+               SELECT twitch_user_id
+               FROM twitch_streamers_partner_state
+               WHERE LOWER(twitch_login) = LOWER($5)
+               LIMIT 1
+           )"#,
+    )
+    .bind(plan_id)
+    .bind(&bonus_expires_iso)
+    .bind(&notes)
+    .bind(&updated_at)
+    .bind(reference)
+    .execute(&mut *tx)
+    .await?;
+    Ok(())
+}
+
+/// Ermittelt den Twitch-Login, dessen Partner-Raid-Score nach einer Billing-
+/// Änderung neu berechnet werden muss (P2.127/P2.128).
+///
+/// Spiegelt Pythons Refresh-Trigger: `customer.subscription.*` und
+/// `checkout.session.completed` (mode=subscription) ändern den Plan und damit den
+/// Raid-Boost-Tier. `customer_reference` (Login) wird in Python-Reihenfolge
+/// aufgelöst: Subscription-/Session-`metadata.customer_reference` →
+/// `client_reference_id` (nur Checkout). Andere Events → `None` (kein Refresh).
+pub fn affected_login_for_billing_refresh(
+    event_type: &str,
+    event_object: &Value,
+    retrieved_subscription: Option<&Value>,
+) -> Option<String> {
+    let event_name = event_type.trim();
+    let reference = if event_name.starts_with("customer.subscription.") {
+        let payload = subscription_payload_from_object(event_object);
+        payload.customer_reference
+    } else if event_name == "checkout.session.completed"
+        && str_field(event_object, "mode") == "subscription"
+    {
+        // Volle Subscription bevorzugen (wie apply_event), sonst Session-Metadaten.
+        let from_sub = retrieved_subscription
+            .map(subscription_payload_from_object)
+            .map(|s| s.customer_reference)
+            .filter(|s| !s.trim().is_empty());
+        from_sub.unwrap_or_else(|| {
+            let metadata = event_object.get("metadata").cloned().unwrap_or(Value::Null);
+            let from_meta = str_field(&metadata, "customer_reference");
+            if from_meta.is_empty() {
+                str_field(event_object, "client_reference_id")
+            } else {
+                from_meta
+            }
+        })
+    } else {
+        return None;
+    };
+    let reference = reference.trim().to_string();
+    if reference.is_empty() {
+        None
+    } else {
+        Some(reference)
+    }
+}
+
+/// Berechnet den Partner-Raid-Score für einen Login nach einer Billing-Änderung
+/// sofort neu (P2.127/P2.128/P2.129; Port von
+/// `_billing_refresh_partner_raid_score_cache`, billing_mixin.py:52-108).
+///
+/// Der Login wird über `twitch_streamers_partner_state` auf `twitch_user_id`
+/// aufgelöst und an [`PartnerScoreRefresher::refresh_for_ids`] übergeben (recompute
+/// + upsert in `twitch_partner_raid_scores`). Wie in Python ist das ein
+/// **best-effort**-Hook: ist der Login unbekannt oder existiert keine
+/// Partner-Zeile, passiert nichts (kein Fehler nach außen).
+pub async fn refresh_partner_raid_score_for_login(
+    pool: &PgPool,
+    login: &str,
+) -> Result<(), sqlx::Error> {
+    let login = login.trim();
+    if login.is_empty() {
+        return Ok(());
+    }
+    let row: Option<(Option<String>,)> = sqlx::query_as(
+        r#"SELECT twitch_user_id
+           FROM twitch_streamers_partner_state
+           WHERE LOWER(twitch_login) = LOWER($1)
+           LIMIT 1"#,
+    )
+    .bind(login)
+    .fetch_optional(pool)
+    .await?;
+    let Some((Some(user_id),)) = row else {
+        return Ok(());
+    };
+    let user_id = user_id.trim().to_string();
+    if user_id.is_empty() {
+        return Ok(());
+    }
+    let refresher = PartnerScoreRefresher::new(pool.clone());
+    refresher.refresh_for_ids(&[user_id], Utc::now()).await?;
+    Ok(())
+}
+
 /// Wendet ein bereits verifiziertes und dedupliziertes Event auf den Zustand an.
 ///
 /// 1:1 `_billing_apply_webhook_event`. Für `checkout.session.completed`
@@ -471,12 +609,33 @@ pub async fn apply_event(
             }
         }
 
+        // bonus_months (annual) aus der NACHGELADENEN Subscription-Metadata lesen
+        // (Python liest sub_meta.bonus_months erst NACH dem Subscription-Retrieve,
+        // billing_mixin.py:707-712). Nur der full-subscription-Pfad trägt sie.
+        let bonus_months = retrieved_subscription
+            .filter(|_| !payload.stripe_subscription_id.is_empty())
+            .and_then(|sub| sub.get("metadata"))
+            .and_then(|meta| meta.get("bonus_months"))
+            .and_then(value_as_i64)
+            .filter(|n| *n > 0)
+            .unwrap_or(0);
+
         upsert_subscription_state(tx, &payload).await?;
         sync_plan_to_streamer_plans(tx, &payload.customer_reference, &payload.plan_id, &payload.status)
             .await?;
-        // TODO(affiliate): Pythons checkout-Pfad gewährt `bonus_months` (annual)
-        // aus der Subscription-Metadata via manual_plan_expires_at — separater
-        // Bonus-/Affiliate-Hook (Block 2B), hier bewusst NICHT gebaut.
+        // P1.50: bezahlter Annual-Bonus → manual_plan_expires_at = period_end +
+        // bonus_months*31 Tage (Port von `_billing_grant_bonus_access_months`,
+        // billing_mixin.py:589-630). Nur wenn bonus_months > 0 und ein Login da ist.
+        if bonus_months > 0 && !payload.customer_reference.trim().is_empty() {
+            grant_bonus_access_months(
+                tx,
+                &payload.customer_reference,
+                &payload.plan_id,
+                payload.current_period_end.as_deref().unwrap_or(""),
+                bonus_months,
+            )
+            .await?;
+        }
         return Ok(WebhookAction::CheckoutSubscriptionRecorded);
     }
 
@@ -726,13 +885,17 @@ mod tests {
         sqlx::query(
             r#"CREATE TABLE streamer_plans (
                    twitch_user_id TEXT PRIMARY KEY, twitch_login TEXT,
-                   plan_name TEXT NOT NULL DEFAULT 'free', expires_at TEXT
+                   plan_name TEXT NOT NULL DEFAULT 'free', expires_at TEXT,
+                   manual_plan_id TEXT, manual_plan_expires_at TEXT,
+                   manual_plan_notes TEXT DEFAULT '', manual_plan_updated_at TEXT,
+                   raid_boost_enabled INTEGER NOT NULL DEFAULT 0
                )"#,
         ).execute(&pool).await.unwrap();
         // Die View ist in Prod read-only; im Test als Tabelle für den Login→UID-Join.
         sqlx::query(
             r#"CREATE TABLE twitch_streamers_partner_state (
-                   twitch_login TEXT, twitch_user_id TEXT
+                   twitch_login TEXT, twitch_user_id TEXT,
+                   is_partner_active INTEGER NOT NULL DEFAULT 1
                )"#,
         ).execute(&pool).await.unwrap();
         ensure_event_table(&pool).await.unwrap();
@@ -860,5 +1023,221 @@ mod tests {
         let action = apply_event(&mut tx, "e", "invoice.payment_succeeded", &json!({"id": "in"}), None)
             .await.unwrap();
         assert_eq!(action, WebhookAction::InvoiceIgnoredWithoutSubscription);
+    }
+
+    // ── P2.127/P2.128: affected-login-Resolver (rein) ───────────────────────
+    #[test]
+    fn affected_login_for_subscription_event() {
+        let sub = json!({
+            "id": "sub_1", "status": "active",
+            "metadata": { "customer_reference": "StreamerLogin", "plan_id": "raid_boost" }
+        });
+        assert_eq!(
+            affected_login_for_billing_refresh("customer.subscription.updated", &sub, None)
+                .as_deref(),
+            Some("StreamerLogin")
+        );
+    }
+
+    #[test]
+    fn affected_login_for_checkout_prefers_subscription_then_client_ref() {
+        // checkout ohne Metadata-Login, mit client_reference_id.
+        let session = json!({
+            "mode": "subscription", "subscription": "sub_x",
+            "client_reference_id": "fallbacklogin", "metadata": {}
+        });
+        assert_eq!(
+            affected_login_for_billing_refresh("checkout.session.completed", &session, None)
+                .as_deref(),
+            Some("fallbacklogin")
+        );
+        // mit nachgeladener Subscription, deren metadata.customer_reference gewinnt.
+        let sub = json!({ "id": "sub_x", "status": "active",
+            "metadata": { "customer_reference": "subwinner" } });
+        assert_eq!(
+            affected_login_for_billing_refresh("checkout.session.completed", &session, Some(&sub))
+                .as_deref(),
+            Some("subwinner")
+        );
+    }
+
+    #[test]
+    fn affected_login_none_for_unrelated_and_nonsubscription() {
+        assert!(affected_login_for_billing_refresh("invoice.payment_succeeded", &json!({}), None)
+            .is_none());
+        // checkout mit mode != subscription.
+        let oneoff = json!({ "mode": "payment", "metadata": { "customer_reference": "x" } });
+        assert!(
+            affected_login_for_billing_refresh("checkout.session.completed", &oneoff, None).is_none()
+        );
+        // subscription-Event ohne Login → None.
+        assert!(affected_login_for_billing_refresh(
+            "customer.subscription.created",
+            &json!({ "id": "s", "metadata": {} }),
+            None
+        )
+        .is_none());
+    }
+
+    // ── P1.50: bonus_months Annual-Grant ────────────────────────────────────
+    #[tokio::test]
+    async fn checkout_with_bonus_months_extends_manual_plan_expires_at() {
+        let Some(pool) = pool_or_skip("wh_bonus_grant").await else { return };
+        sqlx::query("INSERT INTO twitch_streamers_partner_state (twitch_login, twitch_user_id) VALUES ('annuallogin','99')")
+            .execute(&pool).await.unwrap();
+        // Checkout-Session (mode=subscription) + nachgeladene Subscription mit
+        // current_period_end und metadata.bonus_months=2.
+        let period_end_epoch = 1_800_000_000_i64; // fester Zukunfts-Epoch
+        let session = json!({
+            "mode": "subscription", "subscription": "sub_bonus",
+            "customer": "cus_b", "client_reference_id": "annuallogin",
+            "metadata": { "plan_id": "analysis_dashboard" }
+        });
+        let retrieved = json!({
+            "id": "sub_bonus", "customer": "cus_b", "status": "active",
+            "metadata": { "customer_reference": "annuallogin", "plan_id": "analysis_dashboard",
+                          "bonus_months": "2" },
+            "current_period_end": period_end_epoch,
+            "items": { "data": [ { "price": {
+                "recurring": { "interval": "year", "interval_count": 1 } } } ] }
+        });
+        let mut tx = pool.acquire().await.unwrap();
+        let action = apply_event(
+            &mut tx,
+            "evt_bonus",
+            "checkout.session.completed",
+            &session,
+            Some(&retrieved),
+        )
+        .await
+        .unwrap();
+        assert_eq!(action, WebhookAction::CheckoutSubscriptionRecorded);
+        drop(tx);
+
+        // manual_plan_expires_at = period_end + 2*31 Tage.
+        let row: (Option<String>, Option<String>, Option<String>) = sqlx::query_as(
+            "SELECT manual_plan_id, manual_plan_expires_at, manual_plan_notes FROM streamer_plans WHERE twitch_user_id='99'",
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert_eq!(row.0.as_deref(), Some("analysis_dashboard"));
+        let expires = DateTime::parse_from_rfc3339(&row.1.expect("expires set")).unwrap();
+        let period_end = DateTime::<Utc>::from_timestamp(period_end_epoch, 0).unwrap();
+        let expected = period_end + chrono::Duration::days(2 * 31);
+        assert_eq!(expires.with_timezone(&Utc), expected);
+        assert!(row.2.unwrap().contains("bonus 2mo"));
+    }
+
+    #[tokio::test]
+    async fn checkout_without_bonus_months_leaves_manual_plan_untouched() {
+        let Some(pool) = pool_or_skip("wh_no_bonus").await else { return };
+        sqlx::query("INSERT INTO twitch_streamers_partner_state (twitch_login, twitch_user_id) VALUES ('plainlogin','11')")
+            .execute(&pool).await.unwrap();
+        let session = json!({
+            "mode": "subscription", "subscription": "sub_plain",
+            "customer": "c", "metadata": { "customer_reference": "plainlogin", "plan_id": "raid_boost" }
+        });
+        let retrieved = json!({
+            "id": "sub_plain", "customer": "c", "status": "active",
+            "metadata": { "customer_reference": "plainlogin", "plan_id": "raid_boost" },
+            "current_period_end": 1_800_000_000_i64,
+            "items": { "data": [ { "price": { "recurring": { "interval": "month", "interval_count": 1 } } } ] }
+        });
+        let mut tx = pool.acquire().await.unwrap();
+        apply_event(&mut tx, "evt_p", "checkout.session.completed", &session, Some(&retrieved))
+            .await.unwrap();
+        drop(tx);
+        // streamer_plans-Row existiert (sync), aber manual_plan_expires_at bleibt NULL.
+        let row: (Option<String>,) = sqlx::query_as(
+            "SELECT manual_plan_expires_at FROM streamer_plans WHERE twitch_user_id='11'",
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert!(row.0.is_none(), "ohne bonus_months kein manual_plan_expires_at");
+    }
+
+    // ── P2.127/P2.128: Score-Refresh nach Billing-Änderung ──────────────────
+    /// Eigenes Schema mit allen Tabellen, die PartnerScoreRefresher liest/schreibt.
+    ///
+    /// Wichtig: `search_path` wird per `after_connect` auf JEDER Pool-Verbindung
+    /// gesetzt — der Refresher nutzt denselben Pool, dessen Verbindungen also alle
+    /// auf das Test-Schema zeigen (sonst greift er auf `public` zu).
+    async fn refresh_pool_or_skip(schema: &str) -> Option<PgPool> {
+        let dsn = std::env::var("TB_TEST_DATABASE_URL").ok()?;
+        let admin = PgPoolOptions::new().max_connections(1).connect(&dsn).await.unwrap();
+        sqlx::query(&format!("DROP SCHEMA IF EXISTS {schema} CASCADE")).execute(&admin).await.unwrap();
+        sqlx::query(&format!("CREATE SCHEMA {schema}")).execute(&admin).await.unwrap();
+        admin.close().await;
+        let schema_owned = schema.to_string();
+        let pool = PgPoolOptions::new()
+            .max_connections(4)
+            .after_connect(move |conn, _| {
+                let schema = schema_owned.clone();
+                Box::pin(async move {
+                    sqlx::query(&format!("SET search_path TO {schema}"))
+                        .execute(conn)
+                        .await
+                        .map(|_| ())
+                })
+            })
+            .connect(&dsn)
+            .await
+            .unwrap();
+        for ddl in [
+            "CREATE TABLE twitch_streamers_partner_state (twitch_login TEXT, twitch_user_id TEXT, is_partner_active INTEGER NOT NULL DEFAULT 1)",
+            "CREATE TABLE streamer_plans (twitch_user_id TEXT PRIMARY KEY, twitch_login TEXT, raid_boost_enabled INTEGER NOT NULL DEFAULT 0)",
+            "CREATE TABLE twitch_stream_sessions (streamer_login TEXT, started_at TIMESTAMPTZ, duration_seconds BIGINT)",
+            "CREATE TABLE twitch_raid_history (from_broadcaster_id TEXT, to_broadcaster_id TEXT, executed_at TIMESTAMPTZ, success BOOLEAN)",
+            "CREATE TABLE twitch_live_state (twitch_user_id TEXT, is_live INTEGER, last_started_at TIMESTAMPTZ)",
+            r#"CREATE TABLE twitch_partner_raid_scores (
+                   twitch_user_id TEXT PRIMARY KEY, twitch_login TEXT,
+                   avg_duration_sec INTEGER, time_pattern_score_base DOUBLE PRECISION,
+                   received_successful_raids_total INTEGER, is_new_partner_preferred INTEGER,
+                   new_partner_multiplier DOUBLE PRECISION, raid_boost_multiplier DOUBLE PRECISION,
+                   is_live INTEGER, current_started_at TEXT, current_uptime_sec INTEGER,
+                   duration_score DOUBLE PRECISION, time_pattern_score DOUBLE PRECISION,
+                   readiness_score DOUBLE PRECISION, fairness_score DOUBLE PRECISION,
+                   base_score DOUBLE PRECISION, final_score DOUBLE PRECISION,
+                   today_received_raids INTEGER, last_computed_at TEXT,
+                   internal_sent_raids_30d INTEGER, internal_received_raids_7d INTEGER,
+                   internal_received_raids_30d INTEGER
+               )"#,
+        ] {
+            sqlx::query(ddl).execute(&pool).await.unwrap();
+        }
+        Some(pool)
+    }
+
+    #[tokio::test]
+    async fn refresh_recomputes_score_for_known_login() {
+        let Some(pool) = refresh_pool_or_skip("wh_score_refresh").await else { return };
+        sqlx::query("INSERT INTO twitch_streamers_partner_state (twitch_login, twitch_user_id, is_partner_active) VALUES ('boostlogin','555',1)")
+            .execute(&pool).await.unwrap();
+        sqlx::query("INSERT INTO streamer_plans (twitch_user_id, twitch_login, raid_boost_enabled) VALUES ('555','boostlogin',1)")
+            .execute(&pool).await.unwrap();
+
+        refresh_partner_raid_score_for_login(&pool, "BoostLogin").await.unwrap();
+
+        let row: (String, f64) = sqlx::query_as(
+            "SELECT last_computed_at, raid_boost_multiplier FROM twitch_partner_raid_scores WHERE twitch_user_id='555'",
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert!(!row.0.is_empty(), "last_computed_at gesetzt");
+        // raid_boost_enabled=1 → Multiplikator > 1.0 (Boost greift sofort).
+        assert!(row.1 > 1.0, "raid_boost_multiplier nach Refresh > 1.0, war {}", row.1);
+    }
+
+    #[tokio::test]
+    async fn refresh_noop_for_unknown_login() {
+        let Some(pool) = refresh_pool_or_skip("wh_score_refresh_unknown").await else { return };
+        // Kein Eintrag → kein Fehler, keine Score-Zeile.
+        refresh_partner_raid_score_for_login(&pool, "gibtsnicht").await.unwrap();
+        let (count,): (i64,) = sqlx::query_as("SELECT COUNT(*)::bigint FROM twitch_partner_raid_scores")
+            .fetch_one(&pool).await.unwrap();
+        assert_eq!(count, 0);
     }
 }

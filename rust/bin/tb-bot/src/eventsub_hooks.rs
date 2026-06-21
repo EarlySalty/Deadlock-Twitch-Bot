@@ -22,8 +22,9 @@ use tb_monitoring::{EventSubHooks, LiveStateStore, ModeratorProvisioner, Subscri
 use tb_raid::pending_raids::normalize_broadcaster_login;
 use tb_raid::signal_correlation::{ChatNotificationInput, ChatUnraidInput};
 use tb_raid::{
-    classify_partner_raid_arrival, PendingRaidStore, RaidArrivalInput, RaidArrivalRuntime,
-    RaidBlacklistStore, RaidSignalCorrelationService, RaidSignalOutcome, TokenProvider,
+    classify_partner_raid_arrival, ArrivalTrackingStore, PendingRaidStore, RaidArrivalInput,
+    RaidArrivalRuntime, RaidBlacklistStore, RaidSignalCorrelationService, RaidSignalOutcome,
+    TokenProvider,
 };
 use tb_transport_twitch::{AddModeratorOutcome, HelixClient};
 
@@ -53,7 +54,13 @@ pub struct RaidArrivalCoordinator {
     pool: PgPool,
     pending: Arc<Mutex<PendingRaidStore>>,
     runtime: RaidArrivalRuntime,
+    /// P2.43: Recent-Arrival-Lookup für das Sekundär-Signal-Pre-Gate.
+    arrival_store: ArrivalTrackingStore,
 }
+
+/// Recent-Raid-Arrival-TTL (Python `recent_raid_arrival_ttl_seconds = 600`,
+/// raid_state_store.py:16). Identisch zu `raid_arrival_wiring.rs`.
+const RECENT_ARRIVAL_TTL_SECS: i64 = 600;
 
 impl RaidArrivalCoordinator {
     pub fn new(
@@ -61,10 +68,37 @@ impl RaidArrivalCoordinator {
         pending: Arc<Mutex<PendingRaidStore>>,
         runtime: RaidArrivalRuntime,
     ) -> Self {
+        let arrival_store = ArrivalTrackingStore::new(pool.clone());
         Self {
             pool,
             pending,
             runtime,
+            arrival_store,
+        }
+    }
+
+    /// P2.43-Pre-Gate: existiert für (Ziel, Quelle) ein bestätigter Arrival
+    /// innerhalb des Recent-Fensters (TTL 600 s), wird das zweite/späte Signal
+    /// als Sekundär-Bestätigung dedupliziert (Plan-Pfad
+    /// `secondary_signal_handled` → `RecordSecondarySignal`), statt erneut als
+    /// Orphan/Mismatch/eigenständig klassifiziert zu werden. Port von
+    /// `_handle_secondary_confirmed_signal` (raid_arrival_runtime.py:102-166),
+    /// das jeder Handler ZUERST aufruft. Fehler beim Lookup → `false`
+    /// (fail-open auf den normalen Korrelationspfad).
+    async fn recent_arrival_present(&self, to_broadcaster_id: &str, from_broadcaster_login: &str) -> bool {
+        if to_broadcaster_id.is_empty() || from_broadcaster_login.is_empty() {
+            return false;
+        }
+        match self
+            .arrival_store
+            .find_recent_arrival(to_broadcaster_id, from_broadcaster_login, RECENT_ARRIVAL_TTL_SECS)
+            .await
+        {
+            Ok(found) => found.is_some(),
+            Err(error) => {
+                tracing::error!(%error, "Recent-Arrival-Pre-Gate-Lookup fehlgeschlagen");
+                false
+            }
         }
     }
 
@@ -94,10 +128,17 @@ impl RaidArrivalCoordinator {
             .get(&to_id, Some(&from_login))
             .cloned();
 
+        // P2.43: Sekundär-Signal-Pre-Gate ZUERST (vor Unabhängig-Erkennung) —
+        // ein zweites Signal für denselben Raid innerhalb des Recent-Fensters
+        // wird als Bestätigung dedupliziert statt neu klassifiziert.
+        let recent_arrival_present = self.recent_arrival_present(&to_id, &from_login).await;
+
         // Unabhängig-Erkennung nur ohne Pending (Python Z. 445–457):
         // Ziel-Partner-Status + Quell-Auflösung vorab laden, dann pure
         // Klassifikation — Some(_) = manueller/externer Raid auf einen Partner.
-        let independent_manual_detected = if pending.is_none() {
+        // Bei Recent-Arrival short-circuitet der Plan ohnehin auf das
+        // Sekundär-Signal; die teure Unabhängig-/Manual-Key-Auflösung dann sparen.
+        let independent_manual_detected = if pending.is_none() && !recent_arrival_present {
             let lookups = PrefetchedLookups {
                 target_is_partner: is_target_partner(&self.pool, &to_id, &to_login).await,
                 known_source: known_source(&self.pool, from_id.as_deref(), &from_login).await,
@@ -117,9 +158,13 @@ impl RaidArrivalCoordinator {
         };
 
         // Manual-Raid-Key: from-ID, sonst Auflösung über den Partner-Login.
-        let manual_raid_source_key = match &from_id {
-            Some(id) => Some(id.clone()),
-            None => resolve_active_partner_id_by_login(&self.pool, &from_login).await,
+        let manual_raid_source_key = if recent_arrival_present {
+            None
+        } else {
+            match &from_id {
+                Some(id) => Some(id.clone()),
+                None => resolve_active_partner_id_by_login(&self.pool, &from_login).await,
+            }
         };
 
         let plan = RaidSignalCorrelationService.plan_raid_arrival(RaidArrivalInput {
@@ -129,7 +174,7 @@ impl RaidArrivalCoordinator {
             from_broadcaster_id: from_id,
             viewer_count,
             pending_raid: pending,
-            recent_arrival_present: false,
+            recent_arrival_present,
             independent_manual_detected,
             manual_raid_source_key,
         });
@@ -191,6 +236,10 @@ impl RaidArrivalCoordinator {
             .get(&to_id, Some(&from_login))
             .cloned();
 
+        // P2.43: Sekundär-Signal-Pre-Gate — chat.notification ist der häufigste
+        // Sekundärpfad zum channel.raid-Webhook für denselben Raid.
+        let recent_arrival_present = self.recent_arrival_present(&to_id, &from_login).await;
+
         let plan = RaidSignalCorrelationService.plan_chat_notification(ChatNotificationInput {
             to_broadcaster_id: to_id,
             to_broadcaster_login: to_login,
@@ -200,7 +249,7 @@ impl RaidArrivalCoordinator {
             message_id: message_id.map(str::to_string),
             event_timestamp: None,
             pending_raid: pending,
-            recent_arrival_present: false,
+            recent_arrival_present,
         });
 
         let outcome = plan.outcome.clone();
@@ -268,13 +317,20 @@ impl RaidArrivalCoordinator {
             .unwrap_or_else(|poisoned| poisoned.into_inner())
             .get(&broadcaster_id, Some(&from_login))
             .cloned();
+        // P2.43: Ein Unraid für einen bereits bestätigten Raid wird als
+        // Sekundär-Signal mit `unraid_seen` an der Arrival-Zeile vermerkt
+        // (Python `_handle_secondary_confirmed_signal`, unraid-Pfad).
+        let recent_arrival_present = self
+            .recent_arrival_present(&broadcaster_id, &from_login)
+            .await;
+
         let plan = RaidSignalCorrelationService.plan_chat_unraid(ChatUnraidInput {
             to_broadcaster_id: broadcaster_id,
             to_broadcaster_login: broadcaster_login.clone(),
             from_broadcaster_login: from_login.clone(),
             from_broadcaster_id: from_id,
             pending_raid: pending,
-            recent_arrival_present: false,
+            recent_arrival_present,
             event_timestamp: None,
         });
         self.runtime.execute_plan(&plan).await;
@@ -692,5 +748,252 @@ impl EventSubHooks for RaidEventSubHooks {
         self.arrival
             .handle_chat_unraid_notification(event, message_id)
             .await;
+    }
+}
+
+// ─── Tests (P2.43 Sekundär-Signal-Pre-Gate) ──────────────────────────────────
+
+#[cfg(all(test, feature = "integration"))]
+mod arrival_dedupe_tests {
+    use super::*;
+    use std::str::FromStr;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    use tb_raid::pending_raids::PendingRaid;
+    use tb_raid::RaidArrivalSink;
+
+    /// Zählender Stub-Sink: protokolliert pro Action-Kind, wie oft er gerufen
+    /// wurde — so lässt sich beweisen, dass ein dedupliziertes Signal NUR
+    /// `record_secondary_signal` auslöst (kein Orphan/Independent/Confirm).
+    #[derive(Default)]
+    struct CountingSink {
+        secondary: AtomicUsize,
+        orphan: AtomicUsize,
+        independent: AtomicUsize,
+        confirm: AtomicUsize,
+        store_pending: AtomicUsize,
+    }
+
+    #[async_trait::async_trait]
+    impl RaidArrivalSink for CountingSink {
+        async fn record_secondary_signal(
+            &self,
+            _signal_type: &str,
+            _from_broadcaster_login: &str,
+            _from_broadcaster_id: Option<&str>,
+            _to_broadcaster_login: &str,
+            _to_broadcaster_id: &str,
+            _viewer_count: i32,
+            _unraid_seen: bool,
+        ) {
+            self.secondary.fetch_add(1, Ordering::SeqCst);
+        }
+        async fn record_pending_observation(
+            &self,
+            _pending: &PendingRaid,
+            _signal_type: &str,
+            _status: &str,
+            _reason: Option<&str>,
+            _detail: Option<&str>,
+        ) {
+        }
+        async fn store_pending_raid(&self, _pending: &PendingRaid) {
+            self.store_pending.fetch_add(1, Ordering::SeqCst);
+        }
+        async fn store_orphan_chat_notification(
+            &self,
+            _to_broadcaster_id: &str,
+            _to_broadcaster_login: &str,
+            _from_broadcaster_id: Option<&str>,
+            _from_broadcaster_login: &str,
+            _viewer_count: i32,
+            _message_id: Option<&str>,
+            _event_timestamp: Option<&str>,
+        ) {
+            self.orphan.fetch_add(1, Ordering::SeqCst);
+        }
+        async fn confirm_pending_raid(
+            &self,
+            _signal_type: &str,
+            _to_broadcaster_id: &str,
+            _to_broadcaster_login: &str,
+            _from_broadcaster_login: &str,
+            _from_broadcaster_id: Option<&str>,
+            _viewer_count: i32,
+        ) {
+            self.confirm.fetch_add(1, Ordering::SeqCst);
+        }
+        async fn mark_manual_raid_started(&self, _source_key: &str, _ttl_seconds: f64) {}
+        async fn record_independent_raid_arrival(
+            &self,
+            _signal_type: &str,
+            _from_broadcaster_login: &str,
+            _from_broadcaster_id: Option<&str>,
+            _to_broadcaster_login: &str,
+            _to_broadcaster_id: &str,
+            _viewer_count: i32,
+        ) {
+            self.independent.fetch_add(1, Ordering::SeqCst);
+        }
+    }
+
+    async fn setup_db(schema: &str) -> PgPool {
+        let url = std::env::var("TB_TEST_DATABASE_URL")
+            .unwrap_or_else(|_| "postgres://postgres:tbtest@127.0.0.1:5434/postgres".to_string());
+        let admin = sqlx::PgPool::connect(&url).await.unwrap();
+        sqlx::query(&format!("DROP SCHEMA IF EXISTS {schema} CASCADE"))
+            .execute(&admin)
+            .await
+            .unwrap();
+        sqlx::query(&format!("CREATE SCHEMA {schema}"))
+            .execute(&admin)
+            .await
+            .unwrap();
+        admin.close().await;
+        let opts = sqlx::postgres::PgConnectOptions::from_str(&url)
+            .unwrap()
+            .options([("search_path", schema)]);
+        let pool = sqlx::postgres::PgPoolOptions::new()
+            .max_connections(4)
+            .connect_with(opts)
+            .await
+            .unwrap();
+        sqlx::query(
+            r#"
+            CREATE TABLE twitch_raid_arrival_tracking (
+                id                        SERIAL PRIMARY KEY,
+                detected_at               TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+                last_signal_at            TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+                from_broadcaster_id       TEXT,
+                from_broadcaster_login    TEXT NOT NULL,
+                to_broadcaster_id         TEXT NOT NULL,
+                to_broadcaster_login      TEXT NOT NULL,
+                viewer_count              INTEGER NOT NULL DEFAULT 0,
+                classification            TEXT NOT NULL DEFAULT '',
+                confirmation_signals      TEXT NOT NULL DEFAULT '',
+                primary_signal            TEXT NOT NULL DEFAULT '',
+                correlation_status        TEXT NOT NULL DEFAULT '',
+                correlation_detail        TEXT,
+                source_resolution         TEXT NOT NULL DEFAULT '',
+                raid_history_id           BIGINT,
+                raid_history_executed_at  TIMESTAMPTZ,
+                unraid_seen               BOOLEAN NOT NULL DEFAULT FALSE,
+                last_unraid_at            TIMESTAMPTZ
+            )
+            "#,
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+        pool
+    }
+
+    fn coordinator(pool: PgPool, sink: Arc<CountingSink>) -> RaidArrivalCoordinator {
+        let runtime = RaidArrivalRuntime::new(sink);
+        let pending = Arc::new(Mutex::new(PendingRaidStore::new()));
+        RaidArrivalCoordinator::new(pool, pending, runtime)
+    }
+
+    /// Zweites channel.raid-Event für denselben from->to innerhalb der TTL
+    /// wird als Sekundär-Signal dedupliziert: genau EIN secondary, KEIN
+    /// independent/orphan/confirm. Ohne das Pre-Gate würde der zweite Raid
+    /// (kein Pending) als eigenständiger Arrival erneut verarbeitet.
+    #[tokio::test]
+    async fn zweites_raid_signal_wird_als_secondary_dedupliziert() {
+        let pool = setup_db("p243_dedupe").await;
+        // Bestätigter Arrival ist bereits vorhanden (von der ersten Korrelation).
+        sqlx::query(
+            "INSERT INTO twitch_raid_arrival_tracking
+                (from_broadcaster_login, to_broadcaster_id, to_broadcaster_login,
+                 confirmation_signals, detected_at)
+             VALUES ('raider', '200', 'target', 'channel_raid', NOW())",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+
+        let sink = Arc::new(CountingSink::default());
+        let coord = coordinator(pool, sink.clone());
+        let event = serde_json::json!({
+            "from_broadcaster_user_login": "raider",
+            "from_broadcaster_user_id": "100",
+            "to_broadcaster_user_id": "200",
+            "to_broadcaster_user_login": "target",
+            "viewers": 42,
+        });
+        coord.handle_channel_raid(&event).await;
+
+        assert_eq!(sink.secondary.load(Ordering::SeqCst), 1, "genau ein Sekundär-Signal");
+        assert_eq!(sink.independent.load(Ordering::SeqCst), 0, "kein zweiter eigenständiger Arrival");
+        assert_eq!(sink.orphan.load(Ordering::SeqCst), 0);
+        assert_eq!(sink.confirm.load(Ordering::SeqCst), 0);
+
+        // Nur eine Arrival-Zeile insgesamt (keine Dublette).
+        let count: (i64,) =
+            sqlx::query_as("SELECT COUNT(*)::bigint FROM twitch_raid_arrival_tracking")
+                .fetch_one(&coord.pool)
+                .await
+                .unwrap();
+        assert_eq!(count.0, 1, "keine zweite/orphan Arrival-Zeile");
+    }
+
+    /// Späte chat.notification für denselben Raid → Sekundär-Signal mit
+    /// unraid_seen=false, NICHT als Orphan.
+    #[tokio::test]
+    async fn spaete_chat_notification_wird_sekundaer_statt_orphan() {
+        let pool = setup_db("p243_chatnotif").await;
+        sqlx::query(
+            "INSERT INTO twitch_raid_arrival_tracking
+                (from_broadcaster_login, to_broadcaster_id, to_broadcaster_login,
+                 confirmation_signals, detected_at)
+             VALUES ('raider', '200', 'target', 'channel_raid', NOW())",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+
+        let sink = Arc::new(CountingSink::default());
+        let coord = coordinator(pool, sink.clone());
+        let event = serde_json::json!({
+            "broadcaster_user_id": "200",
+            "broadcaster_user_login": "target",
+            "raid": { "user_login": "raider", "user_id": "100", "viewer_count": 42 },
+        });
+        coord
+            .handle_chat_raid_notification(&event, Some("msg-1"))
+            .await;
+
+        assert_eq!(sink.secondary.load(Ordering::SeqCst), 1);
+        assert_eq!(sink.orphan.load(Ordering::SeqCst), 0, "kein Orphan trotz fehlendem Pending");
+    }
+
+    /// Ohne jüngeren Arrival im Fenster greift das Gate NICHT: der Plan läuft
+    /// den normalen Pfad (hier: eigenständiger Arrival), kein Sekundär-Signal.
+    #[tokio::test]
+    async fn ohne_recent_arrival_kein_secondary() {
+        let pool = setup_db("p243_none").await;
+        // Arrival existiert, aber außerhalb der TTL (> 600 s alt).
+        sqlx::query(
+            "INSERT INTO twitch_raid_arrival_tracking
+                (from_broadcaster_login, to_broadcaster_id, to_broadcaster_login,
+                 confirmation_signals, detected_at)
+             VALUES ('raider', '200', 'target', 'channel_raid', NOW() - INTERVAL '20 minutes')",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+
+        let sink = Arc::new(CountingSink::default());
+        let coord = coordinator(pool, sink.clone());
+        let event = serde_json::json!({
+            "from_broadcaster_user_login": "raider",
+            "from_broadcaster_user_id": "100",
+            "to_broadcaster_user_id": "200",
+            "to_broadcaster_user_login": "target",
+            "viewers": 42,
+        });
+        coord.handle_channel_raid(&event).await;
+
+        assert_eq!(sink.secondary.load(Ordering::SeqCst), 0, "alter Arrival → kein Sekundär-Signal");
     }
 }

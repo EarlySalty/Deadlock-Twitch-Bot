@@ -12,7 +12,8 @@ pub mod catalog;
 
 pub use catalog::{
     catalog_json, compute_plan_price, cycle_discount_percent, cycle_label, find_plan,
-    format_eur_cents, is_paid_plan_id, lookup_key, normalize_billing_cycle, price_id_default,
-    product_id_default, BillingPlan, PlanPrice, BILLING_PLANS, CYCLE_DISCOUNTS, PRICE_ID_DEFAULTS,
-    PRODUCT_ID_DEFAULTS,
+    format_eur_cents, is_paid_plan_id, lookup_key, normalize_billing_cycle, parse_price_id_mapping,
+    parse_product_id_mapping, price_id_default, price_id_map_from_env, product_id_default,
+    product_id_map_from_env, resolved_price_id, resolved_product_id, BillingPlan, PlanPrice,
+    BILLING_PLANS, CYCLE_DISCOUNTS, PRICE_ID_DEFAULTS, PRODUCT_ID_DEFAULTS,
 };

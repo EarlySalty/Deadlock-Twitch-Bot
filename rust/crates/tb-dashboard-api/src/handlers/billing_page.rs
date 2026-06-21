@@ -41,6 +41,7 @@ use sqlx::PgPool;
 
 use tb_analytics::billing::{
     catalog_json, find_plan, is_paid_plan_id, normalize_billing_cycle, price_id_default,
+    price_id_map_from_env, resolved_price_id,
 };
 use tb_analytics::plan::resolve_plan_snapshot;
 use tb_analytics::stripe::StripeClient;
@@ -198,7 +199,10 @@ pub async fn checkout_start_handler(
     let Some(Extension(config)) = config else {
         return pricing_unavailable("stripe_secret_key_missing");
     };
-    let Some(price_id) = price_id_default(plan_id, cycle) else {
+    // P2.126: Env-Override (Vault-Map) vor dem Hardcode-Default konsumieren —
+    // erlaubt pro Plan/Zyklus eine abweichende Stripe-Price-ID ohne Code-Build.
+    let price_vault = price_id_map_from_env();
+    let Some(price_id) = resolved_price_id(plan_id, cycle, &price_vault) else {
         return pricing_unavailable("missing_stripe_price_id");
     };
 

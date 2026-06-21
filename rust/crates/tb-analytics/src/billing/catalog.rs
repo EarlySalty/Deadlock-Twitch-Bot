@@ -511,6 +511,161 @@ pub fn catalog_json(cycle_months: u32) -> serde_json::Value {
     })
 }
 
+// ─────────────────────────────────────────────────────────────────────────────
+// P2.126: Stripe Price-/Product-ID Vault-Override-Layer
+// ─────────────────────────────────────────────────────────────────────────────
+//
+// Port von `billing_mixin.py:_billing_price_id_map`/`_billing_product_id_map` +
+// `billing_plans.py:billing_parse_*_mapping`/`billing_merge_*_defaults`.
+//
+// Die Maps stammen aus den Env-/Infisical-Variablen `STRIPE_PRICE_ID_MAP` /
+// `STRIPE_PRODUCT_ID_MAP` (Alias `TWITCH_BILLING_STRIPE_*`, erster nicht-leerer
+// gewinnt) und werden über die eingecheckten Defaults gelegt. **Price-IDs:**
+// Code-Defaults gewinnen für bekannte Pläne; das Vault kann nur NEUE (noch nicht
+// eingecheckte) Pläne ergänzen. **Product-IDs:** Vault gewinnt (Python
+// `result.update(mapping)`). Das sind keine Secrets, daher Plaintext-Env zulässig
+// (Direktive: Secrets read-only aus Infisical/Env; hier nur ID-Strings).
+//
+// Schreib-Rückweg (Python `_billing_set_*_map` via Keyring) liegt im
+// Sync-Handler (anderes Crate) und ist Folge-Wiring (siehe WIRING-TODO).
+
+/// Geparste Price-Map: `(plan_id, [(cycle_months, price_id)])` (normalisiert).
+type PriceMap = Vec<(String, Vec<(u32, String)>)>;
+/// Geparste Product-Map: `(plan_id, product_id)`.
+type ProductMap = Vec<(String, String)>;
+
+/// Liest die erste nicht-leere Env-Variable aus `keys` (getrimmt).
+fn first_env(keys: &[&str]) -> String {
+    for key in keys {
+        if let Ok(value) = std::env::var(key) {
+            let trimmed = value.trim();
+            if !trimmed.is_empty() {
+                return trimmed.to_string();
+            }
+        }
+    }
+    String::new()
+}
+
+/// Parst eine JSON-Price-Map (`{"plan":{"1":"price_x","12":"price_y"}}`).
+///
+/// Port von `billing_parse_price_id_mapping`: ungültiges JSON / Nicht-Objekt → leer;
+/// Zyklen außerhalb `{1,12}` und leere IDs werden verworfen; nur Pläne mit
+/// mindestens einem gültigen Slot bleiben erhalten.
+pub fn parse_price_id_mapping(raw: &str) -> PriceMap {
+    let raw = raw.trim();
+    if raw.is_empty() {
+        return Vec::new();
+    }
+    let Ok(serde_json::Value::Object(obj)) = serde_json::from_str::<serde_json::Value>(raw) else {
+        return Vec::new();
+    };
+    let mut result: PriceMap = Vec::new();
+    for (raw_plan_id, raw_cycle_map) in obj {
+        let plan_id = raw_plan_id.trim().to_string();
+        let serde_json::Value::Object(cycle_obj) = raw_cycle_map else {
+            continue;
+        };
+        if plan_id.is_empty() {
+            continue;
+        }
+        let mut cycle_map: Vec<(u32, String)> = Vec::new();
+        for (raw_cycle, raw_price_id) in cycle_obj {
+            let Some(cycle) = parse_cycle_key(&raw_cycle) else {
+                continue;
+            };
+            let price_id = raw_price_id.as_str().unwrap_or("").trim().to_string();
+            if !price_id.is_empty() {
+                cycle_map.retain(|(c, _)| *c != cycle);
+                cycle_map.push((cycle, price_id));
+            }
+        }
+        if !cycle_map.is_empty() {
+            result.push((plan_id, cycle_map));
+        }
+    }
+    result
+}
+
+/// Parst eine JSON-Product-Map (`{"plan":"prod_x"}`).
+///
+/// Port von `billing_parse_product_id_mapping`: nur nicht-leere Plan-/Product-IDs.
+pub fn parse_product_id_mapping(raw: &str) -> ProductMap {
+    let raw = raw.trim();
+    if raw.is_empty() {
+        return Vec::new();
+    }
+    let Ok(serde_json::Value::Object(obj)) = serde_json::from_str::<serde_json::Value>(raw) else {
+        return Vec::new();
+    };
+    let mut result: ProductMap = Vec::new();
+    for (raw_plan_id, raw_product_id) in obj {
+        let plan_id = raw_plan_id.trim().to_string();
+        let product_id = raw_product_id.as_str().unwrap_or("").trim().to_string();
+        if !plan_id.is_empty() && !product_id.is_empty() {
+            result.retain(|(p, _)| *p != plan_id);
+            result.push((plan_id, product_id));
+        }
+    }
+    result
+}
+
+/// Parst einen Zyklus-Schlüssel; nur `{1,12}` sind gültig (Python
+/// `billing_parse_cycle_key`).
+fn parse_cycle_key(raw: &str) -> Option<u32> {
+    let cycle: u32 = raw.trim().parse().ok()?;
+    CYCLE_DISCOUNTS
+        .iter()
+        .any(|(c, _)| *c == cycle)
+        .then_some(cycle)
+}
+
+/// Effektive Price-ID eines Plans für einen Zyklus mit Vault-Override.
+///
+/// Reihenfolge (Python `_billing_price_id_for_plan` + `billing_merge_price_id_defaults`):
+/// eingecheckter Default gewinnt für bekannte Pläne; nur für Pläne OHNE
+/// eingecheckten Default greift die übergebene Vault-Map. `vault_price_map` kommt
+/// aus [`parse_price_id_mapping`]; in Produktion via [`price_id_map_from_env`].
+pub fn resolved_price_id(plan_id: &str, cycle_months: u32, vault_price_map: &PriceMap) -> Option<String> {
+    let cycle = normalize_billing_cycle(cycle_months);
+    if let Some(default) = price_id_default(plan_id, cycle) {
+        return Some(default.to_string());
+    }
+    // Kein eingecheckter Default → Vault darf den (neuen) Plan liefern.
+    vault_price_map
+        .iter()
+        .find(|(id, _)| id == plan_id)
+        .and_then(|(_, cycles)| cycles.iter().find(|(c, _)| *c == cycle))
+        .map(|(_, price_id)| price_id.clone())
+}
+
+/// Effektive Product-ID eines Plans mit Vault-Override (Vault gewinnt, Python
+/// `result.update(mapping)`).
+pub fn resolved_product_id(plan_id: &str, vault_product_map: &ProductMap) -> Option<String> {
+    if let Some((_, product_id)) = vault_product_map.iter().find(|(id, _)| id == plan_id) {
+        return Some(product_id.clone());
+    }
+    product_id_default(plan_id).map(str::to_string)
+}
+
+/// Liest die Price-Map aus der Umgebung (`STRIPE_PRICE_ID_MAP`, Alias
+/// `TWITCH_BILLING_STRIPE_PRICE_ID_MAP`) und parst sie.
+pub fn price_id_map_from_env() -> PriceMap {
+    parse_price_id_mapping(&first_env(&[
+        "STRIPE_PRICE_ID_MAP",
+        "TWITCH_BILLING_STRIPE_PRICE_ID_MAP",
+    ]))
+}
+
+/// Liest die Product-Map aus der Umgebung (`STRIPE_PRODUCT_ID_MAP`, Alias
+/// `TWITCH_BILLING_STRIPE_PRODUCT_ID_MAP`) und parst sie.
+pub fn product_id_map_from_env() -> ProductMap {
+    parse_product_id_mapping(&first_env(&[
+        "STRIPE_PRODUCT_ID_MAP",
+        "TWITCH_BILLING_STRIPE_PRODUCT_ID_MAP",
+    ]))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -708,6 +863,76 @@ mod tests {
         assert_eq!(cq12["price"]["total_net_label"], "23,88 EUR");
         // Unbekannter Zyklus fällt auf 1 zurück.
         assert_eq!(catalog_json(7)["cycle_months"], 1);
+    }
+
+    // ── P2.126: Vault-Override-Layer ────────────────────────────────────────
+    #[test]
+    fn parse_price_id_mapping_normalizes_and_filters() {
+        let raw = r#"{
+            "new_plan": {"1": "price_new_1m", "12": "price_new_12m", "6": "price_invalid_cycle"},
+            "leer": {"1": "  "},
+            "  ": {"1": "x"}
+        }"#;
+        let map = parse_price_id_mapping(raw);
+        // "leer" (nur leere ID) und "" (leerer Plan) fallen raus.
+        assert_eq!(map.len(), 1);
+        let (plan, cycles) = &map[0];
+        assert_eq!(plan, "new_plan");
+        // Zyklus 6 ist ungültig → verworfen; nur 1 + 12 bleiben.
+        assert_eq!(cycles.len(), 2);
+        assert!(cycles.contains(&(1, "price_new_1m".to_string())));
+        assert!(cycles.contains(&(12, "price_new_12m".to_string())));
+        // Ungültiges JSON / Nicht-Objekt → leer.
+        assert!(parse_price_id_mapping("nicht json").is_empty());
+        assert!(parse_price_id_mapping("[1,2]").is_empty());
+        assert!(parse_price_id_mapping("").is_empty());
+    }
+
+    #[test]
+    fn resolved_price_id_default_wins_for_known_plan() {
+        // Vault versucht raid_boost umzubiegen — Default gewinnt (bekannter Plan).
+        let vault = parse_price_id_mapping(r#"{"raid_boost": {"1": "price_VAULT_HIJACK"}}"#);
+        assert_eq!(
+            resolved_price_id("raid_boost", 1, &vault).as_deref(),
+            Some("price_1TeNGG0yU8I2yGJ0DhWzKQWU")
+        );
+    }
+
+    #[test]
+    fn resolved_price_id_vault_adds_new_plan() {
+        // Neuer Plan ohne eingecheckten Default → Vault liefert die ID.
+        let vault = parse_price_id_mapping(r#"{"future_plan": {"1": "price_future_1m"}}"#);
+        assert_eq!(
+            resolved_price_id("future_plan", 1, &vault).as_deref(),
+            Some("price_future_1m")
+        );
+        // Ohne Vault-Eintrag und ohne Default → None.
+        assert_eq!(resolved_price_id("future_plan", 12, &vault), None);
+    }
+
+    #[test]
+    fn resolved_product_id_vault_wins() {
+        // Product-IDs: Vault gewinnt (Python result.update).
+        let vault = parse_product_id_mapping(r#"{"chat_quiet": "prod_VAULT_OVERRIDE"}"#);
+        assert_eq!(
+            resolved_product_id("chat_quiet", &vault).as_deref(),
+            Some("prod_VAULT_OVERRIDE")
+        );
+        // Ohne Vault-Eintrag → eingecheckter Default.
+        let empty = parse_product_id_mapping("");
+        assert_eq!(
+            resolved_product_id("chat_quiet", &empty).as_deref(),
+            Some("prod_UYKKvIg1sbjVrl")
+        );
+        // Plan ohne Default und ohne Vault → None.
+        assert_eq!(resolved_product_id("raid_boost", &empty), None);
+    }
+
+    #[test]
+    fn parse_product_id_mapping_filters_empty() {
+        let map = parse_product_id_mapping(r#"{"a": "prod_a", "b": "", "  ": "prod_c"}"#);
+        assert_eq!(map.len(), 1);
+        assert_eq!(map[0], ("a".to_string(), "prod_a".to_string()));
     }
 
     #[test]

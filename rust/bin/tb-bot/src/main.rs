@@ -95,15 +95,15 @@ use eventsub_hooks::{
 };
 use offline_side_effects::OfflineSideEffects;
 use raid_adapters::{
-    HelixFallbackStreams, HelixRaidApi, HelixTokenClient, ManagerArrivalReadiness,
-    ManualRaidAdapter,
+    HelixFallbackStreams, HelixRaidApi, HelixTokenClient, ManualRaidAdapter,
 };
 use raid_arrival_wiring::RaidArrivalSinkImpl;
 use reauth_reminder::ReauthReminder;
 use score_refresh::ScoreRefreshResolver;
 use wiring::{
-    BotFollowerTokenSource, BrokerAnnouncementTransport, FollowerTokenSource, HelixFollowerSource,
-    HelixStreamSource, HelixSubscriptionTransport, HelixVodPreview, HelixVodSource, LivePingRoleAuto,
+    BotFollowerTokenSource, BrokerAnnouncementTransport, FollowerTokenSource,
+    FollowerTokenSourceWithStreamerFallback, HelixFollowerSource, HelixStreamSource,
+    HelixSubscriptionTransport, HelixVodPreview, HelixVodSource, LivePingRoleAuto,
     SubscriptionEventSubHooks,
 };
 
@@ -331,11 +331,27 @@ async fn main() {
     // Es gibt nur DIESEN einen BotTokenManager (kein zweiter Refresher).
     let chat_api_handle = chat_wiring::try_build_api(helix.as_ref().clone()).await;
     // P1.7: Bot-Token-Quelle für den Follower-Total-Abruf (moderator:read:followers).
+    // P1.19: mit verfügbarem Streamer-Token-Provider (Krypto-Key + Helix) wird die
+    // Bot-Token-Quelle mit dem Streamer-OAuth-Token-Fallback umwickelt — bei 403
+    // greift dann der Broadcaster-Token statt nur Bot-/App-Token. Der Provider ist
+    // eine eigene Instanz mit Arc-Clones (gleicher Advisory-Lock wie der Raid-Pfad,
+    // kein Dual-Refresh), da der Raid-TokenProvider erst weiter unten gebaut wird.
+    let follower_streamer_token_provider: Option<Arc<TokenProvider>> = helix
+        .as_ref()
+        .clone()
+        .and_then(|hc| build_moderator_token_provider(pool.clone(), hc));
     let follower_token_source: Option<Arc<dyn FollowerTokenSource>> =
         chat_api_handle.as_ref().map(|h| {
-            Arc::new(BotFollowerTokenSource {
+            let bot_source: Arc<dyn FollowerTokenSource> = Arc::new(BotFollowerTokenSource {
                 token_manager: h.bot_token_manager(),
-            }) as Arc<dyn FollowerTokenSource>
+            });
+            match follower_streamer_token_provider.clone() {
+                Some(token_provider) => Arc::new(FollowerTokenSourceWithStreamerFallback {
+                    inner: bot_source,
+                    token_provider,
+                }) as Arc<dyn FollowerTokenSource>,
+                None => bot_source,
+            }
         });
     let followers: Arc<dyn FollowerCountSource> = match helix.as_ref().clone() {
         Some(helix_client) => Arc::new(HelixFollowerSource {
@@ -595,14 +611,27 @@ async fn main() {
                 StrikesStore::new(pool.clone()),
                 executor,
                 pending.clone(),
-                Arc::new(ManagerArrivalReadiness {
+                // P2.58: ensure_ready liefert erst bei Subscription-Status
+                // `enabled` true (8s-Deadline, 500ms-Poll), statt sofort nach dem
+                // best-effort-Create.
+                Arc::new(raid_adapters::ManagerArrivalReadinessWithStatusPoll {
                     manager: manager.clone(),
+                    status_poll: raid_adapters::RaidSubscriptionStatusPoll {
+                        transport: Arc::new(HelixSubscriptionTransport {
+                            helix: helix_client.clone(),
+                        }),
+                        wait_timeout: std::time::Duration::from_secs_f64(8.0),
+                        poll_interval: std::time::Duration::from_millis(500),
+                    },
                 }),
                 Some(Arc::new(HelixFallbackStreams {
                     helix: helix_client.clone(),
                 })),
-                Some(Arc::new(raid_adapters::HelixFollowerEnricher {
+                // P2.49: Session-Cache-Backfill (twitch_stream_sessions) vor Helix
+                // — günstig, offline-resilient, kein Moderator-Token nötig.
+                Some(Arc::new(raid_adapters::CachedFollowerEnricher {
                     followers: followers.clone(),
+                    pool: pool.clone(),
                 })),
                 Some(OutreachBoostStore::new(pool.clone())),
             );
@@ -803,6 +832,10 @@ async fn main() {
             )
             .await;
             runtime.start_background(subscription_manager.clone());
+            // P2.14: einmaliger Eager-Partner-Invite-Backfill (inkl. 60s-Retry,
+            // danach Ende). Spawnt selbst einen Task und kehrt sofort zurück;
+            // NACH start_background, damit der Promo-Pfad parallel läuft.
+            runtime.spawn_partner_invite_backfill();
             runtime.hooks.clone()
         }
         None => eventsub_hooks,
@@ -904,6 +937,89 @@ async fn main() {
             pool.clone(),
             900,
         ));
+    }
+
+    // P1.21/P1.22/P2.63: 6h-Subs+Ads-Snapshot-Collector (Python
+    // `collect_analytics_data`). Je raid-aktivem Partner mit gültigem
+    // Broadcaster-Token wird scope-abhängig die Ad-Schedule
+    // (`channel:read:ads`) und der Subscriber-Snapshot
+    // (`channel:read:subscriptions`) über Helix abgerufen und persistiert.
+    // 2s-Throttle zwischen Usern; best-effort, Fehler nur geloggt. Gated auf
+    // HelixClient + DB_MASTER_KEY_V1 (Token-Auflösung via Raid-TokenProvider).
+    if let Some(helix_client) = helix.as_ref().clone() {
+        if let Some((token_provider, raid_auth)) =
+            build_telemetry_sub_auth(pool.clone(), helix_client.clone())
+        {
+            let collector_pool = pool.clone();
+            tokio::spawn(async move {
+                const INTERVAL: std::time::Duration = std::time::Duration::from_secs(6 * 60 * 60);
+                let mut tick = tokio::time::interval(INTERVAL);
+                tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+                loop {
+                    tick.tick().await;
+                    let partners: Result<Vec<(String, String)>, _> = sqlx::query_as(
+                        r#"
+                        SELECT twitch_user_id, twitch_login
+                        FROM twitch_raid_auth
+                        WHERE raid_enabled IS TRUE
+                          AND needs_reauth = FALSE
+                          AND COALESCE(twitch_user_id, '') <> ''
+                        "#,
+                    )
+                    .fetch_all(&collector_pool)
+                    .await;
+                    let partners = match partners {
+                        Ok(rows) => rows,
+                        Err(error) => {
+                            tracing::error!(%error, "Subs+Ads-Collector: Partner-Liste nicht ladbar");
+                            continue;
+                        }
+                    };
+                    for (uid, login) in &partners {
+                        let now = chrono::Utc::now();
+                        let token = match token_provider.get_valid_token_unrestricted(uid, now).await
+                        {
+                            Ok(Some(token)) => token,
+                            Ok(None) => continue,
+                            Err(error) => {
+                                tracing::debug!(uid = %uid, %error, "Subs+Ads-Collector: Token-Lookup fehlgeschlagen");
+                                continue;
+                            }
+                        };
+                        let scopes = raid_auth.get_scopes(uid).await.unwrap_or_default();
+                        if scopes.iter().any(|s| s == "channel:read:ads") {
+                            if let Err(error) =
+                                tb_analytics::ads_schedule_collector::collect_ads_schedule_for_user(
+                                    &collector_pool,
+                                    &helix_client,
+                                    uid,
+                                    login,
+                                    &token,
+                                )
+                                .await
+                            {
+                                tracing::warn!(uid = %uid, %error, "Subs+Ads-Collector: Ad-Schedule fehlgeschlagen");
+                            }
+                        }
+                        if scopes.iter().any(|s| s == "channel:read:subscriptions") {
+                            if let Err(error) =
+                                tb_analytics::subs_snapshot_collector::collect_subs_for_user(
+                                    &collector_pool,
+                                    &helix_client,
+                                    uid,
+                                    login,
+                                    &token,
+                                )
+                                .await
+                            {
+                                tracing::warn!(uid = %uid, %error, "Subs+Ads-Collector: Subs-Snapshot fehlgeschlagen");
+                            }
+                        }
+                        tokio::time::sleep(std::time::Duration::from_secs(2)).await;
+                    }
+                }
+            });
+        }
     }
 
     // Highlight-Erstellung bleibt nach Grillme Block 15/20 standardmäßig AUS.

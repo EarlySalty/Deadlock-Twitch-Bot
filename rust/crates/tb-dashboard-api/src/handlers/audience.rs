@@ -212,9 +212,11 @@ pub async fn viewer_profiles_handler(
                 SELECT DISTINCT chatter_login
                 FROM twitch_chatter_rollup
                 WHERE LOWER(streamer_login) = $1
-                  AND NOT (chatter_login = ANY($2::text[]))
+                  AND (chatter_login IS NULL OR chatter_login = ''
+                       OR LOWER(chatter_login) <> ALL($2::text[]))
             )
-              AND NOT (cr.chatter_login = ANY($2::text[]))
+              AND (cr.chatter_login IS NULL OR cr.chatter_login = ''
+                   OR LOWER(cr.chatter_login) <> ALL($2::text[]))
             GROUP BY cr.chatter_login
         )
         SELECT streamer_count, COUNT(*) AS viewer_count
@@ -229,7 +231,8 @@ pub async fn viewer_profiles_handler(
         WHERE LOWER(streamer_login) = $1
           AND total_sessions >= 3
           AND total_messages = 0
-          AND NOT (chatter_login = ANY($2::text[]))
+          AND (chatter_login IS NULL OR chatter_login = ''
+               OR LOWER(chatter_login) <> ALL($2::text[]))
     "#;
 
     let dist_rows = match sqlx::query(dist_sql)
@@ -332,7 +335,8 @@ pub async fn audience_sharing_handler(
         SELECT COUNT(DISTINCT chatter_login) AS total
         FROM twitch_chatter_rollup
         WHERE LOWER(streamer_login) = $1
-          AND NOT (chatter_login = ANY($2::text[]))
+          AND (chatter_login IS NULL OR chatter_login = ''
+               OR LOWER(chatter_login) <> ALL($2::text[]))
     "#;
     let my_total: i64 = sqlx::query(my_total_sql)
         .bind(&streamer)
@@ -357,8 +361,10 @@ pub async fn audience_sharing_handler(
             ON cr1.chatter_login = cr2.chatter_login
            AND LOWER(cr2.streamer_login) != LOWER(cr1.streamer_login)
         WHERE LOWER(cr1.streamer_login) = $2
-          AND NOT (cr1.chatter_login = ANY($3::text[]))
-          AND NOT (cr2.chatter_login = ANY($3::text[]))
+          AND (cr1.chatter_login IS NULL OR cr1.chatter_login = ''
+               OR LOWER(cr1.chatter_login) <> ALL($3::text[]))
+          AND (cr2.chatter_login IS NULL OR cr2.chatter_login = ''
+               OR LOWER(cr2.chatter_login) <> ALL($3::text[]))
         GROUP BY cr2.streamer_login
         HAVING COUNT(DISTINCT cr1.chatter_login) >= 3
         ORDER BY shared_viewers DESC
@@ -415,8 +421,10 @@ pub async fn audience_sharing_handler(
            AND LOWER(cr2.streamer_login) = ANY($1::text[])
            AND LOWER(cr2.streamer_login) != LOWER(cr1.streamer_login)
         WHERE LOWER(cr1.streamer_login) = $2
-          AND NOT (cr1.chatter_login = ANY($3::text[]))
-          AND NOT (cr2.chatter_login = ANY($3::text[]))
+          AND (cr1.chatter_login IS NULL OR cr1.chatter_login = ''
+               OR LOWER(cr1.chatter_login) <> ALL($3::text[]))
+          AND (cr2.chatter_login IS NULL OR cr2.chatter_login = ''
+               OR LOWER(cr2.chatter_login) <> ALL($3::text[]))
         GROUP BY month, cr2.streamer_login
         ORDER BY month
     "#;
@@ -740,4 +748,52 @@ pub async fn audience_insights_handler(
             "conversionTrendAvailable": false,
         },
     })).into_response()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use axum::body::to_bytes;
+    use sqlx::postgres::{PgConnectOptions, PgPoolOptions};
+    use std::str::FromStr;
+
+    async fn make_pool(schema: &str) -> Option<PgPool> {
+        let dsn = std::env::var("TB_TEST_DATABASE_URL").ok()?;
+        let admin = PgPoolOptions::new().max_connections(1).connect(&dsn).await.unwrap();
+        sqlx::query(&format!("DROP SCHEMA IF EXISTS {schema} CASCADE")).execute(&admin).await.unwrap();
+        sqlx::query(&format!("CREATE SCHEMA {schema}")).execute(&admin).await.unwrap();
+        admin.close().await;
+        let opts = PgConnectOptions::from_str(&dsn).unwrap().options([("search_path", schema)]);
+        let pool = PgPoolOptions::new().max_connections(2).connect_with(opts).await.unwrap();
+        sqlx::query("CREATE TABLE twitch_chatter_rollup (streamer_login TEXT, chatter_login TEXT, total_sessions INTEGER DEFAULT 0, total_messages INTEGER DEFAULT 0, first_seen_at TIMESTAMPTZ, last_seen_at TIMESTAMPTZ)")
+            .execute(&pool).await.unwrap();
+        Some(pool)
+    }
+
+    async fn body_json(resp: axum::response::Response) -> serde_json::Value {
+        let bytes = to_bytes(resp.into_body(), usize::MAX).await.unwrap();
+        serde_json::from_slice(&bytes).unwrap()
+    }
+
+    // P2.68: mixed-case Bot-Login (Nightbot) muss case-insensitiv aus der
+    // viewer-profiles Exklusivitäts-Verteilung gefiltert werden.
+    #[tokio::test]
+    async fn viewer_profiles_filters_mixed_case_bot() {
+        let Some(pool) = make_pool("t_aud_profiles_bot").await else { return };
+        // Echter exklusiver Viewer (nur 1 Streamer)
+        sqlx::query("INSERT INTO twitch_chatter_rollup (streamer_login, chatter_login) VALUES ('nani','viewer1')")
+            .execute(&pool).await.unwrap();
+        // Bot mit gemischter Schreibweise — darf nicht in der Verteilung auftauchen
+        sqlx::query("INSERT INTO twitch_chatter_rollup (streamer_login, chatter_login) VALUES ('nani','Nightbot')")
+            .execute(&pool).await.unwrap();
+
+        let resp = viewer_profiles_handler(
+            DashboardAuthLevel::Localhost,
+            State(pool),
+            Query(ProfilesQuery { streamer: Some("nani".into()) }),
+        ).await.into_response();
+        assert_eq!(resp.status(), StatusCode::OK);
+        let v = body_json(resp).await;
+        assert_eq!(v["profiles"]["total"], 1, "Nightbot (mixed-case) muss gefiltert werden");
+    }
 }

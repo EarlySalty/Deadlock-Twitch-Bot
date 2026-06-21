@@ -584,6 +584,48 @@ impl ArchiveMode {
     }
 }
 
+/// Entwaffnet die gespeicherte Raid-OAuth eines blockierten Streamers
+/// (Python `set_streamer_block_state`, `partner_registry.py:1613-1632`).
+///
+/// Setzt `raid_enabled = FALSE` und löscht die Reauth-Flags
+/// (`needs_reauth = FALSE`, `reauth_notified_at = NULL`), damit ein blockierter
+/// Streamer nicht weiter von Raid-/Auth-Flows aufgegriffen wird, die auf
+/// `twitch_raid_auth.raid_enabled` gaten. Match erfolgt über den Login
+/// (case-insensitiv), analog zum Block-UPDATE auf `twitch_partners`.
+///
+/// Best-effort: Fehlt die `twitch_raid_auth`-Tabelle bzw. eine ihrer Reauth-
+/// Spalten (Minimal-Setup ohne vollständiges Raid-Subsystem), wird der Block
+/// nicht abgebrochen — es gibt dann schlicht keine Raid-OAuth zu entwaffnen.
+/// Alle anderen DB-Fehler werden propagiert. In Prod (vollständiges Schema)
+/// feuert das UPDATE vollständig.
+async fn disarm_raid_auth_on_block(pool: &PgPool, login: &str) -> Result<(), sqlx::Error> {
+    let result = sqlx::query(
+        r#"
+            UPDATE twitch_raid_auth
+            SET raid_enabled = FALSE,
+                needs_reauth = FALSE,
+                reauth_notified_at = NULL
+            WHERE LOWER(COALESCE(twitch_login, '')) = LOWER($1)
+            "#,
+    )
+    .bind(login)
+    .execute(pool)
+    .await;
+
+    match result {
+        Ok(_) => Ok(()),
+        // 42P01 = undefined_table, 42703 = undefined_column: Raid-Subsystem/Schema
+        // unvollständig → kein Abbruch des Block-Vorgangs.
+        Err(sqlx::Error::Database(db_err))
+            if matches!(db_err.code().as_deref(), Some("42P01") | Some("42703")) =>
+        {
+            tracing::debug!("twitch_raid_auth (Spalte/Tabelle) fehlt — Block-Disarm übersprungen");
+            Ok(())
+        }
+        Err(e) => Err(e),
+    }
+}
+
 /// Archiviert, reaktiviert, blockiert oder entsperrt einen Partner-Eintrag.
 ///
 /// Entspricht `set_streamer_archive_state` / `set_streamer_block_state` in Python.
@@ -625,19 +667,23 @@ pub async fn archive_streamer(
         .execute(pool)
         .await?
         .rows_affected(),
-        ArchiveMode::Block => sqlx::query(
-            r#"
+        ArchiveMode::Block => {
+            let affected = sqlx::query(
+                r#"
                 UPDATE twitch_partners
                 SET technical_pause_reason = 'blocked',
                     manual_partner_opt_out = 1,
                     raid_bot_enabled = 0
                 WHERE LOWER(twitch_login) = LOWER($1)
                 "#,
-        )
-        .bind(login)
-        .execute(pool)
-        .await?
-        .rows_affected(),
+            )
+            .bind(login)
+            .execute(pool)
+            .await?
+            .rows_affected();
+            disarm_raid_auth_on_block(pool, login).await?;
+            affected
+        }
         ArchiveMode::Unblock => sqlx::query(
             r#"
                 UPDATE twitch_partners
@@ -675,13 +721,15 @@ pub async fn archive_streamer(
                 .await?
                 .rows_affected()
             } else {
-                sqlx::query(
+                let affected = sqlx::query(
                     "UPDATE twitch_partners SET technical_pause_reason = 'blocked', manual_partner_opt_out = 1, raid_bot_enabled = 0 WHERE LOWER(twitch_login) = LOWER($1)",
                 )
                 .bind(login)
                 .execute(pool)
                 .await?
-                .rows_affected()
+                .rows_affected();
+                disarm_raid_auth_on_block(pool, login).await?;
+                affected
             }
         }
         ArchiveMode::Toggle => {
@@ -1303,12 +1351,13 @@ mod tests {
         sqlx::query(
             r#"
             CREATE TABLE IF NOT EXISTS twitch_raid_auth (
-                twitch_user_id   TEXT PRIMARY KEY,
-                twitch_login     TEXT,
-                raid_enabled     BOOLEAN,
-                needs_reauth     BOOLEAN,
-                authorized_at    TIMESTAMPTZ,
-                token_expires_at TIMESTAMPTZ
+                twitch_user_id     TEXT PRIMARY KEY,
+                twitch_login       TEXT,
+                raid_enabled       BOOLEAN,
+                needs_reauth       BOOLEAN,
+                reauth_notified_at TIMESTAMPTZ,
+                authorized_at      TIMESTAMPTZ,
+                token_expires_at   TIMESTAMPTZ
             )
             "#,
         )
@@ -1849,5 +1898,81 @@ mod tests {
 
         let result = session_detail(&pool, 99999).await.unwrap();
         assert!(result.is_none());
+    }
+
+    #[tokio::test]
+    async fn block_entwaffnet_raid_auth() {
+        let dsn = db_dsn_or_skip!();
+        let pool = make_pool(&dsn, "test_sc_block_raid_auth").await;
+
+        sqlx::query(
+            "INSERT INTO twitch_partners (twitch_login, twitch_user_id, status, raid_bot_enabled) \
+             VALUES ('blockme', 'uid_block', 'active', 1)",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+        // Raid-OAuth bewaffnet + Reauth-Flags gesetzt.
+        sqlx::query(
+            "INSERT INTO twitch_raid_auth \
+                (twitch_user_id, twitch_login, raid_enabled, needs_reauth, reauth_notified_at) \
+             VALUES ('uid_block', 'BlockMe', TRUE, TRUE, NOW())",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+
+        let ok = archive_streamer(&pool, "blockme", ArchiveMode::Block)
+            .await
+            .unwrap();
+        assert!(ok);
+
+        let row: (Option<bool>, Option<bool>, Option<DateTime<Utc>>) = sqlx::query_as(
+            "SELECT raid_enabled, needs_reauth, reauth_notified_at \
+             FROM twitch_raid_auth WHERE twitch_user_id = 'uid_block'",
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert_eq!(row.0, Some(false), "raid_enabled muss FALSE sein");
+        assert_eq!(row.1, Some(false), "needs_reauth muss gelöscht sein");
+        assert!(row.2.is_none(), "reauth_notified_at muss NULL sein");
+    }
+
+    #[tokio::test]
+    async fn toggle_block_entwaffnet_raid_auth_beim_blocken() {
+        let dsn = db_dsn_or_skip!();
+        let pool = make_pool(&dsn, "test_sc_toggleblock_raid_auth").await;
+
+        sqlx::query(
+            "INSERT INTO twitch_partners (twitch_login, twitch_user_id, status) \
+             VALUES ('togglock', 'uid_tog', 'active')",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+        sqlx::query(
+            "INSERT INTO twitch_raid_auth \
+                (twitch_user_id, twitch_login, raid_enabled, needs_reauth, reauth_notified_at) \
+             VALUES ('uid_tog', 'togglock', TRUE, TRUE, NOW())",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+
+        // Erster ToggleBlock: nicht-blockiert → blockiert ⇒ Raid-OAuth entwaffnen.
+        let ok = archive_streamer(&pool, "togglock", ArchiveMode::ToggleBlock)
+            .await
+            .unwrap();
+        assert!(ok);
+
+        let row: (Option<bool>, Option<bool>) = sqlx::query_as(
+            "SELECT raid_enabled, needs_reauth FROM twitch_raid_auth WHERE twitch_user_id = 'uid_tog'",
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert_eq!(row.0, Some(false));
+        assert_eq!(row.1, Some(false));
     }
 }

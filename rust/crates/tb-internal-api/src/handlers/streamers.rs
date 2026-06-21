@@ -63,11 +63,12 @@
 //!   departnern (clear_verification) + Rolle entziehen; unbekannte Modi → 200
 //!   "Unbekannter Modus" (Python-Parität, KEIN Permanent-Fallback).
 
+use crate::idempotency::{IdempotencyState, Prepared, IDEMPOTENCY_KEY_HEADER};
 use crate::streamer_lifecycle as lifecycle;
 use axum::{
-    extract::{Path, Query, State},
-    http::StatusCode,
-    response::IntoResponse,
+    extract::{OriginalUri, Path, Query, State},
+    http::{HeaderMap, StatusCode},
+    response::{IntoResponse, Response},
     Extension, Json,
 };
 use serde::{Deserialize, Serialize};
@@ -145,13 +146,10 @@ pub trait ChatActionPort: Send + Sync {
 pub struct ChatActionExt(pub Option<Arc<dyn ChatActionPort>>);
 
 // ── Response-Typen ────────────────────────────────────────────────────────────
-
-#[derive(Serialize)]
-pub struct OkLoginMessageResponse {
-    pub ok: bool,
-    pub login: String,
-    pub message: String,
-}
+//
+// Die `{ok, login, message}`-Antwort der Mutations-Routen wird seit P2.143 direkt
+// als `serde_json::Value` über [`ok_login_message`] gebaut (der Idempotenz-Layer
+// cacht/repliziert `(StatusCode, Value)`), daher kein eigenes Response-Struct mehr.
 
 /// Antwort-Shape von `GET /streamers`.
 ///
@@ -170,22 +168,9 @@ pub struct StreamersListResponse {
 
 // ── Request-Typen ─────────────────────────────────────────────────────────────
 
-/// POST /streamers/:login/verify
-/// Python sendet: {"mode": "permanent"|"temp"|"clear"|"failed"}
-#[derive(Deserialize, Default)]
-pub struct VerifyRequest {
-    #[serde(default)]
-    pub mode: Option<String>,
-}
-
-/// POST /streamers/:login/archive
-/// Python sendet: {"mode": "toggle"|"archive"|"unarchive"|"block"|...}
-/// Default wenn leer/fehlt: "toggle" (Python-Semantik).
-#[derive(Deserialize, Default)]
-pub struct ArchiveRequest {
-    #[serde(default)]
-    pub mode: Option<String>,
-}
+// verify/archive lesen ihren `mode` seit P2.143 direkt aus dem rohen
+// JSON-Payload (nötig für den Idempotenz-Fingerprint) — eigene Request-Structs
+// entfallen.
 
 /// POST /streamers/:login/discord-flag
 /// Python sendet: {"is_on_discord": true/false}
@@ -223,8 +208,11 @@ pub struct DiscordProfileRequest {
     #[serde(default, alias = "discordDisplayName")]
     pub discord_display_name: Option<String>,
     /// Default true — wie Python: server._parse_bool(body.get("mark_member", body.get("member_flag")), default=True)
+    /// Loose-Coercion (String/Number/bool) statt rohem serde-bool, damit Clients
+    /// `"true"`/`1`/`"off"` etc. senden dürfen (Python `_parse_bool`, default=True).
     #[serde(
         default = "default_mark_member",
+        deserialize_with = "deserialize_mark_member",
         alias = "markMember",
         alias = "member_flag"
     )]
@@ -233,6 +221,16 @@ pub struct DiscordProfileRequest {
 
 fn default_mark_member() -> bool {
     true
+}
+
+/// Deserialisiert `mark_member` mit Pythons Loose-Coercion (`_parse_bool`,
+/// default=True): akzeptiert bool, Zahl und String; null/leer/unbekannt → true.
+fn deserialize_mark_member<'de, D>(deserializer: D) -> Result<bool, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let value = Option::<serde_json::Value>::deserialize(deserializer)?;
+    Ok(parse_bool_with_default(value.as_ref(), true))
 }
 
 // ── Query-Typen ───────────────────────────────────────────────────────────────
@@ -286,12 +284,25 @@ pub async fn add_handler(
     auth: AuthLevel,
     State(pool): State<PgPool>,
     Extension(helix): Extension<Arc<Option<HelixClient>>>,
+    Extension(idem): Extension<IdempotencyState>,
+    headers: HeaderMap,
+    OriginalUri(uri): OriginalUri,
     Json(body): Json<serde_json::Value>,
-) -> Result<impl IntoResponse, ApiError> {
+) -> Response {
     if !auth.is_privileged() {
-        return Err(ApiError::unauthorized());
+        return ApiError::unauthorized().into_response();
     }
+    with_idempotency(&idem, &headers, &uri, "POST", &body, || {
+        add_handler_inner(&pool, helix.as_ref().as_ref(), &body)
+    })
+    .await
+}
 
+async fn add_handler_inner(
+    pool: &PgPool,
+    helix: Option<&HelixClient>,
+    body: &serde_json::Value,
+) -> Result<(StatusCode, serde_json::Value), ApiError> {
     // Python: login = server._normalize_login(str(body.get("login") or body.get("streamer") or body.get("twitch_login") or ""))
     let raw = body
         .get("login")
@@ -309,13 +320,12 @@ pub async fn add_handler(
     };
 
     // Helix-Lookup: user_id auflösen und Login validieren
-    let user_id: Option<String> = match (*helix).as_ref() {
+    let user_id: Option<String> = match helix {
         None => {
             return Ok((
                 StatusCode::SERVICE_UNAVAILABLE,
-                Json(json!({"ok": false, "error": "helix_unavailable"})),
-            )
-                .into_response());
+                json!({"ok": false, "error": "helix_unavailable"}),
+            ));
         }
         Some(client) => match client.get_users(&[login.as_str()]).await {
             Ok(map) => {
@@ -324,9 +334,8 @@ pub async fn add_handler(
                 } else {
                     return Ok((
                         StatusCode::UNPROCESSABLE_ENTITY,
-                        Json(json!({"ok": false, "error": "unknown_login"})),
-                    )
-                        .into_response());
+                        json!({"ok": false, "error": "unknown_login"}),
+                    ));
                 }
             }
             Err(e) => {
@@ -344,21 +353,20 @@ pub async fn add_handler(
     );
 
     use db::AddStreamerResult;
-    match db::add_streamer(&pool, &login, user_id.as_deref()).await {
+    match db::add_streamer(pool, &login, user_id.as_deref()).await {
         Ok(AddStreamerResult::AlreadyExists) => Ok((
             StatusCode::OK,
-            Json(json!({"ok": true, "login": login, "message": "already_active_partner"})),
-        )
-            .into_response()),
+            json!({"ok": true, "login": login, "message": "already_active_partner"}),
+        )),
         Ok(AddStreamerResult::Added) => {
             // require_link + next_link_check_at (now+30d) nachtragen und
             // Kategorie-Stats backfillen (Python `_cmd_add`: upsert_non_partner_streamer
             // + backfill_tracked_stats_from_category). Beide best-effort über
             // die native Lifecycle-Schicht; Fehler werden geloggt, nicht propagiert.
-            if let Err(e) = lifecycle::backfill_require_link(&pool, &login, require_link).await {
+            if let Err(e) = lifecycle::backfill_require_link(pool, &login, require_link).await {
                 tracing::warn!("backfill_require_link für {login} fehlgeschlagen: {e}");
             }
-            let copied = lifecycle::backfill_tracked_stats_from_category(&pool, &login)
+            let copied = lifecycle::backfill_tracked_stats_from_category(pool, &login)
                 .await
                 .unwrap_or(0);
             let suffix = if copied > 0 {
@@ -368,9 +376,8 @@ pub async fn add_handler(
             };
             Ok((
                 StatusCode::CREATED,
-                Json(json!({"ok": true, "login": login, "message": format!("{login} hinzugefügt{suffix}")})),
-            )
-                .into_response())
+                json!({"ok": true, "login": login, "message": format!("{login} hinzugefügt{suffix}")}),
+            ))
         }
         Err(e) => {
             tracing::error!("add_streamer DB-Fehler: {e}");
@@ -382,16 +389,99 @@ pub async fn add_handler(
 /// Parst einen losen Bool-Wert (bool/Zahl/String) wie Pythons `_parse_bool`;
 /// fehlend/null/unbekannt → `false`.
 fn parse_bool_loose(value: Option<&serde_json::Value>) -> bool {
+    parse_bool_with_default(value, false)
+}
+
+/// Pythons `_parse_bool(value, default=...)` (policy.py:268-282):
+/// - None/Null → `default`
+/// - bool → der Wert
+/// - Zahl → `value != 0`
+/// - String (getrimmt, lowercased): leer → `default`; "1"/"true"/"yes"/"on" → true;
+///   "0"/"false"/"no"/"off" → false; sonst → `default`.
+fn parse_bool_with_default(value: Option<&serde_json::Value>, default: bool) -> bool {
     match value {
+        None | Some(serde_json::Value::Null) => default,
         Some(serde_json::Value::Bool(b)) => *b,
-        Some(serde_json::Value::Number(n)) => n.as_i64().unwrap_or(0) != 0,
+        Some(serde_json::Value::Number(n)) => n.as_f64().unwrap_or(0.0) != 0.0,
         Some(serde_json::Value::String(s)) => {
-            matches!(
-                s.trim().to_lowercase().as_str(),
-                "true" | "1" | "yes" | "on"
-            )
+            let lowered = s.trim().to_lowercase();
+            if lowered.is_empty() {
+                default
+            } else if matches!(lowered.as_str(), "1" | "true" | "yes" | "on") {
+                true
+            } else if matches!(lowered.as_str(), "0" | "false" | "no" | "off") {
+                false
+            } else {
+                default
+            }
         }
-        _ => false,
+        _ => default,
+    }
+}
+
+// ── Idempotenz-Wrapper für Mutations-Routen (P2.143) ────────────────────────────
+
+/// Liest den rohen `Idempotency-Key`-Header (getrimmt).
+fn idem_key(headers: &HeaderMap) -> Option<&str> {
+    headers.get(IDEMPOTENCY_KEY_HEADER).and_then(|v| v.to_str().ok())
+}
+
+/// Pfad ohne/mit Query für Scope-Key bzw. Fingerprint (Python `_prepare_idempotency`).
+fn idem_paths(uri: &axum::http::Uri) -> (String, String) {
+    let path = uri.path().to_string();
+    let path_qs = uri
+        .path_and_query()
+        .map(|pq| pq.as_str().to_string())
+        .unwrap_or_else(|| path.clone());
+    (path, path_qs)
+}
+
+/// Wickelt eine Mutations-Route in den geteilten Idempotenz-Layer (Python
+/// `_prepare_idempotency` + `_release_idempotency_owner`, app.py:587-762):
+///
+/// - Kein/leerer Key → Handler läuft normal (`Skip`).
+/// - Replay/409/400/Inflight-Wait → sofortige Antwort (`Immediate`).
+/// - Owner → Handler ausführen; Erfolg (`Ok`) wird gecacht (`cacheable=true`),
+///   Fehler (`Err`) NICHT (Python: `owner_cacheable` erst nach Erfolg `True`).
+///
+/// `run` liefert die Handler-Antwort als `(StatusCode, Value)` — exakt das, was
+/// gecacht und als JSON-Body zurückgegeben wird.
+async fn with_idempotency<F, Fut>(
+    idem: &IdempotencyState,
+    headers: &HeaderMap,
+    uri: &axum::http::Uri,
+    method: &str,
+    raw_payload: &serde_json::Value,
+    run: F,
+) -> Response
+where
+    F: FnOnce() -> Fut,
+    Fut: std::future::Future<Output = Result<(StatusCode, serde_json::Value), ApiError>>,
+{
+    let (path, path_qs) = idem_paths(uri);
+    match idem
+        .prepare(idem_key(headers), method, &path, &path_qs, raw_payload)
+        .await
+    {
+        Prepared::Immediate(resp) => resp,
+        Prepared::Skip => match run().await {
+            Ok((status, body)) => (status, Json(body)).into_response(),
+            Err(e) => e.into_response(),
+        },
+        Prepared::Owner(slot) => match run().await {
+            Ok((status, body)) => {
+                slot.complete(status.as_u16(), &body, true);
+                (status, Json(body)).into_response()
+            }
+            Err(e) => {
+                let resp = e.into_response();
+                // Fehler nicht cachen (Python owner_cacheable=False), aber Waiter
+                // mit dem Fehler-Status auflösen.
+                let status = resp.status().as_u16();
+                slot.complete(status, &serde_json::json!({"error": "internal_error"}), false);
+                resp
+            }
+        },
     }
 }
 
@@ -459,19 +549,34 @@ pub async fn remove_handler(
     auth: AuthLevel,
     State(pool): State<PgPool>,
     Extension(role_ext): Extension<DiscordRoleExt>,
+    Extension(idem): Extension<IdempotencyState>,
+    headers: HeaderMap,
+    OriginalUri(uri): OriginalUri,
     Path(raw_login): Path<String>,
-) -> Result<impl IntoResponse, ApiError> {
+) -> Response {
     if !auth.is_privileged() {
-        return Err(ApiError::unauthorized());
+        return ApiError::unauthorized().into_response();
     }
+    // DELETE ohne Body → leeres Payload-Objekt für den Idempotenz-Fingerprint.
+    let payload = json!({});
+    with_idempotency(&idem, &headers, &uri, "DELETE", &payload, || {
+        remove_handler_inner(&pool, &role_ext, &raw_login)
+    })
+    .await
+}
 
-    let login = match normalize_twitch_login(&raw_login) {
+async fn remove_handler_inner(
+    pool: &PgPool,
+    role_ext: &DiscordRoleExt,
+    raw_login: &str,
+) -> Result<(StatusCode, serde_json::Value), ApiError> {
+    let login = match normalize_twitch_login(raw_login) {
         Some(l) => l,
         None => return Err(ApiError::bad_request("invalid login")),
     };
 
     // Schritt 1: aktiven Partner departnern (Status-Wechsel + Raid-Auth-Disable).
-    let departnered = lifecycle::departner_active_partner(&pool, &login, false)
+    let departnered = lifecycle::departner_active_partner(pool, &login, false)
         .await
         .map_err(|e| {
             tracing::error!("departner_active_partner DB-Fehler: {e}");
@@ -481,7 +586,7 @@ pub async fn remove_handler(
     // Schritt 2: ohne aktiven Partner → Streamer-Zeile archivieren/löschen.
     let removed_streamer = if departnered.is_none() {
         use db::RemoveStreamerResult;
-        match db::remove_streamer(&pool, &login).await {
+        match db::remove_streamer(pool, &login).await {
             Ok(RemoveStreamerResult::NotFound) => false,
             Ok(_) => true,
             Err(e) => {
@@ -492,7 +597,7 @@ pub async fn remove_handler(
     } else {
         // remove_streamer löscht twitch_live_state mit; im Departner-Pfad
         // holen wir das separat nach (Python: explizites DELETE in _cmd_remove).
-        lifecycle::clear_live_state(&pool, &login)
+        lifecycle::clear_live_state(pool, &login)
             .await
             .map_err(|e| {
                 tracing::error!("clear_live_state DB-Fehler: {e}");
@@ -509,25 +614,26 @@ pub async fn remove_handler(
                 .await;
             role_note = " (Streamer-Rolle entfernt)".to_string();
         }
-        return Ok(Json(OkLoginMessageResponse {
-            ok: true,
-            login: login.clone(),
-            message: format!("{login} operativ deaktiviert{role_note}"),
-        })
-        .into_response());
+        return Ok(ok_login_message(
+            &login,
+            format!("{login} operativ deaktiviert{role_note}"),
+        ));
     }
 
     if removed_streamer {
-        return Ok(Json(OkLoginMessageResponse {
-            ok: true,
-            login: login.clone(),
-            message: format!("{login} entfernt"),
-        })
-        .into_response());
+        return Ok(ok_login_message(&login, format!("{login} entfernt")));
     }
 
     // Python: "{login} war nicht gespeichert" → 404 (interne API-Konvention).
     Err(ApiError::not_found())
+}
+
+/// Baut die kanonische `{ok, login, message}`-Antwort als `(200, Value)`.
+fn ok_login_message(login: &str, message: String) -> (StatusCode, serde_json::Value) {
+    (
+        StatusCode::OK,
+        json!({ "ok": true, "login": login, "message": message }),
+    )
 }
 
 /// `POST /internal/twitch/v1/streamers/:login/verify`
@@ -555,20 +661,37 @@ pub async fn verify_handler(
     State(pool): State<PgPool>,
     Extension(helix): Extension<Arc<Option<HelixClient>>>,
     Extension(role_ext): Extension<DiscordRoleExt>,
+    Extension(idem): Extension<IdempotencyState>,
+    headers: HeaderMap,
+    OriginalUri(uri): OriginalUri,
     Path(raw_login): Path<String>,
-    body: Option<Json<VerifyRequest>>,
-) -> Result<impl IntoResponse, ApiError> {
+    body: Option<Json<serde_json::Value>>,
+) -> Response {
     if !auth.is_privileged() {
-        return Err(ApiError::unauthorized());
+        return ApiError::unauthorized().into_response();
     }
+    let payload = body.map(|Json(v)| v).unwrap_or_else(|| json!({}));
+    with_idempotency(&idem, &headers, &uri, "POST", &payload, || {
+        verify_handler_inner(&pool, helix.as_ref().as_ref(), &role_ext, &raw_login, &payload)
+    })
+    .await
+}
 
-    let login = match normalize_twitch_login(&raw_login) {
+async fn verify_handler_inner(
+    pool: &PgPool,
+    helix: Option<&HelixClient>,
+    role_ext: &DiscordRoleExt,
+    raw_login: &str,
+    payload: &serde_json::Value,
+) -> Result<(StatusCode, serde_json::Value), ApiError> {
+    let login = match normalize_twitch_login(raw_login) {
         Some(l) => l,
         None => return Err(ApiError::bad_request("invalid login")),
     };
 
-    let mode = body
-        .and_then(|b| b.mode.clone())
+    let mode = payload
+        .get("mode")
+        .and_then(|v| v.as_str())
         .map(|m| {
             let m = m.trim().to_lowercase();
             if m.is_empty() {
@@ -579,14 +702,7 @@ pub async fn verify_handler(
         })
         .unwrap_or_else(|| "permanent".to_string());
 
-    let ok_message = |message: String| {
-        Json(OkLoginMessageResponse {
-            ok: true,
-            login: login.clone(),
-            message,
-        })
-        .into_response()
-    };
+    let ok_message = |message: String| ok_login_message(&login, message);
 
     let internal = |e: sqlx::Error, ctx: &str| {
         tracing::error!("verify_handler {ctx} DB-Fehler: {e}");
@@ -595,9 +711,9 @@ pub async fn verify_handler(
 
     match mode.as_str() {
         "permanent" | "temp" => {
-            let payload =
+            let vpayload =
                 lifecycle::VerificationPayload::for_mode(&mode).ok_or_else(ApiError::internal)?; // permanent/temp sind immer Some
-            let source = lifecycle::load_verify_source(&pool, &login, helix.as_ref().as_ref())
+            let source = lifecycle::load_verify_source(pool, &login, helix)
                 .await
                 .map_err(|e| internal(e, "load_verify_source"))?;
             let Some(source) = source.filter(|s| s.twitch_user_id_present()) else {
@@ -605,7 +721,7 @@ pub async fn verify_handler(
             };
 
             lifecycle::promote_streamer_to_partner(
-                &pool,
+                pool,
                 &login,
                 &source.twitch_user_id,
                 source.discord_user_id.as_deref(),
@@ -615,12 +731,12 @@ pub async fn verify_handler(
                 } else {
                     0
                 },
-                &payload,
+                &vpayload,
             )
             .await
             .map_err(|e| internal(e, "promote"))?;
 
-            let copied = lifecycle::backfill_tracked_stats_from_category(&pool, &login)
+            let copied = lifecycle::backfill_tracked_stats_from_category(pool, &login)
                 .await
                 .map_err(|e| internal(e, "backfill"))?;
 
@@ -645,14 +761,14 @@ pub async fn verify_handler(
             Ok(ok_message(format!("{base} {merged}").trim().to_string()))
         }
         "clear" => {
-            let outcome = lifecycle::departner_active_partner(&pool, &login, true)
+            let outcome = lifecycle::departner_active_partner(pool, &login, true)
                 .await
                 .map_err(|e| internal(e, "departner_clear"))?;
             let Some(outcome) = outcome else {
                 return Ok(ok_message(format!("{login} ist nicht gespeichert")));
             };
             let role_note = revoke_role_note(
-                &role_ext,
+                role_ext,
                 outcome.discord_user_id.as_deref(),
                 "Streamer-Verifizierung über Dashboard entfernt",
             )
@@ -662,7 +778,7 @@ pub async fn verify_handler(
             Ok(ok_message(msg.trim().to_string()))
         }
         "failed" => {
-            let outcome = lifecycle::departner_active_partner(&pool, &login, true)
+            let outcome = lifecycle::departner_active_partner(pool, &login, true)
                 .await
                 .map_err(|e| internal(e, "departner_failed"))?;
             let Some(outcome) = outcome else {
@@ -671,7 +787,7 @@ pub async fn verify_handler(
             // Python sendet hier zusätzlich eine Fehler-DM — per B10-Direktive
             // ("keine Discord-DMs mehr") gedroppt. Nur der Rollen-Entzug bleibt.
             let role_note = revoke_role_note(
-                &role_ext,
+                role_ext,
                 outcome.discord_user_id.as_deref(),
                 "Streamer-Verifizierung über Dashboard fehlgeschlagen",
             )
@@ -709,21 +825,36 @@ async fn revoke_role_note(
 pub async fn archive_handler(
     auth: AuthLevel,
     State(pool): State<PgPool>,
+    Extension(idem): Extension<IdempotencyState>,
+    headers: HeaderMap,
+    OriginalUri(uri): OriginalUri,
     Path(raw_login): Path<String>,
-    body: Option<Json<ArchiveRequest>>,
-) -> Result<impl IntoResponse, ApiError> {
+    body: Option<Json<serde_json::Value>>,
+) -> Response {
     if !auth.is_privileged() {
-        return Err(ApiError::unauthorized());
+        return ApiError::unauthorized().into_response();
     }
+    let payload = body.map(|Json(v)| v).unwrap_or_else(|| json!({}));
+    with_idempotency(&idem, &headers, &uri, "POST", &payload, || {
+        archive_handler_inner(&pool, &raw_login, &payload)
+    })
+    .await
+}
 
-    let login = match normalize_twitch_login(&raw_login) {
+async fn archive_handler_inner(
+    pool: &PgPool,
+    raw_login: &str,
+    payload: &serde_json::Value,
+) -> Result<(StatusCode, serde_json::Value), ApiError> {
+    let login = match normalize_twitch_login(raw_login) {
         Some(l) => l,
         None => return Err(ApiError::bad_request("invalid login")),
     };
 
     // mode-String extrahieren — Default "toggle" wenn fehlt/leer (Python-Semantik)
-    let mode_str = body
-        .and_then(|b| b.mode.clone())
+    let mode_str = payload
+        .get("mode")
+        .and_then(|v| v.as_str())
         .map(|m| {
             let m = m.trim().to_lowercase();
             if m.is_empty() {
@@ -738,13 +869,8 @@ pub async fn archive_handler(
     // 'X archiviert' / 'X ent-archiviert' / 'X dauerhaft blockiert' / 'X entsperrt' /
     // 'X ist bereits archiviert (seit …)' / 'X reaktiviert' usw.
     use lifecycle::ArchiveOutcome;
-    match lifecycle::archive_with_message(&pool, &login, &mode_str).await {
-        Ok(ArchiveOutcome::Done(message)) => Ok(Json(OkLoginMessageResponse {
-            ok: true,
-            login: login.clone(),
-            message,
-        })
-        .into_response()),
+    match lifecycle::archive_with_message(pool, &login, &mode_str).await {
+        Ok(ArchiveOutcome::Done(message)) => Ok(ok_login_message(&login, message)),
         // Python: nicht gespeichert → ValueError → 4xx. Interne API: 404.
         Ok(ArchiveOutcome::NotStored) => Err(ApiError::not_found()),
         // History-Zeile vorhanden, aber nicht reaktivierbar (departnert / kein
@@ -788,26 +914,41 @@ fn enforce_discord_action_scope() -> Result<(), ApiError> {
 pub async fn discord_flag_handler(
     auth: AuthLevel,
     State(pool): State<PgPool>,
+    Extension(idem): Extension<IdempotencyState>,
+    headers: HeaderMap,
+    OriginalUri(uri): OriginalUri,
     Path(raw_login): Path<String>,
-    Json(body): Json<DiscordFlagRequest>,
-) -> Result<impl IntoResponse, ApiError> {
+    Json(payload): Json<serde_json::Value>,
+) -> Response {
     if !auth.is_privileged() {
-        return Err(ApiError::unauthorized());
+        return ApiError::unauthorized().into_response();
     }
+    with_idempotency(&idem, &headers, &uri, "POST", &payload, || {
+        discord_flag_handler_inner(&pool, &raw_login, &payload)
+    })
+    .await
+}
 
-    let login = match normalize_twitch_login(&raw_login) {
+async fn discord_flag_handler_inner(
+    pool: &PgPool,
+    raw_login: &str,
+    payload: &serde_json::Value,
+) -> Result<(StatusCode, serde_json::Value), ApiError> {
+    let login = match normalize_twitch_login(raw_login) {
         Some(l) => l,
         None => return Err(ApiError::bad_request("invalid login")),
     };
 
     enforce_discord_action_scope()?;
 
+    let body: DiscordFlagRequest = serde_json::from_value(payload.clone())
+        .map_err(|_| ApiError::bad_request("invalid request body"))?;
     let enabled = match body.parse_enabled() {
         Some(v) => v,
         None => return Err(ApiError::bad_request("is_on_discord is required")),
     };
 
-    let updated = db::set_discord_flag(&pool, &login, enabled)
+    let updated = db::set_discord_flag(pool, &login, enabled)
         .await
         .map_err(|e| {
             tracing::error!("set_discord_flag DB-Fehler: {e}");
@@ -822,18 +963,13 @@ pub async fn discord_flag_handler(
     // No-Op fragen wir daher gezielt nach, ob ein aktiver Partner existiert, und
     // melden dann denselben Erfolg wie Python.
     let succeeded = updated
-        || active_partner_exists(&pool, &login).await.map_err(|e| {
+        || active_partner_exists(pool, &login).await.map_err(|e| {
             tracing::error!("active_partner_exists DB-Fehler: {e}");
             ApiError::internal()
         })?;
 
     if succeeded {
-        Ok(Json(OkLoginMessageResponse {
-            ok: true,
-            login: login.clone(),
-            message: "updated".to_string(),
-        })
-        .into_response())
+        Ok(ok_login_message(&login, "updated".to_string()))
     } else {
         Err(ApiError::not_found())
     }
@@ -864,19 +1000,37 @@ pub async fn discord_profile_handler(
     State(pool): State<PgPool>,
     Extension(helix): Extension<Arc<Option<HelixClient>>>,
     Extension(role_ext): Extension<DiscordRoleExt>,
+    Extension(idem): Extension<IdempotencyState>,
+    headers: HeaderMap,
+    OriginalUri(uri): OriginalUri,
     Path(raw_login): Path<String>,
-    Json(body): Json<DiscordProfileRequest>,
-) -> Result<impl IntoResponse, ApiError> {
+    Json(payload): Json<serde_json::Value>,
+) -> Response {
     if !auth.is_privileged() {
-        return Err(ApiError::unauthorized());
+        return ApiError::unauthorized().into_response();
     }
+    with_idempotency(&idem, &headers, &uri, "POST", &payload, || {
+        discord_profile_handler_inner(&pool, helix.as_ref().as_ref(), &role_ext, &raw_login, &payload)
+    })
+    .await
+}
 
-    let login = match normalize_twitch_login(&raw_login) {
+async fn discord_profile_handler_inner(
+    pool: &PgPool,
+    helix: Option<&HelixClient>,
+    role_ext: &DiscordRoleExt,
+    raw_login: &str,
+    payload: &serde_json::Value,
+) -> Result<(StatusCode, serde_json::Value), ApiError> {
+    let login = match normalize_twitch_login(raw_login) {
         Some(l) => l,
         None => return Err(ApiError::bad_request("invalid login")),
     };
 
     enforce_discord_action_scope()?;
+
+    let body: DiscordProfileRequest = serde_json::from_value(payload.clone())
+        .map_err(|_| ApiError::bad_request("invalid request body"))?;
 
     // discord_user_id: trimmen, leer → None; nicht-numerisch → 400
     // Python: discord_id_clean = (discord_user_id or "").strip()
@@ -909,11 +1063,11 @@ pub async fn discord_profile_handler(
 
     // twitch_user_id auflösen wie Python (_dashboard_save_discord_profile):
     // erst aus twitch_raid_auth, sonst über Helix `GET /users`.
-    let mut twitch_user_id = db::load_twitch_user_id_from_raid_auth(&pool, &login)
+    let mut twitch_user_id = db::load_twitch_user_id_from_raid_auth(pool, &login)
         .await
         .unwrap_or(None);
     if twitch_user_id.is_none() {
-        if let Some(h) = helix.as_ref() {
+        if let Some(h) = helix {
             if let Ok(users) = h.get_users(&[login.as_str()]).await {
                 twitch_user_id = users
                     .values()
@@ -925,7 +1079,7 @@ pub async fn discord_profile_handler(
     }
 
     match db::set_discord_profile(
-        &pool,
+        pool,
         &login,
         discord_user_id.as_deref(),
         discord_display_name.as_deref(),
@@ -941,12 +1095,7 @@ pub async fn discord_profile_handler(
                 port.grant_streamer_role(did, &format!("Discord-Profil für {login} gesetzt"))
                     .await;
             }
-            Ok(Json(OkLoginMessageResponse {
-                ok: true,
-                login: login.clone(),
-                message: "updated".to_string(),
-            })
-            .into_response())
+            Ok(ok_login_message(&login, "updated".to_string()))
         }
         Ok(false) => Err(ApiError::not_found()),
         Err(e) => {
@@ -1119,6 +1268,65 @@ mod tests {
     use std::net::SocketAddr;
     use tb_http_core::{internal_auth, loopback_only, ExpectedToken, INTERNAL_API_BASE_PATH};
     use tower::ServiceExt;
+
+    // ── P2.142: mark_member Loose-Coercion ────────────────────────────────────
+
+    #[test]
+    fn parse_bool_with_default_python_paritaet() {
+        use serde_json::json;
+        // None/Null → default
+        assert!(parse_bool_with_default(None, true));
+        assert!(!parse_bool_with_default(None, false));
+        assert!(parse_bool_with_default(Some(&json!(null)), true));
+        // bool
+        assert!(parse_bool_with_default(Some(&json!(true)), false));
+        assert!(!parse_bool_with_default(Some(&json!(false)), true));
+        // Zahl
+        assert!(parse_bool_with_default(Some(&json!(1)), false));
+        assert!(!parse_bool_with_default(Some(&json!(0)), true));
+        // String truthy/falsy
+        assert!(parse_bool_with_default(Some(&json!("true")), false));
+        assert!(parse_bool_with_default(Some(&json!("on")), false));
+        assert!(!parse_bool_with_default(Some(&json!("off")), true));
+        assert!(!parse_bool_with_default(Some(&json!("0")), true));
+        // leer/unbekannt → default
+        assert!(parse_bool_with_default(Some(&json!("")), true));
+        assert!(!parse_bool_with_default(Some(&json!("vielleicht")), false));
+        assert!(parse_bool_with_default(Some(&json!("vielleicht")), true));
+    }
+
+    #[test]
+    fn discord_profile_mark_member_akzeptiert_string_und_zahl() {
+        // String "true" / "false"
+        let r: DiscordProfileRequest =
+            serde_json::from_str(r#"{"mark_member":"true"}"#).expect("string true");
+        assert!(r.mark_member);
+        let r: DiscordProfileRequest =
+            serde_json::from_str(r#"{"mark_member":"false"}"#).expect("string false");
+        assert!(!r.mark_member);
+        // Zahl 1 / 0
+        let r: DiscordProfileRequest =
+            serde_json::from_str(r#"{"mark_member":1}"#).expect("number 1");
+        assert!(r.mark_member);
+        let r: DiscordProfileRequest =
+            serde_json::from_str(r#"{"mark_member":0}"#).expect("number 0");
+        assert!(!r.mark_member);
+        // bool weiterhin
+        let r: DiscordProfileRequest =
+            serde_json::from_str(r#"{"mark_member":false}"#).expect("bool false");
+        assert!(!r.mark_member);
+        // fehlt → default true
+        let r: DiscordProfileRequest = serde_json::from_str(r#"{}"#).expect("absent → default");
+        assert!(r.mark_member);
+        // null → default true
+        let r: DiscordProfileRequest =
+            serde_json::from_str(r#"{"mark_member":null}"#).expect("null → default");
+        assert!(r.mark_member);
+        // Alias member_flag als String
+        let r: DiscordProfileRequest =
+            serde_json::from_str(r#"{"member_flag":"no"}"#).expect("alias string");
+        assert!(!r.mark_member);
+    }
 
     macro_rules! db_dsn_or_skip {
         () => {
@@ -1316,12 +1524,29 @@ mod tests {
             .with_state(pool)
             .layer(Extension(helix))
             .layer(Extension(DiscordRoleExt(None)))
+            .layer(Extension(IdempotencyState::new()))
             .layer(Extension(ExpectedToken(token.to_string())))
             .layer(middleware::from_fn_with_state(
                 token.to_string(),
                 internal_auth,
             ))
             .layer(middleware::from_fn(loopback_only))
+    }
+
+    /// Wie [`loopback_req`], aber mit `Idempotency-Key`-Header.
+    fn loopback_req_idem(
+        method: &str,
+        uri: &str,
+        body: &str,
+        token: Option<&str>,
+        idem_key: &str,
+    ) -> Request<Body> {
+        let mut req = loopback_req(method, uri, body, token);
+        req.headers_mut().insert(
+            IDEMPOTENCY_KEY_HEADER,
+            axum::http::HeaderValue::from_str(idem_key).unwrap(),
+        );
+        req
     }
 
     fn loopback_req(method: &str, uri: &str, body: &str, token: Option<&str>) -> Request<Body> {
@@ -1601,6 +1826,89 @@ mod tests {
         assert_eq!(resp.status(), StatusCode::OK);
         let j = json_body(resp).await;
         assert_eq!(j["message"], "drag archiviert");
+    }
+
+    // ── P2.143: Idempotenz auf den Mutations-Routen ──────────────────────────
+
+    /// Zwei identische POST /archive mit demselben Idempotency-Key: die zweite
+    /// Antwort kommt aus dem Cache (`X-Idempotency-Replayed: 1`) und führt die
+    /// Mutation NICHT erneut aus (sonst läge der Partner beim 2. Mal bereits
+    /// archiviert vor und die Meldung wäre "bereits archiviert").
+    #[tokio::test]
+    async fn archive_idempotency_key_repliziert_und_fuehrt_nicht_erneut_aus() {
+        let dsn = db_dsn_or_skip!();
+        let pool = make_pool(&dsn, "test_sh_archive_idem").await;
+        seed_active_partner(&pool, "dragidem", "77").await;
+        let app = make_router(pool, "secret");
+        let base = INTERNAL_API_BASE_PATH;
+
+        let first = loopback_req_idem(
+            "POST",
+            &format!("{base}/streamers/dragidem/archive"),
+            r#"{"mode":"archive"}"#,
+            Some("secret"),
+            "idem-key-1",
+        );
+        let r1 = app.clone().oneshot(first).await.unwrap();
+        assert_eq!(r1.status(), StatusCode::OK);
+        assert!(
+            !r1.headers().contains_key("X-Idempotency-Replayed"),
+            "Erstanfrage darf KEIN Replay sein"
+        );
+        let j1 = json_body(r1).await;
+        assert_eq!(j1["message"], "dragidem archiviert");
+
+        let second = loopback_req_idem(
+            "POST",
+            &format!("{base}/streamers/dragidem/archive"),
+            r#"{"mode":"archive"}"#,
+            Some("secret"),
+            "idem-key-1",
+        );
+        let r2 = app.oneshot(second).await.unwrap();
+        assert_eq!(r2.status(), StatusCode::OK);
+        assert_eq!(
+            r2.headers()
+                .get("X-Idempotency-Replayed")
+                .and_then(|v| v.to_str().ok()),
+            Some("1"),
+            "Zweitanfrage muss Replay-Header tragen"
+        );
+        let j2 = json_body(r2).await;
+        // Gecachter Body: identisch zur Erstanfrage (NICHT erneut ausgeführt).
+        assert_eq!(j2["message"], "dragidem archiviert");
+    }
+
+    /// Gleicher Key, anderer Body → 409 idempotency_conflict.
+    #[tokio::test]
+    async fn archive_idempotency_key_anderer_body_gibt_409() {
+        let dsn = db_dsn_or_skip!();
+        let pool = make_pool(&dsn, "test_sh_archive_idem_conflict").await;
+        seed_active_partner(&pool, "dragc", "78").await;
+        let app = make_router(pool, "secret");
+        let base = INTERNAL_API_BASE_PATH;
+
+        let first = loopback_req_idem(
+            "POST",
+            &format!("{base}/streamers/dragc/archive"),
+            r#"{"mode":"archive"}"#,
+            Some("secret"),
+            "idem-key-c",
+        );
+        let r1 = app.clone().oneshot(first).await.unwrap();
+        assert_eq!(r1.status(), StatusCode::OK);
+
+        let second = loopback_req_idem(
+            "POST",
+            &format!("{base}/streamers/dragc/archive"),
+            r#"{"mode":"unarchive"}"#,
+            Some("secret"),
+            "idem-key-c",
+        );
+        let r2 = app.oneshot(second).await.unwrap();
+        assert_eq!(r2.status(), StatusCode::CONFLICT);
+        let j2 = json_body(r2).await;
+        assert_eq!(j2["error"], "idempotency_conflict");
     }
 
     // ── POST /streamers/:login/archive ───────────────────────────────────────
