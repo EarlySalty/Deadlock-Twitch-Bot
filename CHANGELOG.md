@@ -1,3 +1,11 @@
+## #247 — Admin-Streamer-Verwaltung läuft wieder nativ statt ins Leere
+
+**Problem:** Im Admin-Bereich des Dashboards führten die zentralen Streamer-Aktionen — einen Streamer hinzufügen (per Name, Login oder Twitch-Link), entfernen, eine Discord-Verknüpfung samt Mitglieds-Markierung setzen, sowie eine manuelle Chat-Aktion in einen Partner-Kanal senden — ins Leere. Sie wurden noch an den beim Sprachumbau abgeschalteten Alt-Dienst weitergereicht und endeten dort mit einem Server-Fehler.
+
+**Änderung:** Diese Aktionen laufen jetzt direkt im neuen Dashboard-Backend gegen dieselbe gemeinsame Datenbankschicht, die auch die interne Schnittstelle des Bots nutzt — kein Umweg mehr über den toten Alt-Dienst. Das Hinzufügen legt den Streamer an und trägt die Twitch-Kennung nach, sobald sie ermittelbar ist; das Entfernen löst die Partnerschaft; die Discord-Verknüpfung speichert Profil und Mitglieds-Markierung. Die manuelle Chat-Aktion ist auf den freigeschalteten Owner beschränkt, prüft Modus, Farbe und eine Längenobergrenze, schließt abgemeldete oder archivierte Partner aus und wird zum tatsächlichen Senden an den Bot übergeben. Alle Aktionen sind weiterhin durch Admin-Anmeldung und Formular-Schutz abgesichert.
+
+**Ergebnis:** Die Streamer-Verwaltung im Admin-Bereich funktioniert wieder vollständig; die Server-Fehler an diesen Stellen entfallen. Es handelt sich um Admin-Funktionen ohne sichtbare Auswirkung für Streamer.
+
 ## #246 — Nach dem Umbau wieder lückenlos: Werbe-Abweisungen, Raid-Erkennung und Event-Abos
 
 **Problem:** Beim Sprachumbau des Bots waren einige Verhaltensweisen der alten Version noch nicht wieder angeschlossen. Wies ein Kanal eine automatische Nachricht des Bots ab — Werbung, Streamer-Anwerbung oder Partner-Raid-Gruß —, merkte sich der Bot das nicht und versuchte es beim nächsten Anlass erneut im selben Kanal. Widerrief Twitch ein Ereignis-Abo, über das der Bot Live-Starts und Raids erfährt, blieb das bis zum nächsten Neustart unbemerkt. Und bei der Bestätigung einer eingehenden Raid-Welle floss die Vorab-Information, ob ein Partner raidet, nicht mehr in die Einordnung ein.
