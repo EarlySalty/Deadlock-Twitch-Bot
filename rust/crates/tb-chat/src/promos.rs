@@ -132,28 +132,6 @@ const MINIMAX_TIMEOUT_SEC: u64 = 5;
 const PROMO_STREAM_START_DELAY_MIN: u64 = 10;
 
 // ---------------------------------------------------------------------------
-// Scam-/Fake-Server-Warnung (P1.3) — Port von bot/chat/constants.py:231–252
-// ---------------------------------------------------------------------------
-
-/// Master-Schalter (Python: True und nicht-leere Message-Liste).
-const SCAM_WARNING_ENABLED: bool = true;
-/// Frühestens alle 120 min pro Kanal (> Promo-Takt → seltener als Promos).
-const SCAM_WARNING_COOLDOWN_MIN: u64 = 120;
-/// Verzögerung der allerersten Warnung nach dem Säen des Timers (20 min); per
-/// Python-Soll gekappt auf [0, COOLDOWN].
-const SCAM_WARNING_INITIAL_DELAY_MIN: u64 = 20;
-
-/// Feste Warntexte (rotieren, nie zweimal denselben hintereinander).
-/// `{invite}` wird durch den offiziellen Discord-Invite ersetzt.
-///
-/// HINWEIS: user-sichtbarer deutscher Text (Umlaute/Ton) — von Claude final
-/// formuliert. Bis dahin Platzhalter (siehe placeholders[]).
-const SCAM_WARNING_MESSAGES: &[&str] = &[
-    "⚠️ Achtung: Server wie „Deadlock Discord Deutschland\" oder „Deadlock German Competitiv HUB\" gehören NICHT zu uns und sind oft Fake/Scam. Unser einziger offizieller Discord ist: {invite}",
-    "⚠️ Kurzer Hinweis: Es kursieren Fake-Discords („Deadlock Discord Deutschland\", „Deadlock German Competitiv HUB\") — die sind nicht von uns, dort bitte nichts anklicken. Unser echter Discord: {invite}",
-];
-
-// ---------------------------------------------------------------------------
 // Promo-Texte — exakt aus constants.py:114–152
 // ---------------------------------------------------------------------------
 
@@ -492,11 +470,6 @@ struct ChannelState {
     /// (promos.py:564-584). Bei Session-Wechsel zurückgesetzt — verhindert, dass
     /// derselbe ruhige Zuschauer mehrfach pro Session gepingt wird.
     lurker_mentions: (i64, HashSet<String>),
-    /// Monotonic-Timestamp letzte Scam-Warnung (P1.3, promos.py:1029).
-    /// `None` = noch nie gesät → erste Promo-Gelegenheit sät den Timer.
-    last_scam_warning_sent: Option<Instant>,
-    /// Letzter gesendeter Scam-Warntext (Anti-Repeat, promos.py:1058).
-    last_scam_warning_text: Option<String>,
 }
 
 impl ChannelState {
@@ -513,8 +486,6 @@ impl ChannelState {
             seen_chatters: HashMap::new(),
             last_accessed: Instant::now(),
             lurker_mentions: (0, HashSet::new()),
-            last_scam_warning_sent: None,
-            last_scam_warning_text: None,
         }
     }
 }
@@ -864,13 +835,6 @@ impl PromoEngine {
             if overall_ready && activity_ready && self.stream_start_delay_ok(login).await {
                 let (invite, _is_specific) = self.invite_resolver.resolve_invite(login).await;
 
-                // Warnung hat im fälligen Slot Vorrang (eigener Cooldown), sonst
-                // würde die Targeted-Promo sie dauerhaft verdrängen
-                // (P1.3, promos.py:1552–1554).
-                if self.maybe_send_scam_warning(login, channel_id, &invite, now, "promo").await {
-                    continue;
-                }
-
                 // Targeted-Promo-Slot (targeted_promo.py:198).
                 let active_chatters = self.get_active_chatters(login).await;
                 if self.maybe_send_targeted_promo(login, channel_id, &invite, &active_chatters, now).await {
@@ -940,13 +904,6 @@ impl PromoEngine {
         }
         // Invite-Auflösung (promos.py:1096).
         let (invite, is_specific) = self.invite_resolver.resolve_invite(login).await;
-
-        // Statt der Discord-Werbung gelegentlich die Fake-Server-Warnung posten
-        // (P1.3, promos.py:1147–1152). Eigener Cooldown → Promos und Warnung
-        // wechseln sich von selbst ab.
-        if self.maybe_send_scam_warning(login, channel_id, &invite, now, reason).await {
-            return true;
-        }
 
         // Promo-Text bauen (promos.py:945).
         let text = self.build_promo_text(login, &invite, reason).await;
@@ -1043,133 +1000,6 @@ impl PromoEngine {
         }
 
         template.replace("{invite}", invite)
-    }
-
-    // -----------------------------------------------------------------------
-    // Scam-/Fake-Server-Warnung (P1.3) — Port von promos.py:1017–1095
-    // -----------------------------------------------------------------------
-
-    /// True, wenn statt einer Promo die Fake-Server-Warnung dran ist.
-    ///
-    /// Nur bei normalen Promo-Gelegenheiten (`promo`/`chat_activity`). Eigener
-    /// Cooldown pro Kanal. Erste Gelegenheit pro Kanal sät den Timer (zurückdatiert
-    /// um `COOLDOWN - INITIAL_DELAY`) und wirbt normal — die Warnung ist dann schon
-    /// in der nächsten Gelegenheit fällig, aber nicht sofort.
-    ///
-    /// Port: `_scam_warning_due` (promos.py:1017–1051).
-    async fn scam_warning_due(&self, login: &str, now: Instant, reason: &str) -> bool {
-        if !SCAM_WARNING_ENABLED || SCAM_WARNING_MESSAGES.is_empty() {
-            return false;
-        }
-        if reason != "promo" && reason != "chat_activity" {
-            return false;
-        }
-        // Python kappt INITIAL_DELAY auf [0, COOLDOWN].
-        let initial_delay = SCAM_WARNING_INITIAL_DELAY_MIN.min(SCAM_WARNING_COOLDOWN_MIN);
-        let cooldown = Duration::from_secs(SCAM_WARNING_COOLDOWN_MIN * 60);
-
-        let state_ref = self
-            .channel_states
-            .entry(login.to_string())
-            .or_insert_with(|| Mutex::new(ChannelState::new()));
-        let mut state = state_ref.lock().await;
-        match state.last_scam_warning_sent {
-            None => {
-                // Timer säen (zurückdatiert) + persistieren, normal werben.
-                let grace = Duration::from_secs((SCAM_WARNING_COOLDOWN_MIN - initial_delay) * 60);
-                let seed = now.checked_sub(grace).unwrap_or(now);
-                state.last_scam_warning_sent = Some(seed);
-                drop(state);
-                // Persist: wall_ts entspricht dem zurückdatierten Seed.
-                let seed_wall =
-                    Utc::now().timestamp() as f64 - (SCAM_WARNING_COOLDOWN_MIN - initial_delay) as f64 * 60.0;
-                self.save_promo_cooldown(login, "scam_warning", seed_wall).await;
-                false
-            }
-            Some(last) => now.duration_since(last) >= cooldown,
-        }
-    }
-
-    /// Festen Warntext wählen (rotiert, nie zweimal denselben hintereinander).
-    ///
-    /// Port: `_build_scam_warning_text` (promos.py:1053–1066).
-    async fn build_scam_warning_text(&self, login: &str, invite: &str) -> Option<String> {
-        if SCAM_WARNING_MESSAGES.is_empty() {
-            return None;
-        }
-        let last_text = {
-            let state_ref = self
-                .channel_states
-                .entry(login.to_string())
-                .or_insert_with(|| Mutex::new(ChannelState::new()));
-            let state = state_ref.lock().await;
-            state.last_scam_warning_text.clone()
-        };
-        let pool: Vec<&str> = if SCAM_WARNING_MESSAGES.len() > 1 {
-            SCAM_WARNING_MESSAGES
-                .iter()
-                .copied()
-                .filter(|m| Some(*m) != last_text.as_deref())
-                .collect()
-        } else {
-            SCAM_WARNING_MESSAGES.to_vec()
-        };
-        let chosen = {
-            let mut rng = rand::thread_rng();
-            pool.choose(&mut rng).copied().unwrap_or(SCAM_WARNING_MESSAGES[0])
-        };
-        {
-            let state_ref = self
-                .channel_states
-                .entry(login.to_string())
-                .or_insert_with(|| Mutex::new(ChannelState::new()));
-            let mut state = state_ref.lock().await;
-            state.last_scam_warning_text = Some(chosen.to_string());
-        }
-        Some(chosen.replace("{invite}", invite))
-    }
-
-    /// Postet im fälligen Promo-Slot die Fake-Server-Warnung statt einer Promo
-    /// (orange Announcement, source="scam_warning"). Eigener Cooldown → Warnung
-    /// und reguläre Promos wechseln sich von selbst ab. Gibt true zurück, wenn
-    /// die Warnung gesendet wurde.
-    ///
-    /// Port: `_maybe_send_scam_warning` (promos.py:1068–1095).
-    async fn maybe_send_scam_warning(
-        &self,
-        login: &str,
-        channel_id: &str,
-        invite: &str,
-        now: Instant,
-        reason: &str,
-    ) -> bool {
-        if !self.scam_warning_due(login, now, reason).await {
-            return false;
-        }
-        let Some(warn_text) = self.build_scam_warning_text(login, invite).await else {
-            return false;
-        };
-        let warned = self
-            .api
-            .send_announcement(channel_id, &warn_text, "orange")
-            .await
-            .unwrap_or(false);
-        if !warned {
-            return false;
-        }
-        // Promo-Slot belegen (Python: _mark_promo_sent(reason=reason)) +
-        // Scam-Cooldown auf "now" setzen und persistieren.
-        self.mark_promo_sent(login, now, reason, Utc::now().timestamp() as f64).await;
-        {
-            let state_ref = self
-                .channel_states
-                .entry(login.to_string())
-                .or_insert_with(|| Mutex::new(ChannelState::new()));
-            let mut state = state_ref.lock().await;
-            state.last_scam_warning_sent = Some(now);
-        }
-        self.save_promo_cooldown(login, "scam_warning", Utc::now().timestamp() as f64).await;
-        true
     }
 
     /// Globalen Promo-Override laden (promos.py `_load_global_promo_message` +
@@ -2092,10 +1922,6 @@ impl PromoEngine {
                 "viewer_spike" if state.last_promo_viewer_spike.is_none() => {
                     state.last_promo_viewer_spike = mono_restored;
                 }
-                // P1.3: Scam-Warn-Timer überlebt Neustarts (promos.py:968–973).
-                "scam_warning" if state.last_scam_warning_sent.is_none() => {
-                    state.last_scam_warning_sent = mono_restored;
-                }
                 _ => {}
             }
         }
@@ -2325,109 +2151,6 @@ mod tests {
 
         let ready = engine.overall_promo_ready_inner(&state, now);
         assert!(ready, "91 min ≥ 90 min → ready");
-    }
-
-    // -----------------------------------------------------------------------
-    // P1.3 — Fake-/Scam-Server-Warnung im Promo-Pfad
-    // -----------------------------------------------------------------------
-
-    /// Baut eine Engine mit explizitem MockApi-Handle, damit der Test die
-    /// gesendeten Announcements (inkl. Farbe) inspizieren kann.
-    fn make_engine_with_api(api: Arc<MockApi>) -> PromoEngine {
-        use sqlx::postgres::PgPoolOptions;
-        let pool = PgPoolOptions::new()
-            .max_connections(1)
-            .connect_lazy("postgres://localhost/nonexistent")
-            .unwrap();
-        PromoEngine::new(pool, api, Arc::new(NoopSuppressionCheck))
-    }
-
-    #[tokio::test]
-    async fn scam_warning_erste_gelegenheit_saet_nur_und_sendet_nicht() {
-        let api = Arc::new(MockApi::default());
-        let engine = make_engine_with_api(api.clone());
-        let now = Instant::now();
-
-        // Erste Gelegenheit: Timer säen, KEINE Warnung senden.
-        let sent = engine
-            .maybe_send_scam_warning("kanal", "id-1", "https://discord.gg/x", now, "promo")
-            .await;
-        assert!(!sent, "erste Gelegenheit sät nur den Timer, sendet keine Warnung");
-        assert!(api.announcements.lock().await.is_empty(), "kein Send beim Säen");
-
-        // Timer wurde gesät (last_scam_warning_sent gesetzt).
-        let state_ref = engine.channel_states.get("kanal").unwrap();
-        let state = state_ref.lock().await;
-        assert!(state.last_scam_warning_sent.is_some(), "Timer muss gesät sein");
-    }
-
-    #[tokio::test]
-    async fn scam_warning_sendet_orange_announcement_bei_abgelaufenem_cooldown() {
-        let api = Arc::new(MockApi::default());
-        let engine = make_engine_with_api(api.clone());
-        let now = Instant::now();
-
-        // Timer künstlich auf "weit in der Vergangenheit" setzen (Cooldown abgelaufen).
-        {
-            let state_ref = engine
-                .channel_states
-                .entry("kanal".into())
-                .or_insert_with(|| Mutex::new(ChannelState::new()));
-            let mut state = state_ref.lock().await;
-            state.last_scam_warning_sent =
-                now.checked_sub(Duration::from_secs((SCAM_WARNING_COOLDOWN_MIN + 5) * 60));
-        }
-
-        let sent = engine
-            .maybe_send_scam_warning("kanal", "id-1", "https://discord.gg/x", now, "chat_activity")
-            .await;
-        assert!(sent, "abgelaufener Cooldown + reason=chat_activity → Warnung senden");
-
-        // Genau eine orange Announcement, Text enthält den Invite.
-        let anns = api.announcements.lock().await;
-        assert_eq!(anns.len(), 1, "genau eine Warnung gesendet");
-        assert_eq!(anns[0].0, "id-1");
-        assert_eq!(anns[0].2, "orange", "Scam-Warnung ist orange");
-        assert!(anns[0].1.contains("https://discord.gg/x"), "Invite eingesetzt");
-
-        // Cooldown auf "now" aktualisiert.
-        drop(anns);
-        let state_ref = engine.channel_states.get("kanal").unwrap();
-        let state = state_ref.lock().await;
-        assert_eq!(state.last_scam_warning_sent, Some(now));
-    }
-
-    #[tokio::test]
-    async fn scam_warning_ignoriert_viewer_spike_und_lurker_reason() {
-        let api = Arc::new(MockApi::default());
-        let engine = make_engine_with_api(api.clone());
-        let now = Instant::now();
-        // Auch bei abgelaufenem Cooldown darf reason=viewer_spike NICHT warnen.
-        {
-            let state_ref = engine
-                .channel_states
-                .entry("kanal".into())
-                .or_insert_with(|| Mutex::new(ChannelState::new()));
-            let mut state = state_ref.lock().await;
-            state.last_scam_warning_sent =
-                now.checked_sub(Duration::from_secs((SCAM_WARNING_COOLDOWN_MIN + 5) * 60));
-        }
-        let sent = engine
-            .maybe_send_scam_warning("kanal", "id-1", "inv", now, "viewer_spike")
-            .await;
-        assert!(!sent, "viewer_spike ist kein Scam-Warn-Slot");
-        assert!(api.announcements.lock().await.is_empty());
-    }
-
-    #[tokio::test]
-    async fn scam_warning_text_rotiert_und_ersetzt_invite() {
-        let engine = make_engine_no_db();
-        let t = engine
-            .build_scam_warning_text("kanal", "https://discord.gg/y")
-            .await
-            .expect("Warntext muss gebaut werden");
-        assert!(t.contains("https://discord.gg/y"), "Invite eingesetzt");
-        assert!(!t.contains("{invite}"), "Platzhalter ersetzt");
     }
 
     // -----------------------------------------------------------------------
