@@ -1070,6 +1070,9 @@ pub fn build_website_router() -> Router {
 
     Router::new()
         .route("/streamer", get(website::streamer_root_handler))
+        .route("/streamer/help", get(handlers::help_page::help_page))
+        .route("/streamer/commands", get(handlers::help_page::commands_page))
+        .route("/streamer/faq", get(handlers::help_page::faq_redirect))
         .route("/streamer/*path", get(website::streamer_asset_handler))
         .route("/website", get(website::website_root_redirect_handler))
         .route(

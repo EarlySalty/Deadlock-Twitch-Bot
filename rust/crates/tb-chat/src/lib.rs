@@ -23,6 +23,7 @@
 //! [`global_ban_sweep`] (Offline-Sweep-Executor).
 
 pub mod api;
+pub mod catalog;
 pub mod channel_classifier;
 pub mod chatter_tracking;
 pub mod commands;

@@ -24,6 +24,7 @@ pub mod auth_login;
 pub mod auth_status;
 pub mod bans;
 pub mod forward_auth;
+pub mod help_page;
 pub mod billing;
 pub mod billing_page;
 pub mod billing_webhook;

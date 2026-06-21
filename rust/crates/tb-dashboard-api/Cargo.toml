@@ -15,6 +15,7 @@ chrono       = { workspace = true }
 chrono-tz    = { workspace = true }
 hmac         = { workspace = true }
 pbkdf2       = { workspace = true }
+pulldown-cmark = { workspace = true }
 sha2         = { workspace = true }
 hex          = { workspace = true }
 reqwest      = { workspace = true }
