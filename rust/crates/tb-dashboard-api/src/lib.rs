@@ -26,12 +26,44 @@ pub use handlers::billing_page::{billing_page_config_from_env, BillingPageConfig
 pub use handlers::billing_webhook::{stripe_webhook_config_from_env, StripeWebhookConfig};
 
 use axum::{
+    http::{header::HeaderName, HeaderValue},
     routing::{get, post},
     Extension, Router,
 };
 use sqlx::PgPool;
 use tb_http_core::ExpectedToken;
-use tower_http::{compression::CompressionLayer, cors::CorsLayer};
+use tower_http::{
+    compression::CompressionLayer, cors::CorsLayer, set_header::SetResponseHeaderLayer,
+};
+
+use auth::security::{rate_limit_middleware, RateLimitLayerConfig};
+
+/// Baut den globalen Default-Security-Header-Bundle (P2.108).
+///
+/// `SetResponseHeaderLayer::if_not_present` setzt jeden Header nur, wenn der
+/// Handler ihn nicht selbst gesetzt hat — so überschreibt der Bundle keine
+/// bewusst abweichenden Antworten. Auf ALLE Antworten von `build_router`
+/// angewandt (auch Fehler/Redirects). Werte gemäß Plan P2.108:
+/// - `X-Frame-Options: DENY` (Dashboard wird nirgends eingebettet)
+/// - `X-Content-Type-Options: nosniff`
+/// - `Referrer-Policy: strict-origin-when-cross-origin`
+/// - `Cross-Origin-Opener-Policy: same-origin`
+/// - `X-XSS-Protection: 0` (Legacy-Filter bewusst aus — moderne Empfehlung)
+fn security_header_layers() -> [SetResponseHeaderLayer<HeaderValue>; 5] {
+    fn layer(name: &'static str, value: &'static str) -> SetResponseHeaderLayer<HeaderValue> {
+        SetResponseHeaderLayer::if_not_present(
+            HeaderName::from_static(name),
+            HeaderValue::from_static(value),
+        )
+    }
+    [
+        layer("x-frame-options", "DENY"),
+        layer("x-content-type-options", "nosniff"),
+        layer("referrer-policy", "strict-origin-when-cross-origin"),
+        layer("cross-origin-opener-policy", "same-origin"),
+        layer("x-xss-protection", "0"),
+    ]
+}
 
 /// Baut den axum-Router für alle public Analytics-GET-Endpoints.
 ///
@@ -40,7 +72,7 @@ use tower_http::{compression::CompressionLayer, cors::CorsLayer};
 /// (`api_public.py:52-58`). Authed/Admin-Routen bleiben ohne CORS-Header,
 /// sonst wäre die Token-API cross-origin per Browser ansprechbar.
 pub fn build_public_router(pool: PgPool) -> Router {
-    use handlers::{bans, network, raids, roadmap, self_explainer, social_media};
+    use handlers::{bans, network, raids, self_explainer, social_media};
 
     Router::new()
         .route(
@@ -60,7 +92,9 @@ pub fn build_public_router(pool: PgPool) -> Router {
             "/twitch/api/v2/public/network",
             get(network::network_handler),
         )
-        .route("/twitch/api/v2/roadmap", get(roadmap::get_handler))
+        // Roadmap (public GET + admin CRUD) liegt im eigenen build_roadmap_router,
+        // damit der Admin-Write den ExpectedToken-Extractor sieht (axum erlaubt
+        // denselben Pfad nicht in zwei gemergten Routern).
         // Social-Media Rechtstexte — öffentlich für die Plattform-OAuth-Reviews.
         .route("/social-media/terms", get(social_media::terms_handler))
         .route("/social-media/privacy", get(social_media::privacy_handler))
@@ -75,9 +109,13 @@ pub fn build_public_router(pool: PgPool) -> Router {
 ///
 /// Auth-Level wird per Extension eingesetzt — `AuthLevel` als `FromRequestParts`
 /// liest den Token selbst aus der Extension.
-pub fn build_authed_router(pool: PgPool, token: String) -> Router {
+pub fn build_authed_router(pool: PgPool, token: String, rate_limiter: RateLimiter) -> Router {
     use handlers::{ads_schedule, affiliate_portal, ai_analysis, ai_chat, ai_history, audience, audience_demographics, auth_status, billing, category_activity, category_comparison, category_leaderboard, category_timings, chat_analytics, chat_content_analysis, chat_deep_minimax, chat_hype_timeline, chat_social_graph, coaching, engagement_mode, engagement_settings, exp_analytics, follower_funnel, internal_home, leaderboard, loyalty_curve, lurker_analysis, lurker_tax_settings, monetization, overview, performance, raid_analytics, rankings, retention_curve, scam_guard_queue, scam_guard_settings, session_detail, silent_settings, social_media, spa, stream_report, streamers, tag_analysis, title, title_performance, viewer_timeline, viewers, watch_time};
     use handlers::scam_guard_enforce;
+
+    // P2.86: Rate-Limit-Layer für die gebündelte Internal-Home-Startseite (GET +
+    // Changelog-POST). Bucket "internal_home", 60 Requests/60 s pro Client-IP.
+    let internal_home_rl = RateLimitLayerConfig::new(rate_limiter.clone(), "internal_home", 60, 60);
 
     Router::new()
         .route(
@@ -150,11 +188,17 @@ pub fn build_authed_router(pool: PgPool, token: String) -> Router {
         // Changelog). GET liest, POST legt einen Changelog-Eintrag an (Admin-only).
         .route(
             "/twitch/api/v2/internal-home",
-            get(internal_home::get_handler),
+            get(internal_home::get_handler).layer(axum::middleware::from_fn_with_state(
+                internal_home_rl.clone(),
+                rate_limit_middleware,
+            )),
         )
         .route(
             "/twitch/api/v2/internal-home/changelog",
-            post(internal_home::changelog_handler),
+            post(internal_home::changelog_handler).layer(axum::middleware::from_fn_with_state(
+                internal_home_rl,
+                rate_limit_middleware,
+            )),
         )
         // Streamer-Selbstbedienung: Silent-Notification-Flags (sync zu !silentban/
         // !silentraid). GET liest, POST setzt beide Flags auf twitch_partners.
@@ -491,7 +535,7 @@ pub fn build_authed_router(pool: PgPool, token: String) -> Router {
 
 /// Baut den Router für Admin-System-Endpoints.
 pub fn build_admin_system_router(pool: PgPool, token: String) -> Router {
-    use handlers::system::{database, errors, eventsub, health};
+    use handlers::system::{database, errors, eventsub, health, oauth_scopes, query};
 
     Router::new()
         .route(
@@ -509,6 +553,17 @@ pub fn build_admin_system_router(pool: PgPool, token: String) -> Router {
         .route(
             "/twitch/api/admin/system/errors",
             get(errors::errors_handler),
+        )
+        // P2.74: OAuth-Scope-Audit (Scope-Diff-Panel).
+        .route(
+            "/twitch/api/admin/system/oauth-scopes",
+            get(oauth_scopes::oauth_scopes_handler),
+        )
+        // P2.77/P2.81: Read-only Admin-SQL-Konsole (SELECT-only, Blocklist,
+        // READ-ONLY-Transaktion, LIMIT 200).
+        .route(
+            "/twitch/api/admin/system/query",
+            get(query::query_handler),
         )
         .with_state(pool)
         .layer(Extension(ExpectedToken(token)))
@@ -643,13 +698,37 @@ pub fn build_admin_config_router(pool: PgPool, token: String) -> Router {
 /// Fallback) und greifen damit, statt in den toten Python-Service (502) zu
 /// fallen. `DashboardAuthState` + `OAuthLoginConfig` kommen als globale
 /// Extensions aus der `tb-dashboard`-main (s. dort).
-pub fn build_auth_router() -> Router {
+pub fn build_auth_router(rate_limiter: RateLimiter) -> Router {
     use handlers::auth_login;
 
+    // P2.138: Login-Bucket (30/60 s). P2.140: Callback-Bucket (30/60 s) — die
+    // beiden Callback-Routen teilen sich denselben Bucket. Layer pro Route, damit
+    // Login und Callback getrennte Kontingente haben.
+    let login_rl = RateLimitLayerConfig::new(rate_limiter.clone(), "auth_login", 30, 60);
+    let callback_rl = RateLimitLayerConfig::new(rate_limiter, "auth_callback", 30, 60);
+
     Router::new()
-        .route("/twitch/auth/login", get(auth_login::login_handler))
-        .route("/twitch/auth/callback", get(auth_login::callback_handler))
-        .route("/callback/twitch", get(auth_login::shared_callback_handler))
+        .route(
+            "/twitch/auth/login",
+            get(auth_login::login_handler).layer(axum::middleware::from_fn_with_state(
+                login_rl,
+                rate_limit_middleware,
+            )),
+        )
+        .route(
+            "/twitch/auth/callback",
+            get(auth_login::callback_handler).layer(axum::middleware::from_fn_with_state(
+                callback_rl.clone(),
+                rate_limit_middleware,
+            )),
+        )
+        .route(
+            "/callback/twitch",
+            get(auth_login::shared_callback_handler).layer(axum::middleware::from_fn_with_state(
+                callback_rl,
+                rate_limit_middleware,
+            )),
+        )
         .route("/twitch/auth/logout", get(auth_login::logout_handler))
 }
 
@@ -663,12 +742,29 @@ pub fn build_auth_router() -> Router {
 /// `DashboardAuthState`/`OAuthLoginConfig` kommen als globale Extensions aus der
 /// `tb-dashboard`-main. Das HMAC-Secret (`TWITCH_PARTNER_TOKEN`) liest der Handler
 /// aus dem Prozess-Env (Infisical); fehlt es, liefern beide Routen 503.
-pub fn build_partner_login_router(pool: PgPool) -> Router {
+pub fn build_partner_login_router(pool: PgPool, rate_limiter: RateLimiter) -> Router {
     use handlers::partner_login;
 
+    // P2.133: getrennte Buckets — Link-Ausstellung (10/60 s) und Token-Verbrauch
+    // (20/60 s) je Client-IP.
+    let link_rl = RateLimitLayerConfig::new(rate_limiter.clone(), "partner_link", 10, 60);
+    let login_rl = RateLimitLayerConfig::new(rate_limiter, "partner_login", 20, 60);
+
     Router::new()
-        .route("/twitch/auth/partner/link", post(partner_login::link_handler))
-        .route("/twitch/auth/partner/login", post(partner_login::login_handler))
+        .route(
+            "/twitch/auth/partner/link",
+            post(partner_login::link_handler).layer(axum::middleware::from_fn_with_state(
+                link_rl,
+                rate_limit_middleware,
+            )),
+        )
+        .route(
+            "/twitch/auth/partner/login",
+            post(partner_login::login_handler).layer(axum::middleware::from_fn_with_state(
+                login_rl,
+                rate_limit_middleware,
+            )),
+        )
         .with_state(pool)
 }
 
@@ -838,6 +934,12 @@ pub fn build_billing_page_router(pool: PgPool) -> Router {
             "/twitch/api/billing/readiness",
             get(billing_page::readiness_handler),
         )
+        // Checkout-Vorschau: meldet, ob ein Plan checkout-bereit ist (ohne Stripe-
+        // Session anzulegen). CSRF im Body → in-handler validiert.
+        .route(
+            "/twitch/api/billing/checkout-preview",
+            post(billing_page::checkout_preview_handler),
+        )
         // B2-P1: Stripe Product/Price-Sync (Admin-only JSON-API).
         .route(
             "/twitch/api/billing/stripe/sync-products",
@@ -846,28 +948,173 @@ pub fn build_billing_page_router(pool: PgPool) -> Router {
         .with_state(pool)
 }
 
+/// Baut den Router für die Roadmap (public GET + admin CRUD, P1.31).
+///
+/// Aus dem Public-Router herausgelöst, weil das Admin-CRUD den
+/// `AuthLevel`-Extractor (und damit die `ExpectedToken`-Extension) braucht;
+/// axum erlaubt denselben Pfad nicht in zwei gemergten Routern. GET bleibt
+/// öffentlich lesbar (CORS), POST/PATCH/DELETE laufen durch den CSRF-Layer
+/// (GET/HEAD passieren) und sind admin-gegated (Handler-`is_privileged`).
+pub fn build_roadmap_router(pool: PgPool, token: String) -> Router {
+    use handlers::roadmap;
+
+    Router::new()
+        .route(
+            "/twitch/api/v2/roadmap",
+            get(roadmap::get_handler).post(roadmap::create_handler),
+        )
+        .route(
+            "/twitch/api/v2/roadmap/:id",
+            axum::routing::patch(roadmap::update_handler).delete(roadmap::delete_handler),
+        )
+        .with_state(pool)
+        .layer(Extension(ExpectedToken(token)))
+        .layer(axum::middleware::from_fn(crate::auth::csrf::csrf_protect))
+        .layer(CorsLayer::permissive())
+}
+
+/// Baut den Router für die Market-Research-Endpunkte (P2.104/105/106).
+///
+/// - `GET /twitch/market` — gerenderte Market-Research-HTML-Seite.
+/// - `GET /twitch/api/market_data` — aggregierte Markt-Daten (JSON).
+/// - `GET /twitch/api/v2/market-share` — Admin-Proxy auf den internen Worker.
+///
+/// Alle drei sind admin/localhost-gegated (Handler-intern via
+/// `DashboardAuthLevel`). Die `MarketShareProxyConfig` wird – sofern das interne
+/// Token konfiguriert ist – als Extension injiziert; fehlt sie, liefert der
+/// market-share-Handler 503 `internal_token_missing` (Python-Parität).
+pub fn build_market_router(pool: PgPool) -> Router {
+    use handlers::market;
+
+    let mut router = Router::new()
+        .route("/twitch/market", get(market::market_research_handler))
+        .route(
+            "/twitch/api/market_data",
+            get(market::api_market_data_handler),
+        )
+        .route(
+            "/twitch/api/v2/market-share",
+            get(market::api_market_share_handler),
+        )
+        .with_state(pool);
+
+    // Proxy-Config aus der Umgebung (Infisical/Env); ohne internes Token bleibt
+    // sie aus → market-share antwortet 503.
+    if let Some(config) = market::MarketShareProxyConfig::from_env() {
+        router = router.layer(Extension(config));
+    }
+    router
+}
+
+/// Baut den Router für die nativen Raid-Dashboard-Routen (P1.51/P1.52).
+///
+/// - `GET /twitch/raid/auth` — startet den Raid-OAuth-Flow (302 → Twitch).
+/// - `GET /twitch/raid/go`   — Kurz-Redirect für Discord-Buttons (302 → Twitch).
+///
+/// `DashboardAuthLevel` kommt aus der globalen `DashboardAuthState`-Extension;
+/// die Handler bridgen über die Internal-API (`X-Internal-Token`).
+pub fn build_raid_pages_router() -> Router {
+    use handlers::raid_pages;
+
+    Router::new()
+        .route("/twitch/raid/auth", get(raid_pages::raid_auth_handler))
+        .route("/twitch/raid/go", get(raid_pages::raid_go_handler))
+}
+
+/// Baut den Router für die Affiliate-Portal-HTML-Seite (P1.26).
+///
+/// `GET /twitch/affiliate/portal` — serviert die dashboard_v2-SPA-Shell. Die
+/// JSON-API unter `/twitch/api/v2/affiliate/portal` bleibt im authed-Router.
+pub fn build_affiliate_portal_router() -> Router {
+    use handlers::affiliate_portal;
+
+    Router::new().route(
+        "/twitch/affiliate/portal",
+        get(affiliate_portal::portal_page_handler),
+    )
+}
+
+/// Baut den Router für die Social-Media-Admin-SPA (P2.66).
+///
+/// `GET /social-media-admin` (+ `/{path}`) → dashboard_v2-SPA-Shell mit
+/// Host-Gate + Login-Gate (analog `/analyse`). Nativ registriert, damit der
+/// Admin-Host nicht in den toten Python-Service (502) fällt.
+pub fn build_social_media_admin_router(pool: PgPool) -> Router {
+    use handlers::spa;
+
+    Router::new()
+        .route("/social-media-admin", get(spa::social_media_admin_handler))
+        .route(
+            "/social-media-admin/*path",
+            get(spa::social_media_admin_assets_handler),
+        )
+        .with_state(pool)
+}
+
+/// Baut den Router für die öffentliche Website (`/streamer`) + Legacy-Redirect
+/// (`/website`) — P2.67.
+///
+/// - `GET /streamer` → 301 auf `/streamer/`; `GET /streamer/{path}` → statische
+///   Datei aus `website/dist` (Verzeichnis → `index.html`).
+/// - `GET /website` (+ `/{path}`) → 301 auf `/streamer(/path)` (Query erhalten).
+///
+/// Öffentlich (kein Login). Nativ registriert (vor dem Strangler-Fallback).
+pub fn build_website_router() -> Router {
+    use handlers::website;
+
+    Router::new()
+        .route("/streamer", get(website::streamer_root_handler))
+        .route("/streamer/*path", get(website::streamer_asset_handler))
+        .route("/website", get(website::website_root_redirect_handler))
+        .route(
+            "/website/*path",
+            get(website::website_path_redirect_handler),
+        )
+}
+
 /// Zusammengeführter Router: public + auth (Login) + billing-webhook + authed +
 /// admin-system + admin-streamers + admin-config + Legal-Seiten (HTML, statuslos).
 ///
 /// CORS nur auf dem Public-Sub-Router (s. oben).
 pub fn build_router(pool: PgPool, token: String) -> Router {
-    build_public_router(pool.clone())
-        .merge(build_auth_router())
-        .merge(build_partner_login_router(pool.clone()))
+    // P2.86/133/138/140: gemeinsamer Rate-Limiter (atomares Sliding-Window auf
+    // dashboard_sessions). Der Fernet-Key wird aus der Env gelesen (gleiche
+    // Quelle wie die Session-Verschlüsselung). Fehlt er, läuft der Limiter mit
+    // leerem Key — die Hit-Rows sind trotzdem konsistent verschlüsselt; bei
+    // DB-Fehlern ist der Limiter fail-open (siehe RateLimiter::allow).
+    let fernet_key = DashboardAuthState::fernet_key_from_env().unwrap_or_default();
+    let rate_limiter = RateLimiter::new(pool.clone(), fernet_key);
+
+    let mut app = build_public_router(pool.clone())
+        .merge(build_auth_router(rate_limiter.clone()))
+        .merge(build_partner_login_router(pool.clone(), rate_limiter.clone()))
+        .merge(build_roadmap_router(pool.clone(), token.clone()))
+        .merge(build_market_router(pool.clone()))
+        .merge(build_raid_pages_router())
+        .merge(build_affiliate_portal_router())
+        .merge(build_social_media_admin_router(pool.clone()))
+        .merge(build_website_router())
         .merge(handlers::discord_link::build_discord_link_router(pool.clone()))
         .merge(handlers::demo::build_demo_router())
         .merge(build_entry_admin_router())
         .merge(build_billing_webhook_router(pool.clone()))
         .merge(build_billing_page_router(pool.clone()))
         .merge(build_admin_legacy_forms_router(pool.clone()))
-        .merge(build_authed_router(pool.clone(), token.clone()))
+        .merge(build_authed_router(pool.clone(), token.clone(), rate_limiter))
         .merge(build_admin_system_router(pool.clone(), token.clone()))
         .merge(build_admin_streamers_router(pool.clone(), token.clone()))
         .merge(build_admin_config_router(pool, token))
         .merge(handlers::admin_mode::build_admin_mode_router())
         .merge(handlers::legal::build_legal_router())
         .merge(handlers::roadmap_page::build_roadmap_page_router())
-        .layer(CompressionLayer::new())
+        .layer(CompressionLayer::new());
+
+    // P2.108: globaler Default-Security-Header-Bundle auf ALLE Antworten
+    // (if_not_present überschreibt keine handler-eigenen Header).
+    for layer in security_header_layers() {
+        app = app.layer(layer);
+    }
+    app
 }
 
 #[cfg(test)]
@@ -923,5 +1170,64 @@ mod csrf_wiring_tests {
             .await
             .unwrap();
         assert_eq!(resp.status(), StatusCode::UNAUTHORIZED);
+    }
+}
+
+#[cfg(test)]
+mod router_wiring_tests {
+    //! Welle-2-A3: Verifiziert, dass `build_router` ohne Router-Overlap-Panic
+    //! konstruierbar ist (alle gemergten Sub-Router sind pfad-disjunkt) und dass
+    //! der Security-Header-Bundle auf den Antworten liegt. Braucht KEINE echte
+    //! DB — ein lazy PgPool reicht für den reinen Router-Aufbau.
+    use super::*;
+    use axum::body::Body;
+    use axum::http::{header, Request, StatusCode};
+    use sqlx::postgres::PgPoolOptions;
+    use tower::ServiceExt;
+
+    fn lazy_pool() -> PgPool {
+        // connect_lazy baut KEINE Verbindung auf — perfekt, um den Router-
+        // Zusammenbau (Overlap-Schutz) ohne laufende DB zu prüfen.
+        PgPoolOptions::new()
+            .max_connections(1)
+            .connect_lazy("postgres://invalid:invalid@127.0.0.1:1/none")
+            .expect("lazy pool")
+    }
+
+    /// build_router darf NICHT paniccen (kein doppelter Pfad in zwei Routern).
+    /// Async, weil der lazy PgPool einen Tokio-Kontext für seinen Reaper braucht.
+    #[tokio::test]
+    async fn build_router_konstruiert_ohne_overlap_panic() {
+        let _app = build_router(lazy_pool(), "smoke-token".into());
+    }
+
+    /// Eine öffentliche Route (Legacy-Redirect, kein DB-Zugriff) trägt den
+    /// Security-Header-Bundle (P2.108) und liefert kein 500.
+    #[tokio::test]
+    async fn security_header_bundle_auf_antwort() {
+        let app = build_router(lazy_pool(), "smoke-token".into());
+        let resp = app
+            .oneshot(
+                Request::builder()
+                    .method("GET")
+                    .uri("/website/foo")
+                    .header("host", "dashboard.example.com")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        // /website/foo → 301 auf /streamer/foo (kein DB-Zugriff).
+        assert_eq!(resp.status(), StatusCode::PERMANENT_REDIRECT);
+        let h = resp.headers();
+        assert_eq!(h.get("x-frame-options").unwrap(), "DENY");
+        assert_eq!(h.get("x-content-type-options").unwrap(), "nosniff");
+        assert_eq!(
+            h.get("referrer-policy").unwrap(),
+            "strict-origin-when-cross-origin"
+        );
+        assert_eq!(h.get("cross-origin-opener-policy").unwrap(), "same-origin");
+        assert_eq!(h.get("x-xss-protection").unwrap(), "0");
+        assert_eq!(h.get(header::LOCATION).unwrap(), "/streamer/foo");
     }
 }
