@@ -174,6 +174,73 @@ async fn check_suppression_gibt_none_fuer_unbekannte_source() {
     assert!(entry.is_none());
 }
 
+/// P1.1: Ein `channel_settings`-Drop eines Promo-Sends muss über die
+/// Schreibseite (`OutboundSuppressionWriter::suppress_for_drop`) eine Zeile
+/// mit suppressed_until ≈ now+7d anlegen, sodass `is_muted()` danach true ist.
+#[tokio::test]
+async fn suppress_for_drop_promo_channel_settings_schreibt_7d_und_mutet() {
+    use tb_chat::promos::{OutboundSuppressionCheck as PromoCheck, OutboundSuppressionWriter};
+
+    let pool = pool_or_skip!("sup_drop_promo");
+    let store = OutboundSuppressionStore::new(pool.clone());
+
+    // Vorher: nicht stumm.
+    assert!(
+        !PromoCheck::is_muted(&store, "dropkanal").await,
+        "vor dem Drop darf der Kanal nicht stumm sein"
+    );
+
+    store
+        .suppress_for_drop(
+            "dropkanal",
+            Some("4242"),
+            "promo",
+            "channel_settings",
+            Some("Blocked by channel settings"),
+        )
+        .await;
+
+    // is_muted (Promo-Pfad) muss jetzt true sein.
+    assert!(
+        PromoCheck::is_muted(&store, "dropkanal").await,
+        "nach channel_settings-Drop muss der Promo-Pfad den Kanal als stumm sehen"
+    );
+
+    // Zeile existiert mit suppressed_until ≈ now+7d.
+    let entry = OutboundSuppressionCheck::check_suppression(&store, "dropkanal", "promo")
+        .await
+        .expect("Suppression-Zeile muss existieren");
+    assert_eq!(entry.reason_code, "channel_settings");
+    assert!(
+        entry.suppressed_until > Utc::now() + Duration::days(6),
+        "7-Tage-TTL erwartet, war {}",
+        entry.suppressed_until
+    );
+    assert!(
+        entry.suppressed_until < Utc::now() + Duration::days(8),
+        "TTL darf nicht über 7d hinausschießen"
+    );
+}
+
+/// Gegenprobe: ein Nicht-channel_settings-Drop (z. B. sender_timedout) darf
+/// KEINE channel_settings-Suppression schreiben (No-op auf der Schreibseite).
+#[tokio::test]
+async fn suppress_for_drop_ignoriert_fremde_reason_codes() {
+    use tb_chat::promos::{OutboundSuppressionCheck as PromoCheck, OutboundSuppressionWriter};
+
+    let pool = pool_or_skip!("sup_drop_ignore");
+    let store = OutboundSuppressionStore::new(pool.clone());
+
+    store
+        .suppress_for_drop("kein_mute", Some("1"), "promo", "sender_timedout", None)
+        .await;
+
+    assert!(
+        !PromoCheck::is_muted(&store, "kein_mute").await,
+        "sender_timedout darf keine Promo-Suppression schreiben"
+    );
+}
+
 #[tokio::test]
 async fn check_suppression_recruitment_7_tage() {
     let pool = pool_or_skip!("sup_recruitment");
