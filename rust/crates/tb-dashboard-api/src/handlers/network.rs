@@ -17,14 +17,21 @@ pub struct NetworkStreamerJson {
     pub viewer_count: i32,
 }
 
-impl From<NetworkStreamerRow> for NetworkStreamerJson {
-    fn from(r: NetworkStreamerRow) -> Self {
-        Self {
-            login: r.twitch_login,
+impl NetworkStreamerJson {
+    /// Wandelt eine DB-Zeile in die JSON-Form um und normalisiert dabei den Login
+    /// (trim + lowercase, Python-Parität: `api_public.py:219-221`). Leere Logins
+    /// werden mit `None` übersprungen.
+    fn from_row(r: NetworkStreamerRow) -> Option<Self> {
+        let login = r.twitch_login.trim().to_lowercase();
+        if login.is_empty() {
+            return None;
+        }
+        Some(Self {
+            login,
             is_partner: true,
             is_live: r.is_live != 0,
             viewer_count: r.viewer_count,
-        }
+        })
     }
 }
 
@@ -52,7 +59,10 @@ pub async fn network_handler(State(pool): State<PgPool>) -> impl IntoResponse {
     match network_streamers(&pool).await {
         Ok(rows) => {
             let resp = NetworkResponse {
-                streamers: rows.into_iter().map(NetworkStreamerJson::from).collect(),
+                streamers: rows
+                    .into_iter()
+                    .filter_map(NetworkStreamerJson::from_row)
+                    .collect(),
             };
             (StatusCode::OK, Json(resp)).into_response()
         }
@@ -221,6 +231,47 @@ mod tests {
             .find(|s| s["login"] == "offuser")
             .unwrap();
         assert_eq!(offline["is_live"], false, "is_live muss bool false sein");
+    }
+
+    /// P3.15: Login wird lowercased + getrimmt; leerer Login fällt raus (Python-Parität).
+    #[tokio::test]
+    async fn network_login_lowercase_und_leer_uebersprungen() {
+        let dsn = db_dsn_or_skip!();
+        let pool = make_pool(&dsn, "api_network_norm").await;
+
+        sqlx::query(
+            "INSERT INTO _partner_state_base VALUES ('MixedCaseUser', 1), ('   ', 1), ('cleanuser', 1)",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+
+        let app = build_public_router(pool);
+        let req = Request::builder()
+            .uri("/twitch/api/v2/public/network")
+            .body(axum::body::Body::empty())
+            .unwrap();
+        let resp = app.oneshot(req).await.unwrap();
+        let body = to_bytes(resp.into_body(), usize::MAX).await.unwrap();
+        let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+
+        let logins: Vec<&str> = json["streamers"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|s| s["login"].as_str().unwrap())
+            .collect();
+
+        assert!(
+            logins.contains(&"mixedcaseuser"),
+            "Login muss lowercased sein, war: {logins:?}"
+        );
+        assert!(logins.contains(&"cleanuser"));
+        assert!(
+            !logins.iter().any(|l| l.trim().is_empty()),
+            "Leerer Login darf nicht erscheinen, war: {logins:?}"
+        );
+        assert_eq!(logins.len(), 2, "Leer-Zeile muss übersprungen sein");
     }
 
     /// Fehlende View → graceful: 200 mit `{"streamers": []}` statt 500 (Python-Parität).
