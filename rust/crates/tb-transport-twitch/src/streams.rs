@@ -245,26 +245,47 @@ impl HelixClient {
     }
 
     /// Follower-Gesamtzahl via `/channels/followers`. Best-effort: Der
-    /// `total`-Wert verlangt einen Moderator-Token — mit App-Token antwortet
-    /// Twitch 401/403, dann (und bei jedem non-200) kommt `None` zurück.
+    /// `total`-Wert verlangt einen **Moderator-Token mit `moderator:read:followers`**
+    /// für genau diesen Broadcaster.
+    ///
+    /// `user_token`:
+    /// - `Some(tok)` → Request mit diesem Bearer (Streamer- oder zentraler
+    ///   Bot-Token, der den Kanal moderiert). Liefert die echte Zahl.
+    /// - `None` → App-Token-Pfad wie bisher; Twitch antwortet ohne Scope
+    ///   401/403 und es kommt (wie bei jedem non-200) `None` zurück.
+    ///
+    /// Port: Python `twitch_api.get_followers_total(broadcaster_id, user_token=…)`.
+    ///
+    // WIRING-TODO(P1.7): bin/tb-bot/src/wiring.rs HelixFollowerSource::follower_total
+    // und raid_adapters.rs attach_followers_totals rufen weiterhin
+    // get_followers_total(user_id) auf — Aufrufe auf
+    // get_followers_total(user_id, Some(<bot-/streamer-token>)) umstellen
+    // (Bot-Token mit moderator:read:followers bzw. Streamer-Token aus
+    // twitch_raid_auth durchreichen), damit die echte Follower-Zahl ankommt.
     pub async fn get_followers_total(
         &self,
         broadcaster_id: &str,
+        user_token: Option<&str>,
     ) -> Result<Option<i64>, HelixError> {
         let broadcaster_id = broadcaster_id.trim();
         if broadcaster_id.is_empty() {
             return Ok(None);
         }
-        let resp = self
-            .get("/channels/followers")
-            .await?
+        let token = user_token.map(str::trim).filter(|t| !t.is_empty());
+        let request = match token {
+            Some(token) => self
+                .get_with_user_token("/channels/followers", token),
+            None => self.get("/channels/followers").await?,
+        };
+        let resp = request
             .query(&[("broadcaster_id", broadcaster_id), ("first", "1")])
             .send()
             .await?;
         if !resp.status().is_success() {
             tracing::debug!(
                 status = %resp.status(),
-                "followers-total nicht verfügbar (App-Token ohne Moderator-Scope?)"
+                with_user_token = token.is_some(),
+                "followers-total nicht verfügbar (Token ohne moderator:read:followers?)"
             );
             return Ok(None);
         }
@@ -553,8 +574,33 @@ mod tests {
             .respond_with(ResponseTemplate::new(401))
             .mount(&server)
             .await;
-        let total = client.get_followers_total("42").await.unwrap();
+        let total = client.get_followers_total("42", None).await.unwrap();
         assert_eq!(total, None);
+    }
+
+    #[tokio::test]
+    async fn followers_total_mit_user_token_liefert_total() {
+        let server = MockServer::start().await;
+        let client = client_with(&server).await;
+        // Der moderator-scoped User-Token MUSS den App-Token im Authorization-Header
+        // ersetzen, sonst antwortet Twitch ohne `total`.
+        Mock::given(method("GET"))
+            .and(path("/helix/channels/followers"))
+            .and(query_param("broadcaster_id", "42"))
+            .and(header("Authorization", "Bearer usertok"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "total": 1337,
+                "data": []
+            })))
+            .expect(1)
+            .mount(&server)
+            .await;
+        let total = client
+            .get_followers_total("42", Some("usertok"))
+            .await
+            .unwrap();
+        assert_eq!(total, Some(1337));
+        server.verify().await;
     }
 
     #[tokio::test]
