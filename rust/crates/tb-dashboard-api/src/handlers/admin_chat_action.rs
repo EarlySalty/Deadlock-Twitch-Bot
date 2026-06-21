@@ -82,7 +82,7 @@ pub async fn chat_action_handler(
             if owner_id.is_some() { "present" } else { "none" },
             "/twitch/admin/chat_action"
         );
-        return redirect_err("Platzhalter");
+        return redirect_err("Nur der freigeschaltete Discord-Owner darf diese Chat-Aktion nutzen.");
     }
 
     // Login (Python: login / streamer, normalisiert).
