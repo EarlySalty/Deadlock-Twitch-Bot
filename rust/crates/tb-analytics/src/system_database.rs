@@ -1,8 +1,8 @@
 //! Query für `GET /twitch/api/admin/system/database`.
 //!
-//! Row-Count via `pg_class.reltuples` (Schätzung, wie Python-Seite),
-//! Size via `pg_total_relation_size`. Tabellen die nicht existieren
-//! werden einfach weggelassen — keine 500-Fehler.
+//! Row-Count via exaktem `COUNT(*)` (Parität zu Python
+//! `admin_streamer_queries.py:827`), Size via `pg_total_relation_size`.
+//! Tabellen die nicht existieren werden einfach weggelassen — keine 500-Fehler.
 
 use sqlx::PgPool;
 
@@ -34,10 +34,12 @@ pub async fn database_stats(pool: &PgPool, tables: &[&str]) -> Result<DatabaseSt
     let mut table_stats: Vec<TableStat> = Vec::new();
 
     for &table in tables {
-        // Prüfen ob Tabelle im aktuellen Schema existiert
-        let row_count: Option<(i64,)> = sqlx::query_as(
+        // Prüfen ob Tabelle im aktuellen Schema existiert. Der relname aus
+        // pg_class ist die kanonische, im Schema existierende Relation — er
+        // dient als Allowlist-Quelle für den nachfolgenden COUNT(*)-Identifier.
+        let existing: Option<(String,)> = sqlx::query_as(
             r#"
-            SELECT reltuples::BIGINT
+            SELECT relname
             FROM pg_class
             WHERE relname = $1
               AND relnamespace = (
@@ -49,16 +51,26 @@ pub async fn database_stats(pool: &PgPool, tables: &[&str]) -> Result<DatabaseSt
         .fetch_optional(pool)
         .await?;
 
-        if let Some((count,)) = row_count {
+        if let Some((relname,)) = existing {
+            // Exakter Row-Count (Python-Parität): reltuples ist nur eine
+            // ANALYZE-/autovacuum-gepflegte Schätzung und meldet 0 für frisch
+            // befüllte, nie analysierte Tabellen. Identifier wird quote-escaped;
+            // die Quelle ist der verifizierte pg_class.relname (keine Injection).
+            let quoted = format!("\"{}\"", relname.replace('"', "\"\""));
+            let (count,): (i64,) =
+                sqlx::query_as(&format!("SELECT COUNT(*)::BIGINT FROM {quoted}"))
+                    .fetch_one(pool)
+                    .await?;
+
             let size_result: Result<(i64,), sqlx::Error> =
                 sqlx::query_as("SELECT pg_total_relation_size($1::regclass)::BIGINT")
-                    .bind(table)
+                    .bind(&relname)
                     .fetch_one(pool)
                     .await;
             let size_bytes = size_result.unwrap_or((0,)).0;
 
             table_stats.push(TableStat {
-                table: table.to_string(),
+                table: relname,
                 row_count: count.max(0),
                 size_bytes,
             });
@@ -120,6 +132,31 @@ mod tests {
         assert!(stats.database_size_bytes > 0);
         assert_eq!(stats.tables.len(), 1);
         assert_eq!(stats.tables[0].table, "test_table_a");
+    }
+
+    #[tokio::test]
+    async fn row_count_ist_exakt_ohne_analyze() {
+        // P2.87: Frisch befüllte, nie analysierte Tabelle → reltuples wäre 0,
+        // COUNT(*) muss die echte Zeilenzahl liefern.
+        let dsn = match test_dsn() {
+            Some(d) => d,
+            None => {
+                eprintln!("SKIP: TB_TEST_DATABASE_URL nicht gesetzt");
+                return;
+            }
+        };
+        let pool = make_pool(&dsn, "test_sysdb_exact").await;
+        for i in 0..7 {
+            sqlx::query("INSERT INTO test_table_a (val) VALUES ($1)")
+                .bind(format!("row_{i}"))
+                .execute(&pool)
+                .await
+                .unwrap();
+        }
+        // KEIN ANALYZE — reltuples bliebe stale/0.
+        let stats = database_stats(&pool, &["test_table_a"]).await.unwrap();
+        assert_eq!(stats.tables.len(), 1);
+        assert_eq!(stats.tables[0].row_count, 7, "exakter COUNT(*) erwartet");
     }
 
     #[tokio::test]

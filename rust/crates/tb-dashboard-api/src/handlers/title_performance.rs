@@ -1,7 +1,8 @@
 //! Handler für `GET /twitch/api/v2/title-performance`.
 //!
 //! Port von `bot/analytics/api_performance.py:_load_title_performance_payload_sync` (Z.657–754).
-//! `peerBenchmark` wird als null zurückgegeben — `_get_peer_group_stats` ist nicht portiert.
+//! `peerBenchmark` = `{avgViewers, retention10m}` aus `peer_group::peer_group_stats`
+//! (Python `_get_peer_group_stats`); `null`, wenn keine Peer-Gruppe ermittelbar ist.
 
 use axum::{
     extract::{Query, State},
@@ -107,6 +108,19 @@ pub async fn title_performance_handler(
             (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({"error":"internal_error"}))).into_response()
         }
         Ok(rows) => {
+            // peerBenchmark via Peer-Gruppe (Python _get_peer_group_stats).
+            // DB-Fehler hier sind nicht fatal → null (Python: try/except → kein Peer).
+            let peer_benchmark = match tb_analytics::peer_group::peer_group_stats(&pool, &streamer, since).await {
+                Ok(Some(pg)) => json!({
+                    "avgViewers": pg.avg_viewers,
+                    "retention10m": pg.retention_10m,
+                }),
+                Ok(None) => serde_json::Value::Null,
+                Err(e) => {
+                    tracing::warn!("title-performance peerBenchmark DB-Fehler: {e}");
+                    serde_json::Value::Null
+                }
+            };
             let titles: Vec<serde_json::Value> = rows.iter().map(|r| {
                 let title: String = r.try_get("stream_title").unwrap_or_default();
                 let keywords = extract_title_keywords(&title);
@@ -122,7 +136,7 @@ pub async fn title_performance_handler(
             }).collect();
             Json(json!({
                 "titles": titles,
-                "peerBenchmark": null,
+                "peerBenchmark": peer_benchmark,
             })).into_response()
         }
     }

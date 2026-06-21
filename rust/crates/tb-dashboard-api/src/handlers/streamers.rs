@@ -23,7 +23,7 @@ impl From<StreamerListRow> for StreamerJson {
     fn from(r: StreamerListRow) -> Self {
         Self {
             login: r.twitch_login,
-            is_partner: true,
+            is_partner: r.is_partner,
             is_live: r.is_live != 0,
             viewer_count: r.viewer_count,
         }
@@ -111,6 +111,11 @@ mod tests {
                 streamer_login    TEXT NOT NULL PRIMARY KEY,
                 is_live           INTEGER NOT NULL DEFAULT 0,
                 last_viewer_count INTEGER NOT NULL DEFAULT 0
+            )"#,
+            r#"CREATE TABLE twitch_stream_sessions (
+                id             BIGSERIAL PRIMARY KEY,
+                streamer_login TEXT NOT NULL,
+                started_at     TIMESTAMPTZ NOT NULL DEFAULT NOW()
             )"#,
         ] {
             sqlx::query(ddl).execute(&pool).await.expect("DDL fehlgeschlagen");
