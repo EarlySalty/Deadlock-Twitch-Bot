@@ -19,6 +19,8 @@ tracing    = { workspace = true }
 tokio      = { workspace = true, features = ["time"] }
 tb-error   = { workspace = true }
 tb-crypto  = { workspace = true }
+tb-llm     = { workspace = true }
+tb-transport-twitch = { workspace = true }
 
 [dev-dependencies]
 tokio      = { workspace = true }

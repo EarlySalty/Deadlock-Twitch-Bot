@@ -372,9 +372,18 @@ fn resolve_anthropic_key() -> Option<String> {
         .filter(|v| !v.is_empty())
 }
 
+/// Ledger-Zweck aller Post-Stream-MiniMax-Calls (Python
+/// `_track_minimax_completion(..., purpose="post-stream-report")`).
+const MINIMAX_LEDGER_PURPOSE: &str = "post-stream-report";
+
 #[derive(serde::Deserialize)]
 struct MinimaxResponse {
+    #[serde(default)]
     choices: Vec<MinimaxChoice>,
+    /// Token-Verbrauch aus der OpenAI-kompatiblen Antwort (best-effort; fehlt bei
+    /// manchen Fehler-/Stub-Antworten → wird als 0 verbucht).
+    #[serde(default)]
+    usage: Option<MinimaxUsage>,
 }
 #[derive(serde::Deserialize)]
 struct MinimaxChoice {
@@ -385,8 +394,21 @@ struct MinimaxMessage {
     content: Option<String>,
 }
 
+/// `usage`-Block der MiniMax-Antwort (Python liest `prompt_tokens`/`completion_tokens`).
+#[derive(serde::Deserialize, Default)]
+struct MinimaxUsage {
+    #[serde(default)]
+    prompt_tokens: i64,
+    #[serde(default)]
+    completion_tokens: i64,
+}
+
 /// MiniMax-Chat-Completion für den Post-Stream-Report (Python `_call_minimax`:
 /// temp 0.3, max_tokens 16000, Timeout 180s). Liefert `choices[0].message.content`.
+///
+/// Jeder Call wird — wie in Python via `_track_minimax_completion` — best-effort
+/// ins MiniMax-Usage-Ledger verbucht (`purpose=post-stream-report`), mit den
+/// echten Token-Zahlen aus dem `usage`-Block der Antwort.
 pub async fn call_minimax(base_url: &str, api_key: &str, prompt: &str) -> Result<String, String> {
     let url = format!("{}/chat/completions", base_url.trim_end_matches('/'));
     let body = serde_json::json!({
@@ -410,12 +432,25 @@ pub async fn call_minimax(base_url: &str, api_key: &str, prompt: &str) -> Result
         return Err(format!("HTTP {}", resp.status()));
     }
     let parsed: MinimaxResponse = resp.json().await.map_err(|e| e.to_string())?;
-    Ok(parsed
+    let (content, tokens_in, tokens_out) = split_minimax_response(parsed);
+    // Best-effort-Verbuchung (Python `_track_minimax_completion`): wirft nie und
+    // kippt den Call nicht — die echte Persistenz/Isolation testet `tb-llm`.
+    tb_llm::ledger::record(MINIMAX_LEDGER_PURPOSE, MINIMAX_MODEL, tokens_in, tokens_out, true).await;
+    Ok(content)
+}
+
+/// Zerlegt die geparste MiniMax-Antwort in `(content, tokens_in, tokens_out)`.
+/// Pure Funktion (Python `_track_minimax_completion` liest `usage.prompt_tokens`/
+/// `usage.completion_tokens`; fehlt `usage`, werden 0/0 verbucht).
+fn split_minimax_response(parsed: MinimaxResponse) -> (String, i64, i64) {
+    let usage = parsed.usage.unwrap_or_default();
+    let content = parsed
         .choices
         .into_iter()
         .next()
         .and_then(|c| c.message.content)
-        .unwrap_or_default())
+        .unwrap_or_default();
+    (content, usage.prompt_tokens, usage.completion_tokens)
 }
 
 #[derive(serde::Deserialize)]
@@ -2376,6 +2411,11 @@ mod tests {
     async fn call_minimax_liefert_content() {
         use wiremock::matchers::{method, path};
         use wiremock::{Mock, MockServer, ResponseTemplate};
+        // Ledger NIE auf die echte ~/.claude-Datei schreiben lassen: vor dem ersten
+        // record() (lazy Pool-Bind) auf eine prozess-eigene Temp-DB umlenken.
+        let mut ledger_path = std::env::temp_dir();
+        ledger_path.push(format!("tb_an_test_ledger_{}.db", std::process::id()));
+        std::env::set_var("MINIMAX_USAGE_DB", &ledger_path);
         let server = MockServer::start().await;
         let body = serde_json::json!({"choices": [{"message": {"content": "ANTWORT"}}]});
         Mock::given(method("POST"))
@@ -2385,6 +2425,38 @@ mod tests {
             .await;
         let out = call_minimax(&server.uri(), "k", "prompt").await.unwrap();
         assert_eq!(out, "ANTWORT");
+    }
+
+    #[test]
+    fn split_minimax_response_liest_usage_tokens() {
+        // usage-Block vorhanden → Token-Zahlen werden für das Ledger extrahiert.
+        let parsed: MinimaxResponse = serde_json::from_value(serde_json::json!({
+            "choices": [{"message": {"content": "ANTWORT"}}],
+            "usage": {"prompt_tokens": 321, "completion_tokens": 123},
+        }))
+        .unwrap();
+        let (content, tin, tout) = split_minimax_response(parsed);
+        assert_eq!(content, "ANTWORT");
+        assert_eq!(tin, 321, "tokens_in aus usage.prompt_tokens");
+        assert_eq!(tout, 123, "tokens_out aus usage.completion_tokens");
+    }
+
+    #[test]
+    fn split_minimax_response_ohne_usage_ist_null() {
+        // Fehlt usage (Fehler-/Stub-Antwort) → 0/0 verbucht, Call läuft weiter.
+        let parsed: MinimaxResponse = serde_json::from_value(serde_json::json!({
+            "choices": [{"message": {"content": "X"}}],
+        }))
+        .unwrap();
+        let (content, tin, tout) = split_minimax_response(parsed);
+        assert_eq!(content, "X");
+        assert_eq!((tin, tout), (0, 0));
+    }
+
+    #[test]
+    fn ledger_purpose_ist_post_stream_report() {
+        // Vertrag mit dem Audit (P2.70): purpose='post-stream-report'.
+        assert_eq!(MINIMAX_LEDGER_PURPOSE, "post-stream-report");
     }
 
     #[tokio::test]

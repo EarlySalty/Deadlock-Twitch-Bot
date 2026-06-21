@@ -2412,6 +2412,8 @@ dependencies = [
  "tb-crypto",
  "tb-db",
  "tb-error",
+ "tb-llm",
+ "tb-transport-twitch",
  "thiserror 1.0.69",
  "tokio",
  "tracing",

@@ -42,6 +42,8 @@ pub mod raid_blacklist;
 pub mod raids;
 pub mod self_explainer_log;
 pub mod streamer_link;
+pub mod ads_schedule_collector;
+pub mod subs_snapshot_collector;
 pub mod streamers;
 pub mod streamers_crud;
 pub mod stripe;
