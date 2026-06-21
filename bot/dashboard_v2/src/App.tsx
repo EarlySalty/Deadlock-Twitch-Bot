@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef, Component, type ReactNode, type ErrorInfo } from 'react';
-import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
+import { QueryClient, QueryClientProvider, useQuery } from '@tanstack/react-query';
 import { Header } from '@/components/layout/Header';
 import { TabNavigation, type TabId } from '@/components/layout/TabNavigation';
 import { Overview } from '@/pages/Overview';
@@ -15,6 +15,7 @@ import { resolveTabParam } from '@/tabAliases';
 import { SessionDetail } from '@/pages/SessionDetail';
 import { InternalHomeLanding } from '@/pages/InternalHomeLanding';
 import { VerwaltungPage } from '@/pages/Verwaltung';
+import { OnboardingPage } from '@/pages/Onboarding';
 import Pricing from '@/pages/Pricing';
 import { AnalyticsTour } from '@/components/onboarding/AnalyticsTour';
 import { PlanProvider } from '@/context/PlanContext';
@@ -30,6 +31,7 @@ import {
   PREVIEW_VERWALTUNG_ROUTE,
 } from '@/preview/routes';
 import { shouldRetryApiQuery } from '@/api/httpError';
+import { fetchOnboardingStatus } from '@/api/onboarding';
 import { dashboardRuntimeConfig, resolveEffectiveDemoMode } from '@/runtimeConfig';
 import {
   AlertTriangle,
@@ -132,10 +134,16 @@ function OverviewOrTagesform({ streamer, days, onSessionClick }: OverviewOrTages
 function AnalyticsDashboard() {
   const [streamer, setStreamer] = useState<string | null>(null);
   const [days, setDays] = useState<TimeRange>(30);
-  const [activeTab, setActiveTab] = useState<TabId | 'session-detail'>('overview');
+  const pathStartsOnboarding = normalizePathname(window.location.pathname) === '/twitch/onboarding';
+  const [activeTab, setActiveTab] = useState<TabId | 'session-detail'>(
+    pathStartsOnboarding ? 'onboarding' : 'overview',
+  );
   const [selectedSessionId, setSelectedSessionId] = useState<number | null>(null);
   const [pendingSub, setPendingSub] = useState<string | null>(null);
   const [pendingMode, setPendingMode] = useState<string | null>(null);
+  const hasExplicitTab = useRef(
+    pathStartsOnboarding || Boolean(resolveTabParam(new URLSearchParams(window.location.search).get('tab'))),
+  );
 
   const { data: streamers = [], isLoading: loadingStreamers } = useStreamerList();
   const { data: authStatus, isLoading: loadingAuth, isError: authError } = useAuthStatus();
@@ -146,6 +154,12 @@ function AnalyticsDashboard() {
   const isDemoMode = resolveEffectiveDemoMode({
     pathname: window.location.pathname,
     runtimeConfig: dashboardRuntimeConfig,
+  });
+  const { data: onboardingStatus } = useQuery({
+    queryKey: ['streamer-onboarding'],
+    queryFn: fetchOnboardingStatus,
+    enabled: !loadingAuth && authStatus?.level === 'partner' && !isDemoMode,
+    staleTime: 30_000,
   });
 
   // Tracks if we already auto-set the streamer from auth (fire-once guard)
@@ -174,11 +188,15 @@ function AnalyticsDashboard() {
     }
     const resolved = resolveTabParam(params.get('tab'));
     if (resolved) {
+      hasExplicitTab.current = true;
       setActiveTab(resolved.tab);
       setPendingSub(params.get('sub') ?? resolved.sub ?? null);
       setPendingMode(params.get('mode') ?? resolved.mode ?? null);
+    } else if (pathStartsOnboarding) {
+      hasExplicitTab.current = true;
+      setActiveTab('onboarding');
     }
-  }, [isDemoShell]);
+  }, [isDemoShell, pathStartsOnboarding]);
 
   // Auto-set streamer to logged-in Twitch user on first auth load
   useEffect(() => {
@@ -191,6 +209,17 @@ function AnalyticsDashboard() {
       hasAutoSetStreamer.current = true;
     }
   }, [authStatus, isDemoShell]);
+
+  useEffect(() => {
+    if (
+      !hasExplicitTab.current &&
+      activeTab === 'overview' &&
+      onboardingStatus &&
+      !onboardingStatus.completed
+    ) {
+      setActiveTab('onboarding');
+    }
+  }, [activeTab, onboardingStatus]);
 
   // Update URL when params change
   useEffect(() => {
@@ -216,6 +245,7 @@ function AnalyticsDashboard() {
   };
 
   const handleTabChange = (tab: TabId) => {
+    hasExplicitTab.current = true;
     setActiveTab(tab);
     setPendingSub(null);
     setPendingMode(null);
@@ -316,6 +346,10 @@ function AnalyticsDashboard() {
           )}
 
           {/* Tab Content */}
+          {activeTab === 'onboarding' && (
+            <OnboardingPage onNavigateOverview={() => handleTabChange('overview')} />
+          )}
+
           {activeTab === 'overview' && (
             <OverviewOrTagesform
               streamer={streamer}
@@ -380,6 +414,7 @@ export default function App() {
   const isAnalyticsRoute =
     path === PREVIEW_ANALYTICS_ROUTE ||
     path === '/analyse' ||
+    path === '/twitch/onboarding' ||
     path === '/dashboard-v2' ||
     path === '/twitch/dashboard-v2';
 
