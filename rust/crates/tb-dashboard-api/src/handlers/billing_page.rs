@@ -51,6 +51,20 @@ use crate::auth::level::DashboardAuthLevel;
 /// ist (Pythons letzter `_billing_configured_public_origin`-Fallback).
 const DEFAULT_PUBLIC_ORIGIN: &str = "https://admin.deutsche-deadlock-community.de";
 
+/// P2.103: User-sichtbarer AGB-/§356-Widerrufsrecht-Hinweis auf der Stripe-
+/// Checkout-Seite (deutscher Rechtstext). PLATZHALTER — finaler Wortlaut wird von
+/// Claude gesetzt (Markdown-Link zu AGB + Anerkennung des Widerrufsrecht-Verlusts
+/// nach § 356 Abs. 5 BGB; Python-Vorlage: abbo_billing_routes.py:99-107).
+const CHECKOUT_TOS_MESSAGE: &str = "Mit dem Kauf stimmst du unseren AGB zu. Du verlangst ausdrücklich, dass die Leistung sofort beginnt, und bestätigst, dass dein Widerrufsrecht mit der vollständigen Vertragserfüllung gemäß § 356 Abs. 5 BGB erlischt.";
+
+/// P1.44: User-sichtbare Status-Meldungen der Checkout-Preview (vier Zweige aus
+/// `routes_billing.py:api_billing_checkout_preview`). PLATZHALTER — finaler
+/// deutscher Wortlaut wird von Claude gesetzt.
+const PREVIEW_MSG_FREE: &str = "Dieser Plan ist kostenlos – ein Checkout ist nicht nötig.";
+const PREVIEW_MSG_READY: &str = "Der Checkout ist startklar.";
+const PREVIEW_MSG_MISSING_PRICE: &str = "Für diesen Plan ist noch keine Preis-ID hinterlegt.";
+const PREVIEW_MSG_NOT_CONFIGURED: &str = "Der Bezahlvorgang ist noch nicht vollständig eingerichtet.";
+
 /// Laufzeit-Konfiguration des nativen Bezahlpfades (als Extension injiziert).
 ///
 /// `None` als Extension → Stripe nicht konfiguriert → Checkout/Cancel leiten auf
@@ -203,6 +217,12 @@ pub async fn checkout_start_handler(
         "billing_address_collection": "required",
         "tax_id_collection": { "enabled": true },
         "consent_collection": { "terms_of_service": "required" },
+        // P2.103: AGB + §356-Widerrufsrecht-Hinweis auf der Stripe-Checkout-Seite.
+        "custom_text": {
+            "terms_of_service_acceptance": {
+                "message": CHECKOUT_TOS_MESSAGE,
+            },
+        },
         "client_reference_id": reference,
         "metadata": {
             "plan_id": plan_id,
@@ -258,14 +278,55 @@ pub async fn checkout_start_handler(
 
 // ── Kündigen ────────────────────────────────────────────────────────────────
 
-/// `GET|POST /twitch/abbo/kündigen` — Kündigung via Stripe-Customer-Portal,
-/// Fallback `cancel_at_period_end`.
+/// `GET|POST /twitch/abbo/kündigen` — method-bewusster Kündigungs-Einstieg
+/// (P1.37 POST-only-Guard + P1.38 CSRF).
 ///
-/// Port von `abbo_billing_routes.py:abbo_cancel`. Ermittelt die Stripe-Customer-/
-/// Subscription-ID des eingeloggten Partners aus `twitch_billing_subscriptions`.
-/// Hat der Customer eine Portal-Session → Redirect dorthin (Stripe-hosted, deckt
-/// Kündigung + Rechnungen ab). Sonst direkter `cancel_at_period_end`-Fallback.
+/// Die Route ist (in lib.rs) auf GET UND POST registriert; dieser eine Handler
+/// trennt die Methoden:
+/// - **GET** → KEINE state-ändernde Aktion (Prefetch/Link/Image-CSRF-Schutz),
+///   Redirect `cancel=post_required` (Python `abbo_billing_routes.py:186-187`).
+/// - **POST** → Form-Body-CSRF-Validierung (Localhost-Bypass); ungültig →
+///   `cancel=csrf_invalid` (Python :188-191), sonst Kündigung via [`cancel_execute`].
+///
+/// Nicht eingeloggt → Login-Redirect (vor jedem Stripe-Kontakt).
 pub async fn cancel_handler(
+    method: axum::http::Method,
+    auth: DashboardAuthLevel,
+    auth_state: Option<Extension<crate::auth::session::DashboardAuthState>>,
+    config: Option<Extension<BillingPageConfig>>,
+    State(pool): State<PgPool>,
+    headers: axum::http::HeaderMap,
+    body: axum::body::Bytes,
+) -> Response {
+    // Auth-Gate zuerst (CSRF-Validierung braucht eine Session).
+    if customer_reference_for(&auth).is_none() {
+        return Redirect::to("/twitch/auth/login?next=%2Ftwitch%2Fpricing").into_response();
+    }
+
+    // P1.37: GET darf nicht kündigen.
+    if method != axum::http::Method::POST {
+        return Redirect::to("/twitch/pricing?cancel=post_required").into_response();
+    }
+
+    // P1.38: CSRF aus dem Form-Body (Localhost-Bypass).
+    let form = parse_form(&body);
+    if !matches!(auth, DashboardAuthLevel::Localhost)
+        && !verify_cancel_csrf(auth_state.as_ref(), &headers, &form).await
+    {
+        return Redirect::to("/twitch/pricing?cancel=csrf_invalid").into_response();
+    }
+
+    cancel_execute(auth, config, State(pool)).await
+}
+
+/// Kündigungs-Ausführung via Stripe-Customer-Portal, Fallback `cancel_at_period_end`.
+///
+/// Port von `abbo_billing_routes.py:abbo_cancel` (ab Zeile 193). Ermittelt die
+/// Stripe-Customer-/Subscription-ID des eingeloggten Partners aus
+/// `twitch_billing_subscriptions`. Hat der Customer eine Portal-Session → Redirect
+/// dorthin (Stripe-hosted, deckt Kündigung + Rechnungen ab). Sonst direkter
+/// `cancel_at_period_end`-Fallback. CSRF/POST-Guard liegen in den HTTP-Handlern.
+pub async fn cancel_execute(
     auth: DashboardAuthLevel,
     config: Option<Extension<BillingPageConfig>>,
     State(pool): State<PgPool>,
@@ -432,17 +493,111 @@ pub async fn catalog_handler(
     payload["billing_profile"] = profile;
     payload["billing_profile_imported_fields"] = json!(imported_fields);
 
-    payload["payment"] = json!({
-        "provider": "stripe",
-        "catalog_path": "/twitch/api/billing/catalog",
-        "readiness_path": "/twitch/api/billing/readiness",
-        "checkout_path": "/twitch/abbo/bezahlen",
-        "cancel_path": "/twitch/abbo/kündigen",
-        "webhook_path": "/twitch/api/billing/stripe/webhook",
-        "checkout_ready": checkout_ready,
-    });
+    payload["payment"] = payment_section(&readiness);
 
     Json(payload).into_response()
+}
+
+// ── Checkout-Preview (JSON, P1.44) ───────────────────────────────────────────
+
+/// Request-Body von `POST /twitch/api/billing/checkout-preview`.
+#[derive(Debug, Deserialize, Default)]
+pub struct CheckoutPreviewBody {
+    #[serde(default)]
+    pub plan_id: Option<String>,
+    /// Zyklus als Zahl ODER String (Python akzeptiert beides) → über Helfer geparst.
+    #[serde(default)]
+    pub cycle_months: Option<Value>,
+}
+
+/// `POST /twitch/api/billing/checkout-preview` — validiert die Plan-Auswahl und
+/// liefert Stripe-Ready-Metadaten für die Pre-Checkout-UX.
+///
+/// Port von `routes_billing.py:api_billing_checkout_preview`. Nicht authentifiziert
+/// → 401; unbekannte `plan_id` → 404 `unknown_plan_id` (+ `available_plan_ids`);
+/// sonst 200 mit `ready`/`integration_state`/`message`/`next_steps`. Die
+/// `message`-Texte sind user-sichtbar → PLATZHALTER (Claude setzt den Wortlaut).
+pub async fn checkout_preview_handler(
+    auth: DashboardAuthLevel,
+    config: Option<Extension<BillingPageConfig>>,
+    Json(body): Json<CheckoutPreviewBody>,
+) -> Response {
+    if !auth.is_authenticated() {
+        return (StatusCode::UNAUTHORIZED, Json(json!({ "error": "auth_required" }))).into_response();
+    }
+
+    let cycle = normalize_billing_cycle(parse_cycle_value(body.cycle_months.as_ref()));
+    let catalog = catalog_json(cycle);
+    let plans = catalog["plans"].as_array().cloned().unwrap_or_default();
+
+    let selected_plan_id = body.plan_id.unwrap_or_default().trim().to_string();
+    let Some(selected_plan) = plans
+        .iter()
+        .find(|p| p["id"].as_str() == Some(selected_plan_id.as_str()))
+        .cloned()
+    else {
+        let available: Vec<&str> = plans.iter().filter_map(|p| p["id"].as_str()).collect();
+        return (
+            StatusCode::NOT_FOUND,
+            Json(json!({ "error": "unknown_plan_id", "available_plan_ids": available })),
+        )
+            .into_response();
+    };
+
+    let total_cents = selected_plan["price"]["total_net_cents"].as_i64().unwrap_or(0);
+    let readiness = readiness_payload(config.as_ref().map(|Extension(c)| c));
+    let checkout_ready = readiness["checkout_ready"].as_bool().unwrap_or(false);
+    let price_map_ready = readiness["price_map_ready"].as_bool().unwrap_or(false);
+    let price_id = if is_paid_plan_id(&selected_plan_id) {
+        price_id_default(&selected_plan_id, cycle)
+    } else {
+        None
+    };
+    let checkout_possible =
+        total_cents > 0 && checkout_ready && price_map_ready && price_id.is_some();
+    let ready = total_cents <= 0 || checkout_possible;
+
+    // P1.44: user-sichtbare Status-Meldung — vier Zweige (Python). PLATZHALTER.
+    let message = if total_cents <= 0 {
+        PREVIEW_MSG_FREE
+    } else if checkout_possible {
+        PREVIEW_MSG_READY
+    } else if checkout_ready && price_id.is_none() {
+        PREVIEW_MSG_MISSING_PRICE
+    } else {
+        PREVIEW_MSG_NOT_CONFIGURED
+    };
+
+    let payload = json!({
+        "ready": ready,
+        "provider": "stripe",
+        "integration_state": readiness["integration_state"].as_str().unwrap_or("planned"),
+        "currency": catalog["currency"],
+        "tax_mode": catalog["tax_mode"],
+        "gross_available": catalog["gross_available"],
+        "cycle_months": catalog["cycle_months"],
+        "cycle_label": catalog["cycle_label"],
+        "plan": selected_plan,
+        "stripe_price_id": price_id.map(Value::from).unwrap_or(Value::Null),
+        "invoice_preview_path": "/twitch/api/billing/invoice-preview",
+        "invoice_page_path": "/twitch/abbo/rechnung",
+        "message": message,
+        "stripe_docs_url": tb_analytics::billing::catalog::STRIPE_QUICKSTART_URL,
+        "next_steps": [
+            "stripe_product_price_ids_hinterlegen",
+            "webhook_verarbeitung_fuer_abos_aktivieren",
+        ],
+    });
+    Json(payload).into_response()
+}
+
+/// Parst `cycle_months` aus JSON (Zahl ODER String, sonst `1`).
+fn parse_cycle_value(raw: Option<&Value>) -> u32 {
+    match raw {
+        Some(Value::Number(n)) => n.as_u64().unwrap_or(1) as u32,
+        Some(Value::String(s)) => s.trim().parse::<u32>().unwrap_or(1),
+        _ => 1,
+    }
 }
 
 // ── Readiness (JSON) ────────────────────────────────────────────────────────
@@ -486,6 +641,45 @@ fn readiness_payload(config: Option<&BillingPageConfig>) -> Value {
     })
 }
 
+/// Baut die `payment`-Sektion des Katalogs (P2.125-Parität).
+///
+/// Port von `billing_plans.py:build_billing_catalog payment` + den Pfad-Ergänzungen
+/// aus `routes_billing.py:api_billing_catalog`. `integration_state`/`checkout_enabled`
+/// werden aus der Readiness abgeleitet (`payment_state_from_readiness`); die übrigen
+/// Felder sind statische Pfade/Metadaten. `checkout_ready` (Rust-Zusatz) bleibt
+/// erhalten, damit bestehende Frontend-Konsumenten nicht brechen.
+fn payment_section(readiness: &Value) -> Value {
+    use tb_analytics::billing::catalog::{
+        payment_state_from_readiness, STRIPE_QUICKSTART_URL, SUPPORTED_METHODS_PLANNED,
+    };
+
+    let checkout_ready = readiness["checkout_ready"].as_bool().unwrap_or(false);
+    let price_map_ready = readiness["price_map_ready"].as_bool().unwrap_or(false);
+    let integration_override = readiness["integration_state"].as_str();
+    let state = payment_state_from_readiness(checkout_ready, price_map_ready, integration_override);
+
+    json!({
+        "provider": "stripe",
+        "integration_state": state.integration_state,
+        "checkout_enabled": state.checkout_enabled,
+        "checkout_preview_enabled": true,
+        "catalog_path": "/twitch/api/billing/catalog",
+        "checkout_preview_path": "/twitch/api/billing/checkout-preview",
+        "readiness_path": "/twitch/api/billing/readiness",
+        "webhook_path": "/twitch/api/billing/stripe/webhook",
+        "quickstart_url": STRIPE_QUICKSTART_URL,
+        "supported_methods_planned": SUPPORTED_METHODS_PLANNED,
+        // Pfad-Ergänzungen aus routes_billing.py:api_billing_catalog.
+        "invoice_preview_path": "/twitch/api/billing/invoice-preview",
+        "invoice_page_path": "/twitch/abbo/rechnung",
+        "stripe_sync_path": "/twitch/api/billing/stripe/sync-products",
+        // Rust-native Zusätze (Bestandsschutz für bestehende Konsumenten).
+        "checkout_path": "/twitch/abbo/bezahlen",
+        "cancel_path": "/twitch/abbo/kündigen",
+        "checkout_ready": checkout_ready,
+    })
+}
+
 // ── Hilfsfunktionen ─────────────────────────────────────────────────────────
 
 /// Customer-Reference des eingeloggten Nutzers (Login bevorzugt, sonst User-ID).
@@ -526,6 +720,55 @@ fn login_and_user_id(auth: &DashboardAuthLevel) -> (String, String) {
 /// Parst einen `u32` aus einem optionalen String, sonst Default.
 fn parse_u32(raw: Option<&str>, default: u32) -> u32 {
     raw.and_then(|s| s.trim().parse::<u32>().ok()).unwrap_or(default)
+}
+
+/// Parst einen URL-encoded Form-Body in Key/Value-Paare.
+fn parse_form(body: &[u8]) -> Vec<(String, String)> {
+    url::form_urlencoded::parse(body)
+        .map(|(k, v)| (k.into_owned(), v.into_owned()))
+        .collect()
+}
+
+/// Liest einen Form-Wert (leer wenn nicht vorhanden).
+fn form_get<'a>(form: &'a [(String, String)], key: &str) -> &'a str {
+    form.iter().find(|(k, _)| k == key).map(|(_, v)| v.as_str()).unwrap_or("")
+}
+
+/// Validiert das Form-Body-CSRF-Token der Kündigung gegen die Session
+/// (Admin- vor Partner-Cookie). Spiegelt `billing_profile::verify_form_csrf`.
+async fn verify_cancel_csrf(
+    auth_state: Option<&Extension<crate::auth::session::DashboardAuthState>>,
+    headers: &axum::http::HeaderMap,
+    form: &[(String, String)],
+) -> bool {
+    use crate::auth::session::{ADMIN_COOKIE_NAME, PARTNER_COOKIE_NAME};
+    let Some(Extension(state)) = auth_state else {
+        return false;
+    };
+    let presented = form_get(form, "csrf_token").trim().to_string();
+    let cookie_header = headers
+        .get(axum::http::header::COOKIE)
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or("");
+    let read = |name: &str| -> Option<String> {
+        cookie_header.split(';').find_map(|pair| {
+            let pair = pair.trim();
+            pair.split_once('=')
+                .filter(|(k, _)| k.trim() == name)
+                .map(|(_, v)| v.trim().to_string())
+        })
+    };
+    let (cookie, session_type) = if let Some(c) = read(ADMIN_COOKIE_NAME).filter(|s| !s.is_empty()) {
+        (c, "discord_admin")
+    } else if let Some(c) = read(PARTNER_COOKIE_NAME).filter(|s| !s.is_empty()) {
+        (c, "twitch")
+    } else {
+        return false;
+    };
+    state
+        .validate_csrf(&cookie, session_type, &presented)
+        .await
+        .unwrap_or(false)
 }
 
 /// Redirect auf die Pricing-Seite mit `checkout=unavailable&reason=...`.
@@ -635,6 +878,150 @@ mod tests {
         assert_eq!(payload["ready_for_live"], false);
     }
 
+    /// P1.37: GET /twitch/abbo/kündigen löst KEINE Kündigung aus, sondern
+    /// redirectet auf cancel=post_required. Pool/Config werden nie berührt
+    /// (würde sonst beim leeren Pool/HTTP-Call panicen).
+    #[tokio::test]
+    async fn cancel_get_is_post_only_guard() {
+        let Some(pool) = pool_or_skip("bp_cancel_get_guard").await else { return };
+        let resp = cancel_handler(
+            axum::http::Method::GET,
+            partner("login", "5"),
+            None,
+            None,
+            State(pool),
+            axum::http::HeaderMap::new(),
+            axum::body::Bytes::new(),
+        )
+        .await;
+        assert_eq!(resp.status(), StatusCode::SEE_OTHER);
+        let loc = resp.headers().get("location").unwrap().to_str().unwrap();
+        assert_eq!(loc, "/twitch/pricing?cancel=post_required");
+    }
+
+    /// P1.37: GET-Guard ohne Login → Login-Redirect (vor Pool/Config).
+    #[tokio::test]
+    async fn cancel_get_unauthenticated_redirects_login() {
+        let Some(pool) = pool_or_skip("bp_cancel_get_unauth").await else { return };
+        let resp = cancel_handler(
+            axum::http::Method::GET,
+            DashboardAuthLevel::None,
+            None,
+            None,
+            State(pool),
+            axum::http::HeaderMap::new(),
+            axum::body::Bytes::new(),
+        )
+        .await;
+        assert_eq!(resp.status(), StatusCode::SEE_OTHER);
+        let loc = resp.headers().get("location").unwrap().to_str().unwrap();
+        assert!(loc.contains("/twitch/auth/login"), "got {loc}");
+    }
+
+    /// P1.38: POST ohne gültiges CSRF-Token (kein auth_state) → cancel=csrf_invalid,
+    /// KEINE Kündigung (Stripe wird nie kontaktiert).
+    #[tokio::test]
+    async fn cancel_post_without_csrf_is_rejected() {
+        let Some(pool) = pool_or_skip("bp_cancel_csrf").await else { return };
+        let resp = cancel_handler(
+            axum::http::Method::POST,
+            partner("login", "5"),
+            None, // kein DashboardAuthState → CSRF schlägt fehl
+            None,
+            State(pool),
+            axum::http::HeaderMap::new(),
+            axum::body::Bytes::new(),
+        )
+        .await;
+        assert_eq!(resp.status(), StatusCode::SEE_OTHER);
+        let loc = resp.headers().get("location").unwrap().to_str().unwrap();
+        assert_eq!(loc, "/twitch/pricing?cancel=csrf_invalid");
+    }
+
+    /// P2.125: Die served `payment`-Sektion trägt die zuvor fehlenden Keys.
+    #[test]
+    fn payment_section_emits_full_python_keys() {
+        let readiness = readiness_payload(None); // checkout_ready=false → planned
+        let payment = payment_section(&readiness);
+        assert_eq!(payment["provider"], "stripe");
+        assert_eq!(payment["integration_state"], "planned");
+        assert_eq!(payment["checkout_enabled"], false);
+        assert_eq!(payment["checkout_preview_enabled"], true);
+        assert_eq!(payment["checkout_preview_path"], "/twitch/api/billing/checkout-preview");
+        assert_eq!(payment["quickstart_url"], "https://docs.stripe.com/billing/quickstart");
+        let methods = payment["supported_methods_planned"].as_array().unwrap();
+        assert!(methods.iter().any(|m| m == "card"));
+        assert!(methods.iter().any(|m| m == "sepa_debit"));
+        assert!(methods.iter().any(|m| m == "paypal_via_wallet_if_enabled"));
+    }
+
+    /// P1.44: Preview ohne Auth → 401.
+    #[tokio::test]
+    async fn checkout_preview_unauthenticated_401() {
+        let resp = checkout_preview_handler(
+            DashboardAuthLevel::None,
+            None,
+            Json(CheckoutPreviewBody { plan_id: Some("raid_boost".into()), cycle_months: None }),
+        )
+        .await;
+        assert_eq!(resp.status(), StatusCode::UNAUTHORIZED);
+    }
+
+    /// P1.44: unbekannte plan_id → 404 unknown_plan_id + available_plan_ids.
+    #[tokio::test]
+    async fn checkout_preview_unknown_plan_404() {
+        let resp = checkout_preview_handler(
+            partner("login", "5"),
+            None,
+            Json(CheckoutPreviewBody { plan_id: Some("does_not_exist".into()), cycle_months: None }),
+        )
+        .await;
+        assert_eq!(resp.status(), StatusCode::NOT_FOUND);
+        let body = axum::body::to_bytes(resp.into_body(), usize::MAX).await.unwrap();
+        let v: Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(v["error"], "unknown_plan_id");
+        assert!(v["available_plan_ids"].as_array().unwrap().iter().any(|p| p == "raid_boost"));
+    }
+
+    /// P1.44: gültiger bezahlter Plan ohne Stripe-Config → 200 mit readiness/
+    /// next_steps; ready=false (Checkout nicht konfiguriert), price_id=null.
+    #[tokio::test]
+    async fn checkout_preview_valid_plan_returns_readiness() {
+        let resp = checkout_preview_handler(
+            partner("login", "5"),
+            None,
+            Json(CheckoutPreviewBody {
+                plan_id: Some("raid_boost".into()),
+                cycle_months: Some(serde_json::json!(1)),
+            }),
+        )
+        .await;
+        assert_eq!(resp.status(), StatusCode::OK);
+        let body = axum::body::to_bytes(resp.into_body(), usize::MAX).await.unwrap();
+        let v: Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(v["provider"], "stripe");
+        assert_eq!(v["plan"]["id"], "raid_boost");
+        assert_eq!(v["integration_state"], "planned");
+        assert_eq!(v["ready"], false);
+        assert!(v["next_steps"].as_array().unwrap().len() == 2);
+    }
+
+    /// P1.44: Free-Plan → ready=true (kein Stripe nötig).
+    #[tokio::test]
+    async fn checkout_preview_free_plan_is_ready() {
+        let resp = checkout_preview_handler(
+            partner("login", "5"),
+            None,
+            Json(CheckoutPreviewBody { plan_id: Some("raid_free".into()), cycle_months: None }),
+        )
+        .await;
+        assert_eq!(resp.status(), StatusCode::OK);
+        let body = axum::body::to_bytes(resp.into_body(), usize::MAX).await.unwrap();
+        let v: Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(v["ready"], true);
+        assert!(v["stripe_price_id"].is_null());
+    }
+
     #[tokio::test]
     async fn abbo_redirect_keeps_query_string() {
         let resp = abbo_redirect_handler(axum::extract::RawQuery(Some("cycle=12".to_string()))).await;
@@ -690,6 +1077,8 @@ mod tests {
             .and(path("/v1/checkout/sessions"))
             // Beleg: Plan/Cycle landen in den Metadaten der Session.
             .and(body_string_contains("subscription"))
+            // P2.103: AGB/§356-custom_text wird mitgesendet.
+            .and(body_string_contains("terms_of_service_acceptance"))
             .respond_with(ResponseTemplate::new(200).set_body_json(json!({
                 "id": "cs_test_abc",
                 "url": "https://checkout.stripe.com/c/pay/cs_test_abc",
@@ -822,7 +1211,7 @@ mod tests {
     async fn cancel_without_subscription_redirects_missing() {
         let Some(pool) = pool_or_skip("bp_cancel_missing").await else { return };
         let server = MockServer::start().await;
-        let resp = cancel_handler(
+        let resp = cancel_execute(
             partner("nobody", "9"),
             Some(Extension(cfg_with_base(&server.uri()))),
             State(pool.clone()),
@@ -855,7 +1244,7 @@ mod tests {
             .mount(&server)
             .await;
 
-        let resp = cancel_handler(
+        let resp = cancel_execute(
             partner("login", "5"),
             Some(Extension(cfg_with_base(&server.uri()))),
             State(pool.clone()),
@@ -886,7 +1275,7 @@ mod tests {
             .mount(&server)
             .await;
 
-        let resp = cancel_handler(
+        let resp = cancel_execute(
             partner("login", "5"),
             Some(Extension(cfg_with_base(&server.uri()))),
             State(pool.clone()),

@@ -112,6 +112,75 @@ pub async fn analyse_assets_handler(
     serve_asset(asset_path.trim_start_matches('/')).await
 }
 
+// ── Social-Media-Admin-SPA (P2.66) ────────────────────────────────────────────
+
+/// `GET /social-media-admin` — dedizierte Social-Media-Admin-SPA-Shell.
+///
+/// Port von `api_overview.py:_serve_social_media_admin`. Nutzt dasselbe
+/// dashboard_v2-Bundle wie `/analyse`; der Client-Router rendert anhand des
+/// Pfads das Social-Media-Admin-Dashboard. Anders als `/analyse` wird der
+/// Asset-Prefix `/twitch/dashboard-v2/` NICHT umgeschrieben (Python-Parität:
+/// `_inject_dashboard_runtime_config(..., asset_prefix="/twitch/dashboard-v2/")`),
+/// die Assets liefert die `*path`-Route über den geteilten Dist.
+///
+/// Auth wie die Admin-SPA: Host-Gate VOR der Auth (admin-Host → 404), dann
+/// Login-Gate (None → Redirect, Partner → landing/analytics-Access, Admin/
+/// Localhost → frei).
+pub async fn social_media_admin_handler(
+    headers: HeaderMap,
+    auth: DashboardAuthLevel,
+    State(pool): State<PgPool>,
+) -> Response {
+    if let Some(r) = admin_dashboard_host_page_gate(&headers) {
+        return r;
+    }
+    if let Some(r) = check_spa_auth(&auth, &pool).await {
+        return r;
+    }
+
+    let index = dist_root().join("index.html");
+    let html = match tokio::fs::read_to_string(&index).await {
+        Ok(s) => s,
+        Err(_) => {
+            return (
+                StatusCode::NOT_FOUND,
+                "Dashboard not built. Run npm run build in dashboard_v2/",
+            )
+                .into_response()
+        }
+    };
+    // Asset-Prefix bleibt /twitch/dashboard-v2/ (kein Rewrite); nur Runtime-
+    // Script injizieren.
+    let html = html.replacen("</head>", &format!("{RUNTIME_SCRIPT}\n  </head>"), 1);
+
+    (
+        [
+            (header::CONTENT_TYPE, "text/html; charset=utf-8"),
+            (header::CACHE_CONTROL, "no-cache"),
+        ],
+        html,
+    )
+        .into_response()
+}
+
+/// `GET /social-media-admin/{path:.*}` — statische Assets aus dem dashboard_v2-
+/// Dist (geteilt mit `/analyse`). Gleiche Auth- + Host-Gate-Kaskade wie die
+/// Shell. Python: `_serve_dashboard_v2_assets`.
+pub async fn social_media_admin_assets_handler(
+    headers: HeaderMap,
+    auth: DashboardAuthLevel,
+    State(pool): State<PgPool>,
+    Path(asset_path): Path<String>,
+) -> Response {
+    if let Some(r) = admin_dashboard_host_page_gate(&headers) {
+        return r;
+    }
+    if let Some(r) = check_spa_auth(&auth, &pool).await {
+        return r;
+    }
+    serve_asset(asset_path.trim_start_matches('/')).await
+}
+
 // ── Auth-Prüfung ─────────────────────────────────────────────────────────────
 
 /// Gibt `Some(Response)` zurück wenn der Zugriff verweigert wird, sonst `None`.

@@ -184,6 +184,40 @@ pub(crate) fn extract_cookie<'a>(parts: &'a Parts, name: &str) -> Option<&'a str
 /// Spiegelt Python `_TWITCH_ADMIN_LOGINS` (api_v2.py:464), kleingeschrieben.
 const TWITCH_ADMIN_LOGINS: &[&str] = &["earlysalty"];
 
+/// Header-Name des optionalen Admin-Token-Auth-Pfades (P3.18, Python
+/// `X-Admin-Token`).
+const ADMIN_TOKEN_HEADER: &str = "x-admin-token";
+
+/// Erwarteter Admin-Token aus dem Prozess-Env (Infisical). Leer/fehlend → `None`
+/// (Auth-Pfad deaktiviert, fail-closed). NIE loggen.
+fn expected_admin_token() -> Option<String> {
+    std::env::var("TWITCH_DASHBOARD_ADMIN_TOKEN")
+        .ok()
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty())
+}
+
+/// Prüft den `X-Admin-Token`-Header konstant-zeitlich gegen den Env-Token (P3.18).
+///
+/// Restauriert den in der Python-Kaskade vorhandenen Header-Auth-Pfad
+/// (`secrets.compare_digest`). Fehlt der Header oder ist kein Token konfiguriert →
+/// `false` (fail-closed). Konstant-zeitlicher Vergleich gegen Timing-Seitenkanäle.
+fn admin_token_matches(parts: &Parts) -> bool {
+    let Some(expected) = expected_admin_token() else {
+        return false;
+    };
+    let presented = parts
+        .headers
+        .get(ADMIN_TOKEN_HEADER)
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or("")
+        .trim();
+    if presented.is_empty() {
+        return false;
+    }
+    tb_crypto::constant_time_eq(presented.as_bytes(), expected.as_bytes())
+}
+
 /// Macht aus einer geladenen Partner-Session das Auth-Level: Admin-Login-Promotion
 /// (Python api_v2.py:1339-1342) — loggt sich ein Admin per Twitch-OAuth statt
 /// Discord ein, bekommt er Admin-Rechte (canViewAllStreamers), sonst Partner.
@@ -225,6 +259,13 @@ where
         // Localhost-Check zuerst (kein DB-Lookup nötig)
         if is_local_request(parts) {
             return Ok(DashboardAuthLevel::Localhost);
+        }
+
+        // P3.18: optionaler X-Admin-Token-Header (Infisical-Token, konstant-zeitlich).
+        // Restauriert den Python-Header-Auth-Pfad — nur aktiv, wenn der Env-Token
+        // gesetzt ist; sonst fail-closed (Header wird ignoriert). Kein DB-Lookup.
+        if admin_token_matches(parts) {
+            return Ok(DashboardAuthLevel::admin());
         }
 
         // Auth-State-Extension holen (enthält Pool + Cache)
@@ -352,6 +393,36 @@ mod tests {
             "partner"
         );
         assert_eq!(DashboardAuthLevel::None.as_str(), "none");
+    }
+
+    // ── P3.18: X-Admin-Token-Header-Pfad ────────────────────────────────────
+    use std::sync::Mutex;
+    static ENV_LOCK: Mutex<()> = Mutex::new(());
+
+    fn parts_with_admin_token(token: Option<&str>) -> Parts {
+        let mut builder = axum::http::Request::builder().header("host", "dash.example.com");
+        if let Some(t) = token {
+            builder = builder.header("x-admin-token", t);
+        }
+        builder.body(()).unwrap().into_parts().0
+    }
+
+    #[test]
+    fn admin_token_match_bei_korrektem_header() {
+        let _g = ENV_LOCK.lock().unwrap_or_else(|p| p.into_inner());
+        std::env::set_var("TWITCH_DASHBOARD_ADMIN_TOKEN", "supersecret-admin");
+        assert!(admin_token_matches(&parts_with_admin_token(Some("supersecret-admin"))));
+        assert!(!admin_token_matches(&parts_with_admin_token(Some("falsch"))));
+        assert!(!admin_token_matches(&parts_with_admin_token(None)));
+        std::env::remove_var("TWITCH_DASHBOARD_ADMIN_TOKEN");
+    }
+
+    #[test]
+    fn admin_token_fail_closed_ohne_env() {
+        let _g = ENV_LOCK.lock().unwrap_or_else(|p| p.into_inner());
+        std::env::remove_var("TWITCH_DASHBOARD_ADMIN_TOKEN");
+        // Ohne konfiguriertes Token darf KEIN Header durchkommen.
+        assert!(!admin_token_matches(&parts_with_admin_token(Some("egal"))));
     }
 
     #[test]

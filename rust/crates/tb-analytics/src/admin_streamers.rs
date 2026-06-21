@@ -122,6 +122,18 @@ pub enum StreamerView {
 }
 
 impl StreamerView {
+    /// Parst den Query-Parameter-String inkl. Default-Verhalten.
+    ///
+    /// Parität Python `_admin_parse_streamer_view` (api_admin.py:1000-1006):
+    /// fehlender/leerer View → `Active` (nicht `All`). Unbekannte Werte → `None`,
+    /// damit der Handler einen 400 zurückgeben kann.
+    pub fn parse_or_default(s: Option<&str>) -> Option<Self> {
+        match s.map(str::trim).unwrap_or("") {
+            "" => Some(Self::Active),
+            other => Self::parse(other),
+        }
+    }
+
     /// Parst den Query-Parameter-String. Case-insensitive. Gibt `None` bei unbekanntem Wert.
     pub fn parse(s: &str) -> Option<Self> {
         match s.trim().to_lowercase().as_str() {
@@ -133,6 +145,19 @@ impl StreamerView {
             "token_error" => Some(Self::TokenError),
             "all" => Some(Self::All),
             _ => None,
+        }
+    }
+
+    /// Kanonischer View-Name (für das `view`-Feld der Response).
+    pub fn canonical_name(self) -> &'static str {
+        match self {
+            Self::Active => "active",
+            Self::Archived => "archived",
+            Self::Departnered => "departnered",
+            Self::Blocked => "blocked",
+            Self::NonPartner => "non_partner",
+            Self::TokenError => "token_error",
+            Self::All => "all",
         }
     }
 
@@ -782,6 +807,22 @@ mod tests {
         let snap = scope_snapshot(None, 0);
         assert_eq!(snap.status, "missing");
         assert!(!snap.connected);
+    }
+
+    #[test]
+    fn view_parse_or_default_ist_active() {
+        // P2.80: fehlender/leerer View → Active (Python-Default), nicht All.
+        assert_eq!(StreamerView::parse_or_default(None), Some(StreamerView::Active));
+        assert_eq!(StreamerView::parse_or_default(Some("")), Some(StreamerView::Active));
+        assert_eq!(StreamerView::parse_or_default(Some("  ")), Some(StreamerView::Active));
+        // Explizite Werte bleiben erhalten.
+        assert_eq!(StreamerView::parse_or_default(Some("all")), Some(StreamerView::All));
+        assert_eq!(
+            StreamerView::parse_or_default(Some("archived")),
+            Some(StreamerView::Archived)
+        );
+        // Unbekannt → None (Handler liefert 400).
+        assert_eq!(StreamerView::parse_or_default(Some("bogus")), None);
     }
 
     #[test]

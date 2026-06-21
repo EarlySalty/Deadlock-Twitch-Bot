@@ -81,6 +81,11 @@ pub struct OAuthLoginState {
     /// Beim Authorize verwendete Redirect-URI — muss beim Code-Tausch exakt
     /// wiederholt werden, sonst lehnt Twitch ab.
     pub redirect_uri: String,
+    /// CSRF-Kontext-Token (P2.139): wird beim Login-Start als HttpOnly-Cookie
+    /// gesetzt und im Callback gegen den hier persistierten Wert geprüft. Bindet
+    /// den Callback an denselben Browser → ein cookieloser/fremder Callback (CSRF-
+    /// Login) wird abgelehnt. Leer = keine Bindung (Abwärtskompatibilität).
+    pub context_token: String,
 }
 
 /// `SameSite`-Politik eines Session-Cookies.
@@ -337,6 +342,59 @@ impl DashboardAuthState {
         Ok(SessionCreation { session_id, csrf_token })
     }
 
+    /// Legt eine **durable, geräte-gebundene Partner-Access-Session** an (P1.54,
+    /// Pendant zu Python `PartnerAccessService.create`, services.py:540-566).
+    ///
+    /// Anders als [`Self::create_partner_session`] (kurzlebiges
+    /// `twitch_dash_session`) wird hier eine eigene Row mit Typ `partner_token`
+    /// (Cookie `twitch_dash_session_partner`) geschrieben, die den Einmal-Login
+    /// überdauert. Der Payload trägt zusätzlich die Request-Fingerprint-Bindung
+    /// (User-Agent-Familie + Plattform), gegen die [`Self::load_partner_access_session`]
+    /// jeden späteren Request prüft — ein gestohlenes Cookie auf einem anderen
+    /// Gerät/Browser wird so abgewiesen. TTL hartkodiert 6h.
+    pub async fn create_partner_access_session(
+        &self,
+        twitch_login: &str,
+        twitch_user_id: &str,
+        display_name: &str,
+        request_user_agent: &str,
+    ) -> Result<SessionCreation, sqlx::Error> {
+        let now = unix_now();
+        let session_id = tb_crypto::random_urlsafe_token(SESSION_ID_BYTES);
+        let csrf_token = tb_crypto::random_urlsafe_token(SESSION_ID_BYTES);
+        let expires_at = now as f64 + SESSION_CREATE_TTL_SECS as f64;
+        let display = if display_name.trim().is_empty() {
+            twitch_login
+        } else {
+            display_name
+        };
+        let fp = RequestFingerprint::capture(request_user_agent);
+
+        let payload = serde_json::json!({
+            "twitch_login": twitch_login,
+            "twitch_user_id": twitch_user_id,
+            "display_name": display,
+            "is_partner": true,
+            "auth_type": PARTNER_ACCESS_SESSION_TYPE,
+            "csrf_token": csrf_token,
+            "user_agent_family": fp.family_str(),
+            "user_agent_platform": fp.platform_str(),
+            "created_at": now as f64,
+            "expires_at": expires_at,
+        });
+
+        self.persist_new_session(
+            &session_id,
+            PARTNER_ACCESS_SESSION_TYPE,
+            &payload,
+            now as f64,
+            expires_at,
+        )
+        .await?;
+
+        Ok(SessionCreation { session_id, csrf_token })
+    }
+
     /// Legt eine **neue Discord-Admin-Session** an (Pendant zu Python
     /// auth_mixin.py:1548-1583). Gleiche Mechanik wie [`Self::create_partner_session`],
     /// Session-Typ `discord_admin`, Payload mit `auth_type`/`user_id`/`display_name`.
@@ -418,6 +476,7 @@ impl DashboardAuthState {
         let payload = serde_json::json!({
             "next_path": state.next_path,
             "redirect_uri": state.redirect_uri,
+            "context_token": state.context_token,
             "created_at": now as f64,
             "expires_at": expires_at,
         });
@@ -491,7 +550,12 @@ impl DashboardAuthState {
         if redirect_uri.is_empty() {
             return Ok(None);
         }
-        Ok(Some(OAuthLoginState { next_path, redirect_uri }))
+        let context_token = payload
+            .get("context_token")
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .to_string();
+        Ok(Some(OAuthLoginState { next_path, redirect_uri, context_token }))
     }
 
     /// Prüft, ob ein noch gültiger Raid-OAuth-State existiert, ohne ihn zu
@@ -640,6 +704,48 @@ impl DashboardAuthState {
             // echte Helix-Snapshot landet erst beim create_partner_session-Payload.
             display_name: String::new(),
         }))
+    }
+
+    /// Self-Heal beim OAuth-Login (P1.56): reaktiviert einen departnered/archived/
+    /// paused Partner. Setzt `status='active'`, löscht `departnered_at`/
+    /// `admin_archived_at`, `manual_partner_opt_out=0` und einen reinen
+    /// `token_error`-Pausengrund (`technical_pause_reason`) — räumt also die
+    /// vorübergehenden Sperren auf, sobald sich der Streamer selbst wieder per
+    /// OAuth anmeldet.
+    ///
+    /// **Hart geschützt:** `blocked` und `bot_banned` werden NICHT angefasst (das
+    /// sind administrative Hard-Kills, keine Selbstheilung). Liefert `true`, wenn
+    /// eine Zeile reaktiviert wurde. clean-SQL: Zeitspalten via `NULL` bzw. NOW().
+    pub async fn reactivate_partner(&self, login: &str, user_id: &str) -> Result<bool, sqlx::Error> {
+        let login = login.trim().to_lowercase();
+        let user_id = user_id.trim();
+        if login.is_empty() && user_id.is_empty() {
+            return Ok(false);
+        }
+        let result = sqlx::query(
+            r#"
+            UPDATE twitch_partners
+            SET status = 'active',
+                departnered_at = NULL,
+                admin_archived_at = NULL,
+                manual_partner_opt_out = 0,
+                technical_pause_reason = CASE
+                    WHEN LOWER(COALESCE(technical_pause_reason, '')) IN ('token_error', 'token_error_expired')
+                    THEN NULL ELSE technical_pause_reason
+                END
+            WHERE (
+                    LOWER(twitch_login) = $1
+                    OR ($2 <> '' AND twitch_user_id = $2)
+                )
+              AND LOWER(COALESCE(technical_pause_reason, '')) NOT IN ('blocked', 'bot_banned')
+              AND COALESCE(status, '') <> 'active'
+            "#,
+        )
+        .bind(&login)
+        .bind(user_id)
+        .execute(&self.pool)
+        .await?;
+        Ok(result.rows_affected() > 0)
     }
 
     /// Invalidiert eine Session beim Logout: löscht die Row aus `dashboard_sessions`
@@ -1234,6 +1340,16 @@ impl RequestFingerprint {
             family: Self::family(&ua),
             platform: Self::platform(&ua),
         }
+    }
+
+    /// Erfasste User-Agent-Familie (für die Session-Payload-Bindung).
+    pub(crate) fn family_str(&self) -> &str {
+        &self.family
+    }
+
+    /// Erfasste Plattform (für die Session-Payload-Bindung).
+    pub(crate) fn platform_str(&self) -> &str {
+        &self.platform
     }
 
     /// Erstes `[A-Za-z][A-Za-z0-9_-]{1,31}`-Token, kleingeschrieben (services.py:312-317).
@@ -1911,6 +2027,7 @@ print(f.encrypt(payload.encode()).decode(), end='')
         let login_state = OAuthLoginState {
             next_path: "/twitch/stats".to_string(),
             redirect_uri: "https://x.test/twitch/auth/callback".to_string(),
+            context_token: String::new(),
         };
         state.save_oauth_login_state(&token, &login_state).await.unwrap();
 
@@ -2021,6 +2138,123 @@ print(f.encrypt(payload.encode()).decode(), end='')
             .execute(&pool)
             .await
             .ok();
+    }
+
+    /// P1.54: durable Partner-Access-Session anlegen → mit gleichem User-Agent
+    /// ladbar; Replay mit fremdem Fingerprint (anderer Plattform+Familie) → None.
+    #[tokio::test]
+    async fn partner_access_session_create_und_fingerprint_bindung() {
+        let Some(pool) = maybe_pool().await else { return; };
+        ensure_sessions_table(&pool).await;
+        sqlx::query(
+            "CREATE TABLE IF NOT EXISTS twitch_partners (
+                twitch_login TEXT, twitch_user_id TEXT, status TEXT,
+                technical_pause_reason TEXT, manual_partner_opt_out INTEGER,
+                departnered_at TIMESTAMPTZ, admin_archived_at TIMESTAMPTZ,
+                partnered_at TIMESTAMPTZ)",
+        )
+        .execute(&pool)
+        .await
+        .ok();
+
+        sqlx::query(
+            "INSERT INTO twitch_partners (twitch_login, twitch_user_id, status)
+             VALUES ($1, $2, 'active') ON CONFLICT DO NOTHING",
+        )
+        .bind("paccess_user")
+        .bind("888777")
+        .execute(&pool)
+        .await
+        .ok();
+
+        let state = DashboardAuthState::new(pool.clone(), test_fernet_key());
+        let ua_windows = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36";
+        let created = state
+            .create_partner_access_session("paccess_user", "888777", "PAccess", ua_windows)
+            .await
+            .expect("Partner-Access-Session muss anlegbar sein");
+
+        // Row trägt den partner_token-Typ.
+        let session_type: String = sqlx::query_scalar(
+            "SELECT session_type FROM dashboard_sessions WHERE session_id = $1",
+        )
+        .bind(&created.session_id)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert_eq!(session_type, super::PARTNER_ACCESS_SESSION_TYPE);
+
+        // Gleicher User-Agent → ladbar.
+        let loaded = state
+            .load_partner_access_session(&created.session_id, ua_windows)
+            .await
+            .unwrap();
+        assert!(loaded.is_some(), "gleicher Fingerprint muss laden");
+        assert_eq!(loaded.unwrap().twitch_login, "paccess_user");
+
+        // Fremdes Gerät (andere Familie UND Plattform) → abgewiesen (Row gelöscht).
+        let foreign_ua = "curlbot/9 (iPhone; CPU iPhone OS 17_0 like Mac OS X)";
+        let rejected = state
+            .load_partner_access_session(&created.session_id, foreign_ua)
+            .await
+            .unwrap();
+        assert!(rejected.is_none(), "fremder Fingerprint muss abgewiesen werden");
+
+        sqlx::query("DELETE FROM twitch_partners WHERE twitch_login = 'paccess_user'")
+            .execute(&pool)
+            .await
+            .ok();
+    }
+
+    /// P1.56: departnered/token_error-Partner wird beim Self-Heal reaktiviert;
+    /// blocked bleibt unangetastet.
+    #[tokio::test]
+    async fn reactivate_partner_self_heal() {
+        let Some(pool) = maybe_pool().await else { return; };
+        sqlx::query(
+            "CREATE TABLE IF NOT EXISTS twitch_partners (
+                twitch_login TEXT, twitch_user_id TEXT, status TEXT,
+                technical_pause_reason TEXT, manual_partner_opt_out INTEGER,
+                departnered_at TIMESTAMPTZ, admin_archived_at TIMESTAMPTZ,
+                partnered_at TIMESTAMPTZ)",
+        )
+        .execute(&pool)
+        .await
+        .ok();
+        let state = DashboardAuthState::new(pool.clone(), test_fernet_key());
+
+        // departnered + token_error → wird geheilt.
+        sqlx::query(
+            "INSERT INTO twitch_partners (twitch_login, twitch_user_id, status, technical_pause_reason, manual_partner_opt_out, departnered_at)
+             VALUES ('healme', '770001', 'departnered', 'token_error', 1, NOW())",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+        assert!(state.reactivate_partner("HealMe", "").await.unwrap());
+        let (status, reason, optout, departed): (String, Option<String>, Option<i32>, Option<chrono::DateTime<Utc>>) =
+            sqlx::query_as("SELECT status, technical_pause_reason, manual_partner_opt_out, departnered_at FROM twitch_partners WHERE twitch_login='healme'")
+                .fetch_one(&pool).await.unwrap();
+        assert_eq!(status, "active");
+        assert_eq!(reason, None);
+        assert_eq!(optout, Some(0));
+        assert_eq!(departed, None);
+
+        // blocked → bleibt unangetastet, kein Update.
+        sqlx::query(
+            "INSERT INTO twitch_partners (twitch_login, twitch_user_id, status, technical_pause_reason)
+             VALUES ('blockme', '770002', 'departnered', 'blocked')",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+        assert!(!state.reactivate_partner("blockme", "").await.unwrap());
+        let blocked_status: String = sqlx::query_scalar("SELECT status FROM twitch_partners WHERE twitch_login='blockme'")
+            .fetch_one(&pool).await.unwrap();
+        assert_eq!(blocked_status, "departnered");
+
+        sqlx::query("DELETE FROM twitch_partners WHERE twitch_login IN ('healme','blockme')")
+            .execute(&pool).await.ok();
     }
 
     /// Logout: invalidate_session löscht die Row → load_partner_session → None.

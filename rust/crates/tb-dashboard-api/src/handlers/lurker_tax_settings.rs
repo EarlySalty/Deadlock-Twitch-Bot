@@ -73,6 +73,35 @@ const SELECT_SQL: &str = "SELECT COALESCE(lurker_tax_enabled, 0) AS lt \
          OR ($2 <> '' AND twitch_user_id = $2) \
       LIMIT 1";
 
+/// Pflicht-Scope, damit die Lurker-Steuer im Chat-Runtime feuert.
+const CHATTERS_SCOPE: &str = "moderator:read:chatters";
+
+/// Prüft, ob der Streamer-eigene `twitch_raid_auth`-Eintrag den
+/// `moderator:read:chatters`-Scope trägt (P2.109).
+///
+/// Spiegelt die Runtime-Bedingung aus `tb-chat::promos` (Python `promos.py:1410`):
+/// ohne diesen Scope läuft die Lurker-Steuer ins Leere — der Toggle wäre ein
+/// stilles Dead-Toggle. Anders als der Chat-Runtime hat dieses Crate keinen
+/// Bot-Token-Manager-Fallback; geprüft wird ausschließlich der Streamer-Scope.
+async fn has_moderator_read_chatters(pool: &PgPool, login: &str) -> bool {
+    let scopes: Option<(Option<String>,)> = sqlx::query_as(
+        "SELECT scopes FROM twitch_raid_auth \
+          WHERE LOWER(COALESCE(twitch_login, '')) = $1 \
+          LIMIT 1",
+    )
+    .bind(login)
+    .fetch_optional(pool)
+    .await
+    .ok()
+    .flatten();
+
+    scopes
+        .and_then(|(s,)| s)
+        .unwrap_or_default()
+        .split_whitespace()
+        .any(|s| s.eq_ignore_ascii_case(CHATTERS_SCOPE))
+}
+
 /// `GET …/lurker-tax-settings` — aktuellen Flag-Wert lesen.
 pub async fn get_handler(
     auth: DashboardAuthLevel,
@@ -83,13 +112,25 @@ pub async fn get_handler(
         Ok(t) => t,
         Err(resp) => return resp,
     };
+    // P2.109: Readiness-Signal — feuert die Lurker-Steuer überhaupt? Ohne den
+    // Scope ist der Toggle ein Dead-Toggle; das Dashboard kann so warnen.
+    let scope_ready = has_moderator_read_chatters(&pool, &login).await;
+
     match sqlx::query(SELECT_SQL).bind(&login).bind(&user_id).fetch_optional(&pool).await {
         Ok(Some(row)) => {
             let lt: i32 = row.try_get("lt").unwrap_or(0);
-            Json(json!({ "lurker_tax_enabled": lt != 0 })).into_response()
+            Json(json!({
+                "lurker_tax_enabled": lt != 0,
+                "has_moderator_read_chatters": scope_ready,
+            }))
+            .into_response()
         }
         // Kein Plan-Eintrag → Default-Aus (kein Fehler; Dashboard zeigt Toggle aus).
-        Ok(None) => Json(json!({ "lurker_tax_enabled": false })).into_response(),
+        Ok(None) => Json(json!({
+            "lurker_tax_enabled": false,
+            "has_moderator_read_chatters": scope_ready,
+        }))
+        .into_response(),
         Err(error) => {
             tracing::error!(%error, "lurker-tax-settings GET DB-Fehler");
             (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({ "error": "db" }))).into_response()
@@ -178,6 +219,10 @@ mod tests {
         .execute(&pool)
         .await
         .unwrap();
+        sqlx::query("CREATE TABLE twitch_raid_auth (twitch_login TEXT, scopes TEXT)")
+            .execute(&pool)
+            .await
+            .unwrap();
         Some(pool)
     }
 
@@ -239,6 +284,45 @@ mod tests {
         )
         .await;
         assert_eq!(j["lurker_tax_enabled"], false);
+    }
+
+    /// P2.109: Readiness-Feld spiegelt den `moderator:read:chatters`-Scope wider.
+    #[tokio::test]
+    async fn readiness_feld_spiegelt_scope() {
+        let Some(pool) = make_pool("t_lurkertax_scope").await else { return };
+
+        // Ohne raid_auth-Eintrag → Scope fehlt → false.
+        let (s, j) = body_of(
+            get_handler(partner("nani", "42"), State(pool.clone()), Query(LurkerTaxQuery::default())).await,
+        )
+        .await;
+        assert_eq!(s, StatusCode::OK);
+        assert_eq!(j["has_moderator_read_chatters"], false);
+
+        // Mit Scope im raid_auth-Eintrag → true.
+        sqlx::query(
+            "INSERT INTO twitch_raid_auth (twitch_login, scopes) \
+             VALUES ('nani', 'channel:read:subscriptions moderator:read:chatters')",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+        let (_s, j) = body_of(
+            get_handler(partner("nani", "42"), State(pool.clone()), Query(LurkerTaxQuery::default())).await,
+        )
+        .await;
+        assert_eq!(j["has_moderator_read_chatters"], true);
+
+        // Anderer Scope-Satz ohne den Chatters-Scope → false.
+        sqlx::query("UPDATE twitch_raid_auth SET scopes = 'bits:read' WHERE twitch_login = 'nani'")
+            .execute(&pool)
+            .await
+            .unwrap();
+        let (_s, j) = body_of(
+            get_handler(partner("nani", "42"), State(pool), Query(LurkerTaxQuery::default())).await,
+        )
+        .await;
+        assert_eq!(j["has_moderator_read_chatters"], false);
     }
 
     #[tokio::test]

@@ -237,6 +237,109 @@ pub fn require_internal(peer_is_loopback: bool, presented_token: &str, expected_
     tb_crypto::constant_time_eq(presented_token.as_bytes(), expected_token.as_bytes())
 }
 
+// ───────────────────────────────────────────────────────────────────────────
+// Rate-Limit-Middleware (P2.86 / P2.133 / P2.138 / P2.140)
+// ───────────────────────────────────────────────────────────────────────────
+//
+// Wiederverwendbare axum-Middleware, die den [`RateLimiter`] pro Client-IP auf
+// eine Route(ngruppe) anwendet. Die LAYER-Registrierung auf die konkreten Router
+// passiert zentral in `lib.rs` (WIRING-TODO) — hier liegt nur die Mechanik.
+
+use axum::{
+    extract::Request,
+    http::{HeaderValue, StatusCode},
+    middleware::Next,
+    response::{IntoResponse, Response},
+    Json,
+};
+use std::net::SocketAddr;
+
+/// Konfiguration eines Rate-Limit-Layers: logischer Bucket-Name + Limits.
+#[derive(Clone)]
+pub struct RateLimitLayerConfig {
+    limiter: RateLimiter,
+    /// Stabiler Bucket-Name (z. B. `"auth_login"`), geht in den Bucket-Key ein,
+    /// damit verschiedene Routen-Gruppen getrennte Kontingente haben.
+    bucket: &'static str,
+    max_requests: u32,
+    window_secs: u64,
+}
+
+impl RateLimitLayerConfig {
+    pub fn new(
+        limiter: RateLimiter,
+        bucket: &'static str,
+        max_requests: u32,
+        window_secs: u64,
+    ) -> Self {
+        Self { limiter, bucket, max_requests, window_secs }
+    }
+}
+
+/// Ermittelt den Rate-Limit-Schlüssel (Client-IP) aus dem Request.
+///
+/// Bevorzugt die echte Peer-IP (`ConnectInfo`); hinter dem Reverse-Proxy ist die
+/// immer Loopback, daher fällt es auf den **ersten** `X-Forwarded-For`-Eintrag
+/// zurück (der vom vertrauenswürdigen Proxy gesetzt wird). Ohne beides → `"unknown"`.
+fn client_key(request: &Request) -> String {
+    if let Some(ci) = request.extensions().get::<axum::extract::ConnectInfo<SocketAddr>>() {
+        let ip = ci.0.ip();
+        if !ip.is_loopback() {
+            return ip.to_string();
+        }
+    }
+    if let Some(xff) = request
+        .headers()
+        .get("x-forwarded-for")
+        .and_then(|v| v.to_str().ok())
+    {
+        if let Some(first) = xff.split(',').next() {
+            let first = first.trim();
+            if !first.is_empty() {
+                return first.to_string();
+            }
+        }
+    }
+    // Loopback-Peer ohne XFF (lokale Tools) → eigener Bucket.
+    "loopback".to_string()
+}
+
+/// axum-Middleware-Funktion: erzwingt das Rate-Limit pro IP. Über das Limit →
+/// `429 {error:rate_limit_exceeded}` + `Retry-After`-Header.
+pub async fn rate_limit_middleware(
+    axum::extract::State(config): axum::extract::State<RateLimitLayerConfig>,
+    request: Request,
+    next: Next,
+) -> Response {
+    let key = format!("{}:{}", config.bucket, client_key(&request));
+    let allowed = config
+        .limiter
+        .allow(&key, config.max_requests, config.window_secs)
+        .await;
+    if allowed {
+        next.run(request).await
+    } else {
+        too_many_requests(config.window_secs)
+    }
+}
+
+/// 429-Antwort mit `Retry-After` (Sekunden bis zum Fensterende, konservativ das
+/// volle Fenster).
+fn too_many_requests(window_secs: u64) -> Response {
+    let mut response = (
+        StatusCode::TOO_MANY_REQUESTS,
+        Json(serde_json::json!({
+            "error": "rate_limit_exceeded",
+            "message": "Zu viele Anfragen. Bitte später erneut versuchen.",
+        })),
+    )
+        .into_response();
+    if let Ok(value) = HeaderValue::from_str(&window_secs.to_string()) {
+        response.headers_mut().insert(axum::http::header::RETRY_AFTER, value);
+    }
+    response
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -373,6 +476,45 @@ mod integration_tests {
             .execute(&pool)
             .await
             .ok();
+    }
+
+    /// P2.86/133/138/140: Die Rate-Limit-Middleware liefert nach dem Limit 429
+    /// mit Retry-After. Self-contained Router (keine lib.rs-Verdrahtung).
+    #[tokio::test]
+    async fn rate_limit_middleware_429_nach_limit() {
+        use axum::{routing::get, Router};
+        use tower::ServiceExt;
+
+        let Some(pool) = maybe_pool().await else { return; };
+        ensure_table(&pool).await;
+        let limiter = RateLimiter::new(pool.clone(), test_fernet_key());
+        let config = RateLimitLayerConfig::new(limiter, "test_bucket", 2, 60);
+
+        let app = Router::new()
+            .route("/x", get(|| async { "ok" }))
+            .layer(axum::middleware::from_fn_with_state(
+                config,
+                super::rate_limit_middleware,
+            ));
+
+        let make_req = || {
+            let mut req = axum::http::Request::builder()
+                .uri("/x")
+                .body(axum::body::Body::empty())
+                .unwrap();
+            // Nicht-Loopback-Peer, damit der IP-Bucket greift.
+            req.extensions_mut().insert(axum::extract::ConnectInfo(
+                "203.0.113.7:5555".parse::<SocketAddr>().unwrap(),
+            ));
+            req
+        };
+
+        // max=2: erste zwei OK, dritte 429.
+        assert_eq!(app.clone().oneshot(make_req()).await.unwrap().status(), StatusCode::OK);
+        assert_eq!(app.clone().oneshot(make_req()).await.unwrap().status(), StatusCode::OK);
+        let limited = app.clone().oneshot(make_req()).await.unwrap();
+        assert_eq!(limited.status(), StatusCode::TOO_MANY_REQUESTS);
+        assert!(limited.headers().get(axum::http::header::RETRY_AFTER).is_some());
     }
 
     /// Abgelaufene Hits zählen nicht mehr → Slot wird wieder frei.

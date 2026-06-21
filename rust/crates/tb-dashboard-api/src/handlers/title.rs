@@ -11,8 +11,10 @@ use axum::{
 use serde::Deserialize;
 use serde_json::json;
 use sqlx::PgPool;
+use tb_chat::steam_lookup;
 use tb_chat::title_ai::{
-    generate_title, GenerateTitleError, PromptHistoryItem, PromptKnowledgeItem, TitleRateLimiter,
+    generate_title, GenerateTitleError, PromptHistoryItem, PromptKnowledgeItem, PromptLiveState,
+    TitleRateLimiter,
 };
 use tb_chat::title_db;
 use tb_crypto::FieldCipher;
@@ -107,6 +109,76 @@ async fn resolve_user_id(pool: &PgPool, login: &str) -> Result<Option<String>, s
     .await
 }
 
+/// Aufgelöster Deadlock-Kontext für den Titel-Prompt.
+#[derive(Default)]
+struct TitleContext {
+    rank_display: Option<String>,
+    live_state: Option<PromptLiveState>,
+    /// `true`, wenn `include_live` gesetzt war UND ein Live-State wirklich
+    /// geladen wurde — nur dann floss Live-Kontext in den Prompt (P2.102).
+    live_context_used: bool,
+}
+
+/// Löst die Discord-ID des Streamers auf (für die Steam-Lookup-DB).
+async fn resolve_discord_user_id(pool: &PgPool, twitch_user_id: &str) -> Option<i64> {
+    let row: Option<(Option<String>,)> = sqlx::query_as(
+        "SELECT discord_user_id::text \
+         FROM twitch_streamer_identities \
+         WHERE twitch_user_id = $1 \
+         LIMIT 1",
+    )
+    .bind(twitch_user_id)
+    .fetch_optional(pool)
+    .await
+    .ok()
+    .flatten();
+    row.and_then(|(d,)| d)
+        .and_then(|s| s.trim().parse::<i64>().ok())
+}
+
+/// Holt Rang (+ optional Live-State) für den Streamer — Parität zu
+/// `tb-chat/commands.rs` (P2.101/P2.102). Rang/Live liegen in der SQLite-Steam-DB,
+/// daher die Lookups off-Thread via `spawn_blocking`. Fehlt die Discord-Verknüpfung
+/// oder die Steam-DB, bleibt der Kontext leer (Titel wird trotzdem erzeugt).
+async fn resolve_title_context(pool: &PgPool, twitch_user_id: &str, include_live: bool) -> TitleContext {
+    let Some(discord_id) = resolve_discord_user_id(pool, twitch_user_id).await else {
+        return TitleContext::default();
+    };
+
+    let db_path = steam_lookup::steam_db_path();
+    let rank_path = db_path.clone();
+    let rank_display = tokio::task::spawn_blocking(move || {
+        steam_lookup::get_rank_for_discord_user(&rank_path, discord_id)
+    })
+    .await
+    .ok()
+    .flatten()
+    .map(|r| r.rank_display);
+
+    let mut live_state = None;
+    let mut live_context_used = false;
+    if include_live {
+        live_state = tokio::task::spawn_blocking(move || {
+            steam_lookup::get_live_state_for_discord_user(&db_path, discord_id)
+        })
+        .await
+        .ok()
+        .flatten()
+        .map(|l| PromptLiveState {
+            hero: l.hero,
+            party_hint: l.party_hint,
+        });
+        // Live-Kontext wurde nur dann genutzt, wenn auch ein State vorlag.
+        live_context_used = live_state.is_some();
+    }
+
+    TitleContext {
+        rank_display,
+        live_state,
+        live_context_used,
+    }
+}
+
 pub async fn suggest_handler(
     auth: DashboardAuthLevel,
     State(pool): State<PgPool>,
@@ -176,6 +248,10 @@ pub async fn suggest_handler(
         })
         .collect();
 
+    // P2.101/P2.102: Deadlock-Rang + (optional) Live-State auflösen und an den
+    // Generator durchreichen — wie der !title-Chat-Command.
+    let context = resolve_title_context(&pool, &user_id, body.include_live).await;
+
     let limiter = TITLE_RATE_LIMITER.get_or_init(TitleRateLimiter::default);
     match generate_title(
         limiter,
@@ -183,8 +259,8 @@ pub async fn suggest_handler(
         keywords,
         &prompt_history,
         &prompt_knowledge,
-        None,
-        None,
+        context.rank_display.as_deref(),
+        context.live_state.as_ref(),
         "dashboard",
     )
     .await
@@ -193,7 +269,8 @@ pub async fn suggest_handler(
             "primary": result.primary,
             "alternatives": result.alternatives,
             "title_analysis": analysis.into_iter().take(20).collect::<Vec<_>>(),
-            "live_context_used": body.include_live,
+            // P2.102: nur true, wenn Live-Kontext tatsächlich angewandt wurde.
+            "live_context_used": context.live_context_used,
         }))
         .into_response(),
         Err(GenerateTitleError::RateLimit(rate)) => (
@@ -378,6 +455,95 @@ mod tests {
         assert_eq!(
             requested_login(&DashboardAuthLevel::admin(), Some("Nani")).unwrap(),
             "nani"
+        );
+    }
+
+    // ── DB-gestützte Kontext-Auflösung (P2.101/P2.102) ──────────────────────
+    use sqlx::postgres::{PgConnectOptions, PgPoolOptions};
+    use std::str::FromStr;
+
+    async fn make_pool(schema: &str) -> Option<PgPool> {
+        let dsn = std::env::var("TB_TEST_DATABASE_URL").ok()?;
+        let admin = PgPoolOptions::new()
+            .max_connections(1)
+            .connect(&dsn)
+            .await
+            .unwrap();
+        sqlx::query(&format!("DROP SCHEMA IF EXISTS {schema} CASCADE"))
+            .execute(&admin)
+            .await
+            .unwrap();
+        sqlx::query(&format!("CREATE SCHEMA {schema}"))
+            .execute(&admin)
+            .await
+            .unwrap();
+        admin.close().await;
+        let opts = PgConnectOptions::from_str(&dsn)
+            .unwrap()
+            .options([("search_path", schema)]);
+        let pool = PgPoolOptions::new()
+            .max_connections(2)
+            .connect_with(opts)
+            .await
+            .unwrap();
+        sqlx::query(
+            "CREATE TABLE twitch_streamer_identities \
+             (twitch_user_id TEXT, discord_user_id TEXT)",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+        Some(pool)
+    }
+
+    /// P2.101: Ohne Discord-Verknüpfung bleibt der Kontext leer (kein Rang/Live),
+    /// und der Titel kann trotzdem erzeugt werden.
+    #[tokio::test]
+    async fn kontext_leer_ohne_discord_link() {
+        let Some(pool) = make_pool("t_title_nolink").await else { return };
+        // Kein twitch_streamer_identities-Eintrag → discord_user_id nicht auflösbar.
+        let ctx = resolve_title_context(&pool, "999", true).await;
+        assert!(ctx.rank_display.is_none());
+        assert!(ctx.live_state.is_none());
+        assert!(
+            !ctx.live_context_used,
+            "ohne Live-State darf live_context_used nicht true sein"
+        );
+    }
+
+    /// P2.102: `include_live=true` allein macht `live_context_used` NICHT true,
+    /// wenn kein Live-State geladen werden kann (Steam-DB fehlt). Der Flag-Echo-Bug
+    /// (Rust gab vorher body.include_live unverändert zurück) ist damit weg.
+    #[tokio::test]
+    async fn include_live_ohne_live_state_kein_kontext() {
+        let Some(pool) = make_pool("t_title_live_noop").await else { return };
+        // Discord-Link vorhanden, aber Steam-DB-Pfad existiert nicht → Lookups None.
+        sqlx::query(
+            "INSERT INTO twitch_streamer_identities (twitch_user_id, discord_user_id) \
+             VALUES ('1', '123456789')",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+
+        let prev = std::env::var("STEAM_BOT_DB_PATH").ok();
+        std::env::set_var(
+            "STEAM_BOT_DB_PATH",
+            "/tmp/tb_nonexistent_steam_db_for_title_test.sqlite3",
+        );
+
+        let ctx = resolve_title_context(&pool, "1", true).await;
+
+        match prev {
+            Some(v) => std::env::set_var("STEAM_BOT_DB_PATH", v),
+            None => std::env::remove_var("STEAM_BOT_DB_PATH"),
+        }
+
+        assert!(ctx.rank_display.is_none());
+        assert!(ctx.live_state.is_none());
+        assert!(
+            !ctx.live_context_used,
+            "include_live=true ohne geladenen State => live_context_used=false"
         );
     }
 }

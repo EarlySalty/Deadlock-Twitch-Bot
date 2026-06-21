@@ -36,6 +36,9 @@ use crate::handlers::auth_status::ADMIN_MODE_COOKIE;
 
 /// Logout-Redirect-Ziel (Python `auth_logout`: 302 → `/analyse`).
 const LOGOUT_REDIRECT: &str = "/analyse";
+/// Cookie-Name des OAuth-Kontext-CSRF-Tokens (P2.139). Kurzlebig, HttpOnly,
+/// SameSite=Lax; bindet den Callback an den Browser, der den Login startete.
+const OAUTH_CONTEXT_COOKIE: &str = "twitch_oauth_ctx";
 /// Default-Ziel nach erfolgreicher Raid-OAuth-Autorisierung (Python-Konstante).
 const DEFAULT_RAID_OAUTH_SUCCESS_REDIRECT_URL: &str =
     "https://deutsche-deadlock-community.de/twitch/dashboard";
@@ -119,9 +122,14 @@ pub async fn login_handler(
 
     let next_path = sanitize_next_path(query.next.as_deref());
     let state_token = tb_crypto::random_urlsafe_token(24);
+    // P2.139: Kontext-CSRF-Token erzeugen, im State persistieren UND als HttpOnly-
+    // Cookie setzen. Der Callback prüft beide gegeneinander → ein fremder/cookie-
+    // loser Callback (untergeschobener OAuth-Code) wird abgelehnt.
+    let context_token = tb_crypto::random_urlsafe_token(24);
     let login_state = OAuthLoginState {
         next_path,
         redirect_uri: config.redirect_uri.clone(),
+        context_token: context_token.clone(),
     };
 
     if let Err(error) = state.save_oauth_login_state(&state_token, &login_state).await {
@@ -135,8 +143,22 @@ pub async fn login_handler(
 
     let auth_url =
         build_login_authorize_url(&config.client_id, &config.redirect_uri, &state_token);
-    no_store(Redirect::to(&auth_url).into_response())
+    let ctx_cookie = build_session_cookie(
+        OAUTH_CONTEXT_COOKIE,
+        &context_token,
+        config.cookie_secure,
+        SameSite::Lax,
+        OAUTH_CONTEXT_COOKIE_TTL_SECS,
+    );
+    let mut response = Redirect::to(&auth_url).into_response();
+    if let Ok(value) = HeaderValue::from_str(&ctx_cookie) {
+        response.headers_mut().append(SET_COOKIE, value);
+    }
+    no_store(response)
 }
+
+/// TTL des OAuth-Kontext-Cookies (P2.139) — kurz, deckt nur den Login-Roundtrip.
+const OAUTH_CONTEXT_COOKIE_TTL_SECS: u64 = 600;
 
 /// `GET /twitch/auth/callback` — verarbeitet den Twitch-OAuth-Rücksprung.
 ///
@@ -149,9 +171,10 @@ pub async fn login_handler(
 pub async fn callback_handler(
     state: Option<Extension<DashboardAuthState>>,
     config: Option<Extension<OAuthLoginConfig>>,
+    headers: HeaderMap,
     Query(query): Query<CallbackQuery>,
 ) -> Response {
-    callback_handler_inner(state, config, query, false).await
+    callback_handler_inner(state, config, &headers, query, false).await
 }
 
 /// `GET /callback/twitch` — geteilter Twitch-OAuth-Callback.
@@ -162,14 +185,16 @@ pub async fn callback_handler(
 pub async fn shared_callback_handler(
     state: Option<Extension<DashboardAuthState>>,
     config: Option<Extension<OAuthLoginConfig>>,
+    headers: HeaderMap,
     Query(query): Query<CallbackQuery>,
 ) -> Response {
-    callback_handler_inner(state, config, query, true).await
+    callback_handler_inner(state, config, &headers, query, true).await
 }
 
 async fn callback_handler_inner(
     state: Option<Extension<DashboardAuthState>>,
     config: Option<Extension<OAuthLoginConfig>>,
+    headers: &HeaderMap,
     query: CallbackQuery,
     allow_raid_delegate: bool,
 ) -> Response {
@@ -235,6 +260,26 @@ async fn callback_handler_inner(
         return no_store((StatusCode::BAD_REQUEST, "Fehlender OAuth state/code.").into_response());
     }
 
+    // P2.139: Kontext-CSRF-Bindung. Trägt der State ein context_token, MUSS das
+    // `twitch_oauth_ctx`-Cookie des Browsers konstant-zeitlich passen. Ein
+    // cookieloser/fremder Callback (untergeschobener Code) → 400, KEINE Session.
+    if !login_state.context_token.is_empty() {
+        let presented = cookie_from_headers(headers, OAUTH_CONTEXT_COOKIE).unwrap_or_default();
+        if presented.is_empty()
+            || !tb_crypto::constant_time_eq(
+                presented.as_bytes(),
+                login_state.context_token.as_bytes(),
+            )
+        {
+            warn!("OAuth-Callback ohne gültiges Kontext-Cookie abgelehnt (CSRF)");
+            return no_store(clear_context_and_respond(
+                config.cookie_secure,
+                (StatusCode::BAD_REQUEST, "OAuth-Kontext ungültig. Bitte Login erneut starten.")
+                    .into_response(),
+            ));
+        }
+    }
+
     // Code→Token→User. redirect_uri MUSS die beim Authorize gespeicherte sein.
     let identity = match config
         .client
@@ -293,6 +338,18 @@ async fn callback_handler_inner(
         }
     };
 
+    // P1.56: Self-Heal — meldet sich ein departnered/archived/token_error-Partner
+    // selbst per OAuth an, reaktivieren wir ihn (status='active', Pausen geräumt).
+    // blocked/bot_banned bleiben unangetastet. Fehler nur warnen (kein Login-Stop).
+    match state
+        .reactivate_partner(&partner.twitch_login, &partner.twitch_user_id)
+        .await
+    {
+        Ok(true) => info!(twitch_login = %partner.twitch_login, "AUDIT partner self-reactivated on login"),
+        Ok(false) => {}
+        Err(error) => warn!(%error, "Partner-Reaktivierung beim Login fehlgeschlagen"),
+    }
+
     // Session anlegen (kanonischer Login/User-ID aus twitch_partners bevorzugt).
     let session = match state
         .create_partner_session(
@@ -324,7 +381,11 @@ async fn callback_handler_inner(
         SameSite::Lax,
         SESSION_CREATE_TTL_SECS,
     );
-    redirect_with_cookie(&login_state.next_path, &cookie)
+    // Einmal-Kontext-Cookie nach erfolgreichem Login löschen (P2.139).
+    clear_context_and_respond(
+        config.cookie_secure,
+        redirect_with_cookie(&login_state.next_path, &cookie),
+    )
 }
 
 async fn maybe_delegate_raid_oauth_callback(
@@ -565,6 +626,16 @@ fn cookie_from_headers(headers: &HeaderMap, name: &str) -> Option<String> {
     None
 }
 
+/// Hängt ein Lösch-Cookie für das OAuth-Kontext-Cookie (P2.139) an eine Antwort,
+/// damit der Einmal-Kontext nach dem Callback (Erfolg ODER Ablehnung) verschwindet.
+fn clear_context_and_respond(cookie_secure: bool, mut response: Response) -> Response {
+    let clear = clear_session_cookie(OAUTH_CONTEXT_COOKIE, cookie_secure, SameSite::Lax);
+    if let Ok(value) = HeaderValue::from_str(&clear) {
+        response.headers_mut().append(SET_COOKIE, value);
+    }
+    response
+}
+
 /// 302-Redirect mit gesetztem `Set-Cookie` und `Cache-Control: no-store`.
 fn redirect_with_cookie(location: &str, cookie: &str) -> Response {
     let mut response = Redirect::to(location).into_response();
@@ -594,6 +665,14 @@ pub fn oauth_login_config_from_env() -> Option<OAuthLoginConfig> {
     let client_id = non_empty_env("TWITCH_CLIENT_ID")?;
     let client_secret = non_empty_env("TWITCH_CLIENT_SECRET")?;
     let redirect_uri = non_empty_env("TWITCH_DASHBOARD_AUTH_REDIRECT_URI")?;
+    // P2.137: Redirect-URI härten, BEVOR sie in die Authorize-URL fließt. Eine
+    // verseuchte/falsch konfigurierte URI (fremder Host, userinfo, der RAID-
+    // reservierte Callback) darf den nativen Login NICHT aktivieren — sonst
+    // entführt ein Angreifer den OAuth-Code. Ungültig → None (Login bleibt aus).
+    if let Err(reason) = validate_oauth_redirect_uri(&redirect_uri) {
+        warn!(reason, "TWITCH_DASHBOARD_AUTH_REDIRECT_URI ungültig — nativer Login deaktiviert");
+        return None;
+    }
     // Secure-Cookies in Prod (HTTPS hinter dem Proxy); lokal abschaltbar.
     let cookie_secure = std::env::var("TB_DASHBOARD_COOKIE_INSECURE").as_deref() != Ok("1");
 
@@ -638,6 +717,49 @@ fn worker_internal_base_url() -> String {
 
 fn non_empty_env(key: &str) -> Option<String> {
     std::env::var(key).ok().map(|v| v.trim().to_string()).filter(|v| !v.is_empty())
+}
+
+/// RAID-reservierter Callback-Pfad — der Dashboard-Login darf NIE auf diesen Pfad
+/// zeigen (er gehört dem Raid-OAuth-Flow). Memory: `/callback/twitch` ist
+/// RAID-reserviert; zusätzlich `/twitch/raid/callback`.
+const RESERVED_RAID_CALLBACK_PATHS: &[&str] = &["/twitch/raid/callback", "/callback/twitch"];
+
+/// Erlaubte Dashboard-Callback-Pfade (Whitelist). Andere Pfade → abgelehnt.
+const ALLOWED_DASHBOARD_CALLBACK_PATHS: &[&str] =
+    &["/twitch/auth/callback", "/twitch/auth/login/callback"];
+
+/// Validiert die Dashboard-OAuth-Redirect-URI (P2.137).
+///
+/// Anforderungen (industriell gehärtet, nicht 1:1 Python):
+/// - parsebare absolute URL,
+/// - Schema `https` (oder `http` nur für Loopback-Hosts, lokale Entwicklung),
+/// - KEINE userinfo (`user:pass@`),
+/// - nicht der RAID-reservierte Callback-Pfad,
+/// - Pfad steht auf der Dashboard-Callback-Whitelist.
+fn validate_oauth_redirect_uri(raw: &str) -> Result<(), &'static str> {
+    let url = url::Url::parse(raw.trim()).map_err(|_| "unparsebare URI")?;
+    if !url.username().is_empty() || url.password().is_some() {
+        return Err("userinfo nicht erlaubt");
+    }
+    let scheme = url.scheme().to_ascii_lowercase();
+    let host = url.host_str().map(str::to_ascii_lowercase).unwrap_or_default();
+    if host.is_empty() {
+        return Err("kein Host");
+    }
+    let is_loopback = matches!(host.as_str(), "localhost" | "127.0.0.1" | "::1");
+    match scheme.as_str() {
+        "https" => {}
+        "http" if is_loopback => {}
+        _ => return Err("Schema muss https sein (http nur Loopback)"),
+    }
+    let path = url.path();
+    if RESERVED_RAID_CALLBACK_PATHS.contains(&path) {
+        return Err("RAID-reservierter Callback-Pfad");
+    }
+    if !ALLOWED_DASHBOARD_CALLBACK_PATHS.contains(&path) {
+        return Err("Pfad nicht auf der Dashboard-Callback-Whitelist");
+    }
+    Ok(())
 }
 
 #[cfg(test)]
@@ -748,7 +870,7 @@ mod tests {
 
     #[tokio::test]
     async fn callback_ohne_config_503() {
-        let resp = callback_handler(None, None, Query(CallbackQuery::default())).await;
+        let resp = callback_handler(None, None, HeaderMap::new(), Query(CallbackQuery::default())).await;
         assert_eq!(resp.status(), StatusCode::SERVICE_UNAVAILABLE);
     }
 
@@ -762,6 +884,7 @@ mod tests {
         let resp = callback_handler(
             None,
             Some(Extension(cfg)),
+            HeaderMap::new(),
             Query(CallbackQuery {
                 error: Some("access_denied".to_string()),
                 ..Default::default()
@@ -770,6 +893,25 @@ mod tests {
         .await;
         // Ohne DashboardAuthState-Extension → 503 (fail-closed), nie eine Session.
         assert_eq!(resp.status(), StatusCode::SERVICE_UNAVAILABLE);
+    }
+
+    #[test]
+    fn redirect_uri_validierung_p2_137() {
+        // Gültig: https + Dashboard-Callback.
+        assert!(validate_oauth_redirect_uri("https://dash.example.com/twitch/auth/callback").is_ok());
+        // Gültig: http nur Loopback (lokale Entwicklung).
+        assert!(validate_oauth_redirect_uri("http://localhost:8769/twitch/auth/callback").is_ok());
+        // RAID-reservierter Pfad → abgelehnt.
+        assert!(validate_oauth_redirect_uri("https://evil.test/twitch/raid/callback").is_err());
+        assert!(validate_oauth_redirect_uri("https://dash.example.com/callback/twitch").is_err());
+        // userinfo → abgelehnt.
+        assert!(validate_oauth_redirect_uri("https://user:pass@dash.example.com/twitch/auth/callback").is_err());
+        // http auf Nicht-Loopback → abgelehnt.
+        assert!(validate_oauth_redirect_uri("http://dash.example.com/twitch/auth/callback").is_err());
+        // Nicht-Whitelist-Pfad → abgelehnt.
+        assert!(validate_oauth_redirect_uri("https://dash.example.com/twitch/auth/evil").is_err());
+        // Unparsebar → abgelehnt.
+        assert!(validate_oauth_redirect_uri("not a url").is_err());
     }
 
     #[test]
@@ -862,6 +1004,7 @@ mod tests {
                 &OAuthLoginState {
                     next_path: next.to_string(),
                     redirect_uri: redirect_uri.to_string(),
+                    context_token: String::new(),
                 },
             )
             .await
@@ -871,6 +1014,106 @@ mod tests {
 
     fn uuid_like() -> String {
         tb_crypto::random_urlsafe_token(8)
+    }
+
+    /// P2.139: State trägt context_token, aber der Callback kommt OHNE das
+    /// `twitch_oauth_ctx`-Cookie (cookieloser/fremder Browser) → 400, KEINE Session.
+    #[tokio::test]
+    async fn callback_ohne_kontext_cookie_400() {
+        let Some(pool) = maybe_pool().await else { return; };
+        ensure_tables(&pool).await;
+        let state = DashboardAuthState::new(pool.clone(), test_fernet_key());
+        let cfg = config_with(Ok(identity("ctxpartner", "999201")));
+
+        let token = format!("ctxtok-{}", uuid_like());
+        state
+            .save_oauth_login_state(
+                &token,
+                &OAuthLoginState {
+                    next_path: "/analyse".to_string(),
+                    redirect_uri: cfg.redirect_uri.clone(),
+                    context_token: "the-context-secret".to_string(),
+                },
+            )
+            .await
+            .unwrap();
+
+        // KEIN Kontext-Cookie im Request.
+        let resp = callback_handler(
+            Some(Extension(state.clone())),
+            Some(Extension(cfg)),
+            HeaderMap::new(),
+            Query(CallbackQuery {
+                code: Some("good".to_string()),
+                state: Some(token),
+                error: None,
+            }),
+        )
+        .await;
+        assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+        assert!(resp.headers().get(SET_COOKIE).is_some(), "Kontext-Cookie wird gelöscht");
+        // Kein Session-Cookie (twitch_dash_session).
+        let any_session = resp
+            .headers()
+            .get_all(SET_COOKIE)
+            .iter()
+            .filter_map(|v| v.to_str().ok())
+            .any(|c| c.starts_with("twitch_dash_session="));
+        assert!(!any_session, "keine Session bei fehlendem Kontext");
+    }
+
+    /// P2.139: derselbe State + passendes Kontext-Cookie → Login läuft durch (302).
+    #[tokio::test]
+    async fn callback_mit_kontext_cookie_erfolgreich() {
+        let Some(pool) = maybe_pool().await else { return; };
+        ensure_tables(&pool).await;
+        let state = DashboardAuthState::new(pool.clone(), test_fernet_key());
+        sqlx::query(
+            "INSERT INTO twitch_partners (twitch_login, twitch_user_id, status)
+             VALUES ($1, $2, 'active') ON CONFLICT DO NOTHING",
+        )
+        .bind("ctxok")
+        .bind("999202")
+        .execute(&pool)
+        .await
+        .ok();
+        let cfg = config_with(Ok(identity("ctxok", "999202")));
+
+        let token = format!("ctxok-{}", uuid_like());
+        state
+            .save_oauth_login_state(
+                &token,
+                &OAuthLoginState {
+                    next_path: "/analyse".to_string(),
+                    redirect_uri: cfg.redirect_uri.clone(),
+                    context_token: "matching-ctx".to_string(),
+                },
+            )
+            .await
+            .unwrap();
+
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            axum::http::header::COOKIE,
+            HeaderValue::from_static("twitch_oauth_ctx=matching-ctx"),
+        );
+        let resp = callback_handler(
+            Some(Extension(state.clone())),
+            Some(Extension(cfg)),
+            headers,
+            Query(CallbackQuery {
+                code: Some("good".to_string()),
+                state: Some(token),
+                error: None,
+            }),
+        )
+        .await;
+        assert_eq!(resp.status(), StatusCode::SEE_OTHER);
+
+        sqlx::query("DELETE FROM twitch_partners WHERE twitch_login = 'ctxok'")
+            .execute(&pool)
+            .await
+            .ok();
     }
 
     /// Callback mit gültigem Code+State+Partner → 302 + Set-Cookie + Session-Row.
@@ -896,6 +1139,7 @@ mod tests {
         let resp = callback_handler(
             Some(Extension(state.clone())),
             Some(Extension(cfg)),
+            HeaderMap::new(),
             Query(CallbackQuery {
                 code: Some("good-code".to_string()),
                 state: Some(token),
@@ -945,6 +1189,7 @@ mod tests {
         let resp = callback_handler(
             Some(Extension(state.clone())),
             Some(Extension(cfg)),
+            HeaderMap::new(),
             Query(CallbackQuery {
                 code: Some("good".to_string()),
                 state: Some(token),
@@ -967,6 +1212,7 @@ mod tests {
         let resp = callback_handler(
             Some(Extension(state)),
             Some(Extension(cfg)),
+            HeaderMap::new(),
             Query(CallbackQuery {
                 code: Some("c".to_string()),
                 state: Some("gibts-nicht".to_string()),
@@ -990,6 +1236,7 @@ mod tests {
         let resp = callback_handler(
             Some(Extension(state)),
             Some(Extension(cfg)),
+            HeaderMap::new(),
             Query(CallbackQuery {
                 code: Some("c".to_string()),
                 state: Some(token),

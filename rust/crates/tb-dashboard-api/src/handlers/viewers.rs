@@ -1059,7 +1059,16 @@ pub async fn viewer_segments_handler(
     }
 
     // 4. Cross-Channel-Exklusivität
+    // P1.36: Der eigene (Home-)Kanal des Streamers darf NICHT in
+    // COUNT(DISTINCT streamer_login) zählen — sonst gilt ein Viewer, der nur
+    // im Home-Kanal chattet, als nicht-exklusiv. Python schließt den
+    // Home-Login in `_collect_viewer_exclusion_logins` aus; hier ergänzen wir
+    // ihn nur für die streamer_login-Exklusion (Chatter-Filter bleibt = bots).
     let all_logins: Vec<String> = viewer_rows.iter().map(|r| r.login.clone()).collect();
+    let mut streamer_exclusion = bots.clone();
+    if !streamer.is_empty() && !streamer_exclusion.contains(&streamer) {
+        streamer_exclusion.push(streamer.clone());
+    }
     let cc_rows = sqlx::query(
         r#"SELECT LOWER(sc.chatter_login) AS login,
                   COUNT(DISTINCT LOWER(sc.streamer_login)) AS ch_count
@@ -1068,10 +1077,10 @@ pub async fn viewer_segments_handler(
            WHERE LOWER(sc.chatter_login) = ANY($1)
              AND s.started_at >= $2
              AND LOWER(sc.chatter_login) != ALL($3)
-             AND LOWER(sc.streamer_login) != ALL($3)
+             AND LOWER(sc.streamer_login) != ALL($4)
            GROUP BY LOWER(sc.chatter_login)"#,
     )
-    .bind(&all_logins).bind(since).bind(&bots)
+    .bind(&all_logins).bind(since).bind(&bots).bind(&streamer_exclusion)
     .fetch_all(&pool).await.unwrap_or_default();
 
     let mut exclusive_count = 0i64;
@@ -1362,5 +1371,64 @@ mod tests {
         .await
         .into_response();
         assert_eq!(resp.status(), StatusCode::FORBIDDEN, "Free-Partner muss 403 erhalten");
+    }
+
+    /// P1.36: Cross-Channel-Exklusivität schließt den Home-Kanal aus. Ein Viewer,
+    /// der im Home-Kanal UND in genau EINEM anderen Kanal chattet, muss als
+    /// exklusiv (ch_count=1) zählen. Vor dem Fix zählte der Home-Kanal mit
+    /// (ch_count=2 → nicht exklusiv, avgOtherChannels=1).
+    #[tokio::test]
+    async fn segments_cross_channel_exclusivity_excludes_home() {
+        let dsn = db_dsn_or_skip!();
+        let pool = make_pool(&dsn, "viewers_xchannel").await;
+        // twitch_chatter_rollup wird von der shared/whereabouts-Query gebraucht.
+        sqlx::query(
+            r#"CREATE TABLE twitch_chatter_rollup (
+                   chatter_login TEXT, streamer_login TEXT, last_seen_at TIMESTAMPTZ
+               )"#,
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+
+        // Session im Home-Kanal 'host' + eine im Fremdkanal 'otherchan'. Viewer
+        // 'loyal' chattet in BEIDEN: aus Sicht von 'host' ist er exklusiv, weil
+        // außerhalb des Home-Kanals nur EIN weiterer Kanal zählt.
+        sqlx::query(
+            "INSERT INTO twitch_stream_sessions (id, streamer_login, started_at, ended_at) \
+             VALUES (1, 'host', NOW() - INTERVAL '1 day', NOW()), \
+                    (2, 'otherchan', NOW() - INTERVAL '1 day', NOW())",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+        sqlx::query(
+            "INSERT INTO twitch_session_chatters (session_id, chatter_login, streamer_login, messages) \
+             VALUES (1, 'loyal', 'host', 10), \
+                    (2, 'loyal', 'otherchan', 5)",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+
+        let resp = viewer_segments_handler(
+            DashboardAuthLevel::Localhost,
+            State(pool),
+            Query(SegmentsQuery { streamer: Some("host".into()), days: None }),
+        )
+        .await
+        .into_response();
+        assert_eq!(resp.status(), StatusCode::OK);
+        let bytes = axum::body::to_bytes(resp.into_body(), usize::MAX).await.unwrap();
+        let body: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+        let cc = &body["crossChannelStats"];
+        assert_eq!(
+            cc["exclusiveViewersPct"], 100.0,
+            "Home+1-other-Viewer muss 100% exklusiv sein (Home ausgeschlossen), body: {body}"
+        );
+        assert_eq!(
+            cc["avgOtherChannels"], 0.0,
+            "avgOtherChannels muss 0 sein (Home-Kanal zählt nicht als 'anderer')"
+        );
     }
 }

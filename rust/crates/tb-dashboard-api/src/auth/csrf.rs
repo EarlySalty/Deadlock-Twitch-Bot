@@ -108,6 +108,112 @@ pub async fn csrf_protect(request: Request, next: Next) -> Response {
 const ADMIN_COOKIE_NAME_TYPE: &str = "discord_admin";
 const PARTNER_COOKIE_NAME_TYPE: &str = "twitch";
 
+// ───────────────────────────────────────────────────────────────────────────
+// Same-Origin-Guard (P1.32 / P2.134 / P1.45)
+// ───────────────────────────────────────────────────────────────────────────
+//
+// Browser-CSRF-Schutz OHNE erzwungenen `X-CSRF-Token`-Header. Hintergrund
+// (dokumentierter Prod-Vorfall #235): `auth-status` liefert `csrfToken: null`,
+// daher kann das v2-Frontend keinen Header mitschicken — ein harter Header-Zwang
+// erzeugte 403-Login-Loops in Prod. Stattdessen prüfen wir die HTTP-`Origin`-
+// (bzw. `Referer`-)Herkunft gegen den `Host` der Anfrage. Zusammen mit
+// `SameSite=Lax`-Session-Cookies deckt das den Browser-CSRF-Vektor ab, weil ein
+// fremder Origin im Cross-Site-POST sichtbar abweicht.
+
+use axum::http::header::{HeaderMap, HOST, ORIGIN, REFERER};
+
+/// Liest den Host-Teil (ohne Port) aus einem absoluten URL-String (z. B. dem
+/// `Origin`- oder `Referer`-Header). `None`, wenn kein parsebarer Host enthalten.
+fn url_host(value: &str) -> Option<String> {
+    let value = value.trim();
+    if value.is_empty() {
+        return None;
+    }
+    let url = url::Url::parse(value).ok()?;
+    url.host_str().map(|h| h.to_ascii_lowercase())
+}
+
+/// Host-Teil (ohne Port) aus dem `Host`-Request-Header.
+fn request_host(headers: &HeaderMap) -> Option<String> {
+    let raw = headers.get(HOST).and_then(|v| v.to_str().ok())?.trim();
+    if raw.is_empty() {
+        return None;
+    }
+    // `[::1]:port` / `host:port` → Host-Teil isolieren.
+    let host = if let Some(stripped) = raw.strip_prefix('[') {
+        // IPv6-Literal in Brackets.
+        stripped.split(']').next().unwrap_or(stripped)
+    } else {
+        raw.split(':').next().unwrap_or(raw)
+    };
+    if host.is_empty() {
+        None
+    } else {
+        Some(host.to_ascii_lowercase())
+    }
+}
+
+/// Ergebnis der Same-Origin-Prüfung.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum OriginCheck {
+    /// `Origin`/`Referer` stimmt mit dem Request-`Host` überein → erlaubt.
+    SameOrigin,
+    /// `Origin`/`Referer` zeigt auf einen fremden Host → Cross-Origin (403).
+    CrossOrigin,
+    /// Weder `Origin` noch `Referer` vorhanden — keine Browser-Cross-Site-
+    /// Information. Der Aufrufer entscheidet (i. d. R. erlaubt, da Nicht-Browser-
+    /// Clients wie curl/interne Tools keinen Origin senden; sie passieren
+    /// ohnehin den Auth-Gate).
+    Missing,
+}
+
+/// Prüft, ob ein zustandsänderndes Request same-origin ist.
+///
+/// Vergleicht den Host aus `Origin` (bevorzugt) bzw. `Referer` gegen den
+/// `Host`-Header. Fehlt der `Host`-Header, gilt es als Cross-Origin (fail-closed),
+/// denn ohne bekannten Ziel-Host lässt sich Herkunft nicht bestätigen.
+pub fn check_same_origin(headers: &HeaderMap) -> OriginCheck {
+    let Some(host) = request_host(headers) else {
+        return OriginCheck::CrossOrigin;
+    };
+
+    let origin_host = headers
+        .get(ORIGIN)
+        .and_then(|v| v.to_str().ok())
+        .and_then(url_host);
+    if let Some(origin_host) = origin_host {
+        return if origin_host == host {
+            OriginCheck::SameOrigin
+        } else {
+            OriginCheck::CrossOrigin
+        };
+    }
+
+    let referer_host = headers
+        .get(REFERER)
+        .and_then(|v| v.to_str().ok())
+        .and_then(url_host);
+    if let Some(referer_host) = referer_host {
+        return if referer_host == host {
+            OriginCheck::SameOrigin
+        } else {
+            OriginCheck::CrossOrigin
+        };
+    }
+
+    OriginCheck::Missing
+}
+
+/// `true`, wenn das Request NICHT als Cross-Origin-Browser-Request erkannt wird.
+///
+/// `SameOrigin` und `Missing` (Nicht-Browser/interne Clients ohne Origin) gelten
+/// als erlaubt; nur ein nachweislich fremder Origin (`CrossOrigin`) wird
+/// abgelehnt. So bleibt der Browser-CSRF-Vektor zu, ohne legitime Header-lose
+/// Clients (curl, interne Tools) zu sperren (Vorfall #235).
+pub fn is_allowed_origin(headers: &HeaderMap) -> bool {
+    !matches!(check_same_origin(headers), OriginCheck::CrossOrigin)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -172,6 +278,65 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(resp.status(), StatusCode::OK);
+    }
+
+    // ── Same-Origin-Guard (P1.32 / P2.134 / P1.45) ─────────────────────────
+    use axum::http::HeaderMap;
+
+    fn headers_with(host: &str, origin: Option<&str>, referer: Option<&str>) -> HeaderMap {
+        let mut h = HeaderMap::new();
+        h.insert(super::HOST, host.parse().unwrap());
+        if let Some(o) = origin {
+            h.insert(super::ORIGIN, o.parse().unwrap());
+        }
+        if let Some(r) = referer {
+            h.insert(super::REFERER, r.parse().unwrap());
+        }
+        h
+    }
+
+    #[test]
+    fn same_origin_via_origin_header() {
+        let h = headers_with("dash.example.com", Some("https://dash.example.com"), None);
+        assert_eq!(check_same_origin(&h), OriginCheck::SameOrigin);
+        assert!(is_allowed_origin(&h));
+    }
+
+    #[test]
+    fn cross_origin_via_origin_header_abgelehnt() {
+        let h = headers_with("dash.example.com", Some("https://evil.example.org"), None);
+        assert_eq!(check_same_origin(&h), OriginCheck::CrossOrigin);
+        assert!(!is_allowed_origin(&h));
+    }
+
+    #[test]
+    fn origin_mit_port_match() {
+        // Host trägt Port, Origin nur Host → Host-Vergleich ignoriert Port.
+        let h = headers_with("dash.example.com:8769", Some("https://dash.example.com"), None);
+        assert_eq!(check_same_origin(&h), OriginCheck::SameOrigin);
+    }
+
+    #[test]
+    fn referer_fallback_wenn_origin_fehlt() {
+        let same = headers_with("dash.example.com", None, Some("https://dash.example.com/x"));
+        assert_eq!(check_same_origin(&same), OriginCheck::SameOrigin);
+        let cross = headers_with("dash.example.com", None, Some("https://evil.org/x"));
+        assert_eq!(check_same_origin(&cross), OriginCheck::CrossOrigin);
+    }
+
+    #[test]
+    fn fehlender_origin_und_referer_ist_missing_aber_erlaubt() {
+        // Nicht-Browser-Client (curl) ohne Origin/Referer → Missing → erlaubt.
+        let h = headers_with("dash.example.com", None, None);
+        assert_eq!(check_same_origin(&h), OriginCheck::Missing);
+        assert!(is_allowed_origin(&h));
+    }
+
+    #[test]
+    fn fehlender_host_ist_cross_origin_fail_closed() {
+        let h = HeaderMap::new();
+        assert_eq!(check_same_origin(&h), OriginCheck::CrossOrigin);
+        assert!(!is_allowed_origin(&h));
     }
 
     #[tokio::test]

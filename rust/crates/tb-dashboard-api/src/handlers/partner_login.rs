@@ -17,7 +17,7 @@
 
 use axum::{
     extract::State,
-    http::{header::SET_COOKIE, StatusCode},
+    http::{header::SET_COOKIE, HeaderMap, StatusCode},
     response::{IntoResponse, Redirect, Response},
     Extension, Json,
 };
@@ -25,12 +25,13 @@ use serde_json::json;
 use sqlx::PgPool;
 use tracing::warn;
 
+use crate::auth::csrf::is_allowed_origin;
 use crate::auth::level::DashboardAuthLevel;
 use crate::auth::oauth_login::sanitize_next_path;
 use crate::auth::partner_login::{PartnerLoginToken, PARTNER_LOGIN_TOKEN_TTL_SECS};
 use crate::auth::session::{
-    build_session_cookie, DashboardAuthState, SameSite, PARTNER_COOKIE_NAME,
-    SESSION_CREATE_TTL_SECS,
+    build_session_cookie, DashboardAuthState, SameSite, ADMIN_COOKIE_NAME,
+    PARTNER_ACCESS_COOKIE_NAME, PARTNER_COOKIE_NAME, SESSION_CREATE_TTL_SECS,
 };
 use crate::handlers::auth_login::OAuthLoginConfig;
 
@@ -76,11 +77,19 @@ pub async fn link_handler(
     auth: DashboardAuthLevel,
     state: Option<Extension<DashboardAuthState>>,
     State(pool): State<PgPool>,
+    headers: HeaderMap,
     body: Option<Json<LinkBody>>,
 ) -> Response {
     let _ = &pool; // State trägt den Pool; hier nur Symmetrie zu anderen Handlern.
     if !auth.is_privileged() {
         return (StatusCode::FORBIDDEN, Json(json!({ "error": "admin_required" }))).into_response();
+    }
+    // P2.134: Same-Origin-Guard für Browser-Admin-Caller (Cookie-Session).
+    // Localhost ist loopback-only (kein Browser-Cross-Site-Vektor) → Bypass;
+    // ein nachweislich fremder Origin auf der Link-Ausstellung → 403 (Vorfall #235:
+    // kein harter X-CSRF-Header-Zwang, sondern Origin/Referer same-origin).
+    if !matches!(auth, DashboardAuthLevel::Localhost) && !is_allowed_origin(&headers) {
+        return (StatusCode::FORBIDDEN, Json(json!({ "error": "csrf_failed" }))).into_response();
     }
     let Some(Extension(state)) = state else {
         // Ohne Auth-State kein Persistenz-Pfad → Feature aus.
@@ -136,6 +145,7 @@ pub async fn login_handler(
     state: Option<Extension<DashboardAuthState>>,
     config: Option<Extension<OAuthLoginConfig>>,
     State(pool): State<PgPool>,
+    headers: HeaderMap,
     body: String,
 ) -> Response {
     let _ = &pool;
@@ -145,6 +155,14 @@ pub async fn login_handler(
     let Some(secret) = partner_secret() else {
         return (StatusCode::SERVICE_UNAVAILABLE, "Partner-Login nicht verfügbar.").into_response();
     };
+
+    // P3.27: Existiert bereits eine gültige Session (Admin / Partner / durable
+    // Partner-Access), brechen wir VOR dem Token-Consume ab und leiten schlicht
+    // aufs Dashboard um — kein neuer Token-Verbrauch, kein neues Set-Cookie, keine
+    // neue Session-Row (Python `auth_partner_login`-Short-Circuit).
+    if has_active_dashboard_session(&state, &headers).await {
+        return no_store(Redirect::to("/analyse").into_response());
+    }
 
     let Some(token) = extract_token(&body) else {
         return (StatusCode::BAD_REQUEST, "Partner-Login-Token fehlt.").into_response();
@@ -187,9 +205,20 @@ pub async fn login_handler(
         }
     };
 
-    // 4. Session anlegen + Cookie setzen + Redirect.
+    // 4. Durable, geräte-gebundene Partner-Access-Session anlegen (P1.53/P1.54).
+    //    Cookie `twitch_dash_session_partner`, Typ `partner_token`, mit
+    //    User-Agent-Fingerprint-Bindung. Überdauert den Einmal-Login.
+    let user_agent = headers
+        .get(axum::http::header::USER_AGENT)
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or("");
     let session = match state
-        .create_partner_session(&partner.twitch_login, &partner.twitch_user_id, "")
+        .create_partner_access_session(
+            &partner.twitch_login,
+            &partner.twitch_user_id,
+            "",
+            user_agent,
+        )
         .await
     {
         Ok(s) => s,
@@ -201,7 +230,7 @@ pub async fn login_handler(
 
     let cookie_secure = config.as_ref().map(|c| c.0.cookie_secure).unwrap_or(true);
     let cookie = build_session_cookie(
-        PARTNER_COOKIE_NAME,
+        PARTNER_ACCESS_COOKIE_NAME,
         &session.session_id,
         cookie_secure,
         SameSite::Lax,
@@ -213,6 +242,50 @@ pub async fn login_handler(
         response.headers_mut().append(SET_COOKIE, value);
     }
     no_store(response)
+}
+
+/// Liest einen Cookie-Wert direkt aus den Request-Headern.
+fn cookie_from_headers(headers: &HeaderMap, name: &str) -> Option<String> {
+    let raw = headers.get(axum::http::header::COOKIE)?.to_str().ok()?;
+    for pair in raw.split(';') {
+        let pair = pair.trim();
+        if let Some((k, v)) = pair.split_once('=') {
+            if k.trim() == name {
+                let v = v.trim();
+                if !v.is_empty() {
+                    return Some(v.to_string());
+                }
+            }
+        }
+    }
+    None
+}
+
+/// `true`, wenn der Request bereits eine gültige Dashboard-Session trägt
+/// (Admin, Partner ODER durable Partner-Access). Grundlage für den
+/// Existing-Session-Short-Circuit (P3.27). DB-Fehler → behandeln wir als „keine
+/// Session" (fail-open in Richtung normalem Login-Flow, nicht in Richtung Zugang).
+async fn has_active_dashboard_session(state: &DashboardAuthState, headers: &HeaderMap) -> bool {
+    if let Some(sid) = cookie_from_headers(headers, ADMIN_COOKIE_NAME) {
+        if matches!(state.load_admin_session(&sid).await, Ok(Some(true))) {
+            return true;
+        }
+    }
+    if let Some(sid) = cookie_from_headers(headers, PARTNER_COOKIE_NAME) {
+        if matches!(state.load_partner_session(&sid).await, Ok(Some(_))) {
+            return true;
+        }
+    }
+    if let Some(sid) = cookie_from_headers(headers, PARTNER_ACCESS_COOKIE_NAME) {
+        let ua = headers
+            .get(axum::http::header::USER_AGENT)
+            .and_then(|v| v.to_str().ok())
+            .unwrap_or("");
+        if matches!(state.load_partner_access_session(&sid, ua).await, Ok(Some(_))) {
+            return true;
+        }
+    }
+    false
 }
 
 /// Liest `token` aus JSON (`{"token":...}`) oder form-encoded Body (`token=...`).
@@ -266,6 +339,169 @@ fn urldecode(s: &str) -> String {
         }
     }
     out
+}
+
+#[cfg(test)]
+mod route_tests {
+    //! DB-gestützte Route-Tests (self-contained Router) für P1.53 (durable
+    //! Partner-Access-Cookie) und P3.27 (Existing-Session-Short-Circuit).
+    use super::*;
+    use crate::auth::session::ADMIN_COOKIE_NAME;
+    use axum::body::Body;
+    use axum::http::Request;
+    use axum::routing::post;
+    use axum::Router;
+    use sqlx::postgres::{PgConnectOptions, PgPoolOptions};
+    use std::str::FromStr;
+    use std::sync::Mutex;
+    use tower::ServiceExt;
+
+    /// Serialisiert Tests, die `TWITCH_PARTNER_TOKEN` setzen.
+    static ENV_LOCK: Mutex<()> = Mutex::new(());
+    const TEST_SECRET: &str = "test-partner-secret-xyz";
+
+    fn test_fernet_key() -> String {
+        "dGVzdGtleTEyMzQ1Njc4OTAxMjM0NTY3ODkwMTIzNDU=".to_string()
+    }
+
+    async fn make_pool(schema: &str) -> Option<PgPool> {
+        let dsn = std::env::var("TB_TEST_DATABASE_URL").ok()?;
+        let admin = PgPoolOptions::new().max_connections(1).connect(&dsn).await.unwrap();
+        sqlx::query(&format!("DROP SCHEMA IF EXISTS {schema} CASCADE")).execute(&admin).await.unwrap();
+        sqlx::query(&format!("CREATE SCHEMA {schema}")).execute(&admin).await.unwrap();
+        admin.close().await;
+        let opts = PgConnectOptions::from_str(&dsn).unwrap().options([("search_path", schema)]);
+        let pool = PgPoolOptions::new().max_connections(2).connect_with(opts).await.unwrap();
+        sqlx::query(
+            r#"CREATE TABLE dashboard_sessions (
+                session_id TEXT PRIMARY KEY, session_type TEXT NOT NULL,
+                payload_enc BYTEA NOT NULL, created_at DOUBLE PRECISION NOT NULL,
+                expires_at DOUBLE PRECISION NOT NULL)"#,
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+        sqlx::query(
+            r#"CREATE TABLE twitch_partners (
+                twitch_login TEXT, twitch_user_id TEXT, status TEXT,
+                technical_pause_reason TEXT, manual_partner_opt_out INTEGER,
+                departnered_at TIMESTAMPTZ, admin_archived_at TIMESTAMPTZ,
+                partnered_at TIMESTAMPTZ)"#,
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+        sqlx::query(
+            "INSERT INTO twitch_partners (twitch_login, twitch_user_id, status)
+             VALUES ('linkpartner', '5551', 'active')",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+        Some(pool)
+    }
+
+    fn app(pool: PgPool, state: DashboardAuthState) -> Router {
+        Router::new()
+            .route("/login", post(super::login_handler))
+            .layer(Extension(state))
+            .with_state(pool)
+    }
+
+    /// Baut einen gültigen Login-Token + persistierten State für `linkpartner`.
+    async fn mint_token(state: &DashboardAuthState) -> String {
+        let now = unix_now();
+        let sid = tb_crypto::random_urlsafe_token(STATE_ID_BYTES);
+        let token = PartnerLoginToken::new(sid.clone(), "/analyse".to_string(), now, PARTNER_LOGIN_TOKEN_TTL_SECS);
+        let wire = token.sign(TEST_SECRET.as_bytes());
+        state
+            .save_partner_login_state(&sid, "linkpartner", "/analyse", PARTNER_LOGIN_TOKEN_TTL_SECS)
+            .await
+            .unwrap();
+        wire
+    }
+
+    /// P1.53: erfolgreicher Einmal-Login setzt das DURABLE Partner-Access-Cookie
+    /// (`twitch_dash_session_partner`) mit einer `partner_token`-Row.
+    #[tokio::test]
+    async fn login_setzt_durable_partner_access_cookie() {
+        let Some(pool) = make_pool("t_plogin_durable").await else { return; };
+        let _guard = ENV_LOCK.lock().unwrap_or_else(|p| p.into_inner());
+        std::env::set_var("TWITCH_PARTNER_TOKEN", TEST_SECRET);
+        let state = DashboardAuthState::new(pool.clone(), test_fernet_key());
+        let wire = mint_token(&state).await;
+
+        let req = Request::builder()
+            .method("POST")
+            .uri("/login")
+            .header("content-type", "application/json")
+            .body(Body::from(format!(r#"{{"token":"{wire}"}}"#)))
+            .unwrap();
+        let resp = app(pool.clone(), state).oneshot(req).await.unwrap();
+
+        std::env::remove_var("TWITCH_PARTNER_TOKEN");
+        assert_eq!(resp.status(), StatusCode::SEE_OTHER);
+        let cookie = resp.headers().get(SET_COOKIE).unwrap().to_str().unwrap();
+        assert!(
+            cookie.starts_with(&format!("{PARTNER_ACCESS_COOKIE_NAME}=")),
+            "muss durables Partner-Access-Cookie setzen, war: {cookie}"
+        );
+
+        let sid = cookie
+            .strip_prefix(&format!("{PARTNER_ACCESS_COOKIE_NAME}="))
+            .and_then(|s| s.split(';').next())
+            .unwrap();
+        let session_type: String = sqlx::query_scalar(
+            "SELECT session_type FROM dashboard_sessions WHERE session_id = $1",
+        )
+        .bind(sid)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert_eq!(session_type, "partner_token");
+    }
+
+    /// P3.27: existiert bereits eine gültige Admin-Session, wird der Token NICHT
+    /// verbraucht und KEIN neues Cookie/keine neue Session-Row geschrieben.
+    #[tokio::test]
+    async fn login_short_circuit_bei_bestehender_session() {
+        let Some(pool) = make_pool("t_plogin_shortcircuit").await else { return; };
+        let _guard = ENV_LOCK.lock().unwrap_or_else(|p| p.into_inner());
+        std::env::set_var("TWITCH_PARTNER_TOKEN", TEST_SECRET);
+        let state = DashboardAuthState::new(pool.clone(), test_fernet_key());
+        let wire = mint_token(&state).await;
+        let admin = state.create_admin_session("admin-1", "Admin").await.unwrap();
+
+        let rows_before: i64 =
+            sqlx::query_scalar("SELECT COUNT(*) FROM dashboard_sessions")
+                .fetch_one(&pool)
+                .await
+                .unwrap();
+
+        let req = Request::builder()
+            .method("POST")
+            .uri("/login")
+            .header("content-type", "application/json")
+            .header(
+                axum::http::header::COOKIE,
+                format!("{ADMIN_COOKIE_NAME}={}", admin.session_id),
+            )
+            .body(Body::from(format!(r#"{{"token":"{wire}"}}"#)))
+            .unwrap();
+        let resp = app(pool.clone(), state).oneshot(req).await.unwrap();
+
+        std::env::remove_var("TWITCH_PARTNER_TOKEN");
+        assert_eq!(resp.status(), StatusCode::SEE_OTHER);
+        // Kein Set-Cookie (keine neue Session).
+        assert!(resp.headers().get(SET_COOKIE).is_none(), "kein neues Cookie");
+        // Zeilenzahl unverändert (Token-State NICHT verbraucht, keine neue Session).
+        let rows_after: i64 =
+            sqlx::query_scalar("SELECT COUNT(*) FROM dashboard_sessions")
+                .fetch_one(&pool)
+                .await
+                .unwrap();
+        assert_eq!(rows_after, rows_before, "weder State verbraucht noch Session erzeugt");
+    }
 }
 
 #[cfg(test)]

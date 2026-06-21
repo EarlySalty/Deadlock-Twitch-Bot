@@ -386,7 +386,10 @@ fn viewer_timeline_bucket_sql(days: i64) -> &'static str {
 
 #[cfg(test)]
 mod tests {
+    use super::*;
     use super::viewer_timeline_bucket_sql;
+    use sqlx::postgres::{PgConnectOptions, PgPoolOptions};
+    use std::str::FromStr;
 
     #[test]
     fn viewer_timeline_bucket_grenzen_entsprechen_python() {
@@ -394,5 +397,90 @@ mod tests {
         assert!(viewer_timeline_bucket_sql(8).contains("30 minutes"));
         assert!(viewer_timeline_bucket_sql(30).contains("30 minutes"));
         assert_eq!(viewer_timeline_bucket_sql(31), "DATE_TRUNC('hour', ts_utc)");
+    }
+
+    async fn make_pool(schema: &str) -> Option<PgPool> {
+        let dsn = std::env::var("TB_TEST_DATABASE_URL").ok()?;
+        let admin = PgPoolOptions::new()
+            .max_connections(1)
+            .connect(&dsn)
+            .await
+            .unwrap();
+        sqlx::query(&format!("DROP SCHEMA IF EXISTS {schema} CASCADE"))
+            .execute(&admin)
+            .await
+            .unwrap();
+        sqlx::query(&format!("CREATE SCHEMA {schema}"))
+            .execute(&admin)
+            .await
+            .unwrap();
+        admin.close().await;
+        let opts = PgConnectOptions::from_str(&dsn)
+            .unwrap()
+            .options([("search_path", schema), ("timezone", "UTC")]);
+        Some(
+            PgPoolOptions::new()
+                .max_connections(2)
+                .connect_with(opts)
+                .await
+                .unwrap(),
+        )
+    }
+
+    /// P1.35: gegen ein TIMESTAMPTZ-Schema (wie nach der Migration) muss der
+    /// `since: DateTime<Utc>`-Bind ein 200 mit Daten liefern, nicht 500
+    /// ('operator does not exist: text >= timestamp with time zone').
+    #[tokio::test]
+    async fn monthly_stats_timestamptz_schema_liefert_daten() {
+        let Some(pool) = make_pool("t_perf_tstz").await else {
+            return;
+        };
+        // Spaltentypen exakt wie nach der Migration: started_at/ended_at TIMESTAMPTZ.
+        sqlx::query(
+            "CREATE TABLE twitch_stream_sessions (\
+                 id BIGSERIAL PRIMARY KEY, streamer_login TEXT, \
+                 avg_viewers REAL, peak_viewers INTEGER, duration_seconds REAL, \
+                 follower_delta INTEGER, followers_start INTEGER, followers_end INTEGER, \
+                 unique_chatters INTEGER, \
+                 started_at TIMESTAMPTZ, ended_at TIMESTAMPTZ)",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+        let started = Utc::now() - Duration::days(5);
+        let ended = started + Duration::hours(2);
+        sqlx::query(
+            "INSERT INTO twitch_stream_sessions \
+             (streamer_login, avg_viewers, peak_viewers, duration_seconds, \
+              follower_delta, followers_start, followers_end, unique_chatters, started_at, ended_at) \
+             VALUES ('host', 100.0, 150, 7200.0, 5, 10, 15, 20, $1, $2)",
+        )
+        .bind(started)
+        .bind(ended)
+        .execute(&pool)
+        .await
+        .unwrap();
+
+        let resp = monthly_stats_handler(
+            DashboardAuthLevel::Localhost,
+            State(pool),
+            Query(MonthlyQuery { streamer: None, months: None }),
+        )
+        .await
+        .into_response();
+
+        assert_eq!(
+            resp.status(),
+            StatusCode::OK,
+            "timestamptz-Bind muss gegen timestamptz-Spalte funktionieren"
+        );
+        let bytes = axum::body::to_bytes(resp.into_body(), usize::MAX).await.unwrap();
+        let body: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+        // Mindestens ein Monatseintrag mit der Session.
+        let items = body
+            .get("items")
+            .or_else(|| body.get("months"))
+            .or(Some(&body));
+        assert!(items.is_some(), "Response sollte Monatsdaten enthalten: {body}");
     }
 }
