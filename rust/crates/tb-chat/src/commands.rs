@@ -20,13 +20,15 @@
 //! Plan-Auflösung läuft über `tb_analytics::plan::resolve_plan_snapshot`.
 
 use std::collections::HashMap;
-use std::sync::Arc;
+use std::path::PathBuf;
+use std::sync::{Arc, OnceLock};
 use std::time::Instant;
 
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
 use rand::seq::SliceRandom;
 use sqlx::PgPool;
+use tb_knowledge::{KnowledgeBase, Namespace};
 use tokio::sync::Mutex;
 
 use crate::api::ChatApi;
@@ -74,6 +76,39 @@ const CLIP_OAUTH_MISSING_REPLY: &str =
 /// Wortlaut an `commands.py:383–384` angeglichen.
 const CLIP_FAILED_REPLY: &str =
     "Clip konnte nicht erstellt werden. Bitte in 10 Sekunden nochmal versuchen.";
+
+const HELP_BASE_URL: &str = "https://deutsche-deadlock-community.de/streamer/help";
+const COMMANDS_URL: &str = "https://deutsche-deadlock-community.de/streamer/commands";
+
+fn knowledge_dir() -> PathBuf {
+    match std::env::var("KNOWLEDGE_DIR")
+        .ok()
+        .filter(|v| !v.trim().is_empty())
+    {
+        Some(p) => PathBuf::from(p),
+        None => PathBuf::from("rust/knowledge"),
+    }
+}
+
+fn knowledge_base() -> &'static KnowledgeBase {
+    static KB: OnceLock<KnowledgeBase> = OnceLock::new();
+    KB.get_or_init(|| KnowledgeBase::load_from_dir(&knowledge_dir()).unwrap_or_default())
+}
+
+fn commands_reply() -> String {
+    format!("Alle Befehle findest du hier: {COMMANDS_URL}")
+}
+
+fn help_reply(kb: &KnowledgeBase, topic: &str) -> String {
+    let topic = topic.trim();
+    if topic.is_empty() {
+        return format!("Sag mir ein Thema, z. B. !help raid — oder schau hier: {HELP_BASE_URL}");
+    }
+    match kb.select(topic, Namespace::Bot, None, 1).first() {
+        Some(doc) => format!("{}: {HELP_BASE_URL}#{}", doc.title, doc.slug),
+        None => format!("Dazu habe ich nichts gefunden — schau hier: {HELP_BASE_URL}"),
+    }
+}
 
 /// Statuszeile für `!raid_status` (`commands.py:120–125`).
 ///
@@ -385,6 +420,14 @@ impl CommandEngine {
                 self.cmd_invite(event).await;
                 true
             }
+            "!commands" => {
+                self.cmd_commands(event).await;
+                true
+            }
+            "!help" => {
+                self.cmd_help(event, args).await;
+                true
+            }
             "!engagement_on" => {
                 self.cmd_engagement_on(event).await;
                 true
@@ -530,6 +573,14 @@ impl CommandEngine {
                 "reply_plain send fehlgeschlagen"
             );
         }
+    }
+
+    async fn cmd_commands(&self, event: &ChatMessageEvent) {
+        self.reply(event, &commands_reply()).await;
+    }
+
+    async fn cmd_help(&self, event: &ChatMessageEvent, args: &str) {
+        self.reply(event, &help_reply(knowledge_base(), args)).await;
     }
 
     /// `!title <keywords> [--live]` — generiert einen Stream-Titel via MiniMax
@@ -1770,6 +1821,31 @@ mod tests {
     #[test]
     fn invite_cooldown_ist_eine_stunde() {
         assert_eq!(INVITE_COOLDOWN_SECS, 3600);
+    }
+
+    fn help_fixture_kb() -> tb_knowledge::KnowledgeBase {
+        let root =
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../tb-knowledge/tests/fixtures");
+        tb_knowledge::KnowledgeBase::load_from_dir(&root).expect("fixtures")
+    }
+
+    #[test]
+    fn commands_reply_zeigt_link() {
+        assert!(commands_reply().contains("/streamer/commands"));
+    }
+
+    #[test]
+    fn help_reply_findet_thema() {
+        let kb = help_fixture_kb();
+        let r = help_reply(&kb, "raid");
+        assert!(r.contains("Auto-Raid") && r.contains("/streamer/help#auto-raid"), "{r}");
+    }
+
+    #[test]
+    fn help_reply_unbekannt_fallback() {
+        let kb = help_fixture_kb();
+        let r = help_reply(&kb, "quantenphysik");
+        assert!(r.contains("/streamer/help") && !r.contains('#'), "{r}");
     }
 
     #[test]

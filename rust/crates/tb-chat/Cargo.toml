@@ -20,6 +20,7 @@ tracing     = { workspace = true }
 unicode-normalization = { workspace = true }
 tb-domain   = { workspace = true }
 tb-engagement = { workspace = true }
+tb-knowledge = { workspace = true }
 tb-analytics = { workspace = true }
 tb-transport-twitch = { workspace = true }
 tb-llm      = { workspace = true }
