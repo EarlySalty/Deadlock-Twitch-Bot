@@ -28,6 +28,7 @@ pub mod billing;
 pub mod billing_page;
 pub mod billing_webhook;
 pub mod legal;
+pub mod market;
 pub mod monetization;
 pub mod network;
 pub mod overview;
