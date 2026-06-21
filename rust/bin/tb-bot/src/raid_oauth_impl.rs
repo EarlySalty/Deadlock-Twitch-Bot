@@ -41,10 +41,12 @@
 //! # StreamerContextResolver-Impl
 //!
 //! `build_state_info` (oauth_flow) braucht `has_existing_streamer_context` +
-//! `linked_twitch_identity_for_discord_user`. Beide werden via SQL auf
-//! `twitch_raid_auth` und `twitch_streamers_partner_state` aufgelöst — identisch
-//! zu Pythons `_has_existing_streamer_context` und
-//! `_linked_twitch_identity_for_discord_user` in `RaidAuthManager`.
+//! `linked_twitch_identity_for_discord_user`. `has_existing_streamer_context`
+//! prüft aktiven Partner (`twitch_partners`) ODER eine filterlose Auth-Zeile
+//! (`twitch_raid_auth`), mit `discord:<id>`-Identitätsauflösung vorab.
+//! `linked_twitch_identity_for_discord_user` liest direkt
+//! `twitch_streamer_identities` (neueste zuerst) — identisch zu Pythons
+//! `_has_existing_streamer_context`/`load_streamer_identity` in `RaidAuthManager`.
 
 use std::collections::HashSet;
 use std::sync::Arc;
