@@ -460,11 +460,85 @@ where
     })
 }
 
+/// Normalisiert ein Ad-Schedule-Zeitfeld auf ISO-8601 (UTC), wie der Python-Poller
+/// (`mixin.py:_safe_time_text`, 869–886). Eingabe ist der bereits zu `String`
+/// deserialisierte Wert (siehe [`deserialize_string_or_number`]); Helix liefert
+/// hier Unix-Sekunden als Zahl ODER einen fertigen ISO-String.
+///
+/// Regeln (byte-genau wie Python):
+/// - leerer Wert → `None`
+/// - rein numerisch (ggf. mit Nachkommastellen): als Unix-Epoch interpretieren
+///   - `ts <= 0` → `None` (verworfen)
+///   - `ts > 10_000_000_000` → Millisekunden, durch 1000 teilen
+///   - gültig → ISO-8601 UTC (`...+00:00`); nicht darstellbar → `str(int(ts))`
+/// - nicht-numerischer String (bereits ISO o. Ä.) → unverändert durchreichen
+pub fn normalize_ad_time(value: &str) -> Option<String> {
+    let trimmed = value.trim();
+    if trimmed.is_empty() {
+        return None;
+    }
+    // Nur reine Zahlen (inkl. Float) als Epoch behandeln — sonst durchreichen.
+    let Ok(parsed) = trimmed.parse::<f64>() else {
+        return Some(trimmed.to_string());
+    };
+    let mut ts = parsed;
+    if ts <= 0.0 {
+        return None;
+    }
+    // Manche APIs liefern Millisekunden → auf Sekunden normalisieren.
+    if ts > 10_000_000_000.0 {
+        ts /= 1000.0;
+    }
+    let secs = ts.trunc() as i64;
+    let nanos = ((ts - ts.trunc()) * 1_000_000_000.0).round() as u32;
+    match chrono::DateTime::<chrono::Utc>::from_timestamp(secs, nanos) {
+        Some(dt) => Some(dt.to_rfc3339_opts(chrono::SecondsFormat::AutoSi, false)),
+        // Nicht darstellbar (Überlauf) → ganzzahlige Sekunden als Text (Python-Fallback).
+        None => Some(secs.to_string()),
+    }
+}
+
 #[cfg(test)]
 mod tests {
+    use super::normalize_ad_time;
     use crate::client::{HelixClient, HelixConfig, HelixError};
     use wiremock::matchers::{header, method, path, query_param};
     use wiremock::{Mock, MockServer, ResponseTemplate};
+
+    #[test]
+    fn normalize_ad_time_epoch_sekunden_zu_iso() {
+        // 1750000000 = 2025-06-15T15:06:40Z (Helix liefert es als Zahl-String).
+        let iso = normalize_ad_time("1750000000").expect("ISO");
+        assert_eq!(iso, "2025-06-15T15:06:40+00:00");
+    }
+
+    #[test]
+    fn normalize_ad_time_millisekunden_werden_durch_1000_geteilt() {
+        // > 10e9 ⇒ Millisekunden ⇒ /1000 ⇒ gleiche Sekunde wie oben.
+        let iso = normalize_ad_time("1750000000000").expect("ISO");
+        assert_eq!(iso, "2025-06-15T15:06:40+00:00");
+    }
+
+    #[test]
+    fn normalize_ad_time_nicht_positiv_wird_verworfen() {
+        assert_eq!(normalize_ad_time("0"), None);
+        assert_eq!(normalize_ad_time("-5"), None);
+    }
+
+    #[test]
+    fn normalize_ad_time_leer_ist_none() {
+        assert_eq!(normalize_ad_time(""), None);
+        assert_eq!(normalize_ad_time("   "), None);
+    }
+
+    #[test]
+    fn normalize_ad_time_iso_string_wird_durchgereicht() {
+        // Bereits ISO (nicht-numerisch) → unverändert.
+        assert_eq!(
+            normalize_ad_time("2026-06-15T12:00:00Z").as_deref(),
+            Some("2026-06-15T12:00:00Z")
+        );
+    }
 
     async fn client_with(server: &MockServer) -> HelixClient {
         Mock::given(method("POST"))
