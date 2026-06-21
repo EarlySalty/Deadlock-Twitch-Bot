@@ -1566,6 +1566,54 @@ fn read_log_tail(filename: &str, max_lines: usize) -> Option<Vec<String>> {
 
 // ── Block 2g: health_score (api_v2.py:215-355) ───────────────────────────────
 
+/// Bekannte Service-/Chat-Bot-Accounts (Python `bot/core/chat_bots.py:8`,
+/// `KNOWN_CHAT_BOTS`). Single Source of Truth für den Community-Score-Filter.
+const KNOWN_CHAT_BOTS: &[&str] = &[
+    "botrix",
+    "deutschedeadlockcommunity",
+    "fossabot",
+    "moobot",
+    "nightbot",
+    "pretzelrocks",
+    "soundalerts",
+    "streamlabs",
+    "streamelements",
+    "wizebot",
+];
+
+/// Baut Pythons `build_known_chat_bot_not_in_clause` nach (`chat_bots.py:34`):
+/// schließt bekannte Bot-Logins UND den eigenen Streamer-Login aus, behält aber
+/// Zeilen ohne `chatter_login` (NULL/'') — damit anonyme `chatter_id`-Zeilen
+/// nicht fälschlich rausfallen. Gibt die SQL-Klausel (mit `$start..`-Platzhaltern)
+/// und die sortierten, normalisierten Bot-Logins zurück.
+fn known_chat_bot_not_in_clause(
+    column_expr: &str,
+    own_login: &str,
+    start_param: usize,
+) -> (String, Vec<String>) {
+    let mut set: std::collections::BTreeSet<String> = KNOWN_CHAT_BOTS
+        .iter()
+        .map(|b| b.to_string())
+        .collect();
+    let own = own_login.trim().to_lowercase();
+    if !own.is_empty() {
+        set.insert(own);
+    }
+    let logins: Vec<String> = set.into_iter().collect();
+    if logins.is_empty() {
+        return ("1=1".to_string(), Vec::new());
+    }
+    let placeholders: Vec<String> = (0..logins.len())
+        .map(|i| format!("${}", start_param + i))
+        .collect();
+    let clause = format!(
+        "(({col}) IS NULL OR ({col}) = '' OR LOWER({col}) NOT IN ({ph}))",
+        col = column_expr,
+        ph = placeholders.join(", ")
+    );
+    (clause, logins)
+}
+
 async fn health_score_block(pool: &PgPool, resolved_login: &str) -> Value {
     if resolved_login.is_empty() {
         return Value::Null;
@@ -1663,9 +1711,13 @@ async fn compute_health_score(pool: &PgPool, login: &str) -> Option<Value> {
         }
     }
 
-    // Community: KNOWN_CHAT_BOTS-Filter (Vereinfachung: nur eigener Login + Standard-Bots)
+    // Community: KNOWN_CHAT_BOTS-Filter (Python `build_known_chat_bot_not_in_clause`
+    // mit bots=[*KNOWN_CHAT_BOTS, login]). Anonyme chatter_id-Zeilen ohne
+    // chatter_login bleiben erhalten (NULL/'' werden NICHT gefiltert).
     let mut community: i64 = 0;
-    let community_sql = r#"
+    let (bot_clause, bot_logins) = known_chat_bot_not_in_clause("sc.chatter_login", login, 3);
+    let community_sql = format!(
+        r#"
         SELECT
             COUNT(DISTINCT COALESCE(NULLIF(sc.chatter_login, ''), sc.chatter_id)) AS total_viewers,
             COUNT(DISTINCT CASE
@@ -1677,10 +1729,14 @@ async fn compute_health_score(pool: &PgPool, login: &str) -> Option<Value> {
         JOIN twitch_stream_sessions s ON s.id = sc.session_id
         WHERE LOWER(s.streamer_login) = LOWER($1)
           AND s.started_at >= $2
-          AND LOWER(COALESCE(sc.chatter_login, '')) <> LOWER($1)
-    "#;
-    if let Ok(Some(row)) = sqlx::query(community_sql).bind(login).bind(week_ago).fetch_optional(pool).await
-    {
+          AND {bot_clause}
+    "#
+    );
+    let mut community_query = sqlx::query(&community_sql).bind(login).bind(week_ago);
+    for bot in &bot_logins {
+        community_query = community_query.bind(bot.clone());
+    }
+    if let Ok(Some(row)) = community_query.fetch_optional(pool).await {
         let total = read_i64(&row, "total_viewers");
         let returning = read_i64(&row, "returning_viewers");
         if total > 0 {
@@ -2322,5 +2378,42 @@ mod identity_tests {
         assert_eq!(id.twitch_login, "andererpartner");
         assert!(id.twitch_user_id.is_empty());
         assert_eq!(id.display_name, "andererpartner");
+    }
+}
+
+#[cfg(test)]
+mod community_bot_filter_tests {
+    //! P2.83: KNOWN_CHAT_BOTS-Filter im Community-Sub-Score (Parität zu
+    //! `build_known_chat_bot_not_in_clause`).
+    use super::*;
+
+    #[test]
+    fn clause_enthaelt_alle_bots_und_eigenen_login_sortiert() {
+        let (clause, logins) = known_chat_bot_not_in_clause("sc.chatter_login", "Nani", 3);
+        // Eigener Login (lowercased) + alle Bots, dedupliziert + sortiert.
+        assert!(logins.contains(&"nani".to_string()));
+        assert!(logins.contains(&"nightbot".to_string()));
+        assert!(logins.contains(&"streamelements".to_string()));
+        assert_eq!(logins.len(), KNOWN_CHAT_BOTS.len() + 1);
+        let mut sorted = logins.clone();
+        sorted.sort();
+        assert_eq!(logins, sorted, "Logins müssen sortiert sein");
+        // NULL/''-Erhalt + NOT IN-Klausel mit $3-startenden Platzhaltern.
+        assert!(clause.contains("(sc.chatter_login) IS NULL"));
+        assert!(clause.contains("(sc.chatter_login) = ''"));
+        assert!(clause.contains("LOWER(sc.chatter_login) NOT IN ($3,"));
+    }
+
+    #[test]
+    fn eigener_login_bereits_in_bots_keine_dopplung() {
+        // "nightbot" ist bereits ein Bot; als own_login darf er nicht doppeln.
+        let (_clause, logins) = known_chat_bot_not_in_clause("sc.chatter_login", "nightbot", 3);
+        assert_eq!(logins.len(), KNOWN_CHAT_BOTS.len());
+    }
+
+    #[test]
+    fn leerer_login_nur_bots() {
+        let (_clause, logins) = known_chat_bot_not_in_clause("sc.chatter_login", "  ", 3);
+        assert_eq!(logins.len(), KNOWN_CHAT_BOTS.len());
     }
 }

@@ -241,6 +241,10 @@ pub fn build_internal_router(
             get(python_stubs::chatters_debug_handler),
         )
         .route(
+            &format!("{base}/debug/eventsub-processing"),
+            get(telemetry_routes::eventsub_processing_debug_handler),
+        )
+        .route(
             &format!("{base}/eventsub/processing/requeue"),
             post(python_stubs::eventsub_requeue_handler),
         )

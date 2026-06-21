@@ -3,7 +3,7 @@
 
 use axum::{
     extract::{Path, State},
-    http::StatusCode,
+    http::{HeaderMap, StatusCode},
     response::IntoResponse,
     Extension, Json,
 };
@@ -196,13 +196,64 @@ pub struct ChatActionBody {
     pub message: Option<String>,
 }
 
+/// Header, über den ein vorgelagerter Caller (Dashboard-Bridge) die
+/// authentifizierte Discord-Owner-ID des Admins durchreicht. Wird er gesendet,
+/// MUSS er der freigeschalteten Owner-ID entsprechen — sonst Deny + AUDIT-Log
+/// (P2.119, Defense-in-Depth auf der internen Route zusätzlich zur Token-Auth).
+const OWNER_DISCORD_ID_HEADER: &str = "X-Dashboard-Owner-Discord-Id";
+
+/// Freigeschalteter Discord-Owner (Python `_DASHBOARD_OWNER_DISCORD_ID`,
+/// live.py:63). Über `TWITCH_DASHBOARD_OWNER_DISCORD_ID` überschreibbar.
+const DEFAULT_OWNER_DISCORD_ID: &str = "662995601738170389";
+
+fn owner_discord_id() -> String {
+    std::env::var("TWITCH_DASHBOARD_OWNER_DISCORD_ID")
+        .ok()
+        .map(|v| v.trim().to_string())
+        .filter(|v| !v.is_empty())
+        .unwrap_or_else(|| DEFAULT_OWNER_DISCORD_ID.to_string())
+}
+
+/// Owner-Gate (P2.119): Wenn der Caller eine Discord-Owner-ID mitschickt, muss
+/// sie der freigeschalteten Owner-ID entsprechen. Fehlt der Header, bleibt es
+/// beim Token-/Loopback-Gate (Python-Parität: die interne Route hatte nie einen
+/// Owner-Zwang, der vorgelagerte Dashboard-Pfad schon — dieser Header erlaubt
+/// es, die Owner-Identität für Defense-in-Depth durchzureichen).
+/// `Ok(())` = erlaubt; `Err(())` = abgelehnt (Caller hat bereits AUDIT geloggt).
+fn enforce_owner_gate(headers: &HeaderMap) -> Result<(), ()> {
+    let claimed = headers
+        .get(OWNER_DISCORD_ID_HEADER)
+        .and_then(|v| v.to_str().ok())
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty());
+
+    let Some(claimed) = claimed else {
+        // Kein Identitäts-Header → vertrauter interner Caller (Token/Loopback).
+        return Ok(());
+    };
+
+    if claimed == owner_discord_id() {
+        Ok(())
+    } else {
+        tracing::warn!(
+            "AUDIT internal chat-action denied: non-owner discord_user_id present \
+             path=/streamers/:login/chat-action"
+        );
+        Err(())
+    }
+}
+
 /// Owner-Chat-Action: sendet eine Nachricht/Ankündigung über den live rotierten
 /// Bot-User-Token (Bot-Token-Bridge, [`ChatActionPort`]). Ohne Port (Chat aus /
 /// Token nicht gebootet) → 503 statt stummen Scheiterns. Twitch-Drops
 /// (Stummschaltung, Channel-Settings) werden als `ok=false` durchgereicht, NIE
 /// als Erfolg gefälscht (Python-Parität).
+///
+/// Owner-Gate (P2.119): trägt der Request die `X-Dashboard-Owner-Discord-Id`,
+/// muss sie der freigeschalteten Owner-ID entsprechen, sonst 403 + AUDIT-Log.
 pub async fn chat_action_handler(
     auth: AuthLevel,
+    headers: HeaderMap,
     Path(login): Path<String>,
     Extension(ChatActionExt(port)): Extension<ChatActionExt>,
     body: Option<Json<ChatActionBody>>,
@@ -211,6 +262,17 @@ pub async fn chat_action_handler(
         return (
             StatusCode::UNAUTHORIZED,
             Json(serde_json::json!({"ok": false, "error": "unauthorized"})),
+        );
+    }
+
+    if enforce_owner_gate(&headers).is_err() {
+        return (
+            StatusCode::FORBIDDEN,
+            Json(serde_json::json!({
+                "ok": false,
+                "error": "forbidden",
+                "message": "Nur der freigeschaltete Discord-Owner darf diese Chat-Aktion nutzen"
+            })),
         );
     }
 
@@ -389,9 +451,20 @@ mod chat_action_tests {
         body: Option<serde_json::Value>,
         auth: AuthLevel,
     ) -> (StatusCode, serde_json::Value) {
+        run_with_headers(port, login, body, auth, HeaderMap::new()).await
+    }
+
+    async fn run_with_headers(
+        port: Option<Arc<dyn ChatActionPort>>,
+        login: &str,
+        body: Option<serde_json::Value>,
+        auth: AuthLevel,
+        headers: HeaderMap,
+    ) -> (StatusCode, serde_json::Value) {
         let json_body = body.map(|v| Json(serde_json::from_value(v).unwrap()));
         let resp = chat_action_handler(
             auth,
+            headers,
             Path(login.to_string()),
             Extension(ChatActionExt(port)),
             json_body,
@@ -402,6 +475,74 @@ mod chat_action_tests {
         let bytes = axum::body::to_bytes(resp.into_body(), 65536).await.unwrap();
         let value: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
         (status, value)
+    }
+
+    fn owner_header(value: &str) -> HeaderMap {
+        let mut h = HeaderMap::new();
+        h.insert(
+            OWNER_DISCORD_ID_HEADER,
+            axum::http::HeaderValue::from_str(value).unwrap(),
+        );
+        h
+    }
+
+    // ── P2.119: Owner-Gate auf der internen Route ─────────────────────────────
+
+    #[tokio::test]
+    async fn owner_gate_non_owner_id_wird_403_abgelehnt_ohne_send() {
+        let port = FakePort::new(ChatActionResult::Sent {
+            label: "x".to_string(),
+        });
+        let (status, body) = run_with_headers(
+            Some(port.clone()),
+            "nani",
+            Some(serde_json::json!({"message": "x"})),
+            AuthLevel::Admin,
+            owner_header("999000111"),
+        )
+        .await;
+        assert_eq!(status, StatusCode::FORBIDDEN);
+        assert_eq!(body["error"], serde_json::json!("forbidden"));
+        assert_eq!(
+            port.calls.load(Ordering::SeqCst),
+            0,
+            "Non-Owner darf NICHT senden"
+        );
+    }
+
+    #[tokio::test]
+    async fn owner_gate_korrekte_owner_id_sendet() {
+        let port = FakePort::new(ChatActionResult::Sent {
+            label: "ok".to_string(),
+        });
+        let (status, body) = run_with_headers(
+            Some(port.clone()),
+            "nani",
+            Some(serde_json::json!({"message": "x"})),
+            AuthLevel::Admin,
+            owner_header(DEFAULT_OWNER_DISCORD_ID),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(body["ok"], serde_json::json!(true));
+        assert_eq!(port.calls.load(Ordering::SeqCst), 1);
+    }
+
+    #[tokio::test]
+    async fn owner_gate_ohne_header_bleibt_token_gate() {
+        // Kein Identitäts-Header → vertrauter interner Caller (OAuth-Welcome-Flow).
+        let port = FakePort::new(ChatActionResult::Sent {
+            label: "ok".to_string(),
+        });
+        let (status, _body) = run(
+            Some(port.clone()),
+            "nani",
+            Some(serde_json::json!({"message": "x"})),
+            AuthLevel::Admin,
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(port.calls.load(Ordering::SeqCst), 1);
     }
 
     #[tokio::test]

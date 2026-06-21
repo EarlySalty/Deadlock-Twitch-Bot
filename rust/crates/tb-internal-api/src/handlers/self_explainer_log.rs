@@ -122,10 +122,11 @@ fn idempotency_key(payload: &Value) -> String {
     format!("self-explainer:{}", &hex[..48])
 }
 
-/// Kanonisches JSON mit sortierten Schlüsseln (Parität zu Python `sort_keys=True`).
-/// Nur die Felder, die im tatsächlichen Broker-Payload vorkommen, müssen korrekt
-/// sortiert sein. Wir serialisieren über eine `BTreeMap` um Schlüssel-Sortierung
-/// zu erzwingen.
+/// Kanonisches JSON mit sortierten Schlüsseln (Parität zu Python `sort_keys=True`)
+/// und ASCII-Escaping (Parität zu Python `ensure_ascii=True`). Wir serialisieren
+/// über eine `BTreeMap` für die Schlüssel-Sortierung und einen eigenen Formatter,
+/// der Non-ASCII-Codepunkte als `\uXXXX` ausgibt — sonst divergiert der
+/// Idempotency-Key für deutsche Umlaute/Emoji vom Python-Key (P2.144).
 fn canonical_json(value: &Value) -> String {
     use serde_json::Map;
     fn sort_value(v: &Value) -> Value {
@@ -144,11 +145,43 @@ fn canonical_json(value: &Value) -> String {
             other => other.clone(),
         }
     }
-    // Python `separators=(",",":")` = kompakt ohne Leerzeichen —
-    // serde_json's Standardausgabe ist ebenfalls kompakt (keine Leerzeichen).
-    // `ensure_ascii=True` in Python escapet Non-ASCII → serde_json escaped
-    // Non-ASCII in Strings ebenfalls per \uXXXX, daher byte-identisch.
-    serde_json::to_string(&sort_value(value)).unwrap_or_default()
+    // Python `separators=(",",":")` = kompakt ohne Leerzeichen — serde_json's
+    // Standardausgabe ist ebenfalls kompakt. ABER `ensure_ascii=True` escapet in
+    // Python jeden Non-ASCII-Codepunkt zu `\uXXXX`; serde_json gibt rohes UTF-8
+    // aus. Damit der Idempotency-Key über den Python→Rust-Cutover stabil bleibt
+    // (P2.144), serialisieren wir mit einem ASCII-escapenden Formatter.
+    let sorted = sort_value(value);
+    let mut buf = Vec::new();
+    let mut ser = serde_json::Serializer::with_formatter(&mut buf, AsciiEscapeFormatter);
+    if serde::Serialize::serialize(&sorted, &mut ser).is_err() {
+        return String::new();
+    }
+    String::from_utf8(buf).unwrap_or_default()
+}
+
+/// `serde_json`-Formatter, der Non-ASCII-Codepunkte als `\uXXXX` escapet —
+/// reproduziert Pythons `json.dumps(..., ensure_ascii=True)`. Alle übrigen
+/// Regeln (ASCII-Escapes für Steuerzeichen/`"`/`\`, kompakte Separatoren) erbt
+/// er vom `CompactFormatter`.
+struct AsciiEscapeFormatter;
+
+impl serde_json::ser::Formatter for AsciiEscapeFormatter {
+    fn write_string_fragment<W>(&mut self, writer: &mut W, fragment: &str) -> std::io::Result<()>
+    where
+        W: ?Sized + std::io::Write,
+    {
+        for ch in fragment.chars() {
+            if ch.is_ascii() {
+                writer.write_all(&[ch as u8])?;
+            } else {
+                let mut units = [0u16; 2];
+                for unit in ch.encode_utf16(&mut units) {
+                    write!(writer, "\\u{:04x}", unit)?;
+                }
+            }
+        }
+        Ok(())
+    }
 }
 
 /// Python-`not channel_id`-Semantik: `null`/`0`/`""`/`false` (und leere
@@ -545,5 +578,34 @@ mod tests {
         let pos_z = s.find("\"z\"").expect("z");
         assert!(pos_a < pos_m, "a muss vor m");
         assert!(pos_m < pos_z, "m muss vor z");
+    }
+
+    // P2.144: ensure_ascii=True-Parität — Non-ASCII muss als \uXXXX escapt werden.
+    #[test]
+    fn canonical_json_escapet_non_ascii_wie_python_ensure_ascii() {
+        let v = serde_json::json!({"embed": {"title": "Frägé"}});
+        let s = canonical_json(&v);
+        assert_eq!(s, r#"{"embed":{"title":"Fr\u00e4g\u00e9"}}"#);
+    }
+
+    // P2.144: erzeugter Idempotency-Key muss bytegleich zu Pythons
+    // json.dumps(..., ensure_ascii=True, sort_keys=True, separators=(",",":"))
+    // → sha256[:48] sein. Referenzwert aus dem Python-Original berechnet.
+    #[test]
+    fn idempotency_key_matcht_python_ensure_ascii_referenz() {
+        let payload = serde_json::json!({"embed": {"title": "Frägé"}});
+        assert_eq!(
+            idempotency_key(&payload),
+            "self-explainer:ed2a5db529bb088a09a64fbd55ba5296fb9b8a48b911d190"
+        );
+    }
+
+    // Codepunkte außerhalb der BMP (Emoji) → UTF-16-Surrogatpaar als zwei \uXXXX,
+    // exakt wie Pythons ensure_ascii.
+    #[test]
+    fn canonical_json_escapet_emoji_als_surrogatpaar() {
+        let v = serde_json::json!({"t": "😀"});
+        let s = canonical_json(&v);
+        assert_eq!(s, r#"{"t":"\ud83d\ude00"}"#);
     }
 }
