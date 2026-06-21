@@ -24,6 +24,8 @@ tb-crypto           = { workspace = true }
 tb-db               = { workspace = true }
 tb-internal-api     = { workspace = true }
 tb-chat            = { workspace = true }
+tb-knowledge        = { workspace = true }
+tb-tips             = { workspace = true }
 tb-monitoring       = { workspace = true }
 tb-raid             = { workspace = true }
 tb-transport-discord = { workspace = true }

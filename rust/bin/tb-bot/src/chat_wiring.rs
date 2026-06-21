@@ -14,6 +14,7 @@
 //!   `logs` relativ zum WorkingDirectory = Repo-Root, identisch zu Python)
 
 use std::collections::HashSet;
+use std::path::PathBuf;
 use std::sync::{Arc, OnceLock};
 use std::time::Duration;
 
@@ -49,6 +50,7 @@ use tb_engagement::pipeline::EngagementPipeline;
 use tb_engagement::sender_auth::SenderAuthStore;
 use tb_engagement::stealth_sender::StealthSender;
 use tb_engagement::types::IncomingMessage;
+use tb_knowledge::KnowledgeBase;
 use tb_monitoring::{ChatNotificationKind, EventSubHooks, SubscriptionManager, TelemetryStore};
 use tb_raid::{RaidAuthStore, RaidTokenRefresher, TokenBlacklistStore, TokenProvider};
 use tb_transport_discord::BrokerRelay;
@@ -62,6 +64,29 @@ const CHAT_SUB_RECONCILE_INTERVAL: Duration = Duration::from_secs(30 * 60);
 
 /// Fallback-Env für den globalen Discord-Invite (chat_command.rs / promos.py).
 const PROMO_DISCORD_INVITE_ENV: &str = "PROMO_DISCORD_INVITE";
+
+fn knowledge_dir() -> PathBuf {
+    std::env::var("KNOWLEDGE_DIR")
+        .ok()
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty())
+        .map(PathBuf::from)
+        .unwrap_or_else(|| PathBuf::from("rust/knowledge"))
+}
+
+fn knowledge_base() -> &'static KnowledgeBase {
+    static KB: OnceLock<KnowledgeBase> = OnceLock::new();
+    KB.get_or_init(|| match KnowledgeBase::load_from_dir(&knowledge_dir()) {
+        Ok(kb) => {
+            tracing::info!("go-live-tipp: Wissensbasis geladen ({} Dokumente)", kb.len());
+            kb
+        }
+        Err(error) => {
+            tracing::warn!(%error, "go-live-tipp: Wissensbasis nicht geladen");
+            KnowledgeBase::default()
+        }
+    })
+}
 
 // ---------------------------------------------------------------------------
 // Clip-Port (!clip)
@@ -653,6 +678,8 @@ pub async fn build_runtime(
         hooks: Arc::new(ChatHooks {
             inner: inner_hooks,
             pipeline,
+            api: Arc::clone(&api),
+            pool: pool.clone(),
             timeout_guard: Arc::clone(&timeout_guard),
             promos: Arc::clone(&promos),
             engagement,
@@ -888,6 +915,10 @@ async fn ensure_autoban_log_table(pool: &PgPool) {
 struct ChatHooks {
     inner: Arc<dyn EventSubHooks>,
     pipeline: Arc<ChatPipeline>,
+    /// Go-Live-Tipp-Hook: nutzt denselben dekorierten Chat-Sendepfad wie die
+    /// übrige Pipeline und liest Gates/Live-State aus Postgres.
+    api: Arc<dyn ChatApi>,
+    pool: PgPool,
     /// Für den Werbefrei-Pitch beim Go-Live: der geteilte TimeoutGuard
     /// (SET-Seite armiert den Pitch) + die PromoEngine, über die der Pitch
     /// gesendet wird (Suppression-Check + Promo-Cooldown, Python-Parität).
@@ -948,6 +979,111 @@ impl ChatHooks {
             }
         });
     }
+
+    async fn maybe_send_golive_tip(&self, twitch_user_id: &str, login: &str) {
+        let last_game = match sqlx::query_as::<_, (Option<String>,)>(
+            "SELECT last_game FROM twitch_live_state WHERE twitch_user_id = $1",
+        )
+        .bind(twitch_user_id)
+        .fetch_optional(&self.pool)
+        .await
+        {
+            Ok(Some((last_game,))) => last_game.unwrap_or_default(),
+            Ok(None) => return,
+            Err(error) => {
+                tracing::warn!(
+                    %error,
+                    %twitch_user_id,
+                    %login,
+                    "go-live-tipp: Deadlock-Check fehlgeschlagen"
+                );
+                return;
+            }
+        };
+        if last_game.trim().to_lowercase() != "deadlock" {
+            return;
+        }
+
+        let settings = match tb_tips::repo::tip_settings(&self.pool, twitch_user_id).await {
+            Ok(settings) => settings,
+            Err(error) => {
+                tracing::warn!(
+                    %error,
+                    %twitch_user_id,
+                    %login,
+                    "go-live-tipp: Settings konnten nicht gelesen werden"
+                );
+                return;
+            }
+        };
+        if !tb_tips::engine::passes_gates(
+            &settings,
+            chrono::Utc::now(),
+            tb_tips::engine::MIN_GAP_HOURS,
+        ) {
+            return;
+        }
+
+        let pick = match tb_tips::engine::pick_tip(&self.pool, knowledge_base(), twitch_user_id)
+            .await
+        {
+            Ok(pick) => pick,
+            Err(error) => {
+                tracing::warn!(
+                    %error,
+                    %twitch_user_id,
+                    %login,
+                    "go-live-tipp: Tipp-Auswahl fehlgeschlagen"
+                );
+                return;
+            }
+        };
+        let Some((slug, tip_text)) = pick else {
+            return;
+        };
+
+        match self.api.send_message(twitch_user_id, &tip_text).await {
+            Ok(SendOutcome::Sent) => {
+                match tb_tips::repo::record_tip_shown(&self.pool, twitch_user_id, &slug).await {
+                    Ok(()) => tracing::info!(
+                        %twitch_user_id,
+                        %login,
+                        %slug,
+                        "go-live-tipp gesendet"
+                    ),
+                    Err(error) => tracing::warn!(
+                        %error,
+                        %twitch_user_id,
+                        %login,
+                        %slug,
+                        "go-live-tipp: Historie konnte nicht geschrieben werden"
+                    ),
+                }
+            }
+            Ok(SendOutcome::Dropped { code, message }) => tracing::warn!(
+                %twitch_user_id,
+                %login,
+                %slug,
+                %code,
+                reason = %message,
+                "go-live-tipp von Twitch gedroppt"
+            ),
+            Ok(SendOutcome::HttpError { status, .. }) => tracing::warn!(
+                %twitch_user_id,
+                %login,
+                %slug,
+                %status,
+                "go-live-tipp: Chat-Send HTTP-Fehler"
+            ),
+            Err(error) => tracing::warn!(
+                %error,
+                %twitch_user_id,
+                %login,
+                %slug,
+                "go-live-tipp: Chat-Send fehlgeschlagen"
+            ),
+        }
+    }
 }
 
 #[async_trait::async_trait]
@@ -962,6 +1098,7 @@ impl EventSubHooks for ChatHooks {
     }
     async fn on_stream_went_live(&self, twitch_user_id: &str, login: &str) {
         self.inner.on_stream_went_live(twitch_user_id, login).await;
+        self.maybe_send_golive_tip(twitch_user_id, login).await;
 
         // Werbefrei-Pitch (Python eventsub_mixin.py:1523-1555): War der Bot in
         // diesem Kanal getimed-outed (TimeoutGuard-SET), ist beim Stream-Start
