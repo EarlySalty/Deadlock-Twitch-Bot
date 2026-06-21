@@ -2,6 +2,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use async_trait::async_trait;
+use chrono::Utc;
 use dashmap::DashMap;
 use serde::Deserialize;
 use serde_json::Value;
@@ -20,11 +21,13 @@ const SCAM_JUDGE_SYSTEM_PROMPT: &str = r#"Du bist ein wachsamer Chat-Moderator f
 
 Du bekommst die Nachrichten EINES Chatters nacheinander als JSON-Objekte mit den Feldern "message" (der Text), "is_first_global" (true = dieser Chatter wurde im ganzen Netzwerk noch nie gesehen) und "unicode_obfuscation_detected" (true = die Schrift war verfremdet). Bewerte immer den GESAMTEN bisherigen Verlauf, nicht nur die letzte Nachricht.
 
-Zwei Maschen, auf die du achtest:
+Drei Maschen, auf die du achtest:
 
 1) Beziehungs- und Vertrauens-Masche: generischer Beziehungsaufbau ohne echten Spielbezug ("Heya", "How's it going?", "How's your day been?", "Welcome back <3"), übertrieben schleimiges Dauerlob ohne Anlass ("you have good taste", "you deserve it"), einseitiges, vorgefertigt wirkendes Reden, persönliche Ausfrage-Fragen (Wohnort, Job, Alter, Uhrzeit bei dir, PC oder PS5, "wie lange streamst du schon"), Mitleids-Haken ("hab kein Geld, aber ich probier's"), und am Ende der Pivot weg von Twitch: "can we talk on chat now?", "can we connect?", Discord, Freundschaftsanfrage.
 
 2) Wachstums- und Clout-Pitch (oft EINE einzige lange Nachricht): unaufgefordertes Angebot, deinen Kanal "wachsen" zu lassen oder dich mit einem "großen Streamer" zu verbinden, geködert mit "real viewers, active chat, supporters who donate and sub", und der Aufforderung "add him on Discord … tell him X sent you". Häufig in verfremdeter Schrift, um Filter zu täuschen.
+
+3) Ausreden- und Sofort-Pivot-Masche (oft schon mit der ersten oder zweiten Nachricht): ein Erstschreiber behauptet ohne Anlass ein technisches Problem ("my headphones aren't working", "mic is broken", "can't hear the stream", "stream is lagging for me") oder eine andere Ausrede und drängt sofort darauf, woanders weiterzureden ("reply me on chat", "reply me on Discord", "dm me", "add me"). Verräterisch sind die gebrochene Scammer-Grammatik ("reply me" statt "reply to me") und dass die Ausrede keinen echten Spiel- oder Streambezug hat — sie ist nur ein Vorwand für den Off-Platform-Pivot.
 
 Gewichtung der Indizien:
 - Sprache: Diese Scammer schreiben fast immer Englisch in einem deutschsprachigen Kanal. Ein englischsprachiger Erstschreiber, der sofort Beziehungs-Smalltalk oder einen Wachstums-Pitch fährt, ist deutlich verdächtiger. Deutschsprachige Erstschreiber sind selten diese Masche — im Zweifel "clean" oder "unsure".
@@ -36,8 +39,10 @@ Echte neue Zuschauer unterscheiden sich klar: konkrete Spiel- oder Stream-Fragen
 Sei zurückhaltend: Stufe nur dann als "scam" mit hoher confidence ein, wenn das Muster klar erkennbar ist. Reicht der bisherige Verlauf für ein Urteil noch nicht, antworte "unsure" — es kommen weitere Nachrichten. Echte Zuschauer sind "clean".
 
 Antworte AUSSCHLIESSLICH mit einem einzigen JSON-Objekt, ohne Markdown und ohne weiteren Text:
-{"verdict":"scam"|"clean"|"unsure","confidence":<Zahl 0.0 bis 1.0>,"category":"<kurzes Label, z.B. befriending_pivot, growth_pitch, recon_smalltalk>","reasoning":"<2 bis 4 Sätze auf Deutsch, allgemeinverständlich für einen unerfahrenen Streamer: WARUM ist das verdächtig oder unverdächtig? Benenne die konkreten Auffälligkeiten aus dem Verlauf. Kein Fachjargon, keine Zahlen.>"}"#;
+{"verdict":"scam"|"clean"|"unsure","confidence":<Zahl 0.0 bis 1.0>,"category":"<kurzes Label, z.B. befriending_pivot, growth_pitch, excuse_pivot, recon_smalltalk>","reasoning":"<2 bis 4 Sätze auf Deutsch, allgemeinverständlich für einen unerfahrenen Streamer: WARUM ist das verdächtig oder unverdächtig? Benenne die konkreten Auffälligkeiten aus dem Verlauf. Kein Fachjargon, keine Zahlen.>"}"#;
 const TIMEOUT_SECONDS: u32 = 600;
+/// Account gilt als "neu" unter dieser Tagesgrenze (konsistent mit scam_pitch::ACCOUNT_MAX_DAYS = 90).
+const ACCOUNT_NEW_MAX_DAYS: i64 = 90;
 const SUBSTANTIAL_MESSAGE_TARGET: usize = 3;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -286,6 +291,8 @@ fn is_single_message_pitch(text: &str) -> bool {
             "donate and sub",
             "connect with",
             "talk on chat",
+            "reply me",
+            "dm me",
         ]
         .iter()
         .any(|needle| lower.contains(needle))
@@ -458,12 +465,39 @@ pub trait ScamGuardStore: Send + Sync {
 #[async_trait]
 pub trait ScamModeration: Send + Sync {
     async fn auto_ban_and_cleanup(&self, request: AutoBanRequest<'_>) -> bool;
+    async fn timeout_and_cleanup(
+        &self,
+        broadcaster_id: &str,
+        chatter_id: &str,
+        message_id: &str,
+        duration_secs: u32,
+        reason_text: &str,
+    ) -> bool;
 }
 
 #[async_trait]
 impl ScamModeration for ModerationEngine {
     async fn auto_ban_and_cleanup(&self, request: AutoBanRequest<'_>) -> bool {
         ModerationEngine::auto_ban_and_cleanup(self, request).await
+    }
+
+    async fn timeout_and_cleanup(
+        &self,
+        broadcaster_id: &str,
+        chatter_id: &str,
+        message_id: &str,
+        duration_secs: u32,
+        reason_text: &str,
+    ) -> bool {
+        ModerationEngine::timeout_and_cleanup(
+            self,
+            broadcaster_id,
+            chatter_id,
+            message_id,
+            duration_secs,
+            reason_text,
+        )
+        .await
     }
 }
 
@@ -791,25 +825,47 @@ impl ConversationScamGuard {
             VerdictKind::Scam => match settings.mode {
                 GuardMode::AlertOnly => ("suggested".to_string(), true),
                 GuardMode::Timeout => {
-                    let outcome = self
-                        .api
-                        .timeout_user(
+                    let timed_out = self
+                        .moderation
+                        .timeout_and_cleanup(
                             &event.broadcaster_user_id,
                             &event.chatter_user_id,
+                            &event.message_id,
                             TIMEOUT_SECONDS,
                             &verdict.reasoning,
                         )
                         .await;
-                    match outcome {
-                        Ok(BanOutcome::Banned | BanOutcome::AlreadyBanned) => {
-                            ("timed_out".to_string(), true)
-                        }
-                        Ok(_) | Err(_) => ("suggested".to_string(), true),
+                    if timed_out {
+                        ("timed_out".to_string(), true)
+                    } else {
+                        ("suggested".to_string(), true)
                     }
                 }
                 GuardMode::AutoBan => {
                     if event.chatter_user_id.is_empty() {
                         return ("ban_failed_no_mod".to_string(), true);
+                    }
+                    let is_old = match self.api.user_created_at(&event.chatter_user_id).await {
+                        Ok(Some(created)) => {
+                            (Utc::now() - created).num_days() >= ACCOUNT_NEW_MAX_DAYS
+                        }
+                        Ok(None) | Err(_) => false,
+                    };
+                    if is_old {
+                        let timed_out = self
+                            .moderation
+                            .timeout_and_cleanup(
+                                &event.broadcaster_user_id,
+                                &event.chatter_user_id,
+                                &event.message_id,
+                                TIMEOUT_SECONDS,
+                                &verdict.reasoning,
+                            )
+                            .await;
+                        if timed_out {
+                            return ("timed_out".to_string(), true);
+                        }
+                        return ("suggested".to_string(), true);
                     }
                     let banned = self
                         .moderation
@@ -1547,6 +1603,13 @@ mod tests {
     }
 
     #[test]
+    fn reply_me_opener_zaehlt_als_single_message_pitch() {
+        assert!(is_single_message_pitch(
+            "Sorry my headphones are not working can reply me on chat"
+        ));
+    }
+
+    #[test]
     fn learnings_werden_in_system_prompt_eingebettet() {
         let ohne = DialogState::new(true);
         assert_eq!(ohne.messages()[0].content, SCAM_JUDGE_SYSTEM_PROMPT);
@@ -1823,6 +1886,7 @@ mod tests {
     struct MockModeration {
         succeeds: StdMutex<bool>,
         reasons: StdMutex<Vec<String>>,
+        timeout_reasons: StdMutex<Vec<String>>,
     }
 
     #[async_trait]
@@ -1833,6 +1897,21 @@ mod tests {
                 .unwrap()
                 .push(request.reason_text.to_string());
             *self.succeeds.lock().unwrap()
+        }
+
+        async fn timeout_and_cleanup(
+            &self,
+            _broadcaster_id: &str,
+            _chatter_id: &str,
+            _message_id: &str,
+            _duration_secs: u32,
+            reason_text: &str,
+        ) -> bool {
+            self.timeout_reasons
+                .lock()
+                .unwrap()
+                .push(reason_text.to_string());
+            true
         }
     }
 
@@ -1871,6 +1950,7 @@ mod tests {
         let moderation = Arc::new(MockModeration {
             succeeds: StdMutex::new(true),
             reasons: StdMutex::new(Vec::new()),
+            timeout_reasons: StdMutex::new(Vec::new()),
         });
         let guard = ConversationScamGuard::with_store(
             "bot-id".to_string(),
@@ -2099,7 +2179,7 @@ mod tests {
             mode: GuardMode::Timeout,
             ..GuardSettings::default()
         };
-        let (guard, store, _, api, _) =
+        let (guard, store, _, _, moderation) =
             build_guard(timeout_settings, [verdict(VerdictKind::Scam, 0.95)]);
         feed(
             &guard,
@@ -2109,7 +2189,7 @@ mod tests {
         .await;
         assert_eq!(store.records.lock().unwrap()[0].action_taken, "timed_out");
         assert_eq!(
-            api.timeout_reasons.lock().unwrap().as_slice(),
+            moderation.timeout_reasons.lock().unwrap().as_slice(),
             ["test reasoning"]
         );
     }
