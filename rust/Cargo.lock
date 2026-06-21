@@ -2470,9 +2470,11 @@ dependencies = [
  "tb-engagement",
  "tb-highlight",
  "tb-internal-api",
+ "tb-knowledge",
  "tb-monitoring",
  "tb-raid",
  "tb-social-media",
+ "tb-tips",
  "tb-transport-discord",
  "tb-transport-twitch",
  "tokio",
@@ -2780,6 +2782,18 @@ dependencies = [
  "tracing",
  "url",
  "wiremock",
+]
+
+[[package]]
+name = "tb-tips"
+version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "chrono",
+ "sqlx",
+ "tb-knowledge",
+ "tokio",
+ "tracing",
 ]
 
 [[package]]

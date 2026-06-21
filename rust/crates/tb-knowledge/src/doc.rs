@@ -59,6 +59,7 @@ pub struct KnowledgeDoc {
     pub last_updated: String,
     pub source: String,
     pub tip_eligible: bool,
+    pub tip_text: String,
     pub tip_flags: Vec<String>,
     pub time_to_value: u8,
     pub body: String,
@@ -86,6 +87,7 @@ pub fn parse_doc(raw: &str, slug: &str) -> Result<KnowledgeDoc, KnowledgeError> 
     let mut last_updated = String::new();
     let mut source = String::new();
     let mut tip_eligible = false;
+    let mut tip_text = String::new();
     let mut tip_flags: Vec<String> = Vec::new();
     let mut time_to_value: u8 = 3;
 
@@ -107,6 +109,7 @@ pub fn parse_doc(raw: &str, slug: &str) -> Result<KnowledgeDoc, KnowledgeError> 
             "last_updated" => last_updated = value.to_string(),
             "source" => source = value.to_string(),
             "tip_eligible" => tip_eligible = matches!(value, "true" | "yes" | "1"),
+            "tip_text" => tip_text = value.to_string(),
             "tip_flags" => tip_flags = parse_flags(value),
             "time_to_value" => {
                 time_to_value = value.parse::<u8>().map_err(|_| KnowledgeError::BadField {
@@ -134,6 +137,7 @@ pub fn parse_doc(raw: &str, slug: &str) -> Result<KnowledgeDoc, KnowledgeError> 
         last_updated,
         source,
         tip_eligible,
+        tip_text,
         tip_flags,
         time_to_value,
         body,
@@ -177,6 +181,7 @@ Der Bot raidet Zuschauer weiter.\n";
         assert_eq!(d.category, "feature");
         assert_eq!(d.audience, "streamer");
         assert!(d.tip_eligible);
+        assert_eq!(d.tip_text, "");
         assert_eq!(
             d.tip_flags,
             vec!["feature".to_string(), "costream".to_string()]
@@ -215,7 +220,18 @@ Der Bot raidet Zuschauer weiter.\n";
         assert_eq!(d.namespace, Namespace::Deadlock);
         assert_eq!(d.category, "");
         assert!(!d.tip_eligible);
+        assert_eq!(d.tip_text, "");
         assert!(d.tip_flags.is_empty());
         assert_eq!(d.time_to_value, 3);
+    }
+
+    #[test]
+    fn parst_tip_text() {
+        let raw = "---\ntitle: Auto-Raid\nnamespace: bot\ntip_eligible: true\ntip_text: Du gehst offline? Der Bot raidet deine Zuschauer automatisch weiter.\n---\nbody";
+        let d = parse_doc(raw, "auto-raid").unwrap();
+        assert_eq!(
+            d.tip_text,
+            "Du gehst offline? Der Bot raidet deine Zuschauer automatisch weiter."
+        );
     }
 }
