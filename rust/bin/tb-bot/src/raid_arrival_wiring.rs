@@ -13,7 +13,8 @@ use chrono::Utc;
 use sqlx::PgPool;
 use tb_raid::{
     build_partner_raid_message, build_recruitment_message, classify_partner_raid_arrival,
-    decide_blacklist_action, plan_recruitment_delivery, serialize_confirmation_signals,
+    classify_partner_raid_arrival_with_expectation, decide_blacklist_action,
+    plan_recruitment_delivery, serialize_confirmation_signals,
     ArrivalConfirmationService, ArrivalSignalContext, ArrivalTrackingStore, BlacklistScheduleAction,
     ConfirmedExternalRecruitmentRaid, ExternalRecruitmentStore, ManualRaidSuppression, PendingRaid,
     PendingRaidStore, RaidArrivalSink, RaidBlacklistStore, RaidHistoryStore, RecordArrivalInput,
@@ -687,6 +688,28 @@ impl RaidArrivalSink for RaidArrivalSinkImpl {
             )
             .await;
         let known = lookups.known_source;
+
+        // P1.13: expected_partner-Override. Ein Partner-Raid (pending.is_partner_raid)
+        // zu einem noch NICHT in twitch_partners eingetragenen Ziel würde sonst als
+        // `suppressed_external` klassifiziert (Ziel-Lookup = false) und die
+        // Dankesnachricht/das Tracking unterdrückt. Wie Python
+        // (runtime_factories.py:546-563) berechnet der Aufrufer vorab die
+        // Klassifikation MIT expected_partner=is_partner_raid und reicht das
+        // Ergebnis als Overrides durch, damit der zweite Pass `ours_to_partner`
+        // erzwingt. Muss VOR dem Bau des Service laufen (der `lookups` verschiebt).
+        let expectation = classify_partner_raid_arrival_with_expectation(
+            Some(from_broadcaster_login),
+            from_broadcaster_id,
+            Some(to_broadcaster_id),
+            Some(to_broadcaster_login),
+            &lookups,
+            &lookups,
+            pending.is_partner_raid,
+        );
+        let classification_override = Some(expectation.classification.clone());
+        let source_resolution_override = Some(Some(expectation.source_resolution.clone()));
+        let target_is_partner_override = Some(expectation.classification.is_some());
+
         let svc = ArrivalConfirmationService::new(
             Box::new(PrefetchedLookups {
                 target_is_partner: lookups.target_is_partner,
@@ -700,9 +723,14 @@ impl RaidArrivalSink for RaidArrivalSinkImpl {
             to_broadcaster_id,
             to_broadcaster_login: Some(to_broadcaster_login),
         };
-        let Some(decision) =
-            svc.confirm_pending_raid_arrival(pending, &ctx, signal_type, None, None, None)
-        else {
+        let Some(decision) = svc.confirm_pending_raid_arrival(
+            pending,
+            &ctx,
+            signal_type,
+            classification_override,
+            source_resolution_override,
+            target_is_partner_override,
+        ) else {
             return;
         };
 

@@ -164,9 +164,54 @@ impl ChannelInfoSource for HelixStreamSource {
     }
 }
 
-/// Helix-Adapter für Follower-Zahlen (best-effort, App-Token).
+/// Liefert einen User-Token mit `moderator:read:followers` für den
+/// Follower-Total-Abruf (P1.7). Python (`sessions_mixin.py:907-926`) bevorzugt
+/// den zentralen Bot-Token, sofern dieser den Scope trägt; ohne Scope/Token
+/// fällt der Abruf auf den App-Token-Pfad zurück (`None`).
+#[async_trait::async_trait]
+pub trait FollowerTokenSource: Send + Sync {
+    /// `Some(token)` = User-Token mit `moderator:read:followers`, der die echte
+    /// `total`-Zahl liefert; `None` = App-Token-Pfad (Twitch antwortet ohne
+    /// Scope und es kommt `None` zurück).
+    async fn moderator_followers_token(&self) -> Option<String>;
+}
+
+/// Bot-Token-Quelle für den Follower-Total-Abruf: reicht den zentralen
+/// Bot-User-Token nur durch, wenn er `moderator:read:followers` trägt (P1.7,
+/// Python `sessions_mixin.py:925`). Nutzt denselben `BotTokenManager` wie der
+/// Chat-Pfad — KEIN zweiter Refresher.
+pub struct BotFollowerTokenSource {
+    pub token_manager: Arc<tb_chat::token::BotTokenManager>,
+}
+
+#[async_trait::async_trait]
+impl FollowerTokenSource for BotFollowerTokenSource {
+    async fn moderator_followers_token(&self) -> Option<String> {
+        let scopes = self.token_manager.scopes().await;
+        let has_scope = scopes.iter().any(|scope| {
+            scope.trim().eq_ignore_ascii_case("moderator:read:followers")
+        });
+        // Python lässt den Bot-Token auch zu, wenn die Scope-Liste leer ist
+        // (unbekannt) — wir verlangen den Scope nur, wenn überhaupt Scopes
+        // bekannt sind (sessions_mixin.py:925 `not bot_scopes or ... in bot_scopes`).
+        if !scopes.is_empty() && !has_scope {
+            return None;
+        }
+        match self.token_manager.access_token().await {
+            Ok(token) if !token.trim().is_empty() => Some(token),
+            _ => None,
+        }
+    }
+}
+
+/// Helix-Adapter für Follower-Zahlen. Mit verdrahteter [`FollowerTokenSource`]
+/// (P1.7) läuft der Abruf über den Bot-User-Token mit
+/// `moderator:read:followers` und liefert die echte Zahl; ohne Quelle bleibt es
+/// beim App-Token-Pfad (best-effort, Twitch liefert dann meist `None`).
 pub struct HelixFollowerSource {
     pub helix: HelixClient,
+    /// `None` = App-Token-Pfad wie vor P1.7.
+    pub token_source: Option<Arc<dyn FollowerTokenSource>>,
 }
 
 #[async_trait::async_trait]
@@ -176,7 +221,15 @@ impl FollowerCountSource for HelixFollowerSource {
         if user_id.is_empty() {
             return None;
         }
-        match self.helix.get_followers_total(user_id).await {
+        let user_token = match self.token_source.as_ref() {
+            Some(source) => source.moderator_followers_token().await,
+            None => None,
+        };
+        match self
+            .helix
+            .get_followers_total(user_id, user_token.as_deref())
+            .await
+        {
             Ok(total) => total.map(|t| t as i32),
             Err(error) => {
                 tracing::debug!(%error, "Follower-Total nicht abrufbar");
