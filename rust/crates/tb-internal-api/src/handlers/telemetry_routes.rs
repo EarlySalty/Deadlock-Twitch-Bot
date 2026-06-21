@@ -145,7 +145,9 @@ fn normalize_text_field(
         }
         return Ok(None);
     }
-    if text.len() > max_length {
+    // Parität zu Python `len(text)`: Unicode-Codepunkte zählen, NICHT UTF-8-Bytes.
+    // Sonst würden deutsche Umlaute (ä/ö/ü = 2 Bytes) das Limit zu früh reißen.
+    if text.chars().count() > max_length {
         return Err(format!("invalid {field_name}"));
     }
     Ok(Some(text))
@@ -508,6 +510,93 @@ async fn process_link_click(pool: &PgPool, body: LinkClickRequest) -> Result<Val
     })?;
 
     Ok(json!({ "ok": true }))
+}
+
+// ── GET /debug/eventsub-processing ──────────────────────────────────────────────
+
+/// Query für `GET /debug/eventsub-processing` — `limit` ist optional.
+#[derive(Deserialize, Default)]
+pub struct EventsubProcessingQuery {
+    pub limit: Option<String>,
+}
+
+/// `GET /internal/twitch/v1/debug/eventsub-processing?limit=N`
+///
+/// Port von `bot/internal_api/routes/telemetry.py:274-296`
+/// (`eventsub_processing_debug`). Liefert einen limit-begrenzten Snapshot der
+/// Processing-Inbox (`{ok:true, eventsubProcessing:{...}}`).
+///
+/// `limit`: Default 20, validiert `1..=200` (sonst 400 `invalid request`).
+/// Der Payload entspricht `ProcessingInbox.snapshot` (Python
+/// `eventsub_processing_inbox.py:442`) bis auf das Feld `active`: der HTTP-Handler
+/// hat keinen Handle auf den Inbox-Worker, daher wird die Worker-Aktivität hier
+/// nicht gemeldet (wie schon bei `GET /debug/observability`).
+pub async fn eventsub_processing_debug_handler(
+    auth: AuthLevel,
+    State(pool): State<PgPool>,
+    axum::extract::Query(query): axum::extract::Query<EventsubProcessingQuery>,
+) -> Result<impl IntoResponse, ApiError> {
+    if !auth.is_privileged() {
+        return Err(ApiError::unauthorized());
+    }
+
+    // Python: int(str(raw_limit or "20").strip() or "20"); 1..=200, sonst 400.
+    let raw = query.limit.as_deref().unwrap_or("20").trim().to_string();
+    let raw = if raw.is_empty() { "20".to_string() } else { raw };
+    let limit: i64 = raw
+        .parse::<i64>()
+        .ok()
+        .filter(|v| (1..=200).contains(v))
+        .ok_or_else(|| ApiError::bad_request("invalid request"))?;
+
+    let store = tb_monitoring::ProcessingInboxStore::new(pool.clone());
+    let pending = store.list_pending(limit).await.map_err(|e| {
+        tracing::error!("list_pending DB-Fehler: {e}");
+        ApiError::internal()
+    })?;
+    let dead_letters = store.list_dead_letters(limit).await.map_err(|e| {
+        tracing::error!("list_dead_letters DB-Fehler: {e}");
+        ApiError::internal()
+    })?;
+
+    let pending_payload: Vec<Value> = pending
+        .into_iter()
+        .map(|entry| {
+            json!({
+                "workId": entry.work_id,
+                "workType": entry.work_type,
+                "messageId": entry.message_id,
+                "queuedAt": entry.queued_at,
+                "nextAttemptAt": entry.next_attempt_at,
+                "attemptCount": entry.attempt_count,
+                "lastError": entry.last_error,
+            })
+        })
+        .collect();
+    let dead_letter_payload: Vec<Value> = dead_letters
+        .into_iter()
+        .map(|entry| {
+            json!({
+                "workId": entry.work_id,
+                "workType": entry.work_type,
+                "messageId": entry.message_id,
+                "queuedAt": entry.queued_at,
+                "deadLetteredAt": entry.dead_lettered_at,
+                "attemptCount": entry.attempt_count,
+                "lastError": entry.last_error,
+            })
+        })
+        .collect();
+
+    Ok(Json(json!({
+        "ok": true,
+        "eventsubProcessing": {
+            "pendingCount": pending_payload.len(),
+            "deadLetterCount": dead_letter_payload.len(),
+            "pending": pending_payload,
+            "deadLetters": dead_letter_payload,
+        }
+    })))
 }
 
 // ── Tests ─────────────────────────────────────────────────────────────────────
@@ -1098,6 +1187,21 @@ mod tests {
     }
 
     #[test]
+    fn normalize_text_field_zaehlt_zeichen_nicht_bytes() {
+        // P2.141: 150 Umlaut-Zeichen = 300 UTF-8-Bytes, aber 150 Codepunkte.
+        // Limit 200 (discord_username) → muss akzeptiert werden (Python `len()`),
+        // obwohl die Byte-Länge das Limit überschreitet.
+        let umlauts = "ä".repeat(150);
+        assert_eq!(umlauts.len(), 300); // Bytes
+        assert_eq!(umlauts.chars().count(), 150); // Codepunkte
+        let out = normalize_text_field(&Some(umlauts.clone()), "discord_username", true, 200)
+            .expect("150 Umlaut-Zeichen ≤ 200 Zeichen-Limit");
+        assert_eq!(out, Some(umlauts));
+        // 201 Zeichen → abgelehnt (Zeichen-Grenze greift weiterhin).
+        assert!(normalize_text_field(&Some("ä".repeat(201)), "f", false, 200).is_err());
+    }
+
+    #[test]
     fn enforce_scope_allowlist_none_bedeutet_kein_filter() {
         // None = nicht konfiguriert → immer erlaubt
         assert!(enforce_scope_allowlist(Some(42), &None, "k").is_ok());
@@ -1163,4 +1267,109 @@ mod tests {
         assert_eq!(result.len(), 80, "Label muss auf 80 Zeichen gekürzt werden");
     }
 
+    // ── P2.145: GET /debug/eventsub-processing ────────────────────────────────
+
+    /// Schema-isolierter Pool mit den Processing-Inbox-Tabellen.
+    async fn make_inbox_pool(dsn: &str, schema: &str) -> PgPool {
+        let pool = PgPoolOptions::new()
+            .max_connections(1)
+            .connect(dsn)
+            .await
+            .expect("connect");
+        sqlx::query(&format!("DROP SCHEMA IF EXISTS {schema} CASCADE"))
+            .execute(&pool)
+            .await
+            .expect("drop schema");
+        sqlx::query(&format!("CREATE SCHEMA {schema}"))
+            .execute(&pool)
+            .await
+            .expect("create schema");
+        sqlx::query(&format!("SET search_path TO {schema}"))
+            .execute(&pool)
+            .await
+            .expect("search_path");
+        for ddl in [
+            "CREATE TABLE twitch_eventsub_processing_inbox (
+                work_id TEXT PRIMARY KEY, work_type TEXT NOT NULL, message_id TEXT,
+                payload_json TEXT NOT NULL, queued_at DOUBLE PRECISION NOT NULL,
+                next_attempt_at DOUBLE PRECISION NOT NULL,
+                attempt_count INTEGER NOT NULL DEFAULT 0, last_error TEXT)",
+            "CREATE TABLE twitch_eventsub_processing_dead_letter (
+                work_id TEXT PRIMARY KEY, work_type TEXT NOT NULL, message_id TEXT,
+                payload_json TEXT NOT NULL, queued_at DOUBLE PRECISION NOT NULL,
+                dead_lettered_at DOUBLE PRECISION NOT NULL,
+                attempt_count INTEGER NOT NULL, last_error TEXT)",
+        ] {
+            sqlx::query(ddl).execute(&pool).await.expect("inbox DDL");
+        }
+        pool
+    }
+
+    async fn call_eventsub_debug(
+        pool: PgPool,
+        limit: Option<&str>,
+    ) -> (StatusCode, serde_json::Value) {
+        let query = EventsubProcessingQuery {
+            limit: limit.map(|s| s.to_string()),
+        };
+        let resp = eventsub_processing_debug_handler(
+            AuthLevel::Admin,
+            State(pool),
+            axum::extract::Query(query),
+        )
+        .await
+        .into_response();
+        let status = resp.status();
+        let bytes = axum::body::to_bytes(resp.into_body(), 1 << 20)
+            .await
+            .unwrap();
+        let value: serde_json::Value =
+            serde_json::from_slice(&bytes).unwrap_or(serde_json::Value::Null);
+        (status, value)
+    }
+
+    #[tokio::test]
+    async fn eventsub_processing_debug_liefert_snapshot() {
+        let dsn = db_dsn_or_skip!();
+        let pool = make_inbox_pool(&dsn, "t_eventsub_debug").await;
+        sqlx::query(
+            "INSERT INTO twitch_eventsub_processing_inbox \
+             (work_id, work_type, message_id, payload_json, queued_at, next_attempt_at, attempt_count) \
+             VALUES ('w1', 'stream.online', 'm1', '{}', 1.0, 2.0, 0)",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+
+        let (status, body) = call_eventsub_debug(pool, Some("50")).await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(body["ok"], serde_json::json!(true));
+        assert_eq!(body["eventsubProcessing"]["pendingCount"], serde_json::json!(1));
+        assert_eq!(body["eventsubProcessing"]["deadLetterCount"], serde_json::json!(0));
+        assert_eq!(
+            body["eventsubProcessing"]["pending"][0]["workId"],
+            serde_json::json!("w1")
+        );
+    }
+
+    #[tokio::test]
+    async fn eventsub_processing_debug_default_limit_20() {
+        let dsn = db_dsn_or_skip!();
+        let pool = make_inbox_pool(&dsn, "t_eventsub_debug_default").await;
+        // Kein limit → default 20 → 200 ok mit leerem Snapshot.
+        let (status, body) = call_eventsub_debug(pool, None).await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(body["eventsubProcessing"]["pendingCount"], serde_json::json!(0));
+    }
+
+    #[tokio::test]
+    async fn eventsub_processing_debug_limit_grenzen_400() {
+        let dsn = db_dsn_or_skip!();
+        // limit=0 und limit=201 müssen 400 liefern (vor jedem DB-Zugriff).
+        for bad in ["0", "201", "-1", "abc"] {
+            let pool = make_inbox_pool(&dsn, "t_eventsub_debug_bad").await;
+            let (status, _body) = call_eventsub_debug(pool, Some(bad)).await;
+            assert_eq!(status, StatusCode::BAD_REQUEST, "limit={bad} muss 400 sein");
+        }
+    }
 }
