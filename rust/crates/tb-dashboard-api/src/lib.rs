@@ -688,7 +688,7 @@ pub fn build_partner_login_router(pool: PgPool) -> Router {
 /// Redirect und liest den Status aus dem Query). `DashboardAuthLevel` +
 /// `DashboardAuthState` kommen als globale Extensions aus der `tb-dashboard`-main.
 pub fn build_admin_legacy_forms_router(pool: PgPool) -> Router {
-    use handlers::admin_manual_plan;
+    use handlers::{admin_chat_action, admin_legacy_streamers, admin_manual_plan};
 
     Router::new()
         .route(
@@ -698,6 +698,39 @@ pub fn build_admin_legacy_forms_router(pool: PgPool) -> Router {
         .route(
             "/twitch/admin/manual-plan/clear",
             post(admin_manual_plan::clear_handler),
+        )
+        // Welle-2-A1: native Admin-Streamer-Verwaltung (P0.1/P1.46/P2.112/P2.121).
+        // Vor dem Strangler-Proxy-Fallback registriert (s. build_router), damit
+        // diese Form-POSTs nativ greifen statt in den toten Python 8765 (502).
+        .route(
+            "/twitch/add_streamer",
+            post(admin_legacy_streamers::add_streamer_handler),
+        )
+        .route(
+            "/twitch/add_url",
+            post(admin_legacy_streamers::add_any_handler),
+        )
+        .route(
+            "/twitch/add_login",
+            post(admin_legacy_streamers::add_any_handler),
+        )
+        .route(
+            "/twitch/add_any",
+            post(admin_legacy_streamers::add_any_handler),
+        )
+        .route(
+            "/twitch/remove",
+            post(admin_legacy_streamers::remove_handler),
+        )
+        .route(
+            "/twitch/discord_link",
+            post(admin_legacy_streamers::discord_link_handler),
+        )
+        // Welle-2-A1: native Admin-Partner-Chat-Aktion (P2.120) mit Owner-Gate
+        // (P2.119); Send wird über die Bot-internal-API gebrückt.
+        .route(
+            "/twitch/admin/chat_action",
+            post(admin_chat_action::chat_action_handler),
         )
         .with_state(pool)
 }

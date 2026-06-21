@@ -746,6 +746,35 @@ impl DashboardAuthState {
         Ok(Some(true))
     }
 
+    /// Liest die Discord-`user_id` aus einer gültigen `discord_admin`-Session.
+    ///
+    /// Python-Pendant: `_get_discord_admin_user_id` (live.py:83-92) →
+    /// `_get_discord_admin_session(...).get("user_id")`. Wird vom Owner-Gate der
+    /// Admin-Chat-Aktion (P2.120/P2.119) gebraucht, um den freigeschalteten
+    /// Discord-Owner zu prüfen. `Ok(None)` wenn die Session fehlt, abgelaufen ist
+    /// oder kein `user_id`-Feld trägt (fail-closed). DB-Fehler werden hochgereicht.
+    pub async fn load_admin_session_user_id(
+        &self,
+        session_id: &str,
+    ) -> Result<Option<String>, sqlx::Error> {
+        let now = unix_now();
+        let Some(payload) = self
+            .fetch_session_payload(session_id, "discord_admin", now)
+            .await?
+        else {
+            return Ok(None);
+        };
+        if payload_expired(&payload, now) {
+            return Ok(None);
+        }
+        Ok(payload
+            .get("user_id")
+            .and_then(|v| v.as_str())
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+            .map(str::to_string))
+    }
+
     /// Prüft ob eine `twitch`-Session gültig ist UND der User ein aktiver Partner ist.
     ///
     /// Kaskade:
