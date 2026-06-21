@@ -174,6 +174,14 @@ pub trait FollowerTokenSource: Send + Sync {
     /// `total`-Zahl liefert; `None` = App-Token-Pfad (Twitch antwortet ohne
     /// Scope und es kommt `None` zurück).
     async fn moderator_followers_token(&self) -> Option<String>;
+
+    /// P1.19-Fallback: per-Streamer OAuth-Token (Broadcaster moderiert seinen
+    /// eigenen Kanal → `total` lesbar). Wird genutzt, wenn der Bot-Token-Pfad
+    /// keine Zahl liefert (kein Token/Scope oder 403). Default `None` für
+    /// Quellen, die keinen Streamer-Token auflösen können.
+    async fn streamer_followers_token(&self, _twitch_user_id: &str) -> Option<String> {
+        None
+    }
 }
 
 /// Bot-Token-Quelle für den Follower-Total-Abruf: reicht den zentralen
@@ -204,6 +212,51 @@ impl FollowerTokenSource for BotFollowerTokenSource {
     }
 }
 
+/// P1.19: Komponiert eine Bot-Token-Quelle mit dem per-Streamer
+/// OAuth-Token-Fallback (Raid-Auth). Delegiert `moderator_followers_token` an
+/// die innere Quelle und ergänzt `streamer_followers_token` über den
+/// [`tb_raid::TokenProvider`] (Broadcaster moderiert seinen eigenen Kanal →
+/// `total` lesbar). So bleibt [`BotFollowerTokenSource`] unverändert und der
+/// Fallback ist in der Composition-Root opt-in einschaltbar.
+// WIRING-TODO(P1.19): main.rs HelixFollowerSource.token_source mit dieser
+// Quelle umwickeln (inner = BotFollowerTokenSource, token_provider = der
+// bereits gebootete TokenProvider), damit der Streamer-Token-Fallback live ist.
+// Bis dahin: nur Bot-/App-Token-Pfad → dead_code.
+#[allow(dead_code)]
+pub struct FollowerTokenSourceWithStreamerFallback {
+    pub inner: Arc<dyn FollowerTokenSource>,
+    pub token_provider: Arc<tb_raid::TokenProvider>,
+}
+
+#[async_trait::async_trait]
+impl FollowerTokenSource for FollowerTokenSourceWithStreamerFallback {
+    async fn moderator_followers_token(&self) -> Option<String> {
+        self.inner.moderator_followers_token().await
+    }
+
+    async fn streamer_followers_token(&self, twitch_user_id: &str) -> Option<String> {
+        let user_id = twitch_user_id.trim();
+        if user_id.is_empty() {
+            return None;
+        }
+        // Broadcaster moderiert seinen eigenen Kanal → kein expliziter
+        // Scope-Filter (Python `get_valid_token_for_login`, sessions_mixin.py:1053).
+        // unrestricted: der Follower-Read soll auch bei deaktivierten Raids greifen.
+        match self
+            .token_provider
+            .get_valid_token_unrestricted(user_id, chrono::Utc::now())
+            .await
+        {
+            Ok(Some(token)) if !token.trim().is_empty() => Some(token),
+            Ok(_) => None,
+            Err(error) => {
+                tracing::debug!(%error, user_id, "Streamer-Follower-Token-Lookup fehlgeschlagen");
+                None
+            }
+        }
+    }
+}
+
 /// Helix-Adapter für Follower-Zahlen. Mit verdrahteter [`FollowerTokenSource`]
 /// (P1.7) läuft der Abruf über den Bot-User-Token mit
 /// `moderator:read:followers` und liefert die echte Zahl; ohne Quelle bleibt es
@@ -214,6 +267,20 @@ pub struct HelixFollowerSource {
     pub token_source: Option<Arc<dyn FollowerTokenSource>>,
 }
 
+impl HelixFollowerSource {
+    /// Ein einzelner `/channels/followers`-Abruf mit dem gegebenen Token.
+    /// `None` bei jedem non-200 (Twitch kollabiert das im Transport) oder Fehler.
+    async fn fetch_total(&self, user_id: &str, token: Option<&str>) -> Option<i32> {
+        match self.helix.get_followers_total(user_id, token).await {
+            Ok(total) => total.map(|t| t as i32),
+            Err(error) => {
+                tracing::debug!(%error, with_token = token.is_some(), "Follower-Total nicht abrufbar");
+                None
+            }
+        }
+    }
+}
+
 #[async_trait::async_trait]
 impl FollowerCountSource for HelixFollowerSource {
     async fn follower_total(&self, twitch_user_id: Option<&str>, _login: &str) -> Option<i32> {
@@ -221,21 +288,31 @@ impl FollowerCountSource for HelixFollowerSource {
         if user_id.is_empty() {
             return None;
         }
-        let user_token = match self.token_source.as_ref() {
-            Some(source) => source.moderator_followers_token().await,
+        let source = self.token_source.as_ref();
+
+        // 1. Bevorzugt Bot-Token mit moderator:read:followers (P1.7).
+        let bot_token = match source {
+            Some(s) => s.moderator_followers_token().await,
             None => None,
         };
-        match self
-            .helix
-            .get_followers_total(user_id, user_token.as_deref())
-            .await
-        {
-            Ok(total) => total.map(|t| t as i32),
-            Err(error) => {
-                tracing::debug!(%error, "Follower-Total nicht abrufbar");
-                None
+        if let Some(total) = self.fetch_total(user_id, bot_token.as_deref()).await {
+            return Some(total);
+        }
+
+        // 2. P1.19-Fallback: liefert der Bot-/App-Token keine Zahl (kein Scope,
+        //    403, oder Twitch antwortet ohne `total`), den per-Streamer
+        //    OAuth-Token versuchen (Broadcaster moderiert sich selbst).
+        //    `get_followers_total` kollabiert jeden non-200 zu None — ein 403
+        //    ist daher von „echt unbekannt" nicht unterscheidbar; der Fallback
+        //    deckt beide Fälle ab (Python `_fetch_followers_total_safe`:1048-1144).
+        if let Some(s) = source {
+            if let Some(streamer_token) = s.streamer_followers_token(user_id).await {
+                if let Some(total) = self.fetch_total(user_id, Some(&streamer_token)).await {
+                    return Some(total);
+                }
             }
         }
+        None
     }
 }
 
@@ -499,5 +576,140 @@ impl LivePingRoleProvider for LivePingRoleAuto {
         }
 
         Some(role_id_i64)
+    }
+}
+
+// ─── Tests (P1.19 Follower-Total Bot→Streamer-Fallback) ──────────────────────
+
+#[cfg(test)]
+mod follower_fallback_tests {
+    use super::*;
+    use tb_transport_twitch::HelixConfig;
+    use wiremock::matchers::{header, method, path};
+    use wiremock::{Mock, MockServer, ResponseTemplate};
+
+    /// Stub-Token-Quelle: liefert konfigurierbare Bot-/Streamer-Tokens, um den
+    /// Fallback-Pfad ohne echten BotTokenManager/TokenProvider zu testen.
+    struct StubTokenSource {
+        bot: Option<String>,
+        streamer: Option<String>,
+    }
+
+    #[async_trait::async_trait]
+    impl FollowerTokenSource for StubTokenSource {
+        async fn moderator_followers_token(&self) -> Option<String> {
+            self.bot.clone()
+        }
+        async fn streamer_followers_token(&self, _twitch_user_id: &str) -> Option<String> {
+            self.streamer.clone()
+        }
+    }
+
+    async fn helix_at(server: &MockServer) -> HelixClient {
+        Mock::given(method("POST"))
+            .and(path("/oauth2/token"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "access_token": "apptok",
+                "expires_in": 3600
+            })))
+            .mount(server)
+            .await;
+        HelixClient::new(HelixConfig {
+            client_id: "cid".into(),
+            client_secret: "sec".into(),
+            token_url: format!("{}/oauth2/token", server.uri()),
+            helix_base: format!("{}/helix", server.uri()),
+        })
+        .unwrap()
+    }
+
+    /// Bot-Token liefert keine Zahl (403) → Streamer-Token-Fallback liefert die
+    /// echte total. Beweist den P1.19-Fallback statt FOLLOWERS_UNKNOWN.
+    #[tokio::test]
+    async fn fallback_auf_streamer_token_bei_bot_403() {
+        let server = MockServer::start().await;
+        let helix = helix_at(&server).await;
+
+        // Bot-Token: 403 (nicht Moderator) → None.
+        Mock::given(method("GET"))
+            .and(path("/helix/channels/followers"))
+            .and(header("Authorization", "Bearer bottok"))
+            .respond_with(ResponseTemplate::new(403))
+            .mount(&server)
+            .await;
+        // Streamer-Token: 200 mit total.
+        Mock::given(method("GET"))
+            .and(path("/helix/channels/followers"))
+            .and(header("Authorization", "Bearer streamertok"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "total": 4242, "data": []
+            })))
+            .mount(&server)
+            .await;
+
+        let source = HelixFollowerSource {
+            helix,
+            token_source: Some(Arc::new(StubTokenSource {
+                bot: Some("bottok".into()),
+                streamer: Some("streamertok".into()),
+            })),
+        };
+        let total = source.follower_total(Some("42"), "chan").await;
+        assert_eq!(total, Some(4242), "Streamer-Token-Fallback liefert echte Zahl");
+    }
+
+    /// Bot-Token liefert direkt eine Zahl → kein Streamer-Fallback nötig
+    /// (Streamer-Token wäre 500, würde der Fallback ihn anfassen).
+    #[tokio::test]
+    async fn bot_token_erfolg_ueberspringt_fallback() {
+        let server = MockServer::start().await;
+        let helix = helix_at(&server).await;
+
+        Mock::given(method("GET"))
+            .and(path("/helix/channels/followers"))
+            .and(header("Authorization", "Bearer bottok"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "total": 7, "data": []
+            })))
+            .mount(&server)
+            .await;
+        // Streamer-Pfad würde fehlschlagen — darf nicht erreicht werden.
+        Mock::given(method("GET"))
+            .and(path("/helix/channels/followers"))
+            .and(header("Authorization", "Bearer streamertok"))
+            .respond_with(ResponseTemplate::new(500))
+            .mount(&server)
+            .await;
+
+        let source = HelixFollowerSource {
+            helix,
+            token_source: Some(Arc::new(StubTokenSource {
+                bot: Some("bottok".into()),
+                streamer: Some("streamertok".into()),
+            })),
+        };
+        assert_eq!(source.follower_total(Some("42"), "chan").await, Some(7));
+    }
+
+    /// Kein Token verfügbar (App-Token-Pfad) und Twitch antwortet ohne total →
+    /// None, kein Fallback möglich.
+    #[tokio::test]
+    async fn ohne_tokens_app_pfad_none() {
+        let server = MockServer::start().await;
+        let helix = helix_at(&server).await;
+        Mock::given(method("GET"))
+            .and(path("/helix/channels/followers"))
+            .respond_with(ResponseTemplate::new(401))
+            .mount(&server)
+            .await;
+
+        let source = HelixFollowerSource {
+            helix,
+            token_source: Some(Arc::new(StubTokenSource {
+                bot: None,
+                streamer: None,
+            })),
+        };
+        assert_eq!(source.follower_total(Some("42"), "chan").await, None);
     }
 }

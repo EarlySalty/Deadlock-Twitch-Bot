@@ -212,6 +212,27 @@ impl ScoreRefreshResolver {
             return Ok(Vec::new());
         }
 
+        // P2.40 — Partner-State-Gate (Python `_load_partners` Z. 426–464):
+        // Der Single-Partner-Refresh läuft mit `active_only=False`, verlangt aber
+        // dennoch, dass eine Zeile in `twitch_streamers_partner_state` mit
+        // NON-NULL `twitch_user_id` UND `twitch_login` existiert. Fehlt sie (oder
+        // ist ein Feld NULL), lädt Python null Partner und schreibt KEINE
+        // Score-Zeile. Ohne dieses Gate würde Rust für monitored-only-Kanäle
+        // (Go-Live ohne Partner-State) `twitch_partner_raid_scores`-Zeilen
+        // anlegen, die Python nie erzeugt — und die die Auto-Raid-
+        // Kandidatenauswahl verfälschen.
+        let raw_ids: Vec<&str> = partner_user_ids.iter().map(|(id, _)| id.as_str()).collect();
+        let known_partner_ids = load_partner_state_ids(&self.pool, &raw_ids).await?;
+        let gated_pairs: Vec<(String, String)> = partner_user_ids
+            .iter()
+            .filter(|(id, _)| known_partner_ids.contains(id.as_str()))
+            .cloned()
+            .collect();
+        if gated_pairs.is_empty() {
+            return Ok(Vec::new());
+        }
+        let partner_user_ids: &[(String, String)] = &gated_pairs;
+
         let ids: Vec<&str> = partner_user_ids.iter().map(|(id, _)| id.as_str()).collect();
         let logins: Vec<&str> = partner_user_ids.iter().map(|(_, l)| l.as_str()).collect();
 
@@ -535,6 +556,35 @@ fn parse_text_timestamp(s: &str) -> Option<DateTime<Utc>> {
 }
 
 // ─── DB-Ladefunktionen ─────────────────────────────────────────────────────
+
+/// Lädt die Teilmenge der übergebenen user_ids, die als bekannte Partner in
+/// `twitch_streamers_partner_state` mit NON-NULL `twitch_user_id` UND
+/// `twitch_login` existieren (P2.40-Gate).
+///
+/// Python-Herkunft: `_load_partners` Z. 426–464 mit `active_only=False` —
+/// die WHERE-Klausel verlangt `twitch_user_id IS NOT NULL AND twitch_login IS
+/// NOT NULL`; Zeilen mit leerem/NULL-Login oder -ID werden verworfen (Z. 455).
+/// `is_partner_active` wird hier bewusst NICHT gefiltert (active_only=False).
+async fn load_partner_state_ids(
+    pool: &PgPool,
+    user_ids: &[&str],
+) -> Result<std::collections::HashSet<String>, sqlx::Error> {
+    if user_ids.is_empty() {
+        return Ok(std::collections::HashSet::new());
+    }
+    let rows: Vec<(String,)> = sqlx::query_as(
+        "SELECT twitch_user_id \
+         FROM twitch_streamers_partner_state \
+         WHERE twitch_user_id = ANY($1) \
+           AND twitch_user_id IS NOT NULL \
+           AND twitch_login IS NOT NULL \
+           AND TRIM(twitch_login) <> ''",
+    )
+    .bind(user_ids)
+    .fetch_all(pool)
+    .await?;
+    Ok(rows.into_iter().map(|(id,)| id).collect())
+}
 
 /// Lädt Live-State-Zeilen für alle übergebenen user_ids.
 ///
@@ -1088,6 +1138,22 @@ mod tests {
         .await
         .unwrap();
 
+        // P2.40: Partner-State-Tabelle (is_partner_active ist INTEGER in Prod,
+        // siehe partner_roster.rs). Das Gate verlangt NUR Existenz mit
+        // NON-NULL login/id — nicht is_partner_active.
+        sqlx::query(
+            r#"
+            CREATE TABLE twitch_streamers_partner_state (
+                twitch_user_id     TEXT,
+                twitch_login       TEXT,
+                is_partner_active  INTEGER DEFAULT 0
+            )
+            "#,
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+
         pool
     }
 
@@ -1100,6 +1166,12 @@ mod tests {
         let now = chrono::DateTime::parse_from_rfc3339("2026-06-10T18:00:00+00:00")
             .unwrap()
             .with_timezone(&Utc);
+
+        // P2.40-Gate: beide Partner müssen in der Partner-State-Tabelle stehen.
+        sqlx::query(
+            "INSERT INTO twitch_streamers_partner_state (twitch_user_id, twitch_login, is_partner_active)
+             VALUES ('100', 'a', 1), ('200', 'b', 0)",
+        ).execute(&pool).await.unwrap();
 
         // Partner A (live): Start vor 1h → uptime; eine Session (Dauer) als History.
         sqlx::query(
@@ -1152,6 +1224,74 @@ mod tests {
         assert_eq!(b_live, 0);
         assert_eq!(b_final, 0.99, "offline+Cache: final_score eingefroren");
         assert_eq!(b_dur, 0.91, "offline+Cache: duration_score eingefroren");
+    }
+
+    /// P2.40: Ein monitored-only-Kanal (live, aber NICHT in
+    /// `twitch_streamers_partner_state`) darf KEINE Score-Zeile erhalten —
+    /// Python würde sie nie schreiben (`_load_partners` lädt 0 Partner).
+    #[cfg(feature = "integration")]
+    #[tokio::test]
+    async fn non_partner_kanal_bekommt_keine_score_row() {
+        let pool = setup_test_db("t6f_score_gate").await;
+        let now = chrono::DateTime::parse_from_rfc3339("2026-06-10T18:00:00+00:00")
+            .unwrap()
+            .with_timezone(&Utc);
+
+        // Live-State vorhanden, aber KEIN Partner-State-Eintrag.
+        sqlx::query(
+            "INSERT INTO twitch_live_state (twitch_user_id, streamer_login, is_live, last_started_at)
+             VALUES ('999', 'ghost', 1, '2026-06-10T17:00:00+00:00')",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+
+        let resolver = ScoreRefreshResolver::new(pool.clone());
+        let written = resolver
+            .refresh_scores(&[("999".into(), "ghost".into())], now)
+            .await
+            .unwrap();
+        assert_eq!(written, 0, "Nicht-Partner: kein Score geschrieben");
+
+        let count: (i64,) = sqlx::query_as(
+            "SELECT COUNT(*)::bigint FROM twitch_partner_raid_scores WHERE twitch_user_id='999'",
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert_eq!(count.0, 0, "keine Score-Zeile für Nicht-Partner");
+    }
+
+    /// P2.40: Ein Partner-State-Eintrag mit NULL-Login wird vom Gate verworfen
+    /// (Python Z. 436/455 verlangt NON-NULL twitch_login).
+    #[cfg(feature = "integration")]
+    #[tokio::test]
+    async fn partner_state_mit_null_login_wird_gegated() {
+        let pool = setup_test_db("t6f_score_gate_null").await;
+        let now = chrono::DateTime::parse_from_rfc3339("2026-06-10T18:00:00+00:00")
+            .unwrap()
+            .with_timezone(&Utc);
+
+        sqlx::query(
+            "INSERT INTO twitch_streamers_partner_state (twitch_user_id, twitch_login, is_partner_active)
+             VALUES ('555', NULL, 1)",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+        sqlx::query(
+            "INSERT INTO twitch_live_state (twitch_user_id, streamer_login, is_live) VALUES ('555', 'x', 0)",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+
+        let resolver = ScoreRefreshResolver::new(pool.clone());
+        let written = resolver
+            .refresh_scores(&[("555".into(), "x".into())], now)
+            .await
+            .unwrap();
+        assert_eq!(written, 0, "NULL-Login-Partner-State wird gegated");
     }
 }
 
