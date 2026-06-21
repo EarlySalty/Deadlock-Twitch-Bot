@@ -317,6 +317,10 @@ pub struct OverviewSummary {
     pub followers_delta: i64,
     #[serde(rename = "totalSessions")]
     pub total_sessions: i64,
+    // P1.27: Frontend-'Total Streams'-Tile liest `summary.streamCount` (Python-Soll
+    // `api_overview.py:1134`). Alias zu `total_sessions`, damit der Tile nicht 0 zeigt.
+    #[serde(rename = "streamCount")]
+    pub stream_count: i64,
     // Session-abgeleitete Felder (Python _calculate_overview_metrics):
     #[serde(rename = "followersGained")]
     pub followers_gained: i64,
@@ -620,6 +624,7 @@ pub async fn overview_handler(
             total_airtime: airtime,
             followers_delta: total_followers,
             total_sessions: metrics.session_count.unwrap_or(0),
+            stream_count: metrics.session_count.unwrap_or(0),
             followers_gained: gained,
             followers_per_hour: per_hour(total_followers),
             followers_gained_per_hour: per_hour(gained),
@@ -855,6 +860,9 @@ mod tests {
         let v: serde_json::Value = serde_json::from_slice(&b).unwrap();
         assert!((v["summary"]["avgViewers"].as_f64().unwrap() - 100.0).abs() < 0.001);
         assert_eq!(v["summary"]["totalSessions"], 1);
+        // P1.27: streamCount-Alias muss identisch zu totalSessions emittiert werden.
+        assert_eq!(v["summary"]["streamCount"], 1);
+        assert_eq!(v["summary"]["streamCount"], v["summary"]["totalSessions"]);
         // B16-FIX-OVERVIEW-WINDOW: Admin-Token → volles Fenster, nicht limitiert.
         assert_eq!(v["window"], "full");
         assert_eq!(v["windowLimited"], false);

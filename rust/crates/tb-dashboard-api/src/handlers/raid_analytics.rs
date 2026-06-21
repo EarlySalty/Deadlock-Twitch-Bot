@@ -87,7 +87,7 @@ async fn recalculate_raid_chat_metrics(
               AND ri.executed_at IS NOT NULL
               AND sc.last_seen_at >= ri.executed_at
               AND sc.last_seen_at <= ri.executed_at + INTERVAL '30 minutes'
-              AND LOWER(sc.chatter_login) != ALL($2)
+              AND (sc.chatter_login IS NULL OR sc.chatter_login = '' OR LOWER(sc.chatter_login) != ALL($2))
            GROUP BY ri.raid_id, ri.executed_at_key"#
     );
 
@@ -127,12 +127,12 @@ async fn recalculate_raid_chat_metrics(
               AND ri.executed_at IS NOT NULL
               AND sc.last_seen_at >= ri.executed_at
               AND sc.chatter_login IS NOT NULL AND sc.chatter_login <> ''
-              AND LOWER(sc.chatter_login) != ALL($2)
+              AND (sc.chatter_login IS NULL OR sc.chatter_login = '' OR LOWER(sc.chatter_login) != ALL($2))
            JOIN twitch_chatter_rollup cr
                ON LOWER(cr.chatter_login) = LOWER(sc.chatter_login)
               AND LOWER(cr.streamer_login) = ri.from_login
               AND cr.first_seen_at < ri.executed_at
-              AND LOWER(cr.chatter_login) != ALL($2)
+              AND (cr.chatter_login IS NULL OR cr.chatter_login = '' OR LOWER(cr.chatter_login) != ALL($2))
            GROUP BY ri.raid_id, ri.executed_at_key"#;
 
     let known_rows = sqlx::query(known_sql)
@@ -167,12 +167,12 @@ async fn recalculate_raid_chat_metrics(
               AND ri.executed_at IS NOT NULL
               AND sc.first_message_at >= ri.executed_at
               AND sc.messages > 0
-              AND LOWER(sc.chatter_login) != ALL($2)
+              AND (sc.chatter_login IS NULL OR sc.chatter_login = '' OR LOWER(sc.chatter_login) != ALL($2))
            LEFT JOIN twitch_chatter_rollup cr
                ON LOWER(cr.chatter_login) = LOWER(sc.chatter_login)
               AND LOWER(cr.streamer_login) = ri.to_login
               AND cr.first_seen_at < ri.executed_at
-              AND LOWER(cr.chatter_login) != ALL($2)
+              AND (cr.chatter_login IS NULL OR cr.chatter_login = '' OR LOWER(cr.chatter_login) != ALL($2))
            WHERE sc.chatter_login IS NULL OR sc.chatter_login = '' OR cr.chatter_login IS NULL
            GROUP BY ri.raid_id, ri.executed_at_key"#;
 
@@ -717,4 +717,118 @@ pub async fn raid_analytics_handler(
             "raidMetricBatchSize": 500,
         },
     })).into_response()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use sqlx::postgres::{PgConnectOptions, PgPoolOptions};
+    use std::str::FromStr;
+
+    async fn make_pool(schema: &str) -> Option<PgPool> {
+        let dsn = std::env::var("TB_TEST_DATABASE_URL").ok()?;
+        let admin = PgPoolOptions::new()
+            .max_connections(1)
+            .connect(&dsn)
+            .await
+            .unwrap();
+        sqlx::query(&format!("DROP SCHEMA IF EXISTS {schema} CASCADE"))
+            .execute(&admin)
+            .await
+            .unwrap();
+        sqlx::query(&format!("CREATE SCHEMA {schema}"))
+            .execute(&admin)
+            .await
+            .unwrap();
+        admin.close().await;
+        let opts = PgConnectOptions::from_str(&dsn)
+            .unwrap()
+            .options([("search_path", schema)]);
+        let pool = PgPoolOptions::new()
+            .max_connections(2)
+            .connect_with(opts)
+            .await
+            .unwrap();
+        for ddl in [
+            "CREATE TABLE twitch_session_chatters (\
+                 session_id BIGINT, chatter_id TEXT, chatter_login TEXT, \
+                 last_seen_at TIMESTAMPTZ, first_message_at TIMESTAMPTZ, messages INTEGER DEFAULT 0)",
+            "CREATE TABLE twitch_chatter_rollup (\
+                 chatter_login TEXT, streamer_login TEXT, first_seen_at TIMESTAMPTZ)",
+        ] {
+            sqlx::query(ddl).execute(&pool).await.unwrap();
+        }
+        Some(pool)
+    }
+
+    fn raid_input(executed_at: DateTime<Utc>) -> Value {
+        json!({
+            "raid_id": 1,
+            "executed_at_key": "k1",
+            "target_session_id": 42,
+            "executed_at": executed_at.to_rfc3339(),
+            "from_login": "raider",
+            "to_login": "host",
+        })
+    }
+
+    /// P1.33: Chatter mit chatter_id aber NULL chatter_login muss in
+    /// plus30m UND new_chatters mitgezählt werden (vorher fälschlich gefiltert).
+    #[tokio::test]
+    async fn null_login_chatter_wird_gezaehlt() {
+        let Some(pool) = make_pool("t_raid_nulllogin").await else {
+            return;
+        };
+        let executed = Utc::now() - chrono::Duration::minutes(60);
+        let after = executed + chrono::Duration::minutes(2);
+
+        // Anonymer Chatter: chatter_id gesetzt, chatter_login NULL.
+        sqlx::query(
+            "INSERT INTO twitch_session_chatters \
+             (session_id, chatter_id, chatter_login, last_seen_at, first_message_at, messages) \
+             VALUES (42, 'anon-1', NULL, $1, $1, 3)",
+        )
+        .bind(after)
+        .execute(&pool)
+        .await
+        .unwrap();
+
+        let raids = vec![raid_input(executed)];
+        let metrics = recalculate_raid_chat_metrics(&pool, &raids).await;
+        let m = metrics.get(&(1, "k1".to_string())).expect("metric");
+
+        assert_eq!(m.plus30m, 1, "NULL-Login-Chatter muss in plus30m zählen");
+        assert_eq!(
+            m.new_chatters, 1,
+            "NULL-Login-Chatter muss als new_chatter zählen"
+        );
+    }
+
+    /// Gegenprobe: ein bekannter Bot-Login wird weiterhin ausgefiltert.
+    #[tokio::test]
+    async fn bot_login_wird_gefiltert() {
+        let Some(pool) = make_pool("t_raid_botfilter").await else {
+            return;
+        };
+        let executed = Utc::now() - chrono::Duration::minutes(60);
+        let after = executed + chrono::Duration::minutes(2);
+
+        sqlx::query(
+            "INSERT INTO twitch_session_chatters \
+             (session_id, chatter_id, chatter_login, last_seen_at, first_message_at, messages) \
+             VALUES (42, 'bot-1', 'nightbot', $1, $1, 3), \
+                    (42, 'human-1', 'echtuser', $1, $1, 3)",
+        )
+        .bind(after)
+        .execute(&pool)
+        .await
+        .unwrap();
+
+        let raids = vec![raid_input(executed)];
+        let metrics = recalculate_raid_chat_metrics(&pool, &raids).await;
+        let m = metrics.get(&(1, "k1".to_string())).expect("metric");
+
+        assert_eq!(m.plus30m, 1, "Bot ausgefiltert, nur echter User zählt");
+        assert_eq!(m.new_chatters, 1);
+    }
 }

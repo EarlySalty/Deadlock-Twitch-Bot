@@ -93,8 +93,13 @@ pub async fn leaderboard_handler(
         }
     };
 
-    let tracked_entries = shape_entries(tracked, sort_key, descending, min_samples, min_avg, limit);
-    let category_entries = shape_entries(category, sort_key, descending, min_samples, min_avg, limit);
+    // P2.124: Discord-IDs/-Namen nur für privilegierte Aufrufer (Localhost/Admin)
+    // serialisieren — nicht für eingeloggte Partner (Python: localhost-only gate).
+    let show_discord = auth.is_privileged();
+    let tracked_entries =
+        shape_entries(tracked, sort_key, descending, min_samples, min_avg, limit, show_discord);
+    let category_entries =
+        shape_entries(category, sort_key, descending, min_samples, min_avg, limit, show_discord);
 
     Json(json!({
         "window": { "days": 30 },
@@ -210,6 +215,7 @@ fn shape_entries(
     min_samples: Option<i64>,
     min_avg: Option<f64>,
     limit: i64,
+    show_discord: bool,
 ) -> Vec<Value> {
     rows.retain(|r| {
         let samples_ok = min_samples.is_none_or(|m| r.samples.unwrap_or(0) >= m);
@@ -237,6 +243,14 @@ fn shape_entries(
         .take(limit as usize)
         .enumerate()
         .map(|(idx, r)| {
+            // `has_discord_profile` bleibt sichtbar (reines Bool-Flag, keine ID-Leakage);
+            // die rohen Discord-Felder werden nur für privilegierte Aufrufer gesetzt.
+            let has_discord_profile = r.discord_user_id.is_some();
+            let (discord_user_id, discord_display_name) = if show_discord {
+                (r.discord_user_id, r.discord_display_name)
+            } else {
+                (None, None)
+            };
             json!({
                 "rank": idx + 1,
                 "streamer": r.streamer,
@@ -245,9 +259,9 @@ fn shape_entries(
                 "samples": r.samples.unwrap_or(0),
                 "is_partner": r.is_partner.unwrap_or(0),
                 "is_on_discord": r.is_on_discord.unwrap_or(0),
-                "has_discord_profile": i64::from(r.discord_user_id.is_some()),
-                "discord_user_id": r.discord_user_id,
-                "discord_display_name": r.discord_display_name,
+                "has_discord_profile": i64::from(has_discord_profile),
+                "discord_user_id": discord_user_id,
+                "discord_display_name": discord_display_name,
             })
         })
         .collect()
@@ -295,7 +309,7 @@ mod tests {
             row("c", 50.0, 90, 5),
         ];
         // Sort avg desc → b, a, c. Rang 1..3.
-        let out = shape_entries(rows, SortKey::Avg, true, None, None, 5);
+        let out = shape_entries(rows, SortKey::Avg, true, None, None, 5, true);
         assert_eq!(out.len(), 3);
         assert_eq!(out[0]["streamer"], "b");
         assert_eq!(out[0]["rank"], 1);
@@ -309,7 +323,7 @@ mod tests {
             row("b", 300.0, 400, 4),  // unter min_samples
             row("c", 80.0, 90, 20),
         ];
-        let out = shape_entries(rows, SortKey::Avg, true, Some(10), None, 1);
+        let out = shape_entries(rows, SortKey::Avg, true, Some(10), None, 1, true);
         // b rausgefiltert (4 < 10), limit 1 → nur Top-Eintrag (a, avg 100 > c 80).
         assert_eq!(out.len(), 1);
         assert_eq!(out[0]["streamer"], "a");
@@ -326,11 +340,72 @@ mod tests {
             None,
             None,
             5,
+            true,
         );
         assert_eq!(by_name[0]["streamer"], "Zeta");
         // peak desc → alpha(99) vor Zeta(5).
-        let by_peak = shape_entries(rows, SortKey::Peak, true, None, None, 5);
+        let by_peak = shape_entries(rows, SortKey::Peak, true, None, None, 5, true);
         assert_eq!(by_peak[0]["streamer"], "alpha");
+    }
+
+    /// P2.124: Discord-Felder nur für privilegierte Aufrufer, `has_discord_profile`
+    /// bleibt für alle sichtbar.
+    #[test]
+    fn shape_gatet_discord_felder() {
+        let with_discord = TopRow {
+            streamer: "nani".into(),
+            avg_viewers: Some(100.0),
+            max_viewers: Some(200),
+            samples: Some(10),
+            is_partner: Some(1),
+            is_on_discord: Some(1),
+            discord_user_id: Some("123456".into()),
+            discord_display_name: Some("NaniDC".into()),
+        };
+
+        // Privilegiert → Discord-Felder sichtbar.
+        let privileged = shape_entries(
+            vec![TopRow { ..clone_row(&with_discord) }],
+            SortKey::Avg,
+            true,
+            None,
+            None,
+            5,
+            true,
+        );
+        assert_eq!(privileged[0]["discord_user_id"], "123456");
+        assert_eq!(privileged[0]["discord_display_name"], "NaniDC");
+        assert_eq!(privileged[0]["has_discord_profile"], 1);
+
+        // Nicht privilegiert (Partner) → Discord-IDs maskiert, Flag bleibt.
+        let partner = shape_entries(
+            vec![with_discord],
+            SortKey::Avg,
+            true,
+            None,
+            None,
+            5,
+            false,
+        );
+        assert!(partner[0]["discord_user_id"].is_null());
+        assert!(partner[0]["discord_display_name"].is_null());
+        assert_eq!(
+            partner[0]["has_discord_profile"], 1,
+            "has_discord_profile bleibt sichtbar (kein ID-Leak)"
+        );
+    }
+
+    fn clone_row(r: &TopRow) -> TopRow {
+        TopRow {
+            streamer: r.streamer.clone(),
+            avg_viewers: r.avg_viewers,
+            max_viewers: r.max_viewers,
+            samples: r.samples,
+            is_partner: r.is_partner,
+            is_on_discord: r.is_on_discord,
+            discord_user_id: r.discord_user_id.clone(),
+            discord_display_name: r.discord_display_name.clone(),
+        }
     }
 
     // ── DB-Logik (env-gated über TB_TEST_DATABASE_URL) ──────────────────────
