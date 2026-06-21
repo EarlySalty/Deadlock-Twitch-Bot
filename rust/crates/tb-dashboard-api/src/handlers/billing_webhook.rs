@@ -216,6 +216,24 @@ async fn process_event(
 
     tx.commit().await?;
 
+    // P2.127/P2.128: Partner-Raid-Score-Refresh NACH dem Commit (Python
+    // fire-and-forget). Nur für frische Events; der betroffene Login wird aus
+    // Event-Typ/-Objekt bzw. der nachgeladenen Subscription abgeleitet. Best-
+    // effort — Fehler werden nur geloggt, damit Stripe kein Retry auslöst.
+    if is_new {
+        if let Some(login) = tb_analytics::stripe::affected_login_for_billing_refresh(
+            event_type,
+            event_object,
+            retrieved_subscription.as_ref(),
+        ) {
+            if let Err(e) =
+                tb_analytics::stripe::refresh_partner_raid_score_for_login(pool, &login).await
+            {
+                tracing::warn!(%e, "billing webhook raid-score refresh failed");
+            }
+        }
+    }
+
     // Affiliate-Provision (30 %): NACH dem Commit, mit eigenem Pool/Advisory-Lock
     // (Python `affiliate_mixin._affiliate_process_commission` läuft ebenfalls
     // außerhalb der Webhook-DB-Transaktion). Nur für frische

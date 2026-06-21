@@ -110,7 +110,7 @@ pub fn build_public_router(pool: PgPool) -> Router {
 /// Auth-Level wird per Extension eingesetzt — `AuthLevel` als `FromRequestParts`
 /// liest den Token selbst aus der Extension.
 pub fn build_authed_router(pool: PgPool, token: String, rate_limiter: RateLimiter) -> Router {
-    use handlers::{ads_schedule, affiliate_portal, ai_analysis, ai_chat, ai_history, audience, audience_demographics, auth_status, billing, category_activity, category_comparison, category_leaderboard, category_timings, chat_analytics, chat_content_analysis, chat_deep_minimax, chat_hype_timeline, chat_social_graph, coaching, engagement_mode, engagement_settings, exp_analytics, follower_funnel, internal_home, leaderboard, loyalty_curve, lurker_analysis, lurker_tax_settings, monetization, overview, performance, raid_analytics, rankings, retention_curve, scam_guard_queue, scam_guard_settings, session_detail, silent_settings, social_media, spa, stream_report, streamers, tag_analysis, title, title_performance, viewer_timeline, viewers, watch_time};
+    use handlers::{ads_schedule, affiliate_portal, ai_analysis, ai_chat, ai_history, audience, audience_demographics, auth_status, billing, category_activity, category_comparison, category_leaderboard, category_timings, chat_analytics, chat_content_analysis, chat_deep_minimax, chat_hype_timeline, chat_social_graph, coaching, engagement_mode, engagement_settings, exp_analytics, follower_funnel, internal_home, leaderboard, loyalty_curve, lurker_analysis, lurker_tax_settings, monetization, overview, performance, raid_analytics, raid_history, rankings, retention_curve, scam_guard_queue, scam_guard_settings, session_detail, silent_settings, social_media, spa, stream_report, streamers, tag_analysis, title, title_performance, viewer_timeline, viewers, watch_time};
     use handlers::scam_guard_enforce;
 
     // P2.86: Rate-Limit-Layer für die gebündelte Internal-Home-Startseite (GET +
@@ -286,6 +286,12 @@ pub fn build_authed_router(pool: PgPool, token: String, rate_limiter: RateLimite
         .route(
             "/twitch/api/v2/streamers",
             get(streamers::streamers_handler),
+        )
+        // P3.5: Admin-Raid-Historie (Login-Filter `from`/`from_broadcaster`,
+        // `limit` 1..=500, Default 50). Admin-Gate via DashboardAuthLevel.
+        .route(
+            "/twitch/raid/history",
+            get(raid_history::raid_history_handler),
         )
         .route(
             "/twitch/api/v2/title/suggest",

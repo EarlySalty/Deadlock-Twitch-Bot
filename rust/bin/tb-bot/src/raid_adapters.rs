@@ -63,6 +63,9 @@ fn to_fairness_candidate(stream: HelixStream) -> FairnessCandidate {
 /// `attach_followers_totals`). Best-effort über den (per `FollowerCountSource`
 /// gewählten) Token; ein Kandidat ohne abrufbare Zahl behält den
 /// [`FOLLOWERS_UNKNOWN`]-Sentinel.
+// P2.49: durch CachedFollowerEnricher ersetzt (Session-Cache vor Helix); als
+// Referenz-Implementierung behalten, daher dead-code-erlaubt.
+#[allow(dead_code)]
 pub struct HelixFollowerEnricher {
     pub followers: Arc<dyn FollowerCountSource>,
 }
@@ -270,6 +273,9 @@ impl TwitchTokenClient for HelixTokenClient {
 
 /// SubscriptionManager-Adapter: stellt vor dem Raid-Start die
 /// `channel.raid`-Subscription fürs Ziel sicher (best-effort).
+// P2.58: durch ManagerArrivalReadinessWithStatusPoll ersetzt (wartet auf
+// Status `enabled`); als Referenz-Implementierung behalten, dead-code-erlaubt.
+#[allow(dead_code)]
 pub struct ManagerArrivalReadiness {
     pub manager: Arc<SubscriptionManager>,
 }
