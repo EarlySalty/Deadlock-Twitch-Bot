@@ -1,3 +1,11 @@
+## #245 — Datenbank-Tests der Streamer-Übersicht laufen wieder verlässlich durch
+
+**Problem:** Mehrere Datenbank-Tests rund um die Streamer-/Partner-Übersicht und den Admin-Login liefen faktisch nie mit: Ohne konfigurierte Test-Datenbank übersprangen sie sich still. Einmal echt ausgeführt, brachen sie ab, weil die Test-Vorlagen das Produktionsschema nur unvollständig abbildeten — eine benötigte Tabelle sowie einige Spalten fehlten, die die zugrunde liegenden Abfragen voraussetzen.
+
+**Änderung:** Die Test-Vorlagen bilden das Produktionsschema jetzt vollständig ab (fehlende Tabelle und Spalten ergänzt, eine doppelte Definition zur einzigen Quelle zusammengeführt). Gegen eine echte Datenbank ausgeführt laufen die betroffenen Übersicht- und Login-Tests damit durch.
+
+**Ergebnis:** Streamer-Übersicht und Admin-Login sind wieder durch lauffähige Datenbank-Tests abgesichert. Abweichungen zwischen Test- und Produktionsschema fallen künftig sofort im Test auf, statt erst im Betrieb sichtbar zu werden.
+
 ## #244 — Automatische Scam-Bans im Dashboard sichtbar und mit einem Klick rücknehmbar
 
 **Problem:** Der Scam-Schutz konnte verdächtige Erstschreiber bei hoher Sicherheit automatisch bannen oder timeouten. Diese automatischen Eingriffe tauchten im Dashboard aber nirgends auf — die Fall-Liste zeigte nur manuell zu prüfende Vorschläge. Ein versehentlich getroffener Zuschauer ließ sich darum nicht bequem über das Dashboard zurückholen.
