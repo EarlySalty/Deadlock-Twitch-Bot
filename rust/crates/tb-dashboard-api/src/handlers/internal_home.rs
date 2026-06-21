@@ -22,7 +22,7 @@ use std::io::{BufRead, BufReader};
 
 use axum::{
     extract::{Query, State},
-    http::StatusCode,
+    http::{HeaderMap, StatusCode},
     response::{IntoResponse, Response},
     Json,
 };
@@ -1991,9 +1991,15 @@ fn serialize_changelog_entry(row: &PgRow) -> Value {
 pub async fn changelog_handler(
     auth: DashboardAuthLevel,
     State(pool): State<PgPool>,
+    headers: HeaderMap,
     body: Option<Json<ChangelogBody>>,
 ) -> Response {
     // Auth (api_v2.py:1295-1315): none → 401, partner → 403, priv → ok.
+    // P1.32: Same-Origin-CSRF-Schutz statt erzwungenem X-CSRF-Token-Header
+    // (Vorfall #235). Localhost ist von Natur aus loopback-only und kennt keinen
+    // Browser-Cross-Site-Vektor → Bypass; ein Browser-Admin (Cookie-Session) muss
+    // dagegen same-origin sein. Nur ein nachweislich fremder Origin → 403.
+    let is_local = matches!(auth, DashboardAuthLevel::Localhost);
     match auth {
         DashboardAuthLevel::Localhost | DashboardAuthLevel::Admin { .. } => {}
         DashboardAuthLevel::None => {
@@ -2014,6 +2020,18 @@ pub async fn changelog_handler(
             )
                 .into_response();
         }
+    }
+
+    // Same-Origin-Guard für Browser-Admins (P1.32). Cross-Origin-POST → 403.
+    if !is_local && !crate::auth::csrf::is_allowed_origin(&headers) {
+        return (
+            StatusCode::FORBIDDEN,
+            Json(json!({
+                "error": "csrf_failed",
+                "message": "Cross-Origin-Anfrage abgelehnt.",
+            })),
+        )
+            .into_response();
     }
 
     let Some(Json(body)) = body else {
@@ -2130,6 +2148,112 @@ async fn create_changelog_entry(
 
     tx.commit().await?;
     Ok(serialize_changelog_entry(&row))
+}
+
+#[cfg(test)]
+mod changelog_origin_tests {
+    //! P1.32: Same-Origin-CSRF-Guard auf dem Changelog-POST. Browser-Admin mit
+    //! gültiger `master_dash_session` aber Cross-Origin → 403 csrf_failed;
+    //! same-origin → kein csrf_failed (passiert die Origin-Prüfung).
+    use super::*;
+    use crate::auth::session::{DashboardAuthState, ADMIN_COOKIE_NAME};
+    use axum::body::Body;
+    use axum::http::Request;
+    use axum::routing::post;
+    use axum::{Extension, Router};
+    use sqlx::postgres::{PgConnectOptions, PgPoolOptions};
+    use std::str::FromStr;
+    use tower::ServiceExt;
+
+    fn test_fernet_key() -> String {
+        "dGVzdGtleTEyMzQ1Njc4OTAxMjM0NTY3ODkwMTIzNDU=".to_string()
+    }
+
+    async fn make_pool(schema: &str) -> Option<PgPool> {
+        let dsn = std::env::var("TB_TEST_DATABASE_URL").ok()?;
+        let admin = PgPoolOptions::new().max_connections(1).connect(&dsn).await.unwrap();
+        sqlx::query(&format!("DROP SCHEMA IF EXISTS {schema} CASCADE")).execute(&admin).await.unwrap();
+        sqlx::query(&format!("CREATE SCHEMA {schema}")).execute(&admin).await.unwrap();
+        admin.close().await;
+        let opts = PgConnectOptions::from_str(&dsn).unwrap().options([("search_path", schema)]);
+        let pool = PgPoolOptions::new().max_connections(2).connect_with(opts).await.unwrap();
+        sqlx::query(
+            r#"CREATE TABLE dashboard_sessions (
+                session_id TEXT PRIMARY KEY, session_type TEXT NOT NULL,
+                payload_enc BYTEA NOT NULL, created_at DOUBLE PRECISION NOT NULL,
+                expires_at DOUBLE PRECISION NOT NULL)"#,
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+        Some(pool)
+    }
+
+    /// Baut einen Router mit dem changelog_handler + Auth-State und einer gültigen
+    /// Admin-Session; gibt (App, Admin-Cookie-Value) zurück.
+    async fn app_with_admin(pool: PgPool) -> (Router, String) {
+        let auth_state = DashboardAuthState::new(pool.clone(), test_fernet_key());
+        let created = auth_state
+            .create_admin_session("admin-user-1", "Admin")
+            .await
+            .expect("admin session");
+        let app = Router::new()
+            .route("/changelog", post(super::changelog_handler))
+            .layer(Extension(auth_state))
+            .with_state(pool);
+        (app, created.session_id)
+    }
+
+    fn admin_request(cookie_value: &str, origin: Option<&str>) -> Request<Body> {
+        let mut builder = Request::builder()
+            .method("POST")
+            .uri("/changelog")
+            // Nicht-Loopback-Host erzwingen, sonst greift der Localhost-Bypass.
+            .header("host", "dash.example.com")
+            .header("content-type", "application/json")
+            .header(
+                axum::http::header::COOKIE,
+                format!("{ADMIN_COOKIE_NAME}={cookie_value}"),
+            );
+        if let Some(o) = origin {
+            builder = builder.header(axum::http::header::ORIGIN, o);
+        }
+        builder
+            .body(Body::from(r#"{"title":"T","content":"C"}"#))
+            .unwrap()
+    }
+
+    #[tokio::test]
+    async fn browser_admin_cross_origin_403() {
+        let Some(pool) = make_pool("t_changelog_xorigin").await else {
+            return;
+        };
+        let (app, cookie) = app_with_admin(pool).await;
+        let resp = app
+            .oneshot(admin_request(&cookie, Some("https://evil.example.org")))
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::FORBIDDEN);
+        let bytes = axum::body::to_bytes(resp.into_body(), 1 << 16).await.unwrap();
+        let body: Value = serde_json::from_slice(&bytes).unwrap();
+        assert_eq!(body["error"], "csrf_failed");
+    }
+
+    #[tokio::test]
+    async fn browser_admin_same_origin_passiert_csrf_gate() {
+        let Some(pool) = make_pool("t_changelog_sameorigin").await else {
+            return;
+        };
+        let (app, cookie) = app_with_admin(pool).await;
+        let resp = app
+            .oneshot(admin_request(&cookie, Some("https://dash.example.com")))
+            .await
+            .unwrap();
+        // Same-origin darf NICHT am csrf_failed scheitern (kein 403 csrf_failed).
+        // Der Write läuft danach (Changelog-Tabelle wird vom Handler angelegt) → 201.
+        assert_ne!(resp.status(), StatusCode::FORBIDDEN);
+        assert_eq!(resp.status(), StatusCode::CREATED);
+    }
 }
 
 #[cfg(test)]
