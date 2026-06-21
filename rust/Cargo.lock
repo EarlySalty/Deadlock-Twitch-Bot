@@ -2448,6 +2448,7 @@ dependencies = [
  "tracing",
  "tracing-subscriber",
  "unicode-normalization",
+ "wiremock",
 ]
 
 [[package]]

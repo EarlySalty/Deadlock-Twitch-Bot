@@ -41,3 +41,4 @@ integration = []
 [dev-dependencies]
 tokio = { workspace = true, features = ["rt", "macros"] }
 sqlx  = { workspace = true }
+wiremock = { workspace = true }
