@@ -19,6 +19,21 @@
 //! Auth: Admin/Localhost (`DashboardAuthLevel::is_privileged`). Body: optionaler
 //! `dry_run` (JSON oder Form) — bei `true` werden KEINE Stripe-Objekte erzeugt,
 //! nur der Plan (`would_create`/`reused`) berichtet.
+//!
+//! **Self-Heal (P2.113):** Eine eingecheckte *Price*-Default-ID wird im Live-Lauf
+//! erst gegen Stripe verifiziert (`retrieve_price`); schlägt der Retrieve fehl
+//! (gelöscht/ungültig), wird die ID verworfen, NICHT als `reused` gezählt und der
+//! Lookup-/Create-Pfad legt den Preis neu an — exakt wie Pythons Verify-Zyklus
+//! (`routes_billing.py:498-504`). Im `dry_run` wird nicht verifiziert.
+//! Die *Product*-Seite (`routes_billing.py:439-449`, retrieve + deleted-Flag) ist
+//! im nativen Pfad noch nicht self-healing: dafür fehlt `StripeClient::retrieve_product`
+//! im Crate `tb-analytics` (crate-fremd, nicht in diesem Worktree änderbar) — siehe
+//! WIRING-TODO. Bis dahin gilt die eingecheckte Product-Default-ID weiter als `reused`.
+//!
+//! **Response-Parität (P2.114):** Der Payload führt wieder `product_id_map`
+//! (plan_id → product_id), `price_id_map` (plan_id → {cycle → price_id}) und
+//! `readiness` (Stripe-Readiness, keine Secrets) wie Python
+//! (`routes_billing.py:578-592`).
 
 use axum::{
     extract::{Extension, State},
@@ -26,7 +41,7 @@ use axum::{
     response::{IntoResponse, Response},
     Json,
 };
-use serde_json::{json, Value};
+use serde_json::{json, Map, Value};
 use sqlx::PgPool;
 
 use tb_analytics::billing::{
@@ -75,6 +90,9 @@ pub async fn sync_products_handler(
     let mut reused_products = 0u32;
     let mut created_prices = 0u32;
     let mut reused_prices = 0u32;
+    // P2.114: ID-Maps für den Response-Payload akkumulieren.
+    let mut product_id_map: Map<String, Value> = Map::new();
+    let mut price_id_map: Map<String, Value> = Map::new();
 
     // Bezahlte Pläne aus dem 1-Monats-Katalog (Plan-Stammdaten sind zyklus-stabil).
     let base_catalog = catalog_json(1);
@@ -133,6 +151,11 @@ pub async fn sync_products_handler(
             }
         };
 
+        if !product_id.is_empty() {
+            product_id_map.insert(plan_id.to_string(), json!(product_id));
+        }
+
+        let mut cycle_price_map: Map<String, Value> = Map::new();
         let mut price_reports: Vec<Value> = Vec::new();
         for &cycle in SYNC_CYCLES.iter() {
             let cycle_catalog = catalog_json(cycle);
@@ -142,12 +165,32 @@ pub async fn sync_products_handler(
             }
             let lookup_key = format!("deadlock_{plan_id}_{cycle}m_net_v2");
 
-            // 1) Eingecheckter Price-Default → reused.
+            // 1) Eingecheckter Price-Default → gegen Stripe verifizieren (P2.113).
+            //    Live: retrieve_price; schlägt er fehl (gelöscht/ungültig), wird die
+            //    ID verworfen und NICHT als reused gezählt → Lookup/Create heilt.
+            //    dry_run: kein Stripe-Call, Default gilt unverifiziert als reused.
             let mut price_id = price_id_default(plan_id, cycle).unwrap_or("").to_string();
             let mut price_status = "missing";
             if !price_id.is_empty() {
-                reused_prices += 1;
-                price_status = "reused";
+                if dry_run {
+                    reused_prices += 1;
+                    price_status = "reused";
+                } else if let Some(client) = client.as_ref() {
+                    match client.retrieve_price(&price_id).await {
+                        Ok(_) => {
+                            reused_prices += 1;
+                            price_status = "reused";
+                        }
+                        Err(error) => {
+                            tracing::warn!(%error, plan_id, cycle, "stripe price retrieve failed; recreating");
+                            price_id.clear();
+                        }
+                    }
+                } else {
+                    // Kein Client (nur theoretisch außerhalb dry_run) → nicht verifizierbar.
+                    reused_prices += 1;
+                    price_status = "reused";
+                }
             }
 
             // 2) Per Lookup-Key suchen (nur live + wenn noch keine ID).
@@ -205,6 +248,10 @@ pub async fn sync_products_handler(
                 }
             }
 
+            if !price_id.is_empty() {
+                cycle_price_map.insert(cycle.to_string(), json!(price_id.clone()));
+            }
+
             price_reports.push(json!({
                 "cycle_months": cycle,
                 "amount_net_cents": amount_cents,
@@ -212,6 +259,10 @@ pub async fn sync_products_handler(
                 "lookup_key": lookup_key,
                 "status": price_status,
             }));
+        }
+
+        if !cycle_price_map.is_empty() {
+            price_id_map.insert(plan_id.to_string(), Value::Object(cycle_price_map));
         }
 
         operations.push(json!({
@@ -238,6 +289,10 @@ pub async fn sync_products_handler(
         "created_prices": created_prices,
         "reused_prices": reused_prices,
         "operations": operations,
+        // P2.114: ID-Maps + Readiness wieder im Payload (Python-Parität).
+        "product_id_map": Value::Object(product_id_map),
+        "price_id_map": Value::Object(price_id_map),
+        "readiness": readiness_payload(client.is_some()),
     });
     Json(payload).into_response()
 }
@@ -255,6 +310,33 @@ fn cycle_plan_total_net_cents(cycle_catalog: &Value, plan_id: &str) -> i64 {
         .and_then(|price| price.get("total_net_cents"))
         .and_then(Value::as_i64)
         .unwrap_or(0)
+}
+
+/// Baut die Stripe-Readiness für den Sync-Payload (Teilmenge von Pythons
+/// `_billing_stripe_readiness_payload`, identisch zu `billing_page::readiness_payload`).
+///
+/// Keine Secrets. `checkout_ready` = Stripe-Client konfiguriert; `price_map_ready`
+/// ist per Konstruktion `true` (eingecheckte Defaults decken alle bezahlten Pläne
+/// × {1,12} ab); `webhook_ready` aus dem Vorhandensein des Webhook-Secrets.
+fn readiness_payload(checkout_ready: bool) -> Value {
+    let webhook_ready = std::env::var("STRIPE_WEBHOOK_SECRET")
+        .ok()
+        .filter(|v| !v.trim().is_empty())
+        .or_else(|| {
+            std::env::var("TWITCH_BILLING_STRIPE_WEBHOOK_SECRET")
+                .ok()
+                .filter(|v| !v.trim().is_empty())
+        })
+        .is_some();
+    let price_map_ready = true;
+    json!({
+        "provider": "stripe",
+        "integration_state": if checkout_ready && price_map_ready { "live" } else { "planned" },
+        "checkout_ready": checkout_ready,
+        "webhook_ready": webhook_ready,
+        "price_map_ready": price_map_ready,
+        "ready_for_live": checkout_ready && webhook_ready && price_map_ready,
+    })
 }
 
 /// Parst das `dry_run`-Flag aus JSON- ODER Form-Body (Python akzeptiert beides).
@@ -341,6 +423,104 @@ mod tests {
         for op in ops {
             assert!(!op["prices"].as_array().unwrap().is_empty());
         }
+        // P2.114: ID-Maps + Readiness sind im Payload (Python-Parität).
+        assert!(v["product_id_map"].is_object(), "product_id_map fehlt");
+        assert!(v["price_id_map"].is_object(), "price_id_map fehlt");
+        assert!(v["readiness"].is_object(), "readiness fehlt");
+        assert_eq!(v["readiness"]["provider"], "stripe");
+        // dry_run hat keinen Stripe-Client → checkout_ready=false.
+        assert_eq!(v["readiness"]["checkout_ready"], false);
+        // Eingecheckte Defaults füllen beide Maps. chat_quiet hat sowohl Product-
+        // als auch Price-Default; raid_boost nur Price-Default (kein Product).
+        let pmap = v["product_id_map"].as_object().unwrap();
+        assert!(pmap.contains_key("chat_quiet"), "product_id_map ohne chat_quiet");
+        let prmap = v["price_id_map"].as_object().unwrap();
+        let boost_cycles = prmap["raid_boost"].as_object().unwrap();
+        assert!(boost_cycles.contains_key("1"), "price_id_map ohne raid_boost/1m");
+        assert!(boost_cycles.contains_key("12"), "price_id_map ohne raid_boost/12m");
+    }
+
+    /// P2.113: Live-Sync, bei dem `retrieve_price` für eine eingecheckte Default-ID
+    /// 404 liefert (gelöschter Preis). Die ID darf NICHT als `reused` zählen; der
+    /// Plan muss über Lookup/Create geheilt werden (Status `created`/`reused_lookup`),
+    /// und am Ende dürfen `reused_prices` kleiner sein als die Default-Abdeckung.
+    #[tokio::test]
+    async fn live_recreates_when_price_retrieve_404() {
+        use std::sync::Arc;
+        use tb_analytics::stripe::StripeClient;
+        use wiremock::matchers::{method, path_regex};
+        use wiremock::{Mock, MockServer, ResponseTemplate};
+
+        let server = MockServer::start().await;
+        // Jeder Price-Retrieve (GET /v1/prices/{id}) schlägt mit 404 fehl
+        // → ID wird verworfen, nicht als reused gezählt.
+        Mock::given(method("GET"))
+            .and(path_regex(r"^/v1/prices/price_.*"))
+            .respond_with(ResponseTemplate::new(404).set_body_json(json!({
+                "error": {"type": "invalid_request_error", "message": "No such price"}
+            })))
+            .mount(&server)
+            .await;
+        // Lookup-Suche liefert nichts → Create-Pfad.
+        Mock::given(method("GET"))
+            .and(path_regex(r"^/v1/prices$"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({ "data": [] })))
+            .mount(&server)
+            .await;
+        // Product-Create (alle Default-Produkte gelten als reused, daher i. d. R.
+        // nicht aufgerufen; sicherheitshalber gemockt).
+        Mock::given(method("POST"))
+            .and(path_regex(r"^/v1/products$"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({ "id": "prod_new" })))
+            .mount(&server)
+            .await;
+        // Price-Create → neuer Preis (Self-Heal).
+        Mock::given(method("POST"))
+            .and(path_regex(r"^/v1/prices$"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({ "id": "price_recreated" })))
+            .mount(&server)
+            .await;
+
+        let config = BillingPageConfig {
+            client: Arc::new(
+                StripeClient::new("sk_test_x")
+                    .unwrap()
+                    .with_api_base(server.uri()),
+            ),
+            public_origin: "https://example.test".to_string(),
+        };
+
+        use sqlx::postgres::PgPoolOptions;
+        let pool = PgPoolOptions::new()
+            .max_connections(1)
+            .connect_lazy("postgres://invalid:invalid@127.0.0.1:1/none")
+            .unwrap();
+
+        let resp = sync_products_handler(
+            DashboardAuthLevel::Localhost,
+            Some(Extension(config)),
+            State(pool),
+            axum::body::Bytes::from_static(br#"{"dry_run": false}"#),
+        )
+        .await;
+        assert_eq!(resp.status(), StatusCode::OK);
+        let bytes = axum::body::to_bytes(resp.into_body(), 1 << 20).await.unwrap();
+        let v: Value = serde_json::from_slice(&bytes).unwrap();
+
+        // Kein Preis darf als 'reused' (verifizierter Default) gezählt werden, da
+        // jeder Retrieve fehlschlug.
+        assert_eq!(v["reused_prices"], 0, "fehlgeschlagener retrieve zählte als reused");
+        // Alle Preise wurden neu angelegt.
+        assert!(v["created_prices"].as_u64().unwrap() > 0, "kein Preis recreated");
+        // Statt 'reused' steht in den Reports 'created'.
+        for op in v["operations"].as_array().unwrap() {
+            for price in op["prices"].as_array().unwrap() {
+                assert_ne!(price["status"], "reused", "Default galt trotz 404 als reused");
+            }
+        }
+        // Maps + readiness sind weiterhin vorhanden, checkout_ready=true (Client da).
+        assert!(v["price_id_map"].is_object());
+        assert_eq!(v["readiness"]["checkout_ready"], true);
     }
 
     #[tokio::test]
