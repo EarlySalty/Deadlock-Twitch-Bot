@@ -149,11 +149,8 @@ const SCAM_WARNING_INITIAL_DELAY_MIN: u64 = 20;
 /// HINWEIS: user-sichtbarer deutscher Text (Umlaute/Ton) — von Claude final
 /// formuliert. Bis dahin Platzhalter (siehe placeholders[]).
 const SCAM_WARNING_MESSAGES: &[&str] = &[
-    // PLATZHALTER (Warntext 1 — Fake-Server „Deadlock Discord Deutschland" /
-    // „Deadlock German Competitiv HUB", offizieller Discord: {invite})
-    "PLATZHALTER {invite}",
-    // PLATZHALTER (Warntext 2 — Variante)
-    "PLATZHALTER {invite}",
+    "⚠️ Achtung: Server wie „Deadlock Discord Deutschland\" oder „Deadlock German Competitiv HUB\" gehören NICHT zu uns und sind oft Fake/Scam. Unser einziger offizieller Discord ist: {invite}",
+    "⚠️ Kurzer Hinweis: Es kursieren Fake-Discords („Deadlock Discord Deutschland\", „Deadlock German Competitiv HUB\") — die sind nicht von uns, dort bitte nichts anklicken. Unser echter Discord: {invite}",
 ];
 
 // ---------------------------------------------------------------------------
