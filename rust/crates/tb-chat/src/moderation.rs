@@ -486,6 +486,33 @@ impl ModerationEngine {
         }
     }
 
+    /// Löscht die auslösende Nachricht best-effort und setzt danach einen Timeout.
+    pub async fn timeout_and_cleanup(
+        &self,
+        broadcaster_id: &str,
+        chatter_id: &str,
+        message_id: &str,
+        duration_secs: u32,
+        reason_text: &str,
+    ) -> bool {
+        if let Err(error) = self.api.delete_message(broadcaster_id, message_id).await {
+            warn!("Timeout-Cleanup Delete-Fehler: {error}");
+        }
+
+        match self
+            .api
+            .timeout_user(broadcaster_id, chatter_id, duration_secs, reason_text)
+            .await
+        {
+            Ok(BanOutcome::Banned | BanOutcome::AlreadyBanned) => true,
+            Ok(_) => false,
+            Err(error) => {
+                warn!("Timeout Fehler: {error}");
+                false
+            }
+        }
+    }
+
     /// Gibt den letzten AutoBan-Eintrag für einen Kanal zurück.
     ///
     /// Port: `self._last_autoban.get(channel_key)` (commands.py Z. 224).

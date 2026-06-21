@@ -1,3 +1,11 @@
+## #251 — Chat-Schutz erkennt die „Headset-kaputt, schreib mir privat"-Masche
+
+**Problem:** Eine verbreitete Betrugsmasche rutschte durch den Chat-Schutz: Ein Erstschreiber täuscht ohne Anlass ein technisches Problem vor („mein Headset geht nicht, antworte mir im Chat") und versucht so, das Gespräch sofort von Twitch weg ins Private zu ziehen — der erste Schritt vieler Scams. Weil diese erste Nachricht kurz war und kein bisher bekanntes Stichwort enthielt, nahm der Wächter sie gar nicht erst unter die Lupe.
+
+**Änderung:** Der Chat-Wächter kennt diese Ausreden-und-Sofort-Pivot-Masche jetzt ausdrücklich und zieht typische Einstiege wie „reply me" oder „dm me" sofort zur Prüfung heran, statt erst mehrere Nachrichten abzuwarten. Bestätigt sich der Betrugsversuch bei einem Erstschreiber, richtet sich die Reaktion nach dem Alter des Kontos: brandneue — oder nicht eindeutig alte — Konten werden gebannt, während nachweislich ältere Konten (über drei Monate) nur die Nachricht gelöscht und einen Timeout bekommen, da hinter ihnen ein gekapertes Konto eines echten Zuschauers stecken könnte.
+
+**Ergebnis:** Die Masche wird zuverlässig erkannt und je nach Risiko angemessen geahndet — frische Wegwerf-Konten fliegen sofort raus, echte und womöglich übernommene Konten behalten die Chance auf Wiederherstellung. Der Schutz greift unverändert nur bei Erstschreibern; Stammzuschauer sind nie betroffen.
+
 ## #250 — Hilfe-Chat auf der Website lernt aus einer pflegbaren Wissensbasis
 
 **Problem:** Der Frage-Chat auf der Website beantwortete Fragen zum Bot bisher nur aus einem fest eingebauten Kurz-Steckbrief. Dadurch konnte er nur Grundlegendes, keine tiefergehenden Fragen, und er nannte keine Quelle — und es ließ sich nicht leicht erweitern, ohne am Bot selbst zu schrauben.

@@ -3,6 +3,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use async_trait::async_trait;
+use chrono::{DateTime, Duration as ChronoDuration, Utc};
 use sqlx::postgres::{PgConnectOptions, PgPoolOptions};
 use sqlx::PgPool;
 use tb_chat::api::{BanOutcome, ChatApi};
@@ -226,6 +227,159 @@ impl ChatApi for EnforceRecordingApi {
     }
 }
 
+#[derive(Default)]
+struct ActionCalls {
+    bans: Vec<(String, String, String)>,
+    timeouts: Vec<(String, String, u32, String)>,
+    deletes: Vec<(String, String)>,
+}
+
+struct ActionRecordingApi {
+    created_at: Option<DateTime<Utc>>,
+    calls: Arc<std::sync::Mutex<ActionCalls>>,
+}
+
+#[async_trait]
+impl ChatApi for ActionRecordingApi {
+    async fn send_message(&self, _: &str, _: &str) -> Result<SendOutcome, String> {
+        Ok(SendOutcome::Sent)
+    }
+    async fn send_announcement(&self, _: &str, _: &str, _: &str) -> Result<bool, String> {
+        Ok(true)
+    }
+    async fn ban_user(
+        &self,
+        broadcaster_id: &str,
+        target_user_id: &str,
+        reason: &str,
+    ) -> Result<BanOutcome, String> {
+        self.calls.lock().unwrap().bans.push((
+            broadcaster_id.to_string(),
+            target_user_id.to_string(),
+            reason.to_string(),
+        ));
+        Ok(BanOutcome::Banned)
+    }
+    async fn timeout_user(
+        &self,
+        broadcaster_id: &str,
+        target_user_id: &str,
+        duration_secs: u32,
+        reason: &str,
+    ) -> Result<BanOutcome, String> {
+        self.calls.lock().unwrap().timeouts.push((
+            broadcaster_id.to_string(),
+            target_user_id.to_string(),
+            duration_secs,
+            reason.to_string(),
+        ));
+        Ok(BanOutcome::Banned)
+    }
+    async fn unban_user(&self, _: &str, _: &str) -> Result<bool, String> {
+        Ok(true)
+    }
+    async fn delete_message(&self, broadcaster_id: &str, message_id: &str) -> Result<bool, String> {
+        self.calls
+            .lock()
+            .unwrap()
+            .deletes
+            .push((broadcaster_id.to_string(), message_id.to_string()));
+        Ok(true)
+    }
+    async fn user_created_at(
+        &self,
+        _: &str,
+    ) -> Result<Option<chrono::DateTime<chrono::Utc>>, String> {
+        Ok(self.created_at)
+    }
+    async fn resolve_user_id(&self, login: &str) -> Result<Option<String>, String> {
+        Ok(Some(format!("{login}-id")))
+    }
+    async fn bot_user_id(&self) -> String {
+        "bot-id".to_string()
+    }
+}
+
+async fn seed_first_time_guard(pool: &PgPool, mode: &str) {
+    sqlx::query(
+        "INSERT INTO twitch_scam_guard_settings (channel_login, mode) \
+         VALUES ('testchannel', $1)",
+    )
+    .bind(mode)
+    .execute(pool)
+    .await
+    .unwrap();
+    sqlx::query(
+        "INSERT INTO twitch_stream_sessions (id, streamer_login, started_at) \
+         VALUES (1, 'testchannel', NOW())",
+    )
+    .execute(pool)
+    .await
+    .unwrap();
+    sqlx::query(
+        "INSERT INTO twitch_session_chatters \
+         (session_id, streamer_login, chatter_login, is_first_time_streamer) \
+         VALUES (1, 'testchannel', 'sam_09995', TRUE)",
+    )
+    .execute(pool)
+    .await
+    .unwrap();
+}
+
+fn scam_event() -> ChatMessageEvent {
+    ChatMessageEvent {
+        broadcaster_user_id: "channel-id".to_string(),
+        broadcaster_user_login: "testchannel".to_string(),
+        chatter_user_id: "sam-id".to_string(),
+        chatter_user_login: "sam_09995".to_string(),
+        message_id: "message-id".to_string(),
+        message: ChatMessageBody {
+            text: "Yo bro, I know a big streamer who can help you grow with real viewers. Add him on Discord.".to_string(),
+            ..Default::default()
+        },
+        ..Default::default()
+    }
+}
+
+async fn wait_action_taken(pool: &PgPool) -> String {
+    tokio::time::timeout(Duration::from_secs(2), async {
+        loop {
+            if let Some(action) =
+                sqlx::query_scalar::<_, String>("SELECT action_taken FROM twitch_scam_guard_verdicts LIMIT 1")
+                    .fetch_optional(pool)
+                    .await
+                    .unwrap()
+            {
+                break action;
+            }
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+    })
+    .await
+    .expect("Verdict wurde nicht persistiert")
+}
+
+async fn run_action_guard(
+    pool: &PgPool,
+    created_at: Option<DateTime<Utc>>,
+) -> Arc<std::sync::Mutex<ActionCalls>> {
+    let calls = Arc::new(std::sync::Mutex::new(ActionCalls::default()));
+    let api: Arc<dyn ChatApi> = Arc::new(ActionRecordingApi {
+        created_at,
+        calls: calls.clone(),
+    });
+    let moderation = Arc::new(ModerationEngine::new(Arc::clone(&api), pool.clone()));
+    let guard = Arc::new(ConversationScamGuard::new(
+        pool.clone(),
+        "bot-id".to_string(),
+        Arc::new(FixedJudge),
+        api,
+        moderation,
+    ));
+    guard.observe(&scam_event());
+    calls
+}
+
 #[tokio::test]
 async fn guard_laedt_settings_trigger_und_persistiert_verdict() {
     let pool = pool_or_skip!("tb_conversation_scam_guard");
@@ -297,6 +451,59 @@ async fn guard_laedt_settings_trigger_und_persistiert_verdict() {
     assert_eq!(row.1, "suggested");
     assert!(row.2.contains("yo bro"));
     assert!((row.3 - 0.95).abs() < f32::EPSILON);
+}
+
+#[tokio::test]
+async fn auto_ban_bannt_jungen_account() {
+    let pool = pool_or_skip!("tb_conversation_scam_young_autoban");
+    seed_first_time_guard(&pool, "auto_ban").await;
+
+    let calls = run_action_guard(&pool, Some(Utc::now() - ChronoDuration::days(10))).await;
+    assert_eq!(wait_action_taken(&pool).await, "banned");
+
+    let calls = calls.lock().unwrap();
+    assert_eq!(calls.bans.len(), 1);
+    assert!(calls.timeouts.is_empty());
+}
+
+#[tokio::test]
+async fn auto_ban_timeoutet_alten_account_und_loescht_nachricht() {
+    let pool = pool_or_skip!("tb_conversation_scam_old_autoban");
+    seed_first_time_guard(&pool, "auto_ban").await;
+
+    let calls = run_action_guard(&pool, Some(Utc::now() - ChronoDuration::days(400))).await;
+    assert_eq!(wait_action_taken(&pool).await, "timed_out");
+
+    let calls = calls.lock().unwrap();
+    assert!(calls.bans.is_empty());
+    assert_eq!(calls.timeouts.len(), 1);
+    assert_eq!(calls.deletes.len(), 1);
+}
+
+#[tokio::test]
+async fn auto_ban_bannt_bei_unbekanntem_account_alter() {
+    let pool = pool_or_skip!("tb_conversation_scam_unknown_age_autoban");
+    seed_first_time_guard(&pool, "auto_ban").await;
+
+    let calls = run_action_guard(&pool, None).await;
+    assert_eq!(wait_action_taken(&pool).await, "banned");
+
+    let calls = calls.lock().unwrap();
+    assert_eq!(calls.bans.len(), 1);
+    assert!(calls.timeouts.is_empty());
+}
+
+#[tokio::test]
+async fn timeout_mode_timeoutet_und_loescht_nachricht() {
+    let pool = pool_or_skip!("tb_conversation_scam_timeout_mode");
+    seed_first_time_guard(&pool, "timeout").await;
+
+    let calls = run_action_guard(&pool, Some(Utc::now() - ChronoDuration::days(10))).await;
+    assert_eq!(wait_action_taken(&pool).await, "timed_out");
+
+    let calls = calls.lock().unwrap();
+    assert_eq!(calls.timeouts.len(), 1);
+    assert_eq!(calls.deletes.len(), 1);
 }
 
 #[tokio::test]
