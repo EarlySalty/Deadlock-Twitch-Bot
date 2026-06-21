@@ -7,7 +7,16 @@ type TrialState = 'idle' | 'loading' | 'granted' | 'already_used' | 'has_paid_pl
 
 async function startTrial(): Promise<TrialState> {
   try {
-    const res = await fetch('/twitch/api/billing/trial/start', { method: 'POST', credentials: 'include' });
+    // P1.45: Same-Origin-CSRF statt erzwungenem X-CSRF-Token-Header (auth-status
+    // liefert csrfToken:null → harter Header-Zwang erzeugte Prod-403, Vorfall #235).
+    // Same-Origin-Fetch (Browser sendet Origin/Referer) + same-site Session-Cookie
+    // decken den CSRF-Vektor ab; X-Requested-With signalisiert einen XHR.
+    const res = await fetch('/twitch/api/billing/trial/start', {
+      method: 'POST',
+      credentials: 'same-origin',
+      mode: 'same-origin',
+      headers: { 'X-Requested-With': 'XMLHttpRequest' },
+    });
     if (res.status === 401) {
       const data = await res.json().catch(() => ({}));
       window.location.href = data.login_url ?? '/twitch/auth/login?next=%2Ftwitch%2Fpricing';

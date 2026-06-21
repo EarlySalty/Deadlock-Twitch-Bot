@@ -719,14 +719,16 @@ fn non_empty_env(key: &str) -> Option<String> {
     std::env::var(key).ok().map(|v| v.trim().to_string()).filter(|v| !v.is_empty())
 }
 
-/// RAID-reservierter Callback-Pfad — der Dashboard-Login darf NIE auf diesen Pfad
-/// zeigen (er gehört dem Raid-OAuth-Flow). Memory: `/callback/twitch` ist
-/// RAID-reserviert; zusätzlich `/twitch/raid/callback`.
-const RESERVED_RAID_CALLBACK_PATHS: &[&str] = &["/twitch/raid/callback", "/callback/twitch"];
+/// Rein RAID-reservierter Callback-Pfad — der Dashboard-Login darf NIE hierauf
+/// zeigen (er gehört exklusiv dem Raid-OAuth-Flow). `/callback/twitch` ist davon
+/// ausgenommen: das ist der GETEILTE Callback (`shared_callback_handler`), der den
+/// Dashboard-Login trägt UND Raid delegiert — er steht auf der Whitelist.
+const RESERVED_RAID_CALLBACK_PATHS: &[&str] = &["/twitch/raid/callback"];
 
 /// Erlaubte Dashboard-Callback-Pfade (Whitelist). Andere Pfade → abgelehnt.
+/// `/callback/twitch` ist der produktive geteilte Callback (Login + Raid-Delegation).
 const ALLOWED_DASHBOARD_CALLBACK_PATHS: &[&str] =
-    &["/twitch/auth/callback", "/twitch/auth/login/callback"];
+    &["/twitch/auth/callback", "/twitch/auth/login/callback", "/callback/twitch"];
 
 /// Validiert die Dashboard-OAuth-Redirect-URI (P2.137).
 ///
@@ -901,9 +903,10 @@ mod tests {
         assert!(validate_oauth_redirect_uri("https://dash.example.com/twitch/auth/callback").is_ok());
         // Gültig: http nur Loopback (lokale Entwicklung).
         assert!(validate_oauth_redirect_uri("http://localhost:8769/twitch/auth/callback").is_ok());
-        // RAID-reservierter Pfad → abgelehnt.
+        // Rein RAID-reservierter Pfad → abgelehnt.
         assert!(validate_oauth_redirect_uri("https://evil.test/twitch/raid/callback").is_err());
-        assert!(validate_oauth_redirect_uri("https://dash.example.com/callback/twitch").is_err());
+        // Geteilter Dashboard-Callback /callback/twitch → erlaubt (trägt den Login).
+        assert!(validate_oauth_redirect_uri("https://dash.example.com/callback/twitch").is_ok());
         // userinfo → abgelehnt.
         assert!(validate_oauth_redirect_uri("https://user:pass@dash.example.com/twitch/auth/callback").is_err());
         // http auf Nicht-Loopback → abgelehnt.

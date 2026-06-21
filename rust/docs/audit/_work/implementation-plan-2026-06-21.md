@@ -1,0 +1,758 @@
+# Implementierungs-Plan — Twitch-Bot Parity-Port (2026-06-21)
+
+> Aus dem Reconciliation-Lauf (232 Befunde × Grillme-Entscheidungen + Querschnitts-Direktiven + User-Anmerkung). Umsetzung via Ultracode-Workflow: 1 Agent pro Crate, eigener Worktree, TDD, `cargo build/test -p <crate>` grün, Commit auf Branch; Claude reviewt + merged + füllt user-sichtbare Texte.
+
+**Entscheidungen:** PORT=202 · DEFER=8 · KEEP_RUST=4 · DROP=18
+
+## PORT-Backlog nach Crate
+
+### tb-dashboard-api (68: P0×1, P1×21, P2×37, P3×9)
+
+- **P0.1** [P0|risk:medium] Native Rust add_streamer admin endpoint (POST /twitch/add_streamer + _do_add)
+  - Ziel: crates/tb-dashboard-api/src/lib.rs (build_admin_legacy_forms_router / build_entry_admin_router) + neuer handler add_streamer; ggf. Bruecke zu tb-internal-api streamers.rs add_handler
+  - Test: POST /twitch/add_streamer (form-encoded, admin-Session) liefert 200/302 + legt twitch-streamer an, statt fallthrough-502
+- **P1.26** [P1|risk:low] Affiliate-Portal HTML-Seite /twitch/affiliate/portal nativ servieren
+  - Ziel: tb-dashboard-api/src/lib.rs: Route GET /twitch/affiliate/portal serviert Portal-index.html (FileResponse-Aequivalent, analog spa/admin_spa-Serving); ggf. neuer static-serve-Handler; JSON-API /twitch/api/v2/affiliate/portal bleibt unveraendert
+  - Test: Test: GET /twitch/affiliate/portal liefert 200 + HTML (text/html) ohne Python-Fallback; nicht 404/502
+- **P1.27** [P1|risk:low] Overview-Summary: streamCount-Key fuer 'Total Streams'-Tile ergaenzen
+  - Ziel: tb-dashboard-api/src/handlers/overview.rs:318-319/622: zusaetzlich streamCount im OverviewSummary emittieren (alias zu total_sessions/session_count); Test bei overview.rs:857 erweitern
+  - Test: Test: /overview-JSON enthaelt summary.streamCount == session_count (zusaetzlich zu totalSessions)
+- **P1.28** [P1|TEXT|risk:low] Demo AI-Analysis/History an Produktions-Schema (points/dataSnapshot/counts) angleichen
+  - Ziel: tb-dashboard-api/src/handlers/demo.rs:187-218: demo_ai_analysis liefert {id,streamer,days,gameFilter,model,generatedAt,points[],dataSnapshot}; demo_ai_history liefert entries mit generatedAt/points/kritischCount/hochCount/mittelCount; game_filter=deadlock-Branch ergaenzen — Shape von ai_analysis.rs:222-233 / ai_history.rs:106-111 spiegeln
+  - Test: Test: demo_ai_analysis-JSON hat Keys points,dataSnapshot,generatedAt,gameFilter (nicht summary/sections/createdAt) und matcht das Prod-ai_analysis-Schema
+- **P1.29** [P1|security-hardening|risk:low] Admin OAuth-Scopes-Overview-Endpoint GET /system/oauth-scopes portieren
+  - Ziel: tb-dashboard-api/src/lib.rs build_admin_system_router (493-515): Route GET /twitch/api/admin/system/oauth-scopes + neuer Handler, der requiredScopes/criticalScopes/labels/summary{totalAuthorized,fullScopeCount,missingScopeCount}/items[] aus tb-analytics/src/admin_streamers.rs (granted/missing_scopes) aggregiert; missing-schema empty fallback
+  - Test: Test: GET /system/oauth-scopes liefert summary mit totalAuthorized/fullScopeCount/missingScopeCount und items[] mit per-Streamer scope-status; missing-schema -> leere items statt 500
+- **P1.31** [P1|clean-SQL,security-hardening|risk:medium] Admin DB-Roadmap CRUD (POST/PATCH/DELETE /twitch/api/v2/roadmap) portieren
+  - Ziel: tb-dashboard-api/src/handlers/roadmap.rs: create (INSERT...RETURNING 201), update (dynamisches partielles UPDATE + status-Whitelist + updated_at=now, 200/404), delete (DELETE 204); lib.rs:63 .post()/.patch()/.delete() registrieren statt nur get(); _ensure-Tabellenanlage auf Schreibpfad
+  - Test: Test: POST /twitch/api/v2/roadmap legt Item an (201, RETURNING id); PATCH aendert status nur aus Whitelist; DELETE liefert 204 — alles nativ ohne Python-Proxy
+- **P1.32** [P1|security-hardening|risk:high] Changelog-POST: Same-Origin-CSRF statt X-CSRF-Token-Header (Browser-Admin 403)
+  - Ziel: tb-dashboard-api/src/auth/csrf.rs:59-105 + lib.rs:489: fuer den internal-home-changelog-Pfad Same-Origin (Origin/Referer)-Pruefung ergaenzen ODER echtes CSRF-Token liefern (auth_status.rs:153-275 statt csrfToken:null); internal_home.rs:1991-2092 changelog_handler; Localhost-Bypass beibehalten
+  - Test: Test: Browser-aequivalenter POST mit same-origin Origin/Referer-Header und gueltiger Session aber ohne X-CSRF-Token -> 200 (nicht 403 csrf_failed); cross-origin -> 403
+- **P1.33** [P1|clean-SQL|risk:medium] Raid-Metrik-Queries: NULL-Login-Chatter (anonym) nicht mehr ausschliessen
+  - Ziel: tb-dashboard-api/src/handlers/raid_analytics.rs:90,130,135,170,175: Filter umstellen auf (chatter_login IS NULL OR chatter_login='' OR LOWER(chatter_login) <> ALL($2)) fuer sc/cr.chatter_login — analog watch_time.rs:125,180,193
+  - Test: Test: Session-Chatter mit chatter_id aber NULL chatter_login wird in chattersAt30m/newChatters mitgezaehlt (Ergebnis nicht um 1 niedriger als bei chatter_login='')
+- **P1.34** [P1|risk:low] Admin Streamer-Detail sessions[]-JSON-Keys an Frontend angleichen
+  - Ziel: tb-dashboard-api/src/handlers/admin_streamers.rs:122-134/315-328 (StreamerSession): Keys auf sessionId/title/category/averageViewers/watchTimeHours (gerundete Stunden) umstellen bzw. zusaetzlich emittieren; startedAt/endedAt/peakViewers/followerDelta bleiben
+  - Test: Test: GET /twitch/api/admin/streamers/{login} sessions[]-Objekt traegt sessionId/title/category/averageViewers/watchTimeHours (nicht id/streamTitle/gameName/durationSeconds)
+- **P1.35** [P1|clean-SQL|risk:high] Performance/Heatmap/Tag-SQL: timestamptz-Bind gegen TEXT-Spalten -> 500
+  - Ziel: rust/migrations: started_at/ended_at/ts_utc in twitch_stream_sessions/twitch_stats_tracked/twitch_stats_category auf TIMESTAMPTZ konvertieren; tb-dashboard-api/src/handlers/performance.rs:78,105/154,178/221,241/278,297 + tag_analysis.rs:117,139,168,188,201 Binds bestaetigen; Test-Fixtures an Migration angleichen
+  - Test: Test gegen frisch-migrierte DB: monthly-stats/hourly-heatmap/calendar-heatmap/tag-analysis-extended liefern 200 (kein 'operator does not exist: text >= timestamp with time zone')
+- **P1.36** [P1|clean-SQL|risk:medium] Viewer-Segments Cross-Channel: Home-Streamer-Kanal aus Exklusivitaet ausschliessen
+  - Ziel: tb-dashboard-api/src/handlers/viewers.rs:1063-1083: Home-Streamer-Login in die Exklusionsliste fuer sc.streamer_login (!= ALL) aufnehmen (analog shared-channels-Query 1095-1100 / Directory 434), sodass COUNT(DISTINCT streamer_login) den Home-Kanal ausschliesst
+  - Test: Test: Streamer mit Viewern, die nur in seinem Kanal chatten -> exclusiveViewersPct == 100% und avgOtherChannels == 0 (nicht <100% / >0)
+- **P1.46** [P1|risk:medium] Native remove / add_url / add_login / add_any streamer endpoints
+  - Ziel: crates/tb-dashboard-api/src/lib.rs router + neue handler fuer /twitch/remove, /twitch/add_url, /twitch/add_login, /twitch/add_any
+  - Test: POST /twitch/remove (admin) deaktiviert Partner nativ; add_url/add_login/add_any liefern 200/302 statt 502
+  - Abhängt von: P0.1
+- **P1.37** [P1|security-hardening|risk:medium] abbo_cancel: POST-only Guard (kein Stripe-Cancel auf GET)
+  - Ziel: crates/tb-dashboard-api/src/handlers/billing_page.rs cancel_handler + lib.rs:786-789 Route (.get(...).post(...) auf POST-only reduzieren bzw. Method-Guard)
+  - Test: GET /twitch/abbo/kuendigen (auth) redirectet zu cancel=post_required und ruft KEIN cancel_subscription_at_period_end
+- **P1.38** [P1|security-hardening|risk:medium] abbo_cancel: CSRF-Schutz im cancel_handler
+  - Ziel: crates/tb-dashboard-api/src/handlers/billing_page.rs cancel_handler (verify_form_csrf wie billing_profile.rs:56-58) oder csrf_protect-Layer auf build_billing_page_router
+  - Test: POST /twitch/abbo/kuendigen ohne gueltiges X-CSRF-Token -> 403 csrf_failed; mit Token -> cancel ausgefuehrt
+  - Abhängt von: P1.37
+- **P1.39** [P1|security-hardening,Infisical|risk:high] forward_auth: Admin-Session IP-Binding + Fingerprint + fp_pending re-instate (modernisiert)
+  - Ziel: crates/tb-dashboard-api/src/handlers/forward_auth.rs validate_admin_session (B3-10) + auth/level.rs Admin-Resolution + Fingerprint-Capture
+  - Test: Admin-Cookie von anderer IP/Fingerprint replayed -> GET /twitch/auth/validate liefert 401 statt 200; fp_pending-Session -> 401
+  - Abhängt von: P1.53, P1.54
+- **P1.44** [P1|TEXT|risk:low] POST /twitch/api/billing/checkout-preview Endpoint
+  - Ziel: crates/tb-dashboard-api/src/lib.rs build_billing_page_router + neuer preview_handler (Plan-Validierung, total_cents/readiness/price_id-Gating, next_steps)
+  - Test: POST /twitch/api/billing/checkout-preview mit gueltiger plan_id -> 200 readiness/next_steps; unbekannte plan_id -> 404 unknown_plan_id
+- **P1.45** [P1|security-hardening|risk:medium] trial/start CSRF-Header: Partner-Frontend muss X-CSRF-Token senden (Prod-403 fix)
+  - Ziel: Frontend bot/dashboard_v2/src/components/pricing/PricingHero.tsx (X-CSRF-Token anhaengen) + auth-status echten csrfToken liefern (auth/csrf.rs / auth-status handler)
+  - Test: Non-localhost Partner-POST /twitch/api/billing/trial/start mit aus auth-status bezogenem Token -> 200 statt 403 csrf_failed
+  - Abhängt von: P1.38
+- **P1.51** [P1|risk:medium] Dashboard-Route GET /twitch/raid/auth (raid_auth_start) nativ
+  - Ziel: crates/tb-dashboard-api/src/lib.rs neue GET /twitch/raid/auth-Route + handler (Session-own-login, admin-token-override, public website_onboarding-Branch, 302 zu Twitch), generate_auth_url
+  - Test: GET /twitch/raid/auth?login=earlysalty (eigene Session) -> 302 zu Twitch authorize-URL; fremder login ohne admin-token -> _require_token; ohne Fallback kein 404
+- **P1.52** [P1|TEXT|risk:medium] Dashboard-Route GET /twitch/raid/go (Short-Redirect fuer Discord-Buttons) nativ
+  - Ziel: crates/tb-dashboard-api/src/lib.rs neue GET /twitch/raid/go-Route + handler (State -> OAuth-URL, 302; 400 missing-state; 410 abgelaufen)
+  - Test: GET /twitch/raid/go?state=<gueltig> -> 302 zu Twitch; abgelaufener State -> 410 deutsche 'Link abgelaufen'-Seite
+  - Abhängt von: P1.51
+- **P1.53** [P1|security-hardening|risk:medium] Partner-Login setzt korrektes durable Partner-Access-Cookie (twitch_dash_session_partner)
+  - Ziel: crates/tb-dashboard-api/src/handlers/partner_login.rs login_handler (PARTNER_ACCESS_COOKIE_NAME/SESSION_TYPE statt PARTNER_COOKIE_NAME; create_partner_access_session statt create_partner_session)
+  - Test: POST /twitch/auth/partner/login (gueltiger Token) -> Set-Cookie twitch_dash_session_partner + dashboard_sessions-Row session_type='partner_token'
+- **P1.54** [P1|security-hardening,Infisical|risk:medium] Durable, device-gebundene Partner-Access-Session (PartnerAccessBinding) schreiben
+  - Ziel: crates/tb-dashboard-api/src/handlers/partner_login.rs + auth/session.rs: create_partner_access_session/save_partner_access_session mit RequestFingerprint::capture (UA/Platform), korrekte Expiry/SameSite
+  - Test: Partner-Login schreibt session_type='partner_token'-Row mit fingerprint-Binding; Replay mit anderem Fingerprint -> load_partner_access_session lehnt ab
+  - Abhängt von: P1.53
+- **P1.56** [P1|clean-SQL|risk:medium] OAuth-Login reaktiviert departnered/archived/paused Partner (self-heal)
+  - Ziel: crates/tb-dashboard-api/src/handlers/auth_login.rs (Callback nach find_partner_for_login, vor create_partner_session) + reactivate_partner in partner_registry (status->active, opt_out/token_error/raid-flags clearen, blocked/bot_banned skip); clean-SQL TIMESTAMPTZ
+  - Test: twitch_partners status='departnered' -> OAuth-Login -> Row status='active', manual_partner_opt_out/token_error geklaert; status='blocked' bleibt unveraendert
+- **P2.66** [P2|risk:low] /social-media-admin SPA shell route missing natively
+  - Ziel: tb-dashboard-api/src/lib.rs: GET /social-media-admin + /social-media-admin/{path} -> dashboard_v2 SPA-Bundle mit host-gate+auth (analog _serve_social_media_admin)
+  - Test: GET /social-media-admin with admin auth and Python 8765 down returns the dashboard_v2 SPA HTML (200), not 502
+- **P2.67** [P2|risk:low] Public-website (/streamer) + legacy (/website) serving and redirects not ported
+  - Ziel: tb-dashboard-api: native /streamer + /streamer/{path} (dir->index.html, ServeDir website/dist) + /website + /website/{path} 301 -> /streamer
+  - Test: GET /streamer/ serves website index (200) and GET /website/foo returns 301 to /streamer/foo with Python 8765 down
+- **P2.72** [P2|risk:low] Public demo endpoints monthly/weekly/heatmap/calendar/chat-analytics have no Rust port
+  - Ziel: tb-dashboard-api/src/handlers/demo.rs build_demo_router: 5 Routen /twitch/demo/api/v2/{monthly-stats,weekly-stats,hourly-heatmap,calendar-heatmap,chat-analytics} mit schlanken Fixtures
+  - Test: GET /twitch/demo/api/v2/monthly-stats (and the 4 others) returns 200 lean fixture JSON
+- **P2.73** [P2|risk:low] ~30 demo fixture endpoints dropped (most demo tiles 404)
+  - Ziel: tb-dashboard-api/src/handlers/demo.rs build_demo_router: additive lean Fixture-Routen fuer monetization/category-leaderboard/coaching/viewer-*/follower-funnel/exp-* etc.
+  - Test: GET /twitch/demo/api/v2/monetization (and coaching, chat-analytics) returns 200 lean fixture instead of 404
+  - Abhängt von: P2.72
+- **P2.74** [P2|clean-SQL|risk:medium] GET /system/oauth-scopes admin scope-audit not ported (scope-diff panel dead)
+  - Ziel: tb-dashboard-api build_admin_system_router: GET /twitch/api/admin/system/oauth-scopes -> Loader analog _load_admin_oauth_scope_rows (auth_rows + ranked_auth_matches ueber twitch_raid_auth)
+  - Test: GET /system/oauth-scopes with admin token returns JSON scope-diff payload (effective_login/scopes/needs_reauth/status) instead of 404/502
+- **P2.77** [P2|security-hardening,clean-SQL|risk:medium] Admin SQL console (GET /system/query) + oauth-scopes not ported
+  - Ziel: tb-dashboard-api build_admin_system_router: GET /system/query (SELECT-only guard, forbidden-keyword blocklist, fetch LIMIT 200, {columns,rows,rowCount})
+  - Test: GET /system/query?sql=SELECT 1 with admin token returns {columns,rows,rowCount}; a non-SELECT/forbidden keyword is rejected
+- **P2.78** [P2|clean-SQL|risk:medium] system/eventsub returns placeholder live-status (inactive, 0 capacity) + drops fields
+  - Ziel: tb-dashboard-api/src/handlers/system/eventsub.rs + tb-analytics/src/system_eventsub.rs: live capacity-overview (used/total/headroom slots, transports), websocketSessionId/transportMode/raw + per-item snapshotAt
+  - Test: GET /system/eventsub with live subscriptions returns websocketStatus!='inactive' and capacity max/remaining > 0
+- **P2.79** [P2|risk:medium] system/health drops analytics-db-fingerprint mismatch warnings
+  - Ziel: tb-dashboard-api/src/handlers/system/health.rs: upstream-Fingerprint von tb-internal-api fetchen, mit eigenem vergleichen, Felder analyticsDbFingerprint/internalAnalyticsDbFingerprint/analyticsDbFingerprintMismatch + serviceWarnings codes emittieren
+  - Test: dashboard+bot at different analytics DBs -> GET /system/health emits analyticsDbFingerprintMismatch + analytics_db_fingerprint_mismatch serviceWarning
+- **P2.80** [P2|risk:low] Default admin streamers view changed from 'active' to 'all'
+  - Ziel: tb-dashboard-api/src/handlers/admin_streamers.rs list_handler: view-Default 'all' -> 'active'; StreamerView::parse None/empty -> Active branch in tb-analytics/src/admin_streamers.rs:126-138
+  - Test: GET /twitch/api/admin/streamers without ?view= returns view='active' and only active partners
+- **P2.81** [P2|security-hardening,clean-SQL|risk:medium] Admin readonly SQL console (GET /admin/system/query) not ported
+  - Ziel: siehe P2.77 - tb-dashboard-api build_admin_system_router GET /system/query mit SELECT-only guard + Keyword-Blocklist
+  - Test: GET /twitch/api/admin/system/query?sql=SELECT 1 returns JSON {columns,rows,rowCount}
+  - Abhängt von: P2.77
+- **P2.85** [P2|risk:medium] _require_v2_auth access-denied JSON payloads not reproduced (error contract divergence)
+  - Ziel: tb-dashboard-api auth/mod.rs extended_gate + auth/partner_gate.rs + spa.rs: bei /twitch/api/* denial 403 JSON mit error=account_blocked|dashboard_access_restricted + redirectUrl/partnerStatus/technicalPauseReason/operationalState/tokenErrorGraceExpiresAt (aus AccessState in partner_access.rs)
+  - Test: blocked/departnered partner hitting a /twitch/api/v2/* endpoint gets 403 JSON with error=account_blocked + redirectUrl + technicalPauseReason
+- **P2.86** [P2|security-hardening|risk:low] Per-endpoint rate limiting (429+Retry-After) dropped on internal-home GET + changelog POST
+  - Ziel: tb-dashboard-api/src/handlers/internal_home.rs get_handler + changelog_handler: Rate-Limiter (auth/security.rs RateLimiter wiederverwenden) -> 429 {error:rate_limit_exceeded} + Retry-After
+  - Test: hammering GET /twitch/api/v2/internal-home past the window returns 429 with Retry-After
+- **P2.101** [P2|risk:medium] Dashboard title suggest must pass rank_display + live_state to generate_title
+  - Ziel: tb-dashboard-api/src/handlers/title.rs:180-189 suggest_handler — resolve discord_user_id, fetch rank_display + live_state, pass to generate_title (mirror tb-chat/commands.rs:632-666)
+  - Test: POST dashboard title suggest for a streamer with a linked rank; assert generate_title received a non-None rank_display
+- **P2.102** [P2|risk:low] include_live flag must actually fetch live_state (not just echo live_context_used)
+  - Ziel: tb-dashboard-api/src/handlers/title.rs:30-31,187,196 — gate live_state fetch on include_live and stop echoing a false live_context_used
+  - Test: POST suggest with include_live:true for a live streamer; assert a live_state fetch happens and live_context_used only true when context applied
+  - Abhängt von: P2.101
+- **P2.103** [P2|TEXT|risk:low] Stripe checkout AGB/§356-Widerrufsrecht custom_text not set
+  - Ziel: tb-dashboard-api/src/handlers/billing_page.rs:198-230 session_payload — add custom_text.terms_of_service_acceptance.message
+  - Test: Build a checkout session for a paid plan; assert session_payload contains custom_text.terms_of_service_acceptance.message with the AGB/§356 text
+- **P2.104** [P2|TEXT|clean-SQL|risk:medium] Market Research dashboard route group (/twitch/market, /api/market_data, /api/v2/market-share) native port
+  - Ziel: new tb-dashboard-api/src/handlers/market.rs + register /twitch/market, /twitch/api/market_data, /twitch/api/v2/market-share in lib.rs
+  - Test: With fallback proxy unset, GET /twitch/market returns 200 from a native handler (not 404)
+- **P2.105** [P2|clean-SQL|risk:high] api_market_data aggregation (monitored channels, chat-health, lurker ratio, 24h history, sentiment, overlap)
+  - Ziel: tb-dashboard-api/src/handlers/market.rs api_market_data — reimplement aggregation over twitch_chat_messages/twitch_live_state/twitch_stats_category/twitch_session_chatters + sentiment + overlap self-join
+  - Test: GET /twitch/api/market_data returns the full payload shape (total_monitored, total_viewers, market_history, questions, meta_snapshot, sentiment, overlap, channels)
+  - Abhängt von: P2.104
+- **P2.106** [P2|risk:low] api_market_share dashboard proxy wrapper (admin gate, 503/502 envelopes, status passthrough)
+  - Ziel: tb-dashboard-api/src/handlers/market.rs api_market_share — proxy/admin-gate to tb-internal-api market_share_handler
+  - Test: GET /twitch/api/v2/market-share without internal token returns 503 internal_token_missing; with token returns admin-gated JSON
+  - Abhängt von: P2.104
+- **P2.108** [P2|security-hardening|risk:low] Global default security headers (X-Frame-Options/nosniff/Referrer-Policy/COOP/XSS)
+  - Ziel: tb-dashboard-api/src/lib.rs:820-837 build_router — add SetResponseHeaderLayer for the header bundle on all responses
+  - Test: curl -I a non-demo route on the dashboard; assert X-Frame-Options/X-Content-Type-Options/Referrer-Policy/COOP present
+- **P2.109** [P2|TEXT|risk:low] Lurker-tax readiness warning (moderator:read:chatters scope check) in settings API
+  - Ziel: tb-dashboard-api/src/handlers/lurker_tax_settings.rs:77-98 get_handler — add has_moderator_read_chatters readiness field (read twitch_raid_auth.scopes)
+  - Test: GET lurker-tax-settings for a channel missing moderator:read:chatters; assert readiness/scope-missing field is present and false
+- **P2.112** [P2|security-hardening|risk:medium] Admin Discord-profile write (POST /twitch/discord_link form, member_flag override)
+  - Ziel: tb-dashboard-api: register POST /twitch/discord_link (build_admin_legacy_forms_router) → call tb-internal-api discord_profile_handler (member_flag, discord_user_id, display_name)
+  - Test: POST /twitch/discord_link with member_flag+discord_user_id persists discord_user_id/display_name and toggles member flag (native, no proxy)
+- **P2.115** [P2|TEXT|risk:medium] DACH Market Research HTML page (GET /twitch/market)
+  - Ziel: tb-dashboard-api/src/handlers/market.rs market_research page render
+  - Test: GET /twitch/market returns rendered Market Research page natively
+  - Abhängt von: P2.104
+- **P2.116** [P2|clean-SQL|risk:high] Backing data endpoint /twitch/api/market_data (page data source)
+  - Ziel: tb-dashboard-api/src/handlers/market.rs api_market_data
+  - Test: GET /twitch/api/market_data returns valid JSON (not 502/404)
+  - Abhängt von: P2.105
+- **P2.118** [P2|risk:medium] Raid web pages + Discord-admin login/complete/logout + /callback/discord
+  - Ziel: tb-dashboard-api: register native /twitch/raid/{history,analytics,requirements,auth,go} handlers; discord-admin login deferred to B3-10
+  - Test: GET /twitch/raid/history returns a native page (not 502) with fallback proxy unset
+  - Abhängt von: P2.130
+- **P2.120** [P2|security-hardening|risk:medium] admin_partner_chat_action (owner-only live chat/announcement to partner channels)
+  - Ziel: tb-dashboard-api: native POST /twitch/admin/chat_action → ChatActionAdapter (chat_wiring.rs) with mode/color/450-cap + archived/opt_out gating + owner gate
+  - Test: Admin chat_action to an archived partner is rejected; valid send to active partner succeeds via native route
+- **P2.121** [P2|risk:medium] discord_link admin _discord_profile form-POST (duplicate of P2.112)
+  - Ziel: tb-dashboard-api: native POST /twitch/discord_link (see P2.112)
+  - Test: Admin SPA Discord-profile save hits a native route and persists discord_user_id/display_name
+  - Abhängt von: P2.112
+- **P2.124** [P2|security-hardening|risk:low] Leaderboard endpoint leaks Discord IDs to any partner (missing localhost/admin gate)
+  - Ziel: tb-dashboard-api/src/handlers/leaderboard.rs:71,248-250 — gate discord_user_id/discord_display_name serialization behind auth.is_privileged()
+  - Test: Partner-session GET /twitch/api/v2/leaderboard returns null discord_user_id for other streamers; admin/localhost sees them
+- **P2.129** [P2|risk:medium] Admin manual-plan set/clear refreshes partner raid score cache
+  - Ziel: tb-dashboard-api/src/handlers/admin_manual_plan.rs set_manual_plan/clear_manual_plan — invoke raid score refresh after the UPDATE
+  - Test: Admin sets a raid_boost manual plan for an offline streamer; assert raid_boost_multiplier recomputes immediately
+  - Abhängt von: P2.127
+- **P2.130** [P2|clean-SQL|risk:medium] Native raid history/analytics/auth-start pages + remove stale dead nav links
+  - Ziel: tb-dashboard-api: native raid history/analytics endpoints incl. partner send/receive balance + leecher + manual-raid views; fix internal_home.rs:413-414 links
+  - Test: GET internal-home links.raid_history resolves to a 200 native endpoint; analytics payload includes partner-balance/leecher fields
+- **P2.131** [P2|risk:medium] Partner-Access session_type string mismatch (partner_access vs partner_token)
+  - Ziel: tb-dashboard-api/src/auth/session.rs:234 PARTNER_ACCESS_SESSION_TYPE — align constant / add migration after confirming live row values
+  - Test: After alignment, a partner_access row persisted by the old runtime is loaded by the Rust loader
+  - Hinweis: NEEDS_USER aufgelöst → PORT (User-Bias „lieber zu viel portieren").
+- **P2.133** [P2|security-hardening|risk:low] Rate limiting on partner auth link/login routes
+  - Ziel: tb-dashboard-api/src/lib.rs:666-673 build_partner_login_router — apply auth::security::RateLimiter to link (10/60s) and login (20/60s)
+  - Test: >20 POSTs/60s to /twitch/auth/partner/login return 429
+- **P2.134** [P2|security-hardening|risk:low] admin_session same-origin guard on partner link issuance
+  - Ziel: tb-dashboard-api/src/handlers/partner_login.rs:82-91 link_handler — add Origin/Referer same-origin (or CSRF-token) check for admin_session callers
+  - Test: Cross-origin POST /twitch/auth/partner/link with admin cookie returns 403
+- **P2.136** [P2|security-hardening|risk:low] Rate limiting + same-origin on partner link/login (duplicate of P2.133/P2.134)
+  - Ziel: tb-dashboard-api/src/handlers/partner_login.rs + lib.rs (see P2.133/P2.134)
+  - Test: Combined: unthrottled login flood and cross-origin link both blocked
+  - Abhängt von: P2.133, P2.134
+- **P2.137** [P2|security-hardening,Infisical|risk:low] TWITCH_DASHBOARD_AUTH_REDIRECT_URI validation (_build_oauth_redirect_uri)
+  - Ziel: tb-dashboard-api/src/handlers/auth_login.rs:596 oauth_login_config_from_env — validate scheme/host/userinfo/path, reject /twitch/raid/callback, whitelist callback paths
+  - Test: Set redirect_uri to http://evil/twitch/raid/callback; assert native login is disabled/warns instead of building the authorize URL
+- **P2.138** [P2|security-hardening|risk:low] Rate limit on auth_login OAuth start (state-row flooding)
+  - Ziel: tb-dashboard-api/src/handlers/auth_login.rs login_handler + lib.rs:650 route — apply RateLimiter (30/60s)
+  - Test: >30 GET /twitch/auth/login in 60s returns 429
+  - Abhängt von: P2.138
+- **P2.139** [P2|security-hardening|risk:medium] OAuth context-token cookie CSRF binding in callback
+  - Ziel: tb-dashboard-api/src/handlers/auth_login.rs login_handler (set context cookie) + callback_handler_inner (validate) + session.rs OAuthLoginState (carry context_token)
+  - Test: Open callback URL in a cookieless browser; assert 400 instead of completed login
+- **P2.140** [P2|security-hardening|risk:low] Rate-limiting on OAuth callback / login / discord-link routes
+  - Ziel: tb-dashboard-api/src/lib.rs:648-655 build_auth_router + discord_link.rs routes — apply RateLimiter
+  - Test: >10 GET /twitch/auth/discord/link in 60s from one IP returns 429
+  - Abhängt von: P2.138
+- **P3.15** [P3|risk:low] Network endpoint: no lowercase/strip login nor skip empty logins
+  - Ziel: tb-dashboard-api/src/handlers/network.rs:20-29 From<NetworkStreamerRow>: login = twitch_login.trim().to_lowercase(); leere logins ueberspringen
+  - Test: partner row with mixed-case/empty twitch_login -> /public/network output lowercased and empty login dropped
+- **P3.16** [P3|risk:low] Demo multi-profile system collapsed to single hardcoded profile + inconsistent streamers list
+  - Ziel: tb-dashboard-api/src/handlers/demo.rs:130-136: demo_streamers an allowedDemoProfiles angleichen (nur midcore_live), oder ?streamer + Profile lean ergaenzen
+  - Test: GET /twitch/demo/api/v2/streamers login list is consistent with allowedDemoProfiles (no unsupported smallquest_tv leak)
+- **P3.17** [P3|risk:low] Raw-chat lag warning threshold lowered from 900s to 120s
+  - Ziel: tb-dashboard-api/src/handlers/system/health.rs:71-81: lag>120 ggf. zurueck auf lag_seconds>=900 (oder bewusste neue Schwelle dokumentieren)
+  - Test: raw-chat lag of ~3min on live-scope channel does NOT raise RAW_CHAT_LAG (warning only at >=900s) once aligned
+  - Hinweis: NEEDS_USER aufgelöst → PORT (User-Bias „lieber zu viel portieren").
+- **P3.18** [P3|security-hardening,Infisical|risk:medium] X-Admin-Token header auth path dropped in DashboardAuthLevel cascade
+  - Ziel: tb-dashboard-api/src/auth/level.rs:214-277: optional X-Admin-Token-Branch (secrets-compare-digest gegen Infisical-Token) im DashboardAuthLevel-Cascade - nur falls Prod-Consumer bestaetigt
+  - Test: request to /twitch/api/v2/auth-status from non-loopback with only X-Admin-Token returns admin (if path restored)
+  - Hinweis: NEEDS_USER aufgelöst → PORT (User-Bias „lieber zu viel portieren").
+- **P3.20** [P3|risk:low] Detail settings object drops manualPartnerOptOut
+  - Ziel: tb-dashboard-api/src/handlers/admin_streamers.rs:138-162 StreamerSettings + detail-Handler (387-411): manualPartnerOptOut: bool(manual_partner_opt_out) ins settings-Objekt
+  - Test: GET /admin/streamers/{login} for manual_partner_opt_out=1 -> settings.manualPartnerOptOut=true
+- **P3.21** [P3|risk:low] List 'archived' flag true for empty-string archived_at (list vs detail inconsistency)
+  - Ziel: tb-dashboard-api/src/handlers/admin_streamers.rs:238: archived = r.archived_at.is_some_and(|s| !s.trim().is_empty()) (wie detail :342-345)
+  - Test: row with archived_at='' -> list archived=false (consistent with detail and partner_status)
+- **P3.22** [P3|clean-SQL|risk:medium] Runtime chat/raid bot logins not excluded in viewer analytics
+  - Ziel: tb-dashboard-api/src/handlers/viewers.rs:34-41 viewer_exclusion_logins + detail-Gate :634: konfigurierte chat/raid-bot-logins (aus DB/State) in die NOT IN-Klausel + 404-Gate aufnehmen
+  - Test: streamer whose configured bot login is not in static KNOWN_CHAT_BOTS -> excluded from viewer-directory/segments and viewer-detail returns 404
+- **P2.125** [P3|risk:low] Catalog 'payment' section drops integration_state/checkout_enabled/checkout_preview_*/quickstart_url/supported_methods_planned
+  - Ziel: tb-dashboard-api/src/handlers/billing_page.rs:435-443 catalog_handler payment block + tb-analytics catalog.rs:452 — emit the missing payment keys
+  - Test: GET /twitch/api/billing/catalog; assert payment object includes integration_state, checkout_enabled, supported_methods_planned, quickstart_url
+- **P3.27** [P3|risk:low] Existing-session short-circuit on /partner/login (re-login mints new session)
+  - Ziel: tb-dashboard-api/src/handlers/partner_login.rs:135-216 login_handler — short-circuit redirect if an admin/partner/partner-access session already exists
+  - Test: While logged in, consume a fresh partner link; assert plain 303 redirect with no new Set-Cookie/session row
+
+### tb-chat (26: P1×5, P2×19, P3×2)
+
+- **P1.1** [P1|clean-SQL|risk:medium] channel_settings-Drop schreibt Outbound-Suppression (7d/3d)
+  - Ziel: rust/crates/tb-chat/src/moderation.rs (SendOutcome::Dropped{code:'channel_settings'}-Pfad -> OutboundSuppressionStore::upsert_suppression mit 7d promo/recruitment, 3d partner_raid); Verdrahtung in timeout_tracking.rs send_message + promos.rs Drop-Auswertung
+  - Test: Nach channel_settings-Drop eines Promo-Sends existiert eine Zeile in twitch_outbound_chat_suppressions mit suppressed_until=now+7d und is_muted() liefert true
+- **P1.3** [P1|TEXT|risk:medium] Fake-/Scam-Server-Warnung (SCAM_WARNING_*) im Promo-Pfad
+  - Ziel: rust/crates/tb-chat/src/promos.rs (Scam-Warning-Branch in build_promo_text/send_promo_message, 120min-Cooldown, Seed-Backdating, orange Announcement source='scam_warning') + Konstanten/Texte
+  - Test: Bei reason=promo/chat_activity und abgelaufenem Scam-Cooldown wird eine orange Announcement mit der Fake-Server-Warnung gesendet und der Cooldown persistiert
+- **P1.4** [P1|risk:low] Lurker-Tax Bot-Token-Scope-Fallback (bot-zentriert)
+  - Ziel: rust/crates/tb-chat/src/promos.rs:1250-1266 (has_chatters_scope = Streamer-Scope ODER zentraler Bot-Token-Scope); PromoEngine BotTokenManager-Handle ergänzen
+  - Test: Streamer ohne moderator:read:chatters in twitch_raid_auth, aber Bot-Token trägt Scope -> Lurker-Tax-Gate liefert true
+- **P1.5** [P1|clean-SQL|risk:low] Lurker-Tax Known-Chat-Bot-Exklusion in Kandidaten-Query
+  - Ziel: rust/crates/tb-chat/src/promos.rs:1336-1368 get_lurker_tax_candidates (build_known_chat_bot_not_in_clause in historische CTE + Live-SELECT injizieren, KNOWN_CHAT_BOTS aus mention_scoring.rs nutzen)
+  - Test: Ein KNOWN_CHAT_BOTS-Login (nightbot) mit messages=0/seen_via_chatters_api erscheint NICHT in get_lurker_tax_candidates
+- **P1.6** [P1|Infisical,security-hardening|risk:low] oauth:-Prefix-Stripping im Bot-Token-Manager
+  - Ziel: rust/crates/tb-chat/src/token.rs (validate() :351, access_token() :265-280, refresh_with() :365-376, resolve_seed_tokens :75-94 -> 'oauth:' strippen + trim)
+  - Test: BotTokenManager mit access_token='oauth:abc' sendet Header 'OAuth abc' (Prefix entfernt) und Refresh-Form ohne Prefix
+- **P2.1** [P2|Infisical|risk:low] 25 TWITCH_SERVICE_WARNING_* Tuning-Env-Vars lesen
+  - Ziel: rust/crates/tb-chat/src/scam_pitch.rs:39-120 (consts -> from_env mit max(min,parsed)-Clamp für 25 Vars + Threshold-Ordering-Clamp 141-144)
+  - Test: Mit TWITCH_SERVICE_WARNING_MIN_SCORE=99 gesetzt nutzt der Detektor 99 statt des Default-Werts
+- **P2.2** [P2|TEXT|risk:low] Escalation-Timeout-Chatnachricht tatsächlich senden
+  - Ziel: rust/crates/tb-chat/src/pipeline.rs:486 (StrongTimeout-Arm: api.send_message(escalation_text) zusätzlich zu timeout_user + alerter.send)
+  - Test: Bei PitchDecision::StrongTimeout wird api.send_message mit dem Escalation-Text aufgerufen (nicht nur timeout_user)
+- **P2.3** [P2|clean-SQL|risk:medium] manual_partner_opt_out-Guard im Outbound-Sendepfad
+  - Ziel: rust/crates/tb-chat/src/moderation.rs (HelixChatClient::send_message/send_announcement bzw. ChatApi-Decorator: is_manual_partner_opt_out_for_chat als frühes return)
+  - Test: manual_partner_opt_out=1 -> send_message/send_announcement an diesen Kanal wird übersprungen (kein Helix-POST)
+  - Abhängt von: P2.5
+- **P2.4** [P2|risk:medium] Announcement-Fehler fällt auf Plain-Chat zurück
+  - Ziel: rust/crates/tb-chat/src/promos.rs:798-803/829-837/1473-1480 (bei sent=false und nicht-Opt-out/Suppression: self.api.send_message-Fallback)
+  - Test: send_announcement liefert false (Nicht-Opt-out-Fehler) -> send_message-Fallback mit demselben Text wird aufgerufen
+  - Abhängt von: P2.3
+- **P2.5** [P2|clean-SQL|risk:medium] Auto-Ban-Notice/Announcements respektieren Opt-out/Suppression
+  - Ziel: rust/crates/tb-chat/src/moderation.rs:112-176 (send_message/send_announcement: Opt-out + OutboundSuppressionStore::is_muted zentral prüfen) statt nur promos.rs
+  - Test: Bei aktiver Suppression/manual_partner_opt_out wird die Auto-Ban-Notice (silent=false) NICHT gesendet
+- **P2.8** [P2|MiniMax-only,minimax-ledger|risk:medium] MiniMax-Preset-Auswahl für Targeted-Promo verdrahten
+  - Ziel: rust/crates/tb-chat/src/promos.rs (MinimaxPresetPicker impl PresetPicker via EngagementMinimaxClient, 5s-Timeout, PRESET_MAP+Partial-Match, random Fallback) + chat_wiring.rs:516-524 set_preset_picker verdrahten
+  - Test: Mit >1 Preset und vorhandenen Snippets ruft pick_preset den MiniMax-Client und wählt das gematchte Preset; bei Timeout Fallback random
+- **P2.9** [P2|risk:low] Targeted-Promo respektiert Suppression/Opt-out
+  - Ziel: rust/crates/tb-chat/src/promos.rs:1396-1491 maybe_send_targeted_promo (vor send_message/send_announcement self.suppression.is_muted(login)-Gate ergänzen, wie send_promo_message:784)
+  - Test: Bei aktiver 'promo'-Suppression sendet maybe_send_targeted_promo NICHT
+  - Abhängt von: P2.5
+- **P2.12** [P2|risk:low] !invite Cooldown erst bei erfolgreichem Send verbrauchen
+  - Ziel: rust/crates/tb-chat/src/commands.rs:1263-1296 (cooldowns.insert NACH erfolgreichem invite_line/reply_plain statt davor)
+  - Test: !invite bei nicht-Deadlock-live (Ok(None)) setzt KEINEN Cooldown; späterer !invite live antwortet
+- **P2.13** [P2|risk:low] !invite koppelt _last_promo_sent (Doppel-Werbung verhindern)
+  - Ziel: rust/crates/tb-chat/src/commands.rs cmd_invite (PromoEngine-Handle bzw. Callback -> mark_promo_sent/last_promo_sent für channel_login bei erfolgreichem !invite)
+  - Test: Nach erfolgreichem !invite ist overall_promo_ready für den Kanal für die Cooldown-Dauer false
+- **P2.16** [P2|clean-SQL|risk:low] !uban Restart-Survival via tb_chat_autoban_log
+  - Ziel: rust/crates/tb-chat/src/moderation.rs:492-495 last_autoban (bei Map-Miss SELECT FROM tb_chat_autoban_log ORDER BY banned_at DESC LIMIT 1 + cachen) via EngineAutobanStore
+  - Test: Auto-Ban -> Map leeren (Restart-Simulation) -> last_autoban liefert den Eintrag aus tb_chat_autoban_log
+- **P2.17** [P2|TEXT|risk:low] !raid 'started'-Antwort nennt Zielkanal (target_login)
+  - Ziel: rust/crates/tb-chat/src/commands.rs:108-112/944-949 + chat_wiring.rs:992-1008 (RaidCommandPort liefert strukturiertes Ergebnis inkl. target_login; 'started'-Text einsetzen)
+  - Test: !raid 'started' mit target_login=foo erzeugt Reply '...Raid auf foo gestartet...'
+- **P2.18** [P2|risk:low] Lurker-Tax als orange Announcement + Opt-out/Suppression
+  - Ziel: rust/crates/tb-chat/src/promos.rs:1308-1315 (send_announcement orange + is_muted/Opt-out-Gate statt send_message), Fallback Plain-Chat nur bei fehlenden IDs/Token
+  - Test: Lurker-Tax-Send geht als orange Announcement raus; bei aktiver Suppression/Opt-out wird nichts gesendet
+  - Abhängt von: P2.5
+- **P2.19** [P2|clean-SQL|risk:low] Lurker-Tax Aggregation/Join via chatter_identity_key
+  - Ziel: rust/crates/tb-chat/src/promos.rs:1338-1364 (chatter_identity_key = 'id:'||chatter_id ELSE 'login:'||lower(login) in historischer GROUP BY, live_candidates und Final-JOIN)
+  - Test: Chatter mit stabilem chatter_id aber gewechseltem Login wird als EINE Identität aggregiert und als Kandidat selektiert
+- **P2.20** [P2|clean-SQL|risk:medium] New-Chatter-Gate berücksichtigt API-getrackte Session-Viewer
+  - Ziel: rust/crates/tb-chat/src/promos.rs:1025-1045 get_new_chatters_in_window_inner (Union aus chat-activity + DB-Query twitch_session_chatters JOIN twitch_live_state is_live=1)
+  - Test: Bei 2 stillen API-Session-Viewern (kein Chat) feuert nach erstem Promo der zweite Aktivitäts-Promo
+- **P2.21** [P2|clean-SQL|risk:low] _mark_streamer_invite_sent schreibt last_sent_at
+  - Ziel: rust/crates/tb-chat/src/promos.rs:959-961 mark_streamer_invite_sent (UPDATE twitch_streamer_invites SET last_sent_at=now WHERE streamer_login=norm) via Port
+  - Test: Nach is_specific-Invite-Promo ist twitch_streamer_invites.last_sent_at für den Streamer gesetzt (nicht NULL)
+- **P2.22** [P2|clean-SQL|risk:medium] Lurker-Tax eigene Live-Channel-Quelle (game-unabhängig)
+  - Ziel: rust/crates/tb-chat/src/promos.rs (eigene get_live_channels_for_lurker_tax: twitch_live_state WHERE is_live=1 AND active_session_id IS NOT NULL, KEIN game-/promo_disabled-Filter; separate Iteration statt get_live_channels_for_promo)
+  - Test: Lurker-Tax-Streamer live mit active_session_id aber last_game!='deadlock' erhält die Erinnerung
+  - Abhängt von: P2.23
+- **P2.23** [P2|risk:medium] Lurker-Tax nicht durch promo_blocked_by_plan_or_flag blocken
+  - Ziel: rust/crates/tb-chat/src/promos.rs:688-705 (Lurker-Tax aus der von promo_blocked_by_plan_or_flag gegateten Schleife herauslösen; eigene Channelquelle, vgl. P2.22)
+  - Test: Streamer mit lurker_tax_enabled=1 und promo_disabled=1 erhält Lurker-Tax, aber keinen regulären Promo
+- **P2.24** [P2|clean-SQL|risk:low] promo_channel_allowed-Gate vor Targeted-Promo
+  - Ziel: rust/crates/tb-chat/src/promos.rs:686-728 (promo_channel_allowed_db-Gate vor maybe_send_targeted_promo:726)
+  - Test: Kanal is_partner_active=1 + archived_at gesetzt erhält keinen Targeted-Promo
+- **P2.25** [P2|risk:low] Helix /users-Fallback für Bot-ID im Token-Manager
+  - Ziel: rust/crates/tb-chat/src/token.rs validate()/initialize() (bei fehlender user_id GET helix/users mit Client-ID+Bearer, bot_id/login aus data[0])
+  - Test: validate liefert 200 ohne user_id -> initialize() füllt bot_user_id über helix/users statt leer zu lassen
+- **P3.3** [P3|TEXT|risk:low] !raid OAuth-fehlt-Hinweis (has_enabled_auth-Gate)
+  - Ziel: rust/crates/tb-chat/src/commands.rs:915-933 cmd_raid (Pre-Check raid_enabled/has_enabled_auth -> klare 'Bot autorisieren'-Meldung ohne !raid_enable-Referenz)
+  - Test: Aktiver Partner mit raid_enabled=0, needs_reauth=0 -> !raid antwortet mit OAuth-Autorisieren-Hinweis statt 'Raid fehlgeschlagen: No valid token'
+- **P3.4** [P3|TEXT|risk:low] !engagement_on/off Permission-denied-Feedback
+  - Ziel: rust/crates/tb-chat/src/commands.rs:1316-1318/1357-1359 (auf !is_engagement_admin self.reply mit Ablehnungstext statt bare return)
+  - Test: Non-Mod !engagement_on -> Bot antwortet mit Berechtigungs-Ablehnung statt zu schweigen
+
+### tb-analytics (26: P1×3, P2×20, P3×3)
+
+- **P1.22** [P1|clean-SQL|risk:medium] Ad-Schedule-Snapshot-Writer + epoch->ISO/TIMESTAMPTZ-Normalisierung bauen
+  - Ziel: Neuer _collect_ads_schedule_for_user in tb-analytics/tb-monitoring: INSERT in twitch_ads_schedule_snapshot (9 Spalten) mit Zeit-Normalisierung (ms->s wenn >10e9, epoch->TIMESTAMPTZ, ts<=0 drop); tb-transport-twitch/src/streams.rs:421-440 deserialize_string_or_number bzw. nachgelagerte Normalisierung; Lese-Handler ads_schedule.rs:54 bleibt
+  - Test: Test: Helix-AdSchedule mit next_ad_at als ms-Epoch -> Writer schreibt next_ad_at als TIMESTAMPTZ (kein roher Zahlenstring), ts<=0 wird gedroppt
+- **P1.24** [P1|clean-SQL|risk:medium] compute_raid_retention stuendlicher Loop -> twitch_raid_retention befuellen
+  - Ziel: Neuer stuendlicher Loop in tb-analytics/tb-raid: 7-Tage-Raids laden, chatters_at_plus5m/15m/30m via count_chatters, known_from_raider, new_to_target, new_chatters berechnen, INSERT INTO twitch_raid_retention ON CONFLICT(raid_id,executed_at) DO NOTHING; Job in tb-bot/src/main.rs; Lese-Handler raid_analytics.rs:204-484 bleibt
+  - Test: Test: nach einem Raid mit bekannten Chattern liefert ein Loop-Tick genau eine twitch_raid_retention-Row mit korrekten plus5m/known_from_raider-Zaehlern; Re-Tick ist idempotent (ON CONFLICT)
+  - Abhängt von: P1.23
+- **P1.50** [P1|clean-SQL|risk:medium] checkout.session.completed: annual bonus_months Access-Grant
+  - Ziel: crates/tb-analytics/src/stripe/webhook_apply.rs apply_event Checkout-Branch (TODO affiliate 477-480) -> bonus_months lesen + manual_plan_expires_at = period_end + bonus*~31d UPDATE streamer_plans
+  - Test: Checkout-Event mit sub-metadata bonus_months=2 -> streamer_plans.manual_plan_expires_at = period_end + ~62 Tage statt nur period_end
+- **P2.63** [P2|clean-SQL|risk:medium] Subscriptions snapshot poller (twitch_subscriptions_snapshot never written)
+  - Ziel: neuer Subs-Snapshot-Poller in tb-analytics (6h-Loop) der get_broadcaster_subscriptions (tb-transport-twitch/src/streams.rs) nutzt und INSERT INTO twitch_subscriptions_snapshot schreibt
+  - Test: after a poll cycle for a live partner, twitch_subscriptions_snapshot gets a fresh row (twitch_user_id, total, points, snapshot_at)
+- **P2.65** [P2|clean-SQL|risk:high] Helix collect_chatters_data 30s loop (ALL streamers, silent lurkers) unported
+  - Ziel: 30s tasks-loop-Aequivalent in tb-analytics: SELECT live streamers (twitch_live_state is_live), per-streamer OAuth/Bot-Token, parallel get_chatters, persist twitch_session_chatters/_chatter_rollup/_viewer_presence_ticks seen_via_chatters_api=TRUE
+  - Test: with a live streamer + mocked Helix chatters, the 30s poller writes session_chatters rows with seen_via_chatters_api=TRUE for silent lurkers not in IRC
+  - Abhängt von: P2.64
+- **P2.70** [P2|minimax-ledger,MiniMax-only|risk:low] Post-Stream MiniMax calls not recorded in usage ledger
+  - Ziel: tb-analytics/src/post_stream.rs call_minimax (390-419): MinimaxResponse um usage erweitern + tb_llm::ledger::record(purpose='post-stream-report',...) fuer beide Call-Sites (494, 1858)
+  - Test: a post-stream report run inserts a minimax_usage row purpose='post-stream-report' with tokens_in/out
+- **P2.75** [P2|clean-SQL|risk:low] config/overview drops raids.history (last 50 raid events)
+  - Ziel: tb-analytics/src/admin_config.rs raid_snapshot() (108-118): history-Feld ergaenzen (twitch_raid_history ORDER BY executed_at DESC LIMIT 50); admin_config.rs Handler durchreichen
+  - Test: GET /twitch/api/admin/config/overview returns raids.history array (up to 50, fields streamer/target/viewers/executedAt/success/status)
+- **P2.76** [P2|clean-SQL|risk:low] raw_chat_health live-scope ordering inverted (ASC->DESC) hides lagging streamer
+  - Ziel: tb-analytics/src/system_health.rs:121-122: ORDER BY auf COALESCE(...signals...) ASC NULLS LAST LIMIT 1 (staelstes Signal) statt newest_signal_at DESC
+  - Test: two live streamers (one fresh, one stale signal) -> raw_chat_health returns the stale one (high lag) so RAW_CHAT_LAG can fire
+- **P2.82** [P2|clean-SQL|risk:low] Rust drops follower_delta bogus-reset guard in metrics + trend SUM
+  - Ziel: streamer_analytics_native.rs:196 (metrics) + :275 (trend): SUM(COALESCE(follower_delta,0)) ersetzen durch SUM(CASE WHEN follower_delta IS NOT NULL AND NOT (followers_end=0 AND followers_start>0) THEN follower_delta ELSE 0 END)
+  - Test: window with a session followers_start>0 & followers_end=0 -> total_followers_delta excludes the negative glitch delta (matches Python)
+- **P2.84** [P2|clean-SQL|risk:low] GET /streamers dropdown drops 90-day non-partner streamers + isPartner always true
+  - Ziel: tb-analytics/src/streamers.rs:13-32 active_streamers: UNION recent_logins (twitch_stream_sessions started_at >= NOW()-90d); tb-dashboard-api/src/handlers/streamers.rs:22-30 is_partner aus partner_logins-Membership statt hardcoded true
+  - Test: recent (<90d) non-partner login absent from partner_state appears in GET /streamers with isPartner=false
+- **P2.87** [P2|risk:low] DB overview row counts switched from exact COUNT(*) to reltuples estimate
+  - Ziel: tb-analytics/src/system_database.rs:38-51: reltuples-Query ggf. zurueck auf SELECT COUNT(*) pro Tabelle (oder estimate bewusst dokumentieren)
+  - Test: insert rows into a tracked table without ANALYZE -> admin System/Database row count matches exact COUNT(*)
+  - Hinweis: NEEDS_USER aufgelöst → PORT (User-Bias „lieber zu viel portieren").
+- **P2.88** [P2|risk:low] title-performance peerBenchmark hardcoded null (peer group not ported)
+  - Ziel: title_performance.rs:123-126: statt null peerBenchmark via _get_peer_group_stats-Aequivalent (load_peer_benchmark aus tb-analytics/tag_analysis.rs) berechnen {avgViewers, retention10m}
+  - Test: GET /title-performance for a streamer with peers returns peerBenchmark={avgViewers,retention10m}, not null
+- **P2.90** [P2|risk:low] Leaderboard yourTier uses filtered avg + never returns null vs Python peer-group
+  - Ziel: category_leaderboard.rs:185-209: your_tier aus unfiltered all-category AVG (peer-group-stats) berechnen + null zurueckgeben wenn keine same-tier-Peers, statt gefiltertem your_avg_opt/fallback
+  - Test: streamer whose true avg exceeds the tier/exclude filter -> yourTier matches full-category bucket; no peers -> yourTier null
+  - Abhängt von: P2.88
+- **P2.92** [P2|clean-SQL|risk:low] Peak-hours chat-message query drops anonymous NULL chatter_login rows
+  - Ziel: audience_demographics.rs:91-98 compute_weighted_peak_hours: ANY-Filter ersetzen durch (cm.chatter_login IS NULL OR ='' OR LOWER(...) <> ALL(bots))
+  - Test: streamer with NULL-login chat rows -> peak-hours total_samples/coverage match Python (NULL rows counted)
+  - Abhängt von: P2.68
+- **P2.95** [P2|clean-SQL|risk:low] total_messages undercounts: Rust bot-filter drops NULL chatter_login rows
+  - Ziel: audience_demographics.rs:347-353: bot-Filter um (cm.chatter_login IS NULL OR ='') Carve-out erweitern damit NULL-login messages gezaehlt werden
+  - Test: streamer/window with NULL/empty chatter_login messages -> total_messages matches Python (NULL rows counted)
+  - Abhängt von: P2.68
+- **P2.96** [P2|clean-SQL|risk:low] Peak-hours sampling drops NULL chatter_login messages (lower coverage/confidence)
+  - Ziel: audience_demographics.rs:91-98: NULL/empty-keeping + LOWER(chatter_login) bot-Filter (siehe P2.92)
+  - Test: streamer with anonymous NULL-login rows -> peak sampleCount/coverage/confidence-tier match Python
+  - Abhängt von: P2.92
+- **P2.97** [P2|risk:low] Demographics handler has no top-level error catch (zeroed 200 instead of 500)
+  - Ziel: audience_demographics.rs: top-level Error-Handling - DB-Query-Fehler (statt .unwrap_or_default()/.ok().flatten()) zu 500 mappen (Muster aus loyalty_curve.rs:58-62)
+  - Test: DB error / missing table -> GET /audience-demographics returns 500, not 200 with zeroed metrics
+- **P2.99** [P2|clean-SQL|risk:low] Block disarms twitch_raid_auth (raid_enabled FALSE + clear reauth flags) on partner block
+  - Ziel: tb-analytics/src/streamers_crud.rs:628-686 archive_streamer Block/ToggleBlock branch — add UPDATE twitch_raid_auth SET raid_enabled=FALSE, needs_reauth=FALSE, reauth_notified_at=NULL on block
+  - Test: Block a partner, assert twitch_raid_auth row for that twitch_user_id has raid_enabled=false and needs_reauth/reauth_notified_at cleared
+- **P2.113** [P2|risk:medium] Stripe sync: verify existing product/price IDs against Stripe + self-heal
+  - Ziel: tb-analytics/src/stripe/billing_stripe_sync.rs:100-103,146-151 — retrieve product/price, on deleted/exception clear+recreate, don't count failed retrieve as reused
+  - Test: With a deleted Stripe product ID, run sync and assert the plan is reported created/recreated (not 'reused')
+- **P2.114** [P2|risk:low] Stripe sync response: restore product_id_map / price_id_map / readiness fields
+  - Ziel: tb-analytics/src/stripe/billing_stripe_sync.rs:228-241 — accumulate product_id_map/price_id_map and emit readiness in the response payload
+  - Test: POST sync-products dry_run; assert response contains product_id_map, price_id_map and readiness keys
+  - Abhängt von: P2.113
+- **P2.126** [P2|Infisical|risk:medium] Stripe price/product ID vault-override layer (STRIPE_PRICE_ID_MAP/STRIPE_PRODUCT_ID_MAP)
+  - Ziel: tb-analytics/src/billing/catalog.rs price_id_default/product_id_default — merge STRIPE_PRICE_ID_MAP/STRIPE_PRODUCT_ID_MAP from Infisical over defaults; billing_stripe_sync write-back via Infisical
+  - Test: Set STRIPE_PRICE_ID_MAP in env; assert checkout for that plan uses the remapped price ID over the default
+- **P2.127** [P2|risk:medium] Refresh partner raid-score cache after billing change (purchase/change)
+  - Ziel: tb-analytics/src/stripe/webhook_apply.rs + admin_manual_plan.rs — trigger partner raid score recompute after billing state change
+  - Test: Apply a raid_boost plan via webhook path; assert twitch_partner_raid_scores.last_computed_at advances immediately
+- **P2.128** [P2|risk:low] Subscription sync refreshes partner raid score cache
+  - Ziel: tb-analytics/src/stripe/webhook_apply.rs:356-387 sync_plan_to_streamer_plans + apply_event callers — recompute raid score after UPSERT
+  - Test: Send activate/cancel subscription webhook; assert raid score last_computed_at advanced immediately
+  - Abhängt von: P2.127
+- **P3.5** [P3|clean-SQL|risk:low] Native dashboard raid-history endpoint (11-column, broadcaster-filterable, limit-param)
+  - Ziel: NEW handler in tb-analytics/tb-dashboard-api (mirror mixin.py:28-61): SELECT 11 cols FROM twitch_raid_history [WHERE from_broadcaster_login=lower] ORDER BY executed_at DESC LIMIT (default 50); register /twitch/raid/history
+  - Test: GET /twitch/raid/history with a broadcaster filter + limit and assert the response includes success/error_message/candidates_count/target_stream_started_at and respects the filter+limit.
+- **P3.29** [P3|clean-SQL|risk:low] list_unlinked: fehlenden s.discord_user_id-Filter ergänzen (bereits verlinkte Streamer ausschließen)
+  - Ziel: rust/crates/tb-analytics/src/streamer_link.rs:45 — WHERE um '(s.discord_user_id IS NULL OR s.discord_user_id = \'\')' ergänzen (analog Python pg.py:4160-4161); Test-DDL :103-108 um discord_user_id-Spalte auf twitch_streamers erweitern
+  - Test: list_unlinked mit Fixture: twitch_streamers.discord_user_id gesetzt bei leerem/NULL twitch_user_id -> Row darf NICHT als Kandidat erscheinen (heute erscheint sie).
+- **P3.14** [P3|clean-SQL|risk:medium] Entire analytics decision/observability telemetry layer absent
+  - Ziel: siehe P2.62 - _increment_analytics_observability_counter + _log_analytics_decision-Aequivalent in tb-analytics; tb-observability writer
+  - Test: after a collection cycle the named analytics counters + twitch_observability_events decision rows are populated
+  - Abhängt von: P2.62
+
+### tb-monitoring (25: P1×9, P2×13, P3×3)
+
+- **P1.2** [P1|risk:medium] Runtime 403-Mod-Retry-Recovery beim Chat-Join
+  - Ziel: rust/crates/tb-monitoring/src/subscriptions.rs (ensure_subscription_with_condition 783-795: bei 403 ensure_bot_is_mod via add_channel_moderator, 1s warten, re-subscribe; bei Misserfolg 10-Min-Cooldown statt perm_failed) + perm_failed runtime-clearbar machen
+  - Test: Subscription mit erstem 403 -> nach Re-Mod-Versuch landet Kanal NICHT permanent in perm_failed, sondern wird mit Cooldown erneut versucht
+- **P1.12** [P1|risk:medium] Wire chat-raid / chat-unraid arrival correlation handlers (currently no-ops)
+  - Ziel: crates/tb-monitoring/src/dispatch.rs:222/226 on_chat_raid/unraid_notification no-ops -> wire to tb-raid signal_correlation.rs plan_chat_notification (498) / plan_chat_unraid (670) via a real EventSubHooks impl in bin/tb-bot
+  - Test: Feed a channel.chat.notification raid event for a tracked channel and assert an arrival correlation / pending confirmation / orphan record is produced (not silently dropped).
+- **P1.16** [P1|security-hardening|risk:low] sanitize_live_content: mixed-case @everyone/@here mention-bypass on go-live posts
+  - Ziel: crates/tb-monitoring/src/announce/template.rs:554-567 sanitize_live_content (out.replace → case-insensitive Regex über @everyone/@here, zero-width-Joiner einfügen); aufgerufen in sink.rs:290 und sink.rs:299
+  - Test: sanitize_live_content('@EveryOne @hErE @eVeRyOnE') neutralisiert alle drei Mixed-Case-Varianten (kein roher @everyone/@here mehr im Output)
+- **P1.17** [P1|risk:medium] EventSub revocation callback: untrack sub + supervisor/resubscribe self-heal
+  - Ziel: crates/tb-monitoring/src/webhook_receiver.rs:185-196 (MSG_TYPE_REVOCATION-Arm) muss SubscriptionManager-Referenz erhalten und untrack + resubscribe triggern; subscriptions.rs tracked-Set (221/740) + rehydrate (277-299); bin/tb-bot/src/main.rs:810 WebhookReceiver::new Verdrahtung
+  - Test: Revocation-Webhook für eine getrackte Core-Sub → Sub wird aus tracked entfernt und beim nächsten ensure_core_subscriptions neu angelegt (statt is_tracked-Skip)
+- **P1.18** [P1|risk:medium] Revocation message side-effects (duplicate of P1.17 evidence) — untrack + resubscribe
+  - Ziel: crates/tb-monitoring/src/webhook_receiver.rs:185-196 + subscriptions.rs (tracked/rehydrate) — identisch zu P1.17
+  - Test: siehe P1.17 (gemeinsamer Test): Revocation → kein dauerhaft toter tracked-Eintrag
+  - Abhängt von: P1.17
+- **P1.20** [P1|risk:medium] Core-sub revocation → resubscribe/supervisor-restart (duplicate of P1.17)
+  - Ziel: crates/tb-monitoring/src/webhook_receiver.rs:185-196; subscriptions.rs cleanup_stale (829-867) / tracked / rehydrate — identisch zu P1.17
+  - Test: siehe P1.17 (gemeinsamer Test)
+  - Abhängt von: P1.17
+- **P1.23** [P1|clean-SQL|risk:medium] twitch_viewer_presence_ticks-Writer im Live-Pfad verdrahten (30s Poll-Tick)
+  - Ziel: tb-monitoring/src/irc_lurker.rs (in Binary verdrahten, aktuell nur pub mod) bzw. Chatters-Poller: pro Tick INSERT INTO twitch_viewer_presence_ticks (session_id, streamer_login, viewer_login, tick_at) ON CONFLICT DO NOTHING; produktiver Insert statt nur cfg(test) post_stream.rs:2877; Job in tb-bot/src/main.rs spawnen
+  - Test: Test: Chatters-Poll-Tick mit 2 aktiven Chattern schreibt 2 presence_tick-Rows (ON CONFLICT idempotent beim Re-Tick) fuer eine laufende Session
+- **P1.25** [P1|clean-SQL,security-hardening|risk:high] EventSub-Telemetrie: timestamptz-Binds vs TEXT-Spalten — Schema-Fidelity haerten
+  - Ziel: rust/migrations: neue Migration konvertiert received_at/started_at/recorded_at/redeemed_at/ends_at/ended_at in twitch_ban_events/twitch_bits_events/twitch_subscription_events/twitch_channel_points_events/twitch_channel_updates/twitch_hype_train_events/twitch_ad_break_events auf TIMESTAMPTZ; tb-monitoring/src/telemetry.rs Binds bestaetigen; dispatch.rs:593 Insert-Fehler nicht weiter schlucken
+  - Test: Test gegen frisch-migrierte DB: store_bits_event/store_subscription_event schreibt erfolgreich eine Row (kein 42804); Fixtures aus tests/support/mod.rs an Migration angleichen statt ad-hoc TIMESTAMPTZ
+- **P1.48** [P1|security-hardening|risk:medium] Live-Announcement Save-Path: nur Mention-Sanitize (@everyone/@here) als Security-Rest portieren
+  - Ziel: crates/tb-monitoring/src/announce/template.rs _sanitize_live_content (Abdeckung @everyone/@here/Rollen-Mentions sicherstellen, da Save-Validierung entfaellt)
+  - Test: Default-Embed-Render mit @everyone im Content -> Mention wird neutralisiert/escaped, kein Live-Ping
+  - Abhängt von: P1.47
+- **P2.6** [P2|clean-SQL|risk:medium] irc_lurker_tracker Timestamp-Spalten clean-SQL (TIMESTAMPTZ)
+  - Ziel: rust/crates/tb-monitoring/src/irc_lurker.rs:108,116-123,159-160 + Migration: first_message_at/last_seen_at als TIMESTAMPTZ angleichen (Schema + Bind konsistent)
+  - Test: upsert_names_batch gegen frisch-migrierte Prod-Schema-DB schreibt first_message_at/last_seen_at ohne Typfehler (42804)
+- **P2.7** [P2|clean-SQL|risk:medium] irc_lurker_tracker active_session_id/session_id als int4
+  - Ziel: rust/crates/tb-monitoring/src/irc_lurker.rs:90,120,143,163,172 (active_session_id/session_id als i32 decodieren/binden) + Test-Schema auf INTEGER angleichen
+  - Test: Tracker-upsert gegen int4-Schema-DB decodiert active_session_id und bindet session_id ohne Mismatch-Fehler
+  - Abhängt von: P2.6
+- **P2.10** [P2|risk:low] Stale/removed-channel local-state purge bei 403
+  - Ziel: rust/crates/tb-monitoring/src/subscriptions.rs (bei 403 + nicht-tracked/nicht-partner/keine raid-auth: perm_failed/subscription_state-Eviction = port von _purge_local_channel_state) + cleanup_stale() produktiv verdrahten
+  - Test: 403 für nicht-getrackten Kanal entfernt dessen Eintrag aus subscription_state/perm_failed statt ihn dauerhaft zu behalten
+  - Abhängt von: P1.2
+- **P2.51** [P2|risk:low] extract_context: broadcaster id/login fallbacks (user_id, condition.*)
+  - Ziel: crates/tb-monitoring/src/dispatch.rs:262-272 extract_context: Fallback-Kette event.broadcaster_user_id → to_broadcaster_user_id → event.user_id → subscription.condition.broadcaster_user_id → condition.to_broadcaster_user_id; login analog mit user_login
+  - Test: extract_context für ein Event ohne broadcaster_user_id aber mit event.user_id resolved korrekte id; condition-only-Shape ebenfalls
+- **P2.52** [P2|risk:medium] channel.raid durability: route through processing inbox (retry/dead-letter)
+  - Ziel: crates/tb-monitoring/src/dispatch.rs:415-433 (CORE_DELIVERY_TYPES erweitern) + handlers.rs handle() channel.raid-Arm + inbox-Pfad; alternativ KEEP_RUST wenn User die Synchron-Divergenz absegnet
+  - Test: channel.raid mit transientem Hook-Fehler landet im Inbox-Retry statt verloren zu gehen
+  - Hinweis: NEEDS_USER aufgelöst → PORT (User-Bias „lieber zu viel portieren").
+- **P2.53** [P2|clean-SQL|risk:low] EventSub login resolution: streamer-identity fallback + ORDER BY last_seen_at
+  - Ziel: crates/tb-monitoring/src/live_state.rs:467-477 login_for_user_id: ORDER BY last_seen_at DESC LIMIT 1 + zweiter Fallback auf twitch_streamer_identities.twitch_login (load_streamer_identity-Äquivalent)
+  - Test: login_for_user_id für user_id ohne live_state-Row aber mit identity-Row liefert den identity-Login statt leer
+- **P2.54** [P2|risk:medium] channel.raid synchronous hook vs durable inbox (duplicate of P2.52)
+  - Ziel: crates/tb-monitoring/src/dispatch.rs:429-433; bin/tb-bot/src/eventsub_hooks.rs:577-579 (RaidArrivalCoordinator) — identisch zu P2.52
+  - Test: siehe P2.52
+  - Abhängt von: P2.52
+  - Hinweis: NEEDS_USER aufgelöst → PORT (User-Bias „lieber zu viel portieren").
+- **P2.55** [P2|risk:low] Go-live clears stale offline-throttle guard
+  - Ziel: Go-Live-Pfad on_stream_went_live (eventsub_hooks.rs:488-498, main.rs:141, wiring.rs:90, chat_wiring.rs:888) muss GuardKind::OfflineThrottle für den Broadcaster freigeben; guard.rs release-Pfad; handlers.rs:289-298 TTL-Logik
+  - Test: stream.offline → stream.online → stream.offline innerhalb 120s: nach Go-Live ist der offline_throttle-Guard freigegeben und das zweite Offline finalisiert die Session
+- **P2.56** [P2|risk:medium] Moderator telemetry subs: broadcaster-token fallback
+  - Ziel: crates/tb-monitoring/src/subscriptions.rs:655-705 ensure_moderator_telemetry_subscriptions: auth_attempts = [bot-token, broadcaster-token] mit Try-each-Logik; chat_wiring.rs:779-787 Broadcaster-Token bereitstellen
+  - Test: ensure_moderator_telemetry_subscriptions: Bot-Token-Versuch 403 → Broadcaster-Token-Versuch legt Sub erfolgreich an
+- **P2.57** [P2|risk:medium] Inbound channel.ban bot-self-timeout → TimeoutGuard.record_timeout
+  - Ziel: crates/tb-monitoring/src/dispatch.rs:549-553 (channel.ban-Route) bzw. telemetry.rs store_ban_event: bei is_permanent=false und banned_user_id==bot_id → tb-chat TimeoutGuard.record_timeout(login); timeout_tracking.rs:186 als Vorbild
+  - Test: Inbound channel.ban (non-permanent) mit user_id==bot_id ruft record_timeout für den Kanal auf; permanenter Ban tut es nicht
+- **P2.59** [P2|clean-SQL|risk:low] Storage-write retry: transient connection/admin-shutdown SQLSTATEs
+  - Ziel: crates/tb-monitoring/src/inbox_store/retry.rs:70-75 is_retryable um 08000/08001/08003/08004/08006, 57P01/57P02/57P03, 53300 erweitern; with_write_retry um LiveStateStore::persist (live_state.rs:232-319) wickeln
+  - Test: is_retryable liefert true für SQLSTATE 08006 und 57P01; LiveStateStore::persist retried einen transienten Connection-Fehler statt sofort zu failen
+- **P2.60** [P2|TEXT|risk:medium] Re-Auth chat reminder at stream start
+  - Ziel: Go-Live-Hook in tb-monitoring (poller/hooks.rs:111 on_stream_went_live Stub, dispatch.rs:179): needs_reauth=TRUE-Branch → einmaliger Twitch-Chat-Reminder mit stream_id-Dedupe (300s-Fallback); Sende-Pfad via tb-chat send_message
+  - Test: Go-Live mit twitch_raid_auth.needs_reauth=TRUE sendet genau einen Chat-Reminder pro stream_id (zweiter Go-Live im selben Stream sendet nicht erneut)
+- **P2.89** [P2|clean-SQL|risk:low] Retention curve drop_events never labeled 'ad_break' (ad-break correlation dropped)
+  - Ziel: retention_curve.rs:147: twitch_ad_break_events JOIN twitch_stream_sessions -> ad_times-Set; drop_event type='ad_break' wenn minute in ad_times sonst 'unknown'
+  - Test: streamer with a known ad break during a viewer drop -> drop_events[].type='ad_break' at that minute
+- **P3.6** [P3|risk:low] Chat-derived subscription telemetry fallback (should_capture + persist)
+  - Ziel: crates/tb-monitoring/src/dispatch.rs:211 on_chat_subscription_notification no-op + bin/tb-bot/src/chat_wiring.rs:952-961 — add should_capture (eventsub_has_sub) gate + store_subscription_event persistence
+  - Test: On a channel with no dedicated channel.subscribe EventSub, trigger a sub/resub/gift via chat.notification and assert a twitch_subscription_events row is written (and skipped when a dedicated sub exists).
+- **P3.11** [P3|risk:low] extract_context broadcaster_id/login fallbacks (duplicate of P2.51)
+  - Ziel: crates/tb-monitoring/src/dispatch.rs:262-272 extract_context — identisch zu P2.51
+  - Test: siehe P2.51
+  - Abhängt von: P2.51
+- **P3.12** [P3|risk:low] Unknown EventSub work_type silently dropped instead of dead-lettered
+  - Ziel: crates/tb-monitoring/src/handlers.rs:404-410 catch-all-Arm: Err zurückgeben statt Ok(()) → inbox_runtime.rs:162-183 handle_failure → Retry + Dead-Letter nach INBOX_MAX_ATTEMPTS
+  - Test: Inbox-Record mit unbekanntem work_type wird nach Max-Attempts dead-lettered (nicht still mark_delivered)
+
+### tb-bot (18: P1×4, P2×13, P3×1)
+
+- **P1.8** [P1|security-hardening|risk:medium] Auto-scope resolution: restore active-partner check + broad auth-row existence + discord: identity branch
+  - Ziel: bin/tb-bot/src/raid_oauth_impl.rs:160-173 (has_existing_streamer_context) + tb-raid/src/oauth_flow.rs:95-113; add load_active_partner OR + filter-less auth-row existence + discord:-prefix identity resolution before scope auto-resolution
+  - Test: For an active partner with no qualifying twitch_raid_auth row (and for a pending raid_enabled=false/authorized_at NULL row, and a discord:<id> login), assert the generated authorize URL scope param includes channel:read:subscriptions/channel:read:hype_train (dashboard_reauth), not base.
+  - Abhängt von: P2.32
+- **P1.10** [P1|TEXT|risk:low] Restore effective_viewer_count fallback to pending.registered_viewer_count on confirm
+  - Ziel: bin/tb-bot/src/raid_arrival_wiring.rs confirm_pending_raid (~660-871): compute effective = viewer_count.max-fallback to pending.registered_viewer_count before record_arrival/record_confirmed_raid/send_partner_raid_message
+  - Test: Confirm a pending raid (registered_viewer_count=N) via a channel.chat.notification with viewer_count=0 and assert persisted twitch_raid_arrival_tracking.viewer_count==N and the thank-you message contains N, not 0.
+  - Abhängt von: P1.12
+- **P1.19** [P1|risk:medium] Session follower-total fetch: bot-token + streamer-token fallback + self-heal
+  - Ziel: rust/bin/tb-bot/src/wiring.rs:173-187 (HelixFollowerSource.follower_total) auf get_with_user_token umstellen; tb-transport-twitch/src/streams.rs:250-273 get_followers_total user_token-Param ergänzen; tb-transport-twitch/src/client.rs:160 get_with_user_token; Token-Quellen: Bot-Token (moderator:read:followers) → Streamer-OAuth-Token-Fallback
+  - Test: follower_total mit Bot-/Streamer-Token liefert echte total; bei 403 Fallback auf Streamer-Token; tracker.rs:330-335 schreibt followers_end != NULL
+- **P1.21** [P1|clean-SQL|risk:medium] 6h Subs+Ads-Snapshot-Collector-Loop nach Rust portieren (collect_analytics_data)
+  - Ziel: tb-bot/src/main.rs (neuer spawned job, analog zu post_stream/title loops bei 841-857); neuer Collector in tb-analytics oder tb-monitoring der raid_enabled-Streamer aus twitch_raid_auth liest und je scope _collect_subs/_collect_ads aufruft (Helix tb-transport-twitch/src/streams.rs:306 get_subscriptions, :331 get_ad_schedule), INSERT in twitch_subscriptions_snapshot / twitch_ads_schedule_snapshot mit 2s-Throttle
+  - Test: Test: Collector-Tick liest raid_enabled-Streamer mit scope channel:read:subscriptions, ruft (gemockten) Helix get_subscriptions und schreibt genau eine Row in twitch_subscriptions_snapshot mit snapshot_at>cutover
+  - Abhängt von: P1.22
+- **P2.11** [P2|risk:medium] join_partner_channels: raid-enabled-only-Kanäle wieder einschließen
+  - Ziel: rust/bin/tb-bot/src/chat_wiring.rs:698-701 (WHERE-Klausel: raid_enabled OR is_partner_active vs. nur is_partner_active; needs_reauth=FALSE-Filter prüfen)
+  - Test: Reconcile-Query liefert für raid_enabled=TRUE + is_partner_active=0 + channel:bot-Scope den Kanal (falls Entscheidung = einschließen)
+  - Hinweis: NEEDS_USER aufgelöst → PORT (User-Bias „lieber zu viel portieren").
+- **P2.14** [P2|risk:low] Eager Partner-Invite-Backfill beim Startup
+  - Ziel: rust/bin/tb-bot/src/chat_wiring.rs (Startup-Task: SELECT aktive Partner ohne twitch_streamer_invites-Zeile, Invites mit Pacing erzeugen + 60s-Retry; nutzt create_and_store_streamer_invite)
+  - Test: Aktiver Partner ohne Invite-Zeile -> nach Bot-Start (vor erstem Promo) existiert eine twitch_streamer_invites-Zeile
+- **P2.15** [P2|risk:medium] Chat-notification Sub/Resub/Gift-Telemetrie-Fallback
+  - Ziel: rust/bin/tb-bot/src/chat_wiring.rs:952-961 (ChatHooks::on_chat_subscription_notification: should_capture-Gate (kein dedizierter EventSub) + store_subscription_event in tb-monitoring/telemetry.rs:55)
+  - Test: Sub/Resub/Gift via chat.notification auf Kanal ohne channel.subscribe-EventSub erzeugt eine twitch_subscription_events-Zeile; mit EventSub keine (Doppel-Count vermeiden)
+- **P2.32** [P2|security-hardening|risk:medium] Read discord-linked Twitch identity from twitch_streamer_identities (not the active-partner view)
+  - Ziel: bin/tb-bot/src/raid_oauth_impl.rs:179-203 — SELECT from twitch_streamer_identities WHERE discord_user_id=$1 ORDER BY updated_at DESC LIMIT 1 (replace twitch_streamers_partner_state view query)
+  - Test: Seed a twitch_streamer_identities row for a discord_user_id with NO active twitch_partners row, run the discord:<id> OAuth state build, and assert expected_twitch_login/user_id are populated (so the callback mismatch guard fires).
+- **P2.36** [P2|clean-SQL|risk:low] Open-session fallback (_lookup_open_session_id) for target_session_id on confirm
+  - Ziel: bin/tb-bot/src/confirm_resolver.rs:64-91 — also SELECT streamer_login from live_state and, when active_session_id is 0/NULL, fall back to twitch_stream_sessions WHERE LOWER(streamer_login)=LOWER($1) AND ended_at IS NULL ORDER BY started_at-match, started_at DESC
+  - Test: At confirm time with twitch_live_state.active_session_id empty but an open twitch_stream_sessions row present, assert the new tracking row gets target_session_id linked to that open session (not NULL).
+- **P2.37** [P2|clean-SQL|risk:low] Open-session fallback for target_session_id (duplicate of P2.36)
+  - Ziel: bin/tb-bot/src/confirm_resolver.rs:71-91 (see P2.36)
+  - Test: Same as P2.36: force active_session_id NULL with an open session row and assert target_session_id is populated.
+  - Abhängt von: P2.36
+- **P2.39** [P2|risk:low] Gate authorization login-fallback on auth-row ABSENCE, not on unauthorized
+  - Ziel: bin/tb-bot/src/raid_oauth_impl.rs:431-474 — only run query_auth_by_login when the by-user_id query returned NO row (mirror integration_state.py:188-192)
+  - Test: Seed an unauthorized uid-row plus a separate authorized login-row for a different user_id; assert resolve-integration-state returns authorized=false and does not inject the extra candidate user_ids.
+- **P2.40** [P2|risk:low] Gate single-partner score refresh on partner-state existence/NULL (no non-partner score rows)
+  - Ziel: bin/tb-bot/src/eventsub_hooks.rs:505-534 on_score_refresh + score_refresh.rs:206-336 compute_upserts — require an active twitch_streamers_partner_state row (non-NULL login/id) before upserting
+  - Test: Fire on_score_refresh for a monitored-only channel absent from the partner-state view and assert NO twitch_partner_raid_scores row is created.
+  - Abhängt von: P1.9
+- **P2.43** [P2|risk:medium] Port secondary-confirmed-signal pre-gate (dedupe duplicate/late raid signals)
+  - Ziel: bin/tb-bot/src/eventsub_hooks.rs:132/203/277 — populate recent_arrival_present from find_recent_arrival (arrival_tracking_store.rs:210) so signal_correlation reaches RecordSecondarySignal; wire raid_arrival_wiring.rs:968-1023 sink
+  - Test: Send two channel.raid events for the same from->to within 600s and assert one arrival row with both signals in confirmation_signals (no second/orphan row).
+  - Abhängt von: P1.12
+- **P2.48** [P2|Infisical|risk:medium] Restore user-token fallback for follower totals (moderator-scoped)
+  - Ziel: bin/tb-bot/src/wiring.rs:172-187 HelixFollowerSource.follower_total — add bot-token then resolve_user_token retry (mirror followers.py:344-375) using the P2.46 resolver
+  - Test: With a moderator-scoped token available, assert a raid candidate's followers_total resolves to a real count instead of the FOLLOWERS_UNKNOWN sentinel.
+  - Abhängt von: P2.46
+- **P2.49** [P2|clean-SQL|risk:low] Restore DB cache backfill of follower totals from twitch_stream_sessions
+  - Ziel: bin/tb-bot/src/raid_adapters.rs:69-88 / wiring.rs:172-187 — pre-resolve follower totals from twitch_stream_sessions (COALESCE(followers_end,followers_start), newest per login) before Helix (mirror followers.py:111-139)
+  - Test: For a candidate with a prior twitch_stream_sessions follower count and no token, assert the total is served from the session cache without a Helix call.
+- **P2.50** [P2|Infisical|risk:low] Restore bot-token + moderator:read:followers scope gating for follower fetch
+  - Ziel: bin/tb-bot/src/raid_adapters.rs:65-88 + wiring.rs:172-187 — prefer the scoped bot token when moderator:read:followers is present (mirror followers.py:271-280) using P2.46 resolver
+  - Test: With a bot token lacking moderator:read:followers, assert the bot path is skipped (falls back); with the scope present, assert the bot token is used for the followers fetch.
+  - Abhängt von: P2.46
+- **P2.58** [P2|risk:medium] Raid-arrival readiness waits for subscription 'enabled'
+  - Ziel: bin/tb-bot/src/raid_adapters.rs:179-183 ensure_ready + subscriptions.rs:311-320 ensure_raid_subscription: Status-Poll-Loop (deadline ~8s, 0.5s) bis status=='enabled'; _get_eventsub_webhook_subscription_status-Äquivalent neu
+  - Test: ensure_ready pollt Subscription-Status und gibt erst bei 'enabled' true zurück; bei 'verification_pending' wartet es bis Deadline
+- **P2.44** [P3|risk:low] Emit raid_flow events + counters (raid_orphan_chat_notification_total) from arrival handlers
+  - Ziel: bin/tb-bot/src/eventsub_hooks.rs:141/185/255/281 + crates/tb-raid/src/arrival_runtime.rs:147-167 — increment raid_orphan_chat_notification_total and emit structured flow events to the observability snapshot service
+  - Test: Trigger an orphan chat.notification raid and assert the observability snapshot exposes raid_orphan_chat_notification_total and a per-flow event entry.
+  - Abhängt von: P2.35
+
+### tb-raid (17: P1×3, P2×10, P3×4)
+
+- **P1.9** [P1|clean-SQL|risk:medium] Port partner raid-score refresh/write pipeline (compute + upsert + periodic refresh)
+  - Ziel: NEW orchestrator wiring tb-raid/src/scoring.rs compute_scores + score_store.rs upsert into a periodic refresh job (mirror Python bot/raid/partner_scores.py _build_score/_upsert_scores/refresh_all); spawn from bin/tb-bot/src/main.rs alongside the 300s tasks
+  - Test: Run the refresh job against a seeded partner set and assert twitch_partner_raid_scores rows are (re)written with advancing last_computed_at and correct final_score/today_received_raids for a live and an offline partner.
+- **P1.11** [P1|TEXT|risk:medium] Port partner network-raid delivery send-path (5s delay + suppression gate + chat send)
+  - Ziel: crates/tb-raid/src/raid_messaging.rs (build_partner_raid_message exists) — add delivery service: join_chat_channel + lookup_outbound_chat_suppression gate + count_received_network_raids + 5.0s delay + chat send; wire into raid_arrival_wiring confirm path
+  - Test: Confirm a partner network raid and assert: suppression-gated skip when suppressed, otherwise a chat send fires ~5s later with the correct received-raid count.
+  - Abhängt von: P1.10
+- **P1.13** [P1|risk:medium] Port expected_partner override classification path for not-yet-registered partner targets
+  - Ziel: crates/tb-raid/src/arrival_confirmation.rs:124 classify_partner_raid_arrival — add expected_partner param + synthetic pending_partner_override second pass; pass target_is_partner_override from raid_arrival_wiring.rs:704 based on pending.is_partner_raid
+  - Test: Classify a pending raid with is_partner_raid=true whose target is absent from the partner table and assert classification resolves to a *_to_partner value with target_is_partner_override=true (not suppressed_external).
+  - Abhängt von: P1.12
+- **P2.28** [P2|clean-SQL|risk:low] clear_failure_count räumt technical_pause_reason='token_error'
+  - Ziel: rust/crates/tb-raid/src/token_blacklist.rs:110-119 clear_failure_count (zusätzlich UPDATE twitch_partners SET technical_pause_reason=NULL WHERE LOWER(...)='token_error' vor dem DELETE)
+  - Test: Partner mit technical_pause_reason='token_error' -> nach erfolgreichem Refresh ohne Re-Auth ist technical_pause_reason NULL
+- **P2.29** [P2|risk:low] Wire stale pending-raid cleanup sweep (cleanup_stale, 300s timeout)
+  - Ziel: crates/tb-raid/src/pending_raids.rs:238 cleanup_stale — invoke from a periodic task in bin/tb-bot/src/main.rs (timeout 300s)
+  - Test: Register a pending raid that never confirms, advance time >300s, run the sweep, and assert the entry is removed.
+- **P2.30** [P2|risk:medium] Replay orphan chat.notification when matching pending raid registers
+  - Ziel: crates/tb-raid/src/auto_raid_pipeline.rs:511-530 register_pending — on registration pop a matching orphan and replay via the on_chat_raid_notification correlation path (mirror raid_tracking_runtime.py:477-514)
+  - Test: Send a channel.chat.notification raid BEFORE the pending registers, then register; assert the arrival is confirmed as pending-correlated at registration (not only an independent arrival ~15s later).
+  - Abhängt von: P1.12, P2.29
+- **P2.31** [P2|risk:low] Port pending-raid timeout diagnostics (build_pending_timeout_detail) into the sweep
+  - Ziel: crates/tb-raid/src/pending_raids.rs cleanup_stale path — synthesize a timeout_detail string from signal observations and emit it in the sweep (mirror raid_tracking_runtime.py:518-553)
+  - Test: Trigger a pending raid that never confirms, run the sweep past timeout, and assert a timeout diagnostic string with the signal-observation detail is produced.
+  - Abhängt von: P2.29
+- **P2.34** [P2|clean-SQL|risk:low] Bulk snapshot_and_flag_reauth primitive (mass needs_reauth flag) for admin dashboard
+  - Ziel: NEW bulk UPDATE twitch_raid_auth SET needs_reauth=TRUE, reauth_notified_at=NULL WHERE needs_reauth IS NOT TRUE AND token/authorized present (mirror auth.py:1168-1189); expose via admin internal-api handler
+  - Test: Seed several token-bearing twitch_raid_auth rows with needs_reauth NULL/false, invoke the bulk-flag primitive, and assert all flip to needs_reauth=TRUE in one call.
+- **P2.38** [P2|clean-SQL|risk:medium] Decode twitch_stream_sessions.started_at TEXT-tolerantly (TIMESTAMPTZ migration regression)
+  - Ziel: crates/tb-raid/.../score_tracking_store.rs:217-222 _load_session_started_at — decode as text and ISO-parse (or migrate column to timestamptz cleanly); also touches tb-monitoring/src/sessions/store.rs which assumes DateTime<Utc>
+  - Test: Against a DB where twitch_stream_sessions.started_at is TEXT, end a deadlock-target raid session and assert tracking rows get resolved_at set (resolve returns >0).
+- **P2.41** [P2|risk:low] Add offline-with-existing-cache branch to compute_scores (preserve prior live score)
+  - Ziel: crates/tb-raid/src/scoring.rs:256-296 compute_scores — add an existing_cache param + offline-with-cache branch preserving cached duration/time_pattern/readiness/fairness/base/final (mirror partner_scores.py:738-756)
+  - Test: With a partner offline but a non-neutral prior cache row, run compute_scores and assert the cached scores are preserved (not reset to NEUTRAL).
+  - Abhängt von: P1.9
+- **P2.46** [P2|Infisical|risk:medium] Port bot-OAuth context resolver (token/scope normalization) for followers path
+  - Ziel: NEW resolver in tb-raid (mirror runtime_support.py:68-94): resolve bot token via token manager, strip leading 'oauth:', resolve bot_id, return normalized lowercased scope set; gracefully (None,None,empty) on failure
+  - Test: With a bot token carrying moderator:read:followers, assert the resolver returns the normalized lowercased scope set incl. that scope and a stripped (no 'oauth:') token; with no manager, returns empty context gracefully.
+- **P2.69** [P2|risk:low] raid-retention/viewer-profiles/audience-sharing return 500 instead of graceful demo-data 200
+  - Ziel: raid_analytics.rs:232-238, audience.rs:242-246 + 375-378: DB-Error -> 200 mit Demo-Daten/dataAvailable:false statt 500 (Muster aus lurker_analysis.rs:114-120)
+  - Test: raid-retention/viewer-profiles/audience-sharing with a forced DB error return 200 with dataAvailable:false, not 500
+- **P2.98** [P2|risk:low] raid-analytics swallows DB errors (empty 200 instead of 500)
+  - Ziel: raid_analytics.rs:393/495/569 + sub-queries (595/606/651): primaere Query-Results zu 500 mappen statt .unwrap_or_default()/.ok().flatten() (wie raid_retention_handler :232-238)
+  - Test: raid tables dropped/renamed -> GET /raid-analytics returns 500, not 200 with empty per_source
+- **P2.42** [P3|risk:low] Emit structured per-flow raid observability events from the pipeline
+  - Ziel: crates/tb-raid/src/auto_raid_pipeline.rs:227-307 — add an injectable observability event sink and emit at the 5+ flow points (mirror raid_pipeline.py:494-501)
+  - Test: Run a raid flow and assert structured events (flow_id + timing payload) are emitted to the observability sink / twitch_observability_events.
+  - Abhängt von: P2.35
+- **P2.45** [P3|risk:low] Port analytics-followers diagnostic + observability flow (terminal_decision)
+  - Ziel: NEW in tb-raid (mirror runtime_support.py:13-65 build_analytics_followers_runtime_state + log_analytics_followers_decision); write flow_type='analytics' step='terminal_decision' rows via the observability writer
+  - Test: Run a followers/recruitment resolution and assert a twitch_observability_events row with flow_type='analytics', step='terminal_decision' is written.
+  - Abhängt von: P2.35, P2.46
+- **P3.8** [P3|risk:low] Observability counter facility (raid_flow_started_total)
+  - Ziel: crates/tb-raid/src/auto_raid_pipeline.rs (flow_id at :237) — add an injectable counter sink and increment raid_flow_started_total et al (mirror raid_pipeline.py:485-492)
+  - Test: After a raid fires, assert the counters surface reports raid_flow_started_total incremented.
+  - Abhängt von: P2.35
+- **P3.9** [P3|risk:low] User-scope legacy-token fallback WARNING (once-only operator signal)
+  - Ziel: NEW in tb-raid follower path (mirror runtime_support.py:97-124 warn/clear_user_scope_fallback_once): dedup once-only WARN per area/subject, re-arm on recovery
+  - Test: Trigger a follower fetch that falls back from bot token to streamer token and assert the once-only 'Legacy-Broadcaster-Token' WARN fires exactly once (re-armed after recovery).
+  - Abhängt von: P2.48
+
+### tb-internal-api (8: P2×7, P3×1)
+
+- **P2.141** [P2|clean-SQL|risk:low] normalize_text_field: Längenlimit auf Zeichen- statt Byte-Zählung umstellen (Umlaut-Parität)
+  - Ziel: rust/crates/tb-internal-api/src/handlers/telemetry_routes.rs:148 normalize_text_field — text.len() -> text.chars().count(); Call-Sites :435 (discord_username,200) und :460 (source_hint,100)
+  - Test: POST /telemetry mit discord_username aus >100 Umlaut-Zeichen (Byte-Länge >200, Char-Count <200): erwartet 200/akzeptiert statt 400 invalid request body.
+- **P2.142** [P2|risk:low] mark_member: parse_bool-Loose-Coercion statt rohem serde-bool (String/Number akzeptieren)
+  - Ziel: rust/crates/tb-internal-api/src/handlers/streamers.rs:225-236 DiscordProfileRequest.mark_member — von 'pub mark_member: bool' #[serde(default)] auf parse_bool_loose (file:384) umstellen (custom deserialize / Option<Value> + Coercion), analog require_link (:341)
+  - Test: POST /streamers/:login/discord-profile mit mark_member als String "true" bzw. Number 1: erwartet 200 + korrekt geparster bool statt 422.
+- **P2.143** [P2|risk:medium] Idempotency-Layer auf alle sechs Streamer-Mutations-Routen verdrahten (add/remove/verify/archive/discord-flag/discord-profile)
+  - Ziel: rust/crates/tb-internal-api/src/handlers/streamers.rs: add/remove/verify/archive/discord_flag/discord_profile-Handler — Extension<IdempotencyState> extrahieren + prepare()/Prepared + Release wie raid_oauth.rs:700; nutzt idempotency.rs (prepare, 400 bei key>128, 409 conflict, replay X-Idempotency-Replayed:1, in-flight wait->503)
+  - Test: Zwei identische POST /streamers mit gleichem Idempotency-Key: zweite Antwort liefert X-Idempotency-Replayed:1 und führt add NICHT erneut aus (heute: zweimal ausgeführt, kein Replay-Header).
+- **P2.144** [P2|clean-SQL|risk:low] Self-Explainer Idempotency-Key: kanonisches JSON mit ASCII-Escaping (ensure_ascii-Parität)
+  - Ziel: rust/crates/tb-internal-api/src/handlers/self_explainer_log.rs:129-152 canonical_json — serde_json::to_string durch ASCII-escapenden Serializer ersetzen (Non-ASCII -> \uXXXX, sort_keys, separators ',',':'); idempotency_key() L111-123 bleibt sha256()[:48]
+  - Test: Gleichen self-explainer-Payload mit Umlaut im embed-title (z.B. 'Frägé') durch Rust-Handler schicken: erzeugter X-Idempotency-Key muss dem Python-ensure_ascii=True-Key entsprechen (06f47d4f...), nicht der UTF-8-Form.
+- **P2.145** [P2|risk:low] GET /debug/eventsub-processing nativ bauen (limit-validierter Processing-Inbox-Snapshot)
+  - Ziel: rust/crates/tb-internal-api/src/lib.rs:73-282 Route /debug/eventsub-processing registrieren; neuer Handler (telemetry_routes.rs o.ä.) mit limit-Query (default 20, validiert 1..200 -> 400), Antwort {ok:true, eventsubProcessing:<payload>}, gespeist aus tb-monitoring inbox_store list_pending
+  - Test: curl mit Internal-Token GET /internal/twitch/v1/debug/eventsub-processing?limit=50: erwartet 200 {ok,eventsubProcessing} statt 404 not_found; limit=0/201 -> 400.
+- **P2.83** [P2|clean-SQL|risk:low] Health-score Community sub-score drops KNOWN_CHAT_BOTS exclusion
+  - Ziel: internal_home.rs:1668-1681 community_sql: bot-Filter (LOWER(col) NOT IN KNOWN_CHAT_BOTS plus own login) binden, zusaetzlich zum aktuellen own-login-only Filter
+  - Test: channel with Nightbot/StreamElements in session_chatters -> community/overall health excludes them (lower than current inflated value)
+- **P2.119** [P2|security-hardening|risk:medium] Owner-only Discord-ID gate for chat-action
+  - Ziel: tb-internal-api/src/handlers/python_stubs.rs:204-260 chat_action_handler — add owner/role authorization gate + audit log beyond is_privileged()
+  - Test: Non-owner privileged caller POSTs chat-action and is denied with an audit log entry
+  - Abhängt von: P2.120
+- **P3.7** [P3|NO-Discord-DM|risk:low] Admin bulk re-auth (reauth_all) into admin dashboard, no Discord DM
+  - Ziel: Admin internal-api handler invoking the P2.34 bulk snapshot_and_flag primitive (mirror commands.py:459-572 minus the DM loop)
+  - Test: Hit the admin reauth-all endpoint and assert all token-bearing twitch_raid_auth rows flip to needs_reauth=TRUE in one shot (no Discord DM sent).
+  - Abhängt von: P2.34
+
+### tb-transport-twitch (7: P1×1, P2×5, P3×1)
+
+- **P1.7** [P1|risk:medium] get_followers_total mit user_token (echte Follower-Zahl)
+  - Ziel: rust/crates/tb-transport-twitch/src/streams.rs:250-273 (get_followers_total user_token-Param + Bearer-Branch mit moderator:read:followers) + wiring.rs:174-186 HelixFollowerSource Bot-/Streamer-Token durchreichen
+  - Test: get_followers_total mit moderator-scoped user_token gibt das 'total'-Feld zurück; ohne Token weiterhin None
+- **P2.26** [P2|risk:medium] Helix GET/POST transient + 5xx Retry-with-Backoff
+  - Ziel: rust/crates/tb-transport-twitch/src/client.rs:107-127/230-240 (3x Retry mit Backoff 0.5*(n+1) bei 500/502/503/504 und transienten Timeout/Connect-Fehlern)
+  - Test: Mock liefert 503 dann 200 -> Client recovered (zweiter Request beim Mock beobachtet), kein sofortiger Status-Fehler
+- **P2.27** [P2|risk:low] Helix-Request-Timeout 20s (statt 10s)
+  - Ziel: rust/crates/tb-transport-twitch/src/client.rs:15 (REQUEST_TIMEOUT 10s -> 20s falls Parität gewünscht)
+  - Test: Mock verzögert 12s -> Call gelingt (Timeout >=20s) statt bei ~10s zu failen
+  - Abhängt von: P2.26
+  - Hinweis: NEEDS_USER aufgelöst → PORT (User-Bias „lieber zu viel portieren").
+- **P2.33** [P2|security-hardening|risk:low] Add 15-min invalid_client circuit-breaker on the user-token OAuth/sweep path
+  - Ziel: crates/tb-transport-twitch/src/user_token.rs:139-169 + tb-raid/src/token_refresher.rs:310-321 refresh_all_due — add a 900s block flag on InvalidClient and an is_client_auth_blocked early-return guard
+  - Test: Force an invalid_client response, then assert subsequent exchange/refresh/refresh_all_due calls short-circuit (return Skipped/0) for 900s without re-hitting Twitch.
+- **P2.61** [P2|risk:medium] Analytics-time bot moderator self-heal (403->auto-re-mod, 600s cooldown, partner gate, counters)
+  - Ziel: tb-transport-twitch/src/chat.rs get_chatters 403/NotModerator-Pfad + neuer Caller-Layer; tb-chat/src/moderation.rs add_channel_moderator als Self-Heal; 600s-Cooldown + is_operational_partner_channel-Gate + {flow}_moderator_self_heal_success/failure_total Counter
+  - Test: get_chatters returns NotModerator -> self-heal calls add_channel_moderator once, respects 600s cooldown on second 403, only on operational partner channel
+  - Abhängt von: P2.64, P2.65
+- **P2.64** [P2|risk:high] Helix chatters poller incl. bot-token-first path + 403 self-heal+retry
+  - Ziel: neuer poll_chatters-Loop ueber tb-transport-twitch get_chatters mit Bot-Token-first (resolve scopes), 403->self-heal->retry, broadcaster-token Fallback, scope-warn-once dedup
+  - Test: poll_chatters_single uses bot token first; on 403 self-heals then retries; falls back to broadcaster token if bot scopes missing
+  - Abhängt von: P2.61
+- **P3.10** [P3|risk:low] Structured followers-total result surface (ok/http_status/error_code/request_attempted)
+  - Ziel: crates/tb-transport-twitch/src/streams.rs:250-273 get_followers_total + wiring.rs follower path — return/propagate a structured {ok,data,http_status,error_code,request_attempted} surface (mirror runtime_support.py:127-143)
+  - Test: Fetch a follower total with an App-token (no moderator scope) and assert the structured surface records http_status + error_code (e.g. legacy_none_result) rather than a bare None.
+  - Abhängt von: P2.45
+
+### misc (4: P2×4)
+
+- **P2.68** [P2|clean-SQL|risk:low] Bot-filter clause drops anonymous (NULL/empty) chatters + case-sensitive in 3 audience handlers
+  - Ziel: lurker_analysis.rs:83,156 und audience.rs:215,217,232,335,360-361,418-419: ANY(...)-Filter ersetzen durch (col IS NULL OR col='' OR LOWER(col) <> ALL(bots)) wie watch_time.rs:125
+  - Test: lurker/audience query for a streamer with NULL/empty chatter_login + mixed-case bot login keeps anonymous rows and filters 'Nightbot'
+- **P2.71** [P2|risk:low] Twitch-OAuth admin rating/AB-vote attributed to 'admin' instead of twitch_login
+  - Ziel: stream_report.rs:324-331 + 521-528: rated_by/voted_by aus AdminActor.twitch_login (auth/level.rs:196-201) statt hardcoded 'admin'; owner_login() (55-60) auch fuer Admin liefern damit GET own_vote/rating eingebettet
+  - Test: admin authenticated via twitch_login 'earlysalty' rates/votes -> row stored under 'earlysalty' and GET stream-report embeds own rating / ab-vote own_vote!=null
+- **P2.93** [P2|risk:low] follower-funnel confidence threshold formula changed for low session counts
+  - Ziel: follower_funnel.rs:207: session_count.max(3)*3/5 ersetzen durch max(3, (session_count*3/5)) (Threshold clampen, nicht session_count)
+  - Test: session_count=1, follower_valid_samples=1 -> dataQuality.confidence='medium' (not 'high')
+- **P2.94** [P2|clean-SQL|risk:low] audience-insights missing last_seen_at backfill before watch-time calc
+  - Ziel: audience.rs:700-701: vor calc_watch_distribution backfill_last_seen_from_messages (UPDATE twitch_session_chatters.last_seen_at = MAX(message_ts)) aufrufen (Logik aus watch_time.rs:110 wiederverwenden)
+  - Test: data with NULL/stale last_seen_at but existing messages -> audience-insights sample_count/method matches watch-time-distribution
+
+### tb-observability (2: P2×1, P3×1)
+
+- **P2.62** [P2|clean-SQL|risk:medium] Analytics observability/decision-logging subsystem (counters, decision log, observability-event writes, snapshot)
+  - Ziel: tb-observability/src/lib.rs (insert_observability_event writer + mpsc), neuer _log_analytics_decision-Aequivalent im Analytics-Collector; get_analytics_observability_snapshot-Producer; tb-internal-api telemetry_routes.rs /debug/observability nativ statt Python-Proxy
+  - Test: after an analytics collection cycle, twitch_observability_events has a row flow_type='analytics' step='terminal_decision'; get_analytics_observability_snapshot returns last decision
+  - Abhängt von: P2.63, P2.64, P2.65
+- **P2.35** [P3|clean-SQL|risk:medium] Raid observability event service (RaidObservabilityService) -> twitch_observability_events
+  - Ziel: crates/tb-observability/src/lib.rs (deferred writer) — implement insert_observability_event + RaidObservabilityService (flow-id, counters, normalize/format, as_storage_payload) writing twitch_observability_events
+  - Test: Run a full raid flow and assert per-step rows are written to twitch_observability_events (count>0) with flow_id and decision fields.
+
+### tb-engagement (1: P2×1)
+
+- **P2.91** [P2|minimax-ledger,MiniMax-only|risk:low] chat-deep-minimax MiniMax token-usage ledger side-effect dropped
+  - Ziel: chat_deep_minimax.rs:82 / tb-engagement minimax_chat.rs raw_completion (337-352): Token-Counts nicht verwerfen, tb_llm::ledger::record(purpose='chat-deep-analysis') aufrufen
+  - Test: a chat-deep-minimax request inserts a minimax_usage row purpose='chat-deep-analysis'
+
+## DROP (18)
+
+- **P1.15** [P1] UI→template config normalization for customized live-announcement embeds — Block 20 live_announce / live_announce-template-1/3/4
+- **P1.30** [P1] Affiliate-Gutschrift-Generierung POST /admin/affiliates/generate-gutschriften — Block2B:api_admin-3 (DROP via Stripe Connect)
+- **P1.40** [P1] Streamer Promo-Self-Service (disable promos + Discord-Promo-Message) — Block 1 DROP dashboard-live-announcement-mixin-5 (Teil) Promo + Block 2 'Promo raus'
+- **P1.41** [P1] Custom Promo-Message-Editor (POST /twitch/abbo/promo-message) — Block 1 DROP dashboard-live-announcement-mixin-5 (Teil) Promo + Block 2 'Promo raus'
+- **P1.42** [P1] POST /twitch/abbo/promo-settings (Promo-Toggle) nativ — Block 1 DROP dashboard-live-announcement-mixin-5 (Teil) Promo + Block 2 'Promo raus'
+- **P1.43** [P1] POST /twitch/abbo/promo-message Persistenz nativ — Block 1 DROP dashboard-live-announcement-mixin-5 (Teil) Promo + Block 2 'Promo raus'
+- **P1.47** [P1] Go-Live Announcement Dashboard (5 Routen: page/config/save/test/preview) — Block 1 DROP dashboard-live-announcement-mixin-1 + Block 17 live_announce-template-1/3/4 + User-Annotation 'nur EIN Default-Template'
+- **P1.49** [P1] Live-Announcement Dashboard Builder (page + preview/config/test) — Block 1 DROP dashboard-live-announcement-mixin-1 + User-Annotation 'nur EIN Default-Template'
+- **P2.100** [P2] Verification success/failure DM to streamer — Block 4/Block 10 B10-Direktive (keine Discord-DMs)
+- **P2.110** [P2] Streamer self-service promo-disable toggle (POST /twitch/abbo/promo-settings) — Block 1 DROP dashboard-live-announcement-mixin-5 (Teil: Promo) + Block 2 2A Promo raus
+- **P2.117** [P2] Live-announcement dashboard config/test/preview endpoints — Block 1 DROP dashboard-live-announcement-mixin-1 + Block 20 live_announce-template DROP
+- **P2.122** [P2] UI-schema→template converter (_to_template_config) + validate_config_dict; dead dashboard_config helpers — Block 1 DROP dashboard-live-announcement-mixin-1 + Block 20 live_announce-template-1/3/4 DROP
+- **P2.123** [P2] Entire dashboard live-announcement editing surface (config/save/test/preview/editor-roles) — Block 1 DROP dashboard-live-announcement-mixin-1 + Block 20 live_announce-template DROP
+- **P3.28** [P3] Port-Bind Retry/Backoff bei EADDRINUSE — Querschnitts-Direktive: PID-Lock/process-lock -> DROP (systemd)
+- **P3.23** [P3] abbo_invoices page (/twitch/abbo/rechnungen) — Block 2 2A STRIPE-HOSTED DROP (abbo-billing-5/12 Rechnungs-Seite via Stripe Customer Portal)
+- **P3.24** [P3] Admin Stripe-readiness HTML page (/twitch/abbo/stripe-settings) — Block 2 2A (Readiness via JSON) / Block 1 SPA-not-HTML architecture
+- **P3.25** [P3] POST /twitch/reload (reload_cog) admin hot-reload endpoint — Block 17 DROP Hot-Reload (systemd-Restart reicht) + PID-lock/process directive
+- **P3.26** [P3] 'Test per DM' for live-announcement builder — NO-Discord-DM directive + Block 1 DROP live-announcement builder + user annotation
+
+## DEFER (8)
+
+- **P1.14** [P1] External-target bot-ban-check due-processing loop (part/rejoin probe) — Block 7 DEFER raid-blacklist-partner-setup-1 (Phase 6g)
+- **P1.55** [P1] Shared Discord-Admin-Callback (/callback/discord -> /twitch/auth/discord/complete) — Block 1 BUILD-P0 (Admin-Login) vs MEMORY project_twitch_admin_mode_rollback · ADMIN-LOGIN: dokumentierter #235→#236 Login-Loop, nie e2e getestet → nicht ohne ausdrückliche Freigabe.
+- **P1.57** [P1] Discord-Admin-OAuth-Login-Flow (master_dash_session erzeugen) — Block 1 BUILD-P0 live-1 (validate_admin_session) vs MEMORY project_twitch_admin_mode_rollback · ADMIN-LOGIN: dokumentierter #235→#236 Login-Loop, nie e2e getestet → nicht ohne ausdrückliche Freigabe.
+- **P2.47** [P2] Bot-ban-check drain orchestrator (duplicate of P1.14) — Block 7 DEFER raid-blacklist-partner-setup-1 (Phase 6g)
+- **P2.107** [P2] Discord-Dashboard external validate-session fallback for admin login — Block 3 (Discord-Admin-Login deferred ticket B3-10)
+- **P2.132** [P2] Discord-admin + affiliate OAuth state save/consume flows — Block 3 (Discord-admin login = B3-10 deferred) + Block 2 2B affiliate MVP
+- **P3.1** [P3] Chat-Join-Observability-Events (twitch_observability_events) — Block 7 raid-facades-2/raid-runtime-glue-2 (Observability -> Admin-Dashboard, P3) / Block 11 storage-core-pool-rows-pg-2 (deferred)
+- **P3.13** [P3] Blacklist-Raid streamer whisper (cancelled/too-late explanation) — Block 5 / eventsub-mixin (Chat-Cutover-Abhängigkeit)
+
+## KEEP_RUST (4)
+
+- **P2.111** [P2] Legacy abbo lurker-tax form-POST path gone + entitlement gate removed — Block 9 chat-commands-tokens-06 (Lurker-Tax für ALLE Partner, default deaktiviert)
+- **P2.135** [P2] Rust partner-resolution gate (find_partner_for_login→403) + mandatory login field — Block 3 auth-core-9 (Session-Gate strenger → Rust-Verhalten behalten)
+- **P3.2** [P3] Bot-banned-Detection: unconditional 'banned'-Substring — Block 8 ACCEPT / NEU-nicht-in-grillme
+- **P3.19** [P3] /v2/billing/catalog returns different response shape (rich vs simple) — Block2/2A billing-mixin-2 (Katalog)

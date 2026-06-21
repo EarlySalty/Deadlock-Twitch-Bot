@@ -1,0 +1,542 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Einer von uns</title>
+<style>
+  @font-face {
+    font-family: "Sora";
+    src: url("/testing/fonts/sora-latin.woff2") format("woff2");
+    font-weight: 700 800;
+    font-display: swap;
+  }
+  @font-face {
+    font-family: "Manrope";
+    src: url("/testing/fonts/manrope-latin.woff2") format("woff2");
+    font-weight: 400 700;
+    font-display: swap;
+  }
+
+  :root {
+    --bg: #07151d;
+    --text: #e9f1f7;
+    --muted: #9bb3c5;
+    --cyan: #06B6D4;
+    --violet: #A855F7;
+    --orange: #ff7a18;
+    --teal: #10b7ad;
+    --magenta: #ff2f7e;
+  }
+
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+
+  html, body { height: 100%; }
+
+  body {
+    background: var(--bg);
+    color: var(--text);
+    font-family: "Manrope", system-ui, sans-serif;
+    -webkit-font-smoothing: antialiased;
+    text-rendering: optimizeLegibility;
+  }
+
+  .hero {
+    min-height: 100vh;
+    width: 100%;
+    position: relative;
+    overflow: hidden;
+    background: var(--bg);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+  }
+
+  .dots {
+    position: absolute;
+    inset: 0;
+    width: 100%;
+    height: 100%;
+    display: block;
+  }
+
+  /* Typo-Layer */
+  .typo {
+    position: absolute;
+    inset: 0;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    pointer-events: none;
+    will-change: transform;
+    z-index: 2;
+  }
+
+  .headline {
+    font-family: "Sora", sans-serif;
+    font-weight: 800;
+    text-transform: uppercase;
+    line-height: 0.92;
+    letter-spacing: -0.02em;
+    text-align: center;
+    font-size: clamp(2.6rem, 12vw, 9.5rem);
+    opacity: 0;
+  }
+
+  .headline.show { opacity: 1; }
+
+  .headline .line { display: block; }
+
+  /* "VIELEN" tot/ausgegraut bis zum Cut */
+  .word-swap {
+    position: relative;
+    display: inline-block;
+  }
+
+  .word-old {
+    color: var(--teal);
+    filter: saturate(0.35) brightness(0.6);
+    display: inline-block;
+    position: relative;
+  }
+
+  /* Orange-Durchstrich */
+  .word-old::after {
+    content: "";
+    position: absolute;
+    left: -0.04em;
+    right: -0.04em;
+    top: 50%;
+    height: clamp(6px, 1.1vw, 14px);
+    background: var(--orange);
+    transform: translateY(-50%) scaleX(0);
+    transform-origin: left center;
+    box-shadow: 0 0 18px rgba(255, 122, 24, 0.55);
+  }
+
+  .word-swap.struck .word-old::after {
+    transform: translateY(-50%) scaleX(1);
+    transition: transform 120ms cubic-bezier(0.7, 0, 0.85, 0.15);
+  }
+
+  .word-new {
+    color: var(--cyan);
+    display: none;
+    text-shadow:
+      0 0 24px rgba(6, 182, 212, 0.65),
+      0 0 60px rgba(6, 182, 212, 0.30);
+  }
+
+  .word-swap.struck .word-old { display: none; }
+  .word-swap.struck .word-new { display: inline-block; }
+
+  /* Subline + CTA */
+  .outro {
+    position: absolute;
+    left: 50%;
+    transform: translateX(-50%) translateY(14px);
+    bottom: clamp(16%, 22vh, 24%);
+    width: min(720px, 86vw);
+    text-align: center;
+    opacity: 0;
+    transition: opacity 600ms ease, transform 600ms ease;
+    pointer-events: none;
+    z-index: 3;
+  }
+
+  .outro.show {
+    opacity: 1;
+    transform: translateX(-50%) translateY(0);
+    pointer-events: auto;
+  }
+
+  .outro p {
+    color: var(--muted);
+    font-size: clamp(0.95rem, 2.1vw, 1.2rem);
+    line-height: 1.5;
+    margin-bottom: 1.4rem;
+    font-weight: 500;
+  }
+
+  .cta {
+    display: inline-block;
+    font-family: "Sora", sans-serif;
+    font-weight: 700;
+    letter-spacing: 0.14em;
+    text-transform: uppercase;
+    font-size: clamp(0.8rem, 1.7vw, 0.95rem);
+    color: var(--orange);
+    background: transparent;
+    border: 1.5px solid var(--orange);
+    padding: 0.85em 2.2em;
+    border-radius: 2px;
+    cursor: pointer;
+    transition: background 180ms ease, color 180ms ease, box-shadow 180ms ease;
+  }
+
+  .cta:hover {
+    background: var(--orange);
+    color: var(--bg);
+    box-shadow: 0 0 28px rgba(255, 122, 24, 0.45);
+  }
+
+  /* Replay */
+  .replay {
+    position: absolute;
+    left: 50%;
+    bottom: 18px;
+    transform: translateX(-50%);
+    z-index: 4;
+    font-family: "Manrope", sans-serif;
+    font-size: 0.78rem;
+    letter-spacing: 0.05em;
+    color: var(--muted);
+    background: transparent;
+    border: 1px solid rgba(155, 179, 197, 0.25);
+    padding: 0.5em 1.1em;
+    border-radius: 999px;
+    cursor: pointer;
+    opacity: 0.65;
+    transition: opacity 160ms ease, border-color 160ms ease;
+  }
+
+  .replay:hover {
+    opacity: 1;
+    border-color: var(--cyan);
+    color: var(--text);
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    .headline, .outro { transition: none; }
+    .word-swap.struck .word-old::after { transition: none; }
+  }
+</style>
+</head>
+<body>
+  <section class="hero" id="hero">
+    <canvas class="dots" id="dots"></canvas>
+
+    <div class="typo" id="typo">
+      <h1 class="headline" id="headline">
+        <span class="line">DU BIST</span>
+        <span class="line">EINER VON</span>
+        <span class="line"><span class="word-swap" id="swap"><span class="word-old">VIELEN.</span><span class="word-new">UNS.</span></span></span>
+      </h1>
+    </div>
+
+    <div class="outro" id="outro">
+      <p>Endet dein Stream, läuft dein Publikum weiter — zum nächsten von uns.</p>
+      <button class="cta" type="button">ANSCHLIESSEN</button>
+    </div>
+
+    <button class="replay" id="replay" type="button">&#8635; Replay</button>
+  </section>
+
+<script>
+(function () {
+  "use strict";
+
+  var hero = document.getElementById("hero");
+  var canvas = document.getElementById("dots");
+  var ctx = canvas.getContext("2d", { alpha: true });
+  var typo = document.getElementById("typo");
+  var headline = document.getElementById("headline");
+  var swap = document.getElementById("swap");
+  var outro = document.getElementById("outro");
+  var replayBtn = document.getElementById("replay");
+
+  var reduced = window.matchMedia && window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+  var isMobile = Math.min(window.innerWidth, window.innerHeight) < 640;
+
+  // Phasen-Schwellen (ms)
+  var T_HEADLINE = 1000;   // harter Cut: dreizeiliger Satz
+  var T_SHOOT    = 3000;   // einsamer Punkt schiesst los
+  var T_BAND     = 4000;   // Band erreicht Wortmitte -> Swap
+  var T_OUTRO    = 4600;   // Subline + CTA
+
+  var DPR = Math.min(window.devicePixelRatio || 1, 2);
+  var W = 0, H = 0;        // CSS-Pixel
+  var bandY = 0;           // Texthoehe (Mitte des "EINER VON"/Wort-Bands)
+
+  // Punkte
+  var TARGET_COUNT = isMobile ? 220 : 420;
+  var dots = [];          // Band-Punkte (Kettenreaktion)
+  var STAGGER = 70;       // ms je Punkt
+  var DOT_R = isMobile ? 1.6 : 2.0;
+
+  // einsamer Punkt
+  var lonely = { x: 0, y: 0, r: 0 };
+  var shootFrom = { x: 0, y: 0 };
+  var shootTo = { x: 0, y: 0 };
+
+  // Drift + Parallax
+  var driftX = 0;
+  var DRIFT_SPEED = 0.15;  // px/frame
+  var parX = 0, parY = 0;       // aktuell
+  var parTX = 0, parTY = 0;     // ziel
+
+  // Zustand
+  var startT = 0;
+  var rafId = 0;
+  var swapped = false;
+  var headlineShown = false;
+  var outroShown = false;
+
+  function layout() {
+    var rect = hero.getBoundingClientRect();
+    W = rect.width;
+    H = rect.height;
+    canvas.width = Math.round(W * DPR);
+    canvas.height = Math.round(H * DPR);
+    canvas.style.width = W + "px";
+    canvas.style.height = H + "px";
+    ctx.setTransform(DPR, 0, 0, DPR, 0, 0);
+
+    // Band auf Hoehe der mittleren Zeile ("EINER VON")
+    bandY = H * 0.5 - H * 0.06;
+
+    // einsamer Punkt: unten links
+    lonely.x = W * 0.12;
+    lonely.y = H * 0.82;
+    lonely.r = isMobile ? 2.4 : 3.0;
+
+    shootFrom.x = lonely.x;
+    shootFrom.y = lonely.y;
+    shootTo.x = W * 0.04;
+    shootTo.y = bandY;
+  }
+
+  function buildBand() {
+    dots.length = 0;
+    var n = TARGET_COUNT;
+    var startX = W * 0.04;
+    var span = W * 0.96 - startX;
+    // Reihenfolge der Kettenreaktion: links -> rechts
+    for (var i = 0; i < n; i++) {
+      var t = i / (n - 1);
+      var baseX = startX + span * t;
+      // leichte vertikale Streuung für ein "Band", keine Linie
+      var jitter = (Math.sin(i * 12.9898) * 43758.5453);
+      jitter = jitter - Math.floor(jitter); // 0..1 pseudo-random, deterministisch
+      var dy = (jitter - 0.5) * (isMobile ? 14 : 20);
+      var r = DOT_R * (0.7 + jitter * 0.7);
+      dots.push({
+        baseX: baseX,
+        y: bandY + dy,
+        r: r,
+        spawnTime: T_SHOOT + i * STAGGER * (TARGET_COUNT > 320 ? 0.4 : 1) // dichter packen bei vielen
+      });
+    }
+  }
+
+  function resetChoreo() {
+    swapped = false;
+    headlineShown = false;
+    outroShown = false;
+    driftX = 0;
+    parX = parY = parTX = parTY = 0;
+    typo.style.transform = "translate3d(0,0,0)";
+    headline.classList.remove("show");
+    swap.classList.remove("struck");
+    outro.classList.remove("show");
+    startT = performance.now();
+  }
+
+  // ---- Renderer ----
+  function drawLonely(elapsed) {
+    var pulse = 0.5 + 0.5 * Math.sin(elapsed / 220);
+    var r = lonely.r * (0.82 + 0.28 * pulse);
+    var a = 0.55 + 0.45 * pulse;
+    ctx.beginPath();
+    ctx.fillStyle = "rgba(6,182,212," + a.toFixed(3) + ")";
+    ctx.arc(lonely.x + parX, lonely.y + parY, r, 0, Math.PI * 2);
+    ctx.fill();
+    // Halo
+    ctx.beginPath();
+    ctx.fillStyle = "rgba(6,182,212," + (a * 0.16).toFixed(3) + ")";
+    ctx.arc(lonely.x + parX, lonely.y + parY, r * 3.2, 0, Math.PI * 2);
+    ctx.fill();
+  }
+
+  function drawShooter(elapsed) {
+    // 0..1 ueber ~600ms
+    var p = clamp((elapsed - T_SHOOT) / 600, 0, 1);
+    var ep = easeOutCubic(p);
+    var x = shootFrom.x + (shootTo.x - shootFrom.x) * ep;
+    var y = shootFrom.y + (shootTo.y - shootFrom.y) * ep;
+    // harte gerade Trail-Linie
+    ctx.strokeStyle = "rgba(6,182,212,0.35)";
+    ctx.lineWidth = 1.5;
+    ctx.beginPath();
+    ctx.moveTo(shootFrom.x + parX, shootFrom.y + parY);
+    ctx.lineTo(x + parX, y + parY);
+    ctx.stroke();
+    // Kopf
+    ctx.beginPath();
+    ctx.fillStyle = "rgba(6,182,212,0.95)";
+    ctx.arc(x + parX, y + parY, lonely.r * 1.05, 0, Math.PI * 2);
+    ctx.fill();
+    return p >= 1;
+  }
+
+  function drawBand(now) {
+    ctx.fillStyle = "rgba(6,182,212,0.9)";
+    ctx.beginPath();
+    var bw = W * 0.96 - W * 0.04;
+    for (var i = 0; i < dots.length; i++) {
+      var d = dots[i];
+      if (now < d.spawnTime) continue;
+      // Pop-In: kurz aufploppen
+      var age = now - d.spawnTime;
+      var pop = age < 140 ? easeOutBack(age / 140) : 1;
+      // endloser Drift nach rechts + nahtloser Wrap
+      var x = d.baseX + driftX;
+      x = W * 0.04 + ((x - W * 0.04) % bw + bw) % bw;
+      var r = d.r * pop;
+      if (r <= 0.05) continue;
+      ctx.moveTo(x + parX + r, d.y + parY);
+      ctx.arc(x + parX, d.y + parY, r, 0, Math.PI * 2);
+    }
+    ctx.fill();
+  }
+
+  function frame() {
+    rafId = 0;
+    var now = performance.now();
+    var elapsed = now - startT;
+
+    ctx.clearRect(0, 0, W, H);
+
+    // Parallax glaetten
+    parX += (parTX - parX) * 0.08;
+    parY += (parTY - parY) * 0.08;
+    if (Math.abs(parTX - parX) > 0.01 || Math.abs(parTY - parY) > 0.01) {
+      typo.style.transform = "translate3d(" + (parX * 0.6).toFixed(2) + "px," + (parY * 0.6).toFixed(2) + "px,0)";
+    }
+
+    // Phase: Headline (harter Cut)
+    if (!headlineShown && elapsed >= T_HEADLINE) {
+      headline.classList.add("show");
+      headlineShown = true;
+    }
+
+    // Phase: Swap VIELEN -> UNS
+    if (!swapped && elapsed >= T_BAND) {
+      swap.classList.add("struck");
+      swapped = true;
+    }
+
+    // Phase: Outro
+    if (!outroShown && elapsed >= T_OUTRO) {
+      outro.classList.add("show");
+      outroShown = true;
+    }
+
+    // Canvas-Inhalt
+    if (elapsed < T_SHOOT) {
+      // nur einsamer Punkt
+      drawLonely(elapsed);
+    } else if (elapsed < T_SHOOT + 600) {
+      // Shooter läuft, Band beginnt parallel zu spawnen
+      drawShooter(elapsed);
+      drawBand(elapsed);
+    } else {
+      // Band steht; endloser Drift
+      driftX += DRIFT_SPEED;
+      drawBand(elapsed);
+    }
+
+    if (!document.hidden) {
+      rafId = requestAnimationFrame(frame);
+    }
+  }
+
+  // ---- statischer Endzustand (reduced motion) ----
+  function renderStatic() {
+    layout();
+    buildBand();
+    headline.classList.add("show");
+    swap.classList.add("struck");
+    outro.classList.add("show");
+    ctx.clearRect(0, 0, W, H);
+    ctx.fillStyle = "rgba(6,182,212,0.9)";
+    ctx.beginPath();
+    for (var i = 0; i < dots.length; i++) {
+      var d = dots[i];
+      ctx.moveTo(d.baseX + d.r, d.y);
+      ctx.arc(d.baseX, d.y, d.r, 0, Math.PI * 2);
+    }
+    ctx.fill();
+  }
+
+  // ---- helpers ----
+  function clamp(v, a, b) { return v < a ? a : v > b ? b : v; }
+  function easeOutCubic(t) { return 1 - Math.pow(1 - t, 3); }
+  function easeOutBack(t) {
+    var c1 = 1.70158, c3 = c1 + 1;
+    return 1 + c3 * Math.pow(t - 1, 3) + c1 * Math.pow(t - 1, 2);
+  }
+
+  function start() {
+    if (rafId) { cancelAnimationFrame(rafId); rafId = 0; }
+    layout();
+    buildBand();
+    resetChoreo();
+    rafId = requestAnimationFrame(frame);
+  }
+
+  // ---- events ----
+  var resizeTimer = 0;
+  window.addEventListener("resize", function () {
+    if (reduced) { renderStatic(); return; }
+    clearTimeout(resizeTimer);
+    resizeTimer = setTimeout(function () {
+      isMobile = Math.min(window.innerWidth, window.innerHeight) < 640;
+      DPR = Math.min(window.devicePixelRatio || 1, 2);
+      var prevElapsed = performance.now() - startT;
+      layout();
+      buildBand();
+      // Choreo-Zeit beibehalten, nur Geometrie neu
+      startT = performance.now() - prevElapsed;
+    }, 150);
+  });
+
+  document.addEventListener("visibilitychange", function () {
+    if (reduced) return;
+    if (document.hidden) {
+      if (rafId) { cancelAnimationFrame(rafId); rafId = 0; }
+    } else if (!rafId) {
+      rafId = requestAnimationFrame(frame);
+    }
+  });
+
+  hero.addEventListener("mousemove", function (e) {
+    if (reduced) return;
+    var rect = hero.getBoundingClientRect();
+    var nx = (e.clientX - rect.left) / rect.width - 0.5;
+    var ny = (e.clientY - rect.top) / rect.height - 0.5;
+    parTX = -nx * 16; // max ~8px
+    parTY = -ny * 16;
+  });
+
+  hero.addEventListener("mouseleave", function () {
+    parTX = 0; parTY = 0;
+  });
+
+  replayBtn.addEventListener("click", function () {
+    if (reduced) { renderStatic(); return; }
+    start();
+  });
+
+  // ---- boot ----
+  if (reduced) {
+    renderStatic();
+    window.addEventListener("resize", function () { renderStatic(); });
+  } else {
+    start();
+  }
+})();
+</script>
+</body>
+</html>
