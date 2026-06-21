@@ -39,6 +39,7 @@ pub mod promos;
 pub mod scam_pitch;
 pub mod secret_sink;
 pub mod spam_filter;
+pub mod stats;
 pub mod steam_lookup;
 pub mod sus_invite;
 pub mod timeout_tracking;
