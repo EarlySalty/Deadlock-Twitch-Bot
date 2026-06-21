@@ -1,3 +1,11 @@
+## #250 — Hilfe-Chat auf der Website lernt aus einer pflegbaren Wissensbasis
+
+**Problem:** Der Frage-Chat auf der Website beantwortete Fragen zum Bot bisher nur aus einem fest eingebauten Kurz-Steckbrief. Dadurch konnte er nur Grundlegendes, keine tiefergehenden Fragen, und er nannte keine Quelle — und es ließ sich nicht leicht erweitern, ohne am Bot selbst zu schrauben.
+
+**Änderung:** Der Chat liest jetzt aus einer gepflegten Sammlung einzelner Wissens-Dokumente. Pro Frage wählt er über einen Stichwort-Abgleich die passenden Dokumente aus, antwortet ausschließlich auf deren Grundlage und gibt die genutzte Quelle an. Findet sich zu einer Frage kein passendes Dokument, sagt er ehrlich, dass er das (noch) nicht weiß, und verweist auf die Seite bzw. den Discord — statt etwas zu erfinden.
+
+**Ergebnis:** Antworten sind genauer und belegt, die Wissensbasis lässt sich jederzeit erweitern oder korrigieren, ohne den Bot anzufassen, und es gibt keine geratenen Auskünfte mehr. Damit ist die Grundlage gelegt, denselben Wissensstand künftig auch auf einer Hilfeseite und im Twitch-Chat auszuspielen.
+
 ## #249 — Analyse-Genauigkeit, Abo-Boni und Raid-Verlauf nach dem Umbau nachgezogen
 
 **Problem:** Nach dem Sprachumbau fehlten an mehreren Stellen Daten und Feinheiten der alten Version. Auswertungen ließen anonyme Zuschauer und einzelne Kennzahlen aus, Follower-Gesamtzahlen blieben teils leer, Abonnenten- und Werbe-Daten wurden nicht mehr regelmäßig erfasst, der Bonus beim Jahres-Abo wurde nicht gutgeschrieben, und der Raid-Verlauf war nicht abrufbar.
