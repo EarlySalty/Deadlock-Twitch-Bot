@@ -2412,6 +2412,7 @@ dependencies = [
  "tb-crypto",
  "tb-db",
  "tb-error",
+ "tb-raid",
  "thiserror 1.0.69",
  "tokio",
  "tracing",
