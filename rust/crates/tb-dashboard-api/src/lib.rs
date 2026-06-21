@@ -110,7 +110,7 @@ pub fn build_public_router(pool: PgPool) -> Router {
 /// Auth-Level wird per Extension eingesetzt — `AuthLevel` als `FromRequestParts`
 /// liest den Token selbst aus der Extension.
 pub fn build_authed_router(pool: PgPool, token: String, rate_limiter: RateLimiter) -> Router {
-    use handlers::{ads_schedule, affiliate_portal, ai_analysis, ai_chat, ai_history, audience, audience_demographics, auth_status, billing, category_activity, category_comparison, category_leaderboard, category_timings, chat_analytics, chat_content_analysis, chat_deep_minimax, chat_hype_timeline, chat_social_graph, coaching, engagement_mode, engagement_settings, exp_analytics, follower_funnel, internal_home, leaderboard, loyalty_curve, lurker_analysis, lurker_tax_settings, monetization, overview, performance, raid_analytics, raid_history, rankings, retention_curve, scam_guard_queue, scam_guard_settings, session_detail, silent_settings, social_media, spa, stream_report, streamers, tag_analysis, tip_settings, title, title_performance, viewer_timeline, viewers, watch_time};
+    use handlers::{ads_schedule, affiliate_portal, ai_analysis, ai_chat, ai_history, audience, audience_demographics, auth_status, billing, category_activity, category_comparison, category_leaderboard, category_timings, chat_analytics, chat_content_analysis, chat_deep_minimax, chat_hype_timeline, chat_social_graph, coaching, engagement_mode, engagement_settings, exp_analytics, follower_funnel, internal_home, leaderboard, loyalty_curve, lurker_analysis, lurker_tax_settings, monetization, onboarding, overview, performance, raid_analytics, raid_history, rankings, retention_curve, scam_guard_queue, scam_guard_settings, session_detail, silent_settings, social_media, spa, stream_report, streamers, tag_analysis, tip_settings, title, title_performance, viewer_timeline, viewers, watch_time};
     use handlers::scam_guard_enforce;
 
     // P2.86: Rate-Limit-Layer für die gebündelte Internal-Home-Startseite (GET +
@@ -211,6 +211,12 @@ pub fn build_authed_router(pool: PgPool, token: String, rate_limiter: RateLimite
         .route(
             "/twitch/api/v2/streamer/tip-settings",
             get(tip_settings::get_handler).post(tip_settings::post_handler),
+        )
+        // Streamer-Selbstbedienung: resumierbarer Onboarding-Wizard inklusive
+        // Discord-/Steam-Link-Status.
+        .route(
+            "/twitch/api/v2/streamer/onboarding",
+            get(onboarding::get_status).post(onboarding::post_status),
         )
         // Streamer-Selbstbedienung: Conversation-Scam-Guard konfigurieren
         // (enabled, mode, threshold, suggestion_floor).

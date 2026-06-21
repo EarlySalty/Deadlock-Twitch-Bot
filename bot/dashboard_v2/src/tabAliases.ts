@@ -7,6 +7,7 @@ export interface ResolvedTab {
 }
 
 const TAB_ALIASES: Record<string, ResolvedTab> = {
+  onboarding: { tab: 'onboarding' },
   overview: { tab: 'overview' },
   streams: { tab: 'streams' },
   audience: { tab: 'audience', sub: 'ueberblick' },

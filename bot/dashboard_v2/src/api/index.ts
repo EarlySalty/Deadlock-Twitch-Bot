@@ -7,3 +7,4 @@ export * from './affiliate';
 export * from './ai';
 export * from './home';
 export * from './analytics';
+export * from './onboarding';
