@@ -175,11 +175,11 @@ pub async fn create_handler(
     Json(body): Json<CreateBody>,
 ) -> impl IntoResponse {
     if !auth.is_privileged() {
-        return json_err(StatusCode::FORBIDDEN, "Platzhalter");
+        return json_err(StatusCode::FORBIDDEN, "Nur Administratoren dürfen Roadmap-Einträge anlegen.");
     }
     let title = body.title.unwrap_or_default().trim().to_string();
     if title.is_empty() {
-        return json_err(StatusCode::BAD_REQUEST, "Platzhalter");
+        return json_err(StatusCode::BAD_REQUEST, "Bitte einen Titel angeben.");
     }
     let description = body
         .description
@@ -225,7 +225,7 @@ pub async fn update_handler(
     Json(body): Json<UpdateBody>,
 ) -> impl IntoResponse {
     if !auth.is_privileged() {
-        return json_err(StatusCode::FORBIDDEN, "Platzhalter");
+        return json_err(StatusCode::FORBIDDEN, "Nur Administratoren dürfen Roadmap-Einträge ändern.");
     }
 
     // Dynamisches partielles UPDATE über nummerierte Binds.
@@ -266,7 +266,7 @@ pub async fn update_handler(
     }
 
     if sets.is_empty() {
-        return json_err(StatusCode::BAD_REQUEST, "Platzhalter");
+        return json_err(StatusCode::BAD_REQUEST, "Keine änderbaren Felder angegeben.");
     }
     sets.push("updated_at = NOW()".to_string());
 
@@ -295,7 +295,7 @@ pub async fn update_handler(
 
     match fetch_item(&pool, id).await {
         Ok(Some(item)) => (StatusCode::OK, Json(item)).into_response(),
-        Ok(None) => json_err(StatusCode::NOT_FOUND, "Platzhalter"),
+        Ok(None) => json_err(StatusCode::NOT_FOUND, "Roadmap-Eintrag nicht gefunden."),
         Err(e) => {
             tracing::error!("roadmap update fetch fehlgeschlagen: {e}");
             json_err(StatusCode::INTERNAL_SERVER_ERROR, "DB-Fehler")
@@ -310,7 +310,7 @@ pub async fn delete_handler(
     Path(id): Path<i64>,
 ) -> impl IntoResponse {
     if !auth.is_privileged() {
-        return json_err(StatusCode::FORBIDDEN, "Platzhalter");
+        return json_err(StatusCode::FORBIDDEN, "Nur Administratoren dürfen Roadmap-Einträge löschen.");
     }
     if let Err(resp) = ensure_table(&pool).await {
         return resp;
@@ -388,7 +388,7 @@ mod tests {
         body::Body,
         extract::ConnectInfo,
         http::Request,
-        routing::{delete, patch, post},
+        routing::{patch, post},
         Extension, Router,
     };
     use std::net::SocketAddr;

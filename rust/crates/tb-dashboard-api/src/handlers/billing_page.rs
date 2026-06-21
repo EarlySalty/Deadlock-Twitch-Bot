@@ -55,15 +55,15 @@ const DEFAULT_PUBLIC_ORIGIN: &str = "https://admin.deutsche-deadlock-community.d
 /// Checkout-Seite (deutscher Rechtstext). PLATZHALTER — finaler Wortlaut wird von
 /// Claude gesetzt (Markdown-Link zu AGB + Anerkennung des Widerrufsrecht-Verlusts
 /// nach § 356 Abs. 5 BGB; Python-Vorlage: abbo_billing_routes.py:99-107).
-const CHECKOUT_TOS_MESSAGE: &str = "Platzhalter";
+const CHECKOUT_TOS_MESSAGE: &str = "Mit dem Kauf stimmst du unseren AGB zu. Du verlangst ausdrücklich, dass die Leistung sofort beginnt, und bestätigst, dass dein Widerrufsrecht mit der vollständigen Vertragserfüllung gemäß § 356 Abs. 5 BGB erlischt.";
 
 /// P1.44: User-sichtbare Status-Meldungen der Checkout-Preview (vier Zweige aus
 /// `routes_billing.py:api_billing_checkout_preview`). PLATZHALTER — finaler
 /// deutscher Wortlaut wird von Claude gesetzt.
-const PREVIEW_MSG_FREE: &str = "Platzhalter";
-const PREVIEW_MSG_READY: &str = "Platzhalter";
-const PREVIEW_MSG_MISSING_PRICE: &str = "Platzhalter";
-const PREVIEW_MSG_NOT_CONFIGURED: &str = "Platzhalter";
+const PREVIEW_MSG_FREE: &str = "Dieser Plan ist kostenlos – ein Checkout ist nicht nötig.";
+const PREVIEW_MSG_READY: &str = "Der Checkout ist startklar.";
+const PREVIEW_MSG_MISSING_PRICE: &str = "Für diesen Plan ist noch keine Preis-ID hinterlegt.";
+const PREVIEW_MSG_NOT_CONFIGURED: &str = "Der Bezahlvorgang ist noch nicht vollständig eingerichtet.";
 
 /// Laufzeit-Konfiguration des nativen Bezahlpfades (als Extension injiziert).
 ///

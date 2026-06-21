@@ -145,7 +145,7 @@ pub async fn raid_auth_handler(
         // Expliziter Override: nur erlaubt wenn eigener Login ODER Admin.
         let is_own = own_login.as_deref() == Some(requested_login.as_str());
         if !is_own && !is_admin(&auth) {
-            return (StatusCode::UNAUTHORIZED, "Platzhalter").into_response();
+            return (StatusCode::UNAUTHORIZED, "Du darfst diesen Login nicht autorisieren.").into_response();
         }
         requested_login
     } else if let Some(login) = own_login {
@@ -163,7 +163,7 @@ pub async fn raid_auth_handler(
         if allow_public {
             PUBLIC_ONBOARDING_LOGIN.to_string()
         } else {
-            return (StatusCode::UNAUTHORIZED, "Platzhalter").into_response();
+            return (StatusCode::UNAUTHORIZED, "Für diesen Kanal ist kein öffentlicher Onboarding-Link freigeschaltet.").into_response();
         }
     };
 
@@ -175,9 +175,9 @@ pub async fn raid_auth_handler(
 
     match bridge_auth_url(&path).await {
         BridgeResult::Url(url) => Redirect::to(&url).into_response(),
-        BridgeResult::Bad => (StatusCode::BAD_REQUEST, "Platzhalter").into_response(),
+        BridgeResult::Bad => (StatusCode::BAD_REQUEST, "Ungültige Anfrage.").into_response(),
         BridgeResult::Expired | BridgeResult::Unavailable => {
-            (StatusCode::SERVICE_UNAVAILABLE, "Platzhalter").into_response()
+            (StatusCode::SERVICE_UNAVAILABLE, "Der Anmeldedienst ist gerade nicht erreichbar. Bitte versuche es später erneut.").into_response()
         }
     }
 }
@@ -189,25 +189,29 @@ pub async fn raid_auth_handler(
 pub async fn raid_go_handler(Query(q): Query<RaidGoQuery>) -> Response {
     let state = q.state.unwrap_or_default().trim().to_string();
     if state.is_empty() {
-        return (StatusCode::BAD_REQUEST, "Platzhalter").into_response();
+        return (StatusCode::BAD_REQUEST, "Fehlender Link-Parameter.").into_response();
     }
 
     let path = format!("/raid/go-url?state={}", urlencode(&state));
     match bridge_auth_url(&path).await {
         BridgeResult::Url(url) => Redirect::to(&url).into_response(),
         BridgeResult::Expired => expired_link_page(),
-        BridgeResult::Bad => (StatusCode::BAD_REQUEST, "Platzhalter").into_response(),
+        BridgeResult::Bad => (StatusCode::BAD_REQUEST, "Ungültiger Link.").into_response(),
         BridgeResult::Unavailable => {
-            (StatusCode::SERVICE_UNAVAILABLE, "Platzhalter").into_response()
+            (StatusCode::SERVICE_UNAVAILABLE, "Der Dienst ist gerade nicht erreichbar. Bitte versuche es später erneut.").into_response()
         }
     }
 }
 
 /// 410-Seite für abgelaufene/ungültige Discord-Button-Links (Python: 410 HTML).
 fn expired_link_page() -> Response {
-    // Platzhalter: finale deutsche Hinweis-Seite schreibt Claude.
     let html = "<!doctype html><html lang=\"de\"><head><meta charset=\"utf-8\">\
-<title>Platzhalter</title></head><body><p>Platzhalter</p></body></html>";
+<meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">\
+<title>Link abgelaufen</title></head>\
+<body style=\"font-family:system-ui,sans-serif;max-width:32rem;margin:4rem auto;padding:0 1rem;text-align:center\">\
+<h1>Link abgelaufen</h1>\
+<p>Dieser Anmelde-Link ist abgelaufen oder ungültig. Fordere über den Bot einen neuen Link an und versuche es erneut.</p>\
+</body></html>";
     (
         StatusCode::GONE,
         [(header::CONTENT_TYPE, "text/html; charset=utf-8")],

@@ -122,15 +122,15 @@ fn render_market_research_page() -> String {
     )
 }
 
-// PLATZHALTER (P2.115): user-sichtbare deutsche Seitentexte — Claude setzt sie.
-const MR_TITLE: &str = "Platzhalter";
-const MR_SUBTITLE: &str = "Platzhalter";
-const MR_H_HISTORY: &str = "Platzhalter";
-const MR_H_META: &str = "Platzhalter";
-const MR_H_SENTIMENT: &str = "Platzhalter";
-const MR_H_OVERLAP: &str = "Platzhalter";
-const MR_H_QUESTIONS: &str = "Platzhalter";
-const MR_H_CHANNELS: &str = "Platzhalter";
+// User-sichtbare deutsche Seitentexte der Market-Research-Seite (P2.115).
+const MR_TITLE: &str = "Markt-Recherche";
+const MR_SUBTITLE: &str = "Überblick über die Deadlock-Streaming-Landschaft im DACH-Raum";
+const MR_H_HISTORY: &str = "Zuschauer-Verlauf (24 Stunden)";
+const MR_H_META: &str = "Markt-Schnappschuss";
+const MR_H_SENTIMENT: &str = "Stimmung im Chat";
+const MR_H_OVERLAP: &str = "Zuschauer-Überschneidung";
+const MR_H_QUESTIONS: &str = "Offene Fragen";
+const MR_H_CHANNELS: &str = "Beobachtete Kanäle";
 
 // ── Markt-Daten-API (P2.105 / P2.116) ─────────────────────────────────────────
 

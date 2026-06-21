@@ -232,7 +232,7 @@ pub async fn health_handler(
         warnings.push(ServiceWarning {
             level: "error",
             code: "analytics_db_fingerprint_mismatch",
-            message: "Platzhalter".to_string(),
+            message: "Dashboard und Bot greifen auf unterschiedliche Analyse-Datenbanken zu – die angezeigten Werte können abweichen.".to_string(),
             timestamp: Utc::now().to_rfc3339(),
         });
     }

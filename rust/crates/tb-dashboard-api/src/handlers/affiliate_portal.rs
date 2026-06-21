@@ -165,8 +165,8 @@ pub async fn portal_page_handler() -> Response {
     let html = match tokio::fs::read_to_string(&index).await {
         Ok(s) => s,
         Err(_) => {
-            // Platzhalter: finaler deutscher Hinweistext schreibt Claude.
-            return (StatusCode::NOT_FOUND, "Platzhalter").into_response();
+            // 404, wenn das Affiliate-Portal-Bundle (index.html) nicht gebaut ist.
+            return (StatusCode::NOT_FOUND, "Das Affiliate-Portal ist derzeit nicht verfügbar.").into_response();
         }
     };
     (

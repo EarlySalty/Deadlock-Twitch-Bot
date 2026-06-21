@@ -225,17 +225,30 @@ fn demo_ai_points() -> Value {
         "kritisch", "kritisch", "kritisch", "hoch", "hoch", "hoch", "hoch", "mittel", "mittel",
         "mittel",
     ];
+    const DEMO_POINTS: [(&str, &str, &str, &str); 10] = [
+        ("Streamtitel ohne Suchbegriffe", "Deine letzten Titel enthalten weder \"Deadlock\" noch deinen Rang – in der Kategorie-Suche bist du dadurch kaum auffindbar.", "Setze \"Deadlock\" und deinen aktuellen Rang an den Titelanfang.", "Mehr Sichtbarkeit in der Kategorie, geschätzt +10–15 % Erstzuschauer."),
+        ("Unregelmäßige Startzeiten", "Deine Startzeiten schwanken um mehrere Stunden – Stammzuschauer können dich schlecht einplanen.", "Lege zwei feste Wochentage mit fixer Uhrzeit fest und kommuniziere sie im Kanal.", "Stabilere Anfangszuschauer und höhere Wiederkehrrate."),
+        ("Kein klarer Stream-Fokus", "Du wechselst innerhalb eines Streams häufig die Inhalte – das erschwert neuen Zuschauern das Hängenbleiben.", "Definiere pro Stream ein Leitthema, z. B. Ranked-Grind oder Hero-Guide.", "Längere Verweildauer in den ersten zehn Minuten."),
+        ("Wenig Chat-Interaktion in Flauten", "In zuschauerschwachen Phasen sinkt deine Ansprache an den Chat deutlich ab.", "Stelle in ruhigen Momenten gezielt Fragen an den Chat.", "Höhere Zahl an Nachrichten pro Zuschauer."),
+        ("Raids werden selten genutzt", "Du beendest Streams oft ohne Raid und verschenkst damit Reichweite im Partnernetz.", "Raide am Ende jedes Streams einen aktiven Partner.", "Mehr gegenseitige Zuschauer-Übergaben."),
+        ("Kategorie zu spät gesetzt", "Die Kategorie wird teils erst nach Streambeginn korrekt gesetzt.", "Setze Kategorie und Titel bereits vor dem Live-Gehen.", "Bessere Auffindbarkeit ab der ersten Minute."),
+        ("Highlights ungenutzt", "Aus deinen Streams werden kaum Clips oder Highlights weiterverwertet.", "Erstelle pro Stream ein bis zwei Clips für Kurzvideo-Plattformen.", "Zusätzliche Reichweite außerhalb von Twitch."),
+        ("Panels unvollständig", "Deine Kanal-Panels enthalten wenig Infos zu Zeitplan und Social Media.", "Ergänze Panels für Zeitplan, Regeln und Social Media.", "Mehr Follows durch klare Kanal-Infos."),
+        ("Selten Umfragen oder Votings", "Interaktive Elemente wie Umfragen kommen kaum vor.", "Starte pro Stream eine kurze Chat-Umfrage.", "Stärkere Bindung der Stammzuschauer."),
+        ("Wenig Off-Stream-Kommunikation", "Zwischen den Streams gibt es kaum Ankündigungen.", "Kündige den nächsten Stream über Discord und Social Media an.", "Höhere Anfangszuschauerzahl."),
+    ];
     let points: Vec<Value> = priorities
         .iter()
+        .zip(DEMO_POINTS.iter())
         .enumerate()
-        .map(|(i, prio)| {
+        .map(|(i, (prio, (title, analysis, action, expected)))| {
             json!({
                 "number": i + 1,
                 "priority": prio,
-                "title": "Platzhalter",
-                "analysis": "Platzhalter",
-                "action": "Platzhalter",
-                "expectedImpact": "Platzhalter",
+                "title": title,
+                "analysis": analysis,
+                "action": action,
+                "expectedImpact": expected,
             })
         })
         .collect();
@@ -437,8 +450,8 @@ pub async fn demo_coaching() -> Response {
         "streamer": DEMO_LOGIN,
         "generatedAt": "2026-06-13T11:00:00Z",
         "tips": [
-            { "area": "retention", "title": "Platzhalter", "detail": "Platzhalter" },
-            { "area": "growth", "title": "Platzhalter", "detail": "Platzhalter" }
+            { "area": "retention", "title": "Zuschauer länger halten", "detail": "Die meisten Zuschauer springen in den ersten Minuten ab. Steige mit einer klaren Ansage zum heutigen Stream-Ziel ein und sprich neue Zuschauer aktiv an." },
+            { "area": "growth", "title": "Reichweite ausbauen", "detail": "Setze Titel und Kategorie vor dem Live-Gehen, raide zum Schluss einen aktiven Partner und verwerte Highlights als kurze Clips." }
         ]
     }))
     .into_response()
