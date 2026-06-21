@@ -678,6 +678,18 @@ impl RaidArrivalSink for RaidArrivalSinkImpl {
         };
         let Some(pending) = pending else { return };
 
+        // P1.10: Effektive Zuschauerzahl. Trifft das Bestätigungs-Signal ohne
+        // Zuschauerzahl ein (viewer_count==0, z. B. channel.chat.notification),
+        // fällt Python (raid_arrival_runtime.py:263) auf die bei Raid-Erkennung
+        // registrierte registered_viewer_count zurück. Sonst persistiert das
+        // Arrival-Tracking 0 und die Dankesnachricht lautet "mit 0 Zuschauern".
+        // `int(viewer_count or pending.registered_viewer_count or 0)`.
+        let effective_viewer_count = if viewer_count != 0 {
+            viewer_count
+        } else {
+            pending.registered_viewer_count
+        };
+
         // 2. Partner-/Known-Status vorab async laden, dann sync klassifizieren.
         let lookups = self
             .prefetch_lookups(
@@ -780,7 +792,7 @@ impl RaidArrivalSink for RaidArrivalSinkImpl {
                     from_broadcaster_login: from_broadcaster_login.to_string(),
                     to_broadcaster_id: to_broadcaster_id.to_string(),
                     to_broadcaster_login: to_broadcaster_login.to_string(),
-                    viewer_count,
+                    viewer_count: effective_viewer_count,
                     classification: decision.classification.clone().unwrap_or_default(),
                     confirmation_signals: signal_type.to_string(),
                     primary_signal: signal_type.to_string(),
@@ -835,7 +847,7 @@ impl RaidArrivalSink for RaidArrivalSinkImpl {
                 to_broadcaster_login,
                 from_broadcaster_login,
                 from_broadcaster_id,
-                viewer_count,
+                viewer_count: effective_viewer_count,
             };
             match self
                 .confirm_resolver
@@ -871,7 +883,7 @@ impl RaidArrivalSink for RaidArrivalSinkImpl {
                 from_broadcaster_login,
                 to_broadcaster_login,
                 to_broadcaster_id,
-                viewer_count,
+                effective_viewer_count,
             )
             .await;
         }
@@ -894,7 +906,7 @@ impl RaidArrivalSink for RaidArrivalSinkImpl {
                     from_broadcaster_login: from_broadcaster_login.to_string(),
                     to_broadcaster_id: to_broadcaster_id.to_string(),
                     to_broadcaster_login: to_broadcaster_login.to_string(),
-                    viewer_count,
+                    viewer_count: effective_viewer_count,
                     confirmation_signal: Some(signal_type.to_string()),
                 })
                 .await
@@ -1180,7 +1192,8 @@ mod tests {
         for ddl in [
             "CREATE TABLE twitch_partners (twitch_user_id TEXT, twitch_login TEXT, status TEXT, silent_raid INTEGER DEFAULT 0)",
             "CREATE TABLE twitch_streamer_identities (twitch_user_id TEXT, twitch_login TEXT)",
-            "CREATE TABLE twitch_live_state (twitch_user_id TEXT PRIMARY KEY, last_started_at TEXT, last_game TEXT, active_session_id BIGINT)",
+            "CREATE TABLE twitch_live_state (twitch_user_id TEXT PRIMARY KEY, streamer_login TEXT, last_started_at TEXT, last_game TEXT, active_session_id BIGINT)",
+            "CREATE TABLE twitch_stream_sessions (id BIGSERIAL PRIMARY KEY, streamer_login TEXT, started_at TEXT, ended_at TEXT)",
             "CREATE TABLE twitch_raid_history (id BIGSERIAL PRIMARY KEY, from_broadcaster_id TEXT, from_broadcaster_login TEXT, to_broadcaster_id TEXT, to_broadcaster_login TEXT, executed_at TIMESTAMPTZ, success BOOLEAN)",
             "CREATE TABLE twitch_partner_raid_scores (twitch_user_id TEXT PRIMARY KEY, twitch_login TEXT DEFAULT '', avg_duration_sec INTEGER DEFAULT 0, time_pattern_score_base DOUBLE PRECISION DEFAULT 0.5, received_successful_raids_total INTEGER DEFAULT 0, is_new_partner_preferred INTEGER DEFAULT 0, new_partner_multiplier DOUBLE PRECISION DEFAULT 1.0, raid_boost_multiplier DOUBLE PRECISION DEFAULT 1.0, is_live INTEGER DEFAULT 0, current_started_at TEXT, current_uptime_sec INTEGER DEFAULT 0, duration_score DOUBLE PRECISION DEFAULT 0.5, time_pattern_score DOUBLE PRECISION DEFAULT 0.5, readiness_score DOUBLE PRECISION DEFAULT 0.5, fairness_score DOUBLE PRECISION DEFAULT 0.5, base_score DOUBLE PRECISION DEFAULT 0.5, final_score DOUBLE PRECISION DEFAULT 0.5, internal_sent_raids_30d INTEGER DEFAULT 0, internal_received_raids_30d INTEGER DEFAULT 0, internal_received_raids_7d INTEGER DEFAULT 0, today_received_raids INTEGER DEFAULT 0, last_computed_at TEXT DEFAULT '')",
             "CREATE TABLE twitch_raid_arrival_tracking (id SERIAL PRIMARY KEY, detected_at TIMESTAMPTZ DEFAULT NOW(), last_signal_at TIMESTAMPTZ, from_broadcaster_id TEXT, from_broadcaster_login TEXT, to_broadcaster_id TEXT, to_broadcaster_login TEXT, viewer_count INTEGER, classification TEXT, confirmation_signals TEXT, primary_signal TEXT, correlation_status TEXT, correlation_detail TEXT, source_resolution TEXT, raid_history_id BIGINT, raid_history_executed_at TIMESTAMPTZ, unraid_seen BOOLEAN, last_unraid_at TIMESTAMPTZ)",
@@ -1236,6 +1249,88 @@ mod tests {
         assert_eq!(track_cnt, 1, "bestaetigter Partner-Raid getrackt");
         let deadlock: i32 = sqlx::query_scalar("SELECT was_deadlock_at_raid FROM twitch_partner_raid_score_tracking WHERE to_broadcaster_id='200'").fetch_one(&pool).await.unwrap();
         assert_eq!(deadlock, 1, "live_state.last_game=Deadlock -> was_deadlock");
+    }
+
+    #[tokio::test]
+    async fn confirm_viewer_count_null_faellt_auf_registered_zurueck() {
+        // P1.10: Bestätigungs-Signal ohne Zuschauerzahl (viewer_count=0, z. B.
+        // channel.chat.notification) muss auf pending.registered_viewer_count
+        // zurückfallen — sonst persistiert das Arrival-Tracking 0 und die
+        // Dankesnachricht lautet "mit 0 Zuschauern".
+        let pool = setup("t6e_arrival_sink_p1_10").await;
+        sqlx::query("INSERT INTO twitch_partners (twitch_user_id, twitch_login, status) VALUES ('200','dst','active')").execute(&pool).await.unwrap();
+        sqlx::query("INSERT INTO twitch_streamer_identities (twitch_user_id, twitch_login) VALUES ('100','src')").execute(&pool).await.unwrap();
+        sqlx::query("INSERT INTO twitch_live_state (twitch_user_id, last_started_at, last_game, active_session_id) VALUES ('200','2026-06-10T16:00:00+00:00','Deadlock',5)").execute(&pool).await.unwrap();
+
+        let pending_store = Arc::new(Mutex::new(PendingRaidStore::new()));
+        let mut pending = PendingRaid::new("src", "200");
+        pending.registered_viewer_count = 137;
+        pending_store.lock().unwrap().store(pending);
+
+        let suppression = Arc::new(Mutex::new(tb_raid::ManualRaidSuppression::new()));
+        let sink = RaidArrivalSinkImpl::new(
+            pool.clone(),
+            pending_store.clone(),
+            suppression,
+            "deadlock",
+            None,
+            None,
+        );
+        // viewer_count=0 simuliert die zuschauerlose chat.notification-Bestätigung.
+        sink.confirm_pending_raid("channel.chat.notification", "200", "dst", "src", Some("100"), 0)
+            .await;
+
+        let persisted: i32 = sqlx::query_scalar(
+            "SELECT viewer_count FROM twitch_raid_arrival_tracking WHERE to_broadcaster_id='200'",
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert_eq!(
+            persisted, 137,
+            "viewer_count=0 -> Fallback auf registered_viewer_count=137"
+        );
+        // Score-Tracking trägt ebenfalls den effektiven Count.
+        let tracked: i32 = sqlx::query_scalar(
+            "SELECT viewer_count FROM twitch_partner_raid_score_tracking WHERE to_broadcaster_id='200'",
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert_eq!(tracked, 137, "Score-Tracking nutzt effektiven Count");
+    }
+
+    #[tokio::test]
+    async fn confirm_viewer_count_vorhanden_ueberschreibt_registered() {
+        // Gegenprobe: ein nicht-null viewer_count gewinnt gegen registered.
+        let pool = setup("t6e_arrival_sink_p1_10_override").await;
+        sqlx::query("INSERT INTO twitch_partners (twitch_user_id, twitch_login, status) VALUES ('200','dst','active')").execute(&pool).await.unwrap();
+        sqlx::query("INSERT INTO twitch_streamer_identities (twitch_user_id, twitch_login) VALUES ('100','src')").execute(&pool).await.unwrap();
+
+        let pending_store = Arc::new(Mutex::new(PendingRaidStore::new()));
+        let mut pending = PendingRaid::new("src", "200");
+        pending.registered_viewer_count = 137;
+        pending_store.lock().unwrap().store(pending);
+
+        let suppression = Arc::new(Mutex::new(tb_raid::ManualRaidSuppression::new()));
+        let sink = RaidArrivalSinkImpl::new(
+            pool.clone(),
+            pending_store.clone(),
+            suppression,
+            "deadlock",
+            None,
+            None,
+        );
+        sink.confirm_pending_raid("channel.raid", "200", "dst", "src", Some("100"), 42)
+            .await;
+
+        let persisted: i32 = sqlx::query_scalar(
+            "SELECT viewer_count FROM twitch_raid_arrival_tracking WHERE to_broadcaster_id='200'",
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert_eq!(persisted, 42, "vorhandener viewer_count gewinnt");
     }
 
     #[tokio::test]
