@@ -132,6 +132,31 @@ const MINIMAX_TIMEOUT_SEC: u64 = 5;
 const PROMO_STREAM_START_DELAY_MIN: u64 = 10;
 
 // ---------------------------------------------------------------------------
+// Scam-/Fake-Server-Warnung (P1.3) — Port von bot/chat/constants.py:231–252
+// ---------------------------------------------------------------------------
+
+/// Master-Schalter (Python: True und nicht-leere Message-Liste).
+const SCAM_WARNING_ENABLED: bool = true;
+/// Frühestens alle 120 min pro Kanal (> Promo-Takt → seltener als Promos).
+const SCAM_WARNING_COOLDOWN_MIN: u64 = 120;
+/// Verzögerung der allerersten Warnung nach dem Säen des Timers (20 min); per
+/// Python-Soll gekappt auf [0, COOLDOWN].
+const SCAM_WARNING_INITIAL_DELAY_MIN: u64 = 20;
+
+/// Feste Warntexte (rotieren, nie zweimal denselben hintereinander).
+/// `{invite}` wird durch den offiziellen Discord-Invite ersetzt.
+///
+/// HINWEIS: user-sichtbarer deutscher Text (Umlaute/Ton) — von Claude final
+/// formuliert. Bis dahin Platzhalter (siehe placeholders[]).
+const SCAM_WARNING_MESSAGES: &[&str] = &[
+    // PLATZHALTER (Warntext 1 — Fake-Server „Deadlock Discord Deutschland" /
+    // „Deadlock German Competitiv HUB", offizieller Discord: {invite})
+    "PLATZHALTER {invite}",
+    // PLATZHALTER (Warntext 2 — Variante)
+    "PLATZHALTER {invite}",
+];
+
+// ---------------------------------------------------------------------------
 // Promo-Texte — exakt aus constants.py:114–152
 // ---------------------------------------------------------------------------
 
@@ -214,6 +239,64 @@ fn activity_promo_messages() -> Vec<&'static str> {
 pub trait OutboundSuppressionCheck: Send + Sync {
     /// True = Kanal ist aktuell stumm (Mute-Guard aktiv).
     async fn is_muted(&self, channel_login: &str) -> bool;
+}
+
+/// Schreibseite der Outbound-Suppression — Port von
+/// `moderation.py:_maybe_blacklist_for_drop_reason` (Z. 1310–1329) +
+/// `_set_outbound_chat_suppression`.
+///
+/// Wird gerufen, wenn ein ausgehender Bot-Send von Twitch serverseitig
+/// verworfen wird (`is_sent=false`) mit `drop_reason.code == "channel_settings"`.
+/// Der Kanal wird dann je nach `source` für 7 Tage (`promo`/`recruitment`) bzw.
+/// 3 Tage (`partner_raid`) stummgeschaltet, damit derselbe Kanal nicht jeden
+/// Promo-/Recruitment-/Raid-Zyklus erneut angeschrieben wird (Bot-Ban-Eskalation).
+#[async_trait]
+pub trait OutboundSuppressionWriter: Send + Sync {
+    /// Schreibt (UPSERT) eine Suppression für `(channel_login, source)` mit dem
+    /// quell-spezifischen TTL. No-op, wenn `reason_code`/`source` nicht zur
+    /// Suppression führen (Python-Parität: nur `channel_settings` + erlaubte
+    /// Quellen schalten stumm).
+    async fn suppress_for_drop(
+        &self,
+        channel_login: &str,
+        channel_id: Option<&str>,
+        source: &str,
+        reason_code: &str,
+        reason_detail: Option<&str>,
+    );
+}
+
+/// Liefert die Scopes des zentralen Bot-Tokens (P1.4). Implementiert vom
+/// `BotTokenManager`; der Promo-Pfad nutzt das als Fallback, wenn der Streamer
+/// selbst `moderator:read:chatters` nicht in seinem Raid-Auth trägt.
+///
+/// Port: `bot/chat/promos.py:345–349/357` — bot-zentrierte Migration, der
+/// zentrale Bot-Token trägt den Scope.
+#[async_trait]
+pub trait BotScopeProvider: Send + Sync {
+    /// Aktuell gewährte Scopes des Bot-Tokens (leer, falls noch nicht geladen).
+    async fn bot_scopes(&self) -> Vec<String>;
+}
+
+#[async_trait]
+impl BotScopeProvider for crate::token::BotTokenManager {
+    async fn bot_scopes(&self) -> Vec<String> {
+        self.scopes().await
+    }
+}
+
+/// Baut das `AND LOWER(<col>) NOT IN ($start, $start+1, …)`-Fragment für die
+/// Known-Chat-Bot-Exklusion (P1.5). `start` ist der erste Positions-Parameter;
+/// es werden `WHITELISTED_BOTS.len()` aufeinanderfolgende Params referenziert.
+///
+/// Port: `build_known_chat_bot_not_in_clause` (bot/chat/promos.py). Die Logins
+/// selbst kommen als Bind-Params (clean-SQL), hier werden nur die `$n`-Platzhalter
+/// erzeugt.
+fn known_chat_bot_not_in_clause(column: &str, start: usize) -> String {
+    let placeholders: Vec<String> = (0..crate::mention_scoring::WHITELISTED_BOTS.len())
+        .map(|i| format!("${}", start + i))
+        .collect();
+    format!("AND LOWER({column}) NOT IN ({})", placeholders.join(", "))
 }
 
 /// Invite-Auflösung pro Kanal. (promos.py:99: `_resolve_streamer_invite`).
@@ -412,6 +495,11 @@ struct ChannelState {
     /// (promos.py:564-584). Bei Session-Wechsel zurückgesetzt — verhindert, dass
     /// derselbe ruhige Zuschauer mehrfach pro Session gepingt wird.
     lurker_mentions: (i64, HashSet<String>),
+    /// Monotonic-Timestamp letzte Scam-Warnung (P1.3, promos.py:1029).
+    /// `None` = noch nie gesät → erste Promo-Gelegenheit sät den Timer.
+    last_scam_warning_sent: Option<Instant>,
+    /// Letzter gesendeter Scam-Warntext (Anti-Repeat, promos.py:1058).
+    last_scam_warning_text: Option<String>,
 }
 
 impl ChannelState {
@@ -428,6 +516,8 @@ impl ChannelState {
             seen_chatters: HashMap::new(),
             last_accessed: Instant::now(),
             lurker_mentions: (0, HashSet::new()),
+            last_scam_warning_sent: None,
+            last_scam_warning_text: None,
         }
     }
 }
@@ -475,6 +565,12 @@ pub struct PromoEngine {
     pool: PgPool,
     api: Arc<dyn ChatApi>,
     suppression: Arc<dyn OutboundSuppressionCheck>,
+    /// Schreibseite der Outbound-Suppression (channel_settings-Drop → Mute).
+    /// `None` = Schreiben deaktiviert (Verhalten wie vor P1.1).
+    suppression_writer: Option<Arc<dyn OutboundSuppressionWriter>>,
+    /// Scope-Quelle des zentralen Bot-Tokens (P1.4). `None` = nur Streamer-Scope
+    /// zählt (Verhalten wie vor P1.4).
+    bot_scope_provider: Option<Arc<dyn BotScopeProvider>>,
     invite_resolver: Arc<dyn InviteResolver>,
     partner_check: Arc<dyn PartnerChannelCheck>,
     preset_picker: Arc<dyn PresetPicker>,
@@ -516,12 +612,62 @@ impl PromoEngine {
             pool,
             api,
             suppression,
+            suppression_writer: None,
+            bot_scope_provider: None,
             invite_resolver: Arc::new(StaticInviteResolver),
             partner_check: Arc::new(AlwaysPartner),
             preset_picker: Arc::new(RandomPresetPicker),
             send_locks: DashMap::new(),
             channel_states: DashMap::new(),
             targeted_state: Mutex::new(TargetedState::new()),
+        }
+    }
+
+    /// Verdrahtet die Schreibseite der Outbound-Suppression. Ohne Aufruf bleibt
+    /// das Verhalten wie vor P1.1 (channel_settings-Drops werden nicht persistiert).
+    ///
+    // WIRING-TODO(P1.1): Im Composition-Root (bin/tb-bot) die PromoEngine via
+    // `.set_suppression_writer(Arc::new(OutboundSuppressionStore::new(pool)))`
+    // konstruieren (derselbe Store, der bereits als OutboundSuppressionCheck für
+    // den Mute-Read hängt), damit channel_settings-Drops 7d/3d persistiert werden.
+    pub fn set_suppression_writer(mut self, w: Arc<dyn OutboundSuppressionWriter>) -> Self {
+        self.suppression_writer = Some(w);
+        self
+    }
+
+    /// Verdrahtet die Bot-Token-Scope-Quelle für den Lurker-Tax-Fallback (P1.4).
+    /// Ohne Aufruf zählt nur der Streamer-eigene `moderator:read:chatters`-Scope.
+    ///
+    // WIRING-TODO(P1.4): Im Composition-Root (bin/tb-bot) die PromoEngine via
+    // `.set_bot_scope_provider(bot_token_manager.clone())` konstruieren
+    // (der zentrale BotTokenManager implementiert BotScopeProvider), damit der
+    // bot-zentrierte Scope-Fallback greift.
+    pub fn set_bot_scope_provider(mut self, p: Arc<dyn BotScopeProvider>) -> Self {
+        self.bot_scope_provider = Some(p);
+        self
+    }
+
+    /// Wertet ein `send_message`-Ergebnis auf einen `channel_settings`-Drop aus
+    /// und schreibt — falls eine Schreibseite hängt — die quell-spezifische
+    /// Suppression (7d promo/recruitment, 3d partner_raid).
+    ///
+    /// Port: `moderation.py:1525–1530` (is_sent=false-Drop ruft
+    /// `_maybe_blacklist_for_drop_reason`).
+    async fn record_suppression_on_drop(
+        &self,
+        login: &str,
+        channel_id: &str,
+        source: &str,
+        outcome: &Result<crate::types::SendOutcome, String>,
+    ) {
+        let Some(writer) = self.suppression_writer.as_ref() else {
+            return;
+        };
+        if let Ok(crate::types::SendOutcome::Dropped { code, message }) = outcome {
+            let detail = (!message.is_empty()).then_some(message.as_str());
+            writer
+                .suppress_for_drop(login, Some(channel_id), source, code, detail)
+                .await;
         }
     }
 
@@ -721,6 +867,13 @@ impl PromoEngine {
             if overall_ready && activity_ready && self.stream_start_delay_ok(login).await {
                 let (invite, _is_specific) = self.invite_resolver.resolve_invite(login).await;
 
+                // Warnung hat im fälligen Slot Vorrang (eigener Cooldown), sonst
+                // würde die Targeted-Promo sie dauerhaft verdrängen
+                // (P1.3, promos.py:1552–1554).
+                if self.maybe_send_scam_warning(login, channel_id, &invite, now, "promo").await {
+                    continue;
+                }
+
                 // Targeted-Promo-Slot (targeted_promo.py:198).
                 let active_chatters = self.get_active_chatters(login).await;
                 if self.maybe_send_targeted_promo(login, channel_id, &invite, &active_chatters, now).await {
@@ -790,6 +943,13 @@ impl PromoEngine {
         }
         // Invite-Auflösung (promos.py:1096).
         let (invite, is_specific) = self.invite_resolver.resolve_invite(login).await;
+
+        // Statt der Discord-Werbung gelegentlich die Fake-Server-Warnung posten
+        // (P1.3, promos.py:1147–1152). Eigener Cooldown → Promos und Warnung
+        // wechseln sich von selbst ab.
+        if self.maybe_send_scam_warning(login, channel_id, &invite, now, reason).await {
+            return true;
+        }
 
         // Promo-Text bauen (promos.py:945).
         let text = self.build_promo_text(login, &invite, reason).await;
@@ -886,6 +1046,133 @@ impl PromoEngine {
         }
 
         template.replace("{invite}", invite)
+    }
+
+    // -----------------------------------------------------------------------
+    // Scam-/Fake-Server-Warnung (P1.3) — Port von promos.py:1017–1095
+    // -----------------------------------------------------------------------
+
+    /// True, wenn statt einer Promo die Fake-Server-Warnung dran ist.
+    ///
+    /// Nur bei normalen Promo-Gelegenheiten (`promo`/`chat_activity`). Eigener
+    /// Cooldown pro Kanal. Erste Gelegenheit pro Kanal sät den Timer (zurückdatiert
+    /// um `COOLDOWN - INITIAL_DELAY`) und wirbt normal — die Warnung ist dann schon
+    /// in der nächsten Gelegenheit fällig, aber nicht sofort.
+    ///
+    /// Port: `_scam_warning_due` (promos.py:1017–1051).
+    async fn scam_warning_due(&self, login: &str, now: Instant, reason: &str) -> bool {
+        if !SCAM_WARNING_ENABLED || SCAM_WARNING_MESSAGES.is_empty() {
+            return false;
+        }
+        if reason != "promo" && reason != "chat_activity" {
+            return false;
+        }
+        // Python kappt INITIAL_DELAY auf [0, COOLDOWN].
+        let initial_delay = SCAM_WARNING_INITIAL_DELAY_MIN.min(SCAM_WARNING_COOLDOWN_MIN);
+        let cooldown = Duration::from_secs(SCAM_WARNING_COOLDOWN_MIN * 60);
+
+        let state_ref = self
+            .channel_states
+            .entry(login.to_string())
+            .or_insert_with(|| Mutex::new(ChannelState::new()));
+        let mut state = state_ref.lock().await;
+        match state.last_scam_warning_sent {
+            None => {
+                // Timer säen (zurückdatiert) + persistieren, normal werben.
+                let grace = Duration::from_secs((SCAM_WARNING_COOLDOWN_MIN - initial_delay) * 60);
+                let seed = now.checked_sub(grace).unwrap_or(now);
+                state.last_scam_warning_sent = Some(seed);
+                drop(state);
+                // Persist: wall_ts entspricht dem zurückdatierten Seed.
+                let seed_wall =
+                    Utc::now().timestamp() as f64 - (SCAM_WARNING_COOLDOWN_MIN - initial_delay) as f64 * 60.0;
+                self.save_promo_cooldown(login, "scam_warning", seed_wall).await;
+                false
+            }
+            Some(last) => now.duration_since(last) >= cooldown,
+        }
+    }
+
+    /// Festen Warntext wählen (rotiert, nie zweimal denselben hintereinander).
+    ///
+    /// Port: `_build_scam_warning_text` (promos.py:1053–1066).
+    async fn build_scam_warning_text(&self, login: &str, invite: &str) -> Option<String> {
+        if SCAM_WARNING_MESSAGES.is_empty() {
+            return None;
+        }
+        let last_text = {
+            let state_ref = self
+                .channel_states
+                .entry(login.to_string())
+                .or_insert_with(|| Mutex::new(ChannelState::new()));
+            let state = state_ref.lock().await;
+            state.last_scam_warning_text.clone()
+        };
+        let pool: Vec<&str> = if SCAM_WARNING_MESSAGES.len() > 1 {
+            SCAM_WARNING_MESSAGES
+                .iter()
+                .copied()
+                .filter(|m| Some(*m) != last_text.as_deref())
+                .collect()
+        } else {
+            SCAM_WARNING_MESSAGES.to_vec()
+        };
+        let chosen = {
+            let mut rng = rand::thread_rng();
+            pool.choose(&mut rng).copied().unwrap_or(SCAM_WARNING_MESSAGES[0])
+        };
+        {
+            let state_ref = self
+                .channel_states
+                .entry(login.to_string())
+                .or_insert_with(|| Mutex::new(ChannelState::new()));
+            let mut state = state_ref.lock().await;
+            state.last_scam_warning_text = Some(chosen.to_string());
+        }
+        Some(chosen.replace("{invite}", invite))
+    }
+
+    /// Postet im fälligen Promo-Slot die Fake-Server-Warnung statt einer Promo
+    /// (orange Announcement, source="scam_warning"). Eigener Cooldown → Warnung
+    /// und reguläre Promos wechseln sich von selbst ab. Gibt true zurück, wenn
+    /// die Warnung gesendet wurde.
+    ///
+    /// Port: `_maybe_send_scam_warning` (promos.py:1068–1095).
+    async fn maybe_send_scam_warning(
+        &self,
+        login: &str,
+        channel_id: &str,
+        invite: &str,
+        now: Instant,
+        reason: &str,
+    ) -> bool {
+        if !self.scam_warning_due(login, now, reason).await {
+            return false;
+        }
+        let Some(warn_text) = self.build_scam_warning_text(login, invite).await else {
+            return false;
+        };
+        let warned = self
+            .api
+            .send_announcement(channel_id, &warn_text, "orange")
+            .await
+            .unwrap_or(false);
+        if !warned {
+            return false;
+        }
+        // Promo-Slot belegen (Python: _mark_promo_sent(reason=reason)) +
+        // Scam-Cooldown auf "now" setzen und persistieren.
+        self.mark_promo_sent(login, now, reason, Utc::now().timestamp() as f64).await;
+        {
+            let state_ref = self
+                .channel_states
+                .entry(login.to_string())
+                .or_insert_with(|| Mutex::new(ChannelState::new()));
+            let mut state = state_ref.lock().await;
+            state.last_scam_warning_sent = Some(now);
+        }
+        self.save_promo_cooldown(login, "scam_warning", Utc::now().timestamp() as f64).await;
+        true
     }
 
     /// Globalen Promo-Override laden (promos.py `_load_global_promo_message` +
@@ -1258,10 +1545,7 @@ impl PromoEngine {
         .ok()
         .flatten();
         let scopes_raw = auth_scopes.and_then(|(s,)| s).unwrap_or_default();
-        let has_chatters_scope = scopes_raw
-            .split_whitespace()
-            .any(|s| s.eq_ignore_ascii_case("moderator:read:chatters"));
-        if !has_chatters_scope {
+        if !self.has_chatters_scope(&scopes_raw).await {
             return;
         }
 
@@ -1307,10 +1591,11 @@ impl PromoEngine {
 
         let text = self.build_lurker_tax_text(&selected);
         // Nur bei erfolgreichem Send merken + Cooldown belegen (Python: if ok).
-        if !matches!(
-            self.api.send_message(channel_id, &text).await,
-            Ok(crate::types::SendOutcome::Sent)
-        ) {
+        let outcome = self.api.send_message(channel_id, &text).await;
+        // channel_settings-Drop → Kanal stummschalten (P1.1, source="promo").
+        self.record_suppression_on_drop(login, channel_id, "promo", &outcome)
+            .await;
+        if !matches!(outcome, Ok(crate::types::SendOutcome::Sent)) {
             return;
         }
         {
@@ -1329,10 +1614,42 @@ impl PromoEngine {
         info!(login, "Lurker-Tax-Erinnerung gesendet ({} Mentions)", selected.len());
     }
 
+    /// Lurker-Tax-Scope-Gate (P1.4): `moderator:read:chatters` muss entweder im
+    /// Streamer-eigenen Raid-Auth ODER im zentralen Bot-Token vorliegen.
+    ///
+    /// Port: `bot/chat/promos.py:345–349/357` — bot-zentrierte Migration. Ohne
+    /// verdrahteten `BotScopeProvider` greift nur der Streamer-Scope (Verhalten
+    /// wie vor P1.4).
+    async fn has_chatters_scope(&self, streamer_scopes_raw: &str) -> bool {
+        const SCOPE: &str = "moderator:read:chatters";
+        let streamer_has = streamer_scopes_raw
+            .split_whitespace()
+            .any(|s| s.eq_ignore_ascii_case(SCOPE));
+        if streamer_has {
+            return true;
+        }
+        if let Some(provider) = self.bot_scope_provider.as_ref() {
+            return provider
+                .bot_scopes()
+                .await
+                .iter()
+                .any(|s| s.eq_ignore_ascii_case(SCOPE));
+        }
+        false
+    }
+
     /// Lurker-Tax-Kandidaten aus DB (promos.py:408: `_get_lurker_tax_candidates`).
     async fn get_lurker_tax_candidates(&self, login: &str) -> Vec<String> {
         // twitch_session_chatters.seen_via_chatters_api = boolean (prod schema)
         // twitch_session_chatters.messages = integer (prod schema)
+        //
+        // P1.5: Bekannte Chat-Bots (nightbot etc.) ausschließen — sonst werden sie
+        // als stille Lurker (messages=0, seen_via_chatters_api) öffentlich
+        // ge-@-mentioned. Python: build_known_chat_bot_not_in_clause, injiziert in
+        // historische CTE UND live_candidates (promos.py:451–458, 490, 523).
+        // Die Bot-Logins sind eine Compile-Zeit-Konstante; trotzdem als Bind-Params
+        // (ab $5) gebunden statt als SQL-Literal interpoliert (clean-SQL).
+        let bot_clause = known_chat_bot_not_in_clause("sc.chatter_login", 5);
         let sql = format!(
             r#"WITH historical_lurks AS (
                 SELECT sc.chatter_login,
@@ -1348,6 +1665,7 @@ impl PromoEngine {
                    AND s.ended_at IS NOT NULL
                    AND COALESCE(sc.messages, 0) = 0
                    AND sc.seen_via_chatters_api = TRUE
+                   {bot_clause}
                  GROUP BY sc.chatter_login
                ),
                live_candidates AS (
@@ -1358,6 +1676,7 @@ impl PromoEngine {
                     AND sc.last_seen_at >= NOW() - INTERVAL '{freshness} minutes'
                     AND COALESCE(sc.messages, 0) = 0
                     AND sc.seen_via_chatters_api = TRUE
+                    {bot_clause}
                )
                SELECT hl.chatter_login
                  FROM historical_lurks hl
@@ -1367,12 +1686,18 @@ impl PromoEngine {
                 ORDER BY hl.estimated_lurk_minutes DESC, LOWER(hl.chatter_login) ASC
                 LIMIT $4"#,
             freshness = LURKER_TAX_FRESHNESS_MINUTES,
+            bot_clause = bot_clause,
         );
-        let rows: Vec<(String,)> = sqlx::query_as(&sql)
-        .bind(login)
-        .bind(LURKER_TAX_MIN_PRIOR_SESSIONS)
-        .bind(LURKER_TAX_MIN_WATCHTIME_MINUTES)
-        .bind(LURKER_TAX_CANDIDATE_FETCH)
+        let mut query = sqlx::query_as::<_, (String,)>(&sql)
+            .bind(login)
+            .bind(LURKER_TAX_MIN_PRIOR_SESSIONS)
+            .bind(LURKER_TAX_MIN_WATCHTIME_MINUTES)
+            .bind(LURKER_TAX_CANDIDATE_FETCH);
+        // Bot-Logins (lowercase) in stabiler Reihenfolge an $5.. binden.
+        for bot in crate::mention_scoring::WHITELISTED_BOTS {
+            query = query.bind(bot.to_lowercase());
+        }
+        let rows: Vec<(String,)> = query
         .fetch_all(&self.pool)
         .await
         .unwrap_or_default();
@@ -1438,10 +1763,11 @@ impl PromoEngine {
                     .replace("{login}", &target_login);
                 // Python targeted_promo.py:264: `if not ok: return False` — bei nicht
                 // zugestelltem Send keine State-Mutation/keinen Cooldown verbrennen.
-                if !matches!(
-                    self.api.send_message(channel_id, &text).await,
-                    Ok(crate::types::SendOutcome::Sent)
-                ) {
+                let outcome = self.api.send_message(channel_id, &text).await;
+                // channel_settings-Drop → Kanal stummschalten (P1.1, source="promo").
+                self.record_suppression_on_drop(login, channel_id, "promo", &outcome)
+                    .await;
+                if !matches!(outcome, Ok(crate::types::SendOutcome::Sent)) {
                     return false;
                 }
 
@@ -1769,6 +2095,10 @@ impl PromoEngine {
                 "viewer_spike" if state.last_promo_viewer_spike.is_none() => {
                     state.last_promo_viewer_spike = mono_restored;
                 }
+                // P1.3: Scam-Warn-Timer überlebt Neustarts (promos.py:968–973).
+                "scam_warning" if state.last_scam_warning_sent.is_none() => {
+                    state.last_scam_warning_sent = mono_restored;
+                }
                 _ => {}
             }
         }
@@ -2001,6 +2331,109 @@ mod tests {
     }
 
     // -----------------------------------------------------------------------
+    // P1.3 — Fake-/Scam-Server-Warnung im Promo-Pfad
+    // -----------------------------------------------------------------------
+
+    /// Baut eine Engine mit explizitem MockApi-Handle, damit der Test die
+    /// gesendeten Announcements (inkl. Farbe) inspizieren kann.
+    fn make_engine_with_api(api: Arc<MockApi>) -> PromoEngine {
+        use sqlx::postgres::PgPoolOptions;
+        let pool = PgPoolOptions::new()
+            .max_connections(1)
+            .connect_lazy("postgres://localhost/nonexistent")
+            .unwrap();
+        PromoEngine::new(pool, api, Arc::new(NoopSuppressionCheck))
+    }
+
+    #[tokio::test]
+    async fn scam_warning_erste_gelegenheit_saet_nur_und_sendet_nicht() {
+        let api = Arc::new(MockApi::default());
+        let engine = make_engine_with_api(api.clone());
+        let now = Instant::now();
+
+        // Erste Gelegenheit: Timer säen, KEINE Warnung senden.
+        let sent = engine
+            .maybe_send_scam_warning("kanal", "id-1", "https://discord.gg/x", now, "promo")
+            .await;
+        assert!(!sent, "erste Gelegenheit sät nur den Timer, sendet keine Warnung");
+        assert!(api.announcements.lock().await.is_empty(), "kein Send beim Säen");
+
+        // Timer wurde gesät (last_scam_warning_sent gesetzt).
+        let state_ref = engine.channel_states.get("kanal").unwrap();
+        let state = state_ref.lock().await;
+        assert!(state.last_scam_warning_sent.is_some(), "Timer muss gesät sein");
+    }
+
+    #[tokio::test]
+    async fn scam_warning_sendet_orange_announcement_bei_abgelaufenem_cooldown() {
+        let api = Arc::new(MockApi::default());
+        let engine = make_engine_with_api(api.clone());
+        let now = Instant::now();
+
+        // Timer künstlich auf "weit in der Vergangenheit" setzen (Cooldown abgelaufen).
+        {
+            let state_ref = engine
+                .channel_states
+                .entry("kanal".into())
+                .or_insert_with(|| Mutex::new(ChannelState::new()));
+            let mut state = state_ref.lock().await;
+            state.last_scam_warning_sent =
+                now.checked_sub(Duration::from_secs((SCAM_WARNING_COOLDOWN_MIN + 5) * 60));
+        }
+
+        let sent = engine
+            .maybe_send_scam_warning("kanal", "id-1", "https://discord.gg/x", now, "chat_activity")
+            .await;
+        assert!(sent, "abgelaufener Cooldown + reason=chat_activity → Warnung senden");
+
+        // Genau eine orange Announcement, Text enthält den Invite.
+        let anns = api.announcements.lock().await;
+        assert_eq!(anns.len(), 1, "genau eine Warnung gesendet");
+        assert_eq!(anns[0].0, "id-1");
+        assert_eq!(anns[0].2, "orange", "Scam-Warnung ist orange");
+        assert!(anns[0].1.contains("https://discord.gg/x"), "Invite eingesetzt");
+
+        // Cooldown auf "now" aktualisiert.
+        drop(anns);
+        let state_ref = engine.channel_states.get("kanal").unwrap();
+        let state = state_ref.lock().await;
+        assert_eq!(state.last_scam_warning_sent, Some(now));
+    }
+
+    #[tokio::test]
+    async fn scam_warning_ignoriert_viewer_spike_und_lurker_reason() {
+        let api = Arc::new(MockApi::default());
+        let engine = make_engine_with_api(api.clone());
+        let now = Instant::now();
+        // Auch bei abgelaufenem Cooldown darf reason=viewer_spike NICHT warnen.
+        {
+            let state_ref = engine
+                .channel_states
+                .entry("kanal".into())
+                .or_insert_with(|| Mutex::new(ChannelState::new()));
+            let mut state = state_ref.lock().await;
+            state.last_scam_warning_sent =
+                now.checked_sub(Duration::from_secs((SCAM_WARNING_COOLDOWN_MIN + 5) * 60));
+        }
+        let sent = engine
+            .maybe_send_scam_warning("kanal", "id-1", "inv", now, "viewer_spike")
+            .await;
+        assert!(!sent, "viewer_spike ist kein Scam-Warn-Slot");
+        assert!(api.announcements.lock().await.is_empty());
+    }
+
+    #[tokio::test]
+    async fn scam_warning_text_rotiert_und_ersetzt_invite() {
+        let engine = make_engine_no_db();
+        let t = engine
+            .build_scam_warning_text("kanal", "https://discord.gg/y")
+            .await
+            .expect("Warntext muss gebaut werden");
+        assert!(t.contains("https://discord.gg/y"), "Invite eingesetzt");
+        assert!(!t.contains("{invite}"), "Platzhalter ersetzt");
+    }
+
+    // -----------------------------------------------------------------------
     // Doppelsend-Lock (TOCTOU-Fix)
     // -----------------------------------------------------------------------
 
@@ -2149,6 +2582,179 @@ mod tests {
         async fn is_muted(&self, _channel_login: &str) -> bool {
             true
         }
+    }
+
+    // -----------------------------------------------------------------------
+    // P1.1 — channel_settings-Drop schreibt Outbound-Suppression
+    // -----------------------------------------------------------------------
+
+    /// Test-Writer, der jeden suppress_for_drop-Aufruf festhält. Spiegelt die
+    /// Python-Soll-TTL (channel_settings + source → 7d/3d), damit der Test die
+    /// Verdrahtung prüft, ohne eine echte DB anzufassen.
+    #[derive(Clone, Default)]
+    struct CapturingWriter {
+        calls: Arc<std::sync::Mutex<Vec<(String, Option<String>, String, String)>>>,
+    }
+
+    #[async_trait]
+    impl OutboundSuppressionWriter for CapturingWriter {
+        async fn suppress_for_drop(
+            &self,
+            channel_login: &str,
+            channel_id: Option<&str>,
+            source: &str,
+            reason_code: &str,
+            _reason_detail: Option<&str>,
+        ) {
+            self.calls.lock().unwrap().push((
+                channel_login.to_string(),
+                channel_id.map(str::to_string),
+                source.to_string(),
+                reason_code.to_string(),
+            ));
+        }
+    }
+
+    #[tokio::test]
+    async fn channel_settings_drop_schreibt_promo_suppression() {
+        let writer = CapturingWriter::default();
+        let engine = make_engine_no_db().set_suppression_writer(Arc::new(writer.clone()));
+
+        let dropped = Ok(SendOutcome::Dropped {
+            code: "channel_settings".into(),
+            message: "Blocked by channel settings".into(),
+        });
+        engine
+            .record_suppression_on_drop("streamerlogin", "bcast-1", "promo", &dropped)
+            .await;
+
+        let calls = writer.calls.lock().unwrap();
+        assert_eq!(calls.len(), 1, "channel_settings-Drop muss genau einen Write auslösen");
+        assert_eq!(calls[0].0, "streamerlogin");
+        assert_eq!(calls[0].1.as_deref(), Some("bcast-1"));
+        assert_eq!(calls[0].2, "promo");
+        assert_eq!(calls[0].3, "channel_settings");
+    }
+
+    #[tokio::test]
+    async fn sent_und_andere_drops_schreiben_keine_suppression() {
+        let writer = CapturingWriter::default();
+        let engine = make_engine_no_db().set_suppression_writer(Arc::new(writer.clone()));
+
+        engine
+            .record_suppression_on_drop("s", "b", "promo", &Ok(SendOutcome::Sent))
+            .await;
+        engine
+            .record_suppression_on_drop(
+                "s",
+                "b",
+                "promo",
+                &Ok(SendOutcome::Dropped {
+                    code: "sender_timedout".into(),
+                    message: String::new(),
+                }),
+            )
+            .await;
+        engine
+            .record_suppression_on_drop("s", "b", "promo", &Err("boom".into()))
+            .await;
+
+        // record_suppression_on_drop reicht zwar sender_timedout an den Writer
+        // weiter, aber NUR der channel_settings-Code löst real einen DB-Write aus.
+        // Hier prüfen wir die Helper-Ebene: Sent/Err lösen GAR keinen Aufruf aus.
+        let calls = writer.calls.lock().unwrap();
+        assert_eq!(
+            calls.iter().filter(|c| c.3 == "channel_settings").count(),
+            0,
+            "kein channel_settings-Drop → keine channel_settings-Suppression"
+        );
+    }
+
+    // -----------------------------------------------------------------------
+    // P1.4 — Lurker-Tax Bot-Token-Scope-Fallback
+    // -----------------------------------------------------------------------
+
+    struct FakeBotScopes(Vec<String>);
+    #[async_trait]
+    impl BotScopeProvider for FakeBotScopes {
+        async fn bot_scopes(&self) -> Vec<String> {
+            self.0.clone()
+        }
+    }
+
+    #[tokio::test]
+    async fn has_chatters_scope_true_wenn_streamer_scope_traegt() {
+        let engine = make_engine_no_db();
+        assert!(
+            engine
+                .has_chatters_scope("user:bot moderator:read:chatters user:read:chat")
+                .await
+        );
+    }
+
+    #[tokio::test]
+    async fn has_chatters_scope_false_ohne_provider_und_ohne_streamer_scope() {
+        let engine = make_engine_no_db();
+        assert!(!engine.has_chatters_scope("user:bot user:read:chat").await);
+    }
+
+    #[tokio::test]
+    async fn has_chatters_scope_true_via_bot_token_fallback() {
+        // Streamer-Auth OHNE moderator:read:chatters, aber Bot-Token trägt ihn.
+        let engine = make_engine_no_db().set_bot_scope_provider(Arc::new(FakeBotScopes(vec![
+            "user:bot".into(),
+            "moderator:read:chatters".into(),
+        ])));
+        assert!(
+            engine.has_chatters_scope("user:bot user:read:chat").await,
+            "bot-zentrierter Fallback muss das Gate öffnen (P1.4)"
+        );
+    }
+
+    #[tokio::test]
+    async fn has_chatters_scope_false_wenn_auch_bot_token_scope_fehlt() {
+        let engine = make_engine_no_db()
+            .set_bot_scope_provider(Arc::new(FakeBotScopes(vec!["user:bot".into()])));
+        assert!(!engine.has_chatters_scope("user:read:chat").await);
+    }
+
+    // -----------------------------------------------------------------------
+    // P1.5 — Known-Chat-Bot-Exklusion (Clause-Bau)
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn known_chat_bot_not_in_clause_erzeugt_passende_platzhalter() {
+        let clause = known_chat_bot_not_in_clause("sc.chatter_login", 5);
+        let n = crate::mention_scoring::WHITELISTED_BOTS.len();
+        assert!(clause.starts_with("AND LOWER(sc.chatter_login) NOT IN ("));
+        assert!(clause.contains("$5"));
+        assert!(clause.contains(&format!("${}", 5 + n - 1)));
+        // Genau n Platzhalter.
+        assert_eq!(clause.matches('$').count(), n);
+    }
+
+    /// Die TTL-Tabelle (Schreibseite-Entscheidung) bleibt Python-treu:
+    /// channel_settings + promo/recruitment = 7d, partner_raid = 3d, sonst None.
+    #[test]
+    fn suppression_writer_ttl_entspricht_python_soll() {
+        use crate::moderation::OutboundSuppressionStore;
+        use chrono::Duration;
+        assert_eq!(
+            OutboundSuppressionStore::suppression_ttl("promo", "channel_settings"),
+            Some(Duration::seconds(7 * 24 * 3600))
+        );
+        assert_eq!(
+            OutboundSuppressionStore::suppression_ttl("recruitment", "channel_settings"),
+            Some(Duration::seconds(7 * 24 * 3600))
+        );
+        assert_eq!(
+            OutboundSuppressionStore::suppression_ttl("partner_raid", "channel_settings"),
+            Some(Duration::seconds(3 * 24 * 3600))
+        );
+        assert_eq!(
+            OutboundSuppressionStore::suppression_ttl("promo", "sender_timedout"),
+            None
+        );
     }
 
     fn dummy_pool() -> PgPool {

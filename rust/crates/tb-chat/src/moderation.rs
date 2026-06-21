@@ -910,6 +910,47 @@ impl crate::promos::OutboundSuppressionCheck for OutboundSuppressionStore {
     }
 }
 
+#[async_trait]
+impl crate::promos::OutboundSuppressionWriter for OutboundSuppressionStore {
+    /// Schreibseite: bei einem `channel_settings`-Drop wird der Kanal für die
+    /// quell-spezifische Dauer (7d promo/recruitment, 3d partner_raid)
+    /// stummgeschaltet. Nicht-passende `source`/`reason_code` → No-op (kein
+    /// DB-Write), exakt wie [`OutboundSuppressionStore::suppression_ttl`].
+    ///
+    /// Port: `moderation.py:_maybe_blacklist_for_drop_reason` (Z. 1310–1329) +
+    /// `_set_outbound_chat_suppression`. Schreibfehler sind best-effort (geloggt,
+    /// kein Abbruch des Sendepfads).
+    async fn suppress_for_drop(
+        &self,
+        channel_login: &str,
+        channel_id: Option<&str>,
+        source: &str,
+        reason_code: &str,
+        reason_detail: Option<&str>,
+    ) {
+        let Some(ttl) = Self::suppression_ttl(source, reason_code) else {
+            return;
+        };
+        if let Err(e) = self
+            .upsert_suppression(
+                channel_login,
+                channel_id,
+                source,
+                reason_code,
+                reason_detail,
+                ttl,
+            )
+            .await
+        {
+            tracing::warn!(
+                channel = %channel_login,
+                source = %source,
+                "Outbound-Suppression-Write fehlgeschlagen: {e}"
+            );
+        }
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Tests
 // ---------------------------------------------------------------------------
