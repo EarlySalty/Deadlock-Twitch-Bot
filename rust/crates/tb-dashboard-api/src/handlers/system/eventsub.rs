@@ -20,6 +20,8 @@ pub struct EventsubCapacity {
 #[serde(rename_all = "camelCase")]
 pub struct EventsubResponse {
     pub websocket_status: &'static str,
+    /// Transport-Modus (Python-Vertrag: identisch zu `websocketStatus`).
+    pub transport_mode: &'static str,
     pub active_subscription_count: i64,
     pub capacity: EventsubCapacity,
     pub subscriptions: Vec<Value>,
@@ -45,6 +47,7 @@ pub async fn eventsub_handler(
     let response = match snap {
         None => EventsubResponse {
             websocket_status: "inactive",
+            transport_mode: "inactive",
             active_subscription_count: 0,
             capacity: EventsubCapacity {
                 used: 0,
@@ -57,22 +60,39 @@ pub async fn eventsub_handler(
             last_known_snapshot_at: None,
         },
         Some(s) => {
-            // OFFEN (Welle D): websocket_status/"active_subscription_count"/
-            // capacity.max sind hier Platzhalter ("inactive"/0) — das
-            // React-Frontend liest diese Felder als echte KPIs. Vor dem
-            // Dashboard-Cutover aus dem Python-Vertrag ableiten
-            // (used_slots/total_slots liegen in der Snapshot-Tabelle).
+            // P2.78: Live-Kapazität aus dem Snapshot ableiten. Der
+            // WebSocket-Listener läuft im Bot-Prozess; der Snapshot ist die
+            // einzige Quelle, die der Dashboard-Prozess hat. Sobald ein
+            // Snapshot mit Slots existiert, gilt der Transport als aktiv.
             let last_snapshot_at = Some(s.ts_utc.to_rfc3339());
             let parsed: Vec<Value> = serde_json::from_str(&s.listeners_json).unwrap_or_default();
-            let last_known: Vec<Value> = parsed.into_iter().take(200).collect();
-            let used = s.listener_count;
+            // Jeder Listener-Eintrag bekommt den Snapshot-Zeitstempel (Python:
+            // `{**item, "snapshotAt": last_known_snapshot_at}`).
+            let last_known: Vec<Value> = parsed
+                .into_iter()
+                .take(200)
+                .map(|mut item| {
+                    if let (Some(obj), Some(ts)) = (item.as_object_mut(), &last_snapshot_at) {
+                        obj.insert(
+                            "snapshotAt".to_string(),
+                            Value::String(ts.clone()),
+                        );
+                    }
+                    item
+                })
+                .collect();
+            // Transport gilt als aktiv, sobald Slots belegt/konfiguriert sind.
+            let active = s.total_slots > 0 || s.used_slots > 0;
+            let status = if active { "connected" } else { "inactive" };
+            let remaining = s.headroom_slots.max(0);
             EventsubResponse {
-                websocket_status: "inactive",
-                active_subscription_count: 0,
+                websocket_status: status,
+                transport_mode: status,
+                active_subscription_count: s.used_slots,
                 capacity: EventsubCapacity {
-                    used,
-                    max: 0,
-                    remaining: 0,
+                    used: s.used_slots,
+                    max: s.total_slots,
+                    remaining,
                     last_snapshot_at: last_snapshot_at.clone(),
                 },
                 subscriptions: vec![],
@@ -147,6 +167,9 @@ mod tests {
                 id             BIGSERIAL PRIMARY KEY,
                 ts_utc         TIMESTAMPTZ NOT NULL DEFAULT NOW(),
                 listener_count BIGINT NOT NULL DEFAULT 0,
+                used_slots     INTEGER NOT NULL DEFAULT 0,
+                total_slots    INTEGER NOT NULL DEFAULT 0,
+                headroom_slots INTEGER NOT NULL DEFAULT 0,
                 listeners_json TEXT
             )
             "#,
@@ -210,7 +233,8 @@ mod tests {
         let pool = make_pool(&dsn, "test_handler_eventsub_daten").await;
         sqlx::query(
             "INSERT INTO twitch_eventsub_capacity_snapshot \
-             (listener_count, listeners_json) VALUES (2, '[{\"id\":\"x\"},{\"id\":\"y\"}]')",
+             (listener_count, used_slots, total_slots, headroom_slots, listeners_json) \
+             VALUES (2, 0, 0, 0, '[{\"id\":\"x\"},{\"id\":\"y\"}]')",
         )
         .execute(&pool)
         .await
@@ -229,5 +253,41 @@ mod tests {
         let v: serde_json::Value = serde_json::from_slice(&b).unwrap();
         assert_eq!(v["lastKnownSubscriptions"].as_array().unwrap().len(), 2);
         assert!(v["lastKnownSnapshotAt"].is_string());
+        // Per-Item snapshotAt wird angereichert (Python-Vertrag).
+        assert!(v["lastKnownSubscriptions"][0]["snapshotAt"].is_string());
+    }
+
+    // P2.78: Snapshot mit Slot-Kapazität → websocketStatus != "inactive",
+    // capacity.max/remaining > 0.
+    #[tokio::test]
+    async fn live_kapazitaet_meldet_aktiven_transport() {
+        let dsn = db_dsn_or_skip!();
+        let pool = make_pool(&dsn, "test_handler_eventsub_live").await;
+        sqlx::query(
+            "INSERT INTO twitch_eventsub_capacity_snapshot \
+             (listener_count, used_slots, total_slots, headroom_slots, listeners_json) \
+             VALUES (1, 7, 30, 23, '[{\"idx\":1,\"ready\":1}]')",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+        let addr: SocketAddr = "1.2.3.4:9999".parse().unwrap();
+        let req = Request::builder()
+            .uri("/twitch/api/admin/system/eventsub")
+            .extension(ConnectInfo(addr))
+            .header(axum::http::header::HOST, "example.com")
+            .header("x-internal-token", "tok")
+            .body(Body::empty())
+            .unwrap();
+        let res = make_router(pool, "tok").oneshot(req).await.unwrap();
+        assert_eq!(res.status(), StatusCode::OK);
+        let b = axum::body::to_bytes(res.into_body(), 4096).await.unwrap();
+        let v: serde_json::Value = serde_json::from_slice(&b).unwrap();
+        assert_ne!(v["websocketStatus"], "inactive");
+        assert_eq!(v["transportMode"], "connected");
+        assert_eq!(v["capacity"]["max"], 30);
+        assert_eq!(v["capacity"]["used"], 7);
+        assert_eq!(v["capacity"]["remaining"], 23);
+        assert_eq!(v["activeSubscriptionCount"], 7);
     }
 }

@@ -7,10 +7,19 @@ use chrono::{DateTime, Utc};
 use sqlx::PgPool;
 
 /// Neuester EventSub-Snapshot aus der DB.
+///
+/// Die Capacity-Felder (`used_slots`/`total_slots`/`headroom_slots`) werden vom
+/// Monitoring-Prozess beim Schreiben des Snapshots aus dem Live-WebSocket-State
+/// abgeleitet (`bot/monitoring/eventsub_mixin.py`). Für den Dashboard-Prozess
+/// ist dieser Snapshot die einzige verfügbare Quelle der Live-Kapazität — der
+/// WebSocket-Listener läuft im Bot-Prozess, nicht hier.
 #[derive(Debug)]
 pub struct EventsubSnapshot {
     pub ts_utc: DateTime<Utc>,
     pub listener_count: i64,
+    pub used_slots: i64,
+    pub total_slots: i64,
+    pub headroom_slots: i64,
     /// Roh-JSON-String — wird im Handler geparst (max 200 Einträge).
     pub listeners_json: String,
 }
@@ -18,11 +27,18 @@ pub struct EventsubSnapshot {
 /// Lädt den neuesten EventSub-Snapshot mit Daten.
 /// Gibt `None` zurück wenn keine passende Zeile vorhanden.
 ///
-/// `listener_count` ist in Prod int4 → Cast auf bigint damit sqlx i64 dekodieren kann.
+/// Slot-/Listener-Counts sind in Prod int4 → Cast auf bigint, damit sqlx i64
+/// dekodieren kann.
 pub async fn eventsub_snapshot(pool: &PgPool) -> Result<Option<EventsubSnapshot>, sqlx::Error> {
-    let row: Option<(DateTime<Utc>, i64, String)> = sqlx::query_as(
+    let row: Option<(DateTime<Utc>, i64, i64, i64, i64, String)> = sqlx::query_as(
         r#"
-        SELECT ts_utc, listener_count::bigint, listeners_json
+        SELECT
+            ts_utc,
+            listener_count::bigint,
+            COALESCE(used_slots, 0)::bigint,
+            COALESCE(total_slots, 0)::bigint,
+            COALESCE(headroom_slots, 0)::bigint,
+            listeners_json
         FROM twitch_eventsub_capacity_snapshot
         WHERE listener_count > 0
           AND listeners_json IS NOT NULL
@@ -33,11 +49,16 @@ pub async fn eventsub_snapshot(pool: &PgPool) -> Result<Option<EventsubSnapshot>
     .fetch_optional(pool)
     .await?;
 
-    Ok(row.map(|(ts, count, json)| EventsubSnapshot {
-        ts_utc: ts,
-        listener_count: count,
-        listeners_json: json,
-    }))
+    Ok(
+        row.map(|(ts, count, used, total, headroom, json)| EventsubSnapshot {
+            ts_utc: ts,
+            listener_count: count,
+            used_slots: used,
+            total_slots: total,
+            headroom_slots: headroom,
+            listeners_json: json,
+        }),
+    )
 }
 
 #[cfg(test)]
@@ -55,7 +76,11 @@ mod tests {
             .connect(dsn)
             .await
             .expect("connect");
-        sqlx::query(&format!("CREATE SCHEMA IF NOT EXISTS {schema}"))
+        sqlx::query(&format!("DROP SCHEMA IF EXISTS {schema} CASCADE"))
+            .execute(&pool)
+            .await
+            .expect("Schema droppen");
+        sqlx::query(&format!("CREATE SCHEMA {schema}"))
             .execute(&pool)
             .await
             .expect("Schema");
@@ -70,6 +95,9 @@ mod tests {
                 id             BIGSERIAL PRIMARY KEY,
                 ts_utc         TIMESTAMPTZ NOT NULL DEFAULT NOW(),
                 listener_count INTEGER NOT NULL DEFAULT 0,
+                used_slots     INTEGER NOT NULL DEFAULT 0,
+                total_slots    INTEGER NOT NULL DEFAULT 0,
+                headroom_slots INTEGER NOT NULL DEFAULT 0,
                 listeners_json TEXT
             )
             "#,
@@ -111,9 +139,9 @@ mod tests {
         sqlx::query(
             r#"
             INSERT INTO twitch_eventsub_capacity_snapshot
-                (ts_utc, listener_count, listeners_json)
+                (ts_utc, listener_count, used_slots, total_slots, headroom_slots, listeners_json)
             VALUES
-                (NOW() - INTERVAL '5 minutes', 3, '[{"id":"abc","type":"channel.update"}]')
+                (NOW() - INTERVAL '5 minutes', 3, 7, 30, 23, '[{"id":"abc","type":"channel.update"}]')
             "#,
         )
         .execute(&pool)
@@ -123,6 +151,9 @@ mod tests {
         assert!(snap.is_some());
         let s = snap.unwrap();
         assert_eq!(s.listener_count, 3);
+        assert_eq!(s.used_slots, 7);
+        assert_eq!(s.total_slots, 30);
+        assert_eq!(s.headroom_slots, 23);
         let parsed: serde_json::Value = serde_json::from_str(&s.listeners_json).unwrap();
         assert!(parsed.is_array());
     }
