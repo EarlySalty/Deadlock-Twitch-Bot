@@ -131,6 +131,58 @@ impl ConfigSnapshots {
     }
 }
 
+/// Eine Zeile aus `twitch_raid_history` für den Admin-Config-Overview.
+///
+/// `executed_at` wird als `::text` gelesen (1:1 zu Python `executed_at::text`).
+#[derive(Debug, sqlx::FromRow)]
+struct RaidHistoryRow {
+    streamer: Option<String>,
+    target: Option<String>,
+    viewers: Option<i32>,
+    executed_at: Option<String>,
+    reason: Option<String>,
+    success: Option<bool>,
+}
+
+/// Lädt die letzten 50 Raid-Events fürs Admin-Config-Overview
+/// (Python `_admin_load_streamer_config_snapshots`, `api_admin.py:511-536`).
+///
+/// Feldnamen im JSON sind Python-kompatibel
+/// (`streamer`/`target`/`viewers`/`executedAt`/`reason`/`success`/`status`).
+pub async fn load_raid_history(pool: &PgPool) -> Result<Vec<Value>, sqlx::Error> {
+    let rows: Vec<RaidHistoryRow> = sqlx::query_as(
+        r#"
+        SELECT from_broadcaster_login AS streamer,
+               to_broadcaster_login   AS target,
+               viewer_count           AS viewers,
+               executed_at::text      AS executed_at,
+               reason,
+               success
+        FROM twitch_raid_history
+        ORDER BY executed_at DESC
+        LIMIT 50
+        "#,
+    )
+    .fetch_all(pool)
+    .await?;
+
+    Ok(rows
+        .into_iter()
+        .map(|r| {
+            let ok = r.success.unwrap_or(false);
+            json!({
+                "streamer": r.streamer.unwrap_or_default(),
+                "target": r.target.unwrap_or_default(),
+                "viewers": r.viewers.unwrap_or(0),
+                "executedAt": r.executed_at.unwrap_or_default(),
+                "reason": r.reason.unwrap_or_default(),
+                "success": ok,
+                "status": if ok { "success" } else { "failed" },
+            })
+        })
+        .collect())
+}
+
 /// Lädt die Aggregat-Snapshots über den Scope (`active` → nur aktive Partner,
 /// `all` → alle).
 pub async fn load_streamer_config_snapshots(
@@ -191,6 +243,16 @@ mod tests {
         .execute(&pool)
         .await
         .unwrap();
+        sqlx::query(
+            "CREATE TABLE twitch_raid_history (\
+                id BIGSERIAL PRIMARY KEY, \
+                from_broadcaster_login TEXT, to_broadcaster_login TEXT, \
+                viewer_count INTEGER, executed_at TIMESTAMPTZ, \
+                reason TEXT, success BOOLEAN)",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
         Some(pool)
     }
 
@@ -237,5 +299,34 @@ mod tests {
         assert_eq!(snap_all.total, 3);
         assert_eq!(snap_all.raid_bot_enabled_count, 2);
         assert_eq!(snap_all.raid_snapshot()["allRaidBotEnabled"], false);
+    }
+
+    #[tokio::test]
+    async fn raid_history_liefert_letzte_50_neueste_zuerst() {
+        let Some(pool) = make_pool("t_admincfg_raidhist").await else { return };
+        sqlx::query(
+            "INSERT INTO twitch_raid_history \
+                (from_broadcaster_login, to_broadcaster_login, viewer_count, executed_at, reason, success) \
+             VALUES \
+                ('alt', 'ziel_alt', 10, NOW() - INTERVAL '2 hours', 'a', TRUE), \
+                ('neu', 'ziel_neu', 99, NOW(),                      NULL,  FALSE)",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+
+        let hist = load_raid_history(&pool).await.unwrap();
+        assert_eq!(hist.len(), 2);
+        // Neuester zuerst
+        assert_eq!(hist[0]["streamer"], "neu");
+        assert_eq!(hist[0]["target"], "ziel_neu");
+        assert_eq!(hist[0]["viewers"], 99);
+        assert_eq!(hist[0]["success"], false);
+        assert_eq!(hist[0]["status"], "failed");
+        assert_eq!(hist[0]["reason"], "");
+        assert!(hist[0]["executedAt"].as_str().map(|s| !s.is_empty()).unwrap_or(false));
+        // Älterer
+        assert_eq!(hist[1]["streamer"], "alt");
+        assert_eq!(hist[1]["status"], "success");
     }
 }

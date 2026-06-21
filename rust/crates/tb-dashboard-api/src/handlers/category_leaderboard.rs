@@ -19,14 +19,6 @@ use crate::auth::level::DashboardAuthLevel;
 const EXTERNAL_REACH_AVG_THRESHOLD: f64 = 100.0;
 const PARTNER_AGGREGATE_SQL: &str = "BOOL_OR(COALESCE(c.is_partner, FALSE)) AS is_partner";
 
-fn get_tier(avg: f64) -> &'static str {
-    if avg < 15.0 { "starter" }
-    else if avg < 50.0 { "rising" }
-    else if avg < 150.0 { "established" }
-    else if avg < 500.0 { "featured" }
-    else { "top" }
-}
-
 fn tier_range(tier: &str) -> Option<(f64, f64)> {
     match tier {
         "starter"     => Some((0.0, 15.0)),
@@ -136,9 +128,6 @@ pub async fn category_leaderboard_handler(
     let mut your_entry: Option<serde_json::Value> = None;
     let mut leaderboard: Vec<serde_json::Value> = Vec::with_capacity(limit + 1);
 
-    // Also compute your_tier from avg_vc found in result or session fallback
-    let mut your_avg_opt: Option<f64> = None;
-
     for (idx, row) in filtered.iter().enumerate() {
         let rank = idx + 1;
         let name: String = row.try_get("streamer").unwrap_or_default();
@@ -149,7 +138,6 @@ pub async fn category_leaderboard_handler(
 
         if is_you {
             your_rank = Some(rank);
-            your_avg_opt = Some(avg_vc);
         }
 
         let entry = json!({
@@ -173,28 +161,18 @@ pub async fn category_leaderboard_handler(
         leaderboard.push(entry);
     }
 
-    // Determine your tier: from category data if found, else session fallback
+    // yourTier aus der Peer-Gruppe (Python _get_peer_group_stats["tier"]):
+    // ungefilterter all-category-AVG, `null` wenn keine same-tier-Peers
+    // existieren — NICHT der tier/exclude-gefilterte Leaderboard-Schnitt.
     let your_tier: Option<String> = if !streamer_lower.is_empty() {
-        let avg = match your_avg_opt {
-            Some(a) => Some(a),
-            None => {
-                // Fallback: twitch_stream_sessions
-                let fb_sql = r#"
-                    SELECT AVG(avg_viewers) AS avg_vc
-                    FROM twitch_stream_sessions
-                    WHERE LOWER(streamer_login) = $1 AND started_at >= $2 AND ended_at IS NOT NULL
-                "#;
-                sqlx::query(fb_sql)
-                    .bind(&streamer_lower)
-                    .bind(since)
-                    .fetch_optional(&pool)
-                    .await
-                    .ok()
-                    .flatten()
-                    .and_then(|r| r.try_get::<Option<f64>, _>("avg_vc").ok().flatten())
+        match tb_analytics::peer_group::peer_group_stats(&pool, &streamer_lower, since).await {
+            Ok(Some(pg)) => Some(pg.tier),
+            Ok(None) => None,
+            Err(e) => {
+                tracing::warn!("category-leaderboard yourTier DB-Fehler: {e}");
+                None
             }
-        };
-        avg.map(|a| get_tier(a).to_string())
+        }
     } else {
         None
     };

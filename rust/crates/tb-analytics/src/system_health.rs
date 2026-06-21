@@ -57,6 +57,11 @@ type RawChatRow = (
 /// Bug C: LOWER()-JOIN für case-insensitiven Vergleich.
 /// Bug D: `is_live_scope`-Spalte in beiden CTEs.
 ///
+/// Auswahl-Richtung (Python `_fetch_raw_chat_health_snapshot`,
+/// `api_admin.py:557-564`): `ORDER BY <signal> ASC NULLS LAST LIMIT 1` —
+/// es wird der live Streamer mit dem **ältesten** (stärksten verzögerten)
+/// Signal gewählt, damit der Worst-Case-`RAW_CHAT_LAG`-Warning anschlägt.
+///
 /// Alle Timestamp-Spalten in `twitch_raw_chat_ingest_health` und
 /// `last_seen_at` in `twitch_live_state` sind in Prod TEXT → expliziter
 /// Cast auf timestamptz für Vergleiche und EXTRACT.
@@ -118,7 +123,7 @@ pub async fn raw_chat_health(pool: &PgPool) -> Result<Option<RawChatHealth>, sql
             END AS lag_seconds,
             is_live_scope
         FROM chosen
-        ORDER BY newest_signal_at DESC NULLS LAST
+        ORDER BY newest_signal_at ASC NULLS LAST
         LIMIT 1
         "#,
     )
@@ -278,6 +283,48 @@ mod tests {
         assert!(health.is_live_scope);
         assert!(health.lag_seconds.is_some());
         assert!(health.lag_seconds.unwrap() < 60);
+    }
+
+    #[tokio::test]
+    async fn raw_chat_health_waehlt_staelesten_live_streamer() {
+        // P2.76: Bei zwei live Streamern muss der mit dem ÄLTESTEN Signal
+        // (höchster Lag) gewählt werden, damit RAW_CHAT_LAG anschlägt.
+        let dsn = match test_dsn() {
+            Some(d) => d,
+            None => {
+                eprintln!("SKIP: TB_TEST_DATABASE_URL nicht gesetzt");
+                return;
+            }
+        };
+        let pool = make_pool(&dsn, "test_syshealth_stale").await;
+        // Beide Streamer live
+        sqlx::query(
+            "INSERT INTO twitch_live_state (streamer_login, is_live, last_seen_at) VALUES \
+             ('fresh_s', 1, (NOW() - INTERVAL '1 minute')::TEXT), \
+             ('stale_s', 1, (NOW() - INTERVAL '1 minute')::TEXT)",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+        // fresh_s: frisches Signal (10s); stale_s: altes Signal (2h)
+        sqlx::query(
+            "INSERT INTO twitch_raw_chat_ingest_health \
+                (streamer_login, last_raw_chat_message_at, updated_at) VALUES \
+             ('fresh_s', (NOW() - INTERVAL '10 seconds')::TEXT, (NOW() - INTERVAL '10 seconds')::TEXT), \
+             ('stale_s', (NOW() - INTERVAL '2 hours')::TEXT,    (NOW() - INTERVAL '2 hours')::TEXT)",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+
+        let health = raw_chat_health(&pool).await.unwrap().unwrap();
+        assert_eq!(
+            health.streamer_login.as_deref(),
+            Some("stale_s"),
+            "der live Streamer mit dem ältesten Signal muss gewählt werden"
+        );
+        assert!(health.is_live_scope);
+        assert!(health.lag_seconds.unwrap() > 3600, "Lag muss > 1h sein");
     }
 
     #[tokio::test]

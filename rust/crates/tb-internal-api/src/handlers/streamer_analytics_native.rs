@@ -193,7 +193,9 @@ async fn fetch_metrics(
             AVG(s.retention_20m),
             AVG(s.dropoff_pct),
             AVG(s.peak_viewers)::DOUBLE PRECISION,
-            SUM(COALESCE(s.follower_delta, 0))::BIGINT,
+            SUM(CASE WHEN s.follower_delta IS NOT NULL
+                     AND NOT (s.followers_end = 0 AND s.followers_start > 0)
+                     THEN s.follower_delta ELSE 0 END)::BIGINT,
             COUNT(*),
             SUM(s.duration_seconds)::BIGINT,
             AVG(s.unique_chatters)::DOUBLE PRECISION,
@@ -272,7 +274,9 @@ async fn fetch_trend(
         SELECT
             AVG(s.retention_5m),
             AVG(s.peak_viewers)::DOUBLE PRECISION,
-            SUM(COALESCE(s.follower_delta, 0))::BIGINT,
+            SUM(CASE WHEN s.follower_delta IS NOT NULL
+                     AND NOT (s.followers_end = 0 AND s.followers_start > 0)
+                     THEN s.follower_delta ELSE 0 END)::BIGINT,
             AVG(CASE WHEN s.avg_viewers > 0 THEN (s.unique_chatters::DOUBLE PRECISION * 100.0 / s.avg_viewers) ELSE 0.0 END)
         FROM twitch_stream_sessions s
         WHERE s.started_at >= $1 AND s.started_at < $2
@@ -1352,6 +1356,42 @@ mod tests {
         .execute(pool)
         .await
         .expect("Session einfügen");
+    }
+
+    #[tokio::test]
+    async fn metrics_schliesst_bogus_follower_reset_aus() {
+        // P2.82: Session mit followers_start>0 & followers_end=0 (Glitch, großer
+        // negativer follower_delta) muss aus total_followers_delta ausgeschlossen
+        // werden — 1:1 zu backend_extended.py.
+        let dsn = db_dsn_or_skip!();
+        let pool = make_pool(&dsn, "test_san_bogus_reset").await;
+
+        // Normale Session: +50 Follower.
+        insert_session(
+            &pool, "glitchuser", 5, 7200, 100, 80.0,
+            Some(0.7), Some(0.6), Some(0.5), Some(0.2),
+            20, 5, 15, 50, 1000, 1050, "Normal",
+        )
+        .await;
+        // Glitch-Session: follower_delta -900, followers_start>0 & followers_end=0.
+        insert_session(
+            &pool, "glitchuser", 3, 7200, 100, 80.0,
+            Some(0.7), Some(0.6), Some(0.5), Some(0.2),
+            20, 5, 15, -900, 900, 0, "Glitch",
+        )
+        .await;
+
+        let since = Utc::now() - Duration::days(30);
+        let has_fd = follower_delta_exists(&pool).await;
+        assert!(has_fd, "follower_delta-Spalte muss existieren");
+        let metrics = fetch_metrics(&pool, "glitchuser", since, has_fd)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            metrics.total_followers_delta, 50,
+            "Glitch-Session (-900) muss ausgeschlossen sein, nur +50 zählt"
+        );
     }
 
     #[tokio::test]
