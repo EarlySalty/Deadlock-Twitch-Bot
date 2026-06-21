@@ -1,3 +1,11 @@
+## #246 — Nach dem Umbau wieder lückenlos: Werbe-Abweisungen, Raid-Erkennung und Event-Abos
+
+**Problem:** Beim Sprachumbau des Bots waren einige Verhaltensweisen der alten Version noch nicht wieder angeschlossen. Wies ein Kanal eine automatische Nachricht des Bots ab — Werbung, Streamer-Anwerbung oder Partner-Raid-Gruß —, merkte sich der Bot das nicht und versuchte es beim nächsten Anlass erneut im selben Kanal. Widerrief Twitch ein Ereignis-Abo, über das der Bot Live-Starts und Raids erfährt, blieb das bis zum nächsten Neustart unbemerkt. Und bei der Bestätigung einer eingehenden Raid-Welle floss die Vorab-Information, ob ein Partner raidet, nicht mehr in die Einordnung ein.
+
+**Änderung:** Diese Pfade sind jetzt zentral wieder verdrahtet. Eine abgewiesene Bot-Nachricht wird quellabhängig gesperrt — sieben Tage für Werbung und Anwerbung, drei Tage für Partner-Raid-Grüße —, sodass der Bot denselben ablehnenden Kanal in dieser Zeit nicht erneut anschreibt. Ein widerrufenes Ereignis-Abo wird sofort zur Laufzeit als inaktiv vermerkt und beim nächsten regelmäßigen Abgleich automatisch neu eingerichtet, statt auf einen Neustart zu warten. Die Raid-Ankunft berücksichtigt bei der Bestätigung wieder die Erwartung, ob ein Partner raidet, und ordnet Partner- und Fremd-Raids entsprechend ein. Fehlt dem Bot in einem Kanal die Moderatorenrolle — was die Abos dort scheitern lässt —, trägt er sich automatisch wieder ein; und die Follower-Gesamtzahl wird über den Bot-Zugang abgerufen, wenn der Streamer-Zugang die nötige Berechtigung nicht mitbringt.
+
+**Ergebnis:** Der Bot belästigt Kanäle nicht länger mit wiederholten, ohnehin abgewiesenen Nachrichten, verliert nach einem Abo-Widerruf keine Live- und Raid-Ereignisse mehr bis zum nächsten Neustart und erkennt eingehende Partner-Raids wieder korrekt. Diese Lücken waren Reste des Umbaus und sind damit geschlossen.
+
 ## #245 — Datenbank-Tests der Streamer-Übersicht laufen wieder verlässlich durch
 
 **Problem:** Mehrere Datenbank-Tests rund um die Streamer-/Partner-Übersicht und den Admin-Login liefen faktisch nie mit: Ohne konfigurierte Test-Datenbank übersprangen sie sich still. Einmal echt ausgeführt, brachen sie ab, weil die Test-Vorlagen das Produktionsschema nur unvollständig abbildeten — eine benötigte Tabelle sowie einige Spalten fehlten, die die zugrunde liegenden Abfragen voraussetzen.
