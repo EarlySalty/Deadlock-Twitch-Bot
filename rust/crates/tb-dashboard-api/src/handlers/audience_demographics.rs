@@ -62,7 +62,7 @@ async fn compute_weighted_peak_hours(
     streamer: &str,
     since: DateTime<Utc>,
     tz_name: &str,
-) -> PeakResult {
+) -> Result<PeakResult, sqlx::Error> {
     let empty = PeakResult {
         peak_hours: vec![], session_count: 0,
         sessions_with_activity: 0, sample_count: 0, coverage: 0.0,
@@ -75,11 +75,11 @@ async fn compute_weighted_peak_hours(
          WHERE started_at >= $1 AND LOWER(streamer_login) = $2 AND ended_at IS NOT NULL
          ORDER BY started_at DESC LIMIT $3"
     ).bind(since).bind(streamer).bind(PEAK_SESSION_WINDOW)
-    .fetch_all(pool).await.unwrap_or_default();
+    .fetch_all(pool).await?;
 
     let session_ids: Vec<i64> = sess_rows.iter()
         .filter_map(|r| r.try_get::<i64, _>("id").ok()).collect();
-    if session_ids.is_empty() { return empty; }
+    if session_ids.is_empty() { return Ok(empty); }
     let n = session_ids.len();
 
     // Exponentielles Recency-Gewicht: idx=0 = neueste Session (Gewicht=1.0)
@@ -92,10 +92,11 @@ async fn compute_weighted_peak_hours(
         "SELECT cm.session_id, EXTRACT(HOUR FROM (cm.message_ts AT TIME ZONE $1))::int AS hour, COUNT(*) AS cnt
          FROM twitch_chat_messages cm
          WHERE cm.session_id = ANY($2::bigint[])
-           AND NOT (cm.chatter_login = ANY($3::text[]))
+           AND (cm.chatter_login IS NULL OR cm.chatter_login = ''
+                OR LOWER(cm.chatter_login) <> ALL($3::text[]))
          GROUP BY cm.session_id, EXTRACT(HOUR FROM (cm.message_ts AT TIME ZONE $1))::int"
     ).bind(tz_name).bind(&session_ids[..]).bind(&bots[..])
-    .fetch_all(pool).await.unwrap_or_default();
+    .fetch_all(pool).await?;
 
     // per_session_hours: session_id → hour → count
     let mut per_session_hours: HashMap<i64, HashMap<i32, f64>> = HashMap::new();
@@ -140,7 +141,7 @@ async fn compute_weighted_peak_hours(
     hour_score_pairs.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap().then(a.0.cmp(&b.0)));
     let peak_hours: Vec<i32> = hour_score_pairs.into_iter().take(3).map(|(h, _)| h).collect();
 
-    PeakResult { peak_hours, session_count: n, sessions_with_activity, sample_count: total_samples, coverage }
+    Ok(PeakResult { peak_hours, session_count: n, sessions_with_activity, sample_count: total_samples, coverage })
 }
 
 // ─── Query-Params ────────────────────────────────────────────────────────────
@@ -173,6 +174,23 @@ pub async fn audience_demographics_handler(
     // Validate via chrono-tz; fallback to UTC
     let tz_name: &str = if tz_req.parse::<chrono_tz::Tz>().is_ok() { tz_req } else { "UTC" };
 
+    // P2.97: jeder DB-Fehler wird zu 500 (wie Python analytics_internal_error_response),
+    // statt ein zeroed-200 zurückzugeben das einen Ausfall maskiert.
+    match compute_demographics(&pool, &streamer, since, tz_name).await {
+        Ok(resp) => resp,
+        Err(e) => {
+            tracing::error!("audience-demographics DB-Fehler: {e}");
+            (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({"error":"internal_error"}))).into_response()
+        }
+    }
+}
+
+async fn compute_demographics(
+    pool: &PgPool,
+    streamer: &str,
+    since: DateTime<Utc>,
+    tz_name: &str,
+) -> Result<axum::response::Response, sqlx::Error> {
     let bots: Vec<String> = KNOWN_CHAT_BOTS.iter().map(|s| s.to_string()).collect();
 
     // ── Q1: Sprach-Mix ────────────────────────────────────────────────────────
@@ -183,7 +201,7 @@ pub async fn audience_demographics_handler(
          FROM twitch_stream_sessions
          WHERE started_at >= $1 AND LOWER(streamer_login) = $2 AND ended_at IS NOT NULL
          GROUP BY lang ORDER BY sessions DESC"
-    ).bind(since).bind(&streamer).fetch_all(&pool).await.unwrap_or_default();
+    ).bind(since).bind(streamer).fetch_all(pool).await?;
 
     let lang_session_total: i64 = lang_rows.iter()
         .map(|r| r.try_get::<i64, _>("sessions").unwrap_or(0)).sum();
@@ -205,10 +223,10 @@ pub async fn audience_demographics_handler(
          FROM twitch_stream_sessions
          WHERE started_at >= $1 AND LOWER(streamer_login) = $2 AND ended_at IS NOT NULL
          GROUP BY hour"
-    ).bind(since).bind(&streamer).fetch_all(&pool).await.unwrap_or_default();
+    ).bind(since).bind(streamer).fetch_all(pool).await?;
 
     // ── Q3: Gewichtete Peak-Hours ─────────────────────────────────────────────
-    let peak_res = compute_weighted_peak_hours(&pool, &streamer, since, tz_name).await;
+    let peak_res = compute_weighted_peak_hours(pool, streamer, since, tz_name).await?;
 
     // ── Q4: Session-Stats ─────────────────────────────────────────────────────
     let sess_row = sqlx::query(
@@ -218,7 +236,7 @@ pub async fn audience_demographics_handler(
                 COALESCE(SUM(COALESCE(avg_viewers,0)*GREATEST(COALESCE(duration_seconds,0),0)/60.0),0) AS vm_fallback
          FROM twitch_stream_sessions
          WHERE started_at >= $1 AND LOWER(streamer_login) = $2 AND ended_at IS NOT NULL"
-    ).bind(since).bind(&streamer).fetch_optional(&pool).await.ok().flatten();
+    ).bind(since).bind(streamer).fetch_optional(pool).await?;
 
     let session_count: i64 = sess_row.as_ref().and_then(|r| r.try_get::<i64, _>("cnt").ok()).unwrap_or(0);
     let avg_viewers_val: f64 = sess_row.as_ref()
@@ -232,7 +250,7 @@ pub async fn audience_demographics_handler(
          FROM twitch_session_viewers sv
          JOIN twitch_stream_sessions s ON s.id = sv.session_id
          WHERE s.started_at >= $1 AND LOWER(s.streamer_login) = $2 AND s.ended_at IS NOT NULL"
-    ).bind(since).bind(&streamer).fetch_optional(&pool).await.ok().flatten();
+    ).bind(since).bind(streamer).fetch_optional(pool).await?;
     let viewer_sample_count: i64 = vsamp.as_ref().and_then(|r| r.try_get::<i64, _>("cnt").ok()).unwrap_or(0);
     let vm_real: f64 = vsamp.as_ref().and_then(|r| r.try_get::<f64, _>("vm").ok()).unwrap_or(0.0);
     let viewer_minutes = if viewer_sample_count > 0 { vm_real } else { vm_fallback };
@@ -255,14 +273,16 @@ pub async fn audience_demographics_handler(
             JOIN twitch_stream_sessions s ON s.id = sc.session_id
             WHERE s.started_at >= $1 AND LOWER(s.streamer_login) = $2 AND s.ended_at IS NOT NULL
               AND COALESCE(NULLIF(sc.chatter_login,''), sc.chatter_id) IS NOT NULL
-              AND NOT (sc.chatter_login = ANY($3::text[]))
+              AND (sc.chatter_login IS NULL OR sc.chatter_login = ''
+                   OR LOWER(sc.chatter_login) <> ALL($3::text[]))
             GROUP BY user_id, chatter_login
         ),
         rollup AS (
             SELECT LOWER(streamer_login) AS sl, LOWER(chatter_login) AS cl, first_seen_at
             FROM twitch_chatter_rollup
             WHERE LOWER(streamer_login) = $2
-              AND NOT (chatter_login = ANY($3::text[]))
+              AND (chatter_login IS NULL OR chatter_login = ''
+                   OR LOWER(chatter_login) <> ALL($3::text[]))
         )
         SELECT
             pu.user_id, pu.chatter_login, pu.session_count::bigint,
@@ -271,7 +291,7 @@ pub async fn audience_demographics_handler(
             CASE WHEN r.cl IS NOT NULL AND r.first_seen_at < $1 THEN 1 ELSE 0 END AS seen_before
         FROM per_user pu
         LEFT JOIN rollup r ON r.cl = LOWER(pu.chatter_login)
-    "#).bind(since).bind(&streamer).bind(&bots[..]).fetch_all(&pool).await.unwrap_or_default();
+    "#).bind(since).bind(streamer).bind(&bots[..]).fetch_all(pool).await?;
 
     struct ViewerEntry {
         session_count: i64,
@@ -347,9 +367,10 @@ pub async fn audience_demographics_handler(
     let msg_count: i64 = sqlx::query(
         "SELECT COUNT(*) AS cnt FROM twitch_chat_messages cm
          WHERE cm.message_ts >= $1 AND LOWER(cm.streamer_login) = $2
-           AND NOT (cm.chatter_login = ANY($3::text[]))"
-    ).bind(since).bind(&streamer).bind(&bots[..])
-    .fetch_optional(&pool).await.ok().flatten()
+           AND (cm.chatter_login IS NULL OR cm.chatter_login = ''
+                OR LOWER(cm.chatter_login) <> ALL($3::text[]))"
+    ).bind(since).bind(streamer).bind(&bots[..])
+    .fetch_optional(pool).await?
     .and_then(|r| r.try_get::<i64, _>("cnt").ok()).unwrap_or(0);
 
     // ── Q8: Sessions with chat ────────────────────────────────────────────────
@@ -358,9 +379,10 @@ pub async fn audience_demographics_handler(
          FROM twitch_session_chatters sc
          JOIN twitch_stream_sessions s ON s.id = sc.session_id
          WHERE s.started_at >= $1 AND LOWER(s.streamer_login) = $2 AND s.ended_at IS NOT NULL
-           AND NOT (sc.chatter_login = ANY($3::text[]))"
-    ).bind(since).bind(&streamer).bind(&bots[..])
-    .fetch_optional(&pool).await.ok().flatten()
+           AND (sc.chatter_login IS NULL OR sc.chatter_login = ''
+                OR LOWER(sc.chatter_login) <> ALL($3::text[]))"
+    ).bind(since).bind(streamer).bind(&bots[..])
+    .fetch_optional(pool).await?
     .and_then(|r| r.try_get::<i64, _>("cnt").ok()).unwrap_or(0);
 
     // ── Engagement ────────────────────────────────────────────────────────────
@@ -385,7 +407,7 @@ pub async fn audience_demographics_handler(
          FROM twitch_stream_sessions
          WHERE started_at >= $1 AND LOWER(streamer_login) = $2 AND ended_at IS NOT NULL
          GROUP BY dow"
-    ).bind(since).bind(&streamer).fetch_all(&pool).await.unwrap_or_default();
+    ).bind(since).bind(streamer).fetch_all(pool).await?;
     for row in &dow_rows {
         let dow: i32 = row.try_get("dow").unwrap_or(-1);
         let cnt: i64 = row.try_get("cnt").unwrap_or(0);
@@ -458,7 +480,7 @@ pub async fn audience_demographics_handler(
         PEAK_HALF_LIFE_SESSIONS as i32, PEAK_SESSION_WINDOW
     );
 
-    Json(json!({
+    Ok(Json(json!({
         "viewerTypes": [
             {"label": "Dedicated Fans",   "percentage": pct(dedicated, total_viewers)},
             {"label": "Regular Viewers",  "percentage": pct(regular, total_viewers)},
@@ -502,5 +524,82 @@ pub async fn audience_demographics_handler(
             "chatSessionCoverage": (engagement.chat_session_coverage * 1000.0).round() / 10.0,
             "botFilterApplied": true,
         },
-    })).into_response()
+    })).into_response())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use axum::body::to_bytes;
+    use sqlx::postgres::{PgConnectOptions, PgPoolOptions};
+    use std::str::FromStr;
+
+    async fn empty_schema_pool(schema: &str) -> Option<PgPool> {
+        let dsn = std::env::var("TB_TEST_DATABASE_URL").ok()?;
+        let admin = PgPoolOptions::new().max_connections(1).connect(&dsn).await.unwrap();
+        sqlx::query(&format!("DROP SCHEMA IF EXISTS {schema} CASCADE")).execute(&admin).await.unwrap();
+        sqlx::query(&format!("CREATE SCHEMA {schema}")).execute(&admin).await.unwrap();
+        admin.close().await;
+        let opts = PgConnectOptions::from_str(&dsn).unwrap().options([("search_path", schema)]);
+        Some(PgPoolOptions::new().max_connections(2).connect_with(opts).await.unwrap())
+    }
+
+    async fn make_pool(schema: &str) -> Option<PgPool> {
+        let pool = empty_schema_pool(schema).await?;
+        sqlx::query("CREATE TABLE twitch_stream_sessions (id BIGSERIAL PRIMARY KEY, streamer_login TEXT, started_at TIMESTAMPTZ, ended_at TIMESTAMPTZ, language TEXT, avg_viewers DOUBLE PRECISION, duration_seconds BIGINT)")
+            .execute(&pool).await.unwrap();
+        sqlx::query("CREATE TABLE twitch_session_chatters (session_id BIGINT, chatter_login TEXT, chatter_id TEXT, messages INTEGER DEFAULT 0, seen_via_chatters_api BOOLEAN DEFAULT FALSE, is_first_time_streamer BOOLEAN)")
+            .execute(&pool).await.unwrap();
+        sqlx::query("CREATE TABLE twitch_session_viewers (session_id BIGINT, viewer_count INTEGER)")
+            .execute(&pool).await.unwrap();
+        sqlx::query("CREATE TABLE twitch_chat_messages (id BIGSERIAL PRIMARY KEY, session_id BIGINT, streamer_login TEXT, chatter_login TEXT, chatter_id TEXT, message_ts TIMESTAMPTZ)")
+            .execute(&pool).await.unwrap();
+        sqlx::query("CREATE TABLE twitch_chatter_rollup (streamer_login TEXT, chatter_login TEXT, first_seen_at TIMESTAMPTZ)")
+            .execute(&pool).await.unwrap();
+        Some(pool)
+    }
+
+    async fn body_json(resp: axum::response::Response) -> serde_json::Value {
+        let bytes = to_bytes(resp.into_body(), usize::MAX).await.unwrap();
+        serde_json::from_slice(&bytes).unwrap()
+    }
+
+    async fn call(pool: PgPool) -> axum::response::Response {
+        audience_demographics_handler(
+            DashboardAuthLevel::Localhost,
+            State(pool),
+            Query(DemoQuery { streamer: Some("nani".into()), days: Some(30), timezone: Some("UTC".into()) }),
+        ).await.into_response()
+    }
+
+    // P2.95/P2.92/P2.96: Chat-Messages mit NULL chatter_login (anonym) müssen in
+    // total_messages und Peak-Hours mitgezählt werden.
+    #[tokio::test]
+    async fn null_login_messages_counted() {
+        let Some(pool) = make_pool("t_demo_nullmsg").await else { return };
+        sqlx::query("INSERT INTO twitch_stream_sessions (streamer_login, started_at, ended_at, avg_viewers, duration_seconds) VALUES ('nani', NOW()-INTERVAL '2 days', NOW()-INTERVAL '2 days'+INTERVAL '3 hours', 10.0, 10800)")
+            .execute(&pool).await.unwrap();
+        // 1x normaler Chatter, 1x anonym (NULL login), 1x Bot mit mixed case
+        sqlx::query("INSERT INTO twitch_chat_messages (session_id, streamer_login, chatter_login, message_ts) VALUES (1,'nani','viewer', NOW()-INTERVAL '2 days')")
+            .execute(&pool).await.unwrap();
+        sqlx::query("INSERT INTO twitch_chat_messages (session_id, streamer_login, chatter_login, chatter_id, message_ts) VALUES (1,'nani',NULL,'anon', NOW()-INTERVAL '2 days')")
+            .execute(&pool).await.unwrap();
+        sqlx::query("INSERT INTO twitch_chat_messages (session_id, streamer_login, chatter_login, message_ts) VALUES (1,'nani','Nightbot', NOW()-INTERVAL '2 days')")
+            .execute(&pool).await.unwrap();
+
+        let resp = call(pool).await;
+        assert_eq!(resp.status(), StatusCode::OK);
+        let v = body_json(resp).await;
+        // viewer + anon = 2, Nightbot (mixed case) gefiltert
+        assert_eq!(v["dataQuality"]["sampleCount"], 2, "NULL-Login zählt, mixed-case Bot raus");
+    }
+
+    // P2.97: Ein DB-Fehler (fehlende Tabelle) muss 500 ergeben, kein zeroed-200.
+    #[tokio::test]
+    async fn db_error_returns_500() {
+        let Some(pool) = empty_schema_pool("t_demo_dberr").await else { return };
+        // Keine Tabellen angelegt → erste Query schlägt fehl.
+        let resp = call(pool).await;
+        assert_eq!(resp.status(), StatusCode::INTERNAL_SERVER_ERROR);
+    }
 }

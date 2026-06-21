@@ -80,7 +80,8 @@ pub async fn lurker_analysis_handler(
                          THEN COALESCE(sc.first_message_at, sc.last_seen_at) ELSE NULL END) AS first_active_seen
             FROM twitch_session_chatters sc
             JOIN sessions s ON s.id = sc.session_id
-            WHERE NOT (sc.chatter_login = ANY($3::text[]))
+            WHERE (sc.chatter_login IS NULL OR sc.chatter_login = ''
+                   OR LOWER(sc.chatter_login) <> ALL($3::text[]))
             GROUP BY 1
         )
         SELECT
@@ -153,7 +154,8 @@ pub async fn lurker_analysis_handler(
                 MAX(sc.last_seen_at) AS last_seen
             FROM twitch_session_chatters sc
             JOIN sessions s ON s.id = sc.session_id
-            WHERE NOT (sc.chatter_login = ANY($3::text[]))
+            WHERE (sc.chatter_login IS NULL OR sc.chatter_login = ''
+                   OR LOWER(sc.chatter_login) <> ALL($3::text[]))
             GROUP BY 1
         )
         SELECT viewer_id, session_count, first_seen, last_seen
@@ -213,4 +215,79 @@ pub async fn lurker_analysis_handler(
             "converted": converted_lurkers,
         },
     })).into_response()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use axum::body::to_bytes;
+    use sqlx::postgres::{PgConnectOptions, PgPoolOptions};
+    use std::str::FromStr;
+
+    async fn make_pool(schema: &str) -> Option<PgPool> {
+        let dsn = std::env::var("TB_TEST_DATABASE_URL").ok()?;
+        let admin = PgPoolOptions::new().max_connections(1).connect(&dsn).await.unwrap();
+        sqlx::query(&format!("DROP SCHEMA IF EXISTS {schema} CASCADE")).execute(&admin).await.unwrap();
+        sqlx::query(&format!("CREATE SCHEMA {schema}")).execute(&admin).await.unwrap();
+        admin.close().await;
+        let opts = PgConnectOptions::from_str(&dsn).unwrap().options([("search_path", schema)]);
+        let pool = PgPoolOptions::new().max_connections(2).connect_with(opts).await.unwrap();
+        sqlx::query("CREATE TABLE twitch_stream_sessions (id BIGSERIAL PRIMARY KEY, streamer_login TEXT, started_at TIMESTAMPTZ, ended_at TIMESTAMPTZ)")
+            .execute(&pool).await.unwrap();
+        sqlx::query(
+            "CREATE TABLE twitch_session_chatters (
+                session_id BIGINT, chatter_login TEXT, chatter_id TEXT,
+                messages INTEGER DEFAULT 0, seen_via_chatters_api BOOLEAN DEFAULT FALSE,
+                first_message_at TIMESTAMPTZ, last_seen_at TIMESTAMPTZ)"
+        ).execute(&pool).await.unwrap();
+        Some(pool)
+    }
+
+    async fn body_json(resp: axum::response::Response) -> serde_json::Value {
+        let bytes = to_bytes(resp.into_body(), usize::MAX).await.unwrap();
+        serde_json::from_slice(&bytes).unwrap()
+    }
+
+    async fn run(pool: PgPool) -> serde_json::Value {
+        let resp = lurker_analysis_handler(
+            DashboardAuthLevel::Localhost,
+            State(pool),
+            Query(LurkerQuery { streamer: Some("nani".into()), days: Some(30) }),
+        ).await.into_response();
+        assert_eq!(resp.status(), StatusCode::OK);
+        body_json(resp).await
+    }
+
+    // P2.68: anonyme Chatter (NULL chatter_login, gültige chatter_id) müssen als
+    // Lurker mitgezählt werden — nicht durch den Bot-Filter fallen.
+    #[tokio::test]
+    async fn anonymous_null_login_lurker_counted() {
+        let Some(pool) = make_pool("t_lurker_anon").await else { return };
+        sqlx::query("INSERT INTO twitch_stream_sessions (streamer_login, started_at, ended_at) VALUES ('nani', NOW()-INTERVAL '2 days', NOW()-INTERVAL '2 days'+INTERVAL '3 hours')")
+            .execute(&pool).await.unwrap();
+        // Anonymer Lurker: kein Login, nur chatter_id, via Chatter-API gesehen, 0 Messages
+        sqlx::query("INSERT INTO twitch_session_chatters (session_id, chatter_login, chatter_id, messages, seen_via_chatters_api, first_message_at, last_seen_at) VALUES (1, NULL, 'anon-123', 0, TRUE, NULL, NOW()-INTERVAL '2 days')")
+            .execute(&pool).await.unwrap();
+
+        let v = run(pool).await;
+        assert_eq!(v["dataAvailable"], true, "anonymer Lurker muss Daten liefern");
+        assert_eq!(v["lurkerStats"]["totalLurkers"], 1, "anonymer NULL-Login-Lurker muss gezählt werden");
+    }
+
+    // P2.68: gemischt-groß geschriebener Bot-Login muss case-insensitiv gefiltert werden.
+    #[tokio::test]
+    async fn mixed_case_bot_filtered() {
+        let Some(pool) = make_pool("t_lurker_botcase").await else { return };
+        sqlx::query("INSERT INTO twitch_stream_sessions (streamer_login, started_at, ended_at) VALUES ('nani', NOW()-INTERVAL '2 days', NOW()-INTERVAL '2 days'+INTERVAL '3 hours')")
+            .execute(&pool).await.unwrap();
+        // Echter Lurker
+        sqlx::query("INSERT INTO twitch_session_chatters (session_id, chatter_login, chatter_id, messages, seen_via_chatters_api, last_seen_at) VALUES (1, 'realviewer', 'id-1', 0, TRUE, NOW()-INTERVAL '2 days')")
+            .execute(&pool).await.unwrap();
+        // Bot mit gemischter Groß-/Kleinschreibung → muss rausgefiltert werden
+        sqlx::query("INSERT INTO twitch_session_chatters (session_id, chatter_login, chatter_id, messages, seen_via_chatters_api, last_seen_at) VALUES (1, 'Nightbot', 'id-2', 0, TRUE, NOW()-INTERVAL '2 days')")
+            .execute(&pool).await.unwrap();
+
+        let v = run(pool).await;
+        assert_eq!(v["lurkerStats"]["totalLurkers"], 1, "Nightbot (mixed-case) darf nicht als Lurker zählen");
+    }
 }
