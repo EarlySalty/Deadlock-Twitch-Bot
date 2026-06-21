@@ -724,8 +724,19 @@ mod tests {
         .await
         .expect("DDL stream_sessions");
 
+        // twitch_partners — Basistabelle, gegen die list_streamers/streamer_detail per
+        // NOT EXISTS prüfen (is_monitored_only via twitch_user_id/twitch_login). In Prod
+        // eigene Tabelle; twitch_partners_all_state ist die View darüber. Die Query
+        // referenziert beide, also muss die Fixture beide bereitstellen.
         sqlx::query(
-            "TRUNCATE twitch_partners_all_state, twitch_live_state, twitch_raid_auth, \
+            "CREATE TABLE IF NOT EXISTS twitch_partners (twitch_user_id TEXT, twitch_login TEXT)",
+        )
+        .execute(&pool)
+        .await
+        .expect("DDL twitch_partners");
+
+        sqlx::query(
+            "TRUNCATE twitch_partners_all_state, twitch_partners, twitch_live_state, twitch_raid_auth, \
              twitch_billing_subscriptions, streamer_plans, twitch_stream_sessions",
         )
         .execute(&pool)

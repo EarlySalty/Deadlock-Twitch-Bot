@@ -129,11 +129,17 @@ mod tests {
                 created_at   DOUBLE PRECISION NOT NULL,
                 expires_at   DOUBLE PRECISION NOT NULL
             )"#,
+            // departnered_at/admin_archived_at/partnered_at: vom Partner-Gate in
+            // load_partner_session referenziert (ORDER BY). Fehlten sie, warf die
+            // Gate-Query "column does not exist" → Session-Load Err → 401.
             r#"CREATE TABLE twitch_partners (
                 twitch_login            TEXT NOT NULL PRIMARY KEY,
                 twitch_user_id          TEXT,
                 status                  TEXT,
-                technical_pause_reason  TEXT
+                technical_pause_reason  TEXT,
+                departnered_at          TEXT,
+                admin_archived_at       TEXT,
+                partnered_at            TEXT
             )"#,
         ] {
             sqlx::query(ddl).execute(&pool).await.expect("DDL fehlgeschlagen");

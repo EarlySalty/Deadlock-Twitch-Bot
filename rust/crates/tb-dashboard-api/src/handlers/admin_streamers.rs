@@ -747,8 +747,26 @@ mod tests {
         .execute(&pool)
         .await
         .expect("DDL");
+        // twitch_partners — Basistabelle: list_streamers/streamer_detail prüfen per
+        // NOT EXISTS, ob ein Streamer hier steht (is_monitored_only). Volle Spalten,
+        // damit die Mutations-Tests (make_write_pool: verify/archive) sie mitnutzen.
         sqlx::query(
-            "TRUNCATE twitch_partners_all_state, twitch_live_state, twitch_raid_auth, \
+            r#"
+            CREATE TABLE IF NOT EXISTS twitch_partners (
+                id SERIAL PRIMARY KEY, twitch_login TEXT NOT NULL, twitch_user_id TEXT,
+                status TEXT DEFAULT 'active', manual_verified_permanent INTEGER DEFAULT 0,
+                manual_verified_at TEXT, manual_verified_until TEXT, admin_archived_at TEXT,
+                departnered_at TEXT,
+                technical_pause_reason TEXT, manual_partner_opt_out INTEGER DEFAULT 0,
+                raid_bot_enabled INTEGER DEFAULT 1
+            )
+            "#,
+        )
+        .execute(&pool)
+        .await
+        .expect("DDL twitch_partners");
+        sqlx::query(
+            "TRUNCATE twitch_partners_all_state, twitch_partners, twitch_live_state, twitch_raid_auth, \
              twitch_billing_subscriptions, streamer_plans, twitch_stream_sessions",
         )
         .execute(&pool)
@@ -908,21 +926,7 @@ mod tests {
     /// `twitch_partners`, discord-flag `twitch_streamers`/-`_identities`).
     async fn make_write_pool(dsn: &str, schema: &str) -> PgPool {
         let pool = make_pool(dsn, schema).await;
-        sqlx::query(
-            r#"
-            CREATE TABLE IF NOT EXISTS twitch_partners (
-                id SERIAL PRIMARY KEY, twitch_login TEXT NOT NULL, twitch_user_id TEXT,
-                status TEXT DEFAULT 'active', manual_verified_permanent INTEGER DEFAULT 0,
-                manual_verified_at TEXT, manual_verified_until TEXT, admin_archived_at TEXT,
-                departnered_at TEXT,
-                technical_pause_reason TEXT, manual_partner_opt_out INTEGER DEFAULT 0,
-                raid_bot_enabled INTEGER DEFAULT 1
-            )
-            "#,
-        )
-        .execute(&pool)
-        .await
-        .expect("DDL twitch_partners");
+        // twitch_partners kommt jetzt aus make_pool (volle Definition dort).
         sqlx::query(
             r#"
             CREATE TABLE IF NOT EXISTS twitch_streamers (
