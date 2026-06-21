@@ -14,7 +14,7 @@
 //!   `logs` relativ zum WorkingDirectory = Repo-Root, identisch zu Python)
 
 use std::collections::HashSet;
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
 use std::time::Duration;
 
 use serde_json::Value;
@@ -49,7 +49,7 @@ use tb_engagement::pipeline::EngagementPipeline;
 use tb_engagement::sender_auth::SenderAuthStore;
 use tb_engagement::stealth_sender::StealthSender;
 use tb_engagement::types::IncomingMessage;
-use tb_monitoring::{EventSubHooks, SubscriptionManager};
+use tb_monitoring::{ChatNotificationKind, EventSubHooks, SubscriptionManager, TelemetryStore};
 use tb_raid::{RaidAuthStore, RaidTokenRefresher, TokenBlacklistStore, TokenProvider};
 use tb_transport_discord::BrokerRelay;
 use tb_transport_twitch::HelixClient;
@@ -356,6 +356,14 @@ pub struct ChatRuntime {
     promos: Arc<PromoEngine>,
     sweeper: Arc<GlobalBanSweeper>,
     roster: Arc<DbPartnerRoster>,
+    /// P2.14: nur über [`Self::spawn_partner_invite_backfill`] genutzt — bis
+    /// main.rs den Spawn verdrahtet (WIRING-TODO), als tot markiert.
+    #[allow(dead_code)]
+    invite_resolver: Arc<DbInviteResolver>,
+    /// Geteilt mit [`ChatHooks::subscriptions`] (P2.15): wird in
+    /// [`Self::start_background`] mit dem aktiven SubscriptionManager befüllt,
+    /// damit der chat.notification-Fallback die dedizierten EventSub-Subs kennt.
+    subscriptions: Arc<OnceLock<Arc<SubscriptionManager>>>,
     pool: PgPool,
     bot_user_id: String,
 }
@@ -513,6 +521,14 @@ pub async fn build_runtime(
         Arc::new(OutboundSuppressionStore::new(pool.clone())),
         Arc::clone(&timeout_guard),
     ));
+    // Promo-Invite-Resolver: lazy On-Miss-Erstellung (PromoEngine) UND eager
+    // Backfill beim Startup (P2.14) teilen sich denselben Resolver, damit beide
+    // Pfade dieselbe Broker-/DB-Logik nutzen.
+    let invite_resolver = Arc::new(DbInviteResolver {
+        pool: pool.clone(),
+        relay: invite_relay,
+        invite_channel_id: invite_channel_id_from_env(),
+    });
     let promos = Arc::new(
         PromoEngine::new(pool.clone(), Arc::clone(&api), suppression)
             // P1.1: Schreibseite der Outbound-Suppression — derselbe Store, der
@@ -525,11 +541,7 @@ pub async fn build_runtime(
             .set_bot_scope_provider(
                 Arc::clone(&token_manager) as Arc<dyn tb_chat::promos::BotScopeProvider>,
             )
-            .set_invite_resolver(Arc::new(DbInviteResolver {
-                pool: pool.clone(),
-                relay: invite_relay,
-                invite_channel_id: invite_channel_id_from_env(),
-            }))
+            .set_invite_resolver(Arc::clone(&invite_resolver) as Arc<dyn InviteResolver>)
             .set_partner_check(Arc::new(DbPartnerCheck { pool: pool.clone() })),
     );
 
@@ -632,6 +644,10 @@ pub async fn build_runtime(
         EngagementIrcReader::new(pool.clone(), Arc::clone(&engagement), stealth.clone()).run(),
     );
 
+    // P2.15: geteilte Zelle für den SubscriptionManager (erst in
+    // start_background bekannt). ChatHooks und ChatRuntime halten denselben Arc.
+    let subscriptions_cell: Arc<OnceLock<Arc<SubscriptionManager>>> = Arc::new(OnceLock::new());
+
     tracing::info!("Nativer Chat-Bot verdrahtet — Pipeline aktiv (TB_CHAT_ENABLED=1)");
     ChatRuntime {
         hooks: Arc::new(ChatHooks {
@@ -642,11 +658,15 @@ pub async fn build_runtime(
             engagement,
             stealth,
             bot_user_id: bot_user_id.clone(),
+            telemetry: TelemetryStore::new(pool.clone()),
+            subscriptions: Arc::clone(&subscriptions_cell),
         }),
         token_manager,
         promos,
         sweeper,
         roster,
+        invite_resolver,
+        subscriptions: subscriptions_cell,
         pool,
         bot_user_id,
     }
@@ -675,6 +695,9 @@ impl ChatRuntime {
             );
             return;
         };
+        // P2.15: Hooks den aktiven SubscriptionManager bekanntmachen, damit der
+        // chat.notification-Fallback dedizierte EventSub-Subs erkennt.
+        let _ = self.subscriptions.set(Arc::clone(&manager));
         let pool = self.pool.clone();
         let bot_user_id = self.bot_user_id.clone();
         let token_manager = Arc::clone(&self.token_manager);
@@ -687,6 +710,50 @@ impl ChatRuntime {
             }
         });
     }
+
+    /// P2.14: Startet den einmaligen Eager-Partner-Invite-Backfill als
+    /// Hintergrund-Task (Python `_ensure_partner_invites`, beim Start gespawnt).
+    /// Läuft einmal beim Boot durch (inkl. 60-s-Retry der Fehlschläge) und endet
+    /// dann — der laufende Promo-Pfad erstellt fehlende Invites weiter on-miss.
+    ///
+    /// WIRING-TODO(P2.14): In `bin/tb-bot/src/main.rs` nach dem ChatRuntime-Aufbau
+    /// (gleiche Stelle wie `start_background`) einmalig `runtime
+    /// .spawn_partner_invite_backfill()` aufrufen.
+    #[allow(dead_code)]
+    pub fn spawn_partner_invite_backfill(&self) {
+        let resolver = Arc::clone(&self.invite_resolver);
+        tokio::spawn(async move {
+            resolver.ensure_partner_invites().await;
+        });
+    }
+}
+
+/// Kanal-Auswahl für die Chat-Subscriptions (Python `join_partner_channels`,
+/// connection.py:2050-2051). Python jointe disjunktiv:
+/// `WHERE a.raid_enabled IS TRUE OR s.is_partner_active = 1` — ein Kanal
+/// qualifiziert sich, wenn ENTWEDER der Raid-Bot aktiv ist ODER er aktiver
+/// Partner ist (P2.11: die frühere AND-Verengung auf `is_partner_active = 1`
+/// dropte raid-aktive Nicht-Partner aus der Datensammlung).
+///
+/// Zusätzlich bleibt der Rust-Filter `ra.needs_reauth = FALSE`: tote Auth-Einträge
+/// würden beim Subscribe ohnehin 403 liefern (Bot-Token ohne gültigen Grant),
+/// also werden sie gar nicht erst versucht — das vermeidet 403-Retry-Rauschen,
+/// ohne die Python-Auswahlmenge der real abonnierbaren Kanäle zu verkleinern.
+/// `channel:bot`-Scope ist wie in Python Pflicht (sonst kein Chat-Grant).
+async fn select_chat_subscription_channels(
+    pool: &PgPool,
+) -> Result<Vec<(String, String)>, sqlx::Error> {
+    sqlx::query_as(
+        "SELECT LOWER(ps.twitch_login), ps.twitch_user_id \
+         FROM twitch_streamers_partner_state ps \
+         JOIN twitch_raid_auth ra ON ra.twitch_user_id = ps.twitch_user_id \
+         WHERE (ra.raid_enabled IS TRUE OR ps.is_partner_active = 1) \
+           AND COALESCE(ps.twitch_user_id, '') <> '' \
+           AND ra.needs_reauth = FALSE \
+           AND ra.scopes LIKE '%channel:bot%'",
+    )
+    .fetch_all(pool)
+    .await
 }
 
 /// „Join" im Webhook-Modell: für jeden Partner- und Monitored-Kanal die
@@ -701,18 +768,7 @@ async fn reconcile_chat_subscriptions(
     bot_user_id: &str,
     token_manager: &BotTokenManager,
 ) {
-    let rows: Vec<(String, String)> = match sqlx::query_as(
-        "SELECT LOWER(ps.twitch_login), ps.twitch_user_id \
-         FROM twitch_streamers_partner_state ps \
-         JOIN twitch_raid_auth ra ON ra.twitch_user_id = ps.twitch_user_id \
-         WHERE ps.is_partner_active = 1 \
-           AND COALESCE(ps.twitch_user_id, '') <> '' \
-           AND ra.needs_reauth = FALSE \
-           AND ra.scopes LIKE '%channel:bot%'",
-    )
-    .fetch_all(pool)
-    .await
-    {
+    let rows: Vec<(String, String)> = match select_chat_subscription_channels(pool).await {
         Ok(r) => r,
         Err(e) => {
             tracing::warn!("chat-sub-reconcile: Kanal-Query fehlgeschlagen: {e}");
@@ -843,6 +899,15 @@ struct ChatHooks {
     /// User-ID des zentralen Bots — eigene Nachrichten überspringen das
     /// Engagement (Python `event_message`: `message.echo` → return).
     bot_user_id: String,
+    /// P2.15: Sub-Telemetrie-Schreibpfad für den chat.notification-Fallback.
+    telemetry: TelemetryStore,
+    /// P2.15: geteilter Griff auf den SubscriptionManager, erst in
+    /// [`ChatRuntime::start_background`] gesetzt (vorher unbekannt). Über
+    /// `tracked_pairs` wird geprüft, ob für den Broadcaster bereits eine
+    /// dedizierte channel.subscribe*-EventSub existiert (dann KEIN Fallback —
+    /// Doppel-Count vermeiden). Leer/ungesetzt → Fallback an (Python: kein
+    /// `has_sub`-Checker ⇒ `return True`).
+    subscriptions: Arc<OnceLock<Arc<SubscriptionManager>>>,
 }
 
 impl ChatHooks {
@@ -947,8 +1012,7 @@ impl EventSubHooks for ChatHooks {
     }
 
     // B7: chat.notification-Raid/Unraid an die Raid-Schicht durchreichen (der
-    // Demux in tb-monitoring klassifiziert vorab nach notice_type). Sub-Telemetrie
-    // (B8-01) bleibt vorerst der Default-No-op des inneren Hooks.
+    // Demux in tb-monitoring klassifiziert vorab nach notice_type).
     async fn on_chat_raid_notification(&self, event: &Value, message_id: Option<&str>) {
         self.inner
             .on_chat_raid_notification(event, message_id)
@@ -959,16 +1023,237 @@ impl EventSubHooks for ChatHooks {
             .on_chat_unraid_notification(event, message_id)
             .await;
     }
+    // P2.15: Chat-notification-Sub/Resub/Gift-Telemetrie-Fallback. Python
+    // (raid/bot.py:422-453) persistiert chat-abgeleitete Sub-Notices NUR, wenn
+    // für den Broadcaster KEINE dedizierte channel.subscribe*-EventSub existiert
+    // (should_capture-Gate, raid/bot.py:396-420) — sonst Doppel-Count. Wir bauen
+    // aus dem rohen chat.notification-Event dasselbe normalisierte Event wie der
+    // native channel.subscribe-Pfad und schreiben über store_subscription_event.
     async fn on_chat_subscription_notification(
         &self,
-        kind: tb_monitoring::ChatNotificationKind,
+        kind: ChatNotificationKind,
         event: &Value,
         message_id: Option<&str>,
     ) {
         self.inner
             .on_chat_subscription_notification(kind, event, message_id)
             .await;
+
+        let Some((event_type, normalized)) =
+            chat_notification_to_subscription_event(kind, event)
+        else {
+            return;
+        };
+        let broadcaster_id = str_field(event, &["broadcaster_user_id"]).unwrap_or_default();
+        if broadcaster_id.is_empty() {
+            tracing::debug!(
+                "chat.notification-Sub-Fallback: kein broadcaster_user_id — übersprungen"
+            );
+            return;
+        }
+        if !self.should_capture_chat_subscription(kind, &broadcaster_id) {
+            tracing::debug!(
+                broadcaster_id,
+                ?kind,
+                "chat.notification-Sub-Fallback übersprungen: dedizierte EventSub aktiv"
+            );
+            return;
+        }
+        if let Err(error) = self
+            .telemetry
+            .store_subscription_event(&broadcaster_id, &normalized, event_type, chrono::Utc::now())
+            .await
+        {
+            tracing::warn!(
+                %error,
+                broadcaster_id,
+                "chat.notification-Sub-Fallback: store_subscription_event fehlgeschlagen"
+            );
+        }
     }
+}
+
+impl ChatHooks {
+    /// `true` = chat-abgeleitetes Sub-Notice persistieren (Python
+    /// `should_capture_chat_subscription_notice`, raid/bot.py:396-420). Gibt es
+    /// für den Broadcaster bereits die dedizierte EventSub (channel.subscribe /
+    /// .message / .gift), liefert der native Pfad die Telemetrie → `false`
+    /// (Doppel-Count vermeiden). Ohne bekannten SubscriptionManager (Zelle leer)
+    /// fällt der Fallback wie Python (kein `has_sub`-Checker) auf `true` zurück.
+    fn should_capture_chat_subscription(
+        &self,
+        kind: ChatNotificationKind,
+        broadcaster_id: &str,
+    ) -> bool {
+        let eventsub_type = chat_notification_eventsub_type(kind);
+        let Some(manager) = self.subscriptions.get() else {
+            return true;
+        };
+        !manager
+            .tracked_pairs()
+            .iter()
+            .any(|(sub_type, bid)| sub_type == eventsub_type && bid == broadcaster_id)
+    }
+}
+
+/// `notice_type`-Klasse → dedizierter EventSub-Typ (Python
+/// `_subscription_notice_eventsub_type`, raid/bot.py:386-394). Bestimmt, welche
+/// native Subscription den Fallback abschalten würde.
+fn chat_notification_eventsub_type(kind: ChatNotificationKind) -> &'static str {
+    match kind {
+        ChatNotificationKind::Sub => "channel.subscribe",
+        ChatNotificationKind::Resub => "channel.subscription.message",
+        ChatNotificationKind::SubGift | ChatNotificationKind::CommunitySubGift => {
+            "channel.subscription.gift"
+        }
+        // Raid/Unraid laufen nie über diesen Pfad (anderer Hook); defensiver
+        // Fallback ohne Match-Effekt.
+        ChatNotificationKind::Raid | ChatNotificationKind::Unraid => "",
+    }
+}
+
+/// Baut aus einem rohen `channel.chat.notification`-Event dasselbe normalisierte
+/// Sub-Event, das der native `store_subscription_event`-Pfad erwartet (Python
+/// `_build_subscription_event_from_chat_notification`, chat/bot.py:2000-2142).
+/// Liefert `(event_type, event_value)` oder `None`, wenn das Notice keine
+/// Sub-Klasse ist bzw. der erwartete Nested-Payload fehlt.
+fn chat_notification_to_subscription_event(
+    kind: ChatNotificationKind,
+    event: &Value,
+) -> Option<(&'static str, Value)> {
+    let chatter_login = str_lower(event, &["chatter_user_login", "chatter_user_name"]);
+    let chatter_id = str_field(event, &["chatter_user_id"]);
+    let message_text = event
+        .get("message")
+        .and_then(|m| m.get("text"))
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .map(str::to_string);
+
+    match kind {
+        ChatNotificationKind::Sub => {
+            let sub = event.get("sub")?;
+            let tier = tier_of(sub);
+            Some((
+                "subscribe",
+                serde_json::json!({
+                    "user_login": chatter_login,
+                    "user_id": chatter_id,
+                    "tier": tier,
+                    "is_gift": false,
+                }),
+            ))
+        }
+        ChatNotificationKind::Resub => {
+            let resub = event.get("resub")?;
+            let gifter_login = str_lower(resub, &["gifter_user_login", "gifter_user_name"]);
+            let gifter_id = str_field(resub, &["gifter_user_id"]);
+            let is_gift = resub
+                .get("gift")
+                .or_else(|| resub.get("is_gift"))
+                .and_then(Value::as_bool)
+                .unwrap_or(false);
+            let mut obj = serde_json::json!({
+                "user_login": chatter_login,
+                "user_id": chatter_id,
+                "tier": tier_of(resub),
+                "is_gift": is_gift,
+                "gifter_login": gifter_login,
+                "gifter_user_id": gifter_id,
+                "cumulative_months": pos_int(resub, &["cumulative_months"]),
+                "streak_months": pos_int(resub, &["streak_months"]),
+            });
+            if let Some(text) = message_text {
+                obj["message"] = serde_json::json!({ "text": text });
+            }
+            Some(("resub", obj))
+        }
+        ChatNotificationKind::SubGift => {
+            let gift = event.get("sub_gift")?;
+            let recipient_login = str_lower(
+                gift,
+                &["recipient_user_login", "recipient_user_name"],
+            );
+            let recipient_id = str_field(gift, &["recipient_user_id"]);
+            let gift_total = pos_int(gift, &["cumulative_total", "total"]);
+            Some((
+                "gift",
+                serde_json::json!({
+                    "user_login": recipient_login,
+                    "user_id": recipient_id,
+                    "recipient_login": recipient_login,
+                    "recipient_user_id": recipient_id,
+                    "tier": tier_of(gift),
+                    "is_gift": true,
+                    "gifter_login": chatter_login,
+                    "gifter_user_id": chatter_id,
+                    "total": 1,
+                    "gift_total": gift_total,
+                    "gift_total_kind": "cumulative_total",
+                }),
+            ))
+        }
+        ChatNotificationKind::CommunitySubGift => {
+            let gift = event.get("community_sub_gift")?;
+            let gift_total = pos_int(gift, &["total", "gift_total"]);
+            Some((
+                "gift",
+                serde_json::json!({
+                    "tier": tier_of(gift),
+                    "is_gift": true,
+                    "gifter_login": chatter_login,
+                    "gifter_user_id": chatter_id,
+                    "total": gift_total,
+                    "gift_total": gift_total,
+                    "gift_total_kind": "batch_total",
+                }),
+            ))
+        }
+        ChatNotificationKind::Raid | ChatNotificationKind::Unraid => None,
+    }
+}
+
+/// Sub-Tier eines Nested-Payloads (`sub_tier`/`tier`, Default `"1000"` wie
+/// Python). Twitch liefert chat.notification-Tiers als `sub_tier`.
+fn tier_of(payload: &Value) -> String {
+    str_field(payload, &["sub_tier", "tier"]).unwrap_or_else(|| "1000".to_string())
+}
+
+/// Erstes nicht-leeres String-Feld (getrimmt) aus den Kandidaten.
+fn str_field(value: &Value, keys: &[&str]) -> Option<String> {
+    for key in keys {
+        if let Some(s) = value.get(*key).and_then(Value::as_str) {
+            let trimmed = s.trim();
+            if !trimmed.is_empty() {
+                return Some(trimmed.to_string());
+            }
+        }
+    }
+    None
+}
+
+/// Wie [`str_field`], aber lowercased (Login-Felder).
+fn str_lower(value: &Value, keys: &[&str]) -> Option<String> {
+    str_field(value, keys).map(|s| s.to_lowercase())
+}
+
+/// Erstes positives Integer-Feld (Zahl oder numerischer String); `0`/None → None
+/// (Python: `int(...) or None`).
+fn pos_int(value: &Value, keys: &[&str]) -> Option<i64> {
+    for key in keys {
+        let raw = value.get(*key);
+        let parsed = raw.and_then(Value::as_i64).or_else(|| {
+            raw.and_then(Value::as_str)
+                .and_then(|s| s.trim().parse::<i64>().ok())
+        });
+        if let Some(n) = parsed {
+            if n != 0 {
+                return Some(n);
+            }
+        }
+    }
+    None
 }
 
 // ---------------------------------------------------------------------------
@@ -1343,6 +1628,86 @@ impl DbInviteResolver {
         tracing::info!(login, "Promo-Invite für Streamer erstellt und gespeichert");
         Some(invite_url)
     }
+
+    /// Eager Partner-Invite-Backfill (P2.14, Python `_ensure_partner_invites`,
+    /// bot.py:1172-1260). Selektiert alle aktiven Partner OHNE
+    /// `twitch_streamer_invites`-Zeile und erstellt für jeden proaktiv einen
+    /// Invite (0,5 s Pacing). Fehlschläge werden nach 60 s einmal wiederholt.
+    /// So existiert die Invite-Zeile bereits VOR der ersten Promo — cross-system
+    /// Konsumenten (Discord-Bot-Sync, Invite-GET-Handler) sehen keine Lücke.
+    ///
+    /// Kein Broker (`relay`/`invite_channel_id` fehlt) → No-op (wie Python ohne
+    /// Discord-Bot: früher Return).
+    async fn ensure_partner_invites(&self) {
+        if self.relay.is_none() || self.invite_channel_id.is_none() {
+            tracing::debug!(
+                "Partner-Invite-Backfill übersprungen: kein Broker/Notify-Channel konfiguriert"
+            );
+            return;
+        }
+        let logins = match self.partners_without_invite().await {
+            Ok(rows) => rows,
+            Err(error) => {
+                tracing::warn!(%error, "Partner-Invite-Backfill: DB-Abfrage fehlgeschlagen");
+                return;
+            }
+        };
+        if logins.is_empty() {
+            tracing::debug!("Partner-Invite-Backfill: alle aktiven Partner haben einen Invite");
+            return;
+        }
+        tracing::info!(
+            count = logins.len(),
+            "Partner-Invite-Backfill: erstelle fehlende Invites"
+        );
+        let failed = self.create_invites_paced(&logins).await;
+        if failed.is_empty() {
+            return;
+        }
+        tracing::info!(
+            count = failed.len(),
+            "Partner-Invite-Backfill: Fehlschläge, Retry in 60s"
+        );
+        tokio::time::sleep(Duration::from_secs(60)).await;
+        let still_failed = self.create_invites_paced(&failed).await;
+        if !still_failed.is_empty() {
+            tracing::warn!(
+                count = still_failed.len(),
+                "Partner-Invite-Backfill: auch nach Retry ohne Invite (nächste Promo holt nach)"
+            );
+        }
+    }
+
+    /// Aktive Partner ohne Invite-Zeile (Python-SELECT bot.py:1184-1197).
+    async fn partners_without_invite(&self) -> Result<Vec<String>, sqlx::Error> {
+        sqlx::query_scalar::<_, String>(
+            "SELECT LOWER(p.twitch_login) \
+             FROM twitch_partners p \
+             WHERE p.status = 'active' \
+               AND p.admin_archived_at IS NULL \
+               AND p.departnered_at IS NULL \
+               AND NOT EXISTS ( \
+                   SELECT 1 FROM twitch_streamer_invites i \
+                    WHERE LOWER(i.streamer_login) = LOWER(p.twitch_login) \
+               )",
+        )
+        .fetch_all(&self.pool)
+        .await
+    }
+
+    /// Erstellt für jede Login einen Invite mit 0,5 s Pacing (Python-Parität:
+    /// schont das Broker-/Discord-Rate-Limit). Liefert die Logins, für die kein
+    /// Invite erstellt werden konnte.
+    async fn create_invites_paced(&self, logins: &[String]) -> Vec<String> {
+        let mut failed = Vec::new();
+        for login in logins {
+            if self.create_and_store_streamer_invite(login).await.is_none() {
+                failed.push(login.clone());
+            }
+            tokio::time::sleep(Duration::from_millis(500)).await;
+        }
+        failed
+    }
 }
 
 /// Partner-Roster für den Global-Ban-Sweeper (global_ban_sweep.py Z. 145–197).
@@ -1397,5 +1762,315 @@ impl PartnerRoster for DbPartnerRoster {
         .unwrap_or(None)
         .unwrap_or(0)
             != 0
+    }
+}
+
+// ===========================================================================
+// Tests
+// ===========================================================================
+
+#[cfg(test)]
+mod chat_notification_tests {
+    use super::*;
+    use serde_json::json;
+
+    // P2.15: notice_type-Klasse → dedizierter EventSub-Typ (Python
+    // _subscription_notice_eventsub_type). Steuert das should_capture-Gate.
+    #[test]
+    fn eventsub_type_mappt_jede_sub_klasse() {
+        assert_eq!(
+            chat_notification_eventsub_type(ChatNotificationKind::Sub),
+            "channel.subscribe"
+        );
+        assert_eq!(
+            chat_notification_eventsub_type(ChatNotificationKind::Resub),
+            "channel.subscription.message"
+        );
+        assert_eq!(
+            chat_notification_eventsub_type(ChatNotificationKind::SubGift),
+            "channel.subscription.gift"
+        );
+        assert_eq!(
+            chat_notification_eventsub_type(ChatNotificationKind::CommunitySubGift),
+            "channel.subscription.gift"
+        );
+    }
+
+    #[test]
+    fn sub_notice_wird_zu_subscribe_event() {
+        let event = json!({
+            "broadcaster_user_id": "100",
+            "chatter_user_id": "42",
+            "chatter_user_login": "Sub_User",
+            "notice_type": "sub",
+            "sub": { "sub_tier": "2000", "is_prime": false }
+        });
+        let (event_type, value) =
+            chat_notification_to_subscription_event(ChatNotificationKind::Sub, &event).unwrap();
+        assert_eq!(event_type, "subscribe");
+        assert_eq!(value["user_login"], "sub_user");
+        assert_eq!(value["user_id"], "42");
+        assert_eq!(value["tier"], "2000");
+        assert_eq!(value["is_gift"], false);
+    }
+
+    #[test]
+    fn sub_ohne_nested_payload_ergibt_none() {
+        let event = json!({ "broadcaster_user_id": "100", "notice_type": "sub" });
+        assert!(chat_notification_to_subscription_event(ChatNotificationKind::Sub, &event).is_none());
+    }
+
+    #[test]
+    fn resub_notice_traegt_monate_gift_und_message() {
+        let event = json!({
+            "broadcaster_user_id": "100",
+            "chatter_user_id": "42",
+            "chatter_user_login": "ReSubber",
+            "notice_type": "resub",
+            "resub": {
+                "cumulative_months": 12,
+                "streak_months": 3,
+                "sub_tier": "1000",
+                "gift": true,
+                "gifter_user_login": "Patron",
+                "gifter_user_id": "7"
+            },
+            "message": { "text": "  danke!  " }
+        });
+        let (event_type, value) =
+            chat_notification_to_subscription_event(ChatNotificationKind::Resub, &event).unwrap();
+        assert_eq!(event_type, "resub");
+        assert_eq!(value["user_login"], "resubber");
+        assert_eq!(value["cumulative_months"], 12);
+        assert_eq!(value["streak_months"], 3);
+        assert_eq!(value["is_gift"], true);
+        assert_eq!(value["gifter_login"], "patron");
+        assert_eq!(value["message"]["text"], "danke!");
+    }
+
+    #[test]
+    fn resub_null_monate_werden_zu_none() {
+        let event = json!({
+            "broadcaster_user_id": "100",
+            "chatter_user_id": "42",
+            "chatter_user_login": "x",
+            "notice_type": "resub",
+            "resub": { "cumulative_months": 0, "streak_months": 0, "sub_tier": "1000" }
+        });
+        let (_t, value) =
+            chat_notification_to_subscription_event(ChatNotificationKind::Resub, &event).unwrap();
+        assert!(value["cumulative_months"].is_null());
+        assert!(value["streak_months"].is_null());
+        // Kein message-Block, wenn kein Text.
+        assert!(value.get("message").is_none());
+    }
+
+    #[test]
+    fn sub_gift_setzt_recipient_und_cumulative_total() {
+        let event = json!({
+            "broadcaster_user_id": "100",
+            "chatter_user_id": "7",
+            "chatter_user_login": "Gifter",
+            "notice_type": "sub_gift",
+            "sub_gift": {
+                "sub_tier": "1000",
+                "cumulative_total": 25,
+                "recipient_user_login": "Lucky",
+                "recipient_user_id": "555"
+            }
+        });
+        let (event_type, value) =
+            chat_notification_to_subscription_event(ChatNotificationKind::SubGift, &event).unwrap();
+        assert_eq!(event_type, "gift");
+        assert_eq!(value["is_gift"], true);
+        assert_eq!(value["gifter_login"], "gifter");
+        assert_eq!(value["user_login"], "lucky");
+        assert_eq!(value["recipient_user_id"], "555");
+        assert_eq!(value["total"], 1);
+        assert_eq!(value["gift_total"], 25);
+        assert_eq!(value["gift_total_kind"], "cumulative_total");
+    }
+
+    #[test]
+    fn community_sub_gift_setzt_batch_total() {
+        let event = json!({
+            "broadcaster_user_id": "100",
+            "chatter_user_id": "7",
+            "chatter_user_login": "BigGifter",
+            "notice_type": "community_sub_gift",
+            "community_sub_gift": { "sub_tier": "3000", "total": 10 }
+        });
+        let (event_type, value) =
+            chat_notification_to_subscription_event(ChatNotificationKind::CommunitySubGift, &event)
+                .unwrap();
+        assert_eq!(event_type, "gift");
+        assert_eq!(value["tier"], "3000");
+        assert_eq!(value["is_gift"], true);
+        assert_eq!(value["gifter_login"], "biggifter");
+        assert_eq!(value["total"], 10);
+        assert_eq!(value["gift_total"], 10);
+        assert_eq!(value["gift_total_kind"], "batch_total");
+    }
+
+    #[test]
+    fn fehlendes_tier_faellt_auf_1000() {
+        let event = json!({
+            "broadcaster_user_id": "100",
+            "chatter_user_id": "42",
+            "chatter_user_login": "x",
+            "notice_type": "sub",
+            "sub": {}
+        });
+        let (_t, value) =
+            chat_notification_to_subscription_event(ChatNotificationKind::Sub, &event).unwrap();
+        assert_eq!(value["tier"], "1000");
+    }
+
+    #[test]
+    fn pos_int_akzeptiert_zahl_und_string_und_filtert_null() {
+        let v = json!({ "a": 5, "b": "9", "c": 0, "d": "0", "e": "x" });
+        assert_eq!(pos_int(&v, &["a"]), Some(5));
+        assert_eq!(pos_int(&v, &["b"]), Some(9));
+        assert_eq!(pos_int(&v, &["c"]), None);
+        assert_eq!(pos_int(&v, &["d"]), None);
+        assert_eq!(pos_int(&v, &["e"]), None);
+        assert_eq!(pos_int(&v, &["c", "a"]), Some(5));
+    }
+}
+
+#[cfg(all(test, feature = "integration"))]
+mod db_tests {
+    use super::*;
+    use std::str::FromStr;
+
+    async fn setup(schema: &str) -> PgPool {
+        let url = std::env::var("TB_TEST_DATABASE_URL")
+            .unwrap_or_else(|_| "postgres://postgres:tbtest@127.0.0.1:5434/postgres".to_string());
+        let admin = sqlx::postgres::PgPoolOptions::new()
+            .max_connections(1)
+            .connect(&url)
+            .await
+            .unwrap();
+        sqlx::query(&format!("DROP SCHEMA IF EXISTS {schema} CASCADE"))
+            .execute(&admin)
+            .await
+            .unwrap();
+        sqlx::query(&format!("CREATE SCHEMA {schema}"))
+            .execute(&admin)
+            .await
+            .unwrap();
+        admin.close().await;
+        let opts = sqlx::postgres::PgConnectOptions::from_str(&url)
+            .unwrap()
+            .options([("search_path", schema)]);
+        sqlx::postgres::PgPoolOptions::new()
+            .max_connections(4)
+            .connect_with(opts)
+            .await
+            .unwrap()
+    }
+
+    // P2.11: select_chat_subscription_channels zieht raid_enabled-only-Kanäle
+    // (is_partner_active != 1) wieder ein (OR statt der AND-Verengung).
+    #[tokio::test]
+    async fn p2_11_raid_enabled_nicht_partner_wird_eingeschlossen() {
+        let pool = setup("t_p2_11_chatchannels").await;
+        // Vereinfachte Tabelle statt der View — genau die Spalten, die die Query liest.
+        sqlx::query(
+            "CREATE TABLE twitch_streamers_partner_state (
+                twitch_login TEXT, twitch_user_id TEXT, is_partner_active INTEGER DEFAULT 0)",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+        sqlx::query(
+            "CREATE TABLE twitch_raid_auth (
+                twitch_user_id TEXT, twitch_login TEXT, scopes TEXT,
+                raid_enabled BOOLEAN DEFAULT TRUE, needs_reauth BOOLEAN DEFAULT FALSE)",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+
+        // (A) raid-aktiv, KEIN Partner, channel:bot-Scope → muss erscheinen.
+        sqlx::query("INSERT INTO twitch_streamers_partner_state VALUES ('RaidOnly', '10', 0)")
+            .execute(&pool).await.unwrap();
+        sqlx::query("INSERT INTO twitch_raid_auth VALUES ('10', 'raidonly', 'channel:bot user:read', TRUE, FALSE)")
+            .execute(&pool).await.unwrap();
+
+        // (B) aktiver Partner, raid_enabled=FALSE, channel:bot → muss erscheinen.
+        sqlx::query("INSERT INTO twitch_streamers_partner_state VALUES ('PartnerOnly', '20', 1)")
+            .execute(&pool).await.unwrap();
+        sqlx::query("INSERT INTO twitch_raid_auth VALUES ('20', 'partneronly', 'channel:bot', FALSE, FALSE)")
+            .execute(&pool).await.unwrap();
+
+        // (C) raid-aktiv, aber OHNE channel:bot-Scope → NICHT erscheinen.
+        sqlx::query("INSERT INTO twitch_streamers_partner_state VALUES ('NoScope', '30', 0)")
+            .execute(&pool).await.unwrap();
+        sqlx::query("INSERT INTO twitch_raid_auth VALUES ('30', 'noscope', 'user:read', TRUE, FALSE)")
+            .execute(&pool).await.unwrap();
+
+        // (D) raid-aktiv, channel:bot, aber needs_reauth=TRUE → NICHT erscheinen.
+        sqlx::query("INSERT INTO twitch_streamers_partner_state VALUES ('Reauth', '40', 0)")
+            .execute(&pool).await.unwrap();
+        sqlx::query("INSERT INTO twitch_raid_auth VALUES ('40', 'reauth', 'channel:bot', TRUE, TRUE)")
+            .execute(&pool).await.unwrap();
+
+        let mut rows = select_chat_subscription_channels(&pool).await.unwrap();
+        rows.sort();
+        assert_eq!(
+            rows,
+            vec![
+                ("partneronly".to_string(), "20".to_string()),
+                ("raidonly".to_string(), "10".to_string()),
+            ]
+        );
+    }
+
+    // P2.14: partners_without_invite liefert genau die aktiven Partner ohne
+    // twitch_streamer_invites-Zeile (Python _ensure_partner_invites-SELECT).
+    #[tokio::test]
+    async fn p2_14_partner_ohne_invite_werden_selektiert() {
+        let pool = setup("t_p2_14_backfill").await;
+        sqlx::query(
+            "CREATE TABLE twitch_partners (
+                twitch_login TEXT, status TEXT DEFAULT 'active',
+                admin_archived_at TEXT, departnered_at TEXT)",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+        sqlx::query(
+            "CREATE TABLE twitch_streamer_invites (streamer_login TEXT, invite_url TEXT)",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+
+        // Aktiver Partner OHNE Invite → muss erscheinen.
+        sqlx::query("INSERT INTO twitch_partners (twitch_login, status) VALUES ('Fresh', 'active')")
+            .execute(&pool).await.unwrap();
+        // Aktiver Partner MIT Invite → nicht.
+        sqlx::query("INSERT INTO twitch_partners (twitch_login, status) VALUES ('Warm', 'active')")
+            .execute(&pool).await.unwrap();
+        sqlx::query("INSERT INTO twitch_streamer_invites VALUES ('warm', 'https://x')")
+            .execute(&pool).await.unwrap();
+        // Archivierter Partner ohne Invite → nicht.
+        sqlx::query("INSERT INTO twitch_partners (twitch_login, status, admin_archived_at) VALUES ('Arch', 'active', '2026-01-01')")
+            .execute(&pool).await.unwrap();
+        // Departnered → nicht.
+        sqlx::query("INSERT INTO twitch_partners (twitch_login, status, departnered_at) VALUES ('Gone', 'active', '2026-01-01')")
+            .execute(&pool).await.unwrap();
+        // Inaktiver Status → nicht.
+        sqlx::query("INSERT INTO twitch_partners (twitch_login, status) VALUES ('Paused', 'paused')")
+            .execute(&pool).await.unwrap();
+
+        let resolver = DbInviteResolver {
+            pool: pool.clone(),
+            relay: None,
+            invite_channel_id: None,
+        };
+        let logins = resolver.partners_without_invite().await.unwrap();
+        assert_eq!(logins, vec!["fresh".to_string()]);
     }
 }
