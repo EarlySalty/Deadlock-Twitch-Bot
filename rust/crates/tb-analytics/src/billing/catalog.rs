@@ -386,6 +386,57 @@ impl BillingPlan {
     }
 }
 
+/// Stripe-Onboarding-Doku-Link (Python `BILLING_STRIPE_QUICKSTART_URL`).
+pub const STRIPE_QUICKSTART_URL: &str = "https://docs.stripe.com/billing/quickstart";
+
+/// Geplante (noch nicht aktivierte) Zahlungsmethoden für die Katalog-`payment`-
+/// Sektion (Python `supported_methods_planned`).
+pub const SUPPORTED_METHODS_PLANNED: &[&str] =
+    &["card", "sepa_debit", "paypal_via_wallet_if_enabled"];
+
+/// Aus der Readiness abgeleiteter Zahlungs-Integrationszustand.
+///
+/// Port von `billing_plans.py:billing_payment_state_from_readiness`:
+/// `integration_state` wird aus der Readiness übernommen, sonst `"live"` wenn
+/// Checkout- UND Price-Map-Readiness vorliegen, sonst `"planned"`.
+/// `checkout_enabled` = beide Readiness-Flags gesetzt.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct PaymentState {
+    pub integration_state: &'static str,
+    pub checkout_enabled: bool,
+}
+
+/// Leitet [`PaymentState`] aus den Readiness-Flags ab.
+///
+/// `integration_state_override` entspricht Pythons `readiness["integration_state"]`
+/// (leer → automatisch ableiten).
+pub fn payment_state_from_readiness(
+    checkout_ready: bool,
+    price_map_ready: bool,
+    integration_state_override: Option<&str>,
+) -> PaymentState {
+    let integration_state = match integration_state_override.map(str::trim) {
+        Some(s) if !s.is_empty() => {
+            if s == "live" {
+                "live"
+            } else {
+                "planned"
+            }
+        }
+        _ => {
+            if checkout_ready && price_map_ready {
+                "live"
+            } else {
+                "planned"
+            }
+        }
+    };
+    PaymentState {
+        integration_state,
+        checkout_enabled: checkout_ready && price_map_ready,
+    }
+}
+
 /// Formatiert Cent als deutschen EUR-String (`199` → `"1,99 EUR"`).
 ///
 /// Port von `billing_plans.py:format_eur_cents` (negative Werte → `0`).
@@ -491,6 +542,32 @@ mod tests {
     #[test]
     fn cycle_discounts_match_python_zero_zero() {
         assert_eq!(CYCLE_DISCOUNTS, &[(1, 0), (12, 0)]);
+    }
+
+    #[test]
+    fn payment_state_derives_like_python() {
+        // Beide Readiness-Flags → live + checkout enabled.
+        let live = payment_state_from_readiness(true, true, None);
+        assert_eq!(live.integration_state, "live");
+        assert!(live.checkout_enabled);
+        // Nur eins → planned + disabled.
+        let half = payment_state_from_readiness(true, false, None);
+        assert_eq!(half.integration_state, "planned");
+        assert!(!half.checkout_enabled);
+        // Override "live" gewinnt; "planned" bleibt planned.
+        assert_eq!(
+            payment_state_from_readiness(false, false, Some("live")).integration_state,
+            "live"
+        );
+        assert_eq!(
+            payment_state_from_readiness(true, true, Some("planned")).integration_state,
+            "planned"
+        );
+        // Leerer Override → automatische Ableitung.
+        assert_eq!(
+            payment_state_from_readiness(false, true, Some("  ")).integration_state,
+            "planned"
+        );
     }
 
     /// Kern-Orakel: 8 Pläne × Zyklen {1, 12} ergeben wert-identische Preise/lookup_keys.
