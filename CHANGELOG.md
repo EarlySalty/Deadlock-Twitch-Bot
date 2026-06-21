@@ -1,3 +1,11 @@
+## #249 — Analyse-Genauigkeit, Abo-Boni und Raid-Verlauf nach dem Umbau nachgezogen
+
+**Problem:** Nach dem Sprachumbau fehlten an mehreren Stellen Daten und Feinheiten der alten Version. Auswertungen ließen anonyme Zuschauer und einzelne Kennzahlen aus, Follower-Gesamtzahlen blieben teils leer, Abonnenten- und Werbe-Daten wurden nicht mehr regelmäßig erfasst, der Bonus beim Jahres-Abo wurde nicht gutgeschrieben, und der Raid-Verlauf war nicht abrufbar.
+
+**Änderung:** Die Auswertungen rechnen wieder vollständig: anonyme Chatter ohne Login werden mitgezählt, Bot-Konten unabhängig von Groß-/Kleinschreibung herausgefiltert, verfälschte Follower-Sprünge ausgeklammert, Vergleichswerte (Peer-Benchmark und Tier-Einstufung) wieder berechnet, und die Bestenliste gibt fremde Discord-Kennungen nicht mehr preis; tritt ein Datenbankfehler auf, meldet die Demografie ehrlich einen Fehler statt geschönter Nullwerte. Follower-Gesamtzahlen werden wieder real abgerufen (Bot-Zugang mit Streamer-Zugang als Rückfall). Abonnenten- und Werbe-Snapshots werden regelmäßig eingesammelt und bilden die Datengrundlage der Dashboards. Beim Jahres-Abo werden die Bonus-Monate wieder gutgeschrieben, und nach jeder Abo- oder Plan-Änderung wird die Raid-Einstufung sofort neu berechnet. Der Raid-Verlauf ist über eine eigene, filterbare Verlaufsseite wieder abrufbar. Schließlich werden raid-fähige Kanäle wieder zuverlässig betreten, fehlende Einladungen beim Start nachgezogen und eingehende Raids robuster bestätigt (offene Session als Rückfall, korrekte Zuschauerzahl).
+
+**Ergebnis:** Die Dashboards zeigen wieder die vollständigen, genauen Zahlen wie vor dem Umbau, der Jahres-Abo-Bonus stimmt, und sowohl Raid-Verlauf als auch Raid-Erkennung sind zurück. Ergänzt wurden zudem technische Härtungen (z. B. Schutz vor doppelt ausgeführten Anfragen und sicherere Token-Behandlung) ohne sichtbare Auswirkung für Streamer.
+
 ## #248 — Großer Dashboard-Nachzug: Markt-Recherche, Bezahl-Vorschau, Demo-Inhalte, sicherere Anmeldung
 
 **Problem:** Nach dem Sprachumbau fehlten im Dashboard noch zahlreiche Seiten und Verhaltensweisen der alten Version. Einige Kacheln blieben leer, ganze Seiten liefen ins Leere, und an Anmelde- sowie Auswertungspfaden fehlten Feinheiten, die vor dem Umbau selbstverständlich waren.
