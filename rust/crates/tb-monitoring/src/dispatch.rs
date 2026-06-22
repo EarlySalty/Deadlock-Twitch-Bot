@@ -2,16 +2,16 @@
 //! (`POST /eventsub/dispatch`, Vertrag des Python-Dashboard-Service),
 //! dedupliziert per Guard-Store und routet:
 //!
-//! - Core-Typen (`stream.online`/`stream.offline`/`channel.update`) →
+//! - Core-Typen (`stream.online`/`stream.offline`/`channel.update`/`channel.raid`) →
 //!   durable Processing-Inbox (Enqueue-Modus; Python nutzt ihn im WS-Pfad,
 //!   der Webhook-Pfad lief inline — bewusste Vereinheitlichung, durable).
 //! - Telemetrie-Typen (Bits/Subs/Follows/…) → direkter Insert (best-effort,
 //!   Fehler werden wie in Python geloggt und verschluckt).
-//! - `channel.raid` / `channel.moderate` → [`EventSubHooks`] (Raid-Subsystem,
+//! - `channel.moderate` → [`EventSubHooks`] (Raid-Subsystem,
 //!   Phase 6 — Cutover-Kopplung, siehe Plan-Doc).
 
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 use chrono::{DateTime, TimeZone, Utc};
 use serde_json::Value;
@@ -24,7 +24,12 @@ use crate::telemetry::{HypeTrainPhase, ShoutoutDirection, TelemetryStore};
 pub const MESSAGE_DEDUP_TTL_SECONDS: f64 = 600.0;
 
 /// Sub-Typen, die über die durable Inbox verarbeitet werden.
-pub const CORE_DELIVERY_TYPES: [&str; 3] = ["stream.online", "stream.offline", "channel.update"];
+pub const CORE_DELIVERY_TYPES: [&str; 4] = [
+    "stream.online",
+    "stream.offline",
+    "channel.update",
+    "channel.raid",
+];
 
 /// EventSub-Typen mit registriertem Handler — das Rust-Strukturäquivalent zu
 /// Pythons `set_callback`-Registry (`_has_callback`). Genau diese Typen routet
@@ -39,7 +44,7 @@ pub const REGISTERED_SUB_TYPES: [&str; 25] = [
     "stream.online",
     "stream.offline",
     "channel.update",
-    // Hook-geroutet
+    // Durable Inbox
     "channel.raid",
     "channel.moderate",
     "channel.chat.message",
@@ -240,6 +245,267 @@ pub struct NoopEventSubHooks;
 #[async_trait::async_trait]
 impl EventSubHooks for NoopEventSubHooks {}
 
+/// Sync-Gate für P3.6: `true`, wenn für `(eventsub_type, broadcaster_id)` eine
+/// dedizierte Subscription aktiv ist und der Chat-Fallback deshalb NICHT
+/// persistieren darf.
+pub type EventSubHasSubscription = Arc<dyn Fn(&str, &str) -> bool + Send + Sync>;
+
+/// Hook-Decorator für chat.notification-Sub/Resub/Gift-Telemetrie-Fallback.
+///
+/// WIRING-TODO(P3.6): In `bin/tb-bot/src/chat_wiring.rs` bzw. der dortigen
+/// Hook-Komposition genau einen Persistenzpfad auswählen. Diese Crate-Variante
+/// braucht eine `eventsub_has_sub`-Injection aus dem `SubscriptionManager`;
+/// parallel zur bestehenden bin-seitigen ChatHooks-Persistenz darf sie nicht
+/// aktiviert werden, sonst entstehen Doppel-Counts.
+pub struct ChatSubscriptionTelemetryHooks {
+    inner: Arc<dyn EventSubHooks>,
+    telemetry: TelemetryStore,
+    eventsub_has_sub: EventSubHasSubscription,
+    clock: ClockFn,
+}
+
+impl ChatSubscriptionTelemetryHooks {
+    pub fn new(
+        inner: Arc<dyn EventSubHooks>,
+        telemetry: TelemetryStore,
+        eventsub_has_sub: EventSubHasSubscription,
+        clock: ClockFn,
+    ) -> Self {
+        Self {
+            inner,
+            telemetry,
+            eventsub_has_sub,
+            clock,
+        }
+    }
+
+    fn should_capture(&self, eventsub_type: &str, broadcaster_id: &str) -> bool {
+        !(self.eventsub_has_sub)(eventsub_type, broadcaster_id)
+    }
+}
+
+#[async_trait::async_trait]
+impl EventSubHooks for ChatSubscriptionTelemetryHooks {
+    async fn on_channel_raid(&self, event: &Value, message_id: Option<&str>) {
+        self.inner.on_channel_raid(event, message_id).await;
+    }
+
+    async fn on_channel_moderate(&self, broadcaster_id: &str, login: &str, event: &Value) {
+        self.inner
+            .on_channel_moderate(broadcaster_id, login, event)
+            .await;
+    }
+
+    async fn on_stream_went_live(&self, twitch_user_id: &str, login: &str) {
+        self.inner.on_stream_went_live(twitch_user_id, login).await;
+    }
+
+    async fn on_score_refresh(
+        &self,
+        twitch_user_id: &str,
+        login: Option<&str>,
+        trigger: &'static str,
+    ) {
+        self.inner
+            .on_score_refresh(twitch_user_id, login, trigger)
+            .await;
+    }
+
+    async fn on_stream_offline_engagement(&self, twitch_user_id: &str, login: Option<&str>) {
+        self.inner
+            .on_stream_offline_engagement(twitch_user_id, login)
+            .await;
+    }
+
+    async fn on_stream_offline_global_ban(&self, twitch_user_id: &str, login: Option<&str>) {
+        self.inner
+            .on_stream_offline_global_ban(twitch_user_id, login)
+            .await;
+    }
+
+    async fn on_stream_offline(&self, twitch_user_id: &str, login: Option<&str>) {
+        self.inner.on_stream_offline(twitch_user_id, login).await;
+    }
+
+    async fn on_chat_message(&self, event: &Value, message_id: Option<&str>) {
+        self.inner.on_chat_message(event, message_id).await;
+    }
+
+    async fn on_chat_subscription_notification(
+        &self,
+        kind: ChatNotificationKind,
+        event: &Value,
+        message_id: Option<&str>,
+    ) {
+        self.inner
+            .on_chat_subscription_notification(kind, event, message_id)
+            .await;
+
+        let Some((eventsub_type, event_type, normalized)) =
+            chat_notification_to_subscription_event(kind, event)
+        else {
+            return;
+        };
+        let broadcaster_id = str_field(event, &["broadcaster_user_id"]).unwrap_or_default();
+        if broadcaster_id.is_empty() || !self.should_capture(eventsub_type, &broadcaster_id) {
+            return;
+        }
+        let now = epoch_to_datetime((self.clock)());
+        if let Err(error) = self
+            .telemetry
+            .store_subscription_event(&broadcaster_id, &normalized, event_type, now)
+            .await
+        {
+            tracing::warn!(
+                %error,
+                broadcaster_id,
+                eventsub_type,
+                "chat.notification-Sub-Fallback: store_subscription_event fehlgeschlagen"
+            );
+        }
+    }
+
+    async fn on_chat_raid_notification(&self, event: &Value, message_id: Option<&str>) {
+        self.inner
+            .on_chat_raid_notification(event, message_id)
+            .await;
+    }
+
+    async fn on_chat_unraid_notification(&self, event: &Value, message_id: Option<&str>) {
+        self.inner
+            .on_chat_unraid_notification(event, message_id)
+            .await;
+    }
+}
+
+fn chat_notification_to_subscription_event(
+    kind: ChatNotificationKind,
+    event: &Value,
+) -> Option<(&'static str, &'static str, Value)> {
+    let chatter_login = str_lower(event, &["chatter_user_login", "chatter_user_name"]);
+    let chatter_id = str_field(event, &["chatter_user_id"]);
+    let message = event
+        .get("message")
+        .and_then(|m| m.get("text"))
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|text| !text.is_empty())
+        .map(str::to_string);
+
+    match kind {
+        ChatNotificationKind::Sub => {
+            let sub = event.get("sub")?;
+            Some((
+                "channel.subscribe",
+                "subscribe",
+                serde_json::json!({
+                    "user_login": chatter_login,
+                    "user_id": chatter_id,
+                    "tier": tier_of(sub),
+                    "is_gift": false,
+                }),
+            ))
+        }
+        ChatNotificationKind::Resub => {
+            let resub = event.get("resub")?;
+            let mut normalized = serde_json::json!({
+                "user_login": chatter_login,
+                "user_id": chatter_id,
+                "tier": tier_of(resub),
+                "is_gift": resub.get("gift")
+                    .or_else(|| resub.get("is_gift"))
+                    .and_then(Value::as_bool)
+                    .unwrap_or(false),
+                "gifter_login": str_lower(resub, &["gifter_user_login", "gifter_user_name"]),
+                "gifter_user_id": str_field(resub, &["gifter_user_id"]),
+                "cumulative_months": pos_int(resub, &["cumulative_months"]),
+                "streak_months": pos_int(resub, &["streak_months"]),
+            });
+            if let Some(message) = message {
+                normalized["message"] = serde_json::json!({"text": message});
+            }
+            Some(("channel.subscription.message", "resub", normalized))
+        }
+        ChatNotificationKind::SubGift => {
+            let gift = event.get("sub_gift")?;
+            let recipient_login = str_lower(gift, &["recipient_user_login", "recipient_user_name"]);
+            let recipient_id = str_field(gift, &["recipient_user_id"]);
+            Some((
+                "channel.subscription.gift",
+                "gift",
+                serde_json::json!({
+                    "user_login": recipient_login,
+                    "user_id": recipient_id,
+                    "recipient_login": recipient_login,
+                    "recipient_user_id": recipient_id,
+                    "tier": tier_of(gift),
+                    "is_gift": true,
+                    "gifter_login": chatter_login,
+                    "gifter_user_id": chatter_id,
+                    "total": 1,
+                    "gift_total": pos_int(gift, &["cumulative_total", "total"]),
+                    "gift_total_kind": "cumulative_total",
+                }),
+            ))
+        }
+        ChatNotificationKind::CommunitySubGift => {
+            let gift = event.get("community_sub_gift")?;
+            let gift_total = pos_int(gift, &["total", "gift_total"]);
+            Some((
+                "channel.subscription.gift",
+                "gift",
+                serde_json::json!({
+                    "tier": tier_of(gift),
+                    "is_gift": true,
+                    "gifter_login": chatter_login,
+                    "gifter_user_id": chatter_id,
+                    "total": gift_total,
+                    "gift_total": gift_total,
+                    "gift_total_kind": "batch_total",
+                }),
+            ))
+        }
+        ChatNotificationKind::Raid | ChatNotificationKind::Unraid => None,
+    }
+}
+
+fn str_field(value: &Value, keys: &[&str]) -> Option<String> {
+    for key in keys {
+        if let Some(raw) = value.get(*key) {
+            let text = json_to_trimmed_string(raw);
+            if !text.is_empty() {
+                return Some(text);
+            }
+        }
+    }
+    None
+}
+
+fn str_lower(value: &Value, keys: &[&str]) -> Option<String> {
+    str_field(value, keys).map(|value| value.to_lowercase())
+}
+
+fn pos_int(value: &Value, keys: &[&str]) -> Option<i32> {
+    for key in keys {
+        let Some(raw) = value.get(*key) else {
+            continue;
+        };
+        let parsed = match raw {
+            Value::Number(n) => n.as_i64(),
+            Value::String(s) => s.trim().parse::<i64>().ok(),
+            _ => None,
+        };
+        if let Some(parsed) = parsed.filter(|v| *v > 0) {
+            return Some(parsed as i32);
+        }
+    }
+    None
+}
+
+fn tier_of(value: &Value) -> String {
+    str_field(value, &["sub_tier", "tier"]).unwrap_or_else(|| "1000".to_string())
+}
+
 /// Aus der Notification extrahierter Kontext
 /// (Python `_extract_notification_context`).
 #[derive(Debug, Clone, Default)]
@@ -251,13 +517,20 @@ pub struct NotificationContext {
 }
 
 /// Zerlegt den Bridge-Payload: `{subscription, event}` oder geschachtelt
-/// unter `payload`. Raid-Events nutzen `to_broadcaster_*`.
+/// unter `payload`. Fallback-Kette wie Python:
+/// `event.broadcaster_user_id` → `event.to_broadcaster_user_id` →
+/// `event.user_id` → `subscription.condition.broadcaster_user_id` →
+/// `subscription.condition.to_broadcaster_user_id` (Login analog).
 pub fn extract_context(body: &Value, fallback_sub_type: &str) -> NotificationContext {
     let nested = body
         .get("payload")
         .filter(|p| p.get("event").is_some() || p.get("subscription").is_some());
     let scope = nested.unwrap_or(body);
     let event = scope.get("event").cloned().unwrap_or(Value::Null);
+    let condition = scope
+        .get("subscription")
+        .and_then(|s| s.get("condition"))
+        .unwrap_or(&Value::Null);
     let sub_type = scope
         .get("subscription")
         .and_then(|s| s.get("type"))
@@ -267,17 +540,21 @@ pub fn extract_context(body: &Value, fallback_sub_type: &str) -> NotificationCon
         .unwrap_or(fallback_sub_type)
         .trim()
         .to_lowercase();
-    let broadcaster_id = ["broadcaster_user_id", "to_broadcaster_user_id"]
-        .iter()
-        .find_map(|key| event.get(*key))
-        .map(json_to_trimmed_string)
-        .unwrap_or_default();
-    let broadcaster_login = ["broadcaster_user_login", "to_broadcaster_user_login"]
-        .iter()
-        .find_map(|key| event.get(*key))
-        .map(json_to_trimmed_string)
-        .unwrap_or_default()
-        .to_lowercase();
+    let broadcaster_id = first_trimmed_value(&[
+        event.get("broadcaster_user_id"),
+        event.get("to_broadcaster_user_id"),
+        event.get("user_id"),
+        condition.get("broadcaster_user_id"),
+        condition.get("to_broadcaster_user_id"),
+    ]);
+    let broadcaster_login = first_trimmed_value(&[
+        event.get("broadcaster_user_login"),
+        event.get("to_broadcaster_user_login"),
+        event.get("user_login"),
+        condition.get("broadcaster_user_login"),
+        condition.get("to_broadcaster_user_login"),
+    ])
+    .to_lowercase();
     NotificationContext {
         sub_type,
         broadcaster_id,
@@ -292,6 +569,14 @@ fn json_to_trimmed_string(value: &Value) -> String {
         Value::Null => String::new(),
         other => other.to_string(),
     }
+}
+
+fn first_trimmed_value(values: &[Option<&Value>]) -> String {
+    values
+        .iter()
+        .filter_map(|value| value.map(json_to_trimmed_string))
+        .find(|value| !value.is_empty())
+        .unwrap_or_default()
 }
 
 pub struct EventSubDispatcher {
@@ -435,10 +720,6 @@ impl EventSubDispatcher {
         }
 
         match sub_type {
-            "channel.raid" => {
-                self.hooks.on_channel_raid(&context.event, message_id).await;
-                outcome.processed = true;
-            }
             "channel.chat.message" => {
                 self.hooks.on_chat_message(&context.event, message_id).await;
                 outcome.processed = true;
@@ -488,7 +769,9 @@ impl EventSubDispatcher {
         };
         match kind {
             ChatNotificationKind::Raid => {
-                self.hooks.on_chat_raid_notification(event, message_id).await;
+                self.hooks
+                    .on_chat_raid_notification(event, message_id)
+                    .await;
             }
             ChatNotificationKind::Unraid => {
                 self.hooks
@@ -556,12 +839,12 @@ impl EventSubDispatcher {
             }
             "channel.ban" => {
                 self.telemetry
-                    .store_ban_event(user_id, event, false, now)
+                    .store_ban_event(user_id, Some(&context.broadcaster_login), event, false, now)
                     .await
             }
             "channel.unban" => {
                 self.telemetry
-                    .store_ban_event(user_id, event, true, now)
+                    .store_ban_event(user_id, Some(&context.broadcaster_login), event, true, now)
                     .await
             }
             "channel.shoutout.create" => {
@@ -614,8 +897,8 @@ fn epoch_to_datetime(epoch: f64) -> DateTime<Utc> {
 #[cfg(test)]
 mod tests {
     use super::{
-        classify_chat_notification, extract_context, has_registered_handler, ChatNotificationKind,
-        REGISTERED_SUB_TYPES,
+        ChatNotificationKind, REGISTERED_SUB_TYPES, classify_chat_notification, extract_context,
+        has_registered_handler,
     };
 
     #[test]
@@ -697,7 +980,6 @@ mod tests {
         assert_eq!(classify_chat_notification("   "), None);
     }
 
-
     #[test]
     fn extract_context_flach_und_geschachtelt() {
         let flat = serde_json::json!({
@@ -720,5 +1002,40 @@ mod tests {
         assert_eq!(ctx.sub_type, "channel.raid");
         assert_eq!(ctx.broadcaster_id, "7");
         assert_eq!(ctx.broadcaster_login, "ziel");
+    }
+
+    #[test]
+    fn extract_context_nutzt_python_fallback_kette() {
+        let user_id_only = serde_json::json!({
+            "subscription": {"type": "channel.follow"},
+            "event": {"user_id": "  123  ", "user_login": "MixedCase"}
+        });
+        let ctx = extract_context(&user_id_only, "fallback");
+        assert_eq!(ctx.broadcaster_id, "123");
+        assert_eq!(ctx.broadcaster_login, "mixedcase");
+
+        let condition_only = serde_json::json!({
+            "subscription": {
+                "type": "channel.channel_points_custom_reward_redemption.add",
+                "condition": {
+                    "broadcaster_user_id": "456",
+                    "broadcaster_user_login": "CondLogin"
+                }
+            },
+            "event": {}
+        });
+        let ctx = extract_context(&condition_only, "fallback");
+        assert_eq!(ctx.broadcaster_id, "456");
+        assert_eq!(ctx.broadcaster_login, "condlogin");
+
+        let raid_condition = serde_json::json!({
+            "subscription": {
+                "type": "channel.raid",
+                "condition": {"to_broadcaster_user_id": "789"}
+            },
+            "event": {}
+        });
+        let ctx = extract_context(&raid_condition, "fallback");
+        assert_eq!(ctx.broadcaster_id, "789");
     }
 }

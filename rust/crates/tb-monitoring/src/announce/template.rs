@@ -533,9 +533,12 @@ pub fn render_announcement(
     }
 
     RenderedAnnouncement {
-        content: render_placeholders(&config.content_template, context)
-            .trim()
-            .to_string(),
+        content: sanitize_live_content(&render_placeholders(
+            &sanitize_live_content_template(&config.content_template),
+            context,
+        ))
+        .trim()
+        .to_string(),
         embed,
         button_label: {
             let label = render_placeholders(&config.button_label_template, context);
@@ -590,6 +593,40 @@ pub fn sanitize_live_content(content: &str) -> String {
 
     let out = neutralize(content, "everyone");
     neutralize(&out, "here")
+}
+
+/// Fügt bei Discord-Rollen-Mentions (`<@&123>`) nach `&` ein
+/// Zero-Width-Space ein. Nur direkte Rollen-Mentions aus gespeicherten
+/// Templates werden verändert; der generierte `{mention_role}`-Platzhalter
+/// bleibt erlaubt und wird über Discord `allowed_mentions` begrenzt.
+fn sanitize_live_content_template(template: &str) -> String {
+    let input = sanitize_live_content(template);
+    let bytes = input.as_bytes();
+    let mut out = String::with_capacity(input.len());
+    let mut i = 0;
+    while i < bytes.len() {
+        if i + 4 <= bytes.len() && &bytes[i..i + 3] == b"<@&" {
+            let mut j = i + 3;
+            while j < bytes.len() && bytes[j].is_ascii_digit() {
+                j += 1;
+            }
+            if j > i + 3 && j < bytes.len() && bytes[j] == b'>' {
+                out.push_str("<@&\u{200b}");
+                out.push_str(&input[i + 3..j]);
+                out.push('>');
+                i = j + 1;
+                continue;
+            }
+        }
+
+        if let Some(ch) = input[i..].chars().next() {
+            out.push(ch);
+            i += ch.len_utf8();
+        } else {
+            break;
+        }
+    }
+    out
 }
 
 /// Offline-/VOD-Embed (Python `_build_offline_embed` — gleicher Stil, klar
@@ -820,10 +857,28 @@ mod tests {
             "rohes @here (mixed-case) nicht neutralisiert: {out}"
         );
         // Die Original-Schreibweise bleibt erhalten, nur mit Zero-Width-Joiner.
-        assert_eq!(
-            out,
-            "@\u{200b}EveryOne @\u{200b}hErE @\u{200b}eVeRyOnE"
+        assert_eq!(out, "@\u{200b}EveryOne @\u{200b}hErE @\u{200b}eVeRyOnE");
+    }
+
+    #[test]
+    fn render_neutralisiert_direkte_rollen_mentions_aber_nicht_mention_role() {
+        let mut config = AnnouncementConfig {
+            content_template: "Ping <@&1234567890> {mention_role} @everyone".to_string(),
+            ..AnnouncementConfig::default()
+        };
+        config.fields.clear();
+        let now = parse_dt_utc("2026-06-09T18:00:00Z").unwrap();
+        let ctx = ctx_with(&[
+            ("mention_role", "<@&42>"),
+            ("url", "https://www.twitch.tv/drag"),
+        ]);
+
+        let out = render_announcement(&config, &ctx, now, Some("seed")).content;
+        assert!(
+            !out.contains("<@&1234567890>") && !out.to_lowercase().contains("@everyone"),
+            "direkte disallowed Mentions nicht neutralisiert: {out}"
         );
+        assert_eq!(out, "Ping <@&\u{200b}1234567890> <@&42> @\u{200b}everyone");
     }
 
     #[test]
