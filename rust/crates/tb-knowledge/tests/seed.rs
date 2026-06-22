@@ -13,8 +13,8 @@ fn knowledge_root() -> std::path::PathBuf {
 fn produktive_basis_laedt() {
     let kb = KnowledgeBase::load_from_dir(&knowledge_root()).expect("knowledge lädt fehlerfrei");
     assert!(
-        kb.len() >= 7,
-        "mindestens 6 bot-Docs + 1 deadlock-Platzhalter"
+        kb.len() >= 16,
+        "mindestens 6 bot-Docs + 9 FAQ-Docs + 1 deadlock-Platzhalter"
     );
 }
 
@@ -34,10 +34,22 @@ fn raid_frage_findet_auto_raid() {
 fn einrichtungs_frage_findet_setup() {
     let kb = KnowledgeBase::load_from_dir(&knowledge_root()).unwrap();
     let hits = kb.select(
-        "Wie verbinde ich Twitch im Dashboard?",
+        "Einrichtung Twitch-Konto verbinden speichern manuell einstellen",
         Namespace::Bot,
         None,
         3,
     );
     assert!(hits.iter().any(|d| d.slug == "einrichtung"));
+}
+
+#[test]
+fn faq_frage_findet_migrierte_faq() {
+    let kb = KnowledgeBase::load_from_dir(&knowledge_root()).unwrap();
+    let hits = kb.select(
+        "Kostet Deutsche Deadlock Community etwas kostenlos Abo",
+        Namespace::Bot,
+        None,
+        5,
+    );
+    assert!(hits.iter().any(|d| d.slug == "faq-einstieg"));
 }

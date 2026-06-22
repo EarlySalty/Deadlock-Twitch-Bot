@@ -31,27 +31,99 @@ fn md_to_html(md: &str) -> String {
 }
 
 fn render_help(kb: &KnowledgeBase) -> String {
+    let mut toc =
+        String::from("<nav aria-label=\"Inhaltsverzeichnis\"><h2>Inhaltsverzeichnis</h2><ul>");
     let mut sections = String::new();
     let mut docs: Vec<_> = kb
         .docs()
         .iter()
         .filter(|d| d.namespace == Namespace::Bot)
         .collect();
-    docs.sort_by(|a, b| a.slug.cmp(&b.slug));
+    docs.sort_by(|a, b| {
+        category_rank(&a.category)
+            .cmp(&category_rank(&b.category))
+            .then(a.category.cmp(&b.category))
+            .then(a.slug.cmp(&b.slug))
+    });
+
+    for d in &docs {
+        toc.push_str(&format!(
+            "<li><a href=\"#{slug}\">{title}</a></li>",
+            slug = html_escape(&d.slug),
+            title = html_escape(&d.title)
+        ));
+    }
+    toc.push_str("</ul></nav>\n");
+
+    let mut current_category: Option<&str> = None;
     for d in docs {
+        if current_category != Some(d.category.as_str()) {
+            if current_category.is_some() {
+                sections.push_str("</section>\n");
+            }
+            current_category = Some(d.category.as_str());
+            sections.push_str(&format!(
+                "<section id=\"category-{slug}\"><h2>{title}</h2>\n",
+                slug = category_slug(&d.category),
+                title = html_escape(category_label(&d.category))
+            ));
+        }
         sections.push_str(&format!(
-            "<section id=\"{slug}\"><h2>{title}</h2>{body}</section>\n",
-            slug = d.slug,
+            "<article id=\"{slug}\"><h3>{title}</h3>{body}</article>\n",
+            slug = html_escape(&d.slug),
             title = html_escape(&d.title),
             body = md_to_html(&d.body)
         ));
     }
+    if current_category.is_some() {
+        sections.push_str("</section>\n");
+    }
     page(
         "Hilfe & Wissen zum Bot",
         &format!(
-            "<p>Hier findest du, was der Bot kann und wie du ihn einrichtest.</p>\n{sections}"
+            "<p>Hier findest du, was der Bot kann und wie du ihn einrichtest.</p>\n{toc}{sections}"
         ),
     )
+}
+
+fn category_rank(category: &str) -> u8 {
+    match category {
+        "feature" => 0,
+        "setup" => 1,
+        "trust" => 2,
+        "faq" => 3,
+        "" => 254,
+        _ => 253,
+    }
+}
+
+fn category_label(category: &str) -> &str {
+    match category {
+        "faq" => "FAQ",
+        "feature" => "Feature",
+        "setup" => "Setup",
+        "trust" => "Vertrauen",
+        "" => "Sonstiges",
+        other => other,
+    }
+}
+
+fn category_slug(category: &str) -> String {
+    let slug = category
+        .chars()
+        .map(|c| {
+            if c.is_ascii_alphanumeric() || c == '-' {
+                c
+            } else {
+                '-'
+            }
+        })
+        .collect::<String>();
+    if slug.is_empty() {
+        "sonstiges".to_string()
+    } else {
+        slug
+    }
 }
 
 fn html_escape(s: &str) -> String {
@@ -121,6 +193,10 @@ mod tests {
         .unwrap();
         let html = render_help(&kb);
         assert!(html.contains("id=\"auto-raid\""), "Anker pro Slug");
+        assert!(html.contains("<nav aria-label=\"Inhaltsverzeichnis\">"));
+        assert!(html.contains("<a href=\"#auto-raid\">Auto-Raid</a>"));
+        assert!(html.contains("<h2>Feature</h2>"));
+        assert!(html.contains("<h2>Setup</h2>"));
         assert!(html.contains("<h1>Hilfe"));
     }
 
