@@ -33,6 +33,7 @@ pub mod market;
 pub mod monetization;
 pub mod network;
 pub mod onboarding;
+pub mod overlay;
 pub mod overview;
 pub mod raids;
 pub mod streamers;

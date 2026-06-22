@@ -72,7 +72,7 @@ fn security_header_layers() -> [SetResponseHeaderLayer<HeaderValue>; 5] {
 /// (`api_public.py:52-58`). Authed/Admin-Routen bleiben ohne CORS-Header,
 /// sonst wäre die Token-API cross-origin per Browser ansprechbar.
 pub fn build_public_router(pool: PgPool) -> Router {
-    use handlers::{bans, network, raids, self_explainer, social_media};
+    use handlers::{bans, network, overlay, raids, self_explainer, social_media};
 
     Router::new()
         .route(
@@ -92,6 +92,11 @@ pub fn build_public_router(pool: PgPool) -> Router {
             "/twitch/api/v2/public/network",
             get(network::network_handler),
         )
+        .route(
+            "/twitch/api/v2/public/overlay",
+            get(overlay::overlay_api_handler),
+        )
+        .route("/twitch/overlay", get(overlay::overlay_html_handler))
         // Roadmap (public GET + admin CRUD) liegt im eigenen build_roadmap_router,
         // damit der Admin-Write den ExpectedToken-Extractor sieht (axum erlaubt
         // denselben Pfad nicht in zwei gemergten Routern).

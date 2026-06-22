@@ -1,5 +1,17 @@
 # Workflow
 
+## 2026-06-22 — SP2 Live-Overlay OBS Browser-Source
+
+- Start: Scope auf `rust/crates/tb-dashboard-api`; verbindliche Review-Regel aus Auftrag: keine Commits, Änderungen bleiben uncommitted.
+- Befund: Public-Routen liegen in `build_public_router`; vorhandene Resolver-Tabellen sind `twitch_streamers` (`twitch_login` -> `twitch_user_id`) und `twitch_streamer_identities` (`twitch_user_id` -> `discord_user_id`).
+- Plan: eigener Overlay-Handler mit öffentlichem JSON-Endpunkt, self-contained HTML-Route, 30s In-Memory-Cache und env-konfigurierbarer Steam-Bot-Basis `STEAM_BOT_RANK_URL`.
+- Implementiert: `/twitch/api/v2/public/overlay` und `/twitch/overlay` in `tb-dashboard-api`, inkl. 30s JSON-Cache pro Login, Steam-Bot-Abrufe gegen `/player-mmr-trend`, `/player-matches`, `/player-live` und OBS-HTML ohne externe Assets.
+- Verifikation: `cargo build -p tb-dashboard-api` gruen; `cargo test -p tb-dashboard-api` gruen.
+- Clippy: `cargo clippy -p tb-dashboard-api` lief durch, meldete aber bestehende Warnungen in unberuehrten Crates/Dateien (`tb-raid`, `tb-social-media`, `tb-analytics`, sowie `tb-dashboard-api/src/handlers/admin_chat_action.rs` und `demo.rs`); gemaess Auftrag hier gestoppt und nicht bereinigt.
+- Erweiterung: Overlay JSON gibt `badge_level` aus `current_badge` aus; HTML rendert Rang-Badge- und Live-Hero-Bilder nur ueber oeffentliche Deadlock-Asset-URLs, inkl. Valve-Attribution.
+- Tests erweitert: JSON-Schema prueft `badge_level`; HTML-Test prueft Badge-URL-Logik und einmaligen `/v2/heroes?only_active=true`-Fetch.
+- Verifikation Erweiterung: `cargo build -p tb-dashboard-api` gruen; `cargo test -p tb-dashboard-api` gruen; `cargo clippy -p tb-dashboard-api` ohne neue Overlay-Lints, aber weiterhin mit vorbestehenden Warnungen in `tb-raid`, `tb-analytics`, `tb-social-media`, `admin_chat_action.rs` und `demo.rs`.
+
 ## 2026-06-17 — Dashboard-Login Callback-Portierung
 
 - Start: `WORKFLOW.md` war nicht vorhanden; Datei fuer laufende Implementierung angelegt.
