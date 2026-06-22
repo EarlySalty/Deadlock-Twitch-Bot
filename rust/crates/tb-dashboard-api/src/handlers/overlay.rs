@@ -549,13 +549,19 @@ pub async fn overlay_html_handler(Query(query): Query<OverlayQuery>) -> axum::re
     spa::serve_dashboard_v2_index().await
 }
 
-const OVERLAY_HTML: &str = r#"<!doctype html>
+const OVERLAY_HTML: &str = r##"<!doctype html>
 <html lang="de">
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width,initial-scale=1">
   <title>Deadlock Overlay</title>
   <style>
+    :root {
+      --bg-alpha: 0.85;
+      --radius: 14px;
+      --shadow: 0 18px 40px rgba(0, 0, 0, 0.45);
+    }
+
     html, body {
       margin: 0;
       width: 100%;
@@ -565,66 +571,189 @@ const OVERLAY_HTML: &str = r#"<!doctype html>
       font-family: Inter, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
     }
 
+    /* --- Themes via data-theme + CSS Custom Properties --- */
+    #overlay-card[data-theme="dark"] {
+      --bg: rgba(13, 15, 20, var(--bg-alpha));
+      --fg: #f4f7fb;
+      --muted: #9aa6b6;
+      --accent: #22d3ee;
+      --accent-2: #22d3ee;
+      --win: #34d399;
+      --loss: #fb7185;
+      --border: rgba(255, 255, 255, 0.10);
+      --accent-line: linear-gradient(90deg, var(--accent), transparent);
+    }
+
+    #overlay-card[data-theme="light"] {
+      --bg: rgba(248, 250, 253, var(--bg-alpha));
+      --fg: #0f172a;
+      --muted: #475569;
+      --accent: #0891b2;
+      --accent-2: #0891b2;
+      --win: #059669;
+      --loss: #e11d48;
+      --border: rgba(15, 23, 42, 0.12);
+      --accent-line: linear-gradient(90deg, var(--accent), transparent);
+    }
+
+    #overlay-card[data-theme="accent"] {
+      --bg: rgba(16, 12, 26, var(--bg-alpha));
+      --fg: #f6f4ff;
+      --muted: #b3a7cf;
+      --accent: #06B6D4;
+      --accent-2: #A855F7;
+      --win: #34d399;
+      --loss: #fb7185;
+      --border: rgba(255, 255, 255, 0.12);
+      --accent-line: linear-gradient(135deg, #06B6D4, #A855F7);
+    }
+
     #overlay-card {
       position: fixed;
-      width: 280px;
       box-sizing: border-box;
       display: none;
-      padding: 14px 16px;
-      border-radius: 8px;
-      background: rgba(15, 15, 20, 0.78);
-      color: #fff;
-      border-left: 3px solid #7dd3fc;
-      box-shadow: 0 14px 35px rgba(0, 0, 0, 0.34);
-      backdrop-filter: blur(8px);
-      font-size: 16px;
-      line-height: 1.35;
+      color: var(--fg);
+      font-variant-numeric: tabular-nums;
       letter-spacing: 0;
     }
 
-    #overlay-card.overlay-pos-bl {
-      left: 16px;
-      bottom: 16px;
-    }
-
-    #overlay-card.overlay-pos-br {
-      right: 16px;
-      bottom: 16px;
-    }
-
-    #overlay-card.overlay-pos-tl {
-      left: 16px;
-      top: 16px;
-    }
-
-    #overlay-card.overlay-pos-tr {
-      right: 16px;
-      top: 16px;
-    }
+    #overlay-card.overlay-pos-bl { left: 18px; bottom: 18px; }
+    #overlay-card.overlay-pos-br { right: 18px; bottom: 18px; }
+    #overlay-card.overlay-pos-tl { left: 18px; top: 18px; }
+    #overlay-card.overlay-pos-tr { right: 18px; top: 18px; }
 
     #overlay-card.visible {
       display: block;
-      animation: overlay-fade 160ms ease-out;
+      animation: overlay-enter 180ms ease-out;
     }
 
-    .line {
-      display: block;
+    /* --- Box-Layout: Glassmorphism-Karte --- */
+    #overlay-card.layout-box {
+      width: 312px;
+      padding: 16px 18px;
+      border-radius: var(--radius);
+      background: var(--bg);
+      border: 1px solid var(--border);
+      box-shadow: var(--shadow);
+      -webkit-backdrop-filter: blur(12px) saturate(140%);
+      backdrop-filter: blur(12px) saturate(140%);
+      position: fixed;
+      overflow: hidden;
+    }
+
+    #overlay-card.layout-box::before {
+      content: "";
+      position: absolute;
+      inset: 0 0 auto 0;
+      height: 3px;
+      background: var(--accent-line);
+      opacity: 0.9;
+    }
+
+    .ov-head {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 10px;
+    }
+
+    .ov-name {
+      min-width: 0;
+      font-size: 17px;
+      font-weight: 700;
+      color: var(--fg);
       white-space: nowrap;
       overflow: hidden;
       text-overflow: ellipsis;
-      text-shadow: 0 1px 2px rgba(0, 0, 0, 0.55);
     }
 
-    .asset-line {
+    .ov-live {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      flex: 0 0 auto;
+      font-size: 11px;
+      font-weight: 800;
+      letter-spacing: 0.10em;
+      text-transform: uppercase;
+      color: var(--win);
+    }
+
+    .ov-live-dot {
+      width: 8px;
+      height: 8px;
+      border-radius: 999px;
+      background: var(--win);
+      box-shadow: 0 0 0 0 var(--win);
+      animation: ov-pulse 1.6s ease-out infinite;
+    }
+
+    .ov-head-rule {
+      height: 2px;
+      margin: 10px 0 12px;
+      border-radius: 2px;
+      background: var(--accent-line);
+      opacity: 0.75;
+    }
+
+    /* --- Stat-Raster (Box) --- */
+    .ov-grid {
+      display: flex;
+      flex-wrap: wrap;
+      align-items: stretch;
+    }
+
+    .ov-cell {
+      display: flex;
+      flex-direction: column;
+      gap: 3px;
+      padding: 2px 14px;
+      flex: 1 1 auto;
+      min-width: 0;
+      border-left: 1px solid var(--border);
+    }
+
+    .ov-cell:first-child { padding-left: 0; border-left: 0; }
+
+    .ov-label {
+      font-size: 10px;
+      font-weight: 700;
+      letter-spacing: 0.06em;
+      text-transform: uppercase;
+      color: var(--muted);
+    }
+
+    .ov-value {
       display: flex;
       align-items: center;
-      gap: 8px;
+      gap: 7px;
+      font-size: 17px;
+      font-weight: 700;
+      color: var(--fg);
+      white-space: nowrap;
     }
 
-    .asset-line .text {
-      min-width: 0;
+    .ov-value .ov-win { color: var(--win); }
+    .ov-value .ov-loss { color: var(--loss); }
+    .ov-delta-up { color: var(--win); font-size: 13px; }
+    .ov-delta-down { color: var(--loss); font-size: 13px; }
+
+    .ov-hero-name {
       overflow: hidden;
       text-overflow: ellipsis;
+      max-width: 120px;
+    }
+
+    .ov-sub {
+      font-size: 12px;
+      font-weight: 600;
+      color: var(--muted);
+    }
+
+    .ov-sub-kda {
+      font-size: 13px;
+      font-weight: 600;
+      color: var(--muted);
     }
 
     .rank-badge {
@@ -632,29 +761,133 @@ const OVERLAY_HTML: &str = r#"<!doctype html>
       height: 40px;
       flex: 0 0 auto;
       object-fit: contain;
+      filter: drop-shadow(0 2px 6px rgba(0, 0, 0, 0.4));
     }
 
-    .hero-icon {
-      width: 28px;
-      height: 28px;
+    .ov-main-icon {
+      width: 26px;
+      height: 26px;
       flex: 0 0 auto;
       border-radius: 999px;
-      object-fit: contain;
-      background: rgba(255, 255, 255, 0.08);
+      object-fit: cover;
+      background: rgba(127, 127, 127, 0.18);
     }
 
-    .line + .line {
-      margin-top: 6px;
+    /* --- Recent-Matches-Strip --- */
+    .ov-recent {
+      margin-top: 12px;
     }
 
-    .live {
-      color: #86efac;
+    .ov-recent-label {
+      font-size: 10px;
       font-weight: 700;
+      letter-spacing: 0.06em;
+      text-transform: uppercase;
+      color: var(--muted);
+      margin-bottom: 6px;
     }
 
-    @keyframes overlay-fade {
+    .ov-recent-row {
+      display: flex;
+      gap: 6px;
+      flex-wrap: nowrap;
+    }
+
+    .ov-chip {
+      width: 26px;
+      height: 26px;
+      flex: 0 0 auto;
+      border-radius: 999px;
+      box-sizing: border-box;
+      object-fit: cover;
+      background: rgba(127, 127, 127, 0.18);
+    }
+
+    .ov-chip.win { border: 2px solid var(--win); }
+    .ov-chip.loss { border: 2px solid var(--loss); }
+
+    .ov-dot {
+      width: 26px;
+      height: 26px;
+      flex: 0 0 auto;
+      border-radius: 999px;
+      box-sizing: border-box;
+      display: inline-block;
+    }
+
+    .ov-dot.win { background: var(--win); border: 2px solid var(--win); }
+    .ov-dot.loss { background: var(--loss); border: 2px solid var(--loss); }
+
+    /* --- Branding --- */
+    .ov-brand {
+      margin-top: 12px;
+      font-size: 9.5px;
+      font-weight: 600;
+      letter-spacing: 0.04em;
+      text-transform: uppercase;
+      color: var(--muted);
+      opacity: 0.8;
+    }
+
+    /* --- Bar-Layout: schlanke Pille --- */
+    #overlay-card.layout-bar {
+      max-width: 640px;
+      padding: 9px 16px;
+      border-radius: 999px;
+      background: var(--bg);
+      border: 1px solid var(--border);
+      box-shadow: var(--shadow);
+      -webkit-backdrop-filter: blur(12px) saturate(140%);
+      backdrop-filter: blur(12px) saturate(140%);
+    }
+
+    #overlay-card.layout-bar .ov-bar {
+      display: flex;
+      align-items: center;
+      gap: 0;
+      white-space: nowrap;
+      font-size: 14px;
+    }
+
+    .ov-seg {
+      display: inline-flex;
+      align-items: center;
+      gap: 7px;
+    }
+
+    .ov-seg + .ov-seg::before {
+      content: "·";
+      margin: 0 10px;
+      color: var(--muted);
+      opacity: 0.7;
+    }
+
+    .ov-seg .ov-seg-label {
+      font-size: 10px;
+      font-weight: 700;
+      letter-spacing: 0.06em;
+      text-transform: uppercase;
+      color: var(--muted);
+    }
+
+    .ov-seg .ov-seg-value {
+      font-weight: 700;
+      color: var(--fg);
+    }
+
+    .ov-seg .rank-badge { width: 26px; height: 26px; }
+    .ov-seg .ov-recent-row .ov-chip,
+    .ov-seg .ov-recent-row .ov-dot { width: 22px; height: 22px; }
+
+    @keyframes overlay-enter {
       from { opacity: 0; transform: translateY(4px); }
       to { opacity: 1; transform: translateY(0); }
+    }
+
+    @keyframes ov-pulse {
+      0% { box-shadow: 0 0 0 0 var(--win); opacity: 1; }
+      70% { box-shadow: 0 0 0 7px rgba(52, 211, 153, 0); opacity: 0.85; }
+      100% { box-shadow: 0 0 0 0 rgba(52, 211, 153, 0); opacity: 1; }
     }
   </style>
 </head>
@@ -665,21 +898,53 @@ const OVERLAY_HTML: &str = r#"<!doctype html>
     const card = document.getElementById('overlay-card');
     const params = new URLSearchParams(window.location.search);
     const streamer = (params.get('streamer') || '').trim();
-    const flags = {
-      rank: params.get('rank') !== '0',
-      winrate: params.get('winrate') !== '0',
-      streak: params.get('streak') !== '0',
-      live: params.get('live') !== '0',
+
+    const oneOf = (key, allowed, fallback) => {
+      const value = (params.get(key) || '').trim().toLowerCase();
+      return allowed.includes(value) ? value : fallback;
     };
-    const requestedPosition = params.get('pos') || 'bl';
-    const position = ['bl', 'br', 'tl', 'tr'].includes(requestedPosition) ? requestedPosition : 'bl';
+    const flag = (key, fallback) => {
+      const value = params.get(key);
+      if (value === null) return fallback;
+      return value !== '0';
+    };
+    const clampInt = (key, min, max, fallback) => {
+      const value = parseInt(params.get(key) || '', 10);
+      if (!Number.isFinite(value)) return fallback;
+      return Math.min(max, Math.max(min, value));
+    };
+
+    const theme = oneOf('theme', ['dark', 'light', 'accent'], 'dark');
+    const layout = oneOf('layout', ['box', 'bar'], 'box');
+    const position = oneOf('pos', ['bl', 'br', 'tl', 'tr'], 'bl');
+    const opacity = clampInt('opacity', 0, 100, 85);
+    const recentN = clampInt('recent_n', 1, 15, 10);
+
+    const flags = {
+      header: flag('header', true),
+      rank: flag('rank', true),
+      winrate: flag('winrate', true),
+      today: flag('today', true),
+      streak: flag('streak', true),
+      kd: flag('kd', true),
+      lastmatch: flag('lastmatch', false),
+      mostplayed: flag('mostplayed', false),
+      recent: flag('recent', true),
+      live: flag('live', true),
+      branding: flag('branding', true),
+    };
+
+    card.dataset.theme = theme;
+    card.classList.add(`layout-${layout}`);
     card.classList.add(`overlay-pos-${position}`);
+    card.style.setProperty('--bg-alpha', String(opacity / 100));
+
     let heroIconByName = new Map();
     let latestData = null;
 
-    function isNumber(value) {
-      return typeof value === 'number' && Number.isFinite(value);
-    }
+    const isNumber = (value) => typeof value === 'number' && Number.isFinite(value);
+    const nf1 = new Intl.NumberFormat('de-DE', { minimumFractionDigits: 1, maximumFractionDigits: 1 });
+    const nf2 = new Intl.NumberFormat('de-DE', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 
     function rankBadgeUrl(badgeLevel) {
       if (!Number.isInteger(badgeLevel)) return null;
@@ -728,33 +993,235 @@ const OVERLAY_HTML: &str = r#"<!doctype html>
       card.replaceChildren();
     }
 
-    function line(text, className) {
-      const node = document.createElement('div');
-      node.className = className ? `line ${className}` : 'line';
-      node.textContent = text;
+    function el(tag, className, text) {
+      const node = document.createElement(tag);
+      if (className) node.className = className;
+      if (text !== undefined && text !== null) node.textContent = text;
       return node;
     }
 
-    function assetLine(text, imageUrl, imageClassName, className) {
-      const node = document.createElement('div');
-      node.className = className ? `line asset-line ${className}` : 'line asset-line';
+    function recentRow(recent) {
+      const row = el('div', 'ov-recent-row');
+      const items = Array.isArray(recent) ? recent.slice(0, recentN) : [];
+      for (const match of items) {
+        const result = match && match.result === 'win' ? 'win' : 'loss';
+        const icon = heroIconUrl(match && match.hero);
+        if (icon) {
+          const image = el('img', `ov-chip ${result}`);
+          image.src = icon;
+          image.alt = '';
+          image.decoding = 'async';
+          image.loading = 'lazy';
+          image.onerror = () => image.replaceWith(el('span', `ov-dot ${result}`));
+          row.appendChild(image);
+        } else {
+          row.appendChild(el('span', `ov-dot ${result}`));
+        }
+      }
+      return row.childElementCount ? row : null;
+    }
 
-      if (imageUrl) {
-        const image = document.createElement('img');
-        image.className = imageClassName;
-        image.src = imageUrl;
+    function rankValueNode(data) {
+      const value = el('div', 'ov-value');
+      const badge = rankBadgeUrl(data.badge_level);
+      if (badge) {
+        const image = el('img', 'rank-badge');
+        image.src = badge;
         image.alt = '';
         image.decoding = 'async';
         image.loading = 'lazy';
         image.onerror = () => image.remove();
-        node.appendChild(image);
+        value.appendChild(image);
+      }
+      value.appendChild(el('span', 'ov-hero-name', data.rank_name));
+      if (isNumber(data.delta) && data.delta > 0) value.appendChild(el('span', 'ov-delta-up', '▲'));
+      if (isNumber(data.delta) && data.delta < 0) value.appendChild(el('span', 'ov-delta-down', '▼'));
+      return value;
+    }
+
+    // Liefert die aktiven Module als kuratierte Liste {label, build()}.
+    function activeModules(data) {
+      const mods = [];
+
+      if (flags.rank && data.rank_name) {
+        mods.push({ key: 'rank', label: 'RANG', value: () => rankValueNode(data) });
       }
 
-      const label = document.createElement('span');
-      label.className = 'text';
-      label.textContent = text;
-      node.appendChild(label);
-      return node;
+      if (flags.winrate && isNumber(data.winrate) && isNumber(data.wins) && isNumber(data.losses)) {
+        mods.push({
+          key: 'winrate',
+          label: 'WINRATE',
+          value: () => {
+            const value = el('div', 'ov-value');
+            value.appendChild(el('span', null, `${nf1.format(data.winrate)} %`));
+            value.appendChild(el('span', 'ov-sub', `${data.wins}–${data.losses}`));
+            return value;
+          },
+        });
+      }
+
+      if (flags.today && isNumber(data.today_wins) && isNumber(data.today_losses)) {
+        mods.push({
+          key: 'today',
+          label: 'HEUTE',
+          value: () => {
+            const value = el('div', 'ov-value');
+            value.appendChild(el('span', 'ov-win', String(data.today_wins)));
+            value.appendChild(el('span', null, '–'));
+            value.appendChild(el('span', 'ov-loss', String(data.today_losses)));
+            return value;
+          },
+        });
+      }
+
+      if (flags.streak && isNumber(data.streak_len) && data.streak_len >= 2 &&
+          (data.streak_kind === 'win' || data.streak_kind === 'loss')) {
+        mods.push({
+          key: 'streak',
+          label: 'SERIE',
+          value: () => {
+            const value = el('div', 'ov-value');
+            const cls = data.streak_kind === 'win' ? 'ov-win' : 'ov-loss';
+            value.appendChild(el('span', cls, `${data.streak_len}×`));
+            return value;
+          },
+        });
+      }
+
+      if (flags.kd && isNumber(data.kd)) {
+        mods.push({
+          key: 'kd',
+          label: 'K/D',
+          value: () => el('div', 'ov-value', nf2.format(data.kd)),
+        });
+      }
+
+      if (flags.lastmatch && (data.last_result === 'win' || data.last_result === 'loss')) {
+        mods.push({
+          key: 'lastmatch',
+          label: 'LAST',
+          value: () => {
+            const value = el('div', 'ov-value');
+            const cls = data.last_result === 'win' ? 'ov-win' : 'ov-loss';
+            value.appendChild(el('span', cls, data.last_result === 'win' ? 'W' : 'L'));
+            if (isNumber(data.last_kills) && isNumber(data.last_deaths) && isNumber(data.last_assists)) {
+              value.appendChild(el('span', 'ov-sub-kda', `${data.last_kills}/${data.last_deaths}/${data.last_assists}`));
+            }
+            return value;
+          },
+        });
+      }
+
+      if (flags.mostplayed && data.most_played_hero) {
+        mods.push({
+          key: 'mostplayed',
+          label: 'MAIN',
+          value: () => {
+            const value = el('div', 'ov-value');
+            const icon = heroIconUrl(data.most_played_hero);
+            if (icon) {
+              const image = el('img', 'ov-main-icon');
+              image.src = icon;
+              image.alt = '';
+              image.decoding = 'async';
+              image.loading = 'lazy';
+              image.onerror = () => image.remove();
+              value.appendChild(image);
+            }
+            value.appendChild(el('span', 'ov-hero-name', data.most_played_hero));
+            return value;
+          },
+        });
+      }
+
+      return mods;
+    }
+
+    function buildBox(data) {
+      const frag = document.createDocumentFragment();
+
+      if (flags.header && streamer) {
+        const head = el('div', 'ov-head');
+        head.appendChild(el('div', 'ov-name', streamer));
+        if (flags.live && data.live === true) {
+          const live = el('div', 'ov-live');
+          live.appendChild(el('span', 'ov-live-dot'));
+          const details = [];
+          if (data.hero) details.push(data.hero);
+          if (isNumber(data.minutes)) details.push(`${data.minutes}′`);
+          live.appendChild(el('span', null, details.length ? `LIVE · ${details.join(' · ')}` : 'LIVE'));
+          head.appendChild(live);
+        }
+        frag.appendChild(head);
+        frag.appendChild(el('div', 'ov-head-rule'));
+      } else if (flags.live && data.live === true) {
+        const live = el('div', 'ov-live');
+        live.style.marginBottom = '10px';
+        live.appendChild(el('span', 'ov-live-dot'));
+        const details = [];
+        if (data.hero) details.push(data.hero);
+        if (isNumber(data.minutes)) details.push(`${data.minutes}′`);
+        live.appendChild(el('span', null, details.length ? `LIVE · ${details.join(' · ')}` : 'LIVE'));
+        frag.appendChild(live);
+      }
+
+      const mods = activeModules(data);
+      if (mods.length) {
+        const grid = el('div', 'ov-grid');
+        for (const mod of mods) {
+          const cell = el('div', 'ov-cell');
+          cell.appendChild(el('div', 'ov-label', mod.label));
+          cell.appendChild(mod.value());
+          grid.appendChild(cell);
+        }
+        frag.appendChild(grid);
+      }
+
+      if (flags.recent) {
+        const row = recentRow(data.recent);
+        if (row) {
+          const wrap = el('div', 'ov-recent');
+          wrap.appendChild(el('div', 'ov-recent-label', 'Letzte'));
+          wrap.appendChild(row);
+          frag.appendChild(wrap);
+        }
+      }
+
+      if (flags.branding) {
+        frag.appendChild(el('div', 'ov-brand', 'powered by deutsche-deadlock-community.de'));
+      }
+
+      return frag.childElementCount ? frag : null;
+    }
+
+    function buildBar(data) {
+      const bar = el('div', 'ov-bar');
+
+      if (flags.header && streamer) {
+        const seg = el('div', 'ov-seg');
+        if (flags.live && data.live === true) seg.appendChild(el('span', 'ov-live-dot'));
+        seg.appendChild(el('span', 'ov-seg-value', streamer));
+        bar.appendChild(seg);
+      }
+
+      for (const mod of activeModules(data)) {
+        const seg = el('div', 'ov-seg');
+        seg.appendChild(el('span', 'ov-seg-label', mod.label));
+        seg.appendChild(mod.value());
+        bar.appendChild(seg);
+      }
+
+      if (flags.recent) {
+        const row = recentRow(data.recent);
+        if (row) {
+          const seg = el('div', 'ov-seg');
+          seg.appendChild(el('span', 'ov-seg-label', 'Letzte'));
+          seg.appendChild(row);
+          bar.appendChild(seg);
+        }
+      }
+
+      return bar.childElementCount ? bar : null;
     }
 
     function render(data) {
@@ -764,40 +1231,13 @@ const OVERLAY_HTML: &str = r#"<!doctype html>
       }
       latestData = data;
 
-      const rows = [];
-      if (flags.rank && data.rank_name) {
-        let text = `Rang: ${data.rank_name}`;
-        if (isNumber(data.delta) && data.delta > 0) text += ' ▲';
-        if (isNumber(data.delta) && data.delta < 0) text += ' ▼';
-        rows.push(assetLine(text, rankBadgeUrl(data.badge_level), 'rank-badge'));
-      }
-
-      if (flags.winrate && isNumber(data.winrate) && isNumber(data.wins) && isNumber(data.losses)) {
-        rows.push(line(`Winrate: ${data.winrate.toFixed(1)}% (${data.wins}S/${data.losses}N)`));
-      }
-
-      if (flags.streak && isNumber(data.streak_len) && data.streak_len >= 2) {
-        if (data.streak_kind === 'win') {
-          rows.push(line(`Serie: ${data.streak_len} Siege in Folge`));
-        } else if (data.streak_kind === 'loss') {
-          rows.push(line(`Serie: ${data.streak_len} Niederlagen in Folge`));
-        }
-      }
-
-      if (flags.live && data.live === true) {
-        const details = [];
-        if (data.hero) details.push(data.hero);
-        if (isNumber(data.minutes)) details.push(`${data.minutes}′`);
-        const text = details.length ? `● LIVE — ${details.join(' · ')}` : '● LIVE';
-        rows.push(assetLine(text, heroIconUrl(data.hero), 'hero-icon', 'live'));
-      }
-
-      if (rows.length === 0) {
+      const content = layout === 'bar' ? buildBar(data) : buildBox(data);
+      if (!content) {
         hide();
         return;
       }
 
-      card.replaceChildren(...rows);
+      card.replaceChildren(content);
       card.classList.add('visible');
     }
 
@@ -824,7 +1264,7 @@ const OVERLAY_HTML: &str = r#"<!doctype html>
   </script>
 </body>
 </html>
-"#;
+"##;
 
 #[cfg(test)]
 async fn clear_overlay_cache_for_tests() {
@@ -1276,12 +1716,30 @@ mod tests {
         assert!(html.contains("#overlay-card.overlay-pos-br"));
         assert!(html.contains("#overlay-card.overlay-pos-tl"));
         assert!(html.contains("#overlay-card.overlay-pos-tr"));
-        assert!(html.contains("rank: params.get('rank') !== '0'"));
-        assert!(html.contains("winrate: params.get('winrate') !== '0'"));
-        assert!(html.contains("streak: params.get('streak') !== '0'"));
-        assert!(html.contains("live: params.get('live') !== '0'"));
-        assert!(html.contains("['bl', 'br', 'tl', 'tr'].includes(requestedPosition)"));
+        // Glassmorphism / Visual-Spec
+        assert!(html.contains("backdrop-filter: blur(12px) saturate(140%)"));
+        assert!(html.contains("font-variant-numeric: tabular-nums"));
+        assert!(html.contains("border-radius: var(--radius)"));
+        // Themes via data-theme + Custom Properties
+        assert!(html.contains("#overlay-card[data-theme=\"dark\"]"));
+        assert!(html.contains("#overlay-card[data-theme=\"light\"]"));
+        assert!(html.contains("#overlay-card[data-theme=\"accent\"]"));
+        assert!(html.contains("linear-gradient(135deg, #06B6D4, #A855F7)"));
+        assert!(html.contains("--bg: rgba(13, 15, 20, var(--bg-alpha))"));
+        // Param-Parsing + Defaults
+        assert!(html.contains("oneOf('theme', ['dark', 'light', 'accent'], 'dark')"));
+        assert!(html.contains("oneOf('layout', ['box', 'bar'], 'box')"));
+        assert!(html.contains("oneOf('pos', ['bl', 'br', 'tl', 'tr'], 'bl')"));
+        assert!(html.contains("clampInt('opacity', 0, 100, 85)"));
+        assert!(html.contains("clampInt('recent_n', 1, 15, 10)"));
+        assert!(html.contains("flag('lastmatch', false)"));
+        assert!(html.contains("flag('mostplayed', false)"));
+        assert!(html.contains("flag('header', true)"));
+        assert!(html.contains("card.style.setProperty('--bg-alpha', String(opacity / 100))"));
+        assert!(html.contains("card.dataset.theme = theme"));
+        assert!(html.contains("card.classList.add(`layout-${layout}`)"));
         assert!(html.contains("card.classList.add(`overlay-pos-${position}`)"));
+        // Daten-Endpoint + Polling + Assets
         assert!(html.contains("/twitch/api/v2/public/overlay?streamer="));
         assert!(html.contains("setInterval(poll, 20000)"));
         assert!(html.contains("Math.floor(badgeLevel / 10)"));
@@ -1290,14 +1748,63 @@ mod tests {
         assert!(html.contains("https://assets.deadlock-api.com/v2/heroes?only_active=true"));
         assert!(html.contains("icon_image_small_webp"));
         assert!(html.contains("Deadlock-Spiel-Assets (© Valve)"));
-        assert!(html.contains("Rang:"));
-        assert!(html.contains("Winrate:"));
-        assert!(html.contains("Serie:"));
-        assert!(html.contains("LIVE"));
-        assert!(html.contains("if (flags.rank && data.rank_name)"));
-        assert!(html.contains("if (flags.winrate && isNumber(data.winrate)"));
-        assert!(html.contains("if (flags.streak && isNumber(data.streak_len)"));
-        assert!(html.contains("if (flags.live && data.live === true)"));
+        // Deutsche Auto-Labels + Formatierung
+        assert!(html.contains("'RANG'"));
+        assert!(html.contains("'WINRATE'"));
+        assert!(html.contains("'HEUTE'"));
+        assert!(html.contains("'SERIE'"));
+        assert!(html.contains("'K/D'"));
+        assert!(html.contains("'LAST'"));
+        assert!(html.contains("'MAIN'"));
+        assert!(html.contains("'Letzte'"));
+        assert!(html.contains("powered by deutsche-deadlock-community.de"));
+        assert!(html.contains("Intl.NumberFormat('de-DE'"));
+        // Recent-Strip + Live-Puls
+        assert!(html.contains("ov-recent-row"));
+        assert!(html.contains("ov-live-dot"));
+        assert!(html.contains("@keyframes ov-pulse"));
+        assert!(html.contains("function buildBox(data)"));
+        assert!(html.contains("function buildBar(data)"));
+    }
+
+    #[test]
+    fn overlay_html_enthaelt_theme_und_layout_zweige() {
+        // OVERLAY_HTML ist statisch; theme/layout/opacity sind reine URL-Params,
+        // die der eingebettete Script-Block clientseitig auf das Markup anwendet.
+        // Der Render-Branch-Test prüft daher die Präsenz der Zweige im Template.
+        let html = super::OVERLAY_HTML;
+        // light/accent-Theme-Zweige
+        assert!(html.contains("#overlay-card[data-theme=\"light\"]"));
+        assert!(html.contains("--accent: #0891b2"));
+        assert!(html.contains("#overlay-card[data-theme=\"accent\"]"));
+        // Bar-Layout-Container
+        assert!(html.contains("#overlay-card.layout-bar"));
+        assert!(html.contains("border-radius: 999px"));
+        // Box-Layout-Container
+        assert!(html.contains("#overlay-card.layout-box"));
+        // opacity wirkt auf Karten-Hintergrund via --bg-alpha
+        assert!(html.contains("var(--bg-alpha)"));
+        assert!(html.contains("--bg-alpha: 0.85"));
+    }
+
+    #[test]
+    fn overlay_html_enthaelt_alle_modul_flags() {
+        let html = super::OVERLAY_HTML;
+        for flag in [
+            "header", "rank", "winrate", "today", "streak", "kd", "lastmatch", "mostplayed",
+            "recent", "live", "branding",
+        ] {
+            assert!(
+                html.contains(&format!("flag('{flag}',")),
+                "Modul-Flag {flag} fehlt im Render-Script"
+            );
+        }
+        // Default an außer lastmatch/mostplayed
+        assert!(html.contains("flag('header', true)"));
+        assert!(html.contains("flag('recent', true)"));
+        assert!(html.contains("flag('branding', true)"));
+        assert!(html.contains("flag('lastmatch', false)"));
+        assert!(html.contains("flag('mostplayed', false)"));
     }
 
     #[tokio::test]
