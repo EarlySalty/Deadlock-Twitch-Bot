@@ -59,6 +59,97 @@ pub struct PartnerSession {
     pub display_name: String,
 }
 
+/// Sicherheitsrelevante Bindungs-Felder einer geladenen Admin-Session
+/// (`master_dash_session` / `discord_admin`), für den Forward-Auth-Check (P1.39).
+///
+/// Python-Referenz: `server_v2.py:435-472` (`validate_admin_session`). Die Felder
+/// werden beim Discord-Admin-Login geschrieben (`auth_mixin.py:1587-1648`).
+///
+/// **Bewusste Abgrenzung (#235-Lockout-Schutz):** Pythons Check kennt zusätzlich
+/// einen *harten* `js_fp`-Pflicht-Zweig (`source != "discord_dashboard"` UND leerer
+/// `js_fp` → 401). Der Rust-Dashboard-Prozess hat aktuell **keinen** nativen
+/// Discord-Admin-Login, der `source`/`js_fp`/`fp_pending=False` setzt — dieser
+/// Login-Flow ist nach B3-10 vertagt (vgl. P2.118). Würde Rust den js_fp-Pflicht-
+/// Zweig 1:1 erzwingen, bekäme **jede** nativ erzeugte Admin-Session 401 → exakt
+/// der dokumentierte #235-Login-Loop / Hard-Lockout. Deshalb übernimmt
+/// [`AdminSessionFingerprint::verify`] nur die **konditionalen** Python-Checks
+/// (greifen nur, wenn das Feld in der Session tatsächlich gesetzt ist): IP-Bindung
+/// (`if stored_ip:`), Passive-Fingerprint (`if stored_passive_fp:`) und
+/// `fp_pending is True` → 401. Der js_fp-Pflicht-Zweig bleibt bewusst aus, bis der
+/// native Discord-Admin-Login (B3-10) ihn mit den passenden Schreibpfaden liefert.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct AdminSessionFingerprint {
+    /// Beim Login gebundene Client-IP (`session["client_ip"]`). Leer → IP-Check aus.
+    pub client_ip: String,
+    /// Beim Login gebundener Passive-Fingerprint-Hash (`session["passive_fp"]`).
+    /// Leer → Passive-FP-Check aus.
+    pub passive_fp: String,
+    /// `true` solange der JS-Fingerprint-Schritt nach dem Login noch aussteht
+    /// (`session["fp_pending"]`). `true` → 401 (Schritt unvollständig).
+    pub fp_pending: bool,
+    /// Anzeigbarer Admin-Name (`username`/`display_name`, sonst `"admin"`).
+    pub username: String,
+}
+
+impl AdminSessionFingerprint {
+    /// Spiegelt Pythons konditionale Bindungs-Checks aus `validate_admin_session`
+    /// (`server_v2.py:435-466`). Gibt `true` zurück, wenn die Session den aktuellen
+    /// Request akzeptieren darf, `false` bei einer Bindungs-Verletzung (→ 401).
+    ///
+    /// - `current_ip`: aus dem Request abgeleitete Client-IP (X-Forwarded-For hinter
+    ///   dem Loopback-Proxy bzw. Peer-IP). Leer → IP-Check übersprungen (Caddy liefert
+    ///   die Client-IP auf dem Auth-Subrequest nicht zuverlässig — Python-Parität).
+    /// - `current_passive_fp`: aus `ua|lang|platform` SHA-256-gehashter Wert (32 hex).
+    ///
+    /// Konstant-zeitlicher Vergleich gegen Timing-Seitenkanäle.
+    pub fn verify(&self, current_ip: &str, current_passive_fp: &str) -> bool {
+        let stored_ip = self.client_ip.trim();
+        if !stored_ip.is_empty() {
+            let current_ip = current_ip.trim();
+            // Nur erzwingen, wenn eine aktuelle Client-IP vorliegt (Python: Caddy-
+            // forward_auth liefert sie nicht zuverlässig → kein Lockout bei Fehlen).
+            if !current_ip.is_empty()
+                && !tb_crypto::constant_time_eq(stored_ip.as_bytes(), current_ip.as_bytes())
+            {
+                warn!("AUDIT admin session IP mismatch");
+                return false;
+            }
+        }
+
+        let stored_fp = self.passive_fp.trim();
+        if !stored_fp.is_empty()
+            && !tb_crypto::constant_time_eq(stored_fp.as_bytes(), current_passive_fp.trim().as_bytes())
+        {
+            warn!("AUDIT admin session passive FP mismatch");
+            return false;
+        }
+
+        if self.fp_pending {
+            warn!("AUDIT admin session fp_pending - fingerprint step incomplete");
+            return false;
+        }
+
+        true
+    }
+}
+
+/// Berechnet den Passive-Fingerprint-Hash aus den stabilen Request-Headern, exakt
+/// wie Python `_build_passive_fp` (`auth_mixin.py:134-140`) und der Recompute in
+/// `validate_admin_session` (`server_v2.py:454-460`):
+/// `sha256("{ua}|{lang}|{platform}")[:32]`, wobei `lang` der erste
+/// `Accept-Language`-Eintrag ist und `platform` der entquotete
+/// `Sec-CH-UA-Platform`-Wert.
+pub fn build_passive_fp(user_agent: &str, accept_language: &str, sec_ch_ua_platform: &str) -> String {
+    use sha2::{Digest, Sha256};
+    let ua = user_agent.trim();
+    let lang = accept_language.split(',').next().unwrap_or("").trim();
+    let platform = sec_ch_ua_platform.trim().trim_matches('"').trim();
+    let raw = format!("{ua}|{lang}|{platform}");
+    let digest = Sha256::digest(raw.as_bytes());
+    let hex = digest.iter().map(|b| format!("{b:02x}")).collect::<String>();
+    hex.chars().take(32).collect()
+}
+
 /// Ergebnis einer Session-Erstellung: die Session-ID (Cookie-Wert) und das an
 /// die Session gebundene CSRF-Token (für `X-CSRF-Token` bei Write-Actions).
 #[derive(Debug, Clone)]
@@ -286,6 +377,12 @@ impl DashboardAuthState {
             admin_cache: Arc::new(Mutex::new(TimedCache::default())),
             partner_cache: Arc::new(Mutex::new(TimedCache::default())),
         }
+    }
+
+    /// Referenz auf den DB-Pool (für Resolver, die ihn brauchen, z. B. der
+    /// Access-State-Lookup im Partner-Gate, P2.85).
+    pub fn pool(&self) -> &PgPool {
+        &self.pool
     }
 
     /// Lädt den Fernet-Key aus der Env-Var `SESSIONS_ENCRYPTION_KEY`.
@@ -879,6 +976,57 @@ impl DashboardAuthState {
             .map(str::trim)
             .filter(|s| !s.is_empty())
             .map(str::to_string))
+    }
+
+    /// Lädt die sicherheitsrelevanten Bindungs-Felder einer gültigen
+    /// `discord_admin`-Session für den Forward-Auth-Check (P1.39).
+    ///
+    /// Gibt `Ok(Some(..))` mit [`AdminSessionFingerprint`] zurück, wenn die Session
+    /// existiert und nicht abgelaufen ist; `Ok(None)` wenn fehlend/abgelaufen;
+    /// `Err` bei DB-Fehler. Anders als [`load_admin_session`] kein Sliding-Refresh
+    /// und kein Cache — der Forward-Auth-Pfad braucht den frischen Payload-Inhalt.
+    pub async fn load_admin_session_fingerprint(
+        &self,
+        session_id: &str,
+    ) -> Result<Option<AdminSessionFingerprint>, sqlx::Error> {
+        let now = unix_now();
+        let Some(payload) = self
+            .fetch_session_payload(session_id, "discord_admin", now)
+            .await?
+        else {
+            return Ok(None);
+        };
+        if payload_expired(&payload, now) {
+            return Ok(None);
+        }
+
+        let read = |key: &str| -> String {
+            payload
+                .get(key)
+                .and_then(|v| v.as_str())
+                .unwrap_or("")
+                .trim()
+                .to_string()
+        };
+        let username = {
+            let u = read("username");
+            if !u.is_empty() {
+                u
+            } else {
+                let d = read("display_name");
+                if d.is_empty() { "admin".to_string() } else { d }
+            }
+        };
+
+        Ok(Some(AdminSessionFingerprint {
+            client_ip: read("client_ip"),
+            passive_fp: read("passive_fp"),
+            fp_pending: payload
+                .get("fp_pending")
+                .and_then(|v| v.as_bool())
+                .unwrap_or(false),
+            username,
+        }))
     }
 
     /// Prüft ob eine `twitch`-Session gültig ist UND der User ein aktiver Partner ist.
@@ -1654,6 +1802,58 @@ mod tests {
         // Block-11: hartkodiert, kein Env-Override.
         assert_eq!(SESSION_CREATE_TTL_SECS, 6 * 3600);
     }
+
+    // ── P1.39: Admin-Session-Fingerprint / Forward-Auth-Bindung ─────────────
+
+    #[test]
+    fn passive_fp_matcht_python_format() {
+        // sha256("ua|de|Windows")[:32]. Wert gegen die Python-Formel verifiziert.
+        let fp = build_passive_fp("ua", "de", "Windows");
+        assert_eq!(fp.len(), 32);
+        assert_eq!(fp, "1acf759d3fa2005e852d13227cc88189");
+        // Quote-Stripping bei Sec-CH-UA-Platform + erster Accept-Language-Eintrag.
+        let fp_quoted = build_passive_fp("ua", "de,en;q=0.9", "\"Windows\"");
+        assert_eq!(fp, fp_quoted);
+    }
+
+    #[test]
+    fn verify_ohne_bindung_akzeptiert() {
+        // Native Admin-Session ohne client_ip/passive_fp/fp_pending → kein Lockout.
+        let fp = AdminSessionFingerprint::default();
+        assert!(fp.verify("203.0.113.7", "irgendwas"));
+    }
+
+    #[test]
+    fn verify_ip_mismatch_lehnt_ab() {
+        let fp = AdminSessionFingerprint {
+            client_ip: "203.0.113.7".into(),
+            ..Default::default()
+        };
+        assert!(!fp.verify("198.51.100.2", ""));
+        assert!(fp.verify("203.0.113.7", ""));
+        // Fehlende aktuelle IP (Caddy-Subrequest) → nicht erzwungen (kein Lockout).
+        assert!(fp.verify("", ""));
+    }
+
+    #[test]
+    fn verify_passive_fp_mismatch_lehnt_ab() {
+        let stored = build_passive_fp("ua-a", "de", "Windows");
+        let fp = AdminSessionFingerprint {
+            passive_fp: stored.clone(),
+            ..Default::default()
+        };
+        assert!(!fp.verify("", &build_passive_fp("ua-b", "de", "Windows")));
+        assert!(fp.verify("", &stored));
+    }
+
+    #[test]
+    fn verify_fp_pending_lehnt_ab() {
+        let fp = AdminSessionFingerprint {
+            fp_pending: true,
+            ..Default::default()
+        };
+        assert!(!fp.verify("", ""));
+    }
 }
 
 // --------------------------------------------------------------------------
@@ -2288,6 +2488,91 @@ print(f.encrypt(payload.encode()).decode(), end='')
 
         sqlx::query("DELETE FROM twitch_partners WHERE twitch_login = 'logout_user'")
             .execute(&pool)
+            .await
+            .ok();
+    }
+
+    /// P1.39: lädt die Bindungs-Felder einer Discord-Admin-Session mit
+    /// `client_ip`/`passive_fp`/`fp_pending` korrekt aus dem Fernet-Payload.
+    /// Schema-isoliert (eigenes `CREATE SCHEMA`), um die Shared-Schema-Race der
+    /// parallelen Integrations-Tests zu vermeiden.
+    #[tokio::test]
+    async fn admin_fingerprint_aus_payload_geladen() {
+        if std::env::var("TB_TEST_REQUIRE_DB").as_deref() != Ok("1") {
+            return;
+        }
+        let Ok(url) = std::env::var("TB_TEST_DATABASE_URL") else { return; };
+
+        // Eigene Pool-Verbindung mit fixiertem search_path: jede Connection im Pool
+        // sieht das Test-Schema (schema-isoliert, keine Shared-Schema-Race). Die
+        // unqualifizierten Table-Refs in fetch_session_payload landen so im Schema.
+        let schema = format!("fp_test_{}", unix_now());
+        let admin_pool = sqlx::PgPool::connect(&url).await.unwrap();
+        sqlx::query(&format!("CREATE SCHEMA IF NOT EXISTS {schema}"))
+            .execute(&admin_pool)
+            .await
+            .unwrap();
+
+        let opts: sqlx::postgres::PgConnectOptions = url.parse().unwrap();
+        let opts = opts.options([("search_path", schema.as_str())]);
+        let pool = sqlx::postgres::PgPoolOptions::new()
+            .max_connections(2)
+            .connect_with(opts)
+            .await
+            .unwrap();
+
+        sqlx::query(&format!(
+            r#"CREATE TABLE {schema}.dashboard_sessions (
+                session_id   TEXT NOT NULL PRIMARY KEY,
+                session_type TEXT NOT NULL,
+                payload_enc  BYTEA NOT NULL,
+                created_at   DOUBLE PRECISION NOT NULL,
+                expires_at   DOUBLE PRECISION NOT NULL
+            )"#
+        ))
+        .execute(&pool)
+        .await
+        .unwrap();
+
+        let now = unix_now() as f64;
+        let session_id = format!("admin-fp-{}", now as u64);
+        let json_str = format!(
+            r#"{{"auth_type":"discord_admin","username":"earlysalty","client_ip":"203.0.113.7","passive_fp":"abc123","fp_pending":false,"expires_at":{}}}"#,
+            now + 3600.0
+        );
+        let fernet_bytes = make_test_fernet_payload(&json_str);
+        sqlx::query(&format!(
+            "INSERT INTO {schema}.dashboard_sessions (session_id, session_type, payload_enc, created_at, expires_at) VALUES ($1,$2,$3,$4,$5)"
+        ))
+        .bind(&session_id)
+        .bind("discord_admin")
+        .bind(fernet_bytes)
+        .bind(now)
+        .bind(now + 3600.0)
+        .execute(&pool)
+        .await
+        .unwrap();
+
+        let state = DashboardAuthState::new(pool.clone(), test_fernet_key());
+        let fp = state
+            .load_admin_session_fingerprint(&session_id)
+            .await
+            .unwrap()
+            .expect("Admin-Session-Fingerprint muss laden");
+        assert_eq!(fp.client_ip, "203.0.113.7");
+        assert_eq!(fp.passive_fp, "abc123");
+        assert!(!fp.fp_pending);
+        assert_eq!(fp.username, "earlysalty");
+
+        // Bindungs-Verifikation greift: gleiche IP + gleicher Passive-FP ok,
+        // fremde IP bzw. fremder Passive-FP abgelehnt.
+        assert!(fp.verify("203.0.113.7", "abc123"));
+        assert!(!fp.verify("198.51.100.2", "abc123"));
+        assert!(!fp.verify("203.0.113.7", "wrong-fp"));
+
+        drop(pool);
+        sqlx::query(&format!("DROP SCHEMA {schema} CASCADE"))
+            .execute(&admin_pool)
             .await
             .ok();
     }

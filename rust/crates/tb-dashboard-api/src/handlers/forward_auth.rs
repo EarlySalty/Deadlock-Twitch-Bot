@@ -18,74 +18,163 @@
 //! Login über die Twitch-Session. Localhost = Loopback-Peer + Loopback-Host.
 //! Beides ist „privilegiert" → 200; alles andere → 401.
 //!
-//! **Bewusste Abgrenzung (B3-10, separates Ticket):** Pythons
-//! `validate_admin_session` prüft zusätzlich IP-Bindung, Passive-/JS-Fingerprint
-//! und `fp_pending` der Admin-Session. Dieses Device-/Canvas-Fingerprinting nach
-//! Admin-Login ist Ticket **B3-10** (Phase 1, `dependsOn: B3-2, B3-1`) und wird
-//! mit dem Fingerprint-Flow zusammen gebaut — NICHT hier. Dieser Endpoint deckt
-//! die Session-Ebene ab (gültige Admin-/Localhost-Session → 200). Sobald B3-10
-//! landet, ergänzt es die FP-Checks an dieser Stelle.
+//! **Device-Bindung (P1.39, konditional):** Pythons `validate_admin_session`
+//! prüft für die Discord-Admin-Session (`master_dash_session`) zusätzlich
+//! IP-Bindung, Passive-Fingerprint und `fp_pending`. Diese Checks sind hier
+//! restauriert — aber **nur konditional**: sie greifen ausschließlich, wenn die
+//! geladene Admin-Session die jeweiligen Felder (`client_ip`/`passive_fp`/
+//! `fp_pending`) tatsächlich trägt. Eine native Rust-Admin-Session
+//! (`create_admin_session`) trägt sie nicht → die Checks werden übersprungen,
+//! genau wie Pythons konditionale `if stored_ip:` / `if stored_passive_fp:`.
+//!
+//! **Bewusst NICHT portiert (#235-Lockout-Schutz, B3-10):** Pythons *harter*
+//! js_fp-Pflicht-Zweig (`source != "discord_dashboard"` UND leerer `js_fp` → 401)
+//! bleibt aus. Der Rust-Prozess hat keinen nativen Discord-Admin-Login, der
+//! `source`/`js_fp`/`fp_pending=False` setzt (vertagt nach B3-10, vgl. P2.118);
+//! ein 1:1-Port würde jede native Admin-Session 401en → der dokumentierte
+//! #235-Login-Loop. Sobald der native Discord-Admin-Login landet, kommt der
+//! js_fp-Pflicht-Zweig zusammen mit seinen Schreibpfaden hinzu.
 //!
 //! **Secrets:** Es werden keine Token verglichen oder geloggt; die einzige
 //! Geheimnis-nahe Operation (Session-Cookie → DB-Lookup) liegt in der
 //! Auth-Kaskade, die konstant-zeitlich nichts vergleicht außer dem CSRF-Token
 //! (hier nicht berührt). Der Username im `X-Admin-User`-Header ist kein Secret.
 
+use std::net::SocketAddr;
+
 use axum::{
-    http::{HeaderValue, StatusCode},
+    extract::ConnectInfo,
+    http::{request::Parts, HeaderValue, StatusCode},
     response::{IntoResponse, Response},
 };
 
-use crate::auth::level::DashboardAuthLevel;
+use crate::auth::level::{extract_cookie, DashboardAuthLevel};
+use crate::auth::session::{build_passive_fp, DashboardAuthState};
+
+/// Cookie-Name der Discord-Admin-Session (Python `_discord_admin_cookie_name`).
+const ADMIN_COOKIE_NAME: &str = "master_dash_session";
 
 /// `GET /twitch/auth/validate` — Forward-Auth-Check für Caddy.
 ///
-/// - Localhost ODER Admin → **200** (autorisiert).
+/// - Localhost ODER Admin → **200** (autorisiert) — sofern die Discord-Admin-
+///   Session-Bindung (IP/Passive-FP/fp_pending, P1.39) den Request akzeptiert.
 /// - Partner ODER None    → **401** (nicht autorisiert).
 ///
 /// Die Antwort trägt `Cache-Control: no-store` (Auth-Antworten dürfen nicht
 /// gecacht werden, Python `_set_no_store_headers`) und bei Erfolg einen
 /// `X-Admin-User`-Header (Python setzt ihn ebenfalls; nützlich fürs Logging
 /// stromabwärts).
-pub async fn validate_admin_session(auth: DashboardAuthLevel) -> Response {
-    if auth.is_privileged() {
-        let mut response = StatusCode::OK.into_response();
-        let headers = response.headers_mut();
-        headers.insert(
-            axum::http::header::CACHE_CONTROL,
-            HeaderValue::from_static("no-store, max-age=0"),
-        );
-        // Python setzt X-Admin-User auf username/display_name der Session, sonst
-        // "admin". Die Auth-Kaskade hält den Discord-Admin-Username derzeit nicht
-        // vor (load_admin_session liefert nur bool); wir setzen den stabilen
-        // Wert "admin". Ein feinerer Username folgt mit B3-10/Session-Payload.
-        headers.insert(
-            "X-Admin-User",
-            HeaderValue::from_static("admin"),
-        );
-        response
-    } else {
-        let mut response = StatusCode::UNAUTHORIZED.into_response();
-        response.headers_mut().insert(
-            axum::http::header::CACHE_CONTROL,
-            HeaderValue::from_static("no-store, max-age=0"),
-        );
-        response
+pub async fn validate_admin_session(auth: DashboardAuthLevel, parts: Parts) -> Response {
+    if !auth.is_privileged() {
+        return forward_response(StatusCode::UNAUTHORIZED, None);
     }
+
+    // Discord-Admin-Session-Bindung (P1.39): nur wenn der Request über das
+    // master_dash_session-Cookie als Admin aufgelöst wurde, die Session-Bindung
+    // gegen IP + Passive-FP + fp_pending prüfen. Localhost / X-Admin-Token /
+    // Twitch-Admin-Login (kein master_dash_session-Cookie) bleiben unberührt.
+    let mut admin_user = "admin".to_string();
+    if let Some(session_id) = extract_cookie(&parts, ADMIN_COOKIE_NAME) {
+        let session_id = session_id.trim();
+        if !session_id.is_empty() {
+            if let Some(state) = parts.extensions.get::<DashboardAuthState>() {
+                match state.load_admin_session_fingerprint(session_id).await {
+                    Ok(Some(fp)) => {
+                        let current_ip = client_ip(&parts);
+                        let current_passive_fp = current_passive_fp(&parts);
+                        if !fp.verify(&current_ip, &current_passive_fp) {
+                            return forward_response(StatusCode::UNAUTHORIZED, None);
+                        }
+                        admin_user = fp.username;
+                    }
+                    // Cookie gesetzt, aber keine gültige discord_admin-Session: der
+                    // Admin-Status kam über einen anderen Pfad (Localhost / Token /
+                    // Twitch-Admin-Login) — kein Lockout, weiter mit Default-User.
+                    Ok(None) => {}
+                    // DB-Fehler → fail-closed (Python wirft, Caddy bekommt kein 200).
+                    Err(_) => return forward_response(StatusCode::UNAUTHORIZED, None),
+                }
+            }
+        }
+    }
+
+    forward_response(StatusCode::OK, Some(admin_user))
+}
+
+/// Baut die Forward-Auth-Antwort mit `no-store` und optionalem `X-Admin-User`.
+fn forward_response(status: StatusCode, admin_user: Option<String>) -> Response {
+    let mut response = status.into_response();
+    let headers = response.headers_mut();
+    headers.insert(
+        axum::http::header::CACHE_CONTROL,
+        HeaderValue::from_static("no-store, max-age=0"),
+    );
+    if let Some(user) = admin_user {
+        if let Ok(value) = HeaderValue::from_str(&user) {
+            headers.insert("X-Admin-User", value);
+        } else {
+            headers.insert("X-Admin-User", HeaderValue::from_static("admin"));
+        }
+    }
+    response
+}
+
+/// Aktuelle Client-IP für die Session-Bindung. Bevorzugt die echte Peer-IP; hinter
+/// dem Loopback-Reverse-Proxy (Caddy) den ersten `X-Forwarded-For`-Eintrag. Leer,
+/// wenn keine Client-IP vorliegt (Caddy liefert sie auf dem Auth-Subrequest nicht
+/// zuverlässig — dann wird der IP-Check übersprungen, Python-Parität).
+fn client_ip(parts: &Parts) -> String {
+    if let Some(ci) = parts.extensions.get::<ConnectInfo<SocketAddr>>() {
+        let ip = ci.0.ip();
+        if !ip.is_loopback() {
+            return ip.to_string();
+        }
+    }
+    if let Some(xff) = parts
+        .headers
+        .get("x-forwarded-for")
+        .and_then(|v| v.to_str().ok())
+    {
+        if let Some(first) = xff.split(',').next() {
+            let first = first.trim();
+            if !first.is_empty() {
+                return first.to_string();
+            }
+        }
+    }
+    String::new()
+}
+
+/// Berechnet den Passive-Fingerprint des aktuellen Requests aus `User-Agent`,
+/// erstem `Accept-Language`-Eintrag und `Sec-CH-UA-Platform` (Python-Parität).
+fn current_passive_fp(parts: &Parts) -> String {
+    let header = |name: axum::http::HeaderName| -> &str {
+        parts.headers.get(name).and_then(|v| v.to_str().ok()).unwrap_or("")
+    };
+    let ua = header(axum::http::header::USER_AGENT);
+    let lang = header(axum::http::header::ACCEPT_LANGUAGE);
+    let platform = parts
+        .headers
+        .get("sec-ch-ua-platform")
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or("");
+    build_passive_fp(ua, lang, platform)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
+    fn empty_parts() -> Parts {
+        axum::http::Request::builder().body(()).unwrap().into_parts().0
+    }
+
     #[tokio::test]
     async fn admin_session_gibt_200() {
-        let resp = validate_admin_session(DashboardAuthLevel::admin()).await;
+        // Admin ohne master_dash_session-Cookie (z. B. Twitch-Admin-Login) → 200.
+        let resp = validate_admin_session(DashboardAuthLevel::admin(), empty_parts()).await;
         assert_eq!(resp.status(), StatusCode::OK);
-        assert_eq!(
-            resp.headers().get("X-Admin-User").unwrap(),
-            "admin"
-        );
+        assert_eq!(resp.headers().get("X-Admin-User").unwrap(), "admin");
         assert_eq!(
             resp.headers().get(axum::http::header::CACHE_CONTROL).unwrap(),
             "no-store, max-age=0"
@@ -94,14 +183,14 @@ mod tests {
 
     #[tokio::test]
     async fn localhost_gibt_200() {
-        let resp = validate_admin_session(DashboardAuthLevel::Localhost).await;
+        let resp = validate_admin_session(DashboardAuthLevel::Localhost, empty_parts()).await;
         assert_eq!(resp.status(), StatusCode::OK);
         assert!(resp.headers().get("X-Admin-User").is_some());
     }
 
     #[tokio::test]
     async fn keine_session_gibt_401() {
-        let resp = validate_admin_session(DashboardAuthLevel::None).await;
+        let resp = validate_admin_session(DashboardAuthLevel::None, empty_parts()).await;
         assert_eq!(resp.status(), StatusCode::UNAUTHORIZED);
         assert!(resp.headers().get("X-Admin-User").is_none());
         assert_eq!(
@@ -114,13 +203,45 @@ mod tests {
     async fn partner_session_gibt_401() {
         // Ein reiner Partner (kein Admin-Login) ist NICHT autorisiert für den
         // Admin-Host — forward_auth muss 401 liefern.
-        let resp = validate_admin_session(DashboardAuthLevel::Partner {
-            twitch_login: "somepartner".into(),
-            twitch_user_id: "12345".into(),
-            display_name: String::new(),
-        })
+        let resp = validate_admin_session(
+            DashboardAuthLevel::Partner {
+                twitch_login: "somepartner".into(),
+                twitch_user_id: "12345".into(),
+                display_name: String::new(),
+            },
+            empty_parts(),
+        )
         .await;
         assert_eq!(resp.status(), StatusCode::UNAUTHORIZED);
         assert!(resp.headers().get("X-Admin-User").is_none());
+    }
+
+    #[test]
+    fn client_ip_aus_x_forwarded_for() {
+        let parts = axum::http::Request::builder()
+            .header("x-forwarded-for", "203.0.113.7, 10.0.0.1")
+            .body(())
+            .unwrap()
+            .into_parts()
+            .0;
+        assert_eq!(client_ip(&parts), "203.0.113.7");
+    }
+
+    #[test]
+    fn client_ip_leer_ohne_quelle() {
+        assert_eq!(client_ip(&empty_parts()), "");
+    }
+
+    #[test]
+    fn passive_fp_aus_request_headern() {
+        let parts = axum::http::Request::builder()
+            .header(axum::http::header::USER_AGENT, "ua")
+            .header(axum::http::header::ACCEPT_LANGUAGE, "de,en;q=0.9")
+            .header("sec-ch-ua-platform", "\"Windows\"")
+            .body(())
+            .unwrap()
+            .into_parts()
+            .0;
+        assert_eq!(current_passive_fp(&parts), build_passive_fp("ua", "de", "Windows"));
     }
 }
