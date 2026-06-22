@@ -452,6 +452,10 @@ impl CommandEngine {
                 self.cmd_rank(event, args).await;
                 true
             }
+            "!wins" => {
+                self.cmd_wins(event, args).await;
+                true
+            }
             // !title / !titel: bewusst nicht portiert — KI-Abhängigkeit außerhalb Scope.
             // Handle als false → Pipeline fährt fort.
             "!title" | "!titel" => {
@@ -590,12 +594,25 @@ impl CommandEngine {
     async fn cmd_rank(&self, event: &ChatMessageEvent, _args: &str) {
         let info =
             match crate::stats::resolve_discord_id(&self.pool, &event.broadcaster_user_id).await {
-                Some(discord_id) => crate::stats::fetch_rank(&discord_id).await,
+                Some(discord_id) => crate::stats::fetch_rank(&discord_id, false).await,
                 None => None,
             };
         self.reply(
             event,
             &crate::stats::rank_reply(&event.broadcaster_user_name, info.as_ref()),
+        )
+        .await;
+    }
+
+    async fn cmd_wins(&self, event: &ChatMessageEvent, _args: &str) {
+        let info =
+            match crate::stats::resolve_discord_id(&self.pool, &event.broadcaster_user_id).await {
+                Some(discord_id) => crate::stats::fetch_rank(&discord_id, true).await,
+                None => None,
+            };
+        self.reply(
+            event,
+            &crate::stats::wins_reply(&event.broadcaster_user_name, info.as_ref()),
         )
         .await;
     }
