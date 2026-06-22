@@ -5,7 +5,8 @@
 //! keinen fremden Streamkit-Code.
 
 use std::collections::HashMap;
-use std::sync::{Arc, OnceLock};
+use std::future::Future;
+use std::sync::{Arc, Mutex, MutexGuard, OnceLock};
 use std::time::{Duration, Instant};
 
 use axum::{
@@ -20,7 +21,7 @@ use reqwest::Client;
 use serde::{de::DeserializeOwned, Deserialize, Serialize};
 use serde_json::{json, Value};
 use sqlx::PgPool;
-use tokio::sync::{Mutex, Notify};
+use tokio::sync::Notify;
 
 use crate::auth::level::DashboardAuthLevel;
 use crate::handlers::spa;
@@ -205,6 +206,10 @@ fn hero_icon_cache() -> &'static Mutex<HeroIconCache> {
     HERO_ICON_CACHE.get_or_init(|| Mutex::new(HeroIconCache::default()))
 }
 
+fn lock_cache<T>(cache: &Mutex<T>) -> MutexGuard<'_, T> {
+    cache.lock().unwrap_or_else(|poisoned| poisoned.into_inner())
+}
+
 fn deadlock_assets_base_url() -> String {
     std::env::var("DEADLOCK_ASSETS_BASE")
         .ok()
@@ -218,7 +223,7 @@ fn deadlock_assets_base_url() -> String {
 /// der Render fällt dann auf seine Buchstaben-Kachel zurück, niemals `ok:false`.
 async fn hero_icon_map(client: &Client) -> Arc<HashMap<String, String>> {
     {
-        let cache = hero_icon_cache().lock().await;
+        let cache = lock_cache(hero_icon_cache());
         if let Some(fetched_at) = cache.fetched_at {
             if fetched_at.elapsed() < HERO_ASSETS_TTL {
                 return Arc::clone(&cache.icons);
@@ -229,7 +234,7 @@ async fn hero_icon_map(client: &Client) -> Arc<HashMap<String, String>> {
     let map = fetch_hero_icon_map(client).await;
     let arc = Arc::new(map);
     {
-        let mut cache = hero_icon_cache().lock().await;
+        let mut cache = lock_cache(hero_icon_cache());
         cache.fetched_at = Some(Instant::now());
         cache.icons = Arc::clone(&arc);
     }
@@ -275,50 +280,102 @@ fn normalize_login(streamer: Option<&str>) -> Option<String> {
         .map(str::to_lowercase)
 }
 
-async fn cached_overlay_or_fetch(pool: &PgPool, login: &str, mode: &str) -> Value {
-    // Pro (login, mode) keyen — sonst liefert der Cache den falschen Modus.
-    let key = format!("{login}|{mode}");
+struct InflightGuard {
+    cache: &'static Mutex<OverlayCache>,
+    key: String,
+    notify: Arc<Notify>,
+}
+
+impl Drop for InflightGuard {
+    fn drop(&mut self) {
+        let removed = {
+            let mut cache = lock_cache(self.cache);
+            let should_remove = cache
+                .inflight
+                .get(&self.key)
+                .map(|current| Arc::ptr_eq(current, &self.notify))
+                .unwrap_or(false);
+            if should_remove {
+                cache.inflight.remove(&self.key);
+                true
+            } else {
+                false
+            }
+        };
+
+        if removed {
+            self.notify.notify_waiters();
+        }
+    }
+}
+
+async fn cached_or_compute<F, Fut>(
+    cache: &'static Mutex<OverlayCache>,
+    key: String,
+    ttl: Duration,
+    compute: F,
+) -> Value
+where
+    F: FnOnce() -> Fut,
+    Fut: Future<Output = Value>,
+{
+    enum CacheAction {
+        Wait(tokio::sync::futures::OwnedNotified),
+        Lead(Arc<Notify>),
+    }
+
     loop {
-        let notify = {
-            let mut cache = overlay_cache().lock().await;
+        let action = {
+            let mut cache = lock_cache(cache);
             let now = Instant::now();
             if let Some(entry) = cache.entries.get(&key) {
-                if now.duration_since(entry.inserted_at) < OVERLAY_CACHE_TTL {
+                if now.duration_since(entry.inserted_at) < ttl {
                     return entry.body.clone();
                 }
             }
 
             if let Some(notify) = cache.inflight.get(&key) {
-                Some(Arc::clone(notify))
+                CacheAction::Wait(Arc::clone(notify).notified_owned())
             } else {
                 let notify = Arc::new(Notify::new());
                 cache.inflight.insert(key.clone(), Arc::clone(&notify));
-                None
+                CacheAction::Lead(notify)
             }
         };
 
-        let Some(notify) = notify else {
-            break;
-        };
-        notify.notified().await;
+        match action {
+            CacheAction::Wait(notified) => notified.await,
+            CacheAction::Lead(notify) => {
+                let guard = InflightGuard {
+                    cache,
+                    key: key.clone(),
+                    notify,
+                };
+                let body = compute().await;
+                {
+                    let mut cache = lock_cache(cache);
+                    cache.entries.insert(
+                        key.clone(),
+                        CacheEntry {
+                            inserted_at: Instant::now(),
+                            body: body.clone(),
+                        },
+                    );
+                }
+                drop(guard);
+                return body;
+            }
+        }
     }
+}
 
-    let body = build_overlay_json(pool, login, mode).await;
-    let notify = {
-        let mut cache = overlay_cache().lock().await;
-        cache.entries.insert(
-            key.clone(),
-            CacheEntry {
-                inserted_at: Instant::now(),
-                body: body.clone(),
-            },
-        );
-        cache.inflight.remove(&key)
-    };
-    if let Some(notify) = notify {
-        notify.notify_waiters();
-    }
-    body
+async fn cached_overlay_or_fetch(pool: &PgPool, login: &str, mode: &str) -> Value {
+    // Pro (login, mode) keyen — sonst liefert der Cache den falschen Modus.
+    let key = format!("{login}|{mode}");
+    cached_or_compute(overlay_cache(), key, OVERLAY_CACHE_TTL, || {
+        build_overlay_json(pool, login, mode)
+    })
+    .await
 }
 
 async fn build_overlay_json(pool: &PgPool, login: &str, mode: &str) -> Value {
@@ -1420,29 +1477,33 @@ const OVERLAY_HTML: &str = r##"<!doctype html>
 "##;
 
 #[cfg(test)]
-async fn clear_overlay_cache_for_tests() {
-    let mut cache = overlay_cache().lock().await;
+fn clear_overlay_cache_for_tests() {
+    let mut cache = lock_cache(overlay_cache());
     cache.entries.clear();
     cache.inflight.clear();
 }
 
 #[cfg(test)]
-async fn clear_hero_icon_cache_for_tests() {
-    let mut cache = hero_icon_cache().lock().await;
+fn clear_hero_icon_cache_for_tests() {
+    let mut cache = lock_cache(hero_icon_cache());
     cache.fetched_at = None;
     cache.icons = Arc::new(HashMap::new());
 }
 
 #[cfg(test)]
 mod tests {
-    use std::sync::OnceLock;
-    use std::time::{SystemTime, UNIX_EPOCH};
+    use std::sync::{
+        atomic::{AtomicUsize, Ordering},
+        Arc, Mutex as StdMutex, OnceLock,
+    };
+    use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
     use axum::body::to_bytes;
     use axum::http::{header, Request, StatusCode};
     use serde_json::{json, Value};
     use sqlx::postgres::PgPoolOptions;
-    use tokio::sync::Mutex;
+    use tokio::sync::{oneshot, Mutex, Notify};
+    use tokio::time::{sleep, timeout};
     use tower::ServiceExt;
     use wiremock::matchers::{method, path, query_param};
     use wiremock::{Mock, MockServer, ResponseTemplate};
@@ -1450,8 +1511,8 @@ mod tests {
     use crate::build_public_router;
 
     use super::{
-        build_recent, compute_kd, filter_by_mode, normalize_mode, scored_matches,
-        summarize_matches, summarize_today, RecentMatch, SteamMatch,
+        build_recent, cached_or_compute, compute_kd, filter_by_mode, normalize_mode, scored_matches,
+        summarize_matches, summarize_today, OverlayCache, RecentMatch, SteamMatch,
     };
     use chrono::TimeZone;
 
@@ -1500,6 +1561,10 @@ mod tests {
 
     /// Berlin-Tagesbeginn 2026-06-22 00:00 (= 2026-06-21 22:00 UTC, Sommerzeit UTC+2).
     const BERLIN_TODAY_START_UTC: i64 = 1_782_079_200; // 2026-06-21T22:00:00Z
+
+    fn new_test_cache() -> &'static StdMutex<OverlayCache> {
+        Box::leak(Box::new(StdMutex::new(OverlayCache::default())))
+    }
 
     #[test]
     fn summarize_today_zaehlt_nur_heutige_gewertete_matches() {
@@ -1714,6 +1779,150 @@ mod tests {
         assert_eq!(summary.losses, 1);
     }
 
+    #[tokio::test]
+    async fn cached_or_compute_cancel_safety_raeumt_inflight_bei_abbruch() {
+        let cache = new_test_cache();
+        let key = "cancel-key".to_string();
+        let (started_tx, started_rx) = oneshot::channel();
+
+        let leader = tokio::spawn(cached_or_compute(
+            cache,
+            key.clone(),
+            Duration::from_secs(30),
+            move || async move {
+                let _ = started_tx.send(());
+                std::future::pending::<Value>().await
+            },
+        ));
+        started_rx.await.unwrap();
+
+        let waiter = tokio::spawn(cached_or_compute(
+            cache,
+            key.clone(),
+            Duration::from_secs(30),
+            || async { json!({ "source": "waiter" }) },
+        ));
+        sleep(Duration::from_millis(30)).await;
+        assert!(
+            !waiter.is_finished(),
+            "zweiter Aufruf muss vor Leader-Abbruch warten"
+        );
+
+        leader.abort();
+        assert!(leader.await.unwrap_err().is_cancelled());
+
+        let waiter_body = timeout(Duration::from_secs(2), waiter)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(waiter_body, json!({ "source": "waiter" }));
+
+        let follow_up = timeout(
+            Duration::from_secs(2),
+            cached_or_compute(cache, key, Duration::from_secs(30), || async {
+                json!({ "source": "followup" })
+            }),
+        )
+        .await
+        .unwrap();
+        assert_eq!(follow_up, json!({ "source": "waiter" }));
+    }
+
+    #[tokio::test]
+    async fn cached_or_compute_dedup_happy_berechnet_nur_einmal() {
+        let cache = new_test_cache();
+        let key = "dedup-key".to_string();
+        let counter = Arc::new(AtomicUsize::new(0));
+        let release = Arc::new(Notify::new());
+        let (started_tx, started_rx) = oneshot::channel();
+
+        let first = tokio::spawn(cached_or_compute(
+            cache,
+            key.clone(),
+            Duration::from_secs(30),
+            {
+                let counter = Arc::clone(&counter);
+                let release = Arc::clone(&release);
+                move || async move {
+                    counter.fetch_add(1, Ordering::SeqCst);
+                    let _ = started_tx.send(());
+                    release.notified().await;
+                    json!({ "value": "shared" })
+                }
+            },
+        ));
+        started_rx.await.unwrap();
+
+        let second = tokio::spawn(cached_or_compute(
+            cache,
+            key,
+            Duration::from_secs(30),
+            {
+                let counter = Arc::clone(&counter);
+                move || async move {
+                    counter.fetch_add(1, Ordering::SeqCst);
+                    json!({ "value": "second" })
+                }
+            },
+        ));
+        sleep(Duration::from_millis(30)).await;
+        assert!(
+            !second.is_finished(),
+            "zweiter Aufruf muss waehrend Inflight warten"
+        );
+
+        release.notify_waiters();
+        let (first, second) = tokio::join!(first, second);
+        let first = first.unwrap();
+        let second = second.unwrap();
+
+        assert_eq!(first, json!({ "value": "shared" }));
+        assert_eq!(second, first);
+        assert_eq!(counter.load(Ordering::SeqCst), 1);
+    }
+
+    #[tokio::test]
+    async fn cached_or_compute_ttl_cached_innerhalb_ttl_und_erneuert_danach() {
+        let cache = new_test_cache();
+        let key = "ttl-key".to_string();
+        let ttl = Duration::from_millis(60);
+        let counter = Arc::new(AtomicUsize::new(0));
+
+        let first = cached_or_compute(cache, key.clone(), ttl, {
+            let counter = Arc::clone(&counter);
+            move || async move {
+                let value = counter.fetch_add(1, Ordering::SeqCst) + 1;
+                json!({ "value": value })
+            }
+        })
+        .await;
+        let second = cached_or_compute(cache, key.clone(), ttl, {
+            let counter = Arc::clone(&counter);
+            move || async move {
+                let value = counter.fetch_add(1, Ordering::SeqCst) + 1;
+                json!({ "value": value })
+            }
+        })
+        .await;
+
+        assert_eq!(first, json!({ "value": 1 }));
+        assert_eq!(second, first);
+        assert_eq!(counter.load(Ordering::SeqCst), 1);
+
+        sleep(Duration::from_millis(90)).await;
+        let third = cached_or_compute(cache, key, ttl, {
+            let counter = Arc::clone(&counter);
+            move || async move {
+                let value = counter.fetch_add(1, Ordering::SeqCst) + 1;
+                json!({ "value": value })
+            }
+        })
+        .await;
+
+        assert_eq!(third, json!({ "value": 2 }));
+        assert_eq!(counter.load(Ordering::SeqCst), 2);
+    }
+
     struct EnvGuard {
         previous: Option<String>,
     }
@@ -1855,8 +2064,8 @@ mod tests {
     async fn overlay_api_cache_hit_innerhalb_ttl_nutzt_keinen_zweiten_steam_abruf() {
         let dsn = db_dsn_or_skip!();
         let _env_lock = ENV_LOCK.get_or_init(|| Mutex::new(())).lock().await;
-        super::clear_overlay_cache_for_tests().await;
-        super::clear_hero_icon_cache_for_tests().await;
+        super::clear_overlay_cache_for_tests();
+        super::clear_hero_icon_cache_for_tests();
         let mock_server = MockServer::start().await;
         let _env = EnvGuard::set(&mock_server.uri());
         let _assets_env = AssetsEnvGuard::set(&mock_server.uri());
@@ -1974,7 +2183,7 @@ mod tests {
     async fn overlay_api_unbekannter_streamer_liefert_ok_false_ohne_steam_abruf() {
         let dsn = db_dsn_or_skip!();
         let _env_lock = ENV_LOCK.get_or_init(|| Mutex::new(())).lock().await;
-        super::clear_overlay_cache_for_tests().await;
+        super::clear_overlay_cache_for_tests();
         let mock_server = MockServer::start().await;
         let _env = EnvGuard::set(&mock_server.uri());
         let pool = make_pool(&dsn, "api_overlay_unknown").await;
