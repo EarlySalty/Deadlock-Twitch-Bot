@@ -1,3 +1,11 @@
+## #261 — Stream-Sitzungen werden wieder zuverlässig aufgezeichnet
+
+**Problem:** Beim Start einer Stream-Sitzung (und beim Abschluss) brach das Speichern mit einem Datenbankfehler ab — der Zeitstempel wurde im falschen Format übergeben. Für gerade live gegangene Streamer wurde dadurch keine neue Sitzung angelegt, was die Auswertungen dieser Streams lückenhaft machte.
+
+**Änderung:** Der Start- und der Abschluss-Zeitstempel einer Sitzung werden beim Speichern jetzt korrekt als Zeitstempel-Wert behandelt (vorher als reiner Text, was die Datenbankspalte ablehnte). Der Fix ist verträglich mit beiden Spalten-Varianten.
+
+**Ergebnis:** Stream-Sitzungen werden wieder zuverlässig angelegt und abgeschlossen — die Auswertungen erfassen wieder jeden Stream lückenlos.
+
 ## #260 — Zwei weitere Stat-Befehle: !mmr und !live
 
 **Problem:** Es fehlten noch ein Rang-Verlauf („wie läuft mein Climb?") und eine schnelle Live-Auskunft im Chat.
