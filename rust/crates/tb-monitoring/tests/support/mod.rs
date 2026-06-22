@@ -1,9 +1,8 @@
 //! Gemeinsame Test-Infrastruktur der hermetischen tb-monitoring-Tests:
 //! Schema pro Test (Isolation bei parallelem Lauf) + prod-verifiziertes DDL
-//! (Stand 2026-06-09): Sessions timestamptz/bigint, Bool-benannte Flags
-//! (is_mature/had_deadlock_in_session/is_gift/is_automatic/is_partner) sind
-//! INTEGER (0/1, SQLite-Erbe) wie im echten Schema, Live-State und exp_* mit
-//! TEXT-Timestamps.
+//! (Stand 2026-06-22): Session-Flags
+//! (is_mature/had_deadlock_in_session) sind BOOLEAN wie Prod, Live-State bleibt
+//! bei INTEGER-Flags, exp_* bei TEXT-Timestamps.
 
 use std::str::FromStr;
 
@@ -86,8 +85,8 @@ pub async fn pool_in_schema(schema: &str) -> Option<PgPool> {
             returning_chatters INTEGER DEFAULT 0,
             followers_start INTEGER, followers_end INTEGER, follower_delta INTEGER,
             stream_title TEXT, notification_text TEXT, language TEXT,
-            is_mature INTEGER DEFAULT 0, tags TEXT,
-            had_deadlock_in_session INTEGER DEFAULT 0,
+            is_mature BOOLEAN DEFAULT FALSE, tags TEXT,
+            had_deadlock_in_session BOOLEAN DEFAULT FALSE,
             game_name TEXT, notes TEXT
         )",
         "CREATE TABLE twitch_session_viewers (

@@ -2,8 +2,8 @@
 //! `twitch_session_chatters` (nur Count-Read). Prod-Typen (Baseline-Schema):
 //! `id` bigint, `started_at`/`ended_at` **TEXT** (ISO, SQLite-Erbe — Bind als
 //! ISO-String via `iso_seconds`, Decode via `::text`-Cast + `parse_dt_utc`,
-//! P2.38), `is_mature`/`had_deadlock_in_session` INTEGER (0/1, Bind/Decode als
-//! `i32`, nicht bool), `avg_viewers` double precision. SQL-Vergleiche gegen
+//! P2.38), `is_mature`/`had_deadlock_in_session` BOOLEAN (Bind/Decode als
+//! `bool`), `avg_viewers` double precision. SQL-Vergleiche gegen
 //! `NOW()`/Intervalle casten `started_at::timestamptz`, was sowohl für TEXT
 //! (ISO) als auch für eine TIMESTAMPTZ-Spalte gültig ist.
 //!
@@ -188,10 +188,10 @@ impl SessionStore {
         .bind(new.followers_start)
         .bind(&new.title)
         .bind(&new.language)
-        .bind(i32::from(new.is_mature))
+        .bind(new.is_mature)
         .bind(&new.tags)
         .bind(&new.game_name)
-        .bind(i32::from(new.had_deadlock))
+        .bind(new.had_deadlock)
         .fetch_one(&mut *tx)
         .await?;
         sqlx::query(
@@ -309,14 +309,14 @@ impl SessionStore {
             UPDATE twitch_stream_sessions
                SET start_viewers = $1,
                    peak_viewers = GREATEST(peak_viewers, $1),
-                   had_deadlock_in_session = GREATEST(COALESCE(had_deadlock_in_session, 0), $2),
+                   had_deadlock_in_session = COALESCE(had_deadlock_in_session, false) OR $2,
                    game_name = COALESCE(game_name, $3),
                    stream_title = COALESCE(stream_title, $4)
              WHERE id = $5 AND samples = 0 AND start_viewers = 0
             "#,
         )
         .bind(viewer_count)
-        .bind(i32::from(had_deadlock))
+        .bind(had_deadlock)
         .bind(game_name)
         .bind(stream_title)
         .bind(session_id)
@@ -463,7 +463,7 @@ impl SessionStore {
         .bind(update.followers_end)
         .bind(update.follower_delta)
         .bind(&update.notes)
-        .bind(i32::from(update.had_deadlock_in_session))
+        .bind(update.had_deadlock_in_session)
         .bind(&update.fallback_game_name)
         .bind(update.session_id)
         .execute(&mut *tx)

@@ -122,7 +122,7 @@ impl SessionTracker {
                 }
             }
             Err(error) => {
-                tracing::debug!(%error, "Konnte offene Twitch-Sessions nicht laden");
+                tracing::warn!(%error, "Konnte offene Twitch-Sessions nicht laden");
             }
         }
     }
@@ -140,7 +140,7 @@ impl SessionTracker {
             }
             Ok(None) => None,
             Err(error) => {
-                tracing::debug!(%error, login, "Lookup offene Session fehlgeschlagen");
+                tracing::warn!(%error, login, "Lookup offene Session fehlgeschlagen");
                 None
             }
         }
@@ -166,7 +166,13 @@ impl SessionTracker {
 
         let mut session_id = self.active_session_id(&login).await;
         if let Some(id) = session_id {
-            let current = self.store.stream_id_of(id).await.ok().flatten();
+            let current = match self.store.stream_id_of(id).await {
+                Ok(current) => current,
+                Err(error) => {
+                    tracing::warn!(%error, login, session_id = id, "Konnte Stream-ID der offenen Session nicht laden");
+                    None
+                }
+            };
             if let (Some(current), Some(new_id)) = (current.as_deref(), stream_id) {
                 if !current.is_empty() && current != new_id {
                     self.finalize(&login, "restarted", None, None).await;
@@ -186,7 +192,7 @@ impl SessionTracker {
                 )
                 .await
             {
-                tracing::debug!(%error, login, "Konnte unvollständige Session nicht adoptieren");
+                tracing::warn!(%error, login, "Konnte unvollständige Session nicht adoptieren");
             }
             return Some(id);
         }
@@ -211,7 +217,7 @@ impl SessionTracker {
         let outcome = match self.store.start_session(&new).await {
             Ok(outcome) => outcome,
             Err(error) => {
-                tracing::debug!(%error, login, "Konnte neue Twitch-Session nicht speichern");
+                tracing::error!(%error, login, "Konnte neue Twitch-Session nicht speichern");
                 return None;
             }
         };
@@ -238,7 +244,7 @@ impl SessionTracker {
             Ok(true) => self.exp.on_session_sample(&login, stream, now).await,
             Ok(false) => {}
             Err(error) => {
-                tracing::debug!(%error, login, "Konnte Session-Sample nicht speichern");
+                tracing::error!(%error, login, "Konnte Session-Sample nicht speichern");
             }
         }
     }
@@ -283,17 +289,19 @@ impl SessionTracker {
                 return false;
             }
             Err(error) => {
-                tracing::debug!(%error, login, "Konnte Session nicht laden für Abschluss");
+                tracing::error!(%error, login, "Konnte Session nicht laden für Abschluss");
                 return false;
             }
         };
         let duration_seconds = (now - source.started_at).num_seconds().max(0) as i32;
 
-        let samples = self
-            .store
-            .viewer_samples(session_id)
-            .await
-            .unwrap_or_default();
+        let samples = match self.store.viewer_samples(session_id).await {
+            Ok(samples) => samples,
+            Err(error) => {
+                tracing::warn!(%error, login, session_id, "Konnte Viewer-Samples für Session-Abschluss nicht laden");
+                Vec::new()
+            }
+        };
         let start_viewers = source.start_viewers.unwrap_or(0);
         let aggregates = metrics::final_aggregates(
             &samples,
@@ -313,13 +321,19 @@ impl SessionTracker {
             match self.store.chatter_counts(session_id).await {
                 Ok(counts) => counts,
                 Err(error) => {
-                    tracing::debug!(%error, login, "Chatter-Zählung fehlgeschlagen");
+                    tracing::warn!(%error, login, "Chatter-Zählung fehlgeschlagen");
                     (0, 0)
                 }
             };
         let returning_chatters = (unique_chatters - first_time_chatters).max(0);
 
-        let state = self.live_state.finalize_state(&login).await.ok().flatten();
+        let state = match self.live_state.finalize_state(&login).await {
+            Ok(state) => state,
+            Err(error) => {
+                tracing::warn!(%error, login, "Konnte Live-State für Session-Abschluss nicht laden");
+                None
+            }
+        };
         let twitch_user_id = state.as_ref().and_then(|s| s.twitch_user_id.clone());
         let last_game = state.as_ref().and_then(|s| s.last_game.clone());
         let had_deadlock_state = state
@@ -382,7 +396,7 @@ impl SessionTracker {
                 return false;
             }
             Err(error) => {
-                tracing::debug!(%error, login, "Konnte Session-Abschluss nicht speichern");
+                tracing::error!(%error, login, "Konnte Session-Abschluss nicht speichern");
                 return false;
             }
         }
@@ -409,7 +423,7 @@ impl SessionTracker {
         let (zero_sample, stale) = match self.store.orphan_candidates().await {
             Ok(candidates) => candidates,
             Err(error) => {
-                tracing::debug!(%error, "Orphaned-Session-Cleanup fehlgeschlagen");
+                tracing::warn!(%error, "Orphaned-Session-Cleanup fehlgeschlagen");
                 return 0;
             }
         };

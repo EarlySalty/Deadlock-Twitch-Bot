@@ -223,6 +223,43 @@ async fn run_migrations_builds_full_schema_on_fresh_db() {
         "alle 4 Token-Lifecycle-Spalten müssen existieren"
     );
 
+    // WS-B: Session-Flags sind im kanonischen Prod-Schema BOOLEAN. Der
+    // gleichnamige Live-State-Aggregatwert bleibt dagegen INTEGER 0/1.
+    let session_flag_types: Vec<(String, String)> = sqlx::query_as(
+        "SELECT column_name, data_type
+           FROM information_schema.columns
+          WHERE table_schema = 'public'
+            AND table_name = 'twitch_stream_sessions'
+            AND column_name IN ('is_mature', 'had_deadlock_in_session')
+          ORDER BY column_name",
+    )
+    .fetch_all(&pool)
+    .await
+    .unwrap();
+    assert_eq!(
+        session_flag_types,
+        vec![
+            ("had_deadlock_in_session".to_string(), "boolean".to_string()),
+            ("is_mature".to_string(), "boolean".to_string()),
+        ],
+        "twitch_stream_sessions Flags muessen BOOLEAN sein"
+    );
+
+    let live_deadlock_type: String = sqlx::query_scalar(
+        "SELECT data_type
+           FROM information_schema.columns
+          WHERE table_schema = 'public'
+            AND table_name = 'twitch_live_state'
+            AND column_name = 'had_deadlock_in_session'",
+    )
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!(
+        live_deadlock_type, "integer",
+        "twitch_live_state.had_deadlock_in_session bleibt INTEGER"
+    );
+
     // social_media Phase 0: oauth consumed_at + Index.
     let consumed = scalar_i64(
         "SELECT count(*) FROM information_schema.columns \

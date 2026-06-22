@@ -1,6 +1,6 @@
 //! Hermetische Tests für den Write-Core (Slice 4b) gegen den
 //! Wegwerf-Container (`TB_TEST_DATABASE_URL`). Schema pro Test, DDL nach dem
-//! **prod-verifizierten** Stand (2026-06-09): Sessions mit timestamptz/boolean/
+//! **prod-verifizierten** Stand (2026-06-22): Sessions mit timestamptz/boolean/
 //! bigint, Live-State mit TEXT-Timestamps, exp_* mit TEXT-Timestamps + REAL.
 
 use std::sync::{Arc, Mutex};
@@ -150,6 +150,41 @@ async fn live_state_upsert_drift_cleanup_und_snapshot() {
 // ── Session-Lifecycle ─────────────────────────────────────────────────────────
 
 #[tokio::test]
+async fn session_start_schreibt_boolean_session_flags() {
+    let pool = pool_or_skip!("t4b_session_bool_flags");
+    let store = SessionStore::new(pool.clone());
+
+    let new = NewSession {
+        streamer_login: "drag".to_string(),
+        stream_id: Some("s-bool".to_string()),
+        started_at: Utc::now(),
+        viewer_count: 7,
+        followers_start: None,
+        title: "Ranked".to_string(),
+        language: "de".to_string(),
+        is_mature: true,
+        tags: String::new(),
+        game_name: Some("Deadlock".to_string()),
+        had_deadlock: true,
+    };
+
+    let outcome = store
+        .start_session(&new)
+        .await
+        .expect("start_session muss gegen BOOLEAN-Session-Flags schreiben");
+
+    let flags: (bool, bool) = sqlx::query_as(
+        "SELECT is_mature, had_deadlock_in_session
+           FROM twitch_stream_sessions WHERE id = $1",
+    )
+    .bind(outcome.session_id())
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!(flags, (true, true));
+}
+
+#[tokio::test]
 async fn session_lifecycle_start_sample_finalize() {
     let pool = pool_or_skip!("t4b_lifecycle");
     let followers = Arc::new(SeqFollowers {
@@ -219,7 +254,7 @@ async fn session_lifecycle_start_sample_finalize() {
         first_time_chatters: i32,
         follower_delta: Option<i32>,
         notes: String,
-        had_deadlock_in_session: i32,
+        had_deadlock_in_session: bool,
     }
     let row: FinalizedRow = sqlx::query_as(
         "SELECT ended_at::text AS ended_at, end_viewers, peak_viewers, avg_viewers, samples,
@@ -244,7 +279,7 @@ async fn session_lifecycle_start_sample_finalize() {
     assert_eq!(row.follower_delta, Some(15), "follower_delta 25-10");
     assert_eq!(row.notes, "done");
     assert_eq!(
-        row.had_deadlock_in_session, 1,
+        row.had_deadlock_in_session, true,
         "had_deadlock aus Live-State/Game"
     );
 
