@@ -32,7 +32,7 @@ use tb_knowledge::{KnowledgeBase, Namespace};
 use tokio::sync::Mutex;
 
 use crate::api::ChatApi;
-use crate::types::ChatMessageEvent;
+use crate::types::{ChatMessageEvent, SendOutcome};
 
 // ---------------------------------------------------------------------------
 // Konstanten — exakt aus dem Vertrag
@@ -128,6 +128,13 @@ fn raid_status_line(raid_enabled: Option<bool>) -> &'static str {
 // Integrations-Traits — müssen vom Orchestrator verdrahtet werden
 // ---------------------------------------------------------------------------
 
+/// Ergebnis eines manuellen Raid-Starts.
+#[derive(Debug, Clone)]
+pub struct RaidStartResult {
+    pub status: String,
+    pub target_login: Option<String>,
+}
+
 /// Port für manuelle und status-basierte Raid-Operationen.
 /// Wird vom Orchestrator an die tb-raid-Schicht gebunden.
 ///
@@ -137,14 +144,14 @@ fn raid_status_line(raid_enabled: Option<bool>) -> &'static str {
 #[async_trait]
 pub trait RaidCommandPort: Send + Sync {
     /// Startet einen manuellen Raid für den gegebenen Broadcaster.
-    /// Gibt einen Status-String zurück: `"started"`, `"source_not_live"`,
-    /// `"source_not_eligible"`, `"no_target"`, `"unavailable"`, oder
-    /// einen Error-String.
+    /// Gibt Status (`"started"`, `"source_not_live"`, `"source_not_eligible"`,
+    /// `"no_target"`, `"unavailable"`, oder Error-String) plus Zielkanal zurück.
+    // WIRING-TODO(P2.17): Adapter muss target_login aus JSON füllen.
     async fn manual_raid(
         &self,
         broadcaster_id: &str,
         broadcaster_login: &str,
-    ) -> Result<String, String>;
+    ) -> Result<RaidStartResult, String>;
 
     /// Liest Raid-Aktivierungsstatus und Statistik aus.
     /// `commands.py:94–128`
@@ -193,6 +200,13 @@ pub trait InvitePort: Send + Sync {
         channel_login: &str,
         chatter_login: &str,
     ) -> Result<Option<String>, String>;
+}
+
+/// Seam, um erfolgreiche `!invite`-Replies in den Promo-Gesamtcooldown zu koppeln.
+// WIRING-TODO(P2.13): PromoEngine-Handle in CommandEngine verdrahten (chat_wiring).
+#[async_trait]
+pub trait InviteReplyNotifier: Send + Sync {
+    async fn note_invite_reply(&self, channel_login: &str);
 }
 
 /// Port für Super-Mod-Prüfung (Engagement-Commands).
@@ -282,6 +296,8 @@ pub struct CommandEngine {
     clip: Option<Arc<dyn ClipPort>>,
     /// Optionaler Scam-Guard-Port (`!explain` / `!unban`-overturn). `None` → inaktiv.
     scam: Option<Arc<dyn ScamGuardCommandPort>>,
+    /// Optionaler Seam: erfolgreicher `!invite`-Reply belegt Promo-Cooldown.
+    invite_reply_notifier: Option<Arc<dyn InviteReplyNotifier>>,
     /// In-memory Cooldown-Tabelle für `!invite`.
     /// `bot.py:781` — 1h pro (channel_login, chatter_login).
     invite_cooldowns: Mutex<HashMap<(String, String), Instant>>,
@@ -309,6 +325,7 @@ impl CommandEngine {
             autoban,
             clip: None,
             scam: None,
+            invite_reply_notifier: None,
             invite_cooldowns: Mutex::new(HashMap::new()),
             title_rate_limiter: Arc::new(crate::title_ai::TitleRateLimiter::default()),
         }
@@ -325,6 +342,12 @@ impl CommandEngine {
     /// Builder-Style, damit Konstruktor und Tests unverändert bleiben.
     pub fn set_scam_port(mut self, scam: Arc<dyn ScamGuardCommandPort>) -> Self {
         self.scam = Some(scam);
+        self
+    }
+
+    /// Setzt den optionalen Invite-Reply-Notifier.
+    pub fn set_invite_reply_notifier(mut self, notifier: Arc<dyn InviteReplyNotifier>) -> Self {
+        self.invite_reply_notifier = Some(notifier);
         self
     }
 
@@ -576,6 +599,20 @@ impl CommandEngine {
         }
     }
 
+    /// `commands.py:640` / `has_enabled_auth` — `raid_enabled == TRUE`.
+    async fn raid_enabled(&self, twitch_user_id: &str) -> Option<bool> {
+        let row = sqlx::query_as::<_, (Option<bool>,)>(
+            "SELECT raid_enabled FROM twitch_raid_auth WHERE twitch_user_id = $1",
+        )
+        .bind(twitch_user_id)
+        .fetch_optional(&self.pool)
+        .await;
+        match row {
+            Ok(Some((raid_enabled,))) => raid_enabled,
+            _ => None,
+        }
+    }
+
     /// Sendet eine Antwort mit `@<chatter>`-Prefix.
     async fn reply(&self, event: &ChatMessageEvent, text: &str) {
         let msg = format!("@{} {}", event.chatter_user_login, text);
@@ -593,17 +630,39 @@ impl CommandEngine {
     }
 
     /// Sendet eine Antwort ohne `@`-Prefix.
-    async fn reply_plain(&self, event: &ChatMessageEvent, text: &str) {
-        if let Err(e) = self
+    async fn reply_plain(&self, event: &ChatMessageEvent, text: &str) -> bool {
+        match self
             .api
             .send_message(&event.broadcaster_user_id, text)
             .await
         {
-            tracing::warn!(
-                channel = %event.broadcaster_user_login,
-                err = %e,
-                "reply_plain send fehlgeschlagen"
-            );
+            Ok(SendOutcome::Sent) => true,
+            Ok(SendOutcome::Dropped { code, message }) => {
+                tracing::warn!(
+                    channel = %event.broadcaster_user_login,
+                    code = %code,
+                    message = %message,
+                    "reply_plain von Twitch verworfen"
+                );
+                false
+            }
+            Ok(SendOutcome::HttpError { status, body }) => {
+                tracing::warn!(
+                    channel = %event.broadcaster_user_login,
+                    status = status,
+                    body = %body,
+                    "reply_plain HTTP-Fehler"
+                );
+                false
+            }
+            Err(e) => {
+                tracing::warn!(
+                    channel = %event.broadcaster_user_login,
+                    err = %e,
+                    "reply_plain send fehlgeschlagen"
+                );
+                false
+            }
         }
     }
 
@@ -1112,6 +1171,11 @@ impl CommandEngine {
             }
         };
 
+        if self.raid_enabled(&partner.twitch_user_id).await != Some(true) {
+            self.reply(event, "__CLAUDE_TEXT_P3_3_RAID_NOAUTH__").await;
+            return;
+        }
+
         // _is_fully_authed — commands.py:265
         if !self.is_fully_authed(&partner.twitch_user_id).await {
             self.reply(
@@ -1128,14 +1192,14 @@ impl CommandEngine {
             .manual_raid(&partner.twitch_user_id, &partner.twitch_login)
             .await
         {
-            Ok(status) => {
+            Ok(result) => {
                 let chatter = &event.chatter_user_login;
-                let msg = match status.as_str() {
+                let target_login = result.target_login.as_deref().unwrap_or("");
+                let msg = match result.status.as_str() {
                     "started" => {
-                        // commands.py:279 — target_login wird von der Raid-Engine bestimmt.
-                        // UNSICHER: Für den vollständigen "@chatter Raid auf {target} gestartet!"-
-                        // Text würde RaidCommandPort ein strukturiertes Ergebnis liefern müssen.
-                        format!("@{chatter} Raid gestartet! (Twitch-Countdown ~90s)")
+                        format!(
+                            "__CLAUDE_TEXT_P2_17_RAID_STARTED__ chatter={chatter} target_login={target_login}"
+                        )
                     }
                     "source_not_live" => format!(
                         "@{chatter} Kein Stream gefunden, von dem aus geraidet werden kann."
@@ -1449,18 +1513,16 @@ impl CommandEngine {
 
         let channel_login = event.broadcaster_user_login.to_lowercase();
         let chatter_login = event.chatter_user_login.to_lowercase();
+        let cooldown_key = (channel_login.clone(), chatter_login.clone());
 
         // Cooldown-Check: 1h pro (channel, chatter) — bot.py:345
         {
-            let mut cooldowns = self.invite_cooldowns.lock().await;
-            let key = (channel_login.clone(), chatter_login.clone());
-            if let Some(&last) = cooldowns.get(&key) {
+            let cooldowns = self.invite_cooldowns.lock().await;
+            if let Some(&last) = cooldowns.get(&cooldown_key) {
                 if last.elapsed().as_secs() < INVITE_COOLDOWN_SECS {
                     return; // Cooldown aktiv → stilles Return
                 }
             }
-            // Cooldown setzen vor dem eigentlichen Call
-            cooldowns.insert(key, Instant::now());
         }
 
         match self
@@ -1469,7 +1531,15 @@ impl CommandEngine {
             .await
         {
             Ok(Some(reply)) if !reply.is_empty() => {
-                self.reply_plain(event, &reply).await;
+                if self.reply_plain(event, &reply).await {
+                    self.invite_cooldowns
+                        .lock()
+                        .await
+                        .insert(cooldown_key, Instant::now());
+                    if let Some(notifier) = &self.invite_reply_notifier {
+                        notifier.note_invite_reply(&channel_login).await;
+                    }
+                }
             }
             Ok(_) => {
                 // Kein Reply — stilles Return
@@ -1504,6 +1574,8 @@ impl CommandEngine {
     /// `enabled_at` = timestamptz, `enabled_by` = text, `updated_at` = timestamptz.
     async fn cmd_engagement_on(&self, event: &ChatMessageEvent) {
         if !self.is_engagement_admin(event).await {
+            self.reply(event, "__CLAUDE_TEXT_P3_4_ENGAGEMENT_DENIED__")
+                .await;
             return;
         }
         let channel_login = event.broadcaster_user_login.to_lowercase();
@@ -1545,6 +1617,8 @@ impl CommandEngine {
     /// `!engagement_off` — engagement_commands.py:127
     async fn cmd_engagement_off(&self, event: &ChatMessageEvent) {
         if !self.is_engagement_admin(event).await {
+            self.reply(event, "__CLAUDE_TEXT_P3_4_ENGAGEMENT_DENIED__")
+                .await;
             return;
         }
         let channel_login = event.broadcaster_user_login.to_lowercase();
@@ -1750,13 +1824,19 @@ mod tests {
 
     struct MockApi {
         sent: Mutex<Vec<(String, String)>>,
+        fail_next_sends: Mutex<usize>,
     }
 
     impl MockApi {
         fn new() -> Arc<Self> {
             Arc::new(Self {
                 sent: Mutex::new(vec![]),
+                fail_next_sends: Mutex::new(0),
             })
+        }
+
+        async fn fail_next_send(&self) {
+            *self.fail_next_sends.lock().await += 1;
         }
 
         async fn last_message(&self) -> Option<String> {
@@ -1775,6 +1855,12 @@ mod tests {
             broadcaster_id: &str,
             message: &str,
         ) -> Result<SendOutcome, String> {
+            let mut fail_next = self.fail_next_sends.lock().await;
+            if *fail_next > 0 {
+                *fail_next -= 1;
+                return Err("mock send failed".to_string());
+            }
+            drop(fail_next);
             self.sent
                 .lock()
                 .await
@@ -1814,25 +1900,39 @@ mod tests {
     }
 
     struct MockRaid {
-        manual_status: String,
+        manual_result: RaidStartResult,
+        manual_calls: Mutex<usize>,
         silent_ban_val: i32,
         silent_raid_val: i32,
     }
 
     impl MockRaid {
         fn default_arc() -> Arc<Self> {
+            Self::with_manual("started", Some("targetchannel"))
+        }
+
+        fn with_manual(status: &str, target_login: Option<&str>) -> Arc<Self> {
             Arc::new(Self {
-                manual_status: "started".to_string(),
+                manual_result: RaidStartResult {
+                    status: status.to_string(),
+                    target_login: target_login.map(str::to_string),
+                },
+                manual_calls: Mutex::new(0),
                 silent_ban_val: 1,
                 silent_raid_val: 0,
             })
+        }
+
+        async fn manual_call_count(&self) -> usize {
+            *self.manual_calls.lock().await
         }
     }
 
     #[async_trait]
     impl RaidCommandPort for MockRaid {
-        async fn manual_raid(&self, _: &str, _: &str) -> Result<String, String> {
-            Ok(self.manual_status.clone())
+        async fn manual_raid(&self, _: &str, _: &str) -> Result<RaidStartResult, String> {
+            *self.manual_calls.lock().await += 1;
+            Ok(self.manual_result.clone())
         }
         async fn raid_status(&self, _: &str) -> Result<RaidStatusInfo, String> {
             Ok(RaidStatusInfo {
@@ -1873,6 +1973,22 @@ mod tests {
         }
     }
 
+    struct SequenceInvite {
+        replies: Mutex<Vec<Option<String>>>,
+    }
+
+    #[async_trait]
+    impl InvitePort for SequenceInvite {
+        async fn invite_line(&self, _: &str, _: &str) -> Result<Option<String>, String> {
+            let mut replies = self.replies.lock().await;
+            if replies.is_empty() {
+                Ok(None)
+            } else {
+                Ok(replies.remove(0))
+            }
+        }
+    }
+
     struct MockSuperMod(bool);
     #[async_trait]
     impl SuperModPort for MockSuperMod {
@@ -1886,6 +2002,29 @@ mod tests {
     impl LastAutobanStore for MockAutoban {
         async fn last_autoban(&self, _: &str) -> Option<AutobanEntry> {
             self.0.clone()
+        }
+    }
+
+    struct RecordingInviteReplyNotifier {
+        channels: Mutex<Vec<String>>,
+    }
+
+    impl RecordingInviteReplyNotifier {
+        fn new() -> Arc<Self> {
+            Arc::new(Self {
+                channels: Mutex::new(Vec::new()),
+            })
+        }
+
+        async fn channels(&self) -> Vec<String> {
+            self.channels.lock().await.clone()
+        }
+    }
+
+    #[async_trait]
+    impl InviteReplyNotifier for RecordingInviteReplyNotifier {
+        async fn note_invite_reply(&self, channel_login: &str) {
+            self.channels.lock().await.push(channel_login.to_string());
         }
     }
 
@@ -2109,6 +2248,33 @@ mod tests {
             .unwrap()
     }
 
+    async fn seed_partner(pool: &PgPool) {
+        sqlx::query(
+            "CREATE TABLE IF NOT EXISTS twitch_streamers (twitch_login TEXT, twitch_user_id TEXT, is_monitored_only INTEGER DEFAULT 0)",
+        )
+        .execute(pool)
+        .await
+        .unwrap();
+        sqlx::query(
+            "INSERT INTO twitch_streamers_partner_state (twitch_login, twitch_user_id, is_partner_active, raid_bot_enabled) VALUES ('testchannel', 'bc123', 1, 1)",
+        )
+        .execute(pool)
+        .await
+        .unwrap();
+        sqlx::query(
+            "INSERT INTO twitch_streamers (twitch_login, twitch_user_id, is_monitored_only) VALUES ('testchannel', 'bc123', 0)",
+        )
+        .execute(pool)
+        .await
+        .unwrap();
+        sqlx::query(
+            "INSERT INTO twitch_partners (twitch_login, twitch_user_id) VALUES ('testchannel', 'bc123')",
+        )
+        .execute(pool)
+        .await
+        .unwrap();
+    }
+
     async fn apply_ddl(pool: &PgPool) {
         for ddl in [
             // twitch_streamers_partner_state — prod-treu: is_partner_active INTEGER
@@ -2309,6 +2475,28 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn engagement_denied_replies_for_on_and_off() {
+        let pool = pool_or_skip!("cmd_engagement_denied");
+        apply_ddl(&pool).await;
+        let api = MockApi::new();
+        let engine = make_engine_with_pool(pool.clone(), api.clone());
+
+        engine
+            .handle(&make_event("!engagement_on", false, false))
+            .await;
+        engine
+            .handle(&make_event("!engagement_off", false, false))
+            .await;
+
+        assert_eq!(api.message_count().await, 2);
+        let msg = api.last_message().await.unwrap();
+        assert!(
+            msg.contains("__CLAUDE_TEXT_P3_4_ENGAGEMENT_DENIED__"),
+            "Meldung: {msg}"
+        );
+    }
+
+    #[tokio::test]
     async fn engagement_off_setzt_enabled_false() {
         let pool = pool_or_skip!("cmd_engagement_off");
         apply_ddl(&pool).await;
@@ -2461,6 +2649,78 @@ mod tests {
         );
     }
 
+    #[tokio::test]
+    async fn raid_noauth_gate_uses_specific_placeholder_and_skips_manual_call() {
+        let pool = pool_or_skip!("cmd_raid_noauth_gate");
+        apply_ddl(&pool).await;
+        let api = MockApi::new();
+        seed_partner(&pool).await;
+        sqlx::query(
+            "INSERT INTO twitch_raid_auth (twitch_user_id, raid_enabled, needs_reauth) VALUES ('bc123', FALSE, FALSE)",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+
+        let raid = MockRaid::default_arc();
+        let engine = CommandEngine::new(
+            pool,
+            api.clone(),
+            raid.clone(),
+            Arc::new(MockDiscordLink { url: None }),
+            Arc::new(MockInvite { reply: None }),
+            Arc::new(MockSuperMod(false)),
+            Arc::new(MockAutoban(None)),
+        );
+
+        engine.handle(&make_event("!raid", true, false)).await;
+
+        assert_eq!(raid.manual_call_count().await, 0);
+        let msg = api.last_message().await.unwrap();
+        assert!(
+            msg.contains("__CLAUDE_TEXT_P3_3_RAID_NOAUTH__"),
+            "Meldung: {msg}"
+        );
+        assert!(
+            !msg.contains("!raid_enable"),
+            "No-auth reply must not reference removed command: {msg}"
+        );
+    }
+
+    #[tokio::test]
+    async fn raid_started_reply_contains_target_login_placeholder() {
+        let pool = pool_or_skip!("cmd_raid_started_target");
+        apply_ddl(&pool).await;
+        let api = MockApi::new();
+        seed_partner(&pool).await;
+        sqlx::query(
+            "INSERT INTO twitch_raid_auth (twitch_user_id, raid_enabled, needs_reauth) VALUES ('bc123', TRUE, FALSE)",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+
+        let engine = CommandEngine::new(
+            pool,
+            api.clone(),
+            MockRaid::with_manual("started", Some("targetstreamer")),
+            Arc::new(MockDiscordLink { url: None }),
+            Arc::new(MockInvite { reply: None }),
+            Arc::new(MockSuperMod(false)),
+            Arc::new(MockAutoban(None)),
+        );
+
+        engine.handle(&make_event("!raid", true, false)).await;
+
+        let msg = api.last_message().await.unwrap();
+        assert!(
+            msg.contains("__CLAUDE_TEXT_P2_17_RAID_STARTED__"),
+            "Meldung: {msg}"
+        );
+        assert!(msg.contains("testuser"), "Meldung: {msg}");
+        assert!(msg.contains("targetstreamer"), "Meldung: {msg}");
+    }
+
     // !raid_enable / !raidbot entfällt (Grillme Block 8 — „in oder raus"). Die
     // Statuszeile und der gedroppte Befehl dürfen keinen toten !raid_enable-
     // Hinweis mehr ausgeben.
@@ -2534,6 +2794,7 @@ mod tests {
     async fn invite_cooldown_verhindert_doppelaufruf() {
         let pool = pool_or_skip!("cmd_invite_cd");
         apply_ddl(&pool).await;
+        seed_partner(&pool).await;
         let api = MockApi::new();
         let engine = CommandEngine::new(
             pool,
@@ -2560,6 +2821,89 @@ mod tests {
             count_first, count_second,
             "Zweiter !invite muss durch Cooldown blockiert werden"
         );
+    }
+
+    #[tokio::test]
+    async fn invite_no_reply_does_not_consume_cooldown() {
+        let pool = pool_or_skip!("cmd_invite_no_reply_cd");
+        apply_ddl(&pool).await;
+        seed_partner(&pool).await;
+        let api = MockApi::new();
+        let engine = CommandEngine::new(
+            pool,
+            api.clone(),
+            MockRaid::default_arc(),
+            Arc::new(MockDiscordLink { url: None }),
+            Arc::new(SequenceInvite {
+                replies: Mutex::new(vec![None, Some("invite-ok".to_string())]),
+            }),
+            Arc::new(MockSuperMod(false)),
+            Arc::new(MockAutoban(None)),
+        );
+
+        let event = make_event("!invite", false, false);
+        engine.handle(&event).await;
+        assert_eq!(api.message_count().await, 0);
+
+        engine.handle(&event).await;
+        assert_eq!(api.message_count().await, 1);
+        let msg = api.last_message().await.unwrap();
+        assert!(msg.contains("invite-ok"), "Meldung: {msg}");
+    }
+
+    #[tokio::test]
+    async fn invite_send_error_does_not_consume_cooldown() {
+        let pool = pool_or_skip!("cmd_invite_send_error_cd");
+        apply_ddl(&pool).await;
+        seed_partner(&pool).await;
+        let api = MockApi::new();
+        api.fail_next_send().await;
+        let engine = CommandEngine::new(
+            pool,
+            api.clone(),
+            MockRaid::default_arc(),
+            Arc::new(MockDiscordLink { url: None }),
+            Arc::new(MockInvite {
+                reply: Some("invite-ok".to_string()),
+            }),
+            Arc::new(MockSuperMod(false)),
+            Arc::new(MockAutoban(None)),
+        );
+
+        let event = make_event("!invite", false, false);
+        engine.handle(&event).await;
+        assert_eq!(api.message_count().await, 0);
+
+        engine.handle(&event).await;
+        assert_eq!(api.message_count().await, 1);
+        let msg = api.last_message().await.unwrap();
+        assert!(msg.contains("invite-ok"), "Meldung: {msg}");
+    }
+
+    #[tokio::test]
+    async fn invite_success_marks_promo_cooldown_seam() {
+        let pool = pool_or_skip!("cmd_invite_promo_seam");
+        apply_ddl(&pool).await;
+        seed_partner(&pool).await;
+        let api = MockApi::new();
+        let notifier = RecordingInviteReplyNotifier::new();
+        let engine = CommandEngine::new(
+            pool,
+            api.clone(),
+            MockRaid::default_arc(),
+            Arc::new(MockDiscordLink { url: None }),
+            Arc::new(MockInvite {
+                reply: Some("invite-ok".to_string()),
+            }),
+            Arc::new(MockSuperMod(false)),
+            Arc::new(MockAutoban(None)),
+        )
+        .set_invite_reply_notifier(notifier.clone());
+
+        engine.handle(&make_event("!invite", false, false)).await;
+
+        assert_eq!(api.message_count().await, 1);
+        assert_eq!(notifier.channels().await, vec!["testchannel".to_string()]);
     }
 
     // -----------------------------------------------------------------------
