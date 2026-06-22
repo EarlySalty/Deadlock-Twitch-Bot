@@ -175,13 +175,16 @@ impl SessionStore {
                 streamer_login, stream_id, started_at, start_viewers, peak_viewers,
                 end_viewers, avg_viewers, samples, followers_start, stream_title,
                 language, is_mature, tags, game_name, had_deadlock_in_session
-            ) VALUES ($1, $2, $3, $4, $4, $4, $5, 0, $6, $7, $8, $9, $10, $11, $12)
+            ) VALUES ($1, $2, $3::timestamptz, $4, $4, $4, $5, 0, $6, $7, $8, $9, $10, $11, $12)
             RETURNING id
             "#,
         )
         .bind(&new.streamer_login)
         .bind(&new.stream_id)
-        // P2.38: started_at als ISO-TEXT binden (Prod-Spalte ist TEXT).
+        // started_at als ISO-TEXT binden, im SQL nach timestamptz casten — die
+        // Prod-Spalte ist timestamptz (der Text-Bind ohne Cast schlug fehl:
+        // "column started_at is of type timestamptz but expression is of type text").
+        // Der Cast funktioniert sowohl für timestamptz- als auch (Legacy-)TEXT-Spalten.
         .bind(iso_seconds(new.started_at))
         .bind(new.viewer_count)
         .bind(f64::from(new.viewer_count))
@@ -423,7 +426,7 @@ impl SessionStore {
         let updated = sqlx::query(
             r#"
             UPDATE twitch_stream_sessions
-               SET ended_at = $1,
+               SET ended_at = $1::timestamptz,
                    duration_seconds = $2,
                    end_viewers = $3,
                    peak_viewers = $4,
@@ -445,7 +448,8 @@ impl SessionStore {
              WHERE id = $20 AND ended_at IS NULL
             "#,
         )
-        // P2.38: ended_at als ISO-TEXT binden (Prod-Spalte ist TEXT).
+        // ended_at als ISO-TEXT binden, im SQL nach timestamptz casten
+        // (Prod-Spalte ist timestamptz — siehe started_at-Begründung im INSERT).
         .bind(iso_seconds(update.ended_at))
         .bind(update.duration_seconds)
         .bind(update.end_viewers)
