@@ -1,3 +1,15 @@
+## #252 — Streamer-Hilfe, Go-Live-Tipps, !rank und geführtes Onboarding
+
+**Problem:** Viele Streamer wussten kaum, was der Bot alles kann — es fehlten eine zentrale Hilfe, Hinweise direkt im Stream und ein einfacher Einstieg. Und es gab keinen Weg, den eigenen Deadlock-Rang im Chat zu zeigen.
+
+**Änderung:** Mehrere zusammenhängende Bausteine sind dazugekommen, die alle aus derselben gepflegten Wissensbasis schöpfen:
+- **Hilfeseite & Befehls-Übersicht:** Es gibt jetzt eine Hilfeseite mit erklärtem Bot-Wissen und eine gruppierte Übersicht aller Chat-Befehle. Im Chat führen `!commands` (Link zur Übersicht) und `!help <thema>` (Kurzerklärung mit Link) dorthin.
+- **Tipp beim Live-Gehen:** Gehst du mit Deadlock live, postet der Bot eine kurze, wechselnde Tipp-Nachricht als erste Chat-Zeile — er wählt klug (Unbenutztes und lange Vergessenes zuerst), hält mindestens 12 Stunden Abstand und ist im Dashboard abschaltbar.
+- **`!rank`:** Hast du deinen Steam-Account (über den Discord) verknüpft, zeigt `!rank` deinen aktuellen Deadlock-Rang im Chat.
+- **Onboarding-Wizard:** Neue Streamer werden im Dashboard Schritt für Schritt durch die Funktionen, die Discord- und Steam-Verknüpfung und die Go-Live-Tipps geführt — resumierbar und mit sichtbarem Fortschritt.
+
+**Ergebnis:** Streamer verstehen schneller, was der Bot kann, bekommen Hinweise im richtigen Moment und können ihren Rang zeigen. Alles speist sich aus einer einzigen Wissensquelle, sodass nichts doppelt gepflegt werden muss.
+
 ## #251 — Chat-Schutz erkennt die „Headset-kaputt, schreib mir privat"-Masche
 
 **Problem:** Eine verbreitete Betrugsmasche rutschte durch den Chat-Schutz: Ein Erstschreiber täuscht ohne Anlass ein technisches Problem vor („mein Headset geht nicht, antworte mir im Chat") und versucht so, das Gespräch sofort von Twitch weg ins Private zu ziehen — der erste Schritt vieler Scams. Weil diese erste Nachricht kurz war und kein bisher bekanntes Stichwort enthielt, nahm der Wächter sie gar nicht erst unter die Lupe.
