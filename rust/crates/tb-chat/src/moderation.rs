@@ -662,7 +662,6 @@ impl ModerationEngine {
 
 #[async_trait]
 impl LastAutobanStore for ModerationEngine {
-    // WIRING-TODO(P2.16): EngineAutobanStore loeschen, ModerationEngine direkt als Arc<dyn LastAutobanStore> wiren
     async fn last_autoban(&self, channel_key: &str) -> Option<AutobanEntry> {
         self.last_autoban(channel_key)
             .await

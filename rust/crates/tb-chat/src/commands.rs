@@ -146,7 +146,6 @@ pub trait RaidCommandPort: Send + Sync {
     /// Startet einen manuellen Raid für den gegebenen Broadcaster.
     /// Gibt Status (`"started"`, `"source_not_live"`, `"source_not_eligible"`,
     /// `"no_target"`, `"unavailable"`, oder Error-String) plus Zielkanal zurück.
-    // WIRING-TODO(P2.17): Adapter muss target_login aus JSON füllen.
     async fn manual_raid(
         &self,
         broadcaster_id: &str,
@@ -203,7 +202,6 @@ pub trait InvitePort: Send + Sync {
 }
 
 /// Seam, um erfolgreiche `!invite`-Replies in den Promo-Gesamtcooldown zu koppeln.
-// WIRING-TODO(P2.13): PromoEngine-Handle in CommandEngine verdrahten (chat_wiring).
 #[async_trait]
 pub trait InviteReplyNotifier: Send + Sync {
     async fn note_invite_reply(&self, channel_login: &str);
@@ -290,7 +288,7 @@ pub struct CommandEngine {
     raid: Arc<dyn RaidCommandPort>,
     discord_link: Arc<dyn DiscordLinkPort>,
     invite: Arc<dyn InvitePort>,
-    super_mod: Arc<dyn SuperModPort>,
+    _super_mod: Arc<dyn SuperModPort>,
     autoban: Arc<dyn LastAutobanStore>,
     /// Optionaler Clip-Port (`!clip`). `None` → Migrations-Hinweis.
     clip: Option<Arc<dyn ClipPort>>,
@@ -321,7 +319,7 @@ impl CommandEngine {
             raid,
             discord_link,
             invite,
-            super_mod,
+            _super_mod: super_mod,
             autoban,
             clip: None,
             scam: None,
@@ -449,14 +447,6 @@ impl CommandEngine {
             }
             "!help" => {
                 self.cmd_help(event, args).await;
-                true
-            }
-            "!engagement_on" => {
-                self.cmd_engagement_on(event).await;
-                true
-            }
-            "!engagement_off" => {
-                self.cmd_engagement_off(event).await;
                 true
             }
             "!engagement_status" => {
@@ -1172,7 +1162,8 @@ impl CommandEngine {
         };
 
         if self.raid_enabled(&partner.twitch_user_id).await != Some(true) {
-            self.reply(event, "__CLAUDE_TEXT_P3_3_RAID_NOAUTH__").await;
+            self.reply(event, "Raids sind für diesen Kanal nicht aktiviert.")
+                .await;
             return;
         }
 
@@ -1198,7 +1189,7 @@ impl CommandEngine {
                 let msg = match result.status.as_str() {
                     "started" => {
                         format!(
-                            "__CLAUDE_TEXT_P2_17_RAID_STARTED__ chatter={chatter} target_login={target_login}"
+                            "@{chatter} Raid auf {target_login} gestartet! (Twitch-Countdown ~90s)"
                         )
                     }
                     "source_not_live" => format!(
@@ -1558,99 +1549,6 @@ impl CommandEngine {
     // -----------------------------------------------------------------------
     // Engagement-Commands — engagement_commands.py
     // -----------------------------------------------------------------------
-
-    /// Prüft ob der Aufrufer berechtigt ist (Broadcaster, Mod oder Super-Mod).
-    /// `engagement_commands.py:101`
-    async fn is_engagement_admin(&self, event: &ChatMessageEvent) -> bool {
-        if event.is_mod_or_broadcaster() {
-            return true;
-        }
-        self.super_mod.is_super_mod(&event.chatter_user_id).await
-    }
-
-    /// `!engagement_on` — engagement_commands.py:101
-    ///
-    /// Prod-Schema: `twitch_engagement_settings.enabled` = boolean,
-    /// `enabled_at` = timestamptz, `enabled_by` = text, `updated_at` = timestamptz.
-    async fn cmd_engagement_on(&self, event: &ChatMessageEvent) {
-        if !self.is_engagement_admin(event).await {
-            self.reply(event, "__CLAUDE_TEXT_P3_4_ENGAGEMENT_DENIED__")
-                .await;
-            return;
-        }
-        let channel_login = event.broadcaster_user_login.to_lowercase();
-        let actor_id = event.chatter_user_id.clone();
-
-        let result = sqlx::query(
-            r#"
-            INSERT INTO twitch_engagement_settings
-                (channel_login, enabled, enabled_at, enabled_by, updated_at)
-            VALUES ($1, TRUE, NOW(), $2, NOW())
-            ON CONFLICT (channel_login) DO UPDATE SET
-                enabled = TRUE,
-                enabled_at = NOW(),
-                enabled_by = COALESCE(EXCLUDED.enabled_by, twitch_engagement_settings.enabled_by),
-                updated_at = NOW()
-            "#,
-        )
-        .bind(&channel_login)
-        .bind(&actor_id)
-        .execute(&self.pool)
-        .await;
-
-        match result {
-            Ok(_) => {
-                self.reply(
-                    event,
-                    "AI-Engagement aktiviert. Deaktiviert sich automatisch bei Stream-Ende.",
-                )
-                .await;
-            }
-            Err(e) => {
-                tracing::error!(channel = %channel_login, err = %e, "engagement_on INSERT fehlgeschlagen");
-                self.reply(event, "Fehler beim Aktivieren, schau in die Logs.")
-                    .await;
-            }
-        }
-    }
-
-    /// `!engagement_off` — engagement_commands.py:127
-    async fn cmd_engagement_off(&self, event: &ChatMessageEvent) {
-        if !self.is_engagement_admin(event).await {
-            self.reply(event, "__CLAUDE_TEXT_P3_4_ENGAGEMENT_DENIED__")
-                .await;
-            return;
-        }
-        let channel_login = event.broadcaster_user_login.to_lowercase();
-        let actor_id = event.chatter_user_id.clone();
-
-        let result = sqlx::query(
-            r#"
-            INSERT INTO twitch_engagement_settings
-                (channel_login, enabled, enabled_by, updated_at)
-            VALUES ($1, FALSE, $2, NOW())
-            ON CONFLICT (channel_login) DO UPDATE SET
-                enabled = FALSE,
-                enabled_by = COALESCE(EXCLUDED.enabled_by, twitch_engagement_settings.enabled_by),
-                updated_at = NOW()
-            "#,
-        )
-        .bind(&channel_login)
-        .bind(&actor_id)
-        .execute(&self.pool)
-        .await;
-
-        match result {
-            Ok(_) => {
-                self.reply(event, "AI-Engagement deaktiviert.").await;
-            }
-            Err(e) => {
-                tracing::error!(channel = %channel_login, err = %e, "engagement_off INSERT fehlgeschlagen");
-                self.reply(event, "Fehler beim Deaktivieren, schau in die Logs.")
-                    .await;
-            }
-        }
-    }
 
     /// `!engagement_status` — engagement_commands.py:150
     ///
@@ -2452,77 +2350,6 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn engagement_on_schreibt_in_db() {
-        let pool = pool_or_skip!("cmd_engagement_on");
-        apply_ddl(&pool).await;
-        let api = MockApi::new();
-        let engine = make_engine_with_pool(pool.clone(), api.clone());
-
-        let event = make_event("!engagement_on", true, false);
-        let handled = engine.handle(&event).await;
-        assert!(handled);
-
-        let msg = api.last_message().await.unwrap();
-        assert!(msg.contains("AI-Engagement aktiviert"), "Meldung: {msg}");
-
-        let row = sqlx::query_as::<_, (bool,)>(
-            "SELECT enabled FROM twitch_engagement_settings WHERE channel_login = 'testchannel'",
-        )
-        .fetch_one(&pool)
-        .await
-        .unwrap();
-        assert!(row.0);
-    }
-
-    #[tokio::test]
-    async fn engagement_denied_replies_for_on_and_off() {
-        let pool = pool_or_skip!("cmd_engagement_denied");
-        apply_ddl(&pool).await;
-        let api = MockApi::new();
-        let engine = make_engine_with_pool(pool.clone(), api.clone());
-
-        engine
-            .handle(&make_event("!engagement_on", false, false))
-            .await;
-        engine
-            .handle(&make_event("!engagement_off", false, false))
-            .await;
-
-        assert_eq!(api.message_count().await, 2);
-        let msg = api.last_message().await.unwrap();
-        assert!(
-            msg.contains("__CLAUDE_TEXT_P3_4_ENGAGEMENT_DENIED__"),
-            "Meldung: {msg}"
-        );
-    }
-
-    #[tokio::test]
-    async fn engagement_off_setzt_enabled_false() {
-        let pool = pool_or_skip!("cmd_engagement_off");
-        apply_ddl(&pool).await;
-        let api = MockApi::new();
-        let engine = make_engine_with_pool(pool.clone(), api.clone());
-
-        engine
-            .handle(&make_event("!engagement_on", true, false))
-            .await;
-        engine
-            .handle(&make_event("!engagement_off", true, false))
-            .await;
-
-        let row = sqlx::query_as::<_, (bool,)>(
-            "SELECT enabled FROM twitch_engagement_settings WHERE channel_login = 'testchannel'",
-        )
-        .fetch_one(&pool)
-        .await
-        .unwrap();
-        assert!(!row.0);
-
-        let msg = api.last_message().await.unwrap();
-        assert!(msg.contains("deaktiviert"), "Meldung: {msg}");
-    }
-
-    #[tokio::test]
     async fn engagement_ignore_me_schreibt_optout() {
         let pool = pool_or_skip!("cmd_engagement_ignore");
         apply_ddl(&pool).await;
@@ -2678,7 +2505,7 @@ mod tests {
         assert_eq!(raid.manual_call_count().await, 0);
         let msg = api.last_message().await.unwrap();
         assert!(
-            msg.contains("__CLAUDE_TEXT_P3_3_RAID_NOAUTH__"),
+            msg.contains("nicht aktiviert"),
             "Meldung: {msg}"
         );
         assert!(
@@ -2714,7 +2541,7 @@ mod tests {
 
         let msg = api.last_message().await.unwrap();
         assert!(
-            msg.contains("__CLAUDE_TEXT_P2_17_RAID_STARTED__"),
+            msg.contains("Raid auf"),
             "Meldung: {msg}"
         );
         assert!(msg.contains("testuser"), "Meldung: {msg}");

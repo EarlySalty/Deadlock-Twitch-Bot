@@ -21,8 +21,8 @@ use std::time::Duration;
 use serde_json::Value;
 use sqlx::PgPool;
 use tb_chat::commands::{
-    AutobanEntry, ClipOutcome, ClipPort, CommandEngine, DiscordLinkPort, InvitePort,
-    LastAutobanStore, RaidCommandPort, RaidStatusInfo, SuperModPort,
+    ClipOutcome, ClipPort, CommandEngine, DiscordLinkPort, InvitePort, LastAutobanStore,
+    RaidCommandPort, RaidStartResult, RaidStatusInfo, SuperModPort,
 };
 use tb_chat::conversation_scam::{
     ConversationScamGuard, MiniMaxScamJudge, ScamGuardCommands, ScamGuardNotifier,
@@ -30,7 +30,9 @@ use tb_chat::conversation_scam::{
 use tb_chat::moderation::{
     HelixChatClient, ModerationEngine, OutboundSuppressionStore, TimeoutGuard, WERBEFREI_PITCH_MSG,
 };
-use tb_chat::promos::{InviteResolver, PartnerChannelCheck, PromoEngine};
+use tb_chat::promos::{
+    InviteResolver, PartnerChannelCheck, PresetPicker, PromoEngine, PromoPreset, RandomPresetPicker,
+};
 use tb_chat::scam_pitch::{AccountAgePort, ScamPitchDetector, SpamAiReviewer};
 use tb_chat::spam_filter::{LearnedPatterns, SpamFilter};
 use tb_chat::timeout_tracking::{
@@ -45,7 +47,7 @@ use tb_chat::{
 };
 use tb_crypto::FieldCipher;
 use tb_engagement::irc_reader::EngagementIrcReader;
-use tb_engagement::minimax_chat::EngagementMinimaxClient;
+use tb_engagement::minimax_chat::{ChatMessage, EngagementMinimaxClient};
 use tb_engagement::pipeline::EngagementPipeline;
 use tb_engagement::sender_auth::SenderAuthStore;
 use tb_engagement::stealth_sender::StealthSender;
@@ -64,6 +66,8 @@ const CHAT_SUB_RECONCILE_INTERVAL: Duration = Duration::from_secs(30 * 60);
 
 /// Fallback-Env für den globalen Discord-Invite (chat_command.rs / promos.py).
 const PROMO_DISCORD_INVITE_ENV: &str = "PROMO_DISCORD_INVITE";
+
+const MINIMAX_PRESET_SYSTEM_PROMPT: &str = "Du wählst für einen deutschen Twitch-Chat das am besten passende Discord-Einladungs-Preset aus. Du erhältst die verfügbaren Presets (jeweils im Format 'id: Text') und einige aktuelle Chat-Ausschnitte. Wähle das Preset, dessen Ton und Inhalt am besten zum Chat passen. Antworte ausschließlich mit der exakten Preset-id, ohne weitere Worte.";
 
 fn knowledge_dir() -> PathBuf {
     std::env::var("KNOWLEDGE_DIR")
@@ -567,7 +571,10 @@ pub async fn build_runtime(
                 Arc::clone(&token_manager) as Arc<dyn tb_chat::promos::BotScopeProvider>,
             )
             .set_invite_resolver(Arc::clone(&invite_resolver) as Arc<dyn InviteResolver>)
-            .set_partner_check(Arc::new(DbPartnerCheck { pool: pool.clone() })),
+            .set_partner_check(Arc::new(DbPartnerCheck { pool: pool.clone() }))
+            .set_preset_picker(Arc::new(MinimaxPresetPicker::new(
+                EngagementMinimaxClient::new(None, None, None, None),
+            ))),
     );
 
     let mut command_engine = CommandEngine::new(
@@ -580,9 +587,7 @@ pub async fn build_runtime(
         Arc::new(DbDiscordLink { pool: pool.clone() }),
         Arc::new(DbInvitePort { pool: pool.clone() }),
         Arc::new(DbSuperMod { pool: pool.clone() }),
-        Arc::new(EngineAutobanStore {
-            engine: Arc::clone(&moderation),
-        }),
+        Arc::clone(&moderation) as Arc<dyn LastAutobanStore>,
     );
     if let Some(cp) = clip_port {
         command_engine = command_engine.set_clip_port(cp);
@@ -591,6 +596,9 @@ pub async fn build_runtime(
         pool.clone(),
         EngagementMinimaxClient::new(None, None, None, None),
     )));
+    command_engine = command_engine.set_invite_reply_notifier(
+        Arc::clone(&promos) as Arc<dyn tb_chat::commands::InviteReplyNotifier>,
+    );
     let commands = Arc::new(command_engine);
 
     let review_log_dir =
@@ -1412,6 +1420,94 @@ impl AccountAgePort for HelixAccountAge {
     }
 }
 
+struct MinimaxPresetPicker {
+    client: EngagementMinimaxClient,
+}
+
+impl MinimaxPresetPicker {
+    fn new(client: EngagementMinimaxClient) -> Self {
+        Self { client }
+    }
+}
+
+#[async_trait::async_trait]
+impl PresetPicker for MinimaxPresetPicker {
+    async fn pick_preset<'a>(
+        &self,
+        presets: &'a [PromoPreset],
+        snippets: &[String],
+        target_login: &str,
+    ) -> &'a PromoPreset {
+        if presets.len() <= 1 || snippets.is_empty() {
+            return RandomPresetPicker
+                .pick_preset(presets, snippets, target_login)
+                .await;
+        }
+
+        let user_prompt = minimax_preset_user_prompt(presets, snippets, target_login);
+        let history = [ChatMessage {
+            role: "user".to_string(),
+            content: user_prompt,
+            name: None,
+        }];
+        match tokio::time::timeout(
+            Duration::from_secs(5),
+            self.client
+                .generate(MINIMAX_PRESET_SYSTEM_PROMPT, &history, 32, 128),
+        )
+        .await
+        {
+            Ok(Ok(response)) => {
+                if let Some(text) = response.text.as_deref() {
+                    if let Some(preset) = match_preset_id(presets, text) {
+                        return preset;
+                    }
+                }
+            }
+            Ok(Err(error)) => {
+                tracing::debug!(%error, "MiniMax preset picker failed");
+            }
+            Err(_) => {
+                tracing::debug!("MiniMax preset picker timeout");
+            }
+        }
+
+        RandomPresetPicker
+            .pick_preset(presets, snippets, target_login)
+            .await
+    }
+}
+
+fn minimax_preset_user_prompt(
+    presets: &[PromoPreset],
+    snippets: &[String],
+    target_login: &str,
+) -> String {
+    let mut prompt = format!("target_login: {target_login}\n\npresets:\n");
+    for preset in presets {
+        prompt.push_str(preset.id);
+        prompt.push_str(": ");
+        prompt.push_str(preset.text);
+        prompt.push('\n');
+    }
+    prompt.push_str("\nsnippets:\n");
+    for snippet in snippets {
+        prompt.push_str("- ");
+        prompt.push_str(snippet);
+        prompt.push('\n');
+    }
+    prompt.push_str("\nReturn exactly one preset id.");
+    prompt
+}
+
+fn match_preset_id<'a>(presets: &'a [PromoPreset], reply: &str) -> Option<&'a PromoPreset> {
+    let reply = reply.trim();
+    presets
+        .iter()
+        .find(|preset| reply == preset.id)
+        .or_else(|| presets.iter().find(|preset| reply.contains(preset.id)))
+}
+
 /// Raid-Commands: manueller Raid direkt über die tb-raid-Schicht
 /// (kein HTTP-Loop), Status/Toggles per SQL (commands.py Z. 94–128/423/479).
 struct RaidCommandAdapter {
@@ -1425,18 +1521,27 @@ impl RaidCommandPort for RaidCommandAdapter {
         &self,
         broadcaster_id: &str,
         broadcaster_login: &str,
-    ) -> Result<String, String> {
+    ) -> Result<RaidStartResult, String> {
         let Some(port) = &self.manual else {
-            return Ok("unavailable".to_string());
+            return Ok(RaidStartResult {
+                status: "unavailable".to_string(),
+                target_login: None,
+            });
         };
         let value = port
             .start_manual_raid(broadcaster_id, broadcaster_login)
             .await;
-        Ok(value
-            .get("status")
-            .and_then(Value::as_str)
-            .unwrap_or("unavailable")
-            .to_string())
+        Ok(RaidStartResult {
+            status: value
+                .get("status")
+                .and_then(Value::as_str)
+                .unwrap_or("unavailable")
+                .to_string(),
+            target_login: value
+                .get("target_login")
+                .and_then(Value::as_str)
+                .map(|s| s.to_string()),
+        })
     }
 
     async fn raid_status(&self, broadcaster_id: &str) -> Result<RaidStatusInfo, String> {
@@ -1622,21 +1727,6 @@ impl SuperModPort for DbSuperMod {
         .await
         .unwrap_or(None)
         .is_some()
-    }
-}
-
-/// !uban — letzter Auto-Ban aus dem In-Memory-Store der ModerationEngine.
-struct EngineAutobanStore {
-    engine: Arc<ModerationEngine>,
-}
-
-#[async_trait::async_trait]
-impl LastAutobanStore for EngineAutobanStore {
-    async fn last_autoban(&self, channel_key: &str) -> Option<AutobanEntry> {
-        self.engine.last_autoban(channel_key).map(|r| AutobanEntry {
-            user_id: r.user_id,
-            login: r.login,
-        })
     }
 }
 

@@ -43,6 +43,7 @@ use tokio::sync::Mutex;
 use tracing::{debug, info, warn};
 
 use crate::api::ChatApi;
+use crate::commands::InviteReplyNotifier;
 use crate::types::ChatMessageEvent;
 
 // ---------------------------------------------------------------------------
@@ -642,35 +643,6 @@ impl PromoEngine {
         }
     }
 
-    /// Sendet ein Announcement und fällt bei `Ok(false)` oder Transportfehler
-    /// auf Plain-Chat zurück. Suppression-Gates bleiben Sache des Aufrufers.
-    async fn send_announcement_with_plain_fallback(
-        &self,
-        login: &str,
-        channel_id: &str,
-        text: &str,
-        color: &str,
-        source: &str,
-    ) -> bool {
-        match self.api.send_announcement(channel_id, text, color).await {
-            Ok(true) => return true,
-            Ok(false) => {
-                debug!(
-                    login,
-                    color, "Announcement nicht zugestellt, versuche Plain-Chat-Fallback"
-                );
-            }
-            Err(error) => {
-                debug!(login, color, %error, "Announcement fehlgeschlagen, versuche Plain-Chat-Fallback");
-            }
-        }
-
-        let outcome = self.api.send_message(channel_id, text).await;
-        self.record_suppression_on_drop(login, channel_id, source, &outcome)
-            .await;
-        matches!(outcome, Ok(crate::types::SendOutcome::Sent))
-    }
-
     /// Setzt den InviteResolver (Default: StaticInviteResolver).
     pub fn set_invite_resolver(mut self, r: Arc<dyn InviteResolver>) -> Self {
         self.invite_resolver = r;
@@ -684,9 +656,6 @@ impl PromoEngine {
     }
 
     /// Setzt den PresetPicker (Default: RandomPresetPicker).
-    ///
-    // WIRING-TODO(P2.8): MinimaxPresetPicker via set_preset_picker in chat_wiring
-    // verdrahten (MiniMax-Client, 5s-Timeout, Fallback RandomPresetPicker).
     pub fn set_preset_picker(mut self, p: Arc<dyn PresetPicker>) -> Self {
         self.preset_picker = p;
         self
@@ -1013,10 +982,12 @@ impl PromoEngine {
         // Promo-Text bauen (promos.py:945).
         let text = self.build_promo_text(login, &invite, reason).await;
 
-        // Announcement senden (promos.py:1096, color="purple") mit Plain-Fallback.
+        // Announcement senden (promos.py:1096, color="purple").
         let sent = self
-            .send_announcement_with_plain_fallback(login, channel_id, &text, "purple", "promo")
-            .await;
+            .api
+            .send_announcement(channel_id, &text, "purple")
+            .await
+            .unwrap_or(false);
         if !sent {
             debug!(login, "Promo-Announcement nicht gesendet (Drop/Fehler)");
             // Cooldown NICHT verbrauchen bei Failed-Send (promos.py:1096: if not ok: return False).
@@ -1052,8 +1023,10 @@ impl PromoEngine {
             return false;
         }
         let sent = self
-            .send_announcement_with_plain_fallback(login, channel_id, message, "blue", "promo")
-            .await;
+            .api
+            .send_announcement(channel_id, message, "blue")
+            .await
+            .unwrap_or(false);
         if !sent {
             debug!(login, "Werbefrei-Pitch nicht gesendet (Drop/Fehler)");
             return false;
@@ -1619,8 +1592,10 @@ impl PromoEngine {
         let text = self.build_lurker_tax_text(&selected);
         // Nur bei erfolgreichem Send merken + Cooldown belegen (Python: if ok).
         let sent = self
-            .send_announcement_with_plain_fallback(login, channel_id, &text, "orange", "promo")
-            .await;
+            .api
+            .send_announcement(channel_id, &text, "orange")
+            .await
+            .unwrap_or(false);
         if !sent {
             return;
         }
@@ -1855,10 +1830,12 @@ impl PromoEngine {
             .replace("{login}", "");
         // Global → Announcement, color="purple" (promo_presets.py).
         // Python targeted_promo.py:264: `if not ok: return False` — Send-Ergebnis prüfen.
-        if !self
-            .send_announcement_with_plain_fallback(login, channel_id, &text, "purple", "promo")
+        let sent = self
+            .api
+            .send_announcement(channel_id, &text, "purple")
             .await
-        {
+            .unwrap_or(false);
+        if !sent {
             return false;
         }
 
@@ -2240,6 +2217,19 @@ impl PromoEngine {
     }
 }
 
+#[async_trait]
+impl InviteReplyNotifier for PromoEngine {
+    async fn note_invite_reply(&self, channel_login: &str) {
+        self.mark_promo_sent(
+            channel_login,
+            Instant::now(),
+            "invite_reply",
+            Utc::now().timestamp() as f64,
+        )
+        .await;
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Tests
 // ---------------------------------------------------------------------------
@@ -2274,17 +2264,34 @@ mod tests {
 
     #[derive(Default)]
     pub(super) struct MockApi {
+        announcement_result: Option<bool>,
         announcements: TokioMutex<Vec<(String, String, String)>>, // (id, text, color)
         messages: TokioMutex<Vec<(String, String)>>,
     }
 
     impl MockApi {
+        pub(super) fn announcement_dropped() -> Self {
+            Self {
+                announcement_result: Some(false),
+                ..Self::default()
+            }
+        }
+
         pub(super) async fn announcement_count(&self) -> usize {
             self.announcements.lock().await.len()
         }
 
         pub(super) async fn message_count(&self) -> usize {
             self.messages.lock().await.len()
+        }
+
+        pub(super) async fn announcement_colors(&self) -> Vec<String> {
+            self.announcements
+                .lock()
+                .await
+                .iter()
+                .map(|(_, _, color)| color.clone())
+                .collect()
         }
     }
 
@@ -2312,7 +2319,7 @@ mod tests {
                 message.to_string(),
                 color.to_string(),
             ));
-            Ok(true)
+            Ok(self.announcement_result.unwrap_or(true))
         }
         async fn ban_user(
             &self,
@@ -2343,115 +2350,6 @@ mod tests {
         async fn resolve_user_id(&self, _: &str) -> Result<Option<String>, String> {
             Ok(None)
         }
-        async fn bot_user_id(&self) -> String {
-            "bot-id".to_string()
-        }
-    }
-
-    pub(super) struct AnnouncementFallbackApi {
-        announcement_result: Result<bool, String>,
-        announcements: TokioMutex<Vec<(String, String, String)>>,
-        messages: TokioMutex<Vec<(String, String)>>,
-    }
-
-    impl AnnouncementFallbackApi {
-        pub(super) fn announcement_false() -> Self {
-            Self {
-                announcement_result: Ok(false),
-                announcements: TokioMutex::new(Vec::new()),
-                messages: TokioMutex::new(Vec::new()),
-            }
-        }
-
-        pub(super) fn announcement_error() -> Self {
-            Self {
-                announcement_result: Err("announcement failed".to_string()),
-                announcements: TokioMutex::new(Vec::new()),
-                messages: TokioMutex::new(Vec::new()),
-            }
-        }
-
-        pub(super) async fn announcement_count(&self) -> usize {
-            self.announcements.lock().await.len()
-        }
-
-        pub(super) async fn message_count(&self) -> usize {
-            self.messages.lock().await.len()
-        }
-
-        pub(super) async fn announcement_colors(&self) -> Vec<String> {
-            self.announcements
-                .lock()
-                .await
-                .iter()
-                .map(|(_, _, color)| color.clone())
-                .collect()
-        }
-    }
-
-    #[async_trait]
-    impl ChatApi for AnnouncementFallbackApi {
-        async fn send_message(
-            &self,
-            broadcaster_id: &str,
-            message: &str,
-        ) -> Result<SendOutcome, String> {
-            self.messages
-                .lock()
-                .await
-                .push((broadcaster_id.to_string(), message.to_string()));
-            Ok(SendOutcome::Sent)
-        }
-
-        async fn send_announcement(
-            &self,
-            broadcaster_id: &str,
-            message: &str,
-            color: &str,
-        ) -> Result<bool, String> {
-            self.announcements.lock().await.push((
-                broadcaster_id.to_string(),
-                message.to_string(),
-                color.to_string(),
-            ));
-            self.announcement_result.clone()
-        }
-
-        async fn ban_user(
-            &self,
-            _: &str,
-            _: &str,
-            _: &str,
-        ) -> Result<crate::api::BanOutcome, String> {
-            Ok(crate::api::BanOutcome::Banned)
-        }
-
-        async fn timeout_user(
-            &self,
-            _: &str,
-            _: &str,
-            _: u32,
-            _: &str,
-        ) -> Result<crate::api::BanOutcome, String> {
-            Ok(crate::api::BanOutcome::Banned)
-        }
-
-        async fn unban_user(&self, _: &str, _: &str) -> Result<bool, String> {
-            Ok(true)
-        }
-
-        async fn delete_message(&self, _: &str, _: &str) -> Result<bool, String> {
-            Ok(true)
-        }
-
-        async fn user_created_at(&self, _: &str) -> Result<Option<DateTime<Utc>>, String> {
-            Ok(None)
-        }
-
-        async fn resolve_user_id(&self, _: &str) -> Result<Option<String>, String> {
-            Ok(None)
-        }
-
         async fn bot_user_id(&self) -> String {
             "bot-id".to_string()
         }
@@ -2961,35 +2859,6 @@ mod tests {
             !engine.overall_promo_ready_inner(&state, Instant::now()),
             "Promo-Cooldown muss nach dem Pitch belegt sein"
         );
-    }
-
-    #[tokio::test]
-    async fn timeout_pitch_faellt_bei_announcement_false_auf_plain_chat_zurueck() {
-        let api = Arc::new(AnnouncementFallbackApi::announcement_false());
-        let engine = PromoEngine::new(dummy_pool(), api.clone(), Arc::new(NoopSuppressionCheck));
-
-        let sent = engine.send_timeout_pitch("123", "login", "PITCH-MSG").await;
-
-        assert!(
-            sent,
-            "Ok(false) vom Announcement muss per Plain-Chat fallbacken"
-        );
-        assert_eq!(api.announcement_count().await, 1);
-        assert_eq!(api.message_count().await, 1);
-        assert_eq!(api.announcement_colors().await, vec!["blue".to_string()]);
-    }
-
-    #[tokio::test]
-    async fn timeout_pitch_faellt_bei_announcement_error_auf_plain_chat_zurueck() {
-        let api = Arc::new(AnnouncementFallbackApi::announcement_error());
-        let engine = PromoEngine::new(dummy_pool(), api.clone(), Arc::new(NoopSuppressionCheck));
-
-        let sent = engine.send_timeout_pitch("123", "login", "PITCH-MSG").await;
-
-        assert!(sent, "Err vom Announcement muss per Plain-Chat fallbacken");
-        assert_eq!(api.announcement_count().await, 1);
-        assert_eq!(api.message_count().await, 1);
-        assert_eq!(api.announcement_colors().await, vec!["blue".to_string()]);
     }
 
     // Plan-Entitlement-Mapping (chat.lurker_tax / chat.promos.disable inkl.
@@ -3827,9 +3696,9 @@ mod db_tests {
     }
 
     #[tokio::test]
-    async fn lurker_tax_sendet_orange_announcement_mit_plain_fallback() {
-        let pool = pool_or_skip!("promo_lurker_announcement_fallback");
-        let api = Arc::new(super::tests::AnnouncementFallbackApi::announcement_false());
+    async fn lurker_tax_sendet_orange_announcement_ohne_plain_fallback() {
+        let pool = pool_or_skip!("promo_lurker_announcement_drop");
+        let api = Arc::new(super::tests::MockApi::announcement_dropped());
         let engine = PromoEngine::new(pool.clone(), api.clone(), Arc::new(NoopSuppressionCheck))
             .set_bot_scope_provider(Arc::new(super::tests::FakeBotScopes(vec![
                 "moderator:read:chatters".into(),
@@ -3903,8 +3772,8 @@ mod db_tests {
         assert_eq!(api.announcement_colors().await, vec!["orange".to_string()]);
         assert_eq!(
             api.message_count().await,
-            1,
-            "Announcement-Drop muss Plain-Chat fallbacken"
+            0,
+            "Lurker-Tax darf keinen Plain-Chat-Fallback senden"
         );
     }
 
