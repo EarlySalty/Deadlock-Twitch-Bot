@@ -1,3 +1,11 @@
+## #255 — Robustere Twitch-Anbindung, genauere Auswertungen und gehärtete Anmeldung
+
+**Problem:** Nach dem Sprachumbau fehlten noch mehrere Robustheits- und Genauigkeits-Details der alten Version. Kurzzeitige Twitch-API-Aussetzer führten sofort zu Fehlern statt zu einem zweiten Versuch; einige Auswertungsseiten antworteten bei Datenbankproblemen mit einem harten Serverfehler statt mit einer leeren, gekennzeichneten Ansicht; Werbepausen flossen nicht in die Zuschauer-Verlaufskurve ein; und an der Admin-Anmeldung fehlte eine Geräte-/IP-Bindung.
+
+**Änderung:** Die Twitch-Anbindung versucht transiente Fehler (5xx, Verbindungsabbrüche) jetzt bis zu dreimal mit Backoff und nutzt ein großzügigeres Zeitlimit; wiederholte ungültige-Client-Fehler werden für 15 Minuten ausgebremst, statt Twitch weiter zu hämmern. Auswertungen rechnen genauer und robuster: Werbepausen werden in der Verlaufskurve als solche erkannt, Zuschauer-Kennzahlen berücksichtigen wieder fehlende Zeitstempel korrekt, Admin-Bewertungen werden dem richtigen Konto zugeordnet, und Analyse-Seiten liefern bei Datenbankproblemen eine saubere „keine Daten"-Ansicht statt eines Serverfehlers. Die Admin-Anmeldung bindet die Sitzung an Gerät und Herkunft, und abgelehnte Zugriffe liefern eine klare, maschinenlesbare Begründung. Im Hintergrund wurde zudem ein Beobachtungs-Subsystem für Raid- und Analyse-Abläufe angelegt (Grundlage für spätere Diagnose-Ansichten).
+
+**Ergebnis:** Der Bot übersteht kurze Twitch-Störungen ohne sofortigen Abbruch, die Dashboards zeigen genauere Zahlen und fallen bei Datenproblemen weich zurück, und die Admin-Anmeldung ist sicherer. Damit sind weitere Umbau-Reste geschlossen.
+
 ## #254 — Einrichtungs-Assistent jetzt direkt im Verwaltungs-Dashboard
 
 **Problem:** Der geführte Einrichtungs-Assistent (Steam- und Discord-Verknüpfung, Go-Live-Posts an/aus, Schritt-Checkliste) war nur als Reiter im Analyse-Dashboard erreichbar. Wer das Verwaltungs-Dashboard öffnete — die naheliegende Stelle zum Einrichten — fand die neuen Optionen dort gar nicht.
