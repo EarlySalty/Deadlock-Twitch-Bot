@@ -1,3 +1,11 @@
+## #270 — Overlay: Spielmodus-Filter (Standard / Street Brawl) + aufgeräumter Baukasten
+
+**Problem:** Im Overlay vermischten sich alle Spielmodi — Street-Brawl-Partien verzerrten die „echte" Winrate und Serie der Standard-Matches. Außerdem hatte der Baukasten eine Positions-Auswahl, die nichts brachte (in OBS verschiebt man die Quelle ohnehin per Hand), und die Vorschau schnitt größere Overlays ab.
+
+**Änderung:** Im Baukasten gibt es jetzt einen Spielmodus-Filter (Alle Modi, Standard, Street Brawl). Winrate, heutige Bilanz, Serie, K/D und der Match-Verlauf beziehen sich dann nur noch auf den gewählten Modus; Rang, MMR-Trend und Live-Status bleiben modusunabhängig. Die überflüssige Positions-Auswahl ist entfernt — das Overlay sitzt standardmäßig oben links, platziert wird es in OBS. Die Vorschau zeigt jetzt die komplette Karte ohne Abschneiden und nennt die passende OBS-Größe.
+
+**Ergebnis:** Streamer können ihre Standard-Stats sauber von Street Brawl trennen, und der Baukasten ist aufgeräumter und zeigt direkt, was in OBS ankommt.
+
 ## #269 — Overlay: Hero-Bilder im Match-Verlauf + aufgeräumte Optik
 
 **Problem:** Im überarbeiteten Overlay zeigte der Match-Verlauf nur farbige Kreise statt der Hero-Bilder — diese wurden im Browser unzuverlässig nachgeladen und fielen oft ganz aus. Außerdem konnte die Verlaufsreihe über den Kartenrand hinauslaufen, und die empfohlene OBS-Größe passte nicht zur tatsächlichen Kartengröße.
