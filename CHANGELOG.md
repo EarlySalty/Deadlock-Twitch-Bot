@@ -1,3 +1,11 @@
+## #271 — Stille Zuschauer, Anwesenheit und Raid-Treue werden wieder erfasst
+
+**Problem:** Seit der Umstellung auf die neue Bot-Generation wurden Zuschauer nur noch erfasst, wenn sie im Chat schrieben. Stille Mitschauer blieben unsichtbar — und damit liefen die Anwesenheits- und Watchtime-Verläufe sowie die Auswertung, wie viele zugeführte Zuschauer nach einem Raid hängen bleiben, ins Leere.
+
+**Änderung:** Ein Hintergrund-Dienst fragt jetzt alle 30 Sekunden für jeden Live-Kanal die vollständige Zuschauerliste über die offizielle Twitch-Schnittstelle ab. Bevorzugt läuft das über das Bot-Konto; ist der Bot in einem Partner-Kanal kein Moderator mehr, stellt er den Status selbst wieder her (höchstens alle zehn Minuten ein erneuter Versuch). Für Raid-Kanäle springt ersatzweise das Streamer-Token ein. Alle Anwesenden — auch die stillen — werden als Sitzungs-Zuschauer, in der dauerhaften Zuschauer-Übersicht und als Anwesenheits-Tick festgehalten; bekannte Chat-Bots und das eigene Bot-Konto zählen dabei nicht mit.
+
+**Ergebnis:** Lurker-Zahlen, Watchtime-Verläufe und Anwesenheits-Zeitleisten füllen sich wieder mit echten Daten. Zusätzlich berechnet ein stündlicher Lauf für jeden Raid der letzten sieben Tage, wie viele der zugeführten Zuschauer nach 5, 15 und 30 Minuten noch da sind, wie viele dem Quell-Kanal schon bekannt waren und wie viele für den Ziel-Kanal neu sind — die Raid-Treue ist damit wieder messbar.
+
 ## #270 — Overlay: Spielmodus-Filter (Standard / Street Brawl) + aufgeräumter Baukasten
 
 **Problem:** Im Overlay vermischten sich alle Spielmodi — Street-Brawl-Partien verzerrten die „echte" Winrate und Serie der Standard-Matches. Außerdem hatte der Baukasten eine Positions-Auswahl, die nichts brachte (in OBS verschiebt man die Quelle ohnehin per Hand), und die Vorschau schnitt größere Overlays ab.
