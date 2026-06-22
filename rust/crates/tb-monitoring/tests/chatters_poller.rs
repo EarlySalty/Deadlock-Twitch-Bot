@@ -10,8 +10,8 @@ use async_trait::async_trait;
 use chrono::{DateTime, Duration, Utc};
 use sqlx::PgPool;
 use tb_monitoring::chatters_poller::{
-    poll_streamer_once_for_test, BotChatterAuth, ChattersFetcher, CycleStats, LiveStreamer,
-    SelfHealCooldowns, StreamerTokenSource,
+    poll_streamer_once_for_test, BotChatterAuth, ChattersFetcher, CycleStats, KeyedCooldown,
+    LiveStreamer, SelfHealCooldowns, StreamerTokenSource,
 };
 use tb_monitoring::subscriptions::ModeratorProvisioner;
 use tb_monitoring::{record_chatters_for_streamer, ChattersCollector};
@@ -521,6 +521,7 @@ async fn self_heal_403_then_single_retry_success() {
     );
     let prov = FakeProvisioner::new(true);
     let cooldowns = SelfHealCooldowns::new();
+    let not_mod_backoff = KeyedCooldown::not_mod_default();
     let mut stats = CycleStats::default();
     let s = streamer("1", "nani", 42, true);
 
@@ -532,6 +533,7 @@ async fn self_heal_403_then_single_retry_success() {
         &fetcher,
         &prov,
         &cooldowns,
+        &not_mod_backoff,
         &mut stats,
     )
     .await;
@@ -549,6 +551,9 @@ async fn self_heal_failure_sets_cooldown_no_retry() {
     let fetcher = ScriptedFetcher::new(vec![FetchOutcome::NotModerator], vec![]);
     let prov = FakeProvisioner::new(false);
     let cooldowns = SelfHealCooldowns::new();
+    // Frischer Backoff je Poll, damit dieser Test NUR den Self-Heal-Cooldown
+    // prüft (der not-mod-Backoff würde sonst beim zweiten Poll den Bot-Pfad
+    // schon vor dem Provisioner überspringen).
     let mut stats = CycleStats::default();
     let s = streamer("1", "nani", 42, true);
 
@@ -560,6 +565,7 @@ async fn self_heal_failure_sets_cooldown_no_retry() {
         &fetcher,
         &prov,
         &cooldowns,
+        &KeyedCooldown::not_mod_default(),
         &mut stats,
     )
     .await;
@@ -569,7 +575,8 @@ async fn self_heal_failure_sets_cooldown_no_retry() {
     assert_eq!(stats.self_heal_failure, 1);
     assert_eq!(stats.bot_path_failure, 1);
 
-    // Zweiter Poll: Cooldown aktiv → Provisioner NICHT erneut gerufen.
+    // Zweiter Poll: Self-Heal-Cooldown aktiv → Provisioner NICHT erneut gerufen.
+    // Frischer not-mod-Backoff, damit der Bot-Pfad NICHT vorher übersprungen wird.
     let fetcher2 = ScriptedFetcher::new(vec![FetchOutcome::NotModerator], vec![]);
     let mut stats2 = CycleStats::default();
     let r2 = poll_streamer_once_for_test(
@@ -580,6 +587,7 @@ async fn self_heal_failure_sets_cooldown_no_retry() {
         &fetcher2,
         &prov,
         &cooldowns,
+        &KeyedCooldown::not_mod_default(),
         &mut stats2,
     )
     .await;
@@ -592,6 +600,7 @@ async fn self_heal_skipped_for_non_partner() {
     let fetcher = ScriptedFetcher::new(vec![FetchOutcome::NotModerator], vec![]);
     let prov = FakeProvisioner::new(true);
     let cooldowns = SelfHealCooldowns::new();
+    let not_mod_backoff = KeyedCooldown::not_mod_default();
     let mut stats = CycleStats::default();
     let s = streamer("1", "nani", 42, false); // NICHT partner
 
@@ -603,6 +612,7 @@ async fn self_heal_skipped_for_non_partner() {
         &fetcher,
         &prov,
         &cooldowns,
+        &not_mod_backoff,
         &mut stats,
     )
     .await;
@@ -631,6 +641,7 @@ async fn streamer_fallback_only_when_token_present() {
         &fetcher,
         &prov,
         &cooldowns,
+        &KeyedCooldown::not_mod_default(),
         &mut stats,
     )
     .await;
@@ -651,11 +662,171 @@ async fn streamer_fallback_only_when_token_present() {
         &fetcher2,
         &prov,
         &cooldowns,
+        &KeyedCooldown::not_mod_default(),
         &mut stats2,
     )
     .await;
     assert!(!r2.0);
     assert_eq!(fetcher2.streamer_call_count(), 0, "kein Token = kein Fallback");
+}
+
+// ---------------------------------------------------------------------------
+// Tests: Bot-nicht-Mod-Backoff (Effizienz — futile 403-Calls überspringen)
+// ---------------------------------------------------------------------------
+
+#[tokio::test]
+async fn not_mod_backoff_skips_bot_path_on_next_poll() {
+    // 1. Poll: non-partner 403 (Self-Heal nicht anwendbar) → Backoff gesetzt.
+    // 2. Poll: Bot-Pfad wird übersprungen (kein get_chatters-Call mehr),
+    //    bot_path_skipped_backoff=1, Fetcher NICHT erneut für den Bot-Pfad gerufen.
+    let fetcher = ScriptedFetcher::new(vec![FetchOutcome::NotModerator], vec![]);
+    let prov = FakeProvisioner::new(false);
+    let cooldowns = SelfHealCooldowns::new();
+    let not_mod_backoff = KeyedCooldown::not_mod_default();
+    let mut stats = CycleStats::default();
+    let s = streamer("1", "nani", 42, false); // non-partner → kein Self-Heal
+
+    poll_streamer_once_for_test(
+        &s,
+        Some("bot-token"),
+        Some("bot-uid"),
+        None,
+        &fetcher,
+        &prov,
+        &cooldowns,
+        &not_mod_backoff,
+        &mut stats,
+    )
+    .await;
+    assert_eq!(fetcher.bot_call_count(), 1, "erster Poll feuert den Bot-Call");
+    assert_eq!(stats.bot_path_failure, 1);
+    assert_eq!(stats.bot_path_skipped_backoff, 0);
+
+    // Zweiter Poll mit demselben (jetzt aktiven) Backoff.
+    let mut stats2 = CycleStats::default();
+    let r2 = poll_streamer_once_for_test(
+        &s,
+        Some("bot-token"),
+        Some("bot-uid"),
+        None,
+        &fetcher,
+        &prov,
+        &cooldowns,
+        &not_mod_backoff,
+        &mut stats2,
+    )
+    .await;
+    assert!(!r2.0, "ohne Streamer-Token kein Erfolg");
+    assert_eq!(
+        fetcher.bot_call_count(),
+        1,
+        "Bot-Call NICHT erneut gefeuert (Backoff aktiv)"
+    );
+    assert_eq!(stats2.bot_path_skipped_backoff, 1);
+    assert_eq!(stats2.bot_path_attempt, 0, "kein Bot-Attempt im Backoff");
+}
+
+#[tokio::test]
+async fn bot_path_success_clears_existing_backoff() {
+    // Ein abgelaufenes Backoff-Fenster lässt den Bot-Pfad wieder laufen; bei
+    // Erfolg (Bot ist wieder Mod) muss der gespeicherte Eintrag GELÖSCHT werden
+    // (nicht nur abgelaufen). Duration::ZERO modelliert das abgelaufene Fenster:
+    // der Eintrag wird gesetzt, blockt aber nicht → der nächste Poll läuft durch.
+    let cooldowns = SelfHealCooldowns::new();
+    let backoff = KeyedCooldown::new(std::time::Duration::ZERO);
+    let prov = FakeProvisioner::new(false);
+    let s = streamer("1", "nani", 42, false);
+
+    // Schritt 1: 403 setzt einen (sofort abgelaufenen) Backoff-Eintrag für 'nani'.
+    let fetcher_fail = ScriptedFetcher::new(vec![FetchOutcome::NotModerator], vec![]);
+    let mut stats = CycleStats::default();
+    poll_streamer_once_for_test(
+        &s,
+        Some("bot-token"),
+        Some("bot-uid"),
+        None,
+        &fetcher_fail,
+        &prov,
+        &cooldowns,
+        &backoff,
+        &mut stats,
+    )
+    .await;
+    assert!(backoff.contains_for_test("nani").await, "Backoff-Eintrag gesetzt");
+
+    // Schritt 2: Fenster abgelaufen → Bot-Pfad läuft, Bot ist wieder Mod (200).
+    let fetcher_ok = ScriptedFetcher::new(vec![FetchOutcome::Ok(logins(&["alice"]))], vec![]);
+    let mut stats2 = CycleStats::default();
+    let r = poll_streamer_once_for_test(
+        &s,
+        Some("bot-token"),
+        Some("bot-uid"),
+        None,
+        &fetcher_ok,
+        &prov,
+        &cooldowns,
+        &backoff,
+        &mut stats2,
+    )
+    .await;
+    assert!(r.0, "Bot-Pfad erfolgreich");
+    assert_eq!(stats2.bot_path_success, 1);
+    assert_eq!(stats2.bot_path_skipped_backoff, 0, "abgelaufen → kein Skip");
+    assert!(
+        !backoff.contains_for_test("nani").await,
+        "Erfolg löscht den Backoff-Eintrag"
+    );
+}
+
+#[tokio::test]
+async fn raid_enabled_channel_polled_via_fallback_despite_backoff() {
+    // Aktiver Bot-Backoff blockt NUR den Bot-Pfad. Ein raid_enabled-Kanal
+    // (Streamer-Token vorhanden) wird trotzdem per Streamer-Fallback gepollt.
+    let cooldowns = SelfHealCooldowns::new();
+    let not_mod_backoff = KeyedCooldown::not_mod_default();
+    let s = streamer("1", "nani", 42, false);
+
+    // Schritt 1: 403 setzt den Backoff (ohne Streamer-Token).
+    let fetcher_fail = ScriptedFetcher::new(vec![FetchOutcome::NotModerator], vec![]);
+    let prov = FakeProvisioner::new(false);
+    let mut stats = CycleStats::default();
+    poll_streamer_once_for_test(
+        &s,
+        Some("bot-token"),
+        Some("bot-uid"),
+        None,
+        &fetcher_fail,
+        &prov,
+        &cooldowns,
+        &not_mod_backoff,
+        &mut stats,
+    )
+    .await;
+
+    // Schritt 2: Backoff aktiv → Bot-Pfad übersprungen, ABER Streamer-Token da.
+    let fetcher = ScriptedFetcher::new(
+        vec![FetchOutcome::NotModerator],
+        vec![FetchOutcome::Ok(logins(&["carol"]))],
+    );
+    let mut stats2 = CycleStats::default();
+    let r = poll_streamer_once_for_test(
+        &s,
+        Some("bot-token"),
+        Some("bot-uid"),
+        Some("streamer-token"),
+        &fetcher,
+        &prov,
+        &cooldowns,
+        &not_mod_backoff,
+        &mut stats2,
+    )
+    .await;
+    assert!(r.0, "Streamer-Fallback erfolgreich trotz Bot-Backoff");
+    assert_eq!(r.1, logins(&["carol"]));
+    assert_eq!(stats2.bot_path_skipped_backoff, 1, "Bot-Pfad übersprungen");
+    assert_eq!(fetcher.bot_call_count(), 0, "kein Bot-Call im Backoff");
+    assert_eq!(fetcher.streamer_call_count(), 1, "Streamer-Fallback gefeuert");
+    assert_eq!(stats2.fallback_to_streamer_token, 1);
 }
 
 // ---------------------------------------------------------------------------
@@ -669,17 +840,16 @@ async fn full_cycle_inserts_lurkers() {
     };
     seed_live(&pool, "1", "nani", 42, 1).await;
 
-    let collector = ChattersCollector {
-        pool: pool.clone(),
-        auth: Arc::new(FakeAuth::bot("mybot")),
-        streamer_tokens: Arc::new(FakeStreamerTokens::none()),
-        fetcher: Arc::new(ScriptedFetcher::new(
+    let collector = ChattersCollector::new(
+        pool.clone(),
+        Arc::new(FakeAuth::bot("mybot")),
+        Arc::new(FakeStreamerTokens::none()),
+        Arc::new(ScriptedFetcher::new(
             vec![FetchOutcome::Ok(logins(&["alice", "bob", "nightbot"]))],
             vec![],
         )),
-        provisioner: Arc::new(FakeProvisioner::new(false)),
-        cooldowns: SelfHealCooldowns::new(),
-    };
+        Arc::new(FakeProvisioner::new(false)),
+    );
 
     let stats = collector.run_cycle().await;
     assert_eq!(stats.live_streamers, 1);
@@ -700,17 +870,16 @@ async fn cycle_without_bot_token_uses_streamer_fallback() {
     };
     seed_live(&pool, "99", "drag", 7, 0).await;
 
-    let collector = ChattersCollector {
-        pool: pool.clone(),
-        auth: Arc::new(FakeAuth::none()),
-        streamer_tokens: Arc::new(FakeStreamerTokens::with(&["99"])),
-        fetcher: Arc::new(ScriptedFetcher::new(
+    let collector = ChattersCollector::new(
+        pool.clone(),
+        Arc::new(FakeAuth::none()),
+        Arc::new(FakeStreamerTokens::with(&["99"])),
+        Arc::new(ScriptedFetcher::new(
             vec![],
             vec![FetchOutcome::Ok(logins(&["carol"]))],
         )),
-        provisioner: Arc::new(FakeProvisioner::new(false)),
-        cooldowns: SelfHealCooldowns::new(),
-    };
+        Arc::new(FakeProvisioner::new(false)),
+    );
 
     let stats = collector.run_cycle().await;
     assert_eq!(stats.chatters_written, 1);

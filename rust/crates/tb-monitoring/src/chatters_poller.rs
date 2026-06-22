@@ -29,6 +29,13 @@ use crate::subscriptions::ModeratorProvisioner;
 /// 10 Minuten). Solange aktiv wird kein erneuter Heal versucht.
 const SELF_HEAL_COOLDOWN: Duration = Duration::from_secs(600);
 
+/// Backoff-Dauer für Kanäle, in denen der Bot **kein Mod** ist (403 ohne
+/// Self-Heal-Rettung). Solange aktiv wird der **Bot-Pfad** dieses Kanals
+/// übersprungen — der Streamer-Token-Fallback bleibt unberührt. 15 Minuten,
+/// damit ein frisch gemoddeter Bot nach spätestens einem Backoff-Fenster wieder
+/// versucht wird (ein Bot-Pfad-Erfolg löscht den Backoff sofort).
+const NOT_MOD_BACKOFF: Duration = Duration::from_secs(900);
+
 
 // ---------------------------------------------------------------------------
 // Injizierte Ports (Implementierung lebt im Composition-Root / Binary)
@@ -112,21 +119,35 @@ pub async fn load_live_roster(pool: &PgPool) -> Result<Vec<LiveStreamer>, sqlx::
 }
 
 // ---------------------------------------------------------------------------
-// Self-Heal-Cooldown
+// Per-Kanal-Cooldowns (Self-Heal + Bot-nicht-Mod-Backoff)
 // ---------------------------------------------------------------------------
 
-/// Per-Kanal-Cooldown-Tracker für den Mod-Self-Heal (geteilt über Ticks hinweg).
-#[derive(Clone, Default)]
-pub struct SelfHealCooldowns {
+/// Generischer Per-Kanal-Cooldown-Tracker (geteilt über Ticks hinweg). Hält pro
+/// Key einen `Instant`, bis zu dem der Key „kühlt"; die Fenstergröße ist im
+/// Konstruktor konfigurierbar. Trägt sowohl den Mod-Self-Heal-Cooldown (600 s)
+/// als auch den Bot-nicht-Mod-Backoff (900 s) ohne Logik-Duplikation.
+#[derive(Clone)]
+pub struct KeyedCooldown {
     inner: Arc<Mutex<HashMap<String, Instant>>>,
+    duration: Duration,
 }
 
-impl SelfHealCooldowns {
-    pub fn new() -> Self {
-        Self::default()
+impl KeyedCooldown {
+    /// Neuer Tracker mit dem angegebenen Cooldown-Fenster.
+    pub fn new(duration: Duration) -> Self {
+        Self {
+            inner: Arc::new(Mutex::new(HashMap::new())),
+            duration,
+        }
     }
 
-    /// `true`, wenn der Kanal aktuell im Cooldown ist (kein Heal versuchen).
+    /// Neuer Bot-nicht-Mod-Backoff-Tracker (900 s) — kapselt die Konstante, damit
+    /// Wiring + Tests die Dauer nicht kennen müssen.
+    pub fn not_mod_default() -> Self {
+        Self::new(NOT_MOD_BACKOFF)
+    }
+
+    /// `true`, wenn der Key aktuell im Cooldown ist.
     async fn is_cooling(&self, key: &str) -> bool {
         let guard = self.inner.lock().await;
         guard.get(key).is_some_and(|until| Instant::now() < *until)
@@ -134,12 +155,62 @@ impl SelfHealCooldowns {
 
     async fn set_cooldown(&self, key: &str) {
         let mut guard = self.inner.lock().await;
-        guard.insert(key.to_string(), Instant::now() + SELF_HEAL_COOLDOWN);
+        guard.insert(key.to_string(), Instant::now() + self.duration);
     }
 
     async fn clear(&self, key: &str) {
         let mut guard = self.inner.lock().await;
         guard.remove(key);
+    }
+
+    /// Test-Seam: `true`, wenn `key` aktuell als kühlend gespeichert ist. Nutzt
+    /// dieselbe Zeit-Logik wie der Produktionspfad ([`is_cooling`]), erlaubt aber
+    /// Tests, den Backoff-Zustand ohne Netz/Timer zu inspizieren.
+    pub async fn is_cooling_for_test(&self, key: &str) -> bool {
+        self.is_cooling(key).await
+    }
+
+    /// Test-Seam: `true`, wenn für `key` überhaupt ein Eintrag gespeichert ist
+    /// (unabhängig von Ablauf). Trennt im Test „Backoff gelöscht" von „Backoff
+    /// nur abgelaufen".
+    pub async fn contains_for_test(&self, key: &str) -> bool {
+        let guard = self.inner.lock().await;
+        guard.contains_key(key)
+    }
+}
+
+/// Per-Kanal-Cooldown-Tracker für den Mod-Self-Heal (600 s, Python
+/// `_mod_retry_cooldown`). Dünner Wrapper um [`KeyedCooldown`], damit die
+/// öffentliche API + das Binary-Wiring (`SelfHealCooldowns::new()`) stabil
+/// bleiben.
+#[derive(Clone)]
+pub struct SelfHealCooldowns {
+    inner: KeyedCooldown,
+}
+
+impl Default for SelfHealCooldowns {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl SelfHealCooldowns {
+    pub fn new() -> Self {
+        Self {
+            inner: KeyedCooldown::new(SELF_HEAL_COOLDOWN),
+        }
+    }
+
+    async fn is_cooling(&self, key: &str) -> bool {
+        self.inner.is_cooling(key).await
+    }
+
+    async fn set_cooldown(&self, key: &str) {
+        self.inner.set_cooldown(key).await;
+    }
+
+    async fn clear(&self, key: &str) {
+        self.inner.clear(key).await;
     }
 }
 
@@ -154,6 +225,9 @@ pub struct CycleStats {
     pub bot_path_attempt: u64,
     pub bot_path_success: u64,
     pub bot_path_failure: u64,
+    /// Bot-Pfad übersprungen, weil der Kanal im Bot-nicht-Mod-Backoff steht
+    /// (kein `get_chatters`-Call gespart).
+    pub bot_path_skipped_backoff: u64,
     pub fallback_to_streamer_token: u64,
     pub self_heal_success: u64,
     pub self_heal_failure: u64,
@@ -189,57 +263,72 @@ async fn poll_streamer_once(
     fetcher: &dyn ChattersFetcher,
     provisioner: &dyn ModeratorProvisioner,
     cooldowns: &SelfHealCooldowns,
+    not_mod_backoff: &KeyedCooldown,
     stats: &mut CycleStats,
 ) -> PollResult {
     let mut result = PollResult::default();
+    let backoff_key = self_heal_key(&streamer.streamer_login);
 
-    // 1) Bot-Pfad.
-    if let (Some(token), Some(mod_id)) = (bot_token, bot_user_id) {
-        stats.bot_path_attempt += 1;
-        match fetcher
-            .fetch_chatters(&streamer.twitch_user_id, mod_id, token)
-            .await
-        {
-            Ok(chatters) => {
-                stats.bot_path_success += 1;
-                result.chatters = chatters;
-                result.succeeded = true;
-                return result;
-            }
-            Err(HelixError::NotModerator) => {
-                // Self-Heal + genau EIN Retry bei Erfolg.
-                let healed = attempt_self_heal(streamer, provisioner, cooldowns, stats).await;
-                if healed {
-                    match fetcher
-                        .fetch_chatters(&streamer.twitch_user_id, mod_id, token)
-                        .await
-                    {
-                        Ok(chatters) => {
-                            stats.bot_path_success += 1;
-                            result.chatters = chatters;
-                            result.succeeded = true;
-                            return result;
-                        }
-                        Err(err) => {
-                            stats.bot_path_failure += 1;
-                            tracing::warn!(
-                                channel = %streamer.streamer_login,
-                                error = %err,
-                                "chatters: Bot-Retry nach Self-Heal fehlgeschlagen"
-                            );
-                        }
-                    }
-                } else {
-                    stats.bot_path_failure += 1;
+    // 1) Bot-Pfad — nur wenn der Kanal NICHT im Bot-nicht-Mod-Backoff steht.
+    //    Backoff blockt ausschließlich den Bot-Pfad (spart den futilen
+    //    `get_chatters`-403); der Streamer-Token-Fallback bleibt unberührt.
+    let bot_creds = bot_token.zip(bot_user_id);
+    if let Some((token, mod_id)) = bot_creds {
+        if not_mod_backoff.is_cooling(&backoff_key).await {
+            stats.bot_path_skipped_backoff += 1;
+        } else {
+            stats.bot_path_attempt += 1;
+            match fetcher
+                .fetch_chatters(&streamer.twitch_user_id, mod_id, token)
+                .await
+            {
+                Ok(chatters) => {
+                    stats.bot_path_success += 1;
+                    not_mod_backoff.clear(&backoff_key).await;
+                    result.chatters = chatters;
+                    result.succeeded = true;
+                    return result;
                 }
-            }
-            Err(err) => {
-                stats.bot_path_failure += 1;
-                tracing::warn!(
-                    channel = %streamer.streamer_login,
-                    error = %err,
-                    "chatters: Bot-Pfad fehlgeschlagen"
-                );
+                Err(HelixError::NotModerator) => {
+                    // Self-Heal + genau EIN Retry bei Erfolg.
+                    let healed = attempt_self_heal(streamer, provisioner, cooldowns, stats).await;
+                    if healed {
+                        match fetcher
+                            .fetch_chatters(&streamer.twitch_user_id, mod_id, token)
+                            .await
+                        {
+                            Ok(chatters) => {
+                                stats.bot_path_success += 1;
+                                not_mod_backoff.clear(&backoff_key).await;
+                                result.chatters = chatters;
+                                result.succeeded = true;
+                                return result;
+                            }
+                            Err(err) => {
+                                // Heal war erfolgreich, der Retry aber nicht —
+                                // KEIN Not-Mod-Backoff (kein „Bot ist kein Mod"-
+                                // Signal, eher transient).
+                                stats.bot_path_failure += 1;
+                                tracing::warn!(
+                                    channel = %streamer.streamer_login,
+                                    error = %err,
+                                    "chatters: Bot-Retry nach Self-Heal fehlgeschlagen"
+                                );
+                            }
+                        }
+                    } else {
+                        stats.bot_path_failure += 1;
+                        not_mod_backoff.set_cooldown(&backoff_key).await;
+                    }
+                }
+                Err(err) => {
+                    stats.bot_path_failure += 1;
+                    tracing::warn!(
+                        channel = %streamer.streamer_login,
+                        error = %err,
+                        "chatters: Bot-Pfad fehlgeschlagen"
+                    );
+                }
             }
         }
     }
@@ -441,9 +530,35 @@ pub struct ChattersCollector {
     pub fetcher: Arc<dyn ChattersFetcher>,
     pub provisioner: Arc<dyn ModeratorProvisioner>,
     pub cooldowns: SelfHealCooldowns,
+    /// Per-Kanal-Backoff (900 s) für Kanäle, in denen der Bot kein Mod ist —
+    /// überspringt deren Bot-Pfad und spart den futilen 403-`get_chatters`-Call.
+    pub not_mod_backoff: KeyedCooldown,
 }
 
 impl ChattersCollector {
+    /// Baut den Collector mit frischen, leeren Cooldown-Trackern. Bevorzugter
+    /// Konstruktor fürs Binary-Wiring — kapselt die Default-Initialisierung der
+    /// beiden Cooldowns (`SelfHealCooldowns` 600 s, `not_mod_backoff` 900 s),
+    /// sodass das Hinzufügen weiterer interner State-Felder das Wiring nicht
+    /// bricht.
+    pub fn new(
+        pool: PgPool,
+        auth: Arc<dyn BotChatterAuth>,
+        streamer_tokens: Arc<dyn StreamerTokenSource>,
+        fetcher: Arc<dyn ChattersFetcher>,
+        provisioner: Arc<dyn ModeratorProvisioner>,
+    ) -> Self {
+        Self {
+            pool,
+            auth,
+            streamer_tokens,
+            fetcher,
+            provisioner,
+            cooldowns: SelfHealCooldowns::new(),
+            not_mod_backoff: KeyedCooldown::not_mod_default(),
+        }
+    }
+
     /// Führt EINEN Collect-Zyklus aus: Roster laden, alle Streamer nebenläufig
     /// pollen, Ergebnisse sammeln, dann sequenziell schreiben. Fehler werden
     /// geloggt; der Loop läuft weiter. Liefert die Zyklus-Stats.
@@ -492,6 +607,7 @@ impl ChattersCollector {
                 self.fetcher.as_ref(),
                 self.provisioner.as_ref(),
                 &self.cooldowns,
+                &self.not_mod_backoff,
                 &mut stats,
             )
             .await;
@@ -555,6 +671,7 @@ pub async fn poll_streamer_once_for_test(
     fetcher: &dyn ChattersFetcher,
     provisioner: &dyn ModeratorProvisioner,
     cooldowns: &SelfHealCooldowns,
+    not_mod_backoff: &KeyedCooldown,
     stats: &mut CycleStats,
 ) -> (bool, Vec<(String, Option<String>)>) {
     let result = poll_streamer_once(
@@ -565,6 +682,7 @@ pub async fn poll_streamer_once_for_test(
         fetcher,
         provisioner,
         cooldowns,
+        not_mod_backoff,
         stats,
     )
     .await;
