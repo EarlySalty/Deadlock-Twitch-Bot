@@ -245,20 +245,26 @@ fn steam_bot_rank_url() -> String {
 fn steam_bot_matches_url() -> String {
     std::env::var("STEAM_BOT_RANK_URL")
         .ok()
-        .and_then(|value| {
-            let trimmed = value.trim();
-            if trimmed.is_empty() {
-                None
-            } else {
-                Some(
-                    trimmed
-                        .strip_suffix("/rank")
-                        .map(|base| format!("{base}/player-matches"))
-                        .unwrap_or_else(|| trimmed.to_string()),
-                )
-            }
-        })
+        .map(|value| matches_url_from_rank(&value))
         .unwrap_or_else(|| DEFAULT_STEAM_BOT_MATCHES_URL.to_string())
+}
+
+fn matches_url_from_rank(rank_url: &str) -> String {
+    let trimmed = rank_url.trim();
+    if trimmed.is_empty() {
+        return DEFAULT_STEAM_BOT_MATCHES_URL.to_string();
+    }
+
+    if let Some(base) = trimmed.strip_suffix("/rank") {
+        return format!("{base}/player-matches");
+    }
+
+    let base = trimmed.trim_end_matches('/');
+    if base.ends_with("/player-matches") {
+        base.to_string()
+    } else {
+        format!("{base}/player-matches")
+    }
 }
 
 fn scored(m: &[MatchEntry]) -> Vec<&MatchEntry> {
@@ -270,6 +276,41 @@ fn scored(m: &[MatchEntry]) -> Vec<&MatchEntry> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn linked_history(matches: Vec<MatchEntry>) -> MatchHistory {
+        MatchHistory {
+            linked: true,
+            matches,
+        }
+    }
+
+    fn entry(
+        match_result: i64,
+        hero_id: Option<i64>,
+        hero_name: Option<&str>,
+        player_kills: Option<i64>,
+        player_deaths: Option<i64>,
+        player_assists: Option<i64>,
+        not_scored: Option<bool>,
+    ) -> MatchEntry {
+        MatchEntry {
+            match_result: Some(match_result),
+            hero_id,
+            hero_name: hero_name.map(String::from),
+            player_kills,
+            player_deaths,
+            player_assists,
+            not_scored,
+        }
+    }
+
+    fn result_entry(match_result: i64) -> MatchEntry {
+        entry(match_result, None, None, None, None, None, None)
+    }
+
+    fn unscored_result_entry(match_result: i64) -> MatchEntry {
+        entry(match_result, None, None, None, None, None, Some(true))
+    }
 
     #[test]
     fn rang_vorhanden() {
@@ -390,6 +431,40 @@ mod tests {
     }
 
     #[test]
+    fn winrate_reply_ignoriert_not_scored_matches() {
+        let matches = (0..6)
+            .map(|_| result_entry(1))
+            .chain((0..4).map(|_| result_entry(0)))
+            .chain((0..3).map(|i| unscored_result_entry(i % 2)))
+            .collect();
+        let info = linked_history(matches);
+
+        assert_eq!(
+            winrate_reply("nani", Some(&info)),
+            "nani: 60.0% Winrate über die letzten 10 Spiele (6S/4N)."
+        );
+    }
+
+    #[test]
+    fn winrate_reply_meldet_fehlende_gewertete_spiele() {
+        let only_unscored = linked_history(vec![
+            unscored_result_entry(1),
+            unscored_result_entry(0),
+            unscored_result_entry(1),
+        ]);
+        let empty = linked_history(Vec::new());
+
+        assert_eq!(
+            winrate_reply("nani", Some(&only_unscored)),
+            "nani: Noch keine gewerteten Deadlock-Spiele gefunden."
+        );
+        assert_eq!(
+            winrate_reply("nani", Some(&empty)),
+            "nani: Noch keine gewerteten Deadlock-Spiele gefunden."
+        );
+    }
+
+    #[test]
     fn winrate_reply_nicht_verknuepft() {
         let info = MatchHistory {
             linked: false,
@@ -417,8 +492,66 @@ mod tests {
 
         let reply = lastmatch_reply("nani", Some(&info));
 
-        assert!(reply.contains("Sieg"));
-        assert!(reply.contains("Haze"));
+        assert_eq!(reply, "nani: Letztes Spiel — Sieg als Haze (4/10/9).");
+    }
+
+    #[test]
+    fn lastmatch_reply_zeigt_niederlage() {
+        let info = linked_history(vec![entry(
+            0,
+            Some(13),
+            Some("Haze"),
+            Some(4),
+            Some(10),
+            Some(9),
+            None,
+        )]);
+
+        assert_eq!(
+            lastmatch_reply("nani", Some(&info)),
+            "nani: Letztes Spiel — Niederlage als Haze (4/10/9)."
+        );
+    }
+
+    #[test]
+    fn lastmatch_reply_nutzt_unbekannten_hero_ohne_hero_name() {
+        let info = linked_history(vec![entry(
+            1,
+            Some(13),
+            None,
+            Some(4),
+            Some(10),
+            Some(9),
+            None,
+        )]);
+
+        assert_eq!(
+            lastmatch_reply("nani", Some(&info)),
+            "nani: Letztes Spiel — Sieg als unbekanntem Hero (4/10/9)."
+        );
+    }
+
+    #[test]
+    fn lastmatch_reply_nimmt_das_neueste_spiel_zuerst() {
+        let info = linked_history(vec![
+            entry(1, Some(13), Some("Haze"), Some(4), Some(10), Some(9), None),
+            entry(0, Some(6), Some("Abrams"), Some(11), Some(3), Some(7), None),
+        ]);
+
+        assert_eq!(
+            lastmatch_reply("nani", Some(&info)),
+            "nani: Letztes Spiel — Sieg als Haze (4/10/9)."
+        );
+    }
+
+    #[test]
+    fn lastmatch_reply_meldet_leere_historie() {
+        let info = linked_history(Vec::new());
+
+        assert_eq!(
+            lastmatch_reply("nani", Some(&info)),
+            "nani: Noch kein letztes Deadlock-Spiel gefunden."
+        );
     }
 
     #[test]
@@ -468,6 +601,47 @@ mod tests {
         };
 
         assert_eq!(streak_reply("nani", Some(&info)), "nani: 2 Siege in Folge!");
+    }
+
+    #[test]
+    fn streak_reply_ignoriert_not_scored_in_der_serie() {
+        let info = linked_history(vec![
+            result_entry(1),
+            unscored_result_entry(0),
+            result_entry(1),
+        ]);
+
+        assert_eq!(streak_reply("nani", Some(&info)), "nani: 2 Siege in Folge!");
+    }
+
+    #[test]
+    fn streak_reply_zaehlt_niederlagenserie() {
+        let info = linked_history(vec![result_entry(0), result_entry(0), result_entry(0)]);
+
+        assert_eq!(
+            streak_reply("nani", Some(&info)),
+            "nani: 3 Niederlagen in Folge."
+        );
+    }
+
+    #[test]
+    fn streak_reply_meldet_einzelnen_sieg() {
+        let info = linked_history(vec![result_entry(1), result_entry(0)]);
+
+        assert_eq!(
+            streak_reply("nani", Some(&info)),
+            "nani: Letztes Spiel gewonnen."
+        );
+    }
+
+    #[test]
+    fn streak_reply_meldet_einzelne_niederlage() {
+        let info = linked_history(vec![result_entry(0), result_entry(1)]);
+
+        assert_eq!(
+            streak_reply("nani", Some(&info)),
+            "nani: Letztes Spiel verloren."
+        );
     }
 
     #[test]
@@ -532,6 +706,30 @@ mod tests {
     }
 
     #[test]
+    fn mostplayed_reply_nutzt_unbekannten_hero_ohne_hero_name() {
+        let info = linked_history(vec![
+            entry(1, Some(13), None, None, None, None, None),
+            entry(0, Some(13), None, None, None, None, None),
+            entry(1, Some(6), Some("Abrams"), None, None, None, None),
+        ]);
+
+        assert_eq!(
+            mostplayed_reply("nani", Some(&info)),
+            "nani: Meistgespielt zuletzt — unbekannter Hero (2 von 3 Spielen)."
+        );
+    }
+
+    #[test]
+    fn mostplayed_reply_meldet_leere_historie() {
+        let info = linked_history(Vec::new());
+
+        assert_eq!(
+            mostplayed_reply("nani", Some(&info)),
+            "nani: Noch keine Deadlock-Spiele gefunden."
+        );
+    }
+
+    #[test]
     fn mostplayed_reply_nicht_verknuepft() {
         let info = MatchHistory {
             linked: false,
@@ -540,5 +738,17 @@ mod tests {
 
         assert!(mostplayed_reply("nani", Some(&info)).contains("noch keinen Steam-Account"));
         assert!(mostplayed_reply("nani", None).contains("noch keinen Steam-Account"));
+    }
+
+    #[test]
+    fn matches_url_from_rank_leitet_player_matches_url_ab() {
+        assert_eq!(
+            matches_url_from_rank("http://127.0.0.1:8783/rank"),
+            "http://127.0.0.1:8783/player-matches"
+        );
+        assert_eq!(
+            matches_url_from_rank("https://x.y/rank"),
+            "https://x.y/player-matches"
+        );
     }
 }
