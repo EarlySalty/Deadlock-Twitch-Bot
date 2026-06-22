@@ -1,8 +1,7 @@
 //! Hermetische DB-Tests für ModerationEngine — tb_chat_autoban_log.
 //!
 //! Testet den DB-Schreibpfad von [`ModerationEngine::auto_ban_and_cleanup`].
-//! Schema-isoliert; tb_chat_autoban_log ist eine neue Tabelle (nicht in Prod-Schema —
-//! muss durch den Bot-Start angelegt werden).
+//! Schema-isoliert; tb_chat_autoban_log wird prod-treu wie beim Bot-Start angelegt.
 
 use std::str::FromStr;
 use std::sync::Arc;
@@ -12,7 +11,9 @@ use chrono::Utc;
 use sqlx::postgres::{PgConnectOptions, PgPoolOptions};
 use sqlx::PgPool;
 use tb_chat::api::{BanOutcome, ChatApi};
-use tb_chat::moderation::{AutoBanRequest, ModerationEngine, BAN_REASON_SPAM, BAN_REASON_GLOBAL, NOTICE_GLOBAL_BAN};
+use tb_chat::moderation::{
+    AutoBanRequest, ModerationEngine, BAN_REASON_GLOBAL, BAN_REASON_SPAM, NOTICE_GLOBAL_BAN,
+};
 use tb_chat::types::SendOutcome;
 
 macro_rules! pool_or_skip {
@@ -57,8 +58,7 @@ async fn pool_in_schema(dsn: &str, schema: &str) -> PgPool {
 }
 
 async fn apply_ddl(pool: &PgPool) {
-    // tb_chat_autoban_log: neue Tabelle, nicht in Prod-Schema vorhanden.
-    // Wird durch den Bot-Start angelegt; hier prod-treu nachgebaut.
+    // tb_chat_autoban_log: Runtime-Schema aus `ensure_autoban_log_table`.
     sqlx::query(
         r#"CREATE TABLE IF NOT EXISTS tb_chat_autoban_log (
             id BIGSERIAL PRIMARY KEY,
@@ -214,7 +214,7 @@ async fn autoban_last_record_in_memory_gesetzt() {
         })
         .await;
 
-    let rec = engine.last_autoban("memkanal");
+    let rec = engine.last_autoban("memkanal").await;
     assert!(rec.is_some());
     let r = rec.unwrap();
     assert_eq!(r.user_id, "u_x");
@@ -244,11 +244,12 @@ async fn delete_only_schreibt_auch_in_db() {
         })
         .await;
 
-    let count: i64 =
-        sqlx::query_scalar("SELECT COUNT(*)::bigint FROM tb_chat_autoban_log WHERE channel_login = 'delkanal'")
-            .fetch_one(&pool)
-            .await
-            .unwrap();
+    let count: i64 = sqlx::query_scalar(
+        "SELECT COUNT(*)::bigint FROM tb_chat_autoban_log WHERE channel_login = 'delkanal'",
+    )
+    .fetch_one(&pool)
+    .await
+    .unwrap();
     assert_eq!(count, 1, "Delete-only soll auch in DB persistiert werden");
 }
 
@@ -274,11 +275,12 @@ async fn content_wird_auf_500_zeichen_begrenzt() {
         })
         .await;
 
-    let content: Option<String> =
-        sqlx::query_scalar("SELECT content FROM tb_chat_autoban_log WHERE channel_login = 'trunckanal'")
-            .fetch_one(&pool)
-            .await
-            .unwrap();
+    let content: Option<String> = sqlx::query_scalar(
+        "SELECT content FROM tb_chat_autoban_log WHERE channel_login = 'trunckanal'",
+    )
+    .fetch_one(&pool)
+    .await
+    .unwrap();
     assert_eq!(
         content.unwrap().len(),
         500,
