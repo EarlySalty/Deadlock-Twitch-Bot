@@ -213,13 +213,22 @@ impl ScoreTrackingStore {
         let login_lower = streamer_login.trim().to_lowercase();
         let target_game_lower = target_game_lower.trim().to_lowercase();
 
-        // Session-Start (TIMESTAMPTZ) für den Fallback-Lade-Zweig.
+        // Session-Start für den Fallback-Lade-Zweig. P2.38: Die Prod-Spalte
+        // `twitch_stream_sessions.started_at` ist TEXT (ISO), nicht TIMESTAMPTZ —
+        // ein Decode nach `DateTime<Utc>` würde dort einen Typ-Mismatch werfen,
+        // `?` propagieren und `resolve_for_session` 0 zurückgeben (Deadlock-Raids
+        // blieben für immer offen). Daher als TEXT lesen und ISO-parsen, wie
+        // Python `_parse_dt` (partner_raid_score_tracking.py:19-30). Toleriert
+        // sowohl TEXT- als auch (per ::text-Cast) TIMESTAMPTZ-Spalten.
+        let session_started_raw: Option<String> = sqlx::query_scalar(
+            "SELECT started_at::text FROM twitch_stream_sessions WHERE id = $1 LIMIT 1",
+        )
+        .bind(session_id)
+        .fetch_optional(&self.pool)
+        .await?
+        .flatten();
         let session_started_at: Option<DateTime<Utc>> =
-            sqlx::query_scalar("SELECT started_at FROM twitch_stream_sessions WHERE id = $1 LIMIT 1")
-                .bind(session_id)
-                .fetch_optional(&self.pool)
-                .await?
-                .flatten();
+            session_started_raw.as_deref().and_then(parse_iso_utc);
 
         let rows = self
             .load_unresolved_rows(

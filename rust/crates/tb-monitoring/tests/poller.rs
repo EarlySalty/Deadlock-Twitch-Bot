@@ -216,8 +216,8 @@ async fn tick_transitions_online_dann_offline() {
     assert_eq!(state.had_deadlock_in_session, Some(0), "offline → false");
     assert_eq!(state.active_session_id, None);
 
-    let (ended, notes): (Option<chrono::DateTime<Utc>>, Option<String>) =
-        sqlx::query_as("SELECT ended_at, notes FROM twitch_stream_sessions LIMIT 1")
+    let (ended, notes): (Option<String>, Option<String>) =
+        sqlx::query_as("SELECT ended_at::text, notes FROM twitch_stream_sessions LIMIT 1")
             .fetch_one(&pool)
             .await
             .unwrap();

@@ -95,7 +95,7 @@ pub use external_recruitment_store::{
 };
 pub use auto_raid_pipeline::{
     ArrivalReadiness, AutoRaidPipeline, AutoRaidPipelineOutcome, AutoRaidRequest, FallbackStreamSource,
-    FollowerEnricher,
+    FollowerEnricher, OrphanChatNotification, OrphanReplay,
 };
 pub use candidate_selection::{
     is_retryable_raid_error, select_by_score, select_fairest, FairnessCandidate, ScoredCandidate,
@@ -117,7 +117,8 @@ pub use partner_roster::{
     build_online_candidates, OnlineCandidate, PartnerRosterEntry, PartnerRosterStore, StreamData,
 };
 pub use pending_raids::{
-    normalize_broadcaster_login, normalize_pending_raid_key, PendingRaid, PendingRaidStore,
+    build_pending_timeout_detail, normalize_broadcaster_login, normalize_pending_raid_key,
+    PendingRaid, PendingRaidStore,
 };
 pub use raid_blacklist::RaidBlacklistStore;
 pub use raid_executor::{RaidApi, RaidExecutor, RaidOutcome, RaidRequest};
@@ -132,7 +133,8 @@ pub use score_tracking_store::{ScoreTrackingStore, TrackConfirmedInput};
 pub use scoring::{
     compute_base_score, compute_duration_score, compute_fairness_score, compute_final_score,
     compute_new_partner_multiplier, compute_raid_boost_multiplier, compute_readiness_score,
-    compute_scores, compute_time_pattern_score, ScoreComponents, ScoringInputs,
+    compute_scores, compute_scores_with_cache, compute_time_pattern_score, CachedScores,
+    ScoreComponents, ScoringInputs,
     DEFAULT_RAID_BOOST_MULTIPLIER, NEUTRAL_SCORE, NEW_PARTNER_MAX_MULTIPLIER,
     NEW_PARTNER_RAID_THRESHOLD, RAID_BOOST_MULTIPLIER,
 };

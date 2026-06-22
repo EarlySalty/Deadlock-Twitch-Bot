@@ -69,8 +69,10 @@ pub async fn pool_in_schema(schema: &str) -> Option<PgPool> {
             id BIGSERIAL PRIMARY KEY,
             streamer_login TEXT NOT NULL,
             stream_id TEXT,
-            started_at TIMESTAMPTZ NOT NULL,
-            ended_at TIMESTAMPTZ,
+            -- P2.38: Prod-Spalten sind TEXT (ISO), nicht TIMESTAMPTZ —
+            -- Fixture spiegelt das, sonst lügt sie gegen die Baseline.
+            started_at TEXT NOT NULL,
+            ended_at TEXT,
             duration_seconds INTEGER DEFAULT 0,
             start_viewers INTEGER DEFAULT 0, peak_viewers INTEGER DEFAULT 0,
             end_viewers INTEGER DEFAULT 0,
