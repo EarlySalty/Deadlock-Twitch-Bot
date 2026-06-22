@@ -52,10 +52,37 @@ struct ReportRow {
     error: Option<String>,
 }
 
+/// Login, unter dem Bewertungen/Stimmen dieses Auth-Levels gespeichert UND
+/// gelesen werden (Schlüssel für eigenes Rating / `own_vote`).
+///
+/// P2.71: Ein per Twitch-OAuth eingeloggter Admin (z. B. `earlysalty`) trägt
+/// seine Session-Identität im `AdminActor` (auth/level.rs) — Python liest
+/// `twitch_login` IMMER aus der Session, auch bei `auth_level='admin'`
+/// (api_post_stream.py:1271/1310/1364). Daher liefern wir hier den
+/// Actor-Login statt `None`, damit GET das eigene Rating / `own_vote` einbettet
+/// und der UPSERT-Schlüssel mit Python übereinstimmt.
+/// Discord-Admin (`actor=None`) und Localhost haben keine Twitch-Identität → `None`.
 fn owner_login(auth: &DashboardAuthLevel) -> Option<String> {
     match auth {
         DashboardAuthLevel::Partner { twitch_login, .. } => Some(twitch_login.to_lowercase()),
+        DashboardAuthLevel::Admin { actor: Some(actor) } => Some(actor.twitch_login.to_lowercase()),
         _ => None,
+    }
+}
+
+/// Schreib-Schlüssel (`rated_by`/`voted_by`) für ein Auth-Level.
+///
+/// P2.71: Spiegelt Python `twitch_login OR auth_level OR 'unknown'`
+/// (api_post_stream.py:1271/1364). Twitch-OAuth-Admin → sein Login; Discord-Admin
+/// ohne Twitch-Identität → `"admin"`; Localhost → `"localhost"`; None → kein
+/// Schlüssel (Caller liefert 401).
+fn writer_key(auth: &DashboardAuthLevel) -> Option<String> {
+    match auth {
+        DashboardAuthLevel::Partner { twitch_login, .. } => Some(twitch_login.trim().to_lowercase()),
+        DashboardAuthLevel::Admin { actor: Some(actor) } => Some(actor.twitch_login.trim().to_lowercase()),
+        DashboardAuthLevel::Admin { actor: None } => Some("admin".to_string()),
+        DashboardAuthLevel::Localhost => Some("localhost".to_string()),
+        DashboardAuthLevel::None => None,
     }
 }
 
@@ -319,15 +346,10 @@ pub async fn stream_report_rate_handler(
         .take(1000)
         .collect();
 
-    // rated_by: Partner-Login, sonst Auth-Level-Name (Python
-    // `twitch_login or auth_level or "unknown"`); None → 401.
-    let rated_by = match &auth {
-        DashboardAuthLevel::Partner { twitch_login, .. } => twitch_login.trim().to_lowercase(),
-        DashboardAuthLevel::Admin { .. } => "admin".to_string(),
-        DashboardAuthLevel::Localhost => "localhost".to_string(),
-        DashboardAuthLevel::None => {
-            return (StatusCode::UNAUTHORIZED, Json(json!({"error": "unauthorized"}))).into_response();
-        }
+    // rated_by: Partner-Login bzw. Twitch-OAuth-Admin-Login, sonst Auth-Level-Name
+    // (Python `twitch_login or auth_level or "unknown"`, P2.71); None → 401.
+    let Some(rated_by) = writer_key(&auth) else {
+        return (StatusCode::UNAUTHORIZED, Json(json!({"error": "unauthorized"}))).into_response();
     };
 
     let _ = tb_analytics::post_stream::ensure_report_ab_columns(&pool).await;
@@ -518,13 +540,10 @@ pub async fn stream_report_ab_vote_post(
         .take(500)
         .collect();
 
-    let voted_by = match &auth {
-        DashboardAuthLevel::Partner { twitch_login, .. } => twitch_login.trim().to_lowercase(),
-        DashboardAuthLevel::Admin { .. } => "admin".to_string(),
-        DashboardAuthLevel::Localhost => "localhost".to_string(),
-        DashboardAuthLevel::None => {
-            return (StatusCode::UNAUTHORIZED, Json(json!({"error": "unauthorized"}))).into_response();
-        }
+    // voted_by: Partner-Login bzw. Twitch-OAuth-Admin-Login, sonst Auth-Level-Name
+    // (P2.71); None → 401.
+    let Some(voted_by) = writer_key(&auth) else {
+        return (StatusCode::UNAUTHORIZED, Json(json!({"error": "unauthorized"}))).into_response();
     };
 
     let _ = tb_analytics::post_stream::ensure_report_ab_columns(&pool).await;
@@ -544,6 +563,7 @@ pub async fn stream_report_ab_vote_post(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::auth::level::AdminActor;
     use sqlx::postgres::PgPoolOptions;
 
     async fn pool_or_skip(schema: &str) -> Option<PgPool> {
@@ -553,6 +573,109 @@ mod tests {
         sqlx::query(&format!("CREATE SCHEMA {schema}")).execute(&pool).await.unwrap();
         sqlx::query(&format!("SET search_path TO {schema}")).execute(&pool).await.unwrap();
         Some(pool)
+    }
+
+    fn admin_earlysalty() -> DashboardAuthLevel {
+        DashboardAuthLevel::Admin {
+            actor: Some(AdminActor {
+                twitch_user_id: "42".into(),
+                twitch_login: "earlysalty".into(),
+            }),
+        }
+    }
+
+    /// P2.71: writer_key/owner_login lösen für den Twitch-OAuth-Admin seinen
+    /// Login auf (nicht das hartkodierte "admin"); Discord-Admin bleibt "admin".
+    #[test]
+    fn writer_key_und_owner_login_twitch_admin() {
+        assert_eq!(writer_key(&admin_earlysalty()).as_deref(), Some("earlysalty"));
+        assert_eq!(owner_login(&admin_earlysalty()).as_deref(), Some("earlysalty"));
+        // Discord-Admin (kein Actor) → "admin" / kein own-key.
+        assert_eq!(writer_key(&DashboardAuthLevel::admin()).as_deref(), Some("admin"));
+        assert_eq!(owner_login(&DashboardAuthLevel::admin()), None);
+        assert_eq!(writer_key(&DashboardAuthLevel::Localhost).as_deref(), Some("localhost"));
+        assert_eq!(writer_key(&DashboardAuthLevel::None), None);
+    }
+
+    async fn body_json(resp: axum::response::Response) -> serde_json::Value {
+        let bytes = axum::body::to_bytes(resp.into_body(), usize::MAX).await.unwrap();
+        serde_json::from_slice(&bytes).unwrap()
+    }
+
+    /// P2.71: Ein per Twitch-OAuth eingeloggter Admin (earlysalty) bewertet einen
+    /// Report; die Zeile wird unter 'earlysalty' gespeichert und GET stream-report
+    /// bettet das eigene Rating ein (vorher: 'admin' + kein eingebettetes Rating).
+    #[tokio::test]
+    async fn p2_71_twitch_admin_rating_unter_login_und_eingebettet() {
+        let Some(pool) = pool_or_skip("t_p2_71_rating").await else { return };
+        tb_analytics::post_stream::ensure_report_ab_columns(&pool).await.unwrap();
+        // Ein Report existiert für die Session.
+        sqlx::query(
+            "INSERT INTO twitch_stream_ai_reports \
+             (session_id, streamer_login, model, status, report_variant, report_json, generated_at) \
+             VALUES (1, 'streamerx', 'm', 'ready', 'compact', '{}'::jsonb, NOW())",
+        )
+        .execute(&pool).await.unwrap();
+
+        // Admin bewertet.
+        let rate_body = serde_json::to_vec(&json!({
+            "session_id": 1, "streamer": "streamerx", "variant": "compact", "rating": "gut"
+        })).unwrap();
+        let resp = stream_report_rate_handler(admin_earlysalty(), State(pool.clone()), rate_body.into())
+            .await.into_response();
+        assert_eq!(resp.status(), StatusCode::OK);
+
+        // Zeile steht unter 'earlysalty', nicht 'admin'.
+        let rated_by: String = sqlx::query_scalar(
+            "SELECT rated_by FROM twitch_stream_report_ratings WHERE session_id=1 AND report_variant='compact'",
+        )
+        .fetch_one(&pool).await.unwrap();
+        assert_eq!(rated_by, "earlysalty");
+
+        // GET stream-report bettet das eigene Rating ein.
+        let resp = stream_report_handler(
+            admin_earlysalty(),
+            State(pool.clone()),
+            Query(StreamReportParams {
+                streamer: Some("streamerx".into()),
+                session_id: Some("1".into()),
+                variant: Some("compact".into()),
+            }),
+        ).await.into_response();
+        assert_eq!(resp.status(), StatusCode::OK);
+        let v = body_json(resp).await;
+        assert_eq!(v["rating"]["rating"], "gut", "eigenes Rating muss eingebettet sein");
+        assert_eq!(v["rating"]["rated_by"], "earlysalty");
+    }
+
+    /// P2.71: Admin-A/B-Stimme wird unter 'earlysalty' gespeichert und GET ab-vote
+    /// liefert own_vote != null (vorher: 'admin' + own_vote=null).
+    #[tokio::test]
+    async fn p2_71_twitch_admin_abvote_unter_login_und_own_vote() {
+        let Some(pool) = pool_or_skip("t_p2_71_abvote").await else { return };
+        tb_analytics::post_stream::ensure_report_ab_columns(&pool).await.unwrap();
+
+        let vote_body = serde_json::to_vec(&json!({
+            "session_id": 5, "streamer": "streamerx", "winner": "compact"
+        })).unwrap();
+        let resp = stream_report_ab_vote_post(admin_earlysalty(), State(pool.clone()), vote_body.into())
+            .await.into_response();
+        assert_eq!(resp.status(), StatusCode::OK);
+
+        let voted_by: String = sqlx::query_scalar(
+            "SELECT voted_by FROM twitch_stream_report_ab_votes WHERE session_id=5",
+        )
+        .fetch_one(&pool).await.unwrap();
+        assert_eq!(voted_by, "earlysalty");
+
+        let resp = stream_report_ab_vote_get(
+            admin_earlysalty(),
+            State(pool.clone()),
+            Query(AbVoteQuery { streamer: Some("streamerx".into()), session_id: Some("5".into()) }),
+        ).await.into_response();
+        assert_eq!(resp.status(), StatusCode::OK);
+        let v = body_json(resp).await;
+        assert_eq!(v["own_vote"]["winner"], "compact", "own_vote muss gesetzt sein");
     }
 
     #[tokio::test]
