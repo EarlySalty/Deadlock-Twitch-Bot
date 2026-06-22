@@ -119,7 +119,8 @@ export function OverlayBuilderSection({ login }: OverlayBuilderSectionProps) {
     }
   };
 
-  const previewHeight = layout === 'bar' ? 110 : 220;
+  const previewHeight = layout === 'bar' ? 120 : 280;
+  const recommendedSize = layout === 'bar' ? '560 × 120' : '360 × 280';
 
   if (!normalizedLogin) {
     return (
@@ -345,9 +346,13 @@ export function OverlayBuilderSection({ login }: OverlayBuilderSectionProps) {
               <li>Klick in OBS unten bei „Quellen" auf das Plus und wähle „Browser".</li>
               <li>Vergib einen Namen (z. B. „Deadlock-Stats") und bestätige mit OK.</li>
               <li>Füge die obige Overlay-URL in das Feld „URL" ein.</li>
-              <li>Stell die Größe passend zum Layout ein: Box 360×200, Leiste 520×90.</li>
+              <li>Stell die Größe der Browser-Quelle passend zum Layout ein (siehe Empfehlung unten).</li>
               <li>Zieh die Quelle an die gewünschte Stelle — sie aktualisiert sich automatisch.</li>
             </ol>
+            <div className="flex items-center justify-between gap-3 rounded-lg border border-border bg-background/60 px-3 py-2 text-sm">
+              <span className="font-medium text-text-secondary">Empfohlene OBS-Größe</span>
+              <span className="font-mono font-semibold text-white">{recommendedSize}</span>
+            </div>
           </div>
         </div>
 
