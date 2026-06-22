@@ -1,3 +1,11 @@
+## #268 — Overlay-Baukasten überarbeitet: Stile, Layouts & mehr Stats
+
+**Problem:** Der Overlay-Baukasten war funktional, aber schlicht — nur vier An/Aus-Schalter, ein einziger Look, und im Dashboard nur über einen Umweg erreichbar.
+
+**Änderung:** Der Baukasten ist jetzt vollwertig: drei Stile (Dunkel, Hell, Akzent), zwei Layouts (Box-Karte oder schlanke Leiste) und deutlich mehr wählbare Inhalte — Rang mit Abzeichen, Winrate, heutige Bilanz, Serie, K/D, letztes Match, meistgespielter Hero, ein Match-Verlauf-Streifen mit Hero-Bildern und Sieg/Niederlage-Markierung, Live-Match und Branding. Dazu Regler für Hintergrund-Deckkraft und Verlaufslänge sowie eine Live-Vorschau, die sich sofort mitändert. Die Optik ist hochwertig (transparente Glas-Karte), und leere Werte werden ausgeblendet statt mit Platzhaltern gefüllt. Alle Zahlen kommen weiterhin direkt aus den echten Spieldaten. Erreichbar ist der Baukasten jetzt über einen eigenen Eintrag „Stream-Overlay" in der Seitenleiste.
+
+**Ergebnis:** Streamer stellen sich in Sekunden ein Overlay zusammen, das zu ihrem Stream passt — vom dezenten Balken bis zur vollen Statuskarte — und finden es direkt in der Navigation.
+
 ## #267 — Auto-Raid, Reaktivierung und Zuschauer-Tracking repariert
 
 **Problem:** Mehrere zusammenhängende Fehler ließen den automatischen Raid am Stream-Ende für die Mehrheit der Partner ausfallen. Die nötigen Ereignis-Abos wurden im Hintergrund alle paar Stunden gelöscht und erst verspätet neu angelegt — in der Lücke fehlte genau das „Stream offline"-Signal, das den Raid auslöst. Streamer, die ihren Bot-Zugang neu autorisierten, wurden außerdem nur dann wieder vollständig aktiviert, wenn ihr Konto mit Discord verknüpft war — ohne Verknüpfung blieb der Raid stummgeschaltet. Ein abgelaufener Zugangs-Token wurde fälschlich wie ein manuelles Abschalten behandelt, und die Karenzzeit bis zur Pausierung griff durch einen internen Zählerfehler nie. Schließlich war das Spiegeln der Zuschauer- und Chatter-Liste pro Stream still ausgefallen, sodass für viele Streams keine Chatter mehr erfasst wurden.
