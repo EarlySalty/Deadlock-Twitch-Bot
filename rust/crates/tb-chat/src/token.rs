@@ -34,6 +34,7 @@ use crate::secret_sink::SecretSink;
 
 const VALIDATE_URL: &str = "https://id.twitch.tv/oauth2/validate";
 const TOKEN_URL: &str = "https://id.twitch.tv/oauth2/token";
+const HELIX_USERS_URL: &str = "https://api.twitch.tv/helix/users";
 
 /// Entfernt das IRC-style `oauth:`-Präfix und trimmt — Port von
 /// `token_manager.py:135` (`.replace("oauth:","").strip()`).
@@ -45,6 +46,18 @@ const TOKEN_URL: &str = "https://id.twitch.tv/oauth2/token";
 /// genau wie Python.
 fn strip_oauth_prefix(token: &str) -> String {
     token.replace("oauth:", "").trim().to_string()
+}
+
+#[cfg(test)]
+fn infer_mock_users_url(validate_url: &str) -> String {
+    reqwest::Url::parse(validate_url)
+        .map(|mut url| {
+            url.set_path("/helix/users");
+            url.set_query(None);
+            url.set_fragment(None);
+            url.to_string()
+        })
+        .unwrap_or_else(|_| HELIX_USERS_URL.to_string())
 }
 
 /// Seed-Tokens für den Boot-Pfad — Resultat des Provider-Chains.
@@ -88,9 +101,7 @@ fn resolve_seed_tokens(
         .map(strip_oauth_prefix)
         .filter(|s| !s.is_empty());
 
-    let env_access = env_token
-        .map(strip_oauth_prefix)
-        .filter(|s| !s.is_empty());
+    let env_access = env_token.map(strip_oauth_prefix).filter(|s| !s.is_empty());
     if env_access.is_some() {
         return SeedTokens {
             access_token: env_access,
@@ -151,6 +162,20 @@ struct ValidateResponse {
 }
 
 #[derive(Debug, Deserialize)]
+struct HelixUsersResponse {
+    #[serde(default)]
+    data: Vec<HelixUser>,
+}
+
+#[derive(Debug, Deserialize)]
+struct HelixUser {
+    #[serde(default)]
+    id: String,
+    #[serde(default)]
+    login: String,
+}
+
+#[derive(Debug, Deserialize)]
 struct RefreshResponse {
     access_token: String,
     #[serde(default)]
@@ -204,6 +229,7 @@ pub struct BotTokenManager {
     /// URLs für Tests überschreibbar.
     validate_url: String,
     token_url: String,
+    users_url: String,
     /// Optionale Persistenz-Senke (Infisical-Write-Back). `None` = deaktiviert,
     /// Verhalten dann exakt wie vor ADR 0005.
     sink: Option<Arc<dyn SecretSink>>,
@@ -222,6 +248,7 @@ impl BotTokenManager {
             state: RwLock::new(None),
             validate_url: VALIDATE_URL.to_string(),
             token_url: TOKEN_URL.to_string(),
+            users_url: HELIX_USERS_URL.to_string(),
             sink: None,
         })
     }
@@ -235,6 +262,7 @@ impl BotTokenManager {
 
     #[cfg(test)]
     pub fn with_urls(mut self, validate_url: String, token_url: String) -> Self {
+        self.users_url = infer_mock_users_url(&validate_url);
         self.validate_url = validate_url;
         self.token_url = token_url;
         self
@@ -249,7 +277,7 @@ impl BotTokenManager {
     ) -> Result<(), TokenError> {
         let stripped_access = seed_access_token.map(strip_oauth_prefix);
         if let Some(access) = stripped_access.as_deref().filter(|s| !s.is_empty()) {
-            match self.validate(access).await {
+            match self.validate_with_user_fallback(access).await {
                 Ok(v) => {
                     tracing::info!(
                         login = %v.login,
@@ -376,6 +404,55 @@ impl BotTokenManager {
         Ok(resp.json().await?)
     }
 
+    async fn validate_with_user_fallback(
+        &self,
+        access_token: &str,
+    ) -> Result<ValidateResponse, TokenError> {
+        let mut validate = self.validate(access_token).await?;
+        if validate.user_id.trim().is_empty() {
+            let user = self.fetch_helix_user(access_token).await?;
+            validate.user_id = user.id;
+            validate.login = user.login;
+        }
+        Ok(validate)
+    }
+
+    async fn fetch_helix_user(&self, access_token: &str) -> Result<HelixUser, TokenError> {
+        let access_token = strip_oauth_prefix(access_token);
+        let resp = self
+            .client
+            .get(&self.users_url)
+            .header("Client-Id", &self.client_id)
+            .header("Authorization", format!("Bearer {access_token}"))
+            .send()
+            .await?;
+        let status = resp.status().as_u16();
+        if status != 200 {
+            let body = resp.text().await.unwrap_or_default();
+            return Err(TokenError::Rejected {
+                status,
+                body: body.chars().take(200).collect(),
+            });
+        }
+
+        let payload: HelixUsersResponse = resp.json().await?;
+        let user = payload
+            .data
+            .into_iter()
+            .next()
+            .ok_or_else(|| TokenError::Rejected {
+                status,
+                body: "helix/users empty".to_string(),
+            })?;
+        if user.id.trim().is_empty() {
+            return Err(TokenError::Rejected {
+                status,
+                body: "helix/users id empty".to_string(),
+            });
+        }
+        Ok(user)
+    }
+
     async fn refresh_with(&self, refresh_token: &str) -> Result<(), TokenError> {
         let refresh_token = strip_oauth_prefix(refresh_token);
         let refresh_token = refresh_token.as_str();
@@ -399,7 +476,9 @@ impl BotTokenManager {
             });
         }
         let refreshed: RefreshResponse = resp.json().await?;
-        let validate = self.validate(&refreshed.access_token).await?;
+        let validate = self
+            .validate_with_user_fallback(&refreshed.access_token)
+            .await?;
         *self.bot_user_id.write().await = validate.user_id.clone();
         *self.bot_login.write().await = validate.login.clone();
         let new_refresh = refreshed
@@ -521,6 +600,24 @@ mod tests {
         }))
     }
 
+    fn validate_ok_ohne_user_id(expires_in: i64) -> ResponseTemplate {
+        ResponseTemplate::new(200).set_body_json(serde_json::json!({
+            "login": "",
+            "user_id": "",
+            "scopes": ["user:bot", "user:read:chat", "user:write:chat"],
+            "expires_in": expires_in
+        }))
+    }
+
+    fn helix_user_ok() -> ResponseTemplate {
+        ResponseTemplate::new(200).set_body_json(serde_json::json!({
+            "data": [{
+                "id": "1422558159",
+                "login": "deutschedeadlockcommunity"
+            }]
+        }))
+    }
+
     #[tokio::test]
     async fn initialize_mit_gueltigem_seed_token() {
         let server = MockServer::start().await;
@@ -536,6 +633,33 @@ mod tests {
             .unwrap();
         assert_eq!(m.access_token().await.unwrap(), "seed-token");
         assert_eq!(m.bot_user_id().await, "1422558159");
+    }
+
+    #[tokio::test]
+    async fn initialize_nutzt_helix_users_fallback_wenn_validate_keine_user_id_liefert() {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/validate"))
+            .and(header("Authorization", "OAuth seed-token"))
+            .respond_with(validate_ok_ohne_user_id(14000))
+            .expect(1)
+            .mount(&server)
+            .await;
+        Mock::given(method("GET"))
+            .and(path("/helix/users"))
+            .and(header("Client-Id", "cid"))
+            .and(header("Authorization", "Bearer seed-token"))
+            .respond_with(helix_user_ok())
+            .expect(1)
+            .mount(&server)
+            .await;
+
+        let m = manager(&server).await;
+        m.initialize(Some("seed-token"), "refresh-seed")
+            .await
+            .unwrap();
+        assert_eq!(m.bot_user_id().await, "1422558159");
+        assert_eq!(m.bot_login().await, "deutschedeadlockcommunity");
     }
 
     #[tokio::test]
@@ -570,6 +694,42 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(m.access_token().await.unwrap(), "fresh-token");
+    }
+
+    #[tokio::test]
+    async fn refresh_nutzt_helix_users_fallback_wenn_validate_keine_user_id_liefert() {
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/token"))
+            .and(body_string_contains("refresh_token=refresh-seed"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "access_token": "fresh-token",
+                "refresh_token": "fresh-refresh",
+                "expires_in": 14000
+            })))
+            .expect(1)
+            .mount(&server)
+            .await;
+        Mock::given(method("GET"))
+            .and(path("/validate"))
+            .and(header("Authorization", "OAuth fresh-token"))
+            .respond_with(validate_ok_ohne_user_id(14000))
+            .expect(1)
+            .mount(&server)
+            .await;
+        Mock::given(method("GET"))
+            .and(path("/helix/users"))
+            .and(header("Client-Id", "cid"))
+            .and(header("Authorization", "Bearer fresh-token"))
+            .respond_with(helix_user_ok())
+            .expect(1)
+            .mount(&server)
+            .await;
+
+        let m = manager(&server).await;
+        m.initialize(None, "refresh-seed").await.unwrap();
+        assert_eq!(m.bot_user_id().await, "1422558159");
+        assert_eq!(m.bot_login().await, "deutschedeadlockcommunity");
     }
 
     #[tokio::test]
