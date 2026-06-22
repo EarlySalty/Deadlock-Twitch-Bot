@@ -212,7 +212,56 @@ impl TwitchTokenClient for CapturingStubClient {
     }
 }
 
+/// P2.33: Stub-Client, der den 15-Min-`invalid_client`-Cooldown meldet. Jeder
+/// `refresh`-Aufruf ist ein Test-Fehler — `refresh_all_due` MUSS kurzschließen,
+/// bevor ein Refresh ausgelöst wird.
+struct BlockedStubClient;
+#[async_trait::async_trait]
+impl TwitchTokenClient for BlockedStubClient {
+    async fn refresh(&self, _refresh_token: &str) -> Result<TokenResponse, RefreshError> {
+        panic!("refresh darf bei aktivem invalid_client-Cooldown NICHT aufgerufen werden");
+    }
+    async fn exchange_code(&self, _code: &str) -> Result<TokenResponse, RefreshError> {
+        unreachable!()
+    }
+    async fn token_owner(&self, _a: &str) -> Result<TokenOwnerInfo, RefreshError> {
+        unreachable!("token_owner im Test ungenutzt")
+    }
+    fn is_client_auth_blocked(&self) -> bool {
+        true
+    }
+}
+
 // ── Tests ─────────────────────────────────────────────────────────────────────
+
+/// P2.33: Bei aktivem `invalid_client`-Cooldown bricht der Hintergrund-Sweep
+/// sofort mit 0 erneuerten Tokens ab, ohne fällige Streamer gegen Twitch zu
+/// refreshen (Python `if self.is_client_auth_blocked(): return 0`). Trotz einer
+/// fälligen (abgelaufenen) Auth-Zeile wird `refresh` nie aufgerufen.
+#[tokio::test]
+async fn refresh_all_due_kurzschliesst_bei_client_auth_block() {
+    let pool = pool_or_skip!("t6a_refresh_client_auth_block");
+    let cipher = cipher();
+    // Fällige Zeile (abgelaufen) — ohne den Guard würde sie refresht.
+    seed_row_expired(&pool, &cipher, "42", "alt-refresh").await;
+    let blacklist = Arc::new(StubBlacklist::default());
+    let refresher = RaidTokenRefresher::new(
+        pool.clone(),
+        cipher.clone(),
+        Arc::new(BlockedStubClient),
+        blacklist.clone(),
+    );
+
+    let refreshed = refresher.refresh_all_due(Utc::now()).await.unwrap();
+    assert_eq!(refreshed, 0, "Sweep muss bei invalid_client-Cooldown 0 liefern");
+    // Klartext-Spalte unverändert (kein 'ENC'-Write → kein Refresh passiert).
+    let acc_plain: Option<String> =
+        sqlx::query_scalar("SELECT access_token FROM twitch_raid_auth WHERE twitch_user_id = '42'")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+    assert_ne!(acc_plain.as_deref(), Some("ENC"));
+}
 
 #[tokio::test]
 async fn erfolgreicher_refresh_schreibt_neue_verschluesselte_tokens() {

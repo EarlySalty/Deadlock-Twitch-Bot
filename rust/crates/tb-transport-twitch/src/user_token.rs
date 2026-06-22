@@ -37,6 +37,11 @@ pub struct UserTokenResponse {
 /// Fehlerklassen des Token-Endpoints (steuern Blacklist vs. nicht).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum UserTokenError {
+    /// `invalid_client` — Client-Credentials abgelehnt. Auch der lokal
+    /// kurzgeschlossene Zustand bei aktivem 15-Min-Cooldown (P2.33): Der Aufrufer
+    /// behandelt beide identisch (Streamer NICHT sperren, Refresh überspringen),
+    /// daher ist hier bewusst KEINE eigene Variante nötig — das hält die
+    /// bestehenden `match`-Stellen der Adapter exhaustiv ohne Änderung.
     InvalidClient,
     InvalidGrant,
     Other(String),
@@ -140,6 +145,15 @@ impl HelixClient {
         &self,
         params: &[(&str, &str)],
     ) -> Result<UserTokenResponse, UserTokenError> {
+        // P2.33: Cooldown vorab prüfen — Python `_raise_if_client_auth_blocked`
+        // am Eintritt von exchange_code_for_token/refresh_token. Bei aktivem
+        // 15-Min-Block erreicht der Request Twitch gar nicht; der Fall wird als
+        // `InvalidClient` gemeldet (Aufrufer-Verhalten identisch: kein Sperren,
+        // Refresh überspringen).
+        if self.is_client_auth_blocked() {
+            return Err(UserTokenError::InvalidClient);
+        }
+
         let config = self.helix_config();
         let response = self
             .http_client()
@@ -153,6 +167,10 @@ impl HelixClient {
         if status != 200 {
             let body = response.text().await.unwrap_or_default();
             if is_invalid_client(status, &body) {
+                // P2.33: 15-Min-Block setzen (Python `_block_client_auth`), damit
+                // Exchange/Refresh/Sweep Twitch während einer Credentials-Panne
+                // nicht weiter bombardieren.
+                self.block_client_auth();
                 return Err(UserTokenError::InvalidClient);
             }
             if is_invalid_grant(status, &body) {
@@ -162,10 +180,14 @@ impl HelixClient {
             return Err(UserTokenError::Other(format!("HTTP {status}: {snippet}")));
         }
 
-        response
+        let parsed = response
             .json::<UserTokenResponse>()
             .await
-            .map_err(|error| UserTokenError::Other(format!("invalid token response: {error}")))
+            .map_err(|error| UserTokenError::Other(format!("invalid token response: {error}")))?;
+        // P2.33: Erfolgreicher Tausch/Refresh hebt einen evtl. Cooldown auf
+        // (Python: `_client_auth_blocked_until = 0.0`).
+        self.clear_client_auth_block();
+        Ok(parsed)
     }
 
     /// Ermittelt den Inhaber eines frischen User-Access-Tokens
@@ -307,6 +329,77 @@ mod tests {
                 .await
                 .unwrap_err(),
             UserTokenError::InvalidClient
+        );
+    }
+
+    /// P2.33: Erste `invalid_client`-Ablehnung setzt den 15-Min-Cooldown; der
+    /// zweite Refresh UND ein Exchange brechen lokal ab, OHNE Twitch erneut zu
+    /// kontaktieren (Mock `expect(1)` bewacht das). `is_client_auth_blocked`
+    /// meldet danach `true`.
+    #[tokio::test]
+    async fn invalid_client_setzt_15min_cooldown_und_kurzschliesst_folgecalls() {
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/oauth2/token"))
+            .respond_with(ResponseTemplate::new(400).set_body_json(serde_json::json!({
+                "status": 400, "message": "invalid client"
+            })))
+            .expect(1) // nur der erste Versuch erreicht Twitch
+            .mount(&server)
+            .await;
+
+        let client = client_for(&server);
+        assert!(!client.is_client_auth_blocked());
+
+        assert_eq!(
+            client.refresh_user_token("x").await.unwrap_err(),
+            UserTokenError::InvalidClient
+        );
+        assert!(client.is_client_auth_blocked());
+
+        // Folge-Refresh: kein Twitch-Request mehr (expect(1) prüft das).
+        assert_eq!(
+            client.refresh_user_token("y").await.unwrap_err(),
+            UserTokenError::InvalidClient
+        );
+        // Auch ein Exchange ist im Cooldown gesperrt.
+        assert_eq!(
+            client
+                .exchange_user_code("code", "https://example.test/cb")
+                .await
+                .unwrap_err(),
+            UserTokenError::InvalidClient
+        );
+        server.verify().await;
+    }
+
+    /// P2.33: Ein erfolgreicher Refresh hebt einen abgelaufenen Cooldown auf
+    /// (Python: `_client_auth_blocked_until = 0.0`).
+    #[tokio::test]
+    async fn erfolgreicher_refresh_hebt_cooldown_auf() {
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/oauth2/token"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "access_token": "neu", "refresh_token": "neu-ref", "expires_in": 14000, "scope": []
+            })))
+            .mount(&server)
+            .await;
+
+        let client = client_for(&server);
+        // Abgelaufene Cooldown-Deadline setzen (Vergangenheit) → nicht mehr aktiv.
+        client
+            .user_auth_blocked_until
+            .store(crate::token::unix_now() - 1, std::sync::atomic::Ordering::Release);
+        assert!(!client.is_client_auth_blocked());
+
+        client.refresh_user_token("alt").await.unwrap();
+        // Deadline auf 0 genullt.
+        assert_eq!(
+            client
+                .user_auth_blocked_until
+                .load(std::sync::atomic::Ordering::Acquire),
+            0
         );
     }
 
