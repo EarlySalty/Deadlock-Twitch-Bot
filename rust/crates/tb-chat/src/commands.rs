@@ -460,6 +460,14 @@ impl CommandEngine {
                 self.cmd_winrate(event, args).await;
                 true
             }
+            "!mmr" | "!climb" => {
+                self.cmd_mmr(event, args).await;
+                true
+            }
+            "!live" => {
+                self.cmd_live(event, args).await;
+                true
+            }
             "!lastmatch" | "!last" => {
                 self.cmd_lastmatch(event, args).await;
                 true
@@ -642,6 +650,32 @@ impl CommandEngine {
         self.reply(
             event,
             &crate::stats::winrate_reply(&event.broadcaster_user_name, info.as_ref()),
+        )
+        .await;
+    }
+
+    async fn cmd_mmr(&self, event: &ChatMessageEvent, _args: &str) {
+        let info =
+            match crate::stats::resolve_discord_id(&self.pool, &event.broadcaster_user_id).await {
+                Some(discord_id) => crate::stats::fetch_mmr_trend(&discord_id).await,
+                None => None,
+            };
+        self.reply(
+            event,
+            &crate::stats::mmr_reply(&event.broadcaster_user_name, info.as_ref()),
+        )
+        .await;
+    }
+
+    async fn cmd_live(&self, event: &ChatMessageEvent, _args: &str) {
+        let info =
+            match crate::stats::resolve_discord_id(&self.pool, &event.broadcaster_user_id).await {
+                Some(discord_id) => crate::stats::fetch_live(&discord_id).await,
+                None => None,
+            };
+        self.reply(
+            event,
+            &crate::stats::live_reply(&event.broadcaster_user_name, info.as_ref()),
         )
         .await;
     }
@@ -1041,8 +1075,11 @@ impl CommandEngine {
     /// Chat-Nachrichten (≤480 Zeichen, kein Mengen-Limit).
     async fn cmd_explain(&self, event: &ChatMessageEvent, args: &str) {
         let Some(scam) = self.scam.as_ref() else {
-            self.reply(event, "Die Scam-Erklärung ist auf diesem Kanal nicht aktiv.")
-                .await;
+            self.reply(
+                event,
+                "Die Scam-Erklärung ist auf diesem Kanal nicht aktiv.",
+            )
+            .await;
             return;
         };
         let trimmed = args.trim();
@@ -1940,7 +1977,10 @@ mod tests {
     fn help_reply_findet_thema() {
         let kb = help_fixture_kb();
         let r = help_reply(&kb, "raid");
-        assert!(r.contains("Auto-Raid") && r.contains("/streamer/help#auto-raid"), "{r}");
+        assert!(
+            r.contains("Auto-Raid") && r.contains("/streamer/help#auto-raid"),
+            "{r}"
+        );
     }
 
     #[test]

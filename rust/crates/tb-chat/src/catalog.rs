@@ -56,6 +56,16 @@ pub fn catalog() -> &'static [CommandInfo] {
             summary: "Zeigt deine Deadlock-Winrate der letzten Spiele.",
         },
         CommandInfo {
+            name: "!mmr",
+            group: Stats,
+            summary: "Zeigt deinen aktuellen Rang und Trend der letzten Tage.",
+        },
+        CommandInfo {
+            name: "!live",
+            group: Stats,
+            summary: "Zeigt, ob du gerade live in einem Deadlock-Match bist.",
+        },
+        CommandInfo {
             name: "!lastmatch",
             group: Stats,
             summary: "Zeigt dein letztes Deadlock-Spiel (Ergebnis, Hero, KDA).",
