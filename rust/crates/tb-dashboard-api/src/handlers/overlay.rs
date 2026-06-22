@@ -506,22 +506,25 @@ fn normalize_mode(mode: Option<&str>) -> &'static str {
 }
 
 /// Reduziert die Match-Liste auf den gewählten Spielmodus, BEVOR Stats berechnet
-/// werden. `standard` → nur `game_mode == Some(1)`, `brawl` → nur
-/// `game_mode == Some(4)`, alles andere (`all`/unbekannt) → unverändert.
-/// Wirkt nur auf match-abgeleitete Stats, nicht auf rank/mmr-trend/live.
+/// werden. `brawl` → nur Street Brawl (`game_mode == Some(4)`); `standard` →
+/// alles AUSSER Street Brawl (`game_mode != Some(4)`, inkl. fehlender/unbekannter
+/// game_modes — robust gegen alte Matches); `all`/unbekannt → unverändert.
+/// Damit gilt stets `all == standard + brawl`. Wirkt nur auf match-abgeleitete
+/// Stats, nicht auf rank/mmr-trend/live.
 fn filter_by_mode(matches: &[SteamMatch], mode: &str) -> Vec<SteamMatch> {
-    let wanted: Option<i64> = match mode {
-        "standard" => Some(1),
-        "brawl" => Some(4),
-        _ => None,
-    };
-    match wanted {
-        Some(code) => matches
+    const STREET_BRAWL: i64 = 4;
+    match mode {
+        "brawl" => matches
             .iter()
-            .filter(|entry| entry.game_mode == Some(code))
+            .filter(|entry| entry.game_mode == Some(STREET_BRAWL))
             .cloned()
             .collect(),
-        None => matches.to_vec(),
+        "standard" => matches
+            .iter()
+            .filter(|entry| entry.game_mode != Some(STREET_BRAWL))
+            .cloned()
+            .collect(),
+        _ => matches.to_vec(),
     }
 }
 
@@ -1634,16 +1637,20 @@ mod tests {
     fn filter_by_mode_standard_schliesst_brawl_aus() {
         let matches = vec![
             sm_mode(Some(1), Some(1), "Haze"),    // Standard
-            sm_mode(Some(0), Some(4), "Abrams"),  // Brawl
+            sm_mode(Some(0), Some(4), "Abrams"),  // Brawl -> raus
             sm_mode(Some(1), Some(1), "Vindicta"), // Standard
-            sm_mode(Some(0), None, "Seven"),      // unbekannt
+            sm_mode(Some(0), None, "Seven"),      // unbekannt -> zählt als Standard
         ];
         let filtered = filter_by_mode(&matches, "standard");
         let heroes: Vec<_> = filtered
             .iter()
             .map(|m| m.hero_name.clone().unwrap())
             .collect();
-        assert_eq!(heroes, vec!["Haze".to_string(), "Vindicta".to_string()]);
+        // Standard = alles außer Street Brawl: nur Abrams (Brawl) fällt raus.
+        assert_eq!(
+            heroes,
+            vec!["Haze".to_string(), "Vindicta".to_string(), "Seven".to_string()]
+        );
     }
 
     #[test]
