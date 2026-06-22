@@ -32,6 +32,7 @@ pub mod arrival_runtime;
 pub mod arrival_tracking_store;
 pub mod auth_writer;
 pub mod auto_raid_pipeline;
+pub mod bot_oauth;
 pub mod candidate_selection;
 pub mod eligibility;
 pub mod external_recruitment_store;
@@ -48,7 +49,9 @@ pub mod raid_blacklist;
 pub mod raid_executor;
 pub mod raid_history_store;
 pub mod raid_messaging;
+pub mod reauth_admin;
 pub mod recruitment_messaging;
+pub mod scope_fallback_warn;
 pub mod scope_profiles;
 pub mod score_store;
 pub mod score_tracking_store;
@@ -74,6 +77,11 @@ pub use arrival_tracking_store::{
     serialize_confirmation_signals, ArrivalTrackingStore, RecordArrivalInput,
 };
 pub use auth_writer::{AuthWriteError, AuthWriter, NewAuth};
+pub use bot_oauth::{
+    normalize_bot_oauth_context, resolve_bot_oauth_context, BotOAuthContext, BotOAuthSource,
+};
+pub use reauth_admin::{BulkReauthPort, ReauthAdminStore};
+pub use scope_fallback_warn::ScopeFallbackWarner;
 pub use partner_raid_delivery::{
     plan_partner_raid_delivery, PartnerRaidDeliveryConfig, PartnerRaidDeliveryPlan,
     PartnerRaidDeliveryRequest, PartnerRaidDeliveryStatus, PARTNER_RAID_DELAY_SECONDS,
