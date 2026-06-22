@@ -827,7 +827,7 @@ impl DashboardAuthState {
                 admin_archived_at = NULL,
                 manual_partner_opt_out = 0,
                 technical_pause_reason = CASE
-                    WHEN LOWER(COALESCE(technical_pause_reason, '')) IN ('token_error', 'token_error_expired')
+                    WHEN LOWER(TRIM(COALESCE(technical_pause_reason, ''))) LIKE 'token_error%'
                     THEN NULL ELSE technical_pause_reason
                 END
             WHERE (

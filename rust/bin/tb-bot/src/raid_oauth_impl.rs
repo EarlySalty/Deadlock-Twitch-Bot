@@ -1131,22 +1131,21 @@ impl RaidOAuthPort for TbRaidOAuthImpl {
                 });
             }
             (Some(setup), true) => {
-                if let Some(discord_id) = state_discord_user_id {
-                    let setup = setup.clone();
-                    let uid = twitch_user_id.clone();
-                    let login = twitch_login.clone();
-                    tokio::spawn(async move {
-                        if let Err(e) = setup
-                            .sync_partner_state_after_auth(&uid, &login, Some(&discord_id), true)
-                            .await
-                        {
-                            tracing::error!(
-                                login = %login,
-                                "sync_partner_state_after_auth-Followup fehlgeschlagen: {e}"
-                            );
-                        }
-                    });
-                }
+                let setup = setup.clone();
+                let uid = twitch_user_id.clone();
+                let login = twitch_login.clone();
+                let discord_id = state_discord_user_id.clone();
+                tokio::spawn(async move {
+                    if let Err(e) = setup
+                        .sync_partner_state_after_auth(&uid, &login, discord_id.as_deref(), true)
+                        .await
+                    {
+                        tracing::error!(
+                            login = %login,
+                            "sync_partner_state_after_auth-Followup fehlgeschlagen: {e}"
+                        );
+                    }
+                });
             }
             (None, false) => {
                 tracing::warn!(
@@ -1984,7 +1983,9 @@ mod db_tests {
 mod callback_tests {
     use super::*;
     use std::sync::Mutex;
+    use std::time::Duration;
     use tb_crypto::{FieldCipher, KID};
+    use tb_raid::partner_setup::{ChatGreeterPort, DiscordDirectoryPort, ModeratorInstallPort};
     use tb_raid::token_refresher::{RefreshError, TokenOwnerInfo, TokenResponse};
     use tb_raid::RaidOAuthState;
 
@@ -2089,15 +2090,35 @@ mod callback_tests {
         .await
         .unwrap();
         // AuthWriter::store_new_auth raeumt im selben Transaktions-Block den
-        // Token-Error-Zustand auf (Partner-Pause-Grund + Blacklist). Fehlen diese
-        // Tabellen, bricht die Transaktion mit "relation does not exist" ab und der
-        // Handler liefert statt 200 eine generische 500. Nur die vom Schreibpfad
-        // beruehrten Spalten, prod-treu typisiert.
+        // Token-Error-Zustand auf (Partner-Pause-Grund + Blacklist). Der
+        // Reauth-Followup nutzt zusaetzlich PartnerSetupService; daher ist die
+        // DDL hier die kleine prod-treue Schnittmenge beider Schreibpfade.
         sqlx::query(
             r#"
             CREATE TABLE twitch_partners (
-                twitch_user_id          TEXT NOT NULL,
-                technical_pause_reason  TEXT
+                id                          BIGSERIAL PRIMARY KEY,
+                twitch_user_id              TEXT NOT NULL,
+                twitch_login                TEXT NOT NULL,
+                require_discord_link        INTEGER DEFAULT 0,
+                last_description            TEXT,
+                last_link_ok                INTEGER,
+                added_by                    TEXT,
+                last_link_checked_at        TEXT,
+                next_link_check_at          TEXT,
+                manual_verified_permanent   INTEGER DEFAULT 0,
+                manual_verified_until       TEXT,
+                manual_verified_at          TEXT,
+                manual_partner_opt_out      INTEGER DEFAULT 0,
+                raid_bot_enabled            INTEGER DEFAULT 0,
+                silent_ban                  INTEGER DEFAULT 0,
+                silent_raid                 INTEGER DEFAULT 0,
+                live_ping_role_id           BIGINT,
+                live_ping_enabled           INTEGER DEFAULT 1,
+                partnered_at                TEXT DEFAULT CURRENT_TIMESTAMP,
+                admin_archived_at           TEXT,
+                departnered_at              TEXT,
+                technical_pause_reason      TEXT,
+                status                      TEXT DEFAULT 'active'
             )
             "#,
         )
@@ -2117,7 +2138,102 @@ mod callback_tests {
         .execute(&pool)
         .await
         .unwrap();
+        for ddl in [
+            r#"CREATE TABLE twitch_streamer_identities (
+                twitch_user_id TEXT PRIMARY KEY,
+                twitch_login TEXT,
+                discord_user_id TEXT,
+                discord_display_name TEXT,
+                is_on_discord INTEGER DEFAULT 0,
+                created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+                updated_at TEXT DEFAULT CURRENT_TIMESTAMP
+            )"#,
+            r#"CREATE TABLE twitch_streamers (
+                id BIGSERIAL PRIMARY KEY,
+                twitch_login TEXT UNIQUE NOT NULL,
+                twitch_user_id TEXT,
+                created_at TIMESTAMPTZ DEFAULT NOW()
+            )"#,
+            r#"CREATE TABLE streamer_plans (
+                twitch_user_id TEXT PRIMARY KEY,
+                twitch_login TEXT,
+                first_login_at TEXT
+            )"#,
+            r#"CREATE TABLE twitch_partner_raid_scores (
+                twitch_user_id TEXT PRIMARY KEY,
+                twitch_login TEXT
+            )"#,
+            r#"CREATE TABLE twitch_live_state (
+                twitch_user_id TEXT PRIMARY KEY,
+                streamer_login TEXT NOT NULL
+            )"#,
+            r#"CREATE TABLE twitch_stats_category (
+                ts_utc TIMESTAMPTZ NOT NULL,
+                streamer TEXT NOT NULL,
+                viewer_count INTEGER,
+                is_partner BOOLEAN DEFAULT FALSE,
+                game_name TEXT,
+                stream_title TEXT,
+                tags TEXT
+            )"#,
+            r#"CREATE TABLE twitch_stats_tracked (
+                ts_utc TIMESTAMPTZ NOT NULL,
+                streamer TEXT NOT NULL,
+                viewer_count INTEGER,
+                is_partner BOOLEAN DEFAULT FALSE,
+                game_name TEXT,
+                stream_title TEXT,
+                tags TEXT
+            )"#,
+        ] {
+            sqlx::query(ddl).execute(&pool).await.unwrap();
+        }
         pool
+    }
+
+    #[derive(Default)]
+    struct NoopPartnerSetupPorts;
+
+    #[async_trait]
+    impl DiscordDirectoryPort for NoopPartnerSetupPorts {
+        async fn resolve_display_name(&self, _discord_user_id: &str) -> Option<String> {
+            None
+        }
+
+        async fn grant_streamer_role(&self, _discord_user_id: &str, _reason: &str) {}
+    }
+
+    #[async_trait]
+    impl ModeratorInstallPort for NoopPartnerSetupPorts {
+        async fn add_channel_moderator(
+            &self,
+            _broadcaster_id: &str,
+            _bot_user_id: &str,
+            _streamer_access_token: &str,
+        ) {
+        }
+    }
+
+    #[async_trait]
+    impl ChatGreeterPort for NoopPartnerSetupPorts {
+        async fn send_partner_chat_message(
+            &self,
+            _twitch_login: &str,
+            _message: &str,
+        ) -> Result<bool, String> {
+            Ok(true)
+        }
+    }
+
+    fn partner_setup_service(pool: &PgPool) -> Arc<PartnerSetupService> {
+        let ports = Arc::new(NoopPartnerSetupPorts);
+        let discord: Arc<dyn DiscordDirectoryPort> = ports.clone();
+        let moderator: Arc<dyn ModeratorInstallPort> = ports.clone();
+        let greeter: Arc<dyn ChatGreeterPort> = ports;
+        Arc::new(
+            PartnerSetupService::new(pool.clone(), discord, moderator, greeter, None)
+                .with_pauses(Duration::ZERO, Duration::ZERO),
+        )
     }
 
     /// Konfigurierbarer Token-Client: liefert vorgegebene Tokens/Owner oder Fehler.
@@ -2163,7 +2279,11 @@ mod callback_tests {
         }
     }
 
-    async fn make_impl(pool: &PgPool, stub: StubTokenClient) -> TbRaidOAuthImpl {
+    async fn make_impl_with_partner_setup(
+        pool: &PgPool,
+        stub: StubTokenClient,
+        partner_setup: Option<Arc<PartnerSetupService>>,
+    ) -> TbRaidOAuthImpl {
         let cipher = Arc::new(FieldCipher::from_hex_key(TEST_KEY_HEX, KID).unwrap());
         TbRaidOAuthImpl::new(
             pool.clone(),
@@ -2172,8 +2292,12 @@ mod callback_tests {
             Arc::new(stub),
             "cid".to_string(),
             "https://example.test/callback".to_string(),
-            None, // Followups in Handler-Tests nicht verdrahtet
+            partner_setup,
         )
+    }
+
+    async fn make_impl(pool: &PgPool, stub: StubTokenClient) -> TbRaidOAuthImpl {
+        make_impl_with_partner_setup(pool, stub, None).await
     }
 
     /// Persistiert einen State und gibt den Token zurück.
@@ -2231,6 +2355,62 @@ mod callback_tests {
                 .await
                 .unwrap();
         assert!(leftover.is_none(), "State muss konsumiert sein");
+    }
+
+    #[tokio::test]
+    async fn reauth_ohne_discord_state_fuehrt_partner_sync_aus() {
+        let dsn = db_dsn_or_skip!();
+        let pool = make_pool(&dsn, "test_cb_reauth_no_discord_sync").await;
+        sqlx::query(
+            "INSERT INTO twitch_raid_auth (twitch_user_id, twitch_login, raid_enabled, needs_reauth)
+             VALUES ('222', 'reauthme', FALSE, TRUE)",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+        sqlx::query(
+            "INSERT INTO twitch_partners (twitch_user_id, twitch_login, status,
+                manual_partner_opt_out, raid_bot_enabled, technical_pause_reason)
+             VALUES ('222', 'reauthme', 'active', 1, 0, 'token_error')",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+
+        let state = seed_state(&pool, "reauthme", None, None).await;
+        let imp = make_impl_with_partner_setup(
+            &pool,
+            StubTokenClient::ok(&raid_scopes(), "222", "reauthme"),
+            Some(partner_setup_service(&pool)),
+        )
+        .await;
+
+        let result = imp.oauth_callback("code-1", &state, "").await.expect("callback");
+        assert_eq!(result.status, 200, "body: {}", result.body_html);
+
+        for _ in 0..50 {
+            let (opt_out, raid_enabled, pause): (Option<i32>, Option<i32>, Option<String>) =
+                sqlx::query_as(
+                    "SELECT manual_partner_opt_out, raid_bot_enabled, technical_pause_reason
+                     FROM twitch_partners WHERE twitch_user_id = '222'",
+                )
+                .fetch_one(&pool)
+                .await
+                .unwrap();
+            if opt_out == Some(0) && raid_enabled == Some(1) && pause.is_none() {
+                return;
+            }
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+
+        let state: (Option<i32>, Option<i32>, Option<String>) = sqlx::query_as(
+            "SELECT manual_partner_opt_out, raid_bot_enabled, technical_pause_reason
+             FROM twitch_partners WHERE twitch_user_id = '222'",
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        panic!("Partner-Sync nach Reauth ohne Discord-ID blieb aus: {state:?}");
     }
 
     #[tokio::test]
