@@ -50,6 +50,8 @@ struct CacheEntry {
 pub struct OverlayQuery {
     #[serde(default)]
     streamer: Option<String>,
+    #[serde(default)]
+    mode: Option<String>,
 }
 
 #[derive(Serialize)]
@@ -112,7 +114,7 @@ struct SteamMatchHistory {
     matches: Vec<SteamMatch>,
 }
 
-#[derive(Deserialize)]
+#[derive(Clone, Deserialize)]
 struct SteamMatch {
     #[serde(default)]
     match_result: Option<i64>,
@@ -128,6 +130,11 @@ struct SteamMatch {
     player_deaths: i64,
     #[serde(default)]
     player_assists: i64,
+    /// Deadlock-`ECitadelGameMode`-Diskriminator: 1 = Normal/Standard,
+    /// 4 = StreetBrawl. Andere Werte (Test/Sandbox/NYC/Internal) bleiben dem
+    /// `all`-Modus vorbehalten. `match_mode` ist NICHT der Diskriminator.
+    #[serde(default)]
+    game_mode: Option<i64>,
 }
 
 #[derive(Deserialize)]
@@ -267,24 +274,24 @@ fn normalize_login(streamer: Option<&str>) -> Option<String> {
         .map(str::to_lowercase)
 }
 
-async fn cached_overlay_or_fetch(pool: &PgPool, login: &str) -> Value {
+async fn cached_overlay_or_fetch(pool: &PgPool, login: &str, mode: &str) -> Value {
+    // Pro (login, mode) keyen — sonst liefert der Cache den falschen Modus.
+    let key = format!("{login}|{mode}");
     loop {
         let notify = {
             let mut cache = overlay_cache().lock().await;
             let now = Instant::now();
-            if let Some(entry) = cache.entries.get(login) {
+            if let Some(entry) = cache.entries.get(&key) {
                 if now.duration_since(entry.inserted_at) < OVERLAY_CACHE_TTL {
                     return entry.body.clone();
                 }
             }
 
-            if let Some(notify) = cache.inflight.get(login) {
+            if let Some(notify) = cache.inflight.get(&key) {
                 Some(Arc::clone(notify))
             } else {
                 let notify = Arc::new(Notify::new());
-                cache
-                    .inflight
-                    .insert(login.to_string(), Arc::clone(&notify));
+                cache.inflight.insert(key.clone(), Arc::clone(&notify));
                 None
             }
         };
@@ -295,17 +302,17 @@ async fn cached_overlay_or_fetch(pool: &PgPool, login: &str) -> Value {
         notify.notified().await;
     }
 
-    let body = build_overlay_json(pool, login).await;
+    let body = build_overlay_json(pool, login, mode).await;
     let notify = {
         let mut cache = overlay_cache().lock().await;
         cache.entries.insert(
-            login.to_string(),
+            key.clone(),
             CacheEntry {
                 inserted_at: Instant::now(),
                 body: body.clone(),
             },
         );
-        cache.inflight.remove(login)
+        cache.inflight.remove(&key)
     };
     if let Some(notify) = notify {
         notify.notify_waiters();
@@ -313,7 +320,7 @@ async fn cached_overlay_or_fetch(pool: &PgPool, login: &str) -> Value {
     body
 }
 
-async fn build_overlay_json(pool: &PgPool, login: &str) -> Value {
+async fn build_overlay_json(pool: &PgPool, login: &str, mode: &str) -> Value {
     let discord_id = match resolve_discord_id(pool, login).await {
         Ok(Some(discord_id)) => discord_id,
         Ok(None) => return ok_false(),
@@ -350,7 +357,11 @@ async fn build_overlay_json(pool: &PgPool, login: &str) -> Value {
     let history = matches.filter(|value| value.linked != Some(false));
     let live = live.filter(|value| value.linked != Some(false));
 
-    let match_list: &[SteamMatch] = history.as_ref().map(|value| value.matches.as_slice()).unwrap_or(&[]);
+    let raw_matches: &[SteamMatch] =
+        history.as_ref().map(|value| value.matches.as_slice()).unwrap_or(&[]);
+    // Modus-Filter wirkt NUR auf match-abgeleitete Stats, nicht auf rank/mmr-trend/live.
+    let match_list = filter_by_mode(raw_matches, mode);
+    let match_list = match_list.as_slice();
     let match_summary = summarize_matches(match_list);
     let today = summarize_today(match_list, Utc::now());
     let kd = compute_kd(match_list);
@@ -482,6 +493,36 @@ fn clean_string(value: &Option<String>) -> Option<String> {
         .map(str::trim)
         .filter(|value| !value.is_empty())
         .map(str::to_string)
+}
+
+/// Normalisiert den Spielmodus-Param auf `all`, `standard` oder `brawl`.
+/// Unbekanntes/leeres → `all` (keine Filterung).
+fn normalize_mode(mode: Option<&str>) -> &'static str {
+    match mode.map(str::trim).map(str::to_ascii_lowercase).as_deref() {
+        Some("standard") => "standard",
+        Some("brawl") => "brawl",
+        _ => "all",
+    }
+}
+
+/// Reduziert die Match-Liste auf den gewählten Spielmodus, BEVOR Stats berechnet
+/// werden. `standard` → nur `game_mode == Some(1)`, `brawl` → nur
+/// `game_mode == Some(4)`, alles andere (`all`/unbekannt) → unverändert.
+/// Wirkt nur auf match-abgeleitete Stats, nicht auf rank/mmr-trend/live.
+fn filter_by_mode(matches: &[SteamMatch], mode: &str) -> Vec<SteamMatch> {
+    let wanted: Option<i64> = match mode {
+        "standard" => Some(1),
+        "brawl" => Some(4),
+        _ => None,
+    };
+    match wanted {
+        Some(code) => matches
+            .iter()
+            .filter(|entry| entry.game_mode == Some(code))
+            .cloned()
+            .collect(),
+        None => matches.to_vec(),
+    }
 }
 
 /// Liefert die gewerteten Matches (`not_scored != true`, `match_result ∈ {0,1}`)
@@ -634,7 +675,7 @@ fn build_recent(matches: &[SteamMatch], n: usize) -> Vec<RecentMatch> {
         .collect()
 }
 
-/// `GET /twitch/api/v2/public/overlay?streamer=<login>`
+/// `GET /twitch/api/v2/public/overlay?streamer=<login>&mode=<all|standard|brawl>`
 pub async fn overlay_api_handler(
     State(pool): State<PgPool>,
     Query(query): Query<OverlayQuery>,
@@ -643,7 +684,8 @@ pub async fn overlay_api_handler(
         return (StatusCode::OK, Json(ok_false())).into_response();
     };
 
-    let body = cached_overlay_or_fetch(&pool, &login).await;
+    let mode = normalize_mode(query.mode.as_deref());
+    let body = cached_overlay_or_fetch(&pool, &login, mode).await;
     (StatusCode::OK, Json(body)).into_response()
 }
 
@@ -1037,6 +1079,7 @@ const OVERLAY_HTML: &str = r##"<!doctype html>
 
     const theme = oneOf('theme', ['dark', 'light', 'accent'], 'dark');
     const layout = oneOf('layout', ['box', 'bar'], 'box');
+    const mode = oneOf('mode', ['all', 'standard', 'brawl'], 'all');
     const position = oneOf('pos', ['bl', 'br', 'tl', 'tr'], 'bl');
     const opacity = clampInt('opacity', 0, 100, 85);
     const recentN = clampInt('recent_n', 1, 15, 10);
@@ -1346,7 +1389,7 @@ const OVERLAY_HTML: &str = r##"<!doctype html>
         return;
       }
       try {
-        const response = await fetch(`/twitch/api/v2/public/overlay?streamer=${encodeURIComponent(streamer)}`, { cache: 'no-store' });
+        const response = await fetch(`/twitch/api/v2/public/overlay?streamer=${encodeURIComponent(streamer)}&mode=${mode}`, { cache: 'no-store' });
         if (!response.ok) {
           hide();
           return;
@@ -1395,7 +1438,8 @@ mod tests {
     use crate::build_public_router;
 
     use super::{
-        build_recent, compute_kd, summarize_matches, summarize_today, RecentMatch, SteamMatch,
+        build_recent, compute_kd, filter_by_mode, normalize_mode, scored_matches,
+        summarize_matches, summarize_today, RecentMatch, SteamMatch,
     };
     use chrono::TimeZone;
 
@@ -1424,6 +1468,16 @@ mod tests {
             player_kills: kills,
             player_deaths: deaths,
             player_assists: assists,
+            game_mode: None,
+        }
+    }
+
+    /// Wie `sm`, aber mit explizitem `game_mode` (Deadlock-Diskriminator,
+    /// 1 = Standard, 4 = Street Brawl).
+    fn sm_mode(result: Option<i64>, game_mode: Option<i64>, hero: &str) -> SteamMatch {
+        SteamMatch {
+            game_mode,
+            ..sm(result, false, 0, hero, 0, 0, 0)
         }
     }
 
@@ -1563,6 +1617,85 @@ mod tests {
         // Streak: neuestes ist win, danach loss -> Länge 1
         assert_eq!(summary.streak_kind, "win");
         assert_eq!(summary.streak_len, 1);
+    }
+
+    #[test]
+    fn normalize_mode_normalisiert_und_faellt_auf_all_zurueck() {
+        assert_eq!(normalize_mode(Some("standard")), "standard");
+        assert_eq!(normalize_mode(Some("  BRAWL ")), "brawl");
+        assert_eq!(normalize_mode(Some("Standard")), "standard");
+        assert_eq!(normalize_mode(Some("all")), "all");
+        assert_eq!(normalize_mode(Some("unsinn")), "all");
+        assert_eq!(normalize_mode(Some("")), "all");
+        assert_eq!(normalize_mode(None), "all");
+    }
+
+    #[test]
+    fn filter_by_mode_standard_schliesst_brawl_aus() {
+        let matches = vec![
+            sm_mode(Some(1), Some(1), "Haze"),    // Standard
+            sm_mode(Some(0), Some(4), "Abrams"),  // Brawl
+            sm_mode(Some(1), Some(1), "Vindicta"), // Standard
+            sm_mode(Some(0), None, "Seven"),      // unbekannt
+        ];
+        let filtered = filter_by_mode(&matches, "standard");
+        let heroes: Vec<_> = filtered
+            .iter()
+            .map(|m| m.hero_name.clone().unwrap())
+            .collect();
+        assert_eq!(heroes, vec!["Haze".to_string(), "Vindicta".to_string()]);
+    }
+
+    #[test]
+    fn filter_by_mode_brawl_schliesst_standard_aus() {
+        let matches = vec![
+            sm_mode(Some(1), Some(1), "Haze"),    // Standard
+            sm_mode(Some(0), Some(4), "Abrams"),  // Brawl
+            sm_mode(Some(1), Some(4), "Seven"),   // Brawl
+            sm_mode(Some(0), None, "Vindicta"),   // unbekannt
+        ];
+        let filtered = filter_by_mode(&matches, "brawl");
+        let heroes: Vec<_> = filtered
+            .iter()
+            .map(|m| m.hero_name.clone().unwrap())
+            .collect();
+        assert_eq!(heroes, vec!["Abrams".to_string(), "Seven".to_string()]);
+    }
+
+    #[test]
+    fn filter_by_mode_all_enthaelt_beide_und_unbekannte() {
+        let matches = vec![
+            sm_mode(Some(1), Some(1), "Haze"),  // Standard
+            sm_mode(Some(0), Some(4), "Abrams"), // Brawl
+            sm_mode(Some(1), None, "Seven"),    // unbekannt
+        ];
+        // all
+        assert_eq!(filter_by_mode(&matches, "all").len(), 3);
+        // unbekannter Modus-String verhält sich wie all (keine Filterung)
+        assert_eq!(filter_by_mode(&matches, "unsinn").len(), 3);
+    }
+
+    #[test]
+    fn filter_by_mode_kombiniert_mit_not_scored_ausschluss() {
+        // Modus-Filter wirkt VOR scored_matches; not_scored-Ausschluss bleibt danach.
+        let matches = vec![
+            sm_mode(Some(1), Some(1), "Haze"), // Standard, gewertet
+            SteamMatch {
+                not_scored: Some(true),
+                ..sm_mode(Some(0), Some(1), "Abrams")
+            }, // Standard, not_scored -> raus
+            sm_mode(Some(0), Some(4), "Seven"), // Brawl -> vom Standard-Filter raus
+            sm_mode(Some(0), Some(1), "Vindicta"), // Standard, gewertet
+        ];
+        let filtered = filter_by_mode(&matches, "standard");
+        // Modus-Filter behält 3 Standard-Matches (inkl. not_scored)
+        assert_eq!(filtered.len(), 3);
+        // scored_matches entfernt das not_scored-Standard-Match -> 2 gewertete
+        let scored = scored_matches(&filtered);
+        assert_eq!(scored.len(), 2);
+        let summary = summarize_matches(&filtered).unwrap();
+        assert_eq!(summary.wins, 1);
+        assert_eq!(summary.losses, 1);
     }
 
     struct EnvGuard {
@@ -1885,6 +2018,7 @@ mod tests {
         // Param-Parsing + Defaults
         assert!(html.contains("oneOf('theme', ['dark', 'light', 'accent'], 'dark')"));
         assert!(html.contains("oneOf('layout', ['box', 'bar'], 'box')"));
+        assert!(html.contains("oneOf('mode', ['all', 'standard', 'brawl'], 'all')"));
         assert!(html.contains("oneOf('pos', ['bl', 'br', 'tl', 'tr'], 'bl')"));
         assert!(html.contains("clampInt('opacity', 0, 100, 85)"));
         assert!(html.contains("clampInt('recent_n', 1, 15, 10)"));
@@ -1897,6 +2031,8 @@ mod tests {
         assert!(html.contains("card.classList.add(`overlay-pos-${position}`)"));
         // Daten-Endpoint + Polling + Assets
         assert!(html.contains("/twitch/api/v2/public/overlay?streamer="));
+        // Spielmodus an den Daten-Fetch angehängt
+        assert!(html.contains("&mode=${mode}"));
         assert!(html.contains("setInterval(poll, 20000)"));
         assert!(html.contains("Math.floor(badgeLevel / 10)"));
         assert!(html.contains("badge_lg_subrank${sub}.png"));
