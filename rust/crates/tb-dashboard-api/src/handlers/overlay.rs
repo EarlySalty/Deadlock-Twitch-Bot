@@ -25,10 +25,14 @@ use tokio::sync::{Mutex, Notify};
 use crate::handlers::spa;
 
 const DEFAULT_STEAM_BOT_BASE_URL: &str = "http://127.0.0.1:8783";
+const DEFAULT_DEADLOCK_ASSETS_BASE: &str = "https://assets.deadlock-api.com";
 const OVERLAY_CACHE_TTL: Duration = Duration::from_secs(30);
 const STEAM_BOT_TIMEOUT: Duration = Duration::from_secs(8);
+const HERO_ASSETS_TIMEOUT: Duration = Duration::from_secs(5);
+const HERO_ASSETS_TTL: Duration = Duration::from_secs(6 * 60 * 60);
 
 static OVERLAY_CACHE: OnceLock<Mutex<OverlayCache>> = OnceLock::new();
+static HERO_ICON_CACHE: OnceLock<Mutex<HeroIconCache>> = OnceLock::new();
 
 #[derive(Default)]
 struct OverlayCache {
@@ -72,6 +76,7 @@ struct OverlayResponse {
     last_assists: Option<i64>,
     most_played_hero: Option<String>,
     most_played_count: Option<i64>,
+    most_played_icon: Option<String>,
     #[serde(default)]
     recent: Vec<RecentMatch>,
     career_wins: Option<i64>,
@@ -84,6 +89,7 @@ struct OverlayResponse {
 struct RecentMatch {
     result: String,
     hero: Option<String>,
+    hero_icon: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -159,8 +165,95 @@ struct TodaySummary {
     matches: i64,
 }
 
+#[derive(Default)]
+struct HeroIconCache {
+    fetched_at: Option<Instant>,
+    /// `hero_name.to_lowercase()` → Icon-URL.
+    icons: Arc<HashMap<String, String>>,
+}
+
+/// Antwortform der öffentlichen Deadlock-Assets-Helden-API.
+#[derive(Deserialize)]
+struct AssetHero {
+    #[serde(default)]
+    name: Option<String>,
+    #[serde(default)]
+    images: AssetHeroImages,
+}
+
+#[derive(Deserialize, Default)]
+struct AssetHeroImages {
+    #[serde(default)]
+    icon_image_small: Option<String>,
+    #[serde(default)]
+    icon_image_small_webp: Option<String>,
+}
+
 fn overlay_cache() -> &'static Mutex<OverlayCache> {
     OVERLAY_CACHE.get_or_init(|| Mutex::new(OverlayCache::default()))
+}
+
+fn hero_icon_cache() -> &'static Mutex<HeroIconCache> {
+    HERO_ICON_CACHE.get_or_init(|| Mutex::new(HeroIconCache::default()))
+}
+
+fn deadlock_assets_base_url() -> String {
+    std::env::var("DEADLOCK_ASSETS_BASE")
+        .ok()
+        .map(|value| value.trim().trim_end_matches('/').to_string())
+        .filter(|value| !value.is_empty())
+        .unwrap_or_else(|| DEFAULT_DEADLOCK_ASSETS_BASE.to_string())
+}
+
+/// Hero-Name → Icon-URL aus der öffentlichen Deadlock-Assets-API, mit langem
+/// In-Memory-Cache (~6 h). Best-effort: bei Fehler/Timeout eine leere Map —
+/// der Render fällt dann auf seine Buchstaben-Kachel zurück, niemals `ok:false`.
+async fn hero_icon_map(client: &Client) -> Arc<HashMap<String, String>> {
+    {
+        let cache = hero_icon_cache().lock().await;
+        if let Some(fetched_at) = cache.fetched_at {
+            if fetched_at.elapsed() < HERO_ASSETS_TTL {
+                return Arc::clone(&cache.icons);
+            }
+        }
+    }
+
+    let map = fetch_hero_icon_map(client).await;
+    let arc = Arc::new(map);
+    {
+        let mut cache = hero_icon_cache().lock().await;
+        cache.fetched_at = Some(Instant::now());
+        cache.icons = Arc::clone(&arc);
+    }
+    arc
+}
+
+async fn fetch_hero_icon_map(client: &Client) -> HashMap<String, String> {
+    let url = format!("{}/v2/heroes?only_active=true", deadlock_assets_base_url());
+    let heroes: Vec<AssetHero> = match client
+        .get(&url)
+        .timeout(HERO_ASSETS_TIMEOUT)
+        .send()
+        .await
+        .ok()
+        .filter(|response| response.status().is_success())
+    {
+        Some(response) => response.json().await.unwrap_or_default(),
+        None => return HashMap::new(),
+    };
+
+    let mut map = HashMap::new();
+    for hero in heroes {
+        let Some(name) = clean_string(&hero.name) else {
+            continue;
+        };
+        let icon = clean_string(&hero.images.icon_image_small)
+            .or_else(|| clean_string(&hero.images.icon_image_small_webp));
+        if let Some(icon) = icon {
+            map.insert(name.to_lowercase(), icon);
+        }
+    }
+    map
 }
 
 fn ok_false() -> Value {
@@ -246,10 +339,11 @@ async fn build_overlay_json(pool: &PgPool, login: &str) -> Value {
     let matches_query = [("discord_id", discord_id.as_str()), ("limit", "150")];
     let live_query = [("discord_id", discord_id.as_str())];
 
-    let (trend, matches, live) = tokio::join!(
+    let (trend, matches, live, hero_icons) = tokio::join!(
         fetch_steam_json::<SteamMmrTrend>(&client, &trend_url, &trend_query),
         fetch_steam_json::<SteamMatchHistory>(&client, &matches_url, &matches_query),
         fetch_steam_json::<SteamLiveStatus>(&client, &live_url, &live_query),
+        hero_icon_map(&client),
     );
 
     let trend = trend.filter(|value| value.linked != Some(false));
@@ -260,7 +354,18 @@ async fn build_overlay_json(pool: &PgPool, login: &str) -> Value {
     let match_summary = summarize_matches(match_list);
     let today = summarize_today(match_list, Utc::now());
     let kd = compute_kd(match_list);
-    let recent = build_recent(match_list, 15);
+    let mut recent = build_recent(match_list, 15);
+
+    let lookup_icon =
+        |hero: Option<&str>| hero.and_then(|name| hero_icons.get(&name.to_lowercase()).cloned());
+
+    for entry in &mut recent {
+        entry.hero_icon = lookup_icon(entry.hero.as_deref());
+    }
+    let most_played_icon = match_summary
+        .as_ref()
+        .and_then(|summary| summary.most_played_hero.as_deref())
+        .and_then(|hero| lookup_icon(Some(hero)));
 
     let response = OverlayResponse {
         ok: true,
@@ -297,6 +402,7 @@ async fn build_overlay_json(pool: &PgPool, login: &str) -> Value {
         most_played_count: match_summary
             .as_ref()
             .and_then(|summary| summary.most_played_count),
+        most_played_icon,
         recent,
         career_wins: None,
         live: live.as_ref().map(|value| value.live).unwrap_or(false),
@@ -523,6 +629,7 @@ fn build_recent(matches: &[SteamMatch], n: usize) -> Vec<RecentMatch> {
         .map(|entry| RecentMatch {
             result: if entry.match_result == Some(1) { "win" } else { "loss" }.to_string(),
             hero: clean_string(&entry.hero_name),
+            hero_icon: None,
         })
         .collect()
 }
@@ -629,8 +736,8 @@ const OVERLAY_HTML: &str = r##"<!doctype html>
 
     /* --- Box-Layout: Glassmorphism-Karte --- */
     #overlay-card.layout-box {
-      width: 312px;
-      padding: 16px 18px;
+      width: 332px;
+      padding: 14px 16px;
       border-radius: var(--radius);
       background: var(--bg);
       border: 1px solid var(--border);
@@ -690,7 +797,7 @@ const OVERLAY_HTML: &str = r##"<!doctype html>
 
     .ov-head-rule {
       height: 2px;
-      margin: 10px 0 12px;
+      margin: 9px 0 11px;
       border-radius: 2px;
       background: var(--accent-line);
       opacity: 0.75;
@@ -707,7 +814,7 @@ const OVERLAY_HTML: &str = r##"<!doctype html>
       display: flex;
       flex-direction: column;
       gap: 3px;
-      padding: 2px 14px;
+      padding: 2px 12px;
       flex: 1 1 auto;
       min-width: 0;
       border-left: 1px solid var(--border);
@@ -765,17 +872,17 @@ const OVERLAY_HTML: &str = r##"<!doctype html>
     }
 
     .ov-main-icon {
-      width: 26px;
-      height: 26px;
+      width: 24px;
+      height: 24px;
       flex: 0 0 auto;
-      border-radius: 999px;
+      border-radius: 7px;
       object-fit: cover;
       background: rgba(127, 127, 127, 0.18);
     }
 
     /* --- Recent-Matches-Strip --- */
     .ov-recent {
-      margin-top: 12px;
+      margin-top: 11px;
     }
 
     .ov-recent-label {
@@ -789,34 +896,40 @@ const OVERLAY_HTML: &str = r##"<!doctype html>
 
     .ov-recent-row {
       display: flex;
-      gap: 6px;
-      flex-wrap: nowrap;
+      gap: 5px;
+      flex-wrap: wrap;
     }
 
-    .ov-chip {
+    /* Hero-Kachel: abgerundetes Quadrat mit Portrait, Sieg/Niederlage als
+       dezenter farbiger Unterstrich (keine Vollfarb-Fläche). */
+    .ov-tile {
       width: 26px;
       height: 26px;
       flex: 0 0 auto;
-      border-radius: 999px;
+      border-radius: 7px;
       box-sizing: border-box;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      overflow: hidden;
       object-fit: cover;
-      background: rgba(127, 127, 127, 0.18);
+      background: rgba(127, 127, 127, 0.16);
+      border: 1px solid var(--border);
+      border-bottom-width: 2px;
     }
 
-    .ov-chip.win { border: 2px solid var(--win); }
-    .ov-chip.loss { border: 2px solid var(--loss); }
+    .ov-tile.win { border-bottom-color: var(--win); }
+    .ov-tile.loss { border-bottom-color: var(--loss); }
 
-    .ov-dot {
-      width: 26px;
-      height: 26px;
-      flex: 0 0 auto;
-      border-radius: 999px;
-      box-sizing: border-box;
-      display: inline-block;
+    /* Fallback ohne Icon: dezente Kachel mit S/N-Buchstabe in --win/--loss. */
+    .ov-tile-fallback {
+      font-size: 12px;
+      font-weight: 800;
+      line-height: 1;
     }
 
-    .ov-dot.win { background: var(--win); border: 2px solid var(--win); }
-    .ov-dot.loss { background: var(--loss); border: 2px solid var(--loss); }
+    .ov-tile-fallback.win { color: var(--win); }
+    .ov-tile-fallback.loss { color: var(--loss); }
 
     /* --- Branding --- */
     .ov-brand {
@@ -876,8 +989,16 @@ const OVERLAY_HTML: &str = r##"<!doctype html>
     }
 
     .ov-seg .rank-badge { width: 26px; height: 26px; }
-    .ov-seg .ov-recent-row .ov-chip,
-    .ov-seg .ov-recent-row .ov-dot { width: 22px; height: 22px; }
+    .ov-seg .ov-recent-row {
+      flex-wrap: nowrap;
+      gap: 4px;
+    }
+    .ov-seg .ov-recent-row .ov-tile {
+      width: 20px;
+      height: 20px;
+      border-radius: 6px;
+    }
+    .ov-seg .ov-recent-row .ov-tile-fallback { font-size: 10px; }
 
     @keyframes overlay-enter {
       from { opacity: 0; transform: translateY(4px); }
@@ -939,7 +1060,6 @@ const OVERLAY_HTML: &str = r##"<!doctype html>
     card.classList.add(`overlay-pos-${position}`);
     card.style.setProperty('--bg-alpha', String(opacity / 100));
 
-    let heroIconByName = new Map();
     let latestData = null;
 
     const isNumber = (value) => typeof value === 'number' && Number.isFinite(value);
@@ -958,33 +1078,8 @@ const OVERLAY_HTML: &str = r##"<!doctype html>
       return null;
     }
 
-    function heroIconUrl(heroName) {
-      if (typeof heroName !== 'string') return null;
-      return heroIconByName.get(heroName.trim().toLowerCase()) || null;
-    }
-
-    async function loadHeroAssets() {
-      try {
-        const response = await fetch('https://assets.deadlock-api.com/v2/heroes?only_active=true', { cache: 'force-cache' });
-        if (!response.ok) return;
-        const heroes = await response.json();
-        if (!Array.isArray(heroes)) return;
-
-        const next = new Map();
-        for (const hero of heroes) {
-          const name = typeof hero?.name === 'string' ? hero.name.trim().toLowerCase() : '';
-          const images = hero?.images || {};
-          const icon = images.icon_image_small || images.icon_image_small_webp;
-          if (name && typeof icon === 'string' && icon.trim()) {
-            next.set(name, icon.trim());
-          }
-        }
-
-        heroIconByName = next;
-        if (latestData) render(latestData);
-      } catch (_) {
-        heroIconByName = new Map();
-      }
+    function cleanIcon(value) {
+      return typeof value === 'string' && value.trim() ? value.trim() : null;
     }
 
     function hide() {
@@ -1000,22 +1095,26 @@ const OVERLAY_HTML: &str = r##"<!doctype html>
       return node;
     }
 
+    function fallbackTile(result) {
+      return el('span', `ov-tile ov-tile-fallback ${result}`, result === 'win' ? 'S' : 'N');
+    }
+
     function recentRow(recent) {
       const row = el('div', 'ov-recent-row');
       const items = Array.isArray(recent) ? recent.slice(0, recentN) : [];
       for (const match of items) {
         const result = match && match.result === 'win' ? 'win' : 'loss';
-        const icon = heroIconUrl(match && match.hero);
+        const icon = cleanIcon(match && match.hero_icon);
         if (icon) {
-          const image = el('img', `ov-chip ${result}`);
+          const image = el('img', `ov-tile ${result}`);
           image.src = icon;
           image.alt = '';
           image.decoding = 'async';
           image.loading = 'lazy';
-          image.onerror = () => image.replaceWith(el('span', `ov-dot ${result}`));
+          image.onerror = () => image.replaceWith(fallbackTile(result));
           row.appendChild(image);
         } else {
-          row.appendChild(el('span', `ov-dot ${result}`));
+          row.appendChild(fallbackTile(result));
         }
       }
       return row.childElementCount ? row : null;
@@ -1118,7 +1217,7 @@ const OVERLAY_HTML: &str = r##"<!doctype html>
           label: 'MAIN',
           value: () => {
             const value = el('div', 'ov-value');
-            const icon = heroIconUrl(data.most_played_hero);
+            const icon = cleanIcon(data.most_played_icon);
             if (icon) {
               const image = el('img', 'ov-main-icon');
               image.src = icon;
@@ -1181,7 +1280,7 @@ const OVERLAY_HTML: &str = r##"<!doctype html>
         const row = recentRow(data.recent);
         if (row) {
           const wrap = el('div', 'ov-recent');
-          wrap.appendChild(el('div', 'ov-recent-label', 'Letzte'));
+          wrap.appendChild(el('div', 'ov-recent-label', 'Match-Verlauf'));
           wrap.appendChild(row);
           frag.appendChild(wrap);
         }
@@ -1215,7 +1314,7 @@ const OVERLAY_HTML: &str = r##"<!doctype html>
         const row = recentRow(data.recent);
         if (row) {
           const seg = el('div', 'ov-seg');
-          seg.appendChild(el('span', 'ov-seg-label', 'Letzte'));
+          seg.appendChild(el('span', 'ov-seg-label', 'Match-Verlauf'));
           seg.appendChild(row);
           bar.appendChild(seg);
         }
@@ -1258,7 +1357,6 @@ const OVERLAY_HTML: &str = r##"<!doctype html>
       }
     }
 
-    loadHeroAssets();
     poll();
     setInterval(poll, 20000);
   </script>
@@ -1271,6 +1369,13 @@ async fn clear_overlay_cache_for_tests() {
     let mut cache = overlay_cache().lock().await;
     cache.entries.clear();
     cache.inflight.clear();
+}
+
+#[cfg(test)]
+async fn clear_hero_icon_cache_for_tests() {
+    let mut cache = hero_icon_cache().lock().await;
+    cache.fetched_at = None;
+    cache.icons = Arc::new(HashMap::new());
 }
 
 #[cfg(test)]
@@ -1400,15 +1505,18 @@ mod tests {
             vec![
                 RecentMatch {
                     result: "win".to_string(),
-                    hero: Some("Haze".to_string())
+                    hero: Some("Haze".to_string()),
+                    hero_icon: None,
                 },
                 RecentMatch {
                     result: "loss".to_string(),
-                    hero: Some("Vindicta".to_string())
+                    hero: Some("Vindicta".to_string()),
+                    hero_icon: None,
                 },
                 RecentMatch {
                     result: "win".to_string(),
-                    hero: Some("Seven".to_string())
+                    hero: Some("Seven".to_string()),
+                    hero_icon: None,
                 },
             ]
         );
@@ -1475,6 +1583,28 @@ mod tests {
                 std::env::set_var("STEAM_BOT_RANK_URL", previous);
             } else {
                 std::env::remove_var("STEAM_BOT_RANK_URL");
+            }
+        }
+    }
+
+    struct AssetsEnvGuard {
+        previous: Option<String>,
+    }
+
+    impl AssetsEnvGuard {
+        fn set(value: &str) -> Self {
+            let previous = std::env::var("DEADLOCK_ASSETS_BASE").ok();
+            std::env::set_var("DEADLOCK_ASSETS_BASE", value);
+            Self { previous }
+        }
+    }
+
+    impl Drop for AssetsEnvGuard {
+        fn drop(&mut self) {
+            if let Some(previous) = &self.previous {
+                std::env::set_var("DEADLOCK_ASSETS_BASE", previous);
+            } else {
+                std::env::remove_var("DEADLOCK_ASSETS_BASE");
             }
         }
     }
@@ -1577,8 +1707,10 @@ mod tests {
         let dsn = db_dsn_or_skip!();
         let _env_lock = ENV_LOCK.get_or_init(|| Mutex::new(())).lock().await;
         super::clear_overlay_cache_for_tests().await;
+        super::clear_hero_icon_cache_for_tests().await;
         let mock_server = MockServer::start().await;
         let _env = EnvGuard::set(&mock_server.uri());
+        let _assets_env = AssetsEnvGuard::set(&mock_server.uri());
         let pool = make_pool(&dsn, "api_overlay_cache").await;
 
         sqlx::query(
@@ -1615,11 +1747,11 @@ mod tests {
             .respond_with(ResponseTemplate::new(200).set_body_json(json!({
                 "linked": true,
                 "matches": [
-                    { "match_result": 1 },
-                    { "match_result": 1 },
-                    { "match_result": 0 },
-                    { "match_result": 0, "not_scored": true },
-                    { "match_result": 1 }
+                    { "match_result": 1, "hero_name": "Haze" },
+                    { "match_result": 1, "hero_name": "Haze" },
+                    { "match_result": 0, "hero_name": "Vindicta" },
+                    { "match_result": 0, "not_scored": true, "hero_name": "Seven" },
+                    { "match_result": 1, "hero_name": "Haze" }
                 ]
             })))
             .expect(1)
@@ -1634,6 +1766,16 @@ mod tests {
                 "hero": "Haze",
                 "minutes": 7
             })))
+            .expect(1)
+            .mount(&mock_server)
+            .await;
+        Mock::given(method("GET"))
+            .and(path("/v2/heroes"))
+            .and(query_param("only_active", "true"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!([
+                { "name": "Haze", "images": { "icon_image_small": "https://cdn.example/haze.png" } },
+                { "name": "Vindicta", "images": { "icon_image_small_webp": "https://cdn.example/vindicta.webp" } }
+            ])))
             .expect(1)
             .mount(&mock_server)
             .await;
@@ -1661,8 +1803,22 @@ mod tests {
         assert_eq!(first["hero"], "Haze");
         assert_eq!(first["minutes"], 7);
 
+        // Hero-Icons server-seitig aufgelöst (kein Browser-fetch mehr).
+        assert_eq!(first["most_played_hero"], "Haze");
+        assert_eq!(first["most_played_icon"], "https://cdn.example/haze.png");
+        let recent = first["recent"].as_array().unwrap();
+        assert_eq!(recent[0]["hero"], "Haze");
+        assert_eq!(recent[0]["hero_icon"], "https://cdn.example/haze.png");
+        // Vindicta nur als webp hinterlegt -> webp-Fallback greift.
+        let vindicta = recent
+            .iter()
+            .find(|m| m["hero"] == "Vindicta")
+            .expect("Vindicta im Verlauf");
+        assert_eq!(vindicta["hero_icon"], "https://cdn.example/vindicta.webp");
+
         mock_server.verify().await;
-        assert_eq!(mock_server.received_requests().await.unwrap().len(), 3);
+        // 3 Steam-Endpunkte + 1 Hero-Assets-Abruf (über beide Overlay-Calls gecacht).
+        assert_eq!(mock_server.received_requests().await.unwrap().len(), 4);
     }
 
     #[tokio::test]
@@ -1745,8 +1901,11 @@ mod tests {
         assert!(html.contains("Math.floor(badgeLevel / 10)"));
         assert!(html.contains("badge_lg_subrank${sub}.png"));
         assert!(html.contains("badge_lg.png"));
-        assert!(html.contains("https://assets.deadlock-api.com/v2/heroes?only_active=true"));
-        assert!(html.contains("icon_image_small_webp"));
+        // Hero-Icons werden server-seitig aufgelöst; kein Browser-Fetch der Hero-Map mehr.
+        assert!(!html.contains("/v2/heroes"));
+        assert!(!html.contains("loadHeroAssets"));
+        assert!(html.contains("match && match.hero_icon"));
+        assert!(html.contains("data.most_played_icon"));
         assert!(html.contains("Deadlock-Spiel-Assets (© Valve)"));
         // Deutsche Auto-Labels + Formatierung
         assert!(html.contains("'RANG'"));
@@ -1756,11 +1915,13 @@ mod tests {
         assert!(html.contains("'K/D'"));
         assert!(html.contains("'LAST'"));
         assert!(html.contains("'MAIN'"));
-        assert!(html.contains("'Letzte'"));
+        assert!(html.contains("'Match-Verlauf'"));
         assert!(html.contains("powered by deutsche-deadlock-community.de"));
         assert!(html.contains("Intl.NumberFormat('de-DE'"));
-        // Recent-Strip + Live-Puls
+        // Recent-Strip (Hero-Kacheln, kein Farb-Klecks) + Live-Puls
         assert!(html.contains("ov-recent-row"));
+        assert!(html.contains("ov-tile"));
+        assert!(html.contains("ov-tile-fallback"));
         assert!(html.contains("ov-live-dot"));
         assert!(html.contains("@keyframes ov-pulse"));
         assert!(html.contains("function buildBox(data)"));
