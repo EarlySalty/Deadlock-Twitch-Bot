@@ -77,7 +77,7 @@ async fn apply_ddl(pool: &PgPool) {
     sqlx::query(
         r#"CREATE TABLE IF NOT EXISTS twitch_ban_events (
             id BIGSERIAL PRIMARY KEY,
-            session_id INTEGER,
+            session_id BIGINT,
             twitch_user_id TEXT NOT NULL,
             event_type TEXT NOT NULL,
             target_login TEXT,

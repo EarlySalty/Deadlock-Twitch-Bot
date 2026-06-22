@@ -555,10 +555,10 @@ mod tests {
             .connect_with(opts)
             .await
             .unwrap();
-        sqlx::query("CREATE TABLE twitch_live_state (twitch_user_id TEXT PRIMARY KEY, streamer_login TEXT NOT NULL, is_live INTEGER DEFAULT 0, active_session_id INTEGER)")
+        sqlx::query("CREATE TABLE twitch_live_state (twitch_user_id TEXT PRIMARY KEY, streamer_login TEXT NOT NULL, is_live INTEGER DEFAULT 0, active_session_id BIGINT)")
             .execute(&pool).await.unwrap();
         sqlx::query(
-            "CREATE TABLE twitch_session_chatters (session_id INTEGER, streamer_login TEXT, \
+            "CREATE TABLE twitch_session_chatters (session_id BIGINT, streamer_login TEXT, \
              chatter_login TEXT, chatter_id TEXT, first_message_at TIMESTAMPTZ, messages INTEGER, \
              is_first_time_streamer BOOLEAN, seen_via_chatters_api BOOLEAN, last_seen_at TIMESTAMPTZ, \
              PRIMARY KEY (session_id, chatter_login))",

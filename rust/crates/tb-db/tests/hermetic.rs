@@ -56,6 +56,116 @@ fn cfg_single(dsn: String) -> DbConfig {
     }
 }
 
+const B2_SESSION_ID_BIGINT_MIGRATION: &str =
+    include_str!("../../../migrations/20260622140000_b2_session_id_bigint.sql");
+
+async fn column_type(pool: &sqlx::PgPool, table: &str, column: &str) -> String {
+    sqlx::query_scalar(
+        "SELECT data_type
+           FROM information_schema.columns
+          WHERE table_schema = 'public'
+            AND table_name = $1
+            AND column_name = $2",
+    )
+    .bind(table)
+    .bind(column)
+    .fetch_one(pool)
+    .await
+    .unwrap_or_else(|err| panic!("column type for {table}.{column}: {err}"))
+}
+
+/// B2: Die korrigierende Migration muss gegen ein gewachsenes Schema laufen,
+/// in dem die fehlerhafte 12:00-Migration die Session-IDs auf INTEGER gesetzt
+/// hat. Der Test isoliert genau diesen Vertrag statt die bekannte Fresh-Kette
+/// mit historischen Trigger-Abhaengigkeiten mitzuziehen.
+#[tokio::test]
+async fn b2_session_id_bigint_migration_repairs_integer_columns() {
+    let admin_dsn = skip_without_db!();
+    let admin = tb_db::connect(&cfg(admin_dsn.clone()))
+        .await
+        .expect("admin connect");
+
+    let nanos = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_nanos();
+    let dbname = format!("tb_b2_{}_{}", std::process::id(), nanos);
+
+    sqlx::query(&format!("DROP DATABASE IF EXISTS {dbname} WITH (FORCE)"))
+        .execute(&admin)
+        .await
+        .ok();
+    sqlx::query(&format!("CREATE DATABASE {dbname}"))
+        .execute(&admin)
+        .await
+        .expect("create b2 db");
+
+    let pool = tb_db::connect(&cfg_single(swap_db(&admin_dsn, &dbname)))
+        .await
+        .expect("connect b2 db");
+
+    sqlx::query(
+        "CREATE TABLE public.twitch_stream_sessions (
+            id BIGSERIAL PRIMARY KEY
+        )",
+    )
+    .execute(&pool)
+    .await
+    .expect("create twitch_stream_sessions");
+    sqlx::query(
+        "CREATE TABLE public.twitch_live_state (
+            twitch_user_id TEXT PRIMARY KEY,
+            active_session_id INTEGER
+        )",
+    )
+    .execute(&pool)
+    .await
+    .expect("create twitch_live_state");
+    sqlx::query(
+        "CREATE TABLE public.twitch_session_chatters (
+            session_id INTEGER NOT NULL,
+            chatter_login TEXT NOT NULL,
+            PRIMARY KEY (session_id, chatter_login)
+        )",
+    )
+    .execute(&pool)
+    .await
+    .expect("create twitch_session_chatters");
+
+    assert_eq!(
+        column_type(&pool, "twitch_live_state", "active_session_id").await,
+        "integer"
+    );
+    assert_eq!(
+        column_type(&pool, "twitch_session_chatters", "session_id").await,
+        "integer"
+    );
+
+    sqlx::raw_sql(B2_SESSION_ID_BIGINT_MIGRATION)
+        .execute(&pool)
+        .await
+        .expect("apply b2 migration");
+    sqlx::raw_sql(B2_SESSION_ID_BIGINT_MIGRATION)
+        .execute(&pool)
+        .await
+        .expect("apply b2 migration idempotently");
+
+    assert_eq!(
+        column_type(&pool, "twitch_live_state", "active_session_id").await,
+        "bigint"
+    );
+    assert_eq!(
+        column_type(&pool, "twitch_session_chatters", "session_id").await,
+        "bigint"
+    );
+
+    pool.close().await;
+    sqlx::query(&format!("DROP DATABASE IF EXISTS {dbname} WITH (FORCE)"))
+        .execute(&admin)
+        .await
+        .ok();
+}
+
 /// F1-DoD: Eine frische, leere DB ist allein durch `run_migrations()` vollständig
 /// aufsetzbar. Legt eine eigene Wegwerf-Datenbank an, installiert timescaledb,
 /// migriert und prüft die erwarteten Schema-Objekte. Idempotenz wird durch das
