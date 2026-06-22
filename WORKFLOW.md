@@ -1,5 +1,13 @@
 # Workflow
 
+## 2026-06-22 — Overlay-Builder-Rework (schick, GC-nativ)
+
+- Start: Worktree `sp2/overlay-rework`; Scope strikt auf `rust/crates/tb-dashboard-api/src/handlers/overlay.rs`, `bot/dashboard_v2/src/components/verwaltung/OverlayBuilderSection.tsx`, `bot/dashboard_v2/src/pages/InternalHomeLanding.tsx`, `WORKFLOW.md`. Vorgaenger-Scaffolding (Structs/Imports) in overlay.rs war uncommittet vorhanden, nicht kompilierbar.
+- Datenschicht (TDD): pure Helfer `summarize_today` (Tagesgrenze Europe/Berlin, `now_utc` als Param), `compute_kd`, `build_recent` (newest-first, Cap 15), `summarize_matches` um last_match + most_played erweitert; alle ignorieren `not_scored`. `build_overlay_json` fuellt alle neuen `OverlayResponse`-Felder; 30s-Cache bleibt. Unused `hero_id` aus `SteamMatch` entfernt. Pure-fn Unit-Tests (#[test], keine DB).
+- Render: `OVERLAY_HTML` neu — Glassmorphism-Karte, 3 Themes (dark/light/accent via `data-theme` + CSS-Custom-Properties, accent = Marken-Gradient `#06B6D4`→`#A855F7`), 2 Layouts (box/bar), 4 Positionen, opacity nur auf Karten-Hintergrund (`--bg-alpha`), Recent-Strip (26px Ring-Icons + Punkt-Fallback), pulsierender Live-Dot, deutsche Zahlformatierung (`56,7 %` / `1,80` / `4–2`), leere Module verstecken sich. Alle Modul-Flags (lastmatch/mostplayed Default 0), `recent_n` 1–15 Default 10. Render-Branch-Tests + bestehender Struktur-Test angepasst.
+- Builder: `OverlayBuilderSection` erweitert — Stil-/Layout-Select, alle 11 Modul-Toggles, Verlauf-Slider, Deckkraft-Slider, Position; URL traegt alle Params; Vorschau-Hoehe je Layout. Sidebar: `toolNavItems` um Eintrag `Stream-Overlay` (MonitorPlay) nach `Verwaltung` ergaenzt (einzige geteilte Nav).
+- Verifikation: `cargo build -p tb-dashboard-api` gruen; `cargo test -p tb-dashboard-api` gruen (14 Overlay-Tests, davon DB-Tests gegen vorhandene TB_TEST_DATABASE_URL); `cargo clippy -p tb-dashboard-api` ohne neue Warnungen in overlay.rs (2 vorbestehende in admin_chat_action.rs/demo.rs bleiben); `npm --prefix bot/dashboard_v2 run build` (`tsc -b` + vite) gruen nach `npm ci --legacy-peer-deps`. Vier Commits (Daten/Render/Builder/Sidebar) auf `sp2/overlay-rework`, kein Push/Merge/Restart.
+
 ## 2026-06-22 — Overlay-Baukasten als eigene Seite
 
 - Start: delegierter GPT-Implementierungsworker; Scope auf `bot/dashboard_v2/src/**`, `rust/crates/tb-dashboard-api/src/handlers/overlay.rs` und kleinen shared Helper in `spa.rs`; verbindliche Review-Regel: keine Commits, kein Push, Aenderungen bleiben uncommitted.
