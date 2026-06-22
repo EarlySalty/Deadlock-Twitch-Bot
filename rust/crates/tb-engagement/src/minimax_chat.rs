@@ -334,6 +334,11 @@ impl EngagementMinimaxClient {
 
     /// Roher Completion-Call (system + user) → getrimmter Antwort-Text OHNE
     /// [`process_response_text`] — für Jobs wie die Soul-Reflexion.
+    ///
+    /// Verbucht KEINEN Token-Verbrauch im Ledger. Aufrufer, die ihren Verbrauch
+    /// kosten-attribuieren wollen (z. B. der Chat-Deep-Endpoint, Python
+    /// `_track_minimax_completion(purpose="chat-deep-analysis")`), nutzen
+    /// [`Self::raw_completion_tracked`].
     pub async fn raw_completion(
         &self,
         system: &str,
@@ -348,6 +353,42 @@ impl EngagementMinimaxClient {
         let (raw_text, _, _, _) = self
             .post_completion(messages, max_output_tokens, temperature)
             .await?;
+        Ok(raw_text)
+    }
+
+    /// Wie [`Self::raw_completion`], verbucht aber zusätzlich den echten
+    /// Token-Verbrauch im geteilten MiniMax-Usage-Ledger unter dem gegebenen
+    /// `purpose` (Parität zu Pythons `_track_minimax_completion(response,
+    /// purpose=…)`-Seiteneffekt, z. B. `purpose="chat-deep-analysis"`).
+    ///
+    /// Best-effort: `record` verschluckt jeden DB-Fehler intern und kippt den
+    /// Call nie. Tokens werden auch bei leerem Antwort-Text verbucht — verbraucht
+    /// sind sie ohnehin.
+    pub async fn raw_completion_tracked(
+        &self,
+        system: &str,
+        user: &str,
+        max_output_tokens: i64,
+        temperature: f64,
+        purpose: &str,
+    ) -> Result<String, GenerateError> {
+        let messages = serde_json::json!([
+            {"role": "system", "content": system},
+            {"role": "user", "content": user},
+        ]);
+        let (raw_text, prompt_tokens, completion_tokens, _) = self
+            .post_completion(messages, max_output_tokens, temperature)
+            .await?;
+
+        tb_llm::ledger::record(
+            purpose,
+            &self.model,
+            prompt_tokens.unwrap_or(0),
+            completion_tokens.unwrap_or(0),
+            true,
+        )
+        .await;
+
         Ok(raw_text)
     }
 
@@ -639,6 +680,85 @@ mod tests {
         assert_eq!(row.0, "twitch-bot");
         assert_eq!(row.1.as_deref(), Some("engagement"));
         assert_eq!(row.2.as_deref(), Some("MiniMax-M3"));
+        pool.close().await;
+    }
+
+    /// `raw_completion_tracked` verbucht den echten Token-Verbrauch best-effort
+    /// im geteilten MiniMax-Usage-Ledger unter dem übergebenen `purpose`
+    /// (`chat-deep-analysis`) — Parität zu Pythons `_track_minimax_completion`.
+    /// Eindeutige Token-Zahlen (888/444) machen die Assertion unabhängig von
+    /// parallel laufenden Ledger-Schreibern im selben Temp-Ledger.
+    #[tokio::test]
+    async fn raw_completion_tracked_verbucht_usage_mit_purpose() {
+        redirect_ledger_to_temp();
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/chat/completions"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "choices": [{"message": {"content": "tiefe analyse"}}],
+                "usage": {"prompt_tokens": 888, "completion_tokens": 444}
+            })))
+            .mount(&server)
+            .await;
+
+        let text = client_for(&server)
+            .raw_completion_tracked("", "prompt", 5000, 0.1, "chat-deep-analysis")
+            .await
+            .unwrap();
+        assert_eq!(text, "tiefe analyse");
+
+        let pool = sqlx::sqlite::SqlitePoolOptions::new()
+            .max_connections(1)
+            .connect(&format!("sqlite://{}", ledger_temp_path().display()))
+            .await
+            .expect("Ledger-SQLite öffnen");
+        let row: (String, Option<String>, Option<String>) = sqlx::query_as(
+            "SELECT source, purpose, model FROM minimax_usage \
+             WHERE tokens_in = 888 AND tokens_out = 444 \
+             ORDER BY id DESC LIMIT 1",
+        )
+        .fetch_one(&pool)
+        .await
+        .expect("Ledger-Zeile mit 888/444 vorhanden");
+        assert_eq!(row.0, "twitch-bot");
+        assert_eq!(row.1.as_deref(), Some("chat-deep-analysis"));
+        assert_eq!(row.2.as_deref(), Some("MiniMax-M3"));
+        pool.close().await;
+    }
+
+    /// `raw_completion` (untracked) schreibt KEINE Ledger-Zeile — die
+    /// Kosten-Attribution bleibt dem Aufrufer über `raw_completion_tracked`
+    /// überlassen. Geprüft über eine eindeutige Token-Zahl (999/111).
+    #[tokio::test]
+    async fn raw_completion_untracked_schreibt_keine_ledger_zeile() {
+        redirect_ledger_to_temp();
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/chat/completions"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "choices": [{"message": {"content": "x"}}],
+                "usage": {"prompt_tokens": 999, "completion_tokens": 111}
+            })))
+            .mount(&server)
+            .await;
+
+        client_for(&server)
+            .raw_completion("", "p", 100, 0.4)
+            .await
+            .unwrap();
+
+        let pool = sqlx::sqlite::SqlitePoolOptions::new()
+            .max_connections(1)
+            .connect(&format!("sqlite://{}", ledger_temp_path().display()))
+            .await
+            .expect("Ledger-SQLite öffnen");
+        let count: (i64,) = sqlx::query_as(
+            "SELECT COUNT(*) FROM minimax_usage WHERE tokens_in = 999 AND tokens_out = 111",
+        )
+        .fetch_one(&pool)
+        .await
+        .expect("Count-Query");
+        assert_eq!(count.0, 0, "raw_completion darf nicht ins Ledger schreiben");
         pool.close().await;
     }
 

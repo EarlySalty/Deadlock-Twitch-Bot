@@ -87,6 +87,16 @@ pub trait TwitchTokenClient: Send + Sync {
     /// Parameter). Ohne diesen Schritt ist nach dem Code-Tausch unbekannt,
     /// WEM die Tokens gehören — der Persist-Pfad braucht User-ID + Login.
     async fn token_owner(&self, access_token: &str) -> Result<TokenOwnerInfo, RefreshError>;
+
+    /// Ist der User-Token-OAuth-Pfad nach einer `invalid_client`-Ablehnung für
+    /// 15 min gesperrt (P2.33-Circuit-Breaker)? Standard `false` (kein Breaker).
+    /// Die echte Helix-Impl koppelt das an `HelixClient::is_client_auth_blocked`,
+    /// damit [`RaidTokenRefresher::refresh_all_due`] während einer Credentials-
+    /// Panne sofort kurzschließt (Python `if self.is_client_auth_blocked():
+    /// return 0`), statt jeden raid-aktivierten Streamer aussichtslos zu refreshen.
+    fn is_client_auth_blocked(&self) -> bool {
+        false
+    }
 }
 
 /// Inhaber eines User-Access-Tokens (Login bereits lowercase-normalisiert).
@@ -308,6 +318,17 @@ impl RaidTokenRefresher {
     /// Twitch-Rate-Limit-Spikes zu vermeiden. Liefert die Anzahl erfolgreich
     /// erneuerter Tokens. Fehler einzelner Streamer brechen den Sweep nicht ab.
     pub async fn refresh_all_due(&self, now: DateTime<Utc>) -> Result<u64, sqlx::Error> {
+        // P2.33: Ist der App-Credentials-Breaker aktiv (`invalid_client` in den
+        // letzten 15 min), bringt KEIN Refresh etwas — Python kurzschließt hier
+        // mit `if self.is_client_auth_blocked(): return 0`, statt jeden raid-
+        // aktivierten Streamer aussichtslos gegen Twitch zu refreshen.
+        if self.client.is_client_auth_blocked() {
+            tracing::warn!(
+                "Hintergrund-Token-Refresh übersprungen: invalid_client-Cooldown aktiv (15 min)"
+            );
+            return Ok(0);
+        }
+
         type Candidate = (String, Option<String>, Option<Vec<u8>>, Option<i32>, Option<DateTime<Utc>>);
         let rows: Vec<Candidate> = sqlx::query_as(
             r#"
