@@ -559,7 +559,7 @@ mod tests {
                 last_discord_message_id TEXT, last_notified_at TEXT,
                 is_live INTEGER DEFAULT 0, last_seen_at TEXT, last_game TEXT,
                 last_viewer_count INTEGER DEFAULT 0, last_tracking_token TEXT,
-                active_session_id INTEGER, had_deadlock_in_session INTEGER DEFAULT 0,
+                active_session_id BIGINT, had_deadlock_in_session INTEGER DEFAULT 0,
                 last_deadlock_seen_at TEXT
             )",
         )

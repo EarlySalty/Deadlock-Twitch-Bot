@@ -173,7 +173,7 @@ mod tests {
                 last_game                   TEXT,
                 last_viewer_count           INTEGER DEFAULT 0,
                 last_tracking_token         TEXT,
-                active_session_id           INTEGER,
+                active_session_id           BIGINT,
                 had_deadlock_in_session     INTEGER DEFAULT 0,
                 last_deadlock_seen_at       TEXT
             )
