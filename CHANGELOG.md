@@ -1,3 +1,11 @@
+## #273 — Zuschauer-Abfrage entlastet
+
+**Problem:** Der neue Zuschauer-Poller fragte alle 30 Sekunden für jeden Live-Kanal die Zuschauerliste über die Twitch-Schnittstelle ab — auch für die vielen Kanäle, in denen der Bot kein Moderator ist und die Abfrage deshalb zwangsläufig fehlschlägt. Das erzeugte pro Zyklus viele vergebliche Anfragen.
+
+**Änderung:** Kanäle, in denen der Bot nachweislich kein Moderator ist (und ein Wiederherstellen des Mod-Status nicht greift), werden für 15 Minuten vom Bot-Abfragepfad ausgenommen. Der Ersatzweg über das Streamer-Token für Raid-Kanäle bleibt unberührt, und sobald der Bot wieder Moderator wird, greift die Abfrage sofort erneut.
+
+**Ergebnis:** Deutlich weniger vergebliche Twitch-Anfragen pro Zyklus, ohne dass erfassbare Zuschauer verloren gehen — gleiche Datenqualität, geringere Last.
+
 ## #272 — Markt-Daten-Ansicht repariert + interne Aufräumung
 
 **Problem:** Die aggregierte Markt-Daten-Ansicht im Verwaltungsbereich lieferte seit der Datenbank-Umstellung auf größere Zahlen-Typen einen Fehler statt Daten — die Session-Kennung wurde an einer Stelle noch im alten, zu kleinen Zahlenformat gelesen, was den Abruf still abbrechen ließ. Derselbe Lesefehler betraf eine interne Chatter-Statistik. Parallel schleppte der Code eine längst abgelöste „manuell verifiziert"-Sonderbehandlung mit, die durch die neue Partner-Logik überflüssig geworden war.
