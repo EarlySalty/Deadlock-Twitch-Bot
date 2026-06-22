@@ -46,6 +46,11 @@ pub fn catalog() -> &'static [CommandInfo] {
             summary: "Zeigt deinen aktuellen Deadlock-Rang im Chat.",
         },
         CommandInfo {
+            name: "!wins",
+            group: Stats,
+            summary: "Zeigt deine Deadlock-Karriere-Siege im Chat.",
+        },
+        CommandInfo {
             name: "!commands",
             group: Fun,
             summary: "Liste aller Bot-Befehle (Link zur Übersicht).",
