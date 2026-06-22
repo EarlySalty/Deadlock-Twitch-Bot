@@ -209,7 +209,8 @@ async fn session_lifecycle_start_sample_finalize() {
 
     #[derive(sqlx::FromRow)]
     struct FinalizedRow {
-        ended_at: Option<chrono::DateTime<Utc>>,
+        // P2.38: ended_at ist TEXT — als ::text lesen.
+        ended_at: Option<String>,
         end_viewers: i32,
         peak_viewers: i32,
         avg_viewers: f64,
@@ -221,7 +222,7 @@ async fn session_lifecycle_start_sample_finalize() {
         had_deadlock_in_session: i32,
     }
     let row: FinalizedRow = sqlx::query_as(
-        "SELECT ended_at, end_viewers, peak_viewers, avg_viewers, samples,
+        "SELECT ended_at::text AS ended_at, end_viewers, peak_viewers, avg_viewers, samples,
                 unique_chatters, first_time_chatters, follower_delta, notes,
                 had_deadlock_in_session
            FROM twitch_stream_sessions WHERE id = $1",
@@ -325,8 +326,8 @@ async fn session_restart_finalisiert_alte_session() {
         .unwrap();
     assert_ne!(first, second, "neue Session nach Stream-Neustart");
 
-    let (old_ended, old_notes): (Option<chrono::DateTime<Utc>>, Option<String>) =
-        sqlx::query_as("SELECT ended_at, notes FROM twitch_stream_sessions WHERE id = $1")
+    let (old_ended, old_notes): (Option<String>, Option<String>) =
+        sqlx::query_as("SELECT ended_at::text, notes FROM twitch_stream_sessions WHERE id = $1")
             .bind(first)
             .fetch_one(&pool)
             .await
@@ -343,7 +344,7 @@ async fn orphan_cleanup_schliesst_scout_und_stale_sessions() {
     // Scout-Session: 0 Samples, > 24 h offen.
     sqlx::query(
         "INSERT INTO twitch_stream_sessions (streamer_login, started_at, samples)
-         VALUES ('alt', NOW() - INTERVAL '25 hours', 0)",
+         VALUES ('alt', (NOW() - INTERVAL '25 hours')::text, 0)",
     )
     .execute(&pool)
     .await
@@ -351,7 +352,7 @@ async fn orphan_cleanup_schliesst_scout_und_stale_sessions() {
     // Stale Session: Samples vorhanden, letzter Viewer-Eintrag 2 h alt.
     let stale_id: i64 = sqlx::query_scalar(
         "INSERT INTO twitch_stream_sessions (streamer_login, started_at, samples)
-         VALUES ('stale', NOW() - INTERVAL '5 hours', 3) RETURNING id",
+         VALUES ('stale', (NOW() - INTERVAL '5 hours')::text, 3) RETURNING id",
     )
     .fetch_one(&pool)
     .await
@@ -367,7 +368,7 @@ async fn orphan_cleanup_schliesst_scout_und_stale_sessions() {
     // Frische offene Session bleibt unangetastet.
     sqlx::query(
         "INSERT INTO twitch_stream_sessions (streamer_login, started_at, samples)
-         VALUES ('frisch', NOW() - INTERVAL '10 minutes', 0)",
+         VALUES ('frisch', (NOW() - INTERVAL '10 minutes')::text, 0)",
     )
     .execute(&pool)
     .await
@@ -544,7 +545,7 @@ async fn first_message_setzt_confirmed_first_ever_auf_session_chatter() {
     // Offene Session + ein Session-Chatter (noch nicht confirmed).
     let session_id: i64 = sqlx::query_scalar(
         "INSERT INTO twitch_stream_sessions (streamer_login, started_at)
-         VALUES ('drag', NOW()) RETURNING id",
+         VALUES ('drag', NOW()::text) RETURNING id",
     )
     .fetch_one(&pool)
     .await
@@ -592,7 +593,7 @@ async fn first_message_setzt_confirmed_first_ever_auf_session_chatter() {
     );
 
     // Ohne offene Session: kein Update, aber auch kein Fehler (Subquery → NULL).
-    sqlx::query("UPDATE twitch_stream_sessions SET ended_at = NOW() WHERE id = $1")
+    sqlx::query("UPDATE twitch_stream_sessions SET ended_at = NOW()::text WHERE id = $1")
         .bind(session_id)
         .execute(&pool)
         .await

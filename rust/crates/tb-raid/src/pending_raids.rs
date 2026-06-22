@@ -150,6 +150,70 @@ impl PendingRaid {
 }
 
 // ---------------------------------------------------------------------------
+// Timeout-Diagnose (P2.31)
+// ---------------------------------------------------------------------------
+
+/// Synthetisiert den menschenlesbaren `Timeout detail: …`-String aus den
+/// Signal-Beobachtungen eines abgelaufenen Pendings.
+///
+/// Port von `RaidTrackingRuntimeService.build_pending_timeout_detail`
+/// (raid_tracking_runtime.py Z. 518–553): zuerst je Signal
+/// (`channel.raid`, `channel.chat.notification`) `status (reason) [detail]`;
+/// fehlen Beobachtungen, dann Fallback aus `channel_raid_ready` und
+/// `chat_notification_state`/`-detail`.
+pub fn build_pending_timeout_detail(pending: &PendingRaid) -> String {
+    let mut parts: Vec<String> = Vec::new();
+    for signal_type in ["channel.raid", "channel.chat.notification"] {
+        let Some(obs) = pending.signal_observations.get(signal_type) else {
+            continue;
+        };
+        let status = obs.get("status").map(|s| s.trim()).unwrap_or("");
+        let reason = obs.get("reason").map(|s| s.trim()).unwrap_or("");
+        let detail = obs.get("detail").map(|s| s.trim()).unwrap_or("");
+        let mut text = if status.is_empty() {
+            signal_type.to_string()
+        } else {
+            format!("{signal_type}:{status}")
+        };
+        if !reason.is_empty() {
+            text.push_str(&format!(" ({reason})"));
+        }
+        if !detail.is_empty() {
+            text.push_str(&format!(" [{detail}]"));
+        }
+        parts.push(text);
+    }
+
+    if parts.is_empty() {
+        // Fallback: channel_raid_ready (None/true → "ready", false → "subscription_not_ready").
+        let channel_raid_detail = if pending.channel_raid_ready == Some(false) {
+            "subscription_not_ready"
+        } else {
+            "ready"
+        };
+        let chat_state = pending
+            .chat_notification_state
+            .as_deref()
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+            .unwrap_or("missing");
+        let chat_detail = pending
+            .chat_notification_detail
+            .as_deref()
+            .map(str::trim)
+            .unwrap_or("");
+        let mut chat_text = format!("channel.chat.notification:{chat_state}");
+        if !chat_detail.is_empty() {
+            chat_text.push_str(&format!(" [{chat_detail}]"));
+        }
+        parts.push(format!("channel.raid:{channel_raid_detail}"));
+        parts.push(chat_text);
+    }
+
+    format!("Timeout detail: {}", parts.join("; "))
+}
+
+// ---------------------------------------------------------------------------
 // PendingRaidStore — In-Memory-Store mit TTL-Ablauf
 // ---------------------------------------------------------------------------
 
@@ -246,6 +310,46 @@ impl PendingRaidStore {
         stale_keys
             .into_iter()
             .filter_map(|k| self.raids.remove(&k))
+            .collect()
+    }
+
+    /// Sweep für veraltete Pending-Raids inkl. Timeout-Diagnose (P2.29 + P2.31).
+    ///
+    /// Port von `RaidTrackingRuntimeService.cleanup_stale_pending_raids`
+    /// (raid_tracking_runtime.py Z. 74–120): entfernt alle abgelaufenen Pendings
+    /// (`cleanup_stale`), erzeugt je Eintrag den menschenlesbaren
+    /// `build_pending_timeout_detail`-String, loggt eine Warnung mit Alter +
+    /// Detail und gibt `(PendingRaid, timeout_detail)`-Paare zurück, damit der
+    /// Aufrufer Observability-Events/Counter emittieren kann.
+    ///
+    /// Der periodische Aufruf (300 s, `RaidTrackingRuntimeConfig.cleanup_timeout_seconds`)
+    /// wird im Composition-Root verdrahtet — siehe WIRING-TODO.
+    pub fn sweep_stale(
+        &mut self,
+        timeout_seconds: f64,
+        now: Option<f64>,
+    ) -> Vec<(PendingRaid, String)> {
+        let current = now.unwrap_or_else(unix_now);
+        let stale = self.cleanup_stale(timeout_seconds, Some(current));
+        stale
+            .into_iter()
+            .map(|pending| {
+                let detail = build_pending_timeout_detail(&pending);
+                let age = current - pending.registered_ts;
+                let from = if pending.from_broadcaster_login.is_empty() {
+                    "<unknown>"
+                } else {
+                    pending.from_broadcaster_login.as_str()
+                };
+                tracing::warn!(
+                    age_seconds = age.round() as i64,
+                    from = %from,
+                    to_broadcaster_id = %pending.to_broadcaster_id,
+                    timeout_detail = %detail,
+                    "Pending raid timed out"
+                );
+                (pending, detail)
+            })
             .collect()
     }
 
@@ -440,6 +544,84 @@ mod tests {
         s.store(PendingRaid::new("src", "tgt"));
         assert!(s.pop("tgt", Some("src")).is_some());
         assert!(s.is_empty());
+    }
+
+    // --- P2.29: Sweep entfernt abgelaufene Pendings ---
+
+    #[test]
+    fn sweep_stale_entfernt_und_liefert_detail() {
+        let mut s = PendingRaidStore::new();
+        let mut old = PendingRaid::new("old_src", "old_tgt");
+        old.registered_ts = 1.0; // uralt
+        s.store(old);
+        s.store(PendingRaid::new("new_src", "new_tgt")); // frisch
+
+        let swept = s.sweep_stale(300.0, None);
+        assert_eq!(swept.len(), 1, "genau der alte Pending wird gesweept");
+        let (raid, detail) = &swept[0];
+        assert_eq!(raid.from_broadcaster_login, "old_src");
+        assert!(
+            detail.starts_with("Timeout detail:"),
+            "Timeout-Detail-String erzeugt: {detail}"
+        );
+        assert_eq!(s.len(), 1, "frischer Pending bleibt im Store");
+    }
+
+    #[test]
+    fn sweep_stale_leer_wenn_nichts_abgelaufen() {
+        let mut s = PendingRaidStore::new();
+        s.store(PendingRaid::new("src", "tgt"));
+        assert!(s.sweep_stale(300.0, None).is_empty());
+        assert_eq!(s.len(), 1);
+    }
+
+    // --- P2.31: build_pending_timeout_detail ---
+
+    #[test]
+    fn timeout_detail_aus_signal_observations() {
+        let mut raid = PendingRaid::new("src", "tgt");
+        raid.record_signal_observation(
+            "channel.raid",
+            "ready",
+            Some("subscribed".to_string()),
+            None,
+        );
+        raid.record_signal_observation(
+            "channel.chat.notification",
+            "missing",
+            None,
+            Some("no_signal".to_string()),
+        );
+        let detail = build_pending_timeout_detail(&raid);
+        assert_eq!(
+            detail,
+            "Timeout detail: channel.raid:ready (subscribed); \
+             channel.chat.notification:missing [no_signal]"
+        );
+    }
+
+    #[test]
+    fn timeout_detail_fallback_ohne_observations() {
+        let mut raid = PendingRaid::new("src", "tgt");
+        raid.channel_raid_ready = Some(false);
+        raid.chat_notification_state = Some("sent".to_string());
+        raid.chat_notification_detail = Some("delayed".to_string());
+        let detail = build_pending_timeout_detail(&raid);
+        assert_eq!(
+            detail,
+            "Timeout detail: channel.raid:subscription_not_ready; \
+             channel.chat.notification:sent [delayed]"
+        );
+    }
+
+    #[test]
+    fn timeout_detail_fallback_leerer_chat_state_ist_missing() {
+        let raid = PendingRaid::new("src", "tgt"); // channel_raid_ready=None → "ready"
+        let detail = build_pending_timeout_detail(&raid);
+        assert_eq!(
+            detail,
+            "Timeout detail: channel.raid:ready; channel.chat.notification:missing"
+        );
     }
 
     #[test]

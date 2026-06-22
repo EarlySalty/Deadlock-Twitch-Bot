@@ -363,6 +363,107 @@ async fn partner_pfad_startet_raid_und_registriert_pending() {
     assert_eq!(pending.channel_raid_ready, Some(true));
 }
 
+/// P2.30: Geht eine `channel.chat.notification` ein BEVOR das Pending
+/// registriert ist, muss beim Registrieren das Orphan-Signal gezogen und
+/// nachgespielt werden (pending-korrelierte Bestätigung sofort, nicht erst
+/// nach Grace als unabhängiges Arrival).
+#[tokio::test]
+async fn register_pending_spielt_orphan_chat_notification_nach() {
+    use tb_raid::{OrphanChatNotification, OrphanReplay};
+
+    struct StubOrphanReplay {
+        orphan: Option<OrphanChatNotification>,
+        popped: Mutex<Vec<(String, String)>>,
+        replayed: Mutex<Vec<OrphanChatNotification>>,
+    }
+    #[async_trait::async_trait]
+    impl OrphanReplay for StubOrphanReplay {
+        async fn pop_orphan(
+            &self,
+            to_broadcaster_id: &str,
+            from_broadcaster_login: &str,
+        ) -> Option<OrphanChatNotification> {
+            self.popped.lock().unwrap().push((
+                to_broadcaster_id.to_string(),
+                from_broadcaster_login.to_string(),
+            ));
+            self.orphan.clone()
+        }
+        async fn replay(&self, orphan: OrphanChatNotification) {
+            self.replayed.lock().unwrap().push(orphan);
+        }
+    }
+
+    let pool = pool_or_skip!("t6w_pipe_orphan");
+    seed_source_token(&pool, "100").await;
+    seed_score(&pool, "200", 0.9, 1).await;
+
+    let orphan = OrphanChatNotification {
+        to_broadcaster_id: "200".to_string(),
+        to_broadcaster_login: "ziel".to_string(),
+        from_broadcaster_login: "quelle".to_string(),
+        viewer_count: 42,
+        from_broadcaster_id: Some("100".to_string()),
+        message_id: Some("m-orphan-1".to_string()),
+        event_timestamp: Some("2026-06-21T18:00:00+00:00".to_string()),
+    };
+    let replay = Arc::new(StubOrphanReplay {
+        orphan: Some(orphan.clone()),
+        popped: Mutex::new(Vec::new()),
+        replayed: Mutex::new(Vec::new()),
+    });
+
+    let h = build(&pool, HashMap::new(), vec![]);
+    let pipeline = h.pipeline.with_orphan_replay(replay.clone());
+
+    let outcome = pipeline.run(&request(vec![partner("200", "ziel")])).await;
+    assert!(matches!(outcome, AutoRaidPipelineOutcome::Started { .. }));
+
+    // Orphan wurde für (target_id, source_login) gezogen …
+    assert_eq!(
+        replay.popped.lock().unwrap().clone(),
+        vec![("200".to_string(), "quelle".to_string())]
+    );
+    // … und genau einmal nachgespielt.
+    assert_eq!(replay.replayed.lock().unwrap().clone(), vec![orphan]);
+    // Pending ist registriert (Store-Schritt lief vor dem Replay).
+    assert!(h.pending.lock().unwrap().get("200", Some("quelle")).is_some());
+}
+
+/// P2.30: Ohne passenden Orphan wird nichts nachgespielt (Replay-Liste leer).
+#[tokio::test]
+async fn register_pending_ohne_orphan_kein_replay() {
+    use tb_raid::{OrphanChatNotification, OrphanReplay};
+
+    struct EmptyOrphanReplay {
+        replayed: Mutex<usize>,
+    }
+    #[async_trait::async_trait]
+    impl OrphanReplay for EmptyOrphanReplay {
+        async fn pop_orphan(&self, _t: &str, _f: &str) -> Option<OrphanChatNotification> {
+            None
+        }
+        async fn replay(&self, _orphan: OrphanChatNotification) {
+            *self.replayed.lock().unwrap() += 1;
+        }
+    }
+
+    let pool = pool_or_skip!("t6w_pipe_no_orphan");
+    seed_source_token(&pool, "100").await;
+    seed_score(&pool, "200", 0.9, 1).await;
+
+    let replay = Arc::new(EmptyOrphanReplay {
+        replayed: Mutex::new(0),
+    });
+    let pipeline = build(&pool, HashMap::new(), vec![])
+        .pipeline
+        .with_orphan_replay(replay.clone());
+
+    let outcome = pipeline.run(&request(vec![partner("200", "ziel")])).await;
+    assert!(matches!(outcome, AutoRaidPipelineOutcome::Started { .. }));
+    assert_eq!(*replay.replayed.lock().unwrap(), 0, "kein Replay ohne Orphan");
+}
+
 #[tokio::test]
 async fn partner_lehnt_ab_wird_uebersprungen_fallback_uebernimmt() {
     let pool = pool_or_skip!("t6w_pipe_fallback");

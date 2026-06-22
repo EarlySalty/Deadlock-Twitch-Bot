@@ -108,18 +108,43 @@ impl TokenBlacklist for TokenBlacklistStore {
     }
 
     async fn clear_failure_count(&self, twitch_user_id: &str) {
-        if let Err(error) =
-            sqlx::query("DELETE FROM twitch_token_blacklist WHERE twitch_user_id = $1")
-                .bind(twitch_user_id)
-                .execute(&self.pool)
-                .await
-        {
+        if let Err(error) = self.clear_failure_count_inner(twitch_user_id).await {
             tracing::debug!(%error, "Token-Blacklist-Clear fehlgeschlagen");
         }
     }
 }
 
 impl TokenBlacklistStore {
+    /// Räumt nach erfolgreichem Refresh (ohne Re-Auth) sowohl den Pause-Grund
+    /// `technical_pause_reason='token_error'` als auch den Blacklist-Eintrag.
+    ///
+    /// Port von Python `clear_failure_count` (token_error_handler.py:852-867):
+    /// erst `UPDATE twitch_partners` (nur `token_error` → NULL, fremde Gründe wie
+    /// `bot_banned` bleiben dank CASE unangetastet), dann `DELETE` aus der
+    /// Blacklist. Ohne das UPDATE bliebe ein per Refresh genesener Partner in
+    /// Dashboard-/Analytics-Gates als `token_error` pausiert, bis er voll
+    /// neu autorisiert (die Re-Auth-Gegenrichtung in `auth_writer::store_new_auth`).
+    async fn clear_failure_count_inner(&self, twitch_user_id: &str) -> Result<(), sqlx::Error> {
+        let mut tx = self.pool.begin().await?;
+        sqlx::query(
+            "UPDATE twitch_partners
+                SET technical_pause_reason = CASE
+                        WHEN LOWER(COALESCE(technical_pause_reason, '')) = 'token_error' THEN NULL
+                        ELSE technical_pause_reason
+                    END
+              WHERE twitch_user_id = $1",
+        )
+        .bind(twitch_user_id)
+        .execute(&mut *tx)
+        .await?;
+        sqlx::query("DELETE FROM twitch_token_blacklist WHERE twitch_user_id = $1")
+            .bind(twitch_user_id)
+            .execute(&mut *tx)
+            .await?;
+        tx.commit().await?;
+        Ok(())
+    }
+
     async fn add_to_blacklist_inner(
         &self,
         twitch_user_id: &str,

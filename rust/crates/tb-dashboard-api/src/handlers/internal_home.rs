@@ -410,8 +410,13 @@ pub async fn get_handler(
         "links": {
             "dashboard": "/twitch/dashboard",
             "dashboard_v2": if can_access_analytics { "/analyse" } else { "/twitch/dashboard" },
+            // P2.130: /twitch/raid/history ist nativ registriert (lib.rs) → gültiger
+            // Link. /twitch/raid/requirements ist im Rust-Prozess (noch) nicht
+            // registriert (Python-Route routes_mixin.py:623, Port deferred via
+            // P2.118) — der Link wurde entfernt, damit kein toter 404-Link im
+            // erzeugten API-Output landet. Sobald der Requirements-Handler nativ
+            // registriert ist (WIRING-TODO), kann der Link wieder ergänzt werden.
             "raid_history": "/twitch/raid/history",
-            "raid_requirements": "/twitch/raid/requirements",
             "billing": "/twitch/abbo",
             "oauth_reconnect": oauth_reconnect_url,
             "profile_status": "/twitch/dashboard",

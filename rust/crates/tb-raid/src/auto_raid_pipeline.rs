@@ -81,6 +81,49 @@ pub trait FollowerEnricher: Send + Sync {
     async fn enrich(&self, pool: &mut [FairnessCandidate]);
 }
 
+/// Daten einer früher eingegangenen, verwaisten `channel.chat.notification`,
+/// die beim Registrieren eines passenden Pendings nachgespielt wird.
+///
+/// Spiegelt das Orphan-Payload-Dict aus Python
+/// (`raid_tracking_runtime.py:504-513`).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct OrphanChatNotification {
+    pub to_broadcaster_id: String,
+    pub to_broadcaster_login: String,
+    pub from_broadcaster_login: String,
+    pub viewer_count: i32,
+    pub from_broadcaster_id: Option<String>,
+    pub message_id: Option<String>,
+    pub event_timestamp: Option<String>,
+}
+
+/// Port: Korrelations-Replay einer verwaisten `channel.chat.notification` beim
+/// Registrieren eines passenden Pendings (P2.30).
+///
+/// Port von Python `register_pending_raid` (raid_tracking_runtime.py:477-514):
+/// Beim Registrieren wird ein passendes Orphan-Signal aus dem Cache gezogen
+/// (`pop_orphan`) und über `on_chat_raid_notification` erneut durch die
+/// Korrelation geschickt, damit der Raid bereits zum Registrierzeitpunkt
+/// pending-korreliert bestätigt wird (statt erst nach ~15 s Grace als
+/// unabhängiges Arrival promotet zu werden).
+///
+/// Die konkrete Impl (echter Orphan-Store + `on_chat_raid_notification`) lebt im
+/// Composition-Root (tb-bot `raid_arrival_wiring.rs`) — siehe WIRING-TODO.
+#[async_trait::async_trait]
+pub trait OrphanReplay: Send + Sync {
+    /// Zieht ein passendes Orphan-Signal (falls vorhanden) und gibt es zur
+    /// Wiedereinspielung zurück. Liefert `None`, wenn kein Orphan vorliegt.
+    async fn pop_orphan(
+        &self,
+        to_broadcaster_id: &str,
+        from_broadcaster_login: &str,
+    ) -> Option<OrphanChatNotification>;
+
+    /// Spielt das gezogene Orphan-Signal erneut durch die Chat-Raid-Korrelation
+    /// (`on_chat_raid_notification`), nachdem das Pending registriert wurde.
+    async fn replay(&self, orphan: OrphanChatNotification);
+}
+
 /// Eingabe eines Pipeline-Laufs.
 #[derive(Debug, Clone)]
 pub struct AutoRaidRequest {
@@ -130,6 +173,11 @@ pub struct AutoRaidPipeline {
     follower_enricher: Option<Arc<dyn FollowerEnricher>>,
     /// Outreach-Boost-Ziele (Phase 6g) — `None` deaktiviert den Boost-Pfad.
     outreach: Option<OutreachBoostStore>,
+    /// Orphan-Replay beim Registrieren (P2.30) — `None` lässt den Replay aus
+    /// (Verhalten wie vor P2.30: Orphan wird erst nach Grace als unabhängiges
+    /// Arrival promotet). Wird per [`AutoRaidPipeline::with_orphan_replay`]
+    /// gesetzt; die konkrete Impl verdrahtet das Composition-Root (WIRING-TODO).
+    orphan_replay: Option<Arc<dyn OrphanReplay>>,
 }
 
 impl AutoRaidPipeline {
@@ -157,7 +205,16 @@ impl AutoRaidPipeline {
             fallback,
             follower_enricher,
             outreach,
+            orphan_replay: None,
         }
+    }
+
+    /// Aktiviert den Orphan-Replay beim Registrieren (P2.30). Aufruf im
+    /// Composition-Root nach `new(..)`; ohne ihn bleibt das alte Verhalten.
+    #[must_use]
+    pub fn with_orphan_replay(mut self, orphan_replay: Arc<dyn OrphanReplay>) -> Self {
+        self.orphan_replay = Some(orphan_replay);
+        self
     }
 
     pub async fn run(&self, req: &AutoRaidRequest) -> AutoRaidPipelineOutcome {
@@ -274,7 +331,8 @@ impl AutoRaidPipeline {
 
             match outcome {
                 RaidOutcome::Started => {
-                    self.register_pending(req, &target, &flow_id, channel_raid_ready);
+                    self.register_pending(req, &target, &flow_id, channel_raid_ready)
+                        .await;
                     if target.is_outreach_boost {
                         self.consume_outreach_boost(&target.user_login).await;
                     }
@@ -506,26 +564,48 @@ impl AutoRaidPipeline {
         }
     }
 
-    /// Registriert den erfolgreichen Raid als Pending (Arrival-Korrelation) und
-    /// räumt veraltete Pendings derselben Quelle ab (Python `register_pending_raid`).
-    fn register_pending(
+    /// Registriert den erfolgreichen Raid als Pending (Arrival-Korrelation),
+    /// räumt veraltete Pendings derselben Quelle ab und spielt — falls aktiviert —
+    /// eine zuvor verwaiste `channel.chat.notification` nach (Python
+    /// `register_pending_raid`, raid_tracking_runtime.py:477-514).
+    async fn register_pending(
         &self,
         req: &AutoRaidRequest,
         target: &ResolvedTarget,
         flow_id: &str,
         channel_raid_ready: bool,
     ) {
-        let mut store = self
-            .pending
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner());
-        store.supersede_from_source(&req.broadcaster_login, &target.user_id);
-        let mut pending = PendingRaid::new(&req.broadcaster_login, &target.user_id);
-        pending.is_partner_raid = target.is_partner_raid;
-        pending.registered_viewer_count = req.viewer_count;
-        pending.offline_trigger_ts = req.offline_trigger_ts;
-        pending.raid_flow_id = Some(flow_id.to_string());
-        pending.channel_raid_ready = Some(channel_raid_ready);
-        store.store(pending);
+        // Pending speichern (synchroner Store-Abschnitt, Lock nicht über await halten).
+        {
+            let mut store = self
+                .pending
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
+            store.supersede_from_source(&req.broadcaster_login, &target.user_id);
+            let mut pending = PendingRaid::new(&req.broadcaster_login, &target.user_id);
+            pending.is_partner_raid = target.is_partner_raid;
+            pending.registered_viewer_count = req.viewer_count;
+            pending.offline_trigger_ts = req.offline_trigger_ts;
+            pending.raid_flow_id = Some(flow_id.to_string());
+            pending.channel_raid_ready = Some(channel_raid_ready);
+            store.store(pending);
+        }
+
+        // P2.30: Orphan-Replay NACH dem Store — so findet das wiedereingespielte
+        // Chat-Signal das soeben registrierte Pending und korreliert es sofort,
+        // statt erst nach Grace als unabhängiges Arrival promotet zu werden.
+        if let Some(replay) = &self.orphan_replay {
+            if let Some(orphan) = replay
+                .pop_orphan(&target.user_id, &req.broadcaster_login)
+                .await
+            {
+                tracing::info!(
+                    from = %req.broadcaster_login,
+                    to = %target.user_login,
+                    "Pending raid matcht früheres channel.chat.notification-Signal — Replay"
+                );
+                replay.replay(orphan).await;
+            }
+        }
     }
 }

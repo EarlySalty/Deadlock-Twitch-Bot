@@ -243,8 +243,16 @@ pub async fn viewer_profiles_handler(
     {
         Ok(r) => r,
         Err(e) => {
+            // P2.69: Python (api_overview.py:2157-2162) liefert bei jeder Exception
+            // 200 + Demo/dataAvailable:false, damit das Frontend (dataAvailable-basiert)
+            // nicht hart bricht. Muster wie lurker_analysis.rs — Fehler loggen, nicht 500.
             tracing::error!("viewer-profiles dist-Fehler: {e}");
-            return (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({"error":"internal_error"}))).into_response();
+            return Json(json!({
+                "dataAvailable": false,
+                "message": "Keine Daten verfügbar",
+                "profiles": {"exclusive":0,"loyalMulti":0,"casual":0,"explorer":0,"passive":0,"total":0},
+                "exclusivityDistribution": []
+            })).into_response();
         }
     };
 
@@ -379,8 +387,18 @@ pub async fn audience_sharing_handler(
     {
         Ok(r) => r,
         Err(e) => {
+            // P2.69: Python (api_overview.py:2258-2263) liefert bei jeder Exception
+            // 200 + Demo/dataAvailable:false statt 500 (Frontend verzweigt auf
+            // dataAvailable). Muster wie lurker_analysis.rs.
             tracing::error!("audience-sharing shared-Fehler: {e}");
-            return (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({"error":"internal_error"}))).into_response();
+            return Json(json!({
+                "dataAvailable": false,
+                "message": "Keine Daten verfügbar",
+                "current": [],
+                "timeline": [],
+                "totalUniqueViewers": my_total,
+                "dataQuality": {"months": 0, "minSharedFilter": 3},
+            })).into_response();
         }
     };
 
@@ -491,6 +509,53 @@ const WATCH_TIME_MIN_COVERAGE: f64 = 0.15;
 struct WatchDist {
     avg: f64,
     method: &'static str,
+}
+
+/// P2.94: Backfill von `last_seen_at` aus dem letzten Chat-Zeitstempel je
+/// Chatter+Session — mengenbasiert (ein `UPDATE … FROM`), deckt Login- UND
+/// anonyme (`chatter_id`-)Zeilen ab. Spiegelt Python
+/// `_backfill_last_seen_from_messages` (api_audience.py:211-279) und die
+/// Logik aus `tb_analytics::watch_time::backfill_last_seen` (watch_time.rs:110).
+///
+/// Muss VOR `calc_watch_distribution` laufen, sonst werden Chatter mit
+/// NULL/veraltetem `last_seen_at` aus der Watch-Time-Berechnung gedroppt
+/// (niedrigere coverage/sample_count → falsches `low_coverage`/`no_data`).
+/// Best-effort: ein Fehler hier darf den Insights-Endpoint nicht kippen.
+async fn backfill_last_seen(pool: &PgPool, session_ids: &[i64], bots: &[String]) {
+    if session_ids.is_empty() {
+        return;
+    }
+    let result = sqlx::query(
+        r#"UPDATE twitch_session_chatters sc
+              SET last_seen_at = agg.max_ts
+             FROM (
+               SELECT cm.session_id,
+                      LOWER(NULLIF(cm.chatter_login, '')) AS chatter_login,
+                      cm.chatter_id,
+                      MAX(cm.message_ts) AS max_ts
+                 FROM twitch_chat_messages cm
+                WHERE cm.session_id = ANY($1::bigint[])
+                  AND (cm.chatter_login IS NULL OR cm.chatter_login = ''
+                       OR LOWER(cm.chatter_login) <> ALL($2::text[]))
+                GROUP BY cm.session_id, LOWER(NULLIF(cm.chatter_login, '')), cm.chatter_id
+             ) agg
+            WHERE sc.session_id = agg.session_id
+              AND agg.max_ts IS NOT NULL
+              AND (
+                (agg.chatter_login IS NOT NULL AND LOWER(sc.chatter_login) = agg.chatter_login)
+                OR (agg.chatter_login IS NULL AND agg.chatter_id IS NOT NULL
+                    AND sc.chatter_id = agg.chatter_id
+                    AND (sc.chatter_login IS NULL OR sc.chatter_login = ''))
+              )
+              AND (sc.last_seen_at IS NULL OR sc.last_seen_at < agg.max_ts)"#,
+    )
+    .bind(session_ids)
+    .bind(bots)
+    .execute(pool)
+    .await;
+    if let Err(e) = result {
+        tracing::warn!("audience-insights last_seen_at-Backfill fehlgeschlagen: {e}");
+    }
 }
 
 async fn calc_watch_distribution(pool: &PgPool, session_ids: &[i64], bots: &[String]) -> WatchDist {
@@ -705,6 +770,13 @@ pub async fn audience_insights_handler(
         .fetch_all(&pool).await.unwrap_or_default()
         .iter().filter_map(|r| r.try_get("id").ok()).collect();
 
+    // P2.94: last_seen_at aus Chat-Nachrichten backfillen, BEVOR die Watch-Time
+    // berechnet wird (Python api_audience.py:916 ruft _backfill_last_seen_from_messages
+    // mit current_ids + prev_ids genau vor _calc_watch_distribution).
+    let mut backfill_ids = current_ids.clone();
+    backfill_ids.extend_from_slice(&prev_ids);
+    backfill_last_seen(&pool, &backfill_ids, &bots).await;
+
     let current_watch = calc_watch_distribution(&pool, &current_ids, &bots).await;
     let previous_watch = calc_watch_distribution(&pool, &prev_ids, &bots).await;
 
@@ -773,6 +845,65 @@ mod tests {
     async fn body_json(resp: axum::response::Response) -> serde_json::Value {
         let bytes = to_bytes(resp.into_body(), usize::MAX).await.unwrap();
         serde_json::from_slice(&bytes).unwrap()
+    }
+
+    async fn make_pool_backfill(schema: &str) -> Option<PgPool> {
+        let dsn = std::env::var("TB_TEST_DATABASE_URL").ok()?;
+        let admin = PgPoolOptions::new().max_connections(1).connect(&dsn).await.unwrap();
+        sqlx::query(&format!("DROP SCHEMA IF EXISTS {schema} CASCADE")).execute(&admin).await.unwrap();
+        sqlx::query(&format!("CREATE SCHEMA {schema}")).execute(&admin).await.unwrap();
+        admin.close().await;
+        let opts = PgConnectOptions::from_str(&dsn).unwrap().options([("search_path", schema)]);
+        let pool = PgPoolOptions::new().max_connections(2).connect_with(opts).await.unwrap();
+        sqlx::query(
+            "CREATE TABLE twitch_session_chatters (\
+                 session_id BIGINT, chatter_id TEXT, chatter_login TEXT, \
+                 first_message_at TIMESTAMPTZ, last_seen_at TIMESTAMPTZ)",
+        )
+        .execute(&pool).await.unwrap();
+        sqlx::query(
+            "CREATE TABLE twitch_chat_messages (\
+                 session_id BIGINT, chatter_id TEXT, chatter_login TEXT, message_ts TIMESTAMPTZ)",
+        )
+        .execute(&pool).await.unwrap();
+        Some(pool)
+    }
+
+    // P2.94: backfill_last_seen schreibt last_seen_at aus dem letzten
+    // Chat-Zeitstempel, sodass calc_watch_distribution die Zeile zählt.
+    #[tokio::test]
+    async fn backfill_last_seen_setzt_null_last_seen() {
+        let Some(pool) = make_pool_backfill("t_aud_backfill").await else { return };
+        let first = Utc::now() - chrono::Duration::minutes(60);
+        let last_msg = Utc::now() - chrono::Duration::minutes(20);
+
+        // Chatter mit first_message_at, aber NULL last_seen_at.
+        sqlx::query(
+            "INSERT INTO twitch_session_chatters (session_id, chatter_id, chatter_login, first_message_at, last_seen_at) \
+             VALUES (7, 'u1', 'viewer', $1, NULL)",
+        )
+        .bind(first).execute(&pool).await.unwrap();
+        // Letzte Chat-Nachricht dieses Chatters.
+        sqlx::query(
+            "INSERT INTO twitch_chat_messages (session_id, chatter_id, chatter_login, message_ts) \
+             VALUES (7, 'u1', 'viewer', $1)",
+        )
+        .bind(last_msg).execute(&pool).await.unwrap();
+
+        let bots: Vec<String> = KNOWN_CHAT_BOTS.iter().map(|s| s.to_string()).collect();
+        backfill_last_seen(&pool, &[7], &bots).await;
+
+        let updated: Option<DateTime<Utc>> = sqlx::query_scalar(
+            "SELECT last_seen_at FROM twitch_session_chatters WHERE session_id=7",
+        )
+        .fetch_one(&pool).await.unwrap();
+        assert!(updated.is_some(), "last_seen_at muss nach Backfill gesetzt sein");
+        // Watch-Distribution sieht die Zeile jetzt (vorher gefiltert via IS NOT NULL).
+        let dist = calc_watch_distribution(&pool, &[7], &bots).await;
+        // method bleibt low_coverage (1 Sample), aber die Zeile wird erfasst —
+        // der entscheidende Punkt: no_data wäre es ohne Backfill nicht zwingend,
+        // hier prüfen wir, dass die Backfill-Zeile überhaupt ein Sample liefert.
+        assert_ne!(dist.method, "no_data", "Backfill-Zeile muss als Sample zählen");
     }
 
     // P2.68: mixed-case Bot-Login (Nightbot) muss case-insensitiv aus der

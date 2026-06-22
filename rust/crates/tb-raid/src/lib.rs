@@ -32,6 +32,7 @@ pub mod arrival_runtime;
 pub mod arrival_tracking_store;
 pub mod auth_writer;
 pub mod auto_raid_pipeline;
+pub mod bot_oauth;
 pub mod candidate_selection;
 pub mod eligibility;
 pub mod external_recruitment_store;
@@ -48,7 +49,9 @@ pub mod raid_blacklist;
 pub mod raid_executor;
 pub mod raid_history_store;
 pub mod raid_messaging;
+pub mod reauth_admin;
 pub mod recruitment_messaging;
+pub mod scope_fallback_warn;
 pub mod scope_profiles;
 pub mod score_store;
 pub mod score_tracking_store;
@@ -74,6 +77,11 @@ pub use arrival_tracking_store::{
     serialize_confirmation_signals, ArrivalTrackingStore, RecordArrivalInput,
 };
 pub use auth_writer::{AuthWriteError, AuthWriter, NewAuth};
+pub use bot_oauth::{
+    normalize_bot_oauth_context, resolve_bot_oauth_context, BotOAuthContext, BotOAuthSource,
+};
+pub use reauth_admin::{BulkReauthPort, ReauthAdminStore};
+pub use scope_fallback_warn::ScopeFallbackWarner;
 pub use partner_raid_delivery::{
     plan_partner_raid_delivery, PartnerRaidDeliveryConfig, PartnerRaidDeliveryPlan,
     PartnerRaidDeliveryRequest, PartnerRaidDeliveryStatus, PARTNER_RAID_DELAY_SECONDS,
@@ -95,7 +103,7 @@ pub use external_recruitment_store::{
 };
 pub use auto_raid_pipeline::{
     ArrivalReadiness, AutoRaidPipeline, AutoRaidPipelineOutcome, AutoRaidRequest, FallbackStreamSource,
-    FollowerEnricher,
+    FollowerEnricher, OrphanChatNotification, OrphanReplay,
 };
 pub use candidate_selection::{
     is_retryable_raid_error, select_by_score, select_fairest, FairnessCandidate, ScoredCandidate,
@@ -117,7 +125,8 @@ pub use partner_roster::{
     build_online_candidates, OnlineCandidate, PartnerRosterEntry, PartnerRosterStore, StreamData,
 };
 pub use pending_raids::{
-    normalize_broadcaster_login, normalize_pending_raid_key, PendingRaid, PendingRaidStore,
+    build_pending_timeout_detail, normalize_broadcaster_login, normalize_pending_raid_key,
+    PendingRaid, PendingRaidStore,
 };
 pub use raid_blacklist::RaidBlacklistStore;
 pub use raid_executor::{RaidApi, RaidExecutor, RaidOutcome, RaidRequest};
@@ -132,7 +141,8 @@ pub use score_tracking_store::{ScoreTrackingStore, TrackConfirmedInput};
 pub use scoring::{
     compute_base_score, compute_duration_score, compute_fairness_score, compute_final_score,
     compute_new_partner_multiplier, compute_raid_boost_multiplier, compute_readiness_score,
-    compute_scores, compute_time_pattern_score, ScoreComponents, ScoringInputs,
+    compute_scores, compute_scores_with_cache, compute_time_pattern_score, CachedScores,
+    ScoreComponents, ScoringInputs,
     DEFAULT_RAID_BOOST_MULTIPLIER, NEUTRAL_SCORE, NEW_PARTNER_MAX_MULTIPLIER,
     NEW_PARTNER_RAID_THRESHOLD, RAID_BOOST_MULTIPLIER,
 };

@@ -59,13 +59,14 @@ pub fn build_internal_router(
     chat_action: Option<Arc<dyn handlers::streamers::ChatActionPort>>,
     scam_revoke: Option<Arc<dyn handlers::scam_guard::ScamRevokePort>>,
     scam_enforce: Option<Arc<dyn handlers::scam_guard::ScamEnforcePort>>,
+    bulk_reauth: Option<Arc<dyn handlers::reauth_all::BulkReauthPort>>,
     legacy_proxy: Option<Arc<LegacyProxy>>,
 ) -> Router {
     use handlers::{
         chat_command, diagnose, discord_invite, eventsub, global_ban, healthz, market_share,
-        python_stubs, raid, raid_blacklist, raid_oauth as oauth, scam_guard, self_explainer_log,
-        session_detail, stats_native, streamer_analytics_native, streamer_link, streamers,
-        telemetry_routes,
+        python_stubs, raid, raid_blacklist, raid_oauth as oauth, reauth_all, scam_guard,
+        self_explainer_log, session_detail, stats_native, streamer_analytics_native, streamer_link,
+        streamers, telemetry_routes,
     };
 
     let base = INTERNAL_API_BASE_PATH; // "/internal/twitch/v1"
@@ -189,6 +190,13 @@ pub fn build_internal_router(
             get(oauth::block_state_handler),
         )
         .route(&format!("{base}/raid/go-url"), get(oauth::go_url_handler))
+        // P3.7: Admin-Bulk-Re-Auth — flaggt alle token-tragenden Streamer in
+        // einem Schwung zur Neu-Autorisierung (Scope-Profil-Wechsel). KEIN
+        // Discord-DM (B10-Ausschluss). Port nicht verdrahtet → 503.
+        .route(
+            &format!("{base}/raid/reauth-all"),
+            post(reauth_all::reauth_all_handler),
+        )
         // Telemetrie (Welle B): announcements = reiner DB-Read; link-click =
         // Write mit geteiltem Idempotenz-Layer (Scope-Key, Fingerprint→409,
         // Inflight-Dedup, Replay-Header — voller Python-Vertrag).
@@ -297,6 +305,7 @@ pub fn build_internal_router(
         .layer(Extension(handlers::streamers::ChatActionExt(chat_action)))
         .layer(Extension(handlers::scam_guard::ScamRevokeExt(scam_revoke)))
         .layer(Extension(handlers::scam_guard::ScamEnforceExt(scam_enforce)))
+        .layer(Extension(handlers::reauth_all::BulkReauthExt(bulk_reauth)))
         .layer(Extension(idempotency::IdempotencyState::new()))
         .layer(Extension(LegacyProxyExt(legacy_proxy)))
         .layer(Extension(ExpectedToken(token.clone())))

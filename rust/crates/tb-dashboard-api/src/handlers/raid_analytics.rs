@@ -231,8 +231,13 @@ pub async fn raid_retention_handler(
 
     let base_rows = match base_rows {
         Err(e) => {
+            // P2.69: Python (api_overview.py:1973-1979) fängt jede Exception und
+            // liefert bewusst 200 + Demo/dataAvailable:false, damit das Frontend
+            // (das auf dataAvailable verzweigt) bei einem DB-Fehler nicht hart
+            // bricht. Muster wie lurker_analysis.rs. Fehler wird geloggt, aber
+            // nicht als 500 propagiert.
             tracing::error!("raid-retention DB-Fehler: {e}");
-            return (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({"error":"internal_error"}))).into_response();
+            return Json(json!({"dataAvailable":false,"message":"Keine Daten verfügbar"})).into_response();
         }
         Ok(r) => r,
     };
@@ -390,7 +395,18 @@ pub async fn raid_analytics_handler(
            ORDER BY ss.started_at DESC"#,
     )
     .bind(&streamer).bind(since)
-    .fetch_all(&pool).await.unwrap_or_default();
+    .fetch_all(&pool).await;
+
+    // P2.98: Python (api_raids.py:473-475) umschließt den gesamten Body mit
+    // try/except und liefert bei jedem DB-Fehler 500 statt leeres 200. Die drei
+    // Primär-Queries werden daher zu 500 gemappt (Sub-Queries bleiben weich).
+    let retention_rows = match retention_rows {
+        Ok(r) => r,
+        Err(e) => {
+            tracing::error!("raid-analytics retention-Query-Fehler: {e}");
+            return (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({"error":"internal_error"}))).into_response();
+        }
+    };
 
     let mut base_raids_full: Vec<Value> = vec![];
     let mut base_raids_sample: Vec<Value> = vec![];
@@ -492,7 +508,14 @@ pub async fn raid_analytics_handler(
              AND LOWER(fe.follower_login) != ALL($3)"#,
     )
     .bind(&streamer).bind(since).bind(&bots)
-    .fetch_all(&pool).await.unwrap_or_default();
+    .fetch_all(&pool).await;
+    let follow_rows = match follow_rows {
+        Ok(r) => r,
+        Err(e) => {
+            tracing::error!("raid-analytics follow-Query-Fehler: {e}");
+            return (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({"error":"internal_error"}))).into_response();
+        }
+    };
 
     let mut follows_by_source: HashMap<String, i64> = HashMap::new();
     let raid_follows = follow_rows.iter().filter(|r| r.try_get::<String,_>("follow_source").ok().as_deref() == Some("raid")).count() as i64;
@@ -566,7 +589,14 @@ pub async fn raid_analytics_handler(
            ORDER BY detected_at DESC LIMIT 50"#,
     )
     .bind(&streamer).bind(since)
-    .fetch_all(&pool).await.unwrap_or_default();
+    .fetch_all(&pool).await;
+    let incoming_raw = match incoming_raw {
+        Ok(r) => r,
+        Err(e) => {
+            tracing::error!("raid-analytics incoming-Query-Fehler: {e}");
+            return (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({"error":"internal_error"}))).into_response();
+        }
+    };
 
     let mut incoming_raids: Vec<Value> = vec![];
     let mut boost_values: Vec<f64> = vec![];
@@ -722,8 +752,14 @@ pub async fn raid_analytics_handler(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use axum::body::to_bytes;
     use sqlx::postgres::{PgConnectOptions, PgPoolOptions};
     use std::str::FromStr;
+
+    async fn body_json(resp: axum::response::Response) -> Value {
+        let bytes = to_bytes(resp.into_body(), usize::MAX).await.unwrap();
+        serde_json::from_slice(&bytes).unwrap()
+    }
 
     async fn make_pool(schema: &str) -> Option<PgPool> {
         let dsn = std::env::var("TB_TEST_DATABASE_URL").ok()?;
@@ -830,5 +866,48 @@ mod tests {
 
         assert_eq!(m.plus30m, 1, "Bot ausgefiltert, nur echter User zählt");
         assert_eq!(m.new_chatters, 1);
+    }
+
+    /// P2.69: raid-retention liefert bei DB-Fehler (Tabelle fehlt) 200 +
+    /// dataAvailable:false statt 500 (graceful Python-Fallback).
+    #[tokio::test]
+    async fn raid_retention_db_fehler_liefert_200_dataavailable_false() {
+        // make_pool legt twitch_raid_retention NICHT an → Primär-Query schlägt fehl.
+        let Some(pool) = make_pool("t_raid_retention_dberr").await else {
+            return;
+        };
+        let resp = raid_retention_handler(
+            DashboardAuthLevel::Localhost,
+            State(pool),
+            Query(RaidQuery { streamer: Some("nani".into()), days: Some(30) }),
+        )
+        .await
+        .into_response();
+        assert_eq!(resp.status(), StatusCode::OK, "DB-Fehler darf kein 500 sein");
+        let v = body_json(resp).await;
+        assert_eq!(v["dataAvailable"], false);
+    }
+
+    /// P2.98: raid-analytics liefert bei DB-Fehler (Primär-Query-Tabelle fehlt)
+    /// 500 statt leeres 200 — inkonsistenz zur retention vermeiden.
+    #[tokio::test]
+    async fn raid_analytics_db_fehler_liefert_500() {
+        // make_pool legt twitch_raid_retention/twitch_raid_history NICHT an →
+        // die erste Primär-Query (retention_rows) schlägt fehl.
+        let Some(pool) = make_pool("t_raid_analytics_dberr").await else {
+            return;
+        };
+        let resp = raid_analytics_handler(
+            DashboardAuthLevel::Localhost,
+            State(pool),
+            Query(RaidQuery { streamer: Some("nani".into()), days: Some(30) }),
+        )
+        .await
+        .into_response();
+        assert_eq!(
+            resp.status(),
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "DB-Fehler in Primär-Query muss 500 sein"
+        );
     }
 }

@@ -2740,6 +2740,12 @@ dependencies = [
 name = "tb-observability"
 version = "0.1.0"
 dependencies = [
+ "chrono",
+ "serde",
+ "serde_json",
+ "sqlx",
+ "tb-domain",
+ "tokio",
  "tracing",
  "tracing-subscriber",
 ]

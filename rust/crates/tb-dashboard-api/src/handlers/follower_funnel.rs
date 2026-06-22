@@ -44,6 +44,17 @@ fn clamp(v: i32, min: i32, max: i32) -> i32 {
     v.max(min).min(max)
 }
 
+/// Schwelle für `dataQuality.confidence = "high"` (Python `api_audience.py:715`).
+///
+/// Python: `max(3, int(session_count * 0.6))` — der Faktor wird ZUERST per
+/// `int()` abgeschnitten, dann clamped `max(3, …)` die **Schwelle** (nicht
+/// `session_count`). Für `session_count` 1–4 ist die Schwelle daher immer 3.
+/// (P2.93: vorher `session_count.max(3) * 3 / 5`, das `session_count` vor der
+/// Multiplikation clampt und für 1–4 zu niedrige Schwellen 1/2 liefert.)
+fn confidence_threshold(session_count: i64) -> i64 {
+    (session_count * 3 / 5).max(3)
+}
+
 /// `GET /twitch/api/v2/follower-funnel?streamer=&days=30`
 pub async fn follower_funnel_handler(
     auth: DashboardAuthLevel,
@@ -204,7 +215,7 @@ pub async fn follower_funnel_handler(
 
     let confidence = if unique_viewers == 0 {
         "low"
-    } else if follower_valid_samples >= session_count.max(3) * 3 / 5 {
+    } else if follower_valid_samples >= confidence_threshold(session_count) {
         "high"
     } else if follower_valid_samples >= 1 {
         "medium"
@@ -236,4 +247,38 @@ pub async fn follower_funnel_handler(
             "botFilterApplied": true,
         },
     })).into_response()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::confidence_threshold;
+
+    /// P2.93: Für niedrige Session-Counts (1–4) muss die "high"-Schwelle auf 3
+    /// geclamped sein (wie Python `max(3, int(session_count*0.6))`), nicht auf
+    /// 1/2 wie bei der fehlerhaften `session_count.max(3)*3/5`-Formel.
+    #[test]
+    fn confidence_threshold_clamps_low_session_counts_to_three() {
+        // session_count 1–4 → Schwelle immer 3.
+        for sc in 1..=4 {
+            assert_eq!(
+                confidence_threshold(sc),
+                3,
+                "session_count={sc} muss Schwelle 3 liefern"
+            );
+        }
+        // Konkretes Audit-Beispiel: session_count=1, samples=1 → NICHT 'high'.
+        assert!(
+            1 < confidence_threshold(1),
+            "1 Sample bei 1 Session darf 'high' nicht erreichen"
+        );
+    }
+
+    /// Ab session_count 5 stimmen alte und neue Formel überein (floor(sc*0.6)).
+    #[test]
+    fn confidence_threshold_matches_python_for_higher_counts() {
+        assert_eq!(confidence_threshold(5), 3);
+        assert_eq!(confidence_threshold(6), 3);
+        assert_eq!(confidence_threshold(10), 6);
+        assert_eq!(confidence_threshold(100), 60);
+    }
 }

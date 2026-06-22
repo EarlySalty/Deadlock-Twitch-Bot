@@ -53,9 +53,12 @@ async fn pool_in_schema(dsn: &str, schema: &str) -> PgPool {
             resolved_at TEXT, resolution_reason TEXT, raid_history_executed_at TIMESTAMPTZ,
             readiness_score DOUBLE PRECISION, fairness_score DOUBLE PRECISION )",
     ).execute(&pool).await.unwrap();
+    // P2.38: Prod-Schema hält started_at/ended_at als TEXT (ISO), nicht
+    // TIMESTAMPTZ — die Fixture spiegelt das, sonst lügt sie gegen die Baseline
+    // (started_at-Decode würde in Prod werfen, in der Fixture aber durchgehen).
     sqlx::query(
         "CREATE TABLE twitch_stream_sessions (id BIGSERIAL PRIMARY KEY, streamer_login TEXT, \
-         started_at TIMESTAMPTZ, ended_at TIMESTAMPTZ)",
+         started_at TEXT, ended_at TEXT)",
     )
     .execute(&pool)
     .await
@@ -154,8 +157,9 @@ async fn resolve_setzt_offene_zeile_auf_resolved() {
 
     let started: chrono::DateTime<Utc> = "2026-06-15T18:00:00+00:00".parse().unwrap();
     let ended: chrono::DateTime<Utc> = "2026-06-15T22:00:00+00:00".parse().unwrap();
+    // started_at/ended_at als ISO-TEXT (Prod-Form).
     sqlx::query("INSERT INTO twitch_stream_sessions (id, streamer_login, started_at, ended_at) VALUES (1,'dst',$1,$2)")
-        .bind(started).bind(ended).execute(&pool).await.unwrap();
+        .bind(started.to_rfc3339()).bind(ended.to_rfc3339()).execute(&pool).await.unwrap();
 
     // Deadlock-Raid um 18:30, kein Nicht-Deadlock-Channel-Update → session_ended.
     let row_id = insert_open_row(
@@ -205,7 +209,7 @@ async fn resolve_deadlock_endet_an_non_deadlock_channel_update() {
     let started: chrono::DateTime<Utc> = "2026-06-15T18:00:00+00:00".parse().unwrap();
     let ended: chrono::DateTime<Utc> = "2026-06-15T22:00:00+00:00".parse().unwrap();
     sqlx::query("INSERT INTO twitch_stream_sessions (id, streamer_login, started_at, ended_at) VALUES (1,'dst',$1,$2)")
-        .bind(started).bind(ended).execute(&pool).await.unwrap();
+        .bind(started.to_rfc3339()).bind(ended.to_rfc3339()).execute(&pool).await.unwrap();
     let row_id = insert_open_row(
         &pool, "200", "dst", "2026-06-15T18:30:00+00:00", Some(1), None, 1,
     )
