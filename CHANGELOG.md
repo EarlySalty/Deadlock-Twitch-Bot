@@ -1,3 +1,11 @@
+## #269 — Overlay: Hero-Bilder im Match-Verlauf + aufgeräumte Optik
+
+**Problem:** Im überarbeiteten Overlay zeigte der Match-Verlauf nur farbige Kreise statt der Hero-Bilder — diese wurden im Browser unzuverlässig nachgeladen und fielen oft ganz aus. Außerdem konnte die Verlaufsreihe über den Kartenrand hinauslaufen, und die empfohlene OBS-Größe passte nicht zur tatsächlichen Kartengröße.
+
+**Änderung:** Die Hero-Bilder werden jetzt serverseitig aufgelöst und direkt mitgeliefert, sodass sie zuverlässig erscheinen. Der Match-Verlauf zeigt die Heroes als abgerundete Kacheln mit dezenter Sieg/Niederlage-Markierung statt als Vollfarb-Kreise und bricht bei Bedarf sauber um. Die Karte ist etwas kompakter, und der Baukasten nennt jetzt je Layout die passende OBS-Größe.
+
+**Ergebnis:** Das Overlay wirkt aufgeräumter und hochwertiger, der Match-Verlauf zeigt echte Hero-Bilder, und die OBS-Einrichtung passt auf Anhieb.
+
 ## #268 — Overlay-Baukasten überarbeitet: Stile, Layouts & mehr Stats
 
 **Problem:** Der Overlay-Baukasten war funktional, aber schlicht — nur vier An/Aus-Schalter, ein einziger Look, und im Dashboard nur über einen Umweg erreichbar.
