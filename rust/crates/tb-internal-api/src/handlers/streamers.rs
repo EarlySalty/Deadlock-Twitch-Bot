@@ -1368,9 +1368,11 @@ mod tests {
         sqlx::query(
             r#"
             CREATE TABLE IF NOT EXISTS twitch_streamers (
-                twitch_login        TEXT PRIMARY KEY,
-                twitch_user_id      TEXT,
-                created_at          TIMESTAMPTZ DEFAULT NOW()
+                twitch_login         TEXT PRIMARY KEY,
+                twitch_user_id       TEXT,
+                discord_user_id      TEXT,
+                discord_display_name TEXT,
+                created_at           TIMESTAMPTZ DEFAULT NOW()
             )
             "#,
         )
