@@ -394,10 +394,9 @@ impl AutoRaidPipeline {
         self
     }
 
-    /// Verdrahtet optionale Observability-Services.
-    ///
-    /// WIRING-TODO(P2.42-P3.14): bin/tb-bot/src/main.rs soll die fertigen
-    /// `RaidObservabilityService`/`AnalyticsObservabilityService` hier injizieren.
+    /// Verdrahtet optionale Observability-Services. Injiziert in der
+    /// Composition-Root `bin/tb-bot/src/main.rs` (AutoRaidPipeline-Aufbau)
+    /// (P2.42/P3.8/P2.45/P3.14).
     #[must_use]
     pub fn with_observability(
         mut self,

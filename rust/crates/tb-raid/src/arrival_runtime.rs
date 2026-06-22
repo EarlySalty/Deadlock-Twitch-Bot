@@ -102,10 +102,8 @@ impl RaidArrivalRuntime {
         }
     }
 
-    /// Verdrahtet Raid-Observability fuer Arrival-Emitter.
-    ///
-    /// WIRING-TODO(P2.44): bin/tb-bot/src/main.rs soll den
-    /// `RaidObservabilityService` in die Arrival-Runtime injizieren.
+    /// Verdrahtet Raid-Observability fuer Arrival-Emitter. Injiziert in der
+    /// Composition-Root `bin/tb-bot/src/main.rs` (RaidArrivalRuntime-Aufbau) (P2.44).
     #[must_use]
     pub fn with_observability(mut self, observability: Arc<RaidObservabilityService>) -> Self {
         self.observability = Some(observability);
