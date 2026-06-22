@@ -59,14 +59,15 @@ pub trait StreamerTokenSource: Send + Sync {
 /// Tests injizieren ein Fake, damit kein HTTP in die Suite kommt.
 #[async_trait]
 pub trait ChattersFetcher: Send + Sync {
-    /// Liefert die Chatter-**Logins** (Helix `user_login`) eines Kanals oder den
-    /// Helix-Fehler (insb. [`HelixError::NotModerator`] = 403).
+    /// Liefert die Chatter eines Kanals als `(user_login, user_id)`-Paare oder
+    /// den Helix-Fehler (insb. [`HelixError::NotModerator`] = 403). Eine leere
+    /// `user_id` (`""`) wird vom Aufrufer zu `None` normalisiert.
     async fn fetch_chatters(
         &self,
         broadcaster_id: &str,
         moderator_id: &str,
         token: &str,
-    ) -> Result<Vec<String>, HelixError>;
+    ) -> Result<Vec<(String, Option<String>)>, HelixError>;
 }
 
 // ---------------------------------------------------------------------------
@@ -160,10 +161,11 @@ pub struct CycleStats {
     pub lurkers_new: u64,
 }
 
-/// Ergebnis eines Pro-Streamer-Polls: die Chatter-Logins (bereits roh, ungefiltert).
+/// Ergebnis eines Pro-Streamer-Polls: die Chatter als `(login, user_id)`-Paare
+/// (bereits roh, ungefiltert).
 #[derive(Debug, Default)]
 struct PollResult {
-    chatters: Vec<String>,
+    chatters: Vec<(String, Option<String>)>,
     succeeded: bool,
 }
 
@@ -305,18 +307,21 @@ async fn attempt_self_heal(
 
 /// Schreibt die Chatter eines Streamers in alle drei Tabellen (Reihenfolge
 /// zwingend, Python `_persist_chatters`). Bot- und Self-Logins werden vorher
-/// gefiltert. Liefert `(geschriebene_chatter, neue_lurker)`.
+/// gefiltert. Jeder Chatter ist ein `(login, user_id)`-Paar; eine fehlende
+/// `user_id` (`None`) wird als `NULL` gebunden. Liefert
+/// `(geschriebene_chatter, neue_lurker)`.
 pub async fn record_chatters_for_streamer(
     pool: &PgPool,
     streamer: &LiveStreamer,
-    raw_logins: &[String],
+    raw_chatters: &[(String, Option<String>)],
     bot_login: Option<&str>,
     tick_at: DateTime<Utc>,
 ) -> Result<(u64, u64), sqlx::Error> {
-    let viewers = filter_viewers(raw_logins, bot_login);
+    let viewers = filter_viewers(raw_chatters, bot_login);
     if viewers.is_empty() {
         return Ok((0, 0));
     }
+    let logins: Vec<String> = viewers.iter().map(|(login, _)| login.clone()).collect();
 
     // 1) Pre-Read: wer ist im Rollup des Streamers bereits bekannt?
     let seen_before: HashSet<String> = sqlx::query_scalar::<_, String>(
@@ -324,7 +329,7 @@ pub async fn record_chatters_for_streamer(
          WHERE streamer_login = $1 AND chatter_login = ANY($2)",
     )
     .bind(&streamer.streamer_login)
-    .bind(&viewers)
+    .bind(&logins)
     .fetch_all(pool)
     .await?
     .into_iter()
@@ -333,40 +338,45 @@ pub async fn record_chatters_for_streamer(
     let mut tx = pool.begin().await?;
     let mut new_lurkers = 0u64;
 
-    for login in &viewers {
+    for (login, chatter_id) in &viewers {
         let is_first_time = !seen_before.contains(login);
         if is_first_time {
             new_lurkers += 1;
         }
 
-        // 2) session_chatters — Conflict aktualisiert NUR last_seen_at.
+        // 2) session_chatters — Conflict aktualisiert NUR last_seen_at
+        //    (chatter_id wie Python NICHT überschrieben).
         sqlx::query(
             "INSERT INTO twitch_session_chatters \
              (session_id, streamer_login, chatter_login, chatter_id, first_message_at, \
               messages, is_first_time_streamer, seen_via_chatters_api, last_seen_at) \
-             VALUES ($1, $2, $3, NULL, $4, 0, $5, TRUE, $4) \
+             VALUES ($1, $2, $3, $4, $5, 0, $6, TRUE, $5) \
              ON CONFLICT (session_id, chatter_login) \
              DO UPDATE SET last_seen_at = EXCLUDED.last_seen_at",
         )
         .bind(streamer.active_session_id)
         .bind(&streamer.streamer_login)
         .bind(login)
+        .bind(chatter_id)
         .bind(tick_at)
         .bind(is_first_time)
         .execute(&mut *tx)
         .await?;
 
-        // 3) rollup — total_messages/total_sessions NIE inkrementieren.
+        // 3) rollup — total_messages/total_sessions NIE inkrementieren;
+        //    chatter_id per COALESCE nachtragen (bestehende ID gewinnt, Python).
         sqlx::query(
             "INSERT INTO twitch_chatter_rollup \
              (streamer_login, chatter_login, chatter_id, first_seen_at, last_seen_at, \
               total_messages, total_sessions) \
-             VALUES ($1, $2, NULL, $3, $3, 0, 1) \
+             VALUES ($1, $2, $3, $4, $4, 0, 1) \
              ON CONFLICT (streamer_login, chatter_login) DO UPDATE SET \
-               last_seen_at = EXCLUDED.last_seen_at",
+               last_seen_at = EXCLUDED.last_seen_at, \
+               chatter_id = COALESCE(twitch_chatter_rollup.chatter_id, EXCLUDED.chatter_id)",
         )
         .bind(&streamer.streamer_login)
         .bind(login)
+        .bind(chatter_id)
         .bind(tick_at)
         .execute(&mut *tx)
         .await?;
@@ -375,11 +385,12 @@ pub async fn record_chatters_for_streamer(
     tx.commit().await?;
 
     // 4) presence_ticks (fertige, idempotente fn aus irc_lurker.rs).
+    //    presence_ticks hat keine chatter_id-Spalte → nur die Logins.
     record_presence_ticks(
         pool,
         streamer.active_session_id,
         &streamer.streamer_login,
-        &viewers,
+        &logins,
         tick_at,
     )
     .await;
@@ -387,11 +398,15 @@ pub async fn record_chatters_for_streamer(
     Ok((viewers.len() as u64, new_lurkers))
 }
 
-/// Filtert Bot- und Self-Logins, normalisiert + dedupliziert.
-fn filter_viewers(raw: &[String], bot_login: Option<&str>) -> Vec<String> {
+/// Filtert Bot- und Self-Logins, normalisiert Logins + dedupliziert (erstes
+/// Vorkommen gewinnt). Leere `user_id` (`""`) wird zu `None`.
+fn filter_viewers(
+    raw: &[(String, Option<String>)],
+    bot_login: Option<&str>,
+) -> Vec<(String, Option<String>)> {
     let mut seen = HashSet::new();
     let mut out = Vec::new();
-    for login in raw {
+    for (login, user_id) in raw {
         let login = normalize_login(login);
         if login.is_empty() {
             continue;
@@ -403,7 +418,12 @@ fn filter_viewers(raw: &[String], bot_login: Option<&str>) -> Vec<String> {
             continue;
         }
         if seen.insert(login.clone()) {
-            out.push(login);
+            let user_id = user_id
+                .as_deref()
+                .map(str::trim)
+                .filter(|s| !s.is_empty())
+                .map(str::to_string);
+            out.push((login, user_id));
         }
     }
     out
@@ -536,7 +556,7 @@ pub async fn poll_streamer_once_for_test(
     provisioner: &dyn ModeratorProvisioner,
     cooldowns: &SelfHealCooldowns,
     stats: &mut CycleStats,
-) -> (bool, Vec<String>) {
+) -> (bool, Vec<(String, Option<String>)>) {
     let result = poll_streamer_once(
         streamer,
         bot_token,

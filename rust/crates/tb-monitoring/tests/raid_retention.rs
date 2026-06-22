@@ -131,6 +131,90 @@ async fn windows_and_splits_computed() {
 }
 
 #[tokio::test]
+async fn late_seen_counted_in_known_and_new_to_target() {
+    // Python zählt known_from_raider / new_to_target NUR mit Untergrenze
+    // (last_seen_at >= executed_at, KEINE +30min-Obergrenze). Ein Zuschauer der
+    // erst +45min zuletzt gesehen wird muss daher mitzählen.
+    let Some(pool) = support::pool_with_chatters_schema("t_raid_late_seen").await else {
+        return;
+    };
+    let executed = Utc::now() - Duration::hours(2);
+    let session = seed_session(&pool, "target", executed - Duration::minutes(5), None).await;
+    seed_raid(&pool, 21, "raider", "target", 10, executed).await;
+
+    // dave: zuletzt gesehen +45min (außerhalb des 30-min-Fensters), kommt aus
+    // dem Raider-Rollup und ist neu für target → known + new_to_target = 1.
+    seed_chatter(
+        &pool,
+        session,
+        "target",
+        "dave",
+        executed + Duration::minutes(45),
+        executed + Duration::minutes(45),
+        0,
+    )
+    .await;
+    seed_rollup(&pool, "raider", "dave", executed - Duration::days(2)).await;
+
+    let stats = compute_raid_retention(&pool).await.unwrap();
+    assert_eq!(stats.raids_computed, 1);
+
+    let (at30, known, new_to): (i32, i32, i32) = sqlx::query_as(
+        "SELECT chatters_at_plus30m, known_from_raider, new_to_target \
+         FROM twitch_raid_retention WHERE raid_id = 21",
+    )
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+
+    assert_eq!(at30, 0, "+30-Fenster zählt dave NICHT (last_seen +45min)");
+    assert_eq!(known, 1, "known_from_raider hat KEINE Obergrenze → dave zählt");
+    assert_eq!(new_to, 1, "new_to_target hat KEINE Obergrenze → dave zählt");
+}
+
+#[tokio::test]
+async fn new_chatter_independent_of_last_seen() {
+    // Python new_chatters hat GAR KEINE last_seen_at-Bedingung — nur
+    // first_message_at >= executed_at AND messages > 0 (+ not-in-rollup-of-to).
+    let Some(pool) = support::pool_with_chatters_schema("t_raid_new_chatter").await else {
+        return;
+    };
+    let executed = Utc::now() - Duration::hours(2);
+    let session = seed_session(&pool, "target", executed - Duration::minutes(5), None).await;
+    seed_raid(&pool, 22, "raider", "target", 10, executed).await;
+
+    // erin: schreibt erstmals +10min (messages>0), zuletzt gesehen aber erst
+    // +50min → außerhalb jedes Fensters, muss in new_chatters TROTZDEM zählen.
+    seed_chatter(
+        &pool,
+        session,
+        "target",
+        "erin",
+        executed + Duration::minutes(50),
+        executed + Duration::minutes(10),
+        3,
+    )
+    .await;
+
+    let stats = compute_raid_retention(&pool).await.unwrap();
+    assert_eq!(stats.raids_computed, 1);
+
+    let (at30, new_ch): (i32, i32) = sqlx::query_as(
+        "SELECT chatters_at_plus30m, new_chatters \
+         FROM twitch_raid_retention WHERE raid_id = 22",
+    )
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+
+    assert_eq!(at30, 0, "+30-Fenster zählt erin NICHT (last_seen +50min)");
+    assert_eq!(
+        new_ch, 1,
+        "new_chatters ignoriert last_seen_at → erin (first_message +10, messages>0) zählt"
+    );
+}
+
+#[tokio::test]
 async fn skip_if_already_computed() {
     let Some(pool) = support::pool_with_chatters_schema("t_raid_skip").await else {
         return;

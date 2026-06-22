@@ -166,11 +166,12 @@ FROM twitch_raid_history WHERE executed_at >= NOW() - INTERVAL '7 days' ORDER BY
 Pro Raid:
 - Skip wenn `(raid_id, executed_at)` schon in `twitch_raid_retention`.
 - Ziel-Session: `SELECT id FROM twitch_stream_sessions WHERE LOWER(streamer_login)=$to AND started_at<=$executed AND (ended_at IS NULL OR ended_at>=$executed) ORDER BY started_at DESC LIMIT 1` (timestamptz↔timestamptz, kein Cast gg. Prod) — Skip wenn keine.
-- Fenster 5/15/30 (über **session_chatters.last_seen_at**, NICHT presence_ticks):
+- Fenster 5/15/30 (über **session_chatters.last_seen_at**, NICHT presence_ticks) — **NUR diese drei Zähler sind zeitgefenstert** (Ober- UND Untergrenze):
   `COUNT(DISTINCT COALESCE(NULLIF(chatter_login,''), chatter_id)) FROM twitch_session_chatters WHERE session_id=$target AND last_seen_at>=$executed AND last_seen_at <= $executed + (offset||' minutes')::interval AND <bot-clause>`.
-- `known_from_raider` = COUNT(DISTINCT chatter_login) im Ziel-Fenster, die im **rollup des FROM-Streamers** stehen.
-- `new_to_target` = COUNT(DISTINCT COALESCE(NULLIF(login,''),id)), die NICHT im rollup des TO-Streamers mit `first_seen_at<executed_at` stehen.
-- `new_chatters` = wie new_to_target, aber zusätzlich `first_message_at>=executed_at AND messages>0` (echte Erst-Schreiber; Lurker zählen NICHT).
+- **Herkunfts-Splits haben KEINE +30min-Obergrenze (Python-Parität — wichtig):**
+- `known_from_raider` = COUNT(DISTINCT chatter_login) mit NUR Untergrenze `last_seen_at>=$executed` (keine Obergrenze), die im **rollup des FROM-Streamers** stehen (Join über `LOWER(streamer_login)=$from`).
+- `new_to_target` = COUNT(DISTINCT COALESCE(NULLIF(login,''),id)) mit NUR Untergrenze `last_seen_at>=$executed` (keine Obergrenze), die NICHT im rollup des TO-Streamers (`LOWER(streamer_login)=$to`) mit `first_seen_at<executed_at` stehen.
+- `new_chatters` = wie new_to_target, aber **GAR KEINE `last_seen_at`-Bedingung** — nur `first_message_at>=executed_at AND messages>0` (echte Erst-Schreiber; Lurker zählen über `messages>0` ohnehin nicht) plus dieselbe not-in-rollup-of-to-Bedingung.
 - bot-clause = `build_known_chat_bot_not_in_clause` (SQL NOT IN, NULL/''-logins bleiben).
 - Insert (target_session_id **int4-Cast**):
   ```sql

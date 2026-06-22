@@ -23,7 +23,7 @@ use tb_transport_twitch::HelixError;
 
 #[derive(Clone)]
 enum FetchOutcome {
-    Ok(Vec<String>),
+    Ok(Vec<(String, Option<String>)>),
     NotModerator,
 }
 
@@ -60,7 +60,7 @@ impl ChattersFetcher for ScriptedFetcher {
         broadcaster_id: &str,
         moderator_id: &str,
         _token: &str,
-    ) -> Result<Vec<String>, HelixError> {
+    ) -> Result<Vec<(String, Option<String>)>, HelixError> {
         let streamer_path = broadcaster_id == moderator_id;
         let (queue, seen) = if streamer_path {
             (&self.streamer_calls, &self.streamer_seen)
@@ -204,8 +204,15 @@ async fn seed_live(pool: &PgPool, user_id: &str, login: &str, session: i64, part
     .unwrap();
 }
 
-fn logins(v: &[&str]) -> Vec<String> {
-    v.iter().map(|s| s.to_string()).collect()
+fn logins(v: &[&str]) -> Vec<(String, Option<String>)> {
+    v.iter().map(|s| (s.to_string(), None)).collect()
+}
+
+/// Chatter-Liste mit gesetzten Helix-`user_id`s — `(login, user_id)`.
+fn chatters_with_ids(v: &[(&str, &str)]) -> Vec<(String, Option<String>)> {
+    v.iter()
+        .map(|(login, id)| (login.to_string(), Some(id.to_string())))
+        .collect()
 }
 
 // ---------------------------------------------------------------------------
@@ -413,6 +420,89 @@ async fn presence_tick_idempotent_same_tick_at() {
             .await
             .unwrap();
     assert_eq!(n2, 2, "gleicher tick_at = idempotent");
+}
+
+#[tokio::test]
+async fn chatter_id_persisted_into_session_and_rollup() {
+    // Helix-user_id muss in session_chatters UND rollup landen (Python-Parität).
+    let Some(pool) = support::pool_with_chatters_schema("t_chat_id_persist").await else {
+        return;
+    };
+    let s = streamer("1", "nani", 42, true);
+    let tick = Utc::now();
+
+    record_chatters_for_streamer(
+        &pool,
+        &s,
+        &chatters_with_ids(&[("Alice", "111")]),
+        Some("mybot"),
+        tick,
+    )
+    .await
+    .unwrap();
+
+    let session_id: Option<String> = sqlx::query_scalar(
+        "SELECT chatter_id FROM twitch_session_chatters WHERE chatter_login = 'alice'",
+    )
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!(session_id.as_deref(), Some("111"), "chatter_id in session_chatters");
+
+    let rollup_id: Option<String> = sqlx::query_scalar(
+        "SELECT chatter_id FROM twitch_chatter_rollup WHERE chatter_login = 'alice'",
+    )
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!(rollup_id.as_deref(), Some("111"), "chatter_id in rollup");
+}
+
+#[tokio::test]
+async fn rollup_chatter_id_coalesce_on_conflict() {
+    // Bestehende rollup-chatter_id gewinnt (COALESCE), NULL→neu wird nachgetragen.
+    let Some(pool) = support::pool_with_chatters_schema("t_chat_id_coalesce").await else {
+        return;
+    };
+    let s = streamer("1", "nani", 42, true);
+    let earlier = Utc::now() - Duration::days(1);
+
+    // bob hat bereits chatter_id='OLD'; alice existiert mit chatter_id NULL.
+    sqlx::query(
+        "INSERT INTO twitch_chatter_rollup \
+         (streamer_login, chatter_login, chatter_id, first_seen_at, last_seen_at, total_messages, total_sessions) \
+         VALUES ('nani', 'bob', 'OLD', $1, $1, 0, 1), \
+                ('nani', 'alice', NULL, $1, $1, 0, 1)",
+    )
+    .bind(earlier)
+    .execute(&pool)
+    .await
+    .unwrap();
+
+    record_chatters_for_streamer(
+        &pool,
+        &s,
+        &chatters_with_ids(&[("Bob", "NEW"), ("Alice", "222")]),
+        Some("mybot"),
+        Utc::now(),
+    )
+    .await
+    .unwrap();
+
+    let bob_id: Option<String> =
+        sqlx::query_scalar("SELECT chatter_id FROM twitch_chatter_rollup WHERE chatter_login='bob'")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+    assert_eq!(bob_id.as_deref(), Some("OLD"), "bestehende ID gewinnt (COALESCE)");
+
+    let alice_id: Option<String> = sqlx::query_scalar(
+        "SELECT chatter_id FROM twitch_chatter_rollup WHERE chatter_login='alice'",
+    )
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!(alice_id.as_deref(), Some("222"), "NULL→neue ID nachgetragen");
 }
 
 // ---------------------------------------------------------------------------

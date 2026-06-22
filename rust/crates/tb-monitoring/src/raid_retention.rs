@@ -108,7 +108,8 @@ async fn compute_one(pool: &PgPool, raid: &RaidRow) -> Result<Outcome, sqlx::Err
     let at15 = window_count(pool, target_session_id, raid.executed_at, 15).await?;
     let at30 = window_count(pool, target_session_id, raid.executed_at, 30).await?;
 
-    // 4) Herkunfts-Splits (30-min-Fenster als Referenz, wie Python).
+    // 4) Herkunfts-Splits — Untergrenze executed_at, KEINE Obergrenze
+    //    (new_chatters ohne last_seen_at-Bedingung), exakt wie Python.
     let known_from_raider =
         count_known_from_raider(pool, target_session_id, raid).await?;
     let new_to_target = count_new_to_target(pool, target_session_id, raid).await?;
@@ -166,8 +167,9 @@ async fn window_count(
     Ok(count as i32)
 }
 
-/// COUNT(DISTINCT chatter_login) im 30-min-Ziel-Fenster, die im **Rollup des
-/// FROM-Streamers** stehen (= mitgebrachte Stamm-Zuschauer).
+/// COUNT(DISTINCT chatter_login) der Ziel-Chatter ab `executed_at` (KEINE
+/// Obergrenze, Python-Parität), die im **Rollup des FROM-Streamers** stehen
+/// (= mitgebrachte Stamm-Zuschauer).
 async fn count_known_from_raider(
     pool: &PgPool,
     target_session_id: i64,
@@ -177,10 +179,9 @@ async fn count_known_from_raider(
         "SELECT COUNT(DISTINCT sc.chatter_login) \
          FROM twitch_session_chatters sc \
          JOIN twitch_chatter_rollup r \
-           ON r.streamer_login = $3 AND r.chatter_login = sc.chatter_login \
+           ON LOWER(r.streamer_login) = $3 AND r.chatter_login = sc.chatter_login \
          WHERE sc.session_id = $1 \
            AND sc.last_seen_at >= $2 \
-           AND sc.last_seen_at <= $2 + INTERVAL '30 minutes' \
            {bot}",
         bot = bot_not_in_clause("sc.chatter_login", 4),
     ))
@@ -193,8 +194,9 @@ async fn count_known_from_raider(
     Ok(count as i32)
 }
 
-/// COUNT(DISTINCT chatter) im 30-min-Fenster, die NICHT bereits vor dem Raid im
-/// Rollup des TO-Streamers waren (`first_seen_at < executed_at`).
+/// COUNT(DISTINCT chatter) ab `executed_at` (KEINE Obergrenze, Python-Parität),
+/// die NICHT bereits vor dem Raid im Rollup des TO-Streamers waren
+/// (`first_seen_at < executed_at`).
 async fn count_new_to_target(
     pool: &PgPool,
     target_session_id: i64,
@@ -205,10 +207,9 @@ async fn count_new_to_target(
          FROM twitch_session_chatters sc \
          WHERE sc.session_id = $1 \
            AND sc.last_seen_at >= $2 \
-           AND sc.last_seen_at <= $2 + INTERVAL '30 minutes' \
            AND NOT EXISTS ( \
              SELECT 1 FROM twitch_chatter_rollup r \
-             WHERE r.streamer_login = $3 \
+             WHERE LOWER(r.streamer_login) = $3 \
                AND r.chatter_login = sc.chatter_login \
                AND r.first_seen_at < $2 \
            ) \
@@ -224,8 +225,10 @@ async fn count_new_to_target(
     Ok(count as i32)
 }
 
-/// Wie `new_to_target`, aber zusätzlich echte Erst-Schreiber im Fenster
-/// (`first_message_at >= executed_at AND messages > 0`) — Lurker zählen NICHT.
+/// Echte Erst-Schreiber (`first_message_at >= executed_at AND messages > 0`),
+/// die NICHT bereits vor dem Raid im Rollup des TO-Streamers waren. Anders als
+/// die übrigen Metriken hat new_chatters GAR KEINE `last_seen_at`-Bedingung
+/// (Python-Parität) — Lurker zählen über `messages > 0` ohnehin nicht.
 async fn count_new_chatters(
     pool: &PgPool,
     target_session_id: i64,
@@ -235,13 +238,11 @@ async fn count_new_chatters(
         "SELECT COUNT(DISTINCT COALESCE(NULLIF(sc.chatter_login, ''), sc.chatter_id)) \
          FROM twitch_session_chatters sc \
          WHERE sc.session_id = $1 \
-           AND sc.last_seen_at >= $2 \
-           AND sc.last_seen_at <= $2 + INTERVAL '30 minutes' \
            AND sc.first_message_at >= $2 \
            AND sc.messages > 0 \
            AND NOT EXISTS ( \
              SELECT 1 FROM twitch_chatter_rollup r \
-             WHERE r.streamer_login = $3 \
+             WHERE LOWER(r.streamer_login) = $3 \
                AND r.chatter_login = sc.chatter_login \
                AND r.first_seen_at < $2 \
            ) \
