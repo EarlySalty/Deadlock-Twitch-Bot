@@ -1,3 +1,17 @@
+## #259 — Vier neue Stat-Befehle: !winrate, !lastmatch, !streak, !mostplayed
+
+**Problem:** Bisher konnte der Chat nur Rang (`!rank`) und Karriere-Siege (`!wins`) zeigen. Für Zuschauer interessante Live-Werte wie die aktuelle Form, das letzte Spiel oder der Lieblings-Hero fehlten.
+
+**Änderung:** Vier neue Befehle, alle gespeist aus der echten Match-Historie des verknüpften Steam-Accounts:
+- **`!winrate`** — Siegquote über die letzten gewerteten Spiele (Siege/Niederlagen).
+- **`!lastmatch`** — letztes Spiel: Sieg oder Niederlage, gespielter Hero, KDA.
+- **`!streak`** — aktuelle Siegesserie oder Pechsträhne.
+- **`!mostplayed`** — meistgespielter Hero der letzten Spiele.
+
+Die Zahlen kommen aus den tatsächlichen Match-Ergebnissen (ungewertete/abgebrochene Spiele werden für die Quote ausgeklammert) — keine geschätzten Werte. Voraussetzung ist ein über den Discord verknüpfter Steam-Account; ohne Verknüpfung weist der Bot freundlich darauf hin. Alle vier stehen auch in der Befehls-Übersicht.
+
+**Ergebnis:** Streamer können ihre aktuelle Form, ihr letztes Spiel und ihren Main-Hero auf Zuruf zeigen — mit echten Zahlen direkt aus den Matches.
+
 ## #258 — Aussagekräftige Diagnose für Raid- und Follower-Abläufe
 
 **Problem:** Das in #255 angelegte Beobachtungs-Subsystem hatte noch keine Zulieferer: Raid-Abläufe und die Follower-Abfrage hinterließen nur freien Logtext, aber keine strukturierten, über einen Ablauf hinweg zusammenführbaren Diagnose-Ereignisse — der Diagnosespeicher blieb leer. Außerdem wurden ausgelöste Raids, deren Ankunft am Ziel nie bestätigt wurde, nicht regelmäßig aufgeräumt und konnten sich ansammeln.
