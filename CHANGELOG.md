@@ -1,3 +1,11 @@
+## #262 — Partner-Status bleibt bei Inaktivität und pausiertem Raid erhalten
+
+**Problem:** Zwei Mechanismen entzogen Partnern zu Unrecht ihren Status. Erstens wurde ein Partner, der eine Weile nicht Deadlock streamte, automatisch komplett deaktiviert — und verlor damit auf einen Schlag Stats, Leaderboard, Live-Erkennung und Auto-Raid. Zweitens war der Partner-Status an den Raid-Schalter gekoppelt: Wer den Raid-Bot pausierte oder einen abgelaufenen Zugriff hatte, verlor ebenfalls das gesamte Stream-Tracking. In Summe standen rund 35 eigentlich aktive Partner fälschlich auf „archiviert".
+
+**Änderung:** Inaktivität deaktiviert einen Partner nicht mehr — sie wird nur noch als interner Hinweis vermerkt, der Partner bleibt aktiv. Der aktive Partner-Status wird ausschließlich aus echtem Status, bewusstem Opt-out und technischer Pause bestimmt und ist vom Raid-Schalter entkoppelt: Ein pausierter Raid-Bot oder ein Zugriffsfehler nehmen Stats, Leaderboard und Tracking nicht länger weg. Die fälschlich deaktivierten Partner wurden wieder aktiv geschaltet.
+
+**Ergebnis:** Aktive Partner behalten ihre Funktionen durchgehend — auch bei längeren Streampausen oder pausiertem Raid-Bot. Der Auto-Raid am Stream-Ende und die Live-Auswertungen greifen für die betroffenen Kanäle wieder.
+
 ## #261 — Stream-Sitzungen werden wieder zuverlässig aufgezeichnet
 
 **Problem:** Beim Start einer Stream-Sitzung (und beim Abschluss) brach das Speichern mit einem Datenbankfehler ab — der Zeitstempel wurde im falschen Format übergeben. Für gerade live gegangene Streamer wurde dadurch keine neue Sitzung angelegt, was die Auswertungen dieser Streams lückenhaft machte.
