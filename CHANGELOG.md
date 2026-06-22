@@ -1,3 +1,11 @@
+## #272 — Markt-Daten-Ansicht repariert + interne Aufräumung
+
+**Problem:** Die aggregierte Markt-Daten-Ansicht im Verwaltungsbereich lieferte seit der Datenbank-Umstellung auf größere Zahlen-Typen einen Fehler statt Daten — die Session-Kennung wurde an einer Stelle noch im alten, zu kleinen Zahlenformat gelesen, was den Abruf still abbrechen ließ. Derselbe Lesefehler betraf eine interne Chatter-Statistik. Parallel schleppte der Code eine längst abgelöste „manuell verifiziert"-Sonderbehandlung mit, die durch die neue Partner-Logik überflüssig geworden war.
+
+**Änderung:** Die Session-Kennung wird an den betroffenen Stellen wieder im neuen, größeren Format gelesen, sodass die Markt-Daten-Ansicht und die interne Statistik wieder Werte liefern. Die abgelöste „manuell verifiziert"-Logik wurde aus dem neuen Programmteil vollständig entfernt; die zugehörigen Datenbank-Felder bleiben bewusst erhalten, bis auch der letzte Altbestand umgezogen ist — bestehende Anzeigen ändern sich dadurch nicht.
+
+**Ergebnis:** Die Markt-Daten-Ansicht zeigt wieder Werte, interne Statistiken stimmen, und der Code trägt eine tote Sonderbehandlung weniger — ohne Auswirkung auf das, was Streamer sehen.
+
 ## #271 — Stille Zuschauer, Anwesenheit und Raid-Treue werden wieder erfasst
 
 **Problem:** Seit der Umstellung auf die neue Bot-Generation wurden Zuschauer nur noch erfasst, wenn sie im Chat schrieben. Stille Mitschauer blieben unsichtbar — und damit liefen die Anwesenheits- und Watchtime-Verläufe sowie die Auswertung, wie viele zugeführte Zuschauer nach einem Raid hängen bleiben, ins Leere.
