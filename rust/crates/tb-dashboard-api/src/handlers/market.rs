@@ -166,7 +166,7 @@ pub async fn api_market_data_handler(
 struct MonitoredChannel {
     twitch_login: String,
     last_viewer_count: Option<i32>,
-    active_session_id: Option<i32>,
+    active_session_id: Option<i64>,
 }
 
 /// Aggregierte Kanal-Metriken (nach der Pro-Kanal-Berechnung).
@@ -300,7 +300,7 @@ async fn chat_stats_last_hour(pool: &PgPool, login: &str) -> Result<(i64, i64), 
 }
 
 /// (verbundene Chatter, Lurker) einer aktiven Session.
-async fn lurker_stats(pool: &PgPool, session_id: i32) -> Result<(i64, i64), sqlx::Error> {
+async fn lurker_stats(pool: &PgPool, session_id: i64) -> Result<(i64, i64), sqlx::Error> {
     let row: (Option<i64>, Option<i64>) = sqlx::query_as(
         r#"
         SELECT COUNT(*), SUM(CASE WHEN messages = 0 THEN 1 ELSE 0 END)
