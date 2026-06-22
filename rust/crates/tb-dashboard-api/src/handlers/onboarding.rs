@@ -94,7 +94,7 @@ pub async fn get_status(auth: DashboardAuthLevel, State(pool): State<PgPool>) ->
     let discord_id = tb_chat::stats::resolve_discord_id(&pool, &twitch_user_id).await;
     let discord_linked = discord_id.is_some();
     let steam_linked = match discord_id.as_deref() {
-        Some(discord_id) => tb_chat::stats::fetch_rank(discord_id)
+        Some(discord_id) => tb_chat::stats::fetch_rank(discord_id, false)
             .await
             .map(|rank| rank.linked)
             .unwrap_or(false),
