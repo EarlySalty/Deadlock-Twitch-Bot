@@ -28,9 +28,8 @@ pub async fn collect_subs_for_user(
 /// Schreibt einen Subscriptions-Snapshot.
 ///
 /// Spalten (Python-Parität): `twitch_user_id, twitch_login, total, points,
-/// snapshot_at`. `snapshot_at` ist `NOW()` als ISO-8601-String (UTC,
-/// TIMESTAMPTZ-clean); tier1/2/3 bleiben auf ihren Spalten-Defaults (Python
-/// schreibt sie nicht).
+/// snapshot_at`. `snapshot_at` ist `NOW()`; tier1/2/3 bleiben auf ihren
+/// Spalten-Defaults (Python schreibt sie nicht).
 pub async fn write_subs_snapshot(
     pool: &PgPool,
     user_id: &str,
@@ -40,8 +39,7 @@ pub async fn write_subs_snapshot(
     sqlx::query(
         "INSERT INTO twitch_subscriptions_snapshot \
          (twitch_user_id, twitch_login, total, points, snapshot_at) \
-         VALUES ($1, $2, $3, $4, to_char(NOW() AT TIME ZONE 'UTC', \
-                 'YYYY-MM-DD\"T\"HH24:MI:SS.US+00:00'))",
+         VALUES ($1, $2, $3, $4, NOW())",
     )
     .bind(user_id)
     .bind(login)
@@ -102,7 +100,7 @@ mod tests {
                 tier2          INTEGER DEFAULT 0,
                 tier3          INTEGER DEFAULT 0,
                 points         INTEGER DEFAULT 0,
-                snapshot_at    TEXT DEFAULT CURRENT_TIMESTAMP
+                snapshot_at    TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
             )
             "#,
         )
@@ -130,7 +128,8 @@ mod tests {
             .expect("write");
 
         let row: (String, String, i32, i32, String) = sqlx::query_as(
-            "SELECT twitch_user_id, twitch_login, total, points, snapshot_at \
+            "SELECT twitch_user_id, twitch_login, total, points, \
+             to_char(snapshot_at AT TIME ZONE 'UTC', 'YYYY-MM-DD\"T\"HH24:MI:SS.US+00:00') \
              FROM twitch_subscriptions_snapshot ORDER BY id DESC LIMIT 1",
         )
         .fetch_one(&pool)
@@ -141,6 +140,10 @@ mod tests {
         assert_eq!(row.1, "partner");
         assert_eq!(row.2, 137, "total");
         assert_eq!(row.3, 412, "points");
-        assert!(row.4.contains('T') && row.4.ends_with("+00:00"), "ISO UTC: {}", row.4);
+        assert!(
+            row.4.contains('T') && row.4.ends_with("+00:00"),
+            "ISO UTC: {}",
+            row.4
+        );
     }
 }
