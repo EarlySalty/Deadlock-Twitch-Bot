@@ -92,8 +92,8 @@ fn is_irc_word(c: char) -> bool {
 // ---- DB-Layer --------------------------------------------------------------
 
 /// Aktive Session-ID eines live Kanals (`twitch_live_state`), sonst `None`.
-async fn resolve_active_session(pool: &PgPool, channel: &str) -> Option<i32> {
-    sqlx::query_scalar::<_, Option<i32>>(
+async fn resolve_active_session(pool: &PgPool, channel: &str) -> Option<i64> {
+    sqlx::query_scalar::<_, Option<i64>>(
         "SELECT active_session_id FROM twitch_live_state \
          WHERE LOWER(streamer_login) = $1 AND is_live = 1",
     )
