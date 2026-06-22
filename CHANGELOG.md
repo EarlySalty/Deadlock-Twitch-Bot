@@ -1,3 +1,15 @@
+## #260 — Zwei weitere Stat-Befehle: !mmr und !live
+
+**Problem:** Es fehlten noch ein Rang-Verlauf („wie läuft mein Climb?") und eine schnelle Live-Auskunft im Chat.
+
+**Änderung:** Zwei neue Befehle, beide aus den Steam-Daten des verknüpften Accounts:
+- **`!mmr`** (auch `!climb`) — aktueller Rang plus Trend der letzten Tage (Stufen hoch, runter oder stabil). Der Verlauf baut sich ab jetzt auf, je länger der Account verknüpft ist.
+- **`!live`** — zeigt, ob du gerade in einem laufenden Deadlock-Match bist, inklusive Hero und Spielminute.
+
+Beide laufen wie die übrigen Stat-Befehle über den eigenen Spiel-Datendienst (kein externer Dienst). Ohne verknüpften Steam-Account weist der Bot freundlich darauf hin; beide stehen in der Befehls-Übersicht.
+
+**Ergebnis:** Die Stat-Familie im Chat ist komplett — `!rank`, `!wins`, `!winrate`, `!lastmatch`, `!streak`, `!mostplayed`, `!mmr` und `!live`, alle mit echten Zahlen aus den Matches.
+
 ## #259 — Vier neue Stat-Befehle: !winrate, !lastmatch, !streak, !mostplayed
 
 **Problem:** Bisher konnte der Chat nur Rang (`!rank`) und Karriere-Siege (`!wins`) zeigen. Für Zuschauer interessante Live-Werte wie die aktuelle Form, das letzte Spiel oder der Lieblings-Hero fehlten.
