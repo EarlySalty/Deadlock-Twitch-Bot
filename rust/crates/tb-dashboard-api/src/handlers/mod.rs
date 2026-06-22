@@ -59,6 +59,7 @@ pub mod lurker_analysis;
 pub mod lurker_tax_settings;
 pub mod raid_analytics;
 pub mod raid_history;
+pub mod raid_network_analytics;
 pub mod raid_pages;
 pub mod viewer_timeline;
 pub mod viewers;
