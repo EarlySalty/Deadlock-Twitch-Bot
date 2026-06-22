@@ -14,6 +14,10 @@ use std::collections::{BTreeSet, HashMap};
 
 use sqlx::PgPool;
 
+#[path = "inbox_store/retry.rs"]
+mod write_retry;
+use write_retry::{with_write_retry, RetryPolicy};
+
 /// Vollständige Lesesicht einer `twitch_live_state`-Row (Spalten wie Prod).
 #[derive(Debug, Clone, sqlx::FromRow)]
 pub struct LiveStateRow {
@@ -258,64 +262,72 @@ impl LiveStateStore {
             })
             .collect();
 
-        let mut tx = self.pool.begin().await?;
-        for (login, user_id) in &cleanup {
-            sqlx::query(
-                r#"
-                DELETE FROM twitch_live_state
-                 WHERE LOWER(streamer_login) = LOWER($1)
-                   AND LOWER(COALESCE(twitch_user_id, '')) <> LOWER($2)
-                "#,
-            )
-            .bind(login)
-            .bind(user_id)
-            .execute(&mut *tx)
-            .await?;
-        }
-        for row in &valid {
-            sqlx::query(
-                r#"
-                INSERT INTO twitch_live_state (
-                    twitch_user_id, streamer_login, is_live, last_seen_at, last_title,
-                    last_game, last_viewer_count, last_discord_message_id,
-                    last_tracking_token, last_stream_id, last_started_at,
-                    had_deadlock_in_session, active_session_id, last_deadlock_seen_at
-                ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)
-                ON CONFLICT (twitch_user_id) DO UPDATE SET
-                    streamer_login = EXCLUDED.streamer_login,
-                    is_live = EXCLUDED.is_live,
-                    last_seen_at = EXCLUDED.last_seen_at,
-                    last_title = EXCLUDED.last_title,
-                    last_game = EXCLUDED.last_game,
-                    last_viewer_count = EXCLUDED.last_viewer_count,
-                    last_discord_message_id = EXCLUDED.last_discord_message_id,
-                    last_tracking_token = EXCLUDED.last_tracking_token,
-                    last_stream_id = EXCLUDED.last_stream_id,
-                    last_started_at = EXCLUDED.last_started_at,
-                    had_deadlock_in_session = EXCLUDED.had_deadlock_in_session,
-                    active_session_id = EXCLUDED.active_session_id,
-                    last_deadlock_seen_at = EXCLUDED.last_deadlock_seen_at
-                "#,
-            )
-            .bind(&row.twitch_user_id)
-            .bind(&row.streamer_login)
-            .bind(row.is_live)
-            .bind(&row.last_seen_at)
-            .bind(&row.last_title)
-            .bind(&row.last_game)
-            .bind(row.last_viewer_count)
-            .bind(&row.last_discord_message_id)
-            .bind(&row.last_tracking_token)
-            .bind(&row.last_stream_id)
-            .bind(&row.last_started_at)
-            .bind(row.had_deadlock_in_session)
-            .bind(row.active_session_id)
-            .bind(&row.last_deadlock_seen_at)
-            .execute(&mut *tx)
-            .await?;
-        }
-        tx.commit().await?;
-        Ok(())
+        with_write_retry(RetryPolicy::from_env(), || {
+            let pool = self.pool.clone();
+            let cleanup = &cleanup;
+            let valid = &valid;
+            async move {
+                let mut tx = pool.begin().await?;
+                for (login, user_id) in cleanup {
+                    sqlx::query(
+                        r#"
+                        DELETE FROM twitch_live_state
+                         WHERE LOWER(streamer_login) = LOWER($1)
+                           AND LOWER(COALESCE(twitch_user_id, '')) <> LOWER($2)
+                        "#,
+                    )
+                    .bind(login)
+                    .bind(user_id)
+                    .execute(&mut *tx)
+                    .await?;
+                }
+                for row in valid.iter().copied() {
+                    sqlx::query(
+                        r#"
+                        INSERT INTO twitch_live_state (
+                            twitch_user_id, streamer_login, is_live, last_seen_at, last_title,
+                            last_game, last_viewer_count, last_discord_message_id,
+                            last_tracking_token, last_stream_id, last_started_at,
+                            had_deadlock_in_session, active_session_id, last_deadlock_seen_at
+                        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)
+                        ON CONFLICT (twitch_user_id) DO UPDATE SET
+                            streamer_login = EXCLUDED.streamer_login,
+                            is_live = EXCLUDED.is_live,
+                            last_seen_at = EXCLUDED.last_seen_at,
+                            last_title = EXCLUDED.last_title,
+                            last_game = EXCLUDED.last_game,
+                            last_viewer_count = EXCLUDED.last_viewer_count,
+                            last_discord_message_id = EXCLUDED.last_discord_message_id,
+                            last_tracking_token = EXCLUDED.last_tracking_token,
+                            last_stream_id = EXCLUDED.last_stream_id,
+                            last_started_at = EXCLUDED.last_started_at,
+                            had_deadlock_in_session = EXCLUDED.had_deadlock_in_session,
+                            active_session_id = EXCLUDED.active_session_id,
+                            last_deadlock_seen_at = EXCLUDED.last_deadlock_seen_at
+                        "#,
+                    )
+                    .bind(&row.twitch_user_id)
+                    .bind(&row.streamer_login)
+                    .bind(row.is_live)
+                    .bind(&row.last_seen_at)
+                    .bind(&row.last_title)
+                    .bind(&row.last_game)
+                    .bind(row.last_viewer_count)
+                    .bind(&row.last_discord_message_id)
+                    .bind(&row.last_tracking_token)
+                    .bind(&row.last_stream_id)
+                    .bind(&row.last_started_at)
+                    .bind(row.had_deadlock_in_session)
+                    .bind(row.active_session_id)
+                    .bind(&row.last_deadlock_seen_at)
+                    .execute(&mut *tx)
+                    .await?;
+                }
+                tx.commit().await?;
+                Ok(())
+            }
+        })
+        .await
     }
 
     /// EventSub stream.online: Drift-Cleanup + minimaler Upsert. Bestehende
@@ -466,12 +478,33 @@ impl LiveStateStore {
     /// Login zu einer user_id (Python `_resolve_eventsub_broadcaster_login`).
     pub async fn login_for_user_id(&self, user_id: &str) -> Result<Option<String>, sqlx::Error> {
         let login: Option<String> = sqlx::query_scalar(
-            "SELECT streamer_login FROM twitch_live_state WHERE twitch_user_id = $1",
+            "SELECT streamer_login
+               FROM twitch_live_state
+              WHERE twitch_user_id = $1
+              ORDER BY last_seen_at DESC NULLS LAST
+              LIMIT 1",
         )
         .bind(user_id)
         .fetch_optional(&self.pool)
         .await?;
-        Ok(login
+        let login = login
+            .map(|l| l.trim().to_lowercase())
+            .filter(|l| !l.is_empty());
+        if login.is_some() {
+            return Ok(login);
+        }
+
+        let identity_login: Option<String> = sqlx::query_scalar(
+            "SELECT twitch_login
+               FROM twitch_streamer_identities
+              WHERE twitch_user_id = $1
+                AND COALESCE(BTRIM(twitch_login), '') <> ''
+              LIMIT 1",
+        )
+        .bind(user_id)
+        .fetch_optional(&self.pool)
+        .await?;
+        Ok(identity_login
             .map(|l| l.trim().to_lowercase())
             .filter(|l| !l.is_empty()))
     }
@@ -485,5 +518,145 @@ impl LiveStateStore {
         .bind(login)
         .fetch_optional(&self.pool)
         .await
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use sqlx::postgres::{PgConnectOptions, PgPoolOptions};
+    use std::str::FromStr;
+
+    async fn make_pool(schema: &str) -> Option<PgPool> {
+        let dsn = std::env::var("TB_TEST_DATABASE_URL").ok()?;
+        let admin = PgPoolOptions::new()
+            .max_connections(1)
+            .connect(&dsn)
+            .await
+            .unwrap();
+        sqlx::query(&format!("DROP SCHEMA IF EXISTS {schema} CASCADE"))
+            .execute(&admin)
+            .await
+            .unwrap();
+        sqlx::query(&format!("CREATE SCHEMA {schema}"))
+            .execute(&admin)
+            .await
+            .unwrap();
+        admin.close().await;
+        let opts = PgConnectOptions::from_str(&dsn)
+            .unwrap()
+            .options([("search_path", schema)]);
+        let pool = PgPoolOptions::new()
+            .max_connections(3)
+            .connect_with(opts)
+            .await
+            .unwrap();
+        sqlx::query(
+            "CREATE TABLE twitch_live_state (
+                twitch_user_id TEXT PRIMARY KEY,
+                streamer_login TEXT NOT NULL,
+                last_stream_id TEXT, last_started_at TEXT, last_title TEXT, last_game_id TEXT,
+                last_discord_message_id TEXT, last_notified_at TEXT,
+                is_live INTEGER DEFAULT 0, last_seen_at TEXT, last_game TEXT,
+                last_viewer_count INTEGER DEFAULT 0, last_tracking_token TEXT,
+                active_session_id INTEGER, had_deadlock_in_session INTEGER DEFAULT 0,
+                last_deadlock_seen_at TEXT
+            )",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+        sqlx::query(
+            "CREATE TABLE twitch_streamer_identities (
+                twitch_user_id TEXT PRIMARY KEY,
+                twitch_login TEXT NOT NULL
+            )",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+        Some(pool)
+    }
+
+    fn upsert_row(user_id: &str, login: &str) -> LiveStateUpsert {
+        LiveStateUpsert {
+            twitch_user_id: user_id.to_string(),
+            streamer_login: login.to_string(),
+            is_live: 1,
+            last_seen_at: "2026-06-22T10:00:00+00:00".to_string(),
+            last_title: None,
+            last_game: None,
+            last_viewer_count: 0,
+            last_discord_message_id: None,
+            last_tracking_token: None,
+            last_stream_id: None,
+            last_started_at: None,
+            had_deadlock_in_session: 0,
+            active_session_id: None,
+            last_deadlock_seen_at: None,
+        }
+    }
+
+    #[tokio::test]
+    async fn login_for_user_id_falls_back_to_streamer_identity() {
+        let Some(pool) = make_pool("t_live_state_login_identity").await else {
+            return;
+        };
+        sqlx::query(
+            "INSERT INTO twitch_streamer_identities (twitch_user_id, twitch_login)
+             VALUES ('42', 'NaniLogin')",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+
+        let store = LiveStateStore::new(pool);
+        let login = store.login_for_user_id("42").await.unwrap();
+        assert_eq!(login.as_deref(), Some("nanilogin"));
+    }
+
+    #[tokio::test]
+    async fn persist_retries_transient_connection_error() {
+        let Some(pool) = make_pool("t_live_state_persist_retry").await else {
+            return;
+        };
+        sqlx::query("CREATE SEQUENCE live_state_fail_once_seq")
+            .execute(&pool)
+            .await
+            .unwrap();
+        sqlx::query(
+            r#"
+            CREATE OR REPLACE FUNCTION fail_live_state_insert_once()
+            RETURNS trigger LANGUAGE plpgsql AS $$
+            BEGIN
+                IF nextval('live_state_fail_once_seq') = 1 THEN
+                    RAISE SQLSTATE '08006';
+                END IF;
+                RETURN NEW;
+            END $$;
+            "#,
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+        sqlx::query(
+            "CREATE TRIGGER live_state_fail_once
+             BEFORE INSERT ON twitch_live_state
+             FOR EACH ROW EXECUTE FUNCTION fail_live_state_insert_once()",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+
+        let store = LiveStateStore::new(pool.clone());
+        store.persist(&[upsert_row("42", "nani")]).await.unwrap();
+
+        let count: i64 = sqlx::query_scalar(
+            "SELECT COUNT(*) FROM twitch_live_state WHERE twitch_user_id = '42'",
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert_eq!(count, 1);
     }
 }

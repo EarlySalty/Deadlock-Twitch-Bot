@@ -1,12 +1,11 @@
 //! Retry-Wrapper für die Schreiboperationen der Processing-Inbox.
 //!
-//! Parität zum Python-Orakel (`bot/storage/pg.py`): jede Inbox-Schreibung läuft
-//! dort durch `storage.transaction()`, das bei den SQLSTATEs `40001`
-//! (serialization_failure) und `40P01` (deadlock_detected) mit beschränktem
-//! Backoff erneut versucht. Der native Inbox-Store schrieb bisher direkt gegen
-//! den Pool ohne diesen Schutz — ein durch Concurrency (Python- und Rust-Worker
-//! leasen denselben Tisch) ausgelöster Serialisierungs-Abbruch ließ die
-//! Schreibung hart scheitern. [`with_write_retry`] schließt diese Lücke.
+//! Parität zu den Python-Orakeln (`bot/storage/pg.py` und Monitoring-Storage):
+//! retrybare SQLSTATEs laufen mit beschränktem Backoff erneut. Der native
+//! Inbox-Store schrieb bisher direkt gegen den Pool ohne diesen Schutz — ein
+//! durch Concurrency (Python- und Rust-Worker leasen denselben Tisch) oder
+//! einen kurzen Postgres-Neustart ausgelöster Abbruch ließ die Schreibung hart
+//! scheitern. [`with_write_retry`] schließt diese Lücke.
 //!
 //! Knöpfe + Defaults spiegeln Python (`TWITCH_ANALYTICS_TX_RETRY_*`): 3 Versuche,
 //! Backoff `0.10s..=0.75s` (verdoppelnd). Pure und ohne Env-Lesen testbar.
@@ -16,6 +15,15 @@ use std::time::Duration;
 /// Postgres-SQLSTATEs, bei denen ein erneuter Versuch erfolgversprechend ist.
 const SERIALIZATION_FAILURE: &str = "40001";
 const DEADLOCK_DETECTED: &str = "40P01";
+const CONNECTION_EXCEPTION: &str = "08000";
+const SQLCLIENT_UNABLE_TO_ESTABLISH_SQLCONNECTION: &str = "08001";
+const CONNECTION_DOES_NOT_EXIST: &str = "08003";
+const SQLSERVER_REJECTED_ESTABLISHMENT_OF_SQLCONNECTION: &str = "08004";
+const CONNECTION_FAILURE: &str = "08006";
+const ADMIN_SHUTDOWN: &str = "57P01";
+const CRASH_SHUTDOWN: &str = "57P02";
+const CANNOT_CONNECT_NOW: &str = "57P03";
+const TOO_MANY_CONNECTIONS: &str = "53300";
 
 /// Retry-Politik. Pure; liest selbst keine Env (siehe [`RetryPolicy::from_env`]).
 #[derive(Debug, Clone, Copy)]
@@ -61,26 +69,44 @@ impl RetryPolicy {
     /// (`attempt` 1-basiert). Verdoppelt ab `base_delay`, gedeckelt durch
     /// `max_delay` — identisch zu `_transaction_retry_sleep` in Python.
     pub fn backoff(&self, attempt: u32) -> Duration {
-        let factor = 1u32.checked_shl(attempt.saturating_sub(1)).unwrap_or(u32::MAX);
+        let factor = 1u32
+            .checked_shl(attempt.saturating_sub(1))
+            .unwrap_or(u32::MAX);
         self.base_delay.saturating_mul(factor).min(self.max_delay)
     }
 }
 
-/// `true`, wenn der Fehler ein retrybarer Serialisierungs-/Deadlock-Abbruch ist.
+/// `true`, wenn der Fehler ein retrybarer Serialisierungs-, Deadlock-,
+/// Verbindungs- oder Admin-Shutdown-Abbruch ist.
 pub fn is_retryable(err: &sqlx::Error) -> bool {
     matches!(
         err.as_database_error().and_then(|db| db.code()).as_deref(),
-        Some(SERIALIZATION_FAILURE | DEADLOCK_DETECTED)
+        Some(
+            SERIALIZATION_FAILURE
+                | DEADLOCK_DETECTED
+                | CONNECTION_EXCEPTION
+                | SQLCLIENT_UNABLE_TO_ESTABLISH_SQLCONNECTION
+                | CONNECTION_DOES_NOT_EXIST
+                | SQLSERVER_REJECTED_ESTABLISHMENT_OF_SQLCONNECTION
+                | CONNECTION_FAILURE
+                | ADMIN_SHUTDOWN
+                | CRASH_SHUTDOWN
+                | CANNOT_CONNECT_NOW
+                | TOO_MANY_CONNECTIONS
+        )
     )
 }
 
 /// Führt eine Inbox-Schreiboperation aus und versucht sie bei retrybaren
-/// Fehlern (`40001`/`40P01`) mit exponentiellem Backoff erneut. Nicht-retrybare
+/// Fehlern mit exponentiellem Backoff erneut. Nicht-retrybare
 /// Fehler und der letzte erschöpfte Versuch werden unverändert weitergereicht.
 ///
 /// `operation` muss bei jedem Versuch erneut aufrufbar sein (`FnMut`), da ein
 /// Serialisierungs-Abbruch die Transaktion serverseitig zurückrollt.
-pub async fn with_write_retry<F, Fut, T>(policy: RetryPolicy, mut operation: F) -> Result<T, sqlx::Error>
+pub async fn with_write_retry<F, Fut, T>(
+    policy: RetryPolicy,
+    mut operation: F,
+) -> Result<T, sqlx::Error>
 where
     F: FnMut() -> Fut,
     Fut: std::future::Future<Output = Result<T, sqlx::Error>>,
@@ -97,7 +123,7 @@ where
                     sqlstate = err.as_database_error().and_then(|db| db.code()).as_deref(),
                     attempt = attempt + 1,
                     max_attempts,
-                    "Inbox-Schreibung nach Serialisierungs-/Deadlock-Abbruch erneut versuchen"
+                    "Schreiboperation nach retrybarem Postgres-Abbruch erneut versuchen"
                 );
                 tokio::time::sleep(policy.backoff(attempt)).await;
             }
@@ -117,7 +143,10 @@ fn env_secs_f64(key: &str) -> Option<f64> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use sqlx::PgPool;
     use std::cell::Cell;
+    use std::sync::atomic::{AtomicU32, Ordering};
+    use std::sync::Arc;
 
     #[test]
     fn default_policy_matches_python_oracle() {
@@ -147,6 +176,64 @@ mod tests {
     fn pool_closed_is_not_retryable() {
         // Kein DB-Error → trägt keinen SQLSTATE → nicht retrybar.
         assert!(!is_retryable(&sqlx::Error::PoolClosed));
+    }
+
+    async fn make_pool() -> Option<PgPool> {
+        let dsn = std::env::var("TB_TEST_DATABASE_URL").ok()?;
+        sqlx::postgres::PgPoolOptions::new()
+            .max_connections(1)
+            .connect(&dsn)
+            .await
+            .ok()
+    }
+
+    async fn raise_sqlstate(pool: &PgPool, code: &str) -> sqlx::Error {
+        let sql = format!("DO $$ BEGIN RAISE SQLSTATE '{code}'; END $$");
+        match sqlx::query(&sql).execute(pool).await {
+            Ok(_) => panic!("RAISE SQLSTATE {code} unexpectedly succeeded"),
+            Err(err) => err,
+        }
+    }
+
+    #[tokio::test]
+    async fn transient_connection_and_shutdown_sqlstates_are_retryable() {
+        let Some(pool) = make_pool().await else {
+            return;
+        };
+        for code in [
+            "08000", "08001", "08003", "08004", "08006", "57P01", "57P02", "57P03", "53300",
+        ] {
+            let err = raise_sqlstate(&pool, code).await;
+            assert!(is_retryable(&err), "{code} muss retrybar sein");
+        }
+    }
+
+    #[tokio::test]
+    async fn write_retry_retries_transient_connection_error() {
+        let Some(pool) = make_pool().await else {
+            return;
+        };
+        let calls = Arc::new(AtomicU32::new(0));
+        let policy = RetryPolicy {
+            base_delay: Duration::from_millis(1),
+            max_delay: Duration::from_millis(1),
+            ..RetryPolicy::default()
+        };
+        let out = with_write_retry(policy, || {
+            let pool = pool.clone();
+            let calls = Arc::clone(&calls);
+            async move {
+                let attempt = calls.fetch_add(1, Ordering::SeqCst) + 1;
+                if attempt == 1 {
+                    return Err(raise_sqlstate(&pool, "08006").await);
+                }
+                Ok::<_, sqlx::Error>(attempt)
+            }
+        })
+        .await;
+
+        assert_eq!(out.unwrap(), 2);
+        assert_eq!(calls.load(Ordering::SeqCst), 2);
     }
 
     #[tokio::test]

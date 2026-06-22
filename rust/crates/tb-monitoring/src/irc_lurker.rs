@@ -59,7 +59,10 @@ fn parse_membership(line: &str, verb: &str) -> Option<(String, String)> {
     }
     let marker = format!(" {verb} #");
     let idx = after.find(&marker)?;
-    let channel: String = after[idx + marker.len()..].chars().take_while(|c| is_irc_word(*c)).collect();
+    let channel: String = after[idx + marker.len()..]
+        .chars()
+        .take_while(|c| is_irc_word(*c))
+        .collect();
     if channel.is_empty() {
         return None;
     }
@@ -71,7 +74,10 @@ pub fn parse_names(line: &str) -> Option<(String, Vec<String>)> {
     let after = &line[line.find(" 353 ")? + 5..];
     let chan_and_nicks = &after[after.find(" = #")? + 4..];
     let (channel_raw, nicks_str) = chan_and_nicks.split_once(" :")?;
-    let channel: String = channel_raw.chars().take_while(|c| is_irc_word(*c)).collect();
+    let channel: String = channel_raw
+        .chars()
+        .take_while(|c| is_irc_word(*c))
+        .collect();
     if channel.is_empty() {
         return None;
     }
@@ -86,16 +92,17 @@ fn is_irc_word(c: char) -> bool {
 // ---- DB-Layer --------------------------------------------------------------
 
 /// Aktive Session-ID eines live Kanals (`twitch_live_state`), sonst `None`.
-async fn resolve_active_session(pool: &PgPool, channel: &str) -> Option<i64> {
-    let row: Option<(Option<i64>,)> = sqlx::query_as(
+async fn resolve_active_session(pool: &PgPool, channel: &str) -> Option<i32> {
+    sqlx::query_scalar::<_, Option<i32>>(
         "SELECT active_session_id FROM twitch_live_state \
          WHERE LOWER(streamer_login) = $1 AND is_live = 1",
     )
     .bind(channel)
     .fetch_optional(pool)
     .await
-    .ok()?;
-    row.and_then(|(s,)| s)
+    .ok()
+    .flatten()
+    .flatten()
 }
 
 const INSERT_CHATTER: &str = "INSERT INTO twitch_session_chatters \
@@ -277,8 +284,15 @@ pub struct IrcLurkerTracker {
 impl IrcLurkerTracker {
     /// `nick`/`access_token` leer → anonymer `justinfan`-Login (nur lokale Tests);
     /// produktiv: Bot-Login + User-Token (mirror `IRCLurkerTracker.__init__`).
-    pub fn new(pool: PgPool, client_id: String, access_token: String, nick: Option<String>) -> Self {
-        let nick_norm = nick.map(|n| n.trim().to_lowercase()).filter(|n| !n.is_empty());
+    pub fn new(
+        pool: PgPool,
+        client_id: String,
+        access_token: String,
+        nick: Option<String>,
+    ) -> Self {
+        let nick_norm = nick
+            .map(|n| n.trim().to_lowercase())
+            .filter(|n| !n.is_empty());
         let authenticated = !access_token.is_empty() && nick_norm.is_some();
         let (cmd_tx, cmd_rx) = mpsc::unbounded_channel();
         Self {
@@ -298,7 +312,11 @@ impl IrcLurkerTracker {
     /// Fügt einen Kanal zur Verfolgung hinzu (Python `track_channel`). Bei
     /// laufender Verbindung wird er sofort gejoint.
     pub fn track_channel(&self, channel: &str, mode: TrackMode) {
-        let channel = channel.trim().to_lowercase().trim_start_matches('#').to_string();
+        let channel = channel
+            .trim()
+            .to_lowercase()
+            .trim_start_matches('#')
+            .to_string();
         if channel.is_empty() {
             return;
         }
@@ -320,7 +338,11 @@ impl IrcLurkerTracker {
 
     /// Entfernt einen Kanal (Python `untrack_channel`).
     pub fn untrack_channel(&self, channel: &str) {
-        let channel = channel.trim().to_lowercase().trim_start_matches('#').to_string();
+        let channel = channel
+            .trim()
+            .to_lowercase()
+            .trim_start_matches('#')
+            .to_string();
         if !self.channels.lock().unwrap().remove(&channel) {
             return;
         }
@@ -332,7 +354,12 @@ impl IrcLurkerTracker {
     /// Aktuell beobachtete Chatter eines Kanals (Python `get_chatters`).
     pub fn get_chatters(&self, channel: &str) -> HashSet<String> {
         let channel = channel.trim().to_lowercase();
-        self.chatters.lock().unwrap().get(&channel).cloned().unwrap_or_default()
+        self.chatters
+            .lock()
+            .unwrap()
+            .get(&channel)
+            .cloned()
+            .unwrap_or_default()
     }
 
     /// Verbindungs-Loop mit Auto-Reconnect. Läuft bis zum Programmende.
@@ -354,10 +381,16 @@ impl IrcLurkerTracker {
         let (rd, mut wr) = stream.into_split();
         if self.authenticated {
             let clean = self.access_token.replace("oauth:", "");
-            wr.write_all(format!("PASS oauth:{clean}\r\n").as_bytes()).await.ok()?;
+            wr.write_all(format!("PASS oauth:{clean}\r\n").as_bytes())
+                .await
+                .ok()?;
         }
-        wr.write_all(format!("NICK {}\r\n", self.nick).as_bytes()).await.ok()?;
-        wr.write_all(b"CAP REQ :twitch.tv/membership twitch.tv/commands\r\n").await.ok()?;
+        wr.write_all(format!("NICK {}\r\n", self.nick).as_bytes())
+            .await
+            .ok()?;
+        wr.write_all(b"CAP REQ :twitch.tv/membership twitch.tv/commands\r\n")
+            .await
+            .ok()?;
         wr.flush().await.ok()?;
 
         let mut reader = BufReader::new(rd);
@@ -382,7 +415,12 @@ impl IrcLurkerTracker {
         }
     }
 
-    async fn serve(&self, mut reader: BufReader<OwnedReadHalf>, mut writer: OwnedWriteHalf, rx: &mut mpsc::UnboundedReceiver<Cmd>) {
+    async fn serve(
+        &self,
+        mut reader: BufReader<OwnedReadHalf>,
+        mut writer: OwnedWriteHalf,
+        rx: &mut mpsc::UnboundedReceiver<Cmd>,
+    ) {
         let channels: Vec<String> = self.channels.lock().unwrap().iter().cloned().collect();
         for ch in channels {
             let _ = writer.write_all(format!("JOIN #{ch}\r\n").as_bytes()).await;
@@ -427,7 +465,12 @@ impl IrcLurkerTracker {
         let now = Utc::now();
         if let Some((nick, channel)) = parse_join(msg) {
             let (channel, nick) = (channel.to_lowercase(), nick.to_lowercase());
-            self.chatters.lock().unwrap().entry(channel.clone()).or_default().insert(nick.clone());
+            self.chatters
+                .lock()
+                .unwrap()
+                .entry(channel.clone())
+                .or_default()
+                .insert(nick.clone());
             upsert_chatter_seen(&self.pool, &channel, &nick, now).await;
         } else if let Some((nick, channel)) = parse_part(msg) {
             let (channel, nick) = (channel.to_lowercase(), nick.to_lowercase());
@@ -439,7 +482,10 @@ impl IrcLurkerTracker {
             let nicks_lower: Vec<String> = nicks.iter().map(|n| n.to_lowercase()).collect();
             // NAMES nur für Partner-Kanäle im Speicher halten (RAM-Schonung).
             if self.partner_channels.lock().unwrap().contains(&channel) {
-                self.chatters.lock().unwrap().insert(channel.clone(), nicks_lower.iter().cloned().collect());
+                self.chatters
+                    .lock()
+                    .unwrap()
+                    .insert(channel.clone(), nicks_lower.iter().cloned().collect());
             } else {
                 self.chatters.lock().unwrap().remove(&channel);
             }
@@ -487,16 +533,32 @@ mod tests {
 
     async fn make_pool(schema: &str) -> Option<PgPool> {
         let dsn = std::env::var("TB_TEST_DATABASE_URL").ok()?;
-        let admin = PgPoolOptions::new().max_connections(1).connect(&dsn).await.unwrap();
-        sqlx::query(&format!("DROP SCHEMA IF EXISTS {schema} CASCADE")).execute(&admin).await.unwrap();
-        sqlx::query(&format!("CREATE SCHEMA {schema}")).execute(&admin).await.unwrap();
+        let admin = PgPoolOptions::new()
+            .max_connections(1)
+            .connect(&dsn)
+            .await
+            .unwrap();
+        sqlx::query(&format!("DROP SCHEMA IF EXISTS {schema} CASCADE"))
+            .execute(&admin)
+            .await
+            .unwrap();
+        sqlx::query(&format!("CREATE SCHEMA {schema}"))
+            .execute(&admin)
+            .await
+            .unwrap();
         admin.close().await;
-        let opts = PgConnectOptions::from_str(&dsn).unwrap().options([("search_path", schema)]);
-        let pool = PgPoolOptions::new().max_connections(3).connect_with(opts).await.unwrap();
-        sqlx::query("CREATE TABLE twitch_live_state (twitch_user_id TEXT PRIMARY KEY, streamer_login TEXT NOT NULL, is_live INTEGER DEFAULT 0, active_session_id BIGINT)")
+        let opts = PgConnectOptions::from_str(&dsn)
+            .unwrap()
+            .options([("search_path", schema)]);
+        let pool = PgPoolOptions::new()
+            .max_connections(3)
+            .connect_with(opts)
+            .await
+            .unwrap();
+        sqlx::query("CREATE TABLE twitch_live_state (twitch_user_id TEXT PRIMARY KEY, streamer_login TEXT NOT NULL, is_live INTEGER DEFAULT 0, active_session_id INTEGER)")
             .execute(&pool).await.unwrap();
         sqlx::query(
-            "CREATE TABLE twitch_session_chatters (session_id BIGINT, streamer_login TEXT, \
+            "CREATE TABLE twitch_session_chatters (session_id INTEGER, streamer_login TEXT, \
              chatter_login TEXT, chatter_id TEXT, first_message_at TIMESTAMPTZ, messages INTEGER, \
              is_first_time_streamer BOOLEAN, seen_via_chatters_api BOOLEAN, last_seen_at TIMESTAMPTZ, \
              PRIMARY KEY (session_id, chatter_login))",
@@ -508,24 +570,39 @@ mod tests {
              viewer_login TEXT NOT NULL, tick_at TIMESTAMPTZ NOT NULL, \
              PRIMARY KEY (session_id, viewer_login, tick_at))",
         )
-        .execute(&pool).await.unwrap();
+        .execute(&pool)
+        .await
+        .unwrap();
         Some(pool)
     }
 
     #[tokio::test]
     async fn names_batch_und_join_upsert() {
-        let Some(pool) = make_pool("t_irc_lurker").await else { return };
+        let Some(pool) = make_pool("t_irc_lurker").await else {
+            return;
+        };
         sqlx::query("INSERT INTO twitch_live_state (twitch_user_id, streamer_login, is_live, active_session_id) VALUES ('1', 'nani', 1, 42)")
             .execute(&pool).await.unwrap();
         let now = Utc::now();
 
         // NAMES: 3 echte Chatter + 1 Bot (gefiltert) → 3 Inserts.
-        let nicks: Vec<String> = ["Alice", "Bob", "Carol", "Nightbot"].iter().map(|s| s.to_string()).collect();
+        let nicks: Vec<String> = ["Alice", "Bob", "Carol", "Nightbot"]
+            .iter()
+            .map(|s| s.to_string())
+            .collect();
         let (ins, upd) = upsert_names_batch(&pool, "nani", &nicks, now).await;
         assert_eq!((ins, upd), (3, 0));
-        let n: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM twitch_session_chatters").fetch_one(&pool).await.unwrap();
+        let n: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM twitch_session_chatters")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
         assert_eq!(n, 3); // Bot nicht eingefügt
-        let sva: bool = sqlx::query_scalar("SELECT seen_via_chatters_api FROM twitch_session_chatters WHERE chatter_login='alice'").fetch_one(&pool).await.unwrap();
+        let sva: bool = sqlx::query_scalar(
+            "SELECT seen_via_chatters_api FROM twitch_session_chatters WHERE chatter_login='alice'",
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap();
         assert!(sva); // boolean TRUE
 
         // Zweiter NAMES-Lauf: alle vorhanden → 3 Updates, 0 Inserts.
@@ -535,12 +612,18 @@ mod tests {
 
         // JOIN eines neuen Chatters → Upsert (Insert).
         upsert_chatter_seen(&pool, "nani", "Dave", later).await;
-        let n2: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM twitch_session_chatters").fetch_one(&pool).await.unwrap();
+        let n2: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM twitch_session_chatters")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
         assert_eq!(n2, 4);
 
         // JOIN eines Bots → ignoriert.
         upsert_chatter_seen(&pool, "nani", "StreamElements", later).await;
-        let n3: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM twitch_session_chatters").fetch_one(&pool).await.unwrap();
+        let n3: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM twitch_session_chatters")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
         assert_eq!(n3, 4);
     }
 
@@ -548,7 +631,9 @@ mod tests {
     async fn presence_ticks_pro_tick_und_idempotent() {
         // P1.23: pro Poll-Tick eine Presence-Tick-Row je aktivem Chatter,
         // ON CONFLICT idempotent beim Re-Tick (gleicher tick_at).
-        let Some(pool) = make_pool("t_presence_ticks").await else { return };
+        let Some(pool) = make_pool("t_presence_ticks").await else {
+            return;
+        };
         sqlx::query("INSERT INTO twitch_live_state (twitch_user_id, streamer_login, is_live, active_session_id) VALUES ('1', 'nani', 1, 42)")
             .execute(&pool).await.unwrap();
         let tick = Utc::now();
@@ -557,19 +642,31 @@ mod tests {
         // Erster Tick: 2 aktive Chatter → 2 Rows.
         let n = record_presence_ticks(&pool, 42, "nani", &chatters, tick).await;
         assert_eq!(n, 2);
-        let rows: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM twitch_viewer_presence_ticks WHERE session_id = 42")
-            .fetch_one(&pool).await.unwrap();
+        let rows: i64 = sqlx::query_scalar(
+            "SELECT COUNT(*) FROM twitch_viewer_presence_ticks WHERE session_id = 42",
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap();
         assert_eq!(rows, 2);
         // Logins normalisiert (lowercase).
-        let exists: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM twitch_viewer_presence_ticks WHERE viewer_login = 'alice'")
-            .fetch_one(&pool).await.unwrap();
+        let exists: i64 = sqlx::query_scalar(
+            "SELECT COUNT(*) FROM twitch_viewer_presence_ticks WHERE viewer_login = 'alice'",
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap();
         assert_eq!(exists, 1);
 
         // Re-Tick mit identischem tick_at → idempotent (0 neue Rows).
         let n2 = record_presence_ticks(&pool, 42, "nani", &chatters, tick).await;
         assert_eq!(n2, 0);
-        let rows2: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM twitch_viewer_presence_ticks WHERE session_id = 42")
-            .fetch_one(&pool).await.unwrap();
+        let rows2: i64 = sqlx::query_scalar(
+            "SELECT COUNT(*) FROM twitch_viewer_presence_ticks WHERE session_id = 42",
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap();
         assert_eq!(rows2, 2);
 
         // Nächster Tick (anderer tick_at) → neue Rows.
@@ -580,9 +677,16 @@ mod tests {
 
     #[tokio::test]
     async fn track_untrack_und_auth_flag() {
-        let Some(pool) = make_pool("t_irc_lurker_track").await else { return };
+        let Some(pool) = make_pool("t_irc_lurker_track").await else {
+            return;
+        };
         // Authentifiziert: Token + Nick → kein justinfan.
-        let auth = IrcLurkerTracker::new(pool.clone(), "cid".into(), "tok".into(), Some("MyBot".into()));
+        let auth = IrcLurkerTracker::new(
+            pool.clone(),
+            "cid".into(),
+            "tok".into(),
+            Some("MyBot".into()),
+        );
         assert!(auth.authenticated);
         assert_eq!(auth.nick, "mybot");
         // Anonym: leerer Token → justinfan, nicht authentifiziert.
@@ -604,13 +708,21 @@ mod tests {
 
     #[tokio::test]
     async fn keine_aktive_session_ist_noop() {
-        let Some(pool) = make_pool("t_irc_lurker_nosession").await else { return };
+        let Some(pool) = make_pool("t_irc_lurker_nosession").await else {
+            return;
+        };
         // Kanal offline → keine active_session_id.
         sqlx::query("INSERT INTO twitch_live_state (twitch_user_id, streamer_login, is_live) VALUES ('1', 'nani', 0)")
             .execute(&pool).await.unwrap();
         let nicks = vec!["alice".to_string()];
-        assert_eq!(upsert_names_batch(&pool, "nani", &nicks, Utc::now()).await, (0, 0));
-        let n: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM twitch_session_chatters").fetch_one(&pool).await.unwrap();
+        assert_eq!(
+            upsert_names_batch(&pool, "nani", &nicks, Utc::now()).await,
+            (0, 0)
+        );
+        let n: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM twitch_session_chatters")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
         assert_eq!(n, 0);
     }
 }
