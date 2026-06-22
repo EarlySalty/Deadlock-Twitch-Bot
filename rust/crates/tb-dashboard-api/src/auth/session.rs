@@ -379,6 +379,12 @@ impl DashboardAuthState {
         }
     }
 
+    /// Referenz auf den DB-Pool (für Resolver, die ihn brauchen, z. B. der
+    /// Access-State-Lookup im Partner-Gate, P2.85).
+    pub fn pool(&self) -> &PgPool {
+        &self.pool
+    }
+
     /// Lädt den Fernet-Key aus der Env-Var `SESSIONS_ENCRYPTION_KEY`.
     ///
     /// Gibt `None` zurück wenn die Env-Var nicht gesetzt ist.

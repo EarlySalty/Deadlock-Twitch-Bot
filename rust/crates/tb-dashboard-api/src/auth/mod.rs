@@ -25,6 +25,7 @@ pub mod csrf;
 pub mod fernet;
 pub mod level;
 pub mod oauth_login;
+pub mod partner_access;
 pub mod partner_gate;
 pub mod partner_login;
 pub mod security;

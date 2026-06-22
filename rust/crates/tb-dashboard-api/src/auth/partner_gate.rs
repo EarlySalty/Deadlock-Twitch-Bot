@@ -160,6 +160,35 @@ pub async fn partner_status_gate(req: Request<Body>, next: Next) -> Response {
     // Passiver Partner auf active-only-Route → ablehnen (Python 1882-1903).
     tracing::info!(login = %partner.twitch_login, path = %path, "partner_status_gate: passiver Partner abgelehnt");
     if wants_json {
+        // P2.85: für `/twitch/api/*` den Python-Access-Denied-Vertrag liefern
+        // (account_blocked vs dashboard_access_restricted + redirectUrl/
+        // partnerStatus/technicalPauseReason/operationalState/
+        // tokenErrorGraceExpiresAt), damit das Frontend korrekt verzweigt.
+        if path.starts_with("/twitch/api/") {
+            let access = tb_analytics::partner_access::load_partner_access_state(
+                state.pool(),
+                &partner.twitch_login,
+                &partner.twitch_user_id,
+            )
+            .await
+            .unwrap_or_else(|e| {
+                tracing::warn!("partner_status_gate: Access-State-Fehler für {}: {e}", partner.twitch_login);
+                tb_analytics::partner_access::AccessState {
+                    partner_status: "active".into(),
+                    analytics_access_allowed: true,
+                    landing_access_allowed: true,
+                    ..Default::default()
+                }
+            });
+            let payload = if access.landing_access_allowed {
+                crate::auth::partner_access::analytics_access_denied_payload(&access)
+            } else {
+                crate::auth::partner_access::landing_access_denied_payload(&access)
+            };
+            return crate::auth::partner_access::forbidden_json(payload);
+        }
+        // Nicht-`/twitch/api/`-JSON-Akzeptierer (z. B. Accept: application/json auf
+        // einer Seite): schlanker Forbidden-Body wie bisher.
         (
             StatusCode::FORBIDDEN,
             Json(json!({
