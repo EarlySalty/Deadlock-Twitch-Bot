@@ -1,3 +1,11 @@
+## #276 — Telemetrie-, Abrechnungs- und Raid-Robustheit
+
+**Problem:** Mehrere interne Pfade waren unvollständig: (a) Ban-/Timeout-/Shoutout-/Follow-Telemetrie eines Kanals fiel aus, wenn der Bot dort kein Moderator war; (b) wurde der Bot selbst in einem Kanal getimeoutet, bemerkte er es nicht zuverlässig; (c) der Abrechnungs-Abgleich verließ sich blind auf hinterlegte Produkt-Kennungen, auch wenn ein Produkt zwischenzeitlich gelöscht war; (d) bei fehlgeschlagenen Follower-Abfragen im Raid-System fehlte jede Fehler-Diagnose.
+
+**Änderung:** (a) Fehlt dem Bot der Moderator-Zugriff, springt jetzt ein Broadcaster-Token-Ersatzweg ein (ohne Doppel-Abos). (b) Ein Timeout des Bots wird über die offizielle Event-Schnittstelle erkannt und sein Selbstschutz scharfgestellt. (c) Der Abrechnungs-Abgleich prüft hinterlegte Produkte live gegen Stripe und legt gelöschte neu an, statt sie als gültig zu zählen. (d) Follower-Abfragefehler werden differenziert erfasst — erwartete Berechtigungs-Fehlschläge bleiben stumm, nur echte Fehler erscheinen in der Diagnose.
+
+**Ergebnis:** Telemetrie und Selbstschutz greifen auch in Kanälen ohne Mod-Status, der Abrechnungs-Abgleich heilt sich selbst, und die Raid-Diagnose ist aussagekräftig — ohne Falschalarm-Rauschen.
+
 ## #275 — Datenbank-Erstaufbau repariert
 
 **Problem:** Eine Schema-Migration brach beim vollständigen Erstaufbau einer frischen Datenbank ab — ein Trigger an einer Spalte blockierte deren Typ-Umstellung. Bestehende Installationen waren nicht betroffen (die Migration war dort längst angewandt), aber ein sauberer Neuaufbau von null scheiterte.
