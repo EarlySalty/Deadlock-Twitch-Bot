@@ -10,7 +10,7 @@ use std::time::{Duration, Instant};
 
 use axum::{
     extract::{Query, State},
-    http::StatusCode,
+    http::{HeaderMap, StatusCode},
     response::{Html, IntoResponse},
     Json,
 };
@@ -22,6 +22,7 @@ use serde_json::{json, Value};
 use sqlx::PgPool;
 use tokio::sync::{Mutex, Notify};
 
+use crate::auth::level::DashboardAuthLevel;
 use crate::handlers::spa;
 
 const DEFAULT_STEAM_BOT_BASE_URL: &str = "http://127.0.0.1:8783";
@@ -692,13 +693,21 @@ pub async fn overlay_api_handler(
     (StatusCode::OK, Json(body)).into_response()
 }
 
-/// `GET /twitch/overlay` — Builder-SPA ohne Param, OBS-Render mit `streamer`.
-pub async fn overlay_html_handler(Query(query): Query<OverlayQuery>) -> axum::response::Response {
+/// `GET /twitch/overlay` — mit `streamer` das öffentliche OBS-Render, ohne Param
+/// die Builder-SPA. Letztere ist auth-gegated wie die übrigen Dashboard-Seiten:
+/// sonst lieferte sie bei fehlender Session nur die leere Shell aus, deren Assets
+/// dann auf Login 303en → Weißbild. Der Render-Pfad bleibt öffentlich (OBS).
+pub async fn overlay_html_handler(
+    headers: HeaderMap,
+    auth: DashboardAuthLevel,
+    State(pool): State<PgPool>,
+    Query(query): Query<OverlayQuery>,
+) -> axum::response::Response {
     if normalize_login(query.streamer.as_deref()).is_some() {
         return Html(OVERLAY_HTML).into_response();
     }
 
-    spa::serve_dashboard_v2_index().await
+    spa::serve_dashboard_v2_index_gated(&headers, &auth, &pool).await
 }
 
 const OVERLAY_HTML: &str = r##"<!doctype html>
@@ -2112,7 +2121,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn overlay_html_route_ohne_streamer_liefert_dashboard_spa_index() {
+    async fn overlay_html_route_ohne_streamer_ohne_session_leitet_zum_login() {
         let _env_lock = ENV_LOCK.get_or_init(|| Mutex::new(())).lock().await;
         let unique = SystemTime::now()
             .duration_since(UNIX_EPOCH)
@@ -2150,6 +2159,10 @@ mod tests {
         assert!(render_html.contains("id=\"overlay-card\""));
         assert!(render_html.contains("background: transparent"));
 
+        // Ohne Streamer-Param UND ohne Session (Test-Router hat keine
+        // DashboardAuthState-Extension → DashboardAuthLevel::None) leitet die
+        // Builder-Shell zum Login um, statt die leere SPA-Shell auszuliefern
+        // (deren auth-gegatete Assets würden sonst 303en → Weißbild).
         let spa_resp = app
             .oneshot(
                 Request::builder()
@@ -2159,19 +2172,21 @@ mod tests {
             )
             .await
             .unwrap();
-        assert_eq!(spa_resp.status(), StatusCode::OK);
-        assert!(spa_resp
+        assert!(
+            spa_resp.status().is_redirection(),
+            "erwartet Login-Redirect, war {}",
+            spa_resp.status()
+        );
+        let location = spa_resp
             .headers()
-            .get(header::CONTENT_TYPE)
+            .get(header::LOCATION)
             .unwrap()
             .to_str()
-            .unwrap()
-            .starts_with("text/html"));
-        let spa_body = to_bytes(spa_resp.into_body(), usize::MAX).await.unwrap();
-        let spa_html = String::from_utf8(spa_body.to_vec()).unwrap();
-        assert!(spa_html.contains("<div id=\"root\""));
-        assert!(spa_html.contains("window.__TWITCH_DASHBOARD_RUNTIME__"));
-        assert!(spa_html.contains("/analyse/assets/app.js"));
+            .unwrap();
+        assert!(
+            location.contains("/twitch/auth/login"),
+            "Redirect-Ziel war {location}"
+        );
 
         tokio::fs::remove_dir_all(root).await.unwrap();
     }

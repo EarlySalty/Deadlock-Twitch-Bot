@@ -97,6 +97,24 @@ pub(crate) async fn serve_dashboard_v2_index() -> Response {
         .into_response()
 }
 
+/// Wie [`serve_dashboard_v2_index`], aber mit demselben Host-/Auth-Gate wie
+/// [`analyse_handler`]. Ohne Session wird zum Login umgeleitet, statt die leere
+/// SPA-Shell auszuliefern — deren Assets (`/analyse/assets/*`) sind auth-gegated
+/// und würden sonst auf Login 303en, was im Browser ein Weißbild ergibt.
+pub(crate) async fn serve_dashboard_v2_index_gated(
+    headers: &HeaderMap,
+    auth: &DashboardAuthLevel,
+    pool: &PgPool,
+) -> Response {
+    if let Some(r) = admin_dashboard_host_page_gate(headers) {
+        return r;
+    }
+    if let Some(r) = check_spa_auth(auth, pool).await {
+        return r;
+    }
+    serve_dashboard_v2_index().await
+}
+
 /// `GET /analyse/{path:.*}` — statische Assets aus dist/.
 pub async fn analyse_assets_handler(
     headers: HeaderMap,
