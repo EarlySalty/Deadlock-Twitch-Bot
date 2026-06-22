@@ -1,3 +1,11 @@
+## #256 — !wins zeigt deine Deadlock-Siege im Chat
+
+**Problem:** Im Chat ließ sich der Rang zeigen (`!rank`), aber nicht die eigene Erfolgsbilanz.
+
+**Änderung:** Neuer Befehl `!wins`: Wer seinen Steam-Account (über den Discord) verknüpft hat, bekommt seine Deadlock-Karriere-Siege im Chat angezeigt. Der Befehl taucht auch in der Befehls-Übersicht auf. Bewusst nur die Siege: Die verfügbare Datenquelle liefert über diesen Weg keine verlässliche Gesamt-Match-Zahl, deshalb gibt es keine erfundene Niederlagen- oder Winrate-Anzeige.
+
+**Ergebnis:** Streamer können ihre Siege auf Zuruf im Chat zeigen — mit korrekten Zahlen statt geschätzter.
+
 ## #255 — Robustere Twitch-Anbindung, genauere Auswertungen und gehärtete Anmeldung
 
 **Problem:** Nach dem Sprachumbau fehlten noch mehrere Robustheits- und Genauigkeits-Details der alten Version. Kurzzeitige Twitch-API-Aussetzer führten sofort zu Fehlern statt zu einem zweiten Versuch; einige Auswertungsseiten antworteten bei Datenbankproblemen mit einem harten Serverfehler statt mit einer leeren, gekennzeichneten Ansicht; Werbepausen flossen nicht in die Zuschauer-Verlaufskurve ein; und an der Admin-Anmeldung fehlte eine Geräte-/IP-Bindung.
