@@ -1,3 +1,11 @@
+## #253 — FAQ in den zentralen Hilfe-Bereich zusammengeführt
+
+**Problem:** Die FAQ lebte als eigene Seite getrennt vom restlichen Bot-Wissen — zwei Quellen, doppelter Pflegeaufwand. Außerdem schlug im Hintergrund das Einsammeln von Werbe- und Abo-Daten still fehl.
+
+**Änderung:** Alle FAQ-Inhalte sind jetzt Teil derselben gepflegten Wissensbasis und erscheinen im aufgeräumten Hilfe-Bereich (nach Themen gruppiert, mit Inhaltsverzeichnis). Die alte separate FAQ-Seite leitet dorthin weiter. Zusätzlich behoben: das Einsammeln von Werbe-Zeitplan- und Abo-Schnappschüssen schrieb Zeitstempel im falschen Format und schlug dadurch fehl — jetzt korrekt.
+
+**Ergebnis:** Eine einzige Wissensquelle für Hilfe, FAQ und Chat (nichts doppelt), und die Werbe-/Abo-Daten landen wieder zuverlässig in den Auswertungen.
+
 ## #252 — Streamer-Hilfe, Go-Live-Tipps, !rank und geführtes Onboarding
 
 **Problem:** Viele Streamer wussten kaum, was der Bot alles kann — es fehlten eine zentrale Hilfe, Hinweise direkt im Stream und ein einfacher Einstieg. Und es gab keinen Weg, den eigenen Deadlock-Rang im Chat zu zeigen.
