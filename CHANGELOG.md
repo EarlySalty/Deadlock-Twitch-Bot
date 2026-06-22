@@ -1,3 +1,11 @@
+## #263 — Stream-Overlay für OBS mit Live-Stats
+
+**Problem:** Die neuen Stat-Daten (Rang, Winrate, Serie, Live-Match) gab es nur als Chat-Befehle — nicht sichtbar im Stream selbst.
+
+**Änderung:** Es gibt jetzt ein einblendbares Stream-Overlay. Wer in OBS eine Browser-Quelle mit der Adresse `…/twitch/overlay?streamer=DEIN_TWITCH_NAME` hinzufügt, bekommt eine dezente, transparente Karte mit Rang (inkl. Rang-Abzeichen), Winrate und aktueller Serie — und sobald man in einem Match ist, eine Live-Zeile mit gespieltem Hero. Die Anzeige aktualisiert sich automatisch und zieht ihre Zahlen aus denselben verlässlichen Spieldaten wie die Chat-Befehle. Rang-Abzeichen und Hero-Bilder sind die offiziellen Deadlock-Spielgrafiken.
+
+**Ergebnis:** Streamer können ihre aktuellen Deadlock-Stats direkt im Stream zeigen, ohne dass jemand einen Befehl tippen muss — ein Einrichtungsschritt in OBS genügt.
+
 ## #262 — Partner-Status bleibt bei Inaktivität und pausiertem Raid erhalten
 
 **Problem:** Zwei Mechanismen entzogen Partnern zu Unrecht ihren Status. Erstens wurde ein Partner, der eine Weile nicht Deadlock streamte, automatisch komplett deaktiviert — und verlor damit auf einen Schlag Stats, Leaderboard, Live-Erkennung und Auto-Raid. Zweitens war der Partner-Status an den Raid-Schalter gekoppelt: Wer den Raid-Bot pausierte oder einen abgelaufenen Zugriff hatte, verlor ebenfalls das gesamte Stream-Tracking. In Summe standen rund 35 eigentlich aktive Partner fälschlich auf „archiviert".
