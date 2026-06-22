@@ -14,6 +14,8 @@ use axum::{
     response::{Html, IntoResponse},
     Json,
 };
+use chrono::{DateTime, Datelike, TimeZone, Utc};
+use chrono_tz::Europe::Berlin;
 use reqwest::Client;
 use serde::{de::DeserializeOwned, Deserialize, Serialize};
 use serde_json::{json, Value};
@@ -56,11 +58,32 @@ struct OverlayResponse {
     wins: Option<i64>,
     losses: Option<i64>,
     winrate: Option<f64>,
+    today_wins: Option<i64>,
+    today_losses: Option<i64>,
+    today_winrate: Option<f64>,
+    today_matches: Option<i64>,
+    kd: Option<f64>,
     streak_kind: Option<String>,
     streak_len: Option<i64>,
+    last_result: Option<String>,
+    last_hero: Option<String>,
+    last_kills: Option<i64>,
+    last_deaths: Option<i64>,
+    last_assists: Option<i64>,
+    most_played_hero: Option<String>,
+    most_played_count: Option<i64>,
+    #[serde(default)]
+    recent: Vec<RecentMatch>,
+    career_wins: Option<i64>,
     live: bool,
     hero: Option<String>,
     minutes: Option<i64>,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize)]
+struct RecentMatch {
+    result: String,
+    hero: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -89,6 +112,16 @@ struct SteamMatch {
     match_result: Option<i64>,
     #[serde(default)]
     not_scored: Option<bool>,
+    #[serde(default)]
+    hero_name: Option<String>,
+    #[serde(default)]
+    start_time: i64,
+    #[serde(default)]
+    player_kills: i64,
+    #[serde(default)]
+    player_deaths: i64,
+    #[serde(default)]
+    player_assists: i64,
 }
 
 #[derive(Deserialize)]
@@ -109,6 +142,21 @@ struct MatchSummary {
     winrate: f64,
     streak_kind: String,
     streak_len: i64,
+    last_result: String,
+    last_hero: Option<String>,
+    last_kills: i64,
+    last_deaths: i64,
+    last_assists: i64,
+    most_played_hero: Option<String>,
+    most_played_count: Option<i64>,
+}
+
+#[derive(Debug, PartialEq)]
+struct TodaySummary {
+    wins: i64,
+    losses: i64,
+    winrate: f64,
+    matches: i64,
 }
 
 fn overlay_cache() -> &'static Mutex<OverlayCache> {
@@ -205,10 +253,14 @@ async fn build_overlay_json(pool: &PgPool, login: &str) -> Value {
     );
 
     let trend = trend.filter(|value| value.linked != Some(false));
-    let match_summary = matches
-        .filter(|value| value.linked != Some(false))
-        .and_then(|value| summarize_matches(&value.matches));
+    let history = matches.filter(|value| value.linked != Some(false));
     let live = live.filter(|value| value.linked != Some(false));
+
+    let match_list: &[SteamMatch] = history.as_ref().map(|value| value.matches.as_slice()).unwrap_or(&[]);
+    let match_summary = summarize_matches(match_list);
+    let today = summarize_today(match_list, Utc::now());
+    let kd = compute_kd(match_list);
+    let recent = build_recent(match_list, 15);
 
     let response = OverlayResponse {
         ok: true,
@@ -221,10 +273,32 @@ async fn build_overlay_json(pool: &PgPool, login: &str) -> Value {
         wins: match_summary.as_ref().map(|summary| summary.wins),
         losses: match_summary.as_ref().map(|summary| summary.losses),
         winrate: match_summary.as_ref().map(|summary| summary.winrate),
+        today_wins: today.as_ref().map(|summary| summary.wins),
+        today_losses: today.as_ref().map(|summary| summary.losses),
+        today_winrate: today.as_ref().map(|summary| summary.winrate),
+        today_matches: today.as_ref().map(|summary| summary.matches),
+        kd,
         streak_kind: match_summary
             .as_ref()
             .map(|summary| summary.streak_kind.clone()),
         streak_len: match_summary.as_ref().map(|summary| summary.streak_len),
+        last_result: match_summary
+            .as_ref()
+            .map(|summary| summary.last_result.clone()),
+        last_hero: match_summary
+            .as_ref()
+            .and_then(|summary| summary.last_hero.clone()),
+        last_kills: match_summary.as_ref().map(|summary| summary.last_kills),
+        last_deaths: match_summary.as_ref().map(|summary| summary.last_deaths),
+        last_assists: match_summary.as_ref().map(|summary| summary.last_assists),
+        most_played_hero: match_summary
+            .as_ref()
+            .and_then(|summary| summary.most_played_hero.clone()),
+        most_played_count: match_summary
+            .as_ref()
+            .and_then(|summary| summary.most_played_count),
+        recent,
+        career_wins: None,
         live: live.as_ref().map(|value| value.live).unwrap_or(false),
         hero: live.as_ref().and_then(|value| clean_string(&value.hero)),
         minutes: live.and_then(|value| value.minutes),
@@ -304,27 +378,48 @@ fn clean_string(value: &Option<String>) -> Option<String> {
         .map(str::to_string)
 }
 
-fn summarize_matches(matches: &[SteamMatch]) -> Option<MatchSummary> {
-    let scored: Vec<i64> = matches
+/// Liefert die gewerteten Matches (`not_scored != true`, `match_result ∈ {0,1}`)
+/// in Eingabe-Reihenfolge (newest-first).
+fn scored_matches(matches: &[SteamMatch]) -> Vec<&SteamMatch> {
+    matches
         .iter()
         .filter(|entry| entry.not_scored != Some(true))
-        .filter_map(|entry| match entry.match_result {
-            Some(0 | 1) => entry.match_result,
-            _ => None,
-        })
-        .collect();
+        .filter(|entry| matches!(entry.match_result, Some(0 | 1)))
+        .collect()
+}
 
-    let first = *scored.first()?;
-    let wins = scored.iter().filter(|result| **result == 1).count() as i64;
-    let losses = scored.iter().filter(|result| **result == 0).count() as i64;
+fn summarize_matches(matches: &[SteamMatch]) -> Option<MatchSummary> {
+    let scored = scored_matches(matches);
+    let first = scored.first()?;
+    let first_result = first.match_result?;
+
+    let wins = scored
+        .iter()
+        .filter(|entry| entry.match_result == Some(1))
+        .count() as i64;
+    let losses = scored
+        .iter()
+        .filter(|entry| entry.match_result == Some(0))
+        .count() as i64;
     let total = wins + losses;
     if total == 0 {
         return None;
     }
 
-    let streak_len = scored.iter().take_while(|result| **result == first).count() as i64;
+    let streak_len = scored
+        .iter()
+        .take_while(|entry| entry.match_result == Some(first_result))
+        .count() as i64;
     let winrate = ((wins as f64 * 1000.0) / total as f64).round() / 10.0;
-    let streak_kind = if first == 1 { "win" } else { "loss" }.to_string();
+    let streak_kind = if first_result == 1 { "win" } else { "loss" }.to_string();
+
+    let last_result = if first_result == 1 { "win" } else { "loss" }.to_string();
+    let last_hero = clean_string(&first.hero_name);
+    let last_kills = first.player_kills;
+    let last_deaths = first.player_deaths;
+    let last_assists = first.player_assists;
+
+    let (most_played_hero, most_played_count) = most_played(&scored);
 
     Some(MatchSummary {
         wins,
@@ -332,7 +427,104 @@ fn summarize_matches(matches: &[SteamMatch]) -> Option<MatchSummary> {
         winrate,
         streak_kind,
         streak_len,
+        last_result,
+        last_hero,
+        last_kills,
+        last_deaths,
+        last_assists,
+        most_played_hero,
+        most_played_count,
     })
+}
+
+/// Häufigster `hero_name` über das gewertete Fenster. Bei Gleichstand gewinnt der
+/// zuerst (newest-first) gesehene Hero.
+fn most_played(scored: &[&SteamMatch]) -> (Option<String>, Option<i64>) {
+    let mut order: Vec<String> = Vec::new();
+    let mut counts: HashMap<String, i64> = HashMap::new();
+    for entry in scored {
+        if let Some(hero) = clean_string(&entry.hero_name) {
+            if !counts.contains_key(&hero) {
+                order.push(hero.clone());
+            }
+            *counts.entry(hero).or_insert(0) += 1;
+        }
+    }
+
+    let best = order
+        .into_iter()
+        .max_by_key(|hero| counts.get(hero).copied().unwrap_or(0));
+
+    match best {
+        Some(hero) => {
+            let count = counts.get(&hero).copied().unwrap_or(0);
+            (Some(hero), Some(count))
+        }
+        None => (None, None),
+    }
+}
+
+/// Heutige Bilanz, Tagesgrenze fix `Europe/Berlin` (00:00 lokal des Berlin-Datums
+/// von `now_utc`). Nur gewertete Matches mit `start_time ≥ Tagesbeginn`.
+fn summarize_today(matches: &[SteamMatch], now_utc: DateTime<Utc>) -> Option<TodaySummary> {
+    let now_berlin = now_utc.with_timezone(&Berlin);
+    let start_of_day = Berlin
+        .with_ymd_and_hms(now_berlin.year(), now_berlin.month(), now_berlin.day(), 0, 0, 0)
+        .single()?;
+    let cutoff = start_of_day.with_timezone(&Utc).timestamp();
+
+    let scored = scored_matches(matches);
+    let mut wins = 0i64;
+    let mut losses = 0i64;
+    for entry in &scored {
+        if entry.start_time < cutoff {
+            continue;
+        }
+        match entry.match_result {
+            Some(1) => wins += 1,
+            Some(0) => losses += 1,
+            _ => {}
+        }
+    }
+
+    let total = wins + losses;
+    if total == 0 {
+        return None;
+    }
+
+    let winrate = ((wins as f64 * 1000.0) / total as f64).round() / 10.0;
+    Some(TodaySummary {
+        wins,
+        losses,
+        winrate,
+        matches: total,
+    })
+}
+
+/// K/D übers gewertete Fenster: `Σkills / max(Σdeaths, 1)`, 2 Nachkommastellen.
+fn compute_kd(matches: &[SteamMatch]) -> Option<f64> {
+    let scored = scored_matches(matches);
+    if scored.is_empty() {
+        return None;
+    }
+
+    let kills: i64 = scored.iter().map(|entry| entry.player_kills).sum();
+    let deaths: i64 = scored.iter().map(|entry| entry.player_deaths).sum();
+    let kd = kills as f64 / deaths.max(1) as f64;
+    Some((kd * 100.0).round() / 100.0)
+}
+
+/// Letzte `n` gewertete Matches, newest-first (Eingabe-Reihenfolge), `n` auf 15 gecappt.
+fn build_recent(matches: &[SteamMatch], n: usize) -> Vec<RecentMatch> {
+    let cap = n.min(15);
+    scored_matches(matches)
+        .into_iter()
+        .take(cap)
+        .map(|entry| RecentMatch {
+            result: if entry.match_result == Some(1) { "win" } else { "loss" }.to_string(),
+            hero: clean_string(&entry.hero_name),
+        })
+        .collect()
 }
 
 /// `GET /twitch/api/v2/public/overlay?streamer=<login>`
@@ -657,7 +849,173 @@ mod tests {
 
     use crate::build_public_router;
 
+    use super::{
+        build_recent, compute_kd, summarize_matches, summarize_today, RecentMatch, SteamMatch,
+    };
+    use chrono::TimeZone;
+
     static ENV_LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+
+    /// `match_result` (1=Sieg/0=Niederlage), optionaler `not_scored`,
+    /// `start_time` (unix-UTC), Hero-Name, K/D/A.
+    fn sm(
+        result: Option<i64>,
+        not_scored: bool,
+        start_time: i64,
+        hero: &str,
+        kills: i64,
+        deaths: i64,
+        assists: i64,
+    ) -> SteamMatch {
+        SteamMatch {
+            match_result: result,
+            not_scored: if not_scored { Some(true) } else { None },
+            hero_name: if hero.is_empty() {
+                None
+            } else {
+                Some(hero.to_string())
+            },
+            start_time,
+            player_kills: kills,
+            player_deaths: deaths,
+            player_assists: assists,
+        }
+    }
+
+    /// 2026-06-22 12:00 Europe/Berlin (Sommerzeit, UTC+2) als UTC.
+    fn now_berlin_noon() -> chrono::DateTime<chrono::Utc> {
+        chrono::Utc.with_ymd_and_hms(2026, 6, 22, 10, 0, 0).unwrap()
+    }
+
+    /// Berlin-Tagesbeginn 2026-06-22 00:00 (= 2026-06-21 22:00 UTC, Sommerzeit UTC+2).
+    const BERLIN_TODAY_START_UTC: i64 = 1_782_079_200; // 2026-06-21T22:00:00Z
+
+    #[test]
+    fn summarize_today_zaehlt_nur_heutige_gewertete_matches() {
+        let matches = vec![
+            // heute, neueste zuerst
+            sm(Some(1), false, BERLIN_TODAY_START_UTC + 3_600, "Haze", 0, 0, 0),
+            sm(Some(1), false, BERLIN_TODAY_START_UTC + 100, "Haze", 0, 0, 0),
+            sm(Some(0), false, BERLIN_TODAY_START_UTC, "Haze", 0, 0, 0),
+            // not_scored heute -> raus
+            sm(Some(1), true, BERLIN_TODAY_START_UTC + 200, "Haze", 0, 0, 0),
+            // gestern (vor Tagesbeginn) -> raus
+            sm(Some(1), false, BERLIN_TODAY_START_UTC - 1, "Haze", 0, 0, 0),
+            sm(Some(0), false, BERLIN_TODAY_START_UTC - 86_400, "Haze", 0, 0, 0),
+        ];
+
+        let today = summarize_today(&matches, now_berlin_noon()).unwrap();
+        assert_eq!(today.wins, 2);
+        assert_eq!(today.losses, 1);
+        assert_eq!(today.matches, 3);
+        // 2/3 = 66.666... -> 66,7
+        assert_eq!(today.winrate, 66.7);
+    }
+
+    #[test]
+    fn summarize_today_ohne_heutige_matches_ist_none() {
+        let matches = vec![
+            sm(Some(1), false, BERLIN_TODAY_START_UTC - 1, "Haze", 0, 0, 0),
+            sm(Some(1), true, BERLIN_TODAY_START_UTC + 5, "Haze", 0, 0, 0),
+        ];
+        assert_eq!(summarize_today(&matches, now_berlin_noon()), None);
+    }
+
+    #[test]
+    fn compute_kd_rundet_und_haelt_deaths_null_stand() {
+        let matches = vec![
+            sm(Some(1), false, 0, "Haze", 10, 4, 0),
+            sm(Some(0), false, 0, "Haze", 8, 6, 0),
+            // not_scored -> ignoriert
+            sm(Some(1), true, 0, "Haze", 100, 100, 0),
+        ];
+        // 18 / max(10,1) = 1.8 -> 1.80
+        assert_eq!(compute_kd(&matches), Some(1.8));
+    }
+
+    #[test]
+    fn compute_kd_deaths_null_teilt_durch_eins() {
+        let matches = vec![sm(Some(1), false, 0, "Haze", 7, 0, 0)];
+        // 7 / max(0,1) = 7.0
+        assert_eq!(compute_kd(&matches), Some(7.0));
+    }
+
+    #[test]
+    fn compute_kd_ohne_gewertete_matches_ist_none() {
+        let matches = vec![sm(Some(1), true, 0, "Haze", 9, 1, 0)];
+        assert_eq!(compute_kd(&matches), None);
+    }
+
+    #[test]
+    fn build_recent_behaelt_reihenfolge_und_filtert_not_scored() {
+        let matches = vec![
+            sm(Some(1), false, 0, "Haze", 0, 0, 0),
+            sm(Some(0), true, 0, "Abrams", 0, 0, 0), // raus
+            sm(Some(0), false, 0, "Vindicta", 0, 0, 0),
+            sm(Some(1), false, 0, "Seven", 0, 0, 0),
+        ];
+        let recent = build_recent(&matches, 10);
+        assert_eq!(
+            recent,
+            vec![
+                RecentMatch {
+                    result: "win".to_string(),
+                    hero: Some("Haze".to_string())
+                },
+                RecentMatch {
+                    result: "loss".to_string(),
+                    hero: Some("Vindicta".to_string())
+                },
+                RecentMatch {
+                    result: "win".to_string(),
+                    hero: Some("Seven".to_string())
+                },
+            ]
+        );
+    }
+
+    #[test]
+    fn build_recent_cappt_auf_fuenfzehn() {
+        let matches: Vec<SteamMatch> = (0..20)
+            .map(|i| sm(Some(i % 2), false, 0, "Haze", 0, 0, 0))
+            .collect();
+        // n=99 -> cap 15
+        assert_eq!(build_recent(&matches, 99).len(), 15);
+        // n=3 respektiert
+        assert_eq!(build_recent(&matches, 3).len(), 3);
+    }
+
+    #[test]
+    fn summarize_matches_liefert_last_match_und_most_played() {
+        let matches = vec![
+            // neuestes gewertetes Match zuerst
+            sm(Some(1), false, 0, "Haze", 12, 3, 9),
+            sm(Some(0), true, 0, "Seven", 1, 1, 1), // not_scored -> ignoriert
+            sm(Some(0), false, 0, "Haze", 4, 8, 2),
+            sm(Some(1), false, 0, "Vindicta", 6, 5, 4),
+            sm(Some(1), false, 0, "Haze", 9, 2, 7),
+        ];
+        let summary = summarize_matches(&matches).unwrap();
+
+        // last_match = neuestes gewertetes
+        assert_eq!(summary.last_result, "win");
+        assert_eq!(summary.last_hero, Some("Haze".to_string()));
+        assert_eq!(summary.last_kills, 12);
+        assert_eq!(summary.last_deaths, 3);
+        assert_eq!(summary.last_assists, 9);
+
+        // most_played: Haze 3x
+        assert_eq!(summary.most_played_hero, Some("Haze".to_string()));
+        assert_eq!(summary.most_played_count, Some(3));
+
+        // wins=3, losses=1
+        assert_eq!(summary.wins, 3);
+        assert_eq!(summary.losses, 1);
+        assert_eq!(summary.winrate, 75.0);
+        // Streak: neuestes ist win, danach loss -> Länge 1
+        assert_eq!(summary.streak_kind, "win");
+        assert_eq!(summary.streak_len, 1);
+    }
 
     struct EnvGuard {
         previous: Option<String>,
