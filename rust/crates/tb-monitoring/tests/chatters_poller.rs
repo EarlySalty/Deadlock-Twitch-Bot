@@ -1,0 +1,633 @@
+//! Hermetische Tests des Helix-Chatters-Pollers (#11). Kein Netz: der Helix-Call
+//! läuft über einen Fake-[`ChattersFetcher`], Token-Ports + Provisioner ebenso.
+
+mod support;
+
+use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::Arc;
+
+use async_trait::async_trait;
+use chrono::{DateTime, Duration, Utc};
+use sqlx::PgPool;
+use tb_monitoring::chatters_poller::{
+    poll_streamer_once_for_test, BotChatterAuth, ChattersFetcher, CycleStats, LiveStreamer,
+    SelfHealCooldowns, StreamerTokenSource,
+};
+use tb_monitoring::subscriptions::ModeratorProvisioner;
+use tb_monitoring::{record_chatters_for_streamer, ChattersCollector};
+use tb_transport_twitch::HelixError;
+
+// ---------------------------------------------------------------------------
+// Fakes
+// ---------------------------------------------------------------------------
+
+#[derive(Clone)]
+enum FetchOutcome {
+    Ok(Vec<String>),
+    NotModerator,
+}
+
+/// Fetcher mit pro-Call scriptbarer Antwortliste (FIFO), getrennt nach
+/// `moderator_id == broadcaster_id` (Streamer-Pfad) vs. Bot-Pfad.
+struct ScriptedFetcher {
+    bot_calls: std::sync::Mutex<Vec<FetchOutcome>>,
+    streamer_calls: std::sync::Mutex<Vec<FetchOutcome>>,
+    bot_seen: AtomicUsize,
+    streamer_seen: AtomicUsize,
+}
+
+impl ScriptedFetcher {
+    fn new(bot: Vec<FetchOutcome>, streamer: Vec<FetchOutcome>) -> Self {
+        Self {
+            bot_calls: std::sync::Mutex::new(bot),
+            streamer_calls: std::sync::Mutex::new(streamer),
+            bot_seen: AtomicUsize::new(0),
+            streamer_seen: AtomicUsize::new(0),
+        }
+    }
+    fn bot_call_count(&self) -> usize {
+        self.bot_seen.load(Ordering::SeqCst)
+    }
+    fn streamer_call_count(&self) -> usize {
+        self.streamer_seen.load(Ordering::SeqCst)
+    }
+}
+
+#[async_trait]
+impl ChattersFetcher for ScriptedFetcher {
+    async fn fetch_chatters(
+        &self,
+        broadcaster_id: &str,
+        moderator_id: &str,
+        _token: &str,
+    ) -> Result<Vec<String>, HelixError> {
+        let streamer_path = broadcaster_id == moderator_id;
+        let (queue, seen) = if streamer_path {
+            (&self.streamer_calls, &self.streamer_seen)
+        } else {
+            (&self.bot_calls, &self.bot_seen)
+        };
+        seen.fetch_add(1, Ordering::SeqCst);
+        let mut q = queue.lock().unwrap();
+        let outcome = if q.is_empty() {
+            FetchOutcome::Ok(vec![])
+        } else {
+            q.remove(0)
+        };
+        match outcome {
+            FetchOutcome::Ok(v) => Ok(v),
+            FetchOutcome::NotModerator => Err(HelixError::NotModerator),
+        }
+    }
+}
+
+struct FakeAuth {
+    token: Option<String>,
+    user_id: Option<String>,
+    login: Option<String>,
+    scope: bool,
+}
+impl FakeAuth {
+    fn bot(login: &str) -> Self {
+        Self {
+            token: Some("bot-token".into()),
+            user_id: Some("bot-uid".into()),
+            login: Some(login.into()),
+            scope: true,
+        }
+    }
+    fn none() -> Self {
+        Self {
+            token: None,
+            user_id: None,
+            login: None,
+            scope: false,
+        }
+    }
+}
+#[async_trait]
+impl BotChatterAuth for FakeAuth {
+    async fn bot_token(&self) -> Option<String> {
+        self.token.clone()
+    }
+    async fn bot_user_id(&self) -> Option<String> {
+        self.user_id.clone()
+    }
+    async fn bot_login(&self) -> Option<String> {
+        self.login.clone()
+    }
+    async fn has_chatters_scope(&self) -> bool {
+        self.scope
+    }
+}
+
+struct FakeStreamerTokens {
+    enabled: std::collections::HashSet<String>,
+}
+impl FakeStreamerTokens {
+    fn with(ids: &[&str]) -> Self {
+        Self {
+            enabled: ids.iter().map(|s| s.to_string()).collect(),
+        }
+    }
+    fn none() -> Self {
+        Self {
+            enabled: Default::default(),
+        }
+    }
+}
+#[async_trait]
+impl StreamerTokenSource for FakeStreamerTokens {
+    async fn streamer_token(&self, twitch_user_id: &str) -> Option<String> {
+        self.enabled
+            .contains(twitch_user_id)
+            .then(|| "streamer-token".to_string())
+    }
+}
+
+struct FakeProvisioner {
+    result: bool,
+    calls: AtomicUsize,
+}
+impl FakeProvisioner {
+    fn new(result: bool) -> Self {
+        Self {
+            result,
+            calls: AtomicUsize::new(0),
+        }
+    }
+    fn call_count(&self) -> usize {
+        self.calls.load(Ordering::SeqCst)
+    }
+}
+#[async_trait]
+impl ModeratorProvisioner for FakeProvisioner {
+    async fn ensure_bot_is_mod(&self, _broadcaster_id: &str, _login: &str) -> bool {
+        self.calls.fetch_add(1, Ordering::SeqCst);
+        self.result
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Helfer
+// ---------------------------------------------------------------------------
+
+fn streamer(user_id: &str, login: &str, session: i64, partner: bool) -> LiveStreamer {
+    LiveStreamer {
+        twitch_user_id: user_id.into(),
+        streamer_login: login.into(),
+        active_session_id: session,
+        is_partner_active: partner,
+    }
+}
+
+async fn seed_live(pool: &PgPool, user_id: &str, login: &str, session: i64, partner: i32) {
+    sqlx::query(
+        "INSERT INTO twitch_live_state (twitch_user_id, streamer_login, is_live, active_session_id) \
+         VALUES ($1, $2, 1, $3)",
+    )
+    .bind(user_id)
+    .bind(login)
+    .bind(session)
+    .execute(pool)
+    .await
+    .unwrap();
+    sqlx::query(
+        "INSERT INTO twitch_streamers_partner_state (twitch_login, twitch_user_id, is_partner_active) \
+         VALUES ($1, $2, $3)",
+    )
+    .bind(login)
+    .bind(user_id)
+    .bind(partner)
+    .execute(pool)
+    .await
+    .unwrap();
+}
+
+fn logins(v: &[&str]) -> Vec<String> {
+    v.iter().map(|s| s.to_string()).collect()
+}
+
+// ---------------------------------------------------------------------------
+// Tests: Batch-Write
+// ---------------------------------------------------------------------------
+
+#[tokio::test]
+async fn lurker_insert_messages_zero_and_seen_via_api() {
+    let Some(pool) = support::pool_with_chatters_schema("t_chat_lurker").await else {
+        return;
+    };
+    let s = streamer("1", "nani", 42, true);
+    let tick = Utc::now();
+
+    let (written, lurkers) =
+        record_chatters_for_streamer(&pool, &s, &logins(&["Alice", "Bob"]), Some("mybot"), tick)
+            .await
+            .unwrap();
+    assert_eq!((written, lurkers), (2, 2));
+
+    let (messages, seen, first_time): (i32, bool, bool) = sqlx::query_as(
+        "SELECT messages, seen_via_chatters_api, is_first_time_streamer \
+         FROM twitch_session_chatters WHERE chatter_login = 'alice'",
+    )
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!(messages, 0);
+    assert!(seen);
+    assert!(first_time);
+}
+
+#[tokio::test]
+async fn bot_and_self_logins_filtered() {
+    let Some(pool) = support::pool_with_chatters_schema("t_chat_filter").await else {
+        return;
+    };
+    let s = streamer("1", "nani", 42, true);
+    let tick = Utc::now();
+    // nightbot = known bot; mybot = self; Alice = echter Viewer.
+    let (written, _) = record_chatters_for_streamer(
+        &pool,
+        &s,
+        &logins(&["Alice", "Nightbot", "MyBot"]),
+        Some("mybot"),
+        tick,
+    )
+    .await
+    .unwrap();
+    assert_eq!(written, 1);
+    let n: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM twitch_session_chatters")
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    assert_eq!(n, 1);
+}
+
+#[tokio::test]
+async fn conflict_updates_only_last_seen_at() {
+    let Some(pool) = support::pool_with_chatters_schema("t_chat_conflict").await else {
+        return;
+    };
+    let s = streamer("1", "nani", 42, true);
+    // Vorhandene Message-Pfad-Zeile: messages=5, seen_via_chatters_api=FALSE.
+    let first_msg = Utc::now() - Duration::minutes(10);
+    sqlx::query(
+        "INSERT INTO twitch_session_chatters \
+         (session_id, streamer_login, chatter_login, first_message_at, messages, \
+          is_first_time_streamer, seen_via_chatters_api, last_seen_at) \
+         VALUES (42, 'nani', 'alice', $1, 5, FALSE, FALSE, $1)",
+    )
+    .bind(first_msg)
+    .execute(&pool)
+    .await
+    .unwrap();
+
+    let tick = Utc::now();
+    record_chatters_for_streamer(&pool, &s, &logins(&["Alice"]), Some("mybot"), tick)
+        .await
+        .unwrap();
+
+    let (messages, seen, first_at, last): (i32, bool, DateTime<Utc>, DateTime<Utc>) =
+        sqlx::query_as(
+            "SELECT messages, seen_via_chatters_api, first_message_at, last_seen_at \
+             FROM twitch_session_chatters WHERE chatter_login = 'alice'",
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    assert_eq!(messages, 5, "messages NICHT überschrieben");
+    assert!(!seen, "seen_via_chatters_api NICHT überschrieben");
+    assert_eq!(first_at.timestamp(), first_msg.timestamp(), "first_message_at fix");
+    assert_eq!(last.timestamp(), tick.timestamp(), "nur last_seen_at aktualisiert");
+}
+
+#[tokio::test]
+async fn is_first_time_streamer_via_preread() {
+    let Some(pool) = support::pool_with_chatters_schema("t_chat_firsttime").await else {
+        return;
+    };
+    let s = streamer("1", "nani", 42, true);
+    let earlier = Utc::now() - Duration::days(1);
+    // Bob ist bereits im Rollup → NICHT first-time. Alice ist neu.
+    sqlx::query(
+        "INSERT INTO twitch_chatter_rollup \
+         (streamer_login, chatter_login, first_seen_at, last_seen_at, total_messages, total_sessions) \
+         VALUES ('nani', 'bob', $1, $1, 3, 2)",
+    )
+    .bind(earlier)
+    .execute(&pool)
+    .await
+    .unwrap();
+
+    record_chatters_for_streamer(&pool, &s, &logins(&["Alice", "Bob"]), Some("mybot"), Utc::now())
+        .await
+        .unwrap();
+
+    let alice_ft: bool = sqlx::query_scalar(
+        "SELECT is_first_time_streamer FROM twitch_session_chatters WHERE chatter_login='alice'",
+    )
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    let bob_ft: bool = sqlx::query_scalar(
+        "SELECT is_first_time_streamer FROM twitch_session_chatters WHERE chatter_login='bob'",
+    )
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert!(alice_ft, "neuer Chatter = first-time");
+    assert!(!bob_ft, "bekannter Chatter = nicht first-time");
+}
+
+#[tokio::test]
+async fn rollup_no_increment_on_conflict() {
+    let Some(pool) = support::pool_with_chatters_schema("t_chat_rollup").await else {
+        return;
+    };
+    let s = streamer("1", "nani", 42, true);
+    let earlier = Utc::now() - Duration::days(1);
+    sqlx::query(
+        "INSERT INTO twitch_chatter_rollup \
+         (streamer_login, chatter_login, first_seen_at, last_seen_at, total_messages, total_sessions) \
+         VALUES ('nani', 'alice', $1, $1, 7, 3)",
+    )
+    .bind(earlier)
+    .execute(&pool)
+    .await
+    .unwrap();
+
+    let tick = Utc::now();
+    record_chatters_for_streamer(&pool, &s, &logins(&["Alice"]), Some("mybot"), tick)
+        .await
+        .unwrap();
+
+    let (msgs, sessions, first_at, last): (i32, i32, DateTime<Utc>, DateTime<Utc>) =
+        sqlx::query_as(
+            "SELECT total_messages, total_sessions, first_seen_at, last_seen_at \
+             FROM twitch_chatter_rollup WHERE chatter_login='alice'",
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    assert_eq!(msgs, 7, "total_messages NICHT inkrementiert");
+    assert_eq!(sessions, 3, "total_sessions NICHT inkrementiert");
+    assert_eq!(first_at.timestamp(), earlier.timestamp(), "first_seen_at fix");
+    assert_eq!(last.timestamp(), tick.timestamp(), "last_seen_at aktualisiert");
+
+    // Neuer Chatter → Insert mit total_sessions=1.
+    record_chatters_for_streamer(&pool, &s, &logins(&["Bob"]), Some("mybot"), tick)
+        .await
+        .unwrap();
+    let bob_sessions: i32 =
+        sqlx::query_scalar("SELECT total_sessions FROM twitch_chatter_rollup WHERE chatter_login='bob'")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+    assert_eq!(bob_sessions, 1);
+}
+
+#[tokio::test]
+async fn presence_tick_idempotent_same_tick_at() {
+    let Some(pool) = support::pool_with_chatters_schema("t_chat_presence").await else {
+        return;
+    };
+    let s = streamer("1", "nani", 42, true);
+    let tick = Utc::now();
+    record_chatters_for_streamer(&pool, &s, &logins(&["Alice", "Bob"]), Some("mybot"), tick)
+        .await
+        .unwrap();
+    let n1: i64 =
+        sqlx::query_scalar("SELECT COUNT(*) FROM twitch_viewer_presence_ticks WHERE session_id=42")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+    assert_eq!(n1, 2);
+
+    // Gleicher tick_at → keine neuen Presence-Ticks.
+    record_chatters_for_streamer(&pool, &s, &logins(&["Alice", "Bob"]), Some("mybot"), tick)
+        .await
+        .unwrap();
+    let n2: i64 =
+        sqlx::query_scalar("SELECT COUNT(*) FROM twitch_viewer_presence_ticks WHERE session_id=42")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+    assert_eq!(n2, 2, "gleicher tick_at = idempotent");
+}
+
+// ---------------------------------------------------------------------------
+// Tests: Poll-Logik (Token-Reihenfolge, Self-Heal)
+// ---------------------------------------------------------------------------
+
+#[tokio::test]
+async fn self_heal_403_then_single_retry_success() {
+    // Bot-Pfad: 403 → Self-Heal (partner, kein Cooldown) → genau 1 Retry → OK.
+    let fetcher = ScriptedFetcher::new(
+        vec![
+            FetchOutcome::NotModerator,
+            FetchOutcome::Ok(logins(&["alice"])),
+        ],
+        vec![],
+    );
+    let prov = FakeProvisioner::new(true);
+    let cooldowns = SelfHealCooldowns::new();
+    let mut stats = CycleStats::default();
+    let s = streamer("1", "nani", 42, true);
+
+    let result = poll_streamer_once_for_test(
+        &s,
+        Some("bot-token"),
+        Some("bot-uid"),
+        None,
+        &fetcher,
+        &prov,
+        &cooldowns,
+        &mut stats,
+    )
+    .await;
+
+    assert!(result.0, "succeeded");
+    assert_eq!(result.1, logins(&["alice"]));
+    assert_eq!(fetcher.bot_call_count(), 2, "genau 1 Retry");
+    assert_eq!(prov.call_count(), 1);
+    assert_eq!(stats.self_heal_success, 1);
+    assert_eq!(stats.bot_path_success, 1);
+}
+
+#[tokio::test]
+async fn self_heal_failure_sets_cooldown_no_retry() {
+    let fetcher = ScriptedFetcher::new(vec![FetchOutcome::NotModerator], vec![]);
+    let prov = FakeProvisioner::new(false);
+    let cooldowns = SelfHealCooldowns::new();
+    let mut stats = CycleStats::default();
+    let s = streamer("1", "nani", 42, true);
+
+    let result = poll_streamer_once_for_test(
+        &s,
+        Some("bot-token"),
+        Some("bot-uid"),
+        None,
+        &fetcher,
+        &prov,
+        &cooldowns,
+        &mut stats,
+    )
+    .await;
+
+    assert!(!result.0, "nicht succeeded");
+    assert_eq!(fetcher.bot_call_count(), 1, "kein Retry nach Heal-Fehler");
+    assert_eq!(stats.self_heal_failure, 1);
+    assert_eq!(stats.bot_path_failure, 1);
+
+    // Zweiter Poll: Cooldown aktiv → Provisioner NICHT erneut gerufen.
+    let fetcher2 = ScriptedFetcher::new(vec![FetchOutcome::NotModerator], vec![]);
+    let mut stats2 = CycleStats::default();
+    let r2 = poll_streamer_once_for_test(
+        &s,
+        Some("bot-token"),
+        Some("bot-uid"),
+        None,
+        &fetcher2,
+        &prov,
+        &cooldowns,
+        &mut stats2,
+    )
+    .await;
+    assert!(!r2.0);
+    assert_eq!(prov.call_count(), 1, "Cooldown verhindert zweiten Heal");
+}
+
+#[tokio::test]
+async fn self_heal_skipped_for_non_partner() {
+    let fetcher = ScriptedFetcher::new(vec![FetchOutcome::NotModerator], vec![]);
+    let prov = FakeProvisioner::new(true);
+    let cooldowns = SelfHealCooldowns::new();
+    let mut stats = CycleStats::default();
+    let s = streamer("1", "nani", 42, false); // NICHT partner
+
+    poll_streamer_once_for_test(
+        &s,
+        Some("bot-token"),
+        Some("bot-uid"),
+        None,
+        &fetcher,
+        &prov,
+        &cooldowns,
+        &mut stats,
+    )
+    .await;
+    assert_eq!(prov.call_count(), 0, "non-partner → kein Self-Heal");
+    assert_eq!(stats.self_heal_success, 0);
+    assert_eq!(stats.self_heal_failure, 0);
+}
+
+#[tokio::test]
+async fn streamer_fallback_only_when_token_present() {
+    // Bot-Pfad nicht erfolgreich (403, kein Heal weil non-partner) + Streamer-Token vorhanden.
+    let fetcher = ScriptedFetcher::new(
+        vec![FetchOutcome::NotModerator],
+        vec![FetchOutcome::Ok(logins(&["alice", "bob"]))],
+    );
+    let prov = FakeProvisioner::new(false);
+    let cooldowns = SelfHealCooldowns::new();
+    let mut stats = CycleStats::default();
+    let s = streamer("1", "nani", 42, false);
+
+    let result = poll_streamer_once_for_test(
+        &s,
+        Some("bot-token"),
+        Some("bot-uid"),
+        Some("streamer-token"),
+        &fetcher,
+        &prov,
+        &cooldowns,
+        &mut stats,
+    )
+    .await;
+
+    assert!(result.0, "Fallback erfolgreich");
+    assert_eq!(result.1, logins(&["alice", "bob"]));
+    assert_eq!(fetcher.streamer_call_count(), 1);
+    assert_eq!(stats.fallback_to_streamer_token, 1);
+
+    // Ohne Streamer-Token: kein Fallback.
+    let fetcher2 = ScriptedFetcher::new(vec![FetchOutcome::NotModerator], vec![]);
+    let mut stats2 = CycleStats::default();
+    let r2 = poll_streamer_once_for_test(
+        &s,
+        Some("bot-token"),
+        Some("bot-uid"),
+        None,
+        &fetcher2,
+        &prov,
+        &cooldowns,
+        &mut stats2,
+    )
+    .await;
+    assert!(!r2.0);
+    assert_eq!(fetcher2.streamer_call_count(), 0, "kein Token = kein Fallback");
+}
+
+// ---------------------------------------------------------------------------
+// Test: voller Collect-Zyklus über ChattersCollector
+// ---------------------------------------------------------------------------
+
+#[tokio::test]
+async fn full_cycle_inserts_lurkers() {
+    let Some(pool) = support::pool_with_chatters_schema("t_chat_cycle").await else {
+        return;
+    };
+    seed_live(&pool, "1", "nani", 42, 1).await;
+
+    let collector = ChattersCollector {
+        pool: pool.clone(),
+        auth: Arc::new(FakeAuth::bot("mybot")),
+        streamer_tokens: Arc::new(FakeStreamerTokens::none()),
+        fetcher: Arc::new(ScriptedFetcher::new(
+            vec![FetchOutcome::Ok(logins(&["alice", "bob", "nightbot"]))],
+            vec![],
+        )),
+        provisioner: Arc::new(FakeProvisioner::new(false)),
+        cooldowns: SelfHealCooldowns::new(),
+    };
+
+    let stats = collector.run_cycle().await;
+    assert_eq!(stats.live_streamers, 1);
+    assert_eq!(stats.chatters_written, 2, "nightbot gefiltert");
+    assert_eq!(stats.lurkers_new, 2);
+
+    let n: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM twitch_session_chatters")
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    assert_eq!(n, 2);
+}
+
+#[tokio::test]
+async fn cycle_without_bot_token_uses_streamer_fallback() {
+    let Some(pool) = support::pool_with_chatters_schema("t_chat_cycle_fb").await else {
+        return;
+    };
+    seed_live(&pool, "99", "drag", 7, 0).await;
+
+    let collector = ChattersCollector {
+        pool: pool.clone(),
+        auth: Arc::new(FakeAuth::none()),
+        streamer_tokens: Arc::new(FakeStreamerTokens::with(&["99"])),
+        fetcher: Arc::new(ScriptedFetcher::new(
+            vec![],
+            vec![FetchOutcome::Ok(logins(&["carol"]))],
+        )),
+        provisioner: Arc::new(FakeProvisioner::new(false)),
+        cooldowns: SelfHealCooldowns::new(),
+    };
+
+    let stats = collector.run_cycle().await;
+    assert_eq!(stats.chatters_written, 1);
+    let exists: i64 =
+        sqlx::query_scalar("SELECT COUNT(*) FROM twitch_session_chatters WHERE chatter_login='carol'")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+    assert_eq!(exists, 1);
+}

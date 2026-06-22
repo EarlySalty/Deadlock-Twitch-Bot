@@ -22,6 +22,7 @@
 //! Plan-Doc `docs/plans/2026-06-09-schritt-4-monitoring.md` dokumentiert.
 
 pub mod announce;
+pub mod chatters_poller;
 pub mod dispatch;
 pub mod scout;
 pub mod exp_sessions;
@@ -32,6 +33,7 @@ pub mod inbox_runtime;
 pub mod inbox_store;
 pub mod live_state;
 pub mod poller;
+pub mod raid_retention;
 pub mod sessions;
 pub mod stats;
 pub mod stream;
@@ -77,3 +79,8 @@ pub use subscriptions::{
 pub use telemetry::{HypeTrainPhase, TelemetryStore};
 pub use scout::{build_scout_task, NoopScoutChatSink, ScoutChatSink, ScoutTask};
 pub use irc_lurker::record_presence_ticks;
+pub use chatters_poller::{
+    load_live_roster, record_chatters_for_streamer, BotChatterAuth, ChattersCollector,
+    ChattersFetcher, CycleStats, LiveStreamer, SelfHealCooldowns, StreamerTokenSource,
+};
+pub use raid_retention::{compute_raid_retention, RetentionStats};

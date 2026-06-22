@@ -13,6 +13,9 @@ use sqlx::PgPool;
 /// fehlt (laut überspringen, `rust/scripts/test_db.sh up`).
 /// Wenn `TB_TEST_REQUIRE_DB=1` gesetzt ist, wird statt des stillen Skips
 /// ein Panic ausgelöst — damit CI-Läufe mit DB keine grünen Phantoms liefern.
+// Nicht jedes Test-Binary nutzt beide Fixture-Builder (geteiltes Modul, pro
+// Binary kompiliert) → dead_code-Warnung ist erwartet/harmlos.
+#[allow(dead_code)]
 pub async fn pool_in_schema(schema: &str) -> Option<PgPool> {
     let Some(dsn) = std::env::var("TB_TEST_DATABASE_URL").ok() else {
         if std::env::var("TB_TEST_REQUIRE_DB").as_deref() == Ok("1") {
@@ -262,6 +265,132 @@ pub async fn pool_in_schema(schema: &str) -> Option<PgPool> {
             used_slots INTEGER, total_slots INTEGER, headroom_slots INTEGER,
             listeners_at_limit INTEGER, utilization_pct DOUBLE PRECISION,
             listeners_json TEXT
+        )",
+    ] {
+        sqlx::query(ddl).execute(&pool).await.unwrap();
+    }
+    Some(pool)
+}
+
+/// Prod-treues Fixture für die Chatters/Presence-Poller- und Raid-Retention-
+/// Tests (#11). **Bewusst eigenständig** — es mutiert das geteilte
+/// [`pool_in_schema`] NICHT (das spiegelt absichtlich die ältere/abweichende
+/// Prod-Form von `twitch_stream_sessions`/`twitch_session_chatters`), sondern
+/// legt in einem frischen Schema genau die Spalten/PKs an, die der Poller- und
+/// Retention-Code erwartet:
+///
+/// - `twitch_session_chatters` mit voller Spaltenliste + `PK(session_id, chatter_login)`
+/// - `twitch_chatter_rollup` mit `timestamptz`-Timestamps + `PK(streamer_login, chatter_login)`
+/// - `twitch_viewer_presence_ticks` mit `PK(session_id, viewer_login, tick_at)`
+/// - `twitch_stream_sessions` mit `started_at`/`ended_at` als `TIMESTAMPTZ` (Prod!)
+/// - `twitch_raid_history` + `twitch_raid_retention` (`target_session_id int4`)
+/// - `twitch_live_state` + `twitch_streamers_partner_state` für den Roster-Join.
+#[allow(dead_code)]
+pub async fn pool_with_chatters_schema(schema: &str) -> Option<PgPool> {
+    let Some(dsn) = std::env::var("TB_TEST_DATABASE_URL").ok() else {
+        if std::env::var("TB_TEST_REQUIRE_DB").as_deref() == Ok("1") {
+            panic!(
+                "TB_TEST_REQUIRE_DB=1 ist gesetzt, aber TB_TEST_DATABASE_URL fehlt — \
+                 `rust/scripts/test_db.sh up` ausführen"
+            );
+        }
+        eprintln!("SKIP: TB_TEST_DATABASE_URL nicht gesetzt — `rust/scripts/test_db.sh up`");
+        return None;
+    };
+    let admin = PgPoolOptions::new()
+        .max_connections(1)
+        .connect(&dsn)
+        .await
+        .expect("admin connect");
+    sqlx::query(&format!("DROP SCHEMA IF EXISTS {schema} CASCADE"))
+        .execute(&admin)
+        .await
+        .unwrap();
+    sqlx::query(&format!("CREATE SCHEMA {schema}"))
+        .execute(&admin)
+        .await
+        .unwrap();
+    admin.close().await;
+
+    let opts = PgConnectOptions::from_str(&dsn)
+        .expect("dsn parse")
+        .options([("search_path", schema)]);
+    let pool = PgPoolOptions::new()
+        .max_connections(4)
+        .connect_with(opts)
+        .await
+        .expect("connect");
+
+    for ddl in [
+        "CREATE TABLE twitch_live_state (
+            twitch_user_id TEXT PRIMARY KEY,
+            streamer_login TEXT NOT NULL,
+            is_live INTEGER DEFAULT 0,
+            active_session_id BIGINT
+        )",
+        "CREATE TABLE twitch_streamers_partner_state (
+            twitch_login TEXT PRIMARY KEY,
+            twitch_user_id TEXT,
+            is_partner_active INTEGER DEFAULT 0
+        )",
+        "CREATE TABLE twitch_session_chatters (
+            session_id BIGINT NOT NULL,
+            streamer_login TEXT NOT NULL,
+            chatter_login TEXT NOT NULL,
+            chatter_id TEXT,
+            first_message_at TIMESTAMPTZ NOT NULL,
+            messages INTEGER NOT NULL DEFAULT 0,
+            is_first_time_streamer BOOLEAN NOT NULL DEFAULT FALSE,
+            seen_via_chatters_api BOOLEAN NOT NULL DEFAULT FALSE,
+            last_seen_at TIMESTAMPTZ,
+            confirmed_first_ever BOOLEAN NOT NULL DEFAULT FALSE,
+            PRIMARY KEY (session_id, chatter_login)
+        )",
+        "CREATE TABLE twitch_chatter_rollup (
+            streamer_login TEXT NOT NULL,
+            chatter_login TEXT NOT NULL,
+            chatter_id TEXT,
+            first_seen_at TIMESTAMPTZ NOT NULL,
+            last_seen_at TIMESTAMPTZ NOT NULL,
+            total_messages INTEGER NOT NULL DEFAULT 0,
+            total_sessions INTEGER NOT NULL DEFAULT 0,
+            PRIMARY KEY (streamer_login, chatter_login)
+        )",
+        "CREATE TABLE twitch_viewer_presence_ticks (
+            session_id BIGINT NOT NULL,
+            streamer_login TEXT NOT NULL,
+            viewer_login TEXT NOT NULL,
+            tick_at TIMESTAMPTZ NOT NULL,
+            PRIMARY KEY (session_id, viewer_login, tick_at)
+        )",
+        "CREATE TABLE twitch_stream_sessions (
+            id BIGSERIAL PRIMARY KEY,
+            streamer_login TEXT NOT NULL,
+            started_at TIMESTAMPTZ NOT NULL,
+            ended_at TIMESTAMPTZ
+        )",
+        "CREATE TABLE twitch_raid_history (
+            id BIGINT NOT NULL,
+            from_broadcaster_login TEXT NOT NULL,
+            to_broadcaster_login TEXT NOT NULL,
+            viewer_count INTEGER NOT NULL DEFAULT 0,
+            executed_at TIMESTAMPTZ NOT NULL
+        )",
+        "CREATE TABLE twitch_raid_retention (
+            raid_id BIGINT NOT NULL,
+            from_broadcaster_login TEXT NOT NULL,
+            to_broadcaster_login TEXT NOT NULL,
+            viewer_count_sent INTEGER NOT NULL,
+            executed_at TIMESTAMPTZ NOT NULL,
+            target_session_id INTEGER,
+            chatters_at_plus5m INTEGER,
+            chatters_at_plus15m INTEGER,
+            chatters_at_plus30m INTEGER,
+            known_from_raider INTEGER,
+            new_to_target INTEGER,
+            new_chatters INTEGER,
+            computed_at TIMESTAMPTZ DEFAULT NOW(),
+            PRIMARY KEY (raid_id, executed_at)
         )",
     ] {
         sqlx::query(ddl).execute(&pool).await.unwrap();
