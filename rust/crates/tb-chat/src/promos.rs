@@ -106,7 +106,9 @@ pub const DEFAULT_PROMO_DISCORD_INVITE: &str = "https://discord.gg/z5TfVHuQq2";
 /// erzeugen.
 pub fn promo_invite_fallback(configured: Option<&str>) -> String {
     let configured = configured.map(str::trim).filter(|value| !value.is_empty());
-    configured.unwrap_or(DEFAULT_PROMO_DISCORD_INVITE).to_string()
+    configured
+        .unwrap_or(DEFAULT_PROMO_DISCORD_INVITE)
+        .to_string()
 }
 /// Stammgast: mind. 10 Messages in 30 Tagen (targeted_promo.py:33–34).
 const STAMMGAST_MIN_MESSAGES: i64 = 10;
@@ -445,6 +447,7 @@ impl OutboundSuppressionCheck for NoopSuppressionCheck {
 type ActivityEntry = (Instant, String);
 
 /// Laufzeit-State eines Kanals.
+#[derive(Clone)]
 struct ChannelState {
     /// Aktivitäts-Bucket (deque, maxlen 2048) — promos.py:730.
     activity: VecDeque<ActivityEntry>,
@@ -639,6 +642,35 @@ impl PromoEngine {
         }
     }
 
+    /// Sendet ein Announcement und fällt bei `Ok(false)` oder Transportfehler
+    /// auf Plain-Chat zurück. Suppression-Gates bleiben Sache des Aufrufers.
+    async fn send_announcement_with_plain_fallback(
+        &self,
+        login: &str,
+        channel_id: &str,
+        text: &str,
+        color: &str,
+        source: &str,
+    ) -> bool {
+        match self.api.send_announcement(channel_id, text, color).await {
+            Ok(true) => return true,
+            Ok(false) => {
+                debug!(
+                    login,
+                    color, "Announcement nicht zugestellt, versuche Plain-Chat-Fallback"
+                );
+            }
+            Err(error) => {
+                debug!(login, color, %error, "Announcement fehlgeschlagen, versuche Plain-Chat-Fallback");
+            }
+        }
+
+        let outcome = self.api.send_message(channel_id, text).await;
+        self.record_suppression_on_drop(login, channel_id, source, &outcome)
+            .await;
+        matches!(outcome, Ok(crate::types::SendOutcome::Sent))
+    }
+
     /// Setzt den InviteResolver (Default: StaticInviteResolver).
     pub fn set_invite_resolver(mut self, r: Arc<dyn InviteResolver>) -> Self {
         self.invite_resolver = r;
@@ -652,6 +684,9 @@ impl PromoEngine {
     }
 
     /// Setzt den PresetPicker (Default: RandomPresetPicker).
+    ///
+    // WIRING-TODO(P2.8): MinimaxPresetPicker via set_preset_picker in chat_wiring
+    // verdrahten (MiniMax-Client, 5s-Timeout, Fallback RandomPresetPicker).
     pub fn set_preset_picker(mut self, p: Arc<dyn PresetPicker>) -> Self {
         self.preset_picker = p;
         self
@@ -670,7 +705,11 @@ impl PromoEngine {
         }
 
         // Guard: Partner-Channel-Check (promos.py:1422).
-        if !self.partner_check.is_partner_channel_for_chat_tracking(&login).await {
+        if !self
+            .partner_check
+            .is_partner_channel_for_chat_tracking(&login)
+            .await
+        {
             return;
         }
 
@@ -686,7 +725,10 @@ impl PromoEngine {
         // `_track_chat_health` für ALLE partner-getrackten Nachrichten
         // (inkl. "!"-Commands), nicht nur im Promo-Pfad (moderation.py:2173).
         {
-            let state_ref = self.channel_states.entry(login.clone()).or_insert_with(|| Mutex::new(ChannelState::new()));
+            let state_ref = self
+                .channel_states
+                .entry(login.clone())
+                .or_insert_with(|| Mutex::new(ChannelState::new()));
             let mut state = state_ref.lock().await;
             state.last_accessed = now;
             self.record_promo_activity_inner(&mut state, &chatter, now);
@@ -698,7 +740,8 @@ impl PromoEngine {
 
         // maybe_send_promo_with_stats (promos.py:1281).
         let channel_id = event.broadcaster_user_id.clone();
-        self.maybe_send_promo_with_stats(&login, &channel_id, now).await;
+        self.maybe_send_promo_with_stats(&login, &channel_id, now)
+            .await;
     }
 
     /// Raw-Chat-Aktivität aufzeichnen — Port von `_record_raw_chat_message`
@@ -775,7 +818,12 @@ impl PromoEngine {
 
         // Fenster prunen.
         let window = Duration::from_secs(PROMO_ACTIVITY_WINDOW_MIN * 60);
-        while state.activity.front().map(|(t, _)| now.duration_since(*t) > window).unwrap_or(false) {
+        while state
+            .activity
+            .front()
+            .map(|(t, _)| now.duration_since(*t) > window)
+            .unwrap_or(false)
+        {
             state.activity.pop_front();
         }
 
@@ -788,6 +836,28 @@ impl PromoEngine {
 
     /// Periodischer Haupt-Loop-Body (promos.py:1466: `_send_promo_if_due`).
     async fn send_promo_if_due(&self, now: Instant) {
+        // Lurker-Tax nutzt in Python eine eigene Channelquelle ohne Deadlock-,
+        // promo_disabled- oder Plan-Filter.
+        let lurker_tax_channels = match self.get_live_channels_for_lurker_tax().await {
+            Ok(v) => v,
+            Err(e) => {
+                warn!("get_live_channels_for_lurker_tax fehlgeschlagen: {e}");
+                Vec::new()
+            }
+        };
+
+        for (login, channel_id) in &lurker_tax_channels {
+            if !self
+                .partner_check
+                .is_partner_channel_for_chat_tracking(login)
+                .await
+            {
+                continue;
+            }
+            self.maybe_send_lurker_tax_reminder(login, channel_id, now)
+                .await;
+        }
+
         // Live-Kanäle holen (promos.py:1630).
         let live_channels = match self.get_live_channels_for_promo().await {
             Ok(v) => v,
@@ -804,9 +874,9 @@ impl PromoEngine {
             }
 
             // Partner-Gate (promos.py:1524/1533: is_partner_channel_for_chat_tracking).
-            // Gilt für die gesamte Iteration (Lurker-Tax UND Scam/Targeted/Activity/Spike):
+            // Gilt für die periodische Promo-Iteration:
             // Kanäle, die zwar live + promo_disabled=0 sind, im Chat-Tracking aber nicht als
-            // Partner gelten, dürfen KEINE periodischen Promos/Lurker-Tax/Scam-Warnungen erhalten.
+            // Partner gelten, dürfen KEINE periodischen Promos erhalten.
             if !self
                 .partner_check
                 .is_partner_channel_for_chat_tracking(login)
@@ -815,21 +885,29 @@ impl PromoEngine {
                 continue;
             }
 
-            // Lurker-Tax (promos.py:1357 — eigener Pfad, vor Doppelsend-Lock).
-            self.maybe_send_lurker_tax_reminder(login, channel_id, now).await;
+            // Channel-Allowlist gilt für die gesamte Promo-Iteration inklusive
+            // Targeted-Promo, nicht aber für den separaten Lurker-Tax-Pfad.
+            if !self.promo_channel_allowed_db(login).await {
+                continue;
+            }
 
             // Doppelsend-Lock (promos.py:1466).
             let lock = self.get_send_lock(login);
             let _guard = lock.lock().await;
 
             // Overall-Ready + Activity-Ready prüfen (promos.py:1466).
-            let (overall_ready, activity_ready) = {
-                let state_ref = self.channel_states.entry(login.clone()).or_insert_with(|| Mutex::new(ChannelState::new()));
+            let state_snapshot = {
+                let state_ref = self
+                    .channel_states
+                    .entry(login.clone())
+                    .or_insert_with(|| Mutex::new(ChannelState::new()));
                 let state = state_ref.lock().await;
-                let overall = self.overall_promo_ready_inner(&state, now);
-                let activity = self.promo_activity_ready_inner(&state, now);
-                (overall, activity)
+                state.clone()
             };
+            let overall_ready = self.overall_promo_ready_inner(&state_snapshot, now);
+            let activity_ready = self
+                .promo_activity_ready_inner(login, &state_snapshot, now)
+                .await;
 
             // Scam+Targeted nur im fälligen Slot (promos.py:1466: activity_ready Pflicht).
             if overall_ready && activity_ready && self.stream_start_delay_ok(login).await {
@@ -837,16 +915,22 @@ impl PromoEngine {
 
                 // Targeted-Promo-Slot (targeted_promo.py:198).
                 let active_chatters = self.get_active_chatters(login).await;
-                if self.maybe_send_targeted_promo(login, channel_id, &invite, &active_chatters, now).await {
+                if self
+                    .maybe_send_targeted_promo(login, channel_id, &invite, &active_chatters, now)
+                    .await
+                {
                     continue;
                 }
 
                 // Activity-Promo (promos.py:1466).
-                let sent = self.maybe_send_promo_with_stats(login, channel_id, now).await;
+                let sent = self
+                    .maybe_send_promo_with_stats(login, channel_id, now)
+                    .await;
 
                 // Viewer-Spike (promos.py:1466).
                 if !sent {
-                    self.maybe_send_viewer_spike_promo(login, channel_id, now).await;
+                    self.maybe_send_viewer_spike_promo(login, channel_id, now)
+                        .await;
                 }
             }
         }
@@ -855,7 +939,12 @@ impl PromoEngine {
     /// Dummy-Rückgabe (Invite-Auflösung wird per async-Trait gemacht, nicht cached).
     /// maybe_send_promo_with_stats (promos.py:1281).
     /// Gibt true zurück wenn gesendet.
-    async fn maybe_send_promo_with_stats(&self, login: &str, channel_id: &str, now: Instant) -> bool {
+    async fn maybe_send_promo_with_stats(
+        &self,
+        login: &str,
+        channel_id: &str,
+        now: Instant,
+    ) -> bool {
         // Guard: Channel-Allowlist.
         if !self.promo_channel_allowed_db(login).await {
             return false;
@@ -867,14 +956,19 @@ impl PromoEngine {
         }
 
         // Guard: Overall-Cooldown (≥90 min).
-        let (overall_ready, activity_ready, attempt_allowed) = {
-            let state_ref = self.channel_states.entry(login.to_string()).or_insert_with(|| Mutex::new(ChannelState::new()));
+        let state_snapshot = {
+            let state_ref = self
+                .channel_states
+                .entry(login.to_string())
+                .or_insert_with(|| Mutex::new(ChannelState::new()));
             let state = state_ref.lock().await;
-            let overall = self.overall_promo_ready_inner(&state, now);
-            let activity = self.promo_activity_ready_inner(&state, now);
-            let attempt = self.promo_attempt_allowed_inner(&state, now);
-            (overall, activity, attempt)
+            state.clone()
         };
+        let overall_ready = self.overall_promo_ready_inner(&state_snapshot, now);
+        let activity_ready = self
+            .promo_activity_ready_inner(login, &state_snapshot, now)
+            .await;
+        let attempt_allowed = self.promo_attempt_allowed_inner(&state_snapshot, now);
 
         if !overall_ready || !activity_ready || !attempt_allowed {
             return false;
@@ -882,18 +976,29 @@ impl PromoEngine {
 
         // Attempt-Timestamp setzen.
         {
-            let state_ref = self.channel_states.entry(login.to_string()).or_insert_with(|| Mutex::new(ChannelState::new()));
+            let state_ref = self
+                .channel_states
+                .entry(login.to_string())
+                .or_insert_with(|| Mutex::new(ChannelState::new()));
             let mut state = state_ref.lock().await;
             state.last_promo_attempt = Some(now);
         }
         // DB-Persist attempt (promos.py:879: save_promo_cooldown "attempt").
-        self.save_promo_cooldown(login, "attempt", Utc::now().timestamp() as f64).await;
+        self.save_promo_cooldown(login, "attempt", Utc::now().timestamp() as f64)
+            .await;
 
-        self.send_promo_message(login, channel_id, now, "chat_activity").await
+        self.send_promo_message(login, channel_id, now, "chat_activity")
+            .await
     }
 
     /// Kernfunktion Promo senden (promos.py:1096: `_send_promo_message`).
-    async fn send_promo_message(&self, login: &str, channel_id: &str, now: Instant, reason: &str) -> bool {
+    async fn send_promo_message(
+        &self,
+        login: &str,
+        channel_id: &str,
+        now: Instant,
+        reason: &str,
+    ) -> bool {
         // Suppression-Check (promos.py:1096).
         if self.suppression.is_muted(login).await {
             return false;
@@ -908,8 +1013,10 @@ impl PromoEngine {
         // Promo-Text bauen (promos.py:945).
         let text = self.build_promo_text(login, &invite, reason).await;
 
-        // Announcement senden (promos.py:1096, color="purple").
-        let sent = self.api.send_announcement(channel_id, &text, "purple").await.unwrap_or(false);
+        // Announcement senden (promos.py:1096, color="purple") mit Plain-Fallback.
+        let sent = self
+            .send_announcement_with_plain_fallback(login, channel_id, &text, "purple", "promo")
+            .await;
         if !sent {
             debug!(login, "Promo-Announcement nicht gesendet (Drop/Fehler)");
             // Cooldown NICHT verbrauchen bei Failed-Send (promos.py:1096: if not ok: return False).
@@ -917,7 +1024,8 @@ impl PromoEngine {
         }
 
         // Promo markieren (promos.py:879).
-        self.mark_promo_sent(login, now, reason, Utc::now().timestamp() as f64).await;
+        self.mark_promo_sent(login, now, reason, Utc::now().timestamp() as f64)
+            .await;
 
         if is_specific {
             self.mark_streamer_invite_sent(login).await;
@@ -937,21 +1045,27 @@ impl PromoEngine {
     pub async fn send_timeout_pitch(&self, channel_id: &str, login: &str, message: &str) -> bool {
         // Suppression-Check (Python source="promo").
         if self.suppression.is_muted(login).await {
-            debug!(login, "Werbefrei-Pitch unterdrückt (Outbound-Promo-Suppression)");
+            debug!(
+                login,
+                "Werbefrei-Pitch unterdrückt (Outbound-Promo-Suppression)"
+            );
             return false;
         }
         let sent = self
-            .api
-            .send_announcement(channel_id, message, "blue")
-            .await
-            .unwrap_or(false);
+            .send_announcement_with_plain_fallback(login, channel_id, message, "blue", "promo")
+            .await;
         if !sent {
             debug!(login, "Werbefrei-Pitch nicht gesendet (Drop/Fehler)");
             return false;
         }
         // Promo-Cooldown belegen (Python `_mark_promo_sent(reason="timeout_pitch")`).
-        self.mark_promo_sent(login, Instant::now(), "timeout_pitch", Utc::now().timestamp() as f64)
-            .await;
+        self.mark_promo_sent(
+            login,
+            Instant::now(),
+            "timeout_pitch",
+            Utc::now().timestamp() as f64,
+        )
+        .await;
         true
     }
 
@@ -976,13 +1090,24 @@ impl PromoEngine {
 
         // Anti-Repeat (promos.py:975).
         let last_text = {
-            let state_ref = self.channel_states.entry(login.to_string()).or_insert_with(|| Mutex::new(ChannelState::new()));
+            let state_ref = self
+                .channel_states
+                .entry(login.to_string())
+                .or_insert_with(|| Mutex::new(ChannelState::new()));
             let state = state_ref.lock().await;
             state.last_promo_text.clone()
         };
         let pool: Vec<&str> = if let Some(ref last) = last_text {
-            let filtered: Vec<&str> = pool.iter().copied().filter(|t| *t != last.as_str()).collect();
-            if filtered.is_empty() { pool } else { filtered }
+            let filtered: Vec<&str> = pool
+                .iter()
+                .copied()
+                .filter(|t| *t != last.as_str())
+                .collect();
+            if filtered.is_empty() {
+                pool
+            } else {
+                filtered
+            }
         } else {
             pool
         };
@@ -994,7 +1119,10 @@ impl PromoEngine {
 
         // Anti-Repeat zurückschreiben (promos.py:975: last_map[login] = chosen).
         {
-            let state_ref = self.channel_states.entry(login.to_string()).or_insert_with(|| Mutex::new(ChannelState::new()));
+            let state_ref = self
+                .channel_states
+                .entry(login.to_string())
+                .or_insert_with(|| Mutex::new(ChannelState::new()));
             let mut state = state_ref.lock().await;
             state.last_promo_text = Some(template.to_string());
         }
@@ -1009,8 +1137,11 @@ impl PromoEngine {
     /// Event-Text zurück (`{invite}` ersetzt). DB-/Auswertungs-Fehler → None
     /// (kein Override, fällt auf Streamer-/Pool-Promo zurück).
     async fn load_global_promo_message(&self, invite: &str) -> Option<String> {
-        let config = tb_analytics::promo_mode::load_global_promo_mode(&self.pool).await.ok()?;
-        let evaluation = tb_analytics::promo_mode::evaluate_global_promo_mode(&config.to_json(), None);
+        let config = tb_analytics::promo_mode::load_global_promo_mode(&self.pool)
+            .await
+            .ok()?;
+        let evaluation =
+            tb_analytics::promo_mode::evaluate_global_promo_mode(&config.to_json(), None);
         let message = evaluation.active_message?;
         let message = message.trim();
         if message.is_empty() {
@@ -1042,7 +1173,10 @@ impl PromoEngine {
     /// Promo gesendet markieren (promos.py:879: `_mark_promo_sent`).
     async fn mark_promo_sent(&self, login: &str, now: Instant, reason: &str, wall_ts: f64) {
         {
-            let state_ref = self.channel_states.entry(login.to_string()).or_insert_with(|| Mutex::new(ChannelState::new()));
+            let state_ref = self
+                .channel_states
+                .entry(login.to_string())
+                .or_insert_with(|| Mutex::new(ChannelState::new()));
             let mut state = state_ref.lock().await;
             state.last_promo_sent = Some(now);
             state.raw_msg_count_since_promo = 0;
@@ -1053,7 +1187,8 @@ impl PromoEngine {
         }
         self.save_promo_cooldown(login, "sent", wall_ts).await;
         if reason == "viewer_spike" {
-            self.save_promo_cooldown(login, "viewer_spike", wall_ts).await;
+            self.save_promo_cooldown(login, "viewer_spike", wall_ts)
+                .await;
         }
     }
 
@@ -1070,8 +1205,24 @@ impl PromoEngine {
     }
 
     /// Streamer-Invite als gesendet markieren (promos.py:1096).
-    async fn mark_streamer_invite_sent(&self, _login: &str) {
-        // UNSICHER: konkrete Tabelle/Mechanismus nicht aus Python gelesen.
+    async fn mark_streamer_invite_sent(&self, login: &str) {
+        let login_norm = login.trim().to_lowercase();
+        if login_norm.is_empty() {
+            return;
+        }
+        let now = Utc::now().to_rfc3339();
+        if let Err(e) = sqlx::query(
+            "UPDATE twitch_streamer_invites
+                SET last_sent_at = $1
+              WHERE LOWER(streamer_login) = $2",
+        )
+        .bind(now)
+        .bind(&login_norm)
+        .execute(&self.pool)
+        .await
+        {
+            warn!(login = %login_norm, "mark_streamer_invite_sent fehlgeschlagen: {e}");
+        }
     }
 
     /// Overall-Cooldown-Check (≥90 min seit letzter Promo). (promos.py:1251).
@@ -1083,7 +1234,12 @@ impl PromoEngine {
     }
 
     /// Aktivitätsschwellen-Check (promos.py:1251: `_promo_activity_ready`).
-    fn promo_activity_ready_inner(&self, state: &ChannelState, now: Instant) -> bool {
+    async fn promo_activity_ready_inner(
+        &self,
+        login: &str,
+        state: &ChannelState,
+        now: Instant,
+    ) -> bool {
         // 1. Roh-Nachrichten-Minimum.
         if state.raw_msg_count_since_promo < PROMO_ACTIVITY_MIN_RAW_MSGS_SINCE_PROMO {
             return false;
@@ -1126,7 +1282,9 @@ impl PromoEngine {
 
         // 4. Neue Chatter ≥ 2 (wenn last_sent gesetzt).
         if state.last_promo_sent.is_some() {
-            let new_chatters = self.get_new_chatters_in_window_inner(state, now);
+            let new_chatters = self
+                .get_new_chatters_in_window_inner(login, state, now)
+                .await;
             if new_chatters < PROMO_NEW_CHATTERS_MIN {
                 return false;
             }
@@ -1136,26 +1294,57 @@ impl PromoEngine {
     }
 
     /// Neue Chatter im Fenster (promos.py:700: `_get_new_chatters_in_window`).
-    fn get_new_chatters_in_window_inner(&self, state: &ChannelState, now: Instant) -> usize {
+    async fn get_new_chatters_in_window_inner(
+        &self,
+        login: &str,
+        state: &ChannelState,
+        now: Instant,
+    ) -> usize {
         let window = Duration::from_secs(PROMO_ACTIVITY_WINDOW_MIN * 60);
         let max_age = Duration::from_secs(PROMO_SEEN_CHATTER_MAX_AGE_SEC);
 
-        let active: HashSet<&str> = state
+        let mut active: HashSet<String> = state
             .activity
             .iter()
             .filter(|(ts, _)| now.duration_since(*ts) <= window)
-            .map(|(_, c)| c.as_str())
+            .map(|(_, c)| c.clone())
             .collect();
+        active.extend(self.get_current_session_viewers(login).await);
 
         active
             .iter()
-            .filter(|&&c| {
-                match state.seen_chatters.get(c) {
-                    None => true,
-                    Some(&last) => now.duration_since(last) > max_age,
-                }
+            .filter(|c| match state.seen_chatters.get(*c) {
+                None => true,
+                Some(&last) => now.duration_since(last) > max_age,
             })
             .count()
+    }
+
+    /// Aktuelle API-getrackte Chatter/Viewer der laufenden Session
+    /// (promos.py:704: `_get_current_session_viewers`).
+    async fn get_current_session_viewers(&self, login: &str) -> HashSet<String> {
+        if login.trim().is_empty() {
+            return HashSet::new();
+        }
+        let rows: Vec<(String,)> = sqlx::query_as(
+            "SELECT sc.chatter_login
+               FROM twitch_session_chatters sc
+               JOIN twitch_live_state ls ON ls.active_session_id = sc.session_id
+              WHERE LOWER(ls.streamer_login) = LOWER($1)
+                AND ls.is_live = 1
+                AND TRIM(COALESCE(sc.chatter_login, '')) <> ''",
+        )
+        .bind(login)
+        .fetch_all(&self.pool)
+        .await
+        .unwrap_or_default();
+
+        rows.into_iter()
+            .filter_map(|(login,)| {
+                let normalized = login.trim().to_lowercase();
+                (!normalized.is_empty()).then_some(normalized)
+            })
+            .collect()
     }
 
     /// Attempt-Cooldown-Check (≥10 min). (promos.py:1281).
@@ -1170,7 +1359,10 @@ impl PromoEngine {
     async fn maybe_send_viewer_spike_promo(&self, login: &str, channel_id: &str, now: Instant) {
         // Guards (promos.py:1306).
         let (overall_ready, has_new_raw, chat_silent, spike_cd_ok, attempt_ok) = {
-            let state_ref = self.channel_states.entry(login.to_string()).or_insert_with(|| Mutex::new(ChannelState::new()));
+            let state_ref = self
+                .channel_states
+                .entry(login.to_string())
+                .or_insert_with(|| Mutex::new(ChannelState::new()));
             let state = state_ref.lock().await;
 
             let overall = self.overall_promo_ready_inner(&state, now);
@@ -1210,13 +1402,18 @@ impl PromoEngine {
 
         // Attempt-Timestamp.
         {
-            let state_ref = self.channel_states.entry(login.to_string()).or_insert_with(|| Mutex::new(ChannelState::new()));
+            let state_ref = self
+                .channel_states
+                .entry(login.to_string())
+                .or_insert_with(|| Mutex::new(ChannelState::new()));
             let mut state = state_ref.lock().await;
             state.last_promo_attempt = Some(now);
         }
-        self.save_promo_cooldown(login, "attempt", Utc::now().timestamp() as f64).await;
+        self.save_promo_cooldown(login, "attempt", Utc::now().timestamp() as f64)
+            .await;
 
-        self.send_promo_message(login, channel_id, now, "viewer_spike").await;
+        self.send_promo_message(login, channel_id, now, "viewer_spike")
+            .await;
     }
 
     /// Viewer-Spike-Erkennung (promos.py:1152: `_get_viewer_spike_context`).
@@ -1305,7 +1502,10 @@ impl PromoEngine {
     async fn maybe_send_lurker_tax_reminder(&self, login: &str, channel_id: &str, now: Instant) {
         // Guard: Overall-Cooldown (promos.py:1357).
         let overall_ready = {
-            let state_ref = self.channel_states.entry(login.to_string()).or_insert_with(|| Mutex::new(ChannelState::new()));
+            let state_ref = self
+                .channel_states
+                .entry(login.to_string())
+                .or_insert_with(|| Mutex::new(ChannelState::new()));
             let state = state_ref.lock().await;
             self.overall_promo_ready_inner(&state, now)
         };
@@ -1418,11 +1618,10 @@ impl PromoEngine {
 
         let text = self.build_lurker_tax_text(&selected);
         // Nur bei erfolgreichem Send merken + Cooldown belegen (Python: if ok).
-        let outcome = self.api.send_message(channel_id, &text).await;
-        // channel_settings-Drop → Kanal stummschalten (P1.1, source="promo").
-        self.record_suppression_on_drop(login, channel_id, "promo", &outcome)
+        let sent = self
+            .send_announcement_with_plain_fallback(login, channel_id, &text, "orange", "promo")
             .await;
-        if !matches!(outcome, Ok(crate::types::SendOutcome::Sent)) {
+        if !sent {
             return;
         }
         {
@@ -1437,8 +1636,13 @@ impl PromoEngine {
         }
 
         // Promo-Slot belegen (promos.py:1357 — lurker_tax nutzt overall-Cooldown).
-        self.mark_promo_sent(login, now, "lurker_tax", Utc::now().timestamp() as f64).await;
-        info!(login, "Lurker-Tax-Erinnerung gesendet ({} Mentions)", selected.len());
+        self.mark_promo_sent(login, now, "lurker_tax", Utc::now().timestamp() as f64)
+            .await;
+        info!(
+            login,
+            "Lurker-Tax-Erinnerung gesendet ({} Mentions)",
+            selected.len()
+        );
     }
 
     /// Lurker-Tax-Scope-Gate (P1.4): `moderator:read:chatters` muss entweder im
@@ -1476,10 +1680,14 @@ impl PromoEngine {
         // historische CTE UND live_candidates (promos.py:451–458, 490, 523).
         // Die Bot-Logins sind eine Compile-Zeit-Konstante; trotzdem als Bind-Params
         // (ab $5) gebunden statt als SQL-Literal interpoliert (clean-SQL).
-        let bot_clause = known_chat_bot_not_in_clause("sc.chatter_login", 5);
+        let historical_bot_clause = known_chat_bot_not_in_clause("sc.chatter_login", 5);
+        let current_bot_clause = known_chat_bot_not_in_clause("lc.chatter_login", 5);
         let sql = format!(
             r#"WITH historical_lurks AS (
-                SELECT sc.chatter_login,
+                SELECT CASE
+                         WHEN TRIM(COALESCE(sc.chatter_id, '')) <> '' THEN 'id:' || TRIM(sc.chatter_id)
+                         ELSE 'login:' || LOWER(sc.chatter_login)
+                       END AS chatter_identity_key,
                        COUNT(DISTINCT sc.session_id) AS prior_lurk_sessions,
                        COALESCE(SUM(CASE
                                 WHEN sc.first_message_at IS NULL OR sc.last_seen_at IS NULL THEN 0
@@ -1492,28 +1700,36 @@ impl PromoEngine {
                    AND s.ended_at IS NOT NULL
                    AND COALESCE(sc.messages, 0) = 0
                    AND sc.seen_via_chatters_api = TRUE
-                   {bot_clause}
-                 GROUP BY sc.chatter_login
+                   {historical_bot_clause}
+                 GROUP BY CASE
+                            WHEN TRIM(COALESCE(sc.chatter_id, '')) <> '' THEN 'id:' || TRIM(sc.chatter_id)
+                            ELSE 'login:' || LOWER(sc.chatter_login)
+                          END
                ),
                live_candidates AS (
-                 SELECT sc.chatter_login
+                 SELECT sc.chatter_login,
+                        CASE
+                          WHEN TRIM(COALESCE(sc.chatter_id, '')) <> '' THEN 'id:' || TRIM(sc.chatter_id)
+                          ELSE 'login:' || LOWER(sc.chatter_login)
+                        END AS chatter_identity_key
                    FROM twitch_session_chatters sc
-                   JOIN twitch_live_state ls ON ls.streamer_login = $1 AND ls.active_session_id = sc.session_id
+                   JOIN twitch_live_state ls ON LOWER(ls.streamer_login) = LOWER($1) AND ls.active_session_id = sc.session_id
                   WHERE LOWER(sc.streamer_login) = LOWER($1)
                     AND sc.last_seen_at >= NOW() - INTERVAL '{freshness} minutes'
                     AND COALESCE(sc.messages, 0) = 0
                     AND sc.seen_via_chatters_api = TRUE
-                    {bot_clause}
                )
-               SELECT hl.chatter_login
+               SELECT lc.chatter_login
                  FROM historical_lurks hl
-                 JOIN live_candidates lc ON lc.chatter_login = hl.chatter_login
+                 JOIN live_candidates lc ON lc.chatter_identity_key = hl.chatter_identity_key
                 WHERE hl.prior_lurk_sessions >= $2
                   AND hl.estimated_lurk_minutes >= $3
-                ORDER BY hl.estimated_lurk_minutes DESC, LOWER(hl.chatter_login) ASC
+                  {current_bot_clause}
+                ORDER BY hl.estimated_lurk_minutes DESC, LOWER(lc.chatter_login) ASC
                 LIMIT $4"#,
             freshness = LURKER_TAX_FRESHNESS_MINUTES,
-            bot_clause = bot_clause,
+            historical_bot_clause = historical_bot_clause,
+            current_bot_clause = current_bot_clause,
         );
         let mut query = sqlx::query_as::<_, (String,)>(&sql)
             .bind(login)
@@ -1524,10 +1740,7 @@ impl PromoEngine {
         for bot in crate::mention_scoring::WHITELISTED_BOTS {
             query = query.bind(bot.to_lowercase());
         }
-        let rows: Vec<(String,)> = query
-        .fetch_all(&self.pool)
-        .await
-        .unwrap_or_default();
+        let rows: Vec<(String,)> = query.fetch_all(&self.pool).await.unwrap_or_default();
 
         rows.into_iter().map(|(l,)| l).collect()
     }
@@ -1559,8 +1772,13 @@ impl PromoEngine {
         let (cd_ok, want_user) = {
             let ts_state = self.targeted_state.lock().await;
             let last = ts_state.channel_last_targeted.get(login).copied();
-            let cd = last.is_none_or(|t| now.duration_since(t).as_secs() >= CHANNEL_TARGETED_COOLDOWN_SEC);
-            let last_type = ts_state.channel_last_type.get(login).map(|s| s.as_str()).unwrap_or("global");
+            let cd = last
+                .is_none_or(|t| now.duration_since(t).as_secs() >= CHANNEL_TARGETED_COOLDOWN_SEC);
+            let last_type = ts_state
+                .channel_last_type
+                .get(login)
+                .map(|s| s.as_str())
+                .unwrap_or("global");
             let want = last_type == "global"; // alternieren (targeted_promo.py)
             (cd, want)
         };
@@ -1571,13 +1789,16 @@ impl PromoEngine {
 
         // User-Targeted-Pfad (targeted_promo.py:198).
         if want_user && !active_chatters.is_empty() {
-            if let Some((target_login, target_id)) = self.pick_user_target(active_chatters, login, now).await {
+            if let Some((target_login, target_id)) =
+                self.pick_user_target(active_chatters, login, now).await
+            {
                 // User-Context laden (targeted_promo.py: _sync_user_context_snippets).
                 let snippets = self.load_user_context_snippets(&target_id, login).await;
                 let presets = user_presets();
                 let preset = tokio::time::timeout(
                     Duration::from_secs(MINIMAX_TIMEOUT_SEC),
-                    self.preset_picker.pick_preset(&presets, &snippets, &target_login),
+                    self.preset_picker
+                        .pick_preset(&presets, &snippets, &target_login),
                 )
                 .await
                 .unwrap_or_else(|_| {
@@ -1585,7 +1806,8 @@ impl PromoEngine {
                     presets.choose(&mut rng).unwrap_or(&presets[0])
                 });
 
-                let text = preset.text
+                let text = preset
+                    .text
                     .replace("{invite}", invite)
                     .replace("{login}", &target_login);
                 // Python targeted_promo.py:264: `if not ok: return False` — bei nicht
@@ -1600,12 +1822,19 @@ impl PromoEngine {
 
                 {
                     let mut ts_state = self.targeted_state.lock().await;
-                    ts_state.channel_last_targeted.insert(login.to_string(), now);
-                    ts_state.channel_last_type.insert(login.to_string(), "user".to_string());
-                    ts_state.user_last_pitched.insert((login.to_string(), target_login), now);
+                    ts_state
+                        .channel_last_targeted
+                        .insert(login.to_string(), now);
+                    ts_state
+                        .channel_last_type
+                        .insert(login.to_string(), "user".to_string());
+                    ts_state
+                        .user_last_pitched
+                        .insert((login.to_string(), target_login), now);
                 }
                 // Promo-Slot belegen — Python: mark(channel_login, now, reason="targeted_promo").
-                self.mark_promo_sent(login, now, "targeted_promo", Utc::now().timestamp() as f64).await;
+                self.mark_promo_sent(login, now, "targeted_promo", Utc::now().timestamp() as f64)
+                    .await;
 
                 return true;
             }
@@ -1620,25 +1849,31 @@ impl PromoEngine {
         .await
         .unwrap_or_else(|_| &presets[0]);
 
-        let text = preset.text.replace("{invite}", invite).replace("{login}", "");
+        let text = preset
+            .text
+            .replace("{invite}", invite)
+            .replace("{login}", "");
         // Global → Announcement, color="purple" (promo_presets.py).
         // Python targeted_promo.py:264: `if not ok: return False` — Send-Ergebnis prüfen.
         if !self
-            .api
-            .send_announcement(channel_id, &text, "purple")
+            .send_announcement_with_plain_fallback(login, channel_id, &text, "purple", "promo")
             .await
-            .unwrap_or(false)
         {
             return false;
         }
 
         {
             let mut ts_state = self.targeted_state.lock().await;
-            ts_state.channel_last_targeted.insert(login.to_string(), now);
-            ts_state.channel_last_type.insert(login.to_string(), "global".to_string());
+            ts_state
+                .channel_last_targeted
+                .insert(login.to_string(), now);
+            ts_state
+                .channel_last_type
+                .insert(login.to_string(), "global".to_string());
         }
         // Promo-Slot belegen — Python: mark(channel_login, now, reason="targeted_promo").
-        self.mark_promo_sent(login, now, "targeted_promo", Utc::now().timestamp() as f64).await;
+        self.mark_promo_sent(login, now, "targeted_promo", Utc::now().timestamp() as f64)
+            .await;
 
         true
     }
@@ -1656,9 +1891,10 @@ impl PromoEngine {
             .filter(|c| {
                 // Gepitchte User (< 24h) entfernen.
                 let key = (channel_login.to_string(), (*c).clone());
-                ts_state.user_last_pitched.get(&key).is_none_or(|&t| {
-                    now.duration_since(t).as_secs() >= USER_PITCH_COOLDOWN_SEC
-                })
+                ts_state
+                    .user_last_pitched
+                    .get(&key)
+                    .is_none_or(|&t| now.duration_since(t).as_secs() >= USER_PITCH_COOLDOWN_SEC)
             })
             .collect();
         drop(ts_state);
@@ -1730,7 +1966,10 @@ impl PromoEngine {
 
     /// Aktive Chatter aus dem Aktivitäts-Bucket (promos.py:1466).
     async fn get_active_chatters(&self, login: &str) -> Vec<String> {
-        let state_ref = self.channel_states.entry(login.to_string()).or_insert_with(|| Mutex::new(ChannelState::new()));
+        let state_ref = self
+            .channel_states
+            .entry(login.to_string())
+            .or_insert_with(|| Mutex::new(ChannelState::new()));
         let state = state_ref.lock().await;
         let now = Instant::now();
         let window = Duration::from_secs(PROMO_ACTIVITY_WINDOW_MIN * 60);
@@ -1886,15 +2125,36 @@ impl PromoEngine {
         Ok(rows)
     }
 
-    /// Cooldowns aus DB laden (promos.py:1452: `_restore_promo_cooldowns`).
-    /// twitch_promo_cooldowns.wall_ts = double precision, login = text, cooldown_type = text (prod schema).
-    async fn restore_promo_cooldowns(&self) {
-        let rows: Vec<(String, String, f64)> = sqlx::query_as(
-            "SELECT login, cooldown_type, wall_ts FROM twitch_promo_cooldowns",
+    /// Live-Kanäle für Lurker-Tax laden (promos.py:1636:
+    /// `_get_live_channels_for_lurker_tax`).
+    async fn get_live_channels_for_lurker_tax(&self) -> Result<Vec<(String, String)>, String> {
+        let rows: Vec<(String, String)> = sqlx::query_as(
+            "SELECT streamer_login, twitch_user_id
+               FROM twitch_live_state
+              WHERE is_live = 1
+                AND active_session_id IS NOT NULL
+                AND TRIM(COALESCE(streamer_login, '')) <> ''
+                AND TRIM(COALESCE(twitch_user_id, '')) <> ''",
         )
         .fetch_all(&self.pool)
         .await
-        .unwrap_or_default();
+        .map_err(|e| e.to_string())?;
+
+        Ok(rows
+            .into_iter()
+            .map(|(login, user_id)| (login.trim().to_lowercase(), user_id.trim().to_string()))
+            .filter(|(login, user_id)| !login.is_empty() && !user_id.is_empty())
+            .collect())
+    }
+
+    /// Cooldowns aus DB laden (promos.py:1452: `_restore_promo_cooldowns`).
+    /// twitch_promo_cooldowns.wall_ts = double precision, login = text, cooldown_type = text (prod schema).
+    async fn restore_promo_cooldowns(&self) {
+        let rows: Vec<(String, String, f64)> =
+            sqlx::query_as("SELECT login, cooldown_type, wall_ts FROM twitch_promo_cooldowns")
+                .fetch_all(&self.pool)
+                .await
+                .unwrap_or_default();
 
         let wall_now = Utc::now().timestamp() as f64;
         let mono_now = Instant::now();
@@ -1904,7 +2164,10 @@ impl PromoEngine {
             // Monotonic-Zeitstempel rekonstruieren (promos.py:903).
             let mono_restored = mono_now.checked_sub(Duration::from_secs(age_secs));
 
-            let state_ref = self.channel_states.entry(login.clone()).or_insert_with(|| Mutex::new(ChannelState::new()));
+            let state_ref = self
+                .channel_states
+                .entry(login.clone())
+                .or_insert_with(|| Mutex::new(ChannelState::new()));
             let mut state = state_ref.lock().await;
 
             match cooldown_type.as_str() {
@@ -1945,19 +2208,20 @@ impl PromoEngine {
         .execute(&self.pool)
         .await
         {
-            warn!(login, cooldown_type, "save_promo_cooldown fehlgeschlagen: {e}");
+            warn!(
+                login,
+                cooldown_type, "save_promo_cooldown fehlgeschlagen: {e}"
+            );
         }
     }
 
     /// Alte Cooldown-Einträge bereinigen (promos.py: `cleanup_stale_promo_cooldowns(24)`).
     pub async fn cleanup_stale_promo_cooldowns(&self) {
         let cutoff = (Utc::now().timestamp() as f64) - 86400.0;
-        if let Err(e) = sqlx::query(
-            "DELETE FROM twitch_promo_cooldowns WHERE wall_ts < $1",
-        )
-        .bind(cutoff)
-        .execute(&self.pool)
-        .await
+        if let Err(e) = sqlx::query("DELETE FROM twitch_promo_cooldowns WHERE wall_ts < $1")
+            .bind(cutoff)
+            .execute(&self.pool)
+            .await
         {
             warn!("cleanup_stale_promo_cooldowns fehlgeschlagen: {e}");
         }
@@ -1990,8 +2254,14 @@ mod tests {
     #[test]
     fn promo_invite_fallback_nutzt_default_bei_fehlender_oder_leerer_config() {
         assert_eq!(promo_invite_fallback(None), DEFAULT_PROMO_DISCORD_INVITE);
-        assert_eq!(promo_invite_fallback(Some("")), DEFAULT_PROMO_DISCORD_INVITE);
-        assert_eq!(promo_invite_fallback(Some("   ")), DEFAULT_PROMO_DISCORD_INVITE);
+        assert_eq!(
+            promo_invite_fallback(Some("")),
+            DEFAULT_PROMO_DISCORD_INVITE
+        );
+        assert_eq!(
+            promo_invite_fallback(Some("   ")),
+            DEFAULT_PROMO_DISCORD_INVITE
+        );
         assert_eq!(
             promo_invite_fallback(Some(" https://discord.gg/custom ")),
             "https://discord.gg/custom"
@@ -2008,13 +2278,35 @@ mod tests {
         messages: TokioMutex<Vec<(String, String)>>,
     }
 
+    impl MockApi {
+        pub(super) async fn announcement_count(&self) -> usize {
+            self.announcements.lock().await.len()
+        }
+
+        pub(super) async fn message_count(&self) -> usize {
+            self.messages.lock().await.len()
+        }
+    }
+
     #[async_trait]
     impl ChatApi for MockApi {
-        async fn send_message(&self, broadcaster_id: &str, message: &str) -> Result<SendOutcome, String> {
-            self.messages.lock().await.push((broadcaster_id.to_string(), message.to_string()));
+        async fn send_message(
+            &self,
+            broadcaster_id: &str,
+            message: &str,
+        ) -> Result<SendOutcome, String> {
+            self.messages
+                .lock()
+                .await
+                .push((broadcaster_id.to_string(), message.to_string()));
             Ok(SendOutcome::Sent)
         }
-        async fn send_announcement(&self, broadcaster_id: &str, message: &str, color: &str) -> Result<bool, String> {
+        async fn send_announcement(
+            &self,
+            broadcaster_id: &str,
+            message: &str,
+            color: &str,
+        ) -> Result<bool, String> {
             self.announcements.lock().await.push((
                 broadcaster_id.to_string(),
                 message.to_string(),
@@ -2022,10 +2314,21 @@ mod tests {
             ));
             Ok(true)
         }
-        async fn ban_user(&self, _: &str, _: &str, _: &str) -> Result<crate::api::BanOutcome, String> {
+        async fn ban_user(
+            &self,
+            _: &str,
+            _: &str,
+            _: &str,
+        ) -> Result<crate::api::BanOutcome, String> {
             Ok(crate::api::BanOutcome::Banned)
         }
-        async fn timeout_user(&self, _: &str, _: &str, _: u32, _: &str) -> Result<crate::api::BanOutcome, String> {
+        async fn timeout_user(
+            &self,
+            _: &str,
+            _: &str,
+            _: u32,
+            _: &str,
+        ) -> Result<crate::api::BanOutcome, String> {
             Ok(crate::api::BanOutcome::Banned)
         }
         async fn unban_user(&self, _: &str, _: &str) -> Result<bool, String> {
@@ -2040,6 +2343,115 @@ mod tests {
         async fn resolve_user_id(&self, _: &str) -> Result<Option<String>, String> {
             Ok(None)
         }
+        async fn bot_user_id(&self) -> String {
+            "bot-id".to_string()
+        }
+    }
+
+    pub(super) struct AnnouncementFallbackApi {
+        announcement_result: Result<bool, String>,
+        announcements: TokioMutex<Vec<(String, String, String)>>,
+        messages: TokioMutex<Vec<(String, String)>>,
+    }
+
+    impl AnnouncementFallbackApi {
+        pub(super) fn announcement_false() -> Self {
+            Self {
+                announcement_result: Ok(false),
+                announcements: TokioMutex::new(Vec::new()),
+                messages: TokioMutex::new(Vec::new()),
+            }
+        }
+
+        pub(super) fn announcement_error() -> Self {
+            Self {
+                announcement_result: Err("announcement failed".to_string()),
+                announcements: TokioMutex::new(Vec::new()),
+                messages: TokioMutex::new(Vec::new()),
+            }
+        }
+
+        pub(super) async fn announcement_count(&self) -> usize {
+            self.announcements.lock().await.len()
+        }
+
+        pub(super) async fn message_count(&self) -> usize {
+            self.messages.lock().await.len()
+        }
+
+        pub(super) async fn announcement_colors(&self) -> Vec<String> {
+            self.announcements
+                .lock()
+                .await
+                .iter()
+                .map(|(_, _, color)| color.clone())
+                .collect()
+        }
+    }
+
+    #[async_trait]
+    impl ChatApi for AnnouncementFallbackApi {
+        async fn send_message(
+            &self,
+            broadcaster_id: &str,
+            message: &str,
+        ) -> Result<SendOutcome, String> {
+            self.messages
+                .lock()
+                .await
+                .push((broadcaster_id.to_string(), message.to_string()));
+            Ok(SendOutcome::Sent)
+        }
+
+        async fn send_announcement(
+            &self,
+            broadcaster_id: &str,
+            message: &str,
+            color: &str,
+        ) -> Result<bool, String> {
+            self.announcements.lock().await.push((
+                broadcaster_id.to_string(),
+                message.to_string(),
+                color.to_string(),
+            ));
+            self.announcement_result.clone()
+        }
+
+        async fn ban_user(
+            &self,
+            _: &str,
+            _: &str,
+            _: &str,
+        ) -> Result<crate::api::BanOutcome, String> {
+            Ok(crate::api::BanOutcome::Banned)
+        }
+
+        async fn timeout_user(
+            &self,
+            _: &str,
+            _: &str,
+            _: u32,
+            _: &str,
+        ) -> Result<crate::api::BanOutcome, String> {
+            Ok(crate::api::BanOutcome::Banned)
+        }
+
+        async fn unban_user(&self, _: &str, _: &str) -> Result<bool, String> {
+            Ok(true)
+        }
+
+        async fn delete_message(&self, _: &str, _: &str) -> Result<bool, String> {
+            Ok(true)
+        }
+
+        async fn user_created_at(&self, _: &str) -> Result<Option<DateTime<Utc>>, String> {
+            Ok(None)
+        }
+
+        async fn resolve_user_id(&self, _: &str) -> Result<Option<String>, String> {
+            Ok(None)
+        }
+
         async fn bot_user_id(&self) -> String {
             "bot-id".to_string()
         }
@@ -2075,14 +2487,20 @@ mod tests {
         // 1.5 MPM → Mitte: (45 + 0.5*135) * 60 = (45+67.5)*60 = 6750s = 112.5 min
         let cd = interpolated_cooldown_sec(1.5);
         let expected = (45.0 + 0.5 * 135.0) * 60.0;
-        assert!((cd - expected).abs() < 1.0, "1.5 MPM → {expected}s, got {cd}");
+        assert!(
+            (cd - expected).abs() < 1.0,
+            "1.5 MPM → {expected}s, got {cd}"
+        );
     }
 
     #[test]
     fn cooldown_interpolation_cap_ueber_target() {
         // 10.0 MPM → capped auf 3.0 → 45 min
         let cd = interpolated_cooldown_sec(10.0);
-        assert!((cd - 45.0 * 60.0).abs() < 1.0, ">3.0 MPM → capped auf 45 min, got {cd}");
+        assert!(
+            (cd - 45.0 * 60.0).abs() < 1.0,
+            ">3.0 MPM → capped auf 45 min, got {cd}"
+        );
     }
 
     // -----------------------------------------------------------------------
@@ -2094,10 +2512,14 @@ mod tests {
         let engine = make_engine_no_db();
         let mut state = ChannelState::new();
         // Nur 1 Eintrag, zu wenig.
-        state.activity.push_back((Instant::now(), "user1".to_string()));
+        state
+            .activity
+            .push_back((Instant::now(), "user1".to_string()));
         state.raw_msg_count_since_promo = 20;
 
-        let ready = engine.promo_activity_ready_inner(&state, Instant::now());
+        let ready = engine
+            .promo_activity_ready_inner("", &state, Instant::now())
+            .await;
         assert!(!ready, "Zu wenige Msgs im Fenster → nicht ready");
     }
 
@@ -2111,7 +2533,7 @@ mod tests {
         }
         state.raw_msg_count_since_promo = 5; // < 16
 
-        let ready = engine.promo_activity_ready_inner(&state, now);
+        let ready = engine.promo_activity_ready_inner("", &state, now).await;
         assert!(!ready, "Zu wenige Roh-Msgs → nicht ready");
     }
 
@@ -2126,7 +2548,7 @@ mod tests {
         state.raw_msg_count_since_promo = 20;
         // last_promo_sent = None → keine Cooldown-Prüfung nötig.
 
-        let ready = engine.promo_activity_ready_inner(&state, now);
+        let ready = engine.promo_activity_ready_inner("", &state, now).await;
         assert!(ready, "Alle Schwellen OK → ready");
     }
 
@@ -2166,7 +2588,10 @@ mod tests {
         let lock2 = engine.get_send_lock("testkanal");
 
         // Beide Locks sollten identisch sein (gleiche Arc-Instanz).
-        assert!(Arc::ptr_eq(&lock, &lock2), "Lock für gleichen Kanal muss identisch sein");
+        assert!(
+            Arc::ptr_eq(&lock, &lock2),
+            "Lock für gleichen Kanal muss identisch sein"
+        );
 
         // Simulieren: zwei Tasks versuchen gleichzeitig zu senden.
         let c1 = counter.clone();
@@ -2226,7 +2651,9 @@ mod tests {
         // alice als gesehen markieren (frisch → zählt nicht als neu).
         state.seen_chatters.insert("alice".to_string(), now);
 
-        let new_count = engine.get_new_chatters_in_window_inner(&state, now);
+        let new_count = engine
+            .get_new_chatters_in_window_inner("", &state, now)
+            .await;
         assert_eq!(new_count, 1, "Nur bob ist neu");
     }
 
@@ -2243,7 +2670,9 @@ mod tests {
             now.checked_sub(Duration::from_secs(3 * 3600)).unwrap(),
         );
 
-        let new_count = engine.get_new_chatters_in_window_inner(&state, now);
+        let new_count = engine
+            .get_new_chatters_in_window_inner("", &state, now)
+            .await;
         assert_eq!(new_count, 1, "Alice nach 3h wieder als neu");
     }
 
@@ -2257,10 +2686,15 @@ mod tests {
         // wenn der letzte gesetzt ist und Pool groß genug ist.
         let engine = make_engine_no_db();
         // Erster Aufruf: kein last_text.
-        let text1 = engine.build_promo_text("kanal", DEFAULT_PROMO_DISCORD_INVITE, "promo").await;
+        let text1 = engine
+            .build_promo_text("kanal", DEFAULT_PROMO_DISCORD_INVITE, "promo")
+            .await;
         // last_text setzen.
         {
-            let state_ref = engine.channel_states.entry("kanal".to_string()).or_insert_with(|| Mutex::new(ChannelState::new()));
+            let state_ref = engine
+                .channel_states
+                .entry("kanal".to_string())
+                .or_insert_with(|| Mutex::new(ChannelState::new()));
             let mut state = state_ref.lock().await;
             state.last_promo_text = Some(text1.clone());
         }
@@ -2268,13 +2702,18 @@ mod tests {
         // Wir wiederholen mehrmals um Flakiness zu minimieren.
         let mut different = false;
         for _ in 0..20 {
-            let text2 = engine.build_promo_text("kanal", DEFAULT_PROMO_DISCORD_INVITE, "promo").await;
+            let text2 = engine
+                .build_promo_text("kanal", DEFAULT_PROMO_DISCORD_INVITE, "promo")
+                .await;
             if text2 != text1 {
                 different = true;
                 break;
             }
         }
-        assert!(different, "Anti-Repeat: nach 20 Versuchen sollte ein anderer Text kommen");
+        assert!(
+            different,
+            "Anti-Repeat: nach 20 Versuchen sollte ein anderer Text kommen"
+        );
     }
 
     // -----------------------------------------------------------------------
@@ -2349,7 +2788,11 @@ mod tests {
             .await;
 
         let calls = writer.calls.lock().unwrap();
-        assert_eq!(calls.len(), 1, "channel_settings-Drop muss genau einen Write auslösen");
+        assert_eq!(
+            calls.len(),
+            1,
+            "channel_settings-Drop muss genau einen Write auslösen"
+        );
         assert_eq!(calls[0].0, "streamerlogin");
         assert_eq!(calls[0].1.as_deref(), Some("bcast-1"));
         assert_eq!(calls[0].2, "promo");
@@ -2394,7 +2837,7 @@ mod tests {
     // P1.4 — Lurker-Tax Bot-Token-Scope-Fallback
     // -----------------------------------------------------------------------
 
-    struct FakeBotScopes(Vec<String>);
+    pub(super) struct FakeBotScopes(pub(super) Vec<String>);
     #[async_trait]
     impl BotScopeProvider for FakeBotScopes {
         async fn bot_scopes(&self) -> Vec<String> {
@@ -2509,12 +2952,44 @@ mod tests {
             assert_eq!(anns[0].2, "blue");
         }
         // Cooldown belegt → overall_promo_ready_inner ist jetzt false.
-        let state_ref = engine.channel_states.get("login").expect("ChannelState belegt");
+        let state_ref = engine
+            .channel_states
+            .get("login")
+            .expect("ChannelState belegt");
         let state = state_ref.lock().await;
         assert!(
             !engine.overall_promo_ready_inner(&state, Instant::now()),
             "Promo-Cooldown muss nach dem Pitch belegt sein"
         );
+    }
+
+    #[tokio::test]
+    async fn timeout_pitch_faellt_bei_announcement_false_auf_plain_chat_zurueck() {
+        let api = Arc::new(AnnouncementFallbackApi::announcement_false());
+        let engine = PromoEngine::new(dummy_pool(), api.clone(), Arc::new(NoopSuppressionCheck));
+
+        let sent = engine.send_timeout_pitch("123", "login", "PITCH-MSG").await;
+
+        assert!(
+            sent,
+            "Ok(false) vom Announcement muss per Plain-Chat fallbacken"
+        );
+        assert_eq!(api.announcement_count().await, 1);
+        assert_eq!(api.message_count().await, 1);
+        assert_eq!(api.announcement_colors().await, vec!["blue".to_string()]);
+    }
+
+    #[tokio::test]
+    async fn timeout_pitch_faellt_bei_announcement_error_auf_plain_chat_zurueck() {
+        let api = Arc::new(AnnouncementFallbackApi::announcement_error());
+        let engine = PromoEngine::new(dummy_pool(), api.clone(), Arc::new(NoopSuppressionCheck));
+
+        let sent = engine.send_timeout_pitch("123", "login", "PITCH-MSG").await;
+
+        assert!(sent, "Err vom Announcement muss per Plain-Chat fallbacken");
+        assert_eq!(api.announcement_count().await, 1);
+        assert_eq!(api.message_count().await, 1);
+        assert_eq!(api.announcement_colors().await, vec!["blue".to_string()]);
     }
 
     // Plan-Entitlement-Mapping (chat.lurker_tax / chat.promos.disable inkl.
@@ -2530,8 +3005,8 @@ mod tests {
 #[cfg(test)]
 mod db_tests {
     use super::*;
-    use std::str::FromStr;
     use sqlx::postgres::{PgConnectOptions, PgPoolOptions};
+    use std::str::FromStr;
 
     macro_rules! pool_or_skip {
         ($schema:expr) => {{
@@ -2628,6 +3103,7 @@ mod db_tests {
             r#"CREATE TABLE twitch_live_state (
                 twitch_user_id TEXT PRIMARY KEY,
                 streamer_login TEXT NOT NULL,
+                last_started_at TEXT,
                 is_live INTEGER DEFAULT 0,
                 last_game TEXT,
                 active_session_id BIGINT,
@@ -2671,6 +3147,23 @@ mod db_tests {
                 content TEXT,
                 ts TIMESTAMPTZ DEFAULT NOW()
             )"#,
+            // twitch_streamer_invites — streamer-specific Discord invite marker
+            r#"CREATE TABLE twitch_streamer_invites (
+                streamer_login TEXT PRIMARY KEY,
+                guild_id BIGINT NOT NULL DEFAULT 1,
+                channel_id BIGINT NOT NULL DEFAULT 1,
+                invite_code TEXT NOT NULL DEFAULT 'code',
+                invite_url TEXT NOT NULL DEFAULT 'https://discord.example/invite',
+                created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+                last_sent_at TEXT
+            )"#,
+            // twitch_raid_auth — Lurker-Tax scope lookup. Tests may still use the
+            // bot-scope fallback, but the table exists in prod and avoids false
+            // negatives from missing-table errors.
+            r#"CREATE TABLE twitch_raid_auth (
+                twitch_login TEXT PRIMARY KEY,
+                scopes TEXT
+            )"#,
         ] {
             sqlx::query(ddl).execute(pool).await.unwrap();
         }
@@ -2694,14 +3187,15 @@ mod db_tests {
         let engine = make_engine(pool.clone());
 
         let wall_ts = 1718000000.0_f64;
-        engine.save_promo_cooldown("testkanal", "sent", wall_ts).await;
+        engine
+            .save_promo_cooldown("testkanal", "sent", wall_ts)
+            .await;
 
-        let rows: Vec<(String, String, f64)> = sqlx::query_as(
-            "SELECT login, cooldown_type, wall_ts FROM twitch_promo_cooldowns",
-        )
-        .fetch_all(&pool)
-        .await
-        .unwrap();
+        let rows: Vec<(String, String, f64)> =
+            sqlx::query_as("SELECT login, cooldown_type, wall_ts FROM twitch_promo_cooldowns")
+                .fetch_all(&pool)
+                .await
+                .unwrap();
 
         assert_eq!(rows.len(), 1);
         assert_eq!(rows[0].0, "testkanal");
@@ -2724,7 +3218,10 @@ mod db_tests {
         .await
         .unwrap();
 
-        assert!((wall_ts - 2000.0).abs() < 0.001, "Upsert muss neueren Wert schreiben");
+        assert!(
+            (wall_ts - 2000.0).abs() < 0.001,
+            "Upsert muss neueren Wert schreiben"
+        );
     }
 
     #[tokio::test]
@@ -2738,13 +3235,22 @@ mod db_tests {
 
         engine.restore_promo_cooldowns().await;
 
-        let state_ref = engine.channel_states.entry("kanal".to_string()).or_insert_with(|| Mutex::new(ChannelState::new()));
+        let state_ref = engine
+            .channel_states
+            .entry("kanal".to_string())
+            .or_insert_with(|| Mutex::new(ChannelState::new()));
         let state = state_ref.lock().await;
-        assert!(state.last_promo_sent.is_some(), "Restore muss last_promo_sent setzen");
+        assert!(
+            state.last_promo_sent.is_some(),
+            "Restore muss last_promo_sent setzen"
+        );
 
         // Verify: das Instant liegt ca. 60 min in der Vergangenheit.
         let age = Instant::now().duration_since(state.last_promo_sent.unwrap());
-        assert!(age.as_secs() > 3500 && age.as_secs() < 3700, "Age ~60 min, got {age:?}");
+        assert!(
+            age.as_secs() > 3500 && age.as_secs() < 3700,
+            "Age ~60 min, got {age:?}"
+        );
     }
 
     #[tokio::test]
@@ -2830,6 +3336,91 @@ mod db_tests {
         assert!(allowed, "is_partner_active=1 + archived_at=NULL → erlaubt");
     }
 
+    #[tokio::test]
+    async fn lurker_tax_channelquelle_ignoriert_game_und_promo_disabled() {
+        let pool = pool_or_skip!("promo_lurker_channels");
+        let engine = make_engine(pool.clone());
+
+        sqlx::query(
+            "INSERT INTO twitch_live_state
+             (twitch_user_id, streamer_login, is_live, last_game, active_session_id)
+             VALUES ('u-lurk', 'varietykanal', 1, 'Just Chatting', 42)",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+        sqlx::query(
+            "INSERT INTO streamer_plans (twitch_user_id, twitch_login, promo_disabled)
+             VALUES ('u-lurk', 'varietykanal', 1)",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+
+        let lurker_channels = engine.get_live_channels_for_lurker_tax().await.unwrap();
+        assert_eq!(
+            lurker_channels,
+            vec![("varietykanal".to_string(), "u-lurk".to_string())]
+        );
+
+        sqlx::query(
+            "INSERT INTO twitch_streamer_identities (twitch_user_id, twitch_login)
+             VALUES ('u-lurk', 'varietykanal')",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+        let promo_channels = engine.get_live_channels_for_promo().await.unwrap();
+        assert!(
+            promo_channels.is_empty(),
+            "Promo-Quelle bleibt Deadlock/promo_disabled-gefiltert"
+        );
+    }
+
+    #[tokio::test]
+    async fn targeted_promo_respektiert_promo_channel_allowed_gate() {
+        let pool = pool_or_skip!("promo_targeted_allowed_gate");
+        let api = Arc::new(super::tests::MockApi::default());
+        let engine = PromoEngine::new(pool.clone(), api.clone(), Arc::new(NoopSuppressionCheck));
+
+        sqlx::query(
+            "INSERT INTO twitch_streamer_identities (twitch_user_id, twitch_login)
+             VALUES ('u-target', 'targetkanal')",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+        sqlx::query(
+            "INSERT INTO twitch_live_state (twitch_user_id, streamer_login, is_live, last_game)
+             VALUES ('u-target', 'targetkanal', 1, 'Deadlock')",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+
+        let now = Instant::now();
+        {
+            let state_ref = engine
+                .channel_states
+                .entry("targetkanal".to_string())
+                .or_insert_with(|| Mutex::new(ChannelState::new()));
+            let mut state = state_ref.lock().await;
+            state.raw_msg_count_since_promo = PROMO_ACTIVITY_MIN_RAW_MSGS_SINCE_PROMO;
+            for idx in 0..PROMO_ACTIVITY_MIN_MSGS {
+                state.activity.push_back((now, format!("chatter{idx}")));
+            }
+        }
+
+        engine.send_promo_if_due(now).await;
+
+        assert_eq!(
+            api.announcement_count().await,
+            0,
+            "ohne aktiven Partner-State darf auch Targeted-Global nicht senden"
+        );
+        assert_eq!(api.message_count().await, 0);
+    }
+
     // -----------------------------------------------------------------------
     // Plan-Flag-Block
     // -----------------------------------------------------------------------
@@ -2889,7 +3480,10 @@ mod db_tests {
         .unwrap();
 
         let blocked = engine.promo_blocked_by_plan_or_flag("werbefreikanal").await;
-        assert!(blocked, "aktiver chat_quiet → chat.promos.disable → blockiert");
+        assert!(
+            blocked,
+            "aktiver chat_quiet → chat.promos.disable → blockiert"
+        );
     }
 
     #[tokio::test]
@@ -2910,7 +3504,10 @@ mod db_tests {
         .unwrap();
 
         let blocked = engine.promo_blocked_by_plan_or_flag("zukunftkanal").await;
-        assert!(blocked, "nicht abgelaufenes bundle_komplett → chat.promos.disable → blockiert");
+        assert!(
+            blocked,
+            "nicht abgelaufenes bundle_komplett → chat.promos.disable → blockiert"
+        );
     }
 
     #[tokio::test]
@@ -2930,8 +3527,13 @@ mod db_tests {
         .await
         .unwrap();
 
-        let blocked = engine.promo_blocked_by_plan_or_flag("abgelaufenkanal").await;
-        assert!(!blocked, "abgelaufener chat_quiet → Plan nicht effektiv → nicht blockiert");
+        let blocked = engine
+            .promo_blocked_by_plan_or_flag("abgelaufenkanal")
+            .await;
+        assert!(
+            !blocked,
+            "abgelaufener chat_quiet → Plan nicht effektiv → nicht blockiert"
+        );
     }
 
     #[tokio::test]
@@ -3052,8 +3654,39 @@ mod db_tests {
         .await
         .unwrap();
 
-        let text = engine.load_streamer_promo_message("msgkanal", "http://example.com/invite").await;
-        assert_eq!(text.as_deref(), Some("Komm zu uns: http://example.com/invite"));
+        let text = engine
+            .load_streamer_promo_message("msgkanal", "http://example.com/invite")
+            .await;
+        assert_eq!(
+            text.as_deref(),
+            Some("Komm zu uns: http://example.com/invite")
+        );
+    }
+
+    #[tokio::test]
+    async fn streamer_invite_sent_marker_aktualisiert_last_sent_at() {
+        let pool = pool_or_skip!("promo_invite_sent_marker");
+        let engine = make_engine(pool.clone());
+
+        sqlx::query(
+            "INSERT INTO twitch_streamer_invites (streamer_login, guild_id, channel_id, invite_code, invite_url)
+             VALUES ('invitekanal', 1, 2, 'abc', 'https://discord.example/abc')",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+
+        engine.mark_streamer_invite_sent("InviteKanal").await;
+
+        let last_sent_at: Option<String> = sqlx::query_scalar(
+            "SELECT last_sent_at FROM twitch_streamer_invites WHERE streamer_login = 'invitekanal'",
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert!(last_sent_at
+            .as_deref()
+            .is_some_and(|value| value.contains('T')));
     }
 
     #[tokio::test]
@@ -3123,7 +3756,202 @@ mod db_tests {
         .unwrap();
 
         let candidates = engine.get_lurker_tax_candidates("lurkerkanal").await;
-        assert!(!candidates.is_empty(), "Lurker-Kandidat sollte gefunden werden: {candidates:?}");
+        assert!(
+            !candidates.is_empty(),
+            "Lurker-Kandidat sollte gefunden werden: {candidates:?}"
+        );
         assert!(candidates.contains(&"lurker1".to_string()));
+    }
+
+    #[tokio::test]
+    async fn lurker_tax_kandidaten_joinen_ueber_chatter_identity_key() {
+        let pool = pool_or_skip!("promo_lurker_identity_key");
+        let engine = make_engine(pool.clone());
+
+        let live_session_id: i64 = sqlx::query_scalar(
+            "INSERT INTO twitch_stream_sessions (streamer_login, avg_viewers)
+             VALUES ('renamekanal', 10.0)
+             RETURNING id",
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+
+        sqlx::query(
+            "INSERT INTO twitch_live_state (twitch_user_id, streamer_login, is_live, active_session_id)
+             VALUES ('u-rename', 'renamekanal', 1, $1)",
+        )
+        .bind(live_session_id)
+        .execute(&pool)
+        .await
+        .unwrap();
+
+        for s in 0i64..3 {
+            let sid: i64 = sqlx::query_scalar(
+                "INSERT INTO twitch_stream_sessions (streamer_login, ended_at, avg_viewers)
+                 VALUES ('renamekanal', NOW() - ($1 || ' hours')::INTERVAL, 5.0)
+                 RETURNING id",
+            )
+            .bind(s + 2)
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+
+            sqlx::query(
+                "INSERT INTO twitch_session_chatters
+                 (session_id, streamer_login, chatter_login, chatter_id, messages, seen_via_chatters_api,
+                  first_message_at, last_seen_at)
+                 VALUES ($1, 'renamekanal', 'oldlogin', 'same-id-1', 0, TRUE,
+                  NOW() - INTERVAL '6 hours', NOW() - INTERVAL '4 hours 30 minutes')",
+            )
+            .bind(sid)
+            .execute(&pool)
+            .await
+            .unwrap();
+        }
+
+        sqlx::query(
+            "INSERT INTO twitch_session_chatters
+             (session_id, streamer_login, chatter_login, chatter_id, messages, seen_via_chatters_api,
+              first_message_at, last_seen_at)
+             VALUES ($1, 'renamekanal', 'newlogin', 'same-id-1', 0, TRUE,
+              NOW() - INTERVAL '2 minutes', NOW() - INTERVAL '1 minute')",
+        )
+        .bind(live_session_id)
+        .execute(&pool)
+        .await
+        .unwrap();
+
+        let candidates = engine.get_lurker_tax_candidates("renamekanal").await;
+        assert_eq!(candidates, vec!["newlogin".to_string()]);
+    }
+
+    #[tokio::test]
+    async fn lurker_tax_sendet_orange_announcement_mit_plain_fallback() {
+        let pool = pool_or_skip!("promo_lurker_announcement_fallback");
+        let api = Arc::new(super::tests::AnnouncementFallbackApi::announcement_false());
+        let engine = PromoEngine::new(pool.clone(), api.clone(), Arc::new(NoopSuppressionCheck))
+            .set_bot_scope_provider(Arc::new(super::tests::FakeBotScopes(vec![
+                "moderator:read:chatters".into(),
+            ])));
+
+        let live_session_id: i64 = sqlx::query_scalar(
+            "INSERT INTO twitch_stream_sessions (streamer_login, avg_viewers)
+             VALUES ('taxkanal', 10.0)
+             RETURNING id",
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        sqlx::query(
+            "INSERT INTO twitch_live_state (twitch_user_id, streamer_login, is_live, active_session_id)
+             VALUES ('u-tax', 'taxkanal', 1, $1)",
+        )
+        .bind(live_session_id)
+        .execute(&pool)
+        .await
+        .unwrap();
+        sqlx::query(
+            "INSERT INTO streamer_plans (twitch_user_id, twitch_login, lurker_tax_enabled, manual_plan_id)
+             VALUES ('u-tax', 'taxkanal', 1, 'raid_boost')",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+
+        for s in 0i64..3 {
+            let sid: i64 = sqlx::query_scalar(
+                "INSERT INTO twitch_stream_sessions (streamer_login, ended_at, avg_viewers)
+                 VALUES ('taxkanal', NOW() - ($1 || ' hours')::INTERVAL, 5.0)
+                 RETURNING id",
+            )
+            .bind(s + 2)
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+
+            sqlx::query(
+                "INSERT INTO twitch_session_chatters
+                 (session_id, streamer_login, chatter_login, chatter_id, messages, seen_via_chatters_api,
+                  first_message_at, last_seen_at)
+                 VALUES ($1, 'taxkanal', 'lurker1', 'uid-lurker1', 0, TRUE,
+                  NOW() - INTERVAL '6 hours', NOW() - INTERVAL '4 hours 30 minutes')",
+            )
+            .bind(sid)
+            .execute(&pool)
+            .await
+            .unwrap();
+        }
+
+        sqlx::query(
+            "INSERT INTO twitch_session_chatters
+             (session_id, streamer_login, chatter_login, chatter_id, messages, seen_via_chatters_api,
+              first_message_at, last_seen_at)
+             VALUES ($1, 'taxkanal', 'lurker1', 'uid-lurker1', 0, TRUE,
+              NOW() - INTERVAL '2 minutes', NOW() - INTERVAL '1 minute')",
+        )
+        .bind(live_session_id)
+        .execute(&pool)
+        .await
+        .unwrap();
+
+        engine
+            .maybe_send_lurker_tax_reminder("taxkanal", "u-tax", Instant::now())
+            .await;
+
+        assert_eq!(api.announcement_count().await, 1);
+        assert_eq!(api.announcement_colors().await, vec!["orange".to_string()]);
+        assert_eq!(
+            api.message_count().await,
+            1,
+            "Announcement-Drop muss Plain-Chat fallbacken"
+        );
+    }
+
+    #[tokio::test]
+    async fn new_chatter_gate_kombiniert_chat_bucket_und_session_viewer() {
+        let pool = pool_or_skip!("promo_new_chatters_combined");
+        let engine = make_engine(pool.clone());
+        let now = Instant::now();
+
+        let live_session_id: i64 = sqlx::query_scalar(
+            "INSERT INTO twitch_stream_sessions (streamer_login, avg_viewers)
+             VALUES ('combokanal', 10.0)
+             RETURNING id",
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        sqlx::query(
+            "INSERT INTO twitch_live_state (twitch_user_id, streamer_login, is_live, active_session_id)
+             VALUES ('u-combo', 'combokanal', 1, $1)",
+        )
+        .bind(live_session_id)
+        .execute(&pool)
+        .await
+        .unwrap();
+        sqlx::query(
+            "INSERT INTO twitch_session_chatters
+             (session_id, streamer_login, chatter_login, chatter_id, messages, seen_via_chatters_api)
+             VALUES
+             ($1, 'combokanal', 'ApiViewerOne', 'api-1', 0, TRUE),
+             ($1, 'combokanal', 'ApiViewerTwo', 'api-2', 0, TRUE)",
+        )
+        .bind(live_session_id)
+        .execute(&pool)
+        .await
+        .unwrap();
+
+        let mut state = ChannelState::new();
+        state.activity.push_back((now, "oldchat".to_string()));
+        state.seen_chatters.insert("oldchat".to_string(), now);
+
+        let new_count = engine
+            .get_new_chatters_in_window_inner("combokanal", &state, now)
+            .await;
+        assert_eq!(
+            new_count, 2,
+            "API-getrackte Session-Viewer zählen als neue Chatter"
+        );
     }
 }
