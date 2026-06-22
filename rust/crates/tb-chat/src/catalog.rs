@@ -51,6 +51,26 @@ pub fn catalog() -> &'static [CommandInfo] {
             summary: "Zeigt deine Deadlock-Karriere-Siege im Chat.",
         },
         CommandInfo {
+            name: "!winrate",
+            group: Stats,
+            summary: "Zeigt deine Deadlock-Winrate der letzten Spiele.",
+        },
+        CommandInfo {
+            name: "!lastmatch",
+            group: Stats,
+            summary: "Zeigt dein letztes Deadlock-Spiel (Ergebnis, Hero, KDA).",
+        },
+        CommandInfo {
+            name: "!streak",
+            group: Stats,
+            summary: "Zeigt deine aktuelle Sieges- oder Pechsträhne.",
+        },
+        CommandInfo {
+            name: "!mostplayed",
+            group: Stats,
+            summary: "Zeigt deinen meistgespielten Hero der letzten Spiele.",
+        },
+        CommandInfo {
             name: "!commands",
             group: Fun,
             summary: "Liste aller Bot-Befehle (Link zur Übersicht).",
