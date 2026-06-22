@@ -2763,6 +2763,7 @@ dependencies = [
  "sqlx",
  "tb-crypto",
  "tb-domain",
+ "tb-observability",
  "tokio",
  "tracing",
  "url",

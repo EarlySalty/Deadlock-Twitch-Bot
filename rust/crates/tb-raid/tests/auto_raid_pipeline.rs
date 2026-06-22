@@ -7,15 +7,21 @@ use std::str::FromStr;
 use std::sync::{Arc, Mutex};
 
 use chrono::{Duration, Utc};
+use serde_json::json;
 use sqlx::postgres::{PgConnectOptions, PgPoolOptions};
 use sqlx::PgPool;
 use tb_crypto::{aad, FieldCipher, KID};
+use tb_observability::{
+    AnalyticsObservabilityService, EventSink, MillisSource, ObservabilityEvent,
+    RaidObservabilityService,
+};
 use tb_raid::{
     ArrivalReadiness, AutoRaidPipeline, AutoRaidPipelineOutcome, AutoRaidRequest,
-    FairnessCandidate, FallbackStreamSource, FollowerEnricher, OnlineCandidate, PendingRaidStore,
-    RaidApi, RaidAuthStore, RaidBlacklistStore, RaidExecutor, RaidHistoryStore, RaidTokenRefresher,
-    RefreshError, ScoreStore, StreamData, StrikesStore, TokenBlacklistStore, TokenOwnerInfo,
-    TokenProvider, TokenResponse, TwitchTokenClient, FOLLOWERS_UNKNOWN,
+    FairnessCandidate, FallbackStreamSource, FollowerEnricher, FollowersEnrichmentObservation,
+    OnlineCandidate, PendingRaidStore, RaidApi, RaidAuthStore, RaidBlacklistStore, RaidExecutor,
+    RaidHistoryStore, RaidTokenRefresher, RefreshError, ScoreStore, StreamData, StrikesStore,
+    TokenBlacklistStore, TokenOwnerInfo, TokenProvider, TokenResponse, TwitchTokenClient,
+    FOLLOWERS_UNKNOWN,
 };
 
 const TEST_KEY_HEX: &str = "0f0e0d0c0b0a09080706050403020100ffeeddccbbaa99887766554433221100";
@@ -236,6 +242,48 @@ impl FollowerEnricher for StubFollowerEnricher {
     }
 }
 
+struct ObservedFollowerEnricher {
+    followers_by_id: HashMap<String, i32>,
+    observation: FollowersEnrichmentObservation,
+}
+#[async_trait::async_trait]
+impl FollowerEnricher for ObservedFollowerEnricher {
+    async fn enrich(&self, pool: &mut [FairnessCandidate]) {
+        for candidate in pool.iter_mut() {
+            if let Some(total) = self.followers_by_id.get(candidate.user_id.trim()) {
+                candidate.followers_total = *total;
+            }
+        }
+    }
+
+    async fn enrich_with_observability(
+        &self,
+        pool: &mut [FairnessCandidate],
+    ) -> FollowersEnrichmentObservation {
+        self.enrich(pool).await;
+        self.observation.clone()
+    }
+}
+
+#[derive(Default)]
+struct RecordingObservabilitySink {
+    events: Mutex<Vec<ObservabilityEvent>>,
+}
+impl RecordingObservabilitySink {
+    fn events(&self) -> Vec<ObservabilityEvent> {
+        self.events.lock().unwrap().clone()
+    }
+}
+impl EventSink for RecordingObservabilitySink {
+    fn emit(&self, event: &ObservabilityEvent) {
+        self.events.lock().unwrap().push(event.clone());
+    }
+}
+
+fn fixed_millis(value: u64) -> MillisSource {
+    Arc::new(move || value)
+}
+
 // ── Aufbau ──
 
 struct Harness {
@@ -258,6 +306,20 @@ fn build_with_followers(
     errors_by_target: HashMap<String, String>,
     fallback_streams: Vec<FairnessCandidate>,
     followers_by_id: HashMap<String, i32>,
+) -> Harness {
+    build_with_enricher(
+        pool,
+        errors_by_target,
+        fallback_streams,
+        Some(Arc::new(StubFollowerEnricher { followers_by_id })),
+    )
+}
+
+fn build_with_enricher(
+    pool: &PgPool,
+    errors_by_target: HashMap<String, String>,
+    fallback_streams: Vec<FairnessCandidate>,
+    follower_enricher: Option<Arc<dyn FollowerEnricher>>,
 ) -> Harness {
     let cipher = Arc::new(FieldCipher::from_hex_key(TEST_KEY_HEX, KID).unwrap());
     let token_blacklist = Arc::new(TokenBlacklistStore::new(pool.clone()));
@@ -292,7 +354,7 @@ fn build_with_followers(
         Some(Arc::new(StubFallback {
             streams: fallback_streams,
         })),
-        Some(Arc::new(StubFollowerEnricher { followers_by_id })),
+        follower_enricher,
         Some(tb_raid::OutreachBoostStore::new(pool.clone())),
     );
     Harness {
@@ -363,6 +425,146 @@ async fn partner_pfad_startet_raid_und_registriert_pending() {
     assert_eq!(pending.channel_raid_ready, Some(true));
 }
 
+#[tokio::test]
+async fn observability_partner_flow_emittiert_attempt_started_und_counter() {
+    let pool = pool_or_skip!("t6w_pipe_obs_started");
+    seed_source_token(&pool, "100").await;
+    seed_score(&pool, "200", 0.9, 1).await;
+    let h = build(&pool, HashMap::new(), vec![]);
+    let obs_sink = Arc::new(RecordingObservabilitySink::default());
+    let raid_observability = Arc::new(RaidObservabilityService::with_millis_source(
+        Some(obs_sink.clone()),
+        fixed_millis(1234),
+    ));
+    let pipeline = h
+        .pipeline
+        .with_observability(Some(raid_observability.clone()), None);
+
+    let outcome = pipeline.run(&request(vec![partner("200", "ziel")])).await;
+    assert!(matches!(outcome, AutoRaidPipelineOutcome::Started { .. }));
+
+    let events = obs_sink.events();
+    assert_eq!(events.len(), 2);
+    assert_eq!(events[0].step, "attempt_selected");
+    assert_eq!(events[0].decision, "candidate_selected");
+    assert_eq!(events[1].step, "raid_started");
+    assert_eq!(events[1].decision, "success");
+    assert!(events.iter().all(|event| event.flow_id == "raid-1234-1"));
+    assert_eq!(
+        raid_observability.counters().get("raid_flow_started_total"),
+        Some(&1)
+    );
+    assert_eq!(events[0].details.get("candidates_count"), Some(&json!(1)));
+    assert_eq!(
+        events[0].details.get("reason"),
+        Some(&json!("auto_raid_on_offline"))
+    );
+    assert!(
+        events[0]
+            .details
+            .get("selection_ms")
+            .and_then(|v| v.as_i64())
+            .unwrap()
+            > 0
+    );
+    assert!(
+        events[1]
+            .details
+            .get("api_call_ms")
+            .and_then(|v| v.as_i64())
+            .unwrap()
+            > 0
+    );
+    assert!(
+        events[1]
+            .details
+            .get("total_ms")
+            .and_then(|v| v.as_i64())
+            .unwrap()
+            > 0
+    );
+}
+
+#[tokio::test]
+async fn observability_retryable_flow_bleibt_auf_einer_flow_id() {
+    let pool = pool_or_skip!("t6w_pipe_obs_retry");
+    seed_source_token(&pool, "100").await;
+    seed_score(&pool, "200", 0.9, 1).await;
+    let errors: HashMap<String, String> = [(
+        "200".to_string(),
+        "HTTP 400: target does not allow raids".to_string(),
+    )]
+    .into();
+    let h = build(&pool, errors, vec![fairness("300", "de_streamer")]);
+    let obs_sink = Arc::new(RecordingObservabilitySink::default());
+    let raid_observability = Arc::new(RaidObservabilityService::with_millis_source(
+        Some(obs_sink.clone()),
+        fixed_millis(2233),
+    ));
+    let pipeline = h
+        .pipeline
+        .with_observability(Some(raid_observability.clone()), None);
+
+    let outcome = pipeline
+        .run(&request(vec![partner("200", "partner_zu")]))
+        .await;
+    assert!(matches!(outcome, AutoRaidPipelineOutcome::Started { .. }));
+
+    let events = obs_sink.events();
+    let steps: Vec<&str> = events.iter().map(|event| event.step.as_str()).collect();
+    assert_eq!(
+        steps,
+        vec![
+            "attempt_selected",
+            "raid_failed_retryable",
+            "attempt_selected",
+            "raid_started"
+        ]
+    );
+    assert!(events.iter().all(|event| event.flow_id == "raid-2233-1"));
+    assert_eq!(events[1].decision, "skip_blacklist");
+    assert_eq!(events[1].details.get("attempt"), Some(&json!(1)));
+    assert_eq!(events[3].details.get("attempt"), Some(&json!(2)));
+    assert_eq!(
+        raid_observability.counters().get("raid_flow_started_total"),
+        Some(&2)
+    );
+}
+
+#[tokio::test]
+async fn observability_non_retryable_emittiert_raid_failed() {
+    let pool = pool_or_skip!("t6w_pipe_obs_failed");
+    seed_source_token(&pool, "100").await;
+    seed_score(&pool, "200", 0.9, 1).await;
+    let errors: HashMap<String, String> = [(
+        "200".to_string(),
+        "Raid API failed: HTTP 500: kaputt".to_string(),
+    )]
+    .into();
+    let h = build(&pool, errors, vec![fairness("300", "unbenutzt")]);
+    let obs_sink = Arc::new(RecordingObservabilitySink::default());
+    let raid_observability = Arc::new(RaidObservabilityService::with_millis_source(
+        Some(obs_sink.clone()),
+        fixed_millis(3344),
+    ));
+    let pipeline = h
+        .pipeline
+        .with_observability(Some(raid_observability), None);
+
+    let outcome = pipeline.run(&request(vec![partner("200", "ziel")])).await;
+    assert!(matches!(outcome, AutoRaidPipelineOutcome::Failed { .. }));
+
+    let events = obs_sink.events();
+    let last = events.last().unwrap();
+    assert_eq!(last.flow_id, "raid-3344-1");
+    assert_eq!(last.step, "raid_failed");
+    assert_eq!(last.decision, "non_retryable");
+    assert_eq!(
+        last.details.get("error"),
+        Some(&json!("Raid API failed: HTTP 500: kaputt"))
+    );
+}
+
 /// P2.30: Geht eine `channel.chat.notification` ein BEVOR das Pending
 /// registriert ist, muss beim Registrieren das Orphan-Signal gezogen und
 /// nachgespielt werden (pending-korrelierte Bestätigung sofort, nicht erst
@@ -427,7 +629,12 @@ async fn register_pending_spielt_orphan_chat_notification_nach() {
     // … und genau einmal nachgespielt.
     assert_eq!(replay.replayed.lock().unwrap().clone(), vec![orphan]);
     // Pending ist registriert (Store-Schritt lief vor dem Replay).
-    assert!(h.pending.lock().unwrap().get("200", Some("quelle")).is_some());
+    assert!(h
+        .pending
+        .lock()
+        .unwrap()
+        .get("200", Some("quelle"))
+        .is_some());
 }
 
 /// P2.30: Ohne passenden Orphan wird nichts nachgespielt (Replay-Liste leer).
@@ -461,7 +668,11 @@ async fn register_pending_ohne_orphan_kein_replay() {
 
     let outcome = pipeline.run(&request(vec![partner("200", "ziel")])).await;
     assert!(matches!(outcome, AutoRaidPipelineOutcome::Started { .. }));
-    assert_eq!(*replay.replayed.lock().unwrap(), 0, "kein Replay ohne Orphan");
+    assert_eq!(
+        *replay.replayed.lock().unwrap(),
+        0,
+        "kein Replay ohne Orphan"
+    );
 }
 
 #[tokio::test]
@@ -626,6 +837,97 @@ async fn fallback_follower_anreicherung_entscheidet_tie_break() {
         "follower-ärmerer Kandidat gewinnt den Tie-Break (Python-Parität)"
     );
     assert_eq!(h.api.calls.lock().unwrap().clone(), vec!["400"]);
+}
+
+#[tokio::test]
+async fn followers_observability_mappt_ok_http_error_und_request_error() {
+    let pool = pool_or_skip!("t6w_pipe_obs_followers");
+    seed_source_token(&pool, "100").await;
+    let obs_sink = Arc::new(RecordingObservabilitySink::default());
+    let analytics = Arc::new(AnalyticsObservabilityService::with_millis_source(
+        Some(obs_sink.clone()),
+        fixed_millis(9000),
+    ));
+
+    let cases = vec![
+        (
+            "300",
+            "followers_ok",
+            FollowersEnrichmentObservation::ok(1, 1),
+            "ok",
+            None,
+        ),
+        (
+            "400",
+            "followers_http",
+            FollowersEnrichmentObservation::http_error(403, "missing_scope"),
+            "http_error",
+            Some(403),
+        ),
+        (
+            "500",
+            "followers_request",
+            FollowersEnrichmentObservation::request_error("helix_timeout"),
+            "request_error",
+            None,
+        ),
+    ];
+
+    for (user_id, login, observation, expected_result, _expected_status) in &cases {
+        let mut candidate = fairness(user_id, login);
+        candidate.followers_total = FOLLOWERS_UNKNOWN;
+        let enricher = ObservedFollowerEnricher {
+            followers_by_id: [(user_id.to_string(), 100)].into(),
+            observation: observation.clone(),
+        };
+        let h = build_with_enricher(
+            &pool,
+            HashMap::new(),
+            vec![candidate],
+            Some(Arc::new(enricher)),
+        );
+        let pipeline = h.pipeline.with_observability(None, Some(analytics.clone()));
+
+        let outcome = pipeline.run(&request(vec![])).await;
+        assert!(
+            matches!(outcome, AutoRaidPipelineOutcome::Started { .. }),
+            "Followers-Fall {expected_result} sollte den Raid nicht blockieren"
+        );
+    }
+
+    let events = obs_sink.events();
+    let analytics_events: Vec<&ObservabilityEvent> = events
+        .iter()
+        .filter(|event| event.flow_type == "analytics")
+        .collect();
+    assert_eq!(analytics_events.len(), 3);
+    for (idx, event) in analytics_events.iter().enumerate() {
+        assert_eq!(event.step, "terminal_decision");
+        assert_eq!(event.decision, "terminal_decision");
+        assert_eq!(event.details.get("flow"), Some(&json!("followers")));
+        assert_eq!(event.details.get("login"), Some(&json!("quelle")));
+        assert_eq!(
+            event.details.get("request_result"),
+            Some(&json!(cases[idx].3))
+        );
+        assert_eq!(event.details.get("request_attempted"), Some(&json!(true)));
+        match cases[idx].4 {
+            Some(status) => {
+                assert_eq!(event.details.get("http_status"), Some(&json!(status)));
+            }
+            None => {
+                assert_eq!(event.details.get("http_status"), Some(&json!(null)));
+            }
+        }
+    }
+    assert_eq!(
+        analytics_events[1].details.get("error_code"),
+        Some(&json!("missing_scope"))
+    );
+    assert_eq!(
+        analytics_events[2].details.get("error_code"),
+        Some(&json!("helix_timeout"))
+    );
 }
 
 #[tokio::test]

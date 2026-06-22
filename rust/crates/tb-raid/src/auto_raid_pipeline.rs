@@ -18,12 +18,17 @@
 //! - Kandidaten ohne Identität werden vorgefiltert statt die Pipeline
 //!   abzubrechen (siehe `target_resolution`).
 
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::sync::{Arc, Mutex};
+use std::time::Instant;
 
 use chrono::Utc;
+use serde_json::{json, Value};
+use tb_observability::{
+    AnalyticsDecision, AnalyticsObservabilityService, RaidObservabilityService,
+};
 
-use crate::candidate_selection::{is_retryable_raid_error, FairnessCandidate};
+use crate::candidate_selection::{is_retryable_raid_error, FairnessCandidate, FOLLOWERS_UNKNOWN};
 use crate::outreach_boost::{OutreachBoostStore, OUTREACH_BOOST_LOOKBACK_HOURS};
 use crate::partner_roster::OnlineCandidate;
 use crate::pending_raids::{PendingRaid, PendingRaidStore};
@@ -79,6 +84,172 @@ pub trait FollowerEnricher: Send + Sync {
     /// Setzt `followers_total` jedes Kandidaten auf die echte Helix-Zahl,
     /// sofern abrufbar. Nicht-ermittelbare Kandidaten bleiben unverändert.
     async fn enrich(&self, pool: &mut [FairnessCandidate]);
+
+    /// Wie [`FollowerEnricher::enrich`], aber mit strukturierter Diagnose für
+    /// Analytics-Observability. Bestehende Implementierungen behalten ueber den
+    /// Default ihr bisheriges Verhalten.
+    ///
+    /// WIRING-TODO(P3.10): bin/tb-bot Follower-Enricher-Impl soll diese Methode
+    /// mit echten Helix-Result-Feldern (`http_status`, `error_code`) ueberschreiben.
+    async fn enrich_with_observability(
+        &self,
+        pool: &mut [FairnessCandidate],
+    ) -> FollowersEnrichmentObservation {
+        self.enrich(pool).await;
+        FollowersEnrichmentObservation::ok(
+            pool.len(),
+            pool.iter()
+                .filter(|candidate| candidate.followers_total != FOLLOWERS_UNKNOWN)
+                .count(),
+        )
+    }
+}
+
+fn elapsed_ms(start: Instant) -> i64 {
+    let micros = start.elapsed().as_micros();
+    ((micros.saturating_add(999) / 1000).max(1)) as i64
+}
+
+fn no_target_details(
+    attempt: usize,
+    selection_ms: i64,
+    total_ms: i64,
+    reason: &str,
+) -> BTreeMap<String, Value> {
+    let mut details = common_attempt_details(attempt, selection_ms, 0, reason);
+    details.insert("total_ms".to_string(), json!(total_ms));
+    details
+}
+
+fn invalid_target_details(
+    attempt: usize,
+    selection_ms: i64,
+    candidates_count: i32,
+    total_ms: i64,
+    reason: &str,
+) -> BTreeMap<String, Value> {
+    let mut details = common_attempt_details(attempt, selection_ms, candidates_count, reason);
+    details.insert("total_ms".to_string(), json!(total_ms));
+    details
+}
+
+fn attempt_selected_details(
+    attempt: usize,
+    selection_ms: i64,
+    candidates_count: i32,
+    reason: &str,
+    is_partner_raid: bool,
+) -> BTreeMap<String, Value> {
+    let mut details = common_attempt_details(attempt, selection_ms, candidates_count, reason);
+    details.insert("is_partner_raid".to_string(), json!(is_partner_raid));
+    details
+}
+
+fn raid_started_details(
+    attempt: usize,
+    selection_ms: i64,
+    api_call_ms: i64,
+    total_ms: i64,
+    candidates_count: i32,
+    reason: &str,
+) -> BTreeMap<String, Value> {
+    let mut details = common_attempt_details(attempt, selection_ms, candidates_count, reason);
+    details.insert("api_call_ms".to_string(), json!(api_call_ms));
+    details.insert("total_ms".to_string(), json!(total_ms));
+    details
+}
+
+fn raid_failed_details(
+    attempt: usize,
+    selection_ms: i64,
+    api_call_ms: i64,
+    total_ms: i64,
+    candidates_count: i32,
+    reason: &str,
+    error: String,
+) -> BTreeMap<String, Value> {
+    let mut details = common_attempt_details(attempt, selection_ms, candidates_count, reason);
+    details.insert("api_call_ms".to_string(), json!(api_call_ms));
+    details.insert("total_ms".to_string(), json!(total_ms));
+    details.insert("error".to_string(), json!(error));
+    details
+}
+
+fn common_attempt_details(
+    attempt: usize,
+    selection_ms: i64,
+    candidates_count: i32,
+    reason: &str,
+) -> BTreeMap<String, Value> {
+    let mut details = BTreeMap::new();
+    details.insert("attempt".to_string(), json!(attempt));
+    details.insert("max_attempts".to_string(), json!(MAX_ATTEMPTS));
+    details.insert("selection_ms".to_string(), json!(selection_ms));
+    details.insert("candidates_count".to_string(), json!(candidates_count));
+    details.insert("reason".to_string(), json!(reason));
+    details
+}
+
+/// Strukturierte Diagnose des Follower-Enrichments fuer
+/// `AnalyticsObservabilityService::log_decision`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FollowersEnrichmentObservation {
+    pub decision: String,
+    pub reason: String,
+    pub request_attempted: Option<bool>,
+    pub request_result: String,
+    pub http_status: Option<i64>,
+    pub scope_state: BTreeMap<String, Value>,
+    pub runtime_state: BTreeMap<String, Value>,
+    pub extra: BTreeMap<String, Value>,
+}
+
+impl FollowersEnrichmentObservation {
+    pub fn ok(candidate_count: usize, enriched_count: usize) -> Self {
+        let mut extra = BTreeMap::new();
+        extra.insert("candidate_count".to_string(), json!(candidate_count));
+        extra.insert("enriched_count".to_string(), json!(enriched_count));
+        Self {
+            decision: "terminal_decision".to_string(),
+            reason: "followers_enriched".to_string(),
+            request_attempted: Some(true),
+            request_result: "ok".to_string(),
+            http_status: None,
+            scope_state: BTreeMap::new(),
+            runtime_state: BTreeMap::new(),
+            extra,
+        }
+    }
+
+    pub fn http_error(http_status: i64, error_code: impl Into<String>) -> Self {
+        let mut extra = BTreeMap::new();
+        extra.insert("error_code".to_string(), json!(error_code.into()));
+        Self {
+            decision: "terminal_decision".to_string(),
+            reason: "followers_http_error".to_string(),
+            request_attempted: Some(true),
+            request_result: "http_error".to_string(),
+            http_status: Some(http_status),
+            scope_state: BTreeMap::new(),
+            runtime_state: BTreeMap::new(),
+            extra,
+        }
+    }
+
+    pub fn request_error(error_code: impl Into<String>) -> Self {
+        let mut extra = BTreeMap::new();
+        extra.insert("error_code".to_string(), json!(error_code.into()));
+        Self {
+            decision: "terminal_decision".to_string(),
+            reason: "followers_request_error".to_string(),
+            request_attempted: Some(true),
+            request_result: "request_error".to_string(),
+            http_status: None,
+            scope_state: BTreeMap::new(),
+            runtime_state: BTreeMap::new(),
+            extra,
+        }
+    }
 }
 
 /// Daten einer früher eingegangenen, verwaisten `channel.chat.notification`,
@@ -178,6 +349,10 @@ pub struct AutoRaidPipeline {
     /// Arrival promotet). Wird per [`AutoRaidPipeline::with_orphan_replay`]
     /// gesetzt; die konkrete Impl verdrahtet das Composition-Root (WIRING-TODO).
     orphan_replay: Option<Arc<dyn OrphanReplay>>,
+    /// Strukturierte Raid-Flow-Events. `None` behaelt das bisherige Verhalten.
+    observability_raid: Option<Arc<RaidObservabilityService>>,
+    /// Analytics-Decision-Events fuer Followers-Enrichment. `None` = kein Log.
+    observability_analytics: Option<Arc<AnalyticsObservabilityService>>,
 }
 
 impl AutoRaidPipeline {
@@ -206,6 +381,8 @@ impl AutoRaidPipeline {
             follower_enricher,
             outreach,
             orphan_replay: None,
+            observability_raid: None,
+            observability_analytics: None,
         }
     }
 
@@ -217,7 +394,23 @@ impl AutoRaidPipeline {
         self
     }
 
+    /// Verdrahtet optionale Observability-Services.
+    ///
+    /// WIRING-TODO(P2.42-P3.14): bin/tb-bot/src/main.rs soll die fertigen
+    /// `RaidObservabilityService`/`AnalyticsObservabilityService` hier injizieren.
+    #[must_use]
+    pub fn with_observability(
+        mut self,
+        raid: Option<Arc<RaidObservabilityService>>,
+        analytics: Option<Arc<AnalyticsObservabilityService>>,
+    ) -> Self {
+        self.observability_raid = raid;
+        self.observability_analytics = analytics;
+        self
+    }
+
     pub async fn run(&self, req: &AutoRaidRequest) -> AutoRaidPipelineOutcome {
+        let flow_start = Instant::now();
         let (blacklist_ids, blacklist_logins) = match self.blacklist.load_all().await {
             Ok(sets) => sets,
             Err(error) => {
@@ -264,8 +457,13 @@ impl AutoRaidPipeline {
         // Fallback-Streams werden lazy geholt und über Versuche gecacht
         // (Python `cached_de_streams`).
         let mut cached_fallback: Option<Vec<FairnessCandidate>> = None;
+        let observability_flow_id = self
+            .observability_raid
+            .as_ref()
+            .map(|service| service.next_flow_id("raid"));
 
         for attempt in 1..=MAX_ATTEMPTS {
+            let attempt_start = Instant::now();
             let target = match self
                 .resolve_target(
                     req,
@@ -281,6 +479,21 @@ impl AutoRaidPipeline {
             {
                 Some(target) => target,
                 None => {
+                    if let Some(flow_id) = observability_flow_id.as_deref() {
+                        self.emit_raid_observability_event(
+                            flow_id,
+                            "no_target",
+                            "no_target",
+                            req,
+                            None,
+                            no_target_details(
+                                attempt,
+                                elapsed_ms(attempt_start),
+                                elapsed_ms(flow_start),
+                                req.reason.as_str(),
+                            ),
+                        );
+                    }
                     tracing::info!(
                         from = %req.broadcaster_login,
                         attempt,
@@ -291,7 +504,44 @@ impl AutoRaidPipeline {
                 }
             };
 
-            let flow_id = format!("raid-{}", (unix_now() * 1000.0) as i64);
+            let selection_ms = elapsed_ms(attempt_start);
+            let flow_id = observability_flow_id
+                .clone()
+                .unwrap_or_else(|| format!("raid-{}", (unix_now() * 1000.0) as i64));
+            if target.user_id.trim().is_empty() || target.user_login.trim().is_empty() {
+                self.emit_raid_observability_event(
+                    &flow_id,
+                    "invalid_target",
+                    "invalid_target_identity",
+                    req,
+                    Some(&target),
+                    invalid_target_details(
+                        attempt,
+                        selection_ms,
+                        target.candidates_count,
+                        elapsed_ms(flow_start),
+                        req.reason.as_str(),
+                    ),
+                );
+                return AutoRaidPipelineOutcome::NoTarget;
+            }
+            if let Some(service) = &self.observability_raid {
+                service.increment_counter("raid_flow_started_total", 1);
+            }
+            self.emit_raid_observability_event(
+                &flow_id,
+                "attempt_selected",
+                "candidate_selected",
+                req,
+                Some(&target),
+                attempt_selected_details(
+                    attempt,
+                    selection_ms,
+                    target.candidates_count,
+                    req.reason.as_str(),
+                    target.is_partner_raid,
+                ),
+            );
             tracing::info!(
                 from = %req.broadcaster_login,
                 to = %target.user_login,
@@ -319,9 +569,29 @@ impl AutoRaidPipeline {
                 reason: req.reason.clone(),
             };
 
-            let outcome = match self.executor.execute(&raid_request, Utc::now()).await {
+            let api_start = Instant::now();
+            let execution = self.executor.execute(&raid_request, Utc::now()).await;
+            let api_call_ms = elapsed_ms(api_start);
+            let total_ms = elapsed_ms(flow_start);
+            let outcome = match execution {
                 Ok(outcome) => outcome,
                 Err(error) => {
+                    self.emit_raid_observability_event(
+                        &flow_id,
+                        "raid_failed",
+                        "db_error",
+                        req,
+                        Some(&target),
+                        raid_failed_details(
+                            attempt,
+                            selection_ms,
+                            api_call_ms,
+                            total_ms,
+                            target.candidates_count,
+                            req.reason.as_str(),
+                            error.to_string(),
+                        ),
+                    );
                     tracing::error!(%error, to = %target.user_login, "Raid-Ausführung: DB-Fehler");
                     return AutoRaidPipelineOutcome::Failed {
                         error: format!("db_error: {error}"),
@@ -336,6 +606,21 @@ impl AutoRaidPipeline {
                     if target.is_outreach_boost {
                         self.consume_outreach_boost(&target.user_login).await;
                     }
+                    self.emit_raid_observability_event(
+                        &flow_id,
+                        "raid_started",
+                        "success",
+                        req,
+                        Some(&target),
+                        raid_started_details(
+                            attempt,
+                            selection_ms,
+                            api_call_ms,
+                            total_ms,
+                            target.candidates_count,
+                            req.reason.as_str(),
+                        ),
+                    );
                     tracing::info!(
                         from = %req.broadcaster_login,
                         to = %target.user_login,
@@ -351,6 +636,22 @@ impl AutoRaidPipeline {
                 RaidOutcome::Failed(error) => {
                     exclude_ids.insert(target.user_id.clone());
                     if !is_retryable_raid_error(&error) {
+                        self.emit_raid_observability_event(
+                            &flow_id,
+                            "raid_failed",
+                            "non_retryable",
+                            req,
+                            Some(&target),
+                            raid_failed_details(
+                                attempt,
+                                selection_ms,
+                                api_call_ms,
+                                total_ms,
+                                target.candidates_count,
+                                req.reason.as_str(),
+                                error.clone(),
+                            ),
+                        );
                         tracing::error!(
                             from = %req.broadcaster_login,
                             to = %target.user_login,
@@ -360,7 +661,23 @@ impl AutoRaidPipeline {
                         );
                         return AutoRaidPipelineOutcome::Failed { error };
                     }
-                    self.handle_rejected_target(&target, &error).await;
+                    let blacklist_decision = self.handle_rejected_target(&target, &error).await;
+                    self.emit_raid_observability_event(
+                        &flow_id,
+                        "raid_failed_retryable",
+                        blacklist_decision,
+                        req,
+                        Some(&target),
+                        raid_failed_details(
+                            attempt,
+                            selection_ms,
+                            api_call_ms,
+                            total_ms,
+                            target.candidates_count,
+                            req.reason.as_str(),
+                            error,
+                        ),
+                    );
                 }
             }
         }
@@ -465,7 +782,12 @@ impl AutoRaidPipeline {
         // vor der Sortierung in `select_fairest_candidate`.
         let mut pool = filter_fallback_pool(streams, blacklist_ids, blacklist_logins, exclude_ids);
         if let Some(enricher) = &self.follower_enricher {
-            enricher.enrich(&mut pool).await;
+            if self.observability_analytics.is_some() {
+                let observation = enricher.enrich_with_observability(&mut pool).await;
+                self.emit_followers_observability_decision(req, observation);
+            } else {
+                enricher.enrich(&mut pool).await;
+            }
         }
         select_fallback_from_pool(&pool, &recent_targets, &received_raids_by_id)
     }
@@ -502,16 +824,67 @@ impl AutoRaidPipeline {
         *cached_fallback = Some(streams);
     }
 
+    #[allow(clippy::too_many_arguments)]
+    fn emit_raid_observability_event(
+        &self,
+        flow_id: &str,
+        step: &str,
+        decision: &str,
+        req: &AutoRaidRequest,
+        target: Option<&ResolvedTarget>,
+        details: BTreeMap<String, Value>,
+    ) {
+        let Some(service) = &self.observability_raid else {
+            return;
+        };
+        service.emit_event(
+            "raid",
+            flow_id,
+            step,
+            decision,
+            Some(&req.broadcaster_login),
+            Some(&req.broadcaster_id),
+            target.map(|target| target.user_login.as_str()),
+            target.map(|target| target.user_id.as_str()),
+            details,
+        );
+    }
+
+    fn emit_followers_observability_decision(
+        &self,
+        req: &AutoRaidRequest,
+        observation: FollowersEnrichmentObservation,
+    ) {
+        let Some(service) = &self.observability_analytics else {
+            return;
+        };
+        let flow_id = service.next_flow_id("followers");
+        service.log_decision(AnalyticsDecision {
+            flow_id,
+            flow: "followers".to_string(),
+            login: req.broadcaster_login.clone(),
+            session_id: None,
+            decision: observation.decision,
+            reason: observation.reason,
+            request_attempted: observation.request_attempted,
+            request_result: observation.request_result,
+            http_status: observation.http_status,
+            scope_state: observation.scope_state,
+            runtime_state: observation.runtime_state,
+            extra: observation.extra,
+        });
+    }
+
     /// Strike-/Blacklist-Behandlung für ein Ziel, das Raids ablehnt
     /// (Python Z. 413–452): Partner werden nur übersprungen, Nicht-Partner
     /// sammeln Strikes und landen ab Strike 2 auf der Blacklist.
-    async fn handle_rejected_target(&self, target: &ResolvedTarget, error: &str) {
+    async fn handle_rejected_target(&self, target: &ResolvedTarget, error: &str) -> &'static str {
         if target.is_partner_raid {
             tracing::warn!(
                 to = %target.user_login,
                 "Raid abgelehnt: Partner-Ziel erlaubt keine Raids — überspringe ohne Blacklist"
             );
-            return;
+            return "skip_blacklist";
         }
         let strikes = match self
             .strikes
@@ -538,12 +911,14 @@ impl AutoRaidPipeline {
             {
                 tracing::error!(%db_error, to = %target.user_login, "Blacklist-Eintrag fehlgeschlagen");
             }
+            "retry"
         } else {
             tracing::info!(
                 to = %target.user_login,
                 strikes,
                 "Raid abgelehnt: Strike vergeben, noch keine Blacklist — nächster Versuch"
             );
+            "retry_no_blacklist"
         }
     }
 
