@@ -12,6 +12,7 @@ import { useStreamerList, useAuthStatus } from '@/hooks/useAnalytics';
 import {
   PREVIEW_CHANGELOG_ROUTE,
   PREVIEW_HOME_ROUTE,
+  PREVIEW_OVERLAY_ROUTE,
   PREVIEW_PRICING_ROUTE,
   PREVIEW_VERWALTUNG_ROUTE,
   analyticsTabHref,
@@ -27,6 +28,7 @@ import {
   Home,
   Loader2,
   MessageSquare,
+  MonitorPlay,
   RotateCcw,
   Settings,
   ShieldCheck,
@@ -820,6 +822,7 @@ export function InternalHomeLanding() {
   ];
   const toolNavItems: SidebarNavItem[] = [
     { href: PREVIEW_VERWALTUNG_ROUTE, label: 'Verwaltung', icon: Settings },
+    { href: PREVIEW_OVERLAY_ROUTE, label: 'Stream-Overlay', icon: MonitorPlay },
     { href: PREVIEW_PRICING_ROUTE, label: `Plan: ${planName}`, icon: Sparkles },
     { href: PREVIEW_CHANGELOG_ROUTE, label: 'Changelog', icon: FileText },
   ];
