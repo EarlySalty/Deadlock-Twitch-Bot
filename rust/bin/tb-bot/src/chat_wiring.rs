@@ -395,6 +395,11 @@ pub struct ChatRuntime {
     subscriptions: Arc<OnceLock<Arc<SubscriptionManager>>>,
     pool: PgPool,
     bot_user_id: String,
+    /// Geteilter TimeoutGuard (P2.57): die Composition-Root injiziert ihn via
+    /// [`Self::timeout_guard`] in den TelemetryStore, damit inbound erkannte
+    /// Bot-Self-Timeouts (`channel.ban` mit `ends_at`) dieselbe Stumm-Zählung
+    /// füttern wie der ausgehende Send-Pfad.
+    timeout_guard: Arc<TimeoutGuard>,
 }
 
 /// Phase 1: bootet den Bot-Token und baut die ChatApi, wenn `TB_CHAT_ENABLED=1`
@@ -704,6 +709,7 @@ pub async fn build_runtime(
         subscriptions: subscriptions_cell,
         pool,
         bot_user_id,
+        timeout_guard,
     }
 }
 
@@ -715,6 +721,19 @@ fn invite_channel_id_from_env() -> Option<u64> {
 }
 
 impl ChatRuntime {
+    /// Zentraler Bot-User-ID-Wert (P2.57): identisch mit dem `target_id`, den
+    /// die inbound `channel.ban`-Telemetrie gegen den Bot prüft.
+    pub fn bot_user_id(&self) -> String {
+        self.bot_user_id.clone()
+    }
+
+    /// Geteilter [`TimeoutGuard`] (P2.57): füttert sowohl den ausgehenden
+    /// Send-Pfad als auch — nach Injection in den TelemetryStore — die inbound
+    /// erkannten Bot-Self-Timeouts.
+    pub fn timeout_guard(&self) -> Arc<TimeoutGuard> {
+        Arc::clone(&self.timeout_guard)
+    }
+
     /// Startet alle Hintergrund-Loops: Token-Refresh (30 min), Promo-Loop
     /// (60 s), Global-Ban-Sweeper (120 s + 6-Uhr-Vollsweep) und den
     /// Chat-Subscription-Reconcile (Start + alle 30 min — der Python-Join).

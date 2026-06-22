@@ -345,7 +345,9 @@ async fn main() {
     let target_game =
         std::env::var("TWITCH_TARGET_GAME_NAME").unwrap_or_else(|_| "Deadlock".to_string());
     let guard = GuardStore::new(pool.clone());
-    let telemetry = TelemetryStore::new(pool.clone());
+    // P2.57: `mut`, weil der inbound Bot-Timeout-Guard erst nach dem
+    // ChatRuntime-Aufbau injiziert wird (s. `with_bot_timeout_guard` unten).
+    let mut telemetry = TelemetryStore::new(pool.clone());
     let live_state = LiveStateStore::new(pool.clone());
     // Welle B Phase 1: Bot-Token booten + ChatApi bauen (TB_CHAT_ENABLED=1).
     // Früh gezogen (vor Follower-Source + Hooks-Komposition): die Follower-Total-
@@ -454,6 +456,25 @@ async fn main() {
                             "DB_MASTER_KEY_V1 fehlt — Mod-Provisioner aus (403 → perm_failed)"
                         );
                     }
+                }
+                // P2.56: Broadcaster-Token-Fallback für Moderator-Telemetrie-Subs.
+                // Wenn dem Bot-Token der Scope fehlt (403/Scope-Lücke), versucht der
+                // Manager dieselben Subs mit dem Broadcaster-Token (Condition
+                // moderator_user_id = broadcaster_id, wie Python). Quelle ist der
+                // bestehende Raid-Auth-Tokenpfad (cipher-gated); ohne Krypto-Key
+                // bleibt der Fallback aus.
+                if let Some((token_provider, raid_auth)) =
+                    build_telemetry_sub_auth(pool.clone(), helix_client.clone())
+                {
+                    manager_builder = manager_builder.with_broadcaster_eventsub_token_provider(
+                        Arc::new(RaidBroadcasterEventSubTokenProvider {
+                            token_provider,
+                            raid_auth,
+                        }),
+                    );
+                    tracing::info!(
+                        "Broadcaster-EventSub-Token-Provider aktiv (Moderator-Telemetrie-Fallback)"
+                    );
                 }
                 let manager = Arc::new(manager_builder);
                 manager.rehydrate().await;
@@ -924,6 +945,16 @@ async fn main() {
             // danach Ende). Spawnt selbst einen Task und kehrt sofort zurück;
             // NACH start_background, damit der Promo-Pfad parallel läuft.
             runtime.spawn_partner_invite_backfill();
+            // P2.57: den geteilten TimeoutGuard + Bot-User-ID des Chat-Runtimes
+            // in den TelemetryStore injizieren, BEVOR `telemetry` an
+            // MonitoringEventHandler (Z.~941, .clone()) und EventSubDispatcher
+            // (Z.~954, move) verteilt wird. Beide Konsumenten sehen so die
+            // with-Guard-Variante; inbound `channel.ban`-Self-Timeouts füttern
+            // dieselbe Stumm-Zählung wie der ausgehende Send-Pfad.
+            telemetry = telemetry.with_bot_timeout_guard(
+                runtime.bot_user_id(),
+                runtime.timeout_guard(),
+            );
             runtime.hooks.clone()
         }
         None => eventsub_hooks,
@@ -1548,6 +1579,50 @@ fn build_telemetry_sub_auth(
         token_blacklist,
     ));
     Some((token_provider, raid_auth))
+}
+
+/// P2.56: Broadcaster-Token-Fallback für Moderator-Telemetrie-Subs.
+///
+/// Reicht den schon vorhandenen Broadcaster-/Raid-Auth-Tokenpfad an den
+/// `SubscriptionManager` durch — identisch zum B9-Pfad in
+/// [`subscription_maintenance_loop`]: `get_valid_token_unrestricted` löst den
+/// (bei Ablauf refreshten) Broadcaster-Token auf, `RaidAuthStore::get_scopes`
+/// liefert dessen Scopes. `needs_reauth`/Blacklist/Cooldown landen in
+/// `Ok(None)`, Fehler in `Err` — beide → `None` (still überspringen, kein
+/// 401-Spam). Doppel-Sends sind ausgeschlossen: der Manager probiert den
+/// Broadcaster-Token erst nach gescheitertem Bot-Versuch und ist pro
+/// `(sub_type, broadcaster_id)` dedupliziert (`is_tracked`).
+struct RaidBroadcasterEventSubTokenProvider {
+    token_provider: Arc<TokenProvider>,
+    raid_auth: RaidAuthStore,
+}
+
+#[async_trait::async_trait]
+impl tb_monitoring::BroadcasterEventSubTokenProvider for RaidBroadcasterEventSubTokenProvider {
+    async fn eventsub_broadcaster_token(
+        &self,
+        broadcaster_id: &str,
+        login: &str,
+    ) -> Option<tb_monitoring::EventSubUserToken> {
+        match self
+            .token_provider
+            .get_valid_token_unrestricted(broadcaster_id, chrono::Utc::now())
+            .await
+        {
+            Ok(Some(token)) => {
+                let scopes = self.raid_auth.get_scopes(broadcaster_id).await.unwrap_or_default();
+                Some(tb_monitoring::EventSubUserToken::new(token, scopes))
+            }
+            Ok(None) => None,
+            Err(e) => {
+                tracing::debug!(
+                    login,
+                    "P2.56: Broadcaster-Token-Lookup für Moderator-Telemetrie fehlgeschlagen: {e}"
+                );
+                None
+            }
+        }
+    }
 }
 
 /// Baut den `TokenProvider` für den Mod-Provisioner (P1.2): löst den

@@ -73,8 +73,9 @@ pub use sessions::{
 pub use stats::{StatsSample, StatsStore};
 pub use stream::StreamSnapshot;
 pub use subscriptions::{
-    CapacitySnapshotStore, ModeratorProvisioner, RemoteSubscription, RevocationSink,
-    SubscriptionConfig, SubscriptionManager, SubscriptionTransport, EVENTSUB_CORE_SUB_TYPES,
+    BroadcasterEventSubTokenProvider, CapacitySnapshotStore, EventSubUserToken, ModeratorProvisioner,
+    RemoteSubscription, RevocationSink, SubscriptionConfig, SubscriptionManager,
+    SubscriptionTransport, EVENTSUB_CORE_SUB_TYPES,
 };
 pub use telemetry::{HypeTrainPhase, TelemetryStore};
 pub use scout::{build_scout_task, NoopScoutChatSink, ScoutChatSink, ScoutTask};

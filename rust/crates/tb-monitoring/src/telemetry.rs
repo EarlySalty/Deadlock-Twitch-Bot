@@ -54,9 +54,9 @@ impl TelemetryStore {
     /// Verdrahtet die inbound EventSub-Erkennung von Bot-Self-Timeouts
     /// (`channel.ban` mit `ends_at`) an den tb-chat TimeoutGuard.
     ///
-    /// WIRING-TODO(P2.57): In der Composition-Root den zentralen Bot-User-ID-
-    /// Wert und den geteilten `tb_chat::TimeoutGuard` injizieren; ohne diese
-    /// Injection bleibt der Store wie bisher rein insert-only.
+    /// Live verdrahtet in `bin/tb-bot` (main.rs, nach dem ChatRuntime-Aufbau via
+    /// `runtime.bot_user_id()` + `runtime.timeout_guard()`); ohne diese Injection
+    /// bleibt der Store wie bisher rein insert-only.
     pub fn with_bot_timeout_guard(
         mut self,
         bot_user_id: impl Into<String>,

@@ -372,10 +372,10 @@ impl SubscriptionManager {
 
     /// Verdrahtet den Broadcaster-Token-Fallback für Moderator-Telemetrie-Subs.
     ///
-    /// WIRING-TODO(P2.56): In `bin/tb-bot/src/chat_wiring.rs` den bestehenden
-    /// Broadcaster-/Raid-Auth-Tokenpfad als `BroadcasterEventSubTokenProvider`
-    /// an den `SubscriptionManager` durchreichen. Bis dahin bleibt der Fallback
-    /// nur in Tests/bei expliziter Injektion aktiv.
+    /// Live verdrahtet in `bin/tb-bot` (`with_broadcaster_eventsub_token_provider`
+    /// im `manager_builder`, main.rs): reicht den bestehenden Broadcaster-/Raid-
+    /// Auth-Tokenpfad als [`BroadcasterEventSubTokenProvider`] durch. Ohne
+    /// Krypto-Key (DB_MASTER_KEY_V1) bleibt der Fallback aus.
     #[must_use]
     pub fn with_broadcaster_eventsub_token_provider(
         mut self,

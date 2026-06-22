@@ -8,8 +8,9 @@ use std::sync::{Arc, Mutex};
 use chrono::Utc;
 use tb_monitoring::poller::source::SourceError;
 use tb_monitoring::{
-    CapacitySnapshotStore, ModeratorProvisioner, RemoteSubscription, RevocationSink,
-    SubscriptionConfig, SubscriptionManager, SubscriptionTransport,
+    BroadcasterEventSubTokenProvider, CapacitySnapshotStore, EventSubUserToken, ModeratorProvisioner,
+    RemoteSubscription, RevocationSink, SubscriptionConfig, SubscriptionManager,
+    SubscriptionTransport,
 };
 
 mod support;
@@ -119,6 +120,26 @@ impl ModeratorProvisioner for StubProvisioner {
     async fn ensure_bot_is_mod(&self, _broadcaster_id: &str, _login: &str) -> bool {
         self.calls.fetch_add(1, Ordering::SeqCst);
         self.succeed
+    }
+}
+
+/// P2.56-Stub: liefert einen festen Broadcaster-Token mit konfigurierten Scopes
+/// und zählt die Auflösungen (prüft, dass der Fallback nur einmal abgefragt
+/// wird, nicht pro Sub-Typ).
+struct StubBroadcasterTokenProvider {
+    token: String,
+    scopes: Vec<String>,
+    calls: AtomicU64,
+}
+#[async_trait::async_trait]
+impl BroadcasterEventSubTokenProvider for StubBroadcasterTokenProvider {
+    async fn eventsub_broadcaster_token(
+        &self,
+        _broadcaster_id: &str,
+        _login: &str,
+    ) -> Option<EventSubUserToken> {
+        self.calls.fetch_add(1, Ordering::SeqCst);
+        Some(EventSubUserToken::new(self.token.clone(), self.scopes.clone()))
     }
 }
 
@@ -664,6 +685,100 @@ async fn moderator_telemetry_subs_scope_gefiltert_mit_bot_token_und_moderator_id
             .await,
         0
     );
+}
+
+/// P2.56-Wiring: Bot-Token deckt nur Shoutout-Scope, der injizierte
+/// Broadcaster-Provider deckt ban/unban/follow. Verifiziert, dass die
+/// scope-fehlenden Subs über den Broadcaster-Fallback laufen
+/// (`moderator_user_id = broadcaster_id`, Broadcaster-Bearer), die
+/// scope-gedeckten über den Bot-Token (`moderator_user_id = bot`),
+/// und dass es KEINEN Doppel-Send gibt (jeder Sub-Typ genau ein Create).
+#[tokio::test]
+async fn moderator_telemetry_broadcaster_fallback_fuellt_scope_luecke_ohne_doppel_send() {
+    let pool = pool_or_skip!("p256_mod_telemetry_broadcaster_fallback");
+    let transport = Arc::new(StubTransport::default());
+    let broadcaster = Arc::new(StubBroadcasterTokenProvider {
+        token: "BROKTOKEN".to_string(),
+        // Broadcaster-Token deckt ban/unban/follow, NICHT shoutout.
+        scopes: vec![
+            "moderator:manage:banned_users".to_string(),
+            "moderator:read:followers".to_string(),
+        ],
+        calls: AtomicU64::new(0),
+    });
+    let manager = SubscriptionManager::new(
+        transport.clone(),
+        SubscriptionConfig {
+            callback_url: "https://cb/x".to_string(),
+            secret: "geheim".to_string(),
+        },
+        CapacitySnapshotStore::new(pool.clone()),
+    )
+    .with_broadcaster_eventsub_token_provider(broadcaster.clone());
+
+    // Bot-Token deckt NUR Shoutout — ban/unban/follow fehlt der Scope.
+    let bot_scopes = vec!["moderator:manage:shoutouts".to_string()];
+    let ensured = manager
+        .ensure_moderator_telemetry_subscriptions("555", "BOTID", "BOTTOKEN", &bot_scopes, "partner")
+        .await;
+    // Alle 5 Subs sichergestellt: 2 via Bot, 3 via Broadcaster-Fallback.
+    assert_eq!(ensured, 5);
+
+    let creates = transport.creates.lock().unwrap().clone();
+    let mut types: Vec<&str> = creates.iter().map(|(t, _)| t.as_str()).collect();
+    types.sort_unstable();
+    assert_eq!(
+        types,
+        vec![
+            "channel.ban",
+            "channel.follow",
+            "channel.shoutout.create",
+            "channel.shoutout.receive",
+            "channel.unban",
+        ],
+        "jeder Sub-Typ exakt ein Create — kein Doppel-Send"
+    );
+    drop(creates);
+
+    // Broadcaster-Provider EINMAL abgefragt (pro Kanal, nicht pro Sub-Typ).
+    assert_eq!(broadcaster.calls.load(Ordering::SeqCst), 1);
+
+    // Condition + Bearer pro Sub-Typ prüfen: Shoutout via Bot, Rest via
+    // Broadcaster mit moderator_user_id = broadcaster_id.
+    let conditions = transport.conditions.lock().unwrap().clone();
+    let bearers = transport.bearers.lock().unwrap().clone();
+    let bot_cond = serde_json::json!({ "broadcaster_user_id": "555", "moderator_user_id": "BOTID" });
+    let brc_cond = serde_json::json!({ "broadcaster_user_id": "555", "moderator_user_id": "555" });
+    for (sub_type, condition) in &conditions {
+        let bearer = bearers
+            .iter()
+            .find(|(t, _)| t == sub_type)
+            .and_then(|(_, b)| b.as_deref());
+        if sub_type.starts_with("channel.shoutout") {
+            assert_eq!(condition, &bot_cond, "{sub_type} muss Bot-Condition tragen");
+            assert_eq!(bearer, Some("BOTTOKEN"), "{sub_type} muss Bot-Bearer nutzen");
+        } else {
+            assert_eq!(
+                condition, &brc_cond,
+                "{sub_type} muss Broadcaster-Condition tragen"
+            );
+            assert_eq!(
+                bearer,
+                Some("BROKTOKEN"),
+                "{sub_type} muss Broadcaster-Bearer nutzen"
+            );
+        }
+    }
+    drop(conditions);
+    drop(bearers);
+
+    // Zweiter Aufruf: alles getrackt → kein neuer Create, Provider nicht erneut
+    // pro Sub-Typ befragt (is_tracked-Dedup greift im auth-attempts-Pfad).
+    let again = manager
+        .ensure_moderator_telemetry_subscriptions("555", "BOTID", "BOTTOKEN", &bot_scopes, "partner")
+        .await;
+    assert_eq!(again, 5);
+    assert_eq!(transport.creates.lock().unwrap().len(), 5);
 }
 
 // ── B8-07-RECONCILE: Passive-Lurker-Gate vor dem Chat-Subscribe ──────────────
