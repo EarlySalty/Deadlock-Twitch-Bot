@@ -51,44 +51,27 @@ fn now_iso() -> String {
     datetime_to_iso(Utc::now())
 }
 
-// ── Verifikations-Payload (Python `verification_payload`) ──────────────────────
+// ── Partner-Payload (Python `verification_payload`) ────────────────────────────
 
-/// Verifikations-Felder je Modus — Parität zu `verification_payload`
-/// (`partner_registry.py:2188`). `manual_verified_until` ist `Some(iso)` nur im
-/// temp-Modus (30 Tage), sonst `None`.
+/// Partner-Felder je Verify-Modus — nach Entfernung der alten
+/// manuellen Verifikationsspalten bleibt nur der Opt-out-Status.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct VerificationPayload {
-    pub manual_verified_permanent: i32,
-    pub manual_verified_until: Option<String>,
-    pub manual_verified_at: Option<String>,
     pub manual_partner_opt_out: i32,
 }
 
 impl VerificationPayload {
-    /// `permanent`/`temp` → Verifikation setzen, `clear`/`failed` → zurücksetzen,
-    /// sonst `None` (Python wirft hier `unknown_verification_mode`; der Aufrufer
-    /// behandelt unbekannte Modi vorher als 200 "Unbekannter Modus").
+    /// `permanent`/`temp` → Partner aktiv halten, `clear`/`failed` → Opt-out setzen,
+    /// sonst `None`.
     pub fn for_mode(mode: &str) -> Option<Self> {
         match mode.trim().to_lowercase().as_str() {
             "permanent" => Some(Self {
-                manual_verified_permanent: 1,
-                manual_verified_until: None,
-                manual_verified_at: Some(now_iso()),
                 manual_partner_opt_out: 0,
             }),
-            "temp" => {
-                let until = datetime_to_iso(Utc::now() + chrono::Duration::days(30));
-                Some(Self {
-                    manual_verified_permanent: 0,
-                    manual_verified_until: Some(until),
-                    manual_verified_at: Some(now_iso()),
-                    manual_partner_opt_out: 0,
-                })
-            }
+            "temp" => Some(Self {
+                manual_partner_opt_out: 0,
+            }),
             "clear" | "failed" => Some(Self {
-                manual_verified_permanent: 0,
-                manual_verified_until: None,
-                manual_verified_at: None,
                 manual_partner_opt_out: 1,
             }),
             _ => None,
@@ -101,7 +84,7 @@ impl VerificationPayload {
 /// Minimal-Projektion eines aktiven Partner-Datensatzes für den Lifecycle.
 ///
 /// Python lädt via `load_active_partner` die volle Zeile; der Lifecycle nutzt
-/// davon nur Identität + Discord-Felder + Verify-Status. `status='active'` ist
+/// davon nur Identität + Discord-Felder. `status='active'` ist
 /// das Aktiv-Kriterium (Python `PARTNER_STATUS_ACTIVE`).
 #[derive(Debug, Clone, sqlx::FromRow)]
 pub struct ActivePartnerRow {
@@ -111,9 +94,6 @@ pub struct ActivePartnerRow {
     pub discord_user_id: Option<String>,
     pub discord_display_name: Option<String>,
     pub is_on_discord: Option<i32>,
-    pub manual_verified_permanent: Option<i32>,
-    pub manual_verified_until: Option<String>,
-    pub manual_verified_at: Option<String>,
 }
 
 /// Lädt den aktiven Partner zu einem Login (`status='active'`), oder `None`.
@@ -130,8 +110,7 @@ pub async fn load_active_partner(
     sqlx::query_as::<_, ActivePartnerRow>(
         r#"
         SELECT p.id, p.twitch_login, p.twitch_user_id,
-               i.discord_user_id, i.discord_display_name, i.is_on_discord,
-               p.manual_verified_permanent, p.manual_verified_until, p.manual_verified_at
+               i.discord_user_id, i.discord_display_name, i.is_on_discord
           FROM twitch_partners p
           LEFT JOIN twitch_streamer_identities i
             ON i.twitch_user_id = p.twitch_user_id
@@ -206,8 +185,7 @@ pub struct DepartnerOutcome {
 /// 1. Aktiven Partner laden — `None` wenn keiner aktiv ist.
 /// 2. Identity-Upsert (Discord-Daten erhalten).
 /// 3. `twitch_partners`: `status='departnered'`, `departnered_at=now`,
-///    `admin_archived_at=NULL`. `clear_verification=true` setzt die
-///    Verify-Felder zurück; sonst bleiben sie erhalten.
+///    `admin_archived_at=NULL`.
 /// 4. Raid-Auth deaktivieren (`raid_enabled=FALSE`).
 /// 5. Engagement-Settings deaktivieren (best-effort; Tabelle existiert in Prod).
 ///
@@ -218,7 +196,7 @@ pub struct DepartnerOutcome {
 pub async fn departner_active_partner(
     pool: &PgPool,
     login: &str,
-    clear_verification: bool,
+    _clear_verification: bool,
 ) -> Result<Option<DepartnerOutcome>, sqlx::Error> {
     let Some(row) = load_active_partner(pool, login).await? else {
         return Ok(None);
@@ -256,36 +234,19 @@ pub async fn departner_active_partner(
     )
     .await?;
 
-    // Verify-Felder: bei clear_verification zurücksetzen, sonst erhalten.
-    let (mvp, mvu, mva) = if clear_verification {
-        (0, None, None)
-    } else {
-        (
-            row.manual_verified_permanent.unwrap_or(0),
-            row.manual_verified_until.clone(),
-            row.manual_verified_at.clone(),
-        )
-    };
-
     sqlx::query(
         r#"
         UPDATE twitch_partners
         SET status = $1,
             departnered_at = $2,
             admin_archived_at = NULL,
-            manual_verified_permanent = $3,
-            manual_verified_until = $4,
-            manual_verified_at = $5,
-            twitch_login = $6,
-            twitch_user_id = $7
-        WHERE id = $8
+            twitch_login = $3,
+            twitch_user_id = $4
+        WHERE id = $5
         "#,
     )
     .bind(STATUS_DEPARTNERED)
     .bind(&departnered_at)
-    .bind(mvp)
-    .bind(mvu)
-    .bind(mva)
     .bind(&normalized_login)
     .bind(normalized_user_id.as_deref())
     .bind(row.id)
@@ -425,11 +386,11 @@ fn clean_opt(v: Option<String>) -> Option<String> {
 // ── Promote (Python `promote_streamer_to_partner`, Verify-Teilpfad) ────────────
 
 /// Promotet einen Streamer zum aktiven Partner und setzt die Verifikation —
-/// der Verify-Teilpfad von `promote_streamer_to_partner` (`…:782`).
+/// der frühere Verify-Teilpfad von `promote_streamer_to_partner` (`…:782`).
 ///
 /// Block-10-Scope ist GENAU der Verify-Aufruf aus
 /// `_dashboard_verify_storage_step` (`streamer_admin_mixin.py:330`): Identität +
-/// Discord-Daten + Verifikations-Payload. Existiert bereits ein (auch
+/// Discord-Daten + Partner-Payload. Existiert bereits ein (auch
 /// inaktiver) Partner-Datensatz, wird er reaktiviert; sonst wird neu eingefügt.
 /// Die zahlreichen optionalen Spalten (`silent_*`, `live_ping_*`,
 /// `last_link_*`) bleiben auf ihren bestehenden Werten bzw. Defaults — der
@@ -470,15 +431,12 @@ pub async fn promote_streamer_to_partner(
         UPDATE twitch_partners
         SET twitch_login = $1,
             twitch_user_id = $2,
-            manual_verified_permanent = $3,
-            manual_verified_until = $4,
-            manual_verified_at = $5,
-            manual_partner_opt_out = $6,
-            partnered_at = COALESCE(NULLIF(partnered_at, ''), $7),
+            manual_partner_opt_out = $3,
+            partnered_at = COALESCE(NULLIF(partnered_at, ''), $4),
             admin_archived_at = NULL,
             departnered_at = NULL,
             technical_pause_reason = NULL,
-            status = $8
+            status = $5
         WHERE id = (
             SELECT id FROM twitch_partners
              WHERE LOWER(twitch_login) = LOWER($1) OR twitch_user_id = $2
@@ -489,9 +447,6 @@ pub async fn promote_streamer_to_partner(
     )
     .bind(&normalized_login)
     .bind(normalized_user_id)
-    .bind(verification.manual_verified_permanent)
-    .bind(verification.manual_verified_until.as_deref())
-    .bind(verification.manual_verified_at.as_deref())
     .bind(verification.manual_partner_opt_out)
     .bind(&partnered_at)
     .bind(STATUS_ACTIVE)
@@ -510,19 +465,15 @@ pub async fn promote_streamer_to_partner(
         r#"
         INSERT INTO twitch_partners (
             id, twitch_user_id, twitch_login,
-            manual_verified_permanent, manual_verified_until, manual_verified_at,
             manual_partner_opt_out, partnered_at, status
         ) VALUES (
             COALESCE((SELECT MAX(id) FROM twitch_partners), 0) + 1,
-            $1, $2, $3, $4, $5, $6, $7, $8
+            $1, $2, $3, $4, $5
         )
         "#,
     )
     .bind(normalized_user_id)
     .bind(&normalized_login)
-    .bind(verification.manual_verified_permanent)
-    .bind(verification.manual_verified_until.as_deref())
-    .bind(verification.manual_verified_at.as_deref())
     .bind(verification.manual_partner_opt_out)
     .bind(&partnered_at)
     .bind(STATUS_ACTIVE)
@@ -564,11 +515,9 @@ struct HistoryPartnerRow {
 ///    inaktiv (`departnered`/`archived`) → `None` (nichts zu reaktivieren).
 /// 3. Die Zeile auf `status='active'` flippen: `departnered_at`,
 ///    `admin_archived_at`, `technical_pause_reason` nullen, `partnered_at=now`,
-///    `manual_partner_opt_out=0`, `manual_verified_at` auf `now` falls leer.
+///    `manual_partner_opt_out=0`.
 ///    Alle übrigen Partner-Spalten (`silent_*`, `live_ping_*`,
-///    `require_discord_link`, Verify-permanent/until) bleiben
-///    auf der Zeile erhalten — Python liest sie aus der Historienzeile und
-///    schreibt sie unverändert zurück; auf derselben Zeile ist das ein No-Touch.
+///    `require_discord_link`) bleiben auf der Zeile erhalten.
 ///    `raid_bot_enabled` wird bei Reaktivierung explizit wieder eingeschaltet.
 /// 4. Nur wenn der alte Status `archived` (nicht `departnered`) war: Raid-Auth
 ///    wiederherstellen (`raid_enabled=TRUE`), aber nur wenn `needs_reauth`
@@ -626,7 +575,6 @@ pub async fn reactivate_partner(
             technical_pause_reason = NULL,
             manual_partner_opt_out = 0,
             raid_bot_enabled = 1,
-            manual_verified_at = COALESCE(NULLIF(manual_verified_at, ''), $2),
             partnered_at = $2
         WHERE id = $3
         "#,
@@ -1066,9 +1014,6 @@ mod tests {
                 twitch_login TEXT NOT NULL,
                 require_discord_link INTEGER DEFAULT 0,
                 next_link_check_at TEXT,
-                manual_verified_permanent INTEGER DEFAULT 0,
-                manual_verified_until TEXT,
-                manual_verified_at TEXT,
                 manual_partner_opt_out INTEGER DEFAULT 0,
                 raid_bot_enabled INTEGER DEFAULT 0,
                 silent_ban INTEGER DEFAULT 0,
@@ -1120,8 +1065,8 @@ mod tests {
     /// schreibt sie dorthin, damit `load_active_partner` sie via JOIN liefert.
     async fn insert_active_partner(pool: &PgPool, id: i64, login: &str, uid: &str) {
         sqlx::query(
-            "INSERT INTO twitch_partners (id, twitch_login, twitch_user_id, status, manual_verified_permanent, manual_verified_at)
-             VALUES ($1, $2, $3, 'active', 1, '2026-01-01T00:00:00+00:00')",
+            "INSERT INTO twitch_partners (id, twitch_login, twitch_user_id, status)
+             VALUES ($1, $2, $3, 'active')",
         )
         .bind(id)
         .bind(login)
@@ -1155,19 +1100,13 @@ mod tests {
         assert_eq!(outcome.twitch_login, "drag");
         assert_eq!(outcome.discord_user_id.as_deref(), Some("999"));
 
-        let (status, departnered_at, mvp): (Option<String>, Option<String>, Option<i32>) =
-            sqlx::query_as("SELECT status, departnered_at, manual_verified_permanent FROM twitch_partners WHERE id = 1")
+        let (status, departnered_at): (Option<String>, Option<String>) =
+            sqlx::query_as("SELECT status, departnered_at FROM twitch_partners WHERE id = 1")
                 .fetch_one(&pool)
                 .await
                 .unwrap();
         assert_eq!(status.as_deref(), Some("departnered"));
         assert!(departnered_at.is_some());
-        // clear_verification=false → Verify-Flag bleibt erhalten.
-        assert_eq!(
-            mvp,
-            Some(1),
-            "ohne clear_verification bleibt verify erhalten"
-        );
 
         let raid_enabled: Option<bool> = sqlx::query_scalar(
             "SELECT raid_enabled FROM twitch_raid_auth WHERE twitch_user_id = '42'",
@@ -1189,7 +1128,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn departner_clear_verification_setzt_verify_zurueck() {
+    async fn departner_clear_verification_departnert_ohne_verify_spalten() {
         let dsn = db_dsn_or_skip!();
         let pool = make_pool(&dsn, "test_lc_departner_clear").await;
         insert_active_partner(&pool, 1, "drag", "42").await;
@@ -1199,14 +1138,12 @@ mod tests {
             .unwrap()
             .expect("departnert");
 
-        let (mvp, mva): (Option<i32>, Option<String>) = sqlx::query_as(
-            "SELECT manual_verified_permanent, manual_verified_at FROM twitch_partners WHERE id = 1",
-        )
-        .fetch_one(&pool)
-        .await
-        .unwrap();
-        assert_eq!(mvp, Some(0), "clear_verification → permanent zurückgesetzt");
-        assert!(mva.is_none(), "clear_verification → verified_at genullt");
+        let status: Option<String> =
+            sqlx::query_scalar("SELECT status FROM twitch_partners WHERE id = 1")
+                .fetch_one(&pool)
+                .await
+                .unwrap();
+        assert_eq!(status.as_deref(), Some("departnered"));
     }
 
     #[tokio::test]
@@ -1236,14 +1173,14 @@ mod tests {
         .await
         .unwrap();
 
-        let (status, mvp, uid): (Option<String>, Option<i32>, Option<String>) = sqlx::query_as(
-            "SELECT status, manual_verified_permanent, twitch_user_id FROM twitch_partners WHERE LOWER(twitch_login) = 'newpartner'",
+        let (status, opt_out, uid): (Option<String>, Option<i32>, Option<String>) = sqlx::query_as(
+            "SELECT status, manual_partner_opt_out, twitch_user_id FROM twitch_partners WHERE LOWER(twitch_login) = 'newpartner'",
         )
         .fetch_one(&pool)
         .await
         .unwrap();
         assert_eq!(status.as_deref(), Some("active"));
-        assert_eq!(mvp, Some(1));
+        assert_eq!(opt_out, Some(0));
         assert_eq!(uid.as_deref(), Some("777"));
 
         // Identity wurde angelegt.
@@ -1273,14 +1210,14 @@ mod tests {
             .await
             .unwrap();
 
-        let (status, departnered_at, mvu): (Option<String>, Option<String>, Option<String>) =
-            sqlx::query_as("SELECT status, departnered_at, manual_verified_until FROM twitch_partners WHERE id = 1")
+        let (status, departnered_at, opt_out): (Option<String>, Option<String>, Option<i32>) =
+            sqlx::query_as("SELECT status, departnered_at, manual_partner_opt_out FROM twitch_partners WHERE id = 1")
                 .fetch_one(&pool)
                 .await
                 .unwrap();
         assert_eq!(status.as_deref(), Some("active"), "reaktiviert");
         assert!(departnered_at.is_none(), "departnered_at genullt");
-        assert!(mvu.is_some(), "temp → until gesetzt");
+        assert_eq!(opt_out, Some(0), "temp haelt Partner aktiv");
 
         // Kein zweiter Datensatz angelegt.
         let count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM twitch_partners")
@@ -1347,18 +1284,13 @@ mod tests {
     #[tokio::test]
     async fn verification_payload_modi() {
         let perm = VerificationPayload::for_mode("permanent").unwrap();
-        assert_eq!(perm.manual_verified_permanent, 1);
-        assert!(perm.manual_verified_until.is_none());
-        assert!(perm.manual_verified_at.is_some());
+        assert_eq!(perm.manual_partner_opt_out, 0);
 
         let temp = VerificationPayload::for_mode("temp").unwrap();
-        assert_eq!(temp.manual_verified_permanent, 0);
-        assert!(temp.manual_verified_until.is_some());
+        assert_eq!(temp.manual_partner_opt_out, 0);
 
         let clear = VerificationPayload::for_mode("clear").unwrap();
-        assert_eq!(clear.manual_verified_permanent, 0);
         assert_eq!(clear.manual_partner_opt_out, 1);
-        assert!(clear.manual_verified_at.is_none());
 
         assert!(VerificationPayload::for_mode("quatsch").is_none());
     }
@@ -1370,11 +1302,11 @@ mod tests {
     async fn insert_history_partner(pool: &PgPool, id: i64, login: &str, uid: &str, status: &str) {
         sqlx::query(
             "INSERT INTO twitch_partners
-                (id, twitch_login, twitch_user_id, status, departnered_at,
-                 admin_archived_at, technical_pause_reason, manual_partner_opt_out,
-                 silent_ban, live_ping_enabled, manual_verified_permanent, manual_verified_at)
+            	(id, twitch_login, twitch_user_id, status, departnered_at,
+            	 admin_archived_at, technical_pause_reason, manual_partner_opt_out,
+            	 silent_ban, live_ping_enabled)
              VALUES ($1, $2, $3, $4, '2026-01-01T00:00:00+00:00',
-                     '2026-01-01T00:00:00+00:00', 'blocked', 1, 1, 0, 1, NULL)",
+                     '2026-01-01T00:00:00+00:00', 'blocked', 1, 1, 0)",
         )
         .bind(id)
         .bind(login)

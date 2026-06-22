@@ -423,7 +423,9 @@ fn parse_bool_with_default(value: Option<&serde_json::Value>, default: bool) -> 
 
 /// Liest den rohen `Idempotency-Key`-Header (getrimmt).
 fn idem_key(headers: &HeaderMap) -> Option<&str> {
-    headers.get(IDEMPOTENCY_KEY_HEADER).and_then(|v| v.to_str().ok())
+    headers
+        .get(IDEMPOTENCY_KEY_HEADER)
+        .and_then(|v| v.to_str().ok())
 }
 
 /// Pfad ohne/mit Query für Scope-Key bzw. Fingerprint (Python `_prepare_idempotency`).
@@ -478,7 +480,11 @@ where
                 // Fehler nicht cachen (Python owner_cacheable=False), aber Waiter
                 // mit dem Fehler-Status auflösen.
                 let status = resp.status().as_u16();
-                slot.complete(status, &serde_json::json!({"error": "internal_error"}), false);
+                slot.complete(
+                    status,
+                    &serde_json::json!({"error": "internal_error"}),
+                    false,
+                );
                 resp
             }
         },
@@ -672,7 +678,13 @@ pub async fn verify_handler(
     }
     let payload = body.map(|Json(v)| v).unwrap_or_else(|| json!({}));
     with_idempotency(&idem, &headers, &uri, "POST", &payload, || {
-        verify_handler_inner(&pool, helix.as_ref().as_ref(), &role_ext, &raw_login, &payload)
+        verify_handler_inner(
+            &pool,
+            helix.as_ref().as_ref(),
+            &role_ext,
+            &raw_login,
+            &payload,
+        )
     })
     .await
 }
@@ -1010,7 +1022,13 @@ pub async fn discord_profile_handler(
         return ApiError::unauthorized().into_response();
     }
     with_idempotency(&idem, &headers, &uri, "POST", &payload, || {
-        discord_profile_handler_inner(&pool, helix.as_ref().as_ref(), &role_ext, &raw_login, &payload)
+        discord_profile_handler_inner(
+            &pool,
+            helix.as_ref().as_ref(),
+            &role_ext,
+            &raw_login,
+            &payload,
+        )
     })
     .await
 }
@@ -1422,9 +1440,6 @@ mod tests {
                 status                   TEXT DEFAULT 'active',
                 require_discord_link     INTEGER DEFAULT 0,
                 next_link_check_at       TEXT,
-                manual_verified_permanent INTEGER DEFAULT 0,
-                manual_verified_at       TEXT,
-                manual_verified_until    TEXT,
                 partnered_at             TEXT DEFAULT CURRENT_TIMESTAMP,
                 admin_archived_at        TEXT,
                 departnered_at           TEXT,
@@ -1453,8 +1468,6 @@ mod tests {
         for ddl in [
             r#"CREATE TABLE IF NOT EXISTS twitch_partners_all_state (
                 twitch_login TEXT, twitch_user_id TEXT,
-                manual_verified_permanent INTEGER DEFAULT 0,
-                manual_verified_until TEXT, manual_verified_at TEXT,
                 manual_partner_opt_out INTEGER DEFAULT 0, archived_at TEXT,
                 is_on_discord INTEGER DEFAULT 0, discord_user_id TEXT,
                 discord_display_name TEXT, raid_bot_enabled INTEGER DEFAULT 1,
@@ -1626,8 +1639,8 @@ mod tests {
     /// Aktiver Partner anlegen (mit Identity für Discord-Daten + Raid-Auth).
     async fn seed_active_partner(pool: &PgPool, login: &str, uid: &str) {
         sqlx::query(
-            "INSERT INTO twitch_partners (id, twitch_login, twitch_user_id, status, manual_verified_permanent)
-             VALUES (1, $1, $2, 'active', 1)",
+            "INSERT INTO twitch_partners (id, twitch_login, twitch_user_id, status)
+             VALUES (1, $1, $2, 'active')",
         )
         .bind(login)
         .bind(uid)
@@ -1718,14 +1731,12 @@ mod tests {
             j["message"]
         );
 
-        let (status, mvp): (Option<String>, Option<i32>) = sqlx::query_as(
-            "SELECT status, manual_verified_permanent FROM twitch_partners WHERE id = 1",
-        )
-        .fetch_one(&pool)
-        .await
-        .unwrap();
+        let status: Option<String> =
+            sqlx::query_scalar("SELECT status FROM twitch_partners WHERE id = 1")
+                .fetch_one(&pool)
+                .await
+                .unwrap();
         assert_eq!(status.as_deref(), Some("departnered"));
-        assert_eq!(mvp, Some(0), "clear_verification → permanent zurückgesetzt");
     }
 
     /// verify mode=permanent promotet einen Nicht-Partner zum aktiven Partner.
@@ -1760,14 +1771,13 @@ mod tests {
             j["message"]
         );
 
-        let (status, mvp): (Option<String>, Option<i32>) = sqlx::query_as(
-            "SELECT status, manual_verified_permanent FROM twitch_partners WHERE LOWER(twitch_login) = 'newbie'",
+        let status: Option<String> = sqlx::query_scalar(
+            "SELECT status FROM twitch_partners WHERE LOWER(twitch_login) = 'newbie'",
         )
         .fetch_one(&pool)
         .await
         .unwrap();
         assert_eq!(status.as_deref(), Some("active"), "promoted");
-        assert_eq!(mvp, Some(1));
     }
 
     /// verify mode=permanent für unbekannten Login (keine user_id auflösbar) →

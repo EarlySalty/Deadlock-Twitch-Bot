@@ -187,18 +187,13 @@ fn parse_hour_filter(
 
 // ── Interne Hilfstypen ────────────────────────────────────────────────────────
 
-/// Prod-Typen der View `twitch_streamers_partner_state`: `is_on_discord` und
-/// `manual_verified_permanent` sind **INTEGER** (0/1), `manual_verified_until`
-/// ist **TEXT** (ISO-String) — bool-/DateTime-Dekodierung schlägt zur Laufzeit
-/// fehl (Typ-Drift-Klasse; war die Ursache für is_partner=0 auf allen
-/// tracked.top-Einträgen im Live-Diff 12.6.).
+/// Prod-Typen der View `twitch_streamers_partner_state`: `is_on_discord` ist
+/// **INTEGER** (0/1); bool-Dekodierung schlägt zur Laufzeit fehl.
 struct PartnerStateRow {
     twitch_login: String,
     is_on_discord: Option<i32>,
     discord_user_id: Option<String>,
     discord_display_name: Option<String>,
-    manual_verified_permanent: Option<i32>,
-    manual_verified_until: Option<String>,
 }
 
 struct TopRow {
@@ -295,23 +290,6 @@ fn row_i32_opt(row: &sqlx::postgres::PgRow, col: &str) -> Option<i32> {
 /// TIMESTAMPTZ-Spalte (z. B. `twitch_eventsub_capacity_snapshot.ts_utc`).
 fn row_ts_opt(row: &sqlx::postgres::PgRow, col: &str) -> Option<DateTime<Utc>> {
     row.try_get::<Option<DateTime<Utc>>, _>(col).unwrap_or(None)
-}
-
-/// Python `_parse_db_datetime` (`leaderboard.py:504-516`): ISO-String parsen,
-/// naive Werte als UTC interpretieren; nicht parsebar → None.
-fn parse_db_datetime(value: &str) -> Option<DateTime<Utc>> {
-    let trimmed = value.trim();
-    if trimmed.is_empty() {
-        return None;
-    }
-    if let Ok(dt) = DateTime::parse_from_rfc3339(trimmed) {
-        return Some(dt.with_timezone(&Utc));
-    }
-    // Naive Variante ohne Offset (Python fromisoformat akzeptiert beides).
-    chrono::NaiveDateTime::parse_from_str(trimmed, "%Y-%m-%dT%H:%M:%S%.f")
-        .or_else(|_| chrono::NaiveDateTime::parse_from_str(trimmed, "%Y-%m-%d %H:%M:%S%.f"))
-        .ok()
-        .map(|naive| naive.and_utc())
 }
 
 // ── SQL-Templates ─────────────────────────────────────────────────────────────
@@ -435,9 +413,7 @@ async fn fetch_partner_state(pool: &PgPool) -> Result<Vec<PartnerStateRow>, sqlx
         SELECT twitch_login,
                is_on_discord,
                discord_user_id,
-               discord_display_name,
-               manual_verified_permanent,
-               manual_verified_until
+               discord_display_name
           FROM twitch_streamers_partner_state
          WHERE is_partner_active = 1
         "#,
@@ -452,8 +428,6 @@ async fn fetch_partner_state(pool: &PgPool) -> Result<Vec<PartnerStateRow>, sqlx
             is_on_discord: row_i32_opt(r, "is_on_discord"),
             discord_user_id: row_str_opt(r, "discord_user_id"),
             discord_display_name: row_str_opt(r, "discord_display_name"),
-            manual_verified_permanent: row_i32_opt(r, "manual_verified_permanent"),
-            manual_verified_until: row_str_opt(r, "manual_verified_until"),
         })
         .collect())
 }
@@ -660,7 +634,7 @@ struct PartnerMaps {
     discord_info: std::collections::HashMap<String, (Option<String>, Option<String>, bool)>,
 }
 
-fn build_partner_maps(rows: Vec<PartnerStateRow>, now: DateTime<Utc>) -> PartnerMaps {
+fn build_partner_maps(rows: Vec<PartnerStateRow>) -> PartnerMaps {
     let mut tracked = std::collections::HashSet::new();
     let mut verified = std::collections::HashSet::new();
     let mut discord_info = std::collections::HashMap::new();
@@ -668,17 +642,7 @@ fn build_partner_maps(rows: Vec<PartnerStateRow>, now: DateTime<Utc>) -> Partner
     for r in rows {
         let login = r.twitch_login.to_lowercase();
         tracked.insert(login.clone());
-
-        // Python: manual_verified_permanent truthy ODER verified_until >= now.
-        let is_verified = r.manual_verified_permanent.unwrap_or(0) != 0
-            || r.manual_verified_until
-                .as_deref()
-                .and_then(parse_db_datetime)
-                .map(|dt| dt >= now)
-                .unwrap_or(false);
-        if is_verified {
-            verified.insert(login.clone());
-        }
+        verified.insert(login.clone());
 
         let has_profile = r.discord_user_id.as_deref().map(|s| !s.is_empty()).unwrap_or(false)
             || r.discord_display_name.as_deref().map(|s| !s.is_empty()).unwrap_or(false);
@@ -1218,13 +1182,11 @@ async fn compute_stats(
     hf: &HourFilter,
     streamer_login: Option<&str>,
 ) -> Result<Value, BoxError> {
-    let now = Utc::now();
-
     let partner_rows = fetch_partner_state(pool).await.map_err(|e| {
         tracing::error!("Konnte gespeicherte Twitch-Logins nicht laden: {e}");
         Box::new(e) as BoxError
     })?;
-    let maps = build_partner_maps(partner_rows, now);
+    let maps = build_partner_maps(partner_rows);
 
     let tracked_top_raw = fetch_top(pool, "twitch_stats_tracked", true, hf).await?;
     let tracked_hourly_raw = fetch_hourly(pool, "twitch_stats_tracked", true, hf).await?;
@@ -1814,77 +1776,62 @@ mod tests {
     // ── Unit-Tests: Partner-Maps ──────────────────────────────────────────────
 
     #[test]
-    fn partner_maps_tracked_und_verified() {
-        use chrono::TimeZone;
-        let now = Utc.with_ymd_and_hms(2026, 6, 12, 12, 0, 0).unwrap();
+    fn partner_maps_tracked_und_verified_alias() {
         let rows = vec![
             PartnerStateRow {
                 twitch_login: "Helmi".into(),
                 is_on_discord: Some(1),
                 discord_user_id: Some("123".into()),
                 discord_display_name: Some("HelmiDC".into()),
-                manual_verified_permanent: Some(1),
-                manual_verified_until: None,
             },
             PartnerStateRow {
                 twitch_login: "DragScope".into(),
                 is_on_discord: Some(0),
                 discord_user_id: None,
                 discord_display_name: None,
-                manual_verified_permanent: Some(0),
-                manual_verified_until: Some((now - chrono::Duration::hours(1)).format("%Y-%m-%dT%H:%M:%S%.6f+00:00").to_string()),
             },
         ];
-        let maps = build_partner_maps(rows, now);
+        let maps = build_partner_maps(rows);
         assert!(maps.tracked_logins.contains("helmi"));
         assert!(maps.tracked_logins.contains("dragscope"));
         assert!(maps.verified_logins.contains("helmi"));
-        assert!(!maps.verified_logins.contains("dragscope"));
+        assert!(maps.verified_logins.contains("dragscope"));
     }
 
     #[test]
-    fn enrich_top_row_ueberschreibt_is_partner_wenn_tracked_nicht_verified() {
-        use chrono::TimeZone;
-        let now = Utc.with_ymd_and_hms(2026, 6, 12, 12, 0, 0).unwrap();
+    fn enrich_top_row_setzt_is_partner_fuer_aktive_partner() {
         let rows = vec![PartnerStateRow {
             twitch_login: "testuser".into(), is_on_discord: None,
             discord_user_id: None, discord_display_name: None,
-            manual_verified_permanent: Some(0), manual_verified_until: None,
         }];
-        let maps = build_partner_maps(rows, now);
+        let maps = build_partner_maps(rows);
         let top = TopRow { streamer: "testuser".into(), avg_viewers: 100.0, max_viewers: 200, samples: 50, is_partner: 1 };
         let entry = enrich_top_row(top, &maps);
-        assert_eq!(entry.is_partner, 0, "Nicht-verified → is_partner=0");
+        assert_eq!(entry.is_partner, 1, "Aktiver Partner → is_partner=1");
     }
 
     #[test]
     fn enrich_top_row_is_partner_1_wenn_verified() {
-        use chrono::TimeZone;
-        let now = Utc.with_ymd_and_hms(2026, 6, 12, 12, 0, 0).unwrap();
         let rows = vec![PartnerStateRow {
             twitch_login: "verifieduser".into(), is_on_discord: None,
             discord_user_id: None, discord_display_name: None,
-            manual_verified_permanent: Some(1), manual_verified_until: None,
         }];
-        let maps = build_partner_maps(rows, now);
+        let maps = build_partner_maps(rows);
         let top = TopRow { streamer: "verifieduser".into(), avg_viewers: 100.0, max_viewers: 200, samples: 50, is_partner: 0 };
         let entry = enrich_top_row(top, &maps);
-        assert_eq!(entry.is_partner, 1, "Verified → is_partner=1");
+        assert_eq!(entry.is_partner, 1, "Aktiver Partner → is_partner=1");
     }
 
     #[test]
     fn enrich_top_row_is_on_discord_durch_verified() {
-        use chrono::TimeZone;
-        let now = Utc.with_ymd_and_hms(2026, 6, 12, 12, 0, 0).unwrap();
         let rows = vec![PartnerStateRow {
             twitch_login: "streamer1".into(), is_on_discord: Some(0),
             discord_user_id: None, discord_display_name: None,
-            manual_verified_permanent: Some(1), manual_verified_until: None,
         }];
-        let maps = build_partner_maps(rows, now);
+        let maps = build_partner_maps(rows);
         let top = TopRow { streamer: "streamer1".into(), avg_viewers: 50.0, max_viewers: 100, samples: 10, is_partner: 0 };
         let entry = enrich_top_row(top, &maps);
-        assert_eq!(entry.is_on_discord, 1, "Verified → is_on_discord=1");
+        assert_eq!(entry.is_on_discord, 1, "Aktiver Partner → is_on_discord=1");
     }
 
     // ── Unit-Tests: EventSub-Shape ────────────────────────────────────────────
@@ -1978,9 +1925,7 @@ mod tests {
             twitch_login TEXT NOT NULL PRIMARY KEY,
             is_partner_active INTEGER NOT NULL DEFAULT 0,
             is_on_discord INTEGER,
-            discord_user_id TEXT, discord_display_name TEXT,
-            manual_verified_permanent INTEGER DEFAULT 0,
-            manual_verified_until TEXT
+            discord_user_id TEXT, discord_display_name TEXT
         )"#).execute(&pool).await.expect("DDL partner_state");
 
         // Prod-Schema: is_partner ist BOOLEAN. Die Fixture muss das spiegeln,
@@ -2074,7 +2019,7 @@ mod tests {
         let dsn = db_dsn_or_skip!();
         let pool = make_pool(&dsn, "test_stats_daten").await;
 
-        sqlx::query("INSERT INTO twitch_streamers_partner_state (twitch_login, is_partner_active, manual_verified_permanent) VALUES ('helmi', 1, 1), ('dragscope', 1, 0)")
+        sqlx::query("INSERT INTO twitch_streamers_partner_state (twitch_login, is_partner_active) VALUES ('helmi', 1), ('dragscope', 1)")
             .execute(&pool).await.unwrap();
 
         sqlx::query("INSERT INTO twitch_stats_tracked (streamer, viewer_count, is_partner, ts_utc) VALUES ('helmi', 100, TRUE, NOW()), ('helmi', 200, TRUE, NOW()), ('dragscope', 50, FALSE, NOW())")
@@ -2093,7 +2038,7 @@ mod tests {
 
         let drag = top.iter().find(|e| e["streamer"] == "dragscope");
         assert!(drag.is_some());
-        assert_eq!(drag.unwrap()["is_partner"], 0);
+        assert_eq!(drag.unwrap()["is_partner"], 1);
     }
 
     #[tokio::test]
@@ -2175,7 +2120,7 @@ mod tests {
         let dsn = db_dsn_or_skip!();
         let pool = make_pool(&dsn, "test_stats_max_viewers_int").await;
 
-        sqlx::query("INSERT INTO twitch_streamers_partner_state (twitch_login, is_partner_active, manual_verified_permanent) VALUES ('helmi', 1, 1)")
+        sqlx::query("INSERT INTO twitch_streamers_partner_state (twitch_login, is_partner_active) VALUES ('helmi', 1)")
             .execute(&pool).await.unwrap();
         sqlx::query("INSERT INTO twitch_stats_tracked (streamer, viewer_count, is_partner, ts_utc) VALUES ('helmi', 19, TRUE, NOW()), ('helmi', 15, TRUE, NOW())")
             .execute(&pool).await.unwrap();

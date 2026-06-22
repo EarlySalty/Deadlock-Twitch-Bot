@@ -219,7 +219,7 @@ fn is_missing_schema_error(e: &sqlx::Error) -> bool {
 }
 
 /// Partner-Lifecycle-Events (Python `_load_streamer_history_entries`). Erzeugt je
-/// Zeile bis zu vier Einträge (added/restore, verify, archive, remove) anhand der
+/// Zeile bis zu drei Einträge (added/restore, archive, remove) anhand der
 /// gesetzten Zeitstempel. `prior_inactive` (chronologisch über ORDER BY befüllt)
 /// unterscheidet erstes Hinzufügen von Re-Aktivierung.
 async fn streamer_history_entries(pool: &PgPool) -> Result<Vec<Value>, sqlx::Error> {
@@ -228,7 +228,6 @@ async fn streamer_history_entries(pool: &PgPool) -> Result<Vec<Value>, sqlx::Err
         Option<String>, // twitch_user_id
         Option<String>, // twitch_login
         Option<String>, // added_by
-        Option<String>, // manual_verified_at
         Option<String>, // partnered_at
         Option<String>, // admin_archived_at
         Option<String>, // departnered_at
@@ -236,17 +235,17 @@ async fn streamer_history_entries(pool: &PgPool) -> Result<Vec<Value>, sqlx::Err
         Option<String>, // technical_pause_reason
     );
     let rows: Vec<Row> = sqlx::query_as(
-        "SELECT p.id::text, p.twitch_user_id, p.twitch_login, p.added_by, p.manual_verified_at, \
+        "SELECT p.id::text, p.twitch_user_id, p.twitch_login, p.added_by, \
                 p.partnered_at, p.admin_archived_at, p.departnered_at, p.status, p.technical_pause_reason \
          FROM twitch_partners p \
-         ORDER BY COALESCE(p.partnered_at, p.departnered_at, p.admin_archived_at, p.manual_verified_at, '') ASC, p.id ASC",
+         ORDER BY COALESCE(p.partnered_at, p.departnered_at, p.admin_archived_at, '') ASC, p.id ASC",
     )
     .fetch_all(pool)
     .await?;
 
     let mut prior_inactive: BTreeSet<String> = BTreeSet::new();
     let mut entries = Vec::new();
-    for (id, uid, login, added_by, manual_verified_at, partnered_at, admin_archived_at, departnered_at, status, pause_reason) in rows {
+    for (id, uid, login, added_by, partnered_at, admin_archived_at, departnered_at, status, pause_reason) in rows {
         let row_id = id.unwrap_or_default().trim().to_string();
         let twitch_user_id = uid.unwrap_or_default().trim().to_string();
         let twitch_login = login.unwrap_or_default().trim().to_string();
@@ -277,12 +276,6 @@ async fn streamer_history_entries(pool: &PgPool) -> Result<Vec<Value>, sqlx::Err
             };
             let metadata = json!({ "partnerId": row_id, "status": opt(&status), "twitchUserId": opt(&twitch_user_id) });
             if let Some(e) = make_entry(format!("streamer_history:{row_id}:{action}"), "streamer_history", action, added_by.as_deref(), target.as_deref(), Some(ts), description, Some(metadata)) {
-                entries.push(e);
-            }
-        }
-        if let Some(ts) = manual_verified_at.as_deref().filter(|s| !s.is_empty()) {
-            let metadata = json!({ "partnerId": row_id, "twitchUserId": opt(&twitch_user_id) });
-            if let Some(e) = make_entry(format!("streamer_history:{row_id}:verify"), "streamer_history", "verify", None, target.as_deref(), Some(ts), format!("Streamer {label} wurde verifiziert."), Some(metadata)) {
                 entries.push(e);
             }
         }
@@ -708,7 +701,7 @@ mod tests {
         let opts = PgConnectOptions::from_str(&dsn).unwrap().options([("search_path", schema)]);
         let pool = PgPoolOptions::new().max_connections(2).connect_with(opts).await.unwrap();
         for ddl in [
-            "CREATE TABLE twitch_partners (id BIGSERIAL PRIMARY KEY, twitch_user_id TEXT, twitch_login TEXT, added_by TEXT, manual_verified_at TEXT, partnered_at TEXT, admin_archived_at TEXT, departnered_at TEXT, status TEXT, technical_pause_reason TEXT)",
+            "CREATE TABLE twitch_partners (id BIGSERIAL PRIMARY KEY, twitch_user_id TEXT, twitch_login TEXT, added_by TEXT, partnered_at TEXT, admin_archived_at TEXT, departnered_at TEXT, status TEXT, technical_pause_reason TEXT)",
             "CREATE TABLE streamer_plans (twitch_login TEXT PRIMARY KEY, twitch_user_id TEXT, manual_plan_id TEXT, manual_plan_expires_at TEXT, manual_plan_notes TEXT, manual_plan_updated_at TEXT)",
             "CREATE TABLE twitch_billing_events (stripe_event_id TEXT PRIMARY KEY, event_type TEXT, object_id TEXT, received_at TEXT, livemode INTEGER, payload TEXT)",
             "CREATE TABLE twitch_billing_subscriptions (stripe_subscription_id TEXT PRIMARY KEY, customer_reference TEXT, status TEXT, plan_id TEXT, current_period_end TEXT, canceled_at TEXT, ended_at TEXT, updated_at TEXT)",
@@ -719,13 +712,13 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn streamer_history_added_und_verify() {
+    async fn streamer_history_added() {
         let Some(pool) = make_pool("t_audit_sh").await else { return };
-        sqlx::query("INSERT INTO twitch_partners (twitch_user_id, twitch_login, added_by, partnered_at, manual_verified_at, status) VALUES ('100','nani','admin','2026-02-01T00:00:00Z','2026-02-02T00:00:00Z','active')")
+        sqlx::query("INSERT INTO twitch_partners (twitch_user_id, twitch_login, added_by, partnered_at, status) VALUES ('100','nani','admin','2026-02-01T00:00:00Z','active')")
             .execute(&pool).await.unwrap();
         let entries = streamer_history_entries(&pool).await.unwrap();
         let actions: Vec<&str> = entries.iter().map(|e| e["action"].as_str().unwrap()).collect();
-        assert!(actions.contains(&"added") && actions.contains(&"verify"));
+        assert!(actions.contains(&"added"));
         let added = entries.iter().find(|e| e["action"] == "added").unwrap();
         assert_eq!(added["target"], "nani");
         assert_eq!(added["actor"], "admin");

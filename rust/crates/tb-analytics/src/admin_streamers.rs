@@ -540,8 +540,8 @@ LIMIT 1"#,
 
 /// Findet den Twitch-Login zu einer Discord-User-ID (kanonische Lookup-Quelle).
 ///
-/// Spiegelt die Lookup-Logik des Raid-OAuth-Pfads: die jüngste manuelle
-/// Verifizierung bzw. Erstellung gewinnt. `None` = kein verknüpfter Account.
+/// Spiegelt die Lookup-Logik des Raid-OAuth-Pfads: die jüngste Erstellung
+/// gewinnt. `None` = kein verknüpfter Account.
 /// Nur lesend; ein Statement gegen die Partner-State-View.
 pub async fn login_for_discord_user(
     pool: &sqlx::PgPool,
@@ -553,8 +553,6 @@ pub async fn login_for_discord_user(
         FROM twitch_streamers_partner_state
         WHERE discord_user_id = $1
         ORDER BY
-            CASE WHEN manual_verified_at IS NULL THEN 1 ELSE 0 END,
-            manual_verified_at DESC,
             CASE WHEN created_at IS NULL THEN 1 ELSE 0 END,
             created_at DESC
         LIMIT 1
@@ -812,11 +810,23 @@ mod tests {
     #[test]
     fn view_parse_or_default_ist_active() {
         // P2.80: fehlender/leerer View → Active (Python-Default), nicht All.
-        assert_eq!(StreamerView::parse_or_default(None), Some(StreamerView::Active));
-        assert_eq!(StreamerView::parse_or_default(Some("")), Some(StreamerView::Active));
-        assert_eq!(StreamerView::parse_or_default(Some("  ")), Some(StreamerView::Active));
+        assert_eq!(
+            StreamerView::parse_or_default(None),
+            Some(StreamerView::Active)
+        );
+        assert_eq!(
+            StreamerView::parse_or_default(Some("")),
+            Some(StreamerView::Active)
+        );
+        assert_eq!(
+            StreamerView::parse_or_default(Some("  ")),
+            Some(StreamerView::Active)
+        );
         // Explizite Werte bleiben erhalten.
-        assert_eq!(StreamerView::parse_or_default(Some("all")), Some(StreamerView::All));
+        assert_eq!(
+            StreamerView::parse_or_default(Some("all")),
+            Some(StreamerView::All)
+        );
         assert_eq!(
             StreamerView::parse_or_default(Some("archived")),
             Some(StreamerView::Archived)

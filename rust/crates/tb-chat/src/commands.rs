@@ -2186,9 +2186,6 @@ mod tests {
                 discord_user_id TEXT,
                 discord_display_name TEXT,
                 is_on_discord INTEGER,
-                manual_verified_permanent INTEGER,
-                manual_verified_until TEXT,
-                manual_verified_at TEXT,
                 manual_partner_opt_out INTEGER,
                 created_at TEXT,
                 archived_at TEXT,
@@ -2236,9 +2233,6 @@ mod tests {
                 added_by TEXT,
                 last_link_checked_at TEXT,
                 next_link_check_at TEXT,
-                manual_verified_permanent INTEGER,
-                manual_verified_until TEXT,
-                manual_verified_at TEXT,
                 manual_partner_opt_out INTEGER,
                 live_ping_role_id BIGINT,
                 live_ping_enabled INTEGER,
@@ -2504,10 +2498,7 @@ mod tests {
 
         assert_eq!(raid.manual_call_count().await, 0);
         let msg = api.last_message().await.unwrap();
-        assert!(
-            msg.contains("nicht aktiviert"),
-            "Meldung: {msg}"
-        );
+        assert!(msg.contains("nicht aktiviert"), "Meldung: {msg}");
         assert!(
             !msg.contains("!raid_enable"),
             "No-auth reply must not reference removed command: {msg}"
@@ -2540,10 +2531,7 @@ mod tests {
         engine.handle(&make_event("!raid", true, false)).await;
 
         let msg = api.last_message().await.unwrap();
-        assert!(
-            msg.contains("Raid auf"),
-            "Meldung: {msg}"
-        );
+        assert!(msg.contains("Raid auf"), "Meldung: {msg}");
         assert!(msg.contains("testuser"), "Meldung: {msg}");
         assert!(msg.contains("targetstreamer"), "Meldung: {msg}");
     }

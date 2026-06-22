@@ -290,14 +290,13 @@ async fn save_discord_profile(
 
     // Twitch-User-ID auflösen: erst aus twitch_raid_auth, sonst über Helix
     // (Python `_dashboard_save_discord_profile`).
-    let mut twitch_user_id = tb_analytics::streamers_crud::load_twitch_user_id_from_raid_auth(
-        pool, login,
-    )
-    .await
-    .map_err(|e| {
-        tracing::error!("discord_link raid-auth lookup Fehler: {e}");
-        DiscordProfileError::Db
-    })?;
+    let mut twitch_user_id =
+        tb_analytics::streamers_crud::load_twitch_user_id_from_raid_auth(pool, login)
+            .await
+            .map_err(|e| {
+                tracing::error!("discord_link raid-auth lookup Fehler: {e}");
+                DiscordProfileError::Db
+            })?;
     if twitch_user_id.is_none() {
         twitch_user_id = resolve_user_id(login).await;
     }
@@ -332,7 +331,10 @@ async fn save_discord_profile(
 async fn resolve_user_id(login: &str) -> Option<String> {
     let helix = build_helix()?;
     match helix.get_users(&[login]).await {
-        Ok(map) => map.get(login).map(|u| u.id.clone()).filter(|s| !s.is_empty()),
+        Ok(map) => map
+            .get(login)
+            .map(|u| u.id.clone())
+            .filter(|s| !s.is_empty()),
         Err(e) => {
             tracing::warn!("Helix-Lookup für {login} fehlgeschlagen: {e}");
             None
@@ -343,7 +345,9 @@ async fn resolve_user_id(login: &str) -> Option<String> {
 /// Baut einen Helix-Client aus den Twitch-App-Credentials (`None`, wenn nicht
 /// konfiguriert).
 fn build_helix() -> Option<Arc<HelixClient>> {
-    let client_id = std::env::var("TWITCH_CLIENT_ID").ok().filter(|s| !s.is_empty())?;
+    let client_id = std::env::var("TWITCH_CLIENT_ID")
+        .ok()
+        .filter(|s| !s.is_empty())?;
     let client_secret = std::env::var("TWITCH_CLIENT_SECRET")
         .ok()
         .filter(|s| !s.is_empty())?;
@@ -354,7 +358,10 @@ fn build_helix() -> Option<Arc<HelixClient>> {
 
 /// Member-Flag-Parsing (Python `member_raw in {"1","true","on","yes"}`).
 fn parse_member_flag(raw: &str) -> bool {
-    matches!(raw.trim().to_lowercase().as_str(), "1" | "true" | "on" | "yes")
+    matches!(
+        raw.trim().to_lowercase().as_str(),
+        "1" | "true" | "on" | "yes"
+    )
 }
 
 /// Leerer String → `None`.
@@ -449,8 +456,7 @@ mod tests {
                  created_at TEXT, updated_at TEXT)",
             "CREATE TABLE twitch_partners (id BIGSERIAL PRIMARY KEY, twitch_login TEXT, twitch_user_id TEXT, \
                  status TEXT DEFAULT 'active', admin_archived_at TEXT, departnered_at TEXT, \
-                 manual_verified_permanent INTEGER DEFAULT 0, manual_verified_at TEXT, \
-                 manual_verified_until TEXT)",
+                 manual_partner_opt_out INTEGER DEFAULT 0, raid_bot_enabled INTEGER DEFAULT 1)",
             "CREATE TABLE twitch_live_state (streamer_login TEXT PRIMARY KEY)",
             "CREATE TABLE twitch_raid_auth (twitch_login TEXT PRIMARY KEY, twitch_user_id TEXT, raid_enabled BOOLEAN DEFAULT TRUE)",
         ] {
@@ -466,11 +472,12 @@ mod tests {
         };
         let msg = do_add(&pool, "nanistream").await.expect("add ok");
         assert_eq!(msg, "nanistream hinzugefügt");
-        let exists: (i64,) =
-            sqlx::query_as("SELECT COUNT(*) FROM twitch_streamers WHERE twitch_login = 'nanistream'")
-                .fetch_one(&pool)
-                .await
-                .unwrap();
+        let exists: (i64,) = sqlx::query_as(
+            "SELECT COUNT(*) FROM twitch_streamers WHERE twitch_login = 'nanistream'",
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap();
         assert_eq!(exists.0, 1);
 
         // Idempotent: zweiter Add meldet "bereits aktiv", legt nichts Neues an.
@@ -483,10 +490,12 @@ mod tests {
         let Some(pool) = make_pool("t_legacy_remove").await else {
             return;
         };
-        sqlx::query("INSERT INTO twitch_streamers (twitch_login, twitch_user_id) VALUES ('part', '77')")
-            .execute(&pool)
-            .await
-            .unwrap();
+        sqlx::query(
+            "INSERT INTO twitch_streamers (twitch_login, twitch_user_id) VALUES ('part', '77')",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
         sqlx::query("INSERT INTO twitch_partners (twitch_login, twitch_user_id, status) VALUES ('part', '77', 'active')")
             .execute(&pool)
             .await
@@ -507,10 +516,12 @@ mod tests {
         let Some(pool) = make_pool("t_legacy_remove_plain").await else {
             return;
         };
-        sqlx::query("INSERT INTO twitch_streamers (twitch_login, twitch_user_id) VALUES ('solo', '9')")
-            .execute(&pool)
-            .await
-            .unwrap();
+        sqlx::query(
+            "INSERT INTO twitch_streamers (twitch_login, twitch_user_id) VALUES ('solo', '9')",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
         let msg = do_remove(&pool, "solo").await.expect("remove ok");
         assert_eq!(msg, "solo removed");
         let cnt: (i64,) =
@@ -526,14 +537,22 @@ mod tests {
         let Some(pool) = make_pool("t_legacy_discord").await else {
             return;
         };
-        sqlx::query("INSERT INTO twitch_streamers (twitch_login, twitch_user_id) VALUES ('linkme', '123')")
-            .execute(&pool)
-            .await
-            .unwrap();
+        sqlx::query(
+            "INSERT INTO twitch_streamers (twitch_login, twitch_user_id) VALUES ('linkme', '123')",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
 
-        let msg = save_discord_profile(&pool, "linkme", Some("662995601738170389"), Some("Owner"), true)
-            .await
-            .expect("profile ok");
+        let msg = save_discord_profile(
+            &pool,
+            "linkme",
+            Some("662995601738170389"),
+            Some("Owner"),
+            true,
+        )
+        .await
+        .expect("profile ok");
         assert!(msg.contains("linkme"), "msg={msg}");
 
         let row: (Option<String>, Option<String>, i32) = sqlx::query_as(
