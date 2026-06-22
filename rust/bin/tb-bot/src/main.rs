@@ -357,6 +357,8 @@ async fn main() {
         Some(helix_client) => Arc::new(HelixFollowerSource {
             helix: helix_client,
             token_source: follower_token_source,
+            // P3.9: Once-only-WARN beim Legacy-Broadcaster-Token-Fallback.
+            scope_fallback_warner: Some(Arc::new(tb_raid::ScopeFallbackWarner::new())),
         }),
         None => Arc::new(NoFollowerSource),
     };
@@ -1337,6 +1339,9 @@ async fn main() {
         chat_action,
         scam_revoke,
         scam_enforce,
+        // WIRING-TODO(P3.7): hier `Some(Arc::new(tb_raid::ReauthAdminStore::new(pool.clone())))`
+        // einhängen, damit POST /raid/reauth-all live ist. Bis dahin → Handler 503.
+        None,
         legacy_proxy,
     );
 

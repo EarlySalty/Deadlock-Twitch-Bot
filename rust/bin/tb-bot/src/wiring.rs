@@ -188,26 +188,43 @@ pub trait FollowerTokenSource: Send + Sync {
 /// Bot-User-Token nur durch, wenn er `moderator:read:followers` trägt (P1.7,
 /// Python `sessions_mixin.py:925`). Nutzt denselben `BotTokenManager` wie der
 /// Chat-Pfad — KEIN zweiter Refresher.
+///
+/// P2.46/P2.50: Die Scope-/Token-Normalisierung läuft über den zentralen
+/// [`tb_raid::resolve_bot_oauth_context`]-Resolver (`oauth:`-Strip, lowercased
+/// Scope-Set, Gating via [`BotOAuthContext::can_read_followers`]); diese Quelle
+/// implementiert dafür [`BotOAuthSource`] über den `BotTokenManager`.
 pub struct BotFollowerTokenSource {
     pub token_manager: Arc<tb_chat::token::BotTokenManager>,
 }
 
 #[async_trait::async_trait]
+impl tb_raid::BotOAuthSource for BotFollowerTokenSource {
+    async fn raw_bot_oauth(&self) -> (Option<String>, Option<String>, Vec<String>) {
+        // Token best-effort (Fehler/leer → None); der Resolver strippt `oauth:`.
+        let token = match self.token_manager.access_token().await {
+            Ok(t) if !t.trim().is_empty() => Some(t),
+            _ => None,
+        };
+        let bot_id = {
+            let id = self.token_manager.bot_user_id().await;
+            (!id.trim().is_empty()).then_some(id)
+        };
+        let scopes = self.token_manager.scopes().await;
+        (token, bot_id, scopes)
+    }
+}
+
+#[async_trait::async_trait]
 impl FollowerTokenSource for BotFollowerTokenSource {
     async fn moderator_followers_token(&self) -> Option<String> {
-        let scopes = self.token_manager.scopes().await;
-        let has_scope = scopes.iter().any(|scope| {
-            scope.trim().eq_ignore_ascii_case("moderator:read:followers")
-        });
-        // Python lässt den Bot-Token auch zu, wenn die Scope-Liste leer ist
-        // (unbekannt) — wir verlangen den Scope nur, wenn überhaupt Scopes
-        // bekannt sind (sessions_mixin.py:925 `not bot_scopes or ... in bot_scopes`).
-        if !scopes.is_empty() && !has_scope {
-            return None;
-        }
-        match self.token_manager.access_token().await {
-            Ok(token) if !token.trim().is_empty() => Some(token),
-            _ => None,
+        // P2.50: Gating exakt wie Python (`bot_can_read_followers`,
+        // followers.py:271-280) — Bot-Token nur, wenn `moderator:read:followers`
+        // vorhanden ODER die Scope-Liste unbekannt/leer ist.
+        let ctx = tb_raid::resolve_bot_oauth_context(Some(self)).await;
+        if ctx.can_read_followers() {
+            ctx.token
+        } else {
+            None
         }
     }
 }
@@ -265,6 +282,9 @@ pub struct HelixFollowerSource {
     pub helix: HelixClient,
     /// `None` = App-Token-Pfad wie vor P1.7.
     pub token_source: Option<Arc<dyn FollowerTokenSource>>,
+    /// P3.9: Once-only-WARN, wenn der Abruf vom Bot-Token auf den
+    /// Legacy-/Streamer-Token zurückfällt. `None` = kein Operator-Signal.
+    pub scope_fallback_warner: Option<Arc<tb_raid::ScopeFallbackWarner>>,
 }
 
 impl HelixFollowerSource {
@@ -296,17 +316,27 @@ impl FollowerCountSource for HelixFollowerSource {
             None => None,
         };
         if let Some(total) = self.fetch_total(user_id, bot_token.as_deref()).await {
+            // P3.9: Bot-Token-Pfad hat geliefert → Fallback-WARN re-armieren,
+            // damit ein späterer Rückfall wieder einmal warnt.
+            if let Some(warner) = self.scope_fallback_warner.as_ref() {
+                warner.clear("followers", user_id);
+            }
             return Some(total);
         }
 
-        // 2. P1.19-Fallback: liefert der Bot-/App-Token keine Zahl (kein Scope,
-        //    403, oder Twitch antwortet ohne `total`), den per-Streamer
+        // 2. P2.48/P1.19-Fallback: liefert der Bot-/App-Token keine Zahl (kein
+        //    Scope, 403, oder Twitch antwortet ohne `total`), den per-Streamer
         //    OAuth-Token versuchen (Broadcaster moderiert sich selbst).
         //    `get_followers_total` kollabiert jeden non-200 zu None — ein 403
         //    ist daher von „echt unbekannt" nicht unterscheidbar; der Fallback
         //    deckt beide Fälle ab (Python `_fetch_followers_total_safe`:1048-1144).
         if let Some(s) = source {
             if let Some(streamer_token) = s.streamer_followers_token(user_id).await {
+                // P3.9: Once-only-WARN — wir nutzen den Legacy-Broadcaster-Token
+                // statt des Bot-Tokens (Python followers.py:153).
+                if let Some(warner) = self.scope_fallback_warner.as_ref() {
+                    warner.warn_once("followers", user_id);
+                }
                 if let Some(total) = self.fetch_total(user_id, Some(&streamer_token)).await {
                     return Some(total);
                 }
@@ -653,6 +683,7 @@ mod follower_fallback_tests {
                 bot: Some("bottok".into()),
                 streamer: Some("streamertok".into()),
             })),
+            scope_fallback_warner: None,
         };
         let total = source.follower_total(Some("42"), "chan").await;
         assert_eq!(total, Some(4242), "Streamer-Token-Fallback liefert echte Zahl");
@@ -687,6 +718,7 @@ mod follower_fallback_tests {
                 bot: Some("bottok".into()),
                 streamer: Some("streamertok".into()),
             })),
+            scope_fallback_warner: None,
         };
         assert_eq!(source.follower_total(Some("42"), "chan").await, Some(7));
     }
@@ -709,7 +741,56 @@ mod follower_fallback_tests {
                 bot: None,
                 streamer: None,
             })),
+            scope_fallback_warner: None,
         };
         assert_eq!(source.follower_total(Some("42"), "chan").await, None);
+    }
+
+    /// P3.9: Fällt der Abruf auf den Streamer-/Legacy-Token zurück, feuert der
+    /// Once-only-WARN genau einmal je Subject; ein anschließender Bot-Erfolg
+    /// re-armiert ihn.
+    #[tokio::test]
+    async fn legacy_token_fallback_warnt_genau_einmal_und_rearmt() {
+        let server = MockServer::start().await;
+        let helix = helix_at(&server).await;
+
+        // Bot-Token: 403 → None (kein Scope).
+        Mock::given(method("GET"))
+            .and(path("/helix/channels/followers"))
+            .and(header("Authorization", "Bearer bottok"))
+            .respond_with(ResponseTemplate::new(403))
+            .mount(&server)
+            .await;
+        // Streamer-Token: 200 mit total.
+        Mock::given(method("GET"))
+            .and(path("/helix/channels/followers"))
+            .and(header("Authorization", "Bearer streamertok"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "total": 99, "data": []
+            })))
+            .mount(&server)
+            .await;
+
+        let warner = Arc::new(tb_raid::ScopeFallbackWarner::new());
+        let source = HelixFollowerSource {
+            helix,
+            token_source: Some(Arc::new(StubTokenSource {
+                bot: Some("bottok".into()),
+                streamer: Some("streamertok".into()),
+            })),
+            scope_fallback_warner: Some(warner.clone()),
+        };
+
+        // Erster Abruf → Fallback aktiv → WARN gefeuert. Danach meldet ein
+        // erneutes warn_once `false` (schon gewarnt).
+        assert_eq!(source.follower_total(Some("42"), "chan").await, Some(99));
+        assert!(
+            !warner.warn_once("followers", "42"),
+            "WARN muss durch den Fallback bereits gefeuert sein"
+        );
+
+        // Re-Arm: clear → warn_once meldet wieder `true`.
+        warner.clear("followers", "42");
+        assert!(warner.warn_once("followers", "42"));
     }
 }

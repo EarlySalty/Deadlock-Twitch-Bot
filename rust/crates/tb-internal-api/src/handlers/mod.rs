@@ -11,6 +11,7 @@ pub mod python_stubs;
 pub mod raid;
 pub mod raid_blacklist;
 pub mod raid_oauth;
+pub mod reauth_all;
 pub mod scam_guard;
 pub mod self_explainer_log;
 pub mod session_detail;
