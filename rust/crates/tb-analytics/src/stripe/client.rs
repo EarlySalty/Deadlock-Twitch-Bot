@@ -212,6 +212,12 @@ impl StripeClient {
         Self::ensure_id(value)
     }
 
+    /// Liest ein Produkt (`GET /v1/products/{id}`).
+    pub async fn retrieve_product(&self, product_id: &str) -> Result<Value, StripeError> {
+        let url = format!("{}/v1/products/{product_id}", self.api_base);
+        self.get(&url, &[]).await
+    }
+
     /// Erstellt einen Preis (`POST /v1/prices`). `params` als JSON-Objekt
     /// (inkl. `recurring`, `metadata`, `lookup_key`).
     pub async fn create_price(&self, params: &Value) -> Result<Value, StripeError> {

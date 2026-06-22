@@ -20,15 +20,15 @@
 //! `dry_run` (JSON oder Form) — bei `true` werden KEINE Stripe-Objekte erzeugt,
 //! nur der Plan (`would_create`/`reused`) berichtet.
 //!
-//! **Self-Heal (P2.113):** Eine eingecheckte *Price*-Default-ID wird im Live-Lauf
-//! erst gegen Stripe verifiziert (`retrieve_price`); schlägt der Retrieve fehl
-//! (gelöscht/ungültig), wird die ID verworfen, NICHT als `reused` gezählt und der
-//! Lookup-/Create-Pfad legt den Preis neu an — exakt wie Pythons Verify-Zyklus
-//! (`routes_billing.py:498-504`). Im `dry_run` wird nicht verifiziert.
-//! Die *Product*-Seite (`routes_billing.py:439-449`, retrieve + deleted-Flag) ist
-//! im nativen Pfad noch nicht self-healing: dafür fehlt `StripeClient::retrieve_product`
-//! im Crate `tb-analytics` (crate-fremd, nicht in diesem Worktree änderbar) — siehe
-//! WIRING-TODO. Bis dahin gilt die eingecheckte Product-Default-ID weiter als `reused`.
+//! **Self-Heal (P2.113):** Eingecheckte Default-IDs werden im Live-Lauf erst gegen
+//! Stripe verifiziert, bevor sie als `reused` gelten. Eine *Price*-Default-ID via
+//! `retrieve_price` (`routes_billing.py:498-504`), eine *Product*-Default-ID via
+//! `retrieve_product` + `deleted`-Flag (`routes_billing.py:439-449`). Schlägt der
+//! Retrieve fehl (transienter 5xx) ODER ist das Objekt gelöscht, wird die ID
+//! verworfen, NICHT als `reused` gezählt, und der Lookup-/Create-Pfad legt neu an —
+//! genau wie Pythons Verify-Zyklus, der jede Exception schluckt (ein 5xx killt den
+//! Sync nicht). Im `dry_run` wird nicht verifiziert; die Defaults gelten dort
+//! unverändert als `reused`.
 //!
 //! **Response-Parität (P2.114):** Der Payload führt wieder `product_id_map`
 //! (plan_id → product_id), `price_id_map` (plan_id → {cycle → price_id}) und
@@ -114,8 +114,28 @@ pub async fn sync_products_handler(
             .unwrap_or(plan_id);
         let plan_description = plan.get("description").and_then(Value::as_str).unwrap_or("");
 
-        // ── Produkt: eingecheckter Default = reused; sonst create ─────────────
+        // ── Produkt: eingecheckter Default → gegen Stripe verifizieren (P2.113) ──
+        //    Live: retrieve_product + deleted-Flag prüfen; schlägt der Retrieve fehl
+        //    ODER ist das Produkt gelöscht, wird die ID verworfen, NICHT als reused
+        //    gezählt → der Create-Pfad legt neu an (Self-Heal). Ein transienter 5xx
+        //    killt den Sync NICHT (Python schluckt jede Exception).
+        //    dry_run: kein Stripe-Call, Default gilt unverifiziert als reused.
         let mut product_id = product_id_default(plan_id).unwrap_or("").to_string();
+        if !product_id.is_empty() && !dry_run {
+            if let Some(client) = client.as_ref() {
+                match client.retrieve_product(&product_id).await {
+                    Ok(obj) if !is_stripe_deleted(&obj) => {}
+                    Ok(_) => {
+                        tracing::warn!(plan_id, "stripe product is deleted; recreating");
+                        product_id.clear();
+                    }
+                    Err(error) => {
+                        tracing::warn!(%error, plan_id, "stripe product retrieve failed; recreating");
+                        product_id.clear();
+                    }
+                }
+            }
+        }
         let product_status = if !product_id.is_empty() {
             reused_products += 1;
             "reused"
@@ -339,6 +359,21 @@ fn readiness_payload(checkout_ready: bool) -> Value {
     })
 }
 
+/// Liest das `deleted`-Flag eines Stripe-Objekts robust (Python
+/// `bool(_billing_stripe_obj_get(obj, "deleted", False))`): fehlend → `false`,
+/// sonst entscheidet die Truthiness des Werts (`true`, jede Zahl ≠ 0, jeder
+/// nicht-leere String/Array/Objekt → `true`; `false`/`0`/`""`/`null` → `false`).
+fn is_stripe_deleted(obj: &Value) -> bool {
+    match obj.get("deleted") {
+        None | Some(Value::Null) => false,
+        Some(Value::Bool(b)) => *b,
+        Some(Value::Number(n)) => n.as_f64().map(|f| f != 0.0).unwrap_or(true),
+        Some(Value::String(s)) => !s.is_empty(),
+        Some(Value::Array(a)) => !a.is_empty(),
+        Some(Value::Object(o)) => !o.is_empty(),
+    }
+}
+
 /// Parst das `dry_run`-Flag aus JSON- ODER Form-Body (Python akzeptiert beides).
 fn parse_dry_run(body: &[u8]) -> bool {
     let truthy = |s: &str| matches!(s.trim().to_ascii_lowercase().as_str(), "1" | "true" | "yes" | "on");
@@ -467,8 +502,13 @@ mod tests {
             .respond_with(ResponseTemplate::new(200).set_body_json(json!({ "data": [] })))
             .mount(&server)
             .await;
-        // Product-Create (alle Default-Produkte gelten als reused, daher i. d. R.
-        // nicht aufgerufen; sicherheitshalber gemockt).
+        // Default-Produkte existieren und sind nicht gelöscht → bleiben reused.
+        Mock::given(method("GET"))
+            .and(path_regex(r"^/v1/products/prod_.*"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({ "id": "prod_default", "deleted": false })))
+            .mount(&server)
+            .await;
+        // Product-Create (Fallback; bei intakten Defaults nicht aufgerufen).
         Mock::given(method("POST"))
             .and(path_regex(r"^/v1/products$"))
             .respond_with(ResponseTemplate::new(200).set_body_json(json!({ "id": "prod_new" })))
@@ -521,6 +561,172 @@ mod tests {
         // Maps + readiness sind weiterhin vorhanden, checkout_ready=true (Client da).
         assert!(v["price_id_map"].is_object());
         assert_eq!(v["readiness"]["checkout_ready"], true);
+    }
+
+    #[test]
+    fn deleted_flag_robust_gelesen() {
+        // Fehlend / null / falsy → nicht gelöscht.
+        assert!(!is_stripe_deleted(&json!({})));
+        assert!(!is_stripe_deleted(&json!({ "deleted": null })));
+        assert!(!is_stripe_deleted(&json!({ "deleted": false })));
+        assert!(!is_stripe_deleted(&json!({ "deleted": 0 })));
+        assert!(!is_stripe_deleted(&json!({ "deleted": "" })));
+        // Truthy → gelöscht.
+        assert!(is_stripe_deleted(&json!({ "deleted": true })));
+        assert!(is_stripe_deleted(&json!({ "deleted": 1 })));
+        assert!(is_stripe_deleted(&json!({ "deleted": "true" })));
+    }
+
+    /// P2.113 (Product-Seite): Live-Sync, bei dem `retrieve_product` für eine
+    /// eingecheckte Default-Product-ID ein gelöschtes Objekt (`deleted: true`)
+    /// liefert. Die ID darf NICHT als `reused` zählen; das Produkt muss über den
+    /// Create-Pfad neu angelegt werden (`status: created`).
+    #[tokio::test]
+    async fn live_recreates_when_product_deleted() {
+        use std::sync::Arc;
+        use tb_analytics::stripe::StripeClient;
+        use wiremock::matchers::{method, path_regex};
+        use wiremock::{Mock, MockServer, ResponseTemplate};
+
+        let server = MockServer::start().await;
+        // Default-Produkt-Retrieve → deleted:true → Default verworfen.
+        Mock::given(method("GET"))
+            .and(path_regex(r"^/v1/products/prod_.*"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({ "id": "prod_x", "deleted": true })))
+            .mount(&server)
+            .await;
+        // Product-Create → neues Produkt (Self-Heal).
+        Mock::given(method("POST"))
+            .and(path_regex(r"^/v1/products$"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({ "id": "prod_recreated" })))
+            .mount(&server)
+            .await;
+        // Preise: Default-Retrieve OK → bleiben reused (Preis-Pfad nicht im Fokus).
+        Mock::given(method("GET"))
+            .and(path_regex(r"^/v1/prices/price_.*"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({ "id": "price_ok" })))
+            .mount(&server)
+            .await;
+        Mock::given(method("GET"))
+            .and(path_regex(r"^/v1/prices$"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({ "data": [] })))
+            .mount(&server)
+            .await;
+        Mock::given(method("POST"))
+            .and(path_regex(r"^/v1/prices$"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({ "id": "price_created" })))
+            .mount(&server)
+            .await;
+
+        let config = BillingPageConfig {
+            client: Arc::new(
+                StripeClient::new("sk_test_x")
+                    .unwrap()
+                    .with_api_base(server.uri()),
+            ),
+            public_origin: "https://example.test".to_string(),
+        };
+
+        use sqlx::postgres::PgPoolOptions;
+        let pool = PgPoolOptions::new()
+            .max_connections(1)
+            .connect_lazy("postgres://invalid:invalid@127.0.0.1:1/none")
+            .unwrap();
+
+        let resp = sync_products_handler(
+            DashboardAuthLevel::Localhost,
+            Some(Extension(config)),
+            State(pool),
+            axum::body::Bytes::from_static(br#"{"dry_run": false}"#),
+        )
+        .await;
+        assert_eq!(resp.status(), StatusCode::OK);
+        let bytes = axum::body::to_bytes(resp.into_body(), 1 << 20).await.unwrap();
+        let v: Value = serde_json::from_slice(&bytes).unwrap();
+
+        // Kein Produkt darf als verifizierter Default 'reused' zählen.
+        assert_eq!(v["reused_products"], 0, "gelöschter Default zählte als reused");
+        // Die Default-Produkte (4 Pläne) wurden neu angelegt.
+        assert!(
+            v["created_products"].as_u64().unwrap() >= 4,
+            "gelöschte Produkte nicht recreated"
+        );
+        // Kein Operations-Eintrag trägt product.status == reused.
+        for op in v["operations"].as_array().unwrap() {
+            assert_ne!(op["product"]["status"], "reused", "Default galt trotz deleted als reused");
+        }
+    }
+
+    /// P2.113 (Product-Seite): Ein transienter 5xx bei `retrieve_product` darf den
+    /// Sync NICHT abbrechen — die ID wird geleert und der Create-Pfad heilt.
+    #[tokio::test]
+    async fn live_recreates_when_product_retrieve_errors() {
+        use std::sync::Arc;
+        use tb_analytics::stripe::StripeClient;
+        use wiremock::matchers::{method, path_regex};
+        use wiremock::{Mock, MockServer, ResponseTemplate};
+
+        let server = MockServer::start().await;
+        // Default-Produkt-Retrieve → 500 (transient) → ID geleert, kein Abbruch.
+        Mock::given(method("GET"))
+            .and(path_regex(r"^/v1/products/prod_.*"))
+            .respond_with(ResponseTemplate::new(500).set_body_json(json!({
+                "error": {"type": "api_error", "message": "boom"}
+            })))
+            .mount(&server)
+            .await;
+        Mock::given(method("POST"))
+            .and(path_regex(r"^/v1/products$"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({ "id": "prod_recreated" })))
+            .mount(&server)
+            .await;
+        Mock::given(method("GET"))
+            .and(path_regex(r"^/v1/prices/price_.*"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({ "id": "price_ok" })))
+            .mount(&server)
+            .await;
+        Mock::given(method("GET"))
+            .and(path_regex(r"^/v1/prices$"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({ "data": [] })))
+            .mount(&server)
+            .await;
+        Mock::given(method("POST"))
+            .and(path_regex(r"^/v1/prices$"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({ "id": "price_created" })))
+            .mount(&server)
+            .await;
+
+        let config = BillingPageConfig {
+            client: Arc::new(
+                StripeClient::new("sk_test_x")
+                    .unwrap()
+                    .with_api_base(server.uri()),
+            ),
+            public_origin: "https://example.test".to_string(),
+        };
+
+        use sqlx::postgres::PgPoolOptions;
+        let pool = PgPoolOptions::new()
+            .max_connections(1)
+            .connect_lazy("postgres://invalid:invalid@127.0.0.1:1/none")
+            .unwrap();
+
+        let resp = sync_products_handler(
+            DashboardAuthLevel::Localhost,
+            Some(Extension(config)),
+            State(pool),
+            axum::body::Bytes::from_static(br#"{"dry_run": false}"#),
+        )
+        .await;
+        // Kein Abbruch: weiterhin 200 OK trotz 5xx beim Retrieve.
+        assert_eq!(resp.status(), StatusCode::OK);
+        let bytes = axum::body::to_bytes(resp.into_body(), 1 << 20).await.unwrap();
+        let v: Value = serde_json::from_slice(&bytes).unwrap();
+        assert_eq!(v["reused_products"], 0, "transienter Fehler zählte als reused");
+        assert!(
+            v["created_products"].as_u64().unwrap() >= 4,
+            "Produkte nach Retrieve-Fehler nicht recreated"
+        );
     }
 
     #[tokio::test]
