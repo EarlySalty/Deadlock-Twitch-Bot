@@ -2,10 +2,11 @@ import { motion } from 'framer-motion';
 import { useQuery } from '@tanstack/react-query';
 import { fetchInternalHome } from '@/api/home';
 import { useAuthStatus } from '@/hooks/useAnalytics';
-import { PREVIEW_HOME_ROUTE, isPreviewModeEnabled } from '@/preview/routes';
+import { PREVIEW_ANALYTICS_ROUTE, PREVIEW_HOME_ROUTE, isPreviewModeEnabled } from '@/preview/routes';
 import { AIEngagementSection } from '@/components/verwaltung/AIEngagementSection';
 import { SilentNotificationsSection } from '@/components/verwaltung/SilentNotificationsSection';
 import { ScamGuardSection } from '@/components/verwaltung/ScamGuardSection';
+import { OnboardingWizard } from '@/components/onboarding/OnboardingWizard';
 import {
   ArrowLeft,
   ArrowRight,
@@ -171,6 +172,28 @@ export function VerwaltungPage() {
               Zurück zur Startseite
             </a>
           </div>
+        </motion.section>
+
+        {/* Einrichtung & Optionen (Onboarding-Wizard) */}
+        <motion.section
+          className="space-y-4"
+          initial={{ opacity: 0, y: 16 }}
+          whileInView={{ opacity: 1, y: 0 }}
+          viewport={{ once: true }}
+          transition={{ duration: 0.32, delay: 0.02 }}
+        >
+          <div>
+            <p className="text-sm uppercase tracking-wider font-medium text-primary mb-1">Einrichtung</p>
+            <h2 className="display-font text-2xl font-bold text-white">Bot einrichten &amp; Optionen</h2>
+            <p className="mt-1 text-sm text-text-secondary">
+              Steam &amp; Discord verknüpfen, Go-Live-Posts steuern und die Einrichtungsschritte abhaken.
+            </p>
+          </div>
+          <OnboardingWizard
+            onNavigateOverview={() => {
+              window.location.href = PREVIEW_ANALYTICS_ROUTE;
+            }}
+          />
         </motion.section>
 
         {/* Twitch OAuth Section */}
