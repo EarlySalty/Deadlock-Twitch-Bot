@@ -369,8 +369,6 @@ const OVERLAY_HTML: &str = r#"<!doctype html>
 
     #overlay-card {
       position: fixed;
-      left: 18px;
-      bottom: 18px;
       width: 280px;
       box-sizing: border-box;
       display: none;
@@ -384,6 +382,26 @@ const OVERLAY_HTML: &str = r#"<!doctype html>
       font-size: 16px;
       line-height: 1.35;
       letter-spacing: 0;
+    }
+
+    #overlay-card.overlay-pos-bl {
+      left: 16px;
+      bottom: 16px;
+    }
+
+    #overlay-card.overlay-pos-br {
+      right: 16px;
+      bottom: 16px;
+    }
+
+    #overlay-card.overlay-pos-tl {
+      left: 16px;
+      top: 16px;
+    }
+
+    #overlay-card.overlay-pos-tr {
+      right: 16px;
+      top: 16px;
     }
 
     #overlay-card.visible {
@@ -449,6 +467,15 @@ const OVERLAY_HTML: &str = r#"<!doctype html>
     const card = document.getElementById('overlay-card');
     const params = new URLSearchParams(window.location.search);
     const streamer = (params.get('streamer') || '').trim();
+    const flags = {
+      rank: params.get('rank') !== '0',
+      winrate: params.get('winrate') !== '0',
+      streak: params.get('streak') !== '0',
+      live: params.get('live') !== '0',
+    };
+    const requestedPosition = params.get('pos') || 'bl';
+    const position = ['bl', 'br', 'tl', 'tr'].includes(requestedPosition) ? requestedPosition : 'bl';
+    card.classList.add(`overlay-pos-${position}`);
     let heroIconByName = new Map();
     let latestData = null;
 
@@ -540,18 +567,18 @@ const OVERLAY_HTML: &str = r#"<!doctype html>
       latestData = data;
 
       const rows = [];
-      if (data.rank_name) {
+      if (flags.rank && data.rank_name) {
         let text = `Rang: ${data.rank_name}`;
         if (isNumber(data.delta) && data.delta > 0) text += ' ▲';
         if (isNumber(data.delta) && data.delta < 0) text += ' ▼';
         rows.push(assetLine(text, rankBadgeUrl(data.badge_level), 'rank-badge'));
       }
 
-      if (isNumber(data.winrate) && isNumber(data.wins) && isNumber(data.losses)) {
+      if (flags.winrate && isNumber(data.winrate) && isNumber(data.wins) && isNumber(data.losses)) {
         rows.push(line(`Winrate: ${data.winrate.toFixed(1)}% (${data.wins}S/${data.losses}N)`));
       }
 
-      if (isNumber(data.streak_len) && data.streak_len >= 2) {
+      if (flags.streak && isNumber(data.streak_len) && data.streak_len >= 2) {
         if (data.streak_kind === 'win') {
           rows.push(line(`Serie: ${data.streak_len} Siege in Folge`));
         } else if (data.streak_kind === 'loss') {
@@ -559,7 +586,7 @@ const OVERLAY_HTML: &str = r#"<!doctype html>
         }
       }
 
-      if (data.live === true) {
+      if (flags.live && data.live === true) {
         const details = [];
         if (data.hero) details.push(data.hero);
         if (isNumber(data.minutes)) details.push(`${data.minutes}′`);
@@ -858,6 +885,16 @@ mod tests {
 
         assert!(html.contains("background: transparent"));
         assert!(html.contains("id=\"overlay-card\""));
+        assert!(html.contains("#overlay-card.overlay-pos-bl"));
+        assert!(html.contains("#overlay-card.overlay-pos-br"));
+        assert!(html.contains("#overlay-card.overlay-pos-tl"));
+        assert!(html.contains("#overlay-card.overlay-pos-tr"));
+        assert!(html.contains("rank: params.get('rank') !== '0'"));
+        assert!(html.contains("winrate: params.get('winrate') !== '0'"));
+        assert!(html.contains("streak: params.get('streak') !== '0'"));
+        assert!(html.contains("live: params.get('live') !== '0'"));
+        assert!(html.contains("['bl', 'br', 'tl', 'tr'].includes(requestedPosition)"));
+        assert!(html.contains("card.classList.add(`overlay-pos-${position}`)"));
         assert!(html.contains("/twitch/api/v2/public/overlay?streamer="));
         assert!(html.contains("setInterval(poll, 20000)"));
         assert!(html.contains("Math.floor(badgeLevel / 10)"));
@@ -870,5 +907,9 @@ mod tests {
         assert!(html.contains("Winrate:"));
         assert!(html.contains("Serie:"));
         assert!(html.contains("LIVE"));
+        assert!(html.contains("if (flags.rank && data.rank_name)"));
+        assert!(html.contains("if (flags.winrate && isNumber(data.winrate)"));
+        assert!(html.contains("if (flags.streak && isNumber(data.streak_len)"));
+        assert!(html.contains("if (flags.live && data.live === true)"));
     }
 }
