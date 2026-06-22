@@ -1,3 +1,11 @@
+## #275 — Datenbank-Erstaufbau repariert
+
+**Problem:** Eine Schema-Migration brach beim vollständigen Erstaufbau einer frischen Datenbank ab — ein Trigger an einer Spalte blockierte deren Typ-Umstellung. Bestehende Installationen waren nicht betroffen (die Migration war dort längst angewandt), aber ein sauberer Neuaufbau von null scheiterte.
+
+**Änderung:** Die Migration entfernt den blockierenden Trigger jetzt vor der Typ-Umstellung und legt ihn danach unverändert wieder an — ausschließlich im Erstaufbau-Pfad; bestehende Datenbanken bleiben unberührt.
+
+**Ergebnis:** Eine frische Datenbank lässt sich wieder vollständig allein aus den Migrationen aufbauen, ohne Auswirkung auf den laufenden Betrieb.
+
 ## #274 — Overlay-Baukasten lädt wieder (Login statt Weißbild)
 
 **Problem:** Die Overlay-Baukasten-Seite blieb ohne gültige Anmeldung weiß. Die Seite selbst wurde noch ausgeliefert, aber die zugehörigen Programmdateien sind anmeldepflichtig und wurden zur Login-Seite umgeleitet — im Browser kam dadurch nichts an. Anders als alle übrigen Dashboard-Seiten leitete der Baukasten nicht sauber zur Anmeldung weiter.

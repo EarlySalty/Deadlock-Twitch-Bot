@@ -52,6 +52,14 @@ BEGIN
           AND attname = 'created_at'
           AND NOT attisdropped
     ) THEN
+        -- Der Trigger social_media_retention_until_tg haengt an created_at
+        -- (BEFORE INSERT OR UPDATE OF created_at) und blockiert sonst den
+        -- TYPE-Wechsel ("cannot alter type of a column used in a trigger
+        -- definition"). Dieser Zweig laeuft nur auf frischen DBs -- auf Prod ist
+        -- created_at laengst TIMESTAMPTZ, der Guard ueberspringt ihn. Trigger +
+        -- Funktion stammen aus dem baseline (existieren also hier).
+        DROP TRIGGER IF EXISTS social_media_retention_until_tg
+            ON public.twitch_clips_social_media;
         ALTER TABLE twitch_clips_social_media
             ALTER COLUMN created_at DROP DEFAULT,
             ALTER COLUMN created_at TYPE TIMESTAMPTZ
@@ -60,5 +68,10 @@ BEGIN
                     ELSE created_at::text::timestamptz
                 END,
             ALTER COLUMN created_at SET DEFAULT NOW();
+        CREATE TRIGGER social_media_retention_until_tg
+            BEFORE INSERT OR UPDATE OF created_at
+            ON public.twitch_clips_social_media
+            FOR EACH ROW
+            EXECUTE FUNCTION public.social_media_set_retention_until();
     END IF;
 END $$;
