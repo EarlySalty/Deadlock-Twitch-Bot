@@ -1,3 +1,11 @@
+## #266 — Chat-Befehle & automatische Werbung nach Rust-Umstellung repariert
+
+**Problem:** Beim Umstieg auf die neue Bot-Technik hatten sich einige Verhalten verändert: `!raid` nannte den Zielkanal nicht mehr und schwieg, wenn Raids für den Kanal gar nicht eingerichtet waren; die Lurker-Erinnerung kam als normale Chat-Nachricht statt als hervorgehobene Ankündigung; der `!invite`-Cooldown von einer Stunde wurde auch dann verbraucht, wenn gar nichts gesendet wurde; und mehrere Feinheiten der automatischen Werbung (Partner-Abschaltung, Kanalauswahl) griffen nicht mehr wie vorher.
+
+**Änderung:** `!raid` bestätigt wieder mit Zielkanal („Raid auf … gestartet"), und wenn Raids für den Kanal nicht aktiviert sind, kommt eine klare Meldung statt Stille. Die Lurker-Erinnerung wird wieder als orange Ankündigung gesendet. Der `!invite`-Cooldown wird nur noch bei erfolgreichem Versand gesetzt — ein Fehlversuch blockiert nicht mehr eine Stunde; ein erfolgreicher `!invite` verschiebt zudem die nächste automatische Werbung. Die automatische Werbung respektiert wieder Partner-Abschaltungen und die korrekte Kanalauswahl, und der passende Werbetext wird anhand des Gesprächskontexts gewählt. `!uban` findet den letzten automatischen Bann jetzt auch nach einem Neustart des Bots wieder. Das An- und Abschalten des KI-Engagements läuft nur noch über das Verwaltungs-Dashboard; die Chat-Befehle dafür wurden entfernt.
+
+**Ergebnis:** Chat-Befehle und automatische Werbung verhalten sich wieder wie vor der Umstellung, der `!invite`-Cooldown ist fair, und die Engagement-Steuerung ist im Dashboard gebündelt.
+
 ## #265 — Overlay-Baukasten als eigene Seite + öffentlich erreichbar
 
 **Problem:** Der Overlay-Baukasten steckte mitten im Verwaltungs-Dashboard zwischen allen anderen Einstellungen — schwer auffindbar und nicht direkt teilbar. Zudem war die Overlay-Adresse über die öffentliche Domain gar nicht erreichbar: Der vorgelagerte Reverse-Proxy kannte den Pfad nicht und beantwortete ihn mit „nicht gefunden", obwohl der Dienst dahinter die Seite längst auslieferte.
