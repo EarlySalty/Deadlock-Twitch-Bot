@@ -25,9 +25,9 @@ Reply-Funktionen sind pur + verhaltens-getestet (exakte `assert_eq!`, inkl. `not
 
 ## Overlay
 
-- **Render:** `GET /twitch/overlay?streamer=<login>` — self-contained transparentes HTML (`tb-dashboard-api/src/handlers/overlay.rs`, öffentlicher CSRF-freier Router), pollt alle 20 s. Config rein clientseitig über URL-Parameter: `rank|winrate|streak|live` (=`0`/`1`, Default `1`), `pos` ∈ `bl|br|tl|tr` (Default `bl`).
+- **Render:** `GET /twitch/overlay?streamer=<login>` — self-contained transparentes HTML (`tb-dashboard-api/src/handlers/overlay.rs`, öffentlicher CSRF-freier Router), pollt alle 20 s. Config rein clientseitig über URL-Parameter: `rank|winrate|streak|live` (=`0`/`1`, Default `1`), `pos` ∈ `bl|br|tl|tr` (Default `bl`). **Der Handler verzweigt:** mit `streamer`-Param → Render-HTML (für OBS, ohne Login erreichbar); ohne `streamer`-Param → SPA-Index (`serve_dashboard_v2_index` aus `spa.rs`), damit `/twitch/overlay` die Baukasten-Seite ausliefert.
 - **Daten:** `GET /twitch/api/v2/public/overlay?streamer=<login>` — bündelt die 3 Steam-Bot-Endpoints, **30 s In-Memory-Cache pro Login** (schont die GC-Lane). Auflösung `twitch_streamers.twitch_login → twitch_user_id → twitch_streamer_identities.discord_user_id → steam`.
-- **Builder:** `dashboard_v2/src/components/verwaltung/OverlayBuilderSection.tsx`, eingebunden in `VerwaltungPage` — Toggles + Position + Live-Vorschau (iframe) + generierte URL + OBS-Anleitung.
+- **Builder:** eigene Seite `dashboard_v2/src/pages/OverlayBuilder.tsx` unter `/twitch/overlay` (Route in `App.tsx` via `isOverlayBuilderRoute`, Preview-Pfad in `preview/routes.ts`). Die Seite lädt den `twitchLogin` und rendert `components/verwaltung/OverlayBuilderSection.tsx` (Toggles + Position + Live-Vorschau via iframe + generierte URL + OBS-Anleitung). `VerwaltungPage` bindet den Baukasten **nicht** mehr ein, sondern verlinkt nur auf die eigene Seite.
 
 ## Assets (Deadlock-Spielgrafiken, © Valve)
 

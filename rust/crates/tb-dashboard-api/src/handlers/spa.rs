@@ -65,6 +65,11 @@ pub async fn analyse_handler(
         return r;
     }
 
+    serve_dashboard_v2_index().await
+}
+
+/// Liefert die dashboard_v2-SPA-Shell ohne Host- oder Auth-Gate.
+pub(crate) async fn serve_dashboard_v2_index() -> Response {
     let index = dist_root().join("index.html");
     let html = match tokio::fs::read_to_string(&index).await {
         Ok(s) => s,

@@ -15,6 +15,7 @@ import { resolveTabParam } from '@/tabAliases';
 import { SessionDetail } from '@/pages/SessionDetail';
 import { InternalHomeLanding } from '@/pages/InternalHomeLanding';
 import { VerwaltungPage } from '@/pages/Verwaltung';
+import { OverlayBuilderPage } from '@/pages/OverlayBuilder';
 import { OnboardingPage } from '@/pages/Onboarding';
 import Pricing from '@/pages/Pricing';
 import { AnalyticsTour } from '@/components/onboarding/AnalyticsTour';
@@ -27,6 +28,7 @@ import type { TimeRange } from '@/types/analytics';
 import {
   PREVIEW_ANALYTICS_ROUTE,
   PREVIEW_HOME_ROUTE,
+  PREVIEW_OVERLAY_ROUTE,
   PREVIEW_PRICING_ROUTE,
   PREVIEW_VERWALTUNG_ROUTE,
 } from '@/preview/routes';
@@ -409,6 +411,7 @@ export default function App() {
   const path = normalizePathname(window.location.pathname);
   const isInternalHomeRoute = path === PREVIEW_HOME_ROUTE;
   const isVerwaltungRoute = path === PREVIEW_VERWALTUNG_ROUTE;
+  const isOverlayBuilderRoute = path === PREVIEW_OVERLAY_ROUTE;
   const isPricingRoute = path === PREVIEW_PRICING_ROUTE;
   const isSocialMediaAdminRoute = path === '/social-media-admin';
   const isAnalyticsRoute =
@@ -425,6 +428,8 @@ export default function App() {
           <SocialMediaAdminDashboard />
         ) : isVerwaltungRoute ? (
           <VerwaltungPage />
+        ) : isOverlayBuilderRoute ? (
+          <OverlayBuilderPage />
         ) : isPricingRoute ? (
           <Pricing />
         ) : isInternalHomeRoute ? (

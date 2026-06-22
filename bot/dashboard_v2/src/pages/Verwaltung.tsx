@@ -2,9 +2,8 @@ import { motion } from 'framer-motion';
 import { useQuery } from '@tanstack/react-query';
 import { fetchInternalHome } from '@/api/home';
 import { useAuthStatus } from '@/hooks/useAnalytics';
-import { PREVIEW_ANALYTICS_ROUTE, PREVIEW_HOME_ROUTE, isPreviewModeEnabled } from '@/preview/routes';
+import { PREVIEW_ANALYTICS_ROUTE, PREVIEW_HOME_ROUTE, PREVIEW_OVERLAY_ROUTE, isPreviewModeEnabled } from '@/preview/routes';
 import { AIEngagementSection } from '@/components/verwaltung/AIEngagementSection';
-import { OverlayBuilderSection } from '@/components/verwaltung/OverlayBuilderSection';
 import { SilentNotificationsSection } from '@/components/verwaltung/SilentNotificationsSection';
 import { ScamGuardSection } from '@/components/verwaltung/ScamGuardSection';
 import { OnboardingWizard } from '@/components/onboarding/OnboardingWizard';
@@ -352,7 +351,33 @@ export function VerwaltungPage() {
           </div>
         </motion.section>
 
-        <OverlayBuilderSection login={twitchLogin} />
+        <motion.section
+          className="panel-card rounded-2xl p-5 md:p-6"
+          initial={{ opacity: 0, y: 16 }}
+          whileInView={{ opacity: 1, y: 0 }}
+          viewport={{ once: true }}
+          transition={{ duration: 0.32, delay: 0.14 }}
+        >
+          <div className="mb-5">
+            <p className="mb-1 text-sm font-medium uppercase tracking-wider text-primary">
+              Stream-Overlay
+            </p>
+            <h2 className="display-font mb-1 text-2xl font-bold text-white">
+              Overlay für OBS
+            </h2>
+            <p className="text-sm text-text-secondary">
+              Stell dir dein Stream-Overlay zusammen — Rang, Winrate, Serie und Live-Match als einblendbare Karte für OBS.
+            </p>
+          </div>
+
+          <a
+            href={PREVIEW_OVERLAY_ROUTE}
+            className="inline-flex items-center gap-2 rounded-lg border border-primary/40 bg-primary/10 px-5 py-2.5 text-sm font-semibold text-primary transition-colors hover:border-primary/60 hover:bg-primary/20"
+          >
+            <ArrowRight className="h-4 w-4" />
+            Overlay-Baukasten öffnen
+          </a>
+        </motion.section>
 
         <SilentNotificationsSection />
 

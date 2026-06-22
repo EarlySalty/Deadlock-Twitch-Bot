@@ -41,9 +41,9 @@ Die Zahlen kommen aus deiner echten Match-Historie, die der Bot direkt über den
 
 ### Wie blende ich meine Stats im Stream ein (OBS-Overlay)?
 
-Im Verwaltungs-Dashboard gibt es einen Overlay-Baukasten: Dort wählst du aus, was angezeigt werden soll, und bekommst eine fertige URL für OBS.
+Es gibt eine eigene Overlay-Seite mit Baukasten: Dort wählst du aus, was angezeigt werden soll, und bekommst eine fertige URL für OBS.
 
-1. Öffne im Verwaltungs-Dashboard den Bereich „Stream-Overlay".
+1. Öffne die Overlay-Seite: `deutsche-deadlock-community.de/twitch/overlay`.
 2. Wähle aus, was angezeigt werden soll (Rang, Winrate, Serie, Live-Match) und an welcher Ecke.
 3. Kopiere die angezeigte Overlay-URL.
 4. Füge in OBS eine Browser-Quelle hinzu und trage die URL ein (Breite 360, Höhe 200).
@@ -53,4 +53,4 @@ Im Verwaltungs-Dashboard gibt es einen Overlay-Baukasten: Dort wählst du aus, w
 - Rang-Abzeichen und Hero-Bilder sind die offiziellen Deadlock-Spielgrafiken.
 - Du kannst jederzeit umstellen, was angezeigt wird — einfach eine neue URL aus dem Baukasten kopieren.
 
-[Overlay im Verwaltungs-Dashboard einrichten](https://deutsche-deadlock-community.de/twitch/verwaltung)
+[Overlay-Baukasten öffnen](https://deutsche-deadlock-community.de/twitch/overlay)

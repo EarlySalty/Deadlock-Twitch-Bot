@@ -1,5 +1,12 @@
 # Workflow
 
+## 2026-06-22 — Overlay-Baukasten als eigene Seite
+
+- Start: delegierter GPT-Implementierungsworker; Scope auf `bot/dashboard_v2/src/**`, `rust/crates/tb-dashboard-api/src/handlers/overlay.rs` und kleinen shared Helper in `spa.rs`; verbindliche Review-Regel: keine Commits, kein Push, Aenderungen bleiben uncommitted.
+- Implementiert: `/twitch/overlay?streamer=<login>` liefert weiter das OBS-Render-HTML; `/twitch/overlay` ohne Streamer liefert den dashboard_v2-SPA-Index ueber gemeinsamen `spa`-Helper.
+- Implementiert: eigene React-Seite fuer den Overlay-Baukasten, Route-Konstante und App-Routing; Verwaltung zeigt nur noch den Link zur neuen Seite.
+- Verifikation: `npm --prefix bot/dashboard_v2 run build` gruen nach `npm ci --legacy-peer-deps`; `cargo build -p tb-dashboard-api` und `cargo test -p tb-dashboard-api` gruen; `cargo clippy -p tb-dashboard-api` exit 0 mit bestehenden Warnungen ausserhalb der geaenderten Overlay-/SPA-Stellen. Kein Commit gemaess Review-Regel.
+
 ## 2026-06-22 — Overlay-Builder-Seite + Config-Params
 
 - Start: delegierter GPT-Implementierungsworker; Scope auf `bot/dashboard_v2/src/**` plus eingebettete JS/CSS-Logik in `rust/crates/tb-dashboard-api/src/handlers/overlay.rs`; verbindliche Review-Regel: keine Commits, kein Push, Aenderungen bleiben uncommitted.

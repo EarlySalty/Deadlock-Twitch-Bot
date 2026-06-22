@@ -1,3 +1,11 @@
+## #265 — Overlay-Baukasten als eigene Seite + öffentlich erreichbar
+
+**Problem:** Der Overlay-Baukasten steckte mitten im Verwaltungs-Dashboard zwischen allen anderen Einstellungen — schwer auffindbar und nicht direkt teilbar. Zudem war die Overlay-Adresse über die öffentliche Domain gar nicht erreichbar: Der vorgelagerte Reverse-Proxy kannte den Pfad nicht und beantwortete ihn mit „nicht gefunden", obwohl der Dienst dahinter die Seite längst auslieferte.
+
+**Änderung:** Der Baukasten ist jetzt eine eigene Seite unter `…/twitch/overlay`, von der Verwaltung aus verlinkt. Dieselbe Adresse erfüllt zwei Zwecke: ohne Streamer-Namen zeigt sie den Baukasten mit Live-Vorschau und URL-Generator, mit Streamer-Namen liefert sie das reine OBS-Overlay aus. Der Proxy leitet den Pfad jetzt korrekt an den Dienst weiter und erlaubt dem Overlay die nötigen Spielgrafiken (Rang-Abzeichen, Hero-Bilder) sowie die eingebettete Vorschau auf der eigenen Seite.
+
+**Ergebnis:** Der Baukasten hat eine eigene, teilbare Adresse, und das in OBS einzutragende Overlay funktioniert jetzt auch über die öffentliche Domain — nicht nur intern.
+
 ## #264 — Overlay-Baukasten im Dashboard + Hilfe-Bereich
 
 **Problem:** Das Stream-Overlay gab es nur als feste URL — ohne Möglichkeit auszuwählen, was angezeigt wird, und ohne Anleitung. In der Hilfe fehlten die Stat-Befehle und das Overlay komplett.

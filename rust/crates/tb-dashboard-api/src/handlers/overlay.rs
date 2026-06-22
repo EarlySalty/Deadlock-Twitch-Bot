@@ -20,6 +20,8 @@ use serde_json::{json, Value};
 use sqlx::PgPool;
 use tokio::sync::{Mutex, Notify};
 
+use crate::handlers::spa;
+
 const DEFAULT_STEAM_BOT_BASE_URL: &str = "http://127.0.0.1:8783";
 const OVERLAY_CACHE_TTL: Duration = Duration::from_secs(30);
 const STEAM_BOT_TIMEOUT: Duration = Duration::from_secs(8);
@@ -346,9 +348,13 @@ pub async fn overlay_api_handler(
     (StatusCode::OK, Json(body)).into_response()
 }
 
-/// `GET /twitch/overlay?streamer=<login>`
-pub async fn overlay_html_handler() -> Html<&'static str> {
-    Html(OVERLAY_HTML)
+/// `GET /twitch/overlay` — Builder-SPA ohne Param, OBS-Render mit `streamer`.
+pub async fn overlay_html_handler(Query(query): Query<OverlayQuery>) -> axum::response::Response {
+    if normalize_login(query.streamer.as_deref()).is_some() {
+        return Html(OVERLAY_HTML).into_response();
+    }
+
+    spa::serve_dashboard_v2_index().await
 }
 
 const OVERLAY_HTML: &str = r#"<!doctype html>
@@ -638,6 +644,7 @@ async fn clear_overlay_cache_for_tests() {
 #[cfg(test)]
 mod tests {
     use std::sync::OnceLock;
+    use std::time::{SystemTime, UNIX_EPOCH};
 
     use axum::body::to_bytes;
     use axum::http::{header, Request, StatusCode};
@@ -670,6 +677,28 @@ mod tests {
                 std::env::set_var("STEAM_BOT_RANK_URL", previous);
             } else {
                 std::env::remove_var("STEAM_BOT_RANK_URL");
+            }
+        }
+    }
+
+    struct DashboardDistEnvGuard {
+        previous: Option<String>,
+    }
+
+    impl DashboardDistEnvGuard {
+        fn set(value: &str) -> Self {
+            let previous = std::env::var("DASHBOARD_V2_DIST_PATH").ok();
+            std::env::set_var("DASHBOARD_V2_DIST_PATH", value);
+            Self { previous }
+        }
+    }
+
+    impl Drop for DashboardDistEnvGuard {
+        fn drop(&mut self) {
+            if let Some(previous) = &self.previous {
+                std::env::set_var("DASHBOARD_V2_DIST_PATH", previous);
+            } else {
+                std::env::remove_var("DASHBOARD_V2_DIST_PATH");
             }
         }
     }
@@ -911,5 +940,70 @@ mod tests {
         assert!(html.contains("if (flags.winrate && isNumber(data.winrate)"));
         assert!(html.contains("if (flags.streak && isNumber(data.streak_len)"));
         assert!(html.contains("if (flags.live && data.live === true)"));
+    }
+
+    #[tokio::test]
+    async fn overlay_html_route_ohne_streamer_liefert_dashboard_spa_index() {
+        let _env_lock = ENV_LOCK.get_or_init(|| Mutex::new(())).lock().await;
+        let unique = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let root = std::env::temp_dir().join(format!("tb_overlay_spa_index_test_{unique}"));
+        tokio::fs::create_dir_all(&root).await.unwrap();
+        tokio::fs::write(
+            root.join("index.html"),
+            r#"<!doctype html><html><head><script type="module" src="/twitch/dashboard-v2/assets/app.js"></script></head><body><div id="root"></div></body></html>"#,
+        )
+        .await
+        .unwrap();
+        let _dist_env = DashboardDistEnvGuard::set(root.to_str().unwrap());
+
+        let pool = PgPoolOptions::new()
+            .max_connections(1)
+            .connect_lazy("postgres://invalid:invalid@127.0.0.1:1/none")
+            .expect("lazy pool");
+        let app = build_public_router(pool);
+
+        let render_resp = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .uri("/twitch/overlay?streamer=nani")
+                    .body(axum::body::Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(render_resp.status(), StatusCode::OK);
+        let render_body = to_bytes(render_resp.into_body(), usize::MAX).await.unwrap();
+        let render_html = String::from_utf8(render_body.to_vec()).unwrap();
+        assert!(render_html.contains("id=\"overlay-card\""));
+        assert!(render_html.contains("background: transparent"));
+
+        let spa_resp = app
+            .oneshot(
+                Request::builder()
+                    .uri("/twitch/overlay")
+                    .body(axum::body::Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(spa_resp.status(), StatusCode::OK);
+        assert!(spa_resp
+            .headers()
+            .get(header::CONTENT_TYPE)
+            .unwrap()
+            .to_str()
+            .unwrap()
+            .starts_with("text/html"));
+        let spa_body = to_bytes(spa_resp.into_body(), usize::MAX).await.unwrap();
+        let spa_html = String::from_utf8(spa_body.to_vec()).unwrap();
+        assert!(spa_html.contains("<div id=\"root\""));
+        assert!(spa_html.contains("window.__TWITCH_DASHBOARD_RUNTIME__"));
+        assert!(spa_html.contains("/analyse/assets/app.js"));
+
+        tokio::fs::remove_dir_all(root).await.unwrap();
     }
 }
