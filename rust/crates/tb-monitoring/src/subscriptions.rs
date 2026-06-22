@@ -23,8 +23,7 @@ use crate::poller::source::SourceError;
 /// Revocation dieser Typen heilt der Reconcile-Loop die Live-Event-Zustellung
 /// (Go-Live/Offline/Title) durch Resubscribe; nicht-Core-Typen werden ebenfalls
 /// untracked, hängen aber nicht am Go-Live-Pfad.
-pub const EVENTSUB_CORE_SUB_TYPES: &[&str] =
-    &["stream.online", "stream.offline", "channel.update"];
+pub const EVENTSUB_CORE_SUB_TYPES: &[&str] = &["stream.online", "stream.offline", "channel.update"];
 
 /// Chat-Subscription-Typen, deren 403 sich durch Re-Modding des Bots heilen
 /// lässt (Python `_subscribe_missing_chat_subscriptions`). Nur für diese Typen
@@ -49,6 +48,43 @@ pub trait ModeratorProvisioner: Send + Sync {
     /// `true`, wenn der Bot (wieder) Mod im Kanal ist. `broadcaster_id` = Ziel-
     /// Kanal, `login` = dessen Login (für Logging/Token-Auflösung).
     async fn ensure_bot_is_mod(&self, broadcaster_id: &str, login: &str) -> bool;
+}
+
+/// User-Token für EventSub-Subscribe-Versuche. Kein `Debug`, damit Tokens nicht
+/// versehentlich in Logs/Testfehlern landen.
+#[derive(Clone)]
+pub struct EventSubUserToken {
+    token: String,
+    scopes: Vec<String>,
+}
+
+impl EventSubUserToken {
+    pub fn new(token: impl Into<String>, scopes: Vec<String>) -> Self {
+        Self {
+            token: token.into(),
+            scopes,
+        }
+    }
+
+    fn token(&self) -> &str {
+        self.token.as_str()
+    }
+
+    fn scopes(&self) -> &[String] {
+        &self.scopes
+    }
+}
+
+/// Liefert den Broadcaster-User-Token für EventSub-Fallbacks. Die konkrete
+/// Auflösung lebt im Composition-Root, weil dort der verschlüsselte
+/// `twitch_raid_auth`-Store und Refresh-Kontext verfügbar sind.
+#[async_trait::async_trait]
+pub trait BroadcasterEventSubTokenProvider: Send + Sync {
+    async fn eventsub_broadcaster_token(
+        &self,
+        broadcaster_id: &str,
+        login: &str,
+    ) -> Option<EventSubUserToken>;
 }
 
 /// Senke für Webhook-Revocations: entkoppelt den `WebhookReceiver` vom
@@ -282,6 +318,9 @@ pub struct SubscriptionManager {
     /// Optionaler Mod-Provisioner für die 403-Selbstheilung im Chat-Pfad
     /// (Python `_ensure_bot_is_mod`). `None` → Alt-Verhalten (403 = perm_failed).
     moderator_provisioner: Option<Arc<dyn ModeratorProvisioner>>,
+    /// Optionaler Broadcaster-Token-Provider für Moderator-Telemetrie-Fallbacks
+    /// (Python `auth_attempts = [bot-token, broadcaster-token]`).
+    broadcaster_token_provider: Option<Arc<dyn BroadcasterEventSubTokenProvider>>,
     /// 403-Mod-Retry-Cooldown je (sub_type, broadcaster_id) als Ablauf-Epoch-Sek.
     /// (Python `_mod_retry_cooldown`). Ersetzt den permanenten perm_failed-Eintrag
     /// im Chat-Pfad: nach Ablauf wird automatisch erneut versucht.
@@ -306,6 +345,7 @@ impl SubscriptionManager {
             capacity_throttle: Mutex::new(CapacityThrottle::default()),
             clock: Arc::new(epoch_clock),
             moderator_provisioner: None,
+            broadcaster_token_provider: None,
             mod_retry_cooldown: Mutex::new(HashMap::new()),
         }
     }
@@ -335,13 +375,31 @@ impl SubscriptionManager {
         self
     }
 
+    /// Verdrahtet den Broadcaster-Token-Fallback für Moderator-Telemetrie-Subs.
+    ///
+    /// WIRING-TODO(P2.56): In `bin/tb-bot/src/chat_wiring.rs` den bestehenden
+    /// Broadcaster-/Raid-Auth-Tokenpfad als `BroadcasterEventSubTokenProvider`
+    /// an den `SubscriptionManager` durchreichen. Bis dahin bleibt der Fallback
+    /// nur in Tests/bei expliziter Injektion aktiv.
+    #[must_use]
+    pub fn with_broadcaster_eventsub_token_provider(
+        mut self,
+        provider: Arc<dyn BroadcasterEventSubTokenProvider>,
+    ) -> Self {
+        self.broadcaster_token_provider = Some(provider);
+        self
+    }
+
     /// `true`, wenn für (sub_type, broadcaster_id) ein noch nicht abgelaufener
     /// Mod-Retry-Cooldown aktiv ist. Abgelaufene Einträge werden entfernt
     /// (laufzeit-clearbar — kein Neustart nötig).
     fn mod_retry_cooldown_active(&self, sub_type: &str, broadcaster_id: &str) -> bool {
         let key = (sub_type.to_string(), broadcaster_id.to_string());
         let now = (self.clock)();
-        let mut cd = self.mod_retry_cooldown.lock().expect("mod_retry_cooldown lock");
+        let mut cd = self
+            .mod_retry_cooldown
+            .lock()
+            .expect("mod_retry_cooldown lock");
         match cd.get(&key) {
             Some(&until) if until > now => true,
             Some(_) => {
@@ -366,6 +424,20 @@ impl SubscriptionManager {
             .lock()
             .expect("tracked lock")
             .contains(&(sub_type.to_string(), broadcaster_id.to_string()))
+    }
+
+    fn is_perm_failed(&self, sub_type: &str, broadcaster_id: &str) -> bool {
+        self.perm_failed
+            .lock()
+            .expect("perm_failed lock")
+            .contains(&(sub_type.to_string(), broadcaster_id.to_string()))
+    }
+
+    fn mark_perm_failed(&self, sub_type: &str, broadcaster_id: &str) {
+        self.perm_failed
+            .lock()
+            .expect("perm_failed lock")
+            .insert((sub_type.to_string(), broadcaster_id.to_string()));
     }
 
     fn track(&self, sub_type: &str, broadcaster_id: &str) {
@@ -609,6 +681,54 @@ impl SubscriptionManager {
             .insert(sub_type.to_string(), SubscriptionState { state, detail });
     }
 
+    /// Entfernt die in Rust vorhandenen lokalen Chat-/Subscription-Zustände für
+    /// einen stale/removed Kanal (Port von Pythons `_purge_local_channel_state`):
+    /// hier sind das `subscription_state`, `perm_failed` und ein evtl. laufender
+    /// Mod-Retry-Cooldown. Persistente Twitch-/Partner-Tabellen bleiben
+    /// unangetastet.
+    fn purge_local_channel_state(&self, broadcaster_id: &str, login: &str) {
+        let normalized_login = normalize_login(login);
+        if !normalized_login.is_empty() {
+            self.subscription_state
+                .lock()
+                .expect("subscription_state lock")
+                .remove(&normalized_login);
+        }
+        let broadcaster_id = broadcaster_id.trim();
+        if broadcaster_id.is_empty() {
+            return;
+        }
+        self.perm_failed
+            .lock()
+            .expect("perm_failed lock")
+            .retain(|(_, bid)| bid != broadcaster_id);
+        self.mod_retry_cooldown
+            .lock()
+            .expect("mod_retry_cooldown lock")
+            .retain(|(_, bid), _| bid != broadcaster_id);
+    }
+
+    fn has_local_channel_state(&self, broadcaster_id: &str, login: &str) -> bool {
+        let normalized_login = normalize_login(login);
+        if !normalized_login.is_empty()
+            && self
+                .subscription_state
+                .lock()
+                .expect("subscription_state lock")
+                .contains_key(&normalized_login)
+        {
+            return true;
+        }
+        let broadcaster_id = broadcaster_id.trim();
+        !broadcaster_id.is_empty()
+            && self
+                .perm_failed
+                .lock()
+                .expect("perm_failed lock")
+                .iter()
+                .any(|(_, bid)| bid == broadcaster_id)
+    }
+
     /// Subscription-States eines Kanals als `(sub_type, state, detail)`-Tripel —
     /// Diagnose-Quelle für die Join-Entscheidung (Port von Pythons
     /// `get_channel_subscription_state`).
@@ -746,14 +866,22 @@ impl SubscriptionManager {
         .await
     }
 
+    fn scopes_allow(scopes: &[String], required_scope: &str) -> bool {
+        scopes.is_empty()
+            || scopes
+                .iter()
+                .map(|scope| scope.trim())
+                .any(|scope| scope.eq_ignore_ascii_case(required_scope))
+    }
+
     /// Moderator-Daten-Telemetrie-Subs (follow/ban/unban/shoutout) für einen
     /// Partner sicherstellen — Port von `eventsub_mixin.py` `moderator_subs`
     /// (Z. 1704, B5-02). `bot_token` ist der Moderator-User-Token (der Rust-Bot
     /// ist Moderator im Kanal), `bot_user_id` füllt `moderator_user_id` der
-    /// Condition, `scopes` sind die Bot-Token-Scopes; ein Sub wird nur versucht,
-    /// wenn der Scope vorhanden ist (oder die Scope-Liste leer/unbekannt ist).
-    /// Ist der Bot kein Moderator im Kanal, liefert Twitch 403 → `perm_failed`
-    /// (kein Retry-Spam). Liefert die Anzahl sichergestellter Subs.
+    /// Condition, `scopes` sind die Bot-Token-Scopes. Bei 403/Scope-Lücke wird
+    /// zusätzlich ein injizierter Broadcaster-Token versucht (P2.56); dessen
+    /// Condition trägt `moderator_user_id = broadcaster_id`, wie Python.
+    /// Liefert die Anzahl sichergestellter Subs.
     pub async fn ensure_moderator_telemetry_subscriptions(
         &self,
         broadcaster_id: &str,
@@ -764,39 +892,70 @@ impl SubscriptionManager {
     ) -> usize {
         let broadcaster_id = broadcaster_id.trim();
         let bot_user_id = bot_user_id.trim();
-        if broadcaster_id.is_empty() || bot_user_id.is_empty() || bot_token.trim().is_empty() {
+        let bot_token = bot_token.trim();
+        if broadcaster_id.is_empty() {
             return 0;
         }
-        let scope_set: HashSet<String> = scopes
-            .iter()
-            .map(|s| s.trim().to_lowercase())
-            .filter(|s| !s.is_empty())
-            .collect();
-        let condition = serde_json::json!({
-            "broadcaster_user_id": broadcaster_id,
-            "moderator_user_id": bot_user_id,
-        });
+        let broadcaster_auth = match self.broadcaster_token_provider.as_ref() {
+            Some(provider) => provider
+                .eventsub_broadcaster_token(broadcaster_id, login)
+                .await
+                .filter(|auth| !auth.token().trim().is_empty()),
+            None => None,
+        };
         let mut ensured = 0;
         for (sub_type, version, required_scope) in MODERATOR_TELEMETRY_SUBSCRIPTIONS {
-            // Scope-Filter (Python: `if required_scope not in bot_scopes`):
-            // bei bekannter Scope-Liste fehlende Scopes überspringen.
-            if !scope_set.is_empty() && !scope_set.contains(required_scope) {
+            let mut attempts: Vec<(&'static str, serde_json::Value, &str)> = Vec::new();
+            if !bot_token.is_empty()
+                && !bot_user_id.is_empty()
+                && Self::scopes_allow(scopes, required_scope)
+            {
+                attempts.push((
+                    "bot",
+                    serde_json::json!({
+                        "broadcaster_user_id": broadcaster_id,
+                        "moderator_user_id": bot_user_id,
+                    }),
+                    bot_token,
+                ));
+            } else if !scopes.is_empty() && !Self::scopes_allow(scopes, required_scope) {
                 tracing::debug!(
                     sub_type,
                     login,
                     required_scope,
-                    "Moderator-Telemetrie-Sub übersprungen: Bot-Token-Scope fehlt"
+                    "Moderator-Telemetrie-Sub: Bot-Token-Scope fehlt, prüfe Broadcaster-Fallback"
+                );
+            }
+
+            if let Some(auth) = broadcaster_auth.as_ref() {
+                if Self::scopes_allow(auth.scopes(), required_scope) {
+                    attempts.push((
+                        "broadcaster",
+                        serde_json::json!({
+                            "broadcaster_user_id": broadcaster_id,
+                            "moderator_user_id": broadcaster_id,
+                        }),
+                        auth.token().trim(),
+                    ));
+                }
+            }
+
+            if attempts.is_empty() {
+                tracing::debug!(
+                    sub_type,
+                    login,
+                    required_scope,
+                    "Moderator-Telemetrie-Sub übersprungen: kein passender Token/Scope"
                 );
                 continue;
             }
             if self
-                .ensure_subscription_with_condition(
+                .ensure_subscription_with_auth_attempts(
                     sub_type,
                     version,
-                    condition.clone(),
                     broadcaster_id,
                     login,
-                    Some(bot_token),
+                    attempts,
                 )
                 .await
             {
@@ -843,12 +1002,7 @@ impl SubscriptionManager {
             tracing::debug!(sub_type, login, "EventSub: bereits subscribed, überspringe");
             return true;
         }
-        if self
-            .perm_failed
-            .lock()
-            .expect("perm_failed lock")
-            .contains(&(sub_type.to_string(), broadcaster_id.to_string()))
-        {
+        if self.is_perm_failed(sub_type, broadcaster_id) {
             tracing::debug!(sub_type, login, "EventSub: 403-gebannt, überspringe");
             return false;
         }
@@ -864,95 +1018,289 @@ impl SubscriptionManager {
             return false;
         }
         match self
-            .transport
-            .create(
+            .create_subscription_once(
                 sub_type,
                 version,
                 &condition,
-                &self.config.callback_url,
-                &self.config.secret,
+                broadcaster_id,
+                login,
                 bearer_override,
             )
             .await
         {
-            Ok(already_exists) => {
-                self.track(sub_type, broadcaster_id);
+            Ok(_) => true,
+            Err(error) => {
+                self.handle_subscription_create_error(
+                    error,
+                    sub_type,
+                    version,
+                    &condition,
+                    broadcaster_id,
+                    login,
+                    bearer_override,
+                )
+                .await
+            }
+        }
+    }
+
+    async fn create_subscription_once(
+        &self,
+        sub_type: &str,
+        version: &str,
+        condition: &serde_json::Value,
+        broadcaster_id: &str,
+        login: &str,
+        bearer_override: Option<&str>,
+    ) -> Result<bool, SourceError> {
+        let already_exists = self
+            .transport
+            .create(
+                sub_type,
+                version,
+                condition,
+                &self.config.callback_url,
+                &self.config.secret,
+                bearer_override,
+            )
+            .await?;
+        self.track(sub_type, broadcaster_id);
+        tracing::info!(
+            sub_type,
+            login,
+            "EventSub Webhook: Subscription {}",
+            if already_exists {
+                "bereits vorhanden"
+            } else {
+                "erstellt"
+            }
+        );
+        if sub_type == "stream.offline" {
+            self.record_capacity_snapshot("stream_offline_subscribed")
+                .await;
+        }
+        Ok(already_exists)
+    }
+
+    async fn handle_subscription_create_error(
+        &self,
+        error: SourceError,
+        sub_type: &str,
+        version: &str,
+        condition: &serde_json::Value,
+        broadcaster_id: &str,
+        login: &str,
+        bearer_override: Option<&str>,
+    ) -> bool {
+        let msg = error.to_string();
+        if msg.contains("403") {
+            if CHAT_MOD_RETRY_SUB_TYPES.contains(&sub_type)
+                && self
+                    .is_stale_removed_channel_after_403(broadcaster_id, login)
+                    .await
+                && (self.has_local_channel_state(broadcaster_id, login)
+                    || self.moderator_provisioner.is_none())
+            {
+                self.record_subscription_state(
+                    login,
+                    sub_type,
+                    "stale_removed_channel",
+                    Some("channel no longer tracked locally or authorized"),
+                );
+                self.purge_local_channel_state(broadcaster_id, login);
                 tracing::info!(
                     sub_type,
                     login,
-                    "EventSub Webhook: Subscription {}",
-                    if already_exists {
-                        "bereits vorhanden"
-                    } else {
-                        "erstellt"
-                    }
+                    "EventSub 403: stale/removed channel erkannt — lokaler Subscription-State gepurged"
                 );
-                if sub_type == "stream.offline" {
-                    self.record_capacity_snapshot("stream_offline_subscribed")
-                        .await;
-                }
-                true
+                return false;
             }
-            Err(error) => {
-                let msg = error.to_string();
-                if msg.contains("403") {
-                    // P1.2: Chat-Pfad heilt einen Laufzeit-403 (Bot demoddet)
-                    // selbst: Bot re-modden, 1s warten, ein Re-Subscribe.
-                    // Gelingt das, ist der Kanal sofort wieder live; scheitert
-                    // es, greift ein 10-Min-Cooldown (clearbar) STATT eines
-                    // permanenten perm_failed-Eintrags.
-                    if CHAT_MOD_RETRY_SUB_TYPES.contains(&sub_type)
-                        && self.moderator_provisioner.is_some()
-                    {
-                        return self
-                            .retry_chat_subscription_after_mod(
-                                sub_type,
-                                version,
-                                &condition,
-                                broadcaster_id,
-                                login,
-                                bearer_override,
-                            )
-                            .await;
+            // P1.2: Chat-Pfad heilt einen Laufzeit-403 (Bot demoddet)
+            // selbst: Bot re-modden, 1s warten, ein Re-Subscribe.
+            // Gelingt das, ist der Kanal sofort wieder live; scheitert
+            // es, greift ein 10-Min-Cooldown (clearbar) STATT eines
+            // permanenten perm_failed-Eintrags.
+            if CHAT_MOD_RETRY_SUB_TYPES.contains(&sub_type) && self.moderator_provisioner.is_some()
+            {
+                return self
+                    .retry_chat_subscription_after_mod(
+                        sub_type,
+                        version,
+                        condition,
+                        broadcaster_id,
+                        login,
+                        bearer_override,
+                    )
+                    .await;
+            }
+            self.mark_perm_failed(sub_type, broadcaster_id);
+            tracing::warn!(
+                sub_type,
+                login,
+                "EventSub 403: Bot gebannt oder Kanal gesperrt — \
+                 kein weiterer Retry bis Neustart"
+            );
+        } else if msg.contains("429") {
+            // Rate-Limit: transient, nächster Reconcile-Zyklus versucht erneut.
+            // debug! statt warn! — sonst gleicher Spam wie 403 (48 Kanäle × 30 min).
+            tracing::debug!(
+                sub_type,
+                login,
+                "EventSub 429: Rate-Limit — Retry nächster Zyklus"
+            );
+        } else if msg.contains("401") {
+            // App-Token abgelaufen/ungültig: TokenManager übernimmt Refresh.
+            // debug! — betrifft alle Kanäle gleichzeitig, würde sonst 48× spammen.
+            tracing::debug!(sub_type, login, "EventSub 401: App-Token temporär ungültig");
+        } else if msg.contains("400") {
+            // Kanal für diesen Sub-Typ nicht berechtigt (z. B. hype_train
+            // braucht Affiliate/Partner-Tier) oder Scope-Edge-Case. Python
+            // fängt das in den broadcaster_subs still auf debug ab — nächster
+            // Reconcile-Zyklus versucht es erneut, falls sich die Lage ändert.
+            tracing::debug!(
+                sub_type,
+                login,
+                "EventSub 400: Kanal nicht berechtigt — Retry nächster Zyklus"
+            );
+        } else {
+            tracing::warn!(%error, sub_type, login, "EventSub: Subscription fehlgeschlagen");
+        }
+        false
+    }
+
+    async fn ensure_subscription_with_auth_attempts(
+        &self,
+        sub_type: &str,
+        version: &str,
+        broadcaster_id: &str,
+        login: &str,
+        attempts: Vec<(&'static str, serde_json::Value, &str)>,
+    ) -> bool {
+        let broadcaster_id = broadcaster_id.trim();
+        if broadcaster_id.is_empty() {
+            return false;
+        }
+        if self.is_tracked(sub_type, broadcaster_id) {
+            tracing::debug!(sub_type, login, "EventSub: bereits subscribed, überspringe");
+            return true;
+        }
+        if self.is_perm_failed(sub_type, broadcaster_id) {
+            tracing::debug!(sub_type, login, "EventSub: 403-gebannt, überspringe");
+            return false;
+        }
+
+        let mut saw_403 = false;
+        for (auth_label, condition, token) in attempts {
+            match self
+                .create_subscription_once(
+                    sub_type,
+                    version,
+                    &condition,
+                    broadcaster_id,
+                    login,
+                    Some(token),
+                )
+                .await
+            {
+                Ok(_) => {
+                    if auth_label == "broadcaster" {
+                        tracing::warn!(
+                            sub_type,
+                            login,
+                            "EventSub Webhook: Moderator-Telemetrie via Broadcaster-Fallback erstellt"
+                        );
+                    } else {
+                        tracing::debug!(
+                            sub_type,
+                            login,
+                            auth_label,
+                            "EventSub Webhook: Moderator-Telemetrie via Token-Pfad erstellt"
+                        );
                     }
-                    self.perm_failed
-                        .lock()
-                        .expect("perm_failed lock")
-                        .insert((sub_type.to_string(), broadcaster_id.to_string()));
-                    tracing::warn!(
-                        sub_type,
-                        login,
-                        "EventSub 403: Bot gebannt oder Kanal gesperrt — \
-                         kein weiterer Retry bis Neustart"
-                    );
-                } else if msg.contains("429") {
-                    // Rate-Limit: transient, nächster Reconcile-Zyklus versucht erneut.
-                    // debug! statt warn! — sonst gleicher Spam wie 403 (48 Kanäle × 30 min).
-                    tracing::debug!(
-                        sub_type,
-                        login,
-                        "EventSub 429: Rate-Limit — Retry nächster Zyklus"
-                    );
-                } else if msg.contains("401") {
-                    // App-Token abgelaufen/ungültig: TokenManager übernimmt Refresh.
-                    // debug! — betrifft alle Kanäle gleichzeitig, würde sonst 48× spammen.
-                    tracing::debug!(sub_type, login, "EventSub 401: App-Token temporär ungültig");
-                } else if msg.contains("400") {
-                    // Kanal für diesen Sub-Typ nicht berechtigt (z. B. hype_train
-                    // braucht Affiliate/Partner-Tier) oder Scope-Edge-Case. Python
-                    // fängt das in den broadcaster_subs still auf debug ab — nächster
-                    // Reconcile-Zyklus versucht es erneut, falls sich die Lage ändert.
-                    tracing::debug!(
-                        sub_type,
-                        login,
-                        "EventSub 400: Kanal nicht berechtigt — Retry nächster Zyklus"
-                    );
-                } else {
-                    tracing::warn!(%error, sub_type, login, "EventSub: Subscription fehlgeschlagen");
+                    return true;
                 }
-                false
+                Err(error) => {
+                    let msg = error.to_string();
+                    if msg.contains("403") {
+                        saw_403 = true;
+                    }
+                    tracing::debug!(
+                        sub_type,
+                        login,
+                        auth_label,
+                        "EventSub Webhook: Moderator-Telemetrie-Auth-Versuch fehlgeschlagen"
+                    );
+                }
             }
         }
+
+        if saw_403 {
+            self.mark_perm_failed(sub_type, broadcaster_id);
+            tracing::warn!(
+                sub_type,
+                login,
+                "EventSub 403: Moderator-Telemetrie nicht autorisiert — \
+                 kein weiterer Retry bis Neustart"
+            );
+        }
+        false
+    }
+
+    async fn is_stale_removed_channel_after_403(&self, broadcaster_id: &str, login: &str) -> bool {
+        let target_id = broadcaster_id.trim();
+        let normalized_login = normalize_login(login);
+        if target_id.is_empty() && normalized_login.is_empty() {
+            return false;
+        }
+
+        let exists_in_streamers: bool = sqlx::query_scalar(
+            "SELECT EXISTS( \
+                SELECT 1 FROM twitch_streamers \
+                WHERE ($1 <> '' AND twitch_user_id = $1) \
+                   OR ($2 <> '' AND LOWER(twitch_login) = $2) \
+             )",
+        )
+        .bind(target_id)
+        .bind(&normalized_login)
+        .fetch_one(&self.pool)
+        .await
+        .unwrap_or_else(|error| {
+            tracing::debug!(%error, login, "403-Stale-Purge: twitch_streamers nicht ladbar");
+            true
+        });
+
+        let is_partner_active: bool = sqlx::query_scalar(
+            "SELECT COALESCE(MAX(COALESCE(is_partner_active, 0)), 0) <> 0 \
+             FROM twitch_streamers_partner_state \
+             WHERE ($1 <> '' AND twitch_user_id = $1) \
+                OR ($2 <> '' AND LOWER(twitch_login) = $2)",
+        )
+        .bind(target_id)
+        .bind(&normalized_login)
+        .fetch_one(&self.pool)
+        .await
+        .unwrap_or_else(|error| {
+            tracing::debug!(%error, login, "403-Stale-Purge: Partner-State nicht ladbar");
+            true
+        });
+
+        let has_raid_auth: bool = sqlx::query_scalar(
+            "SELECT EXISTS( \
+                SELECT 1 FROM twitch_raid_auth \
+                WHERE ($1 <> '' AND twitch_user_id = $1) \
+                   OR ($2 <> '' AND LOWER(twitch_login) = $2) \
+             )",
+        )
+        .bind(target_id)
+        .bind(&normalized_login)
+        .fetch_one(&self.pool)
+        .await
+        .unwrap_or_else(|error| {
+            tracing::debug!(%error, login, "403-Stale-Purge: Raid-Auth nicht ladbar");
+            true
+        });
+
+        !exists_in_streamers && !is_partner_active && !has_raid_auth
     }
 
     /// 403-Selbstheilung im Chat-Pfad (Python `connection.py:1558-1624`): Bot
@@ -1032,6 +1380,10 @@ impl SubscriptionManager {
     /// Räumt verwaiste Subscriptions unserer Callback-URL ab
     /// (Python `_cleanup_old_eventsub_subscriptions`): Ziel-Broadcaster
     /// nicht mehr aktiv → löschen. Liefert die Anzahl gelöschter Subs.
+    ///
+    /// WIRING-TODO(P2.10): In `bin/tb-bot/src/main.rs` oder der passenden
+    /// Chat/EventSub-Composition alle ~300s mit der aktiven Broadcaster-ID-Menge
+    /// spawnen. Dieses Crate enthält nur die purge-/deletefähige Logik.
     pub async fn cleanup_stale(&self, active_user_ids: &HashSet<String>) -> usize {
         let subs = match self.transport.list().await {
             Ok(subs) => subs,
@@ -1233,5 +1585,261 @@ impl CapacitySnapshotStore {
             .await?
             .rows_affected();
         Ok(rows)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    use std::collections::HashSet;
+    use std::str::FromStr;
+    use std::sync::atomic::{AtomicU64, Ordering};
+
+    use sqlx::postgres::{PgConnectOptions, PgPoolOptions};
+
+    async fn pool_in_schema(schema: &str) -> Option<PgPool> {
+        let Some(dsn) = std::env::var("TB_TEST_DATABASE_URL").ok() else {
+            eprintln!("SKIP: TB_TEST_DATABASE_URL nicht gesetzt");
+            return None;
+        };
+        let admin = PgPoolOptions::new()
+            .max_connections(1)
+            .connect(&dsn)
+            .await
+            .expect("admin connect");
+        sqlx::query(&format!("DROP SCHEMA IF EXISTS {schema} CASCADE"))
+            .execute(&admin)
+            .await
+            .expect("drop schema");
+        sqlx::query(&format!("CREATE SCHEMA {schema}"))
+            .execute(&admin)
+            .await
+            .expect("create schema");
+        admin.close().await;
+
+        let opts = PgConnectOptions::from_str(&dsn)
+            .expect("dsn parse")
+            .options([("search_path", schema)]);
+        let pool = PgPoolOptions::new()
+            .max_connections(4)
+            .connect_with(opts)
+            .await
+            .expect("connect schema");
+        for ddl in [
+            "CREATE TABLE twitch_streamers (
+                twitch_login TEXT,
+                twitch_user_id TEXT
+            )",
+            "CREATE TABLE twitch_partners (
+                twitch_login TEXT,
+                twitch_user_id TEXT,
+                status TEXT
+            )",
+            "CREATE TABLE twitch_streamers_partner_state (
+                twitch_login TEXT,
+                twitch_user_id TEXT,
+                is_partner_active INTEGER DEFAULT 0
+            )",
+            "CREATE TABLE twitch_raid_auth (
+                twitch_login TEXT,
+                twitch_user_id TEXT
+            )",
+            "CREATE TABLE twitch_eventsub_capacity_snapshot (
+                ts_utc TIMESTAMPTZ,
+                trigger_reason TEXT,
+                listener_count INTEGER,
+                ready_listeners INTEGER,
+                failed_listeners INTEGER,
+                used_slots INTEGER,
+                total_slots INTEGER,
+                headroom_slots INTEGER,
+                listeners_at_limit INTEGER,
+                utilization_pct DOUBLE PRECISION,
+                listeners_json TEXT
+            )",
+        ] {
+            sqlx::query(ddl).execute(&pool).await.expect("test ddl");
+        }
+        Some(pool)
+    }
+
+    #[derive(Debug, Clone)]
+    struct CreateCall {
+        sub_type: String,
+        condition: Value,
+        bearer: Option<String>,
+    }
+
+    #[derive(Default)]
+    struct UnitTransport {
+        creates: Mutex<Vec<CreateCall>>,
+        fail_all_403: bool,
+        fail_bearers_403: Mutex<HashSet<String>>,
+    }
+
+    #[async_trait::async_trait]
+    impl SubscriptionTransport for UnitTransport {
+        async fn create(
+            &self,
+            sub_type: &str,
+            _version: &str,
+            condition: &Value,
+            _callback: &str,
+            _secret: &str,
+            bearer_override: Option<&str>,
+        ) -> Result<bool, SourceError> {
+            self.creates.lock().expect("creates lock").push(CreateCall {
+                sub_type: sub_type.to_string(),
+                condition: condition.clone(),
+                bearer: bearer_override.map(str::to_string),
+            });
+            if self.fail_all_403
+                || bearer_override.is_some_and(|bearer| {
+                    self.fail_bearers_403
+                        .lock()
+                        .expect("fail_bearers_403 lock")
+                        .contains(bearer)
+                })
+            {
+                return Err(SourceError::from(
+                    "HTTP 403 subscription missing proper authorization",
+                ));
+            }
+            Ok(false)
+        }
+
+        async fn list(&self) -> Result<Vec<RemoteSubscription>, SourceError> {
+            Ok(Vec::new())
+        }
+
+        async fn delete(&self, _id: &str) -> Result<(), SourceError> {
+            Ok(())
+        }
+    }
+
+    struct UnitBroadcasterTokenProvider {
+        calls: AtomicU64,
+    }
+
+    #[async_trait::async_trait]
+    impl BroadcasterEventSubTokenProvider for UnitBroadcasterTokenProvider {
+        async fn eventsub_broadcaster_token(
+            &self,
+            _broadcaster_id: &str,
+            _login: &str,
+        ) -> Option<EventSubUserToken> {
+            self.calls.fetch_add(1, Ordering::SeqCst);
+            Some(EventSubUserToken::new(
+                "BROADCASTER_TOKEN",
+                vec!["moderator:read:followers".to_string()],
+            ))
+        }
+    }
+
+    #[tokio::test]
+    async fn stale_removed_chat_403_purges_local_state_instead_of_perm_failed() {
+        let Some(pool) = pool_in_schema("unit_subs_stale_403").await else {
+            return;
+        };
+        let transport = Arc::new(UnitTransport {
+            fail_all_403: true,
+            ..Default::default()
+        });
+        let manager = SubscriptionManager::new(
+            transport,
+            SubscriptionConfig {
+                callback_url: "https://cb/test".to_string(),
+                secret: "secret".to_string(),
+            },
+            CapacitySnapshotStore::new(pool),
+        );
+        manager.record_subscription_state(
+            "Removed",
+            "channel.chat.message",
+            PASSIVE_LURKER_STATE,
+            Some(PASSIVE_LURKER_DETAIL),
+        );
+
+        assert!(
+            !manager
+                .ensure_chat_subscriptions("900", "BOTID", "Removed")
+                .await
+        );
+        assert!(
+            !manager.chat_subscriptions_permanently_blocked("900"),
+            "stale/removed 403 darf keinen dauerhaften perm_failed-Eintrag behalten"
+        );
+        assert!(
+            manager.chat_subscription_states("removed").is_empty(),
+            "stale/removed 403 muss lokalen Subscription-State purgen"
+        );
+    }
+
+    #[tokio::test]
+    async fn moderator_telemetry_403_versucht_broadcaster_token_fallback() {
+        let Some(pool) = pool_in_schema("unit_subs_mod_fallback").await else {
+            return;
+        };
+        let transport = Arc::new(UnitTransport::default());
+        transport
+            .fail_bearers_403
+            .lock()
+            .expect("fail_bearers_403 lock")
+            .insert("BOT_TOKEN".to_string());
+        let provider = Arc::new(UnitBroadcasterTokenProvider {
+            calls: AtomicU64::new(0),
+        });
+        let manager = SubscriptionManager::new(
+            transport.clone(),
+            SubscriptionConfig {
+                callback_url: "https://cb/test".to_string(),
+                secret: "secret".to_string(),
+            },
+            CapacitySnapshotStore::new(pool),
+        )
+        .with_broadcaster_eventsub_token_provider(provider.clone());
+
+        let ensured = manager
+            .ensure_moderator_telemetry_subscriptions(
+                "555",
+                "BOTID",
+                "BOT_TOKEN",
+                &["moderator:read:followers".to_string()],
+                "partner",
+            )
+            .await;
+        assert_eq!(ensured, 1);
+        assert_eq!(
+            provider.calls.load(Ordering::SeqCst),
+            1,
+            "Broadcaster-Token wird einmal pro Reconcile-Aufruf geladen"
+        );
+
+        let creates = transport.creates.lock().expect("creates lock").clone();
+        assert_eq!(creates.len(), 2, "Bot-Versuch plus Broadcaster-Fallback");
+        assert_eq!(creates[0].sub_type, "channel.follow");
+        assert_eq!(creates[0].bearer.as_deref(), Some("BOT_TOKEN"));
+        assert_eq!(
+            creates[0].condition,
+            serde_json::json!({
+                "broadcaster_user_id": "555",
+                "moderator_user_id": "BOTID",
+            })
+        );
+        let call = &creates[1];
+        assert_eq!(call.sub_type, "channel.follow");
+        assert_eq!(call.bearer.as_deref(), Some("BROADCASTER_TOKEN"));
+        assert_eq!(
+            call.condition,
+            serde_json::json!({
+                "broadcaster_user_id": "555",
+                "moderator_user_id": "555",
+            })
+        );
+        assert!(manager
+            .tracked_pairs()
+            .iter()
+            .any(|(sub_type, bid)| { sub_type == "channel.follow" && bid == "555" }));
     }
 }
