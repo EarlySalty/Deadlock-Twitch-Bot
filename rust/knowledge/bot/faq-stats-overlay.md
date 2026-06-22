@@ -41,16 +41,18 @@ Die Zahlen kommen aus deiner echten Match-Historie, die der Bot direkt über den
 
 ### Wie blende ich meine Stats im Stream ein (OBS-Overlay)?
 
-Es gibt eine eigene Overlay-Seite mit Baukasten: Dort wählst du aus, was angezeigt werden soll, und bekommst eine fertige URL für OBS.
+Es gibt eine eigene Overlay-Seite mit Baukasten: Dort stellst du dir dein Overlay zusammen und bekommst eine fertige URL für OBS. Erreichbar über den Eintrag „Stream-Overlay" in der Seitenleiste des Dashboards oder direkt unter der Adresse unten.
 
 1. Öffne die Overlay-Seite: `deutsche-deadlock-community.de/twitch/overlay`.
-2. Wähle aus, was angezeigt werden soll (Rang, Winrate, Serie, Live-Match) und an welcher Ecke.
-3. Kopiere die angezeigte Overlay-URL.
-4. Füge in OBS eine Browser-Quelle hinzu und trage die URL ein (Breite 360, Höhe 200).
-5. Zieh die Quelle an die gewünschte Stelle — sie aktualisiert sich automatisch.
+2. Wähle einen Stil (Dunkel, Hell oder Akzent) und ein Layout (Box-Karte oder schlanke Leiste).
+3. Schalte ein, was angezeigt werden soll — Rang, Winrate, heutige Bilanz, Serie, K/D, letztes Match, meistgespielter Hero, Match-Verlauf, Live-Match — und wähle die Ecke im Bild.
+4. Stell bei Bedarf die Hintergrund-Deckkraft und die Länge des Match-Verlaufs ein.
+5. Kopiere die angezeigte Overlay-URL, füge in OBS eine Browser-Quelle hinzu und trage sie ein (Box 360×200, Leiste 520×90).
+6. Zieh die Quelle an die gewünschte Stelle — sie aktualisiert sich automatisch.
 
-- Das Overlay ist transparent und fügt sich in deine Szene ein.
+- Das Overlay ist transparent und fügt sich in deine Szene ein; in der Live-Vorschau siehst du jede Änderung sofort.
 - Rang-Abzeichen und Hero-Bilder sind die offiziellen Deadlock-Spielgrafiken.
+- Werte ohne Daten (z. B. die heutige Bilanz vor dem ersten Match) werden einfach ausgeblendet, statt leer dazustehen.
 - Du kannst jederzeit umstellen, was angezeigt wird — einfach eine neue URL aus dem Baukasten kopieren.
 
 [Overlay-Baukasten öffnen](https://deutsche-deadlock-community.de/twitch/overlay)
