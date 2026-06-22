@@ -724,19 +724,19 @@ mod tests {
         sqlx::query(
             r#"CREATE TABLE twitch_live_state (
                    twitch_user_id TEXT NOT NULL, streamer_login TEXT NOT NULL,
-                   last_viewer_count INTEGER DEFAULT 0, active_session_id INTEGER
+                   last_viewer_count INTEGER DEFAULT 0, active_session_id BIGINT
                )"#,
         ).execute(&pool).await.unwrap();
         sqlx::query(
             r#"CREATE TABLE twitch_chat_messages (
-                   id SERIAL PRIMARY KEY, session_id INTEGER NOT NULL DEFAULT 0,
+                   id SERIAL PRIMARY KEY, session_id BIGINT NOT NULL DEFAULT 0,
                    streamer_login TEXT NOT NULL, chatter_login TEXT,
                    message_ts TIMESTAMPTZ NOT NULL, content TEXT
                )"#,
         ).execute(&pool).await.unwrap();
         sqlx::query(
             r#"CREATE TABLE twitch_session_chatters (
-                   session_id INTEGER NOT NULL, streamer_login TEXT NOT NULL,
+                   session_id BIGINT NOT NULL, streamer_login TEXT NOT NULL,
                    chatter_login TEXT NOT NULL, first_message_at TIMESTAMPTZ NOT NULL,
                    messages INTEGER DEFAULT 0
                )"#,

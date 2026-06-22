@@ -10,9 +10,8 @@
 //! - Verschlüsseln fehlgeschlagen → `EncryptionFailed`, nichts geschrieben.
 //! - `raid_enabled` eines bestehenden Eintrags bleibt erhalten
 //!   (`activate_raid_features OR existing`).
-//! - Die Partner-Raid-Aktivierung (`set_partner_raid_bot_enabled`) ist ein
-//!   nachgelagerter Effekt und wird mit dem Partner-Store (6b+) verdrahtet —
-//!   hier bewusst nicht enthalten.
+//! - Re-Auth heilt technische Token-Pausen (`token_error*`) inklusive
+//!   `raid_bot_enabled`, bevor der Blacklist-Eintrag entfernt wird.
 
 use std::collections::BTreeSet;
 use std::sync::Arc;
@@ -180,16 +179,22 @@ impl AuthWriter {
         // invalid_grant (error_count ≥ 3) blacklisteter Streamer nach erfolgreicher
         // Re-Autorisierung DAUERHAFT gesperrt: der Blacklist-Check in get_valid_token
         // greift vor allem anderen und liefert None. Zuerst den Partner-Pause-Grund
-        // 'token_error' aufheben, dann den Blacklist-Eintrag löschen.
+        // 'token_error*' aufheben und Raid reaktivieren, dann den Blacklist-Eintrag löschen.
         sqlx::query(
             "UPDATE twitch_partners
                 SET technical_pause_reason = CASE
-                        WHEN LOWER(COALESCE(technical_pause_reason, '')) = 'token_error' THEN NULL
+                        WHEN LOWER(TRIM(COALESCE(technical_pause_reason, ''))) LIKE 'token_error%' THEN NULL
                         ELSE technical_pause_reason
+                    END,
+                    raid_bot_enabled = CASE
+                        WHEN LOWER(TRIM(COALESCE(technical_pause_reason, ''))) LIKE 'token_error%' THEN 1
+                        WHEN $2 AND LOWER(TRIM(COALESCE(technical_pause_reason, ''))) NOT IN ('blocked', 'bot_banned') THEN 1
+                        ELSE raid_bot_enabled
                     END
               WHERE twitch_user_id = $1",
         )
         .bind(uid)
+        .bind(new.activate_raid_features)
         .execute(&mut *tx)
         .await?;
         sqlx::query("DELETE FROM twitch_token_blacklist WHERE twitch_user_id = $1")

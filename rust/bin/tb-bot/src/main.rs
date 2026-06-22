@@ -112,6 +112,7 @@ use wiring::{
 struct SubscriptionPollHooks {
     manager: Arc<SubscriptionManager>,
     pool: sqlx::PgPool,
+    offline_raid: Option<Arc<OfflineRaidHandler>>,
     /// ChatApi für den Partner-Recruiting-Outreach; `None` ohne Bot-Token.
     chat_api: Option<Arc<dyn tb_chat::ChatApi>>,
     /// Letzter Recruiting-Durchlauf (interne 30-min-Drosselung, Python
@@ -173,6 +174,12 @@ impl PollHooks for SubscriptionPollHooks {
         self.manager
             .ensure_offline_subscription(twitch_user_id, login)
             .await;
+    }
+
+    async fn on_stream_offline_raid(&self, twitch_user_id: &str, login: Option<&str>) {
+        if let Some(handler) = &self.offline_raid {
+            handler.handle_streamer_offline(twitch_user_id, login).await;
+        }
     }
 
     /// Inaktiver Partner (> N Tage keine relevante Aktivität) → informativ
@@ -497,6 +504,7 @@ async fn main() {
     let suppression = Arc::new(std::sync::Mutex::new(ManualRaidSuppression::new()));
     let mut manual_raid_port: Option<Arc<dyn tb_internal_api::ManualRaidPort>> = None;
     let mut raid_oauth_port: Option<Arc<dyn tb_internal_api::RaidOAuthPort>> = None;
+    let mut poll_offline_raid_handler: Option<Arc<OfflineRaidHandler>> = None;
     let eventsub_hooks: Arc<dyn EventSubHooks> = match (
         &subscription_manager,
         helix.as_ref().clone(),
@@ -825,6 +833,7 @@ async fn main() {
             manual_raid_port = Some(Arc::new(ManualRaidAdapter {
                 handler: offline.clone(),
             }));
+            poll_offline_raid_handler = Some(offline.clone());
             // Go-Live-ReAuth-Reminder (B11): braucht den nativen Chat-Send-Pfad.
             // chat_api_handle ist hier noch in Scope (wird erst unten von der
             // Pipeline konsumiert) — gleiches Durchreich-Muster wie partner_setup.
@@ -1260,6 +1269,7 @@ async fn main() {
                     Some(manager) => Arc::new(SubscriptionPollHooks {
                         manager: manager.clone(),
                         pool: pool.clone(),
+                        offline_raid: poll_offline_raid_handler.clone(),
                         chat_api: recruit_chat_api.clone(),
                         recruit_last_check: std::sync::Mutex::new(None),
                     }),
@@ -1534,67 +1544,65 @@ async fn subscription_maintenance_loop(
     tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
     loop {
         tick.tick().await;
-        let rows: Vec<(String, String, i32)> = match sqlx::query_as(
-            "SELECT LOWER(twitch_login), twitch_user_id, 1 AS is_partner \
-             FROM twitch_streamers_partner_state \
-             WHERE is_partner_active = 1 AND COALESCE(twitch_user_id, '') <> '' \
-             UNION \
-             SELECT LOWER(twitch_login), twitch_user_id, 0 AS is_partner \
-             FROM twitch_streamers \
-             WHERE NOT EXISTS ( \
-                     SELECT 1 FROM twitch_partners p \
-                 WHERE p.twitch_user_id = twitch_streamers.twitch_user_id \
-                    OR LOWER(p.twitch_login) = LOWER(twitch_streamers.twitch_login) \
-                 ) \
-               AND COALESCE(twitch_user_id, '') <> ''",
-        )
-        .fetch_all(&pool)
-        .await
-        {
+        let rows = match chat_wiring::select_eventsub_subscription_broadcasters(&pool).await {
             Ok(r) => r,
             Err(e) => {
-                tracing::warn!("sub-maintenance: Partner-Query fehlgeschlagen: {e}");
+                tracing::warn!("sub-maintenance: Subscription-Roster-Query fehlgeschlagen: {e}");
                 continue;
             }
         };
 
         let active_ids: std::collections::HashSet<String> =
-            rows.iter().map(|(_, uid, _)| uid.clone()).collect();
+            rows.iter().map(|row| row.twitch_user_id.clone()).collect();
 
-        let deleted = manager.cleanup_stale(&active_ids).await;
-        tracing::debug!(deleted, "sub-maintenance: Stale-Cleanup abgeschlossen");
+        let deleted = if active_ids.is_empty() {
+            tracing::warn!(
+                "sub-maintenance: Subscription-Roster leer, Stale-Cleanup fail-open übersprungen"
+            );
+            0
+        } else {
+            let deleted = manager.cleanup_stale(&active_ids).await;
+            tracing::debug!(deleted, "sub-maintenance: Stale-Cleanup abgeschlossen");
+            deleted
+        };
 
         let mut ensured = 0usize;
         let mut telemetry_ensured = 0usize;
-        for (login, uid, is_partner) in &rows {
-            manager.ensure_core_subscriptions(uid, login).await;
-            ensured += 1;
+        for row in &rows {
+            let login = row.login.as_str();
+            let uid = row.twitch_user_id.as_str();
+            if row.core_subscriptions {
+                manager.ensure_core_subscriptions(uid, login).await;
+                ensured += 1;
+            }
 
             // channel.raid (Arrival) proaktiv pro Partner abonnieren — Python
             // (eventsub_mixin.py:2666) subscribt channel.raid für ALLE Streamer,
             // damit eingehende/manuelle Raids erkannt werden, unabhängig von
             // eigenen Outgoing-Raids. Partner-only: die Raid-Dankesnachricht ist
             // partner-gebunden, monitored-only Kanäle haben keinen Konsumenten.
-            if *is_partner == 1 {
+            if row.is_partner {
                 manager.ensure_raid_subscription(uid, login).await;
             }
 
             // Broadcaster-Telemetrie-Subs (B9): nur mit gültigem Broadcaster-
             // Token + dessen Scopes. needs_reauth/blacklist → still überspringen.
-            if let Some((token_provider, raid_auth)) = &telemetry_auth {
-                match token_provider
-                    .get_valid_token_unrestricted(uid, chrono::Utc::now())
-                    .await
-                {
-                    Ok(Some(token)) => {
-                        let scopes = raid_auth.get_scopes(uid).await.unwrap_or_default();
-                        telemetry_ensured += manager
-                            .ensure_broadcaster_telemetry_subscriptions(uid, login, &token, &scopes)
-                            .await;
-                    }
-                    Ok(None) => {}
-                    Err(e) => {
-                        tracing::debug!(uid = %uid, "sub-maintenance: Telemetrie-Token-Lookup fehlgeschlagen: {e}");
+            if row.core_subscriptions {
+                if let Some((token_provider, raid_auth)) = &telemetry_auth {
+                    match token_provider
+                        .get_valid_token_unrestricted(uid, chrono::Utc::now())
+                        .await
+                    {
+                        Ok(Some(token)) => {
+                            let scopes = raid_auth.get_scopes(uid).await.unwrap_or_default();
+                            telemetry_ensured += manager
+                                .ensure_broadcaster_telemetry_subscriptions(uid, login, &token, &scopes)
+                                .await;
+                        }
+                        Ok(None) => {}
+                        Err(e) => {
+                            tracing::debug!(uid = %uid, "sub-maintenance: Telemetrie-Token-Lookup fehlgeschlagen: {e}");
+                        }
                     }
                 }
             }

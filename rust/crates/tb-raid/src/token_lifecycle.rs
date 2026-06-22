@@ -22,7 +22,7 @@
 use chrono::{DateTime, SecondsFormat, Utc};
 use sqlx::PgPool;
 
-use crate::token_blacklist::{BLACKLIST_DISABLE_THRESHOLD, GRACE_PERIOD_DAYS};
+use crate::token_blacklist::GRACE_PERIOD_DAYS;
 use crate::util::mask_log_identifier as mask;
 
 /// Admin-Channel für Token-Fehler-Benachrichtigungen (Python
@@ -306,8 +306,8 @@ impl<N: TokenLifecycleNotifier> TokenLifecycleReactor<N> {
     /// Liefert die Anzahl tatsächlich neu benachrichtigter Streamer.
     ///
     /// Parität: Python feuert `notify_token_error` schon beim **ersten**
-    /// `invalid_grant` (direkt nach `add_to_blacklist`), nicht erst ab
-    /// `error_count >= 3`. Der Blacklist-Eintrag existiert ab dem ersten Fehler
+    /// `invalid_grant` (direkt nach `add_to_blacklist`), nicht erst ab dem
+    /// dritten Fehler. Der Eintrag existiert ab dem ersten Fehler
     /// (`add_to_blacklist_inner` INSERTet ihn), darum genügt hier „Eintrag
     /// existiert UND notified=0".
     pub async fn notify_pending_errors(&self) -> u64 {
@@ -330,7 +330,11 @@ impl<N: TokenLifecycleNotifier> TokenLifecycleReactor<N> {
         let mut notified = 0u64;
         for (uid, login, err) in rows {
             let outcome = self
-                .notify_token_error(&uid, &login, err.as_deref().unwrap_or("invalid refresh grant"))
+                .notify_token_error(
+                    &uid,
+                    &login,
+                    err.as_deref().unwrap_or("invalid refresh grant"),
+                )
                 .await;
             if outcome.any_sent() {
                 notified += 1;
@@ -340,10 +344,11 @@ impl<N: TokenLifecycleNotifier> TokenLifecycleReactor<N> {
     }
 
     /// Stündlicher Grace-Sweep (Python `check_grace_periods`): für jede Zeile mit
-    /// abgelaufener Grace-Period (`error_count >= 3`, `grace_expires_at <= now`,
-    /// `role_removed = 0`) sendet er einmalig Reminder-DM + Admin-Notify
+    /// abgelaufener Grace-Period (`grace_expires_at <= now`, `role_removed = 0`)
+    /// sendet er einmalig Reminder-DM + Admin-Notify
     /// (reminder_sent), entzieht die Streamer-Rolle und setzt
-    /// `manual_opt_out`/`role_removed`. Liefert die Anzahl bearbeiteter Streamer.
+    /// `technical_pause_reason='token_error'`/`role_removed`. Liefert die Anzahl
+    /// bearbeiteter Streamer.
     pub async fn check_grace_periods(&self) -> u64 {
         let now_iso = Self::iso(Utc::now());
         let expired = match self.load_expired_grace(&now_iso).await {
@@ -385,7 +390,7 @@ impl<N: TokenLifecycleNotifier> TokenLifecycleReactor<N> {
                 self.notifier.revoke_streamer_role(did, &reason).await;
             }
 
-            // 3. DB-State: manual_opt_out + role_removed (Python-Block, idempotent).
+            // 3. DB-State: technischer Token-Error + role_removed (idempotent).
             if let Err(error) = self
                 .mark_grace_expired(&row.twitch_user_id, &row.twitch_login)
                 .await
@@ -395,7 +400,7 @@ impl<N: TokenLifecycleNotifier> TokenLifecycleReactor<N> {
                 processed += 1;
                 tracing::info!(
                     user = %mask(&row.twitch_user_id),
-                    "Grace-Period abgelaufen – Rolle entzogen, manual_opt_out gesetzt"
+                    "Grace-Period abgelaufen – Rolle entzogen, token_error gesetzt"
                 );
             }
         }
@@ -502,9 +507,9 @@ impl<N: TokenLifecycleNotifier> TokenLifecycleReactor<N> {
         }
     }
 
-    /// Stündlicher Restore-Sweep für technische Bot-Ban-Pausen. Selektiert nur
-    /// `technical_pause_reason='bot_banned'` und delegiert die Sicherheitslogik
-    /// an [`Self::restore_bot_banned_channel`].
+    /// Stündlicher Restore-Sweep für technische Pausen. Selektiert gesunde
+    /// Auth-Zeilen mit `technical_pause_reason='bot_banned'` oder `token_error*`
+    /// und delegiert die Sicherheitslogik an [`Self::restore_bot_banned_channel`].
     pub async fn restore_ready_bot_banned_channels(&self) -> u64 {
         let rows: Vec<(String, String)> = match sqlx::query_as(
             r#"
@@ -516,7 +521,10 @@ impl<N: TokenLifecycleNotifier> TokenLifecycleReactor<N> {
                 ON p.twitch_user_id = ra.twitch_user_id
                 OR LOWER(p.twitch_login) = LOWER(ra.twitch_login)
              WHERE COALESCE(ra.needs_reauth, TRUE) = FALSE
-               AND LOWER(COALESCE(p.technical_pause_reason, '')) = 'bot_banned'
+               AND (
+                    LOWER(TRIM(COALESCE(p.technical_pause_reason, ''))) = 'bot_banned'
+                    OR LOWER(TRIM(COALESCE(p.technical_pause_reason, ''))) LIKE 'token_error%'
+               )
             "#,
         )
         .fetch_all(&self.pool)
@@ -590,20 +598,18 @@ impl<N: TokenLifecycleNotifier> TokenLifecycleReactor<N> {
             r#"
             SELECT twitch_user_id, twitch_login, reminder_sent
             FROM twitch_token_blacklist
-            WHERE error_count >= $1
-              AND grace_expires_at IS NOT NULL
-              AND grace_expires_at <= $2
+            WHERE grace_expires_at IS NOT NULL
+              AND grace_expires_at <= $1
               AND role_removed = 0
             "#,
         )
-        .bind(BLACKLIST_DISABLE_THRESHOLD)
         .bind(now_iso)
         .fetch_all(&self.pool)
         .await
     }
 
-    /// Python-Grace-Block: Partner als manuellen Opt-out markieren, Raid-Auth
-    /// invalidieren und `role_removed=1` setzen. In einer Transaktion (idempotent).
+    /// Grace-Block: Partner technisch pausieren, Raid-Auth invalidieren und
+    /// `role_removed=1` setzen. In einer Transaktion (idempotent).
     async fn mark_grace_expired(
         &self,
         twitch_user_id: &str,
@@ -613,8 +619,11 @@ impl<N: TokenLifecycleNotifier> TokenLifecycleReactor<N> {
         sqlx::query(
             r#"
             UPDATE twitch_partners
-               SET manual_partner_opt_out = 1,
-                   technical_pause_reason = 'token_error_expired',
+               SET technical_pause_reason = CASE
+                       WHEN LOWER(TRIM(COALESCE(technical_pause_reason, ''))) IN ('blocked', 'bot_banned')
+                       THEN technical_pause_reason
+                       ELSE 'token_error'
+                   END,
                    raid_bot_enabled = 0
              WHERE twitch_user_id = $1
                 OR LOWER(twitch_login) = LOWER($2)
@@ -740,8 +749,8 @@ impl<N: TokenLifecycleNotifier> TokenLifecycleReactor<N> {
 
     /// Kern von `restore_bot_banned_channel`: nur restaurieren, wenn die Auth-Zeile
     /// existiert UND `needs_reauth = FALSE` (Kanal wieder gesund). Hebt
-    /// `technical_pause_reason='bot_banned'` auf und re-aktiviert Raid, sofern kein
-    /// manueller Opt-out vorliegt.
+    /// technische Pausen (`bot_banned`, `token_error*`) auf und re-aktiviert Raid,
+    /// sofern kein manueller Opt-out vorliegt.
     async fn restore_bot_banned_inner(
         &self,
         twitch_user_id: &str,
@@ -790,7 +799,9 @@ impl<N: TokenLifecycleNotifier> TokenLifecycleReactor<N> {
             ),
             None => (false, String::new()),
         };
-        if pause_reason != "bot_banned" {
+        let restores_bot_banned = pause_reason == "bot_banned";
+        let restores_token_error = pause_reason.starts_with("token_error");
+        if !restores_bot_banned && !restores_token_error {
             tx.commit().await?;
             return Ok(false);
         }
@@ -841,7 +852,11 @@ impl<N: TokenLifecycleNotifier> TokenLifecycleReactor<N> {
 
     /// Discord-User-ID eines Streamers (Python `_get_discord_user_id`): aus
     /// `twitch_streamer_identities`, nur rein numerische IDs.
-    async fn discord_user_id_for(&self, twitch_user_id: &str, twitch_login: &str) -> Option<String> {
+    async fn discord_user_id_for(
+        &self,
+        twitch_user_id: &str,
+        twitch_login: &str,
+    ) -> Option<String> {
         let login = tb_domain::normalize_twitch_login(twitch_login).unwrap_or_default();
         let row: Result<Option<String>, _> = sqlx::query_scalar(
             r#"
@@ -929,7 +944,10 @@ mod tests {
 
     #[test]
     fn sanitize_discord_id_nur_numerisch() {
-        assert_eq!(sanitize_discord_user_id(Some(" 123 ")).as_deref(), Some("123"));
+        assert_eq!(
+            sanitize_discord_user_id(Some(" 123 ")).as_deref(),
+            Some("123")
+        );
         assert_eq!(sanitize_discord_user_id(Some("abc")), None);
         assert_eq!(sanitize_discord_user_id(Some("")), None);
         assert_eq!(sanitize_discord_user_id(None), None);
@@ -986,8 +1004,16 @@ mod tests {
 
     #[test]
     fn notify_outcome_any_sent() {
-        assert!(NotifyOutcome { admin_sent: true, ..Default::default() }.any_sent());
-        assert!(NotifyOutcome { user_dm_sent: true, ..Default::default() }.any_sent());
+        assert!(NotifyOutcome {
+            admin_sent: true,
+            ..Default::default()
+        }
+        .any_sent());
+        assert!(NotifyOutcome {
+            user_dm_sent: true,
+            ..Default::default()
+        }
+        .any_sent());
         assert!(!NotifyOutcome::default().any_sent());
     }
 
@@ -1090,7 +1116,9 @@ mod tests {
         let reactor = TokenLifecycleReactor::new(pool.clone(), notifier.clone());
 
         // 1. Aufruf → genau 1 Admin-Embed + 1 User-DM.
-        let out = reactor.notify_token_error("100", "foo", "invalid_grant").await;
+        let out = reactor
+            .notify_token_error("100", "foo", "invalid_grant")
+            .await;
         assert!(out.admin_sent && out.user_dm_sent && !out.already_notified);
         assert_eq!(notifier.admin_embeds.load(Ordering::SeqCst), 1);
         assert_eq!(notifier.user_dms.load(Ordering::SeqCst), 1);
@@ -1106,7 +1134,9 @@ mod tests {
         assert_eq!(dm_sent, Some(1));
 
         // 2. Aufruf → übersprungen (notified-Flag), KEINE weitere Reaktion.
-        let out2 = reactor.notify_token_error("100", "foo", "invalid_grant").await;
+        let out2 = reactor
+            .notify_token_error("100", "foo", "invalid_grant")
+            .await;
         assert!(out2.already_notified);
         assert_eq!(notifier.admin_embeds.load(Ordering::SeqCst), 1);
         assert_eq!(notifier.user_dms.load(Ordering::SeqCst), 1);
@@ -1146,15 +1176,25 @@ mod tests {
             return;
         };
         let pool = setup_db("tl_grace_expire").await;
-        // Abgelaufene Grace (vor 1 Tag), error_count >= 3, role_removed = 0.
+        // Abgelaufene Grace (vor 1 Tag), error_count = 1, role_removed = 0.
+        // Rust setzt den Counter bei Invalid-Grant nicht zuverlässig hoch; der
+        // Grace-Ablauf darf deshalb nicht an error_count >= 3 hängen.
         let expired = (Utc::now() - chrono::Duration::days(1)).to_rfc3339();
-        seed_blacklist(&pool, "200", "bar", &expired, 3).await;
+        seed_blacklist(&pool, "200", "bar", &expired, 1).await;
         sqlx::query("INSERT INTO twitch_streamer_identities (twitch_user_id, twitch_login, discord_user_id) VALUES ('200', 'bar', '777')")
             .execute(&pool).await.unwrap();
-        sqlx::query("INSERT INTO twitch_partners (twitch_user_id, twitch_login) VALUES ('200', 'bar')")
-            .execute(&pool).await.unwrap();
-        sqlx::query("INSERT INTO twitch_raid_auth (twitch_user_id, twitch_login) VALUES ('200', 'bar')")
-            .execute(&pool).await.unwrap();
+        sqlx::query(
+            "INSERT INTO twitch_partners (twitch_user_id, twitch_login) VALUES ('200', 'bar')",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+        sqlx::query(
+            "INSERT INTO twitch_raid_auth (twitch_user_id, twitch_login) VALUES ('200', 'bar')",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
 
         let notifier = Arc::new(CountingNotifier::default());
         let reactor = TokenLifecycleReactor::new(pool.clone(), notifier.clone());
@@ -1166,7 +1206,8 @@ mod tests {
         assert_eq!(notifier.admin_embeds.load(Ordering::SeqCst), 1);
         assert_eq!(notifier.role_revokes.load(Ordering::SeqCst), 1);
 
-        // role_removed + reminder_sent gesetzt; manual_opt_out im Partner.
+        // role_removed + reminder_sent gesetzt; Token-Error bleibt technischer
+        // Pause-Grund, aber kein manueller Partner-Opt-out.
         let (role_removed, reminder): (Option<i32>, Option<i32>) = sqlx::query_as(
             "SELECT role_removed, reminder_sent FROM twitch_token_blacklist WHERE twitch_user_id = '200'",
         )
@@ -1175,13 +1216,17 @@ mod tests {
         .unwrap();
         assert_eq!(role_removed, Some(1));
         assert_eq!(reminder, Some(1));
-        let opt_out: Option<i32> = sqlx::query_scalar(
-            "SELECT manual_partner_opt_out FROM twitch_partners WHERE twitch_user_id = '200'",
-        )
-        .fetch_one(&pool)
-        .await
-        .unwrap();
-        assert_eq!(opt_out, Some(1));
+        let (opt_out, pause, raid_enabled): (Option<i32>, Option<String>, Option<i32>) =
+            sqlx::query_as(
+                "SELECT manual_partner_opt_out, technical_pause_reason, raid_bot_enabled
+             FROM twitch_partners WHERE twitch_user_id = '200'",
+            )
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+        assert_eq!(opt_out, Some(0));
+        assert_eq!(pause.as_deref(), Some("token_error"));
+        assert_eq!(raid_enabled, Some(0));
 
         // 2. Lauf: role_removed = 1 → Zeile nicht mehr selektiert (keine Doppelung).
         let processed2 = reactor.check_grace_periods().await;
@@ -1209,8 +1254,12 @@ mod tests {
         assert!(!reactor.restore_bot_banned_channel("300", "baz").await);
 
         // Health-Restore simulieren.
-        sqlx::query("UPDATE twitch_raid_auth SET needs_reauth = false WHERE twitch_user_id = '300'")
-            .execute(&pool).await.unwrap();
+        sqlx::query(
+            "UPDATE twitch_raid_auth SET needs_reauth = false WHERE twitch_user_id = '300'",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
         assert!(reactor.restore_bot_banned_channel("300", "baz").await);
 
         let reason: Option<String> = sqlx::query_scalar(
@@ -1290,20 +1339,26 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn restore_sweep_hebt_nur_bot_banned_auf() {
+    async fn restore_sweep_hebt_technische_pausen_auf() {
         let Some(_) = test_db_url() else {
             eprintln!("SKIP: TB_TEST_DATABASE_URL nicht gesetzt");
             return;
         };
         let pool = setup_db("tl_restore_sweep").await;
-        sqlx::query("INSERT INTO twitch_partners (twitch_user_id, twitch_login, technical_pause_reason, raid_bot_enabled) VALUES ('600', 'ready', 'bot_banned', 0), ('601', 'blocked', 'blocked', 0)")
+        sqlx::query("INSERT INTO twitch_partners (twitch_user_id, twitch_login, technical_pause_reason, raid_bot_enabled)
+            VALUES ('600', 'ready', 'bot_banned', 0),
+                   ('601', 'blocked', 'blocked', 0),
+                   ('602', 'tokenready', 'token_error_retry', 0)")
             .execute(&pool).await.unwrap();
-        sqlx::query("INSERT INTO twitch_raid_auth (twitch_user_id, twitch_login, raid_enabled, needs_reauth) VALUES ('600', 'ready', false, false), ('601', 'blocked', false, false)")
+        sqlx::query("INSERT INTO twitch_raid_auth (twitch_user_id, twitch_login, raid_enabled, needs_reauth)
+            VALUES ('600', 'ready', false, false),
+                   ('601', 'blocked', false, false),
+                   ('602', 'tokenready', false, false)")
             .execute(&pool).await.unwrap();
 
         let notifier = Arc::new(CountingNotifier::default());
         let reactor = TokenLifecycleReactor::new(pool.clone(), notifier);
-        assert_eq!(reactor.restore_ready_bot_banned_channels().await, 1);
+        assert_eq!(reactor.restore_ready_bot_banned_channels().await, 2);
 
         let ready_reason: Option<String> = sqlx::query_scalar(
             "SELECT technical_pause_reason FROM twitch_partners WHERE twitch_user_id = '600'",
@@ -1317,8 +1372,17 @@ mod tests {
         .fetch_one(&pool)
         .await
         .unwrap();
+        let (token_reason, token_raid): (Option<String>, Option<i32>) = sqlx::query_as(
+            "SELECT technical_pause_reason, raid_bot_enabled
+             FROM twitch_partners WHERE twitch_user_id = '602'",
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap();
         assert_eq!(ready_reason, None);
         assert_eq!(blocked_reason.as_deref(), Some("blocked"));
+        assert_eq!(token_reason, None);
+        assert_eq!(token_raid, Some(1));
     }
 
     #[tokio::test]

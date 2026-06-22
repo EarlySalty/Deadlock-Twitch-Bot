@@ -10,9 +10,9 @@ use sqlx::PgPool;
 use tb_monitoring::poller::{NoopAnnouncementSink, PollHooks, TickReport};
 use tb_monitoring::sessions::store::SessionStore;
 use tb_monitoring::{
-    ExpSessionStore, ExpSessionTracker, GuardStore, LiveStateStore, NoFollowerSource, PollConfig,
-    PollEngine, PollIntervalStore, SessionTracker, StatsStore, StreamSnapshot, StreamSource,
-    TrackedStore,
+    ExpSessionStore, ExpSessionTracker, GuardKind, GuardStore, LiveStateStore, NoFollowerSource,
+    PollConfig, PollEngine, PollIntervalStore, SessionTracker, StatsStore, StreamSnapshot,
+    StreamSource, TrackedStore,
 };
 
 mod support;
@@ -72,6 +72,7 @@ impl StreamSource for StubSource {
 /// Zeichnet Hook-Aufrufe auf.
 struct RecordingHooks {
     went_live: AtomicU64,
+    offline_raid: AtomicU64,
     auto_archive: AtomicU64,
     auto_unarchive: AtomicU64,
     reports: Mutex<Vec<TickReport>>,
@@ -81,6 +82,7 @@ impl RecordingHooks {
     fn new() -> Self {
         Self {
             went_live: AtomicU64::new(0),
+            offline_raid: AtomicU64::new(0),
             auto_archive: AtomicU64::new(0),
             auto_unarchive: AtomicU64::new(0),
             reports: Mutex::new(Vec::new()),
@@ -92,6 +94,9 @@ impl RecordingHooks {
 impl PollHooks for RecordingHooks {
     async fn on_stream_went_live(&self, _twitch_user_id: &str, _login: &str) {
         self.went_live.fetch_add(1, Ordering::SeqCst);
+    }
+    async fn on_stream_offline_raid(&self, _twitch_user_id: &str, _login: Option<&str>) {
+        self.offline_raid.fetch_add(1, Ordering::SeqCst);
     }
     async fn on_auto_archive(&self, _login: &str) -> bool {
         self.auto_archive.fetch_add(1, Ordering::SeqCst);
@@ -245,6 +250,55 @@ async fn tick_transitions_online_dann_offline() {
         hooks.went_live.load(Ordering::SeqCst),
         1,
         "kein zweiter Go-Live"
+    );
+    assert_eq!(
+        hooks.offline_raid.load(Ordering::SeqCst),
+        1,
+        "Poller-Offline triggert Auto-Raid-Hook"
+    );
+}
+
+#[tokio::test]
+async fn poll_offline_raid_hook_respektiert_offline_throttle_guard() {
+    let pool = pool_or_skip!("t4c_offline_raid_dedup");
+    sqlx::query(
+        "INSERT INTO twitch_streamers_partner_state
+            (twitch_login, twitch_user_id, is_partner_active, is_partner)
+         VALUES ('drag', '42', 1, 1)",
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
+
+    let source = Arc::new(StubSource::new());
+    let hooks = Arc::new(RecordingHooks::new());
+    let engine = engine_with(&pool, source.clone(), hooks.clone());
+
+    source.set_streams(vec![live_stream("drag", "42", "s-1", 10)]);
+    engine.tick().await;
+
+    GuardStore::new(pool.clone())
+        .claim(
+            GuardKind::OfflineThrottle,
+            "42",
+            120.0,
+            Utc::now().timestamp() as f64,
+        )
+        .await
+        .unwrap();
+
+    source.set_streams(vec![]);
+    engine.tick().await;
+
+    assert_eq!(
+        hooks.offline_raid.load(Ordering::SeqCst),
+        0,
+        "bestehender EventSub-OfflineThrottle verhindert zweiten Raid-Trigger"
+    );
+    let reports = hooks.reports.lock().unwrap();
+    assert_eq!(
+        reports[1].score_refreshes[0].trigger, "poll_stream_offline",
+        "Score-Refresh bleibt trotz Raid-Dedup erhalten"
     );
 }
 
