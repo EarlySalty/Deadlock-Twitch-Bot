@@ -1,20 +1,22 @@
 //! Hermetische Tests des EventSub-Ingress (Slice 4d): Dispatch-Dedup,
 //! Inbox-Verarbeitung der Core-Typen, Telemetrie-Inserts, Offline-Throttle.
 
-use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 
 use chrono::{Duration, Utc};
 use sqlx::PgPool;
+use std::sync::Mutex;
+use tb_chat::TimeoutGuard;
+use tb_monitoring::dispatch::ChatSubscriptionTelemetryHooks;
 use tb_monitoring::poller::source::{ChannelInfo, ChannelInfoSource, SourceError};
 use tb_monitoring::sessions::store::SessionStore;
 use tb_monitoring::{
-    epoch_clock, ChatNotificationKind, EventSubDispatcher, EventSubHooks, ExpSessionStore,
-    ExpSessionTracker, GuardStore, HypeTrainPhase, InboxRuntime, InboxRuntimeHandle, LiveStateStore,
+    ChatNotificationKind, EventSubDispatcher, EventSubHooks, ExpSessionStore, ExpSessionTracker,
+    GuardStore, HypeTrainPhase, InboxHandler, InboxRuntime, InboxRuntimeHandle, LiveStateStore,
     MonitoringEventHandler, NoFollowerSource, ProcessingInboxStore, SessionTracker, StreamSnapshot,
-    TelemetryStore,
+    TelemetryStore, epoch_clock,
 };
-use std::sync::Mutex;
 
 mod support;
 
@@ -61,10 +63,12 @@ impl EventSubHooks for RecordingHooks {
         self.score_refresh.fetch_add(1, Ordering::SeqCst);
     }
     async fn on_stream_offline_engagement(&self, _twitch_user_id: &str, _login: Option<&str>) {
-        self.stream_offline_engagement.fetch_add(1, Ordering::SeqCst);
+        self.stream_offline_engagement
+            .fetch_add(1, Ordering::SeqCst);
     }
     async fn on_stream_offline_global_ban(&self, _twitch_user_id: &str, _login: Option<&str>) {
-        self.stream_offline_global_ban.fetch_add(1, Ordering::SeqCst);
+        self.stream_offline_global_ban
+            .fetch_add(1, Ordering::SeqCst);
     }
     async fn on_stream_offline(&self, _twitch_user_id: &str, _login: Option<&str>) {
         self.stream_offline.fetch_add(1, Ordering::SeqCst);
@@ -77,7 +81,11 @@ impl EventSubHooks for RecordingHooks {
     ) {
         self.chat_sub_kinds.lock().unwrap().push(kind);
     }
-    async fn on_chat_raid_notification(&self, _event: &serde_json::Value, _message_id: Option<&str>) {
+    async fn on_chat_raid_notification(
+        &self,
+        _event: &serde_json::Value,
+        _message_id: Option<&str>,
+    ) {
         self.chat_raid.fetch_add(1, Ordering::SeqCst);
     }
     async fn on_chat_unraid_notification(
@@ -432,7 +440,7 @@ async fn telemetrie_und_channel_update_und_raid_hook() {
     assert_eq!(count, 1);
     assert_eq!(title.as_deref(), Some("Neuer Titel"));
 
-    // channel.raid geht an den Hook, nicht in die Inbox.
+    // channel.raid läuft durable über die Inbox; der Handler ruft den Hook.
     let raid = serde_json::json!({
         "event": {"to_broadcaster_user_id": "7", "to_broadcaster_user_login": "ziel",
                    "from_broadcaster_user_login": "drag", "viewers": 12}
@@ -441,7 +449,8 @@ async fn telemetrie_und_channel_update_und_raid_hook() {
         .dispatch("channel.raid", Some("m-r"), &raid)
         .await
         .unwrap();
-    assert!(outcome.processed && !outcome.queued);
+    assert!(outcome.queued && !outcome.processed);
+    assert!(wait_until_empty(&store).await);
     assert_eq!(hooks.channel_raid.load(Ordering::SeqCst), 1);
 
     // Unbekannter Typ → ok, aber nicht verarbeitet.
@@ -453,6 +462,182 @@ async fn telemetrie_und_channel_update_und_raid_hook() {
     assert!(outcome.ok && !outcome.processed && !outcome.queued);
 
     runtime.shutdown().await;
+}
+
+#[tokio::test]
+async fn stream_online_gibt_offline_throttle_frei() {
+    let pool = pool_or_skip!("t4d_offline_throttle_release");
+    let hooks = Arc::new(RecordingHooks::default());
+    let (dispatcher, runtime, store) = build_stack(&pool, hooks.clone());
+
+    sqlx::query(
+        "INSERT INTO twitch_live_state (twitch_user_id, streamer_login, is_live)
+         VALUES ('42', 'drag', 1)",
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
+
+    let offline = serde_json::json!({
+        "subscription": {"type": "stream.offline"},
+        "event": {"broadcaster_user_id": "42", "broadcaster_user_login": "drag"}
+    });
+    let online = serde_json::json!({
+        "subscription": {"type": "stream.online"},
+        "event": {
+            "broadcaster_user_id": "42",
+            "broadcaster_user_login": "drag",
+            "id": "s-2",
+            "started_at": "2026-06-10T12:00:00Z"
+        }
+    });
+
+    dispatcher
+        .dispatch("stream.offline", Some("flap-off-1"), &offline)
+        .await
+        .unwrap();
+    assert!(wait_until_empty(&store).await);
+    assert_eq!(hooks.stream_offline.load(Ordering::SeqCst), 1);
+
+    dispatcher
+        .dispatch("stream.online", Some("flap-on-1"), &online)
+        .await
+        .unwrap();
+    assert!(wait_until_empty(&store).await);
+
+    dispatcher
+        .dispatch("stream.offline", Some("flap-off-2"), &offline)
+        .await
+        .unwrap();
+    assert!(wait_until_empty(&store).await);
+    runtime.shutdown().await;
+
+    assert_eq!(
+        hooks.stream_offline.load(Ordering::SeqCst),
+        2,
+        "Go-Live muss den stale OfflineThrottle-Guard freigeben"
+    );
+}
+
+#[tokio::test]
+async fn channel_ban_bot_self_timeout_armt_timeout_guard() {
+    let pool = pool_or_skip!("t4d_ban_timeout_guard");
+    let guard = Arc::new(TimeoutGuard::new());
+    let store = TelemetryStore::new(pool.clone()).with_bot_timeout_guard("bot-42", guard.clone());
+
+    let timeout = serde_json::json!({
+        "broadcaster_user_login": "Drag",
+        "user_id": "bot-42",
+        "user_login": "bot",
+        "moderator_user_login": "mod",
+        "reason": "timeout",
+        "ends_at": "2026-06-10T12:01:00Z"
+    });
+    store
+        .store_ban_event("42", Some("drag"), &timeout, false, Utc::now())
+        .await
+        .unwrap();
+    assert!(
+        guard.consume_stream_start_pitch("drag"),
+        "non-permanent bot self-ban muss record_timeout(login) ausloesen"
+    );
+
+    let permanent = serde_json::json!({
+        "broadcaster_user_login": "Drag",
+        "user_id": "bot-42",
+        "user_login": "bot",
+        "moderator_user_login": "mod",
+        "reason": "ban"
+    });
+    store
+        .store_ban_event("42", Some("drag"), &permanent, false, Utc::now())
+        .await
+        .unwrap();
+    assert!(
+        !guard.consume_stream_start_pitch("drag"),
+        "permanenter Ban darf keinen TimeoutGuard-Eintrag erzeugen"
+    );
+}
+
+#[tokio::test]
+async fn monitoring_handler_gibt_unknown_work_type_als_fehler_zurueck() {
+    let pool = pool_or_skip!("t4d_unknown_work_type");
+    let guard = GuardStore::new(pool.clone());
+    let live_state = LiveStateStore::new(pool.clone());
+    let tracker = Arc::new(SessionTracker::new(
+        SessionStore::new(pool.clone()),
+        live_state.clone(),
+        ExpSessionTracker::new(ExpSessionStore::new(pool.clone())),
+        Arc::new(NoFollowerSource),
+        "Deadlock",
+    ));
+    let handler = MonitoringEventHandler::new(
+        guard,
+        live_state,
+        tracker,
+        TelemetryStore::new(pool),
+        Arc::new(RecordingHooks::default()),
+        None,
+        Arc::new(epoch_clock),
+    );
+
+    let err = handler
+        .handle("future.eventsub.type", &serde_json::json!({"event": {}}))
+        .await
+        .expect_err("unbekannter Work-Type muss den Inbox-Retry-Pfad triggern");
+    assert!(
+        err.to_string()
+            .contains("unknown eventsub processing work_type")
+    );
+}
+
+#[tokio::test]
+async fn chat_subscription_telemetry_hook_persistiert_mit_should_capture_gate() {
+    let pool = pool_or_skip!("t4d_chat_sub_telemetry_hook");
+    let has_dedicated_sub = Arc::new(AtomicBool::new(false));
+    let checker = {
+        let has_dedicated_sub = has_dedicated_sub.clone();
+        Arc::new(move |eventsub_type: &str, broadcaster_id: &str| {
+            assert_eq!(eventsub_type, "channel.subscribe");
+            assert_eq!(broadcaster_id, "42");
+            has_dedicated_sub.load(Ordering::SeqCst)
+        })
+    };
+    let hooks = ChatSubscriptionTelemetryHooks::new(
+        Arc::new(RecordingHooks::default()),
+        TelemetryStore::new(pool.clone()),
+        checker,
+        Arc::new(|| 1_783_000_000.0),
+    );
+    let event = serde_json::json!({
+        "broadcaster_user_id": "42",
+        "notice_type": "sub",
+        "chatter_user_login": "Fan",
+        "chatter_user_id": "fan-1",
+        "sub": {"sub_tier": "1000"}
+    });
+
+    hooks
+        .on_chat_subscription_notification(ChatNotificationKind::Sub, &event, Some("cn-1"))
+        .await;
+    let count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM twitch_subscription_events")
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    assert_eq!(count, 1);
+
+    has_dedicated_sub.store(true, Ordering::SeqCst);
+    hooks
+        .on_chat_subscription_notification(ChatNotificationKind::Sub, &event, Some("cn-2"))
+        .await;
+    let count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM twitch_subscription_events")
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    assert_eq!(
+        count, 1,
+        "dedizierte EventSub aktiv: Chat-Fallback darf nicht doppelt zaehlen"
+    );
 }
 
 /// B8-00: `channel.chat.notification` demuxt nach `notice_type` an die
@@ -549,7 +734,9 @@ async fn ensure_dispatch_ready_gate() {
     // EventSubCallbackNotRegistered), Receiver → 503.
     assert_eq!(
         dispatcher.ensure_dispatch_ready("channel.unbekannt"),
-        Err(DispatchNotReady::CallbackNotRegistered("channel.unbekannt".into()))
+        Err(DispatchNotReady::CallbackNotRegistered(
+            "channel.unbekannt".into()
+        ))
     );
 
     // Deaktiviert → jede Notification scheitert am Aktiv-Check, auch eine, die
@@ -598,11 +785,12 @@ async fn hype_train_end_aktualisiert_begin_zeile() {
         .await
         .unwrap();
 
-    let rows: Vec<(String, Option<String>)> =
-        sqlx::query_as("SELECT event_phase, ended_at::text FROM twitch_hype_train_events ORDER BY id")
-            .fetch_all(&pool)
-            .await
-            .unwrap();
+    let rows: Vec<(String, Option<String>)> = sqlx::query_as(
+        "SELECT event_phase, ended_at::text FROM twitch_hype_train_events ORDER BY id",
+    )
+    .fetch_all(&pool)
+    .await
+    .unwrap();
     // Exakt eine Zeile — das Begin-Event wurde zum End-Event aktualisiert.
     assert_eq!(rows.len(), 1, "Kein Doppel-INSERT erwartet");
     assert_eq!(rows[0].0, "begin");
@@ -628,11 +816,10 @@ async fn hype_train_end_mit_started_at_null_kein_verwaister_insert() {
         .await
         .unwrap();
 
-    let rows: Vec<(String,)> =
-        sqlx::query_as("SELECT event_phase FROM twitch_hype_train_events")
-            .fetch_all(&pool)
-            .await
-            .unwrap();
+    let rows: Vec<(String,)> = sqlx::query_as("SELECT event_phase FROM twitch_hype_train_events")
+        .fetch_all(&pool)
+        .await
+        .unwrap();
     // Exakt ein Fallback-INSERT mit phase='end' — kein doppelter verwaister Eintrag.
     assert_eq!(rows.len(), 1, "Genau ein End-Insert erwartet");
     assert_eq!(rows[0].0, "end");

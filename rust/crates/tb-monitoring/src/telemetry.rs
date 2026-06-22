@@ -7,15 +7,25 @@
 //! (2026-06-09): Timestamps timestamptz, Flags boolean, IDs bigint.
 //! Die `session_id` wird über `twitch_live_state.active_session_id` aufgelöst.
 
+use std::sync::Arc;
+
 use chrono::{DateTime, Utc};
 use serde_json::Value;
 use sqlx::PgPool;
+use tb_chat::TimeoutGuard;
 
 use crate::stream::parse_dt_utc;
 
 #[derive(Clone)]
 pub struct TelemetryStore {
     pool: PgPool,
+    bot_timeout: Option<BotTimeoutRecorder>,
+}
+
+#[derive(Clone)]
+struct BotTimeoutRecorder {
+    bot_user_id: String,
+    guard: Arc<TimeoutGuard>,
 }
 
 /// Hype-Train-Phase (Python: `begin` / `progress` / `end`).
@@ -35,7 +45,28 @@ pub enum ShoutoutDirection {
 
 impl TelemetryStore {
     pub fn new(pool: PgPool) -> Self {
-        Self { pool }
+        Self {
+            pool,
+            bot_timeout: None,
+        }
+    }
+
+    /// Verdrahtet die inbound EventSub-Erkennung von Bot-Self-Timeouts
+    /// (`channel.ban` mit `ends_at`) an den tb-chat TimeoutGuard.
+    ///
+    /// WIRING-TODO(P2.57): In der Composition-Root den zentralen Bot-User-ID-
+    /// Wert und den geteilten `tb_chat::TimeoutGuard` injizieren; ohne diese
+    /// Injection bleibt der Store wie bisher rein insert-only.
+    pub fn with_bot_timeout_guard(
+        mut self,
+        bot_user_id: impl Into<String>,
+        guard: Arc<TimeoutGuard>,
+    ) -> Self {
+        let bot_user_id = bot_user_id.into().trim().to_string();
+        if !bot_user_id.is_empty() {
+            self.bot_timeout = Some(BotTimeoutRecorder { bot_user_id, guard });
+        }
+        self
     }
 
     /// Aktive Session über den Live-State (Sessions tragen keine user_id).
@@ -277,6 +308,7 @@ impl TelemetryStore {
     pub async fn store_ban_event(
         &self,
         broadcaster_user_id: &str,
+        broadcaster_login: Option<&str>,
         event: &Value,
         unbanned: bool,
         now: DateTime<Utc>,
@@ -299,14 +331,55 @@ impl TelemetryStore {
         .bind(broadcaster_user_id)
         .bind(event_type)
         .bind(target_login)
-        .bind(target_id)
+        .bind(&target_id)
         .bind(moderator_login)
         .bind(reason)
         .bind(ends_at)
         .bind(now)
         .execute(&self.pool)
         .await?;
+        self.record_inbound_bot_timeout(broadcaster_login, event, unbanned, ends_at, &target_id);
         Ok(())
+    }
+
+    fn record_inbound_bot_timeout(
+        &self,
+        broadcaster_login: Option<&str>,
+        event: &Value,
+        unbanned: bool,
+        ends_at: Option<DateTime<Utc>>,
+        target_id: &Option<String>,
+    ) {
+        let Some(recorder) = &self.bot_timeout else {
+            return;
+        };
+        if unbanned || ends_at.is_none() {
+            return;
+        }
+        let Some(target_id) = target_id
+            .as_deref()
+            .map(str::trim)
+            .filter(|id| !id.is_empty())
+        else {
+            return;
+        };
+        if target_id != recorder.bot_user_id {
+            return;
+        }
+        let login = broadcaster_login
+            .map(str::trim)
+            .filter(|login| !login.is_empty())
+            .map(str::to_lowercase)
+            .or_else(|| {
+                str_lower(
+                    event,
+                    &["broadcaster_user_login", "to_broadcaster_user_login"],
+                )
+            });
+        if let Some(login) = login {
+            recorder.guard.record_timeout(&login);
+            tracing::info!(login = %login, "Bot-Timeout via channel.ban EventSub erkannt");
+        }
     }
 
     /// channel.shoutout.create (`sent`) / channel.shoutout.receive (`received`).

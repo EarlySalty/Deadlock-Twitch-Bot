@@ -3,13 +3,27 @@
 //! Der Engine-Kern bleibt frei von Discord/EventSub/Raid-Wissen:
 //! - [`AnnouncementSink`] — Go-Live-/Offline-Postings (Slice 4e).
 //! - [`PollHooks`] — EventSub-Subscription bei Go-Live (4d), Partner-Score-
-//!   Refreshes und Partner-Lifecycle-Ops (Cutover-Kopplungen, siehe Plan-Doc).
+//!   Refreshes, ReAuth-Reminder und Partner-Lifecycle-Ops
+//!   (Cutover-Kopplungen, siehe Plan-Doc).
 //!
 //! Bis zur Verdrahtung laufen die Noop-Implementierungen — der Poll-Loop ist
 //! damit ein reiner Write-Core-Treiber ohne Außenwirkung.
 
+use std::collections::HashMap;
+use std::sync::{Arc, Mutex};
+use std::time::{Duration, Instant};
+
+use sqlx::PgPool;
+use tb_chat::{ChatApi, SendOutcome};
+
 use crate::poller::tracked::TrackedEntry;
 use crate::stream::StreamSnapshot;
+
+/// User-sichtbarer Chat-Text für P2.60. Absichtlich nur Platzhalter, bis der
+/// finale deutsche Copytext fachlich freigegeben ist.
+pub const REAUTH_REMINDER_TEXT: &str = "Platzhalter";
+
+const REAUTH_FALLBACK_DEDUPE_WINDOW: Duration = Duration::from_secs(300);
 
 /// Kontext für ein Go-Live-Posting.
 #[derive(Debug, Clone)]
@@ -137,3 +151,327 @@ pub struct NoopPollHooks;
 
 #[async_trait::async_trait]
 impl PollHooks for NoopPollHooks {}
+
+/// PollHooks-Decorator für den Go-Live-ReAuth-Reminder.
+///
+/// WIRING-TODO(P2.60): In `bin/tb-bot/src/main.rs` den bestehenden
+/// `SubscriptionPollHooks` mit diesem Decorator umwickeln und den nativen
+/// `tb_chat::ChatApi` injizieren. Ohne dieses Composition-Root-Wiring bleibt
+/// der Poller-Sendepfad ungenutzt.
+pub struct ReauthReminderPollHooks {
+    inner: Arc<dyn PollHooks>,
+    pool: PgPool,
+    chat: Arc<dyn ChatApi>,
+    sent: Mutex<HashMap<String, Instant>>,
+}
+
+impl ReauthReminderPollHooks {
+    pub fn new(inner: Arc<dyn PollHooks>, pool: PgPool, chat: Arc<dyn ChatApi>) -> Self {
+        Self {
+            inner,
+            pool,
+            chat,
+            sent: Mutex::new(HashMap::new()),
+        }
+    }
+
+    async fn reminder_key(&self, twitch_user_id: &str) -> Option<ReminderKey> {
+        let twitch_user_id = twitch_user_id.trim();
+        if twitch_user_id.is_empty() {
+            return None;
+        }
+        let row = sqlx::query_as::<_, (Option<bool>, Option<String>)>(
+            "SELECT ra.needs_reauth, NULLIF(ls.last_stream_id, '') \
+               FROM twitch_raid_auth ra \
+          LEFT JOIN twitch_live_state ls ON ls.twitch_user_id = ra.twitch_user_id \
+              WHERE ra.twitch_user_id = $1",
+        )
+        .bind(twitch_user_id)
+        .fetch_optional(&self.pool)
+        .await;
+
+        match row {
+            Ok(Some((Some(true), Some(stream_id)))) => {
+                Some(ReminderKey::Stream(format!("stream:{stream_id}")))
+            }
+            Ok(Some((Some(true), None))) => {
+                Some(ReminderKey::Fallback(format!("fallback:{twitch_user_id}")))
+            }
+            Ok(_) => None,
+            Err(error) => {
+                tracing::debug!(%error, twitch_user_id, "ReAuth-Reminder: needs_reauth-Check fehlgeschlagen");
+                None
+            }
+        }
+    }
+
+    fn claim_send(&self, key: ReminderKey) -> bool {
+        let Ok(mut sent) = self.sent.lock() else {
+            tracing::warn!("ReAuth-Reminder: Dedupe-Lock vergiftet");
+            return false;
+        };
+        let now = Instant::now();
+        match key {
+            ReminderKey::Stream(key) => {
+                if sent.contains_key(&key) {
+                    false
+                } else {
+                    sent.insert(key, now);
+                    true
+                }
+            }
+            ReminderKey::Fallback(key) => {
+                let due = sent
+                    .get(&key)
+                    .map(|last| now.duration_since(*last) >= REAUTH_FALLBACK_DEDUPE_WINDOW)
+                    .unwrap_or(true);
+                if due {
+                    sent.insert(key, now);
+                }
+                due
+            }
+        }
+    }
+
+    async fn maybe_send_reauth_reminder(&self, twitch_user_id: &str, login: &str) {
+        let Some(key) = self.reminder_key(twitch_user_id).await else {
+            return;
+        };
+        if !self.claim_send(key) {
+            return;
+        }
+        match self
+            .chat
+            .send_message(twitch_user_id.trim(), REAUTH_REMINDER_TEXT)
+            .await
+        {
+            Ok(SendOutcome::Sent) => {
+                tracing::info!(
+                    login = %login.trim().to_lowercase(),
+                    twitch_user_id = %twitch_user_id.trim(),
+                    "ReAuth-Reminder bei Go-Live in den Chat gesendet"
+                );
+            }
+            Ok(outcome) => {
+                tracing::debug!(
+                    ?outcome,
+                    twitch_user_id = %twitch_user_id.trim(),
+                    "ReAuth-Reminder nicht zugestellt"
+                );
+            }
+            Err(error) => {
+                tracing::debug!(%error, twitch_user_id = %twitch_user_id.trim(), "ReAuth-Reminder-Send fehlgeschlagen");
+            }
+        }
+    }
+}
+
+enum ReminderKey {
+    Stream(String),
+    Fallback(String),
+}
+
+#[async_trait::async_trait]
+impl PollHooks for ReauthReminderPollHooks {
+    async fn on_stream_went_live(&self, twitch_user_id: &str, login: &str) {
+        self.inner.on_stream_went_live(twitch_user_id, login).await;
+        self.maybe_send_reauth_reminder(twitch_user_id, login).await;
+    }
+
+    async fn on_auto_unarchive(&self, login: &str) -> bool {
+        self.inner.on_auto_unarchive(login).await
+    }
+
+    async fn on_auto_archive(&self, login: &str) -> bool {
+        self.inner.on_auto_archive(login).await
+    }
+
+    async fn after_tick(&self, report: TickReport) {
+        self.inner.after_tick(report).await;
+    }
+
+    async fn on_capacity_tick(&self) {
+        self.inner.on_capacity_tick().await;
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{PollHooks, REAUTH_REMINDER_TEXT, ReauthReminderPollHooks};
+
+    use std::str::FromStr;
+    use std::sync::{Arc, Mutex};
+
+    use chrono::{DateTime, Utc};
+    use sqlx::postgres::{PgConnectOptions, PgPoolOptions};
+    use tb_chat::{BanOutcome, ChatApi, SendOutcome};
+
+    #[derive(Default)]
+    struct RecordingChat {
+        sent: Mutex<Vec<(String, String)>>,
+    }
+
+    #[async_trait::async_trait]
+    impl ChatApi for RecordingChat {
+        async fn send_message(
+            &self,
+            broadcaster_id: &str,
+            message: &str,
+        ) -> Result<SendOutcome, String> {
+            self.sent
+                .lock()
+                .unwrap()
+                .push((broadcaster_id.to_string(), message.to_string()));
+            Ok(SendOutcome::Sent)
+        }
+
+        async fn send_announcement(
+            &self,
+            _broadcaster_id: &str,
+            _message: &str,
+            _color: &str,
+        ) -> Result<bool, String> {
+            Ok(false)
+        }
+
+        async fn ban_user(
+            &self,
+            _broadcaster_id: &str,
+            _target_user_id: &str,
+            _reason: &str,
+        ) -> Result<BanOutcome, String> {
+            Ok(BanOutcome::Failed {
+                status: 501,
+                body: String::new(),
+            })
+        }
+
+        async fn timeout_user(
+            &self,
+            _broadcaster_id: &str,
+            _target_user_id: &str,
+            _duration_secs: u32,
+            _reason: &str,
+        ) -> Result<BanOutcome, String> {
+            Ok(BanOutcome::Failed {
+                status: 501,
+                body: String::new(),
+            })
+        }
+
+        async fn unban_user(
+            &self,
+            _broadcaster_id: &str,
+            _target_user_id: &str,
+        ) -> Result<bool, String> {
+            Ok(false)
+        }
+
+        async fn delete_message(
+            &self,
+            _broadcaster_id: &str,
+            _message_id: &str,
+        ) -> Result<bool, String> {
+            Ok(false)
+        }
+
+        async fn user_created_at(&self, _user_id: &str) -> Result<Option<DateTime<Utc>>, String> {
+            Ok(None)
+        }
+
+        async fn resolve_user_id(&self, _login: &str) -> Result<Option<String>, String> {
+            Ok(None)
+        }
+
+        async fn bot_user_id(&self) -> String {
+            "bot".to_string()
+        }
+    }
+
+    async fn pool_in_schema(schema: &str) -> Option<sqlx::PgPool> {
+        let Some(dsn) = std::env::var("TB_TEST_DATABASE_URL").ok() else {
+            eprintln!("SKIP: TB_TEST_DATABASE_URL nicht gesetzt");
+            return None;
+        };
+        let admin = PgPoolOptions::new()
+            .max_connections(1)
+            .connect(&dsn)
+            .await
+            .unwrap();
+        sqlx::query(&format!("DROP SCHEMA IF EXISTS {schema} CASCADE"))
+            .execute(&admin)
+            .await
+            .unwrap();
+        sqlx::query(&format!("CREATE SCHEMA {schema}"))
+            .execute(&admin)
+            .await
+            .unwrap();
+        admin.close().await;
+
+        let opts = PgConnectOptions::from_str(&dsn)
+            .unwrap()
+            .options([("search_path", schema)]);
+        let pool = PgPoolOptions::new()
+            .max_connections(2)
+            .connect_with(opts)
+            .await
+            .unwrap();
+        for ddl in [
+            "CREATE TABLE twitch_raid_auth (
+                twitch_user_id TEXT PRIMARY KEY,
+                needs_reauth BOOLEAN NOT NULL DEFAULT FALSE
+            )",
+            "CREATE TABLE twitch_live_state (
+                twitch_user_id TEXT PRIMARY KEY,
+                last_stream_id TEXT
+            )",
+        ] {
+            sqlx::query(ddl).execute(&pool).await.unwrap();
+        }
+        Some(pool)
+    }
+
+    #[tokio::test]
+    async fn reauth_reminder_sendet_einmal_pro_stream_id() {
+        let Some(pool) = pool_in_schema("poll_hooks_reauth").await else {
+            return;
+        };
+        sqlx::query(
+            "INSERT INTO twitch_raid_auth (twitch_user_id, needs_reauth) VALUES ('42', TRUE)",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+        sqlx::query(
+            "INSERT INTO twitch_live_state (twitch_user_id, last_stream_id) VALUES ('42', 's-1')",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+
+        let chat = Arc::new(RecordingChat::default());
+        let hooks = ReauthReminderPollHooks::new(
+            Arc::new(super::NoopPollHooks),
+            pool.clone(),
+            chat.clone(),
+        );
+        hooks.on_stream_went_live("42", "drag").await;
+        hooks.on_stream_went_live("42", "drag").await;
+
+        sqlx::query(
+            "UPDATE twitch_live_state SET last_stream_id = 's-2' WHERE twitch_user_id = '42'",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+        hooks.on_stream_went_live("42", "drag").await;
+
+        let sent = chat.sent.lock().unwrap().clone();
+        assert_eq!(sent.len(), 2);
+        assert_eq!(
+            sent[0],
+            ("42".to_string(), REAUTH_REMINDER_TEXT.to_string())
+        );
+        assert_eq!(REAUTH_REMINDER_TEXT, "Platzhalter");
+    }
+}

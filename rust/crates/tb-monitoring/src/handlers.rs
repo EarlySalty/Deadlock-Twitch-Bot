@@ -1,5 +1,5 @@
 //! Verarbeitung der Core-EventSub-Aufträge aus der Processing-Inbox
-//! (`stream.online` / `stream.offline` / `channel.update`) — Port der
+//! (`stream.online` / `stream.offline` / `channel.update` / `channel.raid`) — Port der
 //! Python-Handler aus `analytics/mixin.py` und `eventsub_mixin.py`.
 //!
 //! Fachliche Effekte sind über Business-Effect-Guards exactly-once pro
@@ -18,7 +18,7 @@ use crate::inbox_runtime::{ClockFn, HandlerError, InboxHandler};
 use crate::live_state::LiveStateStore;
 use crate::poller::source::ChannelInfoSource;
 use crate::sessions::SessionTracker;
-use crate::stream::{iso_seconds, StreamSnapshot};
+use crate::stream::{StreamSnapshot, iso_seconds};
 use crate::telemetry::TelemetryStore;
 
 /// Business-Effect-TTL (Python: 7 Tage).
@@ -133,6 +133,14 @@ impl MonitoringEventHandler {
             )
             .await
             .map_err(|e| Box::new(e) as HandlerError)?;
+        self.guard
+            .release(GuardKind::OfflineThrottle, &work.broadcaster_id)
+            .await
+            .map_err(|e| Box::new(e) as HandlerError)?;
+        // WIRING-TODO(P2.55): Weitere Go-Live-Adapter außerhalb der
+        // EventSub-Inbox (z. B. bin/tb-bot-Hooks) müssen dieselbe
+        // OfflineThrottle-Freigabe nutzen, falls sie eigene Go-Live-Pfade
+        // ausführen.
 
         // Session sofort bei stream.online eroeffnen statt erst beim naechsten
         // Poll-Tick: sonst geht der gesamte Go-Live-Chat (bis poll_interval +
@@ -391,6 +399,37 @@ impl MonitoringEventHandler {
         .await?;
         Ok(())
     }
+
+    /// channel.raid: durable Inbox-Ausführung des Raid-Arrival-Hooks. Der
+    /// Hook-Return ist aktuell `()`, daher liefert die Inbox heute vor allem
+    /// Cross-Restart-Durability.
+    ///
+    /// WIRING-TODO(P2.52/P2.54): Wenn `bin/tb-bot/src/eventsub_hooks.rs`
+    /// (`RaidArrivalCoordinator`) Hook-Fehler retrybar signalisieren soll, muss
+    /// der konkrete Adapter auf einen Result-fähigen Pfad erweitert werden.
+    async fn handle_channel_raid(&self, work: &WorkPayload) -> Result<(), HandlerError> {
+        let (epoch, _) = self.now_pair();
+        let executed = run_business_effect_once(
+            &self.guard,
+            work.message_id.as_deref(),
+            "channel_raid_arrival",
+            epoch,
+            || async {
+                self.hooks
+                    .on_channel_raid(&work.event, work.message_id.as_deref())
+                    .await;
+                Ok(())
+            },
+        )
+        .await?;
+        if executed {
+            tracing::info!(
+                broadcaster_id = %work.broadcaster_id,
+                "EventSub channel.raid: Raid-Arrival-Handler getriggert"
+            );
+        }
+        Ok(())
+    }
 }
 
 #[async_trait::async_trait]
@@ -401,13 +440,8 @@ impl InboxHandler for MonitoringEventHandler {
             "stream.online" => self.handle_stream_online(&work).await,
             "stream.offline" => self.handle_stream_offline(&work).await,
             "channel.update" => self.handle_channel_update(&work).await,
-            other => {
-                tracing::warn!(
-                    work_type = other,
-                    "Inbox: unbekannter Work-Type — verworfen"
-                );
-                Ok(())
-            }
+            "channel.raid" => self.handle_channel_raid(&work).await,
+            other => Err(format!("unknown eventsub processing work_type: {other}").into()),
         }
     }
 }
