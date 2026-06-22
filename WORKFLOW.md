@@ -1,5 +1,14 @@
 # Workflow
 
+## 2026-06-22 — Overlay-Builder-Seite + Config-Params
+
+- Start: delegierter GPT-Implementierungsworker; Scope auf `bot/dashboard_v2/src/**` plus eingebettete JS/CSS-Logik in `rust/crates/tb-dashboard-api/src/handlers/overlay.rs`; verbindliche Review-Regel: keine Commits, kein Push, Aenderungen bleiben uncommitted.
+- Implementiert: `/twitch/overlay` liest clientseitig `rank`, `winrate`, `streak`, `live` und `pos`; Default bleibt alles sichtbar und unten links.
+- Implementiert: neue Verwaltungssektion `OverlayBuilderSection` mit Toggles, Positionswahl, Live-Vorschau, kopierbarer URL und OBS-Schritten; eingebunden in `Verwaltung.tsx`.
+- Tests erweitert: Overlay-HTML-Test prueft Positionsklassen und Flag-Logik.
+- Verifikation: `npm --prefix bot/dashboard_v2 run build` gruen nach `npm ci --legacy-peer-deps`; `cargo build -p tb-dashboard-api` und `cargo test -p tb-dashboard-api` gruen aus `rust/`.
+- Clippy: `cargo clippy -p tb-dashboard-api` exit 0; bestehende Warnungen in unberuehrten Crates/Dateien bleiben offen. Kein Commit gemaess Review-Regel.
+
 ## 2026-06-22 — SP2 Live-Overlay OBS Browser-Source
 
 - Start: Scope auf `rust/crates/tb-dashboard-api`; verbindliche Review-Regel aus Auftrag: keine Commits, Änderungen bleiben uncommitted.

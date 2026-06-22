@@ -4,6 +4,7 @@ import { fetchInternalHome } from '@/api/home';
 import { useAuthStatus } from '@/hooks/useAnalytics';
 import { PREVIEW_ANALYTICS_ROUTE, PREVIEW_HOME_ROUTE, isPreviewModeEnabled } from '@/preview/routes';
 import { AIEngagementSection } from '@/components/verwaltung/AIEngagementSection';
+import { OverlayBuilderSection } from '@/components/verwaltung/OverlayBuilderSection';
 import { SilentNotificationsSection } from '@/components/verwaltung/SilentNotificationsSection';
 import { ScamGuardSection } from '@/components/verwaltung/ScamGuardSection';
 import { OnboardingWizard } from '@/components/onboarding/OnboardingWizard';
@@ -350,6 +351,8 @@ export function VerwaltungPage() {
             Profiländerungen direkt auf Twitch vornehmen. Daten werden beim nächsten Login synchronisiert.
           </div>
         </motion.section>
+
+        <OverlayBuilderSection login={twitchLogin} />
 
         <SilentNotificationsSection />
 
