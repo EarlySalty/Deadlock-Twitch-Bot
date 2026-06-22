@@ -9,6 +9,8 @@ use sqlx::PgPool;
 
 const DEFAULT_STEAM_BOT_RANK_URL: &str = "http://127.0.0.1:8783/rank";
 const DEFAULT_STEAM_BOT_MATCHES_URL: &str = "http://127.0.0.1:8783/player-matches";
+const DEFAULT_STEAM_BOT_MMR_TREND_URL: &str = "http://127.0.0.1:8783/player-mmr-trend";
+const DEFAULT_STEAM_BOT_LIVE_URL: &str = "http://127.0.0.1:8783/player-live";
 
 #[derive(Debug, Clone, Deserialize)]
 pub struct RankInfo {
@@ -44,6 +46,36 @@ pub struct MatchHistory {
     pub linked: bool,
     #[serde(default)]
     pub matches: Vec<MatchEntry>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct MmrTrend {
+    #[serde(default)]
+    pub linked: bool,
+    #[serde(default)]
+    pub current_rank_name: Option<String>,
+    #[serde(default)]
+    pub current_badge: Option<i64>,
+    #[serde(default)]
+    pub delta: Option<i64>,
+    #[serde(default)]
+    pub days: Option<i64>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct LiveStatus {
+    #[serde(default)]
+    pub linked: bool,
+    #[serde(default)]
+    pub live: bool,
+    #[serde(default)]
+    pub in_deadlock: bool,
+    #[serde(default)]
+    pub hero: Option<String>,
+    #[serde(default)]
+    pub minutes: Option<i64>,
+    #[serde(default)]
+    pub stage: Option<String>,
 }
 
 pub async fn resolve_discord_id(pool: &PgPool, twitch_user_id: &str) -> Option<String> {
@@ -98,6 +130,42 @@ pub async fn fetch_matches(discord_id: &str) -> Option<MatchHistory> {
     response.json::<MatchHistory>().await.ok()
 }
 
+pub async fn fetch_mmr_trend(discord_id: &str) -> Option<MmrTrend> {
+    let trend_url = steam_bot_mmr_trend_url();
+    let client = reqwest::Client::builder()
+        .timeout(Duration::from_secs(8))
+        .build()
+        .ok()?;
+    let response = client
+        .get(trend_url)
+        .query(&[("discord_id", discord_id), ("days", "7")])
+        .send()
+        .await
+        .ok()?;
+    if !response.status().is_success() {
+        return None;
+    }
+    response.json::<MmrTrend>().await.ok()
+}
+
+pub async fn fetch_live(discord_id: &str) -> Option<LiveStatus> {
+    let live_url = steam_bot_live_url();
+    let client = reqwest::Client::builder()
+        .timeout(Duration::from_secs(8))
+        .build()
+        .ok()?;
+    let response = client
+        .get(live_url)
+        .query(&[("discord_id", discord_id)])
+        .send()
+        .await
+        .ok()?;
+    if !response.status().is_success() {
+        return None;
+    }
+    response.json::<LiveStatus>().await.ok()
+}
+
 pub fn rank_reply(name: &str, info: Option<&RankInfo>) -> String {
     match info {
         Some(info) if info.linked => match &info.rank_name {
@@ -141,6 +209,57 @@ pub fn winrate_reply(name: &str, mh: Option<&MatchHistory>) -> String {
                 "{name}: {wr:.1}% Winrate über die letzten {} Spiele ({w}S/{l}N).",
                 w + l
             )
+        }
+        _ => format!(
+            "{name} hat noch keinen Steam-Account verknüpft — geht im Discord über die Steam-Verknüpfung."
+        ),
+    }
+}
+
+pub fn mmr_reply(name: &str, t: Option<&MmrTrend>) -> String {
+    match t {
+        Some(t) if t.linked => match &t.current_rank_name {
+            Some(rank) => {
+                let d = t.days.unwrap_or(7);
+                match t.delta {
+                    Some(d2) if d2 > 0 => {
+                        format!("{name}: Rang {rank} — {d2} Stufen hoch in den letzten {d} Tagen.")
+                    }
+                    Some(d2) if d2 < 0 => {
+                        let abs = d2.abs();
+                        format!("{name}: Rang {rank} — {abs} Stufen runter in den letzten {d} Tagen.")
+                    }
+                    _ => format!("{name}: Rang {rank} — stabil in den letzten {d} Tagen."),
+                }
+            }
+            None => format!(
+                "{name}: Noch keine Rang-Historie — der Trend baut sich ab jetzt auf."
+            ),
+        },
+        _ => format!(
+            "{name} hat noch keinen Steam-Account verknüpft — geht im Discord über die Steam-Verknüpfung."
+        ),
+    }
+}
+
+pub fn live_reply(name: &str, s: Option<&LiveStatus>) -> String {
+    match s {
+        Some(s) if s.linked => {
+            if s.live {
+                let mut reply = format!("{name} ist gerade live in Deadlock");
+                if let Some(hero) = &s.hero {
+                    reply.push_str(&format!(" als {hero}"));
+                }
+                if let Some(minutes) = s.minutes {
+                    reply.push_str(&format!(" (seit {minutes} Min)"));
+                }
+                reply.push('.');
+                reply
+            } else if s.in_deadlock {
+                format!("{name} ist gerade in Deadlock, aber in keinem laufenden Match.")
+            } else {
+                format!("{name} ist gerade nicht in Deadlock.")
+            }
         }
         _ => format!(
             "{name} hat noch keinen Steam-Account verknüpft — geht im Discord über die Steam-Verknüpfung."
@@ -249,6 +368,20 @@ fn steam_bot_matches_url() -> String {
         .unwrap_or_else(|| DEFAULT_STEAM_BOT_MATCHES_URL.to_string())
 }
 
+fn steam_bot_mmr_trend_url() -> String {
+    std::env::var("STEAM_BOT_RANK_URL")
+        .ok()
+        .map(|value| mmr_trend_url_from_rank(&value))
+        .unwrap_or_else(|| DEFAULT_STEAM_BOT_MMR_TREND_URL.to_string())
+}
+
+fn steam_bot_live_url() -> String {
+    std::env::var("STEAM_BOT_RANK_URL")
+        .ok()
+        .map(|value| live_url_from_rank(&value))
+        .unwrap_or_else(|| DEFAULT_STEAM_BOT_LIVE_URL.to_string())
+}
+
 fn matches_url_from_rank(rank_url: &str) -> String {
     let trimmed = rank_url.trim();
     if trimmed.is_empty() {
@@ -267,6 +400,42 @@ fn matches_url_from_rank(rank_url: &str) -> String {
     }
 }
 
+fn mmr_trend_url_from_rank(rank_url: &str) -> String {
+    let trimmed = rank_url.trim();
+    if trimmed.is_empty() {
+        return DEFAULT_STEAM_BOT_MMR_TREND_URL.to_string();
+    }
+
+    if let Some(base) = trimmed.strip_suffix("/rank") {
+        return format!("{base}/player-mmr-trend");
+    }
+
+    let base = trimmed.trim_end_matches('/');
+    if base.ends_with("/player-mmr-trend") {
+        base.to_string()
+    } else {
+        format!("{base}/player-mmr-trend")
+    }
+}
+
+fn live_url_from_rank(rank_url: &str) -> String {
+    let trimmed = rank_url.trim();
+    if trimmed.is_empty() {
+        return DEFAULT_STEAM_BOT_LIVE_URL.to_string();
+    }
+
+    if let Some(base) = trimmed.strip_suffix("/rank") {
+        return format!("{base}/player-live");
+    }
+
+    let base = trimmed.trim_end_matches('/');
+    if base.ends_with("/player-live") {
+        base.to_string()
+    } else {
+        format!("{base}/player-live")
+    }
+}
+
 fn scored(m: &[MatchEntry]) -> Vec<&MatchEntry> {
     m.iter()
         .filter(|entry| entry.not_scored != Some(true))
@@ -281,6 +450,32 @@ mod tests {
         MatchHistory {
             linked: true,
             matches,
+        }
+    }
+
+    fn linked_mmr(rank: Option<&str>, delta: Option<i64>, days: Option<i64>) -> MmrTrend {
+        MmrTrend {
+            linked: true,
+            current_rank_name: rank.map(String::from),
+            current_badge: Some(56),
+            delta,
+            days,
+        }
+    }
+
+    fn linked_live(
+        live: bool,
+        in_deadlock: bool,
+        hero: Option<&str>,
+        minutes: Option<i64>,
+    ) -> LiveStatus {
+        LiveStatus {
+            linked: true,
+            live,
+            in_deadlock,
+            hero: hero.map(String::from),
+            minutes,
+            stage: None,
         }
     }
 
@@ -473,6 +668,137 @@ mod tests {
 
         assert!(winrate_reply("nani", Some(&info)).contains("noch keinen Steam-Account"));
         assert!(winrate_reply("nani", None).contains("noch keinen Steam-Account"));
+    }
+
+    #[test]
+    fn mmr_reply_meldet_positiven_trend() {
+        let info = linked_mmr(Some("Oracle"), Some(2), Some(7));
+
+        assert_eq!(
+            mmr_reply("nani", Some(&info)),
+            "nani: Rang Oracle — 2 Stufen hoch in den letzten 7 Tagen."
+        );
+    }
+
+    #[test]
+    fn mmr_reply_meldet_negativen_trend() {
+        let info = linked_mmr(Some("Oracle"), Some(-3), Some(7));
+
+        assert_eq!(
+            mmr_reply("nani", Some(&info)),
+            "nani: Rang Oracle — 3 Stufen runter in den letzten 7 Tagen."
+        );
+    }
+
+    #[test]
+    fn mmr_reply_meldet_stabil_bei_delta_null() {
+        let info = linked_mmr(Some("Oracle"), Some(0), Some(7));
+
+        assert_eq!(
+            mmr_reply("nani", Some(&info)),
+            "nani: Rang Oracle — stabil in den letzten 7 Tagen."
+        );
+    }
+
+    #[test]
+    fn mmr_reply_meldet_stabil_bei_fehlendem_delta() {
+        let info = linked_mmr(Some("Oracle"), None, None);
+
+        assert_eq!(
+            mmr_reply("nani", Some(&info)),
+            "nani: Rang Oracle — stabil in den letzten 7 Tagen."
+        );
+    }
+
+    #[test]
+    fn mmr_reply_meldet_fehlende_historie() {
+        let info = linked_mmr(None, Some(2), Some(7));
+
+        assert_eq!(
+            mmr_reply("nani", Some(&info)),
+            "nani: Noch keine Rang-Historie — der Trend baut sich ab jetzt auf."
+        );
+    }
+
+    #[test]
+    fn mmr_reply_nicht_verknuepft() {
+        let info = MmrTrend {
+            linked: false,
+            current_rank_name: None,
+            current_badge: None,
+            delta: None,
+            days: None,
+        };
+
+        assert_eq!(
+            mmr_reply("nani", Some(&info)),
+            "nani hat noch keinen Steam-Account verknüpft — geht im Discord über die Steam-Verknüpfung."
+        );
+        assert_eq!(
+            mmr_reply("nani", None),
+            "nani hat noch keinen Steam-Account verknüpft — geht im Discord über die Steam-Verknüpfung."
+        );
+    }
+
+    #[test]
+    fn live_reply_meldet_live_mit_hero_und_minuten() {
+        let info = linked_live(true, true, Some("Haze"), Some(7));
+
+        assert_eq!(
+            live_reply("X", Some(&info)),
+            "X ist gerade live in Deadlock als Haze (seit 7 Min)."
+        );
+    }
+
+    #[test]
+    fn live_reply_meldet_live_ohne_hero_und_minuten() {
+        let info = linked_live(true, true, None, None);
+
+        assert_eq!(
+            live_reply("X", Some(&info)),
+            "X ist gerade live in Deadlock."
+        );
+    }
+
+    #[test]
+    fn live_reply_meldet_in_deadlock_aber_nicht_live() {
+        let info = linked_live(false, true, None, None);
+
+        assert_eq!(
+            live_reply("X", Some(&info)),
+            "X ist gerade in Deadlock, aber in keinem laufenden Match."
+        );
+    }
+
+    #[test]
+    fn live_reply_meldet_gar_nicht_in_deadlock() {
+        let info = linked_live(false, false, None, None);
+
+        assert_eq!(
+            live_reply("X", Some(&info)),
+            "X ist gerade nicht in Deadlock."
+        );
+    }
+
+    #[test]
+    fn live_reply_nicht_verknuepft() {
+        let info = LiveStatus {
+            linked: false,
+            live: false,
+            in_deadlock: false,
+            hero: None,
+            minutes: None,
+            stage: None,
+        };
+
+        assert_eq!(
+            live_reply("X", Some(&info)),
+            "X hat noch keinen Steam-Account verknüpft — geht im Discord über die Steam-Verknüpfung."
+        );
+        assert_eq!(
+            live_reply("X", None),
+            "X hat noch keinen Steam-Account verknüpft — geht im Discord über die Steam-Verknüpfung."
+        );
     }
 
     #[test]
@@ -749,6 +1075,30 @@ mod tests {
         assert_eq!(
             matches_url_from_rank("https://x.y/rank"),
             "https://x.y/player-matches"
+        );
+    }
+
+    #[test]
+    fn mmr_trend_url_from_rank_leitet_player_mmr_trend_url_ab() {
+        assert_eq!(
+            mmr_trend_url_from_rank("http://127.0.0.1:8783/rank"),
+            "http://127.0.0.1:8783/player-mmr-trend"
+        );
+        assert_eq!(
+            mmr_trend_url_from_rank("https://x.y/rank"),
+            "https://x.y/player-mmr-trend"
+        );
+    }
+
+    #[test]
+    fn live_url_from_rank_leitet_player_live_url_ab() {
+        assert_eq!(
+            live_url_from_rank("http://127.0.0.1:8783/rank"),
+            "http://127.0.0.1:8783/player-live"
+        );
+        assert_eq!(
+            live_url_from_rank("https://x.y/rank"),
+            "https://x.y/player-live"
         );
     }
 }
