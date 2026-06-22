@@ -37,6 +37,7 @@
 
 mod auto_raid;
 mod chat_wiring;
+mod chatters_wiring;
 mod confirm_resolver;
 mod eventsub_hooks;
 mod eventsub_stats_adapter;
@@ -498,6 +499,11 @@ async fn main() {
         chat_api_handle.as_ref().map(|h| h.api.clone());
     let scam_enforce_api: Option<Arc<dyn tb_chat::ChatApi>> =
         chat_api_handle.as_ref().map(|h| h.api.clone());
+    // BotTokenManager-Clone für den Chatters-Poller (#11): bot_token/-user_id/
+    // -login + Scope-Check für den Helix-`GET /chat/chatters`-Call. Früh gezogen,
+    // da `chat_api_handle` weiter unten beim Pipeline-Aufbau konsumiert wird.
+    let chatters_bot_token_manager: Option<Arc<tb_chat::token::BotTokenManager>> =
+        chat_api_handle.as_ref().map(|h| h.bot_token_manager());
 
     // Raid-Verdrahtung: mit Manager + Helix + Krypto-Key sind alle vier
     // Raid-Kopplungen echt (Auto-Raid, Arrival, Score-Refresh, Blacklist-Guard).
@@ -1370,6 +1376,48 @@ async fn main() {
         tokio::spawn(streamer_link::streamer_link_task(
             sl_pool, sl_relay, sl_config, sl_base, sl_token,
         ));
+    }
+
+    // Chatters-Poller (#11): 30s-Collect (Helix `GET /chat/chatters` → Lurker-/
+    // Presence-Spiegelung) + stündliche Raid-Retention. Der Collect-Loop läuft
+    // nur, wenn Bot-Token-Manager + HelixClient + Streamer-TokenProvider
+    // verfügbar sind; die Retention braucht kein Token-Plumbing und läuft immer.
+    {
+        let chatters_auth = chatters_wiring::build_bot_chatter_auth(chatters_bot_token_manager);
+        // Bot-User-ID für den Mod-Self-Heal-Provisioner (sync benötigt) aus dem
+        // Bot-Auth-Port auflösen.
+        let chatters_bot_user_id = match chatters_auth.as_ref() {
+            Some(auth) => auth.bot_user_id().await,
+            None => None,
+        };
+        // Mod-TokenProvider + HelixClient → Streamer-Token-Quelle + Self-Heal-
+        // Provisioner (P1.2). Ohne DB_MASTER_KEY_V1 oder Helix bleibt der
+        // 403-Self-Heal aus; der Collect-Loop startet dann nicht (kein Poll).
+        let chatters_mod_token_provider = helix
+            .as_ref()
+            .clone()
+            .and_then(|helix_client| build_moderator_token_provider(pool.clone(), helix_client));
+        let chatters_streamer_tokens =
+            chatters_wiring::build_streamer_token_source(chatters_mod_token_provider.clone());
+        let chatters_fetcher = chatters_wiring::build_chatters_fetcher(helix.as_ref().clone());
+        let chatters_provisioner: Option<Arc<dyn tb_monitoring::ModeratorProvisioner>> =
+            match (chatters_mod_token_provider, helix.as_ref().clone(), chatters_bot_user_id) {
+                (Some(token_provider), Some(helix_client), Some(bot_user_id)) => Some(Arc::new(
+                    eventsub_hooks::HelixModeratorProvisioner::new(
+                        token_provider,
+                        helix_client,
+                        bot_user_id,
+                    ),
+                )),
+                _ => None,
+            };
+        chatters_wiring::spawn_chatters_schedulers(
+            pool.clone(),
+            chatters_auth,
+            chatters_streamer_tokens,
+            chatters_fetcher,
+            chatters_provisioner,
+        );
     }
 
     let addr = SocketAddr::from(([127, 0, 0, 1], port));
