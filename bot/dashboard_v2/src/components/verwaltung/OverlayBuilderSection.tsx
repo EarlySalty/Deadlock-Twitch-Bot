@@ -4,6 +4,7 @@ import { Check, Copy } from 'lucide-react';
 
 type OverlayTheme = 'dark' | 'light' | 'accent';
 type OverlayLayout = 'box' | 'bar';
+type OverlayMode = 'all' | 'standard' | 'brawl';
 type OverlayPosition = 'bl' | 'br' | 'tl' | 'tr';
 type ModuleKey =
   | 'header'
@@ -27,6 +28,12 @@ const THEMES: Array<{ value: OverlayTheme; label: string }> = [
 const LAYOUTS: Array<{ value: OverlayLayout; label: string }> = [
   { value: 'box', label: 'Box (Karte)' },
   { value: 'bar', label: 'Leiste' },
+];
+
+const MODES: Array<{ value: OverlayMode; label: string }> = [
+  { value: 'all', label: 'Alle Modi' },
+  { value: 'standard', label: 'Standard' },
+  { value: 'brawl', label: 'Street Brawl' },
 ];
 
 const POSITIONS: Array<{ value: OverlayPosition; label: string }> = [
@@ -80,6 +87,7 @@ export function OverlayBuilderSection({ login }: OverlayBuilderSectionProps) {
   const normalizedLogin = login.trim();
   const [theme, setTheme] = useState<OverlayTheme>('dark');
   const [layout, setLayout] = useState<OverlayLayout>('box');
+  const [mode, setMode] = useState<OverlayMode>('all');
   const [position, setPosition] = useState<OverlayPosition>('bl');
   const [opacity, setOpacity] = useState<number>(85);
   const [recentN, setRecentN] = useState<number>(10);
@@ -92,6 +100,7 @@ export function OverlayBuilderSection({ login }: OverlayBuilderSectionProps) {
     params.set('streamer', normalizedLogin);
     params.set('theme', theme);
     params.set('layout', layout);
+    params.set('mode', mode);
     params.set('pos', position);
     params.set('opacity', String(opacity));
     params.set('recent_n', String(recentN));
@@ -99,7 +108,7 @@ export function OverlayBuilderSection({ login }: OverlayBuilderSectionProps) {
       params.set(key, modules[key] ? '1' : '0');
     }
     return `${origin}/twitch/overlay?${params.toString()}`;
-  }, [normalizedLogin, theme, layout, position, opacity, recentN, modules]);
+  }, [normalizedLogin, theme, layout, mode, position, opacity, recentN, modules]);
 
   useEffect(() => {
     setCopied(false);
@@ -169,8 +178,8 @@ export function OverlayBuilderSection({ login }: OverlayBuilderSectionProps) {
 
       <div className="grid gap-5 lg:grid-cols-[minmax(0,1fr)_minmax(300px,380px)]">
         <div className="space-y-5">
-          {/* Stil & Layout */}
-          <div className="grid gap-3 sm:grid-cols-2">
+          {/* Stil, Layout & Spielmodus */}
+          <div className="grid gap-3 sm:grid-cols-3">
             <div className="space-y-2">
               <label htmlFor="overlay-theme" className="block text-sm font-semibold text-white">
                 Stil
@@ -200,6 +209,24 @@ export function OverlayBuilderSection({ login }: OverlayBuilderSectionProps) {
                 className="w-full rounded-lg border border-border bg-background/70 px-3 py-2 text-sm font-medium text-white outline-none transition-colors focus:border-border-hover"
               >
                 {LAYOUTS.map(({ value, label }) => (
+                  <option key={value} value={value}>
+                    {label}
+                  </option>
+                ))}
+              </select>
+            </div>
+
+            <div className="space-y-2">
+              <label htmlFor="overlay-mode" className="block text-sm font-semibold text-white">
+                Spielmodus
+              </label>
+              <select
+                id="overlay-mode"
+                value={mode}
+                onChange={(event) => setMode(event.target.value as OverlayMode)}
+                className="w-full rounded-lg border border-border bg-background/70 px-3 py-2 text-sm font-medium text-white outline-none transition-colors focus:border-border-hover"
+              >
+                {MODES.map(({ value, label }) => (
                   <option key={value} value={value}>
                     {label}
                   </option>

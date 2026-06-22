@@ -1,5 +1,16 @@
 # Workflow
 
+## 2026-06-22 — Overlay Spielmodus-Filter (Alle Modi / Standard / Street Brawl)
+
+- Scope strikt auf `rust/crates/tb-dashboard-api/src/handlers/overlay.rs` und `bot/dashboard_v2/src/components/verwaltung/OverlayBuilderSection.tsx`; keine weiteren Crates/Dateien, keine neuen Dependencies, keine deadlock-api als Datenquelle. Review-Regel: Commits ja (auf `sp2/overlay-mode-filter`), aber kein Push/Merge/Restart.
+- Befund: `/player-matches` liefert pro Match `game_mode` als Integer (`ECitadelGameMode`): 1 = Standard, 4 = Street Brawl; `match_mode` ist NICHT der Diskriminator. Filter komplett in `overlay.rs` umsetzbar.
+- Datenschicht: `SteamMatch` um `#[serde(default)] game_mode: Option<i64>` erweitert und `#[derive(Clone)]` ergänzt. Neue reine Helfer `normalize_mode` (Param → `all|standard|brawl`, Default `all`) und `filter_by_mode` (standard→`Some(1)`, brawl→`Some(4)`, sonst keine Filterung). Der Filter wirkt VOR den bestehenden Stat-Helfern und nur auf match-abgeleitete Stats — rank/mmr-trend/live bleiben unberührt.
+- `build_overlay_json` bekommt `mode: &str` und filtert die Match-Liste vor der Berechnung. Cache keyt jetzt pro `login|mode` (`cached_overlay_or_fetch` + `OverlayCache.entries/inflight`), 30s-TTL unverändert. `OverlayQuery` um `mode: Option<String>` erweitert; `overlay_api_handler` liest+normalisiert `mode`. `overlay_html_handler` ignoriert `mode` weiterhin (verzweigt nur auf `streamer`).
+- Render-HTML: liest `mode` via `oneOf('mode', ['all','standard','brawl'], 'all')` und hängt `&mode=${mode}` an den Daten-Fetch.
+- Builder: neues Select „Spielmodus" (Alle Modi/Standard/Street Brawl, Default `all`) oben neben Stil/Layout; State + `mode=` in der generierten URL.
+- Tests: neue reine Tests `normalize_mode_*`, `filter_by_mode_*` (standard schließt brawl aus, brawl schließt standard aus, all enthält beides+unbekannte, kombiniert mit not_scored-Ausschluss). Render-/wiremock-Tests angepasst: HTML prüft mode-Param-Lesecode + `&mode=`-Anhang; Default `all` lässt bestehende JSON-Assertions gültig.
+- Verifikation: `cargo build -p tb-dashboard-api` grün; `cargo test -p tb-dashboard-api overlay` 19/19 grün (inkl. 2 wiremock-DB-Tests); `cargo clippy -p tb-dashboard-api` ohne neue Warnungen in `overlay.rs` (nur vorbestehende in `admin_chat_action.rs`/`demo.rs`). `npm --prefix bot/dashboard_v2 run build` grün nach `npm ci --legacy-peer-deps`. Vorbestehender, scope-fremder Fail `handlers::market::tests::market_data_full_payload_shape` nicht angefasst.
+
 ## 2026-06-22 — Overlay-Politur nach User-Feedback (Hero-Icons, Strip, OBS-Fit)
 
 - Start: Worktree `sp2/overlay-polish`; Scope strikt auf `rust/crates/tb-dashboard-api/src/handlers/overlay.rs`, `bot/dashboard_v2/src/components/verwaltung/OverlayBuilderSection.tsx`, `WORKFLOW.md`. Review-Regel: Commits pro Einheit, kein Push/Merge/Restart. User-Feedback: (1) Recent-Matches als Farb-Klecks haesslich, (2) Overlay unsauber/Strip laeuft ueber, (3) Groesse passt nicht zur OBS-Quelle.
