@@ -77,6 +77,24 @@ pub struct ScoringInputs {
     pub today_received_raids: i64,
 }
 
+/// Vorhandene (gecachte) Score-Werte eines Partners aus der vorigen
+/// Refresh-Runde (`twitch_partner_raid_scores`).
+///
+/// Entspricht den Feldern, die Python `_build_score` im
+/// `elif existing_cache is not None`-Zweig (partner_scores.py:738-756) aus der
+/// Cache-Zeile zurückliest, um sie bei offline-Partner zu erhalten statt auf
+/// NEUTRAL zu setzen. Alle Felder werden vor der Übernahme mit `round_score`
+/// auf 6 Stellen gerundet (wie Pythons `_round_score`).
+#[derive(Debug, Clone, PartialEq)]
+pub struct CachedScores {
+    pub duration_score: f64,
+    pub time_pattern_score: f64,
+    pub readiness_score: f64,
+    pub fairness_score: f64,
+    pub base_score: f64,
+    pub final_score: f64,
+}
+
 /// Alle berechneten Score-Komponenten eines Partners.
 ///
 /// Entspricht den Feldern in `_PreparedScore` in `partner_scores.py`.
@@ -253,15 +271,47 @@ pub fn compute_final_score(
 /// Entspricht dem Kern von `_build_score` in `partner_scores.py` — nur der
 /// reine Berechnungs-Pfad, ohne DB-Zugriffe oder Live-State-Abfragen.
 ///
-/// Wenn `is_live = false` und kein Cache vorhanden ist, wird der offline-Pfad
-/// (Python Z. 757–772) verwendet: NEUTRAL_SCORE für duration/time, aber
-/// fairness/base/final werden trotzdem berechnet.
-pub fn compute_scores(inputs: &ScoringInputs) -> ScoreComponents {
+/// Drei-Wege-Pfad analog Python `_build_score` (partner_scores.py:715-772):
+///
+/// 1. **live** (`is_live = true`): alle Komponenten frisch berechnet.
+/// 2. **offline mit Cache** (`is_live = false`, `existing_cache = Some(..)`):
+///    duration/time_pattern/readiness/fairness/base/final werden aus der
+///    Cache-Zeile übernommen (gerundet), nicht auf NEUTRAL zurückgesetzt
+///    (Python Z. 738–756). So verliert ein gerade offline gegangener Partner
+///    seinen zuvor live berechneten Score nicht.
+/// 3. **offline ohne Cache** (`is_live = false`, `existing_cache = None`):
+///    NEUTRAL_SCORE für duration, time_pattern aus Reliable-Flag, Rest neu
+///    berechnet (Python Z. 757–772).
+///
+/// Die Multiplikatoren (`new_partner_multiplier`, `raid_boost_multiplier`,
+/// `is_new_partner_preferred`) werden in allen Pfaden gleich bestimmt — Python
+/// setzt sie vor dem if/elif/else.
+pub fn compute_scores_with_cache(
+    inputs: &ScoringInputs,
+    existing_cache: Option<&CachedScores>,
+) -> ScoreComponents {
     let is_new_partner_preferred =
         inputs.received_successful_raids_total < NEW_PARTNER_RAID_THRESHOLD;
     let new_partner_multiplier =
         compute_new_partner_multiplier(inputs.received_successful_raids_total);
     let raid_boost_multiplier = compute_raid_boost_multiplier(inputs.raid_boost_enabled);
+
+    // Offline-mit-Cache: gecachte Werte erhalten (Python Z. 738–756).
+    if !inputs.is_live {
+        if let Some(cache) = existing_cache {
+            return ScoreComponents {
+                duration_score: round_score(cache.duration_score),
+                time_pattern_score: round_score(cache.time_pattern_score),
+                readiness_score: round_score(cache.readiness_score),
+                fairness_score: round_score(cache.fairness_score),
+                base_score: round_score(cache.base_score),
+                new_partner_multiplier,
+                raid_boost_multiplier,
+                final_score: round_score(cache.final_score),
+                is_new_partner_preferred,
+            };
+        }
+    }
 
     let duration_score = compute_duration_score(
         inputs.avg_duration_sec,
@@ -293,6 +343,17 @@ pub fn compute_scores(inputs: &ScoringInputs) -> ScoreComponents {
         final_score,
         is_new_partner_preferred,
     }
+}
+
+/// Rückwärtskompatibler Einstieg ohne Cache (live- bzw. offline-ohne-Cache-Pfad).
+///
+/// Entspricht dem bisherigen Verhalten; ruft [`compute_scores_with_cache`] mit
+/// `existing_cache = None`. Bestehende Aufrufer (Score-Refresh-Pipeline) bleiben
+/// unverändert; der Offline-mit-Cache-Pfad (P2.41) wird über die `_with_cache`-
+/// Variante erreicht, sobald die Pipeline die Cache-Zeile mitführt
+/// (siehe WIRING-TODO).
+pub fn compute_scores(inputs: &ScoringInputs) -> ScoreComponents {
+    compute_scores_with_cache(inputs, None)
 }
 
 #[cfg(test)]
@@ -585,5 +646,110 @@ mod tests {
         let result = compute_scores(&inputs);
         assert_eq!(result.fairness_score, round_score(0.05));
         assert_eq!(result.base_score, round_score(0.5 * 0.65 + 0.05 * 0.35));
+    }
+
+    // ─── P2.41: offline-mit-Cache erhält den vorigen Live-Score ──────────────
+
+    #[test]
+    fn compute_scores_offline_mit_cache_erhaelt_werte() {
+        // Partner offline, aber vorige Live-Runde hatte einen nicht-neutralen
+        // Score gecacht. Python (partner_scores.py:738-756) übernimmt die Cache-
+        // Werte statt sie auf NEUTRAL zurückzusetzen.
+        let inputs = ScoringInputs {
+            avg_duration_sec: 0,
+            current_uptime_sec: 0,
+            duration_history_reliable: false,
+            is_live: false,
+            time_pattern_score_base: NEUTRAL_SCORE,
+            time_pattern_reliable: false,
+            received_successful_raids_total: 5, // < 10 → neuer Partner, mult 1.125
+            raid_boost_enabled: false,
+            internal_sent_raids_30d: 0,
+            internal_received_raids_30d: 0,
+            internal_received_raids_7d: 0,
+            today_received_raids: 0,
+        };
+        let cache = CachedScores {
+            duration_score: 0.83,
+            time_pattern_score: 0.72,
+            readiness_score: 0.786,
+            fairness_score: 0.61,
+            base_score: 0.7245,
+            final_score: 0.815,
+        };
+
+        let result = compute_scores_with_cache(&inputs, Some(&cache));
+
+        // Komponenten 1:1 aus dem Cache (gerundet), NICHT auf NEUTRAL gesetzt.
+        assert_eq!(result.duration_score, round_score(0.83));
+        assert_eq!(result.time_pattern_score, round_score(0.72));
+        assert_eq!(result.readiness_score, round_score(0.786));
+        assert_eq!(result.fairness_score, round_score(0.61));
+        assert_eq!(result.base_score, round_score(0.7245));
+        assert_eq!(result.final_score, round_score(0.815));
+        // Multiplikatoren werden wie in Python unabhängig vom Pfad bestimmt.
+        assert_eq!(result.new_partner_multiplier, round_score(1.125));
+        assert_eq!(result.raid_boost_multiplier, 1.0);
+        assert!(result.is_new_partner_preferred);
+    }
+
+    #[test]
+    fn compute_scores_offline_ohne_cache_bleibt_neutral() {
+        // Gleiche Eingaben, aber existing_cache = None → offline-ohne-Cache-Pfad
+        // (NEUTRAL/neu berechnet) — unterscheidet sich klar vom Cache-Pfad.
+        let inputs = ScoringInputs {
+            avg_duration_sec: 0,
+            current_uptime_sec: 0,
+            duration_history_reliable: false,
+            is_live: false,
+            time_pattern_score_base: NEUTRAL_SCORE,
+            time_pattern_reliable: false,
+            received_successful_raids_total: 5,
+            raid_boost_enabled: false,
+            internal_sent_raids_30d: 0,
+            internal_received_raids_30d: 0,
+            internal_received_raids_7d: 0,
+            today_received_raids: 0,
+        };
+        let result = compute_scores_with_cache(&inputs, None);
+        assert_eq!(result.duration_score, NEUTRAL_SCORE);
+        assert_eq!(result.time_pattern_score, NEUTRAL_SCORE);
+        // entspricht exakt dem alten compute_scores-Verhalten.
+        assert_eq!(result, compute_scores(&inputs));
+    }
+
+    #[test]
+    fn compute_scores_live_ignoriert_cache() {
+        // Live-Partner: trotz vorhandenem Cache wird frisch berechnet
+        // (Python: if is_live-Zweig hat Vorrang vor elif existing_cache).
+        let inputs = ScoringInputs {
+            avg_duration_sec: 7200,
+            current_uptime_sec: 3600,
+            duration_history_reliable: true,
+            is_live: true,
+            time_pattern_score_base: 0.75,
+            time_pattern_reliable: true,
+            received_successful_raids_total: 5,
+            raid_boost_enabled: false,
+            internal_sent_raids_30d: 3,
+            internal_received_raids_30d: 1,
+            internal_received_raids_7d: 2,
+            today_received_raids: 0,
+        };
+        let cache = CachedScores {
+            duration_score: 0.1,
+            time_pattern_score: 0.1,
+            readiness_score: 0.1,
+            fairness_score: 0.1,
+            base_score: 0.1,
+            final_score: 0.1,
+        };
+        let with_cache = compute_scores_with_cache(&inputs, Some(&cache));
+        let without_cache = compute_scores(&inputs);
+        assert_eq!(
+            with_cache, without_cache,
+            "live-Pfad ignoriert den Cache vollständig"
+        );
+        assert_eq!(with_cache.duration_score, 0.5);
     }
 }

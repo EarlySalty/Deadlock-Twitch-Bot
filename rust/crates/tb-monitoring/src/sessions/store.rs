@@ -1,8 +1,11 @@
 //! DB-Zugriff auf `twitch_stream_sessions` / `twitch_session_viewers` /
-//! `twitch_session_chatters` (nur Count-Read). Prod-Typen verifiziert:
-//! `id` bigint, `started_at`/`ended_at` timestamptz, `is_mature`/
-//! `had_deadlock_in_session` INTEGER (0/1, SQLite-Erbe — Bind/Decode als `i32`,
-//! nicht bool), `avg_viewers` double precision.
+//! `twitch_session_chatters` (nur Count-Read). Prod-Typen (Baseline-Schema):
+//! `id` bigint, `started_at`/`ended_at` **TEXT** (ISO, SQLite-Erbe — Bind als
+//! ISO-String via `iso_seconds`, Decode via `::text`-Cast + `parse_dt_utc`,
+//! P2.38), `is_mature`/`had_deadlock_in_session` INTEGER (0/1, Bind/Decode als
+//! `i32`, nicht bool), `avg_viewers` double precision. SQL-Vergleiche gegen
+//! `NOW()`/Intervalle casten `started_at::timestamptz`, was sowohl für TEXT
+//! (ISO) als auch für eine TIMESTAMPTZ-Spalte gültig ist.
 //!
 //! Bewusste Fixes gegenüber Python (Plan-Doc Schritt 4):
 //! - `start_session` hält einen Advisory-Lock pro Login und prüft offene
@@ -16,6 +19,7 @@ use chrono::{DateTime, Utc};
 use sqlx::PgPool;
 
 use super::metrics::ViewerSample;
+use crate::stream::{iso_seconds, parse_dt_utc};
 
 /// Neue Session (Python `_start_stream_session`-Parameter).
 #[derive(Debug, Clone)]
@@ -50,7 +54,7 @@ impl StartOutcome {
 }
 
 /// Session-Felder, die das Finalize als Ausgangsbasis braucht.
-#[derive(Debug, Clone, sqlx::FromRow)]
+#[derive(Debug, Clone)]
 pub struct FinalizeSource {
     pub started_at: DateTime<Utc>,
     pub start_viewers: Option<i32>,
@@ -177,7 +181,8 @@ impl SessionStore {
         )
         .bind(&new.streamer_login)
         .bind(&new.stream_id)
-        .bind(new.started_at)
+        // P2.38: started_at als ISO-TEXT binden (Prod-Spalte ist TEXT).
+        .bind(iso_seconds(new.started_at))
         .bind(new.viewer_count)
         .bind(f64::from(new.viewer_count))
         .bind(new.followers_start)
@@ -210,7 +215,11 @@ impl SessionStore {
     ) -> Result<bool, sqlx::Error> {
         #[derive(sqlx::FromRow)]
         struct SampleSource {
-            started_at: DateTime<Utc>,
+            // P2.38: started_at als TEXT lesen (::text-Cast) und ISO-parsen —
+            // die Prod-Spalte ist TEXT (Baseline-Schema), ein Decode nach
+            // DateTime<Utc> würde dort werfen. Der Cast ist auch für eine
+            // TIMESTAMPTZ-Spalte gültig, daher typ-unabhängig.
+            started_at: Option<String>,
             samples: Option<i32>,
             avg_viewers: Option<f64>,
             start_viewers: Option<i32>,
@@ -218,14 +227,14 @@ impl SessionStore {
         }
         let mut tx = self.pool.begin().await?;
         let row: Option<SampleSource> = sqlx::query_as(
-            "SELECT started_at, samples, avg_viewers, start_viewers, peak_viewers
+            "SELECT started_at::text AS started_at, samples, avg_viewers, start_viewers, peak_viewers
                FROM twitch_stream_sessions WHERE id = $1",
         )
         .bind(session_id)
         .fetch_optional(&mut *tx)
         .await?;
         let Some(SampleSource {
-            started_at,
+            started_at: started_at_raw,
             samples,
             avg_viewers: avg_prev,
             start_viewers,
@@ -234,6 +243,12 @@ impl SessionStore {
         else {
             return Ok(false);
         };
+        // Unparsebarer/fehlender Start → minutes_from_start = 0 (defensiv;
+        // Python würde hier ebenfalls 0 setzen statt zu crashen).
+        let started_at = started_at_raw
+            .as_deref()
+            .and_then(parse_dt_utc)
+            .unwrap_or(now);
         let minutes_from_start = ((now - started_at).num_seconds().max(0) / 60) as i32;
         sqlx::query(
             r#"
@@ -329,14 +344,41 @@ impl SessionStore {
         &self,
         session_id: i64,
     ) -> Result<Option<FinalizeSource>, sqlx::Error> {
-        sqlx::query_as(
-            "SELECT started_at, start_viewers, end_viewers, peak_viewers,
+        // P2.38: started_at als TEXT (::text-Cast) lesen und ISO-parsen, statt
+        // direkt nach DateTime<Utc> zu decodieren (Prod-Spalte ist TEXT).
+        #[derive(sqlx::FromRow)]
+        struct Raw {
+            started_at: Option<String>,
+            start_viewers: Option<i32>,
+            end_viewers: Option<i32>,
+            peak_viewers: Option<i32>,
+            avg_viewers: Option<f64>,
+            samples: Option<i32>,
+            followers_start: Option<i32>,
+        }
+        let raw: Option<Raw> = sqlx::query_as(
+            "SELECT started_at::text AS started_at, start_viewers, end_viewers, peak_viewers,
                     avg_viewers, samples, followers_start
                FROM twitch_stream_sessions WHERE id = $1",
         )
         .bind(session_id)
         .fetch_optional(&self.pool)
-        .await
+        .await?;
+        Ok(raw.map(|r| FinalizeSource {
+            // Unparsebar/fehlend → Unix-Epoch (Finalize berechnet daraus eine
+            // große, geklammerte Dauer; verhindert Crash bei Alt-/Defektdaten).
+            started_at: r
+                .started_at
+                .as_deref()
+                .and_then(parse_dt_utc)
+                .unwrap_or_else(|| DateTime::<Utc>::from_timestamp(0, 0).unwrap_or_default()),
+            start_viewers: r.start_viewers,
+            end_viewers: r.end_viewers,
+            peak_viewers: r.peak_viewers,
+            avg_viewers: r.avg_viewers,
+            samples: r.samples,
+            followers_start: r.followers_start,
+        }))
     }
 
     /// Viewer-Samples chronologisch (Python sortiert nach `ts_utc`).
@@ -403,7 +445,8 @@ impl SessionStore {
              WHERE id = $20 AND ended_at IS NULL
             "#,
         )
-        .bind(update.ended_at)
+        // P2.38: ended_at als ISO-TEXT binden (Prod-Spalte ist TEXT).
+        .bind(iso_seconds(update.ended_at))
         .bind(update.duration_seconds)
         .bind(update.end_viewers)
         .bind(update.peak_viewers)
@@ -442,11 +485,12 @@ impl SessionStore {
     ) -> Result<(Vec<OrphanCandidate>, Vec<OrphanCandidate>), sqlx::Error> {
         let zero_sample: Vec<OrphanCandidate> = sqlx::query_as(
             r#"
-            SELECT id, streamer_login, COALESCE(started_at, NOW()) AS finalized_at
+            SELECT id, streamer_login,
+                   COALESCE(started_at::timestamptz, NOW()) AS finalized_at
             FROM twitch_stream_sessions
             WHERE ended_at IS NULL
               AND samples = 0
-              AND started_at < NOW() - INTERVAL '24 hours'
+              AND started_at::timestamptz < NOW() - INTERVAL '24 hours'
             "#,
         )
         .fetch_all(&self.pool)

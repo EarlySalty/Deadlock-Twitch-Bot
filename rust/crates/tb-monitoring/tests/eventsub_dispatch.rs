@@ -314,8 +314,8 @@ async fn stream_offline_finalisiert_session_mit_throttle() {
     .unwrap();
     assert_eq!(is_live, Some(0));
     assert_eq!(active, None);
-    let (ended, notes): (Option<chrono::DateTime<Utc>>, Option<String>) =
-        sqlx::query_as("SELECT ended_at, notes FROM twitch_stream_sessions LIMIT 1")
+    let (ended, notes): (Option<String>, Option<String>) =
+        sqlx::query_as("SELECT ended_at::text, notes FROM twitch_stream_sessions LIMIT 1")
             .fetch_one(&pool)
             .await
             .unwrap();
