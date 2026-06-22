@@ -131,6 +131,10 @@ pub trait PollHooks: Send + Sync {
     /// `stream.offline`-Subscription.
     async fn on_stream_went_live(&self, _twitch_user_id: &str, _login: &str) {}
 
+    /// Aktiver Partner ist laut Poller offline gegangen — redundanter
+    /// Auto-Raid-Trigger zum EventSub-`stream.offline`-Pfad.
+    async fn on_stream_offline_raid(&self, _twitch_user_id: &str, _login: Option<&str>) {}
+
     /// Archivierter Partner streamt wieder Deadlock → entarchivieren.
     /// `true` = durchgeführt (der Tick behandelt ihn ab sofort als aktiv).
     async fn on_auto_unarchive(&self, _login: &str) -> bool {
@@ -283,6 +287,12 @@ impl PollHooks for ReauthReminderPollHooks {
     async fn on_stream_went_live(&self, twitch_user_id: &str, login: &str) {
         self.inner.on_stream_went_live(twitch_user_id, login).await;
         self.maybe_send_reauth_reminder(twitch_user_id, login).await;
+    }
+
+    async fn on_stream_offline_raid(&self, twitch_user_id: &str, login: Option<&str>) {
+        self.inner
+            .on_stream_offline_raid(twitch_user_id, login)
+            .await;
     }
 
     async fn on_auto_unarchive(&self, login: &str) -> bool {

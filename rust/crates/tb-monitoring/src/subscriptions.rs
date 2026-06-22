@@ -1380,6 +1380,13 @@ impl SubscriptionManager {
     /// Chat/EventSub-Composition alle ~300s mit der aktiven Broadcaster-ID-Menge
     /// spawnen. Dieses Crate enthält nur die purge-/deletefähige Logik.
     pub async fn cleanup_stale(&self, active_user_ids: &HashSet<String>) -> usize {
+        if active_user_ids.is_empty() {
+            tracing::warn!(
+                "EventSub-Cleanup: aktives Broadcaster-Set leer, Cleanup fail-open übersprungen"
+            );
+            return 0;
+        }
+
         let subs = match self.transport.list().await {
             Ok(subs) => subs,
             Err(error) => {
@@ -1389,12 +1396,14 @@ impl SubscriptionManager {
         };
         let mut deleted = 0;
         for sub in subs {
-            if sub.callback.as_deref() != Some(self.config.callback_url.as_str()) {
+            let callback = sub.callback.as_deref().map(str::trim).unwrap_or("");
+            if callback.is_empty() {
                 continue;
             }
             let target = sub.broadcaster_user_id.as_deref().unwrap_or("");
-            if !active_user_ids.is_empty() && !target.is_empty() && active_user_ids.contains(target)
-            {
+            let current_callback = callback == self.config.callback_url.as_str();
+            let active_target = !target.is_empty() && active_user_ids.contains(target);
+            if current_callback && active_target {
                 continue;
             }
             match self.transport.delete(&sub.id).await {
