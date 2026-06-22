@@ -1,3 +1,11 @@
+## #277 — Auto-Raid heilt hängende Raid-Schalter selbst
+
+**Problem:** Ein Streamer konnte dauerhaft ohne Auto-Raid bleiben, obwohl seine Raid-Freigabe gültig war: Hatte eine frühere Token-Störung den internen Raid-Schalter auf „aus" gestellt und war die zugehörige technische Pause später wieder verschwunden, blieb der Schalter auf „aus" hängen. Keine der bestehenden Selbstheilungen erfasste diesen Zwischenzustand — der Auto-Raid wurde still übersprungen, ohne Fehlermeldung.
+
+**Änderung:** Ein stündlicher Abgleich schaltet den Raid-Schalter automatisch wieder ein, sobald drei Bedingungen zugleich zutreffen: aktiver Partner, nachweislich gesunder Raid-Token (gültig, keine erneute Anmeldung nötig) und keine technische Pause. Bewusste Abschaltungen (manueller Verzicht oder auf Token-Ebene deaktiviert) sowie gesperrte oder pausierte Kanäle werden dabei nie angetastet.
+
+**Ergebnis:** Der Zustand „Token funktioniert, es wird aber trotzdem nicht geraidet" kann nicht mehr dauerhaft hängenbleiben — der Schalter gleicht sich von selbst an den tatsächlichen Token-Zustand an.
+
 ## #276 — Telemetrie-, Abrechnungs- und Raid-Robustheit
 
 **Problem:** Mehrere interne Pfade waren unvollständig: (a) Ban-/Timeout-/Shoutout-/Follow-Telemetrie eines Kanals fiel aus, wenn der Bot dort kein Moderator war; (b) wurde der Bot selbst in einem Kanal getimeoutet, bemerkte er es nicht zuverlässig; (c) der Abrechnungs-Abgleich verließ sich blind auf hinterlegte Produkt-Kennungen, auch wenn ein Produkt zwischenzeitlich gelöscht war; (d) bei fehlgeschlagenen Follower-Abfragen im Raid-System fehlte jede Fehler-Diagnose.
