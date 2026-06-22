@@ -25,8 +25,7 @@ use chrono::Utc;
 use sqlx::PgPool;
 use tb_chat::token::BotTokenManager;
 use tb_monitoring::{
-    BotChatterAuth, ChattersCollector, ChattersFetcher, ModeratorProvisioner, SelfHealCooldowns,
-    StreamerTokenSource,
+    BotChatterAuth, ChattersCollector, ChattersFetcher, ModeratorProvisioner, StreamerTokenSource,
 };
 use tb_raid::TokenProvider;
 use tb_transport_twitch::{HelixClient, HelixError};
@@ -191,15 +190,9 @@ fn spawn_collect_loop(
             }
         };
 
-    // Collector EINMAL bauen → Self-Heal-Cooldowns + State über alle Ticks teilen.
-    let collector = ChattersCollector {
-        pool,
-        auth,
-        streamer_tokens,
-        fetcher,
-        provisioner,
-        cooldowns: SelfHealCooldowns::new(),
-    };
+    // Collector EINMAL bauen → Self-Heal- + Bot-nicht-Mod-Backoff-Cooldowns
+    // werden über alle 30s-Ticks geteilt.
+    let collector = ChattersCollector::new(pool, auth, streamer_tokens, fetcher, provisioner);
 
     tokio::spawn(async move {
         let mut tick = tokio::time::interval(COLLECT_INTERVAL);
@@ -211,6 +204,7 @@ fn spawn_collect_loop(
                 live_streamers = stats.live_streamers,
                 bot_path_success = stats.bot_path_success,
                 bot_path_failure = stats.bot_path_failure,
+                bot_path_skipped_backoff = stats.bot_path_skipped_backoff,
                 fallback_to_streamer_token = stats.fallback_to_streamer_token,
                 self_heal_success = stats.self_heal_success,
                 self_heal_failure = stats.self_heal_failure,
