@@ -324,13 +324,13 @@ async fn ensure_dedupliziert_und_schreibt_capacity_snapshot() {
 }
 
 #[tokio::test]
-async fn rehydrate_und_cleanup_nur_eigene_callback() {
+async fn rehydrate_nur_current_callback_cleanup_per_app_token_listing() {
     let pool = pool_or_skip!("t4d_subs_cleanup");
     let transport = Arc::new(StubTransport::default());
     *transport.listing.lock().unwrap() = vec![
         sub("a", "stream.offline", "https://cb/x", "42"), // aktiv → bleibt
         sub("b", "stream.offline", "https://cb/x", "99"), // inaktiv → weg
-        sub("c", "stream.offline", "https://anderes/cb", "99"), // fremde URL → bleibt
+        sub("c", "stream.offline", "https://anderes/cb", "99"), // alte App-URL → weg
     ];
     let manager = SubscriptionManager::new(
         transport.clone(),
@@ -347,8 +347,55 @@ async fn rehydrate_und_cleanup_nur_eigene_callback() {
     assert!(transport.creates.lock().unwrap().is_empty());
 
     let active: HashSet<String> = ["42".to_string()].into_iter().collect();
+    assert_eq!(manager.cleanup_stale(&active).await, 2);
+    assert_eq!(
+        *transport.deletes.lock().unwrap(),
+        vec!["b".to_string(), "c".to_string()]
+    );
+}
+
+#[tokio::test]
+async fn cleanup_stale_fail_open_bei_leerem_active_set() {
+    let pool = pool_or_skip!("t4d_subs_cleanup_empty_guard");
+    let transport = Arc::new(StubTransport::default());
+    *transport.listing.lock().unwrap() = vec![
+        sub("a", "stream.offline", "https://cb/x", "42"),
+        sub("b", "channel.chat.message", "https://cb/x", "99"),
+    ];
+    let manager = SubscriptionManager::new(
+        transport.clone(),
+        SubscriptionConfig {
+            callback_url: "https://cb/x".to_string(),
+            secret: "geheim".to_string(),
+        },
+        CapacitySnapshotStore::new(pool.clone()),
+    );
+
+    let active = HashSet::new();
+    assert_eq!(manager.cleanup_stale(&active).await, 0);
+    assert!(transport.deletes.lock().unwrap().is_empty());
+}
+
+#[tokio::test]
+async fn cleanup_stale_loescht_alte_callback_url_trotz_aktivem_target() {
+    let pool = pool_or_skip!("t4d_subs_cleanup_old_callback");
+    let transport = Arc::new(StubTransport::default());
+    *transport.listing.lock().unwrap() = vec![
+        sub("old", "stream.offline", "https://cb/alt", "42"),
+        sub("current", "stream.offline", "https://cb/x", "42"),
+    ];
+    let manager = SubscriptionManager::new(
+        transport.clone(),
+        SubscriptionConfig {
+            callback_url: "https://cb/x".to_string(),
+            secret: "geheim".to_string(),
+        },
+        CapacitySnapshotStore::new(pool.clone()),
+    );
+
+    let active: HashSet<String> = ["42".to_string()].into_iter().collect();
     assert_eq!(manager.cleanup_stale(&active).await, 1);
-    assert_eq!(*transport.deletes.lock().unwrap(), vec!["b".to_string()]);
+    assert_eq!(*transport.deletes.lock().unwrap(), vec!["old".to_string()]);
 }
 
 #[tokio::test]

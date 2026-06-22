@@ -763,32 +763,108 @@ impl ChatRuntime {
     }
 }
 
+/// Gemeinsamer Broadcaster-Roster für EventSub-Wartung und Chat-Reconcile.
+/// `active_ids` aus diesem Roster schützt genau die Broadcaster, für die einer
+/// der Rust-Reconcile-Pfade Subscriptions halten darf.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct EventSubSubscriptionBroadcaster {
+    pub(crate) login: String,
+    pub(crate) twitch_user_id: String,
+    pub(crate) is_partner: bool,
+    pub(crate) core_subscriptions: bool,
+    pub(crate) chat_subscriptions: bool,
+}
+
+/// Source of Truth für Subscription-Broadcaster:
+/// - Core/Event-Lifecycle: aktive Partner plus monitored-only Kanäle.
+/// - Chat-Reconcile: `(raid_enabled OR is_partner_active)` mit gültigem
+///   `channel:bot`-Grant und ohne Reauth-Block.
+pub(crate) async fn select_eventsub_subscription_broadcasters(
+    pool: &PgPool,
+) -> Result<Vec<EventSubSubscriptionBroadcaster>, sqlx::Error> {
+    let rows: Vec<(String, String, bool, bool, bool)> = sqlx::query_as(
+        r#"
+        WITH roster AS (
+            SELECT LOWER(ps.twitch_login) AS login,
+                   ps.twitch_user_id AS twitch_user_id,
+                   TRUE AS core_subscriptions,
+                   (COALESCE(ps.is_partner_active, 0) = 1) AS is_partner,
+                   FALSE AS chat_subscriptions
+              FROM twitch_streamers_partner_state ps
+             WHERE COALESCE(ps.is_partner_active, 0) = 1
+               AND COALESCE(ps.twitch_user_id, '') <> ''
+
+            UNION ALL
+
+            SELECT LOWER(s.twitch_login) AS login,
+                   s.twitch_user_id AS twitch_user_id,
+                   TRUE AS core_subscriptions,
+                   FALSE AS is_partner,
+                   FALSE AS chat_subscriptions
+              FROM twitch_streamers s
+             WHERE COALESCE(s.twitch_user_id, '') <> ''
+               AND NOT EXISTS (
+                   SELECT 1
+                     FROM twitch_partners p
+                    WHERE p.twitch_user_id = s.twitch_user_id
+                       OR LOWER(p.twitch_login) = LOWER(s.twitch_login)
+               )
+
+            UNION ALL
+
+            SELECT LOWER(ps.twitch_login) AS login,
+                   ps.twitch_user_id AS twitch_user_id,
+                   FALSE AS core_subscriptions,
+                   FALSE AS is_partner,
+                   TRUE AS chat_subscriptions
+              FROM twitch_streamers_partner_state ps
+              JOIN twitch_raid_auth ra ON ra.twitch_user_id = ps.twitch_user_id
+             WHERE (ra.raid_enabled IS TRUE OR COALESCE(ps.is_partner_active, 0) = 1)
+               AND COALESCE(ps.twitch_user_id, '') <> ''
+               AND ra.needs_reauth = FALSE
+               AND COALESCE(ra.scopes, '') LIKE '%channel:bot%'
+        )
+        SELECT login,
+               twitch_user_id,
+               BOOL_OR(is_partner) AS is_partner,
+               BOOL_OR(core_subscriptions) AS core_subscriptions,
+               BOOL_OR(chat_subscriptions) AS chat_subscriptions
+          FROM roster
+         WHERE COALESCE(login, '') <> ''
+           AND COALESCE(twitch_user_id, '') <> ''
+         GROUP BY login, twitch_user_id
+         ORDER BY login
+        "#,
+    )
+    .fetch_all(pool)
+    .await?;
+
+    Ok(rows
+        .into_iter()
+        .map(|(login, twitch_user_id, is_partner, core_subscriptions, chat_subscriptions)| {
+            EventSubSubscriptionBroadcaster {
+                login,
+                twitch_user_id,
+                is_partner,
+                core_subscriptions,
+                chat_subscriptions,
+            }
+        })
+        .collect())
+}
+
 /// Kanal-Auswahl für die Chat-Subscriptions (Python `join_partner_channels`,
-/// connection.py:2050-2051). Python jointe disjunktiv:
-/// `WHERE a.raid_enabled IS TRUE OR s.is_partner_active = 1` — ein Kanal
-/// qualifiziert sich, wenn ENTWEDER der Raid-Bot aktiv ist ODER er aktiver
-/// Partner ist (P2.11: die frühere AND-Verengung auf `is_partner_active = 1`
-/// dropte raid-aktive Nicht-Partner aus der Datensammlung).
-///
-/// Zusätzlich bleibt der Rust-Filter `ra.needs_reauth = FALSE`: tote Auth-Einträge
-/// würden beim Subscribe ohnehin 403 liefern (Bot-Token ohne gültigen Grant),
-/// also werden sie gar nicht erst versucht — das vermeidet 403-Retry-Rauschen,
-/// ohne die Python-Auswahlmenge der real abonnierbaren Kanäle zu verkleinern.
-/// `channel:bot`-Scope ist wie in Python Pflicht (sonst kein Chat-Grant).
+/// connection.py:2050-2051). Filtert aus dem gemeinsamen Subscription-Roster,
+/// damit Cleanup und Chat-Reconcile dieselbe Broadcaster-Definition teilen.
 async fn select_chat_subscription_channels(
     pool: &PgPool,
 ) -> Result<Vec<(String, String)>, sqlx::Error> {
-    sqlx::query_as(
-        "SELECT LOWER(ps.twitch_login), ps.twitch_user_id \
-         FROM twitch_streamers_partner_state ps \
-         JOIN twitch_raid_auth ra ON ra.twitch_user_id = ps.twitch_user_id \
-         WHERE (ra.raid_enabled IS TRUE OR ps.is_partner_active = 1) \
-           AND COALESCE(ps.twitch_user_id, '') <> '' \
-           AND ra.needs_reauth = FALSE \
-           AND ra.scopes LIKE '%channel:bot%'",
-    )
-    .fetch_all(pool)
-    .await
+    Ok(select_eventsub_subscription_broadcasters(pool)
+        .await?
+        .into_iter()
+        .filter(|row| row.chat_subscriptions)
+        .map(|row| (row.login, row.twitch_user_id))
+        .collect())
 }
 
 /// „Join" im Webhook-Modell: für jeden Partner- und Monitored-Kanal die
@@ -2218,6 +2294,20 @@ mod db_tests {
         .execute(&pool)
         .await
         .unwrap();
+        sqlx::query(
+            "CREATE TABLE twitch_streamers (
+                twitch_login TEXT, twitch_user_id TEXT)",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+        sqlx::query(
+            "CREATE TABLE twitch_partners (
+                twitch_login TEXT, twitch_user_id TEXT)",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
 
         // (A) raid-aktiv, KEIN Partner, channel:bot-Scope → muss erscheinen.
         sqlx::query("INSERT INTO twitch_streamers_partner_state VALUES ('RaidOnly', '10', 0)")
@@ -2250,6 +2340,89 @@ mod db_tests {
             vec![
                 ("partneronly".to_string(), "20".to_string()),
                 ("raidonly".to_string(), "10".to_string()),
+            ]
+        );
+    }
+
+    #[tokio::test]
+    async fn ws_d_subscription_broadcaster_roster_ist_cleanup_und_chat_source_of_truth() {
+        let pool = setup("t_wsd_subscription_roster").await;
+        sqlx::query(
+            "CREATE TABLE twitch_streamers_partner_state (
+                twitch_login TEXT, twitch_user_id TEXT,
+                is_partner_active INTEGER DEFAULT 0, is_partner INTEGER DEFAULT 0)",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+        sqlx::query(
+            "CREATE TABLE twitch_streamers (
+                twitch_login TEXT, twitch_user_id TEXT)",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+        sqlx::query(
+            "CREATE TABLE twitch_partners (
+                twitch_login TEXT, twitch_user_id TEXT)",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+        sqlx::query(
+            "CREATE TABLE twitch_raid_auth (
+                twitch_user_id TEXT, twitch_login TEXT, scopes TEXT,
+                raid_enabled BOOLEAN DEFAULT TRUE, needs_reauth BOOLEAN DEFAULT FALSE)",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+
+        sqlx::query(
+            "INSERT INTO twitch_streamers_partner_state VALUES
+                ('RaidOnly', '10', 0, 1),
+                ('PartnerOnly', '20', 1, 1),
+                ('NoScope', '30', 0, 1)",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+        sqlx::query(
+            "INSERT INTO twitch_raid_auth VALUES
+                ('10', 'raidonly', 'channel:bot user:read', TRUE, FALSE),
+                ('20', 'partneronly', 'channel:bot', FALSE, FALSE),
+                ('30', 'noscope', 'user:read', TRUE, FALSE)",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+        sqlx::query("INSERT INTO twitch_streamers VALUES ('Lurker', '77')")
+            .execute(&pool)
+            .await
+            .unwrap();
+
+        let mut rows = select_eventsub_subscription_broadcasters(&pool).await.unwrap();
+        rows.sort_by(|a, b| a.twitch_user_id.cmp(&b.twitch_user_id));
+
+        let simplified: Vec<(String, String, bool, bool, bool)> = rows
+            .into_iter()
+            .map(|row| {
+                (
+                    row.login,
+                    row.twitch_user_id,
+                    row.is_partner,
+                    row.core_subscriptions,
+                    row.chat_subscriptions,
+                )
+            })
+            .collect();
+
+        assert_eq!(
+            simplified,
+            vec![
+                ("raidonly".to_string(), "10".to_string(), false, false, true),
+                ("partneronly".to_string(), "20".to_string(), true, true, true),
+                ("lurker".to_string(), "77".to_string(), false, true, false),
             ]
         );
     }

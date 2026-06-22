@@ -14,7 +14,7 @@ use std::time::{Duration, Instant};
 
 use chrono::Utc;
 
-use crate::guard::GuardStore;
+use crate::guard::{GuardKind, GuardStore};
 use crate::live_state::{LiveStateRow, LiveStateStore, LiveStateUpsert, TrackedStreamer};
 use crate::poller::hooks::{
     AnnounceLiveRequest, AnnouncementSink, EndAnnouncementOutcome, EndAnnouncementRequest,
@@ -33,6 +33,8 @@ const CLEANUP_EVERY_N_TICKS: u64 = 10;
 const AUTO_ARCHIVE_THROTTLE: Duration = Duration::from_secs(900);
 /// Inaktivität in Tagen, ab der ein Partner automatisch archiviert wird.
 const AUTO_ARCHIVE_DAYS: i64 = 10;
+/// Gemeinsame Offline-Drossel mit EventSub gegen doppelte Auto-Raid-Trigger.
+const POLL_OFFLINE_RAID_THROTTLE_SECONDS: f64 = 120.0;
 
 /// Statische Poll-Konfiguration (Env-getrieben, wie die Python-Konstanten).
 #[derive(Debug, Clone)]
@@ -147,6 +149,38 @@ impl PollEngine {
                         return;
                     }
                 }
+            }
+        }
+    }
+
+    async fn maybe_trigger_poll_offline_raid(&self, twitch_user_id: &str, login: &str) {
+        let user_id = twitch_user_id.trim();
+        if user_id.is_empty() {
+            return;
+        }
+        let now = Utc::now().timestamp_millis() as f64 / 1000.0;
+        match self
+            .guard
+            .claim(
+                GuardKind::OfflineThrottle,
+                user_id,
+                POLL_OFFLINE_RAID_THROTTLE_SECONDS,
+                now,
+            )
+            .await
+        {
+            Ok(true) => {
+                let login_opt = Some(login.trim()).filter(|l| !l.is_empty());
+                self.hooks.on_stream_offline_raid(user_id, login_opt).await;
+            }
+            Ok(false) => {
+                tracing::debug!(
+                    twitch_user_id = %user_id,
+                    "Poller OfflineThrottle: Auto-Raid-Hook bereits durch anderen Pfad beansprucht"
+                );
+            }
+            Err(error) => {
+                tracing::warn!(%error, twitch_user_id = %user_id, "Poller OfflineThrottle-Claim fehlgeschlagen");
             }
         }
     }
@@ -334,6 +368,13 @@ impl PollEngine {
             // Go-Live: 4d registriert hier die stream.offline-Subscription.
             if !was_live && is_live && entry.is_verified {
                 if let Some(user_id) = twitch_user_id {
+                    if let Err(error) = self
+                        .guard
+                        .release(GuardKind::OfflineThrottle, user_id)
+                        .await
+                    {
+                        tracing::debug!(%error, twitch_user_id = %user_id, "Poller Go-Live: OfflineThrottle konnte nicht freigegeben werden");
+                    }
                     self.hooks.on_stream_went_live(user_id, &login_lower).await;
                 }
             }
@@ -594,9 +635,11 @@ impl PollEngine {
                             trigger: "poll_stream_online",
                         });
                     } else if was_live && !is_live {
+                        self.maybe_trigger_poll_offline_raid(user_id, &login_lower)
+                            .await;
                         refreshes.push(ScoreRefresh {
                             twitch_user_id: user_id.to_string(),
-                            login: login_lower,
+                            login: login_lower.clone(),
                             trigger: "poll_stream_offline",
                         });
                     }
