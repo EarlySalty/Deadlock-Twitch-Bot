@@ -326,8 +326,6 @@ async fn query_partner_rows_by_discord(
         FROM twitch_streamers_partner_state
         WHERE discord_user_id = $1
         ORDER BY
-            CASE WHEN manual_verified_at IS NULL THEN 1 ELSE 0 END,
-            manual_verified_at DESC,
             CASE WHEN created_at IS NULL THEN 1 ELSE 0 END,
             created_at DESC
         "#,
@@ -348,8 +346,6 @@ async fn query_partner_row_by_login(
         FROM twitch_streamers_partner_state
         WHERE LOWER(twitch_login) = LOWER($1)
         ORDER BY
-            CASE WHEN manual_verified_at IS NULL THEN 1 ELSE 0 END,
-            manual_verified_at DESC,
             CASE WHEN created_at IS NULL THEN 1 ELSE 0 END,
             created_at DESC
         LIMIT 1
@@ -1462,7 +1458,6 @@ mod db_tests {
                 -- BOOLEAN hier hätte den Typ-Drift-Bug im Test versteckt.
                 manual_partner_opt_out  INTEGER DEFAULT 0,
                 status                  TEXT DEFAULT 'active',
-                manual_verified_at      TEXT,
                 created_at              TEXT DEFAULT CURRENT_TIMESTAMP
             )
             "#,
@@ -1480,7 +1475,6 @@ mod db_tests {
                 twitch_user_id,
                 discord_user_id,
                 manual_partner_opt_out,
-                manual_verified_at,
                 created_at
             FROM twitch_partners
             WHERE status = 'active'
@@ -2105,9 +2099,6 @@ mod callback_tests {
                 added_by                    TEXT,
                 last_link_checked_at        TEXT,
                 next_link_check_at          TEXT,
-                manual_verified_permanent   INTEGER DEFAULT 0,
-                manual_verified_until       TEXT,
-                manual_verified_at          TEXT,
                 manual_partner_opt_out      INTEGER DEFAULT 0,
                 raid_bot_enabled            INTEGER DEFAULT 0,
                 silent_ban                  INTEGER DEFAULT 0,

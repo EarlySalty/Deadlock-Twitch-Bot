@@ -33,16 +33,12 @@ fn now_iso() -> String {
 ///
 /// Quelle ist seit der Partner-DB-Konsolidierung der View
 /// `twitch_partners_all_state` (Partner-Lifecycle), NICHT mehr
-/// `twitch_streamers` — dessen Duplikat-Spalten (u. a. `is_verified`)
-/// wurden gedroppt. Timestamps im View sind TEXT; die Raid-Auth-Felder
+/// `twitch_streamers`. Timestamps im View sind TEXT; die Raid-Auth-Felder
 /// kommen als echte TIMESTAMPTZ/BOOLEAN aus `twitch_raid_auth`.
 #[derive(Debug, Serialize, sqlx::FromRow)]
 pub struct StreamerListRow {
     pub twitch_login: String,
     pub twitch_user_id: Option<String>,
-    pub manual_verified_permanent: Option<i32>,
-    pub manual_verified_until: Option<String>,
-    pub manual_verified_at: Option<String>,
     pub manual_partner_opt_out: Option<i32>,
     pub archived_at: Option<String>,
     pub is_on_discord: Option<i32>,
@@ -67,9 +63,6 @@ pub async fn list_streamers(
         r#"
         SELECT s.twitch_login,
                COALESCE(NULLIF(s.twitch_user_id, ''), NULLIF(a.twitch_user_id, '')) AS twitch_user_id,
-               s.manual_verified_permanent,
-               s.manual_verified_until,
-               s.manual_verified_at,
                s.manual_partner_opt_out,
                s.archived_at,
                s.is_on_discord,
@@ -310,9 +303,8 @@ pub enum VerifyStreamerResult {
     UnknownMode,
 }
 
-/// Verifikations-Modi auf `twitch_partners` (Python `_dashboard_verify_storage_step`):
-/// - mode "permanent" → `manual_verified_permanent = 1, manual_verified_at = NOW()`
-/// - mode "temp"      → befristet: `manual_verified_at = NOW(), manual_verified_until = NOW()+30d`
+/// Verify-Modi auf `twitch_partners` (Python `_dashboard_verify_storage_step`):
+/// - mode "permanent"/"temp" → aktiven Partner bestätigen, ohne die DB zu ändern
 /// - mode "clear" / "failed" → [`VerifyStreamerResult::RequiresPartnerLifecycle`]
 ///   (Marker; die Departnerung selbst macht [`departner_streamer`]).
 /// - alles andere → [`VerifyStreamerResult::UnknownMode`] (Python-Parität).
@@ -326,39 +318,25 @@ pub async fn verify_streamer(
     mode: &str,
 ) -> Result<VerifyStreamerResult, sqlx::Error> {
     let mode_clean = mode.trim().to_lowercase();
-    let updated = match mode_clean.as_str() {
-        "temp" => sqlx::query(
+    let exists = match mode_clean.as_str() {
+        "temp" | "permanent" => sqlx::query_scalar::<_, i32>(
             r#"
-            UPDATE twitch_partners
-            SET manual_verified_permanent = 0,
-                manual_verified_at = NOW(),
-                manual_verified_until = NOW() + INTERVAL '30 days'
-            WHERE LOWER(twitch_login) = LOWER($1)
+            SELECT 1
+              FROM twitch_partners
+             WHERE LOWER(twitch_login) = LOWER($1)
               AND COALESCE(status, '') = 'active'
+             LIMIT 1
             "#,
         )
         .bind(login)
-        .execute(pool)
+        .fetch_optional(pool)
         .await?
-        .rows_affected(),
-        "permanent" => sqlx::query(
-            r#"
-            UPDATE twitch_partners
-            SET manual_verified_permanent = 1,
-                manual_verified_at = NOW()
-            WHERE LOWER(twitch_login) = LOWER($1)
-              AND COALESCE(status, '') = 'active'
-            "#,
-        )
-        .bind(login)
-        .execute(pool)
-        .await?
-        .rows_affected(),
+        .is_some(),
         "clear" | "failed" => return Ok(VerifyStreamerResult::RequiresPartnerLifecycle),
         _ => return Ok(VerifyStreamerResult::UnknownMode),
     };
 
-    if updated > 0 {
+    if exists {
         Ok(VerifyStreamerResult::Verified)
     } else {
         Ok(VerifyStreamerResult::NotAPartner)
@@ -408,7 +386,7 @@ pub struct DepartnerOutcome {
 /// 1. Aktiven Partner laden — `None` wenn keiner aktiv ist (Handler: "nicht gespeichert").
 /// 2. Identity-Upsert (Discord-Daten erhalten).
 /// 3. `twitch_partners`: `status='departnered'`, `departnered_at=now`,
-///    `admin_archived_at=NULL`, Verify-Felder zurücksetzen (`clear_verification=True`).
+///    `admin_archived_at=NULL`.
 /// 4. Raid-Auth deaktivieren (`raid_enabled=FALSE`).
 /// 5. Engagement-Settings deaktivieren (best-effort wie Python — Tabelle kann fehlen).
 ///
@@ -487,16 +465,13 @@ pub async fn departner_streamer(
         .await?;
     }
 
-    // Schritt 3: Partner departnern + Verify zurücksetzen (clear_verification=True).
+    // Schritt 3: Partner departnern.
     sqlx::query(
         r#"
         UPDATE twitch_partners
         SET status = $1,
             departnered_at = $2,
             admin_archived_at = NULL,
-            manual_verified_permanent = 0,
-            manual_verified_until = NULL,
-            manual_verified_at = NULL,
             twitch_login = $3,
             twitch_user_id = $4
         WHERE id = $5
@@ -1308,10 +1283,6 @@ mod tests {
                 twitch_login             TEXT NOT NULL,
                 twitch_user_id           TEXT,
                 status                   TEXT DEFAULT 'active',
-                manual_verified_permanent INTEGER DEFAULT 0,
-                -- TEXT wie Prod (Python schreibt ISO-Strings) — Typ-Drift-Schutz
-                manual_verified_at       TEXT,
-                manual_verified_until    TEXT,
                 admin_archived_at        TEXT,
                 departnered_at           TEXT,
                 technical_pause_reason   TEXT,
@@ -1331,9 +1302,6 @@ mod tests {
             CREATE TABLE IF NOT EXISTS twitch_partners_all_state (
                 twitch_login             TEXT,
                 twitch_user_id           TEXT,
-                manual_verified_permanent INTEGER DEFAULT 0,
-                manual_verified_until    TEXT,
-                manual_verified_at       TEXT,
                 manual_partner_opt_out   INTEGER DEFAULT 0,
                 archived_at              TEXT,
                 is_on_discord            INTEGER DEFAULT 0,
@@ -1450,9 +1418,9 @@ mod tests {
 
         sqlx::query(
             "INSERT INTO twitch_partners_all_state
-                (twitch_login, twitch_user_id, manual_verified_permanent, status, raid_bot_enabled)
-             VALUES ('drag', '42', 1, 'active', 1),
-                    ('archiviert', '99', 0, 'archived', 0)",
+                (twitch_login, twitch_user_id, status, raid_bot_enabled)
+             VALUES ('drag', '42', 'active', 1),
+                    ('archiviert', '99', 'archived', 0)",
         )
         .execute(&pool)
         .await
@@ -1479,7 +1447,6 @@ mod tests {
         let row = &list[0];
         assert_eq!(row.twitch_login, "drag");
         assert_eq!(row.twitch_user_id.as_deref(), Some("42"));
-        assert_eq!(row.manual_verified_permanent, Some(1));
         assert_eq!(row.raid_auth_enabled, Some(true));
         assert_eq!(row.raid_needs_reauth, Some(false));
         assert!(row.raid_authorized_at.is_some());
@@ -1531,7 +1498,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn verify_setzt_is_verified_bei_aktivem_partner() {
+    async fn verify_bestaetigt_aktiven_partner_ohne_mutation() {
         let dsn = db_dsn_or_skip!();
         let pool = make_pool(&dsn, "test_sc_verify").await;
 
@@ -1547,17 +1514,17 @@ mod tests {
             .unwrap();
         assert!(matches!(result, VerifyStreamerResult::Verified));
 
-        let row: (Option<i32>,) = sqlx::query_as(
-            "SELECT manual_verified_permanent FROM twitch_partners WHERE LOWER(twitch_login) = 'testpartner'",
+        let status: Option<String> = sqlx::query_scalar(
+            "SELECT status FROM twitch_partners WHERE LOWER(twitch_login) = 'testpartner'",
         )
         .fetch_one(&pool)
         .await
         .unwrap();
-        assert_eq!(row.0, Some(1));
+        assert_eq!(status.as_deref(), Some("active"));
     }
 
     #[tokio::test]
-    async fn verify_temp_setzt_until_datum() {
+    async fn verify_temp_bestaetigt_aktiven_partner() {
         let dsn = db_dsn_or_skip!();
         let pool = make_pool(&dsn, "test_sc_verify_temp").await;
 
@@ -1571,15 +1538,13 @@ mod tests {
         let result = verify_streamer(&pool, "tmppartner", "temp").await.unwrap();
         assert!(matches!(result, VerifyStreamerResult::Verified));
 
-        // until ist TEXT in Prod — als String lesen (Typ-Drift-Schutz).
-        let row: (Option<i32>, Option<String>) = sqlx::query_as(
-            "SELECT manual_verified_permanent, manual_verified_until FROM twitch_partners WHERE LOWER(twitch_login) = 'tmppartner'",
+        let status: Option<String> = sqlx::query_scalar(
+            "SELECT status FROM twitch_partners WHERE LOWER(twitch_login) = 'tmppartner'",
         )
         .fetch_one(&pool)
         .await
         .unwrap();
-        assert_eq!(row.0, Some(0), "temp = kein permanent-Flag");
-        assert!(row.1.is_some(), "manual_verified_until muss gesetzt sein");
+        assert_eq!(status.as_deref(), Some("active"));
     }
 
     #[tokio::test]
@@ -1605,14 +1570,6 @@ mod tests {
         .execute(&pool)
         .await
         .unwrap();
-        sqlx::query(
-            "UPDATE twitch_partners SET manual_verified_permanent = 1, manual_verified_at = NOW()
-             WHERE twitch_login = 'lifecycleuser'",
-        )
-        .execute(&pool)
-        .await
-        .unwrap();
-
         for mode in ["clear", "failed"] {
             let result = verify_streamer(&pool, "lifecycleuser", mode).await.unwrap();
             assert!(
@@ -1621,34 +1578,28 @@ mod tests {
             );
         }
 
-        // verify_streamer mutiert hier nicht; Status/Verify unverändert.
-        let row: (Option<i32>, Option<String>) = sqlx::query_as(
-            "SELECT manual_verified_permanent, status FROM twitch_partners
+        // verify_streamer mutiert hier nicht; Status unverändert.
+        let status: Option<String> = sqlx::query_scalar(
+            "SELECT status FROM twitch_partners
              WHERE twitch_login = 'lifecycleuser'",
         )
         .fetch_one(&pool)
         .await
         .unwrap();
-        assert_eq!(
-            row.0,
-            Some(1),
-            "verify_streamer fasst clear/failed nicht an"
-        );
-        assert_eq!(row.1.as_deref(), Some("active"), "kein Halb-Departner");
+        assert_eq!(status.as_deref(), Some("active"), "kein Halb-Departner");
     }
 
-    // departner_streamer macht die echte Departnerung (Python
-    // departner_active_partner mit clear_verification=True): Status→departnered,
-    // Verify-Reset, Raid-Auth disable, Identity-Upsert, Engagement disable.
+    // departner_streamer macht die echte Departnerung: Status→departnered,
+    // Raid-Auth disable, Identity-Upsert, Engagement disable.
     #[tokio::test]
-    async fn departner_streamer_departnert_und_setzt_verify_zurueck() {
+    async fn departner_streamer_departnert_und_disablet_raid() {
         let dsn = db_dsn_or_skip!();
         let pool = make_pool(&dsn, "test_sc_departner").await;
 
         sqlx::query(
             "INSERT INTO twitch_partners
-                (twitch_login, twitch_user_id, status, manual_verified_permanent, manual_verified_at, admin_archived_at)
-             VALUES ('departnerme', '42', 'active', 1, '2026-01-01T00:00:00+00:00', '2026-01-01T00:00:00+00:00')",
+                (twitch_login, twitch_user_id, status, admin_archived_at)
+             VALUES ('departnerme', '42', 'active', '2026-01-01T00:00:00+00:00')",
         )
         .execute(&pool)
         .await
@@ -1683,20 +1634,17 @@ mod tests {
         assert_eq!(outcome.discord_user_id.as_deref(), Some("999"));
         assert_eq!(outcome.discord_display_name.as_deref(), Some("Drag"));
 
-        // twitch_partners: departnered, Verify zurückgesetzt, admin_archived_at genullt.
-        let p: (Option<String>, Option<String>, Option<i32>, Option<String>, Option<String>) =
-            sqlx::query_as(
-                "SELECT status, departnered_at, manual_verified_permanent, manual_verified_at, admin_archived_at
+        // twitch_partners: departnered, admin_archived_at genullt.
+        let p: (Option<String>, Option<String>, Option<String>) = sqlx::query_as(
+            "SELECT status, departnered_at, admin_archived_at
                    FROM twitch_partners WHERE twitch_login = 'departnerme'",
-            )
-            .fetch_one(&pool)
-            .await
-            .unwrap();
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap();
         assert_eq!(p.0.as_deref(), Some("departnered"));
         assert!(p.1.is_some(), "departnered_at gesetzt");
-        assert_eq!(p.2, Some(0), "manual_verified_permanent zurückgesetzt");
-        assert!(p.3.is_none(), "manual_verified_at genullt");
-        assert!(p.4.is_none(), "admin_archived_at genullt");
+        assert!(p.2.is_none(), "admin_archived_at genullt");
 
         // Raid-Auth disabled.
         let raid: Option<bool> = sqlx::query_scalar(
@@ -1743,14 +1691,18 @@ mod tests {
             .unwrap();
         assert!(matches!(result, VerifyStreamerResult::UnknownMode));
 
-        let row: (Option<i32>,) = sqlx::query_as(
-            "SELECT manual_verified_permanent FROM twitch_partners
+        let status: Option<String> = sqlx::query_scalar(
+            "SELECT status FROM twitch_partners
              WHERE twitch_login = 'unknownmodeuser'",
         )
         .fetch_one(&pool)
         .await
         .unwrap();
-        assert_ne!(row.0, Some(1), "unbekannter Modus darf NICHT verifizieren");
+        assert_eq!(
+            status.as_deref(),
+            Some("active"),
+            "unbekannter Modus mutiert nicht"
+        );
     }
 
     #[tokio::test]

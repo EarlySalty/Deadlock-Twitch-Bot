@@ -386,7 +386,7 @@ async fn monitored_only_kanal_wird_getrackt_aber_nicht_als_partner() {
     let (tracked, partner_logins) = tracked_store.load().await.unwrap();
     assert_eq!(tracked.len(), 1);
     assert_eq!(tracked[0].login, "lurker");
-    assert!(!tracked[0].is_verified);
+    assert!(!tracked[0].is_partner_active);
     assert!(partner_logins.is_empty());
 
     // Live-State wird trotzdem geschrieben (Monitoring-only-Tracking).

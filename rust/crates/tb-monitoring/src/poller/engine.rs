@@ -366,7 +366,7 @@ impl PollEngine {
             let is_archived = entry.is_archived;
 
             // Go-Live: 4d registriert hier die stream.offline-Subscription.
-            if !was_live && is_live && entry.is_verified {
+            if !was_live && is_live && entry.is_partner_active {
                 if let Some(user_id) = twitch_user_id {
                     if let Err(error) = self
                         .guard
@@ -441,7 +441,7 @@ impl PollEngine {
             } else if stream_restarted {
                 had_deadlock_prev = false;
                 if let Some(user_id) = twitch_user_id {
-                    if entry.is_verified {
+                    if entry.is_partner_active {
                         refreshes.push(ScoreRefresh {
                             twitch_user_id: user_id.to_string(),
                             login: login_lower.clone(),
@@ -524,7 +524,7 @@ impl PollEngine {
             let should_post = self.sink.ready()
                 && is_deadlock
                 && (!was_live || !was_deadlock || message_id_previous.is_none())
-                && entry.is_verified;
+                && entry.is_partner_active;
             if should_post {
                 if let Some(stream) = stream {
                     let result = self
@@ -627,7 +627,7 @@ impl PollEngine {
             });
 
             if let Some(user_id) = twitch_user_id {
-                if entry.is_verified {
+                if entry.is_partner_active {
                     if !was_live && is_live {
                         refreshes.push(ScoreRefresh {
                             twitch_user_id: user_id.to_string(),

@@ -120,7 +120,7 @@ fn live_request(login: &str) -> AnnounceLiveRequest {
             login: login.to_string(),
             twitch_user_id: Some("42".to_string()),
             require_link: false,
-            is_verified: true,
+            is_partner_active: true,
             is_archived: false,
             is_inactivity_flagged: false,
             discord_user_id: None,
@@ -211,7 +211,10 @@ async fn announce_live_ping_disabled_unterdrueckt_streamer_rolle() {
     let sends = transport.sends.lock().unwrap();
     let (_, _, _, roles, _) = &sends[0];
     assert!(roles.contains(&777));
-    assert!(!roles.contains(&999), "Streamer-Rolle bei disabled Ping verboten");
+    assert!(
+        !roles.contains(&999),
+        "Streamer-Rolle bei disabled Ping verboten"
+    );
 }
 
 #[tokio::test]

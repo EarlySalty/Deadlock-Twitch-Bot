@@ -196,8 +196,6 @@ pub struct PromotePartnerArgs {
     pub discord_user_id: Option<String>,
     pub discord_display_name: Option<String>,
     pub is_on_discord: i32,
-    /// ISO-String (Python `datetime.now(UTC).isoformat()`).
-    pub manual_verified_at: String,
     /// Steuert `manual_partner_opt_out=0` + `raid_bot_enabled=1`.
     pub activate_partner_features: bool,
     /// Python-Default `True`: Quelle nach Promotion aus `twitch_streamers`
@@ -633,8 +631,6 @@ pub async fn promote_streamer_to_partner(
     let last_link_checked_at = active.and_then(|a| a.last_link_checked_at.clone());
     // Quelle in twitch_streamers gedroppt → Python-Literal NULL.
     let next_link_check_at: Option<String> = None;
-    let manual_verified_permanent = 1i32;
-    let manual_verified_until: Option<String> = None;
     let (manual_partner_opt_out, raid_bot_enabled) = if args.activate_partner_features {
         (0i32, 1i32)
     } else {
@@ -684,21 +680,18 @@ pub async fn promote_streamer_to_partner(
                 added_by = $5,
                 last_link_checked_at = $6,
                 next_link_check_at = $7,
-                manual_verified_permanent = $8,
-                manual_verified_until = $9,
-                manual_verified_at = $10,
-                manual_partner_opt_out = $11,
-                raid_bot_enabled = $12,
-                silent_ban = $13,
-                silent_raid = $14,
-                live_ping_role_id = $15,
-                live_ping_enabled = $16,
-                partnered_at = $17,
+                manual_partner_opt_out = $8,
+                raid_bot_enabled = $9,
+                silent_ban = $10,
+                silent_raid = $11,
+                live_ping_role_id = $12,
+                live_ping_enabled = $13,
+                partnered_at = $14,
                 admin_archived_at = NULL,
                 departnered_at = NULL,
                 technical_pause_reason = NULL,
                 status = 'active'
-            WHERE id = $18
+            WHERE id = $15
             "#,
         )
         .bind(&normalized_login)
@@ -708,9 +701,6 @@ pub async fn promote_streamer_to_partner(
         .bind(&added_by)
         .bind(&last_link_checked_at)
         .bind(&next_link_check_at)
-        .bind(manual_verified_permanent)
-        .bind(&manual_verified_until)
-        .bind(&args.manual_verified_at)
         .bind(manual_partner_opt_out)
         .bind(raid_bot_enabled)
         .bind(silent_ban)
@@ -727,12 +717,11 @@ pub async fn promote_streamer_to_partner(
             INSERT INTO twitch_partners (
                 twitch_user_id, twitch_login, require_discord_link, last_description,
                 last_link_ok, added_by, last_link_checked_at, next_link_check_at,
-                manual_verified_permanent, manual_verified_until, manual_verified_at,
                 manual_partner_opt_out, raid_bot_enabled, silent_ban, silent_raid,
                 live_ping_role_id, live_ping_enabled, partnered_at,
                 admin_archived_at, departnered_at, technical_pause_reason, status
-            ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15,
-                      $16, $17, $18, NULL, NULL, NULL, 'active')
+            ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13,
+                      $14, $15, NULL, NULL, NULL, 'active')
             "#,
         )
         .bind(&normalized_user_id)
@@ -743,9 +732,6 @@ pub async fn promote_streamer_to_partner(
         .bind(&added_by)
         .bind(&last_link_checked_at)
         .bind(&next_link_check_at)
-        .bind(manual_verified_permanent)
-        .bind(&manual_verified_until)
-        .bind(&args.manual_verified_at)
         .bind(manual_partner_opt_out)
         .bind(raid_bot_enabled)
         .bind(silent_ban)
@@ -935,7 +921,6 @@ impl PartnerSetupService {
                     discord_user_id: final_discord_id.clone(),
                     discord_display_name: final_display_name,
                     is_on_discord: is_on_discord_value,
-                    manual_verified_at: now_iso(Utc::now()),
                     activate_partner_features,
                     clear_source: true,
                 },

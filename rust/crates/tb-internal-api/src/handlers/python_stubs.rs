@@ -85,7 +85,7 @@ pub async fn chatters_debug_handler(
             Json(serde_json::json!({"error": "invalid_login"})),
         );
     };
-    let session_id: Option<i32> = sqlx::query_scalar(
+    let session_id: Option<i64> = sqlx::query_scalar(
         "SELECT id FROM twitch_stream_sessions \
          WHERE LOWER(streamer_login) = $1 AND ended_at IS NULL \
          ORDER BY started_at DESC LIMIT 1",

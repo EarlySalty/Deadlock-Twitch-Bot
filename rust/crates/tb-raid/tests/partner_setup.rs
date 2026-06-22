@@ -70,9 +70,6 @@ async fn apply_ddl(pool: &PgPool) {
             added_by TEXT,
             last_link_checked_at TEXT,
             next_link_check_at TEXT,
-            manual_verified_permanent INTEGER,
-            manual_verified_until TEXT,
-            manual_verified_at TEXT,
             manual_partner_opt_out INTEGER,
             raid_bot_enabled INTEGER,
             silent_ban INTEGER,
@@ -147,7 +144,6 @@ fn default_args(login: &str, uid: &str) -> PromotePartnerArgs {
         discord_user_id: None,
         discord_display_name: None,
         is_on_discord: 0,
-        manual_verified_at: "2026-06-12T10:00:00.000000+00:00".to_string(),
         activate_partner_features: true,
         clear_source: true,
     }
@@ -189,24 +185,18 @@ async fn erst_promotion_legt_partner_an_und_loescht_quelle() {
     args.is_on_discord = 1;
     promote(&pool, &args).await;
 
-    let (login, status, mvp, opt_out, raid, partnered_at): (
-        String,
-        String,
-        i32,
-        i32,
-        i32,
-        Option<String>,
-    ) = sqlx::query_as(
-        "SELECT twitch_login, status, manual_verified_permanent, manual_partner_opt_out,
+    let (login, status, opt_out, raid, partnered_at): (String, String, i32, i32, Option<String>) =
+        sqlx::query_as(
+            "SELECT twitch_login, status, manual_partner_opt_out,
                 raid_bot_enabled, partnered_at
          FROM twitch_partners WHERE twitch_user_id = '111'",
-    )
-    .fetch_one(&pool)
-    .await
-    .unwrap();
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap();
     assert_eq!(login, "neuling");
     assert_eq!(status, "active");
-    assert_eq!((mvp, opt_out, raid), (1, 0, 1));
+    assert_eq!((opt_out, raid), (0, 1));
     // partnered_at = created_at der Quell-Zeile (::text-Rendering).
     assert!(partnered_at.is_some());
 

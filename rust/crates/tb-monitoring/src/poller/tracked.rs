@@ -12,7 +12,7 @@ pub struct TrackedEntry {
     pub login: String,
     pub twitch_user_id: Option<String>,
     pub require_link: bool,
-    pub is_verified: bool,
+    pub is_partner_active: bool,
     pub is_archived: bool,
     pub is_inactivity_flagged: bool,
     pub discord_user_id: Option<String>,
@@ -43,7 +43,7 @@ impl TrackedStore {
         Self { pool }
     }
 
-    /// Liefert (tracked, partner_logins). `partner_logins` = verifizierte
+    /// Liefert (tracked, partner_logins). `partner_logins` = aktive
     /// Partner (lowercase) für die `is_partner`-Markierung der Stats.
     pub async fn load(
         &self,
@@ -83,8 +83,8 @@ impl TrackedStore {
             if login.is_empty() {
                 continue;
             }
-            let is_verified = row.is_partner_active.unwrap_or(0) != 0;
-            if is_verified {
+            let is_partner_active = row.is_partner_active.unwrap_or(0) != 0;
+            if is_partner_active {
                 partner_logins.insert(login.to_lowercase());
             }
             let is_archived = row
@@ -103,7 +103,7 @@ impl TrackedStore {
                     .map(|u| u.trim().to_string())
                     .filter(|u| !u.is_empty()),
                 require_link: row.require_discord_link.unwrap_or(0) != 0,
-                is_verified,
+                is_partner_active,
                 is_archived,
                 is_inactivity_flagged,
                 discord_user_id: row.discord_user_id,
@@ -122,7 +122,12 @@ impl TrackedStore {
         _target_game: &str,
         cutoff: DateTime<Utc>,
     ) -> Result<Vec<String>, sqlx::Error> {
-        let rows: Vec<(String, Option<String>, Option<String>, Option<DateTime<Utc>>)> = sqlx::query_as(
+        let rows: Vec<(
+            String,
+            Option<String>,
+            Option<String>,
+            Option<DateTime<Utc>>,
+        )> = sqlx::query_as(
             r#"
             SELECT s.twitch_login,
                    s.archived_at::text AS archived_at,
