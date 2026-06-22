@@ -1080,7 +1080,7 @@ const OVERLAY_HTML: &str = r##"<!doctype html>
     const theme = oneOf('theme', ['dark', 'light', 'accent'], 'dark');
     const layout = oneOf('layout', ['box', 'bar'], 'box');
     const mode = oneOf('mode', ['all', 'standard', 'brawl'], 'all');
-    const position = oneOf('pos', ['bl', 'br', 'tl', 'tr'], 'bl');
+    const position = oneOf('pos', ['bl', 'br', 'tl', 'tr'], 'tl');
     const opacity = clampInt('opacity', 0, 100, 85);
     const recentN = clampInt('recent_n', 1, 15, 10);
 
@@ -2019,7 +2019,7 @@ mod tests {
         assert!(html.contains("oneOf('theme', ['dark', 'light', 'accent'], 'dark')"));
         assert!(html.contains("oneOf('layout', ['box', 'bar'], 'box')"));
         assert!(html.contains("oneOf('mode', ['all', 'standard', 'brawl'], 'all')"));
-        assert!(html.contains("oneOf('pos', ['bl', 'br', 'tl', 'tr'], 'bl')"));
+        assert!(html.contains("oneOf('pos', ['bl', 'br', 'tl', 'tr'], 'tl')"));
         assert!(html.contains("clampInt('opacity', 0, 100, 85)"));
         assert!(html.contains("clampInt('recent_n', 1, 15, 10)"));
         assert!(html.contains("flag('lastmatch', false)"));

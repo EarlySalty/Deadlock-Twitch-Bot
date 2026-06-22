@@ -5,7 +5,6 @@ import { Check, Copy } from 'lucide-react';
 type OverlayTheme = 'dark' | 'light' | 'accent';
 type OverlayLayout = 'box' | 'bar';
 type OverlayMode = 'all' | 'standard' | 'brawl';
-type OverlayPosition = 'bl' | 'br' | 'tl' | 'tr';
 type ModuleKey =
   | 'header'
   | 'rank'
@@ -34,13 +33,6 @@ const MODES: Array<{ value: OverlayMode; label: string }> = [
   { value: 'all', label: 'Alle Modi' },
   { value: 'standard', label: 'Standard' },
   { value: 'brawl', label: 'Street Brawl' },
-];
-
-const POSITIONS: Array<{ value: OverlayPosition; label: string }> = [
-  { value: 'bl', label: 'Unten links' },
-  { value: 'br', label: 'Unten rechts' },
-  { value: 'tl', label: 'Oben links' },
-  { value: 'tr', label: 'Oben rechts' },
 ];
 
 const MODULES: Array<{ key: ModuleKey; label: string }> = [
@@ -88,7 +80,6 @@ export function OverlayBuilderSection({ login }: OverlayBuilderSectionProps) {
   const [theme, setTheme] = useState<OverlayTheme>('dark');
   const [layout, setLayout] = useState<OverlayLayout>('box');
   const [mode, setMode] = useState<OverlayMode>('all');
-  const [position, setPosition] = useState<OverlayPosition>('bl');
   const [opacity, setOpacity] = useState<number>(85);
   const [recentN, setRecentN] = useState<number>(10);
   const [modules, setModules] = useState<Record<ModuleKey, boolean>>(DEFAULT_MODULES);
@@ -101,14 +92,13 @@ export function OverlayBuilderSection({ login }: OverlayBuilderSectionProps) {
     params.set('theme', theme);
     params.set('layout', layout);
     params.set('mode', mode);
-    params.set('pos', position);
     params.set('opacity', String(opacity));
     params.set('recent_n', String(recentN));
     for (const { key } of MODULES) {
       params.set(key, modules[key] ? '1' : '0');
     }
     return `${origin}/twitch/overlay?${params.toString()}`;
-  }, [normalizedLogin, theme, layout, mode, position, opacity, recentN, modules]);
+  }, [normalizedLogin, theme, layout, mode, opacity, recentN, modules]);
 
   useEffect(() => {
     setCopied(false);
@@ -128,8 +118,8 @@ export function OverlayBuilderSection({ login }: OverlayBuilderSectionProps) {
     }
   };
 
-  const previewHeight = layout === 'bar' ? 120 : 280;
-  const recommendedSize = layout === 'bar' ? '560 × 120' : '360 × 280';
+  const previewHeight = layout === 'bar' ? 130 : 360;
+  const recommendedSize = layout === 'bar' ? '560 × 120' : '360 × 320';
 
   if (!normalizedLogin) {
     return (
@@ -312,36 +302,6 @@ export function OverlayBuilderSection({ login }: OverlayBuilderSectionProps) {
               />
             </div>
           </div>
-
-          {/* Position */}
-          <fieldset className="space-y-3">
-            <legend className="text-sm font-semibold text-white">Position im Stream</legend>
-            <div className="grid gap-2 sm:grid-cols-4">
-              {POSITIONS.map(({ value, label }) => {
-                const selected = position === value;
-                return (
-                  <label
-                    key={value}
-                    className={`cursor-pointer rounded-lg border px-3 py-2 text-center text-sm font-semibold transition-colors ${
-                      selected
-                        ? 'border-primary bg-primary/15 text-primary'
-                        : 'border-border bg-background/60 text-text-secondary hover:border-border-hover hover:text-white'
-                    }`}
-                  >
-                    <input
-                      type="radio"
-                      name="overlay-position"
-                      value={value}
-                      checked={selected}
-                      onChange={() => setPosition(value)}
-                      className="sr-only"
-                    />
-                    {label}
-                  </label>
-                );
-              })}
-            </div>
-          </fieldset>
 
           {/* URL */}
           <div className="space-y-2">
