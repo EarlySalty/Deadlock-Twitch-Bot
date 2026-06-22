@@ -1,3 +1,11 @@
+## #264 — Overlay-Baukasten im Dashboard + Hilfe-Bereich
+
+**Problem:** Das Stream-Overlay gab es nur als feste URL — ohne Möglichkeit auszuwählen, was angezeigt wird, und ohne Anleitung. In der Hilfe fehlten die Stat-Befehle und das Overlay komplett.
+
+**Änderung:** Im Verwaltungs-Dashboard gibt es jetzt einen Overlay-Baukasten: Du schaltest einzeln ein, was angezeigt werden soll (Rang, Winrate, Serie, Live-Match), wählst die Ecke im Bild, siehst eine Live-Vorschau und bekommst die fertige OBS-URL zum Kopieren — samt Schritt-für-Schritt-Anleitung für OBS. Das Overlay liest diese Auswahl aus der URL, du brauchst also nichts zu speichern. Zusätzlich erklärt der Hilfe-Bereich jetzt die komplette Stat-Familie (`!rank`, `!wins`, `!winrate`, `!lastmatch`, `!streak`, `!mostplayed`, `!mmr`, `!live`) und das Overlay.
+
+**Ergebnis:** Streamer stellen sich ihr Overlay in wenigen Klicks selbst zusammen und finden die nötige Anleitung direkt daneben und im Hilfe-Bereich.
+
 ## #263 — Stream-Overlay für OBS mit Live-Stats
 
 **Problem:** Die neuen Stat-Daten (Rang, Winrate, Serie, Live-Match) gab es nur als Chat-Befehle — nicht sichtbar im Stream selbst.
