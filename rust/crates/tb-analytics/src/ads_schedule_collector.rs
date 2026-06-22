@@ -41,7 +41,8 @@ pub async fn collect_ads_schedule_for_user(
 /// Spalten (9, Python-Parität): `twitch_user_id, twitch_login, next_ad_at,
 /// last_ad_at, duration, preroll_free_time, snooze_count, snooze_refresh_at,
 /// snapshot_at`. Zeit-Felder werden über [`normalize_ad_time`] zu ISO-8601 (UTC)
-/// gemacht; `snapshot_at` ist `NOW()` als ISO-String (TIMESTAMPTZ-clean).
+/// gemacht und beim Schreiben als TIMESTAMPTZ gecastet; `snapshot_at` ist
+/// `NOW()`.
 pub async fn write_ads_schedule_snapshot(
     pool: &PgPool,
     user_id: &str,
@@ -59,8 +60,8 @@ pub async fn write_ads_schedule_snapshot(
         "INSERT INTO twitch_ads_schedule_snapshot \
          (twitch_user_id, twitch_login, next_ad_at, last_ad_at, duration, \
           preroll_free_time, snooze_count, snooze_refresh_at, snapshot_at) \
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, to_char(NOW() AT TIME ZONE 'UTC', \
-                 'YYYY-MM-DD\"T\"HH24:MI:SS.US+00:00'))",
+         VALUES ($1, $2, $3::timestamptz, $4::timestamptz, $5, $6, $7, \
+                 $8::timestamptz, NOW())",
     )
     .bind(user_id)
     .bind(login)
@@ -115,20 +116,20 @@ mod tests {
             .execute(&pool)
             .await
             .expect("search_path");
-        // Schema wie in der Baseline-Migration (Zeit-Felder = TEXT/legacy).
+        // Prod-nahe Zeittypen: die Writer-SQL castet ISO-Strings nach TIMESTAMPTZ.
         sqlx::query(
             r#"
             CREATE TABLE twitch_ads_schedule_snapshot (
                 id                SERIAL PRIMARY KEY,
                 twitch_user_id    TEXT NOT NULL,
                 twitch_login      TEXT,
-                next_ad_at        TEXT,
-                last_ad_at        TEXT,
+                next_ad_at        TIMESTAMPTZ,
+                last_ad_at        TIMESTAMPTZ,
                 duration          INTEGER,
                 preroll_free_time INTEGER,
                 snooze_count      INTEGER,
-                snooze_refresh_at TEXT,
-                snapshot_at       TEXT DEFAULT CURRENT_TIMESTAMP
+                snooze_refresh_at TIMESTAMPTZ,
+                snapshot_at       TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
             )
             "#,
         )
@@ -159,22 +160,37 @@ mod tests {
             .await
             .expect("write");
 
-        let row: (String, String, Option<String>, Option<String>, i32, i32, i32, Option<String>) =
-            sqlx::query_as(
-                "SELECT twitch_user_id, twitch_login, next_ad_at, last_ad_at, duration, \
-                 preroll_free_time, snooze_count, snooze_refresh_at \
+        let row: (
+            String,
+            String,
+            Option<String>,
+            Option<String>,
+            i32,
+            i32,
+            i32,
+            Option<String>,
+        ) = sqlx::query_as(
+            "SELECT twitch_user_id, twitch_login, \
+                 to_char(next_ad_at AT TIME ZONE 'UTC', 'YYYY-MM-DD\"T\"HH24:MI:SS+00:00'), \
+                 to_char(last_ad_at AT TIME ZONE 'UTC', 'YYYY-MM-DD\"T\"HH24:MI:SS+00:00'), \
+                 duration, preroll_free_time, snooze_count, \
+                 to_char(snooze_refresh_at AT TIME ZONE 'UTC', 'YYYY-MM-DD\"T\"HH24:MI:SS+00:00') \
                  FROM twitch_ads_schedule_snapshot ORDER BY id DESC LIMIT 1",
-            )
-            .fetch_one(&pool)
-            .await
-            .expect("row");
+        )
+        .fetch_one(&pool)
+        .await
+        .expect("row");
 
         assert_eq!(row.0, "42");
         assert_eq!(row.1, "kanal");
         // next_ad_at: ms -> s -> ISO (kein roher Zahlenstring).
         assert_eq!(row.2.as_deref(), Some("2025-06-15T15:06:40+00:00"));
         assert!(
-            !row.2.as_deref().unwrap().chars().all(|c| c.is_ascii_digit()),
+            !row.2
+                .as_deref()
+                .unwrap()
+                .chars()
+                .all(|c| c.is_ascii_digit()),
             "ISO-String statt roher Epoch-Zahl"
         );
         // last_ad_at: Sekunden-Epoch -> ISO.
@@ -197,11 +213,14 @@ mod tests {
         write_ads_schedule_snapshot(&pool, "7", "x", &schedule)
             .await
             .expect("write");
-        let snapshot_at: String =
-            sqlx::query_scalar("SELECT snapshot_at FROM twitch_ads_schedule_snapshot LIMIT 1")
-                .fetch_one(&pool)
-                .await
-                .expect("snapshot_at");
+        let snapshot_at: String = sqlx::query_scalar(
+            "SELECT to_char(snapshot_at AT TIME ZONE 'UTC', \
+                 'YYYY-MM-DD\"T\"HH24:MI:SS.US+00:00') \
+                 FROM twitch_ads_schedule_snapshot LIMIT 1",
+        )
+        .fetch_one(&pool)
+        .await
+        .expect("snapshot_at");
         // ISO-8601 UTC (TIMESTAMPTZ-clean): enthält 'T' und endet auf +00:00.
         assert!(snapshot_at.contains('T'), "snapshot_at ISO: {snapshot_at}");
         assert!(snapshot_at.ends_with("+00:00"), "UTC-Offset: {snapshot_at}");
