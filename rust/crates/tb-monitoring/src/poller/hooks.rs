@@ -127,8 +127,8 @@ pub struct TickReport {
 
 #[async_trait::async_trait]
 pub trait PollHooks: Send + Sync {
-    /// Verifizierter Partner mit aktivem Raid-Bot ist frisch live gegangen —
-    /// 4d registriert hier die `stream.offline`-Subscription.
+    /// Aktiver Partner ist frisch live gegangen — 4d registriert hier die
+    /// `stream.offline`-Subscription.
     async fn on_stream_went_live(&self, _twitch_user_id: &str, _login: &str) {}
 
     /// Archivierter Partner streamt wieder Deadlock → entarchivieren.

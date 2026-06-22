@@ -124,6 +124,64 @@ async fn run_migrations_builds_full_schema_on_fresh_db() {
     .await;
     assert_eq!(views, 2, "beide Partner-State-Views müssen existieren");
 
+    sqlx::query(
+        r#"
+        INSERT INTO twitch_partners
+            (twitch_user_id, twitch_login, status, manual_partner_opt_out,
+             raid_bot_enabled, admin_archived_at, technical_pause_reason,
+             inactivity_flagged_at)
+        VALUES
+            ('1001', 'raid_off', 'active', 0, 0, NULL, NULL, NULL),
+            ('1002', 'admin_archived', 'active', 0, 1, '2026-06-01T00:00:00Z', NULL, NULL),
+            ('1003', 'inactive_flag', 'active', 0, 1, NULL, NULL, '2026-06-01T00:00:00Z'),
+            ('1004', 'paused', 'active', 0, 1, NULL, 'maintenance', NULL),
+            ('1005', 'opted_out', 'active', 1, 1, NULL, NULL, NULL)
+        "#,
+    )
+    .execute(&pool)
+    .await
+    .expect("partner-state probe rows");
+
+    let partner_state = |login: &'static str| {
+        let pool = pool.clone();
+        async move {
+            sqlx::query_as::<_, (i32, String)>(
+                "SELECT is_partner_active, operational_state \
+                   FROM twitch_partners_all_state \
+                  WHERE twitch_login = $1",
+            )
+            .bind(login)
+            .fetch_one(&pool)
+            .await
+            .unwrap()
+        }
+    };
+    assert_eq!(
+        partner_state("raid_off").await,
+        (1, "active".to_string()),
+        "raid_bot_enabled=0 darf Lifecycle-Tracking nicht deaktivieren"
+    );
+    assert_eq!(
+        partner_state("admin_archived").await,
+        (0, "inactive".to_string()),
+        "admin_archived_at muss deaktivieren und darf nicht active anzeigen"
+    );
+    assert_eq!(
+        partner_state("inactive_flag").await,
+        (1, "inactive".to_string()),
+        "Inaktivitaetsflag ist nur Anzeigezustand, nicht is_partner_active"
+    );
+    assert_eq!(
+        partner_state("paused").await,
+        (0, "maintenance".to_string()),
+        "jede technische Pause deaktiviert"
+    );
+    assert_eq!(
+        partner_state("opted_out").await,
+        (0, "admin_non_partner".to_string()),
+        "manueller Opt-out deaktiviert"
+    );
+
     // Identity-Sync-Trigger.
     let triggers = scalar_i64(
         "SELECT count(*) FROM pg_trigger WHERE NOT tgisinternal \

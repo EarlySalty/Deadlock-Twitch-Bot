@@ -59,14 +59,14 @@ async fn pool_in_schema(dsn: &str, schema: &str) -> PgPool {
 }
 
 #[tokio::test]
-async fn roster_filtert_aktiv_quelle_und_nicht_autorisierte() {
+async fn roster_filtert_nur_aktive_partner_und_quelle() {
     let pool = pool_or_skip!("t6f_roster");
     sqlx::query(
         "INSERT INTO twitch_streamers_partner_state (twitch_login, twitch_user_id, is_partner_active) VALUES
             ('Quelle', '100', 1),       -- Quelle selbst → raus
             ('Enabled', '200', 1),      -- raid_enabled → rein
             ('OnlyAuth', '300', 1),     -- nur authorized_at → rein
-            ('Neither', '400', 1),      -- weder noch → raus
+            ('NoAuth', '400', 1),       -- Ziel braucht keine eigene Raid-Auth
             ('Inaktiv', '500', 0)       -- nicht aktiv → raus",
     ).execute(&pool).await.unwrap();
     sqlx::query(
@@ -95,6 +95,11 @@ async fn roster_filtert_aktiv_quelle_und_nicht_autorisierte() {
             PartnerRosterEntry {
                 twitch_login: "onlyauth".into(),
                 twitch_user_id: "300".into(),
+                raid_enabled: true
+            },
+            PartnerRosterEntry {
+                twitch_login: "noauth".into(),
+                twitch_user_id: "400".into(),
                 raid_enabled: true
             },
         ]

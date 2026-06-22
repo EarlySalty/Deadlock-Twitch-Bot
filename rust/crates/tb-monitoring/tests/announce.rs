@@ -122,6 +122,7 @@ fn live_request(login: &str) -> AnnounceLiveRequest {
             require_link: false,
             is_verified: true,
             is_archived: false,
+            is_inactivity_flagged: false,
             discord_user_id: None,
             live_ping_role_id: Some(999),
             live_ping_enabled: true,

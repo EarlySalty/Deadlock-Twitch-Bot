@@ -326,17 +326,13 @@ impl PollEngine {
             let stream = streams_by_login.get(&login_lower);
             let prev_entry = snapshot.get(&login_lower);
             let prev_state: Option<&LiveStateRow> = prev_entry.and_then(|e| e.state.as_ref());
-            let raid_enabled = prev_entry
-                .map(|e| e.partner_raid_bot_enabled != 0)
-                .unwrap_or(false);
-
             let was_live = prev_state.is_some_and(|s| s.is_live.unwrap_or(0) != 0);
             let is_live = stream.is_some();
             let twitch_user_id = entry.twitch_user_id.as_deref();
-            let mut is_archived = entry.is_archived;
+            let is_archived = entry.is_archived;
 
             // Go-Live: 4d registriert hier die stream.offline-Subscription.
-            if !was_live && is_live && entry.is_verified && raid_enabled {
+            if !was_live && is_live && entry.is_verified {
                 if let Some(user_id) = twitch_user_id {
                     self.hooks.on_stream_went_live(user_id, &login_lower).await;
                 }
@@ -433,13 +429,13 @@ impl PollEngine {
                 && !self.target_game_lower.is_empty()
                 && game_name.to_lowercase() == self.target_game_lower;
 
-            // Archivierter Partner streamt wieder Deadlock → entarchivieren.
+            // Informativ inaktiver Partner streamt wieder Deadlock → Flag loeschen.
             if is_live
-                && is_archived
+                && entry.is_inactivity_flagged
                 && is_deadlock
                 && self.hooks.on_auto_unarchive(&login_lower).await
             {
-                is_archived = false;
+                tracing::info!(login = %login_lower, "Partner-Inaktivitaetsflag geloescht");
             }
             let _ = is_archived; // Announcement-Gates (4e) nutzen entry-Daten.
 
@@ -664,9 +660,9 @@ impl PollEngine {
         }
     }
 
-    /// Auto-Archiv inaktiver Partner (Python: > 10 Tage kein Deadlock-Stream,
-    /// gedrosselt auf alle 15 Minuten). Die eigentliche Lifecycle-Op macht der
-    /// Hook (Partner-Registry, Verdrahtung in 4f).
+    /// Informative Inaktivitaetsmarkierung (> 10 Tage keine bekannte Stream-
+    /// Aktivitaet, gedrosselt auf alle 15 Minuten). Die eigentliche Lifecycle-
+    /// Op macht der Hook; sie deaktiviert Partner nicht.
     async fn auto_archive_inactive(&self) {
         {
             let mut state = self.state.lock().expect("tick state lock");
@@ -686,13 +682,13 @@ impl PollEngine {
         {
             Ok(candidates) => candidates,
             Err(error) => {
-                tracing::debug!(%error, "Auto-Archivierung: Kandidaten nicht ladbar");
+                tracing::debug!(%error, "Auto-Inaktivitaet: Kandidaten nicht ladbar");
                 return;
             }
         };
         for login in candidates {
             if self.hooks.on_auto_archive(&login).await {
-                tracing::info!(login, "Partner auto-archiviert (inaktiv)");
+                tracing::info!(login, "Partner automatisch als inaktiv markiert");
             }
         }
     }

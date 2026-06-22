@@ -72,6 +72,8 @@ impl StreamSource for StubSource {
 /// Zeichnet Hook-Aufrufe auf.
 struct RecordingHooks {
     went_live: AtomicU64,
+    auto_archive: AtomicU64,
+    auto_unarchive: AtomicU64,
     reports: Mutex<Vec<TickReport>>,
 }
 
@@ -79,6 +81,8 @@ impl RecordingHooks {
     fn new() -> Self {
         Self {
             went_live: AtomicU64::new(0),
+            auto_archive: AtomicU64::new(0),
+            auto_unarchive: AtomicU64::new(0),
             reports: Mutex::new(Vec::new()),
         }
     }
@@ -88,6 +92,14 @@ impl RecordingHooks {
 impl PollHooks for RecordingHooks {
     async fn on_stream_went_live(&self, _twitch_user_id: &str, _login: &str) {
         self.went_live.fetch_add(1, Ordering::SeqCst);
+    }
+    async fn on_auto_archive(&self, _login: &str) -> bool {
+        self.auto_archive.fetch_add(1, Ordering::SeqCst);
+        true
+    }
+    async fn on_auto_unarchive(&self, _login: &str) -> bool {
+        self.auto_unarchive.fetch_add(1, Ordering::SeqCst);
+        true
     }
     async fn after_tick(&self, report: TickReport) {
         self.reports.lock().unwrap().push(report);
@@ -137,7 +149,7 @@ fn live_stream(login: &str, user_id: &str, stream_id: &str, viewers: i32) -> Str
 #[tokio::test]
 async fn tick_transitions_online_dann_offline() {
     let pool = pool_or_skip!("t4c_transitions");
-    // Verifizierter Partner mit aktivem Raid-Bot.
+    // Verifizierter Partner, dessen Raid-Toggle aus ist; Core-Tracking bleibt aktiv.
     sqlx::query(
         "INSERT INTO twitch_streamers_partner_state
             (twitch_login, twitch_user_id, is_partner_active, is_partner)
@@ -148,7 +160,7 @@ async fn tick_transitions_online_dann_offline() {
     .unwrap();
     sqlx::query(
         "INSERT INTO twitch_partners (twitch_user_id, twitch_login, status, raid_bot_enabled)
-         VALUES ('42', 'drag', 'active', 1)",
+         VALUES ('42', 'drag', 'active', 0)",
     )
     .execute(&pool)
     .await
@@ -339,4 +351,77 @@ async fn monitored_only_kanal_wird_getrackt_aber_nicht_als_partner() {
     // Kein Go-Live-Hook, keine Score-Refreshes (nicht verifiziert).
     assert_eq!(hooks.went_live.load(Ordering::SeqCst), 0);
     assert!(hooks.reports.lock().unwrap()[0].score_refreshes.is_empty());
+}
+
+#[tokio::test]
+async fn deadlock_live_cleart_inaktivitaetsflag_ohne_admin_archiv() {
+    let pool = pool_or_skip!("t4c_inactivity_clear");
+    sqlx::query(
+        "INSERT INTO twitch_streamers_partner_state
+            (twitch_login, twitch_user_id, is_partner_active, is_partner, operational_state)
+         VALUES ('sleepy', '422', 1, 1, 'inactive')",
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
+    sqlx::query(
+        "INSERT INTO twitch_partners
+            (twitch_user_id, twitch_login, status, raid_bot_enabled, admin_archived_at, inactivity_flagged_at)
+         VALUES ('422', 'sleepy', 'active', 1, NULL, '2026-06-01T00:00:00Z')",
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
+
+    let source = Arc::new(StubSource::new());
+    let hooks = Arc::new(RecordingHooks::new());
+    let engine = engine_with(&pool, source.clone(), hooks.clone());
+    source.set_streams(vec![live_stream("sleepy", "422", "s-sleepy", 7)]);
+    engine.tick().await;
+
+    assert_eq!(
+        hooks.auto_unarchive.load(Ordering::SeqCst),
+        1,
+        "Deadlock-Live soll nur das Inaktivitaetsflag clearen"
+    );
+    assert_eq!(
+        hooks.auto_archive.load(Ordering::SeqCst),
+        0,
+        "kein Auto-Archive waehrend aktivem Deadlock-Live"
+    );
+}
+
+#[tokio::test]
+async fn archive_candidates_ignoriert_kuerzlich_aktive_nicht_deadlock_streamer() {
+    let pool = pool_or_skip!("t4c_archive_recent_any_game");
+    let now = Utc::now();
+    let cutoff = now - Duration::days(10);
+    sqlx::query(
+        "INSERT INTO twitch_streamers_partner_state
+            (twitch_login, twitch_user_id, is_partner_active, is_partner, operational_state)
+         VALUES ('variety', '423', 1, 1, 'active')",
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
+    sqlx::query(
+        "INSERT INTO twitch_stream_sessions (streamer_login, started_at, ended_at, game_name)
+         VALUES
+            ('variety', $1, $1, 'Deadlock'),
+            ('variety', $2, $2, 'Just Chatting')",
+    )
+    .bind((now - Duration::days(30)).to_rfc3339())
+    .bind((now - Duration::days(1)).to_rfc3339())
+    .execute(&pool)
+    .await
+    .unwrap();
+
+    let candidates = TrackedStore::new(pool)
+        .archive_candidates("Deadlock", cutoff)
+        .await
+        .unwrap();
+    assert!(
+        candidates.is_empty(),
+        "kuerzlich aktive Nicht-Deadlock-Streamer sind keine Inaktivitaetskandidaten"
+    );
 }

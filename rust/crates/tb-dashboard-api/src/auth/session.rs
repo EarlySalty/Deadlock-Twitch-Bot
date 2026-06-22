@@ -1257,10 +1257,10 @@ impl DashboardAuthState {
         }))
     }
 
-    /// `true` wenn der Partner **aktiv** geführt ist — Port von Python
-    /// `_resolve_partner_active_status` (auth_mixin.py:782-831): active =
+    /// `true` wenn der Partner **aktiv** geführt ist. Kanonische Definition
+    /// wie `twitch_partners_all_state.is_partner_active`: active =
     /// `status='active'` UND `manual_partner_opt_out=0` UND
-    /// `technical_pause_reason NOT IN (blocked,bot_banned,token_error,token_error_expired)`.
+    /// `technical_pause_reason=''` UND `admin_archived_at IS NULL`.
     /// Keine Zeile ODER DB-Fehler → `false` (passive) — 1:1 Python (gibt dort
     /// „passive" zurück). Der `partner_status_gate` nutzt das für active-only-Routen.
     pub async fn is_partner_active(&self, login: &str, user_id: &str) -> bool {
@@ -1274,13 +1274,12 @@ impl DashboardAuthState {
             SELECT CASE
                 WHEN COALESCE(p.status, '') = 'active'
                      AND COALESCE(p.manual_partner_opt_out, 0) = 0
-                     AND LOWER(COALESCE(p.technical_pause_reason, '')) NOT IN
-                         ('blocked', 'bot_banned', 'token_error', 'token_error_expired')
+                     AND COALESCE(p.technical_pause_reason, '') = ''
+                     AND p.admin_archived_at IS NULL
                 THEN 1 ELSE 0
             END AS is_active
             FROM twitch_partners p
-            WHERE LOWER(COALESCE(p.technical_pause_reason, '')) <> 'blocked'
-              AND (
+            WHERE (
                   LOWER(p.twitch_login) = $1
                   OR ($2 <> '' AND p.twitch_user_id = $2)
               )
@@ -2338,6 +2337,81 @@ print(f.encrypt(payload.encode()).decode(), end='')
             .execute(&pool)
             .await
             .ok();
+    }
+
+    #[tokio::test]
+    async fn is_partner_active_folgt_kanonischer_view_logik() {
+        let Some(pool) = maybe_pool().await else { return; };
+        sqlx::query(
+            "CREATE TABLE IF NOT EXISTS twitch_partners (
+                twitch_login TEXT, twitch_user_id TEXT, status TEXT,
+                technical_pause_reason TEXT, manual_partner_opt_out INTEGER,
+                departnered_at TIMESTAMPTZ, admin_archived_at TIMESTAMPTZ,
+                partnered_at TIMESTAMPTZ, raid_bot_enabled INTEGER,
+                inactivity_flagged_at TIMESTAMPTZ)",
+        )
+        .execute(&pool)
+        .await
+        .ok();
+        for ddl in [
+            "ALTER TABLE twitch_partners ADD COLUMN IF NOT EXISTS technical_pause_reason TEXT",
+            "ALTER TABLE twitch_partners ADD COLUMN IF NOT EXISTS manual_partner_opt_out INTEGER",
+            "ALTER TABLE twitch_partners ADD COLUMN IF NOT EXISTS departnered_at TIMESTAMPTZ",
+            "ALTER TABLE twitch_partners ADD COLUMN IF NOT EXISTS admin_archived_at TIMESTAMPTZ",
+            "ALTER TABLE twitch_partners ADD COLUMN IF NOT EXISTS partnered_at TIMESTAMPTZ",
+            "ALTER TABLE twitch_partners ADD COLUMN IF NOT EXISTS raid_bot_enabled INTEGER",
+            "ALTER TABLE twitch_partners ADD COLUMN IF NOT EXISTS inactivity_flagged_at TIMESTAMPTZ",
+        ] {
+            sqlx::query(ddl).execute(&pool).await.ok();
+        }
+        sqlx::query(
+            "DELETE FROM twitch_partners
+              WHERE twitch_login IN ('active_raid_off','admin_archived_gate','tech_pause_gate','inactive_info_gate')",
+        )
+        .execute(&pool)
+        .await
+        .ok();
+
+        sqlx::query(
+            "INSERT INTO twitch_partners
+                (twitch_login, twitch_user_id, status, manual_partner_opt_out,
+                 technical_pause_reason, admin_archived_at, raid_bot_enabled,
+                 inactivity_flagged_at)
+             VALUES
+                ('active_raid_off', '901001', 'active', 0, NULL, NULL, 0, NULL),
+                ('admin_archived_gate', '901002', 'active', 0, NULL, '2026-06-01T00:00:00Z', 1, NULL),
+                ('tech_pause_gate', '901003', 'active', 0, 'maintenance', NULL, 1, NULL),
+                ('inactive_info_gate', '901004', 'active', 0, NULL, NULL, 1, '2026-06-01T00:00:00Z')",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+
+        let state = DashboardAuthState::new(pool.clone(), test_fernet_key());
+        assert!(
+            state.is_partner_active("active_raid_off", "").await,
+            "raid_bot_enabled=0 darf nicht deaktivieren"
+        );
+        assert!(
+            !state.is_partner_active("admin_archived_gate", "").await,
+            "admin_archived_at ist Operator-Deaktivierung"
+        );
+        assert!(
+            !state.is_partner_active("tech_pause_gate", "").await,
+            "jede technical_pause_reason deaktiviert"
+        );
+        assert!(
+            state.is_partner_active("inactive_info_gate", "").await,
+            "Inaktivitaet ist nur Anzeigezustand"
+        );
+
+        sqlx::query(
+            "DELETE FROM twitch_partners
+              WHERE twitch_login IN ('active_raid_off','admin_archived_gate','tech_pause_gate','inactive_info_gate')",
+        )
+        .execute(&pool)
+        .await
+        .ok();
     }
 
     /// P1.54: durable Partner-Access-Session anlegen → mit gleichem User-Agent

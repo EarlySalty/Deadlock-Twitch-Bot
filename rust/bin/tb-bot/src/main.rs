@@ -119,6 +119,37 @@ struct SubscriptionPollHooks {
     recruit_last_check: std::sync::Mutex<Option<std::time::Instant>>,
 }
 
+async fn mark_partner_inactivity_flagged(
+    pool: &sqlx::PgPool,
+    login: &str,
+) -> Result<bool, sqlx::Error> {
+    let result = sqlx::query(
+        "UPDATE twitch_partners SET inactivity_flagged_at = NOW()::text \
+         WHERE LOWER(twitch_login) = LOWER($1) \
+           AND COALESCE(status, 'active') = 'active' \
+           AND inactivity_flagged_at IS NULL",
+    )
+    .bind(login)
+    .execute(pool)
+    .await?;
+    Ok(result.rows_affected() > 0)
+}
+
+async fn clear_partner_inactivity_flag(
+    pool: &sqlx::PgPool,
+    login: &str,
+) -> Result<bool, sqlx::Error> {
+    let result = sqlx::query(
+        "UPDATE twitch_partners SET inactivity_flagged_at = NULL \
+         WHERE LOWER(twitch_login) = LOWER($1) \
+           AND inactivity_flagged_at IS NOT NULL",
+    )
+    .bind(login)
+    .execute(pool)
+    .await?;
+    Ok(result.rows_affected() > 0)
+}
+
 impl SubscriptionPollHooks {
     /// `true` wenn der Recruiting-Durchlauf fällig ist (≥ 30 min seit dem
     /// letzten) und stempelt zugleich neu. Python `_run_partner_recruit`-Guard.
@@ -144,46 +175,30 @@ impl PollHooks for SubscriptionPollHooks {
             .await;
     }
 
-    /// Inaktiver Partner (> N Tage kein Deadlock-Stream) → archivieren.
-    /// Mirror von Python `set_streamer_archive_state(archived=True)`:
-    /// `admin_archived_at` im aktiven `twitch_partners`-Eintrag.
+    /// Inaktiver Partner (> N Tage keine relevante Aktivität) → informativ
+    /// markieren. Das ist keine Operator-Deaktivierung.
     async fn on_auto_archive(&self, login: &str) -> bool {
-        let changed = match sqlx::query(
-            "UPDATE twitch_partners SET admin_archived_at = NOW() \
-             WHERE LOWER(twitch_login) = LOWER($1) AND admin_archived_at IS NULL",
-        )
-        .bind(login)
-        .execute(&self.pool)
-        .await
-        {
-            Ok(r) => r.rows_affected() > 0,
+        let changed = match mark_partner_inactivity_flagged(&self.pool, login).await {
+            Ok(changed) => changed,
             Err(e) => {
-                tracing::warn!(login, "auto-archive (twitch_partners) fehlgeschlagen: {e}");
+                tracing::warn!(login, "auto-inactivity (twitch_partners) fehlgeschlagen: {e}");
                 return false;
             }
         };
         if changed {
-            tracing::info!(login, "Partner automatisch archiviert (inaktiv)");
+            tracing::info!(login, "Partner automatisch als inaktiv markiert");
         }
         changed
     }
 
-    /// Archivierter Partner streamt wieder Deadlock → entarchivieren
-    /// (`set_streamer_archive_state(archived=False)`).
+    /// Informativ inaktiver Partner streamt wieder Deadlock → Flag loeschen.
     async fn on_auto_unarchive(&self, login: &str) -> bool {
-        let changed = match sqlx::query(
-            "UPDATE twitch_partners SET admin_archived_at = NULL \
-             WHERE LOWER(twitch_login) = LOWER($1) AND admin_archived_at IS NOT NULL",
-        )
-        .bind(login)
-        .execute(&self.pool)
-        .await
-        {
-            Ok(r) => r.rows_affected() > 0,
+        let changed = match clear_partner_inactivity_flag(&self.pool, login).await {
+            Ok(changed) => changed,
             Err(e) => {
                 tracing::warn!(
                     login,
-                    "auto-unarchive (twitch_partners) fehlgeschlagen: {e}"
+                    "auto-inactivity-clear (twitch_partners) fehlgeschlagen: {e}"
                 );
                 return false;
             }
@@ -191,7 +206,7 @@ impl PollHooks for SubscriptionPollHooks {
         if changed {
             tracing::info!(
                 login,
-                "Partner automatisch entarchiviert (wieder Deadlock live)"
+                "Partner automatisch nicht mehr als inaktiv markiert"
             );
         }
         changed
@@ -1591,5 +1606,122 @@ async fn subscription_maintenance_loop(
             deleted,
             "sub-maintenance: Core-Sub-Reconcile abgeschlossen"
         );
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::str::FromStr;
+
+    use sqlx::postgres::{PgConnectOptions, PgPoolOptions};
+    use sqlx::PgPool;
+
+    async fn pool_in_schema(schema: &str) -> Option<PgPool> {
+        let dsn = match std::env::var("TB_TEST_DATABASE_URL") {
+            Ok(dsn) => dsn,
+            Err(_) => {
+                eprintln!("SKIP: TB_TEST_DATABASE_URL nicht gesetzt");
+                return None;
+            }
+        };
+        let admin = PgPoolOptions::new()
+            .max_connections(1)
+            .connect(&dsn)
+            .await
+            .ok()?;
+        sqlx::query(&format!("DROP SCHEMA IF EXISTS {schema} CASCADE"))
+            .execute(&admin)
+            .await
+            .ok()?;
+        sqlx::query(&format!("CREATE SCHEMA {schema}"))
+            .execute(&admin)
+            .await
+            .ok()?;
+        admin.close().await;
+
+        let opts = PgConnectOptions::from_str(&dsn)
+            .ok()?
+            .options([("search_path", schema)]);
+        let pool = PgPoolOptions::new()
+            .max_connections(2)
+            .connect_with(opts)
+            .await
+            .ok()?;
+        sqlx::query(
+            "CREATE TABLE twitch_partners (
+                twitch_login TEXT PRIMARY KEY,
+                status TEXT,
+                admin_archived_at TEXT,
+                inactivity_flagged_at TEXT
+            )",
+        )
+        .execute(&pool)
+        .await
+        .ok()?;
+        Some(pool)
+    }
+
+    #[tokio::test]
+    async fn auto_archive_markiert_nur_inaktivitaetsflag() {
+        let Some(pool) = pool_in_schema("tb_bot_inactivity_mark").await else {
+            return;
+        };
+        sqlx::query("INSERT INTO twitch_partners (twitch_login) VALUES ('sleepy')")
+            .execute(&pool)
+            .await
+            .unwrap();
+
+        assert!(super::mark_partner_inactivity_flagged(&pool, "Sleepy")
+            .await
+            .unwrap());
+        let (admin_archived_at, inactivity_flagged_at): (Option<String>, Option<String>) =
+            sqlx::query_as(
+                "SELECT admin_archived_at, inactivity_flagged_at
+                   FROM twitch_partners WHERE twitch_login = 'sleepy'",
+            )
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+        assert_eq!(
+            admin_archived_at, None,
+            "admin_archived_at bleibt unangetastet"
+        );
+        assert!(
+            inactivity_flagged_at.is_some(),
+            "Inaktivitaet wird rein informativ markiert"
+        );
+    }
+
+    #[tokio::test]
+    async fn auto_unarchive_cleart_nur_inaktivitaetsflag() {
+        let Some(pool) = pool_in_schema("tb_bot_inactivity_clear").await else {
+            return;
+        };
+        sqlx::query(
+            "INSERT INTO twitch_partners
+                (twitch_login, admin_archived_at, inactivity_flagged_at)
+             VALUES ('sleepy', 'operator', '2026-06-01T00:00:00Z')",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+
+        assert!(super::clear_partner_inactivity_flag(&pool, "sleepy")
+            .await
+            .unwrap());
+        let (admin_archived_at, inactivity_flagged_at): (Option<String>, Option<String>) =
+            sqlx::query_as(
+                "SELECT admin_archived_at, inactivity_flagged_at
+                   FROM twitch_partners WHERE twitch_login = 'sleepy'",
+            )
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+        assert_eq!(
+            admin_archived_at.as_deref(),
+            Some("operator"),
+            "Operator-Archivierung bleibt erhalten"
+        );
+        assert_eq!(inactivity_flagged_at, None);
     }
 }

@@ -63,7 +63,9 @@ pub async fn pool_in_schema(schema: &str) -> Option<PgPool> {
         "CREATE TABLE twitch_partners (
             id BIGSERIAL PRIMARY KEY, twitch_user_id TEXT NOT NULL,
             twitch_login TEXT NOT NULL, status TEXT NOT NULL,
-            raid_bot_enabled INTEGER DEFAULT 0
+            raid_bot_enabled INTEGER DEFAULT 0,
+            admin_archived_at TEXT,
+            inactivity_flagged_at TEXT
         )",
         "CREATE TABLE twitch_stream_sessions (
             id BIGSERIAL PRIMARY KEY,
@@ -134,6 +136,7 @@ pub async fn pool_in_schema(schema: &str) -> Option<PgPool> {
             archived_at TIMESTAMPTZ,
             is_partner_active INTEGER DEFAULT 0,
             is_partner INTEGER DEFAULT 0,
+            operational_state TEXT DEFAULT 'active',
             discord_user_id TEXT,
             live_ping_role_id BIGINT,
             live_ping_enabled INTEGER DEFAULT 1

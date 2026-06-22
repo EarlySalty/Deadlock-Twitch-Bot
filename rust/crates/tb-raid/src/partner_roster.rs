@@ -3,12 +3,11 @@
 //! `load_partner_roster_for_raid` (Z. 203) + `build_online_partner_candidates` (Z. 240).
 //!
 //! Prod-Schema: `twitch_streamers_partner_state.is_partner_active` ist **INTEGER**
-//! (=1 aktiv); JOIN auf `twitch_raid_auth` liefert `raid_enabled` (boolean) +
-//! `authorized_at` (timestamptz).
+//! (=1 aktiv). Raid/Auth-Gates gelten nur fuer die Quelle; Ziele brauchen kein
+//! eigenes `raid_enabled`.
 
 use std::collections::HashMap;
 
-use chrono::{DateTime, Utc};
 use sqlx::PgPool;
 
 /// Ein raid-fähiger Partner aus dem Roster.
@@ -41,8 +40,6 @@ pub struct OnlineCandidate {
 struct RosterRow {
     twitch_login: Option<String>,
     twitch_user_id: Option<String>,
-    raid_enabled: Option<bool>,
-    authorized_at: Option<DateTime<Utc>>,
 }
 
 #[derive(Clone)]
@@ -55,19 +52,16 @@ impl PartnerRosterStore {
         Self { pool }
     }
 
-    /// Lädt alle aktiven Partner außer der Quelle. Ein Partner zählt als
-    /// raid-fähig, wenn `raid_enabled` ODER ein `authorized_at` vorliegt
-    /// (Python Z. 226–235).
+    /// Lädt alle aktiven Partner außer der Quelle. Zielkandidaten werden nur
+    /// durch `is_partner_active` gegatet; die Raid-Toggles gehoeren zur Quelle.
     pub async fn load_roster(
         &self,
         source_user_id: &str,
     ) -> Result<Vec<PartnerRosterEntry>, sqlx::Error> {
         let rows: Vec<RosterRow> = sqlx::query_as(
             r#"
-            SELECT DISTINCT s.twitch_login, s.twitch_user_id,
-                   r.raid_enabled, r.authorized_at
+            SELECT DISTINCT s.twitch_login, s.twitch_user_id
               FROM twitch_streamers_partner_state s
-              LEFT JOIN twitch_raid_auth r ON s.twitch_user_id = r.twitch_user_id
              WHERE s.is_partner_active = 1
                AND s.twitch_user_id IS NOT NULL
                AND s.twitch_login IS NOT NULL
@@ -85,16 +79,10 @@ impl PartnerRosterStore {
             if login.is_empty() || user_id.is_empty() {
                 continue;
             }
-            let raid_enabled = row.raid_enabled.unwrap_or(false);
-            let has_auth = row.authorized_at.is_some();
-            // Weder freigeschaltet noch je autorisiert → kein Raid-Ziel.
-            if !raid_enabled && !has_auth {
-                continue;
-            }
             partners.push(PartnerRosterEntry {
                 twitch_login: login,
                 twitch_user_id: user_id,
-                raid_enabled: raid_enabled || has_auth,
+                raid_enabled: true,
             });
         }
         Ok(partners)
