@@ -1,3 +1,11 @@
+## #254 — Einrichtungs-Assistent jetzt direkt im Verwaltungs-Dashboard
+
+**Problem:** Der geführte Einrichtungs-Assistent (Steam- und Discord-Verknüpfung, Go-Live-Posts an/aus, Schritt-Checkliste) war nur als Reiter im Analyse-Dashboard erreichbar. Wer das Verwaltungs-Dashboard öffnete — die naheliegende Stelle zum Einrichten — fand die neuen Optionen dort gar nicht.
+
+**Änderung:** Der Assistent wird jetzt direkt im Verwaltungs-Dashboard angezeigt, gleich unter der Konto-Übersicht. Steam und Discord verknüpfen, die automatischen Go-Live-Posts steuern und die Einrichtungsschritte abhaken laufen damit an einer Stelle, ohne ins Analyse-Dashboard wechseln zu müssen.
+
+**Ergebnis:** Alle Einrichtungs-Optionen sitzen dort, wo man sie sucht: im Verwaltungs-Dashboard. Der bisherige Zugang im Analyse-Dashboard bleibt zusätzlich bestehen.
+
 ## #253 — FAQ in den zentralen Hilfe-Bereich zusammengeführt
 
 **Problem:** Die FAQ lebte als eigene Seite getrennt vom restlichen Bot-Wissen — zwei Quellen, doppelter Pflegeaufwand. Außerdem schlug im Hintergrund das Einsammeln von Werbe- und Abo-Daten still fehl.
