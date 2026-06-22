@@ -3,11 +3,12 @@
 
 use std::sync::Arc;
 
-use tb_monitoring::sessions::tracker::FollowerCountSource;
+use tb_monitoring::sessions::tracker::{FollowerCountSource, FollowerFetch};
 use tb_monitoring::SubscriptionManager;
 use tb_raid::{
-    ArrivalReadiness, FairnessCandidate, FallbackStreamSource, FollowerEnricher, RaidApi,
-    RefreshError, TokenOwnerInfo, TokenResponse, TwitchTokenClient, FOLLOWERS_UNKNOWN,
+    ArrivalReadiness, FairnessCandidate, FallbackStreamSource, FollowerEnricher,
+    FollowersEnrichmentObservation, RaidApi, RefreshError, TokenOwnerInfo, TokenResponse,
+    TwitchTokenClient, FOLLOWERS_UNKNOWN,
 };
 use tb_transport_twitch::{HelixClient, HelixStream, UserTokenError};
 
@@ -90,7 +91,11 @@ async fn enrich_via_helix(followers: &dyn FollowerCountSource, pool: &mut [Fairn
         } else {
             Some(user_id)
         };
-        if let Some(total) = followers.follower_total(uid, &candidate.user_login).await {
+        if let Some(total) = followers
+            .follower_total(uid, &candidate.user_login)
+            .await
+            .total
+        {
             candidate.followers_total = total;
         }
     }
@@ -115,10 +120,8 @@ pub struct CachedFollowerEnricher {
     pub pool: sqlx::PgPool,
 }
 
-#[async_trait::async_trait]
-impl FollowerEnricher for CachedFollowerEnricher {
-    async fn enrich(&self, pool: &mut [FairnessCandidate]) {
-        // 1. DB-Cache-Backfill für alle bislang unbekannten Kandidaten.
+impl CachedFollowerEnricher {
+    async fn backfill_from_cache(&self, pool: &mut [FairnessCandidate]) {
         let pending_logins: Vec<String> = pool
             .iter()
             .filter(|c| c.followers_total == FOLLOWERS_UNKNOWN)
@@ -135,9 +138,89 @@ impl FollowerEnricher for CachedFollowerEnricher {
                 candidate.followers_total = *total;
             }
         }
+    }
+}
 
-        // 2. Helix nur noch für die danach unbekannten Kandidaten.
+#[async_trait::async_trait]
+impl FollowerEnricher for CachedFollowerEnricher {
+    async fn enrich(&self, pool: &mut [FairnessCandidate]) {
+        self.backfill_from_cache(pool).await;
+
         enrich_via_helix(self.followers.as_ref(), pool).await;
+    }
+
+    /// Überschreibt den Default, weil 401/403 beim App-Token-Follower-Pfad ein
+    /// erwarteter Scope-Miss und damit benign ist; nur andere HTTP-Status
+    /// schlagen vor Transportfehlern als Observation durch.
+    async fn enrich_with_observability(
+        &self,
+        pool: &mut [FairnessCandidate],
+    ) -> FollowersEnrichmentObservation {
+        self.backfill_from_cache(pool).await;
+
+        let mut first_http_error: Option<(i64, String)> = None;
+        let mut saw_transport_error = false;
+        for candidate in pool.iter_mut() {
+            if candidate.followers_total != FOLLOWERS_UNKNOWN {
+                continue;
+            }
+            let user_id = candidate.user_id.trim();
+            if user_id.is_empty() {
+                continue;
+            }
+            let fetch = self
+                .followers
+                .follower_total(Some(user_id), &candidate.user_login)
+                .await;
+            if let Some(total) = fetch.total {
+                candidate.followers_total = total;
+            }
+            record_followers_observation_signal(
+                &fetch,
+                &mut first_http_error,
+                &mut saw_transport_error,
+            );
+        }
+
+        if let Some((status, error_code)) = first_http_error {
+            return FollowersEnrichmentObservation::http_error(status, error_code);
+        }
+        if saw_transport_error {
+            return FollowersEnrichmentObservation::request_error("transport_error");
+        }
+        FollowersEnrichmentObservation::ok(
+            pool.len(),
+            pool.iter()
+                .filter(|candidate| candidate.followers_total != FOLLOWERS_UNKNOWN)
+                .count(),
+        )
+    }
+}
+
+fn record_followers_observation_signal(
+    fetch: &FollowerFetch,
+    first_http_error: &mut Option<(i64, String)>,
+    saw_transport_error: &mut bool,
+) {
+    if fetch.total.is_some() {
+        return;
+    }
+    match fetch.http_status {
+        Some(200 | 401 | 403) => {}
+        Some(status) => {
+            if first_http_error.is_none() {
+                let error_code = fetch
+                    .error_code
+                    .clone()
+                    .unwrap_or_else(|| format!("http_{status}"));
+                *first_http_error = Some((status, error_code));
+            }
+        }
+        None => {
+            if fetch.error_code.as_deref() == Some("transport_error") {
+                *saw_transport_error = true;
+            }
+        }
     }
 }
 
@@ -452,11 +535,38 @@ mod tests {
     }
 
     #[cfg(feature = "integration")]
+    struct StatusFollowerSource {
+        calls: AtomicUsize,
+        fetch: FollowerFetch,
+    }
+
+    #[cfg(feature = "integration")]
     #[async_trait::async_trait]
     impl FollowerCountSource for CountingFollowerSource {
-        async fn follower_total(&self, _twitch_user_id: Option<&str>, _login: &str) -> Option<i32> {
+        async fn follower_total(
+            &self,
+            _twitch_user_id: Option<&str>,
+            _login: &str,
+        ) -> FollowerFetch {
             self.calls.fetch_add(1, Ordering::SeqCst);
-            self.total
+            FollowerFetch {
+                total: self.total,
+                http_status: self.total.map(|_| 200),
+                error_code: None,
+            }
+        }
+    }
+
+    #[cfg(feature = "integration")]
+    #[async_trait::async_trait]
+    impl FollowerCountSource for StatusFollowerSource {
+        async fn follower_total(
+            &self,
+            _twitch_user_id: Option<&str>,
+            _login: &str,
+        ) -> FollowerFetch {
+            self.calls.fetch_add(1, Ordering::SeqCst);
+            self.fetch.clone()
         }
     }
 
@@ -510,6 +620,29 @@ mod tests {
             followers_total: FOLLOWERS_UNKNOWN,
             started_at: "2026-06-10T16:00:00Z".to_string(),
         }
+    }
+
+    #[cfg(feature = "integration")]
+    async fn observe_single_fetch(
+        schema: &str,
+        fetch: FollowerFetch,
+    ) -> (
+        FollowersEnrichmentObservation,
+        Vec<FairnessCandidate>,
+        Arc<StatusFollowerSource>,
+    ) {
+        let pool = setup_sessions_db(schema).await;
+        let followers = Arc::new(StatusFollowerSource {
+            calls: AtomicUsize::new(0),
+            fetch,
+        });
+        let enricher = CachedFollowerEnricher {
+            followers: followers.clone(),
+            pool: pool.clone(),
+        };
+        let mut candidates = vec![candidate(schema)];
+        let observation = enricher.enrich_with_observability(&mut candidates).await;
+        (observation, candidates, followers)
     }
 
     /// Kandidat mit gespeicherter Session-Follower-Zahl wird aus dem Cache
@@ -587,6 +720,117 @@ mod tests {
         enricher.enrich(&mut cands).await;
         assert_eq!(cands[0].followers_total, 777, "Helix-Fallback ohne Cache");
         assert_eq!(followers.calls.load(Ordering::SeqCst), 1, "genau ein Helix-Call");
+    }
+
+    /// Erwarteter App-Token-Scope-Miss 403 bleibt benign und erzeugt kein
+    /// Analytics-http_error-Rauschen.
+    #[cfg(feature = "integration")]
+    #[tokio::test]
+    async fn observability_403_scope_miss_ist_ok() {
+        let (observation, candidates, followers) = observe_single_fetch(
+            "p310_403_ok",
+            FollowerFetch {
+                total: None,
+                http_status: Some(403),
+                error_code: Some("forbidden".to_string()),
+            },
+        )
+        .await;
+
+        assert_eq!(observation.request_result, "ok");
+        assert_ne!(observation.request_result, "http_error");
+        assert_ne!(observation.request_result, "request_error");
+        assert_eq!(candidates[0].followers_total, FOLLOWERS_UNKNOWN);
+        assert_eq!(followers.calls.load(Ordering::SeqCst), 1);
+    }
+
+    /// 401 ist derselbe erwartete Scope-Miss-Pfad wie 403.
+    #[cfg(feature = "integration")]
+    #[tokio::test]
+    async fn observability_401_scope_miss_ist_ok() {
+        let (observation, _candidates, followers) = observe_single_fetch(
+            "p310_401_ok",
+            FollowerFetch {
+                total: None,
+                http_status: Some(401),
+                error_code: Some("unauthorized".to_string()),
+            },
+        )
+        .await;
+
+        assert_eq!(observation.request_result, "ok");
+        assert_ne!(observation.request_result, "http_error");
+        assert_ne!(observation.request_result, "request_error");
+        assert_eq!(followers.calls.load(Ordering::SeqCst), 1);
+    }
+
+    /// Ein unerwarteter HTTP-Status schlägt als http_error durch.
+    #[cfg(feature = "integration")]
+    #[tokio::test]
+    async fn observability_500_wird_http_error() {
+        let (observation, _candidates, followers) = observe_single_fetch(
+            "p310_500_http",
+            FollowerFetch {
+                total: None,
+                http_status: Some(500),
+                error_code: Some("http_500".to_string()),
+            },
+        )
+        .await;
+
+        assert_eq!(observation.request_result, "http_error");
+        assert_eq!(observation.http_status, Some(500));
+        assert_eq!(
+            observation.extra.get("error_code"),
+            Some(&serde_json::json!("http_500"))
+        );
+        assert_eq!(followers.calls.load(Ordering::SeqCst), 1);
+    }
+
+    /// Transport-/JSON-Fehler ohne HTTP-Status werden request_error.
+    #[cfg(feature = "integration")]
+    #[tokio::test]
+    async fn observability_transport_error_wird_request_error() {
+        let (observation, _candidates, followers) = observe_single_fetch(
+            "p310_transport",
+            FollowerFetch {
+                total: None,
+                http_status: None,
+                error_code: Some("transport_error".to_string()),
+            },
+        )
+        .await;
+
+        assert_eq!(observation.request_result, "request_error");
+        assert_eq!(observation.http_status, None);
+        assert_eq!(
+            observation.extra.get("error_code"),
+            Some(&serde_json::json!("transport_error"))
+        );
+        assert_eq!(followers.calls.load(Ordering::SeqCst), 1);
+    }
+
+    /// Ein erfolgreich gelieferter Total-Wert setzt den Kandidaten und bleibt ok.
+    #[cfg(feature = "integration")]
+    #[tokio::test]
+    async fn observability_total_vorhanden_setzt_followers_und_ist_ok() {
+        let (observation, candidates, followers) = observe_single_fetch(
+            "p310_total_ok",
+            FollowerFetch {
+                total: Some(321),
+                http_status: Some(200),
+                error_code: None,
+            },
+        )
+        .await;
+
+        assert_eq!(observation.request_result, "ok");
+        assert_eq!(candidates[0].followers_total, 321);
+        assert_eq!(
+            observation.extra.get("enriched_count"),
+            Some(&serde_json::json!(1))
+        );
+        assert_eq!(followers.calls.load(Ordering::SeqCst), 1);
     }
 
     // ─── P2.58: Raid-Subscription-Status-Poll ───────────────────────────────

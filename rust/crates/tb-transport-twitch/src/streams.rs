@@ -69,6 +69,23 @@ struct FollowersResponse {
     total: Option<i64>,
 }
 
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct FollowersTotalFetch {
+    pub total: Option<i64>,
+    pub http_status: Option<u16>,
+    pub error_code: Option<String>,
+}
+
+fn http_error_code(status: reqwest::StatusCode) -> String {
+    match status.as_u16() {
+        401 => "unauthorized".to_string(),
+        403 => "forbidden".to_string(),
+        404 => "not_found".to_string(),
+        429 => "rate_limited".to_string(),
+        code => format!("http_{code}"),
+    }
+}
+
 /// Kanal-Metadaten aus Helix `/channels` (auch offline verfügbar).
 #[derive(Debug, Clone, Default, Deserialize)]
 pub struct HelixChannelInfo {
@@ -252,29 +269,21 @@ impl HelixClient {
     /// - `Some(tok)` → Request mit diesem Bearer (Streamer- oder zentraler
     ///   Bot-Token, der den Kanal moderiert). Liefert die echte Zahl.
     /// - `None` → App-Token-Pfad wie bisher; Twitch antwortet ohne Scope
-    ///   401/403 und es kommt (wie bei jedem non-200) `None` zurück.
+    ///   401/403 und es kommt `total = None` mit Diagnosefeldern zurück.
     ///
     /// Port: Python `twitch_api.get_followers_total(broadcaster_id, user_token=…)`.
-    ///
-    // WIRING-TODO(P1.7): bin/tb-bot/src/wiring.rs HelixFollowerSource::follower_total
-    // und raid_adapters.rs attach_followers_totals rufen weiterhin
-    // get_followers_total(user_id) auf — Aufrufe auf
-    // get_followers_total(user_id, Some(<bot-/streamer-token>)) umstellen
-    // (Bot-Token mit moderator:read:followers bzw. Streamer-Token aus
-    // twitch_raid_auth durchreichen), damit die echte Follower-Zahl ankommt.
     pub async fn get_followers_total(
         &self,
         broadcaster_id: &str,
         user_token: Option<&str>,
-    ) -> Result<Option<i64>, HelixError> {
+    ) -> Result<FollowersTotalFetch, HelixError> {
         let broadcaster_id = broadcaster_id.trim();
         if broadcaster_id.is_empty() {
-            return Ok(None);
+            return Ok(FollowersTotalFetch::default());
         }
         let token = user_token.map(str::trim).filter(|t| !t.is_empty());
         let request = match token {
-            Some(token) => self
-                .get_with_user_token("/channels/followers", token),
+            Some(token) => self.get_with_user_token("/channels/followers", token),
             None => self.get("/channels/followers").await?,
         };
         let resp = request
@@ -282,15 +291,24 @@ impl HelixClient {
             .send()
             .await?;
         if !resp.status().is_success() {
+            let status = resp.status();
             tracing::debug!(
-                status = %resp.status(),
+                status = %status,
                 with_user_token = token.is_some(),
                 "followers-total nicht verfügbar (Token ohne moderator:read:followers?)"
             );
-            return Ok(None);
+            return Ok(FollowersTotalFetch {
+                total: None,
+                http_status: Some(status.as_u16()),
+                error_code: Some(http_error_code(status)),
+            });
         }
         let body: FollowersResponse = resp.json().await?;
-        Ok(body.total)
+        Ok(FollowersTotalFetch {
+            total: body.total,
+            http_status: Some(200),
+            error_code: None,
+        })
     }
 
     /// Die jüngsten Archiv-VODs eines Kanals (`type=archive`) mit den Feldern,
@@ -648,8 +666,10 @@ mod tests {
             .respond_with(ResponseTemplate::new(401))
             .mount(&server)
             .await;
-        let total = client.get_followers_total("42", None).await.unwrap();
-        assert_eq!(total, None);
+        let fetch = client.get_followers_total("42", None).await.unwrap();
+        assert_eq!(fetch.total, None);
+        assert_eq!(fetch.http_status, Some(401));
+        assert_eq!(fetch.error_code.as_deref(), Some("unauthorized"));
     }
 
     #[tokio::test]
@@ -669,11 +689,13 @@ mod tests {
             .expect(1)
             .mount(&server)
             .await;
-        let total = client
+        let fetch = client
             .get_followers_total("42", Some("usertok"))
             .await
             .unwrap();
-        assert_eq!(total, Some(1337));
+        assert_eq!(fetch.total, Some(1337));
+        assert_eq!(fetch.http_status, Some(200));
+        assert_eq!(fetch.error_code, None);
         server.verify().await;
     }
 

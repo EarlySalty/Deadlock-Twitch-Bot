@@ -507,6 +507,7 @@ impl OfflineRaidHandler {
                 .followers
                 .follower_total(Some(&candidate.twitch_user_id), &candidate.twitch_login)
                 .await
+                .total
             {
                 candidate.stream.followers_total = total;
             }

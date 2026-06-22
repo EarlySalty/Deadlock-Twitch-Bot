@@ -9,9 +9,9 @@ use chrono::{Duration, Utc};
 use sqlx::PgPool;
 use tb_monitoring::sessions::store::SessionStore;
 use tb_monitoring::{
-    ExpSessionStore, ExpSessionTracker, FollowerCountSource, LiveStateStore, LiveStateUpsert,
-    NewSession, NoFollowerSource, SessionTracker, StartOutcome, StatsSample, StatsStore,
-    StreamSnapshot, TrackedStreamer,
+    ExpSessionStore, ExpSessionTracker, FollowerCountSource, FollowerFetch, LiveStateStore,
+    LiveStateUpsert, NewSession, NoFollowerSource, SessionTracker, StartOutcome, StatsSample,
+    StatsStore, StreamSnapshot, TrackedStreamer,
 };
 
 mod support;
@@ -33,12 +33,17 @@ struct SeqFollowers {
 
 #[async_trait::async_trait]
 impl FollowerCountSource for SeqFollowers {
-    async fn follower_total(&self, _user_id: Option<&str>, _login: &str) -> Option<i32> {
+    async fn follower_total(&self, _user_id: Option<&str>, _login: &str) -> FollowerFetch {
         let mut values = self.values.lock().unwrap();
-        if values.is_empty() {
+        let total = if values.is_empty() {
             None
         } else {
             values.remove(0)
+        };
+        FollowerFetch {
+            total,
+            http_status: total.map(|_| 200),
+            error_code: None,
         }
     }
 }

@@ -20,11 +20,20 @@ use crate::stream::{extract_stream_start, StreamSnapshot};
 use super::metrics;
 use super::store::{FinalizeUpdate, NewSession, SessionStore};
 
+/// Strukturierter Rückgabewert; `total` = ermittelte Zahl (best-effort),
+/// `http_status`/`error_code` für Diagnose/Observability (P3.10).
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct FollowerFetch {
+    pub total: Option<i32>,
+    pub http_status: Option<i64>,
+    pub error_code: Option<String>,
+}
+
 /// Liefert die Follower-Gesamtzahl eines Kanals (Helix in Prod, Stub in Tests).
-/// `None` = nicht ermittelbar (best-effort, wie Python).
+/// `total == None` = nicht ermittelbar (best-effort, wie Python).
 #[async_trait::async_trait]
 pub trait FollowerCountSource: Send + Sync {
-    async fn follower_total(&self, twitch_user_id: Option<&str>, login: &str) -> Option<i32>;
+    async fn follower_total(&self, twitch_user_id: Option<&str>, login: &str) -> FollowerFetch;
 }
 
 /// Quelle, die nie Follower-Zahlen liefert (Wiring-Default, Tests).
@@ -32,8 +41,8 @@ pub struct NoFollowerSource;
 
 #[async_trait::async_trait]
 impl FollowerCountSource for NoFollowerSource {
-    async fn follower_total(&self, _twitch_user_id: Option<&str>, _login: &str) -> Option<i32> {
-        None
+    async fn follower_total(&self, _twitch_user_id: Option<&str>, _login: &str) -> FollowerFetch {
+        FollowerFetch::default()
     }
 }
 
@@ -197,7 +206,11 @@ impl SessionTracker {
             return Some(id);
         }
 
-        let followers_start = self.followers.follower_total(twitch_user_id, &login).await;
+        let followers_start = self
+            .followers
+            .follower_total(twitch_user_id, &login)
+            .await
+            .total;
         let started_at =
             extract_stream_start(stream.started_at.as_deref(), previous_started_at).unwrap_or(now);
 
@@ -344,7 +357,8 @@ impl SessionTracker {
         let mut followers_end = self
             .followers
             .follower_total(twitch_user_id.as_deref(), &login)
-            .await;
+            .await
+            .total;
         let followers_start = source.followers_start;
         let follower_delta = match (followers_start, followers_end) {
             (Some(start), Some(end)) if end == 0 && start > 0 => {

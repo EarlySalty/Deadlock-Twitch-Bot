@@ -11,6 +11,6 @@ pub use store::{
     StartOutcome,
 };
 pub use tracker::{
-    FollowerCountSource, NoFollowerSource, NoRaidTrackingResolver, RaidTrackingResolver,
-    SessionTracker,
+    FollowerCountSource, FollowerFetch, NoFollowerSource, NoRaidTrackingResolver,
+    RaidTrackingResolver, SessionTracker,
 };

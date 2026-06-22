@@ -14,7 +14,8 @@ pub use eventsub::{CreateOutcome, EventSubSubscription};
 pub use chat::{parse_created_at, BanOutcome, Chatter, HelixUserInfo, SendOutcome};
 pub use moderation::AddModeratorOutcome;
 pub use streams::{
-    AdSchedule, BroadcasterSubscriptions, HelixChannelInfo, HelixStream, Subscription,
+    AdSchedule, BroadcasterSubscriptions, FollowersTotalFetch, HelixChannelInfo, HelixStream,
+    Subscription,
 };
 pub use token::{AppToken, AppTokenManager, TokenError};
 pub use user_token::{TokenOwner, UserTokenError, UserTokenResponse};

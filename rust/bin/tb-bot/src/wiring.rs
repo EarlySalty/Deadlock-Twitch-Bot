@@ -7,7 +7,7 @@ use std::sync::Arc;
 use serde_json::Value;
 use sqlx::PgPool;
 use tb_monitoring::poller::source::{ChannelInfo, ChannelInfoSource, SourceError, StreamSource};
-use tb_monitoring::sessions::tracker::FollowerCountSource;
+use tb_monitoring::sessions::tracker::{FollowerCountSource, FollowerFetch};
 use tb_monitoring::{
     AnnouncementTransport, EventSubHooks, LivePingRoleProvider, RemoteSubscription, StreamSnapshot,
     SubscriptionManager, SubscriptionTransport, VodPreviewSource,
@@ -289,13 +289,21 @@ pub struct HelixFollowerSource {
 
 impl HelixFollowerSource {
     /// Ein einzelner `/channels/followers`-Abruf mit dem gegebenen Token.
-    /// `None` bei jedem non-200 (Twitch kollabiert das im Transport) oder Fehler.
-    async fn fetch_total(&self, user_id: &str, token: Option<&str>) -> Option<i32> {
+    /// Transport-/JSON-Fehler werden als Diagnose-Code weitergereicht.
+    async fn fetch_total(&self, user_id: &str, token: Option<&str>) -> FollowerFetch {
         match self.helix.get_followers_total(user_id, token).await {
-            Ok(total) => total.map(|t| t as i32),
+            Ok(fetch) => FollowerFetch {
+                total: fetch.total.map(|t| t as i32),
+                http_status: fetch.http_status.map(|s| s as i64),
+                error_code: fetch.error_code,
+            },
             Err(error) => {
                 tracing::debug!(%error, with_token = token.is_some(), "Follower-Total nicht abrufbar");
-                None
+                FollowerFetch {
+                    total: None,
+                    http_status: None,
+                    error_code: Some("transport_error".to_string()),
+                }
             }
         }
     }
@@ -303,10 +311,12 @@ impl HelixFollowerSource {
 
 #[async_trait::async_trait]
 impl FollowerCountSource for HelixFollowerSource {
-    async fn follower_total(&self, twitch_user_id: Option<&str>, _login: &str) -> Option<i32> {
-        let user_id = twitch_user_id?.trim();
+    async fn follower_total(&self, twitch_user_id: Option<&str>, _login: &str) -> FollowerFetch {
+        let Some(user_id) = twitch_user_id.map(str::trim) else {
+            return FollowerFetch::default();
+        };
         if user_id.is_empty() {
-            return None;
+            return FollowerFetch::default();
         }
         let source = self.token_source.as_ref();
 
@@ -315,21 +325,22 @@ impl FollowerCountSource for HelixFollowerSource {
             Some(s) => s.moderator_followers_token().await,
             None => None,
         };
-        if let Some(total) = self.fetch_total(user_id, bot_token.as_deref()).await {
+        let bot = self.fetch_total(user_id, bot_token.as_deref()).await;
+        if bot.total.is_some() {
             // P3.9: Bot-Token-Pfad hat geliefert → Fallback-WARN re-armieren,
             // damit ein späterer Rückfall wieder einmal warnt.
             if let Some(warner) = self.scope_fallback_warner.as_ref() {
                 warner.clear("followers", user_id);
             }
-            return Some(total);
+            return bot;
         }
+        let mut last = bot;
 
         // 2. P2.48/P1.19-Fallback: liefert der Bot-/App-Token keine Zahl (kein
         //    Scope, 403, oder Twitch antwortet ohne `total`), den per-Streamer
         //    OAuth-Token versuchen (Broadcaster moderiert sich selbst).
-        //    `get_followers_total` kollabiert jeden non-200 zu None — ein 403
-        //    ist daher von „echt unbekannt" nicht unterscheidbar; der Fallback
-        //    deckt beide Fälle ab (Python `_fetch_followers_total_safe`:1048-1144).
+        //    Der letzte Fetch wird zurückgegeben, damit Diagnosefelder erhalten
+        //    bleiben (Python `_fetch_followers_total_safe`:1048-1144).
         if let Some(s) = source {
             if let Some(streamer_token) = s.streamer_followers_token(user_id).await {
                 // P3.9: Once-only-WARN — wir nutzen den Legacy-Broadcaster-Token
@@ -337,12 +348,14 @@ impl FollowerCountSource for HelixFollowerSource {
                 if let Some(warner) = self.scope_fallback_warner.as_ref() {
                     warner.warn_once("followers", user_id);
                 }
-                if let Some(total) = self.fetch_total(user_id, Some(&streamer_token)).await {
-                    return Some(total);
+                let streamer = self.fetch_total(user_id, Some(&streamer_token)).await;
+                if streamer.total.is_some() {
+                    return streamer;
                 }
+                last = streamer;
             }
         }
-        None
+        last
     }
 }
 
@@ -685,8 +698,14 @@ mod follower_fallback_tests {
             })),
             scope_fallback_warner: None,
         };
-        let total = source.follower_total(Some("42"), "chan").await;
-        assert_eq!(total, Some(4242), "Streamer-Token-Fallback liefert echte Zahl");
+        let fetch = source.follower_total(Some("42"), "chan").await;
+        assert_eq!(
+            fetch.total,
+            Some(4242),
+            "Streamer-Token-Fallback liefert echte Zahl"
+        );
+        assert_eq!(fetch.http_status, Some(200));
+        assert_eq!(fetch.error_code, None);
     }
 
     /// Bot-Token liefert direkt eine Zahl → kein Streamer-Fallback nötig
@@ -720,7 +739,10 @@ mod follower_fallback_tests {
             })),
             scope_fallback_warner: None,
         };
-        assert_eq!(source.follower_total(Some("42"), "chan").await, Some(7));
+        let fetch = source.follower_total(Some("42"), "chan").await;
+        assert_eq!(fetch.total, Some(7));
+        assert_eq!(fetch.http_status, Some(200));
+        assert_eq!(fetch.error_code, None);
     }
 
     /// Kein Token verfügbar (App-Token-Pfad) und Twitch antwortet ohne total →
@@ -743,7 +765,10 @@ mod follower_fallback_tests {
             })),
             scope_fallback_warner: None,
         };
-        assert_eq!(source.follower_total(Some("42"), "chan").await, None);
+        let fetch = source.follower_total(Some("42"), "chan").await;
+        assert_eq!(fetch.total, None);
+        assert_eq!(fetch.http_status, Some(401));
+        assert_eq!(fetch.error_code.as_deref(), Some("unauthorized"));
     }
 
     /// P3.9: Fällt der Abruf auf den Streamer-/Legacy-Token zurück, feuert der
@@ -783,7 +808,8 @@ mod follower_fallback_tests {
 
         // Erster Abruf → Fallback aktiv → WARN gefeuert. Danach meldet ein
         // erneutes warn_once `false` (schon gewarnt).
-        assert_eq!(source.follower_total(Some("42"), "chan").await, Some(99));
+        let fetch = source.follower_total(Some("42"), "chan").await;
+        assert_eq!(fetch.total, Some(99));
         assert!(
             !warner.warn_once("followers", "42"),
             "WARN muss durch den Fallback bereits gefeuert sein"
