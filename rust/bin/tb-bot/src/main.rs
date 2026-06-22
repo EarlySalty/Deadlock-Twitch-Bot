@@ -599,6 +599,30 @@ async fn main() {
                 token_blacklist,
             ));
             let pending = Arc::new(std::sync::Mutex::new(PendingRaidStore::new()));
+
+            // W3b: Observability-Sink + Flow-Services. Der Writer batcht Events
+            // asynchron (mpsc) in `twitch_observability_events`; beide Services
+            // teilen denselben Sink. Ohne sie liefe der Raid-Pfad exakt wie bisher
+            // (None-Default) — mit ihnen werden strukturierte Flow-Events, Counter
+            // (raid_flow_started_total, raid_orphan_chat_notification_total) und
+            // Analytics-Decisions (followers terminal_decision) persistiert
+            // (P2.42/P3.8/P2.44/P2.45/P3.14).
+            let obs_sink: Arc<dyn tb_observability::EventSink> =
+                Arc::new(tb_observability::ObservabilityWriter::spawn(
+                    pool.clone(),
+                    tb_observability::DEFAULT_QUEUE_CAPACITY,
+                    tb_observability::DEFAULT_BATCH_SIZE,
+                ));
+            let raid_observability = Arc::new(tb_observability::RaidObservabilityService::new(
+                Some(obs_sink.clone()),
+            ));
+            let analytics_observability =
+                Arc::new(tb_observability::AnalyticsObservabilityService::new(
+                    Some(obs_sink.clone()),
+                    true,                      // runtime_available: Raid-Runtime hier aktiv
+                    chat_api_handle.is_some(), // chat_bot_available: bool(get_chat_bot())
+                    true,                      // bot_token_manager_available: TokenProvider steht
+                ));
             let executor = RaidExecutor::new(
                 Arc::new(HelixRaidApi {
                     helix: helix_client.clone(),
@@ -636,6 +660,10 @@ async fn main() {
                     pool: pool.clone(),
                 })),
                 Some(OutreachBoostStore::new(pool.clone())),
+            )
+            .with_observability(
+                Some(raid_observability.clone()),
+                Some(analytics_observability.clone()),
             );
             let offline = Arc::new(OfflineRaidHandler::new(
                 suppression.clone(),
@@ -672,6 +700,31 @@ async fn main() {
                     loop {
                         tick.tick().await;
                         sweeper_sink.promote_stale_orphans().await;
+                    }
+                });
+            }
+
+            // W3b: periodischer Stale-Pending-Raid-Sweep (Python
+            // RaidTrackingRuntimeService.cleanup_stale_pending_raids, bot.py:343,
+            // cleanup_timeout_seconds = 300.0). Entfernt Pendings, deren Arrival
+            // nie bestätigt wurde; `sweep_stale` loggt je Eintrag das Timeout-Detail.
+            {
+                let sweep_pending = pending.clone();
+                tokio::spawn(async move {
+                    let mut tick = tokio::time::interval(std::time::Duration::from_secs(300));
+                    tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+                    loop {
+                        tick.tick().await;
+                        let swept = {
+                            let mut store = match sweep_pending.lock() {
+                                Ok(guard) => guard,
+                                Err(poisoned) => poisoned.into_inner(),
+                            };
+                            store.sweep_stale(300.0, None)
+                        };
+                        if !swept.is_empty() {
+                            tracing::debug!(count = swept.len(), "Stale-Pending-Raids entfernt");
+                        }
                     }
                 });
             }
@@ -744,8 +797,11 @@ async fn main() {
                 });
             }
 
-            let arrival =
-                RaidArrivalCoordinator::new(pool.clone(), pending, RaidArrivalRuntime::new(sink));
+            let arrival = RaidArrivalCoordinator::new(
+                pool.clone(),
+                pending,
+                RaidArrivalRuntime::new(sink).with_observability(raid_observability.clone()),
+            );
             let blacklist_guard = BlacklistRaidGuard::new(
                 RaidBlacklistStore::new(pool.clone()),
                 token_provider,

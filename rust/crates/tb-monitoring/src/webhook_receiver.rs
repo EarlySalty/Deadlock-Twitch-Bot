@@ -69,12 +69,7 @@ impl WebhookReceiver {
     /// `set_revocation_callback`). Wird beim Aufbau in `bin/tb-bot` mit dem
     /// `SubscriptionManager` gefüttert, damit widerrufene Subs zur Laufzeit
     /// untracked + beim nächsten Reconcile neu angelegt werden.
-    ///
-    /// WIRING-TODO(P1.17/P1.18/P1.20): In `bin/tb-bot/src/main.rs:810`
-    /// (`WebhookReceiver::new`) den vorhandenen `SubscriptionManager`-`Arc`
-    /// via `.with_revocation_sink(subscription_manager.clone())` durchreichen,
-    /// damit Core-Sub-Revocations (stream.online/offline/channel.update) zur
-    /// Laufzeit selbstheilen statt erst beim Prozess-Neustart.
+    /// Live verdrahtet in `bin/tb-bot` (`with_revocation_sink`, main.rs).
     #[must_use]
     pub fn with_revocation_sink(mut self, sink: Arc<dyn RevocationSink>) -> Self {
         self.revocation_sink = Some(sink);

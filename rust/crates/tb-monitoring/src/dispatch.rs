@@ -222,20 +222,15 @@ pub trait EventSubHooks: Send + Sync {
     }
 
     /// Routing-Punkt B8-00: `channel.chat.notification` mit `notice_type=raid`
-    /// (Raid-Arrival am Ziel, B7-01). Default no-op.
-    ///
-    /// WIRING-TODO(P1.12): In `bin/tb-bot` einen konkreten `EventSubHooks`-Impl
-    /// bereitstellen, der hier `tb_raid::signal_correlation::plan_chat_notification`
-    /// aufruft (Arrival-Korrelation / Pending-Bestätigung / Orphan-Storage) statt
-    /// den Raid-Arrival still zu verwerfen. Der Demux liefert das Event bereits
-    /// hierher (route_chat_notification → on_chat_raid_notification).
+    /// (Raid-Arrival am Ziel, B7-01). Default no-op; der Prod-Impl
+    /// `RaidEventSubHooks` (bin/tb-bot/src/eventsub_hooks.rs) überschreibt das und
+    /// ruft `tb_raid::signal_correlation::plan_chat_notification` auf.
     async fn on_chat_raid_notification(&self, _event: &Value, _message_id: Option<&str>) {}
 
     /// Routing-Punkt B8-00: `channel.chat.notification` mit `notice_type=unraid`
-    /// (Raid-Withdraw / Source-Self-Unraid, B7-02/B7-03). Default no-op.
-    ///
-    /// WIRING-TODO(P1.12): In `bin/tb-bot` denselben `EventSubHooks`-Impl an
-    /// `tb_raid::signal_correlation::plan_chat_unraid` koppeln.
+    /// (Raid-Withdraw / Source-Self-Unraid, B7-02/B7-03). Default no-op; der
+    /// Prod-Impl `RaidEventSubHooks` koppelt das an
+    /// `tb_raid::signal_correlation::plan_chat_unraid`.
     async fn on_chat_unraid_notification(&self, _event: &Value, _message_id: Option<&str>) {}
 }
 

@@ -19,9 +19,16 @@ use tb_chat::{ChatApi, SendOutcome};
 use crate::poller::tracked::TrackedEntry;
 use crate::stream::StreamSnapshot;
 
-/// User-sichtbarer Chat-Text für P2.60. Absichtlich nur Platzhalter, bis der
-/// finale deutsche Copytext fachlich freigegeben ist.
-pub const REAUTH_REMINDER_TEXT: &str = "Platzhalter";
+/// User-sichtbarer Chat-Text für den Poller-basierten Re-Auth-Reminder.
+/// Byte-identisch zum kanonischen EventSub-Pfad (`bin/tb-bot/src/reauth_reminder.rs`).
+///
+/// ⚠️ NICHT VERDRAHTEN: Der produktive Re-Auth-Reminder läuft über den EventSub-
+/// Go-Live-Pfad (`RaidEventSubHooks::on_stream_went_live` → `ReauthReminder`).
+/// Diesen Poller-Hook zusätzlich einzuhängen würde pro Go-Live einen ZWEITEN
+/// Reminder senden (eigener, getrennter In-Memory-Dedupe) — Doppel-Nachricht
+/// ohne Funktionsgewinn. Die Konstante bleibt korrekt befüllt, falls je ein
+/// EventSub-loses Setup einen geteilten DB-Dedupe bekommt.
+pub const REAUTH_REMINDER_TEXT: &str = "Kurze Erinnerung: Fuer den Raid-/Stats-Bot fehlt noch die neue Twitch-Autorisierung. Bitte im Dashboard einloggen und Twitch neu verbinden. Falls du die DM brauchst: Der Re-Auth-Link wurde dir bereits auf Discord geschickt.";
 
 const REAUTH_FALLBACK_DEDUPE_WINDOW: Duration = Duration::from_secs(300);
 
@@ -472,6 +479,6 @@ mod tests {
             sent[0],
             ("42".to_string(), REAUTH_REMINDER_TEXT.to_string())
         );
-        assert_eq!(REAUTH_REMINDER_TEXT, "Platzhalter");
+        assert!(REAUTH_REMINDER_TEXT.contains("Twitch-Autorisierung"));
     }
 }

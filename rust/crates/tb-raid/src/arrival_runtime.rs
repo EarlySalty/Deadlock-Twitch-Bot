@@ -9,7 +9,11 @@
 //! die Stores + den Confirm-Resolver (`live_state`-Reads) verdrahtet. So bleibt
 //! `tb-raid` von den Monitoring-Tabellen entkoppelt.
 
+use std::collections::BTreeMap;
 use std::sync::Arc;
+
+use serde_json::{json, Value};
+use tb_observability::RaidObservabilityService;
 
 use crate::pending_raids::PendingRaid;
 use crate::signal_correlation::{ActionData, RaidSignalPlan};
@@ -87,11 +91,23 @@ pub trait RaidArrivalSink: Send + Sync {
 /// Führt Korrelations-Pläne gegen einen [`RaidArrivalSink`] aus.
 pub struct RaidArrivalRuntime {
     sink: Arc<dyn RaidArrivalSink>,
+    observability: Option<Arc<RaidObservabilityService>>,
 }
 
 impl RaidArrivalRuntime {
     pub fn new(sink: Arc<dyn RaidArrivalSink>) -> Self {
-        Self { sink }
+        Self {
+            sink,
+            observability: None,
+        }
+    }
+
+    /// Verdrahtet Raid-Observability fuer Arrival-Emitter. Injiziert in der
+    /// Composition-Root `bin/tb-bot/src/main.rs` (RaidArrivalRuntime-Aufbau) (P2.44).
+    #[must_use]
+    pub fn with_observability(mut self, observability: Arc<RaidObservabilityService>) -> Self {
+        self.observability = Some(observability);
+        self
     }
 
     /// Führt alle Actions eines Plans der Reihe nach aus (wie Python).
@@ -164,6 +180,14 @@ impl RaidArrivalRuntime {
                         event_timestamp.as_deref(),
                     )
                     .await;
+                self.emit_orphan_chat_observability(
+                    to_broadcaster_id,
+                    to_broadcaster_login,
+                    from_broadcaster_id.as_deref(),
+                    from_broadcaster_login,
+                    *viewer_count,
+                    message_id.as_deref(),
+                );
             }
             ActionData::ConfirmPendingRaid {
                 signal_type,
@@ -215,5 +239,38 @@ impl RaidArrivalRuntime {
                     .await;
             }
         }
+    }
+
+    fn emit_orphan_chat_observability(
+        &self,
+        to_broadcaster_id: &str,
+        to_broadcaster_login: &str,
+        from_broadcaster_id: Option<&str>,
+        from_broadcaster_login: &str,
+        viewer_count: i32,
+        message_id: Option<&str>,
+    ) {
+        let Some(service) = &self.observability else {
+            return;
+        };
+        service.increment_counter("raid_orphan_chat_notification_total", 1);
+        let flow_id = service.next_flow_id("raid-orphan");
+        let mut details: BTreeMap<String, Value> = BTreeMap::new();
+        details.insert("viewer_count".to_string(), json!(viewer_count));
+        details.insert(
+            "message_id".to_string(),
+            message_id.map(|id| json!(id)).unwrap_or(Value::Null),
+        );
+        service.emit_event(
+            "raid",
+            &flow_id,
+            "orphan_chat",
+            "stored",
+            Some(from_broadcaster_login),
+            from_broadcaster_id,
+            Some(to_broadcaster_login),
+            Some(to_broadcaster_id),
+            details,
+        );
     }
 }

@@ -4,6 +4,8 @@
 
 use std::sync::{Arc, Mutex};
 
+use serde_json::json;
+use tb_observability::{EventSink, MillisSource, ObservabilityEvent, RaidObservabilityService};
 use tb_raid::arrival_runtime::{RaidArrivalRuntime, RaidArrivalSink};
 use tb_raid::pending_raids::PendingRaid;
 use tb_raid::signal_correlation::{
@@ -18,6 +20,25 @@ impl RecordingSink {
     fn names(&self) -> Vec<String> {
         self.calls.lock().unwrap().clone()
     }
+}
+
+#[derive(Default)]
+struct RecordingObservabilitySink {
+    events: Mutex<Vec<ObservabilityEvent>>,
+}
+impl RecordingObservabilitySink {
+    fn events(&self) -> Vec<ObservabilityEvent> {
+        self.events.lock().unwrap().clone()
+    }
+}
+impl EventSink for RecordingObservabilitySink {
+    fn emit(&self, event: &ObservabilityEvent) {
+        self.events.lock().unwrap().push(event.clone());
+    }
+}
+
+fn fixed_millis(value: u64) -> MillisSource {
+    Arc::new(move || value)
 }
 
 #[async_trait::async_trait]
@@ -193,23 +214,28 @@ fn chat_notification_input(pending: Option<PendingRaid>, from: &str) -> ChatNoti
 async fn chat_notification_match_confirmt_genau_einmal() {
     // Eingehende chat.notification-Raidmeldung mit passendem Pending → der
     // Arrival-Pfad (confirm_pending_raid) wird genau 1× dispatcht.
-    let plan = RaidSignalCorrelationService
-        .plan_chat_notification(chat_notification_input(Some(PendingRaid::new("src", "200")), "src"));
+    let plan = RaidSignalCorrelationService.plan_chat_notification(chat_notification_input(
+        Some(PendingRaid::new("src", "200")),
+        "src",
+    ));
     let sink = Arc::new(RecordingSink::default());
     RaidArrivalRuntime::new(sink.clone())
         .execute_plan(&plan)
         .await;
 
     let names = sink.names();
-    let confirms = names.iter().filter(|n| n.as_str() == "confirm_pending_raid").count();
+    let confirms = names
+        .iter()
+        .filter(|n| n.as_str() == "confirm_pending_raid")
+        .count();
     assert_eq!(confirms, 1, "chat.notification-Match → genau 1× confirm");
     assert!(!names.contains(&"store_orphan_chat_notification".to_string()));
 }
 
 #[tokio::test]
 async fn chat_notification_ohne_pending_ist_orphan_kein_confirm() {
-    let plan = RaidSignalCorrelationService
-        .plan_chat_notification(chat_notification_input(None, "src"));
+    let plan =
+        RaidSignalCorrelationService.plan_chat_notification(chat_notification_input(None, "src"));
     let sink = Arc::new(RecordingSink::default());
     RaidArrivalRuntime::new(sink.clone())
         .execute_plan(&plan)
@@ -221,6 +247,46 @@ async fn chat_notification_ohne_pending_ist_orphan_kein_confirm() {
         !names.contains(&"confirm_pending_raid".to_string()),
         "Orphan → kein confirm"
     );
+}
+
+#[tokio::test]
+async fn orphan_chat_notification_emittiert_observability_event_und_counter() {
+    let plan =
+        RaidSignalCorrelationService.plan_chat_notification(chat_notification_input(None, "src"));
+    let sink = Arc::new(RecordingSink::default());
+    let obs_sink = Arc::new(RecordingObservabilitySink::default());
+    let observability = Arc::new(RaidObservabilityService::with_millis_source(
+        Some(obs_sink.clone()),
+        fixed_millis(4444),
+    ));
+
+    RaidArrivalRuntime::new(sink.clone())
+        .with_observability(observability.clone())
+        .execute_plan(&plan)
+        .await;
+
+    assert!(sink
+        .names()
+        .contains(&"store_orphan_chat_notification".to_string()));
+    assert_eq!(
+        observability
+            .counters()
+            .get("raid_orphan_chat_notification_total"),
+        Some(&1)
+    );
+    let events = obs_sink.events();
+    assert_eq!(events.len(), 1);
+    let event = &events[0];
+    assert_eq!(event.flow_type, "raid");
+    assert_eq!(event.flow_id, "raid-orphan-4444-1");
+    assert_eq!(event.step, "orphan_chat");
+    assert_eq!(event.decision, "stored");
+    assert_eq!(event.from_broadcaster_login.as_deref(), Some("src"));
+    assert_eq!(event.from_broadcaster_id.as_deref(), Some("100"));
+    assert_eq!(event.to_broadcaster_login.as_deref(), Some("dst"));
+    assert_eq!(event.to_broadcaster_id.as_deref(), Some("200"));
+    assert_eq!(event.details.get("viewer_count"), Some(&json!(42)));
+    assert_eq!(event.details.get("message_id"), Some(&json!("msg-1")));
 }
 
 #[tokio::test]

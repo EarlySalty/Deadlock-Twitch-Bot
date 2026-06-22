@@ -360,12 +360,7 @@ impl SubscriptionManager {
     /// Verdrahtet den Mod-Provisioner für die 403-Selbstheilung im Chat-Pfad
     /// (Python `_ensure_bot_is_mod`). Ohne ihn bleibt es beim Alt-Verhalten
     /// (403 → permanenter perm_failed-Eintrag, kein Retry bis Neustart).
-    ///
-    /// WIRING-TODO(P1.2): In `bin/tb-bot` beim Aufbau des `SubscriptionManager`
-    /// einen `ModeratorProvisioner` durchreichen, der
-    /// `tb_transport_twitch::HelixClient::add_channel_moderator` (Broadcaster-
-    /// Token) aufruft — sonst heilt ein Laufzeit-403 (Bot demoddet) den Chat-Join
-    /// nicht selbst.
+    /// Live verdrahtet in `bin/tb-bot` (`with_moderator_provisioner`, main.rs).
     #[must_use]
     pub fn with_moderator_provisioner(
         mut self,

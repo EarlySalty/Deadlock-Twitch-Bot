@@ -28,6 +28,7 @@ tb-knowledge        = { workspace = true }
 tb-tips             = { workspace = true }
 tb-monitoring       = { workspace = true }
 tb-raid             = { workspace = true }
+tb-observability    = { workspace = true }
 tb-transport-discord = { workspace = true }
 tb-transport-twitch = { workspace = true }
 tb-social-media          = { workspace = true }

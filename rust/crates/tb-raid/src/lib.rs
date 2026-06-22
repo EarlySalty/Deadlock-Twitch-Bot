@@ -103,7 +103,7 @@ pub use external_recruitment_store::{
 };
 pub use auto_raid_pipeline::{
     ArrivalReadiness, AutoRaidPipeline, AutoRaidPipelineOutcome, AutoRaidRequest, FallbackStreamSource,
-    FollowerEnricher, OrphanChatNotification, OrphanReplay,
+    FollowerEnricher, FollowersEnrichmentObservation, OrphanChatNotification, OrphanReplay,
 };
 pub use candidate_selection::{
     is_retryable_raid_error, select_by_score, select_fairest, FairnessCandidate, ScoredCandidate,
