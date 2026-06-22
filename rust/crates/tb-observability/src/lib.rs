@@ -1,8 +1,27 @@
-//! Observability-Setup: strukturiertes Logging via `tracing`.
+//! Observability-Setup: strukturiertes Logging via `tracing` plus der
+//! Observability-Event-Writer und die Flow-Services (raid + analytics).
 //!
-//! Phase 0b: nur Subscriber-Init (fmt + EnvFilter via `RUST_LOG`). Der
-//! Observability-Event-Writer (mpsc → `twitch_observability_events`) kommt mit
-//! der Monitoring-Phase.
+//! - `init_tracing`: Subscriber-Init (fmt + EnvFilter via `RUST_LOG`).
+//! - [`ObservabilityWriter`]: deferred mpsc-Writer → `twitch_observability_events`.
+//! - [`RaidObservabilityService`]: Raid-Flow-Events, Counter, Flow-IDs.
+//! - [`AnalyticsObservabilityService`]: Analytics-Decision-Logging + Snapshot.
+
+pub mod analytics_service;
+pub mod event;
+pub mod raid_service;
+pub mod value;
+pub mod writer;
+
+pub use analytics_service::{
+    AnalyticsDecision, AnalyticsObservabilityService, AnalyticsObservabilitySnapshot,
+};
+pub use event::{ObservabilityEvent, StoragePayload};
+pub use raid_service::{EventSink, MillisSource, RaidObservabilityService};
+pub use value::{format_fields, normalize_value, safe_observability_text, DEFAULT_VALUE_LIMIT};
+pub use writer::{
+    sanitize_payload, ObservabilityRow, ObservabilityWriter, DEFAULT_BATCH_SIZE,
+    DEFAULT_QUEUE_CAPACITY,
+};
 
 use tracing_subscriber::{fmt, prelude::*, EnvFilter};
 
