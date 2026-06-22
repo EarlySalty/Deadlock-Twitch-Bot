@@ -13,6 +13,7 @@
 //! Port: `bot/chat/moderation.py:1293–1903`, `bot/chat/timeout_guard.py`.
 
 use crate::api::{BanOutcome, ChatApi};
+use crate::commands::{AutobanEntry, LastAutobanStore};
 use crate::token::BotTokenManager;
 use crate::types::SendOutcome;
 use async_trait::async_trait;
@@ -117,10 +118,7 @@ impl ChatApi for HelixChatClient {
         let sender_id = self.token_mgr.bot_user_id().await;
         for attempt in 0..2usize {
             let force = attempt > 0;
-            let token = self
-                .token_mgr
-                .get_valid_token(force)
-                .await?;
+            let token = self.token_mgr.get_valid_token(force).await?;
             match self
                 .helix
                 .send_chat_message(broadcaster_id, &sender_id, message, &token)
@@ -209,11 +207,7 @@ impl ChatApi for HelixChatClient {
     }
 
     /// Hebt Ban auf — 2-Attempt bei 401.
-    async fn unban_user(
-        &self,
-        broadcaster_id: &str,
-        target_user_id: &str,
-    ) -> Result<bool, String> {
+    async fn unban_user(&self, broadcaster_id: &str, target_user_id: &str) -> Result<bool, String> {
         let moderator_id = self.token_mgr.bot_user_id().await;
         for attempt in 0..2usize {
             let force = attempt > 0;
@@ -239,11 +233,7 @@ impl ChatApi for HelixChatClient {
     }
 
     /// Löscht Nachricht — 2-Attempt bei 401.
-    async fn delete_message(
-        &self,
-        broadcaster_id: &str,
-        message_id: &str,
-    ) -> Result<bool, String> {
+    async fn delete_message(&self, broadcaster_id: &str, message_id: &str) -> Result<bool, String> {
         let moderator_id = self.token_mgr.bot_user_id().await;
         for attempt in 0..2usize {
             let force = attempt > 0;
@@ -269,10 +259,7 @@ impl ChatApi for HelixChatClient {
     }
 
     /// Account-Erstellungsdatum via Helix GET /users?id=.
-    async fn user_created_at(
-        &self,
-        user_id: &str,
-    ) -> Result<Option<DateTime<Utc>>, String> {
+    async fn user_created_at(&self, user_id: &str) -> Result<Option<DateTime<Utc>>, String> {
         let token = self.token_mgr.get_valid_token(false).await?;
         let users = self
             .helix
@@ -325,7 +312,14 @@ impl HelixChatClient {
             };
             match self
                 .helix
-                .ban_user(broadcaster_id, moderator_id, user_id, reason, duration_secs, &token)
+                .ban_user(
+                    broadcaster_id,
+                    moderator_id,
+                    user_id,
+                    reason,
+                    duration_secs,
+                    &token,
+                )
                 .await
             {
                 Ok(BanOutcome::Failed { status: 401, body }) if attempt == 0 => {
@@ -442,7 +436,11 @@ impl ModerationEngine {
         }
 
         // Schritt 2: Ban (moderation.py Z. 1679–1816)
-        let outcome = match self.api.ban_user(broadcaster_id, chatter_id, reason_text).await {
+        let outcome = match self
+            .api
+            .ban_user(broadcaster_id, chatter_id, reason_text)
+            .await
+        {
             Ok(o) => o,
             Err(e) => {
                 warn!("AutoBan Fehler: {e}");
@@ -473,9 +471,7 @@ impl ModerationEngine {
                 true
             }
             BanOutcome::Forbidden => {
-                warn!(
-                    "AutoBan: Bot ist wahrscheinlich kein Moderator in #{channel_login}"
-                );
+                warn!("AutoBan: Bot ist wahrscheinlich kein Moderator in #{channel_login}");
                 false
             }
             BanOutcome::Failed { status, body } => {
@@ -515,16 +511,74 @@ impl ModerationEngine {
 
     /// Gibt den letzten AutoBan-Eintrag für einen Kanal zurück.
     ///
-    /// Port: `self._last_autoban.get(channel_key)` (commands.py Z. 224).
-    pub fn last_autoban(&self, channel_login: &str) -> Option<AutoBanRecord> {
+    /// Port: `self._last_autoban.get(channel_key)` plus Restart-Fallback aus
+    /// `tb_chat_autoban_log` (commands.py Z. 224).
+    pub async fn last_autoban(&self, channel_login: &str) -> Option<AutoBanRecord> {
         let key = channel_login.to_lowercase();
-        self.last_autoban.lock().unwrap().get(&key).cloned()
+        if let Some(record) = self.last_autoban.lock().unwrap().get(&key).cloned() {
+            return Some(record);
+        }
+
+        self.last_autoban_db_fallback(&key).await
+    }
+
+    async fn last_autoban_db_fallback(&self, key: &str) -> Option<AutoBanRecord> {
+        sqlx::query_as::<
+            _,
+            (
+                Option<String>,
+                Option<String>,
+                Option<String>,
+                DateTime<Utc>,
+            ),
+        >(
+            r#"SELECT chatter_id, chatter_login, content, banned_at
+               FROM tb_chat_autoban_log
+               WHERE channel_login = $1
+               ORDER BY banned_at DESC
+               LIMIT 1"#,
+        )
+        .bind(key)
+        .fetch_optional(&self.pool)
+        .await
+        .map_err(|e| debug!("last_autoban DB-Fallback fehlgeschlagen: {e}"))
+        .ok()
+        .flatten()
+        .and_then(|(user_id, login, content, ts)| {
+            self.cache_autoban_record(key, user_id, login, content, ts)
+        })
+    }
+
+    fn cache_autoban_record(
+        &self,
+        key: &str,
+        user_id: Option<String>,
+        login: Option<String>,
+        content: Option<String>,
+        ts: DateTime<Utc>,
+    ) -> Option<AutoBanRecord> {
+        let user_id = user_id.unwrap_or_default();
+        if user_id.trim().is_empty() {
+            return None;
+        }
+
+        let record = AutoBanRecord {
+            user_id,
+            login: login.unwrap_or_default(),
+            content: content.unwrap_or_default(),
+            ts,
+        };
+        self.last_autoban
+            .lock()
+            .unwrap()
+            .insert(key.to_string(), record.clone());
+        Some(record)
     }
 
     /// Speichert den AutoBan In-Memory und in der DB.
     ///
-    /// DB-Tabelle: `tb_chat_autoban_log` (eigene kleine Tabelle, nicht in Prod-Schema
-    /// vorhanden — wird durch `apply_ddl` in Tests angelegt).
+    /// DB-Tabelle: `tb_chat_autoban_log` (wird beim Bot-Start durch
+    /// `ensure_autoban_log_table` angelegt).
     /// Port: `self._last_autoban[channel_key] = {...}` (moderation.py Z. 235).
     async fn persist_autoban_record(
         &self,
@@ -547,7 +601,7 @@ impl ModerationEngine {
             guard.insert(key.clone(), record.clone());
         }
 
-        // DB — eigene Tabelle (muss in Migrations-DDL angelegt werden)
+        // DB — Runtime-Schema aus `ensure_autoban_log_table`.
         let ts_str = record.ts.to_rfc3339();
         let content_trunc: String = record.content.clone();
         if let Err(e) = sqlx::query(
@@ -603,6 +657,18 @@ impl ModerationEngine {
         {
             debug!("record_ban_event_db DB-Fehler: {e}");
         }
+    }
+}
+
+#[async_trait]
+impl LastAutobanStore for ModerationEngine {
+    async fn last_autoban(&self, channel_key: &str) -> Option<AutobanEntry> {
+        self.last_autoban(channel_key)
+            .await
+            .map(|record| AutobanEntry {
+                user_id: record.user_id,
+                login: record.login,
+            })
     }
 }
 
@@ -769,11 +835,8 @@ pub struct SuppressionEntry {
 #[async_trait]
 pub trait OutboundSuppressionCheck: Send + Sync {
     /// Gibt `Some(entry)` zurück wenn `(target_login, source)` aktuell unterdrückt ist.
-    async fn check_suppression(
-        &self,
-        target_login: &str,
-        source: &str,
-    ) -> Option<SuppressionEntry>;
+    async fn check_suppression(&self, target_login: &str, source: &str)
+        -> Option<SuppressionEntry>;
 }
 
 /// Liest und schreibt `twitch_outbound_chat_suppressions`.
@@ -900,7 +963,17 @@ impl OutboundSuppressionCheck for OutboundSuppressionStore {
         }
         let now = Utc::now();
         // Prod: suppressed_until ist TIMESTAMPTZ → DateTime<Utc> binden
-        let row = sqlx::query_as::<_, (String, Option<String>, String, String, Option<String>, DateTime<Utc>)>(
+        let row = sqlx::query_as::<
+            _,
+            (
+                String,
+                Option<String>,
+                String,
+                String,
+                Option<String>,
+                DateTime<Utc>,
+            ),
+        >(
             r#"SELECT target_login, target_id, source, reason_code, reason_detail, suppressed_until
                FROM twitch_outbound_chat_suppressions
                WHERE target_login = $1 AND source = $2 AND suppressed_until > $3
@@ -986,6 +1059,8 @@ impl crate::promos::OutboundSuppressionWriter for OutboundSuppressionStore {
 mod tests {
     use super::*;
     use crate::types::SendOutcome;
+    use sqlx::postgres::{PgConnectOptions, PgPoolOptions};
+    use std::str::FromStr;
     use std::sync::atomic::{AtomicUsize, Ordering};
     use std::sync::Arc;
 
@@ -1017,20 +1092,10 @@ mod tests {
             self.send_calls.fetch_add(1, Ordering::SeqCst);
             Ok(SendOutcome::Sent)
         }
-        async fn send_announcement(
-            &self,
-            _b: &str,
-            _m: &str,
-            _c: &str,
-        ) -> Result<bool, String> {
+        async fn send_announcement(&self, _b: &str, _m: &str, _c: &str) -> Result<bool, String> {
             Ok(true)
         }
-        async fn ban_user(
-            &self,
-            _b: &str,
-            _u: &str,
-            _r: &str,
-        ) -> Result<BanOutcome, String> {
+        async fn ban_user(&self, _b: &str, _u: &str, _r: &str) -> Result<BanOutcome, String> {
             self.ban_calls.fetch_add(1, Ordering::SeqCst);
             Ok(self.ban_result.lock().unwrap().clone())
         }
@@ -1050,10 +1115,7 @@ mod tests {
             self.delete_calls.fetch_add(1, Ordering::SeqCst);
             Ok(true)
         }
-        async fn user_created_at(
-            &self,
-            _u: &str,
-        ) -> Result<Option<chrono::DateTime<Utc>>, String> {
+        async fn user_created_at(&self, _u: &str) -> Result<Option<chrono::DateTime<Utc>>, String> {
             Ok(None)
         }
         async fn resolve_user_id(&self, _l: &str) -> Result<Option<String>, String> {
@@ -1067,6 +1129,42 @@ mod tests {
     // -----------------------------------------------------------------------
     // ModerationEngine-Tests
     // -----------------------------------------------------------------------
+
+    async fn pg_pool_in_schema_or_skip(schema: &str) -> Option<PgPool> {
+        let dsn = match std::env::var("TB_TEST_DATABASE_URL") {
+            Ok(dsn) => dsn,
+            Err(_) => {
+                eprintln!("SKIP: TB_TEST_DATABASE_URL nicht gesetzt");
+                return None;
+            }
+        };
+
+        let admin = PgPoolOptions::new()
+            .max_connections(1)
+            .connect(&dsn)
+            .await
+            .unwrap();
+        sqlx::query(&format!("DROP SCHEMA IF EXISTS {schema} CASCADE"))
+            .execute(&admin)
+            .await
+            .unwrap();
+        sqlx::query(&format!("CREATE SCHEMA {schema}"))
+            .execute(&admin)
+            .await
+            .unwrap();
+        admin.close().await;
+
+        let opts = PgConnectOptions::from_str(&dsn)
+            .unwrap()
+            .options([("search_path", schema)]);
+        Some(
+            PgPoolOptions::new()
+                .max_connections(4)
+                .connect_with(opts)
+                .await
+                .unwrap(),
+        )
+    }
 
     #[tokio::test]
     async fn autoban_ruft_delete_und_ban_auf() {
@@ -1091,8 +1189,57 @@ mod tests {
             })
             .await;
         assert!(result, "AutoBan soll true zurückgeben");
-        assert_eq!(api.delete_calls.load(Ordering::SeqCst), 1, "Delete aufgerufen");
+        assert_eq!(
+            api.delete_calls.load(Ordering::SeqCst),
+            1,
+            "Delete aufgerufen"
+        );
         assert_eq!(api.ban_calls.load(Ordering::SeqCst), 1, "Ban aufgerufen");
+    }
+
+    #[tokio::test]
+    async fn last_autoban_laed_restart_fallback_aus_db() {
+        let schema = format!("autoban_restart_{}", std::process::id());
+        let Some(pool) = pg_pool_in_schema_or_skip(&schema).await else {
+            return;
+        };
+        sqlx::query(
+            r#"CREATE TABLE tb_chat_autoban_log (
+                id BIGSERIAL PRIMARY KEY,
+                channel_login TEXT NOT NULL,
+                chatter_id TEXT NOT NULL,
+                chatter_login TEXT NOT NULL,
+                content TEXT,
+                banned_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+            )"#,
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+        sqlx::query(
+            r#"INSERT INTO tb_chat_autoban_log
+               (channel_login, chatter_id, chatter_login, content, banned_at)
+               VALUES
+               ('restartkanal', 'u-old', 'old_spammer', 'alter spam', NOW() - INTERVAL '5 minutes'),
+               ('restartkanal', 'u-new', 'new_spammer', 'neuer spam', NOW())"#,
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+
+        let engine =
+            ModerationEngine::new(MockApi::with_ban_result(BanOutcome::Banned), pool.clone());
+        let record = engine.last_autoban("RestartKanal").await.unwrap();
+        assert_eq!(record.user_id, "u-new");
+        assert_eq!(record.login, "new_spammer");
+        assert_eq!(record.content, "neuer spam");
+
+        sqlx::query("DROP TABLE tb_chat_autoban_log")
+            .execute(&pool)
+            .await
+            .unwrap();
+        let cached = engine.last_autoban("restartkanal").await.unwrap();
+        assert_eq!(cached.user_id, "u-new");
     }
 
     #[tokio::test]
@@ -1115,7 +1262,11 @@ mod tests {
                 silent: false,
             })
             .await;
-        assert_eq!(api.ban_calls.load(Ordering::SeqCst), 0, "kein Ban bei ban=false");
+        assert_eq!(
+            api.ban_calls.load(Ordering::SeqCst),
+            0,
+            "kein Ban bei ban=false"
+        );
         assert_eq!(api.delete_calls.load(Ordering::SeqCst), 1);
     }
 
@@ -1231,7 +1382,10 @@ mod tests {
         let guard = TimeoutGuard::new();
         guard.record_timeout("pitchkanal2");
         assert!(guard.consume_stream_start_pitch("pitchkanal2"));
-        assert!(!guard.consume_stream_start_pitch("pitchkanal2"), "zweites Consume: false");
+        assert!(
+            !guard.consume_stream_start_pitch("pitchkanal2"),
+            "zweites Consume: false"
+        );
     }
 
     // -----------------------------------------------------------------------
