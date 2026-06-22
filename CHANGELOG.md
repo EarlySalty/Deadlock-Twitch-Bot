@@ -1,3 +1,11 @@
+## #258 — Aussagekräftige Diagnose für Raid- und Follower-Abläufe
+
+**Problem:** Das in #255 angelegte Beobachtungs-Subsystem hatte noch keine Zulieferer: Raid-Abläufe und die Follower-Abfrage hinterließen nur freien Logtext, aber keine strukturierten, über einen Ablauf hinweg zusammenführbaren Diagnose-Ereignisse — der Diagnosespeicher blieb leer. Außerdem wurden ausgelöste Raids, deren Ankunft am Ziel nie bestätigt wurde, nicht regelmäßig aufgeräumt und konnten sich ansammeln.
+
+**Änderung:** Raid-Abläufe melden jetzt an jedem Schritt ein strukturiertes Diagnose-Ereignis mit gemeinsamer Ablauf-Kennung — vom Start über die Zielauswahl (inklusive Auswahl- und Ausführungsdauer) bis zu Erfolg oder Fehlschlag — und führen Zähler (gestartete Raids sowie Ankunfts-Chat-Hinweise ohne zugehöriges Raid-Ereignis). Die Follower-Abfrage protokolliert ihre Abschlussentscheidung strukturiert (Erfolg, HTTP-Fehler oder fehlgeschlagene Anfrage). Diese Ereignisse fließen gebündelt und asynchron in den Diagnosespeicher aus #255. Zusätzlich räumt ein periodischer Lauf (alle fünf Minuten) ausgelöste Raids weg, deren Ankunft nach fünf Minuten nicht bestätigt wurde.
+
+**Ergebnis:** Für Raids und Follower-Abfragen liegen jetzt zusammenführbare Ablauf-Diagnosen und Zähler vor statt verstreuter Logzeilen; der Diagnosespeicher füllt sich mit echten Daten, und liegengebliebene, nie bestätigte Raids sammeln sich nicht mehr an. Damit sind weitere Umbau-Reste geschlossen.
+
 ## #257 — Zuverlässigere Ereignis-Verarbeitung und genauere Live-Erkennung
 
 **Problem:** Nach dem Sprachumbau fehlten in der Verarbeitung der Twitch-Ereignisse (EventSub) noch mehrere Robustheits-Details der alten Version. Bei manchen Ereignissen wurde der Kanal nicht zuverlässig erkannt, eingehende Raids konnten bei einem kurzen Verarbeitungsfehler verloren gehen, unbekannte Ereignistypen verschwanden stillschweigend, und kurzzeitige Datenbankaussetzer beim Schreiben führten sofort zum Abbruch. Außerdem ordnete die Zuschauer-Verlaufskurve Werbepausen nicht zu und die Zuordnung von Streamern zu ihrer Twitch-Kennung war in Randfällen ungenau.
