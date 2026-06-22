@@ -297,22 +297,19 @@ async fn load_active_partner_row(
 }
 
 /// Prüft, ob eine **nicht-aktive** Partner-Zeile den OAuth-Followup dauerhaft
-/// blockiert: `technical_pause_reason` ∈ {blocked, bot_banned} oder
-/// `admin_archived_at IS NOT NULL` (ausgeschieden/archiviert).
+/// blockiert: `technical_pause_reason` ∈ {blocked, bot_banned}.
 ///
 /// Dient als zweite Schranke in `promote_streamer_to_partner`: der
 /// aktive-Zeile-Guard (`hard_pause_reason` auf `active_row`) deckt nur den Fall
 /// ab, in dem noch eine aktive Zeile existiert. Ist der Partner hingegen
 /// ausgeschieden (status ≠ 'active'), gibt es keine aktive Zeile, und ein
-/// Re-OAuth würde ohne diesen Guard fälschlich eine neue aktive Zeile anlegen.
+/// Re-OAuth darf nur administrative Hard-Kills nicht umgehen. Reine
+/// `admin_archived_at`-Historie blockiert Reauth nicht.
 async fn load_inactive_block_reason(
     tx: &mut Transaction<'_, Postgres>,
     twitch_user_id: &str,
     twitch_login: &str,
 ) -> Result<Option<String>, sqlx::Error> {
-    // Gibt `technical_pause_reason` zurück — NULL bei reiner Archivierung.
-    // Das WHERE filtert bereits auf genau die Block-Fälle, die uns interessieren;
-    // eine Some(None)-Zeile bedeutet "durch admin_archived_at geblockt".
     let row: Option<Option<String>> = sqlx::query_scalar(
         r#"
         SELECT technical_pause_reason
@@ -320,10 +317,7 @@ async fn load_inactive_block_reason(
          WHERE (($1 <> '' AND twitch_user_id = $1)
              OR ($2 <> '' AND LOWER(twitch_login) = $2))
            AND status <> 'active'
-           AND (
-               LOWER(TRIM(COALESCE(technical_pause_reason, ''))) = ANY(ARRAY['blocked', 'bot_banned'])
-               OR admin_archived_at IS NOT NULL
-           )
+           AND LOWER(TRIM(COALESCE(technical_pause_reason, ''))) = ANY(ARRAY['blocked', 'bot_banned'])
          ORDER BY id DESC
          LIMIT 1
         "#,
@@ -333,15 +327,7 @@ async fn load_inactive_block_reason(
     .fetch_optional(&mut **tx)
     .await?;
 
-    Ok(row.map(|pause_reason| {
-        if let Some(p) = pause_reason {
-            let lower = p.trim().to_lowercase();
-            if HARD_PAUSE_REASONS.contains(&lower.as_str()) {
-                return lower;
-            }
-        }
-        "admin_archived".to_string()
-    }))
+    Ok(row.and_then(|pause_reason| hard_pause_reason(pause_reason.as_deref())))
 }
 
 /// Python `upsert_streamer_identity` (`partner_registry.py:499`).

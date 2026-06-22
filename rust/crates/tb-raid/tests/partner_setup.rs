@@ -525,6 +525,49 @@ async fn weiche_pause_wird_normal_reaktiviert() {
     assert_eq!((opt_out, raid), (0, 1), "voll reaktiviert");
 }
 
+#[tokio::test]
+async fn inaktive_admin_archivierung_blockiert_reauth_nicht() {
+    let pool = pool_or_skip!("ps_inactive_admin_archived");
+    sqlx::query(
+        "INSERT INTO twitch_partners (twitch_user_id, twitch_login, status,
+            manual_partner_opt_out, raid_bot_enabled, admin_archived_at)
+         VALUES ('1004', 'archiviert', 'archived', 1, 0, '2026-01-01T00:00:00+00:00')",
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
+
+    let result = {
+        let mut tx = pool.begin().await.unwrap();
+        let r = promote_streamer_to_partner(
+            &mut tx,
+            &default_args("archiviert", "1004"),
+            chrono::Utc::now(),
+        )
+        .await
+        .unwrap();
+        tx.commit().await.unwrap();
+        r
+    };
+    assert!(
+        result.reactivated,
+        "admin_archived_at darf Reauth nicht blocken"
+    );
+    assert_eq!(result.hard_pause_reason, None);
+
+    let (status, opt_out, raid, pause): (String, i32, i32, Option<String>) = sqlx::query_as(
+        "SELECT status, manual_partner_opt_out, raid_bot_enabled, technical_pause_reason
+         FROM twitch_partners
+         WHERE twitch_user_id = '1004' AND status = 'active'",
+    )
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!(status, "active");
+    assert_eq!((opt_out, raid), (0, 1));
+    assert_eq!(pause, None);
+}
+
 // ---------------------------------------------------------------------------
 // record_first_login
 // ---------------------------------------------------------------------------

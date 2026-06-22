@@ -566,9 +566,10 @@ struct HistoryPartnerRow {
 ///    `admin_archived_at`, `technical_pause_reason` nullen, `partnered_at=now`,
 ///    `manual_partner_opt_out=0`, `manual_verified_at` auf `now` falls leer.
 ///    Alle übrigen Partner-Spalten (`silent_*`, `live_ping_*`,
-///    `raid_bot_enabled`, `require_discord_link`, Verify-permanent/until) bleiben
+///    `require_discord_link`, Verify-permanent/until) bleiben
 ///    auf der Zeile erhalten — Python liest sie aus der Historienzeile und
 ///    schreibt sie unverändert zurück; auf derselben Zeile ist das ein No-Touch.
+///    `raid_bot_enabled` wird bei Reaktivierung explizit wieder eingeschaltet.
 /// 4. Nur wenn der alte Status `archived` (nicht `departnered`) war: Raid-Auth
 ///    wiederherstellen (`raid_enabled=TRUE`), aber nur wenn `needs_reauth`
 ///    nicht gesetzt ist (sonst bleibt die Auth deaktiviert).
@@ -624,6 +625,7 @@ pub async fn reactivate_partner(
             admin_archived_at = NULL,
             technical_pause_reason = NULL,
             manual_partner_opt_out = 0,
+            raid_bot_enabled = 1,
             manual_verified_at = COALESCE(NULLIF(manual_verified_at, ''), $2),
             partnered_at = $2
         WHERE id = $3
@@ -1406,10 +1408,13 @@ mod tests {
             admin_archived_at: Option<String>,
             technical_pause_reason: Option<String>,
             manual_partner_opt_out: Option<i32>,
+            raid_bot_enabled: Option<i32>,
             silent_ban: Option<i32>,
         }
         let s: State = sqlx::query_as(
-            "SELECT status, departnered_at, admin_archived_at, technical_pause_reason, manual_partner_opt_out, silent_ban FROM twitch_partners WHERE id = 1",
+            "SELECT status, departnered_at, admin_archived_at, technical_pause_reason,
+                    manual_partner_opt_out, raid_bot_enabled, silent_ban
+             FROM twitch_partners WHERE id = 1",
         )
         .fetch_one(&pool)
         .await
@@ -1422,6 +1427,7 @@ mod tests {
             "technical_pause_reason genullt"
         );
         assert_eq!(s.manual_partner_opt_out, Some(0), "opt_out zurückgesetzt");
+        assert_eq!(s.raid_bot_enabled, Some(1), "raid_bot_enabled reaktiviert");
         assert_eq!(
             s.silent_ban,
             Some(1),

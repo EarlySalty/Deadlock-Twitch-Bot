@@ -72,7 +72,8 @@ async fn pool_in_schema(dsn: &str, schema: &str) -> PgPool {
     .unwrap();
     sqlx::query(
         "CREATE TABLE twitch_partners (
-            twitch_user_id TEXT, technical_pause_reason TEXT
+            twitch_user_id TEXT, technical_pause_reason TEXT,
+            raid_bot_enabled INTEGER DEFAULT 0
         )",
     )
     .execute(&pool)
@@ -189,19 +190,25 @@ async fn reauth_entfernt_blacklist_und_loest_token_error_pause() {
     let writer = AuthWriter::new(pool.clone(), cipher());
 
     // Ausgangslage: wegen invalid_grant blacklisteter + technisch pausierter Partner.
-    sqlx::query("INSERT INTO twitch_token_blacklist (twitch_user_id, twitch_login) VALUES ('42', 'drag')")
-        .execute(&pool)
-        .await
-        .unwrap();
     sqlx::query(
-        "INSERT INTO twitch_partners (twitch_user_id, technical_pause_reason) VALUES ('42', 'token_error')",
+        "INSERT INTO twitch_token_blacklist (twitch_user_id, twitch_login) VALUES ('42', 'drag')",
     )
+    .execute(&pool)
+    .await
+    .unwrap();
+    let legacy_token_error_reason = format!("{}_expired", "token_error");
+    sqlx::query(
+        "INSERT INTO twitch_partners (twitch_user_id, technical_pause_reason, raid_bot_enabled)
+         VALUES ('42', $1, 0)",
+    )
+    .bind(legacy_token_error_reason)
     .execute(&pool)
     .await
     .unwrap();
     // Fremder Partner mit anderem Pause-Grund bleibt unangetastet.
     sqlx::query(
-        "INSERT INTO twitch_partners (twitch_user_id, technical_pause_reason) VALUES ('99', 'bot_banned')",
+        "INSERT INTO twitch_partners (twitch_user_id, technical_pause_reason, raid_bot_enabled)
+         VALUES ('99', 'bot_banned', 0)",
     )
     .execute(&pool)
     .await
@@ -214,23 +221,66 @@ async fn reauth_entfernt_blacklist_und_loest_token_error_pause() {
         .unwrap();
 
     // Blacklist-Eintrag entfernt.
-    let bl: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM twitch_token_blacklist WHERE twitch_user_id='42'")
-        .fetch_one(&pool)
-        .await
-        .unwrap();
+    let bl: i64 =
+        sqlx::query_scalar("SELECT COUNT(*) FROM twitch_token_blacklist WHERE twitch_user_id='42'")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
     assert_eq!(bl, 0, "Blacklist-Eintrag nach Re-Auth gelöscht");
 
-    // technical_pause_reason='token_error' aufgehoben, fremder Grund unverändert.
-    let pause: Option<String> =
-        sqlx::query_scalar("SELECT technical_pause_reason FROM twitch_partners WHERE twitch_user_id='42'")
+    // technical_pause_reason='token_error*' aufgehoben und Raid wieder aktiviert.
+    let (pause, raid_enabled): (Option<String>, Option<i32>) =
+        sqlx::query_as("SELECT technical_pause_reason, raid_bot_enabled FROM twitch_partners WHERE twitch_user_id='42'")
             .fetch_one(&pool)
             .await
             .unwrap();
     assert_eq!(pause, None, "token_error-Pause aufgehoben");
-    let other: Option<String> =
-        sqlx::query_scalar("SELECT technical_pause_reason FROM twitch_partners WHERE twitch_user_id='99'")
-            .fetch_one(&pool)
-            .await
-            .unwrap();
-    assert_eq!(other.as_deref(), Some("bot_banned"), "fremder Pause-Grund unangetastet");
+    assert_eq!(
+        raid_enabled,
+        Some(1),
+        "raid_bot_enabled nach Re-Auth geheilt"
+    );
+    let other: Option<String> = sqlx::query_scalar(
+        "SELECT technical_pause_reason FROM twitch_partners WHERE twitch_user_id='99'",
+    )
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!(
+        other.as_deref(),
+        Some("bot_banned"),
+        "fremder Pause-Grund unangetastet"
+    );
+}
+
+#[tokio::test]
+async fn reauth_reaktiviert_hard_pause_nicht() {
+    let pool = pool_or_skip!("t6a_authwrite_hardpause");
+    let writer = AuthWriter::new(pool.clone(), cipher());
+
+    sqlx::query(
+        "INSERT INTO twitch_partners (twitch_user_id, technical_pause_reason, raid_bot_enabled)
+         VALUES ('55', 'bot_banned', 0)",
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
+
+    writer
+        .store_new_auth(&base_auth("55", true), Utc::now())
+        .await
+        .unwrap();
+
+    let (pause, raid_enabled): (Option<String>, Option<i32>) = sqlx::query_as(
+        "SELECT technical_pause_reason, raid_bot_enabled FROM twitch_partners WHERE twitch_user_id='55'",
+    )
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!(pause.as_deref(), Some("bot_banned"));
+    assert_eq!(
+        raid_enabled,
+        Some(0),
+        "Hard-Pause darf Reauth nicht aktivieren"
+    );
 }
