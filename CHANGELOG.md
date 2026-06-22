@@ -1,3 +1,11 @@
+## #257 — Zuverlässigere Ereignis-Verarbeitung und genauere Live-Erkennung
+
+**Problem:** Nach dem Sprachumbau fehlten in der Verarbeitung der Twitch-Ereignisse (EventSub) noch mehrere Robustheits-Details der alten Version. Bei manchen Ereignissen wurde der Kanal nicht zuverlässig erkannt, eingehende Raids konnten bei einem kurzen Verarbeitungsfehler verloren gehen, unbekannte Ereignistypen verschwanden stillschweigend, und kurzzeitige Datenbankaussetzer beim Schreiben führten sofort zum Abbruch. Außerdem ordnete die Zuschauer-Verlaufskurve Werbepausen nicht zu und die Zuordnung von Streamern zu ihrer Twitch-Kennung war in Randfällen ungenau.
+
+**Änderung:** Die Ereignis-Verarbeitung ist jetzt robuster: Der zugehörige Kanal wird über eine Kette von Ersatzfeldern aufgelöst, eingehende Raids laufen über eine wiederholbare Verarbeitungs-Warteschlange statt verloren zu gehen, unbekannte Ereignistypen werden nach mehreren Fehlversuchen sauber zur Seite gelegt statt verworfen, und Schreibvorgänge versuchen es bei vorübergehenden Datenbankfehlern automatisch erneut. Die Streamer-Erkennung nutzt zusätzliche Ersatzquellen, Werbepausen erscheinen wieder korrekt in der Zuschauer-Verlaufskurve, und der Schutz vor versehentlichen Massen-Erwähnungen (@everyone/@here und Rollen) in Ankündigungen wurde gehärtet. Im Hintergrund wurden zudem mehrere Datenbankspalten sauber auf einheitliche Typen umgestellt.
+
+**Ergebnis:** Der Bot verarbeitet Twitch-Ereignisse verlässlicher und verliert bei kurzen Störungen keine Raids oder Schreibvorgänge mehr; Auswertungen und Live-Erkennung sind genauer. Weitere Umbau-Reste sind damit geschlossen.
+
 ## #256 — !wins zeigt deine Deadlock-Siege im Chat
 
 **Problem:** Im Chat ließ sich der Rang zeigen (`!rank`), aber nicht die eigene Erfolgsbilanz.
