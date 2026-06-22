@@ -1,3 +1,11 @@
+## #274 — Overlay-Baukasten lädt wieder (Login statt Weißbild)
+
+**Problem:** Die Overlay-Baukasten-Seite blieb ohne gültige Anmeldung weiß. Die Seite selbst wurde noch ausgeliefert, aber die zugehörigen Programmdateien sind anmeldepflichtig und wurden zur Login-Seite umgeleitet — im Browser kam dadurch nichts an. Anders als alle übrigen Dashboard-Seiten leitete der Baukasten nicht sauber zur Anmeldung weiter.
+
+**Änderung:** Die Baukasten-Seite verhält sich jetzt wie die übrigen Dashboard-Seiten und leitet ohne gültige Anmeldung direkt zur Anmeldung weiter. Das öffentliche OBS-Overlay (Adresse mit Streamer-Namen) bleibt unverändert ohne Anmeldung erreichbar.
+
+**Ergebnis:** Eingeloggte Streamer sehen den Baukasten normal; wer nicht mehr angemeldet ist, landet auf der Anmeldung statt auf einer weißen Seite.
+
 ## #273 — Zuschauer-Abfrage entlastet
 
 **Problem:** Der neue Zuschauer-Poller fragte alle 30 Sekunden für jeden Live-Kanal die Zuschauerliste über die Twitch-Schnittstelle ab — auch für die vielen Kanäle, in denen der Bot kein Moderator ist und die Abfrage deshalb zwangsläufig fehlschlägt. Das erzeugte pro Zyklus viele vergebliche Anfragen.
