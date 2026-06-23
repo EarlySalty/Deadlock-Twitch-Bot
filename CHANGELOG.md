@@ -1,3 +1,11 @@
+## #278 — Analyse-Dashboard: ein Plan statt drei Stufen
+
+**Problem:** Das Analyse-Dashboard war über mehrere Pläne verstreut. Analytics ließ sich auf verschiedenen Wegen freischalten — jeder mit einem anderen Umfang an Auswertungen, Verlaufsdaten und KI-Analysen. Das war unübersichtlich und teils widersprüchlich: Selbst einzelne Auswertungen des letzten Streams waren gesperrt, obwohl sie eigentlich der Einstieg sein sollten, und es war nie ganz klar, welcher Plan was zeigt.
+
+**Änderung:** Es gibt jetzt genau einen Analyse-Zugang. Der komplette letzte Stream ist für alle kostenlos sichtbar — inklusive Viewer-Verlauf und Chatter-Liste. Alles, was über den letzten Stream hinausgeht — der Verlauf über mehrere Streams, Trends, Vergleiche, die KI-gestützten Post-Stream-Reports, Coaching und Monetarisierung — steckt gebündelt im einen Analyse-Zugang. Raid-Boost und Werbefrei bleiben eigenständige Produkte und enthalten keine Analytics mehr.
+
+**Ergebnis:** Ein klarer Schnitt statt drei verschachtelter Stufen: den letzten Stream sieht jeder gratis, mit dem Analyse-Zugang gibt es alles. Wer bisher einen Plan mit Analyse hatte (auch als Bundle), behält automatisch den vollen Zugang.
+
 ## #277 — Auto-Raid heilt hängende Raid-Schalter selbst
 
 **Problem:** Ein Streamer konnte dauerhaft ohne Auto-Raid bleiben, obwohl seine Raid-Freigabe gültig war: Hatte eine frühere Token-Störung den internen Raid-Schalter auf „aus" gestellt und war die zugehörige technische Pause später wieder verschwunden, blieb der Schalter auf „aus" hängen. Keine der bestehenden Selbstheilungen erfasste diesen Zwischenzustand — der Auto-Raid wurde still übersprungen, ohne Fehlermeldung.

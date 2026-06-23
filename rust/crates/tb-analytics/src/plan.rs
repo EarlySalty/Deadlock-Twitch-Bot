@@ -51,62 +51,43 @@ pub fn plan_is_extended(plan_id: &str) -> bool {
 /// Entitlements aus Plan-ID (Python: `PLAN_ENTITLEMENTS_MAP`).
 pub fn plan_entitlements(plan_id: &str) -> &'static [&'static str] {
     match plan_id {
-        // analytics.daily = kostenlose "Tagesform" (Snapshot des letzten Streams).
-        // Paid-Plaene brauchen es nicht zusaetzlich: sie bekommen via
-        // analytics.basic/extended ohnehin den vollen Verlauf.
-        "raid_free" => &["analytics.daily"],
+        // Analytics-Konsolidierung auf EIN Flag: kein Flag => `last_stream`
+        // (kostenlose Tagesform) ist der Default; das Flag `"analytics"` => voller
+        // Analytics-Zugang (voller Verlauf, Vergleiche, KI-Analyse via Opus).
+        "raid_free" => &[],
         "chat_quiet" => &["chat.promos.disable"],
-        "raid_boost" => &[
-            "analytics.ai_mini",
-            "analytics.basic",
-            "chat.lurker_tax",
-            "raid.priority",
-        ],
+        "raid_boost" => &["chat.lurker_tax", "raid.priority"],
         "bundle_chat_quiet_raid_boost" => &[
-            "analytics.ai_mini",
-            "analytics.basic",
             "chat.lurker_tax",
             "chat.promos.disable",
             "raid.priority",
         ],
-        "analysis_dashboard" => &[
-            "analytics.basic",
-            "analytics.ai_full",
-            "analytics.extended",
-            "chat.lurker_tax",
-        ],
+        "analysis_dashboard" => &["analytics", "chat.lurker_tax"],
         "bundle_analysis_raid_boost" => &[
-            "analytics.basic",
-            "analytics.ai_full",
-            "analytics.extended",
+            "analytics",
             "chat.lurker_tax",
             "chat.promos.disable",
             "raid.priority",
         ],
         "bundle_werbefrei_analyse" => &[
-            "analytics.basic",
-            "analytics.ai_full",
-            "analytics.extended",
+            "analytics",
             "chat.lurker_tax",
             "chat.promos.disable",
         ],
         "bundle_komplett" => &[
-            "analytics.ai_mini",
-            "analytics.basic",
-            "analytics.ai_full",
-            "analytics.extended",
+            "analytics",
             "chat.lurker_tax",
             "chat.promos.disable",
             "raid.priority",
         ],
-        "analytics_trial" => &[
-            "analytics.ai_mini",
-            "analytics.basic",
-            "analytics.extended",
-            "chat.lurker_tax",
-        ],
+        "analytics_trial" => &["analytics", "chat.lurker_tax"],
         _ => &[],
     }
+}
+
+/// `true`, wenn der Plan den konsolidierten `"analytics"`-Zugang trägt.
+pub fn plan_has_analytics(plan_id: &str) -> bool {
+    plan_entitlements(plan_id).contains(&"analytics")
 }
 
 /// Normalisiert eine Plan-ID strikt-kanonisch auf einen bekannten Plan.
@@ -572,6 +553,44 @@ mod tests {
         assert!(!is_known_plan_id("free"));
         assert!(!is_known_plan_id(""));
         assert!(!is_known_plan_id("garbage"));
+    }
+
+    // ── Analytics-Konsolidierung: EIN Flag ──────────────────────────────────
+
+    /// Drift-Guard: für jeden bekannten Plan stimmen die Entitlements aus diesem
+    /// Modul mit dem Billing-Katalog überein (eine Quelle der Wahrheit).
+    #[test]
+    fn plan_entitlements_match_catalog() {
+        for plan in crate::billing::catalog::BILLING_PLANS {
+            assert_eq!(
+                plan_entitlements(plan.id),
+                plan.entitlements,
+                "entitlements drift between plan module and catalog for {}",
+                plan.id
+            );
+        }
+    }
+
+    /// Das konsolidierte `analytics`-Flag tragen genau die 5 Analyse-Pläne; die
+    /// reinen Raid-/Chat-/Free-Pläne nicht.
+    #[test]
+    fn analytics_flag_nur_auf_analyse_plaenen() {
+        for id in ["raid_boost", "bundle_chat_quiet_raid_boost", "raid_free", "chat_quiet"] {
+            assert!(!plan_has_analytics(id), "{id} darf kein analytics-Flag tragen");
+            assert!(
+                !plan_entitlements(id).contains(&"analytics"),
+                "{id} entitlements dürfen kein analytics enthalten"
+            );
+        }
+        for id in [
+            "analysis_dashboard",
+            "bundle_werbefrei_analyse",
+            "bundle_komplett",
+            "bundle_analysis_raid_boost",
+            "analytics_trial",
+        ] {
+            assert!(plan_has_analytics(id), "{id} muss analytics-Flag tragen");
+        }
     }
 
     // ── B20-ent-2: expiresAt isoformat-normalisiert ─────────────────────────

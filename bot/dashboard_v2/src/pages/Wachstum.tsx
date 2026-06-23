@@ -21,13 +21,13 @@ export function Wachstum({ streamer, days, initialSub, onStreamerSelect, onNavig
     {
       id: 'trends',
       label: 'Trends',
-      entitlement: 'analytics.basic',
+      entitlement: 'analytics',
       render: () => <Growth streamer={streamer ?? ''} days={days} />,
     },
     {
       id: 'vergleich',
       label: 'Vergleich',
-      entitlement: 'analytics.basic',
+      entitlement: 'analytics',
       render: () => <Comparison streamer={streamer ?? ''} days={days} />,
     },
     {
@@ -45,7 +45,7 @@ export function Wachstum({ streamer, days, initialSub, onStreamerSelect, onNavig
     {
       id: 'experimentell',
       label: 'Experimentell',
-      entitlement: 'analytics.extended',
+      entitlement: 'analytics',
       render: () => <Experimental streamer={streamer} days={days} />,
     },
   ];

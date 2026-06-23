@@ -26,7 +26,7 @@ export function PlanGateCard({ featureId, title, children }: PlanGateCardProps) 
             <Lock className="w-5 h-5 text-white/40" />
           </div>
           <p className="text-sm font-medium text-white/70">{title}</p>
-          <p className="text-xs text-white/40 mt-1">Verfügbar ab Erweitert</p>
+          <p className="text-xs text-white/40 mt-1">Mit dem Analyse-Zugang freischalten</p>
           {isPreviewMode && (
             <a
               href={PREVIEW_PRICING_ROUTE}

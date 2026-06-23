@@ -63,6 +63,40 @@ pub async fn session_detail_handler(
 
     let owner = owner_login(&auth);
 
+    // ── Last-Stream-Clamp (Paywall gegen Historie-Leak) ──────────────────────
+    // Ohne das konsolidierte `analytics`-Flag darf ein Partner nur die zuletzt
+    // BEENDETE eigene Session abrufen — exakt dieselbe Definition wie overview.rs
+    // (MAX(started_at) der beendeten Sessions). Localhost/Admin überspringen den
+    // Clamp. Die IDOR-Grenze (Owner-Query unten) bleibt unangetastet: das Flag
+    // weitet NUR das Zeitfenster, nie den Zugriff auf fremde Sessions.
+    if let DashboardAuthLevel::Partner { twitch_login, twitch_user_id, .. } = &auth {
+        let login = twitch_login.to_lowercase();
+        let has_analytics =
+            crate::auth::has_analytics_entitlement(&pool, &login, twitch_user_id).await;
+        if !has_analytics {
+            let latest: Option<i64> = sqlx::query_scalar(
+                "SELECT id FROM twitch_stream_sessions \
+                 WHERE ended_at IS NOT NULL AND LOWER(streamer_login) = $1 \
+                 ORDER BY started_at DESC LIMIT 1",
+            )
+            .bind(&login)
+            .fetch_optional(&pool)
+            .await
+            .ok()
+            .flatten();
+            if latest != Some(session_id) {
+                return (
+                    StatusCode::FORBIDDEN,
+                    Json(json!({
+                        "error": "plan_required",
+                        "required_entitlements": ["analytics"],
+                    })),
+                )
+                    .into_response();
+            }
+        }
+    }
+
     // ── Haupt-Session-Row ────────────────────────────────────────────────────
     let row = match owner {
         Some(login) => sqlx::query(

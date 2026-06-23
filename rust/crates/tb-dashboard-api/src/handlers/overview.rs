@@ -384,9 +384,9 @@ impl WindowMode {
 ///
 /// - Kein Streamer-Kontext → `Full`.
 /// - Privilegiert (Localhost/Admin) → `Full` (Bypass).
-/// - Streamer mit `analytics.basic` ODER `analytics.extended` → `Full`.
-/// - Sonst (Free, nur `analytics.daily`) → `LastStream` (harte Server-Erzwingung;
-///   der Client kann das Fenster NICHT überschreiben — Paywall-Durchsetzung).
+/// - Streamer mit dem konsolidierten `analytics`-Flag → `Full`.
+/// - Sonst (kein Flag) → `LastStream` (kostenlose Tagesform, harte Server-
+///   Erzwingung; der Client kann das Fenster NICHT überschreiben — Paywall).
 async fn resolve_read_window(
     pool: &PgPool,
     privileged: bool,
@@ -401,7 +401,7 @@ async fn resolve_read_window(
     match tb_analytics::plan::resolve_plan_snapshot(pool, login, "").await {
         Ok(snapshot) => {
             let ents = tb_analytics::plan::plan_entitlements(snapshot.plan_id);
-            if ents.contains(&"analytics.basic") || ents.contains(&"analytics.extended") {
+            if ents.contains(&"analytics") {
                 WindowMode::Full
             } else {
                 WindowMode::LastStream
@@ -483,8 +483,8 @@ pub async fn overview_handler(
     };
     let login_ref = login.as_deref();
 
-    // B16-FIX-OVERVIEW-WINDOW: Lesefenster serverseitig auflösen. Free-Streamer
-    // ohne analytics.basic/extended bekommen die „Tagesform" (last_stream); der
+    // B16-FIX-OVERVIEW-WINDOW: Lesefenster serverseitig auflösen. Streamer ohne
+    // das konsolidierte analytics-Flag bekommen die „Tagesform" (last_stream); der
     // Client kann das Fenster nicht überschreiben (Paywall-Durchsetzung).
     let window = resolve_read_window(&pool, auth.is_privileged(), login_ref).await;
     let (since, prev_since) = window_since_dates(&pool, login_ref, days, window).await;

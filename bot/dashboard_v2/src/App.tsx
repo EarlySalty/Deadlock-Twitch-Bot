@@ -122,10 +122,7 @@ interface OverviewOrTagesformProps {
 
 function OverviewOrTagesform({ streamer, days, onSessionClick }: OverviewOrTagesformProps) {
   const { hasFullAccess, hasEntitlement } = usePlan();
-  const hasPaidAnalytics =
-    hasFullAccess ||
-    hasEntitlement('analytics.basic') ||
-    hasEntitlement('analytics.extended');
+  const hasPaidAnalytics = hasFullAccess || hasEntitlement('analytics');
 
   if (hasPaidAnalytics) {
     return <Overview streamer={streamer} days={days} onSessionClick={onSessionClick} />;

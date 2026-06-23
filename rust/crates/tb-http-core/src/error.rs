@@ -78,13 +78,13 @@ impl ApiError {
         }
     }
 
-    /// 403 Forbidden — kein analytics.extended-Entitlement.
+    /// 403 Forbidden — kein analytics-Entitlement.
     pub fn plan_required() -> Self {
         Self {
             status: StatusCode::FORBIDDEN,
             body: ApiErrorBody {
                 error: "plan_required",
-                message: "analytics.extended entitlement required",
+                message: "analytics entitlement required",
             },
             dyn_body: None,
         }

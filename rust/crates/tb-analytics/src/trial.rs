@@ -8,7 +8,7 @@
 //! `streamer_plans`. Der unveränderliche Flag `trial_ever_granted` (INTEGER 0/1)
 //! garantiert „genau einmal pro Streamer" — Self-Claim und Onboarding-Grant
 //! teilen sich denselben Flag. Der Plan `analytics_trial` trägt das
-//! `analytics.extended`-Entitlement (siehe [`crate::plan`]); das vorhandene
+//! konsolidierte `analytics`-Entitlement (siehe [`crate::plan`]); das vorhandene
 //! Ablauf-Gate in `tb_dashboard_api::auth` sperrt nach 30 Tagen automatisch.
 
 use chrono::{Duration, Utc};

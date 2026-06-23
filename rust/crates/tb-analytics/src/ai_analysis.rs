@@ -36,13 +36,12 @@ pub fn model_name_for(ai_model: &str) -> &'static str {
     }
 }
 
-/// Reine Modellwahl aus Entitlements (Python `_plan_ai_model`-Logik):
-/// `analytics.ai_full` → Opus, sonst `analytics.ai_mini` → MiniMax, sonst keins.
+/// Reine Modellwahl aus Entitlements: das konsolidierte `analytics`-Flag → Opus,
+/// sonst kein KI-Zugang. (Frühere ai_mini→MiniMax-Stufe entfällt — Analytics ist
+/// jetzt EIN Flag und gewährt durchgängig Opus.)
 pub fn model_for_entitlements(entitlements: &[&str]) -> Option<&'static str> {
-    if entitlements.contains(&"analytics.ai_full") {
+    if entitlements.contains(&"analytics") {
         Some(AI_MODEL_OPUS)
-    } else if entitlements.contains(&"analytics.ai_mini") {
-        Some(AI_MODEL_MINIMAX)
     } else {
         None
     }
@@ -660,14 +659,11 @@ mod tests {
 
     #[test]
     fn modellwahl_und_name() {
-        // ai_full hat Vorrang vor ai_mini.
-        assert_eq!(model_for_entitlements(&["analytics.ai_full"]), Some("opus"));
-        assert_eq!(model_for_entitlements(&["analytics.ai_mini"]), Some("minimax"));
-        assert_eq!(
-            model_for_entitlements(&["analytics.ai_full", "analytics.ai_mini"]),
-            Some("opus")
-        );
-        assert_eq!(model_for_entitlements(&["analytics.basic"]), None);
+        // Konsolidiertes analytics-Flag → Opus.
+        assert_eq!(model_for_entitlements(&["analytics"]), Some("opus"));
+        assert_eq!(model_for_entitlements(&["analytics", "chat.lurker_tax"]), Some("opus"));
+        // Ohne Flag → kein KI-Zugang.
+        assert_eq!(model_for_entitlements(&["chat.lurker_tax"]), None);
         assert_eq!(model_for_entitlements(&[]), None);
         // Persistenz-Modellname.
         assert_eq!(model_name_for("opus"), "claude-opus-4-6");

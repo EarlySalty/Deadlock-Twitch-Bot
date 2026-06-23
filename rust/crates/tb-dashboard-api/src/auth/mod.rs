@@ -61,9 +61,9 @@ pub fn require_owner(
     }
 }
 
-/// Prüft ob `login` das `analytics.extended`-Entitlement hat — über
-/// [`tb_analytics::plan::plan_is_extended`], das die echten Plan-IDs aus
-/// `catalog.py` kennt (analysis_dashboard, die Bundles, analytics_trial).
+/// Prüft ob `login` das konsolidierte `analytics`-Entitlement hat — über
+/// [`tb_analytics::plan::plan_has_analytics`], das die echten Plan-IDs aus
+/// `catalog.py` kennt (analysis_dashboard, die Analyse-Bundles, analytics_trial).
 ///
 /// Admin überspringt die Prüfung (bypass).
 pub async fn require_extended_plan(
@@ -76,23 +76,23 @@ pub async fn require_extended_plan(
     }
     // AuthLevel-Pfad kennt keine twitch_user_id → login-only (leerer user_id;
     // der Resolver-Guard `$2 <> ''` verhindert Falsch-Matches).
-    if has_extended_entitlement(pool, login, "").await {
+    if has_analytics_entitlement(pool, login, "").await {
         Ok(())
     } else {
         Err(ApiError::plan_required())
     }
 }
 
-/// `true` wenn der Streamer einen aktiven Extended-Plan, ein aktives Stripe-Abo
-/// ODER einen laufenden 30-Tage-Trial hat. Nutzt denselben Resolver wie das
-/// Dashboard (`resolve_plan_snapshot`), damit Manual-Override UND Stripe-Abo
-/// (und der `user_id`-Match) berücksichtigt werden — die frühere verkürzte
-/// streamer_plans-Login-Query sperrte zahlende Stripe-Kunden ohne Manual-Eintrag
-/// fälschlich mit 403 aus. Ablauf wird im Resolver geprüft. Bei DB-Fehler
-/// `false` (fail-closed — kein versehentlicher Gratis-Zugang).
-pub async fn has_extended_entitlement(pool: &PgPool, login: &str, user_id: &str) -> bool {
+/// `true` wenn der Streamer einen Plan mit dem konsolidierten `analytics`-Flag,
+/// ein aktives Stripe-Abo ODER einen laufenden 30-Tage-Trial hat. Nutzt denselben
+/// Resolver wie das Dashboard (`resolve_plan_snapshot`), damit Manual-Override UND
+/// Stripe-Abo (und der `user_id`-Match) berücksichtigt werden — die frühere
+/// verkürzte streamer_plans-Login-Query sperrte zahlende Stripe-Kunden ohne
+/// Manual-Eintrag fälschlich mit 403 aus. Ablauf wird im Resolver geprüft. Bei
+/// DB-Fehler `false` (fail-closed — kein versehentlicher Gratis-Zugang).
+pub async fn has_analytics_entitlement(pool: &PgPool, login: &str, user_id: &str) -> bool {
     match tb_analytics::plan::resolve_plan_snapshot(pool, login, user_id).await {
-        Ok(snapshot) => tb_analytics::plan::plan_is_extended(snapshot.plan_id),
+        Ok(snapshot) => snapshot.entitlements.contains(&"analytics"),
         Err(_) => false,
     }
 }
@@ -112,7 +112,7 @@ pub async fn extended_gate(pool: &PgPool, auth: &DashboardAuthLevel) -> Option<R
         DashboardAuthLevel::Localhost | DashboardAuthLevel::Admin { .. } => None,
         DashboardAuthLevel::None => Some(unauthorized_v2_response()),
         DashboardAuthLevel::Partner { twitch_login, twitch_user_id, .. } => {
-            if has_extended_entitlement(pool, twitch_login, twitch_user_id).await {
+            if has_analytics_entitlement(pool, twitch_login, twitch_user_id).await {
                 None
             } else {
                 Some(plan_required_response())
@@ -137,29 +137,29 @@ pub fn unauthorized_v2_response() -> Response {
 ///
 /// B16-VERIFY-V2AUTH-SHAPE: Python sendet im 403-Body NICHT nur `error` +
 /// `required_entitlements`, sondern zusätzlich `required_plans` — die sortierte
-/// Liste aller bekannten Billing-Pläne (`KNOWN_PLAN_IDS`), die das Entitlement
-/// `analytics.extended` tragen. Das Frontend nutzt diese Liste, um dem Nutzer die
-/// buchbaren Upgrade-Pläne anzuzeigen. Die frühere Rust-Antwort ließ das Feld weg
-/// (Shape-Divergenz) — hier korrigiert (Test `plan_required_response_*`).
+/// Liste aller bekannten Billing-Pläne (`KNOWN_PLAN_IDS`), die das konsolidierte
+/// `analytics`-Entitlement tragen. Das Frontend nutzt diese Liste, um dem Nutzer
+/// die buchbaren Upgrade-Pläne anzuzeigen. Die frühere Rust-Antwort ließ das Feld
+/// weg (Shape-Divergenz) — hier korrigiert (Test `plan_required_response_*`).
 pub fn plan_required_response() -> Response {
     (
         StatusCode::FORBIDDEN,
         Json(json!({
             "error": "plan_required",
-            "required_entitlements": ["analytics.extended"],
+            "required_entitlements": ["analytics"],
             "required_plans": extended_required_plans(),
         })),
     )
         .into_response()
 }
 
-/// Bekannte Billing-Pläne (Python `KNOWN_PLAN_IDS`), die das Entitlement
-/// `analytics.extended` tragen — alphabetisch sortiert wie Pythons `sorted(...)`.
+/// Bekannte Billing-Pläne (Python `KNOWN_PLAN_IDS`), die das konsolidierte
+/// `analytics`-Entitlement tragen — alphabetisch sortiert wie Pythons `sorted(...)`.
 ///
 /// Spiegelt `_require_extended_plan`s `required_plans`-Generator
 /// (`sorted(p for p in _KNOWN_BILLING_PLAN_IDS if _plan_has_entitlement(p, …))`).
-/// `tb_analytics::plan::plan_is_extended` ist die kanonische Quelle des
-/// Extended-Flags; die Plan-ID-Liste ist hier festgehalten (der Katalog ist in
+/// `tb_analytics::plan::plan_has_analytics` ist die kanonische Quelle des
+/// Analytics-Flags; die Plan-ID-Liste ist hier festgehalten (der Katalog ist in
 /// `tb-analytics` privat) und gegen Drift testgesichert.
 fn extended_required_plans() -> Vec<&'static str> {
     const KNOWN_BILLING_PLAN_IDS: [&str; 9] = [
@@ -175,7 +175,7 @@ fn extended_required_plans() -> Vec<&'static str> {
     ];
     let mut plans: Vec<&'static str> = KNOWN_BILLING_PLAN_IDS
         .into_iter()
-        .filter(|id| tb_analytics::plan::plan_is_extended(id))
+        .filter(|id| tb_analytics::plan::plan_has_analytics(id))
         .collect();
     plans.sort_unstable();
     plans
@@ -195,8 +195,8 @@ mod tests {
         let bytes = to_bytes(resp.into_body(), 1 << 16).await.unwrap();
         let body: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
         assert_eq!(body["error"], "plan_required");
-        assert_eq!(body["required_entitlements"], json!(["analytics.extended"]));
-        // Exakt die extended-Pläne aus KNOWN_PLAN_IDS, alphabetisch sortiert.
+        assert_eq!(body["required_entitlements"], json!(["analytics"]));
+        // Exakt die Analyse-Pläne aus KNOWN_PLAN_IDS, alphabetisch sortiert.
         assert_eq!(
             body["required_plans"],
             json!([
@@ -209,14 +209,23 @@ mod tests {
         );
     }
 
-    /// Drift-Gate: jeder gelistete required_plan ist tatsächlich extended, free
-    /// (raid_free) ist nie dabei.
+    /// Drift-Gate: jeder gelistete required_plan trägt tatsächlich das
+    /// `analytics`-Flag, free (raid_free) ist nie dabei. Genau die 5 Analyse-Pläne.
     #[test]
     fn extended_required_plans_sind_alle_extended() {
         let plans = extended_required_plans();
-        assert!(!plans.is_empty());
+        assert_eq!(
+            plans,
+            vec![
+                "analysis_dashboard",
+                "analytics_trial",
+                "bundle_analysis_raid_boost",
+                "bundle_komplett",
+                "bundle_werbefrei_analyse",
+            ]
+        );
         assert!(!plans.contains(&"raid_free"));
-        assert!(plans.iter().all(|p| tb_analytics::plan::plan_is_extended(p)));
+        assert!(plans.iter().all(|p| tb_analytics::plan::plan_has_analytics(p)));
         // sortiert
         let mut sorted = plans.clone();
         sorted.sort_unstable();
