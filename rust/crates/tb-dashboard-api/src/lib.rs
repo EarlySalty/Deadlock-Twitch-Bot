@@ -21,6 +21,9 @@ pub use auth::session::{
     SessionCreation, ADMIN_COOKIE_NAME, OAUTH_STATE_SESSION_TYPE, OAUTH_STATE_TTL_SECS,
     PARTNER_COOKIE_NAME, SESSION_CREATE_TTL_SECS,
 };
+pub use auth::discord_admin_login::{
+    discord_admin_login_config_from_env, DiscordAdminLoginConfig,
+};
 pub use handlers::auth_login::{oauth_login_config_from_env, OAuthLoginConfig};
 pub use handlers::billing_page::{billing_page_config_from_env, BillingPageConfig};
 pub use handlers::billing_webhook::{stripe_webhook_config_from_env, StripeWebhookConfig};
@@ -723,12 +726,17 @@ pub fn build_admin_config_router(pool: PgPool, token: String) -> Router {
 /// Extensions aus der `tb-dashboard`-main (s. dort).
 pub fn build_auth_router(rate_limiter: RateLimiter) -> Router {
     use handlers::auth_login;
+    use auth::discord_admin_login;
 
     // P2.138: Login-Bucket (30/60 s). P2.140: Callback-Bucket (30/60 s) — die
     // beiden Callback-Routen teilen sich denselben Bucket. Layer pro Route, damit
     // Login und Callback getrennte Kontingente haben.
     let login_rl = RateLimitLayerConfig::new(rate_limiter.clone(), "auth_login", 30, 60);
-    let callback_rl = RateLimitLayerConfig::new(rate_limiter, "auth_callback", 30, 60);
+    let callback_rl = RateLimitLayerConfig::new(rate_limiter.clone(), "auth_callback", 30, 60);
+    let discord_login_rl =
+        RateLimitLayerConfig::new(rate_limiter.clone(), "discord_admin_login", 10, 60);
+    let discord_callback_rl =
+        RateLimitLayerConfig::new(rate_limiter, "discord_admin_callback", 20, 60);
 
     Router::new()
         .route(
@@ -753,6 +761,49 @@ pub fn build_auth_router(rate_limiter: RateLimiter) -> Router {
             )),
         )
         .route("/twitch/auth/logout", get(auth_login::logout_handler))
+        .route(
+            "/twitch/auth/discord/login",
+            get(discord_admin_login::login_handler).layer(axum::middleware::from_fn_with_state(
+                discord_login_rl,
+                rate_limit_middleware,
+            )),
+        )
+        .route(
+            "/callback/discord",
+            get(discord_admin_login::shared_callback_handler).layer(
+                axum::middleware::from_fn_with_state(
+                    discord_callback_rl.clone(),
+                    rate_limit_middleware,
+                ),
+            ),
+        )
+        .route(
+            "/twitch/auth/discord/complete",
+            get(discord_admin_login::complete_handler).layer(
+                axum::middleware::from_fn_with_state(
+                    discord_callback_rl.clone(),
+                    rate_limit_middleware,
+                ),
+            ),
+        )
+        .route(
+            "/twitch/auth/discord/callback",
+            get(discord_admin_login::complete_handler).layer(
+                axum::middleware::from_fn_with_state(
+                    discord_callback_rl,
+                    rate_limit_middleware,
+                ),
+            ),
+        )
+        .route(
+            "/twitch/auth/discord/logout",
+            get(discord_admin_login::logout_handler),
+        )
+        .route(
+            "/twitch/auth/fingerprint",
+            get(discord_admin_login::fingerprint_page_handler)
+                .post(discord_admin_login::fingerprint_submit_handler),
+        )
 }
 
 /// Baut den Router für den Partner-Einmal-Login via HMAC One-Time-Token (B3-8).

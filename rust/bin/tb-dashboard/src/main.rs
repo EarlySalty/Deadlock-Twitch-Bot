@@ -94,6 +94,21 @@ async fn main() {
         }
     }
 
+    // Native Discord-Admin-OAuth-Ausstellung für master_dash_session. Der eigentliche
+    // Discord-Code-Tausch läuft wie in Python über den lokalen Broker; Secret-Werte
+    // werden nur aus Env gelesen und nie geloggt.
+    match tb_dashboard_api::discord_admin_login_config_from_env() {
+        Some(config) => {
+            app = app.layer(axum::Extension(config));
+            tracing::info!("Nativer Discord-Admin-Login aktiv");
+        }
+        None => {
+            tracing::warn!(
+                "Discord-Admin-Login-Config fehlt (interner Broker-Token/Base) — nativer Admin-Login deaktiviert"
+            );
+        }
+    }
+
     // P0 (B2): Nativer Stripe-Webhook (Quelle der Wahrheit fürs Bezahlt-Sein).
     // Ohne STRIPE_WEBHOOK_SECRET bleibt er aus → der Webhook-Pfad liefert 503
     // (statt in den toten Python-Proxy zu fallen). Secret aus Env (Infisical),

@@ -17,22 +17,11 @@
 //! (Discord-Admin) ODER ein `_TWITCH_ADMIN_LOGINS`-Login über die Twitch-Session
 //! mit aktivem Admin-Mode. Admin ist „privilegiert" → 200; alles andere → 401.
 //!
-//! **Device-Bindung (P1.39, konditional):** Pythons `validate_admin_session`
-//! prüft für die Discord-Admin-Session (`master_dash_session`) zusätzlich
-//! IP-Bindung, Passive-Fingerprint und `fp_pending`. Diese Checks sind hier
-//! restauriert — aber **nur konditional**: sie greifen ausschließlich, wenn die
-//! geladene Admin-Session die jeweiligen Felder (`client_ip`/`passive_fp`/
-//! `fp_pending`) tatsächlich trägt. Eine native Rust-Admin-Session
-//! (`create_admin_session`) trägt sie nicht → die Checks werden übersprungen,
-//! genau wie Pythons konditionale `if stored_ip:` / `if stored_passive_fp:`.
-//!
-//! **Bewusst NICHT portiert (#235-Lockout-Schutz, B3-10):** Pythons *harter*
-//! js_fp-Pflicht-Zweig (`source != "discord_dashboard"` UND leerer `js_fp` → 401)
-//! bleibt aus. Der Rust-Prozess hat keinen nativen Discord-Admin-Login, der
-//! `source`/`js_fp`/`fp_pending=False` setzt (vertagt nach B3-10, vgl. P2.118);
-//! ein 1:1-Port würde jede native Admin-Session 401en → der dokumentierte
-//! #235-Login-Loop. Sobald der native Discord-Admin-Login landet, kommt der
-//! js_fp-Pflicht-Zweig zusammen mit seinen Schreibpfaden hinzu.
+//! **Device-Bindung (P1.39):** Pythons `validate_admin_session` prüft für die
+//! Discord-Admin-Session (`master_dash_session`) zusätzlich IP-Bindung,
+//! Passive-Fingerprint, `fp_pending` und den harten JS-Fingerprint-Zweig
+//! (`source != "discord_dashboard"` UND leerer `js_fp` → 401). Seit dem nativen
+//! Discord-Admin-Login schreibt Rust dieselben Felder und erzwingt diesen Zweig.
 //!
 //! **Secrets:** Es werden keine Token verglichen oder geloggt; die einzige
 //! Geheimnis-nahe Operation (Session-Cookie → DB-Lookup) liegt in der

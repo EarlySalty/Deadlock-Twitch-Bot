@@ -22,6 +22,7 @@
 //! ```
 
 pub mod csrf;
+pub mod discord_admin_login;
 pub mod fernet;
 pub mod level;
 pub mod oauth_login;

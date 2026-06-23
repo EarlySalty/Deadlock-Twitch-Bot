@@ -65,18 +65,9 @@ pub struct PartnerSession {
 /// Python-Referenz: `server_v2.py:435-472` (`validate_admin_session`). Die Felder
 /// werden beim Discord-Admin-Login geschrieben (`auth_mixin.py:1587-1648`).
 ///
-/// **Bewusste Abgrenzung (#235-Lockout-Schutz):** Pythons Check kennt zusätzlich
-/// einen *harten* `js_fp`-Pflicht-Zweig (`source != "discord_dashboard"` UND leerer
-/// `js_fp` → 401). Der Rust-Dashboard-Prozess hat aktuell **keinen** nativen
-/// Discord-Admin-Login, der `source`/`js_fp`/`fp_pending=False` setzt — dieser
-/// Login-Flow ist nach B3-10 vertagt (vgl. P2.118). Würde Rust den js_fp-Pflicht-
-/// Zweig 1:1 erzwingen, bekäme **jede** nativ erzeugte Admin-Session 401 → exakt
-/// der dokumentierte #235-Login-Loop / Hard-Lockout. Deshalb übernimmt
-/// [`AdminSessionFingerprint::verify`] nur die **konditionalen** Python-Checks
-/// (greifen nur, wenn das Feld in der Session tatsächlich gesetzt ist): IP-Bindung
-/// (`if stored_ip:`), Passive-Fingerprint (`if stored_passive_fp:`) und
-/// `fp_pending is True` → 401. Der js_fp-Pflicht-Zweig bleibt bewusst aus, bis der
-/// native Discord-Admin-Login (B3-10) ihn mit den passenden Schreibpfaden liefert.
+/// Seit dem nativen Discord-Admin-Login werden auch `js_fp`/`fp_pending` geschrieben;
+/// damit kann der harte Python-Zweig wieder abgebildet werden:
+/// `source != "discord_dashboard"` UND leerer `js_fp` → 401.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct AdminSessionFingerprint {
     /// Beim Login gebundene Client-IP (`session["client_ip"]`). Leer → IP-Check aus.
@@ -87,6 +78,11 @@ pub struct AdminSessionFingerprint {
     /// `true` solange der JS-Fingerprint-Schritt nach dem Login noch aussteht
     /// (`session["fp_pending"]`). `true` → 401 (Schritt unvollständig).
     pub fp_pending: bool,
+    /// Herkunft der Session (`source`). `"discord_dashboard"` überspringt Pythons
+    /// harten JS-Fingerprint-Pflichtzweig.
+    pub source: String,
+    /// JS-Fingerprint-Hash (`session["js_fp"]`), nach `/twitch/auth/fingerprint`.
+    pub js_fp: String,
     /// Anzeigbarer Admin-Name (`username`/`display_name`, sonst `"admin"`).
     pub username: String,
 }
@@ -126,6 +122,11 @@ impl AdminSessionFingerprint {
 
         if self.fp_pending {
             warn!("AUDIT admin session fp_pending - fingerprint step incomplete");
+            return false;
+        }
+
+        if self.source.trim() != "discord_dashboard" && self.js_fp.trim().is_empty() {
+            warn!("AUDIT admin session missing JS fingerprint");
             return false;
         }
 
@@ -301,7 +302,7 @@ impl<T: Clone> TimedCache<T> {
 const CACHE_TTL_SECS: u64 = 5;
 
 /// Admin-Session-TTL beim Sliding-Refresh (Python: server_v2.py:330, 14 Tage).
-const ADMIN_SESSION_TTL_SECS: u64 = 14 * 24 * 3600;
+pub const ADMIN_SESSION_TTL_SECS: u64 = 14 * 24 * 3600;
 /// Partner-Session-TTL beim Sliding-Refresh (Python: server_v2.py:183, min. 6h).
 const PARTNER_SESSION_TTL_SECS: u64 = 6 * 3600;
 
@@ -492,12 +493,10 @@ impl DashboardAuthState {
         Ok(SessionCreation { session_id, csrf_token })
     }
 
-    /// Legt eine **neue Discord-Admin-Session** an (Pendant zu Python
-    /// auth_mixin.py:1548-1583). Gleiche Mechanik wie [`Self::create_partner_session`],
-    /// Session-Typ `discord_admin`, Payload mit `auth_type`/`user_id`/`display_name`.
-    /// Admin-TTL hartkodiert wie der Partner-Wert (6h) — der Sliding-Refresh dehnt
-    /// aktive Admin-Sessions weiter auf 14 Tage (Python-Parität), aber die Erstellung
-    /// startet konservativ bei 6h.
+    /// Legt eine einfache synthetische Discord-Admin-Session an (Test-/Interop-
+    /// Helper). Der echte native Discord-Admin-OAuth-Flow nutzt
+    /// [`Self::create_discord_admin_session`], weil dort Python-paritär 14 Tage TTL,
+    /// Passive-Fingerprint und `fp_pending` geschrieben werden.
     pub async fn create_admin_session(
         &self,
         user_id: &str,
@@ -513,6 +512,9 @@ impl DashboardAuthState {
             "user_id": user_id,
             "display_name": display_name,
             "csrf_token": csrf_token,
+            "source": "discord_dashboard",
+            "fp_pending": false,
+            "js_fp": "discord_validated",
             "created_at": now as f64,
             "last_seen_at": now as f64,
             "expires_at": expires_at,
@@ -522,6 +524,103 @@ impl DashboardAuthState {
             .await?;
 
         Ok(SessionCreation { session_id, csrf_token })
+    }
+
+    /// Legt eine neue native Discord-Admin-Session an (Python
+    /// `discord_auth_complete`, auth_mixin.py:1584-1648).
+    ///
+    /// TTL, Payload-Felder und `fp_pending` entsprechen Python: die Session wird mit
+    /// 14 Tagen Laufzeit gemintet und erst nach `/twitch/auth/fingerprint` im
+    /// Forward-Auth-Pfad akzeptiert.
+    pub async fn create_discord_admin_session(
+        &self,
+        user_id: u64,
+        username: &str,
+        display_name: &str,
+        reason: &str,
+        client_ip: &str,
+        passive_fp: &str,
+        post_fp_destination: &str,
+    ) -> Result<SessionCreation, sqlx::Error> {
+        let now = unix_now();
+        let session_id = tb_crypto::random_urlsafe_token(SESSION_ID_BYTES);
+        let csrf_token = tb_crypto::random_urlsafe_token(SESSION_ID_BYTES);
+        let expires_at = now as f64 + ADMIN_SESSION_TTL_SECS as f64;
+        let username = username.trim();
+        let display = if display_name.trim().is_empty() {
+            format!("User {user_id}")
+        } else {
+            display_name.trim().to_string()
+        };
+
+        let payload = serde_json::json!({
+            "auth_type": "discord_admin",
+            "user_id": user_id,
+            "username": username,
+            "display_name": display,
+            "reason": reason.trim(),
+            "csrf_token": csrf_token,
+            "created_at": now as f64,
+            "last_seen_at": now as f64,
+            "expires_at": expires_at,
+            "client_ip": client_ip.trim(),
+            "passive_fp": passive_fp.trim(),
+            "fp_pending": true,
+            "post_fp_destination": post_fp_destination.trim(),
+        });
+
+        self.persist_new_session(&session_id, "discord_admin", &payload, now as f64, expires_at)
+            .await?;
+
+        Ok(SessionCreation { session_id, csrf_token })
+    }
+
+    /// Schließt den JS-Fingerprint-Schritt einer nativen Discord-Admin-Session ab.
+    /// Gibt das gespeicherte Post-Fingerprint-Ziel zurück, wenn die Session gültig war.
+    pub async fn complete_admin_session_fingerprint(
+        &self,
+        session_id: &str,
+        js_fp: &str,
+    ) -> Result<Option<String>, sqlx::Error> {
+        let now = unix_now();
+        let Some(mut payload) = self
+            .fetch_session_payload(session_id, "discord_admin", now)
+            .await?
+        else {
+            return Ok(None);
+        };
+        if payload_expired(&payload, now) {
+            return Ok(None);
+        }
+
+        let destination = payload
+            .get("post_fp_destination")
+            .and_then(serde_json::Value::as_str)
+            .unwrap_or("/twitch/admin")
+            .trim()
+            .to_string();
+        let created_at = payload
+            .get("created_at")
+            .and_then(serde_json::Value::as_f64)
+            .unwrap_or(now as f64);
+        let expires_at = payload
+            .get("expires_at")
+            .and_then(serde_json::Value::as_f64)
+            .unwrap_or(now as f64);
+
+        if let Some(obj) = payload.as_object_mut() {
+            obj.insert("js_fp".into(), serde_json::json!(js_fp.trim()));
+            obj.insert("fp_pending".into(), serde_json::json!(false));
+            obj.insert("last_seen_at".into(), serde_json::json!(now as f64));
+        }
+
+        self.persist_new_session(session_id, "discord_admin", &payload, created_at, expires_at)
+            .await?;
+        {
+            let mut cache = self.admin_cache.lock().await;
+            cache.entries.remove(session_id);
+        }
+        Ok(Some(destination))
     }
 
     /// Verschlüsselt einen frischen Session-Payload und schreibt ihn in
@@ -855,8 +954,14 @@ impl DashboardAuthState {
             return;
         }
         self.delete_session(session_id).await;
-        let mut cache = self.partner_cache.lock().await;
-        cache.entries.remove(session_id);
+        {
+            let mut cache = self.partner_cache.lock().await;
+            cache.entries.remove(session_id);
+        }
+        {
+            let mut cache = self.admin_cache.lock().await;
+            cache.entries.remove(session_id);
+        }
     }
 
     /// Validiert ein CSRF-Token gegen die Session — konstant-zeitlicher Vergleich.
@@ -970,12 +1075,19 @@ impl DashboardAuthState {
         if payload_expired(&payload, now) {
             return Ok(None);
         }
-        Ok(payload
-            .get("user_id")
-            .and_then(|v| v.as_str())
-            .map(str::trim)
-            .filter(|s| !s.is_empty())
-            .map(str::to_string))
+        let Some(user_id) = payload.get("user_id") else {
+            return Ok(None);
+        };
+        if let Some(value) = user_id.as_str().map(str::trim).filter(|s| !s.is_empty()) {
+            return Ok(Some(value.to_string()));
+        }
+        if let Some(value) = user_id.as_u64() {
+            return Ok(Some(value.to_string()));
+        }
+        if let Some(value) = user_id.as_i64().filter(|v| *v > 0) {
+            return Ok(Some(value.to_string()));
+        }
+        Ok(None)
     }
 
     /// Lädt die sicherheitsrelevanten Bindungs-Felder einer gültigen
@@ -1025,6 +1137,8 @@ impl DashboardAuthState {
                 .get("fp_pending")
                 .and_then(|v| v.as_bool())
                 .unwrap_or(false),
+            source: read("source"),
+            js_fp: read("js_fp"),
             username,
         }))
     }
@@ -1827,7 +1941,10 @@ mod tests {
     #[test]
     fn verify_ohne_bindung_akzeptiert() {
         // Native Admin-Session ohne client_ip/passive_fp/fp_pending → kein Lockout.
-        let fp = AdminSessionFingerprint::default();
+        let fp = AdminSessionFingerprint {
+            js_fp: "abc12345".into(),
+            ..Default::default()
+        };
         assert!(fp.verify("203.0.113.7", "irgendwas"));
     }
 
@@ -1835,6 +1952,7 @@ mod tests {
     fn verify_ip_mismatch_lehnt_ab() {
         let fp = AdminSessionFingerprint {
             client_ip: "203.0.113.7".into(),
+            js_fp: "abc12345".into(),
             ..Default::default()
         };
         assert!(!fp.verify("198.51.100.2", ""));
@@ -1848,6 +1966,7 @@ mod tests {
         let stored = build_passive_fp("ua-a", "de", "Windows");
         let fp = AdminSessionFingerprint {
             passive_fp: stored.clone(),
+            js_fp: "abc12345".into(),
             ..Default::default()
         };
         assert!(!fp.verify("", &build_passive_fp("ua-b", "de", "Windows")));
@@ -1858,9 +1977,20 @@ mod tests {
     fn verify_fp_pending_lehnt_ab() {
         let fp = AdminSessionFingerprint {
             fp_pending: true,
+            js_fp: "abc12345".into(),
             ..Default::default()
         };
         assert!(!fp.verify("", ""));
+    }
+
+    #[test]
+    fn verify_missing_js_fp_lehnt_ab_ausser_discord_dashboard_source() {
+        assert!(!AdminSessionFingerprint::default().verify("", ""));
+        let fp = AdminSessionFingerprint {
+            source: "discord_dashboard".into(),
+            ..Default::default()
+        };
+        assert!(fp.verify("", ""));
     }
 }
 
@@ -2660,7 +2790,7 @@ print(f.encrypt(payload.encode()).decode(), end='')
         let now = unix_now() as f64;
         let session_id = format!("admin-fp-{}", now as u64);
         let json_str = format!(
-            r#"{{"auth_type":"discord_admin","username":"earlysalty","client_ip":"203.0.113.7","passive_fp":"abc123","fp_pending":false,"expires_at":{}}}"#,
+            r#"{{"auth_type":"discord_admin","username":"earlysalty","client_ip":"203.0.113.7","passive_fp":"abc123","fp_pending":false,"js_fp":"feedface","expires_at":{}}}"#,
             now + 3600.0
         );
         let fernet_bytes = make_test_fernet_payload(&json_str);
