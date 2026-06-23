@@ -327,27 +327,27 @@ const ANTHROPIC_BASE_URL: &str = "https://api.anthropic.com";
 const CLAUDE_MODEL: &str = "claude-opus-4-6";
 const ANTHROPIC_VERSION: &str = "2023-06-01";
 
-/// Plan-basiertes KI-Modell (Python `_plan_ai_model`).
+/// Plan-basiertes KI-Modell.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum AiModel {
-    /// Claude Opus — Entitlement `analytics.ai_full`.
+    /// Claude Opus — Plan mit dem konsolidierten `analytics`-Flag.
     Opus,
-    /// MiniMax — Entitlement `analytics.ai_mini` (oder Default-Fallback).
+    /// MiniMax — Legacy-Variante (kein Plan vergibt sie mehr; nur noch
+    /// Code-Pfad/Rendering für ggf. historisch persistierte Reports).
     Minimax,
 }
 
-/// Wählt das KI-Modell anhand der Plan-Entitlements (Python `_plan_ai_model`):
-/// `analytics.ai_full` → Opus, `analytics.ai_mini` → MiniMax, sonst `None`.
+/// Wählt das KI-Modell anhand der Plan-Entitlements: das konsolidierte
+/// `analytics`-Flag → Opus, sonst `None` (kein KI-Zugang). Die frühere
+/// ai_mini→MiniMax-Stufe entfällt mit der Analytics-Konsolidierung.
 pub async fn plan_ai_model(pool: &PgPool, streamer: &str) -> Option<AiModel> {
     // Nur Login (kein user_id) → der Trial-Auto-Grant in resolve_plan_snapshot
     // bleibt aus (braucht beides), reine Lese-Auflösung.
     let snapshot = crate::plan::resolve_plan_snapshot(pool, streamer, "")
         .await
         .ok()?;
-    if snapshot.entitlements.contains(&"analytics.ai_full") {
+    if snapshot.entitlements.contains(&"analytics") {
         Some(AiModel::Opus)
-    } else if snapshot.entitlements.contains(&"analytics.ai_mini") {
-        Some(AiModel::Minimax)
     } else {
         None
     }
@@ -2080,8 +2080,8 @@ async fn mark_report_failed(pool: &PgPool, report_id: i64, err: &str) -> Result<
 }
 
 /// Triggert nach Stream-Ende eine planbasierte A/B-Post-Stream-Analyse (Python
-/// `trigger_post_stream_analysis`). Modell aus Plan (Default Minimax), Session-
-/// Lookup wenn keine ID, Wortgruppen-AI + Persistenz, dann pro Variante
+/// `trigger_post_stream_analysis`). Modell aus Plan (analytics-Flag → Opus, sonst
+/// KEIN Report), Session-Lookup wenn keine ID, Wortgruppen-AI + Persistenz, dann pro Variante
 /// (compact/full) Snapshot → pending-Insert → Report-AI → done. Idempotent über
 /// die existing-done/pending-Prüfung.
 pub async fn trigger_post_stream_analysis(
@@ -2094,10 +2094,12 @@ pub async fn trigger_post_stream_analysis(
         return;
     }
 
-    // Plan-basiertes Modell (Default Minimax wie Python `or AI_MODEL_MINIMAX`).
-    let model = plan_ai_model(pool, &streamer)
-        .await
-        .unwrap_or(AiModel::Minimax);
+    // Plan-basiertes Modell: ohne das konsolidierte `analytics`-Flag gibt es
+    // KEINEN KI-Report mehr (kein MiniMax-Default-Fallback). Streamer ohne
+    // Analytics-Zugang lösen also keinen Post-Stream-Report aus.
+    let Some(model) = plan_ai_model(pool, &streamer).await else {
+        return;
+    };
 
     // Session-Lookup, wenn keine ID übergeben (letzte abgeschlossene Session).
     let session_id = match session_id {
@@ -2683,6 +2685,26 @@ mod tests {
             .execute(&pool)
             .await
             .unwrap();
+        // Plan-Resolver-Tabellen: ohne sie liefert resolve_plan_snapshot einen
+        // Fehler → plan_ai_model None → kein Report. Leer = raid_free (kein
+        // analytics-Flag); Tests, die einen Report erwarten, tragen einen
+        // analysis_dashboard-Override ein.
+        sqlx::query(
+            "CREATE TABLE streamer_plans (twitch_user_id TEXT, twitch_login TEXT, \
+             manual_plan_id TEXT, manual_plan_expires_at TEXT, manual_plan_notes TEXT, \
+             manual_plan_updated_at TEXT, first_login_at TEXT, \
+             trial_ever_granted INTEGER DEFAULT 0)",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+        sqlx::query(
+            "CREATE TABLE twitch_billing_subscriptions (customer_reference TEXT, plan_id TEXT, \
+             status TEXT, current_period_end TEXT, updated_at TEXT)",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
         Some(pool)
     }
 
@@ -3352,6 +3374,14 @@ mod tests {
         .execute(&pool)
         .await
         .unwrap();
+        // Analytics-Plan nötig: ohne das `analytics`-Flag wird KEIN Report erzeugt.
+        sqlx::query(
+            "INSERT INTO streamer_plans (twitch_user_id, twitch_login, manual_plan_id, \
+             manual_plan_expires_at) VALUES ('987','streamer','analysis_dashboard','2999-01-01')",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
 
         trigger_post_stream_analysis(&pool, "Streamer", Some(1)).await;
 
@@ -3366,12 +3396,12 @@ mod tests {
         )
         .fetch_all(&pool).await.unwrap();
         assert_eq!(variants, vec!["compact".to_string(), "full".to_string()]);
-        // model = Default Minimax (kein Plan).
+        // model = Opus (analysis_dashboard trägt das konsolidierte analytics-Flag).
         let model: String = sqlx::query_scalar(
             "SELECT model FROM twitch_stream_ai_reports WHERE report_variant='compact' AND session_id=1",
         )
         .fetch_one(&pool).await.unwrap();
-        assert_eq!(model, "minimax");
+        assert_eq!(model, "opus");
         // schema_version content-agnostisch (gilt für Fallback UND echten Report).
         let sv: Option<String> = sqlx::query_scalar(
             "SELECT report_json->>'schema_version' FROM twitch_stream_ai_reports \
@@ -3432,6 +3462,14 @@ mod tests {
         .execute(&pool)
         .await
         .unwrap();
+        // Analytics-Plan nötig: ohne das `analytics`-Flag wird KEIN Report erzeugt.
+        sqlx::query(
+            "INSERT INTO streamer_plans (twitch_user_id, twitch_login, manual_plan_id, \
+             manual_plan_expires_at) VALUES ('987','streamer','analysis_dashboard','2999-01-01')",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
         // Session 1 (ohne done-Report) + Session 2 (mit done-Report).
         sqlx::query(
             "INSERT INTO twitch_stream_sessions (id, streamer_login, started_at, ended_at, duration_seconds, avg_viewers, peak_viewers, follower_delta) VALUES \
@@ -3470,6 +3508,14 @@ mod tests {
             .execute(&pool).await.unwrap();
         sqlx::query(
             "INSERT INTO twitch_streamers (twitch_login, twitch_user_id) VALUES ('streamer','987')",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+        // Analytics-Plan nötig: ohne das `analytics`-Flag wird KEIN Report erzeugt.
+        sqlx::query(
+            "INSERT INTO streamer_plans (twitch_user_id, twitch_login, manual_plan_id, \
+             manual_plan_expires_at) VALUES ('987','streamer','analysis_dashboard','2999-01-01')",
         )
         .execute(&pool)
         .await

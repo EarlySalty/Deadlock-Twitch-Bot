@@ -4,7 +4,6 @@ import { Play, Clock, Users, TrendingUp, ChevronDown, ChevronUp, MessageCircle, 
 import { useQuery } from '@tanstack/react-query';
 import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer } from 'recharts';
 import { fetchOverview, fetchSessionDetail } from '@/api/analytics';
-import { PlanGateCard } from '@/components/cards/PlanGateCard';
 import type { DashboardOverview, StreamSession, TimeRange } from '@/types/analytics';
 
 interface SessionsProps {
@@ -250,8 +249,7 @@ function SessionDetails({ sessionId, session }: SessionDetailsProps) {
         </div>
 
         {/* Timeline Chart */}
-        <PlanGateCard featureId="stream_timeline_detail" title="Stream-Timeline Detail">
-          {isLoading ? (
+        {isLoading ? (
             <div className="h-32 flex items-center justify-center">
               <Loader2 className="w-5 h-5 animate-spin text-primary" />
             </div>
@@ -287,26 +285,23 @@ function SessionDetails({ sessionId, session }: SessionDetailsProps) {
               </ResponsiveContainer>
             </div>
           ) : null}
-        </PlanGateCard>
 
         {/* Top Chatters */}
-        <PlanGateCard featureId="chatter_list" title="Chatter-Liste">
-          {detail?.chatters && detail.chatters.length > 0 && (
-            <div>
-              <div className="text-sm font-medium text-text-secondary mb-2">Top Chatter dieser Session</div>
-              <div className="flex flex-wrap gap-2">
-                {detail.chatters.slice(0, 10).map((c: { login: string; messages: number }) => (
-                  <span
-                    key={c.login}
-                    className="px-2 py-1 text-xs bg-background rounded-full text-text-secondary"
-                  >
-                    {c.login} ({c.messages})
-                  </span>
-                ))}
-              </div>
+        {detail?.chatters && detail.chatters.length > 0 && (
+          <div>
+            <div className="text-sm font-medium text-text-secondary mb-2">Top Chatter dieser Session</div>
+            <div className="flex flex-wrap gap-2">
+              {detail.chatters.slice(0, 10).map((c: { login: string; messages: number }) => (
+                <span
+                  key={c.login}
+                  className="px-2 py-1 text-xs bg-background rounded-full text-text-secondary"
+                >
+                  {c.login} ({c.messages})
+                </span>
+              ))}
             </div>
-          )}
-        </PlanGateCard>
+          </div>
+        )}
       </div>
     </motion.div>
   );

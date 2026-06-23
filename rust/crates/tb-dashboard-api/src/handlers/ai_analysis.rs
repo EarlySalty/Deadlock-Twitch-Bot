@@ -1,8 +1,8 @@
 //! Handler für `GET /twitch/api/v2/ai/analysis`.
 //!
 //! Port von `api_ai.py:_api_v2_ai_analysis`. Erstellt eine tiefe, daten-basierte
-//! KI-Analyse (10-Punkte-Plan) via Claude Opus (Admin/Localhost ODER Plan
-//! `analytics.ai_full`) bzw. MiniMax (`analytics.ai_mini`). Verdrahtet die
+//! KI-Analyse (10-Punkte-Plan) via Claude Opus (Admin/Localhost ODER ein Plan mit
+//! dem konsolidierten `analytics`-Flag). Verdrahtet die
 //! Bausteine aus tb-analytics (collect_ai_context/build_prompt/parse) + die
 //! LLM-Clients (tb-engagement) + den globalen [`crate::ai_state`].
 
@@ -98,8 +98,8 @@ pub async fn ai_analysis_handler(
                     StatusCode::FORBIDDEN,
                     json!({
                         "error": "plan_required",
-                        "required_entitlements": ["analytics.ai_mini", "analytics.ai_full"],
-                        "required_plans": ["analysis_dashboard", "analytics_trial", "bundle_analysis_raid_boost", "raid_boost"],
+                        "required_entitlements": ["analytics"],
+                        "required_plans": ["analysis_dashboard", "analytics_trial", "bundle_analysis_raid_boost", "bundle_komplett", "bundle_werbefrei_analyse"],
                     }),
                 );
             }

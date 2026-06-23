@@ -168,9 +168,9 @@ export function PostStreamReportCard({ streamer, sessionId }: PostStreamReportCa
         <div className="flex flex-col items-center justify-center gap-3 py-8">
           <Lock className="h-8 w-8 text-white/30" />
           <p className="text-center text-sm text-text-secondary">
-            Automatische KI-Analyse nach jedem Stream
+            Automatische Stream-Analyse nach jedem Stream
           </p>
-          <p className="text-xs text-white/40">Verfügbar ab Basic-Plan</p>
+          <p className="text-xs text-white/40">Mit dem Analyse-Zugang freischalten</p>
         </div>
       </div>
     );

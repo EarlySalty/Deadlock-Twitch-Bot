@@ -1,8 +1,8 @@
 //! Handler für `GET /twitch/api/v2/ai/history`.
 //!
 //! Port von `bot/analytics/api_ai.py:_api_v2_ai_history`. Auth: eingeloggt; der
-//! **abgefragte Streamer** braucht einen AI-Plan (`analytics.ai_mini`/`ai_full`),
-//! sonst 403 — außer Admin. `streamer` Pflicht, `limit` 1..50 (Default 20).
+//! **abgefragte Streamer** braucht das konsolidierte `analytics`-Flag, sonst 403
+//! — außer Admin. `streamer` Pflicht, `limit` 1..50 (Default 20).
 
 use axum::{
     extract::{Query, State},
@@ -24,11 +24,10 @@ pub struct AiHistoryQuery {
     pub limit: Option<i32>,
 }
 
-/// AI-Modell des Streamer-Plans (Python `_plan_ai_model`): ai_full→opus, ai_mini→minimax, sonst None.
+/// AI-Modell des Streamer-Plans: konsolidiertes `analytics`-Flag → opus, sonst None.
 async fn ai_plan_model(pool: &PgPool, streamer: &str) -> Option<&'static str> {
     match tb_analytics::plan::resolve_plan_snapshot(pool, streamer, "").await {
-        Ok(s) if s.entitlements.contains(&"analytics.ai_full") => Some("opus"),
-        Ok(s) if s.entitlements.contains(&"analytics.ai_mini") => Some("minimax"),
+        Ok(s) if s.entitlements.contains(&"analytics") => Some("opus"),
         _ => None,
     }
 }
@@ -63,7 +62,7 @@ pub async fn ai_history_handler(
             StatusCode::FORBIDDEN,
             Json(json!({
                 "error": "plan_required",
-                "required_entitlements": ["analytics.ai_mini", "analytics.ai_full"],
+                "required_entitlements": ["analytics"],
             })),
         )
             .into_response();

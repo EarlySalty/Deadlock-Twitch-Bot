@@ -7,8 +7,9 @@
 //!
 //! **Provider-AUSWAHL** (welcher Provider für welches Feature/Entitlement) ist
 //! bewusst NICHT Teil dieser Schicht — sie liegt im Aufrufer (Python-Orakel:
-//! `bot/analytics/api_ai.py:_plan_ai_model`, `analytics.ai_full` → Anthropic,
-//! `analytics.ai_mini` → MiniMax). Diese Foundation liefert nur die Clients.
+//! `bot/analytics/api_ai.py:_plan_ai_model`; nach der Analytics-Konsolidierung
+//! gewährt das `analytics`-Flag durchgängig Anthropic/Opus). Diese Foundation
+//! liefert nur die Clients.
 
 use async_trait::async_trait;
 

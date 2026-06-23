@@ -38,7 +38,7 @@ export function Header({
   const partners = streamers.filter(s => s.isPartner && (!q || s.login.includes(q)));
   const others = streamers.filter(s => !s.isPartner && (!q || s.login.includes(q)));
   const allLabel = isDemoMode ? 'Demo-Profil' : canViewAllStreamers ? 'Alle Streamer' : 'Alle Partner';
-  const canPreviewExtended = !hasFullAccess && !hasEntitlement('analytics.extended');
+  const canPreviewExtended = !hasFullAccess && !hasEntitlement('analytics');
 
   // In Beta: Partner koennen vorerst alle Streamer sehen.
   const visiblePartners = partners;

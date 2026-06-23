@@ -25,9 +25,9 @@ const faqData = [
       'Deine Analytics-Daten bleiben für 30 Tage nach Kündigung gespeichert. Du kannst sie jederzeit exportieren oder dein Konto reaktivieren, um wieder Zugang zu erhalten.',
   },
   {
-    question: 'Welcher Plan ist der richtige für mich?',
+    question: 'Was ist im Analyse-Zugang enthalten?',
     answer:
-      'Der Basic-Plan ist ideal für Streamer, die ihre Analytics verbessern möchten. Der Extended-Plan enthält zusätzlich KI-gestützte Analysen und Coaching-Features für alle, die professionell wachsen wollen.',
+      'Der Analyse-Zugang schaltet alle Analytics-Features frei: detaillierte Stream-Auswertungen, KI-gestützte Analysen, Coaching-Empfehlungen und Wachstums-Insights in einem einzigen Plan.',
   },
 ];
 

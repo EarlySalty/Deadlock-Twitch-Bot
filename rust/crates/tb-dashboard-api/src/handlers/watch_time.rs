@@ -6,8 +6,8 @@
 //! `days` 7..365.
 //!
 //! Lesefenster (Python `_resolve_read_window`): Admin → `full`; sonst
-//! entscheidet der Plan des **abgefragten** Streamers — `analytics.basic` oder
-//! `analytics.extended` → `full`, sonst (Free `analytics.daily`) → `last_stream`.
+//! entscheidet der Plan des **abgefragten** Streamers — das konsolidierte
+//! `analytics`-Flag → `full`, sonst (kein Flag) → `last_stream`.
 
 use axum::{
     extract::{Query, State},
@@ -31,7 +31,7 @@ pub struct WatchTimeQuery {
 
 /// Pures Fenster-Mapping anhand der Plan-Entitlements (Python `_plan_has_entitlement`).
 fn window_for_entitlements(entitlements: &[&str]) -> &'static str {
-    if entitlements.contains(&"analytics.basic") || entitlements.contains(&"analytics.extended") {
+    if entitlements.contains(&"analytics") {
         "full"
     } else {
         "last_stream"
@@ -100,9 +100,9 @@ mod tests {
 
     #[test]
     fn fenster_mapping() {
-        assert_eq!(window_for_entitlements(&["analytics.daily", "analytics.basic"]), "full");
-        assert_eq!(window_for_entitlements(&["analytics.extended"]), "full");
-        assert_eq!(window_for_entitlements(&["analytics.daily"]), "last_stream"); // Free
+        assert_eq!(window_for_entitlements(&["analytics", "chat.lurker_tax"]), "full");
+        assert_eq!(window_for_entitlements(&["analytics"]), "full");
+        assert_eq!(window_for_entitlements(&["chat.lurker_tax"]), "last_stream"); // kein Flag
         assert_eq!(window_for_entitlements(&[]), "last_stream");
     }
 

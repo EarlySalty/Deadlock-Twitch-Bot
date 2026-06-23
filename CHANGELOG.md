@@ -1,10 +1,33 @@
-## #277 — Verwaltungs- & Analyse-Dashboard: Streamer-Standardsicht statt Dauer-Admin
+## #280 — Verwaltungs- & Analyse-Dashboard: Streamer-Standardsicht statt Dauer-Admin
 
 **Problem:** Im Verwaltungs- und Analyse-Dashboard funktionierten viele Kacheln nicht — „Konto-Daten nicht verfügbar", Fehler beim Laden der Scam-Schutz-Fälle und beim Umschalten der Chat-AI. Ursache: Ein Konto mit Admin-Berechtigung wurde nach dem Login dauerhaft als Admin behandelt statt als normaler Streamer; dadurch passten die angezeigte Streamer-Sicht und der Datenzugriff im Hintergrund nicht zusammen. Zusätzlich scheiterten Schreib-Aktionen an einem Schutzmechanismus, den die Dashboard-Oberfläche technisch nicht erfüllen konnte.
 
 **Änderung:** Nach dem Login giltst du jetzt standardmäßig als normaler Streamer und siehst dein eigenes Konto. Den Admin-Vollzugriff schaltest du selbst per Schalter an und jederzeit wieder aus — er ist kein Dauerzustand mehr. Schreib-Aktionen (z. B. Chat-AI ein/aus, Stille Hinweise, Scam-Schutz-Fälle bearbeiten) laufen über einen Schutz, der die eigene Herkunft der Anfrage prüft und so wieder zuverlässig durchgeht, ohne den Schutz vor fremden Seiten aufzugeben. Der Dashboard-Zugang ist nur noch mit Anmeldung möglich.
 
 **Ergebnis:** Verwaltungs- und Analyse-Dashboard laden wieder vollständig, Einstellungen lassen sich speichern und umschalten, und der Admin-Modus ist ein bewusster, umkehrbarer Schalter statt eines festen Zustands — bei anmeldepflichtiger, klar abgegrenzter Zugriffskontrolle.
+## #279 — Analyse-Dashboard: ein Plan statt drei Stufen
+
+**Problem:** Das Analyse-Dashboard war über mehrere Pläne verstreut. Analytics ließ sich auf verschiedenen Wegen freischalten — jeder mit einem anderen Umfang an Auswertungen, Verlaufsdaten und KI-Analysen. Das war unübersichtlich und teils widersprüchlich: Selbst einzelne Auswertungen des letzten Streams waren gesperrt, obwohl sie eigentlich der Einstieg sein sollten, und es war nie ganz klar, welcher Plan was zeigt.
+
+**Änderung:** Es gibt jetzt genau einen Analyse-Zugang. Der komplette letzte Stream ist für alle kostenlos sichtbar — inklusive Viewer-Verlauf und Chatter-Liste. Alles, was über den letzten Stream hinausgeht — der Verlauf über mehrere Streams, Trends, Vergleiche, die KI-gestützten Post-Stream-Reports, Coaching und Monetarisierung — steckt gebündelt im einen Analyse-Zugang. Raid-Boost und Werbefrei bleiben eigenständige Produkte und enthalten keine Analytics mehr.
+
+**Ergebnis:** Ein klarer Schnitt statt drei verschachtelter Stufen: den letzten Stream sieht jeder gratis, mit dem Analyse-Zugang gibt es alles. Wer bisher einen Plan mit Analyse hatte (auch als Bundle), behält automatisch den vollen Zugang.
+
+## #278 — Overlay-Baukasten: Vorschau bleibt nach schnellem Einstellen nicht mehr leer
+
+**Problem:** Wer im Stream-Overlay-Baukasten schnell mehrere Einstellungen verstellte (Regler ziehen, Schalter umlegen, Modus wechseln), bei dem konnte die Vorschau dauerhaft leer und transparent bleiben — nicht nur kurz, sondern bis auf Weiteres. Hintergrund: Jede Einstellungsänderung lud die Vorschau sofort komplett neu und brach dabei die gerade laufende Datenanfrage ab. Eine interne Anfrage-Bündelung räumte sich nach einem solchen Abbruch nicht auf und blockierte danach jede weitere Anfrage für denselben Kanal — der Kanal blieb leer, bis der Dienst neu startete.
+
+**Änderung:** Zwei Stellen. (1) Die Vorschau lädt beim Verstellen nicht mehr bei jedem einzelnen Klick oder Regler-Schritt neu, sondern gebündelt erst nach einer kurzen Pause; die angezeigte und kopierbare Overlay-URL bleibt weiterhin sofort aktuell. (2) Die interne Anfrage-Bündelung räumt sich jetzt auch dann sauber auf, wenn eine laufende Anfrage abgebrochen wird, und gibt wartende Anfragen unmittelbar frei. Läuft ein Datenabruf einmal in eine Zeitüberschreitung, zeigt das Overlay weiterhin, was vorhanden ist (etwa den Rang), statt komplett leer zu bleiben.
+
+**Ergebnis:** Im Baukasten lässt sich jetzt beliebig schnell an Stil, Layout und Inhalten herumspielen, ohne dass die Vorschau hängenbleibt; ein dauerhaft blockierter Kanal kann nicht mehr entstehen. Das eigentliche OBS-Overlay liefert robust weiter, auch wenn einzelne Statistiken kurzzeitig nicht abrufbar sind.
+
+## #277 — Auto-Raid heilt hängende Raid-Schalter selbst
+
+**Problem:** Ein Streamer konnte dauerhaft ohne Auto-Raid bleiben, obwohl seine Raid-Freigabe gültig war: Hatte eine frühere Token-Störung den internen Raid-Schalter auf „aus" gestellt und war die zugehörige technische Pause später wieder verschwunden, blieb der Schalter auf „aus" hängen. Keine der bestehenden Selbstheilungen erfasste diesen Zwischenzustand — der Auto-Raid wurde still übersprungen, ohne Fehlermeldung.
+
+**Änderung:** Ein stündlicher Abgleich schaltet den Raid-Schalter automatisch wieder ein, sobald drei Bedingungen zugleich zutreffen: aktiver Partner, nachweislich gesunder Raid-Token (gültig, keine erneute Anmeldung nötig) und keine technische Pause. Bewusste Abschaltungen (manueller Verzicht oder auf Token-Ebene deaktiviert) sowie gesperrte oder pausierte Kanäle werden dabei nie angetastet.
+
+**Ergebnis:** Der Zustand „Token funktioniert, es wird aber trotzdem nicht geraidet" kann nicht mehr dauerhaft hängenbleiben — der Schalter gleicht sich von selbst an den tatsächlichen Token-Zustand an.
 
 ## #276 — Telemetrie-, Abrechnungs- und Raid-Robustheit
 

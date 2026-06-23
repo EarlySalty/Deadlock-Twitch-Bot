@@ -1,10 +1,7 @@
 // Plan tier levels
 export type PlanTier = 'free' | 'basic' | 'extended';
 export type EntitlementId =
-  | 'analytics.basic'
-  | 'analytics.ai_mini'
-  | 'analytics.ai_full'
-  | 'analytics.extended'
+  | 'analytics'
   | 'chat.lurker_tax'
   | 'chat.promos.disable'
   | 'raid.priority';
@@ -36,10 +33,7 @@ export type TabId =
   | 'monetization';
 
 export const ALL_ENTITLEMENTS: EntitlementId[] = [
-  'analytics.basic',
-  'analytics.ai_mini',
-  'analytics.ai_full',
-  'analytics.extended',
+  'analytics',
   'chat.lurker_tax',
   'chat.promos.disable',
   'raid.priority',
@@ -49,9 +43,9 @@ export const ALL_ENTITLEMENTS: EntitlementId[] = [
 // Fehlt ein Tab hier, ist er frei zugaenglich. Gemischte Tabs erhalten das
 // niedrigste Tier ihrer Inhalte; hoehere Karten/Sub-Tabs gaten feiner.
 export const TAB_ENTITLEMENTS: Partial<Record<TabId, EntitlementId>> = {
-  'audience': 'analytics.basic',
-  'coaching': 'analytics.extended',
-  'monetization': 'analytics.extended',
+  'audience': 'analytics',
+  'coaching': 'analytics',
+  'monetization': 'analytics',
 };
 
 // Feature IDs for card-level gating within tabs
@@ -59,40 +53,32 @@ export type FeatureId =
   | 'health_scores'
   | 'calendar_heatmap'
   | 'insights_panel'
-  | 'stream_timeline_detail'
-  | 'chatter_list'
   | 'hype_timeline'
   | 'chat_content_analysis'
   | 'chat_social_graph'
   | 'title_performance'
   | 'raid_retention'
   | 'lurker_analysis'
-  | 'audience_sharing'
   | 'viewer_overlap'
   | 'category_timings'
-  | 'category_activity_series'
   | 'post_stream_report'
   | 'rankings_extended';
 
 // Feature requirements (cards within tabs that need higher entitlement)
 export const FEATURE_ENTITLEMENTS: Record<FeatureId, EntitlementId> = {
-  'health_scores': 'analytics.extended',
-  'calendar_heatmap': 'analytics.extended',
-  'insights_panel': 'analytics.extended',
-  'stream_timeline_detail': 'analytics.extended',
-  'chatter_list': 'analytics.extended',
-  'hype_timeline': 'analytics.extended',
-  'chat_content_analysis': 'analytics.extended',
-  'chat_social_graph': 'analytics.extended',
-  'title_performance': 'analytics.extended',
-  'raid_retention': 'analytics.extended',
-  'lurker_analysis': 'analytics.extended',
-  'audience_sharing': 'analytics.extended',
-  'viewer_overlap': 'analytics.extended',
-  'category_timings': 'analytics.extended',
-  'category_activity_series': 'analytics.extended',
-  'post_stream_report': 'analytics.ai_mini',
-  'rankings_extended': 'analytics.extended',
+  'health_scores': 'analytics',
+  'calendar_heatmap': 'analytics',
+  'insights_panel': 'analytics',
+  'hype_timeline': 'analytics',
+  'chat_content_analysis': 'analytics',
+  'chat_social_graph': 'analytics',
+  'title_performance': 'analytics',
+  'raid_retention': 'analytics',
+  'lurker_analysis': 'analytics',
+  'viewer_overlap': 'analytics',
+  'category_timings': 'analytics',
+  'post_stream_report': 'analytics',
+  'rankings_extended': 'analytics',
 };
 
 // Tier hierarchy for comparison

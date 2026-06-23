@@ -323,7 +323,7 @@ mod tests {
             .unwrap();
 
         let res = make_router_with_auth(pool, auth_state)
-            .oneshot(cookie_req(&session.session_id))
+            .oneshot(twitch_admin_cookie_req(&session.session_id))
             .await
             .unwrap();
         assert_eq!(res.status(), StatusCode::OK);

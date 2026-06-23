@@ -66,7 +66,7 @@ pub const BILLING_PLANS: &[BillingPlan] = &[
         description: "Starte kostenlos mit automatischen Raids in die Community.",
         monthly_net_cents: 0,
         recommended: false,
-        entitlements: &["analytics.daily"],
+        entitlements: &[],
         features: &[
             "Auto-Raid Grundfunktion bleibt aktiv",
             "Keine monatlichen Kosten für Basis-Raids",
@@ -96,12 +96,7 @@ pub const BILLING_PLANS: &[BillingPlan] = &[
         description: "Dein Kanal wird bevorzugt als Raid-Ziel vorgeschlagen — mehr eingehende Zuschauer.",
         monthly_net_cents: 199,
         recommended: false,
-        entitlements: &[
-            "analytics.ai_mini",
-            "analytics.basic",
-            "chat.lurker_tax",
-            "raid.priority",
-        ],
+        entitlements: &["chat.lurker_tax", "raid.priority"],
         features: &[
             "Bevorzugte Platzierung im Raid-Netzwerk",
             "Sichtbarkeit auch bei deiner Inaktivität",
@@ -118,8 +113,6 @@ pub const BILLING_PLANS: &[BillingPlan] = &[
         monthly_net_cents: 349,
         recommended: false,
         entitlements: &[
-            "analytics.ai_mini",
-            "analytics.basic",
             "chat.lurker_tax",
             "chat.promos.disable",
             "raid.priority",
@@ -139,12 +132,7 @@ pub const BILLING_PLANS: &[BillingPlan] = &[
         description: "Vollständiges Analytics-Dashboard mit Stream-Statistiken, Viewer-Kurven und Wachstumsvergleichen.",
         monthly_net_cents: 199,
         recommended: true,
-        entitlements: &[
-            "analytics.ai_full",
-            "analytics.basic",
-            "analytics.extended",
-            "chat.lurker_tax",
-        ],
+        entitlements: &["analytics", "chat.lurker_tax"],
         features: &[
             "Viewer-Verlauf & Peak-Analyse pro Stream",
             "Zeitraumvergleiche und Wachstumstrends",
@@ -161,9 +149,7 @@ pub const BILLING_PLANS: &[BillingPlan] = &[
         monthly_net_cents: 349,
         recommended: false,
         entitlements: &[
-            "analytics.ai_full",
-            "analytics.basic",
-            "analytics.extended",
+            "analytics",
             "chat.lurker_tax",
             "chat.promos.disable",
         ],
@@ -183,10 +169,7 @@ pub const BILLING_PLANS: &[BillingPlan] = &[
         monthly_net_cents: 499,
         recommended: false,
         entitlements: &[
-            "analytics.ai_full",
-            "analytics.ai_mini",
-            "analytics.basic",
-            "analytics.extended",
+            "analytics",
             "chat.lurker_tax",
             "chat.promos.disable",
             "raid.priority",
@@ -207,9 +190,7 @@ pub const BILLING_PLANS: &[BillingPlan] = &[
         monthly_net_cents: 349,
         recommended: false,
         entitlements: &[
-            "analytics.ai_full",
-            "analytics.basic",
-            "analytics.extended",
+            "analytics",
             "chat.lurker_tax",
             "chat.promos.disable",
             "raid.priority",
@@ -936,9 +917,11 @@ mod tests {
     }
 
     #[test]
-    fn entitlements_are_sorted_and_nonempty() {
+    fn entitlements_are_sorted() {
+        // raid_free trägt nach der Analytics-Konsolidierung keine Entitlements
+        // mehr (kein Flag => last_stream-Default). Sortier-Invariante bleibt für
+        // alle nicht-leeren Listen bestehen (Python plan_entitlements sortiert).
         for plan in BILLING_PLANS {
-            assert!(!plan.entitlements.is_empty(), "no entitlements for {}", plan.id);
             let mut sorted = plan.entitlements.to_vec();
             sorted.sort_unstable();
             assert_eq!(
@@ -946,6 +929,41 @@ mod tests {
                 "entitlements for {} must be sorted (Python plan_entitlements sorts)",
                 plan.id
             );
+        }
+    }
+
+    /// Drift-Guard: für jeden bekannten Plan stimmen die Katalog-Entitlements mit
+    /// [`crate::plan::plan_entitlements`] überein (eine Quelle der Wahrheit).
+    #[test]
+    fn catalog_entitlements_match_plan_module() {
+        for plan in BILLING_PLANS {
+            assert_eq!(
+                plan.entitlements,
+                crate::plan::plan_entitlements(plan.id),
+                "entitlements drift between catalog and plan module for {}",
+                plan.id
+            );
+        }
+    }
+
+    /// Konsolidiertes `"analytics"`-Flag: genau die 5 Analyse-Pläne tragen es,
+    /// die reinen Chat-/Raid-Pläne nicht.
+    #[test]
+    fn analytics_flag_only_on_analysis_plans() {
+        for id in ["raid_boost", "bundle_chat_quiet_raid_boost", "raid_free", "chat_quiet"] {
+            assert!(
+                !crate::plan::plan_has_analytics(id),
+                "{id} darf kein analytics-Flag tragen"
+            );
+        }
+        for id in [
+            "analysis_dashboard",
+            "bundle_werbefrei_analyse",
+            "bundle_komplett",
+            "bundle_analysis_raid_boost",
+            "analytics_trial",
+        ] {
+            assert!(crate::plan::plan_has_analytics(id), "{id} muss analytics-Flag tragen");
         }
     }
 }

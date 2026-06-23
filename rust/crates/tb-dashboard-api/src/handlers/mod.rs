@@ -28,6 +28,7 @@ pub mod help_page;
 pub mod billing;
 pub mod billing_page;
 pub mod billing_webhook;
+pub mod last_session;
 pub mod legal;
 pub mod market;
 pub mod monetization;

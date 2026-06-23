@@ -35,10 +35,7 @@ const AUTH_STATUS_FIXTURE: AuthStatus = {
     expiresAt: null,
     source: 'local_preview',
     entitlements: [
-      'analytics.basic',
-      'analytics.ai_mini',
-      'analytics.ai_full',
-      'analytics.extended',
+      'analytics',
       'chat.lurker_tax',
       'chat.promos.disable',
       'raid.priority',

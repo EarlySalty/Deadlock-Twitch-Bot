@@ -1176,9 +1176,9 @@ export function StreamReports({ streamer, days }: StreamReportsProps) {
           </div>
         </div>
         <div className="max-w-sm text-center">
-          <p className="mb-1 text-lg font-semibold text-white">Stream Reports brauchen KI-Zugang</p>
+          <p className="mb-1 text-lg font-semibold text-white">Stream-Reports brauchen den Analyse-Zugang</p>
           <p className="text-sm leading-relaxed text-text-secondary">
-            Automatische Post-Stream-Reports sind ab dem KI-Plan verfügbar.
+            Automatische Post-Stream-Reports sind mit dem Analyse-Zugang verfügbar.
           </p>
         </div>
       </div>

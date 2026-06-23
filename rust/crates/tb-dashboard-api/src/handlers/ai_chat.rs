@@ -1,8 +1,9 @@
 //! Handler für `POST /twitch/api/v2/ai/chat`.
 //!
 //! Port von `api_ai.py:_api_v2_ai_chat`. Beantwortet Folgefragen zu einer bereits
-//! erstellten KI-Analyse (Session aus [`crate::ai_state`]) via Claude Opus bzw.
-//! MiniMax, mit History-Kontext und Follow-up-Ratelimit.
+//! erstellten KI-Analyse (Session aus [`crate::ai_state`]) via Claude Opus, mit
+//! History-Kontext und Follow-up-Ratelimit. (Der MiniMax-Pfad bleibt im Dispatch
+//! für historische Sessions erhalten; neue Analysen nutzen ausschließlich Opus.)
 
 use std::time::Duration;
 
@@ -149,7 +150,7 @@ pub async fn ai_chat_handler(
             Ok(None) => {
                 return json_err(
                     StatusCode::FORBIDDEN,
-                    json!({ "error": "plan_required", "required_entitlements": ["analytics.ai_mini", "analytics.ai_full"] }),
+                    json!({ "error": "plan_required", "required_entitlements": ["analytics"] }),
                 );
             }
             Err(e) => {

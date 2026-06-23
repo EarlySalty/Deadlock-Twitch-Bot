@@ -22,7 +22,7 @@ export function Publikum({ streamer, days, initialSub }: PublikumProps) {
     {
       id: 'viewer',
       label: 'Einzel-Viewer',
-      entitlement: 'analytics.extended',
+      entitlement: 'analytics',
       render: () => <Viewers streamer={streamer} days={days} />,
     },
     {

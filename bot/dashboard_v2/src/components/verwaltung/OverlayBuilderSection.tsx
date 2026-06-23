@@ -71,6 +71,20 @@ const CHECKER_STYLE: CSSProperties = {
   backgroundSize: '20px 20px',
 };
 
+function useDebouncedValue<T>(value: T, delayMs: number): T {
+  const [debouncedValue, setDebouncedValue] = useState(value);
+
+  useEffect(() => {
+    const timeoutId = window.setTimeout(() => {
+      setDebouncedValue(value);
+    }, delayMs);
+
+    return () => window.clearTimeout(timeoutId);
+  }, [delayMs, value]);
+
+  return debouncedValue;
+}
+
 type OverlayBuilderSectionProps = {
   login: string;
 };
@@ -99,6 +113,7 @@ export function OverlayBuilderSection({ login }: OverlayBuilderSectionProps) {
     }
     return `${origin}/twitch/overlay?${params.toString()}`;
   }, [normalizedLogin, theme, layout, mode, opacity, recentN, modules]);
+  const debouncedUrl = useDebouncedValue(overlayUrl, 300);
 
   useEffect(() => {
     setCopied(false);
@@ -351,8 +366,7 @@ export function OverlayBuilderSection({ login }: OverlayBuilderSectionProps) {
             style={CHECKER_STYLE}
           >
             <iframe
-              key={overlayUrl}
-              src={overlayUrl}
+              src={debouncedUrl}
               title="Vorschau"
               style={{ height: `${previewHeight}px` }}
               className="block w-full border-0 bg-transparent"

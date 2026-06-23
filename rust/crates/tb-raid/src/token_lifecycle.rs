@@ -546,6 +546,36 @@ impl<N: TokenLifecycleNotifier> TokenLifecycleReactor<N> {
         restored
     }
 
+    /// Reconciliation: aktiviert raid_bot_enabled für aktive Partner mit nachweislich
+    /// gesundem Raid-Token, deren Partner-Toggle (durch alten Token-Error-Pfad)
+    /// auf 0 hängt, OHNE technische Pause. Schließt die Lücke, die der
+    /// Bot-Ban/Token-Error-Restore nicht abdeckt. Idempotent. Liefert Anzahl geheilter Zeilen.
+    pub async fn reconcile_healthy_raid_toggles(&self) -> u64 {
+        match sqlx::query(
+            r#"
+            UPDATE twitch_partners p
+               SET raid_bot_enabled = 1
+              FROM twitch_raid_auth a
+             WHERE a.twitch_user_id = p.twitch_user_id
+               AND LOWER(TRIM(COALESCE(p.status, ''))) = 'active'
+               AND COALESCE(p.raid_bot_enabled, 0) = 0
+               AND COALESCE(p.manual_partner_opt_out, 0) = 0
+               AND COALESCE(TRIM(p.technical_pause_reason), '') = ''
+               AND a.raid_enabled IS TRUE
+               AND COALESCE(a.needs_reauth, TRUE) = FALSE
+            "#,
+        )
+        .execute(&self.pool)
+        .await
+        {
+            Ok(result) => result.rows_affected(),
+            Err(error) => {
+                tracing::warn!(%error, "Raid-Toggle-Reconciliation-Sweep fehlgeschlagen");
+                0
+            }
+        }
+    }
+
     // -- DB-Helfer --------------------------------------------------------
 
     async fn is_notified(&self, twitch_user_id: &str) -> Result<bool, sqlx::Error> {
@@ -1070,6 +1100,7 @@ mod tests {
                 discord_display_name text, updated_at timestamptz DEFAULT now())",
             "CREATE TABLE twitch_partners (
                 id bigserial PRIMARY KEY, twitch_user_id text, twitch_login text,
+                status text DEFAULT 'active',
                 manual_partner_opt_out integer DEFAULT 0,
                 technical_pause_reason text, raid_bot_enabled integer DEFAULT 1)",
             "CREATE TABLE twitch_raid_auth (
@@ -1383,6 +1414,74 @@ mod tests {
         assert_eq!(blocked_reason.as_deref(), Some("blocked"));
         assert_eq!(token_reason, None);
         assert_eq!(token_raid, Some(1));
+    }
+
+    #[tokio::test]
+    async fn reconcile_healthy_raid_toggles_heilt_nur_aktive_partner_ohne_pause() {
+        let Some(_) = test_db_url() else {
+            eprintln!("SKIP: TB_TEST_DATABASE_URL nicht gesetzt");
+            return;
+        };
+        let pool = setup_db("tl_reconcile_healthy_raid_toggles").await;
+        sqlx::query(
+            "INSERT INTO twitch_partners
+                (twitch_user_id, twitch_login, status, raid_bot_enabled,
+                 manual_partner_opt_out, technical_pause_reason)
+             VALUES
+                ('700', 'healme', 'active', 0, 0, NULL),
+                ('701', 'tokenpause', 'active', 0, 0, 'token_error'),
+                ('702', 'blocked', 'active', 0, 0, 'blocked'),
+                ('703', 'manualout', 'active', 0, 1, NULL),
+                ('704', 'authoptout', 'active', 0, 0, NULL),
+                ('705', 'reauth', 'active', 0, 0, NULL),
+                ('706', 'archived', 'archived', 0, 0, NULL)",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+        sqlx::query(
+            "INSERT INTO twitch_raid_auth
+                (twitch_user_id, twitch_login, raid_enabled, needs_reauth)
+             VALUES
+                ('700', 'healme', true, false),
+                ('701', 'tokenpause', true, false),
+                ('702', 'blocked', true, false),
+                ('703', 'manualout', true, false),
+                ('704', 'authoptout', false, false),
+                ('705', 'reauth', true, true),
+                ('706', 'archived', true, false)",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+
+        let notifier = Arc::new(CountingNotifier::default());
+        let reactor = TokenLifecycleReactor::new(pool.clone(), notifier);
+
+        assert_eq!(reactor.reconcile_healthy_raid_toggles().await, 1);
+
+        let toggles: Vec<(String, Option<i32>)> = sqlx::query_as(
+            "SELECT twitch_user_id, raid_bot_enabled
+             FROM twitch_partners
+             ORDER BY twitch_user_id",
+        )
+        .fetch_all(&pool)
+        .await
+        .unwrap();
+        assert_eq!(
+            toggles,
+            vec![
+                ("700".to_string(), Some(1)),
+                ("701".to_string(), Some(0)),
+                ("702".to_string(), Some(0)),
+                ("703".to_string(), Some(0)),
+                ("704".to_string(), Some(0)),
+                ("705".to_string(), Some(0)),
+                ("706".to_string(), Some(0)),
+            ]
+        );
+
+        assert_eq!(reactor.reconcile_healthy_raid_toggles().await, 0);
     }
 
     #[tokio::test]

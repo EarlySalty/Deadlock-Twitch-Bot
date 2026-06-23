@@ -92,7 +92,7 @@ export function AIAnalysis({ streamer, days }: AIAnalysisProps) {
     runtimeConfig: dashboardRuntimeConfig,
   });
   const isAdmin = authStatus?.isAdmin || authStatus?.isLocalhost;
-  const hasAiAccess = hasEntitlement('analytics.ai_mini') || hasEntitlement('analytics.ai_full');
+  const hasAiAccess = hasEntitlement('analytics');
   const canUseAI = isDemoMode || isAdmin || hasAiAccess;
   const analysisInProgress = useRef(false);
 
@@ -123,9 +123,9 @@ export function AIAnalysis({ streamer, days }: AIAnalysisProps) {
           </div>
         </div>
         <div className="text-center max-w-xs">
-          <p className="text-white font-semibold text-lg mb-1">Plan-Upgrade erforderlich</p>
+          <p className="text-white font-semibold text-lg mb-1">Analyse-Zugang erforderlich</p>
           <p className="text-text-secondary text-sm leading-relaxed">
-            KI-Analysen sind in den Basic-, Trial-, Erweitert- und Bundle-Plänen verfügbar.
+            KI-Analysen sind mit dem Analyse-Zugang verfügbar.
           </p>
         </div>
       </div>

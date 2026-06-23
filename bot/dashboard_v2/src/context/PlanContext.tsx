@@ -36,7 +36,7 @@ export function PlanProvider({ children, plan, isAdmin, isLocalhost, isDemoMode 
     () => (hasFullAccess ? ALL_ENTITLEMENTS : (plan?.entitlements ?? [])),
     [hasFullAccess, plan?.entitlements],
   );
-  const hasExtendedAnalytics = hasFullAccess || entitlements.includes('analytics.extended');
+  const hasExtendedAnalytics = hasFullAccess || entitlements.includes('analytics');
   const [view, setView] = useState<DashboardView>(
     hasExtendedAnalytics ? 'extended' : 'basic'
   );
