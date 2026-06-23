@@ -69,6 +69,20 @@ const ANALYTICS_BLOCKED_PARTNER_STATUSES: &[&str] = &[
 const INTERNAL_HOME_LOGIN_URL: &str = "/twitch/auth/login?next=%2Ftwitch%2Fdashboard";
 const INTERNAL_HOME_DISCORD_CONNECT_URL: &str =
     "/twitch/auth/discord/link?next=%2Ftwitch%2Fverwaltung";
+const STEAM_LINK_DEFAULT_BASE_URL: &str = "https://deutsche-deadlock-community.de/link";
+
+/// Basis-URL für den Steam-Verknüpfungs-Flow (Steam-Link läuft über die
+/// Community-Seite, gekoppelt an die Discord-ID). Liest `STEAM_LINK_START_BASE_URL`
+/// und schneidet einen evtl. abschließenden `/` ab.
+fn steam_link_base() -> String {
+    std::env::var("STEAM_LINK_START_BASE_URL")
+        .ok()
+        .map(|v| v.trim().to_string())
+        .filter(|v| !v.is_empty())
+        .unwrap_or_else(|| STEAM_LINK_DEFAULT_BASE_URL.to_string())
+        .trim_end_matches('/')
+        .to_string()
+}
 
 // ── Request-Parameter ────────────────────────────────────────────────────────
 
@@ -298,6 +312,21 @@ pub async fn get_handler(
     let health_score = health_score_block(&pool, &resolved_login).await;
     let week_comparison = week_comparison_block(&pool, &resolved_login).await;
     let live_status = live_status_block(&pool, &resolved_login, &resolved_user_id).await;
+
+    // Steam-Verknüpfung läuft über die Discord-ID (Vorbild: onboarding.rs).
+    // Ohne aufgelöste Discord-ID gar kein fetch_rank-Call (kein unnötiger I/O).
+    let steam_discord_id = tb_chat::stats::resolve_discord_id(&pool, &resolved_user_id).await;
+    let steam_connected = match steam_discord_id.as_deref() {
+        Some(discord_id) => tb_chat::stats::fetch_rank(discord_id, false)
+            .await
+            .map(|rank| rank.linked)
+            .unwrap_or(false),
+        None => false,
+    };
+    let steam_connect_url = steam_discord_id
+        .as_deref()
+        .map(|discord_id| format!("{}/steam/login?uid={}", steam_link_base(), discord_id));
+
     let autoban_events = load_autoban_events(&resolved_login, since);
     let service_warning_events = load_service_warning_events(&resolved_login, since);
 
@@ -374,6 +403,11 @@ pub async fn get_handler(
                 "status": if discord_connected { "connected" } else { "missing" },
                 "connect_url": INTERNAL_HOME_DISCORD_CONNECT_URL,
                 "last_checked_at": generated_at,
+            },
+            "steam": {
+                "connected": steam_connected,
+                "status": if steam_connected { "connected" } else { "missing" },
+                "connect_url": steam_connect_url,
             },
             "raid_status": { "state": "active", "read_only": true },
             "partner": {

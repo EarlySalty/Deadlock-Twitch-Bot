@@ -50,6 +50,11 @@ export interface InternalHomeDiscordStatus {
   lastCheckedAt?: string | null;
 }
 
+export interface InternalHomeSteamStatus {
+  connected: boolean;
+  connectUrl: string | null;
+}
+
 export interface InternalHomeRaidStatus {
   active?: boolean;
   statusText?: string | null;
@@ -175,6 +180,7 @@ export interface InternalHomeData {
   loginUrl?: string | null;
   oauth?: InternalHomeOAuthStatus | null;
   discord?: InternalHomeDiscordStatus | null;
+  steam?: InternalHomeSteamStatus | null;
   raid?: InternalHomeRaidStatus | null;
   kpis30d?: InternalHomeKpis30d | null;
   recentStreams?: InternalHomeSession[] | null;
@@ -203,6 +209,12 @@ interface InternalHomeRawDiscordStatus {
   status?: string;
   connect_url?: string | null;
   last_checked_at?: string | null;
+}
+
+interface InternalHomeRawSteamStatus {
+  connected?: boolean;
+  status?: string;
+  connect_url?: string | null;
 }
 
 interface InternalHomeRawRaidStatus {
@@ -266,6 +278,7 @@ interface InternalHomeRawResponse {
   status?: {
     oauth?: InternalHomeRawOAuthStatus | null;
     discord?: InternalHomeRawDiscordStatus | null;
+    steam?: InternalHomeRawSteamStatus | null;
     raid_status?: InternalHomeRawRaidStatus | null;
   } | null;
   kpis?: InternalHomeRawKpis | null;
@@ -431,6 +444,7 @@ export async function fetchInternalHome(streamer?: string | null): Promise<Inter
   const status = raw.status || {};
   const oauth = status.oauth || {};
   const discord = status.discord || {};
+  const steam = status.steam || {};
   const raidStatus = status.raid_status || {};
   const kpis = raw.kpis || {};
   const links = raw.links || {};
@@ -455,6 +469,13 @@ export async function fetchInternalHome(streamer?: string | null): Promise<Inter
   const discordConnectUrl = rawDiscordConnectUrl
     ? sanitizeInternalRedirectUrl(rawDiscordConnectUrl, INTERNAL_HOME_LOGIN_FALLBACK)
     : null;
+  const steamConnected = Boolean(steam.connected);
+  // Server-generierte, absolute externe https-URL (Community-Link) — NICHT durch
+  // sanitizeInternalRedirectUrl (nur interne Pfade) schicken, sonst verworfen.
+  const steamConnectUrl =
+    typeof steam.connect_url === 'string' && steam.connect_url.startsWith('https://')
+      ? steam.connect_url
+      : null;
 
   const impactEvents = (raw.bot_impact?.events || []).map(mapImpactEntry);
   const activityEvents = (raw.bot_activity?.events || []).map(mapImpactEntry);
@@ -512,6 +533,10 @@ export async function fetchInternalHome(streamer?: string | null): Promise<Inter
       status: discordStatus,
       connectUrl: discordConnectUrl,
       lastCheckedAt: discord.last_checked_at || raw.generated_at || null,
+    },
+    steam: {
+      connected: steamConnected,
+      connectUrl: steamConnectUrl,
     },
     raid: {
       active: String(raidStatus.state || '').toLowerCase() === 'active',

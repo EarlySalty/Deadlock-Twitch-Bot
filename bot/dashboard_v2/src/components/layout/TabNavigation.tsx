@@ -1,7 +1,6 @@
 import { motion } from 'framer-motion';
 import {
   LayoutDashboard,
-  ListChecks,
   TrendingUp,
   BarChart3,
   Users,
@@ -32,7 +31,6 @@ interface Tab {
 }
 
 const tabs: Tab[] = [
-  { id: 'onboarding', label: 'Onboarding', icon: ListChecks },
   { id: 'overview', label: 'Übersicht', icon: LayoutDashboard },
   { id: 'streams', label: 'Streams', icon: TrendingUp },
   { id: 'audience', label: 'Publikum', icon: Users },

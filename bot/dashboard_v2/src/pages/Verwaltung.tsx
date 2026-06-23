@@ -2,15 +2,15 @@ import { motion } from 'framer-motion';
 import { useQuery } from '@tanstack/react-query';
 import { fetchInternalHome } from '@/api/home';
 import { useAuthStatus } from '@/hooks/useAnalytics';
-import { PREVIEW_ANALYTICS_ROUTE, PREVIEW_HOME_ROUTE, PREVIEW_OVERLAY_ROUTE, isPreviewModeEnabled } from '@/preview/routes';
+import { PREVIEW_HOME_ROUTE, PREVIEW_OVERLAY_ROUTE, isPreviewModeEnabled } from '@/preview/routes';
 import { AIEngagementSection } from '@/components/verwaltung/AIEngagementSection';
 import { LurkerTaxSection } from '@/components/verwaltung/LurkerTaxSection';
 import { SilentNotificationsSection } from '@/components/verwaltung/SilentNotificationsSection';
 import { ScamGuardSection } from '@/components/verwaltung/ScamGuardSection';
-import { OnboardingWizard } from '@/components/onboarding/OnboardingWizard';
 import {
   ArrowLeft,
   ArrowRight,
+  Gamepad2,
   Loader2,
   MessageSquare,
   ShieldAlert,
@@ -79,6 +79,8 @@ export function VerwaltungPage() {
   const reconnectUrl = home.oauth?.reconnectUrl || oauthFallbackUrl;
   const discordConnected = Boolean(home.discord?.connected);
   const discordConnectUrl = home.discord?.connectUrl || null;
+  const steamConnected = Boolean(home.steam?.connected);
+  const steamConnectUrl = home.steam?.connectUrl || null;
   const userId = (authStatus as any)?.userId || (home as any)?.userId || '';
 
   const oauthConnected = oauthStatus === 'connected' && !hasScopeIssue;
@@ -173,28 +175,6 @@ export function VerwaltungPage() {
               Zurück zur Startseite
             </a>
           </div>
-        </motion.section>
-
-        {/* Einrichtung & Optionen (Onboarding-Wizard) */}
-        <motion.section
-          className="space-y-4"
-          initial={{ opacity: 0, y: 16 }}
-          whileInView={{ opacity: 1, y: 0 }}
-          viewport={{ once: true }}
-          transition={{ duration: 0.32, delay: 0.02 }}
-        >
-          <div>
-            <p className="text-sm uppercase tracking-wider font-medium text-primary mb-1">Einrichtung</p>
-            <h2 className="display-font text-2xl font-bold text-white">Bot einrichten &amp; Optionen</h2>
-            <p className="mt-1 text-sm text-text-secondary">
-              Steam &amp; Discord verknüpfen, Go-Live-Posts steuern und die Einrichtungsschritte abhaken.
-            </p>
-          </div>
-          <OnboardingWizard
-            onNavigateOverview={() => {
-              window.location.href = PREVIEW_ANALYTICS_ROUTE;
-            }}
-          />
         </motion.section>
 
         {/* Twitch OAuth Section */}
@@ -315,6 +295,60 @@ export function VerwaltungPage() {
                   Discord-Verknüpfungen laufen nicht über den Admin-Login und sind auf dieser Seite aktuell nicht als Self-Service freigeschaltet.
                 </p>
               )}
+            </div>
+          )}
+        </motion.section>
+
+        {/* Steam Section */}
+        <motion.section
+          className="panel-card rounded-2xl p-5 md:p-6"
+          initial={{ opacity: 0, y: 16 }}
+          whileInView={{ opacity: 1, y: 0 }}
+          viewport={{ once: true }}
+          transition={{ duration: 0.32, delay: 0.1 }}
+        >
+          <div className="mb-5">
+            <p className="text-sm uppercase tracking-wider font-medium text-primary mb-1">Steam</p>
+            <h2 className="display-font text-2xl font-bold text-white mb-1">Steam verbinden</h2>
+          </div>
+
+          <div className="soft-elevate rounded-xl border border-border bg-background/60 p-4 mb-5">
+            <div className="flex items-start gap-3">
+              <div className="w-10 h-10 rounded-lg gradient-accent flex items-center justify-center shrink-0">
+                <Gamepad2 className="h-5 w-5 text-white" />
+              </div>
+              <div className="min-w-0 flex-1">
+                <p className={`text-base font-bold ${steamConnected ? 'text-success' : 'text-warning'}`}>
+                  {steamConnected ? 'Verbunden' : 'Nicht verbunden'}
+                </p>
+                <p className="mt-0.5 text-xs text-text-secondary">
+                  {steamConnected ? 'Steam-Account verknüpft.' : 'Noch kein Steam-Account verknüpft.'}
+                </p>
+              </div>
+            </div>
+          </div>
+
+          {steamConnectUrl ? (
+            <a
+              href={steamConnectUrl}
+              className="inline-flex items-center gap-2 rounded-lg border border-accent/40 bg-accent/10 px-5 py-2.5 text-sm font-semibold text-accent transition-colors hover:border-accent/60 hover:bg-accent/20"
+            >
+              <Gamepad2 className="h-4 w-4" />
+              {steamConnected ? 'Erneut verknüpfen' : 'Steam verknüpfen'}
+            </a>
+          ) : (
+            <div className="space-y-2">
+              <button
+                type="button"
+                disabled
+                className="inline-flex cursor-not-allowed items-center gap-2 rounded-lg border border-border bg-background/70 px-5 py-2.5 text-sm font-semibold text-text-secondary"
+              >
+                <Gamepad2 className="h-4 w-4" />
+                Steam verknüpfen
+              </button>
+              <p className="text-xs text-text-secondary">
+                Verknüpfe zuerst deinen Discord-Account — die Steam-Verknüpfung läuft darüber.
+              </p>
             </div>
           )}
         </motion.section>

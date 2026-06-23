@@ -1,3 +1,11 @@
+## #285 — Steam direkt im Dashboard verknüpfen, erzwungenes Onboarding entfernt
+
+**Problem:** Das Verwaltungs-Dashboard drängte dich bei jedem Besuch in einen Einrichtungs-Assistenten, solange dieser nicht als „abgeschlossen" markiert war — auch wenn längst alles eingerichtet war. Dessen Steam-Schritt führte dabei ins Leere: er erklärte die Verknüpfung nur, bot aber keinen funktionierenden Knopf. Eine Steam-Verknüpfung ließ sich im Dashboard gar nicht anstoßen.
+
+**Änderung:** Der aufgezwungene Einrichtungs-Assistent ist entfernt — das Dashboard öffnet direkt die Übersicht, und niemand wird mehr automatisch ins Onboarding geleitet. Im Verwaltungs-Bereich gibt es stattdessen neben „Discord verbinden" jetzt eine eigene Karte „Steam verbinden": Sie zeigt, ob dein Steam-Account verknüpft ist, und bietet — sofern dein Discord verknüpft ist — einen Knopf direkt in die bestehende Steam-Anmeldung. Die Verknüpfung selbst läuft unverändert über die Community-Steam-Anmeldung, gekoppelt an deine Discord-ID; es entsteht kein zweiter Speicherort. Ist Steam bereits verknüpft, steht dort nur „Verbunden". Ist Discord noch nicht verknüpft, weist ein Hinweis darauf hin, dass die Steam-Verknüpfung darüber läuft.
+
+**Ergebnis:** Kein erzwungenes Onboarding mehr; das Dashboard startet auf der Übersicht. Steam lässt sich bequem direkt aus der Verwaltung verknüpfen — ohne Doppelung: verknüpft bleibt verknüpft, und fehlt Discord, sagt das Dashboard klar, was zuerst zu tun ist.
+
 ## #284 — Lurker-Steuer jetzt im Dashboard schaltbar
 
 **Problem:** Die „Lurker-Steuer" — die deine ruhigsten Stammzuschauer ab und zu mit einem freundlichen Hinweis zurück in den Chat holt — ließ sich bisher nur per Chat-Befehl abschalten. Im Verwaltungs-Dashboard fehlte ein eigener Schalter, sodass man den Status dort weder sehen noch bequem ändern konnte.
