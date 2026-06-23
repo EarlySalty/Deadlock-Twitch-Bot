@@ -64,7 +64,7 @@ export TB_MONITORING_POLL_ENABLED="${TB_MONITORING_POLL_ENABLED:-1}"
 # Strangler-Fig-Fallback: noch nicht portierte interne-API-Routen (Raid-OAuth,
 # Blacklist, Analytics, …) gehen an die Legacy-Python-API auf Seitenport 8779
 # (Python-Worker, TWITCH_INTERNAL_API_LEGACY_PORT im Takeover-Drop-in).
-export TB_INTERNAL_API_LEGACY_FALLBACK_URL="${TB_INTERNAL_API_LEGACY_FALLBACK_URL:-http://127.0.0.1:8779}"
+export TB_INTERNAL_API_LEGACY_FALLBACK_URL="${TB_INTERNAL_API_LEGACY_FALLBACK_URL:-}"
 # Bot-Account für OAuth-Followups (Moderator-Einsetzung): öffentliche User-ID
 # von deutschedeadlockcommunity — Python löst sie zur Laufzeit aus dem
 # Chat-Token auf, Rust besitzt den Chat-Token (noch) nicht.

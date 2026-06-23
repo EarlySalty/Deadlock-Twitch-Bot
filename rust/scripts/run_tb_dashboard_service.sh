@@ -68,6 +68,6 @@ export TWITCH_DASHBOARD_AUTH_REDIRECT_URI="${TWITCH_DASHBOARD_AUTH_REDIRECT_URI:
 # Welle D: Strangler-Fallback — nicht portierte Dashboard-Routen gehen an
 # Python (8765) weiter. Leer setzen ("") deaktiviert den Proxy (404 statt
 # Weiterleitung). Wird erst wirksam, wenn Caddy v2-Pfade auf 8769 flippt.
-export TB_DASHBOARD_LEGACY_FALLBACK_URL="${TB_DASHBOARD_LEGACY_FALLBACK_URL:-http://127.0.0.1:8765}"
+export TB_DASHBOARD_LEGACY_FALLBACK_URL="${TB_DASHBOARD_LEGACY_FALLBACK_URL:-}"
 
 exec "$ROOT_DIR/rust/target/release/tb-dashboard"
