@@ -86,45 +86,41 @@ pub async fn csrf_protect(request: Request, next: Next) -> Response {
         .trim()
         .to_string();
 
-    // Admin- vor Partner-Session prüfen (Admin-Cookie hat Vorrang).
-    let admin_cookie = extract_cookie(&parts, ADMIN_COOKIE_NAME).map(str::to_string);
-    let partner_cookie = extract_cookie(&parts, PARTNER_COOKIE_NAME).map(str::to_string);
+    // Beide Session-Cookies UNABHÄNGIG prüfen: ein veraltetes `master_dash_session`
+    // (Discord-Admin) darf eine gültige `twitch_dash_session` NICHT verdecken — sonst
+    // scheitern alle Schreib-POSTs, sobald beide Cookies im Browser liegen. Konsistent
+    // zur Auth-Kaskade (level.rs), die die Twitch-Session ebenfalls vorrangig auflöst.
+    let admin_sid = extract_cookie(&parts, ADMIN_COOKIE_NAME).filter(|s| !s.is_empty());
+    let partner_sid = extract_cookie(&parts, PARTNER_COOKIE_NAME).filter(|s| !s.is_empty());
 
-    let token_valid = match (&admin_cookie, &partner_cookie) {
-        (Some(sid), _) if !sid.is_empty() => state
+    // Gültig, sobald EIN Pfad trägt: korrektes `X-CSRF-Token` ODER (same-origin +
+    // gültige DB-Session). F2: Der tokenlose Browser-Fallback trägt sicherheitlich
+    // auf SameSite=Lax plus dem Origin/Referer-Gate oben; ohne gültige DB-Session
+    // bleibt er zu.
+    let mut valid = false;
+    if let Some(sid) = admin_sid {
+        valid = state
             .validate_csrf(sid, ADMIN_COOKIE_NAME_TYPE, &presented)
             .await
-            .unwrap_or(false),
-        (_, Some(sid)) if !sid.is_empty() => state
-            .validate_csrf(sid, PARTNER_COOKIE_NAME_TYPE, &presented)
-            .await
-            .unwrap_or(false),
-        _ => false,
-    };
-
-    let session_valid = if token_valid {
-        true
-    } else {
-        // F2: Der tokenlose Browser-Fallback trägt sicherheitlich auf SameSite=Lax
-        // plus Origin/Referer-Gate; ohne gültige DB-Session bleibt er zu.
-        match (&admin_cookie, &partner_cookie) {
-            (Some(sid), _) if !sid.is_empty() => state
-                .load_admin_session(sid)
+            .unwrap_or(false)
+            || state.load_admin_session(sid).await.ok().flatten().is_some();
+    }
+    if !valid {
+        if let Some(sid) = partner_sid {
+            valid = state
+                .validate_csrf(sid, PARTNER_COOKIE_NAME_TYPE, &presented)
                 .await
-                .ok()
-                .flatten()
-                .is_some(),
-            (_, Some(sid)) if !sid.is_empty() => state
-                .load_partner_session(sid)
-                .await
-                .ok()
-                .flatten()
-                .is_some(),
-            _ => false,
+                .unwrap_or(false)
+                || state
+                    .load_partner_session(sid)
+                    .await
+                    .ok()
+                    .flatten()
+                    .is_some();
         }
-    };
+    }
 
-    if session_valid {
+    if valid {
         next.run(Request::from_parts(parts, body)).await
     } else {
         csrf_failed()
@@ -490,5 +486,39 @@ mod tests {
         let Some((_pool, state)) = maybe_test_state().await else { return; };
         let resp = post_with_state(state, None, Some("https://dashboard.example.com")).await;
         assert_eq!(resp.status(), StatusCode::FORBIDDEN);
+    }
+
+    #[tokio::test]
+    async fn stale_admin_cookie_verdeckt_nicht_gueltige_partner_session() {
+        // Regression: Browser trägt ein veraltetes `master_dash_session` (Discord-Admin)
+        // NEBEN einer gültigen `twitch_dash_session`. Der CSRF-Layer darf nicht am stale
+        // Admin-Cookie hängenbleiben, sondern muss die gültige Partner-Session
+        // akzeptieren — sonst csrf_failed auf allen Schreib-POSTs.
+        let Some((pool, state)) = maybe_test_state().await else { return; };
+        ensure_partner(&pool, 9062403, "csrf_both", "9062403").await;
+        let session = state
+            .create_partner_session("csrf_both", "9062403", "CSRF Both")
+            .await
+            .unwrap();
+        let cookie = format!(
+            "{}=stale-invalid-admin-session; {}={}",
+            ADMIN_COOKIE_NAME, PARTNER_COOKIE_NAME, session.session_id
+        );
+        let resp = post_with_state(
+            state.clone(),
+            Some(cookie),
+            Some("https://dashboard.example.com"),
+        )
+        .await;
+        assert_eq!(resp.status(), StatusCode::OK);
+        sqlx::query("DELETE FROM dashboard_sessions WHERE session_id = $1")
+            .bind(&session.session_id)
+            .execute(&pool)
+            .await
+            .unwrap();
+        sqlx::query("DELETE FROM twitch_partners WHERE id = 9062403")
+            .execute(&pool)
+            .await
+            .unwrap();
     }
 }

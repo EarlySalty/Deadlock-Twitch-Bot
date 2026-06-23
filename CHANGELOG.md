@@ -1,3 +1,11 @@
+## #282 — Dashboard-Schalter speichern wieder zuverlässig
+
+**Problem:** Im Verwaltungs-Dashboard schlugen Schreib-Aktionen — Schalter umlegen, Einstellungen speichern (Stille Hinweise, Scam-Schutz, Chat-AI) — mit „csrf_failed" bzw. „HTTP 403" fehl, obwohl die Seiten normal luden. Ursache: Lag im Browser neben der gültigen Anmeldung noch ein veraltetes Cookie eines früheren Admin-Logins, prüfte der Schreib-Schutz nur dieses veraltete Cookie und wies die Aktion ab — die eigentlich gültige Anmeldung wurde dabei übersprungen.
+
+**Änderung:** Der Schreib-Schutz prüft jetzt jede vorhandene Anmeldung unabhängig; ein veraltetes Alt-Cookie kann eine gültige Anmeldung nicht mehr verdecken. Das entspricht der Anmelde-Reihenfolge im übrigen Dashboard.
+
+**Ergebnis:** Schalter und Einstellungen im Dashboard speichern wieder zuverlässig — auch für Konten, die früher einen separaten Admin-Login genutzt haben.
+
 ## #281 — Analyse-Daten strikt aufs eigene Konto begrenzt
 
 **Problem:** Die Daten-Endpunkte des Verwaltungs- und Analyse-Dashboards lasen den abgefragten Kanal aus einem Anfrage-Parameter, prüften aber nicht durchgängig, dass dieser Kanal auch dem angemeldeten Konto gehört. Eine Plan- bzw. Anmeldeprüfung allein bestätigt nur, dass die eigene Sitzung berechtigt ist — nicht, wessen Kanal abgefragt wird. Dadurch hätte ein angemeldeter Streamer durch Ändern des Kanal-Parameters Auswertungen fremder Kanäle (z. B. Zuschauer-Überschneidung, Audience-, Chat- oder Raid-Auswertungen) einsehen können.
