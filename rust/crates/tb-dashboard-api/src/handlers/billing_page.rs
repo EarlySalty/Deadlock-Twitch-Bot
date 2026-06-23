@@ -13,6 +13,9 @@
 //! - `GET|POST /twitch/abbo/kündigen` → Stripe-Customer-Portal-Link (falls
 //!   Customer-ID vorhanden), sonst Fallback `cancel_at_period_end` via
 //!   [`StripeClient`]. Beides Stripe-hosted; keine eigene Kündigungs-Engine.
+//! - `GET /twitch/abbo/rechnungen` → Stripe-Customer-Portal-Link (falls
+//!   Customer-ID vorhanden), sonst `/twitch/pricing` mit Grund. Keine eigene
+//!   Rechnungsseite.
 //! - `GET /twitch/api/billing/catalog` (+ `/twitch/api/v2/billing/catalog`) →
 //!   Plan-Katalog als JSON inkl. `current_subscription` + Stripe-Price-Verfügbarkeit.
 //! - `GET /twitch/api/billing/readiness` → Stripe-Readiness als JSON (keine Secrets).
@@ -394,6 +397,72 @@ pub async fn cancel_execute(
         Err(error) => {
             tracing::error!(%error, "billing cancel fallback failed");
             Redirect::to("/twitch/pricing?cancel=error").into_response()
+        }
+    }
+}
+
+// ── Legacy-Rechnungslink ────────────────────────────────────────────────────
+
+/// `GET /twitch/abbo/rechnungen` — obsolete eigene Rechnungsseite.
+///
+/// Grillme-2A-Drop: Rechnungen werden nicht mehr selbst gerendert, sondern über
+/// das Stripe-hosted Customer-Portal angeboten. Ohne Session, Customer-ID oder
+/// Stripe-Konfiguration landet der alte Link sauber auf `/twitch/pricing`.
+pub async fn legacy_invoices_redirect_handler(
+    auth: DashboardAuthLevel,
+    config: Option<Extension<BillingPageConfig>>,
+    State(pool): State<PgPool>,
+) -> Response {
+    let Some(reference) = customer_reference_for(&auth) else {
+        return Redirect::to("/twitch/auth/login?next=%2Ftwitch%2Fabbo%2Frechnungen")
+            .into_response();
+    };
+    let (twitch_login, twitch_user_id) = login_and_user_id(&auth);
+
+    let record = match active_customer_record(&pool, &twitch_login, &twitch_user_id, &reference).await
+    {
+        Ok(rec) => rec,
+        Err(error) => {
+            tracing::error!(%error, "billing invoices legacy redirect: customer lookup failed");
+            return Redirect::to("/twitch/pricing?invoice=error").into_response();
+        }
+    };
+    let Some(record) = record else {
+        return Redirect::to("/twitch/pricing?invoice=missing_customer").into_response();
+    };
+    if record.stripe_customer_id.is_empty() {
+        return Redirect::to("/twitch/pricing?invoice=missing_customer").into_response();
+    }
+
+    let Some(Extension(config)) = config else {
+        return Redirect::to("/twitch/pricing?invoice=error").into_response();
+    };
+    let return_url = format!(
+        "{}/twitch/pricing?invoice=portal_returned",
+        config.public_origin.trim_end_matches('/')
+    );
+
+    match config
+        .client
+        .create_billing_portal_session(&record.stripe_customer_id, &return_url)
+        .await
+    {
+        Ok(portal) => {
+            let url = portal
+                .get("url")
+                .and_then(Value::as_str)
+                .unwrap_or("")
+                .trim()
+                .to_string();
+            if url.is_empty() {
+                Redirect::to("/twitch/pricing?invoice=portal_unavailable").into_response()
+            } else {
+                Redirect::to(&url).into_response()
+            }
+        }
+        Err(error) => {
+            tracing::warn!(%error, "billing invoices legacy redirect: portal unavailable");
+            Redirect::to("/twitch/pricing?invoice=portal_unavailable").into_response()
         }
     }
 }

@@ -35,6 +35,7 @@ pub mod market;
 pub mod monetization;
 pub mod network;
 pub mod onboarding;
+pub mod obsolete_routes;
 pub mod overlay;
 pub mod overview;
 pub mod raids;
