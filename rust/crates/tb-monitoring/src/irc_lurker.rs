@@ -3,12 +3,8 @@
 //! Zweite, **ergänzende** Presence-Quelle neben dem primären Helix
 //! `Get Chatters`: eine separate IRC-Verbindung liest JOIN/PART/NAMES und
 //! spiegelt die beobachteten Chatter in `twitch_session_chatters` (für die
-//! aktive Session des Kanals). Bewusst ein Experiment, **default-AUS**
-//! (`TWITCH_EXPERIMENTAL_IRC_LURKER_CHANNELS`).
-//!
-//! Diese Slice (26a) enthält die ohne Socket testbaren Kern-Teile: die
-//! IRC-Zeilen-Parser und die DB-Upserts. Der async-Verbindungs-Loop +
-//! Channel-Tracking + Wiring folgen separat.
+//! aktive Session des Kanals). Bewusst **default-AUS** und im Binary per
+//! `TB_IRC_LURKER_ENABLED=1` aktivierbar.
 
 use std::collections::{HashMap, HashSet};
 use std::sync::{Arc, Mutex};
@@ -237,17 +233,18 @@ pub async fn record_presence_ticks(
 // ---- Async-Tracker (Verbindungs-Loop + dynamisches Channel-Tracking) -------
 //
 // HINWEIS zum An/Aus-Zustand: In Python ist `experimental_irc_lurker_enabled`
-// hartcodiert `False` (runtime_bootstrap.py) und wird NIE auf True gesetzt — der
-// Tracker startet dort nie. Dieser Port baut das Feature vollständig (runnable),
-// wird in tb-bot aber bewusst NICHT gespawnt → 1:1-Parität (dauerhaft aus). Zum
-// Aktivieren müsste ein Aufrufer eine Instanz bauen, `track_channel` füttern und
-// `run()` spawnen (Bot-User-Token + `user:read:chat`-Scope vorausgesetzt).
+// hartcodiert `False` (runtime_bootstrap.py) und wird NIE auf True gesetzt.
+// Der Rust-Port wird in `tb-bot` weiterhin default-aus gehalten und nur per
+// `TB_IRC_LURKER_ENABLED=1` als anonymer justinfan-Presence-Sammler gespawnt.
 
 const IRC_HOST: &str = "irc.chat.twitch.tv";
 const IRC_PORT: u16 = 6667;
 const NAMES_POLL_SECONDS: u64 = 120;
 const CONNECT_BACKOFF_SECONDS: u64 = 30;
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
+// 600ms/JOIN = max ~16 JOINs/10s, sicher unter Twitchs Anonym-/User-Limit von
+// 20 JOINs pro 10s (Ueberschreitung => Verbindungsabbruch + Reconnect-Schleife).
+const IRC_JOIN_STAGGER: Duration = Duration::from_millis(600);
 
 /// Klassifizierung einer getrackten Quelle (nur Metadaten; die Datensammlung
 /// läuft für alle Kanäle).
@@ -282,8 +279,7 @@ pub struct IrcLurkerTracker {
 }
 
 impl IrcLurkerTracker {
-    /// `nick`/`access_token` leer → anonymer `justinfan`-Login (nur lokale Tests);
-    /// produktiv: Bot-Login + User-Token (mirror `IRCLurkerTracker.__init__`).
+    /// `nick`/`access_token` leer → anonymer `justinfan`-Login.
     pub fn new(
         pool: PgPool,
         client_id: String,
@@ -293,6 +289,7 @@ impl IrcLurkerTracker {
         let nick_norm = nick
             .map(|n| n.trim().to_lowercase())
             .filter(|n| !n.is_empty());
+        let access_token = access_token.trim().to_string();
         let authenticated = !access_token.is_empty() && nick_norm.is_some();
         let (cmd_tx, cmd_rx) = mpsc::unbounded_channel();
         Self {
@@ -379,18 +376,9 @@ impl IrcLurkerTracker {
     async fn connect(&self) -> Option<(BufReader<OwnedReadHalf>, OwnedWriteHalf)> {
         let stream = TcpStream::connect((IRC_HOST, IRC_PORT)).await.ok()?;
         let (rd, mut wr) = stream.into_split();
-        if self.authenticated {
-            let clean = self.access_token.replace("oauth:", "");
-            wr.write_all(format!("PASS oauth:{clean}\r\n").as_bytes())
-                .await
-                .ok()?;
+        for command in self.handshake_commands() {
+            wr.write_all(command.as_bytes()).await.ok()?;
         }
-        wr.write_all(format!("NICK {}\r\n", self.nick).as_bytes())
-            .await
-            .ok()?;
-        wr.write_all(b"CAP REQ :twitch.tv/membership twitch.tv/commands\r\n")
-            .await
-            .ok()?;
         wr.flush().await.ok()?;
 
         let mut reader = BufReader::new(rd);
@@ -424,8 +412,9 @@ impl IrcLurkerTracker {
         let channels: Vec<String> = self.channels.lock().unwrap().iter().cloned().collect();
         for ch in channels {
             let _ = writer.write_all(format!("JOIN #{ch}\r\n").as_bytes()).await;
+            let _ = writer.flush().await;
+            tokio::time::sleep(IRC_JOIN_STAGGER).await;
         }
-        let _ = writer.flush().await;
         let mut poll = tokio::time::interval(Duration::from_secs(NAMES_POLL_SECONDS));
         poll.tick().await; // erster Tick sofort — überspringen.
 
@@ -491,6 +480,17 @@ impl IrcLurkerTracker {
             }
             upsert_names_batch(&self.pool, &channel, &nicks_lower, now).await;
         }
+    }
+
+    fn handshake_commands(&self) -> Vec<String> {
+        let mut commands = Vec::with_capacity(3);
+        if self.authenticated {
+            let clean = self.access_token.replace("oauth:", "");
+            commands.push(format!("PASS oauth:{clean}\r\n"));
+        }
+        commands.push(format!("NICK {}\r\n", self.nick));
+        commands.push("CAP REQ :twitch.tv/membership twitch.tv/commands\r\n".to_string());
+        commands
     }
 }
 
@@ -693,6 +693,22 @@ mod tests {
         let t = IrcLurkerTracker::new(pool, "cid".into(), String::new(), None);
         assert!(!t.authenticated);
         assert_eq!(t.nick, "justinfan12345");
+        assert_eq!(
+            t.handshake_commands(),
+            vec![
+                "NICK justinfan12345\r\n".to_string(),
+                "CAP REQ :twitch.tv/membership twitch.tv/commands\r\n".to_string()
+            ]
+        );
+
+        assert_eq!(
+            auth.handshake_commands(),
+            vec![
+                "PASS oauth:tok\r\n".to_string(),
+                "NICK mybot\r\n".to_string(),
+                "CAP REQ :twitch.tv/membership twitch.tv/commands\r\n".to_string()
+            ]
+        );
 
         t.track_channel("#Nani", TrackMode::Partner);
         t.track_channel("someCat", TrackMode::Category);

@@ -233,7 +233,7 @@ pub async fn viewer_timeline_handler(
     // 3. Chat-Messages aus twitch_session_chatters
     let (msg_bot_clause, msg_bots) = bot_not_in_sql(3, "LOWER(chatter_login)", &extra_excluded);
     let msg_sql = format!(
-        r#"SELECT LOWER(chatter_login) AS viewer_login, COALESCE(messages, 0) AS messages
+        r#"SELECT LOWER(chatter_login) AS viewer_login, COALESCE(messages, 0)::bigint AS messages
            FROM twitch_session_chatters
            WHERE session_id = $1 AND LOWER(streamer_login) = $2
              AND {msg_bot_clause}"#
@@ -415,7 +415,7 @@ pub async fn viewer_timeline_profile_handler(
            )
            SELECT s.id AS session_id, s.started_at,
                   COALESCE(p.total_present_min, 0) AS total_present_min,
-                  COALESCE(sc.messages, 0) AS chat_messages
+                  COALESCE(sc.messages, 0)::bigint AS chat_messages
            FROM session_ids sid
            JOIN twitch_stream_sessions s ON s.id = sid.session_id
            LEFT JOIN presence_totals p ON p.session_id = s.id
@@ -519,6 +519,44 @@ mod tests {
         pool
     }
 
+    async fn make_timeline_pool(dsn: &str, schema: &str) -> PgPool {
+        let pool = PgPoolOptions::new().max_connections(1).connect(dsn).await.unwrap();
+        sqlx::query(&format!("DROP SCHEMA IF EXISTS {schema} CASCADE")).execute(&pool).await.unwrap();
+        sqlx::query(&format!("CREATE SCHEMA {schema}")).execute(&pool).await.unwrap();
+        sqlx::query(&format!("SET search_path TO {schema}")).execute(&pool).await.unwrap();
+        sqlx::query(
+            r#"CREATE TABLE twitch_stream_sessions (
+                   id BIGSERIAL PRIMARY KEY,
+                   streamer_login TEXT NOT NULL,
+                   started_at TIMESTAMPTZ NOT NULL,
+                   ended_at TIMESTAMPTZ,
+                   duration_seconds BIGINT
+               )"#,
+        ).execute(&pool).await.unwrap();
+        sqlx::query(
+            r#"CREATE TABLE twitch_viewer_presence_ticks (
+                   session_id BIGINT NOT NULL,
+                   streamer_login TEXT NOT NULL,
+                   viewer_login TEXT NOT NULL,
+                   tick_at TIMESTAMPTZ NOT NULL
+               )"#,
+        ).execute(&pool).await.unwrap();
+        sqlx::query(
+            r#"CREATE TABLE twitch_session_chatters (
+                   session_id BIGINT NOT NULL,
+                   streamer_login TEXT NOT NULL,
+                   chatter_login TEXT NOT NULL,
+                   messages INTEGER DEFAULT 0
+               )"#,
+        ).execute(&pool).await.unwrap();
+        pool
+    }
+
+    async fn json_body(resp: axum::response::Response) -> serde_json::Value {
+        let bytes = axum::body::to_bytes(resp.into_body(), 1 << 16).await.unwrap();
+        serde_json::from_slice(&bytes).unwrap()
+    }
+
     fn free_partner() -> DashboardAuthLevel {
         DashboardAuthLevel::Partner {
             twitch_login: "freeloader".to_string(),
@@ -561,5 +599,56 @@ mod tests {
         .await
         .into_response();
         assert_eq!(resp.status(), StatusCode::FORBIDDEN, "Free-Partner muss 403 erhalten");
+    }
+
+    #[tokio::test]
+    async fn viewer_timeline_decodes_session_chat_messages_as_bigint() {
+        let dsn = db_dsn_or_skip!();
+        let pool = make_timeline_pool(&dsn, "timeline_chat_messages_bigint").await;
+        sqlx::query(
+            "INSERT INTO twitch_stream_sessions (id, streamer_login, started_at, ended_at) \
+             VALUES (100, 'host', '2026-06-23T10:00:00Z', '2026-06-23T11:00:00Z')",
+        ).execute(&pool).await.unwrap();
+        sqlx::query(
+            "INSERT INTO twitch_viewer_presence_ticks (session_id, streamer_login, viewer_login, tick_at) \
+             VALUES \
+             (100, 'host', 'viewer1', '2026-06-23T10:05:00Z'), \
+             (100, 'host', 'viewer1', '2026-06-23T10:10:00Z')",
+        ).execute(&pool).await.unwrap();
+        sqlx::query(
+            "INSERT INTO twitch_session_chatters (session_id, streamer_login, chatter_login, messages) \
+             VALUES (100, 'host', 'viewer1', 7)",
+        ).execute(&pool).await.unwrap();
+
+        let timeline_resp = viewer_timeline_handler(
+            DashboardAuthLevel::admin(),
+            Path("host".to_string()),
+            State(pool.clone()),
+            Query(ViewerTimelineQuery {
+                session_id: Some(100),
+                min_present_min: None,
+                segment: None,
+                search: None,
+                limit: None,
+            }),
+        )
+        .await
+        .into_response();
+        assert_eq!(timeline_resp.status(), StatusCode::OK);
+        let body = json_body(timeline_resp).await;
+        assert_eq!(body["viewers"][0]["login"], "viewer1");
+        assert_eq!(body["viewers"][0]["chat_messages"], 7);
+
+        let profile_resp = viewer_timeline_profile_handler(
+            DashboardAuthLevel::admin(),
+            Path("host".to_string()),
+            State(pool),
+            Query(ViewerProfileQuery { login: Some("viewer1".to_string()) }),
+        )
+        .await
+        .into_response();
+        assert_eq!(profile_resp.status(), StatusCode::OK);
+        let body = json_body(profile_resp).await;
+        assert_eq!(body["sessions"][0]["chat_messages"], 7);
     }
 }

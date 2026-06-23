@@ -41,6 +41,7 @@ mod chatters_wiring;
 mod confirm_resolver;
 mod eventsub_hooks;
 mod eventsub_stats_adapter;
+mod irc_lurker_wiring;
 mod oauth_followups;
 mod offline_side_effects;
 mod partner_lookup;
@@ -1458,6 +1459,8 @@ async fn main() {
             chatters_provisioner,
         );
     }
+
+    irc_lurker_wiring::spawn_irc_lurker(pool.clone());
 
     let addr = SocketAddr::from(([127, 0, 0, 1], port));
     let token = settings.internal_api.token.clone();

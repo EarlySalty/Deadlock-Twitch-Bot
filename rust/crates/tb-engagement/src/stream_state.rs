@@ -24,23 +24,21 @@ impl StreamState {
         Self { pool, cache: Mutex::new(HashMap::new()) }
     }
 
-    async fn check(&self, cl: &str) -> bool {
+    async fn check(&self, cl: &str) -> Result<bool, sqlx::Error> {
         // `is_live` ist INTEGER (DEFAULT 0); `bool(row[0])` = != 0.
         let row: Option<(Option<i32>, Option<String>)> = sqlx::query_as(
             "SELECT is_live, last_game FROM twitch_live_state WHERE streamer_login = $1",
         )
         .bind(cl)
         .fetch_optional(&self.pool)
-        .await
-        .ok()
-        .flatten();
+        .await?;
         match row {
             Some((is_live, last_game)) => {
                 let live = is_live.unwrap_or(0) != 0;
                 let game = last_game.unwrap_or_default().trim().to_lowercase();
-                live && game == "deadlock"
+                Ok(live && game == "deadlock")
             }
-            None => false,
+            None => Ok(false),
         }
     }
 
@@ -58,12 +56,21 @@ impl StreamState {
                 }
             }
         }
-        let val = self.check(&cl).await;
-        {
-            let mut cache = self.cache.lock().unwrap_or_else(|p| p.into_inner());
-            cache.insert(cl, (Instant::now(), val));
+        match self.check(&cl).await {
+            Ok(val) => {
+                let mut cache = self.cache.lock().unwrap_or_else(|p| p.into_inner());
+                cache.insert(cl, (Instant::now(), val));
+                val
+            }
+            Err(e) => {
+                tracing::warn!(
+                    error = %e,
+                    channel = cl,
+                    "Engagement: stream-state DB-Fehler - fail-closed (false)"
+                );
+                false
+            }
         }
-        val
     }
 }
 
@@ -72,6 +79,12 @@ mod tests {
     use super::*;
     use sqlx::postgres::{PgConnectOptions, PgPoolOptions};
     use std::str::FromStr;
+
+    async fn closed_pool() -> PgPool {
+        let pool = PgPoolOptions::new().max_connections(1).connect_lazy_with(PgConnectOptions::new());
+        pool.close().await;
+        pool
+    }
 
     async fn make_pool(schema: &str) -> Option<PgPool> {
         let dsn = std::env::var("TB_TEST_DATABASE_URL").ok()?;
@@ -117,5 +130,13 @@ mod tests {
         assert!(!ss.is_streaming_deadlock("unbekannt").await);
         // leer → false
         assert!(!ss.is_streaming_deadlock("  ").await);
+    }
+
+    #[tokio::test]
+    async fn db_error_fail_closed_und_wird_nicht_gecached() {
+        let ss = StreamState::new(closed_pool().await);
+        assert!(!ss.is_streaming_deadlock("live_dl").await);
+        let cache = ss.cache.lock().unwrap_or_else(|p| p.into_inner());
+        assert!(cache.is_empty());
     }
 }

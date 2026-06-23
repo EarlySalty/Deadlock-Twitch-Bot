@@ -79,7 +79,7 @@ pub use subscriptions::{
 };
 pub use telemetry::{HypeTrainPhase, TelemetryStore};
 pub use scout::{build_scout_task, NoopScoutChatSink, ScoutChatSink, ScoutTask};
-pub use irc_lurker::record_presence_ticks;
+pub use irc_lurker::{record_presence_ticks, IrcLurkerTracker, TrackMode};
 pub use chatters_poller::{
     load_live_roster, record_chatters_for_streamer, BotChatterAuth, ChattersCollector,
     ChattersFetcher, CycleStats, KeyedCooldown, LiveStreamer, SelfHealCooldowns,

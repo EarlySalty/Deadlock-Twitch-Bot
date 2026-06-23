@@ -1,3 +1,11 @@
+## #289 — Breitere Zuschauer-Erfassung + stille Fehler behoben
+
+**Ausgangslage:** Anwesenheitsdaten (wer gerade im Chat ist) konnten bisher nur von Kanälen erfasst werden, die den Bot autorisiert oder zum Moderator gemacht haben. Alle übrigen deutschen Deadlock-Streamer — Nicht-Partner und ehemalige Partner — blieben außen vor, obwohl diese Information öffentlich verfügbar ist. Parallel hat eine systematische Prüfung mehrere Fehler aufgedeckt, die nie eine Fehlermeldung erzeugten und deshalb monatelang unbemerkt blieben.
+
+**Änderung:** Der Bot liest jetzt zusätzlich anonym mit. Für jeden live entdeckten deutschen Deadlock-Kanal verbindet er sich mit dem öffentlichen Chat-Protokoll und erfasst die Zuschauer-Anwesenheit — auch ohne jede Freigabe des Streamers. Die Verbindungen sind anonym und schonend gestaffelt, deutlich unter den Twitch-Grenzen, sodass keine Drosselung entsteht; die Kanalliste aktualisiert sich laufend mit dem Live-Status. Zusätzlich behoben: In der Zuschauer-Zeitleiste stand die Chat-Nachrichten-Zahl pro Sitzung immer auf 0 statt auf dem echten Wert. Bei kurzen Datenbank-Aussetzern konnte eine vom Auto-Chat abgemeldete Person trotzdem eine Antwort bekommen — jetzt gilt im Zweifel die Abmeldung. Verstummte der Chat-Assistent wegen eines kurzen internen Aussetzers, geschah das lautlos und blieb minutenlang hängen — jetzt wird es protokolliert und nach der Erholung sofort fortgesetzt. Und beim automatischen Clip-Upload in soziale Netzwerke konnte im Fehlerfall derselbe Clip ein zweites Mal öffentlich gepostet werden — das ist nun ausgeschlossen.
+
+**Ergebnis:** Spürbar breitere Abdeckung der Streamer-Landschaft in den Statistiken, korrekte Chat-Zahlen im Dashboard, respektierte Abmeldungen, keine doppelten Social-Media-Posts. Jede Korrektur ist mit neuen Tests abgesichert, die genau diese stillen Fehlerfälle abdecken.
+
 ## #288 — Live-Zähler korrigiert + internes Aufräumen
 
 **Problem:** Die „Live"-Anzeige im Analyse-Bereich zählte zuletzt deutlich zu hoch — sie führte auch längst beendete Streams als „live", weil alte Live-Markierungen nicht zuverlässig zurückgesetzt wurden. Zusätzlich schleppten interne Datensätze veraltete Verifikations-Felder mit, und eine interne Verknüpfungs-Abfrage lief gelegentlich auf einen Datenbankfehler.

@@ -63,6 +63,10 @@ export TWITCH_TARGET_GAME_NAME="${TWITCH_TARGET_GAME_NAME:-Deadlock}"
 export TB_MONITORING_POLL_ENABLED="${TB_MONITORING_POLL_ENABLED:-1}"
 # Scout: entdeckt live DE-Deadlock-Streamer (auch Nicht-Partner) und nimmt sie ins Monitoring (Python-Parität).
 export TB_SCOUT_ENABLED="${TB_SCOUT_ENABLED:-1}"
+# Anonymer IRC-Presence-Harvester (justinfan): joint per anonymem IRC ALLE live
+# DE-Streamer aus dem Scout-Roster (auch Nicht-Partner/Ex-Partner OHNE Grant/Mod)
+# und sammelt Presence (JOIN/PART/NAMES) -> twitch_session_chatters. Kein Token noetig.
+export TB_IRC_LURKER_ENABLED="${TB_IRC_LURKER_ENABLED:-1}"
 # Strangler-Fig-Fallback: noch nicht portierte interne-API-Routen (Raid-OAuth,
 # Blacklist, Analytics, …) gehen an die Legacy-Python-API auf Seitenport 8779
 # (Python-Worker, TWITCH_INTERNAL_API_LEGACY_PORT im Takeover-Drop-in).

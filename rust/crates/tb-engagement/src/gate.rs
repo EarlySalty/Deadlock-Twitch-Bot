@@ -52,15 +52,23 @@ pub async fn load_settings(pool: &PgPool, channel_login: &str) -> Option<Engagem
 
 /// Hat sich der User vom Engagement abgemeldet? (Python `_sync_is_opted_out`).
 pub async fn is_opted_out(pool: &PgPool, twitch_user_id: &str) -> bool {
-    sqlx::query_scalar::<_, i32>(
+    match sqlx::query_scalar::<_, i32>(
         "SELECT 1 FROM twitch_user_engagement_optout WHERE twitch_user_id = $1",
     )
     .bind(twitch_user_id)
     .fetch_optional(pool)
     .await
-    .ok()
-    .flatten()
-    .is_some()
+    {
+        Ok(row) => row.is_some(),
+        Err(e) => {
+            tracing::warn!(
+                error = %e,
+                twitch_user_id,
+                "Engagement: opt-out-Check fehlgeschlagen - fail-safe als opted-out behandelt"
+            );
+            true
+        }
+    }
 }
 
 /// True nur für operativ aktive Partner-Channels (Python
@@ -72,16 +80,24 @@ pub async fn is_operational_partner(pool: &PgPool, channel_login: &str) -> bool 
     if norm.is_empty() {
         return false;
     }
-    let active: Option<i32> = sqlx::query_scalar(
+    match sqlx::query_scalar::<_, i32>(
         "SELECT is_partner_active::int FROM twitch_streamers_partner_state \
          WHERE LOWER(twitch_login) = $1",
     )
     .bind(norm)
     .fetch_optional(pool)
     .await
-    .ok()
-    .flatten();
-    active.unwrap_or(0) != 0
+    {
+        Ok(active) => active.unwrap_or(0) != 0,
+        Err(e) => {
+            tracing::warn!(
+                error = %e,
+                channel = norm,
+                "Engagement: operational partner DB-Fehler - fail-closed (false)"
+            );
+            false
+        }
+    }
 }
 
 /// Schreibt eine Engagement-Entscheidung ins Log (Python `_sync_log_decision`).
@@ -129,6 +145,12 @@ mod tests {
     use super::*;
     use sqlx::postgres::{PgConnectOptions, PgPoolOptions};
     use std::str::FromStr;
+
+    async fn closed_pool() -> PgPool {
+        let pool = PgPoolOptions::new().max_connections(1).connect_lazy_with(PgConnectOptions::new());
+        pool.close().await;
+        pool
+    }
 
     async fn make_pool(schema: &str) -> Option<PgPool> {
         let dsn = std::env::var("TB_TEST_DATABASE_URL").ok()?;
@@ -190,6 +212,18 @@ mod tests {
         assert!(is_operational_partner(&pool, "#Nani").await);
         assert!(!is_operational_partner(&pool, "passiv").await);
         assert!(!is_operational_partner(&pool, "unbekannt").await);
+    }
+
+    #[tokio::test]
+    async fn optout_db_error_fail_safe_true() {
+        let pool = closed_pool().await;
+        assert!(is_opted_out(&pool, "u_out").await);
+    }
+
+    #[tokio::test]
+    async fn operational_partner_db_error_fail_closed_false() {
+        let pool = closed_pool().await;
+        assert!(!is_operational_partner(&pool, "nani").await);
     }
 
     #[tokio::test]

@@ -203,25 +203,34 @@ pub async fn update_upload_status(
     let now = Utc::now().to_rfc3339();
     match status {
         "completed" => {
-            sqlx::query("UPDATE twitch_clips_upload_queue SET status = 'completed', completed_at = $1 WHERE id = $2")
-                .bind(&now)
-                .bind(queue_id)
-                .execute(pool)
-                .await?;
-            if let Some((clip_id, platform)) = sqlx::query_as::<_, (i32, String)>(
+            let mut tx = pool.begin().await?;
+            let queue_row = sqlx::query_as::<_, (i32, String)>(
                 "SELECT clip_id, platform FROM twitch_clips_upload_queue WHERE id = $1",
             )
             .bind(queue_id)
-            .fetch_optional(pool)
-            .await?
-            {
+            .fetch_optional(&mut *tx)
+            .await?;
+            sqlx::query("UPDATE twitch_clips_upload_queue SET status = 'completed', completed_at = $1 WHERE id = $2")
+                .bind(&now)
+                .bind(queue_id)
+                .execute(&mut *tx)
+                .await?;
+            let mut clip_for_refresh = None;
+            if let Some((clip_id, platform)) = queue_row {
                 let clip_sql = match platform.as_str() {
                     "tiktok" => "UPDATE twitch_clips_social_media SET uploaded_tiktok = 1, tiktok_video_id = $1, tiktok_uploaded_at = $2 WHERE id = $3",
                     "youtube" => "UPDATE twitch_clips_social_media SET uploaded_youtube = 1, youtube_video_id = $1, youtube_uploaded_at = $2 WHERE id = $3",
                     "instagram" => "UPDATE twitch_clips_social_media SET uploaded_instagram = 1, instagram_media_id = $1, instagram_uploaded_at = $2 WHERE id = $3",
-                    _ => return Ok(()),
+                    _ => {
+                        tx.commit().await?;
+                        return Ok(());
+                    }
                 };
-                sqlx::query(clip_sql).bind(external_video_id).bind(&now).bind(clip_id).execute(pool).await?;
+                sqlx::query(clip_sql).bind(external_video_id).bind(&now).bind(clip_id).execute(&mut *tx).await?;
+                clip_for_refresh = Some(clip_id);
+            }
+            tx.commit().await?;
+            if let Some(clip_id) = clip_for_refresh {
                 refresh_clip_publication_status(pool, clip_id).await;
             }
         }
