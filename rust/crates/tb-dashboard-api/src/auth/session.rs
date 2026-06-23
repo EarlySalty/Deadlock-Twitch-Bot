@@ -1467,6 +1467,15 @@ fn unix_now() -> u64 {
         .unwrap_or(0)
 }
 
+#[cfg(test)]
+static TEST_SCHEMA_COUNTER: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
+#[cfg(test)]
+pub(crate) fn test_schema_name(prefix: &str) -> String {
+    let seq = TEST_SCHEMA_COUNTER.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+    format!("{prefix}_{}_{}", unix_now(), seq)
+}
+
 /// Grobe, robuste Request-Fingerprint-Bindung für Partner-Access-Sessions (B3-9).
 ///
 /// Port von `PartnerAccessBinding` (services.py:275-334): leitet aus dem
@@ -1869,7 +1878,21 @@ mod integration_tests {
             return None;
         }
         let url = std::env::var("TB_TEST_DATABASE_URL").ok()?;
-        sqlx::PgPool::connect(&url).await.ok()
+        let schema = test_schema_name("auth_session");
+        let admin_pool = sqlx::PgPool::connect(&url).await.ok()?;
+        sqlx::query(&format!("CREATE SCHEMA {schema}"))
+            .execute(&admin_pool)
+            .await
+            .ok()?;
+        admin_pool.close().await;
+
+        let opts: sqlx::postgres::PgConnectOptions = url.parse().ok()?;
+        let opts = opts.options([("search_path", schema.as_str())]);
+        sqlx::postgres::PgPoolOptions::new()
+            .max_connections(2)
+            .connect_with(opts)
+            .await
+            .ok()
     }
 
     /// Fernet-Key für Integrations-Tests (Testkey, kein Prod-Secret).
@@ -1905,6 +1928,7 @@ print(f.encrypt(payload.encode()).decode(), end='')
     #[tokio::test]
     async fn session_nicht_gefunden_gibt_none() {
         let Some(pool) = maybe_pool().await else { return; };
+        ensure_sessions_table(&pool).await;
         let state = DashboardAuthState::new(pool, test_fernet_key());
         let result = state.load_admin_session("nicht-existent-session-id-xyz").await;
         assert!(matches!(result, Ok(None)));
@@ -1913,6 +1937,7 @@ print(f.encrypt(payload.encode()).decode(), end='')
     #[tokio::test]
     async fn partner_session_nicht_gefunden_gibt_none() {
         let Some(pool) = maybe_pool().await else { return; };
+        ensure_sessions_table(&pool).await;
         let state = DashboardAuthState::new(pool, test_fernet_key());
         let result = state.load_partner_session("nicht-existent-partner-id-xyz").await;
         assert!(matches!(result, Ok(None)));
@@ -2123,6 +2148,7 @@ print(f.encrypt(payload.encode()).decode(), end='')
         .execute(&pool)
         .await
         .unwrap();
+        ensure_partners_table(&pool).await;
 
         // Partner-Row, damit load_partner_session das Gate passiert.
         sqlx::query(
@@ -2214,6 +2240,26 @@ print(f.encrypt(payload.encode()).decode(), end='')
         .unwrap();
     }
 
+    async fn ensure_partners_table(pool: &PgPool) {
+        sqlx::query(
+            r#"
+            CREATE TABLE IF NOT EXISTS twitch_partners (
+                twitch_login TEXT,
+                twitch_user_id TEXT,
+                status TEXT,
+                technical_pause_reason TEXT,
+                manual_partner_opt_out INTEGER,
+                departnered_at TIMESTAMPTZ,
+                admin_archived_at TIMESTAMPTZ,
+                partnered_at TIMESTAMPTZ
+            )
+            "#,
+        )
+        .execute(pool)
+        .await
+        .unwrap();
+    }
+
     /// B3-1: OAuth-Login-State persistieren → genau EINMAL konsumieren
     /// (Replay-Schutz). Zweiter Consume liefert None.
     #[tokio::test]
@@ -2280,6 +2326,7 @@ print(f.encrypt(payload.encode()).decode(), end='')
     async fn find_partner_for_login_findet_aktiven_partner() {
         let Some(pool) = maybe_pool().await else { return; };
         ensure_sessions_table(&pool).await;
+        ensure_partners_table(&pool).await;
         let state = DashboardAuthState::new(pool.clone(), test_fernet_key());
 
         sqlx::query(
@@ -2318,6 +2365,7 @@ print(f.encrypt(payload.encode()).decode(), end='')
     async fn find_partner_for_login_blocked_wird_abgelehnt() {
         let Some(pool) = maybe_pool().await else { return; };
         ensure_sessions_table(&pool).await;
+        ensure_partners_table(&pool).await;
         let state = DashboardAuthState::new(pool.clone(), test_fernet_key());
 
         sqlx::query(
@@ -2536,6 +2584,7 @@ print(f.encrypt(payload.encode()).decode(), end='')
     async fn invalidate_session_loescht_partner_session() {
         let Some(pool) = maybe_pool().await else { return; };
         ensure_sessions_table(&pool).await;
+        ensure_partners_table(&pool).await;
 
         sqlx::query(
             "INSERT INTO twitch_partners (twitch_login, twitch_user_id, status)

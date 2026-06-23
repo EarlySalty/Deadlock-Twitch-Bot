@@ -385,7 +385,21 @@ mod tests {
 
     async fn maybe_test_state() -> Option<(sqlx::PgPool, DashboardAuthState)> {
         let url = std::env::var("TB_TEST_DATABASE_URL").ok()?;
-        let pool = sqlx::PgPool::connect(&url).await.ok()?;
+        let schema = crate::auth::session::test_schema_name("auth_csrf");
+        let admin_pool = sqlx::PgPool::connect(&url).await.ok()?;
+        sqlx::query(&format!("CREATE SCHEMA {schema}"))
+            .execute(&admin_pool)
+            .await
+            .ok()?;
+        admin_pool.close().await;
+
+        let opts: sqlx::postgres::PgConnectOptions = url.parse().ok()?;
+        let opts = opts.options([("search_path", schema.as_str())]);
+        let pool = sqlx::postgres::PgPoolOptions::new()
+            .max_connections(2)
+            .connect_with(opts)
+            .await
+            .ok()?;
         sqlx::query(
             r#"
             CREATE TABLE IF NOT EXISTS dashboard_sessions (
