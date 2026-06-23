@@ -1,10 +1,18 @@
-## #278 — Analyse-Dashboard: ein Plan statt drei Stufen
+## #279 — Analyse-Dashboard: ein Plan statt drei Stufen
 
 **Problem:** Das Analyse-Dashboard war über mehrere Pläne verstreut. Analytics ließ sich auf verschiedenen Wegen freischalten — jeder mit einem anderen Umfang an Auswertungen, Verlaufsdaten und KI-Analysen. Das war unübersichtlich und teils widersprüchlich: Selbst einzelne Auswertungen des letzten Streams waren gesperrt, obwohl sie eigentlich der Einstieg sein sollten, und es war nie ganz klar, welcher Plan was zeigt.
 
 **Änderung:** Es gibt jetzt genau einen Analyse-Zugang. Der komplette letzte Stream ist für alle kostenlos sichtbar — inklusive Viewer-Verlauf und Chatter-Liste. Alles, was über den letzten Stream hinausgeht — der Verlauf über mehrere Streams, Trends, Vergleiche, die KI-gestützten Post-Stream-Reports, Coaching und Monetarisierung — steckt gebündelt im einen Analyse-Zugang. Raid-Boost und Werbefrei bleiben eigenständige Produkte und enthalten keine Analytics mehr.
 
 **Ergebnis:** Ein klarer Schnitt statt drei verschachtelter Stufen: den letzten Stream sieht jeder gratis, mit dem Analyse-Zugang gibt es alles. Wer bisher einen Plan mit Analyse hatte (auch als Bundle), behält automatisch den vollen Zugang.
+
+## #278 — Overlay-Baukasten: Vorschau bleibt nach schnellem Einstellen nicht mehr leer
+
+**Problem:** Wer im Stream-Overlay-Baukasten schnell mehrere Einstellungen verstellte (Regler ziehen, Schalter umlegen, Modus wechseln), bei dem konnte die Vorschau dauerhaft leer und transparent bleiben — nicht nur kurz, sondern bis auf Weiteres. Hintergrund: Jede Einstellungsänderung lud die Vorschau sofort komplett neu und brach dabei die gerade laufende Datenanfrage ab. Eine interne Anfrage-Bündelung räumte sich nach einem solchen Abbruch nicht auf und blockierte danach jede weitere Anfrage für denselben Kanal — der Kanal blieb leer, bis der Dienst neu startete.
+
+**Änderung:** Zwei Stellen. (1) Die Vorschau lädt beim Verstellen nicht mehr bei jedem einzelnen Klick oder Regler-Schritt neu, sondern gebündelt erst nach einer kurzen Pause; die angezeigte und kopierbare Overlay-URL bleibt weiterhin sofort aktuell. (2) Die interne Anfrage-Bündelung räumt sich jetzt auch dann sauber auf, wenn eine laufende Anfrage abgebrochen wird, und gibt wartende Anfragen unmittelbar frei. Läuft ein Datenabruf einmal in eine Zeitüberschreitung, zeigt das Overlay weiterhin, was vorhanden ist (etwa den Rang), statt komplett leer zu bleiben.
+
+**Ergebnis:** Im Baukasten lässt sich jetzt beliebig schnell an Stil, Layout und Inhalten herumspielen, ohne dass die Vorschau hängenbleibt; ein dauerhaft blockierter Kanal kann nicht mehr entstehen. Das eigentliche OBS-Overlay liefert robust weiter, auch wenn einzelne Statistiken kurzzeitig nicht abrufbar sind.
 
 ## #277 — Auto-Raid heilt hängende Raid-Schalter selbst
 
