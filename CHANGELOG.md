@@ -1,3 +1,11 @@
+## #286 — Go-Live-Designer entfernt, Dashboard-Seiten direkt nativ
+
+**Problem:** Der „Discord Announcement Designer" — der Baukasten, mit dem man sein Go-Live-Embed selbst gestalten konnte — war aufwändig und kaum genutzt. Zugleich liefen mehrere Dashboard-Seiten (Übersicht, Verwaltung, Preise und einige Alt-Adressen) noch über eine Zwischenschicht statt direkt über die aktuelle Plattform.
+
+**Änderung:** Der Designer wurde entfernt; die alte Seite leitet jetzt aufs Dashboard weiter. Die automatische Go-Live-Ankündigung samt Rollen-Ping läuft unverändert weiter (mit Standard-Gestaltung). Die genannten Dashboard-Seiten werden nun direkt ausgeliefert; die Preis-Seite lädt wieder auch ohne Login vollständig.
+
+**Ergebnis:** Weniger Ballast, die Go-Live-Ankündigung funktioniert wie gewohnt, und das Dashboard läuft ein Stück eigenständiger.
+
 ## #285 — Steam direkt im Dashboard verknüpfen, erzwungenes Onboarding entfernt
 
 **Problem:** Das Verwaltungs-Dashboard drängte dich bei jedem Besuch in einen Einrichtungs-Assistenten, solange dieser nicht als „abgeschlossen" markiert war — auch wenn längst alles eingerichtet war. Dessen Steam-Schritt führte dabei ins Leere: er erklärte die Verknüpfung nur, bot aber keinen funktionierenden Knopf. Eine Steam-Verknüpfung ließ sich im Dashboard gar nicht anstoßen.

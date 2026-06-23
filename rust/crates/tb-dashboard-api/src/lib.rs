@@ -1074,6 +1074,47 @@ pub fn build_social_media_admin_router(pool: PgPool) -> Router {
         .with_state(pool)
 }
 
+/// Baut die nativen Main-Domain-SPA-Seiten, die bisher vom Python-Fallback
+/// bedient wurden.
+///
+/// Die Shell-Routen sind bewusst oeffentlich: `/twitch/pricing` ist eine
+/// Marketing-Seite, `/twitch/dashboard` und `/twitch/verwaltung` liefern nur
+/// die SPA-Shell; Auth/Gates passieren clientseitig bzw. in den JSON-APIs.
+pub fn build_v2_spa_pages_router() -> Router {
+    use handlers::spa;
+
+    Router::new()
+        .route("/twitch/dashboard", get(spa::main_domain_spa_shell_handler))
+        .route("/twitch/verwaltung", get(spa::main_domain_spa_shell_handler))
+        .route("/twitch/pricing", get(spa::main_domain_spa_shell_handler))
+        .route(
+            "/twitch/analyse",
+            get(spa::legacy_analyse_root_redirect_handler),
+        )
+        .route(
+            "/twitch/analyse/*path",
+            get(spa::legacy_analyse_path_redirect_handler),
+        )
+        .route(
+            "/twitch/dashboard-v2",
+            get(spa::analyse_root_redirect_handler),
+        )
+        .route(
+            "/twitch/dashboard-v2/*path",
+            get(spa::dashboard_v2_public_assets_handler),
+        )
+        .route("/twitch/partners", get(spa::analyse_root_redirect_handler))
+        .route(
+            "/twitch/raid/analytics",
+            get(spa::analyse_root_redirect_handler),
+        )
+        // Go-Live-Builder entfernt (User 2026-06-23): Seite -> Dashboard-Redirect.
+        .route(
+            "/twitch/live-announcement",
+            get(spa::analyse_root_redirect_handler),
+        )
+}
+
 /// Baut den Router für die öffentliche Website (`/streamer`) + Legacy-Redirect
 /// (`/website`) — P2.67.
 ///
@@ -1119,6 +1160,7 @@ pub fn build_router(pool: PgPool, token: String) -> Router {
         .merge(build_raid_pages_router())
         .merge(build_affiliate_portal_router())
         .merge(build_social_media_admin_router(pool.clone()))
+        .merge(build_v2_spa_pages_router())
         .merge(build_website_router())
         .merge(handlers::discord_link::build_discord_link_router(pool.clone()))
         .merge(handlers::demo::build_demo_router())

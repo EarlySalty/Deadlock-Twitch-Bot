@@ -15,7 +15,7 @@
 
 use axum::{
     extract::{Path, State},
-    http::{header, HeaderMap, StatusCode},
+    http::{header, HeaderMap, HeaderValue, StatusCode, Uri},
     response::{IntoResponse, Redirect, Response},
 };
 use sqlx::PgPool;
@@ -70,8 +70,18 @@ pub async fn analyse_handler(
 
 /// Liefert die dashboard_v2-SPA-Shell ohne Host- oder Auth-Gate.
 pub(crate) async fn serve_dashboard_v2_index() -> Response {
+    serve_dashboard_v2_index_with_asset_prefix("/analyse/").await
+}
+
+/// Liefert die dashboard_v2-SPA-Shell fuer Main-Domain-Seiten ohne Host-,
+/// Login- oder Analytics-Gate. Auth passiert dort clientseitig in der SPA.
+pub async fn main_domain_spa_shell_handler() -> Response {
+    serve_dashboard_v2_index_with_asset_prefix("/twitch/dashboard-v2/").await
+}
+
+async fn serve_dashboard_v2_index_with_asset_prefix(asset_prefix: &str) -> Response {
     let index = dist_root().join("index.html");
-    let html = match tokio::fs::read_to_string(&index).await {
+    let mut html = match tokio::fs::read_to_string(&index).await {
         Ok(s) => s,
         Err(_) => {
             return (
@@ -82,8 +92,10 @@ pub(crate) async fn serve_dashboard_v2_index() -> Response {
         }
     };
 
-    // Vite baut die Assets mit Prefix /twitch/dashboard-v2/; für /analyse ersetzen.
-    let html = html.replace("/twitch/dashboard-v2/", "/analyse/");
+    // Vite baut die Assets mit Prefix /twitch/dashboard-v2/.
+    if asset_prefix != "/twitch/dashboard-v2/" {
+        html = html.replace("/twitch/dashboard-v2/", asset_prefix);
+    }
     // Runtime-Script vor </head> injizieren (erstes Vorkommen).
     let html = html.replacen("</head>", &format!("{RUNTIME_SCRIPT}\n  </head>"), 1);
 
@@ -133,6 +145,56 @@ pub async fn analyse_assets_handler(
     }
     // axum 0.7 liefert bei `/*path` den Wert mit führendem `/`
     serve_asset(asset_path.trim_start_matches('/')).await
+}
+
+/// `GET /twitch/dashboard-v2/{path:.*}` — dashboard_v2-Assets fuer die
+/// ungegateten Main-Domain-Shells. Ohne Login-Gate, damit `/twitch/pricing`
+/// auch ausgeloggt vollstaendig laedt.
+pub async fn dashboard_v2_public_assets_handler(Path(asset_path): Path<String>) -> Response {
+    serve_asset(asset_path.trim_start_matches('/')).await
+}
+
+/// `GET /twitch/analyse` — Legacy-Redirect auf `/analyse` (301, Query erhalten).
+pub async fn legacy_analyse_root_redirect_handler(uri: Uri) -> Response {
+    moved_permanently(with_query("/analyse".to_string(), &uri))
+}
+
+/// `GET /twitch/analyse/{path:.*}` — Legacy-Redirect auf `/analyse/{path}`
+/// (301, Query erhalten).
+pub async fn legacy_analyse_path_redirect_handler(
+    Path(raw_path): Path<String>,
+    uri: Uri,
+) -> Response {
+    let normalized = raw_path.trim_start_matches('/');
+    let location = if normalized.is_empty() {
+        "/analyse".to_string()
+    } else {
+        format!("/analyse/{normalized}")
+    };
+    moved_permanently(with_query(location, &uri))
+}
+
+/// `GET /twitch/dashboard-v2` und weitere alte Main-Domain-Seiten — 301 auf
+/// `/analyse` (Query erhalten).
+pub async fn analyse_root_redirect_handler(uri: Uri) -> Response {
+    moved_permanently(with_query("/analyse".to_string(), &uri))
+}
+
+fn with_query(location: String, uri: &Uri) -> String {
+    match uri.query() {
+        Some(q) if !q.is_empty() => format!("{location}?{q}"),
+        _ => location,
+    }
+}
+
+fn moved_permanently(location: String) -> Response {
+    let value = match HeaderValue::from_str(&location) {
+        Ok(value) => value,
+        Err(_) => return (StatusCode::BAD_REQUEST, "Invalid redirect target").into_response(),
+    };
+    let mut response = StatusCode::MOVED_PERMANENTLY.into_response();
+    response.headers_mut().insert(header::LOCATION, value);
+    response
 }
 
 // ── Social-Media-Admin-SPA (P2.66) ────────────────────────────────────────────
