@@ -1,3 +1,11 @@
+## #278 — Overlay-Baukasten: Vorschau bleibt nach schnellem Einstellen nicht mehr leer
+
+**Problem:** Wer im Stream-Overlay-Baukasten schnell mehrere Einstellungen verstellte (Regler ziehen, Schalter umlegen, Modus wechseln), bei dem konnte die Vorschau dauerhaft leer und transparent bleiben — nicht nur kurz, sondern bis auf Weiteres. Hintergrund: Jede Einstellungsänderung lud die Vorschau sofort komplett neu und brach dabei die gerade laufende Datenanfrage ab. Eine interne Anfrage-Bündelung räumte sich nach einem solchen Abbruch nicht auf und blockierte danach jede weitere Anfrage für denselben Kanal — der Kanal blieb leer, bis der Dienst neu startete.
+
+**Änderung:** Zwei Stellen. (1) Die Vorschau lädt beim Verstellen nicht mehr bei jedem einzelnen Klick oder Regler-Schritt neu, sondern gebündelt erst nach einer kurzen Pause; die angezeigte und kopierbare Overlay-URL bleibt weiterhin sofort aktuell. (2) Die interne Anfrage-Bündelung räumt sich jetzt auch dann sauber auf, wenn eine laufende Anfrage abgebrochen wird, und gibt wartende Anfragen unmittelbar frei. Läuft ein Datenabruf einmal in eine Zeitüberschreitung, zeigt das Overlay weiterhin, was vorhanden ist (etwa den Rang), statt komplett leer zu bleiben.
+
+**Ergebnis:** Im Baukasten lässt sich jetzt beliebig schnell an Stil, Layout und Inhalten herumspielen, ohne dass die Vorschau hängenbleibt; ein dauerhaft blockierter Kanal kann nicht mehr entstehen. Das eigentliche OBS-Overlay liefert robust weiter, auch wenn einzelne Statistiken kurzzeitig nicht abrufbar sind.
+
 ## #277 — Auto-Raid heilt hängende Raid-Schalter selbst
 
 **Problem:** Ein Streamer konnte dauerhaft ohne Auto-Raid bleiben, obwohl seine Raid-Freigabe gültig war: Hatte eine frühere Token-Störung den internen Raid-Schalter auf „aus" gestellt und war die zugehörige technische Pause später wieder verschwunden, blieb der Schalter auf „aus" hängen. Keine der bestehenden Selbstheilungen erfasste diesen Zwischenzustand — der Auto-Raid wurde still übersprungen, ohne Fehlermeldung.
