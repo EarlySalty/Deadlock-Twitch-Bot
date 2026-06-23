@@ -1,3 +1,11 @@
+## #287 — Twitch-System vollständig auf eine moderne Plattform umgestellt
+
+**Problem:** Hinter den Kulissen lief der Twitch-Bot zuletzt zweigleisig — ein Teil bereits auf der neuen, schnelleren Plattform, ein anderer noch auf der alten. Zwei parallele Systeme bedeuten doppelte Wege, mehr Fehlerquellen und Mehraufwand bei jeder Änderung. Zusätzlich wurden die stillen Mitschauer („Lurker") zuletzt nur noch für einen Bruchteil der Kanäle erfasst, weil die Erfassung versehentlich an die falsche Einstellung gekoppelt war.
+
+**Änderung:** Alles läuft jetzt einheitlich auf der neuen Plattform — Chat-Moderation, Live-Erkennung, Raids, Statistiken, Dashboard und Anmeldung. Die alte Parallel-Version wurde abgeschaltet. Die Lurker-Erfassung wurde repariert: Sie greift jetzt für jeden Kanal, der dem Bot die nötige Chat-Leseberechtigung erteilt hat (statt nur für einen Teil). Einige selten genutzte Alt-Adressen leiten nun sauber weiter, statt ins Leere zu laufen.
+
+**Ergebnis:** Ein einziges, durchgängiges System — verlässlicher, schneller und einfacher zu pflegen. Für dich als Streamer bleibt alles wie gewohnt, nur runder. Wer dem Bot die Chat-Leseberechtigung gibt, bekommt seine Lurker-Statistik wieder vollständig.
+
 ## #286 — Go-Live-Designer entfernt, Dashboard-Seiten direkt nativ
 
 **Problem:** Der „Discord Announcement Designer" — der Baukasten, mit dem man sein Go-Live-Embed selbst gestalten konnte — war aufwändig und kaum genutzt. Zugleich liefen mehrere Dashboard-Seiten (Übersicht, Verwaltung, Preise und einige Alt-Adressen) noch über eine Zwischenschicht statt direkt über die aktuelle Plattform.
