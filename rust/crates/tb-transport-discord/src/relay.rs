@@ -341,7 +341,11 @@ impl BrokerRelay {
             let body = resp.text().await.unwrap_or_default();
             return Err(DiscordError::BrokerError { status, body });
         }
-        let parsed: CreateRoleResponse = resp.json().await?;
+        let envelope: BrokerEnvelope<CreateRoleResponse> = resp.json().await?;
+        let parsed = envelope.result.filter(|_| envelope.ok).ok_or(DiscordError::BrokerError {
+            status: 502,
+            body: "missing create-role result".to_string(),
+        })?;
         Ok(parsed.role_id)
     }
 
@@ -682,9 +686,8 @@ mod tests {
             .and(path("/internal/master/v1/discord/role/create"))
             .and(header("X-Internal-Token", "test-token"))
             .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
-                "guild_id": "1",
-                "role_id": "1313624729466441769",
-                "name": "foo ist live"
+                "ok": true,
+                "result": { "role_id": "1313624729466441769" }
             })))
             .mount(&server)
             .await;
@@ -710,9 +713,8 @@ mod tests {
         Mock::given(method("POST"))
             .and(path("/internal/master/v1/discord/role/create"))
             .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
-                "guild_id": "1",
-                "role_id": 42u64,
-                "name": "bar ist live"
+                "ok": true,
+                "result": { "role_id": 42u64 }
             })))
             .mount(&server)
             .await;
