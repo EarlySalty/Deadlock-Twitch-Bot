@@ -1,3 +1,11 @@
+## #288 — Live-Zähler korrigiert + internes Aufräumen
+
+**Problem:** Die „Live"-Anzeige im Analyse-Bereich zählte zuletzt deutlich zu hoch — sie führte auch längst beendete Streams als „live", weil alte Live-Markierungen nicht zuverlässig zurückgesetzt wurden. Zusätzlich schleppten interne Datensätze veraltete Verifikations-Felder mit, und eine interne Verknüpfungs-Abfrage lief gelegentlich auf einen Datenbankfehler.
+
+**Änderung:** Ein neuer Aufräum-Mechanismus setzt verwaiste „live"-Markierungen automatisch zurück (und hat die Altlasten einmalig bereinigt) — die Live-Zahl spiegelt jetzt die tatsächlich laufenden Streams. Die veralteten Verifikations-Felder wurden durch ein einzelnes, sauberes Feld ersetzt (gleiche Anzeige, weniger Ballast). Die fehlerhafte Verknüpfungs-Abfrage wurde korrigiert und mit einem Test abgesichert, der genau diese Klasse von Schema-Fehlern künftig fängt.
+
+**Ergebnis:** Korrekte Live-Zahlen, ein schlankeres Datenmodell und eine stabilere interne Verknüpfung — alles ohne Funktionsänderung für dich.
+
 ## #287 — Twitch-System vollständig auf eine moderne Plattform umgestellt
 
 **Problem:** Hinter den Kulissen lief der Twitch-Bot zuletzt zweigleisig — ein Teil bereits auf der neuen, schnelleren Plattform, ein anderer noch auf der alten. Zwei parallele Systeme bedeuten doppelte Wege, mehr Fehlerquellen und Mehraufwand bei jeder Änderung. Zusätzlich wurden die stillen Mitschauer („Lurker") zuletzt nur noch für einen Bruchteil der Kanäle erfasst, weil die Erfassung versehentlich an die falsche Einstellung gekoppelt war.
