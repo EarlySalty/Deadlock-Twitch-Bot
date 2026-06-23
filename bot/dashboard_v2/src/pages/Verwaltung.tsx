@@ -4,6 +4,7 @@ import { fetchInternalHome } from '@/api/home';
 import { useAuthStatus } from '@/hooks/useAnalytics';
 import { PREVIEW_ANALYTICS_ROUTE, PREVIEW_HOME_ROUTE, PREVIEW_OVERLAY_ROUTE, isPreviewModeEnabled } from '@/preview/routes';
 import { AIEngagementSection } from '@/components/verwaltung/AIEngagementSection';
+import { LurkerTaxSection } from '@/components/verwaltung/LurkerTaxSection';
 import { SilentNotificationsSection } from '@/components/verwaltung/SilentNotificationsSection';
 import { ScamGuardSection } from '@/components/verwaltung/ScamGuardSection';
 import { OnboardingWizard } from '@/components/onboarding/OnboardingWizard';
@@ -384,6 +385,8 @@ export function VerwaltungPage() {
         <ScamGuardSection />
 
         <AIEngagementSection />
+
+        <LurkerTaxSection />
 
       </div>
     </div>

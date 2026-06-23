@@ -1,3 +1,11 @@
+## #284 — Lurker-Steuer jetzt im Dashboard schaltbar
+
+**Problem:** Die „Lurker-Steuer" — die deine ruhigsten Stammzuschauer ab und zu mit einem freundlichen Hinweis zurück in den Chat holt — ließ sich bisher nur per Chat-Befehl abschalten. Im Verwaltungs-Dashboard fehlte ein eigener Schalter, sodass man den Status dort weder sehen noch bequem ändern konnte.
+
+**Änderung:** Im Verwaltungs-Dashboard gibt es jetzt einen eigenen Bereich „Lurker-Steuer" mit An/Aus-Schalter. Er zeigt den aktuellen Stand, speichert Änderungen direkt und bleibt mit dem Chat-Befehl synchron. Fehlt deinem Kanal die nötige Chatter-Leseberechtigung, weist ein Hinweis darauf hin, dass die Funktion sonst wirkungslos bliebe. Standardmäßig ist die Lurker-Steuer aus; jeder Partner kann sie selbst aktivieren.
+
+**Ergebnis:** Die Lurker-Steuer lässt sich bequem im Dashboard ein- und ausschalten — ohne Chat-Befehl, mit klarer Statusanzeige und einem Hinweis, falls noch eine Berechtigung fehlt.
+
 ## #283 — Wartung: Verifikations-Feldumbau vorbereitet (zurückgestellt), interne Tests stabilisiert
 
 **Problem:** Drei veraltete Verifikations-Datenfelder eines Streamer-Datensatzes dienen nur noch intern als Anzeige-Markierung und sollten zugunsten eines einzelnen Felds entfernt werden. Unabhängig davon konnten sich die automatisierten Anmelde-Tests bei gemeinsamem Testdatenbank-Lauf gegenseitig stören und sprangen dann fehl an.
