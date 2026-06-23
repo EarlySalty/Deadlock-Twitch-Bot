@@ -807,7 +807,9 @@ pub fn build_partner_login_router(pool: PgPool, rate_limiter: RateLimiter) -> Ro
 /// Redirect und liest den Status aus dem Query). `DashboardAuthLevel` +
 /// `DashboardAuthState` kommen als globale Extensions aus der `tb-dashboard`-main.
 pub fn build_admin_legacy_forms_router(pool: PgPool) -> Router {
-    use handlers::{admin_chat_action, admin_legacy_streamers, admin_manual_plan};
+    use handlers::{
+        admin_chat_action, admin_form_aliases, admin_legacy_streamers, admin_manual_plan,
+    };
 
     Router::new()
         .route(
@@ -844,6 +846,20 @@ pub fn build_admin_legacy_forms_router(pool: PgPool) -> Router {
         .route(
             "/twitch/discord_link",
             post(admin_legacy_streamers::discord_link_handler),
+        )
+        // Admin-Bare-Form-Pfade aus der Python-Live-Tabelle
+        // (`bot/dashboard/live/live.py`): weiterhin von Legacy-HTML/Client genutzt.
+        .route(
+            "/twitch/verify",
+            post(admin_form_aliases::verify_handler),
+        )
+        .route(
+            "/twitch/archive",
+            post(admin_form_aliases::archive_handler),
+        )
+        .route(
+            "/twitch/discord_flag",
+            post(admin_form_aliases::discord_flag_handler),
         )
         // Welle-2-A1: native Admin-Partner-Chat-Aktion (P2.120) mit Owner-Gate
         // (P2.119); Send wird über die Bot-internal-API gebrückt.
@@ -1036,12 +1052,17 @@ pub fn build_market_router(pool: PgPool) -> Router {
 ///
 /// `DashboardAuthLevel` kommt aus der globalen `DashboardAuthState`-Extension;
 /// die Handler bridgen über die Internal-API (`X-Internal-Token`).
-pub fn build_raid_pages_router() -> Router {
-    use handlers::raid_pages;
+pub fn build_raid_pages_router(pool: PgPool) -> Router {
+    use handlers::{raid_pages, raid_requirements};
 
     Router::new()
         .route("/twitch/raid/auth", get(raid_pages::raid_auth_handler))
         .route("/twitch/raid/go", get(raid_pages::raid_go_handler))
+        .route(
+            "/twitch/raid/requirements",
+            get(raid_requirements::raid_requirements_handler),
+        )
+        .with_state(pool)
 }
 
 /// Baut den Router für die Affiliate-Portal-HTML-Seite (P1.26).
@@ -1157,7 +1178,7 @@ pub fn build_router(pool: PgPool, token: String) -> Router {
         .merge(build_partner_login_router(pool.clone(), rate_limiter.clone()))
         .merge(build_roadmap_router(pool.clone(), token.clone()))
         .merge(build_market_router(pool.clone()))
-        .merge(build_raid_pages_router())
+        .merge(build_raid_pages_router(pool.clone()))
         .merge(build_affiliate_portal_router())
         .merge(build_social_media_admin_router(pool.clone()))
         .merge(build_v2_spa_pages_router())
