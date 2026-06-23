@@ -210,7 +210,7 @@ pub async fn social_media_admin_assets_handler(
 async fn check_spa_auth(auth: &DashboardAuthLevel, pool: &PgPool) -> Option<Response> {
     match auth {
         DashboardAuthLevel::None => Some(Redirect::to(LOGIN_URL).into_response()),
-        DashboardAuthLevel::Localhost | DashboardAuthLevel::Admin { .. } => None,
+        DashboardAuthLevel::Admin { .. } => None,
         DashboardAuthLevel::Partner {
             twitch_login,
             twitch_user_id,

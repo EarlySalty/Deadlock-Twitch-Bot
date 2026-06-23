@@ -566,7 +566,7 @@ mod tests {
 
     async fn call(pool: PgPool) -> axum::response::Response {
         audience_demographics_handler(
-            DashboardAuthLevel::Localhost,
+            DashboardAuthLevel::admin(),
             State(pool),
             Query(DemoQuery { streamer: Some("nani".into()), days: Some(30), timezone: Some("UTC".into()) }),
         ).await.into_response()

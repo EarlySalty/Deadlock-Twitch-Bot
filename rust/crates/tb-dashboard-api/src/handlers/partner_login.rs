@@ -85,10 +85,9 @@ pub async fn link_handler(
         return (StatusCode::FORBIDDEN, Json(json!({ "error": "admin_required" }))).into_response();
     }
     // P2.134: Same-Origin-Guard für Browser-Admin-Caller (Cookie-Session).
-    // Localhost ist loopback-only (kein Browser-Cross-Site-Vektor) → Bypass;
-    // ein nachweislich fremder Origin auf der Link-Ausstellung → 403 (Vorfall #235:
+    // Ein nachweislich fremder Origin auf der Link-Ausstellung → 403 (Vorfall #235:
     // kein harter X-CSRF-Header-Zwang, sondern Origin/Referer same-origin).
-    if !matches!(auth, DashboardAuthLevel::Localhost) && !is_allowed_origin(&headers) {
+    if !is_allowed_origin(&headers) {
         return (StatusCode::FORBIDDEN, Json(json!({ "error": "csrf_failed" }))).into_response();
     }
     let Some(Extension(state)) = state else {

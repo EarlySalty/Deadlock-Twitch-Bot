@@ -48,7 +48,7 @@ fn resolve_target(
         DashboardAuthLevel::Partner { twitch_login, twitch_user_id, .. } => {
             Ok((twitch_login.to_lowercase(), twitch_user_id.trim().to_string()))
         }
-        DashboardAuthLevel::Admin { .. } | DashboardAuthLevel::Localhost => {
+        DashboardAuthLevel::Admin { .. } => {
             match streamer.as_deref().map(str::trim).filter(|s| !s.is_empty()) {
                 Some(s) => Ok((s.to_lowercase(), String::new())),
                 None => Err((

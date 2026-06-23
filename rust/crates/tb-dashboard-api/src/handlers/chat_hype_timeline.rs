@@ -79,7 +79,7 @@ mod tests {
     async fn streamer_pflicht_400() {
         let Some(pool) = make_pool("t_hype_h1").await else { return };
         let resp = chat_hype_timeline_handler(
-            DashboardAuthLevel::Localhost,
+            DashboardAuthLevel::admin(),
             State(pool),
             Query(HypeTimelineQuery { streamer: None, session_id: None }),
         )
@@ -92,7 +92,7 @@ mod tests {
     async fn keine_session_404() {
         let Some(pool) = make_pool("t_hype_h2").await else { return };
         let resp = chat_hype_timeline_handler(
-            DashboardAuthLevel::Localhost,
+            DashboardAuthLevel::admin(),
             State(pool),
             Query(HypeTimelineQuery { streamer: Some("nani".into()), session_id: None }),
         )

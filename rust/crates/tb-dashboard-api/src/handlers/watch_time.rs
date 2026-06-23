@@ -5,7 +5,7 @@
 //! Lesefenster die Sichtbarkeit (Free → nur letzter Stream). `streamer` Pflicht,
 //! `days` 7..365.
 //!
-//! Lesefenster (Python `_resolve_read_window`): Localhost/Admin → `full`; sonst
+//! Lesefenster (Python `_resolve_read_window`): Admin → `full`; sonst
 //! entscheidet der Plan des **abgefragten** Streamers — `analytics.basic` oder
 //! `analytics.extended` → `full`, sonst (Free `analytics.daily`) → `last_stream`.
 
@@ -38,10 +38,10 @@ fn window_for_entitlements(entitlements: &[&str]) -> &'static str {
     }
 }
 
-/// Lesefenster auflösen: Localhost/Admin → `full`; sonst Plan des Streamers prüfen.
+/// Lesefenster auflösen: Admin → `full`; sonst Plan des Streamers prüfen.
 /// Bei Plan-Lookup-Fehler konservativ `last_stream` (nie mehr Daten zeigen als erlaubt).
 async fn resolve_read_window(pool: &PgPool, auth: &DashboardAuthLevel, streamer: &str) -> &'static str {
-    if matches!(auth, DashboardAuthLevel::Localhost | DashboardAuthLevel::Admin { .. }) {
+    if matches!(auth, DashboardAuthLevel::Admin { .. }) {
         return "full";
     }
     match tb_analytics::plan::resolve_plan_snapshot(pool, streamer, "").await {
@@ -110,7 +110,7 @@ mod tests {
     async fn streamer_pflicht_400() {
         let Some(pool) = make_pool("t_wt_handler1").await else { return };
         let resp = watch_time_distribution_handler(
-            DashboardAuthLevel::Localhost,
+            DashboardAuthLevel::admin(),
             State(pool),
             Query(WatchTimeQuery { streamer: None, days: None }),
         )
@@ -136,7 +136,7 @@ mod tests {
     async fn localhost_200() {
         let Some(pool) = make_pool("t_wt_handler3").await else { return };
         let resp = watch_time_distribution_handler(
-            DashboardAuthLevel::Localhost,
+            DashboardAuthLevel::admin(),
             State(pool),
             Query(WatchTimeQuery { streamer: Some("nani".into()), days: Some(30) }),
         )

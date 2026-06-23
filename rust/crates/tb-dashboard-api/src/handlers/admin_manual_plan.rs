@@ -97,10 +97,6 @@ async fn gate(
     if !auth.is_privileged() {
         return Some(redirect_err("Nicht autorisiert."));
     }
-    // Localhost braucht kein CSRF (interner Loopback, Python-Parität).
-    if matches!(auth, DashboardAuthLevel::Localhost) {
-        return None;
-    }
     // Admin (Cookie-Session): CSRF-Token aus dem Form-Body gegen die Session prüfen.
     let presented = form_get(form, "csrf_token").trim().to_string();
     let Some(Extension(state)) = config else {

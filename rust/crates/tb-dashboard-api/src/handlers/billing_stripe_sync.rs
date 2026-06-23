@@ -440,7 +440,7 @@ mod tests {
             .connect_lazy("postgres://invalid:invalid@127.0.0.1:1/none")
             .unwrap();
         let resp = sync_products_handler(
-            DashboardAuthLevel::Localhost,
+            DashboardAuthLevel::admin(),
             None,
             State(pool),
             axum::body::Bytes::from_static(br#"{"dry_run": true}"#),
@@ -537,7 +537,7 @@ mod tests {
             .unwrap();
 
         let resp = sync_products_handler(
-            DashboardAuthLevel::Localhost,
+            DashboardAuthLevel::admin(),
             Some(Extension(config)),
             State(pool),
             axum::body::Bytes::from_static(br#"{"dry_run": false}"#),
@@ -634,7 +634,7 @@ mod tests {
             .unwrap();
 
         let resp = sync_products_handler(
-            DashboardAuthLevel::Localhost,
+            DashboardAuthLevel::admin(),
             Some(Extension(config)),
             State(pool),
             axum::body::Bytes::from_static(br#"{"dry_run": false}"#),
@@ -712,7 +712,7 @@ mod tests {
             .unwrap();
 
         let resp = sync_products_handler(
-            DashboardAuthLevel::Localhost,
+            DashboardAuthLevel::admin(),
             Some(Extension(config)),
             State(pool),
             axum::body::Bytes::from_static(br#"{"dry_run": false}"#),

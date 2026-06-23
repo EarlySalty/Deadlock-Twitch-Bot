@@ -13,10 +13,9 @@
 //! ohne Inhalt — nur Status + optionaler `X-Admin-User`-Header.
 //!
 //! **Auth-Quelle:** Die [`DashboardAuthLevel`]-Kaskade (`auth/level.rs`) löst
-//! Localhost/Admin/Partner/None aus Cookie + Loopback-Check auf. Admin =
-//! gültige `master_dash_session` (Discord-Admin) ODER ein `_TWITCH_ADMIN_LOGINS`-
-//! Login über die Twitch-Session. Localhost = Loopback-Peer + Loopback-Host.
-//! Beides ist „privilegiert" → 200; alles andere → 401.
+//! Admin/Partner/None aus Cookies auf. Admin = gültige `master_dash_session`
+//! (Discord-Admin) ODER ein `_TWITCH_ADMIN_LOGINS`-Login über die Twitch-Session
+//! mit aktivem Admin-Mode. Admin ist „privilegiert" → 200; alles andere → 401.
 //!
 //! **Device-Bindung (P1.39, konditional):** Pythons `validate_admin_session`
 //! prüft für die Discord-Admin-Session (`master_dash_session`) zusätzlich
@@ -56,7 +55,7 @@ const ADMIN_COOKIE_NAME: &str = "master_dash_session";
 
 /// `GET /twitch/auth/validate` — Forward-Auth-Check für Caddy.
 ///
-/// - Localhost ODER Admin → **200** (autorisiert) — sofern die Discord-Admin-
+/// - Admin → **200** (autorisiert) — sofern die Discord-Admin-
 ///   Session-Bindung (IP/Passive-FP/fp_pending, P1.39) den Request akzeptiert.
 /// - Partner ODER None    → **401** (nicht autorisiert).
 ///
@@ -71,8 +70,8 @@ pub async fn validate_admin_session(auth: DashboardAuthLevel, parts: Parts) -> R
 
     // Discord-Admin-Session-Bindung (P1.39): nur wenn der Request über das
     // master_dash_session-Cookie als Admin aufgelöst wurde, die Session-Bindung
-    // gegen IP + Passive-FP + fp_pending prüfen. Localhost / X-Admin-Token /
-    // Twitch-Admin-Login (kein master_dash_session-Cookie) bleiben unberührt.
+    // gegen IP + Passive-FP + fp_pending prüfen. Twitch-Admin-Login
+    // (kein master_dash_session-Cookie) bleibt unberührt.
     let mut admin_user = "admin".to_string();
     if let Some(session_id) = extract_cookie(&parts, ADMIN_COOKIE_NAME) {
         let session_id = session_id.trim();
@@ -88,8 +87,8 @@ pub async fn validate_admin_session(auth: DashboardAuthLevel, parts: Parts) -> R
                         admin_user = fp.username;
                     }
                     // Cookie gesetzt, aber keine gültige discord_admin-Session: der
-                    // Admin-Status kam über einen anderen Pfad (Localhost / Token /
-                    // Twitch-Admin-Login) — kein Lockout, weiter mit Default-User.
+                    // Admin-Status kam über einen anderen Pfad (Twitch-Admin-Login)
+                    // — kein Lockout, weiter mit Default-User.
                     Ok(None) => {}
                     // DB-Fehler → fail-closed (Python wirft, Caddy bekommt kein 200).
                     Err(_) => return forward_response(StatusCode::UNAUTHORIZED, None),
@@ -182,8 +181,8 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn localhost_gibt_200() {
-        let resp = validate_admin_session(DashboardAuthLevel::Localhost, empty_parts()).await;
+    async fn admin_ohne_cookie_gibt_200() {
+        let resp = validate_admin_session(DashboardAuthLevel::admin(), empty_parts()).await;
         assert_eq!(resp.status(), StatusCode::OK);
         assert!(resp.headers().get("X-Admin-User").is_some());
     }

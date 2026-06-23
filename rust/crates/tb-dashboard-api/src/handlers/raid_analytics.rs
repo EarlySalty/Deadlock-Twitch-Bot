@@ -877,7 +877,7 @@ mod tests {
             return;
         };
         let resp = raid_retention_handler(
-            DashboardAuthLevel::Localhost,
+            DashboardAuthLevel::admin(),
             State(pool),
             Query(RaidQuery { streamer: Some("nani".into()), days: Some(30) }),
         )
@@ -898,7 +898,7 @@ mod tests {
             return;
         };
         let resp = raid_analytics_handler(
-            DashboardAuthLevel::Localhost,
+            DashboardAuthLevel::admin(),
             State(pool),
             Query(RaidQuery { streamer: Some("nani".into()), days: Some(30) }),
         )

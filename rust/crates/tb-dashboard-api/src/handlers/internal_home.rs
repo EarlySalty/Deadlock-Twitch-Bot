@@ -22,7 +22,7 @@ use std::io::{BufRead, BufReader};
 
 use axum::{
     extract::{Query, State},
-    http::{HeaderMap, StatusCode},
+    http::{request::Parts, HeaderMap, StatusCode},
     response::{IntoResponse, Response},
     Json,
 };
@@ -31,7 +31,7 @@ use serde::Deserialize;
 use serde_json::{json, Value};
 use sqlx::{postgres::PgRow, PgPool, Row};
 
-use crate::auth::level::DashboardAuthLevel;
+use crate::auth::level::{DashboardAuthLevel, is_local_request};
 
 // ── Konstanten (Python api_v2.py:466-492) ────────────────────────────────────
 
@@ -200,7 +200,7 @@ fn resolve_identity(
                 },
             })
         }
-        DashboardAuthLevel::Localhost | DashboardAuthLevel::Admin { actor: None } => {
+        DashboardAuthLevel::Admin { actor: None } => {
             if override_login.is_empty() {
                 // Python: keine Twitch-Session vorhanden → auth_required/streamer_session_required.
                 return Err(unauthorized_json(
@@ -2048,38 +2048,41 @@ fn serialize_changelog_entry(row: &PgRow) -> Value {
 
 // ── POST-Handler: changelog create (api_v2.py:2077-2189) ─────────────────────
 
-/// `POST /twitch/api/v2/internal-home/changelog` — Admin/Localhost only.
+/// `POST /twitch/api/v2/internal-home/changelog` — Admin or direct loopback only.
 pub async fn changelog_handler(
     auth: DashboardAuthLevel,
     State(pool): State<PgPool>,
     headers: HeaderMap,
+    parts: Parts,
     body: Option<Json<ChangelogBody>>,
 ) -> Response {
-    // Auth (api_v2.py:1295-1315): none → 401, partner → 403, priv → ok.
+    // Auth (api_v2.py:1295-1315): none → 401, partner → 403, admin/direct loopback → ok.
     // P1.32: Same-Origin-CSRF-Schutz statt erzwungenem X-CSRF-Token-Header
-    // (Vorfall #235). Localhost ist von Natur aus loopback-only und kennt keinen
-    // Browser-Cross-Site-Vektor → Bypass; ein Browser-Admin (Cookie-Session) muss
-    // dagegen same-origin sein. Nur ein nachweislich fremder Origin → 403.
-    let is_local = matches!(auth, DashboardAuthLevel::Localhost);
-    match auth {
-        DashboardAuthLevel::Localhost | DashboardAuthLevel::Admin { .. } => {}
-        DashboardAuthLevel::None => {
-            return (
-                StatusCode::UNAUTHORIZED,
-                Json(json!({ "error": "auth_required", "required": "admin" })),
-            )
-                .into_response();
-        }
-        DashboardAuthLevel::Partner { .. } => {
-            return (
-                StatusCode::FORBIDDEN,
-                Json(json!({
-                    "error": "admin_required",
-                    "required": "admin",
-                    "auth_level": "partner",
-                })),
-            )
-                .into_response();
+    // (Vorfall #235). Direct loopback kennt keinen Browser-Cross-Site-Vektor
+    // → Bypass; ein Browser-Admin (Cookie-Session) muss dagegen same-origin sein.
+    // Nur ein nachweislich fremder Origin → 403.
+    let is_local = is_local_request(&parts);
+    if !is_local {
+        match auth {
+            DashboardAuthLevel::Admin { .. } => {}
+            DashboardAuthLevel::None => {
+                return (
+                    StatusCode::UNAUTHORIZED,
+                    Json(json!({ "error": "auth_required", "required": "admin" })),
+                )
+                    .into_response();
+            }
+            DashboardAuthLevel::Partner { .. } => {
+                return (
+                    StatusCode::FORBIDDEN,
+                    Json(json!({
+                        "error": "admin_required",
+                        "required": "admin",
+                        "auth_level": "partner",
+                    })),
+                )
+                    .into_response();
+            }
         }
     }
 

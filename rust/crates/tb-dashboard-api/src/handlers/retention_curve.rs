@@ -306,7 +306,7 @@ mod tests {
         .unwrap();
 
         let resp = retention_curve_handler(
-            DashboardAuthLevel::Localhost,
+            DashboardAuthLevel::admin(),
             State(pool),
             Query(RetentionQuery {
                 streamer: Some("nani".into()),

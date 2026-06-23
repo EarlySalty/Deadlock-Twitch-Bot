@@ -88,7 +88,7 @@ pub async fn ai_analysis_handler(
     }
 
     // Modellwahl: Localhost/Admin → Opus; sonst Plan des Streamers.
-    let ai_model: &str = if matches!(auth, DashboardAuthLevel::Localhost | DashboardAuthLevel::Admin { .. }) {
+    let ai_model: &str = if matches!(auth, DashboardAuthLevel::Admin { .. }) {
         AI_MODEL_OPUS
     } else {
         match plan_ai_model(&pool, &streamer).await {
@@ -271,7 +271,7 @@ mod tests {
     #[tokio::test]
     async fn streamer_required_400() {
         let Some(pool) = make_pool("t_ai_an_str").await else { return };
-        let resp = ai_analysis_handler(DashboardAuthLevel::Localhost, State(pool), Query(query(None, None)))
+        let resp = ai_analysis_handler(DashboardAuthLevel::admin(), State(pool), Query(query(None, None)))
             .await
             .into_response();
         assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
@@ -283,7 +283,7 @@ mod tests {
         // Eindeutiger Streamer-Name (globaler State) → vorbelegen.
         AI_STATE.lock().unwrap().in_progress_add("t6inprogstreamer");
         let resp = ai_analysis_handler(
-            DashboardAuthLevel::Localhost,
+            DashboardAuthLevel::admin(),
             State(pool),
             Query(query(Some("t6inprogstreamer"), None)),
         )
@@ -298,7 +298,7 @@ mod tests {
         let Some(pool) = make_pool("t_ai_an_uc").await else { return };
         let long = "x".repeat(2001);
         let resp = ai_analysis_handler(
-            DashboardAuthLevel::Localhost,
+            DashboardAuthLevel::admin(),
             State(pool),
             Query(query(Some("t6uctxstreamer"), Some(&long))),
         )

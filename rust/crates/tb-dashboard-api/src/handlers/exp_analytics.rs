@@ -150,7 +150,7 @@ mod tests {
         sqlx::query("CREATE TABLE exp_sessions (streamer TEXT, started_at TEXT, ended_at TEXT, game_name TEXT, avg_viewers REAL)").execute(&pool).await.unwrap();
         // Localhost = privilegiert (bypass Paywall); fehlender streamer → 400.
         let resp = exp_overview_handler(
-            DashboardAuthLevel::Localhost,
+            DashboardAuthLevel::admin(),
             State(pool),
             Query(ExpQuery { streamer: None, days: None }),
         )

@@ -85,7 +85,7 @@ mod tests {
     async fn streamer_pflicht_400() {
         let Some(pool) = make_pool("t_coaching_h1").await else { return };
         let resp = coaching_handler(
-            DashboardAuthLevel::Localhost,
+            DashboardAuthLevel::admin(),
             State(pool),
             Query(CoachingQuery { streamer: None, days: None }),
         )
@@ -99,7 +99,7 @@ mod tests {
         let Some(pool) = make_pool("t_coaching_h2").await else { return };
         // Localhost bypasst Gate, streamer vorhanden, keine Sessions → empty:true/200.
         let resp = coaching_handler(
-            DashboardAuthLevel::Localhost,
+            DashboardAuthLevel::admin(),
             State(pool),
             Query(CoachingQuery { streamer: Some("Nani".into()), days: Some("30".into()) }),
         )
@@ -114,7 +114,7 @@ mod tests {
         // Python: _parse_bounded_query_int → {"error":"days must be an integer"}, 400.
         // days-Check läuft VOR streamer-Pflicht (deshalb streamer: None ok).
         let resp = coaching_handler(
-            DashboardAuthLevel::Localhost,
+            DashboardAuthLevel::admin(),
             State(pool),
             Query(CoachingQuery { streamer: None, days: Some("abc".into()) }),
         )

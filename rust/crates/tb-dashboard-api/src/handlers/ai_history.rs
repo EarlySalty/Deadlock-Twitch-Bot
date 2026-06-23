@@ -2,7 +2,7 @@
 //!
 //! Port von `bot/analytics/api_ai.py:_api_v2_ai_history`. Auth: eingeloggt; der
 //! **abgefragte Streamer** braucht einen AI-Plan (`analytics.ai_mini`/`ai_full`),
-//! sonst 403 — außer Localhost/Admin. `streamer` Pflicht, `limit` 1..50 (Default 20).
+//! sonst 403 — außer Admin. `streamer` Pflicht, `limit` 1..50 (Default 20).
 
 use axum::{
     extract::{Query, State},
@@ -56,8 +56,8 @@ pub async fn ai_history_handler(
             return (StatusCode::BAD_REQUEST, Json(json!({ "error": "streamer parameter required" }))).into_response();
         }
     };
-    // AI-Plan-Gate: Localhost/Admin bypass; sonst muss der Streamer einen AI-Plan haben.
-    let privileged = matches!(auth, DashboardAuthLevel::Localhost | DashboardAuthLevel::Admin { .. });
+    // AI-Plan-Gate: Admin bypass; sonst muss der Streamer einen AI-Plan haben.
+    let privileged = matches!(auth, DashboardAuthLevel::Admin { .. });
     if !privileged && ai_plan_model(&pool, &streamer).await.is_none() {
         return (
             StatusCode::FORBIDDEN,
@@ -107,7 +107,7 @@ mod tests {
     async fn streamer_pflicht_400() {
         let Some(pool) = make_pool("t_aih_h1").await else { return };
         let resp = ai_history_handler(
-            DashboardAuthLevel::Localhost,
+            DashboardAuthLevel::admin(),
             State(pool),
             Query(AiHistoryQuery { streamer: None, limit: None }),
         )
@@ -141,9 +141,9 @@ mod tests {
     #[tokio::test]
     async fn localhost_bypass_200() {
         let Some(pool) = make_pool("t_aih_h2").await else { return };
-        // Localhost bypasst das AI-Plan-Gate → 200 (leere Historie).
+        // Admin bypasst das AI-Plan-Gate → 200 (leere Historie).
         let resp = ai_history_handler(
-            DashboardAuthLevel::Localhost,
+            DashboardAuthLevel::admin(),
             State(pool),
             Query(AiHistoryQuery { streamer: Some("nani".into()), limit: Some(10) }),
         )

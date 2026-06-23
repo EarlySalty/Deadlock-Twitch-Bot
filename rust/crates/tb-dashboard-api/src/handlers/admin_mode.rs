@@ -1,12 +1,11 @@
 //! Sessiongebundener Toggle für die Admin-Präsentation im Dashboard.
 //!
-//! Der Auth-Level bleibt unverändert `Admin`; dieser Endpoint steuert nur, ob
-//! `auth-status` den Twitch-OAuth-Admin als normalen Partner oder mit
-//! Admin-Vollzugriff präsentiert. Die Route läuft bewusst NICHT durch
+//! Dieser Endpoint steuert, ob ein admin-eligibler Twitch-Login als normaler
+//! Partner oder mit Admin-Vollzugriff präsentiert wird. Die Route läuft bewusst NICHT durch
 //! `csrf_protect`: Das Streamer-Dashboard (`dashboard_v2`) bekommt von
 //! `auth-status` kein CSRF-Token (`csrfToken: null`) und könnte den
 //! Header-Schutz nie erfüllen. Geschützt ist der rein präsentationssteuernde
-//! Toggle durch die Auth-Prüfung `Admin { actor: Some(_) }` plus das
+//! Toggle durch die Auth-Prüfung auf einen admin-eligiblen Twitch-Login plus das
 //! `SameSite=Lax`-Session-Cookie.
 
 use axum::{
@@ -22,7 +21,7 @@ use tb_http_core::ApiError;
 
 use crate::{
     auth::{
-        level::DashboardAuthLevel,
+        level::{DashboardAuthLevel, is_admin_login},
         session::{build_transient_session_cookie, clear_session_cookie, SameSite},
     },
     handlers::{auth_login::OAuthLoginConfig, auth_status::ADMIN_MODE_COOKIE},
@@ -41,7 +40,12 @@ pub async fn set_admin_mode_handler(
     config: Option<Extension<OAuthLoginConfig>>,
     Json(body): Json<AdminModeRequest>,
 ) -> Response {
-    if !matches!(auth, DashboardAuthLevel::Admin { actor: Some(_) }) {
+    let login = match &auth {
+        DashboardAuthLevel::Partner { twitch_login, .. } => Some(twitch_login.as_str()),
+        DashboardAuthLevel::Admin { actor: Some(actor) } => Some(actor.twitch_login.as_str()),
+        DashboardAuthLevel::Admin { actor: None } | DashboardAuthLevel::None => None,
+    };
+    if !login.map(is_admin_login).unwrap_or(false) {
         return ApiError::forbidden_generic().into_response();
     }
 
@@ -104,6 +108,14 @@ mod tests {
         }
     }
 
+    fn admin_partner() -> DashboardAuthLevel {
+        DashboardAuthLevel::Partner {
+            twitch_login: "earlysalty".to_string(),
+            twitch_user_id: "42".to_string(),
+            display_name: "EarlySalty".to_string(),
+        }
+    }
+
     #[tokio::test]
     async fn enabled_setzt_session_cookie_ohne_ablaufzeit() {
         let response = set_admin_mode_handler(
@@ -156,7 +168,20 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn partner_und_unauth_erhalten_403() {
+    async fn admin_partner_darf_toggle_setzen() {
+        let response = set_admin_mode_handler(
+            admin_partner(),
+            None,
+            Json(AdminModeRequest { enabled: true }),
+        )
+        .await
+        .into_response();
+
+        assert_eq!(response.status(), StatusCode::OK);
+    }
+
+    #[tokio::test]
+    async fn nicht_admin_partner_und_unauth_erhalten_403() {
         for auth in [
             partner(),
             DashboardAuthLevel::None,

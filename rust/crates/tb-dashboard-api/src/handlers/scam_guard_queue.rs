@@ -48,7 +48,7 @@ struct DetailRow {
 fn resolve_login(auth: &DashboardAuthLevel, streamer: &Option<String>) -> Result<String, Response> {
     match auth {
         DashboardAuthLevel::Partner { twitch_login, .. } => Ok(twitch_login.to_lowercase()),
-        DashboardAuthLevel::Admin { .. } | DashboardAuthLevel::Localhost => {
+        DashboardAuthLevel::Admin { .. } => {
             match streamer.as_deref().map(str::trim).filter(|s| !s.is_empty()) {
                 Some(s) => Ok(s.to_lowercase()),
                 None => Err((

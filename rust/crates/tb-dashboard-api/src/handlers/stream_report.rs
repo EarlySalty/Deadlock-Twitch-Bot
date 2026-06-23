@@ -74,14 +74,12 @@ fn owner_login(auth: &DashboardAuthLevel) -> Option<String> {
 ///
 /// P2.71: Spiegelt Python `twitch_login OR auth_level OR 'unknown'`
 /// (api_post_stream.py:1271/1364). Twitch-OAuth-Admin → sein Login; Discord-Admin
-/// ohne Twitch-Identität → `"admin"`; Localhost → `"localhost"`; None → kein
-/// Schlüssel (Caller liefert 401).
+/// ohne Twitch-Identität → `"admin"`; None → kein Schlüssel (Caller liefert 401).
 fn writer_key(auth: &DashboardAuthLevel) -> Option<String> {
     match auth {
         DashboardAuthLevel::Partner { twitch_login, .. } => Some(twitch_login.trim().to_lowercase()),
         DashboardAuthLevel::Admin { actor: Some(actor) } => Some(actor.twitch_login.trim().to_lowercase()),
         DashboardAuthLevel::Admin { actor: None } => Some("admin".to_string()),
-        DashboardAuthLevel::Localhost => Some("localhost".to_string()),
         DashboardAuthLevel::None => None,
     }
 }
@@ -144,7 +142,7 @@ pub async fn stream_report_handler(
         DashboardAuthLevel::None => {
             return (StatusCode::UNAUTHORIZED, Json(json!({"error": "unauthorized"}))).into_response();
         }
-        DashboardAuthLevel::Localhost | DashboardAuthLevel::Admin { .. } => {}
+        DashboardAuthLevel::Admin { .. } => {}
         DashboardAuthLevel::Partner { twitch_login, .. } => {
             if streamer != twitch_login.to_lowercase() {
                 return (StatusCode::FORBIDDEN, Json(json!({"error": "forbidden"}))).into_response();
@@ -593,7 +591,6 @@ mod tests {
         // Discord-Admin (kein Actor) → "admin" / kein own-key.
         assert_eq!(writer_key(&DashboardAuthLevel::admin()).as_deref(), Some("admin"));
         assert_eq!(owner_login(&DashboardAuthLevel::admin()), None);
-        assert_eq!(writer_key(&DashboardAuthLevel::Localhost).as_deref(), Some("localhost"));
         assert_eq!(writer_key(&DashboardAuthLevel::None), None);
     }
 

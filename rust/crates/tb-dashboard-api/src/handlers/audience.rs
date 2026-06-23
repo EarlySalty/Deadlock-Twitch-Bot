@@ -919,7 +919,7 @@ mod tests {
             .execute(&pool).await.unwrap();
 
         let resp = viewer_profiles_handler(
-            DashboardAuthLevel::Localhost,
+            DashboardAuthLevel::admin(),
             State(pool),
             Query(ProfilesQuery { streamer: Some("nani".into()) }),
         ).await.into_response();

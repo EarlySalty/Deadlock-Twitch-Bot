@@ -143,7 +143,7 @@ pub async fn ai_chat_handler(
     }
 
     // Plan-Gate für Nicht-Admin/Localhost.
-    if !matches!(auth, DashboardAuthLevel::Localhost | DashboardAuthLevel::Admin { .. }) {
+    if !matches!(auth, DashboardAuthLevel::Admin { .. }) {
         match plan_ai_model(&pool, &streamer).await {
             Ok(Some(_)) => {}
             Ok(None) => {
@@ -288,7 +288,7 @@ mod tests {
     #[tokio::test]
     async fn invalid_json_400() {
         let Some(pool) = make_pool("t_ai_chat_json").await else { return };
-        let resp = ai_chat_handler(DashboardAuthLevel::Localhost, State(pool), "nicht json".into()).await.into_response();
+        let resp = ai_chat_handler(DashboardAuthLevel::admin(), State(pool), "nicht json".into()).await.into_response();
         assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
     }
 
@@ -297,7 +297,7 @@ mod tests {
         let Some(pool) = make_pool("t_ai_chat_fields").await else { return };
         // analysis_id fehlt.
         let resp = ai_chat_handler(
-            DashboardAuthLevel::Localhost,
+            DashboardAuthLevel::admin(),
             State(pool.clone()),
             json!({"streamer": "nani", "message": "hi"}).to_string(),
         )
@@ -311,7 +311,7 @@ mod tests {
         let Some(pool) = make_pool("t_ai_chat_404").await else { return };
         // Localhost (kein Plan-Gate), gültige Felder, aber keine Session.
         let resp = ai_chat_handler(
-            DashboardAuthLevel::Localhost,
+            DashboardAuthLevel::admin(),
             State(pool),
             json!({"streamer": "t6chatnosession", "analysis_id": 999999, "message": "hi"}).to_string(),
         )
@@ -330,7 +330,7 @@ mod tests {
         let key = chat_session_key("t6chat429", 7);
         AI_STATE.lock().unwrap().insert_session(key.clone(), s);
         let resp = ai_chat_handler(
-            DashboardAuthLevel::Localhost,
+            DashboardAuthLevel::admin(),
             State(pool),
             json!({"streamer": "t6chat429", "analysis_id": 7, "message": "hi"}).to_string(),
         )

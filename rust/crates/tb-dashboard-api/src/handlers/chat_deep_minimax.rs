@@ -121,7 +121,7 @@ mod tests {
         let Some(pool) = make_pool("t_deep_h_403").await else { return };
         // Consent nicht gesetzt → false.
         let resp = chat_deep_minimax_handler(
-            DashboardAuthLevel::Localhost,
+            DashboardAuthLevel::admin(),
             State(pool),
             Query(ChatDeepQuery { streamer: Some("nani".into()), session_id: Some("5".into()) }),
         )
@@ -135,7 +135,7 @@ mod tests {
         let Some(pool) = make_pool("t_deep_h_str").await else { return };
         set_consent(&pool, true).await;
         let resp = chat_deep_minimax_handler(
-            DashboardAuthLevel::Localhost,
+            DashboardAuthLevel::admin(),
             State(pool),
             Query(ChatDeepQuery { streamer: None, session_id: Some("5".into()) }),
         )
@@ -149,7 +149,7 @@ mod tests {
         let Some(pool) = make_pool("t_deep_h_sess").await else { return };
         set_consent(&pool, true).await;
         let resp = chat_deep_minimax_handler(
-            DashboardAuthLevel::Localhost,
+            DashboardAuthLevel::admin(),
             State(pool),
             Query(ChatDeepQuery { streamer: Some("nani".into()), session_id: None }),
         )
@@ -164,7 +164,7 @@ mod tests {
         set_consent(&pool, true).await;
         // Consent ok, streamer+session da, aber keine Nachrichten → 404 (kein LLM-Call).
         let resp = chat_deep_minimax_handler(
-            DashboardAuthLevel::Localhost,
+            DashboardAuthLevel::admin(),
             State(pool),
             Query(ChatDeepQuery { streamer: Some("nani".into()), session_id: Some("5".into()) }),
         )

@@ -13,9 +13,10 @@
 //!
 //! Verhalten:
 //! - Safe-Methoden (GET/HEAD/OPTIONS/TRACE) → immer durchgelassen.
-//! - Localhost-Requests → durchgelassen (kein Browser-CSRF-Vektor; loopback-only
-//!   interne Tools, Python-Parität für den Localhost-Bypass).
-//! - Write ohne gültiges Token/Session → `403 csrf_failed`.
+//! - Direkte Loopback-Requests → durchgelassen (kein Browser-CSRF-Vektor;
+//!   loopback-only interne Tools, vor allem Changelog-Spiegelung).
+//! - Write mit gültigem Token oder Same-Origin-Session → durchgelassen.
+//! - Cross-Origin oder Write ohne gültige Session → `403 csrf_failed`.
 //! - Ohne `DashboardAuthState`-Extension (Auth aus) → fail-closed `403`.
 
 use axum::{
@@ -63,7 +64,7 @@ pub async fn csrf_protect(request: Request, next: Next) -> Response {
 
     let (parts, body) = request.into_parts();
 
-    // Localhost-Bypass (interne loopback-only Tools; Python-Parität).
+    // Direkter Loopback-Bypass (interne loopback-only Tools).
     if is_local_request(&parts) {
         return next.run(Request::from_parts(parts, body)).await;
     }
@@ -72,6 +73,10 @@ pub async fn csrf_protect(request: Request, next: Next) -> Response {
         // Auth-State fehlt → kein Validierungspfad → fail-closed.
         return csrf_failed();
     };
+
+    if !is_allowed_origin(&parts.headers) {
+        return csrf_failed();
+    }
 
     let presented = parts
         .headers
@@ -85,7 +90,7 @@ pub async fn csrf_protect(request: Request, next: Next) -> Response {
     let admin_cookie = extract_cookie(&parts, ADMIN_COOKIE_NAME).map(str::to_string);
     let partner_cookie = extract_cookie(&parts, PARTNER_COOKIE_NAME).map(str::to_string);
 
-    let valid = match (&admin_cookie, &partner_cookie) {
+    let token_valid = match (&admin_cookie, &partner_cookie) {
         (Some(sid), _) if !sid.is_empty() => state
             .validate_csrf(sid, ADMIN_COOKIE_NAME_TYPE, &presented)
             .await
@@ -97,7 +102,29 @@ pub async fn csrf_protect(request: Request, next: Next) -> Response {
         _ => false,
     };
 
-    if valid {
+    let session_valid = if token_valid {
+        true
+    } else {
+        // F2: Der tokenlose Browser-Fallback trägt sicherheitlich auf SameSite=Lax
+        // plus Origin/Referer-Gate; ohne gültige DB-Session bleibt er zu.
+        match (&admin_cookie, &partner_cookie) {
+            (Some(sid), _) if !sid.is_empty() => state
+                .load_admin_session(sid)
+                .await
+                .ok()
+                .flatten()
+                .is_some(),
+            (_, Some(sid)) if !sid.is_empty() => state
+                .load_partner_session(sid)
+                .await
+                .ok()
+                .flatten()
+                .is_some(),
+            _ => false,
+        }
+    };
+
+    if session_valid {
         next.run(Request::from_parts(parts, body)).await
     } else {
         csrf_failed()
@@ -248,7 +275,7 @@ mod tests {
     #[tokio::test]
     async fn write_ohne_gueltiges_csrf_token_403() {
         let app = guarded_router();
-        // Nicht-Loopback-Host erzwingen, sonst greift der Localhost-Bypass.
+        // Nicht-Loopback-Host erzwingen, sonst greift der Loopback-Bypass.
         let resp = app
             .oneshot(
                 Request::builder()
@@ -358,5 +385,110 @@ mod tests {
 
         let resp = app.oneshot(req).await.unwrap();
         assert_eq!(resp.status(), StatusCode::OK);
+    }
+
+    async fn maybe_test_state() -> Option<(sqlx::PgPool, DashboardAuthState)> {
+        let url = std::env::var("TB_TEST_DATABASE_URL").ok()?;
+        let pool = sqlx::PgPool::connect(&url).await.ok()?;
+        sqlx::query(
+            r#"
+            CREATE TABLE IF NOT EXISTS dashboard_sessions (
+                session_id   TEXT NOT NULL PRIMARY KEY,
+                session_type TEXT NOT NULL,
+                payload_enc  BYTEA NOT NULL,
+                created_at   DOUBLE PRECISION NOT NULL,
+                expires_at   DOUBLE PRECISION NOT NULL
+            )
+            "#,
+        )
+        .execute(&pool)
+        .await
+        .ok()?;
+        sqlx::query(
+            r#"
+            CREATE TABLE IF NOT EXISTS twitch_partners (
+                id BIGINT PRIMARY KEY,
+                twitch_login TEXT NOT NULL,
+                twitch_user_id TEXT NOT NULL,
+                status TEXT NOT NULL DEFAULT 'active',
+                technical_pause_reason TEXT,
+                admin_archived_at TEXT,
+                departnered_at TEXT,
+                partnered_at TEXT DEFAULT CURRENT_TIMESTAMP
+            )
+            "#,
+        )
+        .execute(&pool)
+        .await
+        .ok()?;
+        let state = DashboardAuthState::new(pool.clone(), "dGVzdGtleTEyMzQ1Njc4OTAxMjM0NTY3ODkwMTIzNDU=".to_string());
+        Some((pool, state))
+    }
+
+    async fn ensure_partner(pool: &sqlx::PgPool, id: i64, login: &str, user_id: &str) {
+        sqlx::query("DELETE FROM twitch_partners WHERE id = $1 OR twitch_login = $2 OR twitch_user_id = $3")
+            .bind(id)
+            .bind(login)
+            .bind(user_id)
+            .execute(pool)
+            .await
+            .unwrap();
+        sqlx::query(
+            "INSERT INTO twitch_partners (id, twitch_login, twitch_user_id, status)
+             VALUES ($1, $2, $3, 'active')
+             ON CONFLICT DO NOTHING",
+        )
+        .bind(id)
+        .bind(login)
+        .bind(user_id)
+        .execute(pool)
+        .await
+        .unwrap();
+    }
+
+    async fn post_with_state(state: DashboardAuthState, cookie: Option<String>, origin: Option<&str>) -> Response {
+        let app = guarded_router();
+        let mut builder = Request::builder()
+            .method("POST")
+            .uri("/write")
+            .header("host", "dashboard.example.com");
+        if let Some(cookie) = cookie {
+            builder = builder.header("cookie", cookie);
+        }
+        if let Some(origin) = origin {
+            builder = builder.header("origin", origin);
+        }
+        let mut req = builder.body(Body::empty()).unwrap();
+        req.extensions_mut().insert(state);
+        app.oneshot(req).await.unwrap()
+    }
+
+    #[tokio::test]
+    async fn same_origin_session_ohne_token_passiert() {
+        let Some((pool, state)) = maybe_test_state().await else { return; };
+        ensure_partner(&pool, 9062401, "csrf_fallback", "9062401").await;
+        let session = state.create_partner_session("csrf_fallback", "9062401", "CSRF Fallback").await.unwrap();
+        let resp = post_with_state(state.clone(), Some(format!("{}={}", PARTNER_COOKIE_NAME, session.session_id)), Some("https://dashboard.example.com")).await;
+        assert_eq!(resp.status(), StatusCode::OK);
+        sqlx::query("DELETE FROM dashboard_sessions WHERE session_id = $1").bind(&session.session_id).execute(&pool).await.unwrap();
+        sqlx::query("DELETE FROM twitch_partners WHERE id = 9062401").execute(&pool).await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn cross_origin_session_ohne_token_403() {
+        let Some((pool, state)) = maybe_test_state().await else { return; };
+        ensure_partner(&pool, 9062402, "csrf_cross", "9062402").await;
+        let session = state.create_partner_session("csrf_cross", "9062402", "CSRF Cross").await.unwrap();
+        let resp = post_with_state(state.clone(), Some(format!("{}={}", PARTNER_COOKIE_NAME, session.session_id)), Some("https://evil.example.org")).await;
+        assert_eq!(resp.status(), StatusCode::FORBIDDEN);
+        sqlx::query("DELETE FROM dashboard_sessions WHERE session_id = $1").bind(&session.session_id).execute(&pool).await.unwrap();
+        sqlx::query("DELETE FROM twitch_partners WHERE id = 9062402").execute(&pool).await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn same_origin_ohne_session_403() {
+        let Some((_pool, state)) = maybe_test_state().await else { return; };
+        let resp = post_with_state(state, None, Some("https://dashboard.example.com")).await;
+        assert_eq!(resp.status(), StatusCode::FORBIDDEN);
     }
 }

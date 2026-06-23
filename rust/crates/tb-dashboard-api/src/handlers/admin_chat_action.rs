@@ -7,9 +7,8 @@
 //!
 //! **Owner-Gate (P2.119):** Nur der freigeschaltete Discord-Owner
 //! (`_DASHBOARD_OWNER_DISCORD_ID`) darf die Aktion auslösen — ein abgelehnter
-//! Versuch wird als AUDIT-Warnung geloggt. Localhost-Loopback ohne Discord-Admin-
-//! Session hat keine Owner-Identität → wird ebenfalls abgelehnt (Python-Parität:
-//! `_get_discord_admin_user_id` liefert "" → ≠ Owner).
+//! Versuch wird als AUDIT-Warnung geloggt. Admins ohne Discord-Admin-Session
+//! haben keine Owner-Identität → werden ebenfalls abgelehnt.
 //!
 //! **Gating (Python):** `mode` ∈ {message, action, announcement} (sonst message),
 //! `color` ∈ {blue, green, orange, purple, primary} (sonst purple), 450-Zeichen-
@@ -142,14 +141,14 @@ pub async fn chat_action_handler(
 // ── Owner-Gate ────────────────────────────────────────────────────────────────
 
 /// Liest die Discord-User-ID des Admins aus der `discord_admin`-Session
-/// (Python `_get_discord_admin_user_id`). Localhost ohne Admin-Cookie → `None`.
+/// (Python `_get_discord_admin_user_id`). Admin ohne Admin-Cookie → `None`.
 async fn resolve_admin_discord_user_id(
     auth: &DashboardAuthLevel,
     config: Option<&Extension<DashboardAuthState>>,
     headers: &axum::http::HeaderMap,
 ) -> Option<String> {
-    // Nur privilegierte (Localhost/Admin) kommen bis hierher; die Owner-Identität
-    // hängt ausschließlich an der Discord-Admin-Session, nicht am Localhost-Status.
+    // Nur privilegierte Admins kommen bis hierher; die Owner-Identität hängt
+    // ausschließlich an der Discord-Admin-Session.
     let _ = auth;
     let Extension(state) = config?;
     let cookie = read_cookie(headers, ADMIN_COOKIE_NAME)?;
@@ -441,7 +440,7 @@ mod tests {
         );
     }
 
-    // ── Route-Test: Owner-Gate (Localhost ohne Owner → abgelehnt) ───────────
+    // ── Route-Test: fehlende Admin-Auth → abgelehnt ─────────────────────────
     use axum::body::Body;
     use axum::http::{Request, StatusCode};
     use axum::routing::post;
@@ -449,7 +448,7 @@ mod tests {
     use tower::ServiceExt;
 
     #[tokio::test]
-    async fn route_owner_gate_lehnt_localhost_ohne_owner_ab() {
+    async fn route_lehnt_loopback_ohne_admin_auth_ab() {
         let Some(pool) = make_pool("t_chat_owner_gate").await else {
             return;
         };
@@ -471,7 +470,7 @@ mod tests {
             .body(Body::from("login=nani&message=hi"))
             .unwrap();
         let resp = app.oneshot(req).await.unwrap();
-        // Localhost ist privileged, hat aber keine Discord-Owner-Session → 302 err.
+        // Loopback ohne Admin-Session ist nicht privilegiert → 302 err.
         assert_eq!(resp.status(), StatusCode::SEE_OTHER);
         let loc = resp.headers().get("location").unwrap().to_str().unwrap();
         assert!(loc.starts_with("/twitch/admin?err="), "loc={loc}");

@@ -80,7 +80,7 @@ mod tests {
             .execute(&pool).await.unwrap();
         // Localhost = privilegiert (bypass Paywall) → 200 statt 401.
         let resp = tag_analysis_extended_handler(
-            DashboardAuthLevel::Localhost,
+            DashboardAuthLevel::admin(),
             State(pool),
             Query(TagAnalysisQuery { streamer: None, days: None, limit: None }),
         )
@@ -94,7 +94,7 @@ mod tests {
         let Some(pool) = make_pool("t_tagx_handler_400").await else { return };
         // limit greift vor der DB; Python liefert {"error":"limit must be an integer"}.
         let resp = tag_analysis_extended_handler(
-            DashboardAuthLevel::Localhost,
+            DashboardAuthLevel::admin(),
             State(pool),
             Query(TagAnalysisQuery { streamer: None, days: None, limit: Some("foo".into()) }),
         )

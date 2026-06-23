@@ -594,10 +594,9 @@ mod tests {
             .with_state(pool)
     }
 
-    /// Localhost-Request (Host+Peer Loopback) → DashboardAuthLevel::Localhost →
-    /// nativer Add legt an, 302 statt 502-Fallthrough.
+    /// Loopback ohne Admin-Session → fail-closed, kein Write.
     #[tokio::test]
-    async fn route_add_streamer_localhost_legt_an_und_302() {
+    async fn route_add_streamer_loopback_ohne_auth_fail_closed_302() {
         let Some(pool) = make_pool("t_legacy_route_add").await else {
             return;
         };
@@ -616,7 +615,7 @@ mod tests {
         let resp = app.oneshot(req).await.unwrap();
         assert_eq!(resp.status(), StatusCode::SEE_OTHER);
         let loc = resp.headers().get("location").unwrap().to_str().unwrap();
-        assert!(loc.starts_with("/twitch/admin?ok="), "loc={loc}");
+        assert!(loc.starts_with("/twitch/admin?err="), "loc={loc}");
 
         let cnt: (i64,) = sqlx::query_as(
             "SELECT COUNT(*) FROM twitch_streamers WHERE twitch_login = 'routestreamer'",
@@ -624,7 +623,7 @@ mod tests {
         .fetch_one(&pool)
         .await
         .unwrap();
-        assert_eq!(cnt.0, 1);
+        assert_eq!(cnt.0, 0);
     }
 
     /// Nicht-Localhost ohne Auth-State → fail-closed → 302 err (kein Write).

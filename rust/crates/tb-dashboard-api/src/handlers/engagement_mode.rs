@@ -62,7 +62,7 @@ fn resolve_channel(
         DashboardAuthLevel::Partner { twitch_login, .. } => {
             Ok((twitch_login.trim().to_lowercase(), true))
         }
-        DashboardAuthLevel::Admin { .. } | DashboardAuthLevel::Localhost => {
+        DashboardAuthLevel::Admin { .. } => {
             match channel.as_deref().map(str::trim).filter(|s| !s.is_empty()) {
                 Some(s) => Ok((s.to_lowercase(), false)),
                 None => Err(err(StatusCode::BAD_REQUEST, "channel required")),

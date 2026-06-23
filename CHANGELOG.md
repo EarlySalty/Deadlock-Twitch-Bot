@@ -1,3 +1,11 @@
+## #277 — Verwaltungs- & Analyse-Dashboard: Streamer-Standardsicht statt Dauer-Admin
+
+**Problem:** Im Verwaltungs- und Analyse-Dashboard funktionierten viele Kacheln nicht — „Konto-Daten nicht verfügbar", Fehler beim Laden der Scam-Schutz-Fälle und beim Umschalten der Chat-AI. Ursache: Ein Konto mit Admin-Berechtigung wurde nach dem Login dauerhaft als Admin behandelt statt als normaler Streamer; dadurch passten die angezeigte Streamer-Sicht und der Datenzugriff im Hintergrund nicht zusammen. Zusätzlich scheiterten Schreib-Aktionen an einem Schutzmechanismus, den die Dashboard-Oberfläche technisch nicht erfüllen konnte.
+
+**Änderung:** Nach dem Login giltst du jetzt standardmäßig als normaler Streamer und siehst dein eigenes Konto. Den Admin-Vollzugriff schaltest du selbst per Schalter an und jederzeit wieder aus — er ist kein Dauerzustand mehr. Schreib-Aktionen (z. B. Chat-AI ein/aus, Stille Hinweise, Scam-Schutz-Fälle bearbeiten) laufen über einen Schutz, der die eigene Herkunft der Anfrage prüft und so wieder zuverlässig durchgeht, ohne den Schutz vor fremden Seiten aufzugeben. Der Dashboard-Zugang ist nur noch mit Anmeldung möglich.
+
+**Ergebnis:** Verwaltungs- und Analyse-Dashboard laden wieder vollständig, Einstellungen lassen sich speichern und umschalten, und der Admin-Modus ist ein bewusster, umkehrbarer Schalter statt eines festen Zustands — bei anmeldepflichtiger, klar abgegrenzter Zugriffskontrolle.
+
 ## #276 — Telemetrie-, Abrechnungs- und Raid-Robustheit
 
 **Problem:** Mehrere interne Pfade waren unvollständig: (a) Ban-/Timeout-/Shoutout-/Follow-Telemetrie eines Kanals fiel aus, wenn der Bot dort kein Moderator war; (b) wurde der Bot selbst in einem Kanal getimeoutet, bemerkte er es nicht zuverlässig; (c) der Abrechnungs-Abgleich verließ sich blind auf hinterlegte Produkt-Kennungen, auch wenn ein Produkt zwischenzeitlich gelöscht war; (d) bei fehlgeschlagenen Follower-Abfragen im Raid-System fehlte jede Fehler-Diagnose.

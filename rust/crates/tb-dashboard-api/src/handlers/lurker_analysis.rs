@@ -250,7 +250,7 @@ mod tests {
 
     async fn run(pool: PgPool) -> serde_json::Value {
         let resp = lurker_analysis_handler(
-            DashboardAuthLevel::Localhost,
+            DashboardAuthLevel::admin(),
             State(pool),
             Query(LurkerQuery { streamer: Some("nani".into()), days: Some(30) }),
         ).await.into_response();

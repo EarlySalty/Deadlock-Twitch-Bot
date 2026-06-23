@@ -462,7 +462,7 @@ mod tests {
         .unwrap();
 
         let resp = monthly_stats_handler(
-            DashboardAuthLevel::Localhost,
+            DashboardAuthLevel::admin(),
             State(pool),
             Query(MonthlyQuery { streamer: None, months: None }),
         )

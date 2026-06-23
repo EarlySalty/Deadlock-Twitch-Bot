@@ -41,7 +41,7 @@ fn resolve_partner(auth: &DashboardAuthLevel) -> Result<(String, String), Respon
                 Ok((user_id.to_string(), login))
             }
         }
-        DashboardAuthLevel::Admin { .. } | DashboardAuthLevel::Localhost => Err((
+        DashboardAuthLevel::Admin { .. } => Err((
             StatusCode::FORBIDDEN,
             Json(json!({ "error": "partner required" })),
         )

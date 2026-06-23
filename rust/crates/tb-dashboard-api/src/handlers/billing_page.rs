@@ -312,11 +312,9 @@ pub async fn cancel_handler(
         return Redirect::to("/twitch/pricing?cancel=post_required").into_response();
     }
 
-    // P1.38: CSRF aus dem Form-Body (Localhost-Bypass).
+    // P1.38: CSRF aus dem Form-Body.
     let form = parse_form(&body);
-    if !matches!(auth, DashboardAuthLevel::Localhost)
-        && !verify_cancel_csrf(auth_state.as_ref(), &headers, &form).await
-    {
+    if !verify_cancel_csrf(auth_state.as_ref(), &headers, &form).await {
         return Redirect::to("/twitch/pricing?cancel=csrf_invalid").into_response();
     }
 
@@ -704,7 +702,7 @@ fn customer_reference_for(auth: &DashboardAuthLevel) -> Option<String> {
             }
         }
         // Admin/Localhost haben keinen Partner-Kontext → kein eigenes Abo.
-        DashboardAuthLevel::Admin { .. } | DashboardAuthLevel::Localhost => None,
+        DashboardAuthLevel::Admin { .. } => None,
         DashboardAuthLevel::None => None,
     }
 }

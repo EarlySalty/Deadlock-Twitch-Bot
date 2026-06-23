@@ -1,22 +1,14 @@
 //! AuthLevel-Kaskade für das Dashboard-API.
 //!
-//! Reihenfolge (Python: `server_v2.py:745-755`, `_is_local_request`):
-//! 1. **Localhost** — Host-Header UND Peer-IP sind beide Loopback
-//!    (gleiche Bedingung wie Python `_is_local_request`)
-//! 2. **Admin** — Cookie `master_dash_session` ist gültig in der DB
-//!    (Discord-Admin-Session, Typ `discord_admin`)
-//! 3. **Partner** — Cookie `twitch_dash_session` ist gültig in der DB
+//! Reihenfolge:
+//! 1. **Partner/Twitch-Admin** — Cookie `twitch_dash_session` ist gültig in der DB
 //!    (Twitch-OAuth-Session, Typ `twitch`) UND in `twitch_partners` vorhanden
 //!    (gleiche WHERE-Bedingung wie Python `_is_partner_allowed`,
 //!    `auth_mixin.py:741-780`). KEINE `twitch_token_blacklist`-Prüfung — ein
 //!    token_error-Blacklist-Eintrag sperrt den Dashboard-Zugang nicht.
-//! 4. **None** — alles andere
-//!
-//! UNSICHER: Hinter Reverse-Proxy (Caddy) ist `peer_ip` immer 127.0.0.1.
-//! Der Localhost-Check verhält sich dann wie ein reiner Host-Header-Check —
-//! das entspricht dem Python-Verhalten (Python hat denselben Proxy-Blindspot,
-//! `auth_mixin.py:735-755`). Nicht geeignet als Sicherheitsgrenze gegenüber
-//! dem Internet, aber identisch zu Python.
+//! 2. **Admin** — Cookie `master_dash_session` ist gültig in der DB
+//!    (Discord-Admin-Session, Typ `discord_admin`)
+//! 3. **None** — alles andere
 
 use axum::{async_trait, extract::FromRequestParts, http::request::Parts};
 use std::net::{IpAddr, SocketAddr};
@@ -38,10 +30,8 @@ pub struct AdminActor {
 /// Auth-Level eines eingehenden Dashboard-Requests.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum DashboardAuthLevel {
-    /// Loopback-IP UND Loopback-Host (kein Session-Lookup nötig).
-    Localhost,
     /// Admin-Zugang. `actor = None` für Discord-Admin (`master_dash_session`,
-    /// keine Twitch-Identität) bzw. interne Aufrufe; `actor = Some(..)` für einen
+    /// keine Twitch-Identität); `actor = Some(..)` für einen
     /// per Twitch-OAuth eingeloggten Admin (Login-Promotion, senderauth-01).
     Admin { actor: Option<AdminActor> },
     /// Gültige `twitch_dash_session`-Cookie + Partner in DB + nicht blacklisted.
@@ -56,25 +46,24 @@ pub enum DashboardAuthLevel {
 }
 
 impl DashboardAuthLevel {
-    /// Admin-Level ohne Twitch-Session-Identität (Discord-Admin / Localhost-Tools /
-    /// Tests). Kurzform für `Admin { actor: None }`.
+    /// Admin-Level ohne Twitch-Session-Identität (Discord-Admin / Tests).
+    /// Kurzform für `Admin { actor: None }`.
     pub fn admin() -> Self {
         Self::Admin { actor: None }
     }
 
-    /// `true` wenn Localhost oder Admin.
+    /// `true` wenn Admin.
     pub fn is_privileged(&self) -> bool {
-        matches!(self, Self::Localhost | Self::Admin { .. })
+        matches!(self, Self::Admin { .. })
     }
 
-    /// `true` wenn Localhost, Admin oder Partner.
+    /// `true` wenn Admin oder Partner.
     pub fn is_authenticated(&self) -> bool {
         !matches!(self, Self::None)
     }
 
     pub fn as_str(&self) -> &'static str {
         match self {
-            Self::Localhost => "localhost",
             Self::Admin { .. } => "admin",
             Self::Partner { .. } => "partner",
             Self::None => "none",
@@ -136,8 +125,14 @@ fn strip_port(raw: &str) -> &str {
 
 /// Prüft ob Peer-IP + Host-Header beide Loopback sind.
 ///
-/// Python: `_is_local_request`, `server_v2.py:745-755`
+/// Caddy setzt bei proxied Requests `X-Forwarded-For`; ein echter Direkt-
+/// Loopback-curl trägt keine Forwarding-Header. Der Bypass bleibt damit
+/// fail-closed, auch wenn Reverse-Proxy-Routing falsch konfiguriert ist.
 pub(crate) fn is_local_request(parts: &Parts) -> bool {
+    if parts.headers.contains_key("x-forwarded-for") || parts.headers.contains_key("x-forwarded-host") {
+        return false;
+    }
+
     // Host-Header muss Loopback sein
     let host_header = parts
         .headers
@@ -180,50 +175,25 @@ pub(crate) fn extract_cookie<'a>(parts: &'a Parts, name: &str) -> Option<&'a str
     None
 }
 
-/// Twitch-Logins mit Admin-Zugriff (wie Discord-Admin / Localhost).
+/// Twitch-Logins mit Admin-Zugriff (wie Discord-Admin).
 /// Spiegelt Python `_TWITCH_ADMIN_LOGINS` (api_v2.py:464), kleingeschrieben.
 const TWITCH_ADMIN_LOGINS: &[&str] = &["earlysalty"];
 
-/// Header-Name des optionalen Admin-Token-Auth-Pfades (P3.18, Python
-/// `X-Admin-Token`).
-const ADMIN_TOKEN_HEADER: &str = "x-admin-token";
-
-/// Erwarteter Admin-Token aus dem Prozess-Env (Infisical). Leer/fehlend → `None`
-/// (Auth-Pfad deaktiviert, fail-closed). NIE loggen.
-fn expected_admin_token() -> Option<String> {
-    std::env::var("TWITCH_DASHBOARD_ADMIN_TOKEN")
-        .ok()
-        .map(|s| s.trim().to_string())
-        .filter(|s| !s.is_empty())
+pub(crate) fn is_admin_login(login: &str) -> bool {
+    let login = login.trim().to_lowercase();
+    TWITCH_ADMIN_LOGINS.contains(&login.as_str())
 }
 
-/// Prüft den `X-Admin-Token`-Header konstant-zeitlich gegen den Env-Token (P3.18).
-///
-/// Restauriert den in der Python-Kaskade vorhandenen Header-Auth-Pfad
-/// (`secrets.compare_digest`). Fehlt der Header oder ist kein Token konfiguriert →
-/// `false` (fail-closed). Konstant-zeitlicher Vergleich gegen Timing-Seitenkanäle.
-fn admin_token_matches(parts: &Parts) -> bool {
-    let Some(expected) = expected_admin_token() else {
-        return false;
-    };
-    let presented = parts
-        .headers
-        .get(ADMIN_TOKEN_HEADER)
-        .and_then(|v| v.to_str().ok())
-        .unwrap_or("")
-        .trim();
-    if presented.is_empty() {
-        return false;
-    }
-    tb_crypto::constant_time_eq(presented.as_bytes(), expected.as_bytes())
+fn admin_mode_cookie_active(parts: &Parts) -> bool {
+    extract_cookie(parts, crate::handlers::auth_status::ADMIN_MODE_COOKIE) == Some("2")
 }
 
 /// Macht aus einer geladenen Partner-Session das Auth-Level: Admin-Login-Promotion
-/// (Python api_v2.py:1339-1342) — loggt sich ein Admin per Twitch-OAuth statt
-/// Discord ein, bekommt er Admin-Rechte (canViewAllStreamers), sonst Partner.
-fn partner_or_admin(partner: crate::auth::session::PartnerSession) -> DashboardAuthLevel {
+/// nur bei aktivem Admin-Mode-Cookie, sonst bleibt auch ein admin-eligibler Login
+/// Partner.
+fn partner_or_admin(partner: crate::auth::session::PartnerSession, admin_mode_active: bool) -> DashboardAuthLevel {
     let login = partner.twitch_login.trim().to_lowercase();
-    if TWITCH_ADMIN_LOGINS.contains(&login.as_str()) {
+    if is_admin_login(&login) && admin_mode_active {
         // senderauth-01: Twitch-Session-Identität an den Admin durchreichen, damit
         // Handler sie für die Audit-Attribution nutzen können (Python liest
         // actor_id/actor_login IMMER aus der Session, auch bei auth_level='admin').
@@ -256,38 +226,18 @@ where
         parts: &mut Parts,
         _state: &S,
     ) -> Result<Self, Self::Rejection> {
-        // Localhost-Check zuerst (kein DB-Lookup nötig)
-        if is_local_request(parts) {
-            return Ok(DashboardAuthLevel::Localhost);
-        }
-
-        // P3.18: optionaler X-Admin-Token-Header (Infisical-Token, konstant-zeitlich).
-        // Restauriert den Python-Header-Auth-Pfad — nur aktiv, wenn der Env-Token
-        // gesetzt ist; sonst fail-closed (Header wird ignoriert). Kein DB-Lookup.
-        if admin_token_matches(parts) {
-            return Ok(DashboardAuthLevel::admin());
-        }
-
         // Auth-State-Extension holen (enthält Pool + Cache)
         let Some(state) = parts.extensions.get::<crate::auth::session::DashboardAuthState>().cloned() else {
             return Ok(DashboardAuthLevel::None);
         };
 
-        // Admin: master_dash_session
-        if let Some(session_id) = extract_cookie(parts, "master_dash_session") {
-            if !session_id.is_empty() {
-                if let Ok(Some(_)) = state.load_admin_session(session_id).await {
-                    // Discord-Admin: keine Twitch-Session-Identität → keine Attribution.
-                    return Ok(DashboardAuthLevel::admin());
-                }
-            }
-        }
+        let admin_mode_active = admin_mode_cookie_active(parts);
 
         // Partner: twitch_dash_session
-        if let Some(session_id) = extract_cookie(parts, "twitch_dash_session") {
+        if let Some(session_id) = extract_cookie(parts, crate::auth::session::PARTNER_COOKIE_NAME) {
             if !session_id.is_empty() {
                 if let Ok(Some(partner)) = state.load_partner_session(session_id).await {
-                    return Ok(partner_or_admin(partner));
+                    return Ok(partner_or_admin(partner, admin_mode_active));
                 }
             }
         }
@@ -309,7 +259,17 @@ where
                 if let Ok(Some(partner)) =
                     state.load_partner_access_session(session_id, user_agent).await
                 {
-                    return Ok(partner_or_admin(partner));
+                    return Ok(partner_or_admin(partner, admin_mode_active));
+                }
+            }
+        }
+
+        // Admin: master_dash_session
+        if let Some(session_id) = extract_cookie(parts, crate::auth::session::ADMIN_COOKIE_NAME) {
+            if !session_id.is_empty() {
+                if let Ok(Some(_)) = state.load_admin_session(session_id).await {
+                    // Discord-Admin: keine Twitch-Session-Identität → keine Attribution.
+                    return Ok(DashboardAuthLevel::admin());
                 }
             }
         }
@@ -371,7 +331,6 @@ mod tests {
 
     #[test]
     fn auth_level_as_str() {
-        assert_eq!(DashboardAuthLevel::Localhost.as_str(), "localhost");
         assert_eq!(DashboardAuthLevel::admin().as_str(), "admin");
         assert_eq!(
             DashboardAuthLevel::Admin {
@@ -395,39 +354,44 @@ mod tests {
         assert_eq!(DashboardAuthLevel::None.as_str(), "none");
     }
 
-    // ── P3.18: X-Admin-Token-Header-Pfad ────────────────────────────────────
-    use std::sync::Mutex;
-    static ENV_LOCK: Mutex<()> = Mutex::new(());
+    #[test]
+    fn is_admin_login_normalisiert() {
+        assert!(is_admin_login(" earlysalty "));
+        assert!(is_admin_login("EarlySalty"));
+        assert!(!is_admin_login("someoneelse"));
+    }
 
-    fn parts_with_admin_token(token: Option<&str>) -> Parts {
-        let mut builder = axum::http::Request::builder().header("host", "dash.example.com");
-        if let Some(t) = token {
-            builder = builder.header("x-admin-token", t);
+    fn local_parts(extra_header: Option<(&str, &str)>) -> Parts {
+        use axum::extract::ConnectInfo;
+        use std::net::SocketAddr;
+
+        let mut builder = axum::http::Request::builder().header("host", "127.0.0.1:8769");
+        if let Some((name, value)) = extra_header {
+            builder = builder.header(name, value);
         }
-        builder.body(()).unwrap().into_parts().0
+        let mut req = builder.body(()).unwrap();
+        req.extensions_mut()
+            .insert(ConnectInfo("127.0.0.1:9999".parse::<SocketAddr>().unwrap()));
+        req.into_parts().0
     }
 
     #[test]
-    fn admin_token_match_bei_korrektem_header() {
-        let _g = ENV_LOCK.lock().unwrap_or_else(|p| p.into_inner());
-        std::env::set_var("TWITCH_DASHBOARD_ADMIN_TOKEN", "supersecret-admin");
-        assert!(admin_token_matches(&parts_with_admin_token(Some("supersecret-admin"))));
-        assert!(!admin_token_matches(&parts_with_admin_token(Some("falsch"))));
-        assert!(!admin_token_matches(&parts_with_admin_token(None)));
-        std::env::remove_var("TWITCH_DASHBOARD_ADMIN_TOKEN");
+    fn is_local_request_loopback_ohne_forwarding_header_true() {
+        assert!(is_local_request(&local_parts(None)));
     }
 
     #[test]
-    fn admin_token_fail_closed_ohne_env() {
-        let _g = ENV_LOCK.lock().unwrap_or_else(|p| p.into_inner());
-        std::env::remove_var("TWITCH_DASHBOARD_ADMIN_TOKEN");
-        // Ohne konfiguriertes Token darf KEIN Header durchkommen.
-        assert!(!admin_token_matches(&parts_with_admin_token(Some("egal"))));
+    fn is_local_request_mit_forwarded_for_false() {
+        assert!(!is_local_request(&local_parts(Some(("x-forwarded-for", "203.0.113.1")))));
+    }
+
+    #[test]
+    fn is_local_request_mit_forwarded_host_false() {
+        assert!(!is_local_request(&local_parts(Some(("x-forwarded-host", "dash.example.com")))));
     }
 
     #[test]
     fn is_privileged_korrekt() {
-        assert!(DashboardAuthLevel::Localhost.is_privileged());
         assert!(DashboardAuthLevel::admin().is_privileged());
         assert!(!DashboardAuthLevel::Partner {
             twitch_login: "x".into(),
@@ -436,5 +400,127 @@ mod tests {
         }
         .is_privileged());
         assert!(!DashboardAuthLevel::None.is_privileged());
+    }
+
+    async fn maybe_test_state() -> Option<(sqlx::PgPool, crate::auth::session::DashboardAuthState)> {
+        let url = std::env::var("TB_TEST_DATABASE_URL").ok()?;
+        let pool = sqlx::PgPool::connect(&url).await.ok()?;
+        sqlx::query(
+            r#"
+            CREATE TABLE IF NOT EXISTS dashboard_sessions (
+                session_id   TEXT NOT NULL PRIMARY KEY,
+                session_type TEXT NOT NULL,
+                payload_enc  BYTEA NOT NULL,
+                created_at   DOUBLE PRECISION NOT NULL,
+                expires_at   DOUBLE PRECISION NOT NULL
+            )
+            "#,
+        )
+        .execute(&pool)
+        .await
+        .ok()?;
+        sqlx::query(
+            r#"
+            CREATE TABLE IF NOT EXISTS twitch_partners (
+                id BIGINT PRIMARY KEY,
+                twitch_login TEXT NOT NULL,
+                twitch_user_id TEXT NOT NULL,
+                status TEXT NOT NULL DEFAULT 'active',
+                technical_pause_reason TEXT,
+                admin_archived_at TEXT,
+                departnered_at TEXT,
+                partnered_at TEXT DEFAULT CURRENT_TIMESTAMP
+            )
+            "#,
+        )
+        .execute(&pool)
+        .await
+        .ok()?;
+        let state = crate::auth::session::DashboardAuthState::new(pool.clone(), "dGVzdGtleTEyMzQ1Njc4OTAxMjM0NTY3ODkwMTIzNDU=".to_string());
+        Some((pool, state))
+    }
+
+    async fn ensure_partner(pool: &sqlx::PgPool, id: i64, login: &str, user_id: &str) {
+        sqlx::query("DELETE FROM twitch_partners WHERE id = $1 OR twitch_login = $2 OR twitch_user_id = $3")
+            .bind(id)
+            .bind(login)
+            .bind(user_id)
+            .execute(pool)
+            .await
+            .unwrap();
+        sqlx::query(
+            "INSERT INTO twitch_partners (id, twitch_login, twitch_user_id, status)
+             VALUES ($1, $2, $3, 'active')
+             ON CONFLICT DO NOTHING",
+        )
+        .bind(id)
+        .bind(login)
+        .bind(user_id)
+        .execute(pool)
+        .await
+        .unwrap();
+    }
+
+    fn request_parts(cookie: Option<String>) -> Parts {
+        let mut builder = axum::http::Request::builder().header("host", "dash.example.com");
+        if let Some(cookie) = cookie {
+            builder = builder.header("cookie", cookie);
+        }
+        builder.body(()).unwrap().into_parts().0
+    }
+
+    async fn extract_auth(mut parts: Parts, state: crate::auth::session::DashboardAuthState) -> DashboardAuthLevel {
+        parts.extensions.insert(state);
+        DashboardAuthLevel::from_request_parts(&mut parts, &()).await.unwrap()
+    }
+
+    #[tokio::test]
+    async fn twitch_admin_ohne_mode_cookie_bleibt_partner() {
+        let Some((pool, state)) = maybe_test_state().await else { return; };
+        ensure_partner(&pool, 9062301, "earlysalty", "9062301").await;
+        let session = state.create_partner_session("earlysalty", "9062301", "EarlySalty").await.unwrap();
+        let auth = extract_auth(request_parts(Some(format!("{}={}", crate::auth::session::PARTNER_COOKIE_NAME, session.session_id))), state.clone()).await;
+        assert!(matches!(auth, DashboardAuthLevel::Partner { ref twitch_login, .. } if twitch_login == "earlysalty"));
+        sqlx::query("DELETE FROM dashboard_sessions WHERE session_id = $1").bind(&session.session_id).execute(&pool).await.unwrap();
+        sqlx::query("DELETE FROM twitch_partners WHERE id = 9062301").execute(&pool).await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn twitch_admin_mit_mode_cookie_wird_admin_actor() {
+        let Some((pool, state)) = maybe_test_state().await else { return; };
+        ensure_partner(&pool, 9062302, "earlysalty", "9062302").await;
+        let session = state.create_partner_session("earlysalty", "9062302", "EarlySalty").await.unwrap();
+        let auth = extract_auth(request_parts(Some(format!("{}={}; tb_admin_mode=2", crate::auth::session::PARTNER_COOKIE_NAME, session.session_id))), state.clone()).await;
+        assert!(matches!(auth, DashboardAuthLevel::Admin { actor: Some(AdminActor { ref twitch_login, .. }) } if twitch_login == "earlysalty"));
+        sqlx::query("DELETE FROM dashboard_sessions WHERE session_id = $1").bind(&session.session_id).execute(&pool).await.unwrap();
+        sqlx::query("DELETE FROM twitch_partners WHERE id = 9062302").execute(&pool).await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn twitch_session_schlaegt_master_session() {
+        let Some((pool, state)) = maybe_test_state().await else { return; };
+        ensure_partner(&pool, 9062303, "earlysalty", "9062303").await;
+        let partner = state.create_partner_session("earlysalty", "9062303", "EarlySalty").await.unwrap();
+        let admin = state.create_admin_session("discord-9062303", "Discord Admin").await.unwrap();
+        let auth = extract_auth(request_parts(Some(format!("{}={}; {}={}", crate::auth::session::PARTNER_COOKIE_NAME, partner.session_id, crate::auth::session::ADMIN_COOKIE_NAME, admin.session_id))), state.clone()).await;
+        assert!(matches!(auth, DashboardAuthLevel::Partner { ref twitch_login, .. } if twitch_login == "earlysalty"));
+        sqlx::query("DELETE FROM dashboard_sessions WHERE session_id = ANY($1)").bind(&vec![partner.session_id, admin.session_id]).execute(&pool).await.unwrap();
+        sqlx::query("DELETE FROM twitch_partners WHERE id = 9062303").execute(&pool).await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn reine_master_session_wird_admin_none() {
+        let Some((pool, state)) = maybe_test_state().await else { return; };
+        let admin = state.create_admin_session("discord-9062304", "Discord Admin").await.unwrap();
+        let auth = extract_auth(request_parts(Some(format!("{}={}", crate::auth::session::ADMIN_COOKIE_NAME, admin.session_id))), state.clone()).await;
+        assert_eq!(auth, DashboardAuthLevel::admin());
+        sqlx::query("DELETE FROM dashboard_sessions WHERE session_id = $1").bind(&admin.session_id).execute(&pool).await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn loopback_ohne_state_bleibt_none() {
+        let mut parts = local_parts(None);
+        let auth = DashboardAuthLevel::from_request_parts(&mut parts, &()).await.unwrap();
+        assert_eq!(auth, DashboardAuthLevel::None);
     }
 }

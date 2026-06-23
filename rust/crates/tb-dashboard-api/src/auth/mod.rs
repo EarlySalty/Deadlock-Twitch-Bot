@@ -100,7 +100,7 @@ pub async fn has_extended_entitlement(pool: &PgPool, login: &str, user_id: &str)
 /// Plan-Gate für die DashboardAuthLevel-Handler. Gibt `Some(response)` zurück,
 /// wenn der Request blockiert ist (401 unauth / 403 plan_required), sonst `None`.
 ///
-/// - Localhost/Admin → durchgelassen (Bypass, wie Python `_require_extended_plan`)
+/// - Admin → durchgelassen (Bypass, wie Python `_require_extended_plan`)
 /// - Partner → braucht aktiven Extended-Plan oder laufenden Trial
 /// - None → 401
 ///
@@ -109,7 +109,7 @@ pub async fn has_extended_entitlement(pool: &PgPool, login: &str, user_id: &str)
 /// 403 trägt `error=plan_required` + `required_entitlements`.
 pub async fn extended_gate(pool: &PgPool, auth: &DashboardAuthLevel) -> Option<Response> {
     match auth {
-        DashboardAuthLevel::Localhost | DashboardAuthLevel::Admin { .. } => None,
+        DashboardAuthLevel::Admin { .. } => None,
         DashboardAuthLevel::None => Some(unauthorized_v2_response()),
         DashboardAuthLevel::Partner { twitch_login, twitch_user_id, .. } => {
             if has_extended_entitlement(pool, twitch_login, twitch_user_id).await {
@@ -234,4 +234,3 @@ mod tests {
         assert_eq!(body["loginUrl"], "/twitch/auth/login?next=%2Fanalyse");
     }
 }
-

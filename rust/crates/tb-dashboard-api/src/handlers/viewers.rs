@@ -1412,7 +1412,7 @@ mod tests {
         .unwrap();
 
         let resp = viewer_segments_handler(
-            DashboardAuthLevel::Localhost,
+            DashboardAuthLevel::admin(),
             State(pool),
             Query(SegmentsQuery { streamer: Some("host".into()), days: None }),
         )

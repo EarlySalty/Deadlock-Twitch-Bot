@@ -126,7 +126,7 @@ fn session_login(auth: &DashboardAuthLevel) -> Option<String> {
 fn is_admin(auth: &DashboardAuthLevel) -> bool {
     matches!(
         auth,
-        DashboardAuthLevel::Admin { .. } | DashboardAuthLevel::Localhost
+        DashboardAuthLevel::Admin { .. }
     )
 }
 
@@ -265,7 +265,7 @@ mod tests {
     #[test]
     fn admin_und_localhost_sind_admin() {
         assert!(is_admin(&DashboardAuthLevel::admin()));
-        assert!(is_admin(&DashboardAuthLevel::Localhost));
+        assert!(is_admin(&DashboardAuthLevel::admin()));
         assert!(!is_admin(&DashboardAuthLevel::None));
     }
 

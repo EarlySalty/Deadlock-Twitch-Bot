@@ -9,7 +9,7 @@
 //! transparent durchgereicht. Nativ registrierte Routen schatten den Proxy
 //! automatisch aus.
 //!
-//! # Localhost-Bypass und Host-Header (KRITISCH)
+//! # Legacy-Loopback-Erkennung und Host-Header (KRITISCH)
 //!
 //! Python prüft in `bot/analytics/api_v2.py::_is_localhost()` (Zeilen 534–553):
 //!   1. `Host`-Header muss ein Loopback-Host sein (`127.0.0.1`, `::1`, `localhost`)
@@ -22,14 +22,14 @@
 //! **Deshalb MUSS der Original-Host-Header 1:1 durchgereicht werden:**
 //! - Externe Requests kommen über Caddy, dessen Site-Block auf die öffentliche
 //!   Domain matcht — der Host-Header ist dort zwangsläufig die externe Domain
-//!   (nicht Loopback) → Python verweigert den Bypass. Ein Angreifer kann keinen
+//!   (nicht Loopback) → Python erkennt keinen Loopback-Request. Ein Angreifer kann keinen
 //!   Loopback-Host einschleusen, weil ein Request mit `Host: 127.0.0.1` bei
 //!   Caddy keinen öffentlichen Site-Block matcht und nie hier ankommt.
 //! - Lokale Aufrufe (`curl 127.0.0.1:8769/...`) tragen ihren Loopback-Host und
-//!   behalten den Bypass — identisch zum heutigen Direktzugriff auf 8765.
+//!   bleiben für Legacy-Python als direkte Loopback-Aufrufe erkennbar.
 //!
 //! Die naive Alternative — Host strippen und reqwest setzen lassen — wäre eine
-//! **Bypass-Öffnung**: reqwest setzt dann `Host: 127.0.0.1:8765` (Loopback!),
+//! **Loopback-Öffnung**: reqwest setzt dann `Host: 127.0.0.1:8765` (Loopback!),
 //! womit beide Bedingungen für jeden externen Request erfüllt wären.
 //!
 //! Alle übrigen Header (inkl. `x-forwarded-host`, `x-real-ip`) werden ebenfalls
@@ -69,7 +69,7 @@ const UPSTREAM_TIMEOUT: Duration = Duration::from_secs(120);
 
 /// Hop-by-hop-Header nach RFC 9110 §7.6.1 plus `content-length` (wird von
 /// reqwest aus dem Body neu berechnet). `host` wird bewusst NICHT gestrippt —
-/// siehe Modul-Doku: der Original-Host trägt die Localhost-Bypass-Entscheidung
+/// siehe Modul-Doku: der Original-Host trägt die Legacy-Loopback-Entscheidung
 /// in Python und muss den Upstream unverändert erreichen.
 const HOP_HEADERS: &[&str] = &[
     "connection",
@@ -160,7 +160,7 @@ pub async fn dashboard_fallback_handler(
             continue;
         }
         // Inklusive `host`: der Original-Host trägt in Python die
-        // Localhost-Bypass-Entscheidung (siehe Modul-Doku).
+        // Legacy-Loopback-Entscheidung (siehe Modul-Doku).
         upstream = upstream.header(name, value);
     }
 

@@ -773,17 +773,6 @@ mod tests {
             .with_state(pool)
     }
 
-    /// Localhost-Auth: Loopback-Peer + Loopback-Host → DashboardAuthLevel::Localhost.
-    fn admin_req(streamer: &str) -> Request<Body> {
-        let addr: SocketAddr = "127.0.0.1:9999".parse().unwrap();
-        Request::builder()
-            .uri(format!("/twitch/api/v2/overview?streamer={streamer}"))
-            .extension(ConnectInfo(addr))
-            .header(axum::http::header::HOST, "127.0.0.1")
-            .body(Body::empty())
-            .unwrap()
-    }
-
     #[tokio::test]
     async fn returns_401_without_auth() {
         let dsn = db_dsn_or_skip!();
@@ -804,10 +793,14 @@ mod tests {
     async fn returns_empty_for_unknown_streamer() {
         let dsn = db_dsn_or_skip!();
         let pool = make_pool(&dsn, "test_handler_overview_empty").await;
-        let res = make_router(pool)
-            .oneshot(admin_req("nobody"))
+        let res = overview_handler(
+            DashboardAuthLevel::admin(),
+            State(pool),
+            Query(OverviewParams { streamer: Some("nobody".into()), days: 30 }),
+        )
             .await
-            .unwrap();
+            .unwrap()
+            .into_response();
         assert_eq!(res.status(), StatusCode::OK);
         let b = axum::body::to_bytes(res.into_body(), 256).await.unwrap();
         let v: serde_json::Value = serde_json::from_slice(&b).unwrap();
@@ -851,10 +844,14 @@ mod tests {
         .await
         .unwrap();
 
-        let res = make_router(pool)
-            .oneshot(admin_req("streamer_x"))
+        let res = overview_handler(
+            DashboardAuthLevel::admin(),
+            State(pool),
+            Query(OverviewParams { streamer: Some("streamer_x".into()), days: 30 }),
+        )
             .await
-            .unwrap();
+            .unwrap()
+            .into_response();
         assert_eq!(res.status(), StatusCode::OK);
         let b = axum::body::to_bytes(res.into_body(), 16384).await.unwrap();
         let v: serde_json::Value = serde_json::from_slice(&b).unwrap();

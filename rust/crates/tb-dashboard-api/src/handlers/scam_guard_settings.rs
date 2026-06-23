@@ -1,7 +1,7 @@
 //! GET/POST `/twitch/api/v2/streamer/scam-guard/settings`.
 //!
-//! Partner verwalten die Einstellungen ihres eigenen Kanals. Admin und
-//! Localhost adressieren einen Kanal über `?streamer=`.
+//! Partner verwalten die Einstellungen ihres eigenen Kanals. Admin adressiert
+//! einen Kanal über `?streamer=`.
 
 use axum::{
     extract::{Query, State},
@@ -19,7 +19,7 @@ const VALID_MODES: [&str; 3] = ["auto_ban", "timeout", "alert_only"];
 
 #[derive(Deserialize, Default)]
 pub struct ScamGuardQuery {
-    /// Nur für Admin/Localhost relevant; Partner nutzen ihren Session-Login.
+    /// Nur für Admin relevant; Partner nutzen ihren Session-Login.
     #[serde(default)]
     pub streamer: Option<String>,
 }
@@ -36,7 +36,7 @@ pub struct ScamGuardUpdate {
 fn resolve_login(auth: &DashboardAuthLevel, streamer: &Option<String>) -> Result<String, Response> {
     match auth {
         DashboardAuthLevel::Partner { twitch_login, .. } => Ok(twitch_login.to_lowercase()),
-        DashboardAuthLevel::Admin { .. } | DashboardAuthLevel::Localhost => {
+        DashboardAuthLevel::Admin { .. } => {
             match streamer.as_deref().map(str::trim).filter(|s| !s.is_empty()) {
                 Some(s) => Ok(s.to_lowercase()),
                 None => Err((

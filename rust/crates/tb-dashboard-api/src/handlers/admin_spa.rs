@@ -6,8 +6,8 @@
 //!
 //! - **Admin-SPA**: `/twitch/admin` (Shell), `/twitch/admin/assets/*` (Bundles),
 //!   `/twitch/admin/*` (SPA-Deep-Link-Fallback → liefert die Shell, damit der
-//!   Client-Router greift). Auth: nur Localhost ODER Admin (forward_auth-gleiche
-//!   Bedingung); Partner/None → 401.
+//!   Client-Router greift). Auth: nur Admin (forward_auth-gleiche Bedingung);
+//!   Partner/None → 401.
 //! - **Entry/Redirect-Routen**: `/`, `/twitch`, `/twitch/`, `/twitch/stats`,
 //!   diverse `/twitch/dashboard`-Aliase → 302 auf das kanonische Ziel.
 //!
@@ -52,8 +52,8 @@ const CANONICAL_DASHBOARD: &str = "/twitch/dashboard";
 
 /// `GET /` — Root-Einstieg.
 ///
-/// Python `public_home` (routes_entry.py:66-77) verzweigt: Localhost/Admin →
-/// `/twitch/admin`, sonst → `/twitch/dashboard`. Wir bilden das über das
+/// Python `public_home` (routes_entry.py:66-77) verzweigt für privilegierte
+/// Requests zu `/twitch/admin`, sonst → `/twitch/dashboard`. Wir bilden das über das
 /// Auth-Level ab (privilegiert → Admin-Landing, sonst Nutzer-Dashboard).
 pub async fn root_handler(auth: DashboardAuthLevel) -> Response {
     let target = if auth.is_privileged() {
@@ -81,7 +81,7 @@ pub async fn dashboard_redirect_handler() -> Response {
 
 /// `GET /twitch/admin` — Admin-SPA-Shell (index.html).
 ///
-/// Auth-Gate VOR dem Serving: nur Localhost ODER Admin. Partner/None → 401
+/// Auth-Gate VOR dem Serving: nur Admin. Partner/None → 401
 /// (Caddy gated den Admin-Host schon per forward_auth; dieser Check ist
 /// Defense-in-Depth, falls der Endpoint direkt erreicht wird).
 pub async fn admin_index_handler(auth: DashboardAuthLevel) -> Response {
@@ -115,8 +115,8 @@ pub async fn admin_path_handler(auth: DashboardAuthLevel, Path(raw_path): Path<S
 
 /// Gibt `Some(401)` zurück, wenn der Zugriff verweigert wird, sonst `None`.
 ///
-/// Bedingung wie der forward_auth-Endpoint (`is_privileged`): nur Localhost
-/// oder Admin dürfen die Admin-SPA sehen. Python `_admin_dashboard_spa_gate`
+/// Bedingung wie der forward_auth-Endpoint (`is_privileged`): nur Admin darf
+/// die Admin-SPA sehen. Python `_admin_dashboard_spa_gate`
 /// mischt zusätzlich Host-/Login-Redirect-Logik ein; nativ übernimmt Caddy die
 /// Host-Trennung + forward_auth-Redirect, hier bleibt nur der harte Auth-Check.
 fn admin_auth_gate(auth: &DashboardAuthLevel) -> Option<Response> {
@@ -300,7 +300,7 @@ mod tests {
     async fn admin_path_deeplink_admin_serviert_index_kein_proxy() {
         // Deep-Link ohne Dateiendung → Shell-Serving-Pfad, Auth passiert.
         let resp = admin_path_handler(
-            DashboardAuthLevel::Localhost,
+            DashboardAuthLevel::admin(),
             Path("/streamers".to_string()),
         )
         .await;

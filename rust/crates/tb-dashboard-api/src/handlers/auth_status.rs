@@ -18,7 +18,7 @@ use sqlx::PgPool;
 use std::sync::OnceLock;
 use tokio::sync::Mutex;
 
-use crate::auth::level::DashboardAuthLevel;
+use crate::auth::level::{DashboardAuthLevel, is_admin_login};
 
 // ── Konstanten ──────────────────────────────────────────────────────────────
 
@@ -70,47 +70,18 @@ fn now_secs() -> u64 {
 pub async fn auth_status_handler(
     auth: DashboardAuthLevel,
     State(pool): State<PgPool>,
-    headers: HeaderMap,
+    _headers: HeaderMap,
 ) -> Response {
     match &auth {
         DashboardAuthLevel::None => unauth_response().await,
-        DashboardAuthLevel::Localhost => admin_response("localhost", false, true),
-        DashboardAuthLevel::Admin { actor: Some(actor) } => {
-            if admin_mode_cookie_active(&headers) {
-                admin_response("admin", true, true)
-            } else {
-                partner_response(
-                    &pool,
-                    &actor.twitch_login,
-                    &actor.twitch_user_id,
-                    true,
-                    false,
-                )
-                .await
-            }
-        }
+        DashboardAuthLevel::Admin { actor: Some(_) } => admin_response("admin", true, true),
         DashboardAuthLevel::Admin { actor: None } => admin_response("admin", false, true),
         DashboardAuthLevel::Partner {
             twitch_login,
             twitch_user_id,
             ..
-        } => partner_response(&pool, twitch_login, twitch_user_id, false, false).await,
+        } => partner_response(&pool, twitch_login, twitch_user_id, is_admin_login(twitch_login), false).await,
     }
-}
-
-fn admin_mode_cookie_active(headers: &HeaderMap) -> bool {
-    headers
-        .get(header::COOKIE)
-        .and_then(|value| value.to_str().ok())
-        .map(|raw| {
-            raw.split(';').any(|pair| {
-                pair.trim()
-                    .split_once('=')
-                    .map(|(name, value)| name.trim() == ADMIN_MODE_COOKIE && value.trim() == "2")
-                    .unwrap_or(false)
-            })
-        })
-        .unwrap_or(false)
 }
 
 // ── Unauthentifiziert ───────────────────────────────────────────────────────
@@ -321,7 +292,7 @@ mod tests {
     use axum::{
         body::Body,
         extract::ConnectInfo,
-        http::{HeaderMap, HeaderValue, Request, StatusCode},
+        http::{HeaderMap, Request, StatusCode},
         routing::get,
         Extension, Router,
     };
@@ -333,7 +304,7 @@ mod tests {
 
     fn make_router(token: &str) -> Router {
         // Kein echtes Pool in Unit-Tests — nur auth-level basierte Tests
-        // (Localhost/Admin). Partner-Tests brauchen DB-Integration.
+        // (Admin). Partner-Tests nutzen einen absichtlich nicht erreichbaren Pool.
         let pool = sqlx::Pool::connect_lazy_with(
             sqlx::postgres::PgConnectOptions::new(),
         );
@@ -383,31 +354,13 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn twitch_admin_ohne_mode_cookie_sieht_partner_praesentation() {
+    async fn twitch_admin_sieht_admin_praesentation() {
         let response = auth_status_handler(
             twitch_admin(),
             State(unavailable_pool()),
             HeaderMap::new(),
         )
         .await;
-        let value = json_body(response).await;
-
-        assert_eq!(value["isAdmin"], false);
-        assert_eq!(value["adminEligible"], true);
-        assert_eq!(value["adminMode"], false);
-        assert_ne!(value["plan"]["tier"], "extended");
-        assert_ne!(value["plan"]["planName"], "Erweitert (Admin)");
-    }
-
-    #[tokio::test]
-    async fn twitch_admin_mit_mode_cookie_sieht_admin_praesentation() {
-        let mut headers = HeaderMap::new();
-        headers.insert(
-            axum::http::header::COOKIE,
-            HeaderValue::from_static("other=abc; tb_admin_mode=2"),
-        );
-        let response =
-            auth_status_handler(twitch_admin(), State(unavailable_pool()), headers).await;
         let value = json_body(response).await;
 
         assert_eq!(value["isAdmin"], true);
@@ -418,17 +371,40 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn alter_mode_cookie_wird_nicht_uebernommen() {
-        let mut headers = HeaderMap::new();
-        headers.insert(
-            axum::http::header::COOKIE,
-            HeaderValue::from_static("tb_admin_mode=1"),
-        );
-        let response =
-            auth_status_handler(twitch_admin(), State(unavailable_pool()), headers).await;
+    async fn partner_admin_login_ist_admin_eligible_aber_nicht_admin() {
+        let response = auth_status_handler(
+            DashboardAuthLevel::Partner {
+                twitch_login: "earlysalty".to_string(),
+                twitch_user_id: "42".to_string(),
+                display_name: "EarlySalty".to_string(),
+            },
+            State(unavailable_pool()),
+            HeaderMap::new(),
+        )
+        .await;
         let value = json_body(response).await;
 
         assert_eq!(value["isAdmin"], false);
+        assert_eq!(value["adminEligible"], true);
+        assert_eq!(value["adminMode"], false);
+    }
+
+    #[tokio::test]
+    async fn normaler_partner_ist_nicht_admin_eligible() {
+        let response = auth_status_handler(
+            DashboardAuthLevel::Partner {
+                twitch_login: "partner".to_string(),
+                twitch_user_id: "99".to_string(),
+                display_name: "Partner".to_string(),
+            },
+            State(unavailable_pool()),
+            HeaderMap::new(),
+        )
+        .await;
+        let value = json_body(response).await;
+
+        assert_eq!(value["isAdmin"], false);
+        assert_eq!(value["adminEligible"], false);
         assert_eq!(value["adminMode"], false);
     }
 
@@ -447,13 +423,8 @@ mod tests {
         assert!(v["twitchLogin"].is_null());
     }
 
-    // Hinweis: Token-basierter Admin-Zugang (X-Internal-Token) ist NICHT in
-    // DashboardAuthLevel implementiert — auth-status ist ausschließlich Browser-
-    // seitig (Cookie-Auth). Python prüft zusätzlich X-Admin-Token, aber dieses
-    // Feature ist für auth-status nicht gebraucht (kein interner Konsument).
-
     #[tokio::test]
-    async fn localhost_returns_localhost_level() {
+    async fn loopback_ohne_session_returns_none_level() {
         let app = make_router("tok");
         let addr: SocketAddr = "127.0.0.1:9999".parse().unwrap();
         let req = Request::builder()
@@ -466,12 +437,12 @@ mod tests {
         assert_eq!(res.status(), StatusCode::OK);
         let b = axum::body::to_bytes(res.into_body(), 4096).await.unwrap();
         let v: serde_json::Value = serde_json::from_slice(&b).unwrap();
-        assert_eq!(v["level"], "localhost");
-        assert_eq!(v["isLocalhost"], true);
-        assert_eq!(v["isAdmin"], true);
+        assert_eq!(v["level"], "none");
+        assert_eq!(v["isLocalhost"], false);
+        assert_eq!(v["isAdmin"], false);
         assert_eq!(v["adminEligible"], false);
-        assert_eq!(v["adminMode"], true);
-        assert_eq!(v["canViewAllStreamers"], true);
+        assert_eq!(v["adminMode"], false);
+        assert_eq!(v["canViewAllStreamers"], false);
     }
 
     #[tokio::test]

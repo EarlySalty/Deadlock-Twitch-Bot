@@ -91,7 +91,7 @@ mod tests {
     async fn streamer_pflicht_400() {
         let Some(pool) = make_pool("t_ca_h1").await else { return };
         let resp = chat_analytics_handler(
-            DashboardAuthLevel::Localhost,
+            DashboardAuthLevel::admin(),
             State(pool),
             Query(ChatAnalyticsQuery { streamer: None, days: None, timezone: None }),
         )
@@ -117,7 +117,7 @@ mod tests {
     async fn localhost_200() {
         let Some(pool) = make_pool("t_ca_h3").await else { return };
         let resp = chat_analytics_handler(
-            DashboardAuthLevel::Localhost,
+            DashboardAuthLevel::admin(),
             State(pool),
             Query(ChatAnalyticsQuery { streamer: Some("nani".into()), days: Some("30".into()), timezone: None }),
         )
@@ -130,7 +130,7 @@ mod tests {
     async fn nicht_numerische_days_400_python_shape() {
         let Some(pool) = make_pool("t_ca_h4").await else { return };
         let resp = chat_analytics_handler(
-            DashboardAuthLevel::Localhost,
+            DashboardAuthLevel::admin(),
             State(pool),
             Query(ChatAnalyticsQuery { streamer: Some("nani".into()), days: Some("x".into()), timezone: None }),
         )

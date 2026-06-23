@@ -74,7 +74,7 @@ mod tests {
     async fn streamer_pflicht_400() {
         let Some(pool) = make_pool("t_cca_h1").await else { return };
         let resp = chat_content_analysis_handler(
-            DashboardAuthLevel::Localhost,
+            DashboardAuthLevel::admin(),
             State(pool),
             Query(ContentAnalysisQuery { streamer: None, days: None }),
         )
@@ -87,7 +87,7 @@ mod tests {
     async fn localhost_200() {
         let Some(pool) = make_pool("t_cca_h2").await else { return };
         let resp = chat_content_analysis_handler(
-            DashboardAuthLevel::Localhost,
+            DashboardAuthLevel::admin(),
             State(pool),
             Query(ContentAnalysisQuery { streamer: Some("nani".into()), days: Some(30) }),
         )

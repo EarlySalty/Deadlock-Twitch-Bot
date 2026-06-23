@@ -41,7 +41,7 @@ fn resolve_twitch_user_id(auth: &DashboardAuthLevel) -> Result<String, Response>
                 Ok(user_id.to_string())
             }
         }
-        DashboardAuthLevel::Admin { .. } | DashboardAuthLevel::Localhost => Err((
+        DashboardAuthLevel::Admin { .. } => Err((
             StatusCode::FORBIDDEN,
             Json(json!({ "error": "partner required" })),
         )

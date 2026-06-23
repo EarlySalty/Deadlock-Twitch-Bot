@@ -81,7 +81,7 @@ mod tests {
         let Some(pool) = make_pool("t_mon_handler").await else { return };
         // Localhost = privilegiert (bypass Paywall) → 200.
         let resp = monetization_handler(
-            DashboardAuthLevel::Localhost,
+            DashboardAuthLevel::admin(),
             State(pool),
             Query(MonetizationQuery { streamer: None, days: None }),
         )
@@ -94,7 +94,7 @@ mod tests {
     async fn nicht_numerische_days_400_python_shape() {
         let Some(pool) = make_pool("t_mon_handler_400").await else { return };
         let resp = monetization_handler(
-            DashboardAuthLevel::Localhost,
+            DashboardAuthLevel::admin(),
             State(pool),
             Query(MonetizationQuery { streamer: None, days: Some("nope".into()) }),
         )

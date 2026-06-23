@@ -48,15 +48,13 @@ pub async fn profile_save_handler(
         form_get(&form, "cycle").trim().parse::<u32>().unwrap_or(1),
     );
 
-    // Auth-Gate: nur eingeloggter Partner/Admin/Localhost.
+    // Auth-Gate: nur eingeloggter Partner/Admin.
     let Some(customer_reference) = customer_reference_for(&auth) else {
         return Redirect::to("/twitch/auth/login?next=%2Ftwitch%2Fpricing").into_response();
     };
 
-    // CSRF aus dem Form-Body (Localhost-Bypass).
-    if !matches!(auth, DashboardAuthLevel::Localhost)
-        && !verify_form_csrf(auth_state.as_ref(), &headers, &form).await
-    {
+    // CSRF aus dem Form-Body.
+    if !verify_form_csrf(auth_state.as_ref(), &headers, &form).await {
         return profile_redirect(cycle, "error");
     }
 

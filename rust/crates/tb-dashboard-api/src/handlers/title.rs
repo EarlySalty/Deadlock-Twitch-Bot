@@ -86,16 +86,6 @@ fn requested_login(
                 Ok(login)
             }
         }
-        DashboardAuthLevel::Localhost => {
-            if requested.is_empty() {
-                Err((
-                    StatusCode::BAD_REQUEST,
-                    Json(json!({"error":"streamer required"})),
-                ))
-            } else {
-                Ok(requested)
-            }
-        }
     }
 }
 

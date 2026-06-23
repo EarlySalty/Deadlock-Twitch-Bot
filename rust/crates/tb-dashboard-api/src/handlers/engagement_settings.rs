@@ -7,10 +7,10 @@
 //! - `GET  …/engagement/log`      — Decision-Log eines Kanals.
 //!
 //! Permission-Modell (Python `_resolve_actor`):
-//! - **Admin** = Localhost/Admin-Auth-Level ODER `super_mod` (twitch_admin_roles)
+//! - **Admin** = Admin-Auth-Level ODER `super_mod` (twitch_admin_roles)
 //!   → sieht/togglet ALLE Kanäle. Ein per Twitch-OAuth eingeloggter Admin
 //!   (`earlysalty`) behält seine Session-Identität für die Audit-Attribution
-//!   (`enabled_by`); Discord-Admin/Localhost haben keine (senderauth-01).
+//!   (`enabled_by`); Discord-Admin ohne Twitch-Actor hat keine (senderauth-01).
 //! - **Partner** (normaler User) → nur den eigenen Kanal (Session-`twitch_login`).
 //! - **None** → 401.
 //!
@@ -54,8 +54,7 @@ async fn is_super_mod(pool: &PgPool, user_id: &str) -> bool {
     .is_some()
 }
 
-/// Akteur aus dem Auth-Level ableiten. Localhost → admin=true ohne Identität
-/// (reiner Loopback, keine Session). Admin → admin=true; die Session-Identität
+/// Akteur aus dem Auth-Level ableiten. Admin → admin=true; die Session-Identität
 /// (actor_id/actor_login) wird beibehalten, falls vorhanden — ein per Twitch-OAuth
 /// eingeloggter Admin (`earlysalty`) trägt sie für die Audit-Attribution
 /// (`enabled_by`). Python (`dashboard_api.py:214`) extrahiert die Session-Identität
@@ -63,11 +62,6 @@ async fn is_super_mod(pool: &PgPool, user_id: &str) -> bool {
 /// wenn super_mod. None → 401.
 async fn resolve_actor(auth: &DashboardAuthLevel, pool: &PgPool) -> Result<Actor, Response> {
     match auth {
-        DashboardAuthLevel::Localhost => Ok(Actor {
-            actor_id: None,
-            actor_login: None,
-            admin: true,
-        }),
         DashboardAuthLevel::Admin { actor } => Ok(Actor {
             actor_id: actor.as_ref().map(|a| a.twitch_user_id.clone()),
             actor_login: actor.as_ref().map(|a| a.twitch_login.clone()),
@@ -650,10 +644,10 @@ mod tests {
         assert_eq!(actor.actor_login.as_deref(), Some("earlysalty")); // bereits klein
     }
 
-    /// Discord-Admin / Localhost ohne Twitch-Session-Identität → admin, aber
+    /// Discord-Admin ohne Twitch-Session-Identität → admin, aber
     /// keine Attribution (Python: `_extract_session_user({})` → None,None).
     #[tokio::test]
-    async fn discord_admin_und_localhost_ohne_attribution() {
+    async fn discord_admin_ohne_attribution() {
         let Some(pool) = make_pool("t_eng_dash_admin_noattr").await else { return };
         let admin = resolve_actor(&DashboardAuthLevel::Admin { actor: None }, &pool)
             .await
@@ -661,12 +655,5 @@ mod tests {
         assert!(admin.admin);
         assert_eq!(admin.actor_id, None);
         assert_eq!(admin.actor_login, None);
-
-        let local = resolve_actor(&DashboardAuthLevel::Localhost, &pool)
-            .await
-            .expect("resolve ok");
-        assert!(local.admin);
-        assert_eq!(local.actor_id, None);
-        assert_eq!(local.actor_login, None);
     }
 }

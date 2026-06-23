@@ -165,16 +165,6 @@ mod tests {
             .layer(Extension(auth_state))
     }
 
-    fn localhost_req() -> Request<Body> {
-        let addr: SocketAddr = "127.0.0.1:9999".parse().unwrap();
-        Request::builder()
-            .uri("/twitch/api/v2/streamers")
-            .extension(ConnectInfo(addr))
-            .header(axum::http::header::HOST, "127.0.0.1:8769")
-            .body(Body::empty())
-            .unwrap()
-    }
-
     fn unauth_req() -> Request<Body> {
         let addr: SocketAddr = "1.2.3.4:9999".parse().unwrap();
         Request::builder()
@@ -199,6 +189,34 @@ mod tests {
             .unwrap()
     }
 
+    fn admin_cookie_req(session_id: &str) -> Request<Body> {
+        let addr: SocketAddr = "1.2.3.4:9999".parse().unwrap();
+        Request::builder()
+            .uri("/twitch/api/v2/streamers")
+            .extension(ConnectInfo(addr))
+            .header(axum::http::header::HOST, "example.com")
+            .header(
+                axum::http::header::COOKIE,
+                format!("master_dash_session={session_id}"),
+            )
+            .body(Body::empty())
+            .unwrap()
+    }
+
+    fn twitch_admin_cookie_req(session_id: &str) -> Request<Body> {
+        let addr: SocketAddr = "1.2.3.4:9999".parse().unwrap();
+        Request::builder()
+            .uri("/twitch/api/v2/streamers")
+            .extension(ConnectInfo(addr))
+            .header(axum::http::header::HOST, "example.com")
+            .header(
+                axum::http::header::COOKIE,
+                format!("twitch_dash_session={session_id}; tb_admin_mode=2"),
+            )
+            .body(Body::empty())
+            .unwrap()
+    }
+
     // ── Kein Auth ────────────────────────────────────────────────────────────
 
     #[tokio::test]
@@ -209,12 +227,12 @@ mod tests {
         assert_eq!(res.status(), StatusCode::UNAUTHORIZED);
     }
 
-    // ── Localhost (privileged) ────────────────────────────────────────────────
+    // ── Discord-Admin (privileged) ───────────────────────────────────────────
 
     #[tokio::test]
-    async fn returns_streamers_for_localhost() {
+    async fn returns_streamers_for_discord_admin() {
         let dsn = db_dsn_or_skip!();
-        let pool = make_pool(&dsn, "test_streamers_localhost").await;
+        let pool = make_pool_with_sessions(&dsn, "test_streamers_admin").await;
         sqlx::query(
             "INSERT INTO twitch_streamers_partner_state (twitch_login, is_partner_active)
              VALUES ('nani', 1)",
@@ -223,7 +241,13 @@ mod tests {
         .await
         .unwrap();
 
-        let res = make_router(pool).oneshot(localhost_req()).await.unwrap();
+        let auth_state = DashboardAuthState::new(pool.clone(), TEST_FERNET_KEY.to_string());
+        let session = auth_state
+            .create_admin_session("discord-1", "Discord Admin")
+            .await
+            .unwrap();
+
+        let res = make_router_with_auth(pool, auth_state).oneshot(admin_cookie_req(&session.session_id)).await.unwrap();
         assert_eq!(res.status(), StatusCode::OK);
         let b = axum::body::to_bytes(res.into_body(), 1024).await.unwrap();
         let v: serde_json::Value = serde_json::from_slice(&b).unwrap();
@@ -258,7 +282,7 @@ mod tests {
             .unwrap();
 
         let res = make_router_with_auth(pool, auth_state)
-            .oneshot(cookie_req(&session.session_id))
+            .oneshot(twitch_admin_cookie_req(&session.session_id))
             .await
             .unwrap();
         assert_eq!(res.status(), StatusCode::UNAUTHORIZED);
@@ -266,8 +290,8 @@ mod tests {
 
     // ── Cookie-Auth: Twitch-Admin-Login → 200 ────────────────────────────────
     //
-    // Testet den eigentlichen Bug-Pfad: earlysalty meldet sich per Twitch-OAuth an,
-    // wird zu DashboardAuthLevel::Admin promoted, und darf die Partnerliste abrufen.
+    // earlysalty meldet sich per Twitch-OAuth an, aktiviert Admin-Mode,
+    // und darf die Partnerliste abrufen.
 
     #[tokio::test]
     async fn twitch_admin_login_gets_200() {

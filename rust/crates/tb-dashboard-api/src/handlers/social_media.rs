@@ -102,7 +102,7 @@ pub fn resolve_streamer_scope(
             }
             Ok(Some(session))
         }
-        DashboardAuthLevel::Localhost | DashboardAuthLevel::Admin { .. } => {
+        DashboardAuthLevel::Admin { .. } => {
             if required && requested.is_none() {
                 return Err((StatusCode::BAD_REQUEST, "streamer parameter required").into_response());
             }
@@ -401,7 +401,7 @@ pub async fn apply_template_handler(
 /// None → 401.
 fn require_admin(auth: &DashboardAuthLevel) -> Result<(), Response> {
     match auth {
-        DashboardAuthLevel::Localhost | DashboardAuthLevel::Admin { .. } => Ok(()),
+        DashboardAuthLevel::Admin { .. } => Ok(()),
         DashboardAuthLevel::Partner { .. } => Err(forbidden("Admin access required.")),
         DashboardAuthLevel::None => Err(unauthorized()),
     }
@@ -1889,7 +1889,7 @@ mod tests {
         };
         assert_eq!(editor_user_id(&p).as_deref(), Some("777"));
         assert_eq!(editor_user_id(&DashboardAuthLevel::admin()), None);
-        assert_eq!(editor_user_id(&DashboardAuthLevel::Localhost), None);
+        assert_eq!(editor_user_id(&DashboardAuthLevel::admin()), None);
         assert_eq!(editor_user_id(&DashboardAuthLevel::None), None);
         // Leere/whitespace user_id → None.
         let empty = DashboardAuthLevel::Partner {
@@ -1910,7 +1910,7 @@ mod tests {
         assert_eq!(resolve_streamer_scope(&DashboardAuthLevel::admin(), None, false).unwrap(), None);
         assert_eq!(resolve_streamer_scope(&DashboardAuthLevel::admin(), Some("xyz"), false).unwrap(), Some("xyz".to_string()));
         // required ohne requested → 400.
-        assert!(resolve_streamer_scope(&DashboardAuthLevel::Localhost, None, true).is_err());
+        assert!(resolve_streamer_scope(&DashboardAuthLevel::admin(), None, true).is_err());
         // None-Auth → Fehler (401).
         assert!(resolve_streamer_scope(&DashboardAuthLevel::None, None, false).is_err());
     }

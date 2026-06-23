@@ -47,9 +47,6 @@ pub(crate) async fn gate(
     if !auth.is_privileged() {
         return Some(redirect_err("Nicht autorisiert."));
     }
-    if matches!(auth, DashboardAuthLevel::Localhost) {
-        return None;
-    }
     let presented = form_get(form, "csrf_token").trim().to_string();
     let Some(Extension(state)) = config else {
         return Some(redirect_err("CSRF-Prüfung nicht verfügbar."));

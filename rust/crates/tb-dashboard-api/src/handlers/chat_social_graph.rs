@@ -75,7 +75,7 @@ mod tests {
     async fn streamer_pflicht_400() {
         let Some(pool) = make_pool("t_csg_h1").await else { return };
         let resp = chat_social_graph_handler(
-            DashboardAuthLevel::Localhost,
+            DashboardAuthLevel::admin(),
             State(pool),
             Query(SocialGraphQuery { streamer: None, days: None }),
         )
@@ -88,7 +88,7 @@ mod tests {
     async fn localhost_200() {
         let Some(pool) = make_pool("t_csg_h2").await else { return };
         let resp = chat_social_graph_handler(
-            DashboardAuthLevel::Localhost,
+            DashboardAuthLevel::admin(),
             State(pool),
             Query(SocialGraphQuery { streamer: Some("nani".into()), days: Some(30) }),
         )
