@@ -126,7 +126,6 @@ mod tests {
             CREATE TABLE twitch_streamers (
                 twitch_login         TEXT PRIMARY KEY,
                 twitch_user_id       TEXT,
-                discord_user_id      TEXT,
                 created_at           TEXT DEFAULT CURRENT_TIMESTAMP
             )
             "#,
