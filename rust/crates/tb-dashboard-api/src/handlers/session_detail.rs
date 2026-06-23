@@ -74,16 +74,11 @@ pub async fn session_detail_handler(
         let has_analytics =
             crate::auth::has_analytics_entitlement(&pool, &login, twitch_user_id).await;
         if !has_analytics {
-            let latest: Option<i64> = sqlx::query_scalar(
-                "SELECT id FROM twitch_stream_sessions \
-                 WHERE ended_at IS NOT NULL AND LOWER(streamer_login) = $1 \
-                 ORDER BY started_at DESC LIMIT 1",
-            )
-            .bind(&login)
-            .fetch_optional(&pool)
-            .await
-            .ok()
-            .flatten();
+            // Geteilte „letzte beendete Session"-Definition (siehe overview.rs):
+            // ohne analytics-Flag nur die zuletzt beendete eigene Session.
+            let latest = crate::handlers::last_session::latest_ended_session(&pool, &login)
+                .await
+                .map(|s| s.id);
             if latest != Some(session_id) {
                 return (
                     StatusCode::FORBIDDEN,

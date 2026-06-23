@@ -434,20 +434,12 @@ async fn window_since_dates(
         WindowMode::Full => full(),
         WindowMode::LastStream => {
             let login = streamer.unwrap_or("");
-            let latest: Option<chrono::DateTime<Utc>> = sqlx::query_scalar(
-                "SELECT MAX(s.started_at) \
-                 FROM twitch_stream_sessions s \
-                 WHERE s.ended_at IS NOT NULL \
-                   AND (COALESCE($1, '') = '' OR LOWER(s.streamer_login) = $1)",
-            )
-            .bind(login)
-            .fetch_optional(pool)
-            .await
-            .ok()
-            .flatten();
-            match latest {
-                Some(ts) => {
-                    let since = ts.to_rfc3339();
+            // Geteilte „letzte beendete Session"-Definition — identisch zum
+            // Paywall-Clamp in session_detail (eine Quelle, kein Drift).
+            // `started_at` der letzten Session == `MAX(started_at)`.
+            match crate::handlers::last_session::latest_ended_session(pool, login).await {
+                Some(s) => {
+                    let since = s.started_at.to_rfc3339();
                     (since.clone(), since) // prev == since → keine Trends
                 }
                 None => {
