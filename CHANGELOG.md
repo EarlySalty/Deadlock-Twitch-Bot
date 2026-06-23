@@ -1,3 +1,11 @@
+## #283 — Wartung: Verifikations-Feldumbau vorbereitet (zurückgestellt), interne Tests stabilisiert
+
+**Problem:** Drei veraltete Verifikations-Datenfelder eines Streamer-Datensatzes dienen nur noch intern als Anzeige-Markierung und sollten zugunsten eines einzelnen Felds entfernt werden. Unabhängig davon konnten sich die automatisierten Anmelde-Tests bei gemeinsamem Testdatenbank-Lauf gegenseitig stören und sprangen dann fehl an.
+
+**Änderung:** Der Feldumbau wurde vollständig vorbereitet und gegen eine 1:1-Kopie der Live-Daten als wirkungsgleich nachgewiesen, dann aber bewusst zurückgestellt: Solange die alte Programmversion parallel läuft und diese Felder noch liest und schreibt, würde ein Entfernen sie stören. Die fertige Umstellung samt Ablaufplan liegt dokumentiert bereit. Getrennt davon laufen die Anmelde-Tests jetzt jeweils in einem eigenen, isolierten Datenbank-Namensraum.
+
+**Ergebnis:** Keine Funktionsänderung für Nutzer. Die Umstellung ist startklar, sobald die alte Programmversion abgeschaltet ist; die Testreihe ist wieder verlässlich.
+
 ## #282 — Dashboard-Schalter speichern wieder zuverlässig
 
 **Problem:** Im Verwaltungs-Dashboard schlugen Schreib-Aktionen — Schalter umlegen, Einstellungen speichern (Stille Hinweise, Scam-Schutz, Chat-AI) — mit „csrf_failed" bzw. „HTTP 403" fehl, obwohl die Seiten normal luden. Ursache: Lag im Browser neben der gültigen Anmeldung noch ein veraltetes Cookie eines früheren Admin-Logins, prüfte der Schreib-Schutz nur dieses veraltete Cookie und wies die Aktion ab — die eigentlich gültige Anmeldung wurde dabei übersprungen.
