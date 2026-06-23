@@ -1000,16 +1000,15 @@ pub fn build_roadmap_router(pool: PgPool, token: String) -> Router {
 ///
 /// - `GET /twitch/market` — gerenderte Market-Research-HTML-Seite.
 /// - `GET /twitch/api/market_data` — aggregierte Markt-Daten (JSON).
-/// - `GET /twitch/api/v2/market-share` — Admin-Proxy auf den internen Worker.
+/// - `GET /twitch/api/v2/market-share` — Admin-Wrapper auf native Analytics.
 ///
 /// Alle drei sind admin/localhost-gegated (Handler-intern via
-/// `DashboardAuthLevel`). Die `MarketShareProxyConfig` wird – sofern das interne
-/// Token konfiguriert ist – als Extension injiziert; fehlt sie, liefert der
-/// market-share-Handler 503 `internal_token_missing` (Python-Parität).
-pub fn build_market_router(pool: PgPool) -> Router {
+/// `DashboardAuthLevel`). `market-share` nutzt direkt `tb_analytics::market`
+/// und braucht keinen HTTP-Hop zum internen Worker.
+pub fn build_market_router(pool: PgPool, token: String) -> Router {
     use handlers::market;
 
-    let mut router = Router::new()
+    Router::new()
         .route("/twitch/market", get(market::market_research_handler))
         .route(
             "/twitch/api/market_data",
@@ -1019,14 +1018,8 @@ pub fn build_market_router(pool: PgPool) -> Router {
             "/twitch/api/v2/market-share",
             get(market::api_market_share_handler),
         )
-        .with_state(pool);
-
-    // Proxy-Config aus der Umgebung (Infisical/Env); ohne internes Token bleibt
-    // sie aus → market-share antwortet 503.
-    if let Some(config) = market::MarketShareProxyConfig::from_env() {
-        router = router.layer(Extension(config));
-    }
-    router
+        .with_state(pool)
+        .layer(Extension(ExpectedToken(token)))
 }
 
 /// Baut den Router für die nativen Raid-Dashboard-Routen (P1.51/P1.52).
@@ -1156,7 +1149,7 @@ pub fn build_router(pool: PgPool, token: String) -> Router {
         .merge(build_auth_router(rate_limiter.clone()))
         .merge(build_partner_login_router(pool.clone(), rate_limiter.clone()))
         .merge(build_roadmap_router(pool.clone(), token.clone()))
-        .merge(build_market_router(pool.clone()))
+        .merge(build_market_router(pool.clone(), token.clone()))
         .merge(build_raid_pages_router())
         .merge(build_affiliate_portal_router())
         .merge(build_social_media_admin_router(pool.clone()))
