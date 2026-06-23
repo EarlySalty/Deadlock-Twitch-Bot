@@ -101,7 +101,9 @@ pub async fn load_live_roster(pool: &PgPool) -> Result<Vec<LiveStreamer>, sqlx::
          FROM twitch_live_state ls \
          LEFT JOIN twitch_streamers_partner_state ps \
                 ON LOWER(ps.twitch_login) = LOWER(ls.streamer_login) \
-         WHERE ls.is_live = 1 AND ls.active_session_id IS NOT NULL",
+         WHERE ls.is_live = 1 \
+           AND ls.active_session_id IS NOT NULL \
+           AND ls.last_seen_at::timestamptz > now() - interval '15 minutes'",
     )
     .fetch_all(pool)
     .await?;

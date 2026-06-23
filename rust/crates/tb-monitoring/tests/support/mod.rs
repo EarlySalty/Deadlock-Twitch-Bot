@@ -326,6 +326,7 @@ pub async fn pool_with_chatters_schema(schema: &str) -> Option<PgPool> {
             twitch_user_id TEXT PRIMARY KEY,
             streamer_login TEXT NOT NULL,
             is_live INTEGER DEFAULT 0,
+            last_seen_at TEXT,
             active_session_id BIGINT
         )",
         "CREATE TABLE twitch_streamers_partner_state (

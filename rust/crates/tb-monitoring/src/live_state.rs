@@ -428,6 +428,27 @@ impl LiveStateStore {
         Ok(())
     }
 
+    /// Heilt verwaiste Live-State-Rows, deren TEXT-Timestamp länger nicht
+    /// aktualisiert wurde. Wichtig: `last_seen_at` ist TEXT und muss für die
+    /// Alterungsprüfung explizit als `timestamptz` interpretiert werden.
+    pub async fn sweep_stale_live(&self, max_age_secs: i64) -> Result<u64, sqlx::Error> {
+        let max_age_secs = max_age_secs.max(0).to_string();
+        let result = sqlx::query(
+            "UPDATE twitch_live_state
+                SET is_live = 0, active_session_id = NULL
+              WHERE is_live = 1
+                AND last_seen_at::timestamptz < now() - ($1 || ' seconds')::interval",
+        )
+        .bind(max_age_secs)
+        .execute(&self.pool)
+        .await?;
+        let healed = result.rows_affected();
+        if healed > 0 {
+            tracing::info!(healed, "Stale Live-State-Markierungen bereinigt");
+        }
+        Ok(healed)
+    }
+
     /// Session-Restzustand mehrerer Logins als Map (Python
     /// `load_partner_live_state_map`) — Eingabe für den
     /// Kandidaten-Eligibility-Filter des Auto-Raids.

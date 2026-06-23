@@ -29,6 +29,10 @@ use crate::stream::{extract_stream_start, iso_seconds, StreamSnapshot};
 
 /// Alle wievielten Tick Orphan-Cleanup + Guard-Sweep laufen.
 const CLEANUP_EVERY_N_TICKS: u64 = 10;
+/// Periodischer Sweep gegen verwaiste `twitch_live_state.is_live=1`-Rows.
+const STALE_LIVE_SWEEP_INTERVAL: Duration = Duration::from_secs(300);
+/// Live-State gilt nach 30 Minuten ohne Poll-/EventSub-Aktualisierung als stale.
+const STALE_LIVE_MAX_AGE_SECS: i64 = 30 * 60;
 /// Auto-Archiv-Drossel (Python: max. alle 15 Minuten).
 const AUTO_ARCHIVE_THROTTLE: Duration = Duration::from_secs(900);
 /// Inaktivität in Tagen, ab der ein Partner automatisch archiviert wird.
@@ -62,6 +66,7 @@ impl Default for PollConfig {
 struct TickState {
     category_id: Option<String>,
     tick_count: u64,
+    last_stale_live_sweep: Option<Instant>,
     last_archive_check: Option<Instant>,
 }
 
@@ -128,6 +133,7 @@ impl PollEngine {
             state: Mutex::new(TickState {
                 category_id: None,
                 tick_count: 0,
+                last_stale_live_sweep: None,
                 last_archive_check: None,
             }),
         }
@@ -309,6 +315,8 @@ impl PollEngine {
                 Err(error) => tracing::debug!(%error, "Guard-Sweep fehlgeschlagen"),
             }
         }
+
+        self.sweep_stale_live_if_due().await;
 
         self.auto_archive_inactive().await;
 
@@ -733,6 +741,27 @@ impl PollEngine {
             if self.hooks.on_auto_archive(&login).await {
                 tracing::info!(login, "Partner automatisch als inaktiv markiert");
             }
+        }
+    }
+
+    async fn sweep_stale_live_if_due(&self) {
+        let now = Instant::now();
+        let due = {
+            let mut state = self.state.lock().expect("tick state lock");
+            let due = match state.last_stale_live_sweep {
+                Some(last) => now.duration_since(last) >= STALE_LIVE_SWEEP_INTERVAL,
+                None => true,
+            };
+            if due {
+                state.last_stale_live_sweep = Some(now);
+            }
+            due
+        };
+        if !due {
+            return;
+        }
+        if let Err(error) = self.live_state.sweep_stale_live(STALE_LIVE_MAX_AGE_SECS).await {
+            tracing::debug!(%error, "Stale Live-State-Sweep fehlgeschlagen");
         }
     }
 

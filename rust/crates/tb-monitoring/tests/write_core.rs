@@ -152,6 +152,45 @@ async fn live_state_upsert_drift_cleanup_und_snapshot() {
     assert_eq!(neu.twitch_user_id.as_deref(), Some("999"));
 }
 
+#[tokio::test]
+async fn live_state_stale_sweep_setzt_alte_live_rows_offline() {
+    let pool = pool_or_skip!("t4b_live_state_stale_sweep");
+    let store = LiveStateStore::new(pool.clone());
+    let stale_seen = (Utc::now() - Duration::minutes(45)).to_rfc3339();
+    let fresh_seen = (Utc::now() - Duration::minutes(5)).to_rfc3339();
+
+    sqlx::query(
+        "INSERT INTO twitch_live_state
+            (twitch_user_id, streamer_login, is_live, last_seen_at, active_session_id)
+         VALUES ('old', 'oldlogin', 1, $1, 11),
+                ('fresh', 'freshlogin', 1, $2, 22)",
+    )
+    .bind(stale_seen)
+    .bind(fresh_seen)
+    .execute(&pool)
+    .await
+    .unwrap();
+
+    let healed = store.sweep_stale_live(30 * 60).await.unwrap();
+    assert_eq!(healed, 1);
+
+    let rows: Vec<(String, i32, Option<i64>)> = sqlx::query_as(
+        "SELECT twitch_user_id, is_live, active_session_id
+           FROM twitch_live_state
+          ORDER BY twitch_user_id",
+    )
+    .fetch_all(&pool)
+    .await
+    .unwrap();
+    assert_eq!(
+        rows,
+        vec![
+            ("fresh".to_string(), 1, Some(22)),
+            ("old".to_string(), 0, None),
+        ]
+    );
+}
+
 // ── Session-Lifecycle ─────────────────────────────────────────────────────────
 
 #[tokio::test]

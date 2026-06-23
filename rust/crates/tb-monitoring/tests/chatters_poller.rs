@@ -10,8 +10,8 @@ use async_trait::async_trait;
 use chrono::{DateTime, Duration, Utc};
 use sqlx::PgPool;
 use tb_monitoring::chatters_poller::{
-    poll_streamer_once_for_test, BotChatterAuth, ChattersFetcher, CycleStats, KeyedCooldown,
-    LiveStreamer, SelfHealCooldowns, StreamerTokenSource,
+    load_live_roster, poll_streamer_once_for_test, BotChatterAuth, ChattersFetcher, CycleStats,
+    KeyedCooldown, LiveStreamer, SelfHealCooldowns, StreamerTokenSource,
 };
 use tb_monitoring::subscriptions::ModeratorProvisioner;
 use tb_monitoring::{record_chatters_for_streamer, ChattersCollector};
@@ -183,11 +183,13 @@ fn streamer(user_id: &str, login: &str, session: i64, partner: bool) -> LiveStre
 
 async fn seed_live(pool: &PgPool, user_id: &str, login: &str, session: i64, partner: i32) {
     sqlx::query(
-        "INSERT INTO twitch_live_state (twitch_user_id, streamer_login, is_live, active_session_id) \
-         VALUES ($1, $2, 1, $3)",
+        "INSERT INTO twitch_live_state \
+             (twitch_user_id, streamer_login, is_live, last_seen_at, active_session_id) \
+         VALUES ($1, $2, 1, $3, $4)",
     )
     .bind(user_id)
     .bind(login)
+    .bind(Utc::now().to_rfc3339())
     .bind(session)
     .execute(pool)
     .await
@@ -833,6 +835,31 @@ async fn streamer_token_channel_polled_via_fallback_despite_backoff() {
 // ---------------------------------------------------------------------------
 // Test: voller Collect-Zyklus über ChattersCollector
 // ---------------------------------------------------------------------------
+
+#[tokio::test]
+async fn roster_ignoriert_stale_live_ghosts() {
+    let Some(pool) = support::pool_with_chatters_schema("t_chat_roster_stale").await else {
+        return;
+    };
+    let stale_seen = (Utc::now() - Duration::minutes(20)).to_rfc3339();
+    let fresh_seen = (Utc::now() - Duration::minutes(5)).to_rfc3339();
+
+    sqlx::query(
+        "INSERT INTO twitch_live_state \
+             (twitch_user_id, streamer_login, is_live, last_seen_at, active_session_id) \
+         VALUES ('old', 'oldlogin', 1, $1, 11), \
+                ('fresh', 'freshlogin', 1, $2, 22)",
+    )
+    .bind(stale_seen)
+    .bind(fresh_seen)
+    .execute(&pool)
+    .await
+    .unwrap();
+
+    let roster = load_live_roster(&pool).await.unwrap();
+    let logins: Vec<String> = roster.into_iter().map(|s| s.streamer_login).collect();
+    assert_eq!(logins, vec!["freshlogin".to_string()]);
+}
 
 #[tokio::test]
 async fn full_cycle_inserts_lurkers() {
