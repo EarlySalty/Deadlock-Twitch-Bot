@@ -61,6 +61,8 @@ export TWITCH_NOTIFY_CHANNEL_ID="${TWITCH_NOTIFY_CHANNEL_ID:-1304169815505637458
 export TWITCH_TARGET_GAME_NAME="${TWITCH_TARGET_GAME_NAME:-Deadlock}"
 # Cutover-Gate: dieser Service IST der Live-Writer.
 export TB_MONITORING_POLL_ENABLED="${TB_MONITORING_POLL_ENABLED:-1}"
+# Scout: entdeckt live DE-Deadlock-Streamer (auch Nicht-Partner) und nimmt sie ins Monitoring (Python-Parität).
+export TB_SCOUT_ENABLED="${TB_SCOUT_ENABLED:-1}"
 # Strangler-Fig-Fallback: noch nicht portierte interne-API-Routen (Raid-OAuth,
 # Blacklist, Analytics, …) gehen an die Legacy-Python-API auf Seitenport 8779
 # (Python-Worker, TWITCH_INTERNAL_API_LEGACY_PORT im Takeover-Drop-in).

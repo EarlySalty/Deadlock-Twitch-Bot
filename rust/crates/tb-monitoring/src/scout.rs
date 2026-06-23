@@ -130,7 +130,7 @@ impl ScoutRepository {
     /// Trägt einen neuen Monitoring-only-Streamer ein. Gibt `true` zurück wenn
     /// er tatsächlich neu war (nicht nur ein Konflikt-Update).
     pub async fn upsert_monitored(&self, login: &str, user_id: &str) -> Result<bool, sqlx::Error> {
-        let existing: Option<i64> = sqlx::query_scalar(
+        let existing: Option<i32> = sqlx::query_scalar(
             "SELECT 1 FROM twitch_streamers WHERE LOWER(twitch_login) = LOWER($1) LIMIT 1",
         )
         .bind(login)
