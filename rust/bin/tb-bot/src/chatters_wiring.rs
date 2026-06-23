@@ -34,6 +34,8 @@ use tb_transport_twitch::{HelixClient, HelixError};
 const COLLECT_INTERVAL: Duration = Duration::from_secs(30);
 /// Intervall des Raid-Retention-Loops (1 h).
 const RETENTION_INTERVAL: Duration = Duration::from_secs(60 * 60);
+/// Twitch-Helix-Scope fuer `GET /chat/chatters`.
+const CHATTERS_SCOPE: &str = "moderator:read:chatters";
 
 // ---------------------------------------------------------------------------
 // Port-Adapter
@@ -67,8 +69,10 @@ impl BotChatterAuth for BotTokenManagerAuth {
     }
 }
 
-/// [`StreamerTokenSource`] über den raid-gegateten [`TokenProvider`].
-/// `get_valid_token` liefert nur bei `raid_enabled IS TRUE` einen Token.
+/// [`StreamerTokenSource`] über den Broadcaster-Tokenpfad.
+/// Der Chatters-Fallback ist bewusst NICHT `raid_enabled`-gegated: Twitch erlaubt
+/// `moderator_id == broadcaster_id`, sofern der Streamer-Token den Chatters-Scope
+/// hat. Tokens ohne `moderator:read:chatters` werden nicht geliefert.
 struct TokenProviderStreamerSource {
     token_provider: Arc<TokenProvider>,
 }
@@ -77,7 +81,7 @@ struct TokenProviderStreamerSource {
 impl StreamerTokenSource for TokenProviderStreamerSource {
     async fn streamer_token(&self, twitch_user_id: &str) -> Option<String> {
         self.token_provider
-            .get_valid_token(twitch_user_id, Utc::now())
+            .get_valid_token_unrestricted_with_scope(twitch_user_id, Utc::now(), CHATTERS_SCOPE)
             .await
             .ok()
             .flatten()

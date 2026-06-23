@@ -57,6 +57,7 @@ mod scout_chat;
 mod shadow_review_wiring;
 mod streamer_link;
 mod token_lifecycle_wiring;
+mod user_id_backfill;
 mod wiring;
 
 fn opt_in_enabled(name: &str) -> bool {
@@ -403,6 +404,13 @@ async fn main() {
         ))),
     );
     tracker.rehydrate().await;
+    {
+        let backfill_pool = pool.clone();
+        let backfill_helix = helix.as_ref().clone();
+        tokio::spawn(async move {
+            user_id_backfill::sync_missing_user_ids(&backfill_pool, backfill_helix.as_ref()).await;
+        });
+    }
     // Session-Tracker-Clone für den Scout-Task FRÜH ziehen: der Poll-Loop
     // konsumiert das `tracker`-Arc weiter unten (PollEngine::new), die
     // Scout-Konstruktion liegt danach und hätte sonst keinen Zugriff mehr.

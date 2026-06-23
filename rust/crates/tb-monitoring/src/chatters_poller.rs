@@ -55,8 +55,9 @@ pub trait BotChatterAuth: Send + Sync {
     async fn has_chatters_scope(&self) -> bool;
 }
 
-/// Streamer-OAuth-Token-Fallback (Python `TokenProvider::get_valid_token`).
-/// `Some` ⇔ der Streamer hat Raid aktiviert (raid_enabled-gated).
+/// Streamer-OAuth-Token-Fallback.
+/// `Some` ⇔ es gibt einen gueltigen Broadcaster-Token mit
+/// `moderator:read:chatters`; `raid_enabled` darf diesen Datenpfad nicht gaten.
 #[async_trait]
 pub trait StreamerTokenSource: Send + Sync {
     async fn streamer_token(&self, twitch_user_id: &str) -> Option<String>;
@@ -253,7 +254,7 @@ struct PollResult {
 /// 1. Bot-Pfad (falls Bot-Token + `moderator:read:chatters`-Scope vorhanden);
 ///    403 → Self-Heal, bei Erfolg genau EIN Retry desselben Calls.
 /// 2. Streamer-OAuth-Fallback NUR wenn Bot-Pfad nicht erfolgreich, leere
-///    Chatter-Liste und ein Streamer-Token (= raid_enabled) vorhanden ist.
+///    Chatter-Liste und ein Streamer-Token mit Chatters-Scope vorhanden ist.
 #[allow(clippy::too_many_arguments)]
 async fn poll_streamer_once(
     streamer: &LiveStreamer,

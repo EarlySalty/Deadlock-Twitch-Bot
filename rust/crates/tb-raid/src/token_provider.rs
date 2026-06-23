@@ -59,6 +59,32 @@ impl TokenProvider {
         self.resolve(twitch_user_id, now, false).await
     }
 
+    /// Wie [`get_valid_token_unrestricted`], aber nur wenn die gespeicherte
+    /// Scope-Liste den benoetigten Scope enthaelt. Das ist fuer Chatters/Presence
+    /// wichtig: `moderator:read:chatters` ist am Helix-Endpunkt zwingend, ein
+    /// Broadcaster-Token ohne Scope waere ein wirkungsloser 403-Pfad.
+    pub async fn get_valid_token_unrestricted_with_scope(
+        &self,
+        twitch_user_id: &str,
+        now: DateTime<Utc>,
+        required_scope: &str,
+    ) -> Result<Option<String>, sqlx::Error> {
+        let required_scope = required_scope.trim();
+        if required_scope.is_empty() {
+            return Ok(None);
+        }
+
+        let scopes = self.store.get_scopes(twitch_user_id).await?;
+        if !scopes
+            .iter()
+            .any(|scope| scope.trim().eq_ignore_ascii_case(required_scope))
+        {
+            return Ok(None);
+        }
+
+        self.get_valid_token_unrestricted(twitch_user_id, now).await
+    }
+
     /// Gemeinsamer „gültig holen, sonst refreshen"-Pfad. `require_raid_enabled`
     /// wählt nur die Lesevariante des Stores; Blacklist/Cooldown/needs_reauth/
     /// Refresh sind identisch. Der Re-Read nach Refresh nutzt dieselbe Variante.
