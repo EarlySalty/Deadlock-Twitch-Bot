@@ -8,12 +8,13 @@
 //! - `GET /twitch/api/market_data` — aggregierte Markt-Daten als JSON
 //!   (P2.105/P2.116): überwachte Kanäle, Chat-Health, Lurker-Ratio, 24h-Verlauf,
 //!   Fragen-Radar, Deadlock-Term-Sentiment, Viewer-Overlap.
-//! - `GET /twitch/api/v2/market-share` — Admin-Proxy auf den internen Rust-Worker
-//!   (`tb-internal-api`, :8776) für die Markt-Dominanz-Berechnung (P2.106).
+//! - `GET /twitch/api/v2/market-share` — dünner Dashboard-Wrapper auf
+//!   `tb_analytics::market` für die Markt-Dominanz-Berechnung (P2.106).
 //!
 //! **Auth:** Alle drei Routen sind privilegiert (Admin/Localhost). `market_data`
-//! und `market-share` liefern bei fehlender Berechtigung 401 bzw. werden vom Proxy
-//! gegateted; die HTML-Seite verlangt ebenfalls Admin (Python `_require_token`).
+//! liefert bei fehlender Berechtigung 401; `market-share` nutzt das Python-
+//! Admin-API-Gate (`auth_required`/`admin_required`); die HTML-Seite verlangt
+//! ebenfalls Admin (Python `_require_token`).
 //!
 //! **clean-SQL:** Die Aggregation arbeitet auf TIMESTAMPTZ-Zeitspalten
 //! (`message_ts`, `ts_utc`, `first_message_at`). Überwachte Kanäle = Einträge in
@@ -21,19 +22,20 @@
 //! Spalte `is_monitored_only` wurde im Schema-Cleanup entfernt; die Definition
 //! „kein Partner" bleibt identisch, vgl. admin_streamers-CTE).
 
-use std::time::Duration;
-
 use axum::{
     extract::{Extension, Query, State},
-    http::StatusCode,
+    http::{request::Parts, HeaderMap, StatusCode},
     response::{Html, IntoResponse, Response},
     Json,
 };
+use chrono::{DateTime, Duration as ChronoDuration, Utc};
 use serde::Deserialize;
 use serde_json::{json, Value};
 use sqlx::PgPool;
+use tb_analytics::market::{market_current_tick, market_share_series, partner_roster};
+use tb_http_core::ExpectedToken;
 
-use crate::auth::level::DashboardAuthLevel;
+use crate::auth::level::{is_local_request, DashboardAuthLevel};
 
 /// Deadlock-Begriffe für das Meta-Snapshot-/Sentiment-Zählen (Python-Liste 1:1).
 const DEADLOCK_TERMS: &[&str] = &[
@@ -144,8 +146,11 @@ const MR_H_CHANNELS: &str = "Beobachtete Kanäle";
 pub async fn api_market_data_handler(
     auth: DashboardAuthLevel,
     State(pool): State<PgPool>,
+    headers: HeaderMap,
+    expected: Option<Extension<ExpectedToken>>,
+    parts: Parts,
 ) -> Response {
-    if !auth.is_privileged() {
+    if !market_admin_allowed(&auth, &headers, expected.as_ref().map(|e| &e.0), &parts) {
         return (StatusCode::UNAUTHORIZED, Json(json!({ "error": "Unauthorized" }))).into_response();
     }
     match build_market_data(&pool).await {
@@ -453,119 +458,263 @@ async fn viewer_overlap(pool: &PgPool, top_logins: &[String]) -> Result<Vec<Valu
         .collect())
 }
 
-// ── Market-Share-Proxy (P2.106) ───────────────────────────────────────────────
+// ── Market-Share-Dashboard-Wrapper (P2.106) ──────────────────────────────────
 
-/// Query-Parameter des Market-Share-Proxys (durchgereicht an den Worker).
+/// Query-Parameter des Market-Share-Wrappers.
 #[derive(Debug, Deserialize, Default)]
 pub struct MarketShareQuery {
     #[serde(default)]
-    pub days: Option<String>,
+    pub days: Option<i64>,
     #[serde(default)]
     pub scope: Option<String>,
 }
 
-/// Konfiguration des internen Worker-Proxys (als Extension injizierbar; sonst
-/// aus der Umgebung). Hält Host/Port/Token NICHT im Log.
-#[derive(Clone)]
-pub struct MarketShareProxyConfig {
-    pub base_url: String,
-    pub token: String,
+struct SharePoint {
+    ts: DateTime<Utc>,
+    partner_viewers: f64,
+    total_viewers: f64,
+    partner_streams: f64,
+    total_streams: f64,
+    share_pct: f64,
 }
 
-impl MarketShareProxyConfig {
-    /// Liest die Proxy-Config aus der Umgebung (Infisical/Env). `None`, wenn das
-    /// interne Token fehlt → Handler antwortet mit 503 `internal_token_missing`.
-    pub fn from_env() -> Option<Self> {
-        let token = std::env::var("TWITCH_INTERNAL_API_TOKEN")
-            .ok()
-            .map(|v| v.trim().to_string())
-            .filter(|v| !v.is_empty())?;
-        let host = std::env::var("TWITCH_INTERNAL_API_HOST")
-            .ok()
-            .map(|v| v.trim().to_string())
-            .filter(|v| !v.is_empty())
-            .unwrap_or_else(|| "127.0.0.1".to_string());
-        let port = std::env::var("TWITCH_INTERNAL_API_PORT")
-            .ok()
-            .map(|v| v.trim().to_string())
-            .filter(|v| !v.is_empty())
-            .unwrap_or_else(|| "8776".to_string());
-        Some(Self {
-            base_url: format!("http://{host}:{port}"),
-            token,
+fn market_share_bucket_seconds_for(days: i64) -> i64 {
+    if days <= 1 {
+        900
+    } else if days <= 7 {
+        7200
+    } else if days <= 31 {
+        21600
+    } else {
+        86400
+    }
+}
+
+fn market_share_pct(part: f64, total: f64) -> f64 {
+    if total > 0.0 {
+        part / total * 100.0
+    } else {
+        0.0
+    }
+}
+
+async fn build_market_share(
+    pool: &PgPool,
+    days: Option<i64>,
+    scope: Option<&str>,
+) -> Result<Value, sqlx::Error> {
+    let days = days.unwrap_or(7).clamp(1, 365);
+    let scope: &'static str = match scope {
+        Some("german") => "german",
+        _ => "all",
+    };
+    let german_only = scope == "german";
+    let bucket_seconds = market_share_bucket_seconds_for(days);
+    let since = Utc::now() - ChronoDuration::days(days);
+
+    let rows = market_share_series(pool, since, bucket_seconds, german_only).await?;
+    let series: Vec<SharePoint> = rows
+        .into_iter()
+        .map(|r| {
+            let partner = r.partner_viewers.unwrap_or(0.0);
+            let total = r.total_viewers.unwrap_or(0.0);
+            SharePoint {
+                ts: r.bucket,
+                partner_viewers: partner,
+                total_viewers: total,
+                partner_streams: r.partner_streams.unwrap_or(0.0),
+                total_streams: r.total_streams.unwrap_or(0.0),
+                share_pct: market_share_pct(partner, total),
+            }
         })
-    }
-}
+        .collect();
 
-/// `GET /twitch/api/v2/market-share` — Admin-Proxy auf den internen Worker.
-///
-/// Port von `routes_market.py:api_market_share`. Admin-Gate (sonst 401); fehlt das
-/// interne Token (keine Proxy-Config) → 503 `internal_token_missing`; Upstream-
-/// Fehler → 502 `market_share_unavailable`; sonst Status + Body durchgereicht.
-pub async fn api_market_share_handler(
-    auth: DashboardAuthLevel,
-    proxy: Option<Extension<MarketShareProxyConfig>>,
-    Query(params): Query<MarketShareQuery>,
-) -> Response {
-    if !auth.is_privileged() {
-        return (StatusCode::UNAUTHORIZED, Json(json!({ "error": "auth_required" }))).into_response();
-    }
-    let Some(Extension(proxy)) = proxy else {
-        tracing::warn!("market-share: TWITCH_INTERNAL_API_TOKEN fehlt");
-        return (
-            StatusCode::SERVICE_UNAVAILABLE,
-            Json(json!({ "error": "internal_token_missing" })),
-        )
-            .into_response();
-    };
+    let peak = series
+        .iter()
+        .filter(|p| p.total_viewers > 0.0)
+        .max_by(|a, b| a.share_pct.total_cmp(&b.share_pct))
+        .map(|p| {
+            json!({
+                "ts": p.ts,
+                "sharePct": p.share_pct,
+                "partnerViewers": p.partner_viewers,
+                "totalViewers": p.total_viewers,
+            })
+        });
 
-    let days = params.days.unwrap_or_else(|| "7".to_string());
-    let scope = params.scope.unwrap_or_else(|| "all".to_string());
-    let url = format!("{}/internal/twitch/v1/market-share", proxy.base_url);
+    let series_json: Vec<Value> = series
+        .iter()
+        .map(|p| {
+            json!({
+                "ts": p.ts,
+                "partnerViewers": p.partner_viewers,
+                "totalViewers": p.total_viewers,
+                "partnerStreams": p.partner_streams,
+                "totalStreams": p.total_streams,
+                "sharePct": p.share_pct,
+            })
+        })
+        .collect();
 
-    let client = match reqwest::Client::builder()
-        .timeout(Duration::from_secs(30))
-        .build()
-    {
-        Ok(c) => c,
-        Err(error) => {
-            tracing::error!(%error, "market-share: HTTP-Client-Build fehlgeschlagen");
-            return (
-                StatusCode::BAD_GATEWAY,
-                Json(json!({ "error": "market_share_unavailable" })),
-            )
-                .into_response();
-        }
-    };
-
-    let response = client
-        .get(&url)
-        .query(&[("days", days.as_str()), ("scope", scope.as_str())])
-        .header("X-Internal-Token", &proxy.token)
-        .send()
-        .await;
-
-    match response {
-        Ok(resp) => {
-            let status = StatusCode::from_u16(resp.status().as_u16())
-                .unwrap_or(StatusCode::BAD_GATEWAY);
-            match resp.json::<Value>().await {
-                Ok(body) => (status, Json(body)).into_response(),
-                Err(error) => {
-                    tracing::warn!(%error, "market-share: Upstream-Body kein JSON");
-                    (
-                        StatusCode::BAD_GATEWAY,
-                        Json(json!({ "error": "market_share_unavailable" })),
-                    )
-                        .into_response()
+    let tick = market_current_tick(pool).await?;
+    let current = tick.first().map(|first| {
+        let ts = first.ts_utc;
+        let mut total_viewers = 0i64;
+        let mut partner_viewers = 0i64;
+        let mut partner_streams = 0i64;
+        let mut german_viewers = 0i64;
+        let mut german_streams = 0i64;
+        let mut german_partner_viewers = 0i64;
+        let mut german_partner_streams = 0i64;
+        for row in &tick {
+            let viewers = i64::from(row.viewer_count.unwrap_or(0));
+            let german = row.is_german.unwrap_or(false) || row.is_partner;
+            total_viewers += viewers;
+            if row.is_partner {
+                partner_viewers += viewers;
+                partner_streams += 1;
+            }
+            if german {
+                german_viewers += viewers;
+                german_streams += 1;
+                if row.is_partner {
+                    german_partner_viewers += viewers;
+                    german_partner_streams += 1;
                 }
             }
         }
+        let top_streams: Vec<Value> = tick
+            .iter()
+            .filter(|row| !german_only || row.is_german.unwrap_or(false) || row.is_partner)
+            .take(15)
+            .map(|row| {
+                json!({
+                    "streamer": row.streamer.clone(),
+                    "viewers": i64::from(row.viewer_count.unwrap_or(0)),
+                    "isPartner": row.is_partner,
+                    "isGerman": row.is_german.unwrap_or(false) || row.is_partner,
+                    "language": row.language.clone(),
+                })
+            })
+            .collect();
+        json!({
+            "ts": ts,
+            "totalViewers": total_viewers,
+            "partnerViewers": partner_viewers,
+            "totalStreams": tick.len() as i64,
+            "partnerStreams": partner_streams,
+            "sharePct": market_share_pct(partner_viewers as f64, total_viewers as f64),
+            "germanViewers": german_viewers,
+            "germanStreams": german_streams,
+            "germanPartnerViewers": german_partner_viewers,
+            "germanPartnerStreams": german_partner_streams,
+            "germanSharePct": market_share_pct(german_partner_viewers as f64, german_viewers as f64),
+            "topStreams": top_streams,
+        })
+    });
+
+    let (partners_total, partners_seen_in_range) = partner_roster(pool, since).await?;
+
+    Ok(json!({
+        "days": days,
+        "scope": scope,
+        "bucketSeconds": bucket_seconds,
+        "series": series_json,
+        "peak": peak,
+        "current": current,
+        "roster": {
+            "partnersTotal": partners_total,
+            "partnersSeenInRange": partners_seen_in_range,
+        },
+    }))
+}
+
+fn constant_time_eq(provided: &[u8], expected: &[u8]) -> bool {
+    if provided.len() != expected.len() {
+        return false;
+    }
+    let mut diff = 0u8;
+    for (a, b) in provided.iter().zip(expected.iter()) {
+        diff |= a ^ b;
+    }
+    diff == 0
+}
+
+fn admin_header_matches(headers: &HeaderMap, expected: Option<&ExpectedToken>) -> bool {
+    let Some(ExpectedToken(expected)) = expected else {
+        return false;
+    };
+    if expected.is_empty() {
+        return false;
+    }
+    let provided = headers
+        .get("X-Admin-Token")
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or("");
+    constant_time_eq(provided.as_bytes(), expected.as_bytes())
+}
+
+fn market_admin_allowed(
+    auth: &DashboardAuthLevel,
+    headers: &HeaderMap,
+    expected: Option<&ExpectedToken>,
+    parts: &Parts,
+) -> bool {
+    auth.is_privileged() || is_local_request(parts) || admin_header_matches(headers, expected)
+}
+
+fn market_share_auth_error(
+    auth: &DashboardAuthLevel,
+    headers: &HeaderMap,
+    expected: Option<&ExpectedToken>,
+    parts: &Parts,
+) -> Option<Response> {
+    if market_admin_allowed(auth, headers, expected, parts) {
+        return None;
+    }
+    match auth {
+        DashboardAuthLevel::Admin { .. } => None,
+        DashboardAuthLevel::None => Some((
+            StatusCode::UNAUTHORIZED,
+            Json(json!({ "error": "auth_required", "required": "admin" })),
+        ).into_response()),
+        _ => Some((
+            StatusCode::FORBIDDEN,
+            Json(json!({
+                "error": "admin_required",
+                "required": "admin",
+                "auth_level": auth.as_str(),
+            })),
+        ).into_response()),
+    }
+}
+
+/// `GET /twitch/api/v2/market-share` — Dashboard-Wrapper auf native Analytics.
+///
+/// Port von `routes_market.py:api_market_share` ohne HTTP-Hop. Admin-Gate wie
+/// Python `_require_v2_admin_api`; JSON-Shape identisch zum bisherigen Worker
+/// `/internal/twitch/v1/market-share`.
+pub async fn api_market_share_handler(
+    auth: DashboardAuthLevel,
+    State(pool): State<PgPool>,
+    headers: HeaderMap,
+    expected: Option<Extension<ExpectedToken>>,
+    Query(params): Query<MarketShareQuery>,
+    parts: Parts,
+) -> Response {
+    if let Some(resp) = market_share_auth_error(&auth, &headers, expected.as_ref().map(|e| &e.0), &parts) {
+        return resp;
+    }
+    match build_market_share(&pool, params.days, params.scope.as_deref()).await {
+        Ok(body) => Json(body).into_response(),
         Err(error) => {
-            tracing::warn!(%error, "market-share: Worker-Proxy fehlgeschlagen");
+            tracing::error!(%error, "market-share aggregation failed");
             (
-                StatusCode::BAD_GATEWAY,
-                Json(json!({ "error": "market_share_unavailable" })),
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(json!({
+                    "error": "internal_error",
+                    "message": "internal server error",
+                })),
             )
                 .into_response()
         }
@@ -587,6 +736,16 @@ mod tests {
             twitch_user_id: "1".into(),
             display_name: String::new(),
         }
+    }
+
+    fn remote_parts() -> Parts {
+        axum::http::Request::builder()
+            .uri("/")
+            .header(axum::http::header::HOST, "example.com")
+            .body(())
+            .unwrap()
+            .into_parts()
+            .0
     }
 
     // ── Reine Logik ───────────────────────────────────────────────────────────
@@ -638,67 +797,111 @@ mod tests {
         assert!(html.contains("<html"), "must be HTML");
     }
 
-    // ── Market-Share-Proxy ────────────────────────────────────────────────────
+    // ── Market-Share-Wrapper ──────────────────────────────────────────────────
 
     #[tokio::test]
     async fn market_share_unauthenticated_401() {
-        let resp = api_market_share_handler(partner(), None, Query(MarketShareQuery::default())).await;
+        let Some(pool) = pool_or_skip("market_share_none").await else { return };
+        let resp = api_market_share_handler(
+            DashboardAuthLevel::None,
+            State(pool),
+            HeaderMap::new(),
+            None,
+            Query(MarketShareQuery::default()),
+            remote_parts(),
+        )
+        .await;
         assert_eq!(resp.status(), StatusCode::UNAUTHORIZED);
-    }
-
-    #[tokio::test]
-    async fn market_share_without_token_503() {
-        let resp =
-            api_market_share_handler(admin(), None, Query(MarketShareQuery::default())).await;
-        assert_eq!(resp.status(), StatusCode::SERVICE_UNAVAILABLE);
         let body = axum::body::to_bytes(resp.into_body(), usize::MAX).await.unwrap();
         let v: Value = serde_json::from_slice(&body).unwrap();
-        assert_eq!(v["error"], "internal_token_missing");
+        assert_eq!(v["error"], "auth_required");
     }
 
     #[tokio::test]
-    async fn market_share_proxies_status_and_body() {
-        use wiremock::matchers::{header, method, path};
-        use wiremock::{Mock, MockServer, ResponseTemplate};
+    async fn market_share_partner_403() {
+        let Some(pool) = pool_or_skip("market_share_partner").await else { return };
+        let resp = api_market_share_handler(
+            partner(),
+            State(pool),
+            HeaderMap::new(),
+            None,
+            Query(MarketShareQuery::default()),
+            remote_parts(),
+        )
+        .await;
+        assert_eq!(resp.status(), StatusCode::FORBIDDEN);
+        let body = axum::body::to_bytes(resp.into_body(), usize::MAX).await.unwrap();
+        let v: Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(v["error"], "admin_required");
+        assert_eq!(v["auth_level"], "partner");
+    }
 
-        let server = MockServer::start().await;
-        Mock::given(method("GET"))
-            .and(path("/internal/twitch/v1/market-share"))
-            .and(header("X-Internal-Token", "secret-test-token"))
-            .respond_with(ResponseTemplate::new(200).set_body_json(json!({ "share_pct": 42.0 })))
-            .mount(&server)
-            .await;
+    #[tokio::test]
+    async fn market_share_admin_direct_payload() {
+        let Some(pool) = pool_or_skip("market_share_direct").await else { return };
+        sqlx::query(
+            r#"
+            INSERT INTO twitch_stats_category
+                (ts_utc, streamer, viewer_count, is_partner, tags, language)
+            VALUES
+                (NOW(), 'partner_a', 25, true,  '["Deutsch"]', 'de'),
+                (NOW(), 'big_intl',  75, false, '["English"]', 'en')
+            "#,
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+        sqlx::query(
+            "INSERT INTO twitch_partners_all_state (twitch_login, is_partner_active) VALUES ('partner_a', 1)",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
 
-        let proxy = MarketShareProxyConfig {
-            base_url: server.uri(),
-            token: "secret-test-token".to_string(),
-        };
         let resp = api_market_share_handler(
             admin(),
-            Some(Extension(proxy)),
-            Query(MarketShareQuery::default()),
+            State(pool),
+            HeaderMap::new(),
+            None,
+            Query(MarketShareQuery {
+                days: Some(1),
+                scope: None,
+            }),
+            remote_parts(),
         )
         .await;
         assert_eq!(resp.status(), StatusCode::OK);
         let body = axum::body::to_bytes(resp.into_body(), usize::MAX).await.unwrap();
         let v: Value = serde_json::from_slice(&body).unwrap();
-        assert_eq!(v["share_pct"], 42.0);
+        assert_eq!(v["days"], 1);
+        assert_eq!(v["scope"], "all");
+        assert_eq!(v["current"]["totalViewers"], 100);
+        assert_eq!(v["current"]["partnerViewers"], 25);
+        assert!((v["current"]["sharePct"].as_f64().unwrap() - 25.0).abs() < 1e-9);
+        assert_eq!(v["roster"]["partnersTotal"], 1);
+        assert_eq!(v["roster"]["partnersSeenInRange"], 1);
     }
 
     #[tokio::test]
-    async fn market_share_upstream_error_502() {
-        let proxy = MarketShareProxyConfig {
-            // Unerreichbarer Port → Connect-Fehler.
-            base_url: "http://127.0.0.1:1".to_string(),
-            token: "t".to_string(),
-        };
+    async fn market_share_db_error_500_internal_shape() {
+        let Some(pool) = pool_or_skip("market_share_broken").await else { return };
+        sqlx::query("DROP TABLE twitch_stats_category")
+            .execute(&pool)
+            .await
+            .unwrap();
         let resp = api_market_share_handler(
             admin(),
-            Some(Extension(proxy)),
+            State(pool),
+            HeaderMap::new(),
+            None,
             Query(MarketShareQuery::default()),
+            remote_parts(),
         )
         .await;
-        assert_eq!(resp.status(), StatusCode::BAD_GATEWAY);
+        assert_eq!(resp.status(), StatusCode::INTERNAL_SERVER_ERROR);
+        let body = axum::body::to_bytes(resp.into_body(), usize::MAX).await.unwrap();
+        let v: Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(v["error"], "internal_error");
     }
 
     // ── DB-Aggregation (clean-SQL, gegen echtes Postgres) ─────────────────────
@@ -744,7 +947,12 @@ mod tests {
         sqlx::query(
             r#"CREATE TABLE twitch_stats_category (
                    ts_utc TIMESTAMPTZ, streamer TEXT, viewer_count INTEGER,
-                   is_partner BOOLEAN DEFAULT FALSE, tags TEXT
+                   is_partner BOOLEAN DEFAULT FALSE, tags TEXT, language TEXT
+               )"#,
+        ).execute(&pool).await.unwrap();
+        sqlx::query(
+            r#"CREATE TABLE twitch_partners_all_state (
+                   twitch_login TEXT, is_partner_active INTEGER DEFAULT 0
                )"#,
         ).execute(&pool).await.unwrap();
         Some(pool)
@@ -804,14 +1012,28 @@ mod tests {
     #[tokio::test]
     async fn api_market_data_handler_gates_non_admin() {
         let Some(pool) = pool_or_skip("market_data_gate").await else { return };
-        let resp = api_market_data_handler(partner(), State(pool)).await;
+        let resp = api_market_data_handler(
+            partner(),
+            State(pool),
+            HeaderMap::new(),
+            None,
+            remote_parts(),
+        )
+        .await;
         assert_eq!(resp.status(), StatusCode::UNAUTHORIZED);
     }
 
     #[tokio::test]
     async fn api_market_data_handler_admin_200() {
         let Some(pool) = pool_or_skip("market_data_admin").await else { return };
-        let resp = api_market_data_handler(admin(), State(pool)).await;
+        let resp = api_market_data_handler(
+            admin(),
+            State(pool),
+            HeaderMap::new(),
+            None,
+            remote_parts(),
+        )
+        .await;
         assert_eq!(resp.status(), StatusCode::OK);
     }
 }
