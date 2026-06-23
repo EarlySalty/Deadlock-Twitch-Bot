@@ -118,7 +118,10 @@ mod tests {
                 started_at     TIMESTAMPTZ NOT NULL DEFAULT NOW()
             )"#,
         ] {
-            sqlx::query(ddl).execute(&pool).await.expect("DDL fehlgeschlagen");
+            sqlx::query(ddl)
+                .execute(&pool)
+                .await
+                .expect("DDL fehlgeschlagen");
         }
         pool
     }
@@ -147,7 +150,10 @@ mod tests {
                 partnered_at            TEXT
             )"#,
         ] {
-            sqlx::query(ddl).execute(&pool).await.expect("DDL fehlgeschlagen");
+            sqlx::query(ddl)
+                .execute(&pool)
+                .await
+                .expect("DDL fehlgeschlagen");
         }
         pool
     }
@@ -247,7 +253,10 @@ mod tests {
             .await
             .unwrap();
 
-        let res = make_router_with_auth(pool, auth_state).oneshot(admin_cookie_req(&session.session_id)).await.unwrap();
+        let res = make_router_with_auth(pool, auth_state)
+            .oneshot(admin_cookie_req(&session.session_id))
+            .await
+            .unwrap();
         assert_eq!(res.status(), StatusCode::OK);
         let b = axum::body::to_bytes(res.into_body(), 1024).await.unwrap();
         let v: serde_json::Value = serde_json::from_slice(&b).unwrap();
@@ -332,5 +341,39 @@ mod tests {
         assert!(v.is_array());
         assert_eq!(v[0]["login"], "nani");
         assert_eq!(v[0]["isPartner"], true);
+    }
+
+    // ── Cookie-Auth: admin-eligibler Login OHNE Admin-Mode → 401 ──────────────
+    //
+    // Neues Auth-Modell (fix/dashboard-auth-model): ein admin-eligibler
+    // Twitch-Login (earlysalty) ist OHNE aktiven `tb_admin_mode`-Cookie nur ein
+    // gewöhnlicher Partner und darf die admin-only Partnerliste NICHT abrufen.
+    // Genau diese Default-Klemme verhindert, dass die bloße Admin-Eligibilität
+    // (ohne explizit aktivierten Admin-Mode) die Liste freischaltet. Pendant zu
+    // `twitch_admin_login_gets_200`, das den Erfolgsfall MIT Cookie absichert.
+    #[tokio::test]
+    async fn admin_eligible_login_ohne_admin_mode_gets_401() {
+        let dsn = db_dsn_or_skip!();
+        let pool = make_pool_with_sessions(&dsn, "test_streamers_admin_eligible_no_mode").await;
+        sqlx::query(
+            "INSERT INTO twitch_partners (twitch_login, twitch_user_id, status)
+             VALUES ('earlysalty', '42', 'active')",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+
+        let auth_state = DashboardAuthState::new(pool.clone(), TEST_FERNET_KEY.to_string());
+        let session = auth_state
+            .create_partner_session("earlysalty", "42", "EarlySalty")
+            .await
+            .unwrap();
+
+        // `cookie_req` setzt NUR die Partner-Session, KEINEN tb_admin_mode-Cookie.
+        let res = make_router_with_auth(pool, auth_state)
+            .oneshot(cookie_req(&session.session_id))
+            .await
+            .unwrap();
+        assert_eq!(res.status(), StatusCode::UNAUTHORIZED);
     }
 }

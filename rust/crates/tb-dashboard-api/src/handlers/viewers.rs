@@ -17,8 +17,16 @@ use sqlx::{PgPool, Row};
 use crate::auth::level::DashboardAuthLevel;
 
 const KNOWN_CHAT_BOTS: &[&str] = &[
-    "botrix", "deutschedeadlockcommunity", "fossabot", "moobot", "nightbot",
-    "pretzelrocks", "soundalerts", "streamlabs", "streamelements", "wizebot",
+    "botrix",
+    "deutschedeadlockcommunity",
+    "fossabot",
+    "moobot",
+    "nightbot",
+    "pretzelrocks",
+    "soundalerts",
+    "streamlabs",
+    "streamelements",
+    "wizebot",
 ];
 
 /// Viewer-Exklusionsliste: statische Known-Bots **plus** der Streamer selbst.
@@ -51,7 +59,9 @@ fn classify_viewer(
     _last_seen_at: Option<DateTime<Utc>>,
     now: DateTime<Utc>,
 ) -> &'static str {
-    let days_since_first = first_seen_at.map(|fs| (now - fs).num_days()).unwrap_or(9999);
+    let days_since_first = first_seen_at
+        .map(|fs| (now - fs).num_days())
+        .unwrap_or(9999);
     if days_since_first <= 14 && total_sessions <= 3 {
         return "new";
     }
@@ -95,8 +105,14 @@ async fn build_raw_chat_status(
     .ok()
     .flatten();
 
-    let presence_rows: i64 = pres.as_ref().and_then(|r| r.try_get("presence_rows").ok()).unwrap_or(0);
-    let sessions_with_presence: i64 = pres.as_ref().and_then(|r| r.try_get("sessions_with_presence").ok()).unwrap_or(0);
+    let presence_rows: i64 = pres
+        .as_ref()
+        .and_then(|r| r.try_get("presence_rows").ok())
+        .unwrap_or(0);
+    let sessions_with_presence: i64 = pres
+        .as_ref()
+        .and_then(|r| r.try_get("sessions_with_presence").ok())
+        .unwrap_or(0);
 
     // Gap-Start: früheste Session mit Presence aber ohne Raw-Nachrichten
     let gap_row = sqlx::query(
@@ -112,7 +128,8 @@ async fn build_raw_chat_status(
     .await
     .ok()
     .flatten();
-    let gap_start: Option<String> = gap_row.as_ref()
+    let gap_start: Option<String> = gap_row
+        .as_ref()
         .and_then(|r| r.try_get::<Option<DateTime<Utc>>, _>("gap_start").ok())
         .flatten()
         .map(|t| t.to_rfc3339());
@@ -132,10 +149,20 @@ async fn build_raw_chat_status(
     .ok()
     .flatten();
 
-    let raw_rows: i64 = raw_row.as_ref().and_then(|r| r.try_get("raw_rows").ok()).unwrap_or(0);
-    let sessions_with_raw: i64 = raw_row.as_ref().and_then(|r| r.try_get("sessions_with_raw").ok()).unwrap_or(0);
-    let last_message_at: Option<String> = raw_row.as_ref()
-        .and_then(|r| r.try_get::<Option<DateTime<Utc>>, _>("last_message_at").ok())
+    let raw_rows: i64 = raw_row
+        .as_ref()
+        .and_then(|r| r.try_get("raw_rows").ok())
+        .unwrap_or(0);
+    let sessions_with_raw: i64 = raw_row
+        .as_ref()
+        .and_then(|r| r.try_get("sessions_with_raw").ok())
+        .unwrap_or(0);
+    let last_message_at: Option<String> = raw_row
+        .as_ref()
+        .and_then(|r| {
+            r.try_get::<Option<DateTime<Utc>>, _>("last_message_at")
+                .ok()
+        })
         .flatten()
         .map(|t| t.to_rfc3339());
 
@@ -150,15 +177,24 @@ async fn build_raw_chat_status(
     .ok()
     .flatten();
 
-    let last_insert_ok: Option<String> = health.as_ref()
-        .and_then(|r| r.try_get::<Option<DateTime<Utc>>, _>("last_raw_chat_insert_ok_at").ok())
+    let last_insert_ok: Option<String> = health
+        .as_ref()
+        .and_then(|r| {
+            r.try_get::<Option<DateTime<Utc>>, _>("last_raw_chat_insert_ok_at")
+                .ok()
+        })
         .flatten()
         .map(|t| t.to_rfc3339());
-    let last_insert_err: Option<String> = health.as_ref()
-        .and_then(|r| r.try_get::<Option<DateTime<Utc>>, _>("last_raw_chat_insert_error_at").ok())
+    let last_insert_err: Option<String> = health
+        .as_ref()
+        .and_then(|r| {
+            r.try_get::<Option<DateTime<Utc>>, _>("last_raw_chat_insert_error_at")
+                .ok()
+        })
         .flatten()
         .map(|t| t.to_rfc3339());
-    let last_error: Option<String> = health.as_ref()
+    let last_error: Option<String> = health
+        .as_ref()
         .and_then(|r| r.try_get::<Option<String>, _>("last_raw_chat_error").ok())
         .flatten()
         .filter(|s| !s.trim().is_empty());
@@ -181,7 +217,13 @@ async fn build_raw_chat_status(
         .and_then(|r| r.try_get::<Option<String>, _>("status").ok())
         .flatten()
         .filter(|s| !s.trim().is_empty())
-        .unwrap_or_else(|| if suspected_issue { "not_started".into() } else { "not_needed".into() });
+        .unwrap_or_else(|| {
+            if suspected_issue {
+                "not_started".into()
+            } else {
+                "not_needed".into()
+            }
+        });
 
     let note: Option<String> = if suspected_issue && raw_rows == 0 {
         Some("Presence-/Rollup-Daten vorhanden, aber keine Roh-Chat-Nachrichten im gewählten Zeitraum.".into())
@@ -190,7 +232,9 @@ async fn build_raw_chat_status(
     } else if raw_rows == 0 {
         Some("Keine Roh-Chat-Nachrichten im gewählten Zeitraum.".into())
     } else if last_error.is_some() && last_insert_err.is_some() {
-        last_error.as_ref().map(|e| format!("Letzter Roh-Chat-Insert-Fehler: {e}"))
+        last_error
+            .as_ref()
+            .map(|e| format!("Letzter Roh-Chat-Insert-Fehler: {e}"))
     } else {
         None
     };
@@ -224,8 +268,18 @@ async fn viewer_window_metadata(
     logins: &[String],
     since: DateTime<Utc>,
 ) -> std::collections::HashMap<String, WindowMeta> {
-    let mut result: std::collections::HashMap<String, WindowMeta> = logins.iter()
-        .map(|l| (l.clone(), WindowMeta { presence_sessions: 0, presence_messages: 0, raw_messages: 0 }))
+    let mut result: std::collections::HashMap<String, WindowMeta> = logins
+        .iter()
+        .map(|l| {
+            (
+                l.clone(),
+                WindowMeta {
+                    presence_sessions: 0,
+                    presence_messages: 0,
+                    raw_messages: 0,
+                },
+            )
+        })
         .collect();
 
     let pres_rows = sqlx::query(
@@ -333,13 +387,17 @@ async fn fetch_window_viewer_rows(
     .fetch_all(pool)
     .await?;
 
-    Ok(rows.iter().map(|r| ViewerRow {
-        login: r.try_get("chatter_login").unwrap_or_default(),
-        total_sessions: r.try_get("total_sessions").unwrap_or(0),
-        total_messages: r.try_get("total_messages").unwrap_or(0),
-        first_seen_at: r.try_get("first_seen_at").ok(),
-        last_seen_at: r.try_get("last_seen_at").ok(),
-    }).filter(|v| !v.login.is_empty()).collect())
+    Ok(rows
+        .iter()
+        .map(|r| ViewerRow {
+            login: r.try_get("chatter_login").unwrap_or_default(),
+            total_sessions: r.try_get("total_sessions").unwrap_or(0),
+            total_messages: r.try_get("total_messages").unwrap_or(0),
+            first_seen_at: r.try_get("first_seen_at").ok(),
+            last_seen_at: r.try_get("last_seen_at").ok(),
+        })
+        .filter(|v| !v.login.is_empty())
+        .collect())
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -375,10 +433,20 @@ pub async fn viewer_directory_handler(
     if let Some(resp) = crate::auth::extended_gate(&pool, &auth).await {
         return resp;
     }
-    let streamer = match params.streamer.as_deref().map(str::trim).filter(|s| !s.is_empty()) {
-        Some(s) => s.to_lowercase(),
-        None => return (StatusCode::BAD_REQUEST, Json(json!({"error":"Streamer required"}))).into_response(),
-    };
+    // IDOR-Guard: Partner werden auf den eigenen Login geklemmt (fremder
+    // ?streamer= → 403); Admin/Localhost dürfen frei wählen. streamer Pflicht.
+    let streamer =
+        match crate::auth::resolve_streamer_scope(&auth, params.streamer.as_deref(), true) {
+            Ok(Some(s)) => s,
+            Ok(None) => {
+                return (
+                    StatusCode::BAD_REQUEST,
+                    Json(json!({"error":"Streamer required"})),
+                )
+                    .into_response()
+            }
+            Err(resp) => return resp,
+        };
     let days = params.days.unwrap_or(30).clamp(1, 365);
     let since: DateTime<Utc> = Utc::now() - chrono::Duration::days(days as i64);
 
@@ -399,7 +467,11 @@ pub async fn viewer_directory_handler(
     let viewer_rows = match fetch_window_viewer_rows(&pool, &streamer, since).await {
         Err(e) => {
             tracing::error!("viewer-directory rows Fehler: {e}");
-            return (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({"error":"internal_error"}))).into_response();
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(json!({"error":"internal_error"})),
+            )
+                .into_response();
         }
         Ok(r) => r,
     };
@@ -420,7 +492,8 @@ pub async fn viewer_directory_handler(
                 "avgSessionsPerViewer": 0, "avgOtherChannels": 0,
             },
             "rawChatStatus": raw_status,
-        })).into_response();
+        }))
+        .into_response();
     }
 
     // 2. Window-Metadata für alle Logins
@@ -445,7 +518,8 @@ pub async fn viewer_directory_handler(
     .fetch_all(&pool)
     .await
     .unwrap_or_default();
-    let cross_channel: std::collections::HashMap<String, i64> = cc_rows.iter()
+    let cross_channel: std::collections::HashMap<String, i64> = cc_rows
+        .iter()
         .filter_map(|r| {
             let login: String = r.try_get("login").ok()?;
             let cnt: i64 = r.try_get("other_count").unwrap_or(0).max(0);
@@ -475,7 +549,8 @@ pub async fn viewer_directory_handler(
     .await
     .unwrap_or_default();
 
-    let mut top_channels: std::collections::HashMap<String, Vec<String>> = std::collections::HashMap::new();
+    let mut top_channels: std::collections::HashMap<String, Vec<String>> =
+        std::collections::HashMap::new();
     for r in &tc_rows {
         let login: String = r.try_get("login").unwrap_or_default();
         let other: String = r.try_get("other_streamer").unwrap_or_default();
@@ -498,19 +573,38 @@ pub async fn viewer_directory_handler(
     let mut sum_other = 0i64;
 
     for v in &viewer_rows {
-        let days_since = v.last_seen_at.map(|ls| (now - ls).num_days()).unwrap_or(9999);
+        let days_since = v
+            .last_seen_at
+            .map(|ls| (now - ls).num_days())
+            .unwrap_or(9999);
         let other_ch = *cross_channel.get(&v.login).unwrap_or(&0);
-        let category = classify_viewer(v.total_sessions, v.total_messages, v.first_seen_at, v.last_seen_at, now);
+        let category = classify_viewer(
+            v.total_sessions,
+            v.total_messages,
+            v.first_seen_at,
+            v.last_seen_at,
+            now,
+        );
         let is_lurker = v.total_messages == 0;
         let avg_msg = if v.total_sessions > 0 {
             (v.total_messages as f64 / v.total_sessions as f64 * 10.0).round() / 10.0
-        } else { 0.0 };
+        } else {
+            0.0
+        };
 
         sum_sessions += v.total_sessions;
         sum_other += other_ch;
-        if is_lurker { total_lurkers += 1; }
-        if other_ch == 0 { total_exclusive += 1; } else { total_shared += 1; }
-        if days_since <= 14 { total_active += 1; }
+        if is_lurker {
+            total_lurkers += 1;
+        }
+        if other_ch == 0 {
+            total_exclusive += 1;
+        } else {
+            total_shared += 1;
+        }
+        if days_since <= 14 {
+            total_active += 1;
+        }
 
         let meta = window_meta.get(&v.login);
         let wm = window_meta_to_json(meta);
@@ -536,8 +630,16 @@ pub async fn viewer_directory_handler(
     }
 
     let total_viewers = viewer_rows.len() as i64;
-    let avg_sessions = if total_viewers > 0 { (sum_sessions as f64 / total_viewers as f64 * 10.0).round() / 10.0 } else { 0.0 };
-    let avg_other = if total_viewers > 0 { (sum_other as f64 / total_viewers as f64 * 10.0).round() / 10.0 } else { 0.0 };
+    let avg_sessions = if total_viewers > 0 {
+        (sum_sessions as f64 / total_viewers as f64 * 10.0).round() / 10.0
+    } else {
+        0.0
+    };
+    let avg_other = if total_viewers > 0 {
+        (sum_other as f64 / total_viewers as f64 * 10.0).round() / 10.0
+    } else {
+        0.0
+    };
 
     // 7. Filter
     viewers.retain(|v| {
@@ -574,13 +676,25 @@ pub async fn viewer_directory_handler(
         let ka = key_of(a);
         let kb = key_of(b);
         // last_seen sort: "asc" means oldest first = highest days_since first = desc numeric
-        let effective_desc = if sort == "daysSinceLastSeen" { !order_desc } else { order_desc };
-        if effective_desc { kb.cmp(&ka) } else { ka.cmp(&kb) }
+        let effective_desc = if sort == "daysSinceLastSeen" {
+            !order_desc
+        } else {
+            order_desc
+        };
+        if effective_desc {
+            kb.cmp(&ka)
+        } else {
+            ka.cmp(&kb)
+        }
     });
 
     let filtered_total = viewers.len() as i64;
     let start = ((page - 1) * per_page) as usize;
-    let page_viewers: Vec<_> = viewers.into_iter().skip(start).take(per_page as usize).collect();
+    let page_viewers: Vec<_> = viewers
+        .into_iter()
+        .skip(start)
+        .take(per_page as usize)
+        .collect();
 
     Json(json!({
         "viewers": page_viewers,
@@ -598,7 +712,8 @@ pub async fn viewer_directory_handler(
             "avgOtherChannels": avg_other,
         },
         "rawChatStatus": raw_status,
-    })).into_response()
+    }))
+    .into_response()
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -623,16 +738,41 @@ pub async fn viewer_detail_handler(
     if let Some(resp) = crate::auth::extended_gate(&pool, &auth).await {
         return resp;
     }
-    let streamer = match params.streamer.as_deref().map(str::trim).filter(|s| !s.is_empty()) {
-        Some(s) => s.to_lowercase(),
-        None => return (StatusCode::BAD_REQUEST, Json(json!({"error":"streamer and login required"}))).into_response(),
-    };
-    let login = match params.login.as_deref().map(str::trim).filter(|s| !s.is_empty()) {
+    // IDOR-Guard: Partner werden auf den eigenen Login geklemmt (fremder
+    // ?streamer= → 403); Admin/Localhost dürfen frei wählen. streamer Pflicht.
+    let streamer =
+        match crate::auth::resolve_streamer_scope(&auth, params.streamer.as_deref(), true) {
+            Ok(Some(s)) => s,
+            Ok(None) => {
+                return (
+                    StatusCode::BAD_REQUEST,
+                    Json(json!({"error":"streamer and login required"})),
+                )
+                    .into_response()
+            }
+            Err(resp) => return resp,
+        };
+    let login = match params
+        .login
+        .as_deref()
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+    {
         Some(l) => l.to_lowercase(),
-        None => return (StatusCode::BAD_REQUEST, Json(json!({"error":"streamer and login required"}))).into_response(),
+        None => {
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(json!({"error":"streamer and login required"})),
+            )
+                .into_response()
+        }
     };
     if KNOWN_CHAT_BOTS.contains(&login.as_str()) || login == streamer {
-        return (StatusCode::NOT_FOUND, Json(json!({"error":"Viewer not found"}))).into_response();
+        return (
+            StatusCode::NOT_FOUND,
+            Json(json!({"error":"Viewer not found"})),
+        )
+            .into_response();
     }
     let days = params.days.unwrap_or(30).clamp(1, 365);
     let since: DateTime<Utc> = Utc::now() - chrono::Duration::days(days as i64);
@@ -652,27 +792,51 @@ pub async fn viewer_detail_handler(
              AND s.started_at >= $3
              AND LOWER(sc.chatter_login) != ALL($4)"#,
     )
-    .bind(&streamer).bind(&login).bind(since).bind(&bots)
-    .fetch_optional(&pool).await;
+    .bind(&streamer)
+    .bind(&login)
+    .bind(since)
+    .bind(&bots)
+    .fetch_optional(&pool)
+    .await;
 
     let viewer_row = match viewer_row {
         Err(e) => {
             tracing::error!("viewer-detail row Fehler: {e}");
-            return (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({"error":"internal_error"}))).into_response();
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(json!({"error":"internal_error"})),
+            )
+                .into_response();
         }
-        Ok(None) => return (StatusCode::NOT_FOUND, Json(json!({"error":"Viewer not found"}))).into_response(),
+        Ok(None) => {
+            return (
+                StatusCode::NOT_FOUND,
+                Json(json!({"error":"Viewer not found"})),
+            )
+                .into_response()
+        }
         Ok(Some(r)) => r,
     };
 
     let total_sessions: i64 = viewer_row.try_get("total_sessions").unwrap_or(0);
     if total_sessions == 0 {
-        return (StatusCode::NOT_FOUND, Json(json!({"error":"Viewer not found"}))).into_response();
+        return (
+            StatusCode::NOT_FOUND,
+            Json(json!({"error":"Viewer not found"})),
+        )
+            .into_response();
     }
     let total_messages: i64 = viewer_row.try_get("total_messages").unwrap_or(0);
     let first_seen_at: Option<DateTime<Utc>> = viewer_row.try_get("first_seen_at").ok();
     let last_seen_at: Option<DateTime<Utc>> = viewer_row.try_get("last_seen_at").ok();
     let days_since = last_seen_at.map(|ls| (now - ls).num_days()).unwrap_or(9999);
-    let category = classify_viewer(total_sessions, total_messages, first_seen_at, last_seen_at, now);
+    let category = classify_viewer(
+        total_sessions,
+        total_messages,
+        first_seen_at,
+        last_seen_at,
+        now,
+    );
 
     // Window-Metadata
     let logins = vec![login.clone()];
@@ -691,8 +855,12 @@ pub async fn viewer_detail_handler(
            GROUP BY DATE(s.started_at)
            ORDER BY session_date"#,
     )
-    .bind(&streamer).bind(&login).bind(since)
-    .fetch_all(&pool).await.unwrap_or_default();
+    .bind(&streamer)
+    .bind(&login)
+    .bind(since)
+    .fetch_all(&pool)
+    .await
+    .unwrap_or_default();
 
     let activity_timeline: Vec<serde_json::Value> = tl_rows.iter().map(|r| {
         json!({
@@ -716,25 +884,38 @@ pub async fn viewer_detail_handler(
            GROUP BY LOWER(s.streamer_login)
            ORDER BY sessions DESC LIMIT 15"#,
     )
-    .bind(&login).bind(&streamer).bind(since)
-    .fetch_all(&pool).await.unwrap_or_default();
+    .bind(&login)
+    .bind(&streamer)
+    .bind(since)
+    .fetch_all(&pool)
+    .await
+    .unwrap_or_default();
 
-    let cross_channel: Vec<serde_json::Value> = cc_rows.iter().map(|r| {
-        let cc_first: Option<DateTime<Utc>> = r.try_get("first_seen_at").ok();
-        let cc_last: Option<DateTime<Utc>> = r.try_get("last_seen_at").ok();
-        let overlap = match (first_seen_at, cc_first) {
-            (Some(fs), Some(cf)) => if cf < fs { "before" } else { "after" },
-            _ => "unknown",
-        };
-        json!({
-            "streamer": r.try_get::<String, _>("streamer_login").unwrap_or_default(),
-            "sessions": r.try_get::<i64, _>("sessions").unwrap_or(0),
-            "messages": r.try_get::<i64, _>("messages").unwrap_or(0),
-            "firstSeen": cc_first.map(|t| t.to_rfc3339()),
-            "lastSeen": cc_last.map(|t| t.to_rfc3339()),
-            "overlap": overlap,
+    let cross_channel: Vec<serde_json::Value> = cc_rows
+        .iter()
+        .map(|r| {
+            let cc_first: Option<DateTime<Utc>> = r.try_get("first_seen_at").ok();
+            let cc_last: Option<DateTime<Utc>> = r.try_get("last_seen_at").ok();
+            let overlap = match (first_seen_at, cc_first) {
+                (Some(fs), Some(cf)) => {
+                    if cf < fs {
+                        "before"
+                    } else {
+                        "after"
+                    }
+                }
+                _ => "unknown",
+            };
+            json!({
+                "streamer": r.try_get::<String, _>("streamer_login").unwrap_or_default(),
+                "sessions": r.try_get::<i64, _>("sessions").unwrap_or(0),
+                "messages": r.try_get::<i64, _>("messages").unwrap_or(0),
+                "firstSeen": cc_first.map(|t| t.to_rfc3339()),
+                "lastSeen": cc_last.map(|t| t.to_rfc3339()),
+                "overlap": overlap,
+            })
         })
-    }).collect();
+        .collect();
 
     // Chat-Patterns aus twitch_chat_messages
     let chat_rows = sqlx::query(
@@ -745,8 +926,12 @@ pub async fn viewer_detail_handler(
            WHERE LOWER(chatter_login) = $1 AND LOWER(streamer_login) = $2 AND message_ts >= $3
            GROUP BY EXTRACT(HOUR FROM message_ts)::int, EXTRACT(DOW FROM message_ts)::int"#,
     )
-    .bind(&login).bind(&streamer).bind(since)
-    .fetch_all(&pool).await.unwrap_or_default();
+    .bind(&login)
+    .bind(&streamer)
+    .bind(since)
+    .fetch_all(&pool)
+    .await
+    .unwrap_or_default();
 
     let mut hour_counts = [0i64; 24];
     let mut dow_counts = [0i64; 7];
@@ -763,7 +948,15 @@ pub async fn viewer_detail_handler(
     peak_hours.sort_by_key(|&h| std::cmp::Reverse(hour_counts[h as usize]));
     let peak_hours: Vec<i64> = peak_hours.into_iter().take(3).collect();
 
-    let dow_names = ["Sonntag","Montag","Dienstag","Mittwoch","Donnerstag","Freitag","Samstag"];
+    let dow_names = [
+        "Sonntag",
+        "Montag",
+        "Dienstag",
+        "Mittwoch",
+        "Donnerstag",
+        "Freitag",
+        "Samstag",
+    ];
     // Python max() liefert bei Gleichstand den ERSTEN Tag → position() statt max_by_key.
     let max_dow = *dow_counts.iter().max().unwrap_or(&0);
     let most_active_day = if max_dow == 0 {
@@ -775,19 +968,31 @@ pub async fn viewer_detail_handler(
     // Trend
     let trend = if activity_timeline.len() >= 4 {
         let mid = activity_timeline.len() / 2;
-        let first_half: i64 = activity_timeline[..mid].iter()
-            .map(|v| v["messages"].as_i64().unwrap_or(0)).sum();
-        let second_half: i64 = activity_timeline[mid..].iter()
-            .map(|v| v["messages"].as_i64().unwrap_or(0)).sum();
-        if second_half > (first_half as f64 * 1.2) as i64 { "increasing" }
-        else if first_half > (second_half as f64 * 1.2) as i64 { "decreasing" }
-        else { "stable" }
-    } else { "insufficient_data" };
+        let first_half: i64 = activity_timeline[..mid]
+            .iter()
+            .map(|v| v["messages"].as_i64().unwrap_or(0))
+            .sum();
+        let second_half: i64 = activity_timeline[mid..]
+            .iter()
+            .map(|v| v["messages"].as_i64().unwrap_or(0))
+            .sum();
+        if second_half > (first_half as f64 * 1.2) as i64 {
+            "increasing"
+        } else if first_half > (second_half as f64 * 1.2) as i64 {
+            "decreasing"
+        } else {
+            "stable"
+        }
+    } else {
+        "insufficient_data"
+    };
 
     let raw_status = build_raw_chat_status(&pool, &streamer, since).await;
     let avg_msg = if total_sessions > 0 {
         (total_messages as f64 / total_sessions as f64 * 10.0).round() / 10.0
-    } else { 0.0 };
+    } else {
+        0.0
+    };
 
     // Personality: bis zu 2000 Chat-Nachrichten des Viewers klassifizieren
     // (Python api_viewers.py:545-573). Ohne Roh-Chat → null.
@@ -821,8 +1026,10 @@ pub async fn viewer_detail_handler(
                 .max_by_key(|(_, &c)| c)
                 .map(|(t, _)| *t)
                 .unwrap_or("Other");
-            let distribution: serde_json::Map<String, serde_json::Value> =
-                counts.iter().map(|(k, v)| (k.to_string(), json!(v))).collect();
+            let distribution: serde_json::Map<String, serde_json::Value> = counts
+                .iter()
+                .map(|(k, v)| (k.to_string(), json!(v)))
+                .collect();
             json!({ "primary": primary, "distribution": distribution })
         }
     };
@@ -855,7 +1062,8 @@ pub async fn viewer_detail_handler(
         },
         "rawChatStatus": raw_status,
         "personality": personality,
-    })).into_response()
+    }))
+    .into_response()
 }
 
 /// Klassifiziert eine Chat-Nachricht in einen Personality-Typ (Port von
@@ -870,56 +1078,112 @@ fn classify_message(content: &str) -> &'static str {
     let lower = content.to_lowercase();
     let any = |words: &[&str]| words.iter().any(|w| lower.contains(w));
     if any(&[
-        "pog", "poggers", "pogchamp", "hype", "letsgo", "lets go", "lfg", "omg", "wow",
-        "krass", "geil", "banger", "insane", "crazy", "gg", "wp", "ggs", "ez", "clutch",
+        "pog", "poggers", "pogchamp", "hype", "letsgo", "lets go", "lfg", "omg", "wow", "krass",
+        "geil", "banger", "insane", "crazy", "gg", "wp", "ggs", "ez", "clutch",
     ]) {
         return "Hype";
     }
     if any(&[
-        "hi", "hello", "hey", "moin", "nabend", "guten", "welcome", "hallo", "servus",
-        "moinmoin", "ciao", "bye", "tschüss",
+        "hi", "hello", "hey", "moin", "nabend", "guten", "welcome", "hallo", "servus", "moinmoin",
+        "ciao", "bye", "tschüss",
     ]) {
         return "Greeting";
     }
     if content.contains('?')
         || any(&[
-            "was", "wo", "wer", "wie", "wann", "why", "how", "warum", "weshalb",
-            "wie geht", "kann man", "darf man",
+            "was", "wo", "wer", "wie", "wann", "why", "how", "warum", "weshalb", "wie geht",
+            "kann man", "darf man",
         ])
     {
         return "Question";
     }
     if any(&[
-        "gut gemacht", "nice play", "stark", "schlecht", "fehler", "bug", "langweilig",
-        "spannend", "lustig", "witzig", "gefällt", "liebe",
+        "gut gemacht",
+        "nice play",
+        "stark",
+        "schlecht",
+        "fehler",
+        "bug",
+        "langweilig",
+        "spannend",
+        "lustig",
+        "witzig",
+        "gefällt",
+        "liebe",
     ]) {
         return "Feedback";
     }
     if any(&[
-        "lag", "fps", "sound", "audio", "mic", "ton", "bild", "standbild", "leise",
-        "laut", "verzögerung", "delay",
+        "lag",
+        "fps",
+        "sound",
+        "audio",
+        "mic",
+        "ton",
+        "bild",
+        "standbild",
+        "leise",
+        "laut",
+        "verzögerung",
+        "delay",
     ]) {
         return "Technical";
     }
     if any(&[
-        "follow", "sub", "prime", "raid", "host", "danke", "thanks", "thx", "discord",
-        "social", "insta", "twitter", "yt", "youtube", "clip",
+        "follow", "sub", "prime", "raid", "host", "danke", "thanks", "thx", "discord", "social",
+        "insta", "twitter", "yt", "youtube", "clip",
     ]) {
         return "Social";
     }
     if any(&[
-        "lol", "lmao", "haha", "lul", "kek", "xd", ":)", ":d", "f", "o7", "rofl",
-        "hehe", "huhu",
+        "lol", "lmao", "haha", "lul", "kek", "xd", ":)", ":d", "f", "o7", "rofl", "hehe", "huhu",
     ]) {
         return "Reaction";
     }
     if any(&[
-        "deadlock", "hero", "build", "skill", "rank", "elo", "match", "play", "game",
-        "win", "lose", "mmr", "lane", "ult", "item", "soul", "orb", "patron",
-        "mid boss", "guardian", "walker", "urn", "shrine", "abrams", "bebop", "dynamo",
-        "grey talon", "haze", "infernus", "ivy", "kelvin", "lady geist", "lash",
-        "mcginnis", "mirage", "pocket", "seven", "shiv", "vindicta", "viscous",
-        "warden", "wraith", "yamato",
+        "deadlock",
+        "hero",
+        "build",
+        "skill",
+        "rank",
+        "elo",
+        "match",
+        "play",
+        "game",
+        "win",
+        "lose",
+        "mmr",
+        "lane",
+        "ult",
+        "item",
+        "soul",
+        "orb",
+        "patron",
+        "mid boss",
+        "guardian",
+        "walker",
+        "urn",
+        "shrine",
+        "abrams",
+        "bebop",
+        "dynamo",
+        "grey talon",
+        "haze",
+        "infernus",
+        "ivy",
+        "kelvin",
+        "lady geist",
+        "lash",
+        "mcginnis",
+        "mirage",
+        "pocket",
+        "seven",
+        "shiv",
+        "vindicta",
+        "viscous",
+        "warden",
+        "wraith",
+        "yamato",
     ]) {
         return "Game-Related";
     }
@@ -947,10 +1211,20 @@ pub async fn viewer_segments_handler(
     if let Some(resp) = crate::auth::extended_gate(&pool, &auth).await {
         return resp;
     }
-    let streamer = match params.streamer.as_deref().map(str::trim).filter(|s| !s.is_empty()) {
-        Some(s) => s.to_lowercase(),
-        None => return (StatusCode::BAD_REQUEST, Json(json!({"error":"Streamer required"}))).into_response(),
-    };
+    // IDOR-Guard: Partner werden auf den eigenen Login geklemmt (fremder
+    // ?streamer= → 403); Admin/Localhost dürfen frei wählen. streamer Pflicht.
+    let streamer =
+        match crate::auth::resolve_streamer_scope(&auth, params.streamer.as_deref(), true) {
+            Ok(Some(s)) => s,
+            Ok(None) => {
+                return (
+                    StatusCode::BAD_REQUEST,
+                    Json(json!({"error":"Streamer required"})),
+                )
+                    .into_response()
+            }
+            Err(resp) => return resp,
+        };
     let days = params.days.unwrap_or(30).clamp(1, 365);
     let since: DateTime<Utc> = Utc::now() - chrono::Duration::days(days as i64);
     let now = Utc::now();
@@ -958,7 +1232,11 @@ pub async fn viewer_segments_handler(
     let viewer_rows = match fetch_window_viewer_rows(&pool, &streamer, since).await {
         Err(e) => {
             tracing::error!("viewer-segments rows Fehler: {e}");
-            return (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({"error":"internal_error"}))).into_response();
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(json!({"error":"internal_error"})),
+            )
+                .into_response();
         }
         Ok(r) => r,
     };
@@ -973,14 +1251,25 @@ pub async fn viewer_segments_handler(
     }
 
     // 1. Klassifizieren
-    let mut seg_groups: std::collections::HashMap<&str, Vec<serde_json::Value>> = std::collections::HashMap::new();
+    let mut seg_groups: std::collections::HashMap<&str, Vec<serde_json::Value>> =
+        std::collections::HashMap::new();
     let mut at_risk: Vec<serde_json::Value> = vec![];
     let mut recently_churned: Vec<serde_json::Value> = vec![];
 
     for v in &viewer_rows {
-        let days_since = v.last_seen_at.map(|ls| (now - ls).num_days()).unwrap_or(9999);
-        let category = classify_viewer(v.total_sessions, v.total_messages, v.first_seen_at, v.last_seen_at, now);
-        let entry = json!({"login": v.login, "sessions": v.total_sessions, "messages": v.total_messages});
+        let days_since = v
+            .last_seen_at
+            .map(|ls| (now - ls).num_days())
+            .unwrap_or(9999);
+        let category = classify_viewer(
+            v.total_sessions,
+            v.total_messages,
+            v.first_seen_at,
+            v.last_seen_at,
+            now,
+        );
+        let entry =
+            json!({"login": v.login, "sessions": v.total_sessions, "messages": v.total_messages});
         seg_groups.entry(category).or_default().push(entry);
 
         let is_valuable = v.total_sessions >= 3 && v.total_messages > 0;
@@ -1005,11 +1294,14 @@ pub async fn viewer_segments_handler(
     recently_churned.sort_by_key(|v| std::cmp::Reverse(score(v)));
 
     // 2. Whereabouts für Top-20 At-Risk
-    let at_risk_logins: Vec<String> = at_risk.iter().take(20)
+    let at_risk_logins: Vec<String> = at_risk
+        .iter()
+        .take(20)
         .filter_map(|v| v["login"].as_str().map(str::to_string))
         .collect();
     let bots: Vec<String> = KNOWN_CHAT_BOTS.iter().map(|s| s.to_string()).collect();
-    let mut whereabouts: std::collections::HashMap<String, Vec<String>> = std::collections::HashMap::new();
+    let mut whereabouts: std::collections::HashMap<String, Vec<String>> =
+        std::collections::HashMap::new();
     if !at_risk_logins.is_empty() {
         let thirty_days_ago = now - chrono::Duration::days(30);
         let wa_rows = sqlx::query(
@@ -1028,15 +1320,21 @@ pub async fn viewer_segments_handler(
             let login: String = r.try_get("login").unwrap_or_default();
             let other: String = r.try_get("streamer_login").unwrap_or_default();
             let entry = whereabouts.entry(login).or_default();
-            if entry.len() < 3 { entry.push(other); }
+            if entry.len() < 3 {
+                entry.push(other);
+            }
         }
     }
-    let at_risk_with_wa: Vec<serde_json::Value> = at_risk.iter().take(20).map(|v| {
-        let login = v["login"].as_str().unwrap_or_default();
-        let mut entry = v.clone();
-        entry["recentlySeenAt"] = json!(whereabouts.get(login).cloned().unwrap_or_default());
-        entry
-    }).collect();
+    let at_risk_with_wa: Vec<serde_json::Value> = at_risk
+        .iter()
+        .take(20)
+        .map(|v| {
+            let login = v["login"].as_str().unwrap_or_default();
+            let mut entry = v.clone();
+            entry["recentlySeenAt"] = json!(whereabouts.get(login).cloned().unwrap_or_default());
+            entry
+        })
+        .collect();
 
     // 3. Segment-Stats
     let total = viewer_rows.len() as i64;
@@ -1045,11 +1343,29 @@ pub async fn viewer_segments_handler(
         let list = seg_groups.get(seg_name).cloned().unwrap_or_default();
         let count = list.len() as i64;
         let avg_msgs = if count > 0 {
-            (list.iter().map(|v| v["messages"].as_i64().unwrap_or(0)).sum::<i64>() as f64 / count as f64 * 10.0).round() / 10.0
-        } else { 0.0 };
+            (list
+                .iter()
+                .map(|v| v["messages"].as_i64().unwrap_or(0))
+                .sum::<i64>() as f64
+                / count as f64
+                * 10.0)
+                .round()
+                / 10.0
+        } else {
+            0.0
+        };
         let avg_sess = if count > 0 {
-            (list.iter().map(|v| v["sessions"].as_i64().unwrap_or(0)).sum::<i64>() as f64 / count as f64 * 10.0).round() / 10.0
-        } else { 0.0 };
+            (list
+                .iter()
+                .map(|v| v["sessions"].as_i64().unwrap_or(0))
+                .sum::<i64>() as f64
+                / count as f64
+                * 10.0)
+                .round()
+                / 10.0
+        } else {
+            0.0
+        };
         segment_stats.insert(seg_name.into(), json!({
             "count": count,
             "pct": if total > 0 { (count as f64 / total as f64 * 1000.0).round() / 10.0 } else { 0.0 },
@@ -1080,18 +1396,33 @@ pub async fn viewer_segments_handler(
              AND LOWER(sc.streamer_login) != ALL($4)
            GROUP BY LOWER(sc.chatter_login)"#,
     )
-    .bind(&all_logins).bind(since).bind(&bots).bind(&streamer_exclusion)
-    .fetch_all(&pool).await.unwrap_or_default();
+    .bind(&all_logins)
+    .bind(since)
+    .bind(&bots)
+    .bind(&streamer_exclusion)
+    .fetch_all(&pool)
+    .await
+    .unwrap_or_default();
 
     let mut exclusive_count = 0i64;
     let mut other_sum = 0i64;
     for r in &cc_rows {
         let ch: i64 = r.try_get("ch_count").unwrap_or(0);
-        if ch <= 1 { exclusive_count += 1; }
+        if ch <= 1 {
+            exclusive_count += 1;
+        }
         other_sum += 0i64.max(ch - 1);
     }
-    let exclusive_pct = if total > 0 { (exclusive_count as f64 / total as f64 * 1000.0).round() / 10.0 } else { 0.0 };
-    let avg_other = if total > 0 { (other_sum as f64 / total as f64 * 10.0).round() / 10.0 } else { 0.0 };
+    let exclusive_pct = if total > 0 {
+        (exclusive_count as f64 / total as f64 * 1000.0).round() / 10.0
+    } else {
+        0.0
+    };
+    let avg_other = if total > 0 {
+        (other_sum as f64 / total as f64 * 10.0).round() / 10.0
+    } else {
+        0.0
+    };
 
     // 5. Top Shared Channels
     let shared_rows = sqlx::query(
@@ -1111,14 +1442,22 @@ pub async fn viewer_segments_handler(
            ORDER BY shared_count DESC
            LIMIT 10"#,
     )
-    .bind(&streamer).bind(since).bind(&streamer).bind(since).bind(&bots)
-    .fetch_all(&pool).await.unwrap_or_default();
+    .bind(&streamer)
+    .bind(since)
+    .bind(&streamer)
+    .bind(since)
+    .bind(&bots)
+    .fetch_all(&pool)
+    .await
+    .unwrap_or_default();
 
     // Direction-Votes für Top-Shared
-    let other_streamers: Vec<String> = shared_rows.iter()
+    let other_streamers: Vec<String> = shared_rows
+        .iter()
         .filter_map(|r| r.try_get::<String, _>("streamer_login").ok())
         .collect();
-    let mut direction_map: std::collections::HashMap<String, &str> = std::collections::HashMap::new();
+    let mut direction_map: std::collections::HashMap<String, &str> =
+        std::collections::HashMap::new();
     if !other_streamers.is_empty() {
         let dir_rows = sqlx::query(
             r#"SELECT LOWER(other_rollup.streamer_login) AS streamer_login,
@@ -1140,23 +1479,31 @@ pub async fn viewer_segments_handler(
             let s: String = r.try_get("streamer_login").unwrap_or_default();
             let out: i64 = r.try_get("outgoing_votes").unwrap_or(0);
             let inc: i64 = r.try_get("incoming_votes").unwrap_or(0);
-            let dir = if inc > 0 && out > 0 { "bidirectional" }
-                else if inc > 0 { "incoming" }
-                else if out > 0 { "outgoing" }
-                else { "unknown" };
+            let dir = if inc > 0 && out > 0 {
+                "bidirectional"
+            } else if inc > 0 {
+                "incoming"
+            } else if out > 0 {
+                "outgoing"
+            } else {
+                "unknown"
+            };
             direction_map.insert(s, dir);
         }
     }
 
-    let top_shared: Vec<serde_json::Value> = shared_rows.iter().map(|r| {
-        let s: String = r.try_get("streamer_login").unwrap_or_default();
-        let dir = direction_map.get(&s).copied().unwrap_or("unknown");
-        json!({
-            "streamer": s,
-            "sharedCount": r.try_get::<i64, _>("shared_count").unwrap_or(0),
-            "direction": dir,
+    let top_shared: Vec<serde_json::Value> = shared_rows
+        .iter()
+        .map(|r| {
+            let s: String = r.try_get("streamer_login").unwrap_or_default();
+            let dir = direction_map.get(&s).copied().unwrap_or("unknown");
+            json!({
+                "streamer": s,
+                "sharedCount": r.try_get::<i64, _>("shared_count").unwrap_or(0),
+                "direction": dir,
+            })
         })
-    }).collect();
+        .collect();
 
     Json(json!({
         "days": days,
@@ -1171,7 +1518,8 @@ pub async fn viewer_segments_handler(
             "avgOtherChannels": avg_other,
             "topSharedChannels": top_shared,
         },
-    })).into_response()
+    }))
+    .into_response()
 }
 
 #[cfg(test)]
@@ -1183,10 +1531,14 @@ mod tests {
     #[test]
     fn exclusion_list_enthaelt_streamer_und_bots() {
         let logins = viewer_exclusion_logins("MyStreamer");
-        assert!(logins.contains(&"mystreamer".to_string()),
-            "Streamer-Self-Login muss in der Exklusionsliste stehen");
-        assert!(logins.contains(&"nightbot".to_string()),
-            "Known-Bots müssen erhalten bleiben");
+        assert!(
+            logins.contains(&"mystreamer".to_string()),
+            "Streamer-Self-Login muss in der Exklusionsliste stehen"
+        );
+        assert!(
+            logins.contains(&"nightbot".to_string()),
+            "Known-Bots müssen erhalten bleiben"
+        );
     }
 
     #[test]
@@ -1200,8 +1552,10 @@ mod tests {
     #[test]
     fn exclusion_list_leerer_streamer_nur_bots() {
         let logins = viewer_exclusion_logins("");
-        assert!(!logins.iter().any(|l| l.is_empty()),
-            "Leerer Streamer darf keinen Leer-Eintrag erzeugen");
+        assert!(
+            !logins.iter().any(|l| l.is_empty()),
+            "Leerer Streamer darf keinen Leer-Eintrag erzeugen"
+        );
         assert!(logins.contains(&"wizebot".to_string()));
     }
 
@@ -1227,10 +1581,23 @@ mod tests {
 
     /// Prod-treues Schema: chatter-/streamer-Logins TEXT, messages INTEGER.
     async fn make_pool(dsn: &str, schema: &str) -> PgPool {
-        let pool = PgPoolOptions::new().max_connections(1).connect(dsn).await.unwrap();
-        sqlx::query(&format!("DROP SCHEMA IF EXISTS {schema} CASCADE")).execute(&pool).await.unwrap();
-        sqlx::query(&format!("CREATE SCHEMA {schema}")).execute(&pool).await.unwrap();
-        sqlx::query(&format!("SET search_path TO {schema}")).execute(&pool).await.unwrap();
+        let pool = PgPoolOptions::new()
+            .max_connections(1)
+            .connect(dsn)
+            .await
+            .unwrap();
+        sqlx::query(&format!("DROP SCHEMA IF EXISTS {schema} CASCADE"))
+            .execute(&pool)
+            .await
+            .unwrap();
+        sqlx::query(&format!("CREATE SCHEMA {schema}"))
+            .execute(&pool)
+            .await
+            .unwrap();
+        sqlx::query(&format!("SET search_path TO {schema}"))
+            .execute(&pool)
+            .await
+            .unwrap();
         sqlx::query(
             r#"CREATE TABLE twitch_stream_sessions (
                    id BIGSERIAL PRIMARY KEY,
@@ -1238,7 +1605,10 @@ mod tests {
                    started_at TIMESTAMPTZ,
                    ended_at TIMESTAMPTZ
                )"#,
-        ).execute(&pool).await.unwrap();
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
         sqlx::query(
             r#"CREATE TABLE twitch_session_chatters (
                    session_id BIGINT NOT NULL,
@@ -1246,7 +1616,10 @@ mod tests {
                    streamer_login TEXT NOT NULL,
                    messages INTEGER DEFAULT 0
                )"#,
-        ).execute(&pool).await.unwrap();
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
         pool
     }
 
@@ -1258,7 +1631,10 @@ mod tests {
         sqlx::query(
             "INSERT INTO twitch_stream_sessions (id, streamer_login, started_at, ended_at) \
              VALUES (1, 'host', NOW() - INTERVAL '1 day', NOW())",
-        ).execute(&pool).await.unwrap();
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
         // echter Viewer + Bot (nightbot) + der Streamer selbst im eigenen Chat
         sqlx::query(
             "INSERT INTO twitch_session_chatters (session_id, chatter_login, streamer_login, messages) \
@@ -1268,12 +1644,20 @@ mod tests {
         ).execute(&pool).await.unwrap();
 
         let since = Utc::now() - chrono::Duration::days(30);
-        let rows = fetch_window_viewer_rows(&pool, "host", since).await.unwrap();
+        let rows = fetch_window_viewer_rows(&pool, "host", since)
+            .await
+            .unwrap();
 
         let logins: Vec<&str> = rows.iter().map(|r| r.login.as_str()).collect();
         assert!(logins.contains(&"realviewer"), "Echter Viewer muss bleiben");
-        assert!(!logins.contains(&"nightbot"), "Bot-Login darf nicht auftauchen");
-        assert!(!logins.contains(&"host"), "Streamer-Self-Login darf nicht auftauchen");
+        assert!(
+            !logins.contains(&"nightbot"),
+            "Bot-Login darf nicht auftauchen"
+        );
+        assert!(
+            !logins.contains(&"host"),
+            "Streamer-Self-Login darf nicht auftauchen"
+        );
     }
 
     // ── Plan-Gate-Verdrahtung (env-gated) ───────────────────────────────────
@@ -1285,10 +1669,23 @@ mod tests {
     /// (= nicht extended) aus, also 403. twitch_user_id leer lassen, damit der
     /// Trial-Grant-Pfad (braucht user_id+login) nicht anspringt.
     async fn make_plan_pool(dsn: &str, schema: &str) -> PgPool {
-        let pool = PgPoolOptions::new().max_connections(1).connect(dsn).await.unwrap();
-        sqlx::query(&format!("DROP SCHEMA IF EXISTS {schema} CASCADE")).execute(&pool).await.unwrap();
-        sqlx::query(&format!("CREATE SCHEMA {schema}")).execute(&pool).await.unwrap();
-        sqlx::query(&format!("SET search_path TO {schema}")).execute(&pool).await.unwrap();
+        let pool = PgPoolOptions::new()
+            .max_connections(1)
+            .connect(dsn)
+            .await
+            .unwrap();
+        sqlx::query(&format!("DROP SCHEMA IF EXISTS {schema} CASCADE"))
+            .execute(&pool)
+            .await
+            .unwrap();
+        sqlx::query(&format!("CREATE SCHEMA {schema}"))
+            .execute(&pool)
+            .await
+            .unwrap();
+        sqlx::query(&format!("SET search_path TO {schema}"))
+            .execute(&pool)
+            .await
+            .unwrap();
         sqlx::query(
             r#"CREATE TABLE streamer_plans (
                    twitch_user_id TEXT,
@@ -1297,7 +1694,10 @@ mod tests {
                    manual_plan_expires_at TEXT,
                    manual_plan_updated_at TIMESTAMPTZ
                )"#,
-        ).execute(&pool).await.unwrap();
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
         sqlx::query(
             r#"CREATE TABLE twitch_billing_subscriptions (
                    customer_reference TEXT,
@@ -1306,7 +1706,10 @@ mod tests {
                    current_period_end TEXT,
                    updated_at TIMESTAMPTZ
                )"#,
-        ).execute(&pool).await.unwrap();
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
         pool
     }
 
@@ -1316,6 +1719,41 @@ mod tests {
             twitch_user_id: String::new(),
             display_name: String::new(),
         }
+    }
+
+    /// IDOR-Guard: ein Partner, der per ?streamer= einen FREMDEN Login abfragt,
+    /// bekommt nie fremde Daten → 403 (Plan-Gate ODER Scope-Guard greift, beide
+    /// forbidden). Hier am viewer-directory exemplarisch; der Guard sitzt in
+    /// allen drei Handlern identisch hinter `resolve_streamer_scope`.
+    #[tokio::test]
+    async fn viewer_directory_partner_fremder_streamer_403() {
+        let dsn = db_dsn_or_skip!();
+        let pool = make_plan_pool(&dsn, "viewers_idor_dir").await;
+        let resp = viewer_directory_handler(
+            DashboardAuthLevel::Partner {
+                twitch_login: "earlysalty".into(),
+                twitch_user_id: "42".into(),
+                display_name: "earlysalty".into(),
+            },
+            State(pool),
+            Query(DirectoryQuery {
+                streamer: Some("ismile_e".into()),
+                sort: None,
+                order: None,
+                filter: None,
+                search: None,
+                page: None,
+                per_page: None,
+                days: None,
+            }),
+        )
+        .await
+        .into_response();
+        assert_eq!(
+            resp.status(),
+            StatusCode::FORBIDDEN,
+            "Partner mit fremdem ?streamer= muss 403 erhalten"
+        );
     }
 
     #[tokio::test]
@@ -1338,7 +1776,11 @@ mod tests {
         )
         .await
         .into_response();
-        assert_eq!(resp.status(), StatusCode::FORBIDDEN, "Free-Partner muss 403 erhalten");
+        assert_eq!(
+            resp.status(),
+            StatusCode::FORBIDDEN,
+            "Free-Partner muss 403 erhalten"
+        );
     }
 
     #[tokio::test]
@@ -1356,7 +1798,11 @@ mod tests {
         )
         .await
         .into_response();
-        assert_eq!(resp.status(), StatusCode::FORBIDDEN, "Free-Partner muss 403 erhalten");
+        assert_eq!(
+            resp.status(),
+            StatusCode::FORBIDDEN,
+            "Free-Partner muss 403 erhalten"
+        );
     }
 
     #[tokio::test]
@@ -1366,11 +1812,18 @@ mod tests {
         let resp = viewer_segments_handler(
             free_partner(),
             State(pool),
-            Query(SegmentsQuery { streamer: Some("host".into()), days: None }),
+            Query(SegmentsQuery {
+                streamer: Some("host".into()),
+                days: None,
+            }),
         )
         .await
         .into_response();
-        assert_eq!(resp.status(), StatusCode::FORBIDDEN, "Free-Partner muss 403 erhalten");
+        assert_eq!(
+            resp.status(),
+            StatusCode::FORBIDDEN,
+            "Free-Partner muss 403 erhalten"
+        );
     }
 
     /// P1.36: Cross-Channel-Exklusivität schließt den Home-Kanal aus. Ein Viewer,
@@ -1414,12 +1867,17 @@ mod tests {
         let resp = viewer_segments_handler(
             DashboardAuthLevel::admin(),
             State(pool),
-            Query(SegmentsQuery { streamer: Some("host".into()), days: None }),
+            Query(SegmentsQuery {
+                streamer: Some("host".into()),
+                days: None,
+            }),
         )
         .await
         .into_response();
         assert_eq!(resp.status(), StatusCode::OK);
-        let bytes = axum::body::to_bytes(resp.into_body(), usize::MAX).await.unwrap();
+        let bytes = axum::body::to_bytes(resp.into_body(), usize::MAX)
+            .await
+            .unwrap();
         let body: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
         let cc = &body["crossChannelStats"];
         assert_eq!(

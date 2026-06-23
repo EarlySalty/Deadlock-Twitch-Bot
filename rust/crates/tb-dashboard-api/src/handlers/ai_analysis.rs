@@ -59,10 +59,19 @@ pub async fn ai_analysis_handler(
     }
     AI_STATE.lock().unwrap().cleanup(Utc::now());
 
-    let streamer = params.streamer.as_deref().unwrap_or("").trim().to_lowercase();
-    if streamer.is_empty() {
-        return json_err(StatusCode::BAD_REQUEST, json!({ "error": "streamer parameter required" }));
-    }
+    // IDOR-Guard: Partner werden auf den eigenen Login geklemmt (Cross-Account →
+    // 403); Admin/Localhost dürfen `streamer` frei wählen.
+    let streamer =
+        match crate::auth::resolve_streamer_scope(&auth, params.streamer.as_deref(), true) {
+            Ok(Some(s)) => s,
+            Ok(None) => {
+                return json_err(
+                    StatusCode::BAD_REQUEST,
+                    json!({ "error": "streamer parameter required" }),
+                )
+            }
+            Err(resp) => return resp,
+        };
     if AI_STATE.lock().unwrap().in_progress_contains(&streamer) {
         return json_err(
             StatusCode::CONFLICT,
@@ -77,9 +86,19 @@ pub async fn ai_analysis_handler(
         .map(|d| d.clamp(7, 365))
         .unwrap_or(30);
     // game_filter: deadlock|all, sonst all.
-    let gf = params.game_filter.as_deref().unwrap_or("all").trim().to_lowercase();
+    let gf = params
+        .game_filter
+        .as_deref()
+        .unwrap_or("all")
+        .trim()
+        .to_lowercase();
     let game_filter = if gf == "deadlock" { "deadlock" } else { "all" };
-    let user_context = params.user_context.as_deref().unwrap_or("").trim().to_string();
+    let user_context = params
+        .user_context
+        .as_deref()
+        .unwrap_or("")
+        .trim()
+        .to_string();
     if user_context.chars().count() > MAX_USER_CONTEXT_CHARS {
         return json_err(
             StatusCode::BAD_REQUEST,
@@ -133,7 +152,10 @@ async fn call_ai_analysis(ai_model: &str, prompt: &str) -> Result<Vec<Value>, St
         Ok(parse_ai_analysis_points(&extract_text_response(&content)))
     } else {
         let client = EngagementMinimaxClient::new(None, None, None, Some(Duration::from_secs(240)));
-        let raw = client.raw_completion("", prompt, 60000, 0.5).await.map_err(|e| e.to_string())?;
+        let raw = client
+            .raw_completion("", prompt, 60000, 0.5)
+            .await
+            .map_err(|e| e.to_string())?;
         Ok(parse_ai_analysis_points(&raw))
     }
 }
@@ -242,12 +264,30 @@ mod tests {
 
     async fn make_pool(schema: &str) -> Option<PgPool> {
         let dsn = std::env::var("TB_TEST_DATABASE_URL").ok()?;
-        let admin = PgPoolOptions::new().max_connections(1).connect(&dsn).await.unwrap();
-        sqlx::query(&format!("DROP SCHEMA IF EXISTS {schema} CASCADE")).execute(&admin).await.unwrap();
-        sqlx::query(&format!("CREATE SCHEMA {schema}")).execute(&admin).await.unwrap();
+        let admin = PgPoolOptions::new()
+            .max_connections(1)
+            .connect(&dsn)
+            .await
+            .unwrap();
+        sqlx::query(&format!("DROP SCHEMA IF EXISTS {schema} CASCADE"))
+            .execute(&admin)
+            .await
+            .unwrap();
+        sqlx::query(&format!("CREATE SCHEMA {schema}"))
+            .execute(&admin)
+            .await
+            .unwrap();
         admin.close().await;
-        let opts = PgConnectOptions::from_str(&dsn).unwrap().options([("search_path", schema)]);
-        Some(PgPoolOptions::new().max_connections(2).connect_with(opts).await.unwrap())
+        let opts = PgConnectOptions::from_str(&dsn)
+            .unwrap()
+            .options([("search_path", schema)]);
+        Some(
+            PgPoolOptions::new()
+                .max_connections(2)
+                .connect_with(opts)
+                .await
+                .unwrap(),
+        )
     }
 
     fn query(streamer: Option<&str>, user_context: Option<&str>) -> AnalysisQuery {
@@ -261,25 +301,39 @@ mod tests {
 
     #[tokio::test]
     async fn none_auth_401() {
-        let Some(pool) = make_pool("t_ai_an_401").await else { return };
-        let resp = ai_analysis_handler(DashboardAuthLevel::None, State(pool), Query(query(Some("nani"), None)))
-            .await
-            .into_response();
+        let Some(pool) = make_pool("t_ai_an_401").await else {
+            return;
+        };
+        let resp = ai_analysis_handler(
+            DashboardAuthLevel::None,
+            State(pool),
+            Query(query(Some("nani"), None)),
+        )
+        .await
+        .into_response();
         assert_eq!(resp.status(), StatusCode::UNAUTHORIZED);
     }
 
     #[tokio::test]
     async fn streamer_required_400() {
-        let Some(pool) = make_pool("t_ai_an_str").await else { return };
-        let resp = ai_analysis_handler(DashboardAuthLevel::admin(), State(pool), Query(query(None, None)))
-            .await
-            .into_response();
+        let Some(pool) = make_pool("t_ai_an_str").await else {
+            return;
+        };
+        let resp = ai_analysis_handler(
+            DashboardAuthLevel::admin(),
+            State(pool),
+            Query(query(None, None)),
+        )
+        .await
+        .into_response();
         assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
     }
 
     #[tokio::test]
     async fn in_progress_409() {
-        let Some(pool) = make_pool("t_ai_an_409").await else { return };
+        let Some(pool) = make_pool("t_ai_an_409").await else {
+            return;
+        };
         // Eindeutiger Streamer-Name (globaler State) → vorbelegen.
         AI_STATE.lock().unwrap().in_progress_add("t6inprogstreamer");
         let resp = ai_analysis_handler(
@@ -289,13 +343,42 @@ mod tests {
         )
         .await
         .into_response();
-        AI_STATE.lock().unwrap().in_progress_remove("t6inprogstreamer");
+        AI_STATE
+            .lock()
+            .unwrap()
+            .in_progress_remove("t6inprogstreamer");
         assert_eq!(resp.status(), StatusCode::CONFLICT);
+    }
+
+    fn partner(login: &str) -> DashboardAuthLevel {
+        DashboardAuthLevel::Partner {
+            twitch_login: login.to_string(),
+            twitch_user_id: "42".to_string(),
+            display_name: login.to_string(),
+        }
+    }
+
+    // IDOR-Guard: Partner mit fremdem ?streamer= → 403 (vor jedem DB-/LLM-Zugriff).
+    #[tokio::test]
+    async fn partner_fremder_streamer_403() {
+        let Some(pool) = make_pool("t_ai_an_idor").await else {
+            return;
+        };
+        let resp = ai_analysis_handler(
+            partner("earlysalty"),
+            State(pool),
+            Query(query(Some("ismile_e"), None)),
+        )
+        .await
+        .into_response();
+        assert_eq!(resp.status(), StatusCode::FORBIDDEN);
     }
 
     #[tokio::test]
     async fn user_context_too_long_400() {
-        let Some(pool) = make_pool("t_ai_an_uc").await else { return };
+        let Some(pool) = make_pool("t_ai_an_uc").await else {
+            return;
+        };
         let long = "x".repeat(2001);
         let resp = ai_analysis_handler(
             DashboardAuthLevel::admin(),

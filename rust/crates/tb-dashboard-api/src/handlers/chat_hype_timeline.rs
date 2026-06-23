@@ -34,13 +34,26 @@ pub async fn chat_hype_timeline_handler(
     if let Some(resp) = crate::auth::extended_gate(&pool, &auth).await {
         return resp;
     }
-    let streamer = match params.streamer.as_deref().map(str::trim).filter(|s| !s.is_empty()) {
-        Some(s) => s.to_lowercase(),
-        None => {
-            return (StatusCode::BAD_REQUEST, Json(json!({ "error": "Streamer required" }))).into_response();
-        }
-    };
-    let session_id_raw = params.session_id.as_deref().unwrap_or("").trim().to_string();
+    // IDOR-Guard: Partner auf eigenen Login geklemmt (Cross-Account → 403),
+    // Admin/Localhost frei. `required=true`: fehlender Streamer → 400.
+    let streamer =
+        match crate::auth::resolve_streamer_scope(&auth, params.streamer.as_deref(), true) {
+            Ok(Some(s)) => s,
+            Ok(None) => {
+                return (
+                    StatusCode::BAD_REQUEST,
+                    Json(json!({ "error": "Streamer required" })),
+                )
+                    .into_response();
+            }
+            Err(resp) => return resp,
+        };
+    let session_id_raw = params
+        .session_id
+        .as_deref()
+        .unwrap_or("")
+        .trim()
+        .to_string();
 
     match load_chat_hype_timeline(&pool, &streamer, &session_id_raw).await {
         Ok(HypeTimeline::Ok(v)) => Json(v).into_response(),
@@ -48,7 +61,11 @@ pub async fn chat_hype_timeline_handler(
         Ok(HypeTimeline::NotFound(v)) => (StatusCode::NOT_FOUND, Json(v)).into_response(),
         Err(e) => {
             tracing::error!("chat-hype-timeline Fehler: {e}");
-            (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({ "error": "internal" }))).into_response()
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(json!({ "error": "internal" })),
+            )
+                .into_response()
         }
     }
 }
@@ -61,12 +78,28 @@ mod tests {
 
     async fn make_pool(schema: &str) -> Option<PgPool> {
         let dsn = std::env::var("TB_TEST_DATABASE_URL").ok()?;
-        let admin = PgPoolOptions::new().max_connections(1).connect(&dsn).await.unwrap();
-        sqlx::query(&format!("DROP SCHEMA IF EXISTS {schema} CASCADE")).execute(&admin).await.unwrap();
-        sqlx::query(&format!("CREATE SCHEMA {schema}")).execute(&admin).await.unwrap();
+        let admin = PgPoolOptions::new()
+            .max_connections(1)
+            .connect(&dsn)
+            .await
+            .unwrap();
+        sqlx::query(&format!("DROP SCHEMA IF EXISTS {schema} CASCADE"))
+            .execute(&admin)
+            .await
+            .unwrap();
+        sqlx::query(&format!("CREATE SCHEMA {schema}"))
+            .execute(&admin)
+            .await
+            .unwrap();
         admin.close().await;
-        let opts = PgConnectOptions::from_str(&dsn).unwrap().options([("search_path", schema)]);
-        let pool = PgPoolOptions::new().max_connections(2).connect_with(opts).await.unwrap();
+        let opts = PgConnectOptions::from_str(&dsn)
+            .unwrap()
+            .options([("search_path", schema)]);
+        let pool = PgPoolOptions::new()
+            .max_connections(2)
+            .connect_with(opts)
+            .await
+            .unwrap();
         sqlx::query("CREATE TABLE twitch_stream_sessions (id BIGSERIAL PRIMARY KEY, streamer_login TEXT, started_at TIMESTAMPTZ, duration_seconds INTEGER, stream_title TEXT)").execute(&pool).await.unwrap();
         sqlx::query("CREATE TABLE twitch_chat_messages (id BIGSERIAL PRIMARY KEY, session_id BIGINT, streamer_login TEXT, chatter_login TEXT, content TEXT, message_ts TIMESTAMPTZ)").execute(&pool).await.unwrap();
         sqlx::query("CREATE TABLE twitch_session_viewers (session_id BIGINT, minutes_from_start INTEGER, viewer_count INTEGER)").execute(&pool).await.unwrap();
@@ -77,24 +110,65 @@ mod tests {
 
     #[tokio::test]
     async fn streamer_pflicht_400() {
-        let Some(pool) = make_pool("t_hype_h1").await else { return };
+        let Some(pool) = make_pool("t_hype_h1").await else {
+            return;
+        };
         let resp = chat_hype_timeline_handler(
             DashboardAuthLevel::admin(),
             State(pool),
-            Query(HypeTimelineQuery { streamer: None, session_id: None }),
+            Query(HypeTimelineQuery {
+                streamer: None,
+                session_id: None,
+            }),
         )
         .await
         .into_response();
         assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
     }
 
+    fn partner(login: &str) -> DashboardAuthLevel {
+        DashboardAuthLevel::Partner {
+            twitch_login: login.to_string(),
+            twitch_user_id: "42".to_string(),
+            display_name: login.to_string(),
+        }
+    }
+
+    /// IDOR-Guard: Partner mit fremdem ?streamer= → 403 (Plan-Gate ODER Scope).
+    #[tokio::test]
+    async fn partner_fremder_streamer_403() {
+        let Some(pool) = make_pool("t_hype_h3").await else {
+            return;
+        };
+        sqlx::query("CREATE TABLE IF NOT EXISTS streamer_plans (twitch_login TEXT, plan_id TEXT)")
+            .execute(&pool)
+            .await
+            .ok();
+        let resp = chat_hype_timeline_handler(
+            partner("earlysalty"),
+            State(pool),
+            Query(HypeTimelineQuery {
+                streamer: Some("ismile_e".into()),
+                session_id: None,
+            }),
+        )
+        .await
+        .into_response();
+        assert_eq!(resp.status(), StatusCode::FORBIDDEN);
+    }
+
     #[tokio::test]
     async fn keine_session_404() {
-        let Some(pool) = make_pool("t_hype_h2").await else { return };
+        let Some(pool) = make_pool("t_hype_h2").await else {
+            return;
+        };
         let resp = chat_hype_timeline_handler(
             DashboardAuthLevel::admin(),
             State(pool),
-            Query(HypeTimelineQuery { streamer: Some("nani".into()), session_id: None }),
+            Query(HypeTimelineQuery {
+                streamer: Some("nani".into()),
+                session_id: None,
+            }),
         )
         .await
         .into_response();

@@ -65,10 +65,18 @@ pub async fn follower_funnel_handler(
         return resp;
     }
 
-    let streamer = match params.streamer.as_deref().map(str::trim).filter(|s| !s.is_empty()) {
-        Some(s) => s.to_lowercase(),
-        None => return (StatusCode::BAD_REQUEST, Json(json!({"error":"Streamer required"}))).into_response(),
-    };
+    let streamer =
+        match crate::auth::resolve_streamer_scope(&auth, params.streamer.as_deref(), true) {
+            Ok(Some(s)) => s,
+            Ok(None) => {
+                return (
+                    StatusCode::BAD_REQUEST,
+                    Json(json!({"error":"Streamer required"})),
+                )
+                    .into_response()
+            }
+            Err(resp) => return resp,
+        };
     let days = clamp(params.days.unwrap_or(30), 7, 365);
     let since: DateTime<Utc> = Utc::now() - Duration::days(days as i64);
 
@@ -100,7 +108,11 @@ pub async fn follower_funnel_handler(
     let stats = match stats {
         Err(e) => {
             tracing::error!("follower-funnel stats-Fehler: {e}");
-            return (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({"error":"internal_error"}))).into_response();
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(json!({"error":"internal_error"})),
+            )
+                .into_response();
         }
         Ok(r) => r,
     };
@@ -114,7 +126,8 @@ pub async fn follower_funnel_handler(
             "avgTimeToFollow": 0,
             "followersBySource": {"organic":0,"raids":0,"hosts":0,"other":0},
             "dataQuality": {"confidence":"low","reason":"no_sessions"},
-        })).into_response();
+        }))
+        .into_response();
     }
 
     let total_duration: f64 = stats.try_get::<f64, _>("total_duration").unwrap_or(0.0);
@@ -125,7 +138,9 @@ pub async fn follower_funnel_handler(
     // ── 2. Chatter-Stats (bot-bereinigt) ─────────────────────────────────────
     // $1=since, $2=streamer_login, $3..$N+2 = Bot-Logins
     let bot_clause = {
-        let ph: Vec<String> = (3..=(KNOWN_CHAT_BOTS.len() + 2)).map(|i| format!("${i}")).collect();
+        let ph: Vec<String> = (3..=(KNOWN_CHAT_BOTS.len() + 2))
+            .map(|i| format!("${i}"))
+            .collect();
         format!("sc.chatter_login NOT IN ({})", ph.join(", "))
     };
     let chatter_sql = format!(
@@ -150,9 +165,18 @@ pub async fn follower_funnel_handler(
     }
     let chatter_stats = cq.fetch_optional(&pool).await.unwrap_or(None);
 
-    let unique_chatters: i64 = chatter_stats.as_ref().and_then(|r| r.try_get("unique_chatters").ok()).unwrap_or(0);
-    let returning_chatters: i64 = chatter_stats.as_ref().and_then(|r| r.try_get("returning_chatters").ok()).unwrap_or(0);
-    let total_viewers_tracked: i64 = chatter_stats.as_ref().and_then(|r| r.try_get("tracked_viewers").ok()).unwrap_or(0);
+    let unique_chatters: i64 = chatter_stats
+        .as_ref()
+        .and_then(|r| r.try_get("unique_chatters").ok())
+        .unwrap_or(0);
+    let returning_chatters: i64 = chatter_stats
+        .as_ref()
+        .and_then(|r| r.try_get("returning_chatters").ok())
+        .unwrap_or(0);
+    let total_viewers_tracked: i64 = chatter_stats
+        .as_ref()
+        .and_then(|r| r.try_get("tracked_viewers").ok())
+        .unwrap_or(0);
 
     // ── 3. Follow-Events während Streams ─────────────────────────────────────
     let follow_row = sqlx::query(
@@ -170,7 +194,8 @@ pub async fn follower_funnel_handler(
     .fetch_optional(&pool)
     .await
     .unwrap_or(None);
-    let follows_during_stream: i64 = follow_row.as_ref()
+    let follows_during_stream: i64 = follow_row
+        .as_ref()
         .and_then(|r| r.try_get("follows_during_stream").ok())
         .unwrap_or(0);
 
@@ -187,12 +212,26 @@ pub async fn follower_funnel_handler(
     .fetch_optional(&pool)
     .await
     .unwrap_or(None);
-    let raid_count: i64 = raid_row.as_ref().and_then(|r| r.try_get("raid_count").ok()).unwrap_or(0);
-    let raid_viewers: i64 = raid_row.as_ref().and_then(|r| r.try_get("raid_viewers").ok()).unwrap_or(0);
+    let raid_count: i64 = raid_row
+        .as_ref()
+        .and_then(|r| r.try_get("raid_count").ok())
+        .unwrap_or(0);
+    let raid_viewers: i64 = raid_row
+        .as_ref()
+        .and_then(|r| r.try_get("raid_viewers").ok())
+        .unwrap_or(0);
 
     // ── Arithmetik (identisch Python Z. 690–730) ──────────────────────────────
-    let unique_viewers = if total_viewers_tracked > 0 { total_viewers_tracked } else { unique_chatters };
-    let unique_viewers_method = if unique_viewers > 0 { "distinct_session_chatters" } else { "no_viewer_data" };
+    let unique_viewers = if total_viewers_tracked > 0 {
+        total_viewers_tracked
+    } else {
+        unique_chatters
+    };
+    let unique_viewers_method = if unique_viewers > 0 {
+        "distinct_session_chatters"
+    } else {
+        "no_viewer_data"
+    };
 
     let (conversion_source, gained_for_conv) = if follows_during_stream > 0 {
         ("follow_events", follows_during_stream)
@@ -206,7 +245,11 @@ pub async fn follower_funnel_handler(
         0.0
     };
 
-    let avg_session_mins = if total_duration > 0.0 { total_duration / session_count.max(1) as f64 / 60.0 } else { 0.0 };
+    let avg_session_mins = if total_duration > 0.0 {
+        total_duration / session_count.max(1) as f64 / 60.0
+    } else {
+        0.0
+    };
     let avg_time_to_follow = (avg_session_mins * 0.4).clamp(5.0, 45.0);
 
     let raid_followers = (raid_viewers as f64 * 0.05) as i64;
@@ -246,7 +289,8 @@ pub async fn follower_funnel_handler(
             "uniqueViewersMethod": unique_viewers_method,
             "botFilterApplied": true,
         },
-    })).into_response()
+    }))
+    .into_response()
 }
 
 #[cfg(test)]
@@ -280,5 +324,81 @@ mod tests {
         assert_eq!(confidence_threshold(6), 3);
         assert_eq!(confidence_threshold(10), 6);
         assert_eq!(confidence_threshold(100), 60);
+    }
+}
+
+#[cfg(test)]
+mod idor_tests {
+    use super::*;
+    use sqlx::postgres::{PgConnectOptions, PgPoolOptions};
+    use std::str::FromStr;
+
+    async fn make_pool(schema: &str) -> Option<PgPool> {
+        let dsn = std::env::var("TB_TEST_DATABASE_URL").ok()?;
+        let admin = PgPoolOptions::new()
+            .max_connections(1)
+            .connect(&dsn)
+            .await
+            .unwrap();
+        sqlx::query(&format!("DROP SCHEMA IF EXISTS {schema} CASCADE"))
+            .execute(&admin)
+            .await
+            .unwrap();
+        sqlx::query(&format!("CREATE SCHEMA {schema}"))
+            .execute(&admin)
+            .await
+            .unwrap();
+        admin.close().await;
+        let opts = PgConnectOptions::from_str(&dsn)
+            .unwrap()
+            .options([("search_path", schema)]);
+        Some(
+            PgPoolOptions::new()
+                .max_connections(2)
+                .connect_with(opts)
+                .await
+                .unwrap(),
+        )
+    }
+
+    /// Richtet ein berechtigtes Partner-Plan-Snapshot ein (Manual-Override mit
+    /// Analytics-Plan), damit `extended_gate` für den Partner passiert.
+    async fn grant_partner_analytics(pool: &PgPool, login: &str) {
+        sqlx::query(
+            "CREATE TABLE streamer_plans (twitch_user_id TEXT, twitch_login TEXT, manual_plan_id TEXT, manual_plan_expires_at TEXT, manual_plan_notes TEXT, manual_plan_updated_at TEXT)",
+        ).execute(pool).await.unwrap();
+        sqlx::query("CREATE TABLE twitch_billing_subscriptions (customer_reference TEXT, plan_id TEXT, status TEXT, current_period_end TEXT, updated_at TEXT)")
+            .execute(pool).await.unwrap();
+        sqlx::query("INSERT INTO streamer_plans (twitch_login, manual_plan_id) VALUES ($1, 'analysis_dashboard')")
+            .bind(login).execute(pool).await.unwrap();
+    }
+
+    fn partner(login: &str) -> DashboardAuthLevel {
+        DashboardAuthLevel::Partner {
+            twitch_login: login.to_string(),
+            twitch_user_id: String::new(),
+            display_name: login.to_string(),
+        }
+    }
+
+    /// IDOR: ein berechtigter Partner darf NICHT den Follower-Funnel eines fremden
+    /// Streamers lesen (`?streamer=<fremd>` → 403).
+    #[tokio::test]
+    async fn partner_fremder_streamer_ist_forbidden() {
+        let Some(pool) = make_pool("t_funnel_idor").await else {
+            return;
+        };
+        grant_partner_analytics(&pool, "earlysalty").await;
+        let resp = follower_funnel_handler(
+            partner("earlysalty"),
+            State(pool),
+            Query(FunnelQuery {
+                streamer: Some("ismile_e".into()),
+                days: Some(30),
+            }),
+        )
+        .await
+        .into_response();
+        assert_eq!(resp.status(), StatusCode::FORBIDDEN);
     }
 }

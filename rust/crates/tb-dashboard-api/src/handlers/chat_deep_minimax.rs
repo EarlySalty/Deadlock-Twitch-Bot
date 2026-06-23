@@ -18,7 +18,9 @@ use serde_json::json;
 use sqlx::PgPool;
 
 use crate::auth::level::DashboardAuthLevel;
-use tb_analytics::chat_deep_minimax::{build_deep_prompt, extract_json_object, fetch_session_messages};
+use tb_analytics::chat_deep_minimax::{
+    build_deep_prompt, extract_json_object, fetch_session_messages,
+};
 use tb_engagement::minimax_chat::EngagementMinimaxClient;
 
 /// Python setzt kein `max_tokens` (MiniMax-Server-Default). Der Engagement-
@@ -52,16 +54,40 @@ pub async fn chat_deep_minimax_handler(
         return resp;
     }
     if !tb_social_media::settings::external_llm_consent(&pool).await {
-        return (StatusCode::FORBIDDEN, Json(json!({ "error": "External LLM consent not given" }))).into_response();
+        return (
+            StatusCode::FORBIDDEN,
+            Json(json!({ "error": "External LLM consent not given" })),
+        )
+            .into_response();
     }
-    // streamer ist Pflicht, wird aber (wie in Python) für die Query nicht genutzt.
-    if params.streamer.as_deref().map(str::trim).filter(|s| !s.is_empty()).is_none() {
-        return (StatusCode::BAD_REQUEST, Json(json!({ "error": "Streamer required" }))).into_response();
-    }
-    let session_id = match params.session_id.as_deref().map(str::trim).filter(|s| !s.is_empty()) {
+    // IDOR-Guard: streamer ist Pflicht und wird (wie in Python) für die Query
+    // nicht direkt genutzt, aber Partner dürfen nur ihren eigenen Login angeben
+    // (Cross-Account → 403); Admin/Localhost frei. `required=true`.
+    let _streamer =
+        match crate::auth::resolve_streamer_scope(&auth, params.streamer.as_deref(), true) {
+            Ok(Some(s)) => s,
+            Ok(None) => {
+                return (
+                    StatusCode::BAD_REQUEST,
+                    Json(json!({ "error": "Streamer required" })),
+                )
+                    .into_response();
+            }
+            Err(resp) => return resp,
+        };
+    let session_id = match params
+        .session_id
+        .as_deref()
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+    {
         Some(s) => s.to_string(),
         None => {
-            return (StatusCode::BAD_REQUEST, Json(json!({ "error": "Session ID required" }))).into_response();
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(json!({ "error": "Session ID required" })),
+            )
+                .into_response();
         }
     };
 
@@ -73,13 +99,20 @@ pub async fn chat_deep_minimax_handler(
         }
     };
     if messages.is_empty() {
-        return (StatusCode::NOT_FOUND, Json(json!({ "error": "No messages found for this session" }))).into_response();
+        return (
+            StatusCode::NOT_FOUND,
+            Json(json!({ "error": "No messages found for this session" })),
+        )
+            .into_response();
     }
 
     let prompt = build_deep_prompt(&messages);
     // Wie Python: einzelne User-Message, temperature 0.1, 240s-Timeout.
     let client = EngagementMinimaxClient::new(None, None, None, Some(Duration::from_secs(240)));
-    match client.raw_completion("", &prompt, MAX_DEEP_TOKENS, 0.1).await {
+    match client
+        .raw_completion("", &prompt, MAX_DEEP_TOKENS, 0.1)
+        .await
+    {
         Ok(content) => {
             let json_str = extract_json_object(&content);
             match serde_json::from_str::<serde_json::Value>(json_str) {
@@ -99,12 +132,28 @@ mod tests {
 
     async fn make_pool(schema: &str) -> Option<PgPool> {
         let dsn = std::env::var("TB_TEST_DATABASE_URL").ok()?;
-        let admin = PgPoolOptions::new().max_connections(1).connect(&dsn).await.unwrap();
-        sqlx::query(&format!("DROP SCHEMA IF EXISTS {schema} CASCADE")).execute(&admin).await.unwrap();
-        sqlx::query(&format!("CREATE SCHEMA {schema}")).execute(&admin).await.unwrap();
+        let admin = PgPoolOptions::new()
+            .max_connections(1)
+            .connect(&dsn)
+            .await
+            .unwrap();
+        sqlx::query(&format!("DROP SCHEMA IF EXISTS {schema} CASCADE"))
+            .execute(&admin)
+            .await
+            .unwrap();
+        sqlx::query(&format!("CREATE SCHEMA {schema}"))
+            .execute(&admin)
+            .await
+            .unwrap();
         admin.close().await;
-        let opts = PgConnectOptions::from_str(&dsn).unwrap().options([("search_path", schema)]);
-        let pool = PgPoolOptions::new().max_connections(2).connect_with(opts).await.unwrap();
+        let opts = PgConnectOptions::from_str(&dsn)
+            .unwrap()
+            .options([("search_path", schema)]);
+        let pool = PgPoolOptions::new()
+            .max_connections(2)
+            .connect_with(opts)
+            .await
+            .unwrap();
         sqlx::query("CREATE TABLE social_media_settings (key TEXT PRIMARY KEY, value JSONB, updated_at TIMESTAMPTZ, updated_by TEXT)")
             .execute(&pool).await.unwrap();
         sqlx::query("CREATE TABLE twitch_chat_messages (id BIGSERIAL PRIMARY KEY, session_id BIGINT, chatter_login TEXT, content TEXT, message_ts TIMESTAMPTZ)")
@@ -113,17 +162,57 @@ mod tests {
     }
 
     async fn set_consent(pool: &PgPool, on: bool) {
-        tb_social_media::settings::set_setting(pool, "external_llm_consent", &json!(on), None).await.unwrap();
+        tb_social_media::settings::set_setting(pool, "external_llm_consent", &json!(on), None)
+            .await
+            .unwrap();
     }
 
     #[tokio::test]
     async fn ohne_consent_403() {
-        let Some(pool) = make_pool("t_deep_h_403").await else { return };
+        let Some(pool) = make_pool("t_deep_h_403").await else {
+            return;
+        };
         // Consent nicht gesetzt → false.
         let resp = chat_deep_minimax_handler(
             DashboardAuthLevel::admin(),
             State(pool),
-            Query(ChatDeepQuery { streamer: Some("nani".into()), session_id: Some("5".into()) }),
+            Query(ChatDeepQuery {
+                streamer: Some("nani".into()),
+                session_id: Some("5".into()),
+            }),
+        )
+        .await
+        .into_response();
+        assert_eq!(resp.status(), StatusCode::FORBIDDEN);
+    }
+
+    fn partner(login: &str) -> DashboardAuthLevel {
+        DashboardAuthLevel::Partner {
+            twitch_login: login.to_string(),
+            twitch_user_id: "42".to_string(),
+            display_name: login.to_string(),
+        }
+    }
+
+    /// IDOR-Guard: Partner mit fremdem ?streamer= → 403, auch mit Consent.
+    /// (Plan-Gate ODER Scope-Guard greift — fremde Session-Daten bleiben dicht.)
+    #[tokio::test]
+    async fn partner_fremder_streamer_403() {
+        let Some(pool) = make_pool("t_deep_h_idor").await else {
+            return;
+        };
+        set_consent(&pool, true).await;
+        sqlx::query("CREATE TABLE IF NOT EXISTS streamer_plans (twitch_login TEXT, plan_id TEXT)")
+            .execute(&pool)
+            .await
+            .ok();
+        let resp = chat_deep_minimax_handler(
+            partner("earlysalty"),
+            State(pool),
+            Query(ChatDeepQuery {
+                streamer: Some("ismile_e".into()),
+                session_id: Some("5".into()),
+            }),
         )
         .await
         .into_response();
@@ -132,12 +221,17 @@ mod tests {
 
     #[tokio::test]
     async fn streamer_pflicht_400() {
-        let Some(pool) = make_pool("t_deep_h_str").await else { return };
+        let Some(pool) = make_pool("t_deep_h_str").await else {
+            return;
+        };
         set_consent(&pool, true).await;
         let resp = chat_deep_minimax_handler(
             DashboardAuthLevel::admin(),
             State(pool),
-            Query(ChatDeepQuery { streamer: None, session_id: Some("5".into()) }),
+            Query(ChatDeepQuery {
+                streamer: None,
+                session_id: Some("5".into()),
+            }),
         )
         .await
         .into_response();
@@ -146,12 +240,17 @@ mod tests {
 
     #[tokio::test]
     async fn session_pflicht_400() {
-        let Some(pool) = make_pool("t_deep_h_sess").await else { return };
+        let Some(pool) = make_pool("t_deep_h_sess").await else {
+            return;
+        };
         set_consent(&pool, true).await;
         let resp = chat_deep_minimax_handler(
             DashboardAuthLevel::admin(),
             State(pool),
-            Query(ChatDeepQuery { streamer: Some("nani".into()), session_id: None }),
+            Query(ChatDeepQuery {
+                streamer: Some("nani".into()),
+                session_id: None,
+            }),
         )
         .await
         .into_response();
@@ -160,13 +259,18 @@ mod tests {
 
     #[tokio::test]
     async fn keine_nachrichten_404() {
-        let Some(pool) = make_pool("t_deep_h_404").await else { return };
+        let Some(pool) = make_pool("t_deep_h_404").await else {
+            return;
+        };
         set_consent(&pool, true).await;
         // Consent ok, streamer+session da, aber keine Nachrichten → 404 (kein LLM-Call).
         let resp = chat_deep_minimax_handler(
             DashboardAuthLevel::admin(),
             State(pool),
-            Query(ChatDeepQuery { streamer: Some("nani".into()), session_id: Some("5".into()) }),
+            Query(ChatDeepQuery {
+                streamer: Some("nani".into()),
+                session_id: Some("5".into()),
+            }),
         )
         .await
         .into_response();

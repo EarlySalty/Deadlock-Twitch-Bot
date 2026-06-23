@@ -37,8 +37,15 @@ pub async fn tag_analysis_extended_handler(
     if let Some(resp) = crate::auth::extended_gate(&pool, &auth).await {
         return resp;
     }
-    // streamer optional: "" → None (Python `.strip() or None`).
-    let streamer = params.streamer.as_deref().map(str::trim).filter(|s| !s.is_empty());
+    // IDOR-Guard: Partner werden auf den eigenen Login geklemmt (fremder
+    // ?streamer= → 403); Admin/Localhost dürfen frei wählen. streamer optional:
+    // None → ohne Filter über alle (Python `.strip() or None`).
+    let owned_streamer =
+        match crate::auth::resolve_streamer_scope(&auth, params.streamer.as_deref(), false) {
+            Ok(s) => s,
+            Err(resp) => return resp,
+        };
+    let streamer = owned_streamer.as_deref();
     let days = match parse_bounded_query_int(params.days.as_deref(), "days", 30, 7, 365) {
         Ok(d) => d,
         Err(resp) => return resp.into_response(),
@@ -48,11 +55,16 @@ pub async fn tag_analysis_extended_handler(
         Err(resp) => return resp.into_response(),
     };
 
-    match tb_analytics::tag_analysis::load_tag_analysis_extended(&pool, streamer, days, limit).await {
+    match tb_analytics::tag_analysis::load_tag_analysis_extended(&pool, streamer, days, limit).await
+    {
         Ok(v) => Json(v).into_response(),
         Err(e) => {
             tracing::error!("tag-analysis-extended SELECT-Fehler: {e}");
-            (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({ "error": "internal" }))).into_response()
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(json!({ "error": "internal" })),
+            )
+                .into_response()
         }
     }
 }
@@ -65,43 +77,101 @@ mod tests {
 
     async fn make_pool(schema: &str) -> Option<PgPool> {
         let dsn = std::env::var("TB_TEST_DATABASE_URL").ok()?;
-        let admin = PgPoolOptions::new().max_connections(1).connect(&dsn).await.unwrap();
-        sqlx::query(&format!("DROP SCHEMA IF EXISTS {schema} CASCADE")).execute(&admin).await.unwrap();
-        sqlx::query(&format!("CREATE SCHEMA {schema}")).execute(&admin).await.unwrap();
+        let admin = PgPoolOptions::new()
+            .max_connections(1)
+            .connect(&dsn)
+            .await
+            .unwrap();
+        sqlx::query(&format!("DROP SCHEMA IF EXISTS {schema} CASCADE"))
+            .execute(&admin)
+            .await
+            .unwrap();
+        sqlx::query(&format!("CREATE SCHEMA {schema}"))
+            .execute(&admin)
+            .await
+            .unwrap();
         admin.close().await;
-        let opts = PgConnectOptions::from_str(&dsn).unwrap().options([("search_path", schema), ("timezone", "UTC")]);
-        Some(PgPoolOptions::new().max_connections(2).connect_with(opts).await.unwrap())
+        let opts = PgConnectOptions::from_str(&dsn)
+            .unwrap()
+            .options([("search_path", schema), ("timezone", "UTC")]);
+        Some(
+            PgPoolOptions::new()
+                .max_connections(2)
+                .connect_with(opts)
+                .await
+                .unwrap(),
+        )
     }
 
     #[tokio::test]
     async fn localhost_liefert_200_leer() {
-        let Some(pool) = make_pool("t_tagx_handler").await else { return };
+        let Some(pool) = make_pool("t_tagx_handler").await else {
+            return;
+        };
         sqlx::query("CREATE TABLE twitch_stream_sessions (id BIGSERIAL PRIMARY KEY, streamer_login TEXT, tags TEXT, avg_viewers REAL, retention_10m REAL, follower_delta INTEGER, followers_start INTEGER, followers_end INTEGER, duration_seconds REAL, started_at TIMESTAMPTZ, ended_at TIMESTAMPTZ)")
             .execute(&pool).await.unwrap();
         // Localhost = privilegiert (bypass Paywall) → 200 statt 401.
         let resp = tag_analysis_extended_handler(
             DashboardAuthLevel::admin(),
             State(pool),
-            Query(TagAnalysisQuery { streamer: None, days: None, limit: None }),
+            Query(TagAnalysisQuery {
+                streamer: None,
+                days: None,
+                limit: None,
+            }),
         )
         .await
         .into_response();
         assert_eq!(resp.status(), StatusCode::OK);
     }
 
+    /// IDOR-Guard: ein Partner, der per ?streamer= einen FREMDEN Login abfragt,
+    /// bekommt nie fremde Daten → 403 (Plan-Gate ODER Scope-Guard greift, beide
+    /// forbidden).
+    #[tokio::test]
+    async fn partner_fremder_streamer_403() {
+        let Some(pool) = make_pool("t_tagx_handler_idor").await else {
+            return;
+        };
+        let resp = tag_analysis_extended_handler(
+            DashboardAuthLevel::Partner {
+                twitch_login: "earlysalty".into(),
+                twitch_user_id: "42".into(),
+                display_name: "earlysalty".into(),
+            },
+            State(pool),
+            Query(TagAnalysisQuery {
+                streamer: Some("ismile_e".into()),
+                days: None,
+                limit: None,
+            }),
+        )
+        .await
+        .into_response();
+        assert_eq!(resp.status(), StatusCode::FORBIDDEN);
+    }
+
     #[tokio::test]
     async fn nicht_numerische_limit_400_python_shape() {
-        let Some(pool) = make_pool("t_tagx_handler_400").await else { return };
+        let Some(pool) = make_pool("t_tagx_handler_400").await else {
+            return;
+        };
         // limit greift vor der DB; Python liefert {"error":"limit must be an integer"}.
         let resp = tag_analysis_extended_handler(
             DashboardAuthLevel::admin(),
             State(pool),
-            Query(TagAnalysisQuery { streamer: None, days: None, limit: Some("foo".into()) }),
+            Query(TagAnalysisQuery {
+                streamer: None,
+                days: None,
+                limit: Some("foo".into()),
+            }),
         )
         .await
         .into_response();
         assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
-        let bytes = axum::body::to_bytes(resp.into_body(), usize::MAX).await.unwrap();
+        let bytes = axum::body::to_bytes(resp.into_body(), usize::MAX)
+            .await
+            .unwrap();
         let body: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
         assert_eq!(body, json!({ "error": "limit must be an integer" }));
     }

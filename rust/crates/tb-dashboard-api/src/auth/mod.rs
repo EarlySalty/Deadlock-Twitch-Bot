@@ -30,6 +30,12 @@ pub mod partner_gate;
 pub mod partner_login;
 pub mod security;
 pub mod session;
+pub(crate) mod streamer_scope;
+
+#[cfg(test)]
+mod idor_e2e_tests;
+
+pub(crate) use streamer_scope::resolve_streamer_scope;
 
 // ---------------------------------------------------------------------------
 // Migriert aus dem früheren auth.rs (IDOR-Guard + Plan-Gating)
@@ -111,7 +117,11 @@ pub async fn extended_gate(pool: &PgPool, auth: &DashboardAuthLevel) -> Option<R
     match auth {
         DashboardAuthLevel::Admin { .. } => None,
         DashboardAuthLevel::None => Some(unauthorized_v2_response()),
-        DashboardAuthLevel::Partner { twitch_login, twitch_user_id, .. } => {
+        DashboardAuthLevel::Partner {
+            twitch_login,
+            twitch_user_id,
+            ..
+        } => {
             if has_analytics_entitlement(pool, twitch_login, twitch_user_id).await {
                 None
             } else {
@@ -225,7 +235,9 @@ mod tests {
             ]
         );
         assert!(!plans.contains(&"raid_free"));
-        assert!(plans.iter().all(|p| tb_analytics::plan::plan_has_analytics(p)));
+        assert!(plans
+            .iter()
+            .all(|p| tb_analytics::plan::plan_has_analytics(p)));
         // sortiert
         let mut sorted = plans.clone();
         sorted.sort_unstable();
@@ -239,7 +251,10 @@ mod tests {
         assert_eq!(resp.status(), StatusCode::UNAUTHORIZED);
         let bytes = to_bytes(resp.into_body(), 1 << 16).await.unwrap();
         let body: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
-        assert!(body["error"].as_str().unwrap().contains("Authentication required"));
+        assert!(body["error"]
+            .as_str()
+            .unwrap()
+            .contains("Authentication required"));
         assert_eq!(body["loginUrl"], "/twitch/auth/login?next=%2Fanalyse");
     }
 }

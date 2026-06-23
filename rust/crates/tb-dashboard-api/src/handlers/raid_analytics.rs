@@ -20,8 +20,16 @@ use std::collections::HashMap;
 use crate::auth::level::DashboardAuthLevel;
 
 const KNOWN_CHAT_BOTS: &[&str] = &[
-    "botrix", "deutschedeadlockcommunity", "fossabot", "moobot", "nightbot",
-    "pretzelrocks", "soundalerts", "streamlabs", "streamelements", "wizebot",
+    "botrix",
+    "deutschedeadlockcommunity",
+    "fossabot",
+    "moobot",
+    "nightbot",
+    "pretzelrocks",
+    "soundalerts",
+    "streamlabs",
+    "streamelements",
+    "wizebot",
 ];
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -44,7 +52,8 @@ async fn recalculate_raid_chat_metrics(
     pool: &PgPool,
     raids: &[Value], // Array aus {raid_id, executed_at_key, target_session_id, executed_at, from_login, to_login}
 ) -> HashMap<(i64, String), RaidMetric> {
-    let mut metrics: HashMap<(i64, String), RaidMetric> = raids.iter()
+    let mut metrics: HashMap<(i64, String), RaidMetric> = raids
+        .iter()
         .filter_map(|r| {
             let id = r["raid_id"].as_i64()?;
             let key = r["executed_at_key"].as_str().unwrap_or("").to_string();
@@ -60,9 +69,7 @@ async fn recalculate_raid_chat_metrics(
     let bots: Vec<String> = KNOWN_CHAT_BOTS.iter().map(|s| s.to_string()).collect();
 
     // Query 1: Retention (plus5m/15m/30m)
-    let bot_not_in_sc: Vec<String> = (3..=bots.len() + 2)
-        .map(|i| format!("${i}"))
-        .collect();
+    let bot_not_in_sc: Vec<String> = (3..=bots.len() + 2).map(|i| format!("${i}")).collect();
     let ret_sql = String::from(
         r#"WITH raid_inputs AS (
                SELECT CAST(r.raid_id AS BIGINT) AS raid_id,
@@ -88,7 +95,7 @@ async fn recalculate_raid_chat_metrics(
               AND sc.last_seen_at >= ri.executed_at
               AND sc.last_seen_at <= ri.executed_at + INTERVAL '30 minutes'
               AND (sc.chatter_login IS NULL OR sc.chatter_login = '' OR LOWER(sc.chatter_login) != ALL($2))
-           GROUP BY ri.raid_id, ri.executed_at_key"#
+           GROUP BY ri.raid_id, ri.executed_at_key"#,
     );
 
     let q = sqlx::query(&ret_sql).bind(&payload).bind(&bots);
@@ -136,8 +143,11 @@ async fn recalculate_raid_chat_metrics(
            GROUP BY ri.raid_id, ri.executed_at_key"#;
 
     let known_rows = sqlx::query(known_sql)
-        .bind(&payload).bind(&bots)
-        .fetch_all(pool).await.unwrap_or_default();
+        .bind(&payload)
+        .bind(&bots)
+        .fetch_all(pool)
+        .await
+        .unwrap_or_default();
     for r in &known_rows {
         let id: i64 = r.try_get("raid_id").unwrap_or(0);
         let key: String = r.try_get("executed_at_key").unwrap_or_default();
@@ -177,8 +187,11 @@ async fn recalculate_raid_chat_metrics(
            GROUP BY ri.raid_id, ri.executed_at_key"#;
 
     let new_rows = sqlx::query(new_sql)
-        .bind(&payload).bind(&bots)
-        .fetch_all(pool).await.unwrap_or_default();
+        .bind(&payload)
+        .bind(&bots)
+        .fetch_all(pool)
+        .await
+        .unwrap_or_default();
     for r in &new_rows {
         let id: i64 = r.try_get("raid_id").unwrap_or(0);
         let key: String = r.try_get("executed_at_key").unwrap_or_default();
@@ -210,10 +223,19 @@ pub async fn raid_retention_handler(
     if let Some(resp) = crate::auth::extended_gate(&pool, &auth).await {
         return resp;
     }
-    let streamer = match params.streamer.as_deref().map(str::trim).filter(|s| !s.is_empty()) {
-        Some(s) => s.to_lowercase(),
-        None => return (StatusCode::BAD_REQUEST, Json(json!({"dataAvailable":false,"message":"Streamer required"}))).into_response(),
-    };
+    // IDOR-Klemme: Partner nur eigener Login; Admin braucht streamer (required).
+    let streamer =
+        match crate::auth::resolve_streamer_scope(&auth, params.streamer.as_deref(), true) {
+            Ok(Some(s)) => s,
+            Ok(None) => {
+                return (
+                    StatusCode::BAD_REQUEST,
+                    Json(json!({"dataAvailable":false,"message":"Streamer required"})),
+                )
+                    .into_response()
+            }
+            Err(resp) => return resp,
+        };
     let days = params.days.unwrap_or(90).clamp(7, 365);
     let since: DateTime<Utc> = Utc::now() - chrono::Duration::days(days as i64);
 
@@ -237,13 +259,15 @@ pub async fn raid_retention_handler(
             // bricht. Muster wie lurker_analysis.rs. Fehler wird geloggt, aber
             // nicht als 500 propagiert.
             tracing::error!("raid-retention DB-Fehler: {e}");
-            return Json(json!({"dataAvailable":false,"message":"Keine Daten verfügbar"})).into_response();
+            return Json(json!({"dataAvailable":false,"message":"Keine Daten verfügbar"}))
+                .into_response();
         }
         Ok(r) => r,
     };
 
     if base_rows.is_empty() {
-        return Json(json!({"dataAvailable":false,"message":"Keine Raids im Zeitraum"})).into_response();
+        return Json(json!({"dataAvailable":false,"message":"Keine Raids im Zeitraum"}))
+            .into_response();
     }
 
     // JSON-Input für recalculate bauen
@@ -251,12 +275,25 @@ pub async fn raid_retention_handler(
     let mut raid_inputs: Vec<Value> = vec![];
 
     for row in &base_rows {
-        let raid_id: i64 = match row.try_get("raid_id") { Ok(v) => v, Err(_) => continue };
+        let raid_id: i64 = match row.try_get("raid_id") {
+            Ok(v) => v,
+            Err(_) => continue,
+        };
         let executed_at: Option<DateTime<Utc>> = row.try_get("executed_at").ok();
         let executed_at_iso = executed_at.map(|t| t.to_rfc3339()).unwrap_or_default();
         let target_session_id: Option<i64> = row.try_get("target_session_id").ok();
-        let from_login: String = row.try_get::<Option<String>, _>("from_broadcaster_login").ok().flatten().unwrap_or_default().to_lowercase();
-        let to_login: String = row.try_get::<Option<String>, _>("to_broadcaster_login").ok().flatten().unwrap_or_default().to_lowercase();
+        let from_login: String = row
+            .try_get::<Option<String>, _>("from_broadcaster_login")
+            .ok()
+            .flatten()
+            .unwrap_or_default()
+            .to_lowercase();
+        let to_login: String = row
+            .try_get::<Option<String>, _>("to_broadcaster_login")
+            .ok()
+            .flatten()
+            .unwrap_or_default()
+            .to_lowercase();
 
         base_raids.push(json!({
             "raid_id": raid_id,
@@ -301,7 +338,14 @@ pub async fn raid_retention_handler(
         let (c5m, c15m, c30m, known, new_ch, used_recalc) =
             if let Some(m) = raid_metrics.get(&(raid_id, exec_key)) {
                 recalculated += 1;
-                (m.plus5m, m.plus15m, m.plus30m, m.known_from_raider, m.new_chatters, true)
+                (
+                    m.plus5m,
+                    m.plus15m,
+                    m.plus30m,
+                    m.known_from_raider,
+                    m.new_chatters,
+                    true,
+                )
             } else {
                 stored_fallback += 1;
                 (
@@ -315,8 +359,16 @@ pub async fn raid_retention_handler(
             };
         let _ = used_recalc;
 
-        let ret_pct = if viewers_sent > 0 { c30m as f64 / viewers_sent as f64 * 100.0 } else { 0.0 };
-        let conv_pct = if viewers_sent > 0 { new_ch as f64 / viewers_sent as f64 * 100.0 } else { 0.0 };
+        let ret_pct = if viewers_sent > 0 {
+            c30m as f64 / viewers_sent as f64 * 100.0
+        } else {
+            0.0
+        };
+        let conv_pct = if viewers_sent > 0 {
+            new_ch as f64 / viewers_sent as f64 * 100.0
+        } else {
+            0.0
+        };
         retention_values.push(ret_pct);
         conversion_values.push(conv_pct);
         total_new_chatters += new_ch;
@@ -337,12 +389,20 @@ pub async fn raid_retention_handler(
     }
 
     let avg = |vals: &[f64]| -> f64 {
-        if vals.is_empty() { 0.0 } else { (vals.iter().sum::<f64>() / vals.len() as f64 * 10.0).round() / 10.0 }
+        if vals.is_empty() {
+            0.0
+        } else {
+            (vals.iter().sum::<f64>() / vals.len() as f64 * 10.0).round() / 10.0
+        }
     };
 
-    let metric_source = if stored_fallback == 0 { "recalculated" }
-        else if recalculated == 0 { "stored" }
-        else { "mixed" };
+    let metric_source = if stored_fallback == 0 {
+        "recalculated"
+    } else if recalculated == 0 {
+        "stored"
+    } else {
+        "mixed"
+    };
 
     Json(json!({
         "dataAvailable": true,
@@ -359,7 +419,8 @@ pub async fn raid_retention_handler(
             "recalculatedRaidCount": recalculated,
             "storedFallbackRaidCount": stored_fallback,
         },
-    })).into_response()
+    }))
+    .into_response()
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -375,10 +436,19 @@ pub async fn raid_analytics_handler(
     if let Some(resp) = crate::auth::extended_gate(&pool, &auth).await {
         return resp;
     }
-    let streamer = match params.streamer.as_deref().map(str::trim).filter(|s| !s.is_empty()) {
-        Some(s) => s.to_lowercase(),
-        None => return (StatusCode::BAD_REQUEST, Json(json!({"error":"Streamer required"}))).into_response(),
-    };
+    // IDOR-Klemme: Partner nur eigener Login; Admin braucht streamer (required).
+    let streamer =
+        match crate::auth::resolve_streamer_scope(&auth, params.streamer.as_deref(), true) {
+            Ok(Some(s)) => s,
+            Ok(None) => {
+                return (
+                    StatusCode::BAD_REQUEST,
+                    Json(json!({"error":"Streamer required"})),
+                )
+                    .into_response()
+            }
+            Err(resp) => return resp,
+        };
     let days = params.days.unwrap_or(30).clamp(7, 365);
     let since: DateTime<Utc> = Utc::now() - chrono::Duration::days(days as i64);
 
@@ -404,17 +474,37 @@ pub async fn raid_analytics_handler(
         Ok(r) => r,
         Err(e) => {
             tracing::error!("raid-analytics retention-Query-Fehler: {e}");
-            return (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({"error":"internal_error"}))).into_response();
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(json!({"error":"internal_error"})),
+            )
+                .into_response();
         }
     };
 
     let mut base_raids_full: Vec<Value> = vec![];
     let mut base_raids_sample: Vec<Value> = vec![];
     for row in &retention_rows {
-        let raid_id: i64 = match row.try_get("raid_id") { Ok(v) => v, Err(_) => continue };
-        let from: String = row.try_get::<Option<String>,_>("from_broadcaster_login").ok().flatten().unwrap_or_default();
-        let to: String = row.try_get::<Option<String>,_>("to_broadcaster_login").ok().flatten().unwrap_or_default().to_lowercase();
-        let sent: i64 = row.try_get::<Option<i64>,_>("viewer_count_sent").ok().flatten().unwrap_or(0);
+        let raid_id: i64 = match row.try_get("raid_id") {
+            Ok(v) => v,
+            Err(_) => continue,
+        };
+        let from: String = row
+            .try_get::<Option<String>, _>("from_broadcaster_login")
+            .ok()
+            .flatten()
+            .unwrap_or_default();
+        let to: String = row
+            .try_get::<Option<String>, _>("to_broadcaster_login")
+            .ok()
+            .flatten()
+            .unwrap_or_default()
+            .to_lowercase();
+        let sent: i64 = row
+            .try_get::<Option<i64>, _>("viewer_count_sent")
+            .ok()
+            .flatten()
+            .unwrap_or(0);
         let exec_at: Option<DateTime<Utc>> = row.try_get("executed_at").ok();
         let exec_iso = exec_at.map(|t| t.to_rfc3339()).unwrap_or_default();
         let target_sid: i64 = row.try_get("target_session_id").unwrap_or(0);
@@ -435,8 +525,14 @@ pub async fn raid_analytics_handler(
         base_raids_full.push(entry);
     }
 
-    let sample_keys: std::collections::HashSet<(i64, String)> = base_raids_sample.iter()
-        .filter_map(|r| Some((r["raid_id"].as_str()?.parse::<i64>().ok()?, r["executed_at_key"].as_str()?.to_string())))
+    let sample_keys: std::collections::HashSet<(i64, String)> = base_raids_sample
+        .iter()
+        .filter_map(|r| {
+            Some((
+                r["raid_id"].as_str()?.parse::<i64>().ok()?,
+                r["executed_at_key"].as_str()?.to_string(),
+            ))
+        })
         .collect();
 
     // Metriken berechnen (Full + Sample in einem Aufruf)
@@ -447,11 +543,17 @@ pub async fn raid_analytics_handler(
     let mut sample_metrics: HashMap<(i64, String), Value> = HashMap::new();
 
     for raid in &base_raids_full {
-        let raid_id: i64 = raid["raid_id"].as_str().and_then(|s| s.parse().ok()).unwrap_or(0);
+        let raid_id: i64 = raid["raid_id"]
+            .as_str()
+            .and_then(|s| s.parse().ok())
+            .unwrap_or(0);
         let exec_key = raid["executed_at_key"].as_str().unwrap_or("").to_string();
         let src_key = raid["from_login"].as_str().unwrap_or("unknown").to_string();
         let sent = raid["viewers_sent"].as_i64().unwrap_or(0);
-        let m = all_metrics.get(&(raid_id, exec_key.clone())).cloned().unwrap_or_default();
+        let m = all_metrics
+            .get(&(raid_id, exec_key.clone()))
+            .cloned()
+            .unwrap_or_default();
 
         let bucket = grouped_source.entry(src_key.clone()).or_insert(json!({
             "from_channel": raid["from"].as_str().unwrap_or("unknown"),
@@ -466,14 +568,19 @@ pub async fn raid_analytics_handler(
         bucket["raids_received"] = json!(bucket["raids_received"].as_i64().unwrap_or(0) + 1);
         let tv = bucket["total_viewers_sent"].as_f64().unwrap_or(0.0) + sent as f64;
         bucket["total_viewers_sent"] = json!(tv);
-        bucket["total_new_chatters"] = json!(bucket["total_new_chatters"].as_f64().unwrap_or(0.0) + m.new_chatters as f64);
+        bucket["total_new_chatters"] =
+            json!(bucket["total_new_chatters"].as_f64().unwrap_or(0.0) + m.new_chatters as f64);
         if sent > 0 {
-            let rs = bucket["retention_ratio_sum"].as_f64().unwrap_or(0.0) + m.plus30m as f64 / sent as f64;
+            let rs = bucket["retention_ratio_sum"].as_f64().unwrap_or(0.0)
+                + m.plus30m as f64 / sent as f64;
             bucket["retention_ratio_sum"] = json!(rs);
-            bucket["retention_ratio_count"] = json!(bucket["retention_ratio_count"].as_i64().unwrap_or(0) + 1);
-            let os = bucket["overlap_ratio_sum"].as_f64().unwrap_or(0.0) + m.known_from_raider as f64 / sent as f64;
+            bucket["retention_ratio_count"] =
+                json!(bucket["retention_ratio_count"].as_i64().unwrap_or(0) + 1);
+            let os = bucket["overlap_ratio_sum"].as_f64().unwrap_or(0.0)
+                + m.known_from_raider as f64 / sent as f64;
             bucket["overlap_ratio_sum"] = json!(os);
-            bucket["overlap_ratio_count"] = json!(bucket["overlap_ratio_count"].as_i64().unwrap_or(0) + 1);
+            bucket["overlap_ratio_count"] =
+                json!(bucket["overlap_ratio_count"].as_i64().unwrap_or(0) + 1);
         }
 
         if sample_keys.contains(&(raid_id, exec_key.clone())) {
@@ -513,17 +620,32 @@ pub async fn raid_analytics_handler(
         Ok(r) => r,
         Err(e) => {
             tracing::error!("raid-analytics follow-Query-Fehler: {e}");
-            return (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({"error":"internal_error"}))).into_response();
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(json!({"error":"internal_error"})),
+            )
+                .into_response();
         }
     };
 
     let mut follows_by_source: HashMap<String, i64> = HashMap::new();
-    let raid_follows = follow_rows.iter().filter(|r| r.try_get::<String,_>("follow_source").ok().as_deref() == Some("raid")).count() as i64;
-    let organic_follows = follow_rows.iter().filter(|r| r.try_get::<String,_>("follow_source").ok().as_deref() == Some("organic")).count() as i64;
+    let raid_follows = follow_rows
+        .iter()
+        .filter(|r| r.try_get::<String, _>("follow_source").ok().as_deref() == Some("raid"))
+        .count() as i64;
+    let organic_follows = follow_rows
+        .iter()
+        .filter(|r| r.try_get::<String, _>("follow_source").ok().as_deref() == Some("organic"))
+        .count() as i64;
     let total_follows = follow_rows.len() as i64;
     for r in &follow_rows {
-        if r.try_get::<String,_>("follow_source").ok().as_deref() == Some("raid") {
-            let src: String = r.try_get::<Option<String>,_>("raid_source").ok().flatten().unwrap_or_default().to_lowercase();
+        if r.try_get::<String, _>("follow_source").ok().as_deref() == Some("raid") {
+            let src: String = r
+                .try_get::<Option<String>, _>("raid_source")
+                .ok()
+                .flatten()
+                .unwrap_or_default()
+                .to_lowercase();
             *follows_by_source.entry(src).or_default() += 1;
         }
     }
@@ -534,7 +656,9 @@ pub async fn raid_analytics_handler(
             "organic_follows": organic_follows,
             "raid_conversion_rate": (raid_follows as f64 / total_follows as f64 * 1000.0).round() / 1000.0,
         }))
-    } else { None };
+    } else {
+        None
+    };
 
     // 4. Per-Source finalisieren
     let mut per_source: Vec<Value> = grouped_source.iter().map(|(src_key, b)| {
@@ -560,25 +684,46 @@ pub async fn raid_analytics_handler(
     per_source.truncate(20);
 
     // 5. Retention-Curves (Sample)
-    let retention_curves: Vec<Value> = base_raids_sample.iter().map(|raid| {
-        let rid: i64 = raid["raid_id"].as_str().and_then(|s| s.parse().ok()).unwrap_or(0);
-        let ekey = raid["executed_at_key"].as_str().unwrap_or("").to_string();
-        let sent = raid["viewers_sent"].as_i64().unwrap_or(0);
-        let m = sample_metrics.get(&(rid, ekey)).cloned().unwrap_or_else(|| json!({"plus5m":0,"plus15m":0,"plus30m":0,"new_chatters":0}));
-        let p5m = m["plus5m"].as_i64().unwrap_or(0);
-        let p15m = m["plus15m"].as_i64().unwrap_or(0);
-        let p30m = m["plus30m"].as_i64().unwrap_or(0);
-        let r5 = if sent > 0 { (p5m as f64 / sent as f64 * 1000.0).round() / 1000.0 } else { 0.0 };
-        let r15 = if sent > 0 { (p15m as f64 / sent as f64 * 1000.0).round() / 1000.0 } else { 0.0 };
-        let r30 = if sent > 0 { (p30m as f64 / sent as f64 * 1000.0).round() / 1000.0 } else { 0.0 };
-        json!({
-            "raid_id": rid,
-            "from": raid["from"],
-            "viewers_sent": sent,
-            "new_chatters": m["new_chatters"].as_i64().unwrap_or(0),
-            "retention_curve": {"plus5m": r5, "plus15m": r15, "plus30m": r30},
+    let retention_curves: Vec<Value> = base_raids_sample
+        .iter()
+        .map(|raid| {
+            let rid: i64 = raid["raid_id"]
+                .as_str()
+                .and_then(|s| s.parse().ok())
+                .unwrap_or(0);
+            let ekey = raid["executed_at_key"].as_str().unwrap_or("").to_string();
+            let sent = raid["viewers_sent"].as_i64().unwrap_or(0);
+            let m = sample_metrics
+                .get(&(rid, ekey))
+                .cloned()
+                .unwrap_or_else(|| json!({"plus5m":0,"plus15m":0,"plus30m":0,"new_chatters":0}));
+            let p5m = m["plus5m"].as_i64().unwrap_or(0);
+            let p15m = m["plus15m"].as_i64().unwrap_or(0);
+            let p30m = m["plus30m"].as_i64().unwrap_or(0);
+            let r5 = if sent > 0 {
+                (p5m as f64 / sent as f64 * 1000.0).round() / 1000.0
+            } else {
+                0.0
+            };
+            let r15 = if sent > 0 {
+                (p15m as f64 / sent as f64 * 1000.0).round() / 1000.0
+            } else {
+                0.0
+            };
+            let r30 = if sent > 0 {
+                (p30m as f64 / sent as f64 * 1000.0).round() / 1000.0
+            } else {
+                0.0
+            };
+            json!({
+                "raid_id": rid,
+                "from": raid["from"],
+                "viewers_sent": sent,
+                "new_chatters": m["new_chatters"].as_i64().unwrap_or(0),
+                "retention_curve": {"plus5m": r5, "plus15m": r15, "plus30m": r30},
+            })
         })
-    }).collect();
+        .collect();
 
     // 6. Incoming raids (twitch_raid_arrival_tracking) — N+1 für Session-Lookup + Timeline
     let incoming_raw = sqlx::query(
@@ -588,13 +733,19 @@ pub async fn raid_analytics_handler(
            WHERE LOWER(to_broadcaster_login) = $1 AND detected_at >= $2
            ORDER BY detected_at DESC LIMIT 50"#,
     )
-    .bind(&streamer).bind(since)
-    .fetch_all(&pool).await;
+    .bind(&streamer)
+    .bind(since)
+    .fetch_all(&pool)
+    .await;
     let incoming_raw = match incoming_raw {
         Ok(r) => r,
         Err(e) => {
             tracing::error!("raid-analytics incoming-Query-Fehler: {e}");
-            return (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({"error":"internal_error"}))).into_response();
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(json!({"error":"internal_error"})),
+            )
+                .into_response();
         }
     };
 
@@ -604,8 +755,16 @@ pub async fn raid_analytics_handler(
 
     for rr in &incoming_raw {
         let detected_at: Option<DateTime<Utc>> = rr.try_get("detected_at").ok();
-        let from_channel: String = rr.try_get::<Option<String>,_>("from_broadcaster_login").ok().flatten().unwrap_or_else(|| "unknown".into());
-        let viewers_sent: i64 = rr.try_get::<Option<i64>,_>("viewer_count").ok().flatten().unwrap_or(0);
+        let from_channel: String = rr
+            .try_get::<Option<String>, _>("from_broadcaster_login")
+            .ok()
+            .flatten()
+            .unwrap_or_else(|| "unknown".into());
+        let viewers_sent: i64 = rr
+            .try_get::<Option<i64>, _>("viewer_count")
+            .ok()
+            .flatten()
+            .unwrap_or(0);
 
         let mut impact = json!({
             "viewers_before": null, "viewers_peak_after": null, "boost_pct": null,
@@ -621,13 +780,20 @@ pub async fn raid_analytics_handler(
                      AND (ended_at IS NULL OR ended_at >= $2)
                    LIMIT 1"#,
             )
-            .bind(&streamer).bind(det)
-            .fetch_optional(&pool).await.ok().flatten();
+            .bind(&streamer)
+            .bind(det)
+            .fetch_optional(&pool)
+            .await
+            .ok()
+            .flatten();
 
             if let Some(sess_row) = sess {
                 let session_id: i64 = sess_row.try_get("id").unwrap_or(0);
                 let sess_start: Option<DateTime<Utc>> = sess_row.try_get("started_at").ok();
-                let raid_minute = sess_start.map(|ss| ((det - ss).num_seconds() / 60) as i32).unwrap_or(0).max(0);
+                let raid_minute = sess_start
+                    .map(|ss| ((det - ss).num_seconds() / 60) as i32)
+                    .unwrap_or(0)
+                    .max(0);
 
                 let tl_rows = sqlx::query(
                     "SELECT minutes_from_start, viewer_count::bigint AS viewer_count FROM twitch_session_viewers WHERE session_id = $1 ORDER BY minutes_from_start",
@@ -636,18 +802,32 @@ pub async fn raid_analytics_handler(
                 .fetch_all(&pool).await.unwrap_or_default();
 
                 if !tl_rows.is_empty() {
-                    let timeline: HashMap<i32, i64> = tl_rows.iter()
-                        .filter_map(|r| Some((r.try_get::<i32,_>("minutes_from_start").ok()?, r.try_get::<i64,_>("viewer_count").ok()?)))
+                    let timeline: HashMap<i32, i64> = tl_rows
+                        .iter()
+                        .filter_map(|r| {
+                            Some((
+                                r.try_get::<i32, _>("minutes_from_start").ok()?,
+                                r.try_get::<i64, _>("viewer_count").ok()?,
+                            ))
+                        })
                         .collect();
 
-                    let before: Vec<i64> = timeline.iter()
+                    let before: Vec<i64> = timeline
+                        .iter()
                         .filter(|(&m, _)| (raid_minute - 3) <= m && m < raid_minute)
-                        .map(|(_, &v)| v).collect();
-                    let after: Vec<i64> = timeline.iter()
+                        .map(|(_, &v)| v)
+                        .collect();
+                    let after: Vec<i64> = timeline
+                        .iter()
                         .filter(|(&m, _)| m >= raid_minute && m <= raid_minute + 5)
-                        .map(|(_, &v)| v).collect();
+                        .map(|(_, &v)| v)
+                        .collect();
 
-                    let avg_before = if !before.is_empty() { Some(before.iter().sum::<i64>() as f64 / before.len() as f64) } else { None };
+                    let avg_before = if !before.is_empty() {
+                        Some(before.iter().sum::<i64>() as f64 / before.len() as f64)
+                    } else {
+                        None
+                    };
                     let peak_after = after.iter().copied().max();
 
                     if let (Some(ab), Some(pa)) = (avg_before, peak_after) {
@@ -658,14 +838,25 @@ pub async fn raid_analytics_handler(
                             impact["boost_pct"] = json!(boost);
                             boost_values.push(boost);
 
-                            for (offset, key) in [(5i32, "retention_5m_pct"), (15, "retention_15m_pct"), (30, "retention_30m_pct")] {
+                            for (offset, key) in [
+                                (5i32, "retention_5m_pct"),
+                                (15, "retention_15m_pct"),
+                                (30, "retention_30m_pct"),
+                            ] {
                                 let target = raid_minute + offset;
-                                let closest = timeline.keys().min_by_key(|&&m| (m - target).abs()).copied();
+                                let closest = timeline
+                                    .keys()
+                                    .min_by_key(|&&m| (m - target).abs())
+                                    .copied();
                                 if let Some(cm) = closest {
                                     if (cm - target).abs() <= 2 {
-                                        let pct = (timeline[&cm] as f64 / pa as f64 * 1000.0).round() / 10.0;
+                                        let pct = (timeline[&cm] as f64 / pa as f64 * 1000.0)
+                                            .round()
+                                            / 10.0;
                                         impact[key] = json!(pct);
-                                        if key == "retention_15m_pct" { retention_15m_values.push(pct); }
+                                        if key == "retention_15m_pct" {
+                                            retention_15m_values.push(pct);
+                                        }
                                     }
                                 }
                             }
@@ -680,7 +871,8 @@ pub async fn raid_analytics_handler(
                 .bind(&streamer).bind(det)
                 .fetch_optional(&pool).await.ok().flatten();
                 if let Some(fr) = follow_row {
-                    impact["follows_after_raid"] = json!(fr.try_get::<i64,_>("follows").unwrap_or(0));
+                    impact["follows_after_raid"] =
+                        json!(fr.try_get::<i64, _>("follows").unwrap_or(0));
                 }
             }
         }
@@ -697,22 +889,42 @@ pub async fn raid_analytics_handler(
 
     let incoming_summary: Option<Value> = if !incoming_raids.is_empty() {
         let total_rcvd = incoming_raids.len() as i64;
-        let avg_viewers_rcvd = incoming_raids.iter().map(|r| r["viewers_sent"].as_i64().unwrap_or(0)).sum::<i64>() as f64 / total_rcvd as f64;
+        let avg_viewers_rcvd = incoming_raids
+            .iter()
+            .map(|r| r["viewers_sent"].as_i64().unwrap_or(0))
+            .sum::<i64>() as f64
+            / total_rcvd as f64;
         let avg_boost = if !boost_values.is_empty() {
-            Some((boost_values.iter().sum::<f64>() / boost_values.len() as f64 * 10.0).round() / 10.0)
-        } else { None };
+            Some(
+                (boost_values.iter().sum::<f64>() / boost_values.len() as f64 * 10.0).round()
+                    / 10.0,
+            )
+        } else {
+            None
+        };
         let avg_ret_15m = if !retention_15m_values.is_empty() {
-            Some((retention_15m_values.iter().sum::<f64>() / retention_15m_values.len() as f64 * 10.0).round() / 10.0)
-        } else { None };
+            Some(
+                (retention_15m_values.iter().sum::<f64>() / retention_15m_values.len() as f64
+                    * 10.0)
+                    .round()
+                    / 10.0,
+            )
+        } else {
+            None
+        };
 
         // Best raider by avg boost
         let mut raider_boosts: HashMap<String, Vec<f64>> = HashMap::new();
         for r in &incoming_raids {
             if let Some(b) = r["impact"]["boost_pct"].as_f64() {
-                raider_boosts.entry(r["from_channel"].as_str().unwrap_or("").to_string()).or_default().push(b);
+                raider_boosts
+                    .entry(r["from_channel"].as_str().unwrap_or("").to_string())
+                    .or_default()
+                    .push(b);
             }
         }
-        let best_raider = raider_boosts.iter()
+        let best_raider = raider_boosts
+            .iter()
             .max_by(|(_, av), (_, bv)| {
                 let a = av.iter().sum::<f64>() / av.len() as f64;
                 let b = bv.iter().sum::<f64>() / bv.len() as f64;
@@ -731,7 +943,9 @@ pub async fn raid_analytics_handler(
                 "received": total_rcvd,
             },
         }))
-    } else { None };
+    } else {
+        None
+    };
 
     Json(json!({
         "per_source": per_source,
@@ -746,7 +960,8 @@ pub async fn raid_analytics_handler(
             "perSourceUsesFullWindow": true,
             "raidMetricBatchSize": 500,
         },
-    })).into_response()
+    }))
+    .into_response()
 }
 
 #[cfg(test)]
@@ -879,11 +1094,18 @@ mod tests {
         let resp = raid_retention_handler(
             DashboardAuthLevel::admin(),
             State(pool),
-            Query(RaidQuery { streamer: Some("nani".into()), days: Some(30) }),
+            Query(RaidQuery {
+                streamer: Some("nani".into()),
+                days: Some(30),
+            }),
         )
         .await
         .into_response();
-        assert_eq!(resp.status(), StatusCode::OK, "DB-Fehler darf kein 500 sein");
+        assert_eq!(
+            resp.status(),
+            StatusCode::OK,
+            "DB-Fehler darf kein 500 sein"
+        );
         let v = body_json(resp).await;
         assert_eq!(v["dataAvailable"], false);
     }
@@ -900,7 +1122,10 @@ mod tests {
         let resp = raid_analytics_handler(
             DashboardAuthLevel::admin(),
             State(pool),
-            Query(RaidQuery { streamer: Some("nani".into()), days: Some(30) }),
+            Query(RaidQuery {
+                streamer: Some("nani".into()),
+                days: Some(30),
+            }),
         )
         .await
         .into_response();
@@ -909,5 +1134,34 @@ mod tests {
             StatusCode::INTERNAL_SERVER_ERROR,
             "DB-Fehler in Primär-Query muss 500 sein"
         );
+    }
+
+    /// IDOR: Partner mit fremdem `?streamer=` darf fremde Raid-Analytics nicht
+    /// lesen → 403. Die Klemme greift vor jeder DB-Query (Dummy-Pool genügt).
+    #[tokio::test]
+    async fn partner_fremder_streamer_ist_403() {
+        let auth = DashboardAuthLevel::Partner {
+            twitch_login: "someone".into(),
+            twitch_user_id: "1".into(),
+            display_name: "someone".into(),
+        };
+        let pool = match PgPoolOptions::new()
+            .max_connections(1)
+            .connect_lazy("postgres://invalid:5432/none")
+        {
+            Ok(p) => p,
+            Err(_) => return,
+        };
+        let resp = raid_analytics_handler(
+            auth,
+            State(pool),
+            Query(RaidQuery {
+                streamer: Some("fremd".into()),
+                days: Some(30),
+            }),
+        )
+        .await
+        .into_response();
+        assert_eq!(resp.status(), StatusCode::FORBIDDEN);
     }
 }

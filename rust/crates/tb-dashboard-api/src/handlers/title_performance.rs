@@ -32,8 +32,8 @@ pub struct TitleQuery {
 /// Python `_extract_title_keywords` — Stop-Word-Filter + 3+-Zeichen-Wörter, max 5.
 fn extract_title_keywords(title: &str) -> Vec<String> {
     const STOP_WORDS: &[&str] = &[
-        "der", "die", "das", "und", "oder", "mit", "fur", "the", "and", "or", "with", "for",
-        "to", "a", "an",
+        "der", "die", "das", "und", "oder", "mit", "fur", "the", "and", "or", "with", "for", "to",
+        "a", "an",
     ];
     let words: Vec<String> = title
         .to_lowercase()
@@ -70,10 +70,20 @@ pub async fn title_performance_handler(
         Ok(l) => l,
         Err(resp) => return resp.into_response(),
     };
-    let streamer = match params.streamer.as_deref().map(str::trim).filter(|s| !s.is_empty()) {
-        Some(s) => s.to_lowercase(),
-        None => return (StatusCode::BAD_REQUEST, Json(json!({"error":"Streamer required"}))).into_response(),
-    };
+    // IDOR-Guard: Partner werden auf den eigenen Login geklemmt (fremder
+    // ?streamer= → 403); Admin/Localhost dürfen frei wählen. streamer Pflicht.
+    let streamer =
+        match crate::auth::resolve_streamer_scope(&auth, params.streamer.as_deref(), true) {
+            Ok(Some(s)) => s,
+            Ok(None) => {
+                return (
+                    StatusCode::BAD_REQUEST,
+                    Json(json!({"error":"Streamer required"})),
+                )
+                    .into_response()
+            }
+            Err(resp) => return resp,
+        };
     let since: DateTime<Utc> = Utc::now() - Duration::days(days);
 
     let rows = sqlx::query(
@@ -105,22 +115,27 @@ pub async fn title_performance_handler(
     match rows {
         Err(e) => {
             tracing::error!("title-performance DB-Fehler: {e}");
-            (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({"error":"internal_error"}))).into_response()
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(json!({"error":"internal_error"})),
+            )
+                .into_response()
         }
         Ok(rows) => {
             // peerBenchmark via Peer-Gruppe (Python _get_peer_group_stats).
             // DB-Fehler hier sind nicht fatal → null (Python: try/except → kein Peer).
-            let peer_benchmark = match tb_analytics::peer_group::peer_group_stats(&pool, &streamer, since).await {
-                Ok(Some(pg)) => json!({
-                    "avgViewers": pg.avg_viewers,
-                    "retention10m": pg.retention_10m,
-                }),
-                Ok(None) => serde_json::Value::Null,
-                Err(e) => {
-                    tracing::warn!("title-performance peerBenchmark DB-Fehler: {e}");
-                    serde_json::Value::Null
-                }
-            };
+            let peer_benchmark =
+                match tb_analytics::peer_group::peer_group_stats(&pool, &streamer, since).await {
+                    Ok(Some(pg)) => json!({
+                        "avgViewers": pg.avg_viewers,
+                        "retention10m": pg.retention_10m,
+                    }),
+                    Ok(None) => serde_json::Value::Null,
+                    Err(e) => {
+                        tracing::warn!("title-performance peerBenchmark DB-Fehler: {e}");
+                        serde_json::Value::Null
+                    }
+                };
             let titles: Vec<serde_json::Value> = rows.iter().map(|r| {
                 let title: String = r.try_get("stream_title").unwrap_or_default();
                 let keywords = extract_title_keywords(&title);
@@ -137,7 +152,80 @@ pub async fn title_performance_handler(
             Json(json!({
                 "titles": titles,
                 "peerBenchmark": peer_benchmark,
-            })).into_response()
+            }))
+            .into_response()
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use sqlx::postgres::{PgConnectOptions, PgPoolOptions};
+    use std::str::FromStr;
+
+    /// Schema mit den Plan-Tabellen — ein Partner ohne Eintrag löst raid_free
+    /// (= nicht extended) aus. twitch_user_id leer halten ist hier egal: der
+    /// Scope-Guard sperrt den fremden ?streamer= ohnehin.
+    async fn make_plan_pool(schema: &str) -> Option<PgPool> {
+        let dsn = std::env::var("TB_TEST_DATABASE_URL").ok()?;
+        let admin = PgPoolOptions::new()
+            .max_connections(1)
+            .connect(&dsn)
+            .await
+            .unwrap();
+        sqlx::query(&format!("DROP SCHEMA IF EXISTS {schema} CASCADE"))
+            .execute(&admin)
+            .await
+            .unwrap();
+        sqlx::query(&format!("CREATE SCHEMA {schema}"))
+            .execute(&admin)
+            .await
+            .unwrap();
+        admin.close().await;
+        let opts = PgConnectOptions::from_str(&dsn)
+            .unwrap()
+            .options([("search_path", schema), ("timezone", "UTC")]);
+        let pool = PgPoolOptions::new()
+            .max_connections(2)
+            .connect_with(opts)
+            .await
+            .unwrap();
+        sqlx::query("CREATE TABLE streamer_plans (twitch_user_id TEXT, twitch_login TEXT, manual_plan_id TEXT, manual_plan_expires_at TEXT, manual_plan_updated_at TIMESTAMPTZ)").execute(&pool).await.unwrap();
+        sqlx::query("CREATE TABLE twitch_billing_subscriptions (customer_reference TEXT, plan_id TEXT, status TEXT, current_period_end TEXT, updated_at TIMESTAMPTZ)").execute(&pool).await.unwrap();
+        Some(pool)
+    }
+
+    #[test]
+    fn keywords_filtert_stopwords_und_kurzwoerter() {
+        let kw = extract_title_keywords("Der Deadlock Ranked Grind mit dem Team");
+        assert!(kw.contains(&"Deadlock".to_string()));
+        assert!(!kw.iter().any(|w| w.eq_ignore_ascii_case("der")));
+    }
+
+    /// IDOR-Guard: ein Partner, der per ?streamer= einen FREMDEN Login abfragt,
+    /// bekommt nie fremde Daten → 403 (Plan-Gate ODER Scope-Guard greift, beide
+    /// forbidden).
+    #[tokio::test]
+    async fn partner_fremder_streamer_403() {
+        let Some(pool) = make_plan_pool("t_titleperf_idor").await else {
+            return;
+        };
+        let resp = title_performance_handler(
+            DashboardAuthLevel::Partner {
+                twitch_login: "earlysalty".into(),
+                twitch_user_id: "42".into(),
+                display_name: "earlysalty".into(),
+            },
+            State(pool),
+            Query(TitleQuery {
+                streamer: Some("ismile_e".into()),
+                days: None,
+                limit: None,
+            }),
+        )
+        .await
+        .into_response();
+        assert_eq!(resp.status(), StatusCode::FORBIDDEN);
     }
 }

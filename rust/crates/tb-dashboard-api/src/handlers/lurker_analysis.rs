@@ -45,12 +45,18 @@ pub async fn lurker_analysis_handler(
     if let Some(resp) = crate::auth::extended_gate(&pool, &auth).await {
         return resp;
     }
-    let streamer = match params.streamer.as_deref().map(str::trim).filter(|s| !s.is_empty()) {
-        Some(s) => s.to_lowercase(),
-        None => {
-            return (StatusCode::BAD_REQUEST, Json(json!({"dataAvailable":false,"message":"Streamer required"}))).into_response();
-        }
-    };
+    let streamer =
+        match crate::auth::resolve_streamer_scope(&auth, params.streamer.as_deref(), true) {
+            Ok(Some(s)) => s,
+            Ok(None) => {
+                return (
+                    StatusCode::BAD_REQUEST,
+                    Json(json!({"dataAvailable":false,"message":"Streamer required"})),
+                )
+                    .into_response();
+            }
+            Err(resp) => return resp,
+        };
     let days = params.days.unwrap_or(30).clamp(7, 365) as i64;
     let since: DateTime<Utc> = Utc::now() - Duration::days(days);
     let bots: Vec<String> = KNOWN_CHAT_BOTS.iter().map(|s| s.to_string()).collect();
@@ -110,26 +116,32 @@ pub async fn lurker_analysis_handler(
     {
         Ok(Some(r)) => r,
         Ok(None) => {
-            return Json(json!({"dataAvailable":false,"message":"Keine Daten für den Zeitraum"})).into_response();
+            return Json(json!({"dataAvailable":false,"message":"Keine Daten für den Zeitraum"}))
+                .into_response();
         }
         Err(e) => {
             // Python api_overview.py:1779 fängt jede Exception und liefert bewusst
             // 200 + dataAvailable:false (das Frontend wertet dataAvailable aus und
             // bräche bei 500). Fehler wird geloggt, aber nicht als 500 propagiert.
             tracing::error!("lurker-analysis agg-Fehler: {e}");
-            return Json(json!({"dataAvailable":false,"message":"Keine Daten verfügbar"})).into_response();
+            return Json(json!({"dataAvailable":false,"message":"Keine Daten verfügbar"}))
+                .into_response();
         }
     };
 
     let total_viewers: i64 = agg_row.try_get("total_viewers").unwrap_or(0);
     let seen_sample_viewers: i64 = agg_row.try_get("seen_sample_viewers").unwrap_or(0);
     let lurker_count: i64 = agg_row.try_get("lurker_count").unwrap_or(0);
-    let avg_sessions_lurkers: f64 = agg_row.try_get::<Option<f64>, _>("avg_sessions_lurkers").unwrap_or(None).unwrap_or(0.0);
+    let avg_sessions_lurkers: f64 = agg_row
+        .try_get::<Option<f64>, _>("avg_sessions_lurkers")
+        .unwrap_or(None)
+        .unwrap_or(0.0);
     let eligible_lurkers: i64 = agg_row.try_get("eligible_lurkers").unwrap_or(0);
     let converted_lurkers: i64 = agg_row.try_get("converted_lurkers").unwrap_or(0);
 
     if total_viewers == 0 {
-        return Json(json!({"dataAvailable":false,"message":"Keine Daten für den Zeitraum"})).into_response();
+        return Json(json!({"dataAvailable":false,"message":"Keine Daten für den Zeitraum"}))
+            .into_response();
     }
     if seen_sample_viewers == 0 {
         return Json(json!({"dataAvailable":false,"message":"Zu wenig Chatter-API/Lurker-Daten im Zeitraum"})).into_response();
@@ -214,7 +226,8 @@ pub async fn lurker_analysis_handler(
             "eligible": eligible_lurkers,
             "converted": converted_lurkers,
         },
-    })).into_response()
+    }))
+    .into_response()
 }
 
 #[cfg(test)]
@@ -226,20 +239,39 @@ mod tests {
 
     async fn make_pool(schema: &str) -> Option<PgPool> {
         let dsn = std::env::var("TB_TEST_DATABASE_URL").ok()?;
-        let admin = PgPoolOptions::new().max_connections(1).connect(&dsn).await.unwrap();
-        sqlx::query(&format!("DROP SCHEMA IF EXISTS {schema} CASCADE")).execute(&admin).await.unwrap();
-        sqlx::query(&format!("CREATE SCHEMA {schema}")).execute(&admin).await.unwrap();
+        let admin = PgPoolOptions::new()
+            .max_connections(1)
+            .connect(&dsn)
+            .await
+            .unwrap();
+        sqlx::query(&format!("DROP SCHEMA IF EXISTS {schema} CASCADE"))
+            .execute(&admin)
+            .await
+            .unwrap();
+        sqlx::query(&format!("CREATE SCHEMA {schema}"))
+            .execute(&admin)
+            .await
+            .unwrap();
         admin.close().await;
-        let opts = PgConnectOptions::from_str(&dsn).unwrap().options([("search_path", schema)]);
-        let pool = PgPoolOptions::new().max_connections(2).connect_with(opts).await.unwrap();
+        let opts = PgConnectOptions::from_str(&dsn)
+            .unwrap()
+            .options([("search_path", schema)]);
+        let pool = PgPoolOptions::new()
+            .max_connections(2)
+            .connect_with(opts)
+            .await
+            .unwrap();
         sqlx::query("CREATE TABLE twitch_stream_sessions (id BIGSERIAL PRIMARY KEY, streamer_login TEXT, started_at TIMESTAMPTZ, ended_at TIMESTAMPTZ)")
             .execute(&pool).await.unwrap();
         sqlx::query(
             "CREATE TABLE twitch_session_chatters (
                 session_id BIGINT, chatter_login TEXT, chatter_id TEXT,
                 messages INTEGER DEFAULT 0, seen_via_chatters_api BOOLEAN DEFAULT FALSE,
-                first_message_at TIMESTAMPTZ, last_seen_at TIMESTAMPTZ)"
-        ).execute(&pool).await.unwrap();
+                first_message_at TIMESTAMPTZ, last_seen_at TIMESTAMPTZ)",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
         Some(pool)
     }
 
@@ -252,8 +284,13 @@ mod tests {
         let resp = lurker_analysis_handler(
             DashboardAuthLevel::admin(),
             State(pool),
-            Query(LurkerQuery { streamer: Some("nani".into()), days: Some(30) }),
-        ).await.into_response();
+            Query(LurkerQuery {
+                streamer: Some("nani".into()),
+                days: Some(30),
+            }),
+        )
+        .await
+        .into_response();
         assert_eq!(resp.status(), StatusCode::OK);
         body_json(resp).await
     }
@@ -262,7 +299,9 @@ mod tests {
     // Lurker mitgezählt werden — nicht durch den Bot-Filter fallen.
     #[tokio::test]
     async fn anonymous_null_login_lurker_counted() {
-        let Some(pool) = make_pool("t_lurker_anon").await else { return };
+        let Some(pool) = make_pool("t_lurker_anon").await else {
+            return;
+        };
         sqlx::query("INSERT INTO twitch_stream_sessions (streamer_login, started_at, ended_at) VALUES ('nani', NOW()-INTERVAL '2 days', NOW()-INTERVAL '2 days'+INTERVAL '3 hours')")
             .execute(&pool).await.unwrap();
         // Anonymer Lurker: kein Login, nur chatter_id, via Chatter-API gesehen, 0 Messages
@@ -270,14 +309,22 @@ mod tests {
             .execute(&pool).await.unwrap();
 
         let v = run(pool).await;
-        assert_eq!(v["dataAvailable"], true, "anonymer Lurker muss Daten liefern");
-        assert_eq!(v["lurkerStats"]["totalLurkers"], 1, "anonymer NULL-Login-Lurker muss gezählt werden");
+        assert_eq!(
+            v["dataAvailable"], true,
+            "anonymer Lurker muss Daten liefern"
+        );
+        assert_eq!(
+            v["lurkerStats"]["totalLurkers"], 1,
+            "anonymer NULL-Login-Lurker muss gezählt werden"
+        );
     }
 
     // P2.68: gemischt-groß geschriebener Bot-Login muss case-insensitiv gefiltert werden.
     #[tokio::test]
     async fn mixed_case_bot_filtered() {
-        let Some(pool) = make_pool("t_lurker_botcase").await else { return };
+        let Some(pool) = make_pool("t_lurker_botcase").await else {
+            return;
+        };
         sqlx::query("INSERT INTO twitch_stream_sessions (streamer_login, started_at, ended_at) VALUES ('nani', NOW()-INTERVAL '2 days', NOW()-INTERVAL '2 days'+INTERVAL '3 hours')")
             .execute(&pool).await.unwrap();
         // Echter Lurker
@@ -288,6 +335,50 @@ mod tests {
             .execute(&pool).await.unwrap();
 
         let v = run(pool).await;
-        assert_eq!(v["lurkerStats"]["totalLurkers"], 1, "Nightbot (mixed-case) darf nicht als Lurker zählen");
+        assert_eq!(
+            v["lurkerStats"]["totalLurkers"], 1,
+            "Nightbot (mixed-case) darf nicht als Lurker zählen"
+        );
+    }
+
+    /// Richtet ein berechtigtes Partner-Plan-Snapshot ein (Manual-Override mit
+    /// Analytics-Plan), damit `extended_gate` für den Partner passiert.
+    async fn grant_partner_analytics(pool: &PgPool, login: &str) {
+        sqlx::query(
+            "CREATE TABLE streamer_plans (twitch_user_id TEXT, twitch_login TEXT, manual_plan_id TEXT, manual_plan_expires_at TEXT, manual_plan_notes TEXT, manual_plan_updated_at TEXT)",
+        ).execute(pool).await.unwrap();
+        sqlx::query("CREATE TABLE twitch_billing_subscriptions (customer_reference TEXT, plan_id TEXT, status TEXT, current_period_end TEXT, updated_at TEXT)")
+            .execute(pool).await.unwrap();
+        sqlx::query("INSERT INTO streamer_plans (twitch_login, manual_plan_id) VALUES ($1, 'analysis_dashboard')")
+            .bind(login).execute(pool).await.unwrap();
+    }
+
+    fn partner(login: &str) -> DashboardAuthLevel {
+        DashboardAuthLevel::Partner {
+            twitch_login: login.to_string(),
+            twitch_user_id: String::new(),
+            display_name: login.to_string(),
+        }
+    }
+
+    /// IDOR: ein berechtigter Partner darf NICHT die Lurker-Analyse eines fremden
+    /// Streamers lesen (`?streamer=<fremd>` → 403).
+    #[tokio::test]
+    async fn partner_fremder_streamer_ist_forbidden() {
+        let Some(pool) = make_pool("t_lurker_idor").await else {
+            return;
+        };
+        grant_partner_analytics(&pool, "earlysalty").await;
+        let resp = lurker_analysis_handler(
+            partner("earlysalty"),
+            State(pool),
+            Query(LurkerQuery {
+                streamer: Some("ismile_e".into()),
+                days: Some(30),
+            }),
+        )
+        .await
+        .into_response();
+        assert_eq!(resp.status(), StatusCode::FORBIDDEN);
     }
 }

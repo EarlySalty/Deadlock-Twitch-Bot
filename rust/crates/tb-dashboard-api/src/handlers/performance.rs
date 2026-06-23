@@ -53,7 +53,10 @@ pub struct DaysQuery {
 /// Python-`_require_v2_auth`-Parität: None → 401.
 fn require_auth(auth: &DashboardAuthLevel) -> Result<(), (StatusCode, Json<serde_json::Value>)> {
     if matches!(auth, DashboardAuthLevel::None) {
-        Err((StatusCode::UNAUTHORIZED, Json(json!({"error":"unauthorized","message":"not authenticated"}))))
+        Err((
+            StatusCode::UNAUTHORIZED,
+            Json(json!({"error":"unauthorized","message":"not authenticated"})),
+        ))
     } else {
         Ok(())
     }
@@ -61,7 +64,9 @@ fn require_auth(auth: &DashboardAuthLevel) -> Result<(), (StatusCode, Json<serde
 
 // ── Monatliche Stats ─────────────────────────────────────────────────────────
 
-static MONTH_LABELS: [&str; 13] = ["","Jan","Feb","Mar","Apr","Mai","Jun","Jul","Aug","Sep","Okt","Nov","Dez"];
+static MONTH_LABELS: [&str; 13] = [
+    "", "Jan", "Feb", "Mar", "Apr", "Mai", "Jun", "Jul", "Aug", "Sep", "Okt", "Nov", "Dez",
+];
 
 /// `GET /twitch/api/v2/monthly-stats?streamer=&months=12`
 pub async fn monthly_stats_handler(
@@ -69,16 +74,22 @@ pub async fn monthly_stats_handler(
     State(pool): State<PgPool>,
     Query(params): Query<MonthlyQuery>,
 ) -> impl IntoResponse {
-    if let Err(e) = require_auth(&auth) { return e.into_response(); }
+    if let Err(e) = require_auth(&auth) {
+        return e.into_response();
+    }
 
     let months = match parse_bounded_query_int(params.months.as_deref(), "months", 12, 1, 24) {
         Ok(m) => m,
         Err(resp) => return resp.into_response(),
     };
     let since: DateTime<Utc> = Utc::now() - Duration::days((months as f64 * 30.44) as i64);
-    let streamer = params.streamer.as_deref()
-        .map(|s| s.trim().to_lowercase())
-        .filter(|s| !s.is_empty());
+    // IDOR-Klemme: Partner sind auf den eigenen Login beschränkt; Admin frei
+    // (None → alle Streamer aggregiert).
+    let streamer =
+        match crate::auth::resolve_streamer_scope(&auth, params.streamer.as_deref(), false) {
+            Ok(s) => s,
+            Err(resp) => return resp,
+        };
 
     let rows = sqlx::query(
         r#"
@@ -110,7 +121,11 @@ pub async fn monthly_stats_handler(
     match rows {
         Err(e) => {
             tracing::error!("monthly-stats DB-Fehler: {e}");
-            (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({"error":"internal_error"}))).into_response()
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(json!({"error":"internal_error"})),
+            )
+                .into_response()
         }
         Ok(rows) => {
             let items: Vec<serde_json::Value> = rows.iter().map(|r| {
@@ -137,7 +152,7 @@ pub async fn monthly_stats_handler(
 
 // ── Wochentagsanalyse ────────────────────────────────────────────────────────
 
-static WEEKDAY_LABELS: [&str; 7] = ["So","Mo","Di","Mi","Do","Fr","Sa"];
+static WEEKDAY_LABELS: [&str; 7] = ["So", "Mo", "Di", "Mi", "Do", "Fr", "Sa"];
 
 /// `GET /twitch/api/v2/weekly-stats?streamer=&days=30`
 pub async fn weekly_stats_handler(
@@ -145,16 +160,21 @@ pub async fn weekly_stats_handler(
     State(pool): State<PgPool>,
     Query(params): Query<DaysQuery>,
 ) -> impl IntoResponse {
-    if let Err(e) = require_auth(&auth) { return e.into_response(); }
+    if let Err(e) = require_auth(&auth) {
+        return e.into_response();
+    }
 
     let days = match parse_bounded_query_int(params.days.as_deref(), "days", 30, 7, 365) {
         Ok(d) => d,
         Err(resp) => return resp.into_response(),
     };
     let since: DateTime<Utc> = Utc::now() - Duration::days(days);
-    let streamer = params.streamer.as_deref()
-        .map(|s| s.trim().to_lowercase())
-        .filter(|s| !s.is_empty());
+    // IDOR-Klemme: Partner nur eigener Login; Admin frei (None → alle).
+    let streamer =
+        match crate::auth::resolve_streamer_scope(&auth, params.streamer.as_deref(), false) {
+            Ok(s) => s,
+            Err(resp) => return resp,
+        };
 
     let rows = sqlx::query(
         r#"
@@ -183,22 +203,29 @@ pub async fn weekly_stats_handler(
     match rows {
         Err(e) => {
             tracing::error!("weekly-stats DB-Fehler: {e}");
-            (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({"error":"internal_error"}))).into_response()
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(json!({"error":"internal_error"})),
+            )
+                .into_response()
         }
         Ok(rows) => {
-            let items: Vec<serde_json::Value> = rows.iter().map(|r| {
-                let wd: i32 = r.try_get("weekday").unwrap_or(0);
-                let label = WEEKDAY_LABELS.get(wd as usize).copied().unwrap_or("");
-                json!({
-                    "weekday": wd,
-                    "weekdayLabel": label,
-                    "streamCount": r.try_get::<i64,_>("stream_count").unwrap_or(0),
-                    "avgHours": r.try_get::<f64,_>("avg_hours").unwrap_or(0.0),
-                    "avgViewers": r.try_get::<f64,_>("avg_viewers").unwrap_or(0.0),
-                    "avgPeak": r.try_get::<f64,_>("avg_peak").unwrap_or(0.0),
-                    "totalFollowers": r.try_get::<i64,_>("total_followers").unwrap_or(0),
+            let items: Vec<serde_json::Value> = rows
+                .iter()
+                .map(|r| {
+                    let wd: i32 = r.try_get("weekday").unwrap_or(0);
+                    let label = WEEKDAY_LABELS.get(wd as usize).copied().unwrap_or("");
+                    json!({
+                        "weekday": wd,
+                        "weekdayLabel": label,
+                        "streamCount": r.try_get::<i64,_>("stream_count").unwrap_or(0),
+                        "avgHours": r.try_get::<f64,_>("avg_hours").unwrap_or(0.0),
+                        "avgViewers": r.try_get::<f64,_>("avg_viewers").unwrap_or(0.0),
+                        "avgPeak": r.try_get::<f64,_>("avg_peak").unwrap_or(0.0),
+                        "totalFollowers": r.try_get::<i64,_>("total_followers").unwrap_or(0),
+                    })
                 })
-            }).collect();
+                .collect();
             Json(json!(items)).into_response()
         }
     }
@@ -212,16 +239,21 @@ pub async fn hourly_heatmap_handler(
     State(pool): State<PgPool>,
     Query(params): Query<DaysQuery>,
 ) -> impl IntoResponse {
-    if let Err(e) = require_auth(&auth) { return e.into_response(); }
+    if let Err(e) = require_auth(&auth) {
+        return e.into_response();
+    }
 
     let days = match parse_bounded_query_int(params.days.as_deref(), "days", 30, 7, 365) {
         Ok(d) => d,
         Err(resp) => return resp.into_response(),
     };
     let since: DateTime<Utc> = Utc::now() - Duration::days(days);
-    let streamer = params.streamer.as_deref()
-        .map(|s| s.trim().to_lowercase())
-        .filter(|s| !s.is_empty());
+    // IDOR-Klemme: Partner nur eigener Login; Admin frei (None → alle).
+    let streamer =
+        match crate::auth::resolve_streamer_scope(&auth, params.streamer.as_deref(), false) {
+            Ok(s) => s,
+            Err(resp) => return resp,
+        };
 
     let rows = sqlx::query(
         r#"
@@ -246,16 +278,25 @@ pub async fn hourly_heatmap_handler(
     match rows {
         Err(e) => {
             tracing::error!("hourly-heatmap DB-Fehler: {e}");
-            (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({"error":"internal_error"}))).into_response()
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(json!({"error":"internal_error"})),
+            )
+                .into_response()
         }
         Ok(rows) => {
-            let items: Vec<serde_json::Value> = rows.iter().map(|r| json!({
-                "weekday": r.try_get::<i32,_>("weekday").unwrap_or(0),
-                "hour": r.try_get::<i32,_>("hour").unwrap_or(0),
-                "streamCount": r.try_get::<i64,_>("stream_count").unwrap_or(0),
-                "avgViewers": r.try_get::<f64,_>("avg_viewers").unwrap_or(0.0),
-                "avgPeak": r.try_get::<f64,_>("avg_peak").unwrap_or(0.0),
-            })).collect();
+            let items: Vec<serde_json::Value> = rows
+                .iter()
+                .map(|r| {
+                    json!({
+                        "weekday": r.try_get::<i32,_>("weekday").unwrap_or(0),
+                        "hour": r.try_get::<i32,_>("hour").unwrap_or(0),
+                        "streamCount": r.try_get::<i64,_>("stream_count").unwrap_or(0),
+                        "avgViewers": r.try_get::<f64,_>("avg_viewers").unwrap_or(0.0),
+                        "avgPeak": r.try_get::<f64,_>("avg_peak").unwrap_or(0.0),
+                    })
+                })
+                .collect();
             Json(json!(items)).into_response()
         }
     }
@@ -269,16 +310,21 @@ pub async fn calendar_heatmap_handler(
     State(pool): State<PgPool>,
     Query(params): Query<DaysQuery>,
 ) -> impl IntoResponse {
-    if let Err(e) = require_auth(&auth) { return e.into_response(); }
+    if let Err(e) = require_auth(&auth) {
+        return e.into_response();
+    }
 
     let days = match parse_bounded_query_int(params.days.as_deref(), "days", 365, 30, 365) {
         Ok(d) => d,
         Err(resp) => return resp.into_response(),
     };
     let since: DateTime<Utc> = Utc::now() - Duration::days(days);
-    let streamer = params.streamer.as_deref()
-        .map(|s| s.trim().to_lowercase())
-        .filter(|s| !s.is_empty());
+    // IDOR-Klemme: Partner nur eigener Login; Admin frei (None → alle).
+    let streamer =
+        match crate::auth::resolve_streamer_scope(&auth, params.streamer.as_deref(), false) {
+            Ok(s) => s,
+            Err(resp) => return resp,
+        };
 
     let rows = sqlx::query(
         r#"
@@ -302,19 +348,28 @@ pub async fn calendar_heatmap_handler(
     match rows {
         Err(e) => {
             tracing::error!("calendar-heatmap DB-Fehler: {e}");
-            (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({"error":"internal_error"}))).into_response()
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(json!({"error":"internal_error"})),
+            )
+                .into_response()
         }
         Ok(rows) => {
-            let items: Vec<serde_json::Value> = rows.iter().map(|r| {
-                let date: chrono::NaiveDate = r.try_get("date").unwrap_or(chrono::NaiveDate::from_ymd_opt(1970,1,1).unwrap());
-                let hw = r.try_get::<f64,_>("hours_watched").unwrap_or(0.0);
-                json!({
-                    "date": date.to_string(),
-                    "streamCount": r.try_get::<i64,_>("stream_count").unwrap_or(0),
-                    "hoursWatched": hw,
-                    "value": hw,
+            let items: Vec<serde_json::Value> = rows
+                .iter()
+                .map(|r| {
+                    let date: chrono::NaiveDate = r
+                        .try_get("date")
+                        .unwrap_or(chrono::NaiveDate::from_ymd_opt(1970, 1, 1).unwrap());
+                    let hw = r.try_get::<f64, _>("hours_watched").unwrap_or(0.0);
+                    json!({
+                        "date": date.to_string(),
+                        "streamCount": r.try_get::<i64,_>("stream_count").unwrap_or(0),
+                        "hoursWatched": hw,
+                        "value": hw,
+                    })
                 })
-            }).collect();
+                .collect();
             Json(json!(items)).into_response()
         }
     }
@@ -334,12 +389,19 @@ pub async fn viewer_count_timeline_handler(
         Ok(d) => d,
         Err(resp) => return resp.into_response(),
     };
-    let Some(streamer) = params.streamer.as_deref()
-        .map(|s| s.trim().to_lowercase())
-        .filter(|s| !s.is_empty())
-    else {
-        return (StatusCode::BAD_REQUEST, Json(json!({"error":"Streamer required"}))).into_response();
-    };
+    // IDOR-Klemme: Partner nur eigener Login; Admin braucht streamer (required).
+    let streamer =
+        match crate::auth::resolve_streamer_scope(&auth, params.streamer.as_deref(), true) {
+            Ok(Some(s)) => s,
+            Ok(None) => {
+                return (
+                    StatusCode::BAD_REQUEST,
+                    Json(json!({"error":"Streamer required"})),
+                )
+                    .into_response()
+            }
+            Err(resp) => return resp,
+        };
     let since = Utc::now() - Duration::days(days);
     let bucket_sql = viewer_timeline_bucket_sql(days);
     let query = format!(
@@ -353,19 +415,33 @@ pub async fn viewer_count_timeline_handler(
          GROUP BY 1 ORDER BY 1"
     );
 
-    match sqlx::query(&query).bind(since).bind(streamer).fetch_all(&pool).await {
+    match sqlx::query(&query)
+        .bind(since)
+        .bind(streamer)
+        .fetch_all(&pool)
+        .await
+    {
         Err(e) => {
             tracing::error!("viewer-timeline DB-Fehler: {e}");
-            (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({"error":"internal_error"}))).into_response()
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(json!({"error":"internal_error"})),
+            )
+                .into_response()
         }
         Ok(rows) => {
-            let items: Vec<serde_json::Value> = rows.iter().map(|r| json!({
-                "timestamp": r.try_get::<String,_>("bucket").unwrap_or_default(),
-                "avgViewers": r.try_get::<f64,_>("avg_vc").unwrap_or(0.0),
-                "peakViewers": r.try_get::<i64,_>("peak_vc").unwrap_or(0),
-                "minViewers": r.try_get::<i64,_>("min_vc").unwrap_or(0),
-                "samples": r.try_get::<i64,_>("samples").unwrap_or(0),
-            })).collect();
+            let items: Vec<serde_json::Value> = rows
+                .iter()
+                .map(|r| {
+                    json!({
+                        "timestamp": r.try_get::<String,_>("bucket").unwrap_or_default(),
+                        "avgViewers": r.try_get::<f64,_>("avg_vc").unwrap_or(0.0),
+                        "peakViewers": r.try_get::<i64,_>("peak_vc").unwrap_or(0),
+                        "minViewers": r.try_get::<i64,_>("min_vc").unwrap_or(0),
+                        "samples": r.try_get::<i64,_>("samples").unwrap_or(0),
+                    })
+                })
+                .collect();
             Json(json!(items)).into_response()
         }
     }
@@ -386,8 +462,8 @@ fn viewer_timeline_bucket_sql(days: i64) -> &'static str {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use super::viewer_timeline_bucket_sql;
+    use super::*;
     use sqlx::postgres::{PgConnectOptions, PgPoolOptions};
     use std::str::FromStr;
 
@@ -464,7 +540,10 @@ mod tests {
         let resp = monthly_stats_handler(
             DashboardAuthLevel::admin(),
             State(pool),
-            Query(MonthlyQuery { streamer: None, months: None }),
+            Query(MonthlyQuery {
+                streamer: None,
+                months: None,
+            }),
         )
         .await
         .into_response();
@@ -474,13 +553,49 @@ mod tests {
             StatusCode::OK,
             "timestamptz-Bind muss gegen timestamptz-Spalte funktionieren"
         );
-        let bytes = axum::body::to_bytes(resp.into_body(), usize::MAX).await.unwrap();
+        let bytes = axum::body::to_bytes(resp.into_body(), usize::MAX)
+            .await
+            .unwrap();
         let body: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
         // Mindestens ein Monatseintrag mit der Session.
         let items = body
             .get("items")
             .or_else(|| body.get("months"))
             .or(Some(&body));
-        assert!(items.is_some(), "Response sollte Monatsdaten enthalten: {body}");
+        assert!(
+            items.is_some(),
+            "Response sollte Monatsdaten enthalten: {body}"
+        );
+    }
+
+    /// IDOR: Ein eingeloggter Partner darf via `?streamer=<fremd>` NICHT die
+    /// Analytics eines anderen Streamers lesen → 403 (kein DB-Zugriff nötig,
+    /// die Klemme greift vor der Query).
+    #[tokio::test]
+    async fn partner_fremder_streamer_ist_403() {
+        let auth = DashboardAuthLevel::Partner {
+            twitch_login: "someone".into(),
+            twitch_user_id: "1".into(),
+            display_name: "someone".into(),
+        };
+        // Dummy-Pool: wird nie berührt, da die Klemme vor der Query 403 liefert.
+        let pool = match PgPoolOptions::new()
+            .max_connections(1)
+            .connect_lazy("postgres://invalid:5432/none")
+        {
+            Ok(p) => p,
+            Err(_) => return,
+        };
+        let resp = weekly_stats_handler(
+            auth,
+            State(pool),
+            Query(DaysQuery {
+                streamer: Some("fremd".into()),
+                days: None,
+            }),
+        )
+        .await
+        .into_response();
+        assert_eq!(resp.status(), StatusCode::FORBIDDEN);
     }
 }

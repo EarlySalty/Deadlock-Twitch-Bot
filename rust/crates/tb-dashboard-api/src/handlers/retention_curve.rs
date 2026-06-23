@@ -46,21 +46,18 @@ pub async fn retention_curve_handler(
         Ok(d) => d,
         Err(resp) => return resp.into_response(),
     };
-    let streamer = match params
-        .streamer
-        .as_deref()
-        .map(str::trim)
-        .filter(|s| !s.is_empty())
-    {
-        Some(s) => s.to_lowercase(),
-        None => {
-            return (
-                StatusCode::BAD_REQUEST,
-                Json(json!({"error":"Streamer required"})),
-            )
-                .into_response()
-        }
-    };
+    let streamer =
+        match crate::auth::resolve_streamer_scope(&auth, params.streamer.as_deref(), true) {
+            Ok(Some(s)) => s,
+            Ok(None) => {
+                return (
+                    StatusCode::BAD_REQUEST,
+                    Json(json!({"error":"Streamer required"})),
+                )
+                    .into_response()
+            }
+            Err(resp) => return resp,
+        };
     let since: DateTime<Utc> = Utc::now() - Duration::days(days);
 
     // Letzte 50 Sessions wie Python; Viewer-Retention per Minute normalisiert auf peak_viewers,
@@ -322,5 +319,46 @@ mod tests {
         let body: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
         assert_eq!(body["drop_events"][0]["minute"], 1);
         assert_eq!(body["drop_events"][0]["type"], "ad_break");
+    }
+
+    /// Richtet ein berechtigtes Partner-Plan-Snapshot ein (Manual-Override mit
+    /// Analytics-Plan), damit `extended_gate` für den Partner passiert.
+    async fn grant_partner_analytics(pool: &PgPool, login: &str) {
+        sqlx::query(
+            "CREATE TABLE streamer_plans (twitch_user_id TEXT, twitch_login TEXT, manual_plan_id TEXT, manual_plan_expires_at TEXT, manual_plan_notes TEXT, manual_plan_updated_at TEXT)",
+        ).execute(pool).await.unwrap();
+        sqlx::query("CREATE TABLE twitch_billing_subscriptions (customer_reference TEXT, plan_id TEXT, status TEXT, current_period_end TEXT, updated_at TEXT)")
+            .execute(pool).await.unwrap();
+        sqlx::query("INSERT INTO streamer_plans (twitch_login, manual_plan_id) VALUES ($1, 'analysis_dashboard')")
+            .bind(login).execute(pool).await.unwrap();
+    }
+
+    fn partner(login: &str) -> DashboardAuthLevel {
+        DashboardAuthLevel::Partner {
+            twitch_login: login.to_string(),
+            twitch_user_id: String::new(),
+            display_name: login.to_string(),
+        }
+    }
+
+    /// IDOR: ein berechtigter Partner darf NICHT die Retention-Kurve eines fremden
+    /// Streamers lesen (`?streamer=<fremd>` → 403).
+    #[tokio::test]
+    async fn partner_fremder_streamer_ist_forbidden() {
+        let Some(pool) = make_pool("t_retention_idor").await else {
+            return;
+        };
+        grant_partner_analytics(&pool, "earlysalty").await;
+        let resp = retention_curve_handler(
+            partner("earlysalty"),
+            State(pool),
+            Query(RetentionQuery {
+                streamer: Some("ismile_e".into()),
+                days: Some("7".into()),
+            }),
+        )
+        .await
+        .into_response();
+        assert_eq!(resp.status(), StatusCode::FORBIDDEN);
     }
 }

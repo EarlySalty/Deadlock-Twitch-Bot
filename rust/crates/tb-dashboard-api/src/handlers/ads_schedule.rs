@@ -23,7 +23,10 @@ pub struct AdsQuery {
 
 fn require_auth(auth: &DashboardAuthLevel) -> Result<(), (StatusCode, Json<serde_json::Value>)> {
     if matches!(auth, DashboardAuthLevel::None) {
-        Err((StatusCode::UNAUTHORIZED, Json(json!({"error":"unauthorized","message":"not authenticated"}))))
+        Err((
+            StatusCode::UNAUTHORIZED,
+            Json(json!({"error":"unauthorized","message":"not authenticated"})),
+        ))
     } else {
         Ok(())
     }
@@ -43,10 +46,20 @@ pub async fn ads_schedule_handler(
         return e.into_response();
     }
 
-    let streamer = match params.streamer.as_deref().map(str::trim).filter(|s| !s.is_empty()) {
-        Some(s) => s.to_lowercase(),
-        None => return (StatusCode::BAD_REQUEST, Json(json!({"error":"Streamer required"}))).into_response(),
-    };
+    // IDOR-Guard: Partner werden auf den eigenen Login geklemmt (Cross-Account →
+    // 403); Admin/Localhost dürfen `streamer` frei wählen.
+    let streamer =
+        match crate::auth::resolve_streamer_scope(&auth, params.streamer.as_deref(), true) {
+            Ok(Some(s)) => s,
+            Ok(None) => {
+                return (
+                    StatusCode::BAD_REQUEST,
+                    Json(json!({"error":"Streamer required"})),
+                )
+                    .into_response()
+            }
+            Err(resp) => return resp,
+        };
 
     let rows = sqlx::query(
         r#"SELECT twitch_login, next_ad_at, last_ad_at, duration,
@@ -63,9 +76,15 @@ pub async fn ads_schedule_handler(
     match rows {
         Err(e) => {
             tracing::error!("ads-schedule DB-Fehler: {e}");
-            (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({"error":"internal_error"}))).into_response()
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(json!({"error":"internal_error"})),
+            )
+                .into_response()
         }
-        Ok(rows) if rows.is_empty() => Json(json!({"current": null, "history": []})).into_response(),
+        Ok(rows) if rows.is_empty() => {
+            Json(json!({"current": null, "history": []})).into_response()
+        }
         Ok(rows) => {
             let first = &rows[0];
             let current = json!({
@@ -77,13 +96,80 @@ pub async fn ads_schedule_handler(
                 "snooze_refresh_at": opt_iso(first.try_get("snooze_refresh_at").ok()),
                 "snapshot_at": opt_iso(first.try_get("snapshot_at").ok()),
             });
-            let history: Vec<serde_json::Value> = rows.iter().take(10).map(|r| json!({
-                "snapshot_at": opt_iso(r.try_get("snapshot_at").ok()),
-                "next_ad_at": opt_iso(r.try_get("next_ad_at").ok()),
-                "duration": r.try_get::<i32, _>("duration").ok(),
-                "preroll_free_time": r.try_get::<i32, _>("preroll_free_time").ok(),
-            })).collect();
+            let history: Vec<serde_json::Value> = rows
+                .iter()
+                .take(10)
+                .map(|r| {
+                    json!({
+                        "snapshot_at": opt_iso(r.try_get("snapshot_at").ok()),
+                        "next_ad_at": opt_iso(r.try_get("next_ad_at").ok()),
+                        "duration": r.try_get::<i32, _>("duration").ok(),
+                        "preroll_free_time": r.try_get::<i32, _>("preroll_free_time").ok(),
+                    })
+                })
+                .collect();
             Json(json!({"current": current, "history": history})).into_response()
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use sqlx::postgres::{PgConnectOptions, PgPoolOptions};
+    use std::str::FromStr;
+
+    async fn make_pool(schema: &str) -> Option<PgPool> {
+        let dsn = std::env::var("TB_TEST_DATABASE_URL").ok()?;
+        let admin = PgPoolOptions::new()
+            .max_connections(1)
+            .connect(&dsn)
+            .await
+            .unwrap();
+        sqlx::query(&format!("DROP SCHEMA IF EXISTS {schema} CASCADE"))
+            .execute(&admin)
+            .await
+            .unwrap();
+        sqlx::query(&format!("CREATE SCHEMA {schema}"))
+            .execute(&admin)
+            .await
+            .unwrap();
+        admin.close().await;
+        let opts = PgConnectOptions::from_str(&dsn)
+            .unwrap()
+            .options([("search_path", schema)]);
+        Some(
+            PgPoolOptions::new()
+                .max_connections(2)
+                .connect_with(opts)
+                .await
+                .unwrap(),
+        )
+    }
+
+    fn partner(login: &str) -> DashboardAuthLevel {
+        DashboardAuthLevel::Partner {
+            twitch_login: login.to_string(),
+            twitch_user_id: "42".to_string(),
+            display_name: login.to_string(),
+        }
+    }
+
+    // IDOR-Guard: Partner mit fremdem ?streamer= → 403 (vor jedem DB-Zugriff).
+    #[tokio::test]
+    async fn partner_fremder_streamer_403() {
+        let Some(pool) = make_pool("t_ads_idor").await else {
+            return;
+        };
+        let resp = ads_schedule_handler(
+            partner("earlysalty"),
+            State(pool),
+            Query(AdsQuery {
+                streamer: Some("ismile_e".into()),
+            }),
+        )
+        .await
+        .into_response();
+        assert_eq!(resp.status(), StatusCode::FORBIDDEN);
     }
 }

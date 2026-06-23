@@ -1,3 +1,10 @@
+## #281 — Analyse-Daten strikt aufs eigene Konto begrenzt
+
+**Problem:** Die Daten-Endpunkte des Verwaltungs- und Analyse-Dashboards lasen den abgefragten Kanal aus einem Anfrage-Parameter, prüften aber nicht durchgängig, dass dieser Kanal auch dem angemeldeten Konto gehört. Eine Plan- bzw. Anmeldeprüfung allein bestätigt nur, dass die eigene Sitzung berechtigt ist — nicht, wessen Kanal abgefragt wird. Dadurch hätte ein angemeldeter Streamer durch Ändern des Kanal-Parameters Auswertungen fremder Kanäle (z. B. Zuschauer-Überschneidung, Audience-, Chat- oder Raid-Auswertungen) einsehen können.
+
+**Änderung:** Alle Endpunkte, die die privaten Auswertungen genau eines Kanals liefern, laufen jetzt über eine gemeinsame Eigentümer-Prüfung: Ein angemeldeter Streamer wird zwingend auf den eigenen Login festgelegt — ein fremder Kanal im Parameter führt zu „nicht erlaubt". Verwaltungs-Konten dürfen weiterhin jeden Kanal wählen. Bewusst kanalübergreifende, öffentliche Ansichten (Kategorie-Bestenliste, das öffentliche OBS-Overlay) bleiben unverändert offen. Plan- und Anmeldeprüfungen bleiben zusätzlich bestehen.
+
+**Ergebnis:** Jede Kanal-Auswertung ist an das eigene Konto gebunden; ein Zugriff auf fremde Kanal-Daten über den Parameter ist nicht mehr möglich, ohne legitime kanalübergreifende Funktionen einzuschränken.
 ## #280 — Verwaltungs- & Analyse-Dashboard: Streamer-Standardsicht statt Dauer-Admin
 
 **Problem:** Im Verwaltungs- und Analyse-Dashboard funktionierten viele Kacheln nicht — „Konto-Daten nicht verfügbar", Fehler beim Laden der Scam-Schutz-Fälle und beim Umschalten der Chat-AI. Ursache: Ein Konto mit Admin-Berechtigung wurde nach dem Login dauerhaft als Admin behandelt statt als normaler Streamer; dadurch passten die angezeigte Streamer-Sicht und der Datenzugriff im Hintergrund nicht zusammen. Zusätzlich scheiterten Schreib-Aktionen an einem Schutzmechanismus, den die Dashboard-Oberfläche technisch nicht erfüllen konnte.

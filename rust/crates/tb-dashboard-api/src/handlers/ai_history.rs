@@ -49,12 +49,20 @@ pub async fn ai_history_handler(
         )
             .into_response();
     }
-    let streamer = match params.streamer.as_deref().map(str::trim).filter(|s| !s.is_empty()) {
-        Some(s) => s.to_lowercase(),
-        None => {
-            return (StatusCode::BAD_REQUEST, Json(json!({ "error": "streamer parameter required" }))).into_response();
-        }
-    };
+    // IDOR-Guard: Partner werden auf den eigenen Login geklemmt (Cross-Account →
+    // 403); Admin/Localhost dürfen `streamer` frei wählen.
+    let streamer =
+        match crate::auth::resolve_streamer_scope(&auth, params.streamer.as_deref(), true) {
+            Ok(Some(s)) => s,
+            Ok(None) => {
+                return (
+                    StatusCode::BAD_REQUEST,
+                    Json(json!({ "error": "streamer parameter required" })),
+                )
+                    .into_response();
+            }
+            Err(resp) => return resp,
+        };
     // AI-Plan-Gate: Admin bypass; sonst muss der Streamer einen AI-Plan haben.
     let privileged = matches!(auth, DashboardAuthLevel::Admin { .. });
     if !privileged && ai_plan_model(&pool, &streamer).await.is_none() {
@@ -94,21 +102,44 @@ mod tests {
 
     async fn make_pool(schema: &str) -> Option<PgPool> {
         let dsn = std::env::var("TB_TEST_DATABASE_URL").ok()?;
-        let admin = PgPoolOptions::new().max_connections(1).connect(&dsn).await.unwrap();
-        sqlx::query(&format!("DROP SCHEMA IF EXISTS {schema} CASCADE")).execute(&admin).await.unwrap();
-        sqlx::query(&format!("CREATE SCHEMA {schema}")).execute(&admin).await.unwrap();
+        let admin = PgPoolOptions::new()
+            .max_connections(1)
+            .connect(&dsn)
+            .await
+            .unwrap();
+        sqlx::query(&format!("DROP SCHEMA IF EXISTS {schema} CASCADE"))
+            .execute(&admin)
+            .await
+            .unwrap();
+        sqlx::query(&format!("CREATE SCHEMA {schema}"))
+            .execute(&admin)
+            .await
+            .unwrap();
         admin.close().await;
-        let opts = PgConnectOptions::from_str(&dsn).unwrap().options([("search_path", schema)]);
-        Some(PgPoolOptions::new().max_connections(2).connect_with(opts).await.unwrap())
+        let opts = PgConnectOptions::from_str(&dsn)
+            .unwrap()
+            .options([("search_path", schema)]);
+        Some(
+            PgPoolOptions::new()
+                .max_connections(2)
+                .connect_with(opts)
+                .await
+                .unwrap(),
+        )
     }
 
     #[tokio::test]
     async fn streamer_pflicht_400() {
-        let Some(pool) = make_pool("t_aih_h1").await else { return };
+        let Some(pool) = make_pool("t_aih_h1").await else {
+            return;
+        };
         let resp = ai_history_handler(
             DashboardAuthLevel::admin(),
             State(pool),
-            Query(AiHistoryQuery { streamer: None, limit: None }),
+            Query(AiHistoryQuery {
+                streamer: None,
+                limit: None,
+            }),
         )
         .await
         .into_response();
@@ -119,11 +150,16 @@ mod tests {
     /// (Python api_v2.py:1258-1262), nicht das alte `{"error":"unauthorized"}`.
     #[tokio::test]
     async fn unauth_401_python_shape() {
-        let Some(pool) = make_pool("t_aih_h_401").await else { return };
+        let Some(pool) = make_pool("t_aih_h_401").await else {
+            return;
+        };
         let resp = ai_history_handler(
             DashboardAuthLevel::None,
             State(pool),
-            Query(AiHistoryQuery { streamer: Some("nani".into()), limit: None }),
+            Query(AiHistoryQuery {
+                streamer: Some("nani".into()),
+                limit: None,
+            }),
         )
         .await
         .into_response();
@@ -137,14 +173,46 @@ mod tests {
         assert_eq!(body["loginUrl"], "/twitch/auth/login?next=%2Fanalyse");
     }
 
+    fn partner(login: &str) -> DashboardAuthLevel {
+        DashboardAuthLevel::Partner {
+            twitch_login: login.to_string(),
+            twitch_user_id: "42".to_string(),
+            display_name: login.to_string(),
+        }
+    }
+
+    // IDOR-Guard: Partner mit fremdem ?streamer= → 403.
+    #[tokio::test]
+    async fn partner_fremder_streamer_403() {
+        let Some(pool) = make_pool("t_aih_idor").await else {
+            return;
+        };
+        let resp = ai_history_handler(
+            partner("earlysalty"),
+            State(pool),
+            Query(AiHistoryQuery {
+                streamer: Some("ismile_e".into()),
+                limit: None,
+            }),
+        )
+        .await
+        .into_response();
+        assert_eq!(resp.status(), StatusCode::FORBIDDEN);
+    }
+
     #[tokio::test]
     async fn localhost_bypass_200() {
-        let Some(pool) = make_pool("t_aih_h2").await else { return };
+        let Some(pool) = make_pool("t_aih_h2").await else {
+            return;
+        };
         // Admin bypasst das AI-Plan-Gate → 200 (leere Historie).
         let resp = ai_history_handler(
             DashboardAuthLevel::admin(),
             State(pool),
-            Query(AiHistoryQuery { streamer: Some("nani".into()), limit: Some(10) }),
+            Query(AiHistoryQuery {
+                streamer: Some("nani".into()),
+                limit: Some(10),
+            }),
         )
         .await
         .into_response();

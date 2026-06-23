@@ -35,7 +35,10 @@ const KNOWN_CHAT_BOTS: &[&str] = &[
 
 fn require_auth(auth: &DashboardAuthLevel) -> Result<(), (StatusCode, Json<serde_json::Value>)> {
     if matches!(auth, DashboardAuthLevel::None) {
-        Err((StatusCode::UNAUTHORIZED, Json(json!({"error":"unauthorized","message":"not authenticated"}))))
+        Err((
+            StatusCode::UNAUTHORIZED,
+            Json(json!({"error":"unauthorized","message":"not authenticated"})),
+        ))
     } else {
         Ok(())
     }
@@ -67,10 +70,20 @@ pub async fn viewer_overlap_handler(
         return e.into_response();
     }
 
-    let streamer = match params.streamer.as_deref().map(str::trim).filter(|s| !s.is_empty()) {
-        Some(s) => s.to_lowercase(),
-        None => return (StatusCode::BAD_REQUEST, Json(json!({"error":"Streamer required"}))).into_response(),
-    };
+    // IDOR-Guard: Partner werden auf den eigenen Login geklemmt (Cross-Account →
+    // 403); Admin/Localhost dürfen `streamer` frei wählen.
+    let streamer =
+        match crate::auth::resolve_streamer_scope(&auth, params.streamer.as_deref(), true) {
+            Ok(Some(s)) => s,
+            Ok(None) => {
+                return (
+                    StatusCode::BAD_REQUEST,
+                    Json(json!({"error":"Streamer required"})),
+                )
+                    .into_response()
+            }
+            Err(resp) => return resp,
+        };
     let limit = params.limit.unwrap_or(20).clamp(5, 50) as i64;
 
     // Bot-Exclusion: $1 = base_streamer, $2 = base_streamer (für !=), $3..$N+2 = Bots (c1),
@@ -140,8 +153,12 @@ pub async fn viewer_overlap_handler(
 
     // Overlap-Query
     let mut overlap_q = sqlx::query(&sql).bind(&streamer).bind(&streamer);
-    for bot in KNOWN_CHAT_BOTS { overlap_q = overlap_q.bind(*bot); } // c1 bots
-    for bot in KNOWN_CHAT_BOTS { overlap_q = overlap_q.bind(*bot); } // c2 bots (auch in totals_b)
+    for bot in KNOWN_CHAT_BOTS {
+        overlap_q = overlap_q.bind(*bot);
+    } // c1 bots
+    for bot in KNOWN_CHAT_BOTS {
+        overlap_q = overlap_q.bind(*bot);
+    } // c2 bots (auch in totals_b)
     overlap_q = overlap_q.bind(limit);
 
     let rows = overlap_q.fetch_all(&pool).await;
@@ -149,27 +166,35 @@ pub async fn viewer_overlap_handler(
     match rows {
         Err(e) => {
             tracing::error!("viewer-overlap DB-Fehler: {e}");
-            (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({"error":"internal_error"}))).into_response()
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(json!({"error":"internal_error"})),
+            )
+                .into_response()
         }
         Ok(rows) => {
-            let data: Vec<serde_json::Value> = rows.iter().map(|r| {
-                let other: String = r.try_get("other_streamer").unwrap_or_default();
-                let shared: i64 = r.try_get("shared_chatters").unwrap_or(0);
-                let total_b: i64 = r.try_get::<i64, _>("total_b").unwrap_or(1).max(1);
-                let jaccard = shared as f64 / (total_a + total_b - shared).max(1) as f64 * 100.0;
-                let jaccard = (jaccard * 10.0).round() / 10.0;
-                json!({
-                    "streamerA": streamer,
-                    "streamerB": other,
-                    "sharedChatters": shared,
-                    "totalChattersA": total_a,
-                    "totalChattersB": total_b,
-                    "overlapAtoB": ((shared as f64 / total_a as f64 * 1000.0).round() / 10.0),
-                    "overlapBtoA": ((shared as f64 / total_b as f64 * 1000.0).round() / 10.0),
-                    "jaccard": jaccard,
-                    "overlapPercentage": jaccard,
+            let data: Vec<serde_json::Value> = rows
+                .iter()
+                .map(|r| {
+                    let other: String = r.try_get("other_streamer").unwrap_or_default();
+                    let shared: i64 = r.try_get("shared_chatters").unwrap_or(0);
+                    let total_b: i64 = r.try_get::<i64, _>("total_b").unwrap_or(1).max(1);
+                    let jaccard =
+                        shared as f64 / (total_a + total_b - shared).max(1) as f64 * 100.0;
+                    let jaccard = (jaccard * 10.0).round() / 10.0;
+                    json!({
+                        "streamerA": streamer,
+                        "streamerB": other,
+                        "sharedChatters": shared,
+                        "totalChattersA": total_a,
+                        "totalChattersB": total_b,
+                        "overlapAtoB": ((shared as f64 / total_a as f64 * 1000.0).round() / 10.0),
+                        "overlapBtoA": ((shared as f64 / total_b as f64 * 1000.0).round() / 10.0),
+                        "jaccard": jaccard,
+                        "overlapPercentage": jaccard,
+                    })
                 })
-            }).collect();
+                .collect();
             Json(json!(data)).into_response()
         }
     }
@@ -195,12 +220,19 @@ pub async fn viewer_profiles_handler(
     if let Some(resp) = crate::auth::extended_gate(&pool, &auth).await {
         return resp;
     }
-    let streamer = match params.streamer.as_deref().map(str::trim).filter(|s| !s.is_empty()) {
-        Some(s) => s.to_lowercase(),
-        None => {
-            return (StatusCode::BAD_REQUEST, Json(json!({"error":"streamer required"}))).into_response();
-        }
-    };
+    // IDOR-Guard: Partner auf den eigenen Login klemmen (Plan UND Owner).
+    let streamer =
+        match crate::auth::resolve_streamer_scope(&auth, params.streamer.as_deref(), true) {
+            Ok(Some(s)) => s,
+            Ok(None) => {
+                return (
+                    StatusCode::BAD_REQUEST,
+                    Json(json!({"error":"streamer required"})),
+                )
+                    .into_response();
+            }
+            Err(resp) => return resp,
+        };
     let bots: Vec<String> = KNOWN_CHAT_BOTS.iter().map(|s| s.to_string()).collect();
 
     let dist_sql = r#"
@@ -285,8 +317,16 @@ pub async fn viewer_profiles_handler(
         .collect();
 
     let total: i64 = dist.iter().map(|(_, v)| v).sum();
-    let exclusive: i64 = dist.iter().find(|(k, _)| *k == 1).map(|(_, v)| *v).unwrap_or(0);
-    let loyal_multi: i64 = dist.iter().filter(|(k, _)| *k == 2 || *k == 3).map(|(_, v)| *v).sum();
+    let exclusive: i64 = dist
+        .iter()
+        .find(|(k, _)| *k == 1)
+        .map(|(_, v)| *v)
+        .unwrap_or(0);
+    let loyal_multi: i64 = dist
+        .iter()
+        .filter(|(k, _)| *k == 2 || *k == 3)
+        .map(|(_, v)| *v)
+        .sum();
     let explorer: i64 = dist.iter().filter(|(k, _)| *k >= 8).map(|(_, v)| *v).sum();
     let casual = (total - exclusive - loyal_multi - explorer - passive).max(0);
 
@@ -306,7 +346,8 @@ pub async fn viewer_profiles_handler(
             "total": total,
         },
         "exclusivityDistribution": exclusivity_dist,
-    })).into_response()
+    }))
+    .into_response()
 }
 
 // ─── audience-sharing ───────────────────────────────────────────────────────
@@ -329,12 +370,19 @@ pub async fn audience_sharing_handler(
     if let Some(resp) = crate::auth::extended_gate(&pool, &auth).await {
         return resp;
     }
-    let streamer = match params.streamer.as_deref().map(str::trim).filter(|s| !s.is_empty()) {
-        Some(s) => s.to_lowercase(),
-        None => {
-            return (StatusCode::BAD_REQUEST, Json(json!({"error":"streamer required"}))).into_response();
-        }
-    };
+    // IDOR-Guard: Partner auf den eigenen Login klemmen (Plan UND Owner).
+    let streamer =
+        match crate::auth::resolve_streamer_scope(&auth, params.streamer.as_deref(), true) {
+            Ok(Some(s)) => s,
+            Ok(None) => {
+                return (
+                    StatusCode::BAD_REQUEST,
+                    Json(json!({"error":"streamer required"})),
+                )
+                    .into_response();
+            }
+            Err(resp) => return resp,
+        };
     let days = params.days.unwrap_or(30).clamp(7, 365) as i64;
     let since: DateTime<Utc> = Utc::now() - chrono::Duration::days(days);
     let bots: Vec<String> = KNOWN_CHAT_BOTS.iter().map(|s| s.to_string()).collect();
@@ -398,7 +446,8 @@ pub async fn audience_sharing_handler(
                 "timeline": [],
                 "totalUniqueViewers": my_total,
                 "dataQuality": {"months": 0, "minSharedFilter": 3},
-            })).into_response();
+            }))
+            .into_response();
         }
     };
 
@@ -410,7 +459,8 @@ pub async fn audience_sharing_handler(
             "timeline": [],
             "totalUniqueViewers": my_total,
             "dataQuality": {"months": 0, "minSharedFilter": 3},
-        })).into_response();
+        }))
+        .into_response();
     }
 
     let top_streamers: Vec<String> = shared_rows
@@ -498,7 +548,8 @@ pub async fn audience_sharing_handler(
         "timeline": timeline,
         "totalUniqueViewers": my_total,
         "dataQuality": {"months": months_set.len(), "minSharedFilter": 3},
-    })).into_response()
+    }))
+    .into_response()
 }
 
 // ─── audience-insights ──────────────────────────────────────────────────────
@@ -559,7 +610,10 @@ async fn backfill_last_seen(pool: &PgPool, session_ids: &[i64], bots: &[String])
 }
 
 async fn calc_watch_distribution(pool: &PgPool, session_ids: &[i64], bots: &[String]) -> WatchDist {
-    let empty = WatchDist { avg: 0.0, method: "no_data" };
+    let empty = WatchDist {
+        avg: 0.0,
+        method: "no_data",
+    };
     if session_ids.is_empty() {
         return empty;
     }
@@ -631,7 +685,10 @@ async fn calc_watch_distribution(pool: &PgPool, session_ids: &[i64], bots: &[Str
     let total = real_minutes.len() as f64;
     let avg = ((real_minutes.iter().sum::<f64>() / total) * 10.0).round() / 10.0;
 
-    WatchDist { avg, method: "real_samples" }
+    WatchDist {
+        avg,
+        method: "real_samples",
+    }
 }
 
 /// Anteil der Viewer dieser Periode, die bereits vorher bekannt waren (aus twitch_chatter_rollup).
@@ -743,12 +800,19 @@ pub async fn audience_insights_handler(
     if let Some(resp) = crate::auth::extended_gate(&pool, &auth).await {
         return resp;
     }
-    let streamer = match params.streamer.as_deref().map(str::trim).filter(|s| !s.is_empty()) {
-        Some(s) => s.to_lowercase(),
-        None => {
-            return (StatusCode::BAD_REQUEST, Json(json!({"error":"Streamer required"}))).into_response();
-        }
-    };
+    // IDOR-Guard: Partner auf den eigenen Login klemmen (Plan UND Owner).
+    let streamer =
+        match crate::auth::resolve_streamer_scope(&auth, params.streamer.as_deref(), true) {
+            Ok(Some(s)) => s,
+            Ok(None) => {
+                return (
+                    StatusCode::BAD_REQUEST,
+                    Json(json!({"error":"Streamer required"})),
+                )
+                    .into_response();
+            }
+            Err(resp) => return resp,
+        };
     let days = params.days.unwrap_or(30).clamp(7, 365) as i64;
     let now = Utc::now();
     let since = now - chrono::Duration::days(days);
@@ -762,13 +826,25 @@ pub async fn audience_insights_handler(
           AND ended_at IS NOT NULL
     "#;
     let current_ids: Vec<i64> = sqlx::query(sessions_sql)
-        .bind(since).bind(now).bind(&streamer)
-        .fetch_all(&pool).await.unwrap_or_default()
-        .iter().filter_map(|r| r.try_get("id").ok()).collect();
+        .bind(since)
+        .bind(now)
+        .bind(&streamer)
+        .fetch_all(&pool)
+        .await
+        .unwrap_or_default()
+        .iter()
+        .filter_map(|r| r.try_get("id").ok())
+        .collect();
     let prev_ids: Vec<i64> = sqlx::query(sessions_sql)
-        .bind(prev_since).bind(since).bind(&streamer)
-        .fetch_all(&pool).await.unwrap_or_default()
-        .iter().filter_map(|r| r.try_get("id").ok()).collect();
+        .bind(prev_since)
+        .bind(since)
+        .bind(&streamer)
+        .fetch_all(&pool)
+        .await
+        .unwrap_or_default()
+        .iter()
+        .filter_map(|r| r.try_get("id").ok())
+        .collect();
 
     // P2.94: last_seen_at aus Chat-Nachrichten backfillen, BEVOR die Watch-Time
     // berechnet wird (Python api_audience.py:916 ruft _backfill_last_seen_from_messages
@@ -784,7 +860,11 @@ pub async fn audience_insights_handler(
     let (prev_rate, _) = true_return_rate(&pool, prev_since, Some(since), &streamer, &bots).await;
 
     let calc_trend = |curr: f64, prev: f64| -> f64 {
-        if prev == 0.0 { 0.0 } else { ((curr - prev) / prev * 1000.0).round() / 10.0 }
+        if prev == 0.0 {
+            0.0
+        } else {
+            ((curr - prev) / prev * 1000.0).round() / 10.0
+        }
     };
 
     let watch_time_trend_available = current_watch.method == "real_samples"
@@ -819,7 +899,8 @@ pub async fn audience_insights_handler(
             "viewerReturnTrendAvailable": viewer_return_trend_available,
             "conversionTrendAvailable": false,
         },
-    })).into_response()
+    }))
+    .into_response()
 }
 
 #[cfg(test)]
@@ -831,12 +912,28 @@ mod tests {
 
     async fn make_pool(schema: &str) -> Option<PgPool> {
         let dsn = std::env::var("TB_TEST_DATABASE_URL").ok()?;
-        let admin = PgPoolOptions::new().max_connections(1).connect(&dsn).await.unwrap();
-        sqlx::query(&format!("DROP SCHEMA IF EXISTS {schema} CASCADE")).execute(&admin).await.unwrap();
-        sqlx::query(&format!("CREATE SCHEMA {schema}")).execute(&admin).await.unwrap();
+        let admin = PgPoolOptions::new()
+            .max_connections(1)
+            .connect(&dsn)
+            .await
+            .unwrap();
+        sqlx::query(&format!("DROP SCHEMA IF EXISTS {schema} CASCADE"))
+            .execute(&admin)
+            .await
+            .unwrap();
+        sqlx::query(&format!("CREATE SCHEMA {schema}"))
+            .execute(&admin)
+            .await
+            .unwrap();
         admin.close().await;
-        let opts = PgConnectOptions::from_str(&dsn).unwrap().options([("search_path", schema)]);
-        let pool = PgPoolOptions::new().max_connections(2).connect_with(opts).await.unwrap();
+        let opts = PgConnectOptions::from_str(&dsn)
+            .unwrap()
+            .options([("search_path", schema)]);
+        let pool = PgPoolOptions::new()
+            .max_connections(2)
+            .connect_with(opts)
+            .await
+            .unwrap();
         sqlx::query("CREATE TABLE twitch_chatter_rollup (streamer_login TEXT, chatter_login TEXT, total_sessions INTEGER DEFAULT 0, total_messages INTEGER DEFAULT 0, first_seen_at TIMESTAMPTZ, last_seen_at TIMESTAMPTZ)")
             .execute(&pool).await.unwrap();
         Some(pool)
@@ -847,25 +944,72 @@ mod tests {
         serde_json::from_slice(&bytes).unwrap()
     }
 
+    fn partner(login: &str) -> DashboardAuthLevel {
+        DashboardAuthLevel::Partner {
+            twitch_login: login.to_string(),
+            twitch_user_id: "42".to_string(),
+            display_name: login.to_string(),
+        }
+    }
+
+    // IDOR-Guard: Partner mit fremdem ?streamer= → 403 (vor jedem DB-Zugriff).
+    #[tokio::test]
+    async fn partner_fremder_streamer_403() {
+        let Some(pool) = make_pool("t_aud_idor").await else {
+            return;
+        };
+        let resp = viewer_overlap_handler(
+            partner("earlysalty"),
+            State(pool),
+            Query(OverlapQuery {
+                streamer: Some("ismile_e".into()),
+                limit: None,
+            }),
+        )
+        .await
+        .into_response();
+        assert_eq!(resp.status(), StatusCode::FORBIDDEN);
+    }
+
     async fn make_pool_backfill(schema: &str) -> Option<PgPool> {
         let dsn = std::env::var("TB_TEST_DATABASE_URL").ok()?;
-        let admin = PgPoolOptions::new().max_connections(1).connect(&dsn).await.unwrap();
-        sqlx::query(&format!("DROP SCHEMA IF EXISTS {schema} CASCADE")).execute(&admin).await.unwrap();
-        sqlx::query(&format!("CREATE SCHEMA {schema}")).execute(&admin).await.unwrap();
+        let admin = PgPoolOptions::new()
+            .max_connections(1)
+            .connect(&dsn)
+            .await
+            .unwrap();
+        sqlx::query(&format!("DROP SCHEMA IF EXISTS {schema} CASCADE"))
+            .execute(&admin)
+            .await
+            .unwrap();
+        sqlx::query(&format!("CREATE SCHEMA {schema}"))
+            .execute(&admin)
+            .await
+            .unwrap();
         admin.close().await;
-        let opts = PgConnectOptions::from_str(&dsn).unwrap().options([("search_path", schema)]);
-        let pool = PgPoolOptions::new().max_connections(2).connect_with(opts).await.unwrap();
+        let opts = PgConnectOptions::from_str(&dsn)
+            .unwrap()
+            .options([("search_path", schema)]);
+        let pool = PgPoolOptions::new()
+            .max_connections(2)
+            .connect_with(opts)
+            .await
+            .unwrap();
         sqlx::query(
             "CREATE TABLE twitch_session_chatters (\
                  session_id BIGINT, chatter_id TEXT, chatter_login TEXT, \
                  first_message_at TIMESTAMPTZ, last_seen_at TIMESTAMPTZ)",
         )
-        .execute(&pool).await.unwrap();
+        .execute(&pool)
+        .await
+        .unwrap();
         sqlx::query(
             "CREATE TABLE twitch_chat_messages (\
                  session_id BIGINT, chatter_id TEXT, chatter_login TEXT, message_ts TIMESTAMPTZ)",
         )
-        .execute(&pool).await.unwrap();
+        .execute(&pool)
+        .await
+        .unwrap();
         Some(pool)
     }
 
@@ -873,7 +1017,9 @@ mod tests {
     // Chat-Zeitstempel, sodass calc_watch_distribution die Zeile zählt.
     #[tokio::test]
     async fn backfill_last_seen_setzt_null_last_seen() {
-        let Some(pool) = make_pool_backfill("t_aud_backfill").await else { return };
+        let Some(pool) = make_pool_backfill("t_aud_backfill").await else {
+            return;
+        };
         let first = Utc::now() - chrono::Duration::minutes(60);
         let last_msg = Utc::now() - chrono::Duration::minutes(20);
 
@@ -888,7 +1034,10 @@ mod tests {
             "INSERT INTO twitch_chat_messages (session_id, chatter_id, chatter_login, message_ts) \
              VALUES (7, 'u1', 'viewer', $1)",
         )
-        .bind(last_msg).execute(&pool).await.unwrap();
+        .bind(last_msg)
+        .execute(&pool)
+        .await
+        .unwrap();
 
         let bots: Vec<String> = KNOWN_CHAT_BOTS.iter().map(|s| s.to_string()).collect();
         backfill_last_seen(&pool, &[7], &bots).await;
@@ -896,21 +1045,31 @@ mod tests {
         let updated: Option<DateTime<Utc>> = sqlx::query_scalar(
             "SELECT last_seen_at FROM twitch_session_chatters WHERE session_id=7",
         )
-        .fetch_one(&pool).await.unwrap();
-        assert!(updated.is_some(), "last_seen_at muss nach Backfill gesetzt sein");
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert!(
+            updated.is_some(),
+            "last_seen_at muss nach Backfill gesetzt sein"
+        );
         // Watch-Distribution sieht die Zeile jetzt (vorher gefiltert via IS NOT NULL).
         let dist = calc_watch_distribution(&pool, &[7], &bots).await;
         // method bleibt low_coverage (1 Sample), aber die Zeile wird erfasst —
         // der entscheidende Punkt: no_data wäre es ohne Backfill nicht zwingend,
         // hier prüfen wir, dass die Backfill-Zeile überhaupt ein Sample liefert.
-        assert_ne!(dist.method, "no_data", "Backfill-Zeile muss als Sample zählen");
+        assert_ne!(
+            dist.method, "no_data",
+            "Backfill-Zeile muss als Sample zählen"
+        );
     }
 
     // P2.68: mixed-case Bot-Login (Nightbot) muss case-insensitiv aus der
     // viewer-profiles Exklusivitäts-Verteilung gefiltert werden.
     #[tokio::test]
     async fn viewer_profiles_filters_mixed_case_bot() {
-        let Some(pool) = make_pool("t_aud_profiles_bot").await else { return };
+        let Some(pool) = make_pool("t_aud_profiles_bot").await else {
+            return;
+        };
         // Echter exklusiver Viewer (nur 1 Streamer)
         sqlx::query("INSERT INTO twitch_chatter_rollup (streamer_login, chatter_login) VALUES ('nani','viewer1')")
             .execute(&pool).await.unwrap();
@@ -921,10 +1080,17 @@ mod tests {
         let resp = viewer_profiles_handler(
             DashboardAuthLevel::admin(),
             State(pool),
-            Query(ProfilesQuery { streamer: Some("nani".into()) }),
-        ).await.into_response();
+            Query(ProfilesQuery {
+                streamer: Some("nani".into()),
+            }),
+        )
+        .await
+        .into_response();
         assert_eq!(resp.status(), StatusCode::OK);
         let v = body_json(resp).await;
-        assert_eq!(v["profiles"]["total"], 1, "Nightbot (mixed-case) muss gefiltert werden");
+        assert_eq!(
+            v["profiles"]["total"], 1,
+            "Nightbot (mixed-case) muss gefiltert werden"
+        );
     }
 }
