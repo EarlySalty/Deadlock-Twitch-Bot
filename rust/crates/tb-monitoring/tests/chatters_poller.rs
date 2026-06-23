@@ -779,9 +779,10 @@ async fn bot_path_success_clears_existing_backoff() {
 }
 
 #[tokio::test]
-async fn raid_enabled_channel_polled_via_fallback_despite_backoff() {
+async fn streamer_token_channel_polled_via_fallback_despite_backoff() {
     // Aktiver Bot-Backoff blockt NUR den Bot-Pfad. Ein raid_enabled-Kanal
-    // (Streamer-Token vorhanden) wird trotzdem per Streamer-Fallback gepollt.
+    // bzw. jeder Kanal mit geliefertem Streamer-Token wird trotzdem per
+    // Streamer-Fallback gepollt.
     let cooldowns = SelfHealCooldowns::new();
     let not_mod_backoff = KeyedCooldown::not_mod_default();
     let s = streamer("1", "nani", 42, false);
