@@ -42,8 +42,7 @@ pub async fn list_unlinked(pool: &PgPool) -> Result<Vec<UnlinkedStreamer>, sqlx:
            AND tp.admin_archived_at IS NULL
           LEFT JOIN twitch_streamer_identities i
             ON i.twitch_user_id = s.twitch_user_id
-         WHERE (s.discord_user_id IS NULL OR s.discord_user_id = '')
-           AND (i.discord_user_id IS NULL OR i.discord_user_id = '')
+         WHERE (i.discord_user_id IS NULL OR i.discord_user_id = '')
          ORDER BY s.twitch_login
         "#,
     )
@@ -98,13 +97,13 @@ mod tests {
             .await
             .expect("search_path setzen");
 
-        // prod-treue DDL: alle Spaltentypen wie in bot/storage/pg.py
+        // Prod-treue Minimal-DDL: discord_user_id liegt nicht auf
+        // twitch_streamers, sondern auf twitch_streamer_identities.
         sqlx::query(
             r#"
             CREATE TABLE twitch_streamers (
                 twitch_login        TEXT PRIMARY KEY,
                 twitch_user_id      TEXT,
-                discord_user_id     TEXT,
                 created_at          TEXT DEFAULT CURRENT_TIMESTAMP
             )
             "#,
@@ -188,6 +187,42 @@ mod tests {
         assert_eq!(rows[0].twitch_login, "streamer_a");
         assert_eq!(rows[0].twitch_user_id.as_deref(), Some("uid_a"));
         assert_eq!(rows[0].is_monitored_only, 0);
+    }
+
+    #[tokio::test]
+    async fn prod_schema_ohne_streamer_discord_user_id_listet_kandidaten() {
+        let dsn = db_dsn_or_skip!();
+        let pool = make_pool(&dsn, "test_sl_prod_schema").await;
+
+        let has_streamer_discord_user_id: bool = sqlx::query_scalar(
+            "SELECT EXISTS (
+                SELECT 1
+                  FROM information_schema.columns
+                 WHERE table_schema = current_schema()
+                   AND table_name = 'twitch_streamers'
+                   AND column_name = 'discord_user_id'
+            )",
+        )
+        .fetch_one(&pool)
+        .await
+        .expect("check twitch_streamers columns");
+        assert!(
+            !has_streamer_discord_user_id,
+            "twitch_streamers darf im prod-treuen Test-Schema keine discord_user_id-Spalte haben"
+        );
+
+        sqlx::query("INSERT INTO twitch_streamers (twitch_login, twitch_user_id) VALUES ($1, $2)")
+            .bind("prod_schema_ok")
+            .bind("uid_prod_schema")
+            .execute(&pool)
+            .await
+            .expect("insert streamer");
+        insert_active_partner(&pool, "prod_schema_ok").await;
+
+        let rows = list_unlinked(&pool).await.expect("list_unlinked");
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].twitch_login, "prod_schema_ok");
+        assert_eq!(rows[0].twitch_user_id.as_deref(), Some("uid_prod_schema"));
     }
 
     #[tokio::test]
@@ -380,32 +415,6 @@ mod tests {
             rows.len(),
             1,
             "leerer discord_user_id-String gilt als unverknüpft"
-        );
-    }
-
-    #[tokio::test]
-    async fn discord_id_auf_twitch_streamers_wird_ausgeblendet() {
-        // P3.29: Link liegt auf twitch_streamers.discord_user_id (nicht in
-        // identities) bei leerem twitch_user_id → bereits verknüpft, darf NICHT
-        // als Kandidat erscheinen.
-        let dsn = db_dsn_or_skip!();
-        let pool = make_pool(&dsn, "test_sl_s_discord").await;
-
-        sqlx::query(
-            "INSERT INTO twitch_streamers (twitch_login, twitch_user_id, discord_user_id) \
-             VALUES ($1, NULL, $2)",
-        )
-        .bind("s_linked")
-        .bind("discord_789")
-        .execute(&pool)
-        .await
-        .expect("insert streamer mit s.discord_user_id");
-        insert_active_partner(&pool, "s_linked").await;
-
-        let rows = list_unlinked(&pool).await.expect("list_unlinked");
-        assert!(
-            rows.is_empty(),
-            "Streamer mit discord_user_id auf twitch_streamers darf nicht erscheinen"
         );
     }
 
