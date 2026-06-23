@@ -1,3 +1,11 @@
+## #290 — Token-Budget-Zählung korrigiert (intern)
+
+**Ausgangslage:** Die rollierende 5-Stunden-Budget-Zählung für das günstige Sprachmodell (MiniMax) soll ausschließlich dessen Verbrauch erfassen — so wie es früher gehandhabt wurde. Tatsächlich wurden auch die Tokens des Premium-Modells (Anthropic) in dasselbe Budget-Konto geschrieben und verfälschten die Zählung nach oben.
+
+**Änderung:** Der Premium-Pfad schreibt nicht mehr in das MiniMax-Budget-Konto — die beiden Modelle werden sauber getrennt verbucht. Die Aufrufe selbst und die je Antwort ausgewiesenen Token-Zahlen bleiben unverändert.
+
+**Ergebnis:** Das 5-Stunden-Budget spiegelt wieder exakt den MiniMax-Verbrauch. Reiner interner Genauigkeits-Fix ohne sichtbare Funktionsänderung.
+
 ## #289 — Breitere Zuschauer-Erfassung + stille Fehler behoben
 
 **Ausgangslage:** Anwesenheitsdaten (wer gerade im Chat ist) konnten bisher nur von Kanälen erfasst werden, die den Bot autorisiert oder zum Moderator gemacht haben. Alle übrigen deutschen Deadlock-Streamer — Nicht-Partner und ehemalige Partner — blieben außen vor, obwohl diese Information öffentlich verfügbar ist. Parallel hat eine systematische Prüfung mehrere Fehler aufgedeckt, die nie eine Fehlermeldung erzeugten und deshalb monatelang unbemerkt blieben.

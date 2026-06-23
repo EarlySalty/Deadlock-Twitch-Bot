@@ -4,19 +4,14 @@
 //! `client.messages.create`-Aufrufen. Antwort = `content`-Block-Array → Text wird
 //! über [`extract_text`] aggregiert (Python `_extract_text_response`).
 //!
-//! **Ledger-Hinweis:** Das Python-Orakel verbucht NUR MiniMax-Tokens ins
-//! gemeinsame Ledger; der Anthropic-Pfad schreibt dort nichts. Diese Foundation
-//! verbucht den Premium-Verbrauch dennoch best-effort ins selbe Ledger (mit dem
-//! Anthropic-Modellnamen als Unterscheidungsmerkmal), damit der gesamte
-//! LLM-Verbrauch dieses Bots an einer Stelle messbar ist — bewusste Erweiterung
-//! gegenüber Python (siehe Modul-Doku der Foundation).
+//! **Ledger-Hinweis:** Python-Paritaet: Anthropic schreibt keinen Eintrag in
+//! das MiniMax-Ledger; nur MiniMax verbucht Tokens dort.
 
 use std::time::Duration;
 
 use async_trait::async_trait;
 use serde_json::Value;
 
-use crate::ledger;
 use crate::provider::{CompletionRequest, CompletionResponse, LlmError, LlmProvider};
 
 /// Default-Endpunkt (Messages API).
@@ -119,7 +114,7 @@ impl LlmProvider for AnthropicClient {
     async fn complete(
         &self,
         request: &CompletionRequest,
-        purpose: &str,
+        _purpose: &str,
     ) -> Result<CompletionResponse, LlmError> {
         let api_key = self
             .api_key
@@ -169,16 +164,6 @@ impl LlmProvider for AnthropicClient {
         let completion_tokens = usage
             .and_then(|u| u.get("output_tokens"))
             .and_then(Value::as_i64);
-
-        // Best-effort verbuchen (DB-Fehler ≠ Hard-Fail).
-        ledger::record(
-            purpose,
-            &self.model,
-            prompt_tokens.unwrap_or(0),
-            completion_tokens.unwrap_or(0),
-            true,
-        )
-        .await;
 
         Ok(CompletionResponse {
             text,
