@@ -916,6 +916,7 @@ pub fn build_billing_webhook_router(pool: PgPool) -> Router {
 /// - `GET /twitch/abbo` (+ `/abo`/`/abos`) → 301 auf `/twitch/pricing`.
 /// - `GET /twitch/abbo/bezahlen` → Stripe-Checkout-Session + 302 zur hosted URL.
 /// - `GET|POST /twitch/abbo/kündigen` → Stripe-Customer-Portal / cancel_at_period_end.
+/// - `GET /twitch/abbo/rechnungen` → Stripe-Customer-Portal oder Pricing-Redirect.
 /// - `GET /twitch/api/billing/catalog` (+ `/v2/`) → Plan-Katalog + aktueller Plan.
 /// - `GET /twitch/api/billing/readiness` → Stripe-Readiness (keine Secrets).
 ///
@@ -938,6 +939,10 @@ pub fn build_billing_page_router(pool: PgPool) -> Router {
         .route(
             "/twitch/abbo/kündigen",
             get(billing_page::cancel_handler).post(billing_page::cancel_handler),
+        )
+        .route(
+            "/twitch/abbo/rechnungen",
+            get(billing_page::legacy_invoices_redirect_handler),
         )
         // B2-P1: Rechnungsempfänger-Profil speichern (Legacy-Form-POST, CSRF im
         // Body → in-handler validiert, daher KEIN Header-CSRF-Layer hier).
@@ -1037,11 +1042,19 @@ pub fn build_market_router(pool: PgPool) -> Router {
 /// `DashboardAuthLevel` kommt aus der globalen `DashboardAuthState`-Extension;
 /// die Handler bridgen über die Internal-API (`X-Internal-Token`).
 pub fn build_raid_pages_router() -> Router {
-    use handlers::raid_pages;
+    use handlers::{obsolete_routes, raid_pages};
 
     Router::new()
         .route("/twitch/raid/auth", get(raid_pages::raid_auth_handler))
         .route("/twitch/raid/go", get(raid_pages::raid_go_handler))
+        .route(
+            "/twitch/raid/callback",
+            get(obsolete_routes::raid_callback_gone_handler),
+        )
+        .route(
+            "/twitch/raid/requirements",
+            get(obsolete_routes::raid_requirements_gone_handler),
+        )
 }
 
 /// Baut den Router für die Affiliate-Portal-HTML-Seite (P1.26).
@@ -1057,21 +1070,23 @@ pub fn build_affiliate_portal_router() -> Router {
     )
 }
 
-/// Baut den Router für die Social-Media-Admin-SPA (P2.66).
+/// Baut den Router für den Social-Media-Admin-Legacy-Einstieg.
 ///
-/// `GET /social-media-admin` (+ `/{path}`) → dashboard_v2-SPA-Shell mit
-/// Host-Gate + Login-Gate (analog `/analyse`). Nativ registriert, damit der
-/// Admin-Host nicht in den toten Python-Service (502) fällt.
-pub fn build_social_media_admin_router(pool: PgPool) -> Router {
-    use handlers::spa;
+/// Das Social-Media-/Clip-Feature ist im Cutover bewusst zurückgestellt. Die
+/// alte URL wird nativ auf das aktuelle Dashboard geleitet, damit sie nicht in
+/// den Python-Fallback (502) fällt.
+pub fn build_social_media_admin_router() -> Router {
+    use handlers::obsolete_routes;
 
     Router::new()
-        .route("/social-media-admin", get(spa::social_media_admin_handler))
+        .route(
+            "/social-media-admin",
+            get(obsolete_routes::social_media_admin_stub_redirect_handler),
+        )
         .route(
             "/social-media-admin/*path",
-            get(spa::social_media_admin_assets_handler),
+            get(obsolete_routes::social_media_admin_stub_redirect_handler),
         )
-        .with_state(pool)
 }
 
 /// Baut die nativen Main-Domain-SPA-Seiten, die bisher vom Python-Fallback
@@ -1159,7 +1174,7 @@ pub fn build_router(pool: PgPool, token: String) -> Router {
         .merge(build_market_router(pool.clone()))
         .merge(build_raid_pages_router())
         .merge(build_affiliate_portal_router())
-        .merge(build_social_media_admin_router(pool.clone()))
+        .merge(build_social_media_admin_router())
         .merge(build_v2_spa_pages_router())
         .merge(build_website_router())
         .merge(handlers::discord_link::build_discord_link_router(pool.clone()))
