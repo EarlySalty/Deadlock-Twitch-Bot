@@ -1,3 +1,11 @@
+## #291 — Scam-Wächter überreagiert nicht mehr auf normale deutsche Gespräche
+
+**Ausgangslage:** Der automatische Schutz vor aufgesetzten Betrugs-Konversationen mit Erstschreibern hat ein echtes, natürliches Gespräch eines deutschsprachigen Zuschauers fälschlich als Masche eingestuft und mit einem Timeout belegt. Auslöser: Eine ganz normale Beiläufigkeit — der Wunsch, sich auf dem Discord der Community auszutauschen — wurde wie der typische „Wechsel auf eine andere Plattform" der echten Masche gewertet, obwohl der Kanal seinen eigenen Discord selbst aktiv bewirbt. Die Einschätzung schaukelte sich über mehrere harmlose Nachrichten hoch und kippte am Ende in einen Timeout.
+
+**Änderung:** Die Beurteilung stellt jetzt die Sprache klar in den Vordergrund. Die echte Masche läuft praktisch immer auf Englisch oder in sichtbar maschinell übersetztem, steifem Deutsch nach festem Skript ab. Flüssiges, lockeres Alltags- und Jugend-Deutsch ist dagegen ein starkes Zeichen für einen echten Zuschauer und wiegt schwerer als oberflächliche Skript-Ähnlichkeiten. Ein Hinweis auf Discord oder „woanders weiterreden" gilt für sich allein nicht mehr als verdächtig, sondern nur noch zusammen mit den übrigen Skript-Merkmalen und fremder Sprache. Echter Gesprächskontext — ein Bezug auf gemeinsame Vorgeschichte, Freundlichkeit oder ein Sub-Versprechen — zählt ausdrücklich als normal. Zusätzlich löst die bloße Erwähnung von „Discord" keine sofortige Prüfung mehr aus.
+
+**Ergebnis:** Ein natürlich deutschsprachiger Zuschauer wird zuverlässig als unbedenklich eingestuft, auch wenn er den Discord erwähnt. Die Erkennung der tatsächlichen, meist englischsprachigen Betrugsmaschen — vorgetäuschter Beziehungsaufbau, Wachstums-Pitch und Ausreden mit sofortigem Plattform-Wechsel — bleibt unverändert scharf. Geprüft am realen Vorfall und an echten Betrugsverläufen.
+
 ## #290 — Token-Budget-Zählung korrigiert (intern)
 
 **Ausgangslage:** Die rollierende 5-Stunden-Budget-Zählung für das günstige Sprachmodell (MiniMax) soll ausschließlich dessen Verbrauch erfassen — so wie es früher gehandhabt wurde. Tatsächlich wurden auch die Tokens des Premium-Modells (Anthropic) in dasselbe Budget-Konto geschrieben und verfälschten die Zählung nach oben.
