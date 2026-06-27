@@ -173,6 +173,43 @@ async fn late_seen_counted_in_known_and_new_to_target() {
 }
 
 #[tokio::test]
+async fn known_from_raider_requires_rollup_before_raid() {
+    let Some(pool) = support::pool_with_chatters_schema("t_raid_known_before").await else {
+        return;
+    };
+    let executed = Utc::now() - Duration::hours(2);
+    let session = seed_session(&pool, "target", executed - Duration::minutes(5), None).await;
+    seed_raid(&pool, 23, "raider", "target", 10, executed).await;
+
+    seed_chatter(
+        &pool,
+        session,
+        "target",
+        "futurefan",
+        executed + Duration::minutes(3),
+        executed + Duration::minutes(3),
+        1,
+    )
+    .await;
+    seed_rollup(&pool, "raider", "futurefan", executed).await;
+
+    let stats = compute_raid_retention(&pool).await.unwrap();
+    assert_eq!(stats.raids_computed, 1);
+
+    let known: i32 = sqlx::query_scalar(
+        "SELECT known_from_raider FROM twitch_raid_retention WHERE raid_id = 23",
+    )
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+
+    assert_eq!(
+        known, 0,
+        "first_seen_at >= executed_at zählt nicht als known_from_raider"
+    );
+}
+
+#[tokio::test]
 async fn new_chatter_independent_of_last_seen() {
     // Python new_chatters hat GAR KEINE last_seen_at-Bedingung — nur
     // first_message_at >= executed_at AND messages > 0 (+ not-in-rollup-of-to).

@@ -168,8 +168,8 @@ async fn window_count(
 }
 
 /// COUNT(DISTINCT chatter_login) der Ziel-Chatter ab `executed_at` (KEINE
-/// Obergrenze, Python-Parität), die im **Rollup des FROM-Streamers** stehen
-/// (= mitgebrachte Stamm-Zuschauer).
+/// Obergrenze, Python-Parität), die bereits vor dem Raid im **Rollup des
+/// FROM-Streamers** standen (`first_seen_at < executed_at`).
 async fn count_known_from_raider(
     pool: &PgPool,
     target_session_id: i64,
@@ -180,6 +180,7 @@ async fn count_known_from_raider(
          FROM twitch_session_chatters sc \
          JOIN twitch_chatter_rollup r \
            ON LOWER(r.streamer_login) = $3 AND r.chatter_login = sc.chatter_login \
+          AND r.first_seen_at < $2 \
          WHERE sc.session_id = $1 \
            AND sc.last_seen_at >= $2 \
            {bot}",
