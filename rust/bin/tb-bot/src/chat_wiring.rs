@@ -1084,6 +1084,14 @@ impl ChatHooks {
     }
 
     async fn maybe_send_golive_tip(&self, twitch_user_id: &str, login: &str) {
+        // Go-Live-Tipps sind temporär global deaktiviert (GH #565): Die Tipp-Texte
+        // sind inhaltlich zu schwach ("das wusste ich schon") und werden überarbeitet.
+        // Bis dahin bleibt nur der Versand gesperrt — Auswahl-/Gate-/Persistenz-Logik
+        // darunter ist unverändert. Reaktivierung ohne Rebuild via TB_GOLIVE_TIPS_ENABLED=1.
+        if std::env::var("TB_GOLIVE_TIPS_ENABLED").as_deref() != Ok("1") {
+            return;
+        }
+
         let last_game = match sqlx::query_as::<_, (Option<String>,)>(
             "SELECT last_game FROM twitch_live_state WHERE twitch_user_id = $1",
         )
