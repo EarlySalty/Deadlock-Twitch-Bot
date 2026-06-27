@@ -118,7 +118,7 @@ async fn grant_trial_inner(
 ) -> Result<TrialOutcome, sqlx::Error> {
     // Aktives, bezahltes Billing-Abo? Tolerant: die Stripe-Tabelle ist evtl.
     // Python-only — fehlt sie, gilt „kein Abo" (kein Abbruch des Trials).
-    let paid_billing = has_active_paid_billing_sub(pool, twitch_user_id).await;
+    let paid_billing = has_active_paid_billing_sub(pool, twitch_user_id, twitch_login).await;
 
     let mut tx = pool.begin().await?;
 
@@ -188,8 +188,12 @@ async fn grant_trial_inner(
 
 /// Prüft tolerant, ob ein aktives/„trialing" Billing-Abo mit Bezahlplan existiert.
 /// Fehlt die Tabelle (Python-only), wird `false` angenommen.
-async fn has_active_paid_billing_sub(pool: &PgPool, twitch_user_id: &str) -> bool {
-    has_active_paid_billing_sub_in(pool, twitch_user_id, PAID_PLAN_IDS).await
+async fn has_active_paid_billing_sub(
+    pool: &PgPool,
+    twitch_user_id: &str,
+    twitch_login: &str,
+) -> bool {
+    has_active_paid_billing_sub_in(pool, twitch_user_id, twitch_login, PAID_PLAN_IDS).await
 }
 
 /// Wie [`has_active_paid_billing_sub`], aber mit konfigurierbarer Bezahlplan-
@@ -197,15 +201,22 @@ async fn has_active_paid_billing_sub(pool: &PgPool, twitch_user_id: &str) -> boo
 async fn has_active_paid_billing_sub_in(
     pool: &PgPool,
     twitch_user_id: &str,
+    twitch_login: &str,
     allowed: &[&str],
 ) -> bool {
+    let user_id = twitch_user_id.trim();
+    let login = twitch_login.trim();
     let row: Result<Option<(Option<String>,)>, _> = sqlx::query_as(
         r#"SELECT plan_id FROM twitch_billing_subscriptions
-           WHERE LOWER(customer_reference) = LOWER($1)
+           WHERE customer_reference IS NOT NULL
+             AND TRIM(customer_reference) <> ''
+             AND (($1 <> '' AND LOWER(customer_reference) = LOWER($1))
+                  OR ($2 <> '' AND LOWER(customer_reference) = LOWER($2)))
              AND status IN ('active','trialing')
            LIMIT 1"#,
     )
-    .bind(twitch_user_id)
+    .bind(login)
+    .bind(user_id)
     .fetch_optional(pool)
     .await;
 
@@ -251,7 +262,7 @@ async fn check_and_grant_inner(
 ) -> Result<bool, sqlx::Error> {
     // Billing-Abo tolerant VOR der Transaktion prüfen (Tabelle evtl. Python-only).
     let paid_billing =
-        has_active_paid_billing_sub_in(pool, twitch_user_id, AUTO_GRANT_PAID_PLAN_IDS).await;
+        has_active_paid_billing_sub_in(pool, twitch_user_id, twitch_login, AUTO_GRANT_PAID_PLAN_IDS).await;
 
     let mut tx = pool.begin().await?;
     // Flag + manueller Plan + Stunden seit first_login_at in einer Query.
@@ -350,6 +361,16 @@ mod auto_grant_tests {
         .execute(&pool)
         .await
         .unwrap();
+        sqlx::query(
+            r#"CREATE TABLE twitch_billing_subscriptions (
+                   customer_reference TEXT,
+                   plan_id TEXT,
+                   status TEXT
+               )"#,
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
         Some(pool)
     }
 
@@ -376,6 +397,47 @@ mod auto_grant_tests {
         assert_eq!(plan.as_deref(), Some(ANALYTICS_TRIAL_PLAN_ID));
         // Idempotent: zweiter Aufruf grantet nicht erneut.
         assert!(!check_and_grant_trial_eligibility(&pool, "10", "streamer").await);
+    }
+
+    #[tokio::test]
+    async fn self_claim_blockt_login_referenziertes_paid_abo() {
+        let Some(pool) = pool_or_skip("t6e_trial_paid_login").await else { return };
+        sqlx::query(
+            "INSERT INTO twitch_billing_subscriptions (customer_reference, plan_id, status) \
+             VALUES ('streamer', 'analysis_dashboard', 'active')",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+
+        let outcome = start_trial_for_user(&pool, "42", "streamer").await;
+        assert_eq!(outcome, TrialOutcome::HasPaidPlan);
+        let rows: i64 = sqlx::query_scalar(
+            "SELECT COUNT(*) FROM streamer_plans WHERE twitch_user_id = '42'",
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert_eq!(rows, 0, "Paid-Abo via Login darf keinen Trial-Grant erzeugen");
+    }
+
+    #[tokio::test]
+    async fn leere_billing_referenz_matcht_keinen_leeren_login() {
+        let Some(pool) = pool_or_skip("t6e_trial_empty_paid_ref").await else { return };
+        sqlx::query(
+            "INSERT INTO twitch_billing_subscriptions (customer_reference, plan_id, status) \
+             VALUES (NULL, 'analysis_dashboard', 'active'), ('', 'analysis_dashboard', 'active')",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+
+        assert!(!has_active_paid_billing_sub(&pool, "77", "").await);
+        let outcome = start_trial_for_user(&pool, "77", "").await;
+        assert_eq!(outcome, TrialOutcome::Granted);
+        let (flag, plan) = flag_and_plan(&pool, "77").await;
+        assert_eq!(flag, 1);
+        assert_eq!(plan.as_deref(), Some(ANALYTICS_TRIAL_PLAN_ID));
     }
 
     #[tokio::test]
