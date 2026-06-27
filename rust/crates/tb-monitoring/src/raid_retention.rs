@@ -115,13 +115,13 @@ async fn compute_one(pool: &PgPool, raid: &RaidRow) -> Result<Outcome, sqlx::Err
     let new_to_target = count_new_to_target(pool, target_session_id, raid).await?;
     let new_chatters = count_new_chatters(pool, target_session_id, raid).await?;
 
-    // 5) Insert (target_session_id::int4-Cast), ON CONFLICT DO NOTHING.
+    // 5) Insert (target_session_id::int8-Cast), ON CONFLICT DO NOTHING.
     sqlx::query(
         "INSERT INTO twitch_raid_retention \
          (raid_id, from_broadcaster_login, to_broadcaster_login, viewer_count_sent, \
           executed_at, target_session_id, chatters_at_plus5m, chatters_at_plus15m, \
           chatters_at_plus30m, known_from_raider, new_to_target, new_chatters) \
-         VALUES ($1, $2, $3, $4, $5, $6::int4, $7, $8, $9, $10, $11, $12) \
+         VALUES ($1, $2, $3, $4, $5, $6::int8, $7, $8, $9, $10, $11, $12) \
          ON CONFLICT (raid_id, executed_at) DO NOTHING",
     )
     .bind(raid.id)

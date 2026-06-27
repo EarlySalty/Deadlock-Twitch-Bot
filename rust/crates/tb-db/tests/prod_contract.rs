@@ -142,6 +142,22 @@ async fn prod_monitoring_tables_match_contract() {
         Some("timestamp with time zone")
     );
 
+    let chat_messages = column_types(&pool, "twitch_chat_messages").await;
+    assert_eq!(
+        chat_messages.get("session_id").map(String::as_str),
+        Some("bigint")
+    );
+    assert_eq!(
+        chat_messages.get("message_ts").map(String::as_str),
+        Some("timestamp with time zone")
+    );
+
+    let raid_retention = column_types(&pool, "twitch_raid_retention").await;
+    assert_eq!(
+        raid_retention.get("target_session_id").map(String::as_str),
+        Some("bigint")
+    );
+
     // Live-State dagegen führt TEXT-Timestamps und INTEGER-Flags.
     let live_state = column_types(&pool, "twitch_live_state").await;
     assert_eq!(
