@@ -1098,11 +1098,12 @@ pub fn build_market_router(pool: PgPool, token: String) -> Router {
 ///
 /// - `GET /twitch/raid/auth` — startet den Raid-OAuth-Flow (302 → Twitch).
 /// - `GET /twitch/raid/go`   — Kurz-Redirect für Discord-Buttons (302 → Twitch).
+/// - `GET /twitch/api/raid/analytics` — Admin-JSON für Raid-Netzwerk-Analytics.
 ///
 /// `DashboardAuthLevel` kommt aus der globalen `DashboardAuthState`-Extension;
 /// die Handler bridgen über die Internal-API (`X-Internal-Token`).
 pub fn build_raid_pages_router(pool: PgPool) -> Router {
-    use handlers::{obsolete_routes, raid_pages, raid_requirements};
+    use handlers::{obsolete_routes, raid_network_analytics, raid_pages, raid_requirements};
 
     Router::new()
         .route("/twitch/raid/auth", get(raid_pages::raid_auth_handler))
@@ -1114,6 +1115,10 @@ pub fn build_raid_pages_router(pool: PgPool) -> Router {
         .route(
             "/twitch/raid/requirements",
             get(raid_requirements::raid_requirements_handler),
+        )
+        .route(
+            "/twitch/api/raid/analytics",
+            get(raid_network_analytics::raid_network_analytics_handler),
         )
         .with_state(pool)
 }

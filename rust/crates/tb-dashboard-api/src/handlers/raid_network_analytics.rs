@@ -30,7 +30,7 @@ struct LoginAgg {
     viewers: i64,
 }
 
-/// `GET /twitch/raid/analytics/network` (Routen-Name siehe WIRING-TODO).
+/// `GET /twitch/api/raid/analytics`.
 ///
 /// Liefert die Netzwerk-weite Raid-Balance, Leecher und Manual-Raids.
 pub async fn raid_network_analytics_handler(
@@ -209,8 +209,17 @@ fn collect_agg(rows: &[sqlx::postgres::PgRow]) -> BTreeMap<String, LoginAgg> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use axum::{
+        body::Body,
+        http::{header, Request, StatusCode},
+        Extension, Router,
+    };
+    use crate::auth::session::{DashboardAuthState, ADMIN_COOKIE_NAME};
     use sqlx::postgres::{PgConnectOptions, PgPoolOptions};
     use std::str::FromStr;
+    use tower::ServiceExt;
+
+    const TEST_FERNET_KEY: &str = "dGVzdGtleTEyMzQ1Njc4OTAxMjM0NTY3ODkwMTIzNDU=";
 
     async fn make_pool(schema: &str) -> Option<PgPool> {
         let dsn = std::env::var("TB_TEST_DATABASE_URL").ok()?;
@@ -224,6 +233,10 @@ mod tests {
         let opts = PgConnectOptions::from_str(&dsn).unwrap().options([("search_path", schema)]);
         let pool = PgPoolOptions::new().max_connections(2).connect_with(opts).await.unwrap();
         for ddl in [
+            "CREATE TABLE dashboard_sessions (\
+                 session_id TEXT NOT NULL PRIMARY KEY, session_type TEXT NOT NULL, \
+                 payload_enc BYTEA NOT NULL, created_at DOUBLE PRECISION NOT NULL, \
+                 expires_at DOUBLE PRECISION NOT NULL)",
             "CREATE TABLE twitch_streamers_partner_state (\
                  twitch_login TEXT, twitch_user_id TEXT, is_partner_active INTEGER NOT NULL DEFAULT 1)",
             "CREATE TABLE twitch_raid_history (\
@@ -234,6 +247,11 @@ mod tests {
             sqlx::query(ddl).execute(&pool).await.unwrap();
         }
         Some(pool)
+    }
+
+    fn router(pool: PgPool, auth_state: DashboardAuthState) -> Router {
+        crate::build_raid_pages_router(pool)
+            .layer(Extension(auth_state))
     }
 
     async fn seed(pool: &PgPool) {
@@ -311,5 +329,34 @@ mod tests {
         assert!(payload["leechers"].as_array().unwrap().is_empty());
         assert!(payload["manual_raids"].as_array().unwrap().is_empty());
         sqlx::query("DROP SCHEMA t_raid_net_empty CASCADE").execute(&pool).await.ok();
+    }
+
+    #[tokio::test]
+    async fn route_liefert_json_fuer_admin_session() {
+        let Some(pool) = make_pool("t_raid_net_route").await else { return; };
+        seed(&pool).await;
+
+        let auth_state = DashboardAuthState::new(pool.clone(), TEST_FERNET_KEY.to_string());
+        let session = auth_state
+            .create_admin_session("discord-raid-net", "Raid Admin")
+            .await
+            .unwrap();
+        let resp = router(pool.clone(), auth_state)
+            .oneshot(
+                Request::builder()
+                    .uri("/twitch/api/raid/analytics")
+                    .header(header::COOKIE, format!("{ADMIN_COOKIE_NAME}={}", session.session_id))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(resp.status(), StatusCode::OK);
+        let body = axum::body::to_bytes(resp.into_body(), usize::MAX).await.unwrap();
+        let payload: Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(payload["active_partner_count"], 3);
+        assert!(payload["partner_stats"].is_array());
+        sqlx::query("DROP SCHEMA t_raid_net_route CASCADE").execute(&pool).await.ok();
     }
 }
