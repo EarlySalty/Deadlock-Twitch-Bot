@@ -1,3 +1,11 @@
+## #292 — Go-Live-Tipps vorerst abgeschaltet
+
+**Ausgangslage:** Wenn du mit Deadlock live gegangen bist, hat der Bot als erste Chat-Zeile einen wechselnden „Tipp" gepostet. In der Praxis war das meist ein Hinweis, den man als Streamer ohnehin kennt — also eher Rauschen als echte Hilfe.
+
+**Änderung:** Wir haben diese automatischen Go-Live-Tipps erstmal komplett abgeschaltet, bis wir sie inhaltlich überarbeitet haben. Alles drumherum bleibt unangetastet — der Versand pausiert einfach.
+
+**Ergebnis:** Beim Stream-Start kommt keine Tipp-Zeile mehr. Sie kommen überarbeitet zurück, sobald sie wirklich was bringen.
+
 ## #291 — Scam-Schutz überreagiert nicht mehr auf normalen deutschen Chat
 
 **Ausgangslage:** Der automatische Scam-Schutz schaut bei wildfremden Erstschreibern, ob da jemand die typische Betrugsmasche aufzieht — erst künstlich Nähe aufbauen, dann das Gespräch von Twitch wegziehen. Zuletzt hat er aber einen ganz normalen deutschsprachigen Zuschauer erwischt und getimeoutet, nur weil der beiläufig meinte, man könne ja mal im Discord schreiben. Das Modell hatte sich über mehrere harmlose Nachrichten in einen Verdacht hineingesteigert und beim Wort „Discord" zugeschlagen — obwohl der Kanal seinen eigenen Discord selbst aktiv bewirbt.
