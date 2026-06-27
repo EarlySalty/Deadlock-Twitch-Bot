@@ -1182,7 +1182,7 @@ async fn main() {
         tracing::info!("HighlightClipper deaktiviert (TB_HIGHLIGHT_CLIPPER_ENABLED != 1)");
     }
 
-    // Social-Media-Posting-Pipeline (Port von bot/social_media): sechs
+    // Social-Media-Posting-Pipeline (Port von bot/social_media): sieben
     // Hintergrund-Worker. In Python (bootstrap) bedingungslos instanziiert
     // (`if services.api`) → hier ebenso bedingungslos gespawnt; jeder Worker hat
     // ein eigenes Intervall + Initial-Delay und ist still, solange keine Arbeit
@@ -1209,9 +1209,10 @@ async fn main() {
             tb_social_media::enrichment_worker::EnrichmentWorker::new(pool.clone(), llm);
         tokio::spawn(async move { enrichment.run().await });
 
-        // Upload + Insights brauchen den Field-Cipher (verschlüsselte
-        // Plattform-Tokens). Fehlt DB_MASTER_KEY_V1, laufen nur die cipher-freien
-        // Worker — die Token-abhängigen bleiben aus statt zu paniken.
+        // Upload + Token-Refresh + Insights brauchen den Field-Cipher
+        // (verschlüsselte Plattform-Tokens). Fehlt DB_MASTER_KEY_V1, laufen nur
+        // die cipher-freien Worker — die Token-abhängigen bleiben aus statt zu
+        // paniken.
         match tb_crypto::FieldCipher::from_env() {
             Ok(cipher) => {
                 let cipher = Arc::new(cipher);
@@ -1227,6 +1228,15 @@ async fn main() {
                         .with_yt_dlp(cwd.join(".venv/bin/yt-dlp").to_string_lossy().into_owned());
                 tokio::spawn(async move { upload.run().await });
 
+                let refresh_oauth =
+                    tb_social_media::oauth::OAuthManager::new(pool.clone(), cipher.clone());
+                let refresh = tb_social_media::refresh_worker::TokenRefreshWorker::new(
+                    pool.clone(),
+                    cipher.clone(),
+                    refresh_oauth,
+                );
+                tokio::spawn(async move { refresh.run().await });
+
                 let insights_creds =
                     tb_social_media::credentials::CredentialManager::new(pool.clone(), cipher);
                 let insights = tb_social_media::insights_worker::InsightsWorker::new(
@@ -1237,11 +1247,11 @@ async fn main() {
             }
             Err(e) => {
                 tracing::warn!(
-                    "Social-Media Upload/Insights: kein Field-Cipher ({e}) — Worker aus"
+                    "Social-Media Upload/Refresh/Insights: kein Field-Cipher ({e}) — Worker aus"
                 );
             }
         }
-        tracing::info!("Social-Media-Pipeline-Worker gestartet (6 Loops)");
+        tracing::info!("Social-Media-Pipeline-Worker gestartet (7 Loops)");
     }
 
     // Poll-Loop: das Cutover-Gate. Default AUS — Python bleibt alleiniger
