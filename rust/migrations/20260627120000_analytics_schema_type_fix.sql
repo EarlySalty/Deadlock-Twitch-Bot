@@ -10,8 +10,12 @@
 -- Zielsystemen mit manuell hypertabellierten Analytics-Tabellen koennen ALTER
 -- TYPEs Timescale-/Compression-Einschraenkungen und laengere Locks ausloesen.
 --
--- FK/PK-Reihenfolge: FKs auf twitch_stream_sessions(id) werden nur bei Bedarf
--- temporaer entfernt und mit ihrer bestehenden Definition wieder angelegt; die
+-- FK/PK-Reihenfolge: FKs auf twitch_stream_sessions(id) werden nur bei einem
+-- echten Typwechsel von twitch_stream_sessions.id temporaer entfernt und mit
+-- ihrer bestehenden Definition wieder angelegt. Das ist wichtig fuer
+-- Installationen, in denen twitch_session_viewers oder twitch_chat_messages
+-- komprimierte Timescale-Hypertables sind: DROP/ADD CONSTRAINT ist dort nicht
+-- erlaubt und darf nicht durch reine Kindspalten-Fixes ausgeloest werden.
 -- Primaerschluessel werden vor Typaenderungen ihrer Schluesselspalten analog
 -- temporaer entfernt.
 
@@ -22,7 +26,7 @@ DECLARE
     raid_target_needs_fix BOOLEAN;
     viewers_pk_needs_fix BOOLEAN;
     stream_pk_needs_fix BOOLEAN;
-    fk_cycle_needs_fix BOOLEAN;
+    stream_fks_need_rebuild BOOLEAN;
 BEGIN
     SELECT EXISTS (
         SELECT 1
@@ -59,9 +63,9 @@ BEGIN
     ) INTO viewers_pk_needs_fix;
 
     stream_pk_needs_fix := stream_id_needs_fix;
-    fk_cycle_needs_fix := stream_id_needs_fix OR raid_target_needs_fix;
+    stream_fks_need_rebuild := stream_id_needs_fix;
 
-    IF fk_cycle_needs_fix THEN
+    IF stream_fks_need_rebuild THEN
         CREATE TEMP TABLE IF NOT EXISTS analytics_schema_type_fix_fks (
             table_schema TEXT NOT NULL,
             table_name TEXT NOT NULL,
@@ -276,11 +280,63 @@ BEGIN
     END IF;
 
     IF raid_target_needs_fix THEN
+        CREATE TEMP TABLE IF NOT EXISTS analytics_schema_type_fix_raid_target_fks (
+            table_schema TEXT NOT NULL,
+            table_name TEXT NOT NULL,
+            constraint_name TEXT NOT NULL,
+            constraint_def TEXT NOT NULL
+        ) ON COMMIT DROP;
+
+        TRUNCATE analytics_schema_type_fix_raid_target_fks;
+
+        INSERT INTO analytics_schema_type_fix_raid_target_fks
+            (table_schema, table_name, constraint_name, constraint_def)
+        SELECT n.nspname,
+               rel.relname,
+               c.conname,
+               pg_get_constraintdef(c.oid)
+          FROM pg_constraint c
+          JOIN pg_class rel ON rel.oid = c.conrelid
+          JOIN pg_namespace n ON n.oid = rel.relnamespace
+         WHERE c.contype = 'f'
+           AND c.conrelid = to_regclass('public.twitch_raid_retention')
+           AND c.confrelid = to_regclass('public.twitch_stream_sessions')
+           AND (
+               SELECT a.attnum
+                 FROM pg_attribute a
+                WHERE a.attrelid = c.conrelid
+                  AND a.attname = 'target_session_id'
+                  AND NOT a.attisdropped
+           ) = ANY (c.conkey);
+
+        FOR target IN
+            SELECT * FROM analytics_schema_type_fix_raid_target_fks
+        LOOP
+            EXECUTE format(
+                'ALTER TABLE %I.%I DROP CONSTRAINT IF EXISTS %I',
+                target.table_schema,
+                target.table_name,
+                target.constraint_name
+            );
+        END LOOP;
+
         ALTER TABLE public.twitch_raid_retention
             ALTER COLUMN target_session_id TYPE bigint USING target_session_id::bigint;
+
+        FOR target IN
+            SELECT * FROM analytics_schema_type_fix_raid_target_fks
+        LOOP
+            EXECUTE format(
+                'ALTER TABLE %I.%I ADD CONSTRAINT %I %s',
+                target.table_schema,
+                target.table_name,
+                target.constraint_name,
+                target.constraint_def
+            );
+        END LOOP;
     END IF;
 
-    IF fk_cycle_needs_fix THEN
+    IF stream_fks_need_rebuild THEN
         FOR target IN
             SELECT * FROM analytics_schema_type_fix_fks
         LOOP
