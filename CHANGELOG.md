@@ -1,3 +1,11 @@
+## #294 — Stille Parität-Lücken geschlossen + Schema-Migration hypertable-sicher
+
+**Ausgangslage:** Eine systematische Re-Verifikation hat mehrere kleine, lange unbemerkte Lücken zwischen der alten und der neuen Bot-Generation zutage gefördert — nichts, das akut etwas kaputt machte, aber Stellen, an denen sich das neue System nicht exakt wie das alte verhielt. Dazu ein konkreter Stolperstein: die jüngste Datenbank-Migration scheiterte beim Start still (und wurde abgefangen), weil sie auf den komprimierten Verlaufstabellen eine Operation versuchte, die dort gar nicht erlaubt ist — obwohl an diesen Tabellen längst nichts mehr zu korrigieren war.
+
+**Änderung:** Die Migration fasst die komprimierten Tabellen jetzt nicht mehr an, wenn dort nichts zu tun ist, und korrigiert nur noch gezielt die eine Spalte, die wirklich vom alten Schema abwich. Darüber hinaus: ein Opt-out vom Bot wird jetzt durchgängig respektiert — auch bei automatischen Hinweisen und Eskalationen, nicht mehr nur im Hauptpfad; eine Eskalations-Chatnachricht, die bisher nur aufgebaut, aber nie gesendet wurde, geht jetzt tatsächlich raus; beworbene Rechnungs-Links zeigen auf die echte Rechnungsübersicht statt ins Leere; und mehrere Auswertungs-Antworten liefern wieder genau das Format, das das Dashboard erwartet. Im Hintergrund zusätzlich angeglichen: Datenbank-Timeouts, Health-Checks, eine nicht erreichbare Admin-Datensicht und diverse weitere Detail-Angleichungen.
+
+**Ergebnis:** Das neue System verhält sich an diesen Stellen wieder genau wie das alte, der stille Migrations-Fehler beim Start ist weg (gegen die echte Live-Datenbank geprüft), und ein Bot-Opt-out gilt jetzt wirklich überall.
+
 ## #293 — Abo-Erkennung gehärtet + Go-Live-Ankündigung einheitlich Standard
 
 **Ausgangslage:** Zwei Dinge liefen still schief. Bei der Abo-Prüfung konnte ein laufendes, bezahltes Abo unter bestimmten Umständen als „kein Plan" gewertet und danach von einer automatischen Test-Phase überdeckt werden — weil die Bezahl-Referenz inzwischen am Login hängt, die Prüfung aber noch ausschließlich an der alten Nutzer-ID gesucht hat. Und bei der Go-Live-Ankündigung steckten im Code noch Reste des längst abgeschafften Embed-Designers; teils griffen gespeicherte Alt-Anpassungen unzuverlässig rein.
