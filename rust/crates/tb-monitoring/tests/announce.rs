@@ -218,46 +218,6 @@ async fn announce_live_ping_disabled_unterdrueckt_streamer_rolle() {
 }
 
 #[tokio::test]
-async fn announce_live_ui_schema_wird_zu_template_payload_normalisiert() {
-    let pool = pool_or_skip!("t4e_ui_config");
-    sqlx::query(
-        r#"INSERT INTO twitch_live_announcement_configs (streamer_login, config_json)
-           VALUES ('drag', '{
-             "content": "Live jetzt: {rolle}",
-             "mentions": {"enabled": true, "role_id": "12345"},
-             "embed": {
-               "title": "{channel} spielt {game}",
-               "fields": [
-                 {"name": "Kategorie", "value": "{game}", "inline": false}
-               ]
-             },
-             "button": {"label": "Stream öffnen"}
-           }')"#,
-    )
-    .execute(&pool)
-    .await
-    .unwrap();
-
-    let transport = Arc::new(StubTransport::default());
-    let sink = sink_with(&pool, transport.clone());
-    let result = sink
-        .announce_live(live_request("drag"))
-        .await
-        .expect("gesendet");
-
-    assert!(result.notification_text.contains("Live jetzt: <@&999>"));
-    let sends = transport.sends.lock().unwrap();
-    let (_, _, embed, roles, view_spec) = &sends[0];
-    assert_eq!(embed["title"], "Drag spielt Deadlock");
-    assert_eq!(embed["fields"][0]["name"], "Kategorie");
-    assert_eq!(embed["fields"][0]["value"], "Deadlock");
-    assert_eq!(embed["fields"][0]["inline"], false);
-    assert!(roles.contains(&12345));
-    let view = view_spec.as_ref().expect("Tracking-View");
-    assert_eq!(view["button_label"], "Stream öffnen");
-}
-
-#[tokio::test]
 async fn announce_live_nutzt_streamer_config_und_retry_token() {
     let pool = pool_or_skip!("t4e_config_retry");
     sqlx::query(

@@ -15,7 +15,6 @@ use chrono::{DateTime, Utc};
 use serde_json::Value;
 use sqlx::PgPool;
 
-use crate::announce::dashboard_config::{parse_config_json, to_template_config};
 use crate::announce::template::{
     build_context, build_offline_embed, render_announcement, sanitize_live_content,
     AnnouncementConfig, TWITCH_VOD_BUTTON_LABEL,
@@ -120,14 +119,7 @@ impl AnnounceConfigStore {
             }
         };
         match serde_json::from_str::<Value>(&text) {
-            Ok(parsed) if parsed.is_object() => {
-                let parsed = if parsed.get("embed").is_some() {
-                    to_template_config(&parse_config_json(&text))
-                } else {
-                    parsed
-                };
-                AnnouncementConfig::from_json(&parsed)
-            }
+            Ok(parsed) if parsed.is_object() => AnnouncementConfig::from_json(&parsed),
             _ => AnnouncementConfig::default(),
         }
     }
