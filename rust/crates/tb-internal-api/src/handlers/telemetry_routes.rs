@@ -245,47 +245,6 @@ fn build_referral_url(streamer_login: &str) -> String {
     )
 }
 
-/// Extrahiert den Button-Label aus config_json.
-///
-/// Parität zu `_dashboard_live_button_label_from_config` in `bot/dashboard/mixin.py`:
-/// 1. `raw_json` leer/None → `TWITCH_BUTTON_LABEL`
-/// 2. JSON-Parse schlägt fehl oder kein dict → `TWITCH_BUTTON_LABEL`
-/// 3. `parsed["button"]` muss ein dict sein; wenn nicht vorhanden → leeres dict
-/// 4. `button_cfg["label"]` ODER `button_cfg["label_template"]` (label hat Vorrang),
-///    getrimmt
-/// 5. Wenn leer → `TWITCH_BUTTON_LABEL`; sonst auf 80 Zeichen kürzen
-fn button_label_from_config(config_json: Option<&str>) -> String {
-    let raw = config_json.unwrap_or("").trim();
-    if raw.is_empty() {
-        return TWITCH_BUTTON_LABEL.to_string();
-    }
-    let Ok(val) = serde_json::from_str::<Value>(raw) else {
-        return TWITCH_BUTTON_LABEL.to_string();
-    };
-    if !val.is_object() {
-        return TWITCH_BUTTON_LABEL.to_string();
-    }
-    // button_cfg = parsed.get("button") if isinstance(parsed.get("button"), dict) else {}
-    let button_cfg = val.get("button").and_then(|v| v.as_object());
-    let label = button_cfg.and_then(|cfg| {
-        // label hat Vorrang; label_template als Fallback
-        let l = cfg.get("label").and_then(|v| v.as_str()).unwrap_or("");
-        let t = cfg.get("label_template").and_then(|v| v.as_str()).unwrap_or("");
-        let chosen = if !l.is_empty() { l } else { t };
-        let trimmed = chosen.trim();
-        if trimmed.is_empty() {
-            None
-        } else {
-            Some(trimmed.to_string())
-        }
-    });
-    match label {
-        // auf 80 Zeichen kürzen (Python: label[:80])
-        Some(s) => s.chars().take(80).collect(),
-        None => TWITCH_BUTTON_LABEL.to_string(),
-    }
-}
-
 // ── Handler ───────────────────────────────────────────────────────────────────
 
 /// `GET /internal/twitch/v1/live/active-announcements`
@@ -344,7 +303,7 @@ pub async fn live_active_announcements_handler(
             None => continue,
         };
         let referral_url = build_referral_url(&streamer_login);
-        let button_label = button_label_from_config(row.config_json.as_deref());
+        let button_label = TWITCH_BUTTON_LABEL.to_string();
 
         items.push(AnnouncementItem {
             streamer_login,
@@ -693,21 +652,6 @@ mod tests {
 
         sqlx::query(
             r#"
-            CREATE TABLE twitch_live_announcement_configs (
-                streamer_login          TEXT PRIMARY KEY,
-                config_json             TEXT NOT NULL,
-                allowed_editor_role_ids TEXT,
-                updated_at              TEXT DEFAULT CURRENT_TIMESTAMP,
-                updated_by              TEXT
-            )
-            "#,
-        )
-        .execute(&pool)
-        .await
-        .expect("DDL twitch_live_announcement_configs");
-
-        sqlx::query(
-            r#"
             CREATE TABLE twitch_link_clicks (
                 id               SERIAL PRIMARY KEY,
                 clicked_at       TIMESTAMPTZ DEFAULT NOW(),
@@ -832,10 +776,10 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn live_active_announcements_mit_button_label() {
+    async fn live_active_announcements_liefert_status_mit_standard_button_label() {
         let _env_guard = ENV_LOCK.lock().unwrap_or_else(|p| p.into_inner());
         let dsn = db_dsn_or_skip!();
-        let pool = make_pool(&dsn, "test_h_ann_label").await;
+        let pool = make_pool(&dsn, "test_h_ann_standard_label").await;
         let app = make_router(pool.clone(), "secret");
         let base = INTERNAL_API_BASE_PATH;
 
@@ -846,12 +790,6 @@ mod tests {
         )
         .bind("uid_lbl").bind("label_streamer").bind("999").bind("tok_lbl")
         .execute(&pool).await.expect("insert");
-
-        sqlx::query(
-            "INSERT INTO twitch_live_announcement_configs (streamer_login, config_json) VALUES ($1,$2)"
-        )
-        .bind("label_streamer").bind(r#"{"button":{"label":"Jetzt Live!"}}"#)
-        .execute(&pool).await.expect("insert config");
 
         let resp = app
             .oneshot(req(
@@ -866,48 +804,11 @@ mod tests {
         let j = json_body(resp).await;
         let arr = j.as_array().expect("Liste erwartet");
         assert_eq!(arr.len(), 1);
-        assert_eq!(arr[0]["button_label"], "Jetzt Live!");
-        assert_eq!(arr[0]["channel_id"], 123456789_i64);
-
-        std::env::remove_var("TWITCH_NOTIFY_CHANNEL_ID");
-    }
-
-    #[tokio::test]
-    async fn live_active_announcements_fallback_label_wenn_kein_button() {
-        let _env_guard = ENV_LOCK.lock().unwrap_or_else(|p| p.into_inner());
-        let dsn = db_dsn_or_skip!();
-        let pool = make_pool(&dsn, "test_h_ann_fallback").await;
-        let app = make_router(pool.clone(), "secret");
-        let base = INTERNAL_API_BASE_PATH;
-
-        std::env::set_var("TWITCH_NOTIFY_CHANNEL_ID", "111222333");
-
-        sqlx::query(
-            "INSERT INTO twitch_live_state (twitch_user_id, streamer_login, last_discord_message_id, last_tracking_token) VALUES ($1,$2,$3,$4)"
-        )
-        .bind("uid_fb").bind("fallback_str").bind("1").bind("tok_fb")
-        .execute(&pool).await.expect("insert");
-
-        // config_json ohne button-Schlüssel → Fallback
-        sqlx::query(
-            "INSERT INTO twitch_live_announcement_configs (streamer_login, config_json) VALUES ($1,$2)"
-        )
-        .bind("fallback_str").bind(r#"{"other":"x"}"#)
-        .execute(&pool).await.expect("insert config");
-
-        let resp = app
-            .oneshot(req(
-                "GET",
-                &format!("{base}/live/active-announcements"),
-                "",
-                Some("secret"),
-            ))
-            .await
-            .unwrap();
-        assert_eq!(resp.status(), StatusCode::OK);
-        let j = json_body(resp).await;
-        let arr = j.as_array().expect("Liste erwartet");
+        assert_eq!(arr[0]["streamer_login"], "label_streamer");
+        assert_eq!(arr[0]["message_id"], 999_i64);
+        assert_eq!(arr[0]["tracking_token"], "tok_lbl");
         assert_eq!(arr[0]["button_label"], "Auf Twitch ansehen");
+        assert_eq!(arr[0]["channel_id"], 123456789_i64);
 
         std::env::remove_var("TWITCH_NOTIFY_CHANNEL_ID");
     }
@@ -1222,49 +1123,6 @@ mod tests {
         let url = build_referral_url("dragscope");
         assert!(url.contains("dragscope"));
         assert!(url.contains("DE-Deadlock-Discord"));
-    }
-
-    #[test]
-    fn button_label_from_config_korrekte_struktur() {
-        // None → TWITCH_BUTTON_LABEL
-        assert_eq!(button_label_from_config(None), "Auf Twitch ansehen");
-        // Ungültiges JSON → TWITCH_BUTTON_LABEL
-        assert_eq!(button_label_from_config(Some("invalid json")), "Auf Twitch ansehen");
-        // JSON ohne button-Schlüssel → TWITCH_BUTTON_LABEL
-        assert_eq!(
-            button_label_from_config(Some(r#"{"other":"x"}"#)),
-            "Auf Twitch ansehen"
-        );
-        // button.label vorhanden → wird genommen
-        assert_eq!(
-            button_label_from_config(Some(r#"{"button":{"label":"Watch now"}}"#)),
-            "Watch now"
-        );
-        // button.label_template (kein label) → wird genommen
-        assert_eq!(
-            button_label_from_config(Some(r#"{"button":{"label_template":"Jetzt live!"}}"#)),
-            "Jetzt live!"
-        );
-        // button.label hat Vorrang vor label_template
-        assert_eq!(
-            button_label_from_config(Some(
-                r#"{"button":{"label":"Haupt","label_template":"Neben"}}"#
-            )),
-            "Haupt"
-        );
-        // button ist kein Objekt → leeres dict → TWITCH_BUTTON_LABEL
-        assert_eq!(
-            button_label_from_config(Some(r#"{"button":"string_statt_objekt"}"#)),
-            "Auf Twitch ansehen"
-        );
-    }
-
-    #[test]
-    fn button_label_wird_auf_80_zeichen_gekuerzt() {
-        let long_label = "x".repeat(100);
-        let config = format!(r#"{{"button":{{"label":"{long_label}"}}}}"#);
-        let result = button_label_from_config(Some(&config));
-        assert_eq!(result.len(), 80, "Label muss auf 80 Zeichen gekürzt werden");
     }
 
     // ── P2.145: GET /debug/eventsub-processing ────────────────────────────────

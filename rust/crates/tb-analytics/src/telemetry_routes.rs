@@ -6,7 +6,6 @@
 //! Alle Felder entsprechen exakt dem Postgres-Schema:
 //! - `twitch_live_state`: TEXT-Spalten; `is_live`/`last_viewer_count`/
 //!   `active_session_id` als INTEGER; `had_deadlock_in_session` als INTEGER.
-//! - `twitch_live_announcement_configs`: TEXT-Spalten.
 //! - `twitch_link_clicks`: TEXT-Spalten; `id` SERIAL.
 //!
 //! Kein HTTP, kein Serde — nur reine Query-Logik.
@@ -24,12 +23,11 @@ pub struct LiveAnnouncementRow {
     /// message_id als TEXT aus der DB; muss zu i64 parsebar sein.
     pub last_discord_message_id: Option<String>,
     pub last_tracking_token: Option<String>,
-    pub config_json: Option<String>,
 }
 
 // ── Live Active Announcements ─────────────────────────────────────────────────
 
-/// Lädt alle aktiven Announcements aus `twitch_live_state` + Config-JOIN.
+/// Lädt alle aktiven Announcements aus `twitch_live_state`.
 ///
 /// Parität zu `_dashboard_live_active_announcements` in `bot/dashboard/mixin.py`:
 /// - nur Zeilen mit `last_discord_message_id IS NOT NULL` und
@@ -42,11 +40,8 @@ pub async fn list_active_announcements(
         r#"
         SELECT ls.streamer_login,
                ls.last_discord_message_id,
-               ls.last_tracking_token,
-               cfg.config_json
+               ls.last_tracking_token
         FROM twitch_live_state ls
-        LEFT JOIN twitch_live_announcement_configs cfg
-          ON LOWER(cfg.streamer_login) = LOWER(ls.streamer_login)
         WHERE ls.last_discord_message_id IS NOT NULL
           AND ls.last_tracking_token IS NOT NULL
         ORDER BY LOWER(ls.streamer_login)
@@ -135,7 +130,7 @@ mod tests {
         };
     }
 
-    /// Schema-isolierter Pool mit prod-treuer DDL für alle 3 relevanten Tabellen.
+    /// Schema-isolierter Pool mit prod-treuer DDL für die relevanten Tabellen.
     async fn make_pool(dsn: &str, schema: &str) -> PgPool {
         let pool = PgPoolOptions::new()
             .max_connections(1)
@@ -182,21 +177,6 @@ mod tests {
         .execute(&pool)
         .await
         .expect("DDL twitch_live_state");
-
-        sqlx::query(
-            r#"
-            CREATE TABLE twitch_live_announcement_configs (
-                streamer_login          TEXT PRIMARY KEY,
-                config_json             TEXT NOT NULL,
-                allowed_editor_role_ids TEXT,
-                updated_at              TEXT DEFAULT CURRENT_TIMESTAMP,
-                updated_by              TEXT
-            )
-            "#,
-        )
-        .execute(&pool)
-        .await
-        .expect("DDL twitch_live_announcement_configs");
 
         sqlx::query(
             r#"
@@ -265,9 +245,9 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn list_active_announcements_config_join() {
+    async fn list_active_announcements_benoetigt_keine_config_tabelle() {
         let dsn = db_dsn_or_skip!();
-        let pool = make_pool(&dsn, "test_tr_list_config").await;
+        let pool = make_pool(&dsn, "test_tr_list_no_config").await;
 
         sqlx::query(
             "INSERT INTO twitch_live_state (twitch_user_id, streamer_login, last_discord_message_id, last_tracking_token) VALUES ($1,$2,$3,$4)"
@@ -275,39 +255,11 @@ mod tests {
         .bind("uid_x").bind("streamer_x").bind("555").bind("tok_x")
         .execute(&pool).await.expect("insert live");
 
-        // config_json enthält button.label — Parität zur Python-Struktur
-        sqlx::query(
-            "INSERT INTO twitch_live_announcement_configs (streamer_login, config_json) VALUES ($1,$2)"
-        )
-        .bind("streamer_x").bind(r#"{"button":{"label":"Watch now"}}"#)
-        .execute(&pool).await.expect("insert config");
-
         let rows = list_active_announcements(&pool).await.expect("query");
         assert_eq!(rows.len(), 1);
-        assert!(rows[0].config_json.as_deref().unwrap_or("").contains("Watch now"));
-    }
-
-    #[tokio::test]
-    async fn list_active_announcements_config_label_template() {
-        let dsn = db_dsn_or_skip!();
-        let pool = make_pool(&dsn, "test_tr_list_config_tpl").await;
-
-        sqlx::query(
-            "INSERT INTO twitch_live_state (twitch_user_id, streamer_login, last_discord_message_id, last_tracking_token) VALUES ($1,$2,$3,$4)"
-        )
-        .bind("uid_tpl").bind("streamer_tpl").bind("777").bind("tok_tpl")
-        .execute(&pool).await.expect("insert live");
-
-        // config_json enthält nur button.label_template (kein label)
-        sqlx::query(
-            "INSERT INTO twitch_live_announcement_configs (streamer_login, config_json) VALUES ($1,$2)"
-        )
-        .bind("streamer_tpl").bind(r#"{"button":{"label_template":"Jetzt live!"}}"#)
-        .execute(&pool).await.expect("insert config");
-
-        let rows = list_active_announcements(&pool).await.expect("query");
-        assert_eq!(rows.len(), 1);
-        assert!(rows[0].config_json.as_deref().unwrap_or("").contains("Jetzt live!"));
+        assert_eq!(rows[0].streamer_login, "streamer_x");
+        assert_eq!(rows[0].last_discord_message_id.as_deref(), Some("555"));
+        assert_eq!(rows[0].last_tracking_token.as_deref(), Some("tok_x"));
     }
 
     #[tokio::test]

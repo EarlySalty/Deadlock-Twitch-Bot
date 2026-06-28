@@ -1,5 +1,5 @@
-//! Tests des Broker-Announcement-Sinks (Slice 4e): Default-Rendering,
-//! per-Streamer-Config, Retry-Token-Stabilität, Offline-Edit.
+//! Tests des Broker-Announcement-Sinks (Slice 4e): Standard-Rendering,
+//! Retry-Token-Stabilität, Rollen-Ping und Offline-Edit.
 
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
@@ -10,8 +10,8 @@ use tb_monitoring::poller::hooks::{
 };
 use tb_monitoring::poller::source::SourceError;
 use tb_monitoring::{
-    AnnounceConfigStore, AnnouncementSettings, AnnouncementTransport, BrokerAnnouncementSink,
-    LivePingRoleProvider, NoVodPreview, StreamSnapshot, TrackedEntry,
+    AnnouncementSettings, AnnouncementTransport, BrokerAnnouncementSink, LivePingRoleProvider,
+    NoVodPreview, StreamSnapshot, TrackedEntry,
 };
 
 mod support;
@@ -90,18 +90,16 @@ impl LivePingRoleProvider for StubRoleProvider {
     }
 }
 
-fn sink_with(pool: &sqlx::PgPool, transport: Arc<StubTransport>) -> BrokerAnnouncementSink {
-    sink_with_provider(pool, transport, None)
+fn sink_with(transport: Arc<StubTransport>) -> BrokerAnnouncementSink {
+    sink_with_provider(transport, None)
 }
 
 fn sink_with_provider(
-    pool: &sqlx::PgPool,
     transport: Arc<StubTransport>,
     live_ping_role_provider: Option<Arc<dyn LivePingRoleProvider>>,
 ) -> BrokerAnnouncementSink {
     BrokerAnnouncementSink::new(
         transport,
-        AnnounceConfigStore::new(pool.clone()),
         Arc::new(NoVodPreview),
         AnnouncementSettings {
             notify_channel_id: 555,
@@ -159,9 +157,8 @@ fn live_request_no_role(login: &str) -> AnnounceLiveRequest {
 
 #[tokio::test]
 async fn announce_live_default_config_und_mentions() {
-    let pool = pool_or_skip!("t4e_announce");
     let transport = Arc::new(StubTransport::default());
-    let sink = sink_with(&pool, transport.clone());
+    let sink = sink_with(transport.clone());
 
     assert!(sink.ready());
     let result = sink
@@ -196,9 +193,8 @@ async fn announce_live_default_config_und_mentions() {
 /// Alert-Mention (`<@&777>`) bleibt unberührt.
 #[tokio::test]
 async fn announce_live_ping_disabled_unterdrueckt_streamer_rolle() {
-    let pool = pool_or_skip!("t4e_ping_disabled");
     let transport = Arc::new(StubTransport::default());
-    let sink = sink_with(&pool, transport.clone());
+    let sink = sink_with(transport.clone());
 
     let mut request = live_request("drag");
     request.entry.live_ping_enabled = false; // Rolle gesetzt, aber Ping aus.
@@ -218,7 +214,7 @@ async fn announce_live_ping_disabled_unterdrueckt_streamer_rolle() {
 }
 
 #[tokio::test]
-async fn announce_live_nutzt_streamer_config_und_retry_token() {
+async fn announce_live_ignoriert_config_json_row_und_nutzt_standard_mit_retry_token() {
     let pool = pool_or_skip!("t4e_config_retry");
     sqlx::query(
         r#"INSERT INTO twitch_live_announcement_configs (streamer_login, config_json)
@@ -229,7 +225,7 @@ async fn announce_live_nutzt_streamer_config_und_retry_token() {
     .unwrap();
 
     let transport = Arc::new(StubTransport::default());
-    let sink = sink_with(&pool, transport.clone());
+    let sink = sink_with(transport.clone());
 
     // Erster Versuch scheitert → Retry-Zustand mit stabilem Token.
     transport.fail_next_send.store(true, Ordering::SeqCst);
@@ -240,17 +236,23 @@ async fn announce_live_nutzt_streamer_config_und_retry_token() {
         .expect("Retry ok");
 
     let sends = transport.sends.lock().unwrap();
-    let (_, _, embed, _, view_spec) = &sends[0];
-    assert_eq!(embed["title"], "Drag zockt Deadlock");
-    assert!(view_spec.is_none(), "Button deaktiviert → kein View-Spec");
-    assert!(result.tracking_token.is_none(), "ohne Button kein Token");
+    let (_, _, embed, roles, view_spec) = &sends[0];
+    assert_eq!(embed["title"], "Drag ist LIVE in Deadlock!");
+    assert!(roles.contains(&999), "Streamer-Rollen-Ping bleibt aktiv");
+    assert!(roles.contains(&777), "Alert-Mention bleibt erlaubt");
+    let view = view_spec.as_ref().expect("Standard-Button bleibt aktiv");
+    assert_eq!(view["button_label"], "Auf Twitch ansehen");
+    assert_eq!(
+        view["tracking_token"].as_str(),
+        result.tracking_token.as_deref()
+    );
+    assert!(result.tracking_token.is_some(), "Standard-Button liefert Token");
 }
 
 #[tokio::test]
 async fn end_announcement_editiert_offline_embed() {
-    let pool = pool_or_skip!("t4e_offline");
     let transport = Arc::new(StubTransport::default());
-    let sink = sink_with(&pool, transport.clone());
+    let sink = sink_with(transport.clone());
 
     let outcome = sink
         .end_announcement(EndAnnouncementRequest {
@@ -277,13 +279,12 @@ async fn end_announcement_editiert_offline_embed() {
 
 #[tokio::test]
 async fn live_ping_auto_anlage_nutzt_provider_rolle() {
-    let pool = pool_or_skip!("t4e_liveping_auto");
     let transport = Arc::new(StubTransport::default());
     let provider = Arc::new(StubRoleProvider {
         role_id: Some(424242),
         ..Default::default()
     });
-    let sink = sink_with_provider(&pool, transport.clone(), Some(provider.clone()));
+    let sink = sink_with_provider(transport.clone(), Some(provider.clone()));
 
     let result = sink
         .announce_live(live_request_no_role("drag"))
@@ -302,14 +303,13 @@ async fn live_ping_auto_anlage_nutzt_provider_rolle() {
 
 #[tokio::test]
 async fn live_ping_ohne_provider_faellt_auf_warn_zurueck() {
-    let pool = pool_or_skip!("t4e_liveping_nofallback");
     let transport = Arc::new(StubTransport::default());
     // Provider liefert None (z. B. Discord-Anlage scheitert) → kein Rollen-Ping.
     let provider = Arc::new(StubRoleProvider {
         role_id: None,
         ..Default::default()
     });
-    let sink = sink_with_provider(&pool, transport.clone(), Some(provider.clone()));
+    let sink = sink_with_provider(transport.clone(), Some(provider.clone()));
 
     let result = sink
         .announce_live(live_request_no_role("drag"))

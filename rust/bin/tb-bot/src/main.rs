@@ -76,12 +76,11 @@ use tb_monitoring::poller::{ChannelInfoSource, PollHooks, StreamSource};
 use tb_monitoring::sessions::store::SessionStore;
 use tb_monitoring::sessions::tracker::FollowerCountSource;
 use tb_monitoring::{
-    AnnounceConfigStore, AnnouncementSettings, AnnouncementSink, BrokerAnnouncementSink,
-    CapacitySnapshotStore, EventSubDispatcher, EventSubHooks, ExpSessionStore, ExpSessionTracker,
-    GuardStore, InboxRuntime, LiveStateStore, MonitoringEventHandler, NoFollowerSource,
-    NoopAnnouncementSink, NoopEventSubHooks, PollConfig, PollEngine, PollIntervalStore,
-    SessionTracker, StatsStore, SubscriptionConfig, SubscriptionManager, TelemetryStore,
-    TrackedStore, VodPreviewSource,
+    AnnouncementSettings, AnnouncementSink, BrokerAnnouncementSink, CapacitySnapshotStore,
+    EventSubDispatcher, EventSubHooks, ExpSessionStore, ExpSessionTracker, GuardStore,
+    InboxRuntime, LiveStateStore, MonitoringEventHandler, NoFollowerSource, NoopAnnouncementSink,
+    NoopEventSubHooks, PollConfig, PollEngine, PollIntervalStore, SessionTracker, StatsStore,
+    SubscriptionConfig, SubscriptionManager, TelemetryStore, TrackedStore, VodPreviewSource,
 };
 use tb_raid::{
     AutoRaidPipeline, ManualRaidSuppression, OfflineEligibilityStore, OutreachBoostStore,
@@ -1299,7 +1298,6 @@ async fn main() {
                                 as Arc<dyn tb_monitoring::LivePingRoleProvider>);
                             Arc::new(BrokerAnnouncementSink::new(
                                 Arc::new(BrokerAnnouncementTransport { relay }),
-                                AnnounceConfigStore::new(pool.clone()),
                                 vod,
                                 AnnouncementSettings {
                                     notify_channel_id,

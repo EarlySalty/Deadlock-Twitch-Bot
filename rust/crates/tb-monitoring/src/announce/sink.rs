@@ -13,7 +13,6 @@ use std::sync::{Arc, Mutex};
 
 use chrono::{DateTime, Utc};
 use serde_json::Value;
-use sqlx::PgPool;
 
 use crate::announce::template::{
     build_context, build_offline_embed, render_announcement, sanitize_live_content,
@@ -91,40 +90,6 @@ pub struct AnnouncementSettings {
     pub target_game: String,
 }
 
-/// Lädt die per-Streamer-Announcement-Config (`config_json`).
-#[derive(Clone)]
-pub struct AnnounceConfigStore {
-    pool: PgPool,
-}
-
-impl AnnounceConfigStore {
-    pub fn new(pool: PgPool) -> Self {
-        Self { pool }
-    }
-
-    pub async fn load(&self, login: &str) -> AnnouncementConfig {
-        let raw: Result<Option<Option<String>>, sqlx::Error> = sqlx::query_scalar(
-            "SELECT config_json FROM twitch_live_announcement_configs
-              WHERE LOWER(streamer_login) = LOWER($1) LIMIT 1",
-        )
-        .bind(login)
-        .fetch_optional(&self.pool)
-        .await;
-        let text = match raw {
-            Ok(Some(Some(text))) => text,
-            Ok(_) => return AnnouncementConfig::default(),
-            Err(error) => {
-                tracing::debug!(%error, login, "Announcement-Config nicht ladbar — Defaults");
-                return AnnouncementConfig::default();
-            }
-        };
-        match serde_json::from_str::<Value>(&text) {
-            Ok(parsed) if parsed.is_object() => AnnouncementConfig::from_json(&parsed),
-            _ => AnnouncementConfig::default(),
-        }
-    }
-}
-
 struct RetryState {
     tracking_token: String,
     render_now: DateTime<Utc>,
@@ -132,7 +97,6 @@ struct RetryState {
 
 pub struct BrokerAnnouncementSink {
     transport: Arc<dyn AnnouncementTransport>,
-    configs: AnnounceConfigStore,
     vod: Arc<dyn VodPreviewSource>,
     settings: AnnouncementSettings,
     live_ping_role_provider: Option<Arc<dyn LivePingRoleProvider>>,
@@ -142,14 +106,12 @@ pub struct BrokerAnnouncementSink {
 impl BrokerAnnouncementSink {
     pub fn new(
         transport: Arc<dyn AnnouncementTransport>,
-        configs: AnnounceConfigStore,
         vod: Arc<dyn VodPreviewSource>,
         settings: AnnouncementSettings,
         live_ping_role_provider: Option<Arc<dyn LivePingRoleProvider>>,
     ) -> Self {
         Self {
             transport,
-            configs,
             vod,
             settings,
             live_ping_role_provider,
@@ -219,7 +181,7 @@ impl AnnouncementSink for BrokerAnnouncementSink {
                 None => (Self::tracking_token(&request), Utc::now()),
             }
         };
-        let config = self.configs.load(&login).await;
+        let config = AnnouncementConfig::default();
 
         // Mention: Live-Ping-Rolle aus der Partner-Config + statische Rollen.
         let streamer_role_id = request

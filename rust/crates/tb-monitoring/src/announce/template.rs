@@ -1,6 +1,6 @@
 //! Port des Live-Announcement-Template-Systems (`bot/live_announce/template.py`):
-//! per-Streamer konfigurierbare Discord-Embeds mit `{platzhalter}`-Rendering,
-//! Discord-Limits, Thumbnail-Auflösung und stabilem Cache-Buster.
+//! Standard-Discord-Embed mit `{platzhalter}`-Rendering, Discord-Limits,
+//! Thumbnail-Auflösung und stabilem Cache-Buster.
 //! Reine Logik — kein I/O.
 
 use std::collections::BTreeMap;
@@ -20,35 +20,7 @@ pub const TWITCH_VOD_BUTTON_LABEL: &str = "VOD anschauen";
 const MAX_DESCRIPTION: usize = 4096;
 const MAX_FIELDS: usize = 25;
 
-// ── Konfiguration (JSON aus `twitch_live_announcement_configs`) ──────────────
-
-fn s(v: Option<&Value>, default: &str) -> String {
-    match v {
-        Some(Value::String(text)) => {
-            let trimmed = text.trim();
-            if trimmed.is_empty() {
-                default.to_string()
-            } else {
-                text.clone()
-            }
-        }
-        Some(Value::Null) | None => default.to_string(),
-        Some(other) => other.to_string(),
-    }
-}
-
-fn b(v: Option<&Value>, default: bool) -> bool {
-    match v {
-        Some(Value::Bool(value)) => *value,
-        Some(Value::Number(n)) => n.as_i64().map(|x| x != 0).unwrap_or(default),
-        Some(Value::String(raw)) => match raw.trim().to_lowercase().as_str() {
-            "1" | "true" | "yes" | "on" => true,
-            "0" | "false" | "no" | "off" => false,
-            _ => default,
-        },
-        _ => default,
-    }
-}
+// ── Standard-Konfiguration ───────────────────────────────────────────────────
 
 #[derive(Debug, Clone)]
 pub struct AnnouncementConfig {
@@ -108,87 +80,6 @@ impl Default for AnnouncementConfig {
             button_label_template: TWITCH_BUTTON_LABEL.to_string(),
             use_streamer_ping_role: true,
             static_ping_role_ids: Vec::new(),
-        }
-    }
-}
-
-impl AnnouncementConfig {
-    /// Konfiguration aus dem gespeicherten JSON (fehlende Felder → Defaults,
-    /// Python `LiveAnnouncementConfig.from_dict`).
-    pub fn from_json(raw: &Value) -> Self {
-        let defaults = Self::default();
-        let author = raw.get("author").cloned().unwrap_or(Value::Null);
-        let images = raw.get("images").cloned().unwrap_or(Value::Null);
-        let footer = raw.get("footer").cloned().unwrap_or(Value::Null);
-        let button = raw.get("button").cloned().unwrap_or(Value::Null);
-        let mentions = raw.get("mentions").cloned().unwrap_or(Value::Null);
-
-        let mut fields: Vec<(String, String, bool)> = Vec::new();
-        if let Some(Value::Array(items)) = raw.get("fields") {
-            for item in items {
-                fields.push((
-                    s(item.get("name_template"), "Info"),
-                    s(item.get("value_template"), "-"),
-                    b(item.get("inline"), true),
-                ));
-            }
-        }
-        if fields.is_empty() {
-            fields = defaults.fields.clone();
-        }
-        let static_ping_role_ids = mentions
-            .get("static_ping_role_ids")
-            .and_then(Value::as_array)
-            .map(|items| {
-                items
-                    .iter()
-                    .filter_map(|item| match item {
-                        Value::Number(n) => n.as_i64(),
-                        Value::String(text) => text.trim().parse::<i64>().ok(),
-                        _ => None,
-                    })
-                    .filter(|id| *id > 0)
-                    .collect()
-            })
-            .unwrap_or_default();
-
-        Self {
-            content_template: s(raw.get("content_template"), &defaults.content_template),
-            color: raw.get("color").cloned().unwrap_or(defaults.color.clone()),
-            author_name_template: s(author.get("name_template"), &defaults.author_name_template),
-            author_icon_mode: s(author.get("icon_mode"), &defaults.author_icon_mode).to_lowercase(),
-            author_link_to_stream: b(author.get("link_to_stream"), true),
-            title_template: s(raw.get("title_template"), &defaults.title_template),
-            title_link_to_stream: b(raw.get("title_link_to_stream"), true),
-            description_mode: s(raw.get("description_mode"), &defaults.description_mode)
-                .to_lowercase(),
-            description_template: s(
-                raw.get("description_template"),
-                &defaults.description_template,
-            ),
-            short_description: b(raw.get("short_description"), false),
-            fields,
-            thumbnail_mode: s(images.get("thumbnail_mode"), &defaults.thumbnail_mode)
-                .to_lowercase(),
-            thumbnail_url_template: s(images.get("thumbnail_url_template"), ""),
-            image_mode: s(images.get("image_mode"), &defaults.image_mode).to_lowercase(),
-            image_url_template: s(images.get("image_url_template"), ""),
-            image_ratio: s(images.get("image_ratio"), &defaults.image_ratio),
-            cache_buster: b(images.get("cache_buster"), true),
-            footer_text_template: s(footer.get("text_template"), &defaults.footer_text_template),
-            footer_icon_mode: s(footer.get("icon_mode"), &defaults.footer_icon_mode).to_lowercase(),
-            footer_timestamp_mode: s(
-                footer.get("timestamp_mode"),
-                &defaults.footer_timestamp_mode,
-            )
-            .to_lowercase(),
-            button_enabled: b(button.get("enabled"), true),
-            button_label_template: s(button.get("label_template"), {
-                // Legacy-Konfigs nutzen `label` statt `label_template`.
-                &s(button.get("label"), &defaults.button_label_template)
-            }),
-            use_streamer_ping_role: b(mentions.get("use_streamer_ping_role"), true),
-            static_ping_role_ids,
         }
     }
 }
@@ -763,9 +654,11 @@ mod tests {
         );
 
         // image_mode="none": Python-Legacy zeigt trotzdem das Stream-Thumbnail.
-        let config = AnnouncementConfig::from_json(&serde_json::json!({
-            "images": { "image_mode": "none", "cache_buster": false }
-        }));
+        let config = AnnouncementConfig {
+            image_mode: "none".to_string(),
+            cache_buster: false,
+            ..AnnouncementConfig::default()
+        };
         let rendered = render_announcement(&config, &ctx, now, Some("seed"));
         assert_eq!(
             rendered.embed["image"]["url"], "https://cdn/1280x720.jpg",
@@ -773,9 +666,12 @@ mod tests {
         );
 
         // image_mode="custom" mit leerem Template: ebenfalls Fallback.
-        let config = AnnouncementConfig::from_json(&serde_json::json!({
-            "images": { "image_mode": "custom", "image_url_template": "", "cache_buster": false }
-        }));
+        let config = AnnouncementConfig {
+            image_mode: "custom".to_string(),
+            image_url_template: String::new(),
+            cache_buster: false,
+            ..AnnouncementConfig::default()
+        };
         let rendered = render_announcement(&config, &ctx, now, Some("seed"));
         assert_eq!(
             rendered.embed["image"]["url"], "https://cdn/1280x720.jpg",
@@ -783,13 +679,12 @@ mod tests {
         );
 
         // Explizites Custom-Bild bleibt unangetastet (kein Fallback).
-        let config = AnnouncementConfig::from_json(&serde_json::json!({
-            "images": {
-                "image_mode": "custom",
-                "image_url_template": "https://custom/banner.png",
-                "cache_buster": false
-            }
-        }));
+        let config = AnnouncementConfig {
+            image_mode: "custom".to_string(),
+            image_url_template: "https://custom/banner.png".to_string(),
+            cache_buster: false,
+            ..AnnouncementConfig::default()
+        };
         let rendered = render_announcement(&config, &ctx, now, Some("seed"));
         assert_eq!(rendered.embed["image"]["url"], "https://custom/banner.png");
     }
@@ -804,9 +699,10 @@ mod tests {
             ..Default::default()
         };
         let ctx = build_context("drag", &stream, "https://t/drag", "", now, None);
-        let config = AnnouncementConfig::from_json(&serde_json::json!({
-            "images": { "image_mode": "none" }
-        }));
+        let config = AnnouncementConfig {
+            image_mode: "none".to_string(),
+            ..AnnouncementConfig::default()
+        };
         let rendered = render_announcement(&config, &ctx, now, Some("seed"));
         assert!(
             rendered.embed.get("image").is_none(),

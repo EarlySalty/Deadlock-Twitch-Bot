@@ -43,8 +43,8 @@ pub mod webhook_receiver;
 pub use webhook_receiver::WebhookReceiver;
 
 pub use announce::{
-    AnnounceConfigStore, AnnouncementSettings, AnnouncementTransport, BrokerAnnouncementSink,
-    LivePingRoleProvider, NoVodPreview, VodPreviewSource,
+    AnnouncementSettings, AnnouncementTransport, BrokerAnnouncementSink, LivePingRoleProvider,
+    NoVodPreview, VodPreviewSource,
 };
 pub use dispatch::{
     classify_chat_notification, has_registered_handler, ChatNotificationKind, DispatchNotReady,
