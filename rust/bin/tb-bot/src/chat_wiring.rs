@@ -535,7 +535,19 @@ pub async fn build_runtime(
         .build()
         .unwrap_or_default();
 
-    let moderation = Arc::new(ModerationEngine::new(Arc::clone(&api), pool.clone()));
+    // Promo-Suppression kombiniert die bestehende DB-Suppression
+    // (twitch_outbound_chat_suppressions, Quelle "promo") mit dem In-Memory-
+    // TimeoutGuard: der Promo-Pfad sendet weder in DB-stummgeschaltete noch in
+    // per Bot-Timeout stummgeschaltete Kanäle (Port: promos.py:1137 prüft
+    // timeout_guard.is_muted vor jedem Promo-Send).
+    let suppression: Arc<dyn tb_chat::promos::OutboundSuppressionCheck> = Arc::new(CombinedSuppression::new(
+        Arc::new(OutboundSuppressionStore::new(pool.clone())),
+        Arc::clone(&timeout_guard),
+    ));
+    let moderation = Arc::new(
+        ModerationEngine::new(Arc::clone(&api), pool.clone())
+            .with_notice_suppression(Arc::clone(&suppression)),
+    );
     let mut conversation_scam = ConversationScamGuard::new(
         pool.clone(),
         bot_user_id.clone(),
@@ -549,15 +561,6 @@ pub async fn build_runtime(
         conversation_scam = conversation_scam.with_notifier(notifier);
     }
     let conversation_scam = Arc::new(conversation_scam);
-    // Promo-Suppression kombiniert die bestehende DB-Suppression
-    // (twitch_outbound_chat_suppressions, Quelle "promo") mit dem In-Memory-
-    // TimeoutGuard: der Promo-Pfad sendet weder in DB-stummgeschaltete noch in
-    // per Bot-Timeout stummgeschaltete Kanäle (Port: promos.py:1137 prüft
-    // timeout_guard.is_muted vor jedem Promo-Send).
-    let suppression = Arc::new(CombinedSuppression::new(
-        Arc::new(OutboundSuppressionStore::new(pool.clone())),
-        Arc::clone(&timeout_guard),
-    ));
     // Promo-Invite-Resolver: lazy On-Miss-Erstellung (PromoEngine) UND eager
     // Backfill beim Startup (P2.14) teilen sich denselben Resolver, damit beide
     // Pfade dieselbe Broker-/DB-Logik nutzen.
@@ -567,7 +570,7 @@ pub async fn build_runtime(
         invite_channel_id: invite_channel_id_from_env(),
     });
     let promos = Arc::new(
-        PromoEngine::new(pool.clone(), Arc::clone(&api), suppression)
+        PromoEngine::new(pool.clone(), Arc::clone(&api), Arc::clone(&suppression))
             // P1.1: Schreibseite der Outbound-Suppression — derselbe Store, der
             // bereits als Read-Seite in CombinedSuppression hängt. channel_settings-
             // Drops werden so 7d/3d persistiert (promo/recruitment 7d, partner_raid 3d).

@@ -44,6 +44,7 @@ use tracing::{debug, info, warn};
 
 use crate::api::ChatApi;
 use crate::commands::InviteReplyNotifier;
+use crate::suppression_guard::SuppressionGuardChatApi;
 use crate::types::ChatMessageEvent;
 
 // ---------------------------------------------------------------------------
@@ -659,6 +660,16 @@ impl PromoEngine {
     pub fn set_preset_picker(mut self, p: Arc<dyn PresetPicker>) -> Self {
         self.preset_picker = p;
         self
+    }
+
+    fn guarded_api_for(&self, source: &str, login: &str) -> SuppressionGuardChatApi {
+        SuppressionGuardChatApi::with_pool(
+            Arc::clone(&self.api),
+            Arc::clone(&self.suppression),
+            self.pool.clone(),
+            source,
+            login,
+        )
     }
 
     /// Per-Message-Pfad: wird für jede eingehende Chat-Nachricht aufgerufen.
@@ -1787,7 +1798,10 @@ impl PromoEngine {
                     .replace("{login}", &target_login);
                 // Python targeted_promo.py:264: `if not ok: return False` — bei nicht
                 // zugestelltem Send keine State-Mutation/keinen Cooldown verbrennen.
-                let outcome = self.api.send_message(channel_id, &text).await;
+                let outcome = self
+                    .guarded_api_for("promo", login)
+                    .send_message(channel_id, &text)
+                    .await;
                 // channel_settings-Drop → Kanal stummschalten (P1.1, source="promo").
                 self.record_suppression_on_drop(login, channel_id, "promo", &outcome)
                     .await;
@@ -1831,7 +1845,7 @@ impl PromoEngine {
         // Global → Announcement, color="purple" (promo_presets.py).
         // Python targeted_promo.py:264: `if not ok: return False` — Send-Ergebnis prüfen.
         let sent = self
-            .api
+            .guarded_api_for("promo", login)
             .send_announcement(channel_id, &text, "purple")
             .await
             .unwrap_or(false);
@@ -2877,6 +2891,15 @@ mod db_tests {
     use sqlx::postgres::{PgConnectOptions, PgPoolOptions};
     use std::str::FromStr;
 
+    struct FixedSuppression(bool);
+
+    #[async_trait]
+    impl OutboundSuppressionCheck for FixedSuppression {
+        async fn is_muted(&self, _channel_login: &str) -> bool {
+            self.0
+        }
+    }
+
     macro_rules! pool_or_skip {
         ($schema:expr) => {{
             let Some(dsn) = std::env::var("TB_TEST_DATABASE_URL").ok() else {
@@ -2934,6 +2957,7 @@ mod db_tests {
                 twitch_login TEXT NOT NULL,
                 twitch_user_id TEXT,
                 is_partner_active INTEGER DEFAULT 0,
+                manual_partner_opt_out INTEGER DEFAULT 0,
                 archived_at TEXT
             )"#,
             // streamer_plans — promo_disabled=integer, lurker_tax_enabled=integer,
@@ -3288,6 +3312,54 @@ mod db_tests {
             "ohne aktiven Partner-State darf auch Targeted-Global nicht senden"
         );
         assert_eq!(api.message_count().await, 0);
+    }
+
+    #[tokio::test]
+    async fn targeted_promo_suppression_guard_skippt_global_send() {
+        let pool = pool_or_skip!("promo_targeted_guard_suppressed");
+        let api = Arc::new(super::tests::MockApi::default());
+        let engine = PromoEngine::new(pool.clone(), api.clone(), Arc::new(FixedSuppression(true)));
+
+        let sent = engine
+            .maybe_send_targeted_promo(
+                "targetkanal",
+                "u-target",
+                "https://discord.gg/deadlock",
+                &[],
+                Instant::now(),
+            )
+            .await;
+
+        assert!(!sent);
+        assert_eq!(
+            api.announcement_count().await,
+            0,
+            "Suppression-Guard verhindert den Targeted-Global-Send"
+        );
+    }
+
+    #[tokio::test]
+    async fn targeted_promo_suppression_guard_allowed_sendet_global() {
+        let pool = pool_or_skip!("promo_targeted_guard_allowed");
+        let api = Arc::new(super::tests::MockApi::default());
+        let engine = PromoEngine::new(pool.clone(), api.clone(), Arc::new(FixedSuppression(false)));
+
+        let sent = engine
+            .maybe_send_targeted_promo(
+                "targetkanal",
+                "u-target",
+                "https://discord.gg/deadlock",
+                &[],
+                Instant::now(),
+            )
+            .await;
+
+        assert!(sent);
+        assert_eq!(
+            api.announcement_count().await,
+            1,
+            "Allowed-Guard delegiert den Targeted-Global-Send"
+        );
     }
 
     // -----------------------------------------------------------------------

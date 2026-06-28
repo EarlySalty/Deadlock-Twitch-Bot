@@ -14,6 +14,10 @@
 
 use crate::api::{BanOutcome, ChatApi};
 use crate::commands::{AutobanEntry, LastAutobanStore};
+use crate::promos::OutboundSuppressionCheck as PromoSuppressionCheck;
+use crate::suppression_guard::{
+    DbManualPartnerOptOutCheck, ManualPartnerOptOutCheck, SuppressionGuardChatApi,
+};
 use crate::token::BotTokenManager;
 use crate::types::SendOutcome;
 use async_trait::async_trait;
@@ -391,6 +395,8 @@ pub struct AutoBanRequest<'a> {
 pub struct ModerationEngine {
     api: Arc<dyn ChatApi>,
     pool: PgPool,
+    notice_suppression: Option<Arc<dyn PromoSuppressionCheck>>,
+    notice_manual_opt_out: Arc<dyn ManualPartnerOptOutCheck>,
     /// In-Memory-Store: channel_login (lowercase) → letzter AutoBan.
     last_autoban: Arc<Mutex<HashMap<String, AutoBanRecord>>>,
 }
@@ -398,11 +404,53 @@ pub struct ModerationEngine {
 impl ModerationEngine {
     /// Erstellt eine neue ModerationEngine.
     pub fn new(api: Arc<dyn ChatApi>, pool: PgPool) -> Self {
+        let notice_manual_opt_out = Arc::new(DbManualPartnerOptOutCheck::new(pool.clone()));
         Self {
             api,
             pool,
+            notice_suppression: None,
+            notice_manual_opt_out,
             last_autoban: Arc::new(Mutex::new(HashMap::new())),
         }
+    }
+
+    /// Verdrahtet den zentralen Outbound-Suppression-Guard fuer Auto-Ban-Notices.
+    pub fn with_notice_suppression(
+        mut self,
+        suppression: Arc<dyn PromoSuppressionCheck>,
+    ) -> Self {
+        self.notice_suppression = Some(suppression);
+        self
+    }
+
+    /// Ersetzt den Opt-out-Checker fuer Tests.
+    #[cfg(test)]
+    pub fn with_notice_manual_opt_out_check(
+        mut self,
+        check: Arc<dyn ManualPartnerOptOutCheck>,
+    ) -> Self {
+        self.notice_manual_opt_out = check;
+        self
+    }
+
+    async fn send_autoban_notice(
+        &self,
+        channel_login: &str,
+        broadcaster_id: &str,
+        notice: &str,
+    ) {
+        if let Some(suppression) = self.notice_suppression.as_ref() {
+            let api = SuppressionGuardChatApi::new(
+                Arc::clone(&self.api),
+                Arc::clone(suppression),
+                Arc::clone(&self.notice_manual_opt_out),
+                "promo",
+                channel_login,
+            );
+            let _ = api.send_message(broadcaster_id, notice).await;
+            return;
+        }
+        let _ = self.api.send_message(broadcaster_id, notice).await;
     }
 
     /// Führt AutoBan aus: 1. Nachricht löschen, 2. Ban (wenn `req.ban=true`).
@@ -465,7 +513,8 @@ impl ModerationEngine {
                         let notice = notice_text
                             .map(|t| t.replace("{login}", chatter_login))
                             .unwrap_or_else(|| NOTICE_SPAM_BAN.replace("{login}", chatter_login));
-                        let _ = self.api.send_message(broadcaster_id, &notice).await;
+                        self.send_autoban_notice(channel_login, broadcaster_id, &notice)
+                            .await;
                     }
                 }
                 true
@@ -1086,6 +1135,24 @@ mod tests {
         }
     }
 
+    struct FixedSuppression(bool);
+
+    #[async_trait]
+    impl crate::promos::OutboundSuppressionCheck for FixedSuppression {
+        async fn is_muted(&self, _channel_login: &str) -> bool {
+            self.0
+        }
+    }
+
+    struct FixedManualOptOut(bool);
+
+    #[async_trait]
+    impl ManualPartnerOptOutCheck for FixedManualOptOut {
+        async fn is_manual_partner_opt_out(&self, _target_login: &str) -> bool {
+            self.0
+        }
+    }
+
     #[async_trait]
     impl ChatApi for MockApi {
         async fn send_message(&self, _b: &str, _m: &str) -> Result<SendOutcome, String> {
@@ -1344,6 +1411,65 @@ mod tests {
             api.send_calls.load(Ordering::SeqCst),
             1,
             "kein silent → Chat-Notice gesendet"
+        );
+    }
+
+    #[tokio::test]
+    async fn autoban_notice_suppression_guard_skippt_notice() {
+        let api = MockApi::with_ban_result(BanOutcome::Banned);
+        let pool = sqlx::PgPool::connect_lazy("postgres://x:x@127.0.0.1:1/x").unwrap();
+        let engine = ModerationEngine::new(api.clone(), pool)
+            .with_notice_suppression(Arc::new(FixedSuppression(true)))
+            .with_notice_manual_opt_out_check(Arc::new(FixedManualOptOut(false)));
+        engine
+            .auto_ban_and_cleanup(AutoBanRequest {
+                channel_login: "kanal",
+                broadcaster_id: "bid",
+                bot_id: "bot",
+                chatter_login: "user",
+                chatter_id: "u1",
+                message_id: "m1",
+                content: "content",
+                ban: true,
+                reason_text: BAN_REASON_SPAM,
+                notice_text: None,
+                silent: false,
+            })
+            .await;
+        assert_eq!(api.ban_calls.load(Ordering::SeqCst), 1);
+        assert_eq!(
+            api.send_calls.load(Ordering::SeqCst),
+            0,
+            "Suppression-Guard verhindert nur die Notice"
+        );
+    }
+
+    #[tokio::test]
+    async fn autoban_notice_suppression_guard_allowed_sendet_notice() {
+        let api = MockApi::with_ban_result(BanOutcome::Banned);
+        let pool = sqlx::PgPool::connect_lazy("postgres://x:x@127.0.0.1:1/x").unwrap();
+        let engine = ModerationEngine::new(api.clone(), pool)
+            .with_notice_suppression(Arc::new(FixedSuppression(false)))
+            .with_notice_manual_opt_out_check(Arc::new(FixedManualOptOut(false)));
+        engine
+            .auto_ban_and_cleanup(AutoBanRequest {
+                channel_login: "kanal",
+                broadcaster_id: "bid",
+                bot_id: "bot",
+                chatter_login: "user",
+                chatter_id: "u1",
+                message_id: "m1",
+                content: "content",
+                ban: true,
+                reason_text: BAN_REASON_SPAM,
+                notice_text: None,
+                silent: false,
+            })
+            .await;
+        assert_eq!(
+            api.send_calls.load(Ordering::SeqCst),
+            1,
+            "Allowed-Guard delegiert die Notice"
         );
     }
 

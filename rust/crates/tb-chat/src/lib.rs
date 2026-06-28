@@ -41,6 +41,7 @@ pub mod secret_sink;
 pub mod spam_filter;
 pub mod stats;
 pub mod steam_lookup;
+pub mod suppression_guard;
 pub mod sus_invite;
 pub mod timeout_tracking;
 pub mod title_ai;
@@ -83,6 +84,9 @@ pub use promos::{
 pub use scam_pitch::{AccountAgePort, PitchDecision, ScamPitchDetector, SpamAiReviewer};
 pub use secret_sink::{InfisicalWriter, SecretSink, SecretWriteError};
 pub use spam_filter::{LearnedPatterns, SpamAction, SpamContext, SpamFilter, SpamVerdict};
+pub use suppression_guard::{
+    DbManualPartnerOptOutCheck, ManualPartnerOptOutCheck, SuppressionGuardChatApi,
+};
 pub use sus_invite::{SusInviteCheck, SusInviteHit};
 pub use timeout_tracking::{is_bot_timeout_drop, CombinedSuppression, TimeoutTrackingChatApi};
 pub use token::{load_seed_tokens, BotTokenManager, SeedTokens, TokenError};
