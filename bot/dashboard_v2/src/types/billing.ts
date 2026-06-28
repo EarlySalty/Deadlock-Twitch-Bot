@@ -120,3 +120,43 @@ export interface TrialInfo {
   trialDaysRemaining: number;
   onTrialExpiringSoon: boolean;  // true when < 7 days remaining
 }
+
+// Aktuell aufgeloestes Abo des eingeloggten Nutzers (Katalog-Feld
+// `current_subscription`). Fuer Free-Nutzer ist plan_id === 'raid_free'.
+export interface CurrentSubscription {
+  plan_id: string | null;
+  plan_name: string | null;
+  tier: PlanTier;
+  is_extended: boolean;
+  entitlements?: EntitlementId[];
+  expires_at: string | null;
+  source: string | null;
+}
+
+// Vom Backend gelieferte Management-Pfade (Katalog-Feld `payment`). Bewusst
+// server-seitig, damit Frontend keine Billing-URLs hartkodiert.
+export interface BillingPaymentPaths {
+  invoice_page_path?: string;
+  cancel_path?: string;
+  checkout_path?: string;
+}
+
+// Vollstaendige Antwort von GET /twitch/api/v2/billing/catalog.
+export interface BillingCatalog {
+  plans: CatalogPlan[];
+  current_subscription: CurrentSubscription | null;
+  payment: BillingPaymentPaths | null;
+}
+
+// Free-Default vs. echtes bezahltes Abo. Nur bei einem bezahlten Plan zeigen wir
+// die Abo-Verwaltung (Rechnungen/Portal) an.
+export function isActivePaidSubscription(
+  sub: CurrentSubscription | null | undefined,
+): sub is CurrentSubscription {
+  return (
+    !!sub &&
+    !!sub.plan_id &&
+    sub.plan_id !== 'raid_free' &&
+    sub.tier !== 'free'
+  );
+}

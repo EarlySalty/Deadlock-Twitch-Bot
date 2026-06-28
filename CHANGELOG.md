@@ -1,3 +1,11 @@
+## #295 — „Mein Abo": Rechnungen und Verwaltung jetzt direkt auffindbar
+
+**Ausgangslage:** Wer ein Abo hatte, kam an seine Rechnungen praktisch nicht heran — der Weg ins Zahlungsportal war zwar hinterlegt, aber nirgends sichtbar verlinkt. Auf der Preisseite gab es höchstens einen winzigen Punkt am aktuellen Plan; einen klaren Einstieg „hier sind deine Rechnungen" suchte man vergeblich. Und wer doch mal über einen alten Link auf der Preisseite landete, sah nur ein kryptisches Kürzel in der Adresszeile statt einer Erklärung.
+
+**Änderung:** Abonnenten sehen auf der Preisseite jetzt ganz oben einen eigenen „Mein Abo"-Bereich mit dem laufenden Plan und einem deutlichen Button zu Rechnungen, Zahlungsdaten und Kündigung — alles gebündelt im Kundenportal. Zusätzlich übersetzen wir die bisher kryptischen Rückmeldungen aus dem Bezahlvorgang (etwa wenn noch kein Zahlungskonto hinterlegt ist oder das Portal kurz nicht erreichbar war) in verständliche Hinweise direkt auf der Seite.
+
+**Ergebnis:** Wer ein Abo hat, findet seine Rechnungen und die Verwaltung jetzt auf Anhieb, und unklare Status-Meldungen erklären sich von selbst statt als nackter Code in der Adresszeile.
+
 ## #294 — Stille Parität-Lücken geschlossen + Schema-Migration hypertable-sicher
 
 **Ausgangslage:** Eine systematische Re-Verifikation hat mehrere kleine, lange unbemerkte Lücken zwischen der alten und der neuen Bot-Generation zutage gefördert — nichts, das akut etwas kaputt machte, aber Stellen, an denen sich das neue System nicht exakt wie das alte verhielt. Dazu ein konkreter Stolperstein: die jüngste Datenbank-Migration scheiterte beim Start still (und wurde abgefangen), weil sie auf den komprimierten Verlaufstabellen eine Operation versuchte, die dort gar nicht erlaubt ist — obwohl an diesen Tabellen längst nichts mehr zu korrigieren war.
