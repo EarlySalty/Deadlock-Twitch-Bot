@@ -61,11 +61,7 @@ pub async fn chat_hype_timeline_handler(
         Ok(HypeTimeline::NotFound(v)) => (StatusCode::NOT_FOUND, Json(v)).into_response(),
         Err(e) => {
             tracing::error!("chat-hype-timeline Fehler: {e}");
-            (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(json!({ "error": "internal" })),
-            )
-                .into_response()
+            crate::auth::analytics_request_failed_json().into_response()
         }
     }
 }

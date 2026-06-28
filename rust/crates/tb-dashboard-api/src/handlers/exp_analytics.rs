@@ -51,11 +51,7 @@ pub async fn exp_overview_handler(
         Ok(v) => Json(v).into_response(),
         Err(e) => {
             tracing::error!("exp/overview SELECT-Fehler: {e}");
-            (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(json!({ "error": "internal" })),
-            )
-                .into_response()
+            crate::auth::analytics_request_failed_json().into_response()
         }
     }
 }
@@ -87,11 +83,7 @@ pub async fn exp_game_breakdown_handler(
         Ok(v) => Json(v).into_response(),
         Err(e) => {
             tracing::error!("exp/game-breakdown SELECT-Fehler: {e}");
-            (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(json!({ "error": "internal" })),
-            )
-                .into_response()
+            crate::auth::analytics_request_failed_json().into_response()
         }
     }
 }
@@ -123,11 +115,7 @@ pub async fn exp_game_transitions_handler(
         Ok(v) => Json(v).into_response(),
         Err(e) => {
             tracing::error!("exp/game-transitions SELECT-Fehler: {e}");
-            (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(json!({ "error": "internal" })),
-            )
-                .into_response()
+            crate::auth::analytics_request_failed_json().into_response()
         }
     }
 }
@@ -159,11 +147,7 @@ pub async fn exp_growth_curves_handler(
         Ok(v) => Json(v).into_response(),
         Err(e) => {
             tracing::error!("exp/growth-curves SELECT-Fehler: {e}");
-            (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(json!({ "error": "internal" })),
-            )
-                .into_response()
+            crate::auth::analytics_request_failed_json().into_response()
         }
     }
 }

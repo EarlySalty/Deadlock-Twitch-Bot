@@ -26,7 +26,8 @@ static TITLE_RATE_LIMITER: OnceLock<TitleRateLimiter> = OnceLock::new();
 
 #[derive(Deserialize)]
 pub struct TitleSuggestBody {
-    pub keywords: String,
+    #[serde(default)]
+    pub keywords: Option<String>,
     #[serde(default)]
     pub streamer: Option<String>,
     #[serde(default)]
@@ -50,10 +51,7 @@ fn requested_login(
 ) -> Result<String, (StatusCode, Json<serde_json::Value>)> {
     let requested = requested.unwrap_or("").trim().to_lowercase();
     match auth {
-        DashboardAuthLevel::None => Err((
-            StatusCode::UNAUTHORIZED,
-            Json(json!({"error":"unauthorized"})),
-        )),
+        DashboardAuthLevel::None => Err(crate::auth::unauthorized_v2_json()),
         DashboardAuthLevel::Partner { twitch_login, .. } => {
             let own = twitch_login.trim().to_lowercase();
             if !requested.is_empty() && requested != own {
@@ -130,7 +128,11 @@ async fn resolve_discord_user_id(pool: &PgPool, twitch_user_id: &str) -> Option<
 /// `tb-chat/commands.rs` (P2.101/P2.102). Rang/Live liegen in der SQLite-Steam-DB,
 /// daher die Lookups off-Thread via `spawn_blocking`. Fehlt die Discord-Verknüpfung
 /// oder die Steam-DB, bleibt der Kontext leer (Titel wird trotzdem erzeugt).
-async fn resolve_title_context(pool: &PgPool, twitch_user_id: &str, include_live: bool) -> TitleContext {
+async fn resolve_title_context(
+    pool: &PgPool,
+    twitch_user_id: &str,
+    include_live: bool,
+) -> TitleContext {
     let Some(discord_id) = resolve_discord_user_id(pool, twitch_user_id).await else {
         return TitleContext::default();
     };
@@ -172,9 +174,20 @@ async fn resolve_title_context(pool: &PgPool, twitch_user_id: &str, include_live
 pub async fn suggest_handler(
     auth: DashboardAuthLevel,
     State(pool): State<PgPool>,
-    Json(body): Json<TitleSuggestBody>,
+    Query(query): Query<TitleQuery>,
+    body: String,
 ) -> impl IntoResponse {
-    let keywords = body.keywords.trim();
+    let body: TitleSuggestBody = match serde_json::from_str(&body) {
+        Ok(body) => body,
+        Err(_) => {
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(json!({"error":"invalid json"})),
+            )
+                .into_response()
+        }
+    };
+    let keywords = body.keywords.as_deref().unwrap_or("").trim();
     if keywords.is_empty() {
         return (
             StatusCode::BAD_REQUEST,
@@ -182,7 +195,17 @@ pub async fn suggest_handler(
         )
             .into_response();
     }
-    let login = match requested_login(&auth, body.streamer.as_deref()) {
+    let requested_streamer = body
+        .streamer
+        .as_deref()
+        .filter(|value| !value.trim().is_empty())
+        .or_else(|| {
+            query
+                .streamer
+                .as_deref()
+                .filter(|value| !value.trim().is_empty())
+        });
+    let login = match requested_login(&auth, requested_streamer) {
         Ok(login) => login,
         Err(resp) => return resp.into_response(),
     };
@@ -197,11 +220,7 @@ pub async fn suggest_handler(
         }
         Err(e) => {
             tracing::error!("title user-id lookup fehlgeschlagen: {e}");
-            return (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(json!({"error":"internal_error"})),
-            )
-                .into_response();
+            return crate::auth::analytics_request_failed_json().into_response();
         }
     };
 
@@ -216,6 +235,8 @@ pub async fn suggest_handler(
                 "title": item.title,
                 "avg_viewers": avg,
                 "peak_viewers": item.peak_viewers.unwrap_or(0),
+                "followers_start": item.followers_start,
+                "started_at": item.started_at.map(|ts| ts.to_rfc3339()),
                 "relative_perf": if own_avg > 0.0 { avg / own_avg } else { 0.0 },
                 "engagement_rate": avg / followers,
             })
@@ -300,11 +321,7 @@ pub async fn insights_handler(
         Ok(insight) => Json(json!({"insight": insight})).into_response(),
         Err(e) => {
             tracing::error!("title insight lookup fehlgeschlagen: {e}");
-            (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(json!({"error":"internal_error"})),
-            )
-                .into_response()
+            crate::auth::analytics_request_failed_json().into_response()
         }
     }
 }
@@ -490,7 +507,9 @@ mod tests {
     /// und der Titel kann trotzdem erzeugt werden.
     #[tokio::test]
     async fn kontext_leer_ohne_discord_link() {
-        let Some(pool) = make_pool("t_title_nolink").await else { return };
+        let Some(pool) = make_pool("t_title_nolink").await else {
+            return;
+        };
         // Kein twitch_streamer_identities-Eintrag → discord_user_id nicht auflösbar.
         let ctx = resolve_title_context(&pool, "999", true).await;
         assert!(ctx.rank_display.is_none());
@@ -506,7 +525,9 @@ mod tests {
     /// (Rust gab vorher body.include_live unverändert zurück) ist damit weg.
     #[tokio::test]
     async fn include_live_ohne_live_state_kein_kontext() {
-        let Some(pool) = make_pool("t_title_live_noop").await else { return };
+        let Some(pool) = make_pool("t_title_live_noop").await else {
+            return;
+        };
         // Discord-Link vorhanden, aber Steam-DB-Pfad existiert nicht → Lookups None.
         sqlx::query(
             "INSERT INTO twitch_streamer_identities (twitch_user_id, discord_user_id) \

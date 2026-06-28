@@ -23,10 +23,7 @@ pub struct AdsQuery {
 
 fn require_auth(auth: &DashboardAuthLevel) -> Result<(), (StatusCode, Json<serde_json::Value>)> {
     if matches!(auth, DashboardAuthLevel::None) {
-        Err((
-            StatusCode::UNAUTHORIZED,
-            Json(json!({"error":"unauthorized","message":"not authenticated"})),
-        ))
+        Err(crate::auth::unauthorized_v2_json())
     } else {
         Ok(())
     }
@@ -76,11 +73,7 @@ pub async fn ads_schedule_handler(
     match rows {
         Err(e) => {
             tracing::error!("ads-schedule DB-Fehler: {e}");
-            (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(json!({"error":"internal_error"})),
-            )
-                .into_response()
+            crate::auth::analytics_request_failed_json().into_response()
         }
         Ok(rows) if rows.is_empty() => {
             Json(json!({"current": null, "history": []})).into_response()

@@ -74,11 +74,7 @@ pub async fn loyalty_curve_handler(
     match q.fetch_all(&pool).await {
         Err(e) => {
             tracing::error!("loyalty-curve DB-Fehler: {e}");
-            (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(json!({"error":"internal_error"})),
-            )
-                .into_response()
+            crate::auth::analytics_request_failed_json().into_response()
         }
         Ok(rows) if rows.is_empty() => Json(
             json!({"curve": [], "one_time_rate": null, "total_chatters": 0, "window": "all_time"}),

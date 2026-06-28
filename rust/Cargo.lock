@@ -2587,6 +2587,7 @@ dependencies = [
  "tower-http",
  "tracing",
  "url",
+ "uuid",
  "wiremock",
 ]
 

@@ -53,10 +53,7 @@ pub struct DaysQuery {
 /// Python-`_require_v2_auth`-Parität: None → 401.
 fn require_auth(auth: &DashboardAuthLevel) -> Result<(), (StatusCode, Json<serde_json::Value>)> {
     if matches!(auth, DashboardAuthLevel::None) {
-        Err((
-            StatusCode::UNAUTHORIZED,
-            Json(json!({"error":"unauthorized","message":"not authenticated"})),
-        ))
+        Err(crate::auth::unauthorized_v2_json())
     } else {
         Ok(())
     }
@@ -121,11 +118,7 @@ pub async fn monthly_stats_handler(
     match rows {
         Err(e) => {
             tracing::error!("monthly-stats DB-Fehler: {e}");
-            (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(json!({"error":"internal_error"})),
-            )
-                .into_response()
+            crate::auth::analytics_request_failed_json().into_response()
         }
         Ok(rows) => {
             let items: Vec<serde_json::Value> = rows.iter().map(|r| {
@@ -203,11 +196,7 @@ pub async fn weekly_stats_handler(
     match rows {
         Err(e) => {
             tracing::error!("weekly-stats DB-Fehler: {e}");
-            (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(json!({"error":"internal_error"})),
-            )
-                .into_response()
+            crate::auth::analytics_request_failed_json().into_response()
         }
         Ok(rows) => {
             let items: Vec<serde_json::Value> = rows
@@ -278,11 +267,7 @@ pub async fn hourly_heatmap_handler(
     match rows {
         Err(e) => {
             tracing::error!("hourly-heatmap DB-Fehler: {e}");
-            (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(json!({"error":"internal_error"})),
-            )
-                .into_response()
+            crate::auth::analytics_request_failed_json().into_response()
         }
         Ok(rows) => {
             let items: Vec<serde_json::Value> = rows
@@ -348,11 +333,7 @@ pub async fn calendar_heatmap_handler(
     match rows {
         Err(e) => {
             tracing::error!("calendar-heatmap DB-Fehler: {e}");
-            (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(json!({"error":"internal_error"})),
-            )
-                .into_response()
+            crate::auth::analytics_request_failed_json().into_response()
         }
         Ok(rows) => {
             let items: Vec<serde_json::Value> = rows
@@ -423,11 +404,7 @@ pub async fn viewer_count_timeline_handler(
     {
         Err(e) => {
             tracing::error!("viewer-timeline DB-Fehler: {e}");
-            (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(json!({"error":"internal_error"})),
-            )
-                .into_response()
+            crate::auth::analytics_request_failed_json().into_response()
         }
         Ok(rows) => {
             let items: Vec<serde_json::Value> = rows

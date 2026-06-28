@@ -143,13 +143,15 @@ impl ReviewLog {
 // ---------------------------------------------------------------------------
 
 /// Discord-Alert-Kanal (moderation.py Z. 903: `_MOD_ALERT_CHANNEL_ID`).
-const MOD_ALERT_CHANNEL_ID: u64 = 1374364800817303632;
+const DEFAULT_MOD_ALERT_CHANNEL_ID: u64 = 1374364800817303632;
+const MOD_ALERT_CHANNEL_ID_ENV: &str = "TWITCH_ALERT_CHANNEL_ID";
 
 /// Postet Moderations-Alerts in den Discord-Mod-Kanal — Port von
 /// `_send_moderation_alert` (moderation.py Z. 905–951). Fire-and-forget.
 pub struct ModAlerter {
     http: reqwest::Client,
     endpoint: String,
+    channel_id: u64,
 }
 
 impl ModAlerter {
@@ -158,9 +160,18 @@ impl ModAlerter {
     }
 
     pub fn with_endpoint(http: reqwest::Client, endpoint: impl Into<String>) -> Self {
+        Self::with_endpoint_and_channel_id(http, endpoint, alert_channel_id_from_env())
+    }
+
+    pub fn with_endpoint_and_channel_id(
+        http: reqwest::Client,
+        endpoint: impl Into<String>,
+        channel_id: u64,
+    ) -> Self {
         Self {
             http,
             endpoint: endpoint.into(),
+            channel_id,
         }
     }
 
@@ -210,7 +221,7 @@ impl ModAlerter {
         let payload = serde_json::json!({
             "title": title,
             "content": lines.join("\n"),
-            "channel_id": MOD_ALERT_CHANNEL_ID,
+            "channel_id": self.channel_id,
             "token": "changeme-local",
         });
 
@@ -232,6 +243,19 @@ impl ModAlerter {
             }
         });
     }
+}
+
+fn alert_channel_id_from_env() -> u64 {
+    parse_alert_channel_id(std::env::var(MOD_ALERT_CHANNEL_ID_ENV).ok())
+}
+
+fn parse_alert_channel_id(raw: Option<String>) -> u64 {
+    raw.as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .and_then(|value| value.parse::<u64>().ok())
+        .filter(|id| *id != 0)
+        .unwrap_or(DEFAULT_MOD_ALERT_CHANNEL_ID)
 }
 
 // ---------------------------------------------------------------------------
@@ -483,33 +507,18 @@ impl ChatPipeline {
         // (StrongTimeout). Erst-Warnung (StrongWarn/PublicWarn) ist nicht-destruktiv.
         let pitch = p.scam_pitch.observe(event).await;
         match &pitch {
-            PitchDecision::StrongTimeout { .. } => {
+            PitchDecision::StrongTimeout { text, duration } => {
                 debug!(channel = %channel_login, chatter = %chatter_login, "Scam-Pitch: StrongTimeout (Eskalation) → Timeout (kein Delete)");
-                if !event.chatter_user_id.is_empty()
-                    && event.chatter_user_id != event.broadcaster_user_id
-                    && !event.is_mod_or_broadcaster()
-                {
-                    if let Err(e) = p
-                        .api
-                        .timeout_user(
-                            &event.broadcaster_user_id,
-                            &event.chatter_user_id,
-                            600,
-                            SCAM_PITCH_TIMEOUT_REASON,
-                        )
-                        .await
-                    {
-                        debug!("Pitch-Timeout fehlgeschlagen: {e}");
-                    }
-                    p.alerter.send(
-                        "scam_pitch_timeout",
-                        &channel_login,
-                        &chatter_login,
-                        &event.chatter_user_id,
-                        event.text(),
-                        "",
-                    );
-                }
+                handle_strong_timeout(
+                    &p.api,
+                    &p.alerter,
+                    event,
+                    &channel_login,
+                    &chatter_login,
+                    text,
+                    *duration,
+                )
+                .await;
             }
             PitchDecision::StrongWarn { .. } | PitchDecision::PublicWarn { .. } => {
                 debug!(channel = %channel_login, chatter = %chatter_login, "Scam-Pitch: Warnung (kein Delete/Timeout, wie Python)");
@@ -782,6 +791,49 @@ impl ChatPipeline {
     }
 }
 
+async fn handle_strong_timeout(
+    api: &Arc<dyn ChatApi>,
+    alerter: &Arc<ModAlerter>,
+    event: &ChatMessageEvent,
+    channel_login: &str,
+    chatter_login: &str,
+    text: &str,
+    duration: std::time::Duration,
+) {
+    if event.chatter_user_id.is_empty()
+        || event.chatter_user_id == event.broadcaster_user_id
+        || event.is_mod_or_broadcaster()
+    {
+        return;
+    }
+
+    let timeout_secs = duration.as_secs().min(u64::from(u32::MAX)) as u32;
+    if let Err(e) = api
+        .timeout_user(
+            &event.broadcaster_user_id,
+            &event.chatter_user_id,
+            timeout_secs,
+            SCAM_PITCH_TIMEOUT_REASON,
+        )
+        .await
+    {
+        debug!("Pitch-Timeout fehlgeschlagen: {e}");
+    }
+
+    alerter.send(
+        "scam_pitch_timeout",
+        channel_login,
+        chatter_login,
+        &event.chatter_user_id,
+        event.text(),
+        "",
+    );
+
+    if let Err(e) = api.send_message(&event.broadcaster_user_id, text).await {
+        debug!("Pitch-Eskalationstext konnte nicht gesendet werden: {e}");
+    }
+}
+
 /// Erstnachricht-Check: kein Rollup-Eintrag = Erstkontakt mit diesem Streamer
 /// (`_is_first_message_for_streamer`, moderation.py Z. 815–841). Fail-safe:
 /// bei leeren Werten oder DB-Fehler `false` — lieber nicht eskalieren.
@@ -818,6 +870,121 @@ async fn is_first_message_for_streamer(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::Mutex;
+
+    use crate::api::BanOutcome;
+    use crate::types::{ChatMessageBody, SendOutcome};
+    use chrono::{DateTime, Utc};
+    use tokio::time::{sleep, Duration};
+    use wiremock::matchers::{method, path};
+    use wiremock::{Mock, MockServer, ResponseTemplate};
+
+    #[derive(Default)]
+    struct RecordingChatApi {
+        calls: Mutex<Vec<String>>,
+    }
+
+    impl RecordingChatApi {
+        fn calls(&self) -> Vec<String> {
+            self.calls.lock().unwrap().clone()
+        }
+
+        fn push_call(&self, call: impl Into<String>) {
+            self.calls.lock().unwrap().push(call.into());
+        }
+    }
+
+    #[async_trait::async_trait]
+    impl ChatApi for RecordingChatApi {
+        async fn send_message(
+            &self,
+            broadcaster_id: &str,
+            message: &str,
+        ) -> Result<SendOutcome, String> {
+            self.push_call(format!("send:{broadcaster_id}:{message}"));
+            Ok(SendOutcome::Sent)
+        }
+
+        async fn send_announcement(
+            &self,
+            _broadcaster_id: &str,
+            _message: &str,
+            _color: &str,
+        ) -> Result<bool, String> {
+            Ok(true)
+        }
+
+        async fn ban_user(
+            &self,
+            _broadcaster_id: &str,
+            _target_user_id: &str,
+            _reason: &str,
+        ) -> Result<BanOutcome, String> {
+            Ok(BanOutcome::Banned)
+        }
+
+        async fn timeout_user(
+            &self,
+            broadcaster_id: &str,
+            target_user_id: &str,
+            duration_secs: u32,
+            reason: &str,
+        ) -> Result<BanOutcome, String> {
+            self.push_call(format!(
+                "timeout:{broadcaster_id}:{target_user_id}:{duration_secs}:{reason}"
+            ));
+            Ok(BanOutcome::Banned)
+        }
+
+        async fn unban_user(
+            &self,
+            _broadcaster_id: &str,
+            _target_user_id: &str,
+        ) -> Result<bool, String> {
+            Ok(true)
+        }
+
+        async fn delete_message(
+            &self,
+            _broadcaster_id: &str,
+            _message_id: &str,
+        ) -> Result<bool, String> {
+            Ok(true)
+        }
+
+        async fn user_created_at(&self, _user_id: &str) -> Result<Option<DateTime<Utc>>, String> {
+            Ok(None)
+        }
+
+        async fn resolve_user_id(&self, _login: &str) -> Result<Option<String>, String> {
+            Ok(None)
+        }
+
+        async fn bot_user_id(&self) -> String {
+            "bot-id".to_string()
+        }
+    }
+
+    fn strong_timeout_event() -> ChatMessageEvent {
+        ChatMessageEvent {
+            broadcaster_user_id: "broadcaster-id".to_string(),
+            broadcaster_user_login: "channel".to_string(),
+            broadcaster_user_name: String::new(),
+            chatter_user_id: "chatter-id".to_string(),
+            chatter_user_login: "seller".to_string(),
+            chatter_user_name: String::new(),
+            message_id: "msg-1".to_string(),
+            message: ChatMessageBody {
+                text: "incoming pitch".to_string(),
+                fragments: vec![],
+            },
+            badges: vec![],
+            color: String::new(),
+            source_broadcaster_user_id: None,
+            source_broadcaster_user_login: None,
+            source_message_id: None,
+        }
+    }
 
     #[test]
     fn conversation_scam_guard_wird_nach_partner_gate_fire_and_forget_aufgerufen() {
@@ -830,6 +997,66 @@ mod tests {
             .find(&call_needle)
             .expect("Conversation-Scam-Guard-Wiring fehlt");
         assert!(guard_call > partner_gate);
+    }
+
+    #[tokio::test]
+    async fn strong_timeout_timeoutet_alertet_und_sendet_gebauten_text() {
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/changelog"))
+            .respond_with(ResponseTemplate::new(204))
+            .expect(1)
+            .mount(&server)
+            .await;
+
+        let api = Arc::new(RecordingChatApi::default());
+        let api_trait: Arc<dyn ChatApi> = api.clone();
+        let alerter = Arc::new(ModAlerter::with_endpoint(
+            reqwest::Client::new(),
+            format!("{}/changelog", server.uri()),
+        ));
+        let event = strong_timeout_event();
+
+        handle_strong_timeout(
+            &api_trait,
+            &alerter,
+            &event,
+            "channel",
+            "seller",
+            "built escalation text",
+            Duration::from_secs(600),
+        )
+        .await;
+
+        assert_eq!(
+            api.calls(),
+            vec![
+                format!(
+                    "timeout:broadcaster-id:chatter-id:600:{}",
+                    SCAM_PITCH_TIMEOUT_REASON
+                ),
+                "send:broadcaster-id:built escalation text".to_string(),
+            ]
+        );
+
+        let mut request_count = 0;
+        for _ in 0..20 {
+            let requests = server
+                .received_requests()
+                .await
+                .expect("Wiremock-Requests verfügbar");
+            request_count = requests.len();
+            if request_count == 1 {
+                let body = String::from_utf8_lossy(&requests[0].body);
+                assert!(body.contains("channel"));
+                assert!(body.contains("seller"));
+                assert!(body.contains("incoming pitch"));
+                return;
+            }
+            sleep(Duration::from_millis(25)).await;
+        }
+
+        assert_eq!(request_count, 1, "StrongTimeout-Alert wurde nicht gesendet");
     }
 
     #[test]
@@ -893,6 +1120,23 @@ mod tests {
                 _ => ("ℹ️ Moderation", 0x5865F2),
             };
             assert_eq!(title, expected);
+        }
+    }
+
+    #[test]
+    fn alert_channel_id_kommt_aus_env_oder_fallback() {
+        assert_eq!(
+            parse_alert_channel_id(Some("42".to_string())),
+            42,
+            "TWITCH_ALERT_CHANNEL_ID überschreibt den alten Default"
+        );
+        for raw in [
+            None,
+            Some(String::new()),
+            Some("0".to_string()),
+            Some("x".to_string()),
+        ] {
+            assert_eq!(parse_alert_channel_id(raw), DEFAULT_MOD_ALERT_CHANNEL_ID);
         }
     }
 

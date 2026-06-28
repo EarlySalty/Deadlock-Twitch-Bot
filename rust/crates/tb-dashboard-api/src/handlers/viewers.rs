@@ -29,23 +29,110 @@ const KNOWN_CHAT_BOTS: &[&str] = &[
     "wizebot",
 ];
 
-/// Viewer-Exklusionsliste: statische Known-Bots **plus** der Streamer selbst.
-///
-/// Port von `api_viewers.py::_collect_viewer_exclusion_logins`, das in den
-/// Exklusions-Set immer den eigenen Streamer-Login legt (Z.33). Ohne diesen
-/// Self-Ausschluss zählt ein Streamer, der im eigenen Chat schreibt, als
-/// eigener Viewer in Directory/Segments. Die dynamischen Bot-Accounts
-/// (chat-/raid-bot-Login) deckt `KNOWN_CHAT_BOTS` bereits ab; sie sind in
-/// diesem Crate nicht aus der Bot-Config greifbar.
-///
-/// `streamer` wird klein geschrieben erwartet (Aufrufer normalisieren bereits).
-fn viewer_exclusion_logins(streamer: &str) -> Vec<String> {
+const DYNAMIC_BOT_LOGIN_ENV_KEYS: &[&str] = &[
+    "TWITCH_BOT_LOGIN",
+    "TWITCH_BOT_NAME",
+    "TWITCH_CHAT_BOT_LOGIN",
+    "TWITCH_RAID_BOT_LOGIN",
+    "TWITCH_VIEWER_EXCLUDED_BOT_LOGINS",
+];
+
+const DYNAMIC_BOT_USER_ID_ENV_KEYS: &[&str] = &[
+    "TWITCH_BOT_USER_ID",
+    "TWITCH_CHAT_BOT_USER_ID",
+    "TWITCH_RAID_BOT_USER_ID",
+];
+
+fn push_normalized_login(logins: &mut Vec<String>, raw: &str) {
+    for part in raw.split(|c: char| c == ',' || c == ';' || c.is_whitespace()) {
+        let login = part.trim().trim_start_matches('@').to_lowercase();
+        if !login.is_empty() && !logins.contains(&login) {
+            logins.push(login);
+        }
+    }
+}
+
+fn dynamic_bot_logins_from_env() -> Vec<String> {
+    let mut logins = Vec::new();
+    for key in DYNAMIC_BOT_LOGIN_ENV_KEYS {
+        if let Ok(value) = std::env::var(key) {
+            push_normalized_login(&mut logins, &value);
+        }
+    }
+    logins
+}
+
+fn dynamic_bot_user_ids_from_env() -> Vec<String> {
+    let mut ids = Vec::new();
+    for key in DYNAMIC_BOT_USER_ID_ENV_KEYS {
+        if let Ok(value) = std::env::var(key) {
+            for part in value.split(|c: char| c == ',' || c == ';' || c.is_whitespace()) {
+                let id = part.trim().to_string();
+                if !id.is_empty() && !ids.contains(&id) {
+                    ids.push(id);
+                }
+            }
+        }
+    }
+    ids
+}
+
+async fn dynamic_bot_logins_from_db(pool: &PgPool) -> Vec<String> {
+    let user_ids = dynamic_bot_user_ids_from_env();
+    if user_ids.is_empty() {
+        return Vec::new();
+    }
+    match sqlx::query_scalar::<_, String>(
+        r#"SELECT DISTINCT LOWER(TRIM(login)) AS login
+           FROM (
+               SELECT twitch_login AS login FROM twitch_streamers WHERE twitch_user_id = ANY($1)
+               UNION
+               SELECT twitch_login AS login FROM twitch_streamer_identities WHERE twitch_user_id = ANY($1)
+               UNION
+               SELECT twitch_login AS login FROM twitch_user_profile WHERE twitch_user_id = ANY($1)
+           ) resolved
+           WHERE TRIM(COALESCE(login, '')) <> ''"#,
+    )
+    .bind(&user_ids)
+    .fetch_all(pool)
+    .await
+    {
+        Ok(rows) => rows,
+        Err(e) => {
+            tracing::debug!(error = %e, "viewer dynamic bot-login DB-Resolve fehlgeschlagen");
+            Vec::new()
+        }
+    }
+}
+
+fn viewer_exclusion_logins_from_dynamic(streamer: &str, dynamic_logins: &[String]) -> Vec<String> {
     let mut logins: Vec<String> = KNOWN_CHAT_BOTS.iter().map(|s| s.to_string()).collect();
+    for login in dynamic_bot_logins_from_env() {
+        push_normalized_login(&mut logins, &login);
+    }
+    for login in dynamic_logins {
+        push_normalized_login(&mut logins, login);
+    }
     let own = streamer.to_lowercase();
     if !own.is_empty() && !logins.contains(&own) {
         logins.push(own);
     }
     logins
+}
+
+/// Viewer-Exklusionsliste: Known-Bots, runtime/config-aufgelöste Bot-Logins und der Streamer selbst.
+///
+/// Port von `api_viewers.py::_collect_viewer_exclusion_logins`, das in den
+/// Exklusions-Set immer den eigenen Streamer-Login legt und dynamische Bot-
+/// Logins aus `_bot_token_manager`, `_twitch_chat_bot` und `_raid_bot` bezieht.
+/// Im Rust-Dashboard gibt es kein Python-`owner`-Objekt; daher werden konfigurierte
+/// Bot-User-IDs gegen die lokalen Twitch-Identitätstabellen aufgelöst und explizite
+/// Login-Konfigwerte nur als Fallback ergänzt.
+///
+/// `streamer` wird klein geschrieben erwartet (Aufrufer normalisieren bereits).
+async fn viewer_exclusion_logins(pool: &PgPool, streamer: &str) -> Vec<String> {
+    let dynamic_logins = dynamic_bot_logins_from_db(pool).await;
+    viewer_exclusion_logins_from_dynamic(streamer, &dynamic_logins)
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -367,7 +454,7 @@ async fn fetch_window_viewer_rows(
     since: DateTime<Utc>,
 ) -> Result<Vec<ViewerRow>, sqlx::Error> {
     // Streamer-Self- + Bot-Exklusion (Python: _collect_viewer_exclusion_logins).
-    let excluded = viewer_exclusion_logins(streamer);
+    let excluded = viewer_exclusion_logins(pool, streamer).await;
     let rows = sqlx::query(
         r#"SELECT LOWER(sc.chatter_login) AS chatter_login,
                   COUNT(DISTINCT sc.session_id) AS total_sessions,
@@ -467,11 +554,7 @@ pub async fn viewer_directory_handler(
     let viewer_rows = match fetch_window_viewer_rows(&pool, &streamer, since).await {
         Err(e) => {
             tracing::error!("viewer-directory rows Fehler: {e}");
-            return (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(json!({"error":"internal_error"})),
-            )
-                .into_response();
+            return crate::auth::analytics_request_failed_json().into_response();
         }
         Ok(r) => r,
     };
@@ -501,7 +584,7 @@ pub async fn viewer_directory_handler(
     let window_meta = viewer_window_metadata(&pool, &streamer, &all_logins, since).await;
 
     // 3. Cross-Channel-Zählung (andere Kanäle pro Viewer)
-    let bots: Vec<String> = KNOWN_CHAT_BOTS.iter().map(|s| s.to_string()).collect();
+    let bots = viewer_exclusion_logins(&pool, &streamer).await;
     let cc_rows = sqlx::query(
         r#"SELECT LOWER(sc.chatter_login) AS login,
                   COUNT(DISTINCT LOWER(sc.streamer_login)) - 1 AS other_count
@@ -767,7 +850,8 @@ pub async fn viewer_detail_handler(
                 .into_response()
         }
     };
-    if KNOWN_CHAT_BOTS.contains(&login.as_str()) || login == streamer {
+    let bots = viewer_exclusion_logins(&pool, &streamer).await;
+    if bots.contains(&login) {
         return (
             StatusCode::NOT_FOUND,
             Json(json!({"error":"Viewer not found"})),
@@ -777,8 +861,6 @@ pub async fn viewer_detail_handler(
     let days = params.days.unwrap_or(30).clamp(1, 365);
     let since: DateTime<Utc> = Utc::now() - chrono::Duration::days(days as i64);
     let now = Utc::now();
-
-    let bots: Vec<String> = KNOWN_CHAT_BOTS.iter().map(|s| s.to_string()).collect();
 
     // Single-viewer aggregat im Fenster
     let viewer_row = sqlx::query(
@@ -802,11 +884,7 @@ pub async fn viewer_detail_handler(
     let viewer_row = match viewer_row {
         Err(e) => {
             tracing::error!("viewer-detail row Fehler: {e}");
-            return (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(json!({"error":"internal_error"})),
-            )
-                .into_response();
+            return crate::auth::analytics_request_failed_json().into_response();
         }
         Ok(None) => {
             return (
@@ -1232,11 +1310,7 @@ pub async fn viewer_segments_handler(
     let viewer_rows = match fetch_window_viewer_rows(&pool, &streamer, since).await {
         Err(e) => {
             tracing::error!("viewer-segments rows Fehler: {e}");
-            return (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(json!({"error":"internal_error"})),
-            )
-                .into_response();
+            return crate::auth::analytics_request_failed_json().into_response();
         }
         Ok(r) => r,
     };
@@ -1299,7 +1373,7 @@ pub async fn viewer_segments_handler(
         .take(20)
         .filter_map(|v| v["login"].as_str().map(str::to_string))
         .collect();
-    let bots: Vec<String> = KNOWN_CHAT_BOTS.iter().map(|s| s.to_string()).collect();
+    let bots = viewer_exclusion_logins(&pool, &streamer).await;
     let mut whereabouts: std::collections::HashMap<String, Vec<String>> =
         std::collections::HashMap::new();
     if !at_risk_logins.is_empty() {
@@ -1378,8 +1452,8 @@ pub async fn viewer_segments_handler(
     // P1.36: Der eigene (Home-)Kanal des Streamers darf NICHT in
     // COUNT(DISTINCT streamer_login) zählen — sonst gilt ein Viewer, der nur
     // im Home-Kanal chattet, als nicht-exklusiv. Python schließt den
-    // Home-Login in `_collect_viewer_exclusion_logins` aus; hier ergänzen wir
-    // ihn nur für die streamer_login-Exklusion (Chatter-Filter bleibt = bots).
+    // Home-Login in `_collect_viewer_exclusion_logins` aus. `bots` enthält hier
+    // statische Bots, runtime-konfigurierte Bot-Logins und den Home-Login.
     let all_logins: Vec<String> = viewer_rows.iter().map(|r| r.login.clone()).collect();
     let mut streamer_exclusion = bots.clone();
     if !streamer.is_empty() && !streamer_exclusion.contains(&streamer) {
@@ -1530,7 +1604,7 @@ mod tests {
     // ── Reine Logik: Self- + Bot-Exklusionsliste ────────────────────────────
     #[test]
     fn exclusion_list_enthaelt_streamer_und_bots() {
-        let logins = viewer_exclusion_logins("MyStreamer");
+        let logins = viewer_exclusion_logins_from_dynamic("MyStreamer", &[]);
         assert!(
             logins.contains(&"mystreamer".to_string()),
             "Streamer-Self-Login muss in der Exklusionsliste stehen"
@@ -1544,19 +1618,31 @@ mod tests {
     #[test]
     fn exclusion_list_kein_doppelter_streamer() {
         // Streamer-Login der zufällig ein bekannter Bot ist → nicht doppelt.
-        let logins = viewer_exclusion_logins("nightbot");
+        let logins = viewer_exclusion_logins_from_dynamic("nightbot", &[]);
         let count = logins.iter().filter(|l| *l == "nightbot").count();
         assert_eq!(count, 1, "Login darf nicht doppelt erscheinen");
     }
 
     #[test]
     fn exclusion_list_leerer_streamer_nur_bots() {
-        let logins = viewer_exclusion_logins("");
+        let logins = viewer_exclusion_logins_from_dynamic("", &[]);
         assert!(
             !logins.iter().any(|l| l.is_empty()),
             "Leerer Streamer darf keinen Leer-Eintrag erzeugen"
         );
         assert!(logins.contains(&"wizebot".to_string()));
+    }
+
+    #[test]
+    fn dynamic_bot_login_parser_normalisiert_und_dedupliziert() {
+        let mut logins = vec!["nightbot".to_string()];
+        push_normalized_login(&mut logins, "@CustomBot, nightbot; Other_Bot  ");
+        assert!(logins.contains(&"custombot".to_string()));
+        assert!(logins.contains(&"other_bot".to_string()));
+        assert_eq!(
+            logins.iter().filter(|login| *login == "nightbot").count(),
+            1
+        );
     }
 
     // ── DB-Regression (env-gated): Bot + Streamer fallen nach Aggregation raus ─

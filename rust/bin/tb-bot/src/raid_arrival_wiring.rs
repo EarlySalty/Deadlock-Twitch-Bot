@@ -14,8 +14,8 @@ use sqlx::PgPool;
 use tb_raid::{
     build_partner_raid_message, build_recruitment_message, classify_partner_raid_arrival,
     classify_partner_raid_arrival_with_expectation, decide_blacklist_action,
-    plan_recruitment_delivery, serialize_confirmation_signals,
-    ArrivalConfirmationService, ArrivalSignalContext, ArrivalTrackingStore, BlacklistScheduleAction,
+    plan_recruitment_delivery, serialize_confirmation_signals, ArrivalConfirmationService,
+    ArrivalSignalContext, ArrivalTrackingStore, BlacklistScheduleAction,
     ConfirmedExternalRecruitmentRaid, ExternalRecruitmentStore, ManualRaidSuppression, PendingRaid,
     PendingRaidStore, RaidArrivalSink, RaidBlacklistStore, RaidHistoryStore, RecordArrivalInput,
     RecruitmentDeliveryConfig, RecruitmentDeliveryRequest, ScoreTrackingStore,
@@ -48,6 +48,8 @@ struct OrphanChatNotification {
     from_broadcaster_id: Option<String>,
     from_broadcaster_login: String,
     viewer_count: i32,
+    message_id: Option<String>,
+    event_timestamp: Option<String>,
     observed_at: std::time::Instant,
 }
 
@@ -209,7 +211,11 @@ impl RaidArrivalSinkImpl {
 
     /// Entfernt einen wartenden Orphan, sobald das korrelierende Raid-Event
     /// eintrifft (Python `raid_tracking_runtime.py:477-490` — nur Log).
-    fn pop_orphan(&self, to_broadcaster_id: &str, from_broadcaster_login: &str) {
+    fn take_orphan(
+        &self,
+        to_broadcaster_id: &str,
+        from_broadcaster_login: &str,
+    ) -> Option<OrphanChatNotification> {
         let key = orphan_key(to_broadcaster_id, from_broadcaster_login);
         let popped = self
             .orphans
@@ -223,6 +229,7 @@ impl RaidArrivalSinkImpl {
                 "Pending-Raid hat frühere channel.chat.notification korreliert"
             );
         }
+        popped
     }
 
     /// Promotet Orphans nach Ablauf der Grace-Period als eigenständige
@@ -253,11 +260,10 @@ impl RaidArrivalSinkImpl {
                 )
                 .await;
 
-            let drop_entry = processed
-                || orphan.observed_at.elapsed().as_secs() >= ORPHAN_RETENTION_SECS;
+            let drop_entry =
+                processed || orphan.observed_at.elapsed().as_secs() >= ORPHAN_RETENTION_SECS;
             if drop_entry {
-                let key =
-                    orphan_key(&orphan.to_broadcaster_id, &orphan.from_broadcaster_login);
+                let key = orphan_key(&orphan.to_broadcaster_id, &orphan.from_broadcaster_login);
                 self.orphans
                     .lock()
                     .unwrap_or_else(|poisoned| poisoned.into_inner())
@@ -332,8 +338,7 @@ impl RaidArrivalSinkImpl {
             Ok(_) => {
                 // Suppression wie Python (mark_manual_raid_started, 180 s) —
                 // verhindert einen Auto-Raid direkt nach dem externen Raid.
-                if let Some(from_id) =
-                    from_broadcaster_id.map(str::trim).filter(|s| !s.is_empty())
+                if let Some(from_id) = from_broadcaster_id.map(str::trim).filter(|s| !s.is_empty())
                 {
                     self.suppression
                         .lock()
@@ -651,6 +656,38 @@ impl RaidArrivalSinkImpl {
 }
 
 #[async_trait::async_trait]
+impl tb_raid::OrphanReplay for RaidArrivalSinkImpl {
+    async fn pop_orphan(
+        &self,
+        to_broadcaster_id: &str,
+        from_broadcaster_login: &str,
+    ) -> Option<tb_raid::OrphanChatNotification> {
+        self.take_orphan(to_broadcaster_id, from_broadcaster_login)
+            .map(|orphan| tb_raid::OrphanChatNotification {
+                to_broadcaster_id: orphan.to_broadcaster_id,
+                to_broadcaster_login: orphan.to_broadcaster_login,
+                from_broadcaster_login: orphan.from_broadcaster_login,
+                viewer_count: orphan.viewer_count,
+                from_broadcaster_id: orphan.from_broadcaster_id,
+                message_id: orphan.message_id,
+                event_timestamp: orphan.event_timestamp,
+            })
+    }
+
+    async fn replay(&self, orphan: tb_raid::OrphanChatNotification) {
+        self.confirm_pending_raid(
+            "channel.chat.notification",
+            &orphan.to_broadcaster_id,
+            &orphan.to_broadcaster_login,
+            &orphan.from_broadcaster_login,
+            orphan.from_broadcaster_id.as_deref(),
+            orphan.viewer_count,
+        )
+        .await;
+    }
+}
+
+#[async_trait::async_trait]
 impl RaidArrivalSink for RaidArrivalSinkImpl {
     async fn store_pending_raid(&self, pending: &PendingRaid) {
         if let Ok(mut store) = self.pending.lock() {
@@ -669,7 +706,7 @@ impl RaidArrivalSink for RaidArrivalSinkImpl {
     ) {
         // 0. Frühere Orphan-Chat-Notification korrelieren (Python
         // raid_tracking_runtime.py:477-490 — pop + Log, kein Doppel-Insert).
-        self.pop_orphan(to_broadcaster_id, from_broadcaster_login);
+        self.take_orphan(to_broadcaster_id, from_broadcaster_login);
 
         // 1. Pending entfernen (pop) — wie Python `pop_pending_raid`.
         let pending = match self.pending.lock() {
@@ -1021,7 +1058,11 @@ impl RaidArrivalSink for RaidArrivalSinkImpl {
         // viewer_count wird dort nur im Cache, NICHT in der DB aktualisiert).
         let recent = match self
             .arrival_store
-            .find_recent_arrival(to_broadcaster_id, from_broadcaster_login, RECENT_ARRIVAL_TTL_SECS)
+            .find_recent_arrival(
+                to_broadcaster_id,
+                from_broadcaster_login,
+                RECENT_ARRIVAL_TTL_SECS,
+            )
             .await
         {
             Ok(r) => r,
@@ -1042,7 +1083,9 @@ impl RaidArrivalSink for RaidArrivalSinkImpl {
         };
 
         let merged = serialize_confirmation_signals(
-            existing_signals.split(',').chain(std::iter::once(signal_type)),
+            existing_signals
+                .split(',')
+                .chain(std::iter::once(signal_type)),
         );
         if let Err(error) = self
             .arrival_store
@@ -1069,8 +1112,8 @@ impl RaidArrivalSink for RaidArrivalSinkImpl {
         from_broadcaster_id: Option<&str>,
         from_broadcaster_login: &str,
         viewer_count: i32,
-        _message_id: Option<&str>,
-        _event_timestamp: Option<&str>,
+        message_id: Option<&str>,
+        event_timestamp: Option<&str>,
     ) {
         // Chat-Notification ohne Pending-Kontext: für spätere Korrelation
         // vormerken (Python `store_orphan_chat_raid_notification`,
@@ -1084,6 +1127,8 @@ impl RaidArrivalSink for RaidArrivalSinkImpl {
             from_broadcaster_id: from_broadcaster_id.map(str::to_string),
             from_broadcaster_login: from_broadcaster_login.to_string(),
             viewer_count,
+            message_id: message_id.map(str::to_string),
+            event_timestamp: event_timestamp.map(str::to_string),
             observed_at: std::time::Instant::now(),
         };
         self.orphans
@@ -1277,8 +1322,15 @@ mod tests {
             None,
         );
         // viewer_count=0 simuliert die zuschauerlose chat.notification-Bestätigung.
-        sink.confirm_pending_raid("channel.chat.notification", "200", "dst", "src", Some("100"), 0)
-            .await;
+        sink.confirm_pending_raid(
+            "channel.chat.notification",
+            "200",
+            "dst",
+            "src",
+            Some("100"),
+            0,
+        )
+        .await;
 
         let persisted: i32 = sqlx::query_scalar(
             "SELECT viewer_count FROM twitch_raid_arrival_tracking WHERE to_broadcaster_id='200'",
@@ -1381,8 +1433,14 @@ mod tests {
         .unwrap();
         let pending_store = Arc::new(Mutex::new(PendingRaidStore::new()));
         let suppression = Arc::new(Mutex::new(tb_raid::ManualRaidSuppression::new()));
-        let sink =
-            RaidArrivalSinkImpl::new(pool.clone(), pending_store, suppression, "deadlock", None, None);
+        let sink = RaidArrivalSinkImpl::new(
+            pool.clone(),
+            pending_store,
+            suppression,
+            "deadlock",
+            None,
+            None,
+        );
         // aktiver Partner mit silent_raid=1 → true; mit 0 → false; externer
         // Kanal ohne (aktiven) Partner-Eintrag → false (keine Zeile).
         assert!(sink.target_silent_raid("silentpartner").await);

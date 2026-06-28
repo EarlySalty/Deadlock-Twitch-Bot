@@ -84,11 +84,7 @@ pub async fn category_comparison_handler(
     // Plan-Gate. (Rust hatte hier fälschlich extended_gate → 403 für
     // authentifizierte Nicht-Extended-Partner.)
     if matches!(auth, DashboardAuthLevel::None) {
-        return (
-            StatusCode::UNAUTHORIZED,
-            Json(json!({"error":"unauthorized"})),
-        )
-            .into_response();
+        return crate::auth::unauthorized_v2_response();
     }
     // days VOR streamer-Pflicht (Python-Reihenfolge in _api_v2_category_comparison).
     let days = match parse_bounded_query_int(params.days.as_deref(), "days", 30, 7, 365) {

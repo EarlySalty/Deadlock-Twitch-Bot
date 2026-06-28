@@ -21,7 +21,6 @@
 
 use axum::{
     extract::{Query, State},
-    http::StatusCode,
     response::{IntoResponse, Response},
     Json,
 };
@@ -73,7 +72,10 @@ pub async fn leaderboard_handler(
     }
 
     let sort_key = normalize_sort(params.sort.as_deref());
-    let descending = !matches!(params.order.as_deref().map(str::to_lowercase).as_deref(), Some("asc"));
+    let descending = !matches!(
+        params.order.as_deref().map(str::to_lowercase).as_deref(),
+        Some("asc")
+    );
     let limit = params.limit.unwrap_or(DEFAULT_LIMIT).clamp(1, MAX_LIMIT);
     let min_samples = params.min_samples.filter(|&v| v > 0);
     let min_avg = params.min_avg.filter(|&v| v > 0.0);
@@ -96,10 +98,24 @@ pub async fn leaderboard_handler(
     // P2.124: Discord-IDs/-Namen nur für privilegierte Aufrufer (Localhost/Admin)
     // serialisieren — nicht für eingeloggte Partner (Python: localhost-only gate).
     let show_discord = auth.is_privileged();
-    let tracked_entries =
-        shape_entries(tracked, sort_key, descending, min_samples, min_avg, limit, show_discord);
-    let category_entries =
-        shape_entries(category, sort_key, descending, min_samples, min_avg, limit, show_discord);
+    let tracked_entries = shape_entries(
+        tracked,
+        sort_key,
+        descending,
+        min_samples,
+        min_avg,
+        limit,
+        show_discord,
+    );
+    let category_entries = shape_entries(
+        category,
+        sort_key,
+        descending,
+        min_samples,
+        min_avg,
+        limit,
+        show_discord,
+    );
 
     Json(json!({
         "window": { "days": 30 },
@@ -236,7 +252,11 @@ fn shape_entries(
             SortKey::Peak => a.max_viewers.unwrap_or(0).cmp(&b.max_viewers.unwrap_or(0)),
             SortKey::Name => a.streamer.to_lowercase().cmp(&b.streamer.to_lowercase()),
         };
-        if descending { ord.reverse() } else { ord }
+        if descending {
+            ord.reverse()
+        } else {
+            ord
+        }
     });
 
     rows.into_iter()
@@ -268,11 +288,7 @@ fn shape_entries(
 }
 
 fn analytics_error() -> Response {
-    (
-        StatusCode::INTERNAL_SERVER_ERROR,
-        Json(json!({ "error": "analytics_request_failed" })),
-    )
-        .into_response()
+    crate::auth::analytics_request_failed_json().into_response()
 }
 
 #[cfg(test)]
@@ -320,7 +336,7 @@ mod tests {
     fn shape_min_samples_und_limit() {
         let rows = vec![
             row("a", 100.0, 200, 50),
-            row("b", 300.0, 400, 4),  // unter min_samples
+            row("b", 300.0, 400, 4), // unter min_samples
             row("c", 80.0, 90, 20),
         ];
         let out = shape_entries(rows, SortKey::Avg, true, Some(10), None, 1, true);
@@ -365,7 +381,9 @@ mod tests {
 
         // Privilegiert → Discord-Felder sichtbar.
         let privileged = shape_entries(
-            vec![TopRow { ..clone_row(&with_discord) }],
+            vec![TopRow {
+                ..clone_row(&with_discord)
+            }],
             SortKey::Avg,
             true,
             None,
@@ -378,15 +396,7 @@ mod tests {
         assert_eq!(privileged[0]["has_discord_profile"], 1);
 
         // Nicht privilegiert (Partner) → Discord-IDs maskiert, Flag bleibt.
-        let partner = shape_entries(
-            vec![with_discord],
-            SortKey::Avg,
-            true,
-            None,
-            None,
-            5,
-            false,
-        );
+        let partner = shape_entries(vec![with_discord], SortKey::Avg, true, None, None, 5, false);
         assert!(partner[0]["discord_user_id"].is_null());
         assert!(partner[0]["discord_display_name"].is_null());
         assert_eq!(
@@ -414,12 +424,28 @@ mod tests {
 
     async fn make_pool(schema: &str) -> Option<PgPool> {
         let dsn = std::env::var("TB_TEST_DATABASE_URL").ok()?;
-        let admin = PgPoolOptions::new().max_connections(1).connect(&dsn).await.unwrap();
-        sqlx::query(&format!("DROP SCHEMA IF EXISTS {schema} CASCADE")).execute(&admin).await.unwrap();
-        sqlx::query(&format!("CREATE SCHEMA {schema}")).execute(&admin).await.unwrap();
+        let admin = PgPoolOptions::new()
+            .max_connections(1)
+            .connect(&dsn)
+            .await
+            .unwrap();
+        sqlx::query(&format!("DROP SCHEMA IF EXISTS {schema} CASCADE"))
+            .execute(&admin)
+            .await
+            .unwrap();
+        sqlx::query(&format!("CREATE SCHEMA {schema}"))
+            .execute(&admin)
+            .await
+            .unwrap();
         admin.close().await;
-        let opts = PgConnectOptions::from_str(&dsn).unwrap().options([("search_path", schema)]);
-        let pool = PgPoolOptions::new().max_connections(2).connect_with(opts).await.unwrap();
+        let opts = PgConnectOptions::from_str(&dsn)
+            .unwrap()
+            .options([("search_path", schema)]);
+        let pool = PgPoolOptions::new()
+            .max_connections(2)
+            .connect_with(opts)
+            .await
+            .unwrap();
         for ddl in [
             "CREATE TABLE twitch_stats_tracked (ts_utc TEXT, streamer TEXT, viewer_count INTEGER, is_partner BOOLEAN DEFAULT FALSE)",
             "CREATE TABLE twitch_stats_category (ts_utc TEXT, streamer TEXT, viewer_count INTEGER, is_partner BOOLEAN DEFAULT FALSE)",
@@ -434,7 +460,9 @@ mod tests {
 
     #[tokio::test]
     async fn load_category_trennt_partner_und_rest() {
-        let Some(pool) = make_pool("t_lb").await else { return };
+        let Some(pool) = make_pool("t_lb").await else {
+            return;
+        };
         let now = chrono::Utc::now().to_rfc3339();
         // Partner "nani" (tracked), Nicht-Partner "rando" (category).
         sqlx::query("INSERT INTO twitch_streamers_partner_state (twitch_login, is_partner_active, is_on_discord, discord_user_id, discord_display_name) VALUES ('nani', 1, 1, '123', 'NaniDC')")

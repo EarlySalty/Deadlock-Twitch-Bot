@@ -35,10 +35,7 @@ const KNOWN_CHAT_BOTS: &[&str] = &[
 
 fn require_auth(auth: &DashboardAuthLevel) -> Result<(), (StatusCode, Json<serde_json::Value>)> {
     if matches!(auth, DashboardAuthLevel::None) {
-        Err((
-            StatusCode::UNAUTHORIZED,
-            Json(json!({"error":"unauthorized","message":"not authenticated"})),
-        ))
+        Err(crate::auth::unauthorized_v2_json())
     } else {
         Ok(())
     }
@@ -166,11 +163,7 @@ pub async fn viewer_overlap_handler(
     match rows {
         Err(e) => {
             tracing::error!("viewer-overlap DB-Fehler: {e}");
-            (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(json!({"error":"internal_error"})),
-            )
-                .into_response()
+            crate::auth::analytics_request_failed_json().into_response()
         }
         Ok(rows) => {
             let data: Vec<serde_json::Value> = rows

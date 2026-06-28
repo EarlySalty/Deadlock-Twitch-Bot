@@ -172,7 +172,8 @@ pub fn build_internal_router(
         // Ergebnis als HTTP 200 wie Python.
         // BEWUSST NICHT nativ:
         // - POST /raid/requirements — sendet in Python eine echte Discord-DM;
-        //   ohne Discord-Bridge bleibt die Route über den Legacy-Proxy.
+        //   ohne Discord-Bridge bleibt die Route unregistriert und fällt auf
+        //   den Legacy-Proxy.
         .route(
             &format!("{base}/raid/auth-url"),
             get(oauth::auth_url_handler),
@@ -239,7 +240,8 @@ pub fn build_internal_router(
         // den echten Dead-Letter-Store.
         // chat-action: echtes Senden über den ChatActionPort (Bot-Token-Bridge,
         //   tb-bot-Composition-Root); ohne Port (Chat aus) antwortet der Handler 503.
-        // raid/requirements: bewusst entfernt (410), keine Discord-DM.
+        // raid/requirements bleibt bewusst unregistriert: Fallback zu Python,
+        // weil nur dort die Discord-DM 1:1 gesendet wird.
         .route(
             &format!("{base}/debug/observability"),
             get(python_stubs::observability_handler),
@@ -259,11 +261,6 @@ pub fn build_internal_router(
         .route(
             &format!("{base}/streamers/:login/chat-action"),
             post(python_stubs::chat_action_handler),
-        )
-        // Login kommt im POST-Body {"login": "..."}, kein Pfad-Parameter.
-        .route(
-            &format!("{base}/raid/requirements"),
-            post(python_stubs::raid_requirements_handler),
         )
         // Streamer-CRUD: vollständig nativ portiert inkl. Partner-Lifecycle
         // (Block 10): DELETE departnert, verify promotet/departnert + Rollen-Sync,
@@ -304,7 +301,9 @@ pub fn build_internal_router(
         .layer(Extension(handlers::streamers::DiscordRoleExt(discord_role)))
         .layer(Extension(handlers::streamers::ChatActionExt(chat_action)))
         .layer(Extension(handlers::scam_guard::ScamRevokeExt(scam_revoke)))
-        .layer(Extension(handlers::scam_guard::ScamEnforceExt(scam_enforce)))
+        .layer(Extension(handlers::scam_guard::ScamEnforceExt(
+            scam_enforce,
+        )))
         .layer(Extension(handlers::reauth_all::BulkReauthExt(bulk_reauth)))
         .layer(Extension(idempotency::IdempotencyState::new()))
         .layer(Extension(LegacyProxyExt(legacy_proxy)))

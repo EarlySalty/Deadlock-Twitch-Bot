@@ -152,11 +152,7 @@ pub async fn stream_report_handler(
     // Auth: None → 401; Partner → eigener Login Pflicht; Admin/Localhost → frei.
     match &auth {
         DashboardAuthLevel::None => {
-            return (
-                StatusCode::UNAUTHORIZED,
-                Json(json!({"error": "unauthorized"})),
-            )
-                .into_response();
+            return crate::auth::unauthorized_v2_response();
         }
         DashboardAuthLevel::Admin { .. } => {}
         DashboardAuthLevel::Partner { twitch_login, .. } => {
@@ -172,7 +168,7 @@ pub async fn stream_report_handler(
 
     // ── A/B / all: beide Varianten sammeln (neueste je Variante gewinnt) ──────
     if variant == "ab" || variant == "all" {
-        let rows: Vec<ReportRow> = match session_id {
+        let rows_result = match session_id {
             Some(sid) => {
                 sqlx::query_as::<_, ReportRow>(&format!(
                     "{REPORT_SELECT} WHERE session_id = $1 AND streamer_login = $2 \
@@ -194,8 +190,14 @@ pub async fn stream_report_handler(
                 .fetch_all(&pool)
                 .await
             }
-        }
-        .unwrap_or_default();
+        };
+        let rows: Vec<ReportRow> = match rows_result {
+            Ok(rows) => rows,
+            Err(e) => {
+                tracing::error!(error = %e, streamer = %streamer, "PostStream API: Report-Lookup fehlgeschlagen");
+                return crate::auth::analytics_request_failed_json().into_response();
+            }
+        };
 
         // setdefault: erste (neueste) Zeile je Variante gewinnt.
         let mut reports = serde_json::Map::new();
@@ -217,7 +219,7 @@ pub async fn stream_report_handler(
     }
 
     // ── Einzel-Variante (compact|full): neuester Report ───────────────────────
-    let row: Option<ReportRow> = match session_id {
+    let row_result = match session_id {
         Some(sid) => {
             sqlx::query_as::<_, ReportRow>(&format!(
                 "{REPORT_SELECT} WHERE session_id = $1 AND streamer_login = $2 \
@@ -241,9 +243,14 @@ pub async fn stream_report_handler(
             .fetch_optional(&pool)
             .await
         }
-    }
-    .ok()
-    .flatten();
+    };
+    let row: Option<ReportRow> = match row_result {
+        Ok(row) => row,
+        Err(e) => {
+            tracing::error!(error = %e, streamer = %streamer, "PostStream API: Report-Lookup fehlgeschlagen");
+            return crate::auth::analytics_request_failed_json().into_response();
+        }
+    };
 
     let Some(row) = row else {
         return Json(json!({"empty": true, "streamer": streamer, "variant": variant}))
@@ -335,6 +342,10 @@ pub async fn stream_report_rate_handler(
     State(pool): State<PgPool>,
     body: axum::body::Bytes,
 ) -> impl IntoResponse {
+    if matches!(auth, DashboardAuthLevel::None) {
+        return crate::auth::unauthorized_v2_response();
+    }
+
     let parsed: RateBody = match serde_json::from_slice(&body) {
         Ok(v) => v,
         Err(_) => {
@@ -407,11 +418,7 @@ pub async fn stream_report_rate_handler(
     // rated_by: Partner-Login bzw. Twitch-OAuth-Admin-Login, sonst Auth-Level-Name
     // (Python `twitch_login or auth_level or "unknown"`, P2.71); None → 401.
     let Some(rated_by) = writer_key(&auth) else {
-        return (
-            StatusCode::UNAUTHORIZED,
-            Json(json!({"error": "unauthorized"})),
-        )
-            .into_response();
+        return crate::auth::unauthorized_v2_response();
     };
 
     let _ = tb_analytics::post_stream::ensure_report_ab_columns(&pool).await;
@@ -434,11 +441,7 @@ pub async fn stream_report_rate_handler(
         Ok(()) => Json(json!({"ok": true, "rating": rating, "comment": comment})).into_response(),
         Err(e) => {
             tracing::error!(error = %e, "PostStream Rating: Speichern fehlgeschlagen");
-            (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(json!({"error": "Bewertung konnte nicht gespeichert werden"})),
-            )
-                .into_response()
+            crate::auth::analytics_request_failed_json().into_response()
         }
     }
 }
@@ -461,7 +464,7 @@ pub struct AbVoteBody {
 
 /// Stimmen-Aggregat einer Session als `{compact, full, gleich}` (Python `agg`),
 /// fehlende Sieger bleiben 0.
-async fn ab_vote_totals(pool: &PgPool, session_id: i64) -> serde_json::Value {
+async fn ab_vote_totals(pool: &PgPool, session_id: i64) -> Result<serde_json::Value, sqlx::Error> {
     let mut agg = serde_json::Map::new();
     agg.insert("compact".into(), json!(0));
     agg.insert("full".into(), json!(0));
@@ -472,14 +475,13 @@ async fn ab_vote_totals(pool: &PgPool, session_id: i64) -> serde_json::Value {
     )
     .bind(session_id)
     .fetch_all(pool)
-    .await
-    .unwrap_or_default();
+    .await?;
     for (winner, n) in rows {
         if let Some(w) = winner {
             agg.insert(w, json!(n));
         }
     }
-    serde_json::Value::Object(agg)
+    Ok(serde_json::Value::Object(agg))
 }
 
 /// UPSERT einer A/B-Stimme (Python INSERT … ON CONFLICT (session_id, voted_by)).
@@ -516,6 +518,10 @@ pub async fn stream_report_ab_vote_get(
     State(pool): State<PgPool>,
     Query(q): Query<AbVoteQuery>,
 ) -> impl IntoResponse {
+    if matches!(auth, DashboardAuthLevel::None) {
+        return crate::auth::unauthorized_v2_response();
+    }
+
     let session_id: Option<i64> = q
         .session_id
         .as_deref()
@@ -555,21 +561,29 @@ pub async fn stream_report_ab_vote_get(
         .bind(&vb)
         .fetch_optional(&pool)
         .await
-        .ok()
-        .flatten()
         {
-            Some((winner, comment, updated_at)) => json!({
+            Ok(Some((winner, comment, updated_at))) => json!({
                 "winner": winner,
                 "comment": comment,
                 "updated_at": updated_at.unwrap_or_default(),
             }),
-            None => serde_json::Value::Null,
+            Ok(None) => serde_json::Value::Null,
+            Err(e) => {
+                tracing::error!(error = %e, "PostStream AB-Vote GET: Own-Vote-Lookup fehlgeschlagen");
+                return crate::auth::analytics_request_failed_json().into_response();
+            }
         }
     } else {
         serde_json::Value::Null
     };
 
-    let totals = ab_vote_totals(&pool, session_id).await;
+    let totals = match ab_vote_totals(&pool, session_id).await {
+        Ok(totals) => totals,
+        Err(e) => {
+            tracing::error!(error = %e, "PostStream AB-Vote GET: Aggregat-Lookup fehlgeschlagen");
+            return crate::auth::analytics_request_failed_json().into_response();
+        }
+    };
     Json(json!({"session_id": session_id, "own_vote": own_json, "totals": totals})).into_response()
 }
 
@@ -579,6 +593,10 @@ pub async fn stream_report_ab_vote_post(
     State(pool): State<PgPool>,
     body: axum::body::Bytes,
 ) -> impl IntoResponse {
+    if matches!(auth, DashboardAuthLevel::None) {
+        return crate::auth::unauthorized_v2_response();
+    }
+
     let parsed: AbVoteBody = match serde_json::from_slice(&body) {
         Ok(v) => v,
         Err(_) => {
@@ -644,11 +662,7 @@ pub async fn stream_report_ab_vote_post(
     // voted_by: Partner-Login bzw. Twitch-OAuth-Admin-Login, sonst Auth-Level-Name
     // (P2.71); None → 401.
     let Some(voted_by) = writer_key(&auth) else {
-        return (
-            StatusCode::UNAUTHORIZED,
-            Json(json!({"error": "unauthorized"})),
-        )
-            .into_response();
+        return crate::auth::unauthorized_v2_response();
     };
 
     let _ = tb_analytics::post_stream::ensure_report_ab_columns(&pool).await;
@@ -668,13 +682,15 @@ pub async fn stream_report_ab_vote_post(
     .await
     {
         tracing::error!(error = %e, "PostStream AB-Vote: Speichern fehlgeschlagen");
-        return (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(json!({"error": "Abstimmung konnte nicht gespeichert werden"})),
-        )
-            .into_response();
+        return crate::auth::analytics_request_failed_json().into_response();
     }
-    let totals = ab_vote_totals(&pool, session_id).await;
+    let totals = match ab_vote_totals(&pool, session_id).await {
+        Ok(totals) => totals,
+        Err(e) => {
+            tracing::error!(error = %e, "PostStream AB-Vote POST: Aggregat-Lookup fehlgeschlagen");
+            return crate::auth::analytics_request_failed_json().into_response();
+        }
+    };
     Json(json!({"ok": true, "winner": winner, "totals": totals})).into_response()
 }
 
@@ -949,7 +965,7 @@ mod tests {
             .await
             .unwrap();
 
-        let totals = ab_vote_totals(&pool, 1).await;
+        let totals = ab_vote_totals(&pool, 1).await.unwrap();
         assert_eq!(totals["compact"], 2);
         assert_eq!(totals["full"], 1);
         assert_eq!(totals["gleich"], 0); // Default-Key bleibt 0
@@ -958,7 +974,7 @@ mod tests {
         upsert_ab_vote(&pool, 1, "streamer", "gleich", None, "voter1")
             .await
             .unwrap();
-        let totals2 = ab_vote_totals(&pool, 1).await;
+        let totals2 = ab_vote_totals(&pool, 1).await.unwrap();
         assert_eq!(totals2["compact"], 1); // voter1 weg von compact
         assert_eq!(totals2["gleich"], 1);
         let count: i64 = sqlx::query_scalar(
@@ -970,7 +986,7 @@ mod tests {
         assert_eq!(count, 3); // 3 Voter, keine Duplikate
 
         // Fremde Session bleibt leer → alle 0.
-        let empty = ab_vote_totals(&pool, 999).await;
+        let empty = ab_vote_totals(&pool, 999).await.unwrap();
         assert_eq!(empty["compact"], 0);
         assert_eq!(empty["full"], 0);
         assert_eq!(empty["gleich"], 0);

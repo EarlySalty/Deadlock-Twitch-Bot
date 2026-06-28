@@ -101,11 +101,7 @@ pub async fn retention_curve_handler(
     match rows {
         Err(e) => {
             tracing::error!("retention-curve DB-Fehler: {e}");
-            (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(json!({"error":"internal_error"})),
-            )
-                .into_response()
+            crate::auth::analytics_request_failed_json().into_response()
         }
         Ok(rows) if rows.is_empty() => {
             Json(json!({"retention_curve": [], "drop_events": [], "sessions_used": 0}))

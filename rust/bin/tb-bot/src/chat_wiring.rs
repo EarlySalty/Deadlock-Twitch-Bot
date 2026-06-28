@@ -41,9 +41,9 @@ use tb_chat::timeout_tracking::{
 use tb_chat::token::BotTokenManager;
 use tb_chat::types::ChatMessageEvent;
 use tb_chat::{
-    ChannelClassifier, ChatApi, ChatPipeline, ChatPipelineParts, ChatterTracker, FunResponses,
-    GlobalBanSweeper, GlobalChatterBanEnforcer, ModAlerter, PartnerRoster, PgHelixMentionResolver,
-    ReviewLog, SusInviteCheck, promo_invite_fallback,
+    promo_invite_fallback, ChannelClassifier, ChatApi, ChatPipeline, ChatPipelineParts,
+    ChatterTracker, FunResponses, GlobalBanSweeper, GlobalChatterBanEnforcer, ModAlerter,
+    PartnerRoster, PgHelixMentionResolver, ReviewLog, SusInviteCheck,
 };
 use tb_crypto::FieldCipher;
 use tb_engagement::irc_reader::EngagementIrcReader;
@@ -82,7 +82,10 @@ fn knowledge_base() -> &'static KnowledgeBase {
     static KB: OnceLock<KnowledgeBase> = OnceLock::new();
     KB.get_or_init(|| match KnowledgeBase::load_from_dir(&knowledge_dir()) {
         Ok(kb) => {
-            tracing::info!("go-live-tipp: Wissensbasis geladen ({} Dokumente)", kb.len());
+            tracing::info!(
+                "go-live-tipp: Wissensbasis geladen ({} Dokumente)",
+                kb.len()
+            );
             kb
         }
         Err(error) => {
@@ -573,7 +576,7 @@ pub async fn build_runtime(
             // BotTokenManager implementiert BotScopeProvider — bot-zentrierter
             // moderator:read:chatters-Scope greift, wenn der Streamer-Scope fehlt.
             .set_bot_scope_provider(
-                Arc::clone(&token_manager) as Arc<dyn tb_chat::promos::BotScopeProvider>,
+                Arc::clone(&token_manager) as Arc<dyn tb_chat::promos::BotScopeProvider>
             )
             .set_invite_resolver(Arc::clone(&invite_resolver) as Arc<dyn InviteResolver>)
             .set_partner_check(Arc::new(DbPartnerCheck { pool: pool.clone() }))
@@ -602,7 +605,7 @@ pub async fn build_runtime(
         EngagementMinimaxClient::new(None, None, None, None),
     )));
     command_engine = command_engine.set_invite_reply_notifier(
-        Arc::clone(&promos) as Arc<dyn tb_chat::commands::InviteReplyNotifier>,
+        Arc::clone(&promos) as Arc<dyn tb_chat::commands::InviteReplyNotifier>
     );
     let commands = Arc::new(command_engine);
 
@@ -860,15 +863,17 @@ pub(crate) async fn select_eventsub_subscription_broadcasters(
 
     Ok(rows
         .into_iter()
-        .map(|(login, twitch_user_id, is_partner, core_subscriptions, chat_subscriptions)| {
-            EventSubSubscriptionBroadcaster {
-                login,
-                twitch_user_id,
-                is_partner,
-                core_subscriptions,
-                chat_subscriptions,
-            }
-        })
+        .map(
+            |(login, twitch_user_id, is_partner, core_subscriptions, chat_subscriptions)| {
+                EventSubSubscriptionBroadcaster {
+                    login,
+                    twitch_user_id,
+                    is_partner,
+                    core_subscriptions,
+                    chat_subscriptions,
+                }
+            },
+        )
         .collect())
 }
 
@@ -1135,20 +1140,19 @@ impl ChatHooks {
             return;
         }
 
-        let pick = match tb_tips::engine::pick_tip(&self.pool, knowledge_base(), twitch_user_id)
-            .await
-        {
-            Ok(pick) => pick,
-            Err(error) => {
-                tracing::warn!(
-                    %error,
-                    %twitch_user_id,
-                    %login,
-                    "go-live-tipp: Tipp-Auswahl fehlgeschlagen"
-                );
-                return;
-            }
-        };
+        let pick =
+            match tb_tips::engine::pick_tip(&self.pool, knowledge_base(), twitch_user_id).await {
+                Ok(pick) => pick,
+                Err(error) => {
+                    tracing::warn!(
+                        %error,
+                        %twitch_user_id,
+                        %login,
+                        "go-live-tipp: Tipp-Auswahl fehlgeschlagen"
+                    );
+                    return;
+                }
+            };
         let Some((slug, tip_text)) = pick else {
             return;
         };
@@ -1169,6 +1173,17 @@ impl ChatHooks {
                         %slug,
                         "go-live-tipp: Historie konnte nicht geschrieben werden"
                     ),
+                }
+                if let Err(error) =
+                    tb_tips::repo::record_feature_used(&self.pool, twitch_user_id, &slug).await
+                {
+                    tracing::warn!(
+                        %error,
+                        %twitch_user_id,
+                        %login,
+                        %slug,
+                        "go-live-tipp: Feature-Nutzung konnte nicht geschrieben werden"
+                    );
                 }
             }
             Ok(SendOutcome::Dropped { code, message }) => tracing::warn!(
@@ -1287,8 +1302,7 @@ impl EventSubHooks for ChatHooks {
             .on_chat_subscription_notification(kind, event, message_id)
             .await;
 
-        let Some((event_type, normalized)) =
-            chat_notification_to_subscription_event(kind, event)
+        let Some((event_type, normalized)) = chat_notification_to_subscription_event(kind, event)
         else {
             return;
         };
@@ -1419,10 +1433,7 @@ fn chat_notification_to_subscription_event(
         }
         ChatNotificationKind::SubGift => {
             let gift = event.get("sub_gift")?;
-            let recipient_login = str_lower(
-                gift,
-                &["recipient_user_login", "recipient_user_name"],
-            );
+            let recipient_login = str_lower(gift, &["recipient_user_login", "recipient_user_name"]);
             let recipient_id = str_field(gift, &["recipient_user_id"]);
             let gift_total = pos_int(gift, &["cumulative_total", "total"]);
             Some((
@@ -1906,8 +1917,15 @@ impl DbInviteResolver {
         };
         let invite_url = invite.invite_url.trim().to_string();
         let invite_code = invite.code.trim().to_string();
-        if invite_url.is_empty() || invite_code.is_empty() || invite.guild_id == 0 || invite.channel_id == 0 {
-            tracing::warn!(login, "Promo-Invite-Erstellung lieferte unvollständige Broker-Antwort");
+        if invite_url.is_empty()
+            || invite_code.is_empty()
+            || invite.guild_id == 0
+            || invite.channel_id == 0
+        {
+            tracing::warn!(
+                login,
+                "Promo-Invite-Erstellung lieferte unvollständige Broker-Antwort"
+            );
             return None;
         }
         let Ok(guild_id) = i64::try_from(invite.guild_id) else {
@@ -2147,7 +2165,9 @@ mod chat_notification_tests {
     #[test]
     fn sub_ohne_nested_payload_ergibt_none() {
         let event = json!({ "broadcaster_user_id": "100", "notice_type": "sub" });
-        assert!(chat_notification_to_subscription_event(ChatNotificationKind::Sub, &event).is_none());
+        assert!(
+            chat_notification_to_subscription_event(ChatNotificationKind::Sub, &event).is_none()
+        );
     }
 
     #[test]
@@ -2338,27 +2358,43 @@ mod db_tests {
 
         // (A) raid-aktiv, KEIN Partner, channel:bot-Scope → muss erscheinen.
         sqlx::query("INSERT INTO twitch_streamers_partner_state VALUES ('RaidOnly', '10', 0)")
-            .execute(&pool).await.unwrap();
+            .execute(&pool)
+            .await
+            .unwrap();
         sqlx::query("INSERT INTO twitch_raid_auth VALUES ('10', 'raidonly', 'channel:bot user:read', TRUE, FALSE)")
             .execute(&pool).await.unwrap();
 
         // (B) aktiver Partner, raid_enabled=FALSE, channel:bot → muss erscheinen.
         sqlx::query("INSERT INTO twitch_streamers_partner_state VALUES ('PartnerOnly', '20', 1)")
-            .execute(&pool).await.unwrap();
+            .execute(&pool)
+            .await
+            .unwrap();
         sqlx::query("INSERT INTO twitch_raid_auth VALUES ('20', 'partneronly', 'channel:bot', FALSE, FALSE)")
             .execute(&pool).await.unwrap();
 
         // (C) raid-aktiv, aber OHNE channel:bot-Scope → NICHT erscheinen.
         sqlx::query("INSERT INTO twitch_streamers_partner_state VALUES ('NoScope', '30', 0)")
-            .execute(&pool).await.unwrap();
-        sqlx::query("INSERT INTO twitch_raid_auth VALUES ('30', 'noscope', 'user:read', TRUE, FALSE)")
-            .execute(&pool).await.unwrap();
+            .execute(&pool)
+            .await
+            .unwrap();
+        sqlx::query(
+            "INSERT INTO twitch_raid_auth VALUES ('30', 'noscope', 'user:read', TRUE, FALSE)",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
 
         // (D) raid-aktiv, channel:bot, aber needs_reauth=TRUE → NICHT erscheinen.
         sqlx::query("INSERT INTO twitch_streamers_partner_state VALUES ('Reauth', '40', 0)")
-            .execute(&pool).await.unwrap();
-        sqlx::query("INSERT INTO twitch_raid_auth VALUES ('40', 'reauth', 'channel:bot', TRUE, TRUE)")
-            .execute(&pool).await.unwrap();
+            .execute(&pool)
+            .await
+            .unwrap();
+        sqlx::query(
+            "INSERT INTO twitch_raid_auth VALUES ('40', 'reauth', 'channel:bot', TRUE, TRUE)",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
 
         let mut rows = select_chat_subscription_channels(&pool).await.unwrap();
         rows.sort();
@@ -2428,7 +2464,9 @@ mod db_tests {
             .await
             .unwrap();
 
-        let mut rows = select_eventsub_subscription_broadcasters(&pool).await.unwrap();
+        let mut rows = select_eventsub_subscription_broadcasters(&pool)
+            .await
+            .unwrap();
         rows.sort_by(|a, b| a.twitch_user_id.cmp(&b.twitch_user_id));
 
         let simplified: Vec<(String, String, bool, bool, bool)> = rows
@@ -2448,7 +2486,13 @@ mod db_tests {
             simplified,
             vec![
                 ("raidonly".to_string(), "10".to_string(), false, false, true),
-                ("partneronly".to_string(), "20".to_string(), true, true, true),
+                (
+                    "partneronly".to_string(),
+                    "20".to_string(),
+                    true,
+                    true,
+                    true
+                ),
                 ("lurker".to_string(), "77".to_string(), false, true, false),
             ]
         );
@@ -2467,21 +2511,27 @@ mod db_tests {
         .execute(&pool)
         .await
         .unwrap();
+        sqlx::query("CREATE TABLE twitch_streamer_invites (streamer_login TEXT, invite_url TEXT)")
+            .execute(&pool)
+            .await
+            .unwrap();
+
+        // Aktiver Partner OHNE Invite → muss erscheinen.
         sqlx::query(
-            "CREATE TABLE twitch_streamer_invites (streamer_login TEXT, invite_url TEXT)",
+            "INSERT INTO twitch_partners (twitch_login, status) VALUES ('Fresh', 'active')",
         )
         .execute(&pool)
         .await
         .unwrap();
-
-        // Aktiver Partner OHNE Invite → muss erscheinen.
-        sqlx::query("INSERT INTO twitch_partners (twitch_login, status) VALUES ('Fresh', 'active')")
-            .execute(&pool).await.unwrap();
         // Aktiver Partner MIT Invite → nicht.
         sqlx::query("INSERT INTO twitch_partners (twitch_login, status) VALUES ('Warm', 'active')")
-            .execute(&pool).await.unwrap();
+            .execute(&pool)
+            .await
+            .unwrap();
         sqlx::query("INSERT INTO twitch_streamer_invites VALUES ('warm', 'https://x')")
-            .execute(&pool).await.unwrap();
+            .execute(&pool)
+            .await
+            .unwrap();
         // Archivierter Partner ohne Invite → nicht.
         sqlx::query("INSERT INTO twitch_partners (twitch_login, status, admin_archived_at) VALUES ('Arch', 'active', '2026-01-01')")
             .execute(&pool).await.unwrap();
@@ -2489,8 +2539,12 @@ mod db_tests {
         sqlx::query("INSERT INTO twitch_partners (twitch_login, status, departnered_at) VALUES ('Gone', 'active', '2026-01-01')")
             .execute(&pool).await.unwrap();
         // Inaktiver Status → nicht.
-        sqlx::query("INSERT INTO twitch_partners (twitch_login, status) VALUES ('Paused', 'paused')")
-            .execute(&pool).await.unwrap();
+        sqlx::query(
+            "INSERT INTO twitch_partners (twitch_login, status) VALUES ('Paused', 'paused')",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
 
         let resolver = DbInviteResolver {
             pool: pool.clone(),

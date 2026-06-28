@@ -170,9 +170,11 @@ mod tests {
     fn overrides_are_parsed() {
         let mut m = minimal();
         m.insert("TWITCH_ANALYTICS_POOL_MAXSIZE", "25");
+        m.insert("TWITCH_ANALYTICS_CONNECT_TIMEOUT_SECONDS", "9");
         m.insert("MASTER_BROKER_BASE_URL", "http://127.0.0.1:9999");
         let s = Settings::load(&src(m)).unwrap();
         assert_eq!(s.db.pool_max, 25);
+        assert_eq!(s.db.connect_timeout.as_secs(), 9);
         assert_eq!(s.broker.base_url, "http://127.0.0.1:9999");
     }
 

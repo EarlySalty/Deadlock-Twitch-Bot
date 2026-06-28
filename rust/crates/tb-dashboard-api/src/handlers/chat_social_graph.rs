@@ -55,11 +55,7 @@ pub async fn chat_social_graph_handler(
         Ok(v) => Json(v).into_response(),
         Err(e) => {
             tracing::error!("chat-social-graph Fehler: {e}");
-            (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(json!({ "error": "internal" })),
-            )
-                .into_response()
+            crate::auth::analytics_request_failed_json().into_response()
         }
     }
 }

@@ -33,7 +33,7 @@ const KNOWN_CHAT_BOTS: &[&str] = &[
 
 fn require_auth(auth: &DashboardAuthLevel) -> Result<(), (StatusCode, Json<serde_json::Value>)> {
     if matches!(auth, DashboardAuthLevel::None) {
-        Err((StatusCode::UNAUTHORIZED, Json(json!({"error":"unauthorized","message":"not authenticated"}))))
+        Err(crate::auth::unauthorized_v2_json())
     } else {
         Ok(())
     }
@@ -58,7 +58,13 @@ pub async fn session_detail_handler(
 
     let session_id: i64 = match session_id_str.parse() {
         Ok(v) => v,
-        Err(_) => return (StatusCode::BAD_REQUEST, Json(json!({"error":"Invalid session ID"}))).into_response(),
+        Err(_) => {
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(json!({"error":"Invalid session ID"})),
+            )
+                .into_response()
+        }
     };
 
     let owner = owner_login(&auth);
@@ -69,7 +75,12 @@ pub async fn session_detail_handler(
     // (MAX(started_at) der beendeten Sessions). Localhost/Admin überspringen den
     // Clamp. Die IDOR-Grenze (Owner-Query unten) bleibt unangetastet: das Flag
     // weitet NUR das Zeitfenster, nie den Zugriff auf fremde Sessions.
-    if let DashboardAuthLevel::Partner { twitch_login, twitch_user_id, .. } = &auth {
+    if let DashboardAuthLevel::Partner {
+        twitch_login,
+        twitch_user_id,
+        ..
+    } = &auth
+    {
         let login = twitch_login.to_lowercase();
         let has_analytics =
             crate::auth::has_analytics_entitlement(&pool, &login, twitch_user_id).await;
@@ -94,44 +105,60 @@ pub async fn session_detail_handler(
 
     // ── Haupt-Session-Row ────────────────────────────────────────────────────
     let row = match owner {
-        Some(login) => sqlx::query(
-            r#"SELECT id, streamer_login, started_at, ended_at, duration_seconds,
+        Some(login) => {
+            sqlx::query(
+                r#"SELECT id, streamer_login, started_at, ended_at, duration_seconds,
                       start_viewers, peak_viewers, end_viewers, avg_viewers,
                       retention_5m, retention_10m, retention_20m,
                       dropoff_pct, unique_chatters, first_time_chatters,
                       returning_chatters, stream_title
                FROM twitch_stream_sessions
                WHERE id = $1 AND LOWER(streamer_login) = $2"#,
-        ).bind(session_id).bind(login).fetch_optional(&pool).await,
+            )
+            .bind(session_id)
+            .bind(login)
+            .fetch_optional(&pool)
+            .await
+        }
 
-        None => sqlx::query(
-            r#"SELECT id, streamer_login, started_at, ended_at, duration_seconds,
+        None => {
+            sqlx::query(
+                r#"SELECT id, streamer_login, started_at, ended_at, duration_seconds,
                       start_viewers, peak_viewers, end_viewers, avg_viewers,
                       retention_5m, retention_10m, retention_20m,
                       dropoff_pct, unique_chatters, first_time_chatters,
                       returning_chatters, stream_title
                FROM twitch_stream_sessions
                WHERE id = $1"#,
-        ).bind(session_id).fetch_optional(&pool).await,
+            )
+            .bind(session_id)
+            .fetch_optional(&pool)
+            .await
+        }
     };
 
     let row = match row {
         Err(e) => {
             tracing::error!("session_detail DB-Fehler (Haupt-Row): {e}");
-            return (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({"error":"internal_error"}))).into_response();
+            return crate::auth::analytics_request_failed_json().into_response();
         }
-        Ok(None) => return (StatusCode::NOT_FOUND, Json(json!({"error":"Session not found"}))).into_response(),
+        Ok(None) => {
+            return (
+                StatusCode::NOT_FOUND,
+                Json(json!({"error":"Session not found"})),
+            )
+                .into_response()
+        }
         Ok(Some(r)) => r,
     };
 
     // ── Prüfen ob twitch_session_chatters Daten hat ─────────────────────────
-    let chatter_presence = sqlx::query(
-        "SELECT 1 FROM twitch_session_chatters WHERE session_id = $1 LIMIT 1",
-    )
-    .bind(session_id)
-    .fetch_optional(&pool)
-    .await
-    .unwrap_or(None);
+    let chatter_presence =
+        sqlx::query("SELECT 1 FROM twitch_session_chatters WHERE session_id = $1 LIMIT 1")
+            .bind(session_id)
+            .fetch_optional(&pool)
+            .await
+            .unwrap_or(None);
 
     // ── Chatter-Stats (bot-bereinigt) ────────────────────────────────────────
     // Parameterindizes: $1 = session_id, $3..$N+2 = Bot-Logins.
@@ -219,10 +246,12 @@ pub async fn session_detail_handler(
     let chatters = top_query.fetch_all(&pool).await.unwrap_or_default();
 
     // ── Response aufbauen ────────────────────────────────────────────────────
-    let started_at: String = row.try_get::<chrono::DateTime<chrono::Utc>, _>("started_at")
+    let started_at: String = row
+        .try_get::<chrono::DateTime<chrono::Utc>, _>("started_at")
         .map(|t| t.to_rfc3339())
         .unwrap_or_default();
-    let ended_at: Option<String> = row.try_get::<chrono::DateTime<chrono::Utc>, _>("ended_at")
+    let ended_at: Option<String> = row
+        .try_get::<chrono::DateTime<chrono::Utc>, _>("ended_at")
         .ok()
         .map(|t| t.to_rfc3339());
 
@@ -270,7 +299,13 @@ pub async fn session_events_handler(
 
     let session_id: i64 = match session_id_str.parse() {
         Ok(v) => v,
-        Err(_) => return (StatusCode::BAD_REQUEST, Json(json!({"error":"Invalid session ID"}))).into_response(),
+        Err(_) => {
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(json!({"error":"Invalid session ID"})),
+            )
+                .into_response()
+        }
     };
 
     let owner = owner_login(&auth);
@@ -288,9 +323,15 @@ pub async fn session_events_handler(
     let sess = match sess {
         Err(e) => {
             tracing::error!("session_events DB-Fehler (Sess-Row): {e}");
-            return (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({"error":"internal_error"}))).into_response();
+            return crate::auth::analytics_request_failed_json().into_response();
         }
-        Ok(None) => return (StatusCode::NOT_FOUND, Json(json!({"error":"Session not found"}))).into_response(),
+        Ok(None) => {
+            return (
+                StatusCode::NOT_FOUND,
+                Json(json!({"error":"Session not found"})),
+            )
+                .into_response()
+        }
         Ok(Some(r)) => r,
     };
 
@@ -306,7 +347,9 @@ pub async fn session_events_handler(
     .fetch_optional(&pool)
     .await
     .unwrap_or(None);
-    let twitch_user_id: Option<String> = uid_row.as_ref().and_then(|r| r.try_get("twitch_user_id").ok());
+    let twitch_user_id: Option<String> = uid_row
+        .as_ref()
+        .and_then(|r| r.try_get("twitch_user_id").ok());
 
     // Channel-Updates im Session-Fenster
     let channel_updates: Vec<serde_json::Value> = if let Some(uid) = &twitch_user_id {
@@ -326,7 +369,8 @@ pub async fn session_events_handler(
         .unwrap_or_default()
         .iter()
         .map(|r| {
-            let at: String = r.try_get::<chrono::DateTime<chrono::Utc>, _>("recorded_at")
+            let at: String = r
+                .try_get::<chrono::DateTime<chrono::Utc>, _>("recorded_at")
                 .map(|t| t.to_rfc3339())
                 .unwrap_or_default();
             json!({

@@ -2,6 +2,7 @@
 
 use axum::{extract::State, http::StatusCode, response::IntoResponse, Json};
 use serde::Serialize;
+use serde_json::json;
 use sqlx::PgPool;
 use tb_analytics::raids::{recent_raids, RaidRow};
 
@@ -13,7 +14,7 @@ use tb_analytics::raids::{recent_raids, RaidRow};
 pub struct RaidRowJson {
     pub from_channel: String,
     pub to_channel: String,
-    pub viewers: Option<i32>,
+    pub viewers: i32,
     pub executed_at: Option<String>,
 }
 
@@ -22,7 +23,7 @@ impl From<RaidRow> for RaidRowJson {
         Self {
             from_channel: r.from_channel,
             to_channel: r.to_channel,
-            viewers: r.viewers,
+            viewers: r.viewers.unwrap_or_default(),
             executed_at: r.executed_at,
         }
     }
@@ -45,7 +46,11 @@ pub async fn recent_raids_handler(State(pool): State<PgPool>) -> impl IntoRespon
         }
         Err(e) => {
             tracing::error!("recent_raids Query-Fehler: {e}");
-            StatusCode::INTERNAL_SERVER_ERROR.into_response()
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(json!({ "error": "internal_error" })),
+            )
+                .into_response()
         }
     }
 }
@@ -71,9 +76,7 @@ mod tests {
                 Some(d) => d,
                 None => {
                     if std::env::var("TB_TEST_REQUIRE_DB").as_deref() == Ok("1") {
-                        panic!(
-                            "TB_TEST_REQUIRE_DB=1 ist gesetzt, aber TB_TEST_DATABASE_URL fehlt"
-                        );
+                        panic!("TB_TEST_REQUIRE_DB=1 ist gesetzt, aber TB_TEST_DATABASE_URL fehlt");
                     }
                     eprintln!("SKIP: TB_TEST_DATABASE_URL nicht gesetzt");
                     return;

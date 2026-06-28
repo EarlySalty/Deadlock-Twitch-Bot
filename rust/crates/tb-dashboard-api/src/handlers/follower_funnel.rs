@@ -108,11 +108,7 @@ pub async fn follower_funnel_handler(
     let stats = match stats {
         Err(e) => {
             tracing::error!("follower-funnel stats-Fehler: {e}");
-            return (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(json!({"error":"internal_error"})),
-            )
-                .into_response();
+            return crate::auth::analytics_request_failed_json().into_response();
         }
         Ok(r) => r,
     };

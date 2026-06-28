@@ -20,8 +20,16 @@ use sqlx::{PgPool, Row};
 use crate::auth::level::DashboardAuthLevel;
 
 const KNOWN_CHAT_BOTS: &[&str] = &[
-    "botrix", "deutschedeadlockcommunity", "fossabot", "moobot", "nightbot",
-    "pretzelrocks", "soundalerts", "streamlabs", "streamelements", "wizebot",
+    "botrix",
+    "deutschedeadlockcommunity",
+    "fossabot",
+    "moobot",
+    "nightbot",
+    "pretzelrocks",
+    "soundalerts",
+    "streamlabs",
+    "streamelements",
+    "wizebot",
 ];
 
 // ------------------------------------------------------------------
@@ -37,9 +45,7 @@ fn classify_viewer(
     let days_since_first = first_seen_at
         .map(|fs| (now - fs).num_days())
         .unwrap_or(9999);
-    let days_since_last = last_seen_at
-        .map(|ls| (now - ls).num_days())
-        .unwrap_or(9999);
+    let days_since_last = last_seen_at.map(|ls| (now - ls).num_days()).unwrap_or(9999);
     let _ = days_since_last; // Parität: nicht direkt genutzt in Classify, nur für future use
 
     if days_since_first <= 14 && total_sessions <= 3 {
@@ -65,7 +71,9 @@ fn classify_viewer(
 // Query-Hilfsfunktionen für Bot-Exclusion
 // ------------------------------------------------------------------
 fn bot_not_in_sql(start_idx: usize, col: &str, extra: &[String]) -> (String, Vec<String>) {
-    let all: Vec<String> = KNOWN_CHAT_BOTS.iter().map(|s| s.to_string())
+    let all: Vec<String> = KNOWN_CHAT_BOTS
+        .iter()
+        .map(|s| s.to_string())
         .chain(extra.iter().cloned())
         .collect();
     let placeholders: Vec<String> = (start_idx..start_idx + all.len())
@@ -113,20 +121,36 @@ pub async fn viewer_timeline_handler(
 
     let streamer = streamer_raw.trim().to_lowercase();
     if streamer.is_empty() {
-        return (StatusCode::BAD_REQUEST, Json(json!({"error":"Streamer required"}))).into_response();
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(json!({"error":"Streamer required"})),
+        )
+            .into_response();
     }
 
     let session_id = match params.session_id {
         Some(id) => id,
-        None => return (StatusCode::BAD_REQUEST, Json(json!({"error":"session_id required"}))).into_response(),
+        None => {
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(json!({"error":"session_id required"})),
+            )
+                .into_response()
+        }
     };
     let min_present_min = params.min_present_min.unwrap_or(0).max(0);
-    let segment_filter: Option<String> = params.segment
+    let segment_filter: Option<String> = params
+        .segment
         .as_deref()
         .map(str::trim)
         .filter(|s| !s.is_empty() && *s != "all")
         .map(str::to_lowercase);
-    let search_filter = params.search.as_deref().map(str::trim).unwrap_or("").to_lowercase();
+    let search_filter = params
+        .search
+        .as_deref()
+        .map(str::trim)
+        .unwrap_or("")
+        .to_lowercase();
     let limit = params.limit.unwrap_or(200).clamp(1, 1000);
 
     // 1. Session holen
@@ -148,15 +172,21 @@ pub async fn viewer_timeline_handler(
     let session_row = match session_row {
         Err(e) => {
             tracing::error!("viewer-timeline session lookup Fehler: {e}");
-            return (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({"error":"internal_error"}))).into_response();
+            return crate::auth::analytics_request_failed_json().into_response();
         }
-        Ok(None) => return (StatusCode::NOT_FOUND, Json(json!({"error":"Session not found"}))).into_response(),
+        Ok(None) => {
+            return (
+                StatusCode::NOT_FOUND,
+                Json(json!({"error":"Session not found"})),
+            )
+                .into_response()
+        }
         Ok(Some(r)) => r,
     };
 
     let session_start: DateTime<Utc> = match session_row.try_get("started_at") {
         Ok(ts) => ts,
-        Err(_) => return (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({"error":"Session start missing"}))).into_response(),
+        Err(_) => return crate::auth::analytics_request_failed_json().into_response(),
     };
     let session_duration_min: i32 = session_row.try_get("duration_min").unwrap_or(0).max(0);
 
@@ -189,9 +219,7 @@ pub async fn viewer_timeline_handler(
            ORDER BY viewer_login, start_min"#
     );
 
-    let mut span_q = sqlx::query(&span_sql)
-        .bind(session_id)
-        .bind(session_start);
+    let mut span_q = sqlx::query(&span_sql).bind(session_id).bind(session_start);
     for bot in &span_bots {
         span_q = span_q.bind(bot);
     }
@@ -199,13 +227,14 @@ pub async fn viewer_timeline_handler(
     let span_rows = match span_q.fetch_all(&pool).await {
         Err(e) => {
             tracing::error!("viewer-timeline spans Fehler: {e}");
-            return (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({"error":"internal_error"}))).into_response();
+            return crate::auth::analytics_request_failed_json().into_response();
         }
         Ok(r) => r,
     };
 
     // viewer_spans aufbauen
-    let mut viewer_spans: std::collections::HashMap<String, Vec<(i32, i32)>> = std::collections::HashMap::new();
+    let mut viewer_spans: std::collections::HashMap<String, Vec<(i32, i32)>> =
+        std::collections::HashMap::new();
     for row in &span_rows {
         let login: String = row.try_get("viewer_login").unwrap_or_default();
         if login.is_empty() {
@@ -217,7 +246,10 @@ pub async fn viewer_timeline_handler(
             start_min = start_min.min(session_duration_min);
             end_min = end_min.min(session_duration_min);
         }
-        viewer_spans.entry(login).or_default().push((start_min, end_min));
+        viewer_spans
+            .entry(login)
+            .or_default()
+            .push((start_min, end_min));
     }
 
     if viewer_spans.is_empty() {
@@ -227,7 +259,8 @@ pub async fn viewer_timeline_handler(
             "session_duration_min": session_duration_min,
             "viewers": [],
             "total_unique_tracked": 0,
-        })).into_response();
+        }))
+        .into_response();
     }
 
     // 3. Chat-Messages aus twitch_session_chatters
@@ -243,17 +276,23 @@ pub async fn viewer_timeline_handler(
         msg_q = msg_q.bind(bot);
     }
     let msg_rows = msg_q.fetch_all(&pool).await.unwrap_or_default();
-    let chat_by_viewer: std::collections::HashMap<String, i64> = msg_rows.iter()
+    let chat_by_viewer: std::collections::HashMap<String, i64> = msg_rows
+        .iter()
         .filter_map(|r| {
             let login: String = r.try_get("viewer_login").ok()?;
             let msgs: i64 = r.try_get("messages").unwrap_or(0);
-            if login.is_empty() { None } else { Some((login, msgs)) }
+            if login.is_empty() {
+                None
+            } else {
+                Some((login, msgs))
+            }
         })
         .collect();
 
     // 4. Viewer-Profile (aggregiert über alle Sessions)
     let viewer_logins: Vec<String> = viewer_spans.keys().cloned().collect();
-    let (prof_bot_clause, prof_bots) = bot_not_in_sql(3, "LOWER(sc.chatter_login)", &extra_excluded);
+    let (prof_bot_clause, prof_bots) =
+        bot_not_in_sql(3, "LOWER(sc.chatter_login)", &extra_excluded);
     let prof_sql = format!(
         r#"SELECT LOWER(sc.chatter_login) AS viewer_login,
                   COUNT(DISTINCT sc.session_id) AS total_sessions,
@@ -279,16 +318,22 @@ pub async fn viewer_timeline_handler(
         first_seen_at: Option<DateTime<Utc>>,
         last_seen_at: Option<DateTime<Utc>>,
     }
-    let profiles: std::collections::HashMap<String, Profile> = prof_rows.iter()
+    let profiles: std::collections::HashMap<String, Profile> = prof_rows
+        .iter()
         .filter_map(|r| {
             let login: String = r.try_get("viewer_login").ok()?;
-            if login.is_empty() { return None; }
-            Some((login, Profile {
-                total_sessions: r.try_get("total_sessions").unwrap_or(0),
-                total_messages: r.try_get("total_messages").unwrap_or(0),
-                first_seen_at: r.try_get("first_seen_at").ok(),
-                last_seen_at: r.try_get("last_seen_at").ok(),
-            }))
+            if login.is_empty() {
+                return None;
+            }
+            Some((
+                login,
+                Profile {
+                    total_sessions: r.try_get("total_sessions").unwrap_or(0),
+                    total_messages: r.try_get("total_messages").unwrap_or(0),
+                    first_seen_at: r.try_get("first_seen_at").ok(),
+                    last_seen_at: r.try_get("last_seen_at").ok(),
+                },
+            ))
         })
         .collect();
 
@@ -301,21 +346,26 @@ pub async fn viewer_timeline_handler(
             if !search_filter.is_empty() && !login.contains(&search_filter) {
                 return None;
             }
-            let total_present_min: i64 = spans.iter()
-                .map(|(s, e)| (e - s).max(0) as i64)
-                .sum();
+            let total_present_min: i64 = spans.iter().map(|(s, e)| (e - s).max(0) as i64).sum();
             if total_present_min < min_present_min {
                 return None;
             }
             let segment = profiles.get(&login).map(|p| {
-                classify_viewer(p.total_sessions, p.total_messages, p.first_seen_at, p.last_seen_at, now)
+                classify_viewer(
+                    p.total_sessions,
+                    p.total_messages,
+                    p.first_seen_at,
+                    p.last_seen_at,
+                    now,
+                )
             });
             if let Some(sf) = &segment_filter {
                 if segment != Some(sf.as_str()) {
                     return None;
                 }
             }
-            let spans_json: Vec<serde_json::Value> = spans.iter()
+            let spans_json: Vec<serde_json::Value> = spans
+                .iter()
                 .map(|(s, e)| json!({"start_min": s, "end_min": e}))
                 .collect();
             let chat_messages = *chat_by_viewer.get(&login).unwrap_or(&0);
@@ -331,11 +381,10 @@ pub async fn viewer_timeline_handler(
         .collect();
 
     // sort: by (-present_min, -chat_messages, login)
-    result_viewers.sort_by(|a, b| {
-        a.0.cmp(&b.0).then(a.1.cmp(&b.1)).then(a.2.cmp(&b.2))
-    });
+    result_viewers.sort_by(|a, b| a.0.cmp(&b.0).then(a.1.cmp(&b.1)).then(a.2.cmp(&b.2)));
     let total_unique = result_viewers.len();
-    let viewers: Vec<serde_json::Value> = result_viewers.into_iter()
+    let viewers: Vec<serde_json::Value> = result_viewers
+        .into_iter()
         .take(limit as usize)
         .map(|(_, _, _, v)| v)
         .collect();
@@ -346,7 +395,8 @@ pub async fn viewer_timeline_handler(
         "session_duration_min": session_duration_min,
         "viewers": viewers,
         "total_unique_tracked": total_unique,
-    })).into_response()
+    }))
+    .into_response()
 }
 
 // ------------------------------------------------------------------
@@ -365,18 +415,37 @@ pub async fn viewer_timeline_profile_handler(
     }
 
     let streamer = streamer_raw.trim().to_lowercase();
-    let login = match params.login.as_deref().map(str::trim).filter(|s| !s.is_empty()) {
+    let login = match params
+        .login
+        .as_deref()
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+    {
         Some(l) => l.to_lowercase(),
-        None => return (StatusCode::BAD_REQUEST, Json(json!({"error":"streamer and login required"}))).into_response(),
+        None => {
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(json!({"error":"streamer and login required"})),
+            )
+                .into_response()
+        }
     };
 
     if streamer.is_empty() {
-        return (StatusCode::BAD_REQUEST, Json(json!({"error":"streamer and login required"}))).into_response();
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(json!({"error":"streamer and login required"})),
+        )
+            .into_response();
     }
 
     // Bekannte Bots → 404
     if KNOWN_CHAT_BOTS.contains(&login.as_str()) || login == streamer {
-        return (StatusCode::NOT_FOUND, Json(json!({"error":"Viewer not found"}))).into_response();
+        return (
+            StatusCode::NOT_FOUND,
+            Json(json!({"error":"Viewer not found"})),
+        )
+            .into_response();
     }
 
     // CTE: alle Sessions in denen der Viewer präsent war (Ticks oder Chat)
@@ -441,25 +510,29 @@ pub async fn viewer_timeline_profile_handler(
     match rows {
         Err(e) => {
             tracing::error!("viewer-timeline/profile DB-Fehler: {e}");
-            (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({"error":"internal_error"}))).into_response()
+            crate::auth::analytics_request_failed_json().into_response()
         }
         Ok(rows) => {
-            let sessions: Vec<serde_json::Value> = rows.iter().map(|r| {
-                let started_at: Option<DateTime<Utc>> = r.try_get("started_at").ok();
-                json!({
-                    "session_id": r.try_get::<i64, _>("session_id").unwrap_or(0),
-                    "started_at": started_at.map(|t| t.to_rfc3339()),
-                    "total_present_min": r.try_get::<i64, _>("total_present_min").unwrap_or(0),
-                    "chat_messages": r.try_get::<i64, _>("chat_messages").unwrap_or(0),
+            let sessions: Vec<serde_json::Value> = rows
+                .iter()
+                .map(|r| {
+                    let started_at: Option<DateTime<Utc>> = r.try_get("started_at").ok();
+                    json!({
+                        "session_id": r.try_get::<i64, _>("session_id").unwrap_or(0),
+                        "started_at": started_at.map(|t| t.to_rfc3339()),
+                        "total_present_min": r.try_get::<i64, _>("total_present_min").unwrap_or(0),
+                        "chat_messages": r.try_get::<i64, _>("chat_messages").unwrap_or(0),
+                    })
                 })
-            }).collect();
+                .collect();
             let total_sessions = sessions.len();
             Json(json!({
                 "streamer": streamer,
                 "login": login,
                 "sessions": sessions,
                 "total_sessions": total_sessions,
-            })).into_response()
+            }))
+            .into_response()
         }
     }
 }
@@ -494,10 +567,23 @@ mod tests {
     }
 
     async fn make_plan_pool(dsn: &str, schema: &str) -> PgPool {
-        let pool = PgPoolOptions::new().max_connections(1).connect(dsn).await.unwrap();
-        sqlx::query(&format!("DROP SCHEMA IF EXISTS {schema} CASCADE")).execute(&pool).await.unwrap();
-        sqlx::query(&format!("CREATE SCHEMA {schema}")).execute(&pool).await.unwrap();
-        sqlx::query(&format!("SET search_path TO {schema}")).execute(&pool).await.unwrap();
+        let pool = PgPoolOptions::new()
+            .max_connections(1)
+            .connect(dsn)
+            .await
+            .unwrap();
+        sqlx::query(&format!("DROP SCHEMA IF EXISTS {schema} CASCADE"))
+            .execute(&pool)
+            .await
+            .unwrap();
+        sqlx::query(&format!("CREATE SCHEMA {schema}"))
+            .execute(&pool)
+            .await
+            .unwrap();
+        sqlx::query(&format!("SET search_path TO {schema}"))
+            .execute(&pool)
+            .await
+            .unwrap();
         sqlx::query(
             r#"CREATE TABLE streamer_plans (
                    twitch_user_id TEXT,
@@ -506,7 +592,10 @@ mod tests {
                    manual_plan_expires_at TEXT,
                    manual_plan_updated_at TIMESTAMPTZ
                )"#,
-        ).execute(&pool).await.unwrap();
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
         sqlx::query(
             r#"CREATE TABLE twitch_billing_subscriptions (
                    customer_reference TEXT,
@@ -515,15 +604,31 @@ mod tests {
                    current_period_end TEXT,
                    updated_at TIMESTAMPTZ
                )"#,
-        ).execute(&pool).await.unwrap();
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
         pool
     }
 
     async fn make_timeline_pool(dsn: &str, schema: &str) -> PgPool {
-        let pool = PgPoolOptions::new().max_connections(1).connect(dsn).await.unwrap();
-        sqlx::query(&format!("DROP SCHEMA IF EXISTS {schema} CASCADE")).execute(&pool).await.unwrap();
-        sqlx::query(&format!("CREATE SCHEMA {schema}")).execute(&pool).await.unwrap();
-        sqlx::query(&format!("SET search_path TO {schema}")).execute(&pool).await.unwrap();
+        let pool = PgPoolOptions::new()
+            .max_connections(1)
+            .connect(dsn)
+            .await
+            .unwrap();
+        sqlx::query(&format!("DROP SCHEMA IF EXISTS {schema} CASCADE"))
+            .execute(&pool)
+            .await
+            .unwrap();
+        sqlx::query(&format!("CREATE SCHEMA {schema}"))
+            .execute(&pool)
+            .await
+            .unwrap();
+        sqlx::query(&format!("SET search_path TO {schema}"))
+            .execute(&pool)
+            .await
+            .unwrap();
         sqlx::query(
             r#"CREATE TABLE twitch_stream_sessions (
                    id BIGSERIAL PRIMARY KEY,
@@ -532,7 +637,10 @@ mod tests {
                    ended_at TIMESTAMPTZ,
                    duration_seconds BIGINT
                )"#,
-        ).execute(&pool).await.unwrap();
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
         sqlx::query(
             r#"CREATE TABLE twitch_viewer_presence_ticks (
                    session_id BIGINT NOT NULL,
@@ -540,7 +648,10 @@ mod tests {
                    viewer_login TEXT NOT NULL,
                    tick_at TIMESTAMPTZ NOT NULL
                )"#,
-        ).execute(&pool).await.unwrap();
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
         sqlx::query(
             r#"CREATE TABLE twitch_session_chatters (
                    session_id BIGINT NOT NULL,
@@ -548,12 +659,17 @@ mod tests {
                    chatter_login TEXT NOT NULL,
                    messages INTEGER DEFAULT 0
                )"#,
-        ).execute(&pool).await.unwrap();
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
         pool
     }
 
     async fn json_body(resp: axum::response::Response) -> serde_json::Value {
-        let bytes = axum::body::to_bytes(resp.into_body(), 1 << 16).await.unwrap();
+        let bytes = axum::body::to_bytes(resp.into_body(), 1 << 16)
+            .await
+            .unwrap();
         serde_json::from_slice(&bytes).unwrap()
     }
 
@@ -583,7 +699,11 @@ mod tests {
         )
         .await
         .into_response();
-        assert_eq!(resp.status(), StatusCode::FORBIDDEN, "Free-Partner muss 403 erhalten");
+        assert_eq!(
+            resp.status(),
+            StatusCode::FORBIDDEN,
+            "Free-Partner muss 403 erhalten"
+        );
     }
 
     #[tokio::test]
@@ -594,11 +714,17 @@ mod tests {
             free_partner(),
             Path("host".to_string()),
             State(pool),
-            Query(ViewerProfileQuery { login: Some("someviewer".into()) }),
+            Query(ViewerProfileQuery {
+                login: Some("someviewer".into()),
+            }),
         )
         .await
         .into_response();
-        assert_eq!(resp.status(), StatusCode::FORBIDDEN, "Free-Partner muss 403 erhalten");
+        assert_eq!(
+            resp.status(),
+            StatusCode::FORBIDDEN,
+            "Free-Partner muss 403 erhalten"
+        );
     }
 
     #[tokio::test]
@@ -608,7 +734,10 @@ mod tests {
         sqlx::query(
             "INSERT INTO twitch_stream_sessions (id, streamer_login, started_at, ended_at) \
              VALUES (100, 'host', '2026-06-23T10:00:00Z', '2026-06-23T11:00:00Z')",
-        ).execute(&pool).await.unwrap();
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
         sqlx::query(
             "INSERT INTO twitch_viewer_presence_ticks (session_id, streamer_login, viewer_login, tick_at) \
              VALUES \
@@ -643,7 +772,9 @@ mod tests {
             DashboardAuthLevel::admin(),
             Path("host".to_string()),
             State(pool),
-            Query(ViewerProfileQuery { login: Some("viewer1".to_string()) }),
+            Query(ViewerProfileQuery {
+                login: Some("viewer1".to_string()),
+            }),
         )
         .await
         .into_response();

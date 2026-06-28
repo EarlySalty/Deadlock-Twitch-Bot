@@ -6,16 +6,19 @@
 
 use axum::{
     extract::{Query, State},
-    http::StatusCode,
     response::IntoResponse,
     Json,
 };
 use serde::Deserialize;
-use serde_json::json;
 use sqlx::PgPool;
 
 use crate::auth::level::DashboardAuthLevel;
 use crate::query_int::parse_bounded_query_int;
+
+#[cfg(test)]
+use axum::http::StatusCode;
+#[cfg(test)]
+use serde_json::json;
 
 #[derive(Deserialize)]
 pub struct MonetizationQuery {
@@ -53,11 +56,7 @@ pub async fn monetization_handler(
         Ok(v) => Json(v).into_response(),
         Err(e) => {
             tracing::error!("monetization SELECT-Fehler: {e}");
-            (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(json!({ "error": "internal" })),
-            )
-                .into_response()
+            crate::auth::analytics_request_failed_json().into_response()
         }
     }
 }

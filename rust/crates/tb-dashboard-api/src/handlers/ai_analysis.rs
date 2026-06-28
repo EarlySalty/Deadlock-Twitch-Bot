@@ -55,7 +55,7 @@ pub async fn ai_analysis_handler(
 ) -> impl IntoResponse {
     // _require_v2_auth: jede gültige Auth genügt, None → 401.
     if matches!(auth, DashboardAuthLevel::None) {
-        return json_err(StatusCode::UNAUTHORIZED, json!({ "error": "unauthorized" }));
+        return crate::auth::unauthorized_v2_response();
     }
     AI_STATE.lock().unwrap().cleanup(Utc::now());
 

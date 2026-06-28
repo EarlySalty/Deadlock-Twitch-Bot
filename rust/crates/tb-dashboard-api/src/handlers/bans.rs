@@ -2,6 +2,7 @@
 
 use axum::{extract::State, http::StatusCode, response::IntoResponse, Json};
 use serde::Serialize;
+use serde_json::json;
 use sqlx::PgPool;
 use tb_analytics::bans::{recent_bans, BanRow};
 
@@ -11,8 +12,8 @@ use tb_analytics::bans::{recent_bans, BanRow};
 #[derive(Serialize)]
 pub struct BanRowJson {
     pub target_login: String,
-    pub moderator_login: Option<String>,
-    pub reason: Option<String>,
+    pub moderator_login: String,
+    pub reason: String,
     pub received_at: Option<String>,
 }
 
@@ -20,8 +21,8 @@ impl From<BanRow> for BanRowJson {
     fn from(r: BanRow) -> Self {
         Self {
             target_login: r.target_login,
-            moderator_login: r.moderator_login,
-            reason: r.reason,
+            moderator_login: r.moderator_login.unwrap_or_default(),
+            reason: r.reason.unwrap_or_default(),
             received_at: r.received_at,
         }
     }
@@ -58,7 +59,11 @@ pub async fn recent_bans_handler(State(pool): State<PgPool>) -> impl IntoRespons
         }
         Err(e) => {
             tracing::error!("recent_bans Query-Fehler: {e}");
-            StatusCode::INTERNAL_SERVER_ERROR.into_response()
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(json!({ "error": "internal_error" })),
+            )
+                .into_response()
         }
     }
 }
@@ -84,9 +89,7 @@ mod tests {
                 Some(d) => d,
                 None => {
                     if std::env::var("TB_TEST_REQUIRE_DB").as_deref() == Ok("1") {
-                        panic!(
-                            "TB_TEST_REQUIRE_DB=1 ist gesetzt, aber TB_TEST_DATABASE_URL fehlt"
-                        );
+                        panic!("TB_TEST_REQUIRE_DB=1 ist gesetzt, aber TB_TEST_DATABASE_URL fehlt");
                     }
                     eprintln!("SKIP: TB_TEST_DATABASE_URL nicht gesetzt");
                     return;
@@ -179,7 +182,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn bans_endpoint_null_felder_korrekt() {
+    async fn bans_endpoint_null_felder_werden_leere_strings() {
         let dsn = db_dsn_or_skip!();
         let pool = make_pool(&dsn, "api_bans_null").await;
 
@@ -203,11 +206,8 @@ mod tests {
 
         let ban = &json["bans"][0];
         assert_eq!(ban["target_login"], "null_user");
-        assert!(
-            ban["moderator_login"].is_null(),
-            "moderator_login muss null sein"
-        );
-        assert!(ban["reason"].is_null(), "reason muss null sein");
+        assert_eq!(ban["moderator_login"], "");
+        assert_eq!(ban["reason"], "");
         assert!(ban["received_at"].is_null(), "received_at muss null sein");
     }
 }

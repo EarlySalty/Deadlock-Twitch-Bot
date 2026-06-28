@@ -36,11 +36,7 @@ pub async fn chat_analytics_handler(
 ) -> impl IntoResponse {
     // _require_v2_auth: jede gültige v2-Auth genügt, None → 401.
     if matches!(auth, DashboardAuthLevel::None) {
-        return (
-            StatusCode::UNAUTHORIZED,
-            Json(json!({ "error": "unauthorized" })),
-        )
-            .into_response();
+        return crate::auth::unauthorized_v2_response();
     }
     // days VOR streamer-Pflicht (Python-Reihenfolge in _api_v2_chat_analytics).
     let days = match parse_bounded_query_int(params.days.as_deref(), "days", 30, 7, 365) {
@@ -72,11 +68,7 @@ pub async fn chat_analytics_handler(
         Ok(v) => Json(v).into_response(),
         Err(e) => {
             tracing::error!("chat-analytics Fehler: {e}");
-            (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(json!({ "error": "internal" })),
-            )
-                .into_response()
+            crate::auth::analytics_request_failed_json().into_response()
         }
     }
 }

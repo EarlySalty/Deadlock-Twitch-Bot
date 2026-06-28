@@ -62,11 +62,7 @@ pub async fn watch_time_distribution_handler(
 ) -> impl IntoResponse {
     // _require_v2_auth: jede gültige v2-Auth genügt, None → 401.
     if matches!(auth, DashboardAuthLevel::None) {
-        return (
-            StatusCode::UNAUTHORIZED,
-            Json(json!({ "error": "unauthorized" })),
-        )
-            .into_response();
+        return crate::auth::unauthorized_v2_response();
     }
     // IDOR-Guard: Partner werden auf den eigenen Login geklemmt (fremder
     // ?streamer= → 403); Admin/Localhost dürfen frei wählen. streamer Pflicht.
@@ -91,11 +87,7 @@ pub async fn watch_time_distribution_handler(
         Ok(v) => Json(v).into_response(),
         Err(e) => {
             tracing::error!("watch-time-distribution Fehler: {e}");
-            (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(json!({ "error": "internal" })),
-            )
-                .into_response()
+            crate::auth::analytics_request_failed_json().into_response()
         }
     }
 }

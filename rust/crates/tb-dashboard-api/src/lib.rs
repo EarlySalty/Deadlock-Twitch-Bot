@@ -8,11 +8,12 @@ pub mod ai_state;
 pub mod auth;
 pub mod handlers;
 pub mod process_info;
-pub mod query_int;
 /// Strangler-Fig-Fallback-Proxy (→ Python 8765), siehe Modul-Doku.
 pub mod proxy;
+pub mod query_int;
 
 pub use auth::csrf::csrf_protect;
+pub use auth::discord_admin_login::{discord_admin_login_config_from_env, DiscordAdminLoginConfig};
 pub use auth::level::DashboardAuthLevel;
 pub use auth::oauth_login::{HelixOAuthClient, TwitchIdentity, TwitchOAuthClient};
 pub use auth::security::{require_internal, RateLimiter};
@@ -20,9 +21,6 @@ pub use auth::session::{
     build_session_cookie, clear_session_cookie, DashboardAuthState, OAuthLoginState, SameSite,
     SessionCreation, ADMIN_COOKIE_NAME, OAUTH_STATE_SESSION_TYPE, OAUTH_STATE_TTL_SECS,
     PARTNER_COOKIE_NAME, SESSION_CREATE_TTL_SECS,
-};
-pub use auth::discord_admin_login::{
-    discord_admin_login_config_from_env, DiscordAdminLoginConfig,
 };
 pub use handlers::auth_login::{oauth_login_config_from_env, OAuthLoginConfig};
 pub use handlers::billing_page::{billing_page_config_from_env, BillingPageConfig};
@@ -75,9 +73,12 @@ fn security_header_layers() -> [SetResponseHeaderLayer<HeaderValue>; 5] {
 /// (`api_public.py:52-58`). Authed/Admin-Routen bleiben ohne CORS-Header,
 /// sonst wäre die Token-API cross-origin per Browser ansprechbar.
 pub fn build_public_router(pool: PgPool) -> Router {
-    use handlers::{bans, network, overlay, raids, self_explainer, social_media};
+    use handlers::{bans, health_probe, network, overlay, raids, self_explainer, social_media};
 
     Router::new()
+        .route("/healthz", get(health_probe::healthz_handler))
+        .route("/readyz", get(health_probe::readyz_handler))
+        .route("/health", get(health_probe::readyz_handler))
         .route(
             "/twitch/api/v2/public/recent-bans",
             get(bans::recent_bans_handler),
@@ -107,8 +108,14 @@ pub fn build_public_router(pool: PgPool) -> Router {
         .route("/social-media/terms", get(social_media::terms_handler))
         .route("/social-media/privacy", get(social_media::privacy_handler))
         // OAuth-Callback — öffentlich (Provider-Redirect, Security via State-Token).
-        .route("/social-media/oauth/callback", get(social_media::oauth_callback_handler))
-        .route("/social-media/oauth/callback/:platform", get(social_media::oauth_callback_handler))
+        .route(
+            "/social-media/oauth/callback",
+            get(social_media::oauth_callback_handler),
+        )
+        .route(
+            "/social-media/oauth/callback/:platform",
+            get(social_media::oauth_callback_handler),
+        )
         .with_state(pool)
         .layer(CorsLayer::permissive())
 }
@@ -118,8 +125,19 @@ pub fn build_public_router(pool: PgPool) -> Router {
 /// Auth-Level wird per Extension eingesetzt — `AuthLevel` als `FromRequestParts`
 /// liest den Token selbst aus der Extension.
 pub fn build_authed_router(pool: PgPool, token: String, rate_limiter: RateLimiter) -> Router {
-    use handlers::{ads_schedule, affiliate_portal, ai_analysis, ai_chat, ai_history, audience, audience_demographics, auth_status, billing, category_activity, category_comparison, category_leaderboard, category_timings, chat_analytics, chat_content_analysis, chat_deep_minimax, chat_hype_timeline, chat_social_graph, coaching, engagement_mode, engagement_settings, exp_analytics, follower_funnel, internal_home, leaderboard, loyalty_curve, lurker_analysis, lurker_tax_settings, monetization, onboarding, overview, performance, raid_analytics, raid_history, rankings, retention_curve, scam_guard_queue, scam_guard_settings, session_detail, silent_settings, social_media, spa, stream_report, streamers, tag_analysis, tip_settings, title, title_performance, viewer_timeline, viewers, watch_time};
     use handlers::scam_guard_enforce;
+    use handlers::{
+        ads_schedule, affiliate_portal, ai_analysis, ai_chat, ai_history, audience,
+        audience_demographics, auth_status, billing, category_activity, category_comparison,
+        category_leaderboard, category_timings, chat_analytics, chat_content_analysis,
+        chat_deep_minimax, chat_hype_timeline, chat_social_graph, coaching, engagement_mode,
+        engagement_settings, exp_analytics, follower_funnel, internal_home, leaderboard,
+        loyalty_curve, lurker_analysis, lurker_tax_settings, monetization, onboarding, overview,
+        performance, raid_analytics, raid_history, rankings, retention_curve, scam_guard_queue,
+        scam_guard_settings, session_detail, silent_settings, social_media, spa, stream_report,
+        streamers, tag_analysis, tip_settings, title, title_performance, viewer_timeline, viewers,
+        watch_time,
+    };
 
     // P2.86: Rate-Limit-Layer für die gebündelte Internal-Home-Startseite (GET +
     // Changelog-POST). Bucket "internal_home", 60 Requests/60 s pro Client-IP.
@@ -135,44 +153,101 @@ pub fn build_authed_router(pool: PgPool, token: String, rate_limiter: RateLimite
         // Social-Media Read-API (scope-gefiltert).
         .route("/social-media/api/stats", get(social_media::stats_handler))
         .route("/social-media/api/clips", get(social_media::clips_handler))
-        .route("/social-media/api/last-hashtags", get(social_media::last_hashtags_handler))
+        .route(
+            "/social-media/api/last-hashtags",
+            get(social_media::last_hashtags_handler),
+        )
         // Analytics-Ansicht (identisch zu stats) + Queue-Upload.
-        .route("/social-media/api/analytics", get(social_media::stats_handler))
-        .route("/social-media/api/upload", post(social_media::queue_upload_handler))
-        .route("/social-media/api/mark-uploaded", post(social_media::mark_uploaded_handler))
-        .route("/social-media/api/batch-upload", post(social_media::batch_upload_handler))
-        .route("/social-media/api/fetch-clips", post(social_media::fetch_clips_handler))
+        .route(
+            "/social-media/api/analytics",
+            get(social_media::stats_handler),
+        )
+        .route(
+            "/social-media/api/upload",
+            post(social_media::queue_upload_handler),
+        )
+        .route(
+            "/social-media/api/mark-uploaded",
+            post(social_media::mark_uploaded_handler),
+        )
+        .route(
+            "/social-media/api/batch-upload",
+            post(social_media::batch_upload_handler),
+        )
+        .route(
+            "/social-media/api/fetch-clips",
+            post(social_media::fetch_clips_handler),
+        )
         // Multipart-Datei-Upload — eigenes 201MB-Body-Limit (Default ist 2MB).
         .route(
             "/social-media/api/clips/upload",
-            post(social_media::upload_clip_handler).layer(axum::extract::DefaultBodyLimit::max(201 * 1024 * 1024)),
+            post(social_media::upload_clip_handler)
+                .layer(axum::extract::DefaultBodyLimit::max(201 * 1024 * 1024)),
         )
         // Templates: globale + Streamer-Listen (GET), anlegen + anwenden (POST).
-        .route("/social-media/api/templates/global", get(social_media::templates_global_handler))
-        .route("/social-media/api/templates/streamer", get(social_media::templates_streamer_handler).post(social_media::create_template_handler))
-        .route("/social-media/api/templates/apply", post(social_media::apply_template_handler))
+        .route(
+            "/social-media/api/templates/global",
+            get(social_media::templates_global_handler),
+        )
+        .route(
+            "/social-media/api/templates/streamer",
+            get(social_media::templates_streamer_handler)
+                .post(social_media::create_template_handler),
+        )
+        .route(
+            "/social-media/api/templates/apply",
+            post(social_media::apply_template_handler),
+        )
         // Layout-CRUD (Admin): Streamer-Default + Clip-Override.
         .route(
             "/social-media/api/admin/streamer-layout",
-            get(social_media::streamer_layout_get_handler).put(social_media::streamer_layout_put_handler),
+            get(social_media::streamer_layout_get_handler)
+                .put(social_media::streamer_layout_put_handler),
         )
-        .route("/social-media/api/admin/clips/:clip_db_id/layout", axum::routing::put(social_media::clip_layout_put_handler))
+        .route(
+            "/social-media/api/admin/clips/:clip_db_id/layout",
+            axum::routing::put(social_media::clip_layout_put_handler),
+        )
         // Vocab-CRUD (Admin): Liste/Upsert, Löschen, Seed.
         .route(
             "/social-media/api/admin/vocab",
             get(social_media::vocab_list_handler).post(social_media::vocab_upsert_handler),
         )
-        .route("/social-media/api/admin/vocab/seed", post(social_media::vocab_seed_handler))
-        .route("/social-media/api/admin/vocab/:term", axum::routing::delete(social_media::vocab_delete_handler))
+        .route(
+            "/social-media/api/admin/vocab/seed",
+            post(social_media::vocab_seed_handler),
+        )
+        .route(
+            "/social-media/api/admin/vocab/:term",
+            axum::routing::delete(social_media::vocab_delete_handler),
+        )
         // Plattform-Verbindungsstatus (verschlüsselte Credentials).
-        .route("/social-media/api/platforms/status", get(social_media::platforms_status_handler))
+        .route(
+            "/social-media/api/platforms/status",
+            get(social_media::platforms_status_handler),
+        )
         // Admin-Clips: paginierte Liste, Detail, Verwerfen.
-        .route("/social-media/api/admin/clips", get(social_media::admin_clips_handler))
-        .route("/social-media/api/admin/clips/:clip_db_id", get(social_media::admin_clip_detail_handler))
-        .route("/social-media/api/admin/clips/:clip_db_id/discard", post(social_media::admin_clip_discard_handler))
+        .route(
+            "/social-media/api/admin/clips",
+            get(social_media::admin_clips_handler),
+        )
+        .route(
+            "/social-media/api/admin/clips/:clip_db_id",
+            get(social_media::admin_clip_detail_handler),
+        )
+        .route(
+            "/social-media/api/admin/clips/:clip_db_id/discard",
+            post(social_media::admin_clip_discard_handler),
+        )
         // Approval-State + Entscheidung, Auto-Approve-Settings (Admin).
-        .route("/social-media/api/admin/approval/:clip_db_id", get(social_media::approval_get_handler))
-        .route("/social-media/api/admin/approval/:clip_db_id/decision", post(social_media::approval_decision_handler))
+        .route(
+            "/social-media/api/admin/approval/:clip_db_id",
+            get(social_media::approval_get_handler),
+        )
+        .route(
+            "/social-media/api/admin/approval/:clip_db_id/decision",
+            post(social_media::approval_decision_handler),
+        )
         .route(
             "/social-media/api/admin/settings/auto-approve",
             get(social_media::auto_approve_get_handler).put(social_media::auto_approve_put_handler),
@@ -186,12 +261,27 @@ pub fn build_authed_router(pool: PgPool, token: String, rate_limiter: RateLimite
             "/social-media/api/admin/clips/:clip_db_id/enrichment/run",
             post(social_media::enrichment_run_handler),
         )
-        .route("/social-media/api/admin/analytics/clips/:clip_db_id", get(social_media::clip_analytics_get_handler))
-        .route("/social-media/api/admin/reports", get(social_media::reports_list_handler))
-        .route("/social-media/api/admin/reports/run", post(social_media::reports_run_handler))
+        .route(
+            "/social-media/api/admin/analytics/clips/:clip_db_id",
+            get(social_media::clip_analytics_get_handler),
+        )
+        .route(
+            "/social-media/api/admin/reports",
+            get(social_media::reports_list_handler),
+        )
+        .route(
+            "/social-media/api/admin/reports/run",
+            post(social_media::reports_run_handler),
+        )
         // OAuth-Start + Disconnect (Auth erforderlich).
-        .route("/social-media/oauth/start/:platform", get(social_media::oauth_start_handler))
-        .route("/social-media/oauth/disconnect/:platform", post(social_media::oauth_disconnect_handler))
+        .route(
+            "/social-media/oauth/start/:platform",
+            get(social_media::oauth_start_handler),
+        )
+        .route(
+            "/social-media/oauth/disconnect/:platform",
+            post(social_media::oauth_disconnect_handler),
+        )
         // Internal-Home: gebündelte Dashboard-Startseite (Profil, KPIs, Bot-Events,
         // Changelog). GET liest, POST legt einen Changelog-Eintrag an (Admin-only).
         .route(
@@ -313,10 +403,7 @@ pub fn build_authed_router(pool: PgPool, token: String, rate_limiter: RateLimite
             "/twitch/raid/history",
             get(raid_history::raid_history_handler),
         )
-        .route(
-            "/twitch/api/v2/title/suggest",
-            post(title::suggest_handler),
-        )
+        .route("/twitch/api/v2/title/suggest", post(title::suggest_handler))
         .route(
             "/twitch/api/v2/title/insights",
             get(title::insights_handler),
@@ -366,10 +453,7 @@ pub fn build_authed_router(pool: PgPool, token: String, rate_limiter: RateLimite
             "/twitch/api/v2/viewer-timeline",
             get(performance::viewer_count_timeline_handler),
         )
-        .route(
-            "/twitch/api/v2/rankings",
-            get(rankings::rankings_handler),
-        )
+        .route("/twitch/api/v2/rankings", get(rankings::rankings_handler))
         // B13-2: Web-Leaderboard (Ersatz für den gedroppten Discord-!twl).
         .route(
             "/twitch/api/v2/leaderboard",
@@ -459,10 +543,7 @@ pub fn build_authed_router(pool: PgPool, token: String, rate_limiter: RateLimite
             "/twitch/api/v2/chat-content-analysis",
             get(chat_content_analysis::chat_content_analysis_handler),
         )
-        .route(
-            "/twitch/api/v2/coaching",
-            get(coaching::coaching_handler),
-        )
+        .route("/twitch/api/v2/coaching", get(coaching::coaching_handler))
         .route(
             "/twitch/api/v2/chat-deep-minimax",
             get(chat_deep_minimax::chat_deep_minimax_handler),
@@ -479,10 +560,7 @@ pub fn build_authed_router(pool: PgPool, token: String, rate_limiter: RateLimite
             "/twitch/api/v2/ai/analysis",
             get(ai_analysis::ai_analysis_handler),
         )
-        .route(
-            "/twitch/api/v2/ai/chat",
-            post(ai_chat::ai_chat_handler),
-        )
+        .route("/twitch/api/v2/ai/chat", post(ai_chat::ai_chat_handler))
         .route(
             "/twitch/api/v2/audience-demographics",
             get(audience_demographics::audience_demographics_handler),
@@ -548,7 +626,9 @@ pub fn build_authed_router(pool: PgPool, token: String, rate_limiter: RateLimite
         .route("/analyse/*path", get(spa::analyse_assets_handler))
         .with_state(pool)
         .layer(Extension(ExpectedToken(token)))
-        .layer(axum::middleware::from_fn(crate::auth::partner_gate::partner_status_gate))
+        .layer(axum::middleware::from_fn(
+            crate::auth::partner_gate::partner_status_gate,
+        ))
         // CSRF auf allen Write-Actions des authed-Routers (Grillme-Direktive
         // "CSRF auf allen Write-Actions"). Header-basierter csrf_protect lässt
         // GET/HEAD + Localhost (interne Loopback-Tools, z. B. Changelog-Spiegelung)
@@ -587,10 +667,7 @@ pub fn build_admin_system_router(pool: PgPool, token: String) -> Router {
         )
         // P2.77/P2.81: Read-only Admin-SQL-Konsole (SELECT-only, Blocklist,
         // READ-ONLY-Transaktion, LIMIT 200).
-        .route(
-            "/twitch/api/admin/system/query",
-            get(query::query_handler),
-        )
+        .route("/twitch/api/admin/system/query", get(query::query_handler))
         .with_state(pool)
         .layer(Extension(ExpectedToken(token)))
 }
@@ -646,10 +723,7 @@ pub fn build_admin_config_router(pool: PgPool, token: String) -> Router {
             "/twitch/api/admin/config/overview",
             get(admin_config::config_overview_handler),
         )
-        .route(
-            "/twitch/api/admin/audit-log",
-            get(admin_audit_log::handler),
-        )
+        .route("/twitch/api/admin/audit-log", get(admin_audit_log::handler))
         .route(
             "/twitch/api/admin/affiliates/stats",
             get(admin_affiliate::stats_handler),
@@ -725,8 +799,8 @@ pub fn build_admin_config_router(pool: PgPool, token: String) -> Router {
 /// fallen. `DashboardAuthState` + `OAuthLoginConfig` kommen als globale
 /// Extensions aus der `tb-dashboard`-main (s. dort).
 pub fn build_auth_router(rate_limiter: RateLimiter) -> Router {
-    use handlers::auth_login;
     use auth::discord_admin_login;
+    use handlers::auth_login;
 
     // P2.138: Login-Bucket (30/60 s). P2.140: Callback-Bucket (30/60 s) — die
     // beiden Callback-Routen teilen sich denselben Bucket. Layer pro Route, damit
@@ -779,21 +853,17 @@ pub fn build_auth_router(rate_limiter: RateLimiter) -> Router {
         )
         .route(
             "/twitch/auth/discord/complete",
-            get(discord_admin_login::complete_handler).layer(
-                axum::middleware::from_fn_with_state(
-                    discord_callback_rl.clone(),
-                    rate_limit_middleware,
-                ),
-            ),
+            get(discord_admin_login::complete_handler).layer(axum::middleware::from_fn_with_state(
+                discord_callback_rl.clone(),
+                rate_limit_middleware,
+            )),
         )
         .route(
             "/twitch/auth/discord/callback",
-            get(discord_admin_login::complete_handler).layer(
-                axum::middleware::from_fn_with_state(
-                    discord_callback_rl,
-                    rate_limit_middleware,
-                ),
-            ),
+            get(discord_admin_login::complete_handler).layer(axum::middleware::from_fn_with_state(
+                discord_callback_rl,
+                rate_limit_middleware,
+            )),
         )
         .route(
             "/twitch/auth/discord/logout",
@@ -900,14 +970,8 @@ pub fn build_admin_legacy_forms_router(pool: PgPool) -> Router {
         )
         // Admin-Bare-Form-Pfade aus der Python-Live-Tabelle
         // (`bot/dashboard/live/live.py`): weiterhin von Legacy-HTML/Client genutzt.
-        .route(
-            "/twitch/verify",
-            post(admin_form_aliases::verify_handler),
-        )
-        .route(
-            "/twitch/archive",
-            post(admin_form_aliases::archive_handler),
-        )
+        .route("/twitch/verify", post(admin_form_aliases::verify_handler))
+        .route("/twitch/archive", post(admin_form_aliases::archive_handler))
         .route(
             "/twitch/discord_flag",
             post(admin_form_aliases::discord_flag_handler),
@@ -948,8 +1012,14 @@ pub fn build_entry_admin_router() -> Router {
         .route("/twitch", get(admin_spa::twitch_index_handler))
         .route("/twitch/", get(admin_spa::twitch_index_handler))
         .route("/twitch/stats", get(admin_spa::dashboard_redirect_handler))
-        .route("/twitch/dashboards", get(admin_spa::dashboard_redirect_handler))
-        .route("/twitch/dashboads", get(admin_spa::dashboard_redirect_handler))
+        .route(
+            "/twitch/dashboards",
+            get(admin_spa::dashboard_redirect_handler),
+        )
+        .route(
+            "/twitch/dashboads",
+            get(admin_spa::dashboard_redirect_handler),
+        )
         .route("/dashboards", get(admin_spa::dashboard_redirect_handler))
         .route("/dashboads", get(admin_spa::dashboard_redirect_handler))
         // Admin-SPA: Shell + Deep-Link-Fallback + Assets.
@@ -1136,23 +1206,21 @@ pub fn build_affiliate_portal_router() -> Router {
     )
 }
 
-/// Baut den Router für den Social-Media-Admin-Legacy-Einstieg.
+/// Baut den Router für die Social-Media-Admin-SPA (P2.66).
 ///
-/// Das Social-Media-/Clip-Feature ist im Cutover bewusst zurückgestellt. Die
-/// alte URL wird nativ auf das aktuelle Dashboard geleitet, damit sie nicht in
-/// den Python-Fallback (502) fällt.
-pub fn build_social_media_admin_router() -> Router {
-    use handlers::obsolete_routes;
+/// Die Handler nutzen denselben Auth-/Host-Gate-Pfad wie `/analyse`: der
+/// `DashboardAuthLevel`-Extractor liest `DashboardAuthState` aus der globalen
+/// Extension, und der `PgPool`-State wird fuer Partner-Access-Checks benötigt.
+pub fn build_social_media_admin_router(pool: PgPool) -> Router {
+    use handlers::spa;
 
     Router::new()
-        .route(
-            "/social-media-admin",
-            get(obsolete_routes::social_media_admin_stub_redirect_handler),
-        )
+        .route("/social-media-admin", get(spa::social_media_admin_handler))
         .route(
             "/social-media-admin/*path",
-            get(obsolete_routes::social_media_admin_stub_redirect_handler),
+            get(spa::social_media_admin_assets_handler),
         )
+        .with_state(pool)
 }
 
 /// Baut die nativen Main-Domain-SPA-Seiten, die bisher vom Python-Fallback
@@ -1166,7 +1234,10 @@ pub fn build_v2_spa_pages_router() -> Router {
 
     Router::new()
         .route("/twitch/dashboard", get(spa::main_domain_spa_shell_handler))
-        .route("/twitch/verwaltung", get(spa::main_domain_spa_shell_handler))
+        .route(
+            "/twitch/verwaltung",
+            get(spa::main_domain_spa_shell_handler),
+        )
         .route("/twitch/pricing", get(spa::main_domain_spa_shell_handler))
         .route(
             "/twitch/analyse",
@@ -1210,7 +1281,10 @@ pub fn build_website_router() -> Router {
     Router::new()
         .route("/streamer", get(website::streamer_root_handler))
         .route("/streamer/help", get(handlers::help_page::help_page))
-        .route("/streamer/commands", get(handlers::help_page::commands_page))
+        .route(
+            "/streamer/commands",
+            get(handlers::help_page::commands_page),
+        )
         .route("/streamer/faq", get(handlers::help_page::faq_redirect))
         .route("/streamer/*path", get(website::streamer_asset_handler))
         .route("/website", get(website::website_root_redirect_handler))
@@ -1235,21 +1309,30 @@ pub fn build_router(pool: PgPool, token: String) -> Router {
 
     let mut app = build_public_router(pool.clone())
         .merge(build_auth_router(rate_limiter.clone()))
-        .merge(build_partner_login_router(pool.clone(), rate_limiter.clone()))
+        .merge(build_partner_login_router(
+            pool.clone(),
+            rate_limiter.clone(),
+        ))
         .merge(build_roadmap_router(pool.clone(), token.clone()))
         .merge(build_market_router(pool.clone(), token.clone()))
         .merge(build_raid_pages_router(pool.clone()))
         .merge(build_affiliate_portal_router())
-        .merge(build_social_media_admin_router())
+        .merge(build_social_media_admin_router(pool.clone()))
         .merge(build_v2_spa_pages_router())
         .merge(build_website_router())
-        .merge(handlers::discord_link::build_discord_link_router(pool.clone()))
+        .merge(handlers::discord_link::build_discord_link_router(
+            pool.clone(),
+        ))
         .merge(handlers::demo::build_demo_router())
         .merge(build_entry_admin_router())
         .merge(build_billing_webhook_router(pool.clone()))
         .merge(build_billing_page_router(pool.clone()))
         .merge(build_admin_legacy_forms_router(pool.clone()))
-        .merge(build_authed_router(pool.clone(), token.clone(), rate_limiter))
+        .merge(build_authed_router(
+            pool.clone(),
+            token.clone(),
+            rate_limiter,
+        ))
         .merge(build_admin_system_router(pool.clone(), token.clone()))
         .merge(build_admin_streamers_router(pool.clone(), token.clone()))
         .merge(build_admin_config_router(pool, token))
@@ -1278,7 +1361,11 @@ mod csrf_wiring_tests {
 
     async fn pool() -> Option<PgPool> {
         let dsn = std::env::var("TB_TEST_DATABASE_URL").ok()?;
-        PgPoolOptions::new().max_connections(1).connect(&dsn).await.ok()
+        PgPoolOptions::new()
+            .max_connections(1)
+            .connect(&dsn)
+            .await
+            .ok()
     }
 
     /// Nicht-Loopback-POST auf einen Admin-Write ohne CSRF-Token → 403 vom Layer

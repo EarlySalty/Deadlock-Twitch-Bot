@@ -474,11 +474,7 @@ pub async fn raid_analytics_handler(
         Ok(r) => r,
         Err(e) => {
             tracing::error!("raid-analytics retention-Query-Fehler: {e}");
-            return (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(json!({"error":"internal_error"})),
-            )
-                .into_response();
+            return crate::auth::analytics_request_failed_json().into_response();
         }
     };
 
@@ -620,11 +616,7 @@ pub async fn raid_analytics_handler(
         Ok(r) => r,
         Err(e) => {
             tracing::error!("raid-analytics follow-Query-Fehler: {e}");
-            return (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(json!({"error":"internal_error"})),
-            )
-                .into_response();
+            return crate::auth::analytics_request_failed_json().into_response();
         }
     };
 
@@ -741,11 +733,7 @@ pub async fn raid_analytics_handler(
         Ok(r) => r,
         Err(e) => {
             tracing::error!("raid-analytics incoming-Query-Fehler: {e}");
-            return (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(json!({"error":"internal_error"})),
-            )
-                .into_response();
+            return crate::auth::analytics_request_failed_json().into_response();
         }
     };
 

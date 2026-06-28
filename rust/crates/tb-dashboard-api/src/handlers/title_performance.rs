@@ -115,11 +115,7 @@ pub async fn title_performance_handler(
     match rows {
         Err(e) => {
             tracing::error!("title-performance DB-Fehler: {e}");
-            (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(json!({"error":"internal_error"})),
-            )
-                .into_response()
+            crate::auth::analytics_request_failed_json().into_response()
         }
         Ok(rows) => {
             // peerBenchmark via Peer-Gruppe (Python _get_peer_group_stats).

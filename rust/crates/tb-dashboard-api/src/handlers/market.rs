@@ -39,16 +39,44 @@ use crate::auth::level::{is_local_request, DashboardAuthLevel};
 
 /// Deadlock-Begriffe für das Meta-Snapshot-/Sentiment-Zählen (Python-Liste 1:1).
 const DEADLOCK_TERMS: &[&str] = &[
-    "abrams", "bebop", "dynamo", "grey talon", "haze", "infernus", "ivy", "kelvin", "lady geist",
-    "mcginnis", "mo & krill", "paradox", "pocket", "seven", "vindicta", "viscous", "warden",
-    "wraith", "yamato", "lash", "shiv", "urn", "midboss", "soul", "flex slot", "build", "op",
-    "nerf", "buff", "patch",
+    "abrams",
+    "bebop",
+    "dynamo",
+    "grey talon",
+    "haze",
+    "infernus",
+    "ivy",
+    "kelvin",
+    "lady geist",
+    "mcginnis",
+    "mo & krill",
+    "paradox",
+    "pocket",
+    "seven",
+    "vindicta",
+    "viscous",
+    "warden",
+    "wraith",
+    "yamato",
+    "lash",
+    "shiv",
+    "urn",
+    "midboss",
+    "soul",
+    "flex slot",
+    "build",
+    "op",
+    "nerf",
+    "buff",
+    "patch",
 ];
 
 /// Positiv-Wortliste für die simple Sentiment-Heuristik (Python `pos_words`).
 const POS_WORDS: &[&str] = &["pog", "gg", "nice", "cool", "krass", "lol", "win", "stark"];
 /// Negativ-Wortliste (Python `neg_words`).
-const NEG_WORDS: &[&str] = &["rip", "bad", "lose", "troll", "cringe", "throw", "sucks", "lag"];
+const NEG_WORDS: &[&str] = &[
+    "rip", "bad", "lose", "troll", "cringe", "throw", "sucks", "lag",
+];
 
 // ── HTML-Seite (P2.104 / P2.115) ──────────────────────────────────────────────
 
@@ -151,15 +179,20 @@ pub async fn api_market_data_handler(
     parts: Parts,
 ) -> Response {
     if !market_admin_allowed(&auth, &headers, expected.as_ref().map(|e| &e.0), &parts) {
-        return (StatusCode::UNAUTHORIZED, Json(json!({ "error": "Unauthorized" }))).into_response();
+        return (
+            StatusCode::UNAUTHORIZED,
+            Json(json!({ "error": "Unauthorized" })),
+        )
+            .into_response();
     }
     match build_market_data(&pool).await {
         Ok(payload) => Json(payload).into_response(),
         Err(error) => {
-            tracing::error!(%error, "market data aggregation failed");
+            let error_id = uuid::Uuid::new_v4().to_string();
+            tracing::error!(%error, %error_id, "market data aggregation failed");
             (
                 StatusCode::INTERNAL_SERVER_ERROR,
-                Json(json!({ "error": "market_data_failed" })),
+                Json(json!({ "error": "market_data_failed", "error_id": error_id })),
             )
                 .into_response()
         }
@@ -199,7 +232,14 @@ async fn build_market_data(pool: &PgPool) -> Result<Value, sqlx::Error> {
             Some(session_id) => {
                 let (connected, l) = lurker_stats(pool, session_id).await?;
                 // Python: total_connected = connected ODER active_chatters (Fallback).
-                (if connected > 0 { connected } else { active_chatters }, l)
+                (
+                    if connected > 0 {
+                        connected
+                    } else {
+                        active_chatters
+                    },
+                    l,
+                )
             }
             None => (active_chatters, 0),
         };
@@ -674,18 +714,24 @@ fn market_share_auth_error(
     }
     match auth {
         DashboardAuthLevel::Admin { .. } => None,
-        DashboardAuthLevel::None => Some((
-            StatusCode::UNAUTHORIZED,
-            Json(json!({ "error": "auth_required", "required": "admin" })),
-        ).into_response()),
-        _ => Some((
-            StatusCode::FORBIDDEN,
-            Json(json!({
-                "error": "admin_required",
-                "required": "admin",
-                "auth_level": auth.as_str(),
-            })),
-        ).into_response()),
+        DashboardAuthLevel::None => Some(
+            (
+                StatusCode::UNAUTHORIZED,
+                Json(json!({ "error": "auth_required", "required": "admin" })),
+            )
+                .into_response(),
+        ),
+        _ => Some(
+            (
+                StatusCode::FORBIDDEN,
+                Json(json!({
+                    "error": "admin_required",
+                    "required": "admin",
+                    "auth_level": auth.as_str(),
+                })),
+            )
+                .into_response(),
+        ),
     }
 }
 
@@ -702,7 +748,9 @@ pub async fn api_market_share_handler(
     Query(params): Query<MarketShareQuery>,
     parts: Parts,
 ) -> Response {
-    if let Some(resp) = market_share_auth_error(&auth, &headers, expected.as_ref().map(|e| &e.0), &parts) {
+    if let Some(resp) =
+        market_share_auth_error(&auth, &headers, expected.as_ref().map(|e| &e.0), &parts)
+    {
         return resp;
     }
     match build_market_share(&pool, params.days, params.scope.as_deref()).await {
@@ -753,10 +801,10 @@ mod tests {
     #[test]
     fn sentiment_classifies_pos_neg_neutral() {
         let msgs = vec![
-            "pog so nice".to_string(),       // positiv
-            "rip that lag".to_string(),      // negativ
-            "hello there".to_string(),       // neutral
-            "pog but also rip".to_string(),  // pos + neg → neutral
+            "pog so nice".to_string(),      // positiv
+            "rip that lag".to_string(),     // negativ
+            "hello there".to_string(),      // neutral
+            "pog but also rip".to_string(), // pos + neg → neutral
         ];
         let (_meta, sentiment) = compute_meta_and_sentiment(&msgs);
         assert_eq!(sentiment["positive"], 1);
@@ -791,9 +839,14 @@ mod tests {
     async fn market_research_renders_for_admin() {
         let resp = market_research_handler(admin()).await;
         assert_eq!(resp.status(), StatusCode::OK);
-        let body = axum::body::to_bytes(resp.into_body(), usize::MAX).await.unwrap();
+        let body = axum::body::to_bytes(resp.into_body(), usize::MAX)
+            .await
+            .unwrap();
         let html = String::from_utf8(body.to_vec()).unwrap();
-        assert!(html.contains("/twitch/api/market_data"), "page must fetch market_data");
+        assert!(
+            html.contains("/twitch/api/market_data"),
+            "page must fetch market_data"
+        );
         assert!(html.contains("<html"), "must be HTML");
     }
 
@@ -801,7 +854,9 @@ mod tests {
 
     #[tokio::test]
     async fn market_share_unauthenticated_401() {
-        let Some(pool) = pool_or_skip("market_share_none").await else { return };
+        let Some(pool) = pool_or_skip("market_share_none").await else {
+            return;
+        };
         let resp = api_market_share_handler(
             DashboardAuthLevel::None,
             State(pool),
@@ -812,14 +867,18 @@ mod tests {
         )
         .await;
         assert_eq!(resp.status(), StatusCode::UNAUTHORIZED);
-        let body = axum::body::to_bytes(resp.into_body(), usize::MAX).await.unwrap();
+        let body = axum::body::to_bytes(resp.into_body(), usize::MAX)
+            .await
+            .unwrap();
         let v: Value = serde_json::from_slice(&body).unwrap();
         assert_eq!(v["error"], "auth_required");
     }
 
     #[tokio::test]
     async fn market_share_partner_403() {
-        let Some(pool) = pool_or_skip("market_share_partner").await else { return };
+        let Some(pool) = pool_or_skip("market_share_partner").await else {
+            return;
+        };
         let resp = api_market_share_handler(
             partner(),
             State(pool),
@@ -830,7 +889,9 @@ mod tests {
         )
         .await;
         assert_eq!(resp.status(), StatusCode::FORBIDDEN);
-        let body = axum::body::to_bytes(resp.into_body(), usize::MAX).await.unwrap();
+        let body = axum::body::to_bytes(resp.into_body(), usize::MAX)
+            .await
+            .unwrap();
         let v: Value = serde_json::from_slice(&body).unwrap();
         assert_eq!(v["error"], "admin_required");
         assert_eq!(v["auth_level"], "partner");
@@ -838,7 +899,9 @@ mod tests {
 
     #[tokio::test]
     async fn market_share_admin_direct_payload() {
-        let Some(pool) = pool_or_skip("market_share_direct").await else { return };
+        let Some(pool) = pool_or_skip("market_share_direct").await else {
+            return;
+        };
         sqlx::query(
             r#"
             INSERT INTO twitch_stats_category
@@ -871,7 +934,9 @@ mod tests {
         )
         .await;
         assert_eq!(resp.status(), StatusCode::OK);
-        let body = axum::body::to_bytes(resp.into_body(), usize::MAX).await.unwrap();
+        let body = axum::body::to_bytes(resp.into_body(), usize::MAX)
+            .await
+            .unwrap();
         let v: Value = serde_json::from_slice(&body).unwrap();
         assert_eq!(v["days"], 1);
         assert_eq!(v["scope"], "all");
@@ -884,7 +949,9 @@ mod tests {
 
     #[tokio::test]
     async fn market_share_db_error_500_internal_shape() {
-        let Some(pool) = pool_or_skip("market_share_broken").await else { return };
+        let Some(pool) = pool_or_skip("market_share_broken").await else {
+            return;
+        };
         sqlx::query("DROP TABLE twitch_stats_category")
             .execute(&pool)
             .await
@@ -899,7 +966,9 @@ mod tests {
         )
         .await;
         assert_eq!(resp.status(), StatusCode::INTERNAL_SERVER_ERROR);
-        let body = axum::body::to_bytes(resp.into_body(), usize::MAX).await.unwrap();
+        let body = axum::body::to_bytes(resp.into_body(), usize::MAX)
+            .await
+            .unwrap();
         let v: Value = serde_json::from_slice(&body).unwrap();
         assert_eq!(v["error"], "internal_error");
     }
@@ -908,10 +977,23 @@ mod tests {
 
     async fn pool_or_skip(schema: &str) -> Option<PgPool> {
         let dsn = std::env::var("TB_TEST_DATABASE_URL").ok()?;
-        let pool = PgPoolOptions::new().max_connections(1).connect(&dsn).await.unwrap();
-        sqlx::query(&format!("DROP SCHEMA IF EXISTS {schema} CASCADE")).execute(&pool).await.unwrap();
-        sqlx::query(&format!("CREATE SCHEMA {schema}")).execute(&pool).await.unwrap();
-        sqlx::query(&format!("SET search_path TO {schema}")).execute(&pool).await.unwrap();
+        let pool = PgPoolOptions::new()
+            .max_connections(1)
+            .connect(&dsn)
+            .await
+            .unwrap();
+        sqlx::query(&format!("DROP SCHEMA IF EXISTS {schema} CASCADE"))
+            .execute(&pool)
+            .await
+            .unwrap();
+        sqlx::query(&format!("CREATE SCHEMA {schema}"))
+            .execute(&pool)
+            .await
+            .unwrap();
+        sqlx::query(&format!("SET search_path TO {schema}"))
+            .execute(&pool)
+            .await
+            .unwrap();
         // clean-SQL: TIMESTAMPTZ-Zeitspalten.
         sqlx::query(
             r#"CREATE TABLE twitch_streamers (
@@ -923,44 +1005,64 @@ mod tests {
                    id BIGINT, twitch_user_id TEXT NOT NULL, twitch_login TEXT NOT NULL,
                    status TEXT DEFAULT 'active'
                )"#,
-        ).execute(&pool).await.unwrap();
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
         sqlx::query(
             r#"CREATE TABLE twitch_live_state (
                    twitch_user_id TEXT NOT NULL, streamer_login TEXT NOT NULL,
                    last_viewer_count INTEGER DEFAULT 0, active_session_id BIGINT
                )"#,
-        ).execute(&pool).await.unwrap();
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
         sqlx::query(
             r#"CREATE TABLE twitch_chat_messages (
                    id SERIAL PRIMARY KEY, session_id BIGINT NOT NULL DEFAULT 0,
                    streamer_login TEXT NOT NULL, chatter_login TEXT,
                    message_ts TIMESTAMPTZ NOT NULL, content TEXT
                )"#,
-        ).execute(&pool).await.unwrap();
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
         sqlx::query(
             r#"CREATE TABLE twitch_session_chatters (
                    session_id BIGINT NOT NULL, streamer_login TEXT NOT NULL,
                    chatter_login TEXT NOT NULL, first_message_at TIMESTAMPTZ NOT NULL,
                    messages INTEGER DEFAULT 0
                )"#,
-        ).execute(&pool).await.unwrap();
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
         sqlx::query(
             r#"CREATE TABLE twitch_stats_category (
                    ts_utc TIMESTAMPTZ, streamer TEXT, viewer_count INTEGER,
                    is_partner BOOLEAN DEFAULT FALSE, tags TEXT, language TEXT
                )"#,
-        ).execute(&pool).await.unwrap();
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
         sqlx::query(
             r#"CREATE TABLE twitch_partners_all_state (
                    twitch_login TEXT, is_partner_active INTEGER DEFAULT 0
                )"#,
-        ).execute(&pool).await.unwrap();
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
         Some(pool)
     }
 
     #[tokio::test]
     async fn market_data_full_payload_shape() {
-        let Some(pool) = pool_or_skip("market_data_shape").await else { return };
+        let Some(pool) = pool_or_skip("market_data_shape").await else {
+            return;
+        };
         // Ein überwachter Kanal (kein Partner) + ein Partner (ausgeschlossen).
         sqlx::query("INSERT INTO twitch_streamers (twitch_login, twitch_user_id) VALUES ('mon', '100'), ('partnerx', '200')")
             .execute(&pool).await.unwrap();
@@ -986,9 +1088,17 @@ mod tests {
         let payload = build_market_data(&pool).await.unwrap();
         // Shape-Vollständigkeit.
         for key in [
-            "total_monitored", "total_viewers", "avg_chat_health", "avg_lurker_ratio",
-            "total_messages", "market_history", "questions", "channels", "meta_snapshot",
-            "sentiment", "overlap",
+            "total_monitored",
+            "total_viewers",
+            "avg_chat_health",
+            "avg_lurker_ratio",
+            "total_messages",
+            "market_history",
+            "questions",
+            "channels",
+            "meta_snapshot",
+            "sentiment",
+            "overlap",
         ] {
             assert!(payload.get(key).is_some(), "missing key {key}");
         }
@@ -1003,15 +1113,21 @@ mod tests {
         // Frage erkannt.
         assert_eq!(payload["questions"].as_array().unwrap().len(), 1);
         // Meta-Snapshot enthält abrams + haze.
-        let terms: Vec<&str> = payload["meta_snapshot"].as_array().unwrap()
-            .iter().filter_map(|e| e["term"].as_str()).collect();
+        let terms: Vec<&str> = payload["meta_snapshot"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter_map(|e| e["term"].as_str())
+            .collect();
         assert!(terms.contains(&"abrams"));
         assert!(terms.contains(&"haze"));
     }
 
     #[tokio::test]
     async fn api_market_data_handler_gates_non_admin() {
-        let Some(pool) = pool_or_skip("market_data_gate").await else { return };
+        let Some(pool) = pool_or_skip("market_data_gate").await else {
+            return;
+        };
         let resp = api_market_data_handler(
             partner(),
             State(pool),
@@ -1025,15 +1141,12 @@ mod tests {
 
     #[tokio::test]
     async fn api_market_data_handler_admin_200() {
-        let Some(pool) = pool_or_skip("market_data_admin").await else { return };
-        let resp = api_market_data_handler(
-            admin(),
-            State(pool),
-            HeaderMap::new(),
-            None,
-            remote_parts(),
-        )
-        .await;
+        let Some(pool) = pool_or_skip("market_data_admin").await else {
+            return;
+        };
+        let resp =
+            api_market_data_handler(admin(), State(pool), HeaderMap::new(), None, remote_parts())
+                .await;
         assert_eq!(resp.status(), StatusCode::OK);
     }
 }

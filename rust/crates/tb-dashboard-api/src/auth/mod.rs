@@ -134,6 +134,10 @@ pub async fn extended_gate(pool: &PgPool, auth: &DashboardAuthLevel) -> Option<R
 
 /// 401-Body wie Python `_require_v2_auth` (api_v2.py:1258-1262).
 pub fn unauthorized_v2_response() -> Response {
+    unauthorized_v2_json().into_response()
+}
+
+pub fn unauthorized_v2_json() -> (StatusCode, Json<serde_json::Value>) {
     (
         StatusCode::UNAUTHORIZED,
         Json(json!({
@@ -141,7 +145,16 @@ pub fn unauthorized_v2_response() -> Response {
             "loginUrl": "/twitch/auth/login?next=%2Fanalyse",
         })),
     )
-        .into_response()
+}
+
+pub fn analytics_request_failed_json() -> (StatusCode, Json<serde_json::Value>) {
+    (
+        StatusCode::INTERNAL_SERVER_ERROR,
+        Json(json!({
+            "error": "internal_error",
+            "code": "analytics_request_failed",
+        })),
+    )
 }
 
 /// 403-Body wie Python `_require_extended_plan` (api_v2.py:656-664).

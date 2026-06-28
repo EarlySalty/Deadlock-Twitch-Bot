@@ -56,11 +56,7 @@ pub async fn chat_content_analysis_handler(
         Ok(v) => Json(v).into_response(),
         Err(e) => {
             tracing::error!("chat-content-analysis Fehler: {e}");
-            (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(json!({ "error": "internal" })),
-            )
-                .into_response()
+            crate::auth::analytics_request_failed_json().into_response()
         }
     }
 }

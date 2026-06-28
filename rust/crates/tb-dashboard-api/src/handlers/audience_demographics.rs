@@ -264,11 +264,7 @@ pub async fn audience_demographics_handler(
         Ok(resp) => resp,
         Err(e) => {
             tracing::error!("audience-demographics DB-Fehler: {e}");
-            (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(json!({"error":"internal_error"})),
-            )
-                .into_response()
+            crate::auth::analytics_request_failed_json().into_response()
         }
     }
 }

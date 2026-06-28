@@ -121,7 +121,7 @@ pub async fn ai_chat_handler(
     body: String,
 ) -> impl IntoResponse {
     if matches!(auth, DashboardAuthLevel::None) {
-        return json_err(StatusCode::UNAUTHORIZED, json!({ "error": "unauthorized" }));
+        return crate::auth::unauthorized_v2_response();
     }
     AI_STATE.lock().unwrap().cleanup(Utc::now());
 

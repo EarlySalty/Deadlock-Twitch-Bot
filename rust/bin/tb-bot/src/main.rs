@@ -50,9 +50,9 @@ mod raid_adapters;
 mod raid_arrival_wiring;
 mod raid_oauth_impl;
 mod reauth_reminder;
+mod scam_enforce_impl;
 mod scam_notify_impl;
 mod scam_revoke_impl;
-mod scam_enforce_impl;
 mod score_refresh;
 mod scout_chat;
 mod shadow_review_wiring;
@@ -67,8 +67,37 @@ fn opt_in_enabled(name: &str) -> bool {
         .unwrap_or(false)
 }
 
+async fn bind_internal_listener_with_retry(
+    addr: SocketAddr,
+) -> std::io::Result<tokio::net::TcpListener> {
+    const RETRY_DELAYS_MS: &[u64] = &[250, 500, 1_000, 2_000, 4_000];
+
+    for attempt in 0..=RETRY_DELAYS_MS.len() {
+        match tokio::net::TcpListener::bind(addr).await {
+            Ok(listener) => return Ok(listener),
+            Err(error)
+                if error.kind() == std::io::ErrorKind::AddrInUse
+                    && attempt < RETRY_DELAYS_MS.len() =>
+            {
+                let delay = Duration::from_millis(RETRY_DELAYS_MS[attempt]);
+                tracing::warn!(
+                    %addr,
+                    attempt = attempt + 1,
+                    retry_in_ms = delay.as_millis(),
+                    "Internal-API Port belegt, versuche erneut"
+                );
+                tokio::time::sleep(delay).await;
+            }
+            Err(error) => return Err(error),
+        }
+    }
+
+    unreachable!("retry loop returns on success or final error")
+}
+
 use std::net::SocketAddr;
 use std::sync::Arc;
+use std::time::Duration;
 use tb_config::Settings;
 use tb_crypto::FieldCipher;
 use tb_internal_api::build_internal_router;
@@ -96,9 +125,7 @@ use eventsub_hooks::{
     BlacklistRaidGuard, RaidArrivalCoordinator, RaidEventSubHooks, RaidTrackingResolverAdapter,
 };
 use offline_side_effects::OfflineSideEffects;
-use raid_adapters::{
-    HelixFallbackStreams, HelixRaidApi, HelixTokenClient, ManualRaidAdapter,
-};
+use raid_adapters::{HelixFallbackStreams, HelixRaidApi, HelixTokenClient, ManualRaidAdapter};
 use raid_arrival_wiring::RaidArrivalSinkImpl;
 use reauth_reminder::ReauthReminder;
 use score_refresh::ScoreRefreshResolver;
@@ -108,6 +135,20 @@ use wiring::{
     HelixSubscriptionTransport, HelixVodPreview, HelixVodSource, LivePingRoleAuto,
     SubscriptionEventSubHooks,
 };
+
+struct InternalBulkReauthAdapter {
+    store: tb_raid::ReauthAdminStore,
+}
+
+#[async_trait::async_trait]
+impl tb_internal_api::handlers::reauth_all::BulkReauthPort for InternalBulkReauthAdapter {
+    async fn snapshot_and_flag_reauth(&self) -> Result<u64, String> {
+        self.store
+            .snapshot_and_flag_reauth()
+            .await
+            .map_err(|error| error.to_string())
+    }
+}
 
 /// Hooks des Poll-Loops: Go-Live → stream.offline-Subscription (wie EventSub),
 /// Auto-Archiv/Entarchiv inaktiver Partner und Score-Refreshes pro Tick.
@@ -190,7 +231,10 @@ impl PollHooks for SubscriptionPollHooks {
         let changed = match mark_partner_inactivity_flagged(&self.pool, login).await {
             Ok(changed) => changed,
             Err(e) => {
-                tracing::warn!(login, "auto-inactivity (twitch_partners) fehlgeschlagen: {e}");
+                tracing::warn!(
+                    login,
+                    "auto-inactivity (twitch_partners) fehlgeschlagen: {e}"
+                );
                 return false;
             }
         };
@@ -213,10 +257,7 @@ impl PollHooks for SubscriptionPollHooks {
             }
         };
         if changed {
-            tracing::info!(
-                login,
-                "Partner automatisch nicht mehr als inaktiv markiert"
-            );
+            tracing::info!(login, "Partner automatisch nicht mehr als inaktiv markiert");
         }
         changed
     }
@@ -457,8 +498,8 @@ async fn main() {
                             ),
                         ));
                         tracing::info!(
-                            "Mod-Provisioner aktiv (403-Selbstheilung: Bot-Remod via Streamer-Token)"
-                        );
+                        "Mod-Provisioner aktiv (403-Selbstheilung: Bot-Remod via Streamer-Token)"
+                    );
                     } else {
                         tracing::info!(
                             "DB_MASTER_KEY_V1 fehlt — Mod-Provisioner aus (403 → perm_failed)"
@@ -688,6 +729,19 @@ async fn main() {
                 token_provider.clone(),
                 RaidHistoryStore::new(pool.clone()),
             );
+            let sink = Arc::new(RaidArrivalSinkImpl::new(
+                pool.clone(),
+                pending.clone(),
+                suppression.clone(),
+                &target_game.to_lowercase(),
+                // B3-2d: Chat-Send-Port + DB-Chat-Suppression für die
+                // Partner-Raid-Dankesnachricht durchreichen. chat_api ist None,
+                // wenn kein Bot-Token gebootet wurde (Python get_chat_bot()→None).
+                chat_api_handle.as_ref().map(|h| h.api.clone()),
+                Some(Arc::new(
+                    tb_chat::moderation::OutboundSuppressionStore::new(pool.clone()),
+                )),
+            ));
             let pipeline = AutoRaidPipeline::new(
                 RaidBlacklistStore::new(pool.clone()),
                 ScoreStore::new(pool.clone()),
@@ -719,6 +773,7 @@ async fn main() {
                 })),
                 Some(OutreachBoostStore::new(pool.clone())),
             )
+            .with_orphan_replay(sink.clone())
             .with_observability(
                 Some(raid_observability.clone()),
                 Some(analytics_observability.clone()),
@@ -732,19 +787,6 @@ async fn main() {
                 followers.clone(),
                 pipeline,
                 &target_game,
-            ));
-            let sink = Arc::new(RaidArrivalSinkImpl::new(
-                pool.clone(),
-                pending.clone(),
-                suppression.clone(),
-                &target_game.to_lowercase(),
-                // B3-2d: Chat-Send-Port + DB-Chat-Suppression für die
-                // Partner-Raid-Dankesnachricht durchreichen. chat_api ist None,
-                // wenn kein Bot-Token gebootet wurde (Python get_chat_bot()→None).
-                chat_api_handle.as_ref().map(|h| h.api.clone()),
-                Some(Arc::new(
-                    tb_chat::moderation::OutboundSuppressionStore::new(pool.clone()),
-                )),
             ));
 
             // Orphan-Sweeper: promotet channel.chat.notification ohne
@@ -959,10 +1001,8 @@ async fn main() {
             // (Z.~954, move) verteilt wird. Beide Konsumenten sehen so die
             // with-Guard-Variante; inbound `channel.ban`-Self-Timeouts füttern
             // dieselbe Stumm-Zählung wie der ausgehende Send-Pfad.
-            telemetry = telemetry.with_bot_timeout_guard(
-                runtime.bot_user_id(),
-                runtime.timeout_guard(),
-            );
+            telemetry =
+                telemetry.with_bot_timeout_guard(runtime.bot_user_id(), runtime.timeout_guard());
             runtime.hooks.clone()
         }
         None => eventsub_hooks,
@@ -1104,7 +1144,9 @@ async fn main() {
                     };
                     for (uid, login) in &partners {
                         let now = chrono::Utc::now();
-                        let token = match token_provider.get_valid_token_unrestricted(uid, now).await
+                        let token = match token_provider
+                            .get_valid_token_unrestricted(uid, now)
+                            .await
                         {
                             Ok(Some(token)) => token,
                             Ok(None) => continue,
@@ -1448,17 +1490,20 @@ async fn main() {
         let chatters_streamer_tokens =
             chatters_wiring::build_streamer_token_source(chatters_mod_token_provider.clone());
         let chatters_fetcher = chatters_wiring::build_chatters_fetcher(helix.as_ref().clone());
-        let chatters_provisioner: Option<Arc<dyn tb_monitoring::ModeratorProvisioner>> =
-            match (chatters_mod_token_provider, helix.as_ref().clone(), chatters_bot_user_id) {
-                (Some(token_provider), Some(helix_client), Some(bot_user_id)) => Some(Arc::new(
-                    eventsub_hooks::HelixModeratorProvisioner::new(
-                        token_provider,
-                        helix_client,
-                        bot_user_id,
-                    ),
-                )),
-                _ => None,
-            };
+        let chatters_provisioner: Option<Arc<dyn tb_monitoring::ModeratorProvisioner>> = match (
+            chatters_mod_token_provider,
+            helix.as_ref().clone(),
+            chatters_bot_user_id,
+        ) {
+            (Some(token_provider), Some(helix_client), Some(bot_user_id)) => {
+                Some(Arc::new(eventsub_hooks::HelixModeratorProvisioner::new(
+                    token_provider,
+                    helix_client,
+                    bot_user_id,
+                )))
+            }
+            _ => None,
+        };
         chatters_wiring::spawn_chatters_schedulers(
             pool.clone(),
             chatters_auth,
@@ -1506,6 +1551,10 @@ async fn main() {
         scam_revoke_impl::build_scam_revoke_port(scam_revoke_api, pool.clone());
     let scam_enforce: Option<Arc<dyn tb_internal_api::ScamEnforcePort>> =
         scam_enforce_impl::build_scam_enforce_port(scam_enforce_api, pool.clone());
+    let bulk_reauth: Option<Arc<dyn tb_internal_api::handlers::reauth_all::BulkReauthPort>> =
+        Some(Arc::new(InternalBulkReauthAdapter {
+            store: tb_raid::ReauthAdminStore::new(pool.clone()),
+        }));
     let app = build_internal_router(
         pool,
         token,
@@ -1518,9 +1567,7 @@ async fn main() {
         chat_action,
         scam_revoke,
         scam_enforce,
-        // WIRING-TODO(P3.7): hier `Some(Arc::new(tb_raid::ReauthAdminStore::new(pool.clone())))`
-        // einhängen, damit POST /raid/reauth-all live ist. Bis dahin → Handler 503.
-        None,
+        bulk_reauth,
         legacy_proxy,
     );
 
@@ -1540,7 +1587,7 @@ async fn main() {
     }
 
     tracing::info!("tb-bot lauscht auf {addr}");
-    let listener = tokio::net::TcpListener::bind(addr)
+    let listener = bind_internal_listener_with_retry(addr)
         .await
         .unwrap_or_else(|e| {
             tracing::error!("Bind-Fehler auf {addr}: {e}");
@@ -1629,7 +1676,11 @@ impl tb_monitoring::BroadcasterEventSubTokenProvider for RaidBroadcasterEventSub
             .await
         {
             Ok(Some(token)) => {
-                let scopes = self.raid_auth.get_scopes(broadcaster_id).await.unwrap_or_default();
+                let scopes = self
+                    .raid_auth
+                    .get_scopes(broadcaster_id)
+                    .await
+                    .unwrap_or_default();
                 Some(tb_monitoring::EventSubUserToken::new(token, scopes))
             }
             Ok(None) => None,
@@ -1738,7 +1789,9 @@ async fn subscription_maintenance_loop(
                         Ok(Some(token)) => {
                             let scopes = raid_auth.get_scopes(uid).await.unwrap_or_default();
                             telemetry_ensured += manager
-                                .ensure_broadcaster_telemetry_subscriptions(uid, login, &token, &scopes)
+                                .ensure_broadcaster_telemetry_subscriptions(
+                                    uid, login, &token, &scopes,
+                                )
                                 .await;
                         }
                         Ok(None) => {}

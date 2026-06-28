@@ -6,16 +6,17 @@
 
 use axum::{
     extract::{Query, State},
-    http::StatusCode,
     response::IntoResponse,
     Json,
 };
 use serde::Deserialize;
-use serde_json::json;
 use sqlx::PgPool;
 
 use crate::auth::level::DashboardAuthLevel;
 use crate::query_int::parse_bounded_query_int;
+
+#[cfg(test)]
+use axum::http::StatusCode;
 
 #[derive(Deserialize)]
 pub struct ActivityQuery {
@@ -43,7 +44,7 @@ pub async fn category_activity_series_handler(
         Ok(v) => Json(v).into_response(),
         Err(e) => {
             tracing::error!("category-activity-series SELECT-Fehler: {e}");
-            (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({ "error": "internal" }))).into_response()
+            crate::auth::analytics_request_failed_json().into_response()
         }
     }
 }
@@ -56,17 +57,37 @@ mod tests {
 
     async fn make_pool(schema: &str) -> Option<PgPool> {
         let dsn = std::env::var("TB_TEST_DATABASE_URL").ok()?;
-        let admin = PgPoolOptions::new().max_connections(1).connect(&dsn).await.unwrap();
-        sqlx::query(&format!("DROP SCHEMA IF EXISTS {schema} CASCADE")).execute(&admin).await.unwrap();
-        sqlx::query(&format!("CREATE SCHEMA {schema}")).execute(&admin).await.unwrap();
+        let admin = PgPoolOptions::new()
+            .max_connections(1)
+            .connect(&dsn)
+            .await
+            .unwrap();
+        sqlx::query(&format!("DROP SCHEMA IF EXISTS {schema} CASCADE"))
+            .execute(&admin)
+            .await
+            .unwrap();
+        sqlx::query(&format!("CREATE SCHEMA {schema}"))
+            .execute(&admin)
+            .await
+            .unwrap();
         admin.close().await;
-        let opts = PgConnectOptions::from_str(&dsn).unwrap().options([("search_path", schema)]);
-        Some(PgPoolOptions::new().max_connections(2).connect_with(opts).await.unwrap())
+        let opts = PgConnectOptions::from_str(&dsn)
+            .unwrap()
+            .options([("search_path", schema)]);
+        Some(
+            PgPoolOptions::new()
+                .max_connections(2)
+                .connect_with(opts)
+                .await
+                .unwrap(),
+        )
     }
 
     #[tokio::test]
     async fn none_auth_blockiert() {
-        let Some(pool) = make_pool("t_catact_h").await else { return };
+        let Some(pool) = make_pool("t_catact_h").await else {
+            return;
+        };
         let resp = category_activity_series_handler(
             DashboardAuthLevel::None,
             State(pool),
