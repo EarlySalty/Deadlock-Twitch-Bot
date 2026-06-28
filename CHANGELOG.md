@@ -1,3 +1,11 @@
+## #293 — Abo-Erkennung gehärtet + Go-Live-Ankündigung einheitlich Standard
+
+**Ausgangslage:** Zwei Dinge liefen still schief. Bei der Abo-Prüfung konnte ein laufendes, bezahltes Abo unter bestimmten Umständen als „kein Plan" gewertet und danach von einer automatischen Test-Phase überdeckt werden — weil die Bezahl-Referenz inzwischen am Login hängt, die Prüfung aber noch ausschließlich an der alten Nutzer-ID gesucht hat. Und bei der Go-Live-Ankündigung steckten im Code noch Reste des längst abgeschafften Embed-Designers; teils griffen gespeicherte Alt-Anpassungen unzuverlässig rein.
+
+**Änderung:** Die Abo-Erkennung gleicht jetzt sowohl über den Login als auch über die Nutzer-ID ab und matcht keine leere Referenz mehr — ein bezahltes Abo wird damit zuverlässig erkannt. Die Go-Live-Ankündigung läuft jetzt durchgängig über das Standard-Design: Der automatische Post und der Rollen-Ping bleiben unverändert, nur das individuell anpassbare Embed ist endgültig raus (so entschieden). Im Hintergrund zusätzlich: eine Raid-Statistik zählt wieder exakt (sie hatte Zuschauer mitgezählt, die erst nach dem Raid auftauchten), die Admin-Datensicht fürs Raid-Netzwerk ist wieder erreichbar, und das Datenbank-Schema baut sich auch bei einem kompletten Neuaufbau mit den korrekten Spaltentypen auf — abgesichert durch neue Tests.
+
+**Ergebnis:** Zahlende Abos werden korrekt erkannt, die Go-Live-Ankündigung ist für alle einheitlich das Standard-Design, und mehrere lange unbemerkte Ungenauigkeiten im Hintergrund sind ausgeräumt.
+
 ## #292 — Go-Live-Tipps vorerst abgeschaltet
 
 **Ausgangslage:** Wenn du mit Deadlock live gegangen bist, hat der Bot als erste Chat-Zeile einen wechselnden „Tipp" gepostet. In der Praxis war das meist ein Hinweis, den man als Streamer ohnehin kennt — also eher Rauschen als echte Hilfe.
