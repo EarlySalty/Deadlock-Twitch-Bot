@@ -5,8 +5,11 @@ import { useBillingCatalog } from '../hooks/useAnalytics';
 import PricingHero from '../components/pricing/PricingHero';
 import FeaturePicker from '../components/pricing/FeaturePicker';
 import FeatureComparisonGrid from '../components/pricing/FeatureComparisonGrid';
+import MySubscriptionCard from '../components/pricing/MySubscriptionCard';
+import BillingStatusBanner from '../components/pricing/BillingStatusBanner';
 import { PREVIEW_HOME_ROUTE, PREVIEW_ANALYTICS_ROUTE } from '../preview/routes';
 import { PricingTour } from '../components/onboarding/PricingTour';
+import { isActivePaidSubscription } from '../types/billing';
 
 const faqData = [
   {
@@ -68,6 +71,8 @@ export default function Pricing() {
   const [cycle, setCycle] = useState<1 | 12>(1);
   const { data } = useBillingCatalog(cycle);
   const plans = data?.plans ?? [];
+  const subscription = data?.current_subscription ?? null;
+  const invoiceHref = data?.payment?.invoice_page_path ?? '/twitch/abbo/rechnungen';
 
   return (
     <div className="max-w-5xl mx-auto px-4 py-8">
@@ -77,8 +82,16 @@ export default function Pricing() {
         window.location.href = PREVIEW_ANALYTICS_ROUTE;
       }} />
 
+      {/* Billing-Redirect-Hinweis (?invoice=… / ?cancel=…) in Klartext */}
+      <BillingStatusBanner />
+
       {/* Hero Section */}
       <PricingHero />
+
+      {/* Mein Abo — sichtbarer Einstieg zu Rechnungen/Portal für Abonnenten */}
+      {isActivePaidSubscription(subscription) && (
+        <MySubscriptionCard subscription={subscription} invoiceHref={invoiceHref} />
+      )}
 
       {/* Billing cycle toggle */}
       <div id="plans" className="flex justify-center mb-8">
