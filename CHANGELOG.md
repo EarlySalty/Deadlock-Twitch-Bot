@@ -1,3 +1,11 @@
+## #302 — Live-Demo: alle Tabs zeigen wieder vollständige Beispieldaten
+
+**Ausgangslage:** Die öffentliche Demo des Analytics-Dashboards (über „Live Demo" auf der Seite erreichbar) brach auf mehreren Tabs mit einem „Dashboard-Fehler" ab — Übersicht, Publikum, Wachstum, Planung, Zuschauer und Monetization zeigten statt Auswertungen eine Fehlermeldung. Hintergrund: Die Demo läuft auf fest hinterlegten Beispieldaten statt auf echten Zahlen. Diese Beispieldaten waren nur grob angelegt und passten an vielen Stellen nicht mehr zu dem, was das Dashboard inzwischen erwartet — mal kam eine Liste, wo ein einzelner Block gebraucht wurde, mal fehlten Felder, mal hatte ein ganzer Bereich überhaupt keine Beispieldaten. Beim Aufbau der Seite lief das ins Leere.
+
+**Änderung:** Wir haben die Beispieldaten für jeden betroffenen Bereich exakt an das angeglichen, was das Dashboard tatsächlich anzeigt, und die bis dahin fehlenden Demo-Bereiche ergänzt — durchgängig mit realistischen, in sich stimmigen Werten zum Beispiel-Profil (Zuschauerschnitt, Follower-Wachstum, Watch-Time, Funnel, Monetarisierung, Raids, Heatmaps). Ein automatischer Test sichert die Form dieser Beispieldaten dauerhaft ab; ein zweiter, unabhängiger Durchgang und ein kompletter Klick-Test durch alle Tabs haben bestätigt, dass nichts mehr abbricht.
+
+**Ergebnis:** Die Demo zeigt jetzt auf allen Tabs vollständige, glaubwürdige Beispiel-Auswertungen — von der Übersicht über Publikum, Wachstum, Planung und Zuschauer bis Monetization — statt einer Fehlermeldung. Wer die Demo öffnet, sieht das Dashboard so, wie es echte Streamer im Alltag erleben.
+
 ## #301 — Schema-Bauplan wieder deckungsgleich mit der echten Datenbank
 
 **Ausgangslage:** Die laufende Datenbank ist korrekt — aber die Migrationen, also der Bauplan, aus dem eine *neue* Datenbank entsteht, beschrieben für 83 Spalten noch die alten Typen (Text statt Zeitstempel, 32- statt 64-Bit-Zahlen, Zahl statt Wahr/Falsch). Auffallen würde das erst, wenn jemand eine frische Datenbank aufsetzt (Test, neue Umgebung, Wiederaufbau): die liefe sofort in dieselben Datentyp-Fehler wie zuletzt im Dashboard.
