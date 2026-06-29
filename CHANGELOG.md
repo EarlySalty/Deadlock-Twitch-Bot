@@ -1,3 +1,11 @@
+## #300 — Admin-Dashboard durchgehärtet: alle Bereiche gegen das echte Schema abgeglichen
+
+**Ausgangslage:** Nachdem ein Datentyp-Stolperstein die Streamer-Liste blockierte (#299), war klar: derselbe Bruch konnte überall im Admin-Dashboard lauern, weil quer durch die Auswertungen Felder im Code anders gelesen wurden, als sie in der Datenbank wirklich liegen — ein Erbe aus dem Umstieg, bei dem die Schema-Beschreibung von der laufenden Datenbank abgedriftet ist.
+
+**Änderung:** Statt jeden Fehler einzeln abzuwarten, haben wir das **tatsächliche** Datenbank-Schema ausgelesen und alle Auswertungen des Dashboards (Streamer, Monetarisierung, Übersicht, Affiliate, OAuth/System, Startseite) in einem Rutsch dagegen abgeglichen — Wahr/Falsch-, Text-, Datums- und Zahlenfelder. Ein zweiter, unabhängiger Durchgang hat geprüft, dass dabei keine Bedeutung verfälscht wurde.
+
+**Ergebnis:** Die Admin-Bereiche laden ihre Daten sauber, ohne reihum auf Serverfehler zu laufen.
+
 ## #299 — Admin-Dashboard: Streamer-Liste lädt wirklich (Datentyp-Stolperstein behoben)
 
 **Ausgangslage:** Nachdem die Anmeldung an der Daten-Schnittstelle gefixt war (siehe #298), kam man zwar durch, aber die Streamer-Liste warf jetzt einen „internal server error". Ursache: Ein Wahr/Falsch-Feld in der Datenbank (braucht-Neu-Anmeldung) wurde im Code noch als Zahl gelesen — ein Überbleibsel aus der alten Generation, das beim Umstieg auf echte Wahr/Falsch-Felder nie mitgezogen wurde. Beim ersten echten Zugriff (vorher durch die Anmelde-Sperre verdeckt) brach das Auslesen ab.
