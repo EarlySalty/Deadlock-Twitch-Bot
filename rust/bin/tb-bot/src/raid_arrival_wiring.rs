@@ -72,6 +72,102 @@ fn next_flow_id(prefix: &str) -> String {
     format!("{prefix}-{}-{n}", Utc::now().timestamp_millis())
 }
 
+#[derive(Debug, Clone, Copy, Default)]
+struct RecruitmentDeliveryStops {
+    target_blacklisted: bool,
+    target_is_partner: bool,
+    outbound_chat_suppressed: bool,
+}
+
+async fn load_recruitment_delivery_stops(
+    pool: &PgPool,
+    blacklist: &RaidBlacklistStore,
+    outbound_suppression: Option<&tb_chat::moderation::OutboundSuppressionStore>,
+    target_id: &str,
+    target_login: &str,
+) -> RecruitmentDeliveryStops {
+    let target_blacklisted = match blacklist
+        .is_blacklisted(Some(target_id), target_login)
+        .await
+    {
+        Ok(hit) => hit,
+        Err(error) => {
+            tracing::error!(
+                %error,
+                to = %target_login,
+                "Recruitment-Nachricht sicherheitshalber gestoppt: Blacklist-Prüfung fehlgeschlagen"
+            );
+            true
+        }
+    };
+    let target_is_partner = target_is_partner_fail_closed(pool, target_id, target_login).await;
+    let outbound_chat_suppressed =
+        outbound_suppression_lookup_fail_closed(pool, outbound_suppression.is_some(), target_login)
+            .await;
+
+    RecruitmentDeliveryStops {
+        target_blacklisted,
+        target_is_partner,
+        outbound_chat_suppressed,
+    }
+}
+
+async fn target_is_partner_fail_closed(pool: &PgPool, target_id: &str, target_login: &str) -> bool {
+    let row = sqlx::query_scalar::<_, i32>(
+        "SELECT 1 FROM twitch_partners
+          WHERE ((NULLIF($1,'') IS NOT NULL AND twitch_user_id = $1)
+              OR (NULLIF($2,'') IS NOT NULL AND LOWER(twitch_login) = LOWER($2)))
+            AND status = 'active' LIMIT 1",
+    )
+    .bind(target_id)
+    .bind(target_login)
+    .fetch_optional(pool)
+    .await;
+    match row {
+        Ok(row) => row.is_some(),
+        Err(error) => {
+            tracing::error!(
+                %error,
+                to = %target_login,
+                "Recruitment-Nachricht sicherheitshalber gestoppt: Partner-Prüfung fehlgeschlagen"
+            );
+            true
+        }
+    }
+}
+
+async fn outbound_suppression_lookup_fail_closed(
+    pool: &PgPool,
+    suppression_enabled: bool,
+    target_login: &str,
+) -> bool {
+    if !suppression_enabled {
+        return false;
+    }
+
+    let row = sqlx::query_scalar::<_, i32>(
+        "SELECT 1 FROM twitch_outbound_chat_suppressions
+          WHERE target_login = $1
+            AND source = 'recruitment'
+            AND suppressed_until > NOW()
+          LIMIT 1",
+    )
+    .bind(target_login)
+    .fetch_optional(pool)
+    .await;
+    match row {
+        Ok(row) => row.is_some(),
+        Err(error) => {
+            tracing::error!(
+                %error,
+                to = %target_login,
+                "Recruitment-Nachricht sicherheitshalber gestoppt: Suppression-Prüfung fehlgeschlagen"
+            );
+            true
+        }
+    }
+}
+
 // ─── Adapter ────────────────────────────────────────────────────────────────
 
 pub struct RaidArrivalSinkImpl {
@@ -141,6 +237,11 @@ impl RaidArrivalSinkImpl {
         };
 
         for entry in due {
+            if i64::from(entry.confirmed_raid_count) < EXTERNAL_RECRUITMENT_RAID_LIMIT {
+                self.cleanup_blacklist_pending(&entry.target_id).await;
+                continue;
+            }
+
             // Bereits gelistet → nur das Pending aufräumen.
             match self
                 .blacklist
@@ -531,11 +632,12 @@ impl RaidArrivalSinkImpl {
     /// `total_recruitment_raid_count` ist der bereits persistierte Count aus dem
     /// `record_confirmed_raid`-Schritt (Python `confirmed_external_raid_count`).
     ///
-    /// Reihenfolge wie Python: silent_raid → Suppression(source=recruitment) →
+    /// Reihenfolge: silent_raid → Ban-/Partner-/Suppression-Stops →
     /// recent_raids-Count → plan_recruitment_delivery (followers_total=None, da
     /// invite_variant nur ungenutzte Metadaten beeinflusst) → Nachricht bauen →
-    /// 15 s Delay-spawn → send; bei erfolgreichem Send (Sent) wird der verzögerte
-    /// Bot-Ban-Check geplant (recruitment_messaging.py:678, 3600 s).
+    /// 15 s Delay-spawn → Ban-/Partner-/Suppression-Stops direkt vor Send →
+    /// send; bei erfolgreichem Send (Sent) wird der verzögerte Bot-Ban-Check
+    /// geplant.
     async fn send_recruitment_message(
         &self,
         from_broadcaster_login: &str,
@@ -556,23 +658,17 @@ impl RaidArrivalSinkImpl {
             return;
         }
 
-        if let Some(suppression) = self.outbound_suppression.as_ref() {
-            if let Some(entry) = suppression
-                .check_suppression(to_broadcaster_login, "recruitment")
-                .await
-            {
-                tracing::info!(
-                    to = %to_broadcaster_login,
-                    reason_code = %entry.reason_code,
-                    until = %entry.suppressed_until,
-                    "Recruitment-Nachricht übersprungen (gespeicherte Chat-Suppression)"
-                );
-                return;
-            }
-        }
+        let stops = load_recruitment_delivery_stops(
+            &self.pool,
+            &self.blacklist,
+            self.outbound_suppression.as_deref(),
+            to_broadcaster_id,
+            to_broadcaster_login,
+        )
+        .await;
 
         // recent_raids: erfolgreiche eingegangene Raids des Ziels in den letzten
-        // 24 h (recruitment_messaging.py:803). Lookup-Fehler → 0 (Python-Default).
+        // 24 h. Der Trust-Leiter nutzt den Wert nur noch diagnostisch.
         let recent_raid_count = sqlx::query_scalar::<_, i64>(
             "SELECT COUNT(*) FROM twitch_raid_history \
              WHERE to_broadcaster_id = $1 AND COALESCE(success, FALSE) IS TRUE \
@@ -593,7 +689,9 @@ impl RaidArrivalSinkImpl {
             total_recruitment_raid_count: Some(total_recruitment_raid_count),
             followers_total: None,
             chat_bot_available: true,
-            outbound_chat_suppressed: false,
+            target_blacklisted: stops.target_blacklisted,
+            target_is_partner: stops.target_is_partner,
+            outbound_chat_suppressed: stops.outbound_chat_suppressed,
         };
         let plan = plan_recruitment_delivery(&request, &RecruitmentDeliveryConfig::default());
         if !plan.should_deliver() {
@@ -611,10 +709,42 @@ impl RaidArrivalSinkImpl {
         let message = build_recruitment_message(message_variant, to_broadcaster_login);
 
         let pool = self.pool.clone();
+        let outbound_suppression = self.outbound_suppression.clone();
+        let from_broadcaster_login = from_broadcaster_login.to_string();
         let to_broadcaster_id = to_broadcaster_id.to_string();
         let to_broadcaster_login = to_broadcaster_login.to_string();
         tokio::spawn(async move {
             tokio::time::sleep(std::time::Duration::from_secs(15)).await;
+            let blacklist = RaidBlacklistStore::new(pool.clone());
+            let stops = load_recruitment_delivery_stops(
+                &pool,
+                &blacklist,
+                outbound_suppression.as_deref(),
+                &to_broadcaster_id,
+                &to_broadcaster_login,
+            )
+            .await;
+            let request = RecruitmentDeliveryRequest {
+                from_broadcaster_login,
+                to_broadcaster_login: to_broadcaster_login.clone(),
+                target_id: Some(to_broadcaster_id.clone()),
+                recent_raid_count,
+                total_recruitment_raid_count: Some(total_recruitment_raid_count),
+                followers_total: None,
+                chat_bot_available: true,
+                target_blacklisted: stops.target_blacklisted,
+                target_is_partner: stops.target_is_partner,
+                outbound_chat_suppressed: stops.outbound_chat_suppressed,
+            };
+            let plan = plan_recruitment_delivery(&request, &RecruitmentDeliveryConfig::default());
+            if !plan.should_deliver() {
+                tracing::info!(
+                    to = %to_broadcaster_login,
+                    reason = plan.reason.unwrap_or("blocked"),
+                    "Recruitment-Nachricht direkt vor Versand übersprungen"
+                );
+                return;
+            }
             match chat_api.send_message(&to_broadcaster_id, &message).await {
                 Ok(tb_chat::types::SendOutcome::Sent) => {
                     tracing::info!(to = %to_broadcaster_login, "Recruitment-Nachricht gesendet");
@@ -1200,6 +1330,120 @@ impl RaidArrivalSink for RaidArrivalSinkImpl {
         {
             tracing::error!(%error, "Independent-Arrival nicht speicherbar");
         }
+    }
+}
+
+#[cfg(test)]
+mod recruitment_stop_tests {
+    use super::*;
+    use sqlx::postgres::{PgConnectOptions, PgPoolOptions};
+    use std::str::FromStr;
+    use tb_chat::moderation::OutboundSuppressionStore;
+
+    async fn setup(schema: &str, ddls: &[&str]) -> Option<PgPool> {
+        let dsn = std::env::var("TB_TEST_DATABASE_URL").ok()?;
+        let admin = PgPoolOptions::new()
+            .max_connections(1)
+            .connect(&dsn)
+            .await
+            .ok()?;
+        sqlx::query(&format!("DROP SCHEMA IF EXISTS {schema} CASCADE"))
+            .execute(&admin)
+            .await
+            .ok()?;
+        sqlx::query(&format!("CREATE SCHEMA {schema}"))
+            .execute(&admin)
+            .await
+            .ok()?;
+        admin.close().await;
+        let opts = PgConnectOptions::from_str(&dsn)
+            .ok()?
+            .options([("search_path", schema)]);
+        let pool = PgPoolOptions::new()
+            .max_connections(4)
+            .connect_with(opts)
+            .await
+            .ok()?;
+        for ddl in ddls {
+            sqlx::query(ddl).execute(&pool).await.ok()?;
+        }
+        Some(pool)
+    }
+
+    fn delivery_request(stops: RecruitmentDeliveryStops) -> RecruitmentDeliveryRequest {
+        RecruitmentDeliveryRequest {
+            from_broadcaster_login: "quelle".to_string(),
+            to_broadcaster_login: "ziel".to_string(),
+            target_id: Some("200".to_string()),
+            recent_raid_count: 1,
+            total_recruitment_raid_count: Some(1),
+            followers_total: None,
+            chat_bot_available: true,
+            target_blacklisted: stops.target_blacklisted,
+            target_is_partner: stops.target_is_partner,
+            outbound_chat_suppressed: stops.outbound_chat_suppressed,
+        }
+    }
+
+    #[tokio::test]
+    async fn partner_lookup_fehler_blockt_recruitment_fail_closed() {
+        let Some(pool) = setup(
+            "trust_ladder_partner_lookup_fail_closed",
+            &["CREATE TABLE twitch_raid_blacklist (target_id TEXT, target_login TEXT)"],
+        )
+        .await
+        else {
+            eprintln!("SKIP: TB_TEST_DATABASE_URL nicht gesetzt oder nicht erreichbar");
+            return;
+        };
+        let blacklist = RaidBlacklistStore::new(pool.clone());
+
+        let stops = load_recruitment_delivery_stops(&pool, &blacklist, None, "200", "ziel").await;
+
+        assert!(stops.target_is_partner, "Partner-Lookup-Fehler blockt");
+        assert_eq!(
+            plan_recruitment_delivery(
+                &delivery_request(stops),
+                &RecruitmentDeliveryConfig::default()
+            )
+            .reason,
+            Some("target_is_partner")
+        );
+    }
+
+    #[tokio::test]
+    async fn suppression_lookup_fehler_blockt_recruitment_fail_closed() {
+        let Some(pool) = setup(
+            "trust_ladder_suppression_lookup_fail_closed",
+            &[
+                "CREATE TABLE twitch_raid_blacklist (target_id TEXT, target_login TEXT)",
+                "CREATE TABLE twitch_partners (twitch_user_id TEXT, twitch_login TEXT, status TEXT)",
+            ],
+        )
+        .await
+        else {
+            eprintln!("SKIP: TB_TEST_DATABASE_URL nicht gesetzt oder nicht erreichbar");
+            return;
+        };
+        let blacklist = RaidBlacklistStore::new(pool.clone());
+        let suppression = OutboundSuppressionStore::new(pool.clone());
+
+        let stops =
+            load_recruitment_delivery_stops(&pool, &blacklist, Some(&suppression), "200", "ziel")
+                .await;
+
+        assert!(
+            stops.outbound_chat_suppressed,
+            "Suppression-Lookup-Fehler blockt"
+        );
+        assert_eq!(
+            plan_recruitment_delivery(
+                &delivery_request(stops),
+                &RecruitmentDeliveryConfig::default()
+            )
+            .reason,
+            Some("outbound_chat_suppressed")
+        );
     }
 }
 

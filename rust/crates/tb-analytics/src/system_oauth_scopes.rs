@@ -299,19 +299,44 @@ mod tests {
             partner_status(Some("active"), None, true, None),
             "non_partner"
         );
-        assert_eq!(partner_status(Some("departnered"), None, false, None), "departnered");
-        assert_eq!(partner_status(Some("active"), Some("2024-01-01"), false, None), "archived");
-        assert_eq!(partner_status(Some("active"), Some(""), false, None), "active");
+        assert_eq!(
+            partner_status(Some("departnered"), None, false, None),
+            "departnered"
+        );
+        assert_eq!(
+            partner_status(Some("active"), Some("2024-01-01"), false, None),
+            "archived"
+        );
+        assert_eq!(
+            partner_status(Some("active"), Some(""), false, None),
+            "active"
+        );
     }
 
-    async fn pool() -> Option<PgPool> {
+    async fn pool(schema: &str) -> Option<PgPool> {
         let dsn = std::env::var("TB_TEST_DATABASE_URL").ok()?;
-        let admin = PgPoolOptions::new().max_connections(1).connect(&dsn).await.ok()?;
-        sqlx::query("DROP SCHEMA IF EXISTS t_oauth_scopes CASCADE").execute(&admin).await.ok()?;
-        sqlx::query("CREATE SCHEMA t_oauth_scopes").execute(&admin).await.ok()?;
+        let admin = PgPoolOptions::new()
+            .max_connections(1)
+            .connect(&dsn)
+            .await
+            .ok()?;
+        sqlx::query(&format!("DROP SCHEMA IF EXISTS {schema} CASCADE"))
+            .execute(&admin)
+            .await
+            .ok()?;
+        sqlx::query(&format!("CREATE SCHEMA {schema}"))
+            .execute(&admin)
+            .await
+            .ok()?;
         admin.close().await;
-        let options = PgConnectOptions::from_str(&dsn).ok()?.options([("search_path", "t_oauth_scopes")]);
-        let pool = PgPoolOptions::new().max_connections(2).connect_with(options).await.ok()?;
+        let options = PgConnectOptions::from_str(&dsn)
+            .ok()?
+            .options([("search_path", schema)]);
+        let pool = PgPoolOptions::new()
+            .max_connections(2)
+            .connect_with(options)
+            .await
+            .ok()?;
         for ddl in [
             "CREATE TABLE twitch_raid_auth (twitch_login TEXT, twitch_user_id TEXT, scopes TEXT, needs_reauth INTEGER DEFAULT 0, authorized_at TIMESTAMPTZ)",
             "CREATE TABLE twitch_partners_all_state (twitch_login TEXT, twitch_user_id TEXT, discord_display_name TEXT, manual_partner_opt_out INTEGER DEFAULT 0, archived_at TEXT, status TEXT, technical_pause_reason TEXT)",
@@ -323,7 +348,9 @@ mod tests {
 
     #[tokio::test]
     async fn laedt_per_streamer_scope_status() {
-        let Some(pool) = pool().await else { return };
+        let Some(pool) = pool("t_oauth_scopes_status").await else {
+            return;
+        };
         sqlx::query(
             "INSERT INTO twitch_raid_auth (twitch_login, twitch_user_id, scopes, needs_reauth, authorized_at) \
              VALUES ('streamerx','42','channel:bot bits:read',0, NOW())",
@@ -346,7 +373,9 @@ mod tests {
 
     #[tokio::test]
     async fn leeres_schema_liefert_leere_liste() {
-        let Some(pool) = pool().await else { return };
+        let Some(pool) = pool("t_oauth_scopes_empty").await else {
+            return;
+        };
         let rows = load_oauth_scope_rows(&pool).await.unwrap();
         assert!(rows.is_empty());
     }

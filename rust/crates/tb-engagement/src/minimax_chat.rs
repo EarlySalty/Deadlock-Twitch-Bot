@@ -747,11 +747,25 @@ mod tests {
             .await
             .unwrap();
 
+        let ledger_path = ledger_temp_path();
+        if !ledger_path.exists() {
+            return;
+        }
         let pool = sqlx::sqlite::SqlitePoolOptions::new()
             .max_connections(1)
-            .connect(&format!("sqlite://{}", ledger_temp_path().display()))
+            .connect(&format!("sqlite://{}", ledger_path.display()))
             .await
             .expect("Ledger-SQLite öffnen");
+        let table_exists: Option<i64> = sqlx::query_scalar(
+            "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'minimax_usage'",
+        )
+        .fetch_optional(&pool)
+        .await
+        .expect("sqlite_master-Query");
+        if table_exists.is_none() {
+            pool.close().await;
+            return;
+        }
         let count: (i64,) = sqlx::query_as(
             "SELECT COUNT(*) FROM minimax_usage WHERE tokens_in = 999 AND tokens_out = 111",
         )

@@ -1,4 +1,4 @@
-//! Outreach-Boost-Ziele (Phase 6g): frisch kontaktierte Outreach-Empfänger
+//! Outreach-Boost-Ziele (Phase 6g): frisch vorgemerkte Outreach-Empfänger
 //! bekommen höchstens EINEN bevorzugten Raid. Port von
 //! `raid/services/outreach_boost_targets.py`.
 //!
@@ -23,7 +23,7 @@ impl OutreachBoostStore {
     }
 
     /// Logins (lowercase) aller frischen, noch nicht boost-geraidten
-    /// Outreach-Empfänger (Python `load_outreach_boost_logins`).
+    /// Outreach-Empfänger. Aktive Partner werden ausgeschlossen.
     pub async fn load_boost_logins(
         &self,
         lookback_hours: i32,
@@ -33,12 +33,22 @@ impl OutreachBoostStore {
         }
         let rows: Vec<(Option<String>,)> = sqlx::query_as(
             r#"
-            SELECT streamer_login
-            FROM twitch_partner_outreach
-            WHERE status = 'sent'
+            SELECT o.streamer_login
+            FROM twitch_partner_outreach o
+            WHERE o.status IN ('sent', 'queued')
               AND raid_used_at IS NULL
-              AND contacted_at IS NOT NULL
-              AND contacted_at::timestamptz >= NOW() - (($1 || ' hours')::interval)
+              AND COALESCE(NULLIF(o.contacted_at::text, ''), NULLIF(o.detected_at::text, '')) IS NOT NULL
+              AND COALESCE(NULLIF(o.contacted_at::text, '')::timestamptz, NULLIF(o.detected_at::text, '')::timestamptz) >= NOW() - (($1 || ' hours')::interval)
+              AND NOT EXISTS (
+                    SELECT 1
+                    FROM twitch_partners p
+                    WHERE p.status = 'active'
+                      AND (
+                            LOWER(p.twitch_login) = LOWER(o.streamer_login)
+                         OR (NULLIF(o.streamer_user_id, '') IS NOT NULL
+                             AND p.twitch_user_id = o.streamer_user_id)
+                      )
+              )
             "#,
         )
         .bind(lookback_hours.to_string())
