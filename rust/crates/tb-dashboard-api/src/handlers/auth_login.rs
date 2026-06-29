@@ -37,7 +37,8 @@ use crate::handlers::spa::is_admin_dashboard_host_request;
 
 /// Logout-Redirect-Ziel (Python `auth_logout`: 302 → `/analyse`).
 const LOGOUT_REDIRECT: &str = "/analyse";
-const PUBLIC_DASHBOARD_BASE_URL: &str = "https://deutsche-deadlock-community.de";
+/// Admin-Logout-Ziel: zurück in den Discord-Admin-Login auf demselben Host.
+const ADMIN_LOGOUT_REDIRECT: &str = "/twitch/auth/discord/login";
 /// Cookie-Name des OAuth-Kontext-CSRF-Tokens (P2.139). Kurzlebig, HttpOnly,
 /// SameSite=Lax; bindet den Callback an den Browser, der den Login startete.
 const OAUTH_CONTEXT_COOKIE: &str = "twitch_oauth_ctx";
@@ -586,8 +587,7 @@ fn html_escape(value: &str) -> String {
 ///
 /// Löscht die Session-Row + Cache (`invalidate_session`), entfernt das Cookie
 /// (`clear_session_cookie`) und leitet auf [`LOGOUT_REDIRECT`] (`/analyse`).
-/// Kommt der Logout vom Admin-Host, ist das Ziel die absolute öffentliche
-/// Dashboard-URL, weil `/analyse` auf dem Admin-Host absichtlich gesperrt ist.
+/// Kommt der Logout vom Admin-Host, ist das Ziel der relative Admin-Login-Pfad.
 pub async fn logout_handler(
     state: Option<Extension<DashboardAuthState>>,
     config: Option<Extension<OAuthLoginConfig>>,
@@ -618,21 +618,9 @@ pub async fn logout_handler(
 
 fn logout_redirect_for_request(headers: &HeaderMap) -> String {
     if is_admin_dashboard_host_request(headers) {
-        return format!("{}{}", public_dashboard_base_url_from_env(), LOGOUT_REDIRECT);
+        return ADMIN_LOGOUT_REDIRECT.to_string();
     }
     LOGOUT_REDIRECT.to_string()
-}
-
-fn public_dashboard_base_url_from_env() -> String {
-    let base = non_empty_env("TWITCH_PUBLIC_URL")
-        .or_else(|| non_empty_env("DASHBOARD_PUBLIC_URL"))
-        .unwrap_or_else(|| PUBLIC_DASHBOARD_BASE_URL.to_string());
-    let trimmed = base.trim_end_matches('/');
-    if trimmed.is_empty() {
-        PUBLIC_DASHBOARD_BASE_URL.to_string()
-    } else {
-        trimmed.to_string()
-    }
 }
 
 /// Liest einen Cookie-Wert direkt aus den Request-Headern (für Handler ohne
@@ -849,7 +837,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn logout_vom_admin_host_redirectet_absolut_und_loescht_cookies() {
+    async fn logout_vom_admin_host_redirectet_zur_admin_login_und_loescht_cookies() {
         let mut headers = HeaderMap::new();
         headers.insert(
             axum::http::header::HOST,
@@ -861,7 +849,7 @@ mod tests {
         assert_eq!(resp.status(), StatusCode::SEE_OTHER);
         assert_eq!(
             resp.headers().get(axum::http::header::LOCATION).unwrap(),
-            "https://deutsche-deadlock-community.de/analyse"
+            "/twitch/auth/discord/login"
         );
         let cookies: Vec<&str> = resp
             .headers()

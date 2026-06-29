@@ -2,9 +2,9 @@
 
 **Ausgangslage:** Wer sich im Admin-Dashboard ausgeloggt hat, landete auf einer „Not Found"-Seite. Grund: Der Logout schickte den Browser auf einen Pfad, der nur auf der öffentlichen Seite existiert — auf der Admin-Subdomain ist genau dieser Pfad bewusst gesperrt. Der Redirect war noch aus der alten Generation als reiner Relativpfad übernommen, ohne zu unterscheiden, von welchem Host der Logout kam.
 
-**Änderung:** Der Logout merkt jetzt, ob er vom Admin-Host kommt, und schickt in dem Fall gezielt auf die vollständige Adresse der öffentlichen Seite statt auf den dort gesperrten Relativpfad. Vom regulären Host aus bleibt alles wie bisher. Zusätzlich ist der Host-/Pfad-Vertrag (welche Seite auf welcher Subdomain lebt und warum) dauerhaft festgehalten, damit diese Art Fehlleitung nicht wiederkehrt.
+**Änderung:** Der Logout merkt jetzt, ob er vom Admin-Host kommt, und schickt in dem Fall zurück zur Admin-Login-Seite — genau dorthin, wo man sich neu anmeldet — statt auf das öffentliche Analyse-Dashboard, das im Admin-Bereich nichts zu suchen hat. Vom regulären Host aus bleibt alles wie bisher. Zusätzlich ist der Host-/Pfad-Vertrag (welche Seite auf welcher Subdomain lebt und warum) dauerhaft festgehalten, damit diese Art Fehlleitung nicht wiederkehrt.
 
-**Ergebnis:** Logout aus dem Admin-Bereich führt sauber zurück auf eine gültige Seite statt in einen toten 404.
+**Ergebnis:** Logout aus dem Admin-Bereich führt sauber zur Admin-Anmeldung zurück statt in einen toten 404.
 
 ## #296 — Streamer-Ansprache: aus der Einmal-Nachricht wird eine wachsende Beziehung
 
