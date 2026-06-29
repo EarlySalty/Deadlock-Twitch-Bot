@@ -1,44 +1,33 @@
 //! Frische Migrationen gegen eine leere Wegwerf-DB.
 //! Ohne `TEST_DATABASE_URL` wird der Test laut uebersprungen.
 
-use std::time::Duration;
+use std::{
+    collections::{BTreeMap, BTreeSet},
+    fs,
+    path::Path,
+    time::Duration,
+};
 
 use sqlx::postgres::PgPoolOptions;
 
 static MIGRATOR: sqlx::migrate::Migrator = sqlx::migrate!("../../migrations");
+const FRESH_SCHEMA_QUERY: &str = "SELECT table_name, column_name, data_type, is_nullable, coalesce(column_default,'') FROM information_schema.columns WHERE table_schema='public' AND table_name <> '_sqlx_migrations'";
+const SCHEMA_SNAPSHOT: &str = include_str!("fresh_schema_snapshot.txt");
 
 fn test_dsn() -> Option<String> {
     std::env::var("TEST_DATABASE_URL").ok()
 }
 
-async fn column_type(pool: &sqlx::PgPool, table: &str, column: &str) -> String {
-    sqlx::query_scalar(
-        "SELECT data_type
-           FROM information_schema.columns
-          WHERE table_schema = 'public'
-            AND table_name = $1
-            AND column_name = $2",
-    )
-    .bind(table)
-    .bind(column)
-    .fetch_one(pool)
-    .await
-    .unwrap_or_else(|err| panic!("column type for {table}.{column}: {err}"))
-}
-
-async fn column_nullable(pool: &sqlx::PgPool, table: &str, column: &str) -> bool {
-    sqlx::query_scalar(
-        "SELECT is_nullable = 'YES'
-           FROM information_schema.columns
-          WHERE table_schema = 'public'
-            AND table_name = $1
-            AND column_name = $2",
-    )
-    .bind(table)
-    .bind(column)
-    .fetch_one(pool)
-    .await
-    .unwrap_or_else(|err| panic!("column nullable for {table}.{column}: {err}"))
+async fn fresh_schema_lines(pool: &sqlx::PgPool) -> BTreeSet<String> {
+    sqlx::query_as::<_, (String, String, String, String, String)>(FRESH_SCHEMA_QUERY)
+        .fetch_all(pool)
+        .await
+        .expect("read fresh schema from information_schema.columns")
+        .into_iter()
+        .map(|(table, column, data_type, is_nullable, column_default)| {
+            format!("{table}|{column}|{data_type}|{is_nullable}|{column_default}")
+        })
+        .collect()
 }
 
 async fn sequence_type(pool: &sqlx::PgPool, sequence: &str) -> Option<String> {
@@ -53,8 +42,143 @@ async fn sequence_type(pool: &sqlx::PgPool, sequence: &str) -> Option<String> {
     .unwrap_or_else(|err| panic!("sequence type for {sequence}: {err}"))
 }
 
+fn snapshot_lines() -> BTreeSet<String> {
+    SCHEMA_SNAPSHOT
+        .lines()
+        .filter(|line| !line.is_empty())
+        .map(ToOwned::to_owned)
+        .collect()
+}
+
+fn write_schema_snapshot(actual: &BTreeSet<String>) {
+    let snapshot_path =
+        Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fresh_schema_snapshot.txt");
+    let mut content = actual.iter().cloned().collect::<Vec<_>>().join("\n");
+    content.push('\n');
+    fs::write(&snapshot_path, content).unwrap_or_else(|err| {
+        panic!(
+            "write schema snapshot to {}: {err}",
+            snapshot_path.display()
+        )
+    });
+}
+
+fn schema_line_key(line: &str) -> String {
+    let mut parts = line.splitn(3, '|');
+    let table = parts.next().unwrap_or_default();
+    let column = parts.next().unwrap_or_default();
+    format!("{table}|{column}")
+}
+
+fn schema_lines_by_key(lines: &BTreeSet<String>) -> BTreeMap<String, &str> {
+    lines
+        .iter()
+        .map(|line| (schema_line_key(line), line.as_str()))
+        .collect()
+}
+
+#[derive(Debug)]
+struct ChangedSchemaLine {
+    key: String,
+    expected: String,
+    actual: String,
+}
+
+#[derive(Debug)]
+struct SchemaDiff {
+    only_in_actual: Vec<String>,
+    only_in_expected: Vec<String>,
+    changed: Vec<ChangedSchemaLine>,
+}
+
+impl SchemaDiff {
+    fn is_empty(&self) -> bool {
+        self.only_in_actual.is_empty()
+            && self.only_in_expected.is_empty()
+            && self.changed.is_empty()
+    }
+
+    fn count(&self) -> usize {
+        self.only_in_actual.len() + self.only_in_expected.len() + self.changed.len()
+    }
+
+    fn render(&self) -> String {
+        let mut output = String::from("schema drift against fresh_schema_snapshot.txt\n");
+
+        if !self.only_in_actual.is_empty() {
+            output.push_str("\nnur_im_Ist (NEU):\n");
+            for line in &self.only_in_actual {
+                output.push_str("  + ");
+                output.push_str(line);
+                output.push('\n');
+            }
+        }
+
+        if !self.only_in_expected.is_empty() {
+            output.push_str("\nnur_im_Soll (FEHLT):\n");
+            for line in &self.only_in_expected {
+                output.push_str("  - ");
+                output.push_str(line);
+                output.push('\n');
+            }
+        }
+
+        if !self.changed.is_empty() {
+            output.push_str("\ngeaenderte_Zeilen:\n");
+            for changed in &self.changed {
+                output.push_str("  * ");
+                output.push_str(&changed.key);
+                output.push('\n');
+                output.push_str("    soll: ");
+                output.push_str(&changed.expected);
+                output.push('\n');
+                output.push_str("    ist : ");
+                output.push_str(&changed.actual);
+                output.push('\n');
+            }
+        }
+
+        output
+    }
+}
+
+fn diff_schema(actual: &BTreeSet<String>, expected: &BTreeSet<String>) -> SchemaDiff {
+    let actual_by_key = schema_lines_by_key(actual);
+    let expected_by_key = schema_lines_by_key(expected);
+
+    let only_in_actual = actual_by_key
+        .iter()
+        .filter(|(key, _)| !expected_by_key.contains_key(*key))
+        .map(|(_, line)| (*line).to_owned())
+        .collect();
+
+    let only_in_expected = expected_by_key
+        .iter()
+        .filter(|(key, _)| !actual_by_key.contains_key(*key))
+        .map(|(_, line)| (*line).to_owned())
+        .collect();
+
+    let changed = expected_by_key
+        .iter()
+        .filter_map(|(key, expected_line)| {
+            let actual_line = actual_by_key.get(key)?;
+            (*actual_line != *expected_line).then(|| ChangedSchemaLine {
+                key: key.clone(),
+                expected: (*expected_line).to_owned(),
+                actual: (*actual_line).to_owned(),
+            })
+        })
+        .collect();
+
+    SchemaDiff {
+        only_in_actual,
+        only_in_expected,
+        changed,
+    }
+}
+
 #[tokio::test]
-async fn fresh_migrations_apply_expected_analytics_schema_types() {
+async fn fresh_migrations_match_committed_schema_snapshot() {
     let dsn = match test_dsn() {
         Some(dsn) => dsn,
         None => {
@@ -77,304 +201,24 @@ async fn fresh_migrations_apply_expected_analytics_schema_types() {
 
     MIGRATOR.run(&pool).await.expect("run all migrations");
 
-    for (table, column, expected) in [
-        (
-            "clip_fetch_history",
-            "fetched_at",
-            "timestamp with time zone",
-        ),
-        ("clip_fetch_history", "id", "bigint"),
-        (
-            "clip_last_hashtags",
-            "last_used_at",
-            "timestamp with time zone",
-        ),
-        (
-            "clip_templates_global",
-            "created_at",
-            "timestamp with time zone",
-        ),
-        ("clip_templates_global", "id", "bigint"),
-        (
-            "clip_templates_streamer",
-            "created_at",
-            "timestamp with time zone",
-        ),
-        ("clip_templates_streamer", "id", "bigint"),
-        ("clip_templates_streamer", "is_default", "boolean"),
-        (
-            "clip_templates_streamer",
-            "updated_at",
-            "timestamp with time zone",
-        ),
-        ("twitch_ad_break_events", "id", "bigint"),
-        ("twitch_ad_break_events", "session_id", "bigint"),
-        (
-            "twitch_ad_break_events",
-            "started_at",
-            "timestamp with time zone",
-        ),
-        ("twitch_ads_schedule_snapshot", "id", "bigint"),
-        (
-            "twitch_ads_schedule_snapshot",
-            "last_ad_at",
-            "timestamp with time zone",
-        ),
-        (
-            "twitch_ads_schedule_snapshot",
-            "next_ad_at",
-            "timestamp with time zone",
-        ),
-        (
-            "twitch_ads_schedule_snapshot",
-            "snapshot_at",
-            "timestamp with time zone",
-        ),
-        (
-            "twitch_ads_schedule_snapshot",
-            "snooze_refresh_at",
-            "timestamp with time zone",
-        ),
-        ("twitch_ban_events", "ends_at", "timestamp with time zone"),
-        ("twitch_ban_events", "id", "bigint"),
-        (
-            "twitch_ban_events",
-            "received_at",
-            "timestamp with time zone",
-        ),
-        ("twitch_ban_events", "session_id", "bigint"),
-        ("twitch_bits_events", "id", "bigint"),
-        (
-            "twitch_bits_events",
-            "received_at",
-            "timestamp with time zone",
-        ),
-        ("twitch_bits_events", "session_id", "bigint"),
-        ("twitch_channel_points_events", "id", "bigint"),
-        (
-            "twitch_channel_points_events",
-            "redeemed_at",
-            "timestamp with time zone",
-        ),
-        ("twitch_channel_points_events", "session_id", "bigint"),
-        ("twitch_channel_updates", "id", "bigint"),
-        (
-            "twitch_channel_updates",
-            "recorded_at",
-            "timestamp with time zone",
-        ),
-        ("twitch_chat_messages", "id", "bigint"),
-        ("twitch_clips_social_analytics", "clip_id", "bigint"),
-        (
-            "twitch_clips_social_analytics",
-            "completion_rate",
-            "double precision",
-        ),
-        ("twitch_clips_social_analytics", "ctr", "double precision"),
-        (
-            "twitch_clips_social_analytics",
-            "engagement_rate",
-            "double precision",
-        ),
-        ("twitch_clips_social_analytics", "id", "bigint"),
-        (
-            "twitch_clips_social_analytics",
-            "posted_at",
-            "timestamp with time zone",
-        ),
-        (
-            "twitch_clips_social_analytics",
-            "synced_at",
-            "timestamp with time zone",
-        ),
-        (
-            "twitch_clips_social_analytics",
-            "watch_time_avg",
-            "double precision",
-        ),
-        (
-            "twitch_clips_social_media",
-            "downloaded_at",
-            "timestamp with time zone",
-        ),
-        (
-            "twitch_clips_social_media",
-            "duration_seconds",
-            "double precision",
-        ),
-        ("twitch_clips_social_media", "id", "bigint"),
-        (
-            "twitch_clips_social_media",
-            "instagram_uploaded_at",
-            "timestamp with time zone",
-        ),
-        (
-            "twitch_clips_social_media",
-            "last_analytics_sync",
-            "timestamp with time zone",
-        ),
-        (
-            "twitch_clips_social_media",
-            "tiktok_uploaded_at",
-            "timestamp with time zone",
-        ),
-        ("twitch_clips_social_media", "uploaded_instagram", "boolean"),
-        ("twitch_clips_social_media", "uploaded_tiktok", "boolean"),
-        ("twitch_clips_social_media", "uploaded_youtube", "boolean"),
-        (
-            "twitch_clips_social_media",
-            "youtube_uploaded_at",
-            "timestamp with time zone",
-        ),
-        ("twitch_clips_upload_queue", "clip_id", "bigint"),
-        (
-            "twitch_clips_upload_queue",
-            "completed_at",
-            "timestamp with time zone",
-        ),
-        (
-            "twitch_clips_upload_queue",
-            "created_at",
-            "timestamp with time zone",
-        ),
-        ("twitch_clips_upload_queue", "id", "bigint"),
-        (
-            "twitch_clips_upload_queue",
-            "last_attempt_at",
-            "timestamp with time zone",
-        ),
-        (
-            "twitch_clips_upload_queue",
-            "scheduled_at",
-            "timestamp with time zone",
-        ),
-        ("twitch_eventsub_capacity_snapshot", "id", "bigint"),
-        (
-            "twitch_eventsub_capacity_snapshot",
-            "ts_utc",
-            "timestamp with time zone",
-        ),
-        (
-            "twitch_eventsub_capacity_snapshot",
-            "utilization_pct",
-            "double precision",
-        ),
-        (
-            "twitch_follow_events",
-            "followed_at",
-            "timestamp with time zone",
-        ),
-        ("twitch_follow_events", "id", "bigint"),
-        (
-            "twitch_hype_train_events",
-            "ended_at",
-            "timestamp with time zone",
-        ),
-        ("twitch_hype_train_events", "id", "bigint"),
-        ("twitch_hype_train_events", "session_id", "bigint"),
-        (
-            "twitch_hype_train_events",
-            "started_at",
-            "timestamp with time zone",
-        ),
-        (
-            "twitch_link_clicks",
-            "clicked_at",
-            "timestamp with time zone",
-        ),
-        ("twitch_link_clicks", "id", "bigint"),
-        (
-            "twitch_raid_auth",
-            "authorized_at",
-            "timestamp with time zone",
-        ),
-        ("twitch_raid_auth", "created_at", "timestamp with time zone"),
-        (
-            "twitch_raid_auth",
-            "enc_migrated_at",
-            "timestamp with time zone",
-        ),
-        (
-            "twitch_raid_auth",
-            "last_refreshed_at",
-            "timestamp with time zone",
-        ),
-        (
-            "twitch_raid_auth",
-            "reauth_notified_at",
-            "timestamp with time zone",
-        ),
-        (
-            "twitch_raid_auth",
-            "token_expires_at",
-            "timestamp with time zone",
-        ),
-        ("twitch_shoutout_events", "id", "bigint"),
-        (
-            "twitch_shoutout_events",
-            "received_at",
-            "timestamp with time zone",
-        ),
-        ("twitch_stream_sessions", "dropoff_pct", "double precision"),
-        (
-            "twitch_stream_sessions",
-            "retention_10m",
-            "double precision",
-        ),
-        (
-            "twitch_stream_sessions",
-            "retention_20m",
-            "double precision",
-        ),
-        ("twitch_stream_sessions", "retention_5m", "double precision"),
-        ("twitch_streamers", "created_at", "timestamp with time zone"),
-        ("twitch_subscription_events", "id", "bigint"),
-        (
-            "twitch_subscription_events",
-            "received_at",
-            "timestamp with time zone",
-        ),
-        ("twitch_subscription_events", "session_id", "bigint"),
-        ("twitch_subscriptions_snapshot", "id", "bigint"),
-        (
-            "twitch_subscriptions_snapshot",
-            "snapshot_at",
-            "timestamp with time zone",
-        ),
-        ("twitch_stream_sessions", "id", "bigint"),
-        ("twitch_stream_sessions", "avg_viewers", "double precision"),
-        ("twitch_session_viewers", "session_id", "bigint"),
-        (
-            "twitch_session_viewers",
-            "ts_utc",
-            "timestamp with time zone",
-        ),
-        ("twitch_chat_messages", "session_id", "bigint"),
-        (
-            "twitch_chat_messages",
-            "message_ts",
-            "timestamp with time zone",
-        ),
-        ("twitch_raid_retention", "target_session_id", "bigint"),
-    ] {
-        let actual = column_type(&pool, table, column).await;
-        assert_eq!(actual, expected, "{table}.{column}");
+    let actual = fresh_schema_lines(&pool).await;
+
+    if matches!(std::env::var("UPDATE_SCHEMA_SNAPSHOT").as_deref(), Ok("1")) {
+        write_schema_snapshot(&actual);
+        return;
     }
 
-    for (table, column) in [
-        ("twitch_ads_schedule_snapshot", "snapshot_at"),
-        ("twitch_eventsub_capacity_snapshot", "ts_utc"),
-        ("twitch_hype_train_events", "started_at"),
-        ("twitch_link_clicks", "clicked_at"),
-        ("twitch_live_announcement_configs", "updated_at"),
-        ("twitch_stats_category", "streamer"),
-        ("twitch_stats_category", "ts_utc"),
-        ("twitch_stats_tracked", "streamer"),
-        ("twitch_stats_tracked", "ts_utc"),
-        ("twitch_subscriptions_snapshot", "snapshot_at"),
-    ] {
-        let actual = column_nullable(&pool, table, column).await;
-        assert!(!actual, "{table}.{column}");
+    let expected = snapshot_lines();
+    let diff = diff_schema(&actual, &expected);
+    if !diff.is_empty() {
+        eprintln!("{}", diff.render());
+        panic!(
+            "schema drift detected: {} differences ({} new, {} missing, {} changed)",
+            diff.count(),
+            diff.only_in_actual.len(),
+            diff.only_in_expected.len(),
+            diff.changed.len()
+        );
     }
 
     for sequence in [
