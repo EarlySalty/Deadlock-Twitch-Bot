@@ -286,13 +286,6 @@ twitch_ads_schedule_snapshot|snooze_count|integer|YES|
 twitch_ads_schedule_snapshot|snooze_refresh_at|timestamp with time zone|YES|
 twitch_ads_schedule_snapshot|twitch_login|text|YES|
 twitch_ads_schedule_snapshot|twitch_user_id|text|NO|
-twitch_auto_raid_pause|created_at|timestamp with time zone|NO|CURRENT_TIMESTAMP
-twitch_auto_raid_pause|paused_until|timestamp with time zone|NO|
-twitch_auto_raid_pause|reason|text|YES|
-twitch_auto_raid_pause|set_by|text|YES|
-twitch_auto_raid_pause|twitch_login|text|YES|
-twitch_auto_raid_pause|twitch_user_id|text|NO|
-twitch_auto_raid_pause|updated_at|timestamp with time zone|NO|CURRENT_TIMESTAMP
 twitch_ban_events|ends_at|timestamp with time zone|YES|
 twitch_ban_events|event_type|text|NO|
 twitch_ban_events|id|bigint|NO|nextval('twitch_ban_events_id_seq'::regclass)
