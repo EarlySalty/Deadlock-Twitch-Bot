@@ -141,8 +141,8 @@ type ScopeRawRow = (
 ///
 /// Joint `twitch_raid_auth` an die kanonische (deduplizierte) Partner-Zeile aus
 /// `twitch_partners_all_state` — bevorzugt Match per Twitch-User-ID, sonst per
-/// Login. Sortiert nach effektivem Login. Clean-SQL: `authorized_at` ist
-/// TIMESTAMPTZ, kein TEXT-Vergleich.
+/// Login. Sortiert nach effektivem Login. `authorized_at` ist im
+/// Migrationsschema ein TEXT-Zeitstempel.
 pub async fn load_oauth_scope_rows(pool: &PgPool) -> Result<Vec<OAuthScopeRow>, sqlx::Error> {
     let rows: Vec<ScopeRawRow> = sqlx::query_as(
         r#"
@@ -338,7 +338,7 @@ mod tests {
             .await
             .ok()?;
         for ddl in [
-            "CREATE TABLE twitch_raid_auth (twitch_login TEXT, twitch_user_id TEXT, scopes TEXT, needs_reauth BOOLEAN DEFAULT FALSE, authorized_at TIMESTAMPTZ)",
+            "CREATE TABLE twitch_raid_auth (twitch_login TEXT, twitch_user_id TEXT, scopes TEXT, needs_reauth BOOLEAN DEFAULT FALSE, authorized_at TEXT)",
             "CREATE TABLE twitch_partners_all_state (twitch_login TEXT, twitch_user_id TEXT, discord_display_name TEXT, manual_partner_opt_out INTEGER DEFAULT 0, archived_at TEXT, status TEXT, technical_pause_reason TEXT)",
         ] {
             sqlx::query(ddl).execute(&pool).await.ok()?;
@@ -353,7 +353,7 @@ mod tests {
         };
         sqlx::query(
             "INSERT INTO twitch_raid_auth (twitch_login, twitch_user_id, scopes, needs_reauth, authorized_at) \
-             VALUES ('streamerx','42','channel:bot bits:read',FALSE, NOW())",
+             VALUES ('streamerx','42','channel:bot bits:read',FALSE, NOW()::TEXT)",
         )
         .execute(&pool).await.unwrap();
         sqlx::query(
@@ -378,7 +378,7 @@ mod tests {
         };
         sqlx::query(
             "INSERT INTO twitch_raid_auth (twitch_login, twitch_user_id, scopes, needs_reauth, authorized_at) \
-             VALUES ('reauthx','43','bits:read',TRUE, NOW())",
+             VALUES ('reauthx','43','bits:read',TRUE, NOW()::TEXT)",
         )
         .execute(&pool).await.unwrap();
 

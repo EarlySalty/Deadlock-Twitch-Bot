@@ -2,7 +2,7 @@
 
 **Ausgangslage:** Nachdem die Anmeldung an der Daten-Schnittstelle gefixt war (siehe #298), kam man zwar durch, aber die Streamer-Liste warf jetzt einen „internal server error". Ursache: Ein Wahr/Falsch-Feld in der Datenbank (braucht-Neu-Anmeldung) wurde im Code noch als Zahl gelesen — ein Überbleibsel aus der alten Generation, das beim Umstieg auf echte Wahr/Falsch-Felder nie mitgezogen wurde. Beim ersten echten Zugriff (vorher durch die Anmelde-Sperre verdeckt) brach das Auslesen ab.
 
-**Änderung:** Die betroffenen Felder werden jetzt korrekt als Wahr/Falsch gelesen — abgeglichen mit dem tatsächlichen Datenbank-Schema — statt als Zahl. Gleiches galt für eine zweite Stelle (OAuth-Scope-Übersicht), die in der Abfrage Wahr/Falsch und Zahl mischte. Die übrigen Admin-Bereiche wurden auf denselben Stolperstein durchgesehen.
+**Änderung:** Die betroffenen Felder werden jetzt korrekt gelesen — abgeglichen mit dem tatsächlichen Datenbank-Schema. Das betraf zwei Spielarten desselben Stolpersteins: Wahr/Falsch-Felder, die noch als Zahl gelesen wurden, und mehrere Datums-/Zeit-Felder, die in der Datenbank als Text liegen, im Code aber als Zeitstempel erwartet wurden. Alle von der Streamer-Abfrage gelesenen Spalten wurden einmal komplett gegen das Schema abgeglichen (statt Fehler für Fehler), und eine zweite Stelle (OAuth-Scope-Übersicht) mit gemischten Typen ist ebenfalls bereinigt.
 
 **Ergebnis:** Die Streamer-Liste und die OAuth-Scope-Übersicht laden im Admin-Dashboard sauber durch.
 

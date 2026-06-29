@@ -205,7 +205,7 @@ mod tests {
             return;
         };
         for ddl in [
-            "CREATE TABLE twitch_raid_auth (twitch_login TEXT, twitch_user_id TEXT, scopes TEXT, needs_reauth BOOLEAN DEFAULT FALSE, authorized_at TIMESTAMPTZ)",
+            "CREATE TABLE twitch_raid_auth (twitch_login TEXT, twitch_user_id TEXT, scopes TEXT, needs_reauth BOOLEAN DEFAULT FALSE, authorized_at TEXT)",
             "CREATE TABLE twitch_partners_all_state (twitch_login TEXT, twitch_user_id TEXT, discord_display_name TEXT, manual_partner_opt_out INTEGER DEFAULT 0, archived_at TEXT, status TEXT, technical_pause_reason TEXT)",
         ] {
             sqlx::query(ddl).execute(&pool).await.unwrap();
@@ -227,12 +227,12 @@ mod tests {
             return;
         };
         for ddl in [
-            "CREATE TABLE twitch_raid_auth (twitch_login TEXT, twitch_user_id TEXT, scopes TEXT, needs_reauth BOOLEAN DEFAULT FALSE, authorized_at TIMESTAMPTZ)",
+            "CREATE TABLE twitch_raid_auth (twitch_login TEXT, twitch_user_id TEXT, scopes TEXT, needs_reauth BOOLEAN DEFAULT FALSE, authorized_at TEXT)",
             "CREATE TABLE twitch_partners_all_state (twitch_login TEXT, twitch_user_id TEXT, discord_display_name TEXT, manual_partner_opt_out INTEGER DEFAULT 0, archived_at TEXT, status TEXT, technical_pause_reason TEXT)",
         ] {
             sqlx::query(ddl).execute(&pool).await.unwrap();
         }
-        sqlx::query("INSERT INTO twitch_raid_auth (twitch_login, twitch_user_id, scopes, needs_reauth, authorized_at) VALUES ('a','1','bits:read',FALSE, NOW())")
+        sqlx::query("INSERT INTO twitch_raid_auth (twitch_login, twitch_user_id, scopes, needs_reauth, authorized_at) VALUES ('a','1','bits:read',FALSE, NOW()::TEXT)")
             .execute(&pool).await.unwrap();
         sqlx::query("INSERT INTO twitch_partners_all_state (twitch_login, twitch_user_id, status) VALUES ('a','1','active')")
             .execute(&pool).await.unwrap();

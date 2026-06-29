@@ -242,17 +242,19 @@ pub struct AdminStreamerRow {
     pub last_stream_at: Option<chrono::DateTime<chrono::Utc>>,
     pub scopes: Option<String>,
     pub needs_reauth: Option<bool>,
-    /// TIMESTAMPTZ (twitch_raid_auth.authorized_at)
-    pub authorized_at: Option<chrono::DateTime<chrono::Utc>>,
+    /// TEXT in Prod (twitch_raid_auth.authorized_at)
+    pub authorized_at: Option<String>,
     pub promo_disabled: Option<i32>,
     pub promo_message: Option<String>,
     pub raid_boost_enabled: Option<i32>,
     pub manual_plan_id: Option<String>,
-    pub manual_plan_expires_at: Option<chrono::DateTime<chrono::Utc>>,
+    /// TEXT in Prod (streamer_plans.manual_plan_expires_at)
+    pub manual_plan_expires_at: Option<String>,
     pub manual_plan_notes: Option<String>,
     pub billing_plan_id: Option<String>,
     pub billing_status: Option<String>,
-    pub billing_updated_at: Option<chrono::DateTime<chrono::Utc>>,
+    /// TEXT in Prod (twitch_billing_subscriptions.updated_at)
+    pub billing_updated_at: Option<String>,
     pub technical_pause_reason: Option<String>,
     pub operational_state: Option<String>,
 }
@@ -290,19 +292,21 @@ pub struct AdminStreamerDetailRow {
     pub scopes: Option<String>,
     pub needs_reauth: Option<bool>,
     pub oauth_raid_enabled: Option<bool>,
-    /// TIMESTAMPTZ (twitch_raid_auth.authorized_at)
-    pub authorized_at: Option<chrono::DateTime<chrono::Utc>>,
+    /// TEXT in Prod (twitch_raid_auth.authorized_at)
+    pub authorized_at: Option<String>,
     pub plan_name: Option<String>,
     pub promo_disabled: Option<i32>,
     pub promo_message: Option<String>,
     pub raid_boost_enabled: Option<i32>,
     pub notes: Option<String>,
     pub manual_plan_id: Option<String>,
-    pub manual_plan_expires_at: Option<chrono::DateTime<chrono::Utc>>,
+    /// TEXT in Prod (streamer_plans.manual_plan_expires_at)
+    pub manual_plan_expires_at: Option<String>,
     pub manual_plan_notes: Option<String>,
     pub billing_plan_id: Option<String>,
     pub billing_status: Option<String>,
-    pub billing_updated_at: Option<chrono::DateTime<chrono::Utc>>,
+    /// TEXT in Prod (twitch_billing_subscriptions.updated_at)
+    pub billing_updated_at: Option<String>,
     pub technical_pause_reason: Option<String>,
     pub operational_state: Option<String>,
 }
@@ -683,7 +687,7 @@ mod tests {
                 scopes          TEXT,
                 needs_reauth    BOOLEAN NOT NULL DEFAULT FALSE,
                 raid_enabled    BOOLEAN NOT NULL DEFAULT TRUE,
-                authorized_at   TIMESTAMPTZ
+                authorized_at   TEXT
             )
         "#,
         )
@@ -698,7 +702,7 @@ mod tests {
                 customer_reference   TEXT NOT NULL,
                 plan_id              TEXT,
                 status               TEXT,
-                updated_at           TIMESTAMPTZ
+                updated_at           TEXT
             )
         "#,
         )
@@ -709,14 +713,15 @@ mod tests {
         sqlx::query(
             r#"
             CREATE TABLE IF NOT EXISTS streamer_plans (
-                twitch_login         TEXT PRIMARY KEY,
+                twitch_user_id       TEXT,
+                twitch_login         TEXT,
                 plan_name            TEXT,
                 promo_disabled       INTEGER NOT NULL DEFAULT 0,
                 promo_message        TEXT,
                 raid_boost_enabled   INTEGER NOT NULL DEFAULT 0,
                 notes                TEXT,
                 manual_plan_id       TEXT,
-                manual_plan_expires_at TIMESTAMPTZ,
+                manual_plan_expires_at TEXT,
                 manual_plan_notes    TEXT
             )
         "#,
@@ -931,17 +936,45 @@ mod tests {
         sqlx::query(
             "INSERT INTO twitch_raid_auth \
              (twitch_login, twitch_user_id, scopes, needs_reauth, raid_enabled, authorized_at) \
-             VALUES ('booloauth', '42', 'bits:read', TRUE, FALSE, NOW())",
+             VALUES ('booloauth', '42', 'bits:read', TRUE, FALSE, '2026-06-29T12:00:00+00')",
         )
         .execute(&pool)
         .await
         .expect("insert auth");
+        sqlx::query(
+            "INSERT INTO streamer_plans \
+             (twitch_login, manual_plan_id, manual_plan_expires_at, manual_plan_notes) \
+             VALUES ('booloauth', 'manual-pro', '2026-07-01T12:00:00+00', 'fixture')",
+        )
+        .execute(&pool)
+        .await
+        .expect("insert plan");
+        sqlx::query(
+            "INSERT INTO twitch_billing_subscriptions \
+             (customer_reference, plan_id, status, updated_at) \
+             VALUES ('booloauth', 'billing-basic', 'active', '2026-06-28T12:00:00+00')",
+        )
+        .execute(&pool)
+        .await
+        .expect("insert billing");
 
         let rows = list_streamers(&pool, StreamerView::Active)
             .await
             .expect("query");
         assert_eq!(rows.len(), 1);
         assert_eq!(rows[0].needs_reauth, Some(true));
+        assert_eq!(
+            rows[0].authorized_at.as_deref(),
+            Some("2026-06-29T12:00:00+00")
+        );
+        assert_eq!(
+            rows[0].manual_plan_expires_at.as_deref(),
+            Some("2026-07-01T12:00:00+00")
+        );
+        assert_eq!(
+            rows[0].billing_updated_at.as_deref(),
+            Some("2026-06-28T12:00:00+00")
+        );
     }
 
     #[tokio::test]
@@ -1040,11 +1073,27 @@ mod tests {
         sqlx::query(
             "INSERT INTO twitch_raid_auth \
              (twitch_login, twitch_user_id, scopes, needs_reauth, raid_enabled, authorized_at) \
-             VALUES ('detailoauth', '43', 'bits:read', TRUE, FALSE, NOW())",
+             VALUES ('detailoauth', '43', 'bits:read', TRUE, FALSE, '2026-06-29T13:00:00+00')",
         )
         .execute(&pool)
         .await
         .expect("insert auth");
+        sqlx::query(
+            "INSERT INTO streamer_plans \
+             (twitch_login, manual_plan_id, manual_plan_expires_at, manual_plan_notes) \
+             VALUES ('detailoauth', 'manual-plus', '2026-07-02T13:00:00+00', 'detail fixture')",
+        )
+        .execute(&pool)
+        .await
+        .expect("insert plan");
+        sqlx::query(
+            "INSERT INTO twitch_billing_subscriptions \
+             (customer_reference, plan_id, status, updated_at) \
+             VALUES ('detailoauth', 'billing-plus', 'trialing', '2026-06-28T13:00:00+00')",
+        )
+        .execute(&pool)
+        .await
+        .expect("insert billing");
 
         let row = streamer_detail(&pool, "detailoauth")
             .await
@@ -1052,5 +1101,14 @@ mod tests {
             .expect("row");
         assert_eq!(row.needs_reauth, Some(true));
         assert_eq!(row.oauth_raid_enabled, Some(false));
+        assert_eq!(row.authorized_at.as_deref(), Some("2026-06-29T13:00:00+00"));
+        assert_eq!(
+            row.manual_plan_expires_at.as_deref(),
+            Some("2026-07-02T13:00:00+00")
+        );
+        assert_eq!(
+            row.billing_updated_at.as_deref(),
+            Some("2026-06-28T13:00:00+00")
+        );
     }
 }

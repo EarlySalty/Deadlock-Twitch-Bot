@@ -280,7 +280,7 @@ pub async fn list_handler(
                 oauth_status: snap.status.to_string(),
                 granted_scopes: snap.granted_scopes,
                 missing_scopes: snap.missing_scopes,
-                oauth_authorized_at: r.authorized_at.map(fmt_dt),
+                oauth_authorized_at: r.authorized_at,
                 promo_disabled: r.promo_disabled.unwrap_or(0) != 0,
                 notes: r.manual_plan_notes, // Python: manual_plan_notes als notes
                 technical_pause_reason: r.technical_pause_reason,
@@ -426,7 +426,7 @@ pub async fn detail_handler(
             notes: row.notes,
             plan_name: row.plan_name,
             manual_plan_id: row.manual_plan_id,
-            manual_plan_expires_at: row.manual_plan_expires_at.map(fmt_dt),
+            manual_plan_expires_at: row.manual_plan_expires_at,
             manual_plan_notes: row.manual_plan_notes,
             billing_plan_id: row.billing_plan_id,
             billing_status: row.billing_status,
@@ -446,7 +446,7 @@ pub async fn detail_handler(
             status: snap.status.to_string(),
             granted_scopes: snap.granted_scopes,
             missing_scopes: snap.missing_scopes,
-            authorized_at: row.authorized_at.map(fmt_dt),
+            authorized_at: row.authorized_at,
             raid_enabled: row.oauth_raid_enabled.unwrap_or(false),
         },
     }))
@@ -739,7 +739,7 @@ mod tests {
             CREATE TABLE IF NOT EXISTS twitch_raid_auth (
                 id BIGSERIAL PRIMARY KEY, twitch_login TEXT, twitch_user_id TEXT,
                 scopes TEXT, needs_reauth BOOLEAN NOT NULL DEFAULT FALSE,
-                raid_enabled BOOLEAN NOT NULL DEFAULT TRUE, authorized_at TIMESTAMPTZ
+                raid_enabled BOOLEAN NOT NULL DEFAULT TRUE, authorized_at TEXT
             )
         "#,
         )
@@ -750,7 +750,7 @@ mod tests {
             r#"
             CREATE TABLE IF NOT EXISTS twitch_billing_subscriptions (
                 id BIGSERIAL PRIMARY KEY, customer_reference TEXT NOT NULL,
-                plan_id TEXT, status TEXT, updated_at TIMESTAMPTZ
+                plan_id TEXT, status TEXT, updated_at TEXT
             )
         "#,
         )
@@ -760,10 +760,10 @@ mod tests {
         sqlx::query(
             r#"
             CREATE TABLE IF NOT EXISTS streamer_plans (
-                twitch_login TEXT PRIMARY KEY, plan_name TEXT,
+                twitch_user_id TEXT, twitch_login TEXT, plan_name TEXT,
                 promo_disabled INTEGER NOT NULL DEFAULT 0, promo_message TEXT,
                 raid_boost_enabled INTEGER NOT NULL DEFAULT 0, notes TEXT,
-                manual_plan_id TEXT, manual_plan_expires_at TIMESTAMPTZ, manual_plan_notes TEXT
+                manual_plan_id TEXT, manual_plan_expires_at TEXT, manual_plan_notes TEXT
             )
         "#,
         )
@@ -992,11 +992,19 @@ mod tests {
         sqlx::query(
             "INSERT INTO twitch_raid_auth \
              (twitch_login, twitch_user_id, scopes, needs_reauth, raid_enabled, authorized_at) \
-             VALUES ('boolreauth', '42', 'bits:read', TRUE, FALSE, NOW())",
+             VALUES ('boolreauth', '42', 'bits:read', TRUE, FALSE, '2026-06-29T12:10:00+00')",
         )
         .execute(&pool)
         .await
         .expect("insert auth");
+        sqlx::query(
+            "INSERT INTO streamer_plans \
+             (twitch_login, manual_plan_id, manual_plan_expires_at, manual_plan_notes) \
+             VALUES ('boolreauth', 'manual-list', '2026-07-01T12:10:00+00', 'list fixture')",
+        )
+        .execute(&pool)
+        .await
+        .expect("insert plan");
 
         let req = Request::builder()
             .uri("/twitch/api/admin/streamers?view=active")
@@ -1012,6 +1020,8 @@ mod tests {
         assert_eq!(v["items"][0]["login"], "boolreauth");
         assert_eq!(v["items"][0]["oauthNeedsReauth"], true);
         assert_eq!(v["items"][0]["oauthStatus"], "reauth");
+        assert_eq!(v["items"][0]["oauthAuthorizedAt"], "2026-06-29T12:10:00+00");
+        assert_eq!(v["items"][0]["planId"], "manual-list");
     }
 
     // ── Detail-Tests ────────────────────────────────────────────────────────
@@ -1051,7 +1061,7 @@ mod tests {
         let pool = make_pool(&dsn, "test_admin_h_detail_200").await;
         sqlx::query(
             "INSERT INTO twitch_partners_all_state (twitch_login, status, created_at) \
-             VALUES ('bekannter', 'active', NOW())",
+             VALUES ('bekannter', 'active', NOW()::TEXT)",
         )
         .execute(&pool)
         .await
@@ -1074,7 +1084,8 @@ mod tests {
         assert_eq!(v["archived"], false);
         assert_eq!(v["isLive"], false);
         assert!(v["planId"].is_null()); // kein Plan gesetzt
-        assert!(!v["createdAt"].is_null()); // created_at = NOW()
+        // created_at = NOW()
+        assert!(!v["createdAt"].is_null());
         // Stats: totalWatchHours statt totalDurationSeconds; Live-State-Felder vorhanden.
         assert_eq!(v["stats"]["totalWatchHours"], 0.0);
         assert!(v["stats"].get("totalDurationSeconds").is_none());
@@ -1095,7 +1106,7 @@ mod tests {
         sqlx::query(
             "INSERT INTO twitch_partners_all_state \
              (twitch_login, status, created_at, manual_partner_opt_out) \
-             VALUES ('keystreamer', 'active', NOW(), 1)",
+             VALUES ('keystreamer', 'active', NOW()::TEXT, 1)",
         )
         .execute(&pool)
         .await
@@ -1126,7 +1137,8 @@ mod tests {
         assert_eq!(s["title"], "Mein Titel");
         assert_eq!(s["category"], "Deadlock");
         assert_eq!(s["averageViewers"], 123.5);
-        assert_eq!(s["watchTimeHours"], 2.0); // 7200s = 2.0h
+        // 7200s = 2.0h
+        assert_eq!(s["watchTimeHours"], 2.0);
         // Bestehende Keys bleiben (additiv).
         assert_eq!(s["streamTitle"], "Mein Titel");
         assert_eq!(s["gameName"], "Deadlock");
@@ -1148,11 +1160,19 @@ mod tests {
         sqlx::query(
             "INSERT INTO twitch_raid_auth \
              (twitch_login, twitch_user_id, scopes, needs_reauth, raid_enabled, authorized_at) \
-             VALUES ('detailbool', '43', 'bits:read', TRUE, FALSE, NOW())",
+             VALUES ('detailbool', '43', 'bits:read', TRUE, FALSE, '2026-06-29T13:10:00+00')",
         )
         .execute(&pool)
         .await
         .expect("insert auth");
+        sqlx::query(
+            "INSERT INTO streamer_plans \
+             (twitch_login, manual_plan_id, manual_plan_expires_at, manual_plan_notes) \
+             VALUES ('detailbool', 'manual-detail', '2026-07-02T13:10:00+00', 'detail fixture')",
+        )
+        .execute(&pool)
+        .await
+        .expect("insert plan");
 
         let req = Request::builder()
             .uri("/twitch/api/admin/streamers/detailbool")
@@ -1168,6 +1188,11 @@ mod tests {
         assert_eq!(v["oauth"]["needsReauth"], true);
         assert_eq!(v["oauth"]["status"], "reauth");
         assert_eq!(v["oauth"]["raidEnabled"], false);
+        assert_eq!(v["oauth"]["authorizedAt"], "2026-06-29T13:10:00+00");
+        assert_eq!(
+            v["settings"]["manualPlanExpiresAt"],
+            "2026-07-02T13:10:00+00"
+        );
     }
 
     // ── Mutations-Tests (B11-PR-4) ──────────────────────────────────────────
