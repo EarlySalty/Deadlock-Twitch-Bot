@@ -316,7 +316,7 @@ pub async fn get_log_handler(
 
     let rows = sqlx::query(
         "SELECT decision, response_text, model, prompt_tokens, completion_tokens, \
-                cost_usd_estimate, latency_ms, ts \
+                cost_usd_estimate::float8 AS cost_usd_estimate, latency_ms, ts \
          FROM twitch_engagement_log WHERE channel_login = $1 ORDER BY ts DESC LIMIT $2",
     )
     .bind(&channel)

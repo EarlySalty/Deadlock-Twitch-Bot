@@ -87,11 +87,7 @@ pub async fn list_streamers(
           LEFT JOIN (
                SELECT LOWER(streamer_login) AS streamer_login,
                       MAX(CASE
-                            -- had_deadlock_in_session ist INTEGER (0/1); ein nacktes
-                            -- `WHEN <integer>` ist in Postgres ein Typfehler (CASE/OR
-                            -- erwarten boolean) und brach nur deshalb nicht in CI, weil
-                            -- Fixtures die Spalte als BOOLEAN anlegten. `= 1` ist korrekt.
-                            WHEN had_deadlock_in_session = 1
+                            WHEN COALESCE(had_deadlock_in_session, false)
                                  OR LOWER(COALESCE(game_name,'')) = LOWER($1)
                             THEN COALESCE(ended_at, started_at)
                       END) AS last_deadlock_stream_at
@@ -1340,7 +1336,7 @@ mod tests {
                 stream_id               TEXT,
                 streamer_login          TEXT,
                 game_name               TEXT,
-                had_deadlock_in_session INTEGER DEFAULT 0,
+                had_deadlock_in_session BOOLEAN DEFAULT FALSE,
                 started_at              TIMESTAMPTZ,
                 ended_at                TIMESTAMPTZ,
                 -- INT4 wie Prod — i64-Decodes brauchen ::BIGINT-Cast im SQL
@@ -1436,7 +1432,7 @@ mod tests {
         sqlx::query(
             "INSERT INTO twitch_stream_sessions
                 (streamer_login, game_name, had_deadlock_in_session, started_at, ended_at)
-             VALUES ('Drag', 'Deadlock', 1, NOW() - INTERVAL '3 hours', NOW() - INTERVAL '1 hour')",
+             VALUES ('Drag', 'Deadlock', TRUE, NOW() - INTERVAL '3 hours', NOW() - INTERVAL '1 hour')",
         )
         .execute(&pool)
         .await

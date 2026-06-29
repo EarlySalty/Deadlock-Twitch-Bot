@@ -384,8 +384,8 @@ mod route_tests {
             r#"CREATE TABLE twitch_partners (
                 twitch_login TEXT, twitch_user_id TEXT, status TEXT,
                 technical_pause_reason TEXT, manual_partner_opt_out INTEGER,
-                departnered_at TIMESTAMPTZ, admin_archived_at TIMESTAMPTZ,
-                partnered_at TIMESTAMPTZ)"#,
+                departnered_at TEXT, admin_archived_at TEXT,
+                partnered_at TEXT)"#,
         )
         .execute(&pool)
         .await

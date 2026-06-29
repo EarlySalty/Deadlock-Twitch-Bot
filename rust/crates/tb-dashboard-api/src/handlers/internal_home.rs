@@ -261,14 +261,48 @@ fn forbidden_json(code: &str, message: &str) -> Response {
 
 // ── ISO-Helfer ───────────────────────────────────────────────────────────────
 
-/// `_internal_home_iso`: TIMESTAMPTZ/Date → ISO8601-String, sonst "".
+/// `_internal_home_iso`: TIMESTAMPTZ → ISO8601-String, sonst "".
 fn iso_ts(value: Option<DateTime<Utc>>) -> String {
     value.map(|v| v.to_rfc3339()).unwrap_or_default()
 }
 
-/// Liest eine optionale TIMESTAMPTZ-Spalte als ISO-String.
+fn parse_text_ts(value: &str) -> Option<DateTime<Utc>> {
+    let value = value.trim();
+    if value.is_empty() {
+        return None;
+    }
+    DateTime::parse_from_rfc3339(value)
+        .or_else(|_| DateTime::parse_from_str(value, "%Y-%m-%d %H:%M:%S%.f%#z"))
+        .ok()
+        .map(|ts| ts.with_timezone(&Utc))
+}
+
+fn iso_text(value: &str) -> String {
+    let value = value.trim();
+    if value.is_empty() {
+        return String::new();
+    }
+    if let Some(ts) = parse_text_ts(value) {
+        return ts.to_rfc3339();
+    }
+    if let Ok(date) = NaiveDate::parse_from_str(value, "%Y-%m-%d") {
+        return date.to_string();
+    }
+    value.to_string()
+}
+
+/// Liest eine optionale Zeit-/Datumsspalte als ISO-String.
 fn row_ts_iso(row: &PgRow, col: &str) -> String {
-    iso_ts(row.try_get::<Option<DateTime<Utc>>, _>(col).unwrap_or(None))
+    if let Ok(value) = row.try_get::<Option<DateTime<Utc>>, _>(col) {
+        return iso_ts(value);
+    }
+    if let Ok(value) = row.try_get::<Option<NaiveDate>, _>(col) {
+        return value.map(|v| v.to_string()).unwrap_or_default();
+    }
+    if let Ok(value) = row.try_get::<Option<String>, _>(col) {
+        return value.as_deref().map(iso_text).unwrap_or_default();
+    }
+    String::new()
 }
 
 // ── GET-Handler ──────────────────────────────────────────────────────────────
@@ -626,8 +660,10 @@ async fn access_state_block(
             .trim()
             .to_lowercase();
         let archived_at = row
-            .try_get::<Option<DateTime<Utc>>, _>("archived_at")
-            .unwrap_or(None);
+            .try_get::<Option<String>, _>("archived_at")
+            .unwrap_or(None)
+            .map(|s| s.trim().to_string())
+            .filter(|s| !s.is_empty());
         let manual_opt_out =
             row.try_get::<Option<i32>, _>("manual_partner_opt_out").unwrap_or(None).unwrap_or(0) != 0;
         technical_pause_reason = row
@@ -683,11 +719,14 @@ async fn access_state_block(
     {
         Ok(Some(row)) => {
             grace_expires_at = row
-                .try_get::<Option<DateTime<Utc>>, _>("grace_expires_at")
-                .unwrap_or(None);
-            token_error_error_count = row
-                .try_get::<Option<i64>, _>("error_count")
+                .try_get::<Option<String>, _>("grace_expires_at")
                 .unwrap_or(None)
+                .as_deref()
+                .and_then(parse_text_ts);
+            token_error_error_count = row
+                .try_get::<Option<i32>, _>("error_count")
+                .unwrap_or(None)
+                .map(i64::from)
                 .unwrap_or(0);
             let role_removed =
                 row.try_get::<Option<i32>, _>("role_removed").unwrap_or(None).unwrap_or(0) != 0;

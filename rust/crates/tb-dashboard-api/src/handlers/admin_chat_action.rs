@@ -187,7 +187,7 @@ enum SendGate {
 /// der Streamer aktuell/zuletzt ein aktiver Partner ist (admin-archiviert);
 /// `manual_partner_opt_out` ODER nicht erlaubt → Abbruch.
 async fn partner_send_allowed(pool: &PgPool, login: &str) -> Result<SendGate, sqlx::Error> {
-    let row: Option<(Option<String>, Option<chrono::DateTime<chrono::Utc>>, Option<i32>)> =
+    let row: Option<(Option<String>, Option<String>, Option<i32>)> =
         sqlx::query_as(
             "SELECT twitch_user_id, archived_at, manual_partner_opt_out \
              FROM twitch_partners_all_state \
@@ -201,7 +201,7 @@ async fn partner_send_allowed(pool: &PgPool, login: &str) -> Result<SendGate, sq
         return Ok(SendGate::NotFound);
     };
 
-    let is_archived = archived_at.is_some();
+    let is_archived = archived_at.as_deref().map(str::trim).is_some_and(|s| !s.is_empty());
     let manual_opt_out = opt_out.unwrap_or(0) != 0;
     let partner_allowed = if is_archived {
         is_partner_chat_action_allowed(pool, login).await?
@@ -363,7 +363,7 @@ mod tests {
             .unwrap();
         for ddl in [
             "CREATE TABLE twitch_partners_all_state (twitch_login TEXT, twitch_user_id TEXT, \
-                 archived_at TIMESTAMPTZ, manual_partner_opt_out INTEGER DEFAULT 0)",
+                 archived_at TEXT, manual_partner_opt_out INTEGER DEFAULT 0)",
             "CREATE TABLE twitch_partners (id BIGSERIAL PRIMARY KEY, twitch_login TEXT, status TEXT)",
         ] {
             sqlx::query(ddl).execute(&pool).await.unwrap();
@@ -401,7 +401,7 @@ mod tests {
             return;
         };
         // Archiviert + kein aktiver Partner-History-Eintrag → Denied.
-        sqlx::query("INSERT INTO twitch_partners_all_state (twitch_login, twitch_user_id, archived_at, manual_partner_opt_out) VALUES ('arch', '2', NOW(), 0)")
+        sqlx::query("INSERT INTO twitch_partners_all_state (twitch_login, twitch_user_id, archived_at, manual_partner_opt_out) VALUES ('arch', '2', '2026-06-01T00:00:00+00:00', 0)")
             .execute(&pool).await.unwrap();
         assert_eq!(
             partner_send_allowed(&pool, "arch").await.unwrap(),
@@ -414,7 +414,7 @@ mod tests {
         let Some(pool) = make_pool("t_chat_archived_admin").await else {
             return;
         };
-        sqlx::query("INSERT INTO twitch_partners_all_state (twitch_login, twitch_user_id, archived_at, manual_partner_opt_out) VALUES ('aa', '3', NOW(), 0)")
+        sqlx::query("INSERT INTO twitch_partners_all_state (twitch_login, twitch_user_id, archived_at, manual_partner_opt_out) VALUES ('aa', '3', '2026-06-01T00:00:00+00:00', 0)")
             .execute(&pool).await.unwrap();
         // Zuletzt aktiver Partner → admin-archiviert erlaubt.
         sqlx::query("INSERT INTO twitch_partners (twitch_login, status) VALUES ('aa', 'active')")

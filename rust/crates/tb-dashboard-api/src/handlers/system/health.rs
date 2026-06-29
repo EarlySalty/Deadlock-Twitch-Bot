@@ -319,8 +319,8 @@ mod tests {
             CREATE TABLE IF NOT EXISTS twitch_live_state (
                 streamer_login  TEXT PRIMARY KEY,
                 is_live         INTEGER NOT NULL DEFAULT 0,
-                last_seen_at    TIMESTAMPTZ,
-                last_started_at TIMESTAMPTZ
+                last_seen_at    TEXT,
+                last_started_at TEXT
             )
             "#,
         )
@@ -331,11 +331,11 @@ mod tests {
             r#"
             CREATE TABLE IF NOT EXISTS twitch_raw_chat_ingest_health (
                 streamer_login                TEXT PRIMARY KEY,
-                last_raw_chat_message_at      TIMESTAMPTZ,
-                last_raw_chat_insert_ok_at    TIMESTAMPTZ,
-                last_raw_chat_insert_error_at TIMESTAMPTZ,
+                last_raw_chat_message_at      TEXT,
+                last_raw_chat_insert_ok_at    TEXT,
+                last_raw_chat_insert_error_at TEXT,
                 last_raw_chat_error           TEXT,
-                updated_at                    TIMESTAMPTZ NOT NULL DEFAULT NOW()
+                updated_at                    TEXT NOT NULL DEFAULT (NOW()::text)
             )
             "#,
         )
@@ -436,7 +436,7 @@ mod tests {
         let pool = make_pool(&dsn, "test_handler_health_lag180").await;
         sqlx::query(
             "INSERT INTO twitch_live_state (streamer_login, is_live, last_seen_at) \
-             VALUES ('lag_streamer', 1, NOW())",
+             VALUES ('lag_streamer', 1, NOW()::text)",
         )
         .execute(&pool)
         .await
@@ -444,7 +444,7 @@ mod tests {
         sqlx::query(
             "INSERT INTO twitch_raw_chat_ingest_health \
              (streamer_login, last_raw_chat_message_at) \
-             VALUES ('lag_streamer', NOW() - INTERVAL '180 seconds')",
+             VALUES ('lag_streamer', (NOW() - INTERVAL '180 seconds')::text)",
         )
         .execute(&pool)
         .await
