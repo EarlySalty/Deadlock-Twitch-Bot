@@ -1,9 +1,8 @@
 //! Purer Planner + Textbausteine für Recruitment-Nachrichten an extern
 //! geraidete Nicht-Partner-Channels (B3, Recruitment-Teil).
 //!
-//! Faithful-Port von `bot/raid/recruitment_delivery.py` (Planner: Variant-Wahl,
-//! Gating, Delay/Invite-Variant) + dem Stage-Bogen aus
-//! `recruitment_messaging.py::_build_message` (s1..s10).
+//! Faithful-Port von `bot/raid/recruitment_delivery.py` (Planner: Delay/
+//! Invite-Variant) + Outreach-Trust-Leiter (Raid-Zähler pro Ziel).
 //!
 //! Reine Entscheidungs-/Präsentationslogik ohne Seiteneffekte. Der Versand
 //! (ChatApi-Send, Suppression, Recent-/Total-Counts, Follower-Auflösung,
@@ -18,10 +17,9 @@
 pub struct RecruitmentDeliveryConfig {
     /// Verzögerung vor dem Senden (Python `delay_seconds = 15.0`).
     pub delay_seconds: f64,
-    /// Wenn der Ziel-Channel innerhalb des Recent-Fensters öfter als so geraidet
-    /// wurde, wird NICHT recruited (Python `recent_raid_threshold = 2`).
+    /// Legacy-Feld: der Trust-Leiter-Funnel blockt nicht mehr nach Recent-Raids.
     pub recent_raid_threshold: i64,
-    /// Hartes Limit gegen Dauerbeschallung (Python `max_recruitment_messages = 50`).
+    /// Legacy-Feld: der Trust-Leiter-Funnel läuft 11+ endlos.
     pub max_recruitment_messages: i64,
     /// Ziele mit ≤ so vielen Followern bekommen die „direct"-Invite-Variante
     /// (Python `direct_invite_max_followers = 120`).
@@ -32,26 +30,23 @@ impl Default for RecruitmentDeliveryConfig {
     fn default() -> Self {
         Self {
             delay_seconds: 15.0,
-            recent_raid_threshold: 2,
-            max_recruitment_messages: 50,
+            recent_raid_threshold: i64::MAX,
+            max_recruitment_messages: i64::MAX,
             direct_invite_max_followers: 120,
         }
     }
 }
 
-/// Etappe des fortlaufenden Recruitment-Bogens (Python `RecruitmentMessageVariant`).
+/// Etappe des Outreach-Trust-Leiter-Funnels.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum RecruitmentMessageVariant {
     S1,
     S2,
     S3,
     S4,
-    S5,
-    S6,
-    S7,
-    S8,
-    S9,
-    S10,
+    Light { pool_index: usize },
+    Pitch { pool_index: usize },
+    Cheeky { pool_index: usize, raid_count: i64 },
 }
 
 /// Invite-Stil je nach Reichweite des Ziels (Python `RecruitmentInviteVariant`).
@@ -78,6 +73,8 @@ pub struct RecruitmentDeliveryRequest {
     pub total_recruitment_raid_count: Option<i64>,
     pub followers_total: Option<i64>,
     pub chat_bot_available: bool,
+    pub target_blacklisted: bool,
+    pub target_is_partner: bool,
     pub outbound_chat_suppressed: bool,
 }
 
@@ -123,21 +120,30 @@ fn blocked_plan(
     }
 }
 
-/// Etappe = Kontaktzähler als Kapitel-Index (Python `_message_variant`):
-/// 1→S1 … 10→S10, alles darüber bleibt bei S10 (Dauer-Nudge).
+/// Etappe = echter Gesamt-Raid-Zähler pro Ziel:
+/// 1→S1, 2→S2, 3→S3, 4→S4, 5–6→LIGHT, 7–10→PITCH, 11+→CHEEKY.
 fn message_variant_for(total_recruitment_raid_count: i64) -> RecruitmentMessageVariant {
-    match total_recruitment_raid_count.clamp(1, 10) {
+    let stage = total_recruitment_raid_count.max(1);
+    match stage {
         1 => RecruitmentMessageVariant::S1,
         2 => RecruitmentMessageVariant::S2,
         3 => RecruitmentMessageVariant::S3,
         4 => RecruitmentMessageVariant::S4,
-        5 => RecruitmentMessageVariant::S5,
-        6 => RecruitmentMessageVariant::S6,
-        7 => RecruitmentMessageVariant::S7,
-        8 => RecruitmentMessageVariant::S8,
-        9 => RecruitmentMessageVariant::S9,
-        _ => RecruitmentMessageVariant::S10,
+        5 | 6 => RecruitmentMessageVariant::Light {
+            pool_index: pool_index(stage, OUTREACH_TRUST_LIGHT_POOL.len()),
+        },
+        7..=10 => RecruitmentMessageVariant::Pitch {
+            pool_index: pool_index(stage, OUTREACH_TRUST_PITCH_POOL.len()),
+        },
+        _ => RecruitmentMessageVariant::Cheeky {
+            pool_index: pool_index(stage, OUTREACH_TRUST_CHEEKY_POOL.len()),
+            raid_count: stage,
+        },
     }
+}
+
+fn pool_index(stage: i64, pool_len: usize) -> usize {
+    stage as usize % pool_len
 }
 
 /// Python `_invite_variant`: ≤ direct_invite_max_followers → Direct, sonst Standard.
@@ -151,8 +157,7 @@ fn invite_variant_for(
     }
 }
 
-/// Plant die Recruitment-Zustellung (Python `RecruitmentDeliveryPlanner.plan`).
-/// Gating-Reihenfolge 1:1 zu Python.
+/// Plant die Recruitment-Zustellung für die Trust-Leiter.
 pub fn plan_recruitment_delivery(
     request: &RecruitmentDeliveryRequest,
     config: &RecruitmentDeliveryConfig,
@@ -201,9 +206,20 @@ pub fn plan_recruitment_delivery(
         );
     }
 
-    if recent_raid_count > config.recent_raid_threshold {
+    if request.target_blacklisted {
         return blocked_plan(
-            "recent_raids_exceed_threshold",
+            "target_blacklisted",
+            config,
+            Some(target_id),
+            &target_login,
+            recent_raid_count,
+            total,
+        );
+    }
+
+    if request.target_is_partner {
+        return blocked_plan(
+            "target_is_partner",
             config,
             Some(target_id),
             &target_login,
@@ -223,17 +239,6 @@ pub fn plan_recruitment_delivery(
         );
     };
 
-    if total > config.max_recruitment_messages {
-        return blocked_plan(
-            "max_recruitment_messages_reached",
-            config,
-            Some(target_id),
-            &target_login,
-            recent_raid_count,
-            Some(total),
-        );
-    }
-
     RecruitmentDeliveryPlan {
         status: RecruitmentDeliveryStatus::Ready,
         reason: None,
@@ -247,60 +252,70 @@ pub fn plan_recruitment_delivery(
     }
 }
 
-/// Stage-Bogen-Text für die gewählte Variante (Python
-/// `recruitment_messaging.py::_build_message`). CTA immer „in der Bio", KEINE
-/// URLs (Twitch-AutoMod bannt Links); `@name` nur im Erstkontakt (S1/S2).
+pub const OUTREACH_TRUST_STAGE_1_MESSAGE: &str = "Hey! Wir bringen dir gerade ein bisschen Unterstützung aus der Deutschen Deadlock Community 💜 Wir wünschen dir noch nen geilen Stream! Und falls du öfter mal Support bekommen möchtest, schau gerne bei uns im Profil vorbei. (Keine Sorge, wir sind kein Scam oder sowas. 😅)";
+pub const OUTREACH_TRUST_STAGE_2_MESSAGE: &str = "Und wieder ein bisschen Support für dich 👋 Falls du uns noch nicht kennst: Wir sind die größte und aktivste Deutsche Deadlock Community. Viel Spaß weiterhin!";
+pub const OUTREACH_TRUST_STAGE_3_MESSAGE: &str = "Schon wieder wir 😄 Bei uns sind echte Leute, echte Streamer, die Deadlock genauso lieben wie du. Schön, dich dabei zu haben — viel Spaß weiterhin!";
+pub const OUTREACH_TRUST_STAGE_4_MESSAGE: &str = "Nächste Ladung Support für dich 💜 Wenn du Bock hast, dauerhaft dabei zu sein — alles dazu findest du auf unserer Website (Link im Profil), und unser Discord ist auch da. Kein Stress, schau einfach mal rein. Weiter so!";
+
+pub const OUTREACH_TRUST_LIGHT_1_MESSAGE: &str =
+    "Wieder wir 👋 Hau rein und viel Spaß beim Stream!";
+pub const OUTREACH_TRUST_LIGHT_2_MESSAGE: &str =
+    "Kleiner Support von der Deutschen Deadlock Community 💜 Schön, dich regelmäßig zu sehen!";
+pub const OUTREACH_TRUST_LIGHT_3_MESSAGE: &str = "Und wieder ein paar Leute für dich 😄 Wir halten die deutsche Deadlock-Szene zusammen am Leben — freut uns, dass du dabei bist!";
+pub const OUTREACH_TRUST_LIGHT_POOL: [&str; 3] = [
+    OUTREACH_TRUST_LIGHT_1_MESSAGE,
+    OUTREACH_TRUST_LIGHT_2_MESSAGE,
+    OUTREACH_TRUST_LIGHT_3_MESSAGE,
+];
+
+pub const OUTREACH_TRUST_PITCH_1_MESSAGE: &str = "Falls du mehr willst als nur Viewer: Bei uns gibt's Turniere, Coaching und regelmäßige Events, über 2.400 Leute sind dabei. Alles dazu auf unserer Website (Link im Profil), Discord auch 💜";
+pub const OUTREACH_TRUST_PITCH_2_MESSAGE: &str = "Wir machen für die deutsche Deadlock-Szene richtig was — Turniere, Coaching, Events, 2.400+ Mitglieder. Wenn du Bock hast mitzumachen, schau auf unsere Website (im Profil)!";
+pub const OUTREACH_TRUST_PITCH_3_MESSAGE: &str = "Du kriegst hier nicht nur Viewer: Turniere, Coaching und 'ne richtig aktive Community warten auf dich. Mehr auf unserer Website (Profil), bis dahin viel Spaß! 💜";
+pub const OUTREACH_TRUST_PITCH_POOL: [&str; 3] = [
+    OUTREACH_TRUST_PITCH_1_MESSAGE,
+    OUTREACH_TRUST_PITCH_2_MESSAGE,
+    OUTREACH_TRUST_PITCH_3_MESSAGE,
+];
+
+pub const OUTREACH_TRUST_CHEEKY_1_MESSAGE: &str = "Raid Nr. {n} 💀 Du genießt unseren Support echt gern, was? 😄 Aber Teil der Community werden willst du nicht? Komm schon — Website im Profil, Discord auch!";
+pub const OUTREACH_TRUST_CHEEKY_2_MESSAGE: &str = "Und täglich grüßt der Support 😏 Das ist Raid #{n} für dich. Wie oft willst du eigentlich noch Viewer abgreifen, bevor du mal vorbeischaust? Website + Discord im Profil 💜";
+pub const OUTREACH_TRUST_CHEEKY_3_MESSAGE: &str = "Raid #{n} und immer noch nicht dabei? Langsam wird's persönlich 😂 Alles zum Mitmachen auf unserer Website (Profil). Den Support gibt's natürlich trotzdem weiter 👋";
+pub const OUTREACH_TRUST_CHEEKY_4_MESSAGE: &str = "Nr. {n} 🫡 Ehre für die Treue — aber so langsam könntest du auch mal offiziell mitmachen 😅 Website im Profil!";
+pub const OUTREACH_TRUST_CHEEKY_POOL: [&str; 4] = [
+    OUTREACH_TRUST_CHEEKY_1_MESSAGE,
+    OUTREACH_TRUST_CHEEKY_2_MESSAGE,
+    OUTREACH_TRUST_CHEEKY_3_MESSAGE,
+    OUTREACH_TRUST_CHEEKY_4_MESSAGE,
+];
+
+/// Trust-Leiter-Text für die gewählte Variante. CTA bleibt ohne rohe Links.
 pub fn build_recruitment_message(
     variant: RecruitmentMessageVariant,
-    to_broadcaster_login: &str,
+    _to_broadcaster_login: &str,
 ) -> String {
-    let name = to_broadcaster_login;
     match variant {
-        RecruitmentMessageVariant::S1 => format!(
-            "Hey @{name} — die Zuschauer, die grad reinkamen, sind echt und kamen \
-             nicht zufällig: ein anderer deutscher Deadlock-Streamer hat sie dir \
-             geschickt, als er offline ging. Genau das macht unser Bot — Zuschauer \
-             zwischen Deadlock-Streamern weiterreichen, statt sie verpuffen zu lassen. \
-             Wer „wir“ sind, steht in der Bio. 👀"
-        ),
-        RecruitmentMessageVariant::S2 => format!(
-            "Schon der zweite Support-Raid, @{name} — beim ersten hast du wahrscheinlich \
-             „Scam“ gedacht. Verständlich, ist aber keiner: wir vernetzen die deutschen \
-             Deadlock-Streamer und schieben uns gegenseitig Zuschauer zu. Wer dabei ist, \
-             dem hält der Bot nebenbei Viewer-Bot-Spam aus dem Chat. Mehr in der Bio."
-        ),
-        RecruitmentMessageVariant::S3 => "Dritter Raid, und ja, das hat System. Wir sind die größte aktive deutsche \
-             Deadlock-Community — Streamer reichen sich gegenseitig Zuschauer weiter, \
-             keiner sendet allein. Kein Haken: einmal verbinden, der Rest läuft von selbst. \
-             Wie das für dich aussieht, steht in der Bio."
+        RecruitmentMessageVariant::S1 => OUTREACH_TRUST_STAGE_1_MESSAGE.to_string(),
+        RecruitmentMessageVariant::S2 => OUTREACH_TRUST_STAGE_2_MESSAGE.to_string(),
+        RecruitmentMessageVariant::S3 => OUTREACH_TRUST_STAGE_3_MESSAGE.to_string(),
+        RecruitmentMessageVariant::S4 => OUTREACH_TRUST_STAGE_4_MESSAGE.to_string(),
+        RecruitmentMessageVariant::Light { pool_index } => OUTREACH_TRUST_LIGHT_POOL
+            .get(pool_index)
+            .copied()
+            .unwrap_or(OUTREACH_TRUST_LIGHT_1_MESSAGE)
             .to_string(),
-        RecruitmentMessageVariant::S4 => "Fragst dich langsam, was wir wollen? Ganz einfach: hier supportet jeder jeden — \
-             Streamer zocken mit der Community, und das zieht alle hoch. \
-             Die Bio erklärt den Rest."
+        RecruitmentMessageVariant::Pitch { pool_index } => OUTREACH_TRUST_PITCH_POOL
+            .get(pool_index)
+            .copied()
+            .unwrap_or(OUTREACH_TRUST_PITCH_1_MESSAGE)
             .to_string(),
-        RecruitmentMessageVariant::S5 => "Deadlock ist grad klein, und genau das ist die Chance. Wir vernetzen jetzt die, \
-             die dranbleiben, damit wir zusammen oben stehen, wenn's zurückkommt. \
-             Steht alles in der Bio."
-            .to_string(),
-        RecruitmentMessageVariant::S6 => "Mal Butter bei die Fische, weil du immer noch hier bist: Wir koordinieren Raids, \
-             gemeinsame Sessions, gegenseitigen Support. Kein Vertrag, kein Haken — Community. \
-             In der Bio steht, wie's läuft."
-            .to_string(),
-        RecruitmentMessageVariant::S7 => "Die Streamer bei uns raiden sich gegenseitig, zocken zusammen, wachsen zusammen. \
-             Genau dieser Kreislauf fehlt den meisten, die allein streamen. \
-             In der Bio siehst du, wie du reinkommst."
-            .to_string(),
-        RecruitmentMessageVariant::S8 => "Du bist jetzt oft genug von uns geraidet worden, dass man sagen kann: \
-             wir mögen deinen Stream. Der nächste Schritt liegt bei dir — \
-             alles dazu in der Bio."
-            .to_string(),
-        RecruitmentMessageVariant::S9 => "Du gehörst hier eigentlich schon halb dazu. Der Platz in der Community steht \
-             für dich offen — schau in die Bio, da erfährst du mehr."
-            .to_string(),
-        RecruitmentMessageVariant::S10 => {
-            "Wieder wir 👋 Wir halten dir den Platz frei. Alles Wichtige liegt in der Bio."
-                .to_string()
-        }
+        RecruitmentMessageVariant::Cheeky {
+            pool_index,
+            raid_count,
+        } => OUTREACH_TRUST_CHEEKY_POOL
+            .get(pool_index)
+            .copied()
+            .unwrap_or(OUTREACH_TRUST_CHEEKY_1_MESSAGE)
+            .replace("{n}", &raid_count.to_string()),
     }
 }
 
@@ -317,13 +332,16 @@ mod tests {
             total_recruitment_raid_count: Some(1),
             followers_total: Some(50),
             chat_bot_available: true,
+            target_blacklisted: false,
+            target_is_partner: false,
             outbound_chat_suppressed: false,
         }
     }
 
     #[test]
     fn ready_plan_normalisiert_und_waehlt_varianten() {
-        let plan = plan_recruitment_delivery(&ready_request(), &RecruitmentDeliveryConfig::default());
+        let plan =
+            plan_recruitment_delivery(&ready_request(), &RecruitmentDeliveryConfig::default());
         assert!(plan.should_deliver());
         assert_eq!(plan.reason, None);
         assert_eq!(plan.delay_seconds, 15.0);
@@ -335,7 +353,7 @@ mod tests {
     }
 
     #[test]
-    fn gating_reihenfolge_1zu1_python() {
+    fn gating_stoppt_bei_infrastruktur_und_sicherheitsbedingungen() {
         let cfg = RecruitmentDeliveryConfig::default();
 
         let mut r = ready_request();
@@ -359,10 +377,17 @@ mod tests {
         );
 
         let mut r = ready_request();
-        r.recent_raid_count = 3; // > Schwelle 2
+        r.target_blacklisted = true;
         assert_eq!(
             plan_recruitment_delivery(&r, &cfg).reason,
-            Some("recent_raids_exceed_threshold")
+            Some("target_blacklisted")
+        );
+
+        let mut r = ready_request();
+        r.target_is_partner = true;
+        assert_eq!(
+            plan_recruitment_delivery(&r, &cfg).reason,
+            Some("target_is_partner")
         );
 
         let mut r = ready_request();
@@ -371,56 +396,171 @@ mod tests {
             plan_recruitment_delivery(&r, &cfg).reason,
             Some("total_recruitment_raid_count_unresolved")
         );
+    }
 
+    #[test]
+    fn recent_und_max_caps_blocken_leiter_nicht_mehr() {
         let mut r = ready_request();
-        r.total_recruitment_raid_count = Some(51); // > 50
+        r.recent_raid_count = 500;
+        r.total_recruitment_raid_count = Some(50_000);
+        let plan = plan_recruitment_delivery(&r, &RecruitmentDeliveryConfig::default());
+        assert!(plan.should_deliver());
         assert_eq!(
-            plan_recruitment_delivery(&r, &cfg).reason,
-            Some("max_recruitment_messages_reached")
+            plan.message_variant,
+            Some(RecruitmentMessageVariant::Cheeky {
+                pool_index: 0,
+                raid_count: 50_000
+            })
         );
     }
 
     #[test]
-    fn recent_raid_count_genau_auf_schwelle_ist_erlaubt() {
-        // Python: > threshold blockt; == threshold (2) ist erlaubt.
-        let mut r = ready_request();
-        r.recent_raid_count = 2;
-        assert!(plan_recruitment_delivery(&r, &RecruitmentDeliveryConfig::default()).should_deliver());
-    }
-
-    #[test]
-    fn message_variant_clamp_1_bis_10() {
+    fn message_variant_trust_leiter_1_bis_11_plus() {
         assert_eq!(message_variant_for(0), RecruitmentMessageVariant::S1); // max(.,1)
         assert_eq!(message_variant_for(1), RecruitmentMessageVariant::S1);
-        assert_eq!(message_variant_for(5), RecruitmentMessageVariant::S5);
-        assert_eq!(message_variant_for(10), RecruitmentMessageVariant::S10);
-        assert_eq!(message_variant_for(99), RecruitmentMessageVariant::S10); // Dauer-Nudge
+        assert_eq!(message_variant_for(2), RecruitmentMessageVariant::S2);
+        assert_eq!(message_variant_for(3), RecruitmentMessageVariant::S3);
+        assert_eq!(message_variant_for(4), RecruitmentMessageVariant::S4);
+        assert_eq!(
+            message_variant_for(5),
+            RecruitmentMessageVariant::Light { pool_index: 2 }
+        );
+        assert_eq!(
+            message_variant_for(6),
+            RecruitmentMessageVariant::Light { pool_index: 0 }
+        );
+        assert_eq!(
+            message_variant_for(7),
+            RecruitmentMessageVariant::Pitch { pool_index: 1 }
+        );
+        assert_eq!(
+            message_variant_for(8),
+            RecruitmentMessageVariant::Pitch { pool_index: 2 }
+        );
+        assert_eq!(
+            message_variant_for(9),
+            RecruitmentMessageVariant::Pitch { pool_index: 0 }
+        );
+        assert_eq!(
+            message_variant_for(10),
+            RecruitmentMessageVariant::Pitch { pool_index: 1 }
+        );
+        assert_eq!(
+            message_variant_for(11),
+            RecruitmentMessageVariant::Cheeky {
+                pool_index: 3,
+                raid_count: 11
+            }
+        );
+        assert_eq!(
+            message_variant_for(99),
+            RecruitmentMessageVariant::Cheeky {
+                pool_index: 3,
+                raid_count: 99
+            }
+        );
     }
 
     #[test]
     fn invite_variant_schwelle_120() {
         let cfg = RecruitmentDeliveryConfig::default();
-        assert_eq!(invite_variant_for(Some(120), &cfg), RecruitmentInviteVariant::Direct);
-        assert_eq!(invite_variant_for(Some(121), &cfg), RecruitmentInviteVariant::Standard);
-        assert_eq!(invite_variant_for(None, &cfg), RecruitmentInviteVariant::Standard);
+        assert_eq!(
+            invite_variant_for(Some(120), &cfg),
+            RecruitmentInviteVariant::Direct
+        );
+        assert_eq!(
+            invite_variant_for(Some(121), &cfg),
+            RecruitmentInviteVariant::Standard
+        );
+        assert_eq!(
+            invite_variant_for(None, &cfg),
+            RecruitmentInviteVariant::Standard
+        );
     }
 
     #[test]
-    fn message_s1_s2_interpolieren_namen() {
+    fn message_texts_sind_spec_verbatim_und_ohne_rohe_links() {
         let s1 = build_recruitment_message(RecruitmentMessageVariant::S1, "victim");
-        assert!(s1.starts_with("Hey @victim — "));
-        assert!(s1.contains("Wer „wir“ sind, steht in der Bio. 👀"));
+        assert_eq!(s1, OUTREACH_TRUST_STAGE_1_MESSAGE);
 
         let s2 = build_recruitment_message(RecruitmentMessageVariant::S2, "victim");
-        assert!(s2.contains("@victim"));
-        assert!(s2.contains("„Scam“"));
-
-        // s3..s10 ohne @name.
-        let s10 = build_recruitment_message(RecruitmentMessageVariant::S10, "victim");
-        assert!(!s10.contains("@victim"));
+        assert_eq!(s2, OUTREACH_TRUST_STAGE_2_MESSAGE);
         assert_eq!(
-            s10,
-            "Wieder wir 👋 Wir halten dir den Platz frei. Alles Wichtige liegt in der Bio."
+            build_recruitment_message(RecruitmentMessageVariant::S3, "victim"),
+            OUTREACH_TRUST_STAGE_3_MESSAGE
+        );
+        assert_eq!(
+            build_recruitment_message(RecruitmentMessageVariant::S4, "victim"),
+            OUTREACH_TRUST_STAGE_4_MESSAGE
+        );
+        assert_eq!(
+            build_recruitment_message(RecruitmentMessageVariant::Light { pool_index: 2 }, "victim"),
+            OUTREACH_TRUST_LIGHT_3_MESSAGE
+        );
+        assert_eq!(
+            build_recruitment_message(RecruitmentMessageVariant::Pitch { pool_index: 1 }, "victim"),
+            OUTREACH_TRUST_PITCH_2_MESSAGE
+        );
+
+        for msg in [
+            s1,
+            s2,
+            OUTREACH_TRUST_STAGE_3_MESSAGE.to_string(),
+            OUTREACH_TRUST_STAGE_4_MESSAGE.to_string(),
+            OUTREACH_TRUST_LIGHT_1_MESSAGE.to_string(),
+            OUTREACH_TRUST_PITCH_1_MESSAGE.to_string(),
+        ] {
+            assert!(!msg.contains("http://"));
+            assert!(!msg.contains("https://"));
+            assert!(!msg.contains("@victim"));
+        }
+    }
+
+    #[test]
+    fn cheeky_pool_setzt_echten_raid_zaehler_ein() {
+        let msg = build_recruitment_message(
+            RecruitmentMessageVariant::Cheeky {
+                pool_index: 1,
+                raid_count: 42,
+            },
+            "victim",
+        );
+        assert_eq!(
+            msg,
+            "Und täglich grüßt der Support 😏 Das ist Raid #42 für dich. Wie oft willst du eigentlich noch Viewer abgreifen, bevor du mal vorbeischaust? Website + Discord im Profil 💜"
+        );
+        assert!(!msg.contains("{n}"));
+    }
+
+    #[test]
+    fn oeffentliche_pool_index_varianten_haben_sicheren_fallback() {
+        assert_eq!(
+            build_recruitment_message(
+                RecruitmentMessageVariant::Light {
+                    pool_index: usize::MAX
+                },
+                "victim"
+            ),
+            OUTREACH_TRUST_LIGHT_1_MESSAGE
+        );
+        assert_eq!(
+            build_recruitment_message(
+                RecruitmentMessageVariant::Pitch {
+                    pool_index: usize::MAX
+                },
+                "victim"
+            ),
+            OUTREACH_TRUST_PITCH_1_MESSAGE
+        );
+        assert_eq!(
+            build_recruitment_message(
+                RecruitmentMessageVariant::Cheeky {
+                    pool_index: usize::MAX,
+                    raid_count: 42
+                },
+                "victim"
+            ),
+            OUTREACH_TRUST_CHEEKY_1_MESSAGE.replace("{n}", "42")
         );
     }
 }

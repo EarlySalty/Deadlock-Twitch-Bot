@@ -210,7 +210,7 @@ pub fn resolve_fallback_target(
 
 /// Boost-Pfad (Python `execute` Z. 144–178): Outreach-Empfänger unter den
 /// Kategorie-Streams — kleinster Stream zuerst (der Boost soll gezielt
-/// kleinen, frisch kontaktierten Streamern helfen).
+/// kleinen, frisch vorgemerkten Streamern helfen).
 pub fn resolve_boost_target(
     streams: &[FairnessCandidate],
     boost_logins: &HashSet<String>,

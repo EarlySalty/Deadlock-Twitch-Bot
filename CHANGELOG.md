@@ -1,3 +1,11 @@
+## #296 — Streamer-Ansprache: aus der Einmal-Nachricht wird eine wachsende Beziehung
+
+**Ausgangslage:** Wenn der Bot einen passenden deutschen Deadlock-Streamer entdeckt hat, bekam der genau eine, immer gleiche Nachricht — danach lange Funkstille. Das wirkte wie ein kalter Wurf: zu wenig, um zu erklären wer wir sind, schnell überlesen und leicht als Spam oder Scam abgetan. Eine echte Vorstellung der Community fand nie statt.
+
+**Änderung:** Die Ansprache ist keine kalte Einzelnachricht mehr, sondern reitet auf den Support-Raids und erzählt sich über die Zeit Stück für Stück. Beim ersten Raid kommt eine freundliche Vorstellung samt entwaffnendem „keine Sorge, kein Scam"; mit jedem weiteren Raid ein bisschen mehr — wer wir sind, dass hier echte Leute und Streamer dahinterstehen, was die Community real macht (Turniere, Coaching, Events) und eine unaufdringliche Einladung Richtung Website und Discord. Der Druck bleibt durchgehend niedrig, der Ton wird über viele Kontakte vertrauter statt fordernder. Wer den Bot gebannt oder ein Opt-out gesetzt hat, wird zuverlässig nie wieder angeschrieben — mehrfach abgesichert, im Fehlerfall wird blockiert statt gesendet — und die täglichen Sende- und Sicherheitslimits bleiben unangetastet.
+
+**Ergebnis:** Statt eines einmaligen Kaltkontakts entsteht eine über Wochen wachsende, menschlich klingende Begleitung, die einen Streamer Schritt für Schritt von „wer sind die?" zu „coole Community, schau ich mir an" mitnimmt — ohne aufdringlich oder bothaft zu wirken.
+
 ## #295 — „Mein Abo": Rechnungen und Verwaltung jetzt direkt auffindbar
 
 **Ausgangslage:** Wer ein Abo hatte, kam an seine Rechnungen praktisch nicht heran — der Weg ins Zahlungsportal war zwar hinterlegt, aber nirgends sichtbar verlinkt. Auf der Preisseite gab es höchstens einen winzigen Punkt am aktuellen Plan; einen klaren Einstieg „hier sind deine Rechnungen" suchte man vergeblich. Und wer doch mal über einen alten Link auf der Preisseite landete, sah nur ein kryptisches Kürzel in der Adresszeile statt einer Erklärung.

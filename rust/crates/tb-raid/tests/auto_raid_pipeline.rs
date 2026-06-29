@@ -80,6 +80,8 @@ async fn pool_in_schema(dsn: &str, schema: &str) -> PgPool {
             streamer_login TEXT, streamer_user_id TEXT, detected_at TEXT,
             contacted_at TEXT, status TEXT, cooldown_until TEXT, notes TEXT,
             raid_used_at TEXT, conversation_status TEXT )",
+        "CREATE TABLE twitch_partners (
+            twitch_user_id TEXT, twitch_login TEXT, status TEXT )",
         "CREATE TABLE twitch_raid_disabled_strikes (
             target_id TEXT, target_login TEXT NOT NULL, strike_count INTEGER NOT NULL DEFAULT 1,
             last_seen_at TIMESTAMPTZ NOT NULL DEFAULT NOW(), last_reason TEXT,

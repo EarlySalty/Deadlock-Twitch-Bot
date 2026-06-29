@@ -14,10 +14,10 @@
 use chrono::{DateTime, Utc};
 use sqlx::PgPool;
 
-/// Schwelle: ab so vielen bestätigten externen Recruitment-Raids auf dasselbe
-/// Ziel wird die verzögerte Blacklist geplant. Python:
-/// `RaidBlacklistConfig.external_recruitment_raid_limit` (Default 4).
-pub const EXTERNAL_RECRUITMENT_RAID_LIMIT: i64 = 4;
+/// Legacy-Schwelle für die alte „zu oft extern geraidet"-Blacklist.
+/// Der Trust-Leiter läuft endlos; echte Ban-/Raid-Fehler-Blacklists bleiben
+/// davon unberührt.
+pub const EXTERNAL_RECRUITMENT_RAID_LIMIT: i64 = i64::MAX;
 
 /// 48h Karenz, bevor ein wiederholt rekrutierendes Ziel tatsächlich auf die
 /// Blacklist wandert. Python: `external_recruitment_blacklist_grace_seconds`.
@@ -142,10 +142,7 @@ impl ExternalRecruitmentStore {
     }
 
     /// Anzahl bestätigter externer Recruitment-Raids auf ein Ziel.
-    pub async fn count_confirmed_raids(
-        &self,
-        to_broadcaster_id: &str,
-    ) -> Result<i64, sqlx::Error> {
+    pub async fn count_confirmed_raids(&self, to_broadcaster_id: &str) -> Result<i64, sqlx::Error> {
         let row: (i64,) = sqlx::query_as(
             r#"
             SELECT COUNT(*)
@@ -212,10 +209,12 @@ impl ExternalRecruitmentStore {
 
     /// Entfernt die verzögerte Blacklist (z. B. wenn das Ziel jetzt Partner ist).
     pub async fn delete_blacklist_pending(&self, target_id: &str) -> Result<(), sqlx::Error> {
-        sqlx::query("DELETE FROM twitch_external_recruitment_blacklist_pending WHERE target_id = $1")
-            .bind(target_id)
-            .execute(&self.pool)
-            .await?;
+        sqlx::query(
+            "DELETE FROM twitch_external_recruitment_blacklist_pending WHERE target_id = $1",
+        )
+        .bind(target_id)
+        .execute(&self.pool)
+        .await?;
         Ok(())
     }
 
@@ -434,7 +433,9 @@ mod tests {
     macro_rules! skip_without_db {
         () => {
             if std::env::var("TB_TEST_DATABASE_URL").is_err() {
-                eprintln!("SKIP: TB_TEST_DATABASE_URL nicht gesetzt — `rust/scripts/test_db.sh up`");
+                eprintln!(
+                    "SKIP: TB_TEST_DATABASE_URL nicht gesetzt — `rust/scripts/test_db.sh up`"
+                );
                 return;
             }
         };
@@ -442,14 +443,31 @@ mod tests {
 
     #[test]
     fn blacklist_action_threshold_and_partner() {
-        // Unter der Schwelle (4) passiert nie etwas.
-        assert_eq!(decide_blacklist_action(0, false), BlacklistScheduleAction::None);
-        assert_eq!(decide_blacklist_action(3, false), BlacklistScheduleAction::None);
-        assert_eq!(decide_blacklist_action(3, true), BlacklistScheduleAction::None);
-        // Ab der Schwelle: Partner → Delete, sonst → Schedule.
-        assert_eq!(decide_blacklist_action(4, false), BlacklistScheduleAction::Schedule);
-        assert_eq!(decide_blacklist_action(9, false), BlacklistScheduleAction::Schedule);
-        assert_eq!(decide_blacklist_action(4, true), BlacklistScheduleAction::Delete);
+        // Die alte „zu oft geraidet"-Blacklist ist für die Trust-Leiter praktisch deaktiviert.
+        assert_eq!(
+            decide_blacklist_action(0, false),
+            BlacklistScheduleAction::None
+        );
+        assert_eq!(
+            decide_blacklist_action(3, false),
+            BlacklistScheduleAction::None
+        );
+        assert_eq!(
+            decide_blacklist_action(3, true),
+            BlacklistScheduleAction::None
+        );
+        assert_eq!(
+            decide_blacklist_action(4, false),
+            BlacklistScheduleAction::None
+        );
+        assert_eq!(
+            decide_blacklist_action(9, false),
+            BlacklistScheduleAction::None
+        );
+        assert_eq!(
+            decide_blacklist_action(50_000, false),
+            BlacklistScheduleAction::None
+        );
     }
 
     #[tokio::test]
@@ -459,12 +477,36 @@ mod tests {
         let store = ExternalRecruitmentStore::new(pool);
 
         // Gleicher flow_id → dedup, Count bleibt 1.
-        assert_eq!(store.record_confirmed_raid(&raid("f1", "t1")).await.unwrap(), 1);
-        assert_eq!(store.record_confirmed_raid(&raid("f1", "t1")).await.unwrap(), 1);
+        assert_eq!(
+            store
+                .record_confirmed_raid(&raid("f1", "t1"))
+                .await
+                .unwrap(),
+            1
+        );
+        assert_eq!(
+            store
+                .record_confirmed_raid(&raid("f1", "t1"))
+                .await
+                .unwrap(),
+            1
+        );
         // Neuer flow_id, gleiches Ziel → Count 2.
-        assert_eq!(store.record_confirmed_raid(&raid("f2", "t1")).await.unwrap(), 2);
+        assert_eq!(
+            store
+                .record_confirmed_raid(&raid("f2", "t1"))
+                .await
+                .unwrap(),
+            2
+        );
         // Anderes Ziel → eigener Count.
-        assert_eq!(store.record_confirmed_raid(&raid("f3", "t2")).await.unwrap(), 1);
+        assert_eq!(
+            store
+                .record_confirmed_raid(&raid("f3", "t2"))
+                .await
+                .unwrap(),
+            1
+        );
         assert_eq!(store.count_confirmed_raids("t1").await.unwrap(), 2);
         assert_eq!(store.count_confirmed_raids("unknown").await.unwrap(), 0);
     }

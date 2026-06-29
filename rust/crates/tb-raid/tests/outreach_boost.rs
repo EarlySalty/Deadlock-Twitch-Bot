@@ -49,13 +49,21 @@ async fn pool_in_schema(dsn: &str, schema: &str) -> PgPool {
     .execute(&pool)
     .await
     .unwrap();
+    sqlx::query(
+        "CREATE TABLE twitch_partners (
+            twitch_user_id TEXT, twitch_login TEXT, status TEXT )",
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
     pool
 }
 
 async fn insert(pool: &PgPool, login: &str, status: &str, contacted_offset_h: i32, used: bool) {
     sqlx::query(
-        "INSERT INTO twitch_partner_outreach (streamer_login, status, contacted_at, raid_used_at)
+        "INSERT INTO twitch_partner_outreach (streamer_login, status, detected_at, contacted_at, raid_used_at)
          VALUES ($1, $2, (NOW() - ($3 || ' hours')::interval)::text,
+                 CASE WHEN $2 = 'queued' THEN NULL ELSE (NOW() - ($3 || ' hours')::interval)::text END,
                  CASE WHEN $4 THEN NOW()::text ELSE NULL END)",
     )
     .bind(login)
@@ -71,9 +79,18 @@ async fn insert(pool: &PgPool, login: &str, status: &str, contacted_offset_h: i3
 async fn lader_filtert_status_frische_und_verbraucht() {
     let pool = pool_or_skip!("t6g_boost_load");
     insert(&pool, "Frisch", "sent", 2, false).await;
+    insert(&pool, "Queued", "queued", 2, false).await;
     insert(&pool, "alt", "sent", 72, false).await; // außerhalb 48h
     insert(&pool, "verbraucht", "sent", 2, true).await;
     insert(&pool, "nur_erkannt", "detected", 2, false).await;
+    insert(&pool, "partner", "queued", 2, false).await;
+    sqlx::query(
+        "INSERT INTO twitch_partners (twitch_user_id, twitch_login, status)
+         VALUES ('p1', 'partner', 'active')",
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
 
     let store = OutreachBoostStore::new(pool);
     let logins = store
@@ -82,8 +99,10 @@ async fn lader_filtert_status_frische_und_verbraucht() {
         .unwrap();
     assert_eq!(
         logins,
-        ["frisch".to_string()].into_iter().collect(),
-        "nur frisch+sent+unverbraucht, Login lowercase"
+        ["frisch".to_string(), "queued".to_string()]
+            .into_iter()
+            .collect(),
+        "nur frisch+sent/queued+unverbraucht+nicht Partner, Login lowercase"
     );
 }
 

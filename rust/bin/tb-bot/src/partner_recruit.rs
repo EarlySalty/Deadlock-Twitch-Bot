@@ -1,10 +1,9 @@
 //! Partner-Recruiting (B11/Community): erkennt häufige Deadlock-Streamer und
-//! spricht sie mit einem Partner-Angebot im Chat an. Port von
-//! `bot/community/partner_recruit.py`.
+//! reiht sie in die raid-basierte Outreach-Trust-Leiter ein.
 //!
-//! Slice 1 (diese Datei): die Datenschicht — Kandidaten-Detection, Tageszähler,
-//! Outreach-Record + Message-Template. Die Orchestrierung (`run_partner_recruit`
-//! + Send via ChatApi) + Verdrahtung in den Monitoring-Tick folgt als Slice 2.
+//! Kein kalter Chat-Erstkontakt: Kandidaten werden in `twitch_partner_outreach`
+//! mit Cooldown vorgemerkt und danach über den Outreach-Boost/Raid-Arrival-Pfad
+//! kontaktiert.
 
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -12,10 +11,8 @@ use std::time::Duration;
 
 use sqlx::PgPool;
 use tb_chat::moderation::{OutboundSuppressionCheck, OutboundSuppressionStore};
-use tb_chat::types::SendOutcome;
 use tb_chat::ChatApi;
 use tb_monitoring::StreamSnapshot;
-use tb_raid::ExternalRecruitmentStore;
 
 /// Maximale Outreach-Sends pro Tag über alle Ticks (Python `RECRUIT_MAX_PER_DAY`).
 pub const RECRUIT_MAX_PER_DAY: i64 = 8;
@@ -23,8 +20,6 @@ pub const RECRUIT_MAX_PER_DAY: i64 = 8;
 pub const RECRUIT_MAX_PER_TICK: usize = 3;
 /// Pause zwischen Sends innerhalb eines Ticks (Python `RECRUIT_THROTTLE_SECONDS`).
 pub const RECRUIT_THROTTLE_SECONDS: u64 = 60;
-/// Verzögerter Bot-Ban-Check nach erfolgreichem Outreach (wie Recruitment-Message).
-const RECRUIT_BAN_CHECK_DELAY_SECONDS: i64 = 3600;
 
 /// Zeitraum für die Erkennung (Python `RECRUIT_LOOKBACK_DAYS`).
 pub const RECRUIT_LOOKBACK_DAYS: i64 = 28;
@@ -36,16 +31,6 @@ pub const RECRUIT_MIN_AVG_SAMPLES_PER_DAY: f64 = 480.0;
 pub const RECRUIT_COOLDOWN_DAYS: i64 = 30;
 /// Obergrenze Avg-Viewer (Python `RECRUIT_MAX_AVG_VIEWERS`).
 pub const RECRUIT_MAX_AVG_VIEWERS: f64 = 40.0;
-
-/// Erstkontakt-Outreach-Text (Python `_OUTREACH_MSG`). `{login}` eingesetzt.
-pub fn build_outreach_message(login: &str) -> String {
-    format!(
-        "Hey @{login}, bin gerade über deinen Stream gestolpert — \
-         wir sind die größte aktive deutsche Deadlock-Community und ziehen die \
-         Streamer zusammen, die dranbleiben. Dich hätten wir gern als Partner mit \
-         dabei — wie das läuft, steht in der Bio."
-    )
-}
 
 /// Ein erkannter Recruiting-Kandidat (Python `_detect_recruit_candidates`).
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -66,6 +51,10 @@ pub async fn detect_recruit_candidates(pool: &PgPool) -> Vec<RecruitCandidate> {
          WHERE ts_utc > NOW() + ($1 || ' days')::interval \
            AND LOWER(streamer) NOT IN ( \
                  SELECT LOWER(twitch_login) FROM twitch_streamer_identities) \
+           AND NOT EXISTS ( \
+                 SELECT 1 FROM twitch_partners p \
+                 WHERE p.status = 'active' \
+                   AND LOWER(NULLIF(TRIM(p.twitch_login), '')) = LOWER(NULLIF(TRIM(streamer), ''))) \
            AND LOWER(streamer) NOT IN ( \
                  SELECT streamer_login FROM twitch_partner_outreach WHERE cooldown_until > NOW()) \
            AND LOWER(streamer) NOT IN ( \
@@ -97,37 +86,45 @@ pub async fn detect_recruit_candidates(pool: &PgPool) -> Vec<RecruitCandidate> {
     }
 }
 
-/// Zählt heute (seit Mitternacht UTC) bereits gesendete Outreach-Nachrichten
-/// (Python `_count_outreach_sent_today`). Fehler → 0.
-pub async fn count_outreach_sent_today(pool: &PgPool) -> i64 {
-    sqlx::query_scalar::<_, i64>(
+/// Zählt heute (seit Mitternacht UTC) bereits für die Raid-Leiter vorgemerkte
+/// oder historisch kalt kontaktierte Kandidaten. Fehler → Tageslimit erreicht.
+pub async fn count_outreach_enqueued_today(pool: &PgPool) -> i64 {
+    let count = sqlx::query_scalar::<_, i64>(
         "SELECT COUNT(*) FROM twitch_partner_outreach \
-         WHERE status = 'sent' AND contacted_at IS NOT NULL \
-           AND contacted_at::timestamptz >= date_trunc('day', NOW())",
+         WHERE status IN ('queued', 'sent') \
+           AND COALESCE(NULLIF(contacted_at::text, '')::timestamptz, NULLIF(detected_at::text, '')::timestamptz) >= date_trunc('day', NOW())",
     )
     .fetch_one(pool)
-    .await
-    .unwrap_or(0)
+    .await;
+    match count {
+        Ok(count) => count,
+        Err(error) => {
+            tracing::error!(
+                %error,
+                "PartnerRecruit: Tageslimit-Zählung fehlgeschlagen; fail-closed"
+            );
+            RECRUIT_MAX_PER_DAY
+        }
+    }
 }
 
-/// Loggt einen Outreach-Versuch mit Cooldown (Python `_record_outreach`).
-/// Cooldown wird auch bei Fehlschlag gesetzt. Status `sent`/`failed`.
-pub async fn record_outreach(pool: &PgPool, login: &str, user_id: &str, success: bool) {
-    let status = if success { "sent" } else { "failed" };
+/// Merkt einen Kandidaten für den raid-basierten Outreach-Boost vor und setzt
+/// den Cooldown. Es wird keine kalte Chat-Nachricht gesendet.
+pub async fn record_outreach_enqueued(pool: &PgPool, login: &str, user_id: &str) {
     let res = sqlx::query(
         "INSERT INTO twitch_partner_outreach \
-           (streamer_login, streamer_user_id, detected_at, contacted_at, status, cooldown_until) \
-         VALUES (LOWER($1), $2, NOW(), NOW(), $3, NOW() + ($4 || ' days')::interval) \
+           (streamer_login, streamer_user_id, detected_at, contacted_at, status, cooldown_until, raid_used_at) \
+         VALUES (LOWER($1), $2, NOW(), NULL, 'queued', NOW() + ($3 || ' days')::interval, NULL) \
          ON CONFLICT (streamer_login) DO UPDATE SET \
            streamer_user_id = EXCLUDED.streamer_user_id, \
            detected_at = EXCLUDED.detected_at, \
-           contacted_at = EXCLUDED.contacted_at, \
-           status = EXCLUDED.status, \
-           cooldown_until = EXCLUDED.cooldown_until",
+           contacted_at = NULL, \
+           status = 'queued', \
+           cooldown_until = EXCLUDED.cooldown_until, \
+           raid_used_at = NULL",
     )
     .bind(login)
     .bind(user_id)
-    .bind(status)
     .bind(format!("{RECRUIT_COOLDOWN_DAYS}"))
     .execute(pool)
     .await;
@@ -169,63 +166,42 @@ pub fn select_outreach_targets<'a>(
     targets
 }
 
-/// Sendet eine Outreach-Nachricht an einen Kandidaten (Python
-/// `_send_partner_outreach`, OHNE IRC-Follow/Join und OHNE die ausgeschlossene
-/// Voice-Reaction-Konversation). Suppression-Check (source=recruitment) →
-/// ChatApi-Send → record_outreach (Cooldown auch bei Fehlschlag) → bei Erfolg
-/// verzögerter Bot-Ban-Check.
-async fn send_partner_outreach(
-    pool: &PgPool,
-    chat_api: &Arc<dyn ChatApi>,
-    login: &str,
-    user_id: &str,
-) {
+/// Merkt einen Kandidaten als Outreach-Boost-Ziel vor. Suppression-Check
+/// (source=recruitment) bleibt als Opt-out-Stop erhalten.
+async fn enqueue_partner_outreach(pool: &PgPool, login: &str, user_id: &str) {
     if OutboundSuppressionStore::new(pool.clone())
         .check_suppression(login, "recruitment")
         .await
         .is_some()
     {
-        tracing::info!(login, "PartnerRecruit: Outreach übersprungen (Chat-Suppression)");
+        tracing::info!(
+            login,
+            "PartnerRecruit: Outreach übersprungen (Chat-Suppression)"
+        );
         return;
     }
 
-    let message = build_outreach_message(login);
-    let success = matches!(
-        chat_api.send_message(user_id, &message).await,
-        Ok(SendOutcome::Sent)
-    );
-    record_outreach(pool, login, user_id, success).await;
-
-    if success {
-        if let Err(error) = ExternalRecruitmentStore::new(pool.clone())
-            .schedule_bot_ban_check(user_id, login, "recruitment", RECRUIT_BAN_CHECK_DELAY_SECONDS)
-            .await
-        {
-            tracing::debug!(%error, login, "PartnerRecruit: Ban-Check-Schedule fehlgeschlagen");
-        }
-        tracing::info!(login, "PartnerRecruit: Outreach gesendet");
-    } else {
-        tracing::warn!(login, "PartnerRecruit: Outreach fehlgeschlagen");
-    }
+    record_outreach_enqueued(pool, login, user_id).await;
+    tracing::info!(login, "PartnerRecruit: Kandidat für Raid-Leiter vorgemerkt");
 }
 
-/// Haupt-Entry-Point (Python `_run_partner_recruit`): erkennt Kandidaten,
-/// respektiert das Tageslimit, sendet an aktuell live Kandidaten (max pro Tick,
-/// 60 s Throttle dazwischen). Wird vom Monitoring-after_tick gespawnt; die
-/// 30-min-Drosselung liegt beim Aufrufer.
+/// Haupt-Entry-Point: erkennt Kandidaten, respektiert das Tageslimit und merkt
+/// aktuell live Kandidaten für die Raid-Leiter vor (max pro Tick, 60 s Throttle
+/// dazwischen). Wird vom Monitoring-after_tick gespawnt; die 30-min-Drosselung
+/// liegt beim Aufrufer.
 pub async fn run_partner_recruit(
     pool: &PgPool,
-    chat_api: &Arc<dyn ChatApi>,
+    _chat_api: &Arc<dyn ChatApi>,
     category_streams: &[StreamSnapshot],
 ) {
     let candidates = detect_recruit_candidates(pool).await;
     if candidates.is_empty() {
         return;
     }
-    let sent_today = count_outreach_sent_today(pool).await;
-    let remaining_today = RECRUIT_MAX_PER_DAY - sent_today;
+    let enqueued_today = count_outreach_enqueued_today(pool).await;
+    let remaining_today = RECRUIT_MAX_PER_DAY - enqueued_today;
     if remaining_today <= 0 {
-        tracing::info!(sent_today, "PartnerRecruit: Tageslimit erreicht");
+        tracing::info!(enqueued_today, "PartnerRecruit: Tageslimit erreicht");
         return;
     }
 
@@ -239,10 +215,13 @@ pub async fn run_partner_recruit(
         if i > 0 {
             tokio::time::sleep(Duration::from_secs(RECRUIT_THROTTLE_SECONDS)).await;
         }
-        send_partner_outreach(pool, chat_api, login, user_id).await;
+        enqueue_partner_outreach(pool, login, user_id).await;
     }
     if !targets.is_empty() {
-        tracing::info!(count = targets.len(), "PartnerRecruit: Outreach-Tick abgeschlossen");
+        tracing::info!(
+            count = targets.len(),
+            "PartnerRecruit: Queue-Tick abgeschlossen"
+        );
     }
 }
 
@@ -261,11 +240,24 @@ mod pure_tests {
     #[test]
     fn select_targets_live_filter_cap_und_remaining() {
         let candidates = vec![
-            RecruitCandidate { streamer: "live_a".into(), distinct_days: 5 },
-            RecruitCandidate { streamer: "offline_b".into(), distinct_days: 5 },
-            RecruitCandidate { streamer: "live_c".into(), distinct_days: 5 },
+            RecruitCandidate {
+                streamer: "live_a".into(),
+                distinct_days: 5,
+            },
+            RecruitCandidate {
+                streamer: "offline_b".into(),
+                distinct_days: 5,
+            },
+            RecruitCandidate {
+                streamer: "live_c".into(),
+                distinct_days: 5,
+            },
         ];
-        let streams = vec![snap("Live_A", "111"), snap("Live_C", "333"), snap("ohne_id", "")];
+        let streams = vec![
+            snap("Live_A", "111"),
+            snap("Live_C", "333"),
+            snap("ohne_id", ""),
+        ];
 
         // offline_b nicht live → raus; ohne_id leere user_id (nicht Kandidat) → egal.
         let t = select_outreach_targets(&candidates, &streams, 5, 3);
@@ -275,16 +267,287 @@ mod pure_tests {
         let t1 = select_outreach_targets(&candidates, &streams, 5, 1);
         assert_eq!(t1, vec![("live_a", "111")]);
 
-        // remaining_today 0 → keine Sends.
+        // remaining_today 0 → keine neuen Queue-Einträge.
         assert!(select_outreach_targets(&candidates, &streams, 0, 3).is_empty());
     }
 
     #[test]
     fn select_targets_leere_user_id_kandidat_uebersprungen() {
         // Kandidat ist live, aber sein Stream-Snapshot hat keine user_id.
-        let candidates = vec![RecruitCandidate { streamer: "noid".into(), distinct_days: 5 }];
+        let candidates = vec![RecruitCandidate {
+            streamer: "noid".into(),
+            distinct_days: 5,
+        }];
         let streams = vec![snap("noid", "")];
         assert!(select_outreach_targets(&candidates, &streams, 5, 3).is_empty());
+    }
+}
+
+#[cfg(test)]
+mod no_cold_send_tests {
+    use super::*;
+    use async_trait::async_trait;
+    use chrono::{DateTime, Utc};
+    use sqlx::postgres::{PgConnectOptions, PgPoolOptions};
+    use std::str::FromStr;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    use tb_chat::api::BanOutcome;
+    use tb_chat::types::SendOutcome;
+    use tb_raid::OutreachBoostStore;
+
+    struct CountingChatApi {
+        sends: AtomicUsize,
+    }
+
+    impl CountingChatApi {
+        fn new() -> Self {
+            Self {
+                sends: AtomicUsize::new(0),
+            }
+        }
+
+        fn send_count(&self) -> usize {
+            self.sends.load(Ordering::SeqCst)
+        }
+    }
+
+    #[async_trait]
+    impl ChatApi for CountingChatApi {
+        async fn send_message(
+            &self,
+            _broadcaster_id: &str,
+            _message: &str,
+        ) -> Result<SendOutcome, String> {
+            self.sends.fetch_add(1, Ordering::SeqCst);
+            Ok(SendOutcome::Sent)
+        }
+
+        async fn send_announcement(
+            &self,
+            _broadcaster_id: &str,
+            _message: &str,
+            _color: &str,
+        ) -> Result<bool, String> {
+            Ok(true)
+        }
+
+        async fn ban_user(
+            &self,
+            _broadcaster_id: &str,
+            _target_user_id: &str,
+            _reason: &str,
+        ) -> Result<BanOutcome, String> {
+            Ok(BanOutcome::Banned)
+        }
+
+        async fn timeout_user(
+            &self,
+            _broadcaster_id: &str,
+            _target_user_id: &str,
+            _duration_secs: u32,
+            _reason: &str,
+        ) -> Result<BanOutcome, String> {
+            Ok(BanOutcome::Banned)
+        }
+
+        async fn unban_user(
+            &self,
+            _broadcaster_id: &str,
+            _target_user_id: &str,
+        ) -> Result<bool, String> {
+            Ok(true)
+        }
+
+        async fn delete_message(
+            &self,
+            _broadcaster_id: &str,
+            _message_id: &str,
+        ) -> Result<bool, String> {
+            Ok(true)
+        }
+
+        async fn user_created_at(&self, _user_id: &str) -> Result<Option<DateTime<Utc>>, String> {
+            Ok(None)
+        }
+
+        async fn resolve_user_id(&self, _login: &str) -> Result<Option<String>, String> {
+            Ok(None)
+        }
+
+        async fn bot_user_id(&self) -> String {
+            "bot".to_string()
+        }
+    }
+
+    fn snap(login: &str, user_id: &str) -> StreamSnapshot {
+        StreamSnapshot {
+            user_login: login.into(),
+            user_id: user_id.into(),
+            ..Default::default()
+        }
+    }
+
+    async fn setup(schema: &str) -> Option<PgPool> {
+        let dsn = std::env::var("TB_TEST_DATABASE_URL").ok()?;
+        let admin = PgPoolOptions::new()
+            .max_connections(1)
+            .connect(&dsn)
+            .await
+            .ok()?;
+        sqlx::query(&format!("DROP SCHEMA IF EXISTS {schema} CASCADE"))
+            .execute(&admin)
+            .await
+            .ok()?;
+        sqlx::query(&format!("CREATE SCHEMA {schema}"))
+            .execute(&admin)
+            .await
+            .ok()?;
+        admin.close().await;
+        let opts = PgConnectOptions::from_str(&dsn)
+            .ok()?
+            .options([("search_path", schema)]);
+        let pool = PgPoolOptions::new()
+            .max_connections(4)
+            .connect_with(opts)
+            .await
+            .ok()?;
+        for ddl in [
+            "CREATE TABLE twitch_stats_category (streamer TEXT, ts_utc TIMESTAMPTZ, viewer_count INTEGER)",
+            "CREATE TABLE twitch_streamer_identities (twitch_user_id TEXT, twitch_login TEXT)",
+            "CREATE TABLE twitch_partners (twitch_user_id TEXT, twitch_login TEXT, status TEXT)",
+            "CREATE TABLE twitch_raid_blacklist (target_login TEXT)",
+            "CREATE TABLE twitch_partner_outreach (streamer_login TEXT PRIMARY KEY, streamer_user_id TEXT, \
+             detected_at TIMESTAMPTZ, contacted_at TIMESTAMPTZ, status TEXT, cooldown_until TIMESTAMPTZ, raid_used_at TIMESTAMPTZ)",
+        ] {
+            sqlx::query(ddl).execute(&pool).await.ok()?;
+        }
+        Some(pool)
+    }
+
+    async fn seed_qualifying(pool: &PgPool, streamer: &str) {
+        sqlx::query(
+            "INSERT INTO twitch_stats_category (streamer, ts_utc, viewer_count) \
+             SELECT $1, NOW() - (d || ' days')::interval - (s || ' seconds')::interval, 10 \
+             FROM generate_series(0,3) AS d, generate_series(1,480) AS s",
+        )
+        .bind(streamer)
+        .execute(pool)
+        .await
+        .unwrap();
+    }
+
+    #[tokio::test]
+    async fn recruit_tick_queued_ohne_kalten_chat_send() {
+        let Some(pool) = setup("trust_ladder_no_cold_send").await else {
+            eprintln!("SKIP: TB_TEST_DATABASE_URL nicht gesetzt oder nicht erreichbar");
+            return;
+        };
+        seed_qualifying(&pool, "kandidat").await;
+        let chat_api = Arc::new(CountingChatApi::new());
+        let chat_api_trait: Arc<dyn ChatApi> = chat_api.clone();
+
+        run_partner_recruit(&pool, &chat_api_trait, &[snap("kandidat", "555")]).await;
+
+        assert_eq!(chat_api.send_count(), 0, "kein kalter Chat-Send");
+        let (status, contacted_at_is_null): (String, bool) = sqlx::query_as(
+            "SELECT status, contacted_at IS NULL FROM twitch_partner_outreach WHERE streamer_login='kandidat'",
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert_eq!(status, "queued");
+        assert!(contacted_at_is_null);
+        assert_eq!(count_outreach_enqueued_today(&pool).await, 1);
+    }
+
+    #[tokio::test]
+    async fn requeue_setzt_raid_used_at_zurueck_und_boost_laedt_ziel_wieder() {
+        let Some(pool) = setup("trust_ladder_requeue_resets_raid_used").await else {
+            eprintln!("SKIP: TB_TEST_DATABASE_URL nicht gesetzt oder nicht erreichbar");
+            return;
+        };
+        sqlx::query(
+            "INSERT INTO twitch_partner_outreach \
+               (streamer_login, streamer_user_id, detected_at, contacted_at, status, cooldown_until, raid_used_at) \
+             VALUES ('kandidat', 'alt', NOW() - INTERVAL '3 hours', NOW() - INTERVAL '2 hours', \
+                     'sent', NOW(), NOW())",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+
+        record_outreach_enqueued(&pool, "Kandidat", "555").await;
+
+        let (status, user_id, raid_used_at_is_null): (String, String, bool) = sqlx::query_as(
+            "SELECT status, streamer_user_id, raid_used_at IS NULL \
+             FROM twitch_partner_outreach WHERE streamer_login='kandidat'",
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert_eq!(status, "queued");
+        assert_eq!(user_id, "555");
+        assert!(raid_used_at_is_null, "Re-Queue macht Ziel wieder boostbar");
+
+        let logins = OutreachBoostStore::new(pool)
+            .load_boost_logins(48)
+            .await
+            .unwrap();
+        assert!(
+            logins.contains("kandidat"),
+            "re-queued Ziel ist wieder im Boost-Pfad selektierbar"
+        );
+    }
+
+    #[tokio::test]
+    async fn count_cast_fehler_behandelt_tageslimit_als_erreicht() {
+        let Some(pool) = setup("trust_ladder_count_fail_closed").await else {
+            eprintln!("SKIP: TB_TEST_DATABASE_URL nicht gesetzt oder nicht erreichbar");
+            return;
+        };
+        sqlx::query("DROP TABLE twitch_partner_outreach")
+            .execute(&pool)
+            .await
+            .unwrap();
+        sqlx::query(
+            "CREATE TABLE twitch_partner_outreach (streamer_login TEXT PRIMARY KEY, streamer_user_id TEXT, \
+             detected_at TEXT, contacted_at TEXT, status TEXT, cooldown_until TEXT, raid_used_at TEXT)",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+        sqlx::query(
+            "INSERT INTO twitch_partner_outreach (streamer_login, detected_at, contacted_at, status) \
+             VALUES ('kaputt', 'not-a-timestamp', NULL, 'queued')",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+
+        assert_eq!(
+            count_outreach_enqueued_today(&pool).await,
+            RECRUIT_MAX_PER_DAY
+        );
+    }
+
+    #[tokio::test]
+    async fn active_partner_mit_null_login_leert_kandidatenliste_nicht() {
+        let Some(pool) = setup("trust_ladder_null_partner_login").await else {
+            eprintln!("SKIP: TB_TEST_DATABASE_URL nicht gesetzt oder nicht erreichbar");
+            return;
+        };
+        seed_qualifying(&pool, "kandidat").await;
+        sqlx::query(
+            "INSERT INTO twitch_partners (twitch_user_id, twitch_login, status) \
+             VALUES ('p-null', NULL, 'active')",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+
+        let candidates = detect_recruit_candidates(&pool).await;
+        let logins: Vec<&str> = candidates.iter().map(|c| c.streamer.as_str()).collect();
+        assert_eq!(logins, vec!["kandidat"]);
     }
 }
 
@@ -297,7 +560,11 @@ mod tests {
     async fn setup(schema: &str) -> PgPool {
         let dsn = std::env::var("TB_TEST_DATABASE_URL")
             .unwrap_or_else(|_| "postgres://postgres:tbtest@127.0.0.1:5434/postgres".to_string());
-        let admin = PgPoolOptions::new().max_connections(1).connect(&dsn).await.unwrap();
+        let admin = PgPoolOptions::new()
+            .max_connections(1)
+            .connect(&dsn)
+            .await
+            .unwrap();
         sqlx::query(&format!("DROP SCHEMA IF EXISTS {schema} CASCADE"))
             .execute(&admin)
             .await
@@ -318,9 +585,10 @@ mod tests {
         for ddl in [
             "CREATE TABLE twitch_stats_category (streamer TEXT, ts_utc TIMESTAMPTZ, viewer_count INTEGER)",
             "CREATE TABLE twitch_streamer_identities (twitch_user_id TEXT, twitch_login TEXT)",
+            "CREATE TABLE twitch_partners (twitch_user_id TEXT, twitch_login TEXT, status TEXT)",
             "CREATE TABLE twitch_raid_blacklist (target_login TEXT)",
             "CREATE TABLE twitch_partner_outreach (streamer_login TEXT PRIMARY KEY, streamer_user_id TEXT, \
-             detected_at TIMESTAMPTZ, contacted_at TIMESTAMPTZ, status TEXT, cooldown_until TIMESTAMPTZ)",
+             detected_at TIMESTAMPTZ, contacted_at TIMESTAMPTZ, status TEXT, cooldown_until TIMESTAMPTZ, raid_used_at TIMESTAMPTZ)",
         ] {
             sqlx::query(ddl).execute(&pool).await.unwrap();
         }
@@ -353,6 +621,15 @@ mod tests {
             .execute(&pool)
             .await
             .unwrap();
+        // Aktiver Partner ohne Identity-Zeile → ausgeschlossen.
+        seed_qualifying(&pool, "schonpartner", 10).await;
+        sqlx::query(
+            "INSERT INTO twitch_partners (twitch_user_id, twitch_login, status) \
+             VALUES ('p1','schonpartner','active')",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
         // Zu großer Streamer (avg viewers > 40) → ausgeschlossen.
         seed_qualifying(&pool, "zugross", 100).await;
         // Im aktiven Cooldown → ausgeschlossen.
@@ -373,30 +650,35 @@ mod tests {
 
         let candidates = detect_recruit_candidates(&pool).await;
         let logins: Vec<&str> = candidates.iter().map(|c| c.streamer.as_str()).collect();
-        assert_eq!(logins, vec!["kandidat"], "nur der nicht-ausgeschlossene Kandidat");
+        assert_eq!(
+            logins,
+            vec!["kandidat"],
+            "nur der nicht-ausgeschlossene Kandidat"
+        );
         assert_eq!(candidates[0].distinct_days, 4);
     }
 
     #[tokio::test]
-    async fn count_und_record_outreach() {
+    async fn count_und_record_outreach_queue() {
         let pool = setup("t6e_recruit_record").await;
-        assert_eq!(count_outreach_sent_today(&pool).await, 0);
+        assert_eq!(count_outreach_enqueued_today(&pool).await, 0);
 
-        record_outreach(&pool, "NeuerStreamer", "555", true).await;
-        assert_eq!(count_outreach_sent_today(&pool).await, 1);
+        record_outreach_enqueued(&pool, "NeuerStreamer", "555").await;
+        assert_eq!(count_outreach_enqueued_today(&pool).await, 1);
 
-        // failed zählt NICHT als sent-today.
-        record_outreach(&pool, "anderer", "556", false).await;
-        assert_eq!(count_outreach_sent_today(&pool).await, 1);
+        record_outreach_enqueued(&pool, "anderer", "556").await;
+        assert_eq!(count_outreach_enqueued_today(&pool).await, 2);
 
-        // Cooldown gesetzt (in der Zukunft) + Login lowercased + UPSERT.
-        let (login, cd_future): (String, bool) = sqlx::query_as(
-            "SELECT streamer_login, cooldown_until > NOW() FROM twitch_partner_outreach WHERE streamer_login='neuerstreamer'",
+        // Cooldown gesetzt (in der Zukunft), Login lowercased, nicht kalt kontaktiert.
+        let (login, status, contacted_at_is_null, cd_future): (String, String, bool, bool) = sqlx::query_as(
+            "SELECT streamer_login, status, contacted_at IS NULL, cooldown_until > NOW() FROM twitch_partner_outreach WHERE streamer_login='neuerstreamer'",
         )
         .fetch_one(&pool)
         .await
         .unwrap();
         assert_eq!(login, "neuerstreamer");
+        assert_eq!(status, "queued");
+        assert!(contacted_at_is_null);
         assert!(cd_future);
     }
 }
