@@ -384,6 +384,7 @@ mod tests {
 
     // ── CRUD (P1.31) ──────────────────────────────────────────────────────────
 
+    use crate::auth::session::{DashboardAuthState, ADMIN_COOKIE_NAME};
     use axum::{
         body::Body,
         extract::ConnectInfo,
@@ -572,5 +573,38 @@ mod tests {
             .unwrap();
         let res = crud_router(pool).oneshot(req).await.unwrap();
         assert_eq!(res.status(), StatusCode::FORBIDDEN);
+    }
+
+    #[tokio::test]
+    async fn create_accepts_discord_admin_session_cookie() {
+        let Some(pool) = crud_pool("t_roadmap_discord_admin_cookie").await else { return };
+        let auth_state = DashboardAuthState::new(
+            pool.clone(),
+            "dGVzdGtleTEyMzQ1Njc4OTAxMjM0NTY3ODkwMTIzNDU=".to_string(),
+        );
+        let session = auth_state
+            .create_admin_session("discord-roadmap-admin-1", "Discord Admin")
+            .await
+            .expect("admin session");
+        let addr: SocketAddr = "1.2.3.4:9999".parse().unwrap();
+        let req = Request::builder()
+            .method("POST")
+            .uri("/twitch/api/v2/roadmap")
+            .extension(ConnectInfo(addr))
+            .header(axum::http::header::HOST, "example.com")
+            .header(
+                axum::http::header::COOKIE,
+                format!("{ADMIN_COOKIE_NAME}={}", session.session_id),
+            )
+            .header(crate::auth::csrf::CSRF_HEADER, session.csrf_token)
+            .header("content-type", "application/json")
+            .body(Body::from(r#"{"title":"Admin Cookie"}"#))
+            .unwrap();
+        let res = crate::build_roadmap_router(pool, "tok".into())
+            .layer(Extension(auth_state))
+            .oneshot(req)
+            .await
+            .unwrap();
+        assert_eq!(res.status(), StatusCode::CREATED);
     }
 }

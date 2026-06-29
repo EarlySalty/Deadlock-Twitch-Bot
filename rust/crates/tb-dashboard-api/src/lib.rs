@@ -1143,6 +1143,9 @@ pub fn build_roadmap_router(pool: PgPool, token: String) -> Router {
         )
         .with_state(pool)
         .layer(Extension(ExpectedToken(token)))
+        .layer(axum::middleware::from_fn(
+            crate::auth::level::promote_dashboard_admin_session,
+        ))
         .layer(axum::middleware::from_fn(crate::auth::csrf::csrf_protect))
         .layer(CorsLayer::permissive())
 }

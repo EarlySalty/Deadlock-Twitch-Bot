@@ -1,3 +1,11 @@
+## #298 — Admin-Dashboard: Daten laden wieder, auch wenn man eingeloggt ist
+
+**Ausgangslage:** Im Admin-Dashboard lud die Seite zwar, aber die eigentlichen Daten — Streamer-Liste, System-Status, Konfiguration, Roadmap — blieben leer mit „konnten nicht geladen werden", obwohl man klar als Admin angemeldet war. Hintergrund: Seite und Daten-Schnittstelle prüften die Anmeldung über zwei verschiedene Wege. Die Seite akzeptierte die Admin-Anmeldung, die Daten-Schnittstelle dahinter aber nur einen internen Server-Schlüssel — eine normale Browser-Anmeldung kannte sie nicht und wies sie ab.
+
+**Änderung:** Eine gültige Admin-Anmeldung wird jetzt serverseitig auf den Weg übersetzt, den die Daten-Schnittstellen erwarten — einmal sauber an einer Stelle, für alle Admin-Bereiche (Streamer, System, Konfiguration, Roadmap). Der interne Server-Schlüssel funktioniert unverändert weiter, und eine Anmeldung lässt sich von außen nicht fälschen.
+
+**Ergebnis:** Wer als Admin eingeloggt ist, sieht seine Daten wieder — Streamer-Liste und Co. laden, statt auf die Anmeldung zurückzuwerfen.
+
 ## #297 — Logout im Admin-Dashboard landet nicht mehr auf „Not Found"
 
 **Ausgangslage:** Wer sich im Admin-Dashboard ausgeloggt hat, landete auf einer „Not Found"-Seite. Grund: Der Logout schickte den Browser auf einen Pfad, der nur auf der öffentlichen Seite existiert — auf der Admin-Subdomain ist genau dieser Pfad bewusst gesperrt. Der Redirect war noch aus der alten Generation als reiner Relativpfad übernommen, ohne zu unterscheiden, von welchem Host der Logout kam.
