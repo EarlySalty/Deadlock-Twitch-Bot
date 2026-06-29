@@ -33,9 +33,11 @@ use crate::auth::session::{
     PARTNER_COOKIE_NAME, SESSION_CREATE_TTL_SECS,
 };
 use crate::handlers::auth_status::ADMIN_MODE_COOKIE;
+use crate::handlers::spa::is_admin_dashboard_host_request;
 
 /// Logout-Redirect-Ziel (Python `auth_logout`: 302 → `/analyse`).
 const LOGOUT_REDIRECT: &str = "/analyse";
+const PUBLIC_DASHBOARD_BASE_URL: &str = "https://deutsche-deadlock-community.de";
 /// Cookie-Name des OAuth-Kontext-CSRF-Tokens (P2.139). Kurzlebig, HttpOnly,
 /// SameSite=Lax; bindet den Callback an den Browser, der den Login startete.
 const OAUTH_CONTEXT_COOKIE: &str = "twitch_oauth_ctx";
@@ -584,6 +586,8 @@ fn html_escape(value: &str) -> String {
 ///
 /// Löscht die Session-Row + Cache (`invalidate_session`), entfernt das Cookie
 /// (`clear_session_cookie`) und leitet auf [`LOGOUT_REDIRECT`] (`/analyse`).
+/// Kommt der Logout vom Admin-Host, ist das Ziel die absolute öffentliche
+/// Dashboard-URL, weil `/analyse` auf dem Admin-Host absichtlich gesperrt ist.
 pub async fn logout_handler(
     state: Option<Extension<DashboardAuthState>>,
     config: Option<Extension<OAuthLoginConfig>>,
@@ -602,13 +606,33 @@ pub async fn logout_handler(
     }
 
     let cookie = clear_session_cookie(PARTNER_COOKIE_NAME, cookie_secure, SameSite::Lax);
-    let mut response = redirect_with_cookie(LOGOUT_REDIRECT, &cookie);
+    let logout_redirect = logout_redirect_for_request(&headers);
+    let mut response = redirect_with_cookie(&logout_redirect, &cookie);
     let admin_mode_cookie =
         clear_session_cookie(ADMIN_MODE_COOKIE, cookie_secure, SameSite::Lax);
     if let Ok(value) = HeaderValue::from_str(&admin_mode_cookie) {
         response.headers_mut().append(SET_COOKIE, value);
     }
     response
+}
+
+fn logout_redirect_for_request(headers: &HeaderMap) -> String {
+    if is_admin_dashboard_host_request(headers) {
+        return format!("{}{}", public_dashboard_base_url_from_env(), LOGOUT_REDIRECT);
+    }
+    LOGOUT_REDIRECT.to_string()
+}
+
+fn public_dashboard_base_url_from_env() -> String {
+    let base = non_empty_env("TWITCH_PUBLIC_URL")
+        .or_else(|| non_empty_env("DASHBOARD_PUBLIC_URL"))
+        .unwrap_or_else(|| PUBLIC_DASHBOARD_BASE_URL.to_string());
+    let trimmed = base.trim_end_matches('/');
+    if trimmed.is_empty() {
+        PUBLIC_DASHBOARD_BASE_URL.to_string()
+    } else {
+        trimmed.to_string()
+    }
 }
 
 /// Liest einen Cookie-Wert direkt aus den Request-Headern (für Handler ohne
@@ -810,6 +834,35 @@ mod tests {
     async fn logout_loescht_partner_und_admin_mode_cookie_ohne_state() {
         let resp = logout_handler(None, None, HeaderMap::new()).await;
         assert_eq!(resp.status(), StatusCode::SEE_OTHER);
+        let cookies: Vec<&str> = resp
+            .headers()
+            .get_all(SET_COOKIE)
+            .iter()
+            .filter_map(|value| value.to_str().ok())
+            .collect();
+        assert!(cookies.iter().any(|cookie| {
+            cookie.starts_with("twitch_dash_session=") && cookie.contains("Max-Age=0")
+        }));
+        assert!(cookies.iter().any(|cookie| {
+            cookie.starts_with("tb_admin_mode=") && cookie.contains("Max-Age=0")
+        }));
+    }
+
+    #[tokio::test]
+    async fn logout_vom_admin_host_redirectet_absolut_und_loescht_cookies() {
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            axum::http::header::HOST,
+            HeaderValue::from_static("admin.deutsche-deadlock-community.de"),
+        );
+
+        let resp = logout_handler(None, None, headers).await;
+
+        assert_eq!(resp.status(), StatusCode::SEE_OTHER);
+        assert_eq!(
+            resp.headers().get(axum::http::header::LOCATION).unwrap(),
+            "https://deutsche-deadlock-community.de/analyse"
+        );
         let cookies: Vec<&str> = resp
             .headers()
             .get_all(SET_COOKIE)

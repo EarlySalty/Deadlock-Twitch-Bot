@@ -333,7 +333,7 @@ fn admin_dashboard_host_page_gate(headers: &HeaderMap) -> Option<Response> {
 /// Python: `_is_admin_dashboard_host_request` (`api_v2.py:951-955`):
 /// normalisierter Host-Header == `_configured_admin_dashboard_host()`.
 /// Leerer Host → `false`.
-fn is_admin_dashboard_host_request(headers: &HeaderMap) -> bool {
+pub(crate) fn is_admin_dashboard_host_request(headers: &HeaderMap) -> bool {
     let request_host = normalize_host_header(
         headers
             .get(header::HOST)
