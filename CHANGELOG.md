@@ -1,3 +1,11 @@
+## #301 — Schema-Bauplan wieder deckungsgleich mit der echten Datenbank
+
+**Ausgangslage:** Die laufende Datenbank ist korrekt — aber die Migrationen, also der Bauplan, aus dem eine *neue* Datenbank entsteht, beschrieben für 83 Spalten noch die alten Typen (Text statt Zeitstempel, 32- statt 64-Bit-Zahlen, Zahl statt Wahr/Falsch). Auffallen würde das erst, wenn jemand eine frische Datenbank aufsetzt (Test, neue Umgebung, Wiederaufbau): die liefe sofort in dieselben Datentyp-Fehler wie zuletzt im Dashboard.
+
+**Änderung:** Wir haben das echte Schema der laufenden Datenbank ausgelesen, eine frische Datenbank allein aus den Migrationen gebaut und beide Spalte für Spalte verglichen. Die 83 abweichenden Spalten (plus 10 Pflichtfeld-Marker) zieht jetzt eine neue, rückwärtskompatible Korrektur nach — strikt abgesichert, sodass sie auf der bestehenden Datenbank nichts anfasst und ausschließlich eine frisch gebaute angleicht.
+
+**Ergebnis:** Eine frisch aus den Migrationen gebaute Datenbank ist jetzt Spalte für Spalte identisch mit der echten. Ein erweiterter Test baut diese Prüfung dauerhaft ein und fängt künftige Abweichungen automatisch ab.
+
 ## #300 — Admin-Dashboard durchgehärtet: alle Bereiche gegen das echte Schema abgeglichen
 
 **Ausgangslage:** Nachdem ein Datentyp-Stolperstein die Streamer-Liste blockierte (#299), war klar: derselbe Bruch konnte überall im Admin-Dashboard lauern, weil quer durch die Auswertungen Felder im Code anders gelesen wurden, als sie in der Datenbank wirklich liegen — ein Erbe aus dem Umstieg, bei dem die Schema-Beschreibung von der laufenden Datenbank abgedriftet ist.
