@@ -280,7 +280,7 @@ pub async fn list_handler(
                 oauth_status: snap.status.to_string(),
                 granted_scopes: snap.granted_scopes,
                 missing_scopes: snap.missing_scopes,
-                oauth_authorized_at: r.authorized_at,
+                oauth_authorized_at: r.authorized_at.map(fmt_dt),
                 promo_disabled: r.promo_disabled.unwrap_or(0) != 0,
                 notes: r.manual_plan_notes, // Python: manual_plan_notes als notes
                 technical_pause_reason: r.technical_pause_reason,
@@ -446,7 +446,7 @@ pub async fn detail_handler(
             status: snap.status.to_string(),
             granted_scopes: snap.granted_scopes,
             missing_scopes: snap.missing_scopes,
-            authorized_at: row.authorized_at,
+            authorized_at: row.authorized_at.map(fmt_dt),
             raid_enabled: row.oauth_raid_enabled.unwrap_or(false),
         },
     }))
@@ -739,7 +739,7 @@ mod tests {
             CREATE TABLE IF NOT EXISTS twitch_raid_auth (
                 id BIGSERIAL PRIMARY KEY, twitch_login TEXT, twitch_user_id TEXT,
                 scopes TEXT, needs_reauth BOOLEAN NOT NULL DEFAULT FALSE,
-                raid_enabled BOOLEAN NOT NULL DEFAULT TRUE, authorized_at TEXT
+                raid_enabled BOOLEAN NOT NULL DEFAULT TRUE, authorized_at TIMESTAMPTZ
             )
         "#,
         )

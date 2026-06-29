@@ -242,8 +242,8 @@ pub struct AdminStreamerRow {
     pub last_stream_at: Option<chrono::DateTime<chrono::Utc>>,
     pub scopes: Option<String>,
     pub needs_reauth: Option<bool>,
-    /// TEXT in Prod (twitch_raid_auth.authorized_at)
-    pub authorized_at: Option<String>,
+    /// TIMESTAMPTZ in Prod (twitch_raid_auth.authorized_at)
+    pub authorized_at: Option<chrono::DateTime<chrono::Utc>>,
     pub promo_disabled: Option<i32>,
     pub promo_message: Option<String>,
     pub raid_boost_enabled: Option<i32>,
@@ -292,8 +292,8 @@ pub struct AdminStreamerDetailRow {
     pub scopes: Option<String>,
     pub needs_reauth: Option<bool>,
     pub oauth_raid_enabled: Option<bool>,
-    /// TEXT in Prod (twitch_raid_auth.authorized_at)
-    pub authorized_at: Option<String>,
+    /// TIMESTAMPTZ in Prod (twitch_raid_auth.authorized_at)
+    pub authorized_at: Option<chrono::DateTime<chrono::Utc>>,
     pub plan_name: Option<String>,
     pub promo_disabled: Option<i32>,
     pub promo_message: Option<String>,
@@ -687,7 +687,7 @@ mod tests {
                 scopes          TEXT,
                 needs_reauth    BOOLEAN NOT NULL DEFAULT FALSE,
                 raid_enabled    BOOLEAN NOT NULL DEFAULT TRUE,
-                authorized_at   TEXT
+                authorized_at   TIMESTAMPTZ
             )
         "#,
         )
@@ -964,8 +964,8 @@ mod tests {
         assert_eq!(rows.len(), 1);
         assert_eq!(rows[0].needs_reauth, Some(true));
         assert_eq!(
-            rows[0].authorized_at.as_deref(),
-            Some("2026-06-29T12:00:00+00")
+            rows[0].authorized_at.as_ref().map(|dt| dt.to_rfc3339()),
+            Some("2026-06-29T12:00:00+00:00".to_string())
         );
         assert_eq!(
             rows[0].manual_plan_expires_at.as_deref(),
@@ -1101,7 +1101,10 @@ mod tests {
             .expect("row");
         assert_eq!(row.needs_reauth, Some(true));
         assert_eq!(row.oauth_raid_enabled, Some(false));
-        assert_eq!(row.authorized_at.as_deref(), Some("2026-06-29T13:00:00+00"));
+        assert_eq!(
+            row.authorized_at.as_ref().map(|dt| dt.to_rfc3339()),
+            Some("2026-06-29T13:00:00+00:00".to_string())
+        );
         assert_eq!(
             row.manual_plan_expires_at.as_deref(),
             Some("2026-07-02T13:00:00+00")
