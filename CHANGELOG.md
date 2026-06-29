@@ -1,3 +1,11 @@
+## #303 — Demo: Streams-Tabelle, Kategorie-Ranking und Coaching jetzt voll gefüllt
+
+**Ausgangslage:** Nach der letzten Demo-Reparatur liefen alle Tabs fehlerfrei, drei Bereiche blieben aber nur halb gefüllt: Die Stream-Tabelle ließ mehrere Spalten leer, und Kategorie-Ranking wie Coaching-Bereich wirkten dünn — ihre Beispieldaten enthielten nur einen Bruchteil dessen, was das Dashboard dort eigentlich darstellt.
+
+**Änderung:** Wir haben die Beispieldaten dieser drei Bereiche auf die volle Form gebracht. Jeder Stream in der Tabelle trägt jetzt sämtliche Kennzahlen — Zuschauerverlauf, Retention an mehreren Zeitmarken, Chatter-Aufschlüsselung und Follower-Stand. Das Kategorie-Ranking zeigt eine komplette Rangliste mit dem Beispiel-Profil auf Platz 12 von 58. Und der Coaching-Bereich ist von ein paar Stichpunkten zur vollen Auswertung gewachsen: Effizienz, Titel- und Tag-Analyse, Sendeplan, Retention-Kurve, Raid-Netzwerk, Peer-Vergleich und fünf konkrete Empfehlungen, deren Begründung sich jeweils direkt aus den Beispielzahlen ableitet.
+
+**Ergebnis:** Die Demo zeigt jetzt auch auf Streams, Markt und Coaching ein vollständig gefülltes Dashboard statt halbleerer Kacheln — so, wie es echte Streamer mit eigenen Daten sehen. Ein Klick-Test durch alle Tabs bestätigt, dass nichts abbricht und die Inhalte erscheinen.
+
 ## #302 — Live-Demo: alle Tabs zeigen wieder vollständige Beispieldaten
 
 **Ausgangslage:** Die öffentliche Demo des Analytics-Dashboards (über „Live Demo" auf der Seite erreichbar) brach auf mehreren Tabs mit einem „Dashboard-Fehler" ab — Übersicht, Publikum, Wachstum, Planung, Zuschauer und Monetization zeigten statt Auswertungen eine Fehlermeldung. Hintergrund: Die Demo läuft auf fest hinterlegten Beispieldaten statt auf echten Zahlen. Diese Beispieldaten waren nur grob angelegt und passten an vielen Stellen nicht mehr zu dem, was das Dashboard inzwischen erwartet — mal kam eine Liste, wo ein einzelner Block gebraucht wurde, mal fehlten Felder, mal hatte ein ganzer Bereich überhaupt keine Beispieldaten. Beim Aufbau der Seite lief das ins Leere.

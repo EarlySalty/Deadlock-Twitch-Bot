@@ -172,11 +172,29 @@ fn demo_overview_payload(days: i64) -> Value {
         },
         "sessions": [
             { "id": 1, "date": "2026-06-12", "startTime": "20:00", "duration": 11400,
-              "avgViewers": 410.0, "peakViewers": 1087, "retention10m": 72.4,
-              "uniqueChatters": 240, "title": "Ranked Grind bis Eternus" },
+              "startViewers": 286, "peakViewers": 1087, "endViewers": 436,
+              "avgViewers": 410.0, "retention5m": 79.8, "retention10m": 72.4,
+              "retention20m": 64.9, "dropoffPct": 17.6, "totalChatterSessions": 246,
+              "uniqueChatters": 240, "firstTimeChatters": 39, "returningChatters": 201,
+              "followersStart": 12480, "followersEnd": 12528, "title": "Ranked Grind bis Eternus" },
             { "id": 2, "date": "2026-06-10", "startTime": "19:30", "duration": 9000,
-              "avgViewers": 355.0, "peakViewers": 905, "retention10m": 69.8,
-              "uniqueChatters": 198, "title": "Patch-Day First Impressions" }
+              "startViewers": 241, "peakViewers": 905, "endViewers": 362,
+              "avgViewers": 355.0, "retention5m": 76.5, "retention10m": 69.8,
+              "retention20m": 61.7, "dropoffPct": 19.1, "totalChatterSessions": 205,
+              "uniqueChatters": 198, "firstTimeChatters": 31, "returningChatters": 167,
+              "followersStart": 12443, "followersEnd": 12480, "title": "Patch-Day First Impressions" },
+            { "id": 3, "date": "2026-06-06", "startTime": "20:15", "duration": 9900,
+              "startViewers": 268, "peakViewers": 842, "endViewers": 351,
+              "avgViewers": 376.0, "retention5m": 78.1, "retention10m": 71.0,
+              "retention20m": 63.4, "dropoffPct": 18.5, "totalChatterSessions": 218,
+              "uniqueChatters": 211, "firstTimeChatters": 34, "returningChatters": 177,
+              "followersStart": 12412, "followersEnd": 12443, "title": "Hero Pool Review" },
+            { "id": 4, "date": "2026-06-03", "startTime": "19:45", "duration": 10800,
+              "startViewers": 254, "peakViewers": 795, "endViewers": 337,
+              "avgViewers": 348.0, "retention5m": 77.4, "retention10m": 70.5,
+              "retention20m": 62.2, "dropoffPct": 18.9, "totalChatterSessions": 196,
+              "uniqueChatters": 189, "firstTimeChatters": 27, "returningChatters": 162,
+              "followersStart": 12387, "followersEnd": 12412, "title": "Community Scrims am Abend" }
         ],
         "findings": [
             { "type": "pos", "title": "Starke Bindung", "text": "10-Minuten-Retention über dem Kategorie-Schnitt." },
@@ -522,11 +540,26 @@ pub async fn demo_monetization(Query(q): Query<DemoAnalyticsQuery>) -> Response 
 /// `GET /twitch/demo/api/v2/category-leaderboard` — Kategorie-Ranking (Fixture).
 pub async fn demo_category_leaderboard() -> Response {
     Json(json!({
-        "streamer": DEMO_LOGIN,
-        "categories": [
-            { "category": "Deadlock", "rank": 12, "avgViewers": 410, "hours": 32.0 },
-            { "category": "Just Chatting", "rank": 240, "avgViewers": 280, "hours": 9.0 }
-        ]
+        "leaderboard": [
+            { "rank": 1, "streamer": "laneprime_tv", "avgViewers": 1260, "peakViewers": 3410, "isPartner": true, "isYou": false },
+            { "rank": 2, "streamer": "deny_dynamo", "avgViewers": 1018, "peakViewers": 2860, "isPartner": true, "isYou": false },
+            { "rank": 3, "streamer": "geistlane", "avgViewers": 894, "peakViewers": 2425, "isPartner": true, "isYou": false },
+            { "rank": 4, "streamer": "orbital_vault", "avgViewers": 748, "peakViewers": 1904, "isPartner": true, "isYou": false },
+            { "rank": 5, "streamer": "patronpush", "avgViewers": 682, "peakViewers": 1765, "isPartner": false, "isYou": false },
+            { "rank": 6, "streamer": "zipline_zero", "avgViewers": 611, "peakViewers": 1608, "isPartner": true, "isYou": false },
+            { "rank": 7, "streamer": "soulshop_live", "avgViewers": 566, "peakViewers": 1490, "isPartner": false, "isYou": false },
+            { "rank": 8, "streamer": "metro_guardian", "avgViewers": 512, "peakViewers": 1324, "isPartner": true, "isYou": false },
+            { "rank": 9, "streamer": "lantern_macro", "avgViewers": 474, "peakViewers": 1242, "isPartner": false, "isYou": false },
+            { "rank": 10, "streamer": "bridgeboss", "avgViewers": 445, "peakViewers": 1198, "isPartner": true, "isYou": false },
+            { "rank": 11, "streamer": "rookroute", "avgViewers": 414, "peakViewers": 1126, "isPartner": false, "isYou": false },
+            { "rank": 12, "streamer": DEMO_LOGIN, "avgViewers": 382, "peakViewers": 1087, "isPartner": true, "isYou": true },
+            { "rank": 13, "streamer": "aim_dojo_live", "avgViewers": 361, "peakViewers": 980, "isPartner": false, "isYou": false },
+            { "rank": 14, "streamer": "urnwalker", "avgViewers": 338, "peakViewers": 914, "isPartner": false, "isYou": false },
+            { "rank": 15, "streamer": "railgun_room", "avgViewers": 319, "peakViewers": 875, "isPartner": true, "isYou": false }
+        ],
+        "totalStreamers": 58,
+        "yourRank": 12,
+        "yourTier": "Oberes Mittelfeld"
     }))
     .into_response()
 }
@@ -535,11 +568,260 @@ pub async fn demo_category_leaderboard() -> Response {
 pub async fn demo_coaching() -> Response {
     Json(json!({
         "streamer": DEMO_LOGIN,
-        "generatedAt": "2026-06-13T11:00:00Z",
-        "tips": [
-            { "area": "retention", "title": "Zuschauer länger halten", "detail": "Die meisten Zuschauer springen in den ersten Minuten ab. Steige mit einer klaren Ansage zum heutigen Stream-Ziel ein und sprich neue Zuschauer aktiv an." },
-            { "area": "growth", "title": "Reichweite ausbauen", "detail": "Setze Titel und Kategorie vor dem Live-Gehen, raide zum Schluss einen aktiven Partner und verwerte Highlights als kurze Clips." }
-        ]
+        "days": 30,
+        "empty": false,
+        "efficiency": {
+            "viewerHoursPerStreamHour": 382.0,
+            "categoryAvg": 318.0,
+            "topPerformers": [
+                { "streamer": "laneprime_tv", "ratio": 1260.0 },
+                { "streamer": "deny_dynamo", "ratio": 1018.0 },
+                { "streamer": "geistlane", "ratio": 894.0 },
+                { "streamer": DEMO_LOGIN, "ratio": 382.0 }
+            ],
+            "percentile": 79,
+            "totalStreamHours": 44.0,
+            "totalViewerHours": 16808.0,
+            "growthPer10Hours": 41.6,
+            "growthCategoryAvg": 24.2,
+            "growthTopPerformers": [
+                { "streamer": "laneprime_tv", "value": 58.1 },
+                { "streamer": "deny_dynamo", "value": 51.4 },
+                { "streamer": DEMO_LOGIN, "value": 41.6 },
+                { "streamer": "aim_dojo_live", "value": 29.8 }
+            ],
+            "growthPercentile": 82
+        },
+        "titleAnalysis": {
+            "yourTitles": [
+                { "title": "Ranked Grind bis Eternus", "avgViewers": 438, "peakViewers": 1087, "chatters": 246, "usageCount": 5 },
+                { "title": "Patch-Day First Impressions", "avgViewers": 386, "peakViewers": 905, "chatters": 205, "usageCount": 3 },
+                { "title": "Hero Pool Review", "avgViewers": 344, "peakViewers": 760, "chatters": 174, "usageCount": 2 },
+                { "title": "Community Scrims am Abend", "avgViewers": 332, "peakViewers": 795, "chatters": 168, "usageCount": 2 },
+                { "title": "Duo Queue und VOD Review", "avgViewers": 309, "peakViewers": 701, "chatters": 143, "usageCount": 2 }
+            ],
+            "categoryTopTitles": [
+                { "title": "Deadlock Ranked Race", "streamer": "laneprime_tv", "avgViewers": 1260 },
+                { "title": "Patch Meta Breakdown", "streamer": "deny_dynamo", "avgViewers": 1018 },
+                { "title": "High MMR Hero Lab", "streamer": "geistlane", "avgViewers": 894 },
+                { "title": "Viewer Games Queue", "streamer": "orbital_vault", "avgViewers": 748 },
+                { "title": "Road to Ascendant", "streamer": "patronpush", "avgViewers": 682 }
+            ],
+            "yourMissingPatterns": ["Rang oder Ziel im Titel (z. B. \"Push auf Eternus\")", "Patch- oder Hero-Bezug als Aufhänger", "Konkreter Hook statt nur \"Ranked\""],
+            "topPerformerPatterns": ["\"Deadlock\" in den ersten beiden Wörtern", "Klares Versprechen wie \"High MMR Hero Lab\"", "Hero- oder Meta-Name direkt im Titel"],
+            "varietyPct": 35.7,
+            "uniqueTitleCount": 5,
+            "totalSessionCount": 14,
+            "avgPeerVarietyPct": 54.2,
+            "peerVariety": [
+                { "streamer": "rookroute", "uniqueTitles": 7, "totalSessions": 14, "varietyPct": 50.0 },
+                { "streamer": "aim_dojo_live", "uniqueTitles": 8, "totalSessions": 13, "varietyPct": 61.5 },
+                { "streamer": "urnwalker", "uniqueTitles": 6, "totalSessions": 12, "varietyPct": 50.0 }
+            ]
+        },
+        "scheduleOptimizer": {
+            "sweetSpots": [
+                { "weekday": 2, "hour": 18, "categoryViewers": 2140, "competitors": 7, "opportunityScore": 82.4 },
+                { "weekday": 3, "hour": 19, "categoryViewers": 2860, "competitors": 9, "opportunityScore": 79.8 },
+                { "weekday": 4, "hour": 20, "categoryViewers": 3120, "competitors": 11, "opportunityScore": 76.5 },
+                { "weekday": 0, "hour": 17, "categoryViewers": 1760, "competitors": 5, "opportunityScore": 74.0 },
+                { "weekday": 5, "hour": 21, "categoryViewers": 3580, "competitors": 15, "opportunityScore": 70.6 }
+            ],
+            "yourCurrentSlots": [
+                { "weekday": 3, "hour": 20, "count": 4 },
+                { "weekday": 5, "hour": 20, "count": 3 },
+                { "weekday": 2, "hour": 19, "count": 3 },
+                { "weekday": 4, "hour": 20, "count": 2 }
+            ],
+            "competitionHeatmap": [
+                { "weekday": 2, "hour": 18, "competitors": 7, "categoryViewers": 2140 },
+                { "weekday": 2, "hour": 19, "competitors": 10, "categoryViewers": 2620 },
+                { "weekday": 3, "hour": 19, "competitors": 9, "categoryViewers": 2860 },
+                { "weekday": 3, "hour": 20, "competitors": 13, "categoryViewers": 3240 },
+                { "weekday": 4, "hour": 20, "competitors": 11, "categoryViewers": 3120 },
+                { "weekday": 5, "hour": 21, "competitors": 15, "categoryViewers": 3580 }
+            ]
+        },
+        "durationAnalysis": {
+            "buckets": [
+                { "label": "1-2 h", "streamCount": 2, "avgViewers": 304.0, "avgChatters": 132.0, "avgRetention5m": 73.8, "efficiencyRatio": 304.0 },
+                { "label": "2-3 h", "streamCount": 5, "avgViewers": 361.0, "avgChatters": 187.0, "avgRetention5m": 77.1, "efficiencyRatio": 361.0 },
+                { "label": "3-4 h", "streamCount": 6, "avgViewers": 412.0, "avgChatters": 224.0, "avgRetention5m": 79.4, "efficiencyRatio": 412.0 },
+                { "label": "4 h+", "streamCount": 1, "avgViewers": 344.0, "avgChatters": 169.0, "avgRetention5m": 75.2, "efficiencyRatio": 344.0 }
+            ],
+            "optimalLabel": "3-4 h",
+            "currentAvgHours": 3.1,
+            "correlation": 0.18
+        },
+        "crossCommunity": {
+            "totalUniqueChatters": 634,
+            "chatterSources": [
+                { "sourceStreamer": "partner_one", "sharedChatters": 214, "percentage": 33.8 },
+                { "sourceStreamer": "partner_two", "sharedChatters": 168, "percentage": 26.5 },
+                { "sourceStreamer": "aim_dojo_live", "sharedChatters": 91, "percentage": 14.4 },
+                { "sourceStreamer": "rookroute", "sharedChatters": 76, "percentage": 12.0 }
+            ],
+            "isolatedChatters": 286,
+            "isolatedPercentage": 45.1,
+            "ecosystemSummary": "Rund 55 % deiner Chatter teilst du mit anderen Deadlock-Kanälen — vor allem mit zwei Partnern, die zusammen über die Hälfte eurer Überschneidung ausmachen. Die übrigen 45 % schauen ausschließlich bei dir: ein loyaler Kern, auf dem sich aufbauen lässt."
+        },
+        "tagOptimization": {
+            "yourTags": [
+                { "tags": "Deadlock, Ranked, Deutsch", "avgViewers": 438, "usageCount": 6 },
+                { "tags": "Deadlock, Patch, Meta", "avgViewers": 386, "usageCount": 3 },
+                { "tags": "Deadlock, Coaching", "avgViewers": 344, "usageCount": 3 },
+                { "tags": "Deadlock, Community", "avgViewers": 332, "usageCount": 2 }
+            ],
+            "categoryBestTags": [
+                { "tags": "Deadlock, Ranked, High MMR", "avgViewers": 812, "streamerCount": 9 },
+                { "tags": "Deadlock, Patch, Analysis", "avgViewers": 744, "streamerCount": 7 },
+                { "tags": "Deadlock, Viewer Games", "avgViewers": 621, "streamerCount": 6 },
+                { "tags": "Deadlock, Hero Guide", "avgViewers": 588, "streamerCount": 5 }
+            ],
+            "missingHighPerformers": ["High MMR", "Analysis", "Viewer Games"],
+            "underperformingTags": ["Coaching"]
+        },
+        "retentionCoaching": {
+            "your5mRetention": 78.0,
+            "category5mRetention": 68.4,
+            "yourViewerCurve": [
+                { "minute": 0, "avgViewerPct": 100.0 },
+                { "minute": 5, "avgViewerPct": 78.0 },
+                { "minute": 10, "avgViewerPct": 71.2 },
+                { "minute": 15, "avgViewerPct": 66.8 },
+                { "minute": 20, "avgViewerPct": 62.9 },
+                { "minute": 25, "avgViewerPct": 59.7 },
+                { "minute": 30, "avgViewerPct": 56.4 }
+            ],
+            "topPerformerCurve": [
+                { "minute": 0, "avgViewerPct": 100.0 },
+                { "minute": 5, "avgViewerPct": 84.5 },
+                { "minute": 10, "avgViewerPct": 79.8 },
+                { "minute": 15, "avgViewerPct": 75.1 },
+                { "minute": 20, "avgViewerPct": 71.6 },
+                { "minute": 25, "avgViewerPct": 68.8 },
+                { "minute": 30, "avgViewerPct": 65.0 }
+            ],
+            "criticalDropoffMinute": 5
+        },
+        "doubleStreamDetection": {
+            "detected": true,
+            "count": 2,
+            "occurrences": [
+                { "date": "2026-06-01", "sessionCount": 2, "avgViewers": 286.0 },
+                { "date": "2026-06-08", "sessionCount": 2, "avgViewers": 301.0 }
+            ],
+            "singleDayAvg": 392.0,
+            "doubleDayAvg": 294.0
+        },
+        "chatConcentration": {
+            "totalChatters": 634,
+            "totalMessages": 18420,
+            "msgsPerChatter": 29.1,
+            "loyaltyBuckets": {
+                "1x": { "count": 248, "pct": 39.1, "messages": 2104 },
+                "2-5x": { "count": 259, "pct": 40.9, "messages": 6720 },
+                "6+": { "count": 127, "pct": 20.0, "messages": 9596 }
+            },
+            "topChatters": [
+                { "login": "viewer_alpha", "messages": 412, "sessions": 11, "sharePct": 2.2, "cumulativePct": 2.2 },
+                { "login": "viewer_bravo", "messages": 388, "sessions": 9, "sharePct": 2.1, "cumulativePct": 4.3 },
+                { "login": "viewer_charlie", "messages": 301, "sessions": 8, "sharePct": 1.6, "cumulativePct": 5.9 },
+                { "login": "patch_note_reader", "messages": 244, "sessions": 7, "sharePct": 1.3, "cumulativePct": 7.2 },
+                { "login": "silent_anchor", "messages": 220, "sessions": 9, "sharePct": 1.2, "cumulativePct": 8.4 }
+            ],
+            "concentrationIndex": 0.24,
+            "top1Pct": 2.2,
+            "top3Pct": 5.9,
+            "ownOneTimerPct": 39.1,
+            "avgPeerOneTimerPct": 46.8
+        },
+        "raidNetwork": {
+            "totalSent": 8,
+            "totalReceived": 6,
+            "totalSentViewers": 2840,
+            "totalReceivedViewers": 674,
+            "avgSentViewers": 355.0,
+            "avgReceivedViewers": 112.3,
+            "reciprocityRatio": 0.75,
+            "mutualPartners": 3,
+            "totalPartners": 5,
+            "partners": [
+                { "login": "partner_one", "sentCount": 2, "sentAvgViewers": 420.0, "receivedCount": 3, "receivedAvgViewers": 148.0, "reciprocity": "mutual", "balance": 1 },
+                { "login": "partner_two", "sentCount": 2, "sentAvgViewers": 365.0, "receivedCount": 2, "receivedAvgViewers": 96.0, "reciprocity": "mutual", "balance": 0 },
+                { "login": "aim_dojo_live", "sentCount": 1, "sentAvgViewers": 298.0, "receivedCount": 1, "receivedAvgViewers": 78.0, "reciprocity": "mutual", "balance": 0 },
+                { "login": "rookroute", "sentCount": 2, "sentAvgViewers": 330.0, "receivedCount": 0, "receivedAvgViewers": 0.0, "reciprocity": "sentOnly", "balance": 2 },
+                { "login": "bridgeboss", "sentCount": 1, "sentAvgViewers": 312.0, "receivedCount": 0, "receivedAvgViewers": 0.0, "reciprocity": "sentOnly", "balance": 1 }
+            ]
+        },
+        "peerComparison": {
+            "ownData": {
+                "login": DEMO_LOGIN,
+                "sessions": 14,
+                "avgViewers": 382,
+                "maxPeak": 1087,
+                "avgHours": 3.1,
+                "avgChatters": 421,
+                "retention5m": 78.0,
+                "totalHours": 44.0,
+                "followsGained": 183,
+                "uniqueTitles": 5,
+                "titleVariety": 35.7
+            },
+            "ownRank": 12,
+            "totalStreamers": 58,
+            "similarPeers": [
+                { "login": "rookroute", "sessions": 14, "avgViewers": 414, "maxPeak": 1126, "avgHours": 3.0, "avgChatters": 438, "retention5m": 77.4, "totalHours": 42.0, "followsGained": 176, "uniqueTitles": 7, "titleVariety": 50.0 },
+                { "login": "aim_dojo_live", "sessions": 13, "avgViewers": 361, "maxPeak": 980, "avgHours": 2.9, "avgChatters": 386, "retention5m": 75.9, "totalHours": 37.7, "followsGained": 142, "uniqueTitles": 8, "titleVariety": 61.5 },
+                { "login": "urnwalker", "sessions": 12, "avgViewers": 338, "maxPeak": 914, "avgHours": 3.2, "avgChatters": 352, "retention5m": 73.2, "totalHours": 38.4, "followsGained": 119, "uniqueTitles": 6, "titleVariety": 50.0 }
+            ],
+            "aspirationalPeers": [
+                { "login": "bridgeboss", "sessions": 16, "avgViewers": 445, "maxPeak": 1198, "avgHours": 3.1, "avgChatters": 486, "retention5m": 80.4, "totalHours": 49.6, "followsGained": 226, "uniqueTitles": 9, "titleVariety": 56.3 },
+                { "login": "lantern_macro", "sessions": 15, "avgViewers": 474, "maxPeak": 1242, "avgHours": 3.0, "avgChatters": 502, "retention5m": 81.1, "totalHours": 45.0, "followsGained": 244, "uniqueTitles": 10, "titleVariety": 66.7 },
+                { "login": "metro_guardian", "sessions": 15, "avgViewers": 512, "maxPeak": 1324, "avgHours": 3.3, "avgChatters": 548, "retention5m": 82.0, "totalHours": 49.5, "followsGained": 271, "uniqueTitles": 9, "titleVariety": 60.0 }
+            ],
+            "metricsRanked": {
+                "avgViewers": { "rank": 12, "total": 58, "value": 382 },
+                "maxPeak": { "rank": 12, "total": 58, "value": 1087 },
+                "avgChatters": { "rank": 10, "total": 58, "value": 421 },
+                "retention5m": { "rank": 9, "total": 58, "value": 78.0 },
+                "sessions": { "rank": 8, "total": 58, "value": 14 },
+                "titleVariety": { "rank": 31, "total": 58, "value": 35.7 }
+            },
+            "gapToNext": { "login": "rookroute", "avgViewersDiff": 32, "chatDiff": 17, "retentionDiff": 0.6 }
+        },
+        "competitionDensity": {
+            "hourly": [
+                { "hour": 17, "activeStreamers": 5, "avgViewers": 352, "avgPeak": 812, "opportunityScore": 76.0, "yourData": null },
+                { "hour": 18, "activeStreamers": 7, "avgViewers": 306, "avgPeak": 744, "opportunityScore": 82.4, "yourData": { "count": 1, "avgViewers": 338, "avgPeak": 780, "avgChatters": 186 } },
+                { "hour": 19, "activeStreamers": 10, "avgViewers": 262, "avgPeak": 690, "opportunityScore": 73.2, "yourData": { "count": 3, "avgViewers": 368, "avgPeak": 905, "avgChatters": 214 } },
+                { "hour": 20, "activeStreamers": 13, "avgViewers": 249, "avgPeak": 664, "opportunityScore": 65.8, "yourData": { "count": 6, "avgViewers": 410, "avgPeak": 1087, "avgChatters": 246 } },
+                { "hour": 21, "activeStreamers": 15, "avgViewers": 239, "avgPeak": 620, "opportunityScore": 60.1, "yourData": { "count": 2, "avgViewers": 386, "avgPeak": 842, "avgChatters": 205 } },
+                { "hour": 22, "activeStreamers": 9, "avgViewers": 228, "avgPeak": 588, "opportunityScore": 68.4, "yourData": null }
+            ],
+            "weekly": [
+                { "weekday": 0, "weekdayLabel": "So", "activeStreamers": 18, "avgViewers": 214, "yourData": { "count": 1, "avgViewers": 304, "avgPeak": 720 } },
+                { "weekday": 1, "weekdayLabel": "Mo", "activeStreamers": 22, "avgViewers": 238, "yourData": { "count": 1, "avgViewers": 286, "avgPeak": 690 } },
+                { "weekday": 2, "weekdayLabel": "Di", "activeStreamers": 31, "avgViewers": 306, "yourData": { "count": 2, "avgViewers": 338, "avgPeak": 780 } },
+                { "weekday": 3, "weekdayLabel": "Mi", "activeStreamers": 29, "avgViewers": 342, "yourData": { "count": 3, "avgViewers": 410, "avgPeak": 930 } },
+                { "weekday": 4, "weekdayLabel": "Do", "activeStreamers": 34, "avgViewers": 318, "yourData": { "count": 2, "avgViewers": 395, "avgPeak": 890 } },
+                { "weekday": 5, "weekdayLabel": "Fr", "activeStreamers": 42, "avgViewers": 356, "yourData": { "count": 3, "avgViewers": 462, "avgPeak": 1087 } },
+                { "weekday": 6, "weekdayLabel": "Sa", "activeStreamers": 38, "avgViewers": 284, "yourData": { "count": 2, "avgViewers": 304, "avgPeak": 720 } }
+            ],
+            "sweetSpots": [
+                { "hour": 18, "activeStreamers": 7, "avgViewers": 306, "avgPeak": 744, "opportunityScore": 82.4, "yourData": { "count": 1, "avgViewers": 338, "avgPeak": 780, "avgChatters": 186 } },
+                { "hour": 17, "activeStreamers": 5, "avgViewers": 352, "avgPeak": 812, "opportunityScore": 76.0, "yourData": null },
+                { "hour": 19, "activeStreamers": 10, "avgViewers": 262, "avgPeak": 690, "opportunityScore": 73.2, "yourData": { "count": 3, "avgViewers": 368, "avgPeak": 905, "avgChatters": 214 } }
+            ]
+        },
+        "recommendations": [
+            { "priority": "critical", "category": "Retention", "title": "Die ersten fünf Minuten festziehen", "description": "Dein größter Zuschauerverlust passiert direkt nach dem Einstieg: Nach fünf Minuten ist rund ein Fünftel schon wieder weg. Ein klarer Einstieg mit Tagesziel und direkter Ansprache neuer Zuschauer hält mehr Leute im Stream.", "estimatedImpact": "Bis zu +6 Prozentpunkte 5-Minuten-Retention.", "evidence": "Nach 5 Minuten hältst du 78 % — die Kategorie-Spitze hält in derselben Phase rund 85 %.", "icon": "TrendingDown" },
+            { "priority": "high", "category": "Schedule", "title": "Aus der vollsten Sendezeit ausweichen", "description": "Deine Streams liegen vor allem Mittwoch und Freitag um 20 Uhr — genau dann konkurrieren 13 bis 15 andere Deadlock-Kanäle um dieselben Zuschauer. Dienstag 18 Uhr ist deutlich freier bei fast gleicher Nachfrage.", "estimatedImpact": "Mehr Sichtbarkeit pro Stream, geschätzt +8 % Anfangszuschauer.", "evidence": "Dein bester freier Slot (Di 18 Uhr) erreicht Chancen-Score 82 bei nur 7 Konkurrenten — deine 20-Uhr-Slots liegen bei 13 bis 15.", "icon": "Calendar" },
+            { "priority": "high", "category": "Titel", "title": "Suchbegriffe in den Titelanfang", "description": "In deinen Titeln fehlen die Begriffe, über die neue Zuschauer dich finden — Rang, Patch oder Hero. Außerdem wiederholst du dich öfter als vergleichbare Kanäle, das macht jeden Stream schwerer unterscheidbar.", "estimatedImpact": "Geschätzt +10–15 % Erstzuschauer aus der Kategorie-Suche.", "evidence": "Deine Titel-Vielfalt liegt bei 36 % — vergleichbare Kanäle kommen auf 50 bis 65 %.", "icon": "Type" },
+            { "priority": "medium", "category": "Tags", "title": "Die starken Kategorie-Tags übernehmen", "description": "Drei Tags, die in der Kategorie überdurchschnittlich ziehen, fehlen bei dir komplett: High MMR, Analysis und Viewer Games. Wer sie setzt, taucht in mehr Filter-Suchen auf.", "estimatedImpact": "Breitere Auffindbarkeit über die Tag-Suche.", "evidence": "Die Top-Tags der Kategorie bringen im Schnitt 812 Zuschauer — deine aktuellen Tags liegen bei 438.", "icon": "Tag" },
+            { "priority": "medium", "category": "Community", "title": "Raids gezielter platzieren", "description": "Knapp die Hälfte deiner Chatter kommt nur zu dir — dein Netzwerk ist noch dünn. An rookroute und bridgeboss raidest du regelmäßig, zurück kommt aber nichts. Setz deine Raids stärker auf Partner, die zurückraiden.", "estimatedImpact": "Mehr eingehende Zuschauer über gegenseitige Raids.", "evidence": "45 % deiner Chatter tauchen nur bei dir auf; bei zwei deiner fünf Raid-Partner ist die Bilanz einseitig.", "icon": "Users" }
+        ],
+        "aiSummary": "Dein Kanal steht solide: 382 Zuschauer im Schnitt, starke Bindung und gesundes Follower-Wachstum bringen dich auf Rang 12 von 58 in der Kategorie. Die größten Hebel liegen woanders als bei der reinen Reichweite — die ersten fünf Minuten kosten dich noch zu viele Zuschauer, und deine besten Sendezeiten fallen in die vollste Konkurrenzphase. Wer hier nachschärft und Titel wie Tags auf Auffindbarkeit trimmt, rückt aus dem oberen Mittelfeld Richtung Kategorie-Spitze."
     }))
     .into_response()
 }
@@ -1025,6 +1307,67 @@ mod tests {
         assert!(j["scores"]["total"].is_number());
         assert!(j["summary"]["avgViewers"].is_number());
         assert!(j["sessions"].is_array());
+        let session = &j["sessions"][0];
+        for key in [
+            "startViewers",
+            "dropoffPct",
+            "totalChatterSessions",
+            "firstTimeChatters",
+            "returningChatters",
+            "followersStart",
+            "followersEnd",
+            "retention5m",
+            "retention20m",
+            "endViewers",
+        ] {
+            assert!(session.get(key).is_some(), "session key {key} fehlt");
+        }
+    }
+
+    #[tokio::test]
+    async fn category_leaderboard_matcht_contract() {
+        let j = demo_json("/twitch/demo/api/v2/category-leaderboard").await;
+        let entries = j["leaderboard"].as_array().unwrap();
+        assert!(!entries.is_empty());
+        for entry in entries {
+            for key in ["rank", "streamer", "avgViewers", "peakViewers", "isPartner"] {
+                assert!(entry.get(key).is_some(), "leaderboard key {key} fehlt");
+            }
+        }
+        assert!(j["totalStreamers"].is_number());
+        assert!(j["yourRank"].is_number());
+        assert!(j.get("yourTier").is_some());
+        assert_eq!(
+            entries.iter().filter(|entry| entry["isYou"] == true).count(),
+            1
+        );
+        assert!(j.get("categories").is_none());
+    }
+
+    #[tokio::test]
+    async fn coaching_matcht_coachingdata_contract() {
+        let j = demo_json("/twitch/demo/api/v2/coaching").await;
+        assert_eq!(j["empty"], false);
+        for key in [
+            "efficiency",
+            "titleAnalysis",
+            "scheduleOptimizer",
+            "durationAnalysis",
+            "crossCommunity",
+            "tagOptimization",
+            "retentionCoaching",
+            "doubleStreamDetection",
+            "chatConcentration",
+            "raidNetwork",
+            "peerComparison",
+            "competitionDensity",
+            "recommendations",
+        ] {
+            assert!(j.get(key).is_some(), "coaching key {key} fehlt");
+        }
+        assert!(j["recommendations"].as_array().unwrap().len() > 0);
+        assert!(j.get("aiSummary").is_some());
+        assert!(j.get("tips").is_none());
     }
 
     #[tokio::test]
