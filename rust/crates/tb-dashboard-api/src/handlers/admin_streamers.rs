@@ -645,6 +645,7 @@ pub async fn discord_flag_handler(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::auth::session::{DashboardAuthState, ADMIN_COOKIE_NAME};
     use axum::{
         body::Body,
         extract::ConnectInfo,
@@ -659,6 +660,10 @@ mod tests {
 
     fn test_dsn() -> Option<String> {
         std::env::var("TB_TEST_DATABASE_URL").ok()
+    }
+
+    fn test_fernet_key() -> String {
+        "dGVzdGtleTEyMzQ1Njc4OTAxMjM0NTY3ODkwMTIzNDU=".to_string()
     }
 
     /// Gibt die DSN zurück oder bricht den Test ab.
@@ -875,6 +880,37 @@ mod tests {
         let v: serde_json::Value = serde_json::from_slice(&b).unwrap();
         assert_eq!(v["count"], 0);
         assert!(v["items"].as_array().unwrap().is_empty());
+        assert_eq!(v["view"], "all");
+    }
+
+    #[tokio::test]
+    async fn list_accepts_discord_admin_session_cookie() {
+        let dsn = db_dsn_or_skip!();
+        let pool = make_pool(&dsn, "test_admin_h_list_discord_admin_cookie").await;
+        let auth_state = DashboardAuthState::new(pool.clone(), test_fernet_key());
+        let session = auth_state
+            .create_admin_session("discord-admin-1", "Discord Admin")
+            .await
+            .expect("admin session");
+        let req = Request::builder()
+            .uri("/twitch/api/admin/streamers?view=all")
+            .extension(ConnectInfo(addr()))
+            .header(axum::http::header::HOST, "example.com")
+            .header(
+                axum::http::header::COOKIE,
+                format!("{ADMIN_COOKIE_NAME}={}", session.session_id),
+            )
+            .body(Body::empty())
+            .unwrap();
+        let res = crate::build_admin_streamers_router(pool, "tok".into())
+            .layer(Extension(auth_state))
+            .oneshot(req)
+            .await
+            .unwrap();
+        assert_eq!(res.status(), StatusCode::OK);
+        let b = axum::body::to_bytes(res.into_body(), 4096).await.unwrap();
+        let v: serde_json::Value = serde_json::from_slice(&b).unwrap();
+        assert_eq!(v["count"], 0);
         assert_eq!(v["view"], "all");
     }
 

@@ -10,7 +10,14 @@
 //!    (Discord-Admin-Session, Typ `discord_admin`)
 //! 3. **None** — alles andere
 
-use axum::{async_trait, extract::FromRequestParts, http::request::Parts};
+use axum::{
+    async_trait,
+    body::Body,
+    extract::FromRequestParts,
+    http::{request::Parts, Request},
+    middleware::Next,
+    response::Response,
+};
 use std::net::{IpAddr, SocketAddr};
 
 /// Twitch-Session-Identität eines per OAuth eingeloggten Admins (senderauth-01).
@@ -69,6 +76,20 @@ impl DashboardAuthLevel {
             Self::None => "none",
         }
     }
+}
+
+/// Brückt Dashboard-Admin-Sessions auf den legacy-internen `AuthLevel`-Gate.
+pub async fn promote_dashboard_admin_session(
+    auth: DashboardAuthLevel,
+    mut request: Request<Body>,
+    next: Next,
+) -> Response {
+    if auth.is_privileged() {
+        request
+            .extensions_mut()
+            .insert(tb_http_core::AuthLevel::Admin);
+    }
+    next.run(request).await
 }
 
 /// Hilfe: prüft ob ein Host-String auf Loopback zeigt.

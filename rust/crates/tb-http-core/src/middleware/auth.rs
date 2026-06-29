@@ -90,6 +90,10 @@ where
         parts: &mut axum::http::request::Parts,
         _state: &S,
     ) -> Result<Self, Self::Rejection> {
+        if matches!(parts.extensions.get::<AuthLevel>(), Some(AuthLevel::Admin)) {
+            return Ok(AuthLevel::Admin);
+        }
+
         // Admin: X-Internal-Token aus Extension (kein Loopback-Bypass mehr)
         if let Some(expected) = parts.extensions.get::<ExpectedToken>() {
             let provided = parts
@@ -183,6 +187,16 @@ mod auth_level_tests {
             .oneshot(req("192.168.1.1", "example.com", Some("secret")))
             .await
             .unwrap();
+        let body = axum::body::to_bytes(res.into_body(), 64).await.unwrap();
+        assert_eq!(&body[..], b"admin");
+    }
+
+    #[tokio::test]
+    async fn admin_from_preresolved_request_extension() {
+        let app = make_router("secret");
+        let mut request = req("192.168.1.1", "example.com", None);
+        request.extensions_mut().insert(AuthLevel::Admin);
+        let res = app.oneshot(request).await.unwrap();
         let body = axum::body::to_bytes(res.into_body(), 64).await.unwrap();
         assert_eq!(&body[..], b"admin");
     }

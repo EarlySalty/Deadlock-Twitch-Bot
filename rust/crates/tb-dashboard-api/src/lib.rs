@@ -670,6 +670,9 @@ pub fn build_admin_system_router(pool: PgPool, token: String) -> Router {
         .route("/twitch/api/admin/system/query", get(query::query_handler))
         .with_state(pool)
         .layer(Extension(ExpectedToken(token)))
+        .layer(axum::middleware::from_fn(
+            crate::auth::level::promote_dashboard_admin_session,
+        ))
 }
 
 /// Baut den Router für Admin-Streamer-Endpoints.
@@ -708,6 +711,9 @@ pub fn build_admin_streamers_router(pool: PgPool, token: String) -> Router {
         )
         .with_state(pool)
         .layer(Extension(ExpectedToken(token)))
+        .layer(axum::middleware::from_fn(
+            crate::auth::level::promote_dashboard_admin_session,
+        ))
         .layer(axum::middleware::from_fn(crate::auth::csrf::csrf_protect))
 }
 
@@ -786,6 +792,9 @@ pub fn build_admin_config_router(pool: PgPool, token: String) -> Router {
         )
         .with_state(pool)
         .layer(Extension(ExpectedToken(token)))
+        .layer(axum::middleware::from_fn(
+            crate::auth::level::promote_dashboard_admin_session,
+        ))
         // B3-7: CSRF-Schutz auf alle Admin-JSON-Writes (announcements/legal/roadmap/
         // promo/config-POST). Die Middleware lässt GET/HEAD durch, prüft Writes
         // gegen das sessiongebundene Token (Localhost-Bypass für interne Tools).
