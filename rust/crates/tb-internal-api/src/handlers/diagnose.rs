@@ -12,9 +12,9 @@
 //! Discord-ID statt des Logins.
 
 use axum::{
+    Json,
     extract::{Query, State},
     response::IntoResponse,
-    Json,
 };
 use serde::{Deserialize, Serialize};
 use sqlx::PgPool;
@@ -122,7 +122,8 @@ pub async fn handler(
         return Ok(Json(empty_response(Some(login))));
     };
 
-    let snap = admin_streamers::scope_snapshot(row.scopes.as_deref(), row.needs_reauth.unwrap_or(0));
+    let snap =
+        admin_streamers::scope_snapshot(row.scopes.as_deref(), row.needs_reauth.unwrap_or(false));
     let pstatus = admin_streamers::partner_status(
         row.status.as_deref(),
         row.archived_at.as_deref(),
@@ -173,7 +174,10 @@ mod tests {
             admin_streamers::REQUIRED_SCOPES.len()
         );
         // missing_scopes spiegelt vollständig die Pflicht-Scopes wider
-        assert_eq!(resp.missing_scopes.len(), admin_streamers::REQUIRED_SCOPES.len());
+        assert_eq!(
+            resp.missing_scopes.len(),
+            admin_streamers::REQUIRED_SCOPES.len()
+        );
         assert_eq!(resp.partner_status, "non_partner");
     }
 

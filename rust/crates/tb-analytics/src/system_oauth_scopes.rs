@@ -130,7 +130,7 @@ type ScopeRawRow = (
     Option<String>, // effective_login
     Option<String>, // display_name
     Option<String>, // scopes
-    Option<i64>,    // needs_reauth (int/bool → bigint cast)
+    Option<bool>,   // needs_reauth
     Option<String>, // status
     Option<String>, // archived_at
     Option<i64>,    // manual_partner_opt_out
@@ -218,7 +218,7 @@ pub async fn load_oauth_scope_rows(pool: &PgPool) -> Result<Vec<OAuthScopeRow>, 
             ) AS effective_login,
             discord_display_name,
             scopes,
-            COALESCE(needs_reauth, 0)::bigint AS needs_reauth,
+            COALESCE(needs_reauth, FALSE) AS needs_reauth,
             status,
             archived_at::text,
             COALESCE(manual_partner_opt_out, 0)::bigint AS manual_partner_opt_out,
@@ -250,7 +250,7 @@ pub async fn load_oauth_scope_rows(pool: &PgPool) -> Result<Vec<OAuthScopeRow>, 
                 effective_login: login,
                 display_name: r.1,
                 scopes_raw: r.2,
-                needs_reauth: r.3.unwrap_or(0) != 0,
+                needs_reauth: r.3.unwrap_or(false),
                 status: r.4,
                 archived_at: r.5,
                 manual_partner_opt_out: r.6.unwrap_or(0) != 0,
@@ -338,7 +338,7 @@ mod tests {
             .await
             .ok()?;
         for ddl in [
-            "CREATE TABLE twitch_raid_auth (twitch_login TEXT, twitch_user_id TEXT, scopes TEXT, needs_reauth INTEGER DEFAULT 0, authorized_at TIMESTAMPTZ)",
+            "CREATE TABLE twitch_raid_auth (twitch_login TEXT, twitch_user_id TEXT, scopes TEXT, needs_reauth BOOLEAN DEFAULT FALSE, authorized_at TIMESTAMPTZ)",
             "CREATE TABLE twitch_partners_all_state (twitch_login TEXT, twitch_user_id TEXT, discord_display_name TEXT, manual_partner_opt_out INTEGER DEFAULT 0, archived_at TEXT, status TEXT, technical_pause_reason TEXT)",
         ] {
             sqlx::query(ddl).execute(&pool).await.ok()?;
@@ -353,7 +353,7 @@ mod tests {
         };
         sqlx::query(
             "INSERT INTO twitch_raid_auth (twitch_login, twitch_user_id, scopes, needs_reauth, authorized_at) \
-             VALUES ('streamerx','42','channel:bot bits:read',0, NOW())",
+             VALUES ('streamerx','42','channel:bot bits:read',FALSE, NOW())",
         )
         .execute(&pool).await.unwrap();
         sqlx::query(
@@ -369,6 +369,23 @@ mod tests {
         assert_eq!(rows[0].display_name.as_deref(), Some("StreamerX"));
         let snap = scope_snapshot(rows[0].scopes_raw.as_deref(), rows[0].needs_reauth);
         assert_eq!(snap.status, "partial");
+    }
+
+    #[tokio::test]
+    async fn laedt_bool_needs_reauth_ohne_coalesce_typmix() {
+        let Some(pool) = pool("t_oauth_scopes_bool").await else {
+            return;
+        };
+        sqlx::query(
+            "INSERT INTO twitch_raid_auth (twitch_login, twitch_user_id, scopes, needs_reauth, authorized_at) \
+             VALUES ('reauthx','43','bits:read',TRUE, NOW())",
+        )
+        .execute(&pool).await.unwrap();
+
+        let rows = load_oauth_scope_rows(&pool).await.unwrap();
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].effective_login, "reauthx");
+        assert!(rows[0].needs_reauth);
     }
 
     #[tokio::test]

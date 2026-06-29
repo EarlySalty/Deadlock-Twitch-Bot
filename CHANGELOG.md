@@ -1,3 +1,11 @@
+## #299 — Admin-Dashboard: Streamer-Liste lädt wirklich (Datentyp-Stolperstein behoben)
+
+**Ausgangslage:** Nachdem die Anmeldung an der Daten-Schnittstelle gefixt war (siehe #298), kam man zwar durch, aber die Streamer-Liste warf jetzt einen „internal server error". Ursache: Ein Wahr/Falsch-Feld in der Datenbank (braucht-Neu-Anmeldung) wurde im Code noch als Zahl gelesen — ein Überbleibsel aus der alten Generation, das beim Umstieg auf echte Wahr/Falsch-Felder nie mitgezogen wurde. Beim ersten echten Zugriff (vorher durch die Anmelde-Sperre verdeckt) brach das Auslesen ab.
+
+**Änderung:** Die betroffenen Felder werden jetzt korrekt als Wahr/Falsch gelesen — abgeglichen mit dem tatsächlichen Datenbank-Schema — statt als Zahl. Gleiches galt für eine zweite Stelle (OAuth-Scope-Übersicht), die in der Abfrage Wahr/Falsch und Zahl mischte. Die übrigen Admin-Bereiche wurden auf denselben Stolperstein durchgesehen.
+
+**Ergebnis:** Die Streamer-Liste und die OAuth-Scope-Übersicht laden im Admin-Dashboard sauber durch.
+
 ## #298 — Admin-Dashboard: Daten laden wieder, auch wenn man eingeloggt ist
 
 **Ausgangslage:** Im Admin-Dashboard lud die Seite zwar, aber die eigentlichen Daten — Streamer-Liste, System-Status, Konfiguration, Roadmap — blieben leer mit „konnten nicht geladen werden", obwohl man klar als Admin angemeldet war. Hintergrund: Seite und Daten-Schnittstelle prüften die Anmeldung über zwei verschiedene Wege. Die Seite akzeptierte die Admin-Anmeldung, die Daten-Schnittstelle dahinter aber nur einen internen Server-Schlüssel — eine normale Browser-Anmeldung kannte sie nicht und wies sie ab.

@@ -4,13 +4,13 @@
 //! Admin-Scope-Diff-Panel. Bei fehlendem Schema (z. B. frische DB) wird eine
 //! leere `items`-Liste statt eines 500ers geliefert (Python-Parität).
 
-use axum::{extract::State, response::IntoResponse, Json};
+use axum::{Json, extract::State, response::IntoResponse};
 use serde::Serialize;
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use sqlx::PgPool;
 use tb_analytics::system_oauth_scopes::{
-    load_oauth_scope_rows, partner_status, scope_snapshot, CRITICAL_SCOPES, REQUIRED_SCOPES,
-    SCOPE_COLUMN_LABELS,
+    CRITICAL_SCOPES, REQUIRED_SCOPES, SCOPE_COLUMN_LABELS, load_oauth_scope_rows, partner_status,
+    scope_snapshot,
 };
 use tb_http_core::{ApiError, AuthLevel};
 
@@ -140,11 +140,11 @@ fn is_missing_schema_error(e: &sqlx::Error) -> bool {
 mod tests {
     use super::*;
     use axum::{
+        Extension, Router,
         body::Body,
         extract::ConnectInfo,
         http::{Request, StatusCode},
         routing::get,
-        Extension, Router,
     };
     use sqlx::postgres::{PgConnectOptions, PgPoolOptions};
     use std::net::SocketAddr;
@@ -154,17 +154,36 @@ mod tests {
 
     async fn pool(schema: &str) -> Option<PgPool> {
         let dsn = std::env::var("TB_TEST_DATABASE_URL").ok()?;
-        let admin = PgPoolOptions::new().max_connections(1).connect(&dsn).await.ok()?;
-        sqlx::query(&format!("DROP SCHEMA IF EXISTS {schema} CASCADE")).execute(&admin).await.ok()?;
-        sqlx::query(&format!("CREATE SCHEMA {schema}")).execute(&admin).await.ok()?;
+        let admin = PgPoolOptions::new()
+            .max_connections(1)
+            .connect(&dsn)
+            .await
+            .ok()?;
+        sqlx::query(&format!("DROP SCHEMA IF EXISTS {schema} CASCADE"))
+            .execute(&admin)
+            .await
+            .ok()?;
+        sqlx::query(&format!("CREATE SCHEMA {schema}"))
+            .execute(&admin)
+            .await
+            .ok()?;
         admin.close().await;
-        let options = PgConnectOptions::from_str(&dsn).ok()?.options([("search_path", schema)]);
-        PgPoolOptions::new().max_connections(2).connect_with(options).await.ok()
+        let options = PgConnectOptions::from_str(&dsn)
+            .ok()?
+            .options([("search_path", schema)]);
+        PgPoolOptions::new()
+            .max_connections(2)
+            .connect_with(options)
+            .await
+            .ok()
     }
 
     fn router(pool: PgPool) -> Router {
         Router::new()
-            .route("/twitch/api/admin/system/oauth-scopes", get(oauth_scopes_handler))
+            .route(
+                "/twitch/api/admin/system/oauth-scopes",
+                get(oauth_scopes_handler),
+            )
             .with_state(pool)
             .layer(Extension(ExpectedToken("tok".to_string())))
     }
@@ -182,11 +201,15 @@ mod tests {
 
     #[tokio::test]
     async fn ohne_auth_401() {
-        let Some(pool) = pool("t_oauth_h_unauth").await else { return };
+        let Some(pool) = pool("t_oauth_h_unauth").await else {
+            return;
+        };
         for ddl in [
-            "CREATE TABLE twitch_raid_auth (twitch_login TEXT, twitch_user_id TEXT, scopes TEXT, needs_reauth INTEGER DEFAULT 0, authorized_at TIMESTAMPTZ)",
+            "CREATE TABLE twitch_raid_auth (twitch_login TEXT, twitch_user_id TEXT, scopes TEXT, needs_reauth BOOLEAN DEFAULT FALSE, authorized_at TIMESTAMPTZ)",
             "CREATE TABLE twitch_partners_all_state (twitch_login TEXT, twitch_user_id TEXT, discord_display_name TEXT, manual_partner_opt_out INTEGER DEFAULT 0, archived_at TEXT, status TEXT, technical_pause_reason TEXT)",
-        ] { sqlx::query(ddl).execute(&pool).await.unwrap(); }
+        ] {
+            sqlx::query(ddl).execute(&pool).await.unwrap();
+        }
         let addr: SocketAddr = "1.2.3.4:9999".parse().unwrap();
         let req = Request::builder()
             .uri("/twitch/api/admin/system/oauth-scopes")
@@ -200,12 +223,16 @@ mod tests {
 
     #[tokio::test]
     async fn summary_und_items() {
-        let Some(pool) = pool("t_oauth_h_data").await else { return };
+        let Some(pool) = pool("t_oauth_h_data").await else {
+            return;
+        };
         for ddl in [
-            "CREATE TABLE twitch_raid_auth (twitch_login TEXT, twitch_user_id TEXT, scopes TEXT, needs_reauth INTEGER DEFAULT 0, authorized_at TIMESTAMPTZ)",
+            "CREATE TABLE twitch_raid_auth (twitch_login TEXT, twitch_user_id TEXT, scopes TEXT, needs_reauth BOOLEAN DEFAULT FALSE, authorized_at TIMESTAMPTZ)",
             "CREATE TABLE twitch_partners_all_state (twitch_login TEXT, twitch_user_id TEXT, discord_display_name TEXT, manual_partner_opt_out INTEGER DEFAULT 0, archived_at TEXT, status TEXT, technical_pause_reason TEXT)",
-        ] { sqlx::query(ddl).execute(&pool).await.unwrap(); }
-        sqlx::query("INSERT INTO twitch_raid_auth (twitch_login, twitch_user_id, scopes, needs_reauth, authorized_at) VALUES ('a','1','bits:read',0, NOW())")
+        ] {
+            sqlx::query(ddl).execute(&pool).await.unwrap();
+        }
+        sqlx::query("INSERT INTO twitch_raid_auth (twitch_login, twitch_user_id, scopes, needs_reauth, authorized_at) VALUES ('a','1','bits:read',FALSE, NOW())")
             .execute(&pool).await.unwrap();
         sqlx::query("INSERT INTO twitch_partners_all_state (twitch_login, twitch_user_id, status) VALUES ('a','1','active')")
             .execute(&pool).await.unwrap();
@@ -219,13 +246,20 @@ mod tests {
         assert_eq!(v["summary"]["missingScopeCount"], 1);
         assert_eq!(v["items"][0]["login"], "a");
         assert_eq!(v["items"][0]["oauthStatus"], "partial");
-        assert!(v["requiredScopes"].as_array().unwrap().contains(&Value::String("channel:bot".into())));
+        assert!(
+            v["requiredScopes"]
+                .as_array()
+                .unwrap()
+                .contains(&Value::String("channel:bot".into()))
+        );
     }
 
     #[tokio::test]
     async fn fehlendes_schema_liefert_leere_items() {
         // Schema ohne die Tabellen → Loader wirft undefined_table → leere items.
-        let Some(pool) = pool("t_oauth_h_noschema").await else { return };
+        let Some(pool) = pool("t_oauth_h_noschema").await else {
+            return;
+        };
         let res = router(pool).oneshot(admin_req()).await.unwrap();
         assert_eq!(res.status(), StatusCode::OK);
         let b = axum::body::to_bytes(res.into_body(), 65536).await.unwrap();

@@ -8,21 +8,21 @@
 //! `partner_registry`-Dashboard-Routen.
 
 use axum::{
+    Json,
     extract::{Path, Query, State},
     response::IntoResponse,
-    Json,
 };
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use sqlx::PgPool;
 use tb_analytics::admin_streamers::{
-    list_streamers, partner_status, scope_snapshot, streamer_detail, streamer_stats_and_sessions,
-    StreamerView,
+    StreamerView, list_streamers, partner_status, scope_snapshot, streamer_detail,
+    streamer_stats_and_sessions,
 };
 use tb_analytics::streamers_crud::{
-    archive_streamer, departner_streamer, set_discord_flag, verify_streamer, ArchiveMode,
-    VerifyStreamerResult,
+    ArchiveMode, VerifyStreamerResult, archive_streamer, departner_streamer, set_discord_flag,
+    verify_streamer,
 };
 use tb_http_core::{ApiError, AuthLevel};
 
@@ -221,7 +221,7 @@ pub async fn list_handler(
     let items: Vec<AdminStreamerItem> = rows
         .into_iter()
         .map(|r| {
-            let snap = scope_snapshot(r.scopes.as_deref(), r.needs_reauth.unwrap_or(0));
+            let snap = scope_snapshot(r.scopes.as_deref(), r.needs_reauth.unwrap_or(false));
             let ps = partner_status(
                 r.status.as_deref(),
                 r.archived_at.as_deref(),
@@ -324,7 +324,7 @@ pub async fn detail_handler(
                 ApiError::internal()
             })?;
 
-    let snap = scope_snapshot(row.scopes.as_deref(), row.needs_reauth.unwrap_or(0));
+    let snap = scope_snapshot(row.scopes.as_deref(), row.needs_reauth.unwrap_or(false));
     let ps = partner_status(
         row.status.as_deref(),
         row.archived_at.as_deref(),
@@ -447,7 +447,7 @@ pub async fn detail_handler(
             granted_scopes: snap.granted_scopes,
             missing_scopes: snap.missing_scopes,
             authorized_at: row.authorized_at.map(fmt_dt),
-            raid_enabled: row.oauth_raid_enabled.unwrap_or(0) != 0,
+            raid_enabled: row.oauth_raid_enabled.unwrap_or(false),
         },
     }))
 }
@@ -645,13 +645,13 @@ pub async fn discord_flag_handler(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::auth::session::{DashboardAuthState, ADMIN_COOKIE_NAME};
+    use crate::auth::session::{ADMIN_COOKIE_NAME, DashboardAuthState};
     use axum::{
+        Extension, Router,
         body::Body,
         extract::ConnectInfo,
         http::{Request, StatusCode},
         routing::get,
-        Extension, Router,
     };
     use sqlx::postgres::PgPoolOptions;
     use std::net::SocketAddr;
@@ -738,8 +738,8 @@ mod tests {
             r#"
             CREATE TABLE IF NOT EXISTS twitch_raid_auth (
                 id BIGSERIAL PRIMARY KEY, twitch_login TEXT, twitch_user_id TEXT,
-                scopes TEXT, needs_reauth INTEGER NOT NULL DEFAULT 0,
-                raid_enabled INTEGER NOT NULL DEFAULT 0, authorized_at TIMESTAMPTZ
+                scopes TEXT, needs_reauth BOOLEAN NOT NULL DEFAULT FALSE,
+                raid_enabled BOOLEAN NOT NULL DEFAULT TRUE, authorized_at TIMESTAMPTZ
             )
         "#,
         )
@@ -978,6 +978,42 @@ mod tests {
         assert_eq!(item["archived"], false);
     }
 
+    #[tokio::test]
+    async fn list_dekodiert_bool_needs_reauth() {
+        let dsn = db_dsn_or_skip!();
+        let pool = make_pool(&dsn, "test_admin_h_list_bool_reauth").await;
+        sqlx::query(
+            "INSERT INTO twitch_partners_all_state (twitch_login, twitch_user_id, status, created_at) \
+             VALUES ('boolreauth', '42', 'active', NOW()::TEXT)",
+        )
+        .execute(&pool)
+        .await
+        .expect("insert partner");
+        sqlx::query(
+            "INSERT INTO twitch_raid_auth \
+             (twitch_login, twitch_user_id, scopes, needs_reauth, raid_enabled, authorized_at) \
+             VALUES ('boolreauth', '42', 'bits:read', TRUE, FALSE, NOW())",
+        )
+        .execute(&pool)
+        .await
+        .expect("insert auth");
+
+        let req = Request::builder()
+            .uri("/twitch/api/admin/streamers?view=active")
+            .extension(ConnectInfo(addr()))
+            .header(axum::http::header::HOST, "example.com")
+            .header("x-internal-token", "tok")
+            .body(Body::empty())
+            .unwrap();
+        let res = make_list_router(pool, "tok").oneshot(req).await.unwrap();
+        assert_eq!(res.status(), StatusCode::OK);
+        let b = axum::body::to_bytes(res.into_body(), 8192).await.unwrap();
+        let v: serde_json::Value = serde_json::from_slice(&b).unwrap();
+        assert_eq!(v["items"][0]["login"], "boolreauth");
+        assert_eq!(v["items"][0]["oauthNeedsReauth"], true);
+        assert_eq!(v["items"][0]["oauthStatus"], "reauth");
+    }
+
     // ── Detail-Tests ────────────────────────────────────────────────────────
 
     #[tokio::test]
@@ -1039,7 +1075,7 @@ mod tests {
         assert_eq!(v["isLive"], false);
         assert!(v["planId"].is_null()); // kein Plan gesetzt
         assert!(!v["createdAt"].is_null()); // created_at = NOW()
-                                            // Stats: totalWatchHours statt totalDurationSeconds; Live-State-Felder vorhanden.
+        // Stats: totalWatchHours statt totalDurationSeconds; Live-State-Felder vorhanden.
         assert_eq!(v["stats"]["totalWatchHours"], 0.0);
         assert!(v["stats"].get("totalDurationSeconds").is_none());
         assert_eq!(v["stats"]["viewerCount"], 0);
@@ -1091,11 +1127,47 @@ mod tests {
         assert_eq!(s["category"], "Deadlock");
         assert_eq!(s["averageViewers"], 123.5);
         assert_eq!(s["watchTimeHours"], 2.0); // 7200s = 2.0h
-                                              // Bestehende Keys bleiben (additiv).
+        // Bestehende Keys bleiben (additiv).
         assert_eq!(s["streamTitle"], "Mein Titel");
         assert_eq!(s["gameName"], "Deadlock");
         // P3.20: settings.manualPartnerOptOut.
         assert_eq!(v["settings"]["manualPartnerOptOut"], true);
+    }
+
+    #[tokio::test]
+    async fn detail_dekodiert_bool_oauth_flags() {
+        let dsn = db_dsn_or_skip!();
+        let pool = make_pool(&dsn, "test_admin_h_detail_bool_oauth").await;
+        sqlx::query(
+            "INSERT INTO twitch_partners_all_state (twitch_login, twitch_user_id, status, created_at) \
+             VALUES ('detailbool', '43', 'active', NOW()::TEXT)",
+        )
+        .execute(&pool)
+        .await
+        .expect("insert partner");
+        sqlx::query(
+            "INSERT INTO twitch_raid_auth \
+             (twitch_login, twitch_user_id, scopes, needs_reauth, raid_enabled, authorized_at) \
+             VALUES ('detailbool', '43', 'bits:read', TRUE, FALSE, NOW())",
+        )
+        .execute(&pool)
+        .await
+        .expect("insert auth");
+
+        let req = Request::builder()
+            .uri("/twitch/api/admin/streamers/detailbool")
+            .extension(ConnectInfo(addr()))
+            .header(axum::http::header::HOST, "example.com")
+            .header("x-internal-token", "tok")
+            .body(Body::empty())
+            .unwrap();
+        let res = make_detail_router(pool, "tok").oneshot(req).await.unwrap();
+        assert_eq!(res.status(), StatusCode::OK);
+        let b = axum::body::to_bytes(res.into_body(), 16384).await.unwrap();
+        let v: serde_json::Value = serde_json::from_slice(&b).unwrap();
+        assert_eq!(v["oauth"]["needsReauth"], true);
+        assert_eq!(v["oauth"]["status"], "reauth");
+        assert_eq!(v["oauth"]["raidEnabled"], false);
     }
 
     // ── Mutations-Tests (B11-PR-4) ──────────────────────────────────────────
@@ -1128,9 +1200,9 @@ mod tests {
         .execute(&pool)
         .await
         .expect("DDL twitch_streamer_identities");
-        // make_pool legt twitch_raid_auth mit raid_enabled INTEGER an; die native
-        // Departnerung setzt aber `raid_enabled = FALSE` (prod-treu BOOLEAN).
-        // Daher hier prod-faithful neu anlegen (BOOLEAN), plus engagement_settings.
+        // make_pool legt twitch_raid_auth bereits prod-treu mit BOOLEAN-Flags an.
+        // Fuer die Write-Tests wird sie mit der schmaleren Mutations-Fixture neu
+        // angelegt, plus engagement_settings.
         sqlx::query("DROP TABLE IF EXISTS twitch_raid_auth")
             .execute(&pool)
             .await

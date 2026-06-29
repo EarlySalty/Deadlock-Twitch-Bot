@@ -30,8 +30,8 @@ pub struct ScopeSnapshot {
 /// Berechnet OAuth-Scope-Status aus rohem Scope-String und reauth-Flag.
 ///
 /// `scopes_raw`: Space-separierter String aus der DB, kann None sein.
-/// `needs_reauth`: DB-Wert (0 = false, != 0 = true).
-pub fn scope_snapshot(scopes_raw: Option<&str>, needs_reauth: i32) -> ScopeSnapshot {
+/// `needs_reauth`: DB-Wert aus `twitch_raid_auth.needs_reauth` (BOOLEAN).
+pub fn scope_snapshot(scopes_raw: Option<&str>, needs_reauth: bool) -> ScopeSnapshot {
     let mut granted: Vec<String> = scopes_raw
         .unwrap_or("")
         .split_whitespace()
@@ -47,9 +47,7 @@ pub fn scope_snapshot(scopes_raw: Option<&str>, needs_reauth: i32) -> ScopeSnaps
         .collect();
 
     let connected = !granted.is_empty();
-    let reauth = needs_reauth != 0;
-
-    let status = if reauth {
+    let status = if needs_reauth {
         "reauth"
     } else if !connected {
         "missing"
@@ -63,7 +61,7 @@ pub fn scope_snapshot(scopes_raw: Option<&str>, needs_reauth: i32) -> ScopeSnaps
         granted_scopes: granted,
         missing_scopes: missing,
         connected,
-        needs_reauth: reauth,
+        needs_reauth,
         status,
     }
 }
@@ -243,7 +241,7 @@ pub struct AdminStreamerRow {
     /// TIMESTAMPTZ (twitch_stream_sessions.ended_at/started_at)
     pub last_stream_at: Option<chrono::DateTime<chrono::Utc>>,
     pub scopes: Option<String>,
-    pub needs_reauth: Option<i32>,
+    pub needs_reauth: Option<bool>,
     /// TIMESTAMPTZ (twitch_raid_auth.authorized_at)
     pub authorized_at: Option<chrono::DateTime<chrono::Utc>>,
     pub promo_disabled: Option<i32>,
@@ -290,8 +288,8 @@ pub struct AdminStreamerDetailRow {
     pub last_started_at: Option<String>,
     pub last_game: Option<String>,
     pub scopes: Option<String>,
-    pub needs_reauth: Option<i32>,
-    pub oauth_raid_enabled: Option<i32>,
+    pub needs_reauth: Option<bool>,
+    pub oauth_raid_enabled: Option<bool>,
     /// TIMESTAMPTZ (twitch_raid_auth.authorized_at)
     pub authorized_at: Option<chrono::DateTime<chrono::Utc>>,
     pub plan_name: Option<String>,
@@ -683,8 +681,8 @@ mod tests {
                 twitch_login    TEXT,
                 twitch_user_id  TEXT,
                 scopes          TEXT,
-                needs_reauth    INTEGER NOT NULL DEFAULT 0,
-                raid_enabled    INTEGER NOT NULL DEFAULT 0,
+                needs_reauth    BOOLEAN NOT NULL DEFAULT FALSE,
+                raid_enabled    BOOLEAN NOT NULL DEFAULT TRUE,
                 authorized_at   TIMESTAMPTZ
             )
         "#,
@@ -774,8 +772,10 @@ mod tests {
     #[test]
     fn scope_snapshot_connected() {
         let snap = scope_snapshot(
-            Some("channel:manage:raids channel:manage:moderators channel:bot clips:edit channel:read:ads bits:read channel:read:redemptions"),
-            0,
+            Some(
+                "channel:manage:raids channel:manage:moderators channel:bot clips:edit channel:read:ads bits:read channel:read:redemptions",
+            ),
+            false,
         );
         assert_eq!(snap.status, "connected");
         assert!(snap.missing_scopes.is_empty());
@@ -785,7 +785,7 @@ mod tests {
 
     #[test]
     fn scope_snapshot_partial() {
-        let snap = scope_snapshot(Some("channel:manage:raids bits:read"), 0);
+        let snap = scope_snapshot(Some("channel:manage:raids bits:read"), false);
         assert_eq!(snap.status, "partial");
         assert!(!snap.missing_scopes.is_empty());
     }
@@ -794,15 +794,17 @@ mod tests {
     fn scope_snapshot_reauth_vorrang() {
         // Selbst wenn vollständig: reauth-Flag dominiert
         let snap = scope_snapshot(
-            Some("channel:manage:raids channel:manage:moderators channel:bot clips:edit channel:read:ads bits:read channel:read:redemptions"),
-            1,
+            Some(
+                "channel:manage:raids channel:manage:moderators channel:bot clips:edit channel:read:ads bits:read channel:read:redemptions",
+            ),
+            true,
         );
         assert_eq!(snap.status, "reauth");
     }
 
     #[test]
     fn scope_snapshot_leer() {
-        let snap = scope_snapshot(None, 0);
+        let snap = scope_snapshot(None, false);
         assert_eq!(snap.status, "missing");
         assert!(!snap.connected);
     }
@@ -910,6 +912,39 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn list_streamers_dekodiert_bool_oauth_flags() {
+        let dsn = match test_dsn() {
+            Some(d) => d,
+            None => {
+                eprintln!("SKIP");
+                return;
+            }
+        };
+        let pool = make_pool(&dsn, "test_admin_str_bool_oauth").await;
+        sqlx::query(
+            "INSERT INTO twitch_partners_all_state (twitch_login, twitch_user_id, status, created_at) \
+             VALUES ('booloauth', '42', 'active', NOW()::TEXT)",
+        )
+        .execute(&pool)
+        .await
+        .expect("insert partner");
+        sqlx::query(
+            "INSERT INTO twitch_raid_auth \
+             (twitch_login, twitch_user_id, scopes, needs_reauth, raid_enabled, authorized_at) \
+             VALUES ('booloauth', '42', 'bits:read', TRUE, FALSE, NOW())",
+        )
+        .execute(&pool)
+        .await
+        .expect("insert auth");
+
+        let rows = list_streamers(&pool, StreamerView::Active)
+            .await
+            .expect("query");
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].needs_reauth, Some(true));
+    }
+
+    #[tokio::test]
     async fn view_filter_funktioniert_fuer_archived() {
         let dsn = match test_dsn() {
             Some(d) => d,
@@ -983,5 +1018,39 @@ mod tests {
         let row = streamer_detail(&pool, "Bekannter").await.expect("query"); // case-insensitive!
         assert!(row.is_some());
         assert_eq!(row.unwrap().twitch_login, "bekannter");
+    }
+
+    #[tokio::test]
+    async fn detail_dekodiert_bool_oauth_flags() {
+        let dsn = match test_dsn() {
+            Some(d) => d,
+            None => {
+                eprintln!("SKIP");
+                return;
+            }
+        };
+        let pool = make_pool(&dsn, "test_admin_str_detail_bool_oauth").await;
+        sqlx::query(
+            "INSERT INTO twitch_partners_all_state (twitch_login, twitch_user_id, status, created_at) \
+             VALUES ('detailoauth', '43', 'active', NOW()::TEXT)",
+        )
+        .execute(&pool)
+        .await
+        .expect("insert partner");
+        sqlx::query(
+            "INSERT INTO twitch_raid_auth \
+             (twitch_login, twitch_user_id, scopes, needs_reauth, raid_enabled, authorized_at) \
+             VALUES ('detailoauth', '43', 'bits:read', TRUE, FALSE, NOW())",
+        )
+        .execute(&pool)
+        .await
+        .expect("insert auth");
+
+        let row = streamer_detail(&pool, "detailoauth")
+            .await
+            .expect("query")
+            .expect("row");
+        assert_eq!(row.needs_reauth, Some(true));
+        assert_eq!(row.oauth_raid_enabled, Some(false));
     }
 }
