@@ -316,7 +316,7 @@ pub struct StreamerStatsRow {
     pub total_sessions: i64,
     pub total_duration_seconds: i64,
     pub avg_viewers: f64,
-    pub peak_viewers: i64,
+    pub peak_viewers: i32,
     pub follower_delta: i64,
 }
 
@@ -328,9 +328,9 @@ pub struct StreamerSessionRow {
     pub stream_title: Option<String>,
     pub game_name: Option<String>,
     pub avg_viewers: Option<f64>,
-    pub peak_viewers: Option<i64>,
-    pub duration_seconds: Option<i64>,
-    pub follower_delta: Option<i64>,
+    pub peak_viewers: Option<i32>,
+    pub duration_seconds: Option<i32>,
+    pub follower_delta: Option<i32>,
 }
 
 // ── CTE-Konstanten ────────────────────────────────────────────────────────────
@@ -578,7 +578,7 @@ pub async fn streamer_stats_and_sessions(
             COUNT(*) AS total_sessions,
             COALESCE(SUM(duration_seconds), 0)::BIGINT AS total_duration_seconds,
             COALESCE(AVG(avg_viewers), 0.0)::FLOAT8 AS avg_viewers,
-            COALESCE(MAX(peak_viewers), 0)::BIGINT AS peak_viewers,
+            COALESCE(MAX(peak_viewers), 0)::INTEGER AS peak_viewers,
             COALESCE(SUM(follower_delta), 0)::BIGINT AS follower_delta
         FROM twitch_stream_sessions
         WHERE LOWER(streamer_login) = LOWER($1)"#,
@@ -730,6 +730,11 @@ mod tests {
         .await
         .expect("DDL streamer_plans");
 
+        sqlx::query("DROP TABLE IF EXISTS twitch_stream_sessions")
+            .execute(&pool)
+            .await
+            .expect("DROP stream_sessions");
+
         sqlx::query(
             r#"
             CREATE TABLE IF NOT EXISTS twitch_stream_sessions (
@@ -740,9 +745,9 @@ mod tests {
                 stream_title     TEXT,
                 game_name        TEXT,
                 avg_viewers      DOUBLE PRECISION,
-                peak_viewers     BIGINT,
-                duration_seconds BIGINT,
-                follower_delta   BIGINT
+                peak_viewers     INTEGER,
+                duration_seconds INTEGER,
+                follower_delta   INTEGER
             )
         "#,
         )
@@ -1051,6 +1056,41 @@ mod tests {
         let row = streamer_detail(&pool, "Bekannter").await.expect("query"); // case-insensitive!
         assert!(row.is_some());
         assert_eq!(row.unwrap().twitch_login, "bekannter");
+    }
+
+    #[tokio::test]
+    async fn streamer_stats_and_sessions_dekodiert_live_int4_session_spalten() {
+        let dsn = match test_dsn() {
+            Some(d) => d,
+            None => {
+                eprintln!("SKIP");
+                return;
+            }
+        };
+        let pool = make_pool(&dsn, "test_admin_str_stats_int4").await;
+        sqlx::query(
+            "INSERT INTO twitch_stream_sessions \
+             (streamer_login, started_at, ended_at, stream_title, game_name, avg_viewers, \
+              peak_viewers, duration_seconds, follower_delta) \
+             VALUES ('statstreamer', NOW(), NOW(), 'Stats Titel', 'Deadlock', 123.5, 400, 7200, 12)",
+        )
+        .execute(&pool)
+        .await
+        .expect("insert session");
+
+        let (stats, sessions) = streamer_stats_and_sessions(&pool, "StatStreamer")
+            .await
+            .expect("query");
+
+        assert_eq!(stats.total_sessions, 1);
+        assert_eq!(stats.total_duration_seconds, 7200);
+        assert_eq!(stats.avg_viewers, 123.5);
+        assert_eq!(stats.peak_viewers, 400);
+        assert_eq!(stats.follower_delta, 12);
+        assert_eq!(sessions.len(), 1);
+        assert_eq!(sessions[0].peak_viewers, Some(400));
+        assert_eq!(sessions[0].duration_seconds, Some(7200));
+        assert_eq!(sessions[0].follower_delta, Some(12));
     }
 
     #[tokio::test]

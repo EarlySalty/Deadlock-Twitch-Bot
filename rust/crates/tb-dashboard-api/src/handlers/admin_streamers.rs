@@ -110,7 +110,7 @@ pub struct StreamerStats {
     /// (gerundete Stunden, nicht rohe Sekunden).
     pub total_watch_hours: f64,
     pub avg_viewers: f64,
-    pub peak_viewers: i64,
+    pub peak_viewers: i32,
     pub follower_delta: i64,
     /// Aus dem Live-State der Streamer-Row (nicht dem Session-Aggregat).
     pub viewer_count: i64,
@@ -136,11 +136,11 @@ pub struct StreamerSession {
     pub avg_viewers: Option<f64>,
     /// P1.34: Frontend-Alias zu `avg_viewers`.
     pub average_viewers: Option<f64>,
-    pub peak_viewers: Option<i64>,
-    pub duration_seconds: Option<i64>,
+    pub peak_viewers: Option<i32>,
+    pub duration_seconds: Option<i32>,
     /// P1.34: gerundete Stunden aus `duration_seconds` (Python `watchTimeHours`).
     pub watch_time_hours: f64,
-    pub follower_delta: Option<i64>,
+    pub follower_delta: Option<i32>,
 }
 
 #[derive(Serialize)]
@@ -770,13 +770,19 @@ mod tests {
         .execute(&pool)
         .await
         .expect("DDL");
+
+        sqlx::query("DROP TABLE IF EXISTS twitch_stream_sessions")
+            .execute(&pool)
+            .await
+            .expect("DROP stream_sessions");
+
         sqlx::query(
             r#"
             CREATE TABLE IF NOT EXISTS twitch_stream_sessions (
                 id BIGSERIAL PRIMARY KEY, streamer_login TEXT NOT NULL,
                 started_at TIMESTAMPTZ NOT NULL, ended_at TIMESTAMPTZ,
                 stream_title TEXT, game_name TEXT, avg_viewers DOUBLE PRECISION,
-                peak_viewers BIGINT, duration_seconds BIGINT, follower_delta BIGINT
+                peak_viewers INTEGER, duration_seconds INTEGER, follower_delta INTEGER
             )
         "#,
         )
@@ -1137,6 +1143,9 @@ mod tests {
         assert_eq!(s["title"], "Mein Titel");
         assert_eq!(s["category"], "Deadlock");
         assert_eq!(s["averageViewers"], 123.5);
+        assert_eq!(s["peakViewers"], 400);
+        assert_eq!(s["durationSeconds"], 7200);
+        assert_eq!(s["followerDelta"], 12);
         // 7200s = 2.0h
         assert_eq!(s["watchTimeHours"], 2.0);
         // Bestehende Keys bleiben (additiv).
