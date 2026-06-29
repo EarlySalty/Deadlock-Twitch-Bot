@@ -1,3 +1,11 @@
+## #304 — Schema-Aufräumung: tote Tabellen raus, Zeitreihen-Tabellen wie in Produktion
+
+**Ausgangslage:** Eine frisch aus dem Bauplan aufgesetzte Datenbank wich noch von der laufenden ab. Sie schleppte vier alte Einmal-Sicherungskopien aus früheren Datenkorrekturen sowie eine längst ungenutzte Tabelle mit, und 19 große Ereignis- und Statistik-Tabellen waren dort nicht als komprimierte Zeitreihen-Tabellen angelegt, wie es die echte Datenbank längst tut. Auffallen würde das erst beim nächsten Neuaufbau (Test, neue Umgebung): andere Struktur, kein automatisches Wegkomprimieren alter Daten.
+
+**Änderung:** Die toten Tabellen werden entfernt. Die 19 Tabellen werden in Zeitreihen-Tabellen umgewandelt — mit exakt denselben Zeitfenstern und Kompressions-Einstellungen wie in Produktion, Tabelle für Tabelle aus dem Live-Stand abgeleitet. Jeder Schritt ist so abgesichert, dass er auf der laufenden Datenbank nichts anfasst (sie ist bereits im Zielzustand) und ausschließlich eine neu aufgebaute Datenbank angleicht; mehrfaches Anwenden bleibt folgenlos.
+
+**Ergebnis:** Bauplan und laufende Datenbank sind in diesem Bereich wieder deckungsgleich. Eine frisch aufgesetzte Umgebung bekommt automatisch dieselbe Struktur und dasselbe Speicher- und Kompressionsverhalten. Gegen die echte Datenbank Spalte für Spalte und Tabelle für Tabelle gegengeprüft.
+
 ## #303 — Demo: Streams-Tabelle, Kategorie-Ranking und Coaching jetzt voll gefüllt
 
 **Ausgangslage:** Nach der letzten Demo-Reparatur liefen alle Tabs fehlerfrei, drei Bereiche blieben aber nur halb gefüllt: Die Stream-Tabelle ließ mehrere Spalten leer, und Kategorie-Ranking wie Coaching-Bereich wirkten dünn — ihre Beispieldaten enthielten nur einen Bruchteil dessen, was das Dashboard dort eigentlich darstellt.
