@@ -1,3 +1,11 @@
+## #310 — Zweite Welle: das ganze Chat-Gehirn wird jetzt beim Bauen geprüft
+
+**Ausgangslage:** Nach dem Mini-Auftakt aus #308 kommt mit Abstand der größte Brocken: der Teil, der entscheidet, wann und wie der Bot sich überhaupt am Chat beteiligt — also Gesprächsgedächtnis, Persönlichkeit, Stimmungslage, Lauerer-Signale, Stream-Mitschriften und die Absender-Anmeldung. Diese 47 Datenbank-Abfragen wurden bisher erst zur Laufzeit auf Passung geprüft.
+
+**Änderung:** Alle 47 werden ab jetzt schon beim Bauen gegen ein frisch aus dem Bauplan erzeugtes Schema geprüft. Für jede Spalte ist dabei sauber hinterlegt, ob sie leer sein darf oder nicht — exakt so, wie der Code den Wert danach weiterverwendet, ohne Verhaltensänderung. Eine einzige Sammel-Abfrage, die drei feste Status-Aktualisierungen bündelt, bleibt bewusst ungeprüft und ist als solche markiert.
+
+**Ergebnis:** Verschwindet oder ändert sich in diesem großen Bereich eine Spalte, scheitert künftig der Bau statt erst der Betrieb. An einer nachgestellten Kopie bewiesen: Bauen ohne Datenbank läuft, eine künstlich umbenannte Spalte lässt den Bau sofort scheitern, und eine zweite, unabhängige Prüfung bestätigte, dass keine der „darf nicht leer sein"-Festlegungen zur Laufzeit umkippen kann. Für den Betrieb ändert sich nichts.
+
 ## #309 — Auto-Raids meiden jetzt zuverlässig gesperrte Kanäle
 
 **Ausgangslage:** Beim automatischen Raid am Stream-Ende wählte der Bot sein Ziel nur anhand einer einzigen Sperrliste. Kanäle, die über andere Wege gesperrt waren — global gebannte Accounts und kanalweite Hard-Bans — standen auf keiner der geprüften Listen und konnten trotzdem als Raid-Ziel landen. Beinahe wäre ein hart gesperrter Kanal angeraidet worden.
