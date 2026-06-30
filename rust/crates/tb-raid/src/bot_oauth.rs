@@ -47,8 +47,7 @@ impl BotOAuthContext {
     /// Validate-Endpoint die Scopes nicht immer zurückliefert.
     pub fn can_read_followers(&self) -> bool {
         self.token.is_some()
-            && (self.scopes.is_empty()
-                || self.scopes.contains("moderator:read:followers"))
+            && (self.scopes.is_empty() || self.scopes.contains("moderator:read:followers"))
     }
 }
 
@@ -66,9 +65,7 @@ pub fn normalize_bot_oauth_context(
     bot_id_fallback: Option<&str>,
     scopes: impl IntoIterator<Item = String>,
 ) -> BotOAuthContext {
-    let token = token
-        .map(strip_oauth_prefix)
-        .filter(|t| !t.is_empty());
+    let token = token.map(strip_oauth_prefix).filter(|t| !t.is_empty());
 
     let bot_id = bot_id_primary
         .map(str::trim)
@@ -115,9 +112,7 @@ pub trait BotOAuthSource: Send + Sync {
 ///
 /// Port von `runtime_support.py:68-94`: `None`-Quelle → leerer Kontext; sonst
 /// die rohen Werte holen und [`normalize_bot_oauth_context`] anwenden.
-pub async fn resolve_bot_oauth_context(
-    source: Option<&dyn BotOAuthSource>,
-) -> BotOAuthContext {
+pub async fn resolve_bot_oauth_context(source: Option<&dyn BotOAuthSource>) -> BotOAuthContext {
     let Some(source) = source else {
         return BotOAuthContext::empty();
     };
@@ -204,7 +199,10 @@ mod tests {
         let source = StubSource {
             token: Some("oauth:secret-tok".to_string()),
             bot_id: Some("42".to_string()),
-            scopes: vec!["Moderator:Read:Followers".to_string(), "user:bot".to_string()],
+            scopes: vec![
+                "Moderator:Read:Followers".to_string(),
+                "user:bot".to_string(),
+            ],
         };
         let ctx = resolve_bot_oauth_context(Some(&source)).await;
         assert_eq!(ctx.token.as_deref(), Some("secret-tok"));

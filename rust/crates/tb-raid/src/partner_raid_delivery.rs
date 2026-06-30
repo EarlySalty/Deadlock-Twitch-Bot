@@ -220,7 +220,8 @@ mod tests {
 
     #[test]
     fn ready_plan_normalisiert_baut_nachricht_und_5s_delay() {
-        let plan = plan_partner_raid_delivery(&ready_request(), &PartnerRaidDeliveryConfig::default());
+        let plan =
+            plan_partner_raid_delivery(&ready_request(), &PartnerRaidDeliveryConfig::default());
         assert!(plan.should_deliver());
         assert_eq!(plan.reason, None);
         assert_eq!(plan.delay_seconds, 5.0);

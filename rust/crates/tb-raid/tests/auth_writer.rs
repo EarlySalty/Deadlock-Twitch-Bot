@@ -196,12 +196,10 @@ async fn reauth_entfernt_blacklist_und_loest_token_error_pause() {
     .execute(&pool)
     .await
     .unwrap();
-    let legacy_token_error_reason = format!("{}_expired", "token_error");
     sqlx::query(
         "INSERT INTO twitch_partners (twitch_user_id, technical_pause_reason, raid_bot_enabled)
-         VALUES ('42', $1, 0)",
+         VALUES ('42', 'token_error', 0)",
     )
-    .bind(legacy_token_error_reason)
     .execute(&pool)
     .await
     .unwrap();
@@ -228,7 +226,7 @@ async fn reauth_entfernt_blacklist_und_loest_token_error_pause() {
             .unwrap();
     assert_eq!(bl, 0, "Blacklist-Eintrag nach Re-Auth gelöscht");
 
-    // technical_pause_reason='token_error*' aufgehoben und Raid wieder aktiviert.
+    // technical_pause_reason='token_error' aufgehoben und Raid wieder aktiviert.
     let (pause, raid_enabled): (Option<String>, Option<i32>) =
         sqlx::query_as("SELECT technical_pause_reason, raid_bot_enabled FROM twitch_partners WHERE twitch_user_id='42'")
             .fetch_one(&pool)
@@ -251,6 +249,46 @@ async fn reauth_entfernt_blacklist_und_loest_token_error_pause() {
         Some("bot_banned"),
         "fremder Pause-Grund unangetastet"
     );
+}
+
+#[tokio::test]
+async fn reauth_ohne_aktivierung_loest_token_error_suffix_pause_nicht() {
+    let pool = pool_or_skip!("t6a_authwrite_suffix_pause");
+    let writer = AuthWriter::new(pool.clone(), cipher());
+
+    sqlx::query(
+        "INSERT INTO twitch_token_blacklist (twitch_user_id, twitch_login) VALUES ('43', 'drag')",
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
+    sqlx::query(
+        "INSERT INTO twitch_partners (twitch_user_id, technical_pause_reason, raid_bot_enabled)
+         VALUES ('43', 'token_error_expired', 0)",
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
+
+    writer
+        .store_new_auth(&base_auth("43", false), Utc::now())
+        .await
+        .unwrap();
+
+    let bl: i64 =
+        sqlx::query_scalar("SELECT COUNT(*) FROM twitch_token_blacklist WHERE twitch_user_id='43'")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+    assert_eq!(bl, 0, "Blacklist-Eintrag nach Re-Auth gelöscht");
+
+    let (pause, raid_enabled): (Option<String>, Option<i32>) =
+        sqlx::query_as("SELECT technical_pause_reason, raid_bot_enabled FROM twitch_partners WHERE twitch_user_id='43'")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+    assert_eq!(pause.as_deref(), Some("token_error_expired"));
+    assert_eq!(raid_enabled, Some(0));
 }
 
 #[tokio::test]

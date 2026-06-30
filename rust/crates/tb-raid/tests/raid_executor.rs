@@ -11,8 +11,8 @@ use sqlx::PgPool;
 use tb_crypto::{aad, FieldCipher, KID};
 use tb_raid::{
     RaidApi, RaidAuthStore, RaidExecutor, RaidHistoryStore, RaidOutcome, RaidRequest,
-    RaidTokenRefresher, RefreshError, TokenBlacklistStore, TokenOwnerInfo, TokenProvider, TokenResponse,
-    TwitchTokenClient,
+    RaidTokenRefresher, RefreshError, TokenBlacklistStore, TokenOwnerInfo, TokenProvider,
+    TokenResponse, TwitchTokenClient,
 };
 
 const TEST_KEY_HEX: &str = "0f0e0d0c0b0a09080706050403020100ffeeddccbbaa99887766554433221100";

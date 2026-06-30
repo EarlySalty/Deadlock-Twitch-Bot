@@ -77,33 +77,13 @@ pub use arrival_tracking_store::{
     serialize_confirmation_signals, ArrivalTrackingStore, RecordArrivalInput,
 };
 pub use auth_writer::{AuthWriteError, AuthWriter, NewAuth};
+pub use auto_raid_pipeline::{
+    ArrivalReadiness, AutoRaidPipeline, AutoRaidPipelineOutcome, AutoRaidRequest,
+    FallbackStreamSource, FollowerEnricher, FollowersEnrichmentObservation, OrphanChatNotification,
+    OrphanReplay,
+};
 pub use bot_oauth::{
     normalize_bot_oauth_context, resolve_bot_oauth_context, BotOAuthContext, BotOAuthSource,
-};
-pub use reauth_admin::{BulkReauthPort, ReauthAdminStore};
-pub use scope_fallback_warn::ScopeFallbackWarner;
-pub use partner_raid_delivery::{
-    plan_partner_raid_delivery, PartnerRaidDeliveryConfig, PartnerRaidDeliveryPlan,
-    PartnerRaidDeliveryRequest, PartnerRaidDeliveryStatus, PARTNER_RAID_DELAY_SECONDS,
-};
-pub use partner_score_refresh::{
-    build_score_upsert, ExistingCache, LiveState, PartnerScoreRefresher, ScoreBuildInput,
-    SessionRow, LOOKBACK_DAYS, MIN_RELIABLE_SESSIONS,
-};
-pub use raid_messaging::build_partner_raid_message;
-pub use recruitment_messaging::{
-    build_recruitment_message, plan_recruitment_delivery, RecruitmentDeliveryConfig,
-    RecruitmentDeliveryPlan, RecruitmentDeliveryRequest, RecruitmentDeliveryStatus,
-    RecruitmentInviteVariant, RecruitmentMessageVariant,
-};
-pub use external_recruitment_store::{
-    decide_blacklist_action, BlacklistScheduleAction, ConfirmedExternalRecruitmentRaid,
-    DueBlacklistPending, DueBotBanCheck, ExternalRecruitmentStore,
-    EXTERNAL_RECRUITMENT_BLACKLIST_GRACE_SECONDS, EXTERNAL_RECRUITMENT_RAID_LIMIT,
-};
-pub use auto_raid_pipeline::{
-    ArrivalReadiness, AutoRaidPipeline, AutoRaidPipelineOutcome, AutoRaidRequest, FallbackStreamSource,
-    FollowerEnricher, FollowersEnrichmentObservation, OrphanChatNotification, OrphanReplay,
 };
 pub use candidate_selection::{
     is_retryable_raid_error, select_by_score, select_fairest, FairnessCandidate, ScoredCandidate,
@@ -114,6 +94,11 @@ pub use eligibility::{
     classify_eligibility, filter_eligible, is_deadlock_eligible, is_recent_deadlock,
     DeadlockEvalInput, EligibilityBucket, DEADLOCK_RECENCY_CAP_SECONDS,
 };
+pub use external_recruitment_store::{
+    decide_blacklist_action, BlacklistScheduleAction, ConfirmedExternalRecruitmentRaid,
+    DueBlacklistPending, DueBotBanCheck, ExternalRecruitmentStore,
+    EXTERNAL_RECRUITMENT_BLACKLIST_GRACE_SECONDS, EXTERNAL_RECRUITMENT_RAID_LIMIT,
+};
 pub use manual_suppression::ManualRaidSuppression;
 pub use oauth_flow::{
     build_authorize_url, build_state_info, StreamerContextResolver,
@@ -121,8 +106,16 @@ pub use oauth_flow::{
 };
 pub use offline_eligibility::{OfflineAutoRaidEligibility, OfflineEligibilityStore};
 pub use outreach_boost::{OutreachBoostStore, OUTREACH_BOOST_LOOKBACK_HOURS};
+pub use partner_raid_delivery::{
+    plan_partner_raid_delivery, PartnerRaidDeliveryConfig, PartnerRaidDeliveryPlan,
+    PartnerRaidDeliveryRequest, PartnerRaidDeliveryStatus, PARTNER_RAID_DELAY_SECONDS,
+};
 pub use partner_roster::{
     build_online_candidates, OnlineCandidate, PartnerRosterEntry, PartnerRosterStore, StreamData,
+};
+pub use partner_score_refresh::{
+    build_score_upsert, ExistingCache, LiveState, PartnerScoreRefresher, ScoreBuildInput,
+    SessionRow, LOOKBACK_DAYS, MIN_RELIABLE_SESSIONS,
 };
 pub use pending_raids::{
     build_pending_timeout_detail, normalize_broadcaster_login, normalize_pending_raid_key,
@@ -131,6 +124,14 @@ pub use pending_raids::{
 pub use raid_blacklist::RaidBlacklistStore;
 pub use raid_executor::{RaidApi, RaidExecutor, RaidOutcome, RaidRequest};
 pub use raid_history_store::{RaidHistoryStore, RecordRaidInput};
+pub use raid_messaging::build_partner_raid_message;
+pub use reauth_admin::{BulkReauthPort, ReauthAdminStore};
+pub use recruitment_messaging::{
+    build_recruitment_message, plan_recruitment_delivery, RecruitmentDeliveryConfig,
+    RecruitmentDeliveryPlan, RecruitmentDeliveryRequest, RecruitmentDeliveryStatus,
+    RecruitmentInviteVariant, RecruitmentMessageVariant,
+};
+pub use scope_fallback_warn::ScopeFallbackWarner;
 pub use scope_profiles::{
     normalize_scope_profile, scopes_for_profile, AUTO_SCOPE_PROFILE, BASE_CRITICAL_STREAMER_SCOPES,
     BASE_SCOPE_PROFILE, BASE_STREAMER_SCOPES, DASHBOARD_REAUTH_SCOPE_PROFILE,
@@ -142,9 +143,8 @@ pub use scoring::{
     compute_base_score, compute_duration_score, compute_fairness_score, compute_final_score,
     compute_new_partner_multiplier, compute_raid_boost_multiplier, compute_readiness_score,
     compute_scores, compute_scores_with_cache, compute_time_pattern_score, CachedScores,
-    ScoreComponents, ScoringInputs,
-    DEFAULT_RAID_BOOST_MULTIPLIER, NEUTRAL_SCORE, NEW_PARTNER_MAX_MULTIPLIER,
-    NEW_PARTNER_RAID_THRESHOLD, RAID_BOOST_MULTIPLIER,
+    ScoreComponents, ScoringInputs, DEFAULT_RAID_BOOST_MULTIPLIER, NEUTRAL_SCORE,
+    NEW_PARTNER_MAX_MULTIPLIER, NEW_PARTNER_RAID_THRESHOLD, RAID_BOOST_MULTIPLIER,
 };
 pub use signal_correlation::{
     ActionData, RaidArrivalInput, RaidSignalAction, RaidSignalActionKind,

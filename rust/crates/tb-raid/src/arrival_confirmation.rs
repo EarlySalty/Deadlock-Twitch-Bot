@@ -1160,9 +1160,15 @@ mod tests {
             )
             .unwrap();
 
-        assert!(target_is_partner_override, "Klassifikation darf nicht None sein");
+        assert!(
+            target_is_partner_override,
+            "Klassifikation darf nicht None sein"
+        );
         assert_ne!(dec.follow_up_kind, FollowUpKind::SuppressedExternal);
-        assert!(dec.target_is_partner, "expected_partner muss target erzwingen");
+        assert!(
+            dec.target_is_partner,
+            "expected_partner muss target erzwingen"
+        );
         assert_eq!(
             dec.classification.as_deref(),
             Some("ours_to_partner"),

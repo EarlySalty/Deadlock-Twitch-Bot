@@ -156,9 +156,25 @@ async fn refresht_nur_faellige_tokens() {
     let now = Utc::now();
 
     // Fällig: läuft in 1 h ab (< 2 h Puffer).
-    seed_auth(&pool, "100", "faellig", now + Duration::minutes(60), true, false).await;
+    seed_auth(
+        &pool,
+        "100",
+        "faellig",
+        now + Duration::minutes(60),
+        true,
+        false,
+    )
+    .await;
     // Nicht fällig: läuft in 5 h ab.
-    seed_auth(&pool, "200", "frisch", now + Duration::hours(5), true, false).await;
+    seed_auth(
+        &pool,
+        "200",
+        "frisch",
+        now + Duration::hours(5),
+        true,
+        false,
+    )
+    .await;
 
     let count = refresher(&pool).refresh_all_due(now).await.unwrap();
     assert_eq!(count, 1, "nur der fällige Token wird refresht");
@@ -171,7 +187,10 @@ async fn refresht_nur_faellige_tokens() {
     );
     // Nicht-fälliger Token: unverändert (~5 h).
     let untouched = stored_expiry(&pool, "200").await;
-    assert!(untouched > now + Duration::hours(4), "frischer Token unangetastet");
+    assert!(
+        untouched > now + Duration::hours(4),
+        "frischer Token unangetastet"
+    );
 }
 
 #[tokio::test]
@@ -180,13 +199,15 @@ async fn ueberspringt_raid_disabled_und_needs_reauth() {
     // Auf Mikrosekunden trunkieren: Postgres `TIMESTAMPTZ` speichert nur µs,
     // chrono::Utc::now() liefert ns. Ohne Trunkierung scheitert der exakte
     // `assert_eq!`-Vergleich unten an den verlorenen Nanosekunden.
-    let now = Utc::now().duration_trunc(TimeDelta::microseconds(1)).unwrap();
+    let now = Utc::now()
+        .duration_trunc(TimeDelta::microseconds(1))
+        .unwrap();
     let due = now + Duration::minutes(30);
 
     // Beide fällig, aber je ein Ausschlusskriterium.
     seed_auth(&pool, "300", "disabled", due, false, false).await; // raid_enabled = false
     seed_auth(&pool, "400", "reauth", due, true, true).await; // needs_reauth = true
-    // Ein echter Kandidat, damit der Sweep überhaupt etwas tut.
+                                                              // Ein echter Kandidat, damit der Sweep überhaupt etwas tut.
     seed_auth(&pool, "500", "ok", due, true, false).await;
 
     let count = refresher(&pool).refresh_all_due(now).await.unwrap();

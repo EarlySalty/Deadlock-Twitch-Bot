@@ -121,26 +121,27 @@ impl TokenBlacklist for TokenBlacklistStore {
 }
 
 impl TokenBlacklistStore {
-    /// Räumt nach erfolgreichem Refresh (ohne Re-Auth) sowohl den Pause-Grund
-    /// `technical_pause_reason='token_error*'` als auch den Blacklist-Eintrag.
+    /// Räumt nach erfolgreichem Refresh (ohne Re-Auth) sowohl den exakten
+    /// Pause-Grund `technical_pause_reason='token_error'` als auch den
+    /// Blacklist-Eintrag.
     ///
     /// Port von Python `clear_failure_count` (token_error_handler.py:852-867):
-    /// erst `UPDATE twitch_partners` (nur `token_error*` → NULL, fremde Gründe wie
+    /// erst `UPDATE twitch_partners` (nur `token_error` → NULL, fremde Gründe wie
     /// `bot_banned` bleiben dank CASE unangetastet), dann `DELETE` aus der
     /// Blacklist. Ohne das UPDATE bliebe ein per Refresh genesener Partner in
     /// Dashboard-/Analytics-Gates als `token_error` pausiert, bis er voll
     /// neu autorisiert (die Re-Auth-Gegenrichtung in `auth_writer::store_new_auth`).
     async fn clear_failure_count_inner(&self, twitch_user_id: &str) -> Result<(), sqlx::Error> {
         let mut tx = self.pool.begin().await?;
-        sqlx::query!(
+        sqlx::query(
             "UPDATE twitch_partners
                 SET technical_pause_reason = CASE
-                        WHEN LOWER(TRIM(COALESCE(technical_pause_reason, ''))) LIKE 'token_error%' THEN NULL
+                        WHEN LOWER(TRIM(COALESCE(technical_pause_reason, ''))) = 'token_error' THEN NULL
                         ELSE technical_pause_reason
                     END
               WHERE twitch_user_id = $1",
-            twitch_user_id
         )
+        .bind(twitch_user_id)
         .execute(&mut *tx)
         .await?;
         sqlx::query!(

@@ -426,19 +426,20 @@ impl AutoRaidPipeline {
             .iter()
             .map(|p| p.twitch_user_id.as_str())
             .collect();
-        let scores: HashMap<String, PartnerRaidScoreRow> =
-            match self.scores.load_many(&partner_ids).await {
-                Ok(rows) => rows
-                    .into_iter()
-                    .map(|r| (r.twitch_user_id.clone(), r))
-                    .collect(),
-                Err(error) => {
-                    tracing::error!(%error, "Raid-Pipeline blockiert: Score-Cache nicht ladbar");
-                    return AutoRaidPipelineOutcome::Blocked {
-                        error: "score_cache_unavailable".to_string(),
-                    };
-                }
-            };
+        let scores: HashMap<String, PartnerRaidScoreRow> = match self
+            .scores
+            .load_many(&partner_ids)
+            .await
+        {
+            Ok(rows) => rows
+                .into_iter()
+                .map(|r| (r.twitch_user_id.clone(), r))
+                .collect(),
+            Err(error) => {
+                tracing::warn!(%error, "Score-Cache nicht ladbar — fahre ohne Partner-Scores fort");
+                HashMap::new()
+            }
+        };
 
         // Outreach-Boost-Ziele einmal pro Lauf laden (Python lädt vor dem Loop).
         let boost_logins: HashSet<String> = match &self.outreach {
@@ -962,6 +963,7 @@ impl AutoRaidPipeline {
             pending.offline_trigger_ts = req.offline_trigger_ts;
             pending.raid_flow_id = Some(flow_id.to_string());
             pending.channel_raid_ready = Some(channel_raid_ready);
+            pending.target_stream_data = target.target_stream_data.clone();
             store.store(pending);
         }
 

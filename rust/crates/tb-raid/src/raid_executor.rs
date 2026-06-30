@@ -86,7 +86,14 @@ impl RaidExecutor {
             .await
         {
             Ok(()) => {
-                self.record(req, true, None).await?;
+                if let Err(error) = self.record(req, true, None).await {
+                    tracing::error!(
+                        %error,
+                        from = %req.from_broadcaster_login,
+                        to = %req.to_broadcaster_login,
+                        "Raid-History nach erfolgreichem Twitch-Raid nicht schreibbar"
+                    );
+                }
                 Ok(RaidOutcome::Started)
             }
             Err(error) => {

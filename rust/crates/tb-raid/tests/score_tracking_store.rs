@@ -163,12 +163,24 @@ async fn resolve_setzt_offene_zeile_auf_resolved() {
 
     // Deadlock-Raid um 18:30, kein Nicht-Deadlock-Channel-Update → session_ended.
     let row_id = insert_open_row(
-        &pool, "200", "dst", "2026-06-15T18:30:00+00:00", Some(1), None, 1,
+        &pool,
+        "200",
+        "dst",
+        "2026-06-15T18:30:00+00:00",
+        Some(1),
+        None,
+        1,
     )
     .await;
     // Fremde Session-Zeile bleibt unangetastet.
     let other_id = insert_open_row(
-        &pool, "999", "other", "2026-06-15T18:30:00+00:00", Some(2), None, 1,
+        &pool,
+        "999",
+        "other",
+        "2026-06-15T18:30:00+00:00",
+        Some(2),
+        None,
+        1,
     )
     .await;
 
@@ -211,7 +223,13 @@ async fn resolve_deadlock_endet_an_non_deadlock_channel_update() {
     sqlx::query("INSERT INTO twitch_stream_sessions (id, streamer_login, started_at, ended_at) VALUES (1,'dst',$1,$2)")
         .bind(started.to_rfc3339()).bind(ended.to_rfc3339()).execute(&pool).await.unwrap();
     let row_id = insert_open_row(
-        &pool, "200", "dst", "2026-06-15T18:30:00+00:00", Some(1), None, 1,
+        &pool,
+        "200",
+        "dst",
+        "2026-06-15T18:30:00+00:00",
+        Some(1),
+        None,
+        1,
     )
     .await;
 
@@ -244,11 +262,15 @@ async fn resolve_ohne_session_id_oder_ended_macht_nichts() {
     let store = ScoreTrackingStore::new(pool.clone());
     let ended: chrono::DateTime<Utc> = "2026-06-15T22:00:00+00:00".parse().unwrap();
     assert_eq!(
-        store.resolve_for_session(Some("200"), "dst", None, Some(ended), "deadlock").await,
+        store
+            .resolve_for_session(Some("200"), "dst", None, Some(ended), "deadlock")
+            .await,
         0
     );
     assert_eq!(
-        store.resolve_for_session(Some("200"), "dst", Some(1), None, "deadlock").await,
+        store
+            .resolve_for_session(Some("200"), "dst", Some(1), None, "deadlock")
+            .await,
         0
     );
 }
