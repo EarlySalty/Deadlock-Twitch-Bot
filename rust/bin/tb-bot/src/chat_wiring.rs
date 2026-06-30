@@ -526,8 +526,6 @@ pub async fn build_runtime(
             .with_bot_ban_handler(bot_ban_handler),
     );
 
-    ensure_autoban_log_table(&pool).await;
-
     // Lern-Muster einmalig laden (Python lädt sie beim Bot-Start).
     let learned = LearnedPatterns::load(&pool).await;
     let http = reqwest::Client::builder()
@@ -997,26 +995,6 @@ async fn reconcile_chat_subscriptions(
         mod_telemetry,
         "Bot-Token-Sub-Reconcile abgeschlossen"
     );
-}
-
-/// `tb_chat_autoban_log` ist eine neue Rust-Tabelle (nicht im Python-Schema) —
-/// beim Start anlegen, damit `ModerationEngine::persist_autoban_record` schreiben kann.
-async fn ensure_autoban_log_table(pool: &PgPool) {
-    if let Err(e) = sqlx::query(
-        "CREATE TABLE IF NOT EXISTS tb_chat_autoban_log (
-            id BIGSERIAL PRIMARY KEY,
-            channel_login TEXT NOT NULL,
-            chatter_id TEXT NOT NULL,
-            chatter_login TEXT NOT NULL,
-            content TEXT,
-            banned_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
-        )",
-    )
-    .execute(pool)
-    .await
-    {
-        tracing::warn!("tb_chat_autoban_log-Migration fehlgeschlagen: {e}");
-    }
 }
 
 // ---------------------------------------------------------------------------

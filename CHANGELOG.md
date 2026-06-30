@@ -1,3 +1,11 @@
+## #306 — Schema-Aufräumung: beim Start angelegte Tabellen in den Bauplan überführt
+
+**Ausgangslage:** Elf Tabellen existierten in der laufenden Datenbank nur, weil der Programmcode sie beim Start selbst anlegte — im Bauplan fehlten sie. Eine frisch aus dem Bauplan aufgesetzte Datenbank hatte sie deshalb gar nicht, und das Schema ließ sich nicht allein aus dem Bauplan reproduzieren. Dieselbe Tabelle an zwei Stellen zu beschreiben (Lücke im Bauplan, Anlage zur Laufzeit) birgt die Gefahr, dass beide mit der Zeit auseinanderlaufen.
+
+**Änderung:** Die elf Tabellen sind jetzt echte Bauplan-Schritte — Struktur, Schlüssel und Indizes exakt aus dem Live-Stand übernommen, in vier thematischen Gruppen. Jeder Schritt ist so abgesichert, dass er auf der laufenden Datenbank nichts anfasst (die Tabellen sind dort längst da) und nur eine neu aufgebaute Datenbank angleicht; mehrfaches Anwenden bleibt folgenlos. Wo der Code eine Tabelle bisher beim Start selbst anlegte, ist diese doppelte Anlage entfernt — der Bauplan ist nun die einzige Quelle.
+
+**Ergebnis:** Das Schema lässt sich vollständig aus dem Bauplan reproduzieren; eine frisch aufgesetzte Datenbank gleicht der Produktion exakt. An einer nachgestellten Kopie geprüft: Spalten, Schlüssel und Indizes stimmen Tabelle für Tabelle überein, und der erneute Lauf auf einer bereits bestehenden Datenbank bleibt folgenlos. Für den Betrieb ändert sich nichts.
+
 ## #305 — Schema-Aufräumung: Streamer-Tabelle durchgängig über den Login verschlüsselt
 
 **Ausgangslage:** Die Streamer-Tabelle trug in der laufenden Datenbank noch eine alte, nirgends genutzte Zahlen-ID als Primärschlüssel mit — ein Überbleibsel aus früheren Zeiten. Der eigentliche Schlüssel ist längst der Twitch-Login. Eine frisch aufgesetzte Datenbank war bereits auf den Login umgestellt, die laufende noch nicht — wieder eine Stelle, an der Bauplan und Realität auseinanderliefen.

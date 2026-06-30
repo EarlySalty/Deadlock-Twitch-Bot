@@ -2031,45 +2031,9 @@ async fn live_status_block(pool: &PgPool, resolved_login: &str, resolved_user_id
     }
 }
 
-// ── Changelog: Lese-Payload + Storage-Setup (api_v2.py:1496-1609) ────────────
-
-async fn ensure_changelog_storage(pool: &PgPool) -> Result<(), sqlx::Error> {
-    sqlx::query(
-        r#"
-        CREATE TABLE IF NOT EXISTS internal_home_changelog (
-            id BIGSERIAL PRIMARY KEY,
-            entry_date DATE NOT NULL DEFAULT CURRENT_DATE,
-            title TEXT NOT NULL DEFAULT '',
-            content TEXT NOT NULL DEFAULT '',
-            created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
-        )
-        "#,
-    )
-    .execute(pool)
-    .await?;
-    sqlx::query(
-        r#"
-        CREATE INDEX IF NOT EXISTS idx_internal_home_changelog_order
-        ON internal_home_changelog (entry_date DESC, created_at DESC, id DESC)
-        "#,
-    )
-    .execute(pool)
-    .await?;
-    Ok(())
-}
+// ── Changelog: Lese-Payload (api_v2.py:1496-1609) ────────────────────────────
 
 async fn changelog_payload(pool: &PgPool, can_write: bool) -> Value {
-    let empty = || {
-        json!({
-            "entries": [],
-            "can_write": can_write,
-            "max_entries": CHANGELOG_MAX_ENTRIES,
-        })
-    };
-    if let Err(e) = ensure_changelog_storage(pool).await {
-        tracing::warn!("internal-home changelog storage setup: {e}");
-        return empty();
-    }
     let entries = fetch_changelog_entries(pool).await;
     json!({
         "entries": entries,
@@ -2248,7 +2212,6 @@ async fn create_changelog_entry(
     content: &str,
     entry_date: NaiveDate,
 ) -> Result<Value, sqlx::Error> {
-    ensure_changelog_storage(pool).await?;
     let mut tx = pool.begin().await?;
 
     let row = sqlx::query(
@@ -2318,6 +2281,25 @@ mod changelog_origin_tests {
         .execute(&pool)
         .await
         .unwrap();
+        sqlx::query(
+            r#"CREATE TABLE internal_home_changelog (
+                id BIGSERIAL PRIMARY KEY,
+                entry_date DATE NOT NULL DEFAULT CURRENT_DATE,
+                title TEXT NOT NULL DEFAULT '',
+                content TEXT NOT NULL DEFAULT '',
+                created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
+            )"#,
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+        sqlx::query(
+            "CREATE INDEX idx_internal_home_changelog_order \
+             ON internal_home_changelog (entry_date DESC, created_at DESC, id DESC)",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
         Some(pool)
     }
 
@@ -2382,7 +2364,7 @@ mod changelog_origin_tests {
             .await
             .unwrap();
         // Same-origin darf NICHT am csrf_failed scheitern (kein 403 csrf_failed).
-        // Der Write läuft danach (Changelog-Tabelle wird vom Handler angelegt) → 201.
+        // Der Write läuft danach gegen die Test-Fixture → 201.
         assert_ne!(resp.status(), StatusCode::FORBIDDEN);
         assert_eq!(resp.status(), StatusCode::CREATED);
     }
