@@ -1,3 +1,11 @@
+## #311 — Dritte Welle: Stream-Überwachung und Chat-Aktionen — und vier Beinahe-Abstürze abgefangen
+
+**Ausgangslage:** Die größte Umstellung bisher nimmt sich zwei Brocken auf einmal vor: den Teil, der live mitschaut (Stream-Status, Sessions, Telemetrie, die interne Aufgaben-Warteschlange) und den Teil, der im Chat handelt (Moderation, Promos, Scam-Schutz, Titel-Generator). Zusammen 197 Datenbank-Abfragen, bisher erst zur Laufzeit auf Passung geprüft.
+
+**Änderung:** Alle 197 werden ab jetzt schon beim Bauen gegen ein frisch aus dem Bauplan erzeugtes Schema geprüft. Dabei fielen vier Stellen auf, an denen eine Abfrage einen Wert als „immer gefüllt" behandelte, obwohl die Spalte leer sein kann — genau die Sorte stiller Fehler, die sonst erst im Betrieb als Absturz hochkommt. Sie sind jetzt abgesichert: ein leerer Wert wird zum sinnvollen Standard, statt das Programm umzuwerfen.
+
+**Ergebnis:** Verschwindet oder ändert sich in einem dieser großen Bereiche eine Spalte, scheitert künftig der Bau statt der Betrieb. An einer nachgestellten Kopie bewiesen: Bauen ohne Datenbank läuft, eine künstlich umbenannte Spalte lässt den Bau sofort scheitern, und zwei unabhängige Prüfungen bestätigten, dass keine „darf nicht leer sein"-Festlegung zur Laufzeit umkippt. Für den Betrieb ändert sich nichts.
+
 ## #310 — Zweite Welle: das ganze Chat-Gehirn wird jetzt beim Bauen geprüft
 
 **Ausgangslage:** Nach dem Mini-Auftakt aus #308 kommt mit Abstand der größte Brocken: der Teil, der entscheidet, wann und wie der Bot sich überhaupt am Chat beteiligt — also Gesprächsgedächtnis, Persönlichkeit, Stimmungslage, Lauerer-Signale, Stream-Mitschriften und die Absender-Anmeldung. Diese 47 Datenbank-Abfragen wurden bisher erst zur Laufzeit auf Passung geprüft.
