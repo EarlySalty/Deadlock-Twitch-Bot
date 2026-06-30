@@ -59,9 +59,11 @@ pub async fn bulk_update_partner_flags(
     pool: &PgPool,
     flags: &PartnerFlagUpdate,
 ) -> Result<i64, sqlx::Error> {
-    let total: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM twitch_partners WHERE status = 'active'")
-        .fetch_one(pool)
-        .await?;
+    let total: i64 = sqlx::query_scalar!(
+        r#"SELECT COUNT(*) AS "count!" FROM twitch_partners WHERE status = 'active'"#
+    )
+    .fetch_one(pool)
+    .await?;
 
     // Spaltennamen stammen aus festem Set (kein User-Input) → sicher.
     let assignments: Vec<(&str, i32)> = [
@@ -150,12 +152,13 @@ struct RaidHistoryRow {
 /// Feldnamen im JSON sind Python-kompatibel
 /// (`streamer`/`target`/`viewers`/`executedAt`/`reason`/`success`/`status`).
 pub async fn load_raid_history(pool: &PgPool) -> Result<Vec<Value>, sqlx::Error> {
-    let rows: Vec<RaidHistoryRow> = sqlx::query_as(
+    let rows: Vec<RaidHistoryRow> = sqlx::query_as!(
+        RaidHistoryRow,
         r#"
-        SELECT from_broadcaster_login AS streamer,
-               to_broadcaster_login   AS target,
-               viewer_count           AS viewers,
-               executed_at::text      AS executed_at,
+        SELECT from_broadcaster_login AS "streamer?",
+               to_broadcaster_login   AS "target?",
+               viewer_count           AS "viewers?",
+               executed_at::text      AS "executed_at?",
                reason,
                success
         FROM twitch_raid_history
@@ -228,12 +231,28 @@ mod tests {
 
     async fn make_pool(schema: &str) -> Option<PgPool> {
         let dsn = std::env::var("TB_TEST_DATABASE_URL").ok()?;
-        let admin = PgPoolOptions::new().max_connections(1).connect(&dsn).await.unwrap();
-        sqlx::query(&format!("DROP SCHEMA IF EXISTS {schema} CASCADE")).execute(&admin).await.unwrap();
-        sqlx::query(&format!("CREATE SCHEMA {schema}")).execute(&admin).await.unwrap();
+        let admin = PgPoolOptions::new()
+            .max_connections(1)
+            .connect(&dsn)
+            .await
+            .unwrap();
+        sqlx::query(&format!("DROP SCHEMA IF EXISTS {schema} CASCADE"))
+            .execute(&admin)
+            .await
+            .unwrap();
+        sqlx::query(&format!("CREATE SCHEMA {schema}"))
+            .execute(&admin)
+            .await
+            .unwrap();
         admin.close().await;
-        let opts = PgConnectOptions::from_str(&dsn).unwrap().options([("search_path", schema)]);
-        let pool = PgPoolOptions::new().max_connections(2).connect_with(opts).await.unwrap();
+        let opts = PgConnectOptions::from_str(&dsn)
+            .unwrap()
+            .options([("search_path", schema)]);
+        let pool = PgPoolOptions::new()
+            .max_connections(2)
+            .connect_with(opts)
+            .await
+            .unwrap();
         sqlx::query(
             "CREATE TABLE twitch_partners (\
                 twitch_user_id TEXT PRIMARY KEY, twitch_login TEXT, status TEXT, \
@@ -267,7 +286,9 @@ mod tests {
 
     #[tokio::test]
     async fn bulk_update_nur_aktive_plus_snapshot() {
-        let Some(pool) = make_pool("t_admincfg_bulk").await else { return };
+        let Some(pool) = make_pool("t_admincfg_bulk").await else {
+            return;
+        };
         seed(&pool, "a1", "active").await;
         seed(&pool, "a2", "active").await;
         seed(&pool, "d1", "departnered").await; // nicht aktiv
@@ -275,19 +296,29 @@ mod tests {
         // Bulk: raid_bot ein + silent_ban ein → nur die 2 aktiven betroffen.
         let count = bulk_update_partner_flags(
             &pool,
-            &PartnerFlagUpdate { raid_bot_enabled: Some(true), silent_ban: Some(true), ..Default::default() },
+            &PartnerFlagUpdate {
+                raid_bot_enabled: Some(true),
+                silent_ban: Some(true),
+                ..Default::default()
+            },
         )
         .await
         .unwrap();
         assert_eq!(count, 2, "nur aktive Partner zählen");
 
         // departnered bleibt unangetastet (raid_bot_enabled default 0).
-        let dep: i32 = sqlx::query_scalar("SELECT raid_bot_enabled FROM twitch_partners WHERE twitch_user_id = 'd1'")
-            .fetch_one(&pool).await.unwrap();
+        let dep: i32 = sqlx::query_scalar(
+            "SELECT raid_bot_enabled FROM twitch_partners WHERE twitch_user_id = 'd1'",
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap();
         assert_eq!(dep, 0);
 
         // Snapshot scope=active: 2 total, 2 raid_bot, 2 silent_ban → all*=true.
-        let snap = load_streamer_config_snapshots(&pool, "active").await.unwrap();
+        let snap = load_streamer_config_snapshots(&pool, "active")
+            .await
+            .unwrap();
         assert_eq!(snap.total, 2);
         assert_eq!(snap.raid_bot_enabled_count, 2);
         assert_eq!(snap.silent_ban_count, 2);
@@ -303,7 +334,9 @@ mod tests {
 
     #[tokio::test]
     async fn raid_history_liefert_letzte_50_neueste_zuerst() {
-        let Some(pool) = make_pool("t_admincfg_raidhist").await else { return };
+        let Some(pool) = make_pool("t_admincfg_raidhist").await else {
+            return;
+        };
         sqlx::query(
             "INSERT INTO twitch_raid_history \
                 (from_broadcaster_login, to_broadcaster_login, viewer_count, executed_at, reason, success) \
@@ -324,7 +357,10 @@ mod tests {
         assert_eq!(hist[0]["success"], false);
         assert_eq!(hist[0]["status"], "failed");
         assert_eq!(hist[0]["reason"], "");
-        assert!(hist[0]["executedAt"].as_str().map(|s| !s.is_empty()).unwrap_or(false));
+        assert!(hist[0]["executedAt"]
+            .as_str()
+            .map(|s| !s.is_empty())
+            .unwrap_or(false));
         // Älterer
         assert_eq!(hist[1]["streamer"], "alt");
         assert_eq!(hist[1]["status"], "success");

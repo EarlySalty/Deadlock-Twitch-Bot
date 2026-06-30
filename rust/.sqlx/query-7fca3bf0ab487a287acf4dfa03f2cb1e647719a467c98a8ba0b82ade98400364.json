@@ -1,0 +1,40 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n        SELECT s.streamer_login AS \"streamer_login!\",\n               SUM(s.avg_viewers * s.duration_seconds / 3600.0)::float8 AS viewer_hours,\n               SUM(s.duration_seconds / 3600.0)::float8 AS stream_hours,\n               (SUM(s.avg_viewers * s.duration_seconds / 3600.0) / NULLIF(SUM(s.duration_seconds / 3600.0), 0))::float8 AS ratio\n        FROM twitch_stream_sessions s\n        WHERE s.started_at >= $1\n          AND s.duration_seconds > 300\n        GROUP BY s.streamer_login\n        HAVING SUM(s.duration_seconds) / 3600.0 > 1\n        ORDER BY 4 DESC\n        ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "streamer_login!",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 1,
+        "name": "viewer_hours",
+        "type_info": "Float8"
+      },
+      {
+        "ordinal": 2,
+        "name": "stream_hours",
+        "type_info": "Float8"
+      },
+      {
+        "ordinal": 3,
+        "name": "ratio",
+        "type_info": "Float8"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Timestamptz"
+      ]
+    },
+    "nullable": [
+      false,
+      null,
+      null,
+      null
+    ]
+  },
+  "hash": "7fca3bf0ab487a287acf4dfa03f2cb1e647719a467c98a8ba0b82ade98400364"
+}

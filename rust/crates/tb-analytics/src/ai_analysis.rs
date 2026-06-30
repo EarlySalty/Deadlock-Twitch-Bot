@@ -18,7 +18,9 @@ const DOW_NAMES: &[&str] = &["So", "Mo", "Di", "Mi", "Do", "Fr", "Sa"];
 
 /// Erste 60 Zeichen eines optionalen Titels (Python `(str(x) if x else "")[:60]`).
 fn title60(s: Option<&str>) -> String {
-    s.filter(|t| !t.is_empty()).map(|t| t.chars().take(60).collect()).unwrap_or_default()
+    s.filter(|t| !t.is_empty())
+        .map(|t| t.chars().take(60).collect())
+        .unwrap_or_default()
 }
 
 /// Echte Modellnamen (Python `CLAUDE_MODEL`/`MINIMAX_MODEL`), wie sie in
@@ -49,7 +51,10 @@ pub fn model_for_entitlements(entitlements: &[&str]) -> Option<&'static str> {
 
 /// Plan-abhängiges KI-Modell eines Streamers (Python `_plan_ai_model`):
 /// Plan-Snapshot (login-only) → Entitlements → Modellwahl.
-pub async fn plan_ai_model(pool: &PgPool, streamer: &str) -> Result<Option<&'static str>, sqlx::Error> {
+pub async fn plan_ai_model(
+    pool: &PgPool,
+    streamer: &str,
+) -> Result<Option<&'static str>, sqlx::Error> {
     let snapshot = crate::plan::resolve_plan_snapshot(pool, streamer, "").await?;
     Ok(model_for_entitlements(&snapshot.entitlements))
 }
@@ -92,9 +97,18 @@ pub async fn collect_ai_context(
         .await?;
 
     // 2. Letzte 20 Sessions.
-    let sessions: Vec<(NaiveDate, Option<String>, Option<f64>, Option<f64>, Option<i32>, Option<f64>, Option<f64>, i64, i64)> =
-        sqlx::query_as(&format!(
-            "SELECT started_at::date, stream_title, \
+    let sessions: Vec<(
+        NaiveDate,
+        Option<String>,
+        Option<f64>,
+        Option<f64>,
+        Option<i32>,
+        Option<f64>,
+        Option<f64>,
+        i64,
+        i64,
+    )> = sqlx::query_as(&format!(
+        "SELECT started_at::date, stream_title, \
                     ROUND((duration_seconds / 3600.0)::numeric, 2)::float8, \
                     ROUND(avg_viewers::numeric, 1)::float8, peak_viewers, \
                     ROUND((retention_10m * 100)::numeric, 1)::float8, \
@@ -103,11 +117,11 @@ pub async fn collect_ai_context(
                FROM twitch_stream_sessions \
               WHERE LOWER(streamer_login) = $1 AND started_at >= $2 AND ended_at IS NOT NULL{gf} \
               ORDER BY started_at DESC LIMIT 20"
-        ))
-        .bind(streamer)
-        .bind(since)
-        .fetch_all(pool)
-        .await?;
+    ))
+    .bind(streamer)
+    .bind(since)
+    .fetch_all(pool)
+    .await?;
 
     // 3. Wochentags-Performance.
     let weekday: Vec<(i32, i64, Option<f64>, Option<f64>)> = sqlx::query_as(&format!(
@@ -123,28 +137,30 @@ pub async fn collect_ai_context(
     .await?;
 
     // 4./5. Beste/schlechteste 5 Sessions.
-    let best: Vec<(String, Option<f64>, Option<i32>, Option<f64>, NaiveDate)> = sqlx::query_as(&format!(
-        "SELECT COALESCE(stream_title, ''), avg_viewers::float8, peak_viewers, \
+    let best: Vec<(String, Option<f64>, Option<i32>, Option<f64>, NaiveDate)> =
+        sqlx::query_as(&format!(
+            "SELECT COALESCE(stream_title, ''), avg_viewers::float8, peak_viewers, \
                 ROUND((retention_10m * 100)::numeric, 1)::float8, started_at::date \
            FROM twitch_stream_sessions \
           WHERE LOWER(streamer_login) = $1 AND started_at >= $2 AND ended_at IS NOT NULL{gf} \
           ORDER BY avg_viewers DESC NULLS LAST LIMIT 5"
-    ))
-    .bind(streamer)
-    .bind(since)
-    .fetch_all(pool)
-    .await?;
-    let worst: Vec<(String, Option<f64>, Option<i32>, Option<f64>, NaiveDate)> = sqlx::query_as(&format!(
-        "SELECT COALESCE(stream_title, ''), avg_viewers::float8, peak_viewers, \
+        ))
+        .bind(streamer)
+        .bind(since)
+        .fetch_all(pool)
+        .await?;
+    let worst: Vec<(String, Option<f64>, Option<i32>, Option<f64>, NaiveDate)> =
+        sqlx::query_as(&format!(
+            "SELECT COALESCE(stream_title, ''), avg_viewers::float8, peak_viewers, \
                 ROUND((retention_10m * 100)::numeric, 1)::float8, started_at::date \
            FROM twitch_stream_sessions \
           WHERE LOWER(streamer_login) = $1 AND started_at >= $2 AND ended_at IS NOT NULL{gf} \
           ORDER BY avg_viewers ASC NULLS LAST LIMIT 5"
-    ))
-    .bind(streamer)
-    .bind(since)
-    .fetch_all(pool)
-    .await?;
+        ))
+        .bind(streamer)
+        .bind(since)
+        .fetch_all(pool)
+        .await?;
 
     // 6. Game-Breakdown aus exp_sessions (best-effort; Tabelle evtl. fehlend).
     let game_gf = if game_filter == "deadlock" {
@@ -152,19 +168,20 @@ pub async fn collect_ai_context(
     } else {
         ""
     };
-    let game_rows: Vec<(String, i64, Option<f64>, Option<i32>, Option<f64>)> = sqlx::query_as(&format!(
-        "SELECT COALESCE(game_name, 'Unbekannt'), COUNT(*)::bigint, \
+    let game_rows: Vec<(String, i64, Option<f64>, Option<i32>, Option<f64>)> =
+        sqlx::query_as(&format!(
+            "SELECT COALESCE(game_name, 'Unbekannt'), COUNT(*)::bigint, \
                 ROUND(AVG(avg_viewers)::numeric, 1)::float8, MAX(peak_viewers), \
                 ROUND(AVG(duration_min)::numeric, 1)::float8 \
            FROM exp_sessions \
           WHERE LOWER(streamer) = $1 AND started_at >= $2 AND ended_at IS NOT NULL{game_gf} \
           GROUP BY game_name ORDER BY AVG(avg_viewers) DESC LIMIT 10"
-    ))
-    .bind(streamer)
-    .bind(&since_iso)
-    .fetch_all(pool)
-    .await
-    .unwrap_or_default();
+        ))
+        .bind(streamer)
+        .bind(&since_iso)
+        .fetch_all(pool)
+        .await
+        .unwrap_or_default();
 
     // 7. Wöchentlicher Follower-Trend.
     let trend: Vec<(NaiveDate, i64, Option<i64>)> = sqlx::query_as(&format!(
@@ -180,35 +197,70 @@ pub async fn collect_ai_context(
     .await?;
 
     // 8. Deadlock-spezifische KPIs.
-    let dl: (i64, Option<f64>, Option<f64>, Option<i32>, i64) = sqlx::query_as(
-        "SELECT COUNT(*)::bigint, ROUND((SUM(duration_seconds) / 3600.0)::numeric, 1)::float8, \
-                ROUND(AVG(avg_viewers)::numeric, 1)::float8, MAX(peak_viewers), \
-                COALESCE(SUM(CASE WHEN follower_delta > 0 THEN follower_delta ELSE 0 END), 0)::bigint \
-           FROM twitch_stream_sessions \
-          WHERE LOWER(streamer_login) = $1 AND started_at >= $2 AND ended_at IS NOT NULL \
-            AND COALESCE(had_deadlock_in_session, false)",
+    let dl_row = sqlx::query!(
+        r#"
+        SELECT COUNT(*)::bigint AS "session_count!",
+               ROUND((SUM(duration_seconds) / 3600.0)::numeric, 1)::float8 AS total_hours,
+               ROUND(AVG(avg_viewers)::numeric, 1)::float8 AS avg_viewers,
+               MAX(peak_viewers) AS peak_viewers,
+               COALESCE(SUM(CASE WHEN follower_delta > 0 THEN follower_delta ELSE 0 END), 0)::bigint AS "followers_gained!"
+        FROM twitch_stream_sessions
+        WHERE LOWER(streamer_login) = $1
+          AND started_at >= $2
+          AND ended_at IS NOT NULL
+          AND COALESCE(had_deadlock_in_session, false)
+        "#,
+        streamer,
+        since
     )
-    .bind(streamer)
-    .bind(since)
     .fetch_one(pool)
     .await?;
+    let dl = (
+        dl_row.session_count,
+        dl_row.total_hours,
+        dl_row.avg_viewers,
+        dl_row.peak_viewers,
+        dl_row.followers_gained,
+    );
 
     // 9. Per-Game-Breakdown aus Sessions (alle Kategorien).
-    let game_sessions: Vec<(String, i64, Option<f64>, Option<i32>, Option<f64>, i64, Option<i64>, NaiveDate)> =
-        sqlx::query_as(
-            "SELECT COALESCE(game_name, 'Unbekannt'), COUNT(*)::bigint, \
-                    ROUND(AVG(avg_viewers)::numeric, 1)::float8, MAX(peak_viewers), \
-                    ROUND((SUM(duration_seconds) / 3600.0)::numeric, 1)::float8, \
-                    COALESCE(SUM(CASE WHEN follower_delta > 0 THEN follower_delta ELSE 0 END), 0)::bigint, \
-                    SUM(samples)::bigint, MAX(started_at)::date \
-               FROM twitch_stream_sessions \
-              WHERE LOWER(streamer_login) = $1 AND started_at >= $2 AND ended_at IS NOT NULL \
-              GROUP BY game_name ORDER BY COUNT(*) DESC, AVG(avg_viewers) DESC NULLS LAST LIMIT 15",
+    let game_sessions: Vec<(String, i64, Option<f64>, Option<i32>, Option<f64>, i64, Option<i64>, NaiveDate)> = sqlx::query!(
+        r#"
+        SELECT COALESCE(game_name, 'Unbekannt') AS "game_name!",
+               COUNT(*)::bigint AS "session_count!",
+               ROUND(AVG(avg_viewers)::numeric, 1)::float8 AS avg_viewers,
+               MAX(peak_viewers) AS peak_viewers,
+               ROUND((SUM(duration_seconds) / 3600.0)::numeric, 1)::float8 AS total_hours,
+               COALESCE(SUM(CASE WHEN follower_delta > 0 THEN follower_delta ELSE 0 END), 0)::bigint AS "followers_gained!",
+               SUM(samples)::bigint AS sample_count,
+               MAX(started_at)::date AS "last_started!"
+        FROM twitch_stream_sessions
+        WHERE LOWER(streamer_login) = $1
+          AND started_at >= $2
+          AND ended_at IS NOT NULL
+        GROUP BY game_name
+        ORDER BY COUNT(*) DESC, AVG(avg_viewers) DESC NULLS LAST
+        LIMIT 15
+        "#,
+        streamer,
+        since
+    )
+    .fetch_all(pool)
+    .await?
+    .into_iter()
+    .map(|row| {
+        (
+            row.game_name,
+            row.session_count,
+            row.avg_viewers,
+            row.peak_viewers,
+            row.total_hours,
+            row.followers_gained,
+            row.sample_count,
+            row.last_started,
         )
-        .bind(streamer)
-        .bind(since)
-        .fetch_all(pool)
-        .await?;
+    })
+    .collect();
 
     Ok(json!({
         "summary": {
@@ -299,23 +351,40 @@ pub fn extract_text_response(value: &Value) -> String {
                     Value::String(s) => parts.push(s.clone()),
                     // dict-Block: type==text & text, sonst content (1:1 Python).
                     Value::Object(o) => {
-                        let text = o.get("text").and_then(Value::as_str).filter(|s| !s.is_empty());
+                        let text = o
+                            .get("text")
+                            .and_then(Value::as_str)
+                            .filter(|s| !s.is_empty());
                         if o.get("type").and_then(Value::as_str) == Some("text") {
                             if let Some(t) = text {
                                 parts.push(t.to_string());
                                 continue;
                             }
                         }
-                        if let Some(c) = o.get("content").and_then(Value::as_str).filter(|s| !s.is_empty()) {
+                        if let Some(c) = o
+                            .get("content")
+                            .and_then(Value::as_str)
+                            .filter(|s| !s.is_empty())
+                        {
                             parts.push(c.to_string());
                         }
                     }
                     _ => {}
                 }
             }
-            parts.into_iter().filter(|p| !p.is_empty()).collect::<Vec<_>>().join("\n").trim().to_string()
+            parts
+                .into_iter()
+                .filter(|p| !p.is_empty())
+                .collect::<Vec<_>>()
+                .join("\n")
+                .trim()
+                .to_string()
         }
-        Value::Object(o) => match o.get("text").and_then(Value::as_str).filter(|s| !s.is_empty()) {
+        Value::Object(o) => match o
+            .get("text")
+            .and_then(Value::as_str)
+            .filter(|s| !s.is_empty())
+        {
             Some(t) => t.trim().to_string(),
             None => value.to_string().trim().to_string(),
         },
@@ -398,12 +467,20 @@ pub fn build_ai_analysis_prompt(
 
     // Kategorien-Performance (exp); leer → Hinweis-Objekt.
     let game_section = match ctx.get("gamePerformance").and_then(Value::as_array) {
-        Some(arr) if !arr.is_empty() => serde_json::to_string(&Value::Array(arr.clone())).unwrap_or_else(|_| "[]".to_string()),
-        _ => serde_json::to_string(&json!([{"note": "Keine Kategorie-Daten vorhanden (exp_sessions leer)"}])).unwrap_or_else(|_| "[]".to_string()),
+        Some(arr) if !arr.is_empty() => {
+            serde_json::to_string(&Value::Array(arr.clone())).unwrap_or_else(|_| "[]".to_string())
+        }
+        _ => serde_json::to_string(
+            &json!([{"note": "Keine Kategorie-Daten vorhanden (exp_sessions leer)"}]),
+        )
+        .unwrap_or_else(|_| "[]".to_string()),
     };
 
     // Multi-Game-Zeilen (Deadlock-Gesamt + Per-Game-Breakdown).
-    let dl = ctx.get("deadlockSummary").cloned().unwrap_or_else(|| json!({}));
+    let dl = ctx
+        .get("deadlockSummary")
+        .cloned()
+        .unwrap_or_else(|| json!({}));
     let mut multi_lines = vec![format!(
         "Deadlock (gesamt): {} Sessions | {}h | Ø {} Viewer | Peak {} | +{} Follower",
         fmt_val(dl.get("sessionCount")),
@@ -414,7 +491,11 @@ pub fn build_ai_analysis_prompt(
     )];
     if let Some(gb) = ctx.get("gameBreakdown").and_then(Value::as_array) {
         for g in gb {
-            let quality = if g.get("hasFullData").and_then(Value::as_bool).unwrap_or(false) {
+            let quality = if g
+                .get("hasFullData")
+                .and_then(Value::as_bool)
+                .unwrap_or(false)
+            {
                 ""
             } else {
                 " (Viewer-Daten unvollständig)"
@@ -526,7 +607,10 @@ pub fn parse_ai_analysis_points(raw: &str) -> Vec<Value> {
 
     // Markdown-Code-Fences entfernen.
     if raw.starts_with("```") {
-        let kept: Vec<&str> = raw.lines().filter(|ln| !ln.trim().starts_with("```")).collect();
+        let kept: Vec<&str> = raw
+            .lines()
+            .filter(|ln| !ln.trim().starts_with("```"))
+            .collect();
         raw = kept.join("\n").trim().to_string();
     }
 
@@ -604,14 +688,28 @@ mod tests {
 
     async fn make_pool(schema: &str) -> Option<PgPool> {
         let dsn = std::env::var("TB_TEST_DATABASE_URL").ok()?;
-        let admin = PgPoolOptions::new().max_connections(1).connect(&dsn).await.unwrap();
-        sqlx::query(&format!("DROP SCHEMA IF EXISTS {schema} CASCADE")).execute(&admin).await.unwrap();
-        sqlx::query(&format!("CREATE SCHEMA {schema}")).execute(&admin).await.unwrap();
+        let admin = PgPoolOptions::new()
+            .max_connections(1)
+            .connect(&dsn)
+            .await
+            .unwrap();
+        sqlx::query(&format!("DROP SCHEMA IF EXISTS {schema} CASCADE"))
+            .execute(&admin)
+            .await
+            .unwrap();
+        sqlx::query(&format!("CREATE SCHEMA {schema}"))
+            .execute(&admin)
+            .await
+            .unwrap();
         admin.close().await;
         let opts = PgConnectOptions::from_str(&dsn)
             .unwrap()
             .options([("search_path", schema), ("timezone", "UTC")]);
-        let pool = PgPoolOptions::new().max_connections(2).connect_with(opts).await.unwrap();
+        let pool = PgPoolOptions::new()
+            .max_connections(2)
+            .connect_with(opts)
+            .await
+            .unwrap();
         sqlx::query("CREATE TABLE twitch_stream_sessions (id BIGSERIAL PRIMARY KEY, streamer_login TEXT, started_at TIMESTAMPTZ, ended_at TIMESTAMPTZ, duration_seconds INTEGER, avg_viewers REAL, peak_viewers INTEGER, follower_delta INTEGER, retention_10m REAL, dropoff_pct REAL, unique_chatters INTEGER, stream_title TEXT, had_deadlock_in_session BOOLEAN, game_name TEXT, samples INTEGER)")
             .execute(&pool).await.unwrap();
         Some(pool)
@@ -619,11 +717,20 @@ mod tests {
 
     #[test]
     fn extract_json_array_grundfaelle() {
-        assert_eq!(extract_json_array("[1, 2, 3]").as_deref(), Some("[1, 2, 3]"));
+        assert_eq!(
+            extract_json_array("[1, 2, 3]").as_deref(),
+            Some("[1, 2, 3]")
+        );
         // Verschachtelt.
-        assert_eq!(extract_json_array("pre [a, [b]] post").as_deref(), Some("[a, [b]]"));
+        assert_eq!(
+            extract_json_array("pre [a, [b]] post").as_deref(),
+            Some("[a, [b]]")
+        );
         // `]` im String wird übersprungen.
-        assert_eq!(extract_json_array(r#"["has ] bracket"]"#).as_deref(), Some(r#"["has ] bracket"]"#));
+        assert_eq!(
+            extract_json_array(r#"["has ] bracket"]"#).as_deref(),
+            Some(r#"["has ] bracket"]"#)
+        );
         // Abgeschnitten / keins.
         assert_eq!(extract_json_array("[1, 2"), None);
         assert_eq!(extract_json_array("kein array"), None);
@@ -631,14 +738,20 @@ mod tests {
 
     #[test]
     fn parse_points_direkt_und_fence() {
-        assert_eq!(parse_ai_analysis_points(r#"[{"a":1}]"#), vec![json!({"a": 1})]);
+        assert_eq!(
+            parse_ai_analysis_points(r#"[{"a":1}]"#),
+            vec![json!({"a": 1})]
+        );
         // Markdown-Fence.
         assert_eq!(
             parse_ai_analysis_points("```json\n[{\"a\":1}]\n```"),
             vec![json!({"a": 1})]
         );
         // Präambel/Trailing → Stufe 2.
-        assert_eq!(parse_ai_analysis_points(r#"Hier: [{"a":1}] fertig"#), vec![json!({"a": 1})]);
+        assert_eq!(
+            parse_ai_analysis_points(r#"Hier: [{"a":1}] fertig"#),
+            vec![json!({"a": 1})]
+        );
     }
 
     #[test]
@@ -658,7 +771,10 @@ mod tests {
     fn modellwahl_und_name() {
         // Konsolidiertes analytics-Flag → Opus.
         assert_eq!(model_for_entitlements(&["analytics"]), Some("opus"));
-        assert_eq!(model_for_entitlements(&["analytics", "chat.lurker_tax"]), Some("opus"));
+        assert_eq!(
+            model_for_entitlements(&["analytics", "chat.lurker_tax"]),
+            Some("opus")
+        );
         // Ohne Flag → kein KI-Zugang.
         assert_eq!(model_for_entitlements(&["chat.lurker_tax"]), None);
         assert_eq!(model_for_entitlements(&[]), None);
@@ -690,7 +806,9 @@ mod tests {
 
     #[tokio::test]
     async fn collect_ai_context_aggregiert() {
-        let Some(pool) = make_pool("t_ai_ctx").await else { return };
+        let Some(pool) = make_pool("t_ai_ctx").await else {
+            return;
+        };
         sqlx::query(
             "INSERT INTO twitch_stream_sessions (streamer_login, started_at, ended_at, duration_seconds, avg_viewers, peak_viewers, follower_delta, retention_10m, dropoff_pct, unique_chatters, stream_title, had_deadlock_in_session, game_name, samples) VALUES \
             ('nani', TIMESTAMPTZ '2026-06-10 14:00+00', TIMESTAMPTZ '2026-06-10 16:00+00', 7200, 50, 100, 20, 0.8, 0.1, 10, 'Deadlock Grind', TRUE, 'Deadlock', 5), \
@@ -701,7 +819,9 @@ mod tests {
         .unwrap();
 
         let since = Utc::now() - chrono::Duration::days(365);
-        let v = collect_ai_context(&pool, "nani", since, "all").await.unwrap();
+        let v = collect_ai_context(&pool, "nani", since, "all")
+            .await
+            .unwrap();
 
         // Summary über beide Sessions.
         assert_eq!(v["summary"]["streamCount"], 2);
@@ -738,7 +858,9 @@ mod tests {
 
     #[tokio::test]
     async fn collect_ai_context_deadlock_filter() {
-        let Some(pool) = make_pool("t_ai_ctx_dl").await else { return };
+        let Some(pool) = make_pool("t_ai_ctx_dl").await else {
+            return;
+        };
         sqlx::query(
             "INSERT INTO twitch_stream_sessions (streamer_login, started_at, ended_at, duration_seconds, avg_viewers, peak_viewers, follower_delta, retention_10m, dropoff_pct, unique_chatters, stream_title, had_deadlock_in_session, game_name, samples) VALUES \
             ('nani', NOW()-INTERVAL '1 day', NOW(), 7200, 50, 100, 20, 0.8, 0.1, 10, 'A', TRUE, 'Deadlock', 5), \
@@ -750,7 +872,9 @@ mod tests {
 
         let since = Utc::now() - chrono::Duration::days(365);
         // game_filter=deadlock → nur had_deadlock_in_session-Sessions in summary.
-        let v = collect_ai_context(&pool, "nani", since, "deadlock").await.unwrap();
+        let v = collect_ai_context(&pool, "nani", since, "deadlock")
+            .await
+            .unwrap();
         assert_eq!(v["summary"]["streamCount"], 1);
         assert_eq!(v["summary"]["avgViewers"], 50.0);
     }
@@ -777,7 +901,9 @@ mod tests {
         // Leere gamePerformance → Hinweis-Objekt.
         assert!(p.contains("Keine Kategorie-Daten vorhanden (exp_sessions leer)"));
         // Multi-Game-Zeilen + Qualitätshinweis bei hasFullData=false.
-        assert!(p.contains("Deadlock (gesamt): 1 Sessions | 2.0h | Ø 50.0 Viewer | Peak 100 | +20 Follower"));
+        assert!(p.contains(
+            "Deadlock (gesamt): 1 Sessions | 2.0h | Ø 50.0 Viewer | Peak 100 | +20 Follower"
+        ));
         assert!(p.contains("Just Chatting: 1 Sessions | 1.0h | Ø 30.0 Viewer | Peak 60 | +5 Follower | zuletzt 2026-06-11 (Viewer-Daten unvollständig)"));
         // Statischer Abschluss + kein user_context-Block.
         assert!(p.contains("Antworte NUR als JSON Array mit exakt 10 Objekten"));

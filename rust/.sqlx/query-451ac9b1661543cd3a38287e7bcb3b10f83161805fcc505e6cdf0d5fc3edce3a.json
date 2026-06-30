@@ -1,0 +1,41 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n        SELECT\n            status,\n            COALESCE(\n                admin_archived_at,\n                CASE WHEN status = 'archived' THEN departnered_at ELSE NULL END\n            )::text AS archived_at,\n            manual_partner_opt_out,\n            technical_pause_reason\n        FROM twitch_partners\n        WHERE (COALESCE($1, '') != '' AND LOWER(twitch_login) = LOWER($1))\n           OR (COALESCE($2, '') != '' AND twitch_user_id = $2)\n        ORDER BY\n            CASE\n                WHEN COALESCE(status, '') = 'active'      THEN 0\n                WHEN COALESCE(status, '') = 'archived'    THEN 1\n                WHEN COALESCE(status, '') = 'departnered' THEN 2\n                ELSE 3\n            END,\n            COALESCE(departnered_at, admin_archived_at, partnered_at) DESC\n        LIMIT 1\n        ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "status",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 1,
+        "name": "archived_at",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 2,
+        "name": "manual_partner_opt_out",
+        "type_info": "Int4"
+      },
+      {
+        "ordinal": 3,
+        "name": "technical_pause_reason",
+        "type_info": "Text"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Text",
+        "Text"
+      ]
+    },
+    "nullable": [
+      false,
+      null,
+      true,
+      true
+    ]
+  },
+  "hash": "451ac9b1661543cd3a38287e7bcb3b10f83161805fcc505e6cdf0d5fc3edce3a"
+}

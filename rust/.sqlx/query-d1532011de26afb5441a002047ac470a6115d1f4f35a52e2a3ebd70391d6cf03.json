@@ -1,0 +1,23 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n        INSERT INTO twitch_link_clicks (\n            clicked_at,\n            streamer_login,\n            tracking_token,\n            discord_user_id,\n            discord_username,\n            guild_id,\n            channel_id,\n            message_id,\n            ref_code,\n            source_hint\n        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)\n        ",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Timestamptz",
+        "Text",
+        "Text",
+        "Text",
+        "Text",
+        "Text",
+        "Text",
+        "Text",
+        "Text",
+        "Text"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "d1532011de26afb5441a002047ac470a6115d1f4f35a52e2a3ebd70391d6cf03"
+}

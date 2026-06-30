@@ -1,0 +1,48 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n        SELECT COUNT(*)::BIGINT                                                AS \"total_sessions?\",\n               AVG(avg_viewers)::FLOAT8                                        AS avg_viewers,\n               MAX(peak_viewers)::BIGINT                                       AS peak_viewers,\n               COALESCE(SUM(duration_seconds / 3600.0)::FLOAT8, 0.0)          AS \"total_duration_hours?\",\n               COALESCE(SUM(follower_delta)::BIGINT, 0)                        AS \"total_follower_delta?\"\n          FROM twitch_stream_sessions\n         WHERE ($1::INT IS NULL OR EXTRACT(HOUR FROM started_at AT TIME ZONE 'UTC') >= $1)\n           AND ($2::INT IS NULL OR EXTRACT(HOUR FROM started_at AT TIME ZONE 'UTC') <= $2)\n           AND ($3::TEXT IS NULL OR LOWER(streamer_login) = LOWER($3))\n        ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "total_sessions?",
+        "type_info": "Int8"
+      },
+      {
+        "ordinal": 1,
+        "name": "avg_viewers",
+        "type_info": "Float8"
+      },
+      {
+        "ordinal": 2,
+        "name": "peak_viewers",
+        "type_info": "Int8"
+      },
+      {
+        "ordinal": 3,
+        "name": "total_duration_hours?",
+        "type_info": "Float8"
+      },
+      {
+        "ordinal": 4,
+        "name": "total_follower_delta?",
+        "type_info": "Int8"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Int4",
+        "Int4",
+        "Text"
+      ]
+    },
+    "nullable": [
+      null,
+      null,
+      null,
+      null,
+      null
+    ]
+  },
+  "hash": "6f247ec4bc574b615b840d3c41d5ff5b3794f3963b8dddf026253a11b0d1150f"
+}

@@ -1,0 +1,76 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n        SELECT s.streamer_login AS \"streamer_login!\",\n               COUNT(*)::bigint AS \"session_count!\",\n               AVG(s.avg_viewers)::float8 AS avg_viewers,\n               MAX(s.peak_viewers) AS max_peak,\n               AVG(s.duration_seconds / 3600.0)::float8 AS avg_hours,\n               AVG(s.unique_chatters)::float8 AS avg_chatters,\n               AVG(s.retention_5m)::float8 AS retention_5m,\n               SUM(s.duration_seconds / 3600.0)::float8 AS total_hours,\n               SUM(CASE WHEN s.follower_delta > 0 THEN s.follower_delta ELSE 0 END)::bigint AS \"follows_gained!\",\n               COUNT(DISTINCT s.stream_title)::bigint AS \"unique_titles!\"\n        FROM twitch_stream_sessions s\n        WHERE s.started_at >= $1\n          AND s.duration_seconds > 300\n          AND s.ended_at IS NOT NULL\n        GROUP BY s.streamer_login\n        HAVING COUNT(*) >= 3\n        ORDER BY 3 DESC\n        ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "streamer_login!",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 1,
+        "name": "session_count!",
+        "type_info": "Int8"
+      },
+      {
+        "ordinal": 2,
+        "name": "avg_viewers",
+        "type_info": "Float8"
+      },
+      {
+        "ordinal": 3,
+        "name": "max_peak",
+        "type_info": "Int4"
+      },
+      {
+        "ordinal": 4,
+        "name": "avg_hours",
+        "type_info": "Float8"
+      },
+      {
+        "ordinal": 5,
+        "name": "avg_chatters",
+        "type_info": "Float8"
+      },
+      {
+        "ordinal": 6,
+        "name": "retention_5m",
+        "type_info": "Float8"
+      },
+      {
+        "ordinal": 7,
+        "name": "total_hours",
+        "type_info": "Float8"
+      },
+      {
+        "ordinal": 8,
+        "name": "follows_gained!",
+        "type_info": "Int8"
+      },
+      {
+        "ordinal": 9,
+        "name": "unique_titles!",
+        "type_info": "Int8"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Timestamptz"
+      ]
+    },
+    "nullable": [
+      false,
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      null
+    ]
+  },
+  "hash": "13c28f63c6caaeea47933c39404604856dd69db3577dd61eaa906e5e59aa05ae"
+}

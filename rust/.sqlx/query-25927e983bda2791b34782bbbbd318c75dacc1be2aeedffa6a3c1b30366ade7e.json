@@ -1,0 +1,53 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n        SELECT\n            COALESCE(twitch_user_id, '') AS \"twitch_user_id?\",\n            COALESCE(twitch_login, '')   AS \"twitch_login?\",\n            manual_plan_id,\n            manual_plan_expires_at::text,\n            COALESCE(manual_plan_notes, '')      AS \"manual_plan_notes?\",\n            manual_plan_updated_at::text         AS manual_plan_updated_at\n        FROM streamer_plans\n        WHERE LOWER(COALESCE(twitch_login, '')) = LOWER($1)\n           OR ($2 <> '' AND TRIM(COALESCE(twitch_user_id, '')) = $2)\n        ORDER BY\n            CASE WHEN $2 <> '' AND TRIM(COALESCE(twitch_user_id, '')) = $2 THEN 0 ELSE 1 END,\n            manual_plan_updated_at DESC NULLS LAST\n        LIMIT 1\n        ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "twitch_user_id?",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 1,
+        "name": "twitch_login?",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 2,
+        "name": "manual_plan_id",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 3,
+        "name": "manual_plan_expires_at",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 4,
+        "name": "manual_plan_notes?",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 5,
+        "name": "manual_plan_updated_at",
+        "type_info": "Text"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Text",
+        "Text"
+      ]
+    },
+    "nullable": [
+      null,
+      null,
+      true,
+      true,
+      null,
+      true
+    ]
+  },
+  "hash": "25927e983bda2791b34782bbbbd318c75dacc1be2aeedffa6a3c1b30366ade7e"
+}

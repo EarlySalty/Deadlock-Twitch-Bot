@@ -1,0 +1,83 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n            SELECT from_broadcaster_id AS \"from_broadcaster_id?\", from_broadcaster_login AS \"from_broadcaster_login?\",\n                   to_broadcaster_id AS \"to_broadcaster_id?\", to_broadcaster_login AS \"to_broadcaster_login?\",\n                   viewer_count, stream_duration_sec, executed_at::text AS executed_at,\n                   success, error_message,\n                   target_stream_started_at::text AS target_stream_started_at,\n                   candidates_count\n            FROM twitch_raid_history\n            WHERE LOWER(from_broadcaster_login) = $1\n            ORDER BY executed_at DESC\n            LIMIT $2\n            ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "from_broadcaster_id?",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 1,
+        "name": "from_broadcaster_login?",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 2,
+        "name": "to_broadcaster_id?",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 3,
+        "name": "to_broadcaster_login?",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 4,
+        "name": "viewer_count",
+        "type_info": "Int4"
+      },
+      {
+        "ordinal": 5,
+        "name": "stream_duration_sec",
+        "type_info": "Int4"
+      },
+      {
+        "ordinal": 6,
+        "name": "executed_at",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 7,
+        "name": "success",
+        "type_info": "Bool"
+      },
+      {
+        "ordinal": 8,
+        "name": "error_message",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 9,
+        "name": "target_stream_started_at",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 10,
+        "name": "candidates_count",
+        "type_info": "Int4"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Text",
+        "Int8"
+      ]
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      false,
+      true,
+      true,
+      null,
+      true,
+      true,
+      null,
+      true
+    ]
+  },
+  "hash": "d5a191a6ead64f4d65913ee29bd6ca69d7d260437ad0ab66017d6956224b513e"
+}

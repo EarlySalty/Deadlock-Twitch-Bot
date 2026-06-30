@@ -42,13 +42,14 @@ pub struct RecentBansResult {
 /// zuletzt etwas gebannt wurde; die alte `DISTINCT twitch_user_id`-Zählung über
 /// `twitch_ban_events` lieferte daher irreführend kleine Werte.
 pub async fn recent_bans(pool: &PgPool) -> Result<RecentBansResult, sqlx::Error> {
-    let bans: Vec<BanRow> = sqlx::query_as(
+    let bans: Vec<BanRow> = sqlx::query_as!(
+        BanRow,
         r#"
         SELECT
-            target_login,
+            COALESCE(target_login, '') AS "target_login!",
             moderator_login,
             reason,
-            received_at::text AS received_at
+            received_at::text AS "received_at?"
         FROM twitch_ban_events
         WHERE event_type = 'ban'
         ORDER BY received_at DESC
@@ -58,11 +59,11 @@ pub async fn recent_bans(pool: &PgPool) -> Result<RecentBansResult, sqlx::Error>
     .fetch_all(pool)
     .await?;
 
-    let counts: (Option<i64>, Option<i64>) = sqlx::query_as(
+    let counts = sqlx::query!(
         r#"
         SELECT
-            COUNT(*) FILTER (WHERE received_at >= CURRENT_DATE)               AS today,
-            COUNT(*) FILTER (WHERE received_at >= NOW() - INTERVAL '30 days') AS total_30d
+            COUNT(*) FILTER (WHERE received_at >= CURRENT_DATE)               AS "today!",
+            COUNT(*) FILTER (WHERE received_at >= NOW() - INTERVAL '30 days') AS "total_30d!"
         FROM twitch_ban_events
         WHERE event_type = 'ban'
           AND received_at >= NOW() - INTERVAL '30 days'
@@ -72,17 +73,18 @@ pub async fn recent_bans(pool: &PgPool) -> Result<RecentBansResult, sqlx::Error>
     .await?;
 
     // Geschützte Kanäle = aktive Partner (gleiche Quelle wie der Markt-Anteil).
-    let channels_protected: i64 =
-        sqlx::query_scalar("SELECT COUNT(*) FROM twitch_partners_all_state WHERE is_partner_active = 1")
-            .fetch_one(pool)
-            .await
-            .unwrap_or(0);
+    let channels_protected: i64 = sqlx::query_scalar!(
+        r#"SELECT COUNT(*) AS "count!" FROM twitch_partners_all_state WHERE is_partner_active = 1"#
+    )
+    .fetch_one(pool)
+    .await
+    .unwrap_or(0);
 
     Ok(RecentBansResult {
         bans,
         stats: BanStats {
-            today: counts.0.unwrap_or(0),
-            total_30d: counts.1.unwrap_or(0),
+            today: counts.today,
+            total_30d: counts.total_30d,
             channels_protected,
         },
     })

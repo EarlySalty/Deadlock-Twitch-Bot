@@ -1,0 +1,35 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n        SELECT CASE\n                 WHEN total_sessions = 1 THEN 'oneTimer'\n                 WHEN total_sessions BETWEEN 2 AND 3 THEN 'casual'\n                 WHEN total_sessions BETWEEN 4 AND 10 THEN 'regular'\n                 ELSE 'loyal'\n               END AS \"bucket!\",\n               COUNT(*)::bigint AS \"count!\",\n               SUM(total_messages)::bigint AS total_messages\n        FROM twitch_chatter_rollup\n        WHERE streamer_login = $1\n          AND last_seen_at >= $2\n        GROUP BY 1\n        ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "bucket!",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 1,
+        "name": "count!",
+        "type_info": "Int8"
+      },
+      {
+        "ordinal": 2,
+        "name": "total_messages",
+        "type_info": "Int8"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Text",
+        "Timestamptz"
+      ]
+    },
+    "nullable": [
+      null,
+      null,
+      null
+    ]
+  },
+  "hash": "5b2fedf81168a4f745d3a04b390a11b001cd66d1f7f53c95fa55ce94605c3a55"
+}

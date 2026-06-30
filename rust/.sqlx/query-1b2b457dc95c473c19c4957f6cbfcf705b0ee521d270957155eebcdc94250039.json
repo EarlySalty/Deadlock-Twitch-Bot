@@ -1,0 +1,88 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT\n               stripe_customer_id, customer_reference, status AS \"status?\", plan_id, cycle_months AS \"cycle_months?\",\n               quantity AS \"quantity?\", current_period_start, current_period_end, cancel_at_period_end AS \"cancel_at_period_end?\",\n               canceled_at, ended_at, last_event_id\n           FROM twitch_billing_subscriptions\n           WHERE stripe_subscription_id = $1",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "stripe_customer_id",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 1,
+        "name": "customer_reference",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 2,
+        "name": "status?",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 3,
+        "name": "plan_id",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 4,
+        "name": "cycle_months?",
+        "type_info": "Int4"
+      },
+      {
+        "ordinal": 5,
+        "name": "quantity?",
+        "type_info": "Int4"
+      },
+      {
+        "ordinal": 6,
+        "name": "current_period_start",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 7,
+        "name": "current_period_end",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 8,
+        "name": "cancel_at_period_end?",
+        "type_info": "Int4"
+      },
+      {
+        "ordinal": 9,
+        "name": "canceled_at",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 10,
+        "name": "ended_at",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 11,
+        "name": "last_event_id",
+        "type_info": "Text"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Text"
+      ]
+    },
+    "nullable": [
+      true,
+      true,
+      false,
+      true,
+      false,
+      false,
+      true,
+      true,
+      false,
+      true,
+      true,
+      true
+    ]
+  },
+  "hash": "1b2b457dc95c473c19c4957f6cbfcf705b0ee521d270957155eebcdc94250039"
+}

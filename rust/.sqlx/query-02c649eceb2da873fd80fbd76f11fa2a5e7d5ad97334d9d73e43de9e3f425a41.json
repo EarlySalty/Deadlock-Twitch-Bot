@@ -1,0 +1,184 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT id::int8 AS \"id!\", streamer_login AS \"streamer_login?\", stream_id::text AS \"stream_id?\", started_at::text AS \"started_at?\", ended_at::text AS ended_at, duration_seconds::int8 AS duration_seconds, start_viewers::int8 AS start_viewers, peak_viewers::int8 AS peak_viewers, end_viewers::int8 AS end_viewers, avg_viewers::float8 AS avg_viewers, samples::int8 AS samples, retention_5m::float8 AS retention_5m, retention_10m::float8 AS retention_10m, retention_20m::float8 AS retention_20m, dropoff_pct::float8 AS dropoff_pct, dropoff_label, unique_chatters::int8 AS unique_chatters, first_time_chatters::int8 AS first_time_chatters, returning_chatters::int8 AS returning_chatters, followers_start::int8 AS followers_start, followers_end::int8 AS followers_end, follower_delta::int8 AS follower_delta, stream_title, language, is_mature::bool AS is_mature, tags, had_deadlock_in_session::bool AS had_deadlock_in_session, game_name FROM twitch_stream_sessions WHERE id = $1",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id!",
+        "type_info": "Int8"
+      },
+      {
+        "ordinal": 1,
+        "name": "streamer_login?",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 2,
+        "name": "stream_id?",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 3,
+        "name": "started_at?",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 4,
+        "name": "ended_at",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 5,
+        "name": "duration_seconds",
+        "type_info": "Int8"
+      },
+      {
+        "ordinal": 6,
+        "name": "start_viewers",
+        "type_info": "Int8"
+      },
+      {
+        "ordinal": 7,
+        "name": "peak_viewers",
+        "type_info": "Int8"
+      },
+      {
+        "ordinal": 8,
+        "name": "end_viewers",
+        "type_info": "Int8"
+      },
+      {
+        "ordinal": 9,
+        "name": "avg_viewers",
+        "type_info": "Float8"
+      },
+      {
+        "ordinal": 10,
+        "name": "samples",
+        "type_info": "Int8"
+      },
+      {
+        "ordinal": 11,
+        "name": "retention_5m",
+        "type_info": "Float8"
+      },
+      {
+        "ordinal": 12,
+        "name": "retention_10m",
+        "type_info": "Float8"
+      },
+      {
+        "ordinal": 13,
+        "name": "retention_20m",
+        "type_info": "Float8"
+      },
+      {
+        "ordinal": 14,
+        "name": "dropoff_pct",
+        "type_info": "Float8"
+      },
+      {
+        "ordinal": 15,
+        "name": "dropoff_label",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 16,
+        "name": "unique_chatters",
+        "type_info": "Int8"
+      },
+      {
+        "ordinal": 17,
+        "name": "first_time_chatters",
+        "type_info": "Int8"
+      },
+      {
+        "ordinal": 18,
+        "name": "returning_chatters",
+        "type_info": "Int8"
+      },
+      {
+        "ordinal": 19,
+        "name": "followers_start",
+        "type_info": "Int8"
+      },
+      {
+        "ordinal": 20,
+        "name": "followers_end",
+        "type_info": "Int8"
+      },
+      {
+        "ordinal": 21,
+        "name": "follower_delta",
+        "type_info": "Int8"
+      },
+      {
+        "ordinal": 22,
+        "name": "stream_title",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 23,
+        "name": "language",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 24,
+        "name": "is_mature",
+        "type_info": "Bool"
+      },
+      {
+        "ordinal": 25,
+        "name": "tags",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 26,
+        "name": "had_deadlock_in_session",
+        "type_info": "Bool"
+      },
+      {
+        "ordinal": 27,
+        "name": "game_name",
+        "type_info": "Text"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Int8"
+      ]
+    },
+    "nullable": [
+      false,
+      false,
+      true,
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      true,
+      null,
+      true,
+      true,
+      true,
+      true,
+      true,
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      true,
+      true,
+      true,
+      true,
+      true,
+      true
+    ]
+  },
+  "hash": "02c649eceb2da873fd80fbd76f11fa2a5e7d5ad97334d9d73e43de9e3f425a41"
+}

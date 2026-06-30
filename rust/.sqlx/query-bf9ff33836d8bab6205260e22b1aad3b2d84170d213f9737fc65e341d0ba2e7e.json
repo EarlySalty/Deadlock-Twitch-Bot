@@ -1,0 +1,32 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n        SELECT s.twitch_login AS \"twitch_login!\",\n               COALESCE(NULLIF(s.twitch_user_id, ''), i.twitch_user_id) AS twitch_user_id,\n               CASE WHEN NOT EXISTS (\n                    SELECT 1 FROM twitch_partners p\n                    WHERE p.twitch_user_id = s.twitch_user_id\n                       OR LOWER(p.twitch_login) = LOWER(s.twitch_login)\n               ) THEN 1 ELSE 0 END                                      AS \"is_monitored_only!\"\n          FROM twitch_streamers s\n         INNER JOIN twitch_partners tp\n            ON tp.twitch_login = s.twitch_login\n           AND tp.departnered_at IS NULL\n           AND tp.admin_archived_at IS NULL\n          LEFT JOIN twitch_streamer_identities i\n            ON i.twitch_user_id = s.twitch_user_id\n         WHERE (i.discord_user_id IS NULL OR i.discord_user_id = '')\n         ORDER BY s.twitch_login\n        ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "twitch_login!",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 1,
+        "name": "twitch_user_id",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 2,
+        "name": "is_monitored_only!",
+        "type_info": "Int4"
+      }
+    ],
+    "parameters": {
+      "Left": []
+    },
+    "nullable": [
+      false,
+      null,
+      null
+    ]
+  },
+  "hash": "bf9ff33836d8bab6205260e22b1aad3b2d84170d213f9737fc65e341d0ba2e7e"
+}

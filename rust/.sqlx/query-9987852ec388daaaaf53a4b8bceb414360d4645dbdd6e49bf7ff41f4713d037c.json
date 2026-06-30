@@ -1,0 +1,28 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n        SELECT s.streamer_login AS \"streamer_login!\",\n               (SUM(CASE WHEN s.follower_delta > 0 THEN s.follower_delta ELSE 0 END) / NULLIF(SUM(s.duration_seconds / 3600.0), 0) * 10.0)::float8 AS growth\n        FROM twitch_stream_sessions s\n        WHERE s.started_at >= $1\n          AND s.duration_seconds > 300\n        GROUP BY s.streamer_login\n        HAVING SUM(s.duration_seconds) / 3600.0 > 1\n        ORDER BY 2 DESC\n        ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "streamer_login!",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 1,
+        "name": "growth",
+        "type_info": "Float8"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Timestamptz"
+      ]
+    },
+    "nullable": [
+      false,
+      null
+    ]
+  },
+  "hash": "9987852ec388daaaaf53a4b8bceb414360d4645dbdd6e49bf7ff41f4713d037c"
+}

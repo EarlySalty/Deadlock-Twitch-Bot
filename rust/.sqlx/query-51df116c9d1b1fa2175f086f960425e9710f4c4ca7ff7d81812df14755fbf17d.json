@@ -1,0 +1,35 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n        SELECT chatter_login AS \"chatter_login!\",\n               COALESCE(total_messages, 0)::bigint AS \"total_messages!\",\n               COALESCE(total_sessions, 0)::bigint AS \"total_sessions!\"\n        FROM twitch_chatter_rollup\n        WHERE streamer_login = $1\n          AND last_seen_at >= $2\n        ORDER BY total_messages DESC\n        LIMIT 15\n        ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "chatter_login!",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 1,
+        "name": "total_messages!",
+        "type_info": "Int8"
+      },
+      {
+        "ordinal": 2,
+        "name": "total_sessions!",
+        "type_info": "Int8"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Text",
+        "Timestamptz"
+      ]
+    },
+    "nullable": [
+      false,
+      null,
+      null
+    ]
+  },
+  "hash": "51df116c9d1b1fa2175f086f960425e9710f4c4ca7ff7d81812df14755fbf17d"
+}

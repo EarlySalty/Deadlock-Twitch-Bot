@@ -1,0 +1,15 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n                UPDATE twitch_streamer_identities\n                SET discord_user_id = NULL,\n                    discord_display_name = NULL,\n                    is_on_discord = 0,\n                    updated_at = NOW()\n                WHERE discord_user_id = $1\n                  AND twitch_user_id <> $2\n                ",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Text",
+        "Text"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "25d614f5fa80396d7c5987534fc2a64b30114ef6ba7e96b18bbbdbe703071a65"
+}

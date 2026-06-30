@@ -1,0 +1,34 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT chatter_login, message_ts::text, content FROM twitch_chat_messages WHERE session_id = $1 AND COALESCE(is_command, FALSE) = FALSE AND content IS NOT NULL AND length(content) > 1 ORDER BY message_ts",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "chatter_login",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 1,
+        "name": "message_ts",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 2,
+        "name": "content",
+        "type_info": "Text"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Int8"
+      ]
+    },
+    "nullable": [
+      true,
+      null,
+      true
+    ]
+  },
+  "hash": "ca4cf6ccb3c589d81db42c721dad799a7ea33e5cfdfcc451511b6ed165004f3d"
+}

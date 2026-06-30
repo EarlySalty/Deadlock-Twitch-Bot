@@ -1,0 +1,41 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n        SELECT s.duration_seconds AS \"duration_seconds!\",\n               s.avg_viewers::float8 AS avg_viewers,\n               s.unique_chatters,\n               s.retention_5m::float8 AS retention_5m\n        FROM twitch_stream_sessions s\n        WHERE s.streamer_login = $1\n          AND s.started_at >= $2\n          AND s.duration_seconds > 300\n        ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "duration_seconds!",
+        "type_info": "Int4"
+      },
+      {
+        "ordinal": 1,
+        "name": "avg_viewers",
+        "type_info": "Float8"
+      },
+      {
+        "ordinal": 2,
+        "name": "unique_chatters",
+        "type_info": "Int4"
+      },
+      {
+        "ordinal": 3,
+        "name": "retention_5m",
+        "type_info": "Float8"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Text",
+        "Timestamptz"
+      ]
+    },
+    "nullable": [
+      true,
+      true,
+      true,
+      true
+    ]
+  },
+  "hash": "d43f8818cd4fe7f132528ebac5c55c2a607e657edba1f225ba4a0176a2c29ee0"
+}

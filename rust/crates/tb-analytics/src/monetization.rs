@@ -39,8 +39,12 @@ const POSITION_BUCKETS: [&str; 4] = ["early_0_30m", "mid_30_60m", "late_60_90m",
 const DURATION_BUCKETS: [&str; 4] = ["30s", "60s", "90s", "120s_plus"];
 // Labels für best_ad_time bzw. die position-Empfehlung (unterschiedlicher Wortlaut!).
 const POSITION_LABELS_SLOT: [&str; 4] = ["ersten 30 Min", "Min 30-60", "Min 60-90", "nach Min 90"];
-const POSITION_LABELS_RECO: [&str; 4] =
-    ["in den ersten 30 Min", "zwischen Min 30-60", "zwischen Min 60-90", "nach Min 90"];
+const POSITION_LABELS_RECO: [&str; 4] = [
+    "in den ersten 30 Min",
+    "zwischen Min 30-60",
+    "zwischen Min 60-90",
+    "nach Min 90",
+];
 const DURATION_LABELS: [&str; 4] = ["30s", "60s", "90s", "120s+"];
 
 fn mean(values: &[f64]) -> f64 {
@@ -107,16 +111,17 @@ async fn compute_drop_analysis(
     streamer: &str,
     cutoff: DateTime<Utc>,
 ) -> Result<DropAnalysis, sqlx::Error> {
-    type AdRow = (i64, i64, DateTime<Utc>, Option<i32>, Option<bool>, Option<DateTime<Utc>>);
-    let ad_rows: Vec<AdRow> = sqlx::query_as(
-        "SELECT a.id::bigint, a.session_id::bigint, a.started_at, a.duration_seconds, a.is_automatic, s.started_at \
+    let ad_rows = sqlx::query!(
+        "SELECT a.id::bigint AS \"id!\", a.session_id::bigint AS \"session_id!\", \
+                a.started_at AS \"started_at!\", a.duration_seconds, a.is_automatic, \
+                s.started_at AS \"session_started_at?\" \
            FROM twitch_ad_break_events a \
            JOIN twitch_stream_sessions s ON s.id = a.session_id \
           WHERE a.started_at >= $1 AND a.session_id IS NOT NULL AND ($2 = '' OR LOWER(s.streamer_login) = $2) \
           ORDER BY a.started_at DESC LIMIT 200",
+        cutoff,
+        streamer
     )
-    .bind(cutoff)
-    .bind(streamer)
     .fetch_all(pool)
     .await?;
 
@@ -126,21 +131,24 @@ async fn compute_drop_analysis(
         let mut seen: HashSet<i64> = HashSet::new();
         let mut session_ids: Vec<i64> = Vec::new();
         for r in &ad_rows {
-            if seen.insert(r.1) {
-                session_ids.push(r.1);
+            if seen.insert(r.session_id) {
+                session_ids.push(r.session_id);
             }
         }
         if !session_ids.is_empty() {
-            let viewer_rows: Vec<(i64, Option<i32>, i32)> = sqlx::query_as(
-                "SELECT session_id::bigint, minutes_from_start, viewer_count \
-                   FROM twitch_session_viewers WHERE session_id = ANY($1) \
+            let viewer_rows = sqlx::query!(
+                "SELECT session_id::bigint AS \"session_id!\", minutes_from_start, viewer_count AS \"viewer_count!\" \
+                   FROM twitch_session_viewers WHERE session_id = ANY($1::bigint[]) \
                   ORDER BY session_id, minutes_from_start",
+                &session_ids
             )
-            .bind(&session_ids)
             .fetch_all(pool)
             .await?;
-            for (sid, minute, vc) in viewer_rows {
-                timeline_map.entry(sid).or_default().push((minute.unwrap_or(0) as f64, vc as f64));
+            for row in viewer_rows {
+                timeline_map.entry(row.session_id).or_default().push((
+                    f64::from(row.minutes_from_start.unwrap_or(0)),
+                    f64::from(row.viewer_count),
+                ));
             }
         }
     }
@@ -154,14 +162,21 @@ async fn compute_drop_analysis(
     let mut recovery_times: Vec<f64> = Vec::new();
     let mut duration_recovery: [Vec<f64>; 4] = Default::default();
 
-    for (_id, session_id, started_at, duration_seconds, is_automatic, session_start) in &ad_rows {
+    for row in &ad_rows {
         // Python `float(ad.duration_seconds or 30)`: None/0 → 30.
-        let duration_seconds =
-            duration_seconds.map(|d| d as f64).filter(|d| *d != 0.0).unwrap_or(30.0);
+        let duration_seconds = row
+            .duration_seconds
+            .map(f64::from)
+            .filter(|d| *d != 0.0)
+            .unwrap_or(30.0);
         // str(None)→fromisoformat-Fehler→continue.
-        let Some(session_start) = session_start else { continue };
-        let minutes_into = (*started_at - *session_start).num_milliseconds() as f64 / 60_000.0;
-        let Some(timeline) = timeline_map.get(session_id) else { continue };
+        let Some(session_start) = row.session_started_at else {
+            continue;
+        };
+        let minutes_into = (row.started_at - session_start).num_milliseconds() as f64 / 60_000.0;
+        let Some(timeline) = timeline_map.get(&row.session_id) else {
+            continue;
+        };
         if timeline.is_empty() {
             continue;
         }
@@ -211,12 +226,12 @@ async fn compute_drop_analysis(
             duration_recovery[di].push(rm);
         }
 
-        let is_auto = is_automatic.unwrap_or(false);
+        let is_auto = row.is_automatic.unwrap_or(false);
         let drop_pct_round = round1(drop);
         worst_ads.push((
             drop_pct_round,
             json!({
-                "started_at": started_at.format("%Y-%m-%d %H:%M").to_string(),
+                "started_at": row.started_at.format("%Y-%m-%d %H:%M").to_string(),
                 "duration_s": duration_seconds as i64,
                 "drop_pct": drop_pct_round,
                 "is_automatic": is_auto,
@@ -243,8 +258,11 @@ async fn compute_drop_analysis(
         }
     }
 
-    let avg_viewer_drop_pct =
-        if drop_pcts.is_empty() { Value::Null } else { json!(round1(mean(&drop_pcts))) };
+    let avg_viewer_drop_pct = if drop_pcts.is_empty() {
+        Value::Null
+    } else {
+        json!(round1(mean(&drop_pcts)))
+    };
 
     // Top-5 nach drop_pct absteigend (stabil → Gleichstand behält Ad-Reihenfolge).
     worst_ads.sort_by(|a, b| b.0.partial_cmp(&a.0).unwrap_or(std::cmp::Ordering::Equal));
@@ -268,8 +286,11 @@ async fn compute_drop_analysis(
         _ => Value::Null,
     };
 
-    let avg_recovery_min =
-        if recovery_times.is_empty() { Value::Null } else { json!(round1(mean(&recovery_times))) };
+    let avg_recovery_min = if recovery_times.is_empty() {
+        Value::Null
+    } else {
+        json!(round1(mean(&recovery_times)))
+    };
 
     let mut recommendations: Vec<String> = Vec::new();
     if let Some(best) = min_mean_index(&duration) {
@@ -326,29 +347,28 @@ pub async fn load_monetization_payload(
     let cutoff: DateTime<Utc> = Utc::now() - Duration::days(days);
 
     // --- Ad-Break-Aggregat (filtert über JOIN s.streamer_login → funktioniert). ---
-    let (total_ads, auto_ads, avg_duration, sessions_with_ads): (i64, i64, Option<f64>, i64) =
-        sqlx::query_as(
-            "SELECT COUNT(*)::bigint, \
-                    COALESCE(SUM(CASE WHEN COALESCE(a.is_automatic, false) THEN 1 ELSE 0 END), 0)::bigint, \
-                    AVG(a.duration_seconds)::float8, \
-                    COUNT(DISTINCT a.session_id)::bigint \
+    let ad_agg = sqlx::query!(
+            "SELECT COUNT(*)::bigint AS \"total_ads!\", \
+                    COALESCE(SUM(CASE WHEN COALESCE(a.is_automatic, false) THEN 1 ELSE 0 END), 0)::bigint AS \"auto_ads!\", \
+                    AVG(a.duration_seconds)::float8 AS avg_duration, \
+                    COUNT(DISTINCT a.session_id)::bigint AS \"sessions_with_ads!\" \
                FROM twitch_ad_break_events a \
                LEFT JOIN twitch_stream_sessions s ON s.id = a.session_id \
               WHERE a.started_at >= $1 AND ($2 = '' OR LOWER(s.streamer_login) = $2)",
+            cutoff,
+            streamer
         )
-        .bind(cutoff)
-        .bind(streamer)
         .fetch_one(pool)
         .await?;
 
     let analysis = compute_drop_analysis(pool, streamer, cutoff).await?;
 
     let ads = json!({
-        "total": total_ads,
-        "auto": auto_ads,
-        "manual": total_ads - auto_ads,
-        "sessions_with_ads": sessions_with_ads,
-        "avg_duration_s": round1(avg_duration.unwrap_or(0.0)),
+        "total": ad_agg.total_ads,
+        "auto": ad_agg.auto_ads,
+        "manual": ad_agg.total_ads - ad_agg.auto_ads,
+        "sessions_with_ads": ad_agg.sessions_with_ads,
+        "avg_duration_s": round1(ad_agg.avg_duration.unwrap_or(0.0)),
         "avg_viewer_drop_pct": analysis.avg_viewer_drop_pct,
         "worst_ads": analysis.worst_ads,
         "position_impact": analysis.position_impact,
@@ -361,23 +381,24 @@ pub async fn load_monetization_payload(
     });
 
     // --- Hype-Train (filtert über JOIN; catch-all → Default wie Pythons try/except). ---
-    let hype_train = match sqlx::query_as::<_, (i64, Option<f64>, Option<i32>, Option<f64>)>(
-        "SELECT COUNT(*)::bigint, AVG(h.level)::float8, MAX(h.level)::int, AVG(h.duration_seconds)::float8 \
+    let hype_train = match sqlx::query!(
+        "SELECT COUNT(*)::bigint AS \"total!\", AVG(h.level)::float8 AS avg_level, \
+                MAX(h.level)::int AS max_level, AVG(h.duration_seconds)::float8 AS avg_dur \
            FROM twitch_hype_train_events h \
            LEFT JOIN twitch_stream_sessions s ON s.id = h.session_id \
           WHERE h.started_at >= $1 AND h.ended_at IS NOT NULL \
             AND ($2 = '' OR LOWER(s.streamer_login) = $2)",
+        cutoff,
+        streamer
     )
-    .bind(cutoff)
-    .bind(streamer)
     .fetch_one(pool)
     .await
     {
-        Ok((total, avg_level, max_level, avg_dur)) => json!({
-            "total": total,
-            "avg_level": round1(avg_level.unwrap_or(0.0)),
-            "max_level": max_level.unwrap_or(0),
-            "avg_duration_s": avg_dur.unwrap_or(0.0).round(),
+        Ok(row) => json!({
+            "total": row.total,
+            "avg_level": round1(row.avg_level.unwrap_or(0.0)),
+            "max_level": row.max_level.unwrap_or(0),
+            "avg_duration_s": row.avg_dur.unwrap_or(0.0).round(),
         }),
         Err(e) => {
             tracing::debug!("Hype train query failed: {e}");
@@ -386,18 +407,18 @@ pub async fn load_monetization_payload(
     };
 
     // --- Bits (Migrations-Fix: Streamer-Filter via session_id-JOIN statt fehlender Spalte). ---
-    let bits = match sqlx::query_as::<_, (Option<i64>, i64)>(
-        "SELECT SUM(b.amount)::bigint, COUNT(*)::bigint \
+    let bits = match sqlx::query!(
+        "SELECT SUM(b.amount)::bigint AS total, COUNT(*)::bigint AS \"events!\" \
            FROM twitch_bits_events b \
            LEFT JOIN twitch_stream_sessions s ON s.id = b.session_id \
           WHERE b.received_at >= $1 AND ($2 = '' OR LOWER(s.streamer_login) = $2)",
+        cutoff,
+        streamer
     )
-    .bind(cutoff)
-    .bind(streamer)
     .fetch_one(pool)
     .await
     {
-        Ok((total, events)) => json!({ "total": total.unwrap_or(0), "cheer_events": events }),
+        Ok(row) => json!({ "total": row.total.unwrap_or(0), "cheer_events": row.events }),
         Err(e) => {
             tracing::debug!("Bits query failed: {e}");
             json!({ "total": 0, "cheer_events": 0 })
@@ -405,18 +426,19 @@ pub async fn load_monetization_payload(
     };
 
     // --- Subs (Migrations-Fix: Streamer-Filter via session_id-JOIN). ---
-    let subs = match sqlx::query_as::<_, (i64, Option<i64>)>(
-        "SELECT COUNT(*)::bigint, SUM(CASE WHEN COALESCE(su.is_gift, false) THEN 1 ELSE 0 END)::bigint \
+    let subs = match sqlx::query!(
+        "SELECT COUNT(*)::bigint AS \"total!\", \
+                SUM(CASE WHEN COALESCE(su.is_gift, false) THEN 1 ELSE 0 END)::bigint AS gifted \
            FROM twitch_subscription_events su \
            LEFT JOIN twitch_stream_sessions s ON s.id = su.session_id \
           WHERE su.received_at >= $1 AND ($2 = '' OR LOWER(s.streamer_login) = $2)",
+        cutoff,
+        streamer
     )
-    .bind(cutoff)
-    .bind(streamer)
     .fetch_one(pool)
     .await
     {
-        Ok((total, gifted)) => json!({ "total_events": total, "gifted": gifted.unwrap_or(0) }),
+        Ok(row) => json!({ "total_events": row.total, "gifted": row.gifted.unwrap_or(0) }),
         Err(e) => {
             tracing::debug!("Subs query failed: {e}");
             json!({ "total_events": 0, "gifted": 0 })
@@ -440,12 +462,28 @@ mod tests {
 
     async fn make_pool(schema: &str) -> Option<PgPool> {
         let dsn = std::env::var("TB_TEST_DATABASE_URL").ok()?;
-        let admin = PgPoolOptions::new().max_connections(1).connect(&dsn).await.unwrap();
-        sqlx::query(&format!("DROP SCHEMA IF EXISTS {schema} CASCADE")).execute(&admin).await.unwrap();
-        sqlx::query(&format!("CREATE SCHEMA {schema}")).execute(&admin).await.unwrap();
+        let admin = PgPoolOptions::new()
+            .max_connections(1)
+            .connect(&dsn)
+            .await
+            .unwrap();
+        sqlx::query(&format!("DROP SCHEMA IF EXISTS {schema} CASCADE"))
+            .execute(&admin)
+            .await
+            .unwrap();
+        sqlx::query(&format!("CREATE SCHEMA {schema}"))
+            .execute(&admin)
+            .await
+            .unwrap();
         admin.close().await;
-        let opts = PgConnectOptions::from_str(&dsn).unwrap().options([("search_path", schema)]);
-        let pool = PgPoolOptions::new().max_connections(2).connect_with(opts).await.unwrap();
+        let opts = PgConnectOptions::from_str(&dsn)
+            .unwrap()
+            .options([("search_path", schema)]);
+        let pool = PgPoolOptions::new()
+            .max_connections(2)
+            .connect_with(opts)
+            .await
+            .unwrap();
         sqlx::query("CREATE TABLE twitch_stream_sessions (id BIGSERIAL PRIMARY KEY, streamer_login TEXT, started_at TIMESTAMPTZ)")
             .execute(&pool).await.unwrap();
         sqlx::query("CREATE TABLE twitch_ad_break_events (id BIGSERIAL PRIMARY KEY, session_id BIGINT, duration_seconds INTEGER, is_automatic BOOLEAN DEFAULT FALSE, started_at TIMESTAMPTZ)")
@@ -464,7 +502,9 @@ mod tests {
 
     #[tokio::test]
     async fn ads_aggregat_und_graceful_defaults() {
-        let Some(pool) = make_pool("t_mon").await else { return };
+        let Some(pool) = make_pool("t_mon").await else {
+            return;
+        };
         sqlx::query("INSERT INTO twitch_stream_sessions (streamer_login, started_at) VALUES ('nani', NOW() - INTERVAL '2 hours')")
             .execute(&pool).await.unwrap();
         // 3 Ads: 2 auto (60s/60s), 1 manuell (30s).
@@ -479,7 +519,7 @@ mod tests {
         assert_eq!(v["ads"]["manual"], 1);
         assert_eq!(v["ads"]["sessions_with_ads"], 1);
         assert_eq!(v["ads"]["avg_duration_s"], 50.0); // (60+60+30)/3
-        // Leere Drop-Strukturen (Teil 1).
+                                                      // Leere Drop-Strukturen (Teil 1).
         assert!(v["ads"]["avg_viewer_drop_pct"].is_null());
         assert_eq!(v["ads"]["worst_ads"], json!([]));
         assert_eq!(v["ads"]["position_impact"]["early_0_30m"]["count"], 0);
@@ -490,7 +530,7 @@ mod tests {
         assert_eq!(v["hype_train"]["avg_level"], 4.0); // (3+5)/2
         assert_eq!(v["hype_train"]["max_level"], 5);
         assert_eq!(v["hype_train"]["avg_duration_s"], 450.0); // (300+600)/2
-        // keine bits/subs-Zeilen → 0.
+                                                              // keine bits/subs-Zeilen → 0.
         assert_eq!(v["bits"], json!({ "total": 0, "cheer_events": 0 }));
         assert_eq!(v["subs"], json!({ "total_events": 0, "gifted": 0 }));
         assert_eq!(v["window_days"], 30);
@@ -498,7 +538,9 @@ mod tests {
 
     #[tokio::test]
     async fn bits_subs_zaehlen_via_session() {
-        let Some(pool) = make_pool("t_mon_bitssubs").await else { return };
+        let Some(pool) = make_pool("t_mon_bitssubs").await else {
+            return;
+        };
         // Migrations-Fix: Filter läuft über session_id → s.streamer_login (wie ads/hype).
         sqlx::query("INSERT INTO twitch_stream_sessions (id, streamer_login, started_at) VALUES (1,'nani',NOW()-INTERVAL '2 hours'),(2,'other',NOW()-INTERVAL '2 hours')")
             .execute(&pool).await.unwrap();
@@ -521,19 +563,31 @@ mod tests {
 
     #[tokio::test]
     async fn drop_analysis_berechnet() {
-        let Some(pool) = make_pool("t_mon_drop").await else { return };
+        let Some(pool) = make_pool("t_mon_drop").await else {
+            return;
+        };
         // Session + 1 manueller 60s-Ad, 10 Min in den Stream (feste Timestamps → minutes_into=10.0).
         sqlx::query("INSERT INTO twitch_stream_sessions (id, streamer_login, started_at) VALUES (1,'nani','2026-06-14 12:00:00+00')")
             .execute(&pool).await.unwrap();
         sqlx::query("INSERT INTO twitch_ad_break_events (session_id, duration_seconds, is_automatic, started_at) VALUES (1,60,FALSE,'2026-06-14 12:10:00+00')")
             .execute(&pool).await.unwrap();
         // Timeline: pre (Min 7-9)=100, während/post (Min 10-12)=50, Recovery bei Min 13=95.
-        for (m, vc) in [(7, 100), (8, 100), (9, 100), (10, 50), (11, 50), (12, 50), (13, 95)] {
+        for (m, vc) in [
+            (7, 100),
+            (8, 100),
+            (9, 100),
+            (10, 50),
+            (11, 50),
+            (12, 50),
+            (13, 95),
+        ] {
             sqlx::query("INSERT INTO twitch_session_viewers (session_id, ts_utc, minutes_from_start, viewer_count) VALUES (1, NOW(), $1, $2)")
                 .bind(m as i32).bind(vc as i32).execute(&pool).await.unwrap();
         }
 
-        let v = load_monetization_payload(&pool, "nani", 3650).await.unwrap();
+        let v = load_monetization_payload(&pool, "nani", 3650)
+            .await
+            .unwrap();
         let ads = &v["ads"];
         // drop = (100-50)/100*100 = 50.0
         assert_eq!(ads["avg_viewer_drop_pct"], 50.0);
@@ -544,24 +598,47 @@ mod tests {
         assert_eq!(w["is_automatic"], false);
         assert_eq!(w["min_into_stream"], 10.0);
         assert_eq!(w["recovery_min"], 2.0); // Min 13 − post_start 11
-        // Buckets: Position early, Dauer 60s.
-        assert_eq!(ads["position_impact"]["early_0_30m"], json!({ "avg_drop": 50.0, "count": 1 }));
-        assert_eq!(ads["position_impact"]["mid_30_60m"], json!({ "avg_drop": Value::Null, "count": 0 }));
-        assert_eq!(ads["duration_impact"]["60s"], json!({ "avg_drop": 50.0, "count": 1 }));
-        assert_eq!(ads["auto_vs_manual"], json!({ "auto_avg_drop": Value::Null, "manual_avg_drop": 50.0, "auto_count": 0, "manual_count": 1 }));
+                                            // Buckets: Position early, Dauer 60s.
+        assert_eq!(
+            ads["position_impact"]["early_0_30m"],
+            json!({ "avg_drop": 50.0, "count": 1 })
+        );
+        assert_eq!(
+            ads["position_impact"]["mid_30_60m"],
+            json!({ "avg_drop": Value::Null, "count": 0 })
+        );
+        assert_eq!(
+            ads["duration_impact"]["60s"],
+            json!({ "avg_drop": 50.0, "count": 1 })
+        );
+        assert_eq!(
+            ads["auto_vs_manual"],
+            json!({ "auto_avg_drop": Value::Null, "manual_avg_drop": 50.0, "auto_count": 0, "manual_count": 1 })
+        );
         assert_eq!(ads["avg_recovery_min"], 2.0);
-        assert_eq!(ads["recovery_by_duration"]["60s"], json!({ "avg_recovery_min": 2.0, "count": 1 }));
-        assert_eq!(ads["best_ad_time"], "Nach ersten 30 Min (Ø -50.0% statt -50.0% ersten 30 Min)");
-        assert_eq!(ads["recommendations"], json!([
-            "60s-Ads verursachen den geringsten Drop (Ø 50.0%)",
-            "Beste Ad-Zeit: in den ersten 30 Min (Ø 50.0% Drop)",
-            "Ø Recovery-Zeit: 2.0 Minuten nach Ad-Ende"
-        ]));
+        assert_eq!(
+            ads["recovery_by_duration"]["60s"],
+            json!({ "avg_recovery_min": 2.0, "count": 1 })
+        );
+        assert_eq!(
+            ads["best_ad_time"],
+            "Nach ersten 30 Min (Ø -50.0% statt -50.0% ersten 30 Min)"
+        );
+        assert_eq!(
+            ads["recommendations"],
+            json!([
+                "60s-Ads verursachen den geringsten Drop (Ø 50.0%)",
+                "Beste Ad-Zeit: in den ersten 30 Min (Ø 50.0% Drop)",
+                "Ø Recovery-Zeit: 2.0 Minuten nach Ad-Ende"
+            ])
+        );
     }
 
     #[tokio::test]
     async fn leer_ohne_streamer() {
-        let Some(pool) = make_pool("t_mon_empty").await else { return };
+        let Some(pool) = make_pool("t_mon_empty").await else {
+            return;
+        };
         let v = load_monetization_payload(&pool, "", 7).await.unwrap();
         assert_eq!(v["ads"]["total"], 0);
         assert_eq!(v["ads"]["avg_duration_s"], 0.0);

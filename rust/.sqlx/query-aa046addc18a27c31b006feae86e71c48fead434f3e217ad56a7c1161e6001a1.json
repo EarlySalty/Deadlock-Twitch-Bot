@@ -1,0 +1,23 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n        SELECT COUNT(*)::bigint AS \"count!\"\n        FROM twitch_stream_sessions\n        WHERE streamer_login = $1\n          AND started_at >= $2\n          AND duration_seconds > 300\n        ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "count!",
+        "type_info": "Int8"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Text",
+        "Timestamptz"
+      ]
+    },
+    "nullable": [
+      null
+    ]
+  },
+  "hash": "aa046addc18a27c31b006feae86e71c48fead434f3e217ad56a7c1161e6001a1"
+}

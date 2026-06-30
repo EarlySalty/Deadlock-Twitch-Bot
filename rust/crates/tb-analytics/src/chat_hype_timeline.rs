@@ -75,11 +75,23 @@ fn pearson_r(xs: &[f64], ys: &[f64]) -> f64 {
 fn interpret_r(r: f64) -> &'static str {
     let ar = r.abs();
     if ar >= 0.7 {
-        if r > 0.0 { "strong_positive" } else { "strong_negative" }
+        if r > 0.0 {
+            "strong_positive"
+        } else {
+            "strong_negative"
+        }
     } else if ar >= 0.4 {
-        if r > 0.0 { "moderate_positive" } else { "moderate_negative" }
+        if r > 0.0 {
+            "moderate_positive"
+        } else {
+            "moderate_negative"
+        }
     } else if ar >= 0.2 {
-        if r > 0.0 { "weak_positive" } else { "weak_negative" }
+        if r > 0.0 {
+            "weak_positive"
+        } else {
+            "weak_negative"
+        }
     } else {
         "none"
     }
@@ -105,60 +117,105 @@ pub async fn load_chat_hype_timeline(
     let session_id: i64 = if !session_id_raw.is_empty() {
         match session_id_raw.parse::<i64>() {
             Ok(id) => id,
-            Err(_) => return Ok(HypeTimeline::BadRequest(json!({ "error": "Invalid session_id" }))),
+            Err(_) => {
+                return Ok(HypeTimeline::BadRequest(
+                    json!({ "error": "Invalid session_id" }),
+                ))
+            }
         }
     } else {
-        match sqlx::query_scalar::<_, i64>(
-            "SELECT id::bigint FROM twitch_stream_sessions WHERE LOWER(streamer_login) = $1 ORDER BY started_at DESC LIMIT 1",
+        match sqlx::query_scalar!(
+            r#"
+            SELECT id AS "id!"
+            FROM twitch_stream_sessions
+            WHERE LOWER(streamer_login) = $1
+            ORDER BY started_at DESC
+            LIMIT 1
+            "#,
+            streamer
         )
-        .bind(streamer)
         .fetch_optional(pool)
         .await?
         {
             Some(id) => id,
-            None => return Ok(HypeTimeline::NotFound(json!({ "error": "No sessions found" }))),
+            None => {
+                return Ok(HypeTimeline::NotFound(
+                    json!({ "error": "No sessions found" }),
+                ))
+            }
         }
     };
 
-    let sess: Option<(DateTime<Utc>, Option<i32>, Option<String>)> = sqlx::query_as(
-        "SELECT started_at, duration_seconds, stream_title FROM twitch_stream_sessions WHERE id = $1",
+    let sess = sqlx::query!(
+        r#"
+        SELECT started_at AS "started_at!",
+               duration_seconds,
+               stream_title
+        FROM twitch_stream_sessions
+        WHERE id = $1
+        "#,
+        session_id
     )
-    .bind(session_id)
     .fetch_optional(pool)
     .await?;
     let (session_start, duration, title) = match sess {
-        Some((start, dur, t)) => (start, dur.unwrap_or(0) as i64, t.unwrap_or_default()),
-        None => return Ok(HypeTimeline::NotFound(json!({ "error": "Session not found" }))),
+        Some(row) => (
+            row.started_at,
+            i64::from(row.duration_seconds.unwrap_or(0)),
+            row.stream_title.unwrap_or_default(),
+        ),
+        None => {
+            return Ok(HypeTimeline::NotFound(
+                json!({ "error": "Session not found" }),
+            ))
+        }
     };
 
     // Nachrichten/Chatter je Minute (date_trunc = time_bucket('1 minute')).
-    let mpm_rows: Vec<(DateTime<Utc>, i64, i64)> = sqlx::query_as(
-        "SELECT date_trunc('minute', m.message_ts)::timestamptz AS bucket, COUNT(*)::bigint, COUNT(DISTINCT m.chatter_login)::bigint \
-           FROM twitch_chat_messages m \
-          WHERE m.session_id = $1 AND m.chatter_login IS NOT NULL \
-            AND (m.chatter_login IS NULL OR m.chatter_login = '' OR LOWER(m.chatter_login) <> ALL($2)) \
-          GROUP BY bucket ORDER BY bucket",
+    let mpm_rows: Vec<(DateTime<Utc>, i64, i64)> = sqlx::query!(
+        r#"
+        SELECT date_trunc('minute', m.message_ts)::timestamptz AS "bucket!",
+               COUNT(*)::bigint AS "messages!",
+               COUNT(DISTINCT m.chatter_login)::bigint AS "chatters!"
+        FROM twitch_chat_messages m
+        WHERE m.session_id = $1
+          AND m.chatter_login IS NOT NULL
+          AND (m.chatter_login IS NULL OR m.chatter_login = '' OR LOWER(m.chatter_login) <> ALL($2))
+        GROUP BY 1
+        ORDER BY 1
+        "#,
+        session_id,
+        &bots
     )
-    .bind(session_id)
-    .bind(&bots)
     .fetch_all(pool)
-    .await?;
+    .await?
+    .into_iter()
+    .map(|row| (row.bucket, row.messages, row.chatters))
+    .collect();
 
     // Viewer-Overlay.
-    let viewer_rows: Vec<(Option<i32>, Option<i32>)> = sqlx::query_as(
-        "SELECT minutes_from_start, viewer_count FROM twitch_session_viewers WHERE session_id = $1 ORDER BY minutes_from_start",
+    let viewer_rows: Vec<(Option<i32>, i32)> = sqlx::query!(
+        r#"
+        SELECT minutes_from_start, viewer_count AS "viewer_count!"
+        FROM twitch_session_viewers
+        WHERE session_id = $1
+        ORDER BY minutes_from_start
+        "#,
+        session_id
     )
-    .bind(session_id)
     .fetch_all(pool)
-    .await?;
+    .await?
+    .into_iter()
+    .map(|row| (row.minutes_from_start, row.viewer_count))
+    .collect();
     let mut viewer_map: HashMap<i64, i64> = HashMap::new();
     for (minute_raw, viewers_raw) in viewer_rows {
-        let (Some(minute), Some(viewers)) = (minute_raw, viewers_raw) else { continue };
-        let minute = minute as i64;
+        let Some(minute) = minute_raw else { continue };
+        let minute = i64::from(minute);
         if minute < 0 {
             continue;
         }
-        viewer_map.insert(minute, viewers.max(0) as i64);
+        viewer_map.insert(minute, i64::from(viewers_raw.max(0)));
     }
 
     let mut timeline: Vec<Point> = Vec::new();
@@ -176,7 +233,13 @@ pub async fn load_chat_hype_timeline(
                 }
             }
         }
-        timeline.push(Point { minute, messages: *msgs, chatters: *chatters, viewers, is_spike: false });
+        timeline.push(Point {
+            minute,
+            messages: *msgs,
+            chatters: *chatters,
+            viewers,
+            is_spike: false,
+        });
         msg_counts.push(*msgs);
     }
 
@@ -193,16 +256,33 @@ pub async fn load_chat_hype_timeline(
     for point in &mut timeline {
         if point.messages as f64 >= threshold {
             point.is_spike = true;
-            let multiplier = if avg_mpm > 0.0 { round1(point.messages as f64 / avg_mpm) } else { 0.0 };
+            let multiplier = if avg_mpm > 0.0 {
+                round1(point.messages as f64 / avg_mpm)
+            } else {
+                0.0
+            };
             spikes.push(json!({ "minute": point.minute, "messages": point.messages, "multiplier": multiplier }));
         }
     }
-    spikes.sort_by(|a, b| b["messages"].as_i64().unwrap_or(0).cmp(&a["messages"].as_i64().unwrap_or(0)));
+    spikes.sort_by(|a, b| {
+        b["messages"]
+            .as_i64()
+            .unwrap_or(0)
+            .cmp(&a["messages"].as_i64().unwrap_or(0))
+    });
     spikes.truncate(20);
 
     // Pearson-Korrelation (nur Minuten mit Viewern).
-    let chat_vals: Vec<f64> = timeline.iter().filter(|p| p.viewers > 0).map(|p| p.messages as f64).collect();
-    let viewer_vals: Vec<f64> = timeline.iter().filter(|p| p.viewers > 0).map(|p| p.viewers as f64).collect();
+    let chat_vals: Vec<f64> = timeline
+        .iter()
+        .filter(|p| p.viewers > 0)
+        .map(|p| p.messages as f64)
+        .collect();
+    let viewer_vals: Vec<f64> = timeline
+        .iter()
+        .filter(|p| p.viewers > 0)
+        .map(|p| p.viewers as f64)
+        .collect();
     let r_val = pearson_r(&chat_vals, &viewer_vals);
 
     // Lag-Detection: führt der Chat den Viewern voraus?
@@ -229,23 +309,37 @@ pub async fn load_chat_hype_timeline(
     }
 
     // Letzte 10 anderen Sessions + deren Ø-MPM.
-    let recent_rows: Vec<(i64, chrono::NaiveDate, Option<String>)> = sqlx::query_as(
-        "SELECT s.id::bigint, s.started_at::date, s.stream_title FROM twitch_stream_sessions s \
-          WHERE LOWER(s.streamer_login) = $1 AND s.id != $2 ORDER BY s.started_at DESC LIMIT 10",
+    let recent_rows: Vec<(i64, chrono::NaiveDate, Option<String>)> = sqlx::query!(
+        r#"
+        SELECT s.id AS "id!",
+               s.started_at::date AS "started_date!",
+               s.stream_title
+        FROM twitch_stream_sessions s
+        WHERE LOWER(s.streamer_login) = $1
+          AND s.id != $2
+        ORDER BY s.started_at DESC
+        LIMIT 10
+        "#,
+        streamer,
+        session_id
     )
-    .bind(streamer)
-    .bind(session_id)
     .fetch_all(pool)
-    .await?;
+    .await?
+    .into_iter()
+    .map(|row| (row.id, row.started_date, row.stream_title))
+    .collect();
     let mut recent_sessions: Vec<Value> = Vec::new();
     for (rid, rdate, rtitle) in recent_rows {
-        let avg: Option<f64> = sqlx::query_scalar(
-            "SELECT (COUNT(*) * 1.0 / GREATEST(1, EXTRACT(EPOCH FROM MAX(m.message_ts) - MIN(m.message_ts)) / 60))::float8 \
-               FROM twitch_chat_messages m \
-              WHERE m.session_id = $1 AND (m.chatter_login IS NULL OR m.chatter_login = '' OR LOWER(m.chatter_login) <> ALL($2))",
+        let avg: Option<f64> = sqlx::query_scalar!(
+            r#"
+            SELECT (COUNT(*) * 1.0 / GREATEST(1, EXTRACT(EPOCH FROM MAX(m.message_ts) - MIN(m.message_ts)) / 60))::float8 AS avg_mpm
+            FROM twitch_chat_messages m
+            WHERE m.session_id = $1
+              AND (m.chatter_login IS NULL OR m.chatter_login = '' OR LOWER(m.chatter_login) <> ALL($2))
+            "#,
+            rid,
+            &bots
         )
-        .bind(rid)
-        .bind(&bots)
         .fetch_one(pool)
         .await?;
         recent_sessions.push(json!({
@@ -257,7 +351,8 @@ pub async fn load_chat_hype_timeline(
         }));
     }
 
-    let raw_chat_status = build_raw_chat_status(pool, streamer, Scope::Sessions(&[session_id])).await?;
+    let raw_chat_status =
+        build_raw_chat_status(pool, streamer, Scope::Sessions(&[session_id])).await?;
 
     let timeline_json: Vec<Value> = timeline
         .iter()
@@ -303,12 +398,28 @@ mod tests {
 
     async fn make_pool(schema: &str) -> Option<PgPool> {
         let dsn = std::env::var("TB_TEST_DATABASE_URL").ok()?;
-        let admin = PgPoolOptions::new().max_connections(1).connect(&dsn).await.unwrap();
-        sqlx::query(&format!("DROP SCHEMA IF EXISTS {schema} CASCADE")).execute(&admin).await.unwrap();
-        sqlx::query(&format!("CREATE SCHEMA {schema}")).execute(&admin).await.unwrap();
+        let admin = PgPoolOptions::new()
+            .max_connections(1)
+            .connect(&dsn)
+            .await
+            .unwrap();
+        sqlx::query(&format!("DROP SCHEMA IF EXISTS {schema} CASCADE"))
+            .execute(&admin)
+            .await
+            .unwrap();
+        sqlx::query(&format!("CREATE SCHEMA {schema}"))
+            .execute(&admin)
+            .await
+            .unwrap();
         admin.close().await;
-        let opts = PgConnectOptions::from_str(&dsn).unwrap().options([("search_path", schema)]);
-        let pool = PgPoolOptions::new().max_connections(2).connect_with(opts).await.unwrap();
+        let opts = PgConnectOptions::from_str(&dsn)
+            .unwrap()
+            .options([("search_path", schema)]);
+        let pool = PgPoolOptions::new()
+            .max_connections(2)
+            .connect_with(opts)
+            .await
+            .unwrap();
         sqlx::query("CREATE TABLE twitch_stream_sessions (id BIGSERIAL PRIMARY KEY, streamer_login TEXT, started_at TIMESTAMPTZ, duration_seconds INTEGER, stream_title TEXT)").execute(&pool).await.unwrap();
         sqlx::query("CREATE TABLE twitch_session_chatters (session_id BIGINT, streamer_login TEXT, chatter_login TEXT, messages INTEGER DEFAULT 0)").execute(&pool).await.unwrap();
         sqlx::query("CREATE TABLE twitch_chat_messages (id BIGSERIAL PRIMARY KEY, session_id BIGINT, streamer_login TEXT, chatter_login TEXT, content TEXT, message_ts TIMESTAMPTZ)").execute(&pool).await.unwrap();
@@ -326,21 +437,27 @@ mod tests {
 
     #[tokio::test]
     async fn keine_session_404() {
-        let Some(pool) = make_pool("t_hype_404").await else { return };
+        let Some(pool) = make_pool("t_hype_404").await else {
+            return;
+        };
         let r = load_chat_hype_timeline(&pool, "nani", "").await.unwrap();
         assert!(matches!(r, HypeTimeline::NotFound(_)));
     }
 
     #[tokio::test]
     async fn invalid_session_id_400() {
-        let Some(pool) = make_pool("t_hype_400").await else { return };
+        let Some(pool) = make_pool("t_hype_400").await else {
+            return;
+        };
         let r = load_chat_hype_timeline(&pool, "nani", "abc").await.unwrap();
         assert!(matches!(r, HypeTimeline::BadRequest(_)));
     }
 
     #[tokio::test]
     async fn timeline_spikes_korrelation() {
-        let Some(pool) = make_pool("t_hype_ok").await else { return };
+        let Some(pool) = make_pool("t_hype_ok").await else {
+            return;
+        };
         sqlx::query("INSERT INTO twitch_stream_sessions (id, streamer_login, started_at, duration_seconds, stream_title) VALUES (1,'nani','2026-06-14 12:00:00+00',3600,'Test')").execute(&pool).await.unwrap();
         // Minute 0: 2 msgs, Minute 1: 2 msgs, Minute 2: 10 msgs (Spike).
         for ts in ["12:00:10", "12:00:20"] {
@@ -362,7 +479,7 @@ mod tests {
         assert_eq!(v["timeline"].as_array().unwrap().len(), 3);
         assert_eq!(v["peakMPM"], 10);
         assert_eq!(v["avgMPM"], 4.7); // (2+2+10)/3 = 4.6667 → 4.7
-        // Spike bei Minute 2 (10 >= max(9.33,3)).
+                                      // Spike bei Minute 2 (10 >= max(9.33,3)).
         assert_eq!(v["spikes"].as_array().unwrap().len(), 1);
         assert_eq!(v["spikes"][0]["minute"], 2);
         assert_eq!(v["spikes"][0]["messages"], 10);

@@ -1,0 +1,23 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n        SELECT 1 AS \"found!\"\n        FROM twitch_chatter_global_ban\n        WHERE chatter_login = $1\n           OR (chatter_id IS NOT NULL AND chatter_id = $2 AND chatter_id <> '')\n        LIMIT 1\n        ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "found!",
+        "type_info": "Int4"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Text",
+        "Text"
+      ]
+    },
+    "nullable": [
+      null
+    ]
+  },
+  "hash": "ee2de197024a9a65863d99af834c5ddccf53201601877c66b43463f94b0b98dc"
+}

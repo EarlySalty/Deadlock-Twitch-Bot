@@ -1,0 +1,23 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT s.id AS \"id!\" FROM twitch_stream_sessions s WHERE s.streamer_login = $1 AND s.ended_at IS NOT NULL AND NOT EXISTS ( SELECT 1 FROM twitch_stream_ai_reports r WHERE r.session_id = s.id AND r.status = 'done' ) ORDER BY s.ended_at DESC LIMIT $2",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id!",
+        "type_info": "Int8"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Text",
+        "Int8"
+      ]
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "06bab6faf6618b5c69d637abe659551c8708cfeebb7c38b7d7dece2aa1040116"
+}

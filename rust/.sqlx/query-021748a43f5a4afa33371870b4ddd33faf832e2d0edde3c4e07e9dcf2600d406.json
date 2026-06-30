@@ -1,0 +1,34 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "WITH per_viewer AS ( SELECT viewer_login, COUNT(*)::int8 AS ticks FROM twitch_viewer_presence_ticks WHERE session_id = $1 GROUP BY viewer_login ) SELECT COUNT(*)::int8 AS \"unique_viewers!\", ROUND(AVG(ticks * 0.5)::numeric, 2)::float8 AS avg_present_min, ROUND(MAX(ticks * 0.5)::numeric, 2)::float8 AS max_present_min FROM per_viewer",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "unique_viewers!",
+        "type_info": "Int8"
+      },
+      {
+        "ordinal": 1,
+        "name": "avg_present_min",
+        "type_info": "Float8"
+      },
+      {
+        "ordinal": 2,
+        "name": "max_present_min",
+        "type_info": "Float8"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Int8"
+      ]
+    },
+    "nullable": [
+      null,
+      null,
+      null
+    ]
+  },
+  "hash": "021748a43f5a4afa33371870b4ddd33faf832e2d0edde3c4e07e9dcf2600d406"
+}

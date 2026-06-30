@@ -1,0 +1,44 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n        SELECT\n            chatter_login AS \"chatter_login!\",\n            chatter_id,\n            reason,\n            added_by,\n            added_at AS \"added_at?\"\n        FROM twitch_chatter_global_ban\n        ORDER BY added_at DESC\n        ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "chatter_login!",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 1,
+        "name": "chatter_id",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 2,
+        "name": "reason",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 3,
+        "name": "added_by",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 4,
+        "name": "added_at?",
+        "type_info": "Timestamptz"
+      }
+    ],
+    "parameters": {
+      "Left": []
+    },
+    "nullable": [
+      false,
+      true,
+      true,
+      true,
+      false
+    ]
+  },
+  "hash": "e253500d4cbcf49ddae0fe700d92bce29b33b1cac5e48bdc26057f5577f96ebd"
+}

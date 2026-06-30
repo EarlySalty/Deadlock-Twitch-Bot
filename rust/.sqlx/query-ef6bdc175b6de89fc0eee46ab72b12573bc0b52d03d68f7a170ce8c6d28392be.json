@@ -1,0 +1,22 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT content AS \"content!\" FROM twitch_chat_messages WHERE session_id = $1 AND is_command = FALSE AND content IS NOT NULL AND length(content) > 1 ORDER BY message_ts LIMIT 1500",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "content!",
+        "type_info": "Text"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Int8"
+      ]
+    },
+    "nullable": [
+      true
+    ]
+  },
+  "hash": "ef6bdc175b6de89fc0eee46ab72b12573bc0b52d03d68f7a170ce8c6d28392be"
+}

@@ -1,0 +1,17 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n        INSERT INTO twitch_chatter_global_ban (chatter_login, chatter_id, reason, added_by)\n        VALUES ($1, $2, $3, $4)\n        ON CONFLICT (chatter_login) DO UPDATE SET\n            chatter_id = COALESCE(EXCLUDED.chatter_id, twitch_chatter_global_ban.chatter_id),\n            reason     = EXCLUDED.reason,\n            added_by   = EXCLUDED.added_by,\n            added_at   = NOW()\n        ",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Text",
+        "Text",
+        "Text",
+        "Text"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "2e205562dde462dc380c91c260bdfdb7ff6c8e773d691a7958514f57afc405b6"
+}

@@ -1,0 +1,62 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n        WITH auth_rows AS (\n            SELECT\n                ROW_NUMBER() OVER (\n                    ORDER BY\n                        CASE WHEN authorized_at IS NULL THEN 1 ELSE 0 END,\n                        authorized_at DESC,\n                        LOWER(COALESCE(NULLIF(TRIM(twitch_login), ''), '')),\n                        LOWER(COALESCE(NULLIF(TRIM(twitch_user_id), ''), ''))\n                ) AS auth_row_id,\n                twitch_login,\n                twitch_user_id,\n                scopes,\n                needs_reauth\n            FROM twitch_raid_auth\n        ),\n        partner_state AS (\n            SELECT twitch_login, twitch_user_id, discord_display_name,\n                   manual_partner_opt_out, archived_at, status, technical_pause_reason\n            FROM (\n                SELECT\n                    s.twitch_login, s.twitch_user_id, s.discord_display_name,\n                    s.manual_partner_opt_out, s.archived_at, s.status,\n                    s.technical_pause_reason,\n                    ROW_NUMBER() OVER (\n                        PARTITION BY LOWER(s.twitch_login)\n                        ORDER BY\n                            CASE WHEN s.status = 'active' THEN 0 ELSE 1 END,\n                            LOWER(s.twitch_login) ASC\n                    ) AS rn\n                FROM twitch_partners_all_state s\n                WHERE COALESCE(TRIM(s.twitch_login), '') <> ''\n            ) ranked\n            WHERE rn = 1\n        ),\n        ranked_matches AS (\n            SELECT\n                a.auth_row_id, a.twitch_login, a.twitch_user_id, a.scopes,\n                a.needs_reauth,\n                s.twitch_login AS partner_login, s.discord_display_name,\n                s.archived_at, s.manual_partner_opt_out, s.status,\n                s.technical_pause_reason,\n                ROW_NUMBER() OVER (\n                    PARTITION BY a.auth_row_id\n                    ORDER BY\n                        CASE\n                            WHEN NULLIF(TRIM(COALESCE(a.twitch_user_id, '')), '') IS NOT NULL\n                                 AND NULLIF(TRIM(COALESCE(s.twitch_user_id, '')), '') IS NOT NULL\n                                 AND LOWER(TRIM(a.twitch_user_id)) = LOWER(TRIM(s.twitch_user_id))\n                            THEN 0\n                            WHEN LOWER(COALESCE(a.twitch_login, '')) = LOWER(s.twitch_login)\n                            THEN 1\n                            ELSE 2\n                        END,\n                        LOWER(COALESCE(s.twitch_login, '')) ASC\n                ) AS rn\n            FROM auth_rows a\n            LEFT JOIN partner_state s\n                ON (\n                    NULLIF(TRIM(COALESCE(a.twitch_user_id, '')), '') IS NOT NULL\n                    AND NULLIF(TRIM(COALESCE(s.twitch_user_id, '')), '') IS NOT NULL\n                    AND LOWER(TRIM(a.twitch_user_id)) = LOWER(TRIM(s.twitch_user_id))\n                )\n                OR LOWER(COALESCE(a.twitch_login, '')) = LOWER(s.twitch_login)\n        )\n        SELECT\n            COALESCE(\n                NULLIF(TRIM(partner_login), ''),\n                NULLIF(TRIM(twitch_login), ''),\n                NULLIF(TRIM(twitch_user_id), '')\n            ) AS effective_login,\n            discord_display_name,\n            scopes AS \"scopes?\",\n            COALESCE(needs_reauth, FALSE) AS \"needs_reauth?\",\n            status,\n            archived_at::text,\n            COALESCE(manual_partner_opt_out, 0)::bigint AS \"manual_partner_opt_out?\",\n            technical_pause_reason\n        FROM ranked_matches\n        WHERE rn = 1\n        ORDER BY\n            LOWER(\n                COALESCE(\n                    NULLIF(TRIM(partner_login), ''),\n                    NULLIF(TRIM(twitch_login), ''),\n                    NULLIF(TRIM(twitch_user_id), '')\n                )\n            ) ASC,\n            auth_row_id ASC\n        ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "effective_login",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 1,
+        "name": "discord_display_name",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 2,
+        "name": "scopes?",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 3,
+        "name": "needs_reauth?",
+        "type_info": "Bool"
+      },
+      {
+        "ordinal": 4,
+        "name": "status",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 5,
+        "name": "archived_at",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 6,
+        "name": "manual_partner_opt_out?",
+        "type_info": "Int8"
+      },
+      {
+        "ordinal": 7,
+        "name": "technical_pause_reason",
+        "type_info": "Text"
+      }
+    ],
+    "parameters": {
+      "Left": []
+    },
+    "nullable": [
+      null,
+      true,
+      false,
+      null,
+      true,
+      true,
+      null,
+      true
+    ]
+  },
+  "hash": "bb9a99e50a49f636010f78afcd7f961448bba347b8c51b6931856991c1cbb000"
+}

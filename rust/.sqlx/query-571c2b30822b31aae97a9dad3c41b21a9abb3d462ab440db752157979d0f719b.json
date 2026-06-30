@@ -1,0 +1,23 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n        SELECT AVG(day_avg)::float8 AS avg_viewers\n        FROM (\n            SELECT DATE(started_at) AS d, AVG(avg_viewers) AS day_avg\n            FROM twitch_stream_sessions\n            WHERE streamer_login = $1\n              AND started_at >= $2\n              AND duration_seconds > 300\n            GROUP BY d\n            HAVING COUNT(*) > 1\n        ) sub\n        ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "avg_viewers",
+        "type_info": "Float8"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Text",
+        "Timestamptz"
+      ]
+    },
+    "nullable": [
+      null
+    ]
+  },
+  "hash": "571c2b30822b31aae97a9dad3c41b21a9abb3d462ab440db752157979d0f719b"
+}

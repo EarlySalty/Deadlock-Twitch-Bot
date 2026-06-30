@@ -1,0 +1,14 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "UPDATE twitch_stream_ai_reports SET retry_count = retry_count + 1 WHERE status='failed' AND retry_count < 3 AND session_id = ANY($1::bigint[])",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Int8Array"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "38bcb6f1eecabc3de91483204c9efe2d9a5d34b8aece8a3193cde3592b321602"
+}

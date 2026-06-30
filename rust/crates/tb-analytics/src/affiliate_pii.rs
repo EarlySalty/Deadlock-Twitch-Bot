@@ -14,8 +14,14 @@ use serde_json::{json, Value};
 use sqlx::PgPool;
 use tb_crypto::FieldCipher;
 
-const REQUIRED_GUTSCHRIFT_FIELDS: [&str; 6] =
-    ["full_name", "email", "address_line1", "address_city", "address_zip", "address_country"];
+const REQUIRED_GUTSCHRIFT_FIELDS: [&str; 6] = [
+    "full_name",
+    "email",
+    "address_line1",
+    "address_city",
+    "address_zip",
+    "address_country",
+];
 const VALID_UST_STATUS: [&str; 3] = ["kleinunternehmer", "regelbesteuert", "unknown"];
 
 fn field_label(field: &str) -> &'static str {
@@ -63,8 +69,18 @@ fn deserialize_tax_bundle(raw: &str) -> (String, String) {
     }
     if normalized.starts_with('{') {
         if let Ok(Value::Object(m)) = serde_json::from_str::<Value>(normalized) {
-            let tax = m.get("tax_id").and_then(Value::as_str).unwrap_or("").trim().to_string();
-            let vat = m.get("vat_id").and_then(Value::as_str).unwrap_or("").trim().to_string();
+            let tax = m
+                .get("tax_id")
+                .and_then(Value::as_str)
+                .unwrap_or("")
+                .trim()
+                .to_string();
+            let vat = m
+                .get("vat_id")
+                .and_then(Value::as_str)
+                .unwrap_or("")
+                .trim()
+                .to_string();
             return (tax, vat);
         }
     }
@@ -175,12 +191,23 @@ pub async fn load_affiliate_pii(
     cipher: &FieldCipher,
     login: &str,
 ) -> Result<PiiPayload, PiiError> {
-    let row: Option<PiiRow> = sqlx::query_as(
-        "SELECT full_name_enc, email_enc, address_line1_enc, address_city_enc, address_zip_enc, \
-                tax_id_enc, address_country, ust_status, updated_at \
-         FROM affiliate_pii WHERE twitch_login = $1",
+    let row: Option<PiiRow> = sqlx::query_as!(
+        PiiRow,
+        r#"
+        SELECT full_name_enc,
+               email_enc,
+               address_line1_enc,
+               address_city_enc,
+               address_zip_enc,
+               tax_id_enc,
+               address_country AS "address_country?",
+               ust_status AS "ust_status?",
+               updated_at AS "updated_at?"
+        FROM affiliate_pii
+        WHERE twitch_login = $1
+        "#,
+        login
     )
-    .bind(login)
     .fetch_optional(pool)
     .await
     .map_err(PiiError::Db)?;
@@ -272,12 +299,22 @@ pub async fn save_affiliate_pii(
     login: &str,
     input: &PiiInput,
 ) -> Result<(), PiiError> {
-    let existing: Option<PiiExistingRow> = sqlx::query_as(
-        "SELECT full_name_enc, email_enc, address_line1_enc, address_city_enc, address_zip_enc, \
-                tax_id_enc, address_country, ust_status \
-         FROM affiliate_pii WHERE twitch_login = $1",
+    let existing: Option<PiiExistingRow> = sqlx::query_as!(
+        PiiExistingRow,
+        r#"
+        SELECT full_name_enc,
+               email_enc,
+               address_line1_enc,
+               address_city_enc,
+               address_zip_enc,
+               tax_id_enc,
+               address_country AS "address_country?",
+               ust_status AS "ust_status?"
+        FROM affiliate_pii
+        WHERE twitch_login = $1
+        "#,
+        login
     )
-    .bind(login)
     .fetch_optional(pool)
     .await
     .map_err(PiiError::Db)?;
@@ -286,16 +323,41 @@ pub async fn save_affiliate_pii(
     let take = |b: &Option<PiiExistingRow>, f: fn(&PiiExistingRow) -> &Option<Vec<u8>>| {
         b.as_ref().and_then(|r| f(r).clone())
     };
-    let full_name_enc =
-        encrypt_or_keep(cipher, input.full_name.as_ref(), take(&existing, |r| &r.full_name_enc), "full_name", login)?;
-    let email_enc =
-        encrypt_or_keep(cipher, input.email.as_ref(), take(&existing, |r| &r.email_enc), "email", login)?;
+    let full_name_enc = encrypt_or_keep(
+        cipher,
+        input.full_name.as_ref(),
+        take(&existing, |r| &r.full_name_enc),
+        "full_name",
+        login,
+    )?;
+    let email_enc = encrypt_or_keep(
+        cipher,
+        input.email.as_ref(),
+        take(&existing, |r| &r.email_enc),
+        "email",
+        login,
+    )?;
     let address_line1_enc = encrypt_or_keep(
-        cipher, input.address_line1.as_ref(), take(&existing, |r| &r.address_line1_enc), "address_line1", login)?;
+        cipher,
+        input.address_line1.as_ref(),
+        take(&existing, |r| &r.address_line1_enc),
+        "address_line1",
+        login,
+    )?;
     let address_city_enc = encrypt_or_keep(
-        cipher, input.address_city.as_ref(), take(&existing, |r| &r.address_city_enc), "address_city", login)?;
+        cipher,
+        input.address_city.as_ref(),
+        take(&existing, |r| &r.address_city_enc),
+        "address_city",
+        login,
+    )?;
     let address_zip_enc = encrypt_or_keep(
-        cipher, input.address_zip.as_ref(), take(&existing, |r| &r.address_zip_enc), "address_zip", login)?;
+        cipher,
+        input.address_zip.as_ref(),
+        take(&existing, |r| &r.address_zip_enc),
+        "address_zip",
+        login,
+    )?;
 
     // Tax-Bundle (tax_id + vat_id) zusammenführen — Bestand entschlüsseln, mit
     // gesetzten Keys überschreiben, neu serialisieren/verschlüsseln (Python:
@@ -350,31 +412,34 @@ pub async fn save_affiliate_pii(
     };
     let updated_at = chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Micros, false);
 
-    sqlx::query(
-        "INSERT INTO affiliate_pii (twitch_login, full_name_enc, email_enc, address_line1_enc, \
-             address_city_enc, address_zip_enc, tax_id_enc, address_country, ust_status, updated_at) \
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10) \
-         ON CONFLICT (twitch_login) DO UPDATE SET \
-             full_name_enc = excluded.full_name_enc, \
-             email_enc = excluded.email_enc, \
-             address_line1_enc = excluded.address_line1_enc, \
-             address_city_enc = excluded.address_city_enc, \
-             address_zip_enc = excluded.address_zip_enc, \
-             tax_id_enc = excluded.tax_id_enc, \
-             address_country = excluded.address_country, \
-             ust_status = excluded.ust_status, \
-             updated_at = excluded.updated_at",
+    sqlx::query!(
+        r#"
+        INSERT INTO affiliate_pii
+            (twitch_login, full_name_enc, email_enc, address_line1_enc,
+             address_city_enc, address_zip_enc, tax_id_enc, address_country, ust_status, updated_at)
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+        ON CONFLICT (twitch_login) DO UPDATE SET
+            full_name_enc = excluded.full_name_enc,
+            email_enc = excluded.email_enc,
+            address_line1_enc = excluded.address_line1_enc,
+            address_city_enc = excluded.address_city_enc,
+            address_zip_enc = excluded.address_zip_enc,
+            tax_id_enc = excluded.tax_id_enc,
+            address_country = excluded.address_country,
+            ust_status = excluded.ust_status,
+            updated_at = excluded.updated_at
+        "#,
+        login,
+        full_name_enc,
+        email_enc,
+        address_line1_enc,
+        address_city_enc,
+        address_zip_enc,
+        tax_id_enc,
+        &address_country,
+        &ust_status,
+        &updated_at
     )
-    .bind(login)
-    .bind(full_name_enc)
-    .bind(email_enc)
-    .bind(address_line1_enc)
-    .bind(address_city_enc)
-    .bind(address_zip_enc)
-    .bind(tax_id_enc)
-    .bind(&address_country)
-    .bind(&ust_status)
-    .bind(&updated_at)
     .execute(pool)
     .await
     .map_err(PiiError::Db)?;
@@ -413,10 +478,15 @@ pub fn build_readiness(pii: &PiiPayload) -> Value {
     let mut warnings: Vec<String> = Vec::new();
     if normalize_ust_status(&pii.ust_status) == "regelbesteuert" && pii.vat_id.trim().is_empty() {
         warnings.push(
-            "USt-IdNr. ist leer. Bitte nur dann leer lassen, wenn keine vergeben wurde.".to_string(),
+            "USt-IdNr. ist leer. Bitte nur dann leer lassen, wenn keine vergeben wurde."
+                .to_string(),
         );
     }
-    let ust = if pii.ust_status.trim().is_empty() { "unknown".to_string() } else { pii.ust_status.clone() };
+    let ust = if pii.ust_status.trim().is_empty() {
+        "unknown".to_string()
+    } else {
+        pii.ust_status.clone()
+    };
     json!({
         "can_generate": blockers.is_empty(),
         "blockers": blockers,
@@ -442,7 +512,9 @@ mod tests {
         let r = build_readiness(&pii);
         assert_eq!(r["can_generate"], false);
         let blockers = r["blockers"].as_array().unwrap();
-        assert!(blockers.iter().any(|b| b == "USt-Status noch nicht angegeben."));
+        assert!(blockers
+            .iter()
+            .any(|b| b == "USt-Status noch nicht angegeben."));
         // address_country ist "DE" (default) → NICHT in missing.
         let missing = r["missing_fields"].as_array().unwrap();
         assert!(missing.iter().any(|m| m == "full_name"));
@@ -472,19 +544,32 @@ mod tests {
     #[test]
     fn readiness_warnung_regelbesteuert_ohne_vat() {
         let pii = PiiPayload {
-            full_name: "Nani".into(), email: "a@b.de".into(), address_line1: "Str 1".into(),
-            address_city: "Ort".into(), address_zip: "12345".into(), tax_id: "DE123".into(),
-            vat_id: String::new(), address_country: "DE".into(), ust_status: "regelbesteuert".into(),
+            full_name: "Nani".into(),
+            email: "a@b.de".into(),
+            address_line1: "Str 1".into(),
+            address_city: "Ort".into(),
+            address_zip: "12345".into(),
+            tax_id: "DE123".into(),
+            vat_id: String::new(),
+            address_country: "DE".into(),
+            ust_status: "regelbesteuert".into(),
             updated_at: None,
         };
         let r = build_readiness(&pii);
-        assert!(r["warnings"].as_array().unwrap().iter().any(|w| w.as_str().unwrap().contains("USt-IdNr")));
+        assert!(r["warnings"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|w| w.as_str().unwrap().contains("USt-IdNr")));
     }
 
     #[test]
     fn tax_bundle_parsing() {
         assert_eq!(deserialize_tax_bundle(""), (String::new(), String::new()));
-        assert_eq!(deserialize_tax_bundle("DE12345"), ("DE12345".to_string(), String::new()));
+        assert_eq!(
+            deserialize_tax_bundle("DE12345"),
+            ("DE12345".to_string(), String::new())
+        );
         assert_eq!(
             deserialize_tax_bundle(r#"{"tax_id":"DE1","vat_id":"DE9"}"#),
             ("DE1".to_string(), "DE9".to_string())
@@ -493,12 +578,28 @@ mod tests {
 
     async fn connect(schema: &str) -> Option<PgPool> {
         let dsn = std::env::var("TB_TEST_DATABASE_URL").ok()?;
-        let admin = PgPoolOptions::new().max_connections(1).connect(&dsn).await.unwrap();
-        sqlx::query(&format!("DROP SCHEMA IF EXISTS {schema} CASCADE")).execute(&admin).await.unwrap();
-        sqlx::query(&format!("CREATE SCHEMA {schema}")).execute(&admin).await.unwrap();
+        let admin = PgPoolOptions::new()
+            .max_connections(1)
+            .connect(&dsn)
+            .await
+            .unwrap();
+        sqlx::query(&format!("DROP SCHEMA IF EXISTS {schema} CASCADE"))
+            .execute(&admin)
+            .await
+            .unwrap();
+        sqlx::query(&format!("CREATE SCHEMA {schema}"))
+            .execute(&admin)
+            .await
+            .unwrap();
         admin.close().await;
-        let opts = PgConnectOptions::from_str(&dsn).unwrap().options([("search_path", schema)]);
-        let pool = PgPoolOptions::new().max_connections(2).connect_with(opts).await.unwrap();
+        let opts = PgConnectOptions::from_str(&dsn)
+            .unwrap()
+            .options([("search_path", schema)]);
+        let pool = PgPoolOptions::new()
+            .max_connections(2)
+            .connect_with(opts)
+            .await
+            .unwrap();
         sqlx::query(
             "CREATE TABLE affiliate_pii (twitch_login TEXT PRIMARY KEY, full_name_enc BYTEA, email_enc BYTEA, \
              address_line1_enc BYTEA, address_city_enc BYTEA, address_zip_enc BYTEA, tax_id_enc BYTEA, \
@@ -512,13 +613,24 @@ mod tests {
 
     #[tokio::test]
     async fn load_pii_entschluesselt_round_trip() {
-        let Some(pool) = connect("t_pii_load").await else { return };
+        let Some(pool) = connect("t_pii_load").await else {
+            return;
+        };
         let cipher = test_cipher();
         let login = "nani";
         // Mit derselben AAD verschlüsseln wie Python (affiliate_pii|<field>|<login>).
-        let name_blob = cipher.encrypt_field("Nani Mustermann", &pii_aad("full_name", login)).unwrap();
-        let mail_blob = cipher.encrypt_field("a@b.de", &pii_aad("email", login)).unwrap();
-        let tax_blob = cipher.encrypt_field(r#"{"tax_id":"DE1","vat_id":"DE9"}"#, &pii_aad("tax_id", login)).unwrap();
+        let name_blob = cipher
+            .encrypt_field("Nani Mustermann", &pii_aad("full_name", login))
+            .unwrap();
+        let mail_blob = cipher
+            .encrypt_field("a@b.de", &pii_aad("email", login))
+            .unwrap();
+        let tax_blob = cipher
+            .encrypt_field(
+                r#"{"tax_id":"DE1","vat_id":"DE9"}"#,
+                &pii_aad("tax_id", login),
+            )
+            .unwrap();
         sqlx::query("INSERT INTO affiliate_pii (twitch_login, full_name_enc, email_enc, tax_id_enc, address_country, ust_status) VALUES ($1, $2, $3, $4, 'de', 'REGELBESTEUERT')")
             .bind(login).bind(&name_blob).bind(&mail_blob).bind(&tax_blob)
             .execute(&pool).await.unwrap();
@@ -530,15 +642,19 @@ mod tests {
         assert_eq!(pii.vat_id, "DE9");
         assert_eq!(pii.address_country, "DE"); // upper-normalisiert
         assert_eq!(pii.ust_status, "regelbesteuert"); // lower-normalisiert
-        // address_line1/city/zip leer (keine Blobs) → missing.
+                                                      // address_line1/city/zip leer (keine Blobs) → missing.
         let missing = missing_gutschrift_fields(&pii);
         assert!(missing.contains(&"address_line1".to_string()));
     }
 
     #[tokio::test]
     async fn load_pii_keine_zeile_default() {
-        let Some(pool) = connect("t_pii_default").await else { return };
-        let pii = load_affiliate_pii(&pool, &test_cipher(), "ghost").await.unwrap();
+        let Some(pool) = connect("t_pii_default").await else {
+            return;
+        };
+        let pii = load_affiliate_pii(&pool, &test_cipher(), "ghost")
+            .await
+            .unwrap();
         assert_eq!(pii.ust_status, "unknown");
         assert_eq!(pii.address_country, "DE");
         assert!(pii.full_name.is_empty());
@@ -554,7 +670,10 @@ mod tests {
         // Mit vat_id → kompaktes JSON, das deserialize wieder versteht.
         let s = serialize_tax_bundle("DE1", "DE9");
         assert_eq!(s, r#"{"tax_id":"DE1","vat_id":"DE9"}"#);
-        assert_eq!(deserialize_tax_bundle(&s), ("DE1".to_string(), "DE9".to_string()));
+        assert_eq!(
+            deserialize_tax_bundle(&s),
+            ("DE1".to_string(), "DE9".to_string())
+        );
     }
 
     fn input_full() -> PiiInput {
@@ -573,10 +692,14 @@ mod tests {
 
     #[tokio::test]
     async fn save_then_load_round_trip() {
-        let Some(pool) = connect("t_pii_save").await else { return };
+        let Some(pool) = connect("t_pii_save").await else {
+            return;
+        };
         let cipher = test_cipher();
         let login = "nani";
-        save_affiliate_pii(&pool, &cipher, login, &input_full()).await.unwrap();
+        save_affiliate_pii(&pool, &cipher, login, &input_full())
+            .await
+            .unwrap();
 
         let pii = load_affiliate_pii(&pool, &cipher, login).await.unwrap();
         assert_eq!(pii.full_name, "Nani Mustermann");
@@ -593,14 +716,23 @@ mod tests {
 
     #[tokio::test]
     async fn partial_update_behaelt_ungesetzte_felder() {
-        let Some(pool) = connect("t_pii_partial").await else { return };
+        let Some(pool) = connect("t_pii_partial").await else {
+            return;
+        };
         let cipher = test_cipher();
         let login = "nani";
-        save_affiliate_pii(&pool, &cipher, login, &input_full()).await.unwrap();
+        save_affiliate_pii(&pool, &cipher, login, &input_full())
+            .await
+            .unwrap();
 
         // Nur email ändern; alle anderen Felder None → Bestand bleibt.
-        let patch = PiiInput { email: Some("neu@b.de".into()), ..PiiInput::default() };
-        save_affiliate_pii(&pool, &cipher, login, &patch).await.unwrap();
+        let patch = PiiInput {
+            email: Some("neu@b.de".into()),
+            ..PiiInput::default()
+        };
+        save_affiliate_pii(&pool, &cipher, login, &patch)
+            .await
+            .unwrap();
 
         let pii = load_affiliate_pii(&pool, &cipher, login).await.unwrap();
         assert_eq!(pii.email, "neu@b.de"); // geändert
@@ -612,14 +744,23 @@ mod tests {
 
     #[tokio::test]
     async fn leeres_feld_leert_spalte() {
-        let Some(pool) = connect("t_pii_clear").await else { return };
+        let Some(pool) = connect("t_pii_clear").await else {
+            return;
+        };
         let cipher = test_cipher();
         let login = "nani";
-        save_affiliate_pii(&pool, &cipher, login, &input_full()).await.unwrap();
+        save_affiliate_pii(&pool, &cipher, login, &input_full())
+            .await
+            .unwrap();
 
         // address_line1 explizit leeren (Some("")) → Spalte NULL.
-        let patch = PiiInput { address_line1: Some(String::new()), ..PiiInput::default() };
-        save_affiliate_pii(&pool, &cipher, login, &patch).await.unwrap();
+        let patch = PiiInput {
+            address_line1: Some(String::new()),
+            ..PiiInput::default()
+        };
+        save_affiliate_pii(&pool, &cipher, login, &patch)
+            .await
+            .unwrap();
 
         let pii = load_affiliate_pii(&pool, &cipher, login).await.unwrap();
         assert!(pii.address_line1.is_empty());
@@ -630,14 +771,23 @@ mod tests {
 
     #[tokio::test]
     async fn vat_id_entfernen_faellt_auf_rohe_tax_id() {
-        let Some(pool) = connect("t_pii_vat").await else { return };
+        let Some(pool) = connect("t_pii_vat").await else {
+            return;
+        };
         let cipher = test_cipher();
         let login = "nani";
-        save_affiliate_pii(&pool, &cipher, login, &input_full()).await.unwrap();
+        save_affiliate_pii(&pool, &cipher, login, &input_full())
+            .await
+            .unwrap();
 
         // vat_id leeren → Bundle = nur tax_id (roh, kein JSON).
-        let patch = PiiInput { vat_id: Some(String::new()), ..PiiInput::default() };
-        save_affiliate_pii(&pool, &cipher, login, &patch).await.unwrap();
+        let patch = PiiInput {
+            vat_id: Some(String::new()),
+            ..PiiInput::default()
+        };
+        save_affiliate_pii(&pool, &cipher, login, &patch)
+            .await
+            .unwrap();
 
         let pii = load_affiliate_pii(&pool, &cipher, login).await.unwrap();
         assert_eq!(pii.tax_id, "DE1");

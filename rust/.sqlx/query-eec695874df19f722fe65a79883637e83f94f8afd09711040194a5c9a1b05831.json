@@ -1,0 +1,14 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "DELETE FROM twitch_chatter_global_ban_applied WHERE chatter_login = $1",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Text"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "eec695874df19f722fe65a79883637e83f94f8afd09711040194a5c9a1b05831"
+}

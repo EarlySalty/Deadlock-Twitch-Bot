@@ -1,0 +1,17 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "INSERT INTO twitch_subscriptions_snapshot (twitch_user_id, twitch_login, total, points, snapshot_at) VALUES ($1, $2, $3, $4, NOW())",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Text",
+        "Text",
+        "Int4",
+        "Int4"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "103a8b9b22e4ff3e0552967f42950c2bf7da4ec55d899e66633d251d8cad1b5c"
+}

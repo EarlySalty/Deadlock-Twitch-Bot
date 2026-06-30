@@ -1,0 +1,15 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "INSERT INTO streamer_plans (twitch_user_id, twitch_login, plan_name, expires_at)\n           SELECT twitch_user_id, twitch_login, $1, NULL\n           FROM twitch_streamers_partner_state\n           WHERE LOWER(twitch_login) = LOWER($2)\n           ON CONFLICT (twitch_user_id) DO UPDATE SET\n               plan_name = EXCLUDED.plan_name,\n               expires_at = EXCLUDED.expires_at",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Text",
+        "Text"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "6c273a2d5dcdbf90d68a5dfd539efd5142aa046499709e85fa20db08ebe3fa99"
+}

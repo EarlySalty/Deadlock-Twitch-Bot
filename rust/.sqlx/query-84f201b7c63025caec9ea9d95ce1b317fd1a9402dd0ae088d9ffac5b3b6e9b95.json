@@ -1,0 +1,29 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n        SELECT s.id AS \"id!\",\n               s.peak_viewers AS \"peak_viewers!\"\n        FROM twitch_stream_sessions s\n        WHERE s.streamer_login = $1\n          AND s.started_at >= $2\n          AND s.peak_viewers > 0\n        ORDER BY s.started_at DESC\n        LIMIT 20\n        ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id!",
+        "type_info": "Int8"
+      },
+      {
+        "ordinal": 1,
+        "name": "peak_viewers!",
+        "type_info": "Int4"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Text",
+        "Timestamptz"
+      ]
+    },
+    "nullable": [
+      false,
+      true
+    ]
+  },
+  "hash": "84f201b7c63025caec9ea9d95ce1b317fd1a9402dd0ae088d9ffac5b3b6e9b95"
+}

@@ -57,11 +57,9 @@ pub fn plan_entitlements(plan_id: &str) -> &'static [&'static str] {
         "raid_free" => &[],
         "chat_quiet" => &["chat.promos.disable"],
         "raid_boost" => &["chat.lurker_tax", "raid.priority"],
-        "bundle_chat_quiet_raid_boost" => &[
-            "chat.lurker_tax",
-            "chat.promos.disable",
-            "raid.priority",
-        ],
+        "bundle_chat_quiet_raid_boost" => {
+            &["chat.lurker_tax", "chat.promos.disable", "raid.priority"]
+        }
         "analysis_dashboard" => &["analytics", "chat.lurker_tax"],
         "bundle_analysis_raid_boost" => &[
             "analytics",
@@ -69,11 +67,7 @@ pub fn plan_entitlements(plan_id: &str) -> &'static [&'static str] {
             "chat.promos.disable",
             "raid.priority",
         ],
-        "bundle_werbefrei_analyse" => &[
-            "analytics",
-            "chat.lurker_tax",
-            "chat.promos.disable",
-        ],
+        "bundle_werbefrei_analyse" => &["analytics", "chat.lurker_tax", "chat.promos.disable"],
         "bundle_komplett" => &[
             "analytics",
             "chat.lurker_tax",
@@ -262,7 +256,11 @@ pub async fn resolve_plan_snapshot(
     let login = login.trim().to_lowercase();
     let user_id = user_id.trim();
     // Fallback-Ref (Python `fallback_ref`): bevorzugt Login, sonst user_id.
-    let fallback_ref = if !login.is_empty() { login.clone() } else { user_id.to_string() };
+    let fallback_ref = if !login.is_empty() {
+        login.clone()
+    } else {
+        user_id.to_string()
+    };
     if login.is_empty() && user_id.is_empty() {
         return Ok(PlanSnapshot::default_basic(&fallback_ref));
     }
@@ -280,14 +278,15 @@ pub async fn resolve_plan_snapshot(
     // priorisiert den user_id-Treffer (CASE-ORDER). Ein nur per user_id (mit
     // abweichendem/leerem Login) eingetragener Override wurde sonst nicht
     // gefunden → Streamer verlor seinen bezahlten/gecompten Plan.
-    let manual: Option<ManualOverrideRow> = sqlx::query_as(
+    let manual = sqlx::query_as!(
+        ManualOverrideRow,
         r#"
         SELECT
-            COALESCE(twitch_user_id, '') AS twitch_user_id,
-            COALESCE(twitch_login, '')   AS twitch_login,
+            COALESCE(twitch_user_id, '') AS "twitch_user_id?",
+            COALESCE(twitch_login, '')   AS "twitch_login?",
             manual_plan_id,
             manual_plan_expires_at::text,
-            COALESCE(manual_plan_notes, '')      AS manual_plan_notes,
+            COALESCE(manual_plan_notes, '')      AS "manual_plan_notes?",
             manual_plan_updated_at::text         AS manual_plan_updated_at
         FROM streamer_plans
         WHERE LOWER(COALESCE(twitch_login, '')) = LOWER($1)
@@ -297,14 +296,19 @@ pub async fn resolve_plan_snapshot(
             manual_plan_updated_at DESC NULLS LAST
         LIMIT 1
         "#,
+        &login,
+        user_id
     )
-    .bind(&login)
-    .bind(user_id)
     .fetch_optional(pool)
     .await?;
 
     if let Some(row) = manual {
-        let pid_raw = row.manual_plan_id.as_deref().unwrap_or("").trim().to_string();
+        let pid_raw = row
+            .manual_plan_id
+            .as_deref()
+            .unwrap_or("")
+            .trim()
+            .to_string();
         // Strikt-kanonisch wie Python `manual_override_from_row` (repository.py:82):
         // ein `manual_plan_id`, der NICHT in KNOWN_PLAN_IDS liegt (Case-Mismatch,
         // Legacy-Alias, Tippfehler), macht den Override ungültig → Fall-Through zu
@@ -324,7 +328,12 @@ pub async fn resolve_plan_snapshot(
             let is_active = !expired;
 
             let mo_login = row.twitch_login.as_deref().unwrap_or("").trim().to_string();
-            let mo_user_id = row.twitch_user_id.as_deref().unwrap_or("").trim().to_string();
+            let mo_user_id = row
+                .twitch_user_id
+                .as_deref()
+                .unwrap_or("")
+                .trim()
+                .to_string();
             // customer_reference (Python build_plan_snapshot:209): login || user_id || fallback.
             let customer_reference = first_non_empty(&[&mo_login, &mo_user_id, &fallback_ref]);
             // Voll-Sub-Dict identisch zu Pythons `manual_override_from_row`.
@@ -358,25 +367,30 @@ pub async fn resolve_plan_snapshot(
     // ── Stripe-Abo ──────────────────────────────────────────────────────────
     // customer_reference kann Login ODER twitch_user_id sein — beide prüfen,
     // sonst bleibt ein per user_id referenziertes Stripe-Abo unsichtbar.
-    let billing: Option<BillingRow> = sqlx::query_as(
+    let active_billing_statuses: Vec<String> = ACTIVE_BILLING_STATUSES
+        .iter()
+        .map(|status| status.to_string())
+        .collect();
+    let billing = sqlx::query_as!(
+        BillingRow,
         r#"
         SELECT
-            COALESCE(customer_reference, '') AS customer_reference,
+            COALESCE(customer_reference, '') AS "customer_reference?",
             plan_id,
-            COALESCE(status, '')             AS status,
+            COALESCE(status, '')             AS "status?",
             current_period_end::text,
             updated_at::text                 AS updated_at
         FROM twitch_billing_subscriptions
         WHERE (LOWER(customer_reference) = LOWER($1)
                OR ($2 <> '' AND LOWER(customer_reference) = LOWER($2)))
-          AND status = ANY($3)
+          AND status = ANY($3::text[])
         ORDER BY updated_at DESC
         LIMIT 1
         "#,
+        &login,
+        user_id,
+        &active_billing_statuses
     )
-    .bind(&login)
-    .bind(user_id)
-    .bind(&ACTIVE_BILLING_STATUSES[..])
     .fetch_optional(pool)
     .await?;
 
@@ -387,13 +401,20 @@ pub async fn resolve_plan_snapshot(
         let pid = normalize_plan_id(plan_raw);
         // status: leerer Wert → "active" (Python build_plan_snapshot:219).
         let status_raw = row.status.as_deref().unwrap_or("").trim();
-        let status = if status_raw.is_empty() { "active".to_string() } else { status_raw.to_string() };
+        let status = if status_raw.is_empty() {
+            "active".to_string()
+        } else {
+            status_raw.to_string()
+        };
         // current_period_end normalisiert → expires_at (Python:223-228).
         let expires_norm = normalize_expires_at(row.current_period_end.as_deref());
         // customer_reference: row-Wert || fallback (Python:220-222).
         let cust_raw = row.customer_reference.as_deref().unwrap_or("").trim();
-        let customer_reference =
-            if cust_raw.is_empty() { fallback_ref.clone() } else { cust_raw.to_string() };
+        let customer_reference = if cust_raw.is_empty() {
+            fallback_ref.clone()
+        } else {
+            cust_raw.to_string()
+        };
         // Voll-Sub-Dict identisch zu Pythons `load_billing_subscription`-Payload.
         let billing_subscription = json!({
             "customer_reference": customer_reference.clone(),
@@ -430,7 +451,9 @@ fn first_non_empty(candidates: &[&str]) -> String {
 /// `Some(trimmed)` wenn nichtleer, sonst `None` (für JSON-`null`). Spiegelt
 /// Pythons `str(...).strip() or None`.
 fn non_empty_or_null(raw: Option<&str>) -> Option<String> {
-    raw.map(str::trim).filter(|s| !s.is_empty()).map(str::to_string)
+    raw.map(str::trim)
+        .filter(|s| !s.is_empty())
+        .map(str::to_string)
 }
 
 /// Parst einen Roh-Zeitstempel nach UTC — Port von Pythons `parse_datetime_value`
@@ -450,7 +473,10 @@ fn parse_datetime_value(raw: &str) -> Option<chrono::DateTime<chrono::Utc>> {
         return None;
     }
     // Date-only-Fallback (Python: len==10 && text[4]=='-' && text[7]=='-').
-    if text.len() == 10 && text.as_bytes().get(4) == Some(&b'-') && text.as_bytes().get(7) == Some(&b'-') {
+    if text.len() == 10
+        && text.as_bytes().get(4) == Some(&b'-')
+        && text.as_bytes().get(7) == Some(&b'-')
+    {
         text = format!("{text}T23:59:59+00:00");
     }
     let normalized = text.replace('Z', "+00:00");
@@ -459,9 +485,17 @@ fn parse_datetime_value(raw: &str) -> Option<chrono::DateTime<chrono::Utc>> {
         return Some(dt.with_timezone(&chrono::Utc));
     }
     // Naive ISO-Timestamps (kein Offset) — Python nimmt UTC an.
-    for fmt in ["%Y-%m-%dT%H:%M:%S%.f", "%Y-%m-%dT%H:%M:%S", "%Y-%m-%d %H:%M:%S%.f", "%Y-%m-%d %H:%M:%S"] {
+    for fmt in [
+        "%Y-%m-%dT%H:%M:%S%.f",
+        "%Y-%m-%dT%H:%M:%S",
+        "%Y-%m-%d %H:%M:%S%.f",
+        "%Y-%m-%d %H:%M:%S",
+    ] {
         if let Ok(naive) = chrono::NaiveDateTime::parse_from_str(&normalized, fmt) {
-            return Some(chrono::DateTime::from_naive_utc_and_offset(naive, chrono::Utc));
+            return Some(chrono::DateTime::from_naive_utc_and_offset(
+                naive,
+                chrono::Utc,
+            ));
         }
     }
     None
@@ -495,7 +529,11 @@ mod tests {
     #[test]
     fn normalize_akzeptiert_alle_kanonischen_ids() {
         for id in KNOWN_PLAN_IDS {
-            assert_eq!(normalize_plan_id(id), id, "kanonische ID muss erhalten bleiben: {id}");
+            assert_eq!(
+                normalize_plan_id(id),
+                id,
+                "kanonische ID muss erhalten bleiben: {id}"
+            );
         }
     }
 
@@ -503,7 +541,10 @@ mod tests {
     fn normalize_trimmt_whitespace() {
         // Python `str(...).strip()` trimmt vor dem KNOWN_PLAN_IDS-Abgleich.
         assert_eq!(normalize_plan_id("  raid_boost  "), "raid_boost");
-        assert_eq!(normalize_plan_id("\tanalysis_dashboard\n"), "analysis_dashboard");
+        assert_eq!(
+            normalize_plan_id("\tanalysis_dashboard\n"),
+            "analysis_dashboard"
+        );
     }
 
     #[test]
@@ -519,7 +560,14 @@ mod tests {
         // Legacy-Aliase (free/werbefrei/quiet/analysis/bundle/chat_quiet_bundle)
         // gehören in Python NUR zu normalize_plan_id_from_legacy_name (Raid-
         // Subsystem), NICHT zur Entitlement-DB-Auflösung → hier kein Mapping.
-        for alias in ["free", "werbefrei", "quiet", "analysis", "bundle", "chat_quiet_bundle"] {
+        for alias in [
+            "free",
+            "werbefrei",
+            "quiet",
+            "analysis",
+            "bundle",
+            "chat_quiet_bundle",
+        ] {
             assert_eq!(
                 normalize_plan_id(alias),
                 "raid_free",
@@ -575,8 +623,16 @@ mod tests {
     /// reinen Raid-/Chat-/Free-Pläne nicht.
     #[test]
     fn analytics_flag_nur_auf_analyse_plaenen() {
-        for id in ["raid_boost", "bundle_chat_quiet_raid_boost", "raid_free", "chat_quiet"] {
-            assert!(!plan_has_analytics(id), "{id} darf kein analytics-Flag tragen");
+        for id in [
+            "raid_boost",
+            "bundle_chat_quiet_raid_boost",
+            "raid_free",
+            "chat_quiet",
+        ] {
+            assert!(
+                !plan_has_analytics(id),
+                "{id} darf kein analytics-Flag tragen"
+            );
             assert!(
                 !plan_entitlements(id).contains(&"analytics"),
                 "{id} entitlements dürfen kein analytics enthalten"
@@ -619,7 +675,10 @@ mod tests {
         assert!(got.ends_with("+00:00"), "got={got}");
         // Nicht-UTC-Offset wird nach UTC konvertiert (Python astimezone(UTC)).
         let got2 = normalize_expires_at(Some("2026-06-30T12:00:00+02:00")).unwrap();
-        assert!(got2.starts_with("2026-06-30T10:00:00"), "Offset→UTC: {got2}");
+        assert!(
+            got2.starts_with("2026-06-30T10:00:00"),
+            "Offset→UTC: {got2}"
+        );
     }
 
     #[test]
@@ -662,12 +721,28 @@ mod tests {
 
     async fn snapshot_pool(schema: &str) -> Option<PgPool> {
         let dsn = std::env::var("TB_TEST_DATABASE_URL").ok()?;
-        let admin = PgPoolOptions::new().max_connections(1).connect(&dsn).await.unwrap();
-        sqlx::query(&format!("DROP SCHEMA IF EXISTS {schema} CASCADE")).execute(&admin).await.unwrap();
-        sqlx::query(&format!("CREATE SCHEMA {schema}")).execute(&admin).await.unwrap();
+        let admin = PgPoolOptions::new()
+            .max_connections(1)
+            .connect(&dsn)
+            .await
+            .unwrap();
+        sqlx::query(&format!("DROP SCHEMA IF EXISTS {schema} CASCADE"))
+            .execute(&admin)
+            .await
+            .unwrap();
+        sqlx::query(&format!("CREATE SCHEMA {schema}"))
+            .execute(&admin)
+            .await
+            .unwrap();
         admin.close().await;
-        let opts = PgConnectOptions::from_str(&dsn).unwrap().options([("search_path", schema)]);
-        let pool = PgPoolOptions::new().max_connections(2).connect_with(opts).await.unwrap();
+        let opts = PgConnectOptions::from_str(&dsn)
+            .unwrap()
+            .options([("search_path", schema)]);
+        let pool = PgPoolOptions::new()
+            .max_connections(2)
+            .connect_with(opts)
+            .await
+            .unwrap();
         // PK auf twitch_user_id + first_login_at, damit der Trial-Auto-Grant-Pfad
         // sauber durchläuft (er bleibt mangels first_login_at ein No-op).
         sqlx::query(
@@ -675,29 +750,40 @@ mod tests {
              manual_plan_id TEXT, manual_plan_expires_at TEXT, manual_plan_notes TEXT, \
              manual_plan_updated_at TEXT, first_login_at TEXT, \
              trial_ever_granted INTEGER DEFAULT 0)",
-        ).execute(&pool).await.unwrap();
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
         sqlx::query(
             "CREATE TABLE twitch_billing_subscriptions (customer_reference TEXT, plan_id TEXT, \
              status TEXT, current_period_end TEXT, updated_at TEXT)",
-        ).execute(&pool).await.unwrap();
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
         Some(pool)
     }
 
     #[tokio::test]
     async fn resolve_manual_override_full_snapshot() {
-        let Some(pool) = snapshot_pool("plan_manual").await else { return };
+        let Some(pool) = snapshot_pool("plan_manual").await else {
+            return;
+        };
         sqlx::query(
             "INSERT INTO streamer_plans (twitch_user_id, twitch_login, manual_plan_id, \
              manual_plan_expires_at, manual_plan_notes, manual_plan_updated_at) \
              VALUES ('42', 'nani', 'raid_boost', '2999-01-15', 'comped', '2026-06-01T10:00:00Z')",
-        ).execute(&pool).await.unwrap();
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
 
         let snap = resolve_plan_snapshot(&pool, "nani", "42").await.unwrap();
         assert_eq!(snap.plan_id, "raid_boost");
         assert_eq!(snap.source, "manual_override");
         assert_eq!(snap.status, "active");
         assert_eq!(snap.customer_reference, "nani"); // login bevorzugt
-        // expires_at normalisiert (Date-only → Tagesende UTC).
+                                                     // expires_at normalisiert (Date-only → Tagesende UTC).
         let exp = snap.expires_at.as_deref().unwrap();
         assert!(exp.starts_with("2999-01-15T23:59:59"), "exp={exp}");
         // manual_override-Sub-Dict gefüllt, billing leer.
@@ -710,7 +796,9 @@ mod tests {
 
     #[tokio::test]
     async fn resolve_billing_full_snapshot_with_status() {
-        let Some(pool) = snapshot_pool("plan_billing").await else { return };
+        let Some(pool) = snapshot_pool("plan_billing").await else {
+            return;
+        };
         // Kein Manual-Override; aktives Stripe-Abo mit trialing-Status.
         sqlx::query(
             "INSERT INTO twitch_billing_subscriptions (customer_reference, plan_id, status, \

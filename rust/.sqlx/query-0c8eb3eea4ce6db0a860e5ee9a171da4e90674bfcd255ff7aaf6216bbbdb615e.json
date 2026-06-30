@@ -1,0 +1,48 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n        SELECT message_ts AS \"message_ts!\",\n               content,\n               is_command,\n               chatter_login,\n               chatter_id\n        FROM twitch_chat_messages\n        WHERE message_ts >= $1\n          AND LOWER(streamer_login) = $2\n          AND (chatter_login IS NULL OR chatter_login = '' OR LOWER(chatter_login) <> ALL($3))\n        ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "message_ts!",
+        "type_info": "Timestamptz"
+      },
+      {
+        "ordinal": 1,
+        "name": "content",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 2,
+        "name": "is_command",
+        "type_info": "Bool"
+      },
+      {
+        "ordinal": 3,
+        "name": "chatter_login",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 4,
+        "name": "chatter_id",
+        "type_info": "Text"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Timestamptz",
+        "Text",
+        "TextArray"
+      ]
+    },
+    "nullable": [
+      false,
+      true,
+      true,
+      true,
+      true
+    ]
+  },
+  "hash": "0c8eb3eea4ce6db0a860e5ee9a171da4e90674bfcd255ff7aaf6216bbbdb615e"
+}

@@ -1,0 +1,34 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n        SELECT session_id AS \"session_id!\",\n               minutes_from_start,\n               viewer_count AS \"viewer_count!\"\n        FROM twitch_session_viewers\n        WHERE session_id = ANY($1)\n          AND minutes_from_start <= 60\n        ORDER BY session_id, minutes_from_start\n        ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "session_id!",
+        "type_info": "Int8"
+      },
+      {
+        "ordinal": 1,
+        "name": "minutes_from_start",
+        "type_info": "Int4"
+      },
+      {
+        "ordinal": 2,
+        "name": "viewer_count!",
+        "type_info": "Int4"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Int8Array"
+      ]
+    },
+    "nullable": [
+      false,
+      true,
+      false
+    ]
+  },
+  "hash": "e2d128c4d0528a576b4f399f879a78c053ce0197bc0d2f0ac6f07e1f460a7530"
+}

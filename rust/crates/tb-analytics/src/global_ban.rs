@@ -25,9 +25,12 @@ pub struct GlobalBanEntry {
 /// Liefert `None` wenn die Query fehlschlägt (kein Hard-Fehler — healthz soll
 /// trotzdem antworten).
 pub async fn db_schema_fingerprint(pool: &PgPool) -> Result<String, sqlx::Error> {
-    let rows: Vec<(String, String, String)> = sqlx::query_as(
+    let rows = sqlx::query!(
         r#"
-        SELECT table_schema, table_name, table_type
+        SELECT
+            COALESCE(table_schema, '') AS "table_schema!",
+            COALESCE(table_name, '') AS "table_name!",
+            COALESCE(table_type, '') AS "table_type!"
         FROM information_schema.tables
         WHERE table_schema NOT IN ('information_schema', 'pg_catalog')
         ORDER BY table_schema, table_name
@@ -38,7 +41,7 @@ pub async fn db_schema_fingerprint(pool: &PgPool) -> Result<String, sqlx::Error>
 
     let combined: String = rows
         .iter()
-        .map(|(schema, name, typ)| format!("{schema}.{name}:{typ}"))
+        .map(|row| format!("{}.{}:{}", row.table_schema, row.table_name, row.table_type))
         .collect::<Vec<_>>()
         .join("\n");
 
@@ -68,7 +71,7 @@ pub async fn add_ban(
 ) -> Result<(), sqlx::Error> {
     let login = login.to_lowercase();
 
-    sqlx::query(
+    sqlx::query!(
         r#"
         INSERT INTO twitch_chatter_global_ban (chatter_login, chatter_id, reason, added_by)
         VALUES ($1, $2, $3, $4)
@@ -78,11 +81,11 @@ pub async fn add_ban(
             added_by   = EXCLUDED.added_by,
             added_at   = NOW()
         "#,
+        &login,
+        chatter_id,
+        reason,
+        added_by
     )
-    .bind(&login)
-    .bind(chatter_id)
-    .bind(reason)
-    .bind(added_by)
     .execute(pool)
     .await?;
 
@@ -98,15 +101,19 @@ pub async fn remove_ban(pool: &PgPool, login: &str) -> Result<bool, sqlx::Error>
     let login = login.to_lowercase();
     let mut tx = pool.begin().await?;
 
-    let result = sqlx::query("DELETE FROM twitch_chatter_global_ban WHERE chatter_login = $1")
-        .bind(&login)
-        .execute(&mut *tx)
-        .await?;
+    let result = sqlx::query!(
+        "DELETE FROM twitch_chatter_global_ban WHERE chatter_login = $1",
+        &login
+    )
+    .execute(&mut *tx)
+    .await?;
 
-    sqlx::query("DELETE FROM twitch_chatter_global_ban_applied WHERE chatter_login = $1")
-        .bind(&login)
-        .execute(&mut *tx)
-        .await?;
+    sqlx::query!(
+        "DELETE FROM twitch_chatter_global_ban_applied WHERE chatter_login = $1",
+        &login
+    )
+    .execute(&mut *tx)
+    .await?;
 
     tx.commit().await?;
     Ok(result.rows_affected() > 0)
@@ -120,17 +127,17 @@ pub async fn remove_ban(pool: &PgPool, login: &str) -> Result<bool, sqlx::Error>
 /// filtert `chatter_id <> ''` damit kein False-Positive entsteht.
 pub async fn check_ban(pool: &PgPool, login: &str, chatter_id: &str) -> Result<bool, sqlx::Error> {
     let login = login.to_lowercase();
-    let row: Option<(i32,)> = sqlx::query_as(
+    let row = sqlx::query_scalar!(
         r#"
-        SELECT 1
+        SELECT 1 AS "found!"
         FROM twitch_chatter_global_ban
         WHERE chatter_login = $1
            OR (chatter_id IS NOT NULL AND chatter_id = $2 AND chatter_id <> '')
         LIMIT 1
         "#,
+        &login,
+        chatter_id
     )
-    .bind(&login)
-    .bind(chatter_id)
     .fetch_optional(pool)
     .await?;
 
@@ -141,9 +148,15 @@ pub async fn check_ban(pool: &PgPool, login: &str, chatter_id: &str) -> Result<b
 
 /// Alle Einträge, neueste zuerst.
 pub async fn list_bans(pool: &PgPool) -> Result<Vec<GlobalBanEntry>, sqlx::Error> {
-    sqlx::query_as(
+    sqlx::query_as!(
+        GlobalBanEntry,
         r#"
-        SELECT chatter_login, chatter_id, reason, added_by, added_at
+        SELECT
+            chatter_login AS "chatter_login!",
+            chatter_id,
+            reason,
+            added_by,
+            added_at AS "added_at?"
         FROM twitch_chatter_global_ban
         ORDER BY added_at DESC
         "#,

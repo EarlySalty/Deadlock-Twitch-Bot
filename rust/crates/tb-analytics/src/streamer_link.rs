@@ -26,15 +26,16 @@ pub struct UnlinkedStreamer {
 /// Partnerstatus erscheinen hier nicht — der Matcher soll nur echte Partner
 /// automatisch verknüpfen und darüber berichten.
 pub async fn list_unlinked(pool: &PgPool) -> Result<Vec<UnlinkedStreamer>, sqlx::Error> {
-    sqlx::query_as(
+    sqlx::query_as!(
+        UnlinkedStreamer,
         r#"
-        SELECT s.twitch_login,
+        SELECT s.twitch_login AS "twitch_login!",
                COALESCE(NULLIF(s.twitch_user_id, ''), i.twitch_user_id) AS twitch_user_id,
                CASE WHEN NOT EXISTS (
                     SELECT 1 FROM twitch_partners p
                     WHERE p.twitch_user_id = s.twitch_user_id
                        OR LOWER(p.twitch_login) = LOWER(s.twitch_login)
-               ) THEN 1 ELSE 0 END                                      AS is_monitored_only
+               ) THEN 1 ELSE 0 END                                      AS "is_monitored_only!"
           FROM twitch_streamers s
          INNER JOIN twitch_partners tp
             ON tp.twitch_login = s.twitch_login

@@ -1,0 +1,19 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n            INSERT INTO twitch_streamer_identities (\n                twitch_user_id, twitch_login, discord_user_id,\n                discord_display_name, is_on_discord, created_at, updated_at\n            ) VALUES ($1, $2, $3, $4, $5, $6, $6)\n            ON CONFLICT (twitch_user_id) DO UPDATE SET\n                twitch_login         = EXCLUDED.twitch_login,\n                discord_user_id      = COALESCE(EXCLUDED.discord_user_id, twitch_streamer_identities.discord_user_id),\n                discord_display_name = COALESCE(EXCLUDED.discord_display_name, twitch_streamer_identities.discord_display_name),\n                is_on_discord        = EXCLUDED.is_on_discord,\n                updated_at           = EXCLUDED.updated_at\n            ",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Text",
+        "Text",
+        "Text",
+        "Text",
+        "Int4",
+        "Text"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "6c7cb641e02f6f904e4eeacae0937e5dadf35a58896b0c9a0df39b501e6adc62"
+}

@@ -1,0 +1,29 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT COUNT(*)::bigint AS \"rows!\", COUNT(DISTINCT sc.session_id)::bigint AS \"sessions!\" FROM twitch_session_chatters sc WHERE LOWER(sc.streamer_login) = $1 AND sc.session_id = ANY($2::bigint[])",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "rows!",
+        "type_info": "Int8"
+      },
+      {
+        "ordinal": 1,
+        "name": "sessions!",
+        "type_info": "Int8"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Text",
+        "Int8Array"
+      ]
+    },
+    "nullable": [
+      null,
+      null
+    ]
+  },
+  "hash": "0dfad953279837024b145902ee231bac620126b9f1f5b1b9d411fe356f24e009"
+}

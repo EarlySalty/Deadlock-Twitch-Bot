@@ -1,0 +1,19 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "INSERT INTO streamer_plans\n               (twitch_user_id, twitch_login, manual_plan_id, manual_plan_expires_at,\n                trial_ever_granted, manual_plan_notes, manual_plan_updated_at)\n           VALUES ($1, $2, $3, $4, 1, $5, $6)\n           ON CONFLICT (twitch_user_id) DO UPDATE SET\n               manual_plan_id = EXCLUDED.manual_plan_id,\n               manual_plan_expires_at = EXCLUDED.manual_plan_expires_at,\n               trial_ever_granted = 1,\n               manual_plan_notes = EXCLUDED.manual_plan_notes,\n               manual_plan_updated_at = EXCLUDED.manual_plan_updated_at",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Text",
+        "Text",
+        "Text",
+        "Text",
+        "Text",
+        "Text"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "4b1d1224ea55cd347161d89c29323b1eccd98a8fc5e71dc7282376a6f46f0662"
+}

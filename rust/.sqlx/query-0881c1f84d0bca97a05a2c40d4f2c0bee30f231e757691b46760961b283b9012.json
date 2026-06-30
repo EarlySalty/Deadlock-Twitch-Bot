@@ -1,0 +1,65 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n        SELECT COALESCE(game_name, 'Unbekannt') AS \"game_name!\",\n               COUNT(*)::bigint AS \"session_count!\",\n               ROUND(AVG(avg_viewers)::numeric, 1)::float8 AS avg_viewers,\n               MAX(peak_viewers) AS peak_viewers,\n               ROUND((SUM(duration_seconds) / 3600.0)::numeric, 1)::float8 AS total_hours,\n               COALESCE(SUM(CASE WHEN follower_delta > 0 THEN follower_delta ELSE 0 END), 0)::bigint AS \"followers_gained!\",\n               SUM(samples)::bigint AS sample_count,\n               MAX(started_at)::date AS \"last_started!\"\n        FROM twitch_stream_sessions\n        WHERE LOWER(streamer_login) = $1\n          AND started_at >= $2\n          AND ended_at IS NOT NULL\n        GROUP BY game_name\n        ORDER BY COUNT(*) DESC, AVG(avg_viewers) DESC NULLS LAST\n        LIMIT 15\n        ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "game_name!",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 1,
+        "name": "session_count!",
+        "type_info": "Int8"
+      },
+      {
+        "ordinal": 2,
+        "name": "avg_viewers",
+        "type_info": "Float8"
+      },
+      {
+        "ordinal": 3,
+        "name": "peak_viewers",
+        "type_info": "Int4"
+      },
+      {
+        "ordinal": 4,
+        "name": "total_hours",
+        "type_info": "Float8"
+      },
+      {
+        "ordinal": 5,
+        "name": "followers_gained!",
+        "type_info": "Int8"
+      },
+      {
+        "ordinal": 6,
+        "name": "sample_count",
+        "type_info": "Int8"
+      },
+      {
+        "ordinal": 7,
+        "name": "last_started!",
+        "type_info": "Date"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Text",
+        "Timestamptz"
+      ]
+    },
+    "nullable": [
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      null
+    ]
+  },
+  "hash": "0881c1f84d0bca97a05a2c40d4f2c0bee30f231e757691b46760961b283b9012"
+}

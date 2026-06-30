@@ -1,0 +1,12 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n        CREATE TABLE IF NOT EXISTS twitch_global_promo_modes (\n            config_key TEXT PRIMARY KEY,\n            mode TEXT NOT NULL DEFAULT 'standard',\n            custom_message TEXT,\n            starts_at TEXT,\n            ends_at TEXT,\n            is_enabled INTEGER NOT NULL DEFAULT 0,\n            updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,\n            updated_by TEXT\n        )\n        ",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": []
+    },
+    "nullable": []
+  },
+  "hash": "762f88ce6b3858d3ead22d834883f0a647b53130754937d18e123721a55fad15"
+}

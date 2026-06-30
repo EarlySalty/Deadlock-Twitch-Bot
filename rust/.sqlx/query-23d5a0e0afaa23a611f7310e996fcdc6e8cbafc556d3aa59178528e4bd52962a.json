@@ -1,0 +1,58 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT s.streamer_login, s.started_at::text AS \"started_at?\", s.ended_at::text AS ended_at, s.duration_seconds::int8 AS duration_seconds, COALESCE(s.avg_viewers, 0)::float8 AS \"avg_viewers!\", COALESCE(s.peak_viewers, 0)::int8 AS \"peak_viewers!\", COALESCE(s.follower_delta, 0)::int8 AS \"followers_delta!\" FROM twitch_stream_sessions s WHERE s.id = $1",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "streamer_login",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 1,
+        "name": "started_at?",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 2,
+        "name": "ended_at",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 3,
+        "name": "duration_seconds",
+        "type_info": "Int8"
+      },
+      {
+        "ordinal": 4,
+        "name": "avg_viewers!",
+        "type_info": "Float8"
+      },
+      {
+        "ordinal": 5,
+        "name": "peak_viewers!",
+        "type_info": "Int8"
+      },
+      {
+        "ordinal": 6,
+        "name": "followers_delta!",
+        "type_info": "Int8"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Int8"
+      ]
+    },
+    "nullable": [
+      false,
+      null,
+      null,
+      null,
+      null,
+      null,
+      null
+    ]
+  },
+  "hash": "23d5a0e0afaa23a611f7310e996fcdc6e8cbafc556d3aa59178528e4bd52962a"
+}

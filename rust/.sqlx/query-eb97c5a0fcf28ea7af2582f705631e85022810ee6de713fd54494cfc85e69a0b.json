@@ -1,0 +1,35 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n        SELECT s.id AS \"id!\",\n               s.started_at::date AS \"started_date!\",\n               s.stream_title\n        FROM twitch_stream_sessions s\n        WHERE LOWER(s.streamer_login) = $1\n          AND s.id != $2\n        ORDER BY s.started_at DESC\n        LIMIT 10\n        ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id!",
+        "type_info": "Int8"
+      },
+      {
+        "ordinal": 1,
+        "name": "started_date!",
+        "type_info": "Date"
+      },
+      {
+        "ordinal": 2,
+        "name": "stream_title",
+        "type_info": "Text"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Text",
+        "Int8"
+      ]
+    },
+    "nullable": [
+      false,
+      null,
+      true
+    ]
+  },
+  "hash": "eb97c5a0fcf28ea7af2582f705631e85022810ee6de713fd54494cfc85e69a0b"
+}

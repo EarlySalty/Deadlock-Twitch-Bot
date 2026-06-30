@@ -99,6 +99,11 @@ fn is_duplicate_error(e: &sqlx::Error) -> bool {
     msg.contains("unique") || msg.contains("duplicate")
 }
 
+fn cents_to_int4(value: i64, field: &str) -> Result<i32, sqlx::Error> {
+    i32::try_from(value)
+        .map_err(|_| sqlx::Error::InvalidArgument(format!("{field} out of int4 range: {value}")))
+}
+
 /// Verbucht (und zahlt ggf. aus) die Affiliate-Provision für eine bezahlte
 /// Invoice. `stripe` ist optional — ohne Client bleibt eine fällige Auszahlung
 /// `pending` (genau wie Pythons Pfad ohne Connect-Konto/Client).
@@ -111,11 +116,14 @@ pub async fn process_commission(
     // `customer_reference` (ein Twitch-Login, siehe stripe/webhook_apply.rs:351);
     // eine `twitch_login`-Spalte hat `twitch_billing_subscriptions` nie gehabt.
     // Normalisierung wie Python: `str(...).strip().lower()`.
-    let streamer_login: Option<String> = sqlx::query_scalar(
-        "SELECT LOWER(TRIM(COALESCE(customer_reference, ''))) \
-         FROM twitch_billing_subscriptions WHERE stripe_customer_id = $1",
+    let streamer_login: Option<String> = sqlx::query_scalar!(
+        r#"
+        SELECT LOWER(TRIM(COALESCE(customer_reference, ''))) AS "streamer_login!"
+        FROM twitch_billing_subscriptions
+        WHERE stripe_customer_id = $1
+        "#,
+        invoice.stripe_customer_id
     )
-    .bind(invoice.stripe_customer_id)
     .fetch_optional(pool)
     .await?;
     let Some(streamer_login) = streamer_login.filter(|s| !s.is_empty()) else {
@@ -123,11 +131,14 @@ pub async fn process_commission(
     };
 
     // 2. Werbenden Affiliate lösen.
-    let affiliate_login: Option<String> = sqlx::query_scalar(
-        "SELECT affiliate_twitch_login FROM affiliate_streamer_claims \
-         WHERE claimed_streamer_login = $1",
+    let affiliate_login: Option<String> = sqlx::query_scalar!(
+        r#"
+        SELECT affiliate_twitch_login
+        FROM affiliate_streamer_claims
+        WHERE claimed_streamer_login = $1
+        "#,
+        &streamer_login
     )
-    .bind(&streamer_login)
     .fetch_optional(pool)
     .await?;
     let Some(affiliate_login) = affiliate_login.filter(|s| !s.trim().is_empty()) else {
@@ -145,8 +156,8 @@ pub async fn process_commission(
     }
     // `brutto_cents`/`commission_cents` sind INTEGER (INT4) → für den Bind nach
     // i32 verengen. Cent-Beträge realer Invoices passen weit in i32.
-    let brutto_cents_i32 = i32::try_from(invoice.amount_paid_cents).unwrap_or(i32::MAX);
-    let commission_cents_i32 = i32::try_from(commission_cents).unwrap_or(i32::MAX);
+    let brutto_cents_i32 = cents_to_int4(invoice.amount_paid_cents, "brutto_cents")?;
+    let commission_cents_i32 = cents_to_int4(commission_cents, "commission_cents")?;
     let now = chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Micros, false);
 
     // 4. Unter Advisory-Lock idempotent einfügen.
@@ -155,16 +166,18 @@ pub async fn process_commission(
     // Transaktions-Advisory-Lock: löst beim Commit/Rollback automatisch aus
     // (Python nimmt einen Session-Lock + explizites Unlock — selber Schlüssel,
     // damit Python- und Rust-Pfad sich gegenseitig serialisieren).
-    sqlx::query("SELECT pg_advisory_xact_lock($1, $2)")
-        .bind(lock_ns)
-        .bind(lock_key)
-        .execute(&mut *tx)
-        .await?;
-
-    let stripe_account_id: String = sqlx::query_scalar::<_, Option<String>>(
-        "SELECT stripe_account_id FROM affiliate_accounts WHERE twitch_login = $1",
+    sqlx::query!(
+        r#"SELECT 1 AS "locked!" FROM (SELECT pg_advisory_xact_lock($1, $2)) AS _lock"#,
+        lock_ns,
+        lock_key
     )
-    .bind(&affiliate_login)
+    .fetch_one(&mut *tx)
+    .await?;
+
+    let stripe_account_id: String = sqlx::query_scalar!(
+        "SELECT stripe_account_id FROM affiliate_accounts WHERE twitch_login = $1",
+        &affiliate_login
+    )
     .fetch_optional(&mut *tx)
     .await?
     .flatten()
@@ -175,11 +188,14 @@ pub async fn process_commission(
     // Ohne Connect-Konto: Deckel auf offene Provisionssumme anwenden.
     let mut initial_status = "pending";
     if stripe_account_id.is_empty() {
-        let pending_total: i64 = sqlx::query_scalar(
-            "SELECT COALESCE(SUM(commission_cents), 0) FROM affiliate_commissions \
-             WHERE affiliate_twitch_login = $1 AND status = 'pending'",
+        let pending_total: i64 = sqlx::query_scalar!(
+            r#"
+            SELECT COALESCE(SUM(commission_cents), 0)::bigint AS "pending_total!"
+            FROM affiliate_commissions
+            WHERE affiliate_twitch_login = $1 AND status = 'pending'
+            "#,
+            &affiliate_login
         )
-        .bind(&affiliate_login)
         .fetch_one(&mut *tx)
         .await?;
         if pending_total + commission_cents > MAX_PENDING_COMMISSION_CENTS {
@@ -187,25 +203,27 @@ pub async fn process_commission(
         }
     }
 
-    let insert = sqlx::query(
-        "INSERT INTO affiliate_commissions \
-            (affiliate_twitch_login, streamer_login, stripe_event_id, stripe_invoice_id, \
-             stripe_customer_id, brutto_cents, commission_cents, currency, \
-             status, period_start, period_end, created_at) \
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)",
+    let insert = sqlx::query!(
+        r#"
+        INSERT INTO affiliate_commissions
+            (affiliate_twitch_login, streamer_login, stripe_event_id, stripe_invoice_id,
+             stripe_customer_id, brutto_cents, commission_cents, currency,
+             status, period_start, period_end, created_at)
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
+        "#,
+        &affiliate_login,
+        &streamer_login,
+        invoice.stripe_event_id,
+        invoice.invoice_id,
+        invoice.stripe_customer_id,
+        brutto_cents_i32,
+        commission_cents_i32,
+        invoice.currency,
+        initial_status,
+        invoice.period_start,
+        invoice.period_end,
+        &now
     )
-    .bind(&affiliate_login)
-    .bind(&streamer_login)
-    .bind(invoice.stripe_event_id)
-    .bind(invoice.invoice_id)
-    .bind(invoice.stripe_customer_id)
-    .bind(brutto_cents_i32)
-    .bind(commission_cents_i32)
-    .bind(invoice.currency)
-    .bind(initial_status)
-    .bind(invoice.period_start)
-    .bind(invoice.period_end)
-    .bind(&now)
     .execute(&mut *tx)
     .await;
 
@@ -227,13 +245,15 @@ pub async fn process_commission(
     replay_pending_commissions(pool, stripe, &stripe_account_id, &affiliate_login).await?;
 
     // Finaler Status der gerade verbuchten Provision.
-    let status: Option<String> = sqlx::query_scalar(
+    let status: Option<String> = sqlx::query_scalar!(
         "SELECT status FROM affiliate_commissions WHERE stripe_event_id = $1",
+        invoice.stripe_event_id
     )
-    .bind(invoice.stripe_event_id)
     .fetch_optional(pool)
     .await?;
-    Ok(CommissionOutcome::Recorded(status.unwrap_or_else(|| "pending".to_string())))
+    Ok(CommissionOutcome::Recorded(
+        status.unwrap_or_else(|| "pending".to_string()),
+    ))
 }
 
 /// Eine offene/fehlgeschlagene Provision (für Replay-Transfer).
@@ -255,16 +275,22 @@ async fn replay_pending_commissions(
     stripe_account_id: &str,
     affiliate_login: &str,
 ) -> Result<(), sqlx::Error> {
-    let pending: Vec<PendingCommission> = sqlx::query_as(
-        "SELECT id, stripe_event_id, commission_cents, currency \
-         FROM affiliate_commissions \
-         WHERE affiliate_twitch_login = $1 \
-           AND status IN ('pending', 'failed') \
-           AND stripe_transfer_id IS NULL \
-           AND transferred_at IS NULL \
-         ORDER BY created_at ASC, id ASC",
+    let pending: Vec<PendingCommission> = sqlx::query_as!(
+        PendingCommission,
+        r#"
+        SELECT id AS "id!",
+               stripe_event_id AS "stripe_event_id?",
+               commission_cents AS "commission_cents?",
+               currency AS "currency?"
+        FROM affiliate_commissions
+        WHERE affiliate_twitch_login = $1
+          AND status IN ('pending', 'failed')
+          AND stripe_transfer_id IS NULL
+          AND transferred_at IS NULL
+        ORDER BY created_at ASC, id ASC
+        "#,
+        affiliate_login
     )
-    .bind(affiliate_login)
     .fetch_all(pool)
     .await?;
 
@@ -301,7 +327,13 @@ async fn transfer_commission(
     let transfer = match stripe {
         Some(client) if amount > 0 => {
             client
-                .create_transfer(amount, currency, stripe_account_id, stripe_event_id, Some(&idempotency_key))
+                .create_transfer(
+                    amount,
+                    currency,
+                    stripe_account_id,
+                    stripe_event_id,
+                    Some(&idempotency_key),
+                )
                 .await
         }
         // Kein Client (oder 0-Betrag): wie Pythons Fehlerpfad → pending bleiben.
@@ -310,18 +342,25 @@ async fn transfer_commission(
 
     match transfer {
         Ok(value) => {
-            let transfer_id = value.get("id").and_then(serde_json::Value::as_str).unwrap_or("");
+            let transfer_id = value
+                .get("id")
+                .and_then(serde_json::Value::as_str)
+                .unwrap_or("");
             let transferred_at =
                 chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Micros, false);
-            sqlx::query(
-                "UPDATE affiliate_commissions \
-                 SET status = 'transferred', stripe_transfer_id = $1, transferred_at = $2, \
-                     error_message = NULL \
-                 WHERE id = $3",
+            sqlx::query!(
+                r#"
+                UPDATE affiliate_commissions
+                SET status = 'transferred',
+                    stripe_transfer_id = $1,
+                    transferred_at = $2,
+                    error_message = NULL
+                WHERE id = $3
+                "#,
+                transfer_id,
+                &transferred_at,
+                commission_id
             )
-            .bind(transfer_id)
-            .bind(&transferred_at)
-            .bind(commission_id)
             .execute(pool)
             .await?;
         }
@@ -329,14 +368,18 @@ async fn transfer_commission(
             tracing::warn!(%error, commission_id, "Affiliate Stripe-Transfer fehlgeschlagen");
             let mut msg = error.to_string();
             msg.truncate(500);
-            sqlx::query(
-                "UPDATE affiliate_commissions \
-                 SET status = 'pending', stripe_transfer_id = NULL, transferred_at = NULL, \
-                     error_message = $1 \
-                 WHERE id = $2",
+            sqlx::query!(
+                r#"
+                UPDATE affiliate_commissions
+                SET status = 'pending',
+                    stripe_transfer_id = NULL,
+                    transferred_at = NULL,
+                    error_message = $1
+                WHERE id = $2
+                "#,
+                &msg,
+                commission_id
             )
-            .bind(&msg)
-            .bind(commission_id)
             .execute(pool)
             .await?;
         }
@@ -379,20 +422,42 @@ mod tests {
         assert_eq!(CommissionOutcome::NoAffiliate.as_str(), "no_affiliate");
         assert_eq!(CommissionOutcome::Skipped.as_str(), "skipped");
         assert_eq!(CommissionOutcome::Duplicate.as_str(), "duplicate");
-        assert_eq!(CommissionOutcome::Recorded("pending".into()).as_str(), "pending");
-        assert_eq!(CommissionOutcome::Recorded("transferred".into()).as_str(), "transferred");
+        assert_eq!(
+            CommissionOutcome::Recorded("pending".into()).as_str(),
+            "pending"
+        );
+        assert_eq!(
+            CommissionOutcome::Recorded("transferred".into()).as_str(),
+            "transferred"
+        );
     }
 
     // ── DB-Integration (skip ohne TB_TEST_DATABASE_URL) ─────────────────────
 
     async fn connect(schema: &str) -> Option<PgPool> {
         let dsn = std::env::var("TB_TEST_DATABASE_URL").ok()?;
-        let admin = PgPoolOptions::new().max_connections(1).connect(&dsn).await.unwrap();
-        sqlx::query(&format!("DROP SCHEMA IF EXISTS {schema} CASCADE")).execute(&admin).await.unwrap();
-        sqlx::query(&format!("CREATE SCHEMA {schema}")).execute(&admin).await.unwrap();
+        let admin = PgPoolOptions::new()
+            .max_connections(1)
+            .connect(&dsn)
+            .await
+            .unwrap();
+        sqlx::query(&format!("DROP SCHEMA IF EXISTS {schema} CASCADE"))
+            .execute(&admin)
+            .await
+            .unwrap();
+        sqlx::query(&format!("CREATE SCHEMA {schema}"))
+            .execute(&admin)
+            .await
+            .unwrap();
         admin.close().await;
-        let opts = PgConnectOptions::from_str(&dsn).unwrap().options([("search_path", schema)]);
-        let pool = PgPoolOptions::new().max_connections(3).connect_with(opts).await.unwrap();
+        let opts = PgConnectOptions::from_str(&dsn)
+            .unwrap()
+            .options([("search_path", schema)]);
+        let pool = PgPoolOptions::new()
+            .max_connections(3)
+            .connect_with(opts)
+            .await
+            .unwrap();
         // Schema TREU zur echten Migration:
         //   - twitch_billing_subscriptions: Streamer-Identifier ist `customer_reference`
         //     (kein `twitch_login`!), Quelle migrations/20260601000000_baseline_schema.sql.
@@ -405,13 +470,19 @@ mod tests {
                 stripe_subscription_id TEXT PRIMARY KEY, stripe_customer_id TEXT, \
                 customer_reference TEXT, status TEXT NOT NULL DEFAULT 'unknown', \
                 updated_at TEXT)",
-        ).execute(&pool).await.unwrap();
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
         sqlx::query(
             "CREATE TABLE affiliate_streamer_claims (\
                 id INTEGER GENERATED ALWAYS AS IDENTITY PRIMARY KEY, \
                 affiliate_twitch_login TEXT NOT NULL, claimed_streamer_login TEXT NOT NULL, \
                 claimed_at TEXT, UNIQUE (claimed_streamer_login))",
-        ).execute(&pool).await.unwrap();
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
         sqlx::query(
             "CREATE TABLE affiliate_accounts (twitch_login TEXT PRIMARY KEY, stripe_account_id TEXT)",
         ).execute(&pool).await.unwrap();
@@ -425,7 +496,10 @@ mod tests {
                 currency TEXT NOT NULL DEFAULT 'eur', status TEXT NOT NULL DEFAULT 'pending', \
                 period_start TEXT, period_end TEXT, created_at TEXT NOT NULL, \
                 transferred_at TEXT, error_message TEXT)",
-        ).execute(&pool).await.unwrap();
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
         Some(pool)
     }
 
@@ -452,26 +526,38 @@ mod tests {
 
     #[tokio::test]
     async fn no_streamer_when_customer_unknown() {
-        let Some(pool) = connect("comm_nostreamer").await else { return };
-        let out = process_commission(&pool, None, &invoice("evt", "cus_unknown", 1000)).await.unwrap();
+        let Some(pool) = connect("comm_nostreamer").await else {
+            return;
+        };
+        let out = process_commission(&pool, None, &invoice("evt", "cus_unknown", 1000))
+            .await
+            .unwrap();
         assert_eq!(out, CommissionOutcome::NoStreamer);
     }
 
     #[tokio::test]
     async fn no_affiliate_when_unclaimed() {
-        let Some(pool) = connect("comm_noaff").await else { return };
+        let Some(pool) = connect("comm_noaff").await else {
+            return;
+        };
         sqlx::query("INSERT INTO twitch_billing_subscriptions (stripe_subscription_id, stripe_customer_id, customer_reference, updated_at) VALUES ('sub_1', 'cus_1', 'StreamerX', '2026-06-01')")
             .execute(&pool).await.unwrap();
-        let out = process_commission(&pool, None, &invoice("evt", "cus_1", 1000)).await.unwrap();
+        let out = process_commission(&pool, None, &invoice("evt", "cus_1", 1000))
+            .await
+            .unwrap();
         assert_eq!(out, CommissionOutcome::NoAffiliate);
     }
 
     #[tokio::test]
     async fn records_pending_thirty_percent_without_account() {
-        let Some(pool) = connect("comm_pending").await else { return };
+        let Some(pool) = connect("comm_pending").await else {
+            return;
+        };
         seed_claim(&pool).await;
         // 1000 Cent → 30 % = 300 Cent, kein Connect-Konto → pending.
-        let out = process_commission(&pool, None, &invoice("evt_1", "cus_1", 1000)).await.unwrap();
+        let out = process_commission(&pool, None, &invoice("evt_1", "cus_1", 1000))
+            .await
+            .unwrap();
         assert_eq!(out, CommissionOutcome::Recorded("pending".into()));
         // commission_cents ist INTEGER (INT4) → i32.
         let (status, commission): (String, i32) = sqlx::query_as(
@@ -483,48 +569,72 @@ mod tests {
 
     #[tokio::test]
     async fn floor_rounding_thirty_percent() {
-        let Some(pool) = connect("comm_floor").await else { return };
+        let Some(pool) = connect("comm_floor").await else {
+            return;
+        };
         seed_claim(&pool).await;
         // 999 Cent → 30 % = 299.7 → Floor 299.
-        process_commission(&pool, None, &invoice("evt_f", "cus_1", 999)).await.unwrap();
+        process_commission(&pool, None, &invoice("evt_f", "cus_1", 999))
+            .await
+            .unwrap();
         // commission_cents ist INTEGER (INT4) → i32.
         let commission: i32 = sqlx::query_scalar(
             "SELECT commission_cents FROM affiliate_commissions WHERE stripe_event_id = 'evt_f'",
-        ).fetch_one(&pool).await.unwrap();
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap();
         assert_eq!(commission, 299);
     }
 
     #[tokio::test]
     async fn zero_or_negative_amount_skipped() {
-        let Some(pool) = connect("comm_zero").await else { return };
+        let Some(pool) = connect("comm_zero").await else {
+            return;
+        };
         seed_claim(&pool).await;
         assert_eq!(
-            process_commission(&pool, None, &invoice("e0", "cus_1", 0)).await.unwrap(),
+            process_commission(&pool, None, &invoice("e0", "cus_1", 0))
+                .await
+                .unwrap(),
             CommissionOutcome::Skipped
         );
         // commission floor 0 (1 Cent → 0.3 → 0) ist ebenfalls skipped.
         assert_eq!(
-            process_commission(&pool, None, &invoice("e1", "cus_1", 1)).await.unwrap(),
+            process_commission(&pool, None, &invoice("e1", "cus_1", 1))
+                .await
+                .unwrap(),
             CommissionOutcome::Skipped
         );
     }
 
     #[tokio::test]
     async fn duplicate_event_is_idempotent() {
-        let Some(pool) = connect("comm_dup").await else { return };
+        let Some(pool) = connect("comm_dup").await else {
+            return;
+        };
         seed_claim(&pool).await;
-        let first = process_commission(&pool, None, &invoice("evt_dup", "cus_1", 1000)).await.unwrap();
+        let first = process_commission(&pool, None, &invoice("evt_dup", "cus_1", 1000))
+            .await
+            .unwrap();
         assert_eq!(first, CommissionOutcome::Recorded("pending".into()));
-        let second = process_commission(&pool, None, &invoice("evt_dup", "cus_1", 1000)).await.unwrap();
+        let second = process_commission(&pool, None, &invoice("evt_dup", "cus_1", 1000))
+            .await
+            .unwrap();
         assert_eq!(second, CommissionOutcome::Duplicate);
         // Nur eine Zeile.
-        let count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM affiliate_commissions").fetch_one(&pool).await.unwrap();
+        let count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM affiliate_commissions")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
         assert_eq!(count, 1);
     }
 
     #[tokio::test]
     async fn pending_cap_marks_skipped_without_account() {
-        let Some(pool) = connect("comm_cap").await else { return };
+        let Some(pool) = connect("comm_cap").await else {
+            return;
+        };
         seed_claim(&pool).await;
         // Bestehende offene Provision knapp unter dem Deckel (5000).
         sqlx::query(
@@ -533,23 +643,32 @@ mod tests {
              VALUES ('aff1', 'streamerx', 'old', 16000, 4800, 'pending', '2026-06-01')",
         ).execute(&pool).await.unwrap();
         // Neue 300 → 4800+300 = 5100 > 5000 → skipped.
-        let out = process_commission(&pool, None, &invoice("evt_cap", "cus_1", 1000)).await.unwrap();
+        let out = process_commission(&pool, None, &invoice("evt_cap", "cus_1", 1000))
+            .await
+            .unwrap();
         assert_eq!(out, CommissionOutcome::Recorded("skipped".into()));
         let status: String = sqlx::query_scalar(
             "SELECT status FROM affiliate_commissions WHERE stripe_event_id = 'evt_cap'",
-        ).fetch_one(&pool).await.unwrap();
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap();
         assert_eq!(status, "skipped");
     }
 
     #[tokio::test]
     async fn with_account_but_no_client_stays_pending_with_error() {
-        let Some(pool) = connect("comm_acct_noclient").await else { return };
+        let Some(pool) = connect("comm_acct_noclient").await else {
+            return;
+        };
         seed_claim(&pool).await;
         // Affiliate hat ein Connect-Konto, aber wir übergeben keinen Stripe-Client
         // → Transfer schlägt fehl → bleibt pending mit error_message.
         sqlx::query("INSERT INTO affiliate_accounts (twitch_login, stripe_account_id) VALUES ('aff1', 'acct_123')")
             .execute(&pool).await.unwrap();
-        let out = process_commission(&pool, None, &invoice("evt_acct", "cus_1", 1000)).await.unwrap();
+        let out = process_commission(&pool, None, &invoice("evt_acct", "cus_1", 1000))
+            .await
+            .unwrap();
         assert_eq!(out, CommissionOutcome::Recorded("pending".into()));
         let (status, err): (String, Option<String>) = sqlx::query_as(
             "SELECT status, error_message FROM affiliate_commissions WHERE stripe_event_id = 'evt_acct'",

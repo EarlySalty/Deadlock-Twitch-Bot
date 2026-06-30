@@ -1,0 +1,22 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT COALESCE(jsonb_agg(to_jsonb(t) ORDER BY t.messages DESC, t.last_seen_at DESC), '[]'::jsonb)::text AS \"payload!\" FROM ( SELECT chatter_login AS login, chatter_id AS id, first_message_at, messages, is_first_time_streamer, seen_via_chatters_api, last_seen_at FROM twitch_session_chatters WHERE session_id = $1 ) t",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "payload!",
+        "type_info": "Text"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Int8"
+      ]
+    },
+    "nullable": [
+      null
+    ]
+  },
+  "hash": "d2c69e4fe7daa26ad266ffad7fbafd3614ffc9124319bff2b167332dbe9d7529"
+}

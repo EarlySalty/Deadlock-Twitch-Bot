@@ -1,0 +1,23 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n        SELECT COUNT(*)::BIGINT AS \"count!\"\n        FROM twitch_subscription_events e\n        LEFT JOIN twitch_stream_sessions s ON s.id = e.session_id\n        LEFT JOIN twitch_live_state l ON l.twitch_user_id = e.twitch_user_id\n        WHERE e.received_at >= $1::text::TIMESTAMPTZ\n          AND LOWER(COALESCE(s.streamer_login, l.streamer_login, '')) = LOWER($2)\n        ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "count!",
+        "type_info": "Int8"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Text",
+        "Text"
+      ]
+    },
+    "nullable": [
+      null
+    ]
+  },
+  "hash": "c4ee125c453bfc79d1a96b23625c33873cd0ae56127286cb8b7b17194fa8bec3"
+}

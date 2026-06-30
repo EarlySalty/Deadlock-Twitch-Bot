@@ -549,7 +549,7 @@ pub async fn login_for_discord_user(
     pool: &sqlx::PgPool,
     discord_user_id: &str,
 ) -> Result<Option<String>, sqlx::Error> {
-    let row: Option<(Option<String>,)> = sqlx::query_as(
+    let row: Option<Option<String>> = sqlx::query_scalar!(
         r#"
         SELECT twitch_login
         FROM twitch_streamers_partner_state
@@ -559,11 +559,11 @@ pub async fn login_for_discord_user(
             created_at DESC
         LIMIT 1
         "#,
+        discord_user_id
     )
-    .bind(discord_user_id)
     .fetch_optional(pool)
     .await?;
-    Ok(row.and_then(|(login,)| login))
+    Ok(row.flatten())
 }
 
 /// Holt Statistik-Aggregat und letzte 10 Sessions für einen Streamer.
@@ -573,29 +573,31 @@ pub async fn streamer_stats_and_sessions(
     pool: &sqlx::PgPool,
     login: &str,
 ) -> Result<(StreamerStatsRow, Vec<StreamerSessionRow>), sqlx::Error> {
-    let stats: StreamerStatsRow = sqlx::query_as(
+    let stats: StreamerStatsRow = sqlx::query_as!(
+        StreamerStatsRow,
         r#"SELECT
-            COUNT(*) AS total_sessions,
-            COALESCE(SUM(duration_seconds), 0)::BIGINT AS total_duration_seconds,
-            COALESCE(AVG(avg_viewers), 0.0)::FLOAT8 AS avg_viewers,
-            COALESCE(MAX(peak_viewers), 0)::INTEGER AS peak_viewers,
-            COALESCE(SUM(follower_delta), 0)::BIGINT AS follower_delta
+            COUNT(*) AS "total_sessions!",
+            COALESCE(SUM(duration_seconds), 0)::BIGINT AS "total_duration_seconds!",
+            COALESCE(AVG(avg_viewers), 0.0)::FLOAT8 AS "avg_viewers!",
+            COALESCE(MAX(peak_viewers), 0)::INTEGER AS "peak_viewers!",
+            COALESCE(SUM(follower_delta), 0)::BIGINT AS "follower_delta!"
         FROM twitch_stream_sessions
         WHERE LOWER(streamer_login) = LOWER($1)"#,
+        login
     )
-    .bind(login)
     .fetch_one(pool)
     .await?;
 
-    let sessions: Vec<StreamerSessionRow> = sqlx::query_as(
-        r#"SELECT id, started_at, ended_at, stream_title, game_name,
+    let sessions: Vec<StreamerSessionRow> = sqlx::query_as!(
+        StreamerSessionRow,
+        r#"SELECT id AS "id!", started_at AS "started_at!", ended_at, stream_title, game_name,
             avg_viewers, peak_viewers, duration_seconds, follower_delta
         FROM twitch_stream_sessions
         WHERE LOWER(streamer_login) = LOWER($1)
         ORDER BY started_at DESC
         LIMIT 10"#,
+        login
     )
-    .bind(login)
     .fetch_all(pool)
     .await?;
 

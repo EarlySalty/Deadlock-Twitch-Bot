@@ -1,0 +1,28 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT minutes_from_start::int8 AS minutes_from_start, viewer_count::int8 AS viewer_count FROM twitch_session_viewers WHERE session_id = $1 ORDER BY ts_utc",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "minutes_from_start",
+        "type_info": "Int8"
+      },
+      {
+        "ordinal": 1,
+        "name": "viewer_count",
+        "type_info": "Int8"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Int8"
+      ]
+    },
+    "nullable": [
+      null,
+      null
+    ]
+  },
+  "hash": "c52fb6abf5cf92eef628ea8204a58d31b1addac22051cbf0ffa806db00dce602"
+}

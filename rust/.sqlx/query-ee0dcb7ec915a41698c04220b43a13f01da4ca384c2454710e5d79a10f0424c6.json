@@ -1,0 +1,20 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT COALESCE(LOWER(t.twitch_login), '') AS \"streamer_login!\" FROM twitch_streamers_partner_state t WHERE t.is_partner_active = 1 ORDER BY t.twitch_login",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "streamer_login!",
+        "type_info": "Text"
+      }
+    ],
+    "parameters": {
+      "Left": []
+    },
+    "nullable": [
+      null
+    ]
+  },
+  "hash": "ee0dcb7ec915a41698c04220b43a13f01da4ca384c2454710e5d79a10f0424c6"
+}

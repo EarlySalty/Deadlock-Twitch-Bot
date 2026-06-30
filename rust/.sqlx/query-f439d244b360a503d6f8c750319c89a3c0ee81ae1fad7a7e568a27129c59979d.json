@@ -1,0 +1,28 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT COUNT(*)::int8 AS \"count!\", COALESCE(SUM(duration_seconds), 0)::int8 AS \"duration_seconds!\" FROM twitch_ad_break_events WHERE session_id = $1",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "count!",
+        "type_info": "Int8"
+      },
+      {
+        "ordinal": 1,
+        "name": "duration_seconds!",
+        "type_info": "Int8"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Int8"
+      ]
+    },
+    "nullable": [
+      null,
+      null
+    ]
+  },
+  "hash": "f439d244b360a503d6f8c750319c89a3c0ee81ae1fad7a7e568a27129c59979d"
+}

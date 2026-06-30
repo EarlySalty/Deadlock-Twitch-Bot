@@ -36,15 +36,28 @@ pub async fn write_subs_snapshot(
     login: &str,
     subs: &BroadcasterSubscriptions,
 ) -> Result<(), CollectError> {
-    sqlx::query(
+    let total = i32::try_from(subs.total).map_err(|_| {
+        CollectError::Db(sqlx::Error::InvalidArgument(format!(
+            "subscriptions total out of int4 range: {}",
+            subs.total
+        )))
+    })?;
+    let points = i32::try_from(subs.points).map_err(|_| {
+        CollectError::Db(sqlx::Error::InvalidArgument(format!(
+            "subscriptions points out of int4 range: {}",
+            subs.points
+        )))
+    })?;
+
+    sqlx::query!(
         "INSERT INTO twitch_subscriptions_snapshot \
          (twitch_user_id, twitch_login, total, points, snapshot_at) \
          VALUES ($1, $2, $3, $4, NOW())",
+        user_id,
+        login,
+        total,
+        points
     )
-    .bind(user_id)
-    .bind(login)
-    .bind(subs.total)
-    .bind(subs.points)
     .execute(pool)
     .await
     .map_err(CollectError::Db)?;

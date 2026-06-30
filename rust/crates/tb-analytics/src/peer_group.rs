@@ -72,20 +72,20 @@ pub async fn peer_group_stats(
     let login = streamer_login.to_lowercase();
 
     // 1. Durchschnitts-Viewer aller Streamer der Kategorie (ungefiltert).
-    let avgs: Vec<(String, Option<f64>)> = sqlx::query_as(
-        "SELECT streamer, AVG(viewer_count)::float8 FROM twitch_stats_category \
+    let avgs = sqlx::query!(
+        "SELECT streamer AS \"streamer!\", AVG(viewer_count)::float8 AS avg_viewers FROM twitch_stats_category \
          WHERE ts_utc >= $1 GROUP BY streamer",
+        since
     )
-    .bind(since)
     .fetch_all(pool)
     .await?;
     if avgs.is_empty() {
         return Ok(None);
     }
     let mut streamer_avgs: HashMap<String, f64> = HashMap::new();
-    for (s, avg) in avgs {
-        if let Some(a) = avg {
-            streamer_avgs.insert(s.to_lowercase(), a);
+    for row in avgs {
+        if let Some(a) = row.avg_viewers {
+            streamer_avgs.insert(row.streamer.to_lowercase(), a);
         }
     }
 
@@ -93,15 +93,15 @@ pub async fn peer_group_stats(
     let my_avg = match streamer_avgs.get(&login).copied() {
         Some(a) => a,
         None => {
-            let row: Option<(Option<f64>,)> = sqlx::query_as(
-                "SELECT AVG(avg_viewers)::float8 FROM twitch_stream_sessions \
+            let row = sqlx::query_scalar!(
+                "SELECT AVG(avg_viewers)::float8 AS avg_viewers FROM twitch_stream_sessions \
                  WHERE LOWER(streamer_login) = $1 AND started_at >= $2 AND ended_at IS NOT NULL",
+                &login,
+                since
             )
-            .bind(&login)
-            .bind(since)
-            .fetch_optional(pool)
+            .fetch_one(pool)
             .await?;
-            match row.and_then(|(a,)| a) {
+            match row {
                 Some(a) => a,
                 None => return Ok(None),
             }
@@ -120,19 +120,19 @@ pub async fn peer_group_stats(
     }
 
     // 4. Session-Metriken je Peer (avg_viewers + retention_10m).
-    let metrics: Vec<(Option<f64>, Option<f64>)> = sqlx::query_as(
-        "SELECT AVG(s.avg_viewers)::float8, AVG(s.retention_10m)::float8 \
+    let metrics = sqlx::query!(
+        "SELECT AVG(s.avg_viewers)::float8 AS avg_viewers, AVG(s.retention_10m)::float8 AS retention_10m \
          FROM twitch_stream_sessions s \
-         WHERE LOWER(s.streamer_login) = ANY($1) AND s.started_at >= $2 AND s.ended_at IS NOT NULL \
+         WHERE LOWER(s.streamer_login) = ANY($1::text[]) AND s.started_at >= $2 AND s.ended_at IS NOT NULL \
          GROUP BY LOWER(s.streamer_login)",
+        &peer_logins,
+        since
     )
-    .bind(&peer_logins)
-    .bind(since)
     .fetch_all(pool)
     .await?;
 
-    let avg_viewers_list: Vec<f64> = metrics.iter().filter_map(|(v, _)| *v).collect();
-    let retention_list: Vec<f64> = metrics.iter().filter_map(|(_, r)| *r).collect();
+    let avg_viewers_list: Vec<f64> = metrics.iter().filter_map(|row| row.avg_viewers).collect();
+    let retention_list: Vec<f64> = metrics.iter().filter_map(|row| row.retention_10m).collect();
 
     Ok(Some(PeerGroup {
         tier: my_tier.to_string(),

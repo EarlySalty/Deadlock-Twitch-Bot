@@ -41,10 +41,13 @@ pub async fn market_share_series(
     bucket_seconds: i64,
     german_only: bool,
 ) -> Result<Vec<MarketShareBucketRow>, sqlx::Error> {
-    sqlx::query_as(
+    sqlx::query_as!(
+        MarketShareBucketRow,
         r#"
         SELECT
-            to_timestamp(floor(extract(epoch FROM ts_utc) / $1) * $1) AS bucket,
+            to_timestamp(
+                floor(extract(epoch FROM ts_utc) / (($1::int8)::float8)) * (($1::int8)::float8)
+            ) AS "bucket!",
             (SUM(viewer_count) FILTER (WHERE is_partner))::FLOAT8
                 / NULLIF(COUNT(DISTINCT ts_utc), 0)                   AS partner_viewers,
             SUM(viewer_count)::FLOAT8
@@ -61,13 +64,13 @@ pub async fn market_share_series(
                OR (language IS NULL
                    AND (ts_utc < '2026-06-10T00:00:00+00'
                         OR tags ILIKE '%deutsch%' OR tags ILIKE '%german%')))
-        GROUP BY bucket
-        ORDER BY bucket
+        GROUP BY 1
+        ORDER BY 1
         "#,
+        bucket_seconds,
+        since,
+        german_only
     )
-    .bind(bucket_seconds)
-    .bind(since)
-    .bind(german_only)
     .fetch_all(pool)
     .await
 }
@@ -78,19 +81,19 @@ pub async fn partner_roster(
     pool: &PgPool,
     since: DateTime<Utc>,
 ) -> Result<(i64, i64), sqlx::Error> {
-    let total: (i64,) = sqlx::query_as(
-        "SELECT COUNT(*) FROM twitch_partners_all_state WHERE is_partner_active = 1",
+    let total = sqlx::query_scalar!(
+        "SELECT COUNT(*) AS \"count!\" FROM twitch_partners_all_state WHERE is_partner_active = 1",
     )
     .fetch_one(pool)
     .await?;
-    let seen: (i64,) = sqlx::query_as(
-        "SELECT COUNT(DISTINCT LOWER(streamer)) FROM twitch_stats_category
+    let seen = sqlx::query_scalar!(
+        "SELECT COUNT(DISTINCT LOWER(streamer)) AS \"count!\" FROM twitch_stats_category
           WHERE is_partner AND ts_utc >= $1",
+        since
     )
-    .bind(since)
     .fetch_one(pool)
     .await?;
-    Ok((total.0, seen.0))
+    Ok((total, seen))
 }
 
 /// Ein Stream des letzten Kategorie-Ticks.
@@ -108,13 +111,14 @@ pub struct MarketStreamRow {
 /// `is_german` = Stream-Sprache `de`; Tag-Fallback nur für Zeilen ohne
 /// `language`-Wert (Ticks vor Einführung der Spalte).
 pub async fn market_current_tick(pool: &PgPool) -> Result<Vec<MarketStreamRow>, sqlx::Error> {
-    sqlx::query_as(
+    sqlx::query_as!(
+        MarketStreamRow,
         r#"
         SELECT
-            ts_utc,
-            streamer,
+            ts_utc AS "ts_utc!",
+            streamer AS "streamer!",
             viewer_count,
-            COALESCE(is_partner, false)                             AS is_partner,
+            COALESCE(is_partner, false)                             AS "is_partner!",
             (language = 'de'
              OR (language IS NULL
                  AND (tags ILIKE '%deutsch%' OR tags ILIKE '%german%'))) AS is_german,

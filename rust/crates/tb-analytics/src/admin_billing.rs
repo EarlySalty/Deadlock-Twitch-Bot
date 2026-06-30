@@ -13,42 +13,37 @@ pub async fn load_billing_subscriptions(pool: &PgPool) -> Result<Value, sqlx::Er
     // Spaltennamen/-reihenfolge wie Python; current_period_start/canceled_at/
     // ended_at werden dort SELECTed, aber NICHT in die Antwort übernommen → hier
     // weggelassen.
-    let rows: Vec<(
-        Option<String>, // customer_reference
-        Option<String>, // plan_id
-        Option<String>, // status
-        Option<String>, // current_period_end
-        Option<String>, // updated_at
-        Option<String>, // manual_plan_id
-        Option<String>, // manual_plan_expires_at
-    )> = sqlx::query_as(
-        "SELECT b.customer_reference, b.plan_id, b.status, b.current_period_end, b.updated_at, \
-                sp.manual_plan_id, sp.manual_plan_expires_at \
-         FROM twitch_billing_subscriptions b \
-         LEFT JOIN streamer_plans sp ON LOWER(sp.twitch_login) = LOWER(b.customer_reference) \
-         ORDER BY b.updated_at DESC",
+    let rows = sqlx::query!(
+        r#"
+        SELECT b.customer_reference, b.plan_id, b.status, b.current_period_end, b.updated_at,
+               sp.manual_plan_id, sp.manual_plan_expires_at
+        FROM twitch_billing_subscriptions b
+        LEFT JOIN streamer_plans sp ON LOWER(sp.twitch_login) = LOWER(b.customer_reference)
+        ORDER BY b.updated_at DESC
+        "#,
     )
     .fetch_all(pool)
     .await?;
 
     let items: Vec<Value> = rows
         .into_iter()
-        .map(|(customer_ref, plan_id, status, period_end, updated_at, manual_plan_id, manual_expires)| {
+        .map(|row| {
             // login = customer_reference.strip().lower() or None.
-            let login = customer_ref
+            let login = row
+                .customer_reference
                 .as_deref()
                 .map(|s| s.trim().to_lowercase())
                 .filter(|s| !s.is_empty());
             json!({
                 "login": login,
-                "customerReference": customer_ref,
-                "planId": plan_id,
-                "status": status,
+                "customerReference": row.customer_reference,
+                "planId": row.plan_id,
+                "status": row.status,
                 "trialEndsAt": Value::Null,
-                "currentPeriodEnd": period_end,
-                "updatedAt": updated_at,
-                "manualPlanId": manual_plan_id,
-                "manualPlanExpiresAt": manual_expires,
+                "currentPeriodEnd": row.current_period_end,
+                "updatedAt": row.updated_at,
+                "manualPlanId": row.manual_plan_id,
+                "manualPlanExpiresAt": row.manual_plan_expires_at,
             })
         })
         .collect();
@@ -59,30 +54,30 @@ pub async fn load_billing_subscriptions(pool: &PgPool) -> Result<Value, sqlx::Er
 
 /// `{ items: [...], count }` der Affiliate-Konten.
 pub async fn load_billing_affiliates(pool: &PgPool) -> Result<Value, sqlx::Error> {
-    let rows: Vec<(
-        Option<String>, // twitch_login
-        Option<String>, // email
-        Option<String>, // stripe_account_id
-        Option<String>, // stripe_connect_status
-        Option<String>, // updated_at
-        Option<String>, // created_at
-    )> = sqlx::query_as(
-        "SELECT twitch_login, email, stripe_account_id, stripe_connect_status, updated_at, created_at \
-         FROM affiliate_accounts ORDER BY COALESCE(updated_at, created_at) DESC",
+    let rows = sqlx::query!(
+        r#"
+        SELECT twitch_login, email, stripe_account_id, stripe_connect_status, updated_at, created_at
+        FROM affiliate_accounts
+        ORDER BY COALESCE(updated_at, created_at) DESC
+        "#,
     )
     .fetch_all(pool)
     .await?;
 
     let items: Vec<Value> = rows
         .into_iter()
-        .map(|(login, email, stripe_account_id, status, updated_at, created_at)| {
+        .map(|row| {
             // updatedAt = updated_at OR created_at (Pythons Truthiness: leer → Fallback).
-            let updated = updated_at.filter(|s| !s.is_empty()).or(created_at);
+            let updated = if row.updated_at.is_empty() {
+                row.created_at
+            } else {
+                row.updated_at
+            };
             json!({
-                "twitchLogin": login,
-                "stripeAccountId": stripe_account_id,
-                "status": status,
-                "payoutEmail": email,
+                "twitchLogin": row.twitch_login,
+                "stripeAccountId": row.stripe_account_id,
+                "status": row.stripe_connect_status,
+                "payoutEmail": row.email,
                 // affiliate_accounts hat keine commission_rate-Spalte (Python: None).
                 "commissionRate": Value::Null,
                 "updatedAt": updated,
@@ -102,12 +97,28 @@ mod tests {
 
     async fn make_pool(schema: &str) -> Option<PgPool> {
         let dsn = std::env::var("TB_TEST_DATABASE_URL").ok()?;
-        let admin = PgPoolOptions::new().max_connections(1).connect(&dsn).await.unwrap();
-        sqlx::query(&format!("DROP SCHEMA IF EXISTS {schema} CASCADE")).execute(&admin).await.unwrap();
-        sqlx::query(&format!("CREATE SCHEMA {schema}")).execute(&admin).await.unwrap();
+        let admin = PgPoolOptions::new()
+            .max_connections(1)
+            .connect(&dsn)
+            .await
+            .unwrap();
+        sqlx::query(&format!("DROP SCHEMA IF EXISTS {schema} CASCADE"))
+            .execute(&admin)
+            .await
+            .unwrap();
+        sqlx::query(&format!("CREATE SCHEMA {schema}"))
+            .execute(&admin)
+            .await
+            .unwrap();
         admin.close().await;
-        let opts = PgConnectOptions::from_str(&dsn).unwrap().options([("search_path", schema)]);
-        let pool = PgPoolOptions::new().max_connections(2).connect_with(opts).await.unwrap();
+        let opts = PgConnectOptions::from_str(&dsn)
+            .unwrap()
+            .options([("search_path", schema)]);
+        let pool = PgPoolOptions::new()
+            .max_connections(2)
+            .connect_with(opts)
+            .await
+            .unwrap();
         for ddl in [
             "CREATE TABLE twitch_billing_subscriptions (stripe_subscription_id TEXT PRIMARY KEY, customer_reference TEXT, plan_id TEXT, status TEXT, current_period_end TEXT, updated_at TEXT)",
             "CREATE TABLE streamer_plans (twitch_login TEXT PRIMARY KEY, manual_plan_id TEXT, manual_plan_expires_at TEXT)",
@@ -120,7 +131,9 @@ mod tests {
 
     #[tokio::test]
     async fn subscriptions_join_und_login_lower() {
-        let Some(pool) = make_pool("t_admbill_subs").await else { return };
+        let Some(pool) = make_pool("t_admbill_subs").await else {
+            return;
+        };
         sqlx::query("INSERT INTO twitch_billing_subscriptions (stripe_subscription_id, customer_reference, plan_id, status, current_period_end, updated_at) VALUES ('sub_1', 'Nani', 'raid_plus', 'active', '2026-07-01T00:00:00+00:00', '2026-06-01T00:00:00+00:00')")
             .execute(&pool).await.unwrap();
         sqlx::query("INSERT INTO streamer_plans (twitch_login, manual_plan_id, manual_plan_expires_at) VALUES ('nani', 'raid_extended', '2026-12-31T00:00:00+00:00')")
@@ -140,7 +153,9 @@ mod tests {
 
     #[tokio::test]
     async fn affiliates_updated_fallback_created() {
-        let Some(pool) = make_pool("t_admbill_aff").await else { return };
+        let Some(pool) = make_pool("t_admbill_aff").await else {
+            return;
+        };
         // updated_at leer → Fallback created_at.
         sqlx::query("INSERT INTO affiliate_accounts (twitch_login, email, stripe_account_id, stripe_connect_status, updated_at, created_at) VALUES ('nani', 'a@b.de', 'acct_1', 'active', '', '2026-05-01T00:00:00+00:00')")
             .execute(&pool).await.unwrap();
@@ -158,7 +173,9 @@ mod tests {
 
     #[tokio::test]
     async fn leere_tabellen_count_null() {
-        let Some(pool) = make_pool("t_admbill_empty").await else { return };
+        let Some(pool) = make_pool("t_admbill_empty").await else {
+            return;
+        };
         assert_eq!(load_billing_subscriptions(&pool).await.unwrap()["count"], 0);
         assert_eq!(load_billing_affiliates(&pool).await.unwrap()["count"], 0);
     }

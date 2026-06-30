@@ -1,0 +1,30 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n        SELECT m.chatter_login, m.content\n        FROM twitch_chat_messages m\n        JOIN twitch_stream_sessions s ON s.id = m.session_id\n        WHERE LOWER(s.streamer_login) = $1\n          AND m.message_ts >= $2\n          AND m.content LIKE '%@%'\n          AND (m.chatter_login IS NULL OR m.chatter_login = '' OR LOWER(m.chatter_login) <> ALL($3))\n        ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "chatter_login",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 1,
+        "name": "content",
+        "type_info": "Text"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Text",
+        "Timestamptz",
+        "TextArray"
+      ]
+    },
+    "nullable": [
+      true,
+      true
+    ]
+  },
+  "hash": "009c9a29fd213053df5be8874806af18b1bd165aa375009b8ac029764c437e96"
+}

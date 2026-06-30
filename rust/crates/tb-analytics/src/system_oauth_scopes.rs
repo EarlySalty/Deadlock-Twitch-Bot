@@ -144,7 +144,7 @@ type ScopeRawRow = (
 /// Login. Sortiert nach effektivem Login. `authorized_at` ist im
 /// Migrationsschema ein TEXT-Zeitstempel.
 pub async fn load_oauth_scope_rows(pool: &PgPool) -> Result<Vec<OAuthScopeRow>, sqlx::Error> {
-    let rows: Vec<ScopeRawRow> = sqlx::query_as(
+    let rows: Vec<ScopeRawRow> = sqlx::query!(
         r#"
         WITH auth_rows AS (
             SELECT
@@ -217,11 +217,11 @@ pub async fn load_oauth_scope_rows(pool: &PgPool) -> Result<Vec<OAuthScopeRow>, 
                 NULLIF(TRIM(twitch_user_id), '')
             ) AS effective_login,
             discord_display_name,
-            scopes,
-            COALESCE(needs_reauth, FALSE) AS needs_reauth,
+            scopes AS "scopes?",
+            COALESCE(needs_reauth, FALSE) AS "needs_reauth?",
             status,
             archived_at::text,
-            COALESCE(manual_partner_opt_out, 0)::bigint AS manual_partner_opt_out,
+            COALESCE(manual_partner_opt_out, 0)::bigint AS "manual_partner_opt_out?",
             technical_pause_reason
         FROM ranked_matches
         WHERE rn = 1
@@ -237,7 +237,21 @@ pub async fn load_oauth_scope_rows(pool: &PgPool) -> Result<Vec<OAuthScopeRow>, 
         "#,
     )
     .fetch_all(pool)
-    .await?;
+    .await?
+    .into_iter()
+    .map(|row| {
+        (
+            row.effective_login,
+            row.discord_display_name,
+            row.scopes,
+            row.needs_reauth,
+            row.status,
+            row.archived_at,
+            row.manual_partner_opt_out,
+            row.technical_pause_reason,
+        )
+    })
+    .collect();
 
     Ok(rows
         .into_iter()

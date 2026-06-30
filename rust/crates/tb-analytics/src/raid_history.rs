@@ -64,10 +64,11 @@ pub async fn load_raid_history(
         .map(|s| s.to_lowercase());
 
     let rows: Vec<RaidHistoryFullRow> = if let Some(login) = filter {
-        sqlx::query_as(
+        sqlx::query_as!(
+            RaidHistoryFullRow,
             r#"
-            SELECT from_broadcaster_id, from_broadcaster_login,
-                   to_broadcaster_id, to_broadcaster_login,
+            SELECT from_broadcaster_id AS "from_broadcaster_id?", from_broadcaster_login AS "from_broadcaster_login?",
+                   to_broadcaster_id AS "to_broadcaster_id?", to_broadcaster_login AS "to_broadcaster_login?",
                    viewer_count, stream_duration_sec, executed_at::text AS executed_at,
                    success, error_message,
                    target_stream_started_at::text AS target_stream_started_at,
@@ -77,16 +78,17 @@ pub async fn load_raid_history(
             ORDER BY executed_at DESC
             LIMIT $2
             "#,
+            login,
+            limit
         )
-        .bind(login)
-        .bind(limit)
         .fetch_all(pool)
         .await?
     } else {
-        sqlx::query_as(
+        sqlx::query_as!(
+            RaidHistoryFullRow,
             r#"
-            SELECT from_broadcaster_id, from_broadcaster_login,
-                   to_broadcaster_id, to_broadcaster_login,
+            SELECT from_broadcaster_id AS "from_broadcaster_id?", from_broadcaster_login AS "from_broadcaster_login?",
+                   to_broadcaster_id AS "to_broadcaster_id?", to_broadcaster_login AS "to_broadcaster_login?",
                    viewer_count, stream_duration_sec, executed_at::text AS executed_at,
                    success, error_message,
                    target_stream_started_at::text AS target_stream_started_at,
@@ -95,13 +97,16 @@ pub async fn load_raid_history(
             ORDER BY executed_at DESC
             LIMIT $1
             "#,
+            limit
         )
-        .bind(limit)
         .fetch_all(pool)
         .await?
     };
 
-    Ok(rows.into_iter().map(RaidHistoryFullRow::into_json).collect())
+    Ok(rows
+        .into_iter()
+        .map(RaidHistoryFullRow::into_json)
+        .collect())
 }
 
 #[cfg(test)]
@@ -200,9 +205,15 @@ mod tests {
         assert_eq!(failed["candidatesCount"], 3);
         assert!(failed["targetStreamStartedAt"].is_null());
         // success-Zeile hat target_stream_started_at gesetzt + candidates_count
-        let ok = rows.iter().find(|r| r["toBroadcasterLogin"] == "bob").unwrap();
+        let ok = rows
+            .iter()
+            .find(|r| r["toBroadcasterLogin"] == "bob")
+            .unwrap();
         assert_eq!(ok["candidatesCount"], 7);
-        assert!(ok["targetStreamStartedAt"].as_str().map(|s| !s.is_empty()).unwrap_or(false));
+        assert!(ok["targetStreamStartedAt"]
+            .as_str()
+            .map(|s| !s.is_empty())
+            .unwrap_or(false));
         assert_eq!(ok["streamDurationSec"], 3600);
     }
 
@@ -221,10 +232,14 @@ mod tests {
         // 'alice' (case-insensitiv → matcht 'alice' + 'ALICE') = 2 Zeilen.
         let rows = load_raid_history(&pool, Some("Alice"), None).await.unwrap();
         assert_eq!(rows.len(), 2);
-        assert!(rows.iter().all(|r| r["fromBroadcasterLogin"].as_str().unwrap().to_lowercase() == "alice"));
+        assert!(rows
+            .iter()
+            .all(|r| r["fromBroadcasterLogin"].as_str().unwrap().to_lowercase() == "alice"));
 
         // limit=1 begrenzt auf eine Zeile.
-        let limited = load_raid_history(&pool, Some("alice"), Some(1)).await.unwrap();
+        let limited = load_raid_history(&pool, Some("alice"), Some(1))
+            .await
+            .unwrap();
         assert_eq!(limited.len(), 1);
     }
 

@@ -1,0 +1,70 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n        SELECT full_name_enc,\n               email_enc,\n               address_line1_enc,\n               address_city_enc,\n               address_zip_enc,\n               tax_id_enc,\n               address_country AS \"address_country?\",\n               ust_status AS \"ust_status?\",\n               updated_at AS \"updated_at?\"\n        FROM affiliate_pii\n        WHERE twitch_login = $1\n        ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "full_name_enc",
+        "type_info": "Bytea"
+      },
+      {
+        "ordinal": 1,
+        "name": "email_enc",
+        "type_info": "Bytea"
+      },
+      {
+        "ordinal": 2,
+        "name": "address_line1_enc",
+        "type_info": "Bytea"
+      },
+      {
+        "ordinal": 3,
+        "name": "address_city_enc",
+        "type_info": "Bytea"
+      },
+      {
+        "ordinal": 4,
+        "name": "address_zip_enc",
+        "type_info": "Bytea"
+      },
+      {
+        "ordinal": 5,
+        "name": "tax_id_enc",
+        "type_info": "Bytea"
+      },
+      {
+        "ordinal": 6,
+        "name": "address_country?",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 7,
+        "name": "ust_status?",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 8,
+        "name": "updated_at?",
+        "type_info": "Text"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Text"
+      ]
+    },
+    "nullable": [
+      true,
+      true,
+      true,
+      true,
+      true,
+      true,
+      false,
+      false,
+      false
+    ]
+  },
+  "hash": "8124d1c58882ed7204c72ee845937e243d0ccfd9a743e3c01d0d3cc55734e203"
+}

@@ -1,0 +1,47 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n        SELECT EXTRACT(HOUR FROM (s.started_at AT TIME ZONE 'UTC'))::int AS \"hour!\",\n               COUNT(*)::bigint AS \"count!\",\n               AVG(s.avg_viewers)::float8 AS avg_viewers,\n               AVG(s.peak_viewers)::float8 AS avg_peak,\n               AVG(s.unique_chatters)::float8 AS avg_chatters\n        FROM twitch_stream_sessions s\n        WHERE s.streamer_login = $1\n          AND s.started_at >= $2\n          AND s.duration_seconds > 300\n        GROUP BY 1\n        ORDER BY 1\n        ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "hour!",
+        "type_info": "Int4"
+      },
+      {
+        "ordinal": 1,
+        "name": "count!",
+        "type_info": "Int8"
+      },
+      {
+        "ordinal": 2,
+        "name": "avg_viewers",
+        "type_info": "Float8"
+      },
+      {
+        "ordinal": 3,
+        "name": "avg_peak",
+        "type_info": "Float8"
+      },
+      {
+        "ordinal": 4,
+        "name": "avg_chatters",
+        "type_info": "Float8"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Text",
+        "Timestamptz"
+      ]
+    },
+    "nullable": [
+      null,
+      null,
+      null,
+      null,
+      null
+    ]
+  },
+  "hash": "d1d88b94a106572d20c988a5313b0eb1a28a212c9a41534861acb175ba9b5980"
+}

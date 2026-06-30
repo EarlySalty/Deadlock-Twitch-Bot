@@ -1,0 +1,46 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n        SELECT c.id::bigint AS \"id!\",\n               c.claimed_streamer_login,\n               c.claimed_at,\n               COALESCE(SUM(co.commission_cents), 0)::bigint AS \"commission_cents!\",\n               COUNT(co.id)::bigint AS \"commission_count!\"\n        FROM affiliate_streamer_claims c\n        LEFT JOIN affiliate_commissions co\n          ON co.affiliate_twitch_login = c.affiliate_twitch_login\n         AND co.streamer_login = c.claimed_streamer_login\n         AND co.status IN ('pending', 'transferred')\n        WHERE c.affiliate_twitch_login = $1\n        GROUP BY c.id, c.claimed_streamer_login, c.claimed_at\n        ORDER BY c.claimed_at DESC\n        ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id!",
+        "type_info": "Int8"
+      },
+      {
+        "ordinal": 1,
+        "name": "claimed_streamer_login",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 2,
+        "name": "claimed_at",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 3,
+        "name": "commission_cents!",
+        "type_info": "Int8"
+      },
+      {
+        "ordinal": 4,
+        "name": "commission_count!",
+        "type_info": "Int8"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Text"
+      ]
+    },
+    "nullable": [
+      null,
+      false,
+      false,
+      null,
+      null
+    ]
+  },
+  "hash": "20db8892f65564680714875f41062cd19e860af76f1178d6012f26e574354f44"
+}

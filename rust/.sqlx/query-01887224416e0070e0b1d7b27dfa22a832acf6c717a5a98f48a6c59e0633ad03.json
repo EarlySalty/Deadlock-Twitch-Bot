@@ -1,0 +1,29 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n        SELECT c2.streamer_login AS \"streamer_login!\",\n               COUNT(DISTINCT c1.chatter_login)::bigint AS \"shared_count!\"\n        FROM twitch_chatter_rollup c1\n        JOIN twitch_chatter_rollup c2\n          ON c1.chatter_login = c2.chatter_login\n         AND c2.streamer_login != $1\n         AND c2.last_seen_at >= $2\n        WHERE c1.streamer_login = $1\n          AND c1.last_seen_at >= $2\n        GROUP BY c2.streamer_login\n        ORDER BY 2 DESC\n        LIMIT 15\n        ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "streamer_login!",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 1,
+        "name": "shared_count!",
+        "type_info": "Int8"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Text",
+        "Timestamptz"
+      ]
+    },
+    "nullable": [
+      false,
+      null
+    ]
+  },
+  "hash": "01887224416e0070e0b1d7b27dfa22a832acf6c717a5a98f48a6c59e0633ad03"
+}

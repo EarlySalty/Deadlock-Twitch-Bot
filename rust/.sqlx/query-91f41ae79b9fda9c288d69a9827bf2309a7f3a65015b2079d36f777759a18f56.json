@@ -1,0 +1,16 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "UPDATE affiliate_accounts SET is_active = $1, updated_at = $2 WHERE twitch_login = $3",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Int4",
+        "Text",
+        "Text"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "91f41ae79b9fda9c288d69a9827bf2309a7f3a65015b2079d36f777759a18f56"
+}

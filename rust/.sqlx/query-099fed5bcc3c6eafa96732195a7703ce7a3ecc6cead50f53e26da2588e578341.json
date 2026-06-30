@@ -1,0 +1,29 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT COUNT(*)::bigint AS \"total!\", SUM(CASE WHEN COALESCE(su.is_gift, false) THEN 1 ELSE 0 END)::bigint AS gifted FROM twitch_subscription_events su LEFT JOIN twitch_stream_sessions s ON s.id = su.session_id WHERE su.received_at >= $1 AND ($2 = '' OR LOWER(s.streamer_login) = $2)",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "total!",
+        "type_info": "Int8"
+      },
+      {
+        "ordinal": 1,
+        "name": "gifted",
+        "type_info": "Int8"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Timestamptz",
+        "Text"
+      ]
+    },
+    "nullable": [
+      null,
+      null
+    ]
+  },
+  "hash": "099fed5bcc3c6eafa96732195a7703ce7a3ecc6cead50f53e26da2588e578341"
+}

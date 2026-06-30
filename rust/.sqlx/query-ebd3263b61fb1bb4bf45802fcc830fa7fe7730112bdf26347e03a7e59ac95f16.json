@@ -1,0 +1,28 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n        SELECT streamer_login AS \"streamer_login!\",\n               AVG(avg_viewers)::FLOAT8 AS val\n          FROM twitch_stream_sessions\n         WHERE started_at > NOW() - ($1::INT * INTERVAL '1 day')\n         GROUP BY streamer_login\n         ORDER BY val DESC\n         LIMIT 5\n        ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "streamer_login!",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 1,
+        "name": "val",
+        "type_info": "Float8"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Int4"
+      ]
+    },
+    "nullable": [
+      false,
+      null
+    ]
+  },
+  "hash": "ebd3263b61fb1bb4bf45802fcc830fa7fe7730112bdf26347e03a7e59ac95f16"
+}

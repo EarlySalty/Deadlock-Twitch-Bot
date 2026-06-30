@@ -123,31 +123,31 @@ async fn grant_trial_inner(
     let mut tx = pool.begin().await?;
 
     // Einmal-Flag: bereits ein Trial gewährt?
-    let trial_row: Option<(Option<i32>,)> = sqlx::query_as(
+    let trial_row = sqlx::query_scalar!(
         r#"SELECT trial_ever_granted FROM streamer_plans
            WHERE TRIM(COALESCE(twitch_user_id,'')) = $1
               OR LOWER(COALESCE(twitch_login,'')) = LOWER($2)
            LIMIT 1"#,
+        twitch_user_id,
+        twitch_login
     )
-    .bind(twitch_user_id)
-    .bind(twitch_login)
     .fetch_optional(&mut *tx)
     .await?;
-    let already_granted = trial_row.and_then(|r| r.0).unwrap_or(0) == 1;
+    let already_granted = trial_row.unwrap_or(0) == 1;
 
     // Manueller Bezahlplan gesetzt?
-    let manual_row: Option<(Option<String>,)> = sqlx::query_as(
+    let manual_row = sqlx::query_scalar!(
         r#"SELECT manual_plan_id FROM streamer_plans
            WHERE TRIM(COALESCE(twitch_user_id,'')) = $1
               OR LOWER(COALESCE(twitch_login,'')) = LOWER($2)
            LIMIT 1"#,
+        twitch_user_id,
+        twitch_login
     )
-    .bind(twitch_user_id)
-    .bind(twitch_login)
     .fetch_optional(&mut *tx)
     .await?;
     let manual_paid = manual_row
-        .and_then(|r| r.0)
+        .flatten()
         .map(|p| PAID_PLAN_IDS.contains(&p.trim()))
         .unwrap_or(false);
 
@@ -159,7 +159,7 @@ async fn grant_trial_inner(
         let now = Utc::now();
         let now_iso = now.to_rfc3339();
         let expires_iso = (now + Duration::days(TRIAL_DURATION_DAYS)).to_rfc3339();
-        sqlx::query(
+        sqlx::query!(
             r#"INSERT INTO streamer_plans
                    (twitch_user_id, twitch_login, manual_plan_id, manual_plan_expires_at,
                     trial_ever_granted, manual_plan_notes, manual_plan_updated_at)
@@ -170,13 +170,13 @@ async fn grant_trial_inner(
                    trial_ever_granted = 1,
                    manual_plan_notes = EXCLUDED.manual_plan_notes,
                    manual_plan_updated_at = EXCLUDED.manual_plan_updated_at"#,
+            twitch_user_id,
+            twitch_login,
+            ANALYTICS_TRIAL_PLAN_ID,
+            &expires_iso,
+            notes,
+            &now_iso
         )
-        .bind(twitch_user_id)
-        .bind(twitch_login)
-        .bind(ANALYTICS_TRIAL_PLAN_ID)
-        .bind(&expires_iso)
-        .bind(notes)
-        .bind(&now_iso)
         .execute(&mut *tx)
         .await?;
         TrialOutcome::Granted
@@ -206,7 +206,7 @@ async fn has_active_paid_billing_sub_in(
 ) -> bool {
     let user_id = twitch_user_id.trim();
     let login = twitch_login.trim();
-    let row: Result<Option<(Option<String>,)>, _> = sqlx::query_as(
+    let row = sqlx::query_scalar!(
         r#"SELECT plan_id FROM twitch_billing_subscriptions
            WHERE customer_reference IS NOT NULL
              AND TRIM(customer_reference) <> ''
@@ -214,14 +214,14 @@ async fn has_active_paid_billing_sub_in(
                   OR ($2 <> '' AND LOWER(customer_reference) = LOWER($2)))
              AND status IN ('active','trialing')
            LIMIT 1"#,
+        login,
+        user_id
     )
-    .bind(login)
-    .bind(user_id)
     .fetch_optional(pool)
     .await;
 
     match row {
-        Ok(Some((Some(plan),))) => allowed.contains(&plan.trim()),
+        Ok(Some(Some(plan))) => allowed.contains(&plan.trim()),
         _ => false,
     }
 }
@@ -231,8 +231,11 @@ const TRIAL_GRACE_PERIOD_HOURS: f64 = 24.0;
 
 /// Bezahlpläne, die den 24h-Auto-Grant ausschließen — Python-Auto-Grant
 /// `paid_plan_ids` (kleinere Menge als der Self-Claim).
-const AUTO_GRANT_PAID_PLAN_IDS: &[&str] =
-    &["raid_boost", "analysis_dashboard", "bundle_analysis_raid_boost"];
+const AUTO_GRANT_PAID_PLAN_IDS: &[&str] = &[
+    "raid_boost",
+    "analysis_dashboard",
+    "bundle_analysis_raid_boost",
+];
 
 /// Auto-Grant des 30-Tage-Trials nach 24h-Grace (Python
 /// `_billing_check_and_grant_trial_eligibility`). Wird aus der Plan-Resolution
@@ -261,42 +264,47 @@ async fn check_and_grant_inner(
     twitch_login: &str,
 ) -> Result<bool, sqlx::Error> {
     // Billing-Abo tolerant VOR der Transaktion prüfen (Tabelle evtl. Python-only).
-    let paid_billing =
-        has_active_paid_billing_sub_in(pool, twitch_user_id, twitch_login, AUTO_GRANT_PAID_PLAN_IDS).await;
+    let paid_billing = has_active_paid_billing_sub_in(
+        pool,
+        twitch_user_id,
+        twitch_login,
+        AUTO_GRANT_PAID_PLAN_IDS,
+    )
+    .await;
 
     let mut tx = pool.begin().await?;
     // Flag + manueller Plan + Stunden seit first_login_at in einer Query.
     // first_login_at::timestamptz toleriert ISO/Date-only; NULL/unparsebar → NULL.
-    let row: Option<(Option<i32>, Option<String>, Option<f64>)> = sqlx::query_as(
+    let row = sqlx::query!(
         r#"SELECT
                trial_ever_granted,
                manual_plan_id,
-               (EXTRACT(EPOCH FROM (NOW() - first_login_at::timestamptz)) / 3600.0)::float8
+               (EXTRACT(EPOCH FROM (NOW() - first_login_at::timestamptz)) / 3600.0)::float8 AS hours_since
            FROM streamer_plans
            WHERE TRIM(COALESCE(twitch_user_id,'')) = $1
               OR LOWER(COALESCE(twitch_login,'')) = LOWER($2)
            LIMIT 1"#,
+        twitch_user_id,
+        twitch_login
     )
-    .bind(twitch_user_id)
-    .bind(twitch_login)
     .fetch_optional(&mut *tx)
     .await?;
 
-    let Some((trial_flag, manual_plan, hours_since)) = row else {
+    let Some(row) = row else {
         return Ok(false); // kein streamer_plans-Eintrag → kein first_login → nein
     };
-    if trial_flag.unwrap_or(0) == 1 {
+    if row.trial_ever_granted == 1 {
         return Ok(false);
     }
     // first_login_at fehlt/unparsebar oder < 24 h her → kein Grant.
-    let Some(hours) = hours_since else {
+    let Some(hours) = row.hours_since else {
         return Ok(false);
     };
     if hours < TRIAL_GRACE_PERIOD_HOURS {
         return Ok(false);
     }
     // Manueller Bezahlplan (≠ raid_free) → kein Grant.
-    if let Some(mp) = manual_plan.as_deref().map(str::trim) {
+    if let Some(mp) = row.manual_plan_id.as_deref().map(str::trim) {
         if !mp.is_empty() && mp != "raid_free" {
             return Ok(false);
         }
@@ -309,7 +317,7 @@ async fn check_and_grant_inner(
     let now = Utc::now();
     let now_iso = now.to_rfc3339();
     let expires_iso = (now + Duration::days(TRIAL_DURATION_DAYS)).to_rfc3339();
-    sqlx::query(
+    sqlx::query!(
         r#"INSERT INTO streamer_plans
                (twitch_user_id, twitch_login, manual_plan_id, manual_plan_expires_at,
                 trial_ever_granted, manual_plan_notes, manual_plan_updated_at)
@@ -320,13 +328,13 @@ async fn check_and_grant_inner(
                trial_ever_granted = 1,
                manual_plan_notes = EXCLUDED.manual_plan_notes,
                manual_plan_updated_at = EXCLUDED.manual_plan_updated_at"#,
+        twitch_user_id,
+        twitch_login,
+        ANALYTICS_TRIAL_PLAN_ID,
+        &expires_iso,
+        "Trial granted after 24h grace period",
+        &now_iso
     )
-    .bind(twitch_user_id)
-    .bind(twitch_login)
-    .bind(ANALYTICS_TRIAL_PLAN_ID)
-    .bind(&expires_iso)
-    .bind("Trial granted after 24h grace period")
-    .bind(&now_iso)
     .execute(&mut *tx)
     .await?;
     tx.commit().await?;
@@ -340,10 +348,23 @@ mod auto_grant_tests {
 
     async fn pool_or_skip(schema: &str) -> Option<PgPool> {
         let dsn = std::env::var("TB_TEST_DATABASE_URL").ok()?;
-        let pool = PgPoolOptions::new().max_connections(1).connect(&dsn).await.unwrap();
-        sqlx::query(&format!("DROP SCHEMA IF EXISTS {schema} CASCADE")).execute(&pool).await.unwrap();
-        sqlx::query(&format!("CREATE SCHEMA {schema}")).execute(&pool).await.unwrap();
-        sqlx::query(&format!("SET search_path TO {schema}")).execute(&pool).await.unwrap();
+        let pool = PgPoolOptions::new()
+            .max_connections(1)
+            .connect(&dsn)
+            .await
+            .unwrap();
+        sqlx::query(&format!("DROP SCHEMA IF EXISTS {schema} CASCADE"))
+            .execute(&pool)
+            .await
+            .unwrap();
+        sqlx::query(&format!("CREATE SCHEMA {schema}"))
+            .execute(&pool)
+            .await
+            .unwrap();
+        sqlx::query(&format!("SET search_path TO {schema}"))
+            .execute(&pool)
+            .await
+            .unwrap();
         sqlx::query(
             // Prod speichert die Zeitfelder als TEXT (Python schreibt ISO-Strings;
             // der bestehende grant_trial_inner bindet ebenfalls Strings).
@@ -387,7 +408,9 @@ mod auto_grant_tests {
 
     #[tokio::test]
     async fn grant_nach_24h_grace() {
-        let Some(pool) = pool_or_skip("t6e_trial_grant").await else { return };
+        let Some(pool) = pool_or_skip("t6e_trial_grant").await else {
+            return;
+        };
         // first_login 30h her, kein Flag, kein Plan → Grant.
         sqlx::query("INSERT INTO streamer_plans (twitch_user_id, twitch_login, first_login_at) VALUES ('10','streamer', (NOW() - INTERVAL '30 hours')::text)")
             .execute(&pool).await.unwrap();
@@ -401,7 +424,9 @@ mod auto_grant_tests {
 
     #[tokio::test]
     async fn self_claim_blockt_login_referenziertes_paid_abo() {
-        let Some(pool) = pool_or_skip("t6e_trial_paid_login").await else { return };
+        let Some(pool) = pool_or_skip("t6e_trial_paid_login").await else {
+            return;
+        };
         sqlx::query(
             "INSERT INTO twitch_billing_subscriptions (customer_reference, plan_id, status) \
              VALUES ('streamer', 'analysis_dashboard', 'active')",
@@ -412,18 +437,22 @@ mod auto_grant_tests {
 
         let outcome = start_trial_for_user(&pool, "42", "streamer").await;
         assert_eq!(outcome, TrialOutcome::HasPaidPlan);
-        let rows: i64 = sqlx::query_scalar(
-            "SELECT COUNT(*) FROM streamer_plans WHERE twitch_user_id = '42'",
-        )
-        .fetch_one(&pool)
-        .await
-        .unwrap();
-        assert_eq!(rows, 0, "Paid-Abo via Login darf keinen Trial-Grant erzeugen");
+        let rows: i64 =
+            sqlx::query_scalar("SELECT COUNT(*) FROM streamer_plans WHERE twitch_user_id = '42'")
+                .fetch_one(&pool)
+                .await
+                .unwrap();
+        assert_eq!(
+            rows, 0,
+            "Paid-Abo via Login darf keinen Trial-Grant erzeugen"
+        );
     }
 
     #[tokio::test]
     async fn leere_billing_referenz_matcht_keinen_leeren_login() {
-        let Some(pool) = pool_or_skip("t6e_trial_empty_paid_ref").await else { return };
+        let Some(pool) = pool_or_skip("t6e_trial_empty_paid_ref").await else {
+            return;
+        };
         sqlx::query(
             "INSERT INTO twitch_billing_subscriptions (customer_reference, plan_id, status) \
              VALUES (NULL, 'analysis_dashboard', 'active'), ('', 'analysis_dashboard', 'active')",
@@ -442,14 +471,20 @@ mod auto_grant_tests {
 
     #[tokio::test]
     async fn kein_grant_innerhalb_grace_oder_ohne_first_login() {
-        let Some(pool) = pool_or_skip("t6e_trial_nograce").await else { return };
+        let Some(pool) = pool_or_skip("t6e_trial_nograce").await else {
+            return;
+        };
         // first_login erst 5h her → noch nicht eligible.
         sqlx::query("INSERT INTO streamer_plans (twitch_user_id, twitch_login, first_login_at) VALUES ('20','frisch', (NOW() - INTERVAL '5 hours')::text)")
             .execute(&pool).await.unwrap();
         assert!(!check_and_grant_trial_eligibility(&pool, "20", "frisch").await);
         // kein first_login_at → kein Grant.
-        sqlx::query("INSERT INTO streamer_plans (twitch_user_id, twitch_login) VALUES ('21','ohnelogin')")
-            .execute(&pool).await.unwrap();
+        sqlx::query(
+            "INSERT INTO streamer_plans (twitch_user_id, twitch_login) VALUES ('21','ohnelogin')",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
         assert!(!check_and_grant_trial_eligibility(&pool, "21", "ohnelogin").await);
         // gar kein Eintrag → kein Grant.
         assert!(!check_and_grant_trial_eligibility(&pool, "99", "unbekannt").await);
@@ -457,7 +492,9 @@ mod auto_grant_tests {
 
     #[tokio::test]
     async fn kein_grant_bei_manuellem_bezahlplan() {
-        let Some(pool) = pool_or_skip("t6e_trial_paid").await else { return };
+        let Some(pool) = pool_or_skip("t6e_trial_paid").await else {
+            return;
+        };
         sqlx::query("INSERT INTO streamer_plans (twitch_user_id, twitch_login, manual_plan_id, first_login_at) VALUES ('30','zahler','raid_boost', (NOW() - INTERVAL '48 hours')::text)")
             .execute(&pool).await.unwrap();
         assert!(!check_and_grant_trial_eligibility(&pool, "30", "zahler").await);

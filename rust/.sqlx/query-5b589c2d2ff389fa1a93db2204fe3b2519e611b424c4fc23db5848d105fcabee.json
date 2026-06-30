@@ -1,0 +1,41 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT COUNT(*)::bigint AS \"total_ads!\", COALESCE(SUM(CASE WHEN COALESCE(a.is_automatic, false) THEN 1 ELSE 0 END), 0)::bigint AS \"auto_ads!\", AVG(a.duration_seconds)::float8 AS avg_duration, COUNT(DISTINCT a.session_id)::bigint AS \"sessions_with_ads!\" FROM twitch_ad_break_events a LEFT JOIN twitch_stream_sessions s ON s.id = a.session_id WHERE a.started_at >= $1 AND ($2 = '' OR LOWER(s.streamer_login) = $2)",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "total_ads!",
+        "type_info": "Int8"
+      },
+      {
+        "ordinal": 1,
+        "name": "auto_ads!",
+        "type_info": "Int8"
+      },
+      {
+        "ordinal": 2,
+        "name": "avg_duration",
+        "type_info": "Float8"
+      },
+      {
+        "ordinal": 3,
+        "name": "sessions_with_ads!",
+        "type_info": "Int8"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Timestamptz",
+        "Text"
+      ]
+    },
+    "nullable": [
+      null,
+      null,
+      null,
+      null
+    ]
+  },
+  "hash": "5b589c2d2ff389fa1a93db2204fe3b2519e611b424c4fc23db5848d105fcabee"
+}

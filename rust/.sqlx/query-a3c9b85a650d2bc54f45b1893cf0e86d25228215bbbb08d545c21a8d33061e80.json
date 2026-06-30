@@ -1,0 +1,16 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n                UPDATE affiliate_commissions\n                SET status = 'transferred',\n                    stripe_transfer_id = $1,\n                    transferred_at = $2,\n                    error_message = NULL\n                WHERE id = $3\n                ",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Text",
+        "Text",
+        "Int4"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "a3c9b85a650d2bc54f45b1893cf0e86d25228215bbbb08d545c21a8d33061e80"
+}

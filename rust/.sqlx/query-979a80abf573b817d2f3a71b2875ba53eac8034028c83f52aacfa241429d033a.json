@@ -1,0 +1,23 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n        INSERT INTO affiliate_pii\n            (twitch_login, full_name_enc, email_enc, address_line1_enc,\n             address_city_enc, address_zip_enc, tax_id_enc, address_country, ust_status, updated_at)\n        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)\n        ON CONFLICT (twitch_login) DO UPDATE SET\n            full_name_enc = excluded.full_name_enc,\n            email_enc = excluded.email_enc,\n            address_line1_enc = excluded.address_line1_enc,\n            address_city_enc = excluded.address_city_enc,\n            address_zip_enc = excluded.address_zip_enc,\n            tax_id_enc = excluded.tax_id_enc,\n            address_country = excluded.address_country,\n            ust_status = excluded.ust_status,\n            updated_at = excluded.updated_at\n        ",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Text",
+        "Bytea",
+        "Bytea",
+        "Bytea",
+        "Bytea",
+        "Bytea",
+        "Bytea",
+        "Text",
+        "Text",
+        "Text"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "979a80abf573b817d2f3a71b2875ba53eac8034028c83f52aacfa241429d033a"
+}

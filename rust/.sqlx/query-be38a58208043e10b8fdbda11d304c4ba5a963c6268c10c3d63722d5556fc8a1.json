@@ -1,0 +1,35 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n        SELECT\n            grace_expires_at::text,\n            error_count::bigint AS error_count,\n            role_removed\n        FROM twitch_token_blacklist\n        WHERE (COALESCE($1, '') != '' AND twitch_user_id = $1)\n           OR (COALESCE($2, '') != '' AND LOWER(twitch_login) = LOWER($2))\n        ORDER BY last_error_at DESC NULLS LAST, first_error_at DESC NULLS LAST\n        LIMIT 1\n        ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "grace_expires_at",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 1,
+        "name": "error_count",
+        "type_info": "Int8"
+      },
+      {
+        "ordinal": 2,
+        "name": "role_removed",
+        "type_info": "Int4"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Text",
+        "Text"
+      ]
+    },
+    "nullable": [
+      true,
+      null,
+      true
+    ]
+  },
+  "hash": "be38a58208043e10b8fdbda11d304c4ba5a963c6268c10c3d63722d5556fc8a1"
+}

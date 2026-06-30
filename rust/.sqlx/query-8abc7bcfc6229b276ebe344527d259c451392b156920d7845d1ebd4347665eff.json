@@ -1,0 +1,22 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n            SELECT relname AS \"relname!\"\n            FROM pg_class\n            WHERE relname = $1\n              AND relnamespace = (\n                  SELECT oid FROM pg_namespace WHERE nspname = current_schema()\n              )\n            ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "relname!",
+        "type_info": "Name"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Name"
+      ]
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "8abc7bcfc6229b276ebe344527d259c451392b156920d7845d1ebd4347665eff"
+}

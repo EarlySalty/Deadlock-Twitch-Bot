@@ -60,11 +60,11 @@ async fn window_since_dates(
     window: &str,
 ) -> Result<(DateTime<Utc>, DateTime<Utc>), sqlx::Error> {
     if window == "last_stream" {
-        let latest: Option<DateTime<Utc>> = sqlx::query_scalar(
-            "SELECT MAX(s.started_at) FROM twitch_stream_sessions s \
+        let latest = sqlx::query_scalar!(
+            "SELECT MAX(s.started_at) AS started_at FROM twitch_stream_sessions s \
              WHERE s.ended_at IS NOT NULL AND LOWER(s.streamer_login) = $1",
+            streamer
         )
-        .bind(streamer)
         .fetch_one(conn)
         .await?;
         let since = latest.unwrap_or_else(|| Utc::now() - Duration::days(days));
@@ -84,24 +84,28 @@ async fn session_ids(
     until: Option<DateTime<Utc>>,
 ) -> Result<Vec<i64>, sqlx::Error> {
     match until {
-        Some(until) => sqlx::query_scalar(
-            "SELECT s.id::bigint FROM twitch_stream_sessions s \
+        Some(until) => {
+            sqlx::query_scalar!(
+                "SELECT s.id::bigint AS \"id!\" FROM twitch_stream_sessions s \
              WHERE s.started_at >= $1 AND s.started_at < $2 \
                AND LOWER(s.streamer_login) = $3 AND s.ended_at IS NOT NULL",
-        )
-        .bind(since)
-        .bind(until)
-        .bind(streamer)
-        .fetch_all(conn)
-        .await,
-        None => sqlx::query_scalar(
-            "SELECT s.id::bigint FROM twitch_stream_sessions s \
+                since,
+                until,
+                streamer
+            )
+            .fetch_all(conn)
+            .await
+        }
+        None => {
+            sqlx::query_scalar!(
+                "SELECT s.id::bigint AS \"id!\" FROM twitch_stream_sessions s \
              WHERE s.started_at >= $1 AND LOWER(s.streamer_login) = $2 AND s.ended_at IS NOT NULL",
-        )
-        .bind(since)
-        .bind(streamer)
-        .fetch_all(conn)
-        .await,
+                since,
+                streamer
+            )
+            .fetch_all(conn)
+            .await
+        }
     }
 }
 
@@ -112,7 +116,7 @@ async fn backfill_last_seen(conn: &mut PgConnection, ids: &[i64]) -> Result<(), 
         return Ok(());
     }
     let bots = bots_vec();
-    sqlx::query(
+    sqlx::query!(
         "UPDATE twitch_session_chatters sc \
             SET last_seen_at = agg.max_ts \
            FROM ( \
@@ -121,8 +125,8 @@ async fn backfill_last_seen(conn: &mut PgConnection, ids: &[i64]) -> Result<(), 
                     cm.chatter_id, \
                     MAX(cm.message_ts) AS max_ts \
                FROM twitch_chat_messages cm \
-              WHERE cm.session_id = ANY($1) \
-                AND (cm.chatter_login IS NULL OR cm.chatter_login = '' OR LOWER(cm.chatter_login) <> ALL($2)) \
+              WHERE cm.session_id = ANY($1::bigint[]) \
+                AND (cm.chatter_login IS NULL OR cm.chatter_login = '' OR LOWER(cm.chatter_login) <> ALL($2::text[])) \
               GROUP BY cm.session_id, LOWER(NULLIF(cm.chatter_login, '')), cm.chatter_id \
            ) agg \
           WHERE sc.session_id = agg.session_id \
@@ -133,9 +137,9 @@ async fn backfill_last_seen(conn: &mut PgConnection, ids: &[i64]) -> Result<(), 
                   AND sc.chatter_id = agg.chatter_id AND (sc.chatter_login IS NULL OR sc.chatter_login = '')) \
             ) \
             AND (sc.last_seen_at IS NULL OR sc.last_seen_at < agg.max_ts)",
+        ids,
+        &bots
     )
-    .bind(ids)
-    .bind(&bots)
     .execute(conn)
     .await?;
     Ok(())
@@ -172,28 +176,28 @@ async fn calc_watch_distribution(
     let total_sessions = ids.len() as i64;
     let bots = bots_vec();
 
-    let viewer_base_count: i64 = sqlx::query_scalar(
-        "SELECT COUNT(DISTINCT COALESCE(NULLIF(chatter_login, ''), chatter_id))::bigint \
+    let viewer_base_count = sqlx::query_scalar!(
+        "SELECT COUNT(DISTINCT COALESCE(NULLIF(chatter_login, ''), chatter_id))::bigint AS \"count!\" \
            FROM twitch_session_chatters \
-          WHERE session_id = ANY($1) \
+          WHERE session_id = ANY($1::bigint[]) \
             AND COALESCE(NULLIF(chatter_login, ''), chatter_id) IS NOT NULL \
-            AND (chatter_login IS NULL OR chatter_login = '' OR LOWER(chatter_login) <> ALL($2))",
+            AND (chatter_login IS NULL OR chatter_login = '' OR LOWER(chatter_login) <> ALL($2::text[]))",
+        ids,
+        &bots
     )
-    .bind(ids)
-    .bind(&bots)
     .fetch_one(&mut *conn)
     .await?;
 
-    let raw: Vec<Option<f64>> = sqlx::query_scalar(
+    let raw = sqlx::query_scalar!(
         "SELECT ROUND(GREATEST( \
                     EXTRACT(EPOCH FROM COALESCE(last_seen_at, first_message_at)) \
-                    - EXTRACT(EPOCH FROM COALESCE(first_message_at, last_seen_at)), 0) / 60.0)::float8 \
+                    - EXTRACT(EPOCH FROM COALESCE(first_message_at, last_seen_at)), 0) / 60.0)::float8 AS minutes \
            FROM twitch_session_chatters \
-          WHERE session_id = ANY($1) AND first_message_at IS NOT NULL AND last_seen_at IS NOT NULL \
-            AND (chatter_login IS NULL OR chatter_login = '' OR LOWER(chatter_login) <> ALL($2))",
+          WHERE session_id = ANY($1::bigint[]) AND first_message_at IS NOT NULL AND last_seen_at IS NOT NULL \
+            AND (chatter_login IS NULL OR chatter_login = '' OR LOWER(chatter_login) <> ALL($2::text[]))",
+        ids,
+        &bots
     )
-    .bind(ids)
-    .bind(&bots)
     .fetch_all(&mut *conn)
     .await?;
 
@@ -280,7 +284,14 @@ pub async fn load_watch_time_distribution(
     tx.commit().await?;
 
     // Deltas der 6 Kennzahlen.
-    let keys = ["under5min", "min5to15", "min15to30", "min30to60", "over60min", "avgWatchTime"];
+    let keys = [
+        "under5min",
+        "min5to15",
+        "min15to30",
+        "min30to60",
+        "over60min",
+        "avgWatchTime",
+    ];
     let mut deltas = serde_json::Map::new();
     for k in keys {
         let curr = current[k].as_f64().unwrap_or(0.0);
@@ -346,12 +357,28 @@ mod tests {
 
     async fn make_pool(schema: &str) -> Option<PgPool> {
         let dsn = std::env::var("TB_TEST_DATABASE_URL").ok()?;
-        let admin = PgPoolOptions::new().max_connections(1).connect(&dsn).await.unwrap();
-        sqlx::query(&format!("DROP SCHEMA IF EXISTS {schema} CASCADE")).execute(&admin).await.unwrap();
-        sqlx::query(&format!("CREATE SCHEMA {schema}")).execute(&admin).await.unwrap();
+        let admin = PgPoolOptions::new()
+            .max_connections(1)
+            .connect(&dsn)
+            .await
+            .unwrap();
+        sqlx::query(&format!("DROP SCHEMA IF EXISTS {schema} CASCADE"))
+            .execute(&admin)
+            .await
+            .unwrap();
+        sqlx::query(&format!("CREATE SCHEMA {schema}"))
+            .execute(&admin)
+            .await
+            .unwrap();
         admin.close().await;
-        let opts = PgConnectOptions::from_str(&dsn).unwrap().options([("search_path", schema)]);
-        let pool = PgPoolOptions::new().max_connections(2).connect_with(opts).await.unwrap();
+        let opts = PgConnectOptions::from_str(&dsn)
+            .unwrap()
+            .options([("search_path", schema)]);
+        let pool = PgPoolOptions::new()
+            .max_connections(2)
+            .connect_with(opts)
+            .await
+            .unwrap();
         sqlx::query("CREATE TABLE twitch_stream_sessions (id BIGSERIAL PRIMARY KEY, streamer_login TEXT, started_at TIMESTAMPTZ, ended_at TIMESTAMPTZ)")
             .execute(&pool).await.unwrap();
         sqlx::query("CREATE TABLE twitch_session_chatters (session_id BIGINT, chatter_login TEXT, chatter_id TEXT, first_message_at TIMESTAMPTZ, last_seen_at TIMESTAMPTZ)")
@@ -363,8 +390,12 @@ mod tests {
 
     #[tokio::test]
     async fn no_data_payload() {
-        let Some(pool) = make_pool("t_wt_nodata").await else { return };
-        let v = load_watch_time_distribution(&pool, "nani", 30, "full").await.unwrap();
+        let Some(pool) = make_pool("t_wt_nodata").await else {
+            return;
+        };
+        let v = load_watch_time_distribution(&pool, "nani", 30, "full")
+            .await
+            .unwrap();
         assert_eq!(v["under5min"], 0);
         assert_eq!(v["sessionCount"], 0);
         assert_eq!(v["dataQuality"]["method"], "no_data");
@@ -375,7 +406,9 @@ mod tests {
 
     #[tokio::test]
     async fn real_samples_buckets() {
-        let Some(pool) = make_pool("t_wt_real").await else { return };
+        let Some(pool) = make_pool("t_wt_real").await else {
+            return;
+        };
         sqlx::query("INSERT INTO twitch_stream_sessions (id, streamer_login, started_at, ended_at) VALUES (1,'nani',NOW()-INTERVAL '2 days',NOW()-INTERVAL '2 days'+INTERVAL '4 hours')")
             .execute(&pool).await.unwrap();
         // 30 Chatter, je 10 Min Watch-Time (first→last = 10 min) → min5to15-Bucket.
@@ -383,7 +416,9 @@ mod tests {
             sqlx::query("INSERT INTO twitch_session_chatters (session_id, chatter_login, first_message_at, last_seen_at) VALUES (1, $1, NOW()-INTERVAL '2 days', NOW()-INTERVAL '2 days'+INTERVAL '10 minutes')")
                 .bind(format!("chatter{i}")).execute(&pool).await.unwrap();
         }
-        let v = load_watch_time_distribution(&pool, "nani", 30, "full").await.unwrap();
+        let v = load_watch_time_distribution(&pool, "nani", 30, "full")
+            .await
+            .unwrap();
         assert_eq!(v["dataQuality"]["method"], "real_samples");
         assert_eq!(v["dataQuality"]["sample_count"], 30);
         assert_eq!(v["dataQuality"]["coverage"], 1.0); // 30/30
@@ -397,7 +432,9 @@ mod tests {
 
     #[tokio::test]
     async fn backfill_fuellt_last_seen() {
-        let Some(pool) = make_pool("t_wt_backfill").await else { return };
+        let Some(pool) = make_pool("t_wt_backfill").await else {
+            return;
+        };
         sqlx::query("INSERT INTO twitch_stream_sessions (id, streamer_login, started_at, ended_at) VALUES (1,'nani',NOW()-INTERVAL '2 days',NOW()-INTERVAL '2 days'+INTERVAL '1 hour')")
             .execute(&pool).await.unwrap();
         // Chatter ohne last_seen_at, aber mit Chat-Nachrichten → Backfill setzt last_seen.
@@ -405,7 +442,9 @@ mod tests {
             .execute(&pool).await.unwrap();
         sqlx::query("INSERT INTO twitch_chat_messages (session_id, chatter_login, message_ts) VALUES (1,'lurker',NOW()-INTERVAL '2 days'+INTERVAL '7 minutes')")
             .execute(&pool).await.unwrap();
-        let v = load_watch_time_distribution(&pool, "nani", 30, "full").await.unwrap();
+        let v = load_watch_time_distribution(&pool, "nani", 30, "full")
+            .await
+            .unwrap();
         // Ohne Backfill wäre sample_count 0 (last_seen NULL gefiltert); jetzt 1.
         assert_eq!(v["dataQuality"]["sample_count"], 1);
         // 1 Sample < 25 → low_coverage (Buckets bleiben 0).
@@ -414,7 +453,9 @@ mod tests {
 
     #[tokio::test]
     async fn last_stream_window_klemmt_auf_letzten() {
-        let Some(pool) = make_pool("t_wt_laststream").await else { return };
+        let Some(pool) = make_pool("t_wt_laststream").await else {
+            return;
+        };
         // Alte + neue Session; last_stream → nur die neue ist im Fenster, Vorperiode leer.
         sqlx::query("INSERT INTO twitch_stream_sessions (id, streamer_login, started_at, ended_at) VALUES (1,'nani',NOW()-INTERVAL '10 days',NOW()-INTERVAL '10 days'+INTERVAL '2 hours'),(2,'nani',NOW()-INTERVAL '1 day',NOW()-INTERVAL '1 day'+INTERVAL '2 hours')")
             .execute(&pool).await.unwrap();
@@ -423,7 +464,9 @@ mod tests {
             sqlx::query("INSERT INTO twitch_session_chatters (session_id, chatter_login, first_message_at, last_seen_at) VALUES ($1,'a',NOW()-INTERVAL '2 days',NOW()-INTERVAL '2 days'+INTERVAL '10 minutes')")
                 .bind(sid as i64).execute(&pool).await.unwrap();
         }
-        let v = load_watch_time_distribution(&pool, "nani", 30, "last_stream").await.unwrap();
+        let v = load_watch_time_distribution(&pool, "nani", 30, "last_stream")
+            .await
+            .unwrap();
         // Nur Session 2 → sessionCount 1; Vorperiode leer → previous no_data.
         assert_eq!(v["sessionCount"], 1);
         assert_eq!(v["previous"]["dataQuality"]["method"], "no_data");

@@ -1,0 +1,21 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n        INSERT INTO twitch_ads_schedule_snapshot\n            (twitch_user_id, twitch_login, next_ad_at, last_ad_at, duration,\n             preroll_free_time, snooze_count, snooze_refresh_at, snapshot_at)\n        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, NOW())\n        ",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Text",
+        "Text",
+        "Timestamptz",
+        "Timestamptz",
+        "Int4",
+        "Int4",
+        "Int4",
+        "Timestamptz"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "08b26858385a40a0edbb43e0ddaf82c51648717ce05654bd732d895ad6f082cf"
+}

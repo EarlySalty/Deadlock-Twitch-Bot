@@ -1,0 +1,36 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n        WITH session_messages AS (\n            SELECT cm.session_id, COUNT(*) AS message_count\n            FROM twitch_chat_messages cm\n            JOIN twitch_stream_sessions s ON s.id = cm.session_id\n            WHERE s.started_at >= $1\n              AND LOWER(s.streamer_login) = $2\n              AND s.ended_at IS NOT NULL\n              AND (cm.chatter_login IS NULL OR cm.chatter_login = '' OR LOWER(cm.chatter_login) <> ALL($3))\n            GROUP BY cm.session_id\n        ), session_viewer_samples AS (\n            SELECT sv.session_id,\n                   COUNT(*) AS sample_count,\n                   COALESCE(SUM(GREATEST(sv.viewer_count, 0)), 0) AS viewer_minutes\n            FROM twitch_session_viewers sv\n            JOIN twitch_stream_sessions s ON s.id = sv.session_id\n            WHERE s.started_at >= $1\n              AND LOWER(s.streamer_login) = $2\n              AND s.ended_at IS NOT NULL\n            GROUP BY sv.session_id\n        )\n        SELECT s.id::bigint AS \"session_id!\",\n               COALESCE(sm.message_count, 0)::bigint AS \"message_count!\",\n               (CASE WHEN COALESCE(svs.sample_count, 0) > 0 THEN COALESCE(svs.viewer_minutes, 0)\n                     ELSE COALESCE(s.avg_viewers, 0) * GREATEST(COALESCE(s.duration_seconds, 0), 0) / 60.0 END)::float8 AS \"viewer_minutes!\"\n        FROM twitch_stream_sessions s\n        LEFT JOIN session_messages sm ON sm.session_id = s.id\n        LEFT JOIN session_viewer_samples svs ON svs.session_id = s.id\n        WHERE s.started_at >= $1\n          AND LOWER(s.streamer_login) = $2\n          AND s.ended_at IS NOT NULL\n        ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "session_id!",
+        "type_info": "Int8"
+      },
+      {
+        "ordinal": 1,
+        "name": "message_count!",
+        "type_info": "Int8"
+      },
+      {
+        "ordinal": 2,
+        "name": "viewer_minutes!",
+        "type_info": "Float8"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Timestamptz",
+        "Text",
+        "TextArray"
+      ]
+    },
+    "nullable": [
+      false,
+      null,
+      null
+    ]
+  },
+  "hash": "faffe99383dde24107ac8cde13dfc818640c9832c579bf75a7d7849ae727eb76"
+}

@@ -1,0 +1,41 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT COALESCE(es.game_name, '(unbekannt)') AS \"game_name!\", (FLOOR(sn.minutes_from_start / 5) * 5)::bigint AS \"minute_bucket!\", COALESCE(AVG(sn.viewer_count), 0)::float8 AS \"avg_v!\", COUNT(*)::bigint AS \"samples!\" FROM exp_snapshots sn JOIN exp_sessions es ON es.id = sn.exp_session_id WHERE LOWER(es.streamer) = $1 AND es.started_at >= $2 AND sn.minutes_from_start IS NOT NULL AND sn.minutes_from_start >= 0 AND sn.minutes_from_start <= 360 GROUP BY 1, 2 ORDER BY 1, 2",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "game_name!",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 1,
+        "name": "minute_bucket!",
+        "type_info": "Int8"
+      },
+      {
+        "ordinal": 2,
+        "name": "avg_v!",
+        "type_info": "Float8"
+      },
+      {
+        "ordinal": 3,
+        "name": "samples!",
+        "type_info": "Int8"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Text",
+        "Text"
+      ]
+    },
+    "nullable": [
+      null,
+      null,
+      null,
+      null
+    ]
+  },
+  "hash": "437fe9ff9b403cdced01f3c0f02730d2dd94576bb2ecbab73fd8da031fff06cd"
+}

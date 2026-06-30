@@ -55,7 +55,9 @@ impl WebhookAction {
             WebhookAction::CheckoutIgnoredNonSubscription => "checkout_ignored_non_subscription",
             WebhookAction::InvoicePaymentRecorded => "invoice_payment_recorded",
             WebhookAction::InvoiceFailureRecorded => "invoice_failure_recorded",
-            WebhookAction::InvoiceIgnoredWithoutSubscription => "invoice_ignored_without_subscription",
+            WebhookAction::InvoiceIgnoredWithoutSubscription => {
+                "invoice_ignored_without_subscription"
+            }
             WebhookAction::IgnoredUnsupportedEvent => "ignored_unsupported_event",
         }
     }
@@ -184,7 +186,11 @@ pub fn subscription_payload_from_object(sub: &Value) -> SubscriptionState {
         customer_reference: str_field(&metadata, "customer_reference"),
         status: {
             let s = str_field(sub, "status");
-            if s.is_empty() { "unknown".to_string() } else { s }
+            if s.is_empty() {
+                "unknown".to_string()
+            } else {
+                s
+            }
         },
         plan_id,
         cycle_months,
@@ -216,15 +222,16 @@ async fn upsert_subscription_state(
         return Ok(());
     }
 
-    let existing: Option<ExistingRow> = sqlx::query_as(
+    let existing = sqlx::query_as!(
+        ExistingRow,
         r#"SELECT
-               stripe_customer_id, customer_reference, status, plan_id, cycle_months,
-               quantity, current_period_start, current_period_end, cancel_at_period_end,
+               stripe_customer_id, customer_reference, status AS "status?", plan_id, cycle_months AS "cycle_months?",
+               quantity AS "quantity?", current_period_start, current_period_end, cancel_at_period_end AS "cancel_at_period_end?",
                canceled_at, ended_at, last_event_id
            FROM twitch_billing_subscriptions
            WHERE stripe_subscription_id = $1"#,
+        sub_id
     )
-    .bind(sub_id)
     .fetch_optional(&mut *tx)
     .await?;
     let existing = existing.unwrap_or_default();
@@ -234,7 +241,10 @@ async fn upsert_subscription_state(
         if !n.is_empty() {
             return Some(n.to_string());
         }
-        old.as_deref().map(str::trim).filter(|s| !s.is_empty()).map(str::to_string)
+        old.as_deref()
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+            .map(str::to_string)
     };
 
     let final_customer_id = merge(&state.stripe_customer_id, &existing.stripe_customer_id);
@@ -289,7 +299,7 @@ async fn upsert_subscription_state(
     let final_last_event_id = merge(&state.last_event_id, &existing.last_event_id);
     let updated_at = Utc::now().to_rfc3339();
 
-    sqlx::query(
+    sqlx::query!(
         r#"INSERT INTO twitch_billing_subscriptions (
                stripe_subscription_id, stripe_customer_id, customer_reference, status,
                plan_id, cycle_months, quantity, current_period_start, current_period_end,
@@ -309,21 +319,21 @@ async fn upsert_subscription_state(
                ended_at = EXCLUDED.ended_at,
                last_event_id = EXCLUDED.last_event_id,
                updated_at = EXCLUDED.updated_at"#,
+        sub_id,
+        final_customer_id,
+        final_customer_reference,
+        &final_status,
+        final_plan_id,
+        final_cycle_months,
+        final_quantity,
+        final_period_start,
+        final_period_end,
+        final_cancel,
+        final_canceled_at,
+        final_ended_at,
+        final_last_event_id,
+        &updated_at
     )
-    .bind(sub_id)
-    .bind(final_customer_id)
-    .bind(final_customer_reference)
-    .bind(&final_status)
-    .bind(final_plan_id)
-    .bind(final_cycle_months)
-    .bind(final_quantity)
-    .bind(final_period_start)
-    .bind(final_period_end)
-    .bind(final_cancel)
-    .bind(final_canceled_at)
-    .bind(final_ended_at)
-    .bind(final_last_event_id)
-    .bind(&updated_at)
     .execute(&mut *tx)
     .await?;
     Ok(())
@@ -371,7 +381,7 @@ async fn sync_plan_to_streamer_plans(
         "free"
     };
 
-    sqlx::query(
+    sqlx::query!(
         r#"INSERT INTO streamer_plans (twitch_user_id, twitch_login, plan_name, expires_at)
            SELECT twitch_user_id, twitch_login, $1, NULL
            FROM twitch_streamers_partner_state
@@ -379,9 +389,9 @@ async fn sync_plan_to_streamer_plans(
            ON CONFLICT (twitch_user_id) DO UPDATE SET
                plan_name = EXCLUDED.plan_name,
                expires_at = EXCLUDED.expires_at"#,
+        effective_plan,
+        reference
     )
-    .bind(effective_plan)
-    .bind(reference)
     .execute(&mut *tx)
     .await?;
     Ok(())
@@ -408,17 +418,21 @@ async fn grant_bonus_access_months(
     }
     // Abo-Ende parsen; ungültig → No-op (Python schluckt den Fehler).
     let Ok(period_end) = DateTime::parse_from_rfc3339(period_end_iso) else {
-        tracing::debug!(period_end_iso, "billing bonus grant: invalid period_end_iso");
+        tracing::debug!(
+            period_end_iso,
+            "billing bonus grant: invalid period_end_iso"
+        );
         return Ok(());
     };
-    let bonus_expires_at = period_end.with_timezone(&Utc) + chrono::Duration::days(bonus_months * 31);
+    let bonus_expires_at =
+        period_end.with_timezone(&Utc) + chrono::Duration::days(bonus_months * 31);
     let bonus_expires_iso = bonus_expires_at.to_rfc3339();
     let today = Utc::now().date_naive();
     // Hinweis: rein technischer Audit-Vermerk, kein user-sichtbarer Text.
     let notes = format!("bonus {bonus_months}mo: annual (auto {today})");
     let updated_at = Utc::now().to_rfc3339();
 
-    sqlx::query(
+    sqlx::query!(
         r#"UPDATE streamer_plans
            SET manual_plan_id = $1,
                manual_plan_expires_at = $2,
@@ -430,12 +444,12 @@ async fn grant_bonus_access_months(
                WHERE LOWER(twitch_login) = LOWER($5)
                LIMIT 1
            )"#,
+        plan_id,
+        &bonus_expires_iso,
+        &notes,
+        &updated_at,
+        reference
     )
-    .bind(plan_id)
-    .bind(&bonus_expires_iso)
-    .bind(&notes)
-    .bind(&updated_at)
-    .bind(reference)
     .execute(&mut *tx)
     .await?;
     Ok(())
@@ -503,16 +517,16 @@ pub async fn refresh_partner_raid_score_for_login(
     if login.is_empty() {
         return Ok(());
     }
-    let row: Option<(Option<String>,)> = sqlx::query_as(
+    let row = sqlx::query_scalar!(
         r#"SELECT twitch_user_id
            FROM twitch_streamers_partner_state
            WHERE LOWER(twitch_login) = LOWER($1)
            LIMIT 1"#,
+        login
     )
-    .bind(login)
     .fetch_optional(pool)
     .await?;
-    let Some((Some(user_id),)) = row else {
+    let Some(Some(user_id)) = row else {
         return Ok(());
     };
     let user_id = user_id.trim().to_string();
@@ -549,8 +563,13 @@ pub async fn apply_event(
         let mut payload = subscription_payload_from_object(event_object);
         payload.last_event_id = event_id.to_string();
         upsert_subscription_state(tx, &payload).await?;
-        sync_plan_to_streamer_plans(tx, &payload.customer_reference, &payload.plan_id, &payload.status)
-            .await?;
+        sync_plan_to_streamer_plans(
+            tx,
+            &payload.customer_reference,
+            &payload.plan_id,
+            &payload.status,
+        )
+        .await?;
         return Ok(WebhookAction::SubscriptionStateUpdated);
     }
 
@@ -621,8 +640,13 @@ pub async fn apply_event(
             .unwrap_or(0);
 
         upsert_subscription_state(tx, &payload).await?;
-        sync_plan_to_streamer_plans(tx, &payload.customer_reference, &payload.plan_id, &payload.status)
-            .await?;
+        sync_plan_to_streamer_plans(
+            tx,
+            &payload.customer_reference,
+            &payload.plan_id,
+            &payload.status,
+        )
+        .await?;
         // P1.50: bezahlter Annual-Bonus → manual_plan_expires_at = period_end +
         // bonus_months*31 Tage (Port von `_billing_grant_bonus_access_months`,
         // billing_mixin.py:589-630). Nur wenn bonus_months > 0 und ein Login da ist.
@@ -699,18 +723,18 @@ pub async fn record_event_once(
         return Ok(true);
     }
     let received_at = Utc::now().to_rfc3339();
-    let result = sqlx::query(
+    let result = sqlx::query!(
         r#"INSERT INTO twitch_billing_events
                (stripe_event_id, event_type, object_id, received_at, livemode, payload)
            VALUES ($1, $2, $3, $4, $5, $6)
            ON CONFLICT (stripe_event_id) DO NOTHING"#,
+        event_id,
+        event_type,
+        object_id,
+        &received_at,
+        i32::from(livemode),
+        payload
     )
-    .bind(event_id)
-    .bind(event_type)
-    .bind(object_id)
-    .bind(&received_at)
-    .bind(i32::from(livemode))
-    .bind(payload)
     .execute(&mut *tx)
     .await?;
     Ok(result.rows_affected() == 1)
@@ -719,7 +743,7 @@ pub async fn record_event_once(
 /// Test fixture for `twitch_billing_events`; canonical schema lives in migration
 /// 20260630144000.
 pub async fn ensure_event_table(pool: &PgPool) -> Result<(), sqlx::Error> {
-    sqlx::query(
+    sqlx::query!(
         r#"CREATE TABLE IF NOT EXISTS twitch_billing_events (
                stripe_event_id TEXT PRIMARY KEY,
                event_type TEXT NOT NULL,
@@ -835,7 +859,10 @@ mod tests {
 
     #[test]
     fn action_status_strings_match_python() {
-        assert_eq!(WebhookAction::IgnoredMissingType.as_str(), "ignored_missing_type");
+        assert_eq!(
+            WebhookAction::IgnoredMissingType.as_str(),
+            "ignored_missing_type"
+        );
         assert_eq!(
             WebhookAction::SubscriptionStateUpdated.as_str(),
             "subscription_state_updated"
@@ -848,8 +875,14 @@ mod tests {
             WebhookAction::CheckoutIgnoredNonSubscription.as_str(),
             "checkout_ignored_non_subscription"
         );
-        assert_eq!(WebhookAction::InvoicePaymentRecorded.as_str(), "invoice_payment_recorded");
-        assert_eq!(WebhookAction::InvoiceFailureRecorded.as_str(), "invoice_failure_recorded");
+        assert_eq!(
+            WebhookAction::InvoicePaymentRecorded.as_str(),
+            "invoice_payment_recorded"
+        );
+        assert_eq!(
+            WebhookAction::InvoiceFailureRecorded.as_str(),
+            "invoice_failure_recorded"
+        );
         assert_eq!(
             WebhookAction::InvoiceIgnoredWithoutSubscription.as_str(),
             "invoice_ignored_without_subscription"
@@ -865,10 +898,23 @@ mod tests {
 
     async fn pool_or_skip(schema: &str) -> Option<PgPool> {
         let dsn = std::env::var("TB_TEST_DATABASE_URL").ok()?;
-        let pool = PgPoolOptions::new().max_connections(1).connect(&dsn).await.unwrap();
-        sqlx::query(&format!("DROP SCHEMA IF EXISTS {schema} CASCADE")).execute(&pool).await.unwrap();
-        sqlx::query(&format!("CREATE SCHEMA {schema}")).execute(&pool).await.unwrap();
-        sqlx::query(&format!("SET search_path TO {schema}")).execute(&pool).await.unwrap();
+        let pool = PgPoolOptions::new()
+            .max_connections(1)
+            .connect(&dsn)
+            .await
+            .unwrap();
+        sqlx::query(&format!("DROP SCHEMA IF EXISTS {schema} CASCADE"))
+            .execute(&pool)
+            .await
+            .unwrap();
+        sqlx::query(&format!("CREATE SCHEMA {schema}"))
+            .execute(&pool)
+            .await
+            .unwrap();
+        sqlx::query(&format!("SET search_path TO {schema}"))
+            .execute(&pool)
+            .await
+            .unwrap();
         // Minimal-Schema: Abo-Tabelle, Event-Tabelle, Plan-Tabelle + Login-View-Ersatz.
         sqlx::query(
             r#"CREATE TABLE twitch_billing_subscriptions (
@@ -880,7 +926,10 @@ mod tests {
                    cancel_at_period_end INTEGER NOT NULL DEFAULT 0,
                    canceled_at TEXT, ended_at TEXT, last_event_id TEXT, updated_at TEXT NOT NULL
                )"#,
-        ).execute(&pool).await.unwrap();
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
         sqlx::query(
             r#"CREATE TABLE streamer_plans (
                    twitch_user_id TEXT PRIMARY KEY, twitch_login TEXT,
@@ -889,19 +938,28 @@ mod tests {
                    manual_plan_notes TEXT DEFAULT '', manual_plan_updated_at TEXT,
                    raid_boost_enabled INTEGER NOT NULL DEFAULT 0
                )"#,
-        ).execute(&pool).await.unwrap();
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
         // Die View ist in Prod read-only; im Test als Tabelle für den Login→UID-Join.
         sqlx::query(
             r#"CREATE TABLE twitch_streamers_partner_state (
                    twitch_login TEXT, twitch_user_id TEXT,
                    is_partner_active INTEGER NOT NULL DEFAULT 1
                )"#,
-        ).execute(&pool).await.unwrap();
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
         ensure_event_table(&pool).await.unwrap();
         Some(pool)
     }
 
-    async fn sub_row(pool: &PgPool, sub_id: &str) -> Option<(String, Option<String>, Option<String>)> {
+    async fn sub_row(
+        pool: &PgPool,
+        sub_id: &str,
+    ) -> Option<(String, Option<String>, Option<String>)> {
         sqlx::query_as::<_, (String, Option<String>, Option<String>)>(
             "SELECT status, plan_id, last_event_id FROM twitch_billing_subscriptions WHERE stripe_subscription_id = $1",
         )
@@ -913,7 +971,9 @@ mod tests {
 
     #[tokio::test]
     async fn subscription_created_sets_plan() {
-        let Some(pool) = pool_or_skip("wh_sub_created").await else { return };
+        let Some(pool) = pool_or_skip("wh_sub_created").await else {
+            return;
+        };
         sqlx::query("INSERT INTO twitch_streamers_partner_state (twitch_login, twitch_user_id) VALUES ('streamerlogin','42')")
             .execute(&pool).await.unwrap();
         let event_object = json!({
@@ -924,8 +984,15 @@ mod tests {
             } } ] }
         });
         let mut tx = pool.acquire().await.unwrap();
-        let action = apply_event(&mut tx, "evt_1", "customer.subscription.created", &event_object, None)
-            .await.unwrap();
+        let action = apply_event(
+            &mut tx,
+            "evt_1",
+            "customer.subscription.created",
+            &event_object,
+            None,
+        )
+        .await
+        .unwrap();
         assert_eq!(action, WebhookAction::SubscriptionStateUpdated);
         drop(tx);
 
@@ -936,14 +1003,19 @@ mod tests {
         // streamer_plans synchronisiert: raid_boost → plan_name "raid_boost".
         let plan: (String, Option<String>) = sqlx::query_as(
             "SELECT plan_name, expires_at FROM streamer_plans WHERE twitch_user_id = '42'",
-        ).fetch_one(&pool).await.unwrap();
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap();
         assert_eq!(plan.0, "raid_boost");
         assert!(plan.1.is_none());
     }
 
     #[tokio::test]
     async fn subscription_deleted_clears_plan_to_free() {
-        let Some(pool) = pool_or_skip("wh_sub_deleted").await else { return };
+        let Some(pool) = pool_or_skip("wh_sub_deleted").await else {
+            return;
+        };
         sqlx::query("INSERT INTO twitch_streamers_partner_state (twitch_login, twitch_user_id) VALUES ('login2','7')")
             .execute(&pool).await.unwrap();
         // Erst aktiv setzen.
@@ -953,7 +1025,15 @@ mod tests {
             "items": { "data": [ { "price": { "recurring": { "interval": "month", "interval_count": 1 } } } ] }
         });
         let mut tx = pool.acquire().await.unwrap();
-        apply_event(&mut tx, "e1", "customer.subscription.created", &active, None).await.unwrap();
+        apply_event(
+            &mut tx,
+            "e1",
+            "customer.subscription.created",
+            &active,
+            None,
+        )
+        .await
+        .unwrap();
         drop(tx);
         // Dann löschen (status canceled) → free.
         let deleted = json!({
@@ -962,39 +1042,75 @@ mod tests {
             "items": { "data": [ { "price": { "recurring": { "interval": "month", "interval_count": 1 } } } ] }
         });
         let mut tx = pool.acquire().await.unwrap();
-        apply_event(&mut tx, "e2", "customer.subscription.deleted", &deleted, None).await.unwrap();
+        apply_event(
+            &mut tx,
+            "e2",
+            "customer.subscription.deleted",
+            &deleted,
+            None,
+        )
+        .await
+        .unwrap();
         drop(tx);
-        let plan: (String,) = sqlx::query_as("SELECT plan_name FROM streamer_plans WHERE twitch_user_id = '7'")
-            .fetch_one(&pool).await.unwrap();
+        let plan: (String,) =
+            sqlx::query_as("SELECT plan_name FROM streamer_plans WHERE twitch_user_id = '7'")
+                .fetch_one(&pool)
+                .await
+                .unwrap();
         assert_eq!(plan.0, "free");
     }
 
     #[tokio::test]
     async fn dedup_prevents_double_apply() {
-        let Some(pool) = pool_or_skip("wh_dedup").await else { return };
+        let Some(pool) = pool_or_skip("wh_dedup").await else {
+            return;
+        };
         let mut tx = pool.acquire().await.unwrap();
-        let first = record_event_once(&mut tx, "evt_dup", "customer.subscription.updated", "sub_z", false, "{}")
-            .await.unwrap();
+        let first = record_event_once(
+            &mut tx,
+            "evt_dup",
+            "customer.subscription.updated",
+            "sub_z",
+            false,
+            "{}",
+        )
+        .await
+        .unwrap();
         assert!(first, "erstes Event ist neu");
-        let second = record_event_once(&mut tx, "evt_dup", "customer.subscription.updated", "sub_z", false, "{}")
-            .await.unwrap();
+        let second = record_event_once(
+            &mut tx,
+            "evt_dup",
+            "customer.subscription.updated",
+            "sub_z",
+            false,
+            "{}",
+        )
+        .await
+        .unwrap();
         assert!(!second, "Replay desselben event_id ist Duplikat");
     }
 
     #[tokio::test]
     async fn unknown_event_type_is_noop() {
-        let Some(pool) = pool_or_skip("wh_unknown").await else { return };
+        let Some(pool) = pool_or_skip("wh_unknown").await else {
+            return;
+        };
         let mut tx = pool.acquire().await.unwrap();
         let action = apply_event(&mut tx, "e", "customer.created", &json!({"id": "x"}), None)
-            .await.unwrap();
+            .await
+            .unwrap();
         assert_eq!(action, WebhookAction::IgnoredUnsupportedEvent);
-        let action2 = apply_event(&mut tx, "e", "", &json!({}), None).await.unwrap();
+        let action2 = apply_event(&mut tx, "e", "", &json!({}), None)
+            .await
+            .unwrap();
         assert_eq!(action2, WebhookAction::IgnoredMissingType);
     }
 
     #[tokio::test]
     async fn invoice_failed_sets_past_due_without_overwriting_plan() {
-        let Some(pool) = pool_or_skip("wh_invoice_failed").await else { return };
+        let Some(pool) = pool_or_skip("wh_invoice_failed").await else {
+            return;
+        };
         // Vorab volles Abo.
         let active = json!({
             "id": "sub_inv", "customer": "c", "status": "active",
@@ -1002,25 +1118,48 @@ mod tests {
             "items": { "data": [ { "price": { "recurring": { "interval": "month", "interval_count": 1 } } } ] }
         });
         let mut tx = pool.acquire().await.unwrap();
-        apply_event(&mut tx, "e1", "customer.subscription.created", &active, None).await.unwrap();
+        apply_event(
+            &mut tx,
+            "e1",
+            "customer.subscription.created",
+            &active,
+            None,
+        )
+        .await
+        .unwrap();
         drop(tx);
         // invoice.payment_failed (dünn) → status past_due, plan_id bleibt.
         let invoice = json!({ "id": "in_1", "subscription": "sub_inv", "customer": "c" });
         let mut tx = pool.acquire().await.unwrap();
-        let action = apply_event(&mut tx, "e2", "invoice.payment_failed", &invoice, None).await.unwrap();
+        let action = apply_event(&mut tx, "e2", "invoice.payment_failed", &invoice, None)
+            .await
+            .unwrap();
         assert_eq!(action, WebhookAction::InvoiceFailureRecorded);
         drop(tx);
         let row = sub_row(&pool, "sub_inv").await.unwrap();
         assert_eq!(row.0, "past_due");
-        assert_eq!(row.1.as_deref(), Some("raid_boost"), "dünnes Event darf plan_id nicht löschen");
+        assert_eq!(
+            row.1.as_deref(),
+            Some("raid_boost"),
+            "dünnes Event darf plan_id nicht löschen"
+        );
     }
 
     #[tokio::test]
     async fn invoice_without_subscription_ignored() {
-        let Some(pool) = pool_or_skip("wh_invoice_nosub").await else { return };
+        let Some(pool) = pool_or_skip("wh_invoice_nosub").await else {
+            return;
+        };
         let mut tx = pool.acquire().await.unwrap();
-        let action = apply_event(&mut tx, "e", "invoice.payment_succeeded", &json!({"id": "in"}), None)
-            .await.unwrap();
+        let action = apply_event(
+            &mut tx,
+            "e",
+            "invoice.payment_succeeded",
+            &json!({"id": "in"}),
+            None,
+        )
+        .await
+        .unwrap();
         assert_eq!(action, WebhookAction::InvoiceIgnoredWithoutSubscription);
     }
 
@@ -1062,12 +1201,15 @@ mod tests {
 
     #[test]
     fn affected_login_none_for_unrelated_and_nonsubscription() {
-        assert!(affected_login_for_billing_refresh("invoice.payment_succeeded", &json!({}), None)
-            .is_none());
+        assert!(
+            affected_login_for_billing_refresh("invoice.payment_succeeded", &json!({}), None)
+                .is_none()
+        );
         // checkout mit mode != subscription.
         let oneoff = json!({ "mode": "payment", "metadata": { "customer_reference": "x" } });
         assert!(
-            affected_login_for_billing_refresh("checkout.session.completed", &oneoff, None).is_none()
+            affected_login_for_billing_refresh("checkout.session.completed", &oneoff, None)
+                .is_none()
         );
         // subscription-Event ohne Login → None.
         assert!(affected_login_for_billing_refresh(
@@ -1081,7 +1223,9 @@ mod tests {
     // ── P1.50: bonus_months Annual-Grant ────────────────────────────────────
     #[tokio::test]
     async fn checkout_with_bonus_months_extends_manual_plan_expires_at() {
-        let Some(pool) = pool_or_skip("wh_bonus_grant").await else { return };
+        let Some(pool) = pool_or_skip("wh_bonus_grant").await else {
+            return;
+        };
         sqlx::query("INSERT INTO twitch_streamers_partner_state (twitch_login, twitch_user_id) VALUES ('annuallogin','99')")
             .execute(&pool).await.unwrap();
         // Checkout-Session (mode=subscription) + nachgeladene Subscription mit
@@ -1130,7 +1274,9 @@ mod tests {
 
     #[tokio::test]
     async fn checkout_without_bonus_months_leaves_manual_plan_untouched() {
-        let Some(pool) = pool_or_skip("wh_no_bonus").await else { return };
+        let Some(pool) = pool_or_skip("wh_no_bonus").await else {
+            return;
+        };
         sqlx::query("INSERT INTO twitch_streamers_partner_state (twitch_login, twitch_user_id) VALUES ('plainlogin','11')")
             .execute(&pool).await.unwrap();
         let session = json!({
@@ -1144,8 +1290,15 @@ mod tests {
             "items": { "data": [ { "price": { "recurring": { "interval": "month", "interval_count": 1 } } } ] }
         });
         let mut tx = pool.acquire().await.unwrap();
-        apply_event(&mut tx, "evt_p", "checkout.session.completed", &session, Some(&retrieved))
-            .await.unwrap();
+        apply_event(
+            &mut tx,
+            "evt_p",
+            "checkout.session.completed",
+            &session,
+            Some(&retrieved),
+        )
+        .await
+        .unwrap();
         drop(tx);
         // streamer_plans-Row existiert (sync), aber manual_plan_expires_at bleibt NULL.
         let row: (Option<String>,) = sqlx::query_as(
@@ -1154,7 +1307,10 @@ mod tests {
         .fetch_one(&pool)
         .await
         .unwrap();
-        assert!(row.0.is_none(), "ohne bonus_months kein manual_plan_expires_at");
+        assert!(
+            row.0.is_none(),
+            "ohne bonus_months kein manual_plan_expires_at"
+        );
     }
 
     // ── P2.127/P2.128: Score-Refresh nach Billing-Änderung ──────────────────
@@ -1165,9 +1321,19 @@ mod tests {
     /// auf das Test-Schema zeigen (sonst greift er auf `public` zu).
     async fn refresh_pool_or_skip(schema: &str) -> Option<PgPool> {
         let dsn = std::env::var("TB_TEST_DATABASE_URL").ok()?;
-        let admin = PgPoolOptions::new().max_connections(1).connect(&dsn).await.unwrap();
-        sqlx::query(&format!("DROP SCHEMA IF EXISTS {schema} CASCADE")).execute(&admin).await.unwrap();
-        sqlx::query(&format!("CREATE SCHEMA {schema}")).execute(&admin).await.unwrap();
+        let admin = PgPoolOptions::new()
+            .max_connections(1)
+            .connect(&dsn)
+            .await
+            .unwrap();
+        sqlx::query(&format!("DROP SCHEMA IF EXISTS {schema} CASCADE"))
+            .execute(&admin)
+            .await
+            .unwrap();
+        sqlx::query(&format!("CREATE SCHEMA {schema}"))
+            .execute(&admin)
+            .await
+            .unwrap();
         admin.close().await;
         let schema_owned = schema.to_string();
         let pool = PgPoolOptions::new()
@@ -1211,13 +1377,17 @@ mod tests {
 
     #[tokio::test]
     async fn refresh_recomputes_score_for_known_login() {
-        let Some(pool) = refresh_pool_or_skip("wh_score_refresh").await else { return };
+        let Some(pool) = refresh_pool_or_skip("wh_score_refresh").await else {
+            return;
+        };
         sqlx::query("INSERT INTO twitch_streamers_partner_state (twitch_login, twitch_user_id, is_partner_active) VALUES ('boostlogin','555',1)")
             .execute(&pool).await.unwrap();
         sqlx::query("INSERT INTO streamer_plans (twitch_user_id, twitch_login, raid_boost_enabled) VALUES ('555','boostlogin',1)")
             .execute(&pool).await.unwrap();
 
-        refresh_partner_raid_score_for_login(&pool, "BoostLogin").await.unwrap();
+        refresh_partner_raid_score_for_login(&pool, "BoostLogin")
+            .await
+            .unwrap();
 
         let row: (String, f64) = sqlx::query_as(
             "SELECT last_computed_at, raid_boost_multiplier FROM twitch_partner_raid_scores WHERE twitch_user_id='555'",
@@ -1227,16 +1397,27 @@ mod tests {
         .unwrap();
         assert!(!row.0.is_empty(), "last_computed_at gesetzt");
         // raid_boost_enabled=1 → Multiplikator > 1.0 (Boost greift sofort).
-        assert!(row.1 > 1.0, "raid_boost_multiplier nach Refresh > 1.0, war {}", row.1);
+        assert!(
+            row.1 > 1.0,
+            "raid_boost_multiplier nach Refresh > 1.0, war {}",
+            row.1
+        );
     }
 
     #[tokio::test]
     async fn refresh_noop_for_unknown_login() {
-        let Some(pool) = refresh_pool_or_skip("wh_score_refresh_unknown").await else { return };
+        let Some(pool) = refresh_pool_or_skip("wh_score_refresh_unknown").await else {
+            return;
+        };
         // Kein Eintrag → kein Fehler, keine Score-Zeile.
-        refresh_partner_raid_score_for_login(&pool, "gibtsnicht").await.unwrap();
-        let (count,): (i64,) = sqlx::query_as("SELECT COUNT(*)::bigint FROM twitch_partner_raid_scores")
-            .fetch_one(&pool).await.unwrap();
+        refresh_partner_raid_score_for_login(&pool, "gibtsnicht")
+            .await
+            .unwrap();
+        let (count,): (i64,) =
+            sqlx::query_as("SELECT COUNT(*)::bigint FROM twitch_partner_raid_scores")
+                .fetch_one(&pool)
+                .await
+                .unwrap();
         assert_eq!(count, 0);
     }
 }

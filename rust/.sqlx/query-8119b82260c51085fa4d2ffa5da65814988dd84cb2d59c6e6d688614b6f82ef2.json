@@ -1,0 +1,22 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n        SELECT row_to_json(s)::text AS session\n          FROM (\n               SELECT id, stream_id, streamer_login, started_at, ended_at,\n                      duration_seconds, avg_viewers, peak_viewers,\n                      follower_delta, stream_title, unique_chatters,\n                      had_deadlock_in_session, game_name\n                 FROM twitch_stream_sessions\n                WHERE id = $1\n               ) s\n        ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "session",
+        "type_info": "Text"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Int8"
+      ]
+    },
+    "nullable": [
+      null
+    ]
+  },
+  "hash": "8119b82260c51085fa4d2ffa5da65814988dd84cb2d59c6e6d688614b6f82ef2"
+}

@@ -1,0 +1,40 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT COALESCE(NULLIF(chatter_login, ''), 'unknown') AS \"chatter_login!\", COUNT(*)::int8 AS \"messages!\", MIN(message_ts)::text AS first_message_at, MAX(message_ts)::text AS last_message_at FROM twitch_chat_messages WHERE session_id = $1 AND COALESCE(is_command, FALSE) = FALSE GROUP BY COALESCE(NULLIF(chatter_login, ''), 'unknown') ORDER BY COUNT(*) DESC LIMIT 20",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "chatter_login!",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 1,
+        "name": "messages!",
+        "type_info": "Int8"
+      },
+      {
+        "ordinal": 2,
+        "name": "first_message_at",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 3,
+        "name": "last_message_at",
+        "type_info": "Text"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Int8"
+      ]
+    },
+    "nullable": [
+      null,
+      null,
+      null,
+      null
+    ]
+  },
+  "hash": "79b1737d22c272e4f25824e5cc4e18dbd4914a343c9b024682cae9ba43623ceb"
+}

@@ -1,0 +1,34 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n        SELECT streamer_login AS \"streamer_login!\",\n               COUNT(*)::bigint AS \"count!\",\n               SUM(CASE WHEN total_sessions = 1 THEN 1 ELSE 0 END)::bigint AS one_timers\n        FROM twitch_chatter_rollup\n        WHERE last_seen_at >= $1\n        GROUP BY streamer_login\n        HAVING COUNT(*) >= 5\n        ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "streamer_login!",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 1,
+        "name": "count!",
+        "type_info": "Int8"
+      },
+      {
+        "ordinal": 2,
+        "name": "one_timers",
+        "type_info": "Int8"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Timestamptz"
+      ]
+    },
+    "nullable": [
+      false,
+      null,
+      null
+    ]
+  },
+  "hash": "fd3e2e7443134a30183d89547e4bdd20f17eaaf7a9a69703d07e5ba5885a845f"
+}

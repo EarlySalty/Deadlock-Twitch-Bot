@@ -1,0 +1,28 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n        SELECT COUNT(*)::bigint AS \"count!\",\n               COALESCE(SUM(gross_amount_cents), 0)::bigint AS \"total_cents!\"\n        FROM affiliate_gutschriften\n        WHERE affiliate_twitch_login = $1\n        ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "count!",
+        "type_info": "Int8"
+      },
+      {
+        "ordinal": 1,
+        "name": "total_cents!",
+        "type_info": "Int8"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Text"
+      ]
+    },
+    "nullable": [
+      null,
+      null
+    ]
+  },
+  "hash": "4f9a12ddf23633a5ad47bafe2489c442b36a9407a44ff81652a3793e99357831"
+}

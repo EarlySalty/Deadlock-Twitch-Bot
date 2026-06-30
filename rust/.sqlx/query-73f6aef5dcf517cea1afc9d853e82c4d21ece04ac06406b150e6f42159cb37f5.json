@@ -1,0 +1,84 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n        SELECT\n            AVG(s.avg_viewers)::FLOAT8                                AS avg_avg_viewers,\n            MAX(s.peak_viewers)::BIGINT                               AS max_peak_viewers,\n            SUM(s.avg_viewers * s.duration_seconds / 3600.0)::FLOAT8  AS total_hours_watched,\n            SUM(s.duration_seconds / 3600.0)::FLOAT8                  AS total_airtime_hours,\n            SUM(CASE\n                    WHEN s.follower_delta IS NOT NULL\n                     AND NOT (s.followers_end = 0 AND s.followers_start > 0)\n                    THEN s.follower_delta\n                    ELSE 0\n                END)::BIGINT                                          AS total_followers,\n            COALESCE(SUM(CASE\n                    WHEN s.follower_delta > 0\n                     AND NOT (s.followers_end = 0 AND s.followers_start > 0)\n                    THEN s.follower_delta\n                    ELSE 0\n                END), 0)::BIGINT                                      AS gained_followers,\n            AVG(CASE\n                    WHEN s.avg_viewers >= 3 AND s.peak_viewers > 0\n                    THEN LEAST(1.0, s.retention_10m)\n                    ELSE NULL\n                END)::FLOAT8                                          AS avg_retention_10m,\n            COUNT(CASE\n                    WHEN s.avg_viewers >= 3 AND s.peak_viewers > 0 AND s.retention_10m IS NOT NULL\n                    THEN 1\n                END)::BIGINT                                          AS \"retention_sample_count?\",\n            COUNT(CASE\n                    WHEN s.avg_viewers >= 3 AND s.peak_viewers > 0 AND s.unique_chatters IS NOT NULL\n                    THEN 1\n                END)::BIGINT                                          AS \"chat_sample_count?\",\n            COUNT(CASE\n                    WHEN s.follower_delta IS NOT NULL\n                     AND NOT (s.followers_end = 0 AND s.followers_start > 0)\n                    THEN 1\n                END)::BIGINT                                          AS \"follower_valid_count?\",\n            COUNT(*)::BIGINT                                          AS \"session_count?\"\n        FROM twitch_stream_sessions s\n        WHERE s.started_at >= $1::text::TIMESTAMPTZ\n          AND s.ended_at IS NOT NULL\n          AND ($2::TEXT IS NULL OR LOWER(s.streamer_login) = LOWER($2))\n          AND ($3::TEXT IS NULL OR s.started_at < $3::text::TIMESTAMPTZ)\n        ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "avg_avg_viewers",
+        "type_info": "Float8"
+      },
+      {
+        "ordinal": 1,
+        "name": "max_peak_viewers",
+        "type_info": "Int8"
+      },
+      {
+        "ordinal": 2,
+        "name": "total_hours_watched",
+        "type_info": "Float8"
+      },
+      {
+        "ordinal": 3,
+        "name": "total_airtime_hours",
+        "type_info": "Float8"
+      },
+      {
+        "ordinal": 4,
+        "name": "total_followers",
+        "type_info": "Int8"
+      },
+      {
+        "ordinal": 5,
+        "name": "gained_followers",
+        "type_info": "Int8"
+      },
+      {
+        "ordinal": 6,
+        "name": "avg_retention_10m",
+        "type_info": "Float8"
+      },
+      {
+        "ordinal": 7,
+        "name": "retention_sample_count?",
+        "type_info": "Int8"
+      },
+      {
+        "ordinal": 8,
+        "name": "chat_sample_count?",
+        "type_info": "Int8"
+      },
+      {
+        "ordinal": 9,
+        "name": "follower_valid_count?",
+        "type_info": "Int8"
+      },
+      {
+        "ordinal": 10,
+        "name": "session_count?",
+        "type_info": "Int8"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Text",
+        "Text",
+        "Text"
+      ]
+    },
+    "nullable": [
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      null
+    ]
+  },
+  "hash": "73f6aef5dcf517cea1afc9d853e82c4d21ece04ac06406b150e6f42159cb37f5"
+}

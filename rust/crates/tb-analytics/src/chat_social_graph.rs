@@ -44,20 +44,25 @@ pub async fn load_chat_social_graph_payload(
     let cutoff: DateTime<Utc> = Utc::now() - Duration::days(days);
     let bots: Vec<String> = KNOWN_CHAT_BOTS.iter().map(|s| s.to_string()).collect();
 
-    let rows: Vec<(Option<String>, Option<String>)> = sqlx::query_as(
-        "SELECT m.chatter_login, m.content \
-           FROM twitch_chat_messages m \
-           JOIN twitch_stream_sessions s ON s.id = m.session_id \
-          WHERE LOWER(s.streamer_login) = $1 \
-            AND m.message_ts >= $2 \
-            AND m.content LIKE '%@%' \
-            AND (m.chatter_login IS NULL OR m.chatter_login = '' OR LOWER(m.chatter_login) <> ALL($3))",
+    let rows: Vec<(Option<String>, Option<String>)> = sqlx::query!(
+        r#"
+        SELECT m.chatter_login, m.content
+        FROM twitch_chat_messages m
+        JOIN twitch_stream_sessions s ON s.id = m.session_id
+        WHERE LOWER(s.streamer_login) = $1
+          AND m.message_ts >= $2
+          AND m.content LIKE '%@%'
+          AND (m.chatter_login IS NULL OR m.chatter_login = '' OR LOWER(m.chatter_login) <> ALL($3))
+        "#,
+        streamer,
+        cutoff,
+        &bots
     )
-    .bind(streamer)
-    .bind(cutoff)
-    .bind(&bots)
     .fetch_all(pool)
-    .await?;
+    .await?
+    .into_iter()
+    .map(|row| (row.chatter_login, row.content))
+    .collect();
 
     let mut mention_sent: HashMap<String, i64> = HashMap::new();
     let mut mention_received: HashMap<String, i64> = HashMap::new();
@@ -79,7 +84,9 @@ pub async fn load_chat_social_graph_payload(
             mentioned.insert(target.clone());
             *mention_sent.entry(sender.clone()).or_insert(0) += 1;
             *mention_received.entry(target.clone()).or_insert(0) += 1;
-            *pair_counts.entry((sender.clone(), target.clone())).or_insert(0) += 1;
+            *pair_counts
+                .entry((sender.clone(), target.clone()))
+                .or_insert(0) += 1;
         }
     }
 
@@ -94,7 +101,12 @@ pub async fn load_chat_social_graph_payload(
             json!({ "login": u, "mentionsSent": sent, "mentionsReceived": received, "score": sent + received })
         })
         .collect();
-    hubs.sort_by(|a, b| b["score"].as_i64().unwrap_or(0).cmp(&a["score"].as_i64().unwrap_or(0)));
+    hubs.sort_by(|a, b| {
+        b["score"]
+            .as_i64()
+            .unwrap_or(0)
+            .cmp(&a["score"].as_i64().unwrap_or(0))
+    });
     hubs.truncate(20);
 
     // Top-Paare nach Häufigkeit, Top 20.
@@ -102,7 +114,12 @@ pub async fn load_chat_social_graph_payload(
         .iter()
         .map(|((from, to), c)| json!({ "from": from, "to": to, "count": c }))
         .collect();
-    pairs.sort_by(|a, b| b["count"].as_i64().unwrap_or(0).cmp(&a["count"].as_i64().unwrap_or(0)));
+    pairs.sort_by(|a, b| {
+        b["count"]
+            .as_i64()
+            .unwrap_or(0)
+            .cmp(&a["count"].as_i64().unwrap_or(0))
+    });
     pairs.truncate(20);
 
     // Verteilung über die Empfangs-Häufigkeit.
@@ -135,12 +152,15 @@ mod tests {
     #[test]
     fn mention_regex_paritaet() {
         let grab = |s: &str| -> Vec<String> {
-            MENTION_RE.captures_iter(s).map(|c| c[1].to_lowercase()).collect()
+            MENTION_RE
+                .captures_iter(s)
+                .map(|c| c[1].to_lowercase())
+                .collect()
         };
         // Standard + Wortgrenze + Mindestlänge 3.
         assert_eq!(grab("hi @Nani und @bob"), vec!["nani", "bob"]);
         assert_eq!(grab("@ab zu kurz"), Vec::<String>::new()); // <3 Zeichen
-        // @ direkt nach Wortzeichen → kein Mention (Lookbehind-Ersatz).
+                                                               // @ direkt nach Wortzeichen → kein Mention (Lookbehind-Ersatz).
         assert_eq!(grab("mail@example"), Vec::<String>::new());
         // @@doppel: erstes @ scheitert (kein Wortzeichen folgt), zweites greift.
         assert_eq!(grab("@@abc"), vec!["abc"]);
@@ -153,12 +173,28 @@ mod tests {
 
     async fn make_pool(schema: &str) -> Option<PgPool> {
         let dsn = std::env::var("TB_TEST_DATABASE_URL").ok()?;
-        let admin = PgPoolOptions::new().max_connections(1).connect(&dsn).await.unwrap();
-        sqlx::query(&format!("DROP SCHEMA IF EXISTS {schema} CASCADE")).execute(&admin).await.unwrap();
-        sqlx::query(&format!("CREATE SCHEMA {schema}")).execute(&admin).await.unwrap();
+        let admin = PgPoolOptions::new()
+            .max_connections(1)
+            .connect(&dsn)
+            .await
+            .unwrap();
+        sqlx::query(&format!("DROP SCHEMA IF EXISTS {schema} CASCADE"))
+            .execute(&admin)
+            .await
+            .unwrap();
+        sqlx::query(&format!("CREATE SCHEMA {schema}"))
+            .execute(&admin)
+            .await
+            .unwrap();
         admin.close().await;
-        let opts = PgConnectOptions::from_str(&dsn).unwrap().options([("search_path", schema)]);
-        let pool = PgPoolOptions::new().max_connections(2).connect_with(opts).await.unwrap();
+        let opts = PgConnectOptions::from_str(&dsn)
+            .unwrap()
+            .options([("search_path", schema)]);
+        let pool = PgPoolOptions::new()
+            .max_connections(2)
+            .connect_with(opts)
+            .await
+            .unwrap();
         sqlx::query("CREATE TABLE twitch_stream_sessions (id BIGSERIAL PRIMARY KEY, streamer_login TEXT, started_at TIMESTAMPTZ)").execute(&pool).await.unwrap();
         sqlx::query("CREATE TABLE twitch_session_chatters (session_id BIGINT, streamer_login TEXT, chatter_login TEXT, messages INTEGER DEFAULT 0)").execute(&pool).await.unwrap();
         sqlx::query("CREATE TABLE twitch_chat_messages (id BIGSERIAL PRIMARY KEY, session_id BIGINT, streamer_login TEXT, chatter_login TEXT, content TEXT, message_ts TIMESTAMPTZ)").execute(&pool).await.unwrap();
@@ -168,7 +204,9 @@ mod tests {
 
     #[tokio::test]
     async fn mention_netzwerk() {
-        let Some(pool) = make_pool("t_csg").await else { return };
+        let Some(pool) = make_pool("t_csg").await else {
+            return;
+        };
         sqlx::query("INSERT INTO twitch_stream_sessions (id, streamer_login, started_at) VALUES (1,'nani',NOW()-INTERVAL '1 day')").execute(&pool).await.unwrap();
         // alice→bob (×2), alice→carol, bob→alice; carol erwähnt sich selbst (ignoriert);
         // nightbot ist Bot (gefiltert); Nachricht ohne @ wird gar nicht geladen.
@@ -184,12 +222,14 @@ mod tests {
             sqlx::query("INSERT INTO twitch_chat_messages (session_id, streamer_login, chatter_login, content, message_ts) VALUES (1,'nani',$1,$2,NOW()-INTERVAL '2 hours')")
                 .bind(login).bind(content).execute(&pool).await.unwrap();
         }
-        let v = load_chat_social_graph_payload(&pool, "nani", 30).await.unwrap();
+        let v = load_chat_social_graph_payload(&pool, "nani", 30)
+            .await
+            .unwrap();
         // Mentions: alice→bob, alice→carol, alice→bob, bob→alice = 4 (carol-selbst + bot raus).
         assert_eq!(v["totalMentions"], 4);
         assert_eq!(v["uniqueMentioners"], 2); // alice, bob
         assert_eq!(v["uniqueMentioned"], 3); // bob, carol, alice
-        // Top-Paar: alice→bob mit count 2.
+                                             // Top-Paar: alice→bob mit count 2.
         assert_eq!(v["topPairs"][0]["from"], "alice");
         assert_eq!(v["topPairs"][0]["to"], "bob");
         assert_eq!(v["topPairs"][0]["count"], 2);

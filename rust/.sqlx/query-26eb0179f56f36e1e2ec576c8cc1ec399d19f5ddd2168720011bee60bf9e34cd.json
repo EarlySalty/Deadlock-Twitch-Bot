@@ -1,0 +1,28 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n        SELECT streamer AS \"streamer!\", AVG(viewer_count)::FLOAT8 AS \"avg_vc!\"\n        FROM twitch_stats_category\n        WHERE ts_utc >= $1::text::TIMESTAMPTZ\n        GROUP BY streamer\n        ORDER BY AVG(viewer_count)::FLOAT8\n        ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "streamer!",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 1,
+        "name": "avg_vc!",
+        "type_info": "Float8"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Text"
+      ]
+    },
+    "nullable": [
+      false,
+      null
+    ]
+  },
+  "hash": "26eb0179f56f36e1e2ec576c8cc1ec399d19f5ddd2168720011bee60bf9e34cd"
+}

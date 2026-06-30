@@ -1,0 +1,53 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT COALESCE(game_name, '') AS \"game_name!\", COUNT(*)::bigint AS \"sessions!\", COALESCE(AVG(avg_viewers), 0)::float8 AS \"avg_v!\", COALESCE(MAX(peak_viewers), 0)::bigint AS \"peak_v!\", COALESCE(AVG(duration_min), 0)::float8 AS \"avg_dur!\", COALESCE(AVG(follower_delta), 0)::float8 AS \"avg_fd!\" FROM exp_sessions WHERE LOWER(streamer) = $1 AND started_at >= $2 AND ended_at IS NOT NULL GROUP BY game_name ORDER BY COALESCE(AVG(avg_viewers), 0)::float8 DESC",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "game_name!",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 1,
+        "name": "sessions!",
+        "type_info": "Int8"
+      },
+      {
+        "ordinal": 2,
+        "name": "avg_v!",
+        "type_info": "Float8"
+      },
+      {
+        "ordinal": 3,
+        "name": "peak_v!",
+        "type_info": "Int8"
+      },
+      {
+        "ordinal": 4,
+        "name": "avg_dur!",
+        "type_info": "Float8"
+      },
+      {
+        "ordinal": 5,
+        "name": "avg_fd!",
+        "type_info": "Float8"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Text",
+        "Text"
+      ]
+    },
+    "nullable": [
+      null,
+      null,
+      null,
+      null,
+      null,
+      null
+    ]
+  },
+  "hash": "cca73aaa4244ff1b535bafd0df4a86ea099a1ed7fea39bd924c489a2c1f77f13"
+}

@@ -1,0 +1,18 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "UPDATE streamer_plans\n           SET manual_plan_id = $1,\n               manual_plan_expires_at = $2,\n               manual_plan_notes = $3,\n               manual_plan_updated_at = $4\n           WHERE twitch_user_id = (\n               SELECT twitch_user_id\n               FROM twitch_streamers_partner_state\n               WHERE LOWER(twitch_login) = LOWER($5)\n               LIMIT 1\n           )",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Text",
+        "Text",
+        "Text",
+        "Text",
+        "Text"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "e75fc5f1829866ef014ae8bdfa1a3f7dc06190a1ec0732b2554f8bfd51643294"
+}

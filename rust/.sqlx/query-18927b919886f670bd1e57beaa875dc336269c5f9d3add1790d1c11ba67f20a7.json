@@ -1,0 +1,22 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n        SELECT row_to_json(c)::text AS \"row!\"\n          FROM (\n               SELECT chatter_login, messages\n                 FROM twitch_session_chatters\n                WHERE session_id = $1\n                ORDER BY messages DESC\n                LIMIT 10\n               ) c\n        ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "row!",
+        "type_info": "Text"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Int8"
+      ]
+    },
+    "nullable": [
+      null
+    ]
+  },
+  "hash": "18927b919886f670bd1e57beaa875dc336269c5f9d3add1790d1c11ba67f20a7"
+}

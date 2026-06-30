@@ -51,12 +51,20 @@ fn parse_tags(raw: &str) -> Vec<String> {
         match serde_json::from_str::<Value>(raw) {
             Ok(Value::Array(arr)) => arr
                 .iter()
-                .map(|v| v.as_str().map(str::to_string).unwrap_or_else(|| v.to_string()))
+                .map(|v| {
+                    v.as_str()
+                        .map(str::to_string)
+                        .unwrap_or_else(|| v.to_string())
+                })
                 .collect(),
             _ => vec![raw.to_string()], // JSONDecodeError → [tags_str] (Python)
         }
     } else {
-        raw.split(',').map(str::trim).filter(|s| !s.is_empty()).map(str::to_string).collect()
+        raw.split(',')
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+            .map(str::to_string)
+            .collect()
     }
 }
 
@@ -110,20 +118,20 @@ async fn load_peer_benchmark(
     let login = streamer_login.to_lowercase();
 
     // 1. Durchschnitts-Viewer aller Streamer der Kategorie.
-    let avgs: Vec<(String, Option<f64>)> = sqlx::query_as(
-        "SELECT streamer, AVG(viewer_count)::float8 FROM twitch_stats_category \
+    let avgs = sqlx::query!(
+        "SELECT streamer AS \"streamer!\", AVG(viewer_count)::float8 AS avg_viewers FROM twitch_stats_category \
          WHERE ts_utc >= $1 GROUP BY streamer",
+        since
     )
-    .bind(since)
     .fetch_all(pool)
     .await?;
     if avgs.is_empty() {
         return Ok(None);
     }
     let mut streamer_avgs: HashMap<String, f64> = HashMap::new();
-    for (s, avg) in avgs {
-        if let Some(a) = avg {
-            streamer_avgs.insert(s.to_lowercase(), a);
+    for row in avgs {
+        if let Some(a) = row.avg_viewers {
+            streamer_avgs.insert(row.streamer.to_lowercase(), a);
         }
     }
 
@@ -131,15 +139,15 @@ async fn load_peer_benchmark(
     let my_avg = match streamer_avgs.get(&login).copied() {
         Some(a) => a,
         None => {
-            let row: Option<(Option<f64>,)> = sqlx::query_as(
-                "SELECT AVG(avg_viewers)::float8 FROM twitch_stream_sessions \
+            let row = sqlx::query_scalar!(
+                "SELECT AVG(avg_viewers)::float8 AS avg_viewers FROM twitch_stream_sessions \
                  WHERE LOWER(streamer_login) = $1 AND started_at >= $2 AND ended_at IS NOT NULL",
+                &login,
+                since
             )
-            .bind(&login)
-            .bind(since)
-            .fetch_optional(pool)
+            .fetch_one(pool)
             .await?;
-            match row.and_then(|(a,)| a) {
+            match row {
                 Some(a) => a,
                 None => return Ok(None),
             }
@@ -158,19 +166,19 @@ async fn load_peer_benchmark(
     }
 
     // 4. Session-Metriken je Peer (nur avg_viewers + retention_10m nötig).
-    let metrics: Vec<(Option<f64>, Option<f64>)> = sqlx::query_as(
-        "SELECT AVG(s.avg_viewers)::float8, AVG(s.retention_10m)::float8 \
+    let metrics = sqlx::query!(
+        "SELECT AVG(s.avg_viewers)::float8 AS avg_viewers, AVG(s.retention_10m)::float8 AS retention_10m \
          FROM twitch_stream_sessions s \
-         WHERE LOWER(s.streamer_login) = ANY($1) AND s.started_at >= $2 AND s.ended_at IS NOT NULL \
+         WHERE LOWER(s.streamer_login) = ANY($1::text[]) AND s.started_at >= $2 AND s.ended_at IS NOT NULL \
          GROUP BY LOWER(s.streamer_login)",
+        &peer_logins,
+        since
     )
-    .bind(&peer_logins)
-    .bind(since)
     .fetch_all(pool)
     .await?;
 
-    let avg_viewers_list: Vec<f64> = metrics.iter().filter_map(|(v, _)| *v).collect();
-    let retention_list: Vec<f64> = metrics.iter().filter_map(|(_, r)| *r).collect();
+    let avg_viewers_list: Vec<f64> = metrics.iter().filter_map(|row| row.avg_viewers).collect();
+    let retention_list: Vec<f64> = metrics.iter().filter_map(|row| row.retention_10m).collect();
 
     Ok(Some(json!({
         "avgViewers": round1(median(&avg_viewers_list)),
@@ -188,24 +196,24 @@ pub async fn load_tag_analysis_extended(
     let since: DateTime<Utc> = Utc::now() - Duration::days(days);
     let streamer_login = streamer.map(|s| s.to_lowercase());
 
-    type Row = (i64, Option<String>, Option<f64>, Option<f64>, Option<f64>, Option<f64>, Option<i32>);
-    let rows: Vec<Row> = sqlx::query_as(
-        "SELECT s.id::bigint, s.tags, s.avg_viewers::float8, s.retention_10m::float8, \
+    let rows = sqlx::query!(
+        "SELECT s.id::bigint AS \"id!\", s.tags, s.avg_viewers::float8 AS avg_viewers, \
+                s.retention_10m::float8 AS retention_10m, \
                 CASE WHEN s.follower_delta IS NOT NULL AND NOT (s.followers_end = 0 AND s.followers_start > 0) \
                      THEN s.follower_delta ELSE NULL END::float8 AS follower_delta, \
                 s.duration_seconds::float8, EXTRACT(HOUR FROM s.started_at)::int AS start_hour \
          FROM twitch_stream_sessions s \
          WHERE s.started_at >= $1 AND s.ended_at IS NOT NULL AND s.tags IS NOT NULL \
            AND (COALESCE($2, '') = '' OR LOWER(s.streamer_login) = $2)",
+        since,
+        streamer_login.as_deref()
     )
-    .bind(since)
-    .bind(streamer_login.as_deref())
     .fetch_all(pool)
     .await?;
 
     let mut tag_stats: HashMap<String, TagBucket> = HashMap::new();
-    for (_id, tags, avg_viewers, retention, follower_delta, duration, start_hour) in rows {
-        let parsed = parse_tags(tags.as_deref().unwrap_or(""));
+    for row in rows {
+        let parsed = parse_tags(row.tags.as_deref().unwrap_or(""));
         let mut seen: Vec<String> = Vec::new();
         for tag in parsed.into_iter().take(5) {
             if seen.contains(&tag) {
@@ -213,15 +221,15 @@ pub async fn load_tag_analysis_extended(
             }
             seen.push(tag.clone());
             let bucket = tag_stats.entry(tag).or_default();
-            bucket.viewers.push(avg_viewers.unwrap_or(0.0));
-            if let Some(r) = retention {
+            bucket.viewers.push(row.avg_viewers.unwrap_or(0.0));
+            if let Some(r) = row.retention_10m {
                 bucket.retention.push(r * 100.0);
             }
-            if let Some(f) = follower_delta {
+            if let Some(f) = row.follower_delta {
                 bucket.followers.push(f);
             }
-            bucket.durations.push(duration.unwrap_or(0.0));
-            if let Some(h) = start_hour {
+            bucket.durations.push(row.duration_seconds.unwrap_or(0.0));
+            if let Some(h) = row.start_hour {
                 bucket.hours.push(h);
             }
             bucket.samples += 1;
@@ -229,8 +237,10 @@ pub async fn load_tag_analysis_extended(
     }
 
     // samples >= 3, sortiert nach (median(viewers), samples) absteigend.
-    let mut filtered: Vec<(String, TagBucket)> =
-        tag_stats.into_iter().filter(|(_, d)| d.samples >= 3).collect();
+    let mut filtered: Vec<(String, TagBucket)> = tag_stats
+        .into_iter()
+        .filter(|(_, d)| d.samples >= 3)
+        .collect();
     filtered.sort_by(|(ka, a), (kb, b)| {
         let ma = median(&a.viewers);
         let mb = median(&b.viewers);
@@ -266,7 +276,9 @@ pub async fn load_tag_analysis_extended(
 
     // peerBenchmark nur bei gesetztem streamer (Python `if streamer_login`).
     let peer_benchmark = match streamer {
-        Some(login) => load_peer_benchmark(pool, login, since).await?.unwrap_or(Value::Null),
+        Some(login) => load_peer_benchmark(pool, login, since)
+            .await?
+            .unwrap_or(Value::Null),
         None => Value::Null,
     };
 
@@ -281,8 +293,14 @@ mod tests {
 
     #[test]
     fn parse_tags_json_und_csv() {
-        assert_eq!(parse_tags(r#"["Deadlock","Deutsch"]"#), vec!["Deadlock", "Deutsch"]);
-        assert_eq!(parse_tags("Deadlock, Deutsch , "), vec!["Deadlock", "Deutsch"]);
+        assert_eq!(
+            parse_tags(r#"["Deadlock","Deutsch"]"#),
+            vec!["Deadlock", "Deutsch"]
+        );
+        assert_eq!(
+            parse_tags("Deadlock, Deutsch , "),
+            vec!["Deadlock", "Deutsch"]
+        );
         assert_eq!(parse_tags("[kaputt"), vec!["[kaputt"]); // JSON-Fehler → [raw]
     }
 
@@ -297,12 +315,28 @@ mod tests {
 
     async fn make_pool(schema: &str) -> Option<PgPool> {
         let dsn = std::env::var("TB_TEST_DATABASE_URL").ok()?;
-        let admin = PgPoolOptions::new().max_connections(1).connect(&dsn).await.unwrap();
-        sqlx::query(&format!("DROP SCHEMA IF EXISTS {schema} CASCADE")).execute(&admin).await.unwrap();
-        sqlx::query(&format!("CREATE SCHEMA {schema}")).execute(&admin).await.unwrap();
+        let admin = PgPoolOptions::new()
+            .max_connections(1)
+            .connect(&dsn)
+            .await
+            .unwrap();
+        sqlx::query(&format!("DROP SCHEMA IF EXISTS {schema} CASCADE"))
+            .execute(&admin)
+            .await
+            .unwrap();
+        sqlx::query(&format!("CREATE SCHEMA {schema}"))
+            .execute(&admin)
+            .await
+            .unwrap();
         admin.close().await;
-        let opts = PgConnectOptions::from_str(&dsn).unwrap().options([("search_path", schema), ("timezone", "UTC")]);
-        let pool = PgPoolOptions::new().max_connections(2).connect_with(opts).await.unwrap();
+        let opts = PgConnectOptions::from_str(&dsn)
+            .unwrap()
+            .options([("search_path", schema), ("timezone", "UTC")]);
+        let pool = PgPoolOptions::new()
+            .max_connections(2)
+            .connect_with(opts)
+            .await
+            .unwrap();
         sqlx::query(
             "CREATE TABLE twitch_stream_sessions (id BIGSERIAL PRIMARY KEY, streamer_login TEXT, tags TEXT, \
              avg_viewers REAL, retention_10m REAL, follower_delta INTEGER, followers_start INTEGER, followers_end INTEGER, \
@@ -320,7 +354,9 @@ mod tests {
 
     #[tokio::test]
     async fn tag_analysis_aggregiert() {
-        let Some(pool) = make_pool("t_tagx").await else { return };
+        let Some(pool) = make_pool("t_tagx").await else {
+            return;
+        };
         // 3 Sessions mit Tag "Deadlock" (samples>=3 → erscheint), Viewer 100/200/300.
         for v in [100, 200, 300] {
             sqlx::query("INSERT INTO twitch_stream_sessions (streamer_login, tags, avg_viewers, retention_10m, follower_delta, followers_start, followers_end, duration_seconds, started_at, ended_at) VALUES ('nani', '[\"Deadlock\",\"Deutsch\"]', $1, 0.5, 10, 100, 110, 7200, CURRENT_DATE - INTERVAL '1 day' + TIME '20:00', NOW())")
@@ -330,7 +366,9 @@ mod tests {
         sqlx::query("INSERT INTO twitch_stream_sessions (streamer_login, tags, avg_viewers, retention_10m, duration_seconds, started_at, ended_at) VALUES ('nani', 'Solo', 5, 0.1, 100, NOW() - INTERVAL '1 day', NOW())")
             .execute(&pool).await.unwrap();
 
-        let v = load_tag_analysis_extended(&pool, Some("nani"), 3650, 20).await.unwrap();
+        let v = load_tag_analysis_extended(&pool, Some("nani"), 3650, 20)
+            .await
+            .unwrap();
         assert!(v["peerBenchmark"].is_null());
         let tags = v["tags"].as_array().unwrap();
         // "Deadlock" + "Deutsch" haben je 3 samples; "Solo" gefiltert.
@@ -347,7 +385,9 @@ mod tests {
 
     #[tokio::test]
     async fn peer_benchmark_tier_median() {
-        let Some(pool) = make_pool("t_tagx_peer").await else { return };
+        let Some(pool) = make_pool("t_tagx_peer").await else {
+            return;
+        };
         // Kategorie-Schnitte: nani=75, peer1=80 (beide "established" 50..150),
         // peer2=10 (starter, anderes Tier → ausgeschlossen).
         for (s, vc) in [("nani", 75), ("peer1", 80), ("peer2", 10)] {
@@ -359,7 +399,9 @@ mod tests {
             sqlx::query("INSERT INTO twitch_stream_sessions (streamer_login, tags, avg_viewers, retention_10m, duration_seconds, started_at, ended_at) VALUES ($1, 'X', $2, $3, 3600, NOW() - INTERVAL '2 hours', NOW())")
                 .bind(s).bind(avg).bind(ret).execute(&pool).await.unwrap();
         }
-        let v = load_tag_analysis_extended(&pool, Some("nani"), 30, 20).await.unwrap();
+        let v = load_tag_analysis_extended(&pool, Some("nani"), 30, 20)
+            .await
+            .unwrap();
         let pb = &v["peerBenchmark"];
         assert!(!pb.is_null());
         assert_eq!(pb["avgViewers"], 150.0); // median(100,200)
@@ -368,8 +410,12 @@ mod tests {
 
     #[tokio::test]
     async fn tag_analysis_leer() {
-        let Some(pool) = make_pool("t_tagx_empty").await else { return };
-        let v = load_tag_analysis_extended(&pool, None, 30, 20).await.unwrap();
+        let Some(pool) = make_pool("t_tagx_empty").await else {
+            return;
+        };
+        let v = load_tag_analysis_extended(&pool, None, 30, 20)
+            .await
+            .unwrap();
         assert_eq!(v["tags"], json!([]));
         assert!(v["peerBenchmark"].is_null());
     }

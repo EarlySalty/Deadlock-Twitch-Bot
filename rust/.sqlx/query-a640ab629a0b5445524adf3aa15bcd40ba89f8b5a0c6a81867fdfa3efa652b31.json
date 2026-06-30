@@ -1,0 +1,48 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n        SELECT\n            COALESCE(customer_reference, '') AS \"customer_reference?\",\n            plan_id,\n            COALESCE(status, '')             AS \"status?\",\n            current_period_end::text,\n            updated_at::text                 AS updated_at\n        FROM twitch_billing_subscriptions\n        WHERE (LOWER(customer_reference) = LOWER($1)\n               OR ($2 <> '' AND LOWER(customer_reference) = LOWER($2)))\n          AND status = ANY($3::text[])\n        ORDER BY updated_at DESC\n        LIMIT 1\n        ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "customer_reference?",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 1,
+        "name": "plan_id",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 2,
+        "name": "status?",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 3,
+        "name": "current_period_end",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 4,
+        "name": "updated_at",
+        "type_info": "Text"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Text",
+        "Text",
+        "TextArray"
+      ]
+    },
+    "nullable": [
+      null,
+      true,
+      null,
+      true,
+      false
+    ]
+  },
+  "hash": "a640ab629a0b5445524adf3aa15bcd40ba89f8b5a0c6a81867fdfa3efa652b31"
+}

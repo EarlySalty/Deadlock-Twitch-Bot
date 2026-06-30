@@ -36,9 +36,10 @@ pub struct LiveAnnouncementRow {
 pub async fn list_active_announcements(
     pool: &PgPool,
 ) -> Result<Vec<LiveAnnouncementRow>, sqlx::Error> {
-    sqlx::query_as(
+    sqlx::query_as!(
+        LiveAnnouncementRow,
         r#"
-        SELECT ls.streamer_login,
+        SELECT ls.streamer_login AS "streamer_login!",
                ls.last_discord_message_id,
                ls.last_tracking_token
         FROM twitch_live_state ls
@@ -73,7 +74,7 @@ pub async fn insert_link_click(
     ref_code: Option<&str>,
     source_hint: &str,
 ) -> Result<(), sqlx::Error> {
-    sqlx::query(
+    sqlx::query!(
         r#"
         INSERT INTO twitch_link_clicks (
             clicked_at,
@@ -88,17 +89,17 @@ pub async fn insert_link_click(
             source_hint
         ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
         "#,
+        clicked_at,
+        streamer_login,
+        tracking_token,
+        discord_user_id,
+        discord_username,
+        guild_id,
+        channel_id,
+        message_id,
+        ref_code,
+        source_hint
     )
-    .bind(clicked_at)
-    .bind(streamer_login)
-    .bind(tracking_token)
-    .bind(discord_user_id)
-    .bind(discord_username)
-    .bind(guild_id)
-    .bind(channel_id)
-    .bind(message_id)
-    .bind(ref_code)
-    .bind(source_hint)
     .execute(pool)
     .await?;
     Ok(())
@@ -280,7 +281,10 @@ mod tests {
 
         let rows = list_active_announcements(&pool).await.expect("query");
         assert_eq!(rows.len(), 2);
-        assert_eq!(rows[0].streamer_login, "alpha_streamer", "ORDER BY LOWER(streamer_login)");
+        assert_eq!(
+            rows[0].streamer_login, "alpha_streamer",
+            "ORDER BY LOWER(streamer_login)"
+        );
         assert_eq!(rows[1].streamer_login, "zebra_streamer");
     }
 
@@ -291,7 +295,9 @@ mod tests {
 
         insert_link_click(
             &pool,
-            chrono::DateTime::parse_from_rfc3339("2026-06-11T12:00:00+00:00").unwrap().with_timezone(&chrono::Utc),
+            chrono::DateTime::parse_from_rfc3339("2026-06-11T12:00:00+00:00")
+                .unwrap()
+                .with_timezone(&chrono::Utc),
             "dragscope",
             "tok_abc",
             "123456789",
@@ -330,7 +336,9 @@ mod tests {
 
         insert_link_click(
             &pool,
-            chrono::DateTime::parse_from_rfc3339("2026-06-11T13:00:00+00:00").unwrap().with_timezone(&chrono::Utc),
+            chrono::DateTime::parse_from_rfc3339("2026-06-11T13:00:00+00:00")
+                .unwrap()
+                .with_timezone(&chrono::Utc),
             "streamer_y",
             "tok_xyz",
             "111",
@@ -344,12 +352,11 @@ mod tests {
         .await
         .expect("insert");
 
-        let (guild_id, ref_code): (Option<String>, Option<String>) = sqlx::query_as(
-            "SELECT guild_id, ref_code FROM twitch_link_clicks LIMIT 1",
-        )
-        .fetch_one(&pool)
-        .await
-        .expect("select");
+        let (guild_id, ref_code): (Option<String>, Option<String>) =
+            sqlx::query_as("SELECT guild_id, ref_code FROM twitch_link_clicks LIMIT 1")
+                .fetch_one(&pool)
+                .await
+                .expect("select");
 
         assert!(guild_id.is_none());
         assert!(ref_code.is_none());

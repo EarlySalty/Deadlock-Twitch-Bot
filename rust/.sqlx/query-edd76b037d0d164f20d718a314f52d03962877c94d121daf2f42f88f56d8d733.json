@@ -1,0 +1,64 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n        SELECT id::BIGINT AS \"id?\", stream_id, started_at,\n               duration_seconds::BIGINT AS duration_seconds, avg_viewers,\n               peak_viewers::BIGINT AS peak_viewers, follower_delta::BIGINT AS follower_delta, stream_title\n          FROM twitch_stream_sessions\n         WHERE LOWER(streamer_login) = LOWER($1)\n         ORDER BY started_at DESC\n         LIMIT 20\n        ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id?",
+        "type_info": "Int8"
+      },
+      {
+        "ordinal": 1,
+        "name": "stream_id",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 2,
+        "name": "started_at",
+        "type_info": "Timestamptz"
+      },
+      {
+        "ordinal": 3,
+        "name": "duration_seconds",
+        "type_info": "Int8"
+      },
+      {
+        "ordinal": 4,
+        "name": "avg_viewers",
+        "type_info": "Float8"
+      },
+      {
+        "ordinal": 5,
+        "name": "peak_viewers",
+        "type_info": "Int8"
+      },
+      {
+        "ordinal": 6,
+        "name": "follower_delta",
+        "type_info": "Int8"
+      },
+      {
+        "ordinal": 7,
+        "name": "stream_title",
+        "type_info": "Text"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Text"
+      ]
+    },
+    "nullable": [
+      false,
+      true,
+      false,
+      null,
+      true,
+      null,
+      null,
+      true
+    ]
+  },
+  "hash": "edd76b037d0d164f20d718a314f52d03962877c94d121daf2f42f88f56d8d733"
+}

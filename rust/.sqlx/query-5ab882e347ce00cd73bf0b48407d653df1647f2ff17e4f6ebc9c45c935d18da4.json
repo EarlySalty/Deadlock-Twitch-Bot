@@ -1,0 +1,23 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n        SELECT COUNT(DISTINCT chatter_login)::bigint AS \"count!\"\n        FROM twitch_chatter_rollup\n        WHERE streamer_login = $1 AND last_seen_at >= $2\n        ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "count!",
+        "type_info": "Int8"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Text",
+        "Timestamptz"
+      ]
+    },
+    "nullable": [
+      null
+    ]
+  },
+  "hash": "5ab882e347ce00cd73bf0b48407d653df1647f2ff17e4f6ebc9c45c935d18da4"
+}

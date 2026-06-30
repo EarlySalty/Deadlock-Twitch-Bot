@@ -1,0 +1,59 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n        SELECT id AS \"id!\",\n               streamer AS \"streamer!\",\n               days AS \"days!\",\n               model AS \"model!\",\n               generated_at AS \"generated_at!\",\n               data_snapshot::text AS \"data_snapshot!\",\n               points::text AS \"points!\"\n        FROM ai_analyses\n        WHERE streamer = $1\n        ORDER BY generated_at DESC\n        LIMIT $2\n        ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id!",
+        "type_info": "Int8"
+      },
+      {
+        "ordinal": 1,
+        "name": "streamer!",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 2,
+        "name": "days!",
+        "type_info": "Int4"
+      },
+      {
+        "ordinal": 3,
+        "name": "model!",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 4,
+        "name": "generated_at!",
+        "type_info": "Timestamptz"
+      },
+      {
+        "ordinal": 5,
+        "name": "data_snapshot!",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 6,
+        "name": "points!",
+        "type_info": "Text"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Text",
+        "Int8"
+      ]
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      false,
+      false,
+      null,
+      null
+    ]
+  },
+  "hash": "67a586c13b2c498d88aa28e3d5ce45558711f18cb5f52e158d1f6a73f0eedf68"
+}

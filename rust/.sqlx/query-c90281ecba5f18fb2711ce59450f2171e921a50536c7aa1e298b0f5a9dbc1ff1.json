@@ -1,0 +1,22 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n            SELECT 1 AS \"found!\"\n              FROM twitch_partners\n             WHERE LOWER(twitch_login) = LOWER($1)\n              AND COALESCE(status, '') = 'active'\n             LIMIT 1\n            ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "found!",
+        "type_info": "Int4"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Text"
+      ]
+    },
+    "nullable": [
+      null
+    ]
+  },
+  "hash": "c90281ecba5f18fb2711ce59450f2171e921a50536c7aa1e298b0f5a9dbc1ff1"
+}

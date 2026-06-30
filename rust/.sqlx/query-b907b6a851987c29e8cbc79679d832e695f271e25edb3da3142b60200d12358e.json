@@ -1,0 +1,41 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n        SELECT LOWER(from_broadcaster_login) AS \"login!\",\n               COUNT(*)::bigint AS \"count!\",\n               AVG(viewer_count)::float8 AS avg_viewers,\n               SUM(viewer_count)::bigint AS total_viewers\n        FROM twitch_raid_history\n        WHERE LOWER(to_broadcaster_login) = $1\n          AND executed_at >= $2\n          AND COALESCE(success, FALSE) IS TRUE\n        GROUP BY LOWER(from_broadcaster_login)\n        ORDER BY COUNT(*) DESC\n        ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "login!",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 1,
+        "name": "count!",
+        "type_info": "Int8"
+      },
+      {
+        "ordinal": 2,
+        "name": "avg_viewers",
+        "type_info": "Float8"
+      },
+      {
+        "ordinal": 3,
+        "name": "total_viewers",
+        "type_info": "Int8"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Text",
+        "Timestamptz"
+      ]
+    },
+    "nullable": [
+      null,
+      null,
+      null,
+      null
+    ]
+  },
+  "hash": "b907b6a851987c29e8cbc79679d832e695f271e25edb3da3142b60200d12358e"
+}

@@ -1,0 +1,32 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n        SELECT ls.streamer_login AS \"streamer_login!\",\n               ls.last_discord_message_id,\n               ls.last_tracking_token\n        FROM twitch_live_state ls\n        WHERE ls.last_discord_message_id IS NOT NULL\n          AND ls.last_tracking_token IS NOT NULL\n        ORDER BY LOWER(ls.streamer_login)\n        ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "streamer_login!",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 1,
+        "name": "last_discord_message_id",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 2,
+        "name": "last_tracking_token",
+        "type_info": "Text"
+      }
+    ],
+    "parameters": {
+      "Left": []
+    },
+    "nullable": [
+      false,
+      true,
+      true
+    ]
+  },
+  "hash": "85e310ed62f7e53726f88cadb503055f7791e0fc6cd68a2358ff466e0a8fd6ff"
+}

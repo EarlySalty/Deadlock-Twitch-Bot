@@ -1,0 +1,41 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT COUNT(*)::bigint AS \"total!\", AVG(h.level)::float8 AS avg_level, MAX(h.level)::int AS max_level, AVG(h.duration_seconds)::float8 AS avg_dur FROM twitch_hype_train_events h LEFT JOIN twitch_stream_sessions s ON s.id = h.session_id WHERE h.started_at >= $1 AND h.ended_at IS NOT NULL AND ($2 = '' OR LOWER(s.streamer_login) = $2)",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "total!",
+        "type_info": "Int8"
+      },
+      {
+        "ordinal": 1,
+        "name": "avg_level",
+        "type_info": "Float8"
+      },
+      {
+        "ordinal": 2,
+        "name": "max_level",
+        "type_info": "Int4"
+      },
+      {
+        "ordinal": 3,
+        "name": "avg_dur",
+        "type_info": "Float8"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Timestamptz",
+        "Text"
+      ]
+    },
+    "nullable": [
+      null,
+      null,
+      null,
+      null
+    ]
+  },
+  "hash": "fb6b576c8c436aa6c00841235e043110a43ef57f769e1e914ffbd1bfa1a682d6"
+}

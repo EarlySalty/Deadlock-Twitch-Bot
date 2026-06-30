@@ -1,0 +1,23 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n        SELECT COALESCE(SUM(s.unique_chatters), 0)::BIGINT AS \"count!\"\n        FROM twitch_stream_sessions s\n        WHERE s.started_at >= $1::text::TIMESTAMPTZ\n          AND s.ended_at IS NOT NULL\n          AND ($2::TEXT IS NULL OR LOWER(s.streamer_login) = LOWER($2))\n          AND NOT EXISTS (\n              SELECT 1 FROM twitch_session_chatters sc WHERE sc.session_id = s.id\n          )\n        ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "count!",
+        "type_info": "Int8"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Text",
+        "Text"
+      ]
+    },
+    "nullable": [
+      null
+    ]
+  },
+  "hash": "ed813f6e6c3b991676e36660a928a189e6c12955f180487119c0211706acf0c7"
+}

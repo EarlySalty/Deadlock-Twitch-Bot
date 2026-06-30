@@ -1,0 +1,50 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n        SELECT\n            ts_utc AS \"ts_utc!\",\n            streamer AS \"streamer!\",\n            viewer_count,\n            COALESCE(is_partner, false)                             AS \"is_partner!\",\n            (language = 'de'\n             OR (language IS NULL\n                 AND (tags ILIKE '%deutsch%' OR tags ILIKE '%german%'))) AS is_german,\n            language\n        FROM twitch_stats_category\n        WHERE ts_utc = (SELECT MAX(ts_utc) FROM twitch_stats_category)\n        ORDER BY viewer_count DESC NULLS LAST, streamer\n        ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "ts_utc!",
+        "type_info": "Timestamptz"
+      },
+      {
+        "ordinal": 1,
+        "name": "streamer!",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 2,
+        "name": "viewer_count",
+        "type_info": "Int4"
+      },
+      {
+        "ordinal": 3,
+        "name": "is_partner!",
+        "type_info": "Bool"
+      },
+      {
+        "ordinal": 4,
+        "name": "is_german",
+        "type_info": "Bool"
+      },
+      {
+        "ordinal": 5,
+        "name": "language",
+        "type_info": "Text"
+      }
+    ],
+    "parameters": {
+      "Left": []
+    },
+    "nullable": [
+      false,
+      false,
+      true,
+      null,
+      null,
+      true
+    ]
+  },
+  "hash": "31e0efc2772a1cd170c588d89a6661112b78e3360ed37fd42292fe72115cb836"
+}

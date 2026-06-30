@@ -1,0 +1,94 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n        SELECT COALESCE(s.twitch_login, '') AS \"twitch_login!\",\n               COALESCE(NULLIF(s.twitch_user_id, ''), NULLIF(a.twitch_user_id, '')) AS twitch_user_id,\n               s.manual_partner_opt_out,\n               s.archived_at,\n               s.is_on_discord,\n               s.discord_user_id,\n               s.discord_display_name,\n               s.raid_bot_enabled,\n               a.raid_enabled AS \"raid_auth_enabled?\",\n               a.needs_reauth AS \"raid_needs_reauth?\",\n               a.authorized_at AS \"raid_authorized_at?\",\n               a.token_expires_at AS \"raid_token_expires_at?\",\n              sess.last_deadlock_stream_at\n          FROM twitch_partners_all_state s\n          LEFT JOIN twitch_raid_auth a\n            ON (\n                 s.twitch_user_id IS NOT NULL\n                 AND s.twitch_user_id = a.twitch_user_id\n               )\n            OR (\n                 s.twitch_user_id IS NULL\n                 AND LOWER(s.twitch_login) = LOWER(a.twitch_login)\n               )\n          LEFT JOIN (\n               SELECT LOWER(streamer_login) AS streamer_login,\n                      MAX(CASE\n                            WHEN COALESCE(had_deadlock_in_session, false)\n                                 OR LOWER(COALESCE(game_name,'')) = LOWER($1)\n                            THEN COALESCE(ended_at, started_at)\n                      END) AS last_deadlock_stream_at\n                 FROM twitch_stream_sessions\n                GROUP BY LOWER(streamer_login)\n          ) AS sess\n            ON sess.streamer_login = LOWER(s.twitch_login)\n         WHERE s.status = 'active'\n          ORDER BY s.twitch_login\n        ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "twitch_login!",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 1,
+        "name": "twitch_user_id",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 2,
+        "name": "manual_partner_opt_out",
+        "type_info": "Int4"
+      },
+      {
+        "ordinal": 3,
+        "name": "archived_at",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 4,
+        "name": "is_on_discord",
+        "type_info": "Int4"
+      },
+      {
+        "ordinal": 5,
+        "name": "discord_user_id",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 6,
+        "name": "discord_display_name",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 7,
+        "name": "raid_bot_enabled",
+        "type_info": "Int4"
+      },
+      {
+        "ordinal": 8,
+        "name": "raid_auth_enabled?",
+        "type_info": "Bool"
+      },
+      {
+        "ordinal": 9,
+        "name": "raid_needs_reauth?",
+        "type_info": "Bool"
+      },
+      {
+        "ordinal": 10,
+        "name": "raid_authorized_at?",
+        "type_info": "Timestamptz"
+      },
+      {
+        "ordinal": 11,
+        "name": "raid_token_expires_at?",
+        "type_info": "Timestamptz"
+      },
+      {
+        "ordinal": 12,
+        "name": "last_deadlock_stream_at",
+        "type_info": "Timestamptz"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Text"
+      ]
+    },
+    "nullable": [
+      null,
+      null,
+      true,
+      true,
+      true,
+      true,
+      true,
+      true,
+      true,
+      true,
+      true,
+      false,
+      null
+    ]
+  },
+  "hash": "60419cbd34a0e44ccf926bd1964e7ad9c96aa20a04ac24c57f74dadf42a3ff72"
+}

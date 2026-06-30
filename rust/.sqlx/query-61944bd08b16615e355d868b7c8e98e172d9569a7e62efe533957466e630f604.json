@@ -1,0 +1,40 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n        SELECT id AS \"id!\",\n               stripe_event_id AS \"stripe_event_id?\",\n               commission_cents AS \"commission_cents?\",\n               currency AS \"currency?\"\n        FROM affiliate_commissions\n        WHERE affiliate_twitch_login = $1\n          AND status IN ('pending', 'failed')\n          AND stripe_transfer_id IS NULL\n          AND transferred_at IS NULL\n        ORDER BY created_at ASC, id ASC\n        ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id!",
+        "type_info": "Int4"
+      },
+      {
+        "ordinal": 1,
+        "name": "stripe_event_id?",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 2,
+        "name": "commission_cents?",
+        "type_info": "Int4"
+      },
+      {
+        "ordinal": 3,
+        "name": "currency?",
+        "type_info": "Text"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Text"
+      ]
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      false
+    ]
+  },
+  "hash": "61944bd08b16615e355d868b7c8e98e172d9569a7e62efe533957466e630f604"
+}

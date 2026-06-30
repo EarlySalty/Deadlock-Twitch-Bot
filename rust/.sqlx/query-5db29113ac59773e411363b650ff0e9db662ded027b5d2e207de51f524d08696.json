@@ -1,0 +1,22 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n            SELECT COALESCE(SUM(commission_cents), 0)::bigint AS \"pending_total!\"\n            FROM affiliate_commissions\n            WHERE affiliate_twitch_login = $1 AND status = 'pending'\n            ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "pending_total!",
+        "type_info": "Int8"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Text"
+      ]
+    },
+    "nullable": [
+      null
+    ]
+  },
+  "hash": "5db29113ac59773e411363b650ff0e9db662ded027b5d2e207de51f524d08696"
+}

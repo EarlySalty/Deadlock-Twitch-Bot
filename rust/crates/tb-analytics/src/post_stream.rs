@@ -47,55 +47,35 @@ pub struct SessionChatData {
 /// Lädt Session-Metadaten + Chat-Nachrichten einer Session (Python
 /// `_load_session_chat_data`). `None`, wenn die Session nicht existiert.
 pub async fn load_session_chat_data(pool: &PgPool, session_id: i64) -> Option<SessionChatData> {
-    let row = sqlx::query_as::<
-        _,
-        (
-            String,
-            Option<String>,
-            Option<String>,
-            Option<i64>,
-            Option<f64>,
-            Option<i64>,
-            Option<i64>,
-        ),
-    >(
+    let row = sqlx::query!(
         "SELECT s.streamer_login, \
-                s.started_at::text, \
-                s.ended_at::text, \
-                s.duration_seconds::int8, \
-                COALESCE(s.avg_viewers, 0)::float8, \
-                COALESCE(s.peak_viewers, 0)::int8, \
-                COALESCE(s.follower_delta, 0)::int8 \
+                s.started_at::text AS \"started_at?\", \
+                s.ended_at::text AS ended_at, \
+                s.duration_seconds::int8 AS duration_seconds, \
+                COALESCE(s.avg_viewers, 0)::float8 AS \"avg_viewers!\", \
+                COALESCE(s.peak_viewers, 0)::int8 AS \"peak_viewers!\", \
+                COALESCE(s.follower_delta, 0)::int8 AS \"followers_delta!\" \
          FROM twitch_stream_sessions s \
          WHERE s.id = $1",
+        session_id
     )
-    .bind(session_id)
     .fetch_optional(pool)
     .await
     .ok()
     .flatten()?;
 
-    let (
-        streamer_login,
-        started_at,
-        ended_at,
-        duration_seconds,
-        avg_viewers,
-        peak_viewers,
-        followers_delta,
-    ) = row;
-    let duration_seconds = duration_seconds.unwrap_or(0);
+    let duration_seconds = row.duration_seconds.unwrap_or(0);
 
-    let messages: Vec<String> = sqlx::query_scalar::<_, String>(
-        "SELECT content FROM twitch_chat_messages \
+    let messages: Vec<String> = sqlx::query_scalar!(
+        "SELECT content AS \"content!\" FROM twitch_chat_messages \
          WHERE session_id = $1 \
            AND is_command = FALSE \
            AND content IS NOT NULL \
            AND length(content) > 1 \
          ORDER BY message_ts \
          LIMIT 1500",
+        session_id
     )
-    .bind(session_id)
     .fetch_all(pool)
     .await
     .unwrap_or_default()
@@ -104,11 +84,11 @@ pub async fn load_session_chat_data(pool: &PgPool, session_id: i64) -> Option<Se
     .filter(|c| !c.is_empty())
     .collect();
 
-    let unique_chatters: i64 = sqlx::query_scalar(
-        "SELECT COUNT(DISTINCT chatter_login) FROM twitch_chat_messages \
+    let unique_chatters = sqlx::query_scalar!(
+        "SELECT COUNT(DISTINCT chatter_login)::int8 AS \"count!\" FROM twitch_chat_messages \
          WHERE session_id = $1 AND chatter_login IS NOT NULL",
+        session_id
     )
-    .bind(session_id)
     .fetch_one(pool)
     .await
     .unwrap_or(0);
@@ -118,13 +98,13 @@ pub async fn load_session_chat_data(pool: &PgPool, session_id: i64) -> Option<Se
 
     Some(SessionChatData {
         session: PostStreamSession {
-            streamer_login,
-            started_at,
-            ended_at,
+            streamer_login: row.streamer_login,
+            started_at: row.started_at,
+            ended_at: row.ended_at,
             duration_seconds,
-            avg_viewers: avg_viewers.unwrap_or(0.0),
-            peak_viewers: peak_viewers.unwrap_or(0),
-            followers_delta: followers_delta.unwrap_or(0),
+            avg_viewers: row.avg_viewers,
+            peak_viewers: row.peak_viewers,
+            followers_delta: row.followers_delta,
         },
         messages,
         duration_min,
@@ -435,7 +415,14 @@ pub async fn call_minimax(base_url: &str, api_key: &str, prompt: &str) -> Result
     let (content, tokens_in, tokens_out) = split_minimax_response(parsed);
     // Best-effort-Verbuchung (Python `_track_minimax_completion`): wirft nie und
     // kippt den Call nicht — die echte Persistenz/Isolation testet `tb-llm`.
-    tb_llm::ledger::record(MINIMAX_LEDGER_PURPOSE, MINIMAX_MODEL, tokens_in, tokens_out, true).await;
+    tb_llm::ledger::record(
+        MINIMAX_LEDGER_PURPOSE,
+        MINIMAX_MODEL,
+        tokens_in,
+        tokens_out,
+        true,
+    )
+    .await;
     Ok(content)
 }
 
@@ -779,11 +766,12 @@ pub struct ReportRegistry {
 /// Session nicht existiert (Python: leeres Dict → Aufrufer `build_post_stream_snapshot`
 /// bricht mit `{}` ab) oder die Query fehlschlägt.
 pub async fn load_session(pool: &PgPool, session_id: i64) -> Option<ReportSession> {
-    sqlx::query_as::<_, ReportSession>(
-        "SELECT id::int8 AS id, \
-                streamer_login, \
-                stream_id::text AS stream_id, \
-                started_at::text AS started_at, \
+    sqlx::query_as!(
+        ReportSession,
+        "SELECT id::int8 AS \"id!\", \
+                streamer_login AS \"streamer_login?\", \
+                stream_id::text AS \"stream_id?\", \
+                started_at::text AS \"started_at?\", \
                 ended_at::text AS ended_at, \
                 duration_seconds::int8 AS duration_seconds, \
                 start_viewers::int8 AS start_viewers, \
@@ -810,8 +798,8 @@ pub async fn load_session(pool: &PgPool, session_id: i64) -> Option<ReportSessio
                 game_name \
          FROM twitch_stream_sessions \
          WHERE id = $1",
+        session_id
     )
-    .bind(session_id)
     .fetch_optional(pool)
     .await
     .ok()
@@ -821,7 +809,8 @@ pub async fn load_session(pool: &PgPool, session_id: i64) -> Option<ReportSessio
 /// Lädt die Streamer-Registry per Login (Python `_load_registry` via
 /// `_safe_fetchone_dict` → bei Fehler/keinem Treffer leeres Registry).
 pub async fn load_registry(pool: &PgPool, streamer: &str) -> ReportRegistry {
-    sqlx::query_as::<_, ReportRegistry>(
+    sqlx::query_as!(
+        ReportRegistry,
         "SELECT s.twitch_user_id::text AS twitch_user_id, \
                 i.discord_user_id::text AS discord_user_id, \
                 i.discord_display_name, \
@@ -829,14 +818,14 @@ pub async fn load_registry(pool: &PgPool, streamer: &str) -> ReportRegistry {
                     SELECT 1 FROM twitch_partners p \
                     WHERE p.twitch_user_id = s.twitch_user_id \
                        OR LOWER(p.twitch_login) = LOWER(s.twitch_login) \
-                ) AS is_monitored_only \
+                ) AS \"is_monitored_only?\" \
          FROM twitch_streamers s \
          LEFT JOIN twitch_streamer_identities i \
            ON i.twitch_user_id = s.twitch_user_id \
          WHERE LOWER(s.twitch_login) = LOWER($1) \
          LIMIT 1",
+        streamer
     )
-    .bind(streamer)
     .fetch_optional(pool)
     .await
     .ok()
@@ -926,7 +915,7 @@ pub fn core_metrics(session: &ReportSession) -> serde_json::Value {
 /// length>1) gilt — anders als bei den Buckets/Top-Chattern. `minute` bleibt
 /// `None` (kein vorberechneter Wert in der Zeile).
 pub async fn load_messages(pool: &PgPool, session_id: i64) -> Vec<ChatMessageRow> {
-    sqlx::query_as::<_, (Option<String>, Option<String>, Option<String>)>(
+    sqlx::query!(
         "SELECT chatter_login, message_ts::text, content \
          FROM twitch_chat_messages \
          WHERE session_id = $1 \
@@ -934,16 +923,16 @@ pub async fn load_messages(pool: &PgPool, session_id: i64) -> Vec<ChatMessageRow
            AND content IS NOT NULL \
            AND length(content) > 1 \
          ORDER BY message_ts",
+        session_id
     )
-    .bind(session_id)
     .fetch_all(pool)
     .await
     .unwrap_or_default()
     .into_iter()
-    .map(|(chatter_login, message_ts, content)| ChatMessageRow {
-        content: content.unwrap_or_default(),
-        chatter_login: chatter_login.unwrap_or_default(),
-        message_ts,
+    .map(|row| ChatMessageRow {
+        content: row.content.unwrap_or_default(),
+        chatter_login: row.chatter_login.unwrap_or_default(),
+        message_ts: row.message_ts,
         minute: None,
     })
     .collect()
@@ -954,28 +943,28 @@ pub async fn load_messages(pool: &PgPool, session_id: i64) -> Vec<ChatMessageRow
 /// Content-Filter); Zeilen ohne ableitbare Minute werden verworfen. Jede Zeile
 /// als `serde_json::Value`, da `chat_digest` sie unverändert durchreicht.
 pub async fn chat_minute_buckets(pool: &PgPool, session_id: i64) -> Vec<serde_json::Value> {
-    sqlx::query_as::<_, (Option<i64>, Option<i64>, Option<i64>)>(
+    sqlx::query!(
         "SELECT FLOOR(EXTRACT(EPOCH FROM (m.message_ts - s.started_at)) / 60)::int8 AS minute, \
-                COUNT(*)::int8 AS messages, \
-                COUNT(DISTINCT m.chatter_login)::int8 AS chatters \
+                COUNT(*)::int8 AS \"messages!\", \
+                COUNT(DISTINCT m.chatter_login)::int8 AS \"chatters!\" \
          FROM twitch_chat_messages m \
          JOIN twitch_stream_sessions s ON s.id = m.session_id \
          WHERE m.session_id = $1 \
            AND COALESCE(m.is_command, FALSE) = FALSE \
          GROUP BY minute \
          ORDER BY minute",
+        session_id
     )
-    .bind(session_id)
     .fetch_all(pool)
     .await
     .unwrap_or_default()
     .into_iter()
-    .filter_map(|(minute, messages, chatters)| {
-        let minute = minute?; // Python: if row.get("minute") is not None
+    .filter_map(|row| {
+        let minute = row.minute?; // Python: if row.get("minute") is not None
         Some(serde_json::json!({
             "minute": minute,
-            "messages": messages.unwrap_or(0),
-            "chatters": chatters.unwrap_or(0),
+            "messages": row.messages,
+            "chatters": row.chatters,
         }))
     })
     .collect()
@@ -985,30 +974,30 @@ pub async fn chat_minute_buckets(pool: &PgPool, session_id: i64) -> Vec<serde_js
 /// Leerer/`NULL`-Login → `'unknown'`; zählt alle Non-Command-Messages. Gibt ein
 /// JSON-Array zurück (von `chat_digest` durchgereicht).
 pub async fn top_chatters(pool: &PgPool, session_id: i64) -> serde_json::Value {
-    let rows = sqlx::query_as::<_, (Option<String>, Option<i64>, Option<String>, Option<String>)>(
-        "SELECT COALESCE(NULLIF(chatter_login, ''), 'unknown') AS chatter_login, \
-                COUNT(*)::int8 AS messages, \
+    let rows = sqlx::query!(
+        "SELECT COALESCE(NULLIF(chatter_login, ''), 'unknown') AS \"chatter_login!\", \
+                COUNT(*)::int8 AS \"messages!\", \
                 MIN(message_ts)::text AS first_message_at, \
                 MAX(message_ts)::text AS last_message_at \
          FROM twitch_chat_messages \
          WHERE session_id = $1 \
            AND COALESCE(is_command, FALSE) = FALSE \
          GROUP BY COALESCE(NULLIF(chatter_login, ''), 'unknown') \
-         ORDER BY messages DESC \
+         ORDER BY COUNT(*) DESC \
          LIMIT 20",
+        session_id
     )
-    .bind(session_id)
     .fetch_all(pool)
     .await
     .unwrap_or_default();
     serde_json::Value::Array(
         rows.into_iter()
-            .map(|(login, messages, first_at, last_at)| {
+            .map(|row| {
                 serde_json::json!({
-                    "login": login.unwrap_or_else(|| "unknown".to_string()),
-                    "messages": messages.unwrap_or(0),
-                    "first_message_at": first_at.unwrap_or_default(),
-                    "last_message_at": last_at.unwrap_or_default(),
+                    "login": row.chatter_login,
+                    "messages": row.messages,
+                    "first_message_at": row.first_message_at.unwrap_or_default(),
+                    "last_message_at": row.last_message_at.unwrap_or_default(),
                 })
             })
             .collect(),
@@ -1028,19 +1017,19 @@ pub async fn viewer_curve(
     session_id: i64,
     max_points: Option<usize>,
 ) -> Vec<serde_json::Value> {
-    let rows = sqlx::query_as::<_, (Option<i64>, Option<i64>)>(
+    let rows = sqlx::query!(
         "SELECT minutes_from_start::int8 AS minutes_from_start, \
                 viewer_count::int8 AS viewer_count \
          FROM twitch_session_viewers \
          WHERE session_id = $1 \
          ORDER BY ts_utc",
+        session_id
     )
-    .bind(session_id)
     .fetch_all(pool)
     .await
     .unwrap_or_default();
 
-    let selected: Vec<(Option<i64>, Option<i64>)> = match max_points {
+    let selected = match max_points {
         Some(mp) if rows.len() > mp => {
             let step = (rows.len() / mp).max(1);
             rows.into_iter().step_by(step).take(mp).collect()
@@ -1050,10 +1039,10 @@ pub async fn viewer_curve(
 
     selected
         .into_iter()
-        .map(|(minute, viewer_count)| {
+        .map(|row| {
             serde_json::json!({
-                "minute": minute.unwrap_or(0),
-                "viewer_count": viewer_count.unwrap_or(0),
+                "minute": row.minutes_from_start.unwrap_or(0),
+                "viewer_count": row.viewer_count.unwrap_or(0),
             })
         })
         .collect()
@@ -1064,30 +1053,37 @@ pub async fn viewer_curve(
 /// unique/avg/max, dazu Top-25 nach Tick-Zahl. `numeric` per `::float8` für
 /// sqlx-Decode. Gibt das `audience`-Snapshot-Objekt zurück.
 pub async fn viewer_presence(pool: &PgPool, session_id: i64) -> serde_json::Value {
-    let agg = sqlx::query_as::<_, (Option<i64>, Option<f64>, Option<f64>)>(
+    let agg = sqlx::query!(
         "WITH per_viewer AS ( \
-             SELECT viewer_login, COUNT(*)::int8 AS ticks \
+            SELECT viewer_login, COUNT(*)::int8 AS ticks \
                FROM twitch_viewer_presence_ticks \
               WHERE session_id = $1 \
               GROUP BY viewer_login \
          ) \
-         SELECT COUNT(*)::int8 AS unique_viewers, \
+         SELECT COUNT(*)::int8 AS \"unique_viewers!\", \
                 ROUND(AVG(ticks * 0.5)::numeric, 2)::float8 AS avg_present_min, \
                 ROUND(MAX(ticks * 0.5)::numeric, 2)::float8 AS max_present_min \
            FROM per_viewer",
+        session_id
     )
-    .bind(session_id)
     .fetch_optional(pool)
     .await
     .ok()
     .flatten();
-    let (unique_viewers, avg_present_min, max_present_min) = agg.unwrap_or((Some(0), None, None));
+    let (unique_viewers, avg_present_min, max_present_min) = agg
+        .map(|row| {
+            (
+                Some(row.unique_viewers),
+                row.avg_present_min,
+                row.max_present_min,
+            )
+        })
+        .unwrap_or((Some(0), None, None));
 
     // ORDER BY COUNT(*) DESC entspricht dem Python-Alias `ticks DESC` (ticks wird
     // hier nicht ausgegeben, nur present_min daraus).
-    let top_rows =
-        sqlx::query_as::<_, (Option<String>, Option<f64>, Option<String>, Option<String>)>(
-            "SELECT viewer_login, \
+    let top_rows = sqlx::query!(
+        "SELECT viewer_login, \
                     ROUND((COUNT(*) * 0.5)::numeric, 2)::float8 AS present_min, \
                     MIN(tick_at)::text AS first_seen_at, \
                     MAX(tick_at)::text AS last_seen_at \
@@ -1096,20 +1092,20 @@ pub async fn viewer_presence(pool: &PgPool, session_id: i64) -> serde_json::Valu
               GROUP BY viewer_login \
               ORDER BY COUNT(*) DESC \
               LIMIT 25",
-        )
-        .bind(session_id)
-        .fetch_all(pool)
-        .await
-        .unwrap_or_default();
+        session_id
+    )
+    .fetch_all(pool)
+    .await
+    .unwrap_or_default();
 
     let most_present: Vec<serde_json::Value> = top_rows
         .into_iter()
-        .map(|(login, present_min, first_at, last_at)| {
+        .map(|row| {
             serde_json::json!({
-                "login": login, // Python: kein COALESCE → null möglich
-                "present_min": present_min.unwrap_or(0.0),
-                "first_seen_at": first_at.unwrap_or_default(),
-                "last_seen_at": last_at.unwrap_or_default(),
+                "login": row.viewer_login, // Python: kein COALESCE → null möglich
+                "present_min": row.present_min.unwrap_or(0.0),
+                "first_seen_at": row.first_seen_at.unwrap_or_default(),
+                "last_seen_at": row.last_seen_at.unwrap_or_default(),
             })
         })
         .collect();
@@ -1138,20 +1134,8 @@ pub async fn comparison_payload(pool: &PgPool, session: &ReportSession) -> serde
         .unwrap_or("")
         .to_lowercase();
     let session_id = session.id;
-    let agg = sqlx::query_as::<
-        _,
-        (
-            Option<i64>,
-            Option<f64>,
-            Option<f64>,
-            Option<f64>,
-            Option<f64>,
-            Option<f64>,
-            Option<f64>,
-            Option<f64>,
-        ),
-    >(
-        "SELECT COUNT(*)::int8 AS sessions, \
+    let agg = sqlx::query!(
+        "SELECT COUNT(*)::int8 AS \"sessions!\", \
                 ROUND(AVG(avg_viewers)::numeric, 2)::float8 AS avg_viewers, \
                 ROUND(AVG(peak_viewers)::numeric, 2)::float8 AS peak_viewers, \
                 ROUND(AVG(unique_chatters)::numeric, 2)::float8 AS unique_chatters, \
@@ -1172,16 +1156,28 @@ pub async fn comparison_payload(pool: &PgPool, session: &ReportSession) -> serde
                   ORDER BY ended_at DESC \
                   LIMIT 5 \
            ) recent",
+        &streamer,
+        session_id
     )
-    .bind(&streamer)
-    .bind(session_id)
     .fetch_optional(pool)
     .await
     .ok()
     .flatten();
 
-    let (sessions, b_avg, b_peak, b_unique, b_first, b_returning, b_dropoff, b_follower) =
-        agg.unwrap_or((Some(0), None, None, None, None, None, None, None));
+    let (sessions, b_avg, b_peak, b_unique, b_first, b_returning, b_dropoff, b_follower) = agg
+        .map(|row| {
+            (
+                Some(row.sessions),
+                row.avg_viewers,
+                row.peak_viewers,
+                row.unique_chatters,
+                row.first_time_chatters,
+                row.returning_chatters,
+                row.dropoff_pct,
+                row.follower_delta,
+            )
+        })
+        .unwrap_or((Some(0), None, None, None, None, None, None, None));
     let b_avg = b_avg.unwrap_or(0.0);
     let b_peak = b_peak.unwrap_or(0.0);
     let b_unique = b_unique.unwrap_or(0.0);
@@ -1254,10 +1250,10 @@ pub async fn events_payload(
     let mut payload = serde_json::Map::new();
 
     // subscriptions — reiner Count.
-    match sqlx::query_scalar::<_, i64>(
-        "SELECT COUNT(*)::int8 FROM twitch_subscription_events WHERE session_id = $1",
+    match sqlx::query_scalar!(
+        "SELECT COUNT(*)::int8 AS \"count!\" FROM twitch_subscription_events WHERE session_id = $1",
+        session_id
     )
-    .bind(session_id)
     .fetch_one(pool)
     .await
     {
@@ -1269,22 +1265,22 @@ pub async fn events_payload(
     };
 
     // bits_events — count + amount.
-    match sqlx::query_as::<_, (i64, i64)>(
-        "SELECT COUNT(*)::int8, COALESCE(SUM(amount), 0)::int8 FROM twitch_bits_events WHERE session_id = $1",
+    match sqlx::query!(
+        "SELECT COUNT(*)::int8 AS \"count!\", COALESCE(SUM(amount), 0)::int8 AS \"amount!\" FROM twitch_bits_events WHERE session_id = $1",
+        session_id
     )
-    .bind(session_id)
     .fetch_one(pool)
     .await
     {
-        Ok((c, a)) => payload.insert("bits_events".into(), serde_json::json!({"count": c, "amount": a})),
+        Ok(row) => payload.insert("bits_events".into(), serde_json::json!({"count": row.count, "amount": row.amount})),
         Err(_) => payload.insert("bits_events".into(), serde_json::json!({"unavailable": true})),
     };
 
     // channel_points — reiner Count.
-    match sqlx::query_scalar::<_, i64>(
-        "SELECT COUNT(*)::int8 FROM twitch_channel_points_events WHERE session_id = $1",
+    match sqlx::query_scalar!(
+        "SELECT COUNT(*)::int8 AS \"count!\" FROM twitch_channel_points_events WHERE session_id = $1",
+        session_id
     )
-    .bind(session_id)
     .fetch_one(pool)
     .await
     {
@@ -1296,34 +1292,34 @@ pub async fn events_payload(
     };
 
     // hype_trains — count + max_level.
-    match sqlx::query_as::<_, (i64, i64)>(
-        "SELECT COUNT(*)::int8, COALESCE(MAX(level), 0)::int8 FROM twitch_hype_train_events WHERE session_id = $1",
+    match sqlx::query!(
+        "SELECT COUNT(*)::int8 AS \"count!\", COALESCE(MAX(level), 0)::int8 AS \"max_level!\" FROM twitch_hype_train_events WHERE session_id = $1",
+        session_id
     )
-    .bind(session_id)
     .fetch_one(pool)
     .await
     {
-        Ok((c, m)) => payload.insert("hype_trains".into(), serde_json::json!({"count": c, "max_level": m})),
+        Ok(row) => payload.insert("hype_trains".into(), serde_json::json!({"count": row.count, "max_level": row.max_level})),
         Err(_) => payload.insert("hype_trains".into(), serde_json::json!({"unavailable": true})),
     };
 
     // ad_breaks — count + duration_seconds.
-    match sqlx::query_as::<_, (i64, i64)>(
-        "SELECT COUNT(*)::int8, COALESCE(SUM(duration_seconds), 0)::int8 FROM twitch_ad_break_events WHERE session_id = $1",
+    match sqlx::query!(
+        "SELECT COUNT(*)::int8 AS \"count!\", COALESCE(SUM(duration_seconds), 0)::int8 AS \"duration_seconds!\" FROM twitch_ad_break_events WHERE session_id = $1",
+        session_id
     )
-    .bind(session_id)
     .fetch_one(pool)
     .await
     {
-        Ok((c, d)) => payload.insert("ad_breaks".into(), serde_json::json!({"count": c, "duration_seconds": d})),
+        Ok(row) => payload.insert("ad_breaks".into(), serde_json::json!({"count": row.count, "duration_seconds": row.duration_seconds})),
         Err(_) => payload.insert("ad_breaks".into(), serde_json::json!({"unavailable": true})),
     };
 
     // moderation_events — Count über twitch_ban_events.
-    match sqlx::query_scalar::<_, i64>(
-        "SELECT COUNT(*)::int8 FROM twitch_ban_events WHERE session_id = $1",
+    match sqlx::query_scalar!(
+        "SELECT COUNT(*)::int8 AS \"count!\" FROM twitch_ban_events WHERE session_id = $1",
+        session_id
     )
-    .bind(session_id)
     .fetch_one(pool)
     .await
     {
@@ -1592,18 +1588,21 @@ pub async fn raw_event_rows(
 /// (chatter_login→login, chatter_id→id); `to_jsonb` liefert dieselben Typen wie
 /// Pythons `_iso`/`bool`/`_as_int` (Zeit timestamptz→ISO, BOOLEAN→bool, INTEGER→Zahl).
 pub async fn raw_session_chatters(pool: &PgPool, session_id: i64) -> serde_json::Value {
-    sqlx::query_scalar::<_, serde_json::Value>(
-        "SELECT COALESCE(jsonb_agg(to_jsonb(t) ORDER BY t.messages DESC, t.last_seen_at DESC), '[]'::jsonb) \
+    let payload = sqlx::query_scalar!(
+        "SELECT COALESCE(jsonb_agg(to_jsonb(t) ORDER BY t.messages DESC, t.last_seen_at DESC), '[]'::jsonb)::text AS \"payload!\" \
          FROM ( \
              SELECT chatter_login AS login, chatter_id AS id, first_message_at, messages, \
                     is_first_time_streamer, seen_via_chatters_api, last_seen_at \
              FROM twitch_session_chatters WHERE session_id = $1 \
          ) t",
+        session_id
     )
-    .bind(session_id)
     .fetch_one(pool)
     .await
-    .unwrap_or_else(|_| serde_json::json!([]))
+    .ok();
+    payload
+        .and_then(|text| serde_json::from_str(&text).ok())
+        .unwrap_or_else(|| serde_json::json!([]))
 }
 
 /// Baut den strukturierten v2-Snapshot für die Post-Stream-Analyse (Python
@@ -1980,21 +1979,29 @@ async fn persist_word_groups(
     word_groups: &[WordGroup],
 ) -> Result<(), sqlx::Error> {
     let mut tx = pool.begin().await?;
-    sqlx::query("DELETE FROM twitch_chat_word_groups WHERE session_id = $1")
-        .bind(session_id)
-        .execute(&mut *tx)
-        .await?;
+    sqlx::query!(
+        "DELETE FROM twitch_chat_word_groups WHERE session_id = $1",
+        session_id
+    )
+    .execute(&mut *tx)
+    .await?;
     for g in word_groups {
-        sqlx::query(
+        let message_count = i32::try_from(g.message_count).map_err(|_| {
+            sqlx::Error::InvalidArgument(format!(
+                "word group message_count out of int4 range: {}",
+                g.message_count
+            ))
+        })?;
+        sqlx::query!(
             "INSERT INTO twitch_chat_word_groups \
              (session_id, streamer_login, group_name, keywords, message_count) \
-             VALUES ($1, $2, $3, $4, $5)",
+             VALUES ($1, $2, $3, $4::text[], $5)",
+            session_id,
+            streamer,
+            &g.group_name,
+            &g.keywords,
+            message_count
         )
-        .bind(session_id)
-        .bind(streamer)
-        .bind(&g.group_name)
-        .bind(g.keywords.as_slice())
-        .bind(g.message_count as i32)
         .execute(&mut *tx)
         .await?;
     }
@@ -2012,20 +2019,20 @@ async fn insert_pending_report(
     snapshot: &serde_json::Value,
 ) -> Result<i64, sqlx::Error> {
     let snapshot_json = serde_json::to_string(snapshot).unwrap_or_else(|_| "{}".to_string());
-    let id: i64 = sqlx::query_scalar(
+    let id = sqlx::query_scalar!(
         "INSERT INTO twitch_stream_ai_reports \
          (session_id, streamer_login, model, status, schema_version, report_variant, \
           input_snapshot_json, prompt_version, started_at) \
-         VALUES ($1, $2, $3, 'pending', $4, $5, $6::jsonb, $7, NOW()) \
-         RETURNING id",
+         VALUES ($1, $2, $3, 'pending', $4, $5, $6::text::jsonb, $7, NOW()) \
+         RETURNING id AS \"id!\"",
+        session_id,
+        streamer,
+        model.as_str(),
+        POST_STREAM_REPORT_SCHEMA_VERSION,
+        variant,
+        &snapshot_json,
+        REPORT_PROMPT_VERSION
     )
-    .bind(session_id)
-    .bind(streamer)
-    .bind(model.as_str())
-    .bind(POST_STREAM_REPORT_SCHEMA_VERSION)
-    .bind(variant)
-    .bind(snapshot_json)
-    .bind(REPORT_PROMPT_VERSION)
     .fetch_one(pool)
     .await?;
     Ok(id)
@@ -2040,15 +2047,15 @@ async fn finalize_report(
 ) -> Result<(), sqlx::Error> {
     let report_json = serde_json::to_string(report).unwrap_or_else(|_| "{}".to_string());
     let wg_json = serde_json::to_string(word_groups_json).unwrap_or_else(|_| "[]".to_string());
-    sqlx::query(
+    sqlx::query!(
         "UPDATE twitch_stream_ai_reports \
-         SET status='done', report_json=$1::jsonb, word_groups_json=$2::jsonb, \
+         SET status='done', report_json=$1::text::jsonb, word_groups_json=$2::text::jsonb, \
              generated_at=NOW(), finished_at=NOW(), error=NULL \
          WHERE id=$3",
+        &report_json,
+        &wg_json,
+        report_id
     )
-    .bind(report_json)
-    .bind(wg_json)
-    .bind(report_id)
     .execute(pool)
     .await?;
     Ok(())
@@ -2057,11 +2064,11 @@ async fn finalize_report(
 /// UPDATE eines Reports auf `failed` mit Fehlertext (Python `str(exc)[:500]`).
 async fn mark_report_failed(pool: &PgPool, report_id: i64, err: &str) -> Result<(), sqlx::Error> {
     let truncated: String = err.chars().take(500).collect();
-    sqlx::query(
+    sqlx::query!(
         "UPDATE twitch_stream_ai_reports SET status='failed', finished_at=NOW(), error=$1 WHERE id=$2",
+        &truncated,
+        report_id
     )
-    .bind(truncated)
-    .bind(report_id)
     .execute(pool)
     .await?;
     Ok(())
@@ -2092,12 +2099,12 @@ pub async fn trigger_post_stream_analysis(
     // Session-Lookup, wenn keine ID übergeben (letzte abgeschlossene Session).
     let session_id = match session_id {
         Some(id) => id,
-        None => match sqlx::query_scalar::<_, i64>(
-            "SELECT id FROM twitch_stream_sessions \
+        None => match sqlx::query_scalar!(
+            "SELECT id AS \"id!\" FROM twitch_stream_sessions \
              WHERE streamer_login = $1 AND ended_at IS NOT NULL \
              ORDER BY ended_at DESC LIMIT 1",
+            &streamer
         )
-        .bind(&streamer)
         .fetch_optional(pool)
         .await
         {
@@ -2137,15 +2144,15 @@ pub async fn trigger_post_stream_analysis(
     let mut created_any = false;
     for variant in [REPORT_VARIANT_COMPACT, REPORT_VARIANT_FULL] {
         // Existierenden done/pending-Report überspringen (Idempotenz).
-        let existing = sqlx::query_scalar::<_, i64>(
-            "SELECT id FROM twitch_stream_ai_reports \
+        let existing = sqlx::query_scalar!(
+            "SELECT id AS \"id!\" FROM twitch_stream_ai_reports \
              WHERE session_id = $1 AND streamer_login = $2 \
                AND COALESCE(report_variant, 'compact') = $3 \
                AND status IN ('done', 'pending') LIMIT 1",
+            session_id,
+            &streamer,
+            variant
         )
-        .bind(session_id)
-        .bind(&streamer)
-        .bind(variant)
         .fetch_optional(pool)
         .await
         .ok()
@@ -2207,8 +2214,8 @@ pub async fn trigger_post_stream_analysis(
 pub async fn backfill_post_stream_reports(pool: &PgPool, sessions_per_streamer: i64) {
     let _ = ensure_report_ab_columns(pool).await;
 
-    let streamers: Vec<String> = match sqlx::query_scalar::<_, String>(
-        "SELECT LOWER(t.twitch_login) AS streamer_login \
+    let streamers: Vec<String> = match sqlx::query_scalar!(
+        "SELECT COALESCE(LOWER(t.twitch_login), '') AS \"streamer_login!\" \
          FROM twitch_streamers_partner_state t \
          WHERE t.is_partner_active = 1 \
          ORDER BY t.twitch_login",
@@ -2225,17 +2232,17 @@ pub async fn backfill_post_stream_reports(pool: &PgPool, sessions_per_streamer: 
 
     let mut total = 0u32;
     for streamer in streamers {
-        let session_ids: Vec<i64> = match sqlx::query_scalar::<_, i64>(
-            "SELECT s.id FROM twitch_stream_sessions s \
+        let session_ids: Vec<i64> = match sqlx::query_scalar!(
+            "SELECT s.id AS \"id!\" FROM twitch_stream_sessions s \
              WHERE s.streamer_login = $1 AND s.ended_at IS NOT NULL \
                AND NOT EXISTS ( \
                    SELECT 1 FROM twitch_stream_ai_reports r \
                     WHERE r.session_id = s.id AND r.status = 'done' \
                ) \
              ORDER BY s.ended_at DESC LIMIT $2",
+            &streamer,
+            sessions_per_streamer
         )
-        .bind(&streamer)
-        .bind(sessions_per_streamer)
         .fetch_all(pool)
         .await
         {
@@ -2261,13 +2268,13 @@ pub async fn backfill_post_stream_reports(pool: &PgPool, sessions_per_streamer: 
 /// Session (3s-Pause).
 pub async fn retry_failed_reports(pool: &PgPool) {
     // 1. Stuck-Pending-Cleanup (>10 min in pending → failed).
-    match sqlx::query_scalar::<_, i64>(
+    match sqlx::query_scalar!(
         "UPDATE twitch_stream_ai_reports \
          SET status='failed', \
              error='stuck pending — automatisch nach 10 Minuten abgebrochen', \
              finished_at=NOW() \
          WHERE status='pending' AND started_at < NOW() - INTERVAL '10 minutes' \
-         RETURNING id",
+         RETURNING id AS \"id!\"",
     )
     .fetch_all(pool)
     .await
@@ -2285,8 +2292,8 @@ pub async fn retry_failed_reports(pool: &PgPool) {
     }
 
     // 2. Sessions mit failed Reports (retry_count<3) + aktivem Partner.
-    let sessions: Vec<(String, i64)> = match sqlx::query_as::<_, (String, i64)>(
-        "SELECT DISTINCT r.streamer_login, r.session_id \
+    let sessions: Vec<(String, i64)> = match sqlx::query!(
+        "SELECT DISTINCT r.streamer_login AS \"streamer_login!\", r.session_id AS \"session_id!\" \
          FROM twitch_stream_ai_reports r \
          JOIN twitch_streamers_partner_state p ON LOWER(p.twitch_login) = LOWER(r.streamer_login) \
          WHERE r.status='failed' AND r.retry_count < 3 AND p.is_partner_active = 1 \
@@ -2297,7 +2304,7 @@ pub async fn retry_failed_reports(pool: &PgPool) {
     {
         Ok(rows) => rows
             .into_iter()
-            .map(|(s, id)| (s.trim().to_lowercase(), id))
+            .map(|row| (row.streamer_login.trim().to_lowercase(), row.session_id))
             .collect(),
         Err(e) => {
             tracing::warn!(error = %e, "PostStream Retry: Session-Lookup fehlgeschlagen");
@@ -2316,11 +2323,11 @@ pub async fn retry_failed_reports(pool: &PgPool) {
         ids.dedup();
         ids
     };
-    if let Err(e) = sqlx::query(
+    if let Err(e) = sqlx::query!(
         "UPDATE twitch_stream_ai_reports SET retry_count = retry_count + 1 \
-         WHERE status='failed' AND retry_count < 3 AND session_id = ANY($1)",
+         WHERE status='failed' AND retry_count < 3 AND session_id = ANY($1::bigint[])",
+        &session_ids
     )
-    .bind(&session_ids)
     .execute(pool)
     .await
     {

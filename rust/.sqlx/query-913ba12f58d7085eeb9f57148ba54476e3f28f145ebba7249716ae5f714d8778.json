@@ -1,0 +1,28 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n        SELECT COALESCE(SUM(commission_cents), 0)::bigint AS \"total_provision_cents!\",\n               COALESCE(\n                   SUM(CASE\n                       WHEN created_at >= $1 AND status IN ('pending', 'transferred')\n                       THEN commission_cents ELSE 0\n                   END),\n                   0\n               )::bigint AS \"this_month_provision_cents!\"\n        FROM affiliate_commissions\n        WHERE status IN ('pending', 'transferred')\n        ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "total_provision_cents!",
+        "type_info": "Int8"
+      },
+      {
+        "ordinal": 1,
+        "name": "this_month_provision_cents!",
+        "type_info": "Int8"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Text"
+      ]
+    },
+    "nullable": [
+      null,
+      null
+    ]
+  },
+  "hash": "913ba12f58d7085eeb9f57148ba54476e3f28f145ebba7249716ae5f714d8778"
+}

@@ -85,7 +85,11 @@ impl ValidationIssue {
         Self {
             field: field.to_string(),
             message: message.into(),
-            code: if code.is_empty() { None } else { Some(code.to_string()) },
+            code: if code.is_empty() {
+                None
+            } else {
+                Some(code.to_string())
+            },
         }
     }
 
@@ -138,7 +142,12 @@ pub fn parse_utc_datetime(raw: Option<&str>) -> Option<DateTime<Utc>> {
         return Some(dt.with_timezone(&Utc));
     }
     // Naive Varianten (kein Offset) → als UTC interpretieren.
-    for fmt in ["%Y-%m-%dT%H:%M:%S", "%Y-%m-%dT%H:%M", "%Y-%m-%d %H:%M:%S", "%Y-%m-%d %H:%M"] {
+    for fmt in [
+        "%Y-%m-%dT%H:%M:%S",
+        "%Y-%m-%dT%H:%M",
+        "%Y-%m-%d %H:%M:%S",
+        "%Y-%m-%d %H:%M",
+    ] {
         if let Ok(ndt) = NaiveDateTime::parse_from_str(text, fmt) {
             return Some(DateTime::<Utc>::from_naive_utc_and_offset(ndt, Utc));
         }
@@ -158,7 +167,10 @@ pub fn to_iso_utc(raw: Option<&str>) -> Option<String> {
 /// Coerce eines JSON-Werts zu bool (Python `_coerce_bool`).
 fn coerce_bool(value: &Value) -> bool {
     match value {
-        Value::String(s) => !matches!(s.trim().to_lowercase().as_str(), "" | "0" | "false" | "off" | "no"),
+        Value::String(s) => !matches!(
+            s.trim().to_lowercase().as_str(),
+            "" | "0" | "false" | "off" | "no"
+        ),
         Value::Bool(b) => *b,
         Value::Number(n) => n.as_f64().map(|f| f != 0.0).unwrap_or(true),
         Value::Null => false,
@@ -180,14 +192,33 @@ pub fn normalize_global_promo_mode_config(raw: &Value) -> PromoModeConfig {
         None => return config,
     };
 
-    let raw_mode = obj.get("mode").and_then(Value::as_str).unwrap_or("").trim().to_lowercase();
-    config.mode = if is_allowed_mode(&raw_mode) { raw_mode } else { PROMO_MODE_STANDARD.to_string() };
-    config.custom_message = obj.get("custom_message").and_then(Value::as_str).unwrap_or("").trim().to_string();
+    let raw_mode = obj
+        .get("mode")
+        .and_then(Value::as_str)
+        .unwrap_or("")
+        .trim()
+        .to_lowercase();
+    config.mode = if is_allowed_mode(&raw_mode) {
+        raw_mode
+    } else {
+        PROMO_MODE_STANDARD.to_string()
+    };
+    config.custom_message = obj
+        .get("custom_message")
+        .and_then(Value::as_str)
+        .unwrap_or("")
+        .trim()
+        .to_string();
     config.starts_at = to_iso_utc(obj.get("starts_at").and_then(value_as_str).as_deref());
     config.ends_at = to_iso_utc(obj.get("ends_at").and_then(value_as_str).as_deref());
     config.is_enabled = obj.get("is_enabled").map(coerce_bool).unwrap_or(false);
     config.updated_at = to_iso_utc(obj.get("updated_at").and_then(value_as_str).as_deref());
-    config.updated_by = obj.get("updated_by").and_then(Value::as_str).unwrap_or("").trim().to_string();
+    config.updated_by = obj
+        .get("updated_by")
+        .and_then(Value::as_str)
+        .unwrap_or("")
+        .trim()
+        .to_string();
     config
 }
 
@@ -259,11 +290,24 @@ fn validate_template_placeholders(
     let mut used = HashSet::new();
     let roots = match parse_placeholder_roots(text) {
         Ok(r) => r,
-        Err(()) => return (vec![ValidationIssue::new(field, invalid_message, "invalid_placeholder")], HashSet::new()),
+        Err(()) => {
+            return (
+                vec![ValidationIssue::new(
+                    field,
+                    invalid_message,
+                    "invalid_placeholder",
+                )],
+                HashSet::new(),
+            )
+        }
     };
     for root in roots {
         if root.is_empty() {
-            issues.push(ValidationIssue::new(field, invalid_message, "invalid_placeholder"));
+            issues.push(ValidationIssue::new(
+                field,
+                invalid_message,
+                "invalid_placeholder",
+            ));
             continue;
         }
         used.insert(root.clone());
@@ -282,7 +326,11 @@ fn validate_template_placeholders(
 pub fn validate_custom_promo_message(message: &str) -> Vec<ValidationIssue> {
     let text = message.trim();
     if text.is_empty() {
-        return vec![ValidationIssue::new("custom_message", "Bitte einen Event-Text hinterlegen.", "empty")];
+        return vec![ValidationIssue::new(
+            "custom_message",
+            "Bitte einen Event-Text hinterlegen.",
+            "empty",
+        )];
     }
     let (issues, _used) = validate_template_placeholders(
         text,
@@ -345,13 +393,20 @@ pub fn validate_global_promo_mode_config(raw: &Value) -> (PromoModeConfig, Vec<V
         });
     }
 
-    let starts_raw = raw.as_object().and_then(|o| o.get("starts_at")).and_then(value_as_str);
-    let ends_raw = raw.as_object().and_then(|o| o.get("ends_at")).and_then(value_as_str);
+    let starts_raw = raw
+        .as_object()
+        .and_then(|o| o.get("starts_at"))
+        .and_then(value_as_str);
+    let ends_raw = raw
+        .as_object()
+        .and_then(|o| o.get("ends_at"))
+        .and_then(value_as_str);
     if let Some(s) = starts_raw.as_deref().filter(|s| !s.is_empty()) {
         if parse_utc_datetime(Some(s)).is_none() {
             issues.push(ValidationIssue {
                 field: "starts_at".to_string(),
-                message: "Startzeit ist ungültig. Bitte UTC-ISO oder datetime-local senden.".to_string(),
+                message: "Startzeit ist ungültig. Bitte UTC-ISO oder datetime-local senden."
+                    .to_string(),
                 code: None,
             });
         }
@@ -360,7 +415,8 @@ pub fn validate_global_promo_mode_config(raw: &Value) -> (PromoModeConfig, Vec<V
         if parse_utc_datetime(Some(e)).is_none() {
             issues.push(ValidationIssue {
                 field: "ends_at".to_string(),
-                message: "Endzeit ist ungültig. Bitte UTC-ISO oder datetime-local senden.".to_string(),
+                message: "Endzeit ist ungültig. Bitte UTC-ISO oder datetime-local senden."
+                    .to_string(),
                 code: None,
             });
         }
@@ -405,7 +461,12 @@ pub fn evaluate_global_promo_mode(raw: &Value, now: Option<DateTime<Utc>>) -> Pr
     } else if !validate_custom_promo_message(&config.custom_message).is_empty() {
         ("invalid", "invalid_message", false, None)
     } else {
-        ("active", "active_custom_event", true, Some(config.custom_message.trim().to_string()))
+        (
+            "active",
+            "active_custom_event",
+            true,
+            Some(config.custom_message.trim().to_string()),
+        )
     };
 
     PromoModeEvaluation {
@@ -424,7 +485,7 @@ pub fn evaluate_global_promo_mode(raw: &Value, now: Option<DateTime<Utc>>) -> Pr
 
 /// Legt die Tabelle idempotent an (Python `ensure_global_promo_mode_storage`).
 pub async fn ensure_global_promo_mode_storage(pool: &PgPool) -> Result<(), sqlx::Error> {
-    sqlx::query(
+    sqlx::query!(
         r#"
         CREATE TABLE IF NOT EXISTS twitch_global_promo_modes (
             config_key TEXT PRIMARY KEY,
@@ -440,7 +501,7 @@ pub async fn ensure_global_promo_mode_storage(pool: &PgPool) -> Result<(), sqlx:
     )
     .execute(pool)
     .await?;
-    sqlx::query(
+    sqlx::query!(
         "CREATE INDEX IF NOT EXISTS idx_twitch_global_promo_modes_updated_at \
          ON twitch_global_promo_modes(updated_at)",
     )
@@ -452,26 +513,25 @@ pub async fn ensure_global_promo_mode_storage(pool: &PgPool) -> Result<(), sqlx:
 /// Lädt den Singleton-Datensatz, normalisiert (Python `load_global_promo_mode`).
 pub async fn load_global_promo_mode(pool: &PgPool) -> Result<PromoModeConfig, sqlx::Error> {
     ensure_global_promo_mode_storage(pool).await?;
-    let row: Option<(String, Option<String>, Option<String>, Option<String>, i32, Option<String>, Option<String>)> =
-        sqlx::query_as(
-            "SELECT mode, custom_message, starts_at, ends_at, is_enabled, updated_at, updated_by \
-             FROM twitch_global_promo_modes WHERE config_key = $1 LIMIT 1",
-        )
-        .bind(PROMO_MODE_SINGLETON_KEY)
-        .fetch_optional(pool)
-        .await?;
+    let row = sqlx::query!(
+        "SELECT mode AS \"mode!\", custom_message, starts_at, ends_at, is_enabled AS \"is_enabled!\", updated_at, updated_by \
+         FROM twitch_global_promo_modes WHERE config_key = $1 LIMIT 1",
+        PROMO_MODE_SINGLETON_KEY
+    )
+    .fetch_optional(pool)
+    .await?;
 
-    let Some((mode, custom_message, starts_at, ends_at, is_enabled, updated_at, updated_by)) = row else {
+    let Some(row) = row else {
         return Ok(PromoModeConfig::default_config());
     };
     let raw = json!({
-        "mode": mode,
-        "custom_message": custom_message,
-        "starts_at": starts_at,
-        "ends_at": ends_at,
-        "is_enabled": is_enabled,
-        "updated_at": updated_at,
-        "updated_by": updated_by,
+        "mode": row.mode,
+        "custom_message": row.custom_message,
+        "starts_at": row.starts_at,
+        "ends_at": row.ends_at,
+        "is_enabled": row.is_enabled,
+        "updated_at": row.updated_at,
+        "updated_by": row.updated_by,
     });
     Ok(normalize_global_promo_mode_config(&raw))
 }
@@ -519,7 +579,7 @@ pub async fn save_global_promo_mode(
     } else {
         Some(normalized.custom_message.as_str())
     };
-    sqlx::query(
+    sqlx::query!(
         r#"
         INSERT INTO twitch_global_promo_modes (
             config_key, mode, custom_message, starts_at, ends_at, is_enabled, updated_at, updated_by
@@ -533,15 +593,19 @@ pub async fn save_global_promo_mode(
             updated_at = EXCLUDED.updated_at,
             updated_by = EXCLUDED.updated_by
         "#,
+        PROMO_MODE_SINGLETON_KEY,
+        &normalized.mode,
+        custom_message,
+        normalized.starts_at.as_deref(),
+        normalized.ends_at.as_deref(),
+        if normalized.is_enabled { 1_i32 } else { 0_i32 },
+        &updated_at,
+        if updated_by.is_empty() {
+            None
+        } else {
+            Some(updated_by)
+        }
     )
-    .bind(PROMO_MODE_SINGLETON_KEY)
-    .bind(&normalized.mode)
-    .bind(custom_message)
-    .bind(&normalized.starts_at)
-    .bind(&normalized.ends_at)
-    .bind(if normalized.is_enabled { 1_i32 } else { 0_i32 })
-    .bind(&updated_at)
-    .bind(if updated_by.is_empty() { None } else { Some(updated_by) })
     .execute(pool)
     .await?;
 
@@ -570,7 +634,9 @@ mod tests {
 
     #[test]
     fn normalize_unbekannter_modus_wird_standard() {
-        let c = normalize_global_promo_mode_config(&json!({ "mode": "BOGUS", "custom_message": "  hi  " }));
+        let c = normalize_global_promo_mode_config(
+            &json!({ "mode": "BOGUS", "custom_message": "  hi  " }),
+        );
         assert_eq!(c.mode, "standard");
         assert_eq!(c.custom_message, "hi");
     }
@@ -591,7 +657,10 @@ mod tests {
         assert!(parse_utc_datetime(Some("quatsch")).is_none());
         assert!(parse_utc_datetime(None).is_none());
         // Round-trip auf Sekunden-ISO.
-        assert_eq!(to_iso_utc(Some("2026-06-15T12:00:00Z")).as_deref(), Some("2026-06-15T12:00:00+00:00"));
+        assert_eq!(
+            to_iso_utc(Some("2026-06-15T12:00:00Z")).as_deref(),
+            Some("2026-06-15T12:00:00+00:00")
+        );
     }
 
     #[test]
@@ -606,7 +675,9 @@ mod tests {
     #[test]
     fn validate_streamer_braucht_invite() {
         let issues = validate_streamer_promo_message("Schau mal vorbei");
-        assert!(issues.iter().any(|i| i.code.as_deref() == Some("missing_invite")));
+        assert!(issues
+            .iter()
+            .any(|i| i.code.as_deref() == Some("missing_invite")));
         assert!(validate_streamer_promo_message("Schau bei {invite}").is_empty());
         assert!(validate_streamer_promo_message("").is_empty()); // leer = ok (kein Override)
     }
@@ -621,7 +692,9 @@ mod tests {
 
     #[test]
     fn evaluate_custom_event_aktiv() {
-        let now = DateTime::parse_from_rfc3339("2026-06-15T12:00:00Z").unwrap().with_timezone(&Utc);
+        let now = DateTime::parse_from_rfc3339("2026-06-15T12:00:00Z")
+            .unwrap()
+            .with_timezone(&Utc);
         let e = evaluate_global_promo_mode(
             &json!({ "mode": "custom_event", "is_enabled": true, "custom_message": "Event bei {invite}!" }),
             Some(now),
@@ -633,18 +706,32 @@ mod tests {
 
     #[test]
     fn evaluate_custom_event_disabled_und_fenster() {
-        let now = DateTime::parse_from_rfc3339("2026-06-15T12:00:00Z").unwrap().with_timezone(&Utc);
+        let now = DateTime::parse_from_rfc3339("2026-06-15T12:00:00Z")
+            .unwrap()
+            .with_timezone(&Utc);
         // disabled
-        let e = evaluate_global_promo_mode(&json!({ "mode": "custom_event", "is_enabled": false, "custom_message": "x bei {invite}" }), Some(now));
+        let e = evaluate_global_promo_mode(
+            &json!({ "mode": "custom_event", "is_enabled": false, "custom_message": "x bei {invite}" }),
+            Some(now),
+        );
         assert_eq!(e.status, "disabled");
         // scheduled (Start in der Zukunft)
-        let e = evaluate_global_promo_mode(&json!({ "mode": "custom_event", "is_enabled": true, "custom_message": "x bei {invite}", "starts_at": "2026-06-16T00:00:00Z" }), Some(now));
+        let e = evaluate_global_promo_mode(
+            &json!({ "mode": "custom_event", "is_enabled": true, "custom_message": "x bei {invite}", "starts_at": "2026-06-16T00:00:00Z" }),
+            Some(now),
+        );
         assert_eq!(e.status, "scheduled");
         // expired (Ende in der Vergangenheit)
-        let e = evaluate_global_promo_mode(&json!({ "mode": "custom_event", "is_enabled": true, "custom_message": "x bei {invite}", "ends_at": "2026-06-14T00:00:00Z" }), Some(now));
+        let e = evaluate_global_promo_mode(
+            &json!({ "mode": "custom_event", "is_enabled": true, "custom_message": "x bei {invite}", "ends_at": "2026-06-14T00:00:00Z" }),
+            Some(now),
+        );
         assert_eq!(e.status, "expired");
         // invalid (Platzhalter nicht erlaubt)
-        let e = evaluate_global_promo_mode(&json!({ "mode": "custom_event", "is_enabled": true, "custom_message": "x bei {streamer}" }), Some(now));
+        let e = evaluate_global_promo_mode(
+            &json!({ "mode": "custom_event", "is_enabled": true, "custom_message": "x bei {streamer}" }),
+            Some(now),
+        );
         assert_eq!(e.status, "invalid");
     }
 

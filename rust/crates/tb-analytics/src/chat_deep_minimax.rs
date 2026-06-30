@@ -29,21 +29,23 @@ pub async fn fetch_session_messages(
     session_id_raw: &str,
 ) -> Result<Vec<String>, sqlx::Error> {
     let bots: Vec<String> = KNOWN_CHAT_BOTS.iter().map(|s| s.to_string()).collect();
-    let rows: Vec<(String,)> = sqlx::query_as(
-        "SELECT m.content \
-           FROM twitch_chat_messages m \
-          WHERE m.session_id = $1::bigint \
-            AND m.content IS NOT NULL \
-            AND m.content != '' \
-            AND (m.chatter_login IS NULL OR m.chatter_login = '' OR LOWER(m.chatter_login) <> ALL($2)) \
-          ORDER BY m.message_ts \
-          LIMIT 1000",
+    let rows = sqlx::query_scalar!(
+        r#"
+        SELECT m.content AS "content!"
+        FROM twitch_chat_messages m
+        WHERE m.session_id = $1::text::bigint
+          AND m.content IS NOT NULL
+          AND m.content != ''
+          AND (m.chatter_login IS NULL OR m.chatter_login = '' OR LOWER(m.chatter_login) <> ALL($2))
+        ORDER BY m.message_ts
+        LIMIT 1000
+        "#,
+        session_id_raw,
+        &bots
     )
-    .bind(session_id_raw)
-    .bind(&bots)
     .fetch_all(pool)
     .await?;
-    Ok(rows.into_iter().map(|(c,)| c).collect())
+    Ok(rows)
 }
 
 /// Statischer Prompt-Kopf (1:1 Python, escaped `{{`/`}}` → literale Klammern).
@@ -115,19 +117,38 @@ mod tests {
 
     #[test]
     fn extract_json_object_faelle() {
-        assert_eq!(extract_json_object("vortext {\"a\": 1} nachtext"), "{\"a\": 1}");
+        assert_eq!(
+            extract_json_object("vortext {\"a\": 1} nachtext"),
+            "{\"a\": 1}"
+        );
         assert_eq!(extract_json_object("kein json"), "kein json");
         assert_eq!(extract_json_object("}{"), ""); // end < start
     }
 
     async fn make_pool(schema: &str) -> Option<PgPool> {
         let dsn = std::env::var("TB_TEST_DATABASE_URL").ok()?;
-        let admin = PgPoolOptions::new().max_connections(1).connect(&dsn).await.unwrap();
-        sqlx::query(&format!("DROP SCHEMA IF EXISTS {schema} CASCADE")).execute(&admin).await.unwrap();
-        sqlx::query(&format!("CREATE SCHEMA {schema}")).execute(&admin).await.unwrap();
+        let admin = PgPoolOptions::new()
+            .max_connections(1)
+            .connect(&dsn)
+            .await
+            .unwrap();
+        sqlx::query(&format!("DROP SCHEMA IF EXISTS {schema} CASCADE"))
+            .execute(&admin)
+            .await
+            .unwrap();
+        sqlx::query(&format!("CREATE SCHEMA {schema}"))
+            .execute(&admin)
+            .await
+            .unwrap();
         admin.close().await;
-        let opts = PgConnectOptions::from_str(&dsn).unwrap().options([("search_path", schema)]);
-        let pool = PgPoolOptions::new().max_connections(2).connect_with(opts).await.unwrap();
+        let opts = PgConnectOptions::from_str(&dsn)
+            .unwrap()
+            .options([("search_path", schema)]);
+        let pool = PgPoolOptions::new()
+            .max_connections(2)
+            .connect_with(opts)
+            .await
+            .unwrap();
         sqlx::query("CREATE TABLE twitch_chat_messages (id BIGSERIAL PRIMARY KEY, session_id BIGINT, chatter_login TEXT, content TEXT, message_ts TIMESTAMPTZ)")
             .execute(&pool).await.unwrap();
         Some(pool)
@@ -135,7 +156,9 @@ mod tests {
 
     #[tokio::test]
     async fn fetch_session_messages_filtert() {
-        let Some(pool) = make_pool("t_deep_fetch").await else { return };
+        let Some(pool) = make_pool("t_deep_fetch").await else {
+            return;
+        };
         sqlx::query(
             "INSERT INTO twitch_chat_messages (session_id, chatter_login, content, message_ts) VALUES \
             (5, 'alice', 'erste',  NOW()-INTERVAL '3 min'), \

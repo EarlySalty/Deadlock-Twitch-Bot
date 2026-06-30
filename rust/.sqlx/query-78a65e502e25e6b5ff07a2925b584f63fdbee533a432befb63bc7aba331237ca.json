@@ -1,0 +1,16 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n        INSERT INTO twitch_streamer_identities (\n            twitch_user_id, twitch_login, is_on_discord, created_at, updated_at\n        )\n        VALUES ($1, LOWER($2), $3, NOW(), NOW())\n        ON CONFLICT (twitch_user_id) DO UPDATE SET\n            twitch_login = EXCLUDED.twitch_login,\n            is_on_discord = EXCLUDED.is_on_discord,\n            updated_at = NOW()\n        ",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Text",
+        "Text",
+        "Int4"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "78a65e502e25e6b5ff07a2925b584f63fdbee533a432befb63bc7aba331237ca"
+}

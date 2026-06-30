@@ -1,0 +1,23 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT manual_plan_id FROM streamer_plans\n           WHERE TRIM(COALESCE(twitch_user_id,'')) = $1\n              OR LOWER(COALESCE(twitch_login,'')) = LOWER($2)\n           LIMIT 1",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "manual_plan_id",
+        "type_info": "Text"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Text",
+        "Text"
+      ]
+    },
+    "nullable": [
+      true
+    ]
+  },
+  "hash": "e71df1fcec3ebdfa65d25045c792dd75ab9ebcf33393f36f17bb521289501a81"
+}

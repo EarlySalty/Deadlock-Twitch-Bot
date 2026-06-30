@@ -1,0 +1,15 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "UPDATE twitch_stream_ai_reports SET status='failed', finished_at=NOW(), error=$1 WHERE id=$2",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Text",
+        "Int8"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "a34a41504e445b76b86531a98dec8199350412bc45b5c816194f410c03899c66"
+}

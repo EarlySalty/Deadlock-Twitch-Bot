@@ -34,8 +34,19 @@ const KNOWN_CHAT_BOTS: &[&str] = &[
 
 /// topicBreakdown-Schlüssel in fester Reihenfolge (Python-Dict-Init-Reihenfolge).
 const TOPIC_BREAKDOWN_KEYS: &[&str] = &[
-    "heroes", "builds", "ranked", "meta", "gameplay", "backseat", "commands", "social",
-    "smalltalk", "greeting", "community", "reaction", "other",
+    "heroes",
+    "builds",
+    "ranked",
+    "meta",
+    "gameplay",
+    "backseat",
+    "commands",
+    "social",
+    "smalltalk",
+    "greeting",
+    "community",
+    "reaction",
+    "other",
 ];
 
 fn round1(value: f64) -> f64 {
@@ -51,7 +62,10 @@ static WORD_RE: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"[a-z0-9äöüß_
 
 /// Tokenisiert kleingeschriebenen Chat-Text (Python `_tokenize_words`).
 pub fn tokenize_words(content_lower: &str) -> Vec<&str> {
-    WORD_RE.find_iter(content_lower).map(|m| m.as_str()).collect()
+    WORD_RE
+        .find_iter(content_lower)
+        .map(|m| m.as_str())
+        .collect()
 }
 
 /// Erwähnte Hero-Keys, dedupliziert, in ALIAS_TO_HERO-Reihenfolge (Python `_detect_heroes`).
@@ -81,7 +95,9 @@ fn any_contains(haystacks: &[&str], needle: &str) -> bool {
 }
 
 fn is_alpha_word(token: &str) -> bool {
-    token.chars().any(|ch| ch.is_ascii_lowercase() || matches!(ch, 'ä' | 'ö' | 'ü' | 'ß'))
+    token
+        .chars()
+        .any(|ch| ch.is_ascii_lowercase() || matches!(ch, 'ä' | 'ö' | 'ü' | 'ß'))
 }
 
 fn count_alpha_words(words: &[&str]) -> usize {
@@ -210,20 +226,29 @@ pub async fn load_chat_content_analysis_payload(
     let cutoff: DateTime<Utc> = Utc::now() - Duration::days(days);
     let bots: Vec<String> = KNOWN_CHAT_BOTS.iter().map(|s| s.to_string()).collect();
 
-    let rows: Vec<(DateTime<Utc>, String, Option<String>)> = sqlx::query_as(
-        "SELECT m.message_ts, m.content, m.chatter_login \
-           FROM twitch_chat_messages m \
-           JOIN twitch_stream_sessions s ON s.id = m.session_id \
-          WHERE LOWER(s.streamer_login) = $1 AND m.message_ts >= $2 \
-            AND m.content IS NOT NULL AND m.content != '' \
-            AND (m.chatter_login IS NULL OR m.chatter_login = '' OR LOWER(m.chatter_login) <> ALL($3)) \
-          ORDER BY m.message_ts",
+    let rows: Vec<(DateTime<Utc>, String, Option<String>)> = sqlx::query!(
+        r#"
+        SELECT m.message_ts AS "message_ts!",
+               m.content AS "content!",
+               m.chatter_login
+        FROM twitch_chat_messages m
+        JOIN twitch_stream_sessions s ON s.id = m.session_id
+        WHERE LOWER(s.streamer_login) = $1
+          AND m.message_ts >= $2
+          AND m.content IS NOT NULL
+          AND m.content != ''
+          AND (m.chatter_login IS NULL OR m.chatter_login = '' OR LOWER(m.chatter_login) <> ALL($3))
+        ORDER BY m.message_ts
+        "#,
+        streamer,
+        cutoff,
+        &bots
     )
-    .bind(streamer)
-    .bind(cutoff)
-    .bind(&bots)
     .fetch_all(pool)
-    .await?;
+    .await?
+    .into_iter()
+    .map(|row| (row.message_ts, row.content, row.chatter_login))
+    .collect();
 
     let mut hero_counts: HashMap<&'static str, i64> = HashMap::new();
     let mut hero_order: Vec<&'static str> = Vec::new(); // First-Seen (Query ist ORDER BY ts → deterministisch)
@@ -315,7 +340,12 @@ pub async fn load_chat_content_analysis_payload(
 
         let score = score_sentiment(&content_lower);
         let bucket_min = ts.minute() - (ts.minute() % 15);
-        let bucket_key = format!("{}T{:02}:{:02}", ts.format("%Y-%m-%d"), ts.hour(), bucket_min);
+        let bucket_key = format!(
+            "{}T{:02}:{:02}",
+            ts.format("%Y-%m-%d"),
+            ts.hour(),
+            bucket_min
+        );
         let entry = sentiment_buckets.entry(bucket_key).or_insert((0, 0, 0));
         if score > 0 {
             entry.0 += 1;
@@ -342,7 +372,12 @@ pub async fn load_chat_content_analysis_payload(
             json!({ "hero": h, "count": count, "pct": pct })
         })
         .collect();
-    hero_mentions.sort_by(|a, b| b["count"].as_i64().unwrap_or(0).cmp(&a["count"].as_i64().unwrap_or(0)));
+    hero_mentions.sort_by(|a, b| {
+        b["count"]
+            .as_i64()
+            .unwrap_or(0)
+            .cmp(&a["count"].as_i64().unwrap_or(0))
+    });
     hero_mentions.truncate(25);
 
     // sentimentTimeline: nach Bucket-Key sortiert.
@@ -363,7 +398,11 @@ pub async fn load_chat_content_analysis_payload(
     } else {
         0.0
     };
-    let overall_score_val = if scored_total > 0 { json!(overall_score_f) } else { json!(0) };
+    let overall_score_val = if scored_total > 0 {
+        json!(overall_score_f)
+    } else {
+        json!(0)
+    };
 
     let trend = if sentiment_timeline.len() >= 4 {
         let mid = sentiment_timeline.len() / 2;
@@ -371,7 +410,11 @@ pub async fn load_chat_content_analysis_payload(
             if slice.is_empty() {
                 0.0
             } else {
-                slice.iter().map(|s| s["score"].as_f64().unwrap_or(0.0)).sum::<f64>() / slice.len() as f64
+                slice
+                    .iter()
+                    .map(|s| s["score"].as_f64().unwrap_or(0.0))
+                    .sum::<f64>()
+                    / slice.len() as f64
             }
         };
         let first_avg = avg(&sentiment_timeline[..mid]);
@@ -443,14 +486,23 @@ mod tests {
 
     #[test]
     fn tokenize() {
-        assert_eq!(tokenize_words("hey! <3 lol c++"), vec!["hey", "3", "lol", "c++"]);
-        assert_eq!(tokenize_words("schön übel ärgerlich"), vec!["schön", "übel", "ärgerlich"]);
+        assert_eq!(
+            tokenize_words("hey! <3 lol c++"),
+            vec!["hey", "3", "lol", "c++"]
+        );
+        assert_eq!(
+            tokenize_words("schön übel ärgerlich"),
+            vec!["schön", "übel", "ärgerlich"]
+        );
     }
 
     #[test]
     fn heroes_und_topics() {
         // "talon" → grey_talon (steht in ALIAS-Reihenfolge vor haze).
-        assert_eq!(detect_heroes("nice talon und haze play"), vec!["grey_talon", "haze"]);
+        assert_eq!(
+            detect_heroes("nice talon und haze play"),
+            vec!["grey_talon", "haze"]
+        );
         assert_eq!(detect_heroes("kein hero hier"), Vec::<&str>::new());
         assert_eq!(detect_topics("the meta is broken, pls nerf"), vec!["meta"]);
         assert_eq!(detect_topics("guter build mit item"), vec!["builds"]);
@@ -474,11 +526,20 @@ mod tests {
         assert!(is_reaction_message("xddd", &tokenize_words("xddd"))); // startswith xd
         assert!(is_command_message("!uptime"));
         assert!(!is_command_message("kein command"));
-        assert!(is_greeting_message("moin zusammen", &tokenize_words("moin zusammen")));
+        assert!(is_greeting_message(
+            "moin zusammen",
+            &tokenize_words("moin zusammen")
+        ));
         assert!(is_social_message("schau auf meinem discord"));
         assert!(is_smalltalk_message("ja", &tokenize_words("ja")));
-        assert!(looks_like_community_message("warum macht ihr das alle", &tokenize_words("warum macht ihr das alle")));
-        assert!(looks_like_community_message("was geht?", &tokenize_words("was geht?")));
+        assert!(looks_like_community_message(
+            "warum macht ihr das alle",
+            &tokenize_words("warum macht ihr das alle")
+        ));
+        assert!(looks_like_community_message(
+            "was geht?",
+            &tokenize_words("was geht?")
+        ));
     }
 
     use sqlx::postgres::{PgConnectOptions, PgPoolOptions};
@@ -486,12 +547,28 @@ mod tests {
 
     async fn make_pool(schema: &str) -> Option<PgPool> {
         let dsn = std::env::var("TB_TEST_DATABASE_URL").ok()?;
-        let admin = PgPoolOptions::new().max_connections(1).connect(&dsn).await.unwrap();
-        sqlx::query(&format!("DROP SCHEMA IF EXISTS {schema} CASCADE")).execute(&admin).await.unwrap();
-        sqlx::query(&format!("CREATE SCHEMA {schema}")).execute(&admin).await.unwrap();
+        let admin = PgPoolOptions::new()
+            .max_connections(1)
+            .connect(&dsn)
+            .await
+            .unwrap();
+        sqlx::query(&format!("DROP SCHEMA IF EXISTS {schema} CASCADE"))
+            .execute(&admin)
+            .await
+            .unwrap();
+        sqlx::query(&format!("CREATE SCHEMA {schema}"))
+            .execute(&admin)
+            .await
+            .unwrap();
         admin.close().await;
-        let opts = PgConnectOptions::from_str(&dsn).unwrap().options([("search_path", schema)]);
-        let pool = PgPoolOptions::new().max_connections(2).connect_with(opts).await.unwrap();
+        let opts = PgConnectOptions::from_str(&dsn)
+            .unwrap()
+            .options([("search_path", schema)]);
+        let pool = PgPoolOptions::new()
+            .max_connections(2)
+            .connect_with(opts)
+            .await
+            .unwrap();
         sqlx::query("CREATE TABLE twitch_stream_sessions (id BIGSERIAL PRIMARY KEY, streamer_login TEXT, started_at TIMESTAMPTZ)").execute(&pool).await.unwrap();
         sqlx::query("CREATE TABLE twitch_session_chatters (session_id BIGINT, streamer_login TEXT, chatter_login TEXT, messages INTEGER DEFAULT 0)").execute(&pool).await.unwrap();
         sqlx::query("CREATE TABLE twitch_chat_messages (id BIGSERIAL PRIMARY KEY, session_id BIGINT, streamer_login TEXT, chatter_login TEXT, content TEXT, message_ts TIMESTAMPTZ)").execute(&pool).await.unwrap();
@@ -501,22 +578,31 @@ mod tests {
 
     #[tokio::test]
     async fn loader_aggregiert() {
-        let Some(pool) = make_pool("t_cca").await else { return };
+        let Some(pool) = make_pool("t_cca").await else {
+            return;
+        };
         sqlx::query("INSERT INTO twitch_stream_sessions (id, streamer_login, started_at) VALUES (1,'nani',NOW()-INTERVAL '1 day')").execute(&pool).await.unwrap();
         let msgs = [
-            "haze ist so stark gg",      // hero=haze, sentiment+ (stark/gg)
-            "nice talon play",           // hero=grey_talon, sentiment+ (nice)
+            "haze ist so stark gg",       // hero=haze, sentiment+ (stark/gg)
+            "nice talon play",            // hero=grey_talon, sentiment+ (nice)
             "you should just buy spirit", // backseat (you should/just buy) + topic builds(spirit)
-            "moin zusammen",             // greeting
-            "trash game so boring",      // sentiment- (trash + phrase 'so boring')
+            "moin zusammen",              // greeting
+            "trash game so boring",       // sentiment- (trash + phrase 'so boring')
         ];
         for m in msgs {
             sqlx::query("INSERT INTO twitch_chat_messages (session_id, streamer_login, chatter_login, content, message_ts) VALUES (1,'nani','viewer',$1,NOW()-INTERVAL '2 hours')")
                 .bind(m).execute(&pool).await.unwrap();
         }
-        let v = load_chat_content_analysis_payload(&pool, "nani", 30).await.unwrap();
+        let v = load_chat_content_analysis_payload(&pool, "nani", 30)
+            .await
+            .unwrap();
         // Hero-Mentions: haze + grey_talon je 1.
-        let heroes: Vec<&str> = v["heroMentions"].as_array().unwrap().iter().map(|h| h["hero"].as_str().unwrap()).collect();
+        let heroes: Vec<&str> = v["heroMentions"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|h| h["hero"].as_str().unwrap())
+            .collect();
         assert!(heroes.contains(&"haze") && heroes.contains(&"grey_talon"));
         // Backseat erkannt (1×).
         assert_eq!(v["backseat"]["count"], 1);

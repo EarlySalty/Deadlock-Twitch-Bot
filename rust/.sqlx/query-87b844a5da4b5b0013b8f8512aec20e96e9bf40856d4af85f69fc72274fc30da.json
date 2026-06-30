@@ -1,0 +1,22 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n        SELECT twitch_login\n        FROM twitch_streamers_partner_state\n        WHERE discord_user_id = $1\n        ORDER BY\n            CASE WHEN created_at IS NULL THEN 1 ELSE 0 END,\n            created_at DESC\n        LIMIT 1\n        ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "twitch_login",
+        "type_info": "Text"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Text"
+      ]
+    },
+    "nullable": [
+      true
+    ]
+  },
+  "hash": "87b844a5da4b5b0013b8f8512aec20e96e9bf40856d4af85f69fc72274fc30da"
+}

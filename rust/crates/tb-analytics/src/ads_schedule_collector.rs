@@ -13,9 +13,35 @@
 //! Normalisierung (`tb_transport_twitch::streams::normalize_ad_time`) wandelt
 //! Epochs zu ISO, teilt Millisekunden durch 1000 und verwirft `ts <= 0`.
 
+use chrono::{DateTime, Utc};
 use sqlx::PgPool;
 use tb_transport_twitch::streams::normalize_ad_time;
 use tb_transport_twitch::{AdSchedule, HelixClient, HelixError};
+
+fn int4_value(value: i64, field: &str) -> Result<i32, CollectError> {
+    i32::try_from(value).map_err(|_| {
+        CollectError::Db(sqlx::Error::InvalidArgument(format!(
+            "{field} out of int4 range: {value}"
+        )))
+    })
+}
+
+fn parse_normalized_ad_time(
+    value: Option<String>,
+    field: &str,
+) -> Result<Option<DateTime<Utc>>, CollectError> {
+    value
+        .map(|raw| {
+            DateTime::parse_from_rfc3339(&raw)
+                .map(|dt| dt.with_timezone(&Utc))
+                .map_err(|e| {
+                    CollectError::Db(sqlx::Error::InvalidArgument(format!(
+                        "invalid {field}: {e}"
+                    )))
+                })
+        })
+        .transpose()
+}
 
 /// Holt den Ad-Schedule via Helix und schreibt einen Snapshot. `Ok(false)` =
 /// Helix lieferte kein `data[0]` (kein Schedule) → nichts geschrieben (Parität
@@ -49,28 +75,41 @@ pub async fn write_ads_schedule_snapshot(
     login: &str,
     schedule: &AdSchedule,
 ) -> Result<(), CollectError> {
-    let next_ad_at = schedule.next_ad_at.as_deref().and_then(normalize_ad_time);
-    let last_ad_at = schedule.last_ad_at.as_deref().and_then(normalize_ad_time);
-    let snooze_refresh_at = schedule
-        .snooze_refresh_at
-        .as_deref()
-        .and_then(normalize_ad_time);
+    let next_ad_at = parse_normalized_ad_time(
+        schedule.next_ad_at.as_deref().and_then(normalize_ad_time),
+        "next_ad_at",
+    )?;
+    let last_ad_at = parse_normalized_ad_time(
+        schedule.last_ad_at.as_deref().and_then(normalize_ad_time),
+        "last_ad_at",
+    )?;
+    let snooze_refresh_at = parse_normalized_ad_time(
+        schedule
+            .snooze_refresh_at
+            .as_deref()
+            .and_then(normalize_ad_time),
+        "snooze_refresh_at",
+    )?;
+    let duration = int4_value(schedule.duration, "duration")?;
+    let preroll_free_time = int4_value(schedule.preroll_free_time, "preroll_free_time")?;
+    let snooze_count = int4_value(schedule.snooze_count, "snooze_count")?;
 
-    sqlx::query(
-        "INSERT INTO twitch_ads_schedule_snapshot \
-         (twitch_user_id, twitch_login, next_ad_at, last_ad_at, duration, \
-          preroll_free_time, snooze_count, snooze_refresh_at, snapshot_at) \
-         VALUES ($1, $2, $3::timestamptz, $4::timestamptz, $5, $6, $7, \
-                 $8::timestamptz, NOW())",
+    sqlx::query!(
+        r#"
+        INSERT INTO twitch_ads_schedule_snapshot
+            (twitch_user_id, twitch_login, next_ad_at, last_ad_at, duration,
+             preroll_free_time, snooze_count, snooze_refresh_at, snapshot_at)
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, NOW())
+        "#,
+        user_id,
+        login,
+        next_ad_at,
+        last_ad_at,
+        duration,
+        preroll_free_time,
+        snooze_count,
+        snooze_refresh_at
     )
-    .bind(user_id)
-    .bind(login)
-    .bind(next_ad_at)
-    .bind(last_ad_at)
-    .bind(schedule.duration)
-    .bind(schedule.preroll_free_time)
-    .bind(schedule.snooze_count)
-    .bind(snooze_refresh_at)
     .execute(pool)
     .await
     .map_err(CollectError::Db)?;

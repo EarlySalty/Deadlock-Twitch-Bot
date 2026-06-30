@@ -1,0 +1,22 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT COUNT(DISTINCT chatter_login)::int8 AS \"count!\" FROM twitch_chat_messages WHERE session_id = $1 AND chatter_login IS NOT NULL",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "count!",
+        "type_info": "Int8"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Int8"
+      ]
+    },
+    "nullable": [
+      null
+    ]
+  },
+  "hash": "4167e7f1f6a55bcf8b8b3079dbe7e0ff451d3b4cec8a8baf590d0995da82c8cf"
+}

@@ -1,0 +1,47 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n        SELECT COUNT(*)::bigint AS \"session_count!\",\n               ROUND((SUM(duration_seconds) / 3600.0)::numeric, 1)::float8 AS total_hours,\n               ROUND(AVG(avg_viewers)::numeric, 1)::float8 AS avg_viewers,\n               MAX(peak_viewers) AS peak_viewers,\n               COALESCE(SUM(CASE WHEN follower_delta > 0 THEN follower_delta ELSE 0 END), 0)::bigint AS \"followers_gained!\"\n        FROM twitch_stream_sessions\n        WHERE LOWER(streamer_login) = $1\n          AND started_at >= $2\n          AND ended_at IS NOT NULL\n          AND COALESCE(had_deadlock_in_session, false)\n        ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "session_count!",
+        "type_info": "Int8"
+      },
+      {
+        "ordinal": 1,
+        "name": "total_hours",
+        "type_info": "Float8"
+      },
+      {
+        "ordinal": 2,
+        "name": "avg_viewers",
+        "type_info": "Float8"
+      },
+      {
+        "ordinal": 3,
+        "name": "peak_viewers",
+        "type_info": "Int4"
+      },
+      {
+        "ordinal": 4,
+        "name": "followers_gained!",
+        "type_info": "Int8"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Text",
+        "Timestamptz"
+      ]
+    },
+    "nullable": [
+      null,
+      null,
+      null,
+      null,
+      null
+    ]
+  },
+  "hash": "28701083ff6ab1f39d835725c0edeebd4a07cbca9c08da27e1e5d14903e3b455"
+}

@@ -1,0 +1,22 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT MAX(message_ts) AS message_ts FROM twitch_chat_messages WHERE LOWER(streamer_login) = $1",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "message_ts",
+        "type_info": "Timestamptz"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Text"
+      ]
+    },
+    "nullable": [
+      null
+    ]
+  },
+  "hash": "445a2fcfdca1468086a953fe1a2c5519828f8a02e934fc2e5e62580b1889e9f6"
+}

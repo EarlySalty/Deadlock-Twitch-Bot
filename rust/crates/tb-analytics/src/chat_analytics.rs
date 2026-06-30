@@ -135,135 +135,197 @@ pub async fn load_chat_analytics_snapshot(
 ) -> Result<ChatAnalyticsSnapshot, sqlx::Error> {
     let bots = bots_vec();
 
-    let (session_count, total_duration_seconds, avg_viewers, viewer_minutes_fallback): (i64, f64, Option<f64>, f64) =
-        sqlx::query_as(
-            "SELECT COUNT(*)::bigint, \
-                    COALESCE(SUM(s.duration_seconds), 0)::float8, \
-                    AVG(s.avg_viewers)::float8, \
-                    COALESCE(SUM(COALESCE(s.avg_viewers, 0) * GREATEST(COALESCE(s.duration_seconds, 0), 0) / 60.0), 0)::float8 \
-               FROM twitch_stream_sessions s \
-              WHERE s.started_at >= $1 AND LOWER(s.streamer_login) = $2 AND s.ended_at IS NOT NULL",
+    let session_stats = sqlx::query!(
+        r#"
+        SELECT COUNT(*)::bigint AS "session_count!",
+               COALESCE(SUM(s.duration_seconds), 0)::float8 AS "total_duration_seconds!",
+               AVG(s.avg_viewers)::float8 AS avg_viewers,
+               COALESCE(SUM(COALESCE(s.avg_viewers, 0) * GREATEST(COALESCE(s.duration_seconds, 0), 0) / 60.0), 0)::float8 AS "viewer_minutes_fallback!"
+        FROM twitch_stream_sessions s
+        WHERE s.started_at >= $1
+          AND LOWER(s.streamer_login) = $2
+          AND s.ended_at IS NOT NULL
+        "#,
+        since,
+        streamer
+    )
+    .fetch_one(pool)
+    .await?;
+    let session_count = session_stats.session_count;
+    let total_duration_seconds = session_stats.total_duration_seconds;
+    let avg_viewers = session_stats.avg_viewers;
+    let viewer_minutes_fallback = session_stats.viewer_minutes_fallback;
+
+    let viewer_samples = sqlx::query!(
+        r#"
+        SELECT COUNT(*)::bigint AS "viewer_sample_count!",
+               COALESCE(SUM(GREATEST(sv.viewer_count, 0)), 0)::float8 AS "viewer_minutes_samples!"
+        FROM twitch_session_viewers sv
+        JOIN twitch_stream_sessions s ON s.id = sv.session_id
+        WHERE s.started_at >= $1
+          AND LOWER(s.streamer_login) = $2
+          AND s.ended_at IS NOT NULL
+        "#,
+        since,
+        streamer
+    )
+    .fetch_one(pool)
+    .await?;
+    let viewer_sample_count = viewer_samples.viewer_sample_count;
+    let viewer_minutes_samples = viewer_samples.viewer_minutes_samples;
+
+    let session_benchmark_rows: Vec<(i64, i64, f64)> = sqlx::query!(
+        r#"
+        WITH session_messages AS (
+            SELECT cm.session_id, COUNT(*) AS message_count
+            FROM twitch_chat_messages cm
+            JOIN twitch_stream_sessions s ON s.id = cm.session_id
+            WHERE s.started_at >= $1
+              AND LOWER(s.streamer_login) = $2
+              AND s.ended_at IS NOT NULL
+              AND (cm.chatter_login IS NULL OR cm.chatter_login = '' OR LOWER(cm.chatter_login) <> ALL($3))
+            GROUP BY cm.session_id
+        ), session_viewer_samples AS (
+            SELECT sv.session_id,
+                   COUNT(*) AS sample_count,
+                   COALESCE(SUM(GREATEST(sv.viewer_count, 0)), 0) AS viewer_minutes
+            FROM twitch_session_viewers sv
+            JOIN twitch_stream_sessions s ON s.id = sv.session_id
+            WHERE s.started_at >= $1
+              AND LOWER(s.streamer_login) = $2
+              AND s.ended_at IS NOT NULL
+            GROUP BY sv.session_id
         )
-        .bind(since)
-        .bind(streamer)
-        .fetch_one(pool)
-        .await?;
-
-    let (viewer_sample_count, viewer_minutes_samples): (i64, f64) = sqlx::query_as(
-        "SELECT COUNT(*)::bigint, COALESCE(SUM(GREATEST(sv.viewer_count, 0)), 0)::float8 \
-           FROM twitch_session_viewers sv \
-           JOIN twitch_stream_sessions s ON s.id = sv.session_id \
-          WHERE s.started_at >= $1 AND LOWER(s.streamer_login) = $2 AND s.ended_at IS NOT NULL",
+        SELECT s.id::bigint AS "session_id!",
+               COALESCE(sm.message_count, 0)::bigint AS "message_count!",
+               (CASE WHEN COALESCE(svs.sample_count, 0) > 0 THEN COALESCE(svs.viewer_minutes, 0)
+                     ELSE COALESCE(s.avg_viewers, 0) * GREATEST(COALESCE(s.duration_seconds, 0), 0) / 60.0 END)::float8 AS "viewer_minutes!"
+        FROM twitch_stream_sessions s
+        LEFT JOIN session_messages sm ON sm.session_id = s.id
+        LEFT JOIN session_viewer_samples svs ON svs.session_id = s.id
+        WHERE s.started_at >= $1
+          AND LOWER(s.streamer_login) = $2
+          AND s.ended_at IS NOT NULL
+        "#,
+        since,
+        streamer,
+        &bots
     )
-    .bind(since)
-    .bind(streamer)
+    .fetch_all(pool)
+    .await?
+    .into_iter()
+    .map(|row| (row.session_id, row.message_count, row.viewer_minutes))
+    .collect();
+
+    let all_messages: Vec<MessageRow> = sqlx::query_as!(
+        MessageRow,
+        r#"
+        SELECT message_ts AS "message_ts!",
+               content,
+               is_command,
+               chatter_login,
+               chatter_id
+        FROM twitch_chat_messages
+        WHERE message_ts >= $1
+          AND LOWER(streamer_login) = $2
+          AND (chatter_login IS NULL OR chatter_login = '' OR LOWER(chatter_login) <> ALL($3))
+        "#,
+        since,
+        streamer,
+        &bots
+    )
+    .fetch_all(pool)
+    .await?;
+
+    let chatter_rows: Vec<ChatterRow> = sqlx::query_as!(
+        ChatterRow,
+        r#"
+        WITH per_user AS (
+            SELECT * FROM (
+                SELECT COALESCE(NULLIF(sc.chatter_login, ''), sc.chatter_id) AS chatter_key,
+                       NULLIF(sc.chatter_login, '') AS chatter_login,
+                       COUNT(DISTINCT sc.session_id) AS session_count,
+                       SUM(sc.messages) AS total_messages,
+                       MAX(CASE WHEN sc.messages > 0 THEN 1 ELSE 0 END) AS active_flag,
+                       MAX(CASE WHEN sc.messages = 0 AND sc.seen_via_chatters_api IS TRUE THEN 1 ELSE 0 END) AS lurker_flag,
+                       MAX(CASE WHEN sc.is_first_time_streamer IS TRUE THEN 1 ELSE 0 END) AS first_time_flag,
+                       MAX(CASE WHEN sc.is_first_time_streamer IS NOT NULL THEN 1 ELSE 0 END) AS has_first_flag,
+                       MAX(CASE WHEN sc.seen_via_chatters_api IS TRUE THEN 1 ELSE 0 END) AS seen_flag
+                FROM twitch_session_chatters sc
+                JOIN twitch_stream_sessions s ON s.id = sc.session_id
+                WHERE s.started_at >= $1
+                  AND LOWER(s.streamer_login) = $2
+                  AND s.ended_at IS NOT NULL
+                  AND (sc.chatter_login IS NULL OR sc.chatter_login = '' OR LOWER(sc.chatter_login) <> ALL($3))
+                GROUP BY 1, 2
+            ) grouped_chatters
+            WHERE chatter_key IS NOT NULL
+        ), rollup AS (
+            SELECT LOWER(streamer_login) AS streamer_login,
+                   LOWER(chatter_login) AS chatter_login,
+                   first_seen_at
+            FROM twitch_chatter_rollup
+            WHERE LOWER(streamer_login) = $2
+              AND (chatter_login IS NULL OR chatter_login = '' OR LOWER(chatter_login) <> ALL($3))
+        )
+        SELECT pu.chatter_key,
+               pu.chatter_login,
+               pu.session_count::bigint AS "session_count!",
+               pu.total_messages::bigint AS total_messages,
+               pu.active_flag::int AS "active_flag!",
+               pu.lurker_flag::int AS "lurker_flag!",
+               pu.first_time_flag::int AS "first_time_flag!",
+               pu.has_first_flag::int AS "has_first_flag!",
+               pu.seen_flag::int AS "seen_flag!",
+               (CASE WHEN r.chatter_login IS NOT NULL AND r.first_seen_at < $1 THEN 1 ELSE 0 END)::int AS "seen_before!"
+        FROM per_user pu
+        LEFT JOIN rollup r ON r.chatter_login = LOWER(pu.chatter_login)
+        "#,
+        since,
+        streamer,
+        &bots
+    )
+    .fetch_all(pool)
+    .await?;
+
+    let sessions_with_chat: i64 = sqlx::query_scalar!(
+        r#"
+        SELECT COUNT(DISTINCT sc.session_id)::bigint AS "count!"
+        FROM twitch_session_chatters sc
+        JOIN twitch_stream_sessions s ON s.id = sc.session_id
+        WHERE s.started_at >= $1
+          AND LOWER(s.streamer_login) = $2
+          AND s.ended_at IS NOT NULL
+          AND (sc.chatter_login IS NULL OR sc.chatter_login = '' OR LOWER(sc.chatter_login) <> ALL($3))
+        "#,
+        since,
+        streamer,
+        &bots
+    )
     .fetch_one(pool)
     .await?;
 
-    let session_benchmark_rows: Vec<(i64, i64, f64)> = sqlx::query_as(
-        "WITH session_messages AS ( \
-             SELECT cm.session_id, COUNT(*) AS message_count \
-               FROM twitch_chat_messages cm \
-               JOIN twitch_stream_sessions s ON s.id = cm.session_id \
-              WHERE s.started_at >= $1 AND LOWER(s.streamer_login) = $2 AND s.ended_at IS NOT NULL \
-                AND (cm.chatter_login IS NULL OR cm.chatter_login = '' OR LOWER(cm.chatter_login) <> ALL($3)) \
-              GROUP BY cm.session_id \
-         ), session_viewer_samples AS ( \
-             SELECT sv.session_id, COUNT(*) AS sample_count, COALESCE(SUM(GREATEST(sv.viewer_count, 0)), 0) AS viewer_minutes \
-               FROM twitch_session_viewers sv \
-               JOIN twitch_stream_sessions s ON s.id = sv.session_id \
-              WHERE s.started_at >= $1 AND LOWER(s.streamer_login) = $2 AND s.ended_at IS NOT NULL \
-              GROUP BY sv.session_id \
-         ) \
-         SELECT s.id::bigint, COALESCE(sm.message_count, 0)::bigint, \
-                (CASE WHEN COALESCE(svs.sample_count, 0) > 0 THEN COALESCE(svs.viewer_minutes, 0) \
-                      ELSE COALESCE(s.avg_viewers, 0) * GREATEST(COALESCE(s.duration_seconds, 0), 0) / 60.0 END)::float8 \
-           FROM twitch_stream_sessions s \
-           LEFT JOIN session_messages sm ON sm.session_id = s.id \
-           LEFT JOIN session_viewer_samples svs ON svs.session_id = s.id \
-          WHERE s.started_at >= $1 AND LOWER(s.streamer_login) = $2 AND s.ended_at IS NOT NULL",
+    let top_chatters: Vec<TopChatter> = sqlx::query_as!(
+        TopChatter,
+        r#"
+        SELECT COALESCE(NULLIF(cm.chatter_login, ''), cm.chatter_id) AS chatter_key,
+               COUNT(*)::bigint AS "messages!",
+               COUNT(DISTINCT cm.session_id)::bigint AS "sessions!",
+               MIN(cm.message_ts) AS "first_seen!",
+               MAX(cm.message_ts) AS "last_seen!"
+        FROM twitch_chat_messages cm
+        WHERE cm.message_ts >= $1
+          AND LOWER(cm.streamer_login) = $2
+          AND COALESCE(NULLIF(cm.chatter_login, ''), cm.chatter_id) IS NOT NULL
+          AND (cm.chatter_login IS NULL OR cm.chatter_login = '' OR LOWER(cm.chatter_login) <> ALL($3))
+        GROUP BY COALESCE(NULLIF(cm.chatter_login, ''), cm.chatter_id)
+        ORDER BY COUNT(*) DESC
+        LIMIT 20
+        "#,
+        since,
+        streamer,
+        &bots
     )
-    .bind(since)
-    .bind(streamer)
-    .bind(&bots)
-    .fetch_all(pool)
-    .await?;
-
-    let all_messages: Vec<MessageRow> = sqlx::query_as(
-        "SELECT message_ts, content, is_command, chatter_login, chatter_id \
-           FROM twitch_chat_messages \
-          WHERE message_ts >= $1 AND LOWER(streamer_login) = $2 \
-            AND (chatter_login IS NULL OR chatter_login = '' OR LOWER(chatter_login) <> ALL($3))",
-    )
-    .bind(since)
-    .bind(streamer)
-    .bind(&bots)
-    .fetch_all(pool)
-    .await?;
-
-    let chatter_rows: Vec<ChatterRow> = sqlx::query_as(
-        "WITH per_user AS ( \
-             SELECT * FROM ( \
-                 SELECT COALESCE(NULLIF(sc.chatter_login, ''), sc.chatter_id) AS chatter_key, \
-                        NULLIF(sc.chatter_login, '') AS chatter_login, \
-                        COUNT(DISTINCT sc.session_id) AS session_count, \
-                        SUM(sc.messages) AS total_messages, \
-                        MAX(CASE WHEN sc.messages > 0 THEN 1 ELSE 0 END) AS active_flag, \
-                        MAX(CASE WHEN sc.messages = 0 AND LOWER(COALESCE(CAST(sc.seen_via_chatters_api AS TEXT), '0')) IN ('1','t','true') THEN 1 ELSE 0 END) AS lurker_flag, \
-                        MAX(CASE WHEN LOWER(COALESCE(CAST(sc.is_first_time_streamer AS TEXT), '0')) IN ('1','t','true') THEN 1 ELSE 0 END) AS first_time_flag, \
-                        MAX(CASE WHEN sc.is_first_time_streamer IS NOT NULL THEN 1 ELSE 0 END) AS has_first_flag, \
-                        MAX(CASE WHEN LOWER(COALESCE(CAST(sc.seen_via_chatters_api AS TEXT), '0')) IN ('1','t','true') THEN 1 ELSE 0 END) AS seen_flag \
-                   FROM twitch_session_chatters sc \
-                   JOIN twitch_stream_sessions s ON s.id = sc.session_id \
-                  WHERE s.started_at >= $1 AND LOWER(s.streamer_login) = $2 AND s.ended_at IS NOT NULL \
-                    AND (sc.chatter_login IS NULL OR sc.chatter_login = '' OR LOWER(sc.chatter_login) <> ALL($3)) \
-                  GROUP BY 1, 2 \
-             ) grouped_chatters WHERE chatter_key IS NOT NULL \
-         ), rollup AS ( \
-             SELECT LOWER(streamer_login) AS streamer_login, LOWER(chatter_login) AS chatter_login, first_seen_at \
-               FROM twitch_chatter_rollup \
-              WHERE LOWER(streamer_login) = $2 \
-                AND (chatter_login IS NULL OR chatter_login = '' OR LOWER(chatter_login) <> ALL($3)) \
-         ) \
-         SELECT pu.chatter_key, pu.chatter_login, pu.session_count::bigint, pu.total_messages::bigint, \
-                pu.active_flag::int, pu.lurker_flag::int, pu.first_time_flag::int, pu.has_first_flag::int, pu.seen_flag::int, \
-                (CASE WHEN r.chatter_login IS NOT NULL AND r.first_seen_at < $1 THEN 1 ELSE 0 END)::int AS seen_before \
-           FROM per_user pu \
-           LEFT JOIN rollup r ON r.chatter_login = LOWER(pu.chatter_login)",
-    )
-    .bind(since)
-    .bind(streamer)
-    .bind(&bots)
-    .fetch_all(pool)
-    .await?;
-
-    let sessions_with_chat: i64 = sqlx::query_scalar(
-        "SELECT COUNT(DISTINCT sc.session_id)::bigint \
-           FROM twitch_session_chatters sc \
-           JOIN twitch_stream_sessions s ON s.id = sc.session_id \
-          WHERE s.started_at >= $1 AND LOWER(s.streamer_login) = $2 AND s.ended_at IS NOT NULL \
-            AND (sc.chatter_login IS NULL OR sc.chatter_login = '' OR LOWER(sc.chatter_login) <> ALL($3))",
-    )
-    .bind(since)
-    .bind(streamer)
-    .bind(&bots)
-    .fetch_one(pool)
-    .await?;
-
-    let top_chatters: Vec<TopChatter> = sqlx::query_as(
-        "SELECT COALESCE(NULLIF(cm.chatter_login, ''), cm.chatter_id) AS chatter_key, \
-                COUNT(*)::bigint AS messages, COUNT(DISTINCT cm.session_id)::bigint AS sessions, \
-                MIN(cm.message_ts) AS first_seen, MAX(cm.message_ts) AS last_seen \
-           FROM twitch_chat_messages cm \
-          WHERE cm.message_ts >= $1 AND LOWER(cm.streamer_login) = $2 \
-            AND COALESCE(NULLIF(cm.chatter_login, ''), cm.chatter_id) IS NOT NULL \
-            AND (cm.chatter_login IS NULL OR cm.chatter_login = '' OR LOWER(cm.chatter_login) <> ALL($3)) \
-          GROUP BY COALESCE(NULLIF(cm.chatter_login, ''), cm.chatter_id) \
-          ORDER BY messages DESC LIMIT 20",
-    )
-    .bind(since)
-    .bind(streamer)
-    .bind(&bots)
     .fetch_all(pool)
     .await?;
 
@@ -390,25 +452,37 @@ pub async fn load_chat_analytics_payload(
     let mut tracked_unique_viewers = snap.chatter_rows.len() as i64;
     let sessions_with_chat = snap.sessions_with_chat;
 
-    let mut active_chatters_count =
-        snap.chatter_rows.iter().filter(|c| c.active_flag != 0).count() as i64;
+    let mut active_chatters_count = snap
+        .chatter_rows
+        .iter()
+        .filter(|c| c.active_flag != 0)
+        .count() as i64;
     let mut lurker_count = snap
         .chatter_rows
         .iter()
         .filter(|c| c.active_flag == 0 && c.lurker_flag != 0)
         .count() as i64;
-    let mut chatters_api_seen =
-        snap.chatter_rows.iter().filter(|c| c.seen_flag != 0).count() as i64;
-    let total_messages_per_user: i64 =
-        snap.chatter_rows.iter().map(|c| c.total_messages.unwrap_or(0)).sum();
+    let mut chatters_api_seen = snap
+        .chatter_rows
+        .iter()
+        .filter(|c| c.seen_flag != 0)
+        .count() as i64;
+    let total_messages_per_user: i64 = snap
+        .chatter_rows
+        .iter()
+        .map(|c| c.total_messages.unwrap_or(0))
+        .sum();
     let mut avg_messages_per_chatter = if active_chatters_count > 0 {
         round1(total_messages_per_user as f64 / active_chatters_count as f64)
     } else {
         0.0
     };
 
-    let seen_before_count =
-        snap.chatter_rows.iter().filter(|c| c.seen_before != 0).count() as i64;
+    let seen_before_count = snap
+        .chatter_rows
+        .iter()
+        .filter(|c| c.seen_before != 0)
+        .count() as i64;
     let n_chatters = snap.chatter_rows.len();
     let cold_rollup = n_chatters > 0 && (seen_before_count as f64 / n_chatters as f64) < 0.1;
     let loyal_session_threshold: i64 = if days <= 7 {
@@ -430,7 +504,11 @@ pub async fn load_chat_analytics_payload(
         let lurker = c.lurker_flag != 0;
         let seen = c.seen_flag != 0;
         let seen_before = c.seen_before != 0;
-        let has_login = c.chatter_login.as_deref().filter(|s| !s.is_empty()).is_some();
+        let has_login = c
+            .chatter_login
+            .as_deref()
+            .filter(|s| !s.is_empty())
+            .is_some();
         let is_first = if cold_rollup {
             c.session_count < 2
         } else if has_first_flag_data && c.has_first_flag != 0 {
@@ -475,17 +553,31 @@ pub async fn load_chat_analytics_payload(
     let unique_chatters = active_chatters_count;
     first_time_chatters = first_time_chatters.min(unique_chatters);
     let returning_chatters = (unique_chatters - first_time_chatters).max(0);
-    let total_unique_viewers =
-        if tracked_unique_viewers > 0 { tracked_unique_viewers } else { unique_chatters };
+    let total_unique_viewers = if tracked_unique_viewers > 0 {
+        tracked_unique_viewers
+    } else {
+        unique_chatters
+    };
     let lurker_ratio = if total_unique_viewers > 0 {
         round3(lurker_count as f64 / total_unique_viewers as f64)
     } else {
         0.0
     };
-    let total_minutes = if total_duration_seconds > 0.0 { total_duration_seconds / 60.0 } else { 0.0 };
-    let messages_per_minute = if total_minutes > 0.0 { total_messages as f64 / total_minutes } else { 0.0 };
-    let chatter_return_rate =
-        if unique_chatters > 0 { (returning_chatters as f64 / unique_chatters as f64) * 100.0 } else { 0.0 };
+    let total_minutes = if total_duration_seconds > 0.0 {
+        total_duration_seconds / 60.0
+    } else {
+        0.0
+    };
+    let messages_per_minute = if total_minutes > 0.0 {
+        total_messages as f64 / total_minutes
+    } else {
+        0.0
+    };
+    let chatter_return_rate = if unique_chatters > 0 {
+        (returning_chatters as f64 / unique_chatters as f64) * 100.0
+    } else {
+        0.0
+    };
     let core_loyal_viewer_rate = if total_unique_viewers > 0 {
         (core_loyal_viewers as f64 / total_unique_viewers as f64) * 100.0
     } else {
@@ -551,7 +643,8 @@ pub async fn load_chat_analytics_payload(
         .top_chatters
         .iter()
         .map(|t| {
-            let loyalty = round1((t.sessions as f64 / session_count.max(1) as f64 * 100.0).min(100.0));
+            let loyalty =
+                round1((t.sessions as f64 / session_count.max(1) as f64 * 100.0).min(100.0));
             json!({
                 "login": t.chatter_key,
                 "totalMessages": t.messages,
@@ -563,8 +656,9 @@ pub async fn load_chat_analytics_payload(
         })
         .collect();
 
-    let hourly_activity: Vec<Value> =
-        (0..24u32).map(|h| json!({ "hour": h, "count": hour_counts.get(&h).copied().unwrap_or(0) })).collect();
+    let hourly_activity: Vec<Value> = (0..24u32)
+        .map(|h| json!({ "hour": h, "count": hour_counts.get(&h).copied().unwrap_or(0) }))
+        .collect();
 
     Ok(json!({
         "totalMessages": total_messages,
@@ -650,12 +744,28 @@ mod tests {
 
     async fn make_pool(schema: &str) -> Option<PgPool> {
         let dsn = std::env::var("TB_TEST_DATABASE_URL").ok()?;
-        let admin = PgPoolOptions::new().max_connections(1).connect(&dsn).await.unwrap();
-        sqlx::query(&format!("DROP SCHEMA IF EXISTS {schema} CASCADE")).execute(&admin).await.unwrap();
-        sqlx::query(&format!("CREATE SCHEMA {schema}")).execute(&admin).await.unwrap();
+        let admin = PgPoolOptions::new()
+            .max_connections(1)
+            .connect(&dsn)
+            .await
+            .unwrap();
+        sqlx::query(&format!("DROP SCHEMA IF EXISTS {schema} CASCADE"))
+            .execute(&admin)
+            .await
+            .unwrap();
+        sqlx::query(&format!("CREATE SCHEMA {schema}"))
+            .execute(&admin)
+            .await
+            .unwrap();
         admin.close().await;
-        let opts = PgConnectOptions::from_str(&dsn).unwrap().options([("search_path", schema)]);
-        let pool = PgPoolOptions::new().max_connections(2).connect_with(opts).await.unwrap();
+        let opts = PgConnectOptions::from_str(&dsn)
+            .unwrap()
+            .options([("search_path", schema)]);
+        let pool = PgPoolOptions::new()
+            .max_connections(2)
+            .connect_with(opts)
+            .await
+            .unwrap();
         for ddl in [
             "CREATE TABLE twitch_stream_sessions (id BIGSERIAL PRIMARY KEY, streamer_login TEXT, started_at TIMESTAMPTZ, ended_at TIMESTAMPTZ, duration_seconds INTEGER, avg_viewers REAL)",
             "CREATE TABLE twitch_session_viewers (session_id BIGINT, minutes_from_start INTEGER, viewer_count INTEGER)",
@@ -671,7 +781,9 @@ mod tests {
 
     #[tokio::test]
     async fn snapshot_laedt() {
-        let Some(pool) = make_pool("t_ca_snap").await else { return };
+        let Some(pool) = make_pool("t_ca_snap").await else {
+            return;
+        };
         sqlx::query("INSERT INTO twitch_stream_sessions (id, streamer_login, started_at, ended_at, duration_seconds, avg_viewers) VALUES (1,'nani',NOW()-INTERVAL '1 day',NOW()-INTERVAL '1 day'+INTERVAL '2 hours',7200,50)")
             .execute(&pool).await.unwrap();
         // aktiver Chatter mit messages>0; rollup first_seen_at < since → seen_before.
@@ -686,7 +798,9 @@ mod tests {
         sqlx::query("INSERT INTO twitch_session_viewers (session_id, minutes_from_start, viewer_count) VALUES (1,0,40),(1,1,60)").execute(&pool).await.unwrap();
 
         let since = Utc::now() - chrono::Duration::days(30);
-        let snap = load_chat_analytics_snapshot(&pool, "nani", since).await.unwrap();
+        let snap = load_chat_analytics_snapshot(&pool, "nani", since)
+            .await
+            .unwrap();
         assert_eq!(snap.session_count, 1);
         assert_eq!(snap.total_duration_seconds, 7200.0);
         assert_eq!(snap.all_messages.len(), 3);
@@ -709,22 +823,31 @@ mod tests {
 
     #[tokio::test]
     async fn payload_aggregiert() {
-        let Some(pool) = make_pool("t_ca_payload").await else { return };
+        let Some(pool) = make_pool("t_ca_payload").await else {
+            return;
+        };
         sqlx::query("INSERT INTO twitch_stream_sessions (id, streamer_login, started_at, ended_at, duration_seconds, avg_viewers) VALUES (1,'nani',NOW()-INTERVAL '1 day',NOW()-INTERVAL '1 day'+INTERVAL '2 hours',7200,50)")
             .execute(&pool).await.unwrap();
         sqlx::query("INSERT INTO twitch_session_chatters (session_id, streamer_login, chatter_login, messages, seen_via_chatters_api) VALUES (1,'nani','viewer',5,TRUE)")
             .execute(&pool).await.unwrap();
-        for (c, cmd) in [("hallo zusammen", false), ("!uptime", true), ("haze ist op", false), ("lol haha", false)] {
+        for (c, cmd) in [
+            ("hallo zusammen", false),
+            ("!uptime", true),
+            ("haze ist op", false),
+            ("lol haha", false),
+        ] {
             sqlx::query("INSERT INTO twitch_chat_messages (session_id, streamer_login, chatter_login, content, is_command, message_ts) VALUES (1,'nani','viewer',$1,$2,'2026-06-14 18:30:00+00')")
                 .bind(c).bind(cmd).execute(&pool).await.unwrap();
         }
-        let v = load_chat_analytics_payload(&pool, "nani", 30, Some("UTC")).await.unwrap();
+        let v = load_chat_analytics_payload(&pool, "nani", 30, Some("UTC"))
+            .await
+            .unwrap();
         assert_eq!(v["totalMessages"], 4);
         assert_eq!(v["commandMessages"], 1);
         assert_eq!(v["nonCommandMessages"], 3);
         assert_eq!(v["timezone"], "UTC");
         assert_eq!(v["loyaltySessionThreshold"], 3); // days=30
-        // hourlyActivity: 24 Buckets, Stunde 18 = 4 Nachrichten (alle 18:30 UTC).
+                                                     // hourlyActivity: 24 Buckets, Stunde 18 = 4 Nachrichten (alle 18:30 UTC).
         assert_eq!(v["hourlyActivity"].as_array().unwrap().len(), 24);
         assert_eq!(v["hourlyActivity"][18]["count"], 4);
         // messageTypes vorhanden + dataQuality-Struktur.
@@ -737,13 +860,17 @@ mod tests {
 
     #[tokio::test]
     async fn tz_histogramm_verschiebt_stunde() {
-        let Some(pool) = make_pool("t_ca_tz").await else { return };
+        let Some(pool) = make_pool("t_ca_tz").await else {
+            return;
+        };
         sqlx::query("INSERT INTO twitch_stream_sessions (id, streamer_login, started_at, ended_at, duration_seconds, avg_viewers) VALUES (1,'nani',NOW()-INTERVAL '1 day',NOW(),3600,10)")
             .execute(&pool).await.unwrap();
         sqlx::query("INSERT INTO twitch_chat_messages (session_id, streamer_login, chatter_login, content, is_command, message_ts) VALUES (1,'nani','v','hi',FALSE,'2026-06-14 23:30:00+00')")
             .execute(&pool).await.unwrap();
         // 23:30 UTC → Europe/Berlin (Sommerzeit +2) = 01:30 → Stunde 1.
-        let v = load_chat_analytics_payload(&pool, "nani", 30, Some("Europe/Berlin")).await.unwrap();
+        let v = load_chat_analytics_payload(&pool, "nani", 30, Some("Europe/Berlin"))
+            .await
+            .unwrap();
         assert_eq!(v["timezone"], "Europe/Berlin");
         assert_eq!(v["hourlyActivity"][1]["count"], 1);
         assert_eq!(v["hourlyActivity"][23]["count"], 0);

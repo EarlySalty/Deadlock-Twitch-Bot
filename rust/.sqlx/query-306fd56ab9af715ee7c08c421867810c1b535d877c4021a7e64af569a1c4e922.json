@@ -1,0 +1,14 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "UPDATE twitch_partners SET admin_archived_at = NOW() WHERE LOWER(twitch_login) = LOWER($1) AND COALESCE(status, 'active') = 'active' AND admin_archived_at IS NULL",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Text"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "306fd56ab9af715ee7c08c421867810c1b535d877c4021a7e64af569a1c4e922"
+}

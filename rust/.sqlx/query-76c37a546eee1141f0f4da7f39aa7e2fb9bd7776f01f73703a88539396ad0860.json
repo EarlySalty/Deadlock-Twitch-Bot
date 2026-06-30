@@ -1,0 +1,14 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n            UPDATE twitch_raid_auth\n            SET raid_enabled = FALSE,\n                needs_reauth = FALSE,\n                reauth_notified_at = NULL\n            WHERE LOWER(COALESCE(twitch_login, '')) = LOWER($1)\n            ",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Text"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "76c37a546eee1141f0f4da7f39aa7e2fb9bd7776f01f73703a88539396ad0860"
+}

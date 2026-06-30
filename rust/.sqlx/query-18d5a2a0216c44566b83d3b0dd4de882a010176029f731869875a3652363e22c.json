@@ -1,0 +1,23 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT MIN(s.started_at) AS started_at FROM twitch_stream_sessions s WHERE LOWER(s.streamer_login) = $1 AND s.id = ANY($2::bigint[]) AND EXISTS (SELECT 1 FROM twitch_session_chatters sc WHERE sc.session_id = s.id) AND NOT EXISTS (SELECT 1 FROM twitch_chat_messages m WHERE m.session_id = s.id)",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "started_at",
+        "type_info": "Timestamptz"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Text",
+        "Int8Array"
+      ]
+    },
+    "nullable": [
+      null
+    ]
+  },
+  "hash": "18d5a2a0216c44566b83d3b0dd4de882a010176029f731869875a3652363e22c"
+}

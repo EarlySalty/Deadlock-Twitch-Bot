@@ -47,7 +47,12 @@ fn pearson(x: &[f64], y: &[f64]) -> f64 {
     if sx == 0.0 || sy == 0.0 {
         return 0.0;
     }
-    let cov = x.iter().zip(y.iter()).map(|(xi, yi)| (xi - mx) * (yi - my)).sum::<f64>() / nf;
+    let cov = x
+        .iter()
+        .zip(y.iter())
+        .map(|(xi, yi)| (xi - mx) * (yi - my))
+        .sum::<f64>()
+        / nf;
     cov / (sx * sy)
 }
 
@@ -73,22 +78,32 @@ fn empty_efficiency() -> Value {
 }
 
 /// Effizienz-Analyse (Python `_efficiency`).
-pub async fn efficiency(pool: &PgPool, streamer: &str, since: DateTime<Utc>) -> Result<Value, sqlx::Error> {
+pub async fn efficiency(
+    pool: &PgPool,
+    streamer: &str,
+    since: DateTime<Utc>,
+) -> Result<Value, sqlx::Error> {
     // 1) Viewer-Stunden / Stream-Stunden je Streamer.
-    let rows: Vec<(String, Option<f64>, Option<f64>, Option<f64>)> = sqlx::query_as(
-        "SELECT s.streamer_login, \
-                SUM(s.avg_viewers * s.duration_seconds / 3600.0)::float8, \
-                SUM(s.duration_seconds / 3600.0)::float8, \
-                (SUM(s.avg_viewers * s.duration_seconds / 3600.0) / NULLIF(SUM(s.duration_seconds / 3600.0), 0))::float8 \
-           FROM twitch_stream_sessions s \
-          WHERE s.started_at >= $1 AND s.duration_seconds > 300 \
-          GROUP BY s.streamer_login \
-         HAVING SUM(s.duration_seconds) / 3600.0 > 1 \
-          ORDER BY 4 DESC",
+    let rows: Vec<(String, Option<f64>, Option<f64>, Option<f64>)> = sqlx::query!(
+        r#"
+        SELECT s.streamer_login AS "streamer_login!",
+               SUM(s.avg_viewers * s.duration_seconds / 3600.0)::float8 AS viewer_hours,
+               SUM(s.duration_seconds / 3600.0)::float8 AS stream_hours,
+               (SUM(s.avg_viewers * s.duration_seconds / 3600.0) / NULLIF(SUM(s.duration_seconds / 3600.0), 0))::float8 AS ratio
+        FROM twitch_stream_sessions s
+        WHERE s.started_at >= $1
+          AND s.duration_seconds > 300
+        GROUP BY s.streamer_login
+        HAVING SUM(s.duration_seconds) / 3600.0 > 1
+        ORDER BY 4 DESC
+        "#,
+        since
     )
-    .bind(since)
     .fetch_all(pool)
-    .await?;
+    .await?
+    .into_iter()
+    .map(|row| (row.streamer_login, row.viewer_hours, row.stream_hours, row.ratio))
+    .collect();
 
     let mut ratios: Vec<(String, f64)> = Vec::new();
     let mut your_ratio = 0.0;
@@ -127,18 +142,24 @@ pub async fn efficiency(pool: &PgPool, streamer: &str, since: DateTime<Utc>) -> 
         .collect();
 
     // 2) Wachstum: gewonnene Follower je 10 Stream-Stunden.
-    let growth_rows: Vec<(String, Option<f64>)> = sqlx::query_as(
-        "SELECT s.streamer_login, \
-                (SUM(CASE WHEN s.follower_delta > 0 THEN s.follower_delta ELSE 0 END) / NULLIF(SUM(s.duration_seconds / 3600.0), 0) * 10.0)::float8 \
-           FROM twitch_stream_sessions s \
-          WHERE s.started_at >= $1 AND s.duration_seconds > 300 \
-          GROUP BY s.streamer_login \
-         HAVING SUM(s.duration_seconds) / 3600.0 > 1 \
-          ORDER BY 2 DESC",
+    let growth_rows: Vec<(String, Option<f64>)> = sqlx::query!(
+        r#"
+        SELECT s.streamer_login AS "streamer_login!",
+               (SUM(CASE WHEN s.follower_delta > 0 THEN s.follower_delta ELSE 0 END) / NULLIF(SUM(s.duration_seconds / 3600.0), 0) * 10.0)::float8 AS growth
+        FROM twitch_stream_sessions s
+        WHERE s.started_at >= $1
+          AND s.duration_seconds > 300
+        GROUP BY s.streamer_login
+        HAVING SUM(s.duration_seconds) / 3600.0 > 1
+        ORDER BY 2 DESC
+        "#,
+        since
     )
-    .bind(since)
     .fetch_all(pool)
-    .await?;
+    .await?
+    .into_iter()
+    .map(|row| (row.streamer_login, row.growth))
+    .collect();
 
     let mut your_growth = 0.0;
     let mut growth_ratios: Vec<(String, f64)> = Vec::new();
@@ -150,22 +171,31 @@ pub async fn efficiency(pool: &PgPool, streamer: &str, since: DateTime<Utc>) -> 
         }
     }
     let all_growth: Vec<f64> = growth_ratios.iter().map(|(_, g)| *g).collect();
-    let (growth_cat_avg, growth_top, growth_percentile): (f64, Vec<Value>, i64) = if !all_growth.is_empty() {
-        let mut sorted_g = all_growth.clone();
-        sorted_g.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
-        let gt = p85_threshold(&sorted_g);
-        let fg: Vec<&(String, f64)> = growth_ratios.iter().filter(|(_, g)| *g <= gt).collect();
-        let avg = if !fg.is_empty() {
-            fg.iter().map(|(_, g)| *g).sum::<f64>() / fg.len() as f64
+    let (growth_cat_avg, growth_top, growth_percentile): (f64, Vec<Value>, i64) =
+        if !all_growth.is_empty() {
+            let mut sorted_g = all_growth.clone();
+            sorted_g.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+            let gt = p85_threshold(&sorted_g);
+            let fg: Vec<&(String, f64)> = growth_ratios.iter().filter(|(_, g)| *g <= gt).collect();
+            let avg = if !fg.is_empty() {
+                fg.iter().map(|(_, g)| *g).sum::<f64>() / fg.len() as f64
+            } else {
+                0.0
+            };
+            let top: Vec<Value> = fg
+                .iter()
+                .take(5)
+                .map(|(login, g)| json!({ "streamer": login, "value": round1(*g) }))
+                .collect();
+            let below_g = all_growth.iter().filter(|g| **g < your_growth).count();
+            (
+                avg,
+                top,
+                (below_g as f64 / all_growth.len() as f64 * 100.0) as i64,
+            )
         } else {
-            0.0
+            (0.0, Vec::new(), 0)
         };
-        let top: Vec<Value> = fg.iter().take(5).map(|(login, g)| json!({ "streamer": login, "value": round1(*g) })).collect();
-        let below_g = all_growth.iter().filter(|g| **g < your_growth).count();
-        (avg, top, (below_g as f64 / all_growth.len() as f64 * 100.0) as i64)
-    } else {
-        (0.0, Vec::new(), 0)
-    };
 
     Ok(json!({
         "viewerHoursPerStreamHour": round1(your_ratio),
@@ -195,8 +225,7 @@ const KEYWORD_STOPWORDS: &[&str] = &[
 /// wie `collections.Counter.most_common`: absteigende Anzahl, dann früheste
 /// Einfügung) — hier über einen stabilen Sort auf der Insertion-Order.
 fn extract_keywords(titles: &[String]) -> Vec<String> {
-    static WORD_RE: LazyLock<Regex> =
-        LazyLock::new(|| Regex::new(r"[A-Za-z0-9äöüÄÖÜß]+").unwrap());
+    static WORD_RE: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"[A-Za-z0-9äöüÄÖÜß]+").unwrap());
 
     let mut order: Vec<String> = Vec::new();
     let mut counts: HashMap<String, usize> = HashMap::new();
@@ -227,22 +256,37 @@ pub async fn title_analysis(
     since: DateTime<Utc>,
 ) -> Result<Value, sqlx::Error> {
     // 1) Eigene Titel, aggregiert.
-    let your_titles: Vec<(String, Option<f64>, Option<i32>, Option<f64>, i64)> = sqlx::query_as(
-        "SELECT s.stream_title, \
-                AVG(s.avg_viewers)::float8, \
-                MAX(s.peak_viewers), \
-                AVG(s.unique_chatters)::float8, \
-                COUNT(*)::bigint \
-           FROM twitch_stream_sessions s \
-          WHERE s.streamer_login = $1 AND s.started_at >= $2 \
-            AND s.stream_title IS NOT NULL AND s.stream_title != '' \
-          GROUP BY s.stream_title \
-          ORDER BY 2 DESC",
+    let your_titles: Vec<(String, Option<f64>, Option<i32>, Option<f64>, i64)> = sqlx::query!(
+        r#"
+        SELECT s.stream_title AS "stream_title!",
+               AVG(s.avg_viewers)::float8 AS avg_viewers,
+               MAX(s.peak_viewers) AS peak_viewers,
+               AVG(s.unique_chatters)::float8 AS avg_chatters,
+               COUNT(*)::bigint AS "usage_count!"
+        FROM twitch_stream_sessions s
+        WHERE s.streamer_login = $1
+          AND s.started_at >= $2
+          AND s.stream_title IS NOT NULL
+          AND s.stream_title != ''
+        GROUP BY s.stream_title
+        ORDER BY 2 DESC
+        "#,
+        streamer,
+        since
     )
-    .bind(streamer)
-    .bind(since)
     .fetch_all(pool)
-    .await?;
+    .await?
+    .into_iter()
+    .map(|row| {
+        (
+            row.stream_title,
+            row.avg_viewers,
+            row.peak_viewers,
+            row.avg_chatters,
+            row.usage_count,
+        )
+    })
+    .collect();
 
     let your_list: Vec<Value> = your_titles
         .iter()
@@ -258,21 +302,29 @@ pub async fn title_analysis(
         .collect();
 
     // 2) Top-Titel der Kategorie (andere Streamer).
-    let cat_titles: Vec<(String, String, Option<f64>)> = sqlx::query_as(
-        "SELECT s.stream_title, s.streamer_login, AVG(s.avg_viewers)::float8 \
-           FROM twitch_stream_sessions s \
-          WHERE s.started_at >= $1 \
-            AND s.stream_title IS NOT NULL AND s.stream_title != '' \
-            AND s.streamer_login != $2 \
-          GROUP BY s.stream_title, s.streamer_login \
-         HAVING COUNT(*) >= 2 \
-          ORDER BY 3 DESC \
-          LIMIT 10",
+    let cat_titles: Vec<(String, String, Option<f64>)> = sqlx::query!(
+        r#"
+        SELECT s.stream_title AS "stream_title!",
+               s.streamer_login AS "streamer_login!",
+               AVG(s.avg_viewers)::float8 AS avg_viewers
+        FROM twitch_stream_sessions s
+        WHERE s.started_at >= $1
+          AND s.stream_title IS NOT NULL
+          AND s.stream_title != ''
+          AND s.streamer_login != $2
+        GROUP BY s.stream_title, s.streamer_login
+        HAVING COUNT(*) >= 2
+        ORDER BY 3 DESC
+        LIMIT 10
+        "#,
+        since,
+        streamer
     )
-    .bind(since)
-    .bind(streamer)
     .fetch_all(pool)
-    .await?;
+    .await?
+    .into_iter()
+    .map(|row| (row.stream_title, row.streamer_login, row.avg_viewers))
+    .collect();
 
     let cat_list: Vec<Value> = cat_titles
         .iter()
@@ -285,16 +337,25 @@ pub async fn title_analysis(
     let your_words = extract_keywords(&your_titles.iter().map(|r| r.0.clone()).collect::<Vec<_>>());
     let top_words = extract_keywords(&cat_titles.iter().map(|r| r.0.clone()).collect::<Vec<_>>());
     let your_set: HashSet<&String> = your_words.iter().collect();
-    let missing: Vec<&String> = top_words.iter().filter(|w| !your_set.contains(w)).take(10).collect();
+    let missing: Vec<&String> = top_words
+        .iter()
+        .filter(|w| !your_set.contains(w))
+        .take(10)
+        .collect();
     let top_patterns: Vec<&String> = top_words.iter().take(10).collect();
 
     // 4) Titel-Varianz vs. Peers.
-    let own_total: i64 = sqlx::query_scalar(
-        "SELECT COUNT(*)::bigint FROM twitch_stream_sessions \
-          WHERE streamer_login = $1 AND started_at >= $2 AND duration_seconds > 300",
+    let own_total: i64 = sqlx::query_scalar!(
+        r#"
+        SELECT COUNT(*)::bigint AS "count!"
+        FROM twitch_stream_sessions
+        WHERE streamer_login = $1
+          AND started_at >= $2
+          AND duration_seconds > 300
+        "#,
+        streamer,
+        since
     )
-    .bind(streamer)
-    .bind(since)
     .fetch_one(pool)
     .await?;
 
@@ -305,27 +366,43 @@ pub async fn title_analysis(
         json!(0)
     };
 
-    let peer_variety: Vec<(String, i64, i64, Option<f64>)> = sqlx::query_as(
-        "SELECT s.streamer_login, \
-                COUNT(DISTINCT s.stream_title)::bigint, \
-                COUNT(*)::bigint, \
-                ROUND(COUNT(DISTINCT s.stream_title) * 100.0 / COUNT(*), 1)::float8 \
-           FROM twitch_stream_sessions s \
-          WHERE s.started_at >= $1 AND s.duration_seconds > 300 \
-            AND s.streamer_login != $2 \
-            AND s.stream_title IS NOT NULL AND s.stream_title != '' \
-          GROUP BY s.streamer_login \
-         HAVING COUNT(*) >= 3 \
-          ORDER BY 4 DESC",
+    let peer_variety: Vec<(String, i64, i64, Option<f64>)> = sqlx::query!(
+        r#"
+        SELECT s.streamer_login AS "streamer_login!",
+               COUNT(DISTINCT s.stream_title)::bigint AS "unique_titles!",
+               COUNT(*)::bigint AS "total_sessions!",
+               ROUND(COUNT(DISTINCT s.stream_title) * 100.0 / COUNT(*), 1)::float8 AS variety
+        FROM twitch_stream_sessions s
+        WHERE s.started_at >= $1
+          AND s.duration_seconds > 300
+          AND s.streamer_login != $2
+          AND s.stream_title IS NOT NULL
+          AND s.stream_title != ''
+        GROUP BY s.streamer_login
+        HAVING COUNT(*) >= 3
+        ORDER BY 4 DESC
+        "#,
+        since,
+        streamer
     )
-    .bind(since)
-    .bind(streamer)
     .fetch_all(pool)
-    .await?;
+    .await?
+    .into_iter()
+    .map(|row| {
+        (
+            row.streamer_login,
+            row.unique_titles,
+            row.total_sessions,
+            row.variety,
+        )
+    })
+    .collect();
 
     let peer_pcts: Vec<f64> = peer_variety.iter().map(|r| r.3.unwrap_or(0.0)).collect();
     let avg_peer_variety: Value = if !peer_pcts.is_empty() {
-        json!(round1(peer_pcts.iter().sum::<f64>() / peer_pcts.len() as f64))
+        json!(round1(
+            peer_pcts.iter().sum::<f64>() / peer_pcts.len() as f64
+        ))
     } else {
         json!(0)
     };
@@ -364,18 +441,23 @@ pub async fn schedule_optimizer(
     since: DateTime<Utc>,
 ) -> Result<Value, sqlx::Error> {
     // 1) Konkurrenz-Heatmap je Wochentag/Stunde (UTC).
-    let competition: Vec<(i32, i32, i64, Option<f64>)> = sqlx::query_as(
-        "SELECT EXTRACT(DOW FROM (ts_utc AT TIME ZONE 'UTC'))::int, \
-                EXTRACT(HOUR FROM (ts_utc AT TIME ZONE 'UTC'))::int, \
-                COUNT(DISTINCT streamer)::bigint, \
-                AVG(viewer_count)::float8 \
-           FROM twitch_stats_category \
-          WHERE ts_utc >= $1 \
-          GROUP BY 1, 2",
+    let competition: Vec<(i32, i32, i64, Option<f64>)> = sqlx::query!(
+        r#"
+        SELECT EXTRACT(DOW FROM (ts_utc AT TIME ZONE 'UTC'))::int AS "weekday!",
+               EXTRACT(HOUR FROM (ts_utc AT TIME ZONE 'UTC'))::int AS "hour!",
+               COUNT(DISTINCT streamer)::bigint AS "competitors!",
+               AVG(viewer_count)::float8 AS avg_viewers
+        FROM twitch_stats_category
+        WHERE ts_utc >= $1
+        GROUP BY 1, 2
+        "#,
+        since
     )
-    .bind(since)
     .fetch_all(pool)
-    .await?;
+    .await?
+    .into_iter()
+    .map(|row| (row.weekday, row.hour, row.competitors, row.avg_viewers))
+    .collect();
 
     // Zelle = (weekday, hour, competitors, categoryViewers[gerundet]). Die
     // Rundung passiert VOR der Opportunity-Rechnung — exakt wie Python, das
@@ -393,19 +475,25 @@ pub async fn schedule_optimizer(
         .collect();
 
     // 2) Eigene Stream-Slots.
-    let your_slots: Vec<(i32, i32, i64)> = sqlx::query_as(
-        "SELECT EXTRACT(DOW FROM (started_at AT TIME ZONE 'UTC'))::int, \
-                EXTRACT(HOUR FROM (started_at AT TIME ZONE 'UTC'))::int, \
-                COUNT(*)::bigint \
-           FROM twitch_stream_sessions \
-          WHERE streamer_login = $1 AND started_at >= $2 \
-          GROUP BY 1, 2 \
-          ORDER BY 3 DESC",
+    let your_slots: Vec<(i32, i32, i64)> = sqlx::query!(
+        r#"
+        SELECT EXTRACT(DOW FROM (started_at AT TIME ZONE 'UTC'))::int AS "weekday!",
+               EXTRACT(HOUR FROM (started_at AT TIME ZONE 'UTC'))::int AS "hour!",
+               COUNT(*)::bigint AS "count!"
+        FROM twitch_stream_sessions
+        WHERE streamer_login = $1
+          AND started_at >= $2
+        GROUP BY 1, 2
+        ORDER BY 3 DESC
+        "#,
+        streamer,
+        since
     )
-    .bind(streamer)
-    .bind(since)
     .fetch_all(pool)
-    .await?;
+    .await?
+    .into_iter()
+    .map(|row| (row.weekday, row.hour, row.count))
+    .collect();
 
     let current_slots: Vec<Value> = your_slots
         .iter()
@@ -461,16 +549,32 @@ pub async fn duration_analysis(
     streamer: &str,
     since: DateTime<Utc>,
 ) -> Result<Value, sqlx::Error> {
-    let rows: Vec<(i32, Option<f64>, Option<i32>, Option<f64>)> = sqlx::query_as(
-        "SELECT s.duration_seconds, s.avg_viewers::float8, s.unique_chatters, s.retention_5m::float8 \
-           FROM twitch_stream_sessions s \
-          WHERE s.streamer_login = $1 AND s.started_at >= $2 \
-            AND s.duration_seconds > 300",
+    let rows: Vec<(i32, Option<f64>, Option<i32>, Option<f64>)> = sqlx::query!(
+        r#"
+        SELECT s.duration_seconds AS "duration_seconds!",
+               s.avg_viewers::float8 AS avg_viewers,
+               s.unique_chatters,
+               s.retention_5m::float8 AS retention_5m
+        FROM twitch_stream_sessions s
+        WHERE s.streamer_login = $1
+          AND s.started_at >= $2
+          AND s.duration_seconds > 300
+        "#,
+        streamer,
+        since
     )
-    .bind(streamer)
-    .bind(since)
     .fetch_all(pool)
-    .await?;
+    .await?
+    .into_iter()
+    .map(|row| {
+        (
+            row.duration_seconds,
+            row.avg_viewers,
+            row.unique_chatters,
+            row.retention_5m,
+        )
+    })
+    .collect();
 
     if rows.is_empty() {
         return Ok(json!({
@@ -563,12 +667,15 @@ pub async fn cross_community(
     since: DateTime<Utc>,
 ) -> Result<Value, sqlx::Error> {
     // 1) Eigene Unique-Chatter.
-    let total_unique: i64 = sqlx::query_scalar(
-        "SELECT COUNT(DISTINCT chatter_login)::bigint FROM twitch_chatter_rollup \
-          WHERE streamer_login = $1 AND last_seen_at >= $2",
+    let total_unique: i64 = sqlx::query_scalar!(
+        r#"
+        SELECT COUNT(DISTINCT chatter_login)::bigint AS "count!"
+        FROM twitch_chatter_rollup
+        WHERE streamer_login = $1 AND last_seen_at >= $2
+        "#,
+        streamer,
+        since
     )
-    .bind(streamer)
-    .bind(since)
     .fetch_one(pool)
     .await?;
 
@@ -583,22 +690,29 @@ pub async fn cross_community(
     }
 
     // 2) Geteilte Chatter je anderem Streamer ($1/$2 mehrfach referenziert).
-    let shared: Vec<(String, i64)> = sqlx::query_as(
-        "SELECT c2.streamer_login, COUNT(DISTINCT c1.chatter_login)::bigint \
-           FROM twitch_chatter_rollup c1 \
-           JOIN twitch_chatter_rollup c2 \
-             ON c1.chatter_login = c2.chatter_login \
-            AND c2.streamer_login != $1 \
-            AND c2.last_seen_at >= $2 \
-          WHERE c1.streamer_login = $1 AND c1.last_seen_at >= $2 \
-          GROUP BY c2.streamer_login \
-          ORDER BY 2 DESC \
-          LIMIT 15",
+    let shared: Vec<(String, i64)> = sqlx::query!(
+        r#"
+        SELECT c2.streamer_login AS "streamer_login!",
+               COUNT(DISTINCT c1.chatter_login)::bigint AS "shared_count!"
+        FROM twitch_chatter_rollup c1
+        JOIN twitch_chatter_rollup c2
+          ON c1.chatter_login = c2.chatter_login
+         AND c2.streamer_login != $1
+         AND c2.last_seen_at >= $2
+        WHERE c1.streamer_login = $1
+          AND c1.last_seen_at >= $2
+        GROUP BY c2.streamer_login
+        ORDER BY 2 DESC
+        LIMIT 15
+        "#,
+        streamer,
+        since
     )
-    .bind(streamer)
-    .bind(since)
     .fetch_all(pool)
-    .await?;
+    .await?
+    .into_iter()
+    .map(|row| (row.streamer_login, row.shared_count))
+    .collect();
 
     let sources: Vec<Value> = shared
         .iter()
@@ -612,19 +726,23 @@ pub async fn cross_community(
         .collect();
 
     // 3) Chatter, die auch anderswo auftauchen → isoliert = Rest.
-    let shared_count: i64 = sqlx::query_scalar(
-        "SELECT COUNT(DISTINCT c1.chatter_login)::bigint \
-           FROM twitch_chatter_rollup c1 \
-          WHERE c1.streamer_login = $1 AND c1.last_seen_at >= $2 \
-            AND EXISTS ( \
-              SELECT 1 FROM twitch_chatter_rollup c2 \
-               WHERE c2.chatter_login = c1.chatter_login \
-                 AND c2.streamer_login != $1 \
-                 AND c2.last_seen_at >= $2 \
-            )",
+    let shared_count: i64 = sqlx::query_scalar!(
+        r#"
+        SELECT COUNT(DISTINCT c1.chatter_login)::bigint AS "count!"
+        FROM twitch_chatter_rollup c1
+        WHERE c1.streamer_login = $1
+          AND c1.last_seen_at >= $2
+          AND EXISTS (
+              SELECT 1
+              FROM twitch_chatter_rollup c2
+              WHERE c2.chatter_login = c1.chatter_login
+                AND c2.streamer_login != $1
+                AND c2.last_seen_at >= $2
+          )
+        "#,
+        streamer,
+        since
     )
-    .bind(streamer)
-    .bind(since)
     .fetch_one(pool)
     .await?;
 
@@ -672,18 +790,27 @@ pub async fn tag_optimization(
     since: DateTime<Utc>,
 ) -> Result<Value, sqlx::Error> {
     // 1) Eigene Tag-Kombinationen.
-    let your_rows: Vec<(String, Option<f64>, i64)> = sqlx::query_as(
-        "SELECT s.tags, AVG(s.avg_viewers)::float8, COUNT(*)::bigint \
-           FROM twitch_stream_sessions s \
-          WHERE s.streamer_login = $1 AND s.started_at >= $2 \
-            AND s.tags IS NOT NULL AND s.tags != '' \
-          GROUP BY s.tags \
-          ORDER BY 2 DESC",
+    let your_rows: Vec<(String, Option<f64>, i64)> = sqlx::query!(
+        r#"
+        SELECT s.tags AS "tags!",
+               AVG(s.avg_viewers)::float8 AS avg_viewers,
+               COUNT(*)::bigint AS "usage_count!"
+        FROM twitch_stream_sessions s
+        WHERE s.streamer_login = $1
+          AND s.started_at >= $2
+          AND s.tags IS NOT NULL
+          AND s.tags != ''
+        GROUP BY s.tags
+        ORDER BY 2 DESC
+        "#,
+        streamer,
+        since
     )
-    .bind(streamer)
-    .bind(since)
     .fetch_all(pool)
-    .await?;
+    .await?
+    .into_iter()
+    .map(|row| (row.tags, row.avg_viewers, row.usage_count))
+    .collect();
 
     // (tags, gerundete avgViewers, usageCount) — Basis für Output + Avg/Underperf.
     let your_data: Vec<(String, f64, i64)> = your_rows
@@ -698,19 +825,27 @@ pub async fn tag_optimization(
         split_tags_from_rows(&your_rows.iter().map(|r| r.0.clone()).collect::<Vec<_>>());
 
     // 2) Beste Kategorie-Tags (alle Streamer, COUNT≥3).
-    let cat_rows: Vec<(String, Option<f64>, i64)> = sqlx::query_as(
-        "SELECT s.tags, AVG(s.avg_viewers)::float8, COUNT(DISTINCT s.streamer_login)::bigint \
-           FROM twitch_stream_sessions s \
-          WHERE s.started_at >= $1 \
-            AND s.tags IS NOT NULL AND s.tags != '' \
-          GROUP BY s.tags \
-         HAVING COUNT(*) >= 3 \
-          ORDER BY 2 DESC \
-          LIMIT 15",
+    let cat_rows: Vec<(String, Option<f64>, i64)> = sqlx::query!(
+        r#"
+        SELECT s.tags AS "tags!",
+               AVG(s.avg_viewers)::float8 AS avg_viewers,
+               COUNT(DISTINCT s.streamer_login)::bigint AS "streamer_count!"
+        FROM twitch_stream_sessions s
+        WHERE s.started_at >= $1
+          AND s.tags IS NOT NULL
+          AND s.tags != ''
+        GROUP BY s.tags
+        HAVING COUNT(*) >= 3
+        ORDER BY 2 DESC
+        LIMIT 15
+        "#,
+        since
     )
-    .bind(since)
     .fetch_all(pool)
-    .await?;
+    .await?
+    .into_iter()
+    .map(|row| (row.tags, row.avg_viewers, row.streamer_count))
+    .collect();
 
     let cat_tags: Vec<Value> = cat_rows
         .iter()
@@ -767,15 +902,23 @@ async fn build_viewer_curve(
         .collect();
     let ids: Vec<i64> = pairs.iter().map(|(s, _)| *s).collect();
 
-    let rows: Vec<(i64, Option<i32>, i32)> = sqlx::query_as(
-        "SELECT session_id, minutes_from_start, viewer_count \
-           FROM twitch_session_viewers \
-          WHERE session_id = ANY($1) AND minutes_from_start <= 60 \
-          ORDER BY session_id, minutes_from_start",
+    let rows: Vec<(i64, Option<i32>, i32)> = sqlx::query!(
+        r#"
+        SELECT session_id AS "session_id!",
+               minutes_from_start,
+               viewer_count AS "viewer_count!"
+        FROM twitch_session_viewers
+        WHERE session_id = ANY($1)
+          AND minutes_from_start <= 60
+        ORDER BY session_id, minutes_from_start
+        "#,
+        &ids
     )
-    .bind(&ids)
     .fetch_all(pool)
-    .await?;
+    .await?
+    .into_iter()
+    .map(|row| (row.session_id, row.minutes_from_start, row.viewer_count))
+    .collect();
 
     let peak_map: HashMap<i64, i64> = pairs.into_iter().collect();
     let mut by_minute: HashMap<i32, Vec<f64>> = HashMap::new();
@@ -828,49 +971,78 @@ pub async fn retention_coaching(
     streamer: &str,
     since: DateTime<Utc>,
 ) -> Result<Value, sqlx::Error> {
-    let your_avg: Option<f64> = sqlx::query_scalar(
-        "SELECT AVG(retention_5m)::float8 FROM twitch_stream_sessions \
-          WHERE streamer_login = $1 AND started_at >= $2 AND retention_5m IS NOT NULL",
+    let your_avg: Option<f64> = sqlx::query_scalar!(
+        r#"
+        SELECT AVG(retention_5m)::float8 AS avg_retention
+        FROM twitch_stream_sessions
+        WHERE streamer_login = $1
+          AND started_at >= $2
+          AND retention_5m IS NOT NULL
+        "#,
+        streamer,
+        since
     )
-    .bind(streamer)
-    .bind(since)
     .fetch_one(pool)
     .await?;
 
-    let cat_avg: Option<f64> = sqlx::query_scalar(
-        "SELECT AVG(retention_5m)::float8 FROM twitch_stream_sessions \
-          WHERE started_at >= $1 AND retention_5m IS NOT NULL",
+    let cat_avg: Option<f64> = sqlx::query_scalar!(
+        r#"
+        SELECT AVG(retention_5m)::float8 AS avg_retention
+        FROM twitch_stream_sessions
+        WHERE started_at >= $1
+          AND retention_5m IS NOT NULL
+        "#,
+        since
     )
-    .bind(since)
     .fetch_one(pool)
     .await?;
 
     // Eigene Kurve: jüngste 20 Sessions mit peak > 0.
-    let your_sessions: Vec<(i64, i32)> = sqlx::query_as(
-        "SELECT s.id, s.peak_viewers FROM twitch_stream_sessions s \
-          WHERE s.streamer_login = $1 AND s.started_at >= $2 AND s.peak_viewers > 0 \
-          ORDER BY s.started_at DESC LIMIT 20",
+    let your_sessions: Vec<(i64, i32)> = sqlx::query!(
+        r#"
+        SELECT s.id AS "id!",
+               s.peak_viewers AS "peak_viewers!"
+        FROM twitch_stream_sessions s
+        WHERE s.streamer_login = $1
+          AND s.started_at >= $2
+          AND s.peak_viewers > 0
+        ORDER BY s.started_at DESC
+        LIMIT 20
+        "#,
+        streamer,
+        since
     )
-    .bind(streamer)
-    .bind(since)
     .fetch_all(pool)
-    .await?;
+    .await?
+    .into_iter()
+    .map(|row| (row.id, row.peak_viewers))
+    .collect();
     let your_ids: Vec<i64> = your_sessions.iter().map(|(id, _)| *id).collect();
-    let your_peaks: Vec<i64> = your_sessions.iter().map(|(_, p)| *p as i64).collect();
+    let your_peaks: Vec<i64> = your_sessions.iter().map(|(_, p)| i64::from(*p)).collect();
     let your_curve = build_viewer_curve(pool, &your_ids, &your_peaks).await?;
 
     // Top-Performer-Kurve: beste 20 fremder Sessions nach avg_viewers.
-    let top_sessions: Vec<(i64, i32)> = sqlx::query_as(
-        "SELECT s.id, s.peak_viewers FROM twitch_stream_sessions s \
-          WHERE s.started_at >= $1 AND s.streamer_login != $2 AND s.peak_viewers > 0 \
-          ORDER BY s.avg_viewers DESC LIMIT 20",
+    let top_sessions: Vec<(i64, i32)> = sqlx::query!(
+        r#"
+        SELECT s.id AS "id!",
+               s.peak_viewers AS "peak_viewers!"
+        FROM twitch_stream_sessions s
+        WHERE s.started_at >= $1
+          AND s.streamer_login != $2
+          AND s.peak_viewers > 0
+        ORDER BY s.avg_viewers DESC
+        LIMIT 20
+        "#,
+        since,
+        streamer
     )
-    .bind(since)
-    .bind(streamer)
     .fetch_all(pool)
-    .await?;
+    .await?
+    .into_iter()
+    .map(|row| (row.id, row.peak_viewers))
+    .collect();
     let top_ids: Vec<i64> = top_sessions.iter().map(|(id, _)| *id).collect();
-    let top_peaks: Vec<i64> = top_sessions.iter().map(|(_, p)| *p as i64).collect();
+    let top_peaks: Vec<i64> = top_sessions.iter().map(|(_, p)| i64::from(*p)).collect();
     let top_curve = build_viewer_curve(pool, &top_ids, &top_peaks).await?;
 
     // Kritische Abfall-Minute: erster Schritt unter 90 % des Vorwerts.
@@ -901,18 +1073,27 @@ pub async fn double_stream_detection(
     since: DateTime<Utc>,
 ) -> Result<Value, sqlx::Error> {
     // 1) Doppel-Stream-Tage.
-    let rows: Vec<(chrono::NaiveDate, i64, Option<f64>)> = sqlx::query_as(
-        "SELECT DATE(started_at), COUNT(*)::bigint, AVG(avg_viewers)::float8 \
-           FROM twitch_stream_sessions \
-          WHERE streamer_login = $1 AND started_at >= $2 AND duration_seconds > 300 \
-          GROUP BY 1 \
-         HAVING COUNT(*) > 1 \
-          ORDER BY 1 DESC",
+    let rows: Vec<(chrono::NaiveDate, i64, Option<f64>)> = sqlx::query!(
+        r#"
+        SELECT DATE(started_at) AS "date!",
+               COUNT(*)::bigint AS "count!",
+               AVG(avg_viewers)::float8 AS avg_viewers
+        FROM twitch_stream_sessions
+        WHERE streamer_login = $1
+          AND started_at >= $2
+          AND duration_seconds > 300
+        GROUP BY 1
+        HAVING COUNT(*) > 1
+        ORDER BY 1 DESC
+        "#,
+        streamer,
+        since
     )
-    .bind(streamer)
-    .bind(since)
     .fetch_all(pool)
-    .await?;
+    .await?
+    .into_iter()
+    .map(|row| (row.date, row.count, row.avg_viewers))
+    .collect();
 
     let occurrences: Vec<Value> = rows
         .iter()
@@ -926,32 +1107,42 @@ pub async fn double_stream_detection(
         .collect();
 
     // 2) Tages-Ø der Einzel-Stream-Tage.
-    let single_avg: Option<f64> = sqlx::query_scalar(
-        "SELECT AVG(day_avg)::float8 FROM ( \
-            SELECT DATE(started_at) AS d, AVG(avg_viewers) AS day_avg \
-              FROM twitch_stream_sessions \
-             WHERE streamer_login = $1 AND started_at >= $2 AND duration_seconds > 300 \
-             GROUP BY d \
-            HAVING COUNT(*) = 1 \
-         ) sub",
+    let single_avg: Option<f64> = sqlx::query_scalar!(
+        r#"
+        SELECT AVG(day_avg)::float8 AS avg_viewers
+        FROM (
+            SELECT DATE(started_at) AS d, AVG(avg_viewers) AS day_avg
+            FROM twitch_stream_sessions
+            WHERE streamer_login = $1
+              AND started_at >= $2
+              AND duration_seconds > 300
+            GROUP BY d
+            HAVING COUNT(*) = 1
+        ) sub
+        "#,
+        streamer,
+        since
     )
-    .bind(streamer)
-    .bind(since)
     .fetch_one(pool)
     .await?;
 
     // 3) Tages-Ø der Doppel-Stream-Tage.
-    let double_avg: Option<f64> = sqlx::query_scalar(
-        "SELECT AVG(day_avg)::float8 FROM ( \
-            SELECT DATE(started_at) AS d, AVG(avg_viewers) AS day_avg \
-              FROM twitch_stream_sessions \
-             WHERE streamer_login = $1 AND started_at >= $2 AND duration_seconds > 300 \
-             GROUP BY d \
-            HAVING COUNT(*) > 1 \
-         ) sub",
+    let double_avg: Option<f64> = sqlx::query_scalar!(
+        r#"
+        SELECT AVG(day_avg)::float8 AS avg_viewers
+        FROM (
+            SELECT DATE(started_at) AS d, AVG(avg_viewers) AS day_avg
+            FROM twitch_stream_sessions
+            WHERE streamer_login = $1
+              AND started_at >= $2
+              AND duration_seconds > 300
+            GROUP BY d
+            HAVING COUNT(*) > 1
+        ) sub
+        "#,
+        streamer,
+        since
     )
-    .bind(streamer)
-    .bind(since)
     .fetch_one(pool)
     .await?;
 
@@ -976,30 +1167,45 @@ pub async fn chat_concentration(
     since: DateTime<Utc>,
 ) -> Result<Value, sqlx::Error> {
     // 1) Loyalty-Buckets nach Session-Anzahl.
-    let buckets_raw: Vec<(String, i64, Option<i64>)> = sqlx::query_as(
-        "SELECT CASE \
-                  WHEN total_sessions = 1 THEN 'oneTimer' \
-                  WHEN total_sessions BETWEEN 2 AND 3 THEN 'casual' \
-                  WHEN total_sessions BETWEEN 4 AND 10 THEN 'regular' \
-                  ELSE 'loyal' END, \
-                COUNT(*)::bigint, \
-                SUM(total_messages)::bigint \
-           FROM twitch_chatter_rollup \
-          WHERE streamer_login = $1 AND last_seen_at >= $2 \
-          GROUP BY 1",
+    let buckets_raw: Vec<(String, i64, Option<i64>)> = sqlx::query!(
+        r#"
+        SELECT CASE
+                 WHEN total_sessions = 1 THEN 'oneTimer'
+                 WHEN total_sessions BETWEEN 2 AND 3 THEN 'casual'
+                 WHEN total_sessions BETWEEN 4 AND 10 THEN 'regular'
+                 ELSE 'loyal'
+               END AS "bucket!",
+               COUNT(*)::bigint AS "count!",
+               SUM(total_messages)::bigint AS total_messages
+        FROM twitch_chatter_rollup
+        WHERE streamer_login = $1
+          AND last_seen_at >= $2
+        GROUP BY 1
+        "#,
+        streamer,
+        since
     )
-    .bind(streamer)
-    .bind(since)
     .fetch_all(pool)
-    .await?;
+    .await?
+    .into_iter()
+    .map(|row| (row.bucket, row.count, row.total_messages))
+    .collect();
 
     let total_chatters = {
         let s: i64 = buckets_raw.iter().map(|r| r.1).sum();
-        if s == 0 { 1 } else { s }
+        if s == 0 {
+            1
+        } else {
+            s
+        }
     };
     let total_msgs = {
         let s: i64 = buckets_raw.iter().map(|r| r.2.unwrap_or(0)).sum();
-        if s == 0 { 1 } else { s }
+        if s == 0 {
+            1
+        } else {
+            s
+        }
     };
 
     let mut buckets = serde_json::Map::new();
@@ -1016,17 +1222,25 @@ pub async fn chat_concentration(
     }
 
     // 2) Top-Chatter + kumulativer Anteil.
-    let top: Vec<(String, i64, i64)> = sqlx::query_as(
-        "SELECT chatter_login, total_messages::bigint, total_sessions::bigint \
-           FROM twitch_chatter_rollup \
-          WHERE streamer_login = $1 AND last_seen_at >= $2 \
-          ORDER BY total_messages DESC \
-          LIMIT 15",
+    let top: Vec<(String, i64, i64)> = sqlx::query!(
+        r#"
+        SELECT chatter_login AS "chatter_login!",
+               COALESCE(total_messages, 0)::bigint AS "total_messages!",
+               COALESCE(total_sessions, 0)::bigint AS "total_sessions!"
+        FROM twitch_chatter_rollup
+        WHERE streamer_login = $1
+          AND last_seen_at >= $2
+        ORDER BY total_messages DESC
+        LIMIT 15
+        "#,
+        streamer,
+        since
     )
-    .bind(streamer)
-    .bind(since)
     .fetch_all(pool)
-    .await?;
+    .await?
+    .into_iter()
+    .map(|row| (row.chatter_login, row.total_messages, row.total_sessions))
+    .collect();
 
     // (login, messages, sessions, sharePct, cumulativePct) — share gerundet,
     // cumulative summiert die GERUNDETEN shares (1:1 Python).
@@ -1035,7 +1249,13 @@ pub async fn chat_concentration(
     for (login, messages, sessions) in &top {
         let share = round1(*messages as f64 / total_msgs as f64 * 100.0);
         cumulative += share;
-        top_chatters.push((login.clone(), *messages, *sessions, share, round1(cumulative)));
+        top_chatters.push((
+            login.clone(),
+            *messages,
+            *sessions,
+            share,
+            round1(cumulative),
+        ));
     }
 
     // HHI: leeres top → Integer-0 (Pythons leere sum() = int), sonst float.
@@ -1061,17 +1281,23 @@ pub async fn chat_concentration(
     };
 
     // 3) Peer-Vergleich: One-Timer-Quote.
-    let peer_loyalty: Vec<(String, i64, Option<i64>)> = sqlx::query_as(
-        "SELECT streamer_login, COUNT(*)::bigint, \
-                SUM(CASE WHEN total_sessions = 1 THEN 1 ELSE 0 END)::bigint \
-           FROM twitch_chatter_rollup \
-          WHERE last_seen_at >= $1 \
-          GROUP BY streamer_login \
-         HAVING COUNT(*) >= 5",
+    let peer_loyalty: Vec<(String, i64, Option<i64>)> = sqlx::query!(
+        r#"
+        SELECT streamer_login AS "streamer_login!",
+               COUNT(*)::bigint AS "count!",
+               SUM(CASE WHEN total_sessions = 1 THEN 1 ELSE 0 END)::bigint AS one_timers
+        FROM twitch_chatter_rollup
+        WHERE last_seen_at >= $1
+        GROUP BY streamer_login
+        HAVING COUNT(*) >= 5
+        "#,
+        since
     )
-    .bind(since)
     .fetch_all(pool)
-    .await?;
+    .await?
+    .into_iter()
+    .map(|row| (row.streamer_login, row.count, row.one_timers))
+    .collect();
 
     let peer_pcts: Vec<f64> = peer_loyalty
         .iter()
@@ -1079,7 +1305,9 @@ pub async fn chat_concentration(
         .map(|r| round1(r.2.unwrap_or(0) as f64 / r.1 as f64 * 100.0))
         .collect();
     let avg_peer_one_timer: Value = if !peer_pcts.is_empty() {
-        json!(round1(peer_pcts.iter().sum::<f64>() / peer_pcts.len() as f64))
+        json!(round1(
+            peer_pcts.iter().sum::<f64>() / peer_pcts.len() as f64
+        ))
     } else {
         json!(0)
     };
@@ -1120,39 +1348,63 @@ pub async fn raid_network(
     since: DateTime<Utc>,
 ) -> Result<Value, sqlx::Error> {
     // Gesendete Raids je Ziel.
-    let sent: Vec<(String, i64, Option<f64>, Option<i64>)> = sqlx::query_as(
-        "SELECT LOWER(to_broadcaster_login), COUNT(*)::bigint, AVG(viewer_count)::float8, SUM(viewer_count)::bigint \
-           FROM twitch_raid_history \
-          WHERE LOWER(from_broadcaster_login) = $1 AND executed_at >= $2 AND COALESCE(success, FALSE) IS TRUE \
-          GROUP BY LOWER(to_broadcaster_login) \
-          ORDER BY COUNT(*) DESC",
+    let sent: Vec<(String, i64, Option<f64>, Option<i64>)> = sqlx::query!(
+        r#"
+        SELECT LOWER(to_broadcaster_login) AS "login!",
+               COUNT(*)::bigint AS "count!",
+               AVG(viewer_count)::float8 AS avg_viewers,
+               SUM(viewer_count)::bigint AS total_viewers
+        FROM twitch_raid_history
+        WHERE LOWER(from_broadcaster_login) = $1
+          AND executed_at >= $2
+          AND COALESCE(success, FALSE) IS TRUE
+        GROUP BY LOWER(to_broadcaster_login)
+        ORDER BY COUNT(*) DESC
+        "#,
+        streamer,
+        since
     )
-    .bind(streamer)
-    .bind(since)
     .fetch_all(pool)
-    .await?;
+    .await?
+    .into_iter()
+    .map(|row| (row.login, row.count, row.avg_viewers, row.total_viewers))
+    .collect();
 
     // Empfangene Raids je Quelle.
-    let received: Vec<(String, i64, Option<f64>, Option<i64>)> = sqlx::query_as(
-        "SELECT LOWER(from_broadcaster_login), COUNT(*)::bigint, AVG(viewer_count)::float8, SUM(viewer_count)::bigint \
-           FROM twitch_raid_history \
-          WHERE LOWER(to_broadcaster_login) = $1 AND executed_at >= $2 AND COALESCE(success, FALSE) IS TRUE \
-          GROUP BY LOWER(from_broadcaster_login) \
-          ORDER BY COUNT(*) DESC",
+    let received: Vec<(String, i64, Option<f64>, Option<i64>)> = sqlx::query!(
+        r#"
+        SELECT LOWER(from_broadcaster_login) AS "login!",
+               COUNT(*)::bigint AS "count!",
+               AVG(viewer_count)::float8 AS avg_viewers,
+               SUM(viewer_count)::bigint AS total_viewers
+        FROM twitch_raid_history
+        WHERE LOWER(to_broadcaster_login) = $1
+          AND executed_at >= $2
+          AND COALESCE(success, FALSE) IS TRUE
+        GROUP BY LOWER(from_broadcaster_login)
+        ORDER BY COUNT(*) DESC
+        "#,
+        streamer,
+        since
     )
-    .bind(streamer)
-    .bind(since)
     .fetch_all(pool)
-    .await?;
+    .await?
+    .into_iter()
+    .map(|row| (row.login, row.count, row.avg_viewers, row.total_viewers))
+    .collect();
 
     // (count, avgViewers[Value: round1 ODER Int-0 via Truthiness], totalViewers).
-    let to_map = |rows: &[(String, i64, Option<f64>, Option<i64>)]| -> HashMap<String, (i64, Value, i64)> {
-        rows.iter()
-            .map(|(login, count, avg, total)| {
-                (login.clone(), (*count, retention_value(*avg), total.unwrap_or(0)))
-            })
-            .collect()
-    };
+    let to_map =
+        |rows: &[(String, i64, Option<f64>, Option<i64>)]| -> HashMap<String, (i64, Value, i64)> {
+            rows.iter()
+                .map(|(login, count, avg, total)| {
+                    (
+                        login.clone(),
+                        (*count, retention_value(*avg), total.unwrap_or(0)),
+                    )
+                })
+                .collect()
+        };
     let sent_map = to_map(&sent);
     let recv_map = to_map(&received);
 
@@ -1274,28 +1526,62 @@ pub async fn peer_comparison(
         Option<f64>,
         Option<i64>,
         i64,
-    )> = sqlx::query_as(
-        "SELECT s.streamer_login, COUNT(*)::bigint, AVG(s.avg_viewers)::float8, \
-                MAX(s.peak_viewers), AVG(s.duration_seconds / 3600.0)::float8, \
-                AVG(s.unique_chatters)::float8, AVG(s.retention_5m)::float8, \
-                SUM(s.duration_seconds / 3600.0)::float8, \
-                SUM(CASE WHEN s.follower_delta > 0 THEN s.follower_delta ELSE 0 END)::bigint, \
-                COUNT(DISTINCT s.stream_title)::bigint \
-           FROM twitch_stream_sessions s \
-          WHERE s.started_at >= $1 AND s.duration_seconds > 300 AND s.ended_at IS NOT NULL \
-          GROUP BY s.streamer_login \
-         HAVING COUNT(*) >= 3 \
-          ORDER BY 3 DESC",
+    )> = sqlx::query!(
+        r#"
+        SELECT s.streamer_login AS "streamer_login!",
+               COUNT(*)::bigint AS "session_count!",
+               AVG(s.avg_viewers)::float8 AS avg_viewers,
+               MAX(s.peak_viewers) AS max_peak,
+               AVG(s.duration_seconds / 3600.0)::float8 AS avg_hours,
+               AVG(s.unique_chatters)::float8 AS avg_chatters,
+               AVG(s.retention_5m)::float8 AS retention_5m,
+               SUM(s.duration_seconds / 3600.0)::float8 AS total_hours,
+               SUM(CASE WHEN s.follower_delta > 0 THEN s.follower_delta ELSE 0 END)::bigint AS "follows_gained!",
+               COUNT(DISTINCT s.stream_title)::bigint AS "unique_titles!"
+        FROM twitch_stream_sessions s
+        WHERE s.started_at >= $1
+          AND s.duration_seconds > 300
+          AND s.ended_at IS NOT NULL
+        GROUP BY s.streamer_login
+        HAVING COUNT(*) >= 3
+        ORDER BY 3 DESC
+        "#,
+        since
     )
-    .bind(since)
     .fetch_all(pool)
-    .await?;
+    .await?
+    .into_iter()
+    .map(|row| {
+        (
+            row.streamer_login,
+            row.session_count,
+            row.avg_viewers,
+            row.max_peak,
+            row.avg_hours,
+            row.avg_chatters,
+            row.retention_5m,
+            row.total_hours,
+            Some(row.follows_gained),
+            row.unique_titles,
+        )
+    })
+    .collect();
 
     let mut peers: Vec<Peer> = Vec::new();
     let mut own_index: Option<usize> = None;
     for (i, r) in all_rows.iter().enumerate() {
-        let (login, sessions, avg_v, max_peak, avg_hours, avg_chat, avg_ret, total_hours, follows, unique_titles) =
-            r;
+        let (
+            login,
+            sessions,
+            avg_v,
+            max_peak,
+            avg_hours,
+            avg_chat,
+            avg_ret,
+            total_hours,
+            follows,
+            unique_titles,
+        ) = r;
         let sessions = *sessions;
         let unique_t = *unique_titles;
 
@@ -1353,7 +1639,14 @@ pub async fn peer_comparison(
     // Pro-Metrik-Rang (nur wenn eigener Streamer dabei).
     let mut metrics_ranked = serde_json::Map::new();
     if own_index.is_some() {
-        for metric in ["avgViewers", "maxPeak", "avgChatters", "retention5m", "titleVariety", "sessions"] {
+        for metric in [
+            "avgViewers",
+            "maxPeak",
+            "avgChatters",
+            "retention5m",
+            "titleVariety",
+            "sessions",
+        ] {
             let mut ordered: Vec<&Peer> = peers.iter().collect();
             ordered.sort_by(|a, b| {
                 metric_value(b, metric)
@@ -1433,33 +1726,58 @@ pub async fn competition_density(
     since: DateTime<Utc>,
 ) -> Result<Value, sqlx::Error> {
     // 1) Stündliche Dichte (alle Streamer, abgeschlossene Sessions).
-    let density: Vec<(i32, i64, Option<f64>, Option<f64>)> = sqlx::query_as(
-        "SELECT EXTRACT(HOUR FROM (s.started_at AT TIME ZONE 'UTC'))::int, \
-                COUNT(DISTINCT s.streamer_login)::bigint, \
-                AVG(s.avg_viewers)::float8, AVG(s.peak_viewers)::float8 \
-           FROM twitch_stream_sessions s \
-          WHERE s.started_at >= $1 AND s.duration_seconds > 300 AND s.ended_at IS NOT NULL \
-          GROUP BY 1 \
-          ORDER BY 1",
+    let density: Vec<(i32, i64, Option<f64>, Option<f64>)> = sqlx::query!(
+        r#"
+        SELECT EXTRACT(HOUR FROM (s.started_at AT TIME ZONE 'UTC'))::int AS "hour!",
+               COUNT(DISTINCT s.streamer_login)::bigint AS "streamers!",
+               AVG(s.avg_viewers)::float8 AS avg_viewers,
+               AVG(s.peak_viewers)::float8 AS avg_peak
+        FROM twitch_stream_sessions s
+        WHERE s.started_at >= $1
+          AND s.duration_seconds > 300
+          AND s.ended_at IS NOT NULL
+        GROUP BY 1
+        ORDER BY 1
+        "#,
+        since
     )
-    .bind(since)
     .fetch_all(pool)
-    .await?;
+    .await?
+    .into_iter()
+    .map(|row| (row.hour, row.streamers, row.avg_viewers, row.avg_peak))
+    .collect();
 
     // 2) Eigene Performance je Stunde (KEIN ended_at-Filter, 1:1 Python).
-    let own_hours: Vec<(i32, i64, Option<f64>, Option<f64>, Option<f64>)> = sqlx::query_as(
-        "SELECT EXTRACT(HOUR FROM (s.started_at AT TIME ZONE 'UTC'))::int, \
-                COUNT(*)::bigint, AVG(s.avg_viewers)::float8, \
-                AVG(s.peak_viewers)::float8, AVG(s.unique_chatters)::float8 \
-           FROM twitch_stream_sessions s \
-          WHERE s.streamer_login = $1 AND s.started_at >= $2 AND s.duration_seconds > 300 \
-          GROUP BY 1 \
-          ORDER BY 1",
+    let own_hours: Vec<(i32, i64, Option<f64>, Option<f64>, Option<f64>)> = sqlx::query!(
+        r#"
+        SELECT EXTRACT(HOUR FROM (s.started_at AT TIME ZONE 'UTC'))::int AS "hour!",
+               COUNT(*)::bigint AS "count!",
+               AVG(s.avg_viewers)::float8 AS avg_viewers,
+               AVG(s.peak_viewers)::float8 AS avg_peak,
+               AVG(s.unique_chatters)::float8 AS avg_chatters
+        FROM twitch_stream_sessions s
+        WHERE s.streamer_login = $1
+          AND s.started_at >= $2
+          AND s.duration_seconds > 300
+        GROUP BY 1
+        ORDER BY 1
+        "#,
+        streamer,
+        since
     )
-    .bind(streamer)
-    .bind(since)
     .fetch_all(pool)
-    .await?;
+    .await?
+    .into_iter()
+    .map(|row| {
+        (
+            row.hour,
+            row.count,
+            row.avg_viewers,
+            row.avg_peak,
+            row.avg_chatters,
+        )
+    })
+    .collect();
 
     let mut own_map: HashMap<i32, Value> = HashMap::new();
     for (hour, cnt, avg_v, avg_peak, avg_chat) in &own_hours {
@@ -1497,30 +1815,47 @@ pub async fn competition_density(
     }
 
     // 3) Dichte je Wochentag.
-    let weekday_density: Vec<(i32, i64, Option<f64>)> = sqlx::query_as(
-        "SELECT EXTRACT(DOW FROM (s.started_at AT TIME ZONE 'UTC'))::int, \
-                COUNT(DISTINCT s.streamer_login)::bigint, AVG(s.avg_viewers)::float8 \
-           FROM twitch_stream_sessions s \
-          WHERE s.started_at >= $1 AND s.duration_seconds > 300 AND s.ended_at IS NOT NULL \
-          GROUP BY 1 \
-          ORDER BY 1",
+    let weekday_density: Vec<(i32, i64, Option<f64>)> = sqlx::query!(
+        r#"
+        SELECT EXTRACT(DOW FROM (s.started_at AT TIME ZONE 'UTC'))::int AS "weekday!",
+               COUNT(DISTINCT s.streamer_login)::bigint AS "streamers!",
+               AVG(s.avg_viewers)::float8 AS avg_viewers
+        FROM twitch_stream_sessions s
+        WHERE s.started_at >= $1
+          AND s.duration_seconds > 300
+          AND s.ended_at IS NOT NULL
+        GROUP BY 1
+        ORDER BY 1
+        "#,
+        since
     )
-    .bind(since)
     .fetch_all(pool)
-    .await?;
+    .await?
+    .into_iter()
+    .map(|row| (row.weekday, row.streamers, row.avg_viewers))
+    .collect();
 
     // 4) Eigene Performance je Wochentag.
-    let own_weekdays: Vec<(i32, i64, Option<f64>, Option<f64>)> = sqlx::query_as(
-        "SELECT EXTRACT(DOW FROM (s.started_at AT TIME ZONE 'UTC'))::int, \
-                COUNT(*)::bigint, AVG(s.avg_viewers)::float8, AVG(s.peak_viewers)::float8 \
-           FROM twitch_stream_sessions s \
-          WHERE s.streamer_login = $1 AND s.started_at >= $2 AND s.duration_seconds > 300 \
-          GROUP BY 1",
+    let own_weekdays: Vec<(i32, i64, Option<f64>, Option<f64>)> = sqlx::query!(
+        r#"
+        SELECT EXTRACT(DOW FROM (s.started_at AT TIME ZONE 'UTC'))::int AS "weekday!",
+               COUNT(*)::bigint AS "count!",
+               AVG(s.avg_viewers)::float8 AS avg_viewers,
+               AVG(s.peak_viewers)::float8 AS avg_peak
+        FROM twitch_stream_sessions s
+        WHERE s.streamer_login = $1
+          AND s.started_at >= $2
+          AND s.duration_seconds > 300
+        GROUP BY 1
+        "#,
+        streamer,
+        since
     )
-    .bind(streamer)
-    .bind(since)
     .fetch_all(pool)
-    .await?;
+    .await?
+    .into_iter()
+    .map(|row| (row.weekday, row.count, row.avg_viewers, row.avg_peak))
+    .collect();
 
     let mut own_wd_map: HashMap<i32, Value> = HashMap::new();
     for (wd, cnt, avg_v, avg_peak) in &own_weekdays {
@@ -1550,7 +1885,9 @@ pub async fn competition_density(
     // Sweet Spots: stabiler Sort nach opportunityScore DESC, Top 5.
     let mut idx: Vec<usize> = (0..hourly.len()).collect();
     idx.sort_by(|&a, &b| {
-        opp_values[b].partial_cmp(&opp_values[a]).unwrap_or(std::cmp::Ordering::Equal)
+        opp_values[b]
+            .partial_cmp(&opp_values[a])
+            .unwrap_or(std::cmp::Ordering::Equal)
     });
     let sweet_spots: Vec<Value> = idx.iter().take(5).map(|&i| hourly[i].clone()).collect();
 
@@ -1570,7 +1907,10 @@ fn int_of(obj: &Value, key: &str) -> i64 {
     obj.get(key).and_then(Value::as_i64).unwrap_or(0)
 }
 fn text_of(obj: &Value, key: &str) -> String {
-    obj.get(key).and_then(Value::as_str).unwrap_or("").to_string()
+    obj.get(key)
+        .and_then(Value::as_str)
+        .unwrap_or("")
+        .to_string()
 }
 fn value_truthy(v: &Value) -> bool {
     match v {
@@ -1652,7 +1992,11 @@ pub fn build_recommendations(data: &Value) -> Vec<Value> {
 
     // Effizienz unter 25. Perzentil.
     let eff = data.get("efficiency").unwrap_or(&null);
-    if eff.get("percentile").and_then(Value::as_f64).unwrap_or(50.0) < 25.0
+    if eff
+        .get("percentile")
+        .and_then(Value::as_f64)
+        .unwrap_or(50.0)
+        < 25.0
         && num(eff, "totalStreamHours") > 5.0
     {
         recs.push(json!({
@@ -1713,14 +2057,26 @@ pub fn build_recommendations(data: &Value) -> Vec<Value> {
     // Schedule-Mismatch (zu viel Konkurrenz in eigenen Slots).
     let sched = data.get("scheduleOptimizer").unwrap_or(&null);
     if truthy(sched, "yourCurrentSlots") && truthy(sched, "competitionHeatmap") {
-        let slots = sched.get("yourCurrentSlots").and_then(Value::as_array).cloned().unwrap_or_default();
-        let your_slots_set: HashSet<(i64, i64)> =
-            slots.iter().map(|s| (int_of(s, "weekday"), int_of(s, "hour"))).collect();
-        let mut comp = sched.get("competitionHeatmap").and_then(Value::as_array).cloned().unwrap_or_default();
+        let slots = sched
+            .get("yourCurrentSlots")
+            .and_then(Value::as_array)
+            .cloned()
+            .unwrap_or_default();
+        let your_slots_set: HashSet<(i64, i64)> = slots
+            .iter()
+            .map(|s| (int_of(s, "weekday"), int_of(s, "hour")))
+            .collect();
+        let mut comp = sched
+            .get("competitionHeatmap")
+            .and_then(Value::as_array)
+            .cloned()
+            .unwrap_or_default();
         comp.sort_by(|a, b| int_of(b, "competitors").cmp(&int_of(a, "competitors")));
         let take = comp.len() / 4;
-        let high_comp_set: HashSet<(i64, i64)> =
-            comp[..take].iter().map(|s| (int_of(s, "weekday"), int_of(s, "hour"))).collect();
+        let high_comp_set: HashSet<(i64, i64)> = comp[..take]
+            .iter()
+            .map(|s| (int_of(s, "weekday"), int_of(s, "hour")))
+            .collect();
         if !your_slots_set.is_empty() && !high_comp_set.is_empty() {
             let overlap = your_slots_set.intersection(&high_comp_set).count();
             let overlap_pct = overlap as f64 / your_slots_set.len() as f64 * 100.0;
@@ -1743,7 +2099,12 @@ pub fn build_recommendations(data: &Value) -> Vec<Value> {
     if truthy(tags, "missingHighPerformers") {
         let full = tags.get("missingHighPerformers").and_then(Value::as_array);
         let missing: Vec<String> = full
-            .map(|a| a.iter().take(3).filter_map(|v| v.as_str().map(String::from)).collect())
+            .map(|a| {
+                a.iter()
+                    .take(3)
+                    .filter_map(|v| v.as_str().map(String::from))
+                    .collect()
+            })
             .unwrap_or_default();
         recs.push(json!({
             "priority": "high",
@@ -1760,7 +2121,9 @@ pub fn build_recommendations(data: &Value) -> Vec<Value> {
     let titles = data.get("titleAnalysis").unwrap_or(&null);
     if truthy(titles, "yourTitles") {
         let your_titles = titles.get("yourTitles").and_then(Value::as_array);
-        let max_reuse = your_titles.map_or(0, |a| a.iter().map(|t| int_of(t, "usageCount")).max().unwrap_or(0));
+        let max_reuse = your_titles.map_or(0, |a| {
+            a.iter().map(|t| int_of(t, "usageCount")).max().unwrap_or(0)
+        });
         if max_reuse > 5 {
             let reused: Vec<&Value> = your_titles
                 .map(|a| a.iter().filter(|t| int_of(t, "usageCount") > 5).collect())
@@ -1804,7 +2167,12 @@ pub fn build_recommendations(data: &Value) -> Vec<Value> {
     if truthy(titles, "yourMissingPatterns") {
         let full = titles.get("yourMissingPatterns").and_then(Value::as_array);
         let keywords: Vec<String> = full
-            .map(|a| a.iter().take(5).filter_map(|v| v.as_str().map(String::from)).collect())
+            .map(|a| {
+                a.iter()
+                    .take(5)
+                    .filter_map(|v| v.as_str().map(String::from))
+                    .collect()
+            })
             .unwrap_or_default();
         recs.push(json!({
             "priority": "low",
@@ -1912,8 +2280,14 @@ pub fn build_recommendations(data: &Value) -> Vec<Value> {
 
     // Ungenutzter Sweet-Spot.
     let comp = data.get("competitionDensity").unwrap_or(&null);
-    let sweet_non_empty = comp.get("sweetSpots").and_then(Value::as_array).map_or(false, |a| !a.is_empty());
-    let hourly_non_empty = comp.get("hourly").and_then(Value::as_array).map_or(false, |a| !a.is_empty());
+    let sweet_non_empty = comp
+        .get("sweetSpots")
+        .and_then(Value::as_array)
+        .map_or(false, |a| !a.is_empty());
+    let hourly_non_empty = comp
+        .get("hourly")
+        .and_then(Value::as_array)
+        .map_or(false, |a| !a.is_empty());
     if sweet_non_empty && hourly_non_empty {
         let best = &comp.get("sweetSpots").and_then(Value::as_array).unwrap()[0];
         if !truthy(best, "yourData") {
@@ -1947,12 +2321,16 @@ pub async fn get_coaching_data(
     let streamer_login = streamer.to_lowercase();
     let since = Utc::now() - chrono::Duration::days(days);
 
-    let count: i64 = sqlx::query_scalar(
-        "SELECT COUNT(*)::bigint FROM twitch_stream_sessions \
-          WHERE streamer_login = $1 AND started_at >= $2",
+    let count: i64 = sqlx::query_scalar!(
+        r#"
+        SELECT COUNT(*)::bigint AS "count!"
+        FROM twitch_stream_sessions
+        WHERE streamer_login = $1
+          AND started_at >= $2
+        "#,
+        &streamer_login,
+        since
     )
-    .bind(&streamer_login)
-    .bind(since)
     .fetch_one(pool)
     .await?;
 
@@ -2012,14 +2390,28 @@ mod tests {
 
     async fn make_pool(schema: &str) -> Option<PgPool> {
         let dsn = std::env::var("TB_TEST_DATABASE_URL").ok()?;
-        let admin = PgPoolOptions::new().max_connections(1).connect(&dsn).await.unwrap();
-        sqlx::query(&format!("DROP SCHEMA IF EXISTS {schema} CASCADE")).execute(&admin).await.unwrap();
-        sqlx::query(&format!("CREATE SCHEMA {schema}")).execute(&admin).await.unwrap();
+        let admin = PgPoolOptions::new()
+            .max_connections(1)
+            .connect(&dsn)
+            .await
+            .unwrap();
+        sqlx::query(&format!("DROP SCHEMA IF EXISTS {schema} CASCADE"))
+            .execute(&admin)
+            .await
+            .unwrap();
+        sqlx::query(&format!("CREATE SCHEMA {schema}"))
+            .execute(&admin)
+            .await
+            .unwrap();
         admin.close().await;
         let opts = PgConnectOptions::from_str(&dsn)
             .unwrap()
             .options([("search_path", schema), ("timezone", "UTC")]);
-        let pool = PgPoolOptions::new().max_connections(2).connect_with(opts).await.unwrap();
+        let pool = PgPoolOptions::new()
+            .max_connections(2)
+            .connect_with(opts)
+            .await
+            .unwrap();
         sqlx::query("CREATE TABLE twitch_stream_sessions (id BIGSERIAL PRIMARY KEY, streamer_login TEXT, started_at TIMESTAMPTZ, ended_at TIMESTAMPTZ, duration_seconds INTEGER, avg_viewers REAL, follower_delta INTEGER, stream_title TEXT, peak_viewers INTEGER, unique_chatters INTEGER, retention_5m REAL, tags TEXT)")
             .execute(&pool).await.unwrap();
         Some(pool)
@@ -2027,21 +2419,29 @@ mod tests {
 
     #[tokio::test]
     async fn efficiency_leer() {
-        let Some(pool) = make_pool("t_coach_eff_empty").await else { return };
-        let v = efficiency(&pool, "nani", Utc::now() - chrono::Duration::days(30)).await.unwrap();
+        let Some(pool) = make_pool("t_coach_eff_empty").await else {
+            return;
+        };
+        let v = efficiency(&pool, "nani", Utc::now() - chrono::Duration::days(30))
+            .await
+            .unwrap();
         assert_eq!(v["viewerHoursPerStreamHour"], 0);
         assert_eq!(v["topPerformers"], json!([]));
     }
 
     #[tokio::test]
     async fn efficiency_berechnet() {
-        let Some(pool) = make_pool("t_coach_eff").await else { return };
+        let Some(pool) = make_pool("t_coach_eff").await else {
+            return;
+        };
         // nani: 2h Stream, avg 50 → viewer_hours 100, ratio 50. other: 2h, avg 10 → ratio 10.
         sqlx::query("INSERT INTO twitch_stream_sessions (streamer_login, started_at, duration_seconds, avg_viewers, follower_delta) VALUES \
             ('nani', NOW()-INTERVAL '1 day', 7200, 50, 20), \
             ('other', NOW()-INTERVAL '1 day', 7200, 10, 5)")
             .execute(&pool).await.unwrap();
-        let v = efficiency(&pool, "nani", Utc::now() - chrono::Duration::days(30)).await.unwrap();
+        let v = efficiency(&pool, "nani", Utc::now() - chrono::Duration::days(30))
+            .await
+            .unwrap();
         assert_eq!(v["viewerHoursPerStreamHour"], 50.0);
         assert_eq!(v["totalStreamHours"], 2.0);
         assert_eq!(v["totalViewerHours"], 100.0);
@@ -2066,14 +2466,22 @@ mod tests {
     #[test]
     fn extract_keywords_stopwords_und_minlaenge() {
         // Stopwords raus, Tokens < 3 Zeichen raus, ä/ö/ü zählen.
-        assert_eq!(extract_keywords(&["der die und".to_string()]), Vec::<String>::new());
+        assert_eq!(
+            extract_keywords(&["der die und".to_string()]),
+            Vec::<String>::new()
+        );
         assert_eq!(extract_keywords(&["ab cd xyz".to_string()]), vec!["xyz"]);
-        assert_eq!(extract_keywords(&["Übung Spaß".to_string()]), vec!["übung", "spaß"]);
+        assert_eq!(
+            extract_keywords(&["Übung Spaß".to_string()]),
+            vec!["übung", "spaß"]
+        );
     }
 
     #[tokio::test]
     async fn title_analysis_berechnet() {
-        let Some(pool) = make_pool("t_coach_title").await else { return };
+        let Some(pool) = make_pool("t_coach_title").await else {
+            return;
+        };
         sqlx::query(
             "INSERT INTO twitch_stream_sessions (streamer_login, started_at, duration_seconds, avg_viewers, follower_delta, stream_title, peak_viewers, unique_chatters) VALUES \
             ('nani',  NOW()-INTERVAL '1 day', 7200, 50, 0, 'Deadlock Grind', 80, 10), \
@@ -2118,7 +2526,9 @@ mod tests {
 
     #[tokio::test]
     async fn schedule_optimizer_berechnet() {
-        let Some(pool) = make_pool("t_coach_sched").await else { return };
+        let Some(pool) = make_pool("t_coach_sched").await else {
+            return;
+        };
         sqlx::query("CREATE TABLE twitch_stats_category (id BIGSERIAL PRIMARY KEY, ts_utc TIMESTAMPTZ, streamer TEXT, viewer_count INTEGER)")
             .execute(&pool).await.unwrap();
         // Slot A (Stunde 14): 2 Konkurrenten Ø(100,200)=150 → opportunity 75.
@@ -2177,7 +2587,9 @@ mod tests {
 
     #[tokio::test]
     async fn duration_analysis_berechnet() {
-        let Some(pool) = make_pool("t_coach_dur").await else { return };
+        let Some(pool) = make_pool("t_coach_dur").await else {
+            return;
+        };
         // 3 Streams im "1-2h"-Bucket (5400s): avg_v 40/50/60→50, chatters→12,
         // retention 80/NULL/90→85. Konstante Dauer → Korrelation 0.
         sqlx::query(
@@ -2221,7 +2633,9 @@ mod tests {
 
     #[tokio::test]
     async fn cross_community_berechnet() {
-        let Some(pool) = make_rollup_pool("t_coach_cross").await else { return };
+        let Some(pool) = make_rollup_pool("t_coach_cross").await else {
+            return;
+        };
         // nani: a,b,c,d (4 unique). rivalx teilt a,b. rivaly teilt a.
         // → shared_count {a,b}=2, isolated=2 → 50 % → "Gute Mischung".
         sqlx::query(
@@ -2260,7 +2674,9 @@ mod tests {
 
     #[tokio::test]
     async fn cross_community_leer() {
-        let Some(pool) = make_rollup_pool("t_coach_cross_empty").await else { return };
+        let Some(pool) = make_rollup_pool("t_coach_cross_empty").await else {
+            return;
+        };
         let v = cross_community(&pool, "nani", Utc::now() - chrono::Duration::days(30))
             .await
             .unwrap();
@@ -2286,7 +2702,9 @@ mod tests {
 
     #[tokio::test]
     async fn tag_optimization_berechnet() {
-        let Some(pool) = make_pool("t_coach_tags").await else { return };
+        let Some(pool) = make_pool("t_coach_tags").await else {
+            return;
+        };
         sqlx::query(
             "INSERT INTO twitch_stream_sessions (streamer_login, started_at, duration_seconds, avg_viewers, tags) VALUES \
             ('nani',  NOW()-INTERVAL '1 day', 7200, 90,  'Deadlock,German'), \
@@ -2323,7 +2741,9 @@ mod tests {
 
     #[tokio::test]
     async fn retention_coaching_berechnet() {
-        let Some(pool) = make_pool("t_coach_ret").await else { return };
+        let Some(pool) = make_pool("t_coach_ret").await else {
+            return;
+        };
         sqlx::query("CREATE TABLE twitch_session_viewers (session_id BIGINT NOT NULL, ts_utc TIMESTAMPTZ NOT NULL, minutes_from_start INTEGER, viewer_count INTEGER NOT NULL, PRIMARY KEY(session_id, ts_utc))")
             .execute(&pool).await.unwrap();
 
@@ -2372,17 +2792,28 @@ mod tests {
         assert_eq!(v["category5mRetention"], 80.0);
         // Kurve: 13 Marken (0,5,..,60).
         assert_eq!(v["yourViewerCurve"].as_array().unwrap().len(), 13);
-        assert_eq!(v["yourViewerCurve"][0], json!({ "minute": 0, "avgViewerPct": 100.0 }));
-        assert_eq!(v["yourViewerCurve"][1], json!({ "minute": 5, "avgViewerPct": 50.0 }));
+        assert_eq!(
+            v["yourViewerCurve"][0],
+            json!({ "minute": 0, "avgViewerPct": 100.0 })
+        );
+        assert_eq!(
+            v["yourViewerCurve"][1],
+            json!({ "minute": 5, "avgViewerPct": 50.0 })
+        );
         // 50 < 100*0.9=90 → kritischer Drop bei Minute 5.
         assert_eq!(v["criticalDropoffMinute"], 5);
         // Top-Performer = other: 200/200 = 100 % bei Minute 0.
-        assert_eq!(v["topPerformerCurve"][0], json!({ "minute": 0, "avgViewerPct": 100.0 }));
+        assert_eq!(
+            v["topPerformerCurve"][0],
+            json!({ "minute": 0, "avgViewerPct": 100.0 })
+        );
     }
 
     #[tokio::test]
     async fn double_stream_detection_berechnet() {
-        let Some(pool) = make_pool("t_coach_double").await else { return };
+        let Some(pool) = make_pool("t_coach_double").await else {
+            return;
+        };
         // 2026-06-10: 2 Sessions (avg 40/60 → Tages-Ø 50) = Doppel-Stream-Tag.
         // 2026-06-11: 1 Session (avg 30) = Einzel-Tag.
         sqlx::query(
@@ -2411,7 +2842,9 @@ mod tests {
 
     #[tokio::test]
     async fn chat_concentration_berechnet() {
-        let Some(pool) = make_rollup_pool("t_coach_conc").await else { return };
+        let Some(pool) = make_rollup_pool("t_coach_conc").await else {
+            return;
+        };
         // nani: 4 Chatter, je 1 pro Bucket. msgs 100/50/30/20 = 200.
         // rival: 5 Chatter, 3 One-Timer → 60 % (Peer mit COUNT>=5).
         sqlx::query(
@@ -2457,7 +2890,9 @@ mod tests {
 
     #[tokio::test]
     async fn raid_network_berechnet() {
-        let Some(pool) = make_pool("t_coach_raid").await else { return };
+        let Some(pool) = make_pool("t_coach_raid").await else {
+            return;
+        };
         sqlx::query("CREATE TABLE twitch_raid_history (from_broadcaster_login TEXT, to_broadcaster_login TEXT, viewer_count INTEGER, executed_at TIMESTAMPTZ, success BOOLEAN)")
             .execute(&pool).await.unwrap();
         // nani → partnera ×2 (100,200), → partnerb ×1 (50). nani ← partnera (80), ← partnerc (40).
@@ -2515,7 +2950,9 @@ mod tests {
 
     #[tokio::test]
     async fn peer_comparison_berechnet() {
-        let Some(pool) = make_pool("t_coach_peer").await else { return };
+        let Some(pool) = make_pool("t_coach_peer").await else {
+            return;
+        };
         // 4 Streamer je 3 Sessions (HAVING>=3). avg_v: alpha150, gamma60, nani50, beta20.
         // nani 3 distinct titles → titleVariety 100; andere 1 → 33.3.
         sqlx::query(
@@ -2573,7 +3010,9 @@ mod tests {
 
     #[tokio::test]
     async fn competition_density_berechnet() {
-        let Some(pool) = make_pool("t_coach_compdens").await else { return };
+        let Some(pool) = make_pool("t_coach_compdens").await else {
+            return;
+        };
         // Alle am 2026-06-10. Stunde 14: nani(50)+other(100) → 2 Streamer, Ø75.
         // Stunde 20: nur nani(80) → 1 Streamer, Ø80 (bester Sweet Spot).
         sqlx::query(
@@ -2611,7 +3050,7 @@ mod tests {
         assert_eq!(weekly.len(), 1);
         assert_eq!(weekly[0]["activeStreamers"], 2);
         assert_eq!(weekly[0]["avgViewers"], 76.7); // (50+100+80)/3
-        // Label = WEEKDAY_NAMES[DOW(2026-06-10)] (So=0).
+                                                   // Label = WEEKDAY_NAMES[DOW(2026-06-10)] (So=0).
         use chrono::Datelike;
         let dow = chrono::NaiveDate::from_ymd_opt(2026, 6, 10)
             .unwrap()
@@ -2653,19 +3092,28 @@ mod tests {
 
         // Regel-Reihenfolge innerhalb critical: double vor efficiency.
         assert_eq!(recs[0]["title"], "Doppel-Streams erkannt");
-        assert_eq!(recs[0]["estimatedImpact"], "An Single-Stream-Tagen hast du 20 mehr Ø Viewer.");
+        assert_eq!(
+            recs[0]["estimatedImpact"],
+            "An Single-Stream-Tagen hast du 20 mehr Ø Viewer."
+        );
         assert_eq!(recs[0]["evidence"], "3 Tage mit mehreren Sessions");
 
         assert_eq!(recs[1]["title"], "Unterdurchschnittliche Effizienz");
         // Float-Repr im Text: 50.0 / 133.3 (nicht "50"/"133").
-        assert_eq!(recs[1]["evidence"], "Perzentil 10% | Du: 50.0 vs Kat: 133.3");
+        assert_eq!(
+            recs[1]["evidence"],
+            "Perzentil 10% | Du: 50.0 vs Kat: 133.3"
+        );
 
         assert_eq!(recs[2]["title"], "Einseitiges Raid-Netzwerk");
         assert_eq!(
             recs[2]["description"],
             "Du sendest 10 Raids, erhaeltst aber nur 2. Reziprozitaet: 0.2x. Aktiv gegenseitige Raid-Partnerschaften aufbauen."
         );
-        assert_eq!(recs[2]["evidence"], "Gesendet: 10 | Erhalten: 2 | Mutual: 1");
+        assert_eq!(
+            recs[2]["evidence"],
+            "Gesendet: 10 | Erhalten: 2 | Mutual: 1"
+        );
     }
 
     #[test]
@@ -2686,7 +3134,9 @@ mod tests {
 
     #[tokio::test]
     async fn get_coaching_data_leer() {
-        let Some(pool) = make_pool("t_coach_assembly_empty").await else { return };
+        let Some(pool) = make_pool("t_coach_assembly_empty").await else {
+            return;
+        };
         // Keine Sessions → empty-Guard.
         let v = get_coaching_data(&pool, "Nani", 30).await.unwrap();
         assert_eq!(v["streamer"], "Nani"); // Original-Case echot
@@ -2699,7 +3149,9 @@ mod tests {
 
     #[tokio::test]
     async fn get_coaching_data_voll() {
-        let Some(pool) = make_full_pool("t_coach_assembly_full").await else { return };
+        let Some(pool) = make_full_pool("t_coach_assembly_full").await else {
+            return;
+        };
         // Eine nani-Session (lowercase in DB) → count>0, empty:false.
         sqlx::query(
             "INSERT INTO twitch_stream_sessions (streamer_login, started_at, ended_at, duration_seconds, avg_viewers, peak_viewers, retention_5m) VALUES \
@@ -2715,9 +3167,18 @@ mod tests {
         assert_eq!(v["empty"], false);
         // Alle 12 Analyse-Keys + recommendations + aiSummary vorhanden.
         for key in [
-            "efficiency", "titleAnalysis", "scheduleOptimizer", "durationAnalysis",
-            "crossCommunity", "tagOptimization", "retentionCoaching", "doubleStreamDetection",
-            "chatConcentration", "raidNetwork", "peerComparison", "competitionDensity",
+            "efficiency",
+            "titleAnalysis",
+            "scheduleOptimizer",
+            "durationAnalysis",
+            "crossCommunity",
+            "tagOptimization",
+            "retentionCoaching",
+            "doubleStreamDetection",
+            "chatConcentration",
+            "raidNetwork",
+            "peerComparison",
+            "competitionDensity",
         ] {
             assert!(v.get(key).is_some(), "Key {key} fehlt");
         }

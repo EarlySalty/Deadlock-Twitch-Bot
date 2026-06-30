@@ -19,12 +19,13 @@ pub struct NetworkStreamerRow {
 
 /// Lädt alle aktiven Partner, sortiert nach Live-Status und Viewer-Anzahl.
 pub async fn network_streamers(pool: &PgPool) -> Result<Vec<NetworkStreamerRow>, sqlx::Error> {
-    sqlx::query_as(
+    sqlx::query_as!(
+        NetworkStreamerRow,
         r#"
         SELECT
-            sp.twitch_login,
-            COALESCE(ls.is_live, 0)           AS is_live,
-            COALESCE(ls.last_viewer_count, 0) AS viewer_count
+            COALESCE(sp.twitch_login, '')     AS "twitch_login!",
+            COALESCE(ls.is_live, 0)           AS "is_live!",
+            COALESCE(ls.last_viewer_count, 0) AS "viewer_count!"
         FROM twitch_streamers_partner_state sp
         LEFT JOIN twitch_live_state ls
                ON LOWER(ls.streamer_login) = LOWER(sp.twitch_login)

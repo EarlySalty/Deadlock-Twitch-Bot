@@ -30,15 +30,15 @@ pub struct EventsubSnapshot {
 /// Slot-/Listener-Counts sind in Prod int4 → Cast auf bigint, damit sqlx i64
 /// dekodieren kann.
 pub async fn eventsub_snapshot(pool: &PgPool) -> Result<Option<EventsubSnapshot>, sqlx::Error> {
-    let row: Option<(DateTime<Utc>, i64, i64, i64, i64, String)> = sqlx::query_as(
+    let row = sqlx::query!(
         r#"
         SELECT
-            ts_utc,
-            listener_count::bigint,
-            COALESCE(used_slots, 0)::bigint,
-            COALESCE(total_slots, 0)::bigint,
-            COALESCE(headroom_slots, 0)::bigint,
-            listeners_json
+            ts_utc AS "ts_utc!",
+            listener_count::bigint AS "listener_count!",
+            COALESCE(used_slots, 0)::bigint AS "used_slots!",
+            COALESCE(total_slots, 0)::bigint AS "total_slots!",
+            COALESCE(headroom_slots, 0)::bigint AS "headroom_slots!",
+            listeners_json AS "listeners_json!"
         FROM twitch_eventsub_capacity_snapshot
         WHERE listener_count > 0
           AND listeners_json IS NOT NULL
@@ -49,16 +49,14 @@ pub async fn eventsub_snapshot(pool: &PgPool) -> Result<Option<EventsubSnapshot>
     .fetch_optional(pool)
     .await?;
 
-    Ok(
-        row.map(|(ts, count, used, total, headroom, json)| EventsubSnapshot {
-            ts_utc: ts,
-            listener_count: count,
-            used_slots: used,
-            total_slots: total,
-            headroom_slots: headroom,
-            listeners_json: json,
-        }),
-    )
+    Ok(row.map(|row| EventsubSnapshot {
+        ts_utc: row.ts_utc,
+        listener_count: row.listener_count,
+        used_slots: row.used_slots,
+        total_slots: row.total_slots,
+        headroom_slots: row.headroom_slots,
+        listeners_json: row.listeners_json,
+    }))
 }
 
 #[cfg(test)]

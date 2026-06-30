@@ -1,0 +1,40 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT last_raw_chat_message_at, last_raw_chat_insert_ok_at, last_raw_chat_insert_error_at, last_raw_chat_error FROM twitch_raw_chat_ingest_health WHERE LOWER(streamer_login) = $1 LIMIT 1",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "last_raw_chat_message_at",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 1,
+        "name": "last_raw_chat_insert_ok_at",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 2,
+        "name": "last_raw_chat_insert_error_at",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 3,
+        "name": "last_raw_chat_error",
+        "type_info": "Text"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Text"
+      ]
+    },
+    "nullable": [
+      true,
+      true,
+      true,
+      true
+    ]
+  },
+  "hash": "d3c9d6704ca5c0f78413a7f4051ee6e3e0a38ee2dc95bff4569454d0fafa2296"
+}

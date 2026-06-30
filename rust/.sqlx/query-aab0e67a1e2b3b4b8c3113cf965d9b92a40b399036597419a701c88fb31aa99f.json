@@ -1,0 +1,22 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n        SELECT row_to_json(t)::text AS \"row!\"\n          FROM (\n               SELECT minutes_from_start, viewer_count\n                 FROM twitch_session_viewers\n                WHERE session_id = $1\n                ORDER BY minutes_from_start ASC\n               ) t\n        ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "row!",
+        "type_info": "Text"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Int8"
+      ]
+    },
+    "nullable": [
+      null
+    ]
+  },
+  "hash": "aab0e67a1e2b3b4b8c3113cf965d9b92a40b399036597419a701c88fb31aa99f"
+}

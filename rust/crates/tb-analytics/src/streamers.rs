@@ -20,7 +20,8 @@ pub struct StreamerListRow {
 /// `is_partner` ergibt sich aus der Partner-Mitgliedschaft, nicht hartkodiert.
 /// Die Rust-seitige Live-/Viewer-Sortierung bleibt erhalten.
 pub async fn active_streamers(pool: &PgPool) -> Result<Vec<StreamerListRow>, sqlx::Error> {
-    sqlx::query_as(
+    sqlx::query_as!(
+        StreamerListRow,
         r#"
         WITH partner_logins AS (
             SELECT LOWER(twitch_login) AS login
@@ -38,10 +39,10 @@ pub async fn active_streamers(pool: &PgPool) -> Result<Vec<StreamerListRow>, sql
             SELECT login FROM recent_logins
         )
         SELECT
-            a.login                            AS twitch_login,
-            (p.login IS NOT NULL)              AS is_partner,
-            COALESCE(ls.is_live, 0)            AS is_live,
-            COALESCE(ls.last_viewer_count, 0)  AS viewer_count
+            COALESCE(a.login, '')              AS "twitch_login!",
+            (p.login IS NOT NULL)              AS "is_partner!",
+            COALESCE(ls.is_live, 0)            AS "is_live!",
+            COALESCE(ls.last_viewer_count, 0)  AS "viewer_count!"
         FROM all_logins a
         LEFT JOIN partner_logins p
                ON p.login = a.login
@@ -143,10 +144,12 @@ mod tests {
             }
         };
         let pool = make_pool(&dsn, "test_streamers_mit_daten").await;
-        sqlx::query("TRUNCATE twitch_streamers_partner_state, twitch_live_state, twitch_stream_sessions")
-            .execute(&pool)
-            .await
-            .unwrap();
+        sqlx::query(
+            "TRUNCATE twitch_streamers_partner_state, twitch_live_state, twitch_stream_sessions",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
         sqlx::query(
             "INSERT INTO twitch_streamers_partner_state (twitch_login, is_partner_active) VALUES ('streamer_a', 1), ('streamer_b', 0)",
         )
@@ -182,10 +185,12 @@ mod tests {
             }
         };
         let pool = make_pool(&dsn, "test_streamers_recent_union").await;
-        sqlx::query("TRUNCATE twitch_streamers_partner_state, twitch_live_state, twitch_stream_sessions")
-            .execute(&pool)
-            .await
-            .unwrap();
+        sqlx::query(
+            "TRUNCATE twitch_streamers_partner_state, twitch_live_state, twitch_stream_sessions",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
         // Aktiver Partner
         sqlx::query(
             "INSERT INTO twitch_streamers_partner_state (twitch_login, is_partner_active) VALUES ('partner_x', 1)",
@@ -206,11 +211,23 @@ mod tests {
         let rows = active_streamers(&pool).await.unwrap();
         let logins: Vec<&str> = rows.iter().map(|r| r.twitch_login.as_str()).collect();
         assert!(logins.contains(&"partner_x"));
-        assert!(logins.contains(&"recent_nonpartner"), "Recent Non-Partner (lowercase) muss erscheinen");
-        assert!(!logins.contains(&"alt_nonpartner"), "Login >90 Tage darf nicht erscheinen");
+        assert!(
+            logins.contains(&"recent_nonpartner"),
+            "Recent Non-Partner (lowercase) muss erscheinen"
+        );
+        assert!(
+            !logins.contains(&"alt_nonpartner"),
+            "Login >90 Tage darf nicht erscheinen"
+        );
 
-        let recent = rows.iter().find(|r| r.twitch_login == "recent_nonpartner").unwrap();
-        assert!(!recent.is_partner, "Recent Non-Partner muss isPartner=false haben");
+        let recent = rows
+            .iter()
+            .find(|r| r.twitch_login == "recent_nonpartner")
+            .unwrap();
+        assert!(
+            !recent.is_partner,
+            "Recent Non-Partner muss isPartner=false haben"
+        );
         let partner = rows.iter().find(|r| r.twitch_login == "partner_x").unwrap();
         assert!(partner.is_partner);
     }

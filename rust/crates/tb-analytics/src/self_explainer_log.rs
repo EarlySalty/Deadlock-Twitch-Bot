@@ -46,18 +46,18 @@ pub async fn insert(
     flagged_injection: bool,
     peer: Option<&str>,
 ) -> Result<(), sqlx::Error> {
-    sqlx::query(
+    sqlx::query!(
         r#"
         INSERT INTO twitch_self_explainer_log
             (question, answer, grounded, flagged_injection, peer)
         VALUES ($1, $2, $3, $4, $5)
         "#,
+        question,
+        answer,
+        grounded,
+        flagged_injection,
+        peer
     )
-    .bind(question)
-    .bind(answer)
-    .bind(grounded)
-    .bind(flagged_injection)
-    .bind(peer)
     .execute(pool)
     .await?;
     Ok(())
@@ -68,15 +68,23 @@ pub async fn list_recent(
     pool: &PgPool,
     limit: i64,
 ) -> Result<Vec<SelfExplainerLogEntry>, sqlx::Error> {
-    sqlx::query_as(
+    sqlx::query_as!(
+        SelfExplainerLogEntry,
         r#"
-        SELECT id, question, answer, grounded, flagged_injection, peer, created_at
+        SELECT
+            id AS "id!",
+            question AS "question!",
+            answer AS "answer!",
+            grounded AS "grounded!",
+            flagged_injection AS "flagged_injection!",
+            peer,
+            created_at AS "created_at!"
         FROM twitch_self_explainer_log
         ORDER BY created_at DESC
         LIMIT $1
         "#,
+        limit
     )
-    .bind(limit)
     .fetch_all(pool)
     .await
 }
@@ -150,9 +158,16 @@ mod tests {
         let dsn = db_dsn_or_skip!();
         let pool = make_pool(&dsn, "test_sel_log_insert").await;
 
-        insert(&pool, "Wie funktioniert der Bot?", "Der Bot macht X.", true, false, Some("1.2.3.4"))
-            .await
-            .expect("insert");
+        insert(
+            &pool,
+            "Wie funktioniert der Bot?",
+            "Der Bot macht X.",
+            true,
+            false,
+            Some("1.2.3.4"),
+        )
+        .await
+        .expect("insert");
 
         let entries = list_recent(&pool, 10).await.expect("list");
         assert_eq!(entries.len(), 1);
@@ -195,7 +210,11 @@ mod tests {
         .bind(false)
         .bind(false)
         .bind(Option::<String>::None)
-        .bind(chrono::DateTime::parse_from_rfc3339("2026-01-01T00:00:00Z").unwrap().with_timezone(&chrono::Utc))
+        .bind(
+            chrono::DateTime::parse_from_rfc3339("2026-01-01T00:00:00Z")
+                .unwrap()
+                .with_timezone(&chrono::Utc),
+        )
         .execute(&pool)
         .await
         .expect("insert alt");
@@ -212,7 +231,11 @@ mod tests {
         .bind(true)
         .bind(false)
         .bind(Option::<String>::None)
-        .bind(chrono::DateTime::parse_from_rfc3339("2026-06-01T00:00:00Z").unwrap().with_timezone(&chrono::Utc))
+        .bind(
+            chrono::DateTime::parse_from_rfc3339("2026-06-01T00:00:00Z")
+                .unwrap()
+                .with_timezone(&chrono::Utc),
+        )
         .execute(&pool)
         .await
         .expect("insert neu");

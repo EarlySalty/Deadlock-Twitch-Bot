@@ -13,15 +13,15 @@ use sqlx::PgPool;
 ///
 /// `last_seen_at` und `last_started_at` sind in Prod TEXT → expliziter Cast auf timestamptz.
 pub async fn system_last_tick(pool: &PgPool) -> Result<Option<DateTime<Utc>>, sqlx::Error> {
-    let row: (Option<DateTime<Utc>>,) = sqlx::query_as(
+    let last_tick = sqlx::query_scalar!(
         r#"
-        SELECT MAX(COALESCE(last_seen_at::timestamptz, last_started_at::timestamptz))
+        SELECT MAX(COALESCE(last_seen_at::timestamptz, last_started_at::timestamptz)) AS last_tick
         FROM twitch_live_state
         "#,
     )
     .fetch_one(pool)
     .await?;
-    Ok(row.0)
+    Ok(last_tick)
 }
 
 /// Raw-Chat-Ingest-Gesundheit aus `twitch_raw_chat_ingest_health`.
@@ -41,16 +41,6 @@ pub struct RawChatHealth {
     pub is_live_scope: bool,
 }
 
-type RawChatRow = (
-    Option<String>,
-    Option<DateTime<Utc>>,
-    Option<DateTime<Utc>>,
-    Option<DateTime<Utc>>,
-    Option<String>,
-    Option<i64>,
-    Option<bool>,
-);
-
 /// Bevorzugt live Streamer (JOIN `twitch_live_state WHERE is_live = 1 AND
 /// last_seen_at >= NOW() - 4h`), Fallback auf neueste Zeile in der Tabelle.
 /// Bug B: `is_live = 1` statt `TRUE` (INTEGER-Spalte).
@@ -66,7 +56,7 @@ type RawChatRow = (
 /// `last_seen_at` in `twitch_live_state` sind in Prod TEXT → expliziter
 /// Cast auf timestamptz für Vergleiche und EXTRACT.
 pub async fn raw_chat_health(pool: &PgPool) -> Result<Option<RawChatHealth>, sqlx::Error> {
-    let row: Option<RawChatRow> = sqlx::query_as(
+    let row = sqlx::query!(
         r#"
         WITH live_scope AS (
             SELECT
@@ -121,7 +111,7 @@ pub async fn raw_chat_health(pool: &PgPool) -> Result<Option<RawChatHealth>, sql
                 THEN EXTRACT(EPOCH FROM (NOW() - newest_signal_at))::BIGINT
                 ELSE NULL
             END AS lag_seconds,
-            is_live_scope
+            is_live_scope AS "is_live_scope!"
         FROM chosen
         ORDER BY newest_signal_at ASC NULLS LAST
         LIMIT 1
@@ -130,17 +120,15 @@ pub async fn raw_chat_health(pool: &PgPool) -> Result<Option<RawChatHealth>, sql
     .fetch_optional(pool)
     .await?;
 
-    Ok(row.map(
-        |(login, msg, ok, err, last_err, lag, is_live)| RawChatHealth {
-            streamer_login: login,
-            last_message_at: msg,
-            last_insert_ok_at: ok,
-            last_insert_error_at: err,
-            last_error: last_err,
-            lag_seconds: lag,
-            is_live_scope: is_live.unwrap_or(false),
-        },
-    ))
+    Ok(row.map(|row| RawChatHealth {
+        streamer_login: row.streamer_login,
+        last_message_at: row.last_raw_chat_message_at,
+        last_insert_ok_at: row.last_raw_chat_insert_ok_at,
+        last_insert_error_at: row.last_raw_chat_insert_error_at,
+        last_error: row.last_error,
+        lag_seconds: row.lag_seconds,
+        is_live_scope: row.is_live_scope,
+    }))
 }
 
 #[cfg(test)]

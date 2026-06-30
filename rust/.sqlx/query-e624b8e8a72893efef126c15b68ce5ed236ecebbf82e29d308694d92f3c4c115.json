@@ -1,0 +1,15 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "UPDATE twitch_streamers SET twitch_user_id = COALESCE(NULLIF(twitch_user_id, ''), $2) WHERE LOWER(twitch_login) = LOWER($1)",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Text",
+        "Text"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "e624b8e8a72893efef126c15b68ce5ed236ecebbf82e29d308694d92f3c4c115"
+}

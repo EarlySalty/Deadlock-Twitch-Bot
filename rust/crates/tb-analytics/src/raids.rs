@@ -26,11 +26,12 @@ pub struct RaidRow {
 /// `api_public.py:142-158`: `WHERE success = TRUE … LIMIT 10` — ohne den
 /// Filter erschienen auch fehlgeschlagene Raids in der öffentlichen Liste).
 pub async fn recent_raids(pool: &PgPool) -> Result<Vec<RaidRow>, sqlx::Error> {
-    sqlx::query_as(
+    sqlx::query_as!(
+        RaidRow,
         r#"
         SELECT
-            from_broadcaster_login  AS from_channel,
-            to_broadcaster_login    AS to_channel,
+            from_broadcaster_login  AS "from_channel!",
+            to_broadcaster_login    AS "to_channel!",
             viewer_count            AS viewers,
             executed_at::text       AS executed_at
         FROM twitch_raid_history

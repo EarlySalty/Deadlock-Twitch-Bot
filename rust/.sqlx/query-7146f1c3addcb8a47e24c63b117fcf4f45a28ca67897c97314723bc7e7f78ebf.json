@@ -1,0 +1,23 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n        SELECT AVG(retention_5m)::float8 AS avg_retention\n        FROM twitch_stream_sessions\n        WHERE streamer_login = $1\n          AND started_at >= $2\n          AND retention_5m IS NOT NULL\n        ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "avg_retention",
+        "type_info": "Float8"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Text",
+        "Timestamptz"
+      ]
+    },
+    "nullable": [
+      null
+    ]
+  },
+  "hash": "7146f1c3addcb8a47e24c63b117fcf4f45a28ca67897c97314723bc7e7f78ebf"
+}

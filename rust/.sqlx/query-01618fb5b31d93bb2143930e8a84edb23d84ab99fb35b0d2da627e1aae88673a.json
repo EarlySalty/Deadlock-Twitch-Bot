@@ -1,0 +1,28 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n        SELECT AVG(viewer_count)::FLOAT8 AS avg_viewers,\n               MAX(viewer_count)::BIGINT AS peak_viewers\n          FROM twitch_stats_category\n         WHERE ts_utc > NOW() - ($1::INT * INTERVAL '1 day')\n        ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "avg_viewers",
+        "type_info": "Float8"
+      },
+      {
+        "ordinal": 1,
+        "name": "peak_viewers",
+        "type_info": "Int8"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Int4"
+      ]
+    },
+    "nullable": [
+      null,
+      null
+    ]
+  },
+  "hash": "01618fb5b31d93bb2143930e8a84edb23d84ab99fb35b0d2da627e1aae88673a"
+}

@@ -1,0 +1,15 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n        INSERT INTO twitch_streamers (twitch_login, twitch_user_id)\n        VALUES ($1, $2)\n        ON CONFLICT (twitch_login) DO UPDATE SET\n            twitch_user_id = COALESCE(twitch_streamers.twitch_user_id, EXCLUDED.twitch_user_id)\n        ",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Text",
+        "Text"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "358ef2c7a3245984a31bb622e510e2cc1f5f03edc011bf7db5832730fdc239d1"
+}

@@ -1,0 +1,35 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n        SELECT DATE(started_at) AS \"date!\",\n               COUNT(*)::bigint AS \"count!\",\n               AVG(avg_viewers)::float8 AS avg_viewers\n        FROM twitch_stream_sessions\n        WHERE streamer_login = $1\n          AND started_at >= $2\n          AND duration_seconds > 300\n        GROUP BY 1\n        HAVING COUNT(*) > 1\n        ORDER BY 1 DESC\n        ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "date!",
+        "type_info": "Date"
+      },
+      {
+        "ordinal": 1,
+        "name": "count!",
+        "type_info": "Int8"
+      },
+      {
+        "ordinal": 2,
+        "name": "avg_viewers",
+        "type_info": "Float8"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Text",
+        "Timestamptz"
+      ]
+    },
+    "nullable": [
+      null,
+      null,
+      null
+    ]
+  },
+  "hash": "33d3efd4eabd48e2f3fd3bfa64475786ea3a53ea7565ec5d13db8761f48f69ae"
+}

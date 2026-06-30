@@ -110,7 +110,8 @@ pub async fn load_partner_access_state(
     }
 
     // ── twitch_partners Lookup ──────────────────────────────────────────────
-    let partner_row: Option<PartnerRow> = sqlx::query_as(
+    let partner_row = sqlx::query_as!(
+        PartnerRow,
         r#"
         SELECT
             status,
@@ -133,18 +134,19 @@ pub async fn load_partner_access_state(
             COALESCE(departnered_at, admin_archived_at, partnered_at) DESC
         LIMIT 1
         "#,
+        &login,
+        &user_id
     )
-    .bind(&login)
-    .bind(&user_id)
     .fetch_optional(pool)
     .await?;
 
     // ── twitch_token_blacklist Lookup ───────────────────────────────────────
-    let blacklist_row: Option<BlacklistRow> = sqlx::query_as(
+    let blacklist_row = sqlx::query_as!(
+        BlacklistRow,
         r#"
         SELECT
             grace_expires_at::text,
-            error_count,
+            error_count::bigint AS error_count,
             role_removed
         FROM twitch_token_blacklist
         WHERE (COALESCE($1, '') != '' AND twitch_user_id = $1)
@@ -152,9 +154,9 @@ pub async fn load_partner_access_state(
         ORDER BY last_error_at DESC NULLS LAST, first_error_at DESC NULLS LAST
         LIMIT 1
         "#,
+        &user_id,
+        &login
     )
-    .bind(&user_id)
-    .bind(&login)
     .fetch_optional(pool)
     .await?;
 
@@ -168,12 +170,7 @@ pub async fn load_partner_access_state(
     let mut operational_state = String::new();
 
     if let Some(ref row) = partner_row {
-        let status_text = row
-            .status
-            .as_deref()
-            .unwrap_or("")
-            .trim()
-            .to_lowercase();
+        let status_text = row.status.as_deref().unwrap_or("").trim().to_lowercase();
         let archived_at = row.archived_at.as_deref().unwrap_or("").trim().to_string();
         let manual_opt_out = row.manual_partner_opt_out.unwrap_or(0) != 0;
         technical_pause_reason = row
@@ -215,7 +212,12 @@ pub async fn load_partner_access_state(
     // ── Blacklist-Grace prüfen ──────────────────────────────────────────────
     let mut token_error_grace_expires_at: Option<String> = None;
     if let Some(ref bl) = blacklist_row {
-        let grace_raw = bl.grace_expires_at.as_deref().unwrap_or("").trim().to_string();
+        let grace_raw = bl
+            .grace_expires_at
+            .as_deref()
+            .unwrap_or("")
+            .trim()
+            .to_string();
         let error_count = bl.error_count.unwrap_or(0);
         let role_removed = bl.role_removed.unwrap_or(0) != 0;
 

@@ -26,10 +26,11 @@ pub struct DatabaseStats {
 /// Tabellen die im aktuellen `search_path`-Schema nicht existieren werden
 /// weggelassen. Kein Fehler bei fehlender Tabelle.
 pub async fn database_stats(pool: &PgPool, tables: &[&str]) -> Result<DatabaseStats, sqlx::Error> {
-    let (database_size_bytes,): (i64,) =
-        sqlx::query_as("SELECT pg_database_size(current_database())::BIGINT")
-            .fetch_one(pool)
-            .await?;
+    let database_size_bytes = sqlx::query_scalar!(
+        "SELECT pg_database_size(current_database())::BIGINT AS \"database_size_bytes!\"",
+    )
+    .fetch_one(pool)
+    .await?;
 
     let mut table_stats: Vec<TableStat> = Vec::new();
 
@@ -37,21 +38,21 @@ pub async fn database_stats(pool: &PgPool, tables: &[&str]) -> Result<DatabaseSt
         // Prüfen ob Tabelle im aktuellen Schema existiert. Der relname aus
         // pg_class ist die kanonische, im Schema existierende Relation — er
         // dient als Allowlist-Quelle für den nachfolgenden COUNT(*)-Identifier.
-        let existing: Option<(String,)> = sqlx::query_as(
+        let existing = sqlx::query_scalar!(
             r#"
-            SELECT relname
+            SELECT relname AS "relname!"
             FROM pg_class
             WHERE relname = $1
               AND relnamespace = (
                   SELECT oid FROM pg_namespace WHERE nspname = current_schema()
               )
             "#,
+            table
         )
-        .bind(table)
         .fetch_optional(pool)
         .await?;
 
-        if let Some((relname,)) = existing {
+        if let Some(relname) = existing {
             // Exakter Row-Count (Python-Parität): reltuples ist nur eine
             // ANALYZE-/autovacuum-gepflegte Schätzung und meldet 0 für frisch
             // befüllte, nie analysierte Tabellen. Identifier wird quote-escaped;
@@ -62,12 +63,13 @@ pub async fn database_stats(pool: &PgPool, tables: &[&str]) -> Result<DatabaseSt
                     .fetch_one(pool)
                     .await?;
 
-            let size_result: Result<(i64,), sqlx::Error> =
-                sqlx::query_as("SELECT pg_total_relation_size($1::regclass)::BIGINT")
-                    .bind(&relname)
-                    .fetch_one(pool)
-                    .await;
-            let size_bytes = size_result.unwrap_or((0,)).0;
+            let size_result = sqlx::query_scalar!(
+                "SELECT pg_total_relation_size($1::text::regclass)::BIGINT AS \"size_bytes!\"",
+                &relname
+            )
+            .fetch_one(pool)
+            .await;
+            let size_bytes = size_result.unwrap_or(0);
 
             table_stats.push(TableStat {
                 table: relname,

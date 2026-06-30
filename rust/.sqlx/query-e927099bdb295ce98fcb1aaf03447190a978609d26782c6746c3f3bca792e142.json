@@ -1,0 +1,41 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT COALESCE(from_game, '(unbekannt)') AS \"from_game!\", COALESCE(to_game, '(unbekannt)') AS \"to_game!\", COUNT(*)::bigint AS \"cnt!\", COALESCE(AVG(viewer_count), 0)::float8 AS \"avg_v!\" FROM exp_game_transitions WHERE LOWER(streamer) = $1 AND ts_utc >= $2 GROUP BY from_game, to_game ORDER BY COUNT(*) DESC LIMIT 50",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "from_game!",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 1,
+        "name": "to_game!",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 2,
+        "name": "cnt!",
+        "type_info": "Int8"
+      },
+      {
+        "ordinal": 3,
+        "name": "avg_v!",
+        "type_info": "Float8"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Text",
+        "Text"
+      ]
+    },
+    "nullable": [
+      null,
+      null,
+      null,
+      null
+    ]
+  },
+  "hash": "e927099bdb295ce98fcb1aaf03447190a978609d26782c6746c3f3bca792e142"
+}

@@ -1,0 +1,47 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n        SELECT s.stream_title AS \"stream_title!\",\n               AVG(s.avg_viewers)::float8 AS avg_viewers,\n               MAX(s.peak_viewers) AS peak_viewers,\n               AVG(s.unique_chatters)::float8 AS avg_chatters,\n               COUNT(*)::bigint AS \"usage_count!\"\n        FROM twitch_stream_sessions s\n        WHERE s.streamer_login = $1\n          AND s.started_at >= $2\n          AND s.stream_title IS NOT NULL\n          AND s.stream_title != ''\n        GROUP BY s.stream_title\n        ORDER BY 2 DESC\n        ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "stream_title!",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 1,
+        "name": "avg_viewers",
+        "type_info": "Float8"
+      },
+      {
+        "ordinal": 2,
+        "name": "peak_viewers",
+        "type_info": "Int4"
+      },
+      {
+        "ordinal": 3,
+        "name": "avg_chatters",
+        "type_info": "Float8"
+      },
+      {
+        "ordinal": 4,
+        "name": "usage_count!",
+        "type_info": "Int8"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Text",
+        "Timestamptz"
+      ]
+    },
+    "nullable": [
+      true,
+      null,
+      null,
+      null,
+      null
+    ]
+  },
+  "hash": "68aa5a09f33fb9bd93265404c49385ebf05f3345fd61ad7a9dac904bc39a4714"
+}

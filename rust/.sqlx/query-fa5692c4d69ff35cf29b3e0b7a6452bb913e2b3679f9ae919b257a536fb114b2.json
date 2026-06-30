@@ -1,0 +1,29 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT game_name, AVG(avg_viewers)::float8 AS gam_avg FROM exp_sessions WHERE LOWER(streamer) = $1 AND started_at >= $2 AND ended_at IS NOT NULL AND game_name IS NOT NULL AND game_name <> '' GROUP BY game_name ORDER BY gam_avg DESC LIMIT 1",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "game_name",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 1,
+        "name": "gam_avg",
+        "type_info": "Float8"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Text",
+        "Text"
+      ]
+    },
+    "nullable": [
+      true,
+      null
+    ]
+  },
+  "hash": "fa5692c4d69ff35cf29b3e0b7a6452bb913e2b3679f9ae919b257a536fb114b2"
+}

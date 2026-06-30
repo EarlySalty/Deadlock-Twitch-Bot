@@ -1,0 +1,65 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT COUNT(*)::int8 AS \"sessions!\", ROUND(AVG(avg_viewers)::numeric, 2)::float8 AS avg_viewers, ROUND(AVG(peak_viewers)::numeric, 2)::float8 AS peak_viewers, ROUND(AVG(unique_chatters)::numeric, 2)::float8 AS unique_chatters, ROUND(AVG(first_time_chatters)::numeric, 2)::float8 AS first_time_chatters, ROUND(AVG(returning_chatters)::numeric, 2)::float8 AS returning_chatters, ROUND(AVG(dropoff_pct)::numeric, 4)::float8 AS dropoff_pct, ROUND(AVG(follower_delta)::numeric, 2)::float8 AS follower_delta FROM ( SELECT avg_viewers, peak_viewers, unique_chatters, first_time_chatters, returning_chatters, dropoff_pct, CASE WHEN follower_delta IS NOT NULL AND NOT (followers_end = 0 AND followers_start > 0) THEN follower_delta ELSE NULL END AS follower_delta FROM twitch_stream_sessions WHERE LOWER(streamer_login) = LOWER($1) AND id <> $2 AND ended_at IS NOT NULL ORDER BY ended_at DESC LIMIT 5 ) recent",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "sessions!",
+        "type_info": "Int8"
+      },
+      {
+        "ordinal": 1,
+        "name": "avg_viewers",
+        "type_info": "Float8"
+      },
+      {
+        "ordinal": 2,
+        "name": "peak_viewers",
+        "type_info": "Float8"
+      },
+      {
+        "ordinal": 3,
+        "name": "unique_chatters",
+        "type_info": "Float8"
+      },
+      {
+        "ordinal": 4,
+        "name": "first_time_chatters",
+        "type_info": "Float8"
+      },
+      {
+        "ordinal": 5,
+        "name": "returning_chatters",
+        "type_info": "Float8"
+      },
+      {
+        "ordinal": 6,
+        "name": "dropoff_pct",
+        "type_info": "Float8"
+      },
+      {
+        "ordinal": 7,
+        "name": "follower_delta",
+        "type_info": "Float8"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Text",
+        "Int8"
+      ]
+    },
+    "nullable": [
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      null
+    ]
+  },
+  "hash": "c17ad189a6ae06d342c89b8997b7feb91016496ee40c4766702a9508f0377dc6"
+}

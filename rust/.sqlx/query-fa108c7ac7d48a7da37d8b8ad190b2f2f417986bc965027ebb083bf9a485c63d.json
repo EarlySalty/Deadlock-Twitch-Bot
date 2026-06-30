@@ -1,0 +1,46 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n        SELECT COUNT(*)::bigint AS \"total!\",\n               COALESCE(SUM(gross_amount_cents), 0)::bigint AS \"total_cents!\",\n               COALESCE(SUM(CASE WHEN pdf_generated_at IS NOT NULL AND email_sent_at IS NULL THEN 1 ELSE 0 END), 0)::bigint AS \"pending_email!\",\n               MAX(pdf_generated_at) AS last_generated,\n               MAX(email_sent_at) AS last_emailed\n        FROM affiliate_gutschriften\n        WHERE affiliate_twitch_login = $1\n        ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "total!",
+        "type_info": "Int8"
+      },
+      {
+        "ordinal": 1,
+        "name": "total_cents!",
+        "type_info": "Int8"
+      },
+      {
+        "ordinal": 2,
+        "name": "pending_email!",
+        "type_info": "Int8"
+      },
+      {
+        "ordinal": 3,
+        "name": "last_generated",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 4,
+        "name": "last_emailed",
+        "type_info": "Text"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Text"
+      ]
+    },
+    "nullable": [
+      null,
+      null,
+      null,
+      null,
+      null
+    ]
+  },
+  "hash": "fa108c7ac7d48a7da37d8b8ad190b2f2f417986bc965027ebb083bf9a485c63d"
+}

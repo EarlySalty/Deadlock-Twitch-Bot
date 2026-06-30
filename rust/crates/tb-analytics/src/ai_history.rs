@@ -31,18 +31,28 @@ pub async fn save_analysis(
     points: &Value,
 ) -> Option<i64> {
     // JSONB normalisiert Whitespace → Input-Serialisierung egal.
+    let days_i32 = match i32::try_from(days) {
+        Ok(v) => v,
+        Err(error) => {
+            tracing::warn!(%error, days, "AI-Analyse days ausserhalb int4-Range");
+            return None;
+        }
+    };
     let snapshot_text = data_snapshot.to_string();
     let points_text = points.to_string();
-    sqlx::query_scalar::<_, i64>(
-        "INSERT INTO ai_analyses (streamer, days, model, generated_at, data_snapshot, points) \
-         VALUES ($1, $2, $3, $4, $5::jsonb, $6::jsonb) RETURNING id",
+    sqlx::query_scalar!(
+        r#"
+        INSERT INTO ai_analyses (streamer, days, model, generated_at, data_snapshot, points)
+        VALUES ($1, $2, $3, $4, $5::text::jsonb, $6::text::jsonb)
+        RETURNING id AS "id!"
+        "#,
+        streamer,
+        days_i32,
+        model_name,
+        generated_at,
+        snapshot_text,
+        points_text
     )
-    .bind(streamer)
-    .bind(days)
-    .bind(model_name)
-    .bind(generated_at)
-    .bind(snapshot_text)
-    .bind(points_text)
     .fetch_one(pool)
     .await
     .ok()
@@ -51,37 +61,65 @@ pub async fn save_analysis(
 fn count_priority(points: &Value, priority: &str) -> i64 {
     points
         .as_array()
-        .map(|arr| arr.iter().filter(|p| p.get("priority").and_then(Value::as_str) == Some(priority)).count() as i64)
+        .map(|arr| {
+            arr.iter()
+                .filter(|p| p.get("priority").and_then(Value::as_str) == Some(priority))
+                .count() as i64
+        })
         .unwrap_or(0)
 }
 
 /// Lädt die letzten AI-Analysen eines Streamers (neueste zuerst).
-pub async fn load_ai_history(pool: &PgPool, streamer: &str, limit: i64) -> Result<Value, sqlx::Error> {
-    let rows: Vec<(i64, String, i32, String, DateTime<Utc>, Value, Value)> = sqlx::query_as(
-        "SELECT id::bigint, streamer, days, model, generated_at, data_snapshot, points \
-           FROM ai_analyses WHERE streamer = $1 ORDER BY generated_at DESC LIMIT $2",
+pub async fn load_ai_history(
+    pool: &PgPool,
+    streamer: &str,
+    limit: i64,
+) -> Result<Value, sqlx::Error> {
+    let rows = sqlx::query!(
+        r#"
+        SELECT id AS "id!",
+               streamer AS "streamer!",
+               days AS "days!",
+               model AS "model!",
+               generated_at AS "generated_at!",
+               data_snapshot::text AS "data_snapshot!",
+               points::text AS "points!"
+        FROM ai_analyses
+        WHERE streamer = $1
+        ORDER BY generated_at DESC
+        LIMIT $2
+        "#,
+        streamer,
+        limit
     )
-    .bind(streamer)
-    .bind(limit)
     .fetch_all(pool)
     .await?;
 
     let result: Vec<Value> = rows
         .into_iter()
-        .map(|(id, streamer, days, model, generated_at, snap, points)| {
+        .map(|row| {
             // model_alias: "claude" im Namen → opus, sonst minimax (Python AI_MODEL_*).
-            let model_alias = if model.contains("claude") { "opus" } else { "minimax" };
+            let model_alias = if row.model.contains("claude") {
+                "opus"
+            } else {
+                "minimax"
+            };
+            let snap: Value = serde_json::from_str(&row.data_snapshot).unwrap_or(Value::Null);
+            let points: Value = serde_json::from_str(&row.points).unwrap_or(Value::Null);
+            let kritisch_count = count_priority(&points, "kritisch");
+            let hoch_count = count_priority(&points, "hoch");
+            let mittel_count = count_priority(&points, "mittel");
             json!({
-                "id": id,
-                "streamer": streamer,
-                "days": days,
+                "id": row.id,
+                "streamer": row.streamer,
+                "days": row.days,
                 "model": model_alias,
-                "generatedAt": emit_iso(generated_at),
+                "generatedAt": emit_iso(row.generated_at),
                 "dataSnapshot": snap,
                 "points": points,
-                "kritischCount": count_priority(&points, "kritisch"),
-                "hochCount": count_priority(&points, "hoch"),
-                "mittelCount": count_priority(&points, "mittel"),
+                "kritischCount": kritisch_count,
+                "hochCount": hoch_count,
+                "mittelCount": mittel_count,
             })
         })
         .collect();
@@ -97,12 +135,30 @@ mod tests {
 
     async fn make_pool(schema: &str) -> Option<PgPool> {
         let dsn = std::env::var("TB_TEST_DATABASE_URL").ok()?;
-        let admin = PgPoolOptions::new().max_connections(1).connect(&dsn).await.unwrap();
-        sqlx::query(&format!("DROP SCHEMA IF EXISTS {schema} CASCADE")).execute(&admin).await.unwrap();
-        sqlx::query(&format!("CREATE SCHEMA {schema}")).execute(&admin).await.unwrap();
+        let admin = PgPoolOptions::new()
+            .max_connections(1)
+            .connect(&dsn)
+            .await
+            .unwrap();
+        sqlx::query(&format!("DROP SCHEMA IF EXISTS {schema} CASCADE"))
+            .execute(&admin)
+            .await
+            .unwrap();
+        sqlx::query(&format!("CREATE SCHEMA {schema}"))
+            .execute(&admin)
+            .await
+            .unwrap();
         admin.close().await;
-        let opts = PgConnectOptions::from_str(&dsn).unwrap().options([("search_path", schema)]);
-        Some(PgPoolOptions::new().max_connections(2).connect_with(opts).await.unwrap())
+        let opts = PgConnectOptions::from_str(&dsn)
+            .unwrap()
+            .options([("search_path", schema)]);
+        Some(
+            PgPoolOptions::new()
+                .max_connections(2)
+                .connect_with(opts)
+                .await
+                .unwrap(),
+        )
     }
 
     async fn create_ai_analyses_fixture(pool: &PgPool) {
@@ -129,7 +185,9 @@ mod tests {
 
     #[tokio::test]
     async fn leere_historie() {
-        let Some(pool) = make_pool("t_aih_empty").await else { return };
+        let Some(pool) = make_pool("t_aih_empty").await else {
+            return;
+        };
         create_ai_analyses_fixture(&pool).await;
         let v = load_ai_history(&pool, "nani", 20).await.unwrap();
         assert_eq!(v, json!([]));
@@ -137,7 +195,9 @@ mod tests {
 
     #[tokio::test]
     async fn historie_mit_counts() {
-        let Some(pool) = make_pool("t_aih").await else { return };
+        let Some(pool) = make_pool("t_aih").await else {
+            return;
+        };
         create_ai_analyses_fixture(&pool).await;
         sqlx::query("INSERT INTO ai_analyses (streamer, days, model, generated_at, data_snapshot, points) VALUES \
             ('nani', 30, 'claude-opus', NOW()-INTERVAL '1 hour', '{\"x\":1}'::jsonb, '[{\"priority\":\"kritisch\"},{\"priority\":\"hoch\"},{\"priority\":\"kritisch\"}]'::jsonb), \
@@ -148,7 +208,7 @@ mod tests {
         let v = load_ai_history(&pool, "nani", 20).await.unwrap();
         let arr = v.as_array().unwrap();
         assert_eq!(arr.len(), 2); // nur nani
-        // neueste zuerst: minimax-Eintrag (NOW) vor claude (NOW-1h).
+                                  // neueste zuerst: minimax-Eintrag (NOW) vor claude (NOW-1h).
         assert_eq!(arr[0]["model"], "minimax");
         assert_eq!(arr[0]["mittelCount"], 1);
         assert_eq!(arr[1]["model"], "opus"); // claude → opus
@@ -159,7 +219,9 @@ mod tests {
 
     #[tokio::test]
     async fn save_analysis_persistiert() {
-        let Some(pool) = make_pool("t_aih_save").await else { return };
+        let Some(pool) = make_pool("t_aih_save").await else {
+            return;
+        };
         create_ai_analyses_fixture(&pool).await;
         let id = save_analysis(
             &pool,
@@ -183,7 +245,9 @@ mod tests {
 
     #[tokio::test]
     async fn limit_greift() {
-        let Some(pool) = make_pool("t_aih_limit").await else { return };
+        let Some(pool) = make_pool("t_aih_limit").await else {
+            return;
+        };
         create_ai_analyses_fixture(&pool).await;
         for i in 0..5 {
             sqlx::query("INSERT INTO ai_analyses (streamer, days, model, generated_at, data_snapshot, points) VALUES ('nani',30,'minimax', NOW()-($1 || ' minutes')::interval, '{}'::jsonb, '[]'::jsonb)")

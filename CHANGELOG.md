@@ -1,3 +1,11 @@
+## #317 — Siebte und letzte Welle: die Auswertungs-Engine wird beim Bauen geprüft
+
+**Ausgangslage:** Das Herzstück der Auswertung — Streamer- und Partner-Status, Affiliate- und Provisionsrechnung, Watch-Time, Raid-Historie, Post-Stream-Berichte, Stripe-Abgleich, Chat-Statistik — führte seine statischen Datenbank-Abfragen bisher als reine Textbausteine aus. Es ist der größte Brocken dieser Umstellung und der letzte.
+
+**Änderung:** 258 statische Abfragen werden jetzt schon beim Bauen gegen ein frisch aus dem Bauplan erzeugtes Schema geprüft. Drei Stellen bleiben bewusst ungeprüft und sind markiert: zwei lesen aus einer Fehler-Log-Tabelle, die im Bauplan absichtlich nicht geführt wird (der Code verträgt ihr Fehlen seit jeher), eine zählt über einen erst zur Laufzeit bekannten Tabellennamen. Dabei wurden mehrere Werte wieder passgenau geführt (Ja/Nein-Felder, Zahlbreiten), und ein stiller Fehler wurde gefangen: eine Abfrage für den Post-Stream-Bericht hätte nach dem Umbau leere bzw. unklassifizierte Chat-Zeilen mitgezählt, die vorher bewusst aussortiert waren — auf das alte Verhalten zurückgedreht.
+
+**Ergebnis:** Verschwindet oder ändert sich in der Auswertungs-Engine eine Spalte, scheitert künftig der Bau statt der laufende Dienst. An einer nachgestellten Kopie bewiesen: Bauen ohne Datenbank läuft, eine künstlich umbenannte Spalte lässt den Bau sofort scheitern, und die volle Testsuite ist Zeile für Zeile gleich grün wie vorher (359 Tests). Damit ist die gesamte Umstellung abgeschlossen. Für den Betrieb ändert sich nichts.
+
 ## #316 — Sechste Welle: das Streamer-Dashboard-Backend wird beim Bauen geprüft
 
 **Ausgangslage:** Die Schicht hinter dem Dashboard — Übersichten, Zuschauer- und Raid-Auswertungen, Abrechnungs- und Affiliate-Seiten, Clip-Verwaltung und Admin-Werkzeuge — führte 172 ihrer statischen Datenbank-Abfragen bisher als reine Textbausteine aus. Eine Schema-Änderung wäre erst zur Laufzeit aufgefallen, wenn der betroffene Endpunkt schon hängt.
