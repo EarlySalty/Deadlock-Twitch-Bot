@@ -72,7 +72,7 @@ Problematisch/sonderbehandeln: `tb-llm` als SQLite-Ledger separat vorbereiten; `
 
 | Tabelle | Callsite(s) | Entscheidung |
 |---|---|---|
-| `twitch_admin_error_log` | `rust/crates/tb-analytics/src/system_errors.rs:41`, `rust/crates/tb-analytics/src/system_errors.rs:70` | Nicht in `rust/migrations`; Test-DDL existiert, Produktionscode toleriert fehlende Relation. Migration nachziehen oder diese Stellen bewusst roh lassen. |
+| `twitch_admin_error_log` | `rust/crates/tb-analytics/src/system_errors.rs:41`, `rust/crates/tb-analytics/src/system_errors.rs:70` | **Entscheidung 2026-06-30: bewusst roh lassen (Option B).** Tabelle ist nicht in `rust/migrations` und wird vom Rust-Prod-Code nirgends geschrieben (nur 2 Lesestellen; `INSERT`/`CREATE TABLE` nur im `#[cfg(test)]`-Block). Produktionscode toleriert die fehlende Relation bewusst (Graceful Degradation: leere Antwort statt 500, Doc-Kommentar in `system_errors.rs`). Eine Migration würde per `query!`-Makro eine Schemaform behaupten, die wir nicht kontrollieren → Decode-Fehler gegen die echte/legacy Prod-Tabelle, d.h. Graceful Degradation würde zu hartem Laufzeitfehler. Daher bleiben `system_errors.rs:41` und `:70` Laufzeit-`sqlx::query_as` und werden in Welle 7 **nicht** zu Makros konvertiert. Falls die Tabelle künftig migrationsverwaltet werden soll → separates Ticket mit Prod-Schema-Abgleich. |
 
 ## CONVERTIBLE_PG-Callsites
 
