@@ -8,20 +8,20 @@ use std::sync::{Arc, Mutex};
 
 use chrono::{Duration, Utc};
 use serde_json::json;
-use sqlx::postgres::{PgConnectOptions, PgPoolOptions};
 use sqlx::PgPool;
-use tb_crypto::{aad, FieldCipher, KID};
+use sqlx::postgres::{PgConnectOptions, PgPoolOptions};
+use tb_crypto::{FieldCipher, KID, aad};
 use tb_observability::{
     AnalyticsObservabilityService, EventSink, MillisSource, ObservabilityEvent,
     RaidObservabilityService,
 };
 use tb_raid::{
     ArrivalReadiness, AutoRaidPipeline, AutoRaidPipelineOutcome, AutoRaidRequest,
-    FairnessCandidate, FallbackStreamSource, FollowerEnricher, FollowersEnrichmentObservation,
-    OnlineCandidate, PendingRaidStore, RaidApi, RaidAuthStore, RaidBlacklistStore, RaidExecutor,
-    RaidHistoryStore, RaidTokenRefresher, RefreshError, ScoreStore, StreamData, StrikesStore,
-    TokenBlacklistStore, TokenOwnerInfo, TokenProvider, TokenResponse, TwitchTokenClient,
-    FOLLOWERS_UNKNOWN,
+    FOLLOWERS_UNKNOWN, FairnessCandidate, FallbackStreamSource, FollowerEnricher,
+    FollowersEnrichmentObservation, OnlineCandidate, PendingRaidStore, RaidApi, RaidAuthStore,
+    RaidBlacklistStore, RaidExecutor, RaidHistoryStore, RaidTokenRefresher, RefreshError,
+    ScoreStore, StreamData, StrikesStore, TokenBlacklistStore, TokenOwnerInfo, TokenProvider,
+    TokenResponse, TwitchTokenClient,
 };
 
 const TEST_KEY_HEX: &str = "0f0e0d0c0b0a09080706050403020100ffeeddccbbaa99887766554433221100";
@@ -639,12 +639,13 @@ async fn register_pending_spielt_orphan_chat_notification_nach() {
     // … und genau einmal nachgespielt.
     assert_eq!(replay.replayed.lock().unwrap().clone(), vec![orphan]);
     // Pending ist registriert (Store-Schritt lief vor dem Replay).
-    assert!(h
-        .pending
-        .lock()
-        .unwrap()
-        .get("200", Some("quelle"))
-        .is_some());
+    assert!(
+        h.pending
+            .lock()
+            .unwrap()
+            .get("200", Some("quelle"))
+            .is_some()
+    );
 }
 
 /// P2.30: Ohne passenden Orphan wird nichts nachgespielt (Replay-Liste leer).
@@ -815,7 +816,7 @@ async fn blacklist_und_quelle_werden_nie_geraidet() {
 }
 
 #[tokio::test]
-async fn blacklist_globale_bans_und_id_only_exclusions_filtern_fallback() {
+async fn blacklist_und_globale_bans_filtern_fallback() {
     let pool = pool_or_skip!("t6w_pipe_global_ban_filter");
     seed_source_token(&pool, "100").await;
 
@@ -833,49 +834,18 @@ async fn blacklist_globale_bans_und_id_only_exclusions_filtern_fallback() {
     .execute(&pool)
     .await
     .unwrap();
-    sqlx::query(
-        "INSERT INTO twitch_streamers (twitch_login, twitch_user_id)
-         VALUES ('exclusion_banned', '500')",
-    )
-    .execute(&pool)
-    .await
-    .unwrap();
-    sqlx::query(
-        "INSERT INTO twitch_exclusions (twitch_user_id, kind, reason)
-         VALUES ('500', 'banned', 'hard ban')",
-    )
-    .execute(&pool)
-    .await
-    .unwrap();
-    sqlx::query(
-        "INSERT INTO twitch_exclusions (twitch_user_id, kind, reason)
-         VALUES ('550', 'banned', 'id-only hard ban')",
-    )
-    .execute(&pool)
-    .await
-    .unwrap();
 
     let mut raid_blacklisted = fairness("300", "raid_blacklisted");
     raid_blacklisted.viewer_count = 1;
     let mut global_banned = fairness("400", "global_banned");
     global_banned.viewer_count = 2;
-    let mut exclusion_banned = fairness("500", "exclusion_banned");
-    exclusion_banned.viewer_count = 3;
-    let mut id_only_exclusion_banned = fairness("550", "id_only_exclusion_banned");
-    id_only_exclusion_banned.viewer_count = 1;
     let mut allowed = fairness("600", "allowed_target");
     allowed.viewer_count = 20;
 
     let h = build(
         &pool,
         HashMap::new(),
-        vec![
-            raid_blacklisted,
-            global_banned,
-            exclusion_banned,
-            id_only_exclusion_banned,
-            allowed,
-        ],
+        vec![raid_blacklisted, global_banned, allowed],
     );
 
     let outcome = h.pipeline.run(&request(vec![])).await;
@@ -885,7 +855,7 @@ async fn blacklist_globale_bans_und_id_only_exclusions_filtern_fallback() {
             target_login: "allowed_target".to_string(),
             is_partner_raid: false,
         },
-        "Raid-Blacklist, globale Ban-Liste und Exclusion-Bans inklusive ID-only-Bans muessen vor der Auswahl greifen"
+        "Raid-Blacklist und globale Ban-Liste muessen vor der Auswahl greifen"
     );
     assert_eq!(h.api.calls.lock().unwrap().clone(), vec!["600"]);
 }

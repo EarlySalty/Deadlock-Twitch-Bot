@@ -30,9 +30,9 @@ use sqlx::PgPool;
 
 use crate::score_store::{PartnerRaidScoreUpsert, ScoreStore};
 use crate::scoring::{
-    compute_base_score, compute_fairness_score, compute_final_score,
-    compute_new_partner_multiplier, compute_raid_boost_multiplier, compute_readiness_score,
-    round_score, NEUTRAL_SCORE, NEW_PARTNER_RAID_THRESHOLD,
+    NEUTRAL_SCORE, NEW_PARTNER_RAID_THRESHOLD, compute_base_score, compute_fairness_score,
+    compute_final_score, compute_new_partner_multiplier, compute_raid_boost_multiplier,
+    compute_readiness_score, round_score,
 };
 
 /// Lookback-Fenster für Sessions (Python `LOOKBACK_DAYS = 45`).
@@ -105,7 +105,10 @@ fn iso_utc_seconds(value: DateTime<Utc>) -> String {
 /// avg-Dauer + Zuverlässigkeit, Berlin-Zeitraster (weekday+hour-Match),
 /// today_received_raids (Berlin-Datum), live/cache/offline-Verzweigung,
 /// Multiplikatoren und final_score.
-pub fn build_score_upsert(input: &ScoreBuildInput, now_utc: DateTime<Utc>) -> PartnerRaidScoreUpsert {
+pub fn build_score_upsert(
+    input: &ScoreBuildInput,
+    now_utc: DateTime<Utc>,
+) -> PartnerRaidScoreUpsert {
     let lookback_cutoff = now_utc - chrono::Duration::days(LOOKBACK_DAYS);
 
     // recent_started / recent_durations (Python Z. 682–692).
@@ -181,8 +184,7 @@ pub fn build_score_upsert(input: &ScoreBuildInput, now_utc: DateTime<Utc>) -> Pa
     let base_score: f64;
     let final_score: f64;
 
-    if is_live && started_at_live.is_some() {
-        let started = started_at_live.expect("checked is_some");
+    if let (true, Some(started)) = (is_live, started_at_live) {
         current_started_at = Some(iso_utc_seconds(started));
         current_uptime_sec = (now_utc - started).num_seconds().max(0) as i32;
         duration_score = if duration_history_reliable && avg_duration_sec > 0 {
@@ -202,7 +204,8 @@ pub fn build_score_upsert(input: &ScoreBuildInput, now_utc: DateTime<Utc>) -> Pa
         fairness_score =
             compute_fairness_score(sent_30d, received_30d, received_7d, today_received_raids);
         base_score = compute_base_score(readiness_score, fairness_score);
-        final_score = compute_final_score(base_score, new_partner_multiplier, raid_boost_multiplier);
+        final_score =
+            compute_final_score(base_score, new_partner_multiplier, raid_boost_multiplier);
     } else if let Some(cache) = &input.existing_cache {
         current_started_at = cache
             .current_started_at
@@ -230,7 +233,8 @@ pub fn build_score_upsert(input: &ScoreBuildInput, now_utc: DateTime<Utc>) -> Pa
         fairness_score =
             compute_fairness_score(sent_30d, received_30d, received_7d, today_received_raids);
         base_score = compute_base_score(readiness_score, fairness_score);
-        final_score = compute_final_score(base_score, new_partner_multiplier, raid_boost_multiplier);
+        final_score =
+            compute_final_score(base_score, new_partner_multiplier, raid_boost_multiplier);
     }
 
     PartnerRaidScoreUpsert {
@@ -360,10 +364,7 @@ impl PartnerScoreRefresher {
         .await
     }
 
-    async fn load_partners_by_ids(
-        &self,
-        ids: &[String],
-    ) -> Result<Vec<PartnerRow>, sqlx::Error> {
+    async fn load_partners_by_ids(&self, ids: &[String]) -> Result<Vec<PartnerRow>, sqlx::Error> {
         sqlx::query_as::<_, PartnerRow>(
             r#"
             SELECT twitch_user_id, LOWER(twitch_login) AS twitch_login
@@ -399,10 +400,7 @@ impl PartnerScoreRefresher {
             .collect())
     }
 
-    async fn load_raid_timestamps(
-        &self,
-        user_id: &str,
-    ) -> Result<Vec<DateTime<Utc>>, sqlx::Error> {
+    async fn load_raid_timestamps(&self, user_id: &str) -> Result<Vec<DateTime<Utc>>, sqlx::Error> {
         let rows: Vec<(Option<DateTime<Utc>>,)> = sqlx::query_as(
             r#"
             SELECT executed_at
@@ -610,8 +608,8 @@ mod tests {
         let now = Utc.with_ymd_and_hms(2026, 6, 21, 12, 0, 0).unwrap();
         let mut input = base_input("uid_today");
         input.raid_timestamps = vec![
-            now - chrono::Duration::hours(2),  // heute (Berlin)
-            now - chrono::Duration::days(2),   // vor 2 Tagen
+            now - chrono::Duration::hours(2), // heute (Berlin)
+            now - chrono::Duration::days(2),  // vor 2 Tagen
         ];
         let upsert = build_score_upsert(&input, now);
         assert_eq!(upsert.received_successful_raids_total, 2);

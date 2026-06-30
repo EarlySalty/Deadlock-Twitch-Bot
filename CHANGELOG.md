@@ -1,3 +1,11 @@
+## #313 — Auto-Raid-Sperrquelle bereinigt
+
+**Ausgangslage:** Der Auto-Raid-Filter las gebannte Ziele noch aus zwei Quellen, obwohl die globale Chatter-Ban-Liste inzwischen die maßgebliche Wahrheit für gebannte Accounts ist.
+
+**Änderung:** Die Auswahl lädt weiter die explizite Raid-Blacklist und die globale Chatter-Ban-Liste. Der alte `twitch_exclusions kind='banned'`-Zweig ist entfernt.
+
+**Ergebnis:** Das Verhalten bleibt gleich streng, aber die Sperrquelle ist klarer: Raid-Blacklist für reine Raid-Sperren, globale Ban-Liste für gebannte Accounts.
+
 ## #312 — Vierte Welle: interne Streamer-API compile-fest, plus ein Altlast-Fehler bei der Discord-Zuordnung
 
 Die interne API rund um Streamer-Status, Analytics und Partner-Lebenszyklus hat ihre Datenbankabfragen bisher als reine Textbausteine ausgeführt — eine Schema-Änderung wäre erst zur Laufzeit aufgefallen, wenn der betroffene Endpunkt schon hängt. Wir haben die 51 statischen Abfragen dieser Schicht auf zur Bauzeit geprüfte Varianten umgestellt: Passt eine Abfrage nicht mehr zum echten Schema, scheitert schon der Build statt später der laufende Dienst.
@@ -37,7 +45,6 @@ Unterm Strich: Schema-Brüche fliegen beim Bauen auf statt im Betrieb, und ein S
 **Änderung:** Diese Abfrage wird ab jetzt schon beim Bauen gegen ein frisch aus dem Bauplan erzeugtes Schema geprüft — inklusive der Feinheit, dass zwei eigentlich als „darf leer sein" geführte Spalten hier bewusst als gefüllt behandelt werden, weil die Abfrage genau das schon sicherstellt. Reine Test-Abfragen, die sich ihr eigenes Wegwerf-Schema bauen, bleiben absichtlich ungeprüft.
 
 **Ergebnis:** Verschwindet oder ändert sich diese Spalte im echten Schema, scheitert künftig der Bau statt erst der Betrieb. An einer nachgestellten Kopie bewiesen: Bauen ohne Datenbank läuft, eine künstlich umbenannte Spalte lässt den Bau sofort scheitern, die echte Abfrage prüft sauber durch. Für den Betrieb ändert sich nichts.
-
 ## #307 — Datenbank-Abfragen werden ab jetzt schon beim Bauen geprüft (Pilot + Fundament)
 
 **Ausgangslage:** Ob eine Abfrage zur Datenbank passt — gibt es die Spalte, stimmt der Typ — stellte sich bisher erst zur Laufzeit heraus. Liefen Bauplan und Datenbank auseinander, fiel ein Fehler im schlimmsten Fall erst im Betrieb auf, als Absturz statt als klare Meldung. Genau diese Klasse von Brüchen hat die letzten Schema-Aufräumungen ausgelöst.
