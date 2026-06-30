@@ -1,0 +1,52 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n        SELECT a.id AS \"id!\",\n               a.session_id,\n               a.started_at AS \"started_at!\",\n               a.duration_seconds,\n               a.is_automatic,\n               s.started_at AS \"session_start!\"\n          FROM twitch_ad_break_events a\n          JOIN twitch_stream_sessions s ON s.id = a.session_id\n         WHERE a.started_at >= $1\n           AND a.session_id IS NOT NULL\n         ORDER BY a.started_at DESC\n         LIMIT 200\n        ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id!",
+        "type_info": "Int8"
+      },
+      {
+        "ordinal": 1,
+        "name": "session_id",
+        "type_info": "Int8"
+      },
+      {
+        "ordinal": 2,
+        "name": "started_at!",
+        "type_info": "Timestamptz"
+      },
+      {
+        "ordinal": 3,
+        "name": "duration_seconds",
+        "type_info": "Int4"
+      },
+      {
+        "ordinal": 4,
+        "name": "is_automatic",
+        "type_info": "Bool"
+      },
+      {
+        "ordinal": 5,
+        "name": "session_start!",
+        "type_info": "Timestamptz"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Timestamptz"
+      ]
+    },
+    "nullable": [
+      false,
+      true,
+      false,
+      true,
+      true,
+      false
+    ]
+  },
+  "hash": "0ebbd6370c3e3dab16f45ebf6b236d65be8bcc0b5c3ec26cb16e57dee011ce96"
+}

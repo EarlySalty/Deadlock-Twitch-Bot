@@ -2,14 +2,14 @@
 //! wurden. Python läuft nicht mehr — diese Handler ersetzen die Legacy-Routen.
 
 use axum::{
+    Extension, Json,
     extract::{Path, State},
     http::{HeaderMap, StatusCode},
     response::IntoResponse,
-    Extension, Json,
 };
 use chrono::Utc;
 use serde::Deserialize;
-use sqlx::{PgPool, Row};
+use sqlx::PgPool;
 
 use crate::handlers::streamers::{ChatActionExt, ChatActionResult};
 use tb_domain::normalize_twitch_login;
@@ -24,11 +24,12 @@ pub async fn observability_handler(State(pool): State<PgPool>) -> impl IntoRespo
     let store = ProcessingInboxStore::new(pool.clone());
     let pending = store.list_pending(20).await;
     let dead_letters = store.list_dead_letters(20).await;
-    let active_sessions: i64 =
-        sqlx::query_scalar("SELECT COUNT(*) FROM twitch_stream_sessions WHERE ended_at IS NULL")
-            .fetch_one(&pool)
-            .await
-            .unwrap_or(0);
+    let active_sessions: i64 = sqlx::query_scalar!(
+        r#"SELECT COUNT(*) AS "count!" FROM twitch_stream_sessions WHERE ended_at IS NULL"#
+    )
+    .fetch_one(&pool)
+    .await
+    .unwrap_or(0);
 
     match (pending, dead_letters) {
         (Ok(pending), Ok(dead_letters)) => (
@@ -85,24 +86,30 @@ pub async fn chatters_debug_handler(
             Json(serde_json::json!({"error": "invalid_login"})),
         );
     };
-    let session_id: Option<i64> = sqlx::query_scalar(
-        "SELECT id FROM twitch_stream_sessions \
-         WHERE LOWER(streamer_login) = $1 AND ended_at IS NULL \
-         ORDER BY started_at DESC LIMIT 1",
+    let session_id: Option<i64> = sqlx::query_scalar!(
+        r#"SELECT id AS "id!"
+             FROM twitch_stream_sessions
+            WHERE LOWER(streamer_login) = $1 AND ended_at IS NULL
+            ORDER BY started_at DESC
+            LIMIT 1"#,
+        &login
     )
-    .bind(&login)
     .fetch_optional(&pool)
     .await
     .unwrap_or(None);
-    let rows = match sqlx::query(
-        "SELECT chatter_login, chatter_id, messages, last_seen_at::text AS last_seen_at \
-         FROM twitch_session_chatters \
-         WHERE LOWER(streamer_login) = $1 \
-           AND ($2::integer IS NULL OR session_id = $2) \
-         ORDER BY messages DESC, chatter_login ASC LIMIT 200",
+    let rows = match sqlx::query!(
+        r#"SELECT chatter_login AS "chatter_login!",
+                  chatter_id,
+                  COALESCE(messages, 0) AS "messages!",
+                  last_seen_at::text AS "last_seen_at?"
+             FROM twitch_session_chatters
+            WHERE LOWER(streamer_login) = $1
+              AND ($2::bigint IS NULL OR session_id = $2)
+            ORDER BY messages DESC, chatter_login ASC
+            LIMIT 200"#,
+        &login,
+        session_id
     )
-    .bind(&login)
-    .bind(session_id)
     .fetch_all(&pool)
     .await
     {
@@ -119,10 +126,10 @@ pub async fn chatters_debug_handler(
         .into_iter()
         .map(|row| {
             serde_json::json!({
-                "login": row.try_get::<String, _>("chatter_login").unwrap_or_default(),
-                "userId": row.try_get::<Option<String>, _>("chatter_id").unwrap_or(None),
-                "messages": row.try_get::<Option<i32>, _>("messages").unwrap_or(None).unwrap_or(0),
-                "lastSeenAt": row.try_get::<Option<String>, _>("last_seen_at").unwrap_or(None),
+                "login": row.chatter_login,
+                "userId": row.chatter_id,
+                "messages": row.messages,
+                "lastSeenAt": row.last_seen_at,
             })
         })
         .collect::<Vec<_>>();

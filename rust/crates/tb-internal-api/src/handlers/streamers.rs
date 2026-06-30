@@ -63,13 +63,13 @@
 //!   departnern (clear_verification) + Rolle entziehen; unbekannte Modi → 200
 //!   "Unbekannter Modus" (Python-Parität, KEIN Permanent-Fallback).
 
-use crate::idempotency::{IdempotencyState, Prepared, IDEMPOTENCY_KEY_HEADER};
+use crate::idempotency::{IDEMPOTENCY_KEY_HEADER, IdempotencyState, Prepared};
 use crate::streamer_lifecycle as lifecycle;
 use axum::{
+    Extension, Json,
     extract::{OriginalUri, Path, Query, State},
     http::{HeaderMap, StatusCode},
     response::{IntoResponse, Response},
-    Extension, Json,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::json;
@@ -903,8 +903,8 @@ async fn archive_handler_inner(
 /// wie link-click). Die interne API ist loopback-only; das ist Defense-in-depth.
 fn enforce_discord_action_scope() -> Result<(), ApiError> {
     use super::telemetry_routes::{
-        enforce_scope_allowlist, parse_allowlist_ids, ENV_ALLOWED_CHANNEL_IDS,
-        ENV_ALLOWED_GUILD_IDS, ENV_ALLOWED_ROLE_IDS,
+        ENV_ALLOWED_CHANNEL_IDS, ENV_ALLOWED_GUILD_IDS, ENV_ALLOWED_ROLE_IDS,
+        enforce_scope_allowlist, parse_allowlist_ids,
     };
     for (env, key) in [
         (ENV_ALLOWED_GUILD_IDS, "guild_id"),
@@ -990,13 +990,14 @@ async fn discord_flag_handler_inner(
 /// Prüft, ob ein aktiver Partner (`status = 'active'`) mit diesem Login existiert.
 /// Spiegelt Pythons `load_active_partner`-Treffer für den Discord-Flag-No-Op-Pfad.
 async fn active_partner_exists(pool: &PgPool, login: &str) -> Result<bool, sqlx::Error> {
-    let row = sqlx::query_scalar::<_, i32>(
-        "SELECT 1 FROM twitch_partners \
-         WHERE LOWER(twitch_login) = LOWER($1) \
-           AND COALESCE(status, '') = 'active' \
-         LIMIT 1",
+    let row = sqlx::query_scalar!(
+        r#"SELECT 1 AS "one!"
+             FROM twitch_partners
+            WHERE LOWER(twitch_login) = LOWER($1)
+              AND COALESCE(status, '') = 'active'
+            LIMIT 1"#,
+        login
     )
-    .bind(login)
     .fetch_optional(pool)
     .await?;
     Ok(row.is_some())
@@ -1275,16 +1276,16 @@ pub async fn session_detail_handler(
 mod tests {
     use super::*;
     use axum::{
+        Extension, Router,
         body::Body,
         extract::ConnectInfo,
         http::{Request, StatusCode},
         middleware,
         routing::{delete, get, post},
-        Extension, Router,
     };
     use sqlx::postgres::PgPoolOptions;
     use std::net::SocketAddr;
-    use tb_http_core::{internal_auth, loopback_only, ExpectedToken, INTERNAL_API_BASE_PATH};
+    use tb_http_core::{ExpectedToken, INTERNAL_API_BASE_PATH, internal_auth, loopback_only};
     use tower::ServiceExt;
 
     // ── P2.142: mark_member Loose-Coercion ────────────────────────────────────

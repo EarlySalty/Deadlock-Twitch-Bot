@@ -17,19 +17,20 @@
 //!
 //! # Typ-Konventionen
 //!
-//! Alle SQL-Queries nutzen `sqlx::query()` (untyped) mit manuellen
-//! `try_get`-Aufrufen, um Konflikte zwischen Postgres-`NUMERIC`
-//! (AVG-Ergebnis) und fehlenden `bigdecimal`-Features zu vermeiden.
+//! Dynamisch gebaute SQL-Queries nutzen weiter `sqlx::query()` mit manuellen
+//! `try_get`-Aufrufen; statische Queries werden compile-time geprüft.
+//! Das vermeidet Konflikte zwischen Postgres-`NUMERIC`
+//! (AVG-Ergebnis) und fehlenden `bigdecimal`-Features in den Dynamic-Pfaden.
 //! Alle `AVG()`-Spalten werden per `CAST(... AS DOUBLE PRECISION)` erzwungen.
 
 use axum::{
+    Extension, Json,
     extract::{Query, State},
     response::IntoResponse,
-    Extension, Json,
 };
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use sqlx::{PgPool, Row};
 use std::sync::Arc;
 use tb_domain::normalize_twitch_login;
@@ -279,19 +280,6 @@ fn row_i32(row: &sqlx::postgres::PgRow, col: &str) -> i32 {
     0
 }
 
-fn row_str_opt(row: &sqlx::postgres::PgRow, col: &str) -> Option<String> {
-    row.try_get::<Option<String>, _>(col).unwrap_or(None)
-}
-
-fn row_i32_opt(row: &sqlx::postgres::PgRow, col: &str) -> Option<i32> {
-    row.try_get::<Option<i32>, _>(col).unwrap_or(None)
-}
-
-/// TIMESTAMPTZ-Spalte (z. B. `twitch_eventsub_capacity_snapshot.ts_utc`).
-fn row_ts_opt(row: &sqlx::postgres::PgRow, col: &str) -> Option<DateTime<Utc>> {
-    row.try_get::<Option<DateTime<Utc>>, _>(col).unwrap_or(None)
-}
-
 // ── SQL-Templates ─────────────────────────────────────────────────────────────
 
 fn build_top_sql(table: &str, is_tracked: bool, streamer_filter: bool) -> String {
@@ -396,7 +384,17 @@ fn build_weekday_sql(table: &str, is_tracked: bool, streamer_filter: bool) -> St
 
 /// Gibt die Parameter-Platzhalter $1…$7 zurück, verschoben um `offset`
 /// (0 = kein Streamer-Filter, 1 = +1 wegen $1=login).
-fn params_offset(offset: usize) -> (&'static str, &'static str, &'static str, &'static str, &'static str, &'static str, &'static str) {
+fn params_offset(
+    offset: usize,
+) -> (
+    &'static str,
+    &'static str,
+    &'static str,
+    &'static str,
+    &'static str,
+    &'static str,
+    &'static str,
+) {
     match offset {
         0 => ("$1", "$2", "$3", "$4", "$5", "$6", "$7"),
         1 => ("$2", "$3", "$4", "$5", "$6", "$7", "$8"),
@@ -408,9 +406,10 @@ fn params_offset(offset: usize) -> (&'static str, &'static str, &'static str, &'
 
 /// Q1 — Partner-State-Basis (`leaderboard.py:520–531`).
 async fn fetch_partner_state(pool: &PgPool) -> Result<Vec<PartnerStateRow>, sqlx::Error> {
-    let rows = sqlx::query(
+    let rows = sqlx::query_as!(
+        PartnerStateRow,
         r#"
-        SELECT twitch_login,
+        SELECT COALESCE(twitch_login, '') AS "twitch_login!",
                is_on_discord,
                discord_user_id,
                discord_display_name
@@ -421,15 +420,7 @@ async fn fetch_partner_state(pool: &PgPool) -> Result<Vec<PartnerStateRow>, sqlx
     .fetch_all(pool)
     .await?;
 
-    Ok(rows
-        .iter()
-        .map(|r| PartnerStateRow {
-            twitch_login: r.try_get("twitch_login").unwrap_or_default(),
-            is_on_discord: row_i32_opt(r, "is_on_discord"),
-            discord_user_id: row_str_opt(r, "discord_user_id"),
-            discord_display_name: row_str_opt(r, "discord_display_name"),
-        })
-        .collect())
+    Ok(rows)
 }
 
 async fn fetch_top(
@@ -644,31 +635,59 @@ fn build_partner_maps(rows: Vec<PartnerStateRow>) -> PartnerMaps {
         tracked.insert(login.clone());
         verified.insert(login.clone());
 
-        let has_profile = r.discord_user_id.as_deref().map(|s| !s.is_empty()).unwrap_or(false)
-            || r.discord_display_name.as_deref().map(|s| !s.is_empty()).unwrap_or(false);
+        let has_profile = r
+            .discord_user_id
+            .as_deref()
+            .map(|s| !s.is_empty())
+            .unwrap_or(false)
+            || r.discord_display_name
+                .as_deref()
+                .map(|s| !s.is_empty())
+                .unwrap_or(false);
         let is_on_disc = r.is_on_discord.unwrap_or(0) != 0 || has_profile;
-        discord_info.insert(login, (r.discord_user_id, r.discord_display_name, is_on_disc));
+        discord_info.insert(
+            login,
+            (r.discord_user_id, r.discord_display_name, is_on_disc),
+        );
     }
 
-    PartnerMaps { tracked_logins: tracked, verified_logins: verified, discord_info }
+    PartnerMaps {
+        tracked_logins: tracked,
+        verified_logins: verified,
+        discord_info,
+    }
 }
 
 fn enrich_top_row(row: TopRow, maps: &PartnerMaps) -> StreamerEntry {
     let login_lower = row.streamer.to_lowercase();
 
     let is_partner = if maps.tracked_logins.contains(&login_lower) {
-        if maps.verified_logins.contains(&login_lower) { 1 } else { 0 }
+        if maps.verified_logins.contains(&login_lower) {
+            1
+        } else {
+            0
+        }
     } else {
         row.is_partner
     };
 
-    let (discord_user_id, discord_display_name, raw_is_on_discord) =
-        maps.discord_info.get(&login_lower).cloned().unwrap_or((None, None, false));
+    let (discord_user_id, discord_display_name, raw_is_on_discord) = maps
+        .discord_info
+        .get(&login_lower)
+        .cloned()
+        .unwrap_or((None, None, false));
 
-    let has_discord_profile = discord_user_id.as_deref().map(|s| !s.is_empty()).unwrap_or(false)
-        || discord_display_name.as_deref().map(|s| !s.is_empty()).unwrap_or(false);
+    let has_discord_profile = discord_user_id
+        .as_deref()
+        .map(|s| !s.is_empty())
+        .unwrap_or(false)
+        || discord_display_name
+            .as_deref()
+            .map(|s| !s.is_empty())
+            .unwrap_or(false);
 
-    let is_on_discord = if raw_is_on_discord || has_discord_profile
+    let is_on_discord = if raw_is_on_discord
+        || has_discord_profile
         || maps.verified_logins.contains(&login_lower)
     {
         1
@@ -691,16 +710,25 @@ fn enrich_top_row(row: TopRow, maps: &PartnerMaps) -> StreamerEntry {
 
 fn map_hourly(rows: Vec<HourlyRow>) -> Vec<HourlyEntry> {
     rows.into_iter()
-        .map(|r| HourlyEntry { hour: r.hour, avg_viewers: r.avg_viewers, max_viewers: r.max_viewers, samples: r.samples })
+        .map(|r| HourlyEntry {
+            hour: r.hour,
+            avg_viewers: r.avg_viewers,
+            max_viewers: r.max_viewers,
+            samples: r.samples,
+        })
         .collect()
 }
 
 fn map_weekday(rows: Vec<WeekdayRow>) -> Vec<WeekdayEntry> {
     rows.into_iter()
-        .map(|r| WeekdayEntry { weekday: r.weekday, avg_viewers: r.avg_viewers, max_viewers: r.max_viewers, samples: r.samples })
+        .map(|r| WeekdayEntry {
+            weekday: r.weekday,
+            avg_viewers: r.avg_viewers,
+            max_viewers: r.max_viewers,
+            samples: r.samples,
+        })
         .collect()
 }
-
 
 // ── Monetization (Q16–Q20) ───────────────────────────────────────────────────
 
@@ -712,31 +740,35 @@ async fn fetch_monetization(pool: &PgPool) -> Result<Value, BoxError> {
     let cutoff = Utc::now() - chrono::Duration::days(30);
 
     // Q16 — Ad-Break-Aggregation (`dashboard_metrics_mixin.py:48–58`)
-    let ad_row = sqlx::query(
+    let ad_row = sqlx::query!(
         r#"
-        SELECT CAST(COUNT(*) AS BIGINT) AS total_ads,
-               CAST(SUM(CASE WHEN is_automatic <> 0 THEN 1 ELSE 0 END) AS BIGINT) AS auto_ads,
-               CAST(AVG(duration_seconds) AS DOUBLE PRECISION) AS avg_duration,
-               CAST(COUNT(DISTINCT session_id) AS BIGINT) AS sessions_with_ads
+        SELECT CAST(COUNT(*) AS BIGINT) AS "total_ads!",
+               CAST(COALESCE(SUM(CASE WHEN COALESCE(is_automatic, FALSE) THEN 1 ELSE 0 END), 0) AS BIGINT) AS "auto_ads!",
+               CAST(COALESCE(AVG(duration_seconds), 0) AS DOUBLE PRECISION) AS "avg_duration!",
+               CAST(COUNT(DISTINCT session_id) AS BIGINT) AS "sessions_with_ads!"
           FROM twitch_ad_break_events
          WHERE started_at >= $1
         "#,
+        cutoff
     )
-    .bind(cutoff)
     .fetch_one(pool)
     .await?;
 
-    let total_ads = row_i64(&ad_row, "total_ads");
-    let auto_ads = row_i64(&ad_row, "auto_ads");
+    let total_ads = ad_row.total_ads;
+    let auto_ads = ad_row.auto_ads;
     let manual_ads = total_ads - auto_ads;
-    let sessions_with_ads = row_i64(&ad_row, "sessions_with_ads");
-    let avg_duration = row_f64(&ad_row, "avg_duration");
+    let sessions_with_ads = ad_row.sessions_with_ads;
+    let avg_duration = ad_row.avg_duration;
 
     // Q17 — Ad-Einzel-Rows
-    let ad_rows = sqlx::query(
+    let ad_rows = sqlx::query!(
         r#"
-        SELECT a.id, a.session_id, a.started_at, a.duration_seconds, a.is_automatic,
-               s.started_at AS session_start
+        SELECT a.id AS "id!",
+               a.session_id,
+               a.started_at AS "started_at!",
+               a.duration_seconds,
+               a.is_automatic,
+               s.started_at AS "session_start!"
           FROM twitch_ad_break_events a
           JOIN twitch_stream_sessions s ON s.id = a.session_id
          WHERE a.started_at >= $1
@@ -744,18 +776,15 @@ async fn fetch_monetization(pool: &PgPool) -> Result<Value, BoxError> {
          ORDER BY a.started_at DESC
          LIMIT 200
         "#,
+        cutoff
     )
-    .bind(cutoff)
     .fetch_all(pool)
     .await
     .unwrap_or_default();
 
     let session_ids: Vec<i64> = ad_rows
         .iter()
-        .filter_map(|r| {
-            r.try_get::<Option<i64>, _>("session_id").ok().flatten()
-                .or_else(|| r.try_get::<Option<i32>, _>("session_id").ok().flatten().map(|v| v as i64))
-        })
+        .filter_map(|r| r.session_id)
         .collect::<std::collections::HashSet<_>>()
         .into_iter()
         .collect();
@@ -766,24 +795,27 @@ async fn fetch_monetization(pool: &PgPool) -> Result<Value, BoxError> {
     } else {
         let session_ids_json = serde_json::to_string(&session_ids).unwrap_or_default();
         // json_each ist SQLite-spezifisch; in PostgreSQL nutzen wir json_array_elements_text
-        let tl_rows = sqlx::query(
+        let tl_rows = sqlx::query!(
             r#"
-            SELECT session_id, minutes_from_start, viewer_count
+            SELECT session_id AS "session_id!",
+                   minutes_from_start,
+                   viewer_count AS "viewer_count!"
               FROM twitch_session_viewers
-             WHERE session_id = ANY(SELECT value::int FROM json_array_elements_text($1::json))
+             WHERE session_id = ANY(SELECT value::bigint FROM jsonb_array_elements_text($1::text::jsonb))
              ORDER BY session_id, minutes_from_start
             "#,
+            &session_ids_json
         )
-        .bind(&session_ids_json)
         .fetch_all(pool)
         .await
         .unwrap_or_default();
 
-        let mut map: std::collections::HashMap<i64, Vec<(i32, i64)>> = std::collections::HashMap::new();
+        let mut map: std::collections::HashMap<i64, Vec<(i32, i64)>> =
+            std::collections::HashMap::new();
         for r in &tl_rows {
-            let sid = row_i64(r, "session_id");
-            let min = row_i32(r, "minutes_from_start");
-            let vc = row_i64(r, "viewer_count");
+            let sid = r.session_id;
+            let min = r.minutes_from_start.unwrap_or(0);
+            let vc = i64::from(r.viewer_count);
             map.entry(sid).or_default().push((min, vc));
         }
         map
@@ -794,29 +826,16 @@ async fn fetch_monetization(pool: &PgPool) -> Result<Value, BoxError> {
     let mut worst_ads_data: Vec<(String, i64, f64, bool)> = Vec::new();
 
     for r in &ad_rows {
-        let sid = r.try_get::<Option<i64>, _>("session_id").ok().flatten()
-            .or_else(|| r.try_get::<Option<i32>, _>("session_id").ok().flatten().map(|v| v as i64));
-        let sid = match sid { Some(s) => s, None => continue };
-
-        // started_at und session_start können TEXT (ISO) oder TIMESTAMPTZ sein
-        let ad_started_ts = r.try_get::<Option<DateTime<Utc>>, _>("started_at").ok().flatten();
-        let session_start_ts = r.try_get::<Option<DateTime<Utc>>, _>("session_start").ok().flatten();
-
-        let (ad_minute_opt, started_at_str) = if let (Some(ad_dt), Some(ss_dt)) = (ad_started_ts, session_start_ts) {
-            let ad_minute = ((ad_dt - ss_dt).num_seconds() / 60) as i32;
-            let s = ad_dt.format("%Y-%m-%dT%H:%M").to_string();
-            (Some(ad_minute), s)
-        } else {
-            // TEXT-Felder → kein Timeline-Lookup möglich, aber started_at für worst_ads
-            let s = r.try_get::<Option<String>, _>("started_at").ok().flatten().unwrap_or_default();
-            let s16 = if s.len() >= 16 { s[..16].to_string() } else { s };
-            (None, s16)
+        let sid = r.session_id;
+        let sid = match sid {
+            Some(s) => s,
+            None => continue,
         };
 
-        let dur_secs = row_i64(r, "duration_seconds");
-        // `is_automatic` ist im Prod-Schema INTEGER (0/1) — als Option<i32> dekodieren,
-        // ein `try_get::<bool>` würde gegen int4 mit einem Decode-Fehler scheitern.
-        let is_auto = r.try_get::<Option<i32>, _>("is_automatic").ok().flatten().unwrap_or(0) != 0;
+        let ad_minute_opt = Some(((r.started_at - r.session_start).num_seconds() / 60) as i32);
+        let started_at_str = r.started_at.format("%Y-%m-%dT%H:%M").to_string();
+        let dur_secs = i64::from(r.duration_seconds.unwrap_or(0));
+        let is_auto = r.is_automatic.unwrap_or(false);
 
         if let Some(ad_minute) = ad_minute_opt {
             if let Some(tl) = timeline_map.get(&sid) {
@@ -865,26 +884,26 @@ async fn fetch_monetization(pool: &PgPool) -> Result<Value, BoxError> {
     // Q18 — Hype Train (`dashboard_metrics_mixin.py:150–170`). Python hat
     // pro Query ein eigenes try/except → Fehler lassen die Defaults stehen,
     // die Sektion bleibt erhalten.
-    let (hype_total, hype_avg_level, hype_max_level, hype_avg_dur) = match sqlx::query(
+    let (hype_total, hype_avg_level, hype_max_level, hype_avg_dur) = match sqlx::query!(
         r#"
-        SELECT CAST(COUNT(*) AS BIGINT) AS total_trains,
-               CAST(AVG(level) AS DOUBLE PRECISION) AS avg_level,
-               MAX(level) AS max_level,
-               CAST(AVG(duration_seconds) AS DOUBLE PRECISION) AS avg_duration
+        SELECT CAST(COUNT(*) AS BIGINT) AS "total_trains!",
+               CAST(COALESCE(AVG(level), 0) AS DOUBLE PRECISION) AS "avg_level!",
+               COALESCE(MAX(level), 0) AS "max_level!",
+               CAST(COALESCE(AVG(duration_seconds), 0) AS DOUBLE PRECISION) AS "avg_duration!"
           FROM twitch_hype_train_events
          WHERE started_at >= $1
            AND ended_at IS NOT NULL
         "#,
+        cutoff
     )
-    .bind(cutoff)
     .fetch_one(pool)
     .await
     {
         Ok(hype) => (
-            row_i64(&hype, "total_trains"),
-            (row_f64(&hype, "avg_level") * 10.0).round() / 10.0,
-            row_i32(&hype, "max_level"),
-            row_f64(&hype, "avg_duration").round(),
+            hype.total_trains,
+            (hype.avg_level * 10.0).round() / 10.0,
+            hype.max_level,
+            hype.avg_duration.round(),
         ),
         Err(e) => {
             tracing::debug!("Hype Train query fehlgeschlagen: {e}");
@@ -893,18 +912,19 @@ async fn fetch_monetization(pool: &PgPool) -> Result<Value, BoxError> {
     };
 
     // Q19 — Bits (`dashboard_metrics_mixin.py:172–185`)
-    let (bits_total, cheer_events) = match sqlx::query(
+    let (bits_total, cheer_events) = match sqlx::query!(
         r#"
-        SELECT CAST(SUM(amount) AS BIGINT) AS total_bits, CAST(COUNT(*) AS BIGINT) AS cheer_events
+        SELECT CAST(COALESCE(SUM(amount), 0) AS BIGINT) AS "total_bits!",
+               CAST(COUNT(*) AS BIGINT) AS "cheer_events!"
         FROM twitch_bits_events
         WHERE received_at >= $1
         "#,
+        cutoff
     )
-    .bind(cutoff)
     .fetch_one(pool)
     .await
     {
-        Ok(bits) => (row_i64(&bits, "total_bits"), row_i64(&bits, "cheer_events")),
+        Ok(bits) => (bits.total_bits, bits.cheer_events),
         Err(e) => {
             tracing::debug!("Bits query fehlgeschlagen: {e}");
             (0, 0)
@@ -912,22 +932,19 @@ async fn fetch_monetization(pool: &PgPool) -> Result<Value, BoxError> {
     };
 
     // Q20 — Subscriptions-Events (`dashboard_metrics_mixin.py:187–202`).
-    // `twitch_subscription_events.is_gift` ist im Prod-Schema INTEGER (0/1).
-    // Ein `IS TRUE` würde Postgres gegen int4 mit einem Typfehler abweisen —
-    // daher der Integer-Vergleich `<> 0` (deckt Pythons `is_gift=1` korrekt ab).
-    let (subs_total, subs_gifted) = match sqlx::query(
+    let (subs_total, subs_gifted) = match sqlx::query!(
         r#"
-        SELECT CAST(COUNT(*) AS BIGINT) AS total_events,
-               CAST(SUM(CASE WHEN is_gift <> 0 THEN 1 ELSE 0 END) AS BIGINT) AS gifted
+        SELECT CAST(COUNT(*) AS BIGINT) AS "total_events!",
+               CAST(COALESCE(SUM(CASE WHEN COALESCE(is_gift, FALSE) THEN 1 ELSE 0 END), 0) AS BIGINT) AS "gifted!"
           FROM twitch_subscription_events
          WHERE received_at >= $1
         "#,
+        cutoff
     )
-    .bind(cutoff)
     .fetch_one(pool)
     .await
     {
-        Ok(subs_ev) => (row_i64(&subs_ev, "total_events"), row_i64(&subs_ev, "gifted")),
+        Ok(subs_ev) => (subs_ev.total_events, subs_ev.gifted),
         Err(e) => {
             tracing::debug!("Subs query fehlgeschlagen: {e}");
             (0, 0)
@@ -962,16 +979,24 @@ async fn fetch_eventsub_capacity_db(pool: &PgPool) -> Result<Value, sqlx::Error>
     let window = "24 hours";
 
     // Q21 (`eventsub_mixin.py:710–725`)
-    let snap_rows = sqlx::query(
+    let snap_rows = sqlx::query!(
         r#"
-        SELECT ts_utc, trigger_reason, listener_count, ready_listeners, failed_listeners,
-               used_slots, total_slots, headroom_slots, listeners_at_limit, utilization_pct
+        SELECT ts_utc AS "ts_utc!",
+               trigger_reason,
+               COALESCE(listener_count, 0) AS "listener_count!",
+               COALESCE(ready_listeners, 0) AS "ready_listeners!",
+               COALESCE(failed_listeners, 0) AS "failed_listeners!",
+               COALESCE(used_slots, 0) AS "used_slots!",
+               COALESCE(total_slots, 0) AS "total_slots!",
+               COALESCE(headroom_slots, 0) AS "headroom_slots!",
+               COALESCE(listeners_at_limit, 0) AS "listeners_at_limit!",
+               COALESCE(utilization_pct, 0) AS "utilization_pct!"
           FROM twitch_eventsub_capacity_snapshot
-         WHERE ts_utc >= NOW() - ($1::interval)
+         WHERE ts_utc >= NOW() - ($1::text::interval)
          ORDER BY ts_utc ASC
         "#,
+        window
     )
-    .bind(window)
     .fetch_all(pool)
     .await?;
 
@@ -989,84 +1014,114 @@ async fn fetch_eventsub_capacity_db(pool: &PgPool) -> Result<Value, sqlx::Error>
         }));
     }
 
-    let last_ts = snap_rows.last()
-        .and_then(|r| row_ts_opt(r, "ts_utc"))
-        .map(format_ts_python);
+    let last_ts = snap_rows.last().map(|r| r.ts_utc).map(format_ts_python);
 
-    let util_vals: Vec<f64> = snap_rows.iter().map(|r| row_f64(r, "utilization_pct")).collect();
-    let used_vals: Vec<i64> = snap_rows.iter().map(|r| row_i64(r, "used_slots")).collect();
-    let listener_vals: Vec<i64> = snap_rows.iter().map(|r| row_i64(r, "listener_count")).collect();
-    let ready_vals: Vec<i64> = snap_rows.iter().map(|r| row_i64(r, "ready_listeners")).collect();
-    let failed_vals: Vec<i64> = snap_rows.iter().map(|r| row_i64(r, "failed_listeners")).collect();
+    let util_vals: Vec<f64> = snap_rows.iter().map(|r| r.utilization_pct).collect();
+    let used_vals: Vec<i64> = snap_rows.iter().map(|r| i64::from(r.used_slots)).collect();
+    let listener_vals: Vec<i64> = snap_rows
+        .iter()
+        .map(|r| i64::from(r.listener_count))
+        .collect();
+    let ready_vals: Vec<i64> = snap_rows
+        .iter()
+        .map(|r| i64::from(r.ready_listeners))
+        .collect();
+    let failed_vals: Vec<i64> = snap_rows
+        .iter()
+        .map(|r| i64::from(r.failed_listeners))
+        .collect();
 
-    let avg_f = |vals: &[f64]| if vals.is_empty() { 0.0 } else { vals.iter().sum::<f64>() / vals.len() as f64 };
-    let avg_i = |vals: &[i64]| if vals.is_empty() { 0.0 } else { vals.iter().sum::<i64>() as f64 / vals.len() as f64 };
+    let avg_f = |vals: &[f64]| {
+        if vals.is_empty() {
+            0.0
+        } else {
+            vals.iter().sum::<f64>() / vals.len() as f64
+        }
+    };
+    let avg_i = |vals: &[i64]| {
+        if vals.is_empty() {
+            0.0
+        } else {
+            vals.iter().sum::<i64>() as f64 / vals.len() as f64
+        }
+    };
     let max_i = |vals: &[i64]| vals.iter().copied().max().unwrap_or(0);
 
     let mut sorted_util = util_vals.clone();
     sorted_util.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
-    let p95_idx = ((sorted_util.len() as f64 * 0.95) as usize).min(sorted_util.len().saturating_sub(1));
+    let p95_idx =
+        ((sorted_util.len() as f64 * 0.95) as usize).min(sorted_util.len().saturating_sub(1));
     let p95 = sorted_util.get(p95_idx).copied().unwrap_or(0.0);
     let max_util = util_vals.iter().copied().fold(f64::NEG_INFINITY, f64::max);
-    let max_util = if max_util == f64::NEG_INFINITY { 0.0 } else { max_util };
+    let max_util = if max_util == f64::NEG_INFINITY {
+        0.0
+    } else {
+        max_util
+    };
 
     // Q22 (`eventsub_mixin.py:726–748`)
-    let hourly_rows = sqlx::query(
+    let hourly_rows = sqlx::query!(
         r#"
-        SELECT EXTRACT(HOUR FROM ts_utc AT TIME ZONE 'UTC')::int AS hour,
-               CAST(COUNT(*) AS BIGINT) AS samples,
-               CAST(AVG(utilization_pct) AS DOUBLE PRECISION) AS avg_utilization_pct,
-               CAST(MAX(utilization_pct) AS DOUBLE PRECISION) AS max_utilization_pct,
-               CAST(AVG(used_slots) AS DOUBLE PRECISION) AS avg_used_slots,
-               MAX(used_slots) AS max_used_slots,
-               CAST(AVG(listener_count) AS DOUBLE PRECISION) AS avg_listener_count,
-               MAX(listener_count) AS max_listener_count
+        SELECT EXTRACT(HOUR FROM ts_utc AT TIME ZONE 'UTC')::int AS "hour!",
+               CAST(COUNT(*) AS BIGINT) AS "samples!",
+               CAST(COALESCE(AVG(utilization_pct), 0) AS DOUBLE PRECISION) AS "avg_utilization_pct!",
+               CAST(COALESCE(MAX(utilization_pct), 0) AS DOUBLE PRECISION) AS "max_utilization_pct!",
+               CAST(COALESCE(AVG(used_slots), 0) AS DOUBLE PRECISION) AS "avg_used_slots!",
+               COALESCE(MAX(used_slots), 0) AS "max_used_slots!",
+               CAST(COALESCE(AVG(listener_count), 0) AS DOUBLE PRECISION) AS "avg_listener_count!",
+               COALESCE(MAX(listener_count), 0) AS "max_listener_count!"
           FROM twitch_eventsub_capacity_snapshot
-         WHERE ts_utc >= NOW() - ($1::interval)
-         GROUP BY hour
-         ORDER BY hour ASC
+         WHERE ts_utc >= NOW() - ($1::text::interval)
+         GROUP BY 1
+         ORDER BY 1 ASC
         "#,
+        window
     )
-    .bind(window)
     .fetch_all(pool)
     .await?;
 
-    let hourly: Vec<Value> = hourly_rows.iter().map(|r| {
-        json!({
-            "hour": row_i32(r, "hour"),
-            "samples": row_i64(r, "samples"),
-            "avg_utilization_pct": row_f64(r, "avg_utilization_pct"),
-            "max_utilization_pct": row_f64(r, "max_utilization_pct"),
-            "avg_used_slots": row_f64(r, "avg_used_slots"),
-            "max_used_slots": row_i64(r, "max_used_slots"),
-            "avg_listener_count": row_f64(r, "avg_listener_count"),
-            "max_listener_count": row_i64(r, "max_listener_count"),
+    let hourly: Vec<Value> = hourly_rows
+        .iter()
+        .map(|r| {
+            json!({
+                "hour": r.hour,
+                "samples": r.samples,
+                "avg_utilization_pct": r.avg_utilization_pct,
+                "max_utilization_pct": r.max_utilization_pct,
+                "avg_used_slots": r.avg_used_slots,
+                "max_used_slots": r.max_used_slots,
+                "avg_listener_count": r.avg_listener_count,
+                "max_listener_count": r.max_listener_count,
+            })
         })
-    }).collect();
+        .collect();
 
     // Q23 (`eventsub_mixin.py:749–762`)
-    let reason_rows = sqlx::query(
+    let reason_rows = sqlx::query!(
         r#"
         SELECT trigger_reason,
-               CAST(COUNT(*) AS BIGINT) AS samples,
-               CAST(MAX(utilization_pct) AS DOUBLE PRECISION) AS peak_utilization_pct
+               CAST(COUNT(*) AS BIGINT) AS "samples!",
+               CAST(COALESCE(MAX(utilization_pct), 0) AS DOUBLE PRECISION) AS "peak_utilization_pct!"
           FROM twitch_eventsub_capacity_snapshot
-         WHERE ts_utc >= NOW() - ($1::interval)
+         WHERE ts_utc >= NOW() - ($1::text::interval)
          GROUP BY trigger_reason
-         ORDER BY samples DESC, trigger_reason ASC
+         ORDER BY 2 DESC, trigger_reason ASC
         "#,
+        window
     )
-    .bind(window)
     .fetch_all(pool)
     .await?;
 
-    let reasons: Vec<Value> = reason_rows.iter().map(|r| {
-        json!({
-            "reason": r.try_get::<Option<String>, _>("trigger_reason").ok().flatten().unwrap_or_default(),
-            "samples": row_i64(r, "samples"),
-            "peak_utilization_pct": row_f64(r, "peak_utilization_pct"),
+    let reasons: Vec<Value> = reason_rows
+        .iter()
+        .map(|r| {
+            json!({
+                "reason": r.trigger_reason.clone().unwrap_or_default(),
+                "samples": r.samples,
+                "peak_utilization_pct": r.peak_utilization_pct,
+            })
         })
-    }).collect();
+        .collect();
 
     let last_row = snap_rows.last().unwrap();
     Ok(json!({
@@ -1089,21 +1144,23 @@ async fn fetch_eventsub_capacity_db(pool: &PgPool) -> Result<Value, sqlx::Error>
         "active_subscription_channels": [],
         "current": {
             "ts_utc": last_ts,
-            "listener_count": row_i64(last_row, "listener_count"),
-            "ready_listeners": row_i64(last_row, "ready_listeners"),
-            "failed_listeners": row_i64(last_row, "failed_listeners"),
-            "used_slots": row_i64(last_row, "used_slots"),
-            "total_slots": row_i64(last_row, "total_slots"),
-            "headroom_slots": row_i64(last_row, "headroom_slots"),
-            "listeners_at_limit": row_i64(last_row, "listeners_at_limit"),
-            "utilization_pct": row_f64(last_row, "utilization_pct"),
+            "listener_count": last_row.listener_count,
+            "ready_listeners": last_row.ready_listeners,
+            "failed_listeners": last_row.failed_listeners,
+            "used_slots": last_row.used_slots,
+            "total_slots": last_row.total_slots,
+            "headroom_slots": last_row.headroom_slots,
+            "listeners_at_limit": last_row.listeners_at_limit,
+            "utilization_pct": last_row.utilization_pct,
             "subscription_count": 0_i64,
         },
     }))
 }
 
 fn merge_eventsub_current(mut db_block: Value, snapshot: Option<EventSubCurrentSnapshot>) -> Value {
-    let Some(snap) = snapshot else { return db_block; };
+    let Some(snap) = snapshot else {
+        return db_block;
+    };
     let ts = format_ts_seconds(snap.ts_utc);
     if let Some(obj) = db_block.as_object_mut() {
         obj["current"] = json!({
@@ -1195,13 +1252,23 @@ async fn compute_stats(
     let category_hourly_raw = fetch_hourly(pool, "twitch_stats_category", false, hf).await?;
     let category_weekday_raw = fetch_weekday(pool, "twitch_stats_category", false, hf).await?;
 
-    let tracked_top: Vec<StreamerEntry> = tracked_top_raw.into_iter().map(|r| enrich_top_row(r, &maps)).collect();
-    let category_top: Vec<StreamerEntry> = category_top_raw.into_iter().map(|r| enrich_top_row(r, &maps)).collect();
+    let tracked_top: Vec<StreamerEntry> = tracked_top_raw
+        .into_iter()
+        .map(|r| enrich_top_row(r, &maps))
+        .collect();
+    let category_top: Vec<StreamerEntry> = category_top_raw
+        .into_iter()
+        .map(|r| enrich_top_row(r, &maps))
+        .collect();
 
-    let avg_viewers_tracked = if tracked_top.is_empty() { 0.0_f64 } else {
+    let avg_viewers_tracked = if tracked_top.is_empty() {
+        0.0_f64
+    } else {
         tracked_top.iter().map(|s| s.avg_viewers).sum::<f64>() / tracked_top.len() as f64
     };
-    let avg_viewers_all = if category_top.is_empty() { 0.0_f64 } else {
+    let avg_viewers_all = if category_top.is_empty() {
+        0.0_f64
+    } else {
         category_top.iter().map(|s| s.avg_viewers).sum::<f64>() / category_top.len() as f64
     };
 
@@ -1243,20 +1310,30 @@ async fn compute_stats(
 
     // Monetization (exception-safe)
     match fetch_monetization(pool).await {
-        Err(e) => { tracing::debug!("Konnte Monetization-Stats nicht laden: {e}"); }
-        Ok(mono) => { if let Some(obj) = out.as_object_mut() { obj.insert("monetization".to_string(), mono); } }
+        Err(e) => {
+            tracing::debug!("Konnte Monetization-Stats nicht laden: {e}");
+        }
+        Ok(mono) => {
+            if let Some(obj) = out.as_object_mut() {
+                obj.insert("monetization".to_string(), mono);
+            }
+        }
     }
 
     // EventSub-Capacity (exception-safe)
     match fetch_eventsub_capacity_db(pool).await {
-        Err(e) => { tracing::debug!("Konnte EventSub-Capacity-Overview nicht laden: {e}"); }
+        Err(e) => {
+            tracing::debug!("Konnte EventSub-Capacity-Overview nicht laden: {e}");
+        }
         Ok(db_block) => {
             let snapshot = match &eventsub_ext.0 {
                 Some(src) => src.get_snapshot().await,
                 None => None,
             };
             let merged = merge_eventsub_current(db_block, snapshot);
-            if let Some(obj) = out.as_object_mut() { obj.insert("eventsub".to_string(), merged); }
+            if let Some(obj) = out.as_object_mut() {
+                obj.insert("eventsub".to_string(), merged);
+            }
         }
     }
 
@@ -1271,11 +1348,25 @@ async fn compute_streamer_block(
 ) -> Value {
     let is_tracked = maps.tracked_logins.contains(login);
 
-    let (discord_user_id, discord_display_name, raw_is_on_discord) =
-        maps.discord_info.get(login).cloned().unwrap_or((None, None, false));
-    let has_profile = discord_user_id.as_deref().map(|s| !s.is_empty()).unwrap_or(false)
-        || discord_display_name.as_deref().map(|s| !s.is_empty()).unwrap_or(false);
-    let is_on_discord: i32 = if raw_is_on_discord || has_profile || maps.verified_logins.contains(login) { 1 } else { 0 };
+    let (discord_user_id, discord_display_name, raw_is_on_discord) = maps
+        .discord_info
+        .get(login)
+        .cloned()
+        .unwrap_or((None, None, false));
+    let has_profile = discord_user_id
+        .as_deref()
+        .map(|s| !s.is_empty())
+        .unwrap_or(false)
+        || discord_display_name
+            .as_deref()
+            .map(|s| !s.is_empty())
+            .unwrap_or(false);
+    let is_on_discord: i32 =
+        if raw_is_on_discord || has_profile || maps.verified_logins.contains(login) {
+            1
+        } else {
+            0
+        };
 
     let mut summary = json!({});
     let mut hourly = Vec::new();
@@ -1317,7 +1408,11 @@ async fn compute_streamer_block(
         }
     }
 
-    let display_login = summary.get("streamer").and_then(|v| v.as_str()).unwrap_or(login).to_string();
+    let display_login = summary
+        .get("streamer")
+        .and_then(|v| v.as_str())
+        .unwrap_or(login)
+        .to_string();
 
     let mut block = json!({
         "login": login,
@@ -1334,10 +1429,14 @@ async fn compute_streamer_block(
     });
 
     match fetch_streamer_subs_and_audience(pool, login).await {
-        Err(e) => { tracing::error!("Failed to fetch extended user stats (subs/shared): {e}"); }
+        Err(e) => {
+            tracing::error!("Failed to fetch extended user stats (subs/shared): {e}");
+        }
         Ok((subs, shared)) => {
             if let Some(obj) = block.as_object_mut() {
-                if let Some(s) = subs { obj.insert("subs".to_string(), s); }
+                if let Some(s) = subs {
+                    obj.insert("subs".to_string(), s);
+                }
                 obj.insert("shared_audience".to_string(), json!(shared));
             }
         }
@@ -1351,69 +1450,57 @@ async fn fetch_streamer_subs_and_audience(
     login: &str,
 ) -> Result<(Option<Value>, Vec<Value>), BoxError> {
     // Q8 (`leaderboard.py:963–967`)
-    let sub_row = sqlx::query(
+    let sub_row = sqlx::query!(
         r#"
-        SELECT total, points, snapshot_at
+        SELECT total,
+               points,
+               snapshot_at AS "snapshot_at!"
           FROM twitch_subscriptions_snapshot
          WHERE twitch_login = $1
          ORDER BY snapshot_at DESC
          LIMIT 1
         "#,
+        login
     )
-    .bind(login)
     .fetch_optional(pool)
     .await?;
 
     let subs = sub_row.as_ref().map(|r| {
-        // total/points/updated_at direkt aus DB, kein Cast (Vertrag-UNSICHER)
-        let total: Value = r.try_get::<i64, _>("total").map(|v| json!(v))
-            .or_else(|_| r.try_get::<i32, _>("total").map(|v| json!(v)))
-            .unwrap_or(Value::Null);
-        let points: Value = r.try_get::<i64, _>("points").map(|v| json!(v))
-            .or_else(|_| r.try_get::<i32, _>("points").map(|v| json!(v)))
-            .unwrap_or(Value::Null);
-        // snapshot_at ist TIMESTAMPTZ in Prod (Python serialisiert via
-        // isoformat); String-Fallback für ältere Schemata.
-        let updated_at: Value = r
-            .try_get::<Option<DateTime<Utc>>, _>("snapshot_at")
-            .ok()
-            .flatten()
-            .map(|dt| json!(format_ts_python(dt)))
-            .or_else(|| {
-                r.try_get::<Option<String>, _>("snapshot_at")
-                    .ok()
-                    .flatten()
-                    .map(|s| json!(s))
-            })
-            .unwrap_or(Value::Null);
+        let total = r.total.map_or(Value::Null, |v| json!(v));
+        let points = r.points.map_or(Value::Null, |v| json!(v));
+        let updated_at = json!(format_ts_python(r.snapshot_at));
         json!({ "total": total, "points": points, "updated_at": updated_at })
     });
 
     // Q9 (`leaderboard.py:975–987`)
-    let audience_rows = sqlx::query(
+    let audience_rows = sqlx::query!(
         r#"
-        SELECT other.streamer_login, CAST(COUNT(DISTINCT t1.chatter_login) AS BIGINT) as overlap
+        SELECT other.streamer_login AS "streamer_login!",
+               CAST(COUNT(DISTINCT t1.chatter_login) AS BIGINT) AS "overlap!"
         FROM twitch_chatter_rollup t1
         JOIN twitch_chatter_rollup other ON t1.chatter_login = other.chatter_login
         WHERE t1.streamer_login = $1
           AND other.streamer_login != $2
           AND t1.last_seen_at >= NOW() - INTERVAL '30 days'
         GROUP BY other.streamer_login
-        ORDER BY overlap DESC
+        ORDER BY 2 DESC
         LIMIT 10
         "#,
+        login,
+        login
     )
-    .bind(login)
-    .bind(login)
     .fetch_all(pool)
     .await?;
 
-    let shared: Vec<Value> = audience_rows.iter().map(|r| {
-        json!({
-            "streamer": r.try_get::<String, _>("streamer_login").unwrap_or_default(),
-            "overlap": row_i64(r, "overlap"),
+    let shared: Vec<Value> = audience_rows
+        .iter()
+        .map(|r| {
+            json!({
+                "streamer": &r.streamer_login,
+                "overlap": r.overlap,
+            })
         })
-    }).collect();
+        .collect();
 
     Ok((subs, shared))
 }
@@ -1439,11 +1526,9 @@ fn avg_or_none(values: &[f64]) -> Value {
     }
 }
 
-/// `started_at` (TIMESTAMPTZ) als Python-isoformat-String; `null` wenn leer.
-fn session_started_at(row: &sqlx::postgres::PgRow) -> Value {
-    row_ts_opt(row, "started_at")
-        .map(|dt| json!(format_ts_python(dt)))
-        .unwrap_or(Value::Null)
+/// `started_at` (TIMESTAMPTZ) als Python-isoformat-String.
+fn session_started_at(started_at: DateTime<Utc>) -> Value {
+    json!(format_ts_python(started_at))
 }
 
 /// `GET /internal/twitch/v1/stats/extended` — die vier Dashboard-Leaderboard-
@@ -1470,9 +1555,12 @@ pub async fn extended_stats_handler(
 /// `twitch_chat_messages` und `twitch_chatter_rollup`.
 async fn compute_extended_stats(pool: &PgPool) -> Result<Value, BoxError> {
     // 30-Tage-Fenster, max. 400 abgeschlossene Sessions (Python LIMIT 400).
-    let session_rows = sqlx::query(
+    let session_rows = sqlx::query!(
         r#"
-        SELECT id, streamer_login, started_at, duration_seconds, start_viewers, peak_viewers,
+        SELECT id AS "id!",
+               streamer_login AS "streamer_login!",
+               started_at AS "started_at!",
+               duration_seconds, start_viewers, peak_viewers,
                end_viewers, avg_viewers, samples, retention_5m, retention_10m, retention_20m,
                dropoff_pct, dropoff_label, unique_chatters, first_time_chatters,
                returning_chatters, follower_delta, followers_start, followers_end,
@@ -1487,21 +1575,21 @@ async fn compute_extended_stats(pool: &PgPool) -> Result<Value, BoxError> {
     .fetch_all(pool)
     .await?;
 
-    let chat_peak_rows = sqlx::query(
+    let chat_peak_rows = sqlx::query!(
         r#"
-        SELECT cm.session_id,
-               s.streamer_login,
-               s.started_at,
+        SELECT cm.session_id AS "session_id!",
+               s.streamer_login AS "streamer_login!",
+               s.started_at AS "started_at!",
                TO_CHAR(
                    date_trunc('minute', cm.message_ts AT TIME ZONE 'UTC'),
                    'YYYY-MM-DD"T"HH24:MI:00"Z"'
-               ) AS minute_bucket,
-               COUNT(*) AS messages
+               ) AS "minute_bucket!",
+               COUNT(*) AS "messages!"
           FROM twitch_chat_messages cm
           JOIN twitch_stream_sessions s ON s.id = cm.session_id
          WHERE cm.message_ts >= NOW() - INTERVAL '30 days'
-         GROUP BY cm.session_id, s.streamer_login, s.started_at, minute_bucket
-         ORDER BY messages DESC
+         GROUP BY cm.session_id, s.streamer_login, s.started_at, 4
+         ORDER BY 5 DESC
          LIMIT 5
         "#,
     )
@@ -1521,45 +1609,57 @@ async fn compute_extended_stats(pool: &PgPool) -> Result<Value, BoxError> {
                AND last_seen_at >= NOW() - INTERVAL '{interval}'"
         )
     };
-    let active_7: i64 = sqlx::query_scalar(&count_since("7 days")).fetch_one(pool).await?;
-    let returning_7: i64 = sqlx::query_scalar(&returning_since("7 days")).fetch_one(pool).await?;
-    let active_30: i64 = sqlx::query_scalar(&count_since("30 days")).fetch_one(pool).await?;
-    let returning_30: i64 = sqlx::query_scalar(&returning_since("30 days")).fetch_one(pool).await?;
+    let active_7: i64 = sqlx::query_scalar(&count_since("7 days"))
+        .fetch_one(pool)
+        .await?;
+    let returning_7: i64 = sqlx::query_scalar(&returning_since("7 days"))
+        .fetch_one(pool)
+        .await?;
+    let active_30: i64 = sqlx::query_scalar(&count_since("30 days"))
+        .fetch_one(pool)
+        .await?;
+    let returning_30: i64 = sqlx::query_scalar(&returning_since("30 days"))
+        .fetch_one(pool)
+        .await?;
 
     let sessions_count = session_rows.len() as i64;
 
     // ── Retention ──────────────────────────────────────────────────────────────
-    let collect_opt = |col: &str| -> Vec<f64> {
-        session_rows
-            .iter()
-            .filter_map(|r| r.try_get::<Option<f64>, _>(col).ok().flatten())
-            .collect()
-    };
-    let ret5 = collect_opt("retention_5m");
-    let ret10 = collect_opt("retention_10m");
-    let ret20 = collect_opt("retention_20m");
-    let drops = collect_opt("dropoff_pct");
+    let ret5: Vec<f64> = session_rows.iter().filter_map(|r| r.retention_5m).collect();
+    let ret10: Vec<f64> = session_rows
+        .iter()
+        .filter_map(|r| r.retention_10m)
+        .collect();
+    let ret20: Vec<f64> = session_rows
+        .iter()
+        .filter_map(|r| r.retention_20m)
+        .collect();
+    let drops: Vec<f64> = session_rows.iter().filter_map(|r| r.dropoff_pct).collect();
 
     let mut dropoff_examples: Vec<(f64, Value)> = session_rows
         .iter()
         .filter_map(|r| {
-            r.try_get::<Option<f64>, _>("dropoff_pct").ok().flatten().map(|pct| {
+            r.dropoff_pct.map(|pct| {
                 (
                     pct,
                     json!({
-                        "streamer": row_str_opt(r, "streamer_login").unwrap_or_default(),
-                        "started_at": session_started_at(r),
+                        "streamer": &r.streamer_login,
+                        "started_at": session_started_at(r.started_at),
                         "dropoff_pct": pct,
-                        "label": row_str_opt(r, "dropoff_label").unwrap_or_default(),
-                        "start_viewers": row_i64(r, "start_viewers"),
-                        "peak_viewers": row_i64(r, "peak_viewers"),
+                        "label": r.dropoff_label.as_deref().unwrap_or_default(),
+                        "start_viewers": r.start_viewers.unwrap_or(0),
+                        "peak_viewers": r.peak_viewers.unwrap_or(0),
                     }),
                 )
             })
         })
         .collect();
     dropoff_examples.sort_by(|a, b| b.0.partial_cmp(&a.0).unwrap_or(std::cmp::Ordering::Equal));
-    let examples: Vec<Value> = dropoff_examples.into_iter().take(5).map(|(_, v)| v).collect();
+    let examples: Vec<Value> = dropoff_examples
+        .into_iter()
+        .take(5)
+        .map(|(_, v)| v)
+        .collect();
 
     let retention = json!({
         "sessions": sessions_count,
@@ -1571,16 +1671,19 @@ async fn compute_extended_stats(pool: &PgPool) -> Result<Value, BoxError> {
     });
 
     // ── Discovery ──────────────────────────────────────────────────────────────
-    let peak_vals: Vec<f64> = session_rows.iter().map(|r| row_i64(r, "peak_viewers") as f64).collect();
+    let peak_vals: Vec<f64> = session_rows
+        .iter()
+        .map(|r| f64::from(r.peak_viewers.unwrap_or(0)))
+        .collect();
     let follower_deltas: Vec<f64> = session_rows
         .iter()
-        .filter_map(|r| r.try_get::<Option<i32>, _>("follower_delta").ok().flatten().map(|v| v as f64))
+        .filter_map(|r| r.follower_delta.map(f64::from))
         .collect();
     let follower_per_hour: Vec<f64> = session_rows
         .iter()
         .filter_map(|r| {
-            let delta = r.try_get::<Option<i32>, _>("follower_delta").ok().flatten()?;
-            let duration = row_i64(r, "duration_seconds");
+            let delta = r.follower_delta?;
+            let duration = i64::from(r.duration_seconds.unwrap_or(0));
             if duration == 0 {
                 return None;
             }
@@ -1601,11 +1704,22 @@ async fn compute_extended_stats(pool: &PgPool) -> Result<Value, BoxError> {
     });
 
     // ── Chat ───────────────────────────────────────────────────────────────────
-    let unique_sessions: Vec<&sqlx::postgres::PgRow> =
-        session_rows.iter().filter(|r| row_i64(r, "unique_chatters") > 0).collect();
-    let total_unique: i64 = unique_sessions.iter().map(|r| row_i64(r, "unique_chatters")).sum();
-    let total_first: i64 = unique_sessions.iter().map(|r| row_i64(r, "first_time_chatters")).sum();
-    let total_returning: i64 = unique_sessions.iter().map(|r| row_i64(r, "returning_chatters")).sum();
+    let unique_sessions: Vec<_> = session_rows
+        .iter()
+        .filter(|r| r.unique_chatters.unwrap_or(0) > 0)
+        .collect();
+    let total_unique: i64 = unique_sessions
+        .iter()
+        .map(|r| i64::from(r.unique_chatters.unwrap_or(0)))
+        .sum();
+    let total_first: i64 = unique_sessions
+        .iter()
+        .map(|r| i64::from(r.first_time_chatters.unwrap_or(0)))
+        .sum();
+    let total_returning: i64 = unique_sessions
+        .iter()
+        .map(|r| i64::from(r.returning_chatters.unwrap_or(0)))
+        .sum();
 
     let unique_per_100 = if unique_sessions.is_empty() {
         Value::Null
@@ -1613,9 +1727,13 @@ async fn compute_extended_stats(pool: &PgPool) -> Result<Value, BoxError> {
         let ratios: Vec<f64> = unique_sessions
             .iter()
             .map(|r| {
-                let avg = row_f64(r, "avg_viewers");
-                let base = if avg > 0.0 { avg } else { row_i64(r, "start_viewers") as f64 };
-                (row_i64(r, "unique_chatters") as f64 / base.max(1.0)) * 100.0
+                let avg = r.avg_viewers.unwrap_or(0.0);
+                let base = if avg > 0.0 {
+                    avg
+                } else {
+                    f64::from(r.start_viewers.unwrap_or(0))
+                };
+                (f64::from(r.unique_chatters.unwrap_or(0)) / base.max(1.0)) * 100.0
             })
             .collect();
         avg_or_none(&ratios)
@@ -1625,11 +1743,11 @@ async fn compute_extended_stats(pool: &PgPool) -> Result<Value, BoxError> {
         .iter()
         .map(|r| {
             json!({
-                "session_id": row_i64(r, "session_id"),
-                "streamer": row_str_opt(r, "streamer_login").unwrap_or_default(),
-                "minute": row_str_opt(r, "minute_bucket").unwrap_or_default(),
-                "messages": row_i64(r, "messages"),
-                "started_at": session_started_at(r),
+                "session_id": r.session_id,
+                "streamer": &r.streamer_login,
+                "minute": &r.minute_bucket,
+                "messages": r.messages,
+                "started_at": session_started_at(r.started_at),
             })
         })
         .collect();
@@ -1653,13 +1771,13 @@ async fn compute_extended_stats(pool: &PgPool) -> Result<Value, BoxError> {
     let mut content: Vec<(i64, Value)> = session_rows
         .iter()
         .filter_map(|r| {
-            let title = row_str_opt(r, "stream_title").unwrap_or_default();
-            let notify = row_str_opt(r, "notification_text").unwrap_or_default();
+            let title = r.stream_title.as_deref().unwrap_or_default();
+            let notify = r.notification_text.as_deref().unwrap_or_default();
             if title.is_empty() && notify.is_empty() {
                 return None;
             }
-            let followers_start = row_i64(r, "followers_start");
-            let peak = row_i64(r, "peak_viewers");
+            let followers_start = i64::from(r.followers_start.unwrap_or(0));
+            let peak = i64::from(r.peak_viewers.unwrap_or(0));
             let engagement_ratio = if followers_start > 0 {
                 json!((peak as f64 / followers_start as f64) * 100.0)
             } else {
@@ -1668,12 +1786,12 @@ async fn compute_extended_stats(pool: &PgPool) -> Result<Value, BoxError> {
             Some((
                 peak,
                 json!({
-                    "streamer": row_str_opt(r, "streamer_login").unwrap_or_default(),
-                    "started_at": session_started_at(r),
+                    "streamer": &r.streamer_login,
+                    "started_at": session_started_at(r.started_at),
                     "title": title,
                     "notification": notify,
                     "peak_viewers": peak,
-                    "avg_viewers": row_f64(r, "avg_viewers"),
+                    "avg_viewers": r.avg_viewers.unwrap_or(0.0),
                     "followers_start": followers_start,
                     "engagement_ratio": engagement_ratio,
                 }),
@@ -1801,11 +1919,19 @@ mod tests {
     #[test]
     fn enrich_top_row_setzt_is_partner_fuer_aktive_partner() {
         let rows = vec![PartnerStateRow {
-            twitch_login: "testuser".into(), is_on_discord: None,
-            discord_user_id: None, discord_display_name: None,
+            twitch_login: "testuser".into(),
+            is_on_discord: None,
+            discord_user_id: None,
+            discord_display_name: None,
         }];
         let maps = build_partner_maps(rows);
-        let top = TopRow { streamer: "testuser".into(), avg_viewers: 100.0, max_viewers: 200, samples: 50, is_partner: 1 };
+        let top = TopRow {
+            streamer: "testuser".into(),
+            avg_viewers: 100.0,
+            max_viewers: 200,
+            samples: 50,
+            is_partner: 1,
+        };
         let entry = enrich_top_row(top, &maps);
         assert_eq!(entry.is_partner, 1, "Aktiver Partner → is_partner=1");
     }
@@ -1813,11 +1939,19 @@ mod tests {
     #[test]
     fn enrich_top_row_is_partner_1_wenn_verified() {
         let rows = vec![PartnerStateRow {
-            twitch_login: "verifieduser".into(), is_on_discord: None,
-            discord_user_id: None, discord_display_name: None,
+            twitch_login: "verifieduser".into(),
+            is_on_discord: None,
+            discord_user_id: None,
+            discord_display_name: None,
         }];
         let maps = build_partner_maps(rows);
-        let top = TopRow { streamer: "verifieduser".into(), avg_viewers: 100.0, max_viewers: 200, samples: 50, is_partner: 0 };
+        let top = TopRow {
+            streamer: "verifieduser".into(),
+            avg_viewers: 100.0,
+            max_viewers: 200,
+            samples: 50,
+            is_partner: 0,
+        };
         let entry = enrich_top_row(top, &maps);
         assert_eq!(entry.is_partner, 1, "Aktiver Partner → is_partner=1");
     }
@@ -1825,11 +1959,19 @@ mod tests {
     #[test]
     fn enrich_top_row_is_on_discord_durch_verified() {
         let rows = vec![PartnerStateRow {
-            twitch_login: "streamer1".into(), is_on_discord: Some(0),
-            discord_user_id: None, discord_display_name: None,
+            twitch_login: "streamer1".into(),
+            is_on_discord: Some(0),
+            discord_user_id: None,
+            discord_display_name: None,
         }];
         let maps = build_partner_maps(rows);
-        let top = TopRow { streamer: "streamer1".into(), avg_viewers: 50.0, max_viewers: 100, samples: 10, is_partner: 0 };
+        let top = TopRow {
+            streamer: "streamer1".into(),
+            avg_viewers: 50.0,
+            max_viewers: 100,
+            samples: 10,
+            is_partner: 0,
+        };
         let entry = enrich_top_row(top, &maps);
         assert_eq!(entry.is_on_discord, 1, "Aktiver Partner → is_on_discord=1");
     }
@@ -1858,9 +2000,16 @@ mod tests {
         });
         let dt = Utc.with_ymd_and_hms(2026, 6, 12, 10, 0, 0).unwrap();
         let snap = EventSubCurrentSnapshot {
-            ts_utc: dt, listener_count: 5, ready_listeners: 4, failed_listeners: 1,
-            used_slots: 10, total_slots: 100, headroom_slots: 90, listeners_at_limit: 0,
-            utilization_pct: 0.1, subscription_count: 42,
+            ts_utc: dt,
+            listener_count: 5,
+            ready_listeners: 4,
+            failed_listeners: 1,
+            used_slots: 10,
+            total_slots: 100,
+            headroom_slots: 90,
+            listeners_at_limit: 0,
+            utilization_pct: 0.1,
+            subscription_count: 42,
             active_subscriptions: vec![json!({"id": "sub1"})],
             active_subscription_types: vec![json!("channel.follow")],
             active_subscription_channels: vec![json!("helmi")],
@@ -1898,9 +2047,19 @@ mod tests {
 
         // Erst schema anlegen (braucht public-scope-Verbindung ohne after_connect)
         {
-            let setup = PgPoolOptions::new().max_connections(1).connect(dsn).await.expect("connect setup");
-            sqlx::query(&format!("DROP SCHEMA IF EXISTS {schema} CASCADE")).execute(&setup).await.expect("drop schema");
-            sqlx::query(&format!("CREATE SCHEMA {schema}")).execute(&setup).await.expect("create schema");
+            let setup = PgPoolOptions::new()
+                .max_connections(1)
+                .connect(dsn)
+                .await
+                .expect("connect setup");
+            sqlx::query(&format!("DROP SCHEMA IF EXISTS {schema} CASCADE"))
+                .execute(&setup)
+                .await
+                .expect("drop schema");
+            sqlx::query(&format!("CREATE SCHEMA {schema}"))
+                .execute(&setup)
+                .await
+                .expect("create schema");
         }
 
         // Pool mit after_connect → search_path auf isoliertes Schema für ALLE Verbindungen
@@ -1921,26 +2080,41 @@ mod tests {
             .await
             .expect("connect pool");
 
-        sqlx::query(r#"CREATE TABLE twitch_streamers_partner_state (
+        sqlx::query(
+            r#"CREATE TABLE twitch_streamers_partner_state (
             twitch_login TEXT NOT NULL PRIMARY KEY,
             is_partner_active INTEGER NOT NULL DEFAULT 0,
             is_on_discord INTEGER,
             discord_user_id TEXT, discord_display_name TEXT
-        )"#).execute(&pool).await.expect("DDL partner_state");
+        )"#,
+        )
+        .execute(&pool)
+        .await
+        .expect("DDL partner_state");
 
         // Prod-Schema: is_partner ist BOOLEAN. Die Fixture muss das spiegeln,
         // sonst maskiert sie bool/int-Typ-Drift im Aggregat-SQL.
-        sqlx::query(r#"CREATE TABLE twitch_stats_tracked (
+        sqlx::query(
+            r#"CREATE TABLE twitch_stats_tracked (
             id BIGSERIAL PRIMARY KEY, streamer TEXT NOT NULL,
             viewer_count INTEGER NOT NULL DEFAULT 0,
             is_partner BOOLEAN NOT NULL DEFAULT FALSE, ts_utc TIMESTAMPTZ NOT NULL DEFAULT NOW()
-        )"#).execute(&pool).await.expect("DDL stats_tracked");
+        )"#,
+        )
+        .execute(&pool)
+        .await
+        .expect("DDL stats_tracked");
 
-        sqlx::query(r#"CREATE TABLE twitch_stats_category (
+        sqlx::query(
+            r#"CREATE TABLE twitch_stats_category (
             id BIGSERIAL PRIMARY KEY, streamer TEXT NOT NULL,
             viewer_count INTEGER NOT NULL DEFAULT 0,
             is_partner BOOLEAN NOT NULL DEFAULT FALSE, ts_utc TIMESTAMPTZ NOT NULL DEFAULT NOW()
-        )"#).execute(&pool).await.expect("DDL stats_category");
+        )"#,
+        )
+        .execute(&pool)
+        .await
+        .expect("DDL stats_category");
 
         sqlx::query(r#"CREATE TABLE twitch_stream_sessions (
             id BIGSERIAL PRIMARY KEY, streamer_login TEXT NOT NULL,
@@ -1954,43 +2128,83 @@ mod tests {
             stream_title TEXT, notification_text TEXT
         )"#).execute(&pool).await.expect("DDL stream_sessions");
 
-        sqlx::query(r#"CREATE TABLE twitch_chatter_rollup (
+        sqlx::query(
+            r#"CREATE TABLE twitch_chatter_rollup (
             id BIGSERIAL PRIMARY KEY, chatter_login TEXT NOT NULL,
             streamer_login TEXT NOT NULL, first_seen_at TIMESTAMPTZ, last_seen_at TIMESTAMPTZ
-        )"#).execute(&pool).await.expect("DDL chatter_rollup");
+        )"#,
+        )
+        .execute(&pool)
+        .await
+        .expect("DDL chatter_rollup");
 
-        sqlx::query(r#"CREATE TABLE twitch_chat_messages (
+        sqlx::query(
+            r#"CREATE TABLE twitch_chat_messages (
             id BIGSERIAL PRIMARY KEY, session_id BIGINT, message_ts TIMESTAMPTZ
-        )"#).execute(&pool).await.expect("DDL chat_messages");
+        )"#,
+        )
+        .execute(&pool)
+        .await
+        .expect("DDL chat_messages");
 
-        sqlx::query(r#"CREATE TABLE twitch_eventsub_capacity_snapshot (
+        sqlx::query(
+            r#"CREATE TABLE twitch_eventsub_capacity_snapshot (
             id BIGSERIAL PRIMARY KEY, ts_utc TIMESTAMPTZ, trigger_reason TEXT,
             listener_count INTEGER, ready_listeners INTEGER, failed_listeners INTEGER,
             used_slots INTEGER, total_slots INTEGER, headroom_slots INTEGER,
             listeners_at_limit INTEGER, utilization_pct DOUBLE PRECISION
-        )"#).execute(&pool).await.expect("DDL eventsub_snapshot");
+        )"#,
+        )
+        .execute(&pool)
+        .await
+        .expect("DDL eventsub_snapshot");
 
-        sqlx::query(r#"CREATE TABLE twitch_ad_break_events (
+        sqlx::query(
+            r#"CREATE TABLE twitch_ad_break_events (
             id BIGSERIAL PRIMARY KEY, session_id BIGINT, started_at TIMESTAMPTZ,
             duration_seconds INTEGER, is_automatic INTEGER DEFAULT 0
-        )"#).execute(&pool).await.expect("DDL ad_break");
+        )"#,
+        )
+        .execute(&pool)
+        .await
+        .expect("DDL ad_break");
 
-        sqlx::query(r#"CREATE TABLE twitch_session_viewers (
+        sqlx::query(
+            r#"CREATE TABLE twitch_session_viewers (
             session_id BIGINT, minutes_from_start INTEGER, viewer_count INTEGER
-        )"#).execute(&pool).await.expect("DDL session_viewers");
+        )"#,
+        )
+        .execute(&pool)
+        .await
+        .expect("DDL session_viewers");
 
-        sqlx::query(r#"CREATE TABLE twitch_hype_train_events (
+        sqlx::query(
+            r#"CREATE TABLE twitch_hype_train_events (
             id BIGSERIAL PRIMARY KEY, started_at TIMESTAMPTZ, ended_at TIMESTAMPTZ, level INTEGER,
             duration_seconds INTEGER
-        )"#).execute(&pool).await.expect("DDL hype_train");
+        )"#,
+        )
+        .execute(&pool)
+        .await
+        .expect("DDL hype_train");
 
-        sqlx::query(r#"CREATE TABLE twitch_bits_events (
+        sqlx::query(
+            r#"CREATE TABLE twitch_bits_events (
             id BIGSERIAL PRIMARY KEY, amount INTEGER, received_at TIMESTAMPTZ
-        )"#).execute(&pool).await.expect("DDL bits");
+        )"#,
+        )
+        .execute(&pool)
+        .await
+        .expect("DDL bits");
 
-        sqlx::query(r#"CREATE TABLE twitch_subscription_events (
+        sqlx::query(
+            r#"CREATE TABLE twitch_subscription_events (
             id BIGSERIAL PRIMARY KEY, is_gift INTEGER DEFAULT 0, received_at TIMESTAMPTZ
-        )"#).execute(&pool).await.expect("DDL subscription_events");
+        )"#,
+        )
+        .execute(&pool)
+        .await
+        .expect("DDL subscription_events");
 
         sqlx::query(r#"CREATE TABLE twitch_subscriptions_snapshot (
             id BIGSERIAL PRIMARY KEY, twitch_login TEXT, total INTEGER, points INTEGER, snapshot_at TIMESTAMPTZ
@@ -2005,7 +2219,9 @@ mod tests {
         let pool = make_pool(&dsn, "test_stats_leer").await;
         let hf = HourFilter::None;
         let ext = EventSubStatsExt(None);
-        let result = compute_stats(&pool, &ext, &hf, None).await.expect("compute_stats darf nicht fehlschlagen");
+        let result = compute_stats(&pool, &ext, &hf, None)
+            .await
+            .expect("compute_stats darf nicht fehlschlagen");
 
         assert!(result.get("tracked").is_some());
         assert!(result.get("category").is_some());
@@ -2027,7 +2243,9 @@ mod tests {
 
         let hf = HourFilter::None;
         let ext = EventSubStatsExt(None);
-        let result = compute_stats(&pool, &ext, &hf, None).await.expect("compute_stats");
+        let result = compute_stats(&pool, &ext, &hf, None)
+            .await
+            .expect("compute_stats");
 
         let top = result["tracked"]["top"].as_array().unwrap();
         assert!(!top.is_empty(), "Top muss Einträge haben");
@@ -2054,9 +2272,13 @@ mod tests {
 
         let hf = HourFilter::None;
         let ext = EventSubStatsExt(None);
-        let result = compute_stats(&pool, &ext, &hf, Some("helmi")).await.unwrap();
+        let result = compute_stats(&pool, &ext, &hf, Some("helmi"))
+            .await
+            .unwrap();
 
-        let streamer = result.get("streamer").expect("streamer-Block muss vorhanden sein");
+        let streamer = result
+            .get("streamer")
+            .expect("streamer-Block muss vorhanden sein");
         assert_eq!(streamer["login"], "helmi");
         assert!(streamer.get("had_results").is_some());
     }
@@ -2065,7 +2287,9 @@ mod tests {
     async fn eventsub_db_leer_liefert_korrekte_shape() {
         let dsn = db_dsn_or_skip!();
         let pool = make_pool(&dsn, "test_stats_eventsub_leer").await;
-        let result = fetch_eventsub_capacity_db(&pool).await.expect("fetch_eventsub_capacity_db");
+        let result = fetch_eventsub_capacity_db(&pool)
+            .await
+            .expect("fetch_eventsub_capacity_db");
 
         assert_eq!(result["window_hours"], 24);
         assert_eq!(result["samples"], 0);
@@ -2096,21 +2320,34 @@ mod tests {
         let pool = make_pool(&dsn, "test_stats_top_level_keys").await;
         let hf = HourFilter::None;
         let ext = EventSubStatsExt(None);
-        let result = compute_stats(&pool, &ext, &hf, None).await.expect("compute_stats");
+        let result = compute_stats(&pool, &ext, &hf, None)
+            .await
+            .expect("compute_stats");
 
         let obj = result.as_object().expect("result ist kein Object");
         let keys: std::collections::HashSet<&str> = obj.keys().map(|s| s.as_str()).collect();
 
         // Pflicht-Keys (immer vorhanden)
-        for k in &["avg_viewers_all", "avg_viewers_tracked", "category", "tracked"] {
+        for k in &[
+            "avg_viewers_all",
+            "avg_viewers_tracked",
+            "category",
+            "tracked",
+        ] {
             assert!(keys.contains(k), "Pflicht-Key fehlt: {k}");
         }
         // monetization muss bei funktionierender DB vorhanden sein
-        assert!(keys.contains("monetization"), "monetization fehlt — DB-Verbindung OK aber Sektion fehlt");
+        assert!(
+            keys.contains("monetization"),
+            "monetization fehlt — DB-Verbindung OK aber Sektion fehlt"
+        );
 
         // Verbotene Extra-Keys (Python liefert diese nicht)
         for k in &["chat", "content_performance", "discovery", "retention"] {
-            assert!(!keys.contains(k), "Extra-Key darf nicht vorhanden sein: {k}");
+            assert!(
+                !keys.contains(k),
+                "Extra-Key darf nicht vorhanden sein: {k}"
+            );
         }
     }
 
@@ -2127,14 +2364,21 @@ mod tests {
 
         let hf = HourFilter::None;
         let ext = EventSubStatsExt(None);
-        let result = compute_stats(&pool, &ext, &hf, None).await.expect("compute_stats");
+        let result = compute_stats(&pool, &ext, &hf, None)
+            .await
+            .expect("compute_stats");
 
         let top = result["tracked"]["top"].as_array().expect("top ist array");
-        let helmi = top.iter().find(|e| e["streamer"] == "helmi").expect("helmi fehlt");
+        let helmi = top
+            .iter()
+            .find(|e| e["streamer"] == "helmi")
+            .expect("helmi fehlt");
         let max_v = &helmi["max_viewers"];
         // Muss Integer sein (JSON-Zahl ohne Dezimalstelle), nicht Float
-        assert!(max_v.is_i64() || max_v.is_u64(),
-            "max_viewers muss Integer sein, ist: {max_v:?}");
+        assert!(
+            max_v.is_i64() || max_v.is_u64(),
+            "max_viewers muss Integer sein, ist: {max_v:?}"
+        );
         assert_eq!(max_v.as_i64().unwrap(), 19);
     }
 
@@ -2147,7 +2391,9 @@ mod tests {
     async fn extended_stats_leer_liefert_alle_vier_sektionen() {
         let dsn = db_dsn_or_skip!();
         let pool = make_pool(&dsn, "test_ext_stats_leer").await;
-        let result = compute_extended_stats(&pool).await.expect("compute_extended_stats");
+        let result = compute_extended_stats(&pool)
+            .await
+            .expect("compute_extended_stats");
 
         for k in &["retention", "chat", "discovery", "content_performance"] {
             assert!(result.get(*k).is_some(), "Sektion fehlt: {k}");
@@ -2184,7 +2430,9 @@ mod tests {
         .await
         .unwrap();
 
-        let result = compute_extended_stats(&pool).await.expect("compute_extended_stats");
+        let result = compute_extended_stats(&pool)
+            .await
+            .expect("compute_extended_stats");
 
         // Retention: 2 Sessions, ret5 = avg(0.8, 0.6) = 0.7
         assert_eq!(result["retention"]["sessions"], 2);
@@ -2205,7 +2453,9 @@ mod tests {
         assert_eq!(cp[0]["streamer"], "beta");
         assert_eq!(cp[0]["peak_viewers"], 80);
         // engagement_ratio = peak/followers_start*100 = 80/200*100 = 40.0
-        let er = cp[0]["engagement_ratio"].as_f64().expect("engagement_ratio");
+        let er = cp[0]["engagement_ratio"]
+            .as_f64()
+            .expect("engagement_ratio");
         assert!((er - 40.0).abs() < 1e-9, "engagement_ratio falsch: {er}");
 
         // Chat: total_unique = 30 + 40 = 70
@@ -2220,7 +2470,9 @@ mod tests {
         let pool = make_pool(&dsn, "test_ext_not_in_stats").await;
         let hf = HourFilter::None;
         let ext = EventSubStatsExt(None);
-        let stats = compute_stats(&pool, &ext, &hf, None).await.expect("compute_stats");
+        let stats = compute_stats(&pool, &ext, &hf, None)
+            .await
+            .expect("compute_stats");
         let obj = stats.as_object().unwrap();
         for k in &["retention", "chat", "discovery", "content_performance"] {
             assert!(!obj.contains_key(*k), "/stats darf {k} nicht enthalten");

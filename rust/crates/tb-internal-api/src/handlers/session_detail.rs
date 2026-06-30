@@ -7,8 +7,9 @@
 //!
 //! Python führt `SELECT * FROM twitch_stream_sessions WHERE id=%s` und wandelt
 //! die Row dynamisch via `_row_to_dict(row)` (Cursor-Keys + `json_default`-
-//! Serializer) in JSON um. Damit künftige Spalten automatisch mitkommen, macht
-//! dieser Handler dasselbe: dynamischer Spalten-Iterator statt fixierter Struct.
+//! Serializer) in JSON um. Der Rust-Port listet die aktuelle
+//! `twitch_stream_sessions`-Spaltenmenge explizit, damit sqlx die Query zur
+//! Compile-Zeit prüfen kann.
 //!
 //! # Typ-Mapping (Python `json_default` → Rust)
 //!
@@ -30,13 +31,16 @@
 //! | unerwartete Exception | 500 | `{"error":"internal_error","message":"failed to fetch session detail"}` |
 
 use axum::{
+    Json,
     extract::{Path, State},
     response::IntoResponse,
-    Json,
 };
 use chrono::{DateTime, Utc};
-use serde_json::{json, Map, Value};
-use sqlx::{Column, PgPool, Row, TypeInfo};
+use serde::Serialize;
+use serde_json::{Map, Value, json};
+use sqlx::PgPool;
+#[cfg(test)]
+use sqlx::Row;
 use tb_http_core::{ApiError, AuthLevel};
 
 // ── Timestamp-Serialisierung ──────────────────────────────────────────────────
@@ -54,94 +58,28 @@ pub fn ts_to_iso(dt: DateTime<Utc>) -> String {
     crate::security::datetime_to_iso(dt)
 }
 
-// ── Dynamischer Row→JSON-Mapper ───────────────────────────────────────────────
+// ── JSON-Mapper für Makro-Records ─────────────────────────────────────────────
 
-/// Mappt eine `sqlx::postgres::PgRow` dynamisch auf ein `serde_json::Map`.
-///
-/// Iteriert über alle Spalten (`row.columns()`), liest den Postgres-Typ-Namen
-/// und dekodiert den Wert entsprechend. Neue Spalten kommen automatisch mit,
-/// ohne dass der Handler angepasst werden muss — Parität zu Pythons
-/// `_row_to_dict` (`bot/dashboard/dashboard_metrics_mixin.py:326–365`).
-///
-/// Unterstützte Typen laut `twitch_stream_sessions`-DDL
-/// (`bot/migrations/twitch_analytics_schema.sql:169–200`):
-/// `TIMESTAMPTZ`, `INT4`, `INT8`, `FLOAT8`, `BOOL`, `TEXT`.
-fn pg_row_to_json(row: &sqlx::postgres::PgRow) -> Map<String, Value> {
-    use sqlx::postgres::PgRow;
-    let _ = std::marker::PhantomData::<PgRow>;
-
-    let mut map = Map::new();
-    for col in row.columns() {
-        let name = col.name();
-        let type_name = col.type_info().name();
-        let val = decode_pg_column(row, col.ordinal(), type_name);
-        map.insert(name.to_string(), val);
-    }
-    map
+fn insert_value<T: Serialize>(map: &mut Map<String, Value>, key: &str, value: T) {
+    map.insert(key.to_string(), json!(value));
 }
 
-/// Dekodiert eine einzelne Postgres-Spalte nach Typ-Name in einen JSON-`Value`.
-///
-/// Unbekannte Typen werden als `null` kodiert (defensiv, statt zu panicen).
-fn decode_pg_column(row: &sqlx::postgres::PgRow, idx: usize, type_name: &str) -> Value {
-    match type_name {
-        // TIMESTAMPTZ → ISO-8601-String (Python: datetime.isoformat())
-        "TIMESTAMPTZ" => {
-            let v: Option<DateTime<Utc>> = row.try_get(idx).ok().flatten();
-            match v {
-                Some(dt) => Value::String(ts_to_iso(dt)),
-                None => Value::Null,
-            }
-        }
-        // INTEGER / INT4
-        "INT4" => {
-            let v: Option<i32> = row.try_get(idx).ok().flatten();
-            match v {
-                Some(n) => json!(n),
-                None => Value::Null,
-            }
-        }
-        // BIGINT / INT8 / BIGSERIAL
-        "INT8" => {
-            let v: Option<i64> = row.try_get(idx).ok().flatten();
-            match v {
-                Some(n) => json!(n),
-                None => Value::Null,
-            }
-        }
-        // DOUBLE PRECISION / FLOAT8
-        "FLOAT8" => {
-            let v: Option<f64> = row.try_get(idx).ok().flatten();
-            match v {
-                Some(f) => json!(f),
-                None => Value::Null,
-            }
-        }
-        // BOOLEAN
-        "BOOL" => {
-            let v: Option<bool> = row.try_get(idx).ok().flatten();
-            match v {
-                Some(b) => json!(b),
-                None => Value::Null,
-            }
-        }
-        // TEXT / VARCHAR
-        "TEXT" | "VARCHAR" => {
-            let v: Option<String> = row.try_get(idx).ok().flatten();
-            match v {
-                Some(s) => Value::String(s),
-                None => Value::Null,
-            }
-        }
-        // Unbekannter Typ → null (defensiv, kein Panic)
-        _ => {
-            tracing::warn!(
-                "session_detail: unbekannter Spalten-Typ '{}' → null",
-                type_name
-            );
-            Value::Null
-        }
-    }
+fn insert_opt<T: Serialize>(map: &mut Map<String, Value>, key: &str, value: Option<T>) {
+    map.insert(
+        key.to_string(),
+        value.map_or(Value::Null, |value| json!(value)),
+    );
+}
+
+fn insert_ts(map: &mut Map<String, Value>, key: &str, value: DateTime<Utc>) {
+    map.insert(key.to_string(), Value::String(ts_to_iso(value)));
+}
+
+fn insert_opt_ts(map: &mut Map<String, Value>, key: &str, value: Option<DateTime<Utc>>) {
+    map.insert(
+        key.to_string(),
+        value.map_or(Value::Null, |value| Value::String(ts_to_iso(value))),
+    );
 }
 
 // ── Handler ───────────────────────────────────────────────────────────────────
@@ -167,29 +105,130 @@ pub async fn session_detail_handler(
         .map_err(|_| ApiError::bad_request("invalid session id"))?;
 
     // ── Haupt-Session-Row (`bot/dashboard/dashboard_metrics_mixin.py:336–340`)
-    let session_row = sqlx::query("SELECT * FROM twitch_stream_sessions WHERE id = $1")
-        .bind(session_id)
-        .fetch_optional(&pool)
-        .await
-        .map_err(|e| {
-            tracing::error!("session_detail DB-Fehler (sessions): {e}");
-            ApiError::internal_with("failed to fetch session detail")
-        })?;
+    let session_row = sqlx::query!(
+        r#"
+        SELECT id AS "id!",
+               streamer_login AS "streamer_login!",
+               stream_id,
+               started_at AS "started_at!",
+               ended_at,
+               duration_seconds,
+               start_viewers,
+               peak_viewers,
+               end_viewers,
+               avg_viewers,
+               samples,
+               retention_5m,
+               retention_10m,
+               retention_20m,
+               dropoff_pct,
+               dropoff_label,
+               unique_chatters,
+               first_time_chatters,
+               returning_chatters,
+               followers_start,
+               followers_end,
+               follower_delta,
+               stream_title,
+               notification_text,
+               language,
+               is_mature,
+               tags,
+               had_deadlock_in_session,
+               game_name,
+               notes
+          FROM twitch_stream_sessions
+         WHERE id = $1
+        "#,
+        session_id
+    )
+    .fetch_optional(&pool)
+    .await
+    .map_err(|e| {
+        tracing::error!("session_detail DB-Fehler (sessions): {e}");
+        ApiError::internal_with("failed to fetch session detail")
+    })?;
 
     // 404 wenn kein Row — `bot/internal_api/routes/streamers.py:456–457`
     let session_row = session_row.ok_or_else(|| ApiError::not_found_with("session not found"))?;
-    let session_map = pg_row_to_json(&session_row);
+    let mut session_map = Map::new();
+    insert_value(&mut session_map, "id", session_row.id);
+    insert_value(
+        &mut session_map,
+        "streamer_login",
+        session_row.streamer_login,
+    );
+    insert_opt(&mut session_map, "stream_id", session_row.stream_id);
+    insert_ts(&mut session_map, "started_at", session_row.started_at);
+    insert_opt_ts(&mut session_map, "ended_at", session_row.ended_at);
+    insert_opt(
+        &mut session_map,
+        "duration_seconds",
+        session_row.duration_seconds,
+    );
+    insert_opt(&mut session_map, "start_viewers", session_row.start_viewers);
+    insert_opt(&mut session_map, "peak_viewers", session_row.peak_viewers);
+    insert_opt(&mut session_map, "end_viewers", session_row.end_viewers);
+    insert_opt(&mut session_map, "avg_viewers", session_row.avg_viewers);
+    insert_opt(&mut session_map, "samples", session_row.samples);
+    insert_opt(&mut session_map, "retention_5m", session_row.retention_5m);
+    insert_opt(&mut session_map, "retention_10m", session_row.retention_10m);
+    insert_opt(&mut session_map, "retention_20m", session_row.retention_20m);
+    insert_opt(&mut session_map, "dropoff_pct", session_row.dropoff_pct);
+    insert_opt(&mut session_map, "dropoff_label", session_row.dropoff_label);
+    insert_opt(
+        &mut session_map,
+        "unique_chatters",
+        session_row.unique_chatters,
+    );
+    insert_opt(
+        &mut session_map,
+        "first_time_chatters",
+        session_row.first_time_chatters,
+    );
+    insert_opt(
+        &mut session_map,
+        "returning_chatters",
+        session_row.returning_chatters,
+    );
+    insert_opt(
+        &mut session_map,
+        "followers_start",
+        session_row.followers_start,
+    );
+    insert_opt(&mut session_map, "followers_end", session_row.followers_end);
+    insert_opt(
+        &mut session_map,
+        "follower_delta",
+        session_row.follower_delta,
+    );
+    insert_opt(&mut session_map, "stream_title", session_row.stream_title);
+    insert_opt(
+        &mut session_map,
+        "notification_text",
+        session_row.notification_text,
+    );
+    insert_opt(&mut session_map, "language", session_row.language);
+    insert_opt(&mut session_map, "is_mature", session_row.is_mature);
+    insert_opt(&mut session_map, "tags", session_row.tags);
+    insert_opt(
+        &mut session_map,
+        "had_deadlock_in_session",
+        session_row.had_deadlock_in_session,
+    );
+    insert_opt(&mut session_map, "game_name", session_row.game_name);
+    insert_opt(&mut session_map, "notes", session_row.notes);
 
     // ── Timeline (`bot/dashboard/dashboard_metrics_mixin.py:342–347`)
     // SQL: SELECT minutes_from_start, viewer_count FROM twitch_session_viewers
     //      WHERE session_id=$1 ORDER BY minutes_from_start ASC
-    let timeline_rows = sqlx::query(
+    let timeline_rows = sqlx::query!(
         "SELECT minutes_from_start, viewer_count \
          FROM twitch_session_viewers \
          WHERE session_id = $1 \
          ORDER BY minutes_from_start ASC",
+        session_id
     )
-    .bind(session_id)
     .fetch_all(&pool)
     .await
     .map_err(|e| {
@@ -200,11 +239,9 @@ pub async fn session_detail_handler(
     let timeline: Vec<Value> = timeline_rows
         .iter()
         .map(|row| {
-            let minutes: Option<i32> = row.try_get("minutes_from_start").ok().flatten();
-            let viewers: i32 = row.try_get("viewer_count").unwrap_or(0);
             json!({
-                "minutes_from_start": minutes,
-                "viewer_count": viewers,
+                "minutes_from_start": row.minutes_from_start,
+                "viewer_count": row.viewer_count,
             })
         })
         .collect();
@@ -212,14 +249,15 @@ pub async fn session_detail_handler(
     // ── Top-Chatters (`bot/dashboard/dashboard_metrics_mixin.py:349–355`)
     // SQL: SELECT chatter_login, messages FROM twitch_session_chatters
     //      WHERE session_id=$1 ORDER BY messages DESC LIMIT 10
-    let chatter_rows = sqlx::query(
-        "SELECT chatter_login, messages \
-         FROM twitch_session_chatters \
-         WHERE session_id = $1 \
-         ORDER BY messages DESC \
-         LIMIT 10",
+    let chatter_rows = sqlx::query!(
+        r#"SELECT chatter_login AS "chatter_login!",
+                  COALESCE(messages, 0) AS "messages!"
+         FROM twitch_session_chatters
+         WHERE session_id = $1
+         ORDER BY messages DESC
+         LIMIT 10"#,
+        session_id
     )
-    .bind(session_id)
     .fetch_all(&pool)
     .await
     .map_err(|e| {
@@ -230,11 +268,9 @@ pub async fn session_detail_handler(
     let top_chatters: Vec<Value> = chatter_rows
         .iter()
         .map(|row| {
-            let login: String = row.try_get("chatter_login").unwrap_or_default();
-            let messages: i32 = row.try_get("messages").unwrap_or(0);
             json!({
-                "chatter_login": login,
-                "messages": messages,
+                "chatter_login": &row.chatter_login,
+                "messages": row.messages,
             })
         })
         .collect();
@@ -252,18 +288,18 @@ pub async fn session_detail_handler(
 mod tests {
     use super::*;
     use axum::{
+        Extension, Router,
         body::Body,
         extract::ConnectInfo,
         http::{Request, StatusCode},
         middleware,
         routing::get,
-        Extension, Router,
     };
     use chrono::TimeZone;
     use sqlx::postgres::{PgConnectOptions, PgPoolOptions};
     use std::net::SocketAddr;
     use std::str::FromStr;
-    use tb_http_core::{internal_auth, loopback_only, ExpectedToken, INTERNAL_API_BASE_PATH};
+    use tb_http_core::{ExpectedToken, INTERNAL_API_BASE_PATH, internal_auth, loopback_only};
     use tower::ServiceExt;
 
     // ── Infrastruktur ─────────────────────────────────────────────────────────
@@ -390,7 +426,10 @@ mod tests {
             )
             .with_state(pool)
             .layer(Extension(ExpectedToken(token.to_string())))
-            .layer(middleware::from_fn_with_state(token.to_string(), internal_auth))
+            .layer(middleware::from_fn_with_state(
+                token.to_string(),
+                internal_auth,
+            ))
             .layer(middleware::from_fn(loopback_only))
     }
 
@@ -398,7 +437,9 @@ mod tests {
         let mut builder = Request::builder()
             .method("GET")
             .uri(uri)
-            .extension(ConnectInfo("127.0.0.1:55555".parse::<SocketAddr>().unwrap()));
+            .extension(ConnectInfo(
+                "127.0.0.1:55555".parse::<SocketAddr>().unwrap(),
+            ));
         if let Some(t) = token {
             builder = builder.header("x-internal-token", t);
         }
@@ -406,7 +447,9 @@ mod tests {
     }
 
     async fn json_body(resp: axum::response::Response) -> serde_json::Value {
-        let bytes = axum::body::to_bytes(resp.into_body(), 131072).await.unwrap();
+        let bytes = axum::body::to_bytes(resp.into_body(), 131072)
+            .await
+            .unwrap();
         serde_json::from_slice(&bytes).unwrap()
     }
 
@@ -421,9 +464,10 @@ mod tests {
     #[test]
     fn ts_iso_mit_mikrosekunden() {
         use chrono::NaiveDateTime;
-        let dt = NaiveDateTime::parse_from_str("2026-06-12T14:30:00.123456", "%Y-%m-%dT%H:%M:%S%.f")
-            .unwrap()
-            .and_utc();
+        let dt =
+            NaiveDateTime::parse_from_str("2026-06-12T14:30:00.123456", "%Y-%m-%dT%H:%M:%S%.f")
+                .unwrap()
+                .and_utc();
         let s = ts_to_iso(dt);
         assert_eq!(s, "2026-06-12T14:30:00.123456+00:00");
     }
@@ -594,7 +638,10 @@ mod tests {
         // Top-Level-Felder
         assert!(j["session"].is_object(), "session muss ein Objekt sein");
         assert!(j["timeline"].is_array(), "timeline muss ein Array sein");
-        assert!(j["top_chatters"].is_array(), "top_chatters muss ein Array sein");
+        assert!(
+            j["top_chatters"].is_array(),
+            "top_chatters muss ein Array sein"
+        );
 
         // Session-Felder
         let s = &j["session"];

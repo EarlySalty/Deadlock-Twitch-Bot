@@ -1,0 +1,34 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n        SELECT trigger_reason,\n               CAST(COUNT(*) AS BIGINT) AS \"samples!\",\n               CAST(COALESCE(MAX(utilization_pct), 0) AS DOUBLE PRECISION) AS \"peak_utilization_pct!\"\n          FROM twitch_eventsub_capacity_snapshot\n         WHERE ts_utc >= NOW() - ($1::text::interval)\n         GROUP BY trigger_reason\n         ORDER BY 2 DESC, trigger_reason ASC\n        ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "trigger_reason",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 1,
+        "name": "samples!",
+        "type_info": "Int8"
+      },
+      {
+        "ordinal": 2,
+        "name": "peak_utilization_pct!",
+        "type_info": "Float8"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Text"
+      ]
+    },
+    "nullable": [
+      true,
+      null,
+      null
+    ]
+  },
+  "hash": "9d8cf06942ed6ea57de493f0cc62217ec5c20e8d22956eef47a2750667d0c2f1"
+}

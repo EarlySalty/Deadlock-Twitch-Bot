@@ -1,0 +1,41 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n            SELECT\n                DATE(s.started_at) AS \"date?\",\n                AVG(s.peak_viewers)::DOUBLE PRECISION AS \"peak_viewers?\",\n                COALESCE(SUM(COALESCE(s.follower_delta, 0)), 0)::BIGINT AS \"followers_delta!\",\n                AVG(s.avg_viewers) AS \"avg_viewers?\"\n            FROM twitch_stream_sessions s\n            WHERE s.started_at >= $1\n              AND s.ended_at IS NOT NULL\n              AND LOWER(s.streamer_login) = $2\n            GROUP BY DATE(s.started_at)\n            ORDER BY DATE(s.started_at) ASC\n            ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "date?",
+        "type_info": "Date"
+      },
+      {
+        "ordinal": 1,
+        "name": "peak_viewers?",
+        "type_info": "Float8"
+      },
+      {
+        "ordinal": 2,
+        "name": "followers_delta!",
+        "type_info": "Int8"
+      },
+      {
+        "ordinal": 3,
+        "name": "avg_viewers?",
+        "type_info": "Float8"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Timestamptz",
+        "Text"
+      ]
+    },
+    "nullable": [
+      null,
+      null,
+      null,
+      null
+    ]
+  },
+  "hash": "96628cc47f90bf9ee7fe55d28623a513075c8d828d13d7d83015ac9a9620e9ca"
+}

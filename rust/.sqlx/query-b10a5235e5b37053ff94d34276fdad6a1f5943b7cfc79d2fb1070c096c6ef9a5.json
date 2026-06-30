@@ -1,0 +1,15 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n        UPDATE twitch_raid_auth\n        SET raid_enabled = TRUE,\n            twitch_login = COALESCE(NULLIF($2, ''), twitch_login)\n        WHERE ($1 <> '' AND twitch_user_id = $1)\n           OR ($2 <> '' AND LOWER(twitch_login) = LOWER($2))\n        ",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Text",
+        "Text"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "b10a5235e5b37053ff94d34276fdad6a1f5943b7cfc79d2fb1070c096c6ef9a5"
+}

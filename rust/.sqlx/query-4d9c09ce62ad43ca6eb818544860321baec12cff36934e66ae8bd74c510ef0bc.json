@@ -1,0 +1,76 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n        SELECT ts_utc AS \"ts_utc!\",\n               trigger_reason,\n               COALESCE(listener_count, 0) AS \"listener_count!\",\n               COALESCE(ready_listeners, 0) AS \"ready_listeners!\",\n               COALESCE(failed_listeners, 0) AS \"failed_listeners!\",\n               COALESCE(used_slots, 0) AS \"used_slots!\",\n               COALESCE(total_slots, 0) AS \"total_slots!\",\n               COALESCE(headroom_slots, 0) AS \"headroom_slots!\",\n               COALESCE(listeners_at_limit, 0) AS \"listeners_at_limit!\",\n               COALESCE(utilization_pct, 0) AS \"utilization_pct!\"\n          FROM twitch_eventsub_capacity_snapshot\n         WHERE ts_utc >= NOW() - ($1::text::interval)\n         ORDER BY ts_utc ASC\n        ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "ts_utc!",
+        "type_info": "Timestamptz"
+      },
+      {
+        "ordinal": 1,
+        "name": "trigger_reason",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 2,
+        "name": "listener_count!",
+        "type_info": "Int4"
+      },
+      {
+        "ordinal": 3,
+        "name": "ready_listeners!",
+        "type_info": "Int4"
+      },
+      {
+        "ordinal": 4,
+        "name": "failed_listeners!",
+        "type_info": "Int4"
+      },
+      {
+        "ordinal": 5,
+        "name": "used_slots!",
+        "type_info": "Int4"
+      },
+      {
+        "ordinal": 6,
+        "name": "total_slots!",
+        "type_info": "Int4"
+      },
+      {
+        "ordinal": 7,
+        "name": "headroom_slots!",
+        "type_info": "Int4"
+      },
+      {
+        "ordinal": 8,
+        "name": "listeners_at_limit!",
+        "type_info": "Int4"
+      },
+      {
+        "ordinal": 9,
+        "name": "utilization_pct!",
+        "type_info": "Float8"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Text"
+      ]
+    },
+    "nullable": [
+      false,
+      true,
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      null
+    ]
+  },
+  "hash": "4d9c09ce62ad43ca6eb818544860321baec12cff36934e66ae8bd74c510ef0bc"
+}

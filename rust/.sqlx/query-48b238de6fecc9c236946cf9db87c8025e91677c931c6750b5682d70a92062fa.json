@@ -1,0 +1,15 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n        UPDATE twitch_raid_auth\n        SET raid_enabled = FALSE,\n            twitch_login = $1\n        WHERE twitch_user_id = $2\n           OR LOWER(twitch_login) = LOWER($1)\n        ",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Text",
+        "Text"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "48b238de6fecc9c236946cf9db87c8025e91677c931c6750b5682d70a92062fa"
+}

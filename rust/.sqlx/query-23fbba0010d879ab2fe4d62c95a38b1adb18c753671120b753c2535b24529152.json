@@ -1,0 +1,16 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n        UPDATE twitch_partners\n        SET status = $1,\n            departnered_at = NULL,\n            admin_archived_at = NULL,\n            technical_pause_reason = NULL,\n            manual_partner_opt_out = 0,\n            raid_bot_enabled = 1,\n            partnered_at = $2\n        WHERE id = $3\n        ",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Text",
+        "Text",
+        "Int8"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "23fbba0010d879ab2fe4d62c95a38b1adb18c753671120b753c2535b24529152"
+}

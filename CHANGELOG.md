@@ -1,3 +1,11 @@
+## #312 — Vierte Welle: interne Streamer-API compile-fest, plus ein Altlast-Fehler bei der Discord-Zuordnung
+
+Die interne API rund um Streamer-Status, Analytics und Partner-Lebenszyklus hat ihre Datenbankabfragen bisher als reine Textbausteine ausgeführt — eine Schema-Änderung wäre erst zur Laufzeit aufgefallen, wenn der betroffene Endpunkt schon hängt. Wir haben die 51 statischen Abfragen dieser Schicht auf zur Bauzeit geprüfte Varianten umgestellt: Passt eine Abfrage nicht mehr zum echten Schema, scheitert schon der Build statt später der laufende Dienst.
+
+Beim Umbau fiel ein Altlast-Fehler auf: Eine Abfrage las die Discord-Zuordnung eines Streamers noch aus einer Tabelle, die diese Felder beim großen Umzug längst abgegeben hatte — sie lieferte still nichts zurück. Jetzt wird die Zuordnung wieder über den Login gesucht, so wie ursprünglich gedacht.
+
+Unterm Strich: Schema-Brüche fliegen beim Bauen auf statt im Betrieb, und ein Streamer mit hinterlegter Discord-Verknüpfung wird wieder zuverlässig erkannt — inklusive korrekter Partner-Rolle und Discord-Markierung.
+
 ## #311 — Dritte Welle: Stream-Überwachung und Chat-Aktionen — und vier Beinahe-Abstürze abgefangen
 
 **Ausgangslage:** Die größte Umstellung bisher nimmt sich zwei Brocken auf einmal vor: den Teil, der live mitschaut (Stream-Status, Sessions, Telemetrie, die interne Aufgaben-Warteschlange) und den Teil, der im Chat handelt (Moderation, Promos, Scam-Schutz, Titel-Generator). Zusammen 197 Datenbank-Abfragen, bisher erst zur Laufzeit auf Passung geprüft.

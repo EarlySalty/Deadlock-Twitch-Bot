@@ -1,0 +1,28 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n        SELECT CAST(COALESCE(SUM(amount), 0) AS BIGINT) AS \"total_bits!\",\n               CAST(COUNT(*) AS BIGINT) AS \"cheer_events!\"\n        FROM twitch_bits_events\n        WHERE received_at >= $1\n        ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "total_bits!",
+        "type_info": "Int8"
+      },
+      {
+        "ordinal": 1,
+        "name": "cheer_events!",
+        "type_info": "Int8"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Timestamptz"
+      ]
+    },
+    "nullable": [
+      null,
+      null
+    ]
+  },
+  "hash": "28c40d4fc56bdd60713728128d8ebe4b1c827a2b7bee7b361effc537c6ab4e7a"
+}

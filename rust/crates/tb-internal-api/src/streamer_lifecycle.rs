@@ -107,9 +107,12 @@ pub async fn load_active_partner(
     pool: &PgPool,
     login: &str,
 ) -> Result<Option<ActivePartnerRow>, sqlx::Error> {
-    sqlx::query_as::<_, ActivePartnerRow>(
+    sqlx::query_as!(
+        ActivePartnerRow,
         r#"
-        SELECT p.id, p.twitch_login, p.twitch_user_id,
+        SELECT p.id AS "id!",
+               p.twitch_login AS "twitch_login!",
+               p.twitch_user_id AS "twitch_user_id?",
                i.discord_user_id, i.discord_display_name, i.is_on_discord
           FROM twitch_partners p
           LEFT JOIN twitch_streamer_identities i
@@ -119,8 +122,8 @@ pub async fn load_active_partner(
          ORDER BY p.id DESC
          LIMIT 1
         "#,
+        login
     )
-    .bind(login)
     .fetch_optional(pool)
     .await
 }
@@ -140,7 +143,9 @@ async fn upsert_streamer_identity(
     let Some(uid) = twitch_user_id.map(str::trim).filter(|s| !s.is_empty()) else {
         return Ok(());
     };
-    sqlx::query(
+    let normalized_login = twitch_login.to_lowercase();
+    let now = now_iso();
+    sqlx::query!(
         r#"
         INSERT INTO twitch_streamer_identities (
             twitch_user_id, twitch_login, discord_user_id,
@@ -153,13 +158,13 @@ async fn upsert_streamer_identity(
             is_on_discord        = EXCLUDED.is_on_discord,
             updated_at           = EXCLUDED.updated_at
         "#,
+        uid,
+        normalized_login,
+        discord_user_id,
+        discord_display_name,
+        is_on_discord,
+        now
     )
-    .bind(uid)
-    .bind(twitch_login.to_lowercase())
-    .bind(discord_user_id)
-    .bind(discord_display_name)
-    .bind(is_on_discord)
-    .bind(now_iso())
     .execute(pool)
     .await?;
     Ok(())
@@ -234,7 +239,7 @@ pub async fn departner_active_partner(
     )
     .await?;
 
-    sqlx::query(
+    sqlx::query!(
         r#"
         UPDATE twitch_partners
         SET status = $1,
@@ -244,17 +249,17 @@ pub async fn departner_active_partner(
             twitch_user_id = $4
         WHERE id = $5
         "#,
+        STATUS_DEPARTNERED,
+        &departnered_at,
+        &normalized_login,
+        normalized_user_id.as_deref(),
+        row.id
     )
-    .bind(STATUS_DEPARTNERED)
-    .bind(&departnered_at)
-    .bind(&normalized_login)
-    .bind(normalized_user_id.as_deref())
-    .bind(row.id)
     .execute(pool)
     .await?;
 
     // Raid-Auth deaktivieren (Python disable_raid_auth=True default).
-    sqlx::query(
+    sqlx::query!(
         r#"
         UPDATE twitch_raid_auth
         SET raid_enabled = FALSE,
@@ -262,17 +267,17 @@ pub async fn departner_active_partner(
         WHERE twitch_user_id = $2
            OR LOWER(twitch_login) = LOWER($1)
         "#,
+        &normalized_login,
+        normalized_user_id.as_deref()
     )
-    .bind(&normalized_login)
-    .bind(normalized_user_id.as_deref())
     .execute(pool)
     .await?;
 
     // Engagement-Layer abschalten — best-effort wie Python (Tabelle kann fehlen).
-    let _ = sqlx::query(
+    let _ = sqlx::query!(
         "UPDATE twitch_engagement_settings SET enabled = FALSE WHERE LOWER(channel_login) = LOWER($1)",
+        &normalized_login
     )
-    .bind(&normalized_login)
     .execute(pool)
     .await;
 
@@ -320,14 +325,20 @@ pub async fn load_verify_source(
     login: &str,
     helix: Option<&HelixClient>,
 ) -> Result<Option<VerifySource>, sqlx::Error> {
-    let streamer: Option<VerifySourceRow> = sqlx::query_as(
+    let streamer: Option<VerifySourceRow> = sqlx::query_as!(
+        VerifySourceRow,
         r#"
-        SELECT twitch_user_id, discord_user_id, discord_display_name
-          FROM twitch_streamers
-         WHERE LOWER(twitch_login) = LOWER($1)
+        SELECT s.twitch_user_id,
+               i.discord_user_id,
+               i.discord_display_name
+          FROM twitch_streamers s
+          LEFT JOIN twitch_streamer_identities i
+            ON i.twitch_login <> ''
+           AND LOWER(i.twitch_login) = LOWER(s.twitch_login)
+         WHERE LOWER(s.twitch_login) = LOWER($1)
         "#,
+        login
     )
-    .bind(login)
     .fetch_optional(pool)
     .await?;
 
@@ -426,7 +437,7 @@ pub async fn promote_streamer_to_partner(
     let partnered_at = now_iso();
 
     // Bestehenden Partner-Datensatz (egal welcher Status) reaktivieren …
-    let updated = sqlx::query(
+    let updated = sqlx::query!(
         r#"
         UPDATE twitch_partners
         SET twitch_login = $1,
@@ -444,12 +455,12 @@ pub async fn promote_streamer_to_partner(
              LIMIT 1
         )
         "#,
+        &normalized_login,
+        normalized_user_id,
+        verification.manual_partner_opt_out,
+        &partnered_at,
+        STATUS_ACTIVE
     )
-    .bind(&normalized_login)
-    .bind(normalized_user_id)
-    .bind(verification.manual_partner_opt_out)
-    .bind(&partnered_at)
-    .bind(STATUS_ACTIVE)
     .execute(pool)
     .await?
     .rows_affected();
@@ -461,7 +472,7 @@ pub async fn promote_streamer_to_partner(
     // … oder neu einfügen, wenn noch kein Partner-Datensatz existiert.
     // id ist in Prod bigint NOT NULL ohne DEFAULT → MAX(id)+1 (Python-Inserts
     // setzen id ebenfalls explizit über die Sequenz; im Test reicht MAX+1).
-    sqlx::query(
+    sqlx::query!(
         r#"
         INSERT INTO twitch_partners (
             id, twitch_user_id, twitch_login,
@@ -471,12 +482,12 @@ pub async fn promote_streamer_to_partner(
             $1, $2, $3, $4, $5
         )
         "#,
+        normalized_user_id,
+        &normalized_login,
+        verification.manual_partner_opt_out,
+        &partnered_at,
+        STATUS_ACTIVE
     )
-    .bind(normalized_user_id)
-    .bind(&normalized_login)
-    .bind(verification.manual_partner_opt_out)
-    .bind(&partnered_at)
-    .bind(STATUS_ACTIVE)
     .execute(pool)
     .await?;
 
@@ -535,16 +546,20 @@ pub async fn reactivate_partner(
     }
 
     // 2. Jüngste Historienzeile (egal welcher Status).
-    let history: Option<HistoryPartnerRow> = sqlx::query_as(
+    let history: Option<HistoryPartnerRow> = sqlx::query_as!(
+        HistoryPartnerRow,
         r#"
-        SELECT id, twitch_login, twitch_user_id, status
+        SELECT id AS "id!",
+               twitch_login AS "twitch_login!",
+               twitch_user_id AS "twitch_user_id?",
+               status
           FROM twitch_partners
          WHERE LOWER(twitch_login) = LOWER($1)
          ORDER BY COALESCE(departnered_at, partnered_at, '') DESC, id DESC
          LIMIT 1
         "#,
+        login
     )
-    .bind(login)
     .fetch_optional(pool)
     .await?;
 
@@ -566,7 +581,7 @@ pub async fn reactivate_partner(
 
     // 3. Zeile reaktivieren — Konfig-Spalten bleiben unangetastet (No-Touch auf
     //    derselben Zeile entspricht Pythons "Werte aus der Zeile zurückschreiben").
-    sqlx::query(
+    sqlx::query!(
         r#"
         UPDATE twitch_partners
         SET status = $1,
@@ -578,10 +593,10 @@ pub async fn reactivate_partner(
             partnered_at = $2
         WHERE id = $3
         "#,
+        STATUS_ACTIVE,
+        &partnered_at,
+        history.id
     )
-    .bind(STATUS_ACTIVE)
-    .bind(&partnered_at)
-    .bind(history.id)
     .execute(pool)
     .await?;
 
@@ -616,7 +631,7 @@ async fn restore_raid_auth_for_reactivated_partner(
         return Ok(());
     }
 
-    let needs_reauth: Option<Option<bool>> = sqlx::query_scalar(
+    let needs_reauth: Option<Option<bool>> = sqlx::query_scalar!(
         r#"
         SELECT needs_reauth
           FROM twitch_raid_auth
@@ -624,9 +639,9 @@ async fn restore_raid_auth_for_reactivated_partner(
             OR ($2 <> '' AND LOWER(twitch_login) = LOWER($2))
          LIMIT 1
         "#,
+        uid,
+        login
     )
-    .bind(uid)
-    .bind(login)
     .fetch_optional(pool)
     .await?;
 
@@ -638,7 +653,7 @@ async fn restore_raid_auth_for_reactivated_partner(
         return Ok(());
     }
 
-    sqlx::query(
+    sqlx::query!(
         r#"
         UPDATE twitch_raid_auth
         SET raid_enabled = TRUE,
@@ -646,9 +661,9 @@ async fn restore_raid_auth_for_reactivated_partner(
         WHERE ($1 <> '' AND twitch_user_id = $1)
            OR ($2 <> '' AND LOWER(twitch_login) = LOWER($2))
         "#,
+        uid,
+        login
     )
-    .bind(uid)
-    .bind(login)
     .execute(pool)
     .await?;
     Ok(())
@@ -668,7 +683,7 @@ pub async fn backfill_tracked_stats_from_category(
     if normalized.is_empty() {
         return Ok(0);
     }
-    let res = sqlx::query(
+    let res = sqlx::query!(
         r#"
         INSERT INTO twitch_stats_tracked
             (ts_utc, streamer, viewer_count, is_partner, game_name, stream_title, tags)
@@ -682,8 +697,8 @@ pub async fn backfill_tracked_stats_from_category(
                   AND t.ts_utc = c.ts_utc
            )
         "#,
+        &normalized
     )
-    .bind(&normalized)
     .execute(pool)
     .await;
 
@@ -712,7 +727,7 @@ pub async fn backfill_require_link(
     let normalized = login.to_lowercase();
     let next_check = datetime_to_iso(Utc::now() + chrono::Duration::days(30));
     let require_int: i32 = if require_link { 1 } else { 0 };
-    sqlx::query(
+    sqlx::query!(
         r#"
         UPDATE twitch_partners
         SET require_discord_link = $2,
@@ -722,10 +737,10 @@ pub async fn backfill_require_link(
           AND admin_archived_at IS NULL
           AND departnered_at IS NULL
         "#,
+        &normalized,
+        require_int,
+        &next_check
     )
-    .bind(&normalized)
-    .bind(require_int)
-    .bind(&next_check)
     .execute(pool)
     .await?;
     Ok(())
@@ -767,7 +782,7 @@ pub async fn archive_with_message(
     login: &str,
     raw_mode: &str,
 ) -> Result<ArchiveOutcome, sqlx::Error> {
-    use tb_analytics::streamers_crud::{archive_streamer, ArchiveMode};
+    use tb_analytics::streamers_crud::{ArchiveMode, archive_streamer};
 
     // desired wie Python `_dashboard_archive` (mode_clean → desired).
     let desired = match raw_mode.trim().to_lowercase().as_str() {
@@ -779,7 +794,8 @@ pub async fn archive_with_message(
         _ => "toggle",
     };
 
-    let state: Option<ArchiveStateRow> = sqlx::query_as(
+    let state: Option<ArchiveStateRow> = sqlx::query_as!(
+        ArchiveStateRow,
         r#"
         SELECT admin_archived_at, technical_pause_reason
           FROM twitch_partners
@@ -788,8 +804,8 @@ pub async fn archive_with_message(
          ORDER BY id DESC
          LIMIT 1
         "#,
+        login
     )
-    .bind(login)
     .fetch_optional(pool)
     .await?;
 
@@ -900,7 +916,8 @@ async fn archive_history_path(
         departnered_at: Option<String>,
     }
 
-    let row: Option<Row> = sqlx::query_as(
+    let row: Option<Row> = sqlx::query_as!(
+        Row,
         r#"
         SELECT status, admin_archived_at, departnered_at
           FROM twitch_partners
@@ -908,8 +925,8 @@ async fn archive_history_path(
          ORDER BY COALESCE(departnered_at, partnered_at, '') DESC, id DESC
          LIMIT 1
         "#,
+        login
     )
-    .bind(login)
     .fetch_optional(pool)
     .await?;
 
@@ -960,10 +977,12 @@ async fn archive_history_path(
 /// Löscht die `twitch_live_state`-Zeile eines Logins (idempotent) — der
 /// explizite `DELETE FROM twitch_live_state` aus `_cmd_remove` (`admin.py:267`).
 pub async fn clear_live_state(pool: &PgPool, login: &str) -> Result<(), sqlx::Error> {
-    sqlx::query("DELETE FROM twitch_live_state WHERE LOWER(streamer_login) = LOWER($1)")
-        .bind(login.to_lowercase())
-        .execute(pool)
-        .await?;
+    sqlx::query!(
+        "DELETE FROM twitch_live_state WHERE LOWER(streamer_login) = LOWER($1)",
+        login.to_lowercase()
+    )
+    .execute(pool)
+    .await?;
     Ok(())
 }
 

@@ -1,0 +1,18 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n        INSERT INTO twitch_partners (\n            id, twitch_user_id, twitch_login,\n            manual_partner_opt_out, partnered_at, status\n        ) VALUES (\n            COALESCE((SELECT MAX(id) FROM twitch_partners), 0) + 1,\n            $1, $2, $3, $4, $5\n        )\n        ",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Text",
+        "Text",
+        "Int4",
+        "Text",
+        "Text"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "91f07d6c67ebb0e533b3ed9c9d498a8ca07176c8117d96706e93639b4ddeb1b5"
+}

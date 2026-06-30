@@ -1,0 +1,18 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n        UPDATE twitch_partners\n        SET twitch_login = $1,\n            twitch_user_id = $2,\n            manual_partner_opt_out = $3,\n            partnered_at = COALESCE(NULLIF(partnered_at, ''), $4),\n            admin_archived_at = NULL,\n            departnered_at = NULL,\n            technical_pause_reason = NULL,\n            status = $5\n        WHERE id = (\n            SELECT id FROM twitch_partners\n             WHERE LOWER(twitch_login) = LOWER($1) OR twitch_user_id = $2\n             ORDER BY (COALESCE(status,'') = 'active') DESC, id DESC\n             LIMIT 1\n        )\n        ",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Text",
+        "Text",
+        "Int4",
+        "Text",
+        "Text"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "c4fbd24f5b55cae353ed6ce6ea3ebc2673c5162c3078940263b408b22a03ec61"
+}

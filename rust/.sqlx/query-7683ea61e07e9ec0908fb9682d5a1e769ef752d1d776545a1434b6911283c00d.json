@@ -1,0 +1,28 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT chatter_login AS \"chatter_login!\",\n                  COALESCE(messages, 0) AS \"messages!\"\n         FROM twitch_session_chatters\n         WHERE session_id = $1\n         ORDER BY messages DESC\n         LIMIT 10",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "chatter_login!",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 1,
+        "name": "messages!",
+        "type_info": "Int4"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Int8"
+      ]
+    },
+    "nullable": [
+      false,
+      null
+    ]
+  },
+  "hash": "7683ea61e07e9ec0908fb9682d5a1e769ef752d1d776545a1434b6911283c00d"
+}

@@ -1,0 +1,22 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT invite_url AS \"invite_url!\"\n           FROM twitch_streamer_invites\n          WHERE LOWER(streamer_login) = $1\n          LIMIT 1",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "invite_url!",
+        "type_info": "Text"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Text"
+      ]
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "1f06aea85c2c7a4b77f63c77d230153cbd11345f6573ad06d7e735c5b9197100"
+}

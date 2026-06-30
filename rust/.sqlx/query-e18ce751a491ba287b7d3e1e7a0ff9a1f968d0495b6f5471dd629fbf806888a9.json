@@ -1,0 +1,44 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n        SELECT cm.session_id AS \"session_id!\",\n               s.streamer_login AS \"streamer_login!\",\n               s.started_at AS \"started_at!\",\n               TO_CHAR(\n                   date_trunc('minute', cm.message_ts AT TIME ZONE 'UTC'),\n                   'YYYY-MM-DD\"T\"HH24:MI:00\"Z\"'\n               ) AS \"minute_bucket!\",\n               COUNT(*) AS \"messages!\"\n          FROM twitch_chat_messages cm\n          JOIN twitch_stream_sessions s ON s.id = cm.session_id\n         WHERE cm.message_ts >= NOW() - INTERVAL '30 days'\n         GROUP BY cm.session_id, s.streamer_login, s.started_at, 4\n         ORDER BY 5 DESC\n         LIMIT 5\n        ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "session_id!",
+        "type_info": "Int8"
+      },
+      {
+        "ordinal": 1,
+        "name": "streamer_login!",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 2,
+        "name": "started_at!",
+        "type_info": "Timestamptz"
+      },
+      {
+        "ordinal": 3,
+        "name": "minute_bucket!",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 4,
+        "name": "messages!",
+        "type_info": "Int8"
+      }
+    ],
+    "parameters": {
+      "Left": []
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      null,
+      null
+    ]
+  },
+  "hash": "e18ce751a491ba287b7d3e1e7a0ff9a1f968d0495b6f5471dd629fbf806888a9"
+}

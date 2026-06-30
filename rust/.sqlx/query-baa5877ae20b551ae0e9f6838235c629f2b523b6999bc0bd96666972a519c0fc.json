@@ -1,0 +1,34 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n        SELECT s.twitch_user_id,\n               i.discord_user_id,\n               i.discord_display_name\n          FROM twitch_streamers s\n          LEFT JOIN twitch_streamer_identities i\n            ON i.twitch_login <> ''\n           AND LOWER(i.twitch_login) = LOWER(s.twitch_login)\n         WHERE LOWER(s.twitch_login) = LOWER($1)\n        ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "twitch_user_id",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 1,
+        "name": "discord_user_id",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 2,
+        "name": "discord_display_name",
+        "type_info": "Text"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Text"
+      ]
+    },
+    "nullable": [
+      true,
+      true,
+      true
+    ]
+  },
+  "hash": "baa5877ae20b551ae0e9f6838235c629f2b523b6999bc0bd96666972a519c0fc"
+}

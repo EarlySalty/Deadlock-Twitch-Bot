@@ -1,0 +1,146 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n        SELECT id AS \"id!\",\n               streamer_login AS \"streamer_login!\",\n               started_at AS \"started_at!\",\n               duration_seconds, start_viewers, peak_viewers,\n               end_viewers, avg_viewers, samples, retention_5m, retention_10m, retention_20m,\n               dropoff_pct, dropoff_label, unique_chatters, first_time_chatters,\n               returning_chatters, follower_delta, followers_start, followers_end,\n               stream_title, notification_text\n          FROM twitch_stream_sessions\n         WHERE started_at >= NOW() - INTERVAL '30 days'\n           AND ended_at IS NOT NULL\n         ORDER BY started_at DESC\n         LIMIT 400\n        ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id!",
+        "type_info": "Int8"
+      },
+      {
+        "ordinal": 1,
+        "name": "streamer_login!",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 2,
+        "name": "started_at!",
+        "type_info": "Timestamptz"
+      },
+      {
+        "ordinal": 3,
+        "name": "duration_seconds",
+        "type_info": "Int4"
+      },
+      {
+        "ordinal": 4,
+        "name": "start_viewers",
+        "type_info": "Int4"
+      },
+      {
+        "ordinal": 5,
+        "name": "peak_viewers",
+        "type_info": "Int4"
+      },
+      {
+        "ordinal": 6,
+        "name": "end_viewers",
+        "type_info": "Int4"
+      },
+      {
+        "ordinal": 7,
+        "name": "avg_viewers",
+        "type_info": "Float8"
+      },
+      {
+        "ordinal": 8,
+        "name": "samples",
+        "type_info": "Int4"
+      },
+      {
+        "ordinal": 9,
+        "name": "retention_5m",
+        "type_info": "Float8"
+      },
+      {
+        "ordinal": 10,
+        "name": "retention_10m",
+        "type_info": "Float8"
+      },
+      {
+        "ordinal": 11,
+        "name": "retention_20m",
+        "type_info": "Float8"
+      },
+      {
+        "ordinal": 12,
+        "name": "dropoff_pct",
+        "type_info": "Float8"
+      },
+      {
+        "ordinal": 13,
+        "name": "dropoff_label",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 14,
+        "name": "unique_chatters",
+        "type_info": "Int4"
+      },
+      {
+        "ordinal": 15,
+        "name": "first_time_chatters",
+        "type_info": "Int4"
+      },
+      {
+        "ordinal": 16,
+        "name": "returning_chatters",
+        "type_info": "Int4"
+      },
+      {
+        "ordinal": 17,
+        "name": "follower_delta",
+        "type_info": "Int4"
+      },
+      {
+        "ordinal": 18,
+        "name": "followers_start",
+        "type_info": "Int4"
+      },
+      {
+        "ordinal": 19,
+        "name": "followers_end",
+        "type_info": "Int4"
+      },
+      {
+        "ordinal": 20,
+        "name": "stream_title",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 21,
+        "name": "notification_text",
+        "type_info": "Text"
+      }
+    ],
+    "parameters": {
+      "Left": []
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      true,
+      true,
+      true,
+      true,
+      true,
+      true,
+      true,
+      true,
+      true,
+      true,
+      true,
+      true,
+      true,
+      true,
+      true,
+      true,
+      true,
+      true,
+      true
+    ]
+  },
+  "hash": "9f31c5eeb44ae48df0658a1cdaf656b0dba3bfb562909efc66c548f875e6a2e5"
+}

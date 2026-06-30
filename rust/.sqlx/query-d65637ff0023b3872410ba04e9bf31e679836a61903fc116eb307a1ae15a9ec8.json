@@ -1,0 +1,34 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n        SELECT status, admin_archived_at, departnered_at\n          FROM twitch_partners\n         WHERE LOWER(twitch_login) = LOWER($1)\n         ORDER BY COALESCE(departnered_at, partnered_at, '') DESC, id DESC\n         LIMIT 1\n        ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "status",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 1,
+        "name": "admin_archived_at",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 2,
+        "name": "departnered_at",
+        "type_info": "Text"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Text"
+      ]
+    },
+    "nullable": [
+      false,
+      true,
+      true
+    ]
+  },
+  "hash": "d65637ff0023b3872410ba04e9bf31e679836a61903fc116eb307a1ae15a9ec8"
+}

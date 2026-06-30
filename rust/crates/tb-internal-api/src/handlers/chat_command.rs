@@ -9,7 +9,7 @@
 //!   - Invite-URL: zuerst streamer-spezifisch aus `twitch_streamer_invites`,
 //!     dann Env-Var `PROMO_DISCORD_INVITE` oder globaler Default.
 
-use axum::{extract::State, response::IntoResponse, Json};
+use axum::{Json, extract::State, response::IntoResponse};
 use serde::{Deserialize, Serialize};
 use sqlx::PgPool;
 use tb_http_core::ApiError;
@@ -56,10 +56,13 @@ pub async fn handler(
     }
 
     // Kanal muss live Deadlock streamen.
-    let live_row: Option<(i32, Option<String>)> = sqlx::query_as(
-        "SELECT is_live, last_game FROM twitch_live_state WHERE LOWER(streamer_login) = $1 LIMIT 1",
+    let live_row = sqlx::query!(
+        r#"SELECT COALESCE(is_live, 0) AS "is_live!", last_game
+           FROM twitch_live_state
+          WHERE LOWER(streamer_login) = $1
+          LIMIT 1"#,
+        &channel
     )
-    .bind(&channel)
     .fetch_optional(&pool)
     .await
     .map_err(|e| {
@@ -68,9 +71,10 @@ pub async fn handler(
     })?;
 
     let is_deadlock_live = live_row
-        .map(|(is_live, last_game)| {
-            is_live == 1
-                && last_game
+        .map(|row| {
+            row.is_live == 1
+                && row
+                    .last_game
                     .as_deref()
                     .map(|g| g.to_lowercase().contains("deadlock"))
                     .unwrap_or(false)
@@ -97,10 +101,13 @@ pub async fn handler(
 
 async fn get_invite_url(pool: &PgPool, channel_login: &str) -> Result<Option<String>, ApiError> {
     // 1. Streamer-spezifischer Invite (twitch_streamer_invites).
-    let row: Option<(String,)> = sqlx::query_as(
-        "SELECT invite_url FROM twitch_streamer_invites WHERE LOWER(streamer_login) = $1 LIMIT 1",
+    let row = sqlx::query!(
+        r#"SELECT invite_url AS "invite_url!"
+           FROM twitch_streamer_invites
+          WHERE LOWER(streamer_login) = $1
+          LIMIT 1"#,
+        channel_login
     )
-    .bind(channel_login)
     .fetch_optional(pool)
     .await
     .map_err(|e| {
@@ -108,7 +115,8 @@ async fn get_invite_url(pool: &PgPool, channel_login: &str) -> Result<Option<Str
         ApiError::internal()
     })?;
 
-    if let Some((url,)) = row {
+    if let Some(row) = row {
+        let url = row.invite_url;
         if !url.trim().is_empty() {
             return Ok(Some(url));
         }

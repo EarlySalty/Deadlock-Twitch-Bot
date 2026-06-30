@@ -1,0 +1,40 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n        SELECT id AS \"id!\",\n               twitch_login AS \"twitch_login!\",\n               twitch_user_id AS \"twitch_user_id?\",\n               status\n          FROM twitch_partners\n         WHERE LOWER(twitch_login) = LOWER($1)\n         ORDER BY COALESCE(departnered_at, partnered_at, '') DESC, id DESC\n         LIMIT 1\n        ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id!",
+        "type_info": "Int8"
+      },
+      {
+        "ordinal": 1,
+        "name": "twitch_login!",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 2,
+        "name": "twitch_user_id?",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 3,
+        "name": "status",
+        "type_info": "Text"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Text"
+      ]
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      false
+    ]
+  },
+  "hash": "01a1280f0f7c06b63ae57b15591307c6dd1f2411bdad429bbc156ebdd7cd36b1"
+}

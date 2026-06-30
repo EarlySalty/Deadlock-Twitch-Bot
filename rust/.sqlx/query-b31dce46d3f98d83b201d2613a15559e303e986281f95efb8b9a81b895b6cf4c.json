@@ -1,0 +1,28 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT COALESCE(is_live, 0) AS \"is_live!\", last_game\n           FROM twitch_live_state\n          WHERE LOWER(streamer_login) = $1\n          LIMIT 1",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "is_live!",
+        "type_info": "Int4"
+      },
+      {
+        "ordinal": 1,
+        "name": "last_game",
+        "type_info": "Text"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Text"
+      ]
+    },
+    "nullable": [
+      null,
+      true
+    ]
+  },
+  "hash": "b31dce46d3f98d83b201d2613a15559e303e986281f95efb8b9a81b895b6cf4c"
+}

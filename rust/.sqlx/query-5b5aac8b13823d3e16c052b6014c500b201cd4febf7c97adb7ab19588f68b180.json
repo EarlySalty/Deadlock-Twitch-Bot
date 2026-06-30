@@ -1,0 +1,29 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n        SELECT other.streamer_login AS \"streamer_login!\",\n               CAST(COUNT(DISTINCT t1.chatter_login) AS BIGINT) AS \"overlap!\"\n        FROM twitch_chatter_rollup t1\n        JOIN twitch_chatter_rollup other ON t1.chatter_login = other.chatter_login\n        WHERE t1.streamer_login = $1\n          AND other.streamer_login != $2\n          AND t1.last_seen_at >= NOW() - INTERVAL '30 days'\n        GROUP BY other.streamer_login\n        ORDER BY 2 DESC\n        LIMIT 10\n        ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "streamer_login!",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 1,
+        "name": "overlap!",
+        "type_info": "Int8"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Text",
+        "Text"
+      ]
+    },
+    "nullable": [
+      false,
+      null
+    ]
+  },
+  "hash": "5b5aac8b13823d3e16c052b6014c500b201cd4febf7c97adb7ab19588f68b180"
+}

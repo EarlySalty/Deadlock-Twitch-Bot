@@ -1,0 +1,28 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n        SELECT CAST(COUNT(*) AS BIGINT) AS \"total_events!\",\n               CAST(COALESCE(SUM(CASE WHEN COALESCE(is_gift, FALSE) THEN 1 ELSE 0 END), 0) AS BIGINT) AS \"gifted!\"\n          FROM twitch_subscription_events\n         WHERE received_at >= $1\n        ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "total_events!",
+        "type_info": "Int8"
+      },
+      {
+        "ordinal": 1,
+        "name": "gifted!",
+        "type_info": "Int8"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Timestamptz"
+      ]
+    },
+    "nullable": [
+      null,
+      null
+    ]
+  },
+  "hash": "cf4ac725343fb97ed621227a6e6d0c06bd3b2dac61ba053ee49b9c4ea9f8ce9a"
+}

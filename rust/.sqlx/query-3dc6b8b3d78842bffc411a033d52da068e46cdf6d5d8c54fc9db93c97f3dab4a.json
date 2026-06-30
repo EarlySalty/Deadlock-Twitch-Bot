@@ -1,0 +1,34 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n            SELECT session_id AS \"session_id!\",\n                   minutes_from_start,\n                   viewer_count AS \"viewer_count!\"\n              FROM twitch_session_viewers\n             WHERE session_id = ANY(SELECT value::bigint FROM jsonb_array_elements_text($1::text::jsonb))\n             ORDER BY session_id, minutes_from_start\n            ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "session_id!",
+        "type_info": "Int8"
+      },
+      {
+        "ordinal": 1,
+        "name": "minutes_from_start",
+        "type_info": "Int4"
+      },
+      {
+        "ordinal": 2,
+        "name": "viewer_count!",
+        "type_info": "Int4"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Text"
+      ]
+    },
+    "nullable": [
+      false,
+      true,
+      false
+    ]
+  },
+  "hash": "3dc6b8b3d78842bffc411a033d52da068e46cdf6d5d8c54fc9db93c97f3dab4a"
+}

@@ -1,0 +1,28 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n        SELECT admin_archived_at, technical_pause_reason\n          FROM twitch_partners\n         WHERE LOWER(twitch_login) = LOWER($1)\n           AND COALESCE(status, '') = 'active'\n         ORDER BY id DESC\n         LIMIT 1\n        ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "admin_archived_at",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 1,
+        "name": "technical_pause_reason",
+        "type_info": "Text"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Text"
+      ]
+    },
+    "nullable": [
+      true,
+      true
+    ]
+  },
+  "hash": "c25159b43739883374db904d1e505f4a5c8dff0e27badcea23a89c52dcb635a0"
+}

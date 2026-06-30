@@ -22,13 +22,13 @@
 //! einer dedizierten Existenzprüfung (s. `follower_delta_exists`).
 
 use axum::{
+    Json,
     extract::{Path, Query, State},
     response::IntoResponse,
-    Json,
 };
-use chrono::{DateTime, Duration, NaiveDate, Utc};
+use chrono::{DateTime, Duration, Utc};
 use serde::{Deserialize, Serialize};
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use sqlx::{PgPool, Row};
 use tb_domain::normalize_twitch_login;
 use tb_http_core::{ApiError, AuthLevel};
@@ -167,8 +167,8 @@ fn format_python_isoformat(dt: chrono::DateTime<Utc>) -> String {
 /// Exception → Spalte fehlt (backend_extended.py:127).
 /// Gibt `true` zurück wenn die Spalte existiert, `false` bei jedem Fehler.
 async fn follower_delta_exists(pool: &PgPool) -> bool {
-    sqlx::query("SELECT follower_delta FROM twitch_stream_sessions LIMIT 1")
-        .execute(pool)
+    sqlx::query!("SELECT follower_delta FROM twitch_stream_sessions LIMIT 1")
+        .fetch_optional(pool)
         .await
         .is_ok()
 }
@@ -230,7 +230,11 @@ async fn fetch_metrics(
           AND LOWER(s.streamer_login) = $2
     "#;
 
-    let sql = if has_follower_delta { sql_with_fd } else { sql_no_fd };
+    let sql = if has_follower_delta {
+        sql_with_fd
+    } else {
+        sql_no_fd
+    };
 
     let row = sqlx::query(sql)
         .bind(since)
@@ -295,7 +299,11 @@ async fn fetch_trend(
           AND LOWER(s.streamer_login) = $3
     "#;
 
-    let sql = if has_follower_delta { sql_with_fd } else { sql_no_fd };
+    let sql = if has_follower_delta {
+        sql_with_fd
+    } else {
+        sql_no_fd
+    };
     let row = sqlx::query(sql)
         .bind(prev_since)
         .bind(since)
@@ -320,14 +328,14 @@ async fn fetch_retention_timeline(
     login: &str,
     since: DateTime<Utc>,
 ) -> Result<Vec<RetentionTimelineEntry>, sqlx::Error> {
-    let rows = sqlx::query(
+    let rows = sqlx::query!(
         r#"
         SELECT
-            DATE(s.started_at),
-            AVG(s.retention_5m),
-            AVG(s.retention_10m),
-            AVG(s.retention_20m),
-            AVG(s.dropoff_pct)
+            DATE(s.started_at) AS "date?",
+            AVG(s.retention_5m) AS "retention_5m?",
+            AVG(s.retention_10m) AS "retention_10m?",
+            AVG(s.retention_20m) AS "retention_20m?",
+            AVG(s.dropoff_pct) AS "dropoff?"
         FROM twitch_stream_sessions s
         WHERE s.started_at >= $1
           AND s.retention_5m IS NOT NULL
@@ -336,23 +344,23 @@ async fn fetch_retention_timeline(
         GROUP BY DATE(s.started_at)
         ORDER BY DATE(s.started_at) ASC
         "#,
+        since,
+        login
     )
-    .bind(since)
-    .bind(login)
     .fetch_all(pool)
     .await?;
 
     rows.into_iter()
         .map(|r| {
-            let date_val: Option<NaiveDate> = r.try_get(0)?;
             Ok(RetentionTimelineEntry {
-                date: date_val
+                date: r
+                    .date
                     .map(|d| d.format("%Y-%m-%d").to_string())
                     .unwrap_or_default(),
-                retention_5m: r.try_get::<Option<f64>, _>(1)?.unwrap_or(0.0),
-                retention_10m: r.try_get::<Option<f64>, _>(2)?.unwrap_or(0.0),
-                retention_20m: r.try_get::<Option<f64>, _>(3)?.unwrap_or(0.0),
-                dropoff: r.try_get::<Option<f64>, _>(4)?.unwrap_or(0.0),
+                retention_5m: r.retention_5m.unwrap_or(0.0),
+                retention_10m: r.retention_10m.unwrap_or(0.0),
+                retention_20m: r.retention_20m.unwrap_or(0.0),
+                dropoff: r.dropoff.unwrap_or(0.0),
             })
         })
         .collect()
@@ -367,13 +375,13 @@ async fn fetch_discovery_timeline(
     has_follower_delta: bool,
 ) -> Result<Vec<DiscoveryTimelineEntry>, sqlx::Error> {
     if has_follower_delta {
-        let rows = sqlx::query(
+        let rows = sqlx::query!(
             r#"
             SELECT
-                DATE(s.started_at),
-                AVG(s.peak_viewers)::DOUBLE PRECISION,
-                SUM(COALESCE(s.follower_delta, 0))::BIGINT,
-                AVG(s.avg_viewers)
+                DATE(s.started_at) AS "date?",
+                AVG(s.peak_viewers)::DOUBLE PRECISION AS "peak_viewers?",
+                COALESCE(SUM(COALESCE(s.follower_delta, 0)), 0)::BIGINT AS "followers_delta!",
+                AVG(s.avg_viewers) AS "avg_viewers?"
             FROM twitch_stream_sessions s
             WHERE s.started_at >= $1
               AND s.ended_at IS NOT NULL
@@ -381,36 +389,34 @@ async fn fetch_discovery_timeline(
             GROUP BY DATE(s.started_at)
             ORDER BY DATE(s.started_at) ASC
             "#,
+            since,
+            login
         )
-        .bind(since)
-        .bind(login)
         .fetch_all(pool)
         .await?;
 
         rows.into_iter()
             .map(|r| {
-                let date_val: Option<NaiveDate> = r.try_get(0)?;
                 Ok(DiscoveryTimelineEntry {
-                    date: date_val
+                    date: r
+                        .date
                         .map(|d| d.format("%Y-%m-%d").to_string())
                         .unwrap_or_default(),
-                    peak_viewers: r.try_get::<Option<f64>, _>(1)?.unwrap_or(0.0) as i64,
-                    followers_delta: r.try_get::<Option<i64>, _>(2)?.unwrap_or(0),
-                    avg_viewers: r.try_get::<Option<f64>, _>(3)?.unwrap_or(0.0),
+                    peak_viewers: r.peak_viewers.unwrap_or(0.0) as i64,
+                    followers_delta: r.followers_delta,
+                    avg_viewers: r.avg_viewers.unwrap_or(0.0),
                 })
             })
             .collect()
     } else {
         // Fallback ohne follower_delta (backend_extended.py:432)
-        tracing::debug!(
-            "follower_delta Spalte fehlt in discovery_timeline - verwende Fallback"
-        );
-        let rows = sqlx::query(
+        tracing::debug!("follower_delta Spalte fehlt in discovery_timeline - verwende Fallback");
+        let rows = sqlx::query!(
             r#"
             SELECT
-                DATE(s.started_at),
-                AVG(s.peak_viewers)::DOUBLE PRECISION,
-                AVG(s.avg_viewers)
+                DATE(s.started_at) AS "date?",
+                AVG(s.peak_viewers)::DOUBLE PRECISION AS "peak_viewers?",
+                AVG(s.avg_viewers) AS "avg_viewers?"
             FROM twitch_stream_sessions s
             WHERE s.started_at >= $1
               AND s.ended_at IS NOT NULL
@@ -418,22 +424,22 @@ async fn fetch_discovery_timeline(
             GROUP BY DATE(s.started_at)
             ORDER BY DATE(s.started_at) ASC
             "#,
+            since,
+            login
         )
-        .bind(since)
-        .bind(login)
         .fetch_all(pool)
         .await?;
 
         rows.into_iter()
             .map(|r| {
-                let date_val: Option<NaiveDate> = r.try_get(0)?;
                 Ok(DiscoveryTimelineEntry {
-                    date: date_val
+                    date: r
+                        .date
                         .map(|d| d.format("%Y-%m-%d").to_string())
                         .unwrap_or_default(),
-                    peak_viewers: r.try_get::<Option<f64>, _>(1)?.unwrap_or(0.0) as i64,
+                    peak_viewers: r.peak_viewers.unwrap_or(0.0) as i64,
                     followers_delta: 0,
-                    avg_viewers: r.try_get::<Option<f64>, _>(2)?.unwrap_or(0.0),
+                    avg_viewers: r.avg_viewers.unwrap_or(0.0),
                 })
             })
             .collect()
@@ -448,14 +454,14 @@ async fn fetch_chat_timeline(
     login: &str,
     since: DateTime<Utc>,
 ) -> Result<Vec<ChatTimelineEntry>, sqlx::Error> {
-    let rows = sqlx::query(
+    let rows = sqlx::query!(
         r#"
         SELECT
-            DATE(s.started_at),
-            AVG(s.unique_chatters)::DOUBLE PRECISION,
-            AVG(CASE WHEN s.avg_viewers > 0 THEN (s.unique_chatters::DOUBLE PRECISION * 100.0 / s.avg_viewers) ELSE 0.0 END),
-            SUM(s.first_time_chatters)::BIGINT,
-            SUM(s.returning_chatters)::BIGINT
+            DATE(s.started_at) AS "date?",
+            AVG(s.unique_chatters)::DOUBLE PRECISION AS "unique_chatters?",
+            AVG(CASE WHEN s.avg_viewers > 0 THEN (s.unique_chatters::DOUBLE PRECISION * 100.0 / s.avg_viewers) ELSE 0.0 END) AS "chat_per_100?",
+            COALESCE(SUM(s.first_time_chatters), 0)::BIGINT AS "first_time!",
+            COALESCE(SUM(s.returning_chatters), 0)::BIGINT AS "returning!"
         FROM twitch_stream_sessions s
         WHERE s.started_at >= $1
           AND s.ended_at IS NOT NULL
@@ -464,24 +470,23 @@ async fn fetch_chat_timeline(
         GROUP BY DATE(s.started_at)
         ORDER BY DATE(s.started_at) ASC
         "#,
+        since,
+        login
     )
-    .bind(since)
-    .bind(login)
     .fetch_all(pool)
     .await?;
 
     rows.into_iter()
         .map(|r| {
-            let date_val: Option<NaiveDate> = r.try_get(0)?;
             Ok(ChatTimelineEntry {
-                date: date_val
+                date: r
+                    .date
                     .map(|d| d.format("%Y-%m-%d").to_string())
                     .unwrap_or_default(),
-                unique_chatters: r.try_get::<Option<f64>, _>(1)?.unwrap_or(0.0),
-                chat_per_100: r.try_get::<Option<f64>, _>(2)?.unwrap_or(0.0),
-                // SUM(INTEGER)::BIGINT → i64 (nie NULL wenn Rows existieren, aber sicherheitshalber Option)
-                first_time: r.try_get::<Option<i64>, _>(3)?.unwrap_or(0),
-                returning: r.try_get::<Option<i64>, _>(4)?.unwrap_or(0),
+                unique_chatters: r.unique_chatters.unwrap_or(0.0),
+                chat_per_100: r.chat_per_100.unwrap_or(0.0),
+                first_time: r.first_time,
+                returning: r.returning,
             })
         })
         .collect()
@@ -498,12 +503,12 @@ async fn fetch_sessions(
 ) -> Result<Vec<SessionEntry>, sqlx::Error> {
     // Python `TIME(started_at)` → Uhrzeit-String; DATE() → Datum-String.
     // TO_CHAR liefert einen String direkt aus Postgres.
-    let rows = sqlx::query(
+    let rows = sqlx::query!(
         r#"
         SELECT
-            s.id,
-            DATE(s.started_at),
-            TO_CHAR(s.started_at AT TIME ZONE 'UTC', 'HH24:MI:SS'),
+            s.id AS "id!",
+            DATE(s.started_at) AS "date?",
+            TO_CHAR(s.started_at AT TIME ZONE 'UTC', 'HH24:MI:SS') AS "start_time?",
             s.duration_seconds,
             s.start_viewers,
             s.peak_viewers,
@@ -516,8 +521,8 @@ async fn fetch_sessions(
             s.unique_chatters,
             s.first_time_chatters,
             s.returning_chatters,
-            COALESCE(s.followers_start, 0),
-            COALESCE(s.followers_end, 0),
+            COALESCE(s.followers_start, 0) AS "followers_start!",
+            COALESCE(s.followers_end, 0) AS "followers_end!",
             s.stream_title
         FROM twitch_stream_sessions s
         WHERE s.started_at >= $1
@@ -526,42 +531,42 @@ async fn fetch_sessions(
         ORDER BY s.started_at DESC
         LIMIT 50
         "#,
+        since,
+        login
     )
-    .bind(since)
-    .bind(login)
     .fetch_all(pool)
     .await?;
 
     rows.into_iter()
         .map(|r| {
-            let date_val: Option<NaiveDate> = r.try_get(1)?;
             // ×100 — %-Skala (backend_extended.py:568–572)
-            let ret5: Option<f64> = r.try_get(8)?;
-            let ret10: Option<f64> = r.try_get(9)?;
-            let ret20: Option<f64> = r.try_get(10)?;
-            let dropoff: Option<f64> = r.try_get(11)?;
+            let ret5 = r.retention_5m;
+            let ret10 = r.retention_10m;
+            let ret20 = r.retention_20m;
+            let dropoff = r.dropoff_pct;
 
             Ok(SessionEntry {
-                id: r.try_get::<i64, _>(0)?,
-                date: date_val
+                id: r.id,
+                date: r
+                    .date
                     .map(|d| d.format("%Y-%m-%d").to_string())
                     .unwrap_or_default(),
-                start_time: r.try_get::<Option<String>, _>(2)?.unwrap_or_default(),
-                duration: r.try_get::<Option<i32>, _>(3)?.unwrap_or(0) as i64,
-                start_viewers: r.try_get::<Option<i32>, _>(4)?.unwrap_or(0) as i64,
-                peak_viewers: r.try_get::<Option<i32>, _>(5)?.unwrap_or(0) as i64,
-                end_viewers: r.try_get::<Option<i32>, _>(6)?.unwrap_or(0) as i64,
-                avg_viewers: r.try_get::<Option<f64>, _>(7)?.unwrap_or(0.0),
+                start_time: r.start_time.unwrap_or_default(),
+                duration: i64::from(r.duration_seconds.unwrap_or(0)),
+                start_viewers: i64::from(r.start_viewers.unwrap_or(0)),
+                peak_viewers: i64::from(r.peak_viewers.unwrap_or(0)),
+                end_viewers: i64::from(r.end_viewers.unwrap_or(0)),
+                avg_viewers: r.avg_viewers.unwrap_or(0.0),
                 retention5m: ret5.map(|v| v * 100.0).unwrap_or(0.0),
                 retention10m: ret10.map(|v| v * 100.0).unwrap_or(0.0),
                 retention20m: ret20.map(|v| v * 100.0).unwrap_or(0.0),
                 dropoff_pct: dropoff.map(|v| v * 100.0).unwrap_or(0.0),
-                unique_chatters: r.try_get::<Option<i32>, _>(12)?.unwrap_or(0) as i64,
-                first_time_chatters: r.try_get::<Option<i32>, _>(13)?.unwrap_or(0) as i64,
-                returning_chatters: r.try_get::<Option<i32>, _>(14)?.unwrap_or(0) as i64,
-                followers_start: r.try_get::<Option<i32>, _>(15)?.unwrap_or(0) as i64,
-                followers_end: r.try_get::<Option<i32>, _>(16)?.unwrap_or(0) as i64,
-                title: r.try_get::<Option<String>, _>(17)?.unwrap_or_default(),
+                unique_chatters: i64::from(r.unique_chatters.unwrap_or(0)),
+                first_time_chatters: i64::from(r.first_time_chatters.unwrap_or(0)),
+                returning_chatters: i64::from(r.returning_chatters.unwrap_or(0)),
+                followers_start: i64::from(r.followers_start),
+                followers_end: i64::from(r.followers_end),
+                title: r.stream_title.unwrap_or_default(),
             })
         })
         .collect()
@@ -685,8 +690,9 @@ fn generate_insights(
                 insights.push(InsightEntry {
                     insight_type: "warning".to_string(),
                     title: "Negativer Trend".to_string(),
-                    description: "Deine Retention sinkt. Analysiere, was sich zuletzt verändert hat."
-                        .to_string(),
+                    description:
+                        "Deine Retention sinkt. Analysiere, was sich zuletzt verändert hat."
+                            .to_string(),
                 });
             }
         }
@@ -698,30 +704,33 @@ fn generate_insights(
 // ── Comparison-Queries ────────────────────────────────────────────────────────
 
 /// Top-Streamer aus twitch_stats_tracked (backend_extended.py:760–780).
-async fn fetch_top_streamers(pool: &PgPool, since: DateTime<Utc>) -> Result<Vec<Value>, sqlx::Error> {
-    let rows = sqlx::query(
+async fn fetch_top_streamers(
+    pool: &PgPool,
+    since: DateTime<Utc>,
+) -> Result<Vec<Value>, sqlx::Error> {
+    let rows = sqlx::query!(
         r#"
         SELECT
-            streamer,
-            AVG(viewer_count)::DOUBLE PRECISION,
-            MAX(viewer_count)
+            streamer AS "streamer!",
+            COALESCE(AVG(viewer_count), 0)::DOUBLE PRECISION AS "avg_viewers!",
+            COALESCE(MAX(viewer_count), 0) AS "peak_viewers!"
         FROM twitch_stats_tracked
         WHERE ts_utc >= $1
         GROUP BY streamer
         ORDER BY AVG(viewer_count) DESC
         LIMIT 10
         "#,
+        since
     )
-    .bind(since)
     .fetch_all(pool)
     .await?;
 
     rows.into_iter()
         .map(|r| {
             Ok(json!({
-                "login": r.try_get::<Option<String>, _>(0)?.unwrap_or_default(),
-                "avgViewers": r.try_get::<Option<f64>, _>(1)?.unwrap_or(0.0) as i64,
-                "peakViewers": r.try_get::<Option<i32>, _>(2)?.unwrap_or(0) as i64,
+                "login": r.streamer,
+                "avgViewers": r.avg_viewers as i64,
+                "peakViewers": i64::from(r.peak_viewers),
             }))
         })
         .collect()
@@ -729,22 +738,22 @@ async fn fetch_top_streamers(pool: &PgPool, since: DateTime<Utc>) -> Result<Vec<
 
 /// Kategorie-Durchschnitt aus twitch_stats_category (backend_extended.py:785–800).
 async fn fetch_category_avg(pool: &PgPool, since: DateTime<Utc>) -> Result<Value, sqlx::Error> {
-    let r = sqlx::query(
+    let r = sqlx::query!(
         r#"
         SELECT
-            AVG(viewer_count)::DOUBLE PRECISION,
-            MAX(viewer_count)
+            COALESCE(AVG(viewer_count), 0)::DOUBLE PRECISION AS "avg_viewers!",
+            COALESCE(MAX(viewer_count), 0) AS "peak_viewers!"
         FROM twitch_stats_category
         WHERE ts_utc >= $1
         "#,
+        since
     )
-    .bind(since)
     .fetch_one(pool)
     .await?;
 
     Ok(json!({
-        "avgViewers": r.try_get::<Option<f64>, _>(0)?.unwrap_or(0.0),
-        "peakViewers": r.try_get::<Option<i32>, _>(1)?.unwrap_or(0) as i64,
+        "avgViewers": r.avg_viewers,
+        "peakViewers": i64::from(r.peak_viewers),
         "retention10m": 65.0_f64,  // hardcoded Benchmark (backend_extended.py:797)
         "chatHealth": 8.5_f64,     // hardcoded Benchmark (backend_extended.py:798)
     }))
@@ -752,30 +761,34 @@ async fn fetch_category_avg(pool: &PgPool, since: DateTime<Utc>) -> Result<Value
 
 /// Eigene Stats des Streamers für Vergleich (backend_extended.py:803–820).
 /// DB-Rohwert für retention10m (NICHT ×100) — Vertrag Abschnitt 13.1.
-async fn fetch_your_stats(pool: &PgPool, login: &str, since: DateTime<Utc>) -> Result<Value, sqlx::Error> {
-    let r = sqlx::query(
+async fn fetch_your_stats(
+    pool: &PgPool,
+    login: &str,
+    since: DateTime<Utc>,
+) -> Result<Value, sqlx::Error> {
+    let r = sqlx::query!(
         r#"
         SELECT
-            AVG(s.avg_viewers),
-            AVG(s.peak_viewers)::DOUBLE PRECISION,
-            AVG(s.retention_10m),
-            AVG(CASE WHEN s.avg_viewers > 0 THEN (s.unique_chatters::DOUBLE PRECISION * 100.0 / s.avg_viewers) ELSE 0.0 END)
+            COALESCE(AVG(s.avg_viewers), 0) AS "avg_viewers!",
+            COALESCE(AVG(s.peak_viewers), 0)::DOUBLE PRECISION AS "peak_viewers!",
+            COALESCE(AVG(s.retention_10m), 0) AS "retention_10m!",
+            COALESCE(AVG(CASE WHEN s.avg_viewers > 0 THEN (s.unique_chatters::DOUBLE PRECISION * 100.0 / s.avg_viewers) ELSE 0.0 END), 0) AS "chat_health!"
         FROM twitch_stream_sessions s
         WHERE s.started_at >= $1
           AND LOWER(s.streamer_login) = $2
           AND s.ended_at IS NOT NULL
         "#,
+        since,
+        login
     )
-    .bind(since)
-    .bind(login)
     .fetch_one(pool)
     .await?;
 
     Ok(json!({
-        "avgViewers": r.try_get::<Option<f64>, _>(0)?.unwrap_or(0.0),
-        "peakViewers": r.try_get::<Option<f64>, _>(1)?.unwrap_or(0.0) as i64,
-        "retention10m": r.try_get::<Option<f64>, _>(2)?.unwrap_or(0.0), // Rohwert 0..1
-        "chatHealth": r.try_get::<Option<f64>, _>(3)?.unwrap_or(0.0),
+        "avgViewers": r.avg_viewers,
+        "peakViewers": r.peak_viewers as i64,
+        "retention10m": r.retention_10m, // Rohwert 0..1
+        "chatHealth": r.chat_health,
     }))
 }
 
@@ -838,24 +851,20 @@ pub async fn streamer_analytics_native_handler(
     let has_follower_delta_discovery = has_follower_delta_metrics;
 
     // Metrics abrufen — liefert None wenn session_count == 0
-    let metrics_opt =
-        match fetch_metrics(&pool, &login, since_dt, has_follower_delta_metrics).await {
-            Ok(v) => v,
-            Err(e) => {
-                tracing::error!(
-                    "Failed to get comprehensive analytics for {}: {}",
-                    login,
-                    e
-                );
-                // Python: Exception in get_comprehensive_analytics → 200 + {error, empty}
-                // (backend_extended.py:112 — kein HTTP-Fehlercode, 200-Body)
-                return Ok(Json(json!({
-                    "error": "Internal error",
-                    "empty": true
-                }))
-                .into_response());
-            }
-        };
+    let metrics_opt = match fetch_metrics(&pool, &login, since_dt, has_follower_delta_metrics).await
+    {
+        Ok(v) => v,
+        Err(e) => {
+            tracing::error!("Failed to get comprehensive analytics for {}: {}", login, e);
+            // Python: Exception in get_comprehensive_analytics → 200 + {error, empty}
+            // (backend_extended.py:112 — kein HTTP-Fehlercode, 200-Body)
+            return Ok(Json(json!({
+                "error": "Internal error",
+                "empty": true
+            }))
+            .into_response());
+        }
+    };
 
     // Empty-Case: keine Sessions im Zeitfenster
     let Some(metrics_raw) = metrics_opt else {
@@ -867,20 +876,27 @@ pub async fn streamer_analytics_native_handler(
     };
 
     // Trend-Metriken
-    let trend =
-        match fetch_trend(&pool, &login, prev_since_dt, since_dt, has_follower_delta_metrics).await {
-            Ok(t) => t,
-            Err(e) => {
-                tracing::error!("Trend-Query fehlgeschlagen für {}: {}", login, e);
-                // Fallback auf Null-Trend — kein Hard-Fehler
-                TrendRaw {
-                    retention_5m: 0.0,
-                    avg_peak_viewers: 0.0,
-                    total_followers_delta: 0,
-                    unique_chatters_per_100: 0.0,
-                }
+    let trend = match fetch_trend(
+        &pool,
+        &login,
+        prev_since_dt,
+        since_dt,
+        has_follower_delta_metrics,
+    )
+    .await
+    {
+        Ok(t) => t,
+        Err(e) => {
+            tracing::error!("Trend-Query fehlgeschlagen für {}: {}", login, e);
+            // Fallback auf Null-Trend — kein Hard-Fehler
+            TrendRaw {
+                retention_5m: 0.0,
+                avg_peak_viewers: 0.0,
+                total_followers_delta: 0,
+                unique_chatters_per_100: 0.0,
             }
-        };
+        }
+    };
 
     // Timelines
     let retention_timeline = fetch_retention_timeline(&pool, &login, since_dt)
@@ -908,14 +924,16 @@ pub async fn streamer_analytics_native_handler(
     let top_streamers = fetch_top_streamers(&pool, since_dt)
         .await
         .unwrap_or_default();
-    let category_avg = fetch_category_avg(&pool, since_dt).await.unwrap_or_else(|_| {
-        json!({
-            "avgViewers": 0.0,
-            "peakViewers": 0_i64,
-            "retention10m": 65.0_f64,
-            "chatHealth": 8.5_f64,
-        })
-    });
+    let category_avg = fetch_category_avg(&pool, since_dt)
+        .await
+        .unwrap_or_else(|_| {
+            json!({
+                "avgViewers": 0.0,
+                "peakViewers": 0_i64,
+                "retention10m": 65.0_f64,
+                "chatHealth": 8.5_f64,
+            })
+        });
     let your_stats = fetch_your_stats(&pool, &login, since_dt)
         .await
         .unwrap_or_else(|_| json!({}));
@@ -987,17 +1005,17 @@ pub async fn streamer_analytics_native_handler(
 mod tests {
     use super::*;
     use axum::{
+        Extension, Router,
         body::Body,
         extract::ConnectInfo,
         http::{Request, StatusCode},
         middleware,
         routing::get,
-        Extension, Router,
     };
     use sqlx::postgres::{PgConnectOptions, PgPoolOptions};
     use std::net::SocketAddr;
     use std::str::FromStr;
-    use tb_http_core::{internal_auth, loopback_only, ExpectedToken, INTERNAL_API_BASE_PATH};
+    use tb_http_core::{ExpectedToken, INTERNAL_API_BASE_PATH, internal_auth, loopback_only};
     use tower::ServiceExt;
 
     // ── Timestamp-Helfer-Tests ─────────────────────────────────────────────────
@@ -1012,9 +1030,7 @@ mod tests {
     #[test]
     fn isoformat_mit_mikrosekunden() {
         use chrono::TimeZone;
-        let dt = Utc
-            .with_ymd_and_hms(2026, 6, 12, 14, 30, 0)
-            .unwrap()
+        let dt = Utc.with_ymd_and_hms(2026, 6, 12, 14, 30, 0).unwrap()
             + chrono::Duration::microseconds(123456);
         let s = format_python_isoformat(dt);
         assert!(
@@ -1031,9 +1047,7 @@ mod tests {
                 Some(d) => d,
                 None => {
                     if std::env::var("TB_TEST_REQUIRE_DB").as_deref() == Ok("1") {
-                        panic!(
-                            "TB_TEST_REQUIRE_DB=1 gesetzt, aber TB_TEST_DATABASE_URL fehlt"
-                        );
+                        panic!("TB_TEST_REQUIRE_DB=1 gesetzt, aber TB_TEST_DATABASE_URL fehlt");
                     }
                     eprintln!("SKIP: TB_TEST_DATABASE_URL nicht gesetzt");
                     return;
@@ -1368,16 +1382,44 @@ mod tests {
 
         // Normale Session: +50 Follower.
         insert_session(
-            &pool, "glitchuser", 5, 7200, 100, 80.0,
-            Some(0.7), Some(0.6), Some(0.5), Some(0.2),
-            20, 5, 15, 50, 1000, 1050, "Normal",
+            &pool,
+            "glitchuser",
+            5,
+            7200,
+            100,
+            80.0,
+            Some(0.7),
+            Some(0.6),
+            Some(0.5),
+            Some(0.2),
+            20,
+            5,
+            15,
+            50,
+            1000,
+            1050,
+            "Normal",
         )
         .await;
         // Glitch-Session: follower_delta -900, followers_start>0 & followers_end=0.
         insert_session(
-            &pool, "glitchuser", 3, 7200, 100, 80.0,
-            Some(0.7), Some(0.6), Some(0.5), Some(0.2),
-            20, 5, 15, -900, 900, 0, "Glitch",
+            &pool,
+            "glitchuser",
+            3,
+            7200,
+            100,
+            80.0,
+            Some(0.7),
+            Some(0.6),
+            Some(0.5),
+            Some(0.2),
+            20,
+            5,
+            15,
+            -900,
+            900,
+            0,
+            "Glitch",
         )
         .await;
 
@@ -1508,7 +1550,8 @@ mod tests {
         let ct = j["chat_timeline"].as_array().unwrap();
         assert!(!ct.is_empty());
         assert!(
-            ct[0]["unique_chatters"].is_f64() || ct[0]["unique_chatters"].is_i64()
+            ct[0]["unique_chatters"].is_f64()
+                || ct[0]["unique_chatters"].is_i64()
                 || ct[0]["unique_chatters"].is_number()
         );
 
@@ -1680,7 +1723,11 @@ mod tests {
         };
         let insights = generate_insights(&metrics, &[]);
         assert!(insights.iter().any(|i| i.title == "Niedrige Retention"));
-        assert!(insights.iter().any(|i| i.title == "Niedrige Chat-Aktivität"));
+        assert!(
+            insights
+                .iter()
+                .any(|i| i.title == "Niedrige Chat-Aktivität")
+        );
     }
 
     #[test]
@@ -1702,7 +1749,11 @@ mod tests {
         };
         let insights = generate_insights(&metrics, &[]);
         assert!(insights.iter().any(|i| i.title == "Exzellente Retention"));
-        assert!(insights.iter().any(|i| i.title == "Starke Follower-Conversion"));
+        assert!(
+            insights
+                .iter()
+                .any(|i| i.title == "Starke Follower-Conversion")
+        );
         assert!(insights.iter().any(|i| i.title == "Sehr aktive Community"));
     }
 

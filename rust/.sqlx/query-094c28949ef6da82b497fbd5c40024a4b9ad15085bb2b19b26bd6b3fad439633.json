@@ -1,0 +1,47 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n        SELECT\n            DATE(s.started_at) AS \"date?\",\n            AVG(s.unique_chatters)::DOUBLE PRECISION AS \"unique_chatters?\",\n            AVG(CASE WHEN s.avg_viewers > 0 THEN (s.unique_chatters::DOUBLE PRECISION * 100.0 / s.avg_viewers) ELSE 0.0 END) AS \"chat_per_100?\",\n            COALESCE(SUM(s.first_time_chatters), 0)::BIGINT AS \"first_time!\",\n            COALESCE(SUM(s.returning_chatters), 0)::BIGINT AS \"returning!\"\n        FROM twitch_stream_sessions s\n        WHERE s.started_at >= $1\n          AND s.ended_at IS NOT NULL\n          AND s.avg_viewers > 0\n          AND LOWER(s.streamer_login) = $2\n        GROUP BY DATE(s.started_at)\n        ORDER BY DATE(s.started_at) ASC\n        ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "date?",
+        "type_info": "Date"
+      },
+      {
+        "ordinal": 1,
+        "name": "unique_chatters?",
+        "type_info": "Float8"
+      },
+      {
+        "ordinal": 2,
+        "name": "chat_per_100?",
+        "type_info": "Float8"
+      },
+      {
+        "ordinal": 3,
+        "name": "first_time!",
+        "type_info": "Int8"
+      },
+      {
+        "ordinal": 4,
+        "name": "returning!",
+        "type_info": "Int8"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Timestamptz",
+        "Text"
+      ]
+    },
+    "nullable": [
+      null,
+      null,
+      null,
+      null,
+      null
+    ]
+  },
+  "hash": "094c28949ef6da82b497fbd5c40024a4b9ad15085bb2b19b26bd6b3fad439633"
+}

@@ -1,0 +1,196 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n        SELECT id AS \"id!\",\n               streamer_login AS \"streamer_login!\",\n               stream_id,\n               started_at AS \"started_at!\",\n               ended_at,\n               duration_seconds,\n               start_viewers,\n               peak_viewers,\n               end_viewers,\n               avg_viewers,\n               samples,\n               retention_5m,\n               retention_10m,\n               retention_20m,\n               dropoff_pct,\n               dropoff_label,\n               unique_chatters,\n               first_time_chatters,\n               returning_chatters,\n               followers_start,\n               followers_end,\n               follower_delta,\n               stream_title,\n               notification_text,\n               language,\n               is_mature,\n               tags,\n               had_deadlock_in_session,\n               game_name,\n               notes\n          FROM twitch_stream_sessions\n         WHERE id = $1\n        ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id!",
+        "type_info": "Int8"
+      },
+      {
+        "ordinal": 1,
+        "name": "streamer_login!",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 2,
+        "name": "stream_id",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 3,
+        "name": "started_at!",
+        "type_info": "Timestamptz"
+      },
+      {
+        "ordinal": 4,
+        "name": "ended_at",
+        "type_info": "Timestamptz"
+      },
+      {
+        "ordinal": 5,
+        "name": "duration_seconds",
+        "type_info": "Int4"
+      },
+      {
+        "ordinal": 6,
+        "name": "start_viewers",
+        "type_info": "Int4"
+      },
+      {
+        "ordinal": 7,
+        "name": "peak_viewers",
+        "type_info": "Int4"
+      },
+      {
+        "ordinal": 8,
+        "name": "end_viewers",
+        "type_info": "Int4"
+      },
+      {
+        "ordinal": 9,
+        "name": "avg_viewers",
+        "type_info": "Float8"
+      },
+      {
+        "ordinal": 10,
+        "name": "samples",
+        "type_info": "Int4"
+      },
+      {
+        "ordinal": 11,
+        "name": "retention_5m",
+        "type_info": "Float8"
+      },
+      {
+        "ordinal": 12,
+        "name": "retention_10m",
+        "type_info": "Float8"
+      },
+      {
+        "ordinal": 13,
+        "name": "retention_20m",
+        "type_info": "Float8"
+      },
+      {
+        "ordinal": 14,
+        "name": "dropoff_pct",
+        "type_info": "Float8"
+      },
+      {
+        "ordinal": 15,
+        "name": "dropoff_label",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 16,
+        "name": "unique_chatters",
+        "type_info": "Int4"
+      },
+      {
+        "ordinal": 17,
+        "name": "first_time_chatters",
+        "type_info": "Int4"
+      },
+      {
+        "ordinal": 18,
+        "name": "returning_chatters",
+        "type_info": "Int4"
+      },
+      {
+        "ordinal": 19,
+        "name": "followers_start",
+        "type_info": "Int4"
+      },
+      {
+        "ordinal": 20,
+        "name": "followers_end",
+        "type_info": "Int4"
+      },
+      {
+        "ordinal": 21,
+        "name": "follower_delta",
+        "type_info": "Int4"
+      },
+      {
+        "ordinal": 22,
+        "name": "stream_title",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 23,
+        "name": "notification_text",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 24,
+        "name": "language",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 25,
+        "name": "is_mature",
+        "type_info": "Bool"
+      },
+      {
+        "ordinal": 26,
+        "name": "tags",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 27,
+        "name": "had_deadlock_in_session",
+        "type_info": "Bool"
+      },
+      {
+        "ordinal": 28,
+        "name": "game_name",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 29,
+        "name": "notes",
+        "type_info": "Text"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Int8"
+      ]
+    },
+    "nullable": [
+      false,
+      false,
+      true,
+      false,
+      true,
+      true,
+      true,
+      true,
+      true,
+      true,
+      true,
+      true,
+      true,
+      true,
+      true,
+      true,
+      true,
+      true,
+      true,
+      true,
+      true,
+      true,
+      true,
+      true,
+      true,
+      true,
+      true,
+      true,
+      true,
+      true
+    ]
+  },
+  "hash": "c9e0e1220515e580716780dbc2bb12ff527458a0484a763c084bbbbfd3767d41"
+}
