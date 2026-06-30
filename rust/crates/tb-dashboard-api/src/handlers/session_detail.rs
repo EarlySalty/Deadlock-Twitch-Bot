@@ -31,6 +31,32 @@ const KNOWN_CHAT_BOTS: &[&str] = &[
     "wizebot",
 ];
 
+struct SessionDetailRow {
+    id: i64,
+    streamer_login: String,
+    started_at: chrono::DateTime<chrono::Utc>,
+    ended_at: Option<chrono::DateTime<chrono::Utc>>,
+    duration_seconds: Option<i32>,
+    start_viewers: Option<i32>,
+    peak_viewers: Option<i32>,
+    end_viewers: Option<i32>,
+    avg_viewers: Option<f64>,
+    retention_5m: Option<f64>,
+    retention_10m: Option<f64>,
+    retention_20m: Option<f64>,
+    dropoff_pct: Option<f64>,
+    unique_chatters: Option<i32>,
+    first_time_chatters: Option<i32>,
+    returning_chatters: Option<i32>,
+    stream_title: Option<String>,
+}
+
+struct SessionEventSessionRow {
+    streamer_login: String,
+    started_at: chrono::DateTime<chrono::Utc>,
+    ended_at: Option<chrono::DateTime<chrono::Utc>>,
+}
+
 fn require_auth(auth: &DashboardAuthLevel) -> Result<(), (StatusCode, Json<serde_json::Value>)> {
     if matches!(auth, DashboardAuthLevel::None) {
         Err(crate::auth::unauthorized_v2_json())
@@ -106,7 +132,8 @@ pub async fn session_detail_handler(
     // ── Haupt-Session-Row ────────────────────────────────────────────────────
     let row = match owner {
         Some(login) => {
-            sqlx::query(
+            sqlx::query_as!(
+                SessionDetailRow,
                 r#"SELECT id, streamer_login, started_at, ended_at, duration_seconds,
                       start_viewers, peak_viewers, end_viewers, avg_viewers,
                       retention_5m, retention_10m, retention_20m,
@@ -114,15 +141,16 @@ pub async fn session_detail_handler(
                       returning_chatters, stream_title
                FROM twitch_stream_sessions
                WHERE id = $1 AND LOWER(streamer_login) = $2"#,
+                session_id,
+                login
             )
-            .bind(session_id)
-            .bind(login)
             .fetch_optional(&pool)
             .await
         }
 
         None => {
-            sqlx::query(
+            sqlx::query_as!(
+                SessionDetailRow,
                 r#"SELECT id, streamer_login, started_at, ended_at, duration_seconds,
                       start_viewers, peak_viewers, end_viewers, avg_viewers,
                       retention_5m, retention_10m, retention_20m,
@@ -130,8 +158,8 @@ pub async fn session_detail_handler(
                       returning_chatters, stream_title
                FROM twitch_stream_sessions
                WHERE id = $1"#,
+                session_id
             )
-            .bind(session_id)
             .fetch_optional(&pool)
             .await
         }
@@ -153,12 +181,13 @@ pub async fn session_detail_handler(
     };
 
     // ── Prüfen ob twitch_session_chatters Daten hat ─────────────────────────
-    let chatter_presence =
-        sqlx::query("SELECT 1 FROM twitch_session_chatters WHERE session_id = $1 LIMIT 1")
-            .bind(session_id)
-            .fetch_optional(&pool)
-            .await
-            .unwrap_or(None);
+    let chatter_presence = sqlx::query!(
+        "SELECT 1 AS \"present!\" FROM twitch_session_chatters WHERE session_id = $1 LIMIT 1",
+        session_id
+    )
+    .fetch_optional(&pool)
+    .await
+    .unwrap_or(None);
 
     // ── Chatter-Stats (bot-bereinigt) ────────────────────────────────────────
     // Parameterindizes: $1 = session_id, $3..$N+2 = Bot-Logins.
@@ -212,17 +241,17 @@ pub async fn session_detail_handler(
         }
     } else {
         (
-            row.try_get::<i32, _>("unique_chatters").unwrap_or(0) as i64,
-            row.try_get::<i32, _>("first_time_chatters").unwrap_or(0) as i64,
-            row.try_get::<i32, _>("returning_chatters").unwrap_or(0) as i64,
+            i64::from(row.unique_chatters.unwrap_or(0)),
+            i64::from(row.first_time_chatters.unwrap_or(0)),
+            i64::from(row.returning_chatters.unwrap_or(0)),
         )
     };
 
     // ── Viewer-Timeline ──────────────────────────────────────────────────────
-    let timeline = sqlx::query(
+    let timeline = sqlx::query!(
         "SELECT minutes_from_start, viewer_count FROM twitch_session_viewers WHERE session_id = $1 ORDER BY minutes_from_start",
+        session_id
     )
-    .bind(session_id)
     .fetch_all(&pool)
     .await
     .unwrap_or_default();
@@ -246,45 +275,40 @@ pub async fn session_detail_handler(
     let chatters = top_query.fetch_all(&pool).await.unwrap_or_default();
 
     // ── Response aufbauen ────────────────────────────────────────────────────
-    let started_at: String = row
-        .try_get::<chrono::DateTime<chrono::Utc>, _>("started_at")
-        .map(|t| t.to_rfc3339())
-        .unwrap_or_default();
-    let ended_at: Option<String> = row
-        .try_get::<chrono::DateTime<chrono::Utc>, _>("ended_at")
-        .ok()
-        .map(|t| t.to_rfc3339());
+    let started_at: String = row.started_at.to_rfc3339();
+    let ended_at: Option<String> = row.ended_at.map(|t| t.to_rfc3339());
 
     Json(json!({
-        "id": row.try_get::<i64, _>("id").unwrap_or(0),
-        "streamerLogin": row.try_get::<String, _>("streamer_login").unwrap_or_default(),
+        "id": row.id,
+        "streamerLogin": row.streamer_login,
         "startedAt": started_at,
         "endedAt": ended_at,
-        "duration": row.try_get::<i32, _>("duration_seconds").unwrap_or(0),
-        "startViewers": row.try_get::<i32, _>("start_viewers").unwrap_or(0),
-        "peakViewers": row.try_get::<i32, _>("peak_viewers").unwrap_or(0),
-        "endViewers": row.try_get::<i32, _>("end_viewers").unwrap_or(0),
+        "duration": row.duration_seconds.unwrap_or(0),
+        "startViewers": row.start_viewers.unwrap_or(0),
+        "peakViewers": row.peak_viewers.unwrap_or(0),
+        "endViewers": row.end_viewers.unwrap_or(0),
         // NULL (Session ohne Viewer-Samples, z. B. frisch bei stream.online
         // eroeffnet) bleibt JSON null statt 0.0 -> Frontend kann "noch keine
         // Daten" von einer echten 0 unterscheiden.
-        "avgViewers": row.try_get::<Option<f64>, _>("avg_viewers").ok().flatten(),
-        "retention5m": row.try_get::<Option<f64>, _>("retention_5m").ok().flatten().map(|v| v * 100.0),
-        "retention10m": row.try_get::<Option<f64>, _>("retention_10m").ok().flatten().map(|v| v * 100.0),
-        "retention20m": row.try_get::<Option<f64>, _>("retention_20m").ok().flatten().map(|v| v * 100.0),
-        "dropoffPct": row.try_get::<Option<f64>, _>("dropoff_pct").ok().flatten().map(|v| v * 100.0),
+        "avgViewers": row.avg_viewers,
+        "retention5m": row.retention_5m.map(|v| v * 100.0),
+        "retention10m": row.retention_10m.map(|v| v * 100.0),
+        "retention20m": row.retention_20m.map(|v| v * 100.0),
+        "dropoffPct": row.dropoff_pct.map(|v| v * 100.0),
         "uniqueChatters": unique_chatters,
         "firstTimeChatters": first_time_chatters,
         "returningChatters": returning_chatters,
-        "title": row.try_get::<String, _>("stream_title").unwrap_or_default(),
+        "title": row.stream_title.unwrap_or_default(),
         "timeline": timeline.iter().map(|t| json!({
-            "minute": t.try_get::<i32, _>("minutes_from_start").unwrap_or(0),
-            "viewers": t.try_get::<i32, _>("viewer_count").unwrap_or(0),
+            "minute": t.minutes_from_start.unwrap_or(0),
+            "viewers": t.viewer_count,
         })).collect::<Vec<_>>(),
         "chatters": chatters.iter().map(|c| json!({
             "login": c.try_get::<String, _>("chatter_login").unwrap_or_default(),
             "messages": c.try_get::<i32, _>("messages").unwrap_or(0),
         })).collect::<Vec<_>>(),
-    })).into_response()
+    }))
+    .into_response()
 }
 
 /// `GET /twitch/api/v2/session/{id}/events`
@@ -312,12 +336,17 @@ pub async fn session_events_handler(
 
     // Session-Metadaten holen (Owner-Isolierung + started/ended_at für Event-Fenster)
     let sess = match owner {
-        Some(login) => sqlx::query(
+        Some(login) => sqlx::query_as!(
+            SessionEventSessionRow,
             "SELECT streamer_login, started_at, ended_at FROM twitch_stream_sessions WHERE id = $1 AND LOWER(streamer_login) = $2",
-        ).bind(session_id).bind(login).fetch_optional(&pool).await,
-        None => sqlx::query(
+            session_id,
+            login
+        ).fetch_optional(&pool).await,
+        None => sqlx::query_as!(
+            SessionEventSessionRow,
             "SELECT streamer_login, started_at, ended_at FROM twitch_stream_sessions WHERE id = $1",
-        ).bind(session_id).fetch_optional(&pool).await,
+            session_id
+        ).fetch_optional(&pool).await,
     };
 
     let sess = match sess {
@@ -335,49 +364,44 @@ pub async fn session_events_handler(
         Ok(Some(r)) => r,
     };
 
-    let streamer_login: String = sess.try_get("streamer_login").unwrap_or_default();
-    let started_at: chrono::DateTime<chrono::Utc> = sess.try_get("started_at").unwrap_or_default();
-    let ended_at: Option<chrono::DateTime<chrono::Utc>> = sess.try_get("ended_at").ok();
+    let streamer_login = sess.streamer_login;
+    let started_at = sess.started_at;
+    let ended_at = sess.ended_at;
 
     // Twitch-User-ID für Channel-Updates
-    let uid_row = sqlx::query(
+    let twitch_user_id: Option<String> = sqlx::query_scalar!(
         "SELECT twitch_user_id FROM twitch_streamers WHERE LOWER(twitch_login) = $1 LIMIT 1",
+        streamer_login.to_lowercase()
     )
-    .bind(streamer_login.to_lowercase())
     .fetch_optional(&pool)
     .await
-    .unwrap_or(None);
-    let twitch_user_id: Option<String> = uid_row
-        .as_ref()
-        .and_then(|r| r.try_get("twitch_user_id").ok());
+    .unwrap_or(None)
+    .flatten();
 
     // Channel-Updates im Session-Fenster
     let channel_updates: Vec<serde_json::Value> = if let Some(uid) = &twitch_user_id {
         let end_bound: chrono::DateTime<chrono::Utc> = ended_at.unwrap_or_else(chrono::Utc::now);
-        sqlx::query(
+        sqlx::query!(
             r#"SELECT recorded_at, title, game_name, language
                FROM twitch_channel_updates
                WHERE twitch_user_id = $1
                  AND recorded_at::timestamptz BETWEEN $2 AND $3
                ORDER BY recorded_at"#,
+            uid,
+            started_at,
+            end_bound
         )
-        .bind(uid)
-        .bind(started_at)
-        .bind(end_bound)
         .fetch_all(&pool)
         .await
         .unwrap_or_default()
         .iter()
         .map(|r| {
-            let at: String = r
-                .try_get::<chrono::DateTime<chrono::Utc>, _>("recorded_at")
-                .map(|t| t.to_rfc3339())
-                .unwrap_or_default();
+            let at = r.recorded_at.to_rfc3339();
             json!({
                 "at": at,
-                "title": r.try_get::<String, _>("title").unwrap_or_default(),
-                "game": r.try_get::<String, _>("game_name").unwrap_or_default(),
-                "language": r.try_get::<String, _>("language").unwrap_or_default(),
+                "title": r.title.clone().unwrap_or_default(),
+                "game": r.game_name.clone().unwrap_or_default(),
+                "language": r.language.clone().unwrap_or_default(),
             })
         })
         .collect()
@@ -389,61 +413,61 @@ pub async fn session_events_handler(
     // (raid_history), UNION ALL nach Zeit sortiert (Port api_v2.py:2388-2427).
     // viewer_count ist INTEGER -> ::bigint, sonst stiller Decode-Fehler.
     let streamer_lower = streamer_login.to_lowercase();
-    let raids: Vec<serde_json::Value> = sqlx::query(
+    let raids: Vec<serde_json::Value> = sqlx::query!(
         r#"
-        SELECT detected_at AS at, from_broadcaster_login AS channel,
-               viewer_count::bigint AS viewers, 'incoming' AS direction
+        SELECT detected_at AS "at!", from_broadcaster_login AS "channel!",
+               viewer_count::bigint AS "viewers!", 'incoming'::text AS "direction!"
           FROM twitch_raid_arrival_tracking
          WHERE LOWER(to_broadcaster_login) = $1
            AND detected_at BETWEEN $2 AND COALESCE($3, NOW())
         UNION ALL
-        SELECT executed_at AS at, to_broadcaster_login AS channel,
-               viewer_count::bigint AS viewers, 'outgoing' AS direction
+        SELECT executed_at AS "at!", to_broadcaster_login AS "channel!",
+               COALESCE(viewer_count, 0)::bigint AS "viewers!", 'outgoing'::text AS "direction!"
           FROM twitch_raid_history
          WHERE LOWER(from_broadcaster_login) = $1
            AND executed_at BETWEEN $2 AND COALESCE($3, NOW())
         ORDER BY 1
         "#,
+        &streamer_lower,
+        started_at,
+        ended_at
     )
-    .bind(&streamer_lower)
-    .bind(started_at)
-    .bind(ended_at)
     .fetch_all(&pool)
     .await
     .unwrap_or_default()
     .iter()
     .map(|r| {
         json!({
-            "at": r.try_get::<chrono::DateTime<chrono::Utc>, _>("at").map(|t| t.to_rfc3339()).unwrap_or_default(),
-            "channel": r.try_get::<Option<String>, _>("channel").ok().flatten().unwrap_or_default(),
-            "viewers": r.try_get::<Option<i64>, _>("viewers").ok().flatten().unwrap_or(0),
-            "direction": r.try_get::<String, _>("direction").unwrap_or_default(),
+            "at": r.at.to_rfc3339(),
+            "channel": r.channel.clone(),
+            "viewers": r.viewers,
+            "direction": r.direction.clone(),
         })
     })
     .collect();
 
     // Follows pro Minute im Session-Fenster (Port api_v2.py:2429-2456).
-    let follows: Vec<serde_json::Value> = sqlx::query(
+    let follows: Vec<serde_json::Value> = sqlx::query!(
         r#"
-        SELECT DATE_TRUNC('minute', followed_at::timestamptz) AS minute, COUNT(*) AS cnt
+        SELECT DATE_TRUNC('minute', followed_at::timestamptz) AS "minute!", COUNT(*) AS "cnt!"
           FROM twitch_follow_events
          WHERE LOWER(streamer_login) = $1
            AND followed_at::timestamptz BETWEEN $2 AND COALESCE($3, NOW())
          GROUP BY 1
          ORDER BY 1
         "#,
+        &streamer_lower,
+        started_at,
+        ended_at
     )
-    .bind(&streamer_lower)
-    .bind(started_at)
-    .bind(ended_at)
     .fetch_all(&pool)
     .await
     .unwrap_or_default()
     .iter()
     .map(|r| {
         json!({
-            "minute": r.try_get::<chrono::DateTime<chrono::Utc>, _>("minute").map(|t| t.to_rfc3339()).unwrap_or_default(),
-            "count": r.try_get::<i64, _>("cnt").unwrap_or(0),
+            "minute": r.minute.to_rfc3339(),
+            "count": r.cnt,
         })
     })
     .collect();

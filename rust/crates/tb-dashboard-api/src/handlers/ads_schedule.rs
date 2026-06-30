@@ -11,7 +11,7 @@ use axum::{
 };
 use serde::Deserialize;
 use serde_json::json;
-use sqlx::{PgPool, Row};
+use sqlx::PgPool;
 
 use crate::auth::level::DashboardAuthLevel;
 
@@ -58,15 +58,16 @@ pub async fn ads_schedule_handler(
             Err(resp) => return resp,
         };
 
-    let rows = sqlx::query(
+    let rows = sqlx::query!(
         r#"SELECT twitch_login, next_ad_at, last_ad_at, duration,
-                  preroll_free_time, snooze_count, snooze_refresh_at, snapshot_at
+                  preroll_free_time, snooze_count, snooze_refresh_at,
+                  snapshot_at AS "snapshot_at?"
            FROM twitch_ads_schedule_snapshot
            WHERE LOWER(twitch_login) = $1
            ORDER BY snapshot_at DESC
            LIMIT 50"#,
+        streamer
     )
-    .bind(&streamer)
     .fetch_all(&pool)
     .await;
 
@@ -81,23 +82,23 @@ pub async fn ads_schedule_handler(
         Ok(rows) => {
             let first = &rows[0];
             let current = json!({
-                "next_ad_at": opt_iso(first.try_get("next_ad_at").ok()),
-                "last_ad_at": opt_iso(first.try_get("last_ad_at").ok()),
-                "duration": first.try_get::<i32, _>("duration").ok(),
-                "preroll_free_time": first.try_get::<i32, _>("preroll_free_time").ok(),
-                "snooze_count": first.try_get::<i32, _>("snooze_count").ok(),
-                "snooze_refresh_at": opt_iso(first.try_get("snooze_refresh_at").ok()),
-                "snapshot_at": opt_iso(first.try_get("snapshot_at").ok()),
+                "next_ad_at": opt_iso(first.next_ad_at),
+                "last_ad_at": opt_iso(first.last_ad_at),
+                "duration": first.duration,
+                "preroll_free_time": first.preroll_free_time,
+                "snooze_count": first.snooze_count,
+                "snooze_refresh_at": opt_iso(first.snooze_refresh_at),
+                "snapshot_at": opt_iso(first.snapshot_at),
             });
             let history: Vec<serde_json::Value> = rows
                 .iter()
                 .take(10)
                 .map(|r| {
                     json!({
-                        "snapshot_at": opt_iso(r.try_get("snapshot_at").ok()),
-                        "next_ad_at": opt_iso(r.try_get("next_ad_at").ok()),
-                        "duration": r.try_get::<i32, _>("duration").ok(),
-                        "preroll_free_time": r.try_get::<i32, _>("preroll_free_time").ok(),
+                        "snapshot_at": opt_iso(r.snapshot_at),
+                        "next_ad_at": opt_iso(r.next_ad_at),
+                        "duration": r.duration,
+                        "preroll_free_time": r.preroll_free_time,
                     })
                 })
                 .collect();

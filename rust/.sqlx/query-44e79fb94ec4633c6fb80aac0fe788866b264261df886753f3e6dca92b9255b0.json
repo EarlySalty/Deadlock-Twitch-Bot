@@ -1,0 +1,24 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n            SELECT streamer_login\n            FROM oauth_state_tokens\n            WHERE state_token = $1\n              AND platform = $2\n              AND expires_at > $3\n            LIMIT 1\n            ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "streamer_login",
+        "type_info": "Text"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Text",
+        "Text",
+        "Timestamptz"
+      ]
+    },
+    "nullable": [
+      true
+    ]
+  },
+  "hash": "44e79fb94ec4633c6fb80aac0fe788866b264261df886753f3e6dca92b9255b0"
+}

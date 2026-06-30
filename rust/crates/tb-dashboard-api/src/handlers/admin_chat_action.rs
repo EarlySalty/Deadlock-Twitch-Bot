@@ -78,10 +78,16 @@ pub async fn chat_action_handler(
     if owner_id.as_deref() != Some(DASHBOARD_OWNER_DISCORD_ID) {
         tracing::warn!(
             "AUDIT dashboard chat action denied: discord_user_id={} path={}",
-            if owner_id.is_some() { "present" } else { "none" },
+            if owner_id.is_some() {
+                "present"
+            } else {
+                "none"
+            },
             "/twitch/admin/chat_action"
         );
-        return redirect_err("Nur der freigeschaltete Discord-Owner darf diese Chat-Aktion nutzen.");
+        return redirect_err(
+            "Nur der freigeschaltete Discord-Owner darf diese Chat-Aktion nutzen.",
+        );
     }
 
     // Login (Python: login / streamer, normalisiert).
@@ -131,9 +137,9 @@ pub async fn chat_action_handler(
             };
             redirect_ok(&format!("{label} an {login} gesendet"))
         }
-        SendResult::Failed => {
-            redirect_err(&format!("Chat-Aktion für {login} konnte nicht gesendet werden"))
-        }
+        SendResult::Failed => redirect_err(&format!(
+            "Chat-Aktion für {login} konnte nicht gesendet werden"
+        )),
         SendResult::Unavailable => redirect_err("Twitch Chat Bot ist aktuell nicht verfügbar"),
     }
 }
@@ -187,22 +193,25 @@ enum SendGate {
 /// der Streamer aktuell/zuletzt ein aktiver Partner ist (admin-archiviert);
 /// `manual_partner_opt_out` ODER nicht erlaubt → Abbruch.
 async fn partner_send_allowed(pool: &PgPool, login: &str) -> Result<SendGate, sqlx::Error> {
-    let row: Option<(Option<String>, Option<String>, Option<i32>)> =
-        sqlx::query_as(
-            "SELECT twitch_user_id, archived_at, manual_partner_opt_out \
+    let row = sqlx::query!(
+        "SELECT twitch_user_id, archived_at, manual_partner_opt_out \
              FROM twitch_partners_all_state \
              WHERE LOWER(twitch_login) = LOWER($1) LIMIT 1",
-        )
-        .bind(login)
-        .fetch_optional(pool)
-        .await?;
+        login
+    )
+    .fetch_optional(pool)
+    .await?;
 
-    let Some((_uid, archived_at, opt_out)) = row else {
+    let Some(row) = row else {
         return Ok(SendGate::NotFound);
     };
 
-    let is_archived = archived_at.as_deref().map(str::trim).is_some_and(|s| !s.is_empty());
-    let manual_opt_out = opt_out.unwrap_or(0) != 0;
+    let is_archived = row
+        .archived_at
+        .as_deref()
+        .map(str::trim)
+        .is_some_and(|s| !s.is_empty());
+    let manual_opt_out = row.manual_partner_opt_out.unwrap_or(0) != 0;
     let partner_allowed = if is_archived {
         is_partner_chat_action_allowed(pool, login).await?
     } else {
@@ -219,12 +228,12 @@ async fn partner_send_allowed(pool: &PgPool, login: &str) -> Result<SendGate, sq
 /// Python `_is_partner_chat_action_allowed`: erlaubt, wenn ein aktiver Partner
 /// existiert ODER der zuletzt bekannte Partner-Status `active` ist.
 async fn is_partner_chat_action_allowed(pool: &PgPool, login: &str) -> Result<bool, sqlx::Error> {
-    let status: Option<String> = sqlx::query_scalar(
+    let status: Option<String> = sqlx::query_scalar!(
         "SELECT status FROM twitch_partners \
          WHERE LOWER(twitch_login) = LOWER($1) \
          ORDER BY id DESC LIMIT 1",
+        login
     )
-    .bind(login)
     .fetch_optional(pool)
     .await?;
     Ok(status
@@ -321,9 +330,18 @@ mod tests {
             normalize_choice("Announcement", CHAT_ACTION_MODES, "message"),
             "announcement"
         );
-        assert_eq!(normalize_choice("bogus", CHAT_ACTION_MODES, "message"), "message");
-        assert_eq!(normalize_choice("GREEN", CHAT_ANNOUNCEMENT_COLORS, "purple"), "green");
-        assert_eq!(normalize_choice("", CHAT_ANNOUNCEMENT_COLORS, "purple"), "purple");
+        assert_eq!(
+            normalize_choice("bogus", CHAT_ACTION_MODES, "message"),
+            "message"
+        );
+        assert_eq!(
+            normalize_choice("GREEN", CHAT_ANNOUNCEMENT_COLORS, "purple"),
+            "green"
+        );
+        assert_eq!(
+            normalize_choice("", CHAT_ANNOUNCEMENT_COLORS, "purple"),
+            "purple"
+        );
     }
 
     #[test]

@@ -1,0 +1,15 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "UPDATE streamer_plans SET lurker_tax_enabled = $2 WHERE LOWER(COALESCE(twitch_login, '')) = $1",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Text",
+        "Int4"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "208b0e9ba8456bbc6bdbab1843650d4a6eeeb8952fdd2b3ec45b28006a46a9f7"
+}

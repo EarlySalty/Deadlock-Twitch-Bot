@@ -309,12 +309,13 @@ async fn build_market_data(pool: &PgPool) -> Result<Value, sqlx::Error> {
 /// Überwachte Kanäle = `twitch_streamers` ohne Partner-Eintrag (clean-SQL-Ersatz
 /// für das entfernte `is_monitored_only`-Flag).
 async fn load_monitored_channels(pool: &PgPool) -> Result<Vec<MonitoredChannel>, sqlx::Error> {
-    sqlx::query_as(
+    sqlx::query_as!(
+        MonitoredChannel,
         r#"
         SELECT
             s.twitch_login                       AS twitch_login,
-            l.last_viewer_count                  AS last_viewer_count,
-            l.active_session_id                  AS active_session_id
+            l.last_viewer_count                  AS "last_viewer_count?",
+            l.active_session_id                  AS "active_session_id?"
         FROM twitch_streamers s
         LEFT JOIN twitch_live_state l ON s.twitch_user_id = l.twitch_user_id
         WHERE NOT EXISTS (
@@ -330,40 +331,40 @@ async fn load_monitored_channels(pool: &PgPool) -> Result<Vec<MonitoredChannel>,
 
 /// Nachrichten + distinkte Chatter der letzten Stunde für einen Kanal.
 async fn chat_stats_last_hour(pool: &PgPool, login: &str) -> Result<(i64, i64), sqlx::Error> {
-    let row: (i64, i64) = sqlx::query_as(
+    let row = sqlx::query!(
         r#"
-        SELECT COUNT(*), COUNT(DISTINCT chatter_login)
+        SELECT COUNT(*) AS "messages!", COUNT(DISTINCT chatter_login) AS "chatters!"
         FROM twitch_chat_messages
         WHERE streamer_login = $1
           AND message_ts >= now() - INTERVAL '1 hour'
         "#,
+        login
     )
-    .bind(login)
     .fetch_one(pool)
     .await?;
-    Ok(row)
+    Ok((row.messages, row.chatters))
 }
 
 /// (verbundene Chatter, Lurker) einer aktiven Session.
 async fn lurker_stats(pool: &PgPool, session_id: i64) -> Result<(i64, i64), sqlx::Error> {
-    let row: (Option<i64>, Option<i64>) = sqlx::query_as(
+    let row = sqlx::query!(
         r#"
-        SELECT COUNT(*), SUM(CASE WHEN messages = 0 THEN 1 ELSE 0 END)
+        SELECT COUNT(*) AS "connected!", SUM(CASE WHEN messages = 0 THEN 1 ELSE 0 END) AS "lurkers?"
         FROM twitch_session_chatters
         WHERE session_id = $1
         "#,
+        session_id
     )
-    .bind(session_id)
     .fetch_one(pool)
     .await?;
-    Ok((row.0.unwrap_or(0), row.1.unwrap_or(0)))
+    Ok((row.connected, row.lurkers.unwrap_or(0)))
 }
 
 /// 24h-Markt-Verlauf aus `twitch_stats_category` (pro Tick aggregiert).
 async fn market_history_24h(pool: &PgPool) -> Result<Vec<Value>, sqlx::Error> {
-    let rows: Vec<(chrono::DateTime<chrono::Utc>, Option<i64>, i64)> = sqlx::query_as(
+    let rows = sqlx::query!(
         r#"
-        SELECT ts_utc, SUM(viewer_count) AS total_viewers, COUNT(DISTINCT streamer) AS streamer_count
+        SELECT ts_utc, SUM(viewer_count) AS "total_viewers?", COUNT(DISTINCT streamer) AS "streamer_count!"
         FROM twitch_stats_category
         WHERE ts_utc >= now() - INTERVAL '24 hours'
         GROUP BY ts_utc
@@ -374,11 +375,11 @@ async fn market_history_24h(pool: &PgPool) -> Result<Vec<Value>, sqlx::Error> {
     .await?;
     Ok(rows
         .into_iter()
-        .map(|(ts, total, streamers)| {
+        .map(|row| {
             json!({
-                "ts": ts.to_rfc3339(),
-                "total_viewers": total.unwrap_or(0),
-                "streamer_count": streamers,
+                "ts": row.ts_utc.to_rfc3339(),
+                "total_viewers": row.total_viewers.unwrap_or(0),
+                "streamer_count": row.streamer_count,
             })
         })
         .collect())
@@ -386,9 +387,9 @@ async fn market_history_24h(pool: &PgPool) -> Result<Vec<Value>, sqlx::Error> {
 
 /// Frage-Nachrichten der letzten 6 Stunden (enthalten `?`, Länge > 10).
 async fn recent_questions(pool: &PgPool) -> Result<Vec<Value>, sqlx::Error> {
-    let rows: Vec<(Option<String>, String, chrono::DateTime<chrono::Utc>)> = sqlx::query_as(
+    let rows = sqlx::query!(
         r#"
-        SELECT content, streamer_login, message_ts
+        SELECT content AS "content?", streamer_login, message_ts
         FROM twitch_chat_messages
         WHERE message_ts >= now() - INTERVAL '6 hours'
           AND content LIKE '%?%'
@@ -401,11 +402,11 @@ async fn recent_questions(pool: &PgPool) -> Result<Vec<Value>, sqlx::Error> {
     .await?;
     Ok(rows
         .into_iter()
-        .map(|(content, streamer, ts)| {
+        .map(|row| {
             json!({
-                "content": content.unwrap_or_default(),
-                "streamer": streamer,
-                "ts": ts.to_rfc3339(),
+                "content": row.content.unwrap_or_default(),
+                "streamer": row.streamer_login,
+                "ts": row.message_ts.to_rfc3339(),
             })
         })
         .collect())
@@ -413,15 +414,15 @@ async fn recent_questions(pool: &PgPool) -> Result<Vec<Value>, sqlx::Error> {
 
 /// Nachrichten-Inhalte der letzten Stunde (für Meta-Snapshot + Sentiment).
 async fn recent_message_contents(pool: &PgPool) -> Result<Vec<String>, sqlx::Error> {
-    let rows: Vec<(Option<String>,)> = sqlx::query_as(
+    let rows = sqlx::query_scalar!(
         r#"
-        SELECT content FROM twitch_chat_messages
+        SELECT content AS "content?" FROM twitch_chat_messages
         WHERE message_ts >= now() - INTERVAL '1 hour'
         "#,
     )
     .fetch_all(pool)
     .await?;
-    Ok(rows.into_iter().map(|(c,)| c.unwrap_or_default()).collect())
+    Ok(rows.into_iter().map(|c| c.unwrap_or_default()).collect())
 }
 
 /// Zählt Deadlock-Terme + Sentiment über die letzten Nachrichten (Python-Logik).
@@ -473,9 +474,9 @@ async fn viewer_overlap(pool: &PgPool, top_logins: &[String]) -> Result<Vec<Valu
     if top_logins.len() < 2 {
         return Ok(Vec::new());
     }
-    let rows: Vec<(String, String, i64)> = sqlx::query_as(
+    let rows = sqlx::query!(
         r#"
-        SELECT c1.streamer_login, c2.streamer_login, COUNT(DISTINCT c1.chatter_login)
+        SELECT c1.streamer_login AS "a!", c2.streamer_login AS "b!", COUNT(DISTINCT c1.chatter_login) AS "shared!"
         FROM twitch_chat_messages c1
         JOIN twitch_chat_messages c2
           ON c1.chatter_login = c2.chatter_login
@@ -488,13 +489,13 @@ async fn viewer_overlap(pool: &PgPool, top_logins: &[String]) -> Result<Vec<Valu
         ORDER BY 3 DESC
         LIMIT 5
         "#,
+        top_logins
     )
-    .bind(top_logins)
     .fetch_all(pool)
     .await?;
     Ok(rows
         .into_iter()
-        .map(|(a, b, shared)| json!({ "a": a, "b": b, "shared": shared }))
+        .map(|row| json!({ "a": row.a, "b": row.b, "shared": row.shared }))
         .collect())
 }
 

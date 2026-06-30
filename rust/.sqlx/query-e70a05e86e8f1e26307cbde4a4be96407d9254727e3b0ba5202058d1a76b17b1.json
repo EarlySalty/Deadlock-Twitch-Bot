@@ -1,0 +1,18 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n            INSERT INTO dashboard_sessions\n                (session_id, session_type, payload_enc, created_at, expires_at)\n            VALUES ($1, $2, $3, $4, $5)\n            ON CONFLICT (session_id) DO UPDATE SET\n                payload_enc = EXCLUDED.payload_enc,\n                expires_at  = EXCLUDED.expires_at\n            ",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Text",
+        "Text",
+        "Bytea",
+        "Float8",
+        "Float8"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "e70a05e86e8f1e26307cbde4a4be96407d9254727e3b0ba5202058d1a76b17b1"
+}

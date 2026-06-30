@@ -1,0 +1,53 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT\n               COUNT(*) AS \"session_count!\",\n               COALESCE(SUM(s.duration_seconds), 0)::float8 AS \"total_duration!\",\n               AVG(s.avg_viewers) AS \"avg_viewers?\",\n               SUM(CASE WHEN s.follower_delta IS NOT NULL\n                        AND NOT (s.followers_end = 0 AND s.followers_start > 0)\n                        THEN s.follower_delta ELSE 0 END) AS \"net_followers?\",\n               SUM(CASE WHEN s.follower_delta > 0\n                        AND NOT (s.followers_end = 0 AND s.followers_start > 0)\n                        THEN s.follower_delta ELSE 0 END) AS \"gained_followers?\",\n               COUNT(CASE WHEN s.follower_delta IS NOT NULL\n                        AND NOT (s.followers_end = 0 AND s.followers_start > 0)\n                        THEN 1 END) AS \"follower_valid_samples!\"\n           FROM twitch_stream_sessions s\n           WHERE s.started_at >= $1\n             AND LOWER(s.streamer_login) = $2\n             AND s.ended_at IS NOT NULL",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "session_count!",
+        "type_info": "Int8"
+      },
+      {
+        "ordinal": 1,
+        "name": "total_duration!",
+        "type_info": "Float8"
+      },
+      {
+        "ordinal": 2,
+        "name": "avg_viewers?",
+        "type_info": "Float8"
+      },
+      {
+        "ordinal": 3,
+        "name": "net_followers?",
+        "type_info": "Int8"
+      },
+      {
+        "ordinal": 4,
+        "name": "gained_followers?",
+        "type_info": "Int8"
+      },
+      {
+        "ordinal": 5,
+        "name": "follower_valid_samples!",
+        "type_info": "Int8"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Timestamptz",
+        "Text"
+      ]
+    },
+    "nullable": [
+      null,
+      null,
+      null,
+      null,
+      null,
+      null
+    ]
+  },
+  "hash": "5ff7abb72b08e100de9dc232ab217f038dc01b60071caed9f30d7a7d62b19535"
+}

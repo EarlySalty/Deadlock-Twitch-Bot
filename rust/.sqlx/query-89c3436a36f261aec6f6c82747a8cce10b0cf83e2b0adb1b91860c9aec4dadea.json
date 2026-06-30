@@ -1,0 +1,65 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT decision, response_text, model, prompt_tokens, completion_tokens, cost_usd_estimate::float8 AS \"cost_usd_estimate?\", latency_ms, ts FROM twitch_engagement_log WHERE channel_login = $1 ORDER BY ts DESC LIMIT $2",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "decision",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 1,
+        "name": "response_text",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 2,
+        "name": "model",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 3,
+        "name": "prompt_tokens",
+        "type_info": "Int4"
+      },
+      {
+        "ordinal": 4,
+        "name": "completion_tokens",
+        "type_info": "Int4"
+      },
+      {
+        "ordinal": 5,
+        "name": "cost_usd_estimate?",
+        "type_info": "Float8"
+      },
+      {
+        "ordinal": 6,
+        "name": "latency_ms",
+        "type_info": "Int4"
+      },
+      {
+        "ordinal": 7,
+        "name": "ts",
+        "type_info": "Timestamptz"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Text",
+        "Int8"
+      ]
+    },
+    "nullable": [
+      false,
+      true,
+      false,
+      true,
+      true,
+      null,
+      true,
+      false
+    ]
+  },
+  "hash": "89c3436a36f261aec6f6c82747a8cce10b0cf83e2b0adb1b91860c9aec4dadea"
+}

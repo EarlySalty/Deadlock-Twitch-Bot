@@ -1,0 +1,42 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT rating AS \"rating?\", comment, rated_by AS \"rated_by?\", updated_at::text AS \"updated_at?\" FROM twitch_stream_report_ratings WHERE session_id = $1 AND report_variant = $2 AND rated_by = $3 LIMIT 1",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "rating?",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 1,
+        "name": "comment",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 2,
+        "name": "rated_by?",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 3,
+        "name": "updated_at?",
+        "type_info": "Text"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Int8",
+        "Text",
+        "Text"
+      ]
+    },
+    "nullable": [
+      false,
+      true,
+      false,
+      null
+    ]
+  },
+  "hash": "feaaa71f6a7961e1eb2d489e2719825e7b6a7345c167ec658724161cf2d52ccb"
+}

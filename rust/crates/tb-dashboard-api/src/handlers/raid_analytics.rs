@@ -239,16 +239,17 @@ pub async fn raid_retention_handler(
     let days = params.days.unwrap_or(90).clamp(7, 365);
     let since: DateTime<Utc> = Utc::now() - chrono::Duration::days(days as i64);
 
-    let base_rows = sqlx::query(
+    let base_rows = sqlx::query!(
         r#"SELECT raid_id, from_broadcaster_login, to_broadcaster_login,
-                  viewer_count_sent::bigint AS viewer_count_sent, executed_at, target_session_id,
+                  viewer_count_sent::bigint AS "viewer_count_sent!", executed_at, target_session_id,
                   chatters_at_plus5m::bigint AS chatters_at_plus5m, chatters_at_plus15m::bigint AS chatters_at_plus15m, chatters_at_plus30m::bigint AS chatters_at_plus30m,
                   new_chatters::bigint AS new_chatters, known_from_raider::bigint AS known_from_raider
            FROM twitch_raid_retention
            WHERE executed_at >= $1 AND LOWER(from_broadcaster_login) = $2
            ORDER BY executed_at DESC LIMIT 100"#,
+        since,
+        &streamer
     )
-    .bind(since).bind(&streamer)
     .fetch_all(&pool).await;
 
     let base_rows = match base_rows {
@@ -275,38 +276,25 @@ pub async fn raid_retention_handler(
     let mut raid_inputs: Vec<Value> = vec![];
 
     for row in &base_rows {
-        let raid_id: i64 = match row.try_get("raid_id") {
-            Ok(v) => v,
-            Err(_) => continue,
-        };
-        let executed_at: Option<DateTime<Utc>> = row.try_get("executed_at").ok();
+        let raid_id = row.raid_id;
+        let executed_at = Some(row.executed_at);
         let executed_at_iso = executed_at.map(|t| t.to_rfc3339()).unwrap_or_default();
-        let target_session_id: Option<i64> = row.try_get("target_session_id").ok();
-        let from_login: String = row
-            .try_get::<Option<String>, _>("from_broadcaster_login")
-            .ok()
-            .flatten()
-            .unwrap_or_default()
-            .to_lowercase();
-        let to_login: String = row
-            .try_get::<Option<String>, _>("to_broadcaster_login")
-            .ok()
-            .flatten()
-            .unwrap_or_default()
-            .to_lowercase();
+        let target_session_id = row.target_session_id;
+        let from_login = row.from_broadcaster_login.to_lowercase();
+        let to_login = row.to_broadcaster_login.to_lowercase();
 
         base_raids.push(json!({
             "raid_id": raid_id,
             "from_login": from_login,
-            "to_broadcaster": row.try_get::<Option<String>, _>("to_broadcaster_login").ok().flatten(),
-            "viewers_sent": row.try_get::<Option<i64>, _>("viewer_count_sent").ok().flatten().unwrap_or(0),
+            "to_broadcaster": row.to_broadcaster_login.clone(),
+            "viewers_sent": row.viewer_count_sent,
             "executed_at": executed_at.map(|t| t.to_rfc3339()),
             "executed_at_key": &executed_at_iso,
-            "stored_plus5m": row.try_get::<Option<i64>, _>("chatters_at_plus5m").ok().flatten().unwrap_or(0),
-            "stored_plus15m": row.try_get::<Option<i64>, _>("chatters_at_plus15m").ok().flatten().unwrap_or(0),
-            "stored_plus30m": row.try_get::<Option<i64>, _>("chatters_at_plus30m").ok().flatten().unwrap_or(0),
-            "stored_new_chatters": row.try_get::<Option<i64>, _>("new_chatters").ok().flatten().unwrap_or(0),
-            "stored_known_from_raider": row.try_get::<Option<i64>, _>("known_from_raider").ok().flatten().unwrap_or(0),
+            "stored_plus5m": row.chatters_at_plus5m.unwrap_or(0),
+            "stored_plus15m": row.chatters_at_plus15m.unwrap_or(0),
+            "stored_plus30m": row.chatters_at_plus30m.unwrap_or(0),
+            "stored_new_chatters": row.new_chatters.unwrap_or(0),
+            "stored_known_from_raider": row.known_from_raider.unwrap_or(0),
         }));
 
         if let Some(session_id) = target_session_id {
@@ -455,7 +443,7 @@ pub async fn raid_analytics_handler(
     let bots: Vec<String> = KNOWN_CHAT_BOTS.iter().map(|s| s.to_string()).collect();
 
     // 1. Outgoing raids aus twitch_raid_retention (bereits berechnete Metriken)
-    let retention_rows = sqlx::query(
+    let retention_rows = sqlx::query!(
         r#"SELECT rr.raid_id, rh.from_broadcaster_login, rr.viewer_count_sent::bigint AS viewer_count_sent,
                   rr.executed_at, rr.target_session_id, rr.to_broadcaster_login
            FROM twitch_raid_retention rr
@@ -463,8 +451,9 @@ pub async fn raid_analytics_handler(
            JOIN twitch_stream_sessions ss ON ss.id = rr.target_session_id
            WHERE LOWER(ss.streamer_login) = $1 AND ss.started_at >= $2
            ORDER BY ss.started_at DESC"#,
+        &streamer,
+        since
     )
-    .bind(&streamer).bind(since)
     .fetch_all(&pool).await;
 
     // P2.98: Python (api_raids.py:473-475) umschließt den gesamten Body mit
@@ -481,29 +470,13 @@ pub async fn raid_analytics_handler(
     let mut base_raids_full: Vec<Value> = vec![];
     let mut base_raids_sample: Vec<Value> = vec![];
     for row in &retention_rows {
-        let raid_id: i64 = match row.try_get("raid_id") {
-            Ok(v) => v,
-            Err(_) => continue,
-        };
-        let from: String = row
-            .try_get::<Option<String>, _>("from_broadcaster_login")
-            .ok()
-            .flatten()
-            .unwrap_or_default();
-        let to: String = row
-            .try_get::<Option<String>, _>("to_broadcaster_login")
-            .ok()
-            .flatten()
-            .unwrap_or_default()
-            .to_lowercase();
-        let sent: i64 = row
-            .try_get::<Option<i64>, _>("viewer_count_sent")
-            .ok()
-            .flatten()
-            .unwrap_or(0);
-        let exec_at: Option<DateTime<Utc>> = row.try_get("executed_at").ok();
+        let raid_id = row.raid_id;
+        let from = row.from_broadcaster_login.clone();
+        let to = row.to_broadcaster_login.to_lowercase();
+        let sent = row.viewer_count_sent.unwrap_or(0);
+        let exec_at = Some(row.executed_at);
         let exec_iso = exec_at.map(|t| t.to_rfc3339()).unwrap_or_default();
-        let target_sid: i64 = row.try_get("target_session_id").unwrap_or(0);
+        let target_sid = row.target_session_id.unwrap_or(0);
 
         let entry = json!({
             "raid_id": raid_id.to_string(),
@@ -587,13 +560,13 @@ pub async fn raid_analytics_handler(
     }
 
     // 3. Follow-Attribution
-    let follow_rows = sqlx::query(
+    let follow_rows = sqlx::query!(
         r#"SELECT fe.follower_login,
                   CASE WHEN rh.executed_at IS NOT NULL
                             AND sc.first_message_at >= rh.executed_at
                             AND cr_before.chatter_login IS NULL
-                       THEN 'raid' ELSE 'organic' END AS follow_source,
-                  rh.from_broadcaster_login AS raid_source
+                       THEN 'raid' ELSE 'organic' END AS "follow_source!",
+                  rh.from_broadcaster_login AS "raid_source?"
            FROM twitch_follow_events fe
            JOIN twitch_stream_sessions ss
                ON LOWER(ss.streamer_login) = LOWER(fe.streamer_login)
@@ -609,8 +582,10 @@ pub async fn raid_analytics_handler(
            WHERE LOWER(fe.streamer_login) = $1
              AND fe.followed_at >= $2
              AND LOWER(fe.follower_login) != ALL($3)"#,
+        &streamer,
+        since,
+        &bots
     )
-    .bind(&streamer).bind(since).bind(&bots)
     .fetch_all(&pool).await;
     let follow_rows = match follow_rows {
         Ok(r) => r,
@@ -623,21 +598,16 @@ pub async fn raid_analytics_handler(
     let mut follows_by_source: HashMap<String, i64> = HashMap::new();
     let raid_follows = follow_rows
         .iter()
-        .filter(|r| r.try_get::<String, _>("follow_source").ok().as_deref() == Some("raid"))
+        .filter(|r| r.follow_source == "raid")
         .count() as i64;
     let organic_follows = follow_rows
         .iter()
-        .filter(|r| r.try_get::<String, _>("follow_source").ok().as_deref() == Some("organic"))
+        .filter(|r| r.follow_source == "organic")
         .count() as i64;
     let total_follows = follow_rows.len() as i64;
     for r in &follow_rows {
-        if r.try_get::<String, _>("follow_source").ok().as_deref() == Some("raid") {
-            let src: String = r
-                .try_get::<Option<String>, _>("raid_source")
-                .ok()
-                .flatten()
-                .unwrap_or_default()
-                .to_lowercase();
+        if r.follow_source == "raid" {
+            let src = r.raid_source.clone().unwrap_or_default().to_lowercase();
             *follows_by_source.entry(src).or_default() += 1;
         }
     }
@@ -718,15 +688,15 @@ pub async fn raid_analytics_handler(
         .collect();
 
     // 6. Incoming raids (twitch_raid_arrival_tracking) — N+1 für Session-Lookup + Timeline
-    let incoming_raw = sqlx::query(
+    let incoming_raw = sqlx::query!(
         r#"SELECT detected_at, from_broadcaster_login, viewer_count::bigint AS viewer_count,
                   classification, confirmation_signals, unraid_seen
            FROM twitch_raid_arrival_tracking
            WHERE LOWER(to_broadcaster_login) = $1 AND detected_at >= $2
            ORDER BY detected_at DESC LIMIT 50"#,
+        &streamer,
+        since
     )
-    .bind(&streamer)
-    .bind(since)
     .fetch_all(&pool)
     .await;
     let incoming_raw = match incoming_raw {
@@ -742,17 +712,9 @@ pub async fn raid_analytics_handler(
     let mut retention_15m_values: Vec<f64> = vec![];
 
     for rr in &incoming_raw {
-        let detected_at: Option<DateTime<Utc>> = rr.try_get("detected_at").ok();
-        let from_channel: String = rr
-            .try_get::<Option<String>, _>("from_broadcaster_login")
-            .ok()
-            .flatten()
-            .unwrap_or_else(|| "unknown".into());
-        let viewers_sent: i64 = rr
-            .try_get::<Option<i64>, _>("viewer_count")
-            .ok()
-            .flatten()
-            .unwrap_or(0);
+        let detected_at = Some(rr.detected_at);
+        let from_channel = rr.from_broadcaster_login.clone();
+        let viewers_sent = rr.viewer_count.unwrap_or(0);
 
         let mut impact = json!({
             "viewers_before": null, "viewers_peak_after": null, "boost_pct": null,
@@ -762,42 +724,37 @@ pub async fn raid_analytics_handler(
 
         if let Some(det) = detected_at {
             // Session suchen
-            let sess = sqlx::query(
+            let sess = sqlx::query!(
                 r#"SELECT id, started_at FROM twitch_stream_sessions
                    WHERE LOWER(streamer_login) = $1 AND started_at <= $2
                      AND (ended_at IS NULL OR ended_at >= $2)
                    LIMIT 1"#,
+                &streamer,
+                det
             )
-            .bind(&streamer)
-            .bind(det)
             .fetch_optional(&pool)
             .await
             .ok()
             .flatten();
 
             if let Some(sess_row) = sess {
-                let session_id: i64 = sess_row.try_get("id").unwrap_or(0);
-                let sess_start: Option<DateTime<Utc>> = sess_row.try_get("started_at").ok();
+                let session_id = sess_row.id;
+                let sess_start = Some(sess_row.started_at);
                 let raid_minute = sess_start
                     .map(|ss| ((det - ss).num_seconds() / 60) as i32)
                     .unwrap_or(0)
                     .max(0);
 
-                let tl_rows = sqlx::query(
-                    "SELECT minutes_from_start, viewer_count::bigint AS viewer_count FROM twitch_session_viewers WHERE session_id = $1 ORDER BY minutes_from_start",
+                let tl_rows = sqlx::query!(
+                    "SELECT minutes_from_start, viewer_count::bigint AS \"viewer_count!\" FROM twitch_session_viewers WHERE session_id = $1 ORDER BY minutes_from_start",
+                    session_id
                 )
-                .bind(session_id)
                 .fetch_all(&pool).await.unwrap_or_default();
 
                 if !tl_rows.is_empty() {
                     let timeline: HashMap<i32, i64> = tl_rows
                         .iter()
-                        .filter_map(|r| {
-                            Some((
-                                r.try_get::<i32, _>("minutes_from_start").ok()?,
-                                r.try_get::<i64, _>("viewer_count").ok()?,
-                            ))
-                        })
+                        .filter_map(|r| Some((r.minutes_from_start?, r.viewer_count)))
                         .collect();
 
                     let before: Vec<i64> = timeline
@@ -853,14 +810,14 @@ pub async fn raid_analytics_handler(
                 }
 
                 // Follows innerhalb 30 Min nach Raid
-                let follow_row = sqlx::query(
-                    "SELECT COUNT(*) AS follows FROM twitch_follow_events WHERE LOWER(streamer_login) = $1 AND followed_at BETWEEN $2 AND $2 + INTERVAL '30 minutes'",
+                let follow_row = sqlx::query!(
+                    "SELECT COUNT(*) AS \"follows!\" FROM twitch_follow_events WHERE LOWER(streamer_login) = $1 AND followed_at BETWEEN $2 AND $2 + INTERVAL '30 minutes'",
+                    &streamer,
+                    det
                 )
-                .bind(&streamer).bind(det)
                 .fetch_optional(&pool).await.ok().flatten();
                 if let Some(fr) = follow_row {
-                    impact["follows_after_raid"] =
-                        json!(fr.try_get::<i64, _>("follows").unwrap_or(0));
+                    impact["follows_after_raid"] = json!(fr.follows);
                 }
             }
         }
@@ -869,8 +826,8 @@ pub async fn raid_analytics_handler(
             "from_channel": from_channel,
             "detected_at": detected_at.map(|t| t.to_rfc3339()),
             "viewers_sent": viewers_sent,
-            "classification": rr.try_get::<Option<String>,_>("classification").ok().flatten().unwrap_or_else(|| "unknown".into()),
-            "unraid_seen": rr.try_get::<Option<bool>,_>("unraid_seen").ok().flatten().unwrap_or(false),
+            "classification": rr.classification.clone(),
+            "unraid_seen": rr.unraid_seen,
             "impact": impact,
         }));
     }

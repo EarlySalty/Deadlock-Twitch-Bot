@@ -16,7 +16,7 @@ use axum::{
 use chrono::{DateTime, Duration, Utc};
 use serde::Deserialize;
 use serde_json::json;
-use sqlx::{PgPool, Row};
+use sqlx::PgPool;
 
 use crate::auth::level::DashboardAuthLevel;
 use crate::query_int::parse_bounded_query_int;
@@ -62,7 +62,7 @@ pub async fn retention_curve_handler(
 
     // Letzte 50 Sessions wie Python; Viewer-Retention per Minute normalisiert auf peak_viewers,
     // dann PERCENTILE_CONT für p25/p50/p75.
-    let rows = sqlx::query(
+    let rows = sqlx::query!(
         r#"WITH recent_sessions AS (
                SELECT id, peak_viewers
                FROM twitch_stream_sessions
@@ -89,12 +89,12 @@ pub async fn retention_curve_handler(
                FROM normalized
                GROUP BY minute
            )
-           SELECT minute, median_ret, p25, p75, sample_count
+           SELECT minute AS "minute!", median_ret AS "median_ret?", p25 AS "p25?", p75 AS "p75?", sample_count AS "sample_count!"
            FROM stats
            ORDER BY minute"#,
+        &streamer,
+        since
     )
-    .bind(&streamer)
-    .bind(since)
     .fetch_all(&pool)
     .await;
 
@@ -108,18 +108,21 @@ pub async fn retention_curve_handler(
                 .into_response()
         }
         Ok(rows) => {
-            let curve: Vec<serde_json::Value> = rows.iter().map(|r| {
-                let median: f64 = r.try_get("median_ret").unwrap_or(0.0);
-                json!({
-                    "minute": r.try_get::<i32, _>("minute").unwrap_or(0),
-                    "median_retention": (median * 1000.0).round() / 1000.0,
-                    "p25": (r.try_get::<f64, _>("p25").unwrap_or(0.0) * 1000.0).round() / 1000.0,
-                    "p75": (r.try_get::<f64, _>("p75").unwrap_or(0.0) * 1000.0).round() / 1000.0,
-                    "sample_count": r.try_get::<i64, _>("sample_count").unwrap_or(0),
+            let curve: Vec<serde_json::Value> = rows
+                .into_iter()
+                .map(|r| {
+                    let median = r.median_ret.unwrap_or(0.0);
+                    json!({
+                        "minute": r.minute,
+                        "median_retention": (median * 1000.0).round() / 1000.0,
+                        "p25": (r.p25.unwrap_or(0.0) * 1000.0).round() / 1000.0,
+                        "p75": (r.p75.unwrap_or(0.0) * 1000.0).round() / 1000.0,
+                        "sample_count": r.sample_count,
+                    })
                 })
-            }).collect();
+                .collect();
 
-            let ad_times: HashSet<i32> = sqlx::query_scalar(
+            let ad_times: HashSet<i32> = sqlx::query_scalar!(
                 r#"WITH recent_sessions AS (
                        SELECT id, started_at
                        FROM twitch_stream_sessions
@@ -129,12 +132,12 @@ pub async fn retention_curve_handler(
                        ORDER BY started_at DESC
                        LIMIT 50
                    )
-                   SELECT FLOOR(EXTRACT(EPOCH FROM (a.started_at - rs.started_at)) / 60.0)::int AS minute
+                   SELECT FLOOR(EXTRACT(EPOCH FROM (a.started_at - rs.started_at)) / 60.0)::int AS "minute!"
                    FROM twitch_ad_break_events a
                    JOIN recent_sessions rs ON rs.id = a.session_id"#,
+                &streamer,
+                since
             )
-            .bind(&streamer)
-            .bind(since)
             .fetch_all(&pool)
             .await
             .unwrap_or_default()
@@ -177,15 +180,15 @@ pub async fn retention_curve_handler(
 
             // Echte Session-Anzahl (Python sessions_used = len(recent_sessions), ≤50) —
             // rows sind Minuten-Aggregate, nicht Sessions.
-            let sessions_used: i64 = sqlx::query_scalar(
-                r#"SELECT COUNT(*) FROM (
+            let sessions_used: i64 = sqlx::query_scalar!(
+                r#"SELECT COUNT(*) AS "count!" FROM (
                        SELECT id FROM twitch_stream_sessions
                        WHERE LOWER(streamer_login) = $1 AND started_at >= $2 AND ended_at IS NOT NULL
                        ORDER BY started_at DESC LIMIT 50
                    ) s"#,
+                &streamer,
+                since
             )
-            .bind(&streamer)
-            .bind(since)
             .fetch_one(&pool)
             .await
             .unwrap_or(0);

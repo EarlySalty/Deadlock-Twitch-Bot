@@ -4,13 +4,13 @@
 //! Identität kommt ausschließlich aus der Partner-Session (`twitch_user_id`).
 
 use axum::{
-    Json,
     extract::State,
     http::StatusCode,
     response::{IntoResponse, Response},
+    Json,
 };
 use serde::Deserialize;
-use serde_json::{Value, json};
+use serde_json::{json, Value};
 use sqlx::PgPool;
 
 use crate::auth::level::DashboardAuthLevel;
@@ -69,17 +69,17 @@ pub async fn get_status(auth: DashboardAuthLevel, State(pool): State<PgPool>) ->
         Err(resp) => return resp,
     };
 
-    let onboarding = sqlx::query_as::<_, (i32, bool)>(
+    let onboarding = sqlx::query!(
         "SELECT current_step, completed \
          FROM streamer_onboarding \
          WHERE twitch_user_id = $1",
+        &twitch_user_id
     )
-    .bind(&twitch_user_id)
     .fetch_optional(&pool)
     .await;
 
     let (current_step, completed) = match onboarding {
-        Ok(Some(row)) => row,
+        Ok(Some(row)) => (row.current_step, row.completed),
         Ok(None) => (0, false),
         Err(error) => {
             tracing::error!(%error, "onboarding GET DB-Fehler");
@@ -120,7 +120,7 @@ pub async fn post_status(
         Err(resp) => return resp,
     };
 
-    let result = sqlx::query_as::<_, (i32, bool)>(
+    let result = sqlx::query!(
         "INSERT INTO streamer_onboarding (
              twitch_user_id, twitch_login, current_step, completed, completed_at, updated_at
          ) VALUES (
@@ -139,19 +139,19 @@ pub async fn post_status(
              END,
              updated_at = NOW()
          RETURNING current_step, completed",
+        twitch_user_id,
+        twitch_login,
+        body.current_step,
+        body.completed
     )
-    .bind(&twitch_user_id)
-    .bind(&twitch_login)
-    .bind(body.current_step)
-    .bind(body.completed)
     .fetch_one(&pool)
     .await;
 
     match result {
-        Ok((current_step, completed)) => Json(json!({
+        Ok(row) => Json(json!({
             "ok": true,
-            "current_step": current_step,
-            "completed": completed,
+            "current_step": row.current_step,
+            "completed": row.completed,
         }))
         .into_response(),
         Err(error) => {

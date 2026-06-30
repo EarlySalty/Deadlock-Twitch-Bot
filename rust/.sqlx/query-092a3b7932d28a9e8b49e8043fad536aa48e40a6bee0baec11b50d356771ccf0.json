@@ -1,0 +1,35 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT id, started_at,\n                  ROUND(EXTRACT(EPOCH FROM (\n                      COALESCE(ended_at, started_at + COALESCE(duration_seconds, 0) * INTERVAL '1 second')\n                      - started_at\n                  )) / 60)::int AS \"duration_min!\"\n           FROM twitch_stream_sessions\n           WHERE id = $1 AND LOWER(streamer_login) = $2\n           LIMIT 1",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id",
+        "type_info": "Int8"
+      },
+      {
+        "ordinal": 1,
+        "name": "started_at",
+        "type_info": "Timestamptz"
+      },
+      {
+        "ordinal": 2,
+        "name": "duration_min!",
+        "type_info": "Int4"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Int8",
+        "Text"
+      ]
+    },
+    "nullable": [
+      false,
+      false,
+      null
+    ]
+  },
+  "hash": "092a3b7932d28a9e8b49e8043fad536aa48e40a6bee0baec11b50d356771ccf0"
+}

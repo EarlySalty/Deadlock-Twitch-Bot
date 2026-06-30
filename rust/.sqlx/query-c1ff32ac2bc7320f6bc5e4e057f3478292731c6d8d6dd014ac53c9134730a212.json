@@ -1,0 +1,47 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "WITH recent_sessions AS (\n               SELECT id, peak_viewers\n               FROM twitch_stream_sessions\n               WHERE LOWER(streamer_login) = $1\n                 AND started_at >= $2\n                 AND ended_at IS NOT NULL\n               ORDER BY started_at DESC\n               LIMIT 50\n           ),\n           normalized AS (\n               SELECT sv.minutes_from_start AS minute,\n                      sv.viewer_count::float / GREATEST(rs.peak_viewers, 1) AS retention\n               FROM twitch_session_viewers sv\n               JOIN recent_sessions rs ON rs.id = sv.session_id\n               WHERE sv.minutes_from_start <= 180\n                 AND sv.viewer_count IS NOT NULL\n           ),\n           stats AS (\n               SELECT minute,\n                      PERCENTILE_CONT(0.5) WITHIN GROUP (ORDER BY retention) AS median_ret,\n                      PERCENTILE_CONT(0.25) WITHIN GROUP (ORDER BY retention) AS p25,\n                      PERCENTILE_CONT(0.75) WITHIN GROUP (ORDER BY retention) AS p75,\n                      COUNT(*) AS sample_count\n               FROM normalized\n               GROUP BY minute\n           )\n           SELECT minute AS \"minute!\", median_ret AS \"median_ret?\", p25 AS \"p25?\", p75 AS \"p75?\", sample_count AS \"sample_count!\"\n           FROM stats\n           ORDER BY minute",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "minute!",
+        "type_info": "Int4"
+      },
+      {
+        "ordinal": 1,
+        "name": "median_ret?",
+        "type_info": "Float8"
+      },
+      {
+        "ordinal": 2,
+        "name": "p25?",
+        "type_info": "Float8"
+      },
+      {
+        "ordinal": 3,
+        "name": "p75?",
+        "type_info": "Float8"
+      },
+      {
+        "ordinal": 4,
+        "name": "sample_count!",
+        "type_info": "Int8"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Text",
+        "Timestamptz"
+      ]
+    },
+    "nullable": [
+      true,
+      null,
+      null,
+      null,
+      null
+    ]
+  },
+  "hash": "c1ff32ac2bc7320f6bc5e4e057f3478292731c6d8d6dd014ac53c9134730a212"
+}

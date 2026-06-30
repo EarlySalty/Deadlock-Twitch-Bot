@@ -1,0 +1,22 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT AVG(retention_10m) AS \"ret?\" FROM twitch_stream_sessions\n             WHERE started_at >= $1 AND ended_at IS NOT NULL\n             GROUP BY LOWER(streamer_login) ORDER BY 1",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "ret?",
+        "type_info": "Float8"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Timestamptz"
+      ]
+    },
+    "nullable": [
+      null
+    ]
+  },
+  "hash": "54bab5b9dfe2b0719c2a81ba3c959f631ac47b1a59366ac75735430826ecbf0d"
+}

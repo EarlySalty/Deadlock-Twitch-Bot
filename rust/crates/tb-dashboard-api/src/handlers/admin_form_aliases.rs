@@ -126,7 +126,9 @@ pub async fn archive_handler(
             if archived_at.trim().is_empty() {
                 return redirect_ok(&format!("{login} ist bereits archiviert"));
             }
-            return redirect_ok(&format!("{login} ist bereits archiviert (seit {archived_at})"));
+            return redirect_ok(&format!(
+                "{login} ist bereits archiviert (seit {archived_at})"
+            ));
         }
     }
     if mode == ArchiveMode::Unarchive && before.as_ref().is_some_and(|v| v.is_none()) {
@@ -180,11 +182,11 @@ pub async fn discord_flag_handler(
 }
 
 async fn archive_state(pool: &PgPool, login: &str) -> Result<Option<Option<String>>, sqlx::Error> {
-    sqlx::query_scalar::<_, Option<String>>(
+    sqlx::query_scalar!(
         "SELECT admin_archived_at FROM twitch_partners \
          WHERE LOWER(twitch_login) = LOWER($1) LIMIT 1",
+        login
     )
-    .bind(login)
     .fetch_optional(pool)
     .await
 }

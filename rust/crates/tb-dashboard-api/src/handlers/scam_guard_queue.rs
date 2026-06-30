@@ -80,15 +80,16 @@ pub async fn queue_handler(
         Err(response) => return response,
     };
 
-    match sqlx::query_as::<_, QueueRow>(
-        "SELECT id, chatter_login, chatter_id, confidence::float8 AS confidence, \
+    match sqlx::query_as!(
+        QueueRow,
+        "SELECT id, chatter_login, chatter_id, confidence::float8 AS \"confidence!\", \
                 category, reasoning, action_taken, created_at \
            FROM twitch_scam_guard_verdicts \
           WHERE channel_login = $1 AND action_taken IN ('suggested', 'banned', 'timed_out') \
           ORDER BY created_at DESC, id DESC \
           LIMIT 100",
+        &login
     )
-    .bind(&login)
     .fetch_all(&pool)
     .await
     {
@@ -128,15 +129,16 @@ pub async fn detail_handler(
         Err(response) => return response,
     };
 
-    match sqlx::query_as::<_, DetailRow>(
+    match sqlx::query_as!(
+        DetailRow,
         "SELECT id, chatter_login, chatter_id, verdict, \
-                confidence::float8 AS confidence, category, reasoning, \
+                confidence::float8 AS \"confidence!\", category, reasoning, \
                 transcript_snapshot, action_taken, created_at \
            FROM twitch_scam_guard_verdicts \
           WHERE id = $1 AND channel_login = $2",
+        id,
+        &login
     )
-    .bind(id)
-    .bind(&login)
     .fetch_optional(&pool)
     .await
     {
@@ -172,13 +174,13 @@ pub async fn ignore_handler(
         Err(response) => return response,
     };
 
-    let action_taken = match sqlx::query_scalar::<_, String>(
+    let action_taken = match sqlx::query_scalar!(
         "SELECT action_taken FROM twitch_scam_guard_verdicts \
           WHERE id = $1 AND channel_login = $2 \
             AND action_taken IN ('suggested', 'banned', 'timed_out')",
+        id,
+        &login
     )
-    .bind(id)
-    .bind(&login)
     .fetch_optional(&pool)
     .await
     {
@@ -196,13 +198,13 @@ pub async fn ignore_handler(
         return proxy_owned_verdict_by_login(pool, &login, id, REVOKE_PATH).await;
     }
 
-    match sqlx::query(
+    match sqlx::query!(
         "UPDATE twitch_scam_guard_verdicts \
             SET action_taken = 'overturned' \
           WHERE id = $1 AND channel_login = $2 AND action_taken = 'suggested'",
+        id,
+        &login
     )
-    .bind(id)
-    .bind(&login)
     .execute(&pool)
     .await
     {

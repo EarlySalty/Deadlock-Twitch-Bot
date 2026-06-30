@@ -1,0 +1,53 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n        SELECT\n            EXTRACT(DOW FROM s.started_at)::integer AS \"weekday!\",\n            COUNT(*) AS \"stream_count!\",\n            AVG(s.duration_seconds / 3600.0)::float8 AS \"avg_hours?\",\n            AVG(s.avg_viewers) AS \"avg_viewers?\",\n            AVG(s.peak_viewers)::float8 AS \"avg_peak?\",\n            SUM(CASE WHEN s.follower_delta IS NOT NULL\n                     AND NOT (s.followers_end = 0 AND s.followers_start > 0)\n                     THEN s.follower_delta ELSE 0 END) AS \"total_followers!\"\n        FROM twitch_stream_sessions s\n        WHERE s.started_at >= $1\n          AND s.ended_at IS NOT NULL\n          AND (COALESCE($2, '') = '' OR LOWER(s.streamer_login) = $2)\n        GROUP BY 1\n        ORDER BY 1\n        ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "weekday!",
+        "type_info": "Int4"
+      },
+      {
+        "ordinal": 1,
+        "name": "stream_count!",
+        "type_info": "Int8"
+      },
+      {
+        "ordinal": 2,
+        "name": "avg_hours?",
+        "type_info": "Float8"
+      },
+      {
+        "ordinal": 3,
+        "name": "avg_viewers?",
+        "type_info": "Float8"
+      },
+      {
+        "ordinal": 4,
+        "name": "avg_peak?",
+        "type_info": "Float8"
+      },
+      {
+        "ordinal": 5,
+        "name": "total_followers!",
+        "type_info": "Int8"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Timestamptz",
+        "Text"
+      ]
+    },
+    "nullable": [
+      null,
+      null,
+      null,
+      null,
+      null,
+      null
+    ]
+  },
+  "hash": "c1c76e10ef298c14bc103f729910f6d11549b0240ec7ce99506c02f2e6a8c50f"
+}

@@ -13,7 +13,7 @@ use axum::{
 use chrono::{DateTime, Duration, Utc};
 use serde::Deserialize;
 use serde_json::json;
-use sqlx::{PgPool, Row};
+use sqlx::PgPool;
 
 use crate::auth::level::DashboardAuthLevel;
 use crate::query_int::parse_bounded_query_int;
@@ -86,16 +86,16 @@ pub async fn title_performance_handler(
         };
     let since: DateTime<Utc> = Utc::now() - Duration::days(days);
 
-    let rows = sqlx::query(
+    let rows = sqlx::query!(
         r#"SELECT
-               s.stream_title,
-               COUNT(*) AS usage_count,
-               AVG(s.avg_viewers) AS avg_viewers,
-               AVG(s.retention_10m) AS avg_retention,
+               s.stream_title AS "stream_title!",
+               COUNT(*) AS "usage_count!",
+               AVG(s.avg_viewers) AS "avg_viewers?",
+               AVG(s.retention_10m) AS "avg_retention?",
                AVG(CASE WHEN s.follower_delta IS NOT NULL
                         AND NOT (s.followers_end = 0 AND s.followers_start > 0)
-                        THEN s.follower_delta ELSE NULL END) AS avg_followers,
-               MAX(s.peak_viewers) AS peak_viewers
+                        THEN s.follower_delta ELSE NULL END)::float8 AS "avg_followers?",
+               MAX(s.peak_viewers) AS "peak_viewers?"
            FROM twitch_stream_sessions s
            WHERE s.started_at >= $1
              AND LOWER(s.streamer_login) = $2
@@ -103,12 +103,12 @@ pub async fn title_performance_handler(
              AND s.stream_title IS NOT NULL
              AND s.stream_title != ''
            GROUP BY s.stream_title
-           ORDER BY avg_viewers DESC
+           ORDER BY AVG(s.avg_viewers) DESC
            LIMIT $3"#,
+        since,
+        &streamer,
+        limit
     )
-    .bind(since)
-    .bind(&streamer)
-    .bind(limit)
     .fetch_all(&pool)
     .await;
 
@@ -132,16 +132,16 @@ pub async fn title_performance_handler(
                         serde_json::Value::Null
                     }
                 };
-            let titles: Vec<serde_json::Value> = rows.iter().map(|r| {
-                let title: String = r.try_get("stream_title").unwrap_or_default();
+            let titles: Vec<serde_json::Value> = rows.into_iter().map(|r| {
+                let title = r.stream_title;
                 let keywords = extract_title_keywords(&title);
                 json!({
                     "title": title,
-                    "usageCount": r.try_get::<i64, _>("usage_count").unwrap_or(0),
-                    "avgViewers": r.try_get::<f64, _>("avg_viewers").map(|v| (v * 10.0).round() / 10.0).unwrap_or(0.0),
-                    "avgRetention10m": r.try_get::<f64, _>("avg_retention").map(|v| (v * 1000.0).round() / 10.0).unwrap_or(0.0),
-                    "avgFollowerGain": r.try_get::<f64, _>("avg_followers").map(|v| (v * 10.0).round() / 10.0).unwrap_or(0.0),
-                    "peakViewers": r.try_get::<i32, _>("peak_viewers").unwrap_or(0),
+                    "usageCount": r.usage_count,
+                    "avgViewers": r.avg_viewers.map(|v| (v * 10.0).round() / 10.0).unwrap_or(0.0),
+                    "avgRetention10m": r.avg_retention.map(|v| (v * 1000.0).round() / 10.0).unwrap_or(0.0),
+                    "avgFollowerGain": r.avg_followers.map(|v| (v * 10.0).round() / 10.0).unwrap_or(0.0),
+                    "peakViewers": r.peak_viewers.unwrap_or(0),
                     "keywords": keywords,
                 })
             }).collect();

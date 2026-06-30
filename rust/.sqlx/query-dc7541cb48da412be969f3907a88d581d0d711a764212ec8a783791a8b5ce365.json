@@ -1,0 +1,29 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT COUNT(*) AS \"raid_count!\", COALESCE(SUM(viewer_count), 0) AS \"raid_viewers!\"\n           FROM twitch_raid_history\n           WHERE LOWER(to_broadcaster_login) = $1\n             AND executed_at >= $2\n             AND COALESCE(success, FALSE) IS TRUE",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "raid_count!",
+        "type_info": "Int8"
+      },
+      {
+        "ordinal": 1,
+        "name": "raid_viewers!",
+        "type_info": "Int8"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Text",
+        "Timestamptz"
+      ]
+    },
+    "nullable": [
+      null,
+      null
+    ]
+  },
+  "hash": "dc7541cb48da412be969f3907a88d581d0d711a764212ec8a783791a8b5ce365"
+}

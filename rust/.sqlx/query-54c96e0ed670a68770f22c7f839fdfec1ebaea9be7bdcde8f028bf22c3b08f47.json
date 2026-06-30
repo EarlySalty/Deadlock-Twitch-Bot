@@ -1,0 +1,23 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n        INSERT INTO twitch_billing_profiles (\n            customer_reference, recipient_name, recipient_email, company_name,\n            street_line1, postal_code, city, country_code, vat_id, updated_at\n        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)\n        ON CONFLICT (customer_reference) DO UPDATE SET\n            recipient_name = EXCLUDED.recipient_name,\n            recipient_email = EXCLUDED.recipient_email,\n            company_name = EXCLUDED.company_name,\n            street_line1 = EXCLUDED.street_line1,\n            postal_code = EXCLUDED.postal_code,\n            city = EXCLUDED.city,\n            country_code = EXCLUDED.country_code,\n            vat_id = EXCLUDED.vat_id,\n            updated_at = EXCLUDED.updated_at\n        ",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Text",
+        "Text",
+        "Text",
+        "Text",
+        "Text",
+        "Text",
+        "Text",
+        "Text",
+        "Text",
+        "Text"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "54c96e0ed670a68770f22c7f839fdfec1ebaea9be7bdcde8f028bf22c3b08f47"
+}

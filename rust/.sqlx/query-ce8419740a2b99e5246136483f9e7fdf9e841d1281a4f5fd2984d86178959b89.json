@@ -1,0 +1,48 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "WITH session_ids AS (\n               SELECT DISTINCT session_id FROM twitch_viewer_presence_ticks\n               WHERE LOWER(streamer_login) = $1 AND LOWER(viewer_login) = $2\n               UNION\n               SELECT DISTINCT session_id FROM twitch_session_chatters\n               WHERE LOWER(streamer_login) = $3 AND LOWER(chatter_login) = $4\n           ),\n           ticked AS (\n               SELECT session_id, tick_at,\n                      EXTRACT(EPOCH FROM (tick_at - LAG(tick_at) OVER (\n                          PARTITION BY session_id ORDER BY tick_at\n                      ))) / 60 AS gap_min\n               FROM twitch_viewer_presence_ticks\n               WHERE LOWER(streamer_login) = $5 AND LOWER(viewer_login) = $6\n           ),\n           grouped AS (\n               SELECT session_id, tick_at,\n                      SUM(CASE WHEN gap_min > 2 OR gap_min IS NULL THEN 1 ELSE 0 END)\n                          OVER (PARTITION BY session_id ORDER BY tick_at) AS span_id\n               FROM ticked\n           ),\n           span_groups AS (\n               SELECT session_id,\n                      GREATEST(0, ROUND(EXTRACT(EPOCH FROM (MAX(tick_at) - MIN(tick_at))) / 60)::int) AS span_present_min\n               FROM grouped\n               GROUP BY session_id, span_id\n           ),\n           presence_totals AS (\n               SELECT session_id, COALESCE(SUM(span_present_min), 0) AS total_present_min\n               FROM span_groups\n               GROUP BY session_id\n           )\n           SELECT s.id AS \"session_id!\", s.started_at,\n                  COALESCE(p.total_present_min, 0) AS \"total_present_min!\",\n                  COALESCE(sc.messages, 0)::bigint AS \"chat_messages!\"\n           FROM session_ids sid\n           JOIN twitch_stream_sessions s ON s.id = sid.session_id\n           LEFT JOIN presence_totals p ON p.session_id = s.id\n           LEFT JOIN twitch_session_chatters sc\n               ON sc.session_id = s.id\n              AND LOWER(sc.streamer_login) = $7\n              AND LOWER(sc.chatter_login) = $8\n           WHERE LOWER(s.streamer_login) = $9\n           ORDER BY s.started_at DESC",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "session_id!",
+        "type_info": "Int8"
+      },
+      {
+        "ordinal": 1,
+        "name": "started_at",
+        "type_info": "Timestamptz"
+      },
+      {
+        "ordinal": 2,
+        "name": "total_present_min!",
+        "type_info": "Int8"
+      },
+      {
+        "ordinal": 3,
+        "name": "chat_messages!",
+        "type_info": "Int8"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Text",
+        "Text",
+        "Text",
+        "Text",
+        "Text",
+        "Text",
+        "Text",
+        "Text",
+        "Text"
+      ]
+    },
+    "nullable": [
+      false,
+      false,
+      null,
+      null
+    ]
+  },
+  "hash": "ce8419740a2b99e5246136483f9e7fdf9e841d1281a4f5fd2984d86178959b89"
+}

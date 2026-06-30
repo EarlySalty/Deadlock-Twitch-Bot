@@ -1,0 +1,16 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "UPDATE twitch_partners\n            SET silent_ban = $2, silent_raid = $3\n          WHERE id = (\n              SELECT id FROM twitch_partners\n               WHERE LOWER(twitch_login) = $1 AND status = 'active'\n               ORDER BY id DESC LIMIT 1\n          )",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Text",
+        "Int4",
+        "Int4"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "c49334629e7194085ca089c2b5f5523afad92641b4c3090801139e90b968403b"
+}

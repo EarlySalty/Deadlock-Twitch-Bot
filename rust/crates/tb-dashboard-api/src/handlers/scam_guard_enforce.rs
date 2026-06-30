@@ -85,10 +85,10 @@ pub(crate) async fn proxy_owned_verdict_by_login(
     id: i64,
     path: &'static str,
 ) -> Response {
-    let owner = match sqlx::query_scalar::<_, String>(
+    let owner = match sqlx::query_scalar!(
         "SELECT channel_login FROM twitch_scam_guard_verdicts WHERE id = $1",
+        id
     )
-    .bind(id)
     .fetch_optional(&pool)
     .await
     {

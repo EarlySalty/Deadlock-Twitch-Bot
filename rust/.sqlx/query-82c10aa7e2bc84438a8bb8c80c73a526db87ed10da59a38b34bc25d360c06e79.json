@@ -1,0 +1,64 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT twitch_login, next_ad_at, last_ad_at, duration,\n                  preroll_free_time, snooze_count, snooze_refresh_at,\n                  snapshot_at AS \"snapshot_at?\"\n           FROM twitch_ads_schedule_snapshot\n           WHERE LOWER(twitch_login) = $1\n           ORDER BY snapshot_at DESC\n           LIMIT 50",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "twitch_login",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 1,
+        "name": "next_ad_at",
+        "type_info": "Timestamptz"
+      },
+      {
+        "ordinal": 2,
+        "name": "last_ad_at",
+        "type_info": "Timestamptz"
+      },
+      {
+        "ordinal": 3,
+        "name": "duration",
+        "type_info": "Int4"
+      },
+      {
+        "ordinal": 4,
+        "name": "preroll_free_time",
+        "type_info": "Int4"
+      },
+      {
+        "ordinal": 5,
+        "name": "snooze_count",
+        "type_info": "Int4"
+      },
+      {
+        "ordinal": 6,
+        "name": "snooze_refresh_at",
+        "type_info": "Timestamptz"
+      },
+      {
+        "ordinal": 7,
+        "name": "snapshot_at?",
+        "type_info": "Timestamptz"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Text"
+      ]
+    },
+    "nullable": [
+      true,
+      true,
+      true,
+      true,
+      true,
+      true,
+      true,
+      false
+    ]
+  },
+  "hash": "82c10aa7e2bc84438a8bb8c80c73a526db87ed10da59a38b34bc25d360c06e79"
+}

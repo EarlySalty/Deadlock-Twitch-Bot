@@ -111,80 +111,71 @@ pub async fn category_comparison_handler(
     let since: DateTime<Utc> = Utc::now() - Duration::days(days);
 
     // ── Q1: Your tracked stats ──────────────────────────────────────────────
-    let tracked_row = sqlx::query(
-        "SELECT AVG(viewer_count)::float8 AS avg_vc, MAX(viewer_count)::float8 AS peak_vc
+    let tracked_row = sqlx::query!(
+        "SELECT AVG(viewer_count)::float8 AS \"avg_vc?\", MAX(viewer_count)::float8 AS \"peak_vc?\"
          FROM twitch_stats_tracked
          WHERE ts_utc >= $1 AND LOWER(streamer) = $2",
+        since,
+        &streamer
     )
-    .bind(since)
-    .bind(&streamer)
     .fetch_optional(&pool)
     .await
     .ok()
     .flatten();
 
-    let your_tracked_avg: f64 = tracked_row
-        .as_ref()
-        .and_then(|r| r.try_get::<Option<f64>, _>("avg_vc").ok().flatten())
-        .unwrap_or(0.0);
+    let your_tracked_avg: f64 = tracked_row.as_ref().and_then(|r| r.avg_vc).unwrap_or(0.0);
     let your_tracked_peak: i64 = tracked_row
         .as_ref()
-        .and_then(|r| r.try_get::<Option<f64>, _>("peak_vc").ok().flatten())
+        .and_then(|r| r.peak_vc)
         .map(|v| v as i64)
         .unwrap_or(0);
 
     // ── Q2: Your session stats ──────────────────────────────────────────────
-    let sess_row = sqlx::query(r#"
-        SELECT AVG(avg_viewers) AS avg_v,
-               MAX(peak_viewers)::float8 AS peak_v,
-               AVG(retention_10m) AS ret10,
-               AVG(CASE WHEN avg_viewers > 0 THEN unique_chatters * 100.0 / avg_viewers ELSE 0 END) AS chat_h
+    let sess_row = sqlx::query!(r#"
+        SELECT AVG(avg_viewers) AS "avg_v?",
+               MAX(peak_viewers)::float8 AS "peak_v?",
+               AVG(retention_10m) AS "ret10?",
+               AVG(CASE WHEN avg_viewers > 0 THEN unique_chatters * 100.0 / avg_viewers ELSE 0 END) AS "chat_h?"
         FROM twitch_stream_sessions
         WHERE started_at >= $1 AND LOWER(streamer_login) = $2 AND ended_at IS NOT NULL
-    "#).bind(since).bind(&streamer).fetch_optional(&pool).await.ok().flatten();
+    "#, since, &streamer).fetch_optional(&pool).await.ok().flatten();
 
     let your_avg = if your_tracked_avg > 0.0 {
         your_tracked_avg
     } else {
-        sess_row
-            .as_ref()
-            .and_then(|r| r.try_get::<Option<f64>, _>("avg_v").ok().flatten())
-            .unwrap_or(0.0)
+        sess_row.as_ref().and_then(|r| r.avg_v).unwrap_or(0.0)
     };
     let your_peak = if your_tracked_peak > 0 {
         your_tracked_peak
     } else {
         sess_row
             .as_ref()
-            .and_then(|r| r.try_get::<Option<f64>, _>("peak_v").ok().flatten())
+            .and_then(|r| r.peak_v)
             .map(|v| v as i64)
             .unwrap_or(0)
     };
     let your_ret = sess_row
         .as_ref()
-        .and_then(|r| r.try_get::<Option<f64>, _>("ret10").ok().flatten())
+        .and_then(|r| r.ret10)
         .map(|v| v * 100.0)
         .unwrap_or(0.0);
-    let your_chat = sess_row
-        .as_ref()
-        .and_then(|r| r.try_get::<Option<f64>, _>("chat_h").ok().flatten())
-        .unwrap_or(0.0);
+    let your_chat = sess_row.as_ref().and_then(|r| r.chat_h).unwrap_or(0.0);
 
     // ── Q3: All category avgs (unfiltered — needed for peer group + percentile base) ─
-    let all_avgs_rows = sqlx::query(
-        "SELECT streamer, AVG(viewer_count)::float8 AS avg_vc FROM twitch_stats_category
-         WHERE ts_utc >= $1 GROUP BY streamer ORDER BY avg_vc",
+    let all_avgs_rows = sqlx::query!(
+        "SELECT streamer, AVG(viewer_count)::float8 AS \"avg_vc?\" FROM twitch_stats_category
+         WHERE ts_utc >= $1 GROUP BY streamer ORDER BY 2",
+        since
     )
-    .bind(since)
     .fetch_all(&pool)
     .await
     .unwrap_or_default();
 
     let all_avgs: Vec<(String, f64)> = all_avgs_rows
-        .iter()
+        .into_iter()
         .filter_map(|r| {
-            let s: String = r.try_get("streamer").ok()?;
-            let v: f64 = r.try_get::<Option<f64>, _>("avg_vc").ok().flatten()?;
+            let s = r.streamer;
+            let v = r.avg_vc?;
             Some((s.to_lowercase(), v))
         })
         .collect();
@@ -209,41 +200,41 @@ pub async fn category_comparison_handler(
 
     // ── Q4: Category peak avg (with optional threshold) ─────────────────────
     let cat_avg_peak: f64 = if exclude_external {
-        sqlx::query(
-            "SELECT AVG(max_vc)::float8 AS r FROM (
+        sqlx::query!(
+            "SELECT AVG(max_vc)::float8 AS \"r?\" FROM (
                  SELECT MAX(viewer_count) AS max_vc FROM twitch_stats_category
-                 WHERE ts_utc >= $1 GROUP BY streamer HAVING AVG(viewer_count) <= $2
+                 WHERE ts_utc >= $1 GROUP BY streamer HAVING AVG(viewer_count)::float8 <= $2
              ) s",
+            since,
+            EXTERNAL_REACH_AVG_THRESHOLD
         )
-        .bind(since)
-        .bind(EXTERNAL_REACH_AVG_THRESHOLD)
         .fetch_optional(&pool)
         .await
         .ok()
         .flatten()
-        .and_then(|r| r.try_get::<Option<f64>, _>("r").ok().flatten())
+        .and_then(|r| r.r)
         .unwrap_or(0.0)
     } else {
-        sqlx::query(
-            "SELECT AVG(max_vc)::float8 AS r FROM (
+        sqlx::query!(
+            "SELECT AVG(max_vc)::float8 AS \"r?\" FROM (
                  SELECT MAX(viewer_count) AS max_vc FROM twitch_stats_category
                  WHERE ts_utc >= $1 GROUP BY streamer
              ) s",
+            since
         )
-        .bind(since)
         .fetch_optional(&pool)
         .await
         .ok()
         .flatten()
-        .and_then(|r| r.try_get::<Option<f64>, _>("r").ok().flatten())
+        .and_then(|r| r.r)
         .unwrap_or(0.0)
     };
 
     // ── Q5: Category session averages (ret + chat) ──────────────────────────
     let (cat_avg_ret, cat_avg_chat): (f64, f64) = if exclude_external {
-        let r = sqlx::query(r#"
-            SELECT AVG(retention_10m) AS avg_ret,
-                   AVG(CASE WHEN avg_viewers > 0 THEN unique_chatters * 100.0 / avg_viewers ELSE 0 END) AS avg_chat
+        let r = sqlx::query!(r#"
+            SELECT AVG(retention_10m) AS "avg_ret?",
+                   AVG(CASE WHEN avg_viewers > 0 THEN unique_chatters * 100.0 / avg_viewers ELSE 0 END) AS "avg_chat?"
             FROM twitch_stream_sessions
             WHERE started_at >= $1 AND ended_at IS NOT NULL
               AND LOWER(streamer_login) NOT IN (
@@ -251,33 +242,19 @@ pub async fn category_comparison_handler(
                   WHERE started_at >= $1 AND ended_at IS NOT NULL
                   GROUP BY LOWER(streamer_login) HAVING AVG(avg_viewers) > $2
               )
-        "#).bind(since).bind(EXTERNAL_REACH_AVG_THRESHOLD).fetch_optional(&pool).await.ok().flatten();
-        let ret = r
-            .as_ref()
-            .and_then(|row| row.try_get::<Option<f64>, _>("avg_ret").ok().flatten())
-            .unwrap_or(0.0)
-            * 100.0;
-        let chat = r
-            .as_ref()
-            .and_then(|row| row.try_get::<Option<f64>, _>("avg_chat").ok().flatten())
-            .unwrap_or(0.0);
+        "#, since, EXTERNAL_REACH_AVG_THRESHOLD).fetch_optional(&pool).await.ok().flatten();
+        let ret = r.as_ref().and_then(|row| row.avg_ret).unwrap_or(0.0) * 100.0;
+        let chat = r.as_ref().and_then(|row| row.avg_chat).unwrap_or(0.0);
         (ret, chat)
     } else {
-        let r = sqlx::query(r#"
-            SELECT AVG(retention_10m) AS avg_ret,
-                   AVG(CASE WHEN avg_viewers > 0 THEN unique_chatters * 100.0 / avg_viewers ELSE 0 END) AS avg_chat
+        let r = sqlx::query!(r#"
+            SELECT AVG(retention_10m) AS "avg_ret?",
+                   AVG(CASE WHEN avg_viewers > 0 THEN unique_chatters * 100.0 / avg_viewers ELSE 0 END) AS "avg_chat?"
             FROM twitch_stream_sessions
             WHERE started_at >= $1 AND ended_at IS NOT NULL
-        "#).bind(since).fetch_optional(&pool).await.ok().flatten();
-        let ret = r
-            .as_ref()
-            .and_then(|row| row.try_get::<Option<f64>, _>("avg_ret").ok().flatten())
-            .unwrap_or(0.0)
-            * 100.0;
-        let chat = r
-            .as_ref()
-            .and_then(|row| row.try_get::<Option<f64>, _>("avg_chat").ok().flatten())
-            .unwrap_or(0.0);
+        "#, since).fetch_optional(&pool).await.ok().flatten();
+        let ret = r.as_ref().and_then(|row| row.avg_ret).unwrap_or(0.0) * 100.0;
+        let chat = r.as_ref().and_then(|row| row.avg_chat).unwrap_or(0.0);
         (ret, chat)
     };
 
@@ -315,58 +292,59 @@ pub async fn category_comparison_handler(
             .collect();
         chat_sorted.sort_by(|a, b| a.partial_cmp(b).unwrap());
     } else {
-        let ret_rows = sqlx::query(
-            "SELECT AVG(retention_10m) AS ret FROM twitch_stream_sessions
+        let ret_rows = sqlx::query!(
+            "SELECT AVG(retention_10m) AS \"ret?\" FROM twitch_stream_sessions
              WHERE started_at >= $1 AND ended_at IS NOT NULL
-             GROUP BY LOWER(streamer_login) ORDER BY ret",
+             GROUP BY LOWER(streamer_login) ORDER BY 1",
+            since
         )
-        .bind(since)
         .fetch_all(&pool)
         .await
         .unwrap_or_default();
         ret_sorted = ret_rows
-            .iter()
-            .filter_map(|r| r.try_get::<Option<f64>, _>("ret").ok().flatten())
+            .into_iter()
+            .filter_map(|r| r.ret)
             .map(|v| v * 100.0)
             .collect();
         ret_sorted.sort_by(|a, b| a.partial_cmp(b).unwrap());
 
-        let chat_rows = sqlx::query(
-            "SELECT AVG(CASE WHEN avg_viewers > 0 THEN unique_chatters * 100.0 / avg_viewers ELSE 0 END) AS ch
+        let chat_rows = sqlx::query!(
+            "SELECT AVG(CASE WHEN avg_viewers > 0 THEN unique_chatters * 100.0 / avg_viewers ELSE 0 END) AS \"ch?\"
              FROM twitch_stream_sessions
              WHERE started_at >= $1 AND ended_at IS NOT NULL
-             GROUP BY LOWER(streamer_login) ORDER BY ch"
-        ).bind(since).fetch_all(&pool).await.unwrap_or_default();
-        chat_sorted = chat_rows
-            .iter()
-            .filter_map(|r| r.try_get::<Option<f64>, _>("ch").ok().flatten())
-            .collect();
+             GROUP BY LOWER(streamer_login) ORDER BY 1"
+        , since).fetch_all(&pool).await.unwrap_or_default();
+        chat_sorted = chat_rows.into_iter().filter_map(|r| r.ch).collect();
         chat_sorted.sort_by(|a, b| a.partial_cmp(b).unwrap());
     }
 
     // ── Q8: Peak sorted list ─────────────────────────────────────────────────
     let peak_sorted: Vec<f64> = if exclude_external {
-        sqlx::query(
-            "SELECT MAX(viewer_count)::float8 AS peak FROM twitch_stats_category
-             WHERE ts_utc >= $1 GROUP BY streamer HAVING AVG(viewer_count) <= $2 ORDER BY peak",
+        sqlx::query!(
+            "SELECT MAX(viewer_count)::float8 AS \"peak?\" FROM twitch_stats_category
+             WHERE ts_utc >= $1 GROUP BY streamer HAVING AVG(viewer_count)::float8 <= $2 ORDER BY 1",
+            since,
+            EXTERNAL_REACH_AVG_THRESHOLD
         )
-        .bind(since)
-        .bind(EXTERNAL_REACH_AVG_THRESHOLD)
         .fetch_all(&pool)
         .await
+        .unwrap_or_default()
+        .into_iter()
+        .filter_map(|r| r.peak)
+        .collect()
     } else {
-        sqlx::query(
-            "SELECT MAX(viewer_count)::float8 AS peak FROM twitch_stats_category
-             WHERE ts_utc >= $1 GROUP BY streamer ORDER BY peak",
+        sqlx::query!(
+            "SELECT MAX(viewer_count)::float8 AS \"peak?\" FROM twitch_stats_category
+             WHERE ts_utc >= $1 GROUP BY streamer ORDER BY 1",
+            since
         )
-        .bind(since)
         .fetch_all(&pool)
         .await
-    }
-    .unwrap_or_default()
-    .iter()
-    .filter_map(|r| r.try_get::<Option<f64>, _>("peak").ok().flatten())
-    .collect();
+        .unwrap_or_default()
+        .into_iter()
+        .filter_map(|r| r.peak)
+        .collect()
+    };
 
     // ── Percentiles ──────────────────────────────────────────────────────────
     let avg_percentile = percentile_of(&sorted_avgs, your_avg);
@@ -406,53 +384,36 @@ pub async fn category_comparison_handler(
             json!(null)
         } else {
             // Q9: Peer session metrics
-            let peer_rows = sqlx::query(r#"
-                SELECT LOWER(streamer_login) AS login,
-                       AVG(avg_viewers) AS avg_v,
-                       MAX(peak_viewers)::float8 AS peak_v,
-                       AVG(retention_10m) AS ret10,
-                       AVG(CASE WHEN avg_viewers > 0 THEN unique_chatters * 100.0 / avg_viewers ELSE 0 END) AS chat_h
+            let peer_rows = sqlx::query!(r#"
+                SELECT LOWER(streamer_login) AS "login!",
+                       AVG(avg_viewers) AS "avg_v?",
+                       MAX(peak_viewers)::float8 AS "peak_v?",
+                       AVG(retention_10m) AS "ret10?",
+                       AVG(CASE WHEN avg_viewers > 0 THEN unique_chatters * 100.0 / avg_viewers ELSE 0 END) AS "chat_h?"
                 FROM twitch_stream_sessions
                 WHERE LOWER(streamer_login) = ANY($1::text[])
                   AND started_at >= $2 AND ended_at IS NOT NULL
                 GROUP BY LOWER(streamer_login)
-            "#).bind(&peer_logins[..]).bind(since).fetch_all(&pool).await.unwrap_or_default();
+            "#, &peer_logins[..], since).fetch_all(&pool).await.unwrap_or_default();
 
-            let mut avg_list: Vec<f64> = peer_rows
-                .iter()
-                .filter_map(|r| r.try_get::<Option<f64>, _>("avg_v").ok().flatten())
-                .collect();
+            let mut avg_list: Vec<f64> = peer_rows.iter().filter_map(|r| r.avg_v).collect();
             avg_list.sort_by(|a, b| a.partial_cmp(b).unwrap());
-            let mut peak_list: Vec<f64> = peer_rows
-                .iter()
-                .filter_map(|r| r.try_get::<Option<f64>, _>("peak_v").ok().flatten())
-                .collect();
+            let mut peak_list: Vec<f64> = peer_rows.iter().filter_map(|r| r.peak_v).collect();
             peak_list.sort_by(|a, b| a.partial_cmp(b).unwrap());
             let mut ret_list: Vec<f64> = peer_rows
                 .iter()
-                .filter_map(|r| r.try_get::<Option<f64>, _>("ret10").ok().flatten())
+                .filter_map(|r| r.ret10)
                 .map(|v| v * 100.0)
                 .collect();
             ret_list.sort_by(|a, b| a.partial_cmp(b).unwrap());
-            let mut chat_list: Vec<f64> = peer_rows
-                .iter()
-                .filter_map(|r| r.try_get::<Option<f64>, _>("chat_h").ok().flatten())
-                .collect();
+            let mut chat_list: Vec<f64> = peer_rows.iter().filter_map(|r| r.chat_h).collect();
             chat_list.sort_by(|a, b| a.partial_cmp(b).unwrap());
 
-            let my_row = peer_rows.iter().find(|r| {
-                r.try_get::<String, _>("login").ok().as_deref() == Some(streamer.as_str())
-            });
-            let my_peer_avg = my_row
-                .and_then(|r| r.try_get::<Option<f64>, _>("avg_v").ok().flatten())
-                .unwrap_or(my_avg_for_tier);
-            let my_peer_peak =
-                my_row.and_then(|r| r.try_get::<Option<f64>, _>("peak_v").ok().flatten());
-            let my_peer_ret = my_row
-                .and_then(|r| r.try_get::<Option<f64>, _>("ret10").ok().flatten())
-                .map(|v| v * 100.0);
-            let my_peer_chat =
-                my_row.and_then(|r| r.try_get::<Option<f64>, _>("chat_h").ok().flatten());
+            let my_row = peer_rows.iter().find(|r| r.login == streamer);
+            let my_peer_avg = my_row.and_then(|r| r.avg_v).unwrap_or(my_avg_for_tier);
+            let my_peer_peak = my_row.and_then(|r| r.peak_v);
+            let my_peer_ret = my_row.and_then(|r| r.ret10).map(|v| v * 100.0);
+            let my_peer_chat = my_row.and_then(|r| r.chat_h);
 
             let round1 = |v: f64| (v * 10.0).round() / 10.0;
 

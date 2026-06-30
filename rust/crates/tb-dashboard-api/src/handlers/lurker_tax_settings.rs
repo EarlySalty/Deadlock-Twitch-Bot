@@ -45,9 +45,14 @@ fn resolve_target(
     streamer: &Option<String>,
 ) -> Result<(String, String), Response> {
     match auth {
-        DashboardAuthLevel::Partner { twitch_login, twitch_user_id, .. } => {
-            Ok((twitch_login.to_lowercase(), twitch_user_id.trim().to_string()))
-        }
+        DashboardAuthLevel::Partner {
+            twitch_login,
+            twitch_user_id,
+            ..
+        } => Ok((
+            twitch_login.to_lowercase(),
+            twitch_user_id.trim().to_string(),
+        )),
         DashboardAuthLevel::Admin { .. } => {
             match streamer.as_deref().map(str::trim).filter(|s| !s.is_empty()) {
                 Some(s) => Ok((s.to_lowercase(), String::new())),
@@ -84,19 +89,18 @@ const CHATTERS_SCOPE: &str = "moderator:read:chatters";
 /// stilles Dead-Toggle. Anders als der Chat-Runtime hat dieses Crate keinen
 /// Bot-Token-Manager-Fallback; geprüft wird ausschließlich der Streamer-Scope.
 async fn has_moderator_read_chatters(pool: &PgPool, login: &str) -> bool {
-    let scopes: Option<(Option<String>,)> = sqlx::query_as(
+    let scopes: Option<String> = sqlx::query_scalar!(
         "SELECT scopes FROM twitch_raid_auth \
           WHERE LOWER(COALESCE(twitch_login, '')) = $1 \
           LIMIT 1",
+        login
     )
-    .bind(login)
     .fetch_optional(pool)
     .await
     .ok()
     .flatten();
 
     scopes
-        .and_then(|(s,)| s)
         .unwrap_or_default()
         .split_whitespace()
         .any(|s| s.eq_ignore_ascii_case(CHATTERS_SCOPE))
@@ -116,7 +120,12 @@ pub async fn get_handler(
     // Scope ist der Toggle ein Dead-Toggle; das Dashboard kann so warnen.
     let scope_ready = has_moderator_read_chatters(&pool, &login).await;
 
-    match sqlx::query(SELECT_SQL).bind(&login).bind(&user_id).fetch_optional(&pool).await {
+    match sqlx::query(SELECT_SQL)
+        .bind(&login)
+        .bind(&user_id)
+        .fetch_optional(&pool)
+        .await
+    {
         Ok(Some(row)) => {
             let lt: i32 = row.try_get("lt").unwrap_or(0);
             Json(json!({
@@ -133,7 +142,11 @@ pub async fn get_handler(
         .into_response(),
         Err(error) => {
             tracing::error!(%error, "lurker-tax-settings GET DB-Fehler");
-            (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({ "error": "db" }))).into_response()
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(json!({ "error": "db" })),
+            )
+                .into_response()
         }
     }
 }
@@ -157,33 +170,34 @@ pub async fn post_handler(
 
     let result = if !user_id.is_empty() {
         // Partner (kennt User-ID) → Upsert auf den PK.
-        sqlx::query(
+        sqlx::query!(
             "INSERT INTO streamer_plans (twitch_user_id, twitch_login, lurker_tax_enabled) \
              VALUES ($1, $2, $3) \
              ON CONFLICT (twitch_user_id) \
              DO UPDATE SET lurker_tax_enabled = EXCLUDED.lurker_tax_enabled, \
                            twitch_login = COALESCE(streamer_plans.twitch_login, EXCLUDED.twitch_login)",
+            user_id,
+            login,
+            flag
         )
-        .bind(&user_id)
-        .bind(&login)
-        .bind(flag)
         .execute(&pool)
         .await
     } else {
         // Admin/Localhost über Login (keine User-ID) → reines UPDATE.
-        sqlx::query(
+        sqlx::query!(
             "UPDATE streamer_plans SET lurker_tax_enabled = $2 \
               WHERE LOWER(COALESCE(twitch_login, '')) = $1",
+            login,
+            flag
         )
-        .bind(&login)
-        .bind(flag)
         .execute(&pool)
         .await
     };
 
     match result {
         Ok(res) if res.rows_affected() > 0 => {
-            Json(json!({ "ok": true, "lurker_tax_enabled": body.lurker_tax_enabled })).into_response()
+            Json(json!({ "ok": true, "lurker_tax_enabled": body.lurker_tax_enabled }))
+                .into_response()
         }
         // Login-UPDATE ohne Treffer (Admin adressiert unbekannten Plan) → 404.
         Ok(_) => (
@@ -193,7 +207,11 @@ pub async fn post_handler(
             .into_response(),
         Err(error) => {
             tracing::error!(%error, "lurker-tax-settings POST DB-Fehler");
-            (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({ "error": "db" }))).into_response()
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(json!({ "error": "db" })),
+            )
+                .into_response()
         }
     }
 }
@@ -206,12 +224,28 @@ mod tests {
 
     async fn make_pool(schema: &str) -> Option<PgPool> {
         let dsn = std::env::var("TB_TEST_DATABASE_URL").ok()?;
-        let admin = PgPoolOptions::new().max_connections(1).connect(&dsn).await.unwrap();
-        sqlx::query(&format!("DROP SCHEMA IF EXISTS {schema} CASCADE")).execute(&admin).await.unwrap();
-        sqlx::query(&format!("CREATE SCHEMA {schema}")).execute(&admin).await.unwrap();
+        let admin = PgPoolOptions::new()
+            .max_connections(1)
+            .connect(&dsn)
+            .await
+            .unwrap();
+        sqlx::query(&format!("DROP SCHEMA IF EXISTS {schema} CASCADE"))
+            .execute(&admin)
+            .await
+            .unwrap();
+        sqlx::query(&format!("CREATE SCHEMA {schema}"))
+            .execute(&admin)
+            .await
+            .unwrap();
         admin.close().await;
-        let opts = PgConnectOptions::from_str(&dsn).unwrap().options([("search_path", schema)]);
-        let pool = PgPoolOptions::new().max_connections(2).connect_with(opts).await.unwrap();
+        let opts = PgConnectOptions::from_str(&dsn)
+            .unwrap()
+            .options([("search_path", schema)]);
+        let pool = PgPoolOptions::new()
+            .max_connections(2)
+            .connect_with(opts)
+            .await
+            .unwrap();
         sqlx::query(
             "CREATE TABLE streamer_plans (twitch_user_id TEXT PRIMARY KEY, twitch_login TEXT, \
              plan_name TEXT DEFAULT 'free' NOT NULL, lurker_tax_enabled INTEGER DEFAULT 0 NOT NULL)",
@@ -237,15 +271,25 @@ mod tests {
     async fn body_of(resp: Response) -> (StatusCode, serde_json::Value) {
         let status = resp.status();
         let bytes = axum::body::to_bytes(resp.into_body(), 65536).await.unwrap();
-        (status, serde_json::from_slice(&bytes).unwrap_or(serde_json::Value::Null))
+        (
+            status,
+            serde_json::from_slice(&bytes).unwrap_or(serde_json::Value::Null),
+        )
     }
 
     #[tokio::test]
     async fn default_aus_und_partner_toggle_roundtrip() {
-        let Some(pool) = make_pool("t_lurkertax").await else { return };
+        let Some(pool) = make_pool("t_lurkertax").await else {
+            return;
+        };
         // Fresh: kein Plan-Eintrag → default false.
         let (s, j) = body_of(
-            get_handler(partner("nani", "42"), State(pool.clone()), Query(LurkerTaxQuery::default())).await,
+            get_handler(
+                partner("nani", "42"),
+                State(pool.clone()),
+                Query(LurkerTaxQuery::default()),
+            )
+            .await,
         )
         .await;
         assert_eq!(s, StatusCode::OK);
@@ -257,7 +301,9 @@ mod tests {
                 partner("nani", "42"),
                 State(pool.clone()),
                 Query(LurkerTaxQuery::default()),
-                Json(LurkerTaxUpdate { lurker_tax_enabled: true }),
+                Json(LurkerTaxUpdate {
+                    lurker_tax_enabled: true,
+                }),
             )
             .await,
         )
@@ -267,7 +313,12 @@ mod tests {
 
         // GET liest AN.
         let (_s, j) = body_of(
-            get_handler(partner("nani", "42"), State(pool.clone()), Query(LurkerTaxQuery::default())).await,
+            get_handler(
+                partner("nani", "42"),
+                State(pool.clone()),
+                Query(LurkerTaxQuery::default()),
+            )
+            .await,
         )
         .await;
         assert_eq!(j["lurker_tax_enabled"], true);
@@ -278,7 +329,9 @@ mod tests {
                 partner("nani", "42"),
                 State(pool.clone()),
                 Query(LurkerTaxQuery::default()),
-                Json(LurkerTaxUpdate { lurker_tax_enabled: false }),
+                Json(LurkerTaxUpdate {
+                    lurker_tax_enabled: false,
+                }),
             )
             .await,
         )
@@ -289,11 +342,18 @@ mod tests {
     /// P2.109: Readiness-Feld spiegelt den `moderator:read:chatters`-Scope wider.
     #[tokio::test]
     async fn readiness_feld_spiegelt_scope() {
-        let Some(pool) = make_pool("t_lurkertax_scope").await else { return };
+        let Some(pool) = make_pool("t_lurkertax_scope").await else {
+            return;
+        };
 
         // Ohne raid_auth-Eintrag → Scope fehlt → false.
         let (s, j) = body_of(
-            get_handler(partner("nani", "42"), State(pool.clone()), Query(LurkerTaxQuery::default())).await,
+            get_handler(
+                partner("nani", "42"),
+                State(pool.clone()),
+                Query(LurkerTaxQuery::default()),
+            )
+            .await,
         )
         .await;
         assert_eq!(s, StatusCode::OK);
@@ -308,7 +368,12 @@ mod tests {
         .await
         .unwrap();
         let (_s, j) = body_of(
-            get_handler(partner("nani", "42"), State(pool.clone()), Query(LurkerTaxQuery::default())).await,
+            get_handler(
+                partner("nani", "42"),
+                State(pool.clone()),
+                Query(LurkerTaxQuery::default()),
+            )
+            .await,
         )
         .await;
         assert_eq!(j["has_moderator_read_chatters"], true);
@@ -319,7 +384,12 @@ mod tests {
             .await
             .unwrap();
         let (_s, j) = body_of(
-            get_handler(partner("nani", "42"), State(pool), Query(LurkerTaxQuery::default())).await,
+            get_handler(
+                partner("nani", "42"),
+                State(pool),
+                Query(LurkerTaxQuery::default()),
+            )
+            .await,
         )
         .await;
         assert_eq!(j["has_moderator_read_chatters"], false);
@@ -327,15 +397,27 @@ mod tests {
 
     #[tokio::test]
     async fn unauth_401_und_admin_braucht_streamer() {
-        let Some(pool) = make_pool("t_lurkertax_auth").await else { return };
+        let Some(pool) = make_pool("t_lurkertax_auth").await else {
+            return;
+        };
         let (s, _) = body_of(
-            get_handler(DashboardAuthLevel::None, State(pool.clone()), Query(LurkerTaxQuery::default())).await,
+            get_handler(
+                DashboardAuthLevel::None,
+                State(pool.clone()),
+                Query(LurkerTaxQuery::default()),
+            )
+            .await,
         )
         .await;
         assert_eq!(s, StatusCode::UNAUTHORIZED);
         // Admin ohne ?streamer= → 400.
         let (s, _) = body_of(
-            get_handler(DashboardAuthLevel::admin(), State(pool), Query(LurkerTaxQuery::default())).await,
+            get_handler(
+                DashboardAuthLevel::admin(),
+                State(pool),
+                Query(LurkerTaxQuery::default()),
+            )
+            .await,
         )
         .await;
         assert_eq!(s, StatusCode::BAD_REQUEST);

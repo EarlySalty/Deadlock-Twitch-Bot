@@ -1,0 +1,43 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT COUNT(DISTINCT sc.session_id) AS \"total_sessions!\",\n                  COALESCE(SUM(sc.messages), 0) AS \"total_messages!\",\n                  MIN(s.started_at) AS \"first_seen_at?\",\n                  MAX(COALESCE(s.ended_at, s.started_at)) AS \"last_seen_at?\"\n           FROM twitch_session_chatters sc\n           JOIN twitch_stream_sessions s ON s.id = sc.session_id\n           WHERE LOWER(sc.streamer_login) = $1 AND LOWER(sc.chatter_login) = $2\n             AND s.started_at >= $3\n             AND LOWER(sc.chatter_login) != ALL($4)",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "total_sessions!",
+        "type_info": "Int8"
+      },
+      {
+        "ordinal": 1,
+        "name": "total_messages!",
+        "type_info": "Int8"
+      },
+      {
+        "ordinal": 2,
+        "name": "first_seen_at?",
+        "type_info": "Timestamptz"
+      },
+      {
+        "ordinal": 3,
+        "name": "last_seen_at?",
+        "type_info": "Timestamptz"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Text",
+        "Text",
+        "Timestamptz",
+        "TextArray"
+      ]
+    },
+    "nullable": [
+      null,
+      null,
+      null,
+      null
+    ]
+  },
+  "hash": "57b69e935ae22ce44e6bef7b983294d0bb16b2402a1f4baca6358d9aec029346"
+}

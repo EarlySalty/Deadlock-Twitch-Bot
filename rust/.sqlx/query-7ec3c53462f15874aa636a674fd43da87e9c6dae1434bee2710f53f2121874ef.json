@@ -1,0 +1,28 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT winner AS \"winner?\", COUNT(*)::int8 AS \"n!\" FROM twitch_stream_report_ab_votes WHERE session_id = $1 GROUP BY winner",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "winner?",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 1,
+        "name": "n!",
+        "type_info": "Int8"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Int8"
+      ]
+    },
+    "nullable": [
+      false,
+      null
+    ]
+  },
+  "hash": "7ec3c53462f15874aa636a674fd43da87e9c6dae1434bee2710f53f2121874ef"
+}

@@ -1,0 +1,23 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT AVG(max_vc)::float8 AS \"r?\" FROM (\n                 SELECT MAX(viewer_count) AS max_vc FROM twitch_stats_category\n                 WHERE ts_utc >= $1 GROUP BY streamer HAVING AVG(viewer_count)::float8 <= $2\n             ) s",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "r?",
+        "type_info": "Float8"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Timestamptz",
+        "Float8"
+      ]
+    },
+    "nullable": [
+      null
+    ]
+  },
+  "hash": "c18a2f6d7cff7a43274120f9f2a07ce10b47c01ced5bdab08c96a46538190a7e"
+}

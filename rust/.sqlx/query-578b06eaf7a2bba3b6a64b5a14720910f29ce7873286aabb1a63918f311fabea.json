@@ -1,0 +1,24 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n            DELETE FROM dashboard_sessions\n            WHERE session_id = $1\n              AND session_type = $2\n              AND expires_at > $3\n            RETURNING payload_enc\n            ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "payload_enc",
+        "type_info": "Bytea"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Text",
+        "Text",
+        "Float8"
+      ]
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "578b06eaf7a2bba3b6a64b5a14720910f29ce7873286aabb1a63918f311fabea"
+}

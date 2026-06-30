@@ -1,0 +1,83 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT raid_id, from_broadcaster_login, to_broadcaster_login,\n                  viewer_count_sent::bigint AS \"viewer_count_sent!\", executed_at, target_session_id,\n                  chatters_at_plus5m::bigint AS chatters_at_plus5m, chatters_at_plus15m::bigint AS chatters_at_plus15m, chatters_at_plus30m::bigint AS chatters_at_plus30m,\n                  new_chatters::bigint AS new_chatters, known_from_raider::bigint AS known_from_raider\n           FROM twitch_raid_retention\n           WHERE executed_at >= $1 AND LOWER(from_broadcaster_login) = $2\n           ORDER BY executed_at DESC LIMIT 100",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "raid_id",
+        "type_info": "Int8"
+      },
+      {
+        "ordinal": 1,
+        "name": "from_broadcaster_login",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 2,
+        "name": "to_broadcaster_login",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 3,
+        "name": "viewer_count_sent!",
+        "type_info": "Int8"
+      },
+      {
+        "ordinal": 4,
+        "name": "executed_at",
+        "type_info": "Timestamptz"
+      },
+      {
+        "ordinal": 5,
+        "name": "target_session_id",
+        "type_info": "Int8"
+      },
+      {
+        "ordinal": 6,
+        "name": "chatters_at_plus5m",
+        "type_info": "Int8"
+      },
+      {
+        "ordinal": 7,
+        "name": "chatters_at_plus15m",
+        "type_info": "Int8"
+      },
+      {
+        "ordinal": 8,
+        "name": "chatters_at_plus30m",
+        "type_info": "Int8"
+      },
+      {
+        "ordinal": 9,
+        "name": "new_chatters",
+        "type_info": "Int8"
+      },
+      {
+        "ordinal": 10,
+        "name": "known_from_raider",
+        "type_info": "Int8"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Timestamptz",
+        "Text"
+      ]
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      null,
+      false,
+      true,
+      null,
+      null,
+      null,
+      null,
+      null
+    ]
+  },
+  "hash": "22ea9dbd588029dc22383a41deb811549d1f2cf5db5c54b8f5647d1fbde90e46"
+}

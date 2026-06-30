@@ -1,0 +1,19 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "INSERT INTO twitch_stream_report_ratings (session_id, streamer_login, report_variant, rating, comment, rated_by, updated_at) VALUES ($1, $2, $3, $4, $5, $6, NOW()) ON CONFLICT (session_id, report_variant, rated_by) DO UPDATE SET rating = EXCLUDED.rating, comment = EXCLUDED.comment, updated_at = NOW()",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Int8",
+        "Text",
+        "Text",
+        "Text",
+        "Text",
+        "Text"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "5e17c17c38e9e11180ea8631ea739b2117d651e46b5f74029438ada738cec2da"
+}

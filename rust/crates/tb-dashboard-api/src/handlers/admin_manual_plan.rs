@@ -135,7 +135,10 @@ fn csrf_cookie(headers: &axum::http::HeaderMap) -> (Option<String>, &'static str
     if let Some(c) = read(ADMIN_COOKIE_NAME).filter(|s| !s.is_empty()) {
         (Some(c), "discord_admin")
     } else {
-        (read(PARTNER_COOKIE_NAME).filter(|s| !s.is_empty()), "twitch")
+        (
+            read(PARTNER_COOKIE_NAME).filter(|s| !s.is_empty()),
+            "twitch",
+        )
     }
 }
 
@@ -189,15 +192,15 @@ async fn set_manual_plan(
     let (twitch_user_id, canonical_login) = resolve_streamer(pool, &normalized_login).await?;
 
     // Upsert-Identität (Python INSERT … ON CONFLICT) + Override-Update.
-    sqlx::query(
+    sqlx::query!(
         r#"
         INSERT INTO streamer_plans (twitch_user_id, twitch_login)
         VALUES ($1, $2)
         ON CONFLICT (twitch_user_id) DO UPDATE SET twitch_login = EXCLUDED.twitch_login
         "#,
+        &twitch_user_id,
+        &canonical_login
     )
-    .bind(&twitch_user_id)
-    .bind(&canonical_login)
     .execute(pool)
     .await
     .map_err(|e| {
@@ -205,7 +208,7 @@ async fn set_manual_plan(
         ManualPlanError::SaveFailed
     })?;
 
-    sqlx::query(
+    sqlx::query!(
         r#"
         UPDATE streamer_plans
         SET twitch_login = $1,
@@ -215,13 +218,13 @@ async fn set_manual_plan(
             manual_plan_updated_at = $5
         WHERE twitch_user_id = $6
         "#,
+        &canonical_login,
+        normalized_plan_id,
+        expires_at_iso.as_deref(),
+        &notes_value,
+        &updated_at_iso,
+        &twitch_user_id
     )
-    .bind(&canonical_login)
-    .bind(normalized_plan_id)
-    .bind(expires_at_iso.as_deref())
-    .bind(&notes_value)
-    .bind(&updated_at_iso)
-    .bind(&twitch_user_id)
     .execute(pool)
     .await
     .map_err(|e| {
@@ -247,7 +250,7 @@ async fn clear_manual_plan(pool: &PgPool, login: &str) -> Result<String, ManualP
     let updated_at_iso = now_iso();
     let (twitch_user_id, canonical_login) = resolve_streamer(pool, &normalized_login).await?;
 
-    sqlx::query(
+    sqlx::query!(
         r#"
         UPDATE streamer_plans
         SET manual_plan_id = NULL,
@@ -256,9 +259,9 @@ async fn clear_manual_plan(pool: &PgPool, login: &str) -> Result<String, ManualP
             manual_plan_updated_at = $1
         WHERE twitch_user_id = $2
         "#,
+        &updated_at_iso,
+        &twitch_user_id
     )
-    .bind(&updated_at_iso)
-    .bind(&twitch_user_id)
     .execute(pool)
     .await
     .map_err(|e| {
@@ -279,7 +282,8 @@ async fn clear_manual_plan(pool: &PgPool, login: &str) -> Result<String, ManualP
 /// (gemeinsame Funktion mit dem Webhook-Pfad P2.127/P2.128). Fehler werden nur
 /// geloggt — der Admin-Response hängt nicht davon ab.
 async fn refresh_partner_raid_score(pool: &PgPool, login: &str) {
-    if let Err(err) = tb_analytics::stripe::refresh_partner_raid_score_for_login(pool, login).await {
+    if let Err(err) = tb_analytics::stripe::refresh_partner_raid_score_for_login(pool, login).await
+    {
         tracing::warn!("manual_plan raid-score refresh fehlgeschlagen für {login}: {err}");
     }
 }
@@ -289,15 +293,15 @@ async fn resolve_streamer(
     pool: &PgPool,
     normalized_login: &str,
 ) -> Result<(String, String), ManualPlanError> {
-    let row: Option<(Option<String>, Option<String>)> = sqlx::query_as(
+    let row = sqlx::query!(
         r#"
         SELECT twitch_user_id, twitch_login
         FROM twitch_streamers_partner_state
         WHERE LOWER(twitch_login) = LOWER($1)
         LIMIT 1
         "#,
+        normalized_login
     )
-    .bind(normalized_login)
     .fetch_optional(pool)
     .await
     .map_err(|e| {
@@ -305,14 +309,15 @@ async fn resolve_streamer(
         ManualPlanError::SaveFailed
     })?;
 
-    let Some((user_id, db_login)) = row else {
+    let Some(row) = row else {
         return Err(ManualPlanError::UnknownStreamer);
     };
-    let twitch_user_id = user_id.unwrap_or_default().trim().to_string();
+    let twitch_user_id = row.twitch_user_id.unwrap_or_default().trim().to_string();
     if twitch_user_id.is_empty() {
         return Err(ManualPlanError::UserIdMissing);
     }
-    let canonical_login = db_login
+    let canonical_login = row
+        .twitch_login
         .map(|s| s.trim().to_string())
         .filter(|s| !s.is_empty())
         .unwrap_or_else(|| normalized_login.to_string());
@@ -435,7 +440,10 @@ mod tests {
             ManualPlanError::LoginRequired.user_message(""),
             "Bitte einen Twitch-Login angeben"
         );
-        assert_eq!(ManualPlanError::UnknownPlanId.user_message(""), "Unbekannte Plan-ID");
+        assert_eq!(
+            ManualPlanError::UnknownPlanId.user_message(""),
+            "Unbekannte Plan-ID"
+        );
     }
 
     // ── DB-Logik (env-gated über TB_TEST_DATABASE_URL) ──────────────────────
@@ -444,12 +452,28 @@ mod tests {
 
     async fn make_pool(schema: &str) -> Option<PgPool> {
         let dsn = std::env::var("TB_TEST_DATABASE_URL").ok()?;
-        let admin = PgPoolOptions::new().max_connections(1).connect(&dsn).await.unwrap();
-        sqlx::query(&format!("DROP SCHEMA IF EXISTS {schema} CASCADE")).execute(&admin).await.unwrap();
-        sqlx::query(&format!("CREATE SCHEMA {schema}")).execute(&admin).await.unwrap();
+        let admin = PgPoolOptions::new()
+            .max_connections(1)
+            .connect(&dsn)
+            .await
+            .unwrap();
+        sqlx::query(&format!("DROP SCHEMA IF EXISTS {schema} CASCADE"))
+            .execute(&admin)
+            .await
+            .unwrap();
+        sqlx::query(&format!("CREATE SCHEMA {schema}"))
+            .execute(&admin)
+            .await
+            .unwrap();
         admin.close().await;
-        let opts = PgConnectOptions::from_str(&dsn).unwrap().options([("search_path", schema)]);
-        let pool = PgPoolOptions::new().max_connections(2).connect_with(opts).await.unwrap();
+        let opts = PgConnectOptions::from_str(&dsn)
+            .unwrap()
+            .options([("search_path", schema)]);
+        let pool = PgPoolOptions::new()
+            .max_connections(2)
+            .connect_with(opts)
+            .await
+            .unwrap();
         // Minimal-Schema: View-Ersatz als Tabelle (Lookup-Quelle) + streamer_plans
         // + twitch_billing_subscriptions (resolve_plan_snapshot liest beide).
         for ddl in [
@@ -470,12 +494,20 @@ mod tests {
 
     #[tokio::test]
     async fn set_dann_clear_schreibt_streamer_plans() {
-        let Some(pool) = make_pool("t_manplan").await else { return };
+        let Some(pool) = make_pool("t_manplan").await else {
+            return;
+        };
 
         // SET: gültiger bezahlter Plan + Ablaufdatum.
-        let plan = set_manual_plan(&pool, "nanistream", "analysis_dashboard", "2026-12-31", "VIP")
-            .await
-            .expect("set ok");
+        let plan = set_manual_plan(
+            &pool,
+            "nanistream",
+            "analysis_dashboard",
+            "2026-12-31",
+            "VIP",
+        )
+        .await
+        .expect("set ok");
         // Effektiver Plan = der manuell gesetzte (aktiv, nicht abgelaufen).
         assert_eq!(plan, "analysis_dashboard");
 
@@ -490,7 +522,9 @@ mod tests {
         assert!(row.2.unwrap().starts_with("2026-12-31T23:59:59"));
 
         // CLEAR: Override entfernen → effektiver Plan fällt auf raid_free.
-        let plan = clear_manual_plan(&pool, "nanistream").await.expect("clear ok");
+        let plan = clear_manual_plan(&pool, "nanistream")
+            .await
+            .expect("clear ok");
         assert_eq!(plan, "raid_free");
         let cleared: (Option<String>, Option<String>) = sqlx::query_as(
             "SELECT manual_plan_id, manual_plan_notes FROM streamer_plans WHERE twitch_user_id='42'",
@@ -504,15 +538,23 @@ mod tests {
 
     #[tokio::test]
     async fn set_unbekannter_streamer_fehler() {
-        let Some(pool) = make_pool("t_manplan_unknown").await else { return };
-        let err = set_manual_plan(&pool, "gibtsnicht", "raid_boost", "", "").await.unwrap_err();
+        let Some(pool) = make_pool("t_manplan_unknown").await else {
+            return;
+        };
+        let err = set_manual_plan(&pool, "gibtsnicht", "raid_boost", "", "")
+            .await
+            .unwrap_err();
         assert!(matches!(err, ManualPlanError::UnknownStreamer));
     }
 
     #[tokio::test]
     async fn set_unbekannte_plan_id_fehler() {
-        let Some(pool) = make_pool("t_manplan_badplan").await else { return };
-        let err = set_manual_plan(&pool, "nanistream", "Premium_XXL", "", "").await.unwrap_err();
+        let Some(pool) = make_pool("t_manplan_badplan").await else {
+            return;
+        };
+        let err = set_manual_plan(&pool, "nanistream", "Premium_XXL", "", "")
+            .await
+            .unwrap_err();
         assert!(matches!(err, ManualPlanError::UnknownPlanId));
     }
 
@@ -521,9 +563,19 @@ mod tests {
     /// (derselbe) auf das Test-Schema zeigt.
     async fn make_pool_with_scores(schema: &str) -> Option<PgPool> {
         let dsn = std::env::var("TB_TEST_DATABASE_URL").ok()?;
-        let admin = PgPoolOptions::new().max_connections(1).connect(&dsn).await.unwrap();
-        sqlx::query(&format!("DROP SCHEMA IF EXISTS {schema} CASCADE")).execute(&admin).await.unwrap();
-        sqlx::query(&format!("CREATE SCHEMA {schema}")).execute(&admin).await.unwrap();
+        let admin = PgPoolOptions::new()
+            .max_connections(1)
+            .connect(&dsn)
+            .await
+            .unwrap();
+        sqlx::query(&format!("DROP SCHEMA IF EXISTS {schema} CASCADE"))
+            .execute(&admin)
+            .await
+            .unwrap();
+        sqlx::query(&format!("CREATE SCHEMA {schema}"))
+            .execute(&admin)
+            .await
+            .unwrap();
         admin.close().await;
         let schema_owned = schema.to_string();
         let pool = PgPoolOptions::new()
@@ -531,7 +583,10 @@ mod tests {
             .after_connect(move |conn, _| {
                 let schema = schema_owned.clone();
                 Box::pin(async move {
-                    sqlx::query(&format!("SET search_path TO {schema}")).execute(conn).await.map(|_| ())
+                    sqlx::query(&format!("SET search_path TO {schema}"))
+                        .execute(conn)
+                        .await
+                        .map(|_| ())
                 })
             })
             .connect(&dsn)
@@ -569,7 +624,9 @@ mod tests {
     /// neu berechnet werden (Boost-Multiplikator > 1.0 sofort wirksam).
     #[tokio::test]
     async fn set_manual_plan_refreshes_raid_score() {
-        let Some(pool) = make_pool_with_scores("t_manplan_score").await else { return };
+        let Some(pool) = make_pool_with_scores("t_manplan_score").await else {
+            return;
+        };
         // raid_boost greift im Refresher über streamer_plans.raid_boost_enabled.
         // set_manual_plan setzt manual_plan_id; für den Boost-Flag im Refresher
         // setzen wir raid_boost_enabled direkt (Entitlement-Auflösung ist eigene
@@ -579,10 +636,14 @@ mod tests {
             .expect("set ok");
         assert_eq!(plan, "raid_boost");
         sqlx::query("UPDATE streamer_plans SET raid_boost_enabled = 1 WHERE twitch_user_id = '77'")
-            .execute(&pool).await.unwrap();
+            .execute(&pool)
+            .await
+            .unwrap();
         // Refresh erneut auslösen (clear→set würde Score erneut schreiben); wir
         // rufen den Refresh-Pfad direkt über einen zweiten set auf.
-        let _ = set_manual_plan(&pool, "booststreamer", "raid_boost", "", "").await.unwrap();
+        let _ = set_manual_plan(&pool, "booststreamer", "raid_boost", "", "")
+            .await
+            .unwrap();
 
         let row: (String, f64) = sqlx::query_as(
             "SELECT last_computed_at, raid_boost_multiplier FROM twitch_partner_raid_scores WHERE twitch_user_id='77'",

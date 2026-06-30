@@ -81,27 +81,27 @@ pub async fn follower_funnel_handler(
     let since: DateTime<Utc> = Utc::now() - Duration::days(days as i64);
 
     // ── 1. Session-Stats ─────────────────────────────────────────────────────
-    let stats = sqlx::query(
+    let stats = sqlx::query!(
         r#"SELECT
-               COUNT(*) AS session_count,
-               COALESCE(SUM(s.duration_seconds), 0)::float8 AS total_duration,
-               AVG(s.avg_viewers) AS avg_viewers,
+               COUNT(*) AS "session_count!",
+               COALESCE(SUM(s.duration_seconds), 0)::float8 AS "total_duration!",
+               AVG(s.avg_viewers) AS "avg_viewers?",
                SUM(CASE WHEN s.follower_delta IS NOT NULL
                         AND NOT (s.followers_end = 0 AND s.followers_start > 0)
-                        THEN s.follower_delta ELSE 0 END) AS net_followers,
+                        THEN s.follower_delta ELSE 0 END) AS "net_followers?",
                SUM(CASE WHEN s.follower_delta > 0
                         AND NOT (s.followers_end = 0 AND s.followers_start > 0)
-                        THEN s.follower_delta ELSE 0 END) AS gained_followers,
+                        THEN s.follower_delta ELSE 0 END) AS "gained_followers?",
                COUNT(CASE WHEN s.follower_delta IS NOT NULL
                         AND NOT (s.followers_end = 0 AND s.followers_start > 0)
-                        THEN 1 END) AS follower_valid_samples
+                        THEN 1 END) AS "follower_valid_samples!"
            FROM twitch_stream_sessions s
            WHERE s.started_at >= $1
              AND LOWER(s.streamer_login) = $2
              AND s.ended_at IS NOT NULL"#,
+        since,
+        &streamer
     )
-    .bind(since)
-    .bind(&streamer)
     .fetch_one(&pool)
     .await;
 
@@ -113,7 +113,7 @@ pub async fn follower_funnel_handler(
         Ok(r) => r,
     };
 
-    let session_count: i64 = stats.try_get("session_count").unwrap_or(0);
+    let session_count = stats.session_count;
     if session_count == 0 {
         return Json(json!({
             "uniqueViewers": 0, "returningViewers": 0,
@@ -126,10 +126,10 @@ pub async fn follower_funnel_handler(
         .into_response();
     }
 
-    let total_duration: f64 = stats.try_get::<f64, _>("total_duration").unwrap_or(0.0);
-    let net_followers: i64 = stats.try_get("net_followers").unwrap_or(0);
-    let gained_followers: i64 = stats.try_get("gained_followers").unwrap_or(0);
-    let follower_valid_samples: i64 = stats.try_get("follower_valid_samples").unwrap_or(0);
+    let total_duration = stats.total_duration;
+    let net_followers = stats.net_followers.unwrap_or(0);
+    let gained_followers = stats.gained_followers.unwrap_or(0);
+    let follower_valid_samples = stats.follower_valid_samples;
 
     // ── 2. Chatter-Stats (bot-bereinigt) ─────────────────────────────────────
     // $1=since, $2=streamer_login, $3..$N+2 = Bot-Logins
@@ -175,8 +175,8 @@ pub async fn follower_funnel_handler(
         .unwrap_or(0);
 
     // ── 3. Follow-Events während Streams ─────────────────────────────────────
-    let follow_row = sqlx::query(
-        r#"SELECT COUNT(DISTINCT fe.id) AS follows_during_stream
+    let follow_row = sqlx::query!(
+        r#"SELECT COUNT(DISTINCT fe.id) AS "follows_during_stream!"
            FROM twitch_follow_events fe
            JOIN twitch_stream_sessions ss
                ON ss.streamer_login = fe.streamer_login
@@ -184,38 +184,32 @@ pub async fn follower_funnel_handler(
            WHERE LOWER(ss.streamer_login) = $1
              AND ss.started_at >= $2
              AND ss.ended_at IS NOT NULL"#,
+        &streamer,
+        since
     )
-    .bind(&streamer)
-    .bind(since)
     .fetch_optional(&pool)
     .await
     .unwrap_or(None);
     let follows_during_stream: i64 = follow_row
         .as_ref()
-        .and_then(|r| r.try_get("follows_during_stream").ok())
+        .map(|r| r.follows_during_stream)
         .unwrap_or(0);
 
     // ── 4. Raid-Inflow ────────────────────────────────────────────────────────
-    let raid_row = sqlx::query(
-        r#"SELECT COUNT(*) AS raid_count, COALESCE(SUM(viewer_count), 0) AS raid_viewers
+    let raid_row = sqlx::query!(
+        r#"SELECT COUNT(*) AS "raid_count!", COALESCE(SUM(viewer_count), 0) AS "raid_viewers!"
            FROM twitch_raid_history
            WHERE LOWER(to_broadcaster_login) = $1
              AND executed_at >= $2
              AND COALESCE(success, FALSE) IS TRUE"#,
+        &streamer,
+        since
     )
-    .bind(&streamer)
-    .bind(since)
     .fetch_optional(&pool)
     .await
     .unwrap_or(None);
-    let raid_count: i64 = raid_row
-        .as_ref()
-        .and_then(|r| r.try_get("raid_count").ok())
-        .unwrap_or(0);
-    let raid_viewers: i64 = raid_row
-        .as_ref()
-        .and_then(|r| r.try_get("raid_viewers").ok())
-        .unwrap_or(0);
+    let raid_count: i64 = raid_row.as_ref().map(|r| r.raid_count).unwrap_or(0);
+    let raid_viewers: i64 = raid_row.as_ref().map(|r| r.raid_viewers).unwrap_or(0);
 
     // ── Arithmetik (identisch Python Z. 690–730) ──────────────────────────────
     let unique_viewers = if total_viewers_tracked > 0 {

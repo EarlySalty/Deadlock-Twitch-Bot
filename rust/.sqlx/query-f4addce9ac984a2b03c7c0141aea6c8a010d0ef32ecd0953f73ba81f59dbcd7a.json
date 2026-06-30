@@ -1,0 +1,28 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n        SELECT COUNT(*) AS \"messages!\", COUNT(DISTINCT chatter_login) AS \"chatters!\"\n        FROM twitch_chat_messages\n        WHERE streamer_login = $1\n          AND message_ts >= now() - INTERVAL '1 hour'\n        ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "messages!",
+        "type_info": "Int8"
+      },
+      {
+        "ordinal": 1,
+        "name": "chatters!",
+        "type_info": "Int8"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Text"
+      ]
+    },
+    "nullable": [
+      null,
+      null
+    ]
+  },
+  "hash": "f4addce9ac984a2b03c7c0141aea6c8a010d0ef32ecd0953f73ba81f59dbcd7a"
+}

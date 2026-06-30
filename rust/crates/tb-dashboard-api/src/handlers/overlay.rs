@@ -207,7 +207,9 @@ fn hero_icon_cache() -> &'static Mutex<HeroIconCache> {
 }
 
 fn lock_cache<T>(cache: &Mutex<T>) -> MutexGuard<'_, T> {
-    cache.lock().unwrap_or_else(|poisoned| poisoned.into_inner())
+    cache
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
 }
 
 fn deadlock_assets_base_url() -> String {
@@ -415,8 +417,10 @@ async fn build_overlay_json(pool: &PgPool, login: &str, mode: &str) -> Value {
     let history = matches.filter(|value| value.linked != Some(false));
     let live = live.filter(|value| value.linked != Some(false));
 
-    let raw_matches: &[SteamMatch] =
-        history.as_ref().map(|value| value.matches.as_slice()).unwrap_or(&[]);
+    let raw_matches: &[SteamMatch] = history
+        .as_ref()
+        .map(|value| value.matches.as_slice())
+        .unwrap_or(&[]);
     // Modus-Filter wirkt NUR auf match-abgeleitete Stats, nicht auf rank/mmr-trend/live.
     let match_list = filter_by_mode(raw_matches, mode);
     let match_list = match_list.as_slice();
@@ -483,21 +487,20 @@ async fn build_overlay_json(pool: &PgPool, login: &str, mode: &str) -> Value {
 }
 
 async fn resolve_discord_id(pool: &PgPool, login: &str) -> Result<Option<String>, sqlx::Error> {
-    let row: Option<(Option<String>,)> = sqlx::query_as(
-        "SELECT i.discord_user_id::text \
+    let row: Option<String> = sqlx::query_scalar!(
+        "SELECT i.discord_user_id::text AS \"discord_user_id!\" \
          FROM twitch_streamers s \
          JOIN twitch_streamer_identities i ON i.twitch_user_id = s.twitch_user_id \
          WHERE LOWER(s.twitch_login) = $1 \
            AND COALESCE(s.twitch_user_id, '') <> '' \
            AND COALESCE(i.discord_user_id::text, '') <> '' \
          LIMIT 1",
+        login
     )
-    .bind(login)
     .fetch_optional(pool)
     .await?;
 
     Ok(row
-        .and_then(|(discord_id,)| discord_id)
         .map(|discord_id| discord_id.trim().to_string())
         .filter(|discord_id| !discord_id.is_empty()))
 }
@@ -677,7 +680,14 @@ fn most_played(scored: &[&SteamMatch]) -> (Option<String>, Option<i64>) {
 fn summarize_today(matches: &[SteamMatch], now_utc: DateTime<Utc>) -> Option<TodaySummary> {
     let now_berlin = now_utc.with_timezone(&Berlin);
     let start_of_day = Berlin
-        .with_ymd_and_hms(now_berlin.year(), now_berlin.month(), now_berlin.day(), 0, 0, 0)
+        .with_ymd_and_hms(
+            now_berlin.year(),
+            now_berlin.month(),
+            now_berlin.day(),
+            0,
+            0,
+            0,
+        )
         .single()?;
     let cutoff = start_of_day.with_timezone(&Utc).timestamp();
 
@@ -729,7 +739,12 @@ fn build_recent(matches: &[SteamMatch], n: usize) -> Vec<RecentMatch> {
         .into_iter()
         .take(cap)
         .map(|entry| RecentMatch {
-            result: if entry.match_result == Some(1) { "win" } else { "loss" }.to_string(),
+            result: if entry.match_result == Some(1) {
+                "win"
+            } else {
+                "loss"
+            }
+            .to_string(),
             hero: clean_string(&entry.hero_name),
             hero_icon: None,
         })
@@ -1511,8 +1526,8 @@ mod tests {
     use crate::build_public_router;
 
     use super::{
-        build_recent, cached_or_compute, compute_kd, filter_by_mode, normalize_mode, scored_matches,
-        summarize_matches, summarize_today, OverlayCache, RecentMatch, SteamMatch,
+        build_recent, cached_or_compute, compute_kd, filter_by_mode, normalize_mode,
+        scored_matches, summarize_matches, summarize_today, OverlayCache, RecentMatch, SteamMatch,
     };
     use chrono::TimeZone;
 
@@ -1570,14 +1585,38 @@ mod tests {
     fn summarize_today_zaehlt_nur_heutige_gewertete_matches() {
         let matches = vec![
             // heute, neueste zuerst
-            sm(Some(1), false, BERLIN_TODAY_START_UTC + 3_600, "Haze", 0, 0, 0),
-            sm(Some(1), false, BERLIN_TODAY_START_UTC + 100, "Haze", 0, 0, 0),
+            sm(
+                Some(1),
+                false,
+                BERLIN_TODAY_START_UTC + 3_600,
+                "Haze",
+                0,
+                0,
+                0,
+            ),
+            sm(
+                Some(1),
+                false,
+                BERLIN_TODAY_START_UTC + 100,
+                "Haze",
+                0,
+                0,
+                0,
+            ),
             sm(Some(0), false, BERLIN_TODAY_START_UTC, "Haze", 0, 0, 0),
             // not_scored heute -> raus
             sm(Some(1), true, BERLIN_TODAY_START_UTC + 200, "Haze", 0, 0, 0),
             // gestern (vor Tagesbeginn) -> raus
             sm(Some(1), false, BERLIN_TODAY_START_UTC - 1, "Haze", 0, 0, 0),
-            sm(Some(0), false, BERLIN_TODAY_START_UTC - 86_400, "Haze", 0, 0, 0),
+            sm(
+                Some(0),
+                false,
+                BERLIN_TODAY_START_UTC - 86_400,
+                "Haze",
+                0,
+                0,
+                0,
+            ),
         ];
 
         let today = summarize_today(&matches, now_berlin_noon()).unwrap();
@@ -1710,10 +1749,10 @@ mod tests {
     #[test]
     fn filter_by_mode_standard_schliesst_brawl_aus() {
         let matches = vec![
-            sm_mode(Some(1), Some(1), "Haze"),    // Standard
-            sm_mode(Some(0), Some(4), "Abrams"),  // Brawl -> raus
+            sm_mode(Some(1), Some(1), "Haze"),     // Standard
+            sm_mode(Some(0), Some(4), "Abrams"),   // Brawl -> raus
             sm_mode(Some(1), Some(1), "Vindicta"), // Standard
-            sm_mode(Some(0), None, "Seven"),      // unbekannt -> zählt als Standard
+            sm_mode(Some(0), None, "Seven"),       // unbekannt -> zählt als Standard
         ];
         let filtered = filter_by_mode(&matches, "standard");
         let heroes: Vec<_> = filtered
@@ -1723,17 +1762,21 @@ mod tests {
         // Standard = alles außer Street Brawl: nur Abrams (Brawl) fällt raus.
         assert_eq!(
             heroes,
-            vec!["Haze".to_string(), "Vindicta".to_string(), "Seven".to_string()]
+            vec![
+                "Haze".to_string(),
+                "Vindicta".to_string(),
+                "Seven".to_string()
+            ]
         );
     }
 
     #[test]
     fn filter_by_mode_brawl_schliesst_standard_aus() {
         let matches = vec![
-            sm_mode(Some(1), Some(1), "Haze"),    // Standard
-            sm_mode(Some(0), Some(4), "Abrams"),  // Brawl
-            sm_mode(Some(1), Some(4), "Seven"),   // Brawl
-            sm_mode(Some(0), None, "Vindicta"),   // unbekannt
+            sm_mode(Some(1), Some(1), "Haze"),   // Standard
+            sm_mode(Some(0), Some(4), "Abrams"), // Brawl
+            sm_mode(Some(1), Some(4), "Seven"),  // Brawl
+            sm_mode(Some(0), None, "Vindicta"),  // unbekannt
         ];
         let filtered = filter_by_mode(&matches, "brawl");
         let heroes: Vec<_> = filtered
@@ -1746,9 +1789,9 @@ mod tests {
     #[test]
     fn filter_by_mode_all_enthaelt_beide_und_unbekannte() {
         let matches = vec![
-            sm_mode(Some(1), Some(1), "Haze"),  // Standard
+            sm_mode(Some(1), Some(1), "Haze"),   // Standard
             sm_mode(Some(0), Some(4), "Abrams"), // Brawl
-            sm_mode(Some(1), None, "Seven"),    // unbekannt
+            sm_mode(Some(1), None, "Seven"),     // unbekannt
         ];
         // all
         assert_eq!(filter_by_mode(&matches, "all").len(), 3);
@@ -1853,18 +1896,13 @@ mod tests {
         ));
         started_rx.await.unwrap();
 
-        let second = tokio::spawn(cached_or_compute(
-            cache,
-            key,
-            Duration::from_secs(30),
-            {
-                let counter = Arc::clone(&counter);
-                move || async move {
-                    counter.fetch_add(1, Ordering::SeqCst);
-                    json!({ "value": "second" })
-                }
-            },
-        ));
+        let second = tokio::spawn(cached_or_compute(cache, key, Duration::from_secs(30), {
+            let counter = Arc::clone(&counter);
+            move || async move {
+                counter.fetch_add(1, Ordering::SeqCst);
+                json!({ "value": "second" })
+            }
+        }));
         sleep(Duration::from_millis(30)).await;
         assert!(
             !second.is_finished(),
@@ -2313,8 +2351,17 @@ mod tests {
     fn overlay_html_enthaelt_alle_modul_flags() {
         let html = super::OVERLAY_HTML;
         for flag in [
-            "header", "rank", "winrate", "today", "streak", "kd", "lastmatch", "mostplayed",
-            "recent", "live", "branding",
+            "header",
+            "rank",
+            "winrate",
+            "today",
+            "streak",
+            "kd",
+            "lastmatch",
+            "mostplayed",
+            "recent",
+            "live",
+            "branding",
         ] {
             assert!(
                 html.contains(&format!("flag('{flag}',")),

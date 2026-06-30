@@ -1,0 +1,29 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n            SELECT p.twitch_login, p.twitch_user_id\n            FROM twitch_partners p\n            WHERE LOWER(COALESCE(p.technical_pause_reason, '')) <> 'blocked'\n              AND (\n                  LOWER(p.twitch_login) = LOWER($1)\n                  OR ($2 <> '' AND p.twitch_user_id = $2)\n              )\n            ORDER BY CASE\n                WHEN COALESCE(p.status, '') = 'active' THEN 0\n                WHEN COALESCE(p.status, '') = 'archived' THEN 1\n                WHEN COALESCE(p.status, '') = 'departnered' THEN 2\n                ELSE 3\n            END,\n            COALESCE(p.departnered_at, p.admin_archived_at, p.partnered_at) DESC\n            LIMIT 1\n            ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "twitch_login",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 1,
+        "name": "twitch_user_id",
+        "type_info": "Text"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Text",
+        "Text"
+      ]
+    },
+    "nullable": [
+      false,
+      false
+    ]
+  },
+  "hash": "cd4ef221702e44d18a2d2d5e555d9365adefdb0fb14eb45e02e6cc97525e0886"
+}

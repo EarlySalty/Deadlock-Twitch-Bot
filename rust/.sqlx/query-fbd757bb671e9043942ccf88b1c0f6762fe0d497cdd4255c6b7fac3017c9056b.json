@@ -1,0 +1,32 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n        SELECT\n            s.twitch_login                       AS twitch_login,\n            l.last_viewer_count                  AS \"last_viewer_count?\",\n            l.active_session_id                  AS \"active_session_id?\"\n        FROM twitch_streamers s\n        LEFT JOIN twitch_live_state l ON s.twitch_user_id = l.twitch_user_id\n        WHERE NOT EXISTS (\n            SELECT 1 FROM twitch_partners p\n            WHERE p.twitch_user_id = s.twitch_user_id\n               OR LOWER(p.twitch_login) = LOWER(s.twitch_login)\n        )\n        ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "twitch_login",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 1,
+        "name": "last_viewer_count?",
+        "type_info": "Int4"
+      },
+      {
+        "ordinal": 2,
+        "name": "active_session_id?",
+        "type_info": "Int8"
+      }
+    ],
+    "parameters": {
+      "Left": []
+    },
+    "nullable": [
+      false,
+      true,
+      true
+    ]
+  },
+  "hash": "fbd757bb671e9043942ccf88b1c0f6762fe0d497cdd4255c6b7fac3017c9056b"
+}

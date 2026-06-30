@@ -1,0 +1,28 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n        SELECT COUNT(*) AS \"connected!\", SUM(CASE WHEN messages = 0 THEN 1 ELSE 0 END) AS \"lurkers?\"\n        FROM twitch_session_chatters\n        WHERE session_id = $1\n        ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "connected!",
+        "type_info": "Int8"
+      },
+      {
+        "ordinal": 1,
+        "name": "lurkers?",
+        "type_info": "Int8"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Int8"
+      ]
+    },
+    "nullable": [
+      null,
+      null
+    ]
+  },
+  "hash": "622d9291f76bee6bd30bc24cfb133110d05a78a391e11c0a5b50b2b0f1b06f26"
+}

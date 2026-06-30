@@ -1,0 +1,23 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT COUNT(DISTINCT fe.id) AS \"follows_during_stream!\"\n           FROM twitch_follow_events fe\n           JOIN twitch_stream_sessions ss\n               ON ss.streamer_login = fe.streamer_login\n              AND fe.followed_at BETWEEN ss.started_at AND COALESCE(ss.ended_at, NOW())\n           WHERE LOWER(ss.streamer_login) = $1\n             AND ss.started_at >= $2\n             AND ss.ended_at IS NOT NULL",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "follows_during_stream!",
+        "type_info": "Int8"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Text",
+        "Timestamptz"
+      ]
+    },
+    "nullable": [
+      null
+    ]
+  },
+  "hash": "dc31de056f11ff44ed54eab9928db3578e3d7e9897da65abe3ae5838009767eb"
+}

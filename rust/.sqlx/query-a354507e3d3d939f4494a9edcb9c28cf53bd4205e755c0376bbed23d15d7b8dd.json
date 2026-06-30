@@ -1,0 +1,15 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n        INSERT INTO streamer_plans (twitch_user_id, twitch_login)\n        VALUES ($1, $2)\n        ON CONFLICT (twitch_user_id) DO UPDATE SET twitch_login = EXCLUDED.twitch_login\n        ",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Text",
+        "Text"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "a354507e3d3d939f4494a9edcb9c28cf53bd4205e755c0376bbed23d15d7b8dd"
+}

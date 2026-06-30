@@ -1,0 +1,35 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT EXTRACT(HOUR FROM (started_at AT TIME ZONE 'UTC'))::int AS \"hour!\",\n                AVG(avg_viewers) AS \"avg_v?\",\n                COUNT(*) AS \"cnt!\"\n         FROM twitch_stream_sessions\n         WHERE started_at >= $1 AND LOWER(streamer_login) = $2 AND ended_at IS NOT NULL\n         GROUP BY 1",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "hour!",
+        "type_info": "Int4"
+      },
+      {
+        "ordinal": 1,
+        "name": "avg_v?",
+        "type_info": "Float8"
+      },
+      {
+        "ordinal": 2,
+        "name": "cnt!",
+        "type_info": "Int8"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Timestamptz",
+        "Text"
+      ]
+    },
+    "nullable": [
+      null,
+      null,
+      null
+    ]
+  },
+  "hash": "b0833c2bbbe562b0d5aac8399f379e9f1e0722c4f038b6620e44bb1a61620182"
+}

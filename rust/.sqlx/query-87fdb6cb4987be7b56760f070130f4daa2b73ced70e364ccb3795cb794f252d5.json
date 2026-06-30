@@ -1,0 +1,36 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT LOWER(sc.chatter_login) AS \"login!\",\n                  COUNT(DISTINCT sc.session_id) AS \"window_sessions!\",\n                  COALESCE(SUM(sc.messages), 0) AS \"window_messages!\"\n           FROM twitch_session_chatters sc\n           JOIN twitch_stream_sessions s ON s.id = sc.session_id\n           WHERE LOWER(s.streamer_login) = $1 AND s.started_at >= $2\n             AND LOWER(sc.chatter_login) = ANY($3)\n           GROUP BY LOWER(sc.chatter_login)",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "login!",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 1,
+        "name": "window_sessions!",
+        "type_info": "Int8"
+      },
+      {
+        "ordinal": 2,
+        "name": "window_messages!",
+        "type_info": "Int8"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Text",
+        "Timestamptz",
+        "TextArray"
+      ]
+    },
+    "nullable": [
+      null,
+      null,
+      null
+    ]
+  },
+  "hash": "87fdb6cb4987be7b56760f070130f4daa2b73ced70e364ccb3795cb794f252d5"
+}

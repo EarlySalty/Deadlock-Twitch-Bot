@@ -61,12 +61,8 @@ pub async fn raid_requirements_handler(
         RequirementsResult::BadRequest(message) => {
             (StatusCode::BAD_REQUEST, message).into_response()
         }
-        RequirementsResult::Forbidden(message) => {
-            (StatusCode::FORBIDDEN, message).into_response()
-        }
-        RequirementsResult::NotFound(message) => {
-            (StatusCode::NOT_FOUND, message).into_response()
-        }
+        RequirementsResult::Forbidden(message) => (StatusCode::FORBIDDEN, message).into_response(),
+        RequirementsResult::NotFound(message) => (StatusCode::NOT_FOUND, message).into_response(),
         RequirementsResult::Unavailable(message) => {
             (StatusCode::SERVICE_UNAVAILABLE, message).into_response()
         }
@@ -76,21 +72,19 @@ pub async fn raid_requirements_handler(
 
 fn partner_login(auth: &DashboardAuthLevel) -> Option<String> {
     match auth {
-        DashboardAuthLevel::Partner { twitch_login, .. } => {
-            normalize_twitch_login(twitch_login)
-        }
+        DashboardAuthLevel::Partner { twitch_login, .. } => normalize_twitch_login(twitch_login),
         _ => None,
     }
 }
 
 async fn load_active_partner_login(pool: &PgPool, login: &str) -> Option<String> {
-    match sqlx::query_scalar::<_, String>(
+    match sqlx::query_scalar!(
         "SELECT twitch_login FROM twitch_partners \
          WHERE LOWER(twitch_login) = LOWER($1) \
            AND COALESCE(status, 'active') = 'active' \
          LIMIT 1",
+        login
     )
-    .bind(login)
     .fetch_optional(pool)
     .await
     {

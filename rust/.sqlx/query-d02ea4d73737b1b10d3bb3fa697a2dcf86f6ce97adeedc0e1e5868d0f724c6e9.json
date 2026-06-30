@@ -1,0 +1,22 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT twitch_user_id AS \"twitch_user_id!\" FROM twitch_streamers WHERE LOWER(twitch_login) = $1 AND COALESCE(twitch_user_id, '') <> '' LIMIT 1",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "twitch_user_id!",
+        "type_info": "Text"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Text"
+      ]
+    },
+    "nullable": [
+      true
+    ]
+  },
+  "hash": "d02ea4d73737b1b10d3bb3fa697a2dcf86f6ce97adeedc0e1e5868d0f724c6e9"
+}

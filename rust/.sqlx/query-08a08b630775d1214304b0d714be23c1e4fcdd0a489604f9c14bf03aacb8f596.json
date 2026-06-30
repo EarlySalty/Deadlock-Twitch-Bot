@@ -1,0 +1,22 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT twitch_login FROM twitch_partners WHERE LOWER(twitch_login) = LOWER($1) AND COALESCE(status, 'active') = 'active' LIMIT 1",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "twitch_login",
+        "type_info": "Text"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Text"
+      ]
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "08a08b630775d1214304b0d714be23c1e4fcdd0a489604f9c14bf03aacb8f596"
+}

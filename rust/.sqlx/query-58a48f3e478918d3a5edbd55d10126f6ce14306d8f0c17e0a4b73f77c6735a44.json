@@ -1,0 +1,34 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT twitch_user_id, archived_at, manual_partner_opt_out FROM twitch_partners_all_state WHERE LOWER(twitch_login) = LOWER($1) LIMIT 1",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "twitch_user_id",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 1,
+        "name": "archived_at",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 2,
+        "name": "manual_partner_opt_out",
+        "type_info": "Int4"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Text"
+      ]
+    },
+    "nullable": [
+      true,
+      true,
+      true
+    ]
+  },
+  "hash": "58a48f3e478918d3a5edbd55d10126f6ce14306d8f0c17e0a4b73f77c6735a44"
+}

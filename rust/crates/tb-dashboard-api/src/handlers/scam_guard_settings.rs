@@ -11,7 +11,7 @@ use axum::{
 };
 use serde::Deserialize;
 use serde_json::json;
-use sqlx::{PgPool, Row};
+use sqlx::PgPool;
 
 use crate::auth::level::DashboardAuthLevel;
 
@@ -72,31 +72,23 @@ pub async fn get_handler(
         Err(response) => return response,
     };
 
-    match sqlx::query(
-        "SELECT enabled, mode, threshold::float8 AS threshold, \
-                suggestion_floor::float8 AS suggestion_floor \
+    match sqlx::query!(
+        "SELECT enabled, mode, threshold::float8 AS \"threshold!\", \
+                suggestion_floor::float8 AS \"suggestion_floor!\" \
            FROM twitch_scam_guard_settings \
           WHERE channel_login = $1",
+        login
     )
-    .bind(&login)
     .fetch_optional(&pool)
     .await
     {
-        Ok(Some(row)) => {
-            let enabled: bool = row.try_get("enabled").unwrap_or(true);
-            let mode: String = row
-                .try_get("mode")
-                .unwrap_or_else(|_| "auto_ban".to_string());
-            let threshold: f64 = row.try_get("threshold").unwrap_or(0.90);
-            let suggestion_floor: f64 = row.try_get("suggestion_floor").unwrap_or(0.70);
-            Json(json!({
-                "enabled": enabled,
-                "mode": mode,
-                "threshold": threshold,
-                "suggestion_floor": suggestion_floor
-            }))
-            .into_response()
-        }
+        Ok(Some(row)) => Json(json!({
+            "enabled": row.enabled,
+            "mode": row.mode,
+            "threshold": row.threshold,
+            "suggestion_floor": row.suggestion_floor
+        }))
+        .into_response(),
         Ok(None) => Json(json!({
             "enabled": true,
             "mode": "auto_ban",
@@ -129,7 +121,7 @@ pub async fn post_handler(
         return error_response(StatusCode::BAD_REQUEST, "invalid thresholds");
     }
 
-    let result = sqlx::query(
+    let result = sqlx::query!(
         "INSERT INTO twitch_scam_guard_settings \
              (channel_login, enabled, mode, threshold, suggestion_floor) \
          VALUES ($1, $2, $3, $4, $5) \
@@ -138,12 +130,12 @@ pub async fn post_handler(
              mode = EXCLUDED.mode, \
              threshold = EXCLUDED.threshold, \
              suggestion_floor = EXCLUDED.suggestion_floor",
+        login,
+        body.enabled,
+        &body.mode,
+        body.threshold,
+        body.suggestion_floor
     )
-    .bind(&login)
-    .bind(body.enabled)
-    .bind(&body.mode)
-    .bind(body.threshold)
-    .bind(body.suggestion_floor)
     .execute(&pool)
     .await;
 

@@ -1,0 +1,32 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n        SELECT content AS \"content?\", streamer_login, message_ts\n        FROM twitch_chat_messages\n        WHERE message_ts >= now() - INTERVAL '6 hours'\n          AND content LIKE '%?%'\n          AND length(content) > 10\n        ORDER BY message_ts DESC\n        LIMIT 20\n        ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "content?",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 1,
+        "name": "streamer_login",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 2,
+        "name": "message_ts",
+        "type_info": "Timestamptz"
+      }
+    ],
+    "parameters": {
+      "Left": []
+    },
+    "nullable": [
+      true,
+      false,
+      false
+    ]
+  },
+  "hash": "293dfbf35e0a14ff5d4eabd63cb9dda1b1fa5da87defe3f6452c27c94aace9bc"
+}

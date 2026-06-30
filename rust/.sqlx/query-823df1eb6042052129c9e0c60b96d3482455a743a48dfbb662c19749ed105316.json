@@ -1,0 +1,41 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT COUNT(*) AS \"cnt!\",\n                COALESCE(SUM(duration_seconds),0)::bigint AS \"total_dur!\",\n                AVG(avg_viewers) AS \"avg_v?\",\n                COALESCE(SUM(COALESCE(avg_viewers,0)*GREATEST(COALESCE(duration_seconds,0),0)/60.0),0) AS \"vm_fallback!\"\n         FROM twitch_stream_sessions\n         WHERE started_at >= $1 AND LOWER(streamer_login) = $2 AND ended_at IS NOT NULL",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "cnt!",
+        "type_info": "Int8"
+      },
+      {
+        "ordinal": 1,
+        "name": "total_dur!",
+        "type_info": "Int8"
+      },
+      {
+        "ordinal": 2,
+        "name": "avg_v?",
+        "type_info": "Float8"
+      },
+      {
+        "ordinal": 3,
+        "name": "vm_fallback!",
+        "type_info": "Float8"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Timestamptz",
+        "Text"
+      ]
+    },
+    "nullable": [
+      null,
+      null,
+      null,
+      null
+    ]
+  },
+  "hash": "823df1eb6042052129c9e0c60b96d3482455a743a48dfbb662c19749ed105316"
+}

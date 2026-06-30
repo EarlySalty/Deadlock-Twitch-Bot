@@ -1,0 +1,50 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT stripe_event_id AS \"stripe_event_id?\", event_type AS \"event_type?\", object_id AS \"object_id?\", received_at AS \"received_at?\", livemode AS \"livemode?\", payload AS \"payload?\" FROM twitch_billing_events ORDER BY received_at DESC",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "stripe_event_id?",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 1,
+        "name": "event_type?",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 2,
+        "name": "object_id?",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 3,
+        "name": "received_at?",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 4,
+        "name": "livemode?",
+        "type_info": "Int4"
+      },
+      {
+        "ordinal": 5,
+        "name": "payload?",
+        "type_info": "Text"
+      }
+    ],
+    "parameters": {
+      "Left": []
+    },
+    "nullable": [
+      false,
+      false,
+      true,
+      false,
+      false,
+      false
+    ]
+  },
+  "hash": "57e7e91fc299767498f07f870b9e740844caa5b0c4b6407396587e6bbba49474"
+}

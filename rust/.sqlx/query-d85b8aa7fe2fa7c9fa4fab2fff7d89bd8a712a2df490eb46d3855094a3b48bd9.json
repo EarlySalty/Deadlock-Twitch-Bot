@@ -1,0 +1,70 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n            SELECT customer_reference, recipient_name, recipient_email, company_name,\n                   street_line1, postal_code, city, country_code, vat_id\n            FROM twitch_billing_profiles\n            WHERE LOWER(customer_reference) = LOWER($1)\n            LIMIT 1\n            ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "customer_reference",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 1,
+        "name": "recipient_name",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 2,
+        "name": "recipient_email",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 3,
+        "name": "company_name",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 4,
+        "name": "street_line1",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 5,
+        "name": "postal_code",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 6,
+        "name": "city",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 7,
+        "name": "country_code",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 8,
+        "name": "vat_id",
+        "type_info": "Text"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Text"
+      ]
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false
+    ]
+  },
+  "hash": "d85b8aa7fe2fa7c9fa4fab2fff7d89bd8a712a2df490eb46d3855094a3b48bd9"
+}

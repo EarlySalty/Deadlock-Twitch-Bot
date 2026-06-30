@@ -31,13 +31,12 @@ use serde::Deserialize;
 use serde_json::{json, Value};
 use sqlx::{postgres::PgRow, PgPool, Row};
 
-use crate::auth::level::{DashboardAuthLevel, is_local_request};
+use crate::auth::level::{is_local_request, DashboardAuthLevel};
 
 // ── Konstanten (Python api_v2.py:466-492) ────────────────────────────────────
 
 const DEFAULT_DAYS: i64 = 30;
-const BAN_REASON_KEYWORDS: &[&str] =
-    &["bot", "spam", "scam", "phish", "link", "promo", "werbung"];
+const BAN_REASON_KEYWORDS: &[&str] = &["bot", "spam", "scam", "phish", "link", "promo", "werbung"];
 const REQUIRED_SCOPES: &[&str] = &["channel:manage:raids"];
 
 const CHANGELOG_MAX_ENTRIES: i64 = 20;
@@ -664,8 +663,11 @@ async fn access_state_block(
             .unwrap_or(None)
             .map(|s| s.trim().to_string())
             .filter(|s| !s.is_empty());
-        let manual_opt_out =
-            row.try_get::<Option<i32>, _>("manual_partner_opt_out").unwrap_or(None).unwrap_or(0) != 0;
+        let manual_opt_out = row
+            .try_get::<Option<i32>, _>("manual_partner_opt_out")
+            .unwrap_or(None)
+            .unwrap_or(0)
+            != 0;
         technical_pause_reason = row
             .try_get::<Option<String>, _>("technical_pause_reason")
             .unwrap_or(None)
@@ -728,8 +730,11 @@ async fn access_state_block(
                 .unwrap_or(None)
                 .map(i64::from)
                 .unwrap_or(0);
-            let role_removed =
-                row.try_get::<Option<i32>, _>("role_removed").unwrap_or(None).unwrap_or(0) != 0;
+            let role_removed = row
+                .try_get::<Option<i32>, _>("role_removed")
+                .unwrap_or(None)
+                .unwrap_or(0)
+                != 0;
             let grace_active = grace_expires_at.is_some_and(|g| g > Utc::now()) && !role_removed;
             let blocking = matches!(
                 partner_status.as_str(),
@@ -777,7 +782,11 @@ async fn column_exists(pool: &PgPool, table: &str, column: &str) -> bool {
         LIMIT 1
     "#;
     matches!(
-        sqlx::query(sql).bind(table).bind(column).fetch_optional(pool).await,
+        sqlx::query(sql)
+            .bind(table)
+            .bind(column)
+            .fetch_optional(pool)
+            .await,
         Ok(Some(_))
     )
 }
@@ -1107,10 +1116,7 @@ async fn ban_events_block(pool: &PgPool, resolved_user_id: &str, since: DateTime
     // Bind-Positionen: $1=since, $2=user_id, $3.. = keyword-LIKEs.
     let mut clause_parts: Vec<String> = Vec::new();
     for i in 0..BAN_REASON_KEYWORDS.len() {
-        clause_parts.push(format!(
-            "LOWER(COALESCE(b.reason, '')) LIKE ${}",
-            i + 3
-        ));
+        clause_parts.push(format!("LOWER(COALESCE(b.reason, '')) LIKE ${}", i + 3));
     }
     let clause = if clause_parts.is_empty() {
         "1=0".to_string()
@@ -1566,7 +1572,10 @@ fn service_warning_severity(severity_code: &str) -> &'static str {
 /// `internal_home_parse_prefixed_int` (internal_home.py:73-83).
 fn parse_prefixed_int(token: &str, prefix: &str) -> Option<i64> {
     let normalized = token.trim();
-    if !normalized.to_lowercase().starts_with(&prefix.to_lowercase()) {
+    if !normalized
+        .to_lowercase()
+        .starts_with(&prefix.to_lowercase())
+    {
         return None;
     }
     let raw_value = normalized[prefix.len()..].trim();
@@ -1578,7 +1587,10 @@ fn parse_prefixed_int(token: &str, prefix: &str) -> Option<i64> {
 
 /// Python `str.split("\t", maxsplit)`: höchstens `maxsplit` Splits → maxsplit+1 Teile.
 fn split_tab(line: &str, maxsplit: usize) -> Vec<String> {
-    let mut out: Vec<String> = line.splitn(maxsplit + 1, '\t').map(|s| s.to_string()).collect();
+    let mut out: Vec<String> = line
+        .splitn(maxsplit + 1, '\t')
+        .map(|s| s.to_string())
+        .collect();
     // Python: bei genau maxsplit+0-Splits hängt es ein "" an, damit Index maxsplit existiert.
     // splitn liefert maxsplit+1 Teile nur wenn genug Tabs da sind; sonst weniger.
     // parse_*-Funktionen lesen Index `maxsplit` (= Content) tolerant via `part()`.
@@ -1664,10 +1676,8 @@ fn known_chat_bot_not_in_clause(
     own_login: &str,
     start_param: usize,
 ) -> (String, Vec<String>) {
-    let mut set: std::collections::BTreeSet<String> = KNOWN_CHAT_BOTS
-        .iter()
-        .map(|b| b.to_string())
-        .collect();
+    let mut set: std::collections::BTreeSet<String> =
+        KNOWN_CHAT_BOTS.iter().map(|b| b.to_string()).collect();
     let own = own_login.trim().to_lowercase();
     if !own.is_empty() {
         set.insert(own);
@@ -1710,8 +1720,15 @@ async fn compute_health_score(pool: &PgPool, login: &str) -> Option<Value> {
               WHERE LOWER(streamer_login) = LOWER($1)
         ) observed
     "#;
-    if let Ok(Some(row)) = sqlx::query(anchor_sql).bind(login).fetch_optional(pool).await {
-        if let Some(anchor) = row.try_get::<Option<DateTime<Utc>>, _>("anchor").unwrap_or(None) {
+    if let Ok(Some(row)) = sqlx::query(anchor_sql)
+        .bind(login)
+        .fetch_optional(pool)
+        .await
+    {
+        if let Some(anchor) = row
+            .try_get::<Option<DateTime<Utc>>, _>("anchor")
+            .unwrap_or(None)
+        {
             if anchor < now {
                 now = anchor;
             }
@@ -1728,7 +1745,12 @@ async fn compute_health_score(pool: &PgPool, login: &str) -> Option<Value> {
         FROM twitch_stats_tracked
         WHERE LOWER(streamer) = LOWER($1) AND ts_utc >= $2
     "#;
-    let cur_row = sqlx::query(cur_sql).bind(login).bind(week_ago).fetch_optional(pool).await.ok()?;
+    let cur_row = sqlx::query(cur_sql)
+        .bind(login)
+        .bind(week_ago)
+        .fetch_optional(pool)
+        .await
+        .ok()?;
     // prev braucht zusätzlich ts_utc < week_ago; eigene Query:
     let prev_sql = r#"
         SELECT AVG(viewer_count)::float8 AS avg_viewers,
@@ -1749,7 +1771,10 @@ async fn compute_health_score(pool: &PgPool, login: &str) -> Option<Value> {
         .as_ref()
         .map(|r| read_f64(r, "avg_viewers"))
         .unwrap_or(0.0);
-    let cur_days = cur_row.as_ref().map(|r| read_i64(r, "stream_days")).unwrap_or(0);
+    let cur_days = cur_row
+        .as_ref()
+        .map(|r| read_i64(r, "stream_days"))
+        .unwrap_or(0);
     let prev_avg = prev_row
         .as_ref()
         .map(|r| read_f64(r, "avg_viewers"))
@@ -1775,7 +1800,11 @@ async fn compute_health_score(pool: &PgPool, login: &str) -> Option<Value> {
         SELECT COUNT(*) AS c FROM twitch_chat_messages
         WHERE LOWER(streamer_login) = LOWER($1) AND message_ts >= $2
     "#;
-    if let Ok(Some(row)) = sqlx::query(chat_sql).bind(login).bind(week_ago).fetch_optional(pool).await
+    if let Ok(Some(row)) = sqlx::query(chat_sql)
+        .bind(login)
+        .bind(week_ago)
+        .fetch_optional(pool)
+        .await
     {
         let msg_count = row.try_get::<i64, _>("c").unwrap_or(0);
         if msg_count > 0 {
@@ -1855,34 +1884,48 @@ async fn week_stats(pool: &PgPool, login: &str, start: DateTime<Utc>, end: DateT
         FROM twitch_stats_tracked
         WHERE LOWER(streamer) = LOWER($1) AND ts_utc >= $2 AND ts_utc < $3
     "#;
-    let (avg_v, hours): (Value, Value) =
-        match sqlx::query(stats_sql).bind(login).bind(start).bind(end).fetch_optional(pool).await {
-            Ok(Some(row)) => {
-                let a = row.try_get::<Option<f64>, _>("avg_v").unwrap_or(None);
-                let h = row.try_get::<Option<f64>, _>("hours").unwrap_or(None);
-                (
-                    a.filter(|v| *v != 0.0).map(|v| json!(round1(v))).unwrap_or(Value::Null),
-                    h.filter(|v| *v != 0.0).map(|v| json!(round1(v))).unwrap_or(Value::Null),
-                )
-            }
-            _ => (Value::Null, Value::Null),
-        };
+    let (avg_v, hours): (Value, Value) = match sqlx::query(stats_sql)
+        .bind(login)
+        .bind(start)
+        .bind(end)
+        .fetch_optional(pool)
+        .await
+    {
+        Ok(Some(row)) => {
+            let a = row.try_get::<Option<f64>, _>("avg_v").unwrap_or(None);
+            let h = row.try_get::<Option<f64>, _>("hours").unwrap_or(None);
+            (
+                a.filter(|v| *v != 0.0)
+                    .map(|v| json!(round1(v)))
+                    .unwrap_or(Value::Null),
+                h.filter(|v| *v != 0.0)
+                    .map(|v| json!(round1(v)))
+                    .unwrap_or(Value::Null),
+            )
+        }
+        _ => (Value::Null, Value::Null),
+    };
 
     let foll_sql = r#"
         SELECT SUM(follower_delta)::bigint AS f
         FROM twitch_stream_sessions
         WHERE LOWER(streamer_login) = LOWER($1) AND started_at >= $2 AND started_at < $3
     "#;
-    let followers: Value =
-        match sqlx::query(foll_sql).bind(login).bind(start).bind(end).fetch_optional(pool).await {
-            Ok(Some(row)) => row
-                .try_get::<Option<i64>, _>("f")
-                .unwrap_or(None)
-                .filter(|v| *v != 0)
-                .map(|v| json!(v))
-                .unwrap_or(Value::Null),
-            _ => Value::Null,
-        };
+    let followers: Value = match sqlx::query(foll_sql)
+        .bind(login)
+        .bind(start)
+        .bind(end)
+        .fetch_optional(pool)
+        .await
+    {
+        Ok(Some(row)) => row
+            .try_get::<Option<i64>, _>("f")
+            .unwrap_or(None)
+            .filter(|v| *v != 0)
+            .map(|v| json!(v))
+            .unwrap_or(Value::Null),
+        _ => Value::Null,
+    };
 
     json!({
         "avg_viewers": avg_v,
@@ -1933,7 +1976,13 @@ async fn compute_week_comparison(pool: &PgPool, login: &str) -> Value {
             FROM twitch_stats_tracked
             WHERE LOWER(streamer) = LOWER($1) AND ts_utc >= $2 AND ts_utc < $3
         "#;
-        if let Ok(Some(row)) = sqlx::query(day_sql).bind(login).bind(day_start).bind(day_end).fetch_optional(pool).await {
+        if let Ok(Some(row)) = sqlx::query(day_sql)
+            .bind(login)
+            .bind(day_start)
+            .bind(day_end)
+            .fetch_optional(pool)
+            .await
+        {
             if let Some(a) = row.try_get::<Option<f64>, _>("avg_v").unwrap_or(None) {
                 if a != 0.0 {
                     avg_series[day_offset] = round1(a);
@@ -1951,7 +2000,13 @@ async fn compute_week_comparison(pool: &PgPool, login: &str) -> Value {
             FROM twitch_stream_sessions
             WHERE LOWER(streamer_login) = LOWER($1) AND started_at >= $2 AND started_at < $3
         "#;
-        if let Ok(Some(row)) = sqlx::query(day_foll_sql).bind(login).bind(day_start).bind(day_end).fetch_optional(pool).await {
+        if let Ok(Some(row)) = sqlx::query(day_foll_sql)
+            .bind(login)
+            .bind(day_start)
+            .bind(day_end)
+            .fetch_optional(pool)
+            .await
+        {
             if let Some(f) = row.try_get::<Option<i64>, _>("f").unwrap_or(None) {
                 if f != 0 {
                     foll_series[day_offset] = f as f64;
@@ -2049,7 +2104,11 @@ async fn fetch_changelog_entries(pool: &PgPool) -> Vec<Value> {
         ORDER BY entry_date DESC, created_at DESC, id DESC
         LIMIT $1
     "#;
-    match sqlx::query(sql).bind(CHANGELOG_MAX_ENTRIES).fetch_all(pool).await {
+    match sqlx::query(sql)
+        .bind(CHANGELOG_MAX_ENTRIES)
+        .fetch_all(pool)
+        .await
+    {
         Ok(rows) => rows.iter().map(serialize_changelog_entry).collect(),
         Err(e) => {
             tracing::warn!("internal-home changelog fetch: {e}");
@@ -2214,20 +2273,20 @@ async fn create_changelog_entry(
 ) -> Result<Value, sqlx::Error> {
     let mut tx = pool.begin().await?;
 
-    let row = sqlx::query(
+    let row = sqlx::query!(
         r#"
         INSERT INTO internal_home_changelog (entry_date, title, content)
         VALUES ($1, $2, $3)
         RETURNING id, entry_date, title, content, created_at
         "#,
+        entry_date,
+        title,
+        content
     )
-    .bind(entry_date)
-    .bind(title)
-    .bind(content)
     .fetch_one(&mut *tx)
     .await?;
 
-    sqlx::query(
+    sqlx::query!(
         r#"
         DELETE FROM internal_home_changelog
         WHERE id IN (
@@ -2236,13 +2295,19 @@ async fn create_changelog_entry(
             OFFSET $1
         )
         "#,
+        CHANGELOG_MAX_ENTRIES
     )
-    .bind(CHANGELOG_MAX_ENTRIES)
     .execute(&mut *tx)
     .await?;
 
     tx.commit().await?;
-    Ok(serialize_changelog_entry(&row))
+    Ok(json!({
+        "id": row.id,
+        "entry_date": row.entry_date.format("%Y-%m-%d").to_string(),
+        "title": row.title,
+        "content": row.content,
+        "created_at": row.created_at.to_rfc3339(),
+    }))
 }
 
 #[cfg(test)]
@@ -2266,12 +2331,28 @@ mod changelog_origin_tests {
 
     async fn make_pool(schema: &str) -> Option<PgPool> {
         let dsn = std::env::var("TB_TEST_DATABASE_URL").ok()?;
-        let admin = PgPoolOptions::new().max_connections(1).connect(&dsn).await.unwrap();
-        sqlx::query(&format!("DROP SCHEMA IF EXISTS {schema} CASCADE")).execute(&admin).await.unwrap();
-        sqlx::query(&format!("CREATE SCHEMA {schema}")).execute(&admin).await.unwrap();
+        let admin = PgPoolOptions::new()
+            .max_connections(1)
+            .connect(&dsn)
+            .await
+            .unwrap();
+        sqlx::query(&format!("DROP SCHEMA IF EXISTS {schema} CASCADE"))
+            .execute(&admin)
+            .await
+            .unwrap();
+        sqlx::query(&format!("CREATE SCHEMA {schema}"))
+            .execute(&admin)
+            .await
+            .unwrap();
         admin.close().await;
-        let opts = PgConnectOptions::from_str(&dsn).unwrap().options([("search_path", schema)]);
-        let pool = PgPoolOptions::new().max_connections(2).connect_with(opts).await.unwrap();
+        let opts = PgConnectOptions::from_str(&dsn)
+            .unwrap()
+            .options([("search_path", schema)]);
+        let pool = PgPoolOptions::new()
+            .max_connections(2)
+            .connect_with(opts)
+            .await
+            .unwrap();
         sqlx::query(
             r#"CREATE TABLE dashboard_sessions (
                 session_id TEXT PRIMARY KEY, session_type TEXT NOT NULL,
@@ -2348,7 +2429,9 @@ mod changelog_origin_tests {
             .await
             .unwrap();
         assert_eq!(resp.status(), StatusCode::FORBIDDEN);
-        let bytes = axum::body::to_bytes(resp.into_body(), 1 << 16).await.unwrap();
+        let bytes = axum::body::to_bytes(resp.into_body(), 1 << 16)
+            .await
+            .unwrap();
         let body: Value = serde_json::from_slice(&bytes).unwrap();
         assert_eq!(body["error"], "csrf_failed");
     }

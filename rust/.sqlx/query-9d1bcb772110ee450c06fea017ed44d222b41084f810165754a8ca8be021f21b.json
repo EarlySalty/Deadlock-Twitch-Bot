@@ -1,0 +1,28 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT current_step, completed FROM streamer_onboarding WHERE twitch_user_id = $1",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "current_step",
+        "type_info": "Int4"
+      },
+      {
+        "ordinal": 1,
+        "name": "completed",
+        "type_info": "Bool"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Text"
+      ]
+    },
+    "nullable": [
+      false,
+      false
+    ]
+  },
+  "hash": "9d1bcb772110ee450c06fea017ed44d222b41084f810165754a8ca8be021f21b"
+}

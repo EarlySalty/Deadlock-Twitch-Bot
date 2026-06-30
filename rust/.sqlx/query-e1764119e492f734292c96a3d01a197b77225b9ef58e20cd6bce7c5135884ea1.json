@@ -1,0 +1,23 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT MIN(s.started_at) AS gap_start\n           FROM twitch_stream_sessions s\n           WHERE LOWER(s.streamer_login) = $1 AND s.started_at >= $2\n             AND EXISTS (SELECT 1 FROM twitch_session_chatters sc WHERE sc.session_id = s.id)\n             AND NOT EXISTS (SELECT 1 FROM twitch_chat_messages m WHERE m.session_id = s.id)",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "gap_start",
+        "type_info": "Timestamptz"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Text",
+        "Timestamptz"
+      ]
+    },
+    "nullable": [
+      null
+    ]
+  },
+  "hash": "e1764119e492f734292c96a3d01a197b77225b9ef58e20cd6bce7c5135884ea1"
+}

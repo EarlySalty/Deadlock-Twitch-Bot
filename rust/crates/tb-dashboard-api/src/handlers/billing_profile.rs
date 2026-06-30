@@ -44,9 +44,8 @@ pub async fn profile_save_handler(
     RawForm(body): RawForm,
 ) -> Response {
     let form = parse_form(&body);
-    let cycle = normalize_billing_cycle(
-        form_get(&form, "cycle").trim().parse::<u32>().unwrap_or(1),
-    );
+    let cycle =
+        normalize_billing_cycle(form_get(&form, "cycle").trim().parse::<u32>().unwrap_or(1));
 
     // Auth-Gate: nur eingeloggter Partner/Admin.
     let Some(customer_reference) = customer_reference_for(&auth) else {
@@ -139,7 +138,7 @@ pub async fn upsert_profile(pool: &PgPool, profile: &BillingProfile) -> Result<(
         return Ok(());
     }
     let now_iso = chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Micros, false);
-    sqlx::query(
+    sqlx::query!(
         r#"
         INSERT INTO twitch_billing_profiles (
             customer_reference, recipient_name, recipient_email, company_name,
@@ -156,17 +155,17 @@ pub async fn upsert_profile(pool: &PgPool, profile: &BillingProfile) -> Result<(
             vat_id = EXCLUDED.vat_id,
             updated_at = EXCLUDED.updated_at
         "#,
+        reference,
+        profile.recipient_name.trim(),
+        profile.recipient_email.trim(),
+        profile.company_name.trim(),
+        profile.street_line1.trim(),
+        profile.postal_code.trim(),
+        profile.city.trim(),
+        profile.country_code.trim().to_uppercase(),
+        profile.vat_id.trim(),
+        now_iso
     )
-    .bind(reference)
-    .bind(profile.recipient_name.trim())
-    .bind(profile.recipient_email.trim())
-    .bind(profile.company_name.trim())
-    .bind(profile.street_line1.trim())
-    .bind(profile.postal_code.trim())
-    .bind(profile.city.trim())
-    .bind(profile.country_code.trim().to_uppercase())
-    .bind(profile.vat_id.trim())
-    .bind(&now_iso)
     .execute(pool)
     .await?;
     Ok(())
@@ -182,32 +181,33 @@ pub async fn load_profile(
     if reference.is_empty() {
         return Ok(None);
     }
-    // 9 TEXT-Spalten der Profil-Zeile (reference + 8 Felder).
-    type ProfileRow = (String, String, String, String, String, String, String, String, String);
-    let row: Option<ProfileRow> =
-        sqlx::query_as(
-            r#"
+    let row = sqlx::query!(
+        r#"
             SELECT customer_reference, recipient_name, recipient_email, company_name,
                    street_line1, postal_code, city, country_code, vat_id
             FROM twitch_billing_profiles
             WHERE LOWER(customer_reference) = LOWER($1)
             LIMIT 1
             "#,
-        )
-        .bind(reference)
-        .fetch_optional(pool)
-        .await?;
+        reference
+    )
+    .fetch_optional(pool)
+    .await?;
 
     Ok(row.map(|r| BillingProfile {
-        customer_reference: r.0,
-        recipient_name: r.1,
-        recipient_email: r.2,
-        company_name: r.3,
-        street_line1: r.4,
-        postal_code: r.5,
-        city: r.6,
-        country_code: if r.7.trim().is_empty() { "DE".into() } else { r.7.to_uppercase() },
-        vat_id: r.8,
+        customer_reference: r.customer_reference,
+        recipient_name: r.recipient_name,
+        recipient_email: r.recipient_email,
+        company_name: r.company_name,
+        street_line1: r.street_line1,
+        postal_code: r.postal_code,
+        city: r.city,
+        country_code: if r.country_code.trim().is_empty() {
+            "DE".into()
+        } else {
+            r.country_code.to_uppercase()
+        },
+        vat_id: r.vat_id,
     }))
 }
 
@@ -248,9 +248,10 @@ pub async fn resolve_profile(
 
     // Stripe-Prefill nur, wenn Customer-ID + Stripe-Client vorhanden.
     let mut imported: Vec<String> = Vec::new();
-    if let (Some(customer_id), Some(cfg)) =
-        (stripe_customer_id.map(str::trim).filter(|s| !s.is_empty()), config)
-    {
+    if let (Some(customer_id), Some(cfg)) = (
+        stripe_customer_id.map(str::trim).filter(|s| !s.is_empty()),
+        config,
+    ) {
         if let Ok(stripe_profile) = fetch_stripe_profile(cfg, customer_id).await {
             imported = prefill_from_stripe(&mut profile, &stripe_profile);
         }
@@ -274,7 +275,11 @@ async fn fetch_stripe_profile(
         })?;
 
     let str_at = |obj: &Value, key: &str| -> String {
-        obj.get(key).and_then(Value::as_str).unwrap_or("").trim().to_string()
+        obj.get(key)
+            .and_then(Value::as_str)
+            .unwrap_or("")
+            .trim()
+            .to_string()
     };
     let address = {
         let billing = customer.get("address").cloned().unwrap_or(Value::Null);
@@ -299,17 +304,29 @@ async fn fetch_stripe_profile(
         customer_reference: String::new(),
         recipient_name: {
             let n = str_at(&customer, "name");
-            if n.is_empty() { shipping_name } else { n }
+            if n.is_empty() {
+                shipping_name
+            } else {
+                n
+            }
         },
         recipient_email: str_at(&customer, "email"),
         company_name: {
             let c = str_at(&metadata, "company_name");
-            if c.is_empty() { str_at(&metadata, "company") } else { c }
+            if c.is_empty() {
+                str_at(&metadata, "company")
+            } else {
+                c
+            }
         },
         street_line1: str_at(&address, "line1"),
         postal_code: str_at(&address, "postal_code"),
         city: str_at(&address, "city"),
-        country_code: if country.is_empty() { "DE".into() } else { country.to_uppercase() },
+        country_code: if country.is_empty() {
+            "DE".into()
+        } else {
+            country.to_uppercase()
+        },
         vat_id: String::new(),
     })
 }
@@ -350,7 +367,12 @@ fn prefill_from_stripe(profile: &mut BillingProfile, stripe: &BillingProfile) ->
 
 /// Customer-Reference des eingeloggten Nutzers (Login bevorzugt, sonst User-ID).
 fn customer_reference_for(auth: &DashboardAuthLevel) -> Option<String> {
-    if let DashboardAuthLevel::Partner { twitch_login, twitch_user_id, .. } = auth {
+    if let DashboardAuthLevel::Partner {
+        twitch_login,
+        twitch_user_id,
+        ..
+    } = auth
+    {
         let login = twitch_login.trim();
         if !login.is_empty() {
             return Some(login.to_string());
@@ -365,7 +387,12 @@ fn customer_reference_for(auth: &DashboardAuthLevel) -> Option<String> {
 
 /// Anzeigename für den Profil-Default (Python: display_name → login → Fallback).
 fn display_name_for(auth: &DashboardAuthLevel) -> String {
-    if let DashboardAuthLevel::Partner { twitch_login, display_name, .. } = auth {
+    if let DashboardAuthLevel::Partner {
+        twitch_login,
+        display_name,
+        ..
+    } = auth
+    {
         let dn = display_name.trim();
         if !dn.is_empty() {
             return dn.to_string();
@@ -400,7 +427,8 @@ async fn verify_form_csrf(
                 .map(|(_, v)| v.trim().to_string())
         })
     };
-    let (cookie, session_type) = if let Some(c) = read(ADMIN_COOKIE_NAME).filter(|s| !s.is_empty()) {
+    let (cookie, session_type) = if let Some(c) = read(ADMIN_COOKIE_NAME).filter(|s| !s.is_empty())
+    {
         (c, "discord_admin")
     } else if let Some(c) = read(PARTNER_COOKIE_NAME).filter(|s| !s.is_empty()) {
         (c, "twitch")
@@ -420,7 +448,10 @@ fn parse_form(body: &[u8]) -> Vec<(String, String)> {
 }
 
 fn form_get<'a>(form: &'a [(String, String)], key: &str) -> &'a str {
-    form.iter().find(|(k, _)| k == key).map(|(_, v)| v.as_str()).unwrap_or("")
+    form.iter()
+        .find(|(k, _)| k == key)
+        .map(|(_, v)| v.as_str())
+        .unwrap_or("")
 }
 
 /// Trimmt + kürzt auf `max` Zeichen (Python `str(...).strip()[:max]`).
@@ -452,9 +483,15 @@ mod tests {
 
     #[test]
     fn reference_und_default_name() {
-        assert_eq!(customer_reference_for(&partner("nani")).as_deref(), Some("nani"));
+        assert_eq!(
+            customer_reference_for(&partner("nani")).as_deref(),
+            Some("nani")
+        );
         assert_eq!(display_name_for(&partner("nani")), "Nani");
-        assert_eq!(display_name_for(&DashboardAuthLevel::admin()), "Streamer Partner");
+        assert_eq!(
+            display_name_for(&DashboardAuthLevel::admin()),
+            "Streamer Partner"
+        );
         assert_eq!(customer_reference_for(&DashboardAuthLevel::admin()), None);
     }
 

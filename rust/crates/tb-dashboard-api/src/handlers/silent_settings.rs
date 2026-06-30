@@ -75,7 +75,11 @@ pub async fn get_handler(
         Ok(l) => l,
         Err(resp) => return resp,
     };
-    match sqlx::query(SELECT_SQL).bind(&login).fetch_optional(&pool).await {
+    match sqlx::query(SELECT_SQL)
+        .bind(&login)
+        .fetch_optional(&pool)
+        .await
+    {
         Ok(Some(row)) => {
             let sb: i32 = row.try_get("sb").unwrap_or(0);
             let sr: i32 = row.try_get("sr").unwrap_or(0);
@@ -85,7 +89,11 @@ pub async fn get_handler(
         Ok(None) => Json(json!({ "silent_ban": false, "silent_raid": false })).into_response(),
         Err(error) => {
             tracing::error!(%error, "silent-settings GET DB-Fehler");
-            (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({ "error": "db" }))).into_response()
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(json!({ "error": "db" })),
+            )
+                .into_response()
         }
     }
 }
@@ -101,7 +109,7 @@ pub async fn post_handler(
         Ok(l) => l,
         Err(resp) => return resp,
     };
-    let result = sqlx::query(
+    let result = sqlx::query!(
         "UPDATE twitch_partners
             SET silent_ban = $2, silent_raid = $3
           WHERE id = (
@@ -109,10 +117,10 @@ pub async fn post_handler(
                WHERE LOWER(twitch_login) = $1 AND status = 'active'
                ORDER BY id DESC LIMIT 1
           )",
+        login,
+        i32::from(body.silent_ban),
+        i32::from(body.silent_raid)
     )
-    .bind(&login)
-    .bind(i32::from(body.silent_ban))
-    .bind(i32::from(body.silent_raid))
     .execute(&pool)
     .await;
     match result {
@@ -129,7 +137,11 @@ pub async fn post_handler(
             .into_response(),
         Err(error) => {
             tracing::error!(%error, "silent-settings POST DB-Fehler");
-            (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({ "error": "db" }))).into_response()
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(json!({ "error": "db" })),
+            )
+                .into_response()
         }
     }
 }

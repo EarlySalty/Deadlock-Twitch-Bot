@@ -1,3 +1,11 @@
+## #316 — Sechste Welle: das Streamer-Dashboard-Backend wird beim Bauen geprüft
+
+**Ausgangslage:** Die Schicht hinter dem Dashboard — Übersichten, Zuschauer- und Raid-Auswertungen, Abrechnungs- und Affiliate-Seiten, Clip-Verwaltung und Admin-Werkzeuge — führte 172 ihrer statischen Datenbank-Abfragen bisher als reine Textbausteine aus. Eine Schema-Änderung wäre erst zur Laufzeit aufgefallen, wenn der betroffene Endpunkt schon hängt.
+
+**Änderung:** 171 davon werden jetzt schon beim Bauen gegen ein frisch aus dem Bauplan erzeugtes Schema geprüft. Eine einzelne Abfrage bleibt bewusst ungeprüft und ist als solche markiert: Sie liest einen Anzeigenamen aus einer Tabelle, die diese Spalte gar nicht (mehr) führt, und fällt seit jeher still auf den Login-Namen zurück — als eigener Punkt notiert. Beim Umbau wurden mehrere Werte wieder passgenau geführt (Ja/Nein-Felder als solche statt als Zahlen, Kennungen in der Breite, die die Spalte vorgibt), damit das Verhalten exakt gleich bleibt.
+
+**Ergebnis:** Verschwindet oder ändert sich im Dashboard-Backend eine Spalte, scheitert künftig der Bau statt der laufende Dienst. An einer nachgestellten Kopie bewiesen: Bauen ohne Datenbank läuft, eine künstlich umbenannte Spalte lässt den Bau sofort scheitern, und die volle Testsuite ist Zeile für Zeile gleich grün wie vorher (687 Tests, kein einziger Unterschied im Verhalten). Für den Betrieb ändert sich nichts.
+
 ## #315 — Fünfte Welle: die Social-Media-Clip-Pipeline beim Bauen geprüft — und mehrere stille Altlasten behoben
 
 **Ausgangslage:** Der Teil, der Clips einsammelt, freigibt und automatisch auf die Plattformen hochlädt, führte seine 79 statischen Datenbank-Abfragen bisher als reine Textbausteine aus — Schema-Brüche fielen erst im laufenden Betrieb auf.

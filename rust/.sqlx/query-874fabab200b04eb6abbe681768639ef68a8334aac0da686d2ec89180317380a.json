@@ -1,0 +1,37 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT LOWER(chatter_login) AS \"login!\", LOWER(streamer_login) AS \"streamer_login!\", last_seen_at\n               FROM twitch_chatter_rollup\n               WHERE LOWER(chatter_login) = ANY($1)\n                 AND LOWER(streamer_login) != $2\n                 AND last_seen_at >= $3\n                 AND LOWER(streamer_login) != ALL($4)\n               ORDER BY 1, last_seen_at DESC",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "login!",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 1,
+        "name": "streamer_login!",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 2,
+        "name": "last_seen_at",
+        "type_info": "Timestamptz"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "TextArray",
+        "Text",
+        "Timestamptz",
+        "TextArray"
+      ]
+    },
+    "nullable": [
+      null,
+      null,
+      false
+    ]
+  },
+  "hash": "874fabab200b04eb6abbe681768639ef68a8334aac0da686d2ec89180317380a"
+}

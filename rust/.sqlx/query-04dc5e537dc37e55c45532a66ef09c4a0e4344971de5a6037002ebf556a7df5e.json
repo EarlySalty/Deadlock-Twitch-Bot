@@ -1,0 +1,23 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n            SELECT CASE\n                WHEN COALESCE(p.status, '') = 'active'\n                     AND COALESCE(p.manual_partner_opt_out, 0) = 0\n                     AND COALESCE(p.technical_pause_reason, '') = ''\n                     AND p.admin_archived_at IS NULL\n                THEN 1 ELSE 0\n            END AS \"is_active!\"\n            FROM twitch_partners p\n            WHERE (\n                  LOWER(p.twitch_login) = $1\n                  OR ($2 <> '' AND p.twitch_user_id = $2)\n              )\n            ORDER BY CASE\n                WHEN COALESCE(p.status, '') = 'active' THEN 0\n                WHEN COALESCE(p.status, '') = 'archived' THEN 1\n                WHEN COALESCE(p.status, '') = 'departnered' THEN 2\n                ELSE 3\n            END,\n            COALESCE(p.departnered_at, p.admin_archived_at, p.partnered_at) DESC\n            LIMIT 1\n            ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "is_active!",
+        "type_info": "Int4"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Text",
+        "Text"
+      ]
+    },
+    "nullable": [
+      null
+    ]
+  },
+  "hash": "04dc5e537dc37e55c45532a66ef09c4a0e4344971de5a6037002ebf556a7df5e"
+}

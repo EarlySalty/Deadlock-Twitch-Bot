@@ -128,6 +128,31 @@ mod tests {
         )
     }
 
+    async fn create_ai_analyses_fixture(pool: &PgPool) {
+        sqlx::query(
+            r#"
+            CREATE TABLE ai_analyses (
+                id BIGSERIAL PRIMARY KEY,
+                streamer TEXT NOT NULL,
+                days INTEGER NOT NULL,
+                model TEXT NOT NULL,
+                generated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+                data_snapshot JSONB NOT NULL,
+                points JSONB NOT NULL
+            )
+            "#,
+        )
+        .execute(pool)
+        .await
+        .unwrap();
+        sqlx::query(
+            "CREATE INDEX idx_ai_analyses_streamer_ts ON ai_analyses (streamer, generated_at DESC)",
+        )
+        .execute(pool)
+        .await
+        .unwrap();
+    }
+
     #[tokio::test]
     async fn streamer_pflicht_400() {
         let Some(pool) = make_pool("t_aih_h1").await else {
@@ -205,6 +230,7 @@ mod tests {
         let Some(pool) = make_pool("t_aih_h2").await else {
             return;
         };
+        create_ai_analyses_fixture(&pool).await;
         // Admin bypasst das AI-Plan-Gate → 200 (leere Historie).
         let resp = ai_history_handler(
             DashboardAuthLevel::admin(),

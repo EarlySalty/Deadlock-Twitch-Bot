@@ -34,7 +34,10 @@ fn coerce_iso(value: Option<&str>) -> Option<String> {
 }
 
 fn trim_or_none(value: Option<&str>) -> Option<String> {
-    value.map(str::trim).filter(|s| !s.is_empty()).map(String::from)
+    value
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .map(String::from)
 }
 
 /// Baut einen Audit-Eintrag (Python `_make_entry`). `None`, wenn der Timestamp
@@ -67,7 +70,9 @@ fn make_entry(
 fn matches_since(timestamp: Option<&str>, since: Option<DateTime<Utc>>) -> bool {
     match since {
         None => true,
-        Some(s) => parse_utc_datetime(timestamp).map(|t| t >= s).unwrap_or(false),
+        Some(s) => parse_utc_datetime(timestamp)
+            .map(|t| t >= s)
+            .unwrap_or(false),
     }
 }
 
@@ -144,7 +149,10 @@ async fn roadmap_entries() -> Vec<Value> {
     let Ok(doc) = serde_json::from_str::<Value>(&raw) else {
         return Vec::new();
     };
-    let updated_at = doc.get("lastUpdatedAt").and_then(Value::as_str).filter(|s| !s.is_empty());
+    let updated_at = doc
+        .get("lastUpdatedAt")
+        .and_then(Value::as_str)
+        .filter(|s| !s.is_empty());
     let Some(updated_at) = updated_at else {
         return Vec::new();
     };
@@ -177,7 +185,10 @@ async fn legal_entries() -> Vec<Value> {
         let Some(entry) = doc.get(slug).and_then(Value::as_object) else {
             continue;
         };
-        let updated_at = entry.get("lastUpdatedAt").and_then(Value::as_str).filter(|s| !s.is_empty());
+        let updated_at = entry
+            .get("lastUpdatedAt")
+            .and_then(Value::as_str)
+            .filter(|s| !s.is_empty());
         let Some(updated_at) = updated_at else {
             continue;
         };
@@ -213,9 +224,15 @@ fn opt(s: &str) -> Value {
 /// `_is_missing_schema_error`) → Quelle wird übersprungen statt 500.
 fn is_missing_schema_error(e: &sqlx::Error) -> bool {
     let s = e.to_string().to_lowercase();
-    ["does not exist", "no such table", "undefined table", "no such column", "undefined column"]
-        .iter()
-        .any(|m| s.contains(m))
+    [
+        "does not exist",
+        "no such table",
+        "undefined table",
+        "no such column",
+        "undefined column",
+    ]
+    .iter()
+    .any(|m| s.contains(m))
 }
 
 /// Partner-Lifecycle-Events (Python `_load_streamer_history_entries`). Erzeugt je
@@ -223,20 +240,12 @@ fn is_missing_schema_error(e: &sqlx::Error) -> bool {
 /// gesetzten Zeitstempel. `prior_inactive` (chronologisch über ORDER BY befüllt)
 /// unterscheidet erstes Hinzufügen von Re-Aktivierung.
 async fn streamer_history_entries(pool: &PgPool) -> Result<Vec<Value>, sqlx::Error> {
-    type Row = (
-        Option<String>, // id::text
-        Option<String>, // twitch_user_id
-        Option<String>, // twitch_login
-        Option<String>, // added_by
-        Option<String>, // partnered_at
-        Option<String>, // admin_archived_at
-        Option<String>, // departnered_at
-        Option<String>, // status
-        Option<String>, // technical_pause_reason
-    );
-    let rows: Vec<Row> = sqlx::query_as(
-        "SELECT p.id::text, p.twitch_user_id, p.twitch_login, p.added_by, \
-                p.partnered_at, p.admin_archived_at, p.departnered_at, p.status, p.technical_pause_reason \
+    let rows = sqlx::query!(
+        "SELECT p.id::text AS \"id?\", p.twitch_user_id AS \"twitch_user_id?\", \
+                p.twitch_login AS \"twitch_login?\", p.added_by AS \"added_by?\", \
+                p.partnered_at AS \"partnered_at?\", p.admin_archived_at AS \"admin_archived_at?\", \
+                p.departnered_at AS \"departnered_at?\", p.status AS \"status?\", \
+                p.technical_pause_reason AS \"technical_pause_reason?\" \
          FROM twitch_partners p \
          ORDER BY COALESCE(p.partnered_at, p.departnered_at, p.admin_archived_at, '') ASC, p.id ASC",
     )
@@ -245,18 +254,25 @@ async fn streamer_history_entries(pool: &PgPool) -> Result<Vec<Value>, sqlx::Err
 
     let mut prior_inactive: BTreeSet<String> = BTreeSet::new();
     let mut entries = Vec::new();
-    for (id, uid, login, added_by, partnered_at, admin_archived_at, departnered_at, status, pause_reason) in rows {
-        let row_id = id.unwrap_or_default().trim().to_string();
-        let twitch_user_id = uid.unwrap_or_default().trim().to_string();
-        let twitch_login = login.unwrap_or_default().trim().to_string();
+    for row in rows {
+        let row_id = row.id.unwrap_or_default().trim().to_string();
+        let twitch_user_id = row.twitch_user_id.unwrap_or_default().trim().to_string();
+        let twitch_login = row.twitch_login.unwrap_or_default().trim().to_string();
         let identity = if !twitch_user_id.is_empty() {
             twitch_user_id.clone()
         } else {
             twitch_login.to_lowercase()
         };
-        let added_by = added_by.map(|s| s.trim().to_string()).filter(|s| !s.is_empty());
-        let status = status.unwrap_or_default().trim().to_lowercase();
-        let pause_reason = pause_reason.unwrap_or_default().trim().to_lowercase();
+        let added_by = row
+            .added_by
+            .map(|s| s.trim().to_string())
+            .filter(|s| !s.is_empty());
+        let status = row.status.unwrap_or_default().trim().to_lowercase();
+        let pause_reason = row
+            .technical_pause_reason
+            .unwrap_or_default()
+            .trim()
+            .to_lowercase();
         let target: Option<String> = if !twitch_login.is_empty() {
             Some(twitch_login.clone())
         } else if !twitch_user_id.is_empty() {
@@ -264,9 +280,13 @@ async fn streamer_history_entries(pool: &PgPool) -> Result<Vec<Value>, sqlx::Err
         } else {
             None
         };
-        let label = if !twitch_login.is_empty() { twitch_login.clone() } else { twitch_user_id.clone() };
+        let label = if !twitch_login.is_empty() {
+            twitch_login.clone()
+        } else {
+            twitch_user_id.clone()
+        };
 
-        if let Some(ts) = partnered_at.as_deref().filter(|s| !s.is_empty()) {
+        if let Some(ts) = row.partnered_at.as_deref().filter(|s| !s.is_empty()) {
             let is_restore = !identity.is_empty() && prior_inactive.contains(&identity);
             let action = if is_restore { "restore" } else { "added" };
             let description = if is_restore {
@@ -275,20 +295,47 @@ async fn streamer_history_entries(pool: &PgPool) -> Result<Vec<Value>, sqlx::Err
                 format!("Streamer {label} wurde hinzugefuegt.")
             };
             let metadata = json!({ "partnerId": row_id, "status": opt(&status), "twitchUserId": opt(&twitch_user_id) });
-            if let Some(e) = make_entry(format!("streamer_history:{row_id}:{action}"), "streamer_history", action, added_by.as_deref(), target.as_deref(), Some(ts), description, Some(metadata)) {
+            if let Some(e) = make_entry(
+                format!("streamer_history:{row_id}:{action}"),
+                "streamer_history",
+                action,
+                added_by.as_deref(),
+                target.as_deref(),
+                Some(ts),
+                description,
+                Some(metadata),
+            ) {
                 entries.push(e);
             }
         }
-        if let Some(ts) = admin_archived_at.as_deref().filter(|s| !s.is_empty()) {
+        if let Some(ts) = row.admin_archived_at.as_deref().filter(|s| !s.is_empty()) {
             let metadata = json!({ "partnerId": row_id, "twitchUserId": opt(&twitch_user_id), "status": opt(&status) });
-            if let Some(e) = make_entry(format!("streamer_history:{row_id}:archive"), "streamer_history", "archive", None, target.as_deref(), Some(ts), format!("Streamer {label} wurde archiviert."), Some(metadata)) {
+            if let Some(e) = make_entry(
+                format!("streamer_history:{row_id}:archive"),
+                "streamer_history",
+                "archive",
+                None,
+                target.as_deref(),
+                Some(ts),
+                format!("Streamer {label} wurde archiviert."),
+                Some(metadata),
+            ) {
                 entries.push(e);
             }
         }
-        if let Some(ts) = departnered_at.as_deref().filter(|s| !s.is_empty()) {
+        if let Some(ts) = row.departnered_at.as_deref().filter(|s| !s.is_empty()) {
             if status == "departnered" {
                 let metadata = json!({ "partnerId": row_id, "twitchUserId": opt(&twitch_user_id) });
-                if let Some(e) = make_entry(format!("streamer_history:{row_id}:remove"), "streamer_history", "remove", None, target.as_deref(), Some(ts), format!("Streamer {label} wurde entfernt oder departnert."), Some(metadata)) {
+                if let Some(e) = make_entry(
+                    format!("streamer_history:{row_id}:remove"),
+                    "streamer_history",
+                    "remove",
+                    None,
+                    target.as_deref(),
+                    Some(ts),
+                    format!("Streamer {label} wurde entfernt oder departnert."),
+                    Some(metadata),
+                ) {
                     entries.push(e);
                 }
             }
@@ -303,29 +350,27 @@ async fn streamer_history_entries(pool: &PgPool) -> Result<Vec<Value>, sqlx::Err
 
 /// Manuelle Plan-Overrides (Python `_load_manual_plan_entries`).
 async fn manual_plan_entries(pool: &PgPool) -> Result<Vec<Value>, sqlx::Error> {
-    type Row = (
-        Option<String>, // twitch_user_id
-        Option<String>, // twitch_login
-        Option<String>, // manual_plan_id
-        Option<String>, // manual_plan_expires_at
-        Option<String>, // manual_plan_notes
-        Option<String>, // manual_plan_updated_at
-    );
-    let rows: Vec<Row> = sqlx::query_as(
-        "SELECT twitch_user_id, twitch_login, manual_plan_id, manual_plan_expires_at, manual_plan_notes, manual_plan_updated_at \
+    let rows = sqlx::query!(
+        "SELECT twitch_user_id AS \"twitch_user_id?\", twitch_login AS \"twitch_login?\", \
+                manual_plan_id AS \"manual_plan_id?\", manual_plan_expires_at AS \"manual_plan_expires_at?\", \
+                manual_plan_notes AS \"manual_plan_notes?\", manual_plan_updated_at AS \"manual_plan_updated_at?\" \
          FROM streamer_plans WHERE manual_plan_updated_at IS NOT NULL ORDER BY manual_plan_updated_at DESC",
     )
     .fetch_all(pool)
     .await?;
 
     let mut entries = Vec::new();
-    for (uid, login, plan_id, expires_at, notes, updated_at) in rows {
-        let twitch_user_id = uid.unwrap_or_default().trim().to_string();
-        let twitch_login = login.unwrap_or_default().trim().to_string();
-        let manual_plan_id = plan_id.unwrap_or_default().trim().to_string();
-        let notes = notes.unwrap_or_default().trim().to_string();
-        let updated_raw = updated_at.unwrap_or_default();
-        let label = if !twitch_login.is_empty() { twitch_login.clone() } else { twitch_user_id.clone() };
+    for row in rows {
+        let twitch_user_id = row.twitch_user_id.unwrap_or_default().trim().to_string();
+        let twitch_login = row.twitch_login.unwrap_or_default().trim().to_string();
+        let manual_plan_id = row.manual_plan_id.unwrap_or_default().trim().to_string();
+        let notes = row.manual_plan_notes.unwrap_or_default().trim().to_string();
+        let updated_raw = row.manual_plan_updated_at.unwrap_or_default();
+        let label = if !twitch_login.is_empty() {
+            twitch_login.clone()
+        } else {
+            twitch_user_id.clone()
+        };
         let target: Option<String> = if !twitch_login.is_empty() {
             Some(twitch_login.clone())
         } else if !twitch_user_id.is_empty() {
@@ -333,16 +378,26 @@ async fn manual_plan_entries(pool: &PgPool) -> Result<Vec<Value>, sqlx::Error> {
         } else {
             None
         };
-        let id_key = if !twitch_user_id.is_empty() { twitch_user_id.clone() } else { twitch_login.clone() };
+        let id_key = if !twitch_user_id.is_empty() {
+            twitch_user_id.clone()
+        } else {
+            twitch_login.clone()
+        };
 
         let (action, description) = if !manual_plan_id.is_empty() {
-            ("plan_override", format!("Manueller Plan fuer {label} auf {manual_plan_id} gesetzt."))
+            (
+                "plan_override",
+                format!("Manueller Plan fuer {label} auf {manual_plan_id} gesetzt."),
+            )
         } else {
-            ("plan_override_cleared", format!("Manueller Plan-Override fuer {label} entfernt."))
+            (
+                "plan_override_cleared",
+                format!("Manueller Plan-Override fuer {label} entfernt."),
+            )
         };
         let metadata = json!({
             "planId": opt(&manual_plan_id),
-            "expiresAt": coerce_iso(expires_at.as_deref()),
+            "expiresAt": coerce_iso(row.manual_plan_expires_at.as_deref()),
             "notes": opt(&notes),
             "twitchUserId": opt(&twitch_user_id),
         });
@@ -366,9 +421,14 @@ async fn manual_plan_entries(pool: &PgPool) -> Result<Vec<Value>, sqlx::Error> {
 fn map_billing_action(event_type: &str) -> (String, String) {
     let n = event_type.trim().to_lowercase();
     let known = match n.as_str() {
-        "checkout.session.completed" => Some(("checkout_completed", "Stripe-Checkout fuer ein Abo abgeschlossen.")),
+        "checkout.session.completed" => Some((
+            "checkout_completed",
+            "Stripe-Checkout fuer ein Abo abgeschlossen.",
+        )),
         "customer.subscription.created" => Some(("subscription_created", "Stripe-Abo erstellt.")),
-        "customer.subscription.updated" => Some(("subscription_updated", "Stripe-Abo aktualisiert.")),
+        "customer.subscription.updated" => {
+            Some(("subscription_updated", "Stripe-Abo aktualisiert."))
+        }
         "customer.subscription.deleted" => Some(("subscription_canceled", "Stripe-Abo beendet.")),
         "invoice.payment_succeeded" => Some(("invoice_paid", "Abo-Zahlung erfolgreich verbucht.")),
         "invoice.payment_failed" => Some(("invoice_failed", "Abo-Zahlung fehlgeschlagen.")),
@@ -377,7 +437,11 @@ fn map_billing_action(event_type: &str) -> (String, String) {
     match known {
         Some((a, d)) => (a.to_string(), d.to_string()),
         None => {
-            let fallback = if n.is_empty() { "billing_event".to_string() } else { n.replace('.', "_") };
+            let fallback = if n.is_empty() {
+                "billing_event".to_string()
+            } else {
+                n.replace('.', "_")
+            };
             let label = if n.is_empty() { "unknown" } else { n.as_str() };
             (fallback, format!("Billing-Event {label} verarbeitet."))
         }
@@ -387,13 +451,28 @@ fn map_billing_action(event_type: &str) -> (String, String) {
 /// Extrahiert Ziel + Detail-Metadaten aus dem Stripe-Event-Payload
 /// (Python `_extract_billing_target`).
 fn extract_billing_target(event_payload: &Value, object_id: &str) -> (Option<String>, Value) {
-    let object_record = event_payload.get("data").and_then(|d| d.get("object")).filter(|o| o.is_object());
+    let object_record = event_payload
+        .get("data")
+        .and_then(|d| d.get("object"))
+        .filter(|o| o.is_object());
     let get_str = |key: &str| -> String {
-        object_record.and_then(|o| o.get(key)).and_then(Value::as_str).unwrap_or("").trim().to_string()
+        object_record
+            .and_then(|o| o.get(key))
+            .and_then(Value::as_str)
+            .unwrap_or("")
+            .trim()
+            .to_string()
     };
-    let metadata = object_record.and_then(|o| o.get("metadata")).filter(|m| m.is_object());
+    let metadata = object_record
+        .and_then(|o| o.get("metadata"))
+        .filter(|m| m.is_object());
     let meta_str = |key: &str| -> String {
-        metadata.and_then(|m| m.get(key)).and_then(Value::as_str).unwrap_or("").trim().to_string()
+        metadata
+            .and_then(|m| m.get(key))
+            .and_then(Value::as_str)
+            .unwrap_or("")
+            .trim()
+            .to_string()
     };
 
     let customer_reference = {
@@ -402,7 +481,11 @@ fn extract_billing_target(event_payload: &Value, object_id: &str) -> (Option<Str
             cr
         } else {
             let crid = get_str("client_reference_id");
-            if !crid.is_empty() { crid } else { get_str("customer_email") }
+            if !crid.is_empty() {
+                crid
+            } else {
+                get_str("customer_email")
+            }
         }
     };
     let subscription_id = {
@@ -411,7 +494,11 @@ fn extract_billing_target(event_payload: &Value, object_id: &str) -> (Option<Str
             sub
         } else {
             let id = get_str("id");
-            if !id.is_empty() { id } else { object_id.trim().to_string() }
+            if !id.is_empty() {
+                id
+            } else {
+                object_id.trim().to_string()
+            }
         }
     };
     let plan_id = meta_str("plan_id");
@@ -437,22 +524,24 @@ fn extract_billing_target(event_payload: &Value, object_id: &str) -> (Option<Str
 
 /// Stripe-Webhook-Events (Python `_load_billing_event_entries`).
 async fn billing_event_entries(pool: &PgPool) -> Result<Vec<Value>, sqlx::Error> {
-    type Row = (Option<String>, Option<String>, Option<String>, Option<String>, Option<i32>, Option<String>);
-    let rows: Vec<Row> = sqlx::query_as(
-        "SELECT stripe_event_id, event_type, object_id, received_at, livemode, payload \
+    let rows = sqlx::query!(
+        "SELECT stripe_event_id AS \"stripe_event_id?\", event_type AS \"event_type?\", \
+                object_id AS \"object_id?\", received_at AS \"received_at?\", \
+                livemode AS \"livemode?\", payload AS \"payload?\" \
          FROM twitch_billing_events ORDER BY received_at DESC",
     )
     .fetch_all(pool)
     .await?;
 
     let mut entries = Vec::new();
-    for (event_id, event_type, object_id, received_at, livemode, payload) in rows {
-        let event_id = event_id.unwrap_or_default().trim().to_string();
-        let event_type = event_type.unwrap_or_default().trim().to_string();
-        let object_id = object_id.unwrap_or_default().trim().to_string();
-        let livemode = livemode.unwrap_or(0) != 0;
-        let payload_text = payload.unwrap_or_default();
-        let event_payload: Value = serde_json::from_str(payload_text.trim()).unwrap_or_else(|_| json!({}));
+    for row in rows {
+        let event_id = row.stripe_event_id.unwrap_or_default().trim().to_string();
+        let event_type = row.event_type.unwrap_or_default().trim().to_string();
+        let object_id = row.object_id.unwrap_or_default().trim().to_string();
+        let livemode = row.livemode.unwrap_or(0) != 0;
+        let payload_text = row.payload.unwrap_or_default();
+        let event_payload: Value =
+            serde_json::from_str(payload_text.trim()).unwrap_or_else(|_| json!({}));
 
         let (target, details) = extract_billing_target(&event_payload, &object_id);
         let (action, description) = map_billing_action(&event_type);
@@ -462,8 +551,21 @@ async fn billing_event_entries(pool: &PgPool) -> Result<Vec<Value>, sqlx::Error>
                 m.insert(k.clone(), v.clone());
             }
         }
-        let id = if !event_id.is_empty() { event_id } else { object_id.clone() };
-        if let Some(e) = make_entry(format!("billing:{id}"), "billing", &action, None, target.as_deref(), received_at.as_deref(), description, Some(metadata)) {
+        let id = if !event_id.is_empty() {
+            event_id
+        } else {
+            object_id.clone()
+        };
+        if let Some(e) = make_entry(
+            format!("billing:{id}"),
+            "billing",
+            &action,
+            None,
+            target.as_deref(),
+            row.received_at.as_deref(),
+            description,
+            Some(metadata),
+        ) {
             entries.push(e);
         }
     }
@@ -473,41 +575,58 @@ async fn billing_event_entries(pool: &PgPool) -> Result<Vec<Value>, sqlx::Error>
 /// Abo-Statusänderungen als Fallback, wenn keine Webhook-Events vorliegen
 /// (Python `_load_billing_subscription_entries`).
 async fn billing_subscription_entries(pool: &PgPool) -> Result<Vec<Value>, sqlx::Error> {
-    type Row = (
-        Option<String>, // stripe_subscription_id
-        Option<String>, // customer_reference
-        Option<String>, // status
-        Option<String>, // plan_id
-        Option<String>, // current_period_end
-        Option<String>, // canceled_at
-        Option<String>, // ended_at
-        Option<String>, // updated_at
-    );
-    let rows: Vec<Row> = sqlx::query_as(
-        "SELECT stripe_subscription_id, customer_reference, status, plan_id, current_period_end, \
-                canceled_at, ended_at, updated_at \
+    let rows = sqlx::query!(
+        "SELECT stripe_subscription_id AS \"stripe_subscription_id?\", \
+                customer_reference AS \"customer_reference?\", status AS \"status?\", \
+                plan_id AS \"plan_id?\", current_period_end AS \"current_period_end?\", \
+                canceled_at AS \"canceled_at?\", ended_at AS \"ended_at?\", updated_at AS \"updated_at?\" \
          FROM twitch_billing_subscriptions WHERE updated_at IS NOT NULL ORDER BY updated_at DESC",
     )
     .fetch_all(pool)
     .await?;
 
     let mut entries = Vec::new();
-    for (sub_id, cust_ref, status, plan_id, cpe, canceled_at, ended_at, updated_at) in rows {
-        let subscription_id = sub_id.unwrap_or_default().trim().to_string();
-        let customer_reference = cust_ref.unwrap_or_default().trim().to_string();
-        let status = status.unwrap_or_default().trim().to_lowercase();
-        let plan_id = plan_id.unwrap_or_default().trim().to_string();
-        let updated_raw = updated_at.unwrap_or_default();
-        let label = if !customer_reference.is_empty() { customer_reference.clone() } else { subscription_id.clone() };
-
-        let is_canceled = ended_at.as_deref().is_some_and(|s| !s.is_empty())
-            || canceled_at.as_deref().is_some_and(|s| !s.is_empty())
-            || matches!(status.as_str(), "canceled" | "cancelled" | "incomplete_expired");
-        let (action, description): (&str, String) = if is_canceled {
-            ("subscription_canceled", format!("Abo fuer {label} beendet oder gekuendigt."))
+    for row in rows {
+        let subscription_id = row
+            .stripe_subscription_id
+            .unwrap_or_default()
+            .trim()
+            .to_string();
+        let customer_reference = row
+            .customer_reference
+            .unwrap_or_default()
+            .trim()
+            .to_string();
+        let status = row.status.unwrap_or_default().trim().to_lowercase();
+        let plan_id = row.plan_id.unwrap_or_default().trim().to_string();
+        let updated_raw = row.updated_at.unwrap_or_default();
+        let label = if !customer_reference.is_empty() {
+            customer_reference.clone()
         } else {
-            let status_label = if status.is_empty() { "unknown" } else { status.as_str() };
-            ("subscription_updated", format!("Abo-Status fuer {label} auf {status_label} aktualisiert."))
+            subscription_id.clone()
+        };
+
+        let is_canceled = row.ended_at.as_deref().is_some_and(|s| !s.is_empty())
+            || row.canceled_at.as_deref().is_some_and(|s| !s.is_empty())
+            || matches!(
+                status.as_str(),
+                "canceled" | "cancelled" | "incomplete_expired"
+            );
+        let (action, description): (&str, String) = if is_canceled {
+            (
+                "subscription_canceled",
+                format!("Abo fuer {label} beendet oder gekuendigt."),
+            )
+        } else {
+            let status_label = if status.is_empty() {
+                "unknown"
+            } else {
+                status.as_str()
+            };
+            (
+                "subscription_updated",
+                format!("Abo-Status fuer {label} auf {status_label} aktualisiert."),
+            )
         };
         let target = if !customer_reference.is_empty() {
             Some(customer_reference.clone())
@@ -521,11 +640,20 @@ async fn billing_subscription_entries(pool: &PgPool) -> Result<Vec<Value>, sqlx:
             "customerReference": opt(&customer_reference),
             "status": opt(&status),
             "planId": opt(&plan_id),
-            "currentPeriodEnd": coerce_iso(cpe.as_deref()),
-            "canceledAt": coerce_iso(canceled_at.as_deref()),
-            "endedAt": coerce_iso(ended_at.as_deref()),
+            "currentPeriodEnd": coerce_iso(row.current_period_end.as_deref()),
+            "canceledAt": coerce_iso(row.canceled_at.as_deref()),
+            "endedAt": coerce_iso(row.ended_at.as_deref()),
         });
-        if let Some(e) = make_entry(format!("billing:{subscription_id}:{updated_raw}"), "billing", action, None, target.as_deref(), Some(updated_raw.as_str()), description, Some(metadata)) {
+        if let Some(e) = make_entry(
+            format!("billing:{subscription_id}:{updated_raw}"),
+            "billing",
+            action,
+            None,
+            target.as_deref(),
+            Some(updated_raw.as_str()),
+            description,
+            Some(metadata),
+        ) {
             entries.push(e);
         }
     }
@@ -565,7 +693,12 @@ fn combine_and_filter(
         since_filtered
             .into_iter()
             .filter(|e| {
-                let s = e.get("source").and_then(Value::as_str).unwrap_or("").trim().to_lowercase();
+                let s = e
+                    .get("source")
+                    .and_then(Value::as_str)
+                    .unwrap_or("")
+                    .trim()
+                    .to_lowercase();
                 source_filters.contains(&s)
             })
             .collect()
@@ -683,7 +816,12 @@ pub async fn handler(
     entries.extend(roadmap_entries().await);
     entries.extend(legal_entries().await);
 
-    Ok(Json(combine_and_filter(entries, since, &source_filters, limit)))
+    Ok(Json(combine_and_filter(
+        entries,
+        since,
+        &source_filters,
+        limit,
+    )))
 }
 
 #[cfg(test)]
@@ -694,12 +832,28 @@ mod tests {
 
     async fn make_pool(schema: &str) -> Option<PgPool> {
         let dsn = std::env::var("TB_TEST_DATABASE_URL").ok()?;
-        let admin = PgPoolOptions::new().max_connections(1).connect(&dsn).await.unwrap();
-        sqlx::query(&format!("DROP SCHEMA IF EXISTS {schema} CASCADE")).execute(&admin).await.unwrap();
-        sqlx::query(&format!("CREATE SCHEMA {schema}")).execute(&admin).await.unwrap();
+        let admin = PgPoolOptions::new()
+            .max_connections(1)
+            .connect(&dsn)
+            .await
+            .unwrap();
+        sqlx::query(&format!("DROP SCHEMA IF EXISTS {schema} CASCADE"))
+            .execute(&admin)
+            .await
+            .unwrap();
+        sqlx::query(&format!("CREATE SCHEMA {schema}"))
+            .execute(&admin)
+            .await
+            .unwrap();
         admin.close().await;
-        let opts = PgConnectOptions::from_str(&dsn).unwrap().options([("search_path", schema)]);
-        let pool = PgPoolOptions::new().max_connections(2).connect_with(opts).await.unwrap();
+        let opts = PgConnectOptions::from_str(&dsn)
+            .unwrap()
+            .options([("search_path", schema)]);
+        let pool = PgPoolOptions::new()
+            .max_connections(2)
+            .connect_with(opts)
+            .await
+            .unwrap();
         for ddl in [
             "CREATE TABLE twitch_partners (id BIGSERIAL PRIMARY KEY, twitch_user_id TEXT, twitch_login TEXT, added_by TEXT, partnered_at TEXT, admin_archived_at TEXT, departnered_at TEXT, status TEXT, technical_pause_reason TEXT)",
             "CREATE TABLE streamer_plans (twitch_login TEXT PRIMARY KEY, twitch_user_id TEXT, manual_plan_id TEXT, manual_plan_expires_at TEXT, manual_plan_notes TEXT, manual_plan_updated_at TEXT)",
@@ -713,11 +867,16 @@ mod tests {
 
     #[tokio::test]
     async fn streamer_history_added() {
-        let Some(pool) = make_pool("t_audit_sh").await else { return };
+        let Some(pool) = make_pool("t_audit_sh").await else {
+            return;
+        };
         sqlx::query("INSERT INTO twitch_partners (twitch_user_id, twitch_login, added_by, partnered_at, status) VALUES ('100','nani','admin','2026-02-01T00:00:00Z','active')")
             .execute(&pool).await.unwrap();
         let entries = streamer_history_entries(&pool).await.unwrap();
-        let actions: Vec<&str> = entries.iter().map(|e| e["action"].as_str().unwrap()).collect();
+        let actions: Vec<&str> = entries
+            .iter()
+            .map(|e| e["action"].as_str().unwrap())
+            .collect();
         assert!(actions.contains(&"added"));
         let added = entries.iter().find(|e| e["action"] == "added").unwrap();
         assert_eq!(added["target"], "nani");
@@ -727,22 +886,32 @@ mod tests {
 
     #[tokio::test]
     async fn streamer_history_restore_und_remove() {
-        let Some(pool) = make_pool("t_audit_restore").await else { return };
+        let Some(pool) = make_pool("t_audit_restore").await else {
+            return;
+        };
         // Gleiche Identität: erst departnered (älter) → remove, dann re-partnered (neuer) → restore.
         sqlx::query("INSERT INTO twitch_partners (twitch_user_id, twitch_login, departnered_at, status) VALUES ('200','foo','2026-01-01T00:00:00Z','departnered')")
             .execute(&pool).await.unwrap();
         sqlx::query("INSERT INTO twitch_partners (twitch_user_id, twitch_login, partnered_at, status) VALUES ('200','foo','2026-02-01T00:00:00Z','active')")
             .execute(&pool).await.unwrap();
         let entries = streamer_history_entries(&pool).await.unwrap();
-        let actions: Vec<&str> = entries.iter().map(|e| e["action"].as_str().unwrap()).collect();
+        let actions: Vec<&str> = entries
+            .iter()
+            .map(|e| e["action"].as_str().unwrap())
+            .collect();
         assert!(actions.contains(&"remove"));
-        assert!(actions.contains(&"restore"), "prior_inactive → restore statt added");
+        assert!(
+            actions.contains(&"restore"),
+            "prior_inactive → restore statt added"
+        );
         assert!(!actions.contains(&"added"));
     }
 
     #[tokio::test]
     async fn manual_plan_set_und_cleared() {
-        let Some(pool) = make_pool("t_audit_mp").await else { return };
+        let Some(pool) = make_pool("t_audit_mp").await else {
+            return;
+        };
         sqlx::query("INSERT INTO streamer_plans (twitch_login, twitch_user_id, manual_plan_id, manual_plan_updated_at, manual_plan_notes) VALUES ('nani','100','raid_extended','2026-03-01T00:00:00Z','VIP')")
             .execute(&pool).await.unwrap();
         // Ohne manual_plan_updated_at → ignoriert (WHERE NOT NULL).
@@ -758,8 +927,14 @@ mod tests {
 
     #[test]
     fn map_billing_action_bekannt_und_fallback() {
-        assert_eq!(map_billing_action("customer.subscription.deleted").0, "subscription_canceled");
-        assert_eq!(map_billing_action("invoice.payment_succeeded").0, "invoice_paid");
+        assert_eq!(
+            map_billing_action("customer.subscription.deleted").0,
+            "subscription_canceled"
+        );
+        assert_eq!(
+            map_billing_action("invoice.payment_succeeded").0,
+            "invoice_paid"
+        );
         // unbekannt → fallback mit Punkt→Unterstrich.
         let (a, d) = map_billing_action("custom.weird.event");
         assert_eq!(a, "custom_weird_event");
@@ -784,14 +959,16 @@ mod tests {
         assert_eq!(details["subscriptionId"], "sub_123");
         assert_eq!(details["planId"], "raid_plus");
         assert_eq!(details["status"], "active"); // lowercased
-        // ohne data.object → target fällt auf object_id.
+                                                 // ohne data.object → target fällt auf object_id.
         let (target, _d) = extract_billing_target(&json!({}), "evt_obj");
         assert_eq!(target.as_deref(), Some("evt_obj"));
     }
 
     #[tokio::test]
     async fn billing_event_entry_aus_db() {
-        let Some(pool) = make_pool("t_audit_be").await else { return };
+        let Some(pool) = make_pool("t_audit_be").await else {
+            return;
+        };
         sqlx::query("INSERT INTO twitch_billing_events (stripe_event_id, event_type, object_id, received_at, livemode, payload) VALUES ('evt_1','customer.subscription.created','obj_1','2026-04-01T00:00:00Z',1,'{\"data\":{\"object\":{\"id\":\"sub_9\",\"metadata\":{\"customer_reference\":\"nani\"}}}}')")
             .execute(&pool).await.unwrap();
         let entries = billing_event_entries(&pool).await.unwrap();
@@ -799,22 +976,33 @@ mod tests {
         assert_eq!(entries[0]["action"], "subscription_created");
         assert_eq!(entries[0]["target"], "nani");
         assert_eq!(entries[0]["metadata"]["livemode"], true);
-        assert_eq!(entries[0]["metadata"]["eventType"], "customer.subscription.created");
+        assert_eq!(
+            entries[0]["metadata"]["eventType"],
+            "customer.subscription.created"
+        );
         assert_eq!(entries[0]["metadata"]["subscriptionId"], "sub_9");
     }
 
     #[tokio::test]
     async fn billing_subscription_canceled_vs_updated() {
-        let Some(pool) = make_pool("t_audit_bs").await else { return };
+        let Some(pool) = make_pool("t_audit_bs").await else {
+            return;
+        };
         sqlx::query("INSERT INTO twitch_billing_subscriptions (stripe_subscription_id, customer_reference, status, updated_at) VALUES ('sub_a','nani','active','2026-04-02T00:00:00Z')")
             .execute(&pool).await.unwrap();
         sqlx::query("INSERT INTO twitch_billing_subscriptions (stripe_subscription_id, customer_reference, status, ended_at, updated_at) VALUES ('sub_b','foo','canceled','2026-04-01T00:00:00Z','2026-04-03T00:00:00Z')")
             .execute(&pool).await.unwrap();
         let entries = billing_subscription_entries(&pool).await.unwrap();
         assert_eq!(entries.len(), 2);
-        let a = entries.iter().find(|e| e["metadata"]["subscriptionId"] == "sub_a").unwrap();
+        let a = entries
+            .iter()
+            .find(|e| e["metadata"]["subscriptionId"] == "sub_a")
+            .unwrap();
         assert_eq!(a["action"], "subscription_updated");
-        let b = entries.iter().find(|e| e["metadata"]["subscriptionId"] == "sub_b").unwrap();
+        let b = entries
+            .iter()
+            .find(|e| e["metadata"]["subscriptionId"] == "sub_b")
+            .unwrap();
         assert_eq!(b["action"], "subscription_canceled");
     }
 
@@ -834,10 +1022,30 @@ mod tests {
 
     #[test]
     fn make_entry_ungueltiger_timestamp_none() {
-        assert!(make_entry("id".into(), "s", "a", None, None, Some("quatsch"), "d".into(), None).is_none());
+        assert!(make_entry(
+            "id".into(),
+            "s",
+            "a",
+            None,
+            None,
+            Some("quatsch"),
+            "d".into(),
+            None
+        )
+        .is_none());
         assert!(make_entry("id".into(), "s", "a", None, None, None, "d".into(), None).is_none());
         // actor leer → null.
-        let e = make_entry("id".into(), "s", "a", Some("  "), None, Some("2026-06-15T12:00:00Z"), "d".into(), None).unwrap();
+        let e = make_entry(
+            "id".into(),
+            "s",
+            "a",
+            Some("  "),
+            None,
+            Some("2026-06-15T12:00:00Z"),
+            "d".into(),
+            None,
+        )
+        .unwrap();
         assert!(e["actor"].is_null());
     }
 

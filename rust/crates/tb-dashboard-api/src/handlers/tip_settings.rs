@@ -60,14 +60,14 @@ pub async fn get_handler(auth: DashboardAuthLevel, State(pool): State<PgPool>) -
         Err(resp) => return resp,
     };
 
-    match sqlx::query_as::<_, (bool,)>(
+    match sqlx::query_scalar!(
         "SELECT opt_out FROM twitch_tip_settings WHERE twitch_user_id = $1",
+        twitch_user_id
     )
-    .bind(&twitch_user_id)
     .fetch_optional(&pool)
     .await
     {
-        Ok(Some((opt_out,))) => Json(TipSettingsResponse { opt_out }).into_response(),
+        Ok(Some(opt_out)) => Json(TipSettingsResponse { opt_out }).into_response(),
         Ok(None) => Json(TipSettingsResponse { opt_out: false }).into_response(),
         Err(error) => {
             tracing::error!(%error, "tip-settings GET DB-Fehler");
@@ -90,14 +90,14 @@ pub async fn post_handler(
         Err(resp) => return resp,
     };
 
-    let result = sqlx::query(
+    let result = sqlx::query!(
         "INSERT INTO twitch_tip_settings (twitch_user_id, opt_out, updated_at) \
          VALUES ($1, $2, NOW()) \
          ON CONFLICT (twitch_user_id) DO UPDATE \
          SET opt_out = EXCLUDED.opt_out, updated_at = NOW()",
+        twitch_user_id,
+        body.opt_out
     )
-    .bind(&twitch_user_id)
-    .bind(body.opt_out)
     .execute(&pool)
     .await;
 

@@ -1,0 +1,24 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n            SELECT COUNT(*) AS \"count!\"\n            FROM dashboard_sessions\n            WHERE session_type = $1\n              AND expires_at > $2\n              AND session_id LIKE $3\n            ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "count!",
+        "type_info": "Int8"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Text",
+        "Float8",
+        "Text"
+      ]
+    },
+    "nullable": [
+      null
+    ]
+  },
+  "hash": "cbf85c09c9159cf0d37c1f1ce844460dbfc4f3ff7067cc66add5d82403eaf14c"
+}

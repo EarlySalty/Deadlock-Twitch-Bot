@@ -261,30 +261,22 @@ pub async fn stream_report_handler(
             .report_variant
             .clone()
             .unwrap_or_else(|| VARIANT_COMPACT.to_string());
-        if let Ok(Some((rt, comment, rated_by, updated_at))) = sqlx::query_as::<
-            _,
-            (
-                Option<String>,
-                Option<String>,
-                Option<String>,
-                Option<String>,
-            ),
-        >(
-            "SELECT rating, comment, rated_by, updated_at::text \
+        if let Ok(Some(row)) = sqlx::query!(
+            "SELECT rating AS \"rating?\", comment, rated_by AS \"rated_by?\", updated_at::text AS \"updated_at?\" \
                  FROM twitch_stream_report_ratings \
                  WHERE session_id = $1 AND report_variant = $2 AND rated_by = $3 LIMIT 1",
+            sid,
+            &variant_for_rating,
+            &rater
         )
-        .bind(sid)
-        .bind(&variant_for_rating)
-        .bind(&rater)
         .fetch_optional(&pool)
         .await
         {
             rating = json!({
-                "rating": rt,
-                "comment": comment,
-                "rated_by": rated_by,
-                "updated_at": updated_at.unwrap_or_default(),
+                "rating": row.rating,
+                "comment": row.comment,
+                "rated_by": row.rated_by,
+                "updated_at": row.updated_at.unwrap_or_default(),
             });
         }
     }
@@ -315,19 +307,19 @@ async fn upsert_rating(
     comment: Option<&str>,
     rated_by: &str,
 ) -> Result<(), sqlx::Error> {
-    sqlx::query(
+    sqlx::query!(
         "INSERT INTO twitch_stream_report_ratings \
          (session_id, streamer_login, report_variant, rating, comment, rated_by, updated_at) \
          VALUES ($1, $2, $3, $4, $5, $6, NOW()) \
          ON CONFLICT (session_id, report_variant, rated_by) \
          DO UPDATE SET rating = EXCLUDED.rating, comment = EXCLUDED.comment, updated_at = NOW()",
+        session_id,
+        streamer,
+        variant,
+        rating,
+        comment,
+        rated_by
     )
-    .bind(session_id)
-    .bind(streamer)
-    .bind(variant)
-    .bind(rating)
-    .bind(comment)
-    .bind(rated_by)
     .execute(pool)
     .await?;
     Ok(())
@@ -465,16 +457,16 @@ async fn ab_vote_totals(pool: &PgPool, session_id: i64) -> Result<serde_json::Va
     agg.insert("compact".into(), json!(0));
     agg.insert("full".into(), json!(0));
     agg.insert("gleich".into(), json!(0));
-    let rows = sqlx::query_as::<_, (Option<String>, i64)>(
-        "SELECT winner, COUNT(*)::int8 AS n FROM twitch_stream_report_ab_votes \
+    let rows = sqlx::query!(
+        "SELECT winner AS \"winner?\", COUNT(*)::int8 AS \"n!\" FROM twitch_stream_report_ab_votes \
          WHERE session_id = $1 GROUP BY winner",
+        session_id
     )
-    .bind(session_id)
     .fetch_all(pool)
     .await?;
-    for (winner, n) in rows {
-        if let Some(w) = winner {
-            agg.insert(w, json!(n));
+    for row in rows {
+        if let Some(w) = row.winner {
+            agg.insert(w, json!(row.n));
         }
     }
     Ok(serde_json::Value::Object(agg))
@@ -489,18 +481,18 @@ async fn upsert_ab_vote(
     comment: Option<&str>,
     voted_by: &str,
 ) -> Result<(), sqlx::Error> {
-    sqlx::query(
+    sqlx::query!(
         "INSERT INTO twitch_stream_report_ab_votes \
          (session_id, streamer_login, winner, comment, voted_by, updated_at) \
          VALUES ($1, $2, $3, $4, $5, NOW()) \
          ON CONFLICT (session_id, voted_by) \
          DO UPDATE SET winner = EXCLUDED.winner, comment = EXCLUDED.comment, updated_at = NOW()",
+        session_id,
+        streamer,
+        winner,
+        comment,
+        voted_by
     )
-    .bind(session_id)
-    .bind(streamer)
-    .bind(winner)
-    .bind(comment)
-    .bind(voted_by)
     .execute(pool)
     .await?;
     Ok(())
@@ -547,19 +539,19 @@ pub async fn stream_report_ab_vote_get(
     }
     let session_id = session_id.unwrap();
     let own_json = if let Some(vb) = owner_login(&auth) {
-        match sqlx::query_as::<_, (Option<String>, Option<String>, Option<String>)>(
-            "SELECT winner, comment, updated_at::text FROM twitch_stream_report_ab_votes \
+        match sqlx::query!(
+            "SELECT winner AS \"winner?\", comment, updated_at::text AS \"updated_at?\" FROM twitch_stream_report_ab_votes \
              WHERE session_id = $1 AND voted_by = $2 LIMIT 1",
+            session_id,
+            &vb
         )
-        .bind(session_id)
-        .bind(&vb)
         .fetch_optional(&pool)
         .await
         {
-            Ok(Some((winner, comment, updated_at))) => json!({
-                "winner": winner,
-                "comment": comment,
-                "updated_at": updated_at.unwrap_or_default(),
+            Ok(Some(row)) => json!({
+                "winner": row.winner,
+                "comment": row.comment,
+                "updated_at": row.updated_at.unwrap_or_default(),
             }),
             Ok(None) => serde_json::Value::Null,
             Err(e) => {
@@ -740,14 +732,18 @@ mod tests {
         .execute(pool)
         .await
         .unwrap();
-        sqlx::query("CREATE INDEX idx_ab_votes_session ON twitch_stream_report_ab_votes (session_id)")
-            .execute(pool)
-            .await
-            .unwrap();
-        sqlx::query("CREATE INDEX idx_ab_votes_streamer ON twitch_stream_report_ab_votes (streamer_login)")
-            .execute(pool)
-            .await
-            .unwrap();
+        sqlx::query(
+            "CREATE INDEX idx_ab_votes_session ON twitch_stream_report_ab_votes (session_id)",
+        )
+        .execute(pool)
+        .await
+        .unwrap();
+        sqlx::query(
+            "CREATE INDEX idx_ab_votes_streamer ON twitch_stream_report_ab_votes (streamer_login)",
+        )
+        .execute(pool)
+        .await
+        .unwrap();
     }
 
     fn partner(login: &str) -> DashboardAuthLevel {

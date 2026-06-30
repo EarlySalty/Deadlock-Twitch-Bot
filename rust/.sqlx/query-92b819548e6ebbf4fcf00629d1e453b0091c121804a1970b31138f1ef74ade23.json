@@ -1,0 +1,50 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT twitch_user_id AS \"twitch_user_id?\", twitch_login AS \"twitch_login?\", manual_plan_id AS \"manual_plan_id?\", manual_plan_expires_at AS \"manual_plan_expires_at?\", manual_plan_notes AS \"manual_plan_notes?\", manual_plan_updated_at AS \"manual_plan_updated_at?\" FROM streamer_plans WHERE manual_plan_updated_at IS NOT NULL ORDER BY manual_plan_updated_at DESC",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "twitch_user_id?",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 1,
+        "name": "twitch_login?",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 2,
+        "name": "manual_plan_id?",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 3,
+        "name": "manual_plan_expires_at?",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 4,
+        "name": "manual_plan_notes?",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 5,
+        "name": "manual_plan_updated_at?",
+        "type_info": "Text"
+      }
+    ],
+    "parameters": {
+      "Left": []
+    },
+    "nullable": [
+      false,
+      true,
+      true,
+      true,
+      false,
+      true
+    ]
+  },
+  "hash": "92b819548e6ebbf4fcf00629d1e453b0091c121804a1970b31138f1ef74ade23"
+}

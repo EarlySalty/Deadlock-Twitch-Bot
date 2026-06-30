@@ -1,0 +1,24 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n            SELECT payload_enc\n            FROM dashboard_sessions\n            WHERE session_id = $1\n              AND session_type = $2\n              AND expires_at > $3\n            ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "payload_enc",
+        "type_info": "Bytea"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Text",
+        "Text",
+        "Float8"
+      ]
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "4a052e53ed35525f60b44312d380559b46968d014a912a4a5976a4c3ee911614"
+}

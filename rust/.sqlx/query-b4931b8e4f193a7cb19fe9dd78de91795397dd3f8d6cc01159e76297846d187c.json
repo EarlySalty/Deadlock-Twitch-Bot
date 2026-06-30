@@ -1,0 +1,77 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT id, chatter_login, chatter_id, verdict, confidence::float8 AS \"confidence!\", category, reasoning, transcript_snapshot, action_taken, created_at FROM twitch_scam_guard_verdicts WHERE id = $1 AND channel_login = $2",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id",
+        "type_info": "Int8"
+      },
+      {
+        "ordinal": 1,
+        "name": "chatter_login",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 2,
+        "name": "chatter_id",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 3,
+        "name": "verdict",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 4,
+        "name": "confidence!",
+        "type_info": "Float8"
+      },
+      {
+        "ordinal": 5,
+        "name": "category",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 6,
+        "name": "reasoning",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 7,
+        "name": "transcript_snapshot",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 8,
+        "name": "action_taken",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 9,
+        "name": "created_at",
+        "type_info": "Timestamptz"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Int8",
+        "Text"
+      ]
+    },
+    "nullable": [
+      false,
+      false,
+      true,
+      false,
+      null,
+      false,
+      false,
+      false,
+      false,
+      false
+    ]
+  },
+  "hash": "b4931b8e4f193a7cb19fe9dd78de91795397dd3f8d6cc01159e76297846d187c"
+}

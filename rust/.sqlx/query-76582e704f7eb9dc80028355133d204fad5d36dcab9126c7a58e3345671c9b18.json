@@ -1,0 +1,18 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "INSERT INTO twitch_scam_guard_settings (channel_login, enabled, mode, threshold, suggestion_floor) VALUES ($1, $2, $3, $4, $5) ON CONFLICT (channel_login) DO UPDATE SET enabled = EXCLUDED.enabled, mode = EXCLUDED.mode, threshold = EXCLUDED.threshold, suggestion_floor = EXCLUDED.suggestion_floor",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Text",
+        "Bool",
+        "Text",
+        "Float4",
+        "Float4"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "76582e704f7eb9dc80028355133d204fad5d36dcab9126c7a58e3345671c9b18"
+}

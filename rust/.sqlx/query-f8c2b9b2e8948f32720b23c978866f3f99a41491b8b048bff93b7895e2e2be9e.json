@@ -1,0 +1,24 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT COUNT(*) AS \"cnt!\" FROM twitch_chat_messages cm\n         WHERE cm.message_ts >= $1 AND LOWER(cm.streamer_login) = $2\n           AND (cm.chatter_login IS NULL OR cm.chatter_login = ''\n                OR LOWER(cm.chatter_login) <> ALL($3::text[]))",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "cnt!",
+        "type_info": "Int8"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Timestamptz",
+        "Text",
+        "TextArray"
+      ]
+    },
+    "nullable": [
+      null
+    ]
+  },
+  "hash": "f8c2b9b2e8948f32720b23c978866f3f99a41491b8b048bff93b7895e2e2be9e"
+}

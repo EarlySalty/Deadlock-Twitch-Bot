@@ -88,11 +88,11 @@ fn requested_login(
 }
 
 async fn resolve_user_id(pool: &PgPool, login: &str) -> Result<Option<String>, sqlx::Error> {
-    sqlx::query_scalar(
-        "SELECT twitch_user_id FROM twitch_streamers \
+    sqlx::query_scalar!(
+        "SELECT twitch_user_id AS \"twitch_user_id!\" FROM twitch_streamers \
          WHERE LOWER(twitch_login) = $1 AND COALESCE(twitch_user_id, '') <> '' LIMIT 1",
+        login
     )
-    .bind(login)
     .fetch_optional(pool)
     .await
 }
@@ -109,19 +109,18 @@ struct TitleContext {
 
 /// Löst die Discord-ID des Streamers auf (für die Steam-Lookup-DB).
 async fn resolve_discord_user_id(pool: &PgPool, twitch_user_id: &str) -> Option<i64> {
-    let row: Option<(Option<String>,)> = sqlx::query_as(
-        "SELECT discord_user_id::text \
+    let row = sqlx::query_scalar!(
+        "SELECT discord_user_id::text AS \"discord_user_id?\" \
          FROM twitch_streamer_identities \
          WHERE twitch_user_id = $1 \
          LIMIT 1",
+        twitch_user_id
     )
-    .bind(twitch_user_id)
     .fetch_optional(pool)
     .await
     .ok()
     .flatten();
-    row.and_then(|(d,)| d)
-        .and_then(|s| s.trim().parse::<i64>().ok())
+    row.flatten().and_then(|s| s.trim().parse::<i64>().ok())
 }
 
 /// Holt Rang (+ optional Live-State) für den Streamer — Parität zu

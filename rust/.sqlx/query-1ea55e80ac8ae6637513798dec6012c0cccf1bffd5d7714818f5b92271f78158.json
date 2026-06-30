@@ -1,0 +1,14 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n        DELETE FROM internal_home_changelog\n        WHERE id IN (\n            SELECT id FROM internal_home_changelog\n            ORDER BY entry_date DESC, created_at DESC, id DESC\n            OFFSET $1\n        )\n        ",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Int8"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "1ea55e80ac8ae6637513798dec6012c0cccf1bffd5d7714818f5b92271f78158"
+}

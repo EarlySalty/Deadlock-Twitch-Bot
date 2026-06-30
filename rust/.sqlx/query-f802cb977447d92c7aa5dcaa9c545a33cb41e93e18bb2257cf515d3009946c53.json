@@ -1,0 +1,30 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT LOWER(m.chatter_login) AS \"login!\", COUNT(*) AS \"raw_messages!\"\n           FROM twitch_chat_messages m\n           WHERE LOWER(m.streamer_login) = $1 AND m.message_ts >= $2\n             AND LOWER(m.chatter_login) = ANY($3)\n           GROUP BY LOWER(m.chatter_login)",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "login!",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 1,
+        "name": "raw_messages!",
+        "type_info": "Int8"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Text",
+        "Timestamptz",
+        "TextArray"
+      ]
+    },
+    "nullable": [
+      null,
+      null
+    ]
+  },
+  "hash": "f802cb977447d92c7aa5dcaa9c545a33cb41e93e18bb2257cf515d3009946c53"
+}

@@ -1,0 +1,20 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "INSERT INTO twitch_engagement_settings (channel_login, enabled, steam_id, persona_override, tabu_topics, enabled_at, enabled_by, updated_at) VALUES ($1, $2, $3, $4, $5, CASE WHEN $6 THEN NOW() ELSE NULL END, $7, NOW())",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Text",
+        "Bool",
+        "Text",
+        "Text",
+        "TextArray",
+        "Bool",
+        "Text"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "e5e9e1327b14b4356d5b80f1a7ed671fc2e8d33e463261e27ae8ec9c72451ff0"
+}

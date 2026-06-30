@@ -1,0 +1,119 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT id, streamer_login, started_at, ended_at, duration_seconds,\n                      start_viewers, peak_viewers, end_viewers, avg_viewers,\n                      retention_5m, retention_10m, retention_20m,\n                      dropoff_pct, unique_chatters, first_time_chatters,\n                      returning_chatters, stream_title\n               FROM twitch_stream_sessions\n               WHERE id = $1 AND LOWER(streamer_login) = $2",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id",
+        "type_info": "Int8"
+      },
+      {
+        "ordinal": 1,
+        "name": "streamer_login",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 2,
+        "name": "started_at",
+        "type_info": "Timestamptz"
+      },
+      {
+        "ordinal": 3,
+        "name": "ended_at",
+        "type_info": "Timestamptz"
+      },
+      {
+        "ordinal": 4,
+        "name": "duration_seconds",
+        "type_info": "Int4"
+      },
+      {
+        "ordinal": 5,
+        "name": "start_viewers",
+        "type_info": "Int4"
+      },
+      {
+        "ordinal": 6,
+        "name": "peak_viewers",
+        "type_info": "Int4"
+      },
+      {
+        "ordinal": 7,
+        "name": "end_viewers",
+        "type_info": "Int4"
+      },
+      {
+        "ordinal": 8,
+        "name": "avg_viewers",
+        "type_info": "Float8"
+      },
+      {
+        "ordinal": 9,
+        "name": "retention_5m",
+        "type_info": "Float8"
+      },
+      {
+        "ordinal": 10,
+        "name": "retention_10m",
+        "type_info": "Float8"
+      },
+      {
+        "ordinal": 11,
+        "name": "retention_20m",
+        "type_info": "Float8"
+      },
+      {
+        "ordinal": 12,
+        "name": "dropoff_pct",
+        "type_info": "Float8"
+      },
+      {
+        "ordinal": 13,
+        "name": "unique_chatters",
+        "type_info": "Int4"
+      },
+      {
+        "ordinal": 14,
+        "name": "first_time_chatters",
+        "type_info": "Int4"
+      },
+      {
+        "ordinal": 15,
+        "name": "returning_chatters",
+        "type_info": "Int4"
+      },
+      {
+        "ordinal": 16,
+        "name": "stream_title",
+        "type_info": "Text"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Int8",
+        "Text"
+      ]
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      true,
+      true,
+      true,
+      true,
+      true,
+      true,
+      true,
+      true,
+      true,
+      true,
+      true,
+      true,
+      true,
+      true
+    ]
+  },
+  "hash": "f914edc8f416bf6d8c4226d46d12eedfe5cd97f8c2f1398ddbbc634df619283e"
+}

@@ -8,7 +8,7 @@ use axum::{
 };
 use serde::Deserialize;
 use serde_json::{json, Value};
-use sqlx::{PgPool, Row};
+use sqlx::PgPool;
 use tb_http_core::AuthLevel;
 
 /// Erlaubte Roadmap-Status (Python: `_VALID_STATUSES`).
@@ -16,7 +16,7 @@ const VALID_STATUSES: &[&str] = &["planned", "in_progress", "done"];
 
 /// `GET /twitch/api/v2/roadmap`
 pub async fn get_handler(State(pool): State<PgPool>) -> impl IntoResponse {
-    let rows = sqlx::query(
+    let rows = sqlx::query!(
         "SELECT id, title, description, status, priority, created_at, updated_at \
          FROM twitch_roadmap_items ORDER BY priority DESC, id ASC",
     )
@@ -35,35 +35,57 @@ pub async fn get_handler(State(pool): State<PgPool>) -> impl IntoResponse {
         }
     };
 
-    Json(group_rows(rows)).into_response()
-}
-
-fn group_rows(rows: Vec<sqlx::postgres::PgRow>) -> serde_json::Value {
     let mut grouped = json!({"planned": [], "in_progress": [], "done": []});
     for row in rows {
-        let status = row
-            .try_get::<String, _>("status")
-            .unwrap_or_else(|_| "planned".to_string());
-        let group = if matches!(status.as_str(), "planned" | "in_progress" | "done") {
-            status.as_str()
-        } else {
-            "planned"
-        };
-        let item = json!({
-            "id": row.try_get::<i64, _>("id").unwrap_or(0),
-            "title": row.try_get::<String, _>("title").unwrap_or_default(),
-            "description": row.try_get::<Option<String>, _>("description").unwrap_or(None),
-            "status": status,
-            "priority": row.try_get::<i32, _>("priority").unwrap_or(0),
-            "created_at": row.try_get::<chrono::DateTime<chrono::Utc>, _>("created_at").ok(),
-            "updated_at": row.try_get::<chrono::DateTime<chrono::Utc>, _>("updated_at").ok(),
-        });
+        let group = roadmap_group(&row.status);
+        let item = roadmap_item_json(
+            row.id,
+            row.title,
+            row.description,
+            row.status,
+            row.priority,
+            row.created_at,
+            row.updated_at,
+        );
         grouped[group]
             .as_array_mut()
             .expect("Roadmap-Gruppen sind Arrays")
             .push(item);
     }
-    grouped
+
+    Json(grouped).into_response()
+}
+
+fn roadmap_group(status: &str) -> &'static str {
+    if matches!(status, "planned" | "in_progress" | "done") {
+        match status {
+            "in_progress" => "in_progress",
+            "done" => "done",
+            _ => "planned",
+        }
+    } else {
+        "planned"
+    }
+}
+
+fn roadmap_item_json(
+    id: i64,
+    title: String,
+    description: Option<String>,
+    status: String,
+    priority: i32,
+    created_at: chrono::DateTime<chrono::Utc>,
+    updated_at: chrono::DateTime<chrono::Utc>,
+) -> Value {
+    json!({
+        "id": id,
+        "title": title,
+        "description": description,
+        "status": status,
+        "priority": priority,
+        "created_at": created_at,
+        "updated_at": updated_at,
+    })
 }
 
 // ── Admin-CRUD (P1.31) ────────────────────────────────────────────────────────
@@ -108,26 +130,24 @@ fn json_err(status: StatusCode, message: &str) -> axum::response::Response {
 }
 
 async fn fetch_item(pool: &PgPool, id: i64) -> Result<Option<Value>, sqlx::Error> {
-    let row = sqlx::query(
+    let row = sqlx::query!(
         "SELECT id, title, description, status, priority, created_at, updated_at \
          FROM twitch_roadmap_items WHERE id = $1",
+        id
     )
-    .bind(id)
     .fetch_optional(pool)
     .await?;
-    Ok(row.map(|r| row_to_json(&r)))
-}
-
-fn row_to_json(row: &sqlx::postgres::PgRow) -> Value {
-    json!({
-        "id": row.try_get::<i64, _>("id").unwrap_or(0),
-        "title": row.try_get::<String, _>("title").unwrap_or_default(),
-        "description": row.try_get::<Option<String>, _>("description").unwrap_or(None),
-        "status": row.try_get::<String, _>("status").unwrap_or_else(|_| "planned".into()),
-        "priority": row.try_get::<i32, _>("priority").unwrap_or(0),
-        "created_at": row.try_get::<chrono::DateTime<chrono::Utc>, _>("created_at").ok(),
-        "updated_at": row.try_get::<chrono::DateTime<chrono::Utc>, _>("updated_at").ok(),
-    })
+    Ok(row.map(|r| {
+        roadmap_item_json(
+            r.id,
+            r.title,
+            r.description,
+            r.status,
+            r.priority,
+            r.created_at,
+            r.updated_at,
+        )
+    }))
 }
 
 fn normalize_status(raw: Option<&str>, default: &str) -> String {
@@ -146,7 +166,10 @@ pub async fn create_handler(
     Json(body): Json<CreateBody>,
 ) -> impl IntoResponse {
     if !auth.is_privileged() {
-        return json_err(StatusCode::FORBIDDEN, "Nur Administratoren dürfen Roadmap-Einträge anlegen.");
+        return json_err(
+            StatusCode::FORBIDDEN,
+            "Nur Administratoren dürfen Roadmap-Einträge anlegen.",
+        );
     }
     let title = body.title.unwrap_or_default().trim().to_string();
     if title.is_empty() {
@@ -159,19 +182,19 @@ pub async fn create_handler(
     let status = normalize_status(body.status.as_deref(), "planned");
     let priority = body.priority.unwrap_or(0);
 
-    let inserted = sqlx::query(
+    let inserted = sqlx::query_scalar!(
         "INSERT INTO twitch_roadmap_items (title, description, status, priority) \
          VALUES ($1, $2, $3, $4) RETURNING id",
+        title,
+        description,
+        status,
+        priority
     )
-    .bind(&title)
-    .bind(&description)
-    .bind(&status)
-    .bind(priority)
     .fetch_one(&pool)
     .await;
 
     let id: i64 = match inserted {
-        Ok(row) => row.try_get("id").unwrap_or(0),
+        Ok(id) => id,
         Err(e) => {
             tracing::error!("roadmap create fehlgeschlagen: {e}");
             return json_err(StatusCode::INTERNAL_SERVER_ERROR, "DB-Fehler");
@@ -192,7 +215,10 @@ pub async fn update_handler(
     Json(body): Json<UpdateBody>,
 ) -> impl IntoResponse {
     if !auth.is_privileged() {
-        return json_err(StatusCode::FORBIDDEN, "Nur Administratoren dürfen Roadmap-Einträge ändern.");
+        return json_err(
+            StatusCode::FORBIDDEN,
+            "Nur Administratoren dürfen Roadmap-Einträge ändern.",
+        );
     }
 
     // Dynamisches partielles UPDATE über nummerierte Binds.
@@ -233,7 +259,10 @@ pub async fn update_handler(
     }
 
     if sets.is_empty() {
-        return json_err(StatusCode::BAD_REQUEST, "Keine änderbaren Felder angegeben.");
+        return json_err(
+            StatusCode::BAD_REQUEST,
+            "Keine änderbaren Felder angegeben.",
+        );
     }
     sets.push("updated_at = NOW()".to_string());
 
@@ -273,10 +302,12 @@ pub async fn delete_handler(
     Path(id): Path<i64>,
 ) -> impl IntoResponse {
     if !auth.is_privileged() {
-        return json_err(StatusCode::FORBIDDEN, "Nur Administratoren dürfen Roadmap-Einträge löschen.");
+        return json_err(
+            StatusCode::FORBIDDEN,
+            "Nur Administratoren dürfen Roadmap-Einträge löschen.",
+        );
     }
-    match sqlx::query("DELETE FROM twitch_roadmap_items WHERE id = $1")
-        .bind(id)
+    match sqlx::query!("DELETE FROM twitch_roadmap_items WHERE id = $1", id)
         .execute(&pool)
         .await
     {
@@ -370,12 +401,28 @@ CREATE TABLE twitch_roadmap_items (
 
     async fn crud_pool(schema: &str) -> Option<PgPool> {
         let dsn = std::env::var("TB_TEST_DATABASE_URL").ok()?;
-        let admin = PgPoolOptions::new().max_connections(1).connect(&dsn).await.ok()?;
-        sqlx::query(&format!("DROP SCHEMA IF EXISTS {schema} CASCADE")).execute(&admin).await.ok()?;
-        sqlx::query(&format!("CREATE SCHEMA {schema}")).execute(&admin).await.ok()?;
+        let admin = PgPoolOptions::new()
+            .max_connections(1)
+            .connect(&dsn)
+            .await
+            .ok()?;
+        sqlx::query(&format!("DROP SCHEMA IF EXISTS {schema} CASCADE"))
+            .execute(&admin)
+            .await
+            .ok()?;
+        sqlx::query(&format!("CREATE SCHEMA {schema}"))
+            .execute(&admin)
+            .await
+            .ok()?;
         admin.close().await;
-        let options = PgConnectOptions::from_str(&dsn).ok()?.options([("search_path", schema)]);
-        let pool = PgPoolOptions::new().max_connections(2).connect_with(options).await.ok()?;
+        let options = PgConnectOptions::from_str(&dsn)
+            .ok()?
+            .options([("search_path", schema)]);
+        let pool = PgPoolOptions::new()
+            .max_connections(2)
+            .connect_with(options)
+            .await
+            .ok()?;
         sqlx::query(ROADMAP_TEST_DDL).execute(&pool).await.ok()?;
         sqlx::query(
             r#"
@@ -420,7 +467,9 @@ CREATE TABLE twitch_roadmap_items (
 
     #[tokio::test]
     async fn create_legt_item_an_201() {
-        let Some(pool) = crud_pool("t_roadmap_create").await else { return };
+        let Some(pool) = crud_pool("t_roadmap_create").await else {
+            return;
+        };
         let res = crud_router(pool)
             .oneshot(admin_request(
                 "POST",
@@ -440,7 +489,9 @@ CREATE TABLE twitch_roadmap_items (
 
     #[tokio::test]
     async fn create_unbekannter_status_faellt_auf_planned() {
-        let Some(pool) = crud_pool("t_roadmap_create_status").await else { return };
+        let Some(pool) = crud_pool("t_roadmap_create_status").await else {
+            return;
+        };
         let res = crud_router(pool)
             .oneshot(admin_request(
                 "POST",
@@ -457,9 +508,15 @@ CREATE TABLE twitch_roadmap_items (
 
     #[tokio::test]
     async fn create_ohne_titel_400() {
-        let Some(pool) = crud_pool("t_roadmap_create_notitle").await else { return };
+        let Some(pool) = crud_pool("t_roadmap_create_notitle").await else {
+            return;
+        };
         let res = crud_router(pool)
-            .oneshot(admin_request("POST", "/twitch/api/v2/roadmap", r#"{"title":"  "}"#))
+            .oneshot(admin_request(
+                "POST",
+                "/twitch/api/v2/roadmap",
+                r#"{"title":"  "}"#,
+            ))
             .await
             .unwrap();
         assert_eq!(res.status(), StatusCode::BAD_REQUEST);
@@ -467,7 +524,9 @@ CREATE TABLE twitch_roadmap_items (
 
     #[tokio::test]
     async fn update_aendert_status_und_404_bei_unbekannt() {
-        let Some(pool) = crud_pool("t_roadmap_update").await else { return };
+        let Some(pool) = crud_pool("t_roadmap_update").await else {
+            return;
+        };
         let id: i64 = sqlx::query_scalar(
             "INSERT INTO twitch_roadmap_items (title, status, priority) VALUES ('A','planned',0) RETURNING id",
         )
@@ -503,7 +562,9 @@ CREATE TABLE twitch_roadmap_items (
 
     #[tokio::test]
     async fn update_ungueltiger_status_wird_ignoriert_400_wenn_leer() {
-        let Some(pool) = crud_pool("t_roadmap_update_badstatus").await else { return };
+        let Some(pool) = crud_pool("t_roadmap_update_badstatus").await else {
+            return;
+        };
         let id: i64 = sqlx::query_scalar(
             "INSERT INTO twitch_roadmap_items (title, status) VALUES ('A','planned') RETURNING id",
         )
@@ -524,7 +585,9 @@ CREATE TABLE twitch_roadmap_items (
 
     #[tokio::test]
     async fn delete_liefert_204() {
-        let Some(pool) = crud_pool("t_roadmap_delete").await else { return };
+        let Some(pool) = crud_pool("t_roadmap_delete").await else {
+            return;
+        };
         let id: i64 = sqlx::query_scalar(
             "INSERT INTO twitch_roadmap_items (title) VALUES ('A') RETURNING id",
         )
@@ -532,7 +595,11 @@ CREATE TABLE twitch_roadmap_items (
         .await
         .unwrap();
         let res = crud_router(pool.clone())
-            .oneshot(admin_request("DELETE", &format!("/twitch/api/v2/roadmap/{id}"), ""))
+            .oneshot(admin_request(
+                "DELETE",
+                &format!("/twitch/api/v2/roadmap/{id}"),
+                "",
+            ))
             .await
             .unwrap();
         assert_eq!(res.status(), StatusCode::NO_CONTENT);
@@ -547,7 +614,9 @@ CREATE TABLE twitch_roadmap_items (
 
     #[tokio::test]
     async fn create_ohne_admin_403() {
-        let Some(pool) = crud_pool("t_roadmap_noauth").await else { return };
+        let Some(pool) = crud_pool("t_roadmap_noauth").await else {
+            return;
+        };
         let addr: SocketAddr = "8.8.8.8:1234".parse().unwrap();
         let req = Request::builder()
             .method("POST")
@@ -563,7 +632,9 @@ CREATE TABLE twitch_roadmap_items (
 
     #[tokio::test]
     async fn create_accepts_discord_admin_session_cookie() {
-        let Some(pool) = crud_pool("t_roadmap_discord_admin_cookie").await else { return };
+        let Some(pool) = crud_pool("t_roadmap_discord_admin_cookie").await else {
+            return;
+        };
         let auth_state = DashboardAuthState::new(
             pool.clone(),
             "dGVzdGtleTEyMzQ1Njc4OTAxMjM0NTY3ODkwMTIzNDU=".to_string(),

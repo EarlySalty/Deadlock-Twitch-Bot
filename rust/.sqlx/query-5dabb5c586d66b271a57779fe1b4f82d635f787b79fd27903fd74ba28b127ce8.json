@@ -1,0 +1,36 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT DATE(s.started_at) AS \"session_date!\",\n                  COUNT(*) AS \"sessions!\",\n                  COALESCE(SUM(sc.messages), 0) AS \"messages!\"\n           FROM twitch_stream_sessions s\n           JOIN twitch_session_chatters sc ON sc.session_id = s.id\n           WHERE LOWER(s.streamer_login) = $1 AND LOWER(sc.chatter_login) = $2\n             AND s.started_at >= $3\n           GROUP BY DATE(s.started_at)\n           ORDER BY 1",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "session_date!",
+        "type_info": "Date"
+      },
+      {
+        "ordinal": 1,
+        "name": "sessions!",
+        "type_info": "Int8"
+      },
+      {
+        "ordinal": 2,
+        "name": "messages!",
+        "type_info": "Int8"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Text",
+        "Text",
+        "Timestamptz"
+      ]
+    },
+    "nullable": [
+      null,
+      null,
+      null
+    ]
+  },
+  "hash": "5dabb5c586d66b271a57779fe1b4f82d635f787b79fd27903fd74ba28b127ce8"
+}

@@ -18,7 +18,7 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use axum::{extract::State, response::IntoResponse, Json};
 use serde_json::{json, Value};
-use sqlx::{PgPool, Row};
+use sqlx::PgPool;
 use tb_http_core::ApiError;
 
 use crate::auth::level::DashboardAuthLevel;
@@ -26,6 +26,12 @@ use crate::auth::level::DashboardAuthLevel;
 /// Aggregat-Zeile pro Login (Sent/Received-Counts + Viewer-Summen).
 #[derive(Default, Clone)]
 struct LoginAgg {
+    cnt: i64,
+    viewers: i64,
+}
+
+struct LoginAggRow {
+    login: Option<String>,
     cnt: i64,
     viewers: i64,
 }
@@ -49,7 +55,7 @@ pub async fn raid_network_analytics_handler(
 /// Baut das Analytics-Payload (separater Loader für DB-Tests ohne Auth-Extractor).
 async fn load_raid_network_analytics(pool: &PgPool) -> Result<Value, sqlx::Error> {
     // Aktive Partner (Set, lowercased).
-    let partner_rows = sqlx::query(
+    let partner_rows = sqlx::query!(
         "SELECT LOWER(twitch_login) AS login \
          FROM twitch_streamers_partner_state \
          WHERE is_partner_active = 1",
@@ -57,16 +63,17 @@ async fn load_raid_network_analytics(pool: &PgPool) -> Result<Value, sqlx::Error
     .fetch_all(pool)
     .await?;
     let partners: BTreeSet<String> = partner_rows
-        .iter()
-        .filter_map(|r| r.try_get::<Option<String>, _>("login").ok().flatten())
+        .into_iter()
+        .filter_map(|r| r.login)
         .filter(|s| !s.is_empty())
         .collect();
 
     // Sent-Statistik (Quell-Broadcaster).
-    let sent_rows = sqlx::query(
+    let sent_rows = sqlx::query_as!(
+        LoginAggRow,
         "SELECT LOWER(from_broadcaster_login) AS login, \
-                COUNT(*)::bigint AS cnt, \
-                COALESCE(SUM(viewer_count), 0)::bigint AS viewers \
+                COUNT(*)::bigint AS \"cnt!\", \
+                COALESCE(SUM(viewer_count), 0)::bigint AS \"viewers!\" \
          FROM twitch_raid_history \
          WHERE COALESCE(success, FALSE) IS TRUE \
            AND from_broadcaster_login IS NOT NULL \
@@ -77,10 +84,11 @@ async fn load_raid_network_analytics(pool: &PgPool) -> Result<Value, sqlx::Error
     let sent_map = collect_agg(&sent_rows);
 
     // Received-Statistik (Ziel-Broadcaster).
-    let recv_rows = sqlx::query(
+    let recv_rows = sqlx::query_as!(
+        LoginAggRow,
         "SELECT LOWER(to_broadcaster_login) AS login, \
-                COUNT(*)::bigint AS cnt, \
-                COALESCE(SUM(viewer_count), 0)::bigint AS viewers \
+                COUNT(*)::bigint AS \"cnt!\", \
+                COALESCE(SUM(viewer_count), 0)::bigint AS \"viewers!\" \
          FROM twitch_raid_history \
          WHERE COALESCE(success, FALSE) IS TRUE \
            AND to_broadcaster_login IS NOT NULL \
@@ -127,10 +135,10 @@ async fn load_raid_network_analytics(pool: &PgPool) -> Result<Value, sqlx::Error
         .collect();
 
     // Manual-Raids (reason = 'manual_chat_command'), neueste zuerst.
-    let manual_rows = sqlx::query(
+    let manual_rows = sqlx::query!(
         "SELECT LOWER(from_broadcaster_login) AS from_login, \
                 LOWER(to_broadcaster_login) AS to_login, \
-                COALESCE(viewer_count, 0)::bigint AS viewers, \
+                COALESCE(viewer_count, 0)::bigint AS \"viewers!\", \
                 LEFT(executed_at::text, 16) AS at \
          FROM twitch_raid_history \
          WHERE reason = 'manual_chat_command' \
@@ -141,10 +149,10 @@ async fn load_raid_network_analytics(pool: &PgPool) -> Result<Value, sqlx::Error
     let manual_list: Vec<Value> = manual_rows
         .iter()
         .map(|row| {
-            let from = row.try_get::<Option<String>, _>("from_login").ok().flatten().unwrap_or_default();
-            let to = row.try_get::<Option<String>, _>("to_login").ok().flatten().unwrap_or_default();
-            let viewers = row.try_get::<i64, _>("viewers").unwrap_or(0);
-            let at = row.try_get::<Option<String>, _>("at").ok().flatten().unwrap_or_default();
+            let from = row.from_login.clone().unwrap_or_default();
+            let to = row.to_login.clone().unwrap_or_default();
+            let viewers = row.viewers;
+            let at = row.at.clone().unwrap_or_default();
             json!({
                 "from": from,
                 "to": to.clone(),
@@ -156,10 +164,10 @@ async fn load_raid_network_analytics(pool: &PgPool) -> Result<Value, sqlx::Error
         .collect();
 
     // Datumsbereich + Gesamtzahl erfolgreicher Raids.
-    let date_row = sqlx::query(
+    let date_row = sqlx::query!(
         "SELECT LEFT(MIN(executed_at)::text, 10) AS date_min, \
                 LEFT(MAX(executed_at)::text, 10) AS date_max, \
-                COUNT(*)::bigint AS total \
+                COUNT(*)::bigint AS \"total!\" \
          FROM twitch_raid_history \
          WHERE COALESCE(success, FALSE) IS TRUE",
     )
@@ -167,9 +175,9 @@ async fn load_raid_network_analytics(pool: &PgPool) -> Result<Value, sqlx::Error
     .await?;
     let (date_min, date_max, total) = match date_row {
         Some(r) => (
-            r.try_get::<Option<String>, _>("date_min").ok().flatten().unwrap_or_default(),
-            r.try_get::<Option<String>, _>("date_max").ok().flatten().unwrap_or_default(),
-            r.try_get::<i64, _>("total").unwrap_or(0),
+            r.date_min.unwrap_or_default(),
+            r.date_max.unwrap_or_default(),
+            r.total,
         ),
         None => (String::new(), String::new(), 0),
     };
@@ -186,10 +194,10 @@ async fn load_raid_network_analytics(pool: &PgPool) -> Result<Value, sqlx::Error
 }
 
 /// Sammelt die Aggregat-Zeilen in eine Login→`LoginAgg`-Map.
-fn collect_agg(rows: &[sqlx::postgres::PgRow]) -> BTreeMap<String, LoginAgg> {
+fn collect_agg(rows: &[LoginAggRow]) -> BTreeMap<String, LoginAgg> {
     let mut map = BTreeMap::new();
     for row in rows {
-        let Some(login) = row.try_get::<Option<String>, _>("login").ok().flatten() else {
+        let Some(login) = row.login.clone() else {
             continue;
         };
         if login.is_empty() {
@@ -198,8 +206,8 @@ fn collect_agg(rows: &[sqlx::postgres::PgRow]) -> BTreeMap<String, LoginAgg> {
         map.insert(
             login,
             LoginAgg {
-                cnt: row.try_get::<i64, _>("cnt").unwrap_or(0),
-                viewers: row.try_get::<i64, _>("viewers").unwrap_or(0),
+                cnt: row.cnt,
+                viewers: row.viewers,
             },
         );
     }
@@ -209,12 +217,12 @@ fn collect_agg(rows: &[sqlx::postgres::PgRow]) -> BTreeMap<String, LoginAgg> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::auth::session::{DashboardAuthState, ADMIN_COOKIE_NAME};
     use axum::{
         body::Body,
         http::{header, Request, StatusCode},
         Extension, Router,
     };
-    use crate::auth::session::{DashboardAuthState, ADMIN_COOKIE_NAME};
     use sqlx::postgres::{PgConnectOptions, PgPoolOptions};
     use std::str::FromStr;
     use tower::ServiceExt;
@@ -226,12 +234,28 @@ mod tests {
         if std::env::var("TB_TEST_REQUIRE_DB").as_deref() != Ok("1") {
             return None;
         }
-        let admin = PgPoolOptions::new().max_connections(1).connect(&dsn).await.unwrap();
-        sqlx::query(&format!("DROP SCHEMA IF EXISTS {schema} CASCADE")).execute(&admin).await.unwrap();
-        sqlx::query(&format!("CREATE SCHEMA {schema}")).execute(&admin).await.unwrap();
+        let admin = PgPoolOptions::new()
+            .max_connections(1)
+            .connect(&dsn)
+            .await
+            .unwrap();
+        sqlx::query(&format!("DROP SCHEMA IF EXISTS {schema} CASCADE"))
+            .execute(&admin)
+            .await
+            .unwrap();
+        sqlx::query(&format!("CREATE SCHEMA {schema}"))
+            .execute(&admin)
+            .await
+            .unwrap();
         admin.close().await;
-        let opts = PgConnectOptions::from_str(&dsn).unwrap().options([("search_path", schema)]);
-        let pool = PgPoolOptions::new().max_connections(2).connect_with(opts).await.unwrap();
+        let opts = PgConnectOptions::from_str(&dsn)
+            .unwrap()
+            .options([("search_path", schema)]);
+        let pool = PgPoolOptions::new()
+            .max_connections(2)
+            .connect_with(opts)
+            .await
+            .unwrap();
         for ddl in [
             "CREATE TABLE dashboard_sessions (\
                  session_id TEXT NOT NULL PRIMARY KEY, session_type TEXT NOT NULL, \
@@ -250,8 +274,7 @@ mod tests {
     }
 
     fn router(pool: PgPool, auth_state: DashboardAuthState) -> Router {
-        crate::build_raid_pages_router(pool)
-            .layer(Extension(auth_state))
+        crate::build_raid_pages_router(pool).layer(Extension(auth_state))
     }
 
     async fn seed(pool: &PgPool) {
@@ -276,7 +299,9 @@ mod tests {
 
     #[tokio::test]
     async fn partner_balance_leecher_und_manual() {
-        let Some(pool) = make_pool("t_raid_net").await else { return; };
+        let Some(pool) = make_pool("t_raid_net").await else {
+            return;
+        };
         seed(&pool).await;
 
         let payload = load_raid_network_analytics(&pool).await.unwrap();
@@ -316,24 +341,34 @@ mod tests {
         assert_eq!(manual[0]["is_partner"], false);
         assert_eq!(manual[0]["viewers"], 30);
 
-        sqlx::query("DROP SCHEMA t_raid_net CASCADE").execute(&pool).await.ok();
+        sqlx::query("DROP SCHEMA t_raid_net CASCADE")
+            .execute(&pool)
+            .await
+            .ok();
     }
 
     #[tokio::test]
     async fn leerer_datensatz_liefert_leere_listen() {
-        let Some(pool) = make_pool("t_raid_net_empty").await else { return; };
+        let Some(pool) = make_pool("t_raid_net_empty").await else {
+            return;
+        };
         let payload = load_raid_network_analytics(&pool).await.unwrap();
         assert_eq!(payload["total"], 0);
         assert_eq!(payload["active_partner_count"], 0);
         assert!(payload["partner_stats"].as_array().unwrap().is_empty());
         assert!(payload["leechers"].as_array().unwrap().is_empty());
         assert!(payload["manual_raids"].as_array().unwrap().is_empty());
-        sqlx::query("DROP SCHEMA t_raid_net_empty CASCADE").execute(&pool).await.ok();
+        sqlx::query("DROP SCHEMA t_raid_net_empty CASCADE")
+            .execute(&pool)
+            .await
+            .ok();
     }
 
     #[tokio::test]
     async fn route_liefert_json_fuer_admin_session() {
-        let Some(pool) = make_pool("t_raid_net_route").await else { return; };
+        let Some(pool) = make_pool("t_raid_net_route").await else {
+            return;
+        };
         seed(&pool).await;
 
         let auth_state = DashboardAuthState::new(pool.clone(), TEST_FERNET_KEY.to_string());
@@ -345,7 +380,10 @@ mod tests {
             .oneshot(
                 Request::builder()
                     .uri("/twitch/api/raid/analytics")
-                    .header(header::COOKIE, format!("{ADMIN_COOKIE_NAME}={}", session.session_id))
+                    .header(
+                        header::COOKIE,
+                        format!("{ADMIN_COOKIE_NAME}={}", session.session_id),
+                    )
                     .body(Body::empty())
                     .unwrap(),
             )
@@ -353,10 +391,15 @@ mod tests {
             .unwrap();
 
         assert_eq!(resp.status(), StatusCode::OK);
-        let body = axum::body::to_bytes(resp.into_body(), usize::MAX).await.unwrap();
+        let body = axum::body::to_bytes(resp.into_body(), usize::MAX)
+            .await
+            .unwrap();
         let payload: Value = serde_json::from_slice(&body).unwrap();
         assert_eq!(payload["active_partner_count"], 3);
         assert!(payload["partner_stats"].is_array());
-        sqlx::query("DROP SCHEMA t_raid_net_route CASCADE").execute(&pool).await.ok();
+        sqlx::query("DROP SCHEMA t_raid_net_route CASCADE")
+            .execute(&pool)
+            .await
+            .ok();
     }
 }

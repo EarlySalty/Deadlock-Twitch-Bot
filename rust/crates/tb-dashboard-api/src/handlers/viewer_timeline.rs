@@ -154,18 +154,18 @@ pub async fn viewer_timeline_handler(
     let limit = params.limit.unwrap_or(200).clamp(1, 1000);
 
     // 1. Session holen
-    let session_row = sqlx::query(
+    let session_row = sqlx::query!(
         r#"SELECT id, started_at,
                   ROUND(EXTRACT(EPOCH FROM (
                       COALESCE(ended_at, started_at + COALESCE(duration_seconds, 0) * INTERVAL '1 second')
                       - started_at
-                  )) / 60)::int AS duration_min
+                  )) / 60)::int AS "duration_min!"
            FROM twitch_stream_sessions
            WHERE id = $1 AND LOWER(streamer_login) = $2
            LIMIT 1"#,
+        session_id,
+        &streamer
     )
-    .bind(session_id)
-    .bind(&streamer)
     .fetch_optional(&pool)
     .await;
 
@@ -184,11 +184,8 @@ pub async fn viewer_timeline_handler(
         Ok(Some(r)) => r,
     };
 
-    let session_start: DateTime<Utc> = match session_row.try_get("started_at") {
-        Ok(ts) => ts,
-        Err(_) => return crate::auth::analytics_request_failed_json().into_response(),
-    };
-    let session_duration_min: i32 = session_row.try_get("duration_min").unwrap_or(0).max(0);
+    let session_start = session_row.started_at;
+    let session_duration_min = session_row.duration_min.max(0);
 
     // Exclusions: streamer selbst + bekannte Bots
     let extra_excluded = vec![streamer.clone()];
@@ -449,7 +446,7 @@ pub async fn viewer_timeline_profile_handler(
     }
 
     // CTE: alle Sessions in denen der Viewer präsent war (Ticks oder Chat)
-    let rows = sqlx::query(
+    let rows = sqlx::query!(
         r#"WITH session_ids AS (
                SELECT DISTINCT session_id FROM twitch_viewer_presence_ticks
                WHERE LOWER(streamer_login) = $1 AND LOWER(viewer_login) = $2
@@ -482,9 +479,9 @@ pub async fn viewer_timeline_profile_handler(
                FROM span_groups
                GROUP BY session_id
            )
-           SELECT s.id AS session_id, s.started_at,
-                  COALESCE(p.total_present_min, 0) AS total_present_min,
-                  COALESCE(sc.messages, 0)::bigint AS chat_messages
+           SELECT s.id AS "session_id!", s.started_at,
+                  COALESCE(p.total_present_min, 0) AS "total_present_min!",
+                  COALESCE(sc.messages, 0)::bigint AS "chat_messages!"
            FROM session_ids sid
            JOIN twitch_stream_sessions s ON s.id = sid.session_id
            LEFT JOIN presence_totals p ON p.session_id = s.id
@@ -494,16 +491,16 @@ pub async fn viewer_timeline_profile_handler(
               AND LOWER(sc.chatter_login) = $8
            WHERE LOWER(s.streamer_login) = $9
            ORDER BY s.started_at DESC"#,
+        &streamer,
+        &login,
+        &streamer,
+        &login,
+        &streamer,
+        &login,
+        &streamer,
+        &login,
+        &streamer
     )
-    .bind(&streamer)
-    .bind(&login)
-    .bind(&streamer)
-    .bind(&login)
-    .bind(&streamer)
-    .bind(&login)
-    .bind(&streamer)
-    .bind(&login)
-    .bind(&streamer)
     .fetch_all(&pool)
     .await;
 
@@ -516,12 +513,11 @@ pub async fn viewer_timeline_profile_handler(
             let sessions: Vec<serde_json::Value> = rows
                 .iter()
                 .map(|r| {
-                    let started_at: Option<DateTime<Utc>> = r.try_get("started_at").ok();
                     json!({
-                        "session_id": r.try_get::<i64, _>("session_id").unwrap_or(0),
-                        "started_at": started_at.map(|t| t.to_rfc3339()),
-                        "total_present_min": r.try_get::<i64, _>("total_present_min").unwrap_or(0),
-                        "chat_messages": r.try_get::<i64, _>("chat_messages").unwrap_or(0),
+                        "session_id": r.session_id,
+                        "started_at": r.started_at.to_rfc3339(),
+                        "total_present_min": r.total_present_min,
+                        "chat_messages": r.chat_messages,
                     })
                 })
                 .collect();

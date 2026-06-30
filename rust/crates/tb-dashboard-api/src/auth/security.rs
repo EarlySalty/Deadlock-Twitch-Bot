@@ -83,9 +83,8 @@ impl RateLimiter {
     ) -> Result<bool, sqlx::Error> {
         let now = unix_now_f64();
         let bucket_prefix = bucket_prefix(key, window_secs);
-        let (lock_a, lock_b) = advisory_lock_pair(&format!(
-            "{RATE_LIMIT_SESSION_TYPE}:{bucket_prefix}"
-        ));
+        let (lock_a, lock_b) =
+            advisory_lock_pair(&format!("{RATE_LIMIT_SESSION_TYPE}:{bucket_prefix}"));
         let session_id = hit_record_id(&bucket_prefix, now);
         let like_pattern = format!("{}%", escape_like(&bucket_prefix));
         let expires_at = now + window_secs as f64;
@@ -101,24 +100,22 @@ impl RateLimiter {
 
         // Serialisiert konkurrierende Reservierungen desselben Buckets bis
         // Transaktionsende — verhindert die Count-then-Insert-Race.
-        sqlx::query("SELECT pg_advisory_xact_lock($1, $2)")
-            .bind(lock_a)
-            .bind(lock_b)
+        sqlx::query!("SELECT pg_advisory_xact_lock($1, $2)", lock_a, lock_b)
             .execute(&mut *tx)
             .await?;
 
-        let active_hits: i64 = sqlx::query_scalar(
+        let active_hits: i64 = sqlx::query_scalar!(
             r#"
-            SELECT COUNT(*)
+            SELECT COUNT(*) AS "count!"
             FROM dashboard_sessions
             WHERE session_type = $1
               AND expires_at > $2
               AND session_id LIKE $3
             "#,
+            RATE_LIMIT_SESSION_TYPE,
+            now,
+            like_pattern
         )
-        .bind(RATE_LIMIT_SESSION_TYPE)
-        .bind(now)
-        .bind(&like_pattern)
         .fetch_one(&mut *tx)
         .await?;
 
@@ -128,7 +125,7 @@ impl RateLimiter {
             return Ok(false);
         }
 
-        sqlx::query(
+        sqlx::query!(
             r#"
             INSERT INTO dashboard_sessions
                 (session_id, session_type, payload_enc, created_at, expires_at)
@@ -137,12 +134,12 @@ impl RateLimiter {
                 payload_enc = EXCLUDED.payload_enc,
                 expires_at  = EXCLUDED.expires_at
             "#,
+            session_id,
+            RATE_LIMIT_SESSION_TYPE,
+            token.as_bytes(),
+            now,
+            expires_at
         )
-        .bind(&session_id)
-        .bind(RATE_LIMIT_SESSION_TYPE)
-        .bind(token.as_bytes())
-        .bind(now)
-        .bind(expires_at)
         .execute(&mut *tx)
         .await?;
 
@@ -199,7 +196,11 @@ struct RateLimitEncryptError(String);
 
 impl std::fmt::Display for RateLimitEncryptError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "Rate-Limit-Payload-Verschlüsselung fehlgeschlagen: {}", self.0)
+        write!(
+            f,
+            "Rate-Limit-Payload-Verschlüsselung fehlgeschlagen: {}",
+            self.0
+        )
     }
 }
 
@@ -227,7 +228,11 @@ fn unix_now_f64() -> f64 {
 ///   Pendant zu Pythons `hmac.compare_digest`) verhindert Timing-Seitenkanäle.
 ///   Leerer erwarteter Token → immer `false` (fail-closed): ohne konfiguriertes
 ///   Secret darf der interne Zugriff nie offenstehen.
-pub fn require_internal(peer_is_loopback: bool, presented_token: &str, expected_token: &str) -> bool {
+pub fn require_internal(
+    peer_is_loopback: bool,
+    presented_token: &str,
+    expected_token: &str,
+) -> bool {
     if expected_token.is_empty() {
         return false;
     }
@@ -272,7 +277,12 @@ impl RateLimitLayerConfig {
         max_requests: u32,
         window_secs: u64,
     ) -> Self {
-        Self { limiter, bucket, max_requests, window_secs }
+        Self {
+            limiter,
+            bucket,
+            max_requests,
+            window_secs,
+        }
     }
 }
 
@@ -282,7 +292,10 @@ impl RateLimitLayerConfig {
 /// immer Loopback, daher fällt es auf den **ersten** `X-Forwarded-For`-Eintrag
 /// zurück (der vom vertrauenswürdigen Proxy gesetzt wird). Ohne beides → `"unknown"`.
 fn client_key(request: &Request) -> String {
-    if let Some(ci) = request.extensions().get::<axum::extract::ConnectInfo<SocketAddr>>() {
+    if let Some(ci) = request
+        .extensions()
+        .get::<axum::extract::ConnectInfo<SocketAddr>>()
+    {
         let ip = ci.0.ip();
         if !ip.is_loopback() {
             return ip.to_string();
@@ -335,7 +348,9 @@ fn too_many_requests(window_secs: u64) -> Response {
     )
         .into_response();
     if let Ok(value) = HeaderValue::from_str(&window_secs.to_string()) {
-        response.headers_mut().insert(axum::http::header::RETRY_AFTER, value);
+        response
+            .headers_mut()
+            .insert(axum::http::header::RETRY_AFTER, value);
     }
     response
 }
@@ -346,8 +361,14 @@ mod tests {
 
     #[test]
     fn advisory_lock_pair_deterministisch() {
-        assert_eq!(advisory_lock_pair("rl:60:abc"), advisory_lock_pair("rl:60:abc"));
-        assert_ne!(advisory_lock_pair("rl:60:abc"), advisory_lock_pair("rl:60:abd"));
+        assert_eq!(
+            advisory_lock_pair("rl:60:abc"),
+            advisory_lock_pair("rl:60:abc")
+        );
+        assert_ne!(
+            advisory_lock_pair("rl:60:abc"),
+            advisory_lock_pair("rl:60:abd")
+        );
     }
 
     #[test]
@@ -441,7 +462,9 @@ mod integration_tests {
     /// N Requests im Fenster erlaubt, N+1 blockiert (Brute-Force-Schutz).
     #[tokio::test]
     async fn rate_limiter_blockt_nach_limit() {
-        let Some(pool) = maybe_pool().await else { return; };
+        let Some(pool) = maybe_pool().await else {
+            return;
+        };
         ensure_table(&pool).await;
 
         let limiter = RateLimiter::new(pool.clone(), test_fernet_key());
@@ -485,17 +508,16 @@ mod integration_tests {
         use axum::{routing::get, Router};
         use tower::ServiceExt;
 
-        let Some(pool) = maybe_pool().await else { return; };
+        let Some(pool) = maybe_pool().await else {
+            return;
+        };
         ensure_table(&pool).await;
         let limiter = RateLimiter::new(pool.clone(), test_fernet_key());
         let config = RateLimitLayerConfig::new(limiter, "test_bucket", 2, 60);
 
-        let app = Router::new()
-            .route("/x", get(|| async { "ok" }))
-            .layer(axum::middleware::from_fn_with_state(
-                config,
-                super::rate_limit_middleware,
-            ));
+        let app = Router::new().route("/x", get(|| async { "ok" })).layer(
+            axum::middleware::from_fn_with_state(config, super::rate_limit_middleware),
+        );
 
         let make_req = || {
             let mut req = axum::http::Request::builder()
@@ -510,17 +532,28 @@ mod integration_tests {
         };
 
         // max=2: erste zwei OK, dritte 429.
-        assert_eq!(app.clone().oneshot(make_req()).await.unwrap().status(), StatusCode::OK);
-        assert_eq!(app.clone().oneshot(make_req()).await.unwrap().status(), StatusCode::OK);
+        assert_eq!(
+            app.clone().oneshot(make_req()).await.unwrap().status(),
+            StatusCode::OK
+        );
+        assert_eq!(
+            app.clone().oneshot(make_req()).await.unwrap().status(),
+            StatusCode::OK
+        );
         let limited = app.clone().oneshot(make_req()).await.unwrap();
         assert_eq!(limited.status(), StatusCode::TOO_MANY_REQUESTS);
-        assert!(limited.headers().get(axum::http::header::RETRY_AFTER).is_some());
+        assert!(limited
+            .headers()
+            .get(axum::http::header::RETRY_AFTER)
+            .is_some());
     }
 
     /// Abgelaufene Hits zählen nicht mehr → Slot wird wieder frei.
     #[tokio::test]
     async fn rate_limiter_fenster_gleitet() {
-        let Some(pool) = maybe_pool().await else { return; };
+        let Some(pool) = maybe_pool().await else {
+            return;
+        };
         ensure_table(&pool).await;
 
         let limiter = RateLimiter::new(pool.clone(), test_fernet_key());

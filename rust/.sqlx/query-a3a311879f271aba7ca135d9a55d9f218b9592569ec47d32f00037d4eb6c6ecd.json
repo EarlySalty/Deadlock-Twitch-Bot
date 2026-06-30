@@ -1,0 +1,54 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT\n               s.stream_title AS \"stream_title!\",\n               COUNT(*) AS \"usage_count!\",\n               AVG(s.avg_viewers) AS \"avg_viewers?\",\n               AVG(s.retention_10m) AS \"avg_retention?\",\n               AVG(CASE WHEN s.follower_delta IS NOT NULL\n                        AND NOT (s.followers_end = 0 AND s.followers_start > 0)\n                        THEN s.follower_delta ELSE NULL END)::float8 AS \"avg_followers?\",\n               MAX(s.peak_viewers) AS \"peak_viewers?\"\n           FROM twitch_stream_sessions s\n           WHERE s.started_at >= $1\n             AND LOWER(s.streamer_login) = $2\n             AND s.ended_at IS NOT NULL\n             AND s.stream_title IS NOT NULL\n             AND s.stream_title != ''\n           GROUP BY s.stream_title\n           ORDER BY AVG(s.avg_viewers) DESC\n           LIMIT $3",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "stream_title!",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 1,
+        "name": "usage_count!",
+        "type_info": "Int8"
+      },
+      {
+        "ordinal": 2,
+        "name": "avg_viewers?",
+        "type_info": "Float8"
+      },
+      {
+        "ordinal": 3,
+        "name": "avg_retention?",
+        "type_info": "Float8"
+      },
+      {
+        "ordinal": 4,
+        "name": "avg_followers?",
+        "type_info": "Float8"
+      },
+      {
+        "ordinal": 5,
+        "name": "peak_viewers?",
+        "type_info": "Int4"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Timestamptz",
+        "Text",
+        "Int8"
+      ]
+    },
+    "nullable": [
+      true,
+      null,
+      null,
+      null,
+      null,
+      null
+    ]
+  },
+  "hash": "a3a311879f271aba7ca135d9a55d9f218b9592569ec47d32f00037d4eb6c6ecd"
+}

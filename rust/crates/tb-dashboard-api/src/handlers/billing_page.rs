@@ -898,11 +898,12 @@ async fn active_customer_record(
     let user_id = twitch_user_id.trim().to_lowercase();
     let reference = reference.trim().to_lowercase();
 
-    let row: Option<CustomerRecord> = sqlx::query_as(
+    let row: Option<CustomerRecord> = sqlx::query_as!(
+        CustomerRecord,
         r#"
         SELECT
-            COALESCE(stripe_customer_id, '')     AS stripe_customer_id,
-            COALESCE(stripe_subscription_id, '') AS stripe_subscription_id
+            COALESCE(stripe_customer_id, '')     AS "stripe_customer_id!",
+            COALESCE(stripe_subscription_id, '') AS "stripe_subscription_id!"
         FROM twitch_billing_subscriptions
         WHERE (
                   LOWER(COALESCE(customer_reference, '')) = $1
@@ -915,10 +916,10 @@ async fn active_customer_record(
             updated_at DESC
         LIMIT 1
         "#,
+        login,
+        user_id,
+        reference
     )
-    .bind(&login)
-    .bind(&user_id)
-    .bind(&reference)
     .fetch_optional(pool)
     .await?;
 

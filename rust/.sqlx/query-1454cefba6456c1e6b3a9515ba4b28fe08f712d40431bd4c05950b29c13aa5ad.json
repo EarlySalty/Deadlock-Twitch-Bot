@@ -1,0 +1,36 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT LOWER(other_rollup.streamer_login) AS \"streamer_login!\",\n                      COALESCE(SUM(CASE WHEN target_rollup.first_seen_at < other_rollup.first_seen_at THEN 1 ELSE 0 END), 0) AS \"outgoing_votes!\",\n                      COALESCE(SUM(CASE WHEN other_rollup.first_seen_at < target_rollup.first_seen_at THEN 1 ELSE 0 END), 0) AS \"incoming_votes!\"\n               FROM twitch_chatter_rollup target_rollup\n               JOIN twitch_chatter_rollup other_rollup\n                 ON LOWER(target_rollup.chatter_login) = LOWER(other_rollup.chatter_login)\n               WHERE LOWER(target_rollup.streamer_login) = $1\n                 AND LOWER(other_rollup.streamer_login) = ANY($2)\n                 AND LOWER(target_rollup.chatter_login) != ALL($3)\n                 AND LOWER(other_rollup.chatter_login) != ALL($3)\n               GROUP BY LOWER(other_rollup.streamer_login)",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "streamer_login!",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 1,
+        "name": "outgoing_votes!",
+        "type_info": "Int8"
+      },
+      {
+        "ordinal": 2,
+        "name": "incoming_votes!",
+        "type_info": "Int8"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Text",
+        "TextArray",
+        "TextArray"
+      ]
+    },
+    "nullable": [
+      null,
+      null,
+      null
+    ]
+  },
+  "hash": "1454cefba6456c1e6b3a9515ba4b28fe08f712d40431bd4c05950b29c13aa5ad"
+}

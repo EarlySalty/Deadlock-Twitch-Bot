@@ -18,16 +18,15 @@ use axum::{
 };
 use serde::Deserialize;
 use serde_json::{json, Value};
-use sqlx::{Column, Row, TypeInfo};
 use sqlx::PgPool;
+use sqlx::{Column, Row, TypeInfo};
 use tb_http_core::AuthLevel;
 
 const MAX_ROWS: usize = 200;
 
 /// Verbotene Schlüsselwörter (als ganze Wörter geprüft, case-insensitiv).
 const FORBIDDEN_KEYWORDS: &[&str] = &[
-    "INSERT", "UPDATE", "DELETE", "DROP", "ALTER", "CREATE", "TRUNCATE", "GRANT",
-    "REVOKE", "COPY",
+    "INSERT", "UPDATE", "DELETE", "DROP", "ALTER", "CREATE", "TRUNCATE", "GRANT", "REVOKE", "COPY",
 ];
 
 #[derive(Deserialize)]
@@ -42,7 +41,10 @@ fn err(status: StatusCode, message: impl Into<String>) -> axum::response::Respon
 
 /// Normalisiert Whitespace zu einzelnen Leerzeichen und uppercased.
 fn normalize_upper(sql: &str) -> String {
-    sql.split_whitespace().collect::<Vec<_>>().join(" ").to_uppercase()
+    sql.split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ")
+        .to_uppercase()
 }
 
 /// Prüft das SQL gegen die SELECT-only- und Keyword-Blocklist-Regeln.
@@ -50,7 +52,10 @@ fn normalize_upper(sql: &str) -> String {
 pub fn validate_sql(sql: &str) -> Result<(), (StatusCode, String)> {
     let trimmed = sql.trim();
     if trimmed.is_empty() {
-        return Err((StatusCode::BAD_REQUEST, "sql parameter required".to_string()));
+        return Err((
+            StatusCode::BAD_REQUEST,
+            "sql parameter required".to_string(),
+        ));
     }
     let upper = normalize_upper(trimmed);
     if !upper.starts_with("SELECT") {
@@ -61,10 +66,7 @@ pub fn validate_sql(sql: &str) -> Result<(), (StatusCode, String)> {
     }
     for kw in FORBIDDEN_KEYWORDS {
         if contains_word(&upper, kw) {
-            return Err((
-                StatusCode::BAD_REQUEST,
-                format!("forbidden keyword: {kw}"),
-            ));
+            return Err((StatusCode::BAD_REQUEST, format!("forbidden keyword: {kw}")));
         }
     }
     Ok(())
@@ -128,10 +130,13 @@ pub async fn query_handler(
 
 /// Führt das SELECT in einer READ-ONLY-Transaktion aus und stringifiziert alle
 /// Werte (max. 200 Zeilen). Gibt `Err(message)` bei DB-Fehlern.
-async fn run_readonly(pool: &PgPool, sql: &str) -> Result<(Vec<String>, Vec<Vec<Option<String>>>), String> {
+async fn run_readonly(
+    pool: &PgPool,
+    sql: &str,
+) -> Result<(Vec<String>, Vec<Vec<Option<String>>>), String> {
     let mut tx = pool.begin().await.map_err(|e| e.to_string())?;
     // Schreibschutz auf Transaktionsebene — defense in depth.
-    sqlx::query("SET TRANSACTION READ ONLY")
+    sqlx::query!("SET TRANSACTION READ ONLY")
         .execute(&mut *tx)
         .await
         .map_err(|e| e.to_string())?;
@@ -144,7 +149,11 @@ async fn run_readonly(pool: &PgPool, sql: &str) -> Result<(Vec<String>, Vec<Vec<
     let _ = tx.rollback().await;
 
     let columns: Vec<String> = if let Some(first) = rows.first() {
-        first.columns().iter().map(|c| c.name().to_string()).collect()
+        first
+            .columns()
+            .iter()
+            .map(|c| c.name().to_string())
+            .collect()
     } else {
         Vec::new()
     };
@@ -198,13 +207,7 @@ fn stringify_cell(row: &sqlx::postgres::PgRow, idx: usize, type_name: &str) -> O
 #[cfg(test)]
 mod tests {
     use super::*;
-    use axum::{
-        body::Body,
-        extract::ConnectInfo,
-        http::Request,
-        routing::get,
-        Extension, Router,
-    };
+    use axum::{body::Body, extract::ConnectInfo, http::Request, routing::get, Extension, Router};
     use sqlx::postgres::{PgConnectOptions, PgPoolOptions};
     use std::net::SocketAddr;
     use std::str::FromStr;
@@ -227,12 +230,28 @@ mod tests {
 
     async fn pool(schema: &str) -> Option<PgPool> {
         let dsn = std::env::var("TB_TEST_DATABASE_URL").ok()?;
-        let admin = PgPoolOptions::new().max_connections(1).connect(&dsn).await.ok()?;
-        sqlx::query(&format!("DROP SCHEMA IF EXISTS {schema} CASCADE")).execute(&admin).await.ok()?;
-        sqlx::query(&format!("CREATE SCHEMA {schema}")).execute(&admin).await.ok()?;
+        let admin = PgPoolOptions::new()
+            .max_connections(1)
+            .connect(&dsn)
+            .await
+            .ok()?;
+        sqlx::query(&format!("DROP SCHEMA IF EXISTS {schema} CASCADE"))
+            .execute(&admin)
+            .await
+            .ok()?;
+        sqlx::query(&format!("CREATE SCHEMA {schema}"))
+            .execute(&admin)
+            .await
+            .ok()?;
         admin.close().await;
-        let options = PgConnectOptions::from_str(&dsn).ok()?.options([("search_path", schema)]);
-        PgPoolOptions::new().max_connections(2).connect_with(options).await.ok()
+        let options = PgConnectOptions::from_str(&dsn)
+            .ok()?
+            .options([("search_path", schema)]);
+        PgPoolOptions::new()
+            .max_connections(2)
+            .connect_with(options)
+            .await
+            .ok()
     }
 
     fn router(pool: PgPool) -> Router {
@@ -255,8 +274,13 @@ mod tests {
 
     #[tokio::test]
     async fn select_eins_liefert_columns_rows() {
-        let Some(pool) = pool("t_query_select1").await else { return };
-        let res = router(pool).oneshot(admin_req("sql=SELECT%201%20AS%20n")).await.unwrap();
+        let Some(pool) = pool("t_query_select1").await else {
+            return;
+        };
+        let res = router(pool)
+            .oneshot(admin_req("sql=SELECT%201%20AS%20n"))
+            .await
+            .unwrap();
         assert_eq!(res.status(), StatusCode::OK);
         let b = axum::body::to_bytes(res.into_body(), 65536).await.unwrap();
         let v: Value = serde_json::from_slice(&b).unwrap();
@@ -267,8 +291,13 @@ mod tests {
 
     #[tokio::test]
     async fn nicht_select_abgelehnt() {
-        let Some(pool) = pool("t_query_reject").await else { return };
-        let res = router(pool).oneshot(admin_req("sql=DELETE%20FROM%20x")).await.unwrap();
+        let Some(pool) = pool("t_query_reject").await else {
+            return;
+        };
+        let res = router(pool)
+            .oneshot(admin_req("sql=DELETE%20FROM%20x"))
+            .await
+            .unwrap();
         assert_eq!(res.status(), StatusCode::BAD_REQUEST);
         let b = axum::body::to_bytes(res.into_body(), 4096).await.unwrap();
         let v: Value = serde_json::from_slice(&b).unwrap();
@@ -277,8 +306,13 @@ mod tests {
 
     #[tokio::test]
     async fn keyword_blocklist_abgelehnt() {
-        let Some(pool) = pool("t_query_kw").await else { return };
-        let res = router(pool).oneshot(admin_req("sql=SELECT%201%3B%20DROP%20TABLE%20t")).await.unwrap();
+        let Some(pool) = pool("t_query_kw").await else {
+            return;
+        };
+        let res = router(pool)
+            .oneshot(admin_req("sql=SELECT%201%3B%20DROP%20TABLE%20t"))
+            .await
+            .unwrap();
         assert_eq!(res.status(), StatusCode::BAD_REQUEST);
         let b = axum::body::to_bytes(res.into_body(), 4096).await.unwrap();
         let v: Value = serde_json::from_slice(&b).unwrap();
@@ -287,7 +321,9 @@ mod tests {
 
     #[tokio::test]
     async fn ohne_auth_401() {
-        let Some(pool) = pool("t_query_unauth").await else { return };
+        let Some(pool) = pool("t_query_unauth").await else {
+            return;
+        };
         let addr: SocketAddr = "1.2.3.4:9999".parse().unwrap();
         let req = Request::builder()
             .uri("/twitch/api/admin/system/query?sql=SELECT%201")

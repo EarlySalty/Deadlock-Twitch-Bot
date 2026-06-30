@@ -8,21 +8,21 @@
 //! `partner_registry`-Dashboard-Routen.
 
 use axum::{
-    Json,
     extract::{Path, Query, State},
     response::IntoResponse,
+    Json,
 };
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
-use serde_json::{Value, json};
+use serde_json::{json, Value};
 use sqlx::PgPool;
 use tb_analytics::admin_streamers::{
-    StreamerView, list_streamers, partner_status, scope_snapshot, streamer_detail,
-    streamer_stats_and_sessions,
+    list_streamers, partner_status, scope_snapshot, streamer_detail, streamer_stats_and_sessions,
+    StreamerView,
 };
 use tb_analytics::streamers_crud::{
-    ArchiveMode, VerifyStreamerResult, archive_streamer, departner_streamer, set_discord_flag,
-    verify_streamer,
+    archive_streamer, departner_streamer, set_discord_flag, verify_streamer, ArchiveMode,
+    VerifyStreamerResult,
 };
 use tb_http_core::{ApiError, AuthLevel};
 
@@ -188,7 +188,12 @@ pub struct StreamerOAuth {
 // ── Hilfsfunktionen ──────────────────────────────────────────────────────────
 
 fn fmt_dt(dt: DateTime<Utc>) -> String {
-    dt.to_rfc3339()
+    let micros = dt.timestamp_subsec_micros();
+    if micros == 0 {
+        dt.format("%Y-%m-%dT%H:%M:%S+00").to_string()
+    } else {
+        format!("{}.{micros:06}+00", dt.format("%Y-%m-%dT%H:%M:%S"))
+    }
 }
 
 // ── Handler ───────────────────────────────────────────────────────────────────
@@ -645,13 +650,13 @@ pub async fn discord_flag_handler(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::auth::session::{ADMIN_COOKIE_NAME, DashboardAuthState};
+    use crate::auth::session::{DashboardAuthState, ADMIN_COOKIE_NAME};
     use axum::{
-        Extension, Router,
         body::Body,
         extract::ConnectInfo,
         http::{Request, StatusCode},
         routing::get,
+        Extension, Router,
     };
     use sqlx::postgres::PgPoolOptions;
     use std::net::SocketAddr;
@@ -770,6 +775,20 @@ mod tests {
         .execute(&pool)
         .await
         .expect("DDL");
+        sqlx::query(
+            r#"
+            CREATE TABLE IF NOT EXISTS dashboard_sessions (
+                session_id TEXT PRIMARY KEY,
+                session_type TEXT NOT NULL DEFAULT 'twitch',
+                payload_enc BYTEA NOT NULL,
+                created_at DOUBLE PRECISION NOT NULL,
+                expires_at DOUBLE PRECISION NOT NULL
+            )
+        "#,
+        )
+        .execute(&pool)
+        .await
+        .expect("DDL dashboard_sessions");
 
         sqlx::query("DROP TABLE IF EXISTS twitch_stream_sessions")
             .execute(&pool)

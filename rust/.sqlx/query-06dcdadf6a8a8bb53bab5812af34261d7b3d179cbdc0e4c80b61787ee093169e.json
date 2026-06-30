@@ -1,0 +1,23 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "WITH recent_sessions AS (\n                       SELECT id, started_at\n                       FROM twitch_stream_sessions\n                       WHERE LOWER(streamer_login) = $1\n                         AND started_at >= $2\n                         AND ended_at IS NOT NULL\n                       ORDER BY started_at DESC\n                       LIMIT 50\n                   )\n                   SELECT FLOOR(EXTRACT(EPOCH FROM (a.started_at - rs.started_at)) / 60.0)::int AS \"minute!\"\n                   FROM twitch_ad_break_events a\n                   JOIN recent_sessions rs ON rs.id = a.session_id",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "minute!",
+        "type_info": "Int4"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Text",
+        "Timestamptz"
+      ]
+    },
+    "nullable": [
+      null
+    ]
+  },
+  "hash": "06dcdadf6a8a8bb53bab5812af34261d7b3d179cbdc0e4c80b61787ee093169e"
+}

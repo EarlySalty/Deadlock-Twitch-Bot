@@ -13,7 +13,7 @@ use axum::{
 use chrono::{DateTime, Duration, Utc};
 use serde::Deserialize;
 use serde_json::json;
-use sqlx::{PgPool, Row};
+use sqlx::PgPool;
 use std::collections::HashMap;
 
 use crate::auth::level::DashboardAuthLevel;
@@ -93,21 +93,18 @@ async fn compute_weighted_peak_hours(
     let bots: Vec<String> = KNOWN_CHAT_BOTS.iter().map(|s| s.to_string()).collect();
 
     // Q3a: letzte N Sessions (neueste zuerst)
-    let sess_rows = sqlx::query(
+    let sess_rows = sqlx::query!(
         "SELECT id FROM twitch_stream_sessions
          WHERE started_at >= $1 AND LOWER(streamer_login) = $2 AND ended_at IS NOT NULL
          ORDER BY started_at DESC LIMIT $3",
+        since,
+        streamer,
+        PEAK_SESSION_WINDOW
     )
-    .bind(since)
-    .bind(streamer)
-    .bind(PEAK_SESSION_WINDOW)
     .fetch_all(pool)
     .await?;
 
-    let session_ids: Vec<i64> = sess_rows
-        .iter()
-        .filter_map(|r| r.try_get::<i64, _>("id").ok())
-        .collect();
+    let session_ids: Vec<i64> = sess_rows.into_iter().map(|r| r.id).collect();
     if session_ids.is_empty() {
         return Ok(empty);
     }
@@ -121,14 +118,17 @@ async fn compute_weighted_peak_hours(
         .collect();
 
     // Q3b: Chat-Messages aggregiert nach (session_id, hour_in_tz)
-    let msg_rows = sqlx::query(
-        "SELECT cm.session_id, EXTRACT(HOUR FROM (cm.message_ts AT TIME ZONE $1))::int AS hour, COUNT(*) AS cnt
+    let msg_rows = sqlx::query!(
+        "SELECT cm.session_id AS \"session_id!\", EXTRACT(HOUR FROM (cm.message_ts AT TIME ZONE $1))::int AS \"hour!\", COUNT(*) AS \"cnt!\"
          FROM twitch_chat_messages cm
          WHERE cm.session_id = ANY($2::bigint[])
            AND (cm.chatter_login IS NULL OR cm.chatter_login = ''
                 OR LOWER(cm.chatter_login) <> ALL($3::text[]))
-         GROUP BY cm.session_id, EXTRACT(HOUR FROM (cm.message_ts AT TIME ZONE $1))::int"
-    ).bind(tz_name).bind(&session_ids[..]).bind(&bots[..])
+         GROUP BY cm.session_id, EXTRACT(HOUR FROM (cm.message_ts AT TIME ZONE $1))::int",
+        tz_name,
+        &session_ids[..],
+        &bots[..]
+    )
     .fetch_all(pool).await?;
 
     // per_session_hours: session_id → hour → count
@@ -139,18 +139,9 @@ async fn compute_weighted_peak_hours(
     }
 
     for row in &msg_rows {
-        let sid: i64 = match row.try_get("session_id") {
-            Ok(v) => v,
-            Err(_) => continue,
-        };
-        let hour: i32 = match row.try_get("hour") {
-            Ok(v) => v,
-            Err(_) => continue,
-        };
-        let cnt: i64 = match row.try_get("cnt") {
-            Ok(v) => v,
-            Err(_) => continue,
-        };
+        let sid = row.session_id;
+        let hour = row.hour;
+        let cnt = row.cnt;
         if let Some(h) = per_session_hours.get_mut(&sid) {
             *h.entry(hour).or_insert(0.0) += cnt as f64;
             total_samples += cnt;
@@ -278,31 +269,25 @@ async fn compute_demographics(
     let bots: Vec<String> = KNOWN_CHAT_BOTS.iter().map(|s| s.to_string()).collect();
 
     // ── Q1: Sprach-Mix ────────────────────────────────────────────────────────
-    let lang_rows = sqlx::query(
-        "SELECT LOWER(COALESCE(NULLIF(language,''),'unknown')) AS lang,
-                COUNT(*) AS sessions,
-                AVG(avg_viewers) AS avg_v
+    let lang_rows = sqlx::query!(
+        "SELECT LOWER(COALESCE(NULLIF(language,''),'unknown')) AS \"lang!\",
+                COUNT(*) AS \"sessions!\",
+                AVG(avg_viewers) AS \"avg_v?\"
          FROM twitch_stream_sessions
          WHERE started_at >= $1 AND LOWER(streamer_login) = $2 AND ended_at IS NOT NULL
-         GROUP BY lang ORDER BY sessions DESC",
+         GROUP BY 1 ORDER BY 2 DESC",
+        since,
+        streamer
     )
-    .bind(since)
-    .bind(streamer)
     .fetch_all(pool)
     .await?;
 
-    let lang_session_total: i64 = lang_rows
-        .iter()
-        .map(|r| r.try_get::<i64, _>("sessions").unwrap_or(0))
-        .sum();
+    let lang_session_total: i64 = lang_rows.iter().map(|r| r.sessions).sum();
     let primary_lang_code: String = lang_rows
         .first()
-        .and_then(|r| r.try_get::<String, _>("lang").ok())
+        .map(|r| r.lang.clone())
         .unwrap_or_else(|| "unknown".into());
-    let primary_lang_count: i64 = lang_rows
-        .first()
-        .and_then(|r| r.try_get::<i64, _>("sessions").ok())
-        .unwrap_or(0);
+    let primary_lang_count: i64 = lang_rows.first().map(|r| r.sessions).unwrap_or(0);
     let language_confidence: f64 = if lang_session_total > 0 {
         (primary_lang_count as f64 / lang_session_total as f64 * 1000.0).round() / 10.0
     } else {
@@ -311,16 +296,16 @@ async fn compute_demographics(
     let primary_language_label = lang_label(&primary_lang_code);
 
     // ── Q2: Stündliche Schedule-Stats (für Regions-Scoring) ──────────────────
-    let time_rows = sqlx::query(
-        "SELECT EXTRACT(HOUR FROM (started_at AT TIME ZONE 'UTC'))::int AS hour,
-                AVG(avg_viewers) AS avg_v,
-                COUNT(*) AS cnt
+    let time_rows = sqlx::query!(
+        "SELECT EXTRACT(HOUR FROM (started_at AT TIME ZONE 'UTC'))::int AS \"hour!\",
+                AVG(avg_viewers) AS \"avg_v?\",
+                COUNT(*) AS \"cnt!\"
          FROM twitch_stream_sessions
          WHERE started_at >= $1 AND LOWER(streamer_login) = $2 AND ended_at IS NOT NULL
-         GROUP BY hour",
+         GROUP BY 1",
+        since,
+        streamer
     )
-    .bind(since)
-    .bind(streamer)
     .fetch_all(pool)
     .await?;
 
@@ -328,47 +313,34 @@ async fn compute_demographics(
     let peak_res = compute_weighted_peak_hours(pool, streamer, since, tz_name).await?;
 
     // ── Q4: Session-Stats ─────────────────────────────────────────────────────
-    let sess_row = sqlx::query(
-        "SELECT COUNT(*) AS cnt,
-                COALESCE(SUM(duration_seconds),0) AS total_dur,
-                AVG(avg_viewers) AS avg_v,
-                COALESCE(SUM(COALESCE(avg_viewers,0)*GREATEST(COALESCE(duration_seconds,0),0)/60.0),0) AS vm_fallback
+    let sess_row = sqlx::query!(
+        "SELECT COUNT(*) AS \"cnt!\",
+                COALESCE(SUM(duration_seconds),0)::bigint AS \"total_dur!\",
+                AVG(avg_viewers) AS \"avg_v?\",
+                COALESCE(SUM(COALESCE(avg_viewers,0)*GREATEST(COALESCE(duration_seconds,0),0)/60.0),0) AS \"vm_fallback!\"
          FROM twitch_stream_sessions
-         WHERE started_at >= $1 AND LOWER(streamer_login) = $2 AND ended_at IS NOT NULL"
-    ).bind(since).bind(streamer).fetch_optional(pool).await?;
+         WHERE started_at >= $1 AND LOWER(streamer_login) = $2 AND ended_at IS NOT NULL",
+        since,
+        streamer
+    ).fetch_optional(pool).await?;
 
-    let session_count: i64 = sess_row
-        .as_ref()
-        .and_then(|r| r.try_get::<i64, _>("cnt").ok())
-        .unwrap_or(0);
-    let avg_viewers_val: f64 = sess_row
-        .as_ref()
-        .and_then(|r| r.try_get::<Option<f64>, _>("avg_v").ok().flatten())
-        .unwrap_or(0.0);
-    let vm_fallback: f64 = sess_row
-        .as_ref()
-        .and_then(|r| r.try_get::<f64, _>("vm_fallback").ok())
-        .unwrap_or(0.0);
+    let session_count: i64 = sess_row.as_ref().map(|r| r.cnt).unwrap_or(0);
+    let avg_viewers_val: f64 = sess_row.as_ref().and_then(|r| r.avg_v).unwrap_or(0.0);
+    let vm_fallback: f64 = sess_row.as_ref().map(|r| r.vm_fallback).unwrap_or(0.0);
 
     // ── Q5: Viewer-Sample (twitch_session_viewers) ────────────────────────────
-    let vsamp = sqlx::query(
-        "SELECT COUNT(*) AS cnt, COALESCE(SUM(GREATEST(sv.viewer_count,0)),0)::float8 AS vm
+    let vsamp = sqlx::query!(
+        "SELECT COUNT(*) AS \"cnt!\", COALESCE(SUM(GREATEST(sv.viewer_count,0)),0)::float8 AS \"vm!\"
          FROM twitch_session_viewers sv
          JOIN twitch_stream_sessions s ON s.id = sv.session_id
          WHERE s.started_at >= $1 AND LOWER(s.streamer_login) = $2 AND s.ended_at IS NOT NULL",
+        since,
+        streamer
     )
-    .bind(since)
-    .bind(streamer)
     .fetch_optional(pool)
     .await?;
-    let viewer_sample_count: i64 = vsamp
-        .as_ref()
-        .and_then(|r| r.try_get::<i64, _>("cnt").ok())
-        .unwrap_or(0);
-    let vm_real: f64 = vsamp
-        .as_ref()
-        .and_then(|r| r.try_get::<f64, _>("vm").ok())
-        .unwrap_or(0.0);
+    let viewer_sample_count: i64 = vsamp.as_ref().map(|r| r.cnt).unwrap_or(0);
+    let vm_real: f64 = vsamp.as_ref().map(|r| r.vm).unwrap_or(0.0);
     let viewer_minutes = if viewer_sample_count > 0 {
         vm_real
     } else {
@@ -378,7 +350,7 @@ async fn compute_demographics(
 
     // ── Q6: Viewer-Kohorten (per_user + rollup) ───────────────────────────────
     // $1=since, $2=streamer, $3=bots[], — $1 wird auch für seen_before verwendet
-    let vrows = sqlx::query(r#"
+    let vrows = sqlx::query!(r#"
         WITH per_user AS (
             SELECT
                 COALESCE(NULLIF(sc.chatter_login,''), sc.chatter_id) AS user_id,
@@ -405,13 +377,13 @@ async fn compute_demographics(
                    OR LOWER(chatter_login) <> ALL($3::text[]))
         )
         SELECT
-            pu.user_id, pu.chatter_login, pu.session_count::bigint,
-            pu.active_flag::int, pu.lurker_flag::int,
-            pu.first_time_flag::int, pu.has_first_flag::int, pu.seen_flag::int,
-            CASE WHEN r.cl IS NOT NULL AND r.first_seen_at < $1 THEN 1 ELSE 0 END AS seen_before
+            pu.user_id AS "user_id?", pu.chatter_login AS "chatter_login?", pu.session_count::bigint AS "session_count!",
+            pu.active_flag::int AS "active_flag!", pu.lurker_flag::int AS "lurker_flag!",
+            pu.first_time_flag::int AS "first_time_flag!", pu.has_first_flag::int AS "has_first_flag!", pu.seen_flag::int AS "seen_flag!",
+            CASE WHEN r.cl IS NOT NULL AND r.first_seen_at < $1 THEN 1 ELSE 0 END AS "seen_before!"
         FROM per_user pu
         LEFT JOIN rollup r ON r.cl = LOWER(pu.chatter_login)
-    "#).bind(since).bind(streamer).bind(&bots[..]).fetch_all(pool).await?;
+    "#, since, streamer, &bots[..]).fetch_all(pool).await?;
 
     struct ViewerEntry {
         session_count: i64,
@@ -427,14 +399,14 @@ async fn compute_demographics(
     let mut viewer_entries: Vec<ViewerEntry> = Vec::with_capacity(vrows.len());
     let mut has_first_flag_data = false;
     for row in &vrows {
-        let sc: i64 = row.try_get("session_count").unwrap_or(0);
-        let active: i32 = row.try_get("active_flag").unwrap_or(0);
-        let lurker: i32 = row.try_get("lurker_flag").unwrap_or(0);
-        let first_flag: i32 = row.try_get("first_time_flag").unwrap_or(0);
-        let has_ff: i32 = row.try_get("has_first_flag").unwrap_or(0);
-        let seen: i32 = row.try_get("seen_flag").unwrap_or(0);
-        let seen_before: i32 = row.try_get("seen_before").unwrap_or(0);
-        let login: Option<String> = row.try_get("chatter_login").ok().flatten();
+        let sc = row.session_count;
+        let active = row.active_flag;
+        let lurker = row.lurker_flag;
+        let first_flag = row.first_time_flag;
+        let has_ff = row.has_first_flag;
+        let seen = row.seen_flag;
+        let seen_before = row.seen_before;
+        let login = row.chatter_login.as_ref();
         let hff = has_ff != 0;
         has_first_flag_data = has_first_flag_data || hff;
         viewer_entries.push(ViewerEntry {
@@ -508,35 +480,33 @@ async fn compute_demographics(
     let active_viewers = viewer_entries.iter().filter(|v| v.active).count();
 
     // ── Q7: Total Messages ────────────────────────────────────────────────────
-    let msg_count: i64 = sqlx::query(
-        "SELECT COUNT(*) AS cnt FROM twitch_chat_messages cm
+    let msg_count: i64 = sqlx::query_scalar!(
+        "SELECT COUNT(*) AS \"cnt!\" FROM twitch_chat_messages cm
          WHERE cm.message_ts >= $1 AND LOWER(cm.streamer_login) = $2
            AND (cm.chatter_login IS NULL OR cm.chatter_login = ''
                 OR LOWER(cm.chatter_login) <> ALL($3::text[]))",
+        since,
+        streamer,
+        &bots[..]
     )
-    .bind(since)
-    .bind(streamer)
-    .bind(&bots[..])
     .fetch_optional(pool)
     .await?
-    .and_then(|r| r.try_get::<i64, _>("cnt").ok())
     .unwrap_or(0);
 
     // ── Q8: Sessions with chat ────────────────────────────────────────────────
-    let sessions_with_chat: i64 = sqlx::query(
-        "SELECT COUNT(DISTINCT sc.session_id) AS cnt
+    let sessions_with_chat: i64 = sqlx::query_scalar!(
+        "SELECT COUNT(DISTINCT sc.session_id) AS \"cnt!\"
          FROM twitch_session_chatters sc
          JOIN twitch_stream_sessions s ON s.id = sc.session_id
          WHERE s.started_at >= $1 AND LOWER(s.streamer_login) = $2 AND s.ended_at IS NOT NULL
            AND (sc.chatter_login IS NULL OR sc.chatter_login = ''
                 OR LOWER(sc.chatter_login) <> ALL($3::text[]))",
+        since,
+        streamer,
+        &bots[..]
     )
-    .bind(since)
-    .bind(streamer)
-    .bind(&bots[..])
     .fetch_optional(pool)
     .await?
-    .and_then(|r| r.try_get::<i64, _>("cnt").ok())
     .unwrap_or(0);
 
     // ── Engagement ────────────────────────────────────────────────────────────
@@ -556,19 +526,19 @@ async fn compute_demographics(
     let mut weekday_counts: [i64; 7] = [0; 7];
     let mut schedule_total: i64 = 0;
     // Schedule-DOW-Query für Aktivitätsmuster
-    let dow_rows = sqlx::query(
-        "SELECT EXTRACT(DOW FROM (started_at AT TIME ZONE 'UTC'))::int AS dow, COUNT(*) AS cnt
+    let dow_rows = sqlx::query!(
+        "SELECT EXTRACT(DOW FROM (started_at AT TIME ZONE 'UTC'))::int AS \"dow!\", COUNT(*) AS \"cnt!\"
          FROM twitch_stream_sessions
          WHERE started_at >= $1 AND LOWER(streamer_login) = $2 AND ended_at IS NOT NULL
-         GROUP BY dow",
+         GROUP BY 1",
+        since,
+        streamer
     )
-    .bind(since)
-    .bind(streamer)
     .fetch_all(pool)
     .await?;
     for row in &dow_rows {
-        let dow: i32 = row.try_get("dow").unwrap_or(-1);
-        let cnt: i64 = row.try_get("cnt").unwrap_or(0);
+        let dow = row.dow;
+        let cnt = row.cnt;
         if (0..7).contains(&dow) {
             weekday_counts[dow as usize] += cnt;
             schedule_total += cnt;
@@ -612,14 +582,9 @@ async fn compute_demographics(
             *scores.entry("Other").or_default() += 2.0;
         }
         for row in &time_rows {
-            let hour: i32 = row.try_get("hour").unwrap_or(-1);
-            let avg_v: f64 = row
-                .try_get::<Option<f64>, _>("avg_v")
-                .ok()
-                .flatten()
-                .unwrap_or(0.0)
-                .max(0.0);
-            let cnt: f64 = row.try_get::<i64, _>("cnt").unwrap_or(0) as f64;
+            let hour = row.hour;
+            let avg_v = row.avg_v.unwrap_or(0.0).max(0.0);
+            let cnt = row.cnt as f64;
             let score = avg_v.max(1.0) * cnt.max(1.0);
             if (17..=23).contains(&hour) {
                 *scores.entry("Rest EU").or_default() += score;

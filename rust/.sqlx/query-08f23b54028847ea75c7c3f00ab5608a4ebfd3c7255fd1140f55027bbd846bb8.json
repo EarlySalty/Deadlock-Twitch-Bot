@@ -1,0 +1,35 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT winner AS \"winner?\", comment, updated_at::text AS \"updated_at?\" FROM twitch_stream_report_ab_votes WHERE session_id = $1 AND voted_by = $2 LIMIT 1",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "winner?",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 1,
+        "name": "comment",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 2,
+        "name": "updated_at?",
+        "type_info": "Text"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Int8",
+        "Text"
+      ]
+    },
+    "nullable": [
+      false,
+      true,
+      null
+    ]
+  },
+  "hash": "08f23b54028847ea75c7c3f00ab5608a4ebfd3c7255fd1140f55027bbd846bb8"
+}

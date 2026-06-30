@@ -1,0 +1,47 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n        SELECT\n            EXTRACT(DOW  FROM s.started_at)::integer AS \"weekday!\",\n            EXTRACT(HOUR FROM s.started_at)::integer AS \"hour!\",\n            COUNT(*) AS \"stream_count!\",\n            AVG(s.avg_viewers) AS \"avg_viewers?\",\n            AVG(s.peak_viewers)::float8 AS \"avg_peak?\"\n        FROM twitch_stream_sessions s\n        WHERE s.started_at >= $1\n          AND s.ended_at IS NOT NULL\n          AND (COALESCE($2, '') = '' OR LOWER(s.streamer_login) = $2)\n        GROUP BY 1, 2\n        ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "weekday!",
+        "type_info": "Int4"
+      },
+      {
+        "ordinal": 1,
+        "name": "hour!",
+        "type_info": "Int4"
+      },
+      {
+        "ordinal": 2,
+        "name": "stream_count!",
+        "type_info": "Int8"
+      },
+      {
+        "ordinal": 3,
+        "name": "avg_viewers?",
+        "type_info": "Float8"
+      },
+      {
+        "ordinal": 4,
+        "name": "avg_peak?",
+        "type_info": "Float8"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Timestamptz",
+        "Text"
+      ]
+    },
+    "nullable": [
+      null,
+      null,
+      null,
+      null,
+      null
+    ]
+  },
+  "hash": "e7c0d2e9a233cfb181cec85c1e8f01c6740f93a201c1c6d920c543ecdd003b12"
+}

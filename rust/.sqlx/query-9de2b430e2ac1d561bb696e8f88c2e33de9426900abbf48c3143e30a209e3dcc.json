@@ -1,0 +1,36 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT fe.follower_login,\n                  CASE WHEN rh.executed_at IS NOT NULL\n                            AND sc.first_message_at >= rh.executed_at\n                            AND cr_before.chatter_login IS NULL\n                       THEN 'raid' ELSE 'organic' END AS \"follow_source!\",\n                  rh.from_broadcaster_login AS \"raid_source?\"\n           FROM twitch_follow_events fe\n           JOIN twitch_stream_sessions ss\n               ON LOWER(ss.streamer_login) = LOWER(fe.streamer_login)\n              AND fe.followed_at BETWEEN ss.started_at AND COALESCE(ss.ended_at, NOW())\n           LEFT JOIN twitch_session_chatters sc\n               ON sc.session_id = ss.id AND LOWER(sc.chatter_login) = LOWER(fe.follower_login)\n           LEFT JOIN twitch_raid_retention rr ON rr.target_session_id = ss.id\n           LEFT JOIN twitch_raid_history rh ON rh.id = rr.raid_id AND rh.executed_at = rr.executed_at\n           LEFT JOIN twitch_chatter_rollup cr_before\n               ON LOWER(cr_before.chatter_login) = LOWER(fe.follower_login)\n              AND LOWER(cr_before.streamer_login) = LOWER(fe.streamer_login)\n              AND cr_before.first_seen_at < ss.started_at\n           WHERE LOWER(fe.streamer_login) = $1\n             AND fe.followed_at >= $2\n             AND LOWER(fe.follower_login) != ALL($3)",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "follower_login",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 1,
+        "name": "follow_source!",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 2,
+        "name": "raid_source?",
+        "type_info": "Text"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Text",
+        "Timestamptz",
+        "TextArray"
+      ]
+    },
+    "nullable": [
+      false,
+      null,
+      false
+    ]
+  },
+  "hash": "9de2b430e2ac1d561bb696e8f88c2e33de9426900abbf48c3143e30a209e3dcc"
+}

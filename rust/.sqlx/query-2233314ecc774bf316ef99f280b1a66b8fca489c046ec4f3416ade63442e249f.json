@@ -1,0 +1,62 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT stripe_subscription_id AS \"stripe_subscription_id?\", customer_reference AS \"customer_reference?\", status AS \"status?\", plan_id AS \"plan_id?\", current_period_end AS \"current_period_end?\", canceled_at AS \"canceled_at?\", ended_at AS \"ended_at?\", updated_at AS \"updated_at?\" FROM twitch_billing_subscriptions WHERE updated_at IS NOT NULL ORDER BY updated_at DESC",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "stripe_subscription_id?",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 1,
+        "name": "customer_reference?",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 2,
+        "name": "status?",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 3,
+        "name": "plan_id?",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 4,
+        "name": "current_period_end?",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 5,
+        "name": "canceled_at?",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 6,
+        "name": "ended_at?",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 7,
+        "name": "updated_at?",
+        "type_info": "Text"
+      }
+    ],
+    "parameters": {
+      "Left": []
+    },
+    "nullable": [
+      false,
+      true,
+      false,
+      true,
+      true,
+      true,
+      true,
+      false
+    ]
+  },
+  "hash": "2233314ecc774bf316ef99f280b1a66b8fca489c046ec4f3416ade63442e249f"
+}

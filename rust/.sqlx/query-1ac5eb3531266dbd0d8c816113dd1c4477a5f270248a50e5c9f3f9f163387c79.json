@@ -1,0 +1,22 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT status AS \"status!\" FROM twitch_raw_chat_backfill_runs\n           WHERE LOWER(streamer_login) = $1\n           ORDER BY COALESCE(finished_at, started_at) DESC LIMIT 1",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "status!",
+        "type_info": "Text"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Text"
+      ]
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "1ac5eb3531266dbd0d8c816113dd1c4477a5f270248a50e5c9f3f9f163387c79"
+}

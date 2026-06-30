@@ -1,0 +1,15 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "INSERT INTO twitch_tip_settings (twitch_user_id, opt_out, updated_at) VALUES ($1, $2, NOW()) ON CONFLICT (twitch_user_id) DO UPDATE SET opt_out = EXCLUDED.opt_out, updated_at = NOW()",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Text",
+        "Bool"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "4edb1f279ef23cf5f6a77e00f847609b557e303669fd1f86fdc5b7a54ac9163e"
+}

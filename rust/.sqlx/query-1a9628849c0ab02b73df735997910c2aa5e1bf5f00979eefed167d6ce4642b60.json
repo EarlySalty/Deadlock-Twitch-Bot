@@ -1,0 +1,29 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT EXTRACT(DOW FROM (started_at AT TIME ZONE 'UTC'))::int AS \"dow!\", COUNT(*) AS \"cnt!\"\n         FROM twitch_stream_sessions\n         WHERE started_at >= $1 AND LOWER(streamer_login) = $2 AND ended_at IS NOT NULL\n         GROUP BY 1",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "dow!",
+        "type_info": "Int4"
+      },
+      {
+        "ordinal": 1,
+        "name": "cnt!",
+        "type_info": "Int8"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Timestamptz",
+        "Text"
+      ]
+    },
+    "nullable": [
+      null,
+      null
+    ]
+  },
+  "hash": "1a9628849c0ab02b73df735997910c2aa5e1bf5f00979eefed167d6ce4642b60"
+}

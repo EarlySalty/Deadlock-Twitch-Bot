@@ -88,20 +88,20 @@ pub async fn monthly_stats_handler(
             Err(resp) => return resp,
         };
 
-    let rows = sqlx::query(
+    let rows = sqlx::query!(
         r#"
         SELECT
-            EXTRACT(YEAR  FROM s.started_at)::integer AS year,
-            EXTRACT(MONTH FROM s.started_at)::integer AS month,
-            SUM(s.avg_viewers * s.duration_seconds / 3600.0) AS hours_watched,
-            SUM(s.duration_seconds / 3600.0)::float8 AS airtime,
-            AVG(s.avg_viewers) AS avg_viewers,
-            MAX(s.peak_viewers)::bigint AS peak_viewers,
+            EXTRACT(YEAR  FROM s.started_at)::integer AS "year!",
+            EXTRACT(MONTH FROM s.started_at)::integer AS "month!",
+            SUM(s.avg_viewers * s.duration_seconds / 3600.0) AS "hours_watched?",
+            SUM(s.duration_seconds / 3600.0)::float8 AS "airtime?",
+            AVG(s.avg_viewers) AS "avg_viewers?",
+            MAX(s.peak_viewers)::bigint AS "peak_viewers?",
             SUM(CASE WHEN s.follower_delta IS NOT NULL
                      AND NOT (s.followers_end = 0 AND s.followers_start > 0)
-                     THEN s.follower_delta ELSE 0 END) AS follower_delta,
-            SUM(s.unique_chatters) AS total_chatter_sessions,
-            COUNT(*) AS stream_count
+                     THEN s.follower_delta ELSE 0 END) AS "follower_delta!",
+            SUM(s.unique_chatters) AS "total_chatter_sessions?",
+            COUNT(*) AS "stream_count!"
         FROM twitch_stream_sessions s
         WHERE s.started_at >= $1
           AND s.ended_at IS NOT NULL
@@ -109,9 +109,9 @@ pub async fn monthly_stats_handler(
         GROUP BY 1, 2
         ORDER BY 1 DESC, 2 DESC
         "#,
+        since,
+        streamer.as_deref()
     )
-    .bind(since)
-    .bind(streamer.as_deref())
     .fetch_all(&pool)
     .await;
 
@@ -121,23 +121,26 @@ pub async fn monthly_stats_handler(
             crate::auth::analytics_request_failed_json().into_response()
         }
         Ok(rows) => {
-            let items: Vec<serde_json::Value> = rows.iter().map(|r| {
-                let year: i32 = r.try_get("year").unwrap_or(0);
-                let month: i32 = r.try_get("month").unwrap_or(0);
-                let label = MONTH_LABELS.get(month as usize).copied().unwrap_or("");
-                json!({
-                    "year": year,
-                    "month": month,
-                    "monthLabel": label,
-                    "totalHoursWatched": r.try_get::<f64,_>("hours_watched").unwrap_or(0.0),
-                    "totalAirtime": r.try_get::<f64,_>("airtime").unwrap_or(0.0),
-                    "avgViewers": r.try_get::<f64,_>("avg_viewers").unwrap_or(0.0),
-                    "peakViewers": r.try_get::<i64,_>("peak_viewers").unwrap_or(0),
-                    "followerDelta": r.try_get::<i64,_>("follower_delta").unwrap_or(0),
-                    "totalChatterSessions": r.try_get::<i64,_>("total_chatter_sessions").unwrap_or(0),
-                    "streamCount": r.try_get::<i64,_>("stream_count").unwrap_or(0),
+            let items: Vec<serde_json::Value> = rows
+                .into_iter()
+                .map(|r| {
+                    let year = r.year;
+                    let month = r.month;
+                    let label = MONTH_LABELS.get(month as usize).copied().unwrap_or("");
+                    json!({
+                        "year": year,
+                        "month": month,
+                        "monthLabel": label,
+                        "totalHoursWatched": r.hours_watched.unwrap_or(0.0),
+                        "totalAirtime": r.airtime.unwrap_or(0.0),
+                        "avgViewers": r.avg_viewers.unwrap_or(0.0),
+                        "peakViewers": r.peak_viewers.unwrap_or(0),
+                        "followerDelta": r.follower_delta,
+                        "totalChatterSessions": r.total_chatter_sessions.unwrap_or(0),
+                        "streamCount": r.stream_count,
+                    })
                 })
-            }).collect();
+                .collect();
             Json(json!(items)).into_response()
         }
     }
@@ -169,17 +172,17 @@ pub async fn weekly_stats_handler(
             Err(resp) => return resp,
         };
 
-    let rows = sqlx::query(
+    let rows = sqlx::query!(
         r#"
         SELECT
-            EXTRACT(DOW FROM s.started_at)::integer AS weekday,
-            COUNT(*) AS stream_count,
-            AVG(s.duration_seconds / 3600.0)::float8 AS avg_hours,
-            AVG(s.avg_viewers) AS avg_viewers,
-            AVG(s.peak_viewers)::float8 AS avg_peak,
+            EXTRACT(DOW FROM s.started_at)::integer AS "weekday!",
+            COUNT(*) AS "stream_count!",
+            AVG(s.duration_seconds / 3600.0)::float8 AS "avg_hours?",
+            AVG(s.avg_viewers) AS "avg_viewers?",
+            AVG(s.peak_viewers)::float8 AS "avg_peak?",
             SUM(CASE WHEN s.follower_delta IS NOT NULL
                      AND NOT (s.followers_end = 0 AND s.followers_start > 0)
-                     THEN s.follower_delta ELSE 0 END) AS total_followers
+                     THEN s.follower_delta ELSE 0 END) AS "total_followers!"
         FROM twitch_stream_sessions s
         WHERE s.started_at >= $1
           AND s.ended_at IS NOT NULL
@@ -187,9 +190,9 @@ pub async fn weekly_stats_handler(
         GROUP BY 1
         ORDER BY 1
         "#,
+        since,
+        streamer.as_deref()
     )
-    .bind(since)
-    .bind(streamer.as_deref())
     .fetch_all(&pool)
     .await;
 
@@ -200,18 +203,18 @@ pub async fn weekly_stats_handler(
         }
         Ok(rows) => {
             let items: Vec<serde_json::Value> = rows
-                .iter()
+                .into_iter()
                 .map(|r| {
-                    let wd: i32 = r.try_get("weekday").unwrap_or(0);
+                    let wd = r.weekday;
                     let label = WEEKDAY_LABELS.get(wd as usize).copied().unwrap_or("");
                     json!({
                         "weekday": wd,
                         "weekdayLabel": label,
-                        "streamCount": r.try_get::<i64,_>("stream_count").unwrap_or(0),
-                        "avgHours": r.try_get::<f64,_>("avg_hours").unwrap_or(0.0),
-                        "avgViewers": r.try_get::<f64,_>("avg_viewers").unwrap_or(0.0),
-                        "avgPeak": r.try_get::<f64,_>("avg_peak").unwrap_or(0.0),
-                        "totalFollowers": r.try_get::<i64,_>("total_followers").unwrap_or(0),
+                        "streamCount": r.stream_count,
+                        "avgHours": r.avg_hours.unwrap_or(0.0),
+                        "avgViewers": r.avg_viewers.unwrap_or(0.0),
+                        "avgPeak": r.avg_peak.unwrap_or(0.0),
+                        "totalFollowers": r.total_followers,
                     })
                 })
                 .collect();
@@ -244,23 +247,23 @@ pub async fn hourly_heatmap_handler(
             Err(resp) => return resp,
         };
 
-    let rows = sqlx::query(
+    let rows = sqlx::query!(
         r#"
         SELECT
-            EXTRACT(DOW  FROM s.started_at)::integer AS weekday,
-            EXTRACT(HOUR FROM s.started_at)::integer AS hour,
-            COUNT(*) AS stream_count,
-            AVG(s.avg_viewers) AS avg_viewers,
-            AVG(s.peak_viewers)::float8 AS avg_peak
+            EXTRACT(DOW  FROM s.started_at)::integer AS "weekday!",
+            EXTRACT(HOUR FROM s.started_at)::integer AS "hour!",
+            COUNT(*) AS "stream_count!",
+            AVG(s.avg_viewers) AS "avg_viewers?",
+            AVG(s.peak_viewers)::float8 AS "avg_peak?"
         FROM twitch_stream_sessions s
         WHERE s.started_at >= $1
           AND s.ended_at IS NOT NULL
           AND (COALESCE($2, '') = '' OR LOWER(s.streamer_login) = $2)
         GROUP BY 1, 2
         "#,
+        since,
+        streamer.as_deref()
     )
-    .bind(since)
-    .bind(streamer.as_deref())
     .fetch_all(&pool)
     .await;
 
@@ -271,14 +274,14 @@ pub async fn hourly_heatmap_handler(
         }
         Ok(rows) => {
             let items: Vec<serde_json::Value> = rows
-                .iter()
+                .into_iter()
                 .map(|r| {
                     json!({
-                        "weekday": r.try_get::<i32,_>("weekday").unwrap_or(0),
-                        "hour": r.try_get::<i32,_>("hour").unwrap_or(0),
-                        "streamCount": r.try_get::<i64,_>("stream_count").unwrap_or(0),
-                        "avgViewers": r.try_get::<f64,_>("avg_viewers").unwrap_or(0.0),
-                        "avgPeak": r.try_get::<f64,_>("avg_peak").unwrap_or(0.0),
+                        "weekday": r.weekday,
+                        "hour": r.hour,
+                        "streamCount": r.stream_count,
+                        "avgViewers": r.avg_viewers.unwrap_or(0.0),
+                        "avgPeak": r.avg_peak.unwrap_or(0.0),
                     })
                 })
                 .collect();
@@ -311,12 +314,12 @@ pub async fn calendar_heatmap_handler(
             Err(resp) => return resp,
         };
 
-    let rows = sqlx::query(
+    let rows = sqlx::query!(
         r#"
         SELECT
-            DATE(s.started_at) AS date,
-            COUNT(*) AS stream_count,
-            SUM(s.avg_viewers * s.duration_seconds / 3600.0) AS hours_watched
+            DATE(s.started_at) AS "date!",
+            COUNT(*) AS "stream_count!",
+            SUM(s.avg_viewers * s.duration_seconds / 3600.0) AS "hours_watched?"
         FROM twitch_stream_sessions s
         WHERE s.started_at >= $1
           AND s.ended_at IS NOT NULL
@@ -324,9 +327,9 @@ pub async fn calendar_heatmap_handler(
         GROUP BY DATE(s.started_at)
         ORDER BY DATE(s.started_at)
         "#,
+        since,
+        streamer.as_deref()
     )
-    .bind(since)
-    .bind(streamer.as_deref())
     .fetch_all(&pool)
     .await;
 
@@ -337,15 +340,13 @@ pub async fn calendar_heatmap_handler(
         }
         Ok(rows) => {
             let items: Vec<serde_json::Value> = rows
-                .iter()
+                .into_iter()
                 .map(|r| {
-                    let date: chrono::NaiveDate = r
-                        .try_get("date")
-                        .unwrap_or(chrono::NaiveDate::from_ymd_opt(1970, 1, 1).unwrap());
-                    let hw = r.try_get::<f64, _>("hours_watched").unwrap_or(0.0);
+                    let date = r.date;
+                    let hw = r.hours_watched.unwrap_or(0.0);
                     json!({
                         "date": date.to_string(),
-                        "streamCount": r.try_get::<i64,_>("stream_count").unwrap_or(0),
+                        "streamCount": r.stream_count,
                         "hoursWatched": hw,
                         "value": hw,
                     })

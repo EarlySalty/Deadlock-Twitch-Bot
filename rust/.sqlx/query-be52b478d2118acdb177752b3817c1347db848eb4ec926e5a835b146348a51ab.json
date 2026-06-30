@@ -1,0 +1,29 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT AVG(viewer_count)::float8 AS \"avg_vc?\", MAX(viewer_count)::float8 AS \"peak_vc?\"\n         FROM twitch_stats_tracked\n         WHERE ts_utc >= $1 AND LOWER(streamer) = $2",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "avg_vc?",
+        "type_info": "Float8"
+      },
+      {
+        "ordinal": 1,
+        "name": "peak_vc?",
+        "type_info": "Float8"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Timestamptz",
+        "Text"
+      ]
+    },
+    "nullable": [
+      null,
+      null
+    ]
+  },
+  "hash": "be52b478d2118acdb177752b3817c1347db848eb4ec926e5a835b146348a51ab"
+}

@@ -13,7 +13,7 @@ pub async fn healthz_handler() -> Json<serde_json::Value> {
 }
 
 pub async fn readyz_handler(State(pool): State<PgPool>) -> Json<serde_json::Value> {
-    match sqlx::query_scalar::<_, i32>("SELECT 1")
+    match sqlx::query_scalar!("SELECT 1 AS \"one!\"")
         .fetch_one(&pool)
         .await
     {

@@ -1,0 +1,22 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT DISTINCT LOWER(TRIM(login)) AS \"login!\"\n           FROM (\n               SELECT twitch_login AS login FROM twitch_streamers WHERE twitch_user_id = ANY($1)\n               UNION\n               SELECT twitch_login AS login FROM twitch_streamer_identities WHERE twitch_user_id = ANY($1)\n               UNION\n               SELECT twitch_login AS login FROM twitch_user_profile WHERE twitch_user_id = ANY($1)\n           ) resolved\n           WHERE TRIM(COALESCE(login, '')) <> ''",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "login!",
+        "type_info": "Text"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "TextArray"
+      ]
+    },
+    "nullable": [
+      null
+    ]
+  },
+  "hash": "94044646232ced2ccbe884b90292d224c19d9540c92dbdeb2875d93b14fa9786"
+}

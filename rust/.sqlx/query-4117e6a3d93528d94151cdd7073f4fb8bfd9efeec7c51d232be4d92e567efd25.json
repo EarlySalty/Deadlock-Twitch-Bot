@@ -1,0 +1,31 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "INSERT INTO streamer_onboarding (\n             twitch_user_id, twitch_login, current_step, completed, completed_at, updated_at\n         ) VALUES (\n             $1, $2, COALESCE($3, 0), COALESCE($4, FALSE),\n             CASE WHEN COALESCE($4, FALSE) THEN NOW() ELSE NULL END,\n             NOW()\n         )\n         ON CONFLICT (twitch_user_id) DO UPDATE SET\n             twitch_login = EXCLUDED.twitch_login,\n             current_step = COALESCE($3, streamer_onboarding.current_step),\n             completed = COALESCE($4, streamer_onboarding.completed),\n             completed_at = CASE\n                 WHEN $4 = TRUE THEN NOW()\n                 WHEN $4 = FALSE THEN NULL\n                 ELSE streamer_onboarding.completed_at\n             END,\n             updated_at = NOW()\n         RETURNING current_step, completed",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "current_step",
+        "type_info": "Int4"
+      },
+      {
+        "ordinal": 1,
+        "name": "completed",
+        "type_info": "Bool"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Text",
+        "Text",
+        "Int4",
+        "Bool"
+      ]
+    },
+    "nullable": [
+      false,
+      false
+    ]
+  },
+  "hash": "4117e6a3d93528d94151cdd7073f4fb8bfd9efeec7c51d232be4d92e567efd25"
+}

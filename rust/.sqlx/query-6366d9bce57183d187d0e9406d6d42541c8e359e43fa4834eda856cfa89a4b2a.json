@@ -1,0 +1,38 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT LOWER(from_broadcaster_login) AS from_login, LOWER(to_broadcaster_login) AS to_login, COALESCE(viewer_count, 0)::bigint AS \"viewers!\", LEFT(executed_at::text, 16) AS at FROM twitch_raid_history WHERE reason = 'manual_chat_command' ORDER BY executed_at DESC",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "from_login",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 1,
+        "name": "to_login",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 2,
+        "name": "viewers!",
+        "type_info": "Int8"
+      },
+      {
+        "ordinal": 3,
+        "name": "at",
+        "type_info": "Text"
+      }
+    ],
+    "parameters": {
+      "Left": []
+    },
+    "nullable": [
+      null,
+      null,
+      null,
+      null
+    ]
+  },
+  "hash": "6366d9bce57183d187d0e9406d6d42541c8e359e43fa4834eda856cfa89a4b2a"
+}

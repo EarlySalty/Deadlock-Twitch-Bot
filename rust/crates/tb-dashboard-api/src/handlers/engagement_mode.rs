@@ -31,7 +31,7 @@ use axum::{
 };
 use serde::Deserialize;
 use serde_json::json;
-use sqlx::{PgPool, Row};
+use sqlx::PgPool;
 
 use crate::auth::level::DashboardAuthLevel;
 
@@ -91,20 +91,17 @@ pub async fn get_handler(
         Ok(t) => t,
         Err(resp) => return resp,
     };
-    let row = sqlx::query(
+    let row = sqlx::query_scalar!(
         "SELECT output_mode FROM twitch_engagement_settings WHERE channel_login = $1",
+        channel
     )
-    .bind(&channel)
     .fetch_optional(&pool)
     .await;
 
     match row {
         // Kein Eintrag → Default `off` (kein Fehler; Dashboard zeigt den Toggle aus).
         Ok(None) => Json(json!({ "output_mode": "off" })).into_response(),
-        Ok(Some(row)) => {
-            let mode: String = row.try_get("output_mode").unwrap_or_else(|_| "off".into());
-            Json(json!({ "output_mode": mode })).into_response()
-        }
+        Ok(Some(mode)) => Json(json!({ "output_mode": mode })).into_response(),
         Err(error) => db_error(error, "get"),
     }
 }
@@ -135,24 +132,24 @@ pub async fn post_handler(
     let result = if partner_self {
         // Partner → Upsert auf den PK; neue Zeile startet enabled=FALSE (Default),
         // shadow/live greift erst nach separatem enabled-Toggle.
-        sqlx::query(
+        sqlx::query!(
             "INSERT INTO twitch_engagement_settings (channel_login, output_mode, updated_at) \
              VALUES ($1, $2, NOW()) \
              ON CONFLICT (channel_login) \
              DO UPDATE SET output_mode = EXCLUDED.output_mode, updated_at = NOW()",
+            &channel,
+            &mode
         )
-        .bind(&channel)
-        .bind(&mode)
         .execute(&pool)
         .await
     } else {
         // Admin/Localhost → reines UPDATE (kein Kanal-Anlegen).
-        sqlx::query(
+        sqlx::query!(
             "UPDATE twitch_engagement_settings SET output_mode = $2, updated_at = NOW() \
              WHERE channel_login = $1",
+            &channel,
+            &mode
         )
-        .bind(&channel)
-        .bind(&mode)
         .execute(&pool)
         .await
     };
@@ -175,12 +172,28 @@ mod tests {
 
     async fn make_pool(schema: &str) -> Option<PgPool> {
         let dsn = std::env::var("TB_TEST_DATABASE_URL").ok()?;
-        let admin = PgPoolOptions::new().max_connections(1).connect(&dsn).await.unwrap();
-        sqlx::query(&format!("DROP SCHEMA IF EXISTS {schema} CASCADE")).execute(&admin).await.unwrap();
-        sqlx::query(&format!("CREATE SCHEMA {schema}")).execute(&admin).await.unwrap();
+        let admin = PgPoolOptions::new()
+            .max_connections(1)
+            .connect(&dsn)
+            .await
+            .unwrap();
+        sqlx::query(&format!("DROP SCHEMA IF EXISTS {schema} CASCADE"))
+            .execute(&admin)
+            .await
+            .unwrap();
+        sqlx::query(&format!("CREATE SCHEMA {schema}"))
+            .execute(&admin)
+            .await
+            .unwrap();
         admin.close().await;
-        let opts = PgConnectOptions::from_str(&dsn).unwrap().options([("search_path", schema)]);
-        let pool = PgPoolOptions::new().max_connections(2).connect_with(opts).await.unwrap();
+        let opts = PgConnectOptions::from_str(&dsn)
+            .unwrap()
+            .options([("search_path", schema)]);
+        let pool = PgPoolOptions::new()
+            .max_connections(2)
+            .connect_with(opts)
+            .await
+            .unwrap();
         sqlx::query(
             "CREATE TABLE twitch_engagement_settings (channel_login TEXT PRIMARY KEY, \
              enabled BOOLEAN NOT NULL DEFAULT FALSE, steam_id TEXT, persona_override TEXT, \
@@ -206,15 +219,25 @@ mod tests {
     async fn body_of(resp: Response) -> (StatusCode, serde_json::Value) {
         let status = resp.status();
         let bytes = axum::body::to_bytes(resp.into_body(), 65536).await.unwrap();
-        (status, serde_json::from_slice(&bytes).unwrap_or(serde_json::Value::Null))
+        (
+            status,
+            serde_json::from_slice(&bytes).unwrap_or(serde_json::Value::Null),
+        )
     }
 
     #[tokio::test]
     async fn default_off_und_partner_roundtrip() {
-        let Some(pool) = make_pool("t_eng_mode_roundtrip").await else { return };
+        let Some(pool) = make_pool("t_eng_mode_roundtrip").await else {
+            return;
+        };
         // Fresh: keine Zeile → default off.
         let (s, j) = body_of(
-            get_handler(partner("nani"), State(pool.clone()), Query(ChannelQuery::default())).await,
+            get_handler(
+                partner("nani"),
+                State(pool.clone()),
+                Query(ChannelQuery::default()),
+            )
+            .await,
         )
         .await;
         assert_eq!(s, StatusCode::OK);
@@ -226,7 +249,9 @@ mod tests {
                 partner("nani"),
                 State(pool.clone()),
                 Query(ChannelQuery::default()),
-                Json(ModeUpdate { output_mode: "shadow".into() }),
+                Json(ModeUpdate {
+                    output_mode: "shadow".into(),
+                }),
             )
             .await,
         )
@@ -236,7 +261,12 @@ mod tests {
 
         // GET liest shadow.
         let (_s, j) = body_of(
-            get_handler(partner("nani"), State(pool.clone()), Query(ChannelQuery::default())).await,
+            get_handler(
+                partner("nani"),
+                State(pool.clone()),
+                Query(ChannelQuery::default()),
+            )
+            .await,
         )
         .await;
         assert_eq!(j["output_mode"], "shadow");
@@ -247,7 +277,9 @@ mod tests {
                 partner("nani"),
                 State(pool.clone()),
                 Query(ChannelQuery::default()),
-                Json(ModeUpdate { output_mode: "LIVE".into() }), // case-insensitiv
+                Json(ModeUpdate {
+                    output_mode: "LIVE".into(),
+                }), // case-insensitiv
             )
             .await,
         )
@@ -257,13 +289,17 @@ mod tests {
 
     #[tokio::test]
     async fn ungueltiger_modus_400() {
-        let Some(pool) = make_pool("t_eng_mode_invalid").await else { return };
+        let Some(pool) = make_pool("t_eng_mode_invalid").await else {
+            return;
+        };
         let (s, j) = body_of(
             post_handler(
                 partner("nani"),
                 State(pool),
                 Query(ChannelQuery::default()),
-                Json(ModeUpdate { output_mode: "loud".into() }),
+                Json(ModeUpdate {
+                    output_mode: "loud".into(),
+                }),
             )
             .await,
         )
@@ -274,17 +310,29 @@ mod tests {
 
     #[tokio::test]
     async fn unauth_401_und_admin_branch() {
-        let Some(pool) = make_pool("t_eng_mode_auth").await else { return };
+        let Some(pool) = make_pool("t_eng_mode_auth").await else {
+            return;
+        };
         // None → 401.
         let (s, _) = body_of(
-            get_handler(DashboardAuthLevel::None, State(pool.clone()), Query(ChannelQuery::default())).await,
+            get_handler(
+                DashboardAuthLevel::None,
+                State(pool.clone()),
+                Query(ChannelQuery::default()),
+            )
+            .await,
         )
         .await;
         assert_eq!(s, StatusCode::UNAUTHORIZED);
 
         // Admin ohne ?channel= → 400.
         let (s, _) = body_of(
-            get_handler(DashboardAuthLevel::admin(), State(pool.clone()), Query(ChannelQuery::default())).await,
+            get_handler(
+                DashboardAuthLevel::admin(),
+                State(pool.clone()),
+                Query(ChannelQuery::default()),
+            )
+            .await,
         )
         .await;
         assert_eq!(s, StatusCode::BAD_REQUEST);
@@ -294,8 +342,12 @@ mod tests {
             post_handler(
                 DashboardAuthLevel::admin(),
                 State(pool.clone()),
-                Query(ChannelQuery { channel: Some("ghost".into()) }),
-                Json(ModeUpdate { output_mode: "live".into() }),
+                Query(ChannelQuery {
+                    channel: Some("ghost".into()),
+                }),
+                Json(ModeUpdate {
+                    output_mode: "live".into(),
+                }),
             )
             .await,
         )
@@ -307,15 +359,21 @@ mod tests {
             partner("nani"),
             State(pool.clone()),
             Query(ChannelQuery::default()),
-            Json(ModeUpdate { output_mode: "live".into() }),
+            Json(ModeUpdate {
+                output_mode: "live".into(),
+            }),
         )
         .await;
         let (s, j) = body_of(
             post_handler(
                 DashboardAuthLevel::admin(),
                 State(pool.clone()),
-                Query(ChannelQuery { channel: Some("nani".into()) }),
-                Json(ModeUpdate { output_mode: "off".into() }),
+                Query(ChannelQuery {
+                    channel: Some("nani".into()),
+                }),
+                Json(ModeUpdate {
+                    output_mode: "off".into(),
+                }),
             )
             .await,
         )

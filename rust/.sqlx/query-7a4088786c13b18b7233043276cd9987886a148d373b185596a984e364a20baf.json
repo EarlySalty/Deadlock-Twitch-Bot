@@ -1,0 +1,29 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n            SELECT AVG(retention_10m) AS \"avg_ret?\",\n                   AVG(CASE WHEN avg_viewers > 0 THEN unique_chatters * 100.0 / avg_viewers ELSE 0 END) AS \"avg_chat?\"\n            FROM twitch_stream_sessions\n            WHERE started_at >= $1 AND ended_at IS NOT NULL\n              AND LOWER(streamer_login) NOT IN (\n                  SELECT LOWER(streamer_login) FROM twitch_stream_sessions\n                  WHERE started_at >= $1 AND ended_at IS NOT NULL\n                  GROUP BY LOWER(streamer_login) HAVING AVG(avg_viewers) > $2\n              )\n        ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "avg_ret?",
+        "type_info": "Float8"
+      },
+      {
+        "ordinal": 1,
+        "name": "avg_chat?",
+        "type_info": "Float8"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Timestamptz",
+        "Float8"
+      ]
+    },
+    "nullable": [
+      null,
+      null
+    ]
+  },
+  "hash": "7a4088786c13b18b7233043276cd9987886a148d373b185596a984e364a20baf"
+}

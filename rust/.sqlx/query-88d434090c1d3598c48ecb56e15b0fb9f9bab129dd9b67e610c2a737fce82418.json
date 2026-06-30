@@ -1,0 +1,15 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "UPDATE twitch_scam_guard_verdicts SET action_taken = 'overturned' WHERE id = $1 AND channel_login = $2 AND action_taken = 'suggested'",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Int8",
+        "Text"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "88d434090c1d3598c48ecb56e15b0fb9f9bab129dd9b67e610c2a737fce82418"
+}

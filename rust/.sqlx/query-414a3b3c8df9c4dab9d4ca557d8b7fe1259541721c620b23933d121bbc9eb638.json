@@ -1,0 +1,22 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT AVG(CASE WHEN avg_viewers > 0 THEN unique_chatters * 100.0 / avg_viewers ELSE 0 END) AS \"ch?\"\n             FROM twitch_stream_sessions\n             WHERE started_at >= $1 AND ended_at IS NOT NULL\n             GROUP BY LOWER(streamer_login) ORDER BY 1",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "ch?",
+        "type_info": "Float8"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Timestamptz"
+      ]
+    },
+    "nullable": [
+      null
+    ]
+  },
+  "hash": "414a3b3c8df9c4dab9d4ca557d8b7fe1259541721c620b23933d121bbc9eb638"
+}

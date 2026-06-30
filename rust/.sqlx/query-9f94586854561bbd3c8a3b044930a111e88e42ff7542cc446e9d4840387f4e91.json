@@ -1,0 +1,22 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT MAX(viewer_count)::float8 AS \"peak?\" FROM twitch_stats_category\n             WHERE ts_utc >= $1 GROUP BY streamer ORDER BY 1",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "peak?",
+        "type_info": "Float8"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Timestamptz"
+      ]
+    },
+    "nullable": [
+      null
+    ]
+  },
+  "hash": "9f94586854561bbd3c8a3b044930a111e88e42ff7542cc446e9d4840387f4e91"
+}

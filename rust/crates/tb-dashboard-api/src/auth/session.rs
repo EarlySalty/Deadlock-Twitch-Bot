@@ -114,7 +114,10 @@ impl AdminSessionFingerprint {
 
         let stored_fp = self.passive_fp.trim();
         if !stored_fp.is_empty()
-            && !tb_crypto::constant_time_eq(stored_fp.as_bytes(), current_passive_fp.trim().as_bytes())
+            && !tb_crypto::constant_time_eq(
+                stored_fp.as_bytes(),
+                current_passive_fp.trim().as_bytes(),
+            )
         {
             warn!("AUDIT admin session passive FP mismatch");
             return false;
@@ -140,14 +143,21 @@ impl AdminSessionFingerprint {
 /// `sha256("{ua}|{lang}|{platform}")[:32]`, wobei `lang` der erste
 /// `Accept-Language`-Eintrag ist und `platform` der entquotete
 /// `Sec-CH-UA-Platform`-Wert.
-pub fn build_passive_fp(user_agent: &str, accept_language: &str, sec_ch_ua_platform: &str) -> String {
+pub fn build_passive_fp(
+    user_agent: &str,
+    accept_language: &str,
+    sec_ch_ua_platform: &str,
+) -> String {
     use sha2::{Digest, Sha256};
     let ua = user_agent.trim();
     let lang = accept_language.split(',').next().unwrap_or("").trim();
     let platform = sec_ch_ua_platform.trim().trim_matches('"').trim();
     let raw = format!("{ua}|{lang}|{platform}");
     let digest = Sha256::digest(raw.as_bytes());
-    let hex = digest.iter().map(|b| format!("{b:02x}")).collect::<String>();
+    let hex = digest
+        .iter()
+        .map(|b| format!("{b:02x}"))
+        .collect::<String>();
     hex.chars().take(32).collect()
 }
 
@@ -437,7 +447,10 @@ impl DashboardAuthState {
         self.persist_new_session(&session_id, "twitch", &payload, now as f64, expires_at)
             .await?;
 
-        Ok(SessionCreation { session_id, csrf_token })
+        Ok(SessionCreation {
+            session_id,
+            csrf_token,
+        })
     }
 
     /// Legt eine **durable, geräte-gebundene Partner-Access-Session** an (P1.54,
@@ -490,7 +503,10 @@ impl DashboardAuthState {
         )
         .await?;
 
-        Ok(SessionCreation { session_id, csrf_token })
+        Ok(SessionCreation {
+            session_id,
+            csrf_token,
+        })
     }
 
     /// Legt eine einfache synthetische Discord-Admin-Session an (Test-/Interop-
@@ -520,10 +536,19 @@ impl DashboardAuthState {
             "expires_at": expires_at,
         });
 
-        self.persist_new_session(&session_id, "discord_admin", &payload, now as f64, expires_at)
-            .await?;
+        self.persist_new_session(
+            &session_id,
+            "discord_admin",
+            &payload,
+            now as f64,
+            expires_at,
+        )
+        .await?;
 
-        Ok(SessionCreation { session_id, csrf_token })
+        Ok(SessionCreation {
+            session_id,
+            csrf_token,
+        })
     }
 
     /// Legt eine neue native Discord-Admin-Session an (Python
@@ -569,10 +594,19 @@ impl DashboardAuthState {
             "post_fp_destination": post_fp_destination.trim(),
         });
 
-        self.persist_new_session(&session_id, "discord_admin", &payload, now as f64, expires_at)
-            .await?;
+        self.persist_new_session(
+            &session_id,
+            "discord_admin",
+            &payload,
+            now as f64,
+            expires_at,
+        )
+        .await?;
 
-        Ok(SessionCreation { session_id, csrf_token })
+        Ok(SessionCreation {
+            session_id,
+            csrf_token,
+        })
     }
 
     /// Schließt den JS-Fingerprint-Schritt einer nativen Discord-Admin-Session ab.
@@ -614,8 +648,14 @@ impl DashboardAuthState {
             obj.insert("last_seen_at".into(), serde_json::json!(now as f64));
         }
 
-        self.persist_new_session(session_id, "discord_admin", &payload, created_at, expires_at)
-            .await?;
+        self.persist_new_session(
+            session_id,
+            "discord_admin",
+            &payload,
+            created_at,
+            expires_at,
+        )
+        .await?;
         {
             let mut cache = self.admin_cache.lock().await;
             cache.entries.remove(session_id);
@@ -636,7 +676,7 @@ impl DashboardAuthState {
         let token = fernet::encrypt(&self.fernet_key, payload.to_string().as_bytes())
             .map_err(|e| sqlx::Error::Encode(Box::new(SessionEncryptError(e.to_string()))))?;
 
-        sqlx::query(
+        sqlx::query!(
             r#"
             INSERT INTO dashboard_sessions
                 (session_id, session_type, payload_enc, created_at, expires_at)
@@ -645,12 +685,12 @@ impl DashboardAuthState {
                 payload_enc = EXCLUDED.payload_enc,
                 expires_at  = EXCLUDED.expires_at
             "#,
+            session_id,
+            session_type,
+            token.as_bytes(),
+            created_at,
+            expires_at
         )
-        .bind(session_id)
-        .bind(session_type)
-        .bind(token.as_bytes())
-        .bind(created_at)
-        .bind(expires_at)
         .execute(&self.pool)
         .await?;
         Ok(())
@@ -697,7 +737,7 @@ impl DashboardAuthState {
         state_token: &str,
     ) -> Result<Option<OAuthLoginState>, sqlx::Error> {
         let now = unix_now();
-        let row: Option<(Vec<u8>,)> = sqlx::query_as(
+        let row = sqlx::query!(
             r#"
             DELETE FROM dashboard_sessions
             WHERE session_id = $1
@@ -705,16 +745,17 @@ impl DashboardAuthState {
               AND expires_at > $3
             RETURNING payload_enc
             "#,
+            state_token,
+            OAUTH_STATE_SESSION_TYPE,
+            now as f64
         )
-        .bind(state_token)
-        .bind(OAUTH_STATE_SESSION_TYPE)
-        .bind(now as f64)
         .fetch_optional(&self.pool)
         .await?;
 
-        let Some((payload_enc,)) = row else {
+        let Some(row) = row else {
             return Ok(None);
         };
+        let payload_enc = row.payload_enc;
         let plaintext = match fernet::decrypt(&self.fernet_key, &encode_b64(&payload_enc), None) {
             Ok(p) => p,
             Err(e) => {
@@ -751,14 +792,18 @@ impl DashboardAuthState {
             .and_then(|v| v.as_str())
             .unwrap_or("")
             .to_string();
-        Ok(Some(OAuthLoginState { next_path, redirect_uri, context_token }))
+        Ok(Some(OAuthLoginState {
+            next_path,
+            redirect_uri,
+            context_token,
+        }))
     }
 
     /// Prüft, ob ein noch gültiger Raid-OAuth-State existiert, ohne ihn zu
     /// verbrauchen. Das ist das Rust-Pendant zu Pythons `has_state_details`
     /// beim geteilten `/callback/twitch`-Dispatch.
     pub async fn has_raid_oauth_state(&self, state_token: &str) -> Result<bool, sqlx::Error> {
-        let row: Option<(String,)> = sqlx::query_as(
+        let row = sqlx::query!(
             r#"
             SELECT streamer_login
             FROM oauth_state_tokens
@@ -767,15 +812,19 @@ impl DashboardAuthState {
               AND expires_at > $3
             LIMIT 1
             "#,
+            state_token,
+            RAID_OAUTH_STATE_PLATFORM,
+            Utc::now()
         )
-        .bind(state_token)
-        .bind(RAID_OAUTH_STATE_PLATFORM)
-        .bind(Utc::now())
         .fetch_optional(&self.pool)
         .await?;
 
         Ok(row
-            .map(|(login,)| !login.trim().is_empty())
+            .map(|row| {
+                row.streamer_login
+                    .as_deref()
+                    .is_some_and(|login| !login.trim().is_empty())
+            })
             .unwrap_or(false))
     }
 
@@ -815,7 +864,7 @@ impl DashboardAuthState {
         state_id: &str,
     ) -> Result<Option<(String, String)>, sqlx::Error> {
         let now = unix_now();
-        let row: Option<(Vec<u8>,)> = sqlx::query_as(
+        let row = sqlx::query!(
             r#"
             DELETE FROM dashboard_sessions
             WHERE session_id = $1
@@ -823,16 +872,17 @@ impl DashboardAuthState {
               AND expires_at > $3
             RETURNING payload_enc
             "#,
+            state_id,
+            PARTNER_LOGIN_STATE_TYPE,
+            now as f64
         )
-        .bind(state_id)
-        .bind(PARTNER_LOGIN_STATE_TYPE)
-        .bind(now as f64)
         .fetch_optional(&self.pool)
         .await?;
 
-        let Some((payload_enc,)) = row else {
+        let Some(row) = row else {
             return Ok(None);
         };
+        let payload_enc = row.payload_enc;
         let plaintext = match fernet::decrypt(&self.fernet_key, &encode_b64(&payload_enc), None) {
             Ok(p) => p,
             Err(e) => {
@@ -850,8 +900,16 @@ impl DashboardAuthState {
         if payload_expired(&payload, now) {
             return Ok(None);
         }
-        let login = payload.get("login").and_then(|v| v.as_str()).unwrap_or("").to_string();
-        let next_path = payload.get("next_path").and_then(|v| v.as_str()).unwrap_or("").to_string();
+        let login = payload
+            .get("login")
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .to_string();
+        let next_path = payload
+            .get("next_path")
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .to_string();
         Ok(Some((login, next_path)))
     }
 
@@ -870,7 +928,7 @@ impl DashboardAuthState {
         if login.is_empty() && user_id.is_empty() {
             return Ok(None);
         }
-        let row: Option<(String, String)> = sqlx::query_as(
+        let row = sqlx::query!(
             r#"
             SELECT p.twitch_login, p.twitch_user_id
             FROM twitch_partners p
@@ -888,14 +946,14 @@ impl DashboardAuthState {
             COALESCE(p.departnered_at, p.admin_archived_at, p.partnered_at) DESC
             LIMIT 1
             "#,
+            login,
+            user_id
         )
-        .bind(&login)
-        .bind(user_id)
         .fetch_optional(&self.pool)
         .await?;
-        Ok(row.map(|(twitch_login, twitch_user_id)| PartnerSession {
-            twitch_login,
-            twitch_user_id,
+        Ok(row.map(|row| PartnerSession {
+            twitch_login: row.twitch_login,
+            twitch_user_id: row.twitch_user_id,
             // Login-Gate (vor Session-Erstellung) kennt keinen display_name; der
             // echte Helix-Snapshot landet erst beim create_partner_session-Payload.
             display_name: String::new(),
@@ -912,13 +970,17 @@ impl DashboardAuthState {
     /// **Hart geschützt:** `blocked` und `bot_banned` werden NICHT angefasst (das
     /// sind administrative Hard-Kills, keine Selbstheilung). Liefert `true`, wenn
     /// eine Zeile reaktiviert wurde. clean-SQL: Zeitspalten via `NULL` bzw. NOW().
-    pub async fn reactivate_partner(&self, login: &str, user_id: &str) -> Result<bool, sqlx::Error> {
+    pub async fn reactivate_partner(
+        &self,
+        login: &str,
+        user_id: &str,
+    ) -> Result<bool, sqlx::Error> {
         let login = login.trim().to_lowercase();
         let user_id = user_id.trim();
         if login.is_empty() && user_id.is_empty() {
             return Ok(false);
         }
-        let result = sqlx::query(
+        let result = sqlx::query!(
             r#"
             UPDATE twitch_partners
             SET status = 'active',
@@ -936,9 +998,9 @@ impl DashboardAuthState {
               AND LOWER(COALESCE(technical_pause_reason, '')) NOT IN ('blocked', 'bot_banned')
               AND COALESCE(status, '') <> 'active'
             "#,
+            login,
+            user_id
         )
-        .bind(&login)
-        .bind(user_id)
         .execute(&self.pool)
         .await?;
         Ok(result.rows_affected() > 0)
@@ -1004,10 +1066,7 @@ impl DashboardAuthState {
     ///
     /// Gibt `Ok(Some(true))` wenn die Session gültig ist, `Ok(None)` wenn nicht gefunden
     /// oder abgelaufen, `Err` bei DB-Fehler.
-    pub async fn load_admin_session(
-        &self,
-        session_id: &str,
-    ) -> Result<Option<bool>, sqlx::Error> {
+    pub async fn load_admin_session(&self, session_id: &str) -> Result<Option<bool>, sqlx::Error> {
         let now = unix_now();
 
         {
@@ -1126,7 +1185,11 @@ impl DashboardAuthState {
                 u
             } else {
                 let d = read("display_name");
-                if d.is_empty() { "admin".to_string() } else { d }
+                if d.is_empty() {
+                    "admin".to_string()
+                } else {
+                    d
+                }
             }
         };
 
@@ -1164,7 +1227,10 @@ impl DashboardAuthState {
             }
         }
 
-        let Some(mut payload) = self.fetch_session_payload(session_id, "twitch", now).await? else {
+        let Some(mut payload) = self
+            .fetch_session_payload(session_id, "twitch", now)
+            .await?
+        else {
             return Ok(None);
         };
 
@@ -1210,7 +1276,7 @@ impl DashboardAuthState {
         }
 
         // Partner-Gate (auth_mixin.py:741-780)
-        let partner_row: Option<(String, String)> = sqlx::query_as(
+        let partner_row = sqlx::query!(
             r#"
             SELECT p.twitch_login, p.twitch_user_id
             FROM twitch_partners p
@@ -1228,13 +1294,13 @@ impl DashboardAuthState {
             COALESCE(p.departnered_at, p.admin_archived_at, p.partnered_at) DESC
             LIMIT 1
             "#,
+            login,
+            user_id
         )
-        .bind(&login)
-        .bind(&user_id)
         .fetch_optional(&self.pool)
         .await?;
 
-        let Some((db_login, db_user_id)) = partner_row else {
+        let Some(partner_row) = partner_row else {
             return Ok(None);
         };
 
@@ -1247,8 +1313,8 @@ impl DashboardAuthState {
         // einzulassen und nur den Re-Auth-Hinweis anzuzeigen.
 
         let partner = PartnerSession {
-            twitch_login: db_login,
-            twitch_user_id: db_user_id,
+            twitch_login: partner_row.twitch_login,
+            twitch_user_id: partner_row.twitch_user_id,
             display_name,
         };
 
@@ -1336,7 +1402,7 @@ impl DashboardAuthState {
         }
 
         // Partner-Gate (auth_mixin.py:741-780) — identisch zu load_partner_session.
-        let partner_row: Option<(String, String)> = sqlx::query_as(
+        let partner_row = sqlx::query!(
             r#"
             SELECT p.twitch_login, p.twitch_user_id
             FROM twitch_partners p
@@ -1354,19 +1420,19 @@ impl DashboardAuthState {
             COALESCE(p.departnered_at, p.admin_archived_at, p.partnered_at) DESC
             LIMIT 1
             "#,
+            login,
+            user_id
         )
-        .bind(&login)
-        .bind(&user_id)
         .fetch_optional(&self.pool)
         .await?;
 
-        let Some((db_login, db_user_id)) = partner_row else {
+        let Some(partner_row) = partner_row else {
             return Ok(None);
         };
 
         Ok(Some(PartnerSession {
-            twitch_login: db_login,
-            twitch_user_id: db_user_id,
+            twitch_login: partner_row.twitch_login,
+            twitch_user_id: partner_row.twitch_user_id,
             display_name,
         }))
     }
@@ -1383,7 +1449,7 @@ impl DashboardAuthState {
         if login.is_empty() && user_id.is_empty() {
             return false;
         }
-        let row: Result<Option<(i32,)>, _> = sqlx::query_as(
+        let row = sqlx::query_scalar!(
             r#"
             SELECT CASE
                 WHEN COALESCE(p.status, '') = 'active'
@@ -1391,7 +1457,7 @@ impl DashboardAuthState {
                      AND COALESCE(p.technical_pause_reason, '') = ''
                      AND p.admin_archived_at IS NULL
                 THEN 1 ELSE 0
-            END AS is_active
+            END AS "is_active!"
             FROM twitch_partners p
             WHERE (
                   LOWER(p.twitch_login) = $1
@@ -1406,13 +1472,13 @@ impl DashboardAuthState {
             COALESCE(p.departnered_at, p.admin_archived_at, p.partnered_at) DESC
             LIMIT 1
             "#,
+            login,
+            user_id
         )
-        .bind(&login)
-        .bind(user_id)
         .fetch_optional(&self.pool)
         .await;
         match row {
-            Ok(Some((is_active,))) => is_active == 1,
+            Ok(Some(is_active)) => is_active == 1,
             Ok(None) => false,
             Err(error) => {
                 debug!(%error, "is_partner_active-Query fehlgeschlagen → passive");
@@ -1431,7 +1497,7 @@ impl DashboardAuthState {
         now: u64,
     ) -> Result<Option<serde_json::Value>, sqlx::Error> {
         // `expires_at` ist DOUBLE PRECISION (float8), `now` als float vergleichen
-        let row: Option<(Vec<u8>,)> = sqlx::query_as(
+        let row = sqlx::query!(
             r#"
             SELECT payload_enc
             FROM dashboard_sessions
@@ -1439,22 +1505,26 @@ impl DashboardAuthState {
               AND session_type = $2
               AND expires_at > $3
             "#,
+            session_id,
+            session_type,
+            now as f64
         )
-        .bind(session_id)
-        .bind(session_type)
-        .bind(now as f64)
         .fetch_optional(&self.pool)
         .await?;
 
-        let Some((payload_enc,)) = row else {
+        let Some(row) = row else {
             return Ok(None);
         };
+        let payload_enc = row.payload_enc;
 
         // Fernet-Entschlüsselung (kein TTL-Check — DB-`expires_at` reicht)
         let plaintext = match fernet::decrypt(&self.fernet_key, &encode_b64(&payload_enc), None) {
             Ok(p) => p,
             Err(e) => {
-                warn!("Fernet-Decrypt fehlgeschlagen für session {}: {}", session_id, e);
+                warn!(
+                    "Fernet-Decrypt fehlgeschlagen für session {}: {}",
+                    session_id, e
+                );
                 return Ok(None);
             }
         };
@@ -1473,10 +1543,12 @@ impl DashboardAuthState {
     /// Löscht eine Session-Row (abgelaufener Payload). Fehler nur als Debug-Log —
     /// Auth-Entscheid hängt nicht davon ab (Python verhält sich identisch).
     async fn delete_session(&self, session_id: &str) {
-        if let Err(e) = sqlx::query("DELETE FROM dashboard_sessions WHERE session_id = $1")
-            .bind(session_id)
-            .execute(&self.pool)
-            .await
+        if let Err(e) = sqlx::query!(
+            "DELETE FROM dashboard_sessions WHERE session_id = $1",
+            session_id
+        )
+        .execute(&self.pool)
+        .await
         {
             debug!("Session-Delete fehlgeschlagen für {}: {}", session_id, e);
         }
@@ -1517,14 +1589,17 @@ impl DashboardAuthState {
         let token = match fernet::encrypt(&self.fernet_key, payload.to_string().as_bytes()) {
             Ok(t) => t,
             Err(e) => {
-                debug!("Session-Refresh-Encrypt fehlgeschlagen für {}: {}", session_id, e);
+                debug!(
+                    "Session-Refresh-Encrypt fehlgeschlagen für {}: {}",
+                    session_id, e
+                );
                 return;
             }
         };
 
         // Gleiche Semantik wie Python upsert_session (sessions_db.py:123-143):
         // bei Konflikt nur payload_enc + expires_at aktualisieren.
-        if let Err(e) = sqlx::query(
+        if let Err(e) = sqlx::query!(
             r#"
             INSERT INTO dashboard_sessions
                 (session_id, session_type, payload_enc, created_at, expires_at)
@@ -1533,16 +1608,19 @@ impl DashboardAuthState {
                 payload_enc = EXCLUDED.payload_enc,
                 expires_at  = EXCLUDED.expires_at
             "#,
+            session_id,
+            session_type,
+            token.as_bytes(),
+            created_at,
+            new_expires
         )
-        .bind(session_id)
-        .bind(session_type)
-        .bind(token.as_bytes())
-        .bind(created_at)
-        .bind(new_expires)
         .execute(&self.pool)
         .await
         {
-            debug!("Session-Refresh-Persist fehlgeschlagen für {}: {}", session_id, e);
+            debug!(
+                "Session-Refresh-Persist fehlgeschlagen für {}: {}",
+                session_id, e
+            );
         }
     }
 }
@@ -1556,7 +1634,11 @@ struct SessionEncryptError(String);
 
 impl std::fmt::Display for SessionEncryptError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "Session-Payload-Verschlüsselung fehlgeschlagen: {}", self.0)
+        write!(
+            f,
+            "Session-Payload-Verschlüsselung fehlgeschlagen: {}",
+            self.0
+        )
     }
 }
 
@@ -1878,7 +1960,10 @@ mod tests {
         );
         assert!(c.starts_with("twitch_dash_session=abc123"));
         assert!(c.contains("HttpOnly"), "HttpOnly muss gesetzt sein");
-        assert!(c.contains("Secure"), "Secure muss bei secure=true gesetzt sein");
+        assert!(
+            c.contains("Secure"),
+            "Secure muss bei secure=true gesetzt sein"
+        );
         assert!(c.contains("SameSite=Lax"));
         assert!(c.contains("Path=/"));
         assert!(c.contains("Max-Age=21600"), "6h-TTL = 21600s");
@@ -2057,25 +2142,35 @@ print(f.encrypt(payload.encode()).decode(), end='')
 
     #[tokio::test]
     async fn session_nicht_gefunden_gibt_none() {
-        let Some(pool) = maybe_pool().await else { return; };
+        let Some(pool) = maybe_pool().await else {
+            return;
+        };
         ensure_sessions_table(&pool).await;
         let state = DashboardAuthState::new(pool, test_fernet_key());
-        let result = state.load_admin_session("nicht-existent-session-id-xyz").await;
+        let result = state
+            .load_admin_session("nicht-existent-session-id-xyz")
+            .await;
         assert!(matches!(result, Ok(None)));
     }
 
     #[tokio::test]
     async fn partner_session_nicht_gefunden_gibt_none() {
-        let Some(pool) = maybe_pool().await else { return; };
+        let Some(pool) = maybe_pool().await else {
+            return;
+        };
         ensure_sessions_table(&pool).await;
         let state = DashboardAuthState::new(pool, test_fernet_key());
-        let result = state.load_partner_session("nicht-existent-partner-id-xyz").await;
+        let result = state
+            .load_partner_session("nicht-existent-partner-id-xyz")
+            .await;
         assert!(matches!(result, Ok(None)));
     }
 
     #[tokio::test]
     async fn admin_session_insert_und_laden() {
-        let Some(pool) = maybe_pool().await else { return; };
+        let Some(pool) = maybe_pool().await else {
+            return;
+        };
 
         // DDL sicherstellen (prod-treue Spaltentypen aus prod_schema_twitch.txt)
         sqlx::query(
@@ -2130,7 +2225,9 @@ print(f.encrypt(payload.encode()).decode(), end='')
     /// (Payload neu verschlüsselt + DB-`expires_at` auf now + 14d gesetzt).
     #[tokio::test]
     async fn admin_session_wird_beim_laden_verlaengert() {
-        let Some(pool) = maybe_pool().await else { return; };
+        let Some(pool) = maybe_pool().await else {
+            return;
+        };
 
         sqlx::query(
             r#"
@@ -2212,7 +2309,9 @@ print(f.encrypt(payload.encode()).decode(), end='')
 
     #[tokio::test]
     async fn abgelaufene_session_gibt_none() {
-        let Some(pool) = maybe_pool().await else { return; };
+        let Some(pool) = maybe_pool().await else {
+            return;
+        };
 
         sqlx::query(
             r#"
@@ -2262,7 +2361,9 @@ print(f.encrypt(payload.encode()).decode(), end='')
     /// zurück (Round-Trip ver-/entschlüsselt) → CSRF-Token validiert nur exakt.
     #[tokio::test]
     async fn partner_session_create_roundtrip_und_csrf() {
-        let Some(pool) = maybe_pool().await else { return; };
+        let Some(pool) = maybe_pool().await else {
+            return;
+        };
 
         sqlx::query(
             r#"
@@ -2307,13 +2408,12 @@ print(f.encrypt(payload.encode()).decode(), end='')
         assert_eq!(loaded.twitch_login, "csrftest_user");
 
         // DB-Spalte expires_at muss ~6h in der Zukunft liegen (hartkodierte TTL).
-        let db_expires: f64 = sqlx::query_scalar(
-            "SELECT expires_at FROM dashboard_sessions WHERE session_id = $1",
-        )
-        .bind(&created.session_id)
-        .fetch_one(&pool)
-        .await
-        .unwrap();
+        let db_expires: f64 =
+            sqlx::query_scalar("SELECT expires_at FROM dashboard_sessions WHERE session_id = $1")
+                .bind(&created.session_id)
+                .fetch_one(&pool)
+                .await
+                .unwrap();
         let now = unix_now() as f64;
         assert!(
             (db_expires - (now + 6.0 * 3600.0)).abs() < 120.0,
@@ -2394,7 +2494,9 @@ print(f.encrypt(payload.encode()).decode(), end='')
     /// (Replay-Schutz). Zweiter Consume liefert None.
     #[tokio::test]
     async fn oauth_login_state_single_use() {
-        let Some(pool) = maybe_pool().await else { return; };
+        let Some(pool) = maybe_pool().await else {
+            return;
+        };
         ensure_sessions_table(&pool).await;
         let state = DashboardAuthState::new(pool.clone(), test_fernet_key());
 
@@ -2404,7 +2506,10 @@ print(f.encrypt(payload.encode()).decode(), end='')
             redirect_uri: "https://x.test/twitch/auth/callback".to_string(),
             context_token: String::new(),
         };
-        state.save_oauth_login_state(&token, &login_state).await.unwrap();
+        state
+            .save_oauth_login_state(&token, &login_state)
+            .await
+            .unwrap();
 
         // Erster Consume liefert den State zurück.
         let got = state.consume_oauth_login_state(&token).await.unwrap();
@@ -2417,12 +2522,20 @@ print(f.encrypt(payload.encode()).decode(), end='')
     /// B3-1: Unbekannter/abgelaufener State → None (KEIN Login möglich).
     #[tokio::test]
     async fn oauth_login_state_unbekannt_und_abgelaufen_geben_none() {
-        let Some(pool) = maybe_pool().await else { return; };
+        let Some(pool) = maybe_pool().await else {
+            return;
+        };
         ensure_sessions_table(&pool).await;
         let state = DashboardAuthState::new(pool.clone(), test_fernet_key());
 
         // Unbekannt.
-        assert_eq!(state.consume_oauth_login_state("gibt-es-nicht").await.unwrap(), None);
+        assert_eq!(
+            state
+                .consume_oauth_login_state("gibt-es-nicht")
+                .await
+                .unwrap(),
+            None
+        );
 
         // Abgelaufen: Row mit expires_at in der Vergangenheit direkt einschleusen.
         let token = format!("st-exp-{}", unix_now());
@@ -2454,7 +2567,9 @@ print(f.encrypt(payload.encode()).decode(), end='')
     /// B3-2-Gate: aktiver Partner wird gefunden; unbekannter Login nicht.
     #[tokio::test]
     async fn find_partner_for_login_findet_aktiven_partner() {
-        let Some(pool) = maybe_pool().await else { return; };
+        let Some(pool) = maybe_pool().await else {
+            return;
+        };
         ensure_sessions_table(&pool).await;
         ensure_partners_table(&pool).await;
         let state = DashboardAuthState::new(pool.clone(), test_fernet_key());
@@ -2470,7 +2585,10 @@ print(f.encrypt(payload.encode()).decode(), end='')
         .await
         .ok();
 
-        let found = state.find_partner_for_login("GateTest_User", "").await.unwrap();
+        let found = state
+            .find_partner_for_login("GateTest_User", "")
+            .await
+            .unwrap();
         assert_eq!(
             found,
             Some(PartnerSession {
@@ -2481,7 +2599,10 @@ print(f.encrypt(payload.encode()).decode(), end='')
             })
         );
         // Unbekannter Login → None (→ 403 im Callback).
-        let none = state.find_partner_for_login("kein_partner_xyz", "").await.unwrap();
+        let none = state
+            .find_partner_for_login("kein_partner_xyz", "")
+            .await
+            .unwrap();
         assert_eq!(none, None);
 
         sqlx::query("DELETE FROM twitch_partners WHERE twitch_login = 'gatetest_user'")
@@ -2493,7 +2614,9 @@ print(f.encrypt(payload.encode()).decode(), end='')
     /// B3-2-Gate: `technical_pause_reason='blocked'` → kein Treffer (Hard-Kill).
     #[tokio::test]
     async fn find_partner_for_login_blocked_wird_abgelehnt() {
-        let Some(pool) = maybe_pool().await else { return; };
+        let Some(pool) = maybe_pool().await else {
+            return;
+        };
         ensure_sessions_table(&pool).await;
         ensure_partners_table(&pool).await;
         let state = DashboardAuthState::new(pool.clone(), test_fernet_key());
@@ -2509,7 +2632,13 @@ print(f.encrypt(payload.encode()).decode(), end='')
         .await
         .ok();
 
-        assert_eq!(state.find_partner_for_login("blocked_user", "").await.unwrap(), None);
+        assert_eq!(
+            state
+                .find_partner_for_login("blocked_user", "")
+                .await
+                .unwrap(),
+            None
+        );
 
         sqlx::query("DELETE FROM twitch_partners WHERE twitch_login = 'blocked_user'")
             .execute(&pool)
@@ -2519,7 +2648,9 @@ print(f.encrypt(payload.encode()).decode(), end='')
 
     #[tokio::test]
     async fn is_partner_active_folgt_kanonischer_view_logik() {
-        let Some(pool) = maybe_pool().await else { return; };
+        let Some(pool) = maybe_pool().await else {
+            return;
+        };
         sqlx::query(
             "CREATE TABLE IF NOT EXISTS twitch_partners (
                 twitch_login TEXT, twitch_user_id TEXT, status TEXT,
@@ -2596,7 +2727,9 @@ print(f.encrypt(payload.encode()).decode(), end='')
     /// ladbar; Replay mit fremdem Fingerprint (anderer Plattform+Familie) → None.
     #[tokio::test]
     async fn partner_access_session_create_und_fingerprint_bindung() {
-        let Some(pool) = maybe_pool().await else { return; };
+        let Some(pool) = maybe_pool().await else {
+            return;
+        };
         ensure_sessions_table(&pool).await;
         sqlx::query(
             "CREATE TABLE IF NOT EXISTS twitch_partners (
@@ -2627,13 +2760,12 @@ print(f.encrypt(payload.encode()).decode(), end='')
             .expect("Partner-Access-Session muss anlegbar sein");
 
         // Row trägt den partner_token-Typ.
-        let session_type: String = sqlx::query_scalar(
-            "SELECT session_type FROM dashboard_sessions WHERE session_id = $1",
-        )
-        .bind(&created.session_id)
-        .fetch_one(&pool)
-        .await
-        .unwrap();
+        let session_type: String =
+            sqlx::query_scalar("SELECT session_type FROM dashboard_sessions WHERE session_id = $1")
+                .bind(&created.session_id)
+                .fetch_one(&pool)
+                .await
+                .unwrap();
         assert_eq!(session_type, super::PARTNER_ACCESS_SESSION_TYPE);
 
         // Gleicher User-Agent → ladbar.
@@ -2650,7 +2782,10 @@ print(f.encrypt(payload.encode()).decode(), end='')
             .load_partner_access_session(&created.session_id, foreign_ua)
             .await
             .unwrap();
-        assert!(rejected.is_none(), "fremder Fingerprint muss abgewiesen werden");
+        assert!(
+            rejected.is_none(),
+            "fremder Fingerprint muss abgewiesen werden"
+        );
 
         sqlx::query("DELETE FROM twitch_partners WHERE twitch_login = 'paccess_user'")
             .execute(&pool)
@@ -2662,7 +2797,9 @@ print(f.encrypt(payload.encode()).decode(), end='')
     /// blocked bleibt unangetastet.
     #[tokio::test]
     async fn reactivate_partner_self_heal() {
-        let Some(pool) = maybe_pool().await else { return; };
+        let Some(pool) = maybe_pool().await else {
+            return;
+        };
         sqlx::query(
             "CREATE TABLE IF NOT EXISTS twitch_partners (
                 twitch_login TEXT, twitch_user_id TEXT, status TEXT,
@@ -2701,18 +2838,25 @@ print(f.encrypt(payload.encode()).decode(), end='')
         .await
         .unwrap();
         assert!(!state.reactivate_partner("blockme", "").await.unwrap());
-        let blocked_status: String = sqlx::query_scalar("SELECT status FROM twitch_partners WHERE twitch_login='blockme'")
-            .fetch_one(&pool).await.unwrap();
+        let blocked_status: String =
+            sqlx::query_scalar("SELECT status FROM twitch_partners WHERE twitch_login='blockme'")
+                .fetch_one(&pool)
+                .await
+                .unwrap();
         assert_eq!(blocked_status, "departnered");
 
         sqlx::query("DELETE FROM twitch_partners WHERE twitch_login IN ('healme','blockme')")
-            .execute(&pool).await.ok();
+            .execute(&pool)
+            .await
+            .ok();
     }
 
     /// Logout: invalidate_session löscht die Row → load_partner_session → None.
     #[tokio::test]
     async fn invalidate_session_loescht_partner_session() {
-        let Some(pool) = maybe_pool().await else { return; };
+        let Some(pool) = maybe_pool().await else {
+            return;
+        };
         ensure_sessions_table(&pool).await;
         ensure_partners_table(&pool).await;
 
@@ -2733,11 +2877,19 @@ print(f.encrypt(payload.encode()).decode(), end='')
             .await
             .unwrap();
         // Session ist ladbar.
-        assert!(state.load_partner_session(&created.session_id).await.unwrap().is_some());
+        assert!(state
+            .load_partner_session(&created.session_id)
+            .await
+            .unwrap()
+            .is_some());
 
         // Logout invalidiert.
         state.invalidate_session(&created.session_id).await;
-        assert!(state.load_partner_session(&created.session_id).await.unwrap().is_none());
+        assert!(state
+            .load_partner_session(&created.session_id)
+            .await
+            .unwrap()
+            .is_none());
 
         sqlx::query("DELETE FROM twitch_partners WHERE twitch_login = 'logout_user'")
             .execute(&pool)
@@ -2754,7 +2906,9 @@ print(f.encrypt(payload.encode()).decode(), end='')
         if std::env::var("TB_TEST_REQUIRE_DB").as_deref() != Ok("1") {
             return;
         }
-        let Ok(url) = std::env::var("TB_TEST_DATABASE_URL") else { return; };
+        let Ok(url) = std::env::var("TB_TEST_DATABASE_URL") else {
+            return;
+        };
 
         // Eigene Pool-Verbindung mit fixiertem search_path: jede Connection im Pool
         // sieht das Test-Schema (schema-isoliert, keine Shared-Schema-Race). Die

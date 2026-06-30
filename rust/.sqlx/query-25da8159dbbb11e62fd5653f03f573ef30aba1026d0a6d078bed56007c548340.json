@@ -1,0 +1,22 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT i.discord_user_id::text AS \"discord_user_id!\" FROM twitch_streamers s JOIN twitch_streamer_identities i ON i.twitch_user_id = s.twitch_user_id WHERE LOWER(s.twitch_login) = $1 AND COALESCE(s.twitch_user_id, '') <> '' AND COALESCE(i.discord_user_id::text, '') <> '' LIMIT 1",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "discord_user_id!",
+        "type_info": "Text"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Text"
+      ]
+    },
+    "nullable": [
+      true
+    ]
+  },
+  "hash": "25da8159dbbb11e62fd5653f03f573ef30aba1026d0a6d078bed56007c548340"
+}

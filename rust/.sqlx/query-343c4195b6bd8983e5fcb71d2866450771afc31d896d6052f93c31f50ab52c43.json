@@ -1,0 +1,19 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n        UPDATE streamer_plans\n        SET twitch_login = $1,\n            manual_plan_id = $2,\n            manual_plan_expires_at = $3,\n            manual_plan_notes = $4,\n            manual_plan_updated_at = $5\n        WHERE twitch_user_id = $6\n        ",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Text",
+        "Text",
+        "Text",
+        "Text",
+        "Text",
+        "Text"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "343c4195b6bd8983e5fcb71d2866450771afc31d896d6052f93c31f50ab52c43"
+}

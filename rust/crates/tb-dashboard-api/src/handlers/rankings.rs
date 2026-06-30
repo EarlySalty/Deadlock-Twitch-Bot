@@ -14,12 +14,17 @@ use axum::{
 use chrono::{DateTime, Duration, Utc};
 use serde::Deserialize;
 use serde_json::json;
-use sqlx::{PgPool, Row};
+use sqlx::PgPool;
 
 use crate::auth::level::DashboardAuthLevel;
 use crate::query_int::parse_bounded_query_int;
 
 const EXTERNAL_REACH_AVG_THRESHOLD: f64 = 100.0;
+
+struct RankingRow {
+    streamer_login: String,
+    value: Option<f64>,
+}
 
 #[derive(Deserialize)]
 pub struct RankingsQuery {
@@ -69,111 +74,117 @@ pub async fn rankings_handler(
 
     let result = match (metric, exclude_external) {
         ("retention", false) => {
-            sqlx::query(
+            sqlx::query_as!(
+                RankingRow,
                 r#"SELECT s.streamer_login,
-                      AVG(s.retention_10m) AS value
+                      AVG(s.retention_10m) AS "value?"
                FROM twitch_stream_sessions s
                WHERE s.started_at >= $1 AND s.ended_at IS NOT NULL
                GROUP BY s.streamer_login
                HAVING COUNT(*) >= 3
-               ORDER BY value DESC NULLS LAST
+               ORDER BY 2 DESC NULLS LAST
                LIMIT $2"#,
+                since,
+                limit
             )
-            .bind(since)
-            .bind(limit)
             .fetch_all(&pool)
             .await
         }
 
         ("retention", true) => {
-            sqlx::query(
+            sqlx::query_as!(
+                RankingRow,
                 r#"SELECT s.streamer_login,
-                      AVG(s.retention_10m) AS value
+                      AVG(s.retention_10m) AS "value?"
                FROM twitch_stream_sessions s
                WHERE s.started_at >= $1 AND s.ended_at IS NOT NULL
                GROUP BY s.streamer_login
                HAVING COUNT(*) >= 3 AND AVG(s.avg_viewers) <= $3
-               ORDER BY value DESC NULLS LAST
+               ORDER BY 2 DESC NULLS LAST
                LIMIT $2"#,
+                since,
+                limit,
+                EXTERNAL_REACH_AVG_THRESHOLD
             )
-            .bind(since)
-            .bind(limit)
-            .bind(EXTERNAL_REACH_AVG_THRESHOLD)
             .fetch_all(&pool)
             .await
         }
 
         ("growth", false) => {
-            sqlx::query(
+            sqlx::query_as!(
+                RankingRow,
                 r#"SELECT s.streamer_login,
                       SUM(CASE WHEN s.follower_delta IS NOT NULL
                                AND NOT (s.followers_end = 0 AND s.followers_start > 0)
-                               THEN s.follower_delta ELSE 0 END)::float8 AS value
+                               THEN s.follower_delta ELSE 0 END)::float8 AS "value?"
                FROM twitch_stream_sessions s
                WHERE s.started_at >= $1 AND s.ended_at IS NOT NULL
                GROUP BY s.streamer_login
                HAVING COUNT(*) >= 3
-               ORDER BY value DESC NULLS LAST
+               ORDER BY 2 DESC NULLS LAST
                LIMIT $2"#,
+                since,
+                limit
             )
-            .bind(since)
-            .bind(limit)
             .fetch_all(&pool)
             .await
         }
 
         ("growth", true) => {
-            sqlx::query(
+            sqlx::query_as!(
+                RankingRow,
                 r#"SELECT s.streamer_login,
                       SUM(CASE WHEN s.follower_delta IS NOT NULL
                                AND NOT (s.followers_end = 0 AND s.followers_start > 0)
-                               THEN s.follower_delta ELSE 0 END)::float8 AS value
+                               THEN s.follower_delta ELSE 0 END)::float8 AS "value?"
                FROM twitch_stream_sessions s
                WHERE s.started_at >= $1 AND s.ended_at IS NOT NULL
                GROUP BY s.streamer_login
                HAVING COUNT(*) >= 3 AND AVG(s.avg_viewers) <= $3
-               ORDER BY value DESC NULLS LAST
+               ORDER BY 2 DESC NULLS LAST
                LIMIT $2"#,
+                since,
+                limit,
+                EXTERNAL_REACH_AVG_THRESHOLD
             )
-            .bind(since)
-            .bind(limit)
-            .bind(EXTERNAL_REACH_AVG_THRESHOLD)
             .fetch_all(&pool)
             .await
         }
 
         // viewers (default)
         (_, false) => {
-            sqlx::query(
+            sqlx::query_as!(
+                RankingRow,
                 r#"SELECT s.streamer_login,
-                      AVG(s.avg_viewers) AS value
+                      AVG(s.avg_viewers) AS "value?"
                FROM twitch_stream_sessions s
                WHERE s.started_at >= $1 AND s.ended_at IS NOT NULL
                GROUP BY s.streamer_login
                HAVING COUNT(*) >= 3
-               ORDER BY value DESC NULLS LAST
+               ORDER BY 2 DESC NULLS LAST
                LIMIT $2"#,
+                since,
+                limit
             )
-            .bind(since)
-            .bind(limit)
             .fetch_all(&pool)
             .await
         }
 
         (_, true) => {
-            sqlx::query(
+            sqlx::query_as!(
+                RankingRow,
                 r#"SELECT s.streamer_login,
-                      AVG(s.avg_viewers) AS value
+                      AVG(s.avg_viewers) AS "value?"
                FROM twitch_stream_sessions s
                WHERE s.started_at >= $1 AND s.ended_at IS NOT NULL
                GROUP BY s.streamer_login
                HAVING COUNT(*) >= 3 AND AVG(s.avg_viewers) <= $3
-               ORDER BY value DESC NULLS LAST
+               ORDER BY 2 DESC NULLS LAST
                LIMIT $2"#,
+                since,
+                limit,
+                EXTERNAL_REACH_AVG_THRESHOLD
             )
-            .bind(since)
-            .bind(limit)
-            .bind(EXTERNAL_REACH_AVG_THRESHOLD)
             .fetch_all(&pool)
             .await
         }
@@ -191,11 +202,11 @@ pub async fn rankings_handler(
                 .iter()
                 .enumerate()
                 .map(|(idx, r)| {
-                    let raw: f64 = r.try_get::<f64, _>("value").unwrap_or(0.0);
+                    let raw = r.value.unwrap_or(0.0);
                     let value = if is_retention { raw * 100.0 } else { raw };
                     json!({
                         "rank": idx + 1,
-                        "login": r.try_get::<String, _>("streamer_login").unwrap_or_default(),
+                        "login": r.streamer_login,
                         "value": value,
                         "trend": "same",
                         "trendValue": 0,

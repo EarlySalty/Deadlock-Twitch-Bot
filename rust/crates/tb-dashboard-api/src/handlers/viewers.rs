@@ -12,7 +12,7 @@ use axum::{
 use chrono::{DateTime, Utc};
 use serde::Deserialize;
 use serde_json::json;
-use sqlx::{PgPool, Row};
+use sqlx::PgPool;
 
 use crate::auth::level::DashboardAuthLevel;
 
@@ -82,8 +82,8 @@ async fn dynamic_bot_logins_from_db(pool: &PgPool) -> Vec<String> {
     if user_ids.is_empty() {
         return Vec::new();
     }
-    match sqlx::query_scalar::<_, String>(
-        r#"SELECT DISTINCT LOWER(TRIM(login)) AS login
+    match sqlx::query_scalar!(
+        r#"SELECT DISTINCT LOWER(TRIM(login)) AS "login!"
            FROM (
                SELECT twitch_login AS login FROM twitch_streamers WHERE twitch_user_id = ANY($1)
                UNION
@@ -92,8 +92,8 @@ async fn dynamic_bot_logins_from_db(pool: &PgPool) -> Vec<String> {
                SELECT twitch_login AS login FROM twitch_user_profile WHERE twitch_user_id = ANY($1)
            ) resolved
            WHERE TRIM(COALESCE(login, '')) <> ''"#,
+        &user_ids
     )
-    .bind(&user_ids)
     .fetch_all(pool)
     .await
     {
@@ -178,87 +178,80 @@ async fn build_raw_chat_status(
     since: DateTime<Utc>,
 ) -> serde_json::Value {
     // Presence-Stats
-    let pres = sqlx::query(
+    let pres = sqlx::query!(
         r#"SELECT COUNT(*) AS presence_rows,
                   COUNT(DISTINCT sc.session_id) AS sessions_with_presence
            FROM twitch_session_chatters sc
            JOIN twitch_stream_sessions s ON s.id = sc.session_id
            WHERE LOWER(s.streamer_login) = $1 AND s.started_at >= $2"#,
+        streamer,
+        since
     )
-    .bind(streamer)
-    .bind(since)
     .fetch_optional(pool)
     .await
     .ok()
     .flatten();
 
-    let presence_rows: i64 = pres
+    let presence_rows = pres
         .as_ref()
-        .and_then(|r| r.try_get("presence_rows").ok())
+        .map(|r| r.presence_rows.unwrap_or(0))
         .unwrap_or(0);
-    let sessions_with_presence: i64 = pres
+    let sessions_with_presence = pres
         .as_ref()
-        .and_then(|r| r.try_get("sessions_with_presence").ok())
+        .map(|r| r.sessions_with_presence.unwrap_or(0))
         .unwrap_or(0);
 
     // Gap-Start: früheste Session mit Presence aber ohne Raw-Nachrichten
-    let gap_row = sqlx::query(
+    let gap_row = sqlx::query!(
         r#"SELECT MIN(s.started_at) AS gap_start
            FROM twitch_stream_sessions s
            WHERE LOWER(s.streamer_login) = $1 AND s.started_at >= $2
              AND EXISTS (SELECT 1 FROM twitch_session_chatters sc WHERE sc.session_id = s.id)
              AND NOT EXISTS (SELECT 1 FROM twitch_chat_messages m WHERE m.session_id = s.id)"#,
+        streamer,
+        since
     )
-    .bind(streamer)
-    .bind(since)
     .fetch_optional(pool)
     .await
     .ok()
     .flatten();
     let gap_start: Option<String> = gap_row
         .as_ref()
-        .and_then(|r| r.try_get::<Option<DateTime<Utc>>, _>("gap_start").ok())
-        .flatten()
-        .map(|t| t.to_rfc3339());
+        .and_then(|r| r.gap_start.as_ref().map(|t| t.to_rfc3339()));
 
     // Raw-Stats
-    let raw_row = sqlx::query(
+    let raw_row = sqlx::query!(
         r#"SELECT COUNT(*) AS raw_rows,
                   COUNT(DISTINCT m.session_id) AS sessions_with_raw,
                   MAX(m.message_ts) AS last_message_at
            FROM twitch_chat_messages m
            WHERE LOWER(m.streamer_login) = $1 AND m.message_ts >= $2"#,
+        streamer,
+        since
     )
-    .bind(streamer)
-    .bind(since)
     .fetch_optional(pool)
     .await
     .ok()
     .flatten();
 
-    let raw_rows: i64 = raw_row
+    let raw_rows = raw_row
         .as_ref()
-        .and_then(|r| r.try_get("raw_rows").ok())
+        .map(|r| r.raw_rows.unwrap_or(0))
         .unwrap_or(0);
-    let sessions_with_raw: i64 = raw_row
+    let sessions_with_raw = raw_row
         .as_ref()
-        .and_then(|r| r.try_get("sessions_with_raw").ok())
+        .map(|r| r.sessions_with_raw.unwrap_or(0))
         .unwrap_or(0);
     let last_message_at: Option<String> = raw_row
         .as_ref()
-        .and_then(|r| {
-            r.try_get::<Option<DateTime<Utc>>, _>("last_message_at")
-                .ok()
-        })
-        .flatten()
-        .map(|t| t.to_rfc3339());
+        .and_then(|r| r.last_message_at.as_ref().map(|t| t.to_rfc3339()));
 
     // Ingest-Health (best-effort, Fehler ignorieren)
-    let health = sqlx::query(
+    let health = sqlx::query!(
         r#"SELECT last_raw_chat_insert_ok_at, last_raw_chat_insert_error_at, last_raw_chat_error
            FROM twitch_raw_chat_ingest_health WHERE LOWER(streamer_login) = $1 LIMIT 1"#,
+        streamer
     )
-    .bind(streamer)
     .fetch_optional(pool)
     .await
     .ok()
@@ -266,43 +259,31 @@ async fn build_raw_chat_status(
 
     let last_insert_ok: Option<String> = health
         .as_ref()
-        .and_then(|r| {
-            r.try_get::<Option<DateTime<Utc>>, _>("last_raw_chat_insert_ok_at")
-                .ok()
-        })
-        .flatten()
-        .map(|t| t.to_rfc3339());
+        .and_then(|r| r.last_raw_chat_insert_ok_at.clone());
     let last_insert_err: Option<String> = health
         .as_ref()
-        .and_then(|r| {
-            r.try_get::<Option<DateTime<Utc>>, _>("last_raw_chat_insert_error_at")
-                .ok()
-        })
-        .flatten()
-        .map(|t| t.to_rfc3339());
+        .and_then(|r| r.last_raw_chat_insert_error_at.clone());
     let last_error: Option<String> = health
         .as_ref()
-        .and_then(|r| r.try_get::<Option<String>, _>("last_raw_chat_error").ok())
-        .flatten()
+        .and_then(|r| r.last_raw_chat_error.clone())
         .filter(|s| !s.trim().is_empty());
 
     let suspected_issue = (presence_rows > 0 && raw_rows == 0)
         || (sessions_with_presence > sessions_with_raw && sessions_with_raw > 0);
 
     // Backfill-Status
-    let backfill = sqlx::query(
-        r#"SELECT status FROM twitch_raw_chat_backfill_runs
+    let backfill = sqlx::query!(
+        r#"SELECT status AS "status!" FROM twitch_raw_chat_backfill_runs
            WHERE LOWER(streamer_login) = $1
            ORDER BY COALESCE(finished_at, started_at) DESC LIMIT 1"#,
+        streamer
     )
-    .bind(streamer)
     .fetch_optional(pool)
     .await
     .ok()
     .flatten();
     let backfill_state = backfill
-        .and_then(|r| r.try_get::<Option<String>, _>("status").ok())
-        .flatten()
+        .map(|r| r.status)
         .filter(|s| !s.trim().is_empty())
         .unwrap_or_else(|| {
             if suspected_issue {
@@ -369,49 +350,47 @@ async fn viewer_window_metadata(
         })
         .collect();
 
-    let pres_rows = sqlx::query(
-        r#"SELECT LOWER(sc.chatter_login) AS login,
-                  COUNT(DISTINCT sc.session_id) AS window_sessions,
-                  COALESCE(SUM(sc.messages), 0) AS window_messages
+    let pres_rows = sqlx::query!(
+        r#"SELECT LOWER(sc.chatter_login) AS "login!",
+                  COUNT(DISTINCT sc.session_id) AS "window_sessions!",
+                  COALESCE(SUM(sc.messages), 0) AS "window_messages!"
            FROM twitch_session_chatters sc
            JOIN twitch_stream_sessions s ON s.id = sc.session_id
            WHERE LOWER(s.streamer_login) = $1 AND s.started_at >= $2
              AND LOWER(sc.chatter_login) = ANY($3)
            GROUP BY LOWER(sc.chatter_login)"#,
+        streamer,
+        since,
+        logins
     )
-    .bind(streamer)
-    .bind(since)
-    .bind(logins)
     .fetch_all(pool)
     .await
     .unwrap_or_default();
 
     for r in &pres_rows {
-        let login: String = r.try_get("login").unwrap_or_default();
-        if let Some(m) = result.get_mut(&login) {
-            m.presence_sessions = r.try_get("window_sessions").unwrap_or(0);
-            m.presence_messages = r.try_get("window_messages").unwrap_or(0);
+        if let Some(m) = result.get_mut(&r.login) {
+            m.presence_sessions = r.window_sessions;
+            m.presence_messages = r.window_messages;
         }
     }
 
-    let raw_rows = sqlx::query(
-        r#"SELECT LOWER(m.chatter_login) AS login, COUNT(*) AS raw_messages
+    let raw_rows = sqlx::query!(
+        r#"SELECT LOWER(m.chatter_login) AS "login!", COUNT(*) AS "raw_messages!"
            FROM twitch_chat_messages m
            WHERE LOWER(m.streamer_login) = $1 AND m.message_ts >= $2
              AND LOWER(m.chatter_login) = ANY($3)
            GROUP BY LOWER(m.chatter_login)"#,
+        streamer,
+        since,
+        logins
     )
-    .bind(streamer)
-    .bind(since)
-    .bind(logins)
     .fetch_all(pool)
     .await
     .unwrap_or_default();
 
     for r in &raw_rows {
-        let login: String = r.try_get("login").unwrap_or_default();
-        if let Some(m) = result.get_mut(&login) {
-            m.raw_messages = r.try_get("raw_messages").unwrap_or(0);
+        if let Some(m) = result.get_mut(&r.login) {
+            m.raw_messages = r.raw_messages;
         }
     }
     result
@@ -455,33 +434,33 @@ async fn fetch_window_viewer_rows(
 ) -> Result<Vec<ViewerRow>, sqlx::Error> {
     // Streamer-Self- + Bot-Exklusion (Python: _collect_viewer_exclusion_logins).
     let excluded = viewer_exclusion_logins(pool, streamer).await;
-    let rows = sqlx::query(
-        r#"SELECT LOWER(sc.chatter_login) AS chatter_login,
-                  COUNT(DISTINCT sc.session_id) AS total_sessions,
-                  COALESCE(SUM(sc.messages), 0) AS total_messages,
-                  MIN(s.started_at) AS first_seen_at,
-                  MAX(COALESCE(s.ended_at, s.started_at)) AS last_seen_at
+    let rows = sqlx::query!(
+        r#"SELECT LOWER(sc.chatter_login) AS "chatter_login!",
+                  COUNT(DISTINCT sc.session_id) AS "total_sessions!",
+                  COALESCE(SUM(sc.messages), 0) AS "total_messages!",
+                  MIN(s.started_at) AS "first_seen_at?",
+                  MAX(COALESCE(s.ended_at, s.started_at)) AS "last_seen_at?"
            FROM twitch_session_chatters sc
            JOIN twitch_stream_sessions s ON s.id = sc.session_id
            WHERE LOWER(sc.streamer_login) = $1
              AND s.started_at >= $2
              AND LOWER(sc.chatter_login) != ALL($3)
            GROUP BY LOWER(sc.chatter_login)"#,
+        streamer,
+        since,
+        &excluded
     )
-    .bind(streamer)
-    .bind(since)
-    .bind(&excluded)
     .fetch_all(pool)
     .await?;
 
     Ok(rows
         .iter()
         .map(|r| ViewerRow {
-            login: r.try_get("chatter_login").unwrap_or_default(),
-            total_sessions: r.try_get("total_sessions").unwrap_or(0),
-            total_messages: r.try_get("total_messages").unwrap_or(0),
-            first_seen_at: r.try_get("first_seen_at").ok(),
-            last_seen_at: r.try_get("last_seen_at").ok(),
+            login: r.chatter_login.clone(),
+            total_sessions: r.total_sessions,
+            total_messages: r.total_messages,
+            first_seen_at: r.first_seen_at,
+            last_seen_at: r.last_seen_at,
         })
         .filter(|v| !v.login.is_empty())
         .collect())
@@ -585,36 +564,32 @@ pub async fn viewer_directory_handler(
 
     // 3. Cross-Channel-Zählung (andere Kanäle pro Viewer)
     let bots = viewer_exclusion_logins(&pool, &streamer).await;
-    let cc_rows = sqlx::query(
-        r#"SELECT LOWER(sc.chatter_login) AS login,
-                  COUNT(DISTINCT LOWER(sc.streamer_login)) - 1 AS other_count
+    let cc_rows = sqlx::query!(
+        r#"SELECT LOWER(sc.chatter_login) AS "login!",
+                  COUNT(DISTINCT LOWER(sc.streamer_login)) - 1 AS "other_count!"
            FROM twitch_session_chatters sc
            JOIN twitch_stream_sessions s ON s.id = sc.session_id
            WHERE LOWER(sc.chatter_login) = ANY($1)
              AND s.started_at >= $2
              AND LOWER(sc.chatter_login) != ALL($3)
            GROUP BY LOWER(sc.chatter_login)"#,
+        &all_logins,
+        since,
+        &bots
     )
-    .bind(&all_logins)
-    .bind(since)
-    .bind(&bots)
     .fetch_all(&pool)
     .await
     .unwrap_or_default();
     let cross_channel: std::collections::HashMap<String, i64> = cc_rows
         .iter()
-        .filter_map(|r| {
-            let login: String = r.try_get("login").ok()?;
-            let cnt: i64 = r.try_get("other_count").unwrap_or(0).max(0);
-            Some((login, cnt))
-        })
+        .map(|r| (r.login.clone(), r.other_count.max(0)))
         .collect();
 
     // 4. Top-3 andere Kanäle pro Viewer
-    let tc_rows = sqlx::query(
-        r#"SELECT LOWER(sc.chatter_login) AS login,
-                  LOWER(sc.streamer_login) AS other_streamer,
-                  COUNT(DISTINCT sc.session_id) AS sessions
+    let tc_rows = sqlx::query!(
+        r#"SELECT LOWER(sc.chatter_login) AS "login!",
+                  LOWER(sc.streamer_login) AS "other_streamer!",
+                  COUNT(DISTINCT sc.session_id) AS "sessions!"
            FROM twitch_session_chatters sc
            JOIN twitch_stream_sessions s ON s.id = sc.session_id
            WHERE LOWER(sc.chatter_login) = ANY($1)
@@ -622,12 +597,12 @@ pub async fn viewer_directory_handler(
              AND LOWER(sc.streamer_login) != $3
              AND LOWER(sc.chatter_login) != ALL($4)
            GROUP BY LOWER(sc.chatter_login), LOWER(sc.streamer_login)
-           ORDER BY login, sessions DESC"#,
+           ORDER BY 1, 3 DESC"#,
+        &all_logins,
+        since,
+        &streamer,
+        &bots
     )
-    .bind(&all_logins)
-    .bind(since)
-    .bind(&streamer)
-    .bind(&bots)
     .fetch_all(&pool)
     .await
     .unwrap_or_default();
@@ -635,11 +610,9 @@ pub async fn viewer_directory_handler(
     let mut top_channels: std::collections::HashMap<String, Vec<String>> =
         std::collections::HashMap::new();
     for r in &tc_rows {
-        let login: String = r.try_get("login").unwrap_or_default();
-        let other: String = r.try_get("other_streamer").unwrap_or_default();
-        let entry = top_channels.entry(login).or_default();
+        let entry = top_channels.entry(r.login.clone()).or_default();
         if entry.len() < 3 {
-            entry.push(other);
+            entry.push(r.other_streamer.clone());
         }
     }
 
@@ -863,21 +836,21 @@ pub async fn viewer_detail_handler(
     let now = Utc::now();
 
     // Single-viewer aggregat im Fenster
-    let viewer_row = sqlx::query(
-        r#"SELECT COUNT(DISTINCT sc.session_id) AS total_sessions,
-                  COALESCE(SUM(sc.messages), 0) AS total_messages,
-                  MIN(s.started_at) AS first_seen_at,
-                  MAX(COALESCE(s.ended_at, s.started_at)) AS last_seen_at
+    let viewer_row = sqlx::query!(
+        r#"SELECT COUNT(DISTINCT sc.session_id) AS "total_sessions!",
+                  COALESCE(SUM(sc.messages), 0) AS "total_messages!",
+                  MIN(s.started_at) AS "first_seen_at?",
+                  MAX(COALESCE(s.ended_at, s.started_at)) AS "last_seen_at?"
            FROM twitch_session_chatters sc
            JOIN twitch_stream_sessions s ON s.id = sc.session_id
            WHERE LOWER(sc.streamer_login) = $1 AND LOWER(sc.chatter_login) = $2
              AND s.started_at >= $3
              AND LOWER(sc.chatter_login) != ALL($4)"#,
+        &streamer,
+        &login,
+        since,
+        &bots
     )
-    .bind(&streamer)
-    .bind(&login)
-    .bind(since)
-    .bind(&bots)
     .fetch_optional(&pool)
     .await;
 
@@ -896,7 +869,7 @@ pub async fn viewer_detail_handler(
         Ok(Some(r)) => r,
     };
 
-    let total_sessions: i64 = viewer_row.try_get("total_sessions").unwrap_or(0);
+    let total_sessions = viewer_row.total_sessions;
     if total_sessions == 0 {
         return (
             StatusCode::NOT_FOUND,
@@ -904,9 +877,9 @@ pub async fn viewer_detail_handler(
         )
             .into_response();
     }
-    let total_messages: i64 = viewer_row.try_get("total_messages").unwrap_or(0);
-    let first_seen_at: Option<DateTime<Utc>> = viewer_row.try_get("first_seen_at").ok();
-    let last_seen_at: Option<DateTime<Utc>> = viewer_row.try_get("last_seen_at").ok();
+    let total_messages = viewer_row.total_messages;
+    let first_seen_at = viewer_row.first_seen_at;
+    let last_seen_at = viewer_row.last_seen_at;
     let days_since = last_seen_at.map(|ls| (now - ls).num_days()).unwrap_or(9999);
     let category = classify_viewer(
         total_sessions,
@@ -922,49 +895,52 @@ pub async fn viewer_detail_handler(
     let wm = window_meta_to_json(wm_map.get(&login));
 
     // Activity-Timeline (pro Tag)
-    let tl_rows = sqlx::query(
-        r#"SELECT DATE(s.started_at) AS session_date,
-                  COUNT(*) AS sessions,
-                  COALESCE(SUM(sc.messages), 0) AS messages
+    let tl_rows = sqlx::query!(
+        r#"SELECT DATE(s.started_at) AS "session_date!",
+                  COUNT(*) AS "sessions!",
+                  COALESCE(SUM(sc.messages), 0) AS "messages!"
            FROM twitch_stream_sessions s
            JOIN twitch_session_chatters sc ON sc.session_id = s.id
            WHERE LOWER(s.streamer_login) = $1 AND LOWER(sc.chatter_login) = $2
              AND s.started_at >= $3
            GROUP BY DATE(s.started_at)
-           ORDER BY session_date"#,
+           ORDER BY 1"#,
+        &streamer,
+        &login,
+        since
     )
-    .bind(&streamer)
-    .bind(&login)
-    .bind(since)
     .fetch_all(&pool)
     .await
     .unwrap_or_default();
 
-    let activity_timeline: Vec<serde_json::Value> = tl_rows.iter().map(|r| {
-        json!({
-            "date": r.try_get::<chrono::NaiveDate, _>("session_date").map(|d| d.to_string()).unwrap_or_default(),
-            "sessions": r.try_get::<i64, _>("sessions").unwrap_or(0),
-            "messages": r.try_get::<i64, _>("messages").unwrap_or(0),
+    let activity_timeline: Vec<serde_json::Value> = tl_rows
+        .iter()
+        .map(|r| {
+            json!({
+                "date": r.session_date.to_string(),
+                "sessions": r.sessions,
+                "messages": r.messages,
+            })
         })
-    }).collect();
+        .collect();
 
     // Cross-Channel: andere Kanäle wo dieser Viewer war
-    let cc_rows = sqlx::query(
-        r#"SELECT LOWER(s.streamer_login) AS streamer_login,
-                  COUNT(DISTINCT sc.session_id) AS sessions,
-                  COALESCE(SUM(sc.messages), 0) AS messages,
-                  MIN(s.started_at) AS first_seen_at,
-                  MAX(COALESCE(s.ended_at, s.started_at)) AS last_seen_at
+    let cc_rows = sqlx::query!(
+        r#"SELECT LOWER(s.streamer_login) AS "streamer_login!",
+                  COUNT(DISTINCT sc.session_id) AS "sessions!",
+                  COALESCE(SUM(sc.messages), 0) AS "messages!",
+                  MIN(s.started_at) AS "first_seen_at?",
+                  MAX(COALESCE(s.ended_at, s.started_at)) AS "last_seen_at?"
            FROM twitch_session_chatters sc
            JOIN twitch_stream_sessions s ON s.id = sc.session_id
            WHERE LOWER(sc.chatter_login) = $1 AND LOWER(s.streamer_login) != $2
              AND s.started_at >= $3
            GROUP BY LOWER(s.streamer_login)
-           ORDER BY sessions DESC LIMIT 15"#,
+           ORDER BY 2 DESC LIMIT 15"#,
+        &login,
+        &streamer,
+        since
     )
-    .bind(&login)
-    .bind(&streamer)
-    .bind(since)
     .fetch_all(&pool)
     .await
     .unwrap_or_default();
@@ -972,8 +948,8 @@ pub async fn viewer_detail_handler(
     let cross_channel: Vec<serde_json::Value> = cc_rows
         .iter()
         .map(|r| {
-            let cc_first: Option<DateTime<Utc>> = r.try_get("first_seen_at").ok();
-            let cc_last: Option<DateTime<Utc>> = r.try_get("last_seen_at").ok();
+            let cc_first = r.first_seen_at;
+            let cc_last = r.last_seen_at;
             let overlap = match (first_seen_at, cc_first) {
                 (Some(fs), Some(cf)) => {
                     if cf < fs {
@@ -985,9 +961,9 @@ pub async fn viewer_detail_handler(
                 _ => "unknown",
             };
             json!({
-                "streamer": r.try_get::<String, _>("streamer_login").unwrap_or_default(),
-                "sessions": r.try_get::<i64, _>("sessions").unwrap_or(0),
-                "messages": r.try_get::<i64, _>("messages").unwrap_or(0),
+                "streamer": r.streamer_login.clone(),
+                "sessions": r.sessions,
+                "messages": r.messages,
                 "firstSeen": cc_first.map(|t| t.to_rfc3339()),
                 "lastSeen": cc_last.map(|t| t.to_rfc3339()),
                 "overlap": overlap,
@@ -996,17 +972,17 @@ pub async fn viewer_detail_handler(
         .collect();
 
     // Chat-Patterns aus twitch_chat_messages
-    let chat_rows = sqlx::query(
-        r#"SELECT EXTRACT(HOUR FROM message_ts)::int AS hour,
-                  EXTRACT(DOW FROM message_ts)::int AS dow,
-                  COUNT(*) AS cnt
+    let chat_rows = sqlx::query!(
+        r#"SELECT EXTRACT(HOUR FROM message_ts)::int AS "hour!",
+                  EXTRACT(DOW FROM message_ts)::int AS "dow!",
+                  COUNT(*) AS "cnt!"
            FROM twitch_chat_messages
            WHERE LOWER(chatter_login) = $1 AND LOWER(streamer_login) = $2 AND message_ts >= $3
            GROUP BY EXTRACT(HOUR FROM message_ts)::int, EXTRACT(DOW FROM message_ts)::int"#,
+        &login,
+        &streamer,
+        since
     )
-    .bind(&login)
-    .bind(&streamer)
-    .bind(since)
     .fetch_all(&pool)
     .await
     .unwrap_or_default();
@@ -1014,9 +990,9 @@ pub async fn viewer_detail_handler(
     let mut hour_counts = [0i64; 24];
     let mut dow_counts = [0i64; 7];
     for r in &chat_rows {
-        let h = r.try_get::<i32, _>("hour").unwrap_or(0).clamp(0, 23) as usize;
-        let d = r.try_get::<i32, _>("dow").unwrap_or(0).clamp(0, 6) as usize;
-        let c: i64 = r.try_get("cnt").unwrap_or(0);
+        let h = r.hour.clamp(0, 23) as usize;
+        let d = r.dow.clamp(0, 6) as usize;
+        let c = r.cnt;
         hour_counts[h] += c;
         dow_counts[d] += c;
     }
@@ -1075,7 +1051,7 @@ pub async fn viewer_detail_handler(
     // Personality: bis zu 2000 Chat-Nachrichten des Viewers klassifizieren
     // (Python api_viewers.py:545-573). Ohne Roh-Chat → null.
     let personality: serde_json::Value = {
-        let msg_rows = sqlx::query(
+        let msg_rows = sqlx::query!(
             r#"SELECT m.content
                FROM twitch_chat_messages m
                JOIN twitch_stream_sessions s ON s.id = m.session_id
@@ -1083,10 +1059,10 @@ pub async fn viewer_detail_handler(
                  AND LOWER(m.chatter_login) = $2
                  AND m.message_ts >= $3
                LIMIT 2000"#,
+            &streamer,
+            &login,
+            since
         )
-        .bind(&streamer)
-        .bind(&login)
-        .bind(since)
         .fetch_all(&pool)
         .await
         .unwrap_or_default();
@@ -1096,8 +1072,8 @@ pub async fn viewer_detail_handler(
             let mut counts: std::collections::HashMap<&'static str, i64> =
                 std::collections::HashMap::new();
             for r in &msg_rows {
-                let content: String = r.try_get("content").unwrap_or_default();
-                *counts.entry(classify_message(&content)).or_insert(0) += 1;
+                let content = r.content.as_deref().unwrap_or("");
+                *counts.entry(classify_message(content)).or_insert(0) += 1;
             }
             let primary = counts
                 .iter()
@@ -1378,24 +1354,25 @@ pub async fn viewer_segments_handler(
         std::collections::HashMap::new();
     if !at_risk_logins.is_empty() {
         let thirty_days_ago = now - chrono::Duration::days(30);
-        let wa_rows = sqlx::query(
-            r#"SELECT LOWER(chatter_login) AS login, LOWER(streamer_login) AS streamer_login, last_seen_at
+        let wa_rows = sqlx::query!(
+            r#"SELECT LOWER(chatter_login) AS "login!", LOWER(streamer_login) AS "streamer_login!", last_seen_at
                FROM twitch_chatter_rollup
                WHERE LOWER(chatter_login) = ANY($1)
                  AND LOWER(streamer_login) != $2
                  AND last_seen_at >= $3
                  AND LOWER(streamer_login) != ALL($4)
-               ORDER BY login, last_seen_at DESC"#,
+               ORDER BY 1, last_seen_at DESC"#,
+            &at_risk_logins,
+            &streamer,
+            thirty_days_ago,
+            &bots
         )
-        .bind(&at_risk_logins).bind(&streamer).bind(thirty_days_ago).bind(&bots)
         .fetch_all(&pool).await.unwrap_or_default();
 
         for r in &wa_rows {
-            let login: String = r.try_get("login").unwrap_or_default();
-            let other: String = r.try_get("streamer_login").unwrap_or_default();
-            let entry = whereabouts.entry(login).or_default();
+            let entry = whereabouts.entry(r.login.clone()).or_default();
             if entry.len() < 3 {
-                entry.push(other);
+                entry.push(r.streamer_login.clone());
             }
         }
     }
@@ -1459,9 +1436,9 @@ pub async fn viewer_segments_handler(
     if !streamer.is_empty() && !streamer_exclusion.contains(&streamer) {
         streamer_exclusion.push(streamer.clone());
     }
-    let cc_rows = sqlx::query(
-        r#"SELECT LOWER(sc.chatter_login) AS login,
-                  COUNT(DISTINCT LOWER(sc.streamer_login)) AS ch_count
+    let cc_rows = sqlx::query!(
+        r#"SELECT LOWER(sc.chatter_login) AS "login!",
+                  COUNT(DISTINCT LOWER(sc.streamer_login)) AS "ch_count!"
            FROM twitch_session_chatters sc
            JOIN twitch_stream_sessions s ON s.id = sc.session_id
            WHERE LOWER(sc.chatter_login) = ANY($1)
@@ -1469,11 +1446,11 @@ pub async fn viewer_segments_handler(
              AND LOWER(sc.chatter_login) != ALL($3)
              AND LOWER(sc.streamer_login) != ALL($4)
            GROUP BY LOWER(sc.chatter_login)"#,
+        &all_logins,
+        since,
+        &bots,
+        &streamer_exclusion
     )
-    .bind(&all_logins)
-    .bind(since)
-    .bind(&bots)
-    .bind(&streamer_exclusion)
     .fetch_all(&pool)
     .await
     .unwrap_or_default();
@@ -1481,7 +1458,7 @@ pub async fn viewer_segments_handler(
     let mut exclusive_count = 0i64;
     let mut other_sum = 0i64;
     for r in &cc_rows {
-        let ch: i64 = r.try_get("ch_count").unwrap_or(0);
+        let ch = r.ch_count;
         if ch <= 1 {
             exclusive_count += 1;
         }
@@ -1499,9 +1476,9 @@ pub async fn viewer_segments_handler(
     };
 
     // 5. Top Shared Channels
-    let shared_rows = sqlx::query(
-        r#"SELECT LOWER(sc2.streamer_login) AS streamer_login,
-                  COUNT(DISTINCT LOWER(sc2.chatter_login)) AS shared_count
+    let shared_rows = sqlx::query!(
+        r#"SELECT LOWER(sc2.streamer_login) AS "streamer_login!",
+                  COUNT(DISTINCT LOWER(sc2.chatter_login)) AS "shared_count!"
            FROM twitch_session_chatters sc1
            JOIN twitch_stream_sessions s1 ON s1.id = sc1.session_id
            JOIN twitch_session_chatters sc2 ON LOWER(sc1.chatter_login) = LOWER(sc2.chatter_login)
@@ -1513,14 +1490,14 @@ pub async fn viewer_segments_handler(
              AND LOWER(sc1.chatter_login) != ALL($5)
              AND LOWER(sc2.streamer_login) != ALL($5)
            GROUP BY LOWER(sc2.streamer_login)
-           ORDER BY shared_count DESC
+           ORDER BY 2 DESC
            LIMIT 10"#,
+        &streamer,
+        since,
+        &streamer,
+        since,
+        &bots
     )
-    .bind(&streamer)
-    .bind(since)
-    .bind(&streamer)
-    .bind(since)
-    .bind(&bots)
     .fetch_all(&pool)
     .await
     .unwrap_or_default();
@@ -1528,15 +1505,15 @@ pub async fn viewer_segments_handler(
     // Direction-Votes für Top-Shared
     let other_streamers: Vec<String> = shared_rows
         .iter()
-        .filter_map(|r| r.try_get::<String, _>("streamer_login").ok())
+        .map(|r| r.streamer_login.clone())
         .collect();
     let mut direction_map: std::collections::HashMap<String, &str> =
         std::collections::HashMap::new();
     if !other_streamers.is_empty() {
-        let dir_rows = sqlx::query(
-            r#"SELECT LOWER(other_rollup.streamer_login) AS streamer_login,
-                      SUM(CASE WHEN target_rollup.first_seen_at < other_rollup.first_seen_at THEN 1 ELSE 0 END) AS outgoing_votes,
-                      SUM(CASE WHEN other_rollup.first_seen_at < target_rollup.first_seen_at THEN 1 ELSE 0 END) AS incoming_votes
+        let dir_rows = sqlx::query!(
+            r#"SELECT LOWER(other_rollup.streamer_login) AS "streamer_login!",
+                      COALESCE(SUM(CASE WHEN target_rollup.first_seen_at < other_rollup.first_seen_at THEN 1 ELSE 0 END), 0) AS "outgoing_votes!",
+                      COALESCE(SUM(CASE WHEN other_rollup.first_seen_at < target_rollup.first_seen_at THEN 1 ELSE 0 END), 0) AS "incoming_votes!"
                FROM twitch_chatter_rollup target_rollup
                JOIN twitch_chatter_rollup other_rollup
                  ON LOWER(target_rollup.chatter_login) = LOWER(other_rollup.chatter_login)
@@ -1545,14 +1522,16 @@ pub async fn viewer_segments_handler(
                  AND LOWER(target_rollup.chatter_login) != ALL($3)
                  AND LOWER(other_rollup.chatter_login) != ALL($3)
                GROUP BY LOWER(other_rollup.streamer_login)"#,
+            &streamer,
+            &other_streamers,
+            &bots
         )
-        .bind(&streamer).bind(&other_streamers).bind(&bots)
         .fetch_all(&pool).await.unwrap_or_default();
 
         for r in &dir_rows {
-            let s: String = r.try_get("streamer_login").unwrap_or_default();
-            let out: i64 = r.try_get("outgoing_votes").unwrap_or(0);
-            let inc: i64 = r.try_get("incoming_votes").unwrap_or(0);
+            let s = r.streamer_login.clone();
+            let out = r.outgoing_votes;
+            let inc = r.incoming_votes;
             let dir = if inc > 0 && out > 0 {
                 "bidirectional"
             } else if inc > 0 {
@@ -1569,11 +1548,11 @@ pub async fn viewer_segments_handler(
     let top_shared: Vec<serde_json::Value> = shared_rows
         .iter()
         .map(|r| {
-            let s: String = r.try_get("streamer_login").unwrap_or_default();
+            let s = r.streamer_login.clone();
             let dir = direction_map.get(&s).copied().unwrap_or("unknown");
             json!({
                 "streamer": s,
-                "sharedCount": r.try_get::<i64, _>("shared_count").unwrap_or(0),
+                "sharedCount": r.shared_count,
                 "direction": dir,
             })
         })

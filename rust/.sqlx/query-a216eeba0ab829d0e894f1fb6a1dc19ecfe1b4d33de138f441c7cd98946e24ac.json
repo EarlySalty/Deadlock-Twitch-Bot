@@ -1,0 +1,30 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT s.streamer_login,\n                      SUM(CASE WHEN s.follower_delta IS NOT NULL\n                               AND NOT (s.followers_end = 0 AND s.followers_start > 0)\n                               THEN s.follower_delta ELSE 0 END)::float8 AS \"value?\"\n               FROM twitch_stream_sessions s\n               WHERE s.started_at >= $1 AND s.ended_at IS NOT NULL\n               GROUP BY s.streamer_login\n               HAVING COUNT(*) >= 3 AND AVG(s.avg_viewers) <= $3\n               ORDER BY 2 DESC NULLS LAST\n               LIMIT $2",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "streamer_login",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 1,
+        "name": "value?",
+        "type_info": "Float8"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Timestamptz",
+        "Int8",
+        "Float8"
+      ]
+    },
+    "nullable": [
+      false,
+      null
+    ]
+  },
+  "hash": "a216eeba0ab829d0e894f1fb6a1dc19ecfe1b4d33de138f441c7cd98946e24ac"
+}

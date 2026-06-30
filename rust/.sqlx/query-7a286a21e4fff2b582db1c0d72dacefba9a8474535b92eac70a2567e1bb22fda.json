@@ -1,0 +1,29 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT id, started_at FROM twitch_stream_sessions\n                   WHERE LOWER(streamer_login) = $1 AND started_at <= $2\n                     AND (ended_at IS NULL OR ended_at >= $2)\n                   LIMIT 1",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id",
+        "type_info": "Int8"
+      },
+      {
+        "ordinal": 1,
+        "name": "started_at",
+        "type_info": "Timestamptz"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Text",
+        "Timestamptz"
+      ]
+    },
+    "nullable": [
+      false,
+      false
+    ]
+  },
+  "hash": "7a286a21e4fff2b582db1c0d72dacefba9a8474535b92eac70a2567e1bb22fda"
+}

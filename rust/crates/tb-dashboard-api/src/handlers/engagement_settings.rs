@@ -44,10 +44,10 @@ async fn is_super_mod(pool: &PgPool, user_id: &str) -> bool {
     if user_id.is_empty() {
         return false;
     }
-    sqlx::query_scalar::<_, i32>(
-        "SELECT 1 FROM twitch_admin_roles WHERE twitch_user_id = $1 AND role = 'super_mod' LIMIT 1",
+    sqlx::query_scalar!(
+        "SELECT 1 AS \"one!\" FROM twitch_admin_roles WHERE twitch_user_id = $1 AND role = 'super_mod' LIMIT 1",
+        user_id
     )
-    .bind(user_id)
     .fetch_optional(pool)
     .await
     .unwrap_or(None)
@@ -67,7 +67,11 @@ async fn resolve_actor(auth: &DashboardAuthLevel, pool: &PgPool) -> Result<Actor
             actor_login: actor.as_ref().map(|a| a.twitch_login.clone()),
             admin: true,
         }),
-        DashboardAuthLevel::Partner { twitch_login, twitch_user_id, .. } => {
+        DashboardAuthLevel::Partner {
+            twitch_login,
+            twitch_user_id,
+            ..
+        } => {
             let admin = is_super_mod(pool, twitch_user_id).await;
             Ok(Actor {
                 actor_id: Some(twitch_user_id.clone()),
@@ -160,7 +164,10 @@ pub async fn get_settings_handler(
     let result = match channel {
         Some(ch) => {
             if !actor.admin && Some(&ch) != actor.actor_login.as_ref() {
-                return err(StatusCode::FORBIDDEN, "Du darfst nur deinen eigenen Channel sehen.");
+                return err(
+                    StatusCode::FORBIDDEN,
+                    "Du darfst nur deinen eigenen Channel sehen.",
+                );
             }
             load_one(&pool, &ch).await
         }
@@ -201,10 +208,18 @@ pub async fn post_toggle_handler(
     let enabled = payload.get("enabled").and_then(Value::as_bool);
     let (channel, enabled) = match (channel.is_empty(), enabled) {
         (false, Some(en)) => (channel, en),
-        _ => return err(StatusCode::BAD_REQUEST, "channelLogin (str) und enabled (bool) erforderlich."),
+        _ => {
+            return err(
+                StatusCode::BAD_REQUEST,
+                "channelLogin (str) und enabled (bool) erforderlich.",
+            )
+        }
     };
     if !actor.admin && Some(&channel) != actor.actor_login.as_ref() {
-        return err(StatusCode::FORBIDDEN, "Du darfst nur deinen eigenen Channel toggeln.");
+        return err(
+            StatusCode::FORBIDDEN,
+            "Du darfst nur deinen eigenen Channel toggeln.",
+        );
     }
 
     if let Err(e) = update_settings(
@@ -245,7 +260,10 @@ pub async fn post_update_handler(
         return err(StatusCode::BAD_REQUEST, "channelLogin erforderlich.");
     }
     if !actor.admin && Some(&channel) != actor.actor_login.as_ref() {
-        return err(StatusCode::FORBIDDEN, "Du darfst nur deinen eigenen Channel verändern.");
+        return err(
+            StatusCode::FORBIDDEN,
+            "Du darfst nur deinen eigenen Channel verändern.",
+        );
     }
 
     // Feld vorhanden? null → Clear-Marker (""), string → roh. Sonst 400.
@@ -253,13 +271,23 @@ pub async fn post_update_handler(
         None => None,
         Some(Value::Null) => Some(String::new()),
         Some(Value::String(s)) => Some(s.clone()),
-        Some(_) => return err(StatusCode::BAD_REQUEST, "steamId muss string oder null sein."),
+        Some(_) => {
+            return err(
+                StatusCode::BAD_REQUEST,
+                "steamId muss string oder null sein.",
+            )
+        }
     };
     let persona = match payload.get("personaOverride") {
         None => None,
         Some(Value::Null) => Some(String::new()),
         Some(Value::String(s)) => Some(s.clone()),
-        Some(_) => return err(StatusCode::BAD_REQUEST, "personaOverride muss string oder null sein."),
+        Some(_) => {
+            return err(
+                StatusCode::BAD_REQUEST,
+                "personaOverride muss string oder null sein.",
+            )
+        }
     };
     let tabu = match payload.get("tabuTopics") {
         None => None,
@@ -271,11 +299,24 @@ pub async fn post_update_handler(
                 .filter(|t| !t.is_empty())
                 .collect::<Vec<_>>(),
         ),
-        Some(_) => return err(StatusCode::BAD_REQUEST, "tabuTopics muss array oder null sein."),
+        Some(_) => {
+            return err(
+                StatusCode::BAD_REQUEST,
+                "tabuTopics muss array oder null sein.",
+            )
+        }
     };
 
-    if let Err(e) =
-        update_settings(&pool, &channel, None, steam_id, persona, tabu, actor.actor_id.as_deref()).await
+    if let Err(e) = update_settings(
+        &pool,
+        &channel,
+        None,
+        steam_id,
+        persona,
+        tabu,
+        actor.actor_id.as_deref(),
+    )
+    .await
     {
         return db_error(e, "update");
     }
@@ -285,7 +326,9 @@ pub async fn post_update_handler(
 /// Antwortet mit der frisch geladenen Settings-Zeile (oder `null`).
 async fn settings_response(pool: &PgPool, channel: &str) -> Response {
     match load_one(pool, channel).await {
-        Ok(mut list) => Json(json!({ "settings": list.pop().unwrap_or(Value::Null) })).into_response(),
+        Ok(mut list) => {
+            Json(json!({ "settings": list.pop().unwrap_or(Value::Null) })).into_response()
+        }
         Err(e) => db_error(e, "reload"),
     }
 }
@@ -305,7 +348,10 @@ pub async fn get_log_handler(
         return err(StatusCode::BAD_REQUEST, "channel query-param erforderlich.");
     }
     if !actor.admin && Some(&channel) != actor.actor_login.as_ref() {
-        return err(StatusCode::FORBIDDEN, "Du darfst nur deinen eigenen Log sehen.");
+        return err(
+            StatusCode::FORBIDDEN,
+            "Du darfst nur deinen eigenen Log sehen.",
+        );
     }
     let limit = q
         .limit
@@ -314,36 +360,37 @@ pub async fn get_log_handler(
         .unwrap_or(25)
         .clamp(1, 200);
 
-    let rows = sqlx::query(
+    let rows = sqlx::query!(
         "SELECT decision, response_text, model, prompt_tokens, completion_tokens, \
-                cost_usd_estimate::float8 AS cost_usd_estimate, latency_ms, ts \
+                cost_usd_estimate::float8 AS \"cost_usd_estimate?\", latency_ms, ts \
          FROM twitch_engagement_log WHERE channel_login = $1 ORDER BY ts DESC LIMIT $2",
+        &channel,
+        limit
     )
-    .bind(&channel)
-    .bind(limit)
     .fetch_all(&pool)
     .await;
 
     match rows {
         Ok(rows) => {
-            let entries: Vec<Value> = rows.iter().map(serialize_log).collect();
+            let entries: Vec<Value> = rows
+                .into_iter()
+                .map(|row| {
+                    json!({
+                        "decision": row.decision,
+                        "responseText": row.response_text,
+                        "model": row.model,
+                        "promptTokens": row.prompt_tokens,
+                        "completionTokens": row.completion_tokens,
+                        "costUsdEstimate": row.cost_usd_estimate,
+                        "latencyMs": row.latency_ms,
+                        "ts": iso(Some(row.ts)),
+                    })
+                })
+                .collect();
             Json(json!({ "channelLogin": channel, "entries": entries })).into_response()
         }
         Err(e) => db_error(e, "log"),
     }
-}
-
-fn serialize_log(row: &PgRow) -> Value {
-    json!({
-        "decision": row.try_get::<String, _>("decision").unwrap_or_default(),
-        "responseText": row.try_get::<Option<String>, _>("response_text").unwrap_or(None),
-        "model": row.try_get::<Option<String>, _>("model").unwrap_or(None),
-        "promptTokens": row.try_get::<Option<i32>, _>("prompt_tokens").unwrap_or(None),
-        "completionTokens": row.try_get::<Option<i32>, _>("completion_tokens").unwrap_or(None),
-        "costUsdEstimate": row.try_get::<Option<f64>, _>("cost_usd_estimate").unwrap_or(None),
-        "latencyMs": row.try_get::<Option<i32>, _>("latency_ms").unwrap_or(None),
-        "ts": iso(row.try_get("ts").unwrap_or(None)),
-    })
 }
 
 /// `"" / nur-Whitespace → None`, sonst getrimmt (mirror Pythons
@@ -368,29 +415,30 @@ async fn update_settings(
     tabu: Option<Vec<String>>,
     actor_id: Option<&str>,
 ) -> Result<(), sqlx::Error> {
-    let exists = sqlx::query_scalar::<_, i32>(
-        "SELECT 1 FROM twitch_engagement_settings WHERE channel_login = $1",
+    let exists = sqlx::query_scalar!(
+        "SELECT 1 AS \"one!\" FROM twitch_engagement_settings WHERE channel_login = $1",
+        channel
     )
-    .bind(channel)
     .fetch_optional(pool)
     .await?
     .is_some();
 
     if !exists {
         let en = enabled.unwrap_or(false);
-        sqlx::query(
+        let tabu_topics = tabu.unwrap_or_default();
+        sqlx::query!(
             "INSERT INTO twitch_engagement_settings \
                 (channel_login, enabled, steam_id, persona_override, tabu_topics, \
                  enabled_at, enabled_by, updated_at) \
              VALUES ($1, $2, $3, $4, $5, CASE WHEN $6 THEN NOW() ELSE NULL END, $7, NOW())",
+            channel,
+            en,
+            steam_id,
+            persona,
+            &tabu_topics,
+            en,
+            actor_id
         )
-        .bind(channel)
-        .bind(en)
-        .bind(steam_id)
-        .bind(persona)
-        .bind(tabu.unwrap_or_default())
-        .bind(en)
-        .bind(actor_id)
         .execute(pool)
         .await?;
         return Ok(());
@@ -400,9 +448,8 @@ async fn update_settings(
     if enabled.is_none() && steam_id.is_none() && persona.is_none() && tabu.is_none() {
         return Ok(());
     }
-    let mut qb = QueryBuilder::<Postgres>::new(
-        "UPDATE twitch_engagement_settings SET updated_at = NOW()",
-    );
+    let mut qb =
+        QueryBuilder::<Postgres>::new("UPDATE twitch_engagement_settings SET updated_at = NOW()");
     if let Some(en) = enabled {
         qb.push(", enabled = ").push_bind(en);
         if en {
@@ -445,7 +492,10 @@ pub async fn sender_auth_start_handler(
         Err(resp) => return resp,
     };
     if !actor.admin {
-        return err(StatusCode::FORBIDDEN, "Nur Admins dürfen den Sende-Account autorisieren.");
+        return err(
+            StatusCode::FORBIDDEN,
+            "Nur Admins dürfen den Sende-Account autorisieren.",
+        );
     }
     let Some(store) = build_sender_store(pool) else {
         return err(
@@ -463,7 +513,10 @@ pub async fn sender_auth_start_handler(
         .into_response(),
         Err(error) => {
             tracing::error!(%error, "engagement sender-auth: Link-Erzeugung fehlgeschlagen");
-            err(StatusCode::INTERNAL_SERVER_ERROR, "Link-Erzeugung fehlgeschlagen.")
+            err(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "Link-Erzeugung fehlgeschlagen.",
+            )
         }
     }
 }
@@ -487,10 +540,18 @@ pub async fn sender_auth_callback_handler(
     Query(q): Query<CallbackQuery>,
 ) -> Response {
     if !q.error.is_empty() {
-        return page("Autorisierung abgebrochen", &format!("Twitch meldete: {}", esc(&q.error)), StatusCode::BAD_REQUEST);
+        return page(
+            "Autorisierung abgebrochen",
+            &format!("Twitch meldete: {}", esc(&q.error)),
+            StatusCode::BAD_REQUEST,
+        );
     }
     if q.code.is_empty() || q.state.is_empty() {
-        return page("Ungültige Anfrage", "Code oder State fehlt.", StatusCode::BAD_REQUEST);
+        return page(
+            "Ungültige Anfrage",
+            "Code oder State fehlt.",
+            StatusCode::BAD_REQUEST,
+        );
     }
     let Some(store) = build_sender_store(pool) else {
         return page(
@@ -511,7 +572,11 @@ pub async fn sender_auth_callback_handler(
         ),
         Err(error) => {
             tracing::error!(%error, "engagement sender-auth callback fehlgeschlagen");
-            page("Autorisierung fehlgeschlagen", &esc(&error), StatusCode::BAD_REQUEST)
+            page(
+                "Autorisierung fehlgeschlagen",
+                &esc(&error),
+                StatusCode::BAD_REQUEST,
+            )
         }
     }
 }
@@ -529,7 +594,9 @@ fn page(title: &str, body: &str, status: StatusCode) -> Response {
 
 /// Minimales HTML-Escaping für eingebettete dynamische Strings.
 fn esc(s: &str) -> String {
-    s.replace('&', "&amp;").replace('<', "&lt;").replace('>', "&gt;")
+    s.replace('&', "&amp;")
+        .replace('<', "&lt;")
+        .replace('>', "&gt;")
 }
 
 #[cfg(test)]
@@ -540,12 +607,28 @@ mod tests {
 
     async fn make_pool(schema: &str) -> Option<PgPool> {
         let dsn = std::env::var("TB_TEST_DATABASE_URL").ok()?;
-        let admin = PgPoolOptions::new().max_connections(1).connect(&dsn).await.unwrap();
-        sqlx::query(&format!("DROP SCHEMA IF EXISTS {schema} CASCADE")).execute(&admin).await.unwrap();
-        sqlx::query(&format!("CREATE SCHEMA {schema}")).execute(&admin).await.unwrap();
+        let admin = PgPoolOptions::new()
+            .max_connections(1)
+            .connect(&dsn)
+            .await
+            .unwrap();
+        sqlx::query(&format!("DROP SCHEMA IF EXISTS {schema} CASCADE"))
+            .execute(&admin)
+            .await
+            .unwrap();
+        sqlx::query(&format!("CREATE SCHEMA {schema}"))
+            .execute(&admin)
+            .await
+            .unwrap();
         admin.close().await;
-        let opts = PgConnectOptions::from_str(&dsn).unwrap().options([("search_path", schema)]);
-        let pool = PgPoolOptions::new().max_connections(2).connect_with(opts).await.unwrap();
+        let opts = PgConnectOptions::from_str(&dsn)
+            .unwrap()
+            .options([("search_path", schema)]);
+        let pool = PgPoolOptions::new()
+            .max_connections(2)
+            .connect_with(opts)
+            .await
+            .unwrap();
         sqlx::query(
             "CREATE TABLE twitch_engagement_settings (channel_login TEXT PRIMARY KEY, \
              enabled BOOLEAN NOT NULL DEFAULT FALSE, steam_id TEXT, persona_override TEXT, \
@@ -564,9 +647,13 @@ mod tests {
 
     #[tokio::test]
     async fn toggle_legt_an_und_setzt_enabled() {
-        let Some(pool) = make_pool("t_eng_dash_toggle").await else { return };
+        let Some(pool) = make_pool("t_eng_dash_toggle").await else {
+            return;
+        };
         // Neue Zeile via toggle on.
-        update_settings(&pool, "nani", Some(true), None, None, None, Some("42")).await.unwrap();
+        update_settings(&pool, "nani", Some(true), None, None, None, Some("42"))
+            .await
+            .unwrap();
         let list = load_one(&pool, "nani").await.unwrap();
         assert_eq!(list.len(), 1);
         assert_eq!(list[0]["enabled"], json!(true));
@@ -574,7 +661,9 @@ mod tests {
         assert!(list[0]["enabledAt"].is_string()); // gesetzt weil enabled
 
         // toggle off lässt enabled_by/at stehen, setzt enabled=false.
-        update_settings(&pool, "nani", Some(false), None, None, None, Some("99")).await.unwrap();
+        update_settings(&pool, "nani", Some(false), None, None, None, Some("99"))
+            .await
+            .unwrap();
         let list = load_one(&pool, "nani").await.unwrap();
         assert_eq!(list[0]["enabled"], json!(false));
         assert_eq!(list[0]["enabledBy"], json!("42")); // COALESCE: nicht überschrieben (off)
@@ -582,8 +671,12 @@ mod tests {
 
     #[tokio::test]
     async fn update_felder_und_clear() {
-        let Some(pool) = make_pool("t_eng_dash_update").await else { return };
-        update_settings(&pool, "nani", Some(true), None, None, None, Some("1")).await.unwrap();
+        let Some(pool) = make_pool("t_eng_dash_update").await else {
+            return;
+        };
+        update_settings(&pool, "nani", Some(true), None, None, None, Some("1"))
+            .await
+            .unwrap();
         // steam_id + persona + tabu setzen. tabu kommt vom Handler bereits
         // gefiltert (leere Elemente raus) — update_settings speichert verbatim.
         update_settings(
@@ -604,7 +697,17 @@ mod tests {
         assert_eq!(list[0]["enabled"], json!(true)); // unberührt
 
         // steam_id clearen (leerer String → NULL).
-        update_settings(&pool, "nani", None, Some(String::new()), None, None, Some("1")).await.unwrap();
+        update_settings(
+            &pool,
+            "nani",
+            None,
+            Some(String::new()),
+            None,
+            None,
+            Some("1"),
+        )
+        .await
+        .unwrap();
         let list = load_one(&pool, "nani").await.unwrap();
         assert_eq!(list[0]["steamId"], Value::Null);
         assert_eq!(list[0]["personaOverride"], json!("frech")); // nicht angefasst
@@ -612,12 +715,16 @@ mod tests {
 
     #[tokio::test]
     async fn super_mod_erkennung() {
-        let Some(pool) = make_pool("t_eng_dash_supermod").await else { return };
+        let Some(pool) = make_pool("t_eng_dash_supermod").await else {
+            return;
+        };
         assert!(!is_super_mod(&pool, "7").await);
-        sqlx::query("INSERT INTO twitch_admin_roles (twitch_user_id, role) VALUES ('7', 'super_mod')")
-            .execute(&pool)
-            .await
-            .unwrap();
+        sqlx::query(
+            "INSERT INTO twitch_admin_roles (twitch_user_id, role) VALUES ('7', 'super_mod')",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
         assert!(is_super_mod(&pool, "7").await);
         assert!(!is_super_mod(&pool, "").await); // leere ID
     }
@@ -631,7 +738,9 @@ mod tests {
     /// extrahiert die Session-Identität IMMER, auch bei auth_level='admin'.
     #[tokio::test]
     async fn twitch_admin_behaelt_actor_attribution() {
-        let Some(pool) = make_pool("t_eng_dash_admin_attr").await else { return };
+        let Some(pool) = make_pool("t_eng_dash_admin_attr").await else {
+            return;
+        };
         let auth = DashboardAuthLevel::Admin {
             actor: Some(crate::auth::level::AdminActor {
                 twitch_user_id: "555".into(),
@@ -648,7 +757,9 @@ mod tests {
     /// keine Attribution (Python: `_extract_session_user({})` → None,None).
     #[tokio::test]
     async fn discord_admin_ohne_attribution() {
-        let Some(pool) = make_pool("t_eng_dash_admin_noattr").await else { return };
+        let Some(pool) = make_pool("t_eng_dash_admin_noattr").await else {
+            return;
+        };
         let admin = resolve_actor(&DashboardAuthLevel::Admin { actor: None }, &pool)
             .await
             .expect("resolve ok");

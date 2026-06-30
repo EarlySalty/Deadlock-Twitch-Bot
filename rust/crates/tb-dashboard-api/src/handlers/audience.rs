@@ -569,7 +569,7 @@ async fn backfill_last_seen(pool: &PgPool, session_ids: &[i64], bots: &[String])
     if session_ids.is_empty() {
         return;
     }
-    let result = sqlx::query(
+    let result = sqlx::query!(
         r#"UPDATE twitch_session_chatters sc
               SET last_seen_at = agg.max_ts
              FROM (
@@ -592,9 +592,9 @@ async fn backfill_last_seen(pool: &PgPool, session_ids: &[i64], bots: &[String])
                     AND (sc.chatter_login IS NULL OR sc.chatter_login = ''))
               )
               AND (sc.last_seen_at IS NULL OR sc.last_seen_at < agg.max_ts)"#,
+        session_ids,
+        bots
     )
-    .bind(session_ids)
-    .bind(bots)
     .execute(pool)
     .await;
     if let Err(e) = result {

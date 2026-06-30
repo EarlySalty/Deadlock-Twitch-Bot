@@ -1,0 +1,35 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT COALESCE(SUM(commission_cents) FILTER (WHERE status IN ('pending','transferred')), 0)::bigint AS \"total_cents!\", COALESCE(SUM(commission_cents) FILTER (WHERE created_at >= $1 AND status IN ('pending','transferred')), 0)::bigint AS \"month_cents!\", COALESCE(SUM(commission_cents) FILTER (WHERE status = 'pending'), 0)::bigint AS \"pending_cents!\" FROM affiliate_commissions WHERE LOWER(affiliate_twitch_login) = $2",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "total_cents!",
+        "type_info": "Int8"
+      },
+      {
+        "ordinal": 1,
+        "name": "month_cents!",
+        "type_info": "Int8"
+      },
+      {
+        "ordinal": 2,
+        "name": "pending_cents!",
+        "type_info": "Int8"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Text",
+        "Text"
+      ]
+    },
+    "nullable": [
+      null,
+      null,
+      null
+    ]
+  },
+  "hash": "52a1b6f87e67f3d3ec096575b63a81b957691c6a84b447f9c444083d3ce677eb"
+}

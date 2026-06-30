@@ -1,0 +1,68 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT p.id::text AS \"id?\", p.twitch_user_id AS \"twitch_user_id?\", p.twitch_login AS \"twitch_login?\", p.added_by AS \"added_by?\", p.partnered_at AS \"partnered_at?\", p.admin_archived_at AS \"admin_archived_at?\", p.departnered_at AS \"departnered_at?\", p.status AS \"status?\", p.technical_pause_reason AS \"technical_pause_reason?\" FROM twitch_partners p ORDER BY COALESCE(p.partnered_at, p.departnered_at, p.admin_archived_at, '') ASC, p.id ASC",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id?",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 1,
+        "name": "twitch_user_id?",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 2,
+        "name": "twitch_login?",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 3,
+        "name": "added_by?",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 4,
+        "name": "partnered_at?",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 5,
+        "name": "admin_archived_at?",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 6,
+        "name": "departnered_at?",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 7,
+        "name": "status?",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 8,
+        "name": "technical_pause_reason?",
+        "type_info": "Text"
+      }
+    ],
+    "parameters": {
+      "Left": []
+    },
+    "nullable": [
+      null,
+      false,
+      false,
+      true,
+      true,
+      true,
+      true,
+      false,
+      true
+    ]
+  },
+  "hash": "8db95f9408b98b2256c6803c3ca42baa75d023ef419e5f5d86118e4d0b6e5795"
+}

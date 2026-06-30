@@ -1,0 +1,15 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "INSERT INTO twitch_engagement_settings (channel_login, output_mode, updated_at) VALUES ($1, $2, NOW()) ON CONFLICT (channel_login) DO UPDATE SET output_mode = EXCLUDED.output_mode, updated_at = NOW()",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Text",
+        "Text"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "c14d5ab8509f64393529ace32a705467d6036de67b2b140e349f5dfde928c7b5"
+}

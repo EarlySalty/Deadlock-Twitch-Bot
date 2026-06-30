@@ -1,0 +1,29 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT s.streamer_login,\n                      AVG(s.retention_10m) AS \"value?\"\n               FROM twitch_stream_sessions s\n               WHERE s.started_at >= $1 AND s.ended_at IS NOT NULL\n               GROUP BY s.streamer_login\n               HAVING COUNT(*) >= 3\n               ORDER BY 2 DESC NULLS LAST\n               LIMIT $2",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "streamer_login",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 1,
+        "name": "value?",
+        "type_info": "Float8"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Timestamptz",
+        "Int8"
+      ]
+    },
+    "nullable": [
+      false,
+      null
+    ]
+  },
+  "hash": "6d4113975dcc504df46df95d2e0f9a9c5c1b2c4e6d7bc59270b2d88ca9da0472"
+}

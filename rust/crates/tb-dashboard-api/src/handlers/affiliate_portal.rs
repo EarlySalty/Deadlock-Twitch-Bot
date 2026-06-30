@@ -42,11 +42,11 @@ pub async fn portal_handler(
             .into_response();
     };
 
-    let account = sqlx::query_as::<_, (String, Option<String>, i32)>(
+    let account = sqlx::query!(
         "SELECT twitch_login, display_name, is_active \
          FROM affiliate_accounts WHERE LOWER(twitch_login) = $1 LIMIT 1",
+        &login
     )
-    .bind(&login)
     .fetch_optional(&pool)
     .await;
     let account = match account {
@@ -62,32 +62,32 @@ pub async fn portal_handler(
 
     let now = Utc::now();
     let month_start = format!("{:04}-{:02}-01T00:00:00+00:00", now.year(), now.month());
-    let claims = sqlx::query_as::<_, (i64, i64)>(
-        "SELECT COUNT(*)::bigint, \
-                COUNT(*) FILTER (WHERE claimed_at >= $1)::bigint \
+    let claims = sqlx::query!(
+        "SELECT COUNT(*)::bigint AS \"total_claims!\", \
+                COUNT(*) FILTER (WHERE claimed_at >= $1)::bigint AS \"month_claims!\" \
          FROM affiliate_streamer_claims \
          WHERE LOWER(affiliate_twitch_login) = $2",
+        &month_start,
+        &login
     )
-    .bind(&month_start)
-    .bind(&login)
     .fetch_one(&pool)
     .await
-    .unwrap_or((0, 0));
-    let commissions = sqlx::query_as::<_, (i64, i64, i64)>(
+    .ok();
+    let commissions = sqlx::query!(
         "SELECT \
-            COALESCE(SUM(commission_cents) FILTER (WHERE status IN ('pending','transferred')), 0)::bigint, \
-            COALESCE(SUM(commission_cents) FILTER (WHERE created_at >= $1 AND status IN ('pending','transferred')), 0)::bigint, \
-            COALESCE(SUM(commission_cents) FILTER (WHERE status = 'pending'), 0)::bigint \
+            COALESCE(SUM(commission_cents) FILTER (WHERE status IN ('pending','transferred')), 0)::bigint AS \"total_cents!\", \
+            COALESCE(SUM(commission_cents) FILTER (WHERE created_at >= $1 AND status IN ('pending','transferred')), 0)::bigint AS \"month_cents!\", \
+            COALESCE(SUM(commission_cents) FILTER (WHERE status = 'pending'), 0)::bigint AS \"pending_cents!\" \
          FROM affiliate_commissions WHERE LOWER(affiliate_twitch_login) = $2",
+        &month_start,
+        &login
     )
-    .bind(&month_start)
-    .bind(&login)
     .fetch_one(&pool)
     .await
-    .unwrap_or((0, 0, 0));
-    let rows = sqlx::query_as::<_, (String, String, i64)>(
+    .ok();
+    let rows = sqlx::query!(
         "SELECT c.claimed_streamer_login, c.claimed_at, \
-                COALESCE(SUM(co.commission_cents), 0)::bigint \
+                COALESCE(SUM(co.commission_cents), 0)::bigint AS \"amount_cents!\" \
          FROM affiliate_streamer_claims c \
          LEFT JOIN affiliate_commissions co \
            ON LOWER(co.affiliate_twitch_login) = LOWER(c.affiliate_twitch_login) \
@@ -96,14 +96,15 @@ pub async fn portal_handler(
          WHERE LOWER(c.affiliate_twitch_login) = $1 \
          GROUP BY c.claimed_streamer_login, c.claimed_at \
          ORDER BY c.claimed_at DESC LIMIT 10",
+        &login
     )
-    .bind(&login)
     .fetch_all(&pool)
     .await
     .unwrap_or_default();
 
     let mut recent = Vec::with_capacity(rows.len());
-    for (customer_login, created_at, amount_cents) in rows {
+    for row in rows {
+        let customer_login = row.claimed_streamer_login;
         let display_name: Option<String> = sqlx::query_scalar(
             "SELECT display_name FROM twitch_streamers \
              WHERE LOWER(twitch_login) = LOWER($1) LIMIT 1",
@@ -121,8 +122,8 @@ pub async fn portal_handler(
         recent.push(json!({
             "customer_display_name": display_name.unwrap_or_else(|| customer_login.clone()),
             "plan_name": plan_name,
-            "amount": amount_cents as f64 / 100.0,
-            "created_at": created_at,
+            "amount": row.amount_cents as f64 / 100.0,
+            "created_at": row.claimed_at,
         }));
     }
 
@@ -139,18 +140,18 @@ pub async fn portal_handler(
 
     Json(json!({
         "affiliate": {
-            "login": account.0,
-            "display_name": account.1,
-            "active": account.2 != 0,
+            "login": account.twitch_login,
+            "display_name": account.display_name,
+            "active": account.is_active != 0,
             "referral_code": ref_code,
             "referral_url": referral_url,
         },
         "stats": {
-            "total_claims": claims.0,
-            "total_provision": commissions.0 as f64 / 100.0,
-            "this_month_claims": claims.1,
-            "this_month_provision": commissions.1 as f64 / 100.0,
-            "pending_payout": commissions.2 as f64 / 100.0,
+            "total_claims": claims.as_ref().map(|row| row.total_claims).unwrap_or(0),
+            "total_provision": commissions.as_ref().map(|row| row.total_cents).unwrap_or(0) as f64 / 100.0,
+            "this_month_claims": claims.as_ref().map(|row| row.month_claims).unwrap_or(0),
+            "this_month_provision": commissions.as_ref().map(|row| row.month_cents).unwrap_or(0) as f64 / 100.0,
+            "pending_payout": commissions.as_ref().map(|row| row.pending_cents).unwrap_or(0) as f64 / 100.0,
         },
         "recent_claims": recent,
     }))
@@ -166,7 +167,11 @@ pub async fn portal_page_handler() -> Response {
         Ok(s) => s,
         Err(_) => {
             // 404, wenn das Affiliate-Portal-Bundle (index.html) nicht gebaut ist.
-            return (StatusCode::NOT_FOUND, "Das Affiliate-Portal ist derzeit nicht verfügbar.").into_response();
+            return (
+                StatusCode::NOT_FOUND,
+                "Das Affiliate-Portal ist derzeit nicht verfügbar.",
+            )
+                .into_response();
         }
     };
     (
@@ -288,7 +293,10 @@ mod tests {
     #[tokio::test]
     async fn portal_page_serviert_html() {
         use std::time::{SystemTime, UNIX_EPOCH};
-        let unique = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_nanos();
+        let unique = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
         let root = std::env::temp_dir().join(format!("tb_affiliate_portal_{unique}"));
         tokio::fs::create_dir_all(&root).await.unwrap();
         tokio::fs::write(root.join("index.html"), b"<html>portal</html>")
