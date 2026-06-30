@@ -1,3 +1,11 @@
+## #308 — Erste Welle: Partner-Abfrage des Clip-Sammlers beim Bauen geprüft
+
+**Ausgangslage:** Mit dem Prüf-Verfahren aus #307 als Fundament geht es jetzt Bereich für Bereich an die eigentliche Umstellung. Den Auftakt macht der kleinste Baustein: die Abfrage, mit der der Highlight-Clip-Sammler die aktiven Partner-Streamer aus der Datenbank holt.
+
+**Änderung:** Diese Abfrage wird ab jetzt schon beim Bauen gegen ein frisch aus dem Bauplan erzeugtes Schema geprüft — inklusive der Feinheit, dass zwei eigentlich als „darf leer sein" geführte Spalten hier bewusst als gefüllt behandelt werden, weil die Abfrage genau das schon sicherstellt. Reine Test-Abfragen, die sich ihr eigenes Wegwerf-Schema bauen, bleiben absichtlich ungeprüft.
+
+**Ergebnis:** Verschwindet oder ändert sich diese Spalte im echten Schema, scheitert künftig der Bau statt erst der Betrieb. An einer nachgestellten Kopie bewiesen: Bauen ohne Datenbank läuft, eine künstlich umbenannte Spalte lässt den Bau sofort scheitern, die echte Abfrage prüft sauber durch. Für den Betrieb ändert sich nichts.
+
 ## #307 — Datenbank-Abfragen werden ab jetzt schon beim Bauen geprüft (Pilot + Fundament)
 
 **Ausgangslage:** Ob eine Abfrage zur Datenbank passt — gibt es die Spalte, stimmt der Typ — stellte sich bisher erst zur Laufzeit heraus. Liefen Bauplan und Datenbank auseinander, fiel ein Fehler im schlimmsten Fall erst im Betrieb auf, als Absturz statt als klare Meldung. Genau diese Klasse von Brüchen hat die letzten Schema-Aufräumungen ausgelöst.

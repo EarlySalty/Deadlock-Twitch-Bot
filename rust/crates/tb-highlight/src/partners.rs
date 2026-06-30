@@ -103,8 +103,8 @@ pub fn load_manual_steamids(path: &Path) -> BTreeMap<String, String> {
 /// `_query_partner_streamers`). `discord_user_id` ist TEXT → wie Pythons `int()`
 /// geparst; nicht-parsebare Zeilen werden verworfen.
 pub async fn query_partner_streamers(pool: &PgPool) -> Vec<(String, i64)> {
-    let rows = sqlx::query_as::<_, (String, String)>(
-        "SELECT twitch_login, discord_user_id \
+    let rows = sqlx::query!(
+        "SELECT twitch_login AS \"twitch_login!\", discord_user_id AS \"discord_user_id!\" \
          FROM twitch_streamers_partner_state \
          WHERE is_partner_active = 1 AND discord_user_id IS NOT NULL \
          ORDER BY twitch_login",
@@ -114,7 +114,9 @@ pub async fn query_partner_streamers(pool: &PgPool) -> Vec<(String, i64)> {
     match rows {
         Ok(rows) => rows
             .into_iter()
-            .filter_map(|(login, discord)| {
+            .filter_map(|r| {
+                let login = r.twitch_login;
+                let discord = r.discord_user_id;
                 discord.trim().parse::<i64>().ok().map(|id| (login, id))
             })
             .collect(),
@@ -298,11 +300,13 @@ mod db_tests {
     async fn make_pool(schema: &str) -> Option<PgPool> {
         let dsn = std::env::var("TB_TEST_DATABASE_URL").ok()?;
         let admin = PgPoolOptions::new().max_connections(1).connect(&dsn).await.unwrap();
+        // dyn: format!-DDL im temporären Test-Schema, technisch kein sqlx-Makro.
         sqlx::query(&format!("DROP SCHEMA IF EXISTS {schema} CASCADE")).execute(&admin).await.unwrap();
         sqlx::query(&format!("CREATE SCHEMA {schema}")).execute(&admin).await.unwrap();
         admin.close().await;
         let opts = PgConnectOptions::from_str(&dsn).unwrap().options([("search_path", schema)]);
         let pool = PgPoolOptions::new().max_connections(2).connect_with(opts).await.unwrap();
+        // dyn: DDL im temporären Test-Schema, kein Migrations-Bezug.
         sqlx::query(
             "CREATE TABLE twitch_streamers_partner_state \
              (twitch_login TEXT, discord_user_id TEXT, is_partner_active INTEGER)",
@@ -323,6 +327,7 @@ mod db_tests {
     #[tokio::test]
     async fn query_partner_streamers_filtert_und_parst() {
         let Some(pool) = make_pool("t9bii_partner_query").await else { return };
+        // dyn: ad-hoc Test-Schema, kein Migrations-Bezug.
         sqlx::query(
             "INSERT INTO twitch_streamers_partner_state VALUES \
              ('nani', '12345', 1), \
@@ -340,6 +345,7 @@ mod db_tests {
     #[tokio::test]
     async fn get_partner_streamers_voller_pfad() {
         let Some(pool) = make_pool("t9bii_partner_full").await else { return };
+        // dyn: ad-hoc Test-Schema, kein Migrations-Bezug.
         sqlx::query(
             "INSERT INTO twitch_streamers_partner_state VALUES \
              ('nani', '12345', 1), ('zoe', '67890', 1)",

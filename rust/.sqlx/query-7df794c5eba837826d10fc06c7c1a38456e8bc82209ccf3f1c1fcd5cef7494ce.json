@@ -1,0 +1,26 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT twitch_login AS \"twitch_login!\", discord_user_id AS \"discord_user_id!\" FROM twitch_streamers_partner_state WHERE is_partner_active = 1 AND discord_user_id IS NOT NULL ORDER BY twitch_login",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "twitch_login!",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 1,
+        "name": "discord_user_id!",
+        "type_info": "Text"
+      }
+    ],
+    "parameters": {
+      "Left": []
+    },
+    "nullable": [
+      true,
+      true
+    ]
+  },
+  "hash": "7df794c5eba837826d10fc06c7c1a38456e8bc82209ccf3f1c1fcd5cef7494ce"
+}
