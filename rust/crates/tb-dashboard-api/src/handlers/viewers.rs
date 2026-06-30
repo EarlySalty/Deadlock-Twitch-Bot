@@ -15,125 +15,7 @@ use serde_json::json;
 use sqlx::{PgPool, Row};
 
 use crate::auth::level::DashboardAuthLevel;
-
-const KNOWN_CHAT_BOTS: &[&str] = &[
-    "botrix",
-    "deutschedeadlockcommunity",
-    "fossabot",
-    "moobot",
-    "nightbot",
-    "pretzelrocks",
-    "soundalerts",
-    "streamlabs",
-    "streamelements",
-    "wizebot",
-];
-
-const DYNAMIC_BOT_LOGIN_ENV_KEYS: &[&str] = &[
-    "TWITCH_BOT_LOGIN",
-    "TWITCH_BOT_NAME",
-    "TWITCH_CHAT_BOT_LOGIN",
-    "TWITCH_RAID_BOT_LOGIN",
-    "TWITCH_VIEWER_EXCLUDED_BOT_LOGINS",
-];
-
-const DYNAMIC_BOT_USER_ID_ENV_KEYS: &[&str] = &[
-    "TWITCH_BOT_USER_ID",
-    "TWITCH_CHAT_BOT_USER_ID",
-    "TWITCH_RAID_BOT_USER_ID",
-];
-
-fn push_normalized_login(logins: &mut Vec<String>, raw: &str) {
-    for part in raw.split(|c: char| c == ',' || c == ';' || c.is_whitespace()) {
-        let login = part.trim().trim_start_matches('@').to_lowercase();
-        if !login.is_empty() && !logins.contains(&login) {
-            logins.push(login);
-        }
-    }
-}
-
-fn dynamic_bot_logins_from_env() -> Vec<String> {
-    let mut logins = Vec::new();
-    for key in DYNAMIC_BOT_LOGIN_ENV_KEYS {
-        if let Ok(value) = std::env::var(key) {
-            push_normalized_login(&mut logins, &value);
-        }
-    }
-    logins
-}
-
-fn dynamic_bot_user_ids_from_env() -> Vec<String> {
-    let mut ids = Vec::new();
-    for key in DYNAMIC_BOT_USER_ID_ENV_KEYS {
-        if let Ok(value) = std::env::var(key) {
-            for part in value.split(|c: char| c == ',' || c == ';' || c.is_whitespace()) {
-                let id = part.trim().to_string();
-                if !id.is_empty() && !ids.contains(&id) {
-                    ids.push(id);
-                }
-            }
-        }
-    }
-    ids
-}
-
-async fn dynamic_bot_logins_from_db(pool: &PgPool) -> Vec<String> {
-    let user_ids = dynamic_bot_user_ids_from_env();
-    if user_ids.is_empty() {
-        return Vec::new();
-    }
-    match sqlx::query_scalar::<_, String>(
-        r#"SELECT DISTINCT LOWER(TRIM(login)) AS login
-           FROM (
-               SELECT twitch_login AS login FROM twitch_streamers WHERE twitch_user_id = ANY($1)
-               UNION
-               SELECT twitch_login AS login FROM twitch_streamer_identities WHERE twitch_user_id = ANY($1)
-               UNION
-               SELECT twitch_login AS login FROM twitch_user_profile WHERE twitch_user_id = ANY($1)
-           ) resolved
-           WHERE TRIM(COALESCE(login, '')) <> ''"#,
-    )
-    .bind(&user_ids)
-    .fetch_all(pool)
-    .await
-    {
-        Ok(rows) => rows,
-        Err(e) => {
-            tracing::debug!(error = %e, "viewer dynamic bot-login DB-Resolve fehlgeschlagen");
-            Vec::new()
-        }
-    }
-}
-
-fn viewer_exclusion_logins_from_dynamic(streamer: &str, dynamic_logins: &[String]) -> Vec<String> {
-    let mut logins: Vec<String> = KNOWN_CHAT_BOTS.iter().map(|s| s.to_string()).collect();
-    for login in dynamic_bot_logins_from_env() {
-        push_normalized_login(&mut logins, &login);
-    }
-    for login in dynamic_logins {
-        push_normalized_login(&mut logins, login);
-    }
-    let own = streamer.to_lowercase();
-    if !own.is_empty() && !logins.contains(&own) {
-        logins.push(own);
-    }
-    logins
-}
-
-/// Viewer-Exklusionsliste: Known-Bots, runtime/config-aufgelöste Bot-Logins und der Streamer selbst.
-///
-/// Port von `api_viewers.py::_collect_viewer_exclusion_logins`, das in den
-/// Exklusions-Set immer den eigenen Streamer-Login legt und dynamische Bot-
-/// Logins aus `_bot_token_manager`, `_twitch_chat_bot` und `_raid_bot` bezieht.
-/// Im Rust-Dashboard gibt es kein Python-`owner`-Objekt; daher werden konfigurierte
-/// Bot-User-IDs gegen die lokalen Twitch-Identitätstabellen aufgelöst und explizite
-/// Login-Konfigwerte nur als Fallback ergänzt.
-///
-/// `streamer` wird klein geschrieben erwartet (Aufrufer normalisieren bereits).
-async fn viewer_exclusion_logins(pool: &PgPool, streamer: &str) -> Vec<String> {
-    let dynamic_logins = dynamic_bot_logins_from_db(pool).await;
-    viewer_exclusion_logins_from_dynamic(streamer, &dynamic_logins)
-}
+use crate::handlers::viewer_exclusion::viewer_exclusion_logins;
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Shared: classify_viewer (identisch zu viewer_timeline.rs)
@@ -167,175 +49,33 @@ fn classify_viewer(
     "casual"
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
-// Shared: build_raw_chat_status
-// (raw_chat_status.py:166 — inlined, vereinfacht, gleiche Felder)
-// ─────────────────────────────────────────────────────────────────────────────
-
-async fn build_raw_chat_status(
+async fn raw_chat_status_since(
     pool: &PgPool,
     streamer: &str,
     since: DateTime<Utc>,
 ) -> serde_json::Value {
-    // Presence-Stats
-    let pres = sqlx::query(
-        r#"SELECT COUNT(*) AS presence_rows,
-                  COUNT(DISTINCT sc.session_id) AS sessions_with_presence
-           FROM twitch_session_chatters sc
-           JOIN twitch_stream_sessions s ON s.id = sc.session_id
-           WHERE LOWER(s.streamer_login) = $1 AND s.started_at >= $2"#,
+    match tb_analytics::raw_chat_status::build_raw_chat_status(
+        pool,
+        streamer,
+        tb_analytics::raw_chat_status::Scope::Since(since),
     )
-    .bind(streamer)
-    .bind(since)
-    .fetch_optional(pool)
     .await
-    .ok()
-    .flatten();
-
-    let presence_rows: i64 = pres
-        .as_ref()
-        .and_then(|r| r.try_get("presence_rows").ok())
-        .unwrap_or(0);
-    let sessions_with_presence: i64 = pres
-        .as_ref()
-        .and_then(|r| r.try_get("sessions_with_presence").ok())
-        .unwrap_or(0);
-
-    // Gap-Start: früheste Session mit Presence aber ohne Raw-Nachrichten
-    let gap_row = sqlx::query(
-        r#"SELECT MIN(s.started_at) AS gap_start
-           FROM twitch_stream_sessions s
-           WHERE LOWER(s.streamer_login) = $1 AND s.started_at >= $2
-             AND EXISTS (SELECT 1 FROM twitch_session_chatters sc WHERE sc.session_id = s.id)
-             AND NOT EXISTS (SELECT 1 FROM twitch_chat_messages m WHERE m.session_id = s.id)"#,
-    )
-    .bind(streamer)
-    .bind(since)
-    .fetch_optional(pool)
-    .await
-    .ok()
-    .flatten();
-    let gap_start: Option<String> = gap_row
-        .as_ref()
-        .and_then(|r| r.try_get::<Option<DateTime<Utc>>, _>("gap_start").ok())
-        .flatten()
-        .map(|t| t.to_rfc3339());
-
-    // Raw-Stats
-    let raw_row = sqlx::query(
-        r#"SELECT COUNT(*) AS raw_rows,
-                  COUNT(DISTINCT m.session_id) AS sessions_with_raw,
-                  MAX(m.message_ts) AS last_message_at
-           FROM twitch_chat_messages m
-           WHERE LOWER(m.streamer_login) = $1 AND m.message_ts >= $2"#,
-    )
-    .bind(streamer)
-    .bind(since)
-    .fetch_optional(pool)
-    .await
-    .ok()
-    .flatten();
-
-    let raw_rows: i64 = raw_row
-        .as_ref()
-        .and_then(|r| r.try_get("raw_rows").ok())
-        .unwrap_or(0);
-    let sessions_with_raw: i64 = raw_row
-        .as_ref()
-        .and_then(|r| r.try_get("sessions_with_raw").ok())
-        .unwrap_or(0);
-    let last_message_at: Option<String> = raw_row
-        .as_ref()
-        .and_then(|r| {
-            r.try_get::<Option<DateTime<Utc>>, _>("last_message_at")
-                .ok()
-        })
-        .flatten()
-        .map(|t| t.to_rfc3339());
-
-    // Ingest-Health (best-effort, Fehler ignorieren)
-    let health = sqlx::query(
-        r#"SELECT last_raw_chat_insert_ok_at, last_raw_chat_insert_error_at, last_raw_chat_error
-           FROM twitch_raw_chat_ingest_health WHERE LOWER(streamer_login) = $1 LIMIT 1"#,
-    )
-    .bind(streamer)
-    .fetch_optional(pool)
-    .await
-    .ok()
-    .flatten();
-
-    let last_insert_ok: Option<String> = health
-        .as_ref()
-        .and_then(|r| {
-            r.try_get::<Option<DateTime<Utc>>, _>("last_raw_chat_insert_ok_at")
-                .ok()
-        })
-        .flatten()
-        .map(|t| t.to_rfc3339());
-    let last_insert_err: Option<String> = health
-        .as_ref()
-        .and_then(|r| {
-            r.try_get::<Option<DateTime<Utc>>, _>("last_raw_chat_insert_error_at")
-                .ok()
-        })
-        .flatten()
-        .map(|t| t.to_rfc3339());
-    let last_error: Option<String> = health
-        .as_ref()
-        .and_then(|r| r.try_get::<Option<String>, _>("last_raw_chat_error").ok())
-        .flatten()
-        .filter(|s| !s.trim().is_empty());
-
-    let suspected_issue = (presence_rows > 0 && raw_rows == 0)
-        || (sessions_with_presence > sessions_with_raw && sessions_with_raw > 0);
-
-    // Backfill-Status
-    let backfill = sqlx::query(
-        r#"SELECT status FROM twitch_raw_chat_backfill_runs
-           WHERE LOWER(streamer_login) = $1
-           ORDER BY COALESCE(finished_at, started_at) DESC LIMIT 1"#,
-    )
-    .bind(streamer)
-    .fetch_optional(pool)
-    .await
-    .ok()
-    .flatten();
-    let backfill_state = backfill
-        .and_then(|r| r.try_get::<Option<String>, _>("status").ok())
-        .flatten()
-        .filter(|s| !s.trim().is_empty())
-        .unwrap_or_else(|| {
-            if suspected_issue {
-                "not_started".into()
-            } else {
-                "not_needed".into()
-            }
-        });
-
-    let note: Option<String> = if suspected_issue && raw_rows == 0 {
-        Some("Presence-/Rollup-Daten vorhanden, aber keine Roh-Chat-Nachrichten im gewählten Zeitraum.".into())
-    } else if suspected_issue {
-        Some("Roh-Chat-Nachrichten sind im gewählten Zeitraum nur teilweise vorhanden; message-basierte KPIs sind unvollständig.".into())
-    } else if raw_rows == 0 {
-        Some("Keine Roh-Chat-Nachrichten im gewählten Zeitraum.".into())
-    } else if last_error.is_some() && last_insert_err.is_some() {
-        last_error
-            .as_ref()
-            .map(|e| format!("Letzter Roh-Chat-Insert-Fehler: {e}"))
-    } else {
-        None
-    };
-
-    json!({
-        "available": raw_rows > 0,
-        "lastMessageAt": last_message_at,
-        "gapStart": gap_start,
-        "suspectedIngestionIssue": suspected_issue,
-        "backfillState": backfill_state,
-        "note": note,
-        "lastInsertOkAt": last_insert_ok,
-        "lastInsertErrorAt": last_insert_err,
-    })
+    {
+        Ok(status) => status,
+        Err(error) => {
+            tracing::debug!(%error, streamer, "rawChatStatus build failed");
+            json!({
+                "available": false,
+                "lastMessageAt": null,
+                "gapStart": null,
+                "suspectedIngestionIssue": false,
+                "backfillState": "not_needed",
+                "note": null,
+                "lastInsertOkAt": null,
+                "lastInsertErrorAt": null,
+            })
+        }
+    }
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -562,7 +302,7 @@ pub async fn viewer_directory_handler(
     let now = Utc::now();
 
     if viewer_rows.is_empty() {
-        let raw_status = build_raw_chat_status(&pool, &streamer, since).await;
+        let raw_status = raw_chat_status_since(&pool, &streamer, since).await;
         return Json(json!({
             "viewers": [],
             "total": 0,
@@ -644,7 +384,7 @@ pub async fn viewer_directory_handler(
     }
 
     // 5. Raw-Chat-Status
-    let raw_status = build_raw_chat_status(&pool, &streamer, since).await;
+    let raw_status = raw_chat_status_since(&pool, &streamer, since).await;
 
     // 6. Viewer aufbauen + summieren
     let mut viewers: Vec<serde_json::Value> = Vec::new();
@@ -1065,7 +805,7 @@ pub async fn viewer_detail_handler(
         "insufficient_data"
     };
 
-    let raw_status = build_raw_chat_status(&pool, &streamer, since).await;
+    let raw_status = raw_chat_status_since(&pool, &streamer, since).await;
     let avg_msg = if total_sessions > 0 {
         (total_messages as f64 / total_sessions as f64 * 10.0).round() / 10.0
     } else {
@@ -1599,6 +1339,9 @@ pub async fn viewer_segments_handler(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::handlers::viewer_exclusion::{
+        push_normalized_login, viewer_exclusion_logins_from_dynamic,
+    };
     use sqlx::postgres::PgPoolOptions;
 
     // ── Reine Logik: Self- + Bot-Exklusionsliste ────────────────────────────
@@ -1974,5 +1717,15 @@ mod tests {
             cc["avgOtherChannels"], 0.0,
             "avgOtherChannels muss 0 sein (Home-Kanal zählt nicht als 'anderer')"
         );
+    }
+
+    #[tokio::test]
+    async fn raw_chat_status_fehler_liefert_default_status() {
+        let dsn = db_dsn_or_skip!();
+        let pool = make_plan_pool(&dsn, "viewers_raw_status_default").await;
+        let status = raw_chat_status_since(&pool, "host", Utc::now()).await;
+        assert_eq!(status["available"], false);
+        assert_eq!(status["suspectedIngestionIssue"], false);
+        assert_eq!(status["backfillState"], "not_needed");
     }
 }

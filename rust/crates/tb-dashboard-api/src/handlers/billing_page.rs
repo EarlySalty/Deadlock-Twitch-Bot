@@ -33,7 +33,7 @@
 use std::sync::Arc;
 
 use axum::{
-    extract::{Extension, Query, State},
+    extract::{Extension, Query, RawForm, State},
     http::StatusCode,
     response::{IntoResponse, Redirect, Response},
     Json,
@@ -174,6 +174,7 @@ pub struct CheckoutQuery {
 pub async fn checkout_start_handler(
     auth: DashboardAuthLevel,
     config: Option<Extension<BillingPageConfig>>,
+    State(pool): State<PgPool>,
     Query(params): Query<CheckoutQuery>,
 ) -> Response {
     // Auth-Gate: nur eingeloggter Partner/Admin/Localhost.
@@ -256,6 +257,17 @@ pub async fn checkout_start_handler(
         session_payload["subscription_data"] = sub_data;
     }
 
+    let (profile, _) =
+        crate::handlers::billing_profile::resolve_profile(&pool, &auth, Some(&config), None).await;
+    if let Some(email) = profile
+        .get("recipient_email")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|email| !email.is_empty())
+    {
+        session_payload["customer_email"] = json!(email);
+    }
+
     match config
         .client
         .create_checkout_session(&session_payload, None)
@@ -322,6 +334,57 @@ pub async fn cancel_handler(
     }
 
     cancel_execute(auth, config, State(pool)).await
+}
+
+pub async fn promo_message_handler(
+    auth: DashboardAuthLevel,
+    auth_state: Option<Extension<crate::auth::session::DashboardAuthState>>,
+    State(pool): State<PgPool>,
+    headers: axum::http::HeaderMap,
+    RawForm(body): RawForm,
+) -> Response {
+    let DashboardAuthLevel::Partner {
+        twitch_login,
+        twitch_user_id,
+        ..
+    } = &auth
+    else {
+        return Redirect::to("/twitch/abbo").into_response();
+    };
+    let login = twitch_login.trim().to_lowercase();
+    let user_id = twitch_user_id.trim().to_string();
+    if login.is_empty() || user_id.is_empty() {
+        return Redirect::to("/twitch/abbo").into_response();
+    }
+
+    let form = parse_form(&body);
+    if !verify_cancel_csrf(auth_state.as_ref(), &headers, &form).await {
+        return (
+            StatusCode::FORBIDDEN,
+            Json(json!({ "error": "csrf_token_invalid" })),
+        )
+            .into_response();
+    }
+
+    let promo_message = form_get(&form, "promo_message").trim().to_string();
+    let issues = tb_analytics::promo_mode::validate_streamer_promo_message(&promo_message);
+    if let Some(issue) = issues.first() {
+        let code = issue
+            .code
+            .as_deref()
+            .map(str::trim)
+            .filter(|code| !code.is_empty())
+            .unwrap_or("invalid_placeholder");
+        return Redirect::to(&format!("/twitch/abbo?promo_error={code}")).into_response();
+    }
+
+    match upsert_streamer_promo_message(&pool, &login, &user_id, &promo_message).await {
+        Ok(()) => Redirect::to("/twitch/abbo?promo_saved=1").into_response(),
+        Err(error) => {
+            tracing::error!(%error, login, "promo_message update failed");
+            Redirect::to("/twitch/abbo?promo_error=db").into_response()
+        }
+    }
 }
 
 /// Kündigungs-Ausführung via Stripe-Customer-Portal, Fallback `cancel_at_period_end`.
@@ -393,7 +456,13 @@ pub async fn cancel_execute(
         .cancel_subscription_at_period_end(&record.stripe_subscription_id)
         .await
     {
-        Ok(_) => Redirect::to("/twitch/pricing?cancel=scheduled").into_response(),
+        Ok(subscription) => {
+            if let Err(error) = persist_cancelled_subscription(&pool, &subscription).await {
+                tracing::error!(%error, "billing cancel fallback state persist failed");
+                return Redirect::to("/twitch/pricing?cancel=error").into_response();
+            }
+            Redirect::to("/twitch/pricing?cancel=scheduled").into_response()
+        }
         Err(error) => {
             tracing::error!(%error, "billing cancel fallback failed");
             Redirect::to("/twitch/pricing?cancel=error").into_response()
@@ -877,6 +946,33 @@ fn pricing_unavailable(reason: &str) -> Response {
     .into_response()
 }
 
+async fn upsert_streamer_promo_message(
+    pool: &PgPool,
+    login: &str,
+    user_id: &str,
+    promo_message: &str,
+) -> Result<(), sqlx::Error> {
+    let message = promo_message.trim();
+    let value: Option<String> = if message.is_empty() {
+        None
+    } else {
+        Some(message.to_string())
+    };
+    sqlx::query(
+        "INSERT INTO streamer_plans (twitch_user_id, twitch_login, promo_message) \
+         VALUES ($1, $2, $3) \
+         ON CONFLICT (twitch_user_id) DO UPDATE SET \
+             promo_message = EXCLUDED.promo_message, \
+             twitch_login = COALESCE(streamer_plans.twitch_login, EXCLUDED.twitch_login)",
+    )
+    .bind(user_id)
+    .bind(login)
+    .bind(value)
+    .execute(pool)
+    .await?;
+    Ok(())
+}
+
 /// Aktiver Stripe-Customer-/Subscription-Record des Nutzers.
 #[derive(Debug, Default, Clone, sqlx::FromRow)]
 struct CustomerRecord {
@@ -923,6 +1019,33 @@ async fn active_customer_record(
     .await?;
 
     Ok(row)
+}
+
+async fn persist_cancelled_subscription(
+    pool: &PgPool,
+    subscription: &Value,
+) -> Result<(), sqlx::Error> {
+    let subscription_id = subscription
+        .get("id")
+        .and_then(Value::as_str)
+        .unwrap_or("")
+        .trim();
+    if subscription_id.is_empty() {
+        return Ok(());
+    }
+
+    let mut tx = pool.begin().await?;
+    let event_id = format!("dashboard_cancel_fallback:{subscription_id}");
+    tb_analytics::stripe::webhook_apply::apply_event(
+        &mut tx,
+        &event_id,
+        "customer.subscription.updated",
+        subscription,
+        None,
+    )
+    .await?;
+    tx.commit().await?;
+    Ok(())
 }
 
 #[cfg(test)]
@@ -1193,12 +1316,19 @@ mod tests {
         }
     }
 
+    fn lazy_pool() -> PgPool {
+        PgPoolOptions::new()
+            .connect_lazy("postgres://postgres@127.0.0.1:1/unused")
+            .unwrap()
+    }
+
     /// Unauth → Login-Redirect, KEIN Stripe-Call.
     #[tokio::test]
     async fn checkout_unauthenticated_redirects_to_login() {
         let resp = checkout_start_handler(
             DashboardAuthLevel::None,
             None,
+            State(lazy_pool()),
             Query(CheckoutQuery {
                 plan_id: Some("raid_boost".into()),
                 cycle: Some("1".into()),
@@ -1215,6 +1345,17 @@ mod tests {
     /// erstellt UND auf die hosted URL redirected (302).
     #[tokio::test]
     async fn checkout_creates_session_and_redirects_to_hosted_url() {
+        let Some(pool) = pool_or_skip("bp_checkout_session").await else {
+            return;
+        };
+        sqlx::query(
+            "INSERT INTO twitch_billing_profiles \
+             (customer_reference, recipient_name, recipient_email, country_code, updated_at) \
+             VALUES ('streamerlogin', 'Streamer Login', 'billing@example.test', 'DE', 'now')",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
         let server = MockServer::start().await;
         Mock::given(method("POST"))
             .and(path("/v1/checkout/sessions"))
@@ -1222,6 +1363,8 @@ mod tests {
             .and(body_string_contains("subscription"))
             // P2.103: AGB/§356-custom_text wird mitgesendet.
             .and(body_string_contains("terms_of_service_acceptance"))
+            .and(body_string_contains("customer_email"))
+            .and(body_string_contains("billing%40example.test"))
             .respond_with(ResponseTemplate::new(200).set_body_json(json!({
                 "id": "cs_test_abc",
                 "url": "https://checkout.stripe.com/c/pay/cs_test_abc",
@@ -1232,6 +1375,7 @@ mod tests {
         let resp = checkout_start_handler(
             partner("streamerlogin", "42"),
             Some(Extension(cfg_with_base(&server.uri()))),
+            State(pool),
             Query(CheckoutQuery {
                 plan_id: Some("raid_boost".into()),
                 cycle: Some("1".into()),
@@ -1251,6 +1395,7 @@ mod tests {
         let resp = checkout_start_handler(
             partner("login", "1"),
             Some(Extension(cfg_with_base("http://unused.invalid"))),
+            State(lazy_pool()),
             Query(CheckoutQuery {
                 plan_id: Some("raid_free".into()),
                 cycle: Some("1".into()),
@@ -1269,6 +1414,7 @@ mod tests {
         let resp = checkout_start_handler(
             partner("login", "1"),
             None,
+            State(lazy_pool()),
             Query(CheckoutQuery {
                 plan_id: Some("raid_boost".into()),
                 cycle: Some("1".into()),
@@ -1287,6 +1433,9 @@ mod tests {
     /// Stripe-API-Fehler beim Erstellen → Redirect mit reason=checkout_create_failed.
     #[tokio::test]
     async fn checkout_stripe_error_redirects_with_reason() {
+        let Some(pool) = pool_or_skip("bp_checkout_stripe_error").await else {
+            return;
+        };
         let server = MockServer::start().await;
         Mock::given(method("POST"))
             .and(path("/v1/checkout/sessions"))
@@ -1298,6 +1447,7 @@ mod tests {
         let resp = checkout_start_handler(
             partner("login", "1"),
             Some(Extension(cfg_with_base(&server.uri()))),
+            State(pool),
             Query(CheckoutQuery {
                 plan_id: Some("raid_boost".into()),
                 cycle: Some("1".into()),
@@ -1351,7 +1501,7 @@ mod tests {
                    twitch_user_id TEXT PRIMARY KEY, twitch_login TEXT,
                    plan_name TEXT NOT NULL DEFAULT 'free', expires_at TEXT,
                    manual_plan_id TEXT, manual_plan_expires_at TEXT, manual_plan_updated_at TEXT,
-                   trial_ever_granted INTEGER DEFAULT 0, first_login_at TEXT
+                   trial_ever_granted INTEGER DEFAULT 0, first_login_at TEXT, promo_message TEXT
                )"#,
         )
         .execute(&pool)
@@ -1368,6 +1518,18 @@ mod tests {
                    updated_at TEXT NOT NULL DEFAULT ''
                )"#,
         ).execute(&pool).await.unwrap();
+        sqlx::query(
+            r#"CREATE TABLE dashboard_sessions (
+                   session_id TEXT PRIMARY KEY,
+                   session_type TEXT NOT NULL,
+                   payload_enc BYTEA NOT NULL,
+                   created_at DOUBLE PRECISION NOT NULL,
+                   expires_at DOUBLE PRECISION NOT NULL
+               )"#,
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
         Some(pool)
     }
 
@@ -1424,6 +1586,13 @@ mod tests {
         assert_eq!(resp.status(), StatusCode::SEE_OTHER);
         let loc = resp.headers().get("location").unwrap().to_str().unwrap();
         assert_eq!(loc, "/twitch/pricing?cancel=scheduled");
+        let cancel_flag: i32 = sqlx::query_scalar(
+            "SELECT cancel_at_period_end FROM twitch_billing_subscriptions WHERE stripe_subscription_id = 'sub_x'",
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert_eq!(cancel_flag, 1);
     }
 
     /// Cancel mit Customer-ID → Portal-Session, Redirect zur hosted Portal-URL.
@@ -1459,6 +1628,55 @@ mod tests {
         assert_eq!(resp.status(), StatusCode::SEE_OTHER);
         let loc = resp.headers().get("location").unwrap().to_str().unwrap();
         assert_eq!(loc, "https://billing.stripe.com/p/session/bps_1");
+    }
+
+    #[tokio::test]
+    async fn promo_message_post_updates_db() {
+        let Some(pool) = pool_or_skip("bp_promo_message").await else {
+            return;
+        };
+        let auth_state = crate::auth::session::DashboardAuthState::new(
+            pool.clone(),
+            "dGVzdGtleTEyMzQ1Njc4OTAxMjM0NTY3ODkwMTIzNDU=".to_string(),
+        );
+        let created = auth_state
+            .create_partner_session("nani", "42", "Nani")
+            .await
+            .unwrap();
+        let mut headers = axum::http::HeaderMap::new();
+        headers.insert(
+            axum::http::header::COOKIE,
+            axum::http::HeaderValue::from_str(&format!(
+                "{}={}",
+                crate::auth::session::PARTNER_COOKIE_NAME,
+                created.session_id
+            ))
+            .unwrap(),
+        );
+        let mut serializer = url::form_urlencoded::Serializer::new(String::new());
+        serializer
+            .append_pair("csrf_token", &created.csrf_token)
+            .append_pair("promo_message", "Join {invite}");
+        let body = serializer.finish();
+
+        let resp = promo_message_handler(
+            partner("nani", "42"),
+            Some(Extension(auth_state)),
+            State(pool.clone()),
+            headers,
+            RawForm(axum::body::Bytes::from(body)),
+        )
+        .await;
+        assert_eq!(resp.status(), StatusCode::SEE_OTHER);
+        let loc = resp.headers().get("location").unwrap().to_str().unwrap();
+        assert_eq!(loc, "/twitch/abbo?promo_saved=1");
+        let stored: Option<String> = sqlx::query_scalar(
+            "SELECT promo_message FROM streamer_plans WHERE twitch_user_id = '42'",
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert_eq!(stored.as_deref(), Some("Join {invite}"));
     }
 
     /// Katalog: eingeloggt → 200 mit Plan-Status (KEIN 502/Proxy). Aktueller Plan

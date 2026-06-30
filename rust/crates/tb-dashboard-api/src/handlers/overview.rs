@@ -595,7 +595,7 @@ pub async fn overview_handler(
     );
 
     Ok(Json(OverviewResponse::Data(OverviewData {
-        streamer: params.streamer,
+        streamer: login.clone(),
         days,
         window: window.as_str(),
         window_limited: window == WindowMode::LastStream,
@@ -893,6 +893,45 @@ mod tests {
         assert_eq!(v["correlations"]["durationVsViewers"], 0.0);
         assert_eq!(v["correlations"]["chatVsRetention"], 0.0);
         assert_eq!(v["dataQuality"]["botFilterApplied"], true);
+    }
+
+    #[tokio::test]
+    async fn partner_response_streamer_ist_effektiver_login() {
+        let dsn = db_dsn_or_skip!();
+        let pool = make_pool(&dsn, "test_handler_overview_partner_streamer").await;
+        sqlx::query(
+            r#"
+            INSERT INTO twitch_stream_sessions
+                (id, streamer_login, started_at, ended_at, avg_viewers, peak_viewers,
+                 duration_seconds, follower_delta, followers_start, followers_end, retention_10m)
+            VALUES
+                (2, 'owner_login', NOW() - INTERVAL '1 day', NOW() - INTERVAL '23 hours',
+                 10.0, 20, 3600, 1, 100, 101, 0.5)
+            "#,
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+
+        let res = overview_handler(
+            DashboardAuthLevel::Partner {
+                twitch_login: "Owner_Login".into(),
+                twitch_user_id: "42".into(),
+                display_name: "Owner".into(),
+            },
+            State(pool),
+            Query(OverviewParams {
+                streamer: Some("other_login".into()),
+                days: 30,
+            }),
+        )
+        .await
+        .unwrap()
+        .into_response();
+        assert_eq!(res.status(), StatusCode::OK);
+        let b = axum::body::to_bytes(res.into_body(), 16384).await.unwrap();
+        let v: serde_json::Value = serde_json::from_slice(&b).unwrap();
+        assert_eq!(v["streamer"], "owner_login");
     }
 
     #[test]

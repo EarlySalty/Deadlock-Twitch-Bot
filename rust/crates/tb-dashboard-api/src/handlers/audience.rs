@@ -602,13 +602,17 @@ async fn backfill_last_seen(pool: &PgPool, session_ids: &[i64], bots: &[String])
     }
 }
 
-async fn calc_watch_distribution(pool: &PgPool, session_ids: &[i64], bots: &[String]) -> WatchDist {
+async fn calc_watch_distribution(
+    pool: &PgPool,
+    session_ids: &[i64],
+    bots: &[String],
+) -> Result<WatchDist, sqlx::Error> {
     let empty = WatchDist {
         avg: 0.0,
         method: "no_data",
     };
     if session_ids.is_empty() {
-        return empty;
+        return Ok(empty);
     }
 
     let base_sql = r#"
@@ -616,16 +620,15 @@ async fn calc_watch_distribution(pool: &PgPool, session_ids: &[i64], bots: &[Str
         FROM twitch_session_chatters
         WHERE session_id = ANY($1::bigint[])
           AND COALESCE(NULLIF(chatter_login, ''), chatter_id) IS NOT NULL
-          AND NOT (chatter_login = ANY($2::text[]))
+          AND (chatter_login IS NULL OR chatter_login = ''
+               OR LOWER(chatter_login) <> ALL($2::text[]))
     "#;
     let viewer_base_count: i64 = sqlx::query(base_sql)
         .bind(session_ids)
         .bind(bots)
         .fetch_optional(pool)
-        .await
-        .ok()
-        .flatten()
-        .and_then(|r| r.try_get("viewer_base_count").ok())
+        .await?
+        .map(|r| r.try_get("viewer_base_count").unwrap_or(0))
         .unwrap_or(0);
 
     let watch_sql = r#"
@@ -638,17 +641,14 @@ async fn calc_watch_distribution(pool: &PgPool, session_ids: &[i64], bots: &[Str
         WHERE session_id = ANY($1::bigint[])
           AND first_message_at IS NOT NULL
           AND last_seen_at IS NOT NULL
-          AND NOT (chatter_login = ANY($2::text[]))
+          AND (chatter_login IS NULL OR chatter_login = ''
+               OR LOWER(chatter_login) <> ALL($2::text[]))
     "#;
-    let watch_rows = match sqlx::query(watch_sql)
+    let watch_rows = sqlx::query(watch_sql)
         .bind(session_ids)
         .bind(bots)
         .fetch_all(pool)
-        .await
-    {
-        Ok(r) => r,
-        Err(_) => return empty,
-    };
+        .await?;
 
     let real_minutes: Vec<f64> = watch_rows
         .iter()
@@ -672,16 +672,16 @@ async fn calc_watch_distribution(pool: &PgPool, session_ids: &[i64], bots: &[Str
     };
 
     if method != "real_samples" {
-        return WatchDist { avg: 0.0, method };
+        return Ok(WatchDist { avg: 0.0, method });
     }
 
     let total = real_minutes.len() as f64;
     let avg = ((real_minutes.iter().sum::<f64>() / total) * 10.0).round() / 10.0;
 
-    WatchDist {
+    Ok(WatchDist {
         avg,
         method: "real_samples",
-    }
+    })
 }
 
 /// Anteil der Viewer dieser Periode, die bereits vorher bekannt waren (aus twitch_chatter_rollup).
@@ -692,7 +692,7 @@ async fn true_return_rate(
     period_end: Option<DateTime<Utc>>,
     streamer: &str,
     bots: &[String],
-) -> (f64, i64) {
+) -> Result<(f64, i64), sqlx::Error> {
     // $1=period_start (used twice: WHERE started_at >= $1 AND cr.first_seen_at < $1)
     let sql_no_end = r#"
         WITH period_viewers AS (
@@ -705,7 +705,8 @@ async fn true_return_rate(
               AND LOWER(s.streamer_login) = $2
               AND s.ended_at IS NOT NULL
               AND COALESCE(NULLIF(sc.chatter_login, ''), sc.chatter_id) IS NOT NULL
-              AND NOT (sc.chatter_login = ANY($3::text[]))
+              AND (sc.chatter_login IS NULL OR sc.chatter_login = ''
+                   OR LOWER(sc.chatter_login) <> ALL($3::text[]))
         )
         SELECT
             COUNT(DISTINCT pv.viewer_key) AS total_viewers,
@@ -714,7 +715,8 @@ async fn true_return_rate(
         LEFT JOIN twitch_chatter_rollup cr
             ON cr.chatter_login = pv.chatter_login
            AND LOWER(cr.streamer_login) = $2
-           AND NOT (cr.chatter_login = ANY($3::text[]))
+           AND (cr.chatter_login IS NULL OR cr.chatter_login = ''
+                OR LOWER(cr.chatter_login) <> ALL($3::text[]))
            AND cr.first_seen_at < $1
     "#;
     let sql_with_end = r#"
@@ -729,7 +731,8 @@ async fn true_return_rate(
               AND LOWER(s.streamer_login) = $3
               AND s.ended_at IS NOT NULL
               AND COALESCE(NULLIF(sc.chatter_login, ''), sc.chatter_id) IS NOT NULL
-              AND NOT (sc.chatter_login = ANY($4::text[]))
+              AND (sc.chatter_login IS NULL OR sc.chatter_login = ''
+                   OR LOWER(sc.chatter_login) <> ALL($4::text[]))
         )
         SELECT
             COUNT(DISTINCT pv.viewer_key) AS total_viewers,
@@ -738,7 +741,8 @@ async fn true_return_rate(
         LEFT JOIN twitch_chatter_rollup cr
             ON cr.chatter_login = pv.chatter_login
            AND LOWER(cr.streamer_login) = $3
-           AND NOT (cr.chatter_login = ANY($4::text[]))
+           AND (cr.chatter_login IS NULL OR cr.chatter_login = ''
+                OR LOWER(cr.chatter_login) <> ALL($4::text[]))
            AND cr.first_seen_at < $1
     "#;
 
@@ -759,8 +763,8 @@ async fn true_return_rate(
             .await
     };
 
-    match result {
-        Ok(Some(r)) => {
+    match result? {
+        Some(r) => {
             let total: i64 = r.try_get("total_viewers").unwrap_or(0);
             let returning: i64 = r.try_get("returning_viewers").unwrap_or(0);
             let rate = if total > 0 {
@@ -768,10 +772,32 @@ async fn true_return_rate(
             } else {
                 0.0
             };
-            (rate, total)
+            Ok((rate, total))
         }
-        _ => (0.0, 0),
+        None => Ok((0.0, 0)),
     }
+}
+
+async fn load_session_ids(
+    pool: &PgPool,
+    start: DateTime<Utc>,
+    end: DateTime<Utc>,
+    streamer: &str,
+) -> Result<Vec<i64>, sqlx::Error> {
+    let rows = sqlx::query(
+        r#"
+        SELECT id FROM twitch_stream_sessions
+        WHERE started_at >= $1 AND started_at < $2
+          AND LOWER(streamer_login) = $3
+          AND ended_at IS NOT NULL
+    "#,
+    )
+    .bind(start)
+    .bind(end)
+    .bind(streamer)
+    .fetch_all(pool)
+    .await?;
+    rows.iter().map(|r| r.try_get("id")).collect()
 }
 
 #[derive(Deserialize)]
@@ -812,32 +838,20 @@ pub async fn audience_insights_handler(
     let prev_since = now - chrono::Duration::days(days * 2);
     let bots: Vec<String> = KNOWN_CHAT_BOTS.iter().map(|s| s.to_string()).collect();
 
-    let sessions_sql = r#"
-        SELECT id FROM twitch_stream_sessions
-        WHERE started_at >= $1 AND started_at < $2
-          AND LOWER(streamer_login) = $3
-          AND ended_at IS NOT NULL
-    "#;
-    let current_ids: Vec<i64> = sqlx::query(sessions_sql)
-        .bind(since)
-        .bind(now)
-        .bind(&streamer)
-        .fetch_all(&pool)
-        .await
-        .unwrap_or_default()
-        .iter()
-        .filter_map(|r| r.try_get("id").ok())
-        .collect();
-    let prev_ids: Vec<i64> = sqlx::query(sessions_sql)
-        .bind(prev_since)
-        .bind(since)
-        .bind(&streamer)
-        .fetch_all(&pool)
-        .await
-        .unwrap_or_default()
-        .iter()
-        .filter_map(|r| r.try_get("id").ok())
-        .collect();
+    let current_ids = match load_session_ids(&pool, since, now, &streamer).await {
+        Ok(ids) => ids,
+        Err(error) => {
+            tracing::error!(%error, "audience-insights current session lookup failed");
+            return crate::auth::analytics_request_failed_json().into_response();
+        }
+    };
+    let prev_ids = match load_session_ids(&pool, prev_since, since, &streamer).await {
+        Ok(ids) => ids,
+        Err(error) => {
+            tracing::error!(%error, "audience-insights previous session lookup failed");
+            return crate::auth::analytics_request_failed_json().into_response();
+        }
+    };
 
     // P2.94: last_seen_at aus Chat-Nachrichten backfillen, BEVOR die Watch-Time
     // berechnet wird (Python api_audience.py:916 ruft _backfill_last_seen_from_messages
@@ -846,11 +860,37 @@ pub async fn audience_insights_handler(
     backfill_ids.extend_from_slice(&prev_ids);
     backfill_last_seen(&pool, &backfill_ids, &bots).await;
 
-    let current_watch = calc_watch_distribution(&pool, &current_ids, &bots).await;
-    let previous_watch = calc_watch_distribution(&pool, &prev_ids, &bots).await;
+    let current_watch = match calc_watch_distribution(&pool, &current_ids, &bots).await {
+        Ok(dist) => dist,
+        Err(error) => {
+            tracing::error!(%error, "audience-insights current watch distribution failed");
+            return crate::auth::analytics_request_failed_json().into_response();
+        }
+    };
+    let previous_watch = match calc_watch_distribution(&pool, &prev_ids, &bots).await {
+        Ok(dist) => dist,
+        Err(error) => {
+            tracing::error!(%error, "audience-insights previous watch distribution failed");
+            return crate::auth::analytics_request_failed_json().into_response();
+        }
+    };
 
-    let (curr_rate, curr_total) = true_return_rate(&pool, since, None, &streamer, &bots).await;
-    let (prev_rate, _) = true_return_rate(&pool, prev_since, Some(since), &streamer, &bots).await;
+    let (curr_rate, curr_total) = match true_return_rate(&pool, since, None, &streamer, &bots).await
+    {
+        Ok(rate) => rate,
+        Err(error) => {
+            tracing::error!(%error, "audience-insights current return rate failed");
+            return crate::auth::analytics_request_failed_json().into_response();
+        }
+    };
+    let (prev_rate, _) =
+        match true_return_rate(&pool, prev_since, Some(since), &streamer, &bots).await {
+            Ok(rate) => rate,
+            Err(error) => {
+                tracing::error!(%error, "audience-insights previous return rate failed");
+                return crate::auth::analytics_request_failed_json().into_response();
+            }
+        };
 
     let calc_trend = |curr: f64, prev: f64| -> f64 {
         if prev == 0.0 {
@@ -1006,6 +1046,55 @@ mod tests {
         Some(pool)
     }
 
+    async fn make_pool_insights(schema: &str) -> Option<PgPool> {
+        let dsn = std::env::var("TB_TEST_DATABASE_URL").ok()?;
+        let admin = PgPoolOptions::new()
+            .max_connections(1)
+            .connect(&dsn)
+            .await
+            .unwrap();
+        sqlx::query(&format!("DROP SCHEMA IF EXISTS {schema} CASCADE"))
+            .execute(&admin)
+            .await
+            .unwrap();
+        sqlx::query(&format!("CREATE SCHEMA {schema}"))
+            .execute(&admin)
+            .await
+            .unwrap();
+        admin.close().await;
+        let opts = PgConnectOptions::from_str(&dsn)
+            .unwrap()
+            .options([("search_path", schema)]);
+        let pool = PgPoolOptions::new()
+            .max_connections(2)
+            .connect_with(opts)
+            .await
+            .unwrap();
+        sqlx::query(
+            "CREATE TABLE twitch_stream_sessions (\
+                 id BIGINT PRIMARY KEY, streamer_login TEXT, started_at TIMESTAMPTZ, ended_at TIMESTAMPTZ)",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+        sqlx::query(
+            "CREATE TABLE twitch_session_chatters (\
+                 session_id BIGINT, streamer_login TEXT, chatter_id TEXT, chatter_login TEXT, \
+                 first_message_at TIMESTAMPTZ, last_seen_at TIMESTAMPTZ)",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+        sqlx::query(
+            "CREATE TABLE twitch_chatter_rollup (\
+                 streamer_login TEXT, chatter_login TEXT, first_seen_at TIMESTAMPTZ)",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+        Some(pool)
+    }
+
     // P2.94: backfill_last_seen schreibt last_seen_at aus dem letzten
     // Chat-Zeitstempel, sodass calc_watch_distribution die Zeile zählt.
     #[tokio::test]
@@ -1046,7 +1135,7 @@ mod tests {
             "last_seen_at muss nach Backfill gesetzt sein"
         );
         // Watch-Distribution sieht die Zeile jetzt (vorher gefiltert via IS NOT NULL).
-        let dist = calc_watch_distribution(&pool, &[7], &bots).await;
+        let dist = calc_watch_distribution(&pool, &[7], &bots).await.unwrap();
         // method bleibt low_coverage (1 Sample), aber die Zeile wird erfasst —
         // der entscheidende Punkt: no_data wäre es ohne Backfill nicht zwingend,
         // hier prüfen wir, dass die Backfill-Zeile überhaupt ein Sample liefert.
@@ -1054,6 +1143,69 @@ mod tests {
             dist.method, "no_data",
             "Backfill-Zeile muss als Sample zählen"
         );
+    }
+
+    #[tokio::test]
+    async fn true_return_rate_filtert_bots_case_insensitiv_und_behaelt_anonyme() {
+        let Some(pool) = make_pool_insights("t_aud_return_filters").await else {
+            return;
+        };
+        let since = Utc::now() - chrono::Duration::days(2);
+        let started = since + chrono::Duration::hours(2);
+        let ended = started + chrono::Duration::hours(1);
+        sqlx::query(
+            "INSERT INTO twitch_stream_sessions (id, streamer_login, started_at, ended_at) \
+             VALUES (1, 'nani', $1, $2)",
+        )
+        .bind(started)
+        .bind(ended)
+        .execute(&pool)
+        .await
+        .unwrap();
+        sqlx::query(
+            "INSERT INTO twitch_session_chatters (session_id, streamer_login, chatter_id, chatter_login) \
+             VALUES (1, 'nani', 'u1', 'viewer1'), \
+                    (1, 'nani', 'bot1', 'Nightbot'), \
+                    (1, 'nani', 'anon1', '')",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+        sqlx::query(
+            "INSERT INTO twitch_chatter_rollup (streamer_login, chatter_login, first_seen_at) \
+             VALUES ('nani', 'viewer1', $1), ('nani', 'nightbot', $1)",
+        )
+        .bind(since - chrono::Duration::days(10))
+        .execute(&pool)
+        .await
+        .unwrap();
+
+        let bots: Vec<String> = KNOWN_CHAT_BOTS.iter().map(|s| s.to_string()).collect();
+        let (rate, total) = true_return_rate(&pool, since, None, "nani", &bots)
+            .await
+            .unwrap();
+        assert_eq!(total, 2);
+        assert_eq!(rate, 50.0);
+    }
+
+    #[tokio::test]
+    async fn audience_insights_db_fehler_wird_500() {
+        let Some(pool) = make_pool("t_aud_insights_db_error").await else {
+            return;
+        };
+        let resp = audience_insights_handler(
+            DashboardAuthLevel::admin(),
+            State(pool),
+            Query(InsightsQuery {
+                streamer: Some("nani".into()),
+                days: Some(30),
+            }),
+        )
+        .await
+        .into_response();
+        assert_eq!(resp.status(), StatusCode::INTERNAL_SERVER_ERROR);
+        let body = body_json(resp).await;
+        assert_eq!(body["code"], "analytics_request_failed");
     }
 
     // P2.68: mixed-case Bot-Login (Nightbot) muss case-insensitiv aus der

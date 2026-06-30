@@ -416,6 +416,10 @@ pub fn build_authed_router(pool: PgPool, token: String, rate_limiter: RateLimite
             "/twitch/api/v2/affiliate/portal",
             get(affiliate_portal::portal_handler),
         )
+        .route(
+            "/twitch/api/affiliate/commissions",
+            get(affiliate_portal::commissions_handler),
+        )
         .route("/twitch/api/v2/overview", get(overview::overview_handler))
         // Post-Stream-A/B-Report (B11): liest twitch_stream_ai_reports für die
         // Dashboard-Anzeige (Partner → eigener Login, Admin/Localhost → frei).
@@ -1095,6 +1099,10 @@ pub fn build_billing_page_router(pool: PgPool) -> Router {
         .route(
             "/twitch/abbo/rechnungsdaten",
             post(handlers::billing_profile::profile_save_handler),
+        )
+        .route(
+            "/twitch/abbo/promo-message",
+            post(billing_page::promo_message_handler),
         )
         .route(
             "/twitch/api/billing/catalog",

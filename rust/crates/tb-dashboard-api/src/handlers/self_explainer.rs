@@ -223,7 +223,10 @@ fn output_unusable(text: &str) -> bool {
     if low.trim().is_empty() {
         return true;
     }
-    low.contains("fakten:") || low.contains("system-prompt") || low.contains("systemprompt")
+    low.contains("fakten:")
+        || low.contains("dokumente:")
+        || low.contains("system-prompt")
+        || low.contains("systemprompt")
 }
 
 /// Entscheidet aus Frage + (optionaler) Modellausgabe die finale Antwort —
@@ -640,11 +643,14 @@ mod tests {
 
     #[test]
     fn unbrauchbarer_output_gibt_fallback() {
-        // Prompt-Leak (enthält "FAKTEN:") → unbrauchbar → Fallback.
+        // Prompt-Leak (enthält Header-Marker) → unbrauchbar → Fallback.
         let a = evaluate_answer("Was macht der Bot?", Some("Hier die FAKTEN: ..."));
         assert_eq!(a.answer, FALLBACK_UNSURE);
         assert!(!a.grounded);
         assert!(a.sources.is_empty());
+        let a = evaluate_answer("Was macht der Bot?", Some("DOKUMENTE:\n..."));
+        assert_eq!(a.answer, FALLBACK_UNSURE);
+        assert!(!a.grounded);
     }
 
     #[test]

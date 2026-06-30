@@ -41,7 +41,7 @@ const LOGOUT_REDIRECT: &str = "/analyse";
 const ADMIN_LOGOUT_REDIRECT: &str = "/twitch/auth/discord/login";
 /// Cookie-Name des OAuth-Kontext-CSRF-Tokens (P2.139). Kurzlebig, HttpOnly,
 /// SameSite=Lax; bindet den Callback an den Browser, der den Login startete.
-const OAUTH_CONTEXT_COOKIE: &str = "twitch_oauth_ctx";
+const OAUTH_CONTEXT_COOKIE: &str = "twitch_dash_session_oauth_ctx";
 /// Default-Ziel nach erfolgreicher Raid-OAuth-Autorisierung (Python-Konstante).
 const DEFAULT_RAID_OAUTH_SUCCESS_REDIRECT_URL: &str =
     "https://deutsche-deadlock-community.de/twitch/dashboard";
@@ -264,7 +264,7 @@ async fn callback_handler_inner(
     }
 
     // P2.139: Kontext-CSRF-Bindung. Trägt der State ein context_token, MUSS das
-    // `twitch_oauth_ctx`-Cookie des Browsers konstant-zeitlich passen. Ein
+    // `twitch_dash_session_oauth_ctx`-Cookie des Browsers konstant-zeitlich passen. Ein
     // cookieloser/fremder Callback (untergeschobener Code) → 400, KEINE Session.
     if !login_state.context_token.is_empty() {
         let presented = cookie_from_headers(headers, OAUTH_CONTEXT_COOKIE).unwrap_or_default();
@@ -1061,7 +1061,7 @@ mod tests {
     }
 
     /// P2.139: State trägt context_token, aber der Callback kommt OHNE das
-    /// `twitch_oauth_ctx`-Cookie (cookieloser/fremder Browser) → 400, KEINE Session.
+    /// `twitch_dash_session_oauth_ctx`-Cookie (cookieloser/fremder Browser) → 400, KEINE Session.
     #[tokio::test]
     async fn callback_ohne_kontext_cookie_400() {
         let Some(pool) = maybe_pool().await else { return; };
@@ -1139,7 +1139,7 @@ mod tests {
         let mut headers = HeaderMap::new();
         headers.insert(
             axum::http::header::COOKIE,
-            HeaderValue::from_static("twitch_oauth_ctx=matching-ctx"),
+            HeaderValue::from_static("twitch_dash_session_oauth_ctx=matching-ctx"),
         );
         let resp = callback_handler(
             Some(Extension(state.clone())),

@@ -90,6 +90,7 @@ pub mod tag_analysis;
 pub mod tip_settings;
 pub mod title;
 pub mod title_performance;
+pub(crate) mod viewer_exclusion;
 pub mod viewer_timeline;
 pub mod viewers;
 pub mod watch_time;
