@@ -76,6 +76,14 @@ async fn pool_in_schema(dsn: &str, schema: &str) -> PgPool {
             notified INTEGER DEFAULT 0, grace_expires_at TEXT )",
         "CREATE TABLE twitch_raid_blacklist (
             target_login TEXT PRIMARY KEY, target_id TEXT, reason TEXT, added_at TEXT )",
+        "CREATE TABLE twitch_chatter_global_ban (
+            chatter_login TEXT PRIMARY KEY, chatter_id TEXT, reason TEXT,
+            added_by TEXT, added_at TIMESTAMPTZ NOT NULL DEFAULT NOW() )",
+        "CREATE TABLE twitch_streamers (
+            twitch_login TEXT PRIMARY KEY, twitch_user_id TEXT )",
+        "CREATE TABLE twitch_exclusions (
+            twitch_user_id TEXT PRIMARY KEY, kind TEXT NOT NULL, reason TEXT,
+            excluded_at TIMESTAMPTZ NOT NULL DEFAULT NOW(), reactivated_at TIMESTAMPTZ )",
         "CREATE TABLE twitch_partner_outreach (
             streamer_login TEXT, streamer_user_id TEXT, detected_at TEXT,
             contacted_at TEXT, status TEXT, cooldown_until TEXT, notes TEXT,
@@ -804,6 +812,82 @@ async fn blacklist_und_quelle_werden_nie_geraidet() {
         .await;
     assert_eq!(outcome, AutoRaidPipelineOutcome::NoTarget);
     assert!(h.api.calls.lock().unwrap().is_empty(), "kein API-Aufruf");
+}
+
+#[tokio::test]
+async fn blacklist_globale_bans_und_id_only_exclusions_filtern_fallback() {
+    let pool = pool_or_skip!("t6w_pipe_global_ban_filter");
+    seed_source_token(&pool, "100").await;
+
+    sqlx::query(
+        "INSERT INTO twitch_raid_blacklist (target_login, target_id, reason)
+         VALUES ('raid_blacklisted', '300', 'raid blacklist')",
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
+    sqlx::query(
+        "INSERT INTO twitch_chatter_global_ban (chatter_login, chatter_id, reason)
+         VALUES ('global_banned', '400', 'global ban')",
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
+    sqlx::query(
+        "INSERT INTO twitch_streamers (twitch_login, twitch_user_id)
+         VALUES ('exclusion_banned', '500')",
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
+    sqlx::query(
+        "INSERT INTO twitch_exclusions (twitch_user_id, kind, reason)
+         VALUES ('500', 'banned', 'hard ban')",
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
+    sqlx::query(
+        "INSERT INTO twitch_exclusions (twitch_user_id, kind, reason)
+         VALUES ('550', 'banned', 'id-only hard ban')",
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
+
+    let mut raid_blacklisted = fairness("300", "raid_blacklisted");
+    raid_blacklisted.viewer_count = 1;
+    let mut global_banned = fairness("400", "global_banned");
+    global_banned.viewer_count = 2;
+    let mut exclusion_banned = fairness("500", "exclusion_banned");
+    exclusion_banned.viewer_count = 3;
+    let mut id_only_exclusion_banned = fairness("550", "id_only_exclusion_banned");
+    id_only_exclusion_banned.viewer_count = 1;
+    let mut allowed = fairness("600", "allowed_target");
+    allowed.viewer_count = 20;
+
+    let h = build(
+        &pool,
+        HashMap::new(),
+        vec![
+            raid_blacklisted,
+            global_banned,
+            exclusion_banned,
+            id_only_exclusion_banned,
+            allowed,
+        ],
+    );
+
+    let outcome = h.pipeline.run(&request(vec![])).await;
+    assert_eq!(
+        outcome,
+        AutoRaidPipelineOutcome::Started {
+            target_login: "allowed_target".to_string(),
+            is_partner_raid: false,
+        },
+        "Raid-Blacklist, globale Ban-Liste und Exclusion-Bans inklusive ID-only-Bans muessen vor der Auswahl greifen"
+    );
+    assert_eq!(h.api.calls.lock().unwrap().clone(), vec!["600"]);
 }
 
 #[tokio::test]

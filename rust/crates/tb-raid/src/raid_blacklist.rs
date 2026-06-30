@@ -92,14 +92,33 @@ impl RaidBlacklistStore {
         Ok(())
     }
 
-    /// Lädt die komplette Blacklist als `(ids, logins)`-Sets für Set-Filterung
-    /// im Auswahl-Loop (Python `load_raid_blacklist`). Logins lowercase,
-    /// leere IDs ausgelassen.
+    /// Lädt alle Auto-Raid-Sperren als `(ids, logins)`-Sets für Set-Filterung
+    /// im Auswahl-Loop. Neben der expliziten Raid-Blacklist zählen hier auch
+    /// globale Chatter-Bans (Python spiegelte sie in `twitch_raid_blacklist`)
+    /// und aktive kanalweite Hard-Bans aus `twitch_exclusions`.
+    /// Logins lowercase, leere IDs/Logins ausgelassen.
     pub async fn load_all(&self) -> Result<(HashSet<String>, HashSet<String>), sqlx::Error> {
-        let rows: Vec<(Option<String>, String)> =
-            sqlx::query_as("SELECT target_id, target_login FROM twitch_raid_blacklist")
-                .fetch_all(&self.pool)
-                .await?;
+        let rows: Vec<(Option<String>, String)> = sqlx::query_as(
+            r#"
+            SELECT target_id, target_login
+            FROM twitch_raid_blacklist
+
+            UNION ALL
+
+            SELECT NULLIF(chatter_id, '') AS target_id, chatter_login AS target_login
+            FROM twitch_chatter_global_ban
+
+            UNION ALL
+
+            SELECT e.twitch_user_id AS target_id, COALESCE(s.twitch_login, '') AS target_login
+            FROM twitch_exclusions e
+            LEFT JOIN twitch_streamers s ON s.twitch_user_id = e.twitch_user_id
+            WHERE e.kind = 'banned'
+              AND e.reactivated_at IS NULL
+            "#,
+        )
+        .fetch_all(&self.pool)
+        .await?;
         let mut ids = HashSet::new();
         let mut logins = HashSet::new();
         for (id, login) in rows {

@@ -49,6 +49,21 @@ async fn pool_in_schema(dsn: &str, schema: &str) -> PgPool {
     .execute(&pool)
     .await
     .unwrap();
+    for ddl in [
+        "CREATE TABLE twitch_chatter_global_ban (
+            chatter_login TEXT PRIMARY KEY, chatter_id TEXT, reason TEXT,
+            added_by TEXT, added_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+        )",
+        "CREATE TABLE twitch_streamers (
+            twitch_login TEXT PRIMARY KEY, twitch_user_id TEXT
+        )",
+        "CREATE TABLE twitch_exclusions (
+            twitch_user_id TEXT PRIMARY KEY, kind TEXT NOT NULL, reason TEXT,
+            excluded_at TIMESTAMPTZ NOT NULL DEFAULT NOW(), reactivated_at TIMESTAMPTZ
+        )",
+    ] {
+        sqlx::query(ddl).execute(&pool).await.unwrap();
+    }
     pool
 }
 
