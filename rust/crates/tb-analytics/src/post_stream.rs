@@ -1925,9 +1925,10 @@ impl AiModel {
 }
 
 /// Legt die AI-Report-Tabellen/-Spalten/-Indizes idempotent an (Python
-/// `_ensure_report_ab_columns`). Alle Statements sind `IF NOT EXISTS`.
+/// `_ensure_report_ab_columns`). Feedback-Tabellen liegen in Migration
+/// 20260630143000.
 pub async fn ensure_report_ab_columns(pool: &PgPool) -> Result<(), sqlx::Error> {
-    let statements: [&str; 15] = [
+    let statements: [&str; 11] = [
         "CREATE TABLE IF NOT EXISTS twitch_chat_word_groups (\
             id BIGSERIAL PRIMARY KEY, session_id BIGINT NOT NULL, streamer_login TEXT NOT NULL, \
             group_name TEXT NOT NULL, keywords TEXT[] NOT NULL, message_count INT DEFAULT 0, \
@@ -1950,19 +1951,6 @@ pub async fn ensure_report_ab_columns(pool: &PgPool) -> Result<(), sqlx::Error> 
             ON twitch_stream_ai_reports (session_id, report_variant, generated_at DESC)",
         "CREATE INDEX IF NOT EXISTS idx_stream_ai_reports_streamer \
             ON twitch_stream_ai_reports (streamer_login, generated_at DESC)",
-        "CREATE TABLE IF NOT EXISTS twitch_stream_report_ratings (\
-            id BIGSERIAL PRIMARY KEY, session_id BIGINT NOT NULL, streamer_login TEXT NOT NULL, \
-            report_variant TEXT NOT NULL DEFAULT 'compact', \
-            rating TEXT NOT NULL CHECK (rating IN ('gut', 'schlecht', 'neutral')), \
-            comment TEXT, rated_by TEXT NOT NULL, created_at TIMESTAMPTZ DEFAULT NOW(), \
-            updated_at TIMESTAMPTZ DEFAULT NOW(), UNIQUE (session_id, report_variant, rated_by))",
-        "CREATE TABLE IF NOT EXISTS twitch_stream_report_ab_votes (\
-            id BIGSERIAL PRIMARY KEY, session_id BIGINT NOT NULL, streamer_login TEXT NOT NULL, \
-            winner TEXT NOT NULL CHECK (winner IN ('compact', 'full', 'gleich')), \
-            comment TEXT, voted_by TEXT NOT NULL, created_at TIMESTAMPTZ DEFAULT NOW(), \
-            updated_at TIMESTAMPTZ DEFAULT NOW(), UNIQUE (session_id, voted_by))",
-        "CREATE INDEX IF NOT EXISTS idx_ab_votes_session ON twitch_stream_report_ab_votes (session_id)",
-        "CREATE INDEX IF NOT EXISTS idx_ab_votes_streamer ON twitch_stream_report_ab_votes (streamer_login)",
     ];
     for stmt in statements {
         sqlx::query(stmt).execute(pool).await?;
@@ -2178,7 +2166,6 @@ pub async fn trigger_post_stream_analysis(
             }
         }
 
-        let _ = ensure_report_ab_columns(pool).await;
         let report_id =
             match insert_pending_report(pool, session_id, &streamer, model, variant, &snapshot)
                 .await

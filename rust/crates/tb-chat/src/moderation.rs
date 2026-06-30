@@ -626,8 +626,7 @@ impl ModerationEngine {
 
     /// Speichert den AutoBan In-Memory und in der DB.
     ///
-    /// DB-Tabelle: `tb_chat_autoban_log` (wird beim Bot-Start durch
-    /// `ensure_autoban_log_table` angelegt).
+    /// DB-Tabelle: `tb_chat_autoban_log` (Migration 20260630141000).
     /// Port: `self._last_autoban[channel_key] = {...}` (moderation.py Z. 235).
     async fn persist_autoban_record(
         &self,
@@ -650,7 +649,7 @@ impl ModerationEngine {
             guard.insert(key.clone(), record.clone());
         }
 
-        // DB — Runtime-Schema aus `ensure_autoban_log_table`.
+        // DB — Schema aus Migration 20260630141000.
         let ts_str = record.ts.to_rfc3339();
         let content_trunc: String = record.content.clone();
         if let Err(e) = sqlx::query(
@@ -847,9 +846,9 @@ impl Default for TimeoutGuard {
 // OutboundSuppressionStore + OutboundSuppressionCheck-Trait
 // ---------------------------------------------------------------------------
 
-/// DDL für `twitch_outbound_chat_suppressions` (auto-create, moderation.py Z. 387–401).
+/// Test fixture DDL for `twitch_outbound_chat_suppressions`.
 ///
-/// Wird vom Orchestrator beim Start einmalig ausgeführt.
+/// Canonical schema lives in migration 20260630141000.
 pub const SUPPRESSION_DDL: &str = r#"
 CREATE TABLE IF NOT EXISTS twitch_outbound_chat_suppressions (
     target_login TEXT NOT NULL,

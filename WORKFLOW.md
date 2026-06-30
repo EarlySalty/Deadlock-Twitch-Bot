@@ -1,5 +1,14 @@
 # Workflow
 
+## 2026-06-30 — Ticket 1.2 Runtime Tables to Migrations
+
+- Start: delegierter GPT-Implementierungsworker; Scope auf `rust/migrations/`, Rust-Runtime-DDL-Entfernung und Scratch-Harness. Verbindliche Review-Regel aus Auftrag: keine Commits, kein Push, Aenderungen bleiben uncommitted.
+- Eingangsstand: `main...origin/main`, Worktree sauber. Recon-Report und Harness aus Scratchpad gelesen; Produktions-DSN wird nur per Secret-Loader im selben Shell-Befehl verwendet.
+- Implementiert: vier Migrationen `20260630141000` bis `20260630144000` fuer die 11 Prod-Tabellen; DDL aus erneutem `pgdump` ueber Harness abgeleitet. Produktive Runtime-Creator fuer `ai_analyses`, `internal_home_changelog`, `tb_chat_autoban_log`, `twitch_roadmap_items`, `twitch_stream_report_ratings` und `twitch_stream_report_ab_votes` entfernt. Test-Fixtures fuer `twitch_billing_events` und `twitch_outbound_chat_suppressions` bleiben mit Migrationsverweis erhalten.
+- Scratch-Harness erweitert: `gate`/`gate --update` erzeugt `tb_migtest_drift`, touched den SQLx-Migrationstest und setzt `TEST_DATABASE_URL` nur im Cargo-Subprozess.
+- Verifikation: `harness.py gate --update` gruen, final `harness.py gate` gruen; `coldiff`/`consdiff` fuer alle vier Gruppen leer. `cargo build` gruen. Gezielte Tests gruen: `tb-analytics ai_history/post_stream/webhook_apply`, `tb-chat --test suppression_db`, `tb-chat --test moderation_db`, `tb-dashboard-api roadmap/stream_report/internal_home`, `tb-bot chat_wiring`.
+- Clippy: `cargo clippy -p tb-db -p tb-analytics -p tb-chat -p tb-dashboard-api -p tb-bot --all-targets -- -D warnings` blockiert vor Abschluss an bestehenden Lints in unveraenderten lokalen Dependencies (`tb-highlight::event_detector` needless_lifetimes, `tb-raid::partner_score_refresh` unnecessary_unwrap). Keine Commits/Pushes gemaess Review-Regel.
+
 ## 2026-06-22 — Overlay Spielmodus-Filter (Alle Modi / Standard / Street Brawl)
 
 - Scope strikt auf `rust/crates/tb-dashboard-api/src/handlers/overlay.rs` und `bot/dashboard_v2/src/components/verwaltung/OverlayBuilderSection.tsx`; keine weiteren Crates/Dateien, keine neuen Dependencies, keine deadlock-api als Datenquelle. Review-Regel: Commits ja (auf `sp2/overlay-mode-filter`), aber kein Push/Merge/Restart.

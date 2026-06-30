@@ -58,7 +58,7 @@ async fn pool_in_schema(dsn: &str, schema: &str) -> PgPool {
 }
 
 async fn apply_ddl(pool: &PgPool) {
-    // tb_chat_autoban_log: Runtime-Schema aus `ensure_autoban_log_table`.
+    // tb_chat_autoban_log: canonical schema lives in migration 20260630141000.
     sqlx::query(
         r#"CREATE TABLE IF NOT EXISTS tb_chat_autoban_log (
             id BIGSERIAL PRIMARY KEY,

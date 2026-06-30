@@ -163,9 +163,6 @@ pub async fn stream_report_handler(
         }
     }
 
-    // A/B-Spalten best-effort sicherstellen (Python `_ensure_report_ab_columns`).
-    let _ = tb_analytics::post_stream::ensure_report_ab_columns(&pool).await;
-
     // ── A/B / all: beide Varianten sammeln (neueste je Variante gewinnt) ──────
     if variant == "ab" || variant == "all" {
         let rows_result = match session_id {
@@ -421,7 +418,6 @@ pub async fn stream_report_rate_handler(
         return crate::auth::unauthorized_v2_response();
     };
 
-    let _ = tb_analytics::post_stream::ensure_report_ab_columns(&pool).await;
     let comment_opt = if comment.is_empty() {
         None
     } else {
@@ -550,8 +546,6 @@ pub async fn stream_report_ab_vote_get(
             .into_response();
     }
     let session_id = session_id.unwrap();
-    let _ = tb_analytics::post_stream::ensure_report_ab_columns(&pool).await;
-
     let own_json = if let Some(vb) = owner_login(&auth) {
         match sqlx::query_as::<_, (Option<String>, Option<String>, Option<String>)>(
             "SELECT winner, comment, updated_at::text FROM twitch_stream_report_ab_votes \
@@ -665,7 +659,6 @@ pub async fn stream_report_ab_vote_post(
         return crate::auth::unauthorized_v2_response();
     };
 
-    let _ = tb_analytics::post_stream::ensure_report_ab_columns(&pool).await;
     let comment_opt = if comment.is_empty() {
         None
     } else {
@@ -720,6 +713,41 @@ mod tests {
             .await
             .unwrap();
         Some(pool)
+    }
+
+    async fn create_stream_report_fixtures(pool: &PgPool) {
+        tb_analytics::post_stream::ensure_report_ab_columns(pool)
+            .await
+            .unwrap();
+        sqlx::query(
+            "CREATE TABLE twitch_stream_report_ratings (\
+                id BIGSERIAL PRIMARY KEY, session_id BIGINT NOT NULL, streamer_login TEXT NOT NULL, \
+                report_variant TEXT NOT NULL DEFAULT 'compact', \
+                rating TEXT NOT NULL CHECK (rating IN ('gut', 'schlecht', 'neutral')), \
+                comment TEXT, rated_by TEXT NOT NULL, created_at TIMESTAMPTZ DEFAULT NOW(), \
+                updated_at TIMESTAMPTZ DEFAULT NOW(), UNIQUE (session_id, report_variant, rated_by))",
+        )
+        .execute(pool)
+        .await
+        .unwrap();
+        sqlx::query(
+            "CREATE TABLE twitch_stream_report_ab_votes (\
+                id BIGSERIAL PRIMARY KEY, session_id BIGINT NOT NULL, streamer_login TEXT NOT NULL, \
+                winner TEXT NOT NULL CHECK (winner IN ('compact', 'full', 'gleich')), \
+                comment TEXT, voted_by TEXT NOT NULL, created_at TIMESTAMPTZ DEFAULT NOW(), \
+                updated_at TIMESTAMPTZ DEFAULT NOW(), UNIQUE (session_id, voted_by))",
+        )
+        .execute(pool)
+        .await
+        .unwrap();
+        sqlx::query("CREATE INDEX idx_ab_votes_session ON twitch_stream_report_ab_votes (session_id)")
+            .execute(pool)
+            .await
+            .unwrap();
+        sqlx::query("CREATE INDEX idx_ab_votes_streamer ON twitch_stream_report_ab_votes (streamer_login)")
+            .execute(pool)
+            .await
+            .unwrap();
     }
 
     fn partner(login: &str) -> DashboardAuthLevel {
@@ -796,9 +824,7 @@ mod tests {
         let Some(pool) = pool_or_skip("t_p2_71_rating").await else {
             return;
         };
-        tb_analytics::post_stream::ensure_report_ab_columns(&pool)
-            .await
-            .unwrap();
+        create_stream_report_fixtures(&pool).await;
         // Ein Report existiert für die Session.
         sqlx::query(
             "INSERT INTO twitch_stream_ai_reports \
@@ -853,9 +879,7 @@ mod tests {
         let Some(pool) = pool_or_skip("t_p2_71_abvote").await else {
             return;
         };
-        tb_analytics::post_stream::ensure_report_ab_columns(&pool)
-            .await
-            .unwrap();
+        create_stream_report_fixtures(&pool).await;
 
         let vote_body = serde_json::to_vec(&json!({
             "session_id": 5, "streamer": "streamerx", "winner": "compact"
@@ -898,9 +922,7 @@ mod tests {
         let Some(pool) = pool_or_skip("t7b_post_stream_rating").await else {
             return;
         };
-        tb_analytics::post_stream::ensure_report_ab_columns(&pool)
-            .await
-            .unwrap();
+        create_stream_report_fixtures(&pool).await;
 
         upsert_rating(&pool, 1, "streamer", "compact", "gut", Some("top"), "rater")
             .await
@@ -951,9 +973,7 @@ mod tests {
         let Some(pool) = pool_or_skip("t7c_post_stream_abvote").await else {
             return;
         };
-        tb_analytics::post_stream::ensure_report_ab_columns(&pool)
-            .await
-            .unwrap();
+        create_stream_report_fixtures(&pool).await;
 
         upsert_ab_vote(&pool, 1, "streamer", "compact", Some("a"), "voter1")
             .await

@@ -716,9 +716,8 @@ pub async fn record_event_once(
     Ok(result.rows_affected() == 1)
 }
 
-/// Stellt die beiden Webhook-Tabellen sicher (idempotent). In Prod von der
-/// Baseline-Migration angelegt; hier defensiv für ältere/leere Schemata —
-/// spiegelt `_billing_ensure_storage_tables` (nur die Event-Tabelle relevant).
+/// Test fixture for `twitch_billing_events`; canonical schema lives in migration
+/// 20260630144000.
 pub async fn ensure_event_table(pool: &PgPool) -> Result<(), sqlx::Error> {
     sqlx::query(
         r#"CREATE TABLE IF NOT EXISTS twitch_billing_events (

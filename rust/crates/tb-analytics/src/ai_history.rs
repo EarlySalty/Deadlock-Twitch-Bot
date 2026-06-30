@@ -16,28 +16,6 @@ fn emit_iso(dt: DateTime<Utc>) -> String {
     }
 }
 
-/// Stellt die `ai_analyses`-Tabelle sicher (Python `_ensure_ai_table`, idempotent).
-async fn ensure_ai_table(pool: &PgPool) -> Result<(), sqlx::Error> {
-    sqlx::query(
-        "CREATE TABLE IF NOT EXISTS ai_analyses ( \
-            id BIGSERIAL PRIMARY KEY, \
-            streamer TEXT NOT NULL, \
-            days INTEGER NOT NULL, \
-            model TEXT NOT NULL, \
-            generated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(), \
-            data_snapshot JSONB NOT NULL, \
-            points JSONB NOT NULL )",
-    )
-    .execute(pool)
-    .await?;
-    sqlx::query(
-        "CREATE INDEX IF NOT EXISTS idx_ai_analyses_streamer_ts ON ai_analyses (streamer, generated_at DESC)",
-    )
-    .execute(pool)
-    .await?;
-    Ok(())
-}
-
 /// Persistiert eine KI-Analyse (Python: `INSERT INTO ai_analyses … RETURNING id`,
 /// best-effort). `model_name` ist der echte Modellname (`claude-opus-4-6` /
 /// `MiniMax-M3`), NICHT die `opus`/`minimax`-Kennung. Bei jedem Fehler `None`
@@ -52,9 +30,6 @@ pub async fn save_analysis(
     data_snapshot: &Value,
     points: &Value,
 ) -> Option<i64> {
-    if ensure_ai_table(pool).await.is_err() {
-        return None;
-    }
     // JSONB normalisiert Whitespace → Input-Serialisierung egal.
     let snapshot_text = data_snapshot.to_string();
     let points_text = points.to_string();
@@ -82,8 +57,6 @@ fn count_priority(points: &Value, priority: &str) -> i64 {
 
 /// Lädt die letzten AI-Analysen eines Streamers (neueste zuerst).
 pub async fn load_ai_history(pool: &PgPool, streamer: &str, limit: i64) -> Result<Value, sqlx::Error> {
-    ensure_ai_table(pool).await?;
-
     let rows: Vec<(i64, String, i32, String, DateTime<Utc>, Value, Value)> = sqlx::query_as(
         "SELECT id::bigint, streamer, days, model, generated_at, data_snapshot, points \
            FROM ai_analyses WHERE streamer = $1 ORDER BY generated_at DESC LIMIT $2",
@@ -132,10 +105,32 @@ mod tests {
         Some(PgPoolOptions::new().max_connections(2).connect_with(opts).await.unwrap())
     }
 
+    async fn create_ai_analyses_fixture(pool: &PgPool) {
+        sqlx::query(
+            "CREATE TABLE ai_analyses ( \
+                id BIGSERIAL PRIMARY KEY, \
+                streamer TEXT NOT NULL, \
+                days INTEGER NOT NULL, \
+                model TEXT NOT NULL, \
+                generated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(), \
+                data_snapshot JSONB NOT NULL, \
+                points JSONB NOT NULL )",
+        )
+        .execute(pool)
+        .await
+        .unwrap();
+        sqlx::query(
+            "CREATE INDEX idx_ai_analyses_streamer_ts ON ai_analyses (streamer, generated_at DESC)",
+        )
+        .execute(pool)
+        .await
+        .unwrap();
+    }
+
     #[tokio::test]
-    async fn ensure_table_und_leer() {
+    async fn leere_historie() {
         let Some(pool) = make_pool("t_aih_empty").await else { return };
-        // Tabelle existiert nicht → ensure legt sie an → leeres Array.
+        create_ai_analyses_fixture(&pool).await;
         let v = load_ai_history(&pool, "nani", 20).await.unwrap();
         assert_eq!(v, json!([]));
     }
@@ -143,7 +138,7 @@ mod tests {
     #[tokio::test]
     async fn historie_mit_counts() {
         let Some(pool) = make_pool("t_aih").await else { return };
-        ensure_ai_table(&pool).await.unwrap();
+        create_ai_analyses_fixture(&pool).await;
         sqlx::query("INSERT INTO ai_analyses (streamer, days, model, generated_at, data_snapshot, points) VALUES \
             ('nani', 30, 'claude-opus', NOW()-INTERVAL '1 hour', '{\"x\":1}'::jsonb, '[{\"priority\":\"kritisch\"},{\"priority\":\"hoch\"},{\"priority\":\"kritisch\"}]'::jsonb), \
             ('nani', 7, 'minimax-m3', NOW(), '{}'::jsonb, '[{\"priority\":\"mittel\"}]'::jsonb), \
@@ -165,6 +160,7 @@ mod tests {
     #[tokio::test]
     async fn save_analysis_persistiert() {
         let Some(pool) = make_pool("t_aih_save").await else { return };
+        create_ai_analyses_fixture(&pool).await;
         let id = save_analysis(
             &pool,
             "nani",
@@ -188,7 +184,7 @@ mod tests {
     #[tokio::test]
     async fn limit_greift() {
         let Some(pool) = make_pool("t_aih_limit").await else { return };
-        ensure_ai_table(&pool).await.unwrap();
+        create_ai_analyses_fixture(&pool).await;
         for i in 0..5 {
             sqlx::query("INSERT INTO ai_analyses (streamer, days, model, generated_at, data_snapshot, points) VALUES ('nani',30,'minimax', NOW()-($1 || ' minutes')::interval, '{}'::jsonb, '[]'::jsonb)")
                 .bind(i.to_string()).execute(&pool).await.unwrap();
