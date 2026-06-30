@@ -113,7 +113,7 @@ impl SenderAuthStore {
     /// Legt die Token-Tabelle an, falls sie fehlt (idempotent, self-contained;
     /// bewusst getrennt von `twitch_raid_auth`). Byte-genau zu Pythons Schema.
     pub async fn ensure_table(&self) {
-        let _ = sqlx::query(
+        let _ = sqlx::query!(
             "CREATE TABLE IF NOT EXISTS twitch_engagement_sender_auth (\
                 twitch_user_id     TEXT PRIMARY KEY,\
                 twitch_login       TEXT NOT NULL,\
@@ -186,24 +186,26 @@ impl SenderAuthStore {
 
     /// Jüngste onboardete Zeile (Python `_load_row`, `ORDER BY updated_at DESC`).
     async fn load_row(&self) -> Option<SenderRow> {
-        let row: (String, String, Vec<u8>, Vec<u8>, Option<String>, i64) = sqlx::query_as(
-            "SELECT twitch_user_id, twitch_login, access_token_enc, refresh_token_enc, \
-                    scopes, token_expires_at \
-             FROM twitch_engagement_sender_auth ORDER BY updated_at DESC LIMIT 1",
+        let row = sqlx::query!(
+            r#"SELECT twitch_user_id AS "twitch_user_id!", twitch_login AS "twitch_login!",
+                    access_token_enc AS "access_token_enc!",
+                    refresh_token_enc AS "refresh_token_enc!",
+                    scopes, token_expires_at AS "token_expires_at!"
+             FROM twitch_engagement_sender_auth ORDER BY updated_at DESC LIMIT 1"#
         )
         .fetch_optional(&self.pool)
         .await
         .ok()??;
-        if row.2.is_empty() || row.3.is_empty() {
+        if row.access_token_enc.is_empty() || row.refresh_token_enc.is_empty() {
             return None;
         }
         Some(SenderRow {
-            user_id: row.0,
-            login: row.1,
-            access_enc: row.2,
-            refresh_enc: row.3,
-            scopes: row.4,
-            expires_at: row.5,
+            user_id: row.twitch_user_id,
+            login: row.twitch_login,
+            access_enc: row.access_token_enc,
+            refresh_enc: row.refresh_token_enc,
+            scopes: row.scopes,
+            expires_at: row.token_expires_at,
         })
     }
 
@@ -228,7 +230,7 @@ impl SenderAuthStore {
             return;
         };
         let expires_at = chrono::Utc::now().timestamp() + expires_in.max(0);
-        let _ = sqlx::query(
+        let _ = sqlx::query!(
             "INSERT INTO twitch_engagement_sender_auth \
                 (twitch_user_id, twitch_login, access_token_enc, refresh_token_enc, \
                  scopes, token_expires_at, updated_at) \
@@ -240,13 +242,13 @@ impl SenderAuthStore {
                 scopes            = EXCLUDED.scopes, \
                 token_expires_at  = EXCLUDED.token_expires_at, \
                 updated_at        = now()",
+            user_id,
+            login,
+            access_enc,
+            refresh_enc,
+            scopes,
+            expires_at
         )
-        .bind(user_id)
-        .bind(login)
-        .bind(access_enc)
-        .bind(refresh_enc)
-        .bind(scopes)
-        .bind(expires_at)
         .execute(&self.pool)
         .await;
     }
@@ -315,17 +317,17 @@ impl SenderAuthStore {
     /// Persistiert einen State-Token (Upsert) in der geteilten
     /// `oauth_state_tokens`-Tabelle, plattform-gated auf `engagement_sender`.
     async fn persist_state(&self, state: &str, expires_at: DateTime<Utc>) -> Result<(), sqlx::Error> {
-        sqlx::query(
+        sqlx::query!(
             "INSERT INTO oauth_state_tokens \
                 (state_token, platform, streamer_login, redirect_uri, expires_at) \
              VALUES ($1, $2, $3, $4, $5) \
              ON CONFLICT (state_token) DO UPDATE SET expires_at = EXCLUDED.expires_at",
+            state,
+            PLATFORM,
+            SENDER_LOGIN,
+            REDIRECT_URI,
+            expires_at
         )
-        .bind(state)
-        .bind(PLATFORM)
-        .bind(SENDER_LOGIN)
-        .bind(REDIRECT_URI)
-        .bind(expires_at)
         .execute(&self.pool)
         .await?;
         Ok(())
@@ -338,18 +340,20 @@ impl SenderAuthStore {
         if state.is_empty() {
             return false;
         }
-        let row: Option<(Option<DateTime<Utc>>,)> = sqlx::query_as(
-            "DELETE FROM oauth_state_tokens WHERE state_token = $1 AND platform = $2 \
-             RETURNING expires_at",
+        let row = sqlx::query!(
+            r#"DELETE FROM oauth_state_tokens WHERE state_token = $1 AND platform = $2
+             RETURNING expires_at AS "expires_at?""#,
+            state,
+            PLATFORM
         )
-        .bind(state)
-        .bind(PLATFORM)
         .fetch_optional(&self.pool)
         .await
         .unwrap_or(None);
         match row {
-            Some((Some(exp),)) => Utc::now() <= exp,
-            Some((None,)) => true,
+            Some(row) => match row.expires_at {
+                Some(exp) => Utc::now() <= exp,
+                None => true,
+            },
             None => false,
         }
     }

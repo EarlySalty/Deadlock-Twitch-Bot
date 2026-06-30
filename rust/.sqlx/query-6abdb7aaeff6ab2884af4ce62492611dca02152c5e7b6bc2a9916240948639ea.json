@@ -1,0 +1,14 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "DELETE FROM twitch_engagement_soul WHERE kind = 'anchor' AND id NOT IN (SELECT id FROM twitch_engagement_soul WHERE kind = 'anchor' ORDER BY created_at DESC LIMIT $1)",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Int8"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "6abdb7aaeff6ab2884af4ce62492611dca02152c5e7b6bc2a9916240948639ea"
+}

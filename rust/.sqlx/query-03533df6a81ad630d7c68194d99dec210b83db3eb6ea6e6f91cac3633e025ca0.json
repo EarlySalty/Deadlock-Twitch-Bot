@@ -1,0 +1,52 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT channel_login AS \"channel_login!\", enabled AS \"enabled!\",\n                  steam_id, persona_override, tabu_topics, output_mode AS \"output_mode?\"\n             FROM twitch_engagement_settings WHERE channel_login = $1",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "channel_login!",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 1,
+        "name": "enabled!",
+        "type_info": "Bool"
+      },
+      {
+        "ordinal": 2,
+        "name": "steam_id",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 3,
+        "name": "persona_override",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 4,
+        "name": "tabu_topics",
+        "type_info": "TextArray"
+      },
+      {
+        "ordinal": 5,
+        "name": "output_mode?",
+        "type_info": "Text"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Text"
+      ]
+    },
+    "nullable": [
+      false,
+      false,
+      true,
+      true,
+      true,
+      false
+    ]
+  },
+  "hash": "03533df6a81ad630d7c68194d99dec210b83db3eb6ea6e6f91cac3633e025ca0"
+}

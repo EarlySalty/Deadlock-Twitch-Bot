@@ -1,0 +1,42 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT twitch_user_id AS \"twitch_user_id!\", twitch_login,\n                    content AS \"content!\", ts AS \"ts!\"\n             FROM twitch_engagement_conversation\n             WHERE channel_login = $1 AND role = 'user' AND twitch_user_id IS NOT NULL\n               AND ts > NOW() - make_interval(hours => $2)\n             ORDER BY ts DESC LIMIT $3",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "twitch_user_id!",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 1,
+        "name": "twitch_login",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 2,
+        "name": "content!",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 3,
+        "name": "ts!",
+        "type_info": "Timestamptz"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Text",
+        "Int4",
+        "Int8"
+      ]
+    },
+    "nullable": [
+      true,
+      true,
+      false,
+      false
+    ]
+  },
+  "hash": "1e510670596ba4f6817097566f47e34dde4105abfd04e7aaff26b2b30e78fbec"
+}

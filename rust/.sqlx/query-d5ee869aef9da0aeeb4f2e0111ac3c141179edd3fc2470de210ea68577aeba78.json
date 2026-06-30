@@ -1,0 +1,20 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT content AS \"content!\" FROM twitch_engagement_soul\n             WHERE kind='hero_takes'\n             ORDER BY created_at DESC LIMIT 1",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "content!",
+        "type_info": "Text"
+      }
+    ],
+    "parameters": {
+      "Left": []
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "d5ee869aef9da0aeeb4f2e0111ac3c141179edd3fc2470de210ea68577aeba78"
+}

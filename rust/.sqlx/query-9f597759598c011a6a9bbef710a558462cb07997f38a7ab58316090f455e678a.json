@@ -1,0 +1,19 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "INSERT INTO twitch_engagement_sender_auth (twitch_user_id, twitch_login, access_token_enc, refresh_token_enc, scopes, token_expires_at, updated_at) VALUES ($1, $2, $3, $4, $5, $6, now()) ON CONFLICT (twitch_user_id) DO UPDATE SET twitch_login      = EXCLUDED.twitch_login, access_token_enc  = EXCLUDED.access_token_enc, refresh_token_enc = EXCLUDED.refresh_token_enc, scopes            = EXCLUDED.scopes, token_expires_at  = EXCLUDED.token_expires_at, updated_at        = now()",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Text",
+        "Text",
+        "Bytea",
+        "Bytea",
+        "Text",
+        "Int8"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "9f597759598c011a6a9bbef710a558462cb07997f38a7ab58316090f455e678a"
+}

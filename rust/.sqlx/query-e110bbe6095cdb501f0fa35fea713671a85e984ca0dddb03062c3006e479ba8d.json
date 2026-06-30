@@ -1,0 +1,53 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT role AS \"role!\", twitch_user_id, twitch_login,\n                    content AS \"content!\", message_id, ts AS \"ts!\"\n             FROM twitch_engagement_conversation\n             WHERE channel_login = $1\n             ORDER BY ts DESC\n             LIMIT $2",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "role!",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 1,
+        "name": "twitch_user_id",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 2,
+        "name": "twitch_login",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 3,
+        "name": "content!",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 4,
+        "name": "message_id",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 5,
+        "name": "ts!",
+        "type_info": "Timestamptz"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Text",
+        "Int8"
+      ]
+    },
+    "nullable": [
+      false,
+      true,
+      true,
+      false,
+      true,
+      false
+    ]
+  },
+  "hash": "e110bbe6095cdb501f0fa35fea713671a85e984ca0dddb03062c3006e479ba8d"
+}

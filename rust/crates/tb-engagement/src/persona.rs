@@ -195,13 +195,13 @@ impl Persona {
     }
 
     async fn load_user_turns(&self, channel_login: &str, limit: i64) -> Vec<String> {
-        sqlx::query_scalar::<_, Option<String>>(
-            "SELECT content FROM twitch_engagement_conversation \
-             WHERE channel_login = $1 AND role = 'user' \
-             ORDER BY ts DESC LIMIT $2",
+        sqlx::query_scalar!(
+            r#"SELECT content AS "content?" FROM twitch_engagement_conversation
+             WHERE channel_login = $1 AND role = 'user'
+             ORDER BY ts DESC LIMIT $2"#,
+            channel_login,
+            limit
         )
-        .bind(channel_login)
-        .bind(limit)
         .fetch_all(&self.pool)
         .await
         .unwrap_or_default()

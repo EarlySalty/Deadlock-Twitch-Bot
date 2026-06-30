@@ -1,0 +1,15 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "DELETE FROM twitch_engagement_stream_transcripts WHERE created_at < $1 OR id IN (SELECT id FROM (SELECT id, ROW_NUMBER() OVER (PARTITION BY channel_login ORDER BY ended_at DESC) AS rn FROM twitch_engagement_stream_transcripts) ranked WHERE rn > $2)",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Timestamptz",
+        "Int8"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "4403d02eaf0edb1d2cf43d6f860b48c139be073ef6e4ae2deba491df1d1b876c"
+}

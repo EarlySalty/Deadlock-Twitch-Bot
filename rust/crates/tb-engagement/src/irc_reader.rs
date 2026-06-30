@@ -60,7 +60,7 @@ fn is_known_chat_bot(login: &str) -> bool {
 
 /// Fügt die `irc_read`-Spalte lazy hinzu (kein Eingriff in den Settings-Flow).
 async fn ensure_schema(pool: &PgPool) {
-    let _ = sqlx::query(
+    let _ = sqlx::query!(
         "ALTER TABLE twitch_engagement_settings \
          ADD COLUMN IF NOT EXISTS irc_read BOOLEAN NOT NULL DEFAULT FALSE",
     )
@@ -71,15 +71,16 @@ async fn ensure_schema(pool: &PgPool) {
 /// Aktive Kanäle mit `irc_read = TRUE` (kleingeschrieben).
 async fn load_irc_channels(pool: &PgPool) -> HashSet<String> {
     ensure_schema(pool).await;
-    sqlx::query_as::<_, (String,)>(
-        "SELECT channel_login FROM twitch_engagement_settings \
-         WHERE enabled = TRUE AND irc_read = TRUE",
+    sqlx::query_scalar!(
+        r#"SELECT channel_login AS "channel_login!"
+           FROM twitch_engagement_settings
+           WHERE enabled = TRUE AND irc_read = TRUE"#
     )
     .fetch_all(pool)
     .await
     .unwrap_or_default()
     .into_iter()
-    .map(|(c,)| c.trim().to_lowercase())
+    .map(|c| c.trim().to_lowercase())
     .filter(|c| !c.is_empty())
     .collect()
 }

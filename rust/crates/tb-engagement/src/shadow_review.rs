@@ -82,36 +82,35 @@ pub async fn fetch_pending_reviews(
     if limit <= 0 {
         return Ok(Vec::new());
     }
-    type Row = (i64, String, Option<String>, Option<String>, String, DateTime<Utc>);
-    let rows: Vec<Row> = sqlx::query_as(
-        "SELECT id, channel_login, response_text, triggered_by_msg_id, model, ts \
-         FROM twitch_engagement_log \
-         WHERE decision = 'shadowed' \
-           AND shadow_forwarded_at IS NULL \
-           AND response_text IS NOT NULL \
-         ORDER BY ts ASC \
-         LIMIT $1",
+    let rows = sqlx::query!(
+        r#"SELECT id AS "id!", channel_login AS "channel_login!",
+                  response_text AS "response_text?", triggered_by_msg_id,
+                  model AS "model!", ts AS "ts!"
+         FROM twitch_engagement_log
+         WHERE decision = 'shadowed'
+           AND shadow_forwarded_at IS NULL
+           AND response_text IS NOT NULL
+         ORDER BY ts ASC
+         LIMIT $1"#,
+        limit
     )
-    .bind(limit)
     .fetch_all(pool)
     .await?;
 
     Ok(rows
         .into_iter()
-        .filter_map(
-            |(id, channel_login, response_text, triggered_by_msg_id, model, created_at)| {
-                // response_text IS NOT NULL ist in der Query erzwungen; der
-                // filter_map deckt nur den Option-Typ ab.
-                response_text.map(|response_text| ShadowReviewItem {
-                    id,
-                    channel_login,
-                    response_text,
-                    triggered_by_msg_id,
-                    model,
-                    created_at,
-                })
-            },
-        )
+        .filter_map(|row| {
+            // response_text IS NOT NULL ist in der Query erzwungen; der
+            // filter_map deckt nur den Option-Typ ab.
+            row.response_text.map(|response_text| ShadowReviewItem {
+                id: row.id,
+                channel_login: row.channel_login,
+                response_text,
+                triggered_by_msg_id: row.triggered_by_msg_id,
+                model: row.model,
+                created_at: row.ts,
+            })
+        })
         .collect())
 }
 
@@ -124,12 +123,12 @@ pub async fn mark_forwarded(pool: &PgPool, ids: &[i64]) -> Result<u64, ShadowRev
     if ids.is_empty() {
         return Ok(0);
     }
-    let res = sqlx::query(
+    let res = sqlx::query!(
         "UPDATE twitch_engagement_log \
          SET shadow_forwarded_at = NOW() \
          WHERE id = ANY($1) AND shadow_forwarded_at IS NULL",
+        ids
     )
-    .bind(ids)
     .execute(pool)
     .await?;
     Ok(res.rows_affected())

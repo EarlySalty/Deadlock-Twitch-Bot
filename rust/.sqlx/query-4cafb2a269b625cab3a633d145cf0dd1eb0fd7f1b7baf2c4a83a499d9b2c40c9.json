@@ -1,0 +1,22 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT channel_login AS \"channel_login!\" FROM twitch_engagement_conversation\n             WHERE role = 'user'\n             GROUP BY channel_login HAVING count(*) >= $1",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "channel_login!",
+        "type_info": "Text"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Int8"
+      ]
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "4cafb2a269b625cab3a633d145cf0dd1eb0fd7f1b7baf2c4a83a499d9b2c40c9"
+}

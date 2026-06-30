@@ -9,17 +9,6 @@ use sqlx::PgPool;
 
 use crate::types::{Decision, EngagementSettings, HandleResult, OutputMode};
 
-/// Roh-Zeile von `twitch_engagement_settings` in Select-Reihenfolge
-/// (channel_login, enabled, steam_id, persona_override, tabu_topics, output_mode).
-type SettingsRow = (
-    String,
-    bool,
-    Option<String>,
-    Option<String>,
-    Option<Vec<String>>,
-    Option<String>,
-);
-
 /// Lädt die Engagement-Settings eines Channels (Python `_sync_load_settings`,
 /// erweitert um die additive Spalte `output_mode`).
 ///
@@ -27,35 +16,32 @@ type SettingsRow = (
 /// fehlender/unbekannter Wert fällt über [`OutputMode::from_db`] fail-safe auf
 /// `off` zurück (kein Output im Zweifel).
 pub async fn load_settings(pool: &PgPool, channel_login: &str) -> Option<EngagementSettings> {
-    let row: Option<SettingsRow> = sqlx::query_as(
-        "SELECT channel_login, enabled, steam_id, persona_override, tabu_topics, output_mode \
-             FROM twitch_engagement_settings WHERE channel_login = $1",
+    let row = sqlx::query!(
+        r#"SELECT channel_login AS "channel_login!", enabled AS "enabled!",
+                  steam_id, persona_override, tabu_topics, output_mode AS "output_mode?"
+             FROM twitch_engagement_settings WHERE channel_login = $1"#,
+        channel_login
     )
-    .bind(channel_login)
     .fetch_optional(pool)
     .await
     .ok()
     .flatten();
-    row.map(
-        |(channel_login, enabled, steam_id, persona_override, tabu_topics, output_mode)| {
-            EngagementSettings {
-                channel_login,
-                enabled,
-                steam_id,
-                persona_override,
-                tabu_topics: tabu_topics.unwrap_or_default(),
-                output_mode: OutputMode::from_db(output_mode.as_deref().unwrap_or("off")),
-            }
-        },
-    )
+    row.map(|r| EngagementSettings {
+        channel_login: r.channel_login,
+        enabled: r.enabled,
+        steam_id: r.steam_id,
+        persona_override: r.persona_override,
+        tabu_topics: r.tabu_topics.unwrap_or_default(),
+        output_mode: OutputMode::from_db(r.output_mode.as_deref().unwrap_or("off")),
+    })
 }
 
 /// Hat sich der User vom Engagement abgemeldet? (Python `_sync_is_opted_out`).
 pub async fn is_opted_out(pool: &PgPool, twitch_user_id: &str) -> bool {
-    match sqlx::query_scalar::<_, i32>(
-        "SELECT 1 FROM twitch_user_engagement_optout WHERE twitch_user_id = $1",
+    match sqlx::query_scalar!(
+        r#"SELECT 1 AS "opted_out!" FROM twitch_user_engagement_optout WHERE twitch_user_id = $1"#,
+        twitch_user_id
     )
-    .bind(twitch_user_id)
     .fetch_optional(pool)
     .await
     {
@@ -80,11 +66,12 @@ pub async fn is_operational_partner(pool: &PgPool, channel_login: &str) -> bool 
     if norm.is_empty() {
         return false;
     }
-    match sqlx::query_scalar::<_, i32>(
-        "SELECT is_partner_active::int FROM twitch_streamers_partner_state \
-         WHERE LOWER(twitch_login) = $1",
+    match sqlx::query_scalar!(
+        r#"SELECT is_partner_active::int AS "is_partner_active!"
+           FROM twitch_streamers_partner_state
+           WHERE LOWER(twitch_login) = $1"#,
+        norm
     )
-    .bind(norm)
     .fetch_optional(pool)
     .await
     {
@@ -115,22 +102,22 @@ pub async fn log_decision(
     cost_usd: Option<f64>,
 ) {
     let logged_text = result.response_text.as_deref().or(result.shadow_text.as_deref());
-    let _ = sqlx::query(
+    let _ = sqlx::query!(
         "INSERT INTO twitch_engagement_log \
          (channel_login, triggered_by_msg_id, decision, response_text, referenced_thread_ids, \
           model, prompt_tokens, completion_tokens, cost_usd_estimate, latency_ms) \
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)",
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, ($9::double precision)::numeric, $10)",
+        channel_login,
+        triggered_by_msg_id,
+        result.decision.as_str(),
+        logged_text,
+        result.referenced_thread_ids.as_deref(),
+        result.model.as_deref().unwrap_or(""),
+        result.prompt_tokens.map(|t| t as i32),
+        result.completion_tokens.map(|t| t as i32),
+        cost_usd,
+        result.latency_ms.map(|t| t as i32)
     )
-    .bind(channel_login)
-    .bind(triggered_by_msg_id)
-    .bind(result.decision.as_str())
-    .bind(logged_text)
-    .bind(result.referenced_thread_ids.as_deref())
-    .bind(result.model.as_deref().unwrap_or(""))
-    .bind(result.prompt_tokens.map(|t| t as i32))
-    .bind(result.completion_tokens.map(|t| t as i32))
-    .bind(cost_usd)
-    .bind(result.latency_ms.map(|t| t as i32))
     .execute(pool)
     .await;
 }

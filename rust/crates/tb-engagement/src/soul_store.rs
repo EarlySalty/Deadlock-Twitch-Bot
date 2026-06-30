@@ -123,19 +123,21 @@ impl SoulStore {
     /// Speichert einen Soul-Eintrag. Bei `kind == "anchor"` werden alte Anker auf
     /// die jüngsten [`KEEP_ANCHORS`] gekürzt.
     pub async fn store_soul_entry(&self, kind: &str, content: &str) -> Result<(), sqlx::Error> {
-        sqlx::query("INSERT INTO twitch_engagement_soul (kind, content) VALUES ($1, $2)")
-            .bind(kind)
-            .bind(content)
+        sqlx::query!(
+            "INSERT INTO twitch_engagement_soul (kind, content) VALUES ($1, $2)",
+            kind,
+            content
+        )
             .execute(&self.pool)
             .await?;
         if kind == "anchor" {
-            sqlx::query(
+            sqlx::query!(
                 "DELETE FROM twitch_engagement_soul \
                  WHERE kind = 'anchor' AND id NOT IN (\
                    SELECT id FROM twitch_engagement_soul \
                    WHERE kind = 'anchor' ORDER BY created_at DESC LIMIT $1)",
+                KEEP_ANCHORS
             )
-            .bind(KEEP_ANCHORS)
             .execute(&self.pool)
             .await?;
         }
@@ -144,9 +146,10 @@ impl SoulStore {
 
     /// Jüngste Hero-Takes (oder None).
     async fn latest_hero_takes(&self) -> Option<String> {
-        sqlx::query_scalar::<_, String>(
-            "SELECT content FROM twitch_engagement_soul WHERE kind='hero_takes' \
-             ORDER BY created_at DESC LIMIT 1",
+        sqlx::query_scalar!(
+            r#"SELECT content AS "content!" FROM twitch_engagement_soul
+             WHERE kind='hero_takes'
+             ORDER BY created_at DESC LIMIT 1"#
         )
         .fetch_optional(&self.pool)
         .await
@@ -157,11 +160,12 @@ impl SoulStore {
 
     /// Die `limit` jüngsten Anker.
     async fn recent_anchors(&self, limit: i64) -> Vec<String> {
-        sqlx::query_scalar::<_, String>(
-            "SELECT content FROM twitch_engagement_soul WHERE kind='anchor' \
-             ORDER BY created_at DESC LIMIT $1",
+        sqlx::query_scalar!(
+            r#"SELECT content AS "content!" FROM twitch_engagement_soul
+             WHERE kind='anchor'
+             ORDER BY created_at DESC LIMIT $1"#,
+            limit
         )
-        .bind(limit)
         .fetch_all(&self.pool)
         .await
         .unwrap_or_default()
@@ -181,22 +185,27 @@ impl SoulStore {
     /// Die `limit` jüngsten Konversations-Turns (role, login, content),
     /// chronologisch (älteste zuerst).
     async fn recent_convo(&self, limit: i64) -> Vec<(String, Option<String>, String)> {
-        let rows = sqlx::query_as::<_, (String, Option<String>, String)>(
-            "SELECT role, twitch_login, content FROM twitch_engagement_conversation \
-             ORDER BY ts DESC LIMIT $1",
+        let rows = sqlx::query!(
+            r#"SELECT role AS "role!", twitch_login, content AS "content!"
+             FROM twitch_engagement_conversation
+             ORDER BY ts DESC LIMIT $1"#,
+            limit
         )
-        .bind(limit)
         .fetch_all(&self.pool)
         .await
         .unwrap_or_default();
-        rows.into_iter().rev().collect()
+        rows.into_iter()
+            .rev()
+            .map(|r| (r.role, r.twitch_login, r.content))
+            .collect()
     }
 
     /// Der jüngste Anker (für die Dedup-Prüfung).
     async fn last_anchor(&self) -> Option<String> {
-        sqlx::query_scalar::<_, String>(
-            "SELECT content FROM twitch_engagement_soul WHERE kind='anchor' \
-             ORDER BY created_at DESC LIMIT 1",
+        sqlx::query_scalar!(
+            r#"SELECT content AS "content!" FROM twitch_engagement_soul
+             WHERE kind='anchor'
+             ORDER BY created_at DESC LIMIT 1"#
         )
         .fetch_optional(&self.pool)
         .await

@@ -1,0 +1,15 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "INSERT INTO twitch_engagement_conversation (channel_login, role, content) VALUES ($1, 'assistant', $2)",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Text",
+        "Text"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "5b1c83aa6c2024e61499424c624aa784b54c63aebec8f22404a1a19188da7ea5"
+}

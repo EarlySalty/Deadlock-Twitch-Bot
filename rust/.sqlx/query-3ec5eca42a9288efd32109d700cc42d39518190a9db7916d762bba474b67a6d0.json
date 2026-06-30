@@ -1,0 +1,23 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "INSERT INTO twitch_engagement_log (channel_login, triggered_by_msg_id, decision, response_text, referenced_thread_ids, model, prompt_tokens, completion_tokens, cost_usd_estimate, latency_ms) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, ($9::double precision)::numeric, $10)",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Text",
+        "Text",
+        "Text",
+        "Text",
+        "Int8Array",
+        "Text",
+        "Int4",
+        "Int4",
+        "Float8",
+        "Int4"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "3ec5eca42a9288efd32109d700cc42d39518190a9db7916d762bba474b67a6d0"
+}

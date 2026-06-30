@@ -1,0 +1,22 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT sentiment_text AS \"sentiment_text!\" FROM twitch_engagement_global_sentiment\n             WHERE built_at > NOW() - make_interval(hours => $1)\n             ORDER BY built_at DESC LIMIT 1",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "sentiment_text!",
+        "type_info": "Text"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Int4"
+      ]
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "bb4dd236fb761a5ad5ce854fa84c07dd7ea36ea80d7036e73864d116859b1576"
+}

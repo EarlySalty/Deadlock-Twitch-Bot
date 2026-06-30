@@ -1,0 +1,19 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "INSERT INTO twitch_user_threads (twitch_user_id, twitch_login, channel_login, thread_type, summary, due_at, status, created_at, updated_at) VALUES ($1, $2, $3, $4, $5, $6, 'open', NOW(), NOW())",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Text",
+        "Text",
+        "Text",
+        "Text",
+        "Text",
+        "Timestamptz"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "c77384658d7e547d75655e05adaa7f3b3e69f354492c3c3a74a523b1f6b0dc8c"
+}

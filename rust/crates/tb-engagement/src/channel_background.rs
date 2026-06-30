@@ -55,13 +55,13 @@ impl ChannelBackground {
     }
 
     async fn channel_msgs(&self, channel_login: &str, limit: i64) -> Vec<String> {
-        sqlx::query_scalar::<_, String>(
-            "SELECT content FROM twitch_engagement_conversation \
-             WHERE channel_login = $1 AND role = 'user' \
-             ORDER BY ts DESC LIMIT $2",
+        sqlx::query_scalar!(
+            r#"SELECT content AS "content!" FROM twitch_engagement_conversation
+             WHERE channel_login = $1 AND role = 'user'
+             ORDER BY ts DESC LIMIT $2"#,
+            channel_login,
+            limit
         )
-        .bind(channel_login)
-        .bind(limit)
         .fetch_all(&self.pool)
         .await
         .unwrap_or_default()
@@ -74,12 +74,12 @@ impl ChannelBackground {
     }
 
     async fn channels_with_data(&self, min_msgs: i64) -> Vec<String> {
-        sqlx::query_scalar::<_, String>(
-            "SELECT channel_login FROM twitch_engagement_conversation \
-             WHERE role = 'user' \
-             GROUP BY channel_login HAVING count(*) >= $1",
+        sqlx::query_scalar!(
+            r#"SELECT channel_login AS "channel_login!" FROM twitch_engagement_conversation
+             WHERE role = 'user'
+             GROUP BY channel_login HAVING count(*) >= $1"#,
+            min_msgs
         )
-        .bind(min_msgs)
         .fetch_all(&self.pool)
         .await
         .unwrap_or_default()
@@ -89,27 +89,29 @@ impl ChannelBackground {
     }
 
     async fn upsert(&self, channel_login: &str, text: &str, count: i64) -> Result<(), sqlx::Error> {
-        sqlx::query(
+        sqlx::query!(
             "INSERT INTO twitch_engagement_channel_profile \
-             (channel_login, profile_text, msg_count, updated_at) VALUES ($1, $2, $3, NOW()) \
+             (channel_login, profile_text, msg_count, updated_at) VALUES ($1, $2, $3::int8, NOW()) \
              ON CONFLICT (channel_login) DO UPDATE \
                SET profile_text = EXCLUDED.profile_text, \
                    msg_count = EXCLUDED.msg_count, \
                    updated_at = NOW()",
+            channel_login,
+            text,
+            count
         )
-        .bind(channel_login)
-        .bind(text)
-        .bind(count)
         .execute(&self.pool)
         .await?;
         Ok(())
     }
 
     async fn load(&self, channel_login: &str) -> Option<String> {
-        sqlx::query_scalar::<_, String>(
-            "SELECT profile_text FROM twitch_engagement_channel_profile WHERE channel_login = $1",
+        sqlx::query_scalar!(
+            r#"SELECT profile_text AS "profile_text!"
+               FROM twitch_engagement_channel_profile
+               WHERE channel_login = $1"#,
+            channel_login
         )
-        .bind(channel_login)
         .fetch_optional(&self.pool)
         .await
         .ok()

@@ -1,0 +1,52 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT id AS \"id!\", channel_login AS \"channel_login!\",\n                  response_text AS \"response_text?\", triggered_by_msg_id,\n                  model AS \"model!\", ts AS \"ts!\"\n         FROM twitch_engagement_log\n         WHERE decision = 'shadowed'\n           AND shadow_forwarded_at IS NULL\n           AND response_text IS NOT NULL\n         ORDER BY ts ASC\n         LIMIT $1",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id!",
+        "type_info": "Int8"
+      },
+      {
+        "ordinal": 1,
+        "name": "channel_login!",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 2,
+        "name": "response_text?",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 3,
+        "name": "triggered_by_msg_id",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 4,
+        "name": "model!",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 5,
+        "name": "ts!",
+        "type_info": "Timestamptz"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Int8"
+      ]
+    },
+    "nullable": [
+      false,
+      false,
+      true,
+      true,
+      false,
+      false
+    ]
+  },
+  "hash": "7eaacba767526694af18cb354389c99daf4a190365429a2cacd0a32fa68ac28b"
+}

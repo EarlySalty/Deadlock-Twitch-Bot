@@ -1,0 +1,16 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "INSERT INTO twitch_engagement_channel_profile (channel_login, profile_text, msg_count, updated_at) VALUES ($1, $2, $3::int8, NOW()) ON CONFLICT (channel_login) DO UPDATE SET profile_text = EXCLUDED.profile_text, msg_count = EXCLUDED.msg_count, updated_at = NOW()",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Text",
+        "Text",
+        "Int8"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "96b45efbf03b4d3fb1d1d3f820b709bf52b7c265a7ea72c0b86f8b153683aff1"
+}

@@ -20,15 +20,6 @@ pub struct ConversationTurn {
     pub ts: DateTime<Utc>,
 }
 
-type Row = (
-    String,
-    Option<String>,
-    Option<String>,
-    String,
-    Option<String>,
-    DateTime<Utc>,
-);
-
 /// Persistenter Multi-Turn-Buffer pro Channel.
 pub struct ConversationBuffer {
     pool: PgPool,
@@ -48,16 +39,16 @@ impl ConversationBuffer {
         content: &str,
         message_id: Option<&str>,
     ) -> Result<(), sqlx::Error> {
-        sqlx::query(
+        sqlx::query!(
             "INSERT INTO twitch_engagement_conversation \
              (channel_login, role, twitch_user_id, twitch_login, content, message_id) \
              VALUES ($1, 'user', $2, $3, $4, $5)",
+            channel_login,
+            twitch_user_id,
+            twitch_login,
+            content,
+            message_id
         )
-        .bind(channel_login)
-        .bind(twitch_user_id)
-        .bind(twitch_login)
-        .bind(content)
-        .bind(message_id)
         .execute(&self.pool)
         .await?;
         Ok(())
@@ -69,12 +60,12 @@ impl ConversationBuffer {
         channel_login: &str,
         content: &str,
     ) -> Result<(), sqlx::Error> {
-        sqlx::query(
+        sqlx::query!(
             "INSERT INTO twitch_engagement_conversation (channel_login, role, content) \
              VALUES ($1, 'assistant', $2)",
+            channel_login,
+            content
         )
-        .bind(channel_login)
-        .bind(content)
         .execute(&self.pool)
         .await?;
         Ok(())
@@ -87,28 +78,29 @@ impl ConversationBuffer {
         channel_login: &str,
         limit: i64,
     ) -> Result<Vec<ConversationTurn>, sqlx::Error> {
-        let rows = sqlx::query_as::<_, Row>(
-            "SELECT role, twitch_user_id, twitch_login, content, message_id, ts \
-             FROM twitch_engagement_conversation \
-             WHERE channel_login = $1 \
-             ORDER BY ts DESC \
-             LIMIT $2",
+        let rows = sqlx::query!(
+            r#"SELECT role AS "role!", twitch_user_id, twitch_login,
+                    content AS "content!", message_id, ts AS "ts!"
+             FROM twitch_engagement_conversation
+             WHERE channel_login = $1
+             ORDER BY ts DESC
+             LIMIT $2"#,
+            channel_login,
+            limit
         )
-        .bind(channel_login)
-        .bind(limit)
         .fetch_all(&self.pool)
         .await?;
 
         Ok(rows
             .into_iter()
             .rev()
-            .map(|(role, twitch_user_id, twitch_login, content, message_id, ts)| ConversationTurn {
-                role,
-                twitch_user_id,
-                twitch_login,
-                content,
-                message_id,
-                ts,
+            .map(|r| ConversationTurn {
+                role: r.role,
+                twitch_user_id: r.twitch_user_id,
+                twitch_login: r.twitch_login,
+                content: r.content,
+                message_id: r.message_id,
+                ts: r.ts,
             })
             .collect())
     }

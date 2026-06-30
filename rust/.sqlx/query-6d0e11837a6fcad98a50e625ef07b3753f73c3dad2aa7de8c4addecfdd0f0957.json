@@ -1,0 +1,58 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT channel_login AS \"channel_login!\", hero_id, hero_name, match_id,\n                    match_started_at, last_synced_at AS \"last_synced_at?\", is_live AS \"is_live!\"\n             FROM twitch_channel_match_state WHERE channel_login = $1",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "channel_login!",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 1,
+        "name": "hero_id",
+        "type_info": "Int4"
+      },
+      {
+        "ordinal": 2,
+        "name": "hero_name",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 3,
+        "name": "match_id",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 4,
+        "name": "match_started_at",
+        "type_info": "Timestamptz"
+      },
+      {
+        "ordinal": 5,
+        "name": "last_synced_at?",
+        "type_info": "Timestamptz"
+      },
+      {
+        "ordinal": 6,
+        "name": "is_live!",
+        "type_info": "Bool"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Text"
+      ]
+    },
+    "nullable": [
+      false,
+      true,
+      true,
+      true,
+      true,
+      false,
+      false
+    ]
+  },
+  "hash": "6d0e11837a6fcad98a50e625ef07b3753f73c3dad2aa7de8c4addecfdd0f0957"
+}

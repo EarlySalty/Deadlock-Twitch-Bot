@@ -1,0 +1,72 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT id AS \"id!\", twitch_user_id AS \"twitch_user_id!\",\n                    twitch_login AS \"twitch_login!\", channel_login,\n                    thread_type AS \"thread_type!\", summary AS \"summary!\",\n                    due_at, status AS \"status!\", last_referenced_at\n             FROM twitch_user_threads\n             WHERE twitch_user_id = $1 AND (channel_login = $2 OR channel_login IS NULL)\n               AND status IN ('open', 'follow_up_due')\n               AND (last_referenced_at IS NULL\n                    OR last_referenced_at < NOW() - INTERVAL '30 minutes')\n             ORDER BY CASE WHEN status = 'follow_up_due' THEN 0 ELSE 1 END,\n                      COALESCE(due_at, created_at) ASC\n             LIMIT $3",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id!",
+        "type_info": "Int8"
+      },
+      {
+        "ordinal": 1,
+        "name": "twitch_user_id!",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 2,
+        "name": "twitch_login!",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 3,
+        "name": "channel_login",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 4,
+        "name": "thread_type!",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 5,
+        "name": "summary!",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 6,
+        "name": "due_at",
+        "type_info": "Timestamptz"
+      },
+      {
+        "ordinal": 7,
+        "name": "status!",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 8,
+        "name": "last_referenced_at",
+        "type_info": "Timestamptz"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Text",
+        "Text",
+        "Int8"
+      ]
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      true,
+      false,
+      false,
+      true,
+      false,
+      true
+    ]
+  },
+  "hash": "0e1c73228acef03d1f78b66b6a0bac713905c4ebefcf2f1fcd84d3d3b1567780"
+}

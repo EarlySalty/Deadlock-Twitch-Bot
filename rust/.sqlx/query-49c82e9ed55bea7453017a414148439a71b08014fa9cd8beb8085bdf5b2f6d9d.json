@@ -1,0 +1,50 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT twitch_user_id AS \"twitch_user_id!\", twitch_login AS \"twitch_login!\",\n                    access_token_enc AS \"access_token_enc!\",\n                    refresh_token_enc AS \"refresh_token_enc!\",\n                    scopes, token_expires_at AS \"token_expires_at!\"\n             FROM twitch_engagement_sender_auth ORDER BY updated_at DESC LIMIT 1",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "twitch_user_id!",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 1,
+        "name": "twitch_login!",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 2,
+        "name": "access_token_enc!",
+        "type_info": "Bytea"
+      },
+      {
+        "ordinal": 3,
+        "name": "refresh_token_enc!",
+        "type_info": "Bytea"
+      },
+      {
+        "ordinal": 4,
+        "name": "scopes",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 5,
+        "name": "token_expires_at!",
+        "type_info": "Int8"
+      }
+    ],
+    "parameters": {
+      "Left": []
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      false,
+      true,
+      false
+    ]
+  },
+  "hash": "49c82e9ed55bea7453017a414148439a71b08014fa9cd8beb8085bdf5b2f6d9d"
+}

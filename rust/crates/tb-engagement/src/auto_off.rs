@@ -28,12 +28,12 @@ pub async fn auto_disable_on_offline(
     if channel_login.is_empty() {
         return Ok(0);
     }
-    let result = sqlx::query(
+    let result = sqlx::query!(
         "UPDATE twitch_engagement_settings \
             SET enabled = FALSE, updated_at = NOW() \
           WHERE channel_login = $1 AND enabled = TRUE",
+        channel_login
     )
-    .bind(channel_login)
     .execute(pool)
     .await?;
     Ok(result.rows_affected())

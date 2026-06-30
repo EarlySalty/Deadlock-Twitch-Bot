@@ -1,0 +1,14 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "DELETE FROM twitch_engagement_conversation WHERE id IN (SELECT id FROM (SELECT id, ROW_NUMBER() OVER (PARTITION BY channel_login ORDER BY ts DESC) AS rn FROM twitch_engagement_conversation) ranked WHERE rn > $1)",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Int8"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "2e3666112127a13ba54452a0ec24d0e52656df1a72bf440cd9c6efe118a4127a"
+}

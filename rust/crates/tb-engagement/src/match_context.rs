@@ -92,35 +92,24 @@ impl MatchContext {
 
     /// Lädt den Match-Snapshot eines Channels aus der DB (oder None).
     pub async fn get_match_state(&self, channel_login: &str) -> Option<MatchSnapshot> {
-        type Row = (
-            String,
-            Option<i32>,
-            Option<String>,
-            Option<String>,
-            Option<DateTime<Utc>>,
-            Option<DateTime<Utc>>,
-            bool,
-        );
-        let row = sqlx::query_as::<_, Row>(
-            "SELECT channel_login, hero_id, hero_name, match_id, \
-                    match_started_at, last_synced_at, is_live \
-             FROM twitch_channel_match_state WHERE channel_login = $1",
+        let row = sqlx::query!(
+            r#"SELECT channel_login AS "channel_login!", hero_id, hero_name, match_id,
+                    match_started_at, last_synced_at AS "last_synced_at?", is_live AS "is_live!"
+             FROM twitch_channel_match_state WHERE channel_login = $1"#,
+            channel_login
         )
-        .bind(channel_login)
         .fetch_optional(&self.pool)
         .await
         .ok()
         .flatten()?;
-        let (channel_login, hero_id, hero_name, match_id, match_started_at, last_synced_at, is_live) =
-            row;
         Some(MatchSnapshot {
-            channel_login,
-            hero_id: hero_id.map(i64::from),
-            hero_name,
-            match_id: match_id.filter(|s| !s.is_empty()),
-            match_started_at,
-            last_synced_at,
-            is_live,
+            channel_login: row.channel_login,
+            hero_id: row.hero_id.map(i64::from),
+            hero_name: row.hero_name,
+            match_id: row.match_id.filter(|s| !s.is_empty()),
+            match_started_at: row.match_started_at,
+            last_synced_at: row.last_synced_at,
+            is_live: row.is_live,
         })
     }
 
@@ -195,7 +184,7 @@ impl MatchContext {
         m: &ExtractedMatch,
         hero_name: Option<&str>,
     ) -> Result<(), sqlx::Error> {
-        sqlx::query(
+        sqlx::query!(
             "INSERT INTO twitch_channel_match_state \
              (channel_login, hero_id, hero_name, match_id, match_started_at, last_synced_at, is_live) \
              VALUES ($1, $2, $3, $4, $5, NOW(), $6) \
@@ -203,13 +192,13 @@ impl MatchContext {
                hero_id = EXCLUDED.hero_id, hero_name = EXCLUDED.hero_name, \
                match_id = EXCLUDED.match_id, match_started_at = EXCLUDED.match_started_at, \
                last_synced_at = NOW(), is_live = EXCLUDED.is_live",
+            channel_login,
+            m.hero_id.map(|h| h as i32),
+            hero_name,
+            m.match_id.as_deref(),
+            m.match_started_at,
+            m.is_live
         )
-        .bind(channel_login)
-        .bind(m.hero_id.map(|h| h as i32))
-        .bind(hero_name)
-        .bind(m.match_id.as_deref())
-        .bind(m.match_started_at)
-        .bind(m.is_live)
         .execute(&self.pool)
         .await?;
         Ok(())

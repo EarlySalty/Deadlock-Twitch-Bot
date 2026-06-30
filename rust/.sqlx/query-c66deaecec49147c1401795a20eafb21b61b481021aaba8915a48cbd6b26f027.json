@@ -1,0 +1,14 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "UPDATE twitch_engagement_log SET shadow_forwarded_at = NOW() WHERE id = ANY($1) AND shadow_forwarded_at IS NULL",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Int8Array"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "c66deaecec49147c1401795a20eafb21b61b481021aaba8915a48cbd6b26f027"
+}

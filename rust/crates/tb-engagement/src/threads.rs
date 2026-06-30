@@ -99,52 +99,39 @@ impl Threads {
         if user_id.is_empty() {
             return Vec::new();
         }
-        type Row = (
-            i64,
-            String,
-            String,
-            Option<String>,
-            String,
-            String,
-            Option<DateTime<Utc>>,
-            String,
-            Option<DateTime<Utc>>,
-        );
-        let rows = sqlx::query_as::<_, Row>(
-            "SELECT id, twitch_user_id, twitch_login, channel_login, thread_type, summary, \
-                    due_at, status, last_referenced_at \
-             FROM twitch_user_threads \
-             WHERE twitch_user_id = $1 AND (channel_login = $2 OR channel_login IS NULL) \
-               AND status IN ('open', 'follow_up_due') \
-               AND (last_referenced_at IS NULL \
-                    OR last_referenced_at < NOW() - INTERVAL '30 minutes') \
-             ORDER BY CASE WHEN status = 'follow_up_due' THEN 0 ELSE 1 END, \
-                      COALESCE(due_at, created_at) ASC \
-             LIMIT $3",
+        let rows = sqlx::query!(
+            r#"SELECT id AS "id!", twitch_user_id AS "twitch_user_id!",
+                    twitch_login AS "twitch_login!", channel_login,
+                    thread_type AS "thread_type!", summary AS "summary!",
+                    due_at, status AS "status!", last_referenced_at
+             FROM twitch_user_threads
+             WHERE twitch_user_id = $1 AND (channel_login = $2 OR channel_login IS NULL)
+               AND status IN ('open', 'follow_up_due')
+               AND (last_referenced_at IS NULL
+                    OR last_referenced_at < NOW() - INTERVAL '30 minutes')
+             ORDER BY CASE WHEN status = 'follow_up_due' THEN 0 ELSE 1 END,
+                      COALESCE(due_at, created_at) ASC
+             LIMIT $3"#,
+            user_id,
+            channel_login,
+            limit
         )
-        .bind(user_id)
-        .bind(channel_login)
-        .bind(limit)
         .fetch_all(&self.pool)
         .await
         .unwrap_or_default();
 
         rows.into_iter()
-            .map(
-                |(id, twitch_user_id, twitch_login, channel_login, thread_type, summary, due_at, status, last_referenced_at)| {
-                    Thread {
-                        id,
-                        twitch_user_id,
-                        twitch_login,
-                        channel_login,
-                        thread_type,
-                        summary,
-                        due_at,
-                        status,
-                        last_referenced_at,
-                    }
-                },
-            )
+            .map(|r| Thread {
+                id: r.id,
+                twitch_user_id: r.twitch_user_id,
+                twitch_login: r.twitch_login,
+                channel_login: r.channel_login,
+                thread_type: r.thread_type,
+                summary: r.summary,
+                due_at: r.due_at,
+                status: r.status,
+                last_referenced_at: r.last_referenced_at,
+            })
             .collect()
     }
 
@@ -154,15 +141,15 @@ impl Threads {
         if thread_ids.is_empty() {
             return Ok(());
         }
-        sqlx::query(
+        sqlx::query!(
             "UPDATE twitch_user_threads \
                 SET last_referenced_at = NOW(), \
                     status = CASE WHEN status = 'follow_up_due' THEN 'awaiting_response' \
                                   ELSE status END, \
                     updated_at = NOW() \
               WHERE id = ANY($1)",
+            thread_ids
         )
-        .bind(thread_ids)
         .execute(&self.pool)
         .await?;
         Ok(())
@@ -172,6 +159,7 @@ impl Threads {
     /// closed, open >30d → closed. Liefert die Zähler.
     pub async fn auto_close_stale(&self) -> CloseCounts {
         let run = |sql: &'static str| async move {
+            // dyn: gemeinsamer Helper für drei statische Lifecycle-Statements.
             sqlx::query(sql)
                 .execute(&self.pool)
                 .await
@@ -202,19 +190,23 @@ impl Threads {
         hours: i32,
         limit: i64,
     ) -> Vec<(String, Option<String>, String, DateTime<Utc>)> {
-        sqlx::query_as::<_, (String, Option<String>, String, DateTime<Utc>)>(
-            "SELECT twitch_user_id, twitch_login, content, ts \
-             FROM twitch_engagement_conversation \
-             WHERE channel_login = $1 AND role = 'user' AND twitch_user_id IS NOT NULL \
-               AND ts > NOW() - make_interval(hours => $2) \
-             ORDER BY ts DESC LIMIT $3",
+        sqlx::query!(
+            r#"SELECT twitch_user_id AS "twitch_user_id!", twitch_login,
+                    content AS "content!", ts AS "ts!"
+             FROM twitch_engagement_conversation
+             WHERE channel_login = $1 AND role = 'user' AND twitch_user_id IS NOT NULL
+               AND ts > NOW() - make_interval(hours => $2)
+             ORDER BY ts DESC LIMIT $3"#,
+            channel_login,
+            hours,
+            limit
         )
-        .bind(channel_login)
-        .bind(hours)
-        .bind(limit)
         .fetch_all(&self.pool)
         .await
         .unwrap_or_default()
+        .into_iter()
+        .map(|r| (r.twitch_user_id, r.twitch_login, r.content, r.ts))
+        .collect()
     }
 
     /// Insert nur, wenn kein offener Thread mit gleichem (user, channel, type,
@@ -228,33 +220,33 @@ impl Threads {
         summary: &str,
         due_at: Option<DateTime<Utc>>,
     ) -> Result<bool, sqlx::Error> {
-        let existing: Option<i64> = sqlx::query_scalar(
-            "SELECT id FROM twitch_user_threads \
-             WHERE twitch_user_id = $1 AND COALESCE(channel_login, '') = $2 \
-               AND thread_type = $3 AND LOWER(summary) = LOWER($4) \
-               AND status IN ('open', 'follow_up_due', 'awaiting_response') LIMIT 1",
+        let existing = sqlx::query_scalar!(
+            r#"SELECT id AS "id!" FROM twitch_user_threads
+             WHERE twitch_user_id = $1 AND COALESCE(channel_login, '') = $2
+               AND thread_type = $3 AND LOWER(summary) = LOWER($4)
+               AND status IN ('open', 'follow_up_due', 'awaiting_response') LIMIT 1"#,
+            uid,
+            channel,
+            ttype,
+            summary
         )
-        .bind(uid)
-        .bind(channel)
-        .bind(ttype)
-        .bind(summary)
         .fetch_optional(&self.pool)
         .await?;
         if existing.is_some() {
             return Ok(false);
         }
-        sqlx::query(
+        sqlx::query!(
             "INSERT INTO twitch_user_threads \
              (twitch_user_id, twitch_login, channel_login, thread_type, summary, due_at, \
               status, created_at, updated_at) \
              VALUES ($1, $2, $3, $4, $5, $6, 'open', NOW(), NOW())",
+            uid,
+            login,
+            channel,
+            ttype,
+            summary,
+            due_at
         )
-        .bind(uid)
-        .bind(login)
-        .bind(channel)
-        .bind(ttype)
-        .bind(summary)
-        .bind(due_at)
         .execute(&self.pool)
         .await?;
         Ok(true)

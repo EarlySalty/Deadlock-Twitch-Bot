@@ -1,0 +1,54 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT channel_login AS \"channel_login!\", started_at AS \"started_at!\",\n                    ended_at AS \"ended_at!\", text AS \"text!\", engine AS \"engine!\", model\n             FROM twitch_engagement_stream_transcripts\n             WHERE channel_login = $1 AND ended_at >= $2\n             ORDER BY ended_at DESC LIMIT $3",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "channel_login!",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 1,
+        "name": "started_at!",
+        "type_info": "Timestamptz"
+      },
+      {
+        "ordinal": 2,
+        "name": "ended_at!",
+        "type_info": "Timestamptz"
+      },
+      {
+        "ordinal": 3,
+        "name": "text!",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 4,
+        "name": "engine!",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 5,
+        "name": "model",
+        "type_info": "Text"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Text",
+        "Timestamptz",
+        "Int8"
+      ]
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      false,
+      false,
+      true
+    ]
+  },
+  "hash": "ba0c0725d70b71bd47d140833caec76befbdbc9f06f9e6d99dbfd4da8fd5e7cd"
+}

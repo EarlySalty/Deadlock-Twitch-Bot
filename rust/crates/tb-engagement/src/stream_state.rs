@@ -26,16 +26,18 @@ impl StreamState {
 
     async fn check(&self, cl: &str) -> Result<bool, sqlx::Error> {
         // `is_live` ist INTEGER (DEFAULT 0); `bool(row[0])` = != 0.
-        let row: Option<(Option<i32>, Option<String>)> = sqlx::query_as(
-            "SELECT is_live, last_game FROM twitch_live_state WHERE streamer_login = $1",
+        let row = sqlx::query!(
+            r#"SELECT is_live AS "is_live?", last_game
+               FROM twitch_live_state
+               WHERE streamer_login = $1"#,
+            cl
         )
-        .bind(cl)
         .fetch_optional(&self.pool)
         .await?;
         match row {
-            Some((is_live, last_game)) => {
-                let live = is_live.unwrap_or(0) != 0;
-                let game = last_game.unwrap_or_default().trim().to_lowercase();
+            Some(row) => {
+                let live = row.is_live.unwrap_or(0) != 0;
+                let game = row.last_game.unwrap_or_default().trim().to_lowercase();
                 Ok(live && game == "deadlock")
             }
             None => Ok(false),

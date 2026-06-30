@@ -1,0 +1,23 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT content AS \"content!\" FROM twitch_engagement_conversation\n             WHERE role = 'user' AND ts > NOW() - make_interval(hours => $1)\n             ORDER BY ts DESC LIMIT $2",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "content!",
+        "type_info": "Text"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Int4",
+        "Int8"
+      ]
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "e6a13b1be1060eb57aecb55c1a052b5187a8cd28f53bc3ad50b29e7e44aa4527"
+}

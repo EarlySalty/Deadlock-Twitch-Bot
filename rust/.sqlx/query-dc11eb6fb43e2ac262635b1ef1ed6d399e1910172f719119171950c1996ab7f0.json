@@ -1,0 +1,14 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "DELETE FROM twitch_engagement_global_sentiment WHERE id NOT IN (SELECT id FROM twitch_engagement_global_sentiment ORDER BY built_at DESC LIMIT $1)",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Int8"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "dc11eb6fb43e2ac262635b1ef1ed6d399e1910172f719119171950c1996ab7f0"
+}

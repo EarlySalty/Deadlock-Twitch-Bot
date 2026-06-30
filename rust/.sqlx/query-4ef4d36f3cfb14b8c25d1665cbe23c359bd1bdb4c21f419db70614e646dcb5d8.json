@@ -1,0 +1,14 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "UPDATE twitch_user_threads SET last_referenced_at = NOW(), status = CASE WHEN status = 'follow_up_due' THEN 'awaiting_response' ELSE status END, updated_at = NOW() WHERE id = ANY($1)",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Int8Array"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "4ef4d36f3cfb14b8c25d1665cbe23c359bd1bdb4c21f419db70614e646dcb5d8"
+}

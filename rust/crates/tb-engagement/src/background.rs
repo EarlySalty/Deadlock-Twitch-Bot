@@ -47,25 +47,30 @@ fn stream_transcripts_enabled() -> bool {
 
 /// Aktive Engagement-Channels samt steam_id.
 async fn load_enabled_channels(pool: &PgPool) -> Vec<(String, Option<String>)> {
-    sqlx::query_as::<_, (String, Option<String>)>(
-        "SELECT channel_login, steam_id FROM twitch_engagement_settings WHERE enabled = TRUE",
+    sqlx::query!(
+        r#"SELECT channel_login AS "channel_login!", steam_id
+           FROM twitch_engagement_settings
+           WHERE enabled = TRUE"#
     )
     .fetch_all(pool)
     .await
     .unwrap_or_default()
+    .into_iter()
+    .map(|r| (r.channel_login, r.steam_id))
+    .collect()
 }
 
 /// Trimmt den Conversation-Buffer auf die jüngsten `keep` Turns je Channel.
 async fn trim_conversation(pool: &PgPool, keep: i64) -> u64 {
-    sqlx::query(
+    sqlx::query!(
         "DELETE FROM twitch_engagement_conversation WHERE id IN (\
            SELECT id FROM (\
              SELECT id, ROW_NUMBER() OVER (\
                PARTITION BY channel_login ORDER BY ts DESC) AS rn \
              FROM twitch_engagement_conversation) ranked \
            WHERE rn > $1)",
+        keep
     )
-    .bind(keep)
     .execute(pool)
     .await
     .map(|r| r.rows_affected())

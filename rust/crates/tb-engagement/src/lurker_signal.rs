@@ -83,37 +83,38 @@ impl LurkerSignal {
             }
         }
 
-        let rows = sqlx::query_as::<_, (String, Option<String>)>(
-            "WITH regulars AS (\
-               SELECT twitch_user_id, MAX(twitch_login) AS twitch_login, COUNT(*) AS msg_count \
-               FROM twitch_engagement_conversation \
-               WHERE channel_login = $1 AND role = 'user' AND twitch_user_id IS NOT NULL \
-                 AND ts > NOW() - make_interval(days => $2) \
-               GROUP BY twitch_user_id HAVING COUNT(*) >= $3) \
-             SELECT r.twitch_user_id, r.twitch_login FROM regulars r \
-             WHERE NOT EXISTS (\
-               SELECT 1 FROM twitch_engagement_conversation c \
-               WHERE c.channel_login = $1 AND c.role = 'user' \
-                 AND c.twitch_user_id = r.twitch_user_id \
-                 AND c.ts > NOW() - make_interval(mins => $4)) \
-             ORDER BY r.msg_count DESC LIMIT $5",
+        let rows = sqlx::query!(
+            r#"WITH regulars AS (
+               SELECT twitch_user_id, MAX(twitch_login) AS twitch_login, COUNT(*) AS msg_count
+               FROM twitch_engagement_conversation
+               WHERE channel_login = $1 AND role = 'user' AND twitch_user_id IS NOT NULL
+                 AND ts > NOW() - make_interval(days => $2)
+               GROUP BY twitch_user_id HAVING COUNT(*) >= $3)
+             SELECT r.twitch_user_id AS "twitch_user_id!", r.twitch_login FROM regulars r
+             WHERE NOT EXISTS (
+               SELECT 1 FROM twitch_engagement_conversation c
+               WHERE c.channel_login = $1 AND c.role = 'user'
+                 AND c.twitch_user_id = r.twitch_user_id
+                 AND c.ts > NOW() - make_interval(mins => $4))
+             ORDER BY r.msg_count DESC LIMIT $5"#,
+            channel_login,
+            days,
+            min_messages,
+            recent_minutes,
+            limit
         )
-        .bind(channel_login)
-        .bind(days)
-        .bind(min_messages)
-        .bind(recent_minutes)
-        .bind(limit)
         .fetch_all(&self.pool)
         .await
         .unwrap_or_default();
 
         let threads = Threads::new(self.pool.clone());
         let mut hints = Vec::new();
-        for (user_id, login) in rows {
+        for row in rows {
+            let user_id = row.twitch_user_id;
             let top_threads = threads.load_open_threads_for_user(&user_id, channel_login, 2).await;
             hints.push(LurkerHint {
                 twitch_user_id: user_id,
-                twitch_login: login.unwrap_or_default(),
+                twitch_login: row.twitch_login.unwrap_or_default(),
                 top_threads,
             });
         }

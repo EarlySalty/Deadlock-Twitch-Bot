@@ -58,13 +58,13 @@ impl GlobalSentiment {
     }
 
     async fn load_pooled(&self) -> Vec<String> {
-        sqlx::query_scalar::<_, String>(
-            "SELECT content FROM twitch_engagement_conversation \
-             WHERE role = 'user' AND ts > NOW() - make_interval(hours => $1) \
-             ORDER BY ts DESC LIMIT $2",
+        sqlx::query_scalar!(
+            r#"SELECT content AS "content!" FROM twitch_engagement_conversation
+             WHERE role = 'user' AND ts > NOW() - make_interval(hours => $1)
+             ORDER BY ts DESC LIMIT $2"#,
+            POOL_MAX_AGE_HOURS,
+            POOL_LIMIT
         )
-        .bind(POOL_MAX_AGE_HOURS)
-        .bind(POOL_LIMIT)
         .fetch_all(&self.pool)
         .await
         .unwrap_or_default()
@@ -77,34 +77,34 @@ impl GlobalSentiment {
     }
 
     async fn store(&self, text: &str, msg_count: i64, model: &str) -> Result<(), sqlx::Error> {
-        sqlx::query(
+        sqlx::query!(
             "INSERT INTO twitch_engagement_global_sentiment (sentiment_text, msg_count, model) \
-             VALUES ($1, $2, $3)",
+             VALUES ($1, $2::int8, $3)",
+            text,
+            msg_count,
+            model
         )
-        .bind(text)
-        .bind(msg_count)
-        .bind(model)
         .execute(&self.pool)
         .await?;
-        sqlx::query(
+        sqlx::query!(
             "DELETE FROM twitch_engagement_global_sentiment \
              WHERE id NOT IN (\
                SELECT id FROM twitch_engagement_global_sentiment \
                ORDER BY built_at DESC LIMIT $1)",
+            KEEP_ROWS
         )
-        .bind(KEEP_ROWS)
         .execute(&self.pool)
         .await?;
         Ok(())
     }
 
     async fn load_latest(&self, max_age_hours: i32) -> Option<String> {
-        sqlx::query_scalar::<_, String>(
-            "SELECT sentiment_text FROM twitch_engagement_global_sentiment \
-             WHERE built_at > NOW() - make_interval(hours => $1) \
-             ORDER BY built_at DESC LIMIT 1",
+        sqlx::query_scalar!(
+            r#"SELECT sentiment_text AS "sentiment_text!" FROM twitch_engagement_global_sentiment
+             WHERE built_at > NOW() - make_interval(hours => $1)
+             ORDER BY built_at DESC LIMIT 1"#,
+            max_age_hours
         )
-        .bind(max_age_hours)
         .fetch_optional(&self.pool)
         .await
         .ok()

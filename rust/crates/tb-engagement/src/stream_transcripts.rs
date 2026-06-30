@@ -121,17 +121,17 @@ impl StreamTranscripts {
         if text.is_empty() {
             return Ok(());
         }
-        sqlx::query(
+        sqlx::query!(
             "INSERT INTO twitch_engagement_stream_transcripts \
              (channel_login, started_at, ended_at, text, engine, model) \
              VALUES ($1, $2, $3, $4, $5, $6)",
+            &segment.channel_login,
+            segment.started_at,
+            segment.ended_at,
+            &text,
+            &segment.engine,
+            segment.model.as_deref()
         )
-        .bind(&segment.channel_login)
-        .bind(segment.started_at)
-        .bind(segment.ended_at)
-        .bind(&text)
-        .bind(&segment.engine)
-        .bind(segment.model.as_deref())
         .execute(&self.pool)
         .await?;
         Ok(())
@@ -150,29 +150,29 @@ impl StreamTranscripts {
         let limit = limit.unwrap_or_else(|| env_int("ENGAGEMENT_TRANSCRIPT_CONTEXT_LIMIT", 8, 1));
         let cutoff = Utc::now() - Duration::minutes(max_age);
 
-        type Row = (String, DateTime<Utc>, DateTime<Utc>, String, String, Option<String>);
-        let rows = sqlx::query_as::<_, Row>(
-            "SELECT channel_login, started_at, ended_at, text, engine, model \
-             FROM twitch_engagement_stream_transcripts \
-             WHERE channel_login = $1 AND ended_at >= $2 \
-             ORDER BY ended_at DESC LIMIT $3",
+        let rows = sqlx::query!(
+            r#"SELECT channel_login AS "channel_login!", started_at AS "started_at!",
+                    ended_at AS "ended_at!", text AS "text!", engine AS "engine!", model
+             FROM twitch_engagement_stream_transcripts
+             WHERE channel_login = $1 AND ended_at >= $2
+             ORDER BY ended_at DESC LIMIT $3"#,
+            channel_login,
+            cutoff,
+            limit
         )
-        .bind(channel_login)
-        .bind(cutoff)
-        .bind(limit)
         .fetch_all(&self.pool)
         .await
         .unwrap_or_default();
 
         rows.into_iter()
             .rev()
-            .map(|(channel_login, started_at, ended_at, text, engine, model)| StreamTranscriptSegment {
-                channel_login,
-                started_at,
-                ended_at,
-                text,
-                engine,
-                model: model.filter(|m| !m.is_empty()),
+            .map(|r| StreamTranscriptSegment {
+                channel_login: r.channel_login,
+                started_at: r.started_at,
+                ended_at: r.ended_at,
+                text: r.text,
+                engine: r.engine,
+                model: r.model.filter(|m| !m.is_empty()),
             })
             .filter(|s| !s.text.trim().is_empty())
             .collect()
@@ -191,7 +191,7 @@ impl StreamTranscripts {
             .unwrap_or_else(|| env_int("ENGAGEMENT_TRANSCRIPT_KEEP_PER_CHANNEL", 40, 1));
         let cutoff = Utc::now() - Duration::minutes(max_age);
 
-        sqlx::query(
+        sqlx::query!(
             "DELETE FROM twitch_engagement_stream_transcripts \
              WHERE created_at < $1 OR id IN (\
                SELECT id FROM (\
@@ -199,9 +199,9 @@ impl StreamTranscripts {
                    PARTITION BY channel_login ORDER BY ended_at DESC) AS rn \
                  FROM twitch_engagement_stream_transcripts) ranked \
                WHERE rn > $2)",
+            cutoff,
+            keep
         )
-        .bind(cutoff)
-        .bind(keep)
         .execute(&self.pool)
         .await
         .map(|r| r.rows_affected())

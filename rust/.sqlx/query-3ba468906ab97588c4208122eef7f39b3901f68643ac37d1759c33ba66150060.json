@@ -1,0 +1,23 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "DELETE FROM oauth_state_tokens WHERE state_token = $1 AND platform = $2\n             RETURNING expires_at AS \"expires_at?\"",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "expires_at?",
+        "type_info": "Timestamptz"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Text",
+        "Text"
+      ]
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "3ba468906ab97588c4208122eef7f39b3901f68643ac37d1759c33ba66150060"
+}

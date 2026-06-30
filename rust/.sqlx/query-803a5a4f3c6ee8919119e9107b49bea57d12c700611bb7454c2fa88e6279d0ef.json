@@ -1,0 +1,14 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "UPDATE twitch_engagement_settings SET enabled = FALSE, updated_at = NOW() WHERE channel_login = $1 AND enabled = TRUE",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Text"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "803a5a4f3c6ee8919119e9107b49bea57d12c700611bb7454c2fa88e6279d0ef"
+}

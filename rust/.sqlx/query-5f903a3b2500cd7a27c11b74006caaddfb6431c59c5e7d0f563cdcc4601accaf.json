@@ -1,0 +1,16 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "INSERT INTO twitch_engagement_global_sentiment (sentiment_text, msg_count, model) VALUES ($1, $2::int8, $3)",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Text",
+        "Int8",
+        "Text"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "5f903a3b2500cd7a27c11b74006caaddfb6431c59c5e7d0f563cdcc4601accaf"
+}
