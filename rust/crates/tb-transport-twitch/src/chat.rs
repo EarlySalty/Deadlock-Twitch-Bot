@@ -285,9 +285,7 @@ impl HelixClient {
             200 => {
                 // Helix gibt 200 zurück auch wenn die Nachricht verworfen wurde —
                 // is_sent=false + drop_reason auswerten.
-                let parsed: SendMessageResponse = resp.json().await.map_err(|e| {
-                    HelixError::Http(e)
-                })?;
+                let parsed: SendMessageResponse = resp.json().await.map_err(HelixError::Http)?;
                 if let Some(item) = parsed.data.first() {
                     if !item.is_sent {
                         let (code, msg) = item

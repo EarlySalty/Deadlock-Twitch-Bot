@@ -1,3 +1,11 @@
+## #329 — Verdächtige Twitch-Spam-Nachrichten gehen wieder ins AI-Learning
+
+**Ausgangslage:** Eine verdächtige Twitch-Nachricht mit Zuschauer-Kauf-Muster wurde zwar gemeldet, aber nicht an das Lernmodul weitergegeben, weil intern zusätzlich eine bereits bekannte Spam-Domain verlangt wurde. Genau dadurch konnten neue oder absichtlich verschleierte Schreibweisen nicht gelernt werden.
+
+**Änderung:** Jeder Treffer mit positivem Spam-Score darf jetzt in den AI-Review. Das Lernmodul entscheidet danach selbst, ob daraus ein neues Spam-Muster oder ein Safe-Muster wird.
+
+**Ergebnis:** Nachrichten wie der obfuskierte `PeakPy. c0m`-Fall landen künftig im Lernpfad, auch wenn die Domain noch nicht bekannt ist. Die eigentliche Spam-Erkennung bleibt unverändert; entfernt wurde nur das zu enge Vorschalt-Gate vor dem Lernen.
+
 ## #328 — Twitch-Analyse zeigt wieder echte Session-Dauern
 
 **Problem:** Im Twitch-Analyse-Dashboard konnten beendete Streams plötzlich Laufzeiten von mehreren hunderttausend Stunden anzeigen. Ursache war ein Zeitformat, das beim Speichern nicht sauber verstanden wurde und dadurch wie ein Start im Jahr 1970 behandelt wurde.

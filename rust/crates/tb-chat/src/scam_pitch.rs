@@ -183,8 +183,6 @@ struct Patterns {
     discord_handle_drop: Regex,
     discord_teamup: Regex,
     platform_ref: Regex,
-    // Spam-Domain-RE (spam_ai_review.py Z. 28–32)
-    spam_domain: Regex,
 }
 
 impl Patterns {
@@ -319,11 +317,6 @@ impl Patterns {
             discord_handle_drop: ri(r"\bdiscord\s*[:：]\s*[A-Za-z0-9_.-]{3,}\b"),
             discord_teamup: ri(r"\b(?:let'?s|lets)\s+team\s+up(?:\s+on\s+discord)?\b"),
             platform_ref: ri(r"\b(?:discord|instagram|tiktok|youtube|yt|ig)\b"),
-            // spam_ai_review.py Z. 28–32
-            spam_domain: Regex::new(
-                r"(?i)\b\S+\.(?:ru|online|xyz|site)\b|(?:\bstreamboo\b|\bsmmbest\b|\bsmmhype\b|\bsmmtop\b|\bprmxy\b|\bprmup\b)",
-            )
-            .unwrap(),
         }
     }
 }
@@ -1444,7 +1437,6 @@ pub struct SpamAiReviewer {
     pool: PgPool,
     http: reqwest::Client,
     cooldowns: Arc<Mutex<HashMap<(String, String), f64>>>,
-    patterns: Arc<Patterns>,
     /// Gemeinsame Uhr-Basis für monotone Timestamps.
     epoch: Instant,
 }
@@ -1456,22 +1448,17 @@ impl SpamAiReviewer {
             pool,
             http,
             cooldowns: Arc::new(Mutex::new(HashMap::new())),
-            patterns: Arc::new(Patterns::build()),
             epoch: Instant::now(),
         }
     }
 
     /// Startet ggf. einen AI-Review-Task (fire-and-forget).
     ///
-    /// Trigger: `spam_score > 0` AND review_worthwhile AND Cooldown nicht aktiv.
+    /// Trigger: `spam_score > 0` AND Cooldown nicht aktiv.
     /// spam_ai_review.py Z. 286–305 + Z. 75–85
     pub fn maybe_review(&self, event: &ChatMessageEvent, spam_score: i32) {
-        if spam_score <= 0 {
-            return;
-        }
         let content = event.text().to_string();
-        if !self.review_worthwhile(&content, &[]) {
-            // Ohne spam_reasons hier — der Aufrufer übergibt sie separat.
+        if !Self::should_start_review(&content, spam_score, &[]) {
             return;
         }
 
@@ -1483,7 +1470,6 @@ impl SpamAiReviewer {
         // Prüfe Cooldown synchron vor dem Spawn
         let pool = self.pool.clone();
         let http = self.http.clone();
-        let patterns = Arc::clone(&self.patterns);
         let epoch = self.epoch;
 
         tokio::spawn(async move {
@@ -1516,55 +1502,19 @@ impl SpamAiReviewer {
                 }
             };
 
-            let result =
-                call_minimax(&http, &api_key, &content, &patterns).await;
-            match result {
-                None => {
-                    debug!("MiniMax-Review lieferte kein valides JSON");
-                }
-                Some(review) => {
-                    // Ergebnis verarbeiten (Z. 326–366)
-                    if review.is_spam {
-                        warn!(
-                            chatter = %chatter,
-                            channel = %channel,
-                            pattern = ?review.pattern,
-                            reason = ?review.reason,
-                            "SpamAI: Spam bestätigt"
-                        );
-                        if let Some(ref pat) = review.pattern {
-                            if pat.len() >= PATTERN_MIN_LEN {
-                                let pattern_type = match review.pattern_type.as_deref() {
-                                    Some("phrase") => "phrase",
-                                    _ => "fragment",
-                                };
-                                save_spam_pattern(
-                                    &pool,
-                                    pat,
-                                    pattern_type,
-                                    &content,
-                                    &channel,
-                                    review.reason.as_deref().unwrap_or(""),
-                                )
-                                .await;
-                            }
-                        }
-                    } else {
-                        // False Positive (Z. 332–337)
-                        if let Some(ref pat) = review.pattern {
-                            if pat.len() >= PATTERN_MIN_LEN {
-                                save_safe_pattern(
-                                    &pool,
-                                    pat,
-                                    &content,
-                                    &channel,
-                                    review.reason.as_deref().unwrap_or(""),
-                                )
-                                .await;
-                            }
-                        }
-                    }
-                }
+            if !run_ai_review_once(AiReviewRun {
+                pool: &pool,
+                http: &http,
+                api_key: &api_key,
+                base_url: MINIMAX_BASE_URL,
+                record_usage: true,
+                content: &content,
+                channel: &channel,
+                chatter: &chatter,
+            })
+            .await
+            {
+                debug!("MiniMax-Review lieferte kein valides JSON");
             }
         });
     }
@@ -1577,11 +1527,8 @@ impl SpamAiReviewer {
         spam_score: i32,
         spam_reasons: &[String],
     ) {
-        if spam_score <= 0 {
-            return;
-        }
         let content = event.text().to_string();
-        if !self.review_worthwhile(&content, spam_reasons) {
+        if !Self::should_start_review(&content, spam_score, spam_reasons) {
             return;
         }
 
@@ -1591,7 +1538,6 @@ impl SpamAiReviewer {
         let cooldowns = Arc::clone(&self.cooldowns);
         let pool = self.pool.clone();
         let http = self.http.clone();
-        let patterns = Arc::clone(&self.patterns);
         let epoch = self.epoch;
 
         tokio::spawn(async move {
@@ -1621,68 +1567,32 @@ impl SpamAiReviewer {
                 }
             };
 
-            let result = call_minimax(&http, &api_key, &content, &patterns).await;
-            if let Some(review) = result {
-                if review.is_spam {
-                    warn!(
-                        chatter = %chatter,
-                        channel = %channel,
-                        pattern = ?review.pattern,
-                        reason = ?review.reason,
-                        "SpamAI: Spam bestätigt"
-                    );
-                    if let Some(ref pat) = review.pattern {
-                        if pat.len() >= PATTERN_MIN_LEN {
-                            let pt = match review.pattern_type.as_deref() {
-                                Some("phrase") => "phrase",
-                                _ => "fragment",
-                            };
-                            save_spam_pattern(
-                                &pool,
-                                pat,
-                                pt,
-                                &content,
-                                &channel,
-                                review.reason.as_deref().unwrap_or(""),
-                            )
-                            .await;
-                        }
-                    }
-                } else if let Some(ref pat) = review.pattern {
-                    if pat.len() >= PATTERN_MIN_LEN {
-                        save_safe_pattern(
-                            &pool,
-                            pat,
-                            &content,
-                            &channel,
-                            review.reason.as_deref().unwrap_or(""),
-                        )
-                        .await;
-                    }
-                }
-            }
+            run_ai_review_once(AiReviewRun {
+                pool: &pool,
+                http: &http,
+                api_key: &api_key,
+                base_url: MINIMAX_BASE_URL,
+                record_usage: true,
+                content: &content,
+                channel: &channel,
+                chatter: &chatter,
+            })
+            .await;
         });
     }
 
-    /// Pre-Filter: Ist das Review es wert?
-    /// spam_ai_review.py Z. 286–305
-    fn review_worthwhile(&self, content: &str, spam_reasons: &[String]) -> bool {
-        for r in spam_reasons {
-            if r.contains("Phrase(") || r.contains("Fragment(") || r.contains("Learned-") {
-                return true;
-            }
-            if r.contains("mention") {
-                return true;
-            }
-            if r.contains("Muster: viewer + name") {
-                return self.patterns.spam_domain.is_match(content);
-            }
-        }
-        // Ohne Reasons: prüfe nur ob spam_domain matcht (konservativ)
-        if spam_reasons.is_empty() {
-            return self.patterns.spam_domain.is_match(content);
-        }
-        false
+    /// Gate-Vertrag: Nur Score 0 stoppt den Lernpfad. Jeder positive Score darf
+    /// zum Review, unabhängig davon, ob die Domain bereits bekannt ist.
+    fn should_start_review(content: &str, spam_score: i32, spam_reasons: &[String]) -> bool {
+        spam_score > 0 && Self::review_worthwhile(content, spam_reasons)
+    }
+
+    /// Review-Policy: Jeder bereits vom regelbasierten Filter als verdächtig
+    /// markierte Treffer darf in den AI-Lernpfad. Der Caller prüft vorher
+    /// `spam_score > 0`; diese Funktion darf kein zweites Domain-Gate einführen,
+    /// sonst lernt das System neue obfuskierte Spam-Domains nie kennen.
+    fn review_worthwhile(_content: &str, _spam_reasons: &[String]) -> bool {
+        true
     }
 }
 
@@ -1694,6 +1604,79 @@ struct AiReview {
     pattern: Option<String>,
     pattern_type: Option<String>,
     reason: Option<String>,
+}
+
+struct AiReviewRun<'a> {
+    pool: &'a PgPool,
+    http: &'a reqwest::Client,
+    api_key: &'a str,
+    base_url: &'a str,
+    record_usage: bool,
+    content: &'a str,
+    channel: &'a str,
+    chatter: &'a str,
+}
+
+async fn run_ai_review_once(ctx: AiReviewRun<'_>) -> bool {
+    let Some(review) = call_minimax(
+        ctx.http,
+        ctx.api_key,
+        ctx.base_url,
+        ctx.record_usage,
+        ctx.content,
+    )
+    .await
+    else {
+        return false;
+    };
+    persist_ai_review_result(ctx.pool, &review, ctx.content, ctx.channel, ctx.chatter).await;
+    true
+}
+
+async fn persist_ai_review_result(
+    pool: &PgPool,
+    review: &AiReview,
+    content: &str,
+    channel: &str,
+    chatter: &str,
+) {
+    if review.is_spam {
+        warn!(
+            chatter = %chatter,
+            channel = %channel,
+            pattern = ?review.pattern,
+            reason = ?review.reason,
+            "SpamAI: Spam bestätigt"
+        );
+        if let Some(ref pat) = review.pattern {
+            if pat.len() >= PATTERN_MIN_LEN {
+                let pattern_type = match review.pattern_type.as_deref() {
+                    Some("phrase") => "phrase",
+                    _ => "fragment",
+                };
+                save_spam_pattern(
+                    pool,
+                    pat,
+                    pattern_type,
+                    content,
+                    channel,
+                    review.reason.as_deref().unwrap_or(""),
+                )
+                .await;
+            }
+        }
+    } else if let Some(ref pat) = review.pattern {
+        if pat.len() >= PATTERN_MIN_LEN {
+            save_safe_pattern(
+                pool,
+                pat,
+                content,
+                channel,
+                review.reason.as_deref().unwrap_or(""),
+            )
+            .await;
+        }
+    }
 }
 
 /// Liest `usage.prompt_tokens` / `usage.completion_tokens` aus der MiniMax-Antwort.
@@ -1717,8 +1700,9 @@ fn usage_tokens(resp: &serde_json::Value) -> (i64, i64) {
 async fn call_minimax(
     http: &reqwest::Client,
     api_key: &str,
+    base_url: &str,
+    record_usage: bool,
     content: &str,
-    _patterns: &Patterns,
 ) -> Option<AiReview> {
     let truncated: String = content.chars().take(500).collect();
     let body = serde_json::json!({
@@ -1732,7 +1716,7 @@ async fn call_minimax(
     });
 
     let resp = http
-        .post(format!("{MINIMAX_BASE_URL}/chat/completions"))
+        .post(format!("{}/chat/completions", base_url.trim_end_matches('/')))
         .header("Authorization", format!("Bearer {api_key}"))
         .header("Content-Type", "application/json")
         .timeout(Duration::from_secs(15))
@@ -1747,7 +1731,9 @@ async fn call_minimax(
     // spam_ai_review.py Z. 164–176. Verbucht direkt nach der Antwort, damit der
     // Token-Verbrauch auch dann zählt, wenn die JSON-Extraktion unten scheitert.
     let (tokens_in, tokens_out) = usage_tokens(&json);
-    tb_llm::ledger::record(MINIMAX_PURPOSE, MINIMAX_MODEL, tokens_in, tokens_out, true).await;
+    if record_usage {
+        tb_llm::ledger::record(MINIMAX_PURPOSE, MINIMAX_MODEL, tokens_in, tokens_out, true).await;
+    }
 
     let raw = json["choices"][0]["message"]["content"]
         .as_str()
@@ -1858,6 +1844,8 @@ async fn save_safe_pattern(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use wiremock::matchers::{body_string_contains, header, method, path};
+    use wiremock::{Mock, MockServer, ResponseTemplate};
 
     fn make_event(channel: &str, chatter: &str, text: &str) -> ChatMessageEvent {
         use crate::types::ChatMessageBody;
@@ -2130,6 +2118,35 @@ mod tests {
         assert_eq!(usage_tokens(&resp), (0, 0));
     }
 
+    #[test]
+    fn spam_ai_review_contract_score_positiv_startet_ohne_bekannte_domain() {
+        let reasons = vec!["Muster: viewer + name".to_string()];
+        assert!(SpamAiReviewer::should_start_review(
+            "@cheazycrust Targeted viewers PeakPy. c0m SSSsss remove space",
+            1,
+            &reasons,
+        ));
+    }
+
+    #[test]
+    fn spam_ai_review_contract_score_positiv_startet_auch_ohne_reasons() {
+        assert!(SpamAiReviewer::should_start_review(
+            "verdächtige Nachricht",
+            1,
+            &[],
+        ));
+    }
+
+    #[test]
+    fn spam_ai_review_contract_score_null_startet_nicht() {
+        let reasons = vec!["Muster: viewer + name".to_string()];
+        assert!(!SpamAiReviewer::should_start_review(
+            "@cheazycrust Targeted viewers PeakPy. c0m SSSsss remove space",
+            0,
+            &reasons,
+        ));
+    }
+
     // ── has_high_confidence_single_message_signal ─────────────────────────────
     #[test]
     fn high_conf_crew_threat() {
@@ -2357,6 +2374,115 @@ mod tests {
                 .await
                 .unwrap();
         assert_eq!(pattern, "smmhype");
+    }
+
+    #[tokio::test]
+    async fn spam_ai_review_contract_spam_result_landet_in_positivliste() {
+        let pool = pool_or_skip!("scam_ai_contract_spam_result");
+        let content = "@cheazycrust Targeted viewers PeakPy. c0m SSSsss remove space";
+        let review = AiReview {
+            is_spam: true,
+            pattern: Some("PeakPy c0m".to_string()),
+            pattern_type: Some("fragment".to_string()),
+            reason: Some("obfuskierter viewer-service".to_string()),
+        };
+
+        persist_ai_review_result(&pool, &review, content, "cheazycrust", "yameskudas").await;
+
+        let (pattern, pattern_type, source_channel, source_message): (
+            String,
+            String,
+            Option<String>,
+            Option<String>,
+        ) = sqlx::query_as(
+            "SELECT pattern, pattern_type, source_channel, source_message \
+             FROM twitch_auto_learned_spam_patterns",
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+
+        assert_eq!(pattern, "peakpy c0m");
+        assert_eq!(pattern_type, "fragment");
+        assert_eq!(source_channel.as_deref(), Some("cheazycrust"));
+        assert_eq!(source_message.as_deref(), Some(content));
+    }
+
+    #[tokio::test]
+    async fn spam_ai_review_contract_score_positiv_ruft_minimax_und_lernt_spam() {
+        let pool = pool_or_skip!("scam_ai_contract_minimax_mock");
+        let content = "@cheazycrust Targeted viewers PeakPy. c0m SSSsss remove space";
+        let server = MockServer::start().await;
+
+        Mock::given(method("POST"))
+            .and(path("/chat/completions"))
+            .and(header("Authorization", "Bearer test-key"))
+            .and(body_string_contains("PeakPy. c0m"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "choices": [{
+                    "message": {
+                        "content": "{\"is_spam\": true, \"pattern\": \"PeakPy c0m\", \"pattern_type\": \"fragment\", \"reason\": \"obfuskierter viewer-service\"}"
+                    }
+                }],
+                "usage": { "prompt_tokens": 5, "completion_tokens": 6 }
+            })))
+            .mount(&server)
+            .await;
+
+        let http = reqwest::Client::new();
+        let base_url = server.uri();
+        let reviewed = run_ai_review_once(AiReviewRun {
+            pool: &pool,
+            http: &http,
+            api_key: "test-key",
+            base_url: &base_url,
+            record_usage: false,
+            content,
+            channel: "cheazycrust",
+            chatter: "yameskudas",
+        })
+        .await;
+
+        assert!(reviewed, "positiver Score muss den MiniMax-Review-Pfad erreichen");
+        let (pattern, source_channel, source_message): (String, Option<String>, Option<String>) =
+            sqlx::query_as(
+                "SELECT pattern, source_channel, source_message \
+                 FROM twitch_auto_learned_spam_patterns",
+            )
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+
+        assert_eq!(pattern, "peakpy c0m");
+        assert_eq!(source_channel.as_deref(), Some("cheazycrust"));
+        assert_eq!(source_message.as_deref(), Some(content));
+    }
+
+    #[tokio::test]
+    async fn spam_ai_review_contract_false_positive_landet_in_negativliste() {
+        let pool = pool_or_skip!("scam_ai_contract_safe_result");
+        let content = "best viewers in chat today";
+        let review = AiReview {
+            is_spam: false,
+            pattern: Some("best viewers".to_string()),
+            pattern_type: Some("fragment".to_string()),
+            reason: Some("normales kompliment".to_string()),
+        };
+
+        persist_ai_review_result(&pool, &review, content, "cheazycrust", "normalviewer").await;
+
+        let (pattern, source_channel, source_message): (String, Option<String>, Option<String>) =
+            sqlx::query_as(
+                "SELECT pattern, source_channel, source_message \
+                 FROM twitch_auto_learned_safe_patterns",
+            )
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+
+        assert_eq!(pattern, "best viewers");
+        assert_eq!(source_channel.as_deref(), Some("cheazycrust"));
+        assert_eq!(source_message.as_deref(), Some(content));
     }
 
     #[tokio::test]
