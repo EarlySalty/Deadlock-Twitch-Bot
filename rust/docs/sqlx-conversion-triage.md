@@ -1,0 +1,1020 @@
+# SQLx Conversion Triage
+
+Stand: 2026-06-30. Scope: `rust/crates/*/src` im Rust-Workspace. Gezählt werden `sqlx::query*`, `sqlx::raw_sql`, vorhandene `sqlx::query*!`-Makros und `QueryBuilder::new`; `rusqlite`-Stellen sind nicht Teil dieser sqlx-Triage.
+
+Backend-Bestimmung: nur `[dependencies].sqlx` aus der jeweiligen `Cargo.toml`; dev-only SQLite-Overrides zählen als Testkontext, nicht als Crate-Backend. Migration-Coverage: `rust/migrations/*.sql`, `public.` normalisiert; `CREATE VIEW` wird als vorhandene Relation gewertet, weil `cargo sqlx prepare` die angewandte Migration sieht.
+
+`CONVERTIBLE_PG` meint statisches SQL-Literal gegen Postgres mit vollständig vorhandenen Migration-Relationen. Bei `tb-tips` sind diese Stellen bereits auf Makros umgestellt und werden hier als erledigte `CONVERTIBLE_PG` mitgezählt.
+
+## Übersicht
+
+| Crate | Backend | gesamt | CONVERTIBLE_PG | SQLITE | DYNAMIC | BLOCKED_TABLE | TEST_ONLY |
+|---|---:|---:|---:|---:|---:|---:|---:|
+| `tb-analytics` | PG | 876 | 261 | 0 | 24 | 2 | 589 |
+| `tb-chat` | PG | 258 | 98 | 0 | 1 | 0 | 159 |
+| `tb-dashboard-api` | PG | 856 | 172 | 0 | 69 | 0 | 615 |
+| `tb-db` | PG | 0 | 0 | 0 | 0 | 0 | 0 |
+| `tb-engagement` | PG | 178 | 47 | 0 | 1 | 0 | 130 |
+| `tb-highlight` | PG | 6 | 1 | 0 | 0 | 0 | 5 |
+| `tb-internal-api` | PG | 199 | 51 | 0 | 12 | 0 | 136 |
+| `tb-llm` | SQLite | 10 | 0 | 10 | 0 | 0 | 0 |
+| `tb-monitoring` | PG | 142 | 99 | 0 | 8 | 0 | 35 |
+| `tb-observability` | PG | 1 | 0 | 0 | 1 | 0 | 0 |
+| `tb-raid` | PG | 187 | 107 | 0 | 5 | 0 | 75 |
+| `tb-social-media` | PG | 307 | 79 | 0 | 21 | 0 | 207 |
+| `tb-tips` | PG | 7 | 6 | 0 | 0 | 0 | 1 |
+| **Summe** |  | **3027** | **921** | **10** | **142** | **2** | **1952** |
+
+Hinweis: `tb-observability` ist nicht in der Auftragsliste genannt, hat aber eine `sqlx`-Dependency und eine echte `QueryBuilder`-Callsite; deshalb ist es in der Tabelle enthalten. `tb-db` hat im betrachteten `src`-Scope keine Query-Callsite.
+
+## Blocker Und SQLite-Besonderheiten
+
+### `tb-analytics`
+- `rust/crates/tb-analytics/src/system_errors.rs:41` — `BLOCKED_TABLE`: missing: twitch_admin_error_log; referenziert `twitch_admin_error_log`.
+- `rust/crates/tb-analytics/src/system_errors.rs:70` — `BLOCKED_TABLE`: missing: twitch_admin_error_log; referenziert `twitch_admin_error_log`.
+
+### `tb-engagement`
+- Dev-only SQLite in `minimax_chat`-Tests kommt aus `[dev-dependencies]`; Produktions-Backend bleibt PG, diese Stellen sind `TEST_ONLY`.
+
+### `tb-llm`
+- SQLite-Backend: 10 sqlx-Callsites in dieser Crate brauchen eine eigene SQLite-Prepare-Spur; nicht in PG-Wellen aufnehmen.
+- `rust/crates/tb-llm/src/ledger.rs:118` — `SQLITE`: runtime ledger/schema; Tabellen/Objekte: `(keine Relation)`.
+- `rust/crates/tb-llm/src/ledger.rs:178` — `SQLITE`: runtime ledger/schema; Tabellen/Objekte: `minimax_usage`.
+- `rust/crates/tb-llm/src/ledger.rs:223` — `SQLITE`: runtime ledger/schema; Tabellen/Objekte: `(keine Relation)`.
+- `rust/crates/tb-llm/src/ledger.rs:287` — `SQLITE`: SQLite-Test/Schema-Check; Tabellen/Objekte: `(keine Relation)`.
+- `rust/crates/tb-llm/src/ledger.rs:299` — `SQLITE`: SQLite-Test/Schema-Check; Tabellen/Objekte: `minimax_usage`.
+- `rust/crates/tb-llm/src/ledger.rs:324` — `SQLITE`: SQLite-Test/Schema-Check; Tabellen/Objekte: `(keine Relation)`.
+- `rust/crates/tb-llm/src/ledger.rs:344` — `SQLITE`: SQLite-Test/Schema-Check; Tabellen/Objekte: `minimax_usage`.
+- `rust/crates/tb-llm/src/ledger.rs:362` — `SQLITE`: SQLite-Test/Schema-Check; Tabellen/Objekte: `minimax_usage`.
+- `rust/crates/tb-llm/src/ledger.rs:374` — `SQLITE`: SQLite-Test/Schema-Check; Tabellen/Objekte: `minimax_usage`.
+- `rust/crates/tb-llm/src/ledger.rs:383` — `SQLITE`: SQLite-Test/Schema-Check; Tabellen/Objekte: `minimax_usage`.
+
+### `tb-observability`
+- Nicht in der Ursprungs-Auftragsliste, aber `sqlx`-Dependency vorhanden: eine `QueryBuilder::new`-Stelle, keine makrofähige PG-Callsite.
+
+## Empfohlene Wellen-Reihenfolge
+
+Reihenfolge nach makrofähigem PG-Aufwand und Sauberkeit, nicht nach Crate-Größe. `tb-tips` ist Phase 0/done; `tb-llm` ist SQLite-separat; `tb-db` hat keine Callsite.
+
+| Welle | Crates | Begründung |
+|---:|---|---|
+| 1 | `tb-highlight` | sauberste Folge-Crate: 1 `CONVERTIBLE_PG`, keine `DYNAMIC`/`BLOCKED_TABLE`; restliche sqlx-Stellen sind Tests. |
+| 2 | `tb-engagement` | 47 `CONVERTIBLE_PG`, nur 1 produktive nonliteral-Callsite, keine Blocker; guter erster nennenswerter PG-Scope. |
+| 3 | `tb-chat`, `tb-monitoring` | jeweils ca. 100 makrofähige PG-Stellen, keine Blocker; wenige dynamische Reste. |
+| 4 | `tb-raid`, `tb-internal-api` | solide Migration-Coverage, aber mehr bewusste nonliteral-/Savepoint-/Stats-Query-Varianten. |
+| 5 | `tb-social-media` | 79 `CONVERTIBLE_PG`, aber 21 dynamische/QueryBuilder-Stellen; erst nach den saubereren Mittel-Crates. |
+| 6 | `tb-dashboard-api` | 172 `CONVERTIBLE_PG`, viele dynamische Builder/Filterpfade und viele Test-Fixtures; groß, aber ohne Tabellenblocker. |
+| 7 | `tb-analytics` | größter PG-Scope mit 261 `CONVERTIBLE_PG` plus 2 Blocker auf `twitch_admin_error_log`; erst nach Blocker-Entscheid. |
+
+Problematisch/sonderbehandeln: `tb-llm` als SQLite-Ledger separat vorbereiten; `tb-observability` bleibt wegen `QueryBuilder` dynamisch; `tb-analytics` braucht vor Makro-Vollzug eine Entscheidung zu `twitch_admin_error_log`.
+
+## Workspaceweite BLOCKED_TABLE-Tabellen
+
+| Tabelle | Callsite(s) | Entscheidung |
+|---|---|---|
+| `twitch_admin_error_log` | `rust/crates/tb-analytics/src/system_errors.rs:41`, `rust/crates/tb-analytics/src/system_errors.rs:70` | Nicht in `rust/migrations`; Test-DDL existiert, Produktionscode toleriert fehlende Relation. Migration nachziehen oder diese Stellen bewusst roh lassen. |
+
+## CONVERTIBLE_PG-Callsites
+
+Format: `Datei:Zeile` — referenzierte Migration-Relation(en).
+
+### `tb-analytics` — 261
+- `rust/crates/tb-analytics/src/admin_affiliate.rs:57` — affiliate_accounts
+- `rust/crates/tb-analytics/src/admin_affiliate.rs:63` — affiliate_streamer_claims
+- `rust/crates/tb-analytics/src/admin_affiliate.rs:82` — affiliate_gutschriften
+- `rust/crates/tb-analytics/src/admin_affiliate.rs:348` — affiliate_gutschriften
+- `rust/crates/tb-analytics/src/admin_affiliate.rs:394` — affiliate_accounts
+- `rust/crates/tb-analytics/src/admin_affiliate.rs:457` — affiliate_accounts
+- `rust/crates/tb-analytics/src/admin_affiliate.rs:475` — affiliate_accounts
+- `rust/crates/tb-analytics/src/admin_affiliate.rs:498` — affiliate_gutschriften
+- `rust/crates/tb-analytics/src/admin_affiliate.rs:554` — affiliate_accounts
+- `rust/crates/tb-analytics/src/admin_affiliate.rs:574` — affiliate_streamer_claims, affiliate_commissions
+- `rust/crates/tb-analytics/src/admin_affiliate.rs:592` — affiliate_streamer_claims
+- `rust/crates/tb-analytics/src/admin_affiliate.rs:598` — affiliate_commissions
+- `rust/crates/tb-analytics/src/admin_affiliate.rs:613` — affiliate_gutschriften
+- `rust/crates/tb-analytics/src/admin_billing.rs:24` — twitch_billing_subscriptions, streamer_plans
+- `rust/crates/tb-analytics/src/admin_billing.rs:69` — affiliate_accounts
+- `rust/crates/tb-analytics/src/admin_config.rs:62` — twitch_partners
+- `rust/crates/tb-analytics/src/admin_config.rs:153` — twitch_raid_history
+- `rust/crates/tb-analytics/src/admin_streamers.rs:552` — twitch_streamers_partner_state
+- `rust/crates/tb-analytics/src/admin_streamers.rs:576` — twitch_stream_sessions
+- `rust/crates/tb-analytics/src/admin_streamers.rs:590` — twitch_stream_sessions
+- `rust/crates/tb-analytics/src/ads_schedule_collector.rs:59` — twitch_ads_schedule_snapshot
+- `rust/crates/tb-analytics/src/affiliate_commission.rs:114` — twitch_billing_subscriptions
+- `rust/crates/tb-analytics/src/affiliate_commission.rs:126` — affiliate_streamer_claims
+- `rust/crates/tb-analytics/src/affiliate_commission.rs:158` — (keine Relation)
+- `rust/crates/tb-analytics/src/affiliate_commission.rs:164` — affiliate_accounts
+- `rust/crates/tb-analytics/src/affiliate_commission.rs:178` — affiliate_commissions
+- `rust/crates/tb-analytics/src/affiliate_commission.rs:190` — affiliate_commissions
+- `rust/crates/tb-analytics/src/affiliate_commission.rs:230` — affiliate_commissions
+- `rust/crates/tb-analytics/src/affiliate_commission.rs:258` — affiliate_commissions
+- `rust/crates/tb-analytics/src/affiliate_commission.rs:316` — affiliate_commissions
+- `rust/crates/tb-analytics/src/affiliate_commission.rs:332` — affiliate_commissions
+- `rust/crates/tb-analytics/src/affiliate_pii.rs:178` — affiliate_pii
+- `rust/crates/tb-analytics/src/affiliate_pii.rs:275` — affiliate_pii
+- `rust/crates/tb-analytics/src/affiliate_pii.rs:353` — affiliate_pii
+- `rust/crates/tb-analytics/src/ai_analysis.rs:183` — twitch_stream_sessions
+- `rust/crates/tb-analytics/src/ai_analysis.rs:198` — twitch_stream_sessions
+- `rust/crates/tb-analytics/src/ai_history.rs:36` — ai_analyses
+- `rust/crates/tb-analytics/src/ai_history.rs:60` — ai_analyses
+- `rust/crates/tb-analytics/src/bans.rs:45` — twitch_ban_events
+- `rust/crates/tb-analytics/src/bans.rs:61` — twitch_ban_events
+- `rust/crates/tb-analytics/src/bans.rs:76` — twitch_partners_all_state
+- `rust/crates/tb-analytics/src/chat_analytics.rs:139` — twitch_stream_sessions
+- `rust/crates/tb-analytics/src/chat_analytics.rs:152` — twitch_session_viewers, twitch_stream_sessions
+- `rust/crates/tb-analytics/src/chat_analytics.rs:163` — twitch_chat_messages, twitch_session_viewers, twitch_stream_sessions
+- `rust/crates/tb-analytics/src/chat_analytics.rs:192` — twitch_chat_messages
+- `rust/crates/tb-analytics/src/chat_analytics.rs:204` — twitch_session_chatters, twitch_chatter_rollup, twitch_stream_sessions
+- `rust/crates/tb-analytics/src/chat_analytics.rs:240` — twitch_session_chatters, twitch_stream_sessions
+- `rust/crates/tb-analytics/src/chat_analytics.rs:253` — twitch_chat_messages
+- `rust/crates/tb-analytics/src/chat_content_analysis.rs:213` — twitch_chat_messages, twitch_stream_sessions
+- `rust/crates/tb-analytics/src/chat_deep_minimax.rs:32` — twitch_chat_messages
+- `rust/crates/tb-analytics/src/chat_hype_timeline.rs:111` — twitch_stream_sessions
+- `rust/crates/tb-analytics/src/chat_hype_timeline.rs:123` — twitch_stream_sessions
+- `rust/crates/tb-analytics/src/chat_hype_timeline.rs:135` — twitch_chat_messages
+- `rust/crates/tb-analytics/src/chat_hype_timeline.rs:148` — twitch_session_viewers
+- `rust/crates/tb-analytics/src/chat_hype_timeline.rs:232` — twitch_stream_sessions
+- `rust/crates/tb-analytics/src/chat_hype_timeline.rs:242` — twitch_chat_messages
+- `rust/crates/tb-analytics/src/chat_social_graph.rs:47` — twitch_chat_messages, twitch_stream_sessions
+- `rust/crates/tb-analytics/src/coaching.rs:78` — twitch_stream_sessions
+- `rust/crates/tb-analytics/src/coaching.rs:130` — twitch_stream_sessions
+- `rust/crates/tb-analytics/src/coaching.rs:230` — twitch_stream_sessions
+- `rust/crates/tb-analytics/src/coaching.rs:261` — twitch_stream_sessions
+- `rust/crates/tb-analytics/src/coaching.rs:292` — twitch_stream_sessions
+- `rust/crates/tb-analytics/src/coaching.rs:308` — twitch_stream_sessions
+- `rust/crates/tb-analytics/src/coaching.rs:367` — twitch_stats_category
+- `rust/crates/tb-analytics/src/coaching.rs:396` — twitch_stream_sessions
+- `rust/crates/tb-analytics/src/coaching.rs:464` — twitch_stream_sessions
+- `rust/crates/tb-analytics/src/coaching.rs:566` — twitch_chatter_rollup
+- `rust/crates/tb-analytics/src/coaching.rs:586` — twitch_chatter_rollup
+- `rust/crates/tb-analytics/src/coaching.rs:615` — twitch_chatter_rollup
+- `rust/crates/tb-analytics/src/coaching.rs:675` — twitch_stream_sessions
+- `rust/crates/tb-analytics/src/coaching.rs:701` — twitch_stream_sessions
+- `rust/crates/tb-analytics/src/coaching.rs:770` — twitch_session_viewers
+- `rust/crates/tb-analytics/src/coaching.rs:831` — twitch_stream_sessions
+- `rust/crates/tb-analytics/src/coaching.rs:840` — twitch_stream_sessions
+- `rust/crates/tb-analytics/src/coaching.rs:849` — twitch_stream_sessions
+- `rust/crates/tb-analytics/src/coaching.rs:863` — twitch_stream_sessions
+- `rust/crates/tb-analytics/src/coaching.rs:904` — twitch_stream_sessions
+- `rust/crates/tb-analytics/src/coaching.rs:929` — twitch_stream_sessions
+- `rust/crates/tb-analytics/src/coaching.rs:944` — twitch_stream_sessions
+- `rust/crates/tb-analytics/src/coaching.rs:979` — twitch_chatter_rollup
+- `rust/crates/tb-analytics/src/coaching.rs:1019` — twitch_chatter_rollup
+- `rust/crates/tb-analytics/src/coaching.rs:1064` — twitch_chatter_rollup
+- `rust/crates/tb-analytics/src/coaching.rs:1123` — twitch_raid_history
+- `rust/crates/tb-analytics/src/coaching.rs:1136` — twitch_raid_history
+- `rust/crates/tb-analytics/src/coaching.rs:1277` — twitch_stream_sessions
+- `rust/crates/tb-analytics/src/coaching.rs:1436` — twitch_stream_sessions
+- `rust/crates/tb-analytics/src/coaching.rs:1450` — twitch_stream_sessions
+- `rust/crates/tb-analytics/src/coaching.rs:1500` — twitch_stream_sessions
+- `rust/crates/tb-analytics/src/coaching.rs:1513` — twitch_stream_sessions
+- `rust/crates/tb-analytics/src/coaching.rs:1950` — twitch_stream_sessions
+- `rust/crates/tb-analytics/src/exp_analytics.rs:27` — exp_sessions
+- `rust/crates/tb-analytics/src/exp_analytics.rs:36` — exp_sessions
+- `rust/crates/tb-analytics/src/exp_analytics.rs:67` — exp_sessions
+- `rust/crates/tb-analytics/src/exp_analytics.rs:103` — exp_game_transitions
+- `rust/crates/tb-analytics/src/exp_analytics.rs:136` — exp_snapshots, exp_sessions
+- `rust/crates/tb-analytics/src/global_ban.rs:28` — (keine Relation)
+- `rust/crates/tb-analytics/src/global_ban.rs:71` — twitch_chatter_global_ban
+- `rust/crates/tb-analytics/src/global_ban.rs:101` — twitch_chatter_global_ban
+- `rust/crates/tb-analytics/src/global_ban.rs:106` — twitch_chatter_global_ban_applied
+- `rust/crates/tb-analytics/src/global_ban.rs:123` — twitch_chatter_global_ban
+- `rust/crates/tb-analytics/src/global_ban.rs:144` — twitch_chatter_global_ban
+- `rust/crates/tb-analytics/src/market.rs:44` — twitch_stats_category
+- `rust/crates/tb-analytics/src/market.rs:81` — twitch_partners_all_state
+- `rust/crates/tb-analytics/src/market.rs:86` — twitch_stats_category
+- `rust/crates/tb-analytics/src/market.rs:111` — twitch_stats_category
+- `rust/crates/tb-analytics/src/monetization.rs:111` — twitch_ad_break_events, twitch_stream_sessions
+- `rust/crates/tb-analytics/src/monetization.rs:134` — twitch_session_viewers
+- `rust/crates/tb-analytics/src/monetization.rs:330` — twitch_ad_break_events, twitch_stream_sessions
+- `rust/crates/tb-analytics/src/monetization.rs:364` — twitch_hype_train_events, twitch_stream_sessions
+- `rust/crates/tb-analytics/src/monetization.rs:389` — twitch_bits_events, twitch_stream_sessions
+- `rust/crates/tb-analytics/src/monetization.rs:408` — twitch_subscription_events, twitch_stream_sessions
+- `rust/crates/tb-analytics/src/network.rs:22` — twitch_streamers_partner_state, twitch_live_state
+- `rust/crates/tb-analytics/src/overview.rs:39` — twitch_stream_sessions
+- `rust/crates/tb-analytics/src/overview.rs:97` — twitch_stream_sessions
+- `rust/crates/tb-analytics/src/overview.rs:153` — twitch_session_chatters, twitch_stream_sessions
+- `rust/crates/tb-analytics/src/overview.rs:173` — twitch_stream_sessions, twitch_session_chatters
+- `rust/crates/tb-analytics/src/overview.rs:191` — twitch_session_chatters, twitch_stream_sessions
+- `rust/crates/tb-analytics/src/overview.rs:246` — twitch_raid_history
+- `rust/crates/tb-analytics/src/overview.rs:260` — twitch_raid_history
+- `rust/crates/tb-analytics/src/overview.rs:301` — twitch_subscription_events, twitch_stream_sessions, twitch_live_state
+- `rust/crates/tb-analytics/src/overview.rs:318` — twitch_bits_events, twitch_stream_sessions, twitch_live_state
+- `rust/crates/tb-analytics/src/overview.rs:335` — twitch_hype_train_events, twitch_stream_sessions
+- `rust/crates/tb-analytics/src/overview.rs:368` — twitch_session_chatters, twitch_stream_sessions
+- `rust/crates/tb-analytics/src/overview.rs:483` — twitch_stream_sessions, twitch_session_chatters
+- `rust/crates/tb-analytics/src/overview.rs:603` — twitch_stats_category
+- `rust/crates/tb-analytics/src/partner_access.rs:113` — twitch_partners
+- `rust/crates/tb-analytics/src/partner_access.rs:143` — twitch_token_blacklist
+- `rust/crates/tb-analytics/src/peer_group.rs:75` — twitch_stats_category
+- `rust/crates/tb-analytics/src/peer_group.rs:96` — twitch_stream_sessions
+- `rust/crates/tb-analytics/src/peer_group.rs:123` — twitch_stream_sessions
+- `rust/crates/tb-analytics/src/plan.rs:283` — streamer_plans
+- `rust/crates/tb-analytics/src/plan.rs:361` — twitch_billing_subscriptions
+- `rust/crates/tb-analytics/src/post_stream.rs:50` — twitch_stream_sessions
+- `rust/crates/tb-analytics/src/post_stream.rs:89` — twitch_chat_messages
+- `rust/crates/tb-analytics/src/post_stream.rs:107` — twitch_chat_messages
+- `rust/crates/tb-analytics/src/post_stream.rs:782` — twitch_stream_sessions
+- `rust/crates/tb-analytics/src/post_stream.rs:824` — twitch_partners, twitch_streamers, twitch_streamer_identities
+- `rust/crates/tb-analytics/src/post_stream.rs:929` — twitch_chat_messages
+- `rust/crates/tb-analytics/src/post_stream.rs:957` — twitch_chat_messages, twitch_stream_sessions
+- `rust/crates/tb-analytics/src/post_stream.rs:988` — twitch_chat_messages
+- `rust/crates/tb-analytics/src/post_stream.rs:1031` — twitch_session_viewers
+- `rust/crates/tb-analytics/src/post_stream.rs:1067` — twitch_viewer_presence_ticks
+- `rust/crates/tb-analytics/src/post_stream.rs:1089` — twitch_viewer_presence_ticks
+- `rust/crates/tb-analytics/src/post_stream.rs:1141` — twitch_stream_sessions
+- `rust/crates/tb-analytics/src/post_stream.rs:1257` — twitch_subscription_events
+- `rust/crates/tb-analytics/src/post_stream.rs:1272` — twitch_bits_events
+- `rust/crates/tb-analytics/src/post_stream.rs:1284` — twitch_channel_points_events
+- `rust/crates/tb-analytics/src/post_stream.rs:1299` — twitch_hype_train_events
+- `rust/crates/tb-analytics/src/post_stream.rs:1311` — twitch_ad_break_events
+- `rust/crates/tb-analytics/src/post_stream.rs:1323` — twitch_ban_events
+- `rust/crates/tb-analytics/src/post_stream.rs:1595` — twitch_session_chatters
+- `rust/crates/tb-analytics/src/post_stream.rs:1983` — twitch_chat_word_groups
+- `rust/crates/tb-analytics/src/post_stream.rs:1988` — twitch_chat_word_groups
+- `rust/crates/tb-analytics/src/post_stream.rs:2015` — twitch_stream_ai_reports
+- `rust/crates/tb-analytics/src/post_stream.rs:2043` — twitch_stream_ai_reports
+- `rust/crates/tb-analytics/src/post_stream.rs:2060` — twitch_stream_ai_reports
+- `rust/crates/tb-analytics/src/post_stream.rs:2095` — twitch_stream_sessions
+- `rust/crates/tb-analytics/src/post_stream.rs:2140` — twitch_stream_ai_reports
+- `rust/crates/tb-analytics/src/post_stream.rs:2210` — twitch_streamers_partner_state
+- `rust/crates/tb-analytics/src/post_stream.rs:2228` — twitch_stream_sessions, twitch_stream_ai_reports
+- `rust/crates/tb-analytics/src/post_stream.rs:2264` — twitch_stream_ai_reports
+- `rust/crates/tb-analytics/src/post_stream.rs:2288` — twitch_stream_ai_reports, twitch_streamers_partner_state
+- `rust/crates/tb-analytics/src/post_stream.rs:2319` — twitch_stream_ai_reports
+- `rust/crates/tb-analytics/src/promo_mode.rs:427` — twitch_global_promo_modes
+- `rust/crates/tb-analytics/src/promo_mode.rs:443` — (keine Relation)
+- `rust/crates/tb-analytics/src/promo_mode.rs:456` — twitch_global_promo_modes
+- `rust/crates/tb-analytics/src/promo_mode.rs:522` — twitch_global_promo_modes
+- `rust/crates/tb-analytics/src/raid_blacklist.rs:27` — twitch_raid_blacklist
+- `rust/crates/tb-analytics/src/raid_blacklist.rs:47` — twitch_raid_blacklist
+- `rust/crates/tb-analytics/src/raid_blacklist.rs:60` — twitch_raid_blacklist
+- `rust/crates/tb-analytics/src/raid_blacklist.rs:71` — twitch_raid_blacklist
+- `rust/crates/tb-analytics/src/raid_history.rs:67` — twitch_raid_history
+- `rust/crates/tb-analytics/src/raid_history.rs:86` — twitch_raid_history
+- `rust/crates/tb-analytics/src/raids.rs:29` — twitch_raid_history
+- `rust/crates/tb-analytics/src/raw_chat_status.rs:77` — twitch_session_chatters
+- `rust/crates/tb-analytics/src/raw_chat_status.rs:86` — twitch_stream_sessions, twitch_session_chatters, twitch_chat_messages
+- `rust/crates/tb-analytics/src/raw_chat_status.rs:99` — twitch_session_chatters, twitch_stream_sessions
+- `rust/crates/tb-analytics/src/raw_chat_status.rs:109` — twitch_stream_sessions, twitch_session_chatters, twitch_chat_messages
+- `rust/crates/tb-analytics/src/raw_chat_status.rs:133` — twitch_chat_messages
+- `rust/crates/tb-analytics/src/raw_chat_status.rs:142` — twitch_chat_messages
+- `rust/crates/tb-analytics/src/raw_chat_status.rs:170` — twitch_raw_chat_ingest_health
+- `rust/crates/tb-analytics/src/raw_chat_status.rs:180` — twitch_chat_messages
+- `rust/crates/tb-analytics/src/raw_chat_status.rs:208` — twitch_raw_chat_backfill_runs
+- `rust/crates/tb-analytics/src/self_explainer_log.rs:49` — twitch_self_explainer_log
+- `rust/crates/tb-analytics/src/self_explainer_log.rs:71` — twitch_self_explainer_log
+- `rust/crates/tb-analytics/src/streamer_link.rs:29` — twitch_partners, twitch_streamers, twitch_streamer_identities
+- `rust/crates/tb-analytics/src/streamers.rs:23` — twitch_streamers_partner_state, twitch_stream_sessions, twitch_live_state
+- `rust/crates/tb-analytics/src/streamers_crud.rs:62` — twitch_partners_all_state, twitch_stream_sessions, twitch_raid_auth
+- `rust/crates/tb-analytics/src/streamers_crud.rs:134` — twitch_streamers
+- `rust/crates/tb-analytics/src/streamers_crud.rs:144` — twitch_streamers
+- `rust/crates/tb-analytics/src/streamers_crud.rs:163` — twitch_streamer_identities
+- `rust/crates/tb-analytics/src/streamers_crud.rs:199` — twitch_streamers
+- `rust/crates/tb-analytics/src/streamers_crud.rs:240` — twitch_partners
+- `rust/crates/tb-analytics/src/streamers_crud.rs:255` — twitch_streamers, twitch_partners
+- `rust/crates/tb-analytics/src/streamers_crud.rs:276` — twitch_live_state
+- `rust/crates/tb-analytics/src/streamers_crud.rs:318` — twitch_partners
+- `rust/crates/tb-analytics/src/streamers_crud.rs:396` — twitch_partners, twitch_streamer_identities
+- `rust/crates/tb-analytics/src/streamers_crud.rs:440` — twitch_streamer_identities
+- `rust/crates/tb-analytics/src/streamers_crud.rs:465` — twitch_partners
+- `rust/crates/tb-analytics/src/streamers_crud.rs:485` — twitch_raid_auth
+- `rust/crates/tb-analytics/src/streamers_crud.rs:501` — twitch_engagement_settings
+- `rust/crates/tb-analytics/src/streamers_crud.rs:573` — twitch_raid_auth
+- `rust/crates/tb-analytics/src/streamers_crud.rs:617` — twitch_partners
+- `rust/crates/tb-analytics/src/streamers_crud.rs:629` — twitch_partners
+- `rust/crates/tb-analytics/src/streamers_crud.rs:642` — twitch_partners
+- `rust/crates/tb-analytics/src/streamers_crud.rs:658` — twitch_partners
+- `rust/crates/tb-analytics/src/streamers_crud.rs:673` — twitch_partners
+- `rust/crates/tb-analytics/src/streamers_crud.rs:687` — twitch_partners
+- `rust/crates/tb-analytics/src/streamers_crud.rs:695` — twitch_partners
+- `rust/crates/tb-analytics/src/streamers_crud.rs:710` — twitch_partners
+- `rust/crates/tb-analytics/src/streamers_crud.rs:721` — twitch_partners
+- `rust/crates/tb-analytics/src/streamers_crud.rs:730` — twitch_partners
+- `rust/crates/tb-analytics/src/streamers_crud.rs:759` — twitch_streamers
+- `rust/crates/tb-analytics/src/streamers_crud.rs:777` — twitch_streamer_identities
+- `rust/crates/tb-analytics/src/streamers_crud.rs:823` — twitch_streamers
+- `rust/crates/tb-analytics/src/streamers_crud.rs:834` — twitch_streamers
+- `rust/crates/tb-analytics/src/streamers_crud.rs:855` — twitch_streamer_identities
+- `rust/crates/tb-analytics/src/streamers_crud.rs:873` — twitch_streamer_identities
+- `rust/crates/tb-analytics/src/streamers_crud.rs:907` — twitch_raid_auth
+- `rust/crates/tb-analytics/src/streamers_crud.rs:943` — twitch_stream_sessions
+- `rust/crates/tb-analytics/src/streamers_crud.rs:996` — twitch_stream_sessions
+- `rust/crates/tb-analytics/src/streamers_crud.rs:1016` — twitch_stream_sessions
+- `rust/crates/tb-analytics/src/streamers_crud.rs:1065` — twitch_stats_category
+- `rust/crates/tb-analytics/src/streamers_crud.rs:1077` — twitch_stats_tracked
+- `rust/crates/tb-analytics/src/streamers_crud.rs:1089` — twitch_stream_sessions
+- `rust/crates/tb-analytics/src/streamers_crud.rs:1122` — twitch_stream_sessions
+- `rust/crates/tb-analytics/src/streamers_crud.rs:1144` — twitch_session_viewers
+- `rust/crates/tb-analytics/src/streamers_crud.rs:1161` — twitch_session_chatters
+- `rust/crates/tb-analytics/src/stripe/webhook_apply.rs:219` — twitch_billing_subscriptions
+- `rust/crates/tb-analytics/src/stripe/webhook_apply.rs:292` — twitch_billing_subscriptions
+- `rust/crates/tb-analytics/src/stripe/webhook_apply.rs:374` — twitch_streamers_partner_state, streamer_plans
+- `rust/crates/tb-analytics/src/stripe/webhook_apply.rs:421` — twitch_streamers_partner_state, streamer_plans
+- `rust/crates/tb-analytics/src/stripe/webhook_apply.rs:506` — twitch_streamers_partner_state
+- `rust/crates/tb-analytics/src/stripe/webhook_apply.rs:702` — twitch_billing_events
+- `rust/crates/tb-analytics/src/stripe/webhook_apply.rs:722` — twitch_billing_events
+- `rust/crates/tb-analytics/src/subs_snapshot_collector.rs:39` — twitch_subscriptions_snapshot
+- `rust/crates/tb-analytics/src/system_database.rs:30` — (keine Relation)
+- `rust/crates/tb-analytics/src/system_database.rs:40` — (keine Relation)
+- `rust/crates/tb-analytics/src/system_database.rs:66` — (keine Relation)
+- `rust/crates/tb-analytics/src/system_eventsub.rs:33` — twitch_eventsub_capacity_snapshot
+- `rust/crates/tb-analytics/src/system_health.rs:16` — twitch_live_state
+- `rust/crates/tb-analytics/src/system_health.rs:69` — twitch_raw_chat_ingest_health, twitch_live_state
+- `rust/crates/tb-analytics/src/system_oauth_scopes.rs:147` — twitch_raid_auth, twitch_partners_all_state
+- `rust/crates/tb-analytics/src/tag_analysis.rs:113` — twitch_stats_category
+- `rust/crates/tb-analytics/src/tag_analysis.rs:134` — twitch_stream_sessions
+- `rust/crates/tb-analytics/src/tag_analysis.rs:161` — twitch_stream_sessions
+- `rust/crates/tb-analytics/src/tag_analysis.rs:192` — twitch_stream_sessions
+- `rust/crates/tb-analytics/src/telemetry_routes.rs:39` — twitch_live_state
+- `rust/crates/tb-analytics/src/telemetry_routes.rs:76` — twitch_link_clicks
+- `rust/crates/tb-analytics/src/trial.rs:126` — streamer_plans
+- `rust/crates/tb-analytics/src/trial.rs:139` — streamer_plans
+- `rust/crates/tb-analytics/src/trial.rs:162` — streamer_plans
+- `rust/crates/tb-analytics/src/trial.rs:209` — twitch_billing_subscriptions
+- `rust/crates/tb-analytics/src/trial.rs:270` — streamer_plans
+- `rust/crates/tb-analytics/src/trial.rs:312` — streamer_plans
+- `rust/crates/tb-analytics/src/watch_time.rs:63` — twitch_stream_sessions
+- `rust/crates/tb-analytics/src/watch_time.rs:87` — twitch_stream_sessions
+- `rust/crates/tb-analytics/src/watch_time.rs:97` — twitch_stream_sessions
+- `rust/crates/tb-analytics/src/watch_time.rs:115` — twitch_chat_messages, twitch_session_chatters
+- `rust/crates/tb-analytics/src/watch_time.rs:175` — twitch_session_chatters
+- `rust/crates/tb-analytics/src/watch_time.rs:187` — twitch_session_chatters
+
+### `tb-chat` — 98
+- `rust/crates/tb-chat/src/channel_classifier.rs:99` — twitch_partners, twitch_streamers
+- `rust/crates/tb-chat/src/channel_classifier.rs:117` — twitch_streamers_partner_state
+- `rust/crates/tb-chat/src/channel_classifier.rs:134` — twitch_live_state
+- `rust/crates/tb-chat/src/chatter_tracking.rs:190` — twitch_stream_sessions
+- `rust/crates/tb-chat/src/chatter_tracking.rs:213` — twitch_live_state
+- `rust/crates/tb-chat/src/chatter_tracking.rs:226` — twitch_stream_sessions
+- `rust/crates/tb-chat/src/chatter_tracking.rs:271` — twitch_chat_messages
+- `rust/crates/tb-chat/src/chatter_tracking.rs:289` — twitch_session_chatters
+- `rust/crates/tb-chat/src/chatter_tracking.rs:299` — twitch_chatter_rollup
+- `rust/crates/tb-chat/src/chatter_tracking.rs:316` — twitch_chatter_rollup
+- `rust/crates/tb-chat/src/chatter_tracking.rs:333` — twitch_chatter_rollup
+- `rust/crates/tb-chat/src/chatter_tracking.rs:362` — twitch_session_chatters
+- `rust/crates/tb-chat/src/chatter_tracking.rs:380` — twitch_session_chatters
+- `rust/crates/tb-chat/src/chatter_tracking.rs:497` — twitch_raw_chat_ingest_health
+- `rust/crates/tb-chat/src/commands.rs:531` — twitch_streamers_partner_state
+- `rust/crates/tb-chat/src/commands.rs:552` — twitch_streamers_partner_state, twitch_streamers, twitch_partners
+- `rust/crates/tb-chat/src/commands.rs:580` — twitch_raid_auth
+- `rust/crates/tb-chat/src/commands.rs:594` — twitch_raid_auth
+- `rust/crates/tb-chat/src/commands.rs:817` — twitch_streamer_identities
+- `rust/crates/tb-chat/src/commands.rs:967` — twitch_raid_history
+- `rust/crates/tb-chat/src/commands.rs:1340` — streamer_plans
+- `rust/crates/tb-chat/src/commands.rs:1353` — streamer_plans
+- `rust/crates/tb-chat/src/commands.rs:1563` — twitch_engagement_settings
+- `rust/crates/tb-chat/src/commands.rs:1593` — twitch_engagement_log
+- `rust/crates/tb-chat/src/commands.rs:1640` — twitch_user_engagement_optout
+- `rust/crates/tb-chat/src/commands.rs:1677` — twitch_user_engagement_optout
+- `rust/crates/tb-chat/src/conversation_scam.rs:544` — twitch_scam_guard_settings
+- `rust/crates/tb-chat/src/conversation_scam.rs:568` — twitch_session_chatters, twitch_stream_sessions
+- `rust/crates/tb-chat/src/conversation_scam.rs:585` — twitch_chatter_rollup
+- `rust/crates/tb-chat/src/conversation_scam.rs:604` — twitch_chatter_rollup
+- `rust/crates/tb-chat/src/conversation_scam.rs:620` — twitch_scam_guard_verdicts
+- `rust/crates/tb-chat/src/conversation_scam.rs:975` — twitch_scam_guard_verdicts
+- `rust/crates/tb-chat/src/conversation_scam.rs:1034` — twitch_scam_guard_verdicts
+- `rust/crates/tb-chat/src/conversation_scam.rs:1106` — twitch_scam_guard_verdicts
+- `rust/crates/tb-chat/src/conversation_scam.rs:1167` — twitch_scam_guard_learnings
+- `rust/crates/tb-chat/src/conversation_scam.rs:1184` — twitch_scam_guard_learnings
+- `rust/crates/tb-chat/src/conversation_scam.rs:1279` — twitch_scam_guard_verdicts
+- `rust/crates/tb-chat/src/conversation_scam.rs:1300` — twitch_scam_guard_verdicts
+- `rust/crates/tb-chat/src/conversation_scam.rs:1413` — twitch_scam_guard_verdicts
+- `rust/crates/tb-chat/src/conversation_scam.rs:1434` — twitch_scam_guard_verdicts
+- `rust/crates/tb-chat/src/global_ban_sweep.rs:335` — twitch_chatter_global_ban
+- `rust/crates/tb-chat/src/global_ban_sweep.rs:353` — twitch_chatter_global_ban_applied
+- `rust/crates/tb-chat/src/global_ban_sweep.rs:370` — twitch_chatter_global_ban_applied
+- `rust/crates/tb-chat/src/global_ban_sweep.rs:389` — twitch_global_ban_sweep_due
+- `rust/crates/tb-chat/src/global_ban_sweep.rs:406` — twitch_global_ban_sweep_due
+- `rust/crates/tb-chat/src/global_ban_sweep.rs:427` — twitch_chatter_global_ban
+- `rust/crates/tb-chat/src/global_chatter_ban.rs:95` — twitch_chatter_global_ban
+- `rust/crates/tb-chat/src/moderation.rs:575` — tb_chat_autoban_log
+- `rust/crates/tb-chat/src/moderation.rs:655` — tb_chat_autoban_log
+- `rust/crates/tb-chat/src/moderation.rs:693` — twitch_ban_events
+- `rust/crates/tb-chat/src/moderation.rs:942` — twitch_outbound_chat_suppressions
+- `rust/crates/tb-chat/src/moderation.rs:1014` — twitch_outbound_chat_suppressions
+- `rust/crates/tb-chat/src/pipeline.rs:311` — twitch_session_chatters
+- `rust/crates/tb-chat/src/pipeline.rs:322` — twitch_chatter_rollup
+- `rust/crates/tb-chat/src/pipeline.rs:780` — twitch_streamers_partner_state
+- `rust/crates/tb-chat/src/pipeline.rs:848` — twitch_chatter_rollup
+- `rust/crates/tb-chat/src/promos.rs:1140` — streamer_plans
+- `rust/crates/tb-chat/src/promos.rs:1198` — twitch_streamer_invites
+- `rust/crates/tb-chat/src/promos.rs:1313` — twitch_session_chatters, twitch_live_state
+- `rust/crates/tb-chat/src/promos.rs:1406` — twitch_stream_sessions
+- `rust/crates/tb-chat/src/promos.rs:1433` — twitch_stats_tracked
+- `rust/crates/tb-chat/src/promos.rs:1466` — twitch_live_state
+- `rust/crates/tb-chat/src/promos.rs:1502` — streamer_plans
+- `rust/crates/tb-chat/src/promos.rs:1530` — twitch_streamer_identities
+- `rust/crates/tb-chat/src/promos.rs:1548` — twitch_raid_auth
+- `rust/crates/tb-chat/src/promos.rs:1570` — twitch_live_state
+- `rust/crates/tb-chat/src/promos.rs:1903` — twitch_session_chatters
+- `rust/crates/tb-chat/src/promos.rs:1920` — twitch_engagement_conversation
+- `rust/crates/tb-chat/src/promos.rs:1944` — twitch_engagement_conversation
+- `rust/crates/tb-chat/src/promos.rs:1985` — twitch_live_state
+- `rust/crates/tb-chat/src/promos.rs:2015` — twitch_streamers_partner_state
+- `rust/crates/tb-chat/src/promos.rs:2062` — streamer_plans
+- `rust/crates/tb-chat/src/promos.rs:2102` — twitch_streamer_identities, twitch_live_state, streamer_plans
+- `rust/crates/tb-chat/src/promos.rs:2122` — twitch_live_state
+- `rust/crates/tb-chat/src/promos.rs:2145` — twitch_promo_cooldowns
+- `rust/crates/tb-chat/src/promos.rs:2189` — twitch_promo_cooldowns
+- `rust/crates/tb-chat/src/promos.rs:2212` — twitch_promo_cooldowns
+- `rust/crates/tb-chat/src/scam_pitch.rs:1202` — twitch_stream_sessions
+- `rust/crates/tb-chat/src/scam_pitch.rs:1795` — twitch_auto_learned_spam_patterns
+- `rust/crates/tb-chat/src/scam_pitch.rs:1834` — twitch_auto_learned_safe_patterns
+- `rust/crates/tb-chat/src/spam_filter.rs:393` — twitch_auto_learned_spam_patterns
+- `rust/crates/tb-chat/src/spam_filter.rs:414` — twitch_auto_learned_safe_patterns
+- `rust/crates/tb-chat/src/stats.rs:82` — twitch_streamer_identities
+- `rust/crates/tb-chat/src/suppression_guard.rs:42` — twitch_streamers_partner_state
+- `rust/crates/tb-chat/src/sus_invite.rs:151` — twitch_chatter_rollup
+- `rust/crates/tb-chat/src/timeout_tracking.rs:154` — twitch_streamer_identities
+- `rust/crates/tb-chat/src/title_db.rs:34` — twitch_streamers
+- `rust/crates/tb-chat/src/title_db.rs:58` — twitch_stream_sessions
+- `rust/crates/tb-chat/src/title_db.rs:100` — twitch_stream_sessions
+- `rust/crates/tb-chat/src/title_db.rs:116` — title_generator_knowledge
+- `rust/crates/tb-chat/src/title_db.rs:153` — twitch_stream_sessions
+- `rust/crates/tb-chat/src/title_db.rs:179` — title_generator_knowledge
+- `rust/crates/tb-chat/src/title_db.rs:219` — title_generator_insights
+- `rust/crates/tb-chat/src/title_db.rs:243` — title_generator_insights
+- `rust/crates/tb-chat/src/title_jobs.rs:62` — twitch_stream_sessions
+- `rust/crates/tb-chat/src/title_jobs.rs:88` — twitch_streamers
+- `rust/crates/tb-chat/src/title_jobs.rs:186` — twitch_streamers_partner_state
+- `rust/crates/tb-chat/src/title_jobs.rs:201` — twitch_stream_sessions, twitch_streamers
+
+### `tb-dashboard-api` — 172
+- `rust/crates/tb-dashboard-api/src/auth/security.rs:104` — (keine Relation)
+- `rust/crates/tb-dashboard-api/src/auth/security.rs:110` — dashboard_sessions
+- `rust/crates/tb-dashboard-api/src/auth/security.rs:131` — dashboard_sessions
+- `rust/crates/tb-dashboard-api/src/auth/session.rs:639` — dashboard_sessions
+- `rust/crates/tb-dashboard-api/src/auth/session.rs:700` — dashboard_sessions
+- `rust/crates/tb-dashboard-api/src/auth/session.rs:761` — oauth_state_tokens
+- `rust/crates/tb-dashboard-api/src/auth/session.rs:818` — dashboard_sessions
+- `rust/crates/tb-dashboard-api/src/auth/session.rs:873` — twitch_partners
+- `rust/crates/tb-dashboard-api/src/auth/session.rs:921` — twitch_partners
+- `rust/crates/tb-dashboard-api/src/auth/session.rs:1213` — twitch_partners
+- `rust/crates/tb-dashboard-api/src/auth/session.rs:1339` — twitch_partners
+- `rust/crates/tb-dashboard-api/src/auth/session.rs:1386` — twitch_partners
+- `rust/crates/tb-dashboard-api/src/auth/session.rs:1434` — dashboard_sessions
+- `rust/crates/tb-dashboard-api/src/auth/session.rs:1476` — dashboard_sessions
+- `rust/crates/tb-dashboard-api/src/auth/session.rs:1527` — dashboard_sessions
+- `rust/crates/tb-dashboard-api/src/handlers/admin_audit_log.rs:237` — twitch_partners
+- `rust/crates/tb-dashboard-api/src/handlers/admin_audit_log.rs:314` — streamer_plans
+- `rust/crates/tb-dashboard-api/src/handlers/admin_audit_log.rs:441` — twitch_billing_events
+- `rust/crates/tb-dashboard-api/src/handlers/admin_audit_log.rs:486` — twitch_billing_subscriptions
+- `rust/crates/tb-dashboard-api/src/handlers/admin_chat_action.rs:191` — twitch_partners_all_state
+- `rust/crates/tb-dashboard-api/src/handlers/admin_chat_action.rs:222` — twitch_partners
+- `rust/crates/tb-dashboard-api/src/handlers/admin_form_aliases.rs:183` — twitch_partners
+- `rust/crates/tb-dashboard-api/src/handlers/admin_manual_plan.rs:192` — streamer_plans
+- `rust/crates/tb-dashboard-api/src/handlers/admin_manual_plan.rs:208` — streamer_plans
+- `rust/crates/tb-dashboard-api/src/handlers/admin_manual_plan.rs:250` — streamer_plans
+- `rust/crates/tb-dashboard-api/src/handlers/admin_manual_plan.rs:292` — twitch_streamers_partner_state
+- `rust/crates/tb-dashboard-api/src/handlers/ads_schedule.rs:61` — twitch_ads_schedule_snapshot
+- `rust/crates/tb-dashboard-api/src/handlers/affiliate_portal.rs:45` — affiliate_accounts
+- `rust/crates/tb-dashboard-api/src/handlers/affiliate_portal.rs:65` — affiliate_streamer_claims
+- `rust/crates/tb-dashboard-api/src/handlers/affiliate_portal.rs:76` — affiliate_commissions
+- `rust/crates/tb-dashboard-api/src/handlers/affiliate_portal.rs:88` — affiliate_streamer_claims, affiliate_commissions
+- `rust/crates/tb-dashboard-api/src/handlers/affiliate_portal.rs:107` — twitch_streamers
+- `rust/crates/tb-dashboard-api/src/handlers/audience.rs:572` — twitch_chat_messages, twitch_session_chatters
+- `rust/crates/tb-dashboard-api/src/handlers/audience_demographics.rs:96` — twitch_stream_sessions
+- `rust/crates/tb-dashboard-api/src/handlers/audience_demographics.rs:124` — twitch_chat_messages
+- `rust/crates/tb-dashboard-api/src/handlers/audience_demographics.rs:281` — twitch_stream_sessions
+- `rust/crates/tb-dashboard-api/src/handlers/audience_demographics.rs:314` — twitch_stream_sessions
+- `rust/crates/tb-dashboard-api/src/handlers/audience_demographics.rs:331` — twitch_stream_sessions
+- `rust/crates/tb-dashboard-api/src/handlers/audience_demographics.rs:354` — twitch_session_viewers, twitch_stream_sessions
+- `rust/crates/tb-dashboard-api/src/handlers/audience_demographics.rs:381` — twitch_session_chatters, twitch_chatter_rollup, twitch_stream_sessions
+- `rust/crates/tb-dashboard-api/src/handlers/audience_demographics.rs:511` — twitch_chat_messages
+- `rust/crates/tb-dashboard-api/src/handlers/audience_demographics.rs:526` — twitch_session_chatters, twitch_stream_sessions
+- `rust/crates/tb-dashboard-api/src/handlers/audience_demographics.rs:559` — twitch_stream_sessions
+- `rust/crates/tb-dashboard-api/src/handlers/billing_page.rs:901` — twitch_billing_subscriptions
+- `rust/crates/tb-dashboard-api/src/handlers/billing_profile.rs:142` — twitch_billing_profiles
+- `rust/crates/tb-dashboard-api/src/handlers/billing_profile.rs:188` — twitch_billing_profiles
+- `rust/crates/tb-dashboard-api/src/handlers/category_comparison.rs:114` — twitch_stats_tracked
+- `rust/crates/tb-dashboard-api/src/handlers/category_comparison.rs:137` — twitch_stream_sessions
+- `rust/crates/tb-dashboard-api/src/handlers/category_comparison.rs:174` — twitch_stats_category
+- `rust/crates/tb-dashboard-api/src/handlers/category_comparison.rs:212` — twitch_stats_category
+- `rust/crates/tb-dashboard-api/src/handlers/category_comparison.rs:227` — twitch_stats_category
+- `rust/crates/tb-dashboard-api/src/handlers/category_comparison.rs:244` — twitch_stream_sessions
+- `rust/crates/tb-dashboard-api/src/handlers/category_comparison.rs:266` — twitch_stream_sessions
+- `rust/crates/tb-dashboard-api/src/handlers/category_comparison.rs:318` — twitch_stream_sessions
+- `rust/crates/tb-dashboard-api/src/handlers/category_comparison.rs:334` — twitch_stream_sessions
+- `rust/crates/tb-dashboard-api/src/handlers/category_comparison.rs:349` — twitch_stats_category
+- `rust/crates/tb-dashboard-api/src/handlers/category_comparison.rs:358` — twitch_stats_category
+- `rust/crates/tb-dashboard-api/src/handlers/category_comparison.rs:409` — twitch_stream_sessions
+- `rust/crates/tb-dashboard-api/src/handlers/engagement_mode.rs:94` — twitch_engagement_settings
+- `rust/crates/tb-dashboard-api/src/handlers/engagement_mode.rs:138` — twitch_engagement_settings
+- `rust/crates/tb-dashboard-api/src/handlers/engagement_mode.rs:150` — twitch_engagement_settings
+- `rust/crates/tb-dashboard-api/src/handlers/engagement_settings.rs:47` — twitch_admin_roles
+- `rust/crates/tb-dashboard-api/src/handlers/engagement_settings.rs:317` — twitch_engagement_log
+- `rust/crates/tb-dashboard-api/src/handlers/engagement_settings.rs:371` — twitch_engagement_settings
+- `rust/crates/tb-dashboard-api/src/handlers/engagement_settings.rs:381` — twitch_engagement_settings
+- `rust/crates/tb-dashboard-api/src/handlers/follower_funnel.rs:84` — twitch_stream_sessions
+- `rust/crates/tb-dashboard-api/src/handlers/follower_funnel.rs:178` — twitch_follow_events, twitch_stream_sessions
+- `rust/crates/tb-dashboard-api/src/handlers/follower_funnel.rs:199` — twitch_raid_history
+- `rust/crates/tb-dashboard-api/src/handlers/health_probe.rs:16` — (keine Relation)
+- `rust/crates/tb-dashboard-api/src/handlers/internal_home.rs:2217` — internal_home_changelog
+- `rust/crates/tb-dashboard-api/src/handlers/internal_home.rs:2230` — internal_home_changelog
+- `rust/crates/tb-dashboard-api/src/handlers/last_session.rs:30` — twitch_stream_sessions
+- `rust/crates/tb-dashboard-api/src/handlers/lurker_tax_settings.rs:87` — twitch_raid_auth
+- `rust/crates/tb-dashboard-api/src/handlers/lurker_tax_settings.rs:160` — streamer_plans
+- `rust/crates/tb-dashboard-api/src/handlers/lurker_tax_settings.rs:174` — streamer_plans
+- `rust/crates/tb-dashboard-api/src/handlers/market.rs:312` — twitch_streamers, twitch_partners, twitch_live_state
+- `rust/crates/tb-dashboard-api/src/handlers/market.rs:333` — twitch_chat_messages
+- `rust/crates/tb-dashboard-api/src/handlers/market.rs:349` — twitch_session_chatters
+- `rust/crates/tb-dashboard-api/src/handlers/market.rs:364` — twitch_stats_category
+- `rust/crates/tb-dashboard-api/src/handlers/market.rs:389` — twitch_chat_messages
+- `rust/crates/tb-dashboard-api/src/handlers/market.rs:416` — twitch_chat_messages
+- `rust/crates/tb-dashboard-api/src/handlers/market.rs:476` — twitch_chat_messages
+- `rust/crates/tb-dashboard-api/src/handlers/onboarding.rs:72` — streamer_onboarding
+- `rust/crates/tb-dashboard-api/src/handlers/onboarding.rs:123` — streamer_onboarding
+- `rust/crates/tb-dashboard-api/src/handlers/overlay.rs:486` — twitch_streamers, twitch_streamer_identities
+- `rust/crates/tb-dashboard-api/src/handlers/performance.rs:91` — twitch_stream_sessions
+- `rust/crates/tb-dashboard-api/src/handlers/performance.rs:172` — twitch_stream_sessions
+- `rust/crates/tb-dashboard-api/src/handlers/performance.rs:247` — twitch_stream_sessions
+- `rust/crates/tb-dashboard-api/src/handlers/performance.rs:314` — twitch_stream_sessions
+- `rust/crates/tb-dashboard-api/src/handlers/raid_analytics.rs:242` — twitch_raid_retention
+- `rust/crates/tb-dashboard-api/src/handlers/raid_analytics.rs:458` — twitch_raid_retention, twitch_raid_history, twitch_stream_sessions
+- `rust/crates/tb-dashboard-api/src/handlers/raid_analytics.rs:590` — twitch_follow_events, twitch_stream_sessions, twitch_session_chatters, twitch_raid_retention, twitch_raid_history, twitch_chatter_rollup
+- `rust/crates/tb-dashboard-api/src/handlers/raid_analytics.rs:721` — twitch_raid_arrival_tracking
+- `rust/crates/tb-dashboard-api/src/handlers/raid_analytics.rs:765` — twitch_stream_sessions
+- `rust/crates/tb-dashboard-api/src/handlers/raid_analytics.rs:786` — twitch_session_viewers
+- `rust/crates/tb-dashboard-api/src/handlers/raid_analytics.rs:856` — twitch_follow_events
+- `rust/crates/tb-dashboard-api/src/handlers/raid_network_analytics.rs:52` — twitch_streamers_partner_state
+- `rust/crates/tb-dashboard-api/src/handlers/raid_network_analytics.rs:66` — twitch_raid_history
+- `rust/crates/tb-dashboard-api/src/handlers/raid_network_analytics.rs:80` — twitch_raid_history
+- `rust/crates/tb-dashboard-api/src/handlers/raid_network_analytics.rs:130` — twitch_raid_history
+- `rust/crates/tb-dashboard-api/src/handlers/raid_network_analytics.rs:159` — twitch_raid_history
+- `rust/crates/tb-dashboard-api/src/handlers/raid_requirements.rs:87` — twitch_partners
+- `rust/crates/tb-dashboard-api/src/handlers/rankings.rs:72` — twitch_stream_sessions
+- `rust/crates/tb-dashboard-api/src/handlers/rankings.rs:89` — twitch_stream_sessions
+- `rust/crates/tb-dashboard-api/src/handlers/rankings.rs:107` — twitch_stream_sessions
+- `rust/crates/tb-dashboard-api/src/handlers/rankings.rs:126` — twitch_stream_sessions
+- `rust/crates/tb-dashboard-api/src/handlers/rankings.rs:147` — twitch_stream_sessions
+- `rust/crates/tb-dashboard-api/src/handlers/rankings.rs:164` — twitch_stream_sessions
+- `rust/crates/tb-dashboard-api/src/handlers/retention_curve.rs:65` — twitch_stream_sessions, twitch_session_viewers
+- `rust/crates/tb-dashboard-api/src/handlers/retention_curve.rs:122` — twitch_stream_sessions, twitch_ad_break_events
+- `rust/crates/tb-dashboard-api/src/handlers/retention_curve.rs:180` — twitch_stream_sessions
+- `rust/crates/tb-dashboard-api/src/handlers/roadmap.rs:19` — twitch_roadmap_items
+- `rust/crates/tb-dashboard-api/src/handlers/roadmap.rs:111` — twitch_roadmap_items
+- `rust/crates/tb-dashboard-api/src/handlers/roadmap.rs:162` — twitch_roadmap_items
+- `rust/crates/tb-dashboard-api/src/handlers/roadmap.rs:278` — twitch_roadmap_items
+- `rust/crates/tb-dashboard-api/src/handlers/scam_guard_enforce.rs:88` — twitch_scam_guard_verdicts
+- `rust/crates/tb-dashboard-api/src/handlers/scam_guard_queue.rs:83` — twitch_scam_guard_verdicts
+- `rust/crates/tb-dashboard-api/src/handlers/scam_guard_queue.rs:131` — twitch_scam_guard_verdicts
+- `rust/crates/tb-dashboard-api/src/handlers/scam_guard_queue.rs:175` — twitch_scam_guard_verdicts
+- `rust/crates/tb-dashboard-api/src/handlers/scam_guard_queue.rs:199` — twitch_scam_guard_verdicts
+- `rust/crates/tb-dashboard-api/src/handlers/scam_guard_settings.rs:75` — twitch_scam_guard_settings
+- `rust/crates/tb-dashboard-api/src/handlers/scam_guard_settings.rs:132` — twitch_scam_guard_settings
+- `rust/crates/tb-dashboard-api/src/handlers/session_detail.rs:109` — twitch_stream_sessions
+- `rust/crates/tb-dashboard-api/src/handlers/session_detail.rs:125` — twitch_stream_sessions
+- `rust/crates/tb-dashboard-api/src/handlers/session_detail.rs:157` — twitch_session_chatters
+- `rust/crates/tb-dashboard-api/src/handlers/session_detail.rs:222` — twitch_session_viewers
+- `rust/crates/tb-dashboard-api/src/handlers/session_detail.rs:315` — twitch_stream_sessions
+- `rust/crates/tb-dashboard-api/src/handlers/session_detail.rs:318` — twitch_stream_sessions
+- `rust/crates/tb-dashboard-api/src/handlers/session_detail.rs:343` — twitch_streamers
+- `rust/crates/tb-dashboard-api/src/handlers/session_detail.rs:357` — twitch_channel_updates
+- `rust/crates/tb-dashboard-api/src/handlers/session_detail.rs:392` — twitch_raid_arrival_tracking, twitch_raid_history
+- `rust/crates/tb-dashboard-api/src/handlers/session_detail.rs:426` — twitch_follow_events
+- `rust/crates/tb-dashboard-api/src/handlers/silent_settings.rs:104` — twitch_partners
+- `rust/crates/tb-dashboard-api/src/handlers/social_media.rs:247` — twitch_clips_social_media
+- `rust/crates/tb-dashboard-api/src/handlers/social_media.rs:260` — clip_templates_streamer
+- `rust/crates/tb-dashboard-api/src/handlers/social_media.rs:492` — twitch_streamers
+- `rust/crates/tb-dashboard-api/src/handlers/social_media.rs:504` — twitch_clips_social_media
+- `rust/crates/tb-dashboard-api/src/handlers/social_media.rs:813` — social_media_streamer_layout
+- `rust/crates/tb-dashboard-api/src/handlers/social_media.rs:2403` — social_media_platform_auth
+- `rust/crates/tb-dashboard-api/src/handlers/stream_report.rs:264` — twitch_stream_report_ratings
+- `rust/crates/tb-dashboard-api/src/handlers/stream_report.rs:318` — twitch_stream_report_ratings
+- `rust/crates/tb-dashboard-api/src/handlers/stream_report.rs:468` — twitch_stream_report_ab_votes
+- `rust/crates/tb-dashboard-api/src/handlers/stream_report.rs:492` — twitch_stream_report_ab_votes
+- `rust/crates/tb-dashboard-api/src/handlers/stream_report.rs:550` — twitch_stream_report_ab_votes
+- `rust/crates/tb-dashboard-api/src/handlers/system/query.rs:134` — (keine Relation)
+- `rust/crates/tb-dashboard-api/src/handlers/tip_settings.rs:63` — twitch_tip_settings
+- `rust/crates/tb-dashboard-api/src/handlers/tip_settings.rs:93` — twitch_tip_settings
+- `rust/crates/tb-dashboard-api/src/handlers/title.rs:91` — twitch_streamers
+- `rust/crates/tb-dashboard-api/src/handlers/title.rs:112` — twitch_streamer_identities
+- `rust/crates/tb-dashboard-api/src/handlers/title_performance.rs:89` — twitch_stream_sessions
+- `rust/crates/tb-dashboard-api/src/handlers/viewer_timeline.rs:157` — twitch_stream_sessions
+- `rust/crates/tb-dashboard-api/src/handlers/viewer_timeline.rs:452` — twitch_viewer_presence_ticks, twitch_session_chatters, twitch_stream_sessions
+- `rust/crates/tb-dashboard-api/src/handlers/viewers.rs:85` — twitch_streamers, twitch_streamer_identities, twitch_user_profile
+- `rust/crates/tb-dashboard-api/src/handlers/viewers.rs:181` — twitch_session_chatters, twitch_stream_sessions
+- `rust/crates/tb-dashboard-api/src/handlers/viewers.rs:205` — twitch_stream_sessions, twitch_session_chatters, twitch_chat_messages
+- `rust/crates/tb-dashboard-api/src/handlers/viewers.rs:225` — twitch_chat_messages
+- `rust/crates/tb-dashboard-api/src/handlers/viewers.rs:257` — twitch_raw_chat_ingest_health
+- `rust/crates/tb-dashboard-api/src/handlers/viewers.rs:293` — twitch_raw_chat_backfill_runs
+- `rust/crates/tb-dashboard-api/src/handlers/viewers.rs:372` — twitch_session_chatters, twitch_stream_sessions
+- `rust/crates/tb-dashboard-api/src/handlers/viewers.rs:397` — twitch_chat_messages
+- `rust/crates/tb-dashboard-api/src/handlers/viewers.rs:458` — twitch_session_chatters, twitch_stream_sessions
+- `rust/crates/tb-dashboard-api/src/handlers/viewers.rs:588` — twitch_session_chatters, twitch_stream_sessions
+- `rust/crates/tb-dashboard-api/src/handlers/viewers.rs:614` — twitch_session_chatters, twitch_stream_sessions
+- `rust/crates/tb-dashboard-api/src/handlers/viewers.rs:866` — twitch_session_chatters, twitch_stream_sessions
+- `rust/crates/tb-dashboard-api/src/handlers/viewers.rs:925` — twitch_stream_sessions, twitch_session_chatters
+- `rust/crates/tb-dashboard-api/src/handlers/viewers.rs:952` — twitch_session_chatters, twitch_stream_sessions
+- `rust/crates/tb-dashboard-api/src/handlers/viewers.rs:999` — twitch_chat_messages
+- `rust/crates/tb-dashboard-api/src/handlers/viewers.rs:1078` — twitch_chat_messages, twitch_stream_sessions
+- `rust/crates/tb-dashboard-api/src/handlers/viewers.rs:1381` — twitch_chatter_rollup
+- `rust/crates/tb-dashboard-api/src/handlers/viewers.rs:1462` — twitch_session_chatters, twitch_stream_sessions
+- `rust/crates/tb-dashboard-api/src/handlers/viewers.rs:1502` — twitch_session_chatters, twitch_stream_sessions
+- `rust/crates/tb-dashboard-api/src/handlers/viewers.rs:1536` — twitch_chatter_rollup
+
+### `tb-engagement` — 47
+- `rust/crates/tb-engagement/src/auto_off.rs:31` — twitch_engagement_settings
+- `rust/crates/tb-engagement/src/background.rs:50` — twitch_engagement_settings
+- `rust/crates/tb-engagement/src/background.rs:60` — twitch_engagement_conversation
+- `rust/crates/tb-engagement/src/channel_background.rs:58` — twitch_engagement_conversation
+- `rust/crates/tb-engagement/src/channel_background.rs:77` — twitch_engagement_conversation
+- `rust/crates/tb-engagement/src/channel_background.rs:92` — twitch_engagement_channel_profile
+- `rust/crates/tb-engagement/src/channel_background.rs:109` — twitch_engagement_channel_profile
+- `rust/crates/tb-engagement/src/conversation.rs:51` — twitch_engagement_conversation
+- `rust/crates/tb-engagement/src/conversation.rs:72` — twitch_engagement_conversation
+- `rust/crates/tb-engagement/src/conversation.rs:90` — twitch_engagement_conversation
+- `rust/crates/tb-engagement/src/gate.rs:30` — twitch_engagement_settings
+- `rust/crates/tb-engagement/src/gate.rs:55` — twitch_user_engagement_optout
+- `rust/crates/tb-engagement/src/gate.rs:83` — twitch_streamers_partner_state
+- `rust/crates/tb-engagement/src/gate.rs:118` — twitch_engagement_log
+- `rust/crates/tb-engagement/src/global_sentiment.rs:61` — twitch_engagement_conversation
+- `rust/crates/tb-engagement/src/global_sentiment.rs:80` — twitch_engagement_global_sentiment
+- `rust/crates/tb-engagement/src/global_sentiment.rs:89` — twitch_engagement_global_sentiment
+- `rust/crates/tb-engagement/src/global_sentiment.rs:102` — twitch_engagement_global_sentiment
+- `rust/crates/tb-engagement/src/irc_reader.rs:63` — twitch_engagement_settings
+- `rust/crates/tb-engagement/src/irc_reader.rs:74` — twitch_engagement_settings
+- `rust/crates/tb-engagement/src/lurker_signal.rs:86` — twitch_engagement_conversation
+- `rust/crates/tb-engagement/src/match_context.rs:104` — twitch_channel_match_state
+- `rust/crates/tb-engagement/src/match_context.rs:198` — twitch_channel_match_state
+- `rust/crates/tb-engagement/src/persona.rs:198` — twitch_engagement_conversation
+- `rust/crates/tb-engagement/src/sender_auth.rs:116` — twitch_engagement_sender_auth
+- `rust/crates/tb-engagement/src/sender_auth.rs:189` — twitch_engagement_sender_auth
+- `rust/crates/tb-engagement/src/sender_auth.rs:231` — twitch_engagement_sender_auth
+- `rust/crates/tb-engagement/src/sender_auth.rs:318` — oauth_state_tokens
+- `rust/crates/tb-engagement/src/sender_auth.rs:341` — oauth_state_tokens
+- `rust/crates/tb-engagement/src/shadow_review.rs:86` — twitch_engagement_log
+- `rust/crates/tb-engagement/src/shadow_review.rs:127` — twitch_engagement_log
+- `rust/crates/tb-engagement/src/soul_store.rs:126` — twitch_engagement_soul
+- `rust/crates/tb-engagement/src/soul_store.rs:132` — twitch_engagement_soul
+- `rust/crates/tb-engagement/src/soul_store.rs:147` — twitch_engagement_soul
+- `rust/crates/tb-engagement/src/soul_store.rs:160` — twitch_engagement_soul
+- `rust/crates/tb-engagement/src/soul_store.rs:184` — twitch_engagement_conversation
+- `rust/crates/tb-engagement/src/soul_store.rs:197` — twitch_engagement_soul
+- `rust/crates/tb-engagement/src/stream_state.rs:29` — twitch_live_state
+- `rust/crates/tb-engagement/src/stream_transcripts.rs:124` — twitch_engagement_stream_transcripts
+- `rust/crates/tb-engagement/src/stream_transcripts.rs:154` — twitch_engagement_stream_transcripts
+- `rust/crates/tb-engagement/src/stream_transcripts.rs:194` — twitch_engagement_stream_transcripts
+- `rust/crates/tb-engagement/src/style_examples.rs:185` — twitch_engagement_conversation
+- `rust/crates/tb-engagement/src/threads.rs:113` — twitch_user_threads
+- `rust/crates/tb-engagement/src/threads.rs:157` — twitch_user_threads
+- `rust/crates/tb-engagement/src/threads.rs:205` — twitch_engagement_conversation
+- `rust/crates/tb-engagement/src/threads.rs:231` — twitch_user_threads
+- `rust/crates/tb-engagement/src/threads.rs:246` — twitch_user_threads
+
+### `tb-highlight` — 1
+- `rust/crates/tb-highlight/src/partners.rs:106` — twitch_streamers_partner_state
+
+### `tb-internal-api` — 51
+- `rust/crates/tb-internal-api/src/handlers/chat_command.rs:59` — twitch_live_state
+- `rust/crates/tb-internal-api/src/handlers/chat_command.rs:100` — twitch_streamer_invites
+- `rust/crates/tb-internal-api/src/handlers/discord_invite.rs:29` — twitch_streamer_invites
+- `rust/crates/tb-internal-api/src/handlers/discord_invite.rs:68` — twitch_streamer_invites
+- `rust/crates/tb-internal-api/src/handlers/python_stubs.rs:28` — twitch_stream_sessions
+- `rust/crates/tb-internal-api/src/handlers/python_stubs.rs:88` — twitch_stream_sessions
+- `rust/crates/tb-internal-api/src/handlers/python_stubs.rs:97` — twitch_session_chatters
+- `rust/crates/tb-internal-api/src/handlers/session_detail.rs:170` — twitch_stream_sessions
+- `rust/crates/tb-internal-api/src/handlers/session_detail.rs:186` — twitch_session_viewers
+- `rust/crates/tb-internal-api/src/handlers/session_detail.rs:215` — twitch_session_chatters
+- `rust/crates/tb-internal-api/src/handlers/stats_native.rs:411` — twitch_streamers_partner_state
+- `rust/crates/tb-internal-api/src/handlers/stats_native.rs:715` — twitch_ad_break_events
+- `rust/crates/tb-internal-api/src/handlers/stats_native.rs:736` — twitch_ad_break_events, twitch_stream_sessions
+- `rust/crates/tb-internal-api/src/handlers/stats_native.rs:769` — twitch_session_viewers
+- `rust/crates/tb-internal-api/src/handlers/stats_native.rs:868` — twitch_hype_train_events
+- `rust/crates/tb-internal-api/src/handlers/stats_native.rs:896` — twitch_bits_events
+- `rust/crates/tb-internal-api/src/handlers/stats_native.rs:918` — twitch_subscription_events
+- `rust/crates/tb-internal-api/src/handlers/stats_native.rs:965` — twitch_eventsub_capacity_snapshot
+- `rust/crates/tb-internal-api/src/handlers/stats_native.rs:1014` — twitch_eventsub_capacity_snapshot
+- `rust/crates/tb-internal-api/src/handlers/stats_native.rs:1048` — twitch_eventsub_capacity_snapshot
+- `rust/crates/tb-internal-api/src/handlers/stats_native.rs:1354` — twitch_subscriptions_snapshot
+- `rust/crates/tb-internal-api/src/handlers/stats_native.rs:1393` — twitch_chatter_rollup
+- `rust/crates/tb-internal-api/src/handlers/stats_native.rs:1473` — twitch_stream_sessions
+- `rust/crates/tb-internal-api/src/handlers/stats_native.rs:1490` — twitch_chat_messages, twitch_stream_sessions
+- `rust/crates/tb-internal-api/src/handlers/streamer_analytics_native.rs:170` — twitch_stream_sessions
+- `rust/crates/tb-internal-api/src/handlers/streamer_analytics_native.rs:323` — twitch_stream_sessions
+- `rust/crates/tb-internal-api/src/handlers/streamer_analytics_native.rs:370` — twitch_stream_sessions
+- `rust/crates/tb-internal-api/src/handlers/streamer_analytics_native.rs:408` — twitch_stream_sessions
+- `rust/crates/tb-internal-api/src/handlers/streamer_analytics_native.rs:451` — twitch_stream_sessions
+- `rust/crates/tb-internal-api/src/handlers/streamer_analytics_native.rs:501` — twitch_stream_sessions
+- `rust/crates/tb-internal-api/src/handlers/streamer_analytics_native.rs:702` — twitch_stats_tracked
+- `rust/crates/tb-internal-api/src/handlers/streamer_analytics_native.rs:732` — twitch_stats_category
+- `rust/crates/tb-internal-api/src/handlers/streamer_analytics_native.rs:756` — twitch_stream_sessions
+- `rust/crates/tb-internal-api/src/handlers/streamers.rs:993` — twitch_partners
+- `rust/crates/tb-internal-api/src/streamer_lifecycle.rs:110` — twitch_partners, twitch_streamer_identities
+- `rust/crates/tb-internal-api/src/streamer_lifecycle.rs:143` — twitch_streamer_identities
+- `rust/crates/tb-internal-api/src/streamer_lifecycle.rs:237` — twitch_partners
+- `rust/crates/tb-internal-api/src/streamer_lifecycle.rs:257` — twitch_raid_auth
+- `rust/crates/tb-internal-api/src/streamer_lifecycle.rs:272` — twitch_engagement_settings
+- `rust/crates/tb-internal-api/src/streamer_lifecycle.rs:323` — twitch_streamers
+- `rust/crates/tb-internal-api/src/streamer_lifecycle.rs:429` — twitch_partners
+- `rust/crates/tb-internal-api/src/streamer_lifecycle.rs:464` — twitch_partners
+- `rust/crates/tb-internal-api/src/streamer_lifecycle.rs:538` — twitch_partners
+- `rust/crates/tb-internal-api/src/streamer_lifecycle.rs:569` — twitch_partners
+- `rust/crates/tb-internal-api/src/streamer_lifecycle.rs:619` — twitch_raid_auth
+- `rust/crates/tb-internal-api/src/streamer_lifecycle.rs:641` — twitch_raid_auth
+- `rust/crates/tb-internal-api/src/streamer_lifecycle.rs:671` — twitch_stats_category, twitch_stats_tracked
+- `rust/crates/tb-internal-api/src/streamer_lifecycle.rs:715` — twitch_partners
+- `rust/crates/tb-internal-api/src/streamer_lifecycle.rs:782` — twitch_partners
+- `rust/crates/tb-internal-api/src/streamer_lifecycle.rs:903` — twitch_partners
+- `rust/crates/tb-internal-api/src/streamer_lifecycle.rs:963` — twitch_live_state
+
+### `tb-monitoring` — 99
+- `rust/crates/tb-monitoring/src/chatters_poller.rs:98` — twitch_live_state, twitch_streamers_partner_state
+- `rust/crates/tb-monitoring/src/chatters_poller.rs:419` — twitch_chatter_rollup
+- `rust/crates/tb-monitoring/src/chatters_poller.rs:441` — twitch_session_chatters
+- `rust/crates/tb-monitoring/src/chatters_poller.rs:460` — twitch_chatter_rollup
+- `rust/crates/tb-monitoring/src/exp_sessions.rs:31` — exp_sessions
+- `rust/crates/tb-monitoring/src/exp_sessions.rs:51` — exp_sessions
+- `rust/crates/tb-monitoring/src/exp_sessions.rs:93` — exp_sessions
+- `rust/crates/tb-monitoring/src/exp_sessions.rs:113` — exp_snapshots
+- `rust/crates/tb-monitoring/src/exp_sessions.rs:139` — exp_sessions
+- `rust/crates/tb-monitoring/src/exp_sessions.rs:161` — exp_game_transitions
+- `rust/crates/tb-monitoring/src/exp_sessions.rs:185` — exp_sessions
+- `rust/crates/tb-monitoring/src/exp_sessions.rs:194` — exp_sessions
+- `rust/crates/tb-monitoring/src/guard.rs:68` — eventsub_guard_state
+- `rust/crates/tb-monitoring/src/guard.rs:103` — eventsub_guard_state
+- `rust/crates/tb-monitoring/src/guard.rs:130` — eventsub_guard_state
+- `rust/crates/tb-monitoring/src/guard.rs:141` — eventsub_guard_state
+- `rust/crates/tb-monitoring/src/inbox_store/mod.rs:89` — twitch_eventsub_processing_inbox
+- `rust/crates/tb-monitoring/src/inbox_store/mod.rs:120` — twitch_eventsub_processing_inbox
+- `rust/crates/tb-monitoring/src/inbox_store/mod.rs:148` — twitch_eventsub_processing_inbox
+- `rust/crates/tb-monitoring/src/inbox_store/mod.rs:167` — twitch_eventsub_processing_inbox
+- `rust/crates/tb-monitoring/src/inbox_store/mod.rs:206` — twitch_eventsub_processing_dead_letter
+- `rust/crates/tb-monitoring/src/inbox_store/mod.rs:233` — twitch_eventsub_processing_inbox
+- `rust/crates/tb-monitoring/src/inbox_store/mod.rs:245` — twitch_eventsub_processing_inbox
+- `rust/crates/tb-monitoring/src/inbox_store/mod.rs:261` — twitch_eventsub_processing_dead_letter
+- `rust/crates/tb-monitoring/src/inbox_store/mod.rs:284` — twitch_eventsub_processing_dead_letter
+- `rust/crates/tb-monitoring/src/inbox_store/mod.rs:297` — twitch_eventsub_processing_inbox
+- `rust/crates/tb-monitoring/src/irc_lurker.rs:92` — twitch_live_state
+- `rust/crates/tb-monitoring/src/irc_lurker.rs:143` — twitch_session_chatters
+- `rust/crates/tb-monitoring/src/irc_lurker.rs:161` — twitch_session_chatters
+- `rust/crates/tb-monitoring/src/irc_lurker.rs:214` — twitch_viewer_presence_ticks
+- `rust/crates/tb-monitoring/src/live_state.rs:144` — twitch_live_state, twitch_partners
+- `rust/crates/tb-monitoring/src/live_state.rs:199` — twitch_partners
+- `rust/crates/tb-monitoring/src/live_state.rs:272` — twitch_live_state
+- `rust/crates/tb-monitoring/src/live_state.rs:285` — twitch_live_state
+- `rust/crates/tb-monitoring/src/live_state.rs:346` — twitch_live_state
+- `rust/crates/tb-monitoring/src/live_state.rs:358` — twitch_live_state
+- `rust/crates/tb-monitoring/src/live_state.rs:399` — twitch_live_state
+- `rust/crates/tb-monitoring/src/live_state.rs:419` — twitch_live_state
+- `rust/crates/tb-monitoring/src/live_state.rs:436` — twitch_live_state
+- `rust/crates/tb-monitoring/src/live_state.rs:468` — twitch_live_state
+- `rust/crates/tb-monitoring/src/live_state.rs:489` — twitch_live_state
+- `rust/crates/tb-monitoring/src/live_state.rs:501` — twitch_live_state
+- `rust/crates/tb-monitoring/src/live_state.rs:518` — twitch_streamer_identities
+- `rust/crates/tb-monitoring/src/live_state.rs:535` — twitch_live_state
+- `rust/crates/tb-monitoring/src/poller/hooks.rs:194` — twitch_raid_auth, twitch_live_state
+- `rust/crates/tb-monitoring/src/poller/settings.rs:25` — twitch_global_settings
+- `rust/crates/tb-monitoring/src/poller/tracked.rs:51` — twitch_streamers_partner_state, twitch_streamers, twitch_partners, twitch_streamer_identities
+- `rust/crates/tb-monitoring/src/poller/tracked.rs:130` — twitch_streamers_partner_state, twitch_stream_sessions
+- `rust/crates/tb-monitoring/src/raid_retention.rs:37` — twitch_raid_history
+- `rust/crates/tb-monitoring/src/raid_retention.rs:78` — twitch_raid_retention
+- `rust/crates/tb-monitoring/src/raid_retention.rs:91` — twitch_stream_sessions
+- `rust/crates/tb-monitoring/src/raid_retention.rs:119` — twitch_raid_retention
+- `rust/crates/tb-monitoring/src/scout.rs:117` — twitch_streamers, twitch_partners
+- `rust/crates/tb-monitoring/src/scout.rs:133` — twitch_streamers
+- `rust/crates/tb-monitoring/src/scout.rs:144` — twitch_streamers
+- `rust/crates/tb-monitoring/src/scout.rs:161` — twitch_stream_sessions
+- `rust/crates/tb-monitoring/src/scout.rs:183` — twitch_live_state
+- `rust/crates/tb-monitoring/src/scout.rs:213` — twitch_streamers, twitch_partners
+- `rust/crates/tb-monitoring/src/sessions/store.rs:121` — twitch_stream_sessions
+- `rust/crates/tb-monitoring/src/sessions/store.rs:130` — twitch_stream_sessions
+- `rust/crates/tb-monitoring/src/sessions/store.rs:142` — twitch_stream_sessions
+- `rust/crates/tb-monitoring/src/sessions/store.rs:154` — (keine Relation)
+- `rust/crates/tb-monitoring/src/sessions/store.rs:160` — twitch_stream_sessions
+- `rust/crates/tb-monitoring/src/sessions/store.rs:172` — twitch_stream_sessions
+- `rust/crates/tb-monitoring/src/sessions/store.rs:200` — twitch_live_state
+- `rust/crates/tb-monitoring/src/sessions/store.rs:232` — twitch_stream_sessions
+- `rust/crates/tb-monitoring/src/sessions/store.rs:256` — twitch_session_viewers
+- `rust/crates/tb-monitoring/src/sessions/store.rs:282` — twitch_stream_sessions
+- `rust/crates/tb-monitoring/src/sessions/store.rs:310` — twitch_stream_sessions
+- `rust/crates/tb-monitoring/src/sessions/store.rs:338` — twitch_stream_sessions
+- `rust/crates/tb-monitoring/src/sessions/store.rs:362` — twitch_stream_sessions
+- `rust/crates/tb-monitoring/src/sessions/store.rs:389` — twitch_session_viewers
+- `rust/crates/tb-monitoring/src/sessions/store.rs:408` — twitch_session_chatters
+- `rust/crates/tb-monitoring/src/sessions/store.rs:426` — twitch_stream_sessions
+- `rust/crates/tb-monitoring/src/sessions/store.rs:475` — twitch_live_state
+- `rust/crates/tb-monitoring/src/sessions/store.rs:490` — twitch_stream_sessions
+- `rust/crates/tb-monitoring/src/sessions/store.rs:502` — twitch_session_viewers, twitch_stream_sessions
+- `rust/crates/tb-monitoring/src/subscriptions.rs:596` — twitch_streamers, twitch_partners
+- `rust/crates/tb-monitoring/src/subscriptions.rs:622` — twitch_streamers_partner_state
+- `rust/crates/tb-monitoring/src/subscriptions.rs:639` — twitch_raid_auth
+- `rust/crates/tb-monitoring/src/subscriptions.rs:1251` — twitch_streamers
+- `rust/crates/tb-monitoring/src/subscriptions.rs:1267` — twitch_streamers_partner_state
+- `rust/crates/tb-monitoring/src/subscriptions.rs:1282` — twitch_raid_auth
+- `rust/crates/tb-monitoring/src/subscriptions.rs:1566` — twitch_eventsub_capacity_snapshot
+- `rust/crates/tb-monitoring/src/subscriptions.rs:1586` — twitch_eventsub_capacity_snapshot
+- `rust/crates/tb-monitoring/src/telemetry.rs:74` — twitch_live_state
+- `rust/crates/tb-monitoring/src/telemetry.rs:113` — twitch_subscription_events
+- `rust/crates/tb-monitoring/src/telemetry.rs:152` — twitch_ad_break_events
+- `rust/crates/tb-monitoring/src/telemetry.rs:181` — twitch_bits_events
+- `rust/crates/tb-monitoring/src/telemetry.rs:217` — twitch_channel_points_events
+- `rust/crates/tb-monitoring/src/telemetry.rs:259` — twitch_hype_train_events
+- `rust/crates/tb-monitoring/src/telemetry.rs:288` — twitch_hype_train_events
+- `rust/crates/tb-monitoring/src/telemetry.rs:324` — twitch_ban_events
+- `rust/crates/tb-monitoring/src/telemetry.rs:410` — twitch_shoutout_events
+- `rust/crates/tb-monitoring/src/telemetry.rs:441` — twitch_follow_events
+- `rust/crates/tb-monitoring/src/telemetry.rs:481` — twitch_first_message_events
+- `rust/crates/tb-monitoring/src/telemetry.rs:501` — twitch_stream_sessions, twitch_session_chatters
+- `rust/crates/tb-monitoring/src/telemetry.rs:535` — twitch_channel_updates
+- `rust/crates/tb-monitoring/src/telemetry.rs:546` — twitch_live_state
+
+### `tb-raid` — 107
+- `rust/crates/tb-raid/src/arrival_tracking_store.rs:103` — twitch_raid_arrival_tracking
+- `rust/crates/tb-raid/src/arrival_tracking_store.rs:162` — twitch_raid_arrival_tracking
+- `rust/crates/tb-raid/src/arrival_tracking_store.rs:187` — twitch_raid_arrival_tracking
+- `rust/crates/tb-raid/src/arrival_tracking_store.rs:216` — twitch_raid_arrival_tracking
+- `rust/crates/tb-raid/src/auth_writer.rs:124` — twitch_raid_auth
+- `rust/crates/tb-raid/src/auth_writer.rs:138` — twitch_raid_auth
+- `rust/crates/tb-raid/src/auth_writer.rs:169` — twitch_raid_auth
+- `rust/crates/tb-raid/src/auth_writer.rs:183` — twitch_partners
+- `rust/crates/tb-raid/src/auth_writer.rs:200` — twitch_token_blacklist
+- `rust/crates/tb-raid/src/external_recruitment_store.rs:104` — twitch_confirmed_external_recruitment_raids
+- `rust/crates/tb-raid/src/external_recruitment_store.rs:129` — twitch_confirmed_external_recruitment_raids
+- `rust/crates/tb-raid/src/external_recruitment_store.rs:146` — twitch_confirmed_external_recruitment_raids
+- `rust/crates/tb-raid/src/external_recruitment_store.rs:170` — twitch_external_recruitment_blacklist_pending
+- `rust/crates/tb-raid/src/external_recruitment_store.rs:212` — twitch_external_recruitment_blacklist_pending
+- `rust/crates/tb-raid/src/external_recruitment_store.rs:225` — twitch_external_recruitment_blacklist_pending
+- `rust/crates/tb-raid/src/external_recruitment_store.rs:259` — twitch_external_bot_ban_check_pending
+- `rust/crates/tb-raid/src/external_recruitment_store.rs:293` — twitch_external_bot_ban_check_pending
+- `rust/crates/tb-raid/src/external_recruitment_store.rs:306` — twitch_external_bot_ban_check_pending
+- `rust/crates/tb-raid/src/external_recruitment_store.rs:323` — twitch_external_bot_ban_check_pending
+- `rust/crates/tb-raid/src/offline_eligibility.rs:71` — twitch_partners
+- `rust/crates/tb-raid/src/offline_eligibility.rs:80` — twitch_raid_auth
+- `rust/crates/tb-raid/src/outreach_boost.rs:34` — twitch_partner_outreach, twitch_partners
+- `rust/crates/tb-raid/src/outreach_boost.rs:73` — twitch_partner_outreach
+- `rust/crates/tb-raid/src/partner_roster.rs:61` — twitch_streamers_partner_state
+- `rust/crates/tb-raid/src/partner_score_refresh.rs:349` — twitch_streamers_partner_state
+- `rust/crates/tb-raid/src/partner_score_refresh.rs:367` — twitch_streamers_partner_state
+- `rust/crates/tb-raid/src/partner_score_refresh.rs:383` — twitch_stream_sessions
+- `rust/crates/tb-raid/src/partner_score_refresh.rs:406` — twitch_raid_history
+- `rust/crates/tb-raid/src/partner_score_refresh.rs:429` — twitch_raid_history, twitch_streamers_partner_state
+- `rust/crates/tb-raid/src/partner_score_refresh.rs:447` — twitch_raid_history, twitch_streamers_partner_state
+- `rust/crates/tb-raid/src/partner_score_refresh.rs:465` — twitch_raid_history, twitch_streamers_partner_state
+- `rust/crates/tb-raid/src/partner_score_refresh.rs:491` — streamer_plans
+- `rust/crates/tb-raid/src/partner_score_refresh.rs:505` — twitch_live_state
+- `rust/crates/tb-raid/src/partner_setup.rs:217` — twitch_streamer_identities
+- `rust/crates/tb-raid/src/partner_setup.rs:243` — twitch_streamers
+- `rust/crates/tb-raid/src/partner_setup.rs:266` — twitch_partners
+- `rust/crates/tb-raid/src/partner_setup.rs:311` — twitch_partners
+- `rust/crates/tb-raid/src/partner_setup.rs:360` — twitch_streamer_identities
+- `rust/crates/tb-raid/src/partner_setup.rs:377` — twitch_streamer_identities
+- `rust/crates/tb-raid/src/partner_setup.rs:484` — twitch_stats_category, twitch_stats_tracked
+- `rust/crates/tb-raid/src/partner_setup.rs:537` — streamer_plans
+- `rust/crates/tb-raid/src/partner_setup.rs:673` — twitch_partners
+- `rust/crates/tb-raid/src/partner_setup.rs:715` — twitch_partners
+- `rust/crates/tb-raid/src/partner_setup.rs:749` — twitch_streamers
+- `rust/crates/tb-raid/src/raid_blacklist.rs:33` — twitch_raid_blacklist
+- `rust/crates/tb-raid/src/raid_blacklist.rs:66` — twitch_raid_blacklist
+- `rust/crates/tb-raid/src/raid_blacklist.rs:75` — twitch_raid_blacklist
+- `rust/crates/tb-raid/src/raid_blacklist.rs:100` — twitch_raid_blacklist
+- `rust/crates/tb-raid/src/raid_blacklist.rs:121` — twitch_raid_blacklist
+- `rust/crates/tb-raid/src/raid_history_store.rs:62` — twitch_raid_history
+- `rust/crates/tb-raid/src/raid_history_store.rs:123` — twitch_raid_history
+- `rust/crates/tb-raid/src/raid_history_store.rs:148` — twitch_raid_history
+- `rust/crates/tb-raid/src/reauth_admin.rs:34` — twitch_raid_auth
+- `rust/crates/tb-raid/src/score_store.rs:122` — twitch_partner_raid_scores
+- `rust/crates/tb-raid/src/score_store.rs:152` — twitch_partner_raid_scores
+- `rust/crates/tb-raid/src/score_store.rs:182` — twitch_partner_raid_scores
+- `rust/crates/tb-raid/src/score_store.rs:207` — twitch_partner_raid_scores
+- `rust/crates/tb-raid/src/score_tracking_store.rs:88` — twitch_partner_raid_score_tracking
+- `rust/crates/tb-raid/src/score_tracking_store.rs:223` — twitch_stream_sessions
+- `rust/crates/tb-raid/src/score_tracking_store.rs:267` — twitch_channel_updates
+- `rust/crates/tb-raid/src/score_tracking_store.rs:297` — twitch_partner_raid_score_tracking
+- `rust/crates/tb-raid/src/score_tracking_store.rs:329` — twitch_partner_raid_score_tracking
+- `rust/crates/tb-raid/src/score_tracking_store.rs:345` — twitch_partner_raid_score_tracking
+- `rust/crates/tb-raid/src/score_tracking_store.rs:361` — twitch_partner_raid_score_tracking
+- `rust/crates/tb-raid/src/state_store.rs:106` — oauth_state_tokens
+- `rust/crates/tb-raid/src/state_store.rs:137` — oauth_state_tokens
+- `rust/crates/tb-raid/src/state_store.rs:159` — oauth_state_tokens
+- `rust/crates/tb-raid/src/state_store.rs:178` — oauth_state_tokens
+- `rust/crates/tb-raid/src/strikes_store.rs:55` — twitch_raid_disabled_strikes
+- `rust/crates/tb-raid/src/token_blacklist.rs:59` — twitch_token_blacklist
+- `rust/crates/tb-raid/src/token_blacklist.rs:77` — twitch_token_blacklist
+- `rust/crates/tb-raid/src/token_blacklist.rs:129` — twitch_partners
+- `rust/crates/tb-raid/src/token_blacklist.rs:140` — twitch_token_blacklist
+- `rust/crates/tb-raid/src/token_blacklist.rs:157` — twitch_token_blacklist
+- `rust/crates/tb-raid/src/token_blacklist.rs:174` — twitch_token_blacklist
+- `rust/crates/tb-raid/src/token_blacklist.rs:187` — twitch_token_blacklist
+- `rust/crates/tb-raid/src/token_blacklist.rs:203` — twitch_token_blacklist
+- `rust/crates/tb-raid/src/token_blacklist.rs:224` — twitch_raid_auth
+- `rust/crates/tb-raid/src/token_blacklist.rs:243` — twitch_partners
+- `rust/crates/tb-raid/src/token_lifecycle.rs:314` — twitch_token_blacklist
+- `rust/crates/tb-raid/src/token_lifecycle.rs:415` — twitch_token_blacklist
+- `rust/crates/tb-raid/src/token_lifecycle.rs:514` — twitch_raid_auth, twitch_partners
+- `rust/crates/tb-raid/src/token_lifecycle.rs:554` — twitch_raid_auth, twitch_partners
+- `rust/crates/tb-raid/src/token_lifecycle.rs:582` — twitch_token_blacklist
+- `rust/crates/tb-raid/src/token_lifecycle.rs:593` — twitch_token_blacklist
+- `rust/crates/tb-raid/src/token_lifecycle.rs:603` — twitch_token_blacklist
+- `rust/crates/tb-raid/src/token_lifecycle.rs:615` — twitch_token_blacklist
+- `rust/crates/tb-raid/src/token_lifecycle.rs:627` — twitch_token_blacklist
+- `rust/crates/tb-raid/src/token_lifecycle.rs:649` — twitch_partners
+- `rust/crates/tb-raid/src/token_lifecycle.rs:666` — twitch_raid_auth
+- `rust/crates/tb-raid/src/token_lifecycle.rs:680` — twitch_token_blacklist
+- `rust/crates/tb-raid/src/token_lifecycle.rs:707` — twitch_raid_blacklist
+- `rust/crates/tb-raid/src/token_lifecycle.rs:719` — twitch_raid_blacklist
+- `rust/crates/tb-raid/src/token_lifecycle.rs:728` — twitch_raid_blacklist
+- `rust/crates/tb-raid/src/token_lifecycle.rs:750` — twitch_raid_auth
+- `rust/crates/tb-raid/src/token_lifecycle.rs:762` — twitch_partners
+- `rust/crates/tb-raid/src/token_lifecycle.rs:792` — twitch_raid_auth
+- `rust/crates/tb-raid/src/token_lifecycle.rs:812` — twitch_partners
+- `rust/crates/tb-raid/src/token_lifecycle.rs:842` — twitch_raid_blacklist
+- `rust/crates/tb-raid/src/token_lifecycle.rs:852` — twitch_raid_auth
+- `rust/crates/tb-raid/src/token_lifecycle.rs:865` — twitch_partners
+- `rust/crates/tb-raid/src/token_lifecycle.rs:891` — twitch_streamer_identities
+- `rust/crates/tb-raid/src/token_refresher.rs:184` — (keine Relation)
+- `rust/crates/tb-raid/src/token_refresher.rs:195` — twitch_raid_auth
+- `rust/crates/tb-raid/src/token_refresher.rs:276` — twitch_raid_auth
+- `rust/crates/tb-raid/src/token_refresher.rs:333` — twitch_raid_auth
+- `rust/crates/tb-raid/src/token_store.rs:153` — twitch_raid_auth
+
+### `tb-social-media` — 79
+- `rust/crates/tb-social-media/src/analytics.rs:69` — twitch_clips_social_analytics
+- `rust/crates/tb-social-media/src/analytics.rs:93` — twitch_clips_social_analytics
+- `rust/crates/tb-social-media/src/analytics.rs:120` — twitch_clips_social_analytics
+- `rust/crates/tb-social-media/src/approval.rs:110` — social_media_clip_approval
+- `rust/crates/tb-social-media/src/approval.rs:134` — social_media_clip_approval
+- `rust/crates/tb-social-media/src/approval.rs:143` — twitch_clips_social_media
+- `rust/crates/tb-social-media/src/approval.rs:155` — social_media_clip_approval
+- `rust/crates/tb-social-media/src/approval.rs:232` — social_media_clip_approval
+- `rust/crates/tb-social-media/src/approval.rs:243` — twitch_clips_social_media
+- `rust/crates/tb-social-media/src/approval.rs:287` — twitch_clips_social_media
+- `rust/crates/tb-social-media/src/clip/repository.rs:22` — twitch_partners
+- `rust/crates/tb-social-media/src/clip/repository.rs:47` — twitch_streamers
+- `rust/crates/tb-social-media/src/clip/repository.rs:81` — twitch_clips_social_media
+- `rust/crates/tb-social-media/src/clip/repository.rs:93` — twitch_clips_social_media
+- `rust/crates/tb-social-media/src/clip/repository.rs:133` — clip_fetch_history
+- `rust/crates/tb-social-media/src/clip/repository.rs:144` — clip_fetch_history
+- `rust/crates/tb-social-media/src/clip_analytics.rs:15` — twitch_clips_social_media
+- `rust/crates/tb-social-media/src/clip_analytics.rs:39` — twitch_clips_upload_queue, twitch_clips_social_media
+- `rust/crates/tb-social-media/src/clip_analytics.rs:55` — twitch_clips_social_analytics, twitch_clips_social_media
+- `rust/crates/tb-social-media/src/clip_manager.rs:39` — twitch_clips_social_media
+- `rust/crates/tb-social-media/src/clip_manager.rs:48` — twitch_streamers
+- `rust/crates/tb-social-media/src/clip_manager.rs:58` — twitch_clips_social_media
+- `rust/crates/tb-social-media/src/clip_manager.rs:88` — twitch_clips_upload_queue, twitch_clips_social_media
+- `rust/crates/tb-social-media/src/clip_manager.rs:164` — clip_templates_streamer
+- `rust/crates/tb-social-media/src/clip_queue.rs:69` — twitch_clips_upload_queue
+- `rust/crates/tb-social-media/src/clip_queue.rs:84` — twitch_clips_upload_queue
+- `rust/crates/tb-social-media/src/clip_queue.rs:98` — twitch_clips_upload_queue
+- `rust/crates/tb-social-media/src/clip_queue.rs:115` — twitch_clips_upload_queue
+- `rust/crates/tb-social-media/src/clip_queue.rs:144` — twitch_clips_upload_queue
+- `rust/crates/tb-social-media/src/clip_queue.rs:207` — twitch_clips_upload_queue
+- `rust/crates/tb-social-media/src/clip_queue.rs:213` — twitch_clips_upload_queue
+- `rust/crates/tb-social-media/src/clip_queue.rs:238` — twitch_clips_upload_queue
+- `rust/crates/tb-social-media/src/clip_queue.rs:249` — twitch_clips_upload_queue
+- `rust/crates/tb-social-media/src/clip_templates.rs:53` — clip_templates_global
+- `rust/crates/tb-social-media/src/clip_templates.rs:105` — clip_templates_streamer
+- `rust/crates/tb-social-media/src/clip_templates.rs:110` — clip_templates_streamer
+- `rust/crates/tb-social-media/src/clip_templates.rs:119` — clip_templates_streamer
+- `rust/crates/tb-social-media/src/clip_templates.rs:132` — clip_templates_streamer
+- `rust/crates/tb-social-media/src/clip_templates.rs:150` — clip_templates_streamer
+- `rust/crates/tb-social-media/src/clip_templates.rs:176` — twitch_clips_social_media
+- `rust/crates/tb-social-media/src/clip_templates.rs:189` — clip_templates_global
+- `rust/crates/tb-social-media/src/clip_templates.rs:191` — clip_templates_global
+- `rust/crates/tb-social-media/src/clip_templates.rs:195` — clip_templates_streamer
+- `rust/crates/tb-social-media/src/clip_templates.rs:216` — twitch_clips_social_media
+- `rust/crates/tb-social-media/src/clip_templates.rs:228` — clip_last_hashtags
+- `rust/crates/tb-social-media/src/clip_templates.rs:241` — clip_last_hashtags
+- `rust/crates/tb-social-media/src/credentials.rs:69` — social_media_platform_auth
+- `rust/crates/tb-social-media/src/enrich_pipeline.rs:103` — twitch_clips_social_media
+- `rust/crates/tb-social-media/src/enrichment.rs:125` — social_media_clip_enrichment
+- `rust/crates/tb-social-media/src/enrichment.rs:201` — social_media_clip_enrichment
+- `rust/crates/tb-social-media/src/enrichment.rs:223` — social_media_clip_enrichment
+- `rust/crates/tb-social-media/src/enrichment.rs:248` — social_media_clip_enrichment
+- `rust/crates/tb-social-media/src/enrichment.rs:278` — twitch_clips_social_media, social_media_clip_enrichment
+- `rust/crates/tb-social-media/src/enrichment.rs:312` — social_media_clip_enrichment
+- `rust/crates/tb-social-media/src/insights_worker.rs:68` — twitch_clips_social_media
+- `rust/crates/tb-social-media/src/insights_worker.rs:83` — twitch_clips_social_analytics
+- `rust/crates/tb-social-media/src/layout.rs:221` — social_media_streamer_layout
+- `rust/crates/tb-social-media/src/layout.rs:247` — social_media_streamer_layout
+- `rust/crates/tb-social-media/src/layout.rs:267` — twitch_clips_social_media, social_media_streamer_layout
+- `rust/crates/tb-social-media/src/layout.rs:311` — twitch_clips_social_media
+- `rust/crates/tb-social-media/src/layout.rs:327` — twitch_clips_social_media
+- `rust/crates/tb-social-media/src/oauth.rs:122` — oauth_state_tokens
+- `rust/crates/tb-social-media/src/oauth.rs:174` — oauth_state_tokens
+- `rust/crates/tb-social-media/src/refresh_worker.rs:48` — social_media_platform_auth
+- `rust/crates/tb-social-media/src/refresh_worker.rs:123` — social_media_platform_auth
+- `rust/crates/tb-social-media/src/refresh_worker.rs:137` — social_media_platform_auth
+- `rust/crates/tb-social-media/src/report_writer.rs:96` — twitch_clips_social_analytics, twitch_clips_social_media
+- `rust/crates/tb-social-media/src/retention.rs:21` — social_media_platform_auth
+- `rust/crates/tb-social-media/src/retention.rs:36` — twitch_clips_social_media
+- `rust/crates/tb-social-media/src/retention.rs:73` — twitch_clips_social_media
+- `rust/crates/tb-social-media/src/retention.rs:81` — twitch_clips_social_media
+- `rust/crates/tb-social-media/src/retention.rs:110` — twitch_clips_social_media
+- `rust/crates/tb-social-media/src/retention.rs:127` — twitch_clips_social_media
+- `rust/crates/tb-social-media/src/retention.rs:158` — twitch_clips_social_media
+- `rust/crates/tb-social-media/src/settings.rs:32` — social_media_settings
+- `rust/crates/tb-social-media/src/settings.rs:51` — social_media_settings
+- `rust/crates/tb-social-media/src/upload_worker.rs:235` — twitch_clips_social_media
+- `rust/crates/tb-social-media/src/vocab.rs:192` — deadlock_vocab
+- `rust/crates/tb-social-media/src/vocab.rs:238` — deadlock_vocab
+
+### `tb-tips` — 6 (bereits Phase 0 erledigt)
+- `rust/crates/tb-tips/src/repo.rs:14` — twitch_tip_settings
+- `rust/crates/tb-tips/src/repo.rs:34` — twitch_feature_usage
+- `rust/crates/tb-tips/src/repo.rs:47` — twitch_tip_history
+- `rust/crates/tb-tips/src/repo.rs:75` — twitch_tip_history
+- `rust/crates/tb-tips/src/repo.rs:83` — twitch_tip_settings
+- `rust/crates/tb-tips/src/repo.rs:101` — twitch_feature_usage
