@@ -413,11 +413,8 @@ impl CommandEngine {
                 if event.is_mod_or_broadcaster() {
                     self.cmd_silentban(event).await;
                 } else {
-                    self.reply(
-                        event,
-                        "Nur der Broadcaster oder Mods können den Bot steuern.",
-                    )
-                    .await;
+                    self.reply(event, "Nur der Broadcaster oder Mods können den Bot steuern.")
+                        .await;
                 }
                 true
             }
@@ -425,11 +422,8 @@ impl CommandEngine {
                 if event.is_mod_or_broadcaster() {
                     self.cmd_silentraid(event).await;
                 } else {
-                    self.reply(
-                        event,
-                        "Nur der Broadcaster oder Mods können den Bot steuern.",
-                    )
-                    .await;
+                    self.reply(event, "Nur der Broadcaster oder Mods können den Bot steuern.")
+                        .await;
                 }
                 true
             }
@@ -451,6 +445,14 @@ impl CommandEngine {
             }
             "!engagement_status" => {
                 self.cmd_engagement_status(event).await;
+                true
+            }
+            "!engagement_on" => {
+                self.cmd_engagement_set_enabled(event, true).await;
+                true
+            }
+            "!engagement_off" => {
+                self.cmd_engagement_set_enabled(event, false).await;
                 true
             }
             "!engagement_ignore_me" => {
@@ -604,6 +606,10 @@ impl CommandEngine {
             Ok(Some(raid_enabled)) => raid_enabled,
             _ => None,
         }
+    }
+
+    async fn can_toggle_engagement(&self, event: &ChatMessageEvent) -> bool {
+        event.is_mod_or_broadcaster() || self._super_mod.is_super_mod(&event.chatter_user_id).await
     }
 
     /// Sendet eine Antwort mit `@<chatter>`-Prefix.
@@ -1406,9 +1412,18 @@ impl CommandEngine {
             }
         };
 
+        if !self.is_fully_authed(&partner.twitch_user_id).await {
+            self.reply(
+                event,
+                "Neu-Autorisierung erforderlich. Bitte prüfe deine Discord-DMs oder nutze /traid.",
+            )
+            .await;
+            return;
+        }
+
         match self.raid.toggle_silent_ban(&partner.twitch_login).await {
             Ok(1) => {
-                // commands.py:219
+                // commands.py:467 — silent_ban=1 → Benachrichtigung stumm
                 self.reply(
                     event,
                     "🔇 Auto-Ban Benachrichtigungen deaktiviert. Bans werden weiterhin ausgeführt, aber keine Nachricht mehr im Chat.",
@@ -1416,7 +1431,7 @@ impl CommandEngine {
                 .await;
             }
             Ok(_) => {
-                // commands.py:220
+                // commands.py:471 — silent_ban=0 → Benachrichtigung aktiv
                 self.reply(event, "🔊 Auto-Ban Benachrichtigungen aktiviert.")
                     .await;
             }
@@ -1444,9 +1459,18 @@ impl CommandEngine {
             }
         };
 
+        if !self.is_fully_authed(&partner.twitch_user_id).await {
+            self.reply(
+                event,
+                "Neu-Autorisierung erforderlich. Bitte prüfe deine Discord-DMs oder nutze /traid.",
+            )
+            .await;
+            return;
+        }
+
         match self.raid.toggle_silent_raid(&partner.twitch_login).await {
             Ok(1) => {
-                // commands.py:233
+                // commands.py:523 — silent_raid=1 → Benachrichtigung stumm
                 self.reply(
                     event,
                     "🔇 Raid-Benachrichtigungen deaktiviert. Raids werden weiterhin ausgeführt, aber keine Nachricht mehr im Chat.",
@@ -1454,7 +1478,7 @@ impl CommandEngine {
                 .await;
             }
             Ok(_) => {
-                // commands.py:234
+                // commands.py:527 — silent_raid=0 → Benachrichtigung aktiv
                 self.reply(event, "🔊 Raid-Benachrichtigungen aktiviert.")
                     .await;
             }
@@ -1559,6 +1583,67 @@ impl CommandEngine {
     // Engagement-Commands — engagement_commands.py
     // -----------------------------------------------------------------------
 
+    async fn cmd_engagement_set_enabled(&self, event: &ChatMessageEvent, enabled: bool) {
+        if !self.can_toggle_engagement(event).await {
+            self.reply(event, "Nur Broadcaster, Mods oder Super-Mod dürfen das.")
+                .await;
+            return;
+        }
+
+        let channel_login = event.broadcaster_user_login.to_lowercase();
+        let actor_id = if event.chatter_user_id.trim().is_empty() {
+            None
+        } else {
+            Some(event.chatter_user_id.as_str())
+        };
+
+        let result = sqlx::query(
+            r#"
+            INSERT INTO twitch_engagement_settings
+                (channel_login, enabled, enabled_at, enabled_by, updated_at)
+            VALUES ($1, $2, NOW(), $3, NOW())
+            ON CONFLICT (channel_login) DO UPDATE SET
+                enabled = EXCLUDED.enabled,
+                enabled_at = CASE
+                    WHEN EXCLUDED.enabled THEN NOW()
+                    ELSE twitch_engagement_settings.enabled_at
+                END,
+                enabled_by = COALESCE(EXCLUDED.enabled_by, twitch_engagement_settings.enabled_by),
+                updated_at = NOW()
+            "#,
+        )
+        .bind(&channel_login)
+        .bind(enabled)
+        .bind(actor_id)
+        .execute(&self.pool)
+        .await;
+
+        match result {
+            Ok(_) => {
+                let msg = if enabled {
+                    "AI-Engagement aktiviert. Deaktiviert sich automatisch bei Stream-Ende."
+                } else {
+                    "AI-Engagement deaktiviert."
+                };
+                self.reply(event, msg).await
+            }
+            Err(e) => {
+                tracing::error!(
+                    channel = %channel_login,
+                    enabled,
+                    err = %e,
+                    "engagement_set_enabled fehlgeschlagen"
+                );
+                let msg = if enabled {
+                    "Fehler beim Aktivieren, schau in die Logs."
+                } else {
+                    "Fehler beim Deaktivieren, schau in die Logs."
+                };
+                self.reply(event, msg).await;
+            }
+        }
+    }
+
     /// `!engagement_status` — engagement_commands.py:150
     ///
     /// Prod-Schema:
@@ -1569,16 +1654,25 @@ impl CommandEngine {
     async fn cmd_engagement_status(&self, event: &ChatMessageEvent) {
         let channel_login = event.broadcaster_user_login.to_lowercase();
 
-        let settings_row = sqlx::query_scalar!(
+        let settings_result = sqlx::query_scalar!(
             "SELECT enabled FROM twitch_engagement_settings WHERE channel_login = $1",
             &channel_login,
         )
         .fetch_optional(&self.pool)
-        .await
-        .unwrap_or(None);
+        .await;
 
-        let enabled = match settings_row {
-            None => {
+        let enabled = match settings_result {
+            Err(e) => {
+                tracing::error!(
+                    channel = %channel_login,
+                    err = %e,
+                    "engagement_status settings fetch fehlgeschlagen"
+                );
+                self.reply_plain(event, "Fehler beim Status-Abruf, schau in die Logs.")
+                    .await;
+                return;
+            }
+            Ok(None) => {
                 self.reply_plain(
                     event,
                     &format!("AI-Engagement für {channel_login}: nie konfiguriert."),
@@ -1586,10 +1680,8 @@ impl CommandEngine {
                 .await;
                 return;
             }
-            Some(v) => v,
+            Ok(Some(v)) => v,
         };
-
-        let status_str = if enabled { "AN" } else { "AUS" };
 
         // Letzter Log-Eintrag — engagement_commands.py:155
         #[derive(sqlx::FromRow)]
@@ -1599,7 +1691,7 @@ impl CommandEngine {
             ts: Option<DateTime<Utc>>,
         }
 
-        let log_row = sqlx::query_as!(
+        let log_result = sqlx::query_as!(
             LogRow,
             r#"
             SELECT decision AS "decision?", response_text, ts AS "ts?"
@@ -1611,29 +1703,56 @@ impl CommandEngine {
             &channel_login,
         )
         .fetch_optional(&self.pool)
-        .await
-        .unwrap_or(None);
+        .await;
 
-        let msg = if let Some(log) = log_row {
-            let now = Utc::now();
-            let ago_sec = log.ts.map(|t| (now - t).num_seconds()).unwrap_or(0);
-            let text = log.response_text.as_deref().unwrap_or("");
-            // snippet = response_text[:77] + "…" wenn > 80 — engagement_commands.py:158
-            let snippet = if text.chars().count() > 80 {
-                let s: String = text.chars().take(77).collect();
-                format!("{s}…")
-            } else {
-                text.to_string()
-            };
-            let decision = log.decision.as_deref().unwrap_or("?");
-            format!(
-                r#"AI-Engagement: {status_str}. Letzte Aktion: {decision} vor {ago_sec}s — "{snippet}"."#
-            )
-        } else {
-            format!("AI-Engagement: {status_str}. Noch keine Aktionen geloggt.")
+        let log_row = match log_result {
+            Ok(row) => row,
+            Err(e) => {
+                tracing::error!(
+                    channel = %channel_login,
+                    err = %e,
+                    "engagement_status log fetch fehlgeschlagen"
+                );
+                self.reply_plain(event, "Fehler beim Status-Abruf, schau in die Logs.")
+                    .await;
+                return;
+            }
         };
 
-        self.reply_plain(event, &msg).await;
+        // engagement_commands.py:164-175 — Statuszeile.
+        let state = if enabled { "AN" } else { "AUS" };
+        let last_action = log_row.as_ref().and_then(|log| {
+            let decision = log
+                .decision
+                .as_deref()
+                .map(str::trim)
+                .filter(|d| !d.is_empty())?;
+            let ts = log.ts?;
+            Some((decision.to_string(), ts, log.response_text.clone()))
+        });
+
+        let message = match last_action {
+            Some((last_decision, ts, response_text)) => {
+                let ago_sec = (Utc::now() - ts).num_seconds().max(0);
+                let snippet_source = response_text.unwrap_or_default();
+                let snippet_trimmed = snippet_source.trim();
+                let snippet: String = if snippet_trimmed.chars().count() > 80 {
+                    format!("{}…", snippet_trimmed.chars().take(77).collect::<String>())
+                } else {
+                    snippet_trimmed.to_string()
+                };
+                let tail = if snippet.is_empty() {
+                    String::new()
+                } else {
+                    format!(" — “{snippet}”")
+                };
+                format!(
+                    "AI-Engagement: {state}. Letzte Aktion: {last_decision} vor {ago_sec}s{tail}."
+                )
+            }
+            None => format!("AI-Engagement: {state}. Noch keine Aktionen geloggt."),
+        };
+        self.reply_plain(event, &message).await;
     }
 
     /// `!engagement_ignore_me` — engagement_commands.py:177
@@ -1811,6 +1930,8 @@ mod tests {
     struct MockRaid {
         manual_result: RaidStartResult,
         manual_calls: Mutex<usize>,
+        silent_ban_calls: Mutex<usize>,
+        silent_raid_calls: Mutex<usize>,
         silent_ban_val: i32,
         silent_raid_val: i32,
     }
@@ -1827,6 +1948,8 @@ mod tests {
                     target_login: target_login.map(str::to_string),
                 },
                 manual_calls: Mutex::new(0),
+                silent_ban_calls: Mutex::new(0),
+                silent_raid_calls: Mutex::new(0),
                 silent_ban_val: 1,
                 silent_raid_val: 0,
             })
@@ -1834,6 +1957,14 @@ mod tests {
 
         async fn manual_call_count(&self) -> usize {
             *self.manual_calls.lock().await
+        }
+
+        async fn silent_ban_call_count(&self) -> usize {
+            *self.silent_ban_calls.lock().await
+        }
+
+        async fn silent_raid_call_count(&self) -> usize {
+            *self.silent_raid_calls.lock().await
         }
     }
 
@@ -1855,9 +1986,11 @@ mod tests {
             })
         }
         async fn toggle_silent_ban(&self, _: &str) -> Result<i32, String> {
+            *self.silent_ban_calls.lock().await += 1;
             Ok(self.silent_ban_val)
         }
         async fn toggle_silent_raid(&self, _: &str) -> Result<i32, String> {
+            *self.silent_raid_calls.lock().await += 1;
             Ok(self.silent_raid_val)
         }
     }
@@ -2415,6 +2548,74 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn engagement_status_db_fehler_antwortet_placeholder() {
+        let pool = sqlx::PgPool::connect_lazy("postgres://x:x@127.0.0.1:1/x").unwrap();
+        let api = MockApi::new();
+        let engine = make_engine_with_pool(pool, api.clone());
+
+        engine
+            .handle(&make_event("!engagement_status", false, false))
+            .await;
+
+        let msg = api.last_message().await.unwrap();
+        assert!(msg.contains("Fehler beim Status-Abruf"), "Meldung: {msg}");
+    }
+
+    #[tokio::test]
+    async fn engagement_on_off_schreibt_enabled() {
+        let pool = pool_or_skip!("cmd_engagement_toggle");
+        apply_ddl(&pool).await;
+        let api = MockApi::new();
+        let engine = make_engine_with_pool(pool.clone(), api.clone());
+
+        engine
+            .handle(&make_event("!engagement_on", true, false))
+            .await;
+        let enabled: bool = sqlx::query_scalar(
+            "SELECT enabled FROM twitch_engagement_settings WHERE channel_login = 'testchannel'",
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert!(enabled);
+
+        engine
+            .handle(&make_event("!engagement_off", true, false))
+            .await;
+        let enabled: bool = sqlx::query_scalar(
+            "SELECT enabled FROM twitch_engagement_settings WHERE channel_login = 'testchannel'",
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert!(!enabled);
+
+        let msg = api.last_message().await.unwrap();
+        assert!(msg.contains("AI-Engagement deaktiviert"), "Meldung: {msg}");
+    }
+
+    #[tokio::test]
+    async fn engagement_on_ohne_recht_schreibt_nicht() {
+        let pool = pool_or_skip!("cmd_engagement_toggle_denied");
+        apply_ddl(&pool).await;
+        let api = MockApi::new();
+        let engine = make_engine_with_pool(pool.clone(), api.clone());
+
+        engine
+            .handle(&make_event("!engagement_on", false, false))
+            .await;
+
+        let count: i64 =
+            sqlx::query_scalar("SELECT COUNT(*)::bigint FROM twitch_engagement_settings")
+                .fetch_one(&pool)
+                .await
+                .unwrap();
+        assert_eq!(count, 0);
+        let msg = api.last_message().await.unwrap();
+        assert!(msg.contains("dürfen das"), "Meldung: {msg}");
+    }
+
+    #[tokio::test]
     async fn raid_history_ohne_einträge() {
         let pool = pool_or_skip!("cmd_raid_hist_leer");
         apply_ddl(&pool).await;
@@ -2584,6 +2785,68 @@ mod tests {
             0,
             "gedroppter Befehl darf keine Chat-Antwort senden"
         );
+    }
+
+    #[tokio::test]
+    async fn silentban_reauth_gate_blockt_toggle() {
+        let pool = pool_or_skip!("cmd_silentban_reauth");
+        apply_ddl(&pool).await;
+        let api = MockApi::new();
+        seed_partner(&pool).await;
+        sqlx::query(
+            "INSERT INTO twitch_raid_auth (twitch_user_id, raid_enabled, needs_reauth) VALUES ('bc123', TRUE, TRUE)",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+
+        let raid = MockRaid::default_arc();
+        let engine = CommandEngine::new(
+            pool,
+            api.clone(),
+            raid.clone(),
+            Arc::new(MockDiscordLink { url: None }),
+            Arc::new(MockInvite { reply: None }),
+            Arc::new(MockSuperMod(false)),
+            Arc::new(MockAutoban(None)),
+        );
+
+        engine.handle(&make_event("!silentban", true, false)).await;
+
+        assert_eq!(raid.silent_ban_call_count().await, 0);
+        let msg = api.last_message().await.unwrap();
+        assert!(msg.contains("Neu-Autorisierung erforderlich"), "Meldung: {msg}");
+    }
+
+    #[tokio::test]
+    async fn silentraid_reauth_gate_blockt_toggle() {
+        let pool = pool_or_skip!("cmd_silentraid_reauth");
+        apply_ddl(&pool).await;
+        let api = MockApi::new();
+        seed_partner(&pool).await;
+        sqlx::query(
+            "INSERT INTO twitch_raid_auth (twitch_user_id, raid_enabled, needs_reauth) VALUES ('bc123', TRUE, TRUE)",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+
+        let raid = MockRaid::default_arc();
+        let engine = CommandEngine::new(
+            pool,
+            api.clone(),
+            raid.clone(),
+            Arc::new(MockDiscordLink { url: None }),
+            Arc::new(MockInvite { reply: None }),
+            Arc::new(MockSuperMod(false)),
+            Arc::new(MockAutoban(None)),
+        );
+
+        engine.handle(&make_event("!silentraid", true, false)).await;
+
+        assert_eq!(raid.silent_raid_call_count().await, 0);
+        let msg = api.last_message().await.unwrap();
+        assert!(msg.contains("Neu-Autorisierung erforderlich"), "Meldung: {msg}");
     }
 
     #[tokio::test]

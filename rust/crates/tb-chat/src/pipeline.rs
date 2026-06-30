@@ -431,7 +431,10 @@ impl ChatPipeline {
 
     /// Verarbeitet ein eingehendes Chat-Event — Einstiegspunkt für den
     /// EventSub-Dispatch (`channel.chat.message`).
-    pub async fn handle(&self, event: &ChatMessageEvent) {
+    ///
+    /// Rueckgabe: `true`, wenn das Event den Python-aequivalenten
+    /// Engagement-Punkt erreicht hat. Fruehe Returns liefern `false`.
+    pub async fn handle(&self, event: &ChatMessageEvent) -> bool {
         let p = &self.parts;
 
         // Twitch Shared Chat: Stammt die Nachricht aus einem fremden Quell-Kanal
@@ -445,7 +448,7 @@ impl ChatPipeline {
 
         // Schritt 0: Echo-/Self-Filter (bot.py Z. 1528–1532)
         if event.chatter_user_id == p.bot_user_id {
-            return;
+            return false;
         }
 
         let channel_login = event.broadcaster_user_login.to_lowercase();
@@ -457,7 +460,7 @@ impl ChatPipeline {
         if WHITELISTED_BOTS.contains(&chatter_login.as_str()) {
             p.tracker.track(event).await;
             p.commands.handle(event).await;
-            return;
+            return false;
         }
 
         // Schritt 3: Kanal-Klassifizierung (bot.py Z. 1559–1572)
@@ -469,7 +472,7 @@ impl ChatPipeline {
         // Schritt 4: Non-Partner — nur Datensammlung, keine Moderation/Promos
         if !class.is_partner {
             p.tracker.track(event).await;
-            return;
+            return false;
         }
 
         // Conversation-Scam-Guard: eigener, fehlertoleranter Hintergrundpfad.
@@ -496,7 +499,7 @@ impl ChatPipeline {
                 )
                 .await
             {
-                return;
+                return false;
             }
             // Ban nicht durchsetzbar (z. B. Chatter ist Mod) → Pipeline läuft
             // weiter, wie Python (enforce gibt das auto_ban-Resultat zurück).
@@ -544,7 +547,7 @@ impl ChatPipeline {
             .run_spam_check(event, &channel_login, &chatter_login)
             .await
         {
-            return;
+            return false;
         }
 
         // Schritt 8: Sus-Discord-Invite (Z. 1741–1743)
@@ -577,6 +580,7 @@ impl ChatPipeline {
         p.promos.record_raw_message(&channel_login).await;
 
         // Schritt 11: Engagement-AI — No-op bis Engagement-Phase (Modul-Doku).
+        let should_spawn_engagement = true;
 
         // Schritt 12/13: Activity-Promo, nur wenn Deadlock live (Z. 1813–1824).
         // !invite wird vom CommandEngine (Schritt 14) bedient; der
@@ -587,6 +591,7 @@ impl ChatPipeline {
 
         // Schritt 14: Command-Processing — immer am Ende (Z. 1827)
         p.commands.handle(event).await;
+        should_spawn_engagement
     }
 
     /// Spam-Schritt (bot.py Z. 1602–1737). Gibt `true` zurück wenn die
@@ -873,8 +878,15 @@ mod tests {
     use std::sync::Mutex;
 
     use crate::api::BanOutcome;
+    use crate::commands::{
+        AutobanEntry, DiscordLinkPort, InvitePort, LastAutobanStore, RaidCommandPort,
+        RaidStartResult, RaidStatusInfo, SuperModPort,
+    };
+    use crate::promos::OutboundSuppressionCheck;
+    use crate::scam_pitch::AccountAgePort;
     use crate::types::{ChatMessageBody, SendOutcome};
     use chrono::{DateTime, Utc};
+    use tb_engagement::minimax_chat::EngagementMinimaxClient;
     use tokio::time::{sleep, Duration};
     use wiremock::matchers::{method, path};
     use wiremock::{Mock, MockServer, ResponseTemplate};
@@ -891,6 +903,116 @@ mod tests {
 
         fn push_call(&self, call: impl Into<String>) {
             self.calls.lock().unwrap().push(call.into());
+        }
+    }
+
+    struct NoopAccountAge;
+
+    #[async_trait::async_trait]
+    impl AccountAgePort for NoopAccountAge {
+        async fn user_created_at_days(&self, _user_id: &str, _login: &str) -> Option<i64> {
+            None
+        }
+    }
+
+    struct NoopMentionResolver;
+
+    #[async_trait::async_trait]
+    impl MentionResolver for NoopMentionResolver {
+        async fn is_known_chatter(&self, _channel_login: &str, _mention_login: &str) -> bool {
+            false
+        }
+
+        async fn resolve_existing(
+            &self,
+            _logins: &[&str],
+        ) -> (std::collections::HashSet<String>, bool) {
+            (std::collections::HashSet::new(), false)
+        }
+    }
+
+    struct NoopSuppression;
+
+    #[async_trait::async_trait]
+    impl OutboundSuppressionCheck for NoopSuppression {
+        async fn is_muted(&self, _channel_login: &str) -> bool {
+            false
+        }
+    }
+
+    struct NoopRaid;
+
+    #[async_trait::async_trait]
+    impl RaidCommandPort for NoopRaid {
+        async fn manual_raid(
+            &self,
+            _broadcaster_id: &str,
+            _broadcaster_login: &str,
+        ) -> Result<RaidStartResult, String> {
+            Ok(RaidStartResult {
+                status: "unavailable".to_string(),
+                target_login: None,
+            })
+        }
+
+        async fn raid_status(&self, _broadcaster_id: &str) -> Result<RaidStatusInfo, String> {
+            Ok(RaidStatusInfo {
+                raid_enabled: None,
+                authorized_at: None,
+                total_raids: 0,
+                successful_raids: 0,
+                last_raid_login: None,
+                last_raid_viewers: None,
+                last_raid_at: None,
+            })
+        }
+
+        async fn toggle_silent_ban(&self, _twitch_login: &str) -> Result<i32, String> {
+            Ok(0)
+        }
+
+        async fn toggle_silent_raid(&self, _twitch_login: &str) -> Result<i32, String> {
+            Ok(0)
+        }
+    }
+
+    struct NoopDiscordLink;
+
+    #[async_trait::async_trait]
+    impl DiscordLinkPort for NoopDiscordLink {
+        async fn discord_invite(&self, _channel_login: &str) -> Result<Option<String>, String> {
+            Ok(None)
+        }
+    }
+
+    struct NoopInvite;
+
+    #[async_trait::async_trait]
+    impl InvitePort for NoopInvite {
+        async fn invite_line(
+            &self,
+            _channel_login: &str,
+            _chatter_login: &str,
+        ) -> Result<Option<String>, String> {
+            Ok(None)
+        }
+    }
+
+    struct NoopSuperMod;
+
+    #[async_trait::async_trait]
+    impl SuperModPort for NoopSuperMod {
+        async fn is_super_mod(&self, _actor_id: &str) -> bool {
+            false
+        }
+    }
+
+    struct NoopAutoban;
+
+    #[async_trait::async_trait]
+    impl LastAutobanStore for NoopAutoban {
+        async fn last_autoban(&self, _channel_key: &str) -> Option<AutobanEntry> {
+            None
         }
     }
 
@@ -986,6 +1108,59 @@ mod tests {
         }
     }
 
+    fn pipeline_for_non_partner(api: Arc<RecordingChatApi>, pool: PgPool) -> ChatPipeline {
+        let api_trait: Arc<dyn ChatApi> = api;
+        let http = reqwest::Client::new();
+        let moderation = Arc::new(ModerationEngine::new(Arc::clone(&api_trait), pool.clone()));
+        ChatPipeline::new(ChatPipelineParts {
+            bot_user_id: "bot-id".to_string(),
+            api: Arc::clone(&api_trait),
+            pool: pool.clone(),
+            classifier: Arc::new(ChannelClassifier::new(pool.clone())),
+            tracker: Arc::new(ChatterTracker::new(pool.clone())),
+            global_ban: Arc::new(GlobalChatterBanEnforcer::new(pool.clone())),
+            scam_pitch: Arc::new(ScamPitchDetector::new(
+                Arc::clone(&api_trait),
+                Arc::new(NoopAccountAge),
+                pool.clone(),
+            )),
+            conversation_scam: Arc::new(ConversationScamGuard::new(
+                pool.clone(),
+                "bot-id".to_string(),
+                Arc::new(crate::conversation_scam::MiniMaxScamJudge::new(
+                    EngagementMinimaxClient::new(None, None, None, None),
+                )),
+                Arc::clone(&api_trait),
+                Arc::clone(&moderation),
+            )),
+            spam_filter: Arc::new(SpamFilter::new(Default::default())),
+            ai_reviewer: Arc::new(SpamAiReviewer::new(pool.clone(), http.clone())),
+            moderation,
+            sus_invite: Arc::new(SusInviteCheck::new(pool.clone())),
+            fun: Arc::new(FunResponses::new(Arc::clone(&api_trait), false)),
+            promos: Arc::new(PromoEngine::new(
+                pool.clone(),
+                Arc::clone(&api_trait),
+                Arc::new(NoopSuppression),
+            )),
+            commands: Arc::new(CommandEngine::new(
+                pool,
+                Arc::clone(&api_trait),
+                Arc::new(NoopRaid),
+                Arc::new(NoopDiscordLink),
+                Arc::new(NoopInvite),
+                Arc::new(NoopSuperMod),
+                Arc::new(NoopAutoban),
+            )),
+            mention_resolver: Arc::new(NoopMentionResolver),
+            review_log: Arc::new(ReviewLog::new(std::env::temp_dir())),
+            alerter: Arc::new(ModAlerter::with_endpoint(
+                http,
+                "http://127.0.0.1:1/changelog",
+            )),
+        })
+    }
+
     #[test]
     fn conversation_scam_guard_wird_nach_partner_gate_fire_and_forget_aufgerufen() {
         let source = include_str!("pipeline.rs");
@@ -997,6 +1172,15 @@ mod tests {
             .find(&call_needle)
             .expect("Conversation-Scam-Guard-Wiring fehlt");
         assert!(guard_call > partner_gate);
+    }
+
+    #[tokio::test]
+    async fn non_partner_event_erreicht_engagement_outcome_nicht() {
+        let pool = sqlx::PgPool::connect_lazy("postgres://x:x@127.0.0.1:1/x").unwrap();
+        let api = Arc::new(RecordingChatApi::default());
+        let pipeline = pipeline_for_non_partner(api, pool);
+
+        assert!(!pipeline.handle(&strong_timeout_event()).await);
     }
 
     #[tokio::test]
