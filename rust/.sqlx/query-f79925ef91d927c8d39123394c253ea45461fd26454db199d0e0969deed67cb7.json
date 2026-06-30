@@ -1,0 +1,28 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT clip_id AS \"clip_id!\", platform AS \"platform!\" FROM twitch_clips_upload_queue WHERE id = $1",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "clip_id!",
+        "type_info": "Int8"
+      },
+      {
+        "ordinal": 1,
+        "name": "platform!",
+        "type_info": "Text"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Int8"
+      ]
+    },
+    "nullable": [
+      false,
+      false
+    ]
+  },
+  "hash": "f79925ef91d927c8d39123394c253ea45461fd26454db199d0e0969deed67cb7"
+}

@@ -1,0 +1,29 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "INSERT INTO twitch_clips_upload_queue (clip_id, platform, title, description, hashtags, scheduled_at, priority, status, created_at) VALUES ($1, $2, $3, $4, $5, $6::text::timestamptz, $7, 'pending', $8::text::timestamptz) RETURNING id AS \"id!\"",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id!",
+        "type_info": "Int8"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Int8",
+        "Text",
+        "Text",
+        "Text",
+        "Text",
+        "Text",
+        "Int4",
+        "Text"
+      ]
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "9804b5cfab52ced82ce747548643f0e5d6014b0f68d5f3dc5fb652d2b8a4c353"
+}

@@ -1,0 +1,16 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "INSERT INTO social_media_clip_enrichment (clip_db_id, status, updated_at, edited_by) VALUES ($1, $2, CURRENT_TIMESTAMP, $3) ON CONFLICT (clip_db_id) DO NOTHING",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Int4",
+        "Text",
+        "Text"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "bc26d9602f44db5a56839ee530f93df37205b2a352f0b5259040d940867db1fa"
+}

@@ -1,0 +1,38 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT clip_id AS \"clip_id!\", platform AS \"platform!\", COALESCE(bucket, '') AS \"bucket!\", (next_pull_at IS NOT NULL AND next_pull_at > now()) AS \"not_due!\" FROM twitch_clips_social_analytics",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "clip_id!",
+        "type_info": "Int8"
+      },
+      {
+        "ordinal": 1,
+        "name": "platform!",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 2,
+        "name": "bucket!",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 3,
+        "name": "not_due!",
+        "type_info": "Bool"
+      }
+    ],
+    "parameters": {
+      "Left": []
+    },
+    "nullable": [
+      false,
+      false,
+      null,
+      null
+    ]
+  },
+  "hash": "d193049de37dd41482c32a1a759f29f5b17da432ef282afbfe099eeb5e2791c6"
+}

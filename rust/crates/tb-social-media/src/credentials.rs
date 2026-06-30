@@ -12,7 +12,7 @@
 
 use std::sync::Arc;
 
-use sqlx::{PgPool, Row};
+use sqlx::PgPool;
 use tb_crypto::{aad, FieldCipher};
 
 /// Plattformen mit Social-Media-Anbindung (Python-Reihenfolge).
@@ -66,7 +66,7 @@ impl CredentialManager {
         platform: &str,
         streamer_login: Option<&str>,
     ) -> Option<SocialMediaCredentials> {
-        let row = sqlx::query(
+        let row = sqlx::query!(
             "SELECT id, platform, streamer_login, access_token_enc, refresh_token_enc, \
                     client_id, client_secret_enc, token_expires_at, scopes, \
                     platform_user_id, platform_username, enc_version \
@@ -78,21 +78,21 @@ impl CredentialManager {
              ORDER BY CASE WHEN streamer_login = $2 THEN 1 ELSE 0 END DESC, \
                       authorized_at DESC, id DESC \
              LIMIT 1",
+            platform,
+            streamer_login
         )
-        .bind(platform)
-        .bind(streamer_login)
         .fetch_optional(&self.pool)
         .await
         .ok()
         .flatten()?;
 
-        let id: i32 = row.try_get("id").ok()?;
-        let row_platform: String = row.try_get("platform").ok()?;
-        let row_streamer: Option<String> = row.try_get("streamer_login").unwrap_or(None);
-        let access_enc: Vec<u8> = row.try_get("access_token_enc").ok()?;
-        let refresh_enc: Option<Vec<u8>> = row.try_get("refresh_token_enc").unwrap_or(None);
-        let client_secret_enc: Option<Vec<u8>> = row.try_get("client_secret_enc").unwrap_or(None);
-        let enc_version: i64 = row.try_get::<Option<i32>, _>("enc_version").unwrap_or(None).unwrap_or(1) as i64;
+        let id = row.id;
+        let row_platform = row.platform;
+        let row_streamer = row.streamer_login;
+        let access_enc = row.access_token_enc;
+        let refresh_enc = row.refresh_token_enc;
+        let client_secret_enc = row.client_secret_enc;
+        let enc_version = row.enc_version.unwrap_or(1) as i64;
         let streamer_ref = row_streamer.as_deref();
 
         let access_token = match self.cipher.decrypt_field(
@@ -111,12 +111,18 @@ impl CredentialManager {
         };
         let refresh_token = refresh_enc.and_then(|b| {
             self.cipher
-                .decrypt_field(&b, &aad::social_media("refresh_token", &row_platform, streamer_ref, enc_version))
+                .decrypt_field(
+                    &b,
+                    &aad::social_media("refresh_token", &row_platform, streamer_ref, enc_version),
+                )
                 .ok()
         });
         let client_secret = client_secret_enc.and_then(|b| {
             self.cipher
-                .decrypt_field(&b, &aad::social_media("client_secret", &row_platform, streamer_ref, enc_version))
+                .decrypt_field(
+                    &b,
+                    &aad::social_media("client_secret", &row_platform, streamer_ref, enc_version),
+                )
                 .ok()
         });
 
@@ -126,23 +132,27 @@ impl CredentialManager {
             streamer_login: row_streamer,
             access_token,
             refresh_token,
-            client_id: row.try_get("client_id").unwrap_or(None),
+            client_id: row.client_id,
             client_secret,
-            expires_at: row.try_get("token_expires_at").unwrap_or(None),
-            scopes: row.try_get("scopes").unwrap_or(None),
-            platform_user_id: row.try_get("platform_user_id").unwrap_or(None),
-            platform_username: row.try_get("platform_username").unwrap_or(None),
+            expires_at: row.token_expires_at,
+            scopes: row.scopes,
+            platform_user_id: row.platform_user_id,
+            platform_username: row.platform_username,
         })
     }
 
     /// Verbindungs-Status aller drei Plattformen (Python
     /// `get_all_platforms_status`).
-    pub async fn get_all_platforms_status(&self, streamer_login: Option<&str>) -> Vec<PlatformStatus> {
+    pub async fn get_all_platforms_status(
+        &self,
+        streamer_login: Option<&str>,
+    ) -> Vec<PlatformStatus> {
         let mut out = Vec::with_capacity(PLATFORMS.len());
         for platform in PLATFORMS {
             let status = match self.get_credentials(platform, streamer_login).await {
                 Some(creds) => {
-                    let uses_global_fallback = streamer_login.is_some() && creds.streamer_login.is_none();
+                    let uses_global_fallback =
+                        streamer_login.is_some() && creds.streamer_login.is_none();
                     PlatformStatus {
                         platform: platform.to_string(),
                         connected: true,
@@ -215,23 +225,47 @@ mod tests {
         assert!(token_expired(None, now)); // fehlend
         assert!(token_expired(Some("   "), now)); // leer
         assert!(token_expired(Some("kaputt"), now)); // unparsebar
-        // In 30min → < 1h → abgelaufen.
-        assert!(token_expired(Some(&(now + Duration::minutes(30)).to_rfc3339()), now));
+                                                     // In 30min → < 1h → abgelaufen.
+        assert!(token_expired(
+            Some(&(now + Duration::minutes(30)).to_rfc3339()),
+            now
+        ));
         // In 2h → frisch.
-        assert!(!token_expired(Some(&(now + Duration::hours(2)).to_rfc3339()), now));
+        assert!(!token_expired(
+            Some(&(now + Duration::hours(2)).to_rfc3339()),
+            now
+        ));
         // Z-Suffix wird normalisiert.
-        let z = (now + Duration::hours(2)).format("%Y-%m-%dT%H:%M:%SZ").to_string();
+        let z = (now + Duration::hours(2))
+            .format("%Y-%m-%dT%H:%M:%SZ")
+            .to_string();
         assert!(!token_expired(Some(&z), now));
     }
 
     async fn make_pool(schema: &str) -> Option<PgPool> {
         let dsn = std::env::var("TB_TEST_DATABASE_URL").ok()?;
-        let admin = PgPoolOptions::new().max_connections(1).connect(&dsn).await.unwrap();
-        sqlx::query(&format!("DROP SCHEMA IF EXISTS {schema} CASCADE")).execute(&admin).await.unwrap();
-        sqlx::query(&format!("CREATE SCHEMA {schema}")).execute(&admin).await.unwrap();
+        let admin = PgPoolOptions::new()
+            .max_connections(1)
+            .connect(&dsn)
+            .await
+            .unwrap();
+        sqlx::query(&format!("DROP SCHEMA IF EXISTS {schema} CASCADE"))
+            .execute(&admin)
+            .await
+            .unwrap();
+        sqlx::query(&format!("CREATE SCHEMA {schema}"))
+            .execute(&admin)
+            .await
+            .unwrap();
         admin.close().await;
-        let opts = PgConnectOptions::from_str(&dsn).unwrap().options([("search_path", schema)]);
-        let pool = PgPoolOptions::new().max_connections(2).connect_with(opts).await.unwrap();
+        let opts = PgConnectOptions::from_str(&dsn)
+            .unwrap()
+            .options([("search_path", schema)]);
+        let pool = PgPoolOptions::new()
+            .max_connections(2)
+            .connect_with(opts)
+            .await
+            .unwrap();
         sqlx::query(
             "CREATE TABLE social_media_platform_auth (\
                 id INTEGER GENERATED ALWAYS AS IDENTITY PRIMARY KEY, platform TEXT NOT NULL, \
@@ -248,9 +282,27 @@ mod tests {
     }
 
     /// Fügt einen verschlüsselten Auth-Record ein.
-    async fn seed(pool: &PgPool, c: &FieldCipher, platform: &str, streamer: Option<&str>, access: &str, refresh: Option<&str>) {
-        let access_enc = c.encrypt_field(access, &aad::social_media("access_token", platform, streamer, 1)).unwrap();
-        let refresh_enc = refresh.map(|r| c.encrypt_field(r, &aad::social_media("refresh_token", platform, streamer, 1)).unwrap());
+    async fn seed(
+        pool: &PgPool,
+        c: &FieldCipher,
+        platform: &str,
+        streamer: Option<&str>,
+        access: &str,
+        refresh: Option<&str>,
+    ) {
+        let access_enc = c
+            .encrypt_field(
+                access,
+                &aad::social_media("access_token", platform, streamer, 1),
+            )
+            .unwrap();
+        let refresh_enc = refresh.map(|r| {
+            c.encrypt_field(
+                r,
+                &aad::social_media("refresh_token", platform, streamer, 1),
+            )
+            .unwrap()
+        });
         sqlx::query(
             "INSERT INTO social_media_platform_auth (platform, streamer_login, access_token_enc, refresh_token_enc, platform_username, enabled) \
              VALUES ($1, $2, $3, $4, 'theuser', 1)",
@@ -266,10 +318,20 @@ mod tests {
 
     #[tokio::test]
     async fn get_credentials_entschluesselt_und_fallback() {
-        let Some(pool) = make_pool("t_sm_creds").await else { return };
+        let Some(pool) = make_pool("t_sm_creds").await else {
+            return;
+        };
         let c = cipher();
         // Globaler TikTok-Eintrag + streamer-spezifischer für 'nani'.
-        seed(&pool, &c, "tiktok", None, "global-access", Some("global-refresh")).await;
+        seed(
+            &pool,
+            &c,
+            "tiktok",
+            None,
+            "global-access",
+            Some("global-refresh"),
+        )
+        .await;
         seed(&pool, &c, "tiktok", Some("nani"), "nani-access", None).await;
         let mgr = CredentialManager::new(pool.clone(), c);
 
@@ -291,7 +353,9 @@ mod tests {
 
     #[tokio::test]
     async fn all_platforms_status() {
-        let Some(pool) = make_pool("t_sm_creds_status").await else { return };
+        let Some(pool) = make_pool("t_sm_creds_status").await else {
+            return;
+        };
         let c = cipher();
         seed(&pool, &c, "youtube", None, "yt-access", None).await;
         let mgr = CredentialManager::new(pool, c);

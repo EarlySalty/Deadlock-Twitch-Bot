@@ -1,0 +1,14 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "UPDATE clip_templates_global SET usage_count = usage_count + 1 WHERE id = $1",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Int8"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "8dc351123a99758815d93569b7f25ae770f6daadf0ff929c79d6e836a4005a1a"
+}

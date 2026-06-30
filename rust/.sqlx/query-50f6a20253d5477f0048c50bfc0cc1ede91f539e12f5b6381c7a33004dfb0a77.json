@@ -1,0 +1,64 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT id AS \"id!\", clip_id AS \"clip_id!\", streamer_login AS \"streamer_login!\", clip_title, duration_seconds, game_name, upload_local_path, local_file_path FROM twitch_clips_social_media WHERE id = $1 LIMIT 1",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id!",
+        "type_info": "Int8"
+      },
+      {
+        "ordinal": 1,
+        "name": "clip_id!",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 2,
+        "name": "streamer_login!",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 3,
+        "name": "clip_title",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 4,
+        "name": "duration_seconds",
+        "type_info": "Float8"
+      },
+      {
+        "ordinal": 5,
+        "name": "game_name",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 6,
+        "name": "upload_local_path",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 7,
+        "name": "local_file_path",
+        "type_info": "Text"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Int8"
+      ]
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      true,
+      true,
+      true,
+      true,
+      true
+    ]
+  },
+  "hash": "50f6a20253d5477f0048c50bfc0cc1ede91f539e12f5b6381c7a33004dfb0a77"
+}

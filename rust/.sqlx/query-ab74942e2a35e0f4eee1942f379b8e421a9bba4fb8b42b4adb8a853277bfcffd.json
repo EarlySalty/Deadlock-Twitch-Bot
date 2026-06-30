@@ -1,0 +1,18 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "UPDATE social_media_clip_approval SET state = $1, approved_platforms = $2::text::jsonb, approver_user_id = $3, decided_at = $4::text::timestamptz WHERE clip_db_id = $5",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Text",
+        "Text",
+        "Text",
+        "Text",
+        "Int4"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "ab74942e2a35e0f4eee1942f379b8e421a9bba4fb8b42b4adb8a853277bfcffd"
+}

@@ -1,0 +1,14 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "UPDATE twitch_clips_social_media SET status = CASE WHEN discarded_at IS NOT NULL THEN status ELSE 'pending' END WHERE id = $1 AND status = 'published_all'",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Int8"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "0ade42c8a6319ad0b6a9bcc392f64f9569278af03680fa0cd638ab44d0459c2a"
+}

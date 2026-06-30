@@ -1,0 +1,40 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT streamer_login, COALESCE(uploaded_tiktok, false) AS \"uploaded_tiktok!\", COALESCE(uploaded_youtube, false) AS \"uploaded_youtube!\", COALESCE(uploaded_instagram, false) AS \"uploaded_instagram!\" FROM twitch_clips_social_media WHERE id = $1 LIMIT 1",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "streamer_login",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 1,
+        "name": "uploaded_tiktok!",
+        "type_info": "Bool"
+      },
+      {
+        "ordinal": 2,
+        "name": "uploaded_youtube!",
+        "type_info": "Bool"
+      },
+      {
+        "ordinal": 3,
+        "name": "uploaded_instagram!",
+        "type_info": "Bool"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Int8"
+      ]
+    },
+    "nullable": [
+      false,
+      null,
+      null,
+      null
+    ]
+  },
+  "hash": "0c0d8f1416321c7c8be82e32ef495a27ab932c6e159c8a34d090f7859ff80d13"
+}

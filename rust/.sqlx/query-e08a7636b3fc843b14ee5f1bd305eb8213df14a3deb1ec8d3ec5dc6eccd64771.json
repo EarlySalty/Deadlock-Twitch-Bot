@@ -1,0 +1,17 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n                INSERT INTO clip_fetch_history\n                    (streamer_login, clips_found, clips_new, fetch_duration_ms)\n                VALUES ($1, $2, $3, $4)\n                ",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Text",
+        "Int4",
+        "Int4",
+        "Int4"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "e08a7636b3fc843b14ee5f1bd305eb8213df14a3deb1ec8d3ec5dc6eccd64771"
+}

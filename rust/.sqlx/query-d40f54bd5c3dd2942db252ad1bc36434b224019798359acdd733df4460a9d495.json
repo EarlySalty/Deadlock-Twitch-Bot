@@ -1,0 +1,34 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT clip_title, streamer_login, game_name FROM twitch_clips_social_media WHERE id = $1",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "clip_title",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 1,
+        "name": "streamer_login",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 2,
+        "name": "game_name",
+        "type_info": "Text"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Int8"
+      ]
+    },
+    "nullable": [
+      true,
+      false,
+      true
+    ]
+  },
+  "hash": "d40f54bd5c3dd2942db252ad1bc36434b224019798359acdd733df4460a9d495"
+}

@@ -1,0 +1,26 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "UPDATE twitch_clips_social_analytics SET views = $1, likes = $2, comments = $3, shares = $4, watch_time_seconds = $5, ctr_percent = $6::double precision, engagement_rate = $7::double precision, provider = $8, synced_at = $9::text::timestamptz, next_pull_at = $10::text::timestamptz WHERE clip_id = $11 AND platform = $12 AND bucket = $13",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Int4",
+        "Int4",
+        "Int4",
+        "Int4",
+        "Int4",
+        "Float8",
+        "Float8",
+        "Text",
+        "Text",
+        "Text",
+        "Int8",
+        "Text",
+        "Text"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "290d2f4a0ee6a7d33c20619441deceee6daa4060499151c8e6f499e6316eea5c"
+}

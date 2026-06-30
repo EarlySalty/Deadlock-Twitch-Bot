@@ -1,0 +1,17 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "UPDATE social_media_clip_enrichment SET transcript_raw = $1, transcript_segments = $2::text::jsonb, transcript_lang = $3, updated_at = CURRENT_TIMESTAMP WHERE clip_db_id = $4",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Text",
+        "Text",
+        "Text",
+        "Int4"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "857f19106b3783342665254369fbeb3c2a38673e44745fb4281d31374d602b96"
+}

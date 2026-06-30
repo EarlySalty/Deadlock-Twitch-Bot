@@ -1,0 +1,42 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "UPDATE oauth_state_tokens SET consumed_at = $1 WHERE state_token = $2 AND expires_at > $1 AND consumed_at IS NULL AND ($3::text IS NULL OR platform = $3) RETURNING platform, streamer_login, redirect_uri, pkce_verifier",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "platform",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 1,
+        "name": "streamer_login",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 2,
+        "name": "redirect_uri",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 3,
+        "name": "pkce_verifier",
+        "type_info": "Text"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Timestamptz",
+        "Text",
+        "Text"
+      ]
+    },
+    "nullable": [
+      false,
+      true,
+      true,
+      true
+    ]
+  },
+  "hash": "414b66c3633add56b287f28aaf81343f03a52df8a5de9834a92ea9aa8fb66c56"
+}

@@ -3,6 +3,12 @@ use sqlx::PgPool;
 use super::model::{ClipRecord, StreamerFetchResult};
 use crate::layout::apply_default_layout;
 
+fn int4_metric(field: &str, value: i64) -> Result<i32, sqlx::Error> {
+    i32::try_from(value).map_err(|error| {
+        sqlx::Error::InvalidArgument(format!("{field}={value} does not fit into int4: {error}"))
+    })
+}
+
 /// DB-Zugriff für den Clip-Fetcher.
 ///
 /// Jede Methode ist ein einzelner, klar benannter Datenbankaufruf.
@@ -19,7 +25,7 @@ impl ClipRepository {
 
     /// Gibt alle Logins aktiver Partner zurück (nicht departnered, nicht archiviert).
     pub async fn active_partner_logins(&self) -> Result<Vec<String>, sqlx::Error> {
-        let rows = sqlx::query_scalar::<_, String>(
+        let rows = sqlx::query_scalar!(
             r#"
             SELECT tp.twitch_login
               FROM twitch_partners tp
@@ -44,15 +50,15 @@ impl ClipRepository {
         login: &str,
         twitch_user_id: &str,
     ) -> Result<(), sqlx::Error> {
-        sqlx::query(
+        sqlx::query!(
             r#"
             INSERT INTO twitch_streamers (twitch_login, twitch_user_id)
             VALUES ($1, $2)
             ON CONFLICT (twitch_login) DO NOTHING
             "#,
+            login,
+            twitch_user_id
         )
-        .bind(login)
-        .bind(twitch_user_id)
         .execute(&self.pool)
         .await?;
         Ok(())
@@ -70,18 +76,17 @@ impl ClipRepository {
     /// Der frühere Rust-Fetch-Pfad rief das nie auf → per-Fetch eingelesene Clips
     /// hatten `layout_override_json = NULL` statt des Defaults (social_media-1).
     ///
-    /// Der Live-Bestand enthält sowohl INT4- als auch BIGINT-Varianten der ID.
-    /// Der SQL-Cast hält den bestehenden i32-API-Vertrag kompatibel.
-    pub async fn register_clip(&self, rec: &ClipRecord) -> Result<(i32, bool), sqlx::Error> {
+    pub async fn register_clip(&self, rec: &ClipRecord) -> Result<(i64, bool), sqlx::Error> {
         let created_at = chrono::DateTime::parse_from_rfc3339(&rec.created_at)
             .map(|value| value.with_timezone(&chrono::Utc))
             .map_err(|error| sqlx::Error::Decode(Box::new(error)))?;
+        let view_count = int4_metric("view_count", rec.view_count)?;
 
         // Prüfe ob der Clip bereits existiert.
-        let existing: Option<i32> = sqlx::query_scalar(
-            "SELECT id::integer FROM twitch_clips_social_media WHERE clip_id = $1",
+        let existing: Option<i64> = sqlx::query_scalar!(
+            "SELECT id AS \"id!\" FROM twitch_clips_social_media WHERE clip_id = $1",
+            &rec.clip_id
         )
-        .bind(&rec.clip_id)
         .fetch_optional(&self.pool)
         .await?;
 
@@ -90,26 +95,26 @@ impl ClipRepository {
             return Ok((id, false));
         }
 
-        let id: i32 = sqlx::query_scalar(
+        let id: i64 = sqlx::query_scalar!(
             r#"
             INSERT INTO twitch_clips_social_media
                 (clip_id, clip_url, clip_title, clip_thumbnail_url,
                  streamer_login, twitch_user_id, created_at, duration_seconds,
                  view_count, game_name, status)
             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, 'pending')
-            RETURNING id::integer
+            RETURNING id AS "id!"
             "#,
+            &rec.clip_id,
+            &rec.clip_url,
+            &rec.clip_title,
+            rec.thumbnail_url.as_deref(),
+            &rec.streamer_login,
+            &rec.twitch_user_id,
+            created_at,
+            rec.duration_seconds,
+            view_count,
+            rec.game_name.as_deref()
         )
-        .bind(&rec.clip_id)
-        .bind(&rec.clip_url)
-        .bind(&rec.clip_title)
-        .bind(&rec.thumbnail_url)
-        .bind(&rec.streamer_login)
-        .bind(&rec.twitch_user_id)
-        .bind(created_at)
-        .bind(rec.duration_seconds)
-        .bind(rec.view_count)
-        .bind(&rec.game_name)
         .fetch_one(&self.pool)
         .await?;
 
@@ -119,7 +124,7 @@ impl ClipRepository {
 
     /// Belegt das Clip-Override mit dem Streamer-Default (best-effort, mirror
     /// Python: Layout-Fehler brechen den Register-Pfad nicht ab).
-    async fn apply_layout(&self, clip_db_id: i32, streamer_login: &str) {
+    async fn apply_layout(&self, clip_db_id: i64, streamer_login: &str) {
         if let Err(e) = apply_default_layout(&self.pool, clip_db_id, streamer_login).await {
             tracing::warn!(
                 "clip_fetch: apply_default_layout für Clip {clip_db_id} fehlgeschlagen: {e}"
@@ -130,28 +135,29 @@ impl ClipRepository {
     /// Schreibt einen Eintrag in `clip_fetch_history` (Erfolg oder Fehler).
     pub async fn record_history(&self, result: &StreamerFetchResult) -> Result<(), sqlx::Error> {
         if let Some(err) = &result.error {
-            sqlx::query(
+            sqlx::query!(
                 r#"
                 INSERT INTO clip_fetch_history (streamer_login, clips_found, clips_new, error)
                 VALUES ($1, 0, 0, $2)
                 "#,
+                &result.login,
+                err.as_str()
             )
-            .bind(&result.login)
-            .bind(err)
             .execute(&self.pool)
             .await?;
         } else {
-            sqlx::query(
+            let duration_ms = int4_metric("fetch_duration_ms", result.duration_ms)?;
+            sqlx::query!(
                 r#"
                 INSERT INTO clip_fetch_history
                     (streamer_login, clips_found, clips_new, fetch_duration_ms)
                 VALUES ($1, $2, $3, $4)
                 "#,
+                &result.login,
+                result.clips_found,
+                result.clips_new,
+                duration_ms
             )
-            .bind(&result.login)
-            .bind(result.clips_found)
-            .bind(result.clips_new)
-            .bind(result.duration_ms)
             .execute(&self.pool)
             .await?;
         }
@@ -214,7 +220,7 @@ mod tests {
         }
     }
 
-    async fn layout_override(pool: &PgPool, clip_db_id: i32) -> Option<String> {
+    async fn layout_override(pool: &PgPool, clip_db_id: i64) -> Option<String> {
         sqlx::query_scalar(
             "SELECT layout_override_json::text FROM twitch_clips_social_media WHERE id = $1",
         )
@@ -268,7 +274,7 @@ mod tests {
         assert!(id > 0);
         let created_at: chrono::DateTime<chrono::Utc> =
             sqlx::query_scalar("SELECT created_at FROM twitch_clips_social_media WHERE id = $1")
-                .bind(i64::from(id))
+                .bind(id)
                 .fetch_one(&pool)
                 .await
                 .unwrap();

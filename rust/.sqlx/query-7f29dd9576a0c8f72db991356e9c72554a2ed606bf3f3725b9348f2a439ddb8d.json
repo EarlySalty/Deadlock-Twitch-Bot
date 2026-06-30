@@ -1,0 +1,16 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "INSERT INTO social_media_settings (key, value, updated_at, updated_by) VALUES ($1, $2::text::jsonb, CURRENT_TIMESTAMP, $3) ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value, updated_at = CURRENT_TIMESTAMP, updated_by = EXCLUDED.updated_by",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Text",
+        "Text",
+        "Text"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "7f29dd9576a0c8f72db991356e9c72554a2ed606bf3f3725b9348f2a439ddb8d"
+}

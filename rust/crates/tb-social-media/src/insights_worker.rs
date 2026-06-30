@@ -12,7 +12,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use chrono::Utc;
-use sqlx::{PgPool, Row};
+use sqlx::PgPool;
 
 use crate::analytics::{upsert_clip_analytics, ClipAnalyticsUpsert, BUCKETS, PLATFORMS};
 use crate::credentials::{CredentialManager, SocialMediaCredentials};
@@ -27,7 +27,7 @@ const BATCH_SIZE: i64 = 18;
 /// Ein fälliges Analytics-Ziel.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AnalyticsTarget {
-    pub clip_db_id: i32,
+    pub clip_db_id: i64,
     pub streamer_login: String,
     pub platform: String,
     pub platform_video_id: String,
@@ -47,13 +47,22 @@ fn success_delay(bucket: &str) -> chrono::Duration {
 /// Baut den Analytics-Client (mirror `_resolve_client`): YouTube/TikTok immer
 /// bauen, Instagram nur mit `platform_user_id`. Token kommt fertig vom
 /// credential_manager.
-fn resolve_insights_client(platform: &str, creds: &SocialMediaCredentials) -> Option<Arc<dyn PlatformUploader>> {
+fn resolve_insights_client(
+    platform: &str,
+    creds: &SocialMediaCredentials,
+) -> Option<Arc<dyn PlatformUploader>> {
     match platform {
         "youtube" => Some(Arc::new(crate::upload_worker::youtube_uploader(creds))),
         "tiktok" => Some(Arc::new(TikTokUploader::new(creds.access_token.clone()))),
         "instagram" => {
-            let uid = creds.platform_user_id.as_deref().filter(|s| !s.is_empty())?;
-            Some(Arc::new(InstagramUploader::new(creds.access_token.clone(), uid.to_string())))
+            let uid = creds
+                .platform_user_id
+                .as_deref()
+                .filter(|s| !s.is_empty())?;
+            Some(Arc::new(InstagramUploader::new(
+                creds.access_token.clone(),
+                uid.to_string(),
+            )))
         }
         _ => None,
     }
@@ -65,60 +74,65 @@ fn resolve_insights_client(platform: &str, creds: &SocialMediaCredentials) -> Op
 pub async fn collect_due_targets(pool: &PgPool, limit: i64) -> Vec<AnalyticsTarget> {
     let limit = limit.max(1);
     let clip_limit = (limit * 4).max(limit);
-    let clip_rows = sqlx::query(
-        "SELECT id, streamer_login, uploaded_tiktok, uploaded_youtube, uploaded_instagram, \
+    let clip_rows = sqlx::query!(
+        "SELECT id AS \"id!\", streamer_login AS \"streamer_login!\", \
+                COALESCE(uploaded_tiktok, false) AS \"uploaded_tiktok!\", \
+                COALESCE(uploaded_youtube, false) AS \"uploaded_youtube!\", \
+                COALESCE(uploaded_instagram, false) AS \"uploaded_instagram!\", \
                 tiktok_video_id, youtube_video_id, instagram_media_id \
            FROM twitch_clips_social_media \
           WHERE discarded_at IS NULL AND ( \
-                (uploaded_tiktok = 1 AND tiktok_video_id IS NOT NULL) \
-             OR (uploaded_youtube = 1 AND youtube_video_id IS NOT NULL) \
-             OR (uploaded_instagram = 1 AND instagram_media_id IS NOT NULL)) \
+                (uploaded_tiktok AND tiktok_video_id IS NOT NULL) \
+             OR (uploaded_youtube AND youtube_video_id IS NOT NULL) \
+             OR (uploaded_instagram AND instagram_media_id IS NOT NULL)) \
           ORDER BY created_at DESC, id DESC LIMIT $1",
+        clip_limit
     )
-    .bind(clip_limit)
     .fetch_all(pool)
     .await
     .unwrap_or_default();
 
-    let analytics_rows = sqlx::query(
-        "SELECT clip_id, platform, bucket, \
-                (next_pull_at IS NOT NULL AND next_pull_at > now()) AS not_due \
+    let analytics_rows = sqlx::query!(
+        "SELECT clip_id AS \"clip_id!\", platform AS \"platform!\", COALESCE(bucket, '') AS \"bucket!\", \
+                (next_pull_at IS NOT NULL AND next_pull_at > now()) AS \"not_due!\" \
            FROM twitch_clips_social_analytics",
     )
     .fetch_all(pool)
     .await
     .unwrap_or_default();
-    let mut not_due: HashMap<(i32, String, String), bool> = HashMap::new();
+    let mut not_due: HashMap<(i64, String, String), bool> = HashMap::new();
     for r in &analytics_rows {
-        let key = (
-            r.try_get::<i32, _>("clip_id").unwrap_or(0),
-            r.try_get::<String, _>("platform").unwrap_or_default(),
-            r.try_get::<String, _>("bucket").unwrap_or_default(),
-        );
-        not_due.insert(key, r.try_get::<bool, _>("not_due").unwrap_or(false));
+        let key = (r.clip_id, r.platform.clone(), r.bucket.clone());
+        not_due.insert(key, r.not_due);
     }
 
     let mut due: Vec<AnalyticsTarget> = Vec::new();
     for row in &clip_rows {
-        let id: i32 = row.try_get("id").unwrap_or(0);
-        let streamer_login: String = row.try_get::<Option<String>, _>("streamer_login").unwrap_or(None).unwrap_or_default();
+        let id = row.id;
+        let streamer_login = row.streamer_login.clone();
         let video_id_for = |platform: &str| -> Option<String> {
-            let (flag, col) = match platform {
-                "tiktok" => ("uploaded_tiktok", "tiktok_video_id"),
-                "youtube" => ("uploaded_youtube", "youtube_video_id"),
-                _ => ("uploaded_instagram", "instagram_media_id"),
+            let (uploaded, external_id) = match platform {
+                "tiktok" => (row.uploaded_tiktok, row.tiktok_video_id.as_ref()),
+                "youtube" => (row.uploaded_youtube, row.youtube_video_id.as_ref()),
+                _ => (row.uploaded_instagram, row.instagram_media_id.as_ref()),
             };
-            let uploaded: i32 = row.try_get::<Option<i32>, _>(flag).unwrap_or(None).unwrap_or(0);
-            if uploaded != 1 {
+            if !uploaded {
                 return None;
             }
-            row.try_get::<Option<String>, _>(col).unwrap_or(None).filter(|s| !s.trim().is_empty()).map(|s| s.trim().to_string())
+            external_id
+                .filter(|s| !s.trim().is_empty())
+                .map(|s| s.trim().to_string())
         };
 
         for platform in PLATFORMS {
-            let Some(video_id) = video_id_for(platform) else { continue };
+            let Some(video_id) = video_id_for(platform) else {
+                continue;
+            };
             for bucket in BUCKETS {
-                if *not_due.get(&(id, platform.to_string(), bucket.to_string())).unwrap_or(&false) {
+                if *not_due
+                    .get(&(id, platform.to_string(), bucket.to_string()))
+                    .unwrap_or(&false)
+                {
                     continue;
                 }
                 due.push(AnalyticsTarget {
@@ -147,11 +161,23 @@ pub struct InsightsWorker {
 
 impl InsightsWorker {
     pub fn new(pool: PgPool, credentials: CredentialManager) -> Self {
-        Self { pool, credentials, batch_size: BATCH_SIZE, interval: Duration::from_secs(INTERVAL_SECS) }
+        Self {
+            pool,
+            credentials,
+            batch_size: BATCH_SIZE,
+            interval: Duration::from_secs(INTERVAL_SECS),
+        }
     }
 
-    async fn resolve_client(&self, platform: &str, streamer_login: &str) -> Option<Arc<dyn PlatformUploader>> {
-        let creds = self.credentials.get_credentials(platform, Some(streamer_login)).await?;
+    async fn resolve_client(
+        &self,
+        platform: &str,
+        streamer_login: &str,
+    ) -> Option<Arc<dyn PlatformUploader>> {
+        let creds = self
+            .credentials
+            .get_credentials(platform, Some(streamer_login))
+            .await?;
         resolve_insights_client(platform, &creds)
     }
 
@@ -177,29 +203,44 @@ impl InsightsWorker {
         if targets.is_empty() {
             return;
         }
-        let mut client_cache: HashMap<(String, String), Option<Arc<dyn PlatformUploader>>> = HashMap::new();
+        let mut client_cache: HashMap<(String, String), Option<Arc<dyn PlatformUploader>>> =
+            HashMap::new();
         for target in targets {
             let key = (target.platform.clone(), target.streamer_login.clone());
             let client = match client_cache.get(&key) {
                 Some(c) => c.clone(),
                 None => {
-                    let c = self.resolve_client(&target.platform, &target.streamer_login).await;
+                    let c = self
+                        .resolve_client(&target.platform, &target.streamer_login)
+                        .await;
                     client_cache.insert(key, c.clone());
                     c
                 }
             };
             let Some(client) = client else {
-                self.schedule_retry(&target, &format!("error:{}:missing_client", target.platform)).await;
+                self.schedule_retry(
+                    &target,
+                    &format!("error:{}:missing_client", target.platform),
+                )
+                .await;
                 continue;
             };
-            let metrics = match client.fetch_video_analytics(&target.platform_video_id, &target.bucket).await {
+            let metrics = match client
+                .fetch_video_analytics(&target.platform_video_id, &target.bucket)
+                .await
+            {
                 Ok(m) => m,
                 Err(_) => {
-                    self.schedule_retry(&target, &format!("error:{}:api", target.platform)).await;
+                    self.schedule_retry(&target, &format!("error:{}:api", target.platform))
+                        .await;
                     continue;
                 }
             };
-            let provider = if metrics.provider.trim().is_empty() { target.platform.clone() } else { metrics.provider.trim().to_string() };
+            let provider = if metrics.provider.trim().is_empty() {
+                target.platform.clone()
+            } else {
+                metrics.provider.trim().to_string()
+            };
             let next_pull = (Utc::now() + success_delay(&target.bucket)).to_rfc3339();
             let _ = upsert_clip_analytics(
                 &self.pool,
@@ -242,14 +283,30 @@ mod tests {
 
     async fn make_pool(schema: &str) -> Option<PgPool> {
         let dsn = std::env::var("TB_TEST_DATABASE_URL").ok()?;
-        let admin = PgPoolOptions::new().max_connections(1).connect(&dsn).await.unwrap();
-        sqlx::query(&format!("DROP SCHEMA IF EXISTS {schema} CASCADE")).execute(&admin).await.unwrap();
-        sqlx::query(&format!("CREATE SCHEMA {schema}")).execute(&admin).await.unwrap();
+        let admin = PgPoolOptions::new()
+            .max_connections(1)
+            .connect(&dsn)
+            .await
+            .unwrap();
+        sqlx::query(&format!("DROP SCHEMA IF EXISTS {schema} CASCADE"))
+            .execute(&admin)
+            .await
+            .unwrap();
+        sqlx::query(&format!("CREATE SCHEMA {schema}"))
+            .execute(&admin)
+            .await
+            .unwrap();
         admin.close().await;
-        let opts = PgConnectOptions::from_str(&dsn).unwrap().options([("search_path", schema)]);
-        let pool = PgPoolOptions::new().max_connections(3).connect_with(opts).await.unwrap();
+        let opts = PgConnectOptions::from_str(&dsn)
+            .unwrap()
+            .options([("search_path", schema)]);
+        let pool = PgPoolOptions::new()
+            .max_connections(3)
+            .connect_with(opts)
+            .await
+            .unwrap();
         for ddl in [
-            "CREATE TABLE twitch_clips_social_media (id SERIAL PRIMARY KEY, streamer_login TEXT, created_at TIMESTAMPTZ DEFAULT NOW(), discarded_at TIMESTAMPTZ, uploaded_tiktok INTEGER DEFAULT 0, uploaded_youtube INTEGER DEFAULT 0, uploaded_instagram INTEGER DEFAULT 0, tiktok_video_id TEXT, youtube_video_id TEXT, instagram_media_id TEXT)",
+            "CREATE TABLE twitch_clips_social_media (id SERIAL PRIMARY KEY, streamer_login TEXT, created_at TIMESTAMPTZ DEFAULT NOW(), discarded_at TIMESTAMPTZ, uploaded_tiktok BOOLEAN DEFAULT FALSE, uploaded_youtube BOOLEAN DEFAULT FALSE, uploaded_instagram BOOLEAN DEFAULT FALSE, tiktok_video_id TEXT, youtube_video_id TEXT, instagram_media_id TEXT)",
             "CREATE TABLE twitch_clips_social_analytics (id SERIAL PRIMARY KEY, clip_id INTEGER, platform TEXT, bucket TEXT, next_pull_at TIMESTAMPTZ)",
         ] {
             sqlx::query(ddl).execute(&pool).await.unwrap();
@@ -259,27 +316,38 @@ mod tests {
 
     #[tokio::test]
     async fn due_targets_selektion() {
-        let Some(pool) = make_pool("t_sm_insights").await else { return };
+        let Some(pool) = make_pool("t_sm_insights").await else {
+            return;
+        };
         // A: tiktok veröffentlicht, keine Analytics → 3 Buckets fällig.
-        let a: i32 = sqlx::query_scalar("INSERT INTO twitch_clips_social_media (streamer_login, uploaded_tiktok, tiktok_video_id) VALUES ('nani', 1, 'tt1') RETURNING id").fetch_one(&pool).await.unwrap();
+        let a: i64 = sqlx::query_scalar("INSERT INTO twitch_clips_social_media (streamer_login, uploaded_tiktok, tiktok_video_id) VALUES ('nani', TRUE, 'tt1') RETURNING id").fetch_one(&pool).await.unwrap();
         // B: youtube uploaded aber video_id NULL → gar kein Kandidat.
-        sqlx::query("INSERT INTO twitch_clips_social_media (streamer_login, uploaded_youtube) VALUES ('nani', 1)").execute(&pool).await.unwrap();
+        sqlx::query("INSERT INTO twitch_clips_social_media (streamer_login, uploaded_youtube) VALUES ('nani', TRUE)").execute(&pool).await.unwrap();
         // C: tiktok veröffentlicht, 24h hat next_pull in der Zukunft → nur 7d/30d fällig.
-        let c: i32 = sqlx::query_scalar("INSERT INTO twitch_clips_social_media (streamer_login, uploaded_tiktok, tiktok_video_id) VALUES ('nani', 1, 'tt3') RETURNING id").fetch_one(&pool).await.unwrap();
+        let c: i64 = sqlx::query_scalar("INSERT INTO twitch_clips_social_media (streamer_login, uploaded_tiktok, tiktok_video_id) VALUES ('nani', TRUE, 'tt3') RETURNING id").fetch_one(&pool).await.unwrap();
         sqlx::query("INSERT INTO twitch_clips_social_analytics (clip_id, platform, bucket, next_pull_at) VALUES ($1, 'tiktok', '24h', NOW() + INTERVAL '1 day')").bind(c).execute(&pool).await.unwrap();
         // D: verworfen → kein Kandidat.
-        sqlx::query("INSERT INTO twitch_clips_social_media (streamer_login, uploaded_tiktok, tiktok_video_id, discarded_at) VALUES ('nani', 1, 'tt4', NOW())").execute(&pool).await.unwrap();
+        sqlx::query("INSERT INTO twitch_clips_social_media (streamer_login, uploaded_tiktok, tiktok_video_id, discarded_at) VALUES ('nani', TRUE, 'tt4', NOW())").execute(&pool).await.unwrap();
 
         let targets = collect_due_targets(&pool, 100).await;
-        let keys: Vec<(i32, String)> = targets.iter().map(|t| (t.clip_db_id, t.bucket.clone())).collect();
+        let keys: Vec<(i64, String)> = targets
+            .iter()
+            .map(|t| (t.clip_db_id, t.bucket.clone()))
+            .collect();
         // A: alle 3 Buckets.
-        assert!(keys.contains(&(a, "24h".into())) && keys.contains(&(a, "7d".into())) && keys.contains(&(a, "30d".into())));
+        assert!(
+            keys.contains(&(a, "24h".into()))
+                && keys.contains(&(a, "7d".into()))
+                && keys.contains(&(a, "30d".into()))
+        );
         // C: 7d/30d fällig, 24h NICHT.
         assert!(keys.contains(&(c, "7d".into())) && keys.contains(&(c, "30d".into())));
         assert!(!keys.contains(&(c, "24h".into())));
         // Gesamt genau 5 (A×3 + C×2), kein B/D.
         assert_eq!(targets.len(), 5);
-        assert!(targets.iter().all(|t| t.platform == "tiktok" && t.platform_video_id.starts_with("tt")));
+        assert!(targets
+            .iter()
+            .all(|t| t.platform == "tiktok" && t.platform_video_id.starts_with("tt")));
 
         // Limit greift.
         assert_eq!(collect_due_targets(&pool, 2).await.len(), 2);

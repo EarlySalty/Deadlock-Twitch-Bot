@@ -1,0 +1,16 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "UPDATE twitch_clips_upload_queue SET status = 'failed', attempts = attempts + 1, last_error = $1, last_attempt_at = $2::text::timestamptz WHERE id = $3",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Text",
+        "Text",
+        "Int8"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "ede766144972857adb37b065d1a7fe27eeef693404f521252ae4046687532290"
+}

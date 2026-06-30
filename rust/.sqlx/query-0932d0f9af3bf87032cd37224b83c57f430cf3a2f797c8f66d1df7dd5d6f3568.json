@@ -1,0 +1,64 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT id AS \"id!\", streamer_login AS \"streamer_login!\", COALESCE(uploaded_tiktok, false) AS \"uploaded_tiktok!\", COALESCE(uploaded_youtube, false) AS \"uploaded_youtube!\", COALESCE(uploaded_instagram, false) AS \"uploaded_instagram!\", tiktok_video_id, youtube_video_id, instagram_media_id FROM twitch_clips_social_media WHERE discarded_at IS NULL AND ( (uploaded_tiktok AND tiktok_video_id IS NOT NULL) OR (uploaded_youtube AND youtube_video_id IS NOT NULL) OR (uploaded_instagram AND instagram_media_id IS NOT NULL)) ORDER BY created_at DESC, id DESC LIMIT $1",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id!",
+        "type_info": "Int8"
+      },
+      {
+        "ordinal": 1,
+        "name": "streamer_login!",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 2,
+        "name": "uploaded_tiktok!",
+        "type_info": "Bool"
+      },
+      {
+        "ordinal": 3,
+        "name": "uploaded_youtube!",
+        "type_info": "Bool"
+      },
+      {
+        "ordinal": 4,
+        "name": "uploaded_instagram!",
+        "type_info": "Bool"
+      },
+      {
+        "ordinal": 5,
+        "name": "tiktok_video_id",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 6,
+        "name": "youtube_video_id",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 7,
+        "name": "instagram_media_id",
+        "type_info": "Text"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Int8"
+      ]
+    },
+    "nullable": [
+      false,
+      false,
+      null,
+      null,
+      null,
+      true,
+      true,
+      true
+    ]
+  },
+  "hash": "0932d0f9af3bf87032cd37224b83c57f430cf3a2f797c8f66d1df7dd5d6f3568"
+}

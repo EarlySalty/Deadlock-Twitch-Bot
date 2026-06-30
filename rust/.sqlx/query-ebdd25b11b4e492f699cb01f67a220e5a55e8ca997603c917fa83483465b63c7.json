@@ -1,0 +1,15 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "UPDATE twitch_clips_upload_queue SET status = 'completed', completed_at = $1::text::timestamptz WHERE id = $2",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Text",
+        "Int8"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "ebdd25b11b4e492f699cb01f67a220e5a55e8ca997603c917fa83483465b63c7"
+}

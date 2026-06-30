@@ -1,0 +1,103 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT c.id AS \"clip_db_id!\", c.streamer_login AS \"streamer_login!\", c.clip_title, c.clip_url, c.created_at::text AS created_at, c.game_name, a.platform, COALESCE(a.views, 0) AS \"views!\", COALESCE(a.likes, 0) AS \"likes!\", COALESCE(a.comments, 0) AS \"comments!\", COALESCE(a.shares, 0) AS \"shares!\", COALESCE(a.watch_time_seconds, 0) AS \"watch_time_seconds!\", a.ctr_percent::double precision AS \"ctr?\", a.engagement_rate::double precision AS \"eng?\" FROM twitch_clips_social_analytics a JOIN twitch_clips_social_media c ON c.id = a.clip_id WHERE a.bucket = $1 AND a.synced_at >= $2::text::timestamptz AND a.synced_at < $3::text::timestamptz AND c.discarded_at IS NULL AND COALESCE(a.provider, '') NOT LIKE 'error:%' AND ($4::text IS NULL OR LOWER(c.streamer_login) = LOWER($4)) ORDER BY c.id ASC, a.platform ASC, a.synced_at DESC",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "clip_db_id!",
+        "type_info": "Int8"
+      },
+      {
+        "ordinal": 1,
+        "name": "streamer_login!",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 2,
+        "name": "clip_title",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 3,
+        "name": "clip_url",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 4,
+        "name": "created_at",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 5,
+        "name": "game_name",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 6,
+        "name": "platform",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 7,
+        "name": "views!",
+        "type_info": "Int4"
+      },
+      {
+        "ordinal": 8,
+        "name": "likes!",
+        "type_info": "Int4"
+      },
+      {
+        "ordinal": 9,
+        "name": "comments!",
+        "type_info": "Int4"
+      },
+      {
+        "ordinal": 10,
+        "name": "shares!",
+        "type_info": "Int4"
+      },
+      {
+        "ordinal": 11,
+        "name": "watch_time_seconds!",
+        "type_info": "Int4"
+      },
+      {
+        "ordinal": 12,
+        "name": "ctr?",
+        "type_info": "Float8"
+      },
+      {
+        "ordinal": 13,
+        "name": "eng?",
+        "type_info": "Float8"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Text",
+        "Text",
+        "Text",
+        "Text"
+      ]
+    },
+    "nullable": [
+      false,
+      false,
+      true,
+      false,
+      null,
+      true,
+      false,
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      true
+    ]
+  },
+  "hash": "bd89d5ef1735956478d9e1dded368e3cdb6e432922b14471c713171b38c17d07"
+}

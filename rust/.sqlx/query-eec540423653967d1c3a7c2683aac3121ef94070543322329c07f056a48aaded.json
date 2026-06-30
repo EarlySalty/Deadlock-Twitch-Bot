@@ -1,0 +1,19 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "INSERT INTO deadlock_vocab (term, canonical, category, source, aliases, weight, updated_at) VALUES ($1, $2, $3, $4, $5::text::jsonb, $6, CURRENT_TIMESTAMP) ON CONFLICT (term) DO UPDATE SET canonical = EXCLUDED.canonical, category = EXCLUDED.category, source = EXCLUDED.source, aliases = EXCLUDED.aliases, weight = EXCLUDED.weight, updated_at = CURRENT_TIMESTAMP",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Text",
+        "Text",
+        "Text",
+        "Text",
+        "Text",
+        "Int4"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "eec540423653967d1c3a7c2683aac3121ef94070543322329c07f056a48aaded"
+}

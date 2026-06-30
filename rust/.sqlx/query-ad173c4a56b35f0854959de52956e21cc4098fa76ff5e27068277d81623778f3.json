@@ -1,0 +1,26 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "UPDATE social_media_clip_enrichment SET title_youtube = $1, title_tiktok = $2, title_instagram = $3, description_youtube = $4, description_tiktok = $5, description_instagram = $6, hashtags_youtube = $7::text::jsonb, hashtags_tiktok = $8::text::jsonb, hashtags_instagram = $9::text::jsonb, llm_provider = $10, llm_model = $11, cost_usd_estimate = $12::double precision, updated_at = CURRENT_TIMESTAMP WHERE clip_db_id = $13",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Text",
+        "Text",
+        "Text",
+        "Text",
+        "Text",
+        "Text",
+        "Text",
+        "Text",
+        "Text",
+        "Text",
+        "Text",
+        "Float8",
+        "Int4"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "ad173c4a56b35f0854959de52956e21cc4098fa76ff5e27068277d81623778f3"
+}

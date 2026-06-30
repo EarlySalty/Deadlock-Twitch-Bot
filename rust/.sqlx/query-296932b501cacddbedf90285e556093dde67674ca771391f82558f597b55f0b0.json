@@ -1,0 +1,14 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "UPDATE twitch_clips_upload_queue SET status = 'pending', last_error = NULL WHERE status = 'processing' AND COALESCE(last_attempt_at, created_at) < $1::text::timestamptz",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Text"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "296932b501cacddbedf90285e556093dde67674ca771391f82558f597b55f0b0"
+}

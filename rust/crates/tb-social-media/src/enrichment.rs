@@ -57,13 +57,22 @@ pub struct EnrichmentRecord {
 /// JSON-Text → Vec<Value> (Segmente; fehlertolerant).
 fn decode_array(raw: Option<String>) -> Vec<Value> {
     raw.and_then(|t| serde_json::from_str::<Value>(&t).ok())
-        .and_then(|v| if let Value::Array(a) = v { Some(a) } else { None })
+        .and_then(|v| {
+            if let Value::Array(a) = v {
+                Some(a)
+            } else {
+                None
+            }
+        })
         .unwrap_or_default()
 }
 
 /// JSON-Text → Vec<String> (detected_terms / hashtags; fehlertolerant).
 fn decode_strings(raw: Option<String>) -> Vec<String> {
-    decode_array(raw).into_iter().filter_map(|v| v.as_str().map(str::to_string)).collect()
+    decode_array(raw)
+        .into_iter()
+        .filter_map(|v| v.as_str().map(str::to_string))
+        .collect()
 }
 
 /// Alle Spalten — JSONB als `::text`, Timestamps als `::text`.
@@ -96,7 +105,10 @@ fn row_to_record(row: &PgRow) -> EnrichmentRecord {
         llm_provider: row.try_get("llm_provider").unwrap_or(None),
         llm_model: row.try_get("llm_model").unwrap_or(None),
         cost_usd_estimate: row.try_get("cost_usd_estimate").unwrap_or(None),
-        status: row.try_get::<Option<String>, _>("status").unwrap_or(None).unwrap_or_else(|| STATUS_PENDING.to_string()),
+        status: row
+            .try_get::<Option<String>, _>("status")
+            .unwrap_or(None)
+            .unwrap_or_else(|| STATUS_PENDING.to_string()),
         error_message: row.try_get("error_message").unwrap_or(None),
         started_at: row.try_get("started_at").unwrap_or(None),
         completed_at: row.try_get("completed_at").unwrap_or(None),
@@ -122,40 +134,42 @@ pub async fn ensure_enrichment_row(pool: &PgPool, clip_db_id: i32) -> Enrichment
     if let Some(existing) = get_enrichment(pool, clip_db_id).await {
         return existing;
     }
-    let _ = sqlx::query(
+    let _ = sqlx::query!(
         "INSERT INTO social_media_clip_enrichment (clip_db_id, status, updated_at) \
          VALUES ($1, $2, CURRENT_TIMESTAMP) ON CONFLICT (clip_db_id) DO NOTHING",
+        clip_db_id,
+        STATUS_PENDING
     )
-    .bind(clip_db_id)
-    .bind(STATUS_PENDING)
     .execute(pool)
     .await;
-    get_enrichment(pool, clip_db_id).await.unwrap_or(EnrichmentRecord {
-        clip_db_id,
-        transcript_raw: None,
-        transcript_corrected: None,
-        transcript_segments: Vec::new(),
-        transcript_lang: None,
-        detected_terms: Vec::new(),
-        title_youtube: None,
-        title_tiktok: None,
-        title_instagram: None,
-        description_youtube: None,
-        description_tiktok: None,
-        description_instagram: None,
-        hashtags_youtube: Vec::new(),
-        hashtags_tiktok: Vec::new(),
-        hashtags_instagram: Vec::new(),
-        llm_provider: None,
-        llm_model: None,
-        cost_usd_estimate: None,
-        status: STATUS_PENDING.to_string(),
-        error_message: None,
-        started_at: None,
-        completed_at: None,
-        edited_by: None,
-        updated_at: None,
-    })
+    get_enrichment(pool, clip_db_id)
+        .await
+        .unwrap_or(EnrichmentRecord {
+            clip_db_id,
+            transcript_raw: None,
+            transcript_corrected: None,
+            transcript_segments: Vec::new(),
+            transcript_lang: None,
+            detected_terms: Vec::new(),
+            title_youtube: None,
+            title_tiktok: None,
+            title_instagram: None,
+            description_youtube: None,
+            description_tiktok: None,
+            description_instagram: None,
+            hashtags_youtube: Vec::new(),
+            hashtags_tiktok: Vec::new(),
+            hashtags_instagram: Vec::new(),
+            llm_provider: None,
+            llm_model: None,
+            cost_usd_estimate: None,
+            status: STATUS_PENDING.to_string(),
+            error_message: None,
+            started_at: None,
+            completed_at: None,
+            edited_by: None,
+            updated_at: None,
+        })
 }
 
 /// Setzt den Status (+ optionale Felder). Outer `None` = unverändert lassen
@@ -170,15 +184,20 @@ pub async fn update_enrichment_status(
 ) -> Result<(), sqlx::Error> {
     ensure_enrichment_row(pool, clip_db_id).await;
     let mut qb = QueryBuilder::<Postgres>::new("UPDATE social_media_clip_enrichment SET status = ");
-    qb.push_bind(status.to_string()).push(", updated_at = CURRENT_TIMESTAMP");
+    qb.push_bind(status.to_string())
+        .push(", updated_at = CURRENT_TIMESTAMP");
     if let Some(em) = error_message {
         qb.push(", error_message = ").push_bind(em);
     }
     if let Some(sa) = started_at {
-        qb.push(", started_at = ").push_bind(sa).push("::timestamptz");
+        qb.push(", started_at = ")
+            .push_bind(sa)
+            .push("::timestamptz");
     }
     if let Some(ca) = completed_at {
-        qb.push(", completed_at = ").push_bind(ca).push("::timestamptz");
+        qb.push(", completed_at = ")
+            .push_bind(ca)
+            .push("::timestamptz");
     }
     qb.push(" WHERE clip_db_id = ").push_bind(clip_db_id);
     qb.build().execute(pool).await?;
@@ -198,15 +217,15 @@ pub async fn save_transcript(
     } else {
         Some(serde_json::to_string(transcript_segments).unwrap_or_else(|_| "[]".to_string()))
     };
-    sqlx::query(
+    sqlx::query!(
         "UPDATE social_media_clip_enrichment SET transcript_raw = $1, \
-         transcript_segments = $2::jsonb, transcript_lang = $3, updated_at = CURRENT_TIMESTAMP \
+         transcript_segments = $2::text::jsonb, transcript_lang = $3, updated_at = CURRENT_TIMESTAMP \
          WHERE clip_db_id = $4",
+        transcript_raw,
+        payload.as_deref(),
+        transcript_lang,
+        clip_db_id
     )
-    .bind(transcript_raw)
-    .bind(payload)
-    .bind(transcript_lang)
-    .bind(clip_db_id)
     .execute(pool)
     .await?;
     Ok(())
@@ -220,13 +239,13 @@ pub async fn save_corrected(
     detected_terms: &[String],
 ) -> Result<(), sqlx::Error> {
     let payload = serde_json::to_string(detected_terms).unwrap_or_else(|_| "[]".to_string());
-    sqlx::query(
+    sqlx::query!(
         "UPDATE social_media_clip_enrichment SET transcript_corrected = $1, \
-         detected_terms = $2::jsonb, updated_at = CURRENT_TIMESTAMP WHERE clip_db_id = $3",
+         detected_terms = $2::text::jsonb, updated_at = CURRENT_TIMESTAMP WHERE clip_db_id = $3",
+        transcript_corrected,
+        &payload,
+        clip_db_id
     )
-    .bind(transcript_corrected)
-    .bind(payload)
-    .bind(clip_db_id)
     .execute(pool)
     .await?;
     Ok(())
@@ -244,28 +263,33 @@ pub async fn save_llm_output(
     model: Option<&str>,
     cost_usd_estimate: Option<f64>,
 ) -> Result<(), sqlx::Error> {
-    let json_tags = |p: &PlatformEnrichment| serde_json::to_string(&p.hashtags).unwrap_or_else(|_| "[]".to_string());
-    sqlx::query(
+    let json_tags = |p: &PlatformEnrichment| {
+        serde_json::to_string(&p.hashtags).unwrap_or_else(|_| "[]".to_string())
+    };
+    let youtube_tags = json_tags(youtube);
+    let tiktok_tags = json_tags(tiktok);
+    let instagram_tags = json_tags(instagram);
+    sqlx::query!(
         "UPDATE social_media_clip_enrichment SET \
             title_youtube = $1, title_tiktok = $2, title_instagram = $3, \
             description_youtube = $4, description_tiktok = $5, description_instagram = $6, \
-            hashtags_youtube = $7::jsonb, hashtags_tiktok = $8::jsonb, hashtags_instagram = $9::jsonb, \
-            llm_provider = $10, llm_model = $11, cost_usd_estimate = $12, updated_at = CURRENT_TIMESTAMP \
+            hashtags_youtube = $7::text::jsonb, hashtags_tiktok = $8::text::jsonb, hashtags_instagram = $9::text::jsonb, \
+            llm_provider = $10, llm_model = $11, cost_usd_estimate = $12::double precision, updated_at = CURRENT_TIMESTAMP \
          WHERE clip_db_id = $13",
+        youtube.title.as_deref(),
+        tiktok.title.as_deref(),
+        instagram.title.as_deref(),
+        youtube.description.as_deref(),
+        tiktok.description.as_deref(),
+        instagram.description.as_deref(),
+        &youtube_tags,
+        &tiktok_tags,
+        &instagram_tags,
+        provider,
+        model,
+        cost_usd_estimate,
+        clip_db_id
     )
-    .bind(youtube.title.as_deref())
-    .bind(tiktok.title.as_deref())
-    .bind(instagram.title.as_deref())
-    .bind(youtube.description.as_deref())
-    .bind(tiktok.description.as_deref())
-    .bind(instagram.description.as_deref())
-    .bind(json_tags(youtube))
-    .bind(json_tags(tiktok))
-    .bind(json_tags(instagram))
-    .bind(provider)
-    .bind(model)
-    .bind(cost_usd_estimate)
-    .bind(clip_db_id)
     .execute(pool)
     .await?;
     Ok(())
@@ -275,18 +299,31 @@ pub async fn save_llm_output(
 /// nicht verworfen, mit lokaler Datei, ohne Enrichment-Zeile ODER Status
 /// `pending`/`failed` — neueste zuerst.
 pub async fn iter_pending_enrichments(pool: &PgPool, limit: i64) -> Vec<i32> {
-    sqlx::query_scalar::<_, i32>(
-        "SELECT c.id FROM twitch_clips_social_media c \
+    let rows = sqlx::query!(
+        "SELECT c.id AS \"id!\" FROM twitch_clips_social_media c \
          LEFT JOIN social_media_clip_enrichment e ON e.clip_db_id = c.id \
          WHERE c.discarded_at IS NULL \
            AND COALESCE(c.upload_local_path, c.local_file_path) IS NOT NULL \
            AND (e.status IS NULL OR e.status IN ('pending', 'failed')) \
+           AND c.id BETWEEN 0 AND 2147483647 \
          ORDER BY c.created_at DESC LIMIT $1",
+        limit.max(1)
     )
-    .bind(limit.max(1))
     .fetch_all(pool)
     .await
-    .unwrap_or_default()
+    .unwrap_or_default();
+    let mut ids = Vec::with_capacity(rows.len());
+    for row in rows {
+        let Ok(id) = i32::try_from(row.id) else {
+            tracing::warn!(
+                clip_db_id = row.id,
+                "pending enrichment clip id is out of int4 range; skipping"
+            );
+            continue;
+        };
+        ids.push(id);
+    }
+    ids
 }
 
 /// Speichert manuelle Enrichment-Edits aus dem Admin-UI (Python
@@ -309,17 +346,19 @@ pub async fn update_manual_edit(
     hashtags_instagram: Option<&[String]>,
 ) -> Result<(), sqlx::Error> {
     // Zeile sicherstellen.
-    sqlx::query(
+    sqlx::query!(
         "INSERT INTO social_media_clip_enrichment (clip_db_id, status, updated_at, edited_by) \
          VALUES ($1, $2, CURRENT_TIMESTAMP, $3) ON CONFLICT (clip_db_id) DO NOTHING",
+        clip_db_id,
+        STATUS_PENDING,
+        edited_by
     )
-    .bind(clip_db_id)
-    .bind(STATUS_PENDING)
-    .bind(edited_by)
     .execute(pool)
     .await?;
 
-    let mut qb = QueryBuilder::<Postgres>::new("UPDATE social_media_clip_enrichment SET updated_at = CURRENT_TIMESTAMP, edited_by = ");
+    let mut qb = QueryBuilder::<Postgres>::new(
+        "UPDATE social_media_clip_enrichment SET updated_at = CURRENT_TIMESTAMP, edited_by = ",
+    );
     qb.push_bind(edited_by.map(str::to_string));
     for (col, value) in [
         ("title_youtube", title_youtube),
@@ -330,7 +369,10 @@ pub async fn update_manual_edit(
         ("description_instagram", description_instagram),
     ] {
         if let Some(v) = value {
-            qb.push(", ").push(col).push(" = ").push_bind(v.map(str::to_string));
+            qb.push(", ")
+                .push(col)
+                .push(" = ")
+                .push_bind(v.map(str::to_string));
         }
     }
     for (col, value) in [
@@ -339,7 +381,11 @@ pub async fn update_manual_edit(
         ("hashtags_instagram", hashtags_instagram),
     ] {
         if let Some(list) = value {
-            qb.push(", ").push(col).push(" = ").push_bind(serde_json::to_string(list).unwrap_or_else(|_| "[]".to_string())).push("::jsonb");
+            qb.push(", ")
+                .push(col)
+                .push(" = ")
+                .push_bind(serde_json::to_string(list).unwrap_or_else(|_| "[]".to_string()))
+                .push("::jsonb");
         }
     }
 
@@ -357,12 +403,28 @@ mod tests {
 
     async fn make_pool(schema: &str) -> Option<PgPool> {
         let dsn = std::env::var("TB_TEST_DATABASE_URL").ok()?;
-        let admin = PgPoolOptions::new().max_connections(1).connect(&dsn).await.unwrap();
-        sqlx::query(&format!("DROP SCHEMA IF EXISTS {schema} CASCADE")).execute(&admin).await.unwrap();
-        sqlx::query(&format!("CREATE SCHEMA {schema}")).execute(&admin).await.unwrap();
+        let admin = PgPoolOptions::new()
+            .max_connections(1)
+            .connect(&dsn)
+            .await
+            .unwrap();
+        sqlx::query(&format!("DROP SCHEMA IF EXISTS {schema} CASCADE"))
+            .execute(&admin)
+            .await
+            .unwrap();
+        sqlx::query(&format!("CREATE SCHEMA {schema}"))
+            .execute(&admin)
+            .await
+            .unwrap();
         admin.close().await;
-        let opts = PgConnectOptions::from_str(&dsn).unwrap().options([("search_path", schema)]);
-        let pool = PgPoolOptions::new().max_connections(2).connect_with(opts).await.unwrap();
+        let opts = PgConnectOptions::from_str(&dsn)
+            .unwrap()
+            .options([("search_path", schema)]);
+        let pool = PgPoolOptions::new()
+            .max_connections(2)
+            .connect_with(opts)
+            .await
+            .unwrap();
         // Minimaltabelle (Spalten wie schema.rs, ohne FK).
         sqlx::query(
             "CREATE TABLE social_media_clip_enrichment (clip_db_id INTEGER PRIMARY KEY, \
@@ -382,7 +444,9 @@ mod tests {
 
     #[tokio::test]
     async fn persistenz_roundtrip() {
-        let Some(pool) = make_pool("t_sm_enrich").await else { return };
+        let Some(pool) = make_pool("t_sm_enrich").await else {
+            return;
+        };
         // ensure legt pending an.
         let rec = ensure_enrichment_row(&pool, 7).await;
         assert_eq!(rec.clip_db_id, 7);
@@ -392,14 +456,28 @@ mod tests {
 
         // Transkript + Segmente.
         let segs = vec![json!({"start": 0.0, "end": 2.0, "text": "haze"})];
-        save_transcript(&pool, 7, Some("haze ist stark"), &segs, Some("de")).await.unwrap();
+        save_transcript(&pool, 7, Some("haze ist stark"), &segs, Some("de"))
+            .await
+            .unwrap();
         // Korrektur.
-        save_corrected(&pool, 7, Some("Haze ist stark"), &["Haze".to_string()]).await.unwrap();
+        save_corrected(&pool, 7, Some("Haze ist stark"), &["Haze".to_string()])
+            .await
+            .unwrap();
         // LLM-Ausgabe.
-        let yt = PlatformEnrichment { title: Some("YT Titel".into()), description: Some("desc".into()), hashtags: vec!["deadlock".into(), "haze".into()] };
-        let tk = PlatformEnrichment { title: Some("TK".into()), description: None, hashtags: vec!["dl".into()] };
+        let yt = PlatformEnrichment {
+            title: Some("YT Titel".into()),
+            description: Some("desc".into()),
+            hashtags: vec!["deadlock".into(), "haze".into()],
+        };
+        let tk = PlatformEnrichment {
+            title: Some("TK".into()),
+            description: None,
+            hashtags: vec!["dl".into()],
+        };
         let ig = PlatformEnrichment::default();
-        save_llm_output(&pool, 7, &yt, &tk, &ig, "ollama", Some("llama3"), Some(0.0)).await.unwrap();
+        save_llm_output(&pool, 7, &yt, &tk, &ig, "ollama", Some("llama3"), Some(0.0))
+            .await
+            .unwrap();
 
         let got = get_enrichment(&pool, 7).await.unwrap();
         assert_eq!(got.transcript_raw.as_deref(), Some("haze ist stark"));
@@ -408,7 +486,10 @@ mod tests {
         assert_eq!(got.detected_terms, vec!["Haze".to_string()]);
         assert_eq!(got.transcript_segments.len(), 1);
         assert_eq!(got.title_youtube.as_deref(), Some("YT Titel"));
-        assert_eq!(got.hashtags_youtube, vec!["deadlock".to_string(), "haze".to_string()]);
+        assert_eq!(
+            got.hashtags_youtube,
+            vec!["deadlock".to_string(), "haze".to_string()]
+        );
         assert_eq!(got.title_instagram, None);
         assert_eq!(got.hashtags_instagram, Vec::<String>::new());
         assert_eq!(got.llm_provider.as_deref(), Some("ollama"));
@@ -417,16 +498,29 @@ mod tests {
 
     #[tokio::test]
     async fn status_sentinel() {
-        let Some(pool) = make_pool("t_sm_enrich_status").await else { return };
+        let Some(pool) = make_pool("t_sm_enrich_status").await else {
+            return;
+        };
         // failed + error setzen, started_at unverändert (None), completed_at = NULL setzen.
-        update_enrichment_status(&pool, 1, STATUS_FAILED, Some(Some("boom".into())), None, Some(None)).await.unwrap();
+        update_enrichment_status(
+            &pool,
+            1,
+            STATUS_FAILED,
+            Some(Some("boom".into())),
+            None,
+            Some(None),
+        )
+        .await
+        .unwrap();
         let r = get_enrichment(&pool, 1).await.unwrap();
         assert_eq!(r.status, "failed");
         assert_eq!(r.error_message.as_deref(), Some("boom"));
         assert!(r.completed_at.is_none());
 
         // Status auf done, error NICHT anfassen (None) → bleibt "boom".
-        update_enrichment_status(&pool, 1, STATUS_DONE, None, None, None).await.unwrap();
+        update_enrichment_status(&pool, 1, STATUS_DONE, None, None, None)
+            .await
+            .unwrap();
         let r = get_enrichment(&pool, 1).await.unwrap();
         assert_eq!(r.status, "done");
         assert_eq!(r.error_message.as_deref(), Some("boom")); // unverändert
@@ -434,9 +528,26 @@ mod tests {
 
     #[tokio::test]
     async fn manual_edit_sentinel() {
-        let Some(pool) = make_pool("t_sm_enrich_edit").await else { return };
+        let Some(pool) = make_pool("t_sm_enrich_edit").await else {
+            return;
+        };
         // Edit 1: YT + TT-Titel setzen, hashtags_youtube setzen (Zeile via INSERT angelegt).
-        update_manual_edit(&pool, 1, Some("admin"), Some(Some("YT")), Some(Some("TT")), None, None, None, None, Some(&["#a".into(), "#b".into()]), None, None).await.unwrap();
+        update_manual_edit(
+            &pool,
+            1,
+            Some("admin"),
+            Some(Some("YT")),
+            Some(Some("TT")),
+            None,
+            None,
+            None,
+            None,
+            Some(&["#a".into(), "#b".into()]),
+            None,
+            None,
+        )
+        .await
+        .unwrap();
         let r = get_enrichment(&pool, 1).await.unwrap();
         assert_eq!(r.title_youtube.as_deref(), Some("YT"));
         assert_eq!(r.title_tiktok.as_deref(), Some("TT"));
@@ -444,11 +555,27 @@ mod tests {
         assert_eq!(r.hashtags_youtube, vec!["#a".to_string(), "#b".to_string()]);
 
         // Edit 2: title_tiktok auf NULL (Some(None)), title_youtube unverändert (None).
-        update_manual_edit(&pool, 1, Some("admin2"), None, Some(None), None, None, None, None, None, None, None).await.unwrap();
+        update_manual_edit(
+            &pool,
+            1,
+            Some("admin2"),
+            None,
+            Some(None),
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+        )
+        .await
+        .unwrap();
         let r = get_enrichment(&pool, 1).await.unwrap();
         assert_eq!(r.title_youtube.as_deref(), Some("YT")); // unverändert (None=skip)
         assert!(r.title_tiktok.is_none()); // geleert (Some(None))
         assert_eq!(r.edited_by.as_deref(), Some("admin2")); // edited_by immer gesetzt
-        assert_eq!(r.hashtags_youtube, vec!["#a".to_string(), "#b".to_string()]); // unverändert
+        assert_eq!(r.hashtags_youtube, vec!["#a".to_string(), "#b".to_string()]);
+        // unverändert
     }
 }

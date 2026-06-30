@@ -1,0 +1,15 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "UPDATE twitch_clips_social_media SET layout_override_json = COALESCE(layout_override_json, $1::text::jsonb) WHERE id = $2",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Text",
+        "Int8"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "179d1190f2c2bfb5cb7f6c4a82521a48638caec15873995ae9c7dd307b4db91d"
+}

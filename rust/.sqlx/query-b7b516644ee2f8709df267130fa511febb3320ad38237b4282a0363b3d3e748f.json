@@ -1,0 +1,23 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT id AS \"id!\" FROM twitch_clips_upload_queue WHERE clip_id = $1 AND platform = $2 AND status = 'pending' ORDER BY priority DESC, created_at ASC, id ASC LIMIT 1",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id!",
+        "type_info": "Int8"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Int8",
+        "Text"
+      ]
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "b7b516644ee2f8709df267130fa511febb3320ad38237b4282a0363b3d3e748f"
+}

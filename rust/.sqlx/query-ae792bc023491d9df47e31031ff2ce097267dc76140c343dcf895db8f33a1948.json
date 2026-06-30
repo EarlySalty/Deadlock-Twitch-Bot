@@ -1,0 +1,15 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "UPDATE twitch_clips_social_media SET status = $1 WHERE id = $2 AND COALESCE(status, '') NOT IN ('published_all', 'published_partial', 'discarded')",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Text",
+        "Int8"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "ae792bc023491d9df47e31031ff2ce097267dc76140c343dcf895db8f33a1948"
+}

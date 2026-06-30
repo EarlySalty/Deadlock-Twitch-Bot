@@ -1,3 +1,11 @@
+## #315 — Fünfte Welle: die Social-Media-Clip-Pipeline beim Bauen geprüft — und mehrere stille Altlasten behoben
+
+**Ausgangslage:** Der Teil, der Clips einsammelt, freigibt und automatisch auf die Plattformen hochlädt, führte seine 79 statischen Datenbank-Abfragen bisher als reine Textbausteine aus — Schema-Brüche fielen erst im laufenden Betrieb auf.
+
+**Änderung:** Alle 79 werden jetzt schon beim Bauen gegen ein frisch aus dem Bauplan erzeugtes Schema geprüft. Dabei kamen mehrere echte Altlasten ans Licht, die im Betrieb stille Fehler verursacht hätten: ein paar Ja/Nein-Felder wurden noch wie Zahlen behandelt, das Datum eines erfolgreichen Uploads wurde im falschen Format geschrieben — was die Fertig-Markierung hätte scheitern lassen — und einzelne Abfragen hätten bei einem leeren Wert oder einer ungewöhnlich großen Kennung still ausgesetzt, statt sauber weiterzulaufen. Alle behoben.
+
+**Ergebnis:** Schema-Brüche fliegen künftig beim Bauen auf statt im Betrieb, und die Upload-Pipeline markiert fertige Uploads wieder zuverlässig — ohne dass ein einzelner Ausreißer den ganzen Lauf blockiert. Für den normalen Betrieb ändert sich nichts.
+
 ## #314 — Vierte Welle, zweiter Teil: das Raid-, Partner- und Token-Innenleben wird beim Bauen geprüft
 
 **Ausgangslage:** Der größte einzelne Brocken dieser Umstellung ist der Maschinenraum hinter den Auto-Raids: Token-Verwaltung und -Erneuerung, Partner-Bewertung und -Liste, die Sperrlisten der Raid-Ziele, Anwerbung und Ankunfts-Erkennung. 107 Datenbank-Abfragen, bisher erst zur Laufzeit auf Passung geprüft — ausgerechnet in dem Teil, der unbeaufsichtigt im Hintergrund läuft.

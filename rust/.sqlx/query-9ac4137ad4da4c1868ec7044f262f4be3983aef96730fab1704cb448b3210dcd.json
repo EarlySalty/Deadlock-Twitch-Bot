@@ -1,0 +1,14 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "UPDATE clip_templates_streamer SET is_default = FALSE WHERE streamer_login = $1",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Text"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "9ac4137ad4da4c1868ec7044f262f4be3983aef96730fab1704cb448b3210dcd"
+}

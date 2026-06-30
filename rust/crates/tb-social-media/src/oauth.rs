@@ -12,7 +12,7 @@ use std::time::Duration as StdDuration;
 use base64::Engine;
 use chrono::{DateTime, Duration, Utc};
 use sha2::{Digest, Sha256};
-use sqlx::{PgPool, Row};
+use sqlx::PgPool;
 use tb_crypto::{aad, FieldCipher};
 
 /// State-Token-Gültigkeit (Python: 10 min).
@@ -38,7 +38,10 @@ pub enum OAuthError {
     #[error("OAuth redirect URI mismatch")]
     RedirectMismatch,
     #[error("{platform}-Token-Exchange fehlgeschlagen: {detail}")]
-    Exchange { platform: &'static str, detail: String },
+    Exchange {
+        platform: &'static str,
+        detail: String,
+    },
 }
 
 /// Token-Endpoints je Plattform (Default = Produktiv; Tests injizieren).
@@ -87,13 +90,25 @@ pub struct OAuthManager {
 
 impl OAuthManager {
     pub fn new(pool: PgPool, cipher: Arc<FieldCipher>) -> Self {
-        let http = reqwest::Client::builder().timeout(OAUTH_TIMEOUT).build().unwrap_or_default();
-        Self { pool, cipher, http, token_urls: TokenUrls::default() }
+        let http = reqwest::Client::builder()
+            .timeout(OAUTH_TIMEOUT)
+            .build()
+            .unwrap_or_default();
+        Self {
+            pool,
+            cipher,
+            http,
+            token_urls: TokenUrls::default(),
+        }
     }
 
     /// Überschreibt die Token-Endpoints (Tests).
     pub fn with_token_urls(mut self, tiktok: String, youtube: String, instagram: String) -> Self {
-        self.token_urls = TokenUrls { tiktok, youtube, instagram };
+        self.token_urls = TokenUrls {
+            tiktok,
+            youtube,
+            instagram,
+        };
         self
     }
 
@@ -119,17 +134,17 @@ impl OAuthManager {
         };
 
         let expires_at = Utc::now() + Duration::minutes(STATE_TTL_MINUTES);
-        sqlx::query(
+        sqlx::query!(
             "INSERT INTO oauth_state_tokens \
                 (state_token, platform, streamer_login, redirect_uri, pkce_verifier, expires_at, consumed_at) \
              VALUES ($1, $2, $3, $4, $5, $6, NULL)",
+            &state,
+            platform,
+            streamer_login,
+            redirect_uri,
+            pkce_verifier.as_deref(),
+            expires_at
         )
-        .bind(&state)
-        .bind(platform)
-        .bind(streamer_login)
-        .bind(redirect_uri)
-        .bind(pkce_verifier)
-        .bind(expires_at)
         .execute(&self.pool)
         .await?;
 
@@ -145,18 +160,29 @@ impl OAuthManager {
         expected_platform: Option<&str>,
         expected_redirect_uri: Option<&str>,
     ) -> Result<CallbackResult, OAuthError> {
-        let (platform, streamer_login, redirect_uri, verifier) =
-            self.consume_state_token(state, expected_platform, expected_redirect_uri).await?;
+        let (platform, streamer_login, redirect_uri, verifier) = self
+            .consume_state_token(state, expected_platform, expected_redirect_uri)
+            .await?;
 
         let tokens = match platform.as_str() {
-            "tiktok" => self.tiktok_exchange_code(code, &redirect_uri, verifier.as_deref().unwrap_or("")).await?,
-            "youtube" => self.youtube_exchange_code(code, &redirect_uri, verifier.as_deref().unwrap_or("")).await?,
+            "tiktok" => {
+                self.tiktok_exchange_code(code, &redirect_uri, verifier.as_deref().unwrap_or(""))
+                    .await?
+            }
+            "youtube" => {
+                self.youtube_exchange_code(code, &redirect_uri, verifier.as_deref().unwrap_or(""))
+                    .await?
+            }
             "instagram" => self.instagram_exchange_code(code, &redirect_uri).await?,
             other => return Err(OAuthError::UnknownPlatform(other.to_string())),
         };
 
-        self.save_encrypted_tokens(&platform, streamer_login.as_deref(), &tokens).await?;
-        Ok(CallbackResult { platform, streamer_login })
+        self.save_encrypted_tokens(&platform, streamer_login.as_deref(), &tokens)
+            .await?;
+        Ok(CallbackResult {
+            platform,
+            streamer_login,
+        })
     }
 
     /// Verbraucht den State atomar (single-use; Python `_consume_state_token`):
@@ -168,28 +194,33 @@ impl OAuthManager {
         expected_platform: Option<&str>,
         expected_redirect_uri: Option<&str>,
     ) -> Result<(String, Option<String>, String, Option<String>), OAuthError> {
-        let expected_platform = expected_platform.map(|p| p.trim().to_lowercase()).filter(|p| !p.is_empty());
+        let expected_platform = expected_platform
+            .map(|p| p.trim().to_lowercase())
+            .filter(|p| !p.is_empty());
         let now = Utc::now();
         // Plattform-Filter optional über $3 (NULL = kein Filter).
-        let row = sqlx::query(
+        let row = sqlx::query!(
             "UPDATE oauth_state_tokens SET consumed_at = $1 \
              WHERE state_token = $2 AND expires_at > $1 AND consumed_at IS NULL \
                AND ($3::text IS NULL OR platform = $3) \
              RETURNING platform, streamer_login, redirect_uri, pkce_verifier",
+            now,
+            state,
+            expected_platform.as_deref()
         )
-        .bind(now)
-        .bind(state)
-        .bind(expected_platform.as_deref())
         .fetch_optional(&self.pool)
         .await?
         .ok_or(OAuthError::StateInvalid)?;
 
-        let platform: String = row.try_get("platform").map_err(|_| OAuthError::StateInvalid)?;
-        let streamer_login: Option<String> = row.try_get("streamer_login").unwrap_or(None);
-        let redirect_uri: String = row.try_get::<Option<String>, _>("redirect_uri").unwrap_or(None).unwrap_or_default();
-        let verifier: Option<String> = row.try_get("pkce_verifier").unwrap_or(None);
+        let platform = row.platform;
+        let streamer_login = row.streamer_login;
+        let redirect_uri = row.redirect_uri.unwrap_or_default();
+        let verifier = row.pkce_verifier;
 
-        if let Some(expected) = expected_redirect_uri.map(normalize_redirect).filter(|s| !s.is_empty()) {
+        if let Some(expected) = expected_redirect_uri
+            .map(normalize_redirect)
+            .filter(|s| !s.is_empty())
+        {
             if normalize_redirect(&redirect_uri) != expected {
                 return Err(OAuthError::RedirectMismatch);
             }
@@ -197,27 +228,44 @@ impl OAuthManager {
         Ok((platform, streamer_login, redirect_uri, verifier))
     }
 
-    async fn tiktok_exchange_code(&self, code: &str, redirect_uri: &str, verifier: &str) -> Result<ExchangedTokens, OAuthError> {
+    async fn tiktok_exchange_code(
+        &self,
+        code: &str,
+        redirect_uri: &str,
+        verifier: &str,
+    ) -> Result<ExchangedTokens, OAuthError> {
         let client_key = env_nonempty("TIKTOK_CLIENT_KEY").unwrap_or_default();
         let client_secret = env_nonempty("TIKTOK_CLIENT_SECRET").unwrap_or_default();
         let data = self
-            .post_token("TikTok", &self.token_urls.tiktok, &[
-                ("client_key", &client_key),
-                ("client_secret", &client_secret),
-                ("code", code),
-                ("grant_type", "authorization_code"),
-                ("redirect_uri", redirect_uri),
-                ("code_verifier", verifier),
-            ])
+            .post_token(
+                "TikTok",
+                &self.token_urls.tiktok,
+                &[
+                    ("client_key", &client_key),
+                    ("client_secret", &client_secret),
+                    ("code", code),
+                    ("grant_type", "authorization_code"),
+                    ("redirect_uri", redirect_uri),
+                    ("code_verifier", verifier),
+                ],
+            )
             .await?;
         if data.get("error").is_some() {
-            return Err(OAuthError::Exchange { platform: "TikTok", detail: error_detail(&data) });
+            return Err(OAuthError::Exchange {
+                platform: "TikTok",
+                detail: error_detail(&data),
+            });
         }
         let d = data.get("data").cloned().unwrap_or(serde_json::Value::Null);
         Ok(ExchangedTokens {
             access_token: str_field(&d, "access_token"),
             refresh_token: opt_field(&d, "refresh_token"),
-            expires_at: Utc::now() + Duration::seconds(d.get("expires_in").and_then(serde_json::Value::as_i64).unwrap_or(0)),
+            expires_at: Utc::now()
+                + Duration::seconds(
+                    d.get("expires_in")
+                        .and_then(serde_json::Value::as_i64)
+                        .unwrap_or(0),
+                ),
             scopes: opt_field(&d, "scope"),
             user_id: opt_field(&d, "open_id"),
             username: None,
@@ -226,26 +274,43 @@ impl OAuthManager {
         })
     }
 
-    async fn youtube_exchange_code(&self, code: &str, redirect_uri: &str, verifier: &str) -> Result<ExchangedTokens, OAuthError> {
+    async fn youtube_exchange_code(
+        &self,
+        code: &str,
+        redirect_uri: &str,
+        verifier: &str,
+    ) -> Result<ExchangedTokens, OAuthError> {
         let client_id = env_nonempty("YOUTUBE_CLIENT_ID").unwrap_or_default();
         let client_secret = env_nonempty("YOUTUBE_CLIENT_SECRET").unwrap_or_default();
         let data = self
-            .post_token("YouTube", &self.token_urls.youtube, &[
-                ("client_id", &client_id),
-                ("client_secret", &client_secret),
-                ("code", code),
-                ("code_verifier", verifier),
-                ("grant_type", "authorization_code"),
-                ("redirect_uri", redirect_uri),
-            ])
+            .post_token(
+                "YouTube",
+                &self.token_urls.youtube,
+                &[
+                    ("client_id", &client_id),
+                    ("client_secret", &client_secret),
+                    ("code", code),
+                    ("code_verifier", verifier),
+                    ("grant_type", "authorization_code"),
+                    ("redirect_uri", redirect_uri),
+                ],
+            )
             .await?;
         if data.get("error").is_some() {
-            return Err(OAuthError::Exchange { platform: "YouTube", detail: error_detail(&data) });
+            return Err(OAuthError::Exchange {
+                platform: "YouTube",
+                detail: error_detail(&data),
+            });
         }
         Ok(ExchangedTokens {
             access_token: str_field(&data, "access_token"),
             refresh_token: opt_field(&data, "refresh_token"), // nur bei Erst-Auth
-            expires_at: Utc::now() + Duration::seconds(data.get("expires_in").and_then(serde_json::Value::as_i64).unwrap_or(0)),
+            expires_at: Utc::now()
+                + Duration::seconds(
+                    data.get("expires_in")
+                        .and_then(serde_json::Value::as_i64)
+                        .unwrap_or(0),
+                ),
             scopes: opt_field(&data, "scope"),
             user_id: None,
             username: None,
@@ -254,20 +319,31 @@ impl OAuthManager {
         })
     }
 
-    async fn instagram_exchange_code(&self, code: &str, redirect_uri: &str) -> Result<ExchangedTokens, OAuthError> {
+    async fn instagram_exchange_code(
+        &self,
+        code: &str,
+        redirect_uri: &str,
+    ) -> Result<ExchangedTokens, OAuthError> {
         let client_id = env_nonempty("INSTAGRAM_CLIENT_ID").unwrap_or_default();
         let client_secret = env_nonempty("INSTAGRAM_CLIENT_SECRET").unwrap_or_default();
         let data = self
-            .post_token("Instagram", &self.token_urls.instagram, &[
-                ("client_id", &client_id),
-                ("client_secret", &client_secret),
-                ("grant_type", "authorization_code"),
-                ("redirect_uri", redirect_uri),
-                ("code", code),
-            ])
+            .post_token(
+                "Instagram",
+                &self.token_urls.instagram,
+                &[
+                    ("client_id", &client_id),
+                    ("client_secret", &client_secret),
+                    ("grant_type", "authorization_code"),
+                    ("redirect_uri", redirect_uri),
+                    ("code", code),
+                ],
+            )
             .await?;
         if data.get("error_message").is_some() {
-            return Err(OAuthError::Exchange { platform: "Instagram", detail: error_detail(&data) });
+            return Err(OAuthError::Exchange {
+                platform: "Instagram",
+                detail: error_detail(&data),
+            });
         }
         Ok(ExchangedTokens {
             access_token: str_field(&data, "access_token"),
@@ -283,17 +359,28 @@ impl OAuthManager {
 
     /// Form-POST an einen Token-Endpoint → JSON-Body. Nicht-2xx wird trotzdem als
     /// JSON geparst (Plattformen liefern Fehler im Body, wie Python).
-    async fn post_token(&self, platform: &'static str, url: &str, form: &[(&str, &str)]) -> Result<serde_json::Value, OAuthError> {
-        let resp = self
-            .http
-            .post(url)
-            .form(form)
-            .send()
-            .await
-            .map_err(|e| OAuthError::Exchange { platform, detail: e.to_string() })?;
+    async fn post_token(
+        &self,
+        platform: &'static str,
+        url: &str,
+        form: &[(&str, &str)],
+    ) -> Result<serde_json::Value, OAuthError> {
+        let resp =
+            self.http
+                .post(url)
+                .form(form)
+                .send()
+                .await
+                .map_err(|e| OAuthError::Exchange {
+                    platform,
+                    detail: e.to_string(),
+                })?;
         resp.json::<serde_json::Value>()
             .await
-            .map_err(|e| OAuthError::Exchange { platform, detail: e.to_string() })
+            .map_err(|e| OAuthError::Exchange {
+                platform,
+                detail: e.to_string(),
+            })
     }
 
     /// Verschlüsselt + persistiert die Tokens (Python `save_encrypted_tokens`).
@@ -307,14 +394,34 @@ impl OAuthManager {
     ) -> Result<(), OAuthError> {
         let access_enc = self
             .cipher
-            .encrypt_field(&tokens.access_token, &aad::social_media("access_token", platform, streamer_login, 1))
-            .map_err(|_| OAuthError::Exchange { platform: "persist", detail: "encrypt access".to_string() })?;
+            .encrypt_field(
+                &tokens.access_token,
+                &aad::social_media("access_token", platform, streamer_login, 1),
+            )
+            .map_err(|_| OAuthError::Exchange {
+                platform: "persist",
+                detail: "encrypt access".to_string(),
+            })?;
         let refresh_enc = tokens.refresh_token.as_ref().and_then(|t| {
-            self.cipher.encrypt_field(t, &aad::social_media("refresh_token", platform, streamer_login, 1)).ok()
+            self.cipher
+                .encrypt_field(
+                    t,
+                    &aad::social_media("refresh_token", platform, streamer_login, 1),
+                )
+                .ok()
         });
-        let secret_enc = tokens.client_secret.as_ref().filter(|s| !s.is_empty()).and_then(|s| {
-            self.cipher.encrypt_field(s, &aad::social_media("client_secret", platform, streamer_login, 1)).ok()
-        });
+        let secret_enc = tokens
+            .client_secret
+            .as_ref()
+            .filter(|s| !s.is_empty())
+            .and_then(|s| {
+                self.cipher
+                    .encrypt_field(
+                        s,
+                        &aad::social_media("client_secret", platform, streamer_login, 1),
+                    )
+                    .ok()
+            });
         let expires_at_iso = tokens.expires_at.to_rfc3339();
 
         let conflict = if streamer_login.is_none() {
@@ -366,13 +473,24 @@ impl OAuthManager {
         client_secret: &str,
     ) -> Result<RefreshedTokens, OAuthError> {
         match platform {
-            "tiktok" => self.refresh_tiktok(refresh_token, client_id, client_secret).await,
-            "youtube" => self.refresh_youtube(refresh_token, client_id, client_secret).await,
+            "tiktok" => {
+                self.refresh_tiktok(refresh_token, client_id, client_secret)
+                    .await
+            }
+            "youtube" => {
+                self.refresh_youtube(refresh_token, client_id, client_secret)
+                    .await
+            }
             other => Err(OAuthError::UnknownPlatform(other.to_string())),
         }
     }
 
-    async fn refresh_tiktok(&self, refresh_token: &str, client_key: &str, client_secret: &str) -> Result<RefreshedTokens, OAuthError> {
+    async fn refresh_tiktok(
+        &self,
+        refresh_token: &str,
+        client_key: &str,
+        client_secret: &str,
+    ) -> Result<RefreshedTokens, OAuthError> {
         // TikTok-Refresh nutzt JSON-Body (anders als der Form-Exchange).
         let resp = self
             .http
@@ -385,35 +503,66 @@ impl OAuthManager {
             }))
             .send()
             .await
-            .map_err(|e| OAuthError::Exchange { platform: "tiktok-refresh", detail: e.to_string() })?;
-        let data: serde_json::Value = resp.json().await.map_err(|e| OAuthError::Exchange { platform: "tiktok-refresh", detail: e.to_string() })?;
+            .map_err(|e| OAuthError::Exchange {
+                platform: "tiktok-refresh",
+                detail: e.to_string(),
+            })?;
+        let data: serde_json::Value = resp.json().await.map_err(|e| OAuthError::Exchange {
+            platform: "tiktok-refresh",
+            detail: e.to_string(),
+        })?;
         if data.get("error").is_some() {
-            return Err(OAuthError::Exchange { platform: "tiktok-refresh", detail: error_detail(&data) });
+            return Err(OAuthError::Exchange {
+                platform: "tiktok-refresh",
+                detail: error_detail(&data),
+            });
         }
         let d = data.get("data").cloned().unwrap_or(serde_json::Value::Null);
         Ok(RefreshedTokens {
             access_token: str_field(&d, "access_token"),
             refresh_token: opt_field(&d, "refresh_token"),
-            expires_at: Utc::now() + Duration::seconds(d.get("expires_in").and_then(serde_json::Value::as_i64).unwrap_or(0)),
+            expires_at: Utc::now()
+                + Duration::seconds(
+                    d.get("expires_in")
+                        .and_then(serde_json::Value::as_i64)
+                        .unwrap_or(0),
+                ),
         })
     }
 
-    async fn refresh_youtube(&self, refresh_token: &str, client_id: &str, client_secret: &str) -> Result<RefreshedTokens, OAuthError> {
+    async fn refresh_youtube(
+        &self,
+        refresh_token: &str,
+        client_id: &str,
+        client_secret: &str,
+    ) -> Result<RefreshedTokens, OAuthError> {
         let data = self
-            .post_token("youtube-refresh", &self.token_urls.youtube, &[
-                ("client_id", client_id),
-                ("client_secret", client_secret),
-                ("refresh_token", refresh_token),
-                ("grant_type", "refresh_token"),
-            ])
+            .post_token(
+                "youtube-refresh",
+                &self.token_urls.youtube,
+                &[
+                    ("client_id", client_id),
+                    ("client_secret", client_secret),
+                    ("refresh_token", refresh_token),
+                    ("grant_type", "refresh_token"),
+                ],
+            )
             .await?;
         if data.get("error").is_some() {
-            return Err(OAuthError::Exchange { platform: "youtube-refresh", detail: error_detail(&data) });
+            return Err(OAuthError::Exchange {
+                platform: "youtube-refresh",
+                detail: error_detail(&data),
+            });
         }
         Ok(RefreshedTokens {
             access_token: str_field(&data, "access_token"),
             refresh_token: None, // YouTube liefert beim Refresh keinen neuen.
-            expires_at: Utc::now() + Duration::seconds(data.get("expires_in").and_then(serde_json::Value::as_i64).unwrap_or(0)),
+            expires_at: Utc::now()
+                + Duration::seconds(
+                    data.get("expires_in")
+                        .and_then(serde_json::Value::as_i64)
+                        .unwrap_or(0),
+                ),
         })
     }
 }
@@ -431,11 +580,17 @@ fn normalize_redirect(value: &str) -> String {
 }
 
 fn str_field(v: &serde_json::Value, key: &str) -> String {
-    v.get(key).and_then(serde_json::Value::as_str).unwrap_or("").to_string()
+    v.get(key)
+        .and_then(serde_json::Value::as_str)
+        .unwrap_or("")
+        .to_string()
 }
 
 fn opt_field(v: &serde_json::Value, key: &str) -> Option<String> {
-    v.get(key).and_then(serde_json::Value::as_str).filter(|s| !s.is_empty()).map(str::to_string)
+    v.get(key)
+        .and_then(serde_json::Value::as_str)
+        .filter(|s| !s.is_empty())
+        .map(str::to_string)
 }
 
 fn error_detail(v: &serde_json::Value) -> String {
@@ -460,7 +615,8 @@ fn build_url(base: &str, params: &[(&str, &str)]) -> Result<String, OAuthError> 
 }
 
 fn tiktok_auth_url(state: &str, redirect_uri: &str, verifier: &str) -> Result<String, OAuthError> {
-    let client_key = env_nonempty("TIKTOK_CLIENT_KEY").ok_or(OAuthError::MissingConfig("TIKTOK_CLIENT_KEY"))?;
+    let client_key =
+        env_nonempty("TIKTOK_CLIENT_KEY").ok_or(OAuthError::MissingConfig("TIKTOK_CLIENT_KEY"))?;
     let challenge = pkce_challenge(verifier);
     build_url(
         "https://www.tiktok.com/v2/auth/authorize/",
@@ -477,7 +633,8 @@ fn tiktok_auth_url(state: &str, redirect_uri: &str, verifier: &str) -> Result<St
 }
 
 fn youtube_auth_url(state: &str, redirect_uri: &str, verifier: &str) -> Result<String, OAuthError> {
-    let client_id = env_nonempty("YOUTUBE_CLIENT_ID").ok_or(OAuthError::MissingConfig("YOUTUBE_CLIENT_ID"))?;
+    let client_id =
+        env_nonempty("YOUTUBE_CLIENT_ID").ok_or(OAuthError::MissingConfig("YOUTUBE_CLIENT_ID"))?;
     let challenge = pkce_challenge(verifier);
     build_url(
         "https://accounts.google.com/o/oauth2/v2/auth",
@@ -496,7 +653,8 @@ fn youtube_auth_url(state: &str, redirect_uri: &str, verifier: &str) -> Result<S
 }
 
 fn instagram_auth_url(state: &str, redirect_uri: &str) -> Result<String, OAuthError> {
-    let client_id = env_nonempty("INSTAGRAM_CLIENT_ID").ok_or(OAuthError::MissingConfig("INSTAGRAM_CLIENT_ID"))?;
+    let client_id = env_nonempty("INSTAGRAM_CLIENT_ID")
+        .ok_or(OAuthError::MissingConfig("INSTAGRAM_CLIENT_ID"))?;
     build_url(
         "https://api.instagram.com/oauth/authorize",
         &[
@@ -567,12 +725,28 @@ mod tests {
 
     async fn make_pool(schema: &str) -> Option<PgPool> {
         let dsn = std::env::var("TB_TEST_DATABASE_URL").ok()?;
-        let admin = PgPoolOptions::new().max_connections(1).connect(&dsn).await.unwrap();
-        sqlx::query(&format!("DROP SCHEMA IF EXISTS {schema} CASCADE")).execute(&admin).await.unwrap();
-        sqlx::query(&format!("CREATE SCHEMA {schema}")).execute(&admin).await.unwrap();
+        let admin = PgPoolOptions::new()
+            .max_connections(1)
+            .connect(&dsn)
+            .await
+            .unwrap();
+        sqlx::query(&format!("DROP SCHEMA IF EXISTS {schema} CASCADE"))
+            .execute(&admin)
+            .await
+            .unwrap();
+        sqlx::query(&format!("CREATE SCHEMA {schema}"))
+            .execute(&admin)
+            .await
+            .unwrap();
         admin.close().await;
-        let opts = PgConnectOptions::from_str(&dsn).unwrap().options([("search_path", schema)]);
-        let pool = PgPoolOptions::new().max_connections(2).connect_with(opts).await.unwrap();
+        let opts = PgConnectOptions::from_str(&dsn)
+            .unwrap()
+            .options([("search_path", schema)]);
+        let pool = PgPoolOptions::new()
+            .max_connections(2)
+            .connect_with(opts)
+            .await
+            .unwrap();
         sqlx::query(
             "CREATE TABLE oauth_state_tokens (state_token TEXT PRIMARY KEY, platform TEXT, \
              streamer_login TEXT, redirect_uri TEXT, pkce_verifier TEXT, expires_at TIMESTAMPTZ, \
@@ -591,7 +765,9 @@ mod tests {
                 enc_kid TEXT DEFAULT 'v1', authorized_at TEXT DEFAULT CURRENT_TIMESTAMP, \
                 last_refreshed_at TEXT, enabled INTEGER DEFAULT 1)",
         )
-        .execute(&pool).await.unwrap();
+        .execute(&pool)
+        .await
+        .unwrap();
         sqlx::query("CREATE UNIQUE INDEX idx_spa_streamer ON social_media_platform_auth(platform, streamer_login) WHERE streamer_login IS NOT NULL")
             .execute(&pool).await.unwrap();
         sqlx::query("CREATE UNIQUE INDEX idx_spa_global ON social_media_platform_auth(platform) WHERE streamer_login IS NULL")
@@ -600,7 +776,14 @@ mod tests {
     }
 
     /// Seedet einen gültigen State-Token (wie generate_auth_url).
-    async fn seed_state(pool: &PgPool, state: &str, platform: &str, streamer: Option<&str>, redirect: &str, verifier: Option<&str>) {
+    async fn seed_state(
+        pool: &PgPool,
+        state: &str,
+        platform: &str,
+        streamer: Option<&str>,
+        redirect: &str,
+        verifier: Option<&str>,
+    ) {
         sqlx::query(
             "INSERT INTO oauth_state_tokens (state_token, platform, streamer_login, redirect_uri, pkce_verifier, expires_at, consumed_at) \
              VALUES ($1, $2, $3, $4, $5, NOW() + INTERVAL '5 minutes', NULL)",
@@ -611,23 +794,32 @@ mod tests {
 
     #[tokio::test]
     async fn generate_auth_url_persistiert_state() {
-        let Some(pool) = make_pool("t_sm_oauth_state").await else { return };
+        let Some(pool) = make_pool("t_sm_oauth_state").await else {
+            return;
+        };
         std::env::set_var("YOUTUBE_CLIENT_ID", "yt-cid");
         let mgr = OAuthManager::new(pool.clone(), test_cipher());
-        let url = mgr.generate_auth_url("youtube", Some("nani"), "https://cb/yt").await.unwrap();
+        let url = mgr
+            .generate_auth_url("youtube", Some("nani"), "https://cb/yt")
+            .await
+            .unwrap();
         assert!(url.contains("client_id=yt-cid"));
         assert!(url.contains("access_type=offline"));
 
         // State persistiert mit PKCE-Verifier + 10min-Ablauf.
-        let (platform, streamer, verifier, in_future): (String, Option<String>, Option<String>, bool) =
-            sqlx::query_as(
-                "SELECT platform, streamer_login, pkce_verifier, \
+        let (platform, streamer, verifier, in_future): (
+            String,
+            Option<String>,
+            Option<String>,
+            bool,
+        ) = sqlx::query_as(
+            "SELECT platform, streamer_login, pkce_verifier, \
                         expires_at > NOW() + INTERVAL '9 minutes' \
                  FROM oauth_state_tokens LIMIT 1",
-            )
-            .fetch_one(&pool)
-            .await
-            .unwrap();
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap();
         assert_eq!(platform, "youtube");
         assert_eq!(streamer.as_deref(), Some("nani"));
         assert!(verifier.is_some()); // youtube → PKCE
@@ -637,31 +829,51 @@ mod tests {
 
     #[tokio::test]
     async fn consume_state_single_use_und_redirect() {
-        let Some(pool) = make_pool("t_sm_oauth_consume").await else { return };
+        let Some(pool) = make_pool("t_sm_oauth_consume").await else {
+            return;
+        };
         let mgr = OAuthManager::new(pool.clone(), test_cipher());
-        seed_state(&pool, "st1", "tiktok", Some("nani"), "https://cb/x", Some("verif")).await;
+        seed_state(
+            &pool,
+            "st1",
+            "tiktok",
+            Some("nani"),
+            "https://cb/x",
+            Some("verif"),
+        )
+        .await;
         // Erster Consume liefert die Zeile.
-        let (platform, streamer, redirect, verifier) = mgr.consume_state_token("st1", None, None).await.unwrap();
+        let (platform, streamer, redirect, verifier) =
+            mgr.consume_state_token("st1", None, None).await.unwrap();
         assert_eq!(platform, "tiktok");
         assert_eq!(streamer.as_deref(), Some("nani"));
         assert_eq!(redirect, "https://cb/x");
         assert_eq!(verifier.as_deref(), Some("verif"));
         // Zweiter Consume → bereits benutzt.
-        assert!(matches!(mgr.consume_state_token("st1", None, None).await, Err(OAuthError::StateInvalid)));
+        assert!(matches!(
+            mgr.consume_state_token("st1", None, None).await,
+            Err(OAuthError::StateInvalid)
+        ));
         // Redirect-Mismatch.
         seed_state(&pool, "st2", "tiktok", None, "https://cb/x", None).await;
         assert!(matches!(
-            mgr.consume_state_token("st2", None, Some("https://andere")).await,
+            mgr.consume_state_token("st2", None, Some("https://andere"))
+                .await,
             Err(OAuthError::RedirectMismatch)
         ));
         // Plattform-Filter: falsche erwartete Plattform → kein Treffer.
         seed_state(&pool, "st3", "tiktok", None, "https://cb/x", None).await;
-        assert!(matches!(mgr.consume_state_token("st3", Some("youtube"), None).await, Err(OAuthError::StateInvalid)));
+        assert!(matches!(
+            mgr.consume_state_token("st3", Some("youtube"), None).await,
+            Err(OAuthError::StateInvalid)
+        ));
     }
 
     #[tokio::test]
     async fn handle_callback_youtube_persistiert_verschluesselt() {
-        let Some(pool) = make_pool("t_sm_oauth_cb").await else { return };
+        let Some(pool) = make_pool("t_sm_oauth_cb").await else {
+            return;
+        };
         let server = MockServer::start().await;
         Mock::given(method("POST"))
             .and(path("/token"))
@@ -676,10 +888,27 @@ mod tests {
             format!("{}/token", server.uri()),
             "http://127.0.0.1:1".into(),
         );
-        seed_state(&pool, "stc", "youtube", Some("nani"), "https://cb/yt", Some("verif")).await;
+        seed_state(
+            &pool,
+            "stc",
+            "youtube",
+            Some("nani"),
+            "https://cb/yt",
+            Some("verif"),
+        )
+        .await;
 
-        let result = mgr.handle_callback("the-code", "stc", None, None).await.unwrap();
-        assert_eq!(result, CallbackResult { platform: "youtube".to_string(), streamer_login: Some("nani".to_string()) });
+        let result = mgr
+            .handle_callback("the-code", "stc", None, None)
+            .await
+            .unwrap();
+        assert_eq!(
+            result,
+            CallbackResult {
+                platform: "youtube".to_string(),
+                streamer_login: Some("nani".to_string())
+            }
+        );
 
         // Access-Token verschlüsselt persistiert + entschlüsselbar.
         let enc: Vec<u8> = sqlx::query_scalar(
@@ -687,27 +916,46 @@ mod tests {
         )
         .fetch_one(&pool).await.unwrap();
         let dec = test_cipher()
-            .decrypt_field(&enc, &aad::social_media("access_token", "youtube", Some("nani"), 1))
+            .decrypt_field(
+                &enc,
+                &aad::social_media("access_token", "youtube", Some("nani"), 1),
+            )
             .unwrap();
         assert_eq!(dec, "yt-access");
         let scopes: Option<String> = sqlx::query_scalar(
             "SELECT scopes FROM social_media_platform_auth WHERE platform='youtube'",
         )
-        .fetch_one(&pool).await.unwrap();
+        .fetch_one(&pool)
+        .await
+        .unwrap();
         assert_eq!(scopes.as_deref(), Some("youtube.upload"));
 
         // Zweiter Callback (neuer State, kein refresh_token in Antwort) → UPSERT,
         // refresh_token bleibt via COALESCE erhalten.
-        Mock::given(method("POST")).and(path("/token2"))
+        Mock::given(method("POST"))
+            .and(path("/token2"))
             .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
                 "access_token": "yt-access-2", "expires_in": 3600, "scope": "youtube.upload"
             })))
-            .mount(&server).await;
+            .mount(&server)
+            .await;
         let mgr2 = OAuthManager::new(pool.clone(), test_cipher()).with_token_urls(
-            "http://127.0.0.1:1".into(), format!("{}/token2", server.uri()), "http://127.0.0.1:1".into(),
+            "http://127.0.0.1:1".into(),
+            format!("{}/token2", server.uri()),
+            "http://127.0.0.1:1".into(),
         );
-        seed_state(&pool, "stc2", "youtube", Some("nani"), "https://cb/yt", Some("v2")).await;
-        mgr2.handle_callback("code2", "stc2", None, None).await.unwrap();
+        seed_state(
+            &pool,
+            "stc2",
+            "youtube",
+            Some("nani"),
+            "https://cb/yt",
+            Some("v2"),
+        )
+        .await;
+        mgr2.handle_callback("code2", "stc2", None, None)
+            .await
+            .unwrap();
         let refresh_present: bool = sqlx::query_scalar(
             "SELECT refresh_token_enc IS NOT NULL FROM social_media_platform_auth WHERE platform='youtube'",
         )

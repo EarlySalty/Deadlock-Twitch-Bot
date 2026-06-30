@@ -1,0 +1,30 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT id AS \"id!\", (COALESCE(last_attempt_at, created_at) IS NOT NULL AND COALESCE(last_attempt_at, created_at) >= $3::text::timestamptz) AS \"is_fresh!\" FROM twitch_clips_upload_queue WHERE clip_id = $1 AND platform = $2 AND status = 'processing' ORDER BY COALESCE(last_attempt_at, created_at) DESC, id DESC LIMIT 1",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id!",
+        "type_info": "Int8"
+      },
+      {
+        "ordinal": 1,
+        "name": "is_fresh!",
+        "type_info": "Bool"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Int8",
+        "Text",
+        "Text"
+      ]
+    },
+    "nullable": [
+      false,
+      null
+    ]
+  },
+  "hash": "3c7ef94acc8ad7f15a60a9d8ee39a560e0841be07555f9a2c7eb907e64ef832d"
+}

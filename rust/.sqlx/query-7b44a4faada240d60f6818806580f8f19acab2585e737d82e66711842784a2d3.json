@@ -1,0 +1,28 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT COALESCE(description_template, '') AS \"description_template!\", hashtags AS \"hashtags!\" FROM clip_templates_streamer WHERE id = $1",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "description_template!",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 1,
+        "name": "hashtags!",
+        "type_info": "Text"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Int8"
+      ]
+    },
+    "nullable": [
+      null,
+      false
+    ]
+  },
+  "hash": "7b44a4faada240d60f6818806580f8f19acab2585e737d82e66711842784a2d3"
+}

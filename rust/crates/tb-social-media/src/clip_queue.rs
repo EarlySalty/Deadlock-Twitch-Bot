@@ -26,8 +26,8 @@ pub enum QueueError {
 /// Ein Queue-Eintrag samt Clip-Daten (für den Upload-Worker).
 #[derive(Debug, Clone)]
 pub struct UploadQueueItem {
-    pub id: i32,
-    pub clip_db_id: i32,
+    pub id: i64,
+    pub clip_db_id: i64,
     pub platform: String,
     pub status: String,
     pub priority: i32,
@@ -45,34 +45,40 @@ pub struct UploadQueueItem {
 }
 
 fn hashtags_json(hashtags: Option<&[String]>) -> Option<String> {
-    hashtags.filter(|h| !h.is_empty()).map(|h| serde_json::to_string(h).unwrap_or_else(|_| "[]".to_string()))
+    hashtags
+        .filter(|h| !h.is_empty())
+        .map(|h| serde_json::to_string(h).unwrap_or_else(|_| "[]".to_string()))
 }
 
 /// Fügt einen Upload zur Queue hinzu (oder gibt einen vorhandenen wieder).
 #[allow(clippy::too_many_arguments)]
-pub async fn queue_upload(
+pub async fn queue_upload<C>(
     pool: &PgPool,
-    clip_db_id: i32,
+    clip_db_id: C,
     platform: &str,
     title: Option<&str>,
     description: Option<&str>,
     hashtags: Option<&[String]>,
     scheduled_at: Option<&str>,
     priority: i32,
-) -> Result<i32, QueueError> {
+) -> Result<i64, QueueError>
+where
+    C: Into<i64>,
+{
+    let clip_db_id = clip_db_id.into();
     if !PLATFORMS.contains(&platform) {
         return Err(QueueError::InvalidPlatform(platform.to_string()));
     }
     let tags = hashtags_json(hashtags);
 
     // 1) Pending wiederverwenden.
-    if let Some((id,)) = sqlx::query_as::<_, (i32,)>(
-        "SELECT id FROM twitch_clips_upload_queue \
+    if let Some(id) = sqlx::query_scalar!(
+        "SELECT id AS \"id!\" FROM twitch_clips_upload_queue \
          WHERE clip_id = $1 AND platform = $2 AND status = 'pending' \
          ORDER BY priority DESC, created_at ASC, id ASC LIMIT 1",
+        clip_db_id,
+        platform
     )
-    .bind(clip_db_id)
-    .bind(platform)
     .fetch_optional(pool)
     .await?
     {
@@ -81,50 +87,55 @@ pub async fn queue_upload(
 
     // 2) Processing: frisch → wiederverwenden; stale → re-queuen.
     let stale_cutoff = (Utc::now() - Duration::minutes(PROCESSING_STALE_MINUTES)).to_rfc3339();
-    if let Some((id, last_seen)) = sqlx::query_as::<_, (i32, Option<String>)>(
-        "SELECT id, COALESCE(last_attempt_at, created_at) FROM twitch_clips_upload_queue \
+    if let Some(row) = sqlx::query!(
+        "SELECT id AS \"id!\", \
+                (COALESCE(last_attempt_at, created_at) IS NOT NULL \
+                 AND COALESCE(last_attempt_at, created_at) >= $3::text::timestamptz) AS \"is_fresh!\" \
+         FROM twitch_clips_upload_queue \
          WHERE clip_id = $1 AND platform = $2 AND status = 'processing' \
          ORDER BY COALESCE(last_attempt_at, created_at) DESC, id DESC LIMIT 1",
+        clip_db_id,
+        platform,
+        stale_cutoff
     )
-    .bind(clip_db_id)
-    .bind(platform)
     .fetch_optional(pool)
     .await?
     {
-        let last_seen = last_seen.unwrap_or_default();
-        if !last_seen.is_empty() && last_seen >= stale_cutoff {
+        let id = row.id;
+        if row.is_fresh {
             return Ok(id); // wird noch verarbeitet
         }
-        sqlx::query(
+        sqlx::query!(
             "UPDATE twitch_clips_upload_queue SET status = 'pending', title = $1, description = $2, \
-             hashtags = $3, scheduled_at = $4, priority = $5, last_error = NULL, \
+             hashtags = $3, scheduled_at = $4::text::timestamptz, priority = $5, last_error = NULL, \
              last_attempt_at = NULL, completed_at = NULL WHERE id = $6",
+            title,
+            description,
+            tags.as_deref(),
+            scheduled_at,
+            priority,
+            id
         )
-        .bind(title)
-        .bind(description)
-        .bind(&tags)
-        .bind(scheduled_at)
-        .bind(priority)
-        .bind(id)
         .execute(pool)
         .await?;
         return Ok(id);
     }
 
     // 3) Neu einfügen.
-    let (id,): (i32,) = sqlx::query_as(
+    let id: i64 = sqlx::query_scalar!(
         "INSERT INTO twitch_clips_upload_queue \
             (clip_id, platform, title, description, hashtags, scheduled_at, priority, status, created_at) \
-         VALUES ($1, $2, $3, $4, $5, $6, $7, 'pending', $8) RETURNING id",
+         VALUES ($1, $2, $3, $4, $5, $6::text::timestamptz, $7, 'pending', $8::text::timestamptz) \
+         RETURNING id AS \"id!\"",
+        clip_db_id,
+        platform,
+        title,
+        description,
+        tags.as_deref(),
+        scheduled_at,
+        priority,
+        Utc::now().to_rfc3339()
     )
-    .bind(clip_db_id)
-    .bind(platform)
-    .bind(title)
-    .bind(description)
-    .bind(&tags)
-    .bind(scheduled_at)
-    .bind(priority)
-    .bind(Utc::now().to_rfc3339())
     .fetch_one(pool)
     .await?;
     Ok(id)
@@ -141,11 +152,11 @@ pub async fn get_upload_queue(
 ) -> Vec<UploadQueueItem> {
     if status == "pending" {
         if let Some(cutoff) = reclaim_stale_before {
-            let _ = sqlx::query(
+            let _ = sqlx::query!(
                 "UPDATE twitch_clips_upload_queue SET status = 'pending', last_error = NULL \
-                 WHERE status = 'processing' AND COALESCE(last_attempt_at, created_at) < $1",
+                 WHERE status = 'processing' AND COALESCE(last_attempt_at, created_at) < $1::text::timestamptz",
+                cutoff
             )
-            .bind(cutoff)
             .execute(pool)
             .await;
         }
@@ -195,7 +206,7 @@ pub async fn get_upload_queue(
 /// Clip-Upload-Spalten gesetzt + der Publication-Status aufgefrischt.
 pub async fn update_upload_status(
     pool: &PgPool,
-    queue_id: i32,
+    queue_id: i64,
     status: &str,
     external_video_id: Option<&str>,
     error: Option<&str>,
@@ -204,29 +215,39 @@ pub async fn update_upload_status(
     match status {
         "completed" => {
             let mut tx = pool.begin().await?;
-            let queue_row = sqlx::query_as::<_, (i32, String)>(
-                "SELECT clip_id, platform FROM twitch_clips_upload_queue WHERE id = $1",
+            let queue_row = sqlx::query!(
+                "SELECT clip_id AS \"clip_id!\", platform AS \"platform!\" \
+                 FROM twitch_clips_upload_queue WHERE id = $1",
+                queue_id
             )
-            .bind(queue_id)
             .fetch_optional(&mut *tx)
             .await?;
-            sqlx::query("UPDATE twitch_clips_upload_queue SET status = 'completed', completed_at = $1 WHERE id = $2")
-                .bind(&now)
-                .bind(queue_id)
+            sqlx::query!(
+                "UPDATE twitch_clips_upload_queue SET status = 'completed', completed_at = $1::text::timestamptz WHERE id = $2",
+                &now,
+                queue_id
+            )
                 .execute(&mut *tx)
                 .await?;
             let mut clip_for_refresh = None;
-            if let Some((clip_id, platform)) = queue_row {
+            if let Some(row) = queue_row {
+                let clip_id = row.clip_id;
+                let platform = row.platform;
                 let clip_sql = match platform.as_str() {
-                    "tiktok" => "UPDATE twitch_clips_social_media SET uploaded_tiktok = 1, tiktok_video_id = $1, tiktok_uploaded_at = $2 WHERE id = $3",
-                    "youtube" => "UPDATE twitch_clips_social_media SET uploaded_youtube = 1, youtube_video_id = $1, youtube_uploaded_at = $2 WHERE id = $3",
-                    "instagram" => "UPDATE twitch_clips_social_media SET uploaded_instagram = 1, instagram_media_id = $1, instagram_uploaded_at = $2 WHERE id = $3",
+                    "tiktok" => "UPDATE twitch_clips_social_media SET uploaded_tiktok = TRUE, tiktok_video_id = $1, tiktok_uploaded_at = $2::text::timestamptz WHERE id = $3",
+                    "youtube" => "UPDATE twitch_clips_social_media SET uploaded_youtube = TRUE, youtube_video_id = $1, youtube_uploaded_at = $2::text::timestamptz WHERE id = $3",
+                    "instagram" => "UPDATE twitch_clips_social_media SET uploaded_instagram = TRUE, instagram_media_id = $1, instagram_uploaded_at = $2::text::timestamptz WHERE id = $3",
                     _ => {
                         tx.commit().await?;
                         return Ok(());
                     }
                 };
-                sqlx::query(clip_sql).bind(external_video_id).bind(&now).bind(clip_id).execute(&mut *tx).await?;
+                sqlx::query(clip_sql)
+                    .bind(external_video_id)
+                    .bind(&now)
+                    .bind(clip_id)
+                    .execute(&mut *tx)
+                    .await?;
                 clip_for_refresh = Some(clip_id);
             }
             tx.commit().await?;
@@ -235,21 +256,23 @@ pub async fn update_upload_status(
             }
         }
         "failed" => {
-            sqlx::query(
+            sqlx::query!(
                 "UPDATE twitch_clips_upload_queue SET status = 'failed', attempts = attempts + 1, \
-                 last_error = $1, last_attempt_at = $2 WHERE id = $3",
+                 last_error = $1, last_attempt_at = $2::text::timestamptz WHERE id = $3",
+                error,
+                &now,
+                queue_id
             )
-            .bind(error)
-            .bind(&now)
-            .bind(queue_id)
             .execute(pool)
             .await?;
         }
         other => {
-            sqlx::query("UPDATE twitch_clips_upload_queue SET status = $1, last_attempt_at = $2 WHERE id = $3")
-                .bind(other)
-                .bind(&now)
-                .bind(queue_id)
+            sqlx::query!(
+                "UPDATE twitch_clips_upload_queue SET status = $1, last_attempt_at = $2::text::timestamptz WHERE id = $3",
+                other,
+                &now,
+                queue_id
+            )
                 .execute(pool)
                 .await?;
         }
@@ -265,47 +288,84 @@ mod tests {
 
     async fn make_pool(schema: &str) -> Option<PgPool> {
         let dsn = std::env::var("TB_TEST_DATABASE_URL").ok()?;
-        let admin = PgPoolOptions::new().max_connections(1).connect(&dsn).await.unwrap();
-        sqlx::query(&format!("DROP SCHEMA IF EXISTS {schema} CASCADE")).execute(&admin).await.unwrap();
-        sqlx::query(&format!("CREATE SCHEMA {schema}")).execute(&admin).await.unwrap();
+        let admin = PgPoolOptions::new()
+            .max_connections(1)
+            .connect(&dsn)
+            .await
+            .unwrap();
+        sqlx::query(&format!("DROP SCHEMA IF EXISTS {schema} CASCADE"))
+            .execute(&admin)
+            .await
+            .unwrap();
+        sqlx::query(&format!("CREATE SCHEMA {schema}"))
+            .execute(&admin)
+            .await
+            .unwrap();
         admin.close().await;
-        let opts = PgConnectOptions::from_str(&dsn).unwrap().options([("search_path", schema)]);
-        let pool = PgPoolOptions::new().max_connections(3).connect_with(opts).await.unwrap();
+        let opts = PgConnectOptions::from_str(&dsn)
+            .unwrap()
+            .options([("search_path", schema)]);
+        let pool = PgPoolOptions::new()
+            .max_connections(3)
+            .connect_with(opts)
+            .await
+            .unwrap();
         sqlx::query("CREATE TABLE social_media_platform_auth (id SERIAL PRIMARY KEY, platform TEXT, streamer_login TEXT, enabled INTEGER DEFAULT 1)").execute(&pool).await.unwrap();
-        sqlx::query("CREATE TABLE twitch_clips_social_media (id SERIAL PRIMARY KEY, clip_id TEXT, clip_url TEXT, clip_title TEXT, streamer_login TEXT, local_file_path TEXT, converted_file_path TEXT, status TEXT DEFAULT 'pending', discarded_at TIMESTAMPTZ, uploaded_tiktok INTEGER DEFAULT 0, uploaded_youtube INTEGER DEFAULT 0, uploaded_instagram INTEGER DEFAULT 0, tiktok_video_id TEXT, youtube_video_id TEXT, instagram_media_id TEXT, tiktok_uploaded_at TEXT, youtube_uploaded_at TEXT, instagram_uploaded_at TEXT)").execute(&pool).await.unwrap();
-        sqlx::query("CREATE TABLE twitch_clips_upload_queue (id SERIAL PRIMARY KEY, clip_id INTEGER NOT NULL, platform TEXT NOT NULL, status TEXT DEFAULT 'pending', priority INTEGER DEFAULT 0, title TEXT, description TEXT, hashtags TEXT, scheduled_at TEXT, attempts INTEGER DEFAULT 0, last_error TEXT, last_attempt_at TEXT, created_at TEXT DEFAULT CURRENT_TIMESTAMP, completed_at TEXT)").execute(&pool).await.unwrap();
+        sqlx::query("CREATE TABLE twitch_clips_social_media (id SERIAL PRIMARY KEY, clip_id TEXT, clip_url TEXT, clip_title TEXT, streamer_login TEXT, local_file_path TEXT, converted_file_path TEXT, status TEXT DEFAULT 'pending', discarded_at TIMESTAMPTZ, uploaded_tiktok BOOLEAN DEFAULT FALSE, uploaded_youtube BOOLEAN DEFAULT FALSE, uploaded_instagram BOOLEAN DEFAULT FALSE, tiktok_video_id TEXT, youtube_video_id TEXT, instagram_media_id TEXT, tiktok_uploaded_at TIMESTAMPTZ, youtube_uploaded_at TIMESTAMPTZ, instagram_uploaded_at TIMESTAMPTZ)").execute(&pool).await.unwrap();
+        sqlx::query("CREATE TABLE twitch_clips_upload_queue (id SERIAL PRIMARY KEY, clip_id INTEGER NOT NULL, platform TEXT NOT NULL, status TEXT DEFAULT 'pending', priority INTEGER DEFAULT 0, title TEXT, description TEXT, hashtags TEXT, scheduled_at TIMESTAMPTZ, attempts INTEGER DEFAULT 0, last_error TEXT, last_attempt_at TIMESTAMPTZ, created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP, completed_at TIMESTAMPTZ)").execute(&pool).await.unwrap();
         Some(pool)
     }
 
-    async fn seed_clip(pool: &PgPool) -> i32 {
+    async fn seed_clip(pool: &PgPool) -> i64 {
         sqlx::query_scalar("INSERT INTO twitch_clips_social_media (clip_id, streamer_login, clip_title) VALUES ('c1', 'nani', 'T') RETURNING id").fetch_one(pool).await.unwrap()
     }
 
     #[tokio::test]
     async fn queue_dedup_und_invalid_platform() {
-        let Some(pool) = make_pool("t_sm_queue").await else { return };
+        let Some(pool) = make_pool("t_sm_queue").await else {
+            return;
+        };
         let clip = seed_clip(&pool).await;
-        assert!(matches!(queue_upload(&pool, clip, "twitter", None, None, None, None, 0).await, Err(QueueError::InvalidPlatform(_))));
+        assert!(matches!(
+            queue_upload(&pool, clip, "twitter", None, None, None, None, 0).await,
+            Err(QueueError::InvalidPlatform(_))
+        ));
 
         let tags = vec!["#deadlock".to_string()];
-        let id1 = queue_upload(&pool, clip, "tiktok", Some("T"), None, Some(&tags), None, 5).await.unwrap();
+        let id1 = queue_upload(&pool, clip, "tiktok", Some("T"), None, Some(&tags), None, 5)
+            .await
+            .unwrap();
         // Zweiter Aufruf für denselben pending → gleiche ID.
-        let id2 = queue_upload(&pool, clip, "tiktok", None, None, None, None, 0).await.unwrap();
+        let id2 = queue_upload(&pool, clip, "tiktok", None, None, None, None, 0)
+            .await
+            .unwrap();
         assert_eq!(id1, id2);
-        let n: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM twitch_clips_upload_queue").fetch_one(&pool).await.unwrap();
+        let n: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM twitch_clips_upload_queue")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
         assert_eq!(n, 1);
         // hashtags als JSON gespeichert.
-        let tags_raw: Option<String> = sqlx::query_scalar("SELECT hashtags FROM twitch_clips_upload_queue WHERE id = $1").bind(id1).fetch_one(&pool).await.unwrap();
+        let tags_raw: Option<String> =
+            sqlx::query_scalar("SELECT hashtags FROM twitch_clips_upload_queue WHERE id = $1")
+                .bind(id1)
+                .fetch_one(&pool)
+                .await
+                .unwrap();
         assert_eq!(tags_raw.as_deref(), Some("[\"#deadlock\"]"));
     }
 
     #[tokio::test]
     async fn get_queue_und_update_completed() {
-        let Some(pool) = make_pool("t_sm_queue_flow").await else { return };
+        let Some(pool) = make_pool("t_sm_queue_flow").await else {
+            return;
+        };
         let clip = seed_clip(&pool).await;
         // Aktive Plattform tiktok für 'nani' → completed soll published_all geben.
         sqlx::query("INSERT INTO social_media_platform_auth (platform, streamer_login) VALUES ('tiktok','nani')").execute(&pool).await.unwrap();
-        let qid = queue_upload(&pool, clip, "tiktok", None, None, None, None, 0).await.unwrap();
+        let qid = queue_upload(&pool, clip, "tiktok", None, None, None, None, 0)
+            .await
+            .unwrap();
 
         let items = get_upload_queue(&pool, Some("tiktok"), "pending", 10, None).await;
         assert_eq!(items.len(), 1);
@@ -314,26 +374,47 @@ mod tests {
         assert_eq!(items[0].twitch_clip_id.as_deref(), Some("c1"));
         assert_eq!(items[0].streamer_login.as_deref(), Some("nani"));
 
-        // completed → Queue completed, Clip uploaded_tiktok=1, status=published_all.
-        update_upload_status(&pool, qid, "completed", Some("vid123"), None).await.unwrap();
-        let qstatus: String = sqlx::query_scalar("SELECT status FROM twitch_clips_upload_queue WHERE id = $1").bind(qid).fetch_one(&pool).await.unwrap();
+        // completed → Queue completed, Clip uploaded_tiktok=true, status=published_all.
+        update_upload_status(&pool, qid, "completed", Some("vid123"), None)
+            .await
+            .unwrap();
+        let qstatus: String =
+            sqlx::query_scalar("SELECT status FROM twitch_clips_upload_queue WHERE id = $1")
+                .bind(qid)
+                .fetch_one(&pool)
+                .await
+                .unwrap();
         assert_eq!(qstatus, "completed");
-        let (up, vidid, cstatus): (i32, Option<String>, String) = sqlx::query_as("SELECT uploaded_tiktok, tiktok_video_id, status FROM twitch_clips_social_media WHERE id = $1").bind(clip).fetch_one(&pool).await.unwrap();
-        assert_eq!(up, 1);
+        let (up, vidid, cstatus): (bool, Option<String>, String) = sqlx::query_as("SELECT uploaded_tiktok, tiktok_video_id, status FROM twitch_clips_social_media WHERE id = $1").bind(clip).fetch_one(&pool).await.unwrap();
+        assert!(up);
         assert_eq!(vidid.as_deref(), Some("vid123"));
         assert_eq!(cstatus, "published_all"); // einzige aktive Plattform hochgeladen
 
         // Pending-Queue jetzt leer.
-        assert!(get_upload_queue(&pool, None, "pending", 10, None).await.is_empty());
+        assert!(get_upload_queue(&pool, None, "pending", 10, None)
+            .await
+            .is_empty());
     }
 
     #[tokio::test]
     async fn update_failed_zaehlt_attempts() {
-        let Some(pool) = make_pool("t_sm_queue_fail").await else { return };
+        let Some(pool) = make_pool("t_sm_queue_fail").await else {
+            return;
+        };
         let clip = seed_clip(&pool).await;
-        let qid = queue_upload(&pool, clip, "youtube", None, None, None, None, 0).await.unwrap();
-        update_upload_status(&pool, qid, "failed", None, Some("boom")).await.unwrap();
-        let (status, attempts, err): (String, i32, Option<String>) = sqlx::query_as("SELECT status, attempts, last_error FROM twitch_clips_upload_queue WHERE id = $1").bind(qid).fetch_one(&pool).await.unwrap();
+        let qid = queue_upload(&pool, clip, "youtube", None, None, None, None, 0)
+            .await
+            .unwrap();
+        update_upload_status(&pool, qid, "failed", None, Some("boom"))
+            .await
+            .unwrap();
+        let (status, attempts, err): (String, i32, Option<String>) = sqlx::query_as(
+            "SELECT status, attempts, last_error FROM twitch_clips_upload_queue WHERE id = $1",
+        )
+        .bind(qid)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
         assert_eq!(status, "failed");
         assert_eq!(attempts, 1);
         assert_eq!(err.as_deref(), Some("boom"));

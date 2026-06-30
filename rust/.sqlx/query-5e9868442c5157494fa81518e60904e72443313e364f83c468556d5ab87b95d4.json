@@ -1,0 +1,89 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT id, platform, streamer_login, access_token_enc, refresh_token_enc, client_id, client_secret_enc, token_expires_at, scopes, platform_user_id, platform_username, enc_version FROM social_media_platform_auth WHERE platform = $1 AND enabled = 1 AND ( streamer_login = $2 OR ($2 IS NOT NULL AND streamer_login IS NULL) OR ($2 IS NULL AND streamer_login IS NULL)) ORDER BY CASE WHEN streamer_login = $2 THEN 1 ELSE 0 END DESC, authorized_at DESC, id DESC LIMIT 1",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id",
+        "type_info": "Int4"
+      },
+      {
+        "ordinal": 1,
+        "name": "platform",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 2,
+        "name": "streamer_login",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 3,
+        "name": "access_token_enc",
+        "type_info": "Bytea"
+      },
+      {
+        "ordinal": 4,
+        "name": "refresh_token_enc",
+        "type_info": "Bytea"
+      },
+      {
+        "ordinal": 5,
+        "name": "client_id",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 6,
+        "name": "client_secret_enc",
+        "type_info": "Bytea"
+      },
+      {
+        "ordinal": 7,
+        "name": "token_expires_at",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 8,
+        "name": "scopes",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 9,
+        "name": "platform_user_id",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 10,
+        "name": "platform_username",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 11,
+        "name": "enc_version",
+        "type_info": "Int4"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Text",
+        "Text"
+      ]
+    },
+    "nullable": [
+      false,
+      false,
+      true,
+      false,
+      true,
+      true,
+      true,
+      true,
+      true,
+      true,
+      true,
+      true
+    ]
+  },
+  "hash": "5e9868442c5157494fa81518e60904e72443313e364f83c468556d5ab87b95d4"
+}

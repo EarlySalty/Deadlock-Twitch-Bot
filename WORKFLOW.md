@@ -1,5 +1,40 @@
 # Workflow
 
+## 2026-06-30 — sqlx Welle 5 Rework-4 tb-social-media Test-i64
+
+- Start: delegierter GPT-Implementierungsworker fuer 3 Test-Build-Typfehler in `clip_queue.rs`, `insights_worker.rs` und `retention.rs`; kein Commit/Push, keine Git-Kommandos, Scope nur `#[cfg(test)]`-Module.
+- Implementiert: Test-Fixture-/Erwartungstypen fuer bigint-IDs von `i32` auf `i64` nachgezogen: `seed_clip`, due-target Keys/Fixure-IDs und Retention-Expired-ID-Vergleich.
+- Verifikation: `rustfmt --edition 2021` auf den drei Ziel-Dateien erfolgreich; `SQLX_OFFLINE=true cargo test -p tb-social-media --no-run` gruen.
+
+## 2026-06-30 — sqlx Welle 5 Rework-3 tb-social-media
+
+- Start: delegierter GPT-Implementierungsworker fuer zwei MED-Befunde in `analytics.rs` und `enrichment.rs`; kein Commit/Push, kein Prepare, keine Git-Kommandos.
+- Implementiert: `list_clip_analytics` liest nullable `bucket` wieder mit Default-Semantik ueber `COALESCE(bucket, '') AS "bucket!"`; `iter_pending_enrichments` filtert vor `LIMIT` per `AND c.id BETWEEN 0 AND 2147483647`, bestehender `i32::try_from`-Skip mit `tracing::warn!` bleibt erhalten.
+- Verifikation: `rustfmt --edition 2021 rust/crates/tb-social-media/src/analytics.rs rust/crates/tb-social-media/src/enrichment.rs` erfolgreich; SQL-Ausschnitte per `sed`/`rg` kontrolliert. ORDER BY, uebrige WHERE-Bedingungen und LIMIT-Param bleiben unveraendert.
+
+## 2026-06-30 — sqlx Welle 5 Rework-2 tb-social-media
+
+- Start: delegierter GPT-Implementierungsworker fuer 4 Kritiker-Befunde in `rust/crates/tb-social-media/src`; keine Commits/Pushes, kein `cargo sqlx prepare`.
+- Vorab verifiziert: `git diff HEAD --` fuer `clip_queue.rs`, `approval.rs`, `upload_worker.rs`, `enrichment.rs`, `analytics.rs` und `clip/repository.rs` gelesen; die gemeldeten Regressionen im aktuellen Diff bestaetigt.
+- Implementiert: Processing-Frische in `clip_queue` wird wieder als `timestamptz` in SQL verglichen (`is_fresh!`), Approval-Gate liefert bei int4-Out-of-range/DB-Fehlern `Result` statt stillem `false`, `iter_pending_enrichments` ueberspringt nur die einzelne nicht-konvertierbare ID mit `tracing::warn!`, int4-Metrik-Writes in Analytics/Repository nutzen checked `i32::try_from`.
+- Verifikation: `rustfmt --edition 2021` auf allen geaenderten Rust-Dateien gruen; `git diff --check` gruen; statische Suche in den sechs Befund-Dateien findet kein verbleibendes `as i32`, keinen `COALESCE(... )::text`-Zeitvergleich und kein `try_into()`-Silent-False. `cargo check -p tb-social-media` stoppt erwartbar, weil `SQLX_OFFLINE=true` gesetzt ist und fuer die neue `clip_queue`-Query kein Cache existiert; kein `cargo sqlx prepare` gemaess Auftrag. Verbleibender scope-fremder `as i32`-Treffer liegt in `clip/service.rs`.
+
+## 2026-06-30 — sqlx Welle 5 Rework tb-social-media prepare-Fehler
+
+- Start: delegierter GPT-Implementierungsworker fuer `cargo sqlx prepare --workspace`-Rework in `tb-social-media`; kein Git, kein Build/Prepare/DB-Zugriff gemaess Auftrag. Schemaabgleich ueber `rust/migrations/20260601000000_baseline_schema.sql` plus `20260629120000_live_schema_type_reconcile.sql`.
+- Befund: `twitch_clips_social_media.id`, `twitch_clips_upload_queue.id`, `twitch_clips_social_analytics.clip_id` und `clip_templates_* .id` sind im prod-aequivalenten Schema `bigint`; Upload-Flags und `clip_templates_streamer.is_default` sind `boolean`; `social_media_streamer_layout.cam_enabled/mode` sind NOT NULL, werden im LEFT JOIN aber nullable.
+- Implementiert: Bool-SQL fuer Upload-Flags/is_default, bigint-RETURNING/Binds fuer Queue/Templates/Clip-/Analytics-IDs, nullable/non-null sqlx-Aliases an Downstream angepasst, Settings-JSON nullable entpackt. Keine `.unwrap()`/`.expect()` oder `.try_into().unwrap()` in neuen Produktionspfaden.
+- Verifikation: `rustfmt --edition 2021` auf den geaenderten Rust-Dateien erfolgreich. Statische Suche: keine produktiven `::integer`-ID-Casts oder 0/1-Boolvergleiche mehr; verbleibender 0/1-Treffer liegt in einem `#[cfg(test)]`-Fixture. Kein Build, kein `cargo sqlx prepare`, keine Tests gemaess Auftrag.
+
+## 2026-06-30 — sqlx Welle 5 tb-social-media
+
+- Start: delegierter GPT-Implementierungsworker; Scope strikt auf die 79 CONVERTIBLE_PG-Callsites aus `rust/docs/sqlx-conversion-triage.md` im Abschnitt `tb-social-media — 79`. Keine Commits/Pushes, kein Build/Prepare/DB-Zugriff gemaess Auftrag.
+- Eingang gelesen: `WORKFLOW.md` und Triage-Abschnitt ab Zeile 933; DYNAMIC- und TEST_ONLY-Stellen bleiben ausgeschlossen.
+- Implementiert: alle 79 gelisteten CONVERTIBLE_PG-Callsites in `rust/crates/tb-social-media/src` auf `sqlx::query!` oder `sqlx::query_scalar!` umgestellt. Datei-Counts: analytics 3, approval 7, clip/repository 6, clip_analytics 3, clip_manager 5, clip_queue 9, clip_templates 13, credentials 1, enrich_pipeline 1, enrichment 6, insights_worker 2, layout 5, oauth 2, refresh_worker 3, report_writer 1, retention 7, settings 2, upload_worker 1, vocab 2.
+- Abgrenzung: die 21 DYNAMIC-Stellen bleiben unveraendert (format!/nonliteral SELECT_SQL/QueryBuilder/plattformabhaengige SQL-Strings), ebenso alle TEST_ONLY-Queries. Schema-Loop `schema.rs::ensure_schema` bleibt als Runtime-DDL-Dynamik unveraendert.
+- Auffaelligkeiten fuer Review: i32-API gegen potentiell bigint `twitch_clips_social_media.id`/FKs per SQL `id::integer` bzw. `$n::integer` stabilisiert; int4-Zaehler (`view_count`, Analytics-Zaehler, `clip_fetch_history.fetch_duration_ms`) am Bind-Ort auf i32 gecastet; JSONB-Strings ueber `$n::text::jsonb`; RFC3339-Strings fuer timestamptz ueber `$n::text::timestamptz`.
+- Verifikation: `rustfmt --edition 2021` auf allen 19 geaenderten Rust-Dateien erfolgreich; statische Makro-Zaehlung ergibt exakt 79. Kein Build, kein Prepare, keine Tests gemaess Auftrag.
+
 ## 2026-06-30 — Wave 4b Re-Konvert raid_blacklist + partner_score_refresh
 
 - Start: delegierter GPT-Implementierungsworker; Scope strikt auf `rust/crates/tb-raid/src/raid_blacklist.rs` und `rust/crates/tb-raid/src/partner_score_refresh.rs`. Keine Commits/Pushes, kein Build/Prepare/DB-Zugriff gemaess Auftrag.

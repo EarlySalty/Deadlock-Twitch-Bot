@@ -1,0 +1,28 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT q.platform AS \"platform?\", COUNT(*) AS \"pending!\" FROM twitch_clips_upload_queue q JOIN twitch_clips_social_media c ON c.id = q.clip_id WHERE q.status = 'pending' AND ($1::text IS NULL OR c.streamer_login = $1) GROUP BY q.platform",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "platform?",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 1,
+        "name": "pending!",
+        "type_info": "Int8"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Text"
+      ]
+    },
+    "nullable": [
+      false,
+      null
+    ]
+  },
+  "hash": "c24e3186649fc39e7703deb2353f97527b51265db45c151c8d1b5f3200f27223"
+}

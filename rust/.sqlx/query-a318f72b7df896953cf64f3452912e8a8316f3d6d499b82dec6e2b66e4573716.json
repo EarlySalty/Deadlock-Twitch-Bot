@@ -1,0 +1,64 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT id, streamer_login, template_name, COALESCE(description_template, '') AS \"description_template!\", hashtags, COALESCE(is_default, false) AS \"is_default!\", created_at::text, updated_at::text FROM clip_templates_streamer WHERE streamer_login = $1 ORDER BY is_default DESC, template_name ASC",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id",
+        "type_info": "Int8"
+      },
+      {
+        "ordinal": 1,
+        "name": "streamer_login",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 2,
+        "name": "template_name",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 3,
+        "name": "description_template!",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 4,
+        "name": "hashtags",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 5,
+        "name": "is_default!",
+        "type_info": "Bool"
+      },
+      {
+        "ordinal": 6,
+        "name": "created_at",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 7,
+        "name": "updated_at",
+        "type_info": "Text"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Text"
+      ]
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      null,
+      false,
+      null,
+      null,
+      null
+    ]
+  },
+  "hash": "a318f72b7df896953cf64f3452912e8a8316f3d6d499b82dec6e2b66e4573716"
+}

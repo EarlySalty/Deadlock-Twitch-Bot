@@ -8,7 +8,6 @@
 //! report_dispatcher-Slice.
 
 use sqlx::PgPool;
-use sqlx::Row;
 
 /// Auswertungs-Zeitfenster (Python `BUCKETS`).
 pub const BUCKETS: [&str; 3] = ["24h", "7d", "30d"];
@@ -18,7 +17,7 @@ pub const PLATFORMS: [&str; 3] = ["youtube", "tiktok", "instagram"];
 /// Gelesener Statistik-Snapshot.
 #[derive(Debug, Clone, PartialEq)]
 pub struct ClipAnalyticsSnapshot {
-    pub clip_db_id: i32,
+    pub clip_db_id: i64,
     pub platform: String,
     pub bucket: String,
     pub views: i64,
@@ -36,7 +35,7 @@ pub struct ClipAnalyticsSnapshot {
 /// Eingabe für `upsert_clip_analytics` (Default = Retry-Fall: nur Metadaten).
 #[derive(Debug, Clone, Default)]
 pub struct ClipAnalyticsUpsert {
-    pub clip_db_id: i32,
+    pub clip_db_id: i64,
     pub platform: String,
     pub bucket: String,
     pub views: i64,
@@ -56,59 +55,85 @@ fn round2(value: Option<f64>) -> Option<f64> {
 }
 
 fn clean_provider(provider: Option<&str>) -> Option<String> {
-    provider.map(str::trim).filter(|s| !s.is_empty()).map(str::to_string)
+    provider
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .map(str::to_string)
+}
+
+fn int4_metric(field: &str, value: i64) -> Result<i32, sqlx::Error> {
+    i32::try_from(value).map_err(|error| {
+        sqlx::Error::InvalidArgument(format!("{field}={value} does not fit into int4: {error}"))
+    })
+}
+
+fn optional_int4_metric(field: &str, value: Option<i64>) -> Result<Option<i32>, sqlx::Error> {
+    value.map(i32::try_from).transpose().map_err(|error| {
+        sqlx::Error::InvalidArgument(format!("{field} does not fit into int4: {error}"))
+    })
 }
 
 /// Aktualisiert den Snapshot oder legt ihn an (UPDATE → bei 0 Zeilen INSERT).
-pub async fn upsert_clip_analytics(pool: &PgPool, upsert: &ClipAnalyticsUpsert) -> Result<(), sqlx::Error> {
-    let synced = upsert.synced_at.clone().unwrap_or_else(|| chrono::Utc::now().to_rfc3339());
+pub async fn upsert_clip_analytics(
+    pool: &PgPool,
+    upsert: &ClipAnalyticsUpsert,
+) -> Result<(), sqlx::Error> {
+    let synced = upsert
+        .synced_at
+        .clone()
+        .unwrap_or_else(|| chrono::Utc::now().to_rfc3339());
     let provider = clean_provider(upsert.provider.as_deref());
     let ctr = round2(upsert.ctr_percent);
     let engagement = round2(upsert.engagement_rate);
+    let views = int4_metric("views", upsert.views)?;
+    let likes = int4_metric("likes", upsert.likes)?;
+    let comments = int4_metric("comments", upsert.comments)?;
+    let shares = int4_metric("shares", upsert.shares)?;
+    let watch_time_seconds = optional_int4_metric("watch_time_seconds", upsert.watch_time_seconds)?;
 
-    let updated = sqlx::query(
+    let updated = sqlx::query!(
         "UPDATE twitch_clips_social_analytics \
             SET views = $1, likes = $2, comments = $3, shares = $4, \
-                watch_time_seconds = $5, ctr_percent = $6, engagement_rate = $7, \
-                provider = $8, synced_at = $9::timestamptz, next_pull_at = $10::timestamptz \
+                watch_time_seconds = $5, ctr_percent = $6::double precision, engagement_rate = $7::double precision, \
+                provider = $8, synced_at = $9::text::timestamptz, next_pull_at = $10::text::timestamptz \
           WHERE clip_id = $11 AND platform = $12 AND bucket = $13",
+        views,
+        likes,
+        comments,
+        shares,
+        watch_time_seconds,
+        ctr,
+        engagement,
+        provider.as_deref(),
+        &synced,
+        upsert.next_pull_at.as_deref(),
+        upsert.clip_db_id,
+        &upsert.platform,
+        &upsert.bucket
     )
-    .bind(upsert.views)
-    .bind(upsert.likes)
-    .bind(upsert.comments)
-    .bind(upsert.shares)
-    .bind(upsert.watch_time_seconds)
-    .bind(ctr)
-    .bind(engagement)
-    .bind(provider.as_deref())
-    .bind(&synced)
-    .bind(upsert.next_pull_at.as_deref())
-    .bind(upsert.clip_db_id)
-    .bind(&upsert.platform)
-    .bind(&upsert.bucket)
     .execute(pool)
     .await?;
 
     if updated.rows_affected() == 0 {
-        sqlx::query(
+        sqlx::query!(
             "INSERT INTO twitch_clips_social_analytics \
                 (clip_id, platform, bucket, views, likes, comments, shares, \
                  watch_time_seconds, ctr_percent, engagement_rate, provider, synced_at, next_pull_at) \
-             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12::timestamptz, $13::timestamptz)",
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9::double precision, $10::double precision, $11, $12::text::timestamptz, $13::text::timestamptz)",
+            upsert.clip_db_id,
+            &upsert.platform,
+            &upsert.bucket,
+            views,
+            likes,
+            comments,
+            shares,
+            watch_time_seconds,
+            ctr,
+            engagement,
+            provider.as_deref(),
+            &synced,
+            upsert.next_pull_at.as_deref()
         )
-        .bind(upsert.clip_db_id)
-        .bind(&upsert.platform)
-        .bind(&upsert.bucket)
-        .bind(upsert.views)
-        .bind(upsert.likes)
-        .bind(upsert.comments)
-        .bind(upsert.shares)
-        .bind(upsert.watch_time_seconds)
-        .bind(ctr)
-        .bind(engagement)
-        .bind(provider.as_deref())
-        .bind(&synced)
-        .bind(upsert.next_pull_at.as_deref())
         .execute(pool)
         .await?;
     }
@@ -116,33 +141,40 @@ pub async fn upsert_clip_analytics(pool: &PgPool, upsert: &ClipAnalyticsUpsert) 
 }
 
 /// Alle Snapshots eines Clips (Platform/Bucket sortiert).
-pub async fn list_clip_analytics(pool: &PgPool, clip_db_id: i32) -> Vec<ClipAnalyticsSnapshot> {
-    let rows = sqlx::query(
-        "SELECT clip_id, platform, bucket, views, likes, comments, shares, watch_time_seconds, \
-                ctr_percent::double precision AS ctr, engagement_rate::double precision AS eng, \
-                provider, synced_at::text AS synced, next_pull_at::text AS next_pull \
+pub async fn list_clip_analytics(
+    pool: &PgPool,
+    clip_db_id: impl Into<i64>,
+) -> Vec<ClipAnalyticsSnapshot> {
+    let clip_db_id = clip_db_id.into();
+    let rows = sqlx::query!(
+        "SELECT clip_id AS \"clip_id!\", platform AS \"platform!\", COALESCE(bucket, '') AS \"bucket!\", \
+                COALESCE(views, 0) AS \"views!\", COALESCE(likes, 0) AS \"likes!\", \
+                COALESCE(comments, 0) AS \"comments!\", COALESCE(shares, 0) AS \"shares!\", \
+                watch_time_seconds, ctr_percent::double precision AS \"ctr?\", \
+                engagement_rate::double precision AS \"eng?\", provider, synced_at::text AS synced, \
+                next_pull_at::text AS next_pull \
            FROM twitch_clips_social_analytics WHERE clip_id = $1 \
           ORDER BY platform ASC, bucket ASC",
+        clip_db_id
     )
-    .bind(clip_db_id)
     .fetch_all(pool)
     .await
     .unwrap_or_default();
     rows.iter()
         .map(|r| ClipAnalyticsSnapshot {
-            clip_db_id: r.try_get("clip_id").unwrap_or(0),
-            platform: r.try_get("platform").unwrap_or_default(),
-            bucket: r.try_get("bucket").unwrap_or_default(),
-            views: r.try_get::<Option<i32>, _>("views").unwrap_or(None).unwrap_or(0) as i64,
-            likes: r.try_get::<Option<i32>, _>("likes").unwrap_or(None).unwrap_or(0) as i64,
-            comments: r.try_get::<Option<i32>, _>("comments").unwrap_or(None).unwrap_or(0) as i64,
-            shares: r.try_get::<Option<i32>, _>("shares").unwrap_or(None).unwrap_or(0) as i64,
-            watch_time_seconds: r.try_get::<Option<i32>, _>("watch_time_seconds").unwrap_or(None).map(|v| v as i64),
-            ctr_percent: r.try_get::<Option<f64>, _>("ctr").unwrap_or(None),
-            engagement_rate: r.try_get::<Option<f64>, _>("eng").unwrap_or(None),
-            provider: r.try_get::<Option<String>, _>("provider").unwrap_or(None),
-            synced_at: r.try_get::<Option<String>, _>("synced").unwrap_or(None),
-            next_pull_at: r.try_get::<Option<String>, _>("next_pull").unwrap_or(None),
+            clip_db_id: r.clip_id,
+            platform: r.platform.clone(),
+            bucket: r.bucket.clone(),
+            views: r.views as i64,
+            likes: r.likes as i64,
+            comments: r.comments as i64,
+            shares: r.shares as i64,
+            watch_time_seconds: r.watch_time_seconds.map(|v| v as i64),
+            ctr_percent: r.ctr,
+            engagement_rate: r.eng,
+            provider: r.provider.clone(),
+            synced_at: r.synced.clone(),
+            next_pull_at: r.next_pull.clone(),
         })
         .collect()
 }
@@ -160,10 +192,21 @@ pub struct SocialMediaReportRecord {
     pub created_at: Option<String>,
 }
 
-type ReportRow = (i32, String, Option<String>, String, String, String, Option<String>, Option<String>);
+type ReportRow = (
+    i32,
+    String,
+    Option<String>,
+    String,
+    String,
+    String,
+    Option<String>,
+    Option<String>,
+);
 
 fn opt_str(value: Option<String>) -> Option<String> {
-    value.map(|s| s.trim().to_string()).filter(|s| !s.is_empty())
+    value
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty())
 }
 
 fn row_to_report(r: ReportRow) -> SocialMediaReportRecord {
@@ -262,12 +305,28 @@ mod tests {
 
     async fn make_pool(schema: &str) -> Option<PgPool> {
         let dsn = std::env::var("TB_TEST_DATABASE_URL").ok()?;
-        let admin = PgPoolOptions::new().max_connections(1).connect(&dsn).await.unwrap();
-        sqlx::query(&format!("DROP SCHEMA IF EXISTS {schema} CASCADE")).execute(&admin).await.unwrap();
-        sqlx::query(&format!("CREATE SCHEMA {schema}")).execute(&admin).await.unwrap();
+        let admin = PgPoolOptions::new()
+            .max_connections(1)
+            .connect(&dsn)
+            .await
+            .unwrap();
+        sqlx::query(&format!("DROP SCHEMA IF EXISTS {schema} CASCADE"))
+            .execute(&admin)
+            .await
+            .unwrap();
+        sqlx::query(&format!("CREATE SCHEMA {schema}"))
+            .execute(&admin)
+            .await
+            .unwrap();
         admin.close().await;
-        let opts = PgConnectOptions::from_str(&dsn).unwrap().options([("search_path", schema)]);
-        let pool = PgPoolOptions::new().max_connections(3).connect_with(opts).await.unwrap();
+        let opts = PgConnectOptions::from_str(&dsn)
+            .unwrap()
+            .options([("search_path", schema)]);
+        let pool = PgPoolOptions::new()
+            .max_connections(3)
+            .connect_with(opts)
+            .await
+            .unwrap();
         sqlx::query(
             "CREATE TABLE twitch_clips_social_analytics (id SERIAL PRIMARY KEY, clip_id INTEGER, platform TEXT, bucket TEXT, \
              views INTEGER, likes INTEGER, comments INTEGER, shares INTEGER, watch_time_seconds INTEGER, \
@@ -281,21 +340,26 @@ mod tests {
 
     #[tokio::test]
     async fn upsert_insert_dann_update() {
-        let Some(pool) = make_pool("t_sm_analytics_persist").await else { return };
+        let Some(pool) = make_pool("t_sm_analytics_persist").await else {
+            return;
+        };
         // Insert-Pfad.
-        upsert_clip_analytics(&pool, &ClipAnalyticsUpsert {
-            clip_db_id: 5,
-            platform: "tiktok".into(),
-            bucket: "24h".into(),
-            views: 100,
-            likes: 10,
-            comments: 5,
-            shares: 5,
-            engagement_rate: Some(20.0),
-            provider: Some("  tiktok_open_api_v2 ".into()),
-            next_pull_at: Some("2026-07-01T00:00:00+00:00".into()),
-            ..Default::default()
-        })
+        upsert_clip_analytics(
+            &pool,
+            &ClipAnalyticsUpsert {
+                clip_db_id: 5,
+                platform: "tiktok".into(),
+                bucket: "24h".into(),
+                views: 100,
+                likes: 10,
+                comments: 5,
+                shares: 5,
+                engagement_rate: Some(20.0),
+                provider: Some("  tiktok_open_api_v2 ".into()),
+                next_pull_at: Some("2026-07-01T00:00:00+00:00".into()),
+                ..Default::default()
+            },
+        )
         .await
         .unwrap();
         let snaps = list_clip_analytics(&pool, 5).await;
@@ -306,14 +370,17 @@ mod tests {
         assert!(snaps[0].synced_at.is_some());
 
         // Update-Pfad (gleicher Key) — keine zweite Zeile.
-        upsert_clip_analytics(&pool, &ClipAnalyticsUpsert {
-            clip_db_id: 5,
-            platform: "tiktok".into(),
-            bucket: "24h".into(),
-            views: 250,
-            likes: 30,
-            ..Default::default()
-        })
+        upsert_clip_analytics(
+            &pool,
+            &ClipAnalyticsUpsert {
+                clip_db_id: 5,
+                platform: "tiktok".into(),
+                bucket: "24h".into(),
+                views: 250,
+                likes: 30,
+                ..Default::default()
+            },
+        )
         .await
         .unwrap();
         let snaps = list_clip_analytics(&pool, 5).await;
@@ -323,13 +390,16 @@ mod tests {
         assert_eq!(snaps[0].provider, None); // im Update auf NULL gesetzt
 
         // Anderer Bucket → eigene Zeile.
-        upsert_clip_analytics(&pool, &ClipAnalyticsUpsert {
-            clip_db_id: 5,
-            platform: "tiktok".into(),
-            bucket: "7d".into(),
-            provider: Some("error:tiktok:api".into()),
-            ..Default::default()
-        })
+        upsert_clip_analytics(
+            &pool,
+            &ClipAnalyticsUpsert {
+                clip_db_id: 5,
+                platform: "tiktok".into(),
+                bucket: "7d".into(),
+                provider: Some("error:tiktok:api".into()),
+                ..Default::default()
+            },
+        )
         .await
         .unwrap();
         let snaps = list_clip_analytics(&pool, 5).await;
@@ -342,12 +412,28 @@ mod tests {
 
     async fn make_reports_pool(schema: &str) -> Option<PgPool> {
         let dsn = std::env::var("TB_TEST_DATABASE_URL").ok()?;
-        let admin = PgPoolOptions::new().max_connections(1).connect(&dsn).await.unwrap();
-        sqlx::query(&format!("DROP SCHEMA IF EXISTS {schema} CASCADE")).execute(&admin).await.unwrap();
-        sqlx::query(&format!("CREATE SCHEMA {schema}")).execute(&admin).await.unwrap();
+        let admin = PgPoolOptions::new()
+            .max_connections(1)
+            .connect(&dsn)
+            .await
+            .unwrap();
+        sqlx::query(&format!("DROP SCHEMA IF EXISTS {schema} CASCADE"))
+            .execute(&admin)
+            .await
+            .unwrap();
+        sqlx::query(&format!("CREATE SCHEMA {schema}"))
+            .execute(&admin)
+            .await
+            .unwrap();
         admin.close().await;
-        let opts = PgConnectOptions::from_str(&dsn).unwrap().options([("search_path", schema)]);
-        let pool = PgPoolOptions::new().max_connections(3).connect_with(opts).await.unwrap();
+        let opts = PgConnectOptions::from_str(&dsn)
+            .unwrap()
+            .options([("search_path", schema)]);
+        let pool = PgPoolOptions::new()
+            .max_connections(3)
+            .connect_with(opts)
+            .await
+            .unwrap();
         sqlx::query(
             "CREATE TABLE social_media_reports (id SERIAL PRIMARY KEY, kind TEXT NOT NULL, streamer_login TEXT, \
              period_start TIMESTAMPTZ NOT NULL, period_end TIMESTAMPTZ NOT NULL, content_md TEXT NOT NULL, \
@@ -361,10 +447,22 @@ mod tests {
 
     #[tokio::test]
     async fn report_insert_get_list() {
-        let Some(pool) = make_reports_pool("t_sm_reports").await else { return };
+        let Some(pool) = make_reports_pool("t_sm_reports").await else {
+            return;
+        };
         let (ps, pe) = ("2026-06-01T00:00:00+00:00", "2026-06-08T00:00:00+00:00");
         // Insert streamer-spezifisch.
-        let rec = insert_report(&pool, "weekly", Some("nani"), ps, pe, "# Report", Some("minimax")).await.unwrap();
+        let rec = insert_report(
+            &pool,
+            "weekly",
+            Some("nani"),
+            ps,
+            pe,
+            "# Report",
+            Some("minimax"),
+        )
+        .await
+        .unwrap();
         assert_eq!(rec.kind, "weekly");
         assert_eq!(rec.streamer_login.as_deref(), Some("nani"));
         assert_eq!(rec.content_md, "# Report");
@@ -374,16 +472,30 @@ mod tests {
         let found = get_existing_report(&pool, "weekly", ps, pe, Some("nani")).await;
         assert_eq!(found.map(|r| r.id), Some(rec.id));
         // Anderer Streamer → kein Treffer.
-        assert!(get_existing_report(&pool, "weekly", ps, pe, Some("other")).await.is_none());
+        assert!(get_existing_report(&pool, "weekly", ps, pe, Some("other"))
+            .await
+            .is_none());
         // Globaler Report (streamer NULL) separat.
-        insert_report(&pool, "weekly", None, ps, pe, "# Global", None).await.unwrap();
-        let global = get_existing_report(&pool, "weekly", ps, pe, None).await.unwrap();
+        insert_report(&pool, "weekly", None, ps, pe, "# Global", None)
+            .await
+            .unwrap();
+        let global = get_existing_report(&pool, "weekly", ps, pe, None)
+            .await
+            .unwrap();
         assert_eq!(global.streamer_login, None);
         assert_eq!(global.model, None);
 
         // list: ohne Filter beide, kind-Filter greift, streamer-Filter greift.
         assert_eq!(list_reports(&pool, None, None, 20).await.len(), 2);
-        assert_eq!(list_reports(&pool, Some("weekly"), Some("nani"), 20).await.len(), 1);
-        assert_eq!(list_reports(&pool, Some("monthly"), None, 20).await.len(), 0);
+        assert_eq!(
+            list_reports(&pool, Some("weekly"), Some("nani"), 20)
+                .await
+                .len(),
+            1
+        );
+        assert_eq!(
+            list_reports(&pool, Some("monthly"), None, 20).await.len(),
+            0
+        );
     }
 }

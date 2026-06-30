@@ -44,8 +44,15 @@ enum WorkerError {
 
 /// Baut den passenden Uploader aus den Credentials (mirror `_build_uploader`).
 /// `None`, wenn Pflichtfelder fehlen oder die Plattform unbekannt ist.
-fn build_uploader(platform: &str, creds: &SocialMediaCredentials) -> Option<Arc<dyn PlatformUploader>> {
-    let has_client_id = creds.client_id.as_deref().map(|s| !s.is_empty()).unwrap_or(false);
+fn build_uploader(
+    platform: &str,
+    creds: &SocialMediaCredentials,
+) -> Option<Arc<dyn PlatformUploader>> {
+    let has_client_id = creds
+        .client_id
+        .as_deref()
+        .map(|s| !s.is_empty())
+        .unwrap_or(false);
     match platform {
         "tiktok" => {
             if !has_client_id || creds.access_token.is_empty() {
@@ -60,11 +67,17 @@ fn build_uploader(platform: &str, creds: &SocialMediaCredentials) -> Option<Arc<
             Some(Arc::new(youtube_uploader(creds)))
         }
         "instagram" => {
-            let user_id = creds.platform_user_id.as_deref().filter(|s| !s.is_empty())?;
+            let user_id = creds
+                .platform_user_id
+                .as_deref()
+                .filter(|s| !s.is_empty())?;
             if creds.access_token.is_empty() {
                 return None;
             }
-            Some(Arc::new(InstagramUploader::new(creds.access_token.clone(), user_id.to_string())))
+            Some(Arc::new(InstagramUploader::new(
+                creds.access_token.clone(),
+                user_id.to_string(),
+            )))
         }
         _ => None,
     }
@@ -81,12 +94,14 @@ pub(crate) fn youtube_uploader(creds: &SocialMediaCredentials) -> YouTubeUploade
         creds.client_id.as_deref().filter(|s| !s.is_empty()),
         creds.client_secret.as_deref().filter(|s| !s.is_empty()),
     ) {
-        (Some(refresh_token), Some(client_id), Some(client_secret)) => uploader.with_refresh(YouTubeRefreshCreds {
-            refresh_token: refresh_token.to_string(),
-            client_id: client_id.to_string(),
-            client_secret: client_secret.to_string(),
-            token_url: GOOGLE_TOKEN_URL.to_string(),
-        }),
+        (Some(refresh_token), Some(client_id), Some(client_secret)) => {
+            uploader.with_refresh(YouTubeRefreshCreds {
+                refresh_token: refresh_token.to_string(),
+                client_id: client_id.to_string(),
+                client_secret: client_secret.to_string(),
+                token_url: GOOGLE_TOKEN_URL.to_string(),
+            })
+        }
         _ => uploader,
     }
 }
@@ -125,16 +140,41 @@ impl UploadTask {
     async fn process(&self, item: UploadQueueItem, uploader: Arc<dyn PlatformUploader>) -> bool {
         let clip_db_id = item.clip_db_id;
         // Approval-Gate: ohne Freigabe direkt failed.
-        if !is_clip_approved_for(&self.pool, clip_db_id, &item.platform).await {
-            let _ = update_upload_status(&self.pool, item.id, "failed", None, Some("approval_required")).await;
-            return false;
+        match is_clip_approved_for(&self.pool, clip_db_id, &item.platform).await {
+            Ok(true) => {}
+            Ok(false) => {
+                let _ = update_upload_status(
+                    &self.pool,
+                    item.id,
+                    "failed",
+                    None,
+                    Some("approval_required"),
+                )
+                .await;
+                return false;
+            }
+            Err(e) => {
+                tracing::error!(queue_id = item.id, clip_db_id, %e, "approval check failed before upload");
+                let err = format!("approval_check_failed: {e}");
+                let _ = update_upload_status(&self.pool, item.id, "failed", None, Some(&err)).await;
+                return false;
+            }
         }
         match self.existing_upload(&item).await {
             Ok(Some(existing)) => {
-                if let Err(e) = update_upload_status(&self.pool, item.id, "completed", existing.external_id.as_deref(), None).await {
+                if let Err(e) = update_upload_status(
+                    &self.pool,
+                    item.id,
+                    "completed",
+                    existing.external_id.as_deref(),
+                    None,
+                )
+                .await
+                {
                     tracing::error!(queue_id = item.id, %e, "completed-write failed for existing uploaded clip");
                     let err = format!("completed_write_failed: {e}");
-                    let _ = update_upload_status(&self.pool, item.id, "failed", None, Some(&err)).await;
+                    let _ =
+                        update_upload_status(&self.pool, item.id, "failed", None, Some(&err)).await;
                 }
                 return true;
             }
@@ -149,25 +189,54 @@ impl UploadTask {
         match self.do_upload(&item).await {
             Ok(converted) => {
                 match uploader
-                    .upload_video(&converted.path, &converted.title, &converted.description, &converted.hashtags)
+                    .upload_video(
+                        &converted.path,
+                        &converted.title,
+                        &converted.description,
+                        &converted.hashtags,
+                    )
                     .await
                 {
                     Ok(external_id) => {
-                        if let Err(e) = update_upload_status(&self.pool, item.id, "completed", Some(&external_id), None).await {
+                        if let Err(e) = update_upload_status(
+                            &self.pool,
+                            item.id,
+                            "completed",
+                            Some(&external_id),
+                            None,
+                        )
+                        .await
+                        {
                             tracing::error!(queue_id = item.id, %e, "completed-write failed after successful upload");
                             let err = format!("completed_write_failed: {e}");
-                            let _ = update_upload_status(&self.pool, item.id, "failed", None, Some(&err)).await;
+                            let _ = update_upload_status(
+                                &self.pool,
+                                item.id,
+                                "failed",
+                                None,
+                                Some(&err),
+                            )
+                            .await;
                         }
                         true
                     }
                     Err(e) => {
-                        let _ = update_upload_status(&self.pool, item.id, "failed", None, Some(&e.to_string())).await;
+                        let _ = update_upload_status(
+                            &self.pool,
+                            item.id,
+                            "failed",
+                            None,
+                            Some(&e.to_string()),
+                        )
+                        .await;
                         false
                     }
                 }
             }
             Err(e) => {
-                let _ = update_upload_status(&self.pool, item.id, "failed", None, Some(&e.to_string())).await;
+                let _ =
+                    update_upload_status(&self.pool, item.id, "failed", None, Some(&e.to_string()))
+                        .await;
                 false
             }
         }
@@ -179,11 +248,15 @@ impl UploadTask {
 
         let mut local_path = item.local_file_path.clone().unwrap_or_default();
         if local_path.is_empty() || !Path::new(&local_path).exists() {
-            local_path = self.download_clip(item.clip_url.as_deref().unwrap_or(""), item.clip_db_id).await?;
+            local_path = self
+                .download_clip(item.clip_url.as_deref().unwrap_or(""), item.clip_db_id)
+                .await?;
             let _ = update_upload_status(&self.pool, item.id, "processing", None, None).await;
         }
 
-        let converted_path = self.convert_to_vertical(&local_path, &item.platform).await?;
+        let converted_path = self
+            .convert_to_vertical(&local_path, &item.platform)
+            .await?;
         let _ = update_upload_status(&self.pool, item.id, "processing", None, None).await;
 
         let title = item
@@ -200,23 +273,28 @@ impl UploadTask {
         })
     }
 
-    async fn existing_upload(&self, item: &UploadQueueItem) -> Result<Option<ExistingUpload>, sqlx::Error> {
+    async fn existing_upload(
+        &self,
+        item: &UploadQueueItem,
+    ) -> Result<Option<ExistingUpload>, sqlx::Error> {
         let sql = match item.platform.as_str() {
             "tiktok" => "SELECT uploaded_tiktok, tiktok_video_id FROM twitch_clips_social_media WHERE id = $1",
             "youtube" => "SELECT uploaded_youtube, youtube_video_id FROM twitch_clips_social_media WHERE id = $1",
             "instagram" => "SELECT uploaded_instagram, instagram_media_id FROM twitch_clips_social_media WHERE id = $1",
             _ => return Ok(None),
         };
-        let row: Option<(Option<i32>, Option<String>)> = sqlx::query_as(sql)
+        let row: Option<(Option<bool>, Option<String>)> = sqlx::query_as(sql)
             .bind(item.clip_db_id)
             .fetch_optional(&self.pool)
             .await?;
         Ok(row.and_then(|(uploaded, external_id)| {
-            (uploaded.unwrap_or(0) != 0).then_some(ExistingUpload { external_id })
+            uploaded
+                .unwrap_or(false)
+                .then_some(ExistingUpload { external_id })
         }))
     }
 
-    async fn download_clip(&self, clip_url: &str, clip_db_id: i32) -> Result<String, WorkerError> {
+    async fn download_clip(&self, clip_url: &str, clip_db_id: i64) -> Result<String, WorkerError> {
         tokio::fs::create_dir_all(&self.clips_dir).await?;
         let output_path = format!("{}/{}.mp4", self.clips_dir, clip_db_id);
         if Path::new(&output_path).exists() {
@@ -227,27 +305,43 @@ impl UploadTask {
             .output()
             .await?;
         if !output.status.success() {
-            return Err(WorkerError::Download(String::from_utf8_lossy(&output.stderr).trim().to_string()));
+            return Err(WorkerError::Download(
+                String::from_utf8_lossy(&output.stderr).trim().to_string(),
+            ));
         }
         if !Path::new(&output_path).exists() {
-            return Err(WorkerError::Download(format!("Downloaded file not found: {output_path}")));
+            return Err(WorkerError::Download(format!(
+                "Downloaded file not found: {output_path}"
+            )));
         }
-        let _ = sqlx::query("UPDATE twitch_clips_social_media SET local_file_path = $1, downloaded_at = $2 WHERE id = $3")
-            .bind(&output_path)
-            .bind(Utc::now().to_rfc3339())
-            .bind(clip_db_id)
+        let _ = sqlx::query!(
+            "UPDATE twitch_clips_social_media SET local_file_path = $1, downloaded_at = $2::text::timestamptz WHERE id = $3",
+            &output_path,
+            Utc::now().to_rfc3339(),
+            clip_db_id
+        )
             .execute(&self.pool)
             .await;
         Ok(output_path)
     }
 
-    async fn convert_to_vertical(&self, input_path: &str, platform: &str) -> Result<String, WorkerError> {
+    async fn convert_to_vertical(
+        &self,
+        input_path: &str,
+        platform: &str,
+    ) -> Result<String, WorkerError> {
         let output_path = vertical_output_path(input_path, platform);
         if Path::new(&output_path).exists() {
             return Ok(output_path);
         }
         self.video_processor
-            .convert_and_trim(input_path, &output_path, max_duration_for(platform), TARGET_WIDTH, TARGET_HEIGHT)
+            .convert_and_trim(
+                input_path,
+                &output_path,
+                max_duration_for(platform),
+                TARGET_WIDTH,
+                TARGET_HEIGHT,
+            )
             .await?;
         Ok(output_path)
     }
@@ -309,7 +403,10 @@ impl UploadWorker {
         streamer_login: Option<&str>,
         cache: &mut HashMap<(String, i32), Option<Arc<dyn PlatformUploader>>>,
     ) -> Option<Arc<dyn PlatformUploader>> {
-        let creds = self.credentials.get_credentials(platform, streamer_login).await?;
+        let creds = self
+            .credentials
+            .get_credentials(platform, streamer_login)
+            .await?;
         let key = (platform.to_string(), creds.id);
         if let Some(cached) = cache.get(&key) {
             return cached.clone();
@@ -324,7 +421,14 @@ impl UploadWorker {
     pub async fn run_once(&self) {
         let scan_limit = (self.max_parallel * 10).max(self.max_parallel) as i64;
         let stale_cutoff = (Utc::now() - chrono::Duration::seconds(STALE_AFTER_SECS)).to_rfc3339();
-        let queue = get_upload_queue(&self.task.pool, None, "pending", scan_limit, Some(&stale_cutoff)).await;
+        let queue = get_upload_queue(
+            &self.task.pool,
+            None,
+            "pending",
+            scan_limit,
+            Some(&stale_cutoff),
+        )
+        .await;
         if queue.is_empty() {
             return;
         }
@@ -332,7 +436,10 @@ impl UploadWorker {
         let mut cache: HashMap<(String, i32), Option<Arc<dyn PlatformUploader>>> = HashMap::new();
         let mut batch: Vec<(UploadQueueItem, Arc<dyn PlatformUploader>)> = Vec::new();
         for item in queue {
-            if let Some(uploader) = self.resolve_uploader(&item.platform, item.streamer_login.as_deref(), &mut cache).await {
+            if let Some(uploader) = self
+                .resolve_uploader(&item.platform, item.streamer_login.as_deref(), &mut cache)
+                .await
+            {
                 batch.push((item, uploader));
                 if batch.len() >= self.max_parallel {
                     break;
@@ -370,7 +477,12 @@ mod tests {
     use std::str::FromStr;
     use std::sync::atomic::{AtomicUsize, Ordering};
 
-    fn creds(platform: &str, client_id: Option<&str>, token: &str, user_id: Option<&str>) -> SocialMediaCredentials {
+    fn creds(
+        platform: &str,
+        client_id: Option<&str>,
+        token: &str,
+        user_id: Option<&str>,
+    ) -> SocialMediaCredentials {
         SocialMediaCredentials {
             id: 1,
             platform: platform.to_string(),
@@ -388,13 +500,29 @@ mod tests {
 
     #[test]
     fn build_uploader_pflichtfelder() {
-        assert_eq!(build_uploader("tiktok", &creds("tiktok", Some("ck"), "tok", None)).unwrap().platform_name(), "tiktok");
+        assert_eq!(
+            build_uploader("tiktok", &creds("tiktok", Some("ck"), "tok", None))
+                .unwrap()
+                .platform_name(),
+            "tiktok"
+        );
         assert!(build_uploader("tiktok", &creds("tiktok", None, "tok", None)).is_none()); // client_id fehlt
         assert!(build_uploader("youtube", &creds("youtube", Some("ci"), "", None)).is_none()); // token leer
-        assert_eq!(build_uploader("youtube", &creds("youtube", Some("ci"), "tok", None)).unwrap().platform_name(), "youtube");
-        assert_eq!(build_uploader("instagram", &creds("instagram", None, "tok", Some("123"))).unwrap().platform_name(), "instagram");
+        assert_eq!(
+            build_uploader("youtube", &creds("youtube", Some("ci"), "tok", None))
+                .unwrap()
+                .platform_name(),
+            "youtube"
+        );
+        assert_eq!(
+            build_uploader("instagram", &creds("instagram", None, "tok", Some("123")))
+                .unwrap()
+                .platform_name(),
+            "instagram"
+        );
         assert!(build_uploader("instagram", &creds("instagram", None, "tok", None)).is_none()); // user_id fehlt
-        assert!(build_uploader("snapchat", &creds("snapchat", Some("x"), "tok", None)).is_none()); // unbekannt
+        assert!(build_uploader("snapchat", &creds("snapchat", Some("x"), "tok", None)).is_none());
+        // unbekannt
     }
 
     #[test]
@@ -402,8 +530,14 @@ mod tests {
         assert_eq!(max_duration_for("tiktok"), 60);
         assert_eq!(max_duration_for("youtube"), 60);
         assert_eq!(max_duration_for("instagram"), 90);
-        assert_eq!(vertical_output_path("data/clips/5.mp4", "tiktok"), "data/clips/5_tiktok_vertical.mp4");
-        assert_eq!(parse_hashtags(Some("[\"a\",\"b\"]")), vec!["a".to_string(), "b".to_string()]);
+        assert_eq!(
+            vertical_output_path("data/clips/5.mp4", "tiktok"),
+            "data/clips/5_tiktok_vertical.mp4"
+        );
+        assert_eq!(
+            parse_hashtags(Some("[\"a\",\"b\"]")),
+            vec!["a".to_string(), "b".to_string()]
+        );
         assert_eq!(parse_hashtags(None), Vec::<String>::new());
         assert_eq!(parse_hashtags(Some("")), Vec::<String>::new());
     }
@@ -418,13 +552,23 @@ mod tests {
         fn validate_video(&self, _: &str) -> Result<(), UploadError> {
             Ok(())
         }
-        async fn upload_video(&self, _: &str, _: &str, _: &str, _: &[String]) -> Result<String, UploadError> {
+        async fn upload_video(
+            &self,
+            _: &str,
+            _: &str,
+            _: &str,
+            _: &[String],
+        ) -> Result<String, UploadError> {
             panic!("upload_video darf bei fehlender Freigabe nicht laufen");
         }
         async fn get_video_status(&self, _: &str) -> Value {
             Value::Null
         }
-        async fn fetch_video_analytics(&self, _: &str, _: &str) -> Result<crate::uploaders::AnalyticsSnapshot, UploadError> {
+        async fn fetch_video_analytics(
+            &self,
+            _: &str,
+            _: &str,
+        ) -> Result<crate::uploaders::AnalyticsSnapshot, UploadError> {
             unreachable!()
         }
     }
@@ -441,31 +585,57 @@ mod tests {
         fn validate_video(&self, _: &str) -> Result<(), UploadError> {
             Ok(())
         }
-        async fn upload_video(&self, _: &str, _: &str, _: &str, _: &[String]) -> Result<String, UploadError> {
+        async fn upload_video(
+            &self,
+            _: &str,
+            _: &str,
+            _: &str,
+            _: &[String],
+        ) -> Result<String, UploadError> {
             self.calls.fetch_add(1, Ordering::SeqCst);
             Ok("new_vid".to_string())
         }
         async fn get_video_status(&self, _: &str) -> Value {
             Value::Null
         }
-        async fn fetch_video_analytics(&self, _: &str, _: &str) -> Result<crate::uploaders::AnalyticsSnapshot, UploadError> {
+        async fn fetch_video_analytics(
+            &self,
+            _: &str,
+            _: &str,
+        ) -> Result<crate::uploaders::AnalyticsSnapshot, UploadError> {
             unreachable!()
         }
     }
 
     async fn make_pool(schema: &str) -> Option<PgPool> {
         let dsn = std::env::var("TB_TEST_DATABASE_URL").ok()?;
-        let admin = PgPoolOptions::new().max_connections(1).connect(&dsn).await.unwrap();
-        sqlx::query(&format!("DROP SCHEMA IF EXISTS {schema} CASCADE")).execute(&admin).await.unwrap();
-        sqlx::query(&format!("CREATE SCHEMA {schema}")).execute(&admin).await.unwrap();
+        let admin = PgPoolOptions::new()
+            .max_connections(1)
+            .connect(&dsn)
+            .await
+            .unwrap();
+        sqlx::query(&format!("DROP SCHEMA IF EXISTS {schema} CASCADE"))
+            .execute(&admin)
+            .await
+            .unwrap();
+        sqlx::query(&format!("CREATE SCHEMA {schema}"))
+            .execute(&admin)
+            .await
+            .unwrap();
         admin.close().await;
-        let opts = PgConnectOptions::from_str(&dsn).unwrap().options([("search_path", schema)]);
-        let pool = PgPoolOptions::new().max_connections(3).connect_with(opts).await.unwrap();
+        let opts = PgConnectOptions::from_str(&dsn)
+            .unwrap()
+            .options([("search_path", schema)]);
+        let pool = PgPoolOptions::new()
+            .max_connections(3)
+            .connect_with(opts)
+            .await
+            .unwrap();
         for ddl in [
             "CREATE TABLE social_media_platform_auth (id SERIAL PRIMARY KEY, platform TEXT, streamer_login TEXT, enabled INTEGER DEFAULT 1)",
-            "CREATE TABLE twitch_clips_social_media (id SERIAL PRIMARY KEY, clip_id TEXT, clip_url TEXT, clip_title TEXT, streamer_login TEXT, local_file_path TEXT, converted_file_path TEXT, status TEXT DEFAULT 'pending', uploaded_tiktok INTEGER DEFAULT 0, uploaded_youtube INTEGER DEFAULT 0, uploaded_instagram INTEGER DEFAULT 0, tiktok_video_id TEXT, youtube_video_id TEXT, instagram_media_id TEXT, tiktok_uploaded_at TEXT, youtube_uploaded_at TEXT, instagram_uploaded_at TEXT, discarded_at TIMESTAMPTZ)",
+            "CREATE TABLE twitch_clips_social_media (id SERIAL PRIMARY KEY, clip_id TEXT, clip_url TEXT, clip_title TEXT, streamer_login TEXT, local_file_path TEXT, converted_file_path TEXT, status TEXT DEFAULT 'pending', uploaded_tiktok BOOLEAN DEFAULT FALSE, uploaded_youtube BOOLEAN DEFAULT FALSE, uploaded_instagram BOOLEAN DEFAULT FALSE, tiktok_video_id TEXT, youtube_video_id TEXT, instagram_media_id TEXT, tiktok_uploaded_at TIMESTAMPTZ, youtube_uploaded_at TIMESTAMPTZ, instagram_uploaded_at TIMESTAMPTZ, discarded_at TIMESTAMPTZ)",
             "CREATE TABLE social_media_clip_approval (clip_db_id INTEGER PRIMARY KEY, state TEXT NOT NULL DEFAULT 'awaiting_approval', approved_platforms JSONB NOT NULL DEFAULT '[]'::jsonb, approver_user_id TEXT, decided_at TIMESTAMPTZ, dm_message_id TEXT, dm_channel_id TEXT, last_sent_at TIMESTAMPTZ)",
-            "CREATE TABLE twitch_clips_upload_queue (id SERIAL PRIMARY KEY, clip_id INTEGER, platform TEXT, status TEXT DEFAULT 'pending', priority INTEGER DEFAULT 0, title TEXT, description TEXT, hashtags TEXT, scheduled_at TEXT, attempts INTEGER DEFAULT 0, last_error TEXT, last_attempt_at TEXT, created_at TEXT DEFAULT CURRENT_TIMESTAMP, completed_at TEXT)",
+            "CREATE TABLE twitch_clips_upload_queue (id SERIAL PRIMARY KEY, clip_id INTEGER, platform TEXT, status TEXT DEFAULT 'pending', priority INTEGER DEFAULT 0, title TEXT, description TEXT, hashtags TEXT, scheduled_at TIMESTAMPTZ, attempts INTEGER DEFAULT 0, last_error TEXT, last_attempt_at TIMESTAMPTZ, created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP, completed_at TIMESTAMPTZ)",
         ] {
             sqlx::query(ddl).execute(&pool).await.unwrap();
         }
@@ -474,16 +644,32 @@ mod tests {
 
     async fn make_completed_write_error_pool(schema: &str) -> Option<PgPool> {
         let dsn = std::env::var("TB_TEST_DATABASE_URL").ok()?;
-        let admin = PgPoolOptions::new().max_connections(1).connect(&dsn).await.unwrap();
-        sqlx::query(&format!("DROP SCHEMA IF EXISTS {schema} CASCADE")).execute(&admin).await.unwrap();
-        sqlx::query(&format!("CREATE SCHEMA {schema}")).execute(&admin).await.unwrap();
+        let admin = PgPoolOptions::new()
+            .max_connections(1)
+            .connect(&dsn)
+            .await
+            .unwrap();
+        sqlx::query(&format!("DROP SCHEMA IF EXISTS {schema} CASCADE"))
+            .execute(&admin)
+            .await
+            .unwrap();
+        sqlx::query(&format!("CREATE SCHEMA {schema}"))
+            .execute(&admin)
+            .await
+            .unwrap();
         admin.close().await;
-        let opts = PgConnectOptions::from_str(&dsn).unwrap().options([("search_path", schema)]);
-        let pool = PgPoolOptions::new().max_connections(3).connect_with(opts).await.unwrap();
+        let opts = PgConnectOptions::from_str(&dsn)
+            .unwrap()
+            .options([("search_path", schema)]);
+        let pool = PgPoolOptions::new()
+            .max_connections(3)
+            .connect_with(opts)
+            .await
+            .unwrap();
         for ddl in [
-            "CREATE TABLE twitch_clips_social_media (id SERIAL PRIMARY KEY, clip_id TEXT, clip_url TEXT, clip_title TEXT, streamer_login TEXT, local_file_path TEXT, converted_file_path TEXT, status TEXT DEFAULT 'pending', uploaded_tiktok INTEGER DEFAULT 0, uploaded_youtube INTEGER DEFAULT 0, uploaded_instagram INTEGER DEFAULT 0, tiktok_video_id TEXT, youtube_video_id TEXT, instagram_media_id TEXT, youtube_uploaded_at TEXT, instagram_uploaded_at TEXT, discarded_at TIMESTAMPTZ)",
+            "CREATE TABLE twitch_clips_social_media (id SERIAL PRIMARY KEY, clip_id TEXT, clip_url TEXT, clip_title TEXT, streamer_login TEXT, local_file_path TEXT, converted_file_path TEXT, status TEXT DEFAULT 'pending', uploaded_tiktok BOOLEAN DEFAULT FALSE, uploaded_youtube BOOLEAN DEFAULT FALSE, uploaded_instagram BOOLEAN DEFAULT FALSE, tiktok_video_id TEXT, youtube_video_id TEXT, instagram_media_id TEXT, youtube_uploaded_at TIMESTAMPTZ, instagram_uploaded_at TIMESTAMPTZ, discarded_at TIMESTAMPTZ)",
             "CREATE TABLE social_media_clip_approval (clip_db_id INTEGER PRIMARY KEY, state TEXT NOT NULL DEFAULT 'awaiting_approval', approved_platforms JSONB NOT NULL DEFAULT '[]'::jsonb, approver_user_id TEXT, decided_at TIMESTAMPTZ, dm_message_id TEXT, dm_channel_id TEXT, last_sent_at TIMESTAMPTZ)",
-            "CREATE TABLE twitch_clips_upload_queue (id SERIAL PRIMARY KEY, clip_id INTEGER, platform TEXT, status TEXT DEFAULT 'pending', priority INTEGER DEFAULT 0, title TEXT, description TEXT, hashtags TEXT, scheduled_at TEXT, attempts INTEGER DEFAULT 0, last_error TEXT, last_attempt_at TEXT, created_at TEXT DEFAULT CURRENT_TIMESTAMP, completed_at TEXT)",
+            "CREATE TABLE twitch_clips_upload_queue (id SERIAL PRIMARY KEY, clip_id INTEGER, platform TEXT, status TEXT DEFAULT 'pending', priority INTEGER DEFAULT 0, title TEXT, description TEXT, hashtags TEXT, scheduled_at TIMESTAMPTZ, attempts INTEGER DEFAULT 0, last_error TEXT, last_attempt_at TIMESTAMPTZ, created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP, completed_at TIMESTAMPTZ)",
         ] {
             sqlx::query(ddl).execute(&pool).await.unwrap();
         }
@@ -512,8 +698,8 @@ mod tests {
 
     fn upload_item(queue_id: i32, clip: i32, local_file_path: Option<String>) -> UploadQueueItem {
         UploadQueueItem {
-            id: queue_id,
-            clip_db_id: clip,
+            id: queue_id as i64,
+            clip_db_id: clip as i64,
             platform: "tiktok".to_string(),
             status: "processing".to_string(),
             priority: 0,
@@ -544,14 +730,20 @@ mod tests {
 
     #[tokio::test]
     async fn approval_gate_markiert_failed() {
-        let Some(pool) = make_pool("t_sm_upload_worker").await else { return };
-        let clip: i32 = sqlx::query_scalar("INSERT INTO twitch_clips_social_media DEFAULT VALUES RETURNING id").fetch_one(&pool).await.unwrap();
+        let Some(pool) = make_pool("t_sm_upload_worker").await else {
+            return;
+        };
+        let clip: i32 =
+            sqlx::query_scalar("INSERT INTO twitch_clips_social_media DEFAULT VALUES RETURNING id")
+                .fetch_one(&pool)
+                .await
+                .unwrap();
         let queue_id: i32 = sqlx::query_scalar("INSERT INTO twitch_clips_upload_queue (clip_id, platform, status) VALUES ($1, 'tiktok', 'pending') RETURNING id").bind(clip).fetch_one(&pool).await.unwrap();
 
         let task = task(pool.clone());
         let item = UploadQueueItem {
-            id: queue_id,
-            clip_db_id: clip,
+            id: queue_id as i64,
+            clip_db_id: clip as i64,
             platform: "tiktok".to_string(),
             status: "pending".to_string(),
             priority: 0,
@@ -571,14 +763,23 @@ mod tests {
         // ohne dass der Uploader (NeverUploader) je aufgerufen wird.
         let ok = task.process(item, Arc::new(NeverUploader)).await;
         assert!(!ok);
-        let (status, err): (String, Option<String>) = sqlx::query_as("SELECT status, last_error FROM twitch_clips_upload_queue WHERE id = $1").bind(queue_id).fetch_one(&pool).await.unwrap();
+        let (status, err): (String, Option<String>) = sqlx::query_as(
+            "SELECT status, last_error FROM twitch_clips_upload_queue WHERE id = $1",
+        )
+        .bind(queue_id)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
         assert_eq!(status, "failed");
         assert_eq!(err.as_deref(), Some("approval_required"));
     }
 
     #[tokio::test]
     async fn completed_write_failure_after_success_marks_failed() {
-        let Some(pool) = make_completed_write_error_pool("t_sm_upload_completed_write_fail").await else { return };
+        let Some(pool) = make_completed_write_error_pool("t_sm_upload_completed_write_fail").await
+        else {
+            return;
+        };
         let dir = unique_temp_dir("completed_write_fail");
         let input_path = dir.join("clip.mp4");
         let converted_path = dir.join("clip_tiktok_vertical.mp4");
@@ -608,30 +809,38 @@ mod tests {
         let ok = task(pool.clone())
             .process(
                 upload_item(queue_id, clip, Some(input_path_s)),
-                Arc::new(OkUploader { calls: calls.clone() }),
+                Arc::new(OkUploader {
+                    calls: calls.clone(),
+                }),
             )
             .await;
         assert!(ok);
         assert_eq!(calls.load(Ordering::SeqCst), 1);
-        let (status, attempts, err): (String, i32, Option<String>) =
-            sqlx::query_as("SELECT status, attempts, last_error FROM twitch_clips_upload_queue WHERE id = $1")
-                .bind(queue_id)
-                .fetch_one(&pool)
-                .await
-                .unwrap();
+        let (status, attempts, err): (String, i32, Option<String>) = sqlx::query_as(
+            "SELECT status, attempts, last_error FROM twitch_clips_upload_queue WHERE id = $1",
+        )
+        .bind(queue_id)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
         assert_eq!(status, "failed");
         assert_eq!(attempts, 1);
-        assert!(err.as_deref().unwrap_or("").starts_with("completed_write_failed:"));
+        assert!(err
+            .as_deref()
+            .unwrap_or("")
+            .starts_with("completed_write_failed:"));
 
         let _ = std::fs::remove_dir_all(dir);
     }
 
     #[tokio::test]
     async fn existing_uploaded_flag_skips_platform_upload() {
-        let Some(pool) = make_pool("t_sm_upload_existing_flag").await else { return };
+        let Some(pool) = make_pool("t_sm_upload_existing_flag").await else {
+            return;
+        };
         let clip: i32 = sqlx::query_scalar(
             "INSERT INTO twitch_clips_social_media (clip_id, streamer_login, uploaded_tiktok, tiktok_video_id) \
-             VALUES ('c1', 'nani', 1, 'old_vid') RETURNING id",
+             VALUES ('c1', 'nani', TRUE, 'old_vid') RETURNING id",
         )
         .fetch_one(&pool)
         .await
@@ -648,23 +857,30 @@ mod tests {
 
         let calls = Arc::new(AtomicUsize::new(0));
         let ok = task(pool.clone())
-            .process(upload_item(queue_id, clip, None), Arc::new(OkUploader { calls: calls.clone() }))
+            .process(
+                upload_item(queue_id, clip, None),
+                Arc::new(OkUploader {
+                    calls: calls.clone(),
+                }),
+            )
             .await;
         assert!(ok);
         assert_eq!(calls.load(Ordering::SeqCst), 0);
-        let qstatus: String = sqlx::query_scalar("SELECT status FROM twitch_clips_upload_queue WHERE id = $1")
-            .bind(queue_id)
-            .fetch_one(&pool)
-            .await
-            .unwrap();
-        assert_eq!(qstatus, "completed");
-        let (uploaded, video_id): (i32, Option<String>) =
-            sqlx::query_as("SELECT uploaded_tiktok, tiktok_video_id FROM twitch_clips_social_media WHERE id = $1")
-                .bind(clip)
+        let qstatus: String =
+            sqlx::query_scalar("SELECT status FROM twitch_clips_upload_queue WHERE id = $1")
+                .bind(queue_id)
                 .fetch_one(&pool)
                 .await
                 .unwrap();
-        assert_eq!(uploaded, 1);
+        assert_eq!(qstatus, "completed");
+        let (uploaded, video_id): (bool, Option<String>) = sqlx::query_as(
+            "SELECT uploaded_tiktok, tiktok_video_id FROM twitch_clips_social_media WHERE id = $1",
+        )
+        .bind(clip)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert!(uploaded);
         assert_eq!(video_id.as_deref(), Some("old_vid"));
     }
 }

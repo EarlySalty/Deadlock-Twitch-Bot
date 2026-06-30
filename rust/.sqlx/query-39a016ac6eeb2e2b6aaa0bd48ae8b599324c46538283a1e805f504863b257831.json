@@ -1,0 +1,30 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT to_jsonb(c)::text AS clip, COALESCE((SELECT COUNT(*) FROM twitch_clips_upload_queue q WHERE q.clip_id = c.id AND q.status = 'pending'), 0) AS \"pending_uploads!\" FROM twitch_clips_social_media c WHERE ($1::text IS NULL OR LOWER(c.streamer_login) = LOWER($1)) AND ($2::text IS NULL OR c.status = $2) ORDER BY c.created_at DESC LIMIT $3",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "clip",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 1,
+        "name": "pending_uploads!",
+        "type_info": "Int8"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Text",
+        "Text",
+        "Int8"
+      ]
+    },
+    "nullable": [
+      null,
+      null
+    ]
+  },
+  "hash": "39a016ac6eeb2e2b6aaa0bd48ae8b599324c46538283a1e805f504863b257831"
+}

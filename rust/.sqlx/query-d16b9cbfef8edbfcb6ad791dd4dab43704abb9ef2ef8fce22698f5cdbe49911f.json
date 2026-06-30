@@ -1,0 +1,14 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "DELETE FROM deadlock_vocab WHERE term = $1",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Text"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "d16b9cbfef8edbfcb6ad791dd4dab43704abb9ef2ef8fce22698f5cdbe49911f"
+}

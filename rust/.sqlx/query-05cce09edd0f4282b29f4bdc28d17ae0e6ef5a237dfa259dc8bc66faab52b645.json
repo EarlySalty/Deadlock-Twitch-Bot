@@ -1,0 +1,18 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "UPDATE clip_templates_streamer SET description_template = $1, hashtags = $2, is_default = $3, updated_at = $4::text::timestamptz WHERE id = $5",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Text",
+        "Text",
+        "Bool",
+        "Text",
+        "Int8"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "05cce09edd0f4282b29f4bdc28d17ae0e6ef5a237dfa259dc8bc66faab52b645"
+}

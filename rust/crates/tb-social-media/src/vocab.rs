@@ -74,7 +74,11 @@ fn validate_category(category: &str) -> Result<String, VocabError> {
 fn validate_source(source: &str) -> Result<String, VocabError> {
     let v = {
         let t = source.trim().to_lowercase();
-        if t.is_empty() { "manual".to_string() } else { t }
+        if t.is_empty() {
+            "manual".to_string()
+        } else {
+            t
+        }
     };
     if ALLOWED_SOURCES.contains(&v.as_str()) {
         Ok(v)
@@ -101,7 +105,15 @@ fn decode_aliases(raw: Option<&str>) -> Vec<String> {
     }
 }
 
-type Row = (String, String, String, String, Option<String>, i32, Option<String>);
+type Row = (
+    String,
+    String,
+    String,
+    String,
+    Option<String>,
+    i32,
+    Option<String>,
+);
 
 fn row_to_entry(r: Row) -> VocabEntry {
     VocabEntry {
@@ -131,25 +143,48 @@ pub async fn list_vocab(
     let like = query.map(|q| format!("%{}%", q.to_lowercase()));
 
     let total: i64 = {
-        let mut qb = sqlx::QueryBuilder::<sqlx::Postgres>::new("SELECT COUNT(*) FROM deadlock_vocab WHERE 1=1");
+        let mut qb = sqlx::QueryBuilder::<sqlx::Postgres>::new(
+            "SELECT COUNT(*) FROM deadlock_vocab WHERE 1=1",
+        );
         if let Some(cat) = category {
-            qb.push(" AND LOWER(category) = LOWER(").push_bind(cat).push(")");
+            qb.push(" AND LOWER(category) = LOWER(")
+                .push_bind(cat)
+                .push(")");
         }
         if let Some(l) = &like {
-            qb.push(" AND (LOWER(term) LIKE ").push_bind(l).push(" OR LOWER(canonical) LIKE ").push_bind(l).push(")");
+            qb.push(" AND (LOWER(term) LIKE ")
+                .push_bind(l)
+                .push(" OR LOWER(canonical) LIKE ")
+                .push_bind(l)
+                .push(")");
         }
         qb.build_query_scalar().fetch_one(pool).await.unwrap_or(0)
     };
 
-    let mut qb = sqlx::QueryBuilder::<sqlx::Postgres>::new(&format!("SELECT {SELECT_COLS} FROM deadlock_vocab WHERE 1=1"));
+    let mut qb = sqlx::QueryBuilder::<sqlx::Postgres>::new(&format!(
+        "SELECT {SELECT_COLS} FROM deadlock_vocab WHERE 1=1"
+    ));
     if let Some(cat) = category {
-        qb.push(" AND LOWER(category) = LOWER(").push_bind(cat).push(")");
+        qb.push(" AND LOWER(category) = LOWER(")
+            .push_bind(cat)
+            .push(")");
     }
     if let Some(l) = &like {
-        qb.push(" AND (LOWER(term) LIKE ").push_bind(l).push(" OR LOWER(canonical) LIKE ").push_bind(l).push(")");
+        qb.push(" AND (LOWER(term) LIKE ")
+            .push_bind(l)
+            .push(" OR LOWER(canonical) LIKE ")
+            .push_bind(l)
+            .push(")");
     }
-    qb.push(" ORDER BY weight DESC, canonical ASC LIMIT ").push_bind(limit).push(" OFFSET ").push_bind(offset);
-    let rows: Vec<Row> = qb.build_query_as().fetch_all(pool).await.unwrap_or_default();
+    qb.push(" ORDER BY weight DESC, canonical ASC LIMIT ")
+        .push_bind(limit)
+        .push(" OFFSET ")
+        .push_bind(offset);
+    let rows: Vec<Row> = qb
+        .build_query_as()
+        .fetch_all(pool)
+        .await
+        .unwrap_or_default();
     (rows.into_iter().map(row_to_entry).collect(), total)
 }
 
@@ -189,39 +224,51 @@ pub async fn upsert_vocab_entry(
     let weight_value = weight.max(1);
     let aliases_json = serde_json::to_string(&alias_list).unwrap_or_else(|_| "[]".to_string());
 
-    sqlx::query(
+    sqlx::query!(
         "INSERT INTO deadlock_vocab (term, canonical, category, source, aliases, weight, updated_at) \
-         VALUES ($1, $2, $3, $4, $5::jsonb, $6, CURRENT_TIMESTAMP) \
+         VALUES ($1, $2, $3, $4, $5::text::jsonb, $6, CURRENT_TIMESTAMP) \
          ON CONFLICT (term) DO UPDATE SET \
              canonical = EXCLUDED.canonical, category = EXCLUDED.category, \
              source = EXCLUDED.source, aliases = EXCLUDED.aliases, \
              weight = EXCLUDED.weight, updated_at = CURRENT_TIMESTAMP",
+        &normalized_term,
+        &canonical_value,
+        &cat,
+        &src,
+        &aliases_json,
+        weight_value
     )
-    .bind(&normalized_term)
-    .bind(&canonical_value)
-    .bind(&cat)
-    .bind(&src)
-    .bind(&aliases_json)
-    .bind(weight_value)
     .execute(pool)
     .await?;
 
-    Ok(get_vocab_entry(pool, &normalized_term).await.unwrap_or(VocabEntry {
-        term: normalized_term,
-        canonical: canonical_value,
-        category: cat,
-        source: src,
-        aliases: alias_list,
-        weight: weight_value,
-        updated_at: None,
-    }))
+    Ok(get_vocab_entry(pool, &normalized_term)
+        .await
+        .unwrap_or(VocabEntry {
+            term: normalized_term,
+            canonical: canonical_value,
+            category: cat,
+            source: src,
+            aliases: alias_list,
+            weight: weight_value,
+            updated_at: None,
+        }))
 }
 
 /// Bulk-Upsert → (geschrieben, übersprungen).
 pub async fn bulk_upsert_vocab_entries(pool: &PgPool, entries: &[VocabEntry]) -> (usize, usize) {
     let (mut written, mut skipped) = (0, 0);
     for e in entries {
-        match upsert_vocab_entry(pool, &e.term, &e.canonical, &e.category, &e.source, &e.aliases, e.weight).await {
+        match upsert_vocab_entry(
+            pool,
+            &e.term,
+            &e.canonical,
+            &e.category,
+            &e.source,
+            &e.aliases,
+            e.weight,
+        )
+        .await
+        {
             Ok(_) => written += 1,
             Err(error) => {
                 tracing::warn!(term = %e.term, %error, "Vocab-Upsert fehlgeschlagen");
@@ -235,8 +282,7 @@ pub async fn bulk_upsert_vocab_entries(pool: &PgPool, entries: &[VocabEntry]) ->
 /// Löscht einen Eintrag; `true` wenn etwas gelöscht wurde.
 pub async fn delete_vocab_entry(pool: &PgPool, term: &str) -> Result<bool, VocabError> {
     let normalized = normalize_term(term)?;
-    let result = sqlx::query("DELETE FROM deadlock_vocab WHERE term = $1")
-        .bind(&normalized)
+    let result = sqlx::query!("DELETE FROM deadlock_vocab WHERE term = $1", &normalized)
         .execute(pool)
         .await?;
     Ok(result.rows_affected() > 0)
@@ -280,27 +326,49 @@ mod tests {
 
     async fn make_pool(schema: &str) -> Option<PgPool> {
         let dsn = std::env::var("TB_TEST_DATABASE_URL").ok()?;
-        let admin = PgPoolOptions::new().max_connections(1).connect(&dsn).await.unwrap();
-        sqlx::query(&format!("DROP SCHEMA IF EXISTS {schema} CASCADE")).execute(&admin).await.unwrap();
-        sqlx::query(&format!("CREATE SCHEMA {schema}")).execute(&admin).await.unwrap();
+        let admin = PgPoolOptions::new()
+            .max_connections(1)
+            .connect(&dsn)
+            .await
+            .unwrap();
+        sqlx::query(&format!("DROP SCHEMA IF EXISTS {schema} CASCADE"))
+            .execute(&admin)
+            .await
+            .unwrap();
+        sqlx::query(&format!("CREATE SCHEMA {schema}"))
+            .execute(&admin)
+            .await
+            .unwrap();
         admin.close().await;
-        let opts = PgConnectOptions::from_str(&dsn).unwrap().options([("search_path", schema)]);
-        let pool = PgPoolOptions::new().max_connections(2).connect_with(opts).await.unwrap();
+        let opts = PgConnectOptions::from_str(&dsn)
+            .unwrap()
+            .options([("search_path", schema)]);
+        let pool = PgPoolOptions::new()
+            .max_connections(2)
+            .connect_with(opts)
+            .await
+            .unwrap();
         sqlx::query(
             "CREATE TABLE deadlock_vocab (term TEXT PRIMARY KEY, canonical TEXT NOT NULL, \
              category TEXT NOT NULL, source TEXT NOT NULL DEFAULT 'manual', \
              aliases JSONB NOT NULL DEFAULT '[]'::JSONB, weight INTEGER NOT NULL DEFAULT 1, \
              updated_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP)",
         )
-        .execute(&pool).await.unwrap();
+        .execute(&pool)
+        .await
+        .unwrap();
         Some(pool)
     }
 
     #[tokio::test]
     async fn crud_roundtrip() {
-        let Some(pool) = make_pool("t_sm_vocab").await else { return };
+        let Some(pool) = make_pool("t_sm_vocab").await else {
+            return;
+        };
         // Upsert + get.
-        let e = upsert_vocab_entry(&pool, "Haze", "Haze", "hero", "manual", &["Häze".into()], 5).await.unwrap();
+        let e = upsert_vocab_entry(&pool, "Haze", "Haze", "hero", "manual", &["Häze".into()], 5)
+            .await
+            .unwrap();
         assert_eq!(e.term, "haze");
         assert_eq!(e.weight, 5);
         assert_eq!(e.aliases, vec!["Häze".to_string()]);
@@ -309,11 +377,26 @@ mod tests {
         assert_eq!(got.aliases, vec!["Häze".to_string()]);
 
         // Upsert überschreibt.
-        upsert_vocab_entry(&pool, "haze", "Haze (Hero)", "hero", "deadlock_api", &[], 9).await.unwrap();
-        assert_eq!(get_vocab_entry(&pool, "haze").await.unwrap().canonical, "Haze (Hero)");
+        upsert_vocab_entry(&pool, "haze", "Haze (Hero)", "hero", "deadlock_api", &[], 9)
+            .await
+            .unwrap();
+        assert_eq!(
+            get_vocab_entry(&pool, "haze").await.unwrap().canonical,
+            "Haze (Hero)"
+        );
 
         // Zweiter Eintrag + list/filter.
-        upsert_vocab_entry(&pool, "trophy", "Trophy Collector", "item", "manual", &[], 3).await.unwrap();
+        upsert_vocab_entry(
+            &pool,
+            "trophy",
+            "Trophy Collector",
+            "item",
+            "manual",
+            &[],
+            3,
+        )
+        .await
+        .unwrap();
         let (all, total) = list_vocab(&pool, None, None, 200, 0).await;
         assert_eq!(total, 2);
         assert_eq!(all.len(), 2);
@@ -325,7 +408,11 @@ mod tests {
         assert_eq!(search.len(), 1);
 
         // Ungültige Kategorie → Fehler, kein Insert.
-        assert!(upsert_vocab_entry(&pool, "x", "X", "blah", "manual", &[], 1).await.is_err());
+        assert!(
+            upsert_vocab_entry(&pool, "x", "X", "blah", "manual", &[], 1)
+                .await
+                .is_err()
+        );
 
         // Delete.
         assert!(delete_vocab_entry(&pool, "trophy").await.unwrap());

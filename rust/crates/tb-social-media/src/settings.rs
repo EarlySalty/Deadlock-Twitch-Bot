@@ -28,14 +28,15 @@ pub async fn get_setting(pool: &PgPool, key: &str) -> Option<Value> {
     if key.is_empty() {
         return None;
     }
-    let row: Option<(Option<String>,)> =
-        sqlx::query_as("SELECT value::text FROM social_media_settings WHERE key = $1")
-            .bind(key)
-            .fetch_optional(pool)
-            .await
-            .ok()
-            .flatten();
-    let text = row.and_then(|(t,)| t)?;
+    let text = sqlx::query_scalar!(
+        "SELECT value::text AS \"value?\" FROM social_media_settings WHERE key = $1",
+        key
+    )
+    .fetch_optional(pool)
+    .await
+    .ok()
+    .flatten()
+    .flatten()?;
     serde_json::from_str(&text).ok()
 }
 
@@ -48,17 +49,17 @@ pub async fn set_setting(
 ) -> Result<(), sqlx::Error> {
     let payload = value.to_string();
     let updated_by = updated_by.map(str::trim).filter(|s| !s.is_empty());
-    sqlx::query(
+    sqlx::query!(
         "INSERT INTO social_media_settings (key, value, updated_at, updated_by) \
-         VALUES ($1, $2::jsonb, CURRENT_TIMESTAMP, $3) \
+         VALUES ($1, $2::text::jsonb, CURRENT_TIMESTAMP, $3) \
          ON CONFLICT (key) DO UPDATE SET \
              value = EXCLUDED.value, \
              updated_at = CURRENT_TIMESTAMP, \
              updated_by = EXCLUDED.updated_by",
+        key,
+        payload,
+        updated_by
     )
-    .bind(key)
-    .bind(payload)
-    .bind(updated_by)
     .execute(pool)
     .await?;
     Ok(())
@@ -69,14 +70,21 @@ pub async fn set_setting(
 pub fn coerce_bool(value: &Value) -> bool {
     match value {
         Value::Bool(b) => *b,
-        Value::String(s) => matches!(s.trim().to_lowercase().as_str(), "true" | "1" | "yes" | "on"),
+        Value::String(s) => matches!(
+            s.trim().to_lowercase().as_str(),
+            "true" | "1" | "yes" | "on"
+        ),
         Value::Number(n) => n.as_f64().map(|f| f != 0.0).unwrap_or(false),
         _ => false,
     }
 }
 
 async fn get_bool(pool: &PgPool, key: &str) -> bool {
-    get_setting(pool, key).await.as_ref().map(coerce_bool).unwrap_or(false)
+    get_setting(pool, key)
+        .await
+        .as_ref()
+        .map(coerce_bool)
+        .unwrap_or(false)
 }
 
 /// `true`, wenn der Admin explizit `external_llm_consent=true` gesetzt hat.
@@ -99,9 +107,27 @@ pub async fn set_auto_approve_settings(
     values: AutoApprove,
     updated_by: Option<&str>,
 ) -> Result<AutoApprove, sqlx::Error> {
-    set_setting(pool, KEY_AUTO_APPROVE_YOUTUBE, &Value::Bool(values.youtube), updated_by).await?;
-    set_setting(pool, KEY_AUTO_APPROVE_TIKTOK, &Value::Bool(values.tiktok), updated_by).await?;
-    set_setting(pool, KEY_AUTO_APPROVE_INSTAGRAM, &Value::Bool(values.instagram), updated_by).await?;
+    set_setting(
+        pool,
+        KEY_AUTO_APPROVE_YOUTUBE,
+        &Value::Bool(values.youtube),
+        updated_by,
+    )
+    .await?;
+    set_setting(
+        pool,
+        KEY_AUTO_APPROVE_TIKTOK,
+        &Value::Bool(values.tiktok),
+        updated_by,
+    )
+    .await?;
+    set_setting(
+        pool,
+        KEY_AUTO_APPROVE_INSTAGRAM,
+        &Value::Bool(values.instagram),
+        updated_by,
+    )
+    .await?;
     Ok(values)
 }
 
@@ -128,12 +154,28 @@ mod tests {
 
     async fn make_pool(schema: &str) -> Option<PgPool> {
         let dsn = std::env::var("TB_TEST_DATABASE_URL").ok()?;
-        let admin = PgPoolOptions::new().max_connections(1).connect(&dsn).await.unwrap();
-        sqlx::query(&format!("DROP SCHEMA IF EXISTS {schema} CASCADE")).execute(&admin).await.unwrap();
-        sqlx::query(&format!("CREATE SCHEMA {schema}")).execute(&admin).await.unwrap();
+        let admin = PgPoolOptions::new()
+            .max_connections(1)
+            .connect(&dsn)
+            .await
+            .unwrap();
+        sqlx::query(&format!("DROP SCHEMA IF EXISTS {schema} CASCADE"))
+            .execute(&admin)
+            .await
+            .unwrap();
+        sqlx::query(&format!("CREATE SCHEMA {schema}"))
+            .execute(&admin)
+            .await
+            .unwrap();
         admin.close().await;
-        let opts = PgConnectOptions::from_str(&dsn).unwrap().options([("search_path", schema)]);
-        let pool = PgPoolOptions::new().max_connections(2).connect_with(opts).await.unwrap();
+        let opts = PgConnectOptions::from_str(&dsn)
+            .unwrap()
+            .options([("search_path", schema)]);
+        let pool = PgPoolOptions::new()
+            .max_connections(2)
+            .connect_with(opts)
+            .await
+            .unwrap();
         sqlx::query(
             "CREATE TABLE social_media_settings (key TEXT PRIMARY KEY, value JSONB, \
              updated_at TIMESTAMPTZ, updated_by TEXT)",
@@ -146,31 +188,60 @@ mod tests {
 
     #[tokio::test]
     async fn get_set_roundtrip_und_consent() {
-        let Some(pool) = make_pool("t_sm_settings").await else { return };
+        let Some(pool) = make_pool("t_sm_settings").await else {
+            return;
+        };
         // Fehlend → None / Default false.
         assert!(get_setting(&pool, "fehlt").await.is_none());
         assert!(!external_llm_consent(&pool).await);
 
         // Consent setzen (als JSON-bool) → external_llm_consent true.
-        set_setting(&pool, KEY_EXTERNAL_LLM_CONSENT, &json!(true), Some("admin")).await.unwrap();
+        set_setting(&pool, KEY_EXTERNAL_LLM_CONSENT, &json!(true), Some("admin"))
+            .await
+            .unwrap();
         assert!(external_llm_consent(&pool).await);
         // Roundtrip-Wert ist echtes JSON-bool.
-        assert_eq!(get_setting(&pool, KEY_EXTERNAL_LLM_CONSENT).await, Some(json!(true)));
+        assert_eq!(
+            get_setting(&pool, KEY_EXTERNAL_LLM_CONSENT).await,
+            Some(json!(true))
+        );
 
         // Upsert überschreibt + speichert komplexe JSON-Werte.
-        set_setting(&pool, "obj", &json!({"a": 1, "b": [2, 3]}), None).await.unwrap();
-        assert_eq!(get_setting(&pool, "obj").await, Some(json!({"a": 1, "b": [2, 3]})));
-        set_setting(&pool, KEY_EXTERNAL_LLM_CONSENT, &json!(false), None).await.unwrap();
+        set_setting(&pool, "obj", &json!({"a": 1, "b": [2, 3]}), None)
+            .await
+            .unwrap();
+        assert_eq!(
+            get_setting(&pool, "obj").await,
+            Some(json!({"a": 1, "b": [2, 3]}))
+        );
+        set_setting(&pool, KEY_EXTERNAL_LLM_CONSENT, &json!(false), None)
+            .await
+            .unwrap();
         assert!(!external_llm_consent(&pool).await);
     }
 
     #[tokio::test]
     async fn auto_approve_roundtrip() {
-        let Some(pool) = make_pool("t_sm_autoapprove").await else { return };
+        let Some(pool) = make_pool("t_sm_autoapprove").await else {
+            return;
+        };
         // Default alle false.
-        assert_eq!(get_auto_approve_settings(&pool).await, AutoApprove { youtube: false, tiktok: false, instagram: false });
-        let set = AutoApprove { youtube: true, tiktok: false, instagram: true };
-        set_auto_approve_settings(&pool, set, Some("admin")).await.unwrap();
+        assert_eq!(
+            get_auto_approve_settings(&pool).await,
+            AutoApprove {
+                youtube: false,
+                tiktok: false,
+                instagram: false
+            }
+        );
+        let set = AutoApprove {
+            youtube: true,
+            tiktok: false,
+            instagram: true,
+        };
+        set_auto_approve_settings(&pool, set, Some("admin"))
+            .await
+            .unwrap();
         assert_eq!(get_auto_approve_settings(&pool).await, set);
     }
 }

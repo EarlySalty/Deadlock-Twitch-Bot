@@ -1,0 +1,52 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT a.platform AS \"platform?\", COUNT(DISTINCT a.clip_id) AS \"clips_n!\", SUM(a.views) AS views, SUM(a.likes) AS likes, SUM(a.comments) AS comments, SUM(a.shares) AS shares FROM twitch_clips_social_analytics a JOIN twitch_clips_social_media c ON c.id = a.clip_id WHERE a.synced_at > NOW() - INTERVAL '30 days' AND ($1::text IS NULL OR c.streamer_login = $1) GROUP BY a.platform",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "platform?",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 1,
+        "name": "clips_n!",
+        "type_info": "Int8"
+      },
+      {
+        "ordinal": 2,
+        "name": "views",
+        "type_info": "Int8"
+      },
+      {
+        "ordinal": 3,
+        "name": "likes",
+        "type_info": "Int8"
+      },
+      {
+        "ordinal": 4,
+        "name": "comments",
+        "type_info": "Int8"
+      },
+      {
+        "ordinal": 5,
+        "name": "shares",
+        "type_info": "Int8"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Text"
+      ]
+    },
+    "nullable": [
+      false,
+      null,
+      null,
+      null,
+      null,
+      null
+    ]
+  },
+  "hash": "5457463a431f8c91a78f9d74d8d6771d984497a936051efcc33ce1c897ceab47"
+}

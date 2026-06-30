@@ -1,0 +1,40 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT COUNT(*) AS \"total!\", SUM(CASE WHEN uploaded_tiktok THEN 1 ELSE 0 END) AS tiktok_uploads, SUM(CASE WHEN uploaded_youtube THEN 1 ELSE 0 END) AS youtube_uploads, SUM(CASE WHEN uploaded_instagram THEN 1 ELSE 0 END) AS instagram_uploads FROM twitch_clips_social_media c WHERE ($1::text IS NULL OR c.streamer_login = $1)",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "total!",
+        "type_info": "Int8"
+      },
+      {
+        "ordinal": 1,
+        "name": "tiktok_uploads",
+        "type_info": "Int8"
+      },
+      {
+        "ordinal": 2,
+        "name": "youtube_uploads",
+        "type_info": "Int8"
+      },
+      {
+        "ordinal": 3,
+        "name": "instagram_uploads",
+        "type_info": "Int8"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Text"
+      ]
+    },
+    "nullable": [
+      null,
+      null,
+      null,
+      null
+    ]
+  },
+  "hash": "343776412304cae8c6bae7540f50acb2dab78314bd8d0d54caadc989698ad9ad"
+}

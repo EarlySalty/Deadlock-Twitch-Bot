@@ -1,0 +1,16 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "INSERT INTO clip_last_hashtags (streamer_login, hashtags, last_used_at) VALUES ($1, $2, $3::text::timestamptz) ON CONFLICT (streamer_login) DO UPDATE SET hashtags = EXCLUDED.hashtags, last_used_at = EXCLUDED.last_used_at",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Text",
+        "Text",
+        "Text"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "f8b0cfdfc55d8a84ead0c045ed5e27b3fa60f29f76a1373cafc4c7b7a5fc81eb"
+}
