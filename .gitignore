@@ -50,6 +50,7 @@ data/stream_coaching_audits/
 *.json
 # sqlx offline cache MUSS eingecheckt sein (Tier 3 compile-checked queries)
 !rust/.sqlx/*.json
+!rust/crates/tb-llm/.sqlx/*.json
 rust/bin/tb-bot/tb-bot
 
 # Added by ggshield

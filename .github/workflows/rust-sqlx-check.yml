@@ -29,6 +29,41 @@ jobs:
       - name: Build workspace from SQLx cache
         run: cd rust && SQLX_OFFLINE=true cargo build --workspace --locked
 
+  sqlite-ledger-gate:
+    name: "sqlite-ledger-gate"
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+
+      - name: Install Rust stable
+        run: |
+          rustup toolchain install stable --profile minimal
+          rustup default stable
+
+      - name: Install sqlx-cli
+        run: cargo install sqlx-cli --version 0.8.6 --locked --no-default-features --features sqlite
+
+      - name: Build SQLite prepare database
+        run: |
+          python3 - <<'PY'
+          import sqlite3
+          from pathlib import Path
+
+          db = Path("/tmp/tb-llm-sqlx.sqlite")
+          schema = Path("rust/crates/tb-llm/sqlx/schema.sql").read_text()
+          if db.exists():
+              db.unlink()
+          with sqlite3.connect(db) as conn:
+              conn.executescript(schema)
+          PY
+
+      - name: Check tb-llm SQLite SQLx cache
+        env:
+          DATABASE_URL: sqlite:///tmp/tb-llm-sqlx.sqlite
+          SQLX_OFFLINE: "false"
+        run: cd rust/crates/tb-llm && cargo sqlx prepare --check -- --tests
+
   schema-gate:
     name: "schema-gate"
     runs-on: ubuntu-latest
@@ -68,4 +103,4 @@ jobs:
       - name: Check SQLx offline cache
         env:
           SQLX_OFFLINE: "false"
-        run: cd rust && cargo sqlx prepare --workspace --check
+        run: cd rust && cargo sqlx prepare --workspace --check -- --exclude tb-llm

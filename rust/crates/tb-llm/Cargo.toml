@@ -16,7 +16,7 @@ tracing     = { workspace = true }
 # Eigene sqlx-Instanz mit SQLite-Feature: das geteilte Usage-Ledger ist eine
 # SQLite-WAL-Datei (cross-bot), NICHT das Postgres der übrigen Crates. sqlx-sqlite
 # ist über `rusqlite`/Workspace bereits im Lockfile aufgelöst — keine neue Version.
-sqlx = { version = "0.8", default-features = false, features = ["sqlite", "runtime-tokio"] }
+sqlx = { version = "0.8", default-features = false, features = ["sqlite", "runtime-tokio", "macros"] }
 
 [dev-dependencies]
 tokio    = { workspace = true, features = ["rt-multi-thread", "macros"] }

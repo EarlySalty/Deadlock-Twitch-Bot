@@ -40,25 +40,6 @@ const WINDOW_HOURS: i64 = 5;
 /// für die teurere `SUM`-Abfrage anfasst (siehe [`warn_if_over_budget`]).
 const BUDGET_CHECK_INTERVAL: Duration = Duration::from_secs(60);
 
-/// Schema — wortgleich zum Python-Helfer. `CREATE … IF NOT EXISTS` ist idempotent
-/// und läuft bei jedem Pool-Aufbau einmal mit.
-const SCHEMA: &str = "
-CREATE TABLE IF NOT EXISTS minimax_usage (
-    id         INTEGER PRIMARY KEY AUTOINCREMENT,
-    ts         TEXT    NOT NULL,
-    source     TEXT    NOT NULL,
-    purpose    TEXT,
-    model      TEXT,
-    tokens_in  INTEGER DEFAULT 0,
-    tokens_out INTEGER DEFAULT 0,
-    total      INTEGER DEFAULT 0,
-    success    INTEGER DEFAULT 1,
-    meta       TEXT
-);
-CREATE INDEX IF NOT EXISTS idx_mmu_ts     ON minimax_usage(ts);
-CREATE INDEX IF NOT EXISTS idx_mmu_source ON minimax_usage(source);
-";
-
 /// Lazy gebauter, prozessweit gecachter Pool auf das Ledger-SQLite.
 ///
 /// Der Pool wird beim ersten Zugriff einmal aufgebaut (Schema-Ensure inklusive)
@@ -115,8 +96,46 @@ async fn build_pool() -> sqlx::Result<SqlitePool> {
         .max_connections(2)
         .connect_with(options)
         .await?;
-    sqlx::raw_sql(SCHEMA).execute(&pool).await?;
+    ensure_schema(&pool).await?;
     Ok(pool)
+}
+
+/// Stellt das Python-kompatible Ledger-Schema sicher. Die Statements sind
+/// einzeln gehalten, damit sqlx sie gegen den separaten SQLite-Cache prüfen kann.
+async fn ensure_schema(pool: &SqlitePool) -> sqlx::Result<()> {
+    sqlx::query!(
+        r#"
+        CREATE TABLE IF NOT EXISTS minimax_usage (
+            id         INTEGER PRIMARY KEY AUTOINCREMENT,
+            ts         TEXT    NOT NULL,
+            source     TEXT    NOT NULL,
+            purpose    TEXT,
+            model      TEXT,
+            tokens_in  INTEGER DEFAULT 0,
+            tokens_out INTEGER DEFAULT 0,
+            total      INTEGER DEFAULT 0,
+            success    INTEGER DEFAULT 1,
+            meta       TEXT
+        )
+        "#
+    )
+    .execute(pool)
+    .await?;
+    sqlx::query!(
+        r#"
+        CREATE INDEX IF NOT EXISTS idx_mmu_ts ON minimax_usage(ts)
+        "#
+    )
+    .execute(pool)
+    .await?;
+    sqlx::query!(
+        r#"
+        CREATE INDEX IF NOT EXISTS idx_mmu_source ON minimax_usage(source)
+        "#
+    )
+    .execute(pool)
+    .await?;
+    Ok(())
 }
 
 /// Holt den gecachten Pool oder baut ihn beim ersten Mal. `None`, wenn der Aufbau
@@ -172,23 +191,36 @@ async fn record_with_pool(
     let to = tokens_out.max(0);
     let ts = Utc::now().to_rfc3339_opts(SecondsFormat::Secs, false);
     // Leere purpose/model als NULL ablegen — Parität mit `purpose or None`.
-    let purpose_opt = if purpose.trim().is_empty() { None } else { Some(purpose) };
-    let model_opt = if model.trim().is_empty() { None } else { Some(model) };
+    let purpose_opt = if purpose.trim().is_empty() {
+        None
+    } else {
+        Some(purpose)
+    };
+    let model_opt = if model.trim().is_empty() {
+        None
+    } else {
+        Some(model)
+    };
+    let total = ti + to;
+    let success_int = if success { 1_i64 } else { 0_i64 };
+    let meta: Option<&str> = None;
 
-    sqlx::query(
-        "INSERT INTO minimax_usage \
-         (ts, source, purpose, model, tokens_in, tokens_out, total, success, meta) \
-         VALUES (?,?,?,?,?,?,?,?,?)",
+    sqlx::query!(
+        r#"
+        INSERT INTO minimax_usage
+            (ts, source, purpose, model, tokens_in, tokens_out, total, success, meta)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+        "#,
+        ts,
+        source,
+        purpose_opt,
+        model_opt,
+        ti,
+        to,
+        total,
+        success_int,
+        meta
     )
-    .bind(ts)
-    .bind(source)
-    .bind(purpose_opt)
-    .bind(model_opt)
-    .bind(ti)
-    .bind(to)
-    .bind(ti + to)
-    .bind(if success { 1 } else { 0 })
-    .bind(Option::<String>::None) // meta bleibt frei (Pro-Bot-/Purpose-Granularität reicht).
     .execute(pool)
     .await?;
     Ok(())
@@ -215,12 +247,17 @@ pub async fn window_tokens(hours: i64) -> i64 {
 /// Kern-Abfrage des Fensters gegen einen expliziten Pool — von [`window_tokens`]
 /// (gecachter Pool) und den Tests (Temp-Pool) genutzt.
 async fn window_tokens_with_pool(pool: &SqlitePool, hours: i64) -> sqlx::Result<i64> {
-    let query = format!(
-        "SELECT COALESCE(SUM(total),0) FROM minimax_usage \
-         WHERE ts >= datetime('now', '-{} hours')",
-        hours.max(0)
-    );
-    sqlx::query_scalar::<_, i64>(&query).fetch_one(pool).await
+    let hours = hours.max(0);
+    sqlx::query_scalar!(
+        r#"
+        SELECT COALESCE(SUM(total), 0) AS "sum!: i64"
+        FROM minimax_usage
+        WHERE ts >= datetime('now', '-' || ? || ' hours')
+        "#,
+        hours
+    )
+    .fetch_one(pool)
+    .await
 }
 
 /// Misst den 5h-Verbrauch und **warnt** bei Budget-Überschreitung — KEIN Block,
@@ -273,7 +310,11 @@ mod tests {
     /// derselbe Schema-/PRAGMA-Aufbau wie [`build_pool`].
     async fn open_temp(name: &str) -> SqlitePool {
         let mut path = std::env::temp_dir();
-        path.push(format!("tb_llm_ledger_test_{}_{}.db", name, std::process::id()));
+        path.push(format!(
+            "tb_llm_ledger_test_{}_{}.db",
+            name,
+            std::process::id()
+        ));
         let _ = std::fs::remove_file(&path);
         let options = SqliteConnectOptions::new()
             .filename(&path)
@@ -284,7 +325,7 @@ mod tests {
             .connect_with(options)
             .await
             .expect("Temp-Ledger öffnen");
-        sqlx::raw_sql(SCHEMA).execute(&pool).await.expect("Schema");
+        ensure_schema(&pool).await.expect("Schema");
         pool
     }
 
@@ -295,41 +336,73 @@ mod tests {
             .await
             .expect("Insert");
 
-        let row: (String, String, Option<String>, Option<String>, i64, i64, i64, i64) =
-            sqlx::query_as(
-                "SELECT ts, source, purpose, model, tokens_in, tokens_out, total, success \
-                 FROM minimax_usage ORDER BY id DESC LIMIT 1",
-            )
-            .fetch_one(&pool)
-            .await
-            .expect("Zeile vorhanden");
+        let row = sqlx::query!(
+            r#"
+            SELECT
+                ts AS "ts!: String",
+                source AS "source!: String",
+                purpose AS "purpose?: String",
+                model AS "model?: String",
+                tokens_in AS "tokens_in!: i64",
+                tokens_out AS "tokens_out!: i64",
+                total AS "total!: i64",
+                success AS "success!: i64"
+            FROM minimax_usage
+            ORDER BY id DESC
+            LIMIT 1
+            "#
+        )
+        .fetch_one(&pool)
+        .await
+        .expect("Zeile vorhanden");
 
-        assert_eq!(row.1, "twitch-bot");
-        assert_eq!(row.2.as_deref(), Some("engagement"));
-        assert_eq!(row.3.as_deref(), Some("MiniMax-M3"));
-        assert_eq!(row.4, 120);
-        assert_eq!(row.5, 80);
-        assert_eq!(row.6, 200, "total = tokens_in + tokens_out");
-        assert_eq!(row.7, 1);
+        assert_eq!(row.source, "twitch-bot");
+        assert_eq!(row.purpose.as_deref(), Some("engagement"));
+        assert_eq!(row.model.as_deref(), Some("MiniMax-M3"));
+        assert_eq!(row.tokens_in, 120);
+        assert_eq!(row.tokens_out, 80);
+        assert_eq!(row.total, 200, "total = tokens_in + tokens_out");
+        assert_eq!(row.success, 1);
         // ts-Stil: ISO-8601 UTC mit +00:00 (Python-kompatibel).
-        assert!(row.0.ends_with("+00:00"), "ts endet auf +00:00: {}", row.0);
-        assert!(row.0.contains('T'));
+        assert!(
+            row.ts.ends_with("+00:00"),
+            "ts endet auf +00:00: {}",
+            row.ts
+        );
+        assert!(row.ts.contains('T'));
     }
 
     #[tokio::test]
     async fn schema_hat_exakt_die_python_spalten() {
         // Schema-Kompatibilität: identische Spaltennamen wie im Python-Helfer.
         let pool = open_temp("schema").await;
-        let cols: Vec<String> =
-            sqlx::query_scalar("SELECT name FROM pragma_table_info('minimax_usage')")
-                .fetch_all(&pool)
-                .await
-                .expect("table_info");
+        let cols_csv = sqlx::query_scalar!(
+            r#"
+            SELECT group_concat(name, ',') AS "cols!: String"
+            FROM (
+                SELECT name
+                FROM pragma_table_info('minimax_usage')
+                ORDER BY cid
+            )
+            "#
+        )
+        .fetch_one(&pool)
+        .await
+        .expect("table_info");
+        let cols: Vec<&str> = cols_csv.split(',').collect();
         assert_eq!(
             cols,
             vec![
-                "id", "ts", "source", "purpose", "model", "tokens_in", "tokens_out", "total",
-                "success", "meta"
+                "id",
+                "ts",
+                "source",
+                "purpose",
+                "model",
+                "tokens_in",
+                "tokens_out",
+                "total",
+                "success",
+                "meta"
             ]
         );
     }
@@ -341,15 +414,23 @@ mod tests {
             .await
             .expect("Insert");
 
-        let row: (Option<String>, Option<String>, i64) = sqlx::query_as(
-            "SELECT purpose, model, success FROM minimax_usage ORDER BY id DESC LIMIT 1",
+        let row = sqlx::query!(
+            r#"
+            SELECT
+                purpose AS "purpose?: String",
+                model AS "model?: String",
+                success AS "success!: i64"
+            FROM minimax_usage
+            ORDER BY id DESC
+            LIMIT 1
+            "#
         )
         .fetch_one(&pool)
         .await
         .expect("Zeile");
-        assert_eq!(row.0, None, "leere purpose → NULL");
-        assert_eq!(row.1, None, "leeres model → NULL");
-        assert_eq!(row.2, 0, "success=false → 0");
+        assert_eq!(row.purpose, None, "leere purpose → NULL");
+        assert_eq!(row.model, None, "leeres model → NULL");
+        assert_eq!(row.success, 0, "success=false → 0");
     }
 
     #[tokio::test]
@@ -358,12 +439,21 @@ mod tests {
         record_with_pool(&pool, SOURCE, "engagement", "MiniMax-M3", -5, -10, true)
             .await
             .expect("Insert");
-        let row: (i64, i64, i64) =
-            sqlx::query_as("SELECT tokens_in, tokens_out, total FROM minimax_usage ORDER BY id DESC LIMIT 1")
-                .fetch_one(&pool)
-                .await
-                .expect("Zeile");
-        assert_eq!(row, (0, 0, 0));
+        let row = sqlx::query!(
+            r#"
+            SELECT
+                tokens_in AS "tokens_in!: i64",
+                tokens_out AS "tokens_out!: i64",
+                total AS "total!: i64"
+            FROM minimax_usage
+            ORDER BY id DESC
+            LIMIT 1
+            "#
+        )
+        .fetch_one(&pool)
+        .await
+        .expect("Zeile");
+        assert_eq!((row.tokens_in, row.tokens_out, row.total), (0, 0, 0));
     }
 
     #[tokio::test]
@@ -371,25 +461,34 @@ mod tests {
         let pool = open_temp("window").await;
         // Aktuell (zählt): zweimal je 100 total.
         for _ in 0..2 {
-            sqlx::query(
-                "INSERT INTO minimax_usage (ts, source, total) \
-                 VALUES (datetime('now'), 'twitch-bot', 100)",
+            sqlx::query!(
+                r#"
+                INSERT INTO minimax_usage (ts, source, total)
+                VALUES (datetime('now'), 'twitch-bot', 100)
+                "#
             )
             .execute(&pool)
             .await
             .unwrap();
         }
         // Alt (>5h, zählt NICHT): 999 total vor 6 Stunden.
-        sqlx::query(
-            "INSERT INTO minimax_usage (ts, source, total) \
-             VALUES (datetime('now','-6 hours'), 'twitch-bot', 999)",
+        sqlx::query!(
+            r#"
+            INSERT INTO minimax_usage (ts, source, total)
+            VALUES (datetime('now', '-6 hours'), 'twitch-bot', 999)
+            "#
         )
         .execute(&pool)
         .await
         .unwrap();
 
-        let sum = window_tokens_with_pool(&pool, 5).await.expect("Fenster-Summe");
-        assert_eq!(sum, 200, "nur die zwei aktuellen 100er zählen, nicht die alten 999");
+        let sum = window_tokens_with_pool(&pool, 5)
+            .await
+            .expect("Fenster-Summe");
+        assert_eq!(
+            sum, 200,
+            "nur die zwei aktuellen 100er zählen, nicht die alten 999"
+        );
     }
 
     #[test]
@@ -413,6 +512,9 @@ mod tests {
         std::env::remove_var(ENV_DB_PATH);
         // Ohne Env endet der Default auf dem bekannten Pfad-Suffix.
         let p = resolve_path();
-        assert!(p.ends_with(".claude/minimax-usage/ledger.db"), "Default-Pfad: {p:?}");
+        assert!(
+            p.ends_with(".claude/minimax-usage/ledger.db"),
+            "Default-Pfad: {p:?}"
+        );
     }
 }

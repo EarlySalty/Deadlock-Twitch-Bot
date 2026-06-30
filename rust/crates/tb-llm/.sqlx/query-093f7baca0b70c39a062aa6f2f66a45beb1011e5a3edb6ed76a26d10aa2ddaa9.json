@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "\n        INSERT INTO minimax_usage\n            (ts, source, purpose, model, tokens_in, tokens_out, total, success, meta)\n        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)\n        ",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 9
+    },
+    "nullable": []
+  },
+  "hash": "093f7baca0b70c39a062aa6f2f66a45beb1011e5a3edb6ed76a26d10aa2ddaa9"
+}

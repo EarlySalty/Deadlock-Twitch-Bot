@@ -1,3 +1,11 @@
+## #318 — MiniMax-Ledger wird getrennt gegen SQLite geprüft
+
+**Ausgangslage:** Das gemeinsame MiniMax-Verbrauchsledger nutzt eine SQLite-Datei, während die übrige SQLx-Prüfung gegen Postgres läuft. Seine Abfragen waren noch reine Laufzeit-SQL und durften nicht in den Postgres-Prüflauf geraten.
+
+**Änderung:** Die Ledger-Abfragen werden jetzt beim Bauen gegen einen eigenen SQLite-Cache geprüft. Die CI baut dafür eine separate SQLite-Prüfdatenbank; der bestehende Postgres-Job lässt diese Spur bewusst aus.
+
+**Ergebnis:** Eine abweichende Ledger-Spalte fällt künftig beim Prüflauf auf, ohne den Postgres-Cache zu vermischen. Lokal bestätigt: Tests bleiben unverändert grün, Offline-Build funktioniert, und ein absichtlich kaputtes SQLite-Schema scheitert beim Prüfen.
+
 ## #317 — Siebte und letzte Welle: die Auswertungs-Engine wird beim Bauen geprüft
 
 **Ausgangslage:** Das Herzstück der Auswertung — Streamer- und Partner-Status, Affiliate- und Provisionsrechnung, Watch-Time, Raid-Historie, Post-Stream-Berichte, Stripe-Abgleich, Chat-Statistik — führte seine statischen Datenbank-Abfragen bisher als reine Textbausteine aus. Es ist der größte Brocken dieser Umstellung und der letzte.

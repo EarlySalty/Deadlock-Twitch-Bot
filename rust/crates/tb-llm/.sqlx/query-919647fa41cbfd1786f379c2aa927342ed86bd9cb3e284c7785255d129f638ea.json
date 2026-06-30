@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "\n        CREATE INDEX IF NOT EXISTS idx_mmu_ts ON minimax_usage(ts)\n        ",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 0
+    },
+    "nullable": []
+  },
+  "hash": "919647fa41cbfd1786f379c2aa927342ed86bd9cb3e284c7785255d129f638ea"
+}
