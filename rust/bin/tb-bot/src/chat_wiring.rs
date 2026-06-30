@@ -1339,8 +1339,9 @@ impl EventSubHooks for ChatHooks {
         self.inner.on_chat_message(event, message_id).await;
         match serde_json::from_value::<ChatMessageEvent>(event.clone()) {
             Ok(chat_event) => {
-                self.pipeline.handle(&chat_event).await;
-                self.spawn_engagement(&chat_event);
+                if self.pipeline.handle(&chat_event).await {
+                    self.spawn_engagement(&chat_event);
+                }
             }
             Err(e) => tracing::warn!("chat.message nicht deserialisierbar: {e}"),
         }
@@ -2193,7 +2194,11 @@ impl PartnerRoster for DbPartnerRoster {
 mod chat_notification_tests {
     use super::*;
     use serde_json::json;
+    use sqlx::postgres::{PgConnectOptions, PgPoolOptions};
+    use std::str::FromStr;
     use std::sync::Mutex;
+    use tb_chat::types::ChatMessageBody;
+    use tb_chat::{AutobanEntry, MentionResolver};
 
     struct FakeChatApi {
         send_message_outcome: Mutex<Result<SendOutcome, String>>,
@@ -2293,6 +2298,240 @@ mod chat_notification_tests {
         }
     }
 
+    struct NoopAccountAge;
+
+    #[async_trait::async_trait]
+    impl AccountAgePort for NoopAccountAge {
+        async fn user_created_at_days(&self, _user_id: &str, _login: &str) -> Option<i64> {
+            None
+        }
+    }
+
+    struct NoopMentionResolver;
+
+    #[async_trait::async_trait]
+    impl MentionResolver for NoopMentionResolver {
+        async fn is_known_chatter(&self, _channel_login: &str, _mention_login: &str) -> bool {
+            false
+        }
+
+        async fn resolve_existing(
+            &self,
+            _logins: &[&str],
+        ) -> (std::collections::HashSet<String>, bool) {
+            (std::collections::HashSet::new(), false)
+        }
+    }
+
+    struct NoopRaid;
+
+    #[async_trait::async_trait]
+    impl RaidCommandPort for NoopRaid {
+        async fn manual_raid(
+            &self,
+            _broadcaster_id: &str,
+            _broadcaster_login: &str,
+        ) -> Result<RaidStartResult, String> {
+            Ok(RaidStartResult {
+                status: "unavailable".to_string(),
+                target_login: None,
+            })
+        }
+
+        async fn raid_status(&self, _broadcaster_id: &str) -> Result<RaidStatusInfo, String> {
+            Ok(RaidStatusInfo {
+                raid_enabled: None,
+                authorized_at: None,
+                total_raids: 0,
+                successful_raids: 0,
+                last_raid_login: None,
+                last_raid_viewers: None,
+                last_raid_at: None,
+            })
+        }
+
+        async fn toggle_silent_ban(&self, _twitch_login: &str) -> Result<i32, String> {
+            Ok(0)
+        }
+
+        async fn toggle_silent_raid(&self, _twitch_login: &str) -> Result<i32, String> {
+            Ok(0)
+        }
+    }
+
+    struct NoopDiscordLink;
+
+    #[async_trait::async_trait]
+    impl DiscordLinkPort for NoopDiscordLink {
+        async fn discord_invite(&self, _channel_login: &str) -> Result<Option<String>, String> {
+            Ok(None)
+        }
+    }
+
+    struct NoopInvite;
+
+    #[async_trait::async_trait]
+    impl InvitePort for NoopInvite {
+        async fn invite_line(
+            &self,
+            _channel_login: &str,
+            _chatter_login: &str,
+        ) -> Result<Option<String>, String> {
+            Ok(None)
+        }
+    }
+
+    struct NoopSuperMod;
+
+    #[async_trait::async_trait]
+    impl SuperModPort for NoopSuperMod {
+        async fn is_super_mod(&self, _actor_id: &str) -> bool {
+            false
+        }
+    }
+
+    struct NoopAutoban;
+
+    #[async_trait::async_trait]
+    impl LastAutobanStore for NoopAutoban {
+        async fn last_autoban(&self, _channel_key: &str) -> Option<AutobanEntry> {
+            None
+        }
+    }
+
+    fn non_partner_chat_event() -> ChatMessageEvent {
+        ChatMessageEvent {
+            broadcaster_user_id: "broadcaster-id".to_string(),
+            broadcaster_user_login: "nonpartner".to_string(),
+            broadcaster_user_name: String::new(),
+            chatter_user_id: "chatter-id".to_string(),
+            chatter_user_login: "viewer".to_string(),
+            chatter_user_name: String::new(),
+            message_id: "msg-1".to_string(),
+            message: ChatMessageBody {
+                text: "hallo".to_string(),
+                fragments: vec![],
+            },
+            badges: vec![],
+            color: String::new(),
+            source_broadcaster_user_id: None,
+            source_broadcaster_user_login: None,
+            source_message_id: None,
+        }
+    }
+
+    fn pipeline_for_non_partner(api: Arc<FakeChatApi>, pool: PgPool) -> ChatPipeline {
+        let api_trait: Arc<dyn ChatApi> = api;
+        let http = reqwest::Client::new();
+        let moderation = Arc::new(ModerationEngine::new(Arc::clone(&api_trait), pool.clone()));
+        ChatPipeline::new(ChatPipelineParts {
+            bot_user_id: "bot-id".to_string(),
+            api: Arc::clone(&api_trait),
+            pool: pool.clone(),
+            classifier: Arc::new(ChannelClassifier::new(pool.clone())),
+            tracker: Arc::new(ChatterTracker::new(pool.clone())),
+            global_ban: Arc::new(GlobalChatterBanEnforcer::new(pool.clone())),
+            scam_pitch: Arc::new(ScamPitchDetector::new(
+                Arc::clone(&api_trait),
+                Arc::new(NoopAccountAge),
+                pool.clone(),
+            )),
+            conversation_scam: Arc::new(ConversationScamGuard::new(
+                pool.clone(),
+                "bot-id".to_string(),
+                Arc::new(MiniMaxScamJudge::new(EngagementMinimaxClient::new(
+                    None, None, None, None,
+                ))),
+                Arc::clone(&api_trait),
+                Arc::clone(&moderation),
+            )),
+            spam_filter: Arc::new(SpamFilter::new(Default::default())),
+            ai_reviewer: Arc::new(SpamAiReviewer::new(pool.clone(), http.clone())),
+            moderation,
+            sus_invite: Arc::new(SusInviteCheck::new(pool.clone())),
+            fun: Arc::new(FunResponses::new(Arc::clone(&api_trait), false)),
+            promos: Arc::new(PromoEngine::new(
+                pool.clone(),
+                Arc::clone(&api_trait),
+                Arc::new(tb_chat::NoopSuppressionCheck),
+            )),
+            commands: Arc::new(CommandEngine::new(
+                pool,
+                Arc::clone(&api_trait),
+                Arc::new(NoopRaid),
+                Arc::new(NoopDiscordLink),
+                Arc::new(NoopInvite),
+                Arc::new(NoopSuperMod),
+                Arc::new(NoopAutoban),
+            )),
+            mention_resolver: Arc::new(NoopMentionResolver),
+            review_log: Arc::new(ReviewLog::new(std::env::temp_dir())),
+            alerter: Arc::new(ModAlerter::with_endpoint(
+                http,
+                "http://127.0.0.1:1/changelog",
+            )),
+        })
+    }
+
+    async fn setup_non_partner_pipeline_pool(schema: &str) -> Option<PgPool> {
+        let dsn = std::env::var("TB_TEST_DATABASE_URL").ok()?;
+        let admin = PgPoolOptions::new()
+            .max_connections(1)
+            .connect(&dsn)
+            .await
+            .unwrap();
+        sqlx::query(&format!("DROP SCHEMA IF EXISTS {schema} CASCADE"))
+            .execute(&admin)
+            .await
+            .unwrap();
+        sqlx::query(&format!("CREATE SCHEMA {schema}"))
+            .execute(&admin)
+            .await
+            .unwrap();
+        admin.close().await;
+
+        let opts = PgConnectOptions::from_str(&dsn)
+            .unwrap()
+            .options([("search_path", schema)]);
+        let pool = PgPoolOptions::new()
+            .max_connections(4)
+            .connect_with(opts)
+            .await
+            .unwrap();
+        for ddl in [
+            "CREATE TABLE twitch_partners (twitch_user_id TEXT, twitch_login TEXT)",
+            "CREATE TABLE twitch_streamers (twitch_login TEXT, twitch_user_id TEXT)",
+            "CREATE TABLE twitch_streamers_partner_state (
+                twitch_login TEXT,
+                is_partner_active INTEGER DEFAULT 0
+            )",
+            "CREATE TABLE twitch_live_state (
+                streamer_login TEXT PRIMARY KEY,
+                is_live INTEGER DEFAULT 0,
+                last_game TEXT
+            )",
+            "CREATE TABLE twitch_stream_sessions (
+                id BIGINT PRIMARY KEY,
+                streamer_login TEXT,
+                started_at TIMESTAMPTZ DEFAULT now(),
+                ended_at TIMESTAMPTZ,
+                game_name TEXT
+            )",
+            "CREATE TABLE twitch_raw_chat_ingest_health (
+                streamer_login TEXT PRIMARY KEY,
+                last_raw_chat_message_at TEXT,
+                last_raw_chat_insert_ok_at TEXT,
+                last_raw_chat_insert_error_at TEXT,
+                last_raw_chat_error TEXT,
+                raw_chat_lag_seconds INTEGER,
+                updated_at TEXT
+            )",
+        ] {
+            sqlx::query(ddl).execute(&pool).await.unwrap();
+        }
+        Some(pool)
+    }
+
     #[test]
     fn chat_http_error_reason_enthaelt_gekuerztes_body_detail() {
         let body = format!(
@@ -2348,6 +2587,22 @@ mod chat_notification_tests {
             ChatActionResult::Failed {
                 reason: "helix http 403: {\"message\":\"missing scope\"}".to_string()
             }
+        );
+    }
+
+    #[tokio::test]
+    async fn non_partner_event_liefert_false_damit_engagement_nicht_startet() {
+        let Some(pool) = setup_non_partner_pipeline_pool("t_chat_wiring_nonpartner").await else {
+            eprintln!("SKIP: TB_TEST_DATABASE_URL nicht gesetzt");
+            return;
+        };
+        let api = Arc::new(FakeChatApi::new(Ok(SendOutcome::Sent)));
+        let pipeline = pipeline_for_non_partner(Arc::clone(&api), pool);
+
+        assert!(!pipeline.handle(&non_partner_chat_event()).await);
+        assert!(
+            api.sent_messages().is_empty(),
+            "Non-Partner-Pfad darf keine Chat-Aktion auslösen"
         );
     }
 

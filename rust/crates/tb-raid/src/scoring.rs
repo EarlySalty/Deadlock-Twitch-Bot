@@ -122,7 +122,7 @@ pub struct ScoreComponents {
 }
 
 /// Rundet auf die nächste ganze Zahl mit Banker's Rounding (ties-to-even),
-/// passend zu Python `round()`.
+/// passend zu Python `round()` ohne `ndigits`.
 #[inline]
 pub(crate) fn round_ties_to_even(value: f64) -> f64 {
     if !value.is_finite() {
@@ -145,7 +145,7 @@ pub(crate) fn round_ties_to_even(value: f64) -> f64 {
 /// `round(value, 6)` — identisch zu Pythons `_round_score` (Z. 207–208).
 #[inline]
 pub fn round_score(value: f64) -> f64 {
-    round_ties_to_even(value * 1_000_000.0) / 1_000_000.0
+    format!("{value:.6}").parse::<f64>().unwrap_or(value)
 }
 
 /// `max(minimum, min(maximum, value))` — identisch zu Pythons `_clamp` (Z. 185–186).
@@ -405,9 +405,9 @@ mod tests {
     #[test]
     fn round_score_nutzt_bankers_rounding_bei_halben_mikroeinheiten() {
         assert_eq!(round_score(0.1234565), 0.123456);
-        assert_eq!(round_score(0.1234575), 0.123458);
+        assert_eq!(round_score(0.1234575), 0.123457);
         assert_eq!(round_score(-0.1234565), -0.123456);
-        assert_eq!(round_score(-0.1234575), -0.123458);
+        assert_eq!(round_score(-0.1234575), -0.123457);
     }
 
     // ─── duration_score ──────────────────────────────────────────────────────

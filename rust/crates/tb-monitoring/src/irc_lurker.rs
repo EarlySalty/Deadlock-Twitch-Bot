@@ -88,17 +88,15 @@ fn is_irc_word(c: char) -> bool {
 // ---- DB-Layer --------------------------------------------------------------
 
 /// Aktive Session-ID eines live Kanals (`twitch_live_state`), sonst `None`.
-async fn resolve_active_session(pool: &PgPool, channel: &str) -> Option<i64> {
-    sqlx::query_scalar!(
+async fn resolve_active_session(pool: &PgPool, channel: &str) -> Result<Option<i64>, sqlx::Error> {
+    Ok(sqlx::query_scalar!(
         "SELECT active_session_id FROM twitch_live_state \
          WHERE LOWER(streamer_login) = $1 AND is_live = 1",
         channel,
     )
     .fetch_optional(pool)
-    .await
-    .ok()
-    .flatten()
-    .flatten()
+    .await?
+    .flatten())
 }
 
 const INSERT_CHATTER: &str = "INSERT INTO twitch_session_chatters \
@@ -113,8 +111,18 @@ pub async fn upsert_chatter_seen(pool: &PgPool, channel: &str, nick: &str, now: 
     if is_known_chat_bot(&nick) {
         return;
     }
-    let Some(session_id) = resolve_active_session(pool, channel).await else {
-        return;
+    let session_id = match resolve_active_session(pool, channel).await {
+        Ok(Some(session_id)) => session_id,
+        Ok(None) => return,
+        Err(error) => {
+            tracing::warn!(
+                %error,
+                channel,
+                nick = %nick,
+                "IRC-Lurker: aktive Session-Query fehlgeschlagen"
+            );
+            return;
+        }
     };
     // dyn: wiederverwendeter INSERT-Grundkörper mit variierendem ON-CONFLICT-Zweig.
     match sqlx::query(&format!(
@@ -150,18 +158,37 @@ pub async fn upsert_names_batch(
     nicks: &[String],
     now: DateTime<Utc>,
 ) -> (usize, usize) {
-    let Some(session_id) = resolve_active_session(pool, channel).await else {
-        return (0, 0);
+    let session_id = match resolve_active_session(pool, channel).await {
+        Ok(Some(session_id)) => session_id,
+        Ok(None) => return (0, 0),
+        Err(error) => {
+            tracing::warn!(
+                %error,
+                channel,
+                nick_count = nicks.len(),
+                "IRC-Lurker: aktive Session-Query fuer NAMES fehlgeschlagen"
+            );
+            return (0, 0);
+        }
     };
-    let existing: HashSet<String> = sqlx::query_scalar!(
+    let existing: HashSet<String> = match sqlx::query_scalar!(
         "SELECT chatter_login FROM twitch_session_chatters WHERE session_id = $1",
         session_id,
     )
     .fetch_all(pool)
     .await
-    .unwrap_or_default()
-    .into_iter()
-    .collect();
+    {
+        Ok(rows) => rows.into_iter().collect(),
+        Err(error) => {
+            tracing::warn!(
+                %error,
+                channel,
+                session_id,
+                "IRC-Lurker: NAMES-existing-SELECT fehlgeschlagen"
+            );
+            return (0, 0);
+        }
+    };
 
     let mut inserts = 0;
     let mut updates = 0;
@@ -795,5 +822,24 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(n, 0);
+    }
+
+    #[tokio::test]
+    async fn names_batch_bricht_bei_existing_select_fehler_ab() {
+        let Some(pool) = make_pool("t_irc_lurker_existing_error").await else {
+            return;
+        };
+        sqlx::query("INSERT INTO twitch_live_state (twitch_user_id, streamer_login, is_live, active_session_id) VALUES ('1', 'nani', 1, 42)")
+            .execute(&pool).await.unwrap();
+        sqlx::query("DROP TABLE twitch_session_chatters")
+            .execute(&pool)
+            .await
+            .unwrap();
+
+        let nicks = vec!["alice".to_string()];
+        assert_eq!(
+            upsert_names_batch(&pool, "nani", &nicks, Utc::now()).await,
+            (0, 0)
+        );
     }
 }

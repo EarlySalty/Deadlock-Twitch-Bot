@@ -75,10 +75,10 @@ pub async fn overview_metrics(
                 END)::BIGINT                                          AS follower_valid_count,
             COUNT(*)                                                  AS session_count
         FROM twitch_stream_sessions s
-        WHERE s.started_at >= $1::TIMESTAMPTZ
+        WHERE s.started_at >= $1::text::TIMESTAMPTZ
           AND s.ended_at IS NOT NULL
           AND ($2::TEXT IS NULL OR LOWER(s.streamer_login) = LOWER($2))
-          AND ($3::TEXT IS NULL OR s.started_at < $3::TIMESTAMPTZ)
+          AND ($3::TEXT IS NULL OR s.started_at < $3::text::TIMESTAMPTZ)
         "#,
     )
     .bind(since)
@@ -98,7 +98,7 @@ pub async fn overview_session_count(
         r#"
         SELECT COUNT(*)
         FROM twitch_stream_sessions s
-        WHERE s.started_at >= $1::TIMESTAMPTZ
+        WHERE s.started_at >= $1::text::TIMESTAMPTZ
           AND s.ended_at IS NOT NULL
           AND ($2::TEXT IS NULL OR LOWER(s.streamer_login) = LOWER($2))
         "#,
@@ -155,7 +155,7 @@ pub async fn overview_chatter_metrics(
         SELECT COUNT(DISTINCT COALESCE(NULLIF(sc.chatter_login, ''), sc.chatter_id))::BIGINT
         FROM twitch_session_chatters sc
         JOIN twitch_stream_sessions s ON s.id = sc.session_id
-        WHERE s.started_at >= $1::TIMESTAMPTZ
+        WHERE s.started_at >= $1::text::TIMESTAMPTZ
           AND s.ended_at IS NOT NULL
           AND ($2::TEXT IS NULL OR LOWER(s.streamer_login) = LOWER($2))
           AND sc.messages > 0
@@ -174,7 +174,7 @@ pub async fn overview_chatter_metrics(
         r#"
         SELECT COALESCE(SUM(s.unique_chatters), 0)::BIGINT
         FROM twitch_stream_sessions s
-        WHERE s.started_at >= $1::TIMESTAMPTZ
+        WHERE s.started_at >= $1::text::TIMESTAMPTZ
           AND s.ended_at IS NOT NULL
           AND ($2::TEXT IS NULL OR LOWER(s.streamer_login) = LOWER($2))
           AND NOT EXISTS (
@@ -193,7 +193,7 @@ pub async fn overview_chatter_metrics(
         SELECT COUNT(DISTINCT COALESCE(NULLIF(sc.chatter_login, ''), sc.chatter_id))::BIGINT
         FROM twitch_session_chatters sc
         JOIN twitch_stream_sessions s ON s.id = sc.session_id
-        WHERE s.started_at >= $1::TIMESTAMPTZ
+        WHERE s.started_at >= $1::text::TIMESTAMPTZ
           AND s.ended_at IS NOT NULL
           AND ($2::TEXT IS NULL OR LOWER(s.streamer_login) = LOWER($2))
           AND (sc.messages > 0 OR COALESCE(sc.seen_via_chatters_api, FALSE) IS TRUE)
@@ -248,7 +248,7 @@ pub async fn overview_network_stats(
         SELECT COUNT(*)::BIGINT, COALESCE(SUM(viewer_count), 0)::BIGINT
         FROM twitch_raid_history
         WHERE LOWER(from_broadcaster_login) = LOWER($1)
-          AND executed_at >= $2::TIMESTAMPTZ
+          AND executed_at >= $2::text::TIMESTAMPTZ
           AND COALESCE(success, FALSE) IS TRUE
         "#,
     )
@@ -262,7 +262,7 @@ pub async fn overview_network_stats(
         SELECT COUNT(*)::BIGINT
         FROM twitch_raid_history
         WHERE LOWER(to_broadcaster_login) = LOWER($1)
-          AND executed_at >= $2::TIMESTAMPTZ
+          AND executed_at >= $2::text::TIMESTAMPTZ
           AND COALESCE(success, FALSE) IS TRUE
         "#,
     )
@@ -304,7 +304,7 @@ pub async fn overview_monetization_counts(
         FROM twitch_subscription_events e
         LEFT JOIN twitch_stream_sessions s ON s.id = e.session_id
         LEFT JOIN twitch_live_state l ON l.twitch_user_id = e.twitch_user_id
-        WHERE e.received_at >= $1::TIMESTAMPTZ
+        WHERE e.received_at >= $1::text::TIMESTAMPTZ
           AND LOWER(COALESCE(s.streamer_login, l.streamer_login, '')) = LOWER($2)
         "#,
     )
@@ -321,7 +321,7 @@ pub async fn overview_monetization_counts(
         FROM twitch_bits_events e
         LEFT JOIN twitch_stream_sessions s ON s.id = e.session_id
         LEFT JOIN twitch_live_state l ON l.twitch_user_id = e.twitch_user_id
-        WHERE e.received_at >= $1::TIMESTAMPTZ
+        WHERE e.received_at >= $1::text::TIMESTAMPTZ
           AND LOWER(COALESCE(s.streamer_login, l.streamer_login, '')) = LOWER($2)
         "#,
     )
@@ -337,7 +337,7 @@ pub async fn overview_monetization_counts(
         SELECT COUNT(*)::BIGINT
         FROM twitch_hype_train_events h
         LEFT JOIN twitch_stream_sessions s ON s.id = h.session_id
-        WHERE h.started_at >= $1::TIMESTAMPTZ AND h.ended_at IS NOT NULL
+        WHERE h.started_at >= $1::text::TIMESTAMPTZ AND h.ended_at IS NOT NULL
           AND LOWER(COALESCE(s.streamer_login, '')) = LOWER($2)
         "#,
     )
@@ -373,7 +373,7 @@ pub async fn overview_chat_per_100(
                         THEN COALESCE(NULLIF(sc.chatter_login, ''), sc.chatter_id) END) AS unique_chatters
             FROM twitch_session_chatters sc
             JOIN twitch_stream_sessions s ON s.id = sc.session_id
-            WHERE s.started_at >= $1::TIMESTAMPTZ AND s.ended_at IS NOT NULL
+            WHERE s.started_at >= $1::text::TIMESTAMPTZ AND s.ended_at IS NOT NULL
               AND ($2::TEXT IS NULL OR LOWER(s.streamer_login) = LOWER($2))
               AND (sc.chatter_login IS NULL OR sc.chatter_login = ''
                    OR LOWER(sc.chatter_login) <> ALL($3))
@@ -383,7 +383,7 @@ pub async fn overview_chat_per_100(
             SELECT sc.session_id, 1 AS has_any_chatters
             FROM twitch_session_chatters sc
             JOIN twitch_stream_sessions s ON s.id = sc.session_id
-            WHERE s.started_at >= $1::TIMESTAMPTZ AND s.ended_at IS NOT NULL
+            WHERE s.started_at >= $1::text::TIMESTAMPTZ AND s.ended_at IS NOT NULL
               AND ($2::TEXT IS NULL OR LOWER(s.streamer_login) = LOWER($2))
             GROUP BY sc.session_id
         )
@@ -399,7 +399,7 @@ pub async fn overview_chat_per_100(
         FROM twitch_stream_sessions s
         LEFT JOIN fsc ON fsc.session_id = s.id
         LEFT JOIN scp ON scp.session_id = s.id
-        WHERE s.started_at >= $1::TIMESTAMPTZ AND s.ended_at IS NOT NULL
+        WHERE s.started_at >= $1::text::TIMESTAMPTZ AND s.ended_at IS NOT NULL
           AND ($2::TEXT IS NULL OR LOWER(s.streamer_login) = LOWER($2))
         "#,
     )
@@ -488,7 +488,7 @@ pub async fn overview_sessions(
                    s.dropoff_pct, s.unique_chatters, s.first_time_chatters, s.returning_chatters,
                    s.followers_start, s.followers_end, s.stream_title
             FROM twitch_stream_sessions s
-            WHERE s.started_at >= $1::TIMESTAMPTZ AND s.ended_at IS NOT NULL
+            WHERE s.started_at >= $1::text::TIMESTAMPTZ AND s.ended_at IS NOT NULL
               AND ($2::TEXT IS NULL OR LOWER(s.streamer_login) = LOWER($2))
             ORDER BY s.started_at DESC
             LIMIT $3
@@ -587,7 +587,7 @@ pub struct CategoryRank {
 }
 
 /// Liefert Perzentil/Rang aus `twitch_stats_category` (per-Streamer AVG der
-/// Viewer, ts_utc = TEXT-ISO). Ohne Streamer, leere Daten oder Streamer nicht
+/// Viewer, `ts_utc` als `TIMESTAMPTZ`). Ohne Streamer, leere Daten oder Streamer nicht
 /// in den Kategorie-Daten → `None`; Query-Fehler werden propagiert.
 pub async fn overview_category_rank(
     pool: &PgPool,
@@ -598,13 +598,11 @@ pub async fn overview_category_rank(
         return Ok(None);
     };
     let login = login.to_lowercase();
-    // ts_utc ist TEXT (ISO) → lexikografischer Vergleich gegen den ISO-`since`
-    // (wie Python).
     let rows: Vec<(String, f64)> = sqlx::query_as(
         r#"
         SELECT streamer, AVG(viewer_count)::FLOAT8 AS avg_vc
         FROM twitch_stats_category
-        WHERE ts_utc >= $1
+        WHERE ts_utc >= $1::text::TIMESTAMPTZ
         GROUP BY streamer
         ORDER BY avg_vc
         "#,
@@ -740,7 +738,7 @@ mod tests {
         sqlx::query(
             r#"
             CREATE TABLE twitch_stats_category (
-                ts_utc       TEXT,
+                ts_utc       TIMESTAMPTZ,
                 streamer     TEXT,
                 viewer_count INTEGER
             )

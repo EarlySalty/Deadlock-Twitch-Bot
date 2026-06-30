@@ -313,9 +313,15 @@ impl PollEngine {
         }
 
         if tick_count % CLEANUP_EVERY_N_TICKS == 0 {
-            let closed = self.tracker.cleanup_orphans().await;
-            if closed > 0 {
-                tracing::info!(closed, "Orphaned Sessions bereinigt");
+            if tracked_streams_loaded {
+                let closed = self.tracker.cleanup_orphans().await;
+                if closed > 0 {
+                    tracing::info!(closed, "Orphaned Sessions bereinigt");
+                }
+            } else {
+                tracing::debug!(
+                    "Poll-Tick: Orphaned-Session-Cleanup nach tracked Stream-Abruffehler übersprungen"
+                );
             }
             // Guard-GC läuft hier statt (wie Python) bei jedem Claim.
             match self.guard.sweep_expired(epoch_now()).await {
@@ -325,9 +331,14 @@ impl PollEngine {
             }
         }
 
-        self.sweep_stale_live_if_due().await;
-
-        self.auto_archive_inactive().await;
+        if tracked_streams_loaded {
+            self.sweep_stale_live_if_due().await;
+            self.auto_archive_inactive().await;
+        } else {
+            tracing::debug!(
+                "Poll-Tick: Offline-schreibende Wartung nach tracked Stream-Abruffehler übersprungen"
+            );
+        }
 
         self.hooks
             .after_tick(TickReport {
@@ -813,8 +824,9 @@ fn epoch_now() -> f64 {
 #[cfg(test)]
 mod tests {
     use std::sync::atomic::{AtomicU64, Ordering};
+    use std::str::FromStr;
 
-    use sqlx::postgres::PgPoolOptions;
+    use sqlx::postgres::{PgConnectOptions, PgPoolOptions};
 
     use super::*;
     use crate::exp_sessions::{ExpSessionStore, ExpSessionTracker};
@@ -859,6 +871,35 @@ mod tests {
         }
     }
 
+    struct FailingTrackedSource;
+
+    #[async_trait::async_trait]
+    impl StreamSource for FailingTrackedSource {
+        async fn streams_by_logins(
+            &self,
+            _logins: &[String],
+            _language: Option<&str>,
+        ) -> Result<Vec<StreamSnapshot>, crate::poller::source::SourceError> {
+            Err(Box::new(std::io::Error::other("tracked streams failed")))
+        }
+
+        async fn streams_by_category(
+            &self,
+            _category_id: &str,
+            _language: Option<&str>,
+            _limit: usize,
+        ) -> Result<Vec<StreamSnapshot>, crate::poller::source::SourceError> {
+            Ok(Vec::new())
+        }
+
+        async fn category_id(
+            &self,
+            _game_name: &str,
+        ) -> Result<Option<String>, crate::poller::source::SourceError> {
+            Ok(None)
+        }
+    }
+
     /// Engine mit lazy-Pool (verbindet NIE, weil der Tick vor jedem DB-Zugriff
     /// abbricht) auf der gegebenen Quelle.
     fn engine_on(source: Arc<BlockableSource>) -> PollEngine {
@@ -867,6 +908,11 @@ mod tests {
         let pool = PgPoolOptions::new()
             .connect_lazy("postgres://invalid:invalid@127.0.0.1:1/none")
             .expect("lazy pool");
+        let source: Arc<dyn StreamSource> = source;
+        engine_with_pool(source, pool)
+    }
+
+    fn engine_with_pool(source: Arc<dyn StreamSource>, pool: sqlx::PgPool) -> PollEngine {
         let tracker = Arc::new(SessionTracker::new(
             SessionStore::new(pool.clone()),
             LiveStateStore::new(pool.clone()),
@@ -889,6 +935,73 @@ mod tests {
         )
     }
 
+    async fn make_pool(schema: &str) -> Option<sqlx::PgPool> {
+        let dsn = std::env::var("TB_TEST_DATABASE_URL").ok()?;
+        let admin = PgPoolOptions::new()
+            .max_connections(1)
+            .connect(&dsn)
+            .await
+            .unwrap();
+        sqlx::query(&format!("DROP SCHEMA IF EXISTS {schema} CASCADE"))
+            .execute(&admin)
+            .await
+            .unwrap();
+        sqlx::query(&format!("CREATE SCHEMA {schema}"))
+            .execute(&admin)
+            .await
+            .unwrap();
+        admin.close().await;
+        let opts = PgConnectOptions::from_str(&dsn)
+            .unwrap()
+            .options([("search_path", schema)]);
+        let pool = PgPoolOptions::new()
+            .max_connections(3)
+            .connect_with(opts)
+            .await
+            .unwrap();
+        sqlx::query(
+            "CREATE TABLE twitch_streamers_partner_state (
+                twitch_login TEXT NOT NULL,
+                twitch_user_id TEXT,
+                require_discord_link INTEGER DEFAULT 0,
+                archived_at TEXT,
+                is_partner_active INTEGER DEFAULT 0,
+                discord_user_id TEXT,
+                operational_state TEXT,
+                live_ping_role_id BIGINT,
+                live_ping_enabled INTEGER DEFAULT 1
+            )",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+        sqlx::query("CREATE TABLE twitch_streamers (twitch_login TEXT, twitch_user_id TEXT)")
+            .execute(&pool)
+            .await
+            .unwrap();
+        sqlx::query("CREATE TABLE twitch_streamer_identities (twitch_user_id TEXT, discord_user_id TEXT)")
+            .execute(&pool)
+            .await
+            .unwrap();
+        sqlx::query("CREATE TABLE twitch_partners (twitch_user_id TEXT, twitch_login TEXT)")
+            .execute(&pool)
+            .await
+            .unwrap();
+        sqlx::query(
+            "CREATE TABLE twitch_live_state (
+                twitch_user_id TEXT PRIMARY KEY,
+                streamer_login TEXT NOT NULL,
+                is_live INTEGER DEFAULT 0,
+                last_seen_at TEXT,
+                active_session_id BIGINT
+            )",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+        Some(pool)
+    }
+
     #[tokio::test]
     async fn auth_blocked_ueberspringt_tick_ohne_helix_oder_db() {
         let source = Arc::new(BlockableSource {
@@ -904,5 +1017,38 @@ mod tests {
             0,
             "bei Auth-Block darf kein Helix-Request laufen"
         );
+    }
+
+    #[tokio::test]
+    async fn tracked_stream_fehler_sweept_stale_live_state_nicht_offline() {
+        let Some(pool) = make_pool("t_poller_tracked_error_stale_live").await else {
+            return;
+        };
+        sqlx::query(
+            "INSERT INTO twitch_streamers_partner_state
+                (twitch_login, twitch_user_id, is_partner_active, operational_state)
+             VALUES ('nani', '1', 1, 'active')",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+        sqlx::query(
+            "INSERT INTO twitch_live_state
+                (twitch_user_id, streamer_login, is_live, last_seen_at, active_session_id)
+             VALUES ('1', 'nani', 1, '2000-01-01T00:00:00+00:00', 42)",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+
+        let engine = engine_with_pool(Arc::new(FailingTrackedSource), pool.clone());
+        engine.tick().await;
+
+        let is_live: i32 =
+            sqlx::query_scalar("SELECT is_live FROM twitch_live_state WHERE twitch_user_id = '1'")
+                .fetch_one(&pool)
+                .await
+                .unwrap();
+        assert_eq!(is_live, 1);
     }
 }
