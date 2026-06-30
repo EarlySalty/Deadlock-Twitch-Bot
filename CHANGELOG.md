@@ -1,3 +1,11 @@
+## #309 — Auto-Raids meiden jetzt zuverlässig gesperrte Kanäle
+
+**Ausgangslage:** Beim automatischen Raid am Stream-Ende wählte der Bot sein Ziel nur anhand einer einzigen Sperrliste. Kanäle, die über andere Wege gesperrt waren — global gebannte Accounts und kanalweite Hard-Bans — standen auf keiner der geprüften Listen und konnten trotzdem als Raid-Ziel landen. Beinahe wäre ein hart gesperrter Kanal angeraidet worden.
+
+**Änderung:** Die Zielauswahl prüft jetzt vor jedem Raid alle Sperrquellen gemeinsam: die klassische Raid-Sperrliste, global gebannte Accounts und aktive kanalweite Bans. Auch Sperren, die nur per Account-ID ohne hinterlegten Kanalnamen vorliegen, greifen jetzt. Lädt eine der Listen nicht, bricht der Raid sicher ab, statt ungefiltert weiterzulaufen.
+
+**Ergebnis:** Ein gesperrter Kanal kann nicht mehr versehentlich angeraidet werden — egal über welchen Weg er gesperrt wurde. Die Auswahl überspringt ihn und nimmt das nächste erlaubte Ziel.
+
 ## #308 — Erste Welle: Partner-Abfrage des Clip-Sammlers beim Bauen geprüft
 
 **Ausgangslage:** Mit dem Prüf-Verfahren aus #307 als Fundament geht es jetzt Bereich für Bereich an die eigentliche Umstellung. Den Auftakt macht der kleinste Baustein: die Abfrage, mit der der Highlight-Clip-Sammler die aktiven Partner-Streamer aus der Datenbank holt.
