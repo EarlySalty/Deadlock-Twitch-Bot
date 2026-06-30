@@ -1126,7 +1126,9 @@ impl RaidOAuthPort for TbRaidOAuthImpl {
                     tb_analytics::trial::grant_trial_at_onboarding(&trial_pool, &uid, &login).await;
                 });
             }
-            (Some(setup), true) => {
+            (Some(setup), true)
+                if should_sync_existing_auth_followup(state_discord_user_id.as_deref()) =>
+            {
                 let setup = setup.clone();
                 let uid = twitch_user_id.clone();
                 let login = twitch_login.clone();
@@ -1143,6 +1145,7 @@ impl RaidOAuthPort for TbRaidOAuthImpl {
                     }
                 });
             }
+            (Some(_), true) => {}
             (None, false) => {
                 tracing::warn!(
                     login = %twitch_login,
@@ -1230,6 +1233,12 @@ impl TbRaidOAuthImpl {
         .await;
         matches!(row, Ok(Some(_)))
     }
+}
+
+fn should_sync_existing_auth_followup(state_discord_user_id: Option<&str>) -> bool {
+    state_discord_user_id
+        .map(str::trim)
+        .is_some_and(|discord_id| !discord_id.is_empty())
 }
 
 /// Minimales HTML-Escaping für Attribut- und Textwerte.
@@ -1366,6 +1375,15 @@ mod tests {
         assert_eq!(normalize_login_db("  "), None);
         assert_eq!(normalize_login_db("a"), None); // len < 2
         assert_eq!(normalize_login_db("ab"), Some("ab".to_string())); // len == 2 ok
+    }
+
+    #[test]
+    fn existing_auth_followup_nur_mit_discord_id() {
+        assert!(should_sync_existing_auth_followup(Some("123456")));
+        assert!(should_sync_existing_auth_followup(Some(" 123456 ")));
+        assert!(!should_sync_existing_auth_followup(None));
+        assert!(!should_sync_existing_auth_followup(Some("")));
+        assert!(!should_sync_existing_auth_followup(Some("   ")));
     }
 }
 

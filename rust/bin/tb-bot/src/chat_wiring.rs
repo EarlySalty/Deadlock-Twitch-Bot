@@ -241,6 +241,9 @@ use tb_internal_api::{ChatActionPort, ChatActionResult};
 const CHAT_ACTION_MODES: &[&str] = &["message", "action", "announcement"];
 /// Erlaubte Announcement-Farben (Python `_CHAT_ANNOUNCEMENT_COLORS`).
 const CHAT_ANNOUNCEMENT_COLORS: &[&str] = &["blue", "green", "orange", "purple", "primary"];
+const CHAT_HTTP_ERROR_BODY_SNIPPET_MAX_CHARS: usize = 240;
+const ANNOUNCEMENT_FALLBACK_SUCCESS_LABEL: &str =
+    "Announcement nicht möglich, als normale Chat-Nachricht gesendet";
 
 /// Bridge zwischen der internen API und dem nativen Chat-Send: sendet die
 /// Owner-Chat-Action über den live rotierten Bot-User-Token ([`ChatApi`], das
@@ -275,6 +278,88 @@ impl ChatActionAdapter {
             Ok(Some(id)) if !id.trim().is_empty() => Some(id),
             _ => None,
         }
+    }
+}
+
+fn chat_http_error_reason(status: u16, body: &str) -> String {
+    let body = body.trim();
+    if body.is_empty() {
+        return format!("helix http {status}");
+    }
+    let mut chars = body.chars();
+    let snippet: String = chars
+        .by_ref()
+        .take(CHAT_HTTP_ERROR_BODY_SNIPPET_MAX_CHARS)
+        .collect();
+    if chars.next().is_some() {
+        format!("helix http {status}: {snippet}...")
+    } else {
+        format!("helix http {status}: {snippet}")
+    }
+}
+
+fn chat_action_result_from_send_outcome(
+    login: &str,
+    mode: &str,
+    outcome: SendOutcome,
+    sent_label_override: Option<&str>,
+) -> ChatActionResult {
+    match outcome {
+        SendOutcome::Sent => {
+            let label = sent_label_override.map(str::to_string).unwrap_or_else(|| {
+                let label = if mode == "action" {
+                    "Action"
+                } else {
+                    "Nachricht"
+                };
+                format!("{label} an {login} gesendet")
+            });
+            ChatActionResult::Sent { label }
+        }
+        SendOutcome::Dropped { code, message } => ChatActionResult::Dropped { code, message },
+        SendOutcome::HttpError { status, body } => ChatActionResult::Failed {
+            reason: chat_http_error_reason(status, &body),
+        },
+    }
+}
+
+async fn send_chat_message_action(
+    api: &dyn ChatApi,
+    broadcaster_id: &str,
+    login: &str,
+    mode: &str,
+    send_text: &str,
+    sent_label_override: Option<&str>,
+) -> ChatActionResult {
+    match api.send_message(broadcaster_id, send_text).await {
+        Ok(outcome) => {
+            chat_action_result_from_send_outcome(login, mode, outcome, sent_label_override)
+        }
+        Err(reason) => ChatActionResult::Failed { reason },
+    }
+}
+
+async fn send_announcement_fallback(
+    api: &dyn ChatApi,
+    broadcaster_id: &str,
+    login: &str,
+    send_text: &str,
+    original_failure: &str,
+) -> ChatActionResult {
+    match send_chat_message_action(
+        api,
+        broadcaster_id,
+        login,
+        "message",
+        send_text,
+        Some(ANNOUNCEMENT_FALLBACK_SUCCESS_LABEL),
+    )
+    .await
+    {
+        ChatActionResult::Failed { reason } => ChatActionResult::Failed {
+            reason: format!("announcement failed: {original_failure}; fallback failed: {reason}"),
+        },
+        other => other,
     }
 }
 
@@ -319,31 +404,37 @@ impl ChatActionPort for ChatActionAdapter {
                 Ok(true) => ChatActionResult::Sent {
                     label: format!("Announcement an {login} gesendet"),
                 },
-                Ok(false) => ChatActionResult::Failed {
-                    reason: "announcement not accepted".to_string(),
-                },
-                Err(reason) => ChatActionResult::Failed { reason },
+                Ok(false) => {
+                    send_announcement_fallback(
+                        self.api.as_ref(),
+                        &broadcaster_id,
+                        login,
+                        &send_text,
+                        "announcement not accepted",
+                    )
+                    .await
+                }
+                Err(reason) => {
+                    send_announcement_fallback(
+                        self.api.as_ref(),
+                        &broadcaster_id,
+                        login,
+                        &send_text,
+                        &reason,
+                    )
+                    .await
+                }
             }
         } else {
-            match self.api.send_message(&broadcaster_id, &send_text).await {
-                Ok(SendOutcome::Sent) => {
-                    let label = if mode == "action" {
-                        "Action"
-                    } else {
-                        "Nachricht"
-                    };
-                    ChatActionResult::Sent {
-                        label: format!("{label} an {login} gesendet"),
-                    }
-                }
-                Ok(SendOutcome::Dropped { code, message }) => {
-                    ChatActionResult::Dropped { code, message }
-                }
-                Ok(SendOutcome::HttpError { status, .. }) => ChatActionResult::Failed {
-                    reason: format!("helix http {status}"),
-                },
-                Err(reason) => ChatActionResult::Failed { reason },
-            }
+            send_chat_message_action(
+                self.api.as_ref(),
+                &broadcaster_id,
+                login,
+                mode,
+                &send_text,
+                None,
+            )
+            .await
         }
     }
 }
@@ -2102,6 +2193,163 @@ impl PartnerRoster for DbPartnerRoster {
 mod chat_notification_tests {
     use super::*;
     use serde_json::json;
+    use std::sync::Mutex;
+
+    struct FakeChatApi {
+        send_message_outcome: Mutex<Result<SendOutcome, String>>,
+        sent_messages: Mutex<Vec<(String, String)>>,
+    }
+
+    impl FakeChatApi {
+        fn new(send_message_outcome: Result<SendOutcome, String>) -> Self {
+            Self {
+                send_message_outcome: Mutex::new(send_message_outcome),
+                sent_messages: Mutex::new(Vec::new()),
+            }
+        }
+
+        fn sent_messages(&self) -> Vec<(String, String)> {
+            self.sent_messages
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner())
+                .clone()
+        }
+    }
+
+    #[async_trait::async_trait]
+    impl ChatApi for FakeChatApi {
+        async fn send_message(
+            &self,
+            broadcaster_id: &str,
+            message: &str,
+        ) -> Result<SendOutcome, String> {
+            self.sent_messages
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner())
+                .push((broadcaster_id.to_string(), message.to_string()));
+            self.send_message_outcome
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner())
+                .clone()
+        }
+
+        async fn send_announcement(
+            &self,
+            _broadcaster_id: &str,
+            _message: &str,
+            _color: &str,
+        ) -> Result<bool, String> {
+            Ok(false)
+        }
+
+        async fn ban_user(
+            &self,
+            _broadcaster_id: &str,
+            _target_user_id: &str,
+            _reason: &str,
+        ) -> Result<tb_chat::BanOutcome, String> {
+            Ok(tb_chat::BanOutcome::Banned)
+        }
+
+        async fn timeout_user(
+            &self,
+            _broadcaster_id: &str,
+            _target_user_id: &str,
+            _duration_secs: u32,
+            _reason: &str,
+        ) -> Result<tb_chat::BanOutcome, String> {
+            Ok(tb_chat::BanOutcome::Banned)
+        }
+
+        async fn unban_user(
+            &self,
+            _broadcaster_id: &str,
+            _target_user_id: &str,
+        ) -> Result<bool, String> {
+            Ok(true)
+        }
+
+        async fn delete_message(
+            &self,
+            _broadcaster_id: &str,
+            _message_id: &str,
+        ) -> Result<bool, String> {
+            Ok(true)
+        }
+
+        async fn user_created_at(
+            &self,
+            _user_id: &str,
+        ) -> Result<Option<chrono::DateTime<chrono::Utc>>, String> {
+            Ok(None)
+        }
+
+        async fn resolve_user_id(&self, _login: &str) -> Result<Option<String>, String> {
+            Ok(None)
+        }
+
+        async fn bot_user_id(&self) -> String {
+            "bot".to_string()
+        }
+    }
+
+    #[test]
+    fn chat_http_error_reason_enthaelt_gekuerztes_body_detail() {
+        let body = format!(
+            "{}tail",
+            "x".repeat(CHAT_HTTP_ERROR_BODY_SNIPPET_MAX_CHARS + 20)
+        );
+        let reason = chat_http_error_reason(500, &body);
+
+        assert!(reason.starts_with("helix http 500: "));
+        assert!(reason.ends_with("..."));
+        assert!(reason.contains(&"x".repeat(CHAT_HTTP_ERROR_BODY_SNIPPET_MAX_CHARS)));
+        assert!(!reason.contains("tail"));
+    }
+
+    #[tokio::test]
+    async fn announcement_fallback_sendet_chat_mit_originaltext_und_placeholder_label() {
+        let api = FakeChatApi::new(Ok(SendOutcome::Sent));
+        let result = send_announcement_fallback(
+            &api,
+            "broadcaster_1",
+            "nani",
+            "Original Announcement",
+            "announcement not accepted",
+        )
+        .await;
+
+        assert_eq!(
+            result,
+            ChatActionResult::Sent {
+                label: ANNOUNCEMENT_FALLBACK_SUCCESS_LABEL.to_string()
+            }
+        );
+        assert_eq!(
+            api.sent_messages(),
+            vec![(
+                "broadcaster_1".to_string(),
+                "Original Announcement".to_string()
+            )]
+        );
+    }
+
+    #[tokio::test]
+    async fn send_message_http_error_uebernimmt_body_snippet() {
+        let api = FakeChatApi::new(Ok(SendOutcome::HttpError {
+            status: 403,
+            body: "{\"message\":\"missing scope\"}".to_string(),
+        }));
+        let result =
+            send_chat_message_action(&api, "broadcaster_1", "nani", "message", "Hi", None).await;
+
+        assert_eq!(
+            result,
+            ChatActionResult::Failed {
+                reason: "helix http 403: {\"message\":\"missing scope\"}".to_string()
+            }
+        );
+    }
 
     // P2.15: notice_type-Klasse → dedizierter EventSub-Typ (Python
     // _subscription_notice_eventsub_type). Steuert das should_capture-Gate.

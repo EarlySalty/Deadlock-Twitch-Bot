@@ -12,8 +12,8 @@
 //! - **Blacklist-Cleanup** — alle 3,5 h (Python `cleanup_old_entries`, >30 Tage).
 //!
 //! Discord-Reaktionen laufen ausschließlich über den Broker (der Twitch-Bot hat
-//! keinen Discord-Zugang); ohne erreichbaren Broker laufen DB-Cleanup und
-//! Bot-Ban-Restore weiter, Discord-lastige Sweeps bleiben aus.
+//! keinen Discord-Zugang); ohne erreichbaren Broker laufen Grace-Expiry,
+//! DB-Cleanup und Bot-Ban-Restore weiter, Discord-Benachrichtigungen bleiben aus.
 
 use std::sync::Arc;
 use std::time::Duration;
@@ -37,6 +37,19 @@ const ALERT_COLOR: i64 = 0xE7_4C_3C;
 /// Streamer-Guild/Rolle (gleiche Defaults wie [`crate::oauth_followups`] /
 /// `streamer_link`): Env `STREAMER_GUILD_ID`/`MAIN_GUILD_ID` und `STREAMER_ROLE_ID`.
 const DEFAULT_STREAMER_ROLE_ID: u64 = 1313624729466441769;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct TokenLifecycleSweepPolicy {
+    notify_pending_errors: bool,
+    check_grace_periods: bool,
+}
+
+fn token_lifecycle_sweep_policy(discord_enabled: bool) -> TokenLifecycleSweepPolicy {
+    TokenLifecycleSweepPolicy {
+        notify_pending_errors: discord_enabled,
+        check_grace_periods: true,
+    }
+}
 
 fn env_u64(name: &str) -> Option<u64> {
     std::env::var(name)
@@ -191,8 +204,8 @@ pub(crate) fn build_bot_ban_handler(
 }
 
 /// Spawnt die Token-Lifecycle-Scheduler. Wenn kein BrokerRelay konstruierbar
-/// ist, laufen DB-Cleanup und Bot-Ban-Restore weiter; Discord-lastige Sweeps
-/// bleiben aus.
+/// ist, laufen Grace-Expiry, DB-Cleanup und Bot-Ban-Restore weiter; nur
+/// Discord-Benachrichtigungen bleiben aus.
 pub fn spawn_token_lifecycle_schedulers(pool: PgPool, broker: &tb_config::BrokerConfig) {
     let (notifier, discord_enabled) = match BrokerRelay::new(broker) {
         Ok(relay) => (BrokerTokenLifecycleNotifier::from_env(relay), true),
@@ -220,13 +233,16 @@ fn spawn_token_lifecycle_tasks(
             tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
             loop {
                 tick.tick().await;
-                let (notified, expired) = if discord_enabled {
-                    (
-                        reactor.notify_pending_errors().await,
-                        reactor.check_grace_periods().await,
-                    )
+                let policy = token_lifecycle_sweep_policy(discord_enabled);
+                let notified = if policy.notify_pending_errors {
+                    reactor.notify_pending_errors().await
                 } else {
-                    (0, 0)
+                    0
+                };
+                let expired = if policy.check_grace_periods {
+                    reactor.check_grace_periods().await
+                } else {
+                    0
                 };
                 let restored = reactor.restore_ready_bot_banned_channels().await;
                 let reconciled = reactor.reconcile_healthy_raid_toggles().await;
@@ -258,4 +274,25 @@ fn spawn_token_lifecycle_tasks(
     tracing::info!(
         "Token-Lifecycle-Scheduler aktiv (Fehler-Reaktion + Grace + Bot-Ban-Restore stündlich, Cleanup 3,5 h)"
     );
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn broker_absent_deaktiviert_nur_discord_notify_nicht_grace_expiry() {
+        let policy = token_lifecycle_sweep_policy(false);
+
+        assert!(!policy.notify_pending_errors);
+        assert!(policy.check_grace_periods);
+    }
+
+    #[test]
+    fn broker_present_aktiviert_notify_und_grace_expiry() {
+        let policy = token_lifecycle_sweep_policy(true);
+
+        assert!(policy.notify_pending_errors);
+        assert!(policy.check_grace_periods);
+    }
 }

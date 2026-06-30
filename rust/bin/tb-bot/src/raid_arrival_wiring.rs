@@ -62,6 +62,20 @@ fn orphan_key(to_broadcaster_id: &str, from_broadcaster_login: &str) -> String {
     )
 }
 
+fn claim_stale_orphans(
+    map: &mut std::collections::HashMap<String, OrphanChatNotification>,
+) -> Vec<OrphanChatNotification> {
+    let stale_keys: Vec<String> = map
+        .iter()
+        .filter(|(_, orphan)| orphan.observed_at.elapsed().as_secs() >= ORPHAN_GRACE_SECS)
+        .map(|(key, _)| key.clone())
+        .collect();
+    stale_keys
+        .into_iter()
+        .filter_map(|key| map.remove(&key))
+        .collect()
+}
+
 /// Prozessweit eindeutige Flow-ID, wenn das Pending keine trägt (Python
 /// `_next_flow_id`). Da das Pending beim Confirm gepoppt wird, kann derselbe
 /// Raid nicht doppelt bestätigt werden — Zähler + Millis genügen.
@@ -340,14 +354,11 @@ impl RaidArrivalSinkImpl {
     /// periodisch aufgerufen.
     pub async fn promote_stale_orphans(&self) {
         let stale: Vec<OrphanChatNotification> = {
-            let map = self
+            let mut map = self
                 .orphans
                 .lock()
                 .unwrap_or_else(|poisoned| poisoned.into_inner());
-            map.values()
-                .filter(|o| o.observed_at.elapsed().as_secs() >= ORPHAN_GRACE_SECS)
-                .cloned()
-                .collect()
+            claim_stale_orphans(&mut map)
         };
 
         for orphan in stale {
@@ -361,21 +372,15 @@ impl RaidArrivalSinkImpl {
                 )
                 .await;
 
-            let drop_entry =
-                processed || orphan.observed_at.elapsed().as_secs() >= ORPHAN_RETENTION_SECS;
-            if drop_entry {
-                let key = orphan_key(&orphan.to_broadcaster_id, &orphan.from_broadcaster_login);
-                self.orphans
-                    .lock()
-                    .unwrap_or_else(|poisoned| poisoned.into_inner())
-                    .remove(&key);
-                if !processed {
-                    tracing::info!(
-                        from = %orphan.from_broadcaster_login,
-                        to = %orphan.to_broadcaster_login,
-                        "Verwaiste channel.chat.notification ohne Korrelation verworfen"
-                    );
-                }
+            if !processed {
+                let retention_expired =
+                    orphan.observed_at.elapsed().as_secs() >= ORPHAN_RETENTION_SECS;
+                tracing::info!(
+                    from = %orphan.from_broadcaster_login,
+                    to = %orphan.to_broadcaster_login,
+                    retention_expired,
+                    "Verwaiste channel.chat.notification ohne Korrelation verworfen"
+                );
             }
         }
     }
@@ -1444,6 +1449,46 @@ mod recruitment_stop_tests {
             .reason,
             Some("outbound_chat_suppressed")
         );
+    }
+}
+
+#[cfg(test)]
+mod orphan_claim_tests {
+    use super::*;
+    use std::collections::HashMap;
+    use std::time::{Duration, Instant};
+
+    fn orphan(observed_at: Instant, from_login: &str) -> OrphanChatNotification {
+        OrphanChatNotification {
+            to_broadcaster_id: "200".to_string(),
+            to_broadcaster_login: "dst".to_string(),
+            from_broadcaster_id: Some("100".to_string()),
+            from_broadcaster_login: from_login.to_string(),
+            viewer_count: 12,
+            message_id: Some("msg".to_string()),
+            event_timestamp: Some("2026-06-10T16:00:00Z".to_string()),
+            observed_at,
+        }
+    }
+
+    #[test]
+    fn stale_orphans_werden_unter_mutex_geclaimt_und_entfernt() {
+        let mut map = HashMap::new();
+        map.insert(
+            orphan_key("200", "src"),
+            orphan(
+                Instant::now() - Duration::from_secs(ORPHAN_GRACE_SECS + 1),
+                "src",
+            ),
+        );
+        map.insert(orphan_key("200", "fresh"), orphan(Instant::now(), "fresh"));
+
+        let claimed = claim_stale_orphans(&mut map);
+
+        assert_eq!(claimed.len(), 1);
+        assert_eq!(claimed[0].from_broadcaster_login, "src");
+        assert!(!map.contains_key(&orphan_key("200", "src")));
+        assert!(map.contains_key(&orphan_key("200", "fresh")));
     }
 }
 
