@@ -1,0 +1,14 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "DELETE FROM twitch_raid_blacklist WHERE lower(target_login) = $1",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Text"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "c683de42261c22f3582ecaccfe8f215c502a7ccaf3cb9a500221db4eec1e6127"
+}

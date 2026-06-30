@@ -1,0 +1,22 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT reason AS \"reason?\" FROM twitch_raid_blacklist WHERE LOWER(target_login) = LOWER($1) LIMIT 1",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "reason?",
+        "type_info": "Text"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Text"
+      ]
+    },
+    "nullable": [
+      true
+    ]
+  },
+  "hash": "29f8b715db079133f31576d3361ea0da02a4346d7f48d3c23bd35c684eb2b9f2"
+}

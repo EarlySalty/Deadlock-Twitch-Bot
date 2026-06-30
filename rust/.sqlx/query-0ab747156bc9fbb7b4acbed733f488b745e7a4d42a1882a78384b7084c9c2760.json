@@ -1,0 +1,16 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n            UPDATE twitch_partners\n               SET technical_pause_reason = NULL,\n                   raid_bot_enabled = CASE WHEN $1 THEN 1 ELSE raid_bot_enabled END\n             WHERE twitch_user_id = $2\n                OR LOWER(twitch_login) = LOWER($3)\n            ",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Bool",
+        "Text",
+        "Text"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "0ab747156bc9fbb7b4acbed733f488b745e7a4d42a1882a78384b7084c9c2760"
+}

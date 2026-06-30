@@ -1,0 +1,22 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT error_count AS \"error_count?\" FROM twitch_token_blacklist WHERE twitch_user_id = $1",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "error_count?",
+        "type_info": "Int4"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Text"
+      ]
+    },
+    "nullable": [
+      true
+    ]
+  },
+  "hash": "3cf3ef92689bb9a03b6814d5d9d62926fe3065e70a02cdee440985ff31bcd532"
+}

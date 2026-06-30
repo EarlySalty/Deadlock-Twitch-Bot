@@ -1,0 +1,18 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "INSERT INTO twitch_token_blacklist\n                        (twitch_user_id, twitch_login, error_message,\n                         first_error_at, last_error_at, grace_expires_at)\n                     VALUES ($1, $2, $3, $4, $4, $5)",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Text",
+        "Text",
+        "Text",
+        "Text",
+        "Text"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "a2dc4ab147deafbb7863d9e94af9861c839b2b3657ca8cf3fb54cecb77ad5e40"
+}

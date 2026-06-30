@@ -1,0 +1,32 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n            SELECT twitch_user_id AS \"twitch_user_id!\",\n                   twitch_login AS \"twitch_login!\",\n                   error_message AS \"error_message?\"\n            FROM twitch_token_blacklist\n            WHERE COALESCE(notified, 0) = 0\n            ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "twitch_user_id!",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 1,
+        "name": "twitch_login!",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 2,
+        "name": "error_message?",
+        "type_info": "Text"
+      }
+    ],
+    "parameters": {
+      "Left": []
+    },
+    "nullable": [
+      false,
+      false,
+      true
+    ]
+  },
+  "hash": "f308350b324a545681c525757c051fd250ee1a2d41f83310168a7ac49b456b0d"
+}

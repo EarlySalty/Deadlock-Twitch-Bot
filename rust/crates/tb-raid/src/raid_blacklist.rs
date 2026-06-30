@@ -30,16 +30,16 @@ impl RaidBlacklistStore {
     ) -> Result<bool, sqlx::Error> {
         let target_id = target_id.map(str::trim).filter(|s| !s.is_empty());
         let login = target_login.trim().to_lowercase();
-        let row: Option<i32> = sqlx::query_scalar(
+        let row: Option<i32> = sqlx::query_scalar!(
             r#"
-            SELECT 1 FROM twitch_raid_blacklist
+            SELECT 1 AS "found!" FROM twitch_raid_blacklist
             WHERE (target_id IS NOT NULL AND target_id = $1)
                OR lower(target_login) = $2
             LIMIT 1
             "#,
+            target_id,
+            &login
         )
-        .bind(target_id)
-        .bind(&login)
         .fetch_optional(&self.pool)
         .await?;
         Ok(row.is_some())
@@ -63,16 +63,16 @@ impl RaidBlacklistStore {
 
         let mut tx = self.pool.begin().await?;
         if let Some(tid) = target_id {
-            sqlx::query(
+            sqlx::query!(
                 "DELETE FROM twitch_raid_blacklist
                   WHERE target_id = $1 AND lower(target_login) <> $2",
+                tid,
+                &login
             )
-            .bind(tid)
-            .bind(&login)
             .execute(&mut *tx)
             .await?;
         }
-        sqlx::query(
+        sqlx::query!(
             r#"
             INSERT INTO twitch_raid_blacklist (target_id, target_login, reason, added_at)
             VALUES ($1, $2, $3, $4)
@@ -81,11 +81,11 @@ impl RaidBlacklistStore {
                 reason    = EXCLUDED.reason,
                 added_at  = EXCLUDED.added_at
             "#,
+            target_id,
+            &login,
+            reason,
+            &added_at
         )
-        .bind(target_id)
-        .bind(&login)
-        .bind(reason)
-        .bind(&added_at)
         .execute(&mut *tx)
         .await?;
         tx.commit().await?;
@@ -97,14 +97,14 @@ impl RaidBlacklistStore {
     /// globale Chatter-Bans.
     /// Logins lowercase, leere IDs/Logins ausgelassen.
     pub async fn load_all(&self) -> Result<(HashSet<String>, HashSet<String>), sqlx::Error> {
-        let rows: Vec<(Option<String>, String)> = sqlx::query_as(
+        let rows = sqlx::query!(
             r#"
-            SELECT target_id, target_login
+            SELECT target_id AS "target_id?", target_login AS "target_login!"
             FROM twitch_raid_blacklist
 
             UNION ALL
 
-            SELECT NULLIF(chatter_id, '') AS target_id, chatter_login AS target_login
+            SELECT NULLIF(chatter_id, '') AS "target_id?", chatter_login AS "target_login!"
             FROM twitch_chatter_global_ban
             "#,
         )
@@ -112,7 +112,9 @@ impl RaidBlacklistStore {
         .await?;
         let mut ids = HashSet::new();
         let mut logins = HashSet::new();
-        for (id, login) in rows {
+        for row in rows {
+            let id = row.target_id;
+            let login = row.target_login;
             if let Some(id) = id.map(|i| i.trim().to_string()).filter(|i| !i.is_empty()) {
                 ids.insert(id);
             }
@@ -127,11 +129,12 @@ impl RaidBlacklistStore {
     /// Entfernt ein Ziel per Login. Liefert `true` wenn etwas gelöscht wurde.
     pub async fn remove(&self, target_login: &str) -> Result<bool, sqlx::Error> {
         let login = target_login.trim().to_lowercase();
-        let result =
-            sqlx::query("DELETE FROM twitch_raid_blacklist WHERE lower(target_login) = $1")
-                .bind(&login)
-                .execute(&self.pool)
-                .await?;
+        let result = sqlx::query!(
+            "DELETE FROM twitch_raid_blacklist WHERE lower(target_login) = $1",
+            &login
+        )
+        .execute(&self.pool)
+        .await?;
         Ok(result.rows_affected() > 0)
     }
 }

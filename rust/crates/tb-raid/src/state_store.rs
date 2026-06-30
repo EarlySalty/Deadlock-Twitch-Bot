@@ -103,7 +103,7 @@ impl StateStore {
         now: DateTime<Utc>,
     ) -> Result<(), sqlx::Error> {
         let expires_at = now + Duration::seconds(STATE_TTL_SECONDS);
-        sqlx::query(
+        sqlx::query!(
             r#"
             INSERT INTO oauth_state_tokens
                 (state_token, platform, streamer_login, redirect_uri, pkce_verifier, expires_at)
@@ -115,13 +115,13 @@ impl StateStore {
                 pkce_verifier = EXCLUDED.pkce_verifier,
                 expires_at = EXCLUDED.expires_at
             "#,
+            state_token,
+            PLATFORM_RAID,
+            &state.requested_login,
+            &self.redirect_uri,
+            state.serialize_meta(),
+            expires_at
         )
-        .bind(state_token)
-        .bind(PLATFORM_RAID)
-        .bind(&state.requested_login)
-        .bind(&self.redirect_uri)
-        .bind(state.serialize_meta())
-        .bind(expires_at)
         .execute(&self.pool)
         .await?;
         Ok(())
@@ -134,20 +134,23 @@ impl StateStore {
         state_token: &str,
         now: DateTime<Utc>,
     ) -> Result<Option<RaidOAuthState>, sqlx::Error> {
-        let row: Option<(String, Option<String>)> = sqlx::query_as(
+        let row = sqlx::query!(
             r#"
-            SELECT streamer_login, pkce_verifier
+            SELECT COALESCE(streamer_login, '') AS "streamer_login!",
+                   pkce_verifier AS "pkce_verifier?"
             FROM oauth_state_tokens
             WHERE state_token = $1 AND platform = $2 AND expires_at > $3
             LIMIT 1
             "#,
+            state_token,
+            PLATFORM_RAID,
+            now
         )
-        .bind(state_token)
-        .bind(PLATFORM_RAID)
-        .bind(now)
         .fetch_optional(&self.pool)
         .await?;
-        Ok(row_to_state(row))
+        Ok(row_to_state(
+            row.map(|row| (row.streamer_login, row.pkce_verifier)),
+        ))
     }
 
     /// Verbraucht einen noch gültigen State atomar (DELETE … RETURNING).
@@ -156,30 +159,34 @@ impl StateStore {
         state_token: &str,
         now: DateTime<Utc>,
     ) -> Result<Option<RaidOAuthState>, sqlx::Error> {
-        let row: Option<(String, Option<String>)> = sqlx::query_as(
+        let row = sqlx::query!(
             r#"
             DELETE FROM oauth_state_tokens
             WHERE state_token = $1 AND platform = $2 AND expires_at > $3
-            RETURNING streamer_login, pkce_verifier
+            RETURNING COALESCE(streamer_login, '') AS "streamer_login!",
+                      pkce_verifier AS "pkce_verifier?"
             "#,
+            state_token,
+            PLATFORM_RAID,
+            now
         )
-        .bind(state_token)
-        .bind(PLATFORM_RAID)
-        .bind(now)
         .fetch_optional(&self.pool)
         .await?;
-        Ok(row_to_state(row))
+        Ok(row_to_state(
+            row.map(|row| (row.streamer_login, row.pkce_verifier)),
+        ))
     }
 
     /// Räumt abgelaufene raid-State-Tokens ab; liefert die Anzahl.
     /// Nur eigene Plattform — social-media-Einträge bleiben unangetastet.
     pub async fn cleanup_expired(&self, now: DateTime<Utc>) -> Result<u64, sqlx::Error> {
-        let result =
-            sqlx::query("DELETE FROM oauth_state_tokens WHERE platform = $1 AND expires_at <= $2")
-                .bind(PLATFORM_RAID)
-                .bind(now)
-                .execute(&self.pool)
-                .await?;
+        let result = sqlx::query!(
+            "DELETE FROM oauth_state_tokens WHERE platform = $1 AND expires_at <= $2",
+            PLATFORM_RAID,
+            now
+        )
+        .execute(&self.pool)
+        .await?;
         Ok(result.rows_affected())
     }
 }

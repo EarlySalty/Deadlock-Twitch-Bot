@@ -1,0 +1,22 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT raid_bot_enabled AS \"raid_bot_enabled?\" FROM twitch_partners\n              WHERE twitch_user_id = $1 AND status = 'active'\n              ORDER BY id DESC LIMIT 1",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "raid_bot_enabled?",
+        "type_info": "Int4"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Text"
+      ]
+    },
+    "nullable": [
+      true
+    ]
+  },
+  "hash": "8fa9f923b9b31986e29418838e2ad09240e457f37955ccbf3fb669e16274d0c4"
+}

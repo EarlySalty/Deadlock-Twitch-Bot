@@ -1,0 +1,14 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n            UPDATE twitch_raid_arrival_tracking\n            SET unraid_seen    = TRUE,\n                last_unraid_at = NOW(),\n                last_signal_at = NOW()\n            WHERE id = $1\n            ",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Int4"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "6c8b96dc1911b2115486e1923d9667d47db7dc0088138a75617e772e0f2a9fcd"
+}

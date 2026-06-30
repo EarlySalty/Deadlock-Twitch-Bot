@@ -1,5 +1,20 @@
 # Workflow
 
+## 2026-06-30 — Wave 4b Re-Konvert raid_blacklist + partner_score_refresh
+
+- Start: delegierter GPT-Implementierungsworker; Scope strikt auf `rust/crates/tb-raid/src/raid_blacklist.rs` und `rust/crates/tb-raid/src/partner_score_refresh.rs`. Keine Commits/Pushes, kein Build/Prepare/DB-Zugriff gemaess Auftrag.
+- Recon: 14 Runtime-Callsites gefunden: 5 in `raid_blacklist.rs`, 9 in `partner_score_refresh.rs`. `load_all()` ist aktuell die geforderte 2-Arm-UNION (`twitch_raid_blacklist` + `twitch_chatter_global_ban`); kein dritter Arm.
+- Implementiert: alle 14 Callsites auf `query!`, `query_as!` oder `query_scalar!` umgestellt. `twitch_live_state.last_started_at` wird als `NULLIF(last_started_at::text, '')::timestamptz AS "last_started_at?"` gelesen; `raid_blacklist::load_all` bleibt bei der 2-Arm-UNION.
+- Verifikation: `rustfmt --edition 2021` auf beiden Rust-Dateien erfolgreich; statische Suche findet keine Runtime-`sqlx::query*(`-Callsites und keine `.bind(...)`-Reste in den zwei Ziel-Dateien. Kein Build, kein Prepare, keine Tests gemaess Auftrag.
+
+## 2026-06-30 — sqlx Welle 4b tb-raid
+
+- Start: delegierter GPT-Implementierungsworker; Scope strikt auf `rust/crates/tb-raid` und die 107 CONVERTIBLE_PG-Callsites aus `rust/docs/sqlx-conversion-triage.md`. Keine Commits/Pushes, kein Build/Prepare/DB-Zugriff gemaess Auftrag.
+- Eingang gelesen: `WORKFLOW.md` und Triage-Abschnitt `tb-raid — 107`; DYNAMIC- und TEST_ONLY-Stellen bleiben ausgeschlossen.
+- Recon: gelistete Produktions-Callsites mit aktuellen `sqlx::query*`-Treffern abgeglichen; `token_store::load_inner` bleibt als DYNAMIC-Stelle unveraendert. Schema-Check: `twitch_stream_sessions.started_at` ist im frischen Snapshot `timestamptz`, `twitch_live_state.last_started_at` bleibt TEXT; Makro-Konvertierung liest beide robust ueber `::text`/`NULLIF(..., '')::timestamptz` und meldet `last_started_at` als Typ-Auffaelligkeit.
+- Implementiert: alle 107 gelisteten CONVERTIBLE_PG-Callsites in `rust/crates/tb-raid/src` auf `sqlx::query!`, `query_as!` oder `query_scalar!` umgestellt. Datei-Counts: arrival_tracking_store 4, auth_writer 5, external_recruitment_store 10, offline_eligibility 2, outreach_boost 2, partner_roster 1, partner_score_refresh 9, partner_setup 11, raid_blacklist 5, raid_history_store 3, reauth_admin 1, score_store 4, score_tracking_store 7, state_store 4, strikes_store 1, token_blacklist 10, token_lifecycle 23, token_refresher 4, token_store 1.
+- Verifikation: `rustfmt --edition 2021` auf den 19 geaenderten Rust-Dateien erfolgreich; statische Suche zaehlt exakt 107 sqlx-Makros in den Scope-Dateien. Verbleibende `sqlx::query*(`-Treffer sind die 5 DYNAMIC-Stellen (`token_store::load_inner`, `partner_setup::normalize_related_tables`) oder TEST_ONLY-Queries. Kein Build, kein Prepare, keine Tests gemaess Auftrag.
+
 ## 2026-06-30 — Ticket 1.2 Runtime Tables to Migrations
 
 - Start: delegierter GPT-Implementierungsworker; Scope auf `rust/migrations/`, Rust-Runtime-DDL-Entfernung und Scratch-Harness. Verbindliche Review-Regel aus Auftrag: keine Commits, kein Push, Aenderungen bleiben uncommitted.

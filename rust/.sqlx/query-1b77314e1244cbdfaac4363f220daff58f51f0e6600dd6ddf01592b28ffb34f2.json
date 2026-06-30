@@ -1,0 +1,15 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n            UPDATE twitch_partners\n               SET technical_pause_reason = 'bot_banned',\n                   raid_bot_enabled = 0,\n                   twitch_login = COALESCE(NULLIF($1, ''), twitch_login)\n             WHERE twitch_user_id = $2\n                OR LOWER(twitch_login) = LOWER($1)\n            ",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Text",
+        "Text"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "1b77314e1244cbdfaac4363f220daff58f51f0e6600dd6ddf01592b28ffb34f2"
+}

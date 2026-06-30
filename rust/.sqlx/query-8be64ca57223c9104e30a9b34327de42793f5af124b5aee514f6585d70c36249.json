@@ -1,0 +1,30 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n            SELECT id::bigint AS \"id!\",\n                   COALESCE(confirmation_signals, '') AS \"confirmation_signals!\"\n            FROM twitch_raid_arrival_tracking\n            WHERE to_broadcaster_id = $1\n              AND LOWER(from_broadcaster_login) = LOWER($2)\n              AND detected_at > NOW() - ($3 * INTERVAL '1 second')\n            ORDER BY detected_at DESC\n            LIMIT 1\n            ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id!",
+        "type_info": "Int8"
+      },
+      {
+        "ordinal": 1,
+        "name": "confirmation_signals!",
+        "type_info": "Text"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Text",
+        "Text",
+        "Float8"
+      ]
+    },
+    "nullable": [
+      null,
+      null
+    ]
+  },
+  "hash": "8be64ca57223c9104e30a9b34327de42793f5af124b5aee514f6585d70c36249"
+}

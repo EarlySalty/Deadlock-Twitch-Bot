@@ -1,0 +1,21 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n            INSERT INTO twitch_raid_auth\n                (twitch_user_id, twitch_login, access_token, refresh_token,\n                 access_token_enc, refresh_token_enc, enc_version, enc_kid,\n                 token_expires_at, scopes, authorized_at, raid_enabled)\n            VALUES ($1, $2, 'ENC', 'ENC', $3, $4, 1, 'v1', $5, $6, $7, $8)\n            ON CONFLICT (twitch_user_id) DO UPDATE SET\n                twitch_login      = EXCLUDED.twitch_login,\n                access_token_enc  = EXCLUDED.access_token_enc,\n                refresh_token_enc = EXCLUDED.refresh_token_enc,\n                enc_version       = EXCLUDED.enc_version,\n                enc_kid           = EXCLUDED.enc_kid,\n                token_expires_at  = EXCLUDED.token_expires_at,\n                scopes            = EXCLUDED.scopes,\n                authorized_at     = EXCLUDED.authorized_at,\n                raid_enabled      = EXCLUDED.raid_enabled\n            ",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Text",
+        "Text",
+        "Bytea",
+        "Bytea",
+        "Timestamptz",
+        "Text",
+        "Timestamptz",
+        "Bool"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "b13f33f88607880ff3fa4da7d08f8d87032bc449645c5d445247ad3fd0964fff"
+}

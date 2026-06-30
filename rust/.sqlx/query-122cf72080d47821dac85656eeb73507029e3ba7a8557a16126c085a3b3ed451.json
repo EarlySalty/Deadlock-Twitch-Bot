@@ -1,0 +1,22 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n            SELECT o.streamer_login AS \"streamer_login?\"\n            FROM twitch_partner_outreach o\n            WHERE o.status IN ('sent', 'queued')\n              AND raid_used_at IS NULL\n              AND COALESCE(NULLIF(o.contacted_at::text, ''), NULLIF(o.detected_at::text, '')) IS NOT NULL\n              AND COALESCE(NULLIF(o.contacted_at::text, '')::timestamptz, NULLIF(o.detected_at::text, '')::timestamptz) >= NOW() - (($1::text || ' hours')::interval)\n              AND NOT EXISTS (\n                    SELECT 1\n                    FROM twitch_partners p\n                    WHERE p.status = 'active'\n                      AND (\n                            LOWER(p.twitch_login) = LOWER(o.streamer_login)\n                         OR (NULLIF(o.streamer_user_id, '') IS NOT NULL\n                             AND p.twitch_user_id = o.streamer_user_id)\n                      )\n              )\n            ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "streamer_login?",
+        "type_info": "Text"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Text"
+      ]
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "122cf72080d47821dac85656eeb73507029e3ba7a8557a16126c085a3b3ed451"
+}

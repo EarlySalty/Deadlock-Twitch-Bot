@@ -1,0 +1,15 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "DELETE FROM oauth_state_tokens WHERE platform = $1 AND expires_at <= $2",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Text",
+        "Timestamptz"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "0149371ff77e5115d375bd1a36093e2ef812026e9bd7d2fc07d24bf5b7fca075"
+}

@@ -1,0 +1,17 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "UPDATE twitch_token_blacklist\n                            SET error_count = $1, last_error_at = $2, error_message = $3\n                          WHERE twitch_user_id = $4",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Int4",
+        "Text",
+        "Text",
+        "Text"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "a5df1223c9e01a409660259b0187c8bf5fc01648e6f6d76f716c96795e48a9b7"
+}

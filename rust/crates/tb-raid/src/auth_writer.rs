@@ -121,21 +121,21 @@ impl AuthWriter {
 
         let mut tx = self.pool.begin().await?;
         // Bestehenden raid_enabled-Status erhalten (per user_id ODER login).
-        let existing_raid_enabled: Option<bool> = sqlx::query_scalar(
+        let existing_raid_enabled: Option<bool> = sqlx::query_scalar!(
             r#"
-            SELECT raid_enabled FROM twitch_raid_auth
+            SELECT raid_enabled AS "raid_enabled?" FROM twitch_raid_auth
             WHERE twitch_user_id = $1 OR LOWER(COALESCE(twitch_login, '')) = LOWER($2)
             LIMIT 1
             "#,
+            uid,
+            &new.twitch_login
         )
-        .bind(uid)
-        .bind(&new.twitch_login)
         .fetch_optional(&mut *tx)
         .await?
         .flatten();
         let raid_enabled = new.activate_raid_features || existing_raid_enabled.unwrap_or(false);
 
-        sqlx::query(
+        sqlx::query!(
             r#"
             INSERT INTO twitch_raid_auth
                 (twitch_user_id, twitch_login, access_token, refresh_token,
@@ -153,24 +153,24 @@ impl AuthWriter {
                 authorized_at     = EXCLUDED.authorized_at,
                 raid_enabled      = EXCLUDED.raid_enabled
             "#,
+            uid,
+            &new.twitch_login,
+            access_enc,
+            refresh_enc,
+            expires_at,
+            &scopes_for_db,
+            now,
+            raid_enabled
         )
-        .bind(uid)
-        .bind(&new.twitch_login)
-        .bind(access_enc)
-        .bind(refresh_enc)
-        .bind(expires_at)
-        .bind(&scopes_for_db)
-        .bind(now)
-        .bind(raid_enabled)
         .execute(&mut *tx)
         .await?;
 
         // Re-Auth abgeschlossen → needs_reauth zurücksetzen.
-        sqlx::query(
+        sqlx::query!(
             "UPDATE twitch_raid_auth SET needs_reauth = FALSE, reauth_notified_at = NULL
              WHERE twitch_user_id = $1",
+            uid
         )
-        .bind(uid)
         .execute(&mut *tx)
         .await?;
 
@@ -180,7 +180,7 @@ impl AuthWriter {
         // Re-Autorisierung DAUERHAFT gesperrt: der Blacklist-Check in get_valid_token
         // greift vor allem anderen und liefert None. Zuerst den Partner-Pause-Grund
         // 'token_error*' aufheben und Raid reaktivieren, dann den Blacklist-Eintrag löschen.
-        sqlx::query(
+        sqlx::query!(
             "UPDATE twitch_partners
                 SET technical_pause_reason = CASE
                         WHEN LOWER(TRIM(COALESCE(technical_pause_reason, ''))) LIKE 'token_error%' THEN NULL
@@ -192,15 +192,17 @@ impl AuthWriter {
                         ELSE raid_bot_enabled
                     END
               WHERE twitch_user_id = $1",
+            uid,
+            new.activate_raid_features
         )
-        .bind(uid)
-        .bind(new.activate_raid_features)
         .execute(&mut *tx)
         .await?;
-        sqlx::query("DELETE FROM twitch_token_blacklist WHERE twitch_user_id = $1")
-            .bind(uid)
-            .execute(&mut *tx)
-            .await?;
+        sqlx::query!(
+            "DELETE FROM twitch_token_blacklist WHERE twitch_user_id = $1",
+            uid
+        )
+        .execute(&mut *tx)
+        .await?;
 
         tx.commit().await?;
         Ok(())

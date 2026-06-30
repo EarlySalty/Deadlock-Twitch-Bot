@@ -31,14 +31,14 @@ impl OutreachBoostStore {
         if lookback_hours <= 0 {
             return Ok(HashSet::new());
         }
-        let rows: Vec<(Option<String>,)> = sqlx::query_as(
+        let rows = sqlx::query!(
             r#"
-            SELECT o.streamer_login
+            SELECT o.streamer_login AS "streamer_login?"
             FROM twitch_partner_outreach o
             WHERE o.status IN ('sent', 'queued')
               AND raid_used_at IS NULL
               AND COALESCE(NULLIF(o.contacted_at::text, ''), NULLIF(o.detected_at::text, '')) IS NOT NULL
-              AND COALESCE(NULLIF(o.contacted_at::text, '')::timestamptz, NULLIF(o.detected_at::text, '')::timestamptz) >= NOW() - (($1 || ' hours')::interval)
+              AND COALESCE(NULLIF(o.contacted_at::text, '')::timestamptz, NULLIF(o.detected_at::text, '')::timestamptz) >= NOW() - (($1::text || ' hours')::interval)
               AND NOT EXISTS (
                     SELECT 1
                     FROM twitch_partners p
@@ -50,13 +50,13 @@ impl OutreachBoostStore {
                       )
               )
             "#,
+            lookback_hours.to_string()
         )
-        .bind(lookback_hours.to_string())
         .fetch_all(&self.pool)
         .await?;
         Ok(rows
             .into_iter()
-            .filter_map(|(login,)| login)
+            .filter_map(|row| row.streamer_login)
             .map(|l| l.trim().to_lowercase())
             .filter(|l| !l.is_empty())
             .collect())
@@ -70,12 +70,12 @@ impl OutreachBoostStore {
         if normalized.is_empty() {
             return Ok(false);
         }
-        let result = sqlx::query(
+        let result = sqlx::query!(
             "UPDATE twitch_partner_outreach
                 SET raid_used_at = NOW()::text
               WHERE streamer_login = $1 AND raid_used_at IS NULL",
+            &normalized
         )
-        .bind(&normalized)
         .execute(&self.pool)
         .await?;
         Ok(result.rows_affected() > 0)

@@ -1,0 +1,23 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n            SELECT 1 AS \"found!\" FROM twitch_raid_blacklist\n            WHERE (target_id IS NOT NULL AND target_id = $1)\n               OR lower(target_login) = $2\n            LIMIT 1\n            ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "found!",
+        "type_info": "Int4"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Text",
+        "Text"
+      ]
+    },
+    "nullable": [
+      null
+    ]
+  },
+  "hash": "825d860ccdd2459e72fb3397006969d680f632c9d760a3cd8059547ff261834d"
+}

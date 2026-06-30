@@ -59,7 +59,7 @@ impl RaidHistoryStore {
     /// `executed_at` wird serverseitig auf `NOW()` gesetzt — kein
     /// Clock-Skew durch den Bot-Prozess.
     pub async fn record_raid(&self, input: &RecordRaidInput) -> Result<i64, sqlx::Error> {
-        let row: (i64,) = sqlx::query_as(
+        let id: i64 = sqlx::query_scalar!(
             r#"
             INSERT INTO twitch_raid_history (
                 from_broadcaster_id,
@@ -75,24 +75,24 @@ impl RaidHistoryStore {
                 target_stream_started_at,
                 candidates_count
             ) VALUES ($1, $2, $3, $4, $5, $6, $7, NOW(), $8, $9, $10, $11)
-            RETURNING id
+            RETURNING id AS "id!"
             "#,
+            &input.from_broadcaster_id,
+            &input.from_broadcaster_login,
+            &input.to_broadcaster_id,
+            &input.to_broadcaster_login,
+            input.viewer_count,
+            input.stream_duration_sec,
+            input.reason.as_deref(),
+            input.success,
+            input.error_message.as_deref(),
+            input.target_stream_started_at,
+            input.candidates_count
         )
-        .bind(&input.from_broadcaster_id)
-        .bind(&input.from_broadcaster_login)
-        .bind(&input.to_broadcaster_id)
-        .bind(&input.to_broadcaster_login)
-        .bind(input.viewer_count)
-        .bind(input.stream_duration_sec)
-        .bind(&input.reason)
-        .bind(input.success)
-        .bind(&input.error_message)
-        .bind(input.target_stream_started_at)
-        .bind(input.candidates_count)
         .fetch_one(&self.pool)
         .await?;
 
-        Ok(row.0)
+        Ok(id)
     }
 
     /// Gibt die IDs aller Ziele zurück, die `from_broadcaster_id` in den
@@ -120,21 +120,21 @@ impl RaidHistoryStore {
 
         // Postgres: `($2 || ' days')::interval` — interpolierter String ist
         // hier sicher, weil `days` ein typisierter i32 ist (kein User-Input).
-        let rows: Vec<(String,)> = sqlx::query_as(
+        let rows = sqlx::query!(
             r#"
-            SELECT DISTINCT to_broadcaster_id
+            SELECT DISTINCT to_broadcaster_id AS "to_broadcaster_id!"
             FROM twitch_raid_history
             WHERE from_broadcaster_id = $1
               AND COALESCE(success, FALSE) IS TRUE
-              AND executed_at >= NOW() - (($2 || ' days')::interval)
+              AND executed_at >= NOW() - (($2::text || ' days')::interval)
             "#,
+            from_broadcaster_id.trim(),
+            days.to_string()
         )
-        .bind(from_broadcaster_id.trim())
-        .bind(days.to_string())
         .fetch_all(&self.pool)
         .await?;
 
-        Ok(rows.into_iter().map(|(id,)| id).collect())
+        Ok(rows.into_iter().map(|row| row.to_broadcaster_id).collect())
     }
 
     /// Jüngste erfolgreiche Raid-History-Referenz `(id, executed_at)` für ein
@@ -145,9 +145,9 @@ impl RaidHistoryStore {
         from_broadcaster_login: &str,
         to_broadcaster_id: &str,
     ) -> Result<Option<(i64, Option<DateTime<Utc>>)>, sqlx::Error> {
-        let row: Option<(i64, Option<DateTime<Utc>>)> = sqlx::query_as(
+        let row = sqlx::query!(
             r#"
-            SELECT id, executed_at
+            SELECT id AS "id!", executed_at AS "executed_at?"
             FROM twitch_raid_history
             WHERE LOWER(from_broadcaster_login) = $1
               AND to_broadcaster_id = $2
@@ -155,12 +155,12 @@ impl RaidHistoryStore {
             ORDER BY executed_at DESC
             LIMIT 1
             "#,
+            from_broadcaster_login.trim().to_lowercase(),
+            to_broadcaster_id.trim()
         )
-        .bind(from_broadcaster_login.trim().to_lowercase())
-        .bind(to_broadcaster_id.trim())
         .fetch_optional(&self.pool)
         .await?;
-        Ok(row)
+        Ok(row.map(|row| (row.id, row.executed_at)))
     }
 }
 

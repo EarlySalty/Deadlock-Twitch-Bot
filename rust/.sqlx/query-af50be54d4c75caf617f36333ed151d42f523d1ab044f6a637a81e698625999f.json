@@ -1,0 +1,14 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "DELETE FROM twitch_external_bot_ban_check_pending WHERE target_id = $1",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Text"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "af50be54d4c75caf617f36333ed151d42f523d1ab044f6a637a81e698625999f"
+}

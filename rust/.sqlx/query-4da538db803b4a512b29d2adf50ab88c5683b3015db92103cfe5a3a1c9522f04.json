@@ -1,0 +1,28 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT refresh_token_enc AS \"refresh_token_enc?\",\n                      token_expires_at AS \"token_expires_at?\"\n                 FROM twitch_raid_auth\n                WHERE twitch_user_id = $1",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "refresh_token_enc?",
+        "type_info": "Bytea"
+      },
+      {
+        "ordinal": 1,
+        "name": "token_expires_at?",
+        "type_info": "Timestamptz"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Text"
+      ]
+    },
+    "nullable": [
+      true,
+      false
+    ]
+  },
+  "hash": "4da538db803b4a512b29d2adf50ab88c5683b3015db92103cfe5a3a1c9522f04"
+}

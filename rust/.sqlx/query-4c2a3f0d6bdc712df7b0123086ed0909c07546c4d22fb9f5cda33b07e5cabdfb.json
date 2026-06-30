@@ -1,0 +1,18 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "UPDATE twitch_partner_raid_score_tracking SET deadlock_continued_until = $1, deadlock_continued_sec = $2, resolved_at = $3, resolution_reason = $4 WHERE id = $5",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Text",
+        "Int4",
+        "Text",
+        "Text",
+        "Int4"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "4c2a3f0d6bdc712df7b0123086ed0909c07546c4d22fb9f5cda33b07e5cabdfb"
+}

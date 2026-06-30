@@ -119,7 +119,8 @@ impl ScoreStore {
         &self,
         twitch_user_id: &str,
     ) -> Result<Option<PartnerRaidScoreRow>, sqlx::Error> {
-        sqlx::query_as::<_, PartnerRaidScoreRow>(
+        sqlx::query_as!(
+            PartnerRaidScoreRow,
             r#"
             SELECT twitch_user_id, twitch_login, avg_duration_sec,
                    time_pattern_score_base, received_successful_raids_total,
@@ -133,8 +134,8 @@ impl ScoreStore {
             FROM twitch_partner_raid_scores
             WHERE twitch_user_id = $1
             "#,
+            twitch_user_id
         )
-        .bind(twitch_user_id)
         .fetch_optional(&self.pool)
         .await
     }
@@ -149,7 +150,10 @@ impl ScoreStore {
         if twitch_user_ids.is_empty() {
             return Ok(vec![]);
         }
-        sqlx::query_as::<_, PartnerRaidScoreRow>(
+        let twitch_user_ids: Vec<String> =
+            twitch_user_ids.iter().map(|id| (*id).to_string()).collect();
+        sqlx::query_as!(
+            PartnerRaidScoreRow,
             r#"
             SELECT twitch_user_id, twitch_login, avg_duration_sec,
                    time_pattern_score_base, received_successful_raids_total,
@@ -163,8 +167,8 @@ impl ScoreStore {
             FROM twitch_partner_raid_scores
             WHERE twitch_user_id = ANY($1)
             "#,
+            &twitch_user_ids[..]
         )
-        .bind(twitch_user_ids)
         .fetch_all(&self.pool)
         .await
     }
@@ -179,7 +183,10 @@ impl ScoreStore {
         if twitch_user_ids.is_empty() {
             return Ok(vec![]);
         }
-        sqlx::query_as::<_, PartnerRaidScoreRow>(
+        let twitch_user_ids: Vec<String> =
+            twitch_user_ids.iter().map(|id| (*id).to_string()).collect();
+        sqlx::query_as!(
+            PartnerRaidScoreRow,
             r#"
             SELECT twitch_user_id, twitch_login, avg_duration_sec,
                    time_pattern_score_base, received_successful_raids_total,
@@ -193,8 +200,8 @@ impl ScoreStore {
             FROM twitch_partner_raid_scores
             WHERE twitch_user_id = ANY($1) AND COALESCE(is_live, 0) = 1
             "#,
+            &twitch_user_ids[..]
         )
-        .bind(twitch_user_ids)
         .fetch_all(&self.pool)
         .await
     }
@@ -204,7 +211,7 @@ impl ScoreStore {
     /// Port von `PartnerRaidScoreService._upsert_scores` in `partner_scores.py`
     /// (INSERT … ON CONFLICT DO UPDATE, Z. 804–853).
     pub async fn upsert(&self, row: &PartnerRaidScoreUpsert) -> Result<(), sqlx::Error> {
-        sqlx::query(
+        sqlx::query!(
             r#"
             INSERT INTO twitch_partner_raid_scores (
                 twitch_user_id,
@@ -259,29 +266,29 @@ impl ScoreStore {
                 today_received_raids            = EXCLUDED.today_received_raids,
                 last_computed_at                = EXCLUDED.last_computed_at
             "#,
+            &row.twitch_user_id,
+            &row.twitch_login,
+            row.avg_duration_sec,
+            row.time_pattern_score_base,
+            row.received_successful_raids_total,
+            row.is_new_partner_preferred,
+            row.new_partner_multiplier,
+            row.raid_boost_multiplier,
+            row.is_live,
+            row.current_started_at.as_deref(),
+            row.current_uptime_sec,
+            row.duration_score,
+            row.time_pattern_score,
+            row.readiness_score,
+            row.fairness_score,
+            row.base_score,
+            row.final_score,
+            row.internal_sent_raids_30d,
+            row.internal_received_raids_30d,
+            row.internal_received_raids_7d,
+            row.today_received_raids,
+            &row.last_computed_at
         )
-        .bind(&row.twitch_user_id)
-        .bind(&row.twitch_login)
-        .bind(row.avg_duration_sec)
-        .bind(row.time_pattern_score_base)
-        .bind(row.received_successful_raids_total)
-        .bind(row.is_new_partner_preferred)
-        .bind(row.new_partner_multiplier)
-        .bind(row.raid_boost_multiplier)
-        .bind(row.is_live)
-        .bind(&row.current_started_at)
-        .bind(row.current_uptime_sec)
-        .bind(row.duration_score)
-        .bind(row.time_pattern_score)
-        .bind(row.readiness_score)
-        .bind(row.fairness_score)
-        .bind(row.base_score)
-        .bind(row.final_score)
-        .bind(row.internal_sent_raids_30d)
-        .bind(row.internal_received_raids_30d)
-        .bind(row.internal_received_raids_7d)
-        .bind(row.today_received_raids)
-        .bind(&row.last_computed_at)
         .execute(&self.pool)
         .await?;
         Ok(())

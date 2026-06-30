@@ -1,0 +1,15 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n            DELETE FROM twitch_streamers\n            WHERE twitch_user_id = $1\n               OR LOWER(twitch_login) = LOWER($2)\n            ",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Text",
+        "Text"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "2609d151c4e5b82f887c1360fc43f61cb7cf09c1758f5223685f12f3add93154"
+}

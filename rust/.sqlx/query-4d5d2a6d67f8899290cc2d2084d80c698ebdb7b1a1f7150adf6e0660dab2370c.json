@@ -1,0 +1,22 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT notified AS \"notified?\" FROM twitch_token_blacklist WHERE twitch_user_id = $1",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "notified?",
+        "type_info": "Int4"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Text"
+      ]
+    },
+    "nullable": [
+      true
+    ]
+  },
+  "hash": "4d5d2a6d67f8899290cc2d2084d80c698ebdb7b1a1f7150adf6e0660dab2370c"
+}

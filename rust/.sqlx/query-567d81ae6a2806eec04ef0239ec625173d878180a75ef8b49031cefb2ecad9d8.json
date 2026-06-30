@@ -1,0 +1,23 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n            SELECT raid_enabled AS \"raid_enabled?\" FROM twitch_raid_auth\n            WHERE twitch_user_id = $1 OR LOWER(COALESCE(twitch_login, '')) = LOWER($2)\n            LIMIT 1\n            ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "raid_enabled?",
+        "type_info": "Bool"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Text",
+        "Text"
+      ]
+    },
+    "nullable": [
+      true
+    ]
+  },
+  "hash": "567d81ae6a2806eec04ef0239ec625173d878180a75ef8b49031cefb2ecad9d8"
+}

@@ -58,17 +58,20 @@ impl PartnerRosterStore {
         &self,
         source_user_id: &str,
     ) -> Result<Vec<PartnerRosterEntry>, sqlx::Error> {
-        let rows: Vec<RosterRow> = sqlx::query_as(
+        let rows: Vec<RosterRow> = sqlx::query_as!(
+            RosterRow,
             r#"
-            SELECT DISTINCT s.twitch_login, s.twitch_user_id
+            SELECT DISTINCT
+                   s.twitch_login AS "twitch_login?",
+                   s.twitch_user_id AS "twitch_user_id?"
               FROM twitch_streamers_partner_state s
              WHERE s.is_partner_active = 1
                AND s.twitch_user_id IS NOT NULL
                AND s.twitch_login IS NOT NULL
                AND s.twitch_user_id <> $1
             "#,
+            source_user_id
         )
-        .bind(source_user_id)
         .fetch_all(&self.pool)
         .await?;
 

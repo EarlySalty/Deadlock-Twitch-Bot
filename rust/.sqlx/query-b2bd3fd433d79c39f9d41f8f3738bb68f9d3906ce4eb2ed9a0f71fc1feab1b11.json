@@ -1,0 +1,23 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n        SELECT technical_pause_reason AS \"technical_pause_reason?\"\n          FROM twitch_partners\n         WHERE (($1 <> '' AND twitch_user_id = $1)\n             OR ($2 <> '' AND LOWER(twitch_login) = $2))\n           AND status <> 'active'\n           AND LOWER(TRIM(COALESCE(technical_pause_reason, ''))) = ANY(ARRAY['blocked', 'bot_banned'])\n         ORDER BY id DESC\n         LIMIT 1\n        ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "technical_pause_reason?",
+        "type_info": "Text"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Text",
+        "Text"
+      ]
+    },
+    "nullable": [
+      true
+    ]
+  },
+  "hash": "b2bd3fd433d79c39f9d41f8f3738bb68f9d3906ce4eb2ed9a0f71fc1feab1b11"
+}

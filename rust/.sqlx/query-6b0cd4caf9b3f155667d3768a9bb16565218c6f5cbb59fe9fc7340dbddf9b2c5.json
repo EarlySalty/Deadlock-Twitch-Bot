@@ -1,0 +1,14 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "UPDATE twitch_partner_outreach\n                SET raid_used_at = NOW()::text\n              WHERE streamer_login = $1 AND raid_used_at IS NULL",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Text"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "6b0cd4caf9b3f155667d3768a9bb16565218c6f5cbb59fe9fc7340dbddf9b2c5"
+}

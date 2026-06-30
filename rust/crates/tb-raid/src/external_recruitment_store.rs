@@ -101,7 +101,7 @@ impl ExternalRecruitmentStore {
         raid: &ConfirmedExternalRecruitmentRaid,
     ) -> Result<i64, sqlx::Error> {
         let mut tx = self.pool.begin().await?;
-        sqlx::query(
+        sqlx::query!(
             r#"
             INSERT INTO twitch_confirmed_external_recruitment_raids (
                 raid_flow_id,
@@ -115,45 +115,45 @@ impl ExternalRecruitmentStore {
             VALUES ($1, $2, $3, $4, $5, $6, $7)
             ON CONFLICT (raid_flow_id) DO NOTHING
             "#,
+            raid.raid_flow_id.as_deref(),
+            raid.from_broadcaster_id.as_deref(),
+            &raid.from_broadcaster_login,
+            &raid.to_broadcaster_id,
+            &raid.to_broadcaster_login,
+            raid.viewer_count,
+            raid.confirmation_signal.as_deref()
         )
-        .bind(raid.raid_flow_id.as_deref())
-        .bind(raid.from_broadcaster_id.as_deref())
-        .bind(&raid.from_broadcaster_login)
-        .bind(&raid.to_broadcaster_id)
-        .bind(&raid.to_broadcaster_login)
-        .bind(raid.viewer_count)
-        .bind(raid.confirmation_signal.as_deref())
         .execute(&mut *tx)
         .await?;
 
-        let count: (i64,) = sqlx::query_as(
+        let count: i64 = sqlx::query_scalar!(
             r#"
-            SELECT COUNT(*)
+            SELECT COUNT(*) AS "count!"
             FROM twitch_confirmed_external_recruitment_raids
             WHERE to_broadcaster_id = $1
             "#,
+            &raid.to_broadcaster_id
         )
-        .bind(&raid.to_broadcaster_id)
         .fetch_one(&mut *tx)
         .await?;
 
         tx.commit().await?;
-        Ok(count.0)
+        Ok(count)
     }
 
     /// Anzahl bestätigter externer Recruitment-Raids auf ein Ziel.
     pub async fn count_confirmed_raids(&self, to_broadcaster_id: &str) -> Result<i64, sqlx::Error> {
-        let row: (i64,) = sqlx::query_as(
+        let count: i64 = sqlx::query_scalar!(
             r#"
-            SELECT COUNT(*)
+            SELECT COUNT(*) AS "count!"
             FROM twitch_confirmed_external_recruitment_raids
             WHERE to_broadcaster_id = $1
             "#,
+            to_broadcaster_id
         )
-        .bind(to_broadcaster_id)
         .fetch_one(&self.pool)
         .await?;
-        Ok(row.0)
+        Ok(count)
     }
 
     /// UPSERT der verzögerten Blacklist (`blacklist_after = now + grace`).
@@ -167,7 +167,7 @@ impl ExternalRecruitmentStore {
         raid_flow_id: Option<&str>,
         grace_seconds: i64,
     ) -> Result<(), sqlx::Error> {
-        sqlx::query(
+        sqlx::query!(
             r#"
             INSERT INTO twitch_external_recruitment_blacklist_pending (
                 target_id,
@@ -183,7 +183,7 @@ impl ExternalRecruitmentStore {
                 $2,
                 $3,
                 CURRENT_TIMESTAMP,
-                CURRENT_TIMESTAMP + ($4::double precision * INTERVAL '1 second'),
+                CURRENT_TIMESTAMP + ($4::bigint::double precision * INTERVAL '1 second'),
                 $5,
                 CURRENT_TIMESTAMP
             )
@@ -196,12 +196,12 @@ impl ExternalRecruitmentStore {
                 last_raid_flow_id = EXCLUDED.last_raid_flow_id,
                 updated_at = CURRENT_TIMESTAMP
             "#,
+            target_id,
+            target_login,
+            confirmed_raid_count,
+            grace_seconds,
+            raid_flow_id
         )
-        .bind(target_id)
-        .bind(target_login)
-        .bind(confirmed_raid_count)
-        .bind(grace_seconds)
-        .bind(raid_flow_id)
         .execute(&self.pool)
         .await?;
         Ok(())
@@ -209,10 +209,10 @@ impl ExternalRecruitmentStore {
 
     /// Entfernt die verzögerte Blacklist (z. B. wenn das Ziel jetzt Partner ist).
     pub async fn delete_blacklist_pending(&self, target_id: &str) -> Result<(), sqlx::Error> {
-        sqlx::query(
+        sqlx::query!(
             "DELETE FROM twitch_external_recruitment_blacklist_pending WHERE target_id = $1",
+            target_id
         )
-        .bind(target_id)
         .execute(&self.pool)
         .await?;
         Ok(())
@@ -222,9 +222,12 @@ impl ExternalRecruitmentStore {
     pub async fn load_due_blacklist_pending(
         &self,
     ) -> Result<Vec<DueBlacklistPending>, sqlx::Error> {
-        let rows: Vec<(String, String, i32, DateTime<Utc>)> = sqlx::query_as(
+        let rows = sqlx::query!(
             r#"
-            SELECT target_id, target_login, confirmed_raid_count, threshold_reached_at
+            SELECT target_id AS "target_id!",
+                   target_login AS "target_login!",
+                   confirmed_raid_count AS "confirmed_raid_count!",
+                   threshold_reached_at AS "threshold_reached_at!"
             FROM twitch_external_recruitment_blacklist_pending
             WHERE blacklist_after <= NOW()
             ORDER BY blacklist_after ASC
@@ -234,16 +237,12 @@ impl ExternalRecruitmentStore {
         .await?;
         Ok(rows
             .into_iter()
-            .map(
-                |(target_id, target_login, confirmed_raid_count, threshold_reached_at)| {
-                    DueBlacklistPending {
-                        target_id,
-                        target_login,
-                        confirmed_raid_count,
-                        threshold_reached_at,
-                    }
-                },
-            )
+            .map(|row| DueBlacklistPending {
+                target_id: row.target_id,
+                target_login: row.target_login,
+                confirmed_raid_count: row.confirmed_raid_count,
+                threshold_reached_at: row.threshold_reached_at,
+            })
             .collect())
     }
 
@@ -256,7 +255,7 @@ impl ExternalRecruitmentStore {
         source: &str,
         delay_seconds: i64,
     ) -> Result<(), sqlx::Error> {
-        sqlx::query(
+        sqlx::query!(
             r#"
             INSERT INTO twitch_external_bot_ban_check_pending (
                 target_id,
@@ -269,7 +268,7 @@ impl ExternalRecruitmentStore {
                 $1,
                 $2,
                 $3,
-                CURRENT_TIMESTAMP + ($4::double precision * INTERVAL '1 second'),
+                CURRENT_TIMESTAMP + ($4::bigint::double precision * INTERVAL '1 second'),
                 CURRENT_TIMESTAMP
             )
             ON CONFLICT (target_id) DO UPDATE SET
@@ -278,11 +277,11 @@ impl ExternalRecruitmentStore {
                 run_after = EXCLUDED.run_after,
                 updated_at = CURRENT_TIMESTAMP
             "#,
+            target_id,
+            target_login,
+            source,
+            delay_seconds
         )
-        .bind(target_id)
-        .bind(target_login)
-        .bind(source)
-        .bind(delay_seconds)
         .execute(&self.pool)
         .await?;
         Ok(())
@@ -290,10 +289,12 @@ impl ExternalRecruitmentStore {
 
     /// Entfernt einen verzögerten Bot-Ban-Check.
     pub async fn delete_bot_ban_check(&self, target_id: &str) -> Result<(), sqlx::Error> {
-        sqlx::query("DELETE FROM twitch_external_bot_ban_check_pending WHERE target_id = $1")
-            .bind(target_id)
-            .execute(&self.pool)
-            .await?;
+        sqlx::query!(
+            "DELETE FROM twitch_external_bot_ban_check_pending WHERE target_id = $1",
+            target_id
+        )
+        .execute(&self.pool)
+        .await?;
         Ok(())
     }
 
@@ -303,16 +304,16 @@ impl ExternalRecruitmentStore {
         target_id: &str,
         delay_seconds: i64,
     ) -> Result<(), sqlx::Error> {
-        sqlx::query(
+        sqlx::query!(
             r#"
             UPDATE twitch_external_bot_ban_check_pending
-            SET run_after = CURRENT_TIMESTAMP + ($1::double precision * INTERVAL '1 second'),
+            SET run_after = CURRENT_TIMESTAMP + ($1::bigint::double precision * INTERVAL '1 second'),
                 updated_at = CURRENT_TIMESTAMP
             WHERE target_id = $2
             "#,
+            delay_seconds.max(60),
+            target_id
         )
-        .bind(delay_seconds.max(60))
-        .bind(target_id)
         .execute(&self.pool)
         .await?;
         Ok(())
@@ -320,9 +321,11 @@ impl ExternalRecruitmentStore {
 
     /// Lädt fällige Bot-Ban-Checks (`run_after <= now`, max. 25, wie Python).
     pub async fn load_due_bot_ban_checks(&self) -> Result<Vec<DueBotBanCheck>, sqlx::Error> {
-        let rows: Vec<(String, String, String)> = sqlx::query_as(
+        let rows = sqlx::query!(
             r#"
-            SELECT target_id, target_login, source
+            SELECT target_id AS "target_id!",
+                   target_login AS "target_login!",
+                   source AS "source!"
             FROM twitch_external_bot_ban_check_pending
             WHERE run_after <= NOW()
             ORDER BY run_after ASC
@@ -333,10 +336,10 @@ impl ExternalRecruitmentStore {
         .await?;
         Ok(rows
             .into_iter()
-            .map(|(target_id, target_login, source)| DueBotBanCheck {
-                target_id,
-                target_login,
-                source,
+            .map(|row| DueBotBanCheck {
+                target_id: row.target_id,
+                target_login: row.target_login,
+                source: row.source,
             })
             .collect())
     }

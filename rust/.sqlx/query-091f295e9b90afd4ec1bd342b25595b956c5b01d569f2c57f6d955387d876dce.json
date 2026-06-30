@@ -1,0 +1,14 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "DELETE FROM twitch_token_blacklist WHERE last_error_at < $1",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Text"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "091f295e9b90afd4ec1bd342b25595b956c5b01d569f2c57f6d955387d876dce"
+}

@@ -1,0 +1,19 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n            INSERT INTO oauth_state_tokens\n                (state_token, platform, streamer_login, redirect_uri, pkce_verifier, expires_at)\n            VALUES ($1, $2, $3, $4, $5, $6)\n            ON CONFLICT (state_token) DO UPDATE SET\n                platform = EXCLUDED.platform,\n                streamer_login = EXCLUDED.streamer_login,\n                redirect_uri = EXCLUDED.redirect_uri,\n                pkce_verifier = EXCLUDED.pkce_verifier,\n                expires_at = EXCLUDED.expires_at\n            ",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Text",
+        "Text",
+        "Text",
+        "Text",
+        "Text",
+        "Timestamptz"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "02a5b8176dcc3368deae56d6b19a152732cd2286b9e0e86e8f5a6b548f10514f"
+}

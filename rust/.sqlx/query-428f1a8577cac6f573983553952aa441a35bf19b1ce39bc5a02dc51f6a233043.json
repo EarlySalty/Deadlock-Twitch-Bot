@@ -1,0 +1,30 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n            DELETE FROM oauth_state_tokens\n            WHERE state_token = $1 AND platform = $2 AND expires_at > $3\n            RETURNING COALESCE(streamer_login, '') AS \"streamer_login!\",\n                      pkce_verifier AS \"pkce_verifier?\"\n            ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "streamer_login!",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 1,
+        "name": "pkce_verifier?",
+        "type_info": "Text"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Text",
+        "Text",
+        "Timestamptz"
+      ]
+    },
+    "nullable": [
+      null,
+      true
+    ]
+  },
+  "hash": "428f1a8577cac6f573983553952aa441a35bf19b1ce39bc5a02dc51f6a233043"
+}

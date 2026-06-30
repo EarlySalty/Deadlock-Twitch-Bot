@@ -30,9 +30,9 @@ use sqlx::PgPool;
 
 use crate::score_store::{PartnerRaidScoreUpsert, ScoreStore};
 use crate::scoring::{
-    NEUTRAL_SCORE, NEW_PARTNER_RAID_THRESHOLD, compute_base_score, compute_fairness_score,
-    compute_final_score, compute_new_partner_multiplier, compute_raid_boost_multiplier,
-    compute_readiness_score, round_score,
+    compute_base_score, compute_fairness_score, compute_final_score,
+    compute_new_partner_multiplier, compute_raid_boost_multiplier, compute_readiness_score,
+    round_score, NEUTRAL_SCORE, NEW_PARTNER_RAID_THRESHOLD,
 };
 
 /// Lookback-Fenster für Sessions (Python `LOOKBACK_DAYS = 45`).
@@ -350,9 +350,11 @@ impl PartnerScoreRefresher {
     }
 
     async fn load_active_partners(&self) -> Result<Vec<PartnerRow>, sqlx::Error> {
-        sqlx::query_as::<_, PartnerRow>(
+        sqlx::query_as!(
+            PartnerRow,
             r#"
-            SELECT twitch_user_id, LOWER(twitch_login) AS twitch_login
+            SELECT twitch_user_id AS "twitch_user_id!",
+                   LOWER(twitch_login) AS "twitch_login!"
             FROM twitch_streamers_partner_state
             WHERE twitch_user_id IS NOT NULL
               AND twitch_login IS NOT NULL
@@ -365,54 +367,57 @@ impl PartnerScoreRefresher {
     }
 
     async fn load_partners_by_ids(&self, ids: &[String]) -> Result<Vec<PartnerRow>, sqlx::Error> {
-        sqlx::query_as::<_, PartnerRow>(
+        sqlx::query_as!(
+            PartnerRow,
             r#"
-            SELECT twitch_user_id, LOWER(twitch_login) AS twitch_login
+            SELECT twitch_user_id AS "twitch_user_id!",
+                   LOWER(twitch_login) AS "twitch_login!"
             FROM twitch_streamers_partner_state
             WHERE twitch_user_id IS NOT NULL
               AND twitch_login IS NOT NULL
               AND twitch_user_id = ANY($1)
             ORDER BY LOWER(twitch_login)
             "#,
+            ids
         )
-        .bind(ids)
         .fetch_all(&self.pool)
         .await
     }
 
     async fn load_sessions(&self, login: &str) -> Result<Vec<SessionRow>, sqlx::Error> {
-        let rows: Vec<(Option<DateTime<Utc>>, Option<i64>)> = sqlx::query_as(
+        let rows = sqlx::query!(
             r#"
-            SELECT started_at, duration_seconds
+            SELECT NULLIF(started_at::text, '')::timestamptz AS "started_at?",
+                   duration_seconds AS "duration_seconds?"
             FROM twitch_stream_sessions
             WHERE LOWER(streamer_login) = LOWER($1)
             "#,
+            login
         )
-        .bind(login)
         .fetch_all(&self.pool)
         .await?;
         Ok(rows
             .into_iter()
-            .map(|(started_at, duration)| SessionRow {
-                started_at,
-                duration_seconds: duration.unwrap_or(0),
+            .map(|row| SessionRow {
+                started_at: row.started_at,
+                duration_seconds: i64::from(row.duration_seconds.unwrap_or(0)),
             })
             .collect())
     }
 
     async fn load_raid_timestamps(&self, user_id: &str) -> Result<Vec<DateTime<Utc>>, sqlx::Error> {
-        let rows: Vec<(Option<DateTime<Utc>>,)> = sqlx::query_as(
+        let rows = sqlx::query!(
             r#"
-            SELECT executed_at
+            SELECT executed_at AS "executed_at?"
             FROM twitch_raid_history
             WHERE to_broadcaster_id = $1
               AND COALESCE(success, FALSE) IS TRUE
             "#,
+            user_id
         )
-        .bind(user_id)
         .fetch_all(&self.pool)
         .await?;
-        Ok(rows.into_iter().filter_map(|(ts,)| ts).collect())
+        Ok(rows.into_iter().filter_map(|row| row.executed_at).collect())
     }
 
     async fn load_internal_metrics(
@@ -424,9 +429,9 @@ impl PartnerScoreRefresher {
         let cutoff_7d = now_utc - chrono::Duration::days(7);
 
         // sent_30d: dieser Partner als Quelle, anderer Partner als Ziel.
-        let (sent_30d,): (i64,) = sqlx::query_as(
+        let sent_30d: i64 = sqlx::query_scalar!(
             r#"
-            SELECT COUNT(*)::bigint
+            SELECT COUNT(*)::bigint AS "count!"
             FROM twitch_raid_history h
             WHERE COALESCE(h.success, FALSE) IS TRUE
               AND h.from_broadcaster_id = $1
@@ -436,15 +441,15 @@ impl PartnerScoreRefresher {
                   WHERE p.twitch_user_id = h.to_broadcaster_id
               )
             "#,
+            user_id,
+            cutoff_30d
         )
-        .bind(user_id)
-        .bind(cutoff_30d)
         .fetch_one(&self.pool)
         .await?;
 
-        let (received_30d,): (i64,) = sqlx::query_as(
+        let received_30d: i64 = sqlx::query_scalar!(
             r#"
-            SELECT COUNT(*)::bigint
+            SELECT COUNT(*)::bigint AS "count!"
             FROM twitch_raid_history h
             WHERE COALESCE(h.success, FALSE) IS TRUE
               AND h.to_broadcaster_id = $1
@@ -454,15 +459,15 @@ impl PartnerScoreRefresher {
                   WHERE p.twitch_user_id = h.from_broadcaster_id
               )
             "#,
+            user_id,
+            cutoff_30d
         )
-        .bind(user_id)
-        .bind(cutoff_30d)
         .fetch_one(&self.pool)
         .await?;
 
-        let (received_7d,): (i64,) = sqlx::query_as(
+        let received_7d: i64 = sqlx::query_scalar!(
             r#"
-            SELECT COUNT(*)::bigint
+            SELECT COUNT(*)::bigint AS "count!"
             FROM twitch_raid_history h
             WHERE COALESCE(h.success, FALSE) IS TRUE
               AND h.to_broadcaster_id = $1
@@ -472,9 +477,9 @@ impl PartnerScoreRefresher {
                   WHERE p.twitch_user_id = h.from_broadcaster_id
               )
             "#,
+            user_id,
+            cutoff_7d
         )
-        .bind(user_id)
-        .bind(cutoff_7d)
         .fetch_one(&self.pool)
         .await?;
 
@@ -486,34 +491,35 @@ impl PartnerScoreRefresher {
     /// (plan_name/manual_plan_id) aus Python `_load_boost_flags` ist eine eigene
     /// Slice (Entitlement-Katalog noch nicht in tb-raid portiert).
     async fn load_boost_flag(&self, user_id: &str) -> Result<bool, sqlx::Error> {
-        let row: Option<(i32,)> = sqlx::query_as(
+        let row: Option<i32> = sqlx::query_scalar!(
             r#"
-            SELECT COALESCE(raid_boost_enabled, 0)
+            SELECT COALESCE(raid_boost_enabled, 0) AS "raid_boost_enabled!"
             FROM streamer_plans
             WHERE twitch_user_id = $1
             "#,
+            user_id
         )
-        .bind(user_id)
         .fetch_optional(&self.pool)
         .await?;
-        Ok(row.map(|(v,)| v != 0).unwrap_or(false))
+        Ok(row.map(|v| v != 0).unwrap_or(false))
     }
 
     async fn load_live_state(&self, user_id: &str) -> Result<LiveState, sqlx::Error> {
-        let row: Option<(Option<i32>, Option<DateTime<Utc>>)> = sqlx::query_as(
+        let row = sqlx::query!(
             r#"
-            SELECT is_live, last_started_at
+            SELECT COALESCE(is_live, 0) AS "is_live!",
+                   NULLIF(last_started_at::text, '')::timestamptz AS "last_started_at?"
             FROM twitch_live_state
             WHERE twitch_user_id = $1
             "#,
+            user_id
         )
-        .bind(user_id)
         .fetch_optional(&self.pool)
         .await?;
         Ok(match row {
-            Some((is_live, last_started_at)) => LiveState {
-                is_live: is_live.unwrap_or(0) != 0,
-                last_started_at,
+            Some(row) => LiveState {
+                is_live: row.is_live != 0,
+                last_started_at: row.last_started_at,
             },
             None => LiveState::default(),
         })

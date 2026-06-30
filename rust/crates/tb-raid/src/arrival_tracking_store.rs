@@ -100,7 +100,7 @@ impl ArrivalTrackingStore {
     pub async fn record_arrival(&self, input: &RecordArrivalInput) -> Result<i64, sqlx::Error> {
         // Prod-Spalte `id` ist int4 (SERIAL). Ohne den expliziten `::bigint`-Cast
         // lehnt sqlx das Tupel-Decode in `(i64,)` strikt ab → jeder Insert schlägt fehl.
-        let row: (i64,) = sqlx::query_as(
+        let id: i64 = sqlx::query_scalar!(
             r#"
             INSERT INTO twitch_raid_arrival_tracking (
                 from_broadcaster_id,
@@ -122,27 +122,27 @@ impl ArrivalTrackingStore {
                 $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14,
                 CASE WHEN $14 THEN NOW() ELSE NULL END
             )
-            RETURNING id::bigint
+            RETURNING id::bigint AS "id!"
             "#,
+            input.from_broadcaster_id.as_deref(),
+            &input.from_broadcaster_login,
+            &input.to_broadcaster_id,
+            &input.to_broadcaster_login,
+            input.viewer_count,
+            &input.classification,
+            &input.confirmation_signals,
+            &input.primary_signal,
+            &input.correlation_status,
+            input.correlation_detail.as_deref(),
+            &input.source_resolution,
+            input.raid_history_id,
+            input.raid_history_executed_at,
+            input.unraid_seen
         )
-        .bind(&input.from_broadcaster_id)
-        .bind(&input.from_broadcaster_login)
-        .bind(&input.to_broadcaster_id)
-        .bind(&input.to_broadcaster_login)
-        .bind(input.viewer_count)
-        .bind(&input.classification)
-        .bind(&input.confirmation_signals)
-        .bind(&input.primary_signal)
-        .bind(&input.correlation_status)
-        .bind(&input.correlation_detail)
-        .bind(&input.source_resolution)
-        .bind(input.raid_history_id)
-        .bind(input.raid_history_executed_at)
-        .bind(input.unraid_seen)
         .fetch_one(&self.pool)
         .await?;
 
-        Ok(row.0)
+        Ok(id)
     }
 
     /// Aktualisiert `confirmation_signals`, `last_signal_at` und optional `unraid_seen` / `last_unraid_at`.
@@ -159,7 +159,7 @@ impl ArrivalTrackingStore {
         confirmation_signals: &str,
         unraid_seen: bool,
     ) -> Result<(), sqlx::Error> {
-        sqlx::query(
+        sqlx::query!(
             r#"
             UPDATE twitch_raid_arrival_tracking
             SET confirmation_signals = $1,
@@ -168,10 +168,10 @@ impl ArrivalTrackingStore {
                 last_unraid_at       = CASE WHEN $2 THEN NOW() ELSE last_unraid_at END
             WHERE id = $3
             "#,
+            confirmation_signals,
+            unraid_seen,
+            arrival_tracking_id as i32
         )
-        .bind(confirmation_signals)
-        .bind(unraid_seen)
-        .bind(arrival_tracking_id)
         .execute(&self.pool)
         .await?;
 
@@ -184,7 +184,7 @@ impl ArrivalTrackingStore {
     /// Wird separat von `update_arrival` angeboten, da ein reines Unraid-Signal
     /// keine neuen `confirmation_signals` mitbringt.
     pub async fn mark_unraid(&self, arrival_tracking_id: i64) -> Result<(), sqlx::Error> {
-        sqlx::query(
+        sqlx::query!(
             r#"
             UPDATE twitch_raid_arrival_tracking
             SET unraid_seen    = TRUE,
@@ -192,8 +192,8 @@ impl ArrivalTrackingStore {
                 last_signal_at = NOW()
             WHERE id = $1
             "#,
+            arrival_tracking_id as i32
         )
-        .bind(arrival_tracking_id)
         .execute(&self.pool)
         .await?;
 
@@ -213,9 +213,10 @@ impl ArrivalTrackingStore {
         from_broadcaster_login: &str,
         max_age_seconds: i64,
     ) -> Result<Option<(i64, String)>, sqlx::Error> {
-        let row: Option<(i64, Option<String>)> = sqlx::query_as(
+        let row = sqlx::query!(
             r#"
-            SELECT id::bigint, confirmation_signals
+            SELECT id::bigint AS "id!",
+                   COALESCE(confirmation_signals, '') AS "confirmation_signals!"
             FROM twitch_raid_arrival_tracking
             WHERE to_broadcaster_id = $1
               AND LOWER(from_broadcaster_login) = LOWER($2)
@@ -223,13 +224,13 @@ impl ArrivalTrackingStore {
             ORDER BY detected_at DESC
             LIMIT 1
             "#,
+            to_broadcaster_id,
+            from_broadcaster_login,
+            max_age_seconds as f64
         )
-        .bind(to_broadcaster_id)
-        .bind(from_broadcaster_login)
-        .bind(max_age_seconds)
         .fetch_optional(&self.pool)
         .await?;
-        Ok(row.map(|(id, signals)| (id, signals.unwrap_or_default())))
+        Ok(row.map(|row| (row.id, row.confirmation_signals)))
     }
 }
 

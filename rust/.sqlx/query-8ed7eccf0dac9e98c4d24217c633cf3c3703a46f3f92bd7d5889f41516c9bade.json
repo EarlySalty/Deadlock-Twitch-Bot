@@ -1,0 +1,35 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n            INSERT INTO twitch_raid_arrival_tracking (\n                from_broadcaster_id,\n                from_broadcaster_login,\n                to_broadcaster_id,\n                to_broadcaster_login,\n                viewer_count,\n                classification,\n                confirmation_signals,\n                primary_signal,\n                correlation_status,\n                correlation_detail,\n                source_resolution,\n                raid_history_id,\n                raid_history_executed_at,\n                unraid_seen,\n                last_unraid_at\n            ) VALUES (\n                $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14,\n                CASE WHEN $14 THEN NOW() ELSE NULL END\n            )\n            RETURNING id::bigint AS \"id!\"\n            ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id!",
+        "type_info": "Int8"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Text",
+        "Text",
+        "Text",
+        "Text",
+        "Int4",
+        "Text",
+        "Text",
+        "Text",
+        "Text",
+        "Text",
+        "Text",
+        "Int8",
+        "Timestamptz",
+        "Bool"
+      ]
+    },
+    "nullable": [
+      null
+    ]
+  },
+  "hash": "8ed7eccf0dac9e98c4d24217c633cf3c3703a46f3f92bd7d5889f41516c9bade"
+}

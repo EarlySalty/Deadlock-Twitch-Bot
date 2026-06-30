@@ -1,0 +1,22 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n            SELECT executed_at AS \"executed_at?\"\n            FROM twitch_raid_history\n            WHERE to_broadcaster_id = $1\n              AND COALESCE(success, FALSE) IS TRUE\n            ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "executed_at?",
+        "type_info": "Timestamptz"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Text"
+      ]
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "38ee1e9bf893852946690f33f7d25a4ce9718a96aaacddf216671a77cf6b7cbf"
+}

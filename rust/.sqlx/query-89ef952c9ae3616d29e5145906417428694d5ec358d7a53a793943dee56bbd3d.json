@@ -1,0 +1,14 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "UPDATE twitch_token_blacklist SET role_removed = 1 WHERE twitch_user_id = $1",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Text"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "89ef952c9ae3616d29e5145906417428694d5ec358d7a53a793943dee56bbd3d"
+}

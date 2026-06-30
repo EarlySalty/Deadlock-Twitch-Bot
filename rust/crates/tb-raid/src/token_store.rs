@@ -149,11 +149,12 @@ impl RaidAuthStore {
 
     /// Scopes eines Streamers als Liste (`scopes` ist Space-getrennter Text).
     pub async fn get_scopes(&self, twitch_user_id: &str) -> Result<Vec<String>, sqlx::Error> {
-        let scopes: Option<Option<String>> =
-            sqlx::query_scalar("SELECT scopes FROM twitch_raid_auth WHERE twitch_user_id = $1")
-                .bind(twitch_user_id)
-                .fetch_optional(&self.pool)
-                .await?;
+        let scopes: Option<Option<String>> = sqlx::query_scalar!(
+            r#"SELECT scopes AS "scopes?" FROM twitch_raid_auth WHERE twitch_user_id = $1"#,
+            twitch_user_id
+        )
+        .fetch_optional(&self.pool)
+        .await?;
         Ok(scopes
             .flatten()
             .map(|raw| {

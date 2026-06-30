@@ -1,0 +1,15 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "UPDATE twitch_partners\n                SET technical_pause_reason = CASE\n                        WHEN LOWER(TRIM(COALESCE(technical_pause_reason, ''))) LIKE 'token_error%' THEN NULL\n                        ELSE technical_pause_reason\n                    END,\n                    raid_bot_enabled = CASE\n                        WHEN LOWER(TRIM(COALESCE(technical_pause_reason, ''))) LIKE 'token_error%' THEN 1\n                        WHEN $2 AND LOWER(TRIM(COALESCE(technical_pause_reason, ''))) NOT IN ('blocked', 'bot_banned') THEN 1\n                        ELSE raid_bot_enabled\n                    END\n              WHERE twitch_user_id = $1",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Text",
+        "Bool"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "32f6661a89a8a30cc548421edd35305c51e56cc4380d950d9c1c993bfba679b6"
+}

@@ -68,31 +68,27 @@ impl OfflineEligibilityStore {
         }
 
         // Neueste aktive Partner-Zeile (Python: status='active', ORDER BY id DESC).
-        let partner_row: Option<(Option<i32>,)> = sqlx::query_as(
-            "SELECT raid_bot_enabled FROM twitch_partners
+        let partner_row: Option<Option<i32>> = sqlx::query_scalar!(
+            r#"SELECT raid_bot_enabled AS "raid_bot_enabled?" FROM twitch_partners
               WHERE twitch_user_id = $1 AND status = 'active'
-              ORDER BY id DESC LIMIT 1",
+              ORDER BY id DESC LIMIT 1"#,
+            user_id
         )
-        .bind(user_id)
         .fetch_optional(&self.pool)
         .await?;
 
-        let auth_row: Option<(Option<bool>,)> = sqlx::query_as(
-            "SELECT raid_enabled FROM twitch_raid_auth WHERE twitch_user_id = $1 LIMIT 1",
+        let auth_row: Option<Option<bool>> = sqlx::query_scalar!(
+            r#"SELECT raid_enabled AS "raid_enabled?" FROM twitch_raid_auth WHERE twitch_user_id = $1 LIMIT 1"#,
+            user_id
         )
-        .bind(user_id)
         .fetch_optional(&self.pool)
         .await?;
 
         Ok(OfflineAutoRaidEligibility {
             active_partner: partner_row.is_some(),
             auth_row_found: auth_row.is_some(),
-            raid_bot_enabled: partner_row
-                .map(|(flag,)| flag.unwrap_or(0) != 0)
-                .unwrap_or(false),
-            raid_auth_enabled: auth_row
-                .map(|(flag,)| flag.unwrap_or(false))
-                .unwrap_or(false),
+            raid_bot_enabled: partner_row.flatten().unwrap_or(0) != 0,
+            raid_auth_enabled: auth_row.flatten().unwrap_or(false),
         })
     }
 }

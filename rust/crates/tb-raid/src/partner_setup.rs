@@ -214,18 +214,20 @@ async fn load_streamer_identity(
     twitch_user_id: &str,
     twitch_login: &str,
 ) -> Result<Option<IdentityRow>, sqlx::Error> {
-    sqlx::query_as::<_, IdentityRow>(
+    sqlx::query_as!(
+        IdentityRow,
         r#"
-        SELECT discord_user_id, discord_display_name
+        SELECT discord_user_id AS "discord_user_id?",
+               discord_display_name AS "discord_display_name?"
         FROM twitch_streamer_identities
         WHERE ($1 <> '' AND twitch_user_id = $1)
            OR ($2 <> '' AND LOWER(twitch_login) = $2)
         ORDER BY updated_at DESC
         LIMIT 1
         "#,
+        twitch_user_id.trim(),
+        normalized_or_empty(twitch_login)
     )
-    .bind(twitch_user_id.trim())
-    .bind(normalized_or_empty(twitch_login))
     .fetch_optional(pool)
     .await
 }
@@ -240,9 +242,10 @@ async fn load_streamer_source_row(
     twitch_user_id: &str,
     twitch_login: &str,
 ) -> Result<Option<SourceStreamerRow>, sqlx::Error> {
-    sqlx::query_as::<_, SourceStreamerRow>(
+    sqlx::query_as!(
+        SourceStreamerRow,
         r#"
-        SELECT created_at::text AS created_at
+        SELECT created_at::text AS "created_at?"
         FROM twitch_streamers
         WHERE ($1 <> '' AND twitch_user_id = $1)
            OR ($2 <> '' AND LOWER(twitch_login) = $2)
@@ -251,9 +254,9 @@ async fn load_streamer_source_row(
             LOWER(twitch_login)
         LIMIT 1
         "#,
+        twitch_user_id,
+        twitch_login
     )
-    .bind(twitch_user_id)
-    .bind(twitch_login)
     .fetch_optional(&mut **tx)
     .await
 }
@@ -263,23 +266,24 @@ async fn load_active_partner_row(
     twitch_user_id: &str,
     twitch_login: &str,
 ) -> Result<Option<ActivePartnerRow>, sqlx::Error> {
-    sqlx::query_as::<_, ActivePartnerRow>(
+    sqlx::query_as!(
+        ActivePartnerRow,
         r#"
         SELECT
-            p.id,
-            p.require_discord_link,
-            p.last_description,
-            p.last_link_ok,
-            p.added_by,
-            p.last_link_checked_at,
-            p.manual_partner_opt_out,
-            p.raid_bot_enabled,
-            p.silent_ban,
-            p.silent_raid,
-            p.live_ping_role_id,
-            COALESCE(p.live_ping_enabled, 1) AS live_ping_enabled,
-            p.partnered_at,
-            p.technical_pause_reason
+            p.id AS "id!",
+            p.require_discord_link AS "require_discord_link?",
+            p.last_description AS "last_description?",
+            p.last_link_ok AS "last_link_ok?",
+            p.added_by AS "added_by?",
+            p.last_link_checked_at AS "last_link_checked_at?",
+            p.manual_partner_opt_out AS "manual_partner_opt_out?",
+            p.raid_bot_enabled AS "raid_bot_enabled?",
+            p.silent_ban AS "silent_ban?",
+            p.silent_raid AS "silent_raid?",
+            p.live_ping_role_id AS "live_ping_role_id?",
+            COALESCE(p.live_ping_enabled, 1) AS "live_ping_enabled?",
+            p.partnered_at AS "partnered_at?",
+            p.technical_pause_reason AS "technical_pause_reason?"
         FROM twitch_partners p
         WHERE (($1 <> '' AND p.twitch_user_id = $1)
             OR ($2 <> '' AND LOWER(p.twitch_login) = $2))
@@ -287,9 +291,9 @@ async fn load_active_partner_row(
         ORDER BY p.id DESC
         LIMIT 1
         "#,
+        twitch_user_id,
+        twitch_login
     )
-    .bind(twitch_user_id)
-    .bind(twitch_login)
     .fetch_optional(&mut **tx)
     .await
 }
@@ -308,9 +312,9 @@ async fn load_inactive_block_reason(
     twitch_user_id: &str,
     twitch_login: &str,
 ) -> Result<Option<String>, sqlx::Error> {
-    let row: Option<Option<String>> = sqlx::query_scalar(
+    let row: Option<Option<String>> = sqlx::query_scalar!(
         r#"
-        SELECT technical_pause_reason
+        SELECT technical_pause_reason AS "technical_pause_reason?"
           FROM twitch_partners
          WHERE (($1 <> '' AND twitch_user_id = $1)
              OR ($2 <> '' AND LOWER(twitch_login) = $2))
@@ -319,9 +323,9 @@ async fn load_inactive_block_reason(
          ORDER BY id DESC
          LIMIT 1
         "#,
+        twitch_user_id,
+        twitch_login
     )
-    .bind(twitch_user_id)
-    .bind(twitch_login)
     .fetch_optional(&mut **tx)
     .await?;
 
@@ -357,7 +361,7 @@ async fn upsert_streamer_identity(
         };
 
     if let Some(ref discord_id) = normalized_discord {
-        sqlx::query(
+        sqlx::query!(
             r#"
             UPDATE twitch_streamer_identities
             SET discord_user_id = NULL,
@@ -367,14 +371,14 @@ async fn upsert_streamer_identity(
             WHERE discord_user_id = $1
               AND twitch_user_id <> $2
             "#,
+            discord_id,
+            normalized_user_id
         )
-        .bind(discord_id)
-        .bind(normalized_user_id)
         .execute(&mut **tx)
         .await?;
     }
 
-    sqlx::query(
+    sqlx::query!(
         r#"
         INSERT INTO twitch_streamer_identities (
             twitch_user_id, twitch_login, discord_user_id, discord_display_name,
@@ -387,12 +391,12 @@ async fn upsert_streamer_identity(
             is_on_discord = COALESCE(EXCLUDED.is_on_discord, twitch_streamer_identities.is_on_discord),
             updated_at = CURRENT_TIMESTAMP
         "#,
+        normalized_user_id,
+        &normalized_login,
+        normalized_discord.as_deref(),
+        normalized_display.as_deref(),
+        is_on_discord_value
     )
-    .bind(normalized_user_id)
-    .bind(&normalized_login)
-    .bind(&normalized_discord)
-    .bind(&normalized_display)
-    .bind(is_on_discord_value)
     .execute(&mut **tx)
     .await?;
     Ok(())
@@ -481,7 +485,7 @@ async fn backfill_tracked_stats_from_category(
     if normalized.is_empty() {
         return Ok(0);
     }
-    let result = sqlx::query(
+    let result = sqlx::query!(
         r#"
         INSERT INTO twitch_stats_tracked
             (ts_utc, streamer, viewer_count, is_partner, game_name, stream_title, tags)
@@ -496,8 +500,8 @@ async fn backfill_tracked_stats_from_category(
                   AND t.ts_utc = c.ts_utc
            )
         "#,
+        &normalized
     )
-    .bind(&normalized)
     .execute(&mut **tx)
     .await?;
     Ok(result.rows_affected())
@@ -534,17 +538,17 @@ async fn backfill_tracked_stats_best_effort(pool: &PgPool, login: &str) -> u64 {
 /// Fehler werden geloggt, nicht propagiert (Python-Parität).
 pub async fn record_first_login(pool: &PgPool, twitch_user_id: &str, twitch_login: &str) {
     let now = now_iso(Utc::now());
-    let result = sqlx::query(
+    let result = sqlx::query!(
         r#"
         INSERT INTO streamer_plans (twitch_user_id, twitch_login, first_login_at)
         VALUES ($1, $2, $3)
         ON CONFLICT (twitch_user_id) DO UPDATE SET
             first_login_at = COALESCE(streamer_plans.first_login_at, EXCLUDED.first_login_at)
         "#,
+        twitch_user_id,
+        twitch_login,
+        &now
     )
-    .bind(twitch_user_id)
-    .bind(twitch_login)
-    .bind(&now)
     .execute(pool)
     .await;
     match result {
@@ -670,7 +674,7 @@ pub async fn promote_streamer_to_partner(
         .unwrap_or_else(|| now_iso(now));
 
     if let Some(active) = active {
-        sqlx::query(
+        sqlx::query!(
             r#"
             UPDATE twitch_partners
             SET twitch_login = $1,
@@ -693,26 +697,26 @@ pub async fn promote_streamer_to_partner(
                 status = 'active'
             WHERE id = $15
             "#,
+            &normalized_login,
+            require_discord_link,
+            last_description.as_deref(),
+            last_link_ok,
+            added_by.as_deref(),
+            last_link_checked_at.as_deref(),
+            next_link_check_at.as_deref(),
+            manual_partner_opt_out,
+            raid_bot_enabled,
+            silent_ban,
+            silent_raid,
+            live_ping_role_id,
+            live_ping_enabled,
+            &effective_partnered_at,
+            active.id
         )
-        .bind(&normalized_login)
-        .bind(require_discord_link)
-        .bind(&last_description)
-        .bind(last_link_ok)
-        .bind(&added_by)
-        .bind(&last_link_checked_at)
-        .bind(&next_link_check_at)
-        .bind(manual_partner_opt_out)
-        .bind(raid_bot_enabled)
-        .bind(silent_ban)
-        .bind(silent_raid)
-        .bind(live_ping_role_id)
-        .bind(live_ping_enabled)
-        .bind(&effective_partnered_at)
-        .bind(active.id)
         .execute(&mut **tx)
         .await?;
     } else {
-        sqlx::query(
+        sqlx::query!(
             r#"
             INSERT INTO twitch_partners (
                 twitch_user_id, twitch_login, require_discord_link, last_description,
@@ -723,22 +727,22 @@ pub async fn promote_streamer_to_partner(
             ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13,
                       $14, $15, NULL, NULL, NULL, 'active')
             "#,
+            &normalized_user_id,
+            &normalized_login,
+            require_discord_link,
+            last_description.as_deref(),
+            last_link_ok,
+            added_by.as_deref(),
+            last_link_checked_at.as_deref(),
+            next_link_check_at.as_deref(),
+            manual_partner_opt_out,
+            raid_bot_enabled,
+            silent_ban,
+            silent_raid,
+            live_ping_role_id,
+            live_ping_enabled,
+            &effective_partnered_at
         )
-        .bind(&normalized_user_id)
-        .bind(&normalized_login)
-        .bind(require_discord_link)
-        .bind(&last_description)
-        .bind(last_link_ok)
-        .bind(&added_by)
-        .bind(&last_link_checked_at)
-        .bind(&next_link_check_at)
-        .bind(manual_partner_opt_out)
-        .bind(raid_bot_enabled)
-        .bind(silent_ban)
-        .bind(silent_raid)
-        .bind(live_ping_role_id)
-        .bind(live_ping_enabled)
-        .bind(&effective_partnered_at)
         .execute(&mut **tx)
         .await?;
     }
@@ -746,15 +750,15 @@ pub async fn promote_streamer_to_partner(
     normalize_related_tables(tx, &normalized_user_id, &normalized_login).await?;
 
     if args.clear_source {
-        sqlx::query(
+        sqlx::query!(
             r#"
             DELETE FROM twitch_streamers
             WHERE twitch_user_id = $1
                OR LOWER(twitch_login) = LOWER($2)
             "#,
+            &normalized_user_id,
+            &normalized_login
         )
-        .bind(&normalized_user_id)
-        .bind(&normalized_login)
         .execute(&mut **tx)
         .await?;
     }

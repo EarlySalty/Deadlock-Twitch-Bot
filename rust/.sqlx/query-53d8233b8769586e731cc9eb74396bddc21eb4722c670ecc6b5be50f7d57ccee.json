@@ -1,0 +1,22 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n            SELECT COALESCE(raid_boost_enabled, 0) AS \"raid_boost_enabled!\"\n            FROM streamer_plans\n            WHERE twitch_user_id = $1\n            ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "raid_boost_enabled!",
+        "type_info": "Int4"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Text"
+      ]
+    },
+    "nullable": [
+      null
+    ]
+  },
+  "hash": "53d8233b8769586e731cc9eb74396bddc21eb4722c670ecc6b5be50f7d57ccee"
+}

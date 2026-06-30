@@ -1,0 +1,22 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT scopes AS \"scopes?\" FROM twitch_raid_auth WHERE twitch_user_id = $1",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "scopes?",
+        "type_info": "Text"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Text"
+      ]
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "45a6a3bf188fa6dc2f60ae0dc9e96f08db4899ff0d1517881e3bc182df5f0d17"
+}

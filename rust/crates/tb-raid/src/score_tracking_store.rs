@@ -85,7 +85,7 @@ impl ScoreTrackingStore {
                 Some("not_deadlock_at_raid"),
             )
         };
-        let id: (i32,) = sqlx::query_as(
+        let id: i32 = sqlx::query_scalar!(
             r#"
             INSERT INTO twitch_partner_raid_score_tracking (
                 raid_history_id, raid_history_executed_at,
@@ -102,43 +102,41 @@ impl ScoreTrackingStore {
                 $12, $13, $14, $15, $16, $17, $18, $19, $20, $21,
                 $22, $23, $24, $25
             )
-            RETURNING id
+            RETURNING id AS "id!"
             "#,
-        )
-        .bind(input.raid_history_id)
-        .bind(input.raid_history_executed_at)
-        .bind(
+            input.raid_history_id,
+            input.raid_history_executed_at,
             input
                 .from_broadcaster_id
                 .as_deref()
                 .map(str::trim)
                 .filter(|s| !s.is_empty()),
+            input.from_broadcaster_login.trim().to_lowercase(),
+            input.to_broadcaster_id.trim(),
+            input.to_broadcaster_login.trim().to_lowercase(),
+            input.viewer_count,
+            &input.confirmed_at,
+            input.target_session_id,
+            input.target_stream_started_at.as_deref(),
+            input.score_last_computed_at.as_deref(),
+            input.final_score,
+            input.base_score,
+            input.duration_score,
+            input.time_pattern_score,
+            input.readiness_score,
+            input.fairness_score,
+            input.new_partner_multiplier,
+            input.raid_boost_multiplier,
+            input.today_received_raids,
+            i32::from(input.was_deadlock_at_raid),
+            continued_until,
+            continued_sec,
+            resolved_at,
+            resolution_reason
         )
-        .bind(input.from_broadcaster_login.trim().to_lowercase())
-        .bind(input.to_broadcaster_id.trim())
-        .bind(input.to_broadcaster_login.trim().to_lowercase())
-        .bind(input.viewer_count)
-        .bind(&input.confirmed_at)
-        .bind(input.target_session_id)
-        .bind(&input.target_stream_started_at)
-        .bind(&input.score_last_computed_at)
-        .bind(input.final_score)
-        .bind(input.base_score)
-        .bind(input.duration_score)
-        .bind(input.time_pattern_score)
-        .bind(input.readiness_score)
-        .bind(input.fairness_score)
-        .bind(input.new_partner_multiplier)
-        .bind(input.raid_boost_multiplier)
-        .bind(input.today_received_raids)
-        .bind(i32::from(input.was_deadlock_at_raid))
-        .bind(continued_until)
-        .bind(continued_sec)
-        .bind(resolved_at)
-        .bind(resolution_reason)
         .fetch_one(&self.pool)
         .await?;
-        Ok(Some(i64::from(id.0)))
+        Ok(Some(i64::from(id)))
     }
 
     /// Löst die noch offenen Tracking-Zeilen einer abgeschlossenen Session auf.
@@ -220,10 +218,10 @@ impl ScoreTrackingStore {
         // blieben für immer offen). Daher als TEXT lesen und ISO-parsen, wie
         // Python `_parse_dt` (partner_raid_score_tracking.py:19-30). Toleriert
         // sowohl TEXT- als auch (per ::text-Cast) TIMESTAMPTZ-Spalten.
-        let session_started_raw: Option<String> = sqlx::query_scalar(
-            "SELECT started_at::text FROM twitch_stream_sessions WHERE id = $1 LIMIT 1",
+        let session_started_raw: Option<String> = sqlx::query_scalar!(
+            r#"SELECT started_at::text AS "started_at?" FROM twitch_stream_sessions WHERE id::bigint = $1 LIMIT 1"#,
+            session_id
         )
-        .bind(session_id)
         .fetch_optional(&self.pool)
         .await?
         .flatten();
@@ -264,27 +262,31 @@ impl ScoreTrackingStore {
                 } else {
                     to_broadcaster_id.trim().to_string()
                 };
-                let updates: Vec<(Option<String>, DateTime<Utc>)> = sqlx::query_as(
-                    "SELECT game_name, recorded_at FROM twitch_channel_updates \
-                     WHERE twitch_user_id = $1 AND recorded_at >= $2 AND recorded_at <= $3 \
-                     ORDER BY recorded_at ASC",
+                let updates = sqlx::query!(
+                    r#"SELECT game_name AS "game_name?",
+                              recorded_at::timestamptz AS "recorded_at!"
+                       FROM twitch_channel_updates
+                      WHERE twitch_user_id = $1
+                        AND recorded_at::timestamptz >= $2
+                        AND recorded_at::timestamptz <= $3
+                      ORDER BY recorded_at ASC"#,
+                    if tracked_user_id.is_empty() {
+                        target_id.clone()
+                    } else {
+                        tracked_user_id
+                    },
+                    confirmed_at_dt,
+                    ended_at
                 )
-                .bind(if tracked_user_id.is_empty() {
-                    target_id.clone()
-                } else {
-                    tracked_user_id
-                })
-                .bind(confirmed_at_dt)
-                .bind(ended_at)
                 .fetch_all(&self.pool)
                 .await?;
-                for (game_name, recorded_at) in updates {
-                    let game = game_name.unwrap_or_default().trim().to_lowercase();
+                for row in updates {
+                    let game = row.game_name.unwrap_or_default().trim().to_lowercase();
                     if game.is_empty() {
                         continue;
                     }
                     if game != target_game_lower {
-                        resolution_dt = recorded_at;
+                        resolution_dt = row.recorded_at;
                         resolution_reason = "channel_update_non_deadlock";
                         break;
                     }
@@ -294,17 +296,17 @@ impl ScoreTrackingStore {
             }
 
             let duration_sec = (resolution_dt - confirmed_at_dt).num_seconds().max(0) as i32;
-            sqlx::query(
+            sqlx::query!(
                 "UPDATE twitch_partner_raid_score_tracking \
                  SET deadlock_continued_until = $1, deadlock_continued_sec = $2, \
                      resolved_at = $3, resolution_reason = $4 \
                  WHERE id = $5",
+                iso_utc(resolution_dt),
+                duration_sec,
+                iso_utc(ended_at),
+                resolution_reason,
+                tracking_id
             )
-            .bind(iso_utc(resolution_dt))
-            .bind(duration_sec)
-            .bind(iso_utc(ended_at))
-            .bind(resolution_reason)
-            .bind(tracking_id)
             .execute(&self.pool)
             .await?;
             resolved += 1;
@@ -326,13 +328,17 @@ impl ScoreTrackingStore {
         session_started_at: Option<DateTime<Utc>>,
         session_ended_at: DateTime<Utc>,
     ) -> Result<Vec<TrackingRow>, sqlx::Error> {
-        let primary: Vec<TrackingRowRaw> = sqlx::query_as(
-            "SELECT id, confirmed_at, to_broadcaster_id, was_deadlock_at_raid \
-             FROM twitch_partner_raid_score_tracking \
-             WHERE target_session_id = $1 AND resolved_at IS NULL \
-             ORDER BY confirmed_at ASC, id ASC",
+        let primary: Vec<TrackingRowRaw> = sqlx::query_as!(
+            TrackingRowRaw,
+            r#"SELECT id AS "id!",
+                      confirmed_at AS "confirmed_at?",
+                      to_broadcaster_id AS "to_broadcaster_id?",
+                      was_deadlock_at_raid AS "was_deadlock_at_raid?"
+                 FROM twitch_partner_raid_score_tracking
+                WHERE target_session_id = $1 AND resolved_at IS NULL
+                ORDER BY confirmed_at ASC, id ASC"#,
+            session_id as i32
         )
-        .bind(session_id as i32)
         .fetch_all(&self.pool)
         .await?;
 
@@ -342,35 +348,43 @@ impl ScoreTrackingStore {
 
         // Fallback nur mit auflösbarer Ziel-Identität (Python Z. 303–310).
         let fallback: Vec<TrackingRowRaw> = if !target_id.trim().is_empty() {
-            sqlx::query_as(
-                "SELECT id, confirmed_at, to_broadcaster_id, was_deadlock_at_raid \
-                 FROM twitch_partner_raid_score_tracking \
-                 WHERE target_session_id IS NULL AND resolved_at IS NULL \
-                   AND to_broadcaster_id = $1 \
-                   AND confirmed_at >= $2 AND confirmed_at <= $3 \
-                   AND (target_stream_started_at IS NULL OR target_stream_started_at = $4) \
-                 ORDER BY confirmed_at ASC, id ASC",
+            sqlx::query_as!(
+                TrackingRowRaw,
+                r#"SELECT id AS "id!",
+                          confirmed_at AS "confirmed_at?",
+                          to_broadcaster_id AS "to_broadcaster_id?",
+                          was_deadlock_at_raid AS "was_deadlock_at_raid?"
+                     FROM twitch_partner_raid_score_tracking
+                    WHERE target_session_id IS NULL AND resolved_at IS NULL
+                      AND to_broadcaster_id = $1
+                      AND confirmed_at >= $2 AND confirmed_at <= $3
+                      AND (target_stream_started_at IS NULL OR target_stream_started_at = $4)
+                    ORDER BY confirmed_at ASC, id ASC"#,
+                target_id.trim(),
+                iso_utc(started_at),
+                iso_utc(session_ended_at),
+                iso_utc(started_at)
             )
-            .bind(target_id.trim())
-            .bind(iso_utc(started_at))
-            .bind(iso_utc(session_ended_at))
-            .bind(iso_utc(started_at))
             .fetch_all(&self.pool)
             .await?
         } else if !login_lower.is_empty() {
-            sqlx::query_as(
-                "SELECT id, confirmed_at, to_broadcaster_id, was_deadlock_at_raid \
-                 FROM twitch_partner_raid_score_tracking \
-                 WHERE target_session_id IS NULL AND resolved_at IS NULL \
-                   AND LOWER(to_broadcaster_login) = LOWER($1) \
-                   AND confirmed_at >= $2 AND confirmed_at <= $3 \
-                   AND (target_stream_started_at IS NULL OR target_stream_started_at = $4) \
-                 ORDER BY confirmed_at ASC, id ASC",
+            sqlx::query_as!(
+                TrackingRowRaw,
+                r#"SELECT id AS "id!",
+                          confirmed_at AS "confirmed_at?",
+                          to_broadcaster_id AS "to_broadcaster_id?",
+                          was_deadlock_at_raid AS "was_deadlock_at_raid?"
+                     FROM twitch_partner_raid_score_tracking
+                    WHERE target_session_id IS NULL AND resolved_at IS NULL
+                      AND LOWER(to_broadcaster_login) = LOWER($1)
+                      AND confirmed_at >= $2 AND confirmed_at <= $3
+                      AND (target_stream_started_at IS NULL OR target_stream_started_at = $4)
+                    ORDER BY confirmed_at ASC, id ASC"#,
+                login_lower,
+                iso_utc(started_at),
+                iso_utc(session_ended_at),
+                iso_utc(started_at)
             )
-            .bind(login_lower)
-            .bind(iso_utc(started_at))
-            .bind(iso_utc(session_ended_at))
-            .bind(iso_utc(started_at))
             .fetch_all(&self.pool)
             .await?
         } else {

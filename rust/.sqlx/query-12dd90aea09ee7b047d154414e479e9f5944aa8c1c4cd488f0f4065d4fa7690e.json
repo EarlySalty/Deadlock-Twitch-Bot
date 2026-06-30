@@ -1,0 +1,22 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT started_at::text AS \"started_at?\" FROM twitch_stream_sessions WHERE id::bigint = $1 LIMIT 1",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "started_at?",
+        "type_info": "Text"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Int8"
+      ]
+    },
+    "nullable": [
+      null
+    ]
+  },
+  "hash": "12dd90aea09ee7b047d154414e479e9f5944aa8c1c4cd488f0f4065d4fa7690e"
+}

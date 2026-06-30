@@ -52,7 +52,7 @@ impl StrikesStore {
         // target_id: leerer String → NULL (identisch zu Python `target_id or None`).
         let tid: Option<&str> = target_id.filter(|s| !s.trim().is_empty());
 
-        let row: (i32,) = sqlx::query_as(
+        let strike_count: i32 = sqlx::query_scalar!(
             r#"
             INSERT INTO twitch_raid_disabled_strikes
                 (target_id, target_login, strike_count, last_seen_at, last_reason)
@@ -62,16 +62,16 @@ impl StrikesStore {
                 strike_count = twitch_raid_disabled_strikes.strike_count + 1,
                 last_seen_at = NOW(),
                 last_reason  = EXCLUDED.last_reason
-            RETURNING strike_count
+            RETURNING strike_count AS "strike_count!"
             "#,
+            tid,
+            target_login,
+            reason
         )
-        .bind(tid)
-        .bind(target_login)
-        .bind(reason)
         .fetch_one(&self.pool)
         .await?;
 
-        Ok(row.0)
+        Ok(strike_count)
     }
 }
 

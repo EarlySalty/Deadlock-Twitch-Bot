@@ -1,0 +1,17 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n            UPDATE twitch_raid_auth\n               SET access_token = 'ENC', refresh_token = 'ENC',\n                   access_token_enc = $1, refresh_token_enc = $2,\n                   enc_version = 1, enc_kid = 'v1',\n                   token_expires_at = $3, last_refreshed_at = NOW()\n             WHERE twitch_user_id = $4\n            ",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Bytea",
+        "Bytea",
+        "Timestamptz",
+        "Text"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "ece8c08172b6b97723c8da5ec7670752d9e7a42da4bdbacdbd0ebd6f7168b9bc"
+}

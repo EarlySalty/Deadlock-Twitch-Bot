@@ -1,0 +1,28 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n            INSERT INTO twitch_partners (\n                twitch_user_id, twitch_login, require_discord_link, last_description,\n                last_link_ok, added_by, last_link_checked_at, next_link_check_at,\n                manual_partner_opt_out, raid_bot_enabled, silent_ban, silent_raid,\n                live_ping_role_id, live_ping_enabled, partnered_at,\n                admin_archived_at, departnered_at, technical_pause_reason, status\n            ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13,\n                      $14, $15, NULL, NULL, NULL, 'active')\n            ",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Text",
+        "Text",
+        "Int4",
+        "Text",
+        "Int4",
+        "Text",
+        "Text",
+        "Text",
+        "Int4",
+        "Int4",
+        "Int4",
+        "Int4",
+        "Int8",
+        "Int4",
+        "Text"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "c0cd5bf352b44088dc60e6eb8f0aee858b445904e6a69f81bd6ffed68561712e"
+}

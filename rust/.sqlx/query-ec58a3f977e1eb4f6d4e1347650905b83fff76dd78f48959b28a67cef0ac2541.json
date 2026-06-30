@@ -1,0 +1,101 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n        SELECT\n            p.id AS \"id!\",\n            p.require_discord_link AS \"require_discord_link?\",\n            p.last_description AS \"last_description?\",\n            p.last_link_ok AS \"last_link_ok?\",\n            p.added_by AS \"added_by?\",\n            p.last_link_checked_at AS \"last_link_checked_at?\",\n            p.manual_partner_opt_out AS \"manual_partner_opt_out?\",\n            p.raid_bot_enabled AS \"raid_bot_enabled?\",\n            p.silent_ban AS \"silent_ban?\",\n            p.silent_raid AS \"silent_raid?\",\n            p.live_ping_role_id AS \"live_ping_role_id?\",\n            COALESCE(p.live_ping_enabled, 1) AS \"live_ping_enabled?\",\n            p.partnered_at AS \"partnered_at?\",\n            p.technical_pause_reason AS \"technical_pause_reason?\"\n        FROM twitch_partners p\n        WHERE (($1 <> '' AND p.twitch_user_id = $1)\n            OR ($2 <> '' AND LOWER(p.twitch_login) = $2))\n          AND p.status = 'active'\n        ORDER BY p.id DESC\n        LIMIT 1\n        ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id!",
+        "type_info": "Int8"
+      },
+      {
+        "ordinal": 1,
+        "name": "require_discord_link?",
+        "type_info": "Int4"
+      },
+      {
+        "ordinal": 2,
+        "name": "last_description?",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 3,
+        "name": "last_link_ok?",
+        "type_info": "Int4"
+      },
+      {
+        "ordinal": 4,
+        "name": "added_by?",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 5,
+        "name": "last_link_checked_at?",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 6,
+        "name": "manual_partner_opt_out?",
+        "type_info": "Int4"
+      },
+      {
+        "ordinal": 7,
+        "name": "raid_bot_enabled?",
+        "type_info": "Int4"
+      },
+      {
+        "ordinal": 8,
+        "name": "silent_ban?",
+        "type_info": "Int4"
+      },
+      {
+        "ordinal": 9,
+        "name": "silent_raid?",
+        "type_info": "Int4"
+      },
+      {
+        "ordinal": 10,
+        "name": "live_ping_role_id?",
+        "type_info": "Int8"
+      },
+      {
+        "ordinal": 11,
+        "name": "live_ping_enabled?",
+        "type_info": "Int4"
+      },
+      {
+        "ordinal": 12,
+        "name": "partnered_at?",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 13,
+        "name": "technical_pause_reason?",
+        "type_info": "Text"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Text",
+        "Text"
+      ]
+    },
+    "nullable": [
+      false,
+      true,
+      true,
+      true,
+      true,
+      true,
+      true,
+      true,
+      true,
+      true,
+      true,
+      null,
+      true,
+      true
+    ]
+  },
+  "hash": "ec58a3f977e1eb4f6d4e1347650905b83fff76dd78f48959b28a67cef0ac2541"
+}

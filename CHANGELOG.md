@@ -1,3 +1,11 @@
+## #314 — Vierte Welle, zweiter Teil: das Raid-, Partner- und Token-Innenleben wird beim Bauen geprüft
+
+**Ausgangslage:** Der größte einzelne Brocken dieser Umstellung ist der Maschinenraum hinter den Auto-Raids: Token-Verwaltung und -Erneuerung, Partner-Bewertung und -Liste, die Sperrlisten der Raid-Ziele, Anwerbung und Ankunfts-Erkennung. 107 Datenbank-Abfragen, bisher erst zur Laufzeit auf Passung geprüft — ausgerechnet in dem Teil, der unbeaufsichtigt im Hintergrund läuft.
+
+**Änderung:** Alle 107 werden ab jetzt schon beim Bauen gegen ein frisch aus dem Bauplan erzeugtes Schema geprüft. Dabei fielen drei Stellen auf, an denen ein Wert breiter geführt wurde, als die Spalte ihn überhaupt fassen kann — verlustfrei zurechtgerückt, weil die Spalte den Wertebereich ohnehin begrenzt. Fünf dynamisch zusammengesetzte Abfragen bleiben bewusst ungeprüft und sind als solche markiert.
+
+**Ergebnis:** Verschwindet oder ändert sich in diesem Hintergrund-Bereich eine Spalte, scheitert künftig der Bau statt erst der unbeaufsichtigte Betrieb. An einer nachgestellten Kopie bewiesen: Bauen ohne Datenbank läuft, eine künstlich umbenannte Spalte lässt den Bau sofort scheitern, und eine zweite, unabhängige Prüfung bestätigte, dass keine „darf nicht leer sein"-Festlegung zur Laufzeit umkippt. Für den Betrieb ändert sich nichts.
+
 ## #313 — Auto-Raid-Sperrquelle bereinigt
 
 **Ausgangslage:** Der Auto-Raid-Filter las gebannte Ziele noch aus zwei Quellen, obwohl die globale Chatter-Ban-Liste inzwischen die maßgebliche Wahrheit für gebannte Accounts ist.

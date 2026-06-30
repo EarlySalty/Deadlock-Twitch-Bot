@@ -1,0 +1,28 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n            SELECT twitch_user_id AS \"twitch_user_id!\",\n                   LOWER(twitch_login) AS \"twitch_login!\"\n            FROM twitch_streamers_partner_state\n            WHERE twitch_user_id IS NOT NULL\n              AND twitch_login IS NOT NULL\n              AND twitch_user_id = ANY($1)\n            ORDER BY LOWER(twitch_login)\n            ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "twitch_user_id!",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 1,
+        "name": "twitch_login!",
+        "type_info": "Text"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "TextArray"
+      ]
+    },
+    "nullable": [
+      true,
+      null
+    ]
+  },
+  "hash": "38c1f5e66efa77286b7f840ca5ac0e0b7805e2a6385282a89224837da5a96aec"
+}

@@ -1,0 +1,28 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n            SELECT COALESCE(is_live, 0) AS \"is_live!\",\n                   NULLIF(last_started_at::text, '')::timestamptz AS \"last_started_at?\"\n            FROM twitch_live_state\n            WHERE twitch_user_id = $1\n            ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "is_live!",
+        "type_info": "Int4"
+      },
+      {
+        "ordinal": 1,
+        "name": "last_started_at?",
+        "type_info": "Timestamptz"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Text"
+      ]
+    },
+    "nullable": [
+      null,
+      null
+    ]
+  },
+  "hash": "74a86f11ed823c62271bf70c104ed33e5c394049a66ddb2c053a5d31d1800d07"
+}

@@ -311,9 +311,11 @@ impl<N: TokenLifecycleNotifier> TokenLifecycleReactor<N> {
     /// (`add_to_blacklist_inner` INSERTet ihn), darum genügt hier „Eintrag
     /// existiert UND notified=0".
     pub async fn notify_pending_errors(&self) -> u64 {
-        let pending: Result<Vec<(String, String, Option<String>)>, _> = sqlx::query_as(
+        let pending = sqlx::query!(
             r#"
-            SELECT twitch_user_id, twitch_login, error_message
+            SELECT twitch_user_id AS "twitch_user_id!",
+                   twitch_login AS "twitch_login!",
+                   error_message AS "error_message?"
             FROM twitch_token_blacklist
             WHERE COALESCE(notified, 0) = 0
             "#,
@@ -328,12 +330,14 @@ impl<N: TokenLifecycleNotifier> TokenLifecycleReactor<N> {
             }
         };
         let mut notified = 0u64;
-        for (uid, login, err) in rows {
+        for row in rows {
             let outcome = self
                 .notify_token_error(
-                    &uid,
-                    &login,
-                    err.as_deref().unwrap_or("invalid refresh grant"),
+                    &row.twitch_user_id,
+                    &row.twitch_login,
+                    row.error_message
+                        .as_deref()
+                        .unwrap_or("invalid refresh grant"),
                 )
                 .await;
             if outcome.any_sent() {
@@ -412,10 +416,12 @@ impl<N: TokenLifecycleNotifier> TokenLifecycleReactor<N> {
     pub async fn cleanup_old_entries(&self, days: i64) -> u64 {
         let cutoff = Utc::now() - chrono::Duration::days(days);
         let cutoff_iso = Self::iso(cutoff);
-        match sqlx::query("DELETE FROM twitch_token_blacklist WHERE last_error_at < $1")
-            .bind(&cutoff_iso)
-            .execute(&self.pool)
-            .await
+        match sqlx::query!(
+            "DELETE FROM twitch_token_blacklist WHERE last_error_at < $1",
+            &cutoff_iso
+        )
+        .execute(&self.pool)
+        .await
         {
             Ok(result) => {
                 let deleted = result.rows_affected();
@@ -511,11 +517,11 @@ impl<N: TokenLifecycleNotifier> TokenLifecycleReactor<N> {
     /// Auth-Zeilen mit `technical_pause_reason='bot_banned'` oder `token_error*`
     /// und delegiert die Sicherheitslogik an [`Self::restore_bot_banned_channel`].
     pub async fn restore_ready_bot_banned_channels(&self) -> u64 {
-        let rows: Vec<(String, String)> = match sqlx::query_as(
+        let rows = match sqlx::query!(
             r#"
             SELECT DISTINCT
-                   ra.twitch_user_id,
-                   COALESCE(NULLIF(LOWER(ra.twitch_login), ''), LOWER(p.twitch_login), '') AS twitch_login
+                   ra.twitch_user_id AS "twitch_user_id!",
+                   COALESCE(NULLIF(LOWER(ra.twitch_login), ''), LOWER(p.twitch_login), '') AS "twitch_login!"
               FROM twitch_raid_auth ra
               JOIN twitch_partners p
                 ON p.twitch_user_id = ra.twitch_user_id
@@ -538,8 +544,11 @@ impl<N: TokenLifecycleNotifier> TokenLifecycleReactor<N> {
         };
 
         let mut restored = 0u64;
-        for (uid, login) in rows {
-            if self.restore_bot_banned_channel(&uid, &login).await {
+        for row in rows {
+            if self
+                .restore_bot_banned_channel(&row.twitch_user_id, &row.twitch_login)
+                .await
+            {
                 restored += 1;
             }
         }
@@ -551,7 +560,7 @@ impl<N: TokenLifecycleNotifier> TokenLifecycleReactor<N> {
     /// auf 0 hängt, OHNE technische Pause. Schließt die Lücke, die der
     /// Bot-Ban/Token-Error-Restore nicht abdeckt. Idempotent. Liefert Anzahl geheilter Zeilen.
     pub async fn reconcile_healthy_raid_toggles(&self) -> u64 {
-        match sqlx::query(
+        match sqlx::query!(
             r#"
             UPDATE twitch_partners p
                SET raid_bot_enabled = 1
@@ -579,31 +588,32 @@ impl<N: TokenLifecycleNotifier> TokenLifecycleReactor<N> {
     // -- DB-Helfer --------------------------------------------------------
 
     async fn is_notified(&self, twitch_user_id: &str) -> Result<bool, sqlx::Error> {
-        let row: Option<Option<i32>> = sqlx::query_scalar(
-            "SELECT notified FROM twitch_token_blacklist WHERE twitch_user_id = $1",
+        let row: Option<Option<i32>> = sqlx::query_scalar!(
+            r#"SELECT notified AS "notified?" FROM twitch_token_blacklist WHERE twitch_user_id = $1"#,
+            twitch_user_id
         )
-        .bind(twitch_user_id)
         .fetch_optional(&self.pool)
         .await?;
         Ok(matches!(row, Some(Some(n)) if n == 1))
     }
 
     async fn set_notified(&self, twitch_user_id: &str) {
-        if let Err(error) =
-            sqlx::query("UPDATE twitch_token_blacklist SET notified = 1 WHERE twitch_user_id = $1")
-                .bind(twitch_user_id)
-                .execute(&self.pool)
-                .await
+        if let Err(error) = sqlx::query!(
+            "UPDATE twitch_token_blacklist SET notified = 1 WHERE twitch_user_id = $1",
+            twitch_user_id
+        )
+        .execute(&self.pool)
+        .await
         {
             tracing::warn!(%error, user = %mask(twitch_user_id), "notified-Flag nicht setzbar");
         }
     }
 
     async fn set_user_dm_sent(&self, twitch_user_id: &str) {
-        if let Err(error) = sqlx::query(
+        if let Err(error) = sqlx::query!(
             "UPDATE twitch_token_blacklist SET user_dm_sent = 1 WHERE twitch_user_id = $1",
+            twitch_user_id
         )
-        .bind(twitch_user_id)
         .execute(&self.pool)
         .await
         {
@@ -612,10 +622,10 @@ impl<N: TokenLifecycleNotifier> TokenLifecycleReactor<N> {
     }
 
     async fn set_reminder_sent(&self, twitch_user_id: &str) {
-        if let Err(error) = sqlx::query(
+        if let Err(error) = sqlx::query!(
             "UPDATE twitch_token_blacklist SET reminder_sent = 1 WHERE twitch_user_id = $1",
+            twitch_user_id
         )
-        .bind(twitch_user_id)
         .execute(&self.pool)
         .await
         {
@@ -624,16 +634,19 @@ impl<N: TokenLifecycleNotifier> TokenLifecycleReactor<N> {
     }
 
     async fn load_expired_grace(&self, now_iso: &str) -> Result<Vec<ExpiredGraceRow>, sqlx::Error> {
-        sqlx::query_as::<_, ExpiredGraceRow>(
+        sqlx::query_as!(
+            ExpiredGraceRow,
             r#"
-            SELECT twitch_user_id, twitch_login, reminder_sent
+            SELECT twitch_user_id AS "twitch_user_id!",
+                   twitch_login AS "twitch_login!",
+                   reminder_sent AS "reminder_sent?"
             FROM twitch_token_blacklist
             WHERE grace_expires_at IS NOT NULL
               AND grace_expires_at <= $1
               AND role_removed = 0
             "#,
+            now_iso
         )
-        .bind(now_iso)
         .fetch_all(&self.pool)
         .await
     }
@@ -646,7 +659,7 @@ impl<N: TokenLifecycleNotifier> TokenLifecycleReactor<N> {
         twitch_login: &str,
     ) -> Result<(), sqlx::Error> {
         let mut tx = self.pool.begin().await?;
-        sqlx::query(
+        sqlx::query!(
             r#"
             UPDATE twitch_partners
                SET technical_pause_reason = CASE
@@ -658,12 +671,12 @@ impl<N: TokenLifecycleNotifier> TokenLifecycleReactor<N> {
              WHERE twitch_user_id = $1
                 OR LOWER(twitch_login) = LOWER($2)
             "#,
+            twitch_user_id,
+            twitch_login
         )
-        .bind(twitch_user_id)
-        .bind(twitch_login)
         .execute(&mut *tx)
         .await?;
-        sqlx::query(
+        sqlx::query!(
             r#"
             UPDATE twitch_raid_auth
                SET raid_enabled = FALSE,
@@ -672,15 +685,17 @@ impl<N: TokenLifecycleNotifier> TokenLifecycleReactor<N> {
              WHERE twitch_user_id = $2
                 OR LOWER(twitch_login) = LOWER($1)
             "#,
+            twitch_login,
+            twitch_user_id
         )
-        .bind(twitch_login)
-        .bind(twitch_user_id)
         .execute(&mut *tx)
         .await?;
-        sqlx::query("UPDATE twitch_token_blacklist SET role_removed = 1 WHERE twitch_user_id = $1")
-            .bind(twitch_user_id)
-            .execute(&mut *tx)
-            .await?;
+        sqlx::query!(
+            "UPDATE twitch_token_blacklist SET role_removed = 1 WHERE twitch_user_id = $1",
+            twitch_user_id
+        )
+        .execute(&mut *tx)
+        .await?;
         tx.commit().await?;
         Ok(())
     }
@@ -704,10 +719,10 @@ impl<N: TokenLifecycleNotifier> TokenLifecycleReactor<N> {
         let added_at = Self::iso(Utc::now());
 
         let mut tx = self.pool.begin().await?;
-        let existing_reason: Option<Option<String>> = sqlx::query_scalar(
-            "SELECT reason FROM twitch_raid_blacklist WHERE LOWER(target_login) = LOWER($1) LIMIT 1",
+        let existing_reason: Option<Option<String>> = sqlx::query_scalar!(
+            r#"SELECT reason AS "reason?" FROM twitch_raid_blacklist WHERE LOWER(target_login) = LOWER($1) LIMIT 1"#,
+            &login_hint
         )
-        .bind(&login_hint)
         .fetch_optional(&mut *tx)
         .await?;
         let already_flagged = existing_reason
@@ -716,16 +731,16 @@ impl<N: TokenLifecycleNotifier> TokenLifecycleReactor<N> {
             .unwrap_or(false);
 
         if let Some(tid) = target_id {
-            sqlx::query(
+            sqlx::query!(
                 "DELETE FROM twitch_raid_blacklist
                   WHERE target_id = $1 AND LOWER(target_login) <> $2",
+                tid,
+                &login_hint
             )
-            .bind(tid)
-            .bind(&login_hint)
             .execute(&mut *tx)
             .await?;
         }
-        sqlx::query(
+        sqlx::query!(
             r#"
             INSERT INTO twitch_raid_blacklist (target_id, target_login, reason, added_at)
             VALUES ($1, $2, $3, $4)
@@ -734,11 +749,11 @@ impl<N: TokenLifecycleNotifier> TokenLifecycleReactor<N> {
                 reason = EXCLUDED.reason,
                 added_at = EXCLUDED.added_at
             "#,
+            target_id,
+            &login_hint,
+            &reason,
+            &added_at
         )
-        .bind(target_id)
-        .bind(&login_hint)
-        .bind(&reason)
-        .bind(&added_at)
         .execute(&mut *tx)
         .await?;
 
@@ -747,19 +762,19 @@ impl<N: TokenLifecycleNotifier> TokenLifecycleReactor<N> {
             return Ok(true);
         }
 
-        sqlx::query(
+        sqlx::query!(
             r#"
             UPDATE twitch_raid_auth
                SET raid_enabled = FALSE,
                    twitch_login = COALESCE(NULLIF($1, ''), twitch_login)
              WHERE twitch_user_id = $2
             "#,
+            &login_hint,
+            twitch_user_id
         )
-        .bind(&login_hint)
-        .bind(twitch_user_id)
         .execute(&mut *tx)
         .await?;
-        sqlx::query(
+        sqlx::query!(
             r#"
             UPDATE twitch_partners
                SET technical_pause_reason = 'bot_banned',
@@ -768,9 +783,9 @@ impl<N: TokenLifecycleNotifier> TokenLifecycleReactor<N> {
              WHERE twitch_user_id = $2
                 OR LOWER(twitch_login) = LOWER($1)
             "#,
+            &login_hint,
+            twitch_user_id
         )
-        .bind(&login_hint)
-        .bind(twitch_user_id)
         .execute(&mut *tx)
         .await?;
         tx.commit().await?;
@@ -789,18 +804,22 @@ impl<N: TokenLifecycleNotifier> TokenLifecycleReactor<N> {
         let login_hint = twitch_login.trim().to_lowercase();
         let mut tx = self.pool.begin().await?;
 
-        let auth: Option<(Option<bool>, Option<bool>)> = sqlx::query_as(
-            "SELECT raid_enabled, needs_reauth FROM twitch_raid_auth WHERE twitch_user_id = $1 LIMIT 1",
+        let auth = sqlx::query!(
+            r#"SELECT raid_enabled AS "raid_enabled?",
+                      needs_reauth AS "needs_reauth?"
+                 FROM twitch_raid_auth
+                WHERE twitch_user_id = $1
+                LIMIT 1"#,
+            twitch_user_id
         )
-        .bind(twitch_user_id)
         .fetch_optional(&mut *tx)
         .await?;
-        let Some((_raid_enabled, needs_reauth)) = auth else {
+        let Some(auth) = auth else {
             tx.commit().await?;
             return Ok(false);
         };
         // Kanal noch nicht gesund → nicht restaurieren.
-        if needs_reauth.unwrap_or(true) {
+        if auth.needs_reauth.unwrap_or(true) {
             tx.commit().await?;
             return Ok(false);
         }
@@ -809,23 +828,27 @@ impl<N: TokenLifecycleNotifier> TokenLifecycleReactor<N> {
         // `manual_partner_opt_out` ist in `twitch_partners` ein INTEGER-Flag
         // (DEFAULT 0, Python liest es als `bool(...)`) — daher als i32 dekodieren
         // und gegen 0 prüfen. Ein bool-Decode würde am int4-Spaltentyp scheitern.
-        let partner: Option<(Option<i32>, Option<String>)> = sqlx::query_as(
+        let partner = sqlx::query!(
             r#"
-            SELECT manual_partner_opt_out, technical_pause_reason
+            SELECT manual_partner_opt_out AS "manual_partner_opt_out?",
+                   technical_pause_reason AS "technical_pause_reason?"
             FROM twitch_partners
             WHERE twitch_user_id = $1
                OR LOWER(twitch_login) = LOWER($2)
             LIMIT 1
             "#,
+            twitch_user_id,
+            &login_hint
         )
-        .bind(twitch_user_id)
-        .bind(&login_hint)
         .fetch_optional(&mut *tx)
         .await?;
         let (manual_opt_out, pause_reason) = match partner {
-            Some((m, r)) => (
-                m.unwrap_or(0) != 0,
-                r.unwrap_or_default().trim().to_lowercase(),
+            Some(row) => (
+                row.manual_partner_opt_out.unwrap_or(0) != 0,
+                row.technical_pause_reason
+                    .unwrap_or_default()
+                    .trim()
+                    .to_lowercase(),
             ),
             None => (false, String::new()),
         };
@@ -839,30 +862,30 @@ impl<N: TokenLifecycleNotifier> TokenLifecycleReactor<N> {
         // Restore: Pause-Reason löschen; Raid nur re-aktivieren, wenn kein manueller
         // Opt-out vorliegt (Python-Parität).
         let reenable = !manual_opt_out;
-        sqlx::query(
+        sqlx::query!(
             r#"
             DELETE FROM twitch_raid_blacklist
             WHERE LOWER(target_login) = LOWER($1)
               AND LOWER(COALESCE(reason, '')) LIKE '%bot_banned%'
             "#,
+            &login_hint
         )
-        .bind(&login_hint)
         .execute(&mut *tx)
         .await?;
-        sqlx::query(
+        sqlx::query!(
             r#"
             UPDATE twitch_raid_auth
                SET raid_enabled = $1,
                    twitch_login = COALESCE(NULLIF($2, ''), twitch_login)
              WHERE twitch_user_id = $3
             "#,
+            reenable,
+            &login_hint,
+            twitch_user_id
         )
-        .bind(reenable)
-        .bind(&login_hint)
-        .bind(twitch_user_id)
         .execute(&mut *tx)
         .await?;
-        sqlx::query(
+        sqlx::query!(
             r#"
             UPDATE twitch_partners
                SET technical_pause_reason = NULL,
@@ -870,10 +893,10 @@ impl<N: TokenLifecycleNotifier> TokenLifecycleReactor<N> {
              WHERE twitch_user_id = $2
                 OR LOWER(twitch_login) = LOWER($3)
             "#,
+            reenable,
+            twitch_user_id,
+            &login_hint
         )
-        .bind(reenable)
-        .bind(twitch_user_id)
-        .bind(&login_hint)
         .execute(&mut *tx)
         .await?;
         tx.commit().await?;
@@ -888,18 +911,18 @@ impl<N: TokenLifecycleNotifier> TokenLifecycleReactor<N> {
         twitch_login: &str,
     ) -> Option<String> {
         let login = tb_domain::normalize_twitch_login(twitch_login).unwrap_or_default();
-        let row: Result<Option<String>, _> = sqlx::query_scalar(
+        let row: Result<Option<String>, _> = sqlx::query_scalar!(
             r#"
-            SELECT discord_user_id
+            SELECT discord_user_id AS "discord_user_id?"
             FROM twitch_streamer_identities
             WHERE ($1 <> '' AND twitch_user_id = $1)
                OR ($2 <> '' AND LOWER(twitch_login) = $2)
             ORDER BY updated_at DESC
             LIMIT 1
             "#,
+            twitch_user_id.trim(),
+            &login
         )
-        .bind(twitch_user_id.trim())
-        .bind(&login)
         .fetch_optional(&self.pool)
         .await
         .map(Option::flatten);

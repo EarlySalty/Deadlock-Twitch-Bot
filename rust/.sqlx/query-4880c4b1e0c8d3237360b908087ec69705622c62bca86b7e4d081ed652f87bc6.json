@@ -1,0 +1,23 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n            SELECT COUNT(*)::bigint AS \"count!\"\n            FROM twitch_raid_history h\n            WHERE COALESCE(h.success, FALSE) IS TRUE\n              AND h.from_broadcaster_id = $1\n              AND h.executed_at >= $2\n              AND EXISTS (\n                  SELECT 1 FROM twitch_streamers_partner_state p\n                  WHERE p.twitch_user_id = h.to_broadcaster_id\n              )\n            ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "count!",
+        "type_info": "Int8"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Text",
+        "Timestamptz"
+      ]
+    },
+    "nullable": [
+      null
+    ]
+  },
+  "hash": "4880c4b1e0c8d3237360b908087ec69705622c62bca86b7e4d081ed652f87bc6"
+}

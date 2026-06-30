@@ -1,0 +1,14 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n            DELETE FROM twitch_raid_blacklist\n            WHERE LOWER(target_login) = LOWER($1)\n              AND LOWER(COALESCE(reason, '')) LIKE '%bot_banned%'\n            ",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Text"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "bf2da480e0da9b472ad9294a189641dbd97640f39c83ac81fa96faf9eefc46e2"
+}

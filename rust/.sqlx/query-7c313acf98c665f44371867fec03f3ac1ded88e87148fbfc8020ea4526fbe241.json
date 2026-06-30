@@ -1,0 +1,18 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n            INSERT INTO twitch_external_recruitment_blacklist_pending (\n                target_id,\n                target_login,\n                confirmed_raid_count,\n                threshold_reached_at,\n                blacklist_after,\n                last_raid_flow_id,\n                updated_at\n            )\n            VALUES (\n                $1,\n                $2,\n                $3,\n                CURRENT_TIMESTAMP,\n                CURRENT_TIMESTAMP + ($4::bigint::double precision * INTERVAL '1 second'),\n                $5,\n                CURRENT_TIMESTAMP\n            )\n            ON CONFLICT (target_id) DO UPDATE SET\n                target_login = EXCLUDED.target_login,\n                confirmed_raid_count = GREATEST(\n                    twitch_external_recruitment_blacklist_pending.confirmed_raid_count,\n                    EXCLUDED.confirmed_raid_count\n                ),\n                last_raid_flow_id = EXCLUDED.last_raid_flow_id,\n                updated_at = CURRENT_TIMESTAMP\n            ",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Text",
+        "Text",
+        "Int4",
+        "Int8",
+        "Text"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "7c313acf98c665f44371867fec03f3ac1ded88e87148fbfc8020ea4526fbe241"
+}

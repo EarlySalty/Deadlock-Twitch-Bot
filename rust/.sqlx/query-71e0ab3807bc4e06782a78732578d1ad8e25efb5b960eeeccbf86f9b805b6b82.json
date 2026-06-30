@@ -1,0 +1,14 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "DELETE FROM twitch_external_recruitment_blacklist_pending WHERE target_id = $1",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Text"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "71e0ab3807bc4e06782a78732578d1ad8e25efb5b960eeeccbf86f9b805b6b82"
+}

@@ -1,0 +1,30 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT game_name AS \"game_name?\",\n                              recorded_at::timestamptz AS \"recorded_at!\"\n                       FROM twitch_channel_updates\n                      WHERE twitch_user_id = $1\n                        AND recorded_at::timestamptz >= $2\n                        AND recorded_at::timestamptz <= $3\n                      ORDER BY recorded_at ASC",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "game_name?",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 1,
+        "name": "recorded_at!",
+        "type_info": "Timestamptz"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Text",
+        "Timestamptz",
+        "Timestamptz"
+      ]
+    },
+    "nullable": [
+      true,
+      false
+    ]
+  },
+  "hash": "c93de3648c8675c5f91bb066251a279c21b0f320c734b3913795ab3faf0bab52"
+}

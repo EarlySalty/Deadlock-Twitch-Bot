@@ -1,0 +1,44 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n            SELECT twitch_user_id AS \"twitch_user_id!\",\n                   twitch_login AS \"twitch_login?\",\n                   refresh_token_enc AS \"refresh_token_enc?\",\n                   enc_version AS \"enc_version?\",\n                   token_expires_at AS \"token_expires_at?\"\n            FROM twitch_raid_auth\n            WHERE raid_enabled IS TRUE\n              AND needs_reauth IS NOT TRUE\n            ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "twitch_user_id!",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 1,
+        "name": "twitch_login?",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 2,
+        "name": "refresh_token_enc?",
+        "type_info": "Bytea"
+      },
+      {
+        "ordinal": 3,
+        "name": "enc_version?",
+        "type_info": "Int4"
+      },
+      {
+        "ordinal": 4,
+        "name": "token_expires_at?",
+        "type_info": "Timestamptz"
+      }
+    ],
+    "parameters": {
+      "Left": []
+    },
+    "nullable": [
+      false,
+      false,
+      true,
+      true,
+      false
+    ]
+  },
+  "hash": "80496da4988efe3e65a2d3a960b5f410f3535a7920cd0292b6b1121f9744d122"
+}

@@ -181,21 +181,25 @@ impl RaidTokenRefresher {
 
         let mut tx = self.pool.begin().await?;
         let (lock_a, lock_b) = advisory_lock_pair(twitch_user_id);
-        sqlx::query("SELECT pg_advisory_xact_lock($1, $2)")
-            .bind(lock_a)
-            .bind(lock_b)
-            .execute(&mut *tx)
-            .await?;
+        let _ = sqlx::query!(
+            r#"SELECT 1 AS "locked!" FROM (SELECT pg_advisory_xact_lock($1, $2)) AS _lock"#,
+            lock_a,
+            lock_b
+        )
+        .fetch_one(&mut *tx)
+        .await?;
 
         // Re-Read unterm Lock: frischesten Stand holen, damit wir keinen bereits
         // invalidierten Refresh-Token von vor dem Lock verwenden (Twitch rotiert
         // Refresh-Tokens bei Nutzung — ein paralleler Python-Writer könnte ihn
         // inzwischen schon konsumiert haben).
-        type RefreshRow = (Option<Vec<u8>>, Option<DateTime<Utc>>);
-        let row: Option<RefreshRow> = sqlx::query_as(
-            "SELECT refresh_token_enc, token_expires_at FROM twitch_raid_auth WHERE twitch_user_id = $1",
+        let row = sqlx::query!(
+            r#"SELECT refresh_token_enc AS "refresh_token_enc?",
+                      token_expires_at AS "token_expires_at?"
+                 FROM twitch_raid_auth
+                WHERE twitch_user_id = $1"#,
+            twitch_user_id
         )
-        .bind(twitch_user_id)
         .fetch_optional(&mut *tx)
         .await?;
 
@@ -205,9 +209,9 @@ impl RaidTokenRefresher {
                 tx.commit().await?;
                 return Ok(RefreshOutcome::Skipped);
             }
-            Some((enc_bytes, expires_at)) => {
+            Some(row) => {
                 let refresh_aad = aad::raid_auth("refresh_token", twitch_user_id, 1);
-                let token = match enc_bytes {
+                let token = match row.refresh_token_enc {
                     Some(b) => match self.cipher.decrypt_field(&b, &refresh_aad) {
                         Ok(t) => t,
                         Err(_) => {
@@ -224,7 +228,7 @@ impl RaidTokenRefresher {
                         return Ok(RefreshOutcome::Skipped);
                     }
                 };
-                (token, expires_at)
+                (token, row.token_expires_at)
             }
         };
 
@@ -273,7 +277,7 @@ impl RaidTokenRefresher {
         // Floor gegen literal-0/negativ aus der Twitch-Antwort (fehlendes Feld
         // fängt bereits der serde-Default 3600 ab) — sonst sofort-stale-Token.
         let expires_at = now + Duration::seconds(response.expires_in.max(60));
-        let result = sqlx::query(
+        let result = sqlx::query!(
             r#"
             UPDATE twitch_raid_auth
                SET access_token = 'ENC', refresh_token = 'ENC',
@@ -282,11 +286,11 @@ impl RaidTokenRefresher {
                    token_expires_at = $3, last_refreshed_at = NOW()
              WHERE twitch_user_id = $4
             "#,
+            access_enc,
+            refresh_enc,
+            expires_at,
+            twitch_user_id
         )
-        .bind(access_enc)
-        .bind(refresh_enc)
-        .bind(expires_at)
-        .bind(twitch_user_id)
         .execute(&mut *tx)
         .await?;
         if result.rows_affected() == 0 {
@@ -329,10 +333,13 @@ impl RaidTokenRefresher {
             return Ok(0);
         }
 
-        type Candidate = (String, Option<String>, Option<Vec<u8>>, Option<i32>, Option<DateTime<Utc>>);
-        let rows: Vec<Candidate> = sqlx::query_as(
+        let rows = sqlx::query!(
             r#"
-            SELECT twitch_user_id, twitch_login, refresh_token_enc, enc_version, token_expires_at
+            SELECT twitch_user_id AS "twitch_user_id!",
+                   twitch_login AS "twitch_login?",
+                   refresh_token_enc AS "refresh_token_enc?",
+                   enc_version AS "enc_version?",
+                   token_expires_at AS "token_expires_at?"
             FROM twitch_raid_auth
             WHERE raid_enabled IS TRUE
               AND needs_reauth IS NOT TRUE
@@ -342,8 +349,9 @@ impl RaidTokenRefresher {
         .await?;
 
         let mut refreshed = 0u64;
-        for (user_id, login, refresh_enc, enc_version, expires_at) in rows {
-            let login = login.unwrap_or_default();
+        for row in rows {
+            let user_id = row.twitch_user_id;
+            let login = row.twitch_login.unwrap_or_default();
 
             // Geblacklistet/Cooldown vorab (Python prüft das vor dem Refresh).
             if self.blacklist.is_blacklisted(&user_id).await
@@ -353,9 +361,10 @@ impl RaidTokenRefresher {
             }
 
             // Refresh-Token entschlüsseln; ohne ihn ist kein Refresh möglich.
-            let enc_v = i64::from(enc_version.unwrap_or(1));
+            let enc_v = i64::from(row.enc_version.unwrap_or(1));
             let refresh_aad = aad::raid_auth("refresh_token", &user_id, enc_v);
-            let Some(refresh_token) = refresh_enc
+            let Some(refresh_token) = row
+                .refresh_token_enc
                 .as_deref()
                 .filter(|b| !b.is_empty())
                 .and_then(|b| self.cipher.decrypt_field(b, &refresh_aad).ok())
@@ -369,10 +378,10 @@ impl RaidTokenRefresher {
             };
 
             // Noch nicht fällig (> 2 h gültig) → nichts tun.
-            if !is_refresh_due(expires_at, now) {
+            if !is_refresh_due(row.token_expires_at, now) {
                 continue;
             }
-            if expires_at.is_none() {
+            if row.token_expires_at.is_none() {
                 tracing::warn!(user = %mask(&login), "Ungültige Ablaufzeit — erzwinge Refresh");
             }
 
@@ -393,7 +402,10 @@ impl RaidTokenRefresher {
         }
 
         if refreshed > 0 {
-            tracing::debug!(refreshed, "Wartung: Hintergrund-Token-Refresh abgeschlossen");
+            tracing::debug!(
+                refreshed,
+                "Wartung: Hintergrund-Token-Refresh abgeschlossen"
+            );
         }
         Ok(refreshed)
     }

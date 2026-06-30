@@ -1,0 +1,24 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n            INSERT INTO twitch_raid_disabled_strikes\n                (target_id, target_login, strike_count, last_seen_at, last_reason)\n            VALUES ($1, $2, 1, NOW(), $3)\n            ON CONFLICT (target_login) DO UPDATE SET\n                target_id    = COALESCE(EXCLUDED.target_id, twitch_raid_disabled_strikes.target_id),\n                strike_count = twitch_raid_disabled_strikes.strike_count + 1,\n                last_seen_at = NOW(),\n                last_reason  = EXCLUDED.last_reason\n            RETURNING strike_count AS \"strike_count!\"\n            ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "strike_count!",
+        "type_info": "Int4"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Text",
+        "Text",
+        "Text"
+      ]
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "5710bb53761964b22f45d08b15fae7db705e14f80603aa2fa165da7399ac2e4b"
+}

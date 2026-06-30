@@ -1,0 +1,28 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n            UPDATE twitch_partners\n            SET twitch_login = $1,\n                require_discord_link = $2,\n                last_description = $3,\n                last_link_ok = $4,\n                added_by = $5,\n                last_link_checked_at = $6,\n                next_link_check_at = $7,\n                manual_partner_opt_out = $8,\n                raid_bot_enabled = $9,\n                silent_ban = $10,\n                silent_raid = $11,\n                live_ping_role_id = $12,\n                live_ping_enabled = $13,\n                partnered_at = $14,\n                admin_archived_at = NULL,\n                departnered_at = NULL,\n                technical_pause_reason = NULL,\n                status = 'active'\n            WHERE id = $15\n            ",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Text",
+        "Int4",
+        "Text",
+        "Int4",
+        "Text",
+        "Text",
+        "Text",
+        "Int4",
+        "Int4",
+        "Int4",
+        "Int4",
+        "Int8",
+        "Int4",
+        "Text",
+        "Int8"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "6dda2e077e015206bf0aaa109ec0c120f13859f3bb6d876fbf392f66bbbc4d87"
+}

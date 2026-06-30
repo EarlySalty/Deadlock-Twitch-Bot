@@ -31,7 +31,7 @@ impl ReauthAdminStore {
     /// Port von `auth.py:1168-1189` — identisches WHERE-Prädikat (mind. eine
     /// Token-/Autorisierungs-Quelle vorhanden), kein Discord-DM.
     pub async fn snapshot_and_flag_reauth(&self) -> Result<u64, sqlx::Error> {
-        let result = sqlx::query(
+        let result = sqlx::query!(
             "UPDATE twitch_raid_auth
                 SET needs_reauth = TRUE,
                     reauth_notified_at = NULL
@@ -41,7 +41,7 @@ impl ReauthAdminStore {
                      OR refresh_token_enc IS NOT NULL
                      OR NULLIF(access_token, '') IS NOT NULL
                      OR NULLIF(refresh_token, '') IS NOT NULL
-                     OR authorized_at IS NOT NULL
+                        OR authorized_at IS NOT NULL
                 )",
         )
         .execute(&self.pool)
@@ -199,11 +199,12 @@ mod tests {
         }
 
         // D bleibt unberührt.
-        let d_needs: Option<bool> =
-            sqlx::query_scalar("SELECT needs_reauth FROM twitch_raid_auth WHERE twitch_user_id='d'")
-                .fetch_one(&pool)
-                .await
-                .unwrap();
+        let d_needs: Option<bool> = sqlx::query_scalar(
+            "SELECT needs_reauth FROM twitch_raid_auth WHERE twitch_user_id='d'",
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap();
         assert_eq!(d_needs, Some(false));
 
         // Zweiter Aufruf: nichts mehr zu flaggen (idempotent).

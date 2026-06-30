@@ -1,0 +1,29 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n            SELECT id AS \"id!\", executed_at AS \"executed_at?\"\n            FROM twitch_raid_history\n            WHERE LOWER(from_broadcaster_login) = $1\n              AND to_broadcaster_id = $2\n              AND COALESCE(success, FALSE) IS TRUE\n            ORDER BY executed_at DESC\n            LIMIT 1\n            ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id!",
+        "type_info": "Int8"
+      },
+      {
+        "ordinal": 1,
+        "name": "executed_at?",
+        "type_info": "Timestamptz"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Text",
+        "Text"
+      ]
+    },
+    "nullable": [
+      false,
+      false
+    ]
+  },
+  "hash": "2f471effe10661eacb20fa2f0be529402ab8ba5b710d6c3d2911567523dc15d5"
+}

@@ -56,10 +56,10 @@ impl TokenBlacklistStore {
 #[async_trait::async_trait]
 impl TokenBlacklist for TokenBlacklistStore {
     async fn is_blacklisted(&self, twitch_user_id: &str) -> bool {
-        let count: Result<Option<i32>, _> = sqlx::query_scalar(
-            "SELECT error_count FROM twitch_token_blacklist WHERE twitch_user_id = $1",
+        let count: Result<Option<i32>, _> = sqlx::query_scalar!(
+            r#"SELECT error_count AS "error_count?" FROM twitch_token_blacklist WHERE twitch_user_id = $1"#,
+            twitch_user_id
         )
-        .bind(twitch_user_id)
         .fetch_optional(&self.pool)
         .await
         .map(Option::flatten);
@@ -74,17 +74,23 @@ impl TokenBlacklist for TokenBlacklistStore {
     }
 
     async fn has_recent_failure(&self, twitch_user_id: &str) -> bool {
-        let row: Result<Option<(Option<i32>, Option<String>)>, _> = sqlx::query_as(
-            "SELECT error_count, last_error_at FROM twitch_token_blacklist WHERE twitch_user_id = $1",
+        let row = sqlx::query!(
+            r#"SELECT error_count AS "error_count?",
+                      last_error_at AS "last_error_at?"
+                 FROM twitch_token_blacklist
+                WHERE twitch_user_id = $1"#,
+            twitch_user_id
         )
-        .bind(twitch_user_id)
         .fetch_optional(&self.pool)
         .await;
-        let Ok(Some((count, Some(last)))) = row else {
+        let Ok(Some(row)) = row else {
+            return false;
+        };
+        let Some(last) = row.last_error_at else {
             return false;
         };
         // Vollständig blacklisted → separat via is_blacklisted behandelt.
-        if i64::from(count.unwrap_or(0)) >= BLACKLIST_DISABLE_THRESHOLD {
+        if i64::from(row.error_count.unwrap_or(0)) >= BLACKLIST_DISABLE_THRESHOLD {
             return false;
         }
         let Some(last_dt) = Self::parse_ts(&last) else {
@@ -126,21 +132,23 @@ impl TokenBlacklistStore {
     /// neu autorisiert (die Re-Auth-Gegenrichtung in `auth_writer::store_new_auth`).
     async fn clear_failure_count_inner(&self, twitch_user_id: &str) -> Result<(), sqlx::Error> {
         let mut tx = self.pool.begin().await?;
-        sqlx::query(
+        sqlx::query!(
             "UPDATE twitch_partners
                 SET technical_pause_reason = CASE
                         WHEN LOWER(TRIM(COALESCE(technical_pause_reason, ''))) LIKE 'token_error%' THEN NULL
                         ELSE technical_pause_reason
                     END
               WHERE twitch_user_id = $1",
+            twitch_user_id
         )
-        .bind(twitch_user_id)
         .execute(&mut *tx)
         .await?;
-        sqlx::query("DELETE FROM twitch_token_blacklist WHERE twitch_user_id = $1")
-            .bind(twitch_user_id)
-            .execute(&mut *tx)
-            .await?;
+        sqlx::query!(
+            "DELETE FROM twitch_token_blacklist WHERE twitch_user_id = $1",
+            twitch_user_id
+        )
+        .execute(&mut *tx)
+        .await?;
         tx.commit().await?;
         Ok(())
     }
@@ -154,45 +162,49 @@ impl TokenBlacklistStore {
     ) -> Result<(), sqlx::Error> {
         let now_iso = Self::iso(now);
         let mut tx = self.pool.begin().await?;
-        let existing: Option<(Option<i32>, Option<String>)> = sqlx::query_as(
-            "SELECT error_count, last_error_at FROM twitch_token_blacklist WHERE twitch_user_id = $1",
+        let existing = sqlx::query!(
+            r#"SELECT error_count AS "error_count?",
+                      last_error_at AS "last_error_at?"
+                 FROM twitch_token_blacklist
+                WHERE twitch_user_id = $1"#,
+            twitch_user_id
         )
-        .bind(twitch_user_id)
         .fetch_optional(&mut *tx)
         .await?;
 
         match existing {
-            Some((prior, last_raw)) => {
-                let prior = i64::from(prior.unwrap_or(0));
+            Some(row) => {
+                let prior = i64::from(row.error_count.unwrap_or(0));
                 // Außerhalb des Consecutive-Fensters → Counter zurücksetzen.
-                let reset = last_raw
+                let reset = row
+                    .last_error_at
                     .as_deref()
                     .and_then(Self::parse_ts)
                     .map(|dt| (now - dt) > Duration::hours(CONSECUTIVE_FAILURE_WINDOW_HOURS))
                     .unwrap_or(false);
                 if reset {
-                    sqlx::query(
+                    sqlx::query!(
                         "UPDATE twitch_token_blacklist
                             SET error_count = 1, first_error_at = $1, last_error_at = $1,
                                 error_message = $2, notified = 0
                           WHERE twitch_user_id = $3",
+                        &now_iso,
+                        error_message,
+                        twitch_user_id
                     )
-                    .bind(&now_iso)
-                    .bind(error_message)
-                    .bind(twitch_user_id)
                     .execute(&mut *tx)
                     .await?;
                 } else {
                     let new_count = (prior + 1).max(1) as i32;
-                    sqlx::query(
+                    sqlx::query!(
                         "UPDATE twitch_token_blacklist
                             SET error_count = $1, last_error_at = $2, error_message = $3
                           WHERE twitch_user_id = $4",
+                        new_count,
+                        &now_iso,
+                        error_message,
+                        twitch_user_id
                     )
-                    .bind(new_count)
-                    .bind(&now_iso)
-                    .bind(error_message)
-                    .bind(twitch_user_id)
                     .execute(&mut *tx)
                     .await?;
                 }
@@ -200,17 +212,17 @@ impl TokenBlacklistStore {
             None => {
                 let grace = Self::iso(now + Duration::days(GRACE_PERIOD_DAYS));
                 // error_count nutzt DEFAULT 1.
-                sqlx::query(
+                sqlx::query!(
                     "INSERT INTO twitch_token_blacklist
                         (twitch_user_id, twitch_login, error_message,
                          first_error_at, last_error_at, grace_expires_at)
                      VALUES ($1, $2, $3, $4, $4, $5)",
+                    twitch_user_id,
+                    twitch_login,
+                    error_message,
+                    &now_iso,
+                    &grace
                 )
-                .bind(twitch_user_id)
-                .bind(twitch_login)
-                .bind(error_message)
-                .bind(&now_iso)
-                .bind(&grace)
                 .execute(&mut *tx)
                 .await?;
             }
@@ -221,15 +233,15 @@ impl TokenBlacklistStore {
         // Token wird ab sofort nicht mehr geladen/refresht; needs_reauth=TRUE
         // signalisiert dem Dashboard die nötige Neu-Autorisierung. twitch_login wird
         // wie in Python nur bei nicht-leerem Hint überschrieben.
-        sqlx::query(
+        sqlx::query!(
             "UPDATE twitch_raid_auth
                 SET raid_enabled = FALSE,
                     needs_reauth = TRUE,
                     twitch_login = COALESCE(NULLIF($1, ''), twitch_login)
               WHERE twitch_user_id = $2",
+            twitch_login.trim().to_lowercase(),
+            twitch_user_id
         )
-        .bind(twitch_login.trim().to_lowercase())
-        .bind(twitch_user_id)
         .execute(&mut *tx)
         .await?;
 
@@ -240,7 +252,7 @@ impl TokenBlacklistStore {
         // Guards wie Python: manueller Opt-out und 'bot_banned' werden NICHT
         // überschrieben. Die Gegenrichtung (Re-Auth) hebt 'token_error' in
         // auth_writer::store_new_auth wieder auf.
-        sqlx::query(
+        sqlx::query!(
             "UPDATE twitch_partners
                 SET technical_pause_reason = CASE
                         WHEN COALESCE(manual_partner_opt_out, 0) = 1 THEN technical_pause_reason
@@ -249,8 +261,8 @@ impl TokenBlacklistStore {
                     END,
                     raid_bot_enabled = 0
               WHERE twitch_user_id = $1",
+            twitch_user_id
         )
-        .bind(twitch_user_id)
         .execute(&mut *tx)
         .await?;
 

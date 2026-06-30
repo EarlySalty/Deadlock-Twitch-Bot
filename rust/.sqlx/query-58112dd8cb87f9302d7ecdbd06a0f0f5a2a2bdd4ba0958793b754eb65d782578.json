@@ -1,0 +1,46 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n            INSERT INTO twitch_partner_raid_score_tracking (\n                raid_history_id, raid_history_executed_at,\n                from_broadcaster_id, from_broadcaster_login,\n                to_broadcaster_id, to_broadcaster_login,\n                viewer_count, confirmed_at, target_session_id,\n                target_stream_started_at, score_last_computed_at,\n                final_score, base_score, duration_score, time_pattern_score,\n                readiness_score, fairness_score, new_partner_multiplier,\n                raid_boost_multiplier, today_received_raids, was_deadlock_at_raid,\n                deadlock_continued_until, deadlock_continued_sec, resolved_at, resolution_reason\n            ) VALUES (\n                $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11,\n                $12, $13, $14, $15, $16, $17, $18, $19, $20, $21,\n                $22, $23, $24, $25\n            )\n            RETURNING id AS \"id!\"\n            ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id!",
+        "type_info": "Int4"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Int8",
+        "Timestamptz",
+        "Text",
+        "Text",
+        "Text",
+        "Text",
+        "Int4",
+        "Text",
+        "Int4",
+        "Text",
+        "Text",
+        "Float8",
+        "Float8",
+        "Float8",
+        "Float8",
+        "Float8",
+        "Float8",
+        "Float8",
+        "Float8",
+        "Int4",
+        "Int4",
+        "Text",
+        "Int4",
+        "Text",
+        "Text"
+      ]
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "58112dd8cb87f9302d7ecdbd06a0f0f5a2a2bdd4ba0958793b754eb65d782578"
+}

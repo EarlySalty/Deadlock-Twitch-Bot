@@ -1,0 +1,16 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n            UPDATE twitch_raid_arrival_tracking\n            SET confirmation_signals = $1,\n                last_signal_at       = NOW(),\n                unraid_seen          = CASE WHEN $2 THEN TRUE ELSE unraid_seen END,\n                last_unraid_at       = CASE WHEN $2 THEN NOW() ELSE last_unraid_at END\n            WHERE id = $3\n            ",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Text",
+        "Bool",
+        "Int4"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "bf62a21518f6cb382256c4ed88df1722fe3715439d86f00ba244fecf15d15fe2"
+}
