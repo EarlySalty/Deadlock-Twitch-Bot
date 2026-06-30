@@ -101,7 +101,9 @@ fn coerce_positive_int(value: &Value, key: &str) -> Result<Option<i64>, String> 
         Value::Null => Ok(None),
         Value::Bool(_) => Err(format!("{key} must be a positive integer")),
         Value::Number(n) => {
-            let v = n.as_i64().ok_or_else(|| format!("{key} must be a positive integer"))?;
+            let v = n
+                .as_i64()
+                .ok_or_else(|| format!("{key} must be a positive integer"))?;
             if v <= 0 {
                 return Err(format!("{key} must be a positive integer"));
             }
@@ -116,7 +118,9 @@ fn coerce_positive_int(value: &Value, key: &str) -> Result<Option<i64>, String> 
             if !s.chars().all(|c| c.is_ascii_digit()) {
                 return Err(format!("{key} must be a positive integer"));
             }
-            let v: i64 = s.parse().map_err(|_| format!("{key} must be a positive integer"))?;
+            let v: i64 = s
+                .parse()
+                .map_err(|_| format!("{key} must be a positive integer"))?;
             if v <= 0 {
                 return Err(format!("{key} must be a positive integer"));
             }
@@ -134,10 +138,7 @@ fn normalize_text_field(
     required: bool,
     max_length: usize,
 ) -> Result<Option<String>, String> {
-    let text = value
-        .as_deref()
-        .unwrap_or("")
-        .replace(['\r', '\n'], " ");
+    let text = value.as_deref().unwrap_or("").replace(['\r', '\n'], " ");
     let text = text.trim().to_string();
     if text.is_empty() {
         if required {
@@ -353,7 +354,10 @@ pub async fn live_link_click_handler(
         .map(|pq| pq.as_str().to_string())
         .unwrap_or_else(|| path.clone());
 
-    match idem.prepare(raw_key, "POST", &path, &path_qs, &raw_payload).await {
+    match idem
+        .prepare(raw_key, "POST", &path, &path_qs, &raw_payload)
+        .await
+    {
         Prepared::Immediate(resp) => Ok(resp),
         Prepared::Skip => {
             let result = process_link_click(&pool, body).await?;
@@ -380,9 +384,8 @@ pub async fn live_link_click_handler(
 async fn process_link_click(pool: &PgPool, body: LinkClickRequest) -> Result<Value, ApiError> {
     // ── Validation (Parität zu telemetry.py + policy.py) ─────────────────────
 
-    let streamer_login =
-        normalize_twitch_login(body.streamer_login.as_deref().unwrap_or(""))
-            .ok_or_else(|| ApiError::bad_request("invalid streamer_login"))?;
+    let streamer_login = normalize_twitch_login(body.streamer_login.as_deref().unwrap_or(""))
+        .ok_or_else(|| ApiError::bad_request("invalid streamer_login"))?;
 
     let tracking_token = normalize_tracking_token(&body.tracking_token, true)
         .map_err(|_| ApiError::bad_request("invalid request body"))?
@@ -501,7 +504,11 @@ pub async fn eventsub_processing_debug_handler(
 
     // Python: int(str(raw_limit or "20").strip() or "20"); 1..=200, sonst 400.
     let raw = query.limit.as_deref().unwrap_or("20").trim().to_string();
-    let raw = if raw.is_empty() { "20".to_string() } else { raw };
+    let raw = if raw.is_empty() {
+        "20".to_string()
+    } else {
+        raw
+    };
     let limit: i64 = raw
         .parse::<i64>()
         .ok()
@@ -511,11 +518,11 @@ pub async fn eventsub_processing_debug_handler(
     let store = tb_monitoring::ProcessingInboxStore::new(pool.clone());
     let pending = store.list_pending(limit).await.map_err(|e| {
         tracing::error!("list_pending DB-Fehler: {e}");
-        ApiError::internal()
+        ApiError::internal_with("failed to build eventsub processing payload")
     })?;
     let dead_letters = store.list_dead_letters(limit).await.map_err(|e| {
         tracing::error!("list_dead_letters DB-Fehler: {e}");
-        ApiError::internal()
+        ApiError::internal_with("failed to build eventsub processing payload")
     })?;
 
     let pending_payload: Vec<Value> = pending
@@ -688,7 +695,10 @@ mod tests {
             .with_state(pool)
             .layer(Extension(IdempotencyState::new()))
             .layer(Extension(ExpectedToken(token.to_string())))
-            .layer(middleware::from_fn_with_state(token.to_string(), internal_auth))
+            .layer(middleware::from_fn_with_state(
+                token.to_string(),
+                internal_auth,
+            ))
             .layer(middleware::from_fn(loopback_only))
     }
 
@@ -697,7 +707,9 @@ mod tests {
             .method(method)
             .uri(uri)
             .header("content-type", "application/json")
-            .extension(ConnectInfo("127.0.0.1:55555".parse::<SocketAddr>().unwrap()));
+            .extension(ConnectInfo(
+                "127.0.0.1:55555".parse::<SocketAddr>().unwrap(),
+            ));
         if let Some(t) = token {
             builder = builder.header("x-internal-token", t);
         }
@@ -717,7 +729,9 @@ mod tests {
             .header("content-type", "application/json")
             .header("x-internal-token", token)
             .header("Idempotency-Key", idem_key)
-            .extension(ConnectInfo("127.0.0.1:55555".parse::<SocketAddr>().unwrap()))
+            .extension(ConnectInfo(
+                "127.0.0.1:55555".parse::<SocketAddr>().unwrap(),
+            ))
             .body(Body::from(body.to_string()))
             .unwrap()
     }
@@ -1024,11 +1038,12 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(resp1.status(), StatusCode::OK);
-        let count1: i64 =
-            sqlx::query_scalar("SELECT COUNT(*) FROM twitch_link_clicks WHERE streamer_login='idem_streamer'")
-                .fetch_one(&pool)
-                .await
-                .unwrap();
+        let count1: i64 = sqlx::query_scalar(
+            "SELECT COUNT(*) FROM twitch_link_clicks WHERE streamer_login='idem_streamer'",
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap();
         assert_eq!(count1, 1, "Erster Request muss in DB schreiben");
 
         // Zweiter Request mit demselben Key → Replay, KEIN zweiter DB-Write
@@ -1046,16 +1061,20 @@ mod tests {
 
         // X-Idempotency-Replayed muss gesetzt sein
         assert_eq!(
-            resp2.headers().get("X-Idempotency-Replayed").and_then(|v| v.to_str().ok()),
+            resp2
+                .headers()
+                .get("X-Idempotency-Replayed")
+                .and_then(|v| v.to_str().ok()),
             Some("1"),
             "Zweiter Request muss als Replay markiert sein"
         );
 
-        let count2: i64 =
-            sqlx::query_scalar("SELECT COUNT(*) FROM twitch_link_clicks WHERE streamer_login='idem_streamer'")
-                .fetch_one(&pool)
-                .await
-                .unwrap();
+        let count2: i64 = sqlx::query_scalar(
+            "SELECT COUNT(*) FROM twitch_link_clicks WHERE streamer_login='idem_streamer'",
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap();
         assert_eq!(count2, 1, "Idempotenz: kein zweiter DB-Write");
     }
 
@@ -1163,6 +1182,27 @@ mod tests {
         pool
     }
 
+    async fn make_empty_schema_pool(dsn: &str, schema: &str) -> PgPool {
+        let pool = PgPoolOptions::new()
+            .max_connections(1)
+            .connect(dsn)
+            .await
+            .expect("connect");
+        sqlx::query(&format!("DROP SCHEMA IF EXISTS {schema} CASCADE"))
+            .execute(&pool)
+            .await
+            .expect("drop schema");
+        sqlx::query(&format!("CREATE SCHEMA {schema}"))
+            .execute(&pool)
+            .await
+            .expect("create schema");
+        sqlx::query(&format!("SET search_path TO {schema}"))
+            .execute(&pool)
+            .await
+            .expect("search_path");
+        pool
+    }
+
     async fn call_eventsub_debug(
         pool: PgPool,
         limit: Option<&str>,
@@ -1202,8 +1242,14 @@ mod tests {
         let (status, body) = call_eventsub_debug(pool, Some("50")).await;
         assert_eq!(status, StatusCode::OK);
         assert_eq!(body["ok"], serde_json::json!(true));
-        assert_eq!(body["eventsubProcessing"]["pendingCount"], serde_json::json!(1));
-        assert_eq!(body["eventsubProcessing"]["deadLetterCount"], serde_json::json!(0));
+        assert_eq!(
+            body["eventsubProcessing"]["pendingCount"],
+            serde_json::json!(1)
+        );
+        assert_eq!(
+            body["eventsubProcessing"]["deadLetterCount"],
+            serde_json::json!(0)
+        );
         assert_eq!(
             body["eventsubProcessing"]["pending"][0]["workId"],
             serde_json::json!("w1")
@@ -1217,7 +1263,10 @@ mod tests {
         // Kein limit → default 20 → 200 ok mit leerem Snapshot.
         let (status, body) = call_eventsub_debug(pool, None).await;
         assert_eq!(status, StatusCode::OK);
-        assert_eq!(body["eventsubProcessing"]["pendingCount"], serde_json::json!(0));
+        assert_eq!(
+            body["eventsubProcessing"]["pendingCount"],
+            serde_json::json!(0)
+        );
     }
 
     #[tokio::test]
@@ -1229,5 +1278,20 @@ mod tests {
             let (status, _body) = call_eventsub_debug(pool, Some(bad)).await;
             assert_eq!(status, StatusCode::BAD_REQUEST, "limit={bad} muss 400 sein");
         }
+    }
+
+    #[tokio::test]
+    async fn eventsub_processing_debug_db_fehler_nutzt_python_message() {
+        let dsn = db_dsn_or_skip!();
+        let pool = make_empty_schema_pool(&dsn, "t_eventsub_debug_db_error").await;
+
+        let (status, body) = call_eventsub_debug(pool, Some("20")).await;
+
+        assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR);
+        assert_eq!(body["error"], serde_json::json!("internal_error"));
+        assert_eq!(
+            body["message"],
+            serde_json::json!("failed to build eventsub processing payload")
+        );
     }
 }

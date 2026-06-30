@@ -576,9 +576,9 @@ pub async fn overview_sessions(
         .collect())
 }
 
-/// Kategorie-Perzentil/Rang eines Streamers (Python `_get_category_percentiles`
-/// + `_percentile_of` + Rank-Berechnung). `percentile` speist den Reach-Score,
-/// `rank`/`total` die categoryRank/categoryTotal-Felder.
+/// Kategorie-Perzentil/Rang eines Streamers (Python `_get_category_percentiles`,
+/// `_percentile_of` und die Rank-Berechnung). `percentile` speist den Reach-Score;
+/// die Felder `rank` und `total` fuellen categoryRank/categoryTotal.
 #[derive(Debug, Clone, Copy)]
 pub struct CategoryRank {
     pub percentile: f64,
@@ -587,8 +587,8 @@ pub struct CategoryRank {
 }
 
 /// Liefert Perzentil/Rang aus `twitch_stats_category` (per-Streamer AVG der
-/// Viewer, ts_utc = TEXT-ISO). Ohne Streamer, fehlende Tabelle, leere Daten
-/// oder Streamer nicht in den Kategorie-Daten → `None`.
+/// Viewer, ts_utc = TEXT-ISO). Ohne Streamer, leere Daten oder Streamer nicht
+/// in den Kategorie-Daten → `None`; Query-Fehler werden propagiert.
 pub async fn overview_category_rank(
     pool: &PgPool,
     since: &str,
@@ -599,8 +599,8 @@ pub async fn overview_category_rank(
     };
     let login = login.to_lowercase();
     // ts_utc ist TEXT (ISO) → lexikografischer Vergleich gegen den ISO-`since`
-    // (wie Python). Fehlende Tabelle → None.
-    let rows: Vec<(String, f64)> = match sqlx::query_as(
+    // (wie Python).
+    let rows: Vec<(String, f64)> = sqlx::query_as(
         r#"
         SELECT streamer, AVG(viewer_count)::FLOAT8 AS avg_vc
         FROM twitch_stats_category
@@ -611,11 +611,7 @@ pub async fn overview_category_rank(
     )
     .bind(since)
     .fetch_all(pool)
-    .await
-    {
-        Ok(r) => r,
-        Err(_) => return Ok(None),
-    };
+    .await?;
     if rows.is_empty() {
         return Ok(None);
     }
@@ -857,12 +853,20 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(m.active_chatters, 1, "nur alice aktiv (streamlabs=Bot)");
-        assert_eq!(m.unique_viewers, 2, "alice + bob (bob via API), streamlabs=Bot raus");
-        assert_eq!(m.unique_chatters, 1, "1 tracked + 0 legacy (Session hat Chatter-Zeilen)");
+        assert_eq!(
+            m.unique_viewers, 2,
+            "alice + bob (bob via API), streamlabs=Bot raus"
+        );
+        assert_eq!(
+            m.unique_chatters, 1,
+            "1 tracked + 0 legacy (Session hat Chatter-Zeilen)"
+        );
         assert!((m.engagement_rate - 50.0).abs() < 0.001, "1/2*100");
 
         // chat_per_100: 1 distinkter Chatter / 200 Peak * 100 = 0.5.
-        let cp100 = overview_chat_per_100(&pool, since, Some("streamer_x")).await.unwrap();
+        let cp100 = overview_chat_per_100(&pool, since, Some("streamer_x"))
+            .await
+            .unwrap();
         assert!((cp100 - 0.5).abs() < 0.001, "1 Chatter / 200 Peak");
     }
 
@@ -890,7 +894,9 @@ mod tests {
         .unwrap();
 
         let since = "2000-01-01T00:00:00+00:00";
-        let n = overview_network_stats(&pool, since, Some("streamer_x")).await.unwrap();
+        let n = overview_network_stats(&pool, since, Some("streamer_x"))
+            .await
+            .unwrap();
         assert_eq!(n.sent, 1, "nur der erfolgreiche ausgehende Raid");
         assert_eq!(n.sent_viewers, 40);
         assert_eq!(n.received, 1);
@@ -936,7 +942,9 @@ mod tests {
         .unwrap();
 
         let since = "2000-01-01T00:00:00+00:00";
-        let list = overview_sessions(&pool, since, Some("streamer_x"), 50).await.unwrap();
+        let list = overview_sessions(&pool, since, Some("streamer_x"), 50)
+            .await
+            .unwrap();
         assert_eq!(list.len(), 1);
         let s = &list[0];
         assert_eq!(s.id, 2);
@@ -981,12 +989,55 @@ mod tests {
         let since = "2000-01-01T00:00:00+00:00";
         // sorted_avgs=[10,30,50,90]; streamer_x=50: below=2, equal=1 → (2+0.5)/4=0.625.
         // rank = 4 - int(0.625*4) = 4 - 2 = 2.
-        let c = overview_category_rank(&pool, since, Some("streamer_x")).await.unwrap().unwrap();
+        let c = overview_category_rank(&pool, since, Some("streamer_x"))
+            .await
+            .unwrap()
+            .unwrap();
         assert!((c.percentile - 0.625).abs() < 1e-9);
         assert_eq!(c.rank, 2);
         assert_eq!(c.total, 4);
         // Unbekannter Streamer / kein Streamer → None.
-        assert!(overview_category_rank(&pool, since, Some("nobody")).await.unwrap().is_none());
-        assert!(overview_category_rank(&pool, since, None).await.unwrap().is_none());
+        assert!(overview_category_rank(&pool, since, Some("nobody"))
+            .await
+            .unwrap()
+            .is_none());
+        assert!(overview_category_rank(&pool, since, None)
+            .await
+            .unwrap()
+            .is_none());
+    }
+
+    #[tokio::test]
+    async fn category_rank_propagiert_query_fehler() {
+        let dsn = match test_dsn() {
+            Some(d) => d,
+            None => {
+                eprintln!("SKIP: TB_TEST_DATABASE_URL nicht gesetzt");
+                return;
+            }
+        };
+        let schema = "test_overview_category_query_fail";
+        let pool = PgPoolOptions::new()
+            .max_connections(1)
+            .connect(&dsn)
+            .await
+            .expect("connect test-db");
+        sqlx::query(&format!("DROP SCHEMA IF EXISTS {schema} CASCADE"))
+            .execute(&pool)
+            .await
+            .expect("Schema droppen fehlgeschlagen");
+        sqlx::query(&format!("CREATE SCHEMA {schema}"))
+            .execute(&pool)
+            .await
+            .expect("Schema anlegen fehlgeschlagen");
+        sqlx::query(&format!("SET search_path TO {schema}"))
+            .execute(&pool)
+            .await
+            .expect("search_path setzen fehlgeschlagen");
+
+        let err = overview_category_rank(&pool, "2000-01-01T00:00:00+00:00", Some("streamer_x"))
+            .await
+            .expect_err("fehlende twitch_stats_category muss sichtbar fehlschlagen");
+        assert!(matches!(err, sqlx::Error::Database(_)));
     }
 }
