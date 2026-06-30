@@ -1,3 +1,11 @@
+## #318 — Etliche Rand-Unterschiede zwischen alter und neuer Bot-Version aufgeräumt
+
+**Ausgangslage:** Beim systematischen Vergleich der alten Python- mit der neuen Rust-Version sind viele kleine Abweichungen aufgefallen — Stellen, an denen die neue Version in Randfällen anders reagierte als gewollt: verschluckte Datenbankfehler, falsch gerundete Werte, fehlende Chat-Befehle und ein paar zu lockere Zugriffsprüfungen.
+
+**Änderung:** Die eindeutigen Bugs davon haben wir behoben — u.a. die AI-Engagement-Befehle (an/aus/status) wieder verfügbar gemacht, die Neu-Autorisierungs-Sperre für privilegierte Befehle nachgezogen, fehlerhafte Webhook-Antworten korrigiert und mehrere Stellen, die Fehler still verschluckten, zum Melden gebracht. Unklare oder bewusst gewollte Abweichungen haben wir stehen lassen.
+
+**Verhalten jetzt:** In diesen Randfällen verhält sich die neue Version wieder wie die alte.
+
 ## #315 — Fünfte Welle: die Social-Media-Clip-Pipeline beim Bauen geprüft — und mehrere stille Altlasten behoben
 
 **Ausgangslage:** Der Teil, der Clips einsammelt, freigibt und automatisch auf die Plattformen hochlädt, führte seine 79 statischen Datenbank-Abfragen bisher als reine Textbausteine aus — Schema-Brüche fielen erst im laufenden Betrieb auf.
