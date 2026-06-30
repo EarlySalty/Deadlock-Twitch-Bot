@@ -1,3 +1,11 @@
+## #305 — Schema-Aufräumung: Streamer-Tabelle durchgängig über den Login verschlüsselt
+
+**Ausgangslage:** Die Streamer-Tabelle trug in der laufenden Datenbank noch eine alte, nirgends genutzte Zahlen-ID als Primärschlüssel mit — ein Überbleibsel aus früheren Zeiten. Der eigentliche Schlüssel ist längst der Twitch-Login. Eine frisch aufgesetzte Datenbank war bereits auf den Login umgestellt, die laufende noch nicht — wieder eine Stelle, an der Bauplan und Realität auseinanderliefen.
+
+**Änderung:** Die tote ID-Spalte samt Zähler wird entfernt und der Primärschlüssel auf den Twitch-Login gelegt. Der einzige Verweis aus einer anderen Tabelle wird dabei sauber umgehängt. Der Schritt fasst nur die laufende Datenbank an (eine frische ist schon umgestellt → folgenlos) und bleibt auch bei mehrfacher Anwendung folgenlos.
+
+**Ergebnis:** Streamer werden überall einheitlich über ihren Login geführt; die doppelte Schlüssel-Buchführung entfällt. An einer nachgestellten Kopie des Produktions-Zustands geprüft, dass die Umstellung sauber durchläuft und alle Verknüpfungen intakt bleiben.
+
 ## #304 — Schema-Aufräumung: tote Tabellen raus, Zeitreihen-Tabellen wie in Produktion
 
 **Ausgangslage:** Eine frisch aus dem Bauplan aufgesetzte Datenbank wich noch von der laufenden ab. Sie schleppte vier alte Einmal-Sicherungskopien aus früheren Datenkorrekturen sowie eine längst ungenutzte Tabelle mit, und 19 große Ereignis- und Statistik-Tabellen waren dort nicht als komprimierte Zeitreihen-Tabellen angelegt, wie es die echte Datenbank längst tut. Auffallen würde das erst beim nächsten Neuaufbau (Test, neue Umgebung): andere Struktur, kein automatisches Wegkomprimieren alter Daten.
