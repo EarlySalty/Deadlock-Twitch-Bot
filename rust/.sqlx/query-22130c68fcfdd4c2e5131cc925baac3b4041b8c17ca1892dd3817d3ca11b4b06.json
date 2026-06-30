@@ -1,0 +1,22 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT COALESCE(promo_disabled, 0) AS \"promo_disabled!\"\n               FROM streamer_plans\n              WHERE LOWER(COALESCE(twitch_login,'')) = $1\n              LIMIT 1",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "promo_disabled!",
+        "type_info": "Int4"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Text"
+      ]
+    },
+    "nullable": [
+      null
+    ]
+  },
+  "hash": "22130c68fcfdd4c2e5131cc925baac3b4041b8c17ca1892dd3817d3ca11b4b06"
+}

@@ -1,0 +1,40 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT title AS \"title!\", normalized_score::float8 AS \"normalized_score?\", keywords, quality_tier::int4 AS \"quality_tier?\" FROM title_generator_knowledge WHERE game_context = 'deadlock' ORDER BY normalized_score DESC LIMIT $1",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "title!",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 1,
+        "name": "normalized_score?",
+        "type_info": "Float8"
+      },
+      {
+        "ordinal": 2,
+        "name": "keywords",
+        "type_info": "TextArray"
+      },
+      {
+        "ordinal": 3,
+        "name": "quality_tier?",
+        "type_info": "Int4"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Int8"
+      ]
+    },
+    "nullable": [
+      false,
+      false,
+      true,
+      null
+    ]
+  },
+  "hash": "703fdd8a1d1ea999c5c0366eedc5b3359b46784f4d5c3f6ac22aa7a69567f397"
+}

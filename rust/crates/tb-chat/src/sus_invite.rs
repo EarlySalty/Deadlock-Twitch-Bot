@@ -148,14 +148,17 @@ impl SusInviteCheck {
             first_seen_at: Option<chrono::DateTime<chrono::Utc>>,
         }
 
-        let row = sqlx::query_as::<_, RollupRow>(
-            "SELECT total_sessions, total_messages, first_seen_at \
+        let row = sqlx::query_as!(
+            RollupRow,
+            "SELECT total_sessions AS \"total_sessions?\", \
+                    total_messages AS \"total_messages?\", \
+                    first_seen_at AS \"first_seen_at?\" \
              FROM twitch_chatter_rollup \
              WHERE streamer_login = $1 AND chatter_login = $2 \
              LIMIT 1",
+            channel_login,
+            chatter_login,
         )
-        .bind(channel_login)
-        .bind(chatter_login)
         .fetch_optional(&self.pool)
         .await;
 

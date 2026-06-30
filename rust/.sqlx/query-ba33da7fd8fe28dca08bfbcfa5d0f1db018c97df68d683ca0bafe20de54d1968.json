@@ -1,0 +1,21 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "INSERT INTO title_generator_knowledge (title, keywords, relative_perf, engagement_rate, history_weight, normalized_score, streamer_size, source_streamer) VALUES ($1, $2, $3, $4, $5, $6, $7, $8) ON CONFLICT (title, game_context) DO UPDATE SET normalized_score = GREATEST(title_generator_knowledge.normalized_score, EXCLUDED.normalized_score), quality_tier = CASE WHEN EXCLUDED.normalized_score > 2.0 THEN 3 WHEN EXCLUDED.normalized_score > 1.5 THEN 2 ELSE 1 END",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Text",
+        "TextArray",
+        "Float8",
+        "Float8",
+        "Float8",
+        "Float8",
+        "Text",
+        "Text"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "ba33da7fd8fe28dca08bfbcfa5d0f1db018c97df68d683ca0bafe20de54d1968"
+}

@@ -1,0 +1,17 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "INSERT INTO twitch_viewer_presence_ticks (session_id, streamer_login, viewer_login, tick_at) VALUES ($1, $2, $3, $4) ON CONFLICT (session_id, viewer_login, tick_at) DO NOTHING",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Int8",
+        "Text",
+        "Text",
+        "Timestamptz"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "345c57c0fbd545608317262eca3a3e3ef7df143166ac4eb35bf060bb237b0277"
+}

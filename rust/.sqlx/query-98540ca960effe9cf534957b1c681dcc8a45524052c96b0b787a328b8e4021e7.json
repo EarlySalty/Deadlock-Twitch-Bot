@@ -1,0 +1,28 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT is_partner_active, archived_at\n               FROM twitch_streamers_partner_state\n              WHERE LOWER(twitch_login) = LOWER($1)\n              LIMIT 1",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "is_partner_active",
+        "type_info": "Int4"
+      },
+      {
+        "ordinal": 1,
+        "name": "archived_at",
+        "type_info": "Text"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Text"
+      ]
+    },
+    "nullable": [
+      true,
+      true
+    ]
+  },
+  "hash": "98540ca960effe9cf534957b1c681dcc8a45524052c96b0b787a328b8e4021e7"
+}

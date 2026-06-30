@@ -1,0 +1,18 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "UPDATE twitch_chatter_rollup SET total_messages = total_messages + 1, total_sessions = total_sessions + $1, last_seen_at   = $2, chatter_id     = COALESCE(chatter_id, $3) WHERE streamer_login = $4 AND chatter_login = $5",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Int4",
+        "Timestamptz",
+        "Text",
+        "Text",
+        "Text"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "260ae96a7f98476b7e5a21488692c4ca8b7645539ac836210dc30eaa54a1b6f0"
+}

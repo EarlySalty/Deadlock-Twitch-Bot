@@ -1,0 +1,14 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "DELETE FROM twitch_global_ban_sweep_due WHERE broadcaster_login = $1",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Text"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "f4ca98b2ad206a06ef4d2707a41ea6f8d50af57fd83e81322890841e2d6b30cf"
+}

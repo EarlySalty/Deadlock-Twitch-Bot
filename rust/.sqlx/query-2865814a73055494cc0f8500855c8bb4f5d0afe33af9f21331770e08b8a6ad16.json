@@ -1,0 +1,26 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n        SELECT broadcaster_login AS \"broadcaster_login!\",\n               broadcaster_id AS \"broadcaster_id!\"\n          FROM twitch_global_ban_sweep_due\n         WHERE run_after <= NOW()\n        ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "broadcaster_login!",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 1,
+        "name": "broadcaster_id!",
+        "type_info": "Text"
+      }
+    ],
+    "parameters": {
+      "Left": []
+    },
+    "nullable": [
+      false,
+      false
+    ]
+  },
+  "hash": "2865814a73055494cc0f8500855c8bb4f5d0afe33af9f21331770e08b8a6ad16"
+}

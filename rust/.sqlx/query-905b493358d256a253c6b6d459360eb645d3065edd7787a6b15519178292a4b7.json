@@ -1,0 +1,20 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT pattern AS \"pattern?\" FROM twitch_auto_learned_safe_patterns WHERE pattern IS NOT NULL",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "pattern?",
+        "type_info": "Text"
+      }
+    ],
+    "parameters": {
+      "Left": []
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "905b493358d256a253c6b6d459360eb645d3065edd7787a6b15519178292a4b7"
+}

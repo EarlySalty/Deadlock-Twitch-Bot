@@ -1,0 +1,14 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n            UPDATE twitch_stream_sessions\n            SET ended_at = NOW(),\n                duration_seconds = EXTRACT(EPOCH FROM (NOW() - started_at))::int,\n                notes = COALESCE(notes || '; ', '') || 'auto-closed: scout-removed'\n            WHERE LOWER(streamer_login) = LOWER($1)\n              AND ended_at IS NULL\n            ",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Text"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "aed604b2f04c9de0aca8ba42dd929ddc3f25818ccb0dfeb6db6e947c12ac87fd"
+}

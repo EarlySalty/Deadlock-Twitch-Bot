@@ -1,0 +1,46 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n            SELECT started_at::text AS \"started_at?\", samples, avg_viewers, start_viewers, peak_viewers\n              FROM twitch_stream_sessions WHERE id = $1\n            ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "started_at?",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 1,
+        "name": "samples",
+        "type_info": "Int4"
+      },
+      {
+        "ordinal": 2,
+        "name": "avg_viewers",
+        "type_info": "Float8"
+      },
+      {
+        "ordinal": 3,
+        "name": "start_viewers",
+        "type_info": "Int4"
+      },
+      {
+        "ordinal": 4,
+        "name": "peak_viewers",
+        "type_info": "Int4"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Int8"
+      ]
+    },
+    "nullable": [
+      null,
+      true,
+      true,
+      true,
+      true
+    ]
+  },
+  "hash": "1a0197316a81f41bf88262923ac202a329dfff20ae43528815891c01421afe89"
+}

@@ -1,0 +1,27 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n                        INSERT INTO twitch_live_state (\n                            twitch_user_id, streamer_login, is_live, last_seen_at, last_title,\n                            last_game, last_viewer_count, last_discord_message_id,\n                            last_tracking_token, last_stream_id, last_started_at,\n                            had_deadlock_in_session, active_session_id, last_deadlock_seen_at\n                        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)\n                        ON CONFLICT (twitch_user_id) DO UPDATE SET\n                            streamer_login = EXCLUDED.streamer_login,\n                            is_live = EXCLUDED.is_live,\n                            last_seen_at = EXCLUDED.last_seen_at,\n                            last_title = EXCLUDED.last_title,\n                            last_game = EXCLUDED.last_game,\n                            last_viewer_count = EXCLUDED.last_viewer_count,\n                            last_discord_message_id = EXCLUDED.last_discord_message_id,\n                            last_tracking_token = EXCLUDED.last_tracking_token,\n                            last_stream_id = EXCLUDED.last_stream_id,\n                            last_started_at = EXCLUDED.last_started_at,\n                            had_deadlock_in_session = EXCLUDED.had_deadlock_in_session,\n                            active_session_id = EXCLUDED.active_session_id,\n                            last_deadlock_seen_at = EXCLUDED.last_deadlock_seen_at\n                        ",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Text",
+        "Text",
+        "Int4",
+        "Text",
+        "Text",
+        "Text",
+        "Int4",
+        "Text",
+        "Text",
+        "Text",
+        "Text",
+        "Int4",
+        "Int8",
+        "Text"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "ea54464a6f019255b29651d7ae2c2c767a077943b4d7cff53d18c34aa502f907"
+}

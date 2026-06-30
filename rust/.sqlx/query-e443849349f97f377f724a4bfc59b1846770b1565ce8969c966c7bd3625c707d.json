@@ -1,0 +1,40 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n                DELETE FROM twitch_eventsub_processing_dead_letter\n                 WHERE work_id = $1\n             RETURNING work_id AS \"work_id!\", work_type AS \"work_type!\",\n                       message_id, payload_json AS \"payload_json!\"\n                ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "work_id!",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 1,
+        "name": "work_type!",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 2,
+        "name": "message_id",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 3,
+        "name": "payload_json!",
+        "type_info": "Text"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Text"
+      ]
+    },
+    "nullable": [
+      false,
+      false,
+      true,
+      false
+    ]
+  },
+  "hash": "e443849349f97f377f724a4bfc59b1846770b1565ce8969c966c7bd3625c707d"
+}

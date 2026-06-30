@@ -34,23 +34,26 @@ pub struct RetentionStats {
 pub async fn compute_raid_retention(pool: &PgPool) -> Result<RetentionStats, sqlx::Error> {
     let mut stats = RetentionStats::default();
 
-    let raids: Vec<(i64, String, String, i32, DateTime<Utc>)> = sqlx::query_as(
-        "SELECT id, from_broadcaster_login, to_broadcaster_login, viewer_count, executed_at \
-         FROM twitch_raid_history \
-         WHERE executed_at >= NOW() - INTERVAL '7 days' \
-         ORDER BY executed_at DESC",
+    let raids = sqlx::query!(
+        r#"
+        SELECT id, from_broadcaster_login, to_broadcaster_login,
+               COALESCE(viewer_count, 0) AS "viewer_count!", executed_at
+         FROM twitch_raid_history
+         WHERE executed_at >= NOW() - INTERVAL '7 days'
+         ORDER BY executed_at DESC
+        "#,
     )
     .fetch_all(pool)
     .await?;
     stats.raids_scanned = raids.len();
 
-    for (id, from_login, to_login, viewer_count, executed_at) in raids {
+    for row in raids {
         let raid = RaidRow {
-            id,
-            from_login: from_login.trim().to_lowercase(),
-            to_login: to_login.trim().to_lowercase(),
-            viewer_count,
-            executed_at,
+            id: row.id,
+            from_login: row.from_broadcaster_login.trim().to_lowercase(),
+            to_login: row.to_broadcaster_login.trim().to_lowercase(),
+            viewer_count: row.viewer_count,
+            executed_at: row.executed_at,
         };
         match compute_one(pool, &raid).await {
             Ok(Outcome::Computed) => stats.raids_computed += 1,
@@ -75,12 +78,12 @@ enum Outcome {
 
 async fn compute_one(pool: &PgPool, raid: &RaidRow) -> Result<Outcome, sqlx::Error> {
     // 1) Skip wenn bereits berechnet (raid_id, executed_at).
-    let exists: bool = sqlx::query_scalar(
+    let exists: bool = sqlx::query_scalar!(
         "SELECT EXISTS(SELECT 1 FROM twitch_raid_retention \
-         WHERE raid_id = $1 AND executed_at = $2)",
+         WHERE raid_id = $1 AND executed_at = $2) AS \"exists!\"",
+        raid.id,
+        raid.executed_at,
     )
-    .bind(raid.id)
-    .bind(raid.executed_at)
     .fetch_one(pool)
     .await?;
     if exists {
@@ -88,15 +91,15 @@ async fn compute_one(pool: &PgPool, raid: &RaidRow) -> Result<Outcome, sqlx::Err
     }
 
     // 2) Ziel-Session auflösen (timestamptz ↔ timestamptz, kein Cast gg. Prod).
-    let target_session: Option<i64> = sqlx::query_scalar(
+    let target_session: Option<i64> = sqlx::query_scalar!(
         "SELECT id FROM twitch_stream_sessions \
          WHERE LOWER(streamer_login) = $1 \
            AND started_at <= $2 \
            AND (ended_at IS NULL OR ended_at >= $2) \
          ORDER BY started_at DESC LIMIT 1",
+        &raid.to_login,
+        raid.executed_at,
     )
-    .bind(&raid.to_login)
-    .bind(raid.executed_at)
     .fetch_optional(pool)
     .await?;
     let Some(target_session_id) = target_session else {
@@ -110,32 +113,31 @@ async fn compute_one(pool: &PgPool, raid: &RaidRow) -> Result<Outcome, sqlx::Err
 
     // 4) Herkunfts-Splits — Untergrenze executed_at, KEINE Obergrenze
     //    (new_chatters ohne last_seen_at-Bedingung), exakt wie Python.
-    let known_from_raider =
-        count_known_from_raider(pool, target_session_id, raid).await?;
+    let known_from_raider = count_known_from_raider(pool, target_session_id, raid).await?;
     let new_to_target = count_new_to_target(pool, target_session_id, raid).await?;
     let new_chatters = count_new_chatters(pool, target_session_id, raid).await?;
 
     // 5) Insert (target_session_id::int8-Cast), ON CONFLICT DO NOTHING.
-    sqlx::query(
+    sqlx::query!(
         "INSERT INTO twitch_raid_retention \
          (raid_id, from_broadcaster_login, to_broadcaster_login, viewer_count_sent, \
           executed_at, target_session_id, chatters_at_plus5m, chatters_at_plus15m, \
           chatters_at_plus30m, known_from_raider, new_to_target, new_chatters) \
          VALUES ($1, $2, $3, $4, $5, $6::int8, $7, $8, $9, $10, $11, $12) \
          ON CONFLICT (raid_id, executed_at) DO NOTHING",
+        raid.id,
+        &raid.from_login,
+        &raid.to_login,
+        raid.viewer_count,
+        raid.executed_at,
+        target_session_id,
+        at5,
+        at15,
+        at30,
+        known_from_raider,
+        new_to_target,
+        new_chatters,
     )
-    .bind(raid.id)
-    .bind(&raid.from_login)
-    .bind(&raid.to_login)
-    .bind(raid.viewer_count)
-    .bind(raid.executed_at)
-    .bind(target_session_id)
-    .bind(at5)
-    .bind(at15)
-    .bind(at30)
-    .bind(known_from_raider)
-    .bind(new_to_target)
-    .bind(new_chatters)
     .execute(pool)
     .await?;
 
@@ -149,6 +151,7 @@ async fn window_count(
     executed_at: DateTime<Utc>,
     offset_min: i32,
 ) -> Result<i32, sqlx::Error> {
+    // dyn: Bot-Filter erzeugt eine variable NOT-IN-Placeholderliste.
     let count: i64 = sqlx::query_scalar(&format!(
         "SELECT COUNT(DISTINCT COALESCE(NULLIF(chatter_login, ''), chatter_id)) \
          FROM twitch_session_chatters \
@@ -175,6 +178,7 @@ async fn count_known_from_raider(
     target_session_id: i64,
     raid: &RaidRow,
 ) -> Result<i32, sqlx::Error> {
+    // dyn: Bot-Filter erzeugt eine variable NOT-IN-Placeholderliste.
     let count: i64 = sqlx::query_scalar(&format!(
         "SELECT COUNT(DISTINCT sc.chatter_login) \
          FROM twitch_session_chatters sc \
@@ -203,6 +207,7 @@ async fn count_new_to_target(
     target_session_id: i64,
     raid: &RaidRow,
 ) -> Result<i32, sqlx::Error> {
+    // dyn: Bot-Filter erzeugt eine variable NOT-IN-Placeholderliste.
     let count: i64 = sqlx::query_scalar(&format!(
         "SELECT COUNT(DISTINCT COALESCE(NULLIF(sc.chatter_login, ''), sc.chatter_id)) \
          FROM twitch_session_chatters sc \

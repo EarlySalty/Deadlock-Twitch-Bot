@@ -187,13 +187,13 @@ impl ChatterTracker {
             }
         }
 
-        let session_id: Option<i64> = sqlx::query_scalar(
-            "SELECT id FROM twitch_stream_sessions \
+        let session_id: Option<i64> = sqlx::query_scalar!(
+            "SELECT id::bigint AS \"id!\" FROM twitch_stream_sessions \
              WHERE streamer_login = $1 AND ended_at IS NULL \
              ORDER BY started_at DESC \
              LIMIT 1",
+            login,
         )
-        .bind(login)
         .fetch_optional(&self.pool)
         .await?;
 
@@ -210,24 +210,26 @@ impl ChatterTracker {
         login: &str,
         session_id: i64,
     ) -> Result<bool, sqlx::Error> {
-        let live_row = sqlx::query_as::<_, (i32, Option<String>)>(
-            "SELECT is_live, last_game FROM twitch_live_state WHERE streamer_login = $1",
+        let live_row = sqlx::query!(
+            "SELECT COALESCE(is_live, 0) AS \"is_live!\", last_game \
+             FROM twitch_live_state \
+             WHERE streamer_login = $1",
+            login,
         )
-        .bind(login)
         .fetch_optional(&self.pool)
         .await?;
 
-        if let Some((is_live, game)) = live_row {
-            let game = game.unwrap_or_default();
-            return Ok(is_live != 0 && game.trim().to_lowercase() == TARGET_GAME);
+        if let Some(row) = live_row {
+            let game = row.last_game.unwrap_or_default();
+            return Ok(row.is_live != 0 && game.trim().to_lowercase() == TARGET_GAME);
         }
 
         // Fallback: game_name der offenen Session (moderation.py Z. 2051–2073).
-        let game_name: Option<String> = sqlx::query_scalar(
+        let game_name: Option<String> = sqlx::query_scalar!(
             "SELECT game_name FROM twitch_stream_sessions \
              WHERE id = $1 AND ended_at IS NULL",
+            session_id,
         )
-        .bind(session_id)
         .fetch_optional(&self.pool)
         .await?
         .flatten();
@@ -268,41 +270,44 @@ impl ChatterTracker {
         upsert_ingest_health(&mut tx, login, Some(ts_iso), None, None, None).await?;
 
         // 2. Roh-Nachricht (Python Z. 2214–2238). message_ts = timestamptz.
-        sqlx::query(
+        sqlx::query!(
             "INSERT INTO twitch_chat_messages \
              (session_id, streamer_login, chatter_login, chatter_id, message_id, \
               message_ts, is_command, content) \
              VALUES ($1, $2, $3, $4, $5, $6, $7, $8)",
+            session_id,
+            login,
+            chatter_login,
+            chatter_id,
+            message_id,
+            now,
+            is_command,
+            &content,
         )
-        .bind(session_id)
-        .bind(login)
-        .bind(chatter_login)
-        .bind(chatter_id)
-        .bind(message_id)
-        .bind(now)
-        .bind(is_command)
-        .bind(&content)
         .execute(&mut *tx)
         .await?;
 
         // 3. Rollup + Session-Chatters lesen (Python Z. 2241–2257).
-        let existing = sqlx::query_as::<_, (i32, Option<bool>, bool)>(
-            "SELECT messages, is_first_time_streamer, seen_via_chatters_api \
+        let existing = sqlx::query!(
+            "SELECT COALESCE(messages, 0) AS \"messages!\", \
+                    is_first_time_streamer, \
+                    COALESCE(seen_via_chatters_api, FALSE) AS \"seen_via_chatters_api!\" \
              FROM twitch_session_chatters \
              WHERE session_id = $1 AND chatter_login = $2",
+            session_id,
+            chatter_login,
         )
-        .bind(session_id)
-        .bind(chatter_login)
         .fetch_optional(&mut *tx)
         .await?;
 
-        let rollup = sqlx::query_as::<_, (i32, i32)>(
-            "SELECT total_messages, total_sessions \
+        let rollup = sqlx::query!(
+            "SELECT COALESCE(total_messages, 0) AS \"total_messages!\", \
+                    COALESCE(total_sessions, 0) AS \"total_sessions!\" \
              FROM twitch_chatter_rollup \
              WHERE streamer_login = $1 AND chatter_login = $2",
+            login,
+            chatter_login,
         )
-        .bind(login)
-        .bind(chatter_login)
         .fetch_optional(&mut *tx)
         .await?;
 
@@ -313,34 +318,34 @@ impl ChatterTracker {
         match rollup {
             Some(_) => {
                 let sessions_inc: i32 = if existing.is_none() { 1 } else { 0 };
-                sqlx::query(
+                sqlx::query!(
                     "UPDATE twitch_chatter_rollup \
                      SET total_messages = total_messages + 1, \
                          total_sessions = total_sessions + $1, \
                          last_seen_at   = $2, \
                          chatter_id     = COALESCE(chatter_id, $3) \
                      WHERE streamer_login = $4 AND chatter_login = $5",
+                    sessions_inc,
+                    now,
+                    chatter_id,
+                    login,
+                    chatter_login,
                 )
-                .bind(sessions_inc)
-                .bind(now)
-                .bind(chatter_id)
-                .bind(login)
-                .bind(chatter_login)
                 .execute(&mut *tx)
                 .await?;
             }
             None => {
-                sqlx::query(
+                sqlx::query!(
                     "INSERT INTO twitch_chatter_rollup \
                      (streamer_login, chatter_login, chatter_id, first_seen_at, last_seen_at, \
                       total_messages, total_sessions) \
                      VALUES ($1, $2, $3, $4, $5, 1, 1)",
+                    login,
+                    chatter_login,
+                    chatter_id,
+                    now,
+                    now,
                 )
-                .bind(login)
-                .bind(chatter_login)
-                .bind(chatter_id)
-                .bind(now)
-                .bind(now)
                 .execute(&mut *tx)
                 .await?;
             }
@@ -348,18 +353,19 @@ impl ChatterTracker {
 
         // 5. Session-Chatters schreiben (Python Z. 2284–2336).
         match existing {
-            Some((existing_messages, existing_first_global, existing_seen_via_api)) => {
+            Some(existing) => {
                 // Lurker-Zeilen (seen_via_chatters_api=true, messages=0) neu labeln
                 // (Python Z. 2291–2296).
-                let resolved_first_global = if (existing_seen_via_api && existing_messages == 0)
-                    || existing_first_global.is_none()
+                let resolved_first_global = if (existing.seen_via_chatters_api
+                    && existing.messages == 0)
+                    || existing.is_first_time_streamer.is_none()
                 {
                     is_first_global
                 } else {
-                    existing_first_global.unwrap_or(false)
+                    existing.is_first_time_streamer.unwrap_or(false)
                 };
 
-                sqlx::query(
+                sqlx::query!(
                     "UPDATE twitch_session_chatters \
                      SET messages               = messages + 1, \
                          last_seen_at           = $1, \
@@ -367,29 +373,29 @@ impl ChatterTracker {
                          is_first_time_streamer = $2, \
                          chatter_id             = COALESCE(chatter_id, $3) \
                      WHERE session_id = $4 AND chatter_login = $5",
+                    now,
+                    resolved_first_global,
+                    chatter_id,
+                    session_id,
+                    chatter_login,
                 )
-                .bind(now)
-                .bind(resolved_first_global)
-                .bind(chatter_id)
-                .bind(session_id)
-                .bind(chatter_login)
                 .execute(&mut *tx)
                 .await?;
             }
             None => {
-                sqlx::query(
+                sqlx::query!(
                     "INSERT INTO twitch_session_chatters \
                      (session_id, streamer_login, chatter_login, chatter_id, first_message_at, \
                       messages, is_first_time_streamer, seen_via_chatters_api, last_seen_at) \
                      VALUES ($1, $2, $3, $4, $5, 1, $6, FALSE, $7)",
+                    session_id,
+                    login,
+                    chatter_login,
+                    chatter_id,
+                    now,
+                    is_first_global,
+                    now,
                 )
-                .bind(session_id)
-                .bind(login)
-                .bind(chatter_login)
-                .bind(chatter_id)
-                .bind(now)
-                .bind(is_first_global)
-                .bind(now)
                 .execute(&mut *tx)
                 .await?;
             }
@@ -494,7 +500,7 @@ async fn upsert_ingest_health(
         None
     };
 
-    sqlx::query(
+    sqlx::query!(
         "INSERT INTO twitch_raw_chat_ingest_health ( \
              streamer_login, \
              last_raw_chat_message_at, \
@@ -526,15 +532,15 @@ async fn upsert_ingest_health(
                  twitch_raw_chat_ingest_health.raw_chat_lag_seconds \
              ), \
              updated_at = EXCLUDED.updated_at",
+        login,
+        message_at,
+        ok_at,
+        error_at,
+        error_value,
+        lag_seconds,
+        &updated_at,
+        should_update_error,
     )
-    .bind(login)
-    .bind(message_at)
-    .bind(ok_at)
-    .bind(error_at)
-    .bind(error_value)
-    .bind(lag_seconds)
-    .bind(&updated_at)
-    .bind(should_update_error)
     .execute(conn)
     .await?;
 

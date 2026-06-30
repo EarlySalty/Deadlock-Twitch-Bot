@@ -1,0 +1,28 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n                SELECT DISTINCT ON (p.twitch_user_id)\n                       p.twitch_user_id,\n                       COALESCE(p.raid_bot_enabled, 0) AS \"partner_raid_bot_enabled!\"\n                FROM twitch_partners p\n                WHERE p.status = 'active'\n                  AND p.twitch_user_id = ANY($1)\n                ORDER BY p.twitch_user_id, p.id DESC\n                ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "twitch_user_id",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 1,
+        "name": "partner_raid_bot_enabled!",
+        "type_info": "Int4"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "TextArray"
+      ]
+    },
+    "nullable": [
+      false,
+      null
+    ]
+  },
+  "hash": "f454f3b935bda8207361a81f07e0c5c754e28f5036dbbdf0332b3686816a88e9"
+}

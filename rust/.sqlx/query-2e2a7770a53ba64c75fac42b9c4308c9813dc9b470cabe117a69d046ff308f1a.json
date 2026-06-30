@@ -1,0 +1,17 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n            INSERT INTO twitch_session_viewers (session_id, ts_utc, minutes_from_start, viewer_count)\n            VALUES ($1, $2, $3, $4)\n            ON CONFLICT (session_id, ts_utc) DO UPDATE SET\n                minutes_from_start = EXCLUDED.minutes_from_start,\n                viewer_count = EXCLUDED.viewer_count\n            ",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Int8",
+        "Timestamptz",
+        "Int4",
+        "Int4"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "2e2a7770a53ba64c75fac42b9c4308c9813dc9b470cabe117a69d046ff308f1a"
+}

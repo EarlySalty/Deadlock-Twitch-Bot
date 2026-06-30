@@ -92,14 +92,14 @@ impl GlobalChatterBanEnforcer {
         chatter_login: &str,
         chatter_id: &str,
     ) -> Result<bool, sqlx::Error> {
-        let row = sqlx::query_scalar::<_, i32>(
+        let row = sqlx::query_scalar!(
             "SELECT 1 FROM twitch_chatter_global_ban \
              WHERE chatter_login = $1 \
                 OR (chatter_id IS NOT NULL AND chatter_id = $2 AND chatter_id <> '') \
              LIMIT 1",
+            chatter_login,
+            chatter_id,
         )
-        .bind(chatter_login)
-        .bind(chatter_id)
         .fetch_optional(&self.pool)
         .await?;
         Ok(row.is_some())

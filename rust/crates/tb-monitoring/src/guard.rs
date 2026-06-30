@@ -65,19 +65,19 @@ impl GuardStore {
         if key.is_empty() {
             return Ok(false);
         }
-        let row: Option<i32> = sqlx::query_scalar(
+        let row: Option<i32> = sqlx::query_scalar!(
             r#"
-            SELECT 1
+            SELECT 1 AS "one!"
               FROM eventsub_guard_state
              WHERE kind = $1
                AND guard_key = $2
                AND expires_at > $3
              LIMIT 1
             "#,
+            kind.as_str(),
+            key,
+            now,
         )
-        .bind(kind.as_str())
-        .bind(key)
-        .bind(now)
         .fetch_optional(&self.pool)
         .await?;
         Ok(row.is_some())
@@ -100,7 +100,7 @@ impl GuardStore {
             return Ok(false);
         }
         let expires_at = now + ttl_seconds.max(1.0);
-        let row: Option<i32> = sqlx::query_scalar(
+        let row: Option<i32> = sqlx::query_scalar!(
             r#"
             INSERT INTO eventsub_guard_state (kind, guard_key, expires_at, updated_at)
             VALUES ($1, $2, $3, $4)
@@ -108,13 +108,13 @@ impl GuardStore {
                SET expires_at = EXCLUDED.expires_at,
                    updated_at = EXCLUDED.updated_at
              WHERE eventsub_guard_state.expires_at <= EXCLUDED.updated_at
-            RETURNING 1
+            RETURNING 1 AS "one!"
             "#,
+            kind.as_str(),
+            key,
+            expires_at,
+            now,
         )
-        .bind(kind.as_str())
-        .bind(key)
-        .bind(expires_at)
-        .bind(now)
         .fetch_optional(&self.pool)
         .await?;
         Ok(row.is_some())
@@ -127,21 +127,25 @@ impl GuardStore {
         if key.is_empty() {
             return Ok(());
         }
-        sqlx::query("DELETE FROM eventsub_guard_state WHERE kind = $1 AND guard_key = $2")
-            .bind(kind.as_str())
-            .bind(key)
-            .execute(&self.pool)
-            .await?;
+        sqlx::query!(
+            "DELETE FROM eventsub_guard_state WHERE kind = $1 AND guard_key = $2",
+            kind.as_str(),
+            key,
+        )
+        .execute(&self.pool)
+        .await?;
         Ok(())
     }
 
     /// Garbage-Collection: löscht abgelaufene Einträge, liefert die Anzahl.
     /// Periodisch aufrufen (z. B. aus dem Poll-Loop) — nicht im Claim-Hot-Path.
     pub async fn sweep_expired(&self, now: f64) -> Result<u64, sqlx::Error> {
-        let result = sqlx::query("DELETE FROM eventsub_guard_state WHERE expires_at <= $1")
-            .bind(now)
-            .execute(&self.pool)
-            .await?;
+        let result = sqlx::query!(
+            "DELETE FROM eventsub_guard_state WHERE expires_at <= $1",
+            now,
+        )
+        .execute(&self.pool)
+        .await?;
         Ok(result.rows_affected())
     }
 }

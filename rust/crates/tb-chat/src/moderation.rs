@@ -572,29 +572,27 @@ impl ModerationEngine {
     }
 
     async fn last_autoban_db_fallback(&self, key: &str) -> Option<AutoBanRecord> {
-        sqlx::query_as::<
-            _,
-            (
-                Option<String>,
-                Option<String>,
-                Option<String>,
-                DateTime<Utc>,
-            ),
-        >(
+        sqlx::query!(
             r#"SELECT chatter_id, chatter_login, content, banned_at
                FROM tb_chat_autoban_log
                WHERE channel_login = $1
                ORDER BY banned_at DESC
                LIMIT 1"#,
+            key,
         )
-        .bind(key)
         .fetch_optional(&self.pool)
         .await
         .map_err(|e| debug!("last_autoban DB-Fallback fehlgeschlagen: {e}"))
         .ok()
         .flatten()
-        .and_then(|(user_id, login, content, ts)| {
-            self.cache_autoban_record(key, user_id, login, content, ts)
+        .and_then(|row| {
+            self.cache_autoban_record(
+                key,
+                Some(row.chatter_id),
+                Some(row.chatter_login),
+                row.content,
+                row.banned_at,
+            )
         })
     }
 
@@ -652,17 +650,17 @@ impl ModerationEngine {
         // DB — Schema aus Migration 20260630141000.
         let ts_str = record.ts.to_rfc3339();
         let content_trunc: String = record.content.clone();
-        if let Err(e) = sqlx::query(
+        if let Err(e) = sqlx::query!(
             r#"INSERT INTO tb_chat_autoban_log
                (channel_login, chatter_id, chatter_login, content, banned_at)
                VALUES ($1, $2, $3, $4, $5)
                ON CONFLICT DO NOTHING"#,
+            &key,
+            chatter_id,
+            chatter_login,
+            &content_trunc,
+            record.ts,
         )
-        .bind(&key)
-        .bind(chatter_id)
-        .bind(chatter_login)
-        .bind(&content_trunc)
-        .bind(record.ts)
         .execute(&self.pool)
         .await
         {
@@ -690,16 +688,16 @@ impl ModerationEngine {
         let login_norm = chatter_login.trim().to_lowercase();
         let login_opt = (!login_norm.is_empty()).then_some(login_norm);
 
-        if let Err(e) = sqlx::query(
+        if let Err(e) = sqlx::query!(
             r#"INSERT INTO twitch_ban_events
                    (twitch_user_id, event_type, target_login, target_id, reason, received_at)
                VALUES ($1, 'ban', $2, $3, $4, $5)"#,
+            broadcaster_id,
+            login_opt,
+            chatter_id,
+            reason_opt,
+            Utc::now(),
         )
-        .bind(broadcaster_id)
-        .bind(login_opt)
-        .bind(chatter_id)
-        .bind(reason_opt)
-        .bind(Utc::now())
         .execute(&self.pool)
         .await
         {
@@ -939,7 +937,7 @@ impl OutboundSuppressionStore {
     ) -> Result<(), sqlx::Error> {
         let now = Utc::now();
         let suppressed_until = now + ttl;
-        sqlx::query(
+        sqlx::query!(
             r#"INSERT INTO twitch_outbound_chat_suppressions
                (target_login, source, target_id, reason_code, reason_detail,
                 suppressed_until, created_at, updated_at)
@@ -950,15 +948,15 @@ impl OutboundSuppressionStore {
                    reason_detail = EXCLUDED.reason_detail,
                    suppressed_until = EXCLUDED.suppressed_until,
                    updated_at = EXCLUDED.updated_at"#,
+            target_login,
+            source,
+            target_id,
+            reason_code,
+            reason_detail,
+            suppressed_until,
+            now,
+            now,
         )
-        .bind(target_login)
-        .bind(source)
-        .bind(target_id)
-        .bind(reason_code)
-        .bind(reason_detail)
-        .bind(suppressed_until)
-        .bind(now)
-        .bind(now)
         .execute(&self.pool)
         .await?;
         Ok(())
@@ -1011,37 +1009,27 @@ impl OutboundSuppressionCheck for OutboundSuppressionStore {
         }
         let now = Utc::now();
         // Prod: suppressed_until ist TIMESTAMPTZ → DateTime<Utc> binden
-        let row = sqlx::query_as::<
-            _,
-            (
-                String,
-                Option<String>,
-                String,
-                String,
-                Option<String>,
-                DateTime<Utc>,
-            ),
-        >(
+        let row = sqlx::query!(
             r#"SELECT target_login, target_id, source, reason_code, reason_detail, suppressed_until
                FROM twitch_outbound_chat_suppressions
                WHERE target_login = $1 AND source = $2 AND suppressed_until > $3
                LIMIT 1"#,
+            target_login,
+            source,
+            now,
         )
-        .bind(target_login)
-        .bind(source)
-        .bind(now)
         .fetch_optional(&self.pool)
         .await
         .ok()
         .flatten();
 
-        row.map(|(tl, tid, src, rc, rd, su)| SuppressionEntry {
-            target_login: tl,
-            target_id: tid,
-            source: src,
-            reason_code: rc,
-            reason_detail: rd,
-            suppressed_until: su,
+        row.map(|row| SuppressionEntry {
+            target_login: row.target_login,
+            target_id: row.target_id,
+            source: row.source,
+            reason_code: row.reason_code,
+            reason_detail: row.reason_detail,
+            suppressed_until: row.suppressed_until,
         })
     }
 }

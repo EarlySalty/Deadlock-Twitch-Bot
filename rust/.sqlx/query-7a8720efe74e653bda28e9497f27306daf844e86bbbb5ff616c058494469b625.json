@@ -1,0 +1,23 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT COALESCE(is_partner_active, 0) <> 0 AS \"is_partner_active!\" FROM twitch_streamers_partner_state WHERE ($1 <> '' AND twitch_user_id = $1) OR ($2 <> '' AND LOWER(twitch_login) = $2) ORDER BY is_partner_active DESC LIMIT 1",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "is_partner_active!",
+        "type_info": "Bool"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Text",
+        "Text"
+      ]
+    },
+    "nullable": [
+      null
+    ]
+  },
+  "hash": "7a8720efe74e653bda28e9497f27306daf844e86bbbb5ff616c058494469b625"
+}

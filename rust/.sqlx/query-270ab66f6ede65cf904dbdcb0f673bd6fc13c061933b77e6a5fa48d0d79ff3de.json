@@ -1,0 +1,15 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n        UPDATE twitch_chatter_global_ban\n           SET chatter_id = $2\n         WHERE chatter_login = $1\n           AND chatter_id IS NULL\n        ",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Text",
+        "Text"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "270ab66f6ede65cf904dbdcb0f673bd6fc13c061933b77e6a5fa48d0d79ff3de"
+}

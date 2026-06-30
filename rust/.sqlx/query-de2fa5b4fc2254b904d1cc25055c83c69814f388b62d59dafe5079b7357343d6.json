@@ -1,0 +1,58 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT streamer_login, is_live, last_game, had_deadlock_in_session,\n                    last_deadlock_seen_at, last_viewer_count, last_started_at\n               FROM twitch_live_state WHERE streamer_login = ANY($1)",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "streamer_login",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 1,
+        "name": "is_live",
+        "type_info": "Int4"
+      },
+      {
+        "ordinal": 2,
+        "name": "last_game",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 3,
+        "name": "had_deadlock_in_session",
+        "type_info": "Int4"
+      },
+      {
+        "ordinal": 4,
+        "name": "last_deadlock_seen_at",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 5,
+        "name": "last_viewer_count",
+        "type_info": "Int4"
+      },
+      {
+        "ordinal": 6,
+        "name": "last_started_at",
+        "type_info": "Text"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "TextArray"
+      ]
+    },
+    "nullable": [
+      false,
+      true,
+      true,
+      true,
+      true,
+      true,
+      true
+    ]
+  },
+  "hash": "de2fa5b4fc2254b904d1cc25055c83c69814f388b62d59dafe5079b7357343d6"
+}

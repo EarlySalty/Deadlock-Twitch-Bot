@@ -1,0 +1,47 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT s.stream_title AS \"stream_title!\", s.avg_viewers::float8 AS avg_viewers, s.peak_viewers::int8 AS peak_viewers, s.followers_start::int8 AS followers_start, s.started_at AS \"started_at?\" FROM twitch_stream_sessions s WHERE LOWER(s.streamer_login) = $1 AND s.stream_title IS NOT NULL AND s.stream_title != '' ORDER BY s.started_at DESC LIMIT $2",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "stream_title!",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 1,
+        "name": "avg_viewers",
+        "type_info": "Float8"
+      },
+      {
+        "ordinal": 2,
+        "name": "peak_viewers",
+        "type_info": "Int8"
+      },
+      {
+        "ordinal": 3,
+        "name": "followers_start",
+        "type_info": "Int8"
+      },
+      {
+        "ordinal": 4,
+        "name": "started_at?",
+        "type_info": "Timestamptz"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Text",
+        "Int8"
+      ]
+    },
+    "nullable": [
+      true,
+      true,
+      null,
+      null,
+      false
+    ]
+  },
+  "hash": "aad1855b8cf0d8838c3866fdc013f6342db9c3185e8c03b35f4baf1377ef0da5"
+}

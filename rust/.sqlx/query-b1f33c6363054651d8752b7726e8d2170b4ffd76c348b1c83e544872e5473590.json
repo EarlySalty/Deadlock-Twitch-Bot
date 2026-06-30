@@ -1,0 +1,44 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n        SELECT id, from_broadcaster_login, to_broadcaster_login,\n               COALESCE(viewer_count, 0) AS \"viewer_count!\", executed_at\n         FROM twitch_raid_history\n         WHERE executed_at >= NOW() - INTERVAL '7 days'\n         ORDER BY executed_at DESC\n        ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id",
+        "type_info": "Int8"
+      },
+      {
+        "ordinal": 1,
+        "name": "from_broadcaster_login",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 2,
+        "name": "to_broadcaster_login",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 3,
+        "name": "viewer_count!",
+        "type_info": "Int4"
+      },
+      {
+        "ordinal": 4,
+        "name": "executed_at",
+        "type_info": "Timestamptz"
+      }
+    ],
+    "parameters": {
+      "Left": []
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      null,
+      false
+    ]
+  },
+  "hash": "b1f33c6363054651d8752b7726e8d2170b4ffd76c348b1c83e544872e5473590"
+}

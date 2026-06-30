@@ -1,0 +1,68 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n            SELECT twitch_login AS \"twitch_login!\", twitch_user_id,\n                   require_discord_link AS \"require_discord_link?\",\n                   archived_at::text AS \"archived_at?\",\n                   is_partner_active AS \"is_partner_active?\",\n                   discord_user_id,\n                   operational_state AS \"operational_state?\",\n                   live_ping_role_id,\n                   COALESCE(live_ping_enabled, 1) AS \"live_ping_enabled?\"\n              FROM twitch_streamers_partner_state\n            UNION ALL\n            -- Monitored-only Kanäle sind keine Partner: Partner-Config als\n            -- Spalten-Default, Archive-Status ist partner-spezifisch.\n            SELECT s.twitch_login, s.twitch_user_id, 0 AS require_discord_link,\n                   NULL::text AS archived_at, 0 AS is_partner_active, i.discord_user_id,\n                   'active'::text AS operational_state,\n                   NULL::bigint AS live_ping_role_id, 1 AS live_ping_enabled\n              FROM twitch_streamers s\n              LEFT JOIN twitch_streamer_identities i\n                ON i.twitch_user_id = s.twitch_user_id\n             WHERE NOT EXISTS (\n                   SELECT 1\n                     FROM twitch_partners p\n                    WHERE p.twitch_user_id = s.twitch_user_id\n                       OR LOWER(p.twitch_login) = LOWER(s.twitch_login)\n               )\n            ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "twitch_login!",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 1,
+        "name": "twitch_user_id",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 2,
+        "name": "require_discord_link?",
+        "type_info": "Int4"
+      },
+      {
+        "ordinal": 3,
+        "name": "archived_at?",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 4,
+        "name": "is_partner_active?",
+        "type_info": "Int4"
+      },
+      {
+        "ordinal": 5,
+        "name": "discord_user_id",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 6,
+        "name": "operational_state?",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 7,
+        "name": "live_ping_role_id",
+        "type_info": "Int8"
+      },
+      {
+        "ordinal": 8,
+        "name": "live_ping_enabled?",
+        "type_info": "Int4"
+      }
+    ],
+    "parameters": {
+      "Left": []
+    },
+    "nullable": [
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      null
+    ]
+  },
+  "hash": "831865358fe544aa5ef998e18227fbb3617643becb70f09f2cd021bacbe5eb4d"
+}

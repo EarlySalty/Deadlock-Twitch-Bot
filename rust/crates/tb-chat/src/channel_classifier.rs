@@ -96,16 +96,16 @@ impl ChannelClassifier {
 
     async fn classify_from_db(&self, login: &str) -> ChannelClass {
         // --- is_monitored_only: Streamer ohne Partner-Eintrag ---
-        let is_monitored_only = sqlx::query_scalar::<_, bool>(
+        let is_monitored_only = sqlx::query_scalar!(
             "SELECT NOT EXISTS ( \
                  SELECT 1 FROM twitch_partners p \
                  WHERE p.twitch_user_id = s.twitch_user_id \
                     OR LOWER(p.twitch_login) = LOWER(s.twitch_login) \
-             ) \
+             ) AS \"is_monitored_only!\" \
              FROM twitch_streamers s \
              WHERE LOWER(s.twitch_login) = $1",
+            login,
         )
-        .bind(login)
         .fetch_optional(&self.pool)
         .await
         .unwrap_or(None)
@@ -114,12 +114,12 @@ impl ChannelClassifier {
         // --- is_partner_channel_for_chat_tracking (partner_utils.py Z. 153–181)
         //     bot.py Z. 746–753: monitored-only → True für Tracking-Gate, aber KEIN Partner
         //     is_partner = aktiver Partner UND NICHT monitored-only (bot.py Z. 1568–1572) ---
-        let is_partner_active = sqlx::query_scalar::<_, i32>(
-            "SELECT COALESCE(is_partner_active, 0) \
+        let is_partner_active = sqlx::query_scalar!(
+            "SELECT COALESCE(is_partner_active, 0) AS \"is_partner_active!\" \
              FROM twitch_streamers_partner_state \
              WHERE LOWER(twitch_login) = $1",
+            login,
         )
-        .bind(login)
         .fetch_optional(&self.pool)
         .await
         .unwrap_or(None)
@@ -131,15 +131,22 @@ impl ChannelClassifier {
 
         // --- is_deadlock_live (bot.py Z. 755–761, moderation.py Z. 2008–2080)
         //     is_live = integer, last_game = text (Prod-Schema) ---
-        let is_deadlock_live = match sqlx::query_as::<_, (i32, Option<String>)>(
-            "SELECT is_live, last_game FROM twitch_live_state WHERE streamer_login = $1",
+        let is_deadlock_live = match sqlx::query!(
+            "SELECT COALESCE(is_live, 0) AS \"is_live!\", last_game \
+             FROM twitch_live_state \
+             WHERE streamer_login = $1",
+            login,
         )
-        .bind(login)
         .fetch_optional(&self.pool)
         .await
         {
-            Ok(Some((is_live, Some(game)))) => {
-                is_live != 0 && game.trim().to_lowercase() == "deadlock"
+            Ok(Some(row)) => {
+                row.is_live != 0
+                    && row
+                        .last_game
+                        .as_deref()
+                        .map(|game| game.trim().to_lowercase() == "deadlock")
+                        .unwrap_or(false)
             }
             _ => false,
         };

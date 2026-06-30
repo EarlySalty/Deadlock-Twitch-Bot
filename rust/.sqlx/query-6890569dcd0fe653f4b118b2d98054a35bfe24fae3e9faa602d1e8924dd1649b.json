@@ -1,0 +1,15 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "UPDATE twitch_streamer_invites\n                SET last_sent_at = $1\n              WHERE LOWER(streamer_login) = $2",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Text",
+        "Text"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "6890569dcd0fe653f4b118b2d98054a35bfe24fae3e9faa602d1e8924dd1649b"
+}

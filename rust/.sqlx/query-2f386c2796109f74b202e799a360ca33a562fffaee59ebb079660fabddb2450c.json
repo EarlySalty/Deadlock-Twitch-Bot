@@ -1,0 +1,17 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "INSERT INTO twitch_chatter_rollup (streamer_login, chatter_login, chatter_id, first_seen_at, last_seen_at, total_messages, total_sessions) VALUES ($1, $2, $3, $4, $4, 0, 1) ON CONFLICT (streamer_login, chatter_login) DO UPDATE SET last_seen_at = EXCLUDED.last_seen_at, chatter_id = COALESCE(twitch_chatter_rollup.chatter_id, EXCLUDED.chatter_id)",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Text",
+        "Text",
+        "Text",
+        "Timestamptz"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "2f386c2796109f74b202e799a360ca33a562fffaee59ebb079660fabddb2450c"
+}

@@ -1,0 +1,20 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "INSERT INTO twitch_session_chatters (session_id, streamer_login, chatter_login, chatter_id, first_message_at, messages, is_first_time_streamer, seen_via_chatters_api, last_seen_at) VALUES ($1, $2, $3, $4, $5, 1, $6, FALSE, $7)",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Int8",
+        "Text",
+        "Text",
+        "Text",
+        "Timestamptz",
+        "Bool",
+        "Timestamptz"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "69f5fff190fe39e83101ecde34f0aa48e445b2b7e4ae161bebe88f244f4fb807"
+}

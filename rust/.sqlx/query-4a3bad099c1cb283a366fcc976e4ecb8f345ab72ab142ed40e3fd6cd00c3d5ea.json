@@ -1,0 +1,14 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "DELETE FROM twitch_eventsub_processing_inbox WHERE work_id = $1",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Text"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "4a3bad099c1cb283a366fcc976e4ecb8f345ab72ab142ed40e3fd6cd00c3d5ea"
+}

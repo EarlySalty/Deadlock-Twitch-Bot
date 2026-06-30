@@ -63,6 +63,7 @@ impl StatsStore {
         );
         let mut tx = self.pool.begin().await?;
         for row in rows {
+            // dyn: Tabellenname ist der ausgewählte Stats-Sink (`tracked` oder `category`).
             sqlx::query(&sql)
                 .bind(ts)
                 .bind(&row.streamer)

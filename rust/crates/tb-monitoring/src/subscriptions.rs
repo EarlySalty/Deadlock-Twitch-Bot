@@ -593,8 +593,8 @@ impl SubscriptionManager {
             return false;
         }
 
-        let is_monitored_only: bool = sqlx::query_scalar(
-            "SELECT TRUE FROM twitch_streamers s \
+        let is_monitored_only: bool = sqlx::query_scalar!(
+            "SELECT TRUE AS \"is_monitored_only!\" FROM twitch_streamers s \
              WHERE (($1 <> '' AND s.twitch_user_id = $1) \
                 OR ($2 <> '' AND LOWER(s.twitch_login) = $2)) \
                AND NOT EXISTS ( \
@@ -603,9 +603,9 @@ impl SubscriptionManager {
                       OR LOWER(p.twitch_login) = LOWER(s.twitch_login) \
                ) \
              LIMIT 1",
+            target_id,
+            &normalized_login,
         )
-        .bind(target_id)
-        .bind(&normalized_login)
         .fetch_optional(&self.pool)
         .await
         .unwrap_or_else(|error| {
@@ -619,15 +619,15 @@ impl SubscriptionManager {
             return false;
         }
 
-        let is_partner_active: bool = sqlx::query_scalar(
-            "SELECT COALESCE(is_partner_active, 0) <> 0 \
+        let is_partner_active: bool = sqlx::query_scalar!(
+            "SELECT COALESCE(is_partner_active, 0) <> 0 AS \"is_partner_active!\" \
              FROM twitch_streamers_partner_state \
              WHERE ($1 <> '' AND twitch_user_id = $1) \
                 OR ($2 <> '' AND LOWER(twitch_login) = $2) \
              ORDER BY is_partner_active DESC LIMIT 1",
+            target_id,
+            &normalized_login,
         )
-        .bind(target_id)
-        .bind(&normalized_login)
         .fetch_optional(&self.pool)
         .await
         .unwrap_or_else(|error| {
@@ -636,15 +636,15 @@ impl SubscriptionManager {
         })
         .unwrap_or(false);
 
-        let has_raid_auth: bool = sqlx::query_scalar(
+        let has_raid_auth: bool = sqlx::query_scalar!(
             "SELECT EXISTS( \
                 SELECT 1 FROM twitch_raid_auth \
                 WHERE ($1 <> '' AND twitch_user_id = $1) \
                    OR ($2 <> '' AND LOWER(twitch_login) = $2) \
-             )",
+             ) AS \"has_raid_auth!\"",
+            target_id,
+            &normalized_login,
         )
-        .bind(target_id)
-        .bind(&normalized_login)
         .fetch_one(&self.pool)
         .await
         .unwrap_or_else(|error| {
@@ -1248,15 +1248,15 @@ impl SubscriptionManager {
             return false;
         }
 
-        let exists_in_streamers: bool = sqlx::query_scalar(
+        let exists_in_streamers: bool = sqlx::query_scalar!(
             "SELECT EXISTS( \
                 SELECT 1 FROM twitch_streamers \
                 WHERE ($1 <> '' AND twitch_user_id = $1) \
                    OR ($2 <> '' AND LOWER(twitch_login) = $2) \
-             )",
+             ) AS \"exists_in_streamers!\"",
+            target_id,
+            &normalized_login,
         )
-        .bind(target_id)
-        .bind(&normalized_login)
         .fetch_one(&self.pool)
         .await
         .unwrap_or_else(|error| {
@@ -1264,14 +1264,14 @@ impl SubscriptionManager {
             true
         });
 
-        let is_partner_active: bool = sqlx::query_scalar(
-            "SELECT COALESCE(MAX(COALESCE(is_partner_active, 0)), 0) <> 0 \
+        let is_partner_active: bool = sqlx::query_scalar!(
+            "SELECT COALESCE(MAX(COALESCE(is_partner_active, 0)), 0) <> 0 AS \"is_partner_active!\" \
              FROM twitch_streamers_partner_state \
              WHERE ($1 <> '' AND twitch_user_id = $1) \
                 OR ($2 <> '' AND LOWER(twitch_login) = $2)",
+            target_id,
+            &normalized_login,
         )
-        .bind(target_id)
-        .bind(&normalized_login)
         .fetch_one(&self.pool)
         .await
         .unwrap_or_else(|error| {
@@ -1279,15 +1279,15 @@ impl SubscriptionManager {
             true
         });
 
-        let has_raid_auth: bool = sqlx::query_scalar(
+        let has_raid_auth: bool = sqlx::query_scalar!(
             "SELECT EXISTS( \
                 SELECT 1 FROM twitch_raid_auth \
                 WHERE ($1 <> '' AND twitch_user_id = $1) \
                    OR ($2 <> '' AND LOWER(twitch_login) = $2) \
-             )",
+             ) AS \"has_raid_auth!\"",
+            target_id,
+            &normalized_login,
         )
-        .bind(target_id)
-        .bind(&normalized_login)
         .fetch_one(&self.pool)
         .await
         .unwrap_or_else(|error| {
@@ -1563,7 +1563,7 @@ impl CapacitySnapshotStore {
         used_slots: i32,
         ts: DateTime<Utc>,
     ) -> Result<(), sqlx::Error> {
-        sqlx::query(
+        sqlx::query!(
             r#"
             INSERT INTO twitch_eventsub_capacity_snapshot
                 (ts_utc, trigger_reason, listener_count, ready_listeners,
@@ -1571,10 +1571,10 @@ impl CapacitySnapshotStore {
                  listeners_at_limit, utilization_pct, listeners_json)
             VALUES ($1, $2, 0, 0, 0, $3, 0, 0, 0, 0.0, '[]')
             "#,
+            ts,
+            trigger,
+            used_slots,
         )
-        .bind(ts)
-        .bind(trigger)
-        .bind(used_slots)
         .execute(&self.pool)
         .await?;
         Ok(())
@@ -1583,11 +1583,13 @@ impl CapacitySnapshotStore {
     /// Löscht Zeitreihen-Zeilen älter als `cutoff` (Retention, B5-08). Liefert die
     /// Anzahl gelöschter Zeilen.
     pub async fn delete_older_than(&self, cutoff: DateTime<Utc>) -> Result<u64, sqlx::Error> {
-        let rows = sqlx::query("DELETE FROM twitch_eventsub_capacity_snapshot WHERE ts_utc < $1")
-            .bind(cutoff)
-            .execute(&self.pool)
-            .await?
-            .rows_affected();
+        let rows = sqlx::query!(
+            "DELETE FROM twitch_eventsub_capacity_snapshot WHERE ts_utc < $1",
+            cutoff,
+        )
+        .execute(&self.pool)
+        .await?
+        .rows_affected();
         Ok(rows)
     }
 }

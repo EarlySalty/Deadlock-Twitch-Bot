@@ -1,0 +1,22 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT lurker_tax_enabled AS \"lurker_tax_enabled?\" FROM streamer_plans\n              WHERE LOWER(COALESCE(twitch_login, '')) = LOWER($1) LIMIT 1",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "lurker_tax_enabled?",
+        "type_info": "Int4"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Text"
+      ]
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "8009622e3e98d6854efcfb96c7600d4f6f32bc15094b341440554615778aa222"
+}

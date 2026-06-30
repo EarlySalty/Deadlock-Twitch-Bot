@@ -1,0 +1,26 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT chatter_login AS \"chatter_login!\", broadcaster_id AS \"broadcaster_id!\" FROM twitch_chatter_global_ban_applied",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "chatter_login!",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 1,
+        "name": "broadcaster_id!",
+        "type_info": "Text"
+      }
+    ],
+    "parameters": {
+      "Left": []
+    },
+    "nullable": [
+      false,
+      false
+    ]
+  },
+  "hash": "0172e7e0cb78970c3e39e91a0a9c41e22fa37a25b14da339d5d3308cb9574c28"
+}

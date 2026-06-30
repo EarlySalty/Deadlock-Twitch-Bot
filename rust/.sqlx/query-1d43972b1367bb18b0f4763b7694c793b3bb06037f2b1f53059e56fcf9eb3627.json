@@ -1,0 +1,21 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n                INSERT INTO twitch_eventsub_processing_dead_letter (\n                    work_id, work_type, message_id, payload_json,\n                    queued_at, dead_lettered_at, attempt_count, last_error\n                )\n                VALUES ($1, $2, $3, $4, $5, $6, $7, $8)\n                ON CONFLICT (work_id) DO UPDATE\n                   SET work_type = EXCLUDED.work_type,\n                       message_id = EXCLUDED.message_id,\n                       payload_json = EXCLUDED.payload_json,\n                       queued_at = EXCLUDED.queued_at,\n                       dead_lettered_at = EXCLUDED.dead_lettered_at,\n                       attempt_count = EXCLUDED.attempt_count,\n                       last_error = EXCLUDED.last_error\n                ",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Text",
+        "Text",
+        "Text",
+        "Text",
+        "Float8",
+        "Float8",
+        "Int4",
+        "Text"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "1d43972b1367bb18b0f4763b7694c793b3bb06037f2b1f53059e56fcf9eb3627"
+}

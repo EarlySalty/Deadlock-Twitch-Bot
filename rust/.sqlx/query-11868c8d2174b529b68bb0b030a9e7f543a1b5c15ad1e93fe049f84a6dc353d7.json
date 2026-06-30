@@ -1,0 +1,17 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "UPDATE exp_sessions SET samples = $1, avg_viewers = $2, peak_viewers = $3 WHERE id = $4",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Int4",
+        "Float4",
+        "Int4",
+        "Int8"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "11868c8d2174b529b68bb0b030a9e7f543a1b5c15ad1e93fe049f84a6dc353d7"
+}

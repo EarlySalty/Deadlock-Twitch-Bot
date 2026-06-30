@@ -1,0 +1,18 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "INSERT INTO tb_chat_autoban_log\n               (channel_login, chatter_id, chatter_login, content, banned_at)\n               VALUES ($1, $2, $3, $4, $5)\n               ON CONFLICT DO NOTHING",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Text",
+        "Text",
+        "Text",
+        "Text",
+        "Timestamptz"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "288b452d2486e5e8d09d46008f4512f7c7c7081f11e3aae0684e794990b90d48"
+}

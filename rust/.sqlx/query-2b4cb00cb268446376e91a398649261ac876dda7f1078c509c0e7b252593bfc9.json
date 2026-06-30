@@ -1,0 +1,32 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT login AS \"login!\", cooldown_type AS \"cooldown_type!\", wall_ts AS \"wall_ts!\" FROM twitch_promo_cooldowns",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "login!",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 1,
+        "name": "cooldown_type!",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 2,
+        "name": "wall_ts!",
+        "type_info": "Float8"
+      }
+    ],
+    "parameters": {
+      "Left": []
+    },
+    "nullable": [
+      false,
+      false,
+      false
+    ]
+  },
+  "hash": "2b4cb00cb268446376e91a398649261ac876dda7f1078c509c0e7b252593bfc9"
+}

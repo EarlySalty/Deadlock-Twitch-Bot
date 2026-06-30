@@ -96,13 +96,6 @@ pub struct OfflineSourceState {
     pub last_started_at: Option<String>,
 }
 
-#[derive(sqlx::FromRow)]
-struct SnapshotJoinRow {
-    #[sqlx(flatten)]
-    state: LiveStateRow,
-    partner_raid_bot_enabled: i32,
-}
-
 #[derive(Clone)]
 pub struct LiveStateStore {
     pool: PgPool,
@@ -141,7 +134,7 @@ impl LiveStateStore {
             return Ok(HashMap::new());
         }
 
-        let rows: Vec<SnapshotJoinRow> = sqlx::query_as(
+        let rows = sqlx::query!(
             r#"
             SELECT ls.twitch_user_id, ls.streamer_login, ls.last_stream_id,
                    ls.last_started_at, ls.last_title, ls.last_game_id,
@@ -149,7 +142,7 @@ impl LiveStateStore {
                    ls.last_seen_at, ls.last_game, ls.last_viewer_count,
                    ls.last_tracking_token, ls.active_session_id,
                    ls.had_deadlock_in_session, ls.last_deadlock_seen_at,
-                   COALESCE(p.raid_bot_enabled, 0) AS partner_raid_bot_enabled
+                   COALESCE(p.raid_bot_enabled, 0) AS "partner_raid_bot_enabled!"
             FROM twitch_live_state ls
             LEFT JOIN LATERAL (
                 SELECT p.raid_bot_enabled
@@ -161,24 +154,42 @@ impl LiveStateStore {
             ) p ON TRUE
             WHERE LOWER(ls.streamer_login) = ANY($1)
             "#,
+            &logins,
         )
-        .bind(&logins)
         .fetch_all(&self.pool)
         .await?;
 
         let mut snapshot: HashMap<String, SnapshotEntry> = HashMap::new();
         for row in rows {
-            let key = row.state.streamer_login.trim().to_lowercase();
+            let state = LiveStateRow {
+                twitch_user_id: row.twitch_user_id,
+                streamer_login: row.streamer_login,
+                last_stream_id: row.last_stream_id,
+                last_started_at: row.last_started_at,
+                last_title: row.last_title,
+                last_game_id: row.last_game_id,
+                last_discord_message_id: row.last_discord_message_id,
+                last_notified_at: row.last_notified_at,
+                is_live: row.is_live,
+                last_seen_at: row.last_seen_at,
+                last_game: row.last_game,
+                last_viewer_count: row.last_viewer_count,
+                last_tracking_token: row.last_tracking_token,
+                active_session_id: row.active_session_id,
+                had_deadlock_in_session: row.had_deadlock_in_session,
+                last_deadlock_seen_at: row.last_deadlock_seen_at,
+            };
+            let key = state.streamer_login.trim().to_lowercase();
             if key.is_empty() {
                 continue;
             }
             snapshot.insert(
                 key,
                 SnapshotEntry {
-                    streamer_login: row.state.streamer_login.clone(),
-                    twitch_user_id: Some(row.state.twitch_user_id.clone()),
+                    streamer_login: state.streamer_login.clone(),
+                    twitch_user_id: Some(state.twitch_user_id.clone()),
                     partner_raid_bot_enabled: row.partner_raid_bot_enabled,
-                    state: Some(row.state),
+                    state: Some(state),
                 },
             );
         }
@@ -196,21 +207,24 @@ impl LiveStateStore {
         };
         let mut partner_flags: HashMap<String, i32> = HashMap::new();
         if !missing_user_ids.is_empty() {
-            let rows: Vec<(String, i32)> = sqlx::query_as(
+            let rows = sqlx::query!(
                 r#"
                 SELECT DISTINCT ON (p.twitch_user_id)
                        p.twitch_user_id,
-                       COALESCE(p.raid_bot_enabled, 0) AS partner_raid_bot_enabled
+                       COALESCE(p.raid_bot_enabled, 0) AS "partner_raid_bot_enabled!"
                 FROM twitch_partners p
                 WHERE p.status = 'active'
                   AND p.twitch_user_id = ANY($1)
                 ORDER BY p.twitch_user_id, p.id DESC
                 "#,
+                &missing_user_ids,
             )
-            .bind(&missing_user_ids)
             .fetch_all(&self.pool)
             .await?;
-            partner_flags.extend(rows);
+            partner_flags.extend(
+                rows.into_iter()
+                    .map(|row| (row.twitch_user_id, row.partner_raid_bot_enabled)),
+            );
         }
         for (login, user_id) in &login_to_user_id {
             if snapshot.contains_key(login) {
@@ -269,20 +283,20 @@ impl LiveStateStore {
             async move {
                 let mut tx = pool.begin().await?;
                 for (login, user_id) in cleanup {
-                    sqlx::query(
+                    sqlx::query!(
                         r#"
                         DELETE FROM twitch_live_state
                          WHERE LOWER(streamer_login) = LOWER($1)
                            AND LOWER(COALESCE(twitch_user_id, '')) <> LOWER($2)
                         "#,
+                        login,
+                        user_id,
                     )
-                    .bind(login)
-                    .bind(user_id)
                     .execute(&mut *tx)
                     .await?;
                 }
                 for row in valid.iter().copied() {
-                    sqlx::query(
+                    sqlx::query!(
                         r#"
                         INSERT INTO twitch_live_state (
                             twitch_user_id, streamer_login, is_live, last_seen_at, last_title,
@@ -305,21 +319,21 @@ impl LiveStateStore {
                             active_session_id = EXCLUDED.active_session_id,
                             last_deadlock_seen_at = EXCLUDED.last_deadlock_seen_at
                         "#,
+                        &row.twitch_user_id,
+                        &row.streamer_login,
+                        row.is_live,
+                        &row.last_seen_at,
+                        row.last_title.as_deref(),
+                        row.last_game.as_deref(),
+                        row.last_viewer_count,
+                        row.last_discord_message_id.as_deref(),
+                        row.last_tracking_token.as_deref(),
+                        row.last_stream_id.as_deref(),
+                        row.last_started_at.as_deref(),
+                        row.had_deadlock_in_session,
+                        row.active_session_id,
+                        row.last_deadlock_seen_at.as_deref(),
                     )
-                    .bind(&row.twitch_user_id)
-                    .bind(&row.streamer_login)
-                    .bind(row.is_live)
-                    .bind(&row.last_seen_at)
-                    .bind(&row.last_title)
-                    .bind(&row.last_game)
-                    .bind(row.last_viewer_count)
-                    .bind(&row.last_discord_message_id)
-                    .bind(&row.last_tracking_token)
-                    .bind(&row.last_stream_id)
-                    .bind(&row.last_started_at)
-                    .bind(row.had_deadlock_in_session)
-                    .bind(row.active_session_id)
-                    .bind(&row.last_deadlock_seen_at)
                     .execute(&mut *tx)
                     .await?;
                 }
@@ -343,19 +357,19 @@ impl LiveStateStore {
     ) -> Result<(), sqlx::Error> {
         let mut tx = self.pool.begin().await?;
         if !login_lower.is_empty() {
-            sqlx::query(
+            sqlx::query!(
                 r#"
                 DELETE FROM twitch_live_state
                  WHERE LOWER(streamer_login) = LOWER($1)
                    AND LOWER(COALESCE(twitch_user_id, '')) <> LOWER($2)
                 "#,
+                login_lower,
+                broadcaster_user_id,
             )
-            .bind(login_lower)
-            .bind(broadcaster_user_id)
             .execute(&mut *tx)
             .await?;
         }
-        sqlx::query(
+        sqlx::query!(
             r#"
             INSERT INTO twitch_live_state (
                 twitch_user_id, streamer_login, is_live, last_seen_at, last_stream_id, last_started_at
@@ -368,16 +382,16 @@ impl LiveStateStore {
                     last_stream_id = COALESCE(EXCLUDED.last_stream_id, twitch_live_state.last_stream_id),
                     last_started_at = COALESCE(EXCLUDED.last_started_at, twitch_live_state.last_started_at)
             "#,
+            broadcaster_user_id,
+            if login_lower.is_empty() {
+                broadcaster_user_id
+            } else {
+                login_lower
+            },
+            now_iso,
+            stream_id,
+            started_at,
         )
-        .bind(broadcaster_user_id)
-        .bind(if login_lower.is_empty() {
-            broadcaster_user_id
-        } else {
-            login_lower
-        })
-        .bind(now_iso)
-        .bind(stream_id)
-        .bind(started_at)
         .execute(&mut *tx)
         .await?;
         tx.commit().await?;
@@ -396,15 +410,15 @@ impl LiveStateStore {
         if title.is_none() && game_name.is_none() {
             return Ok(());
         }
-        sqlx::query(
+        sqlx::query!(
             "UPDATE twitch_live_state
                 SET last_title = COALESCE($1, last_title),
                     last_game  = COALESCE($2, last_game)
               WHERE twitch_user_id = $3 AND is_live = 1",
+            title,
+            game_name,
+            broadcaster_user_id,
         )
-        .bind(title)
-        .bind(game_name)
-        .bind(broadcaster_user_id)
         .execute(&self.pool)
         .await?;
         Ok(())
@@ -416,13 +430,13 @@ impl LiveStateStore {
         broadcaster_user_id: &str,
         now_iso: &str,
     ) -> Result<(), sqlx::Error> {
-        sqlx::query(
+        sqlx::query!(
             "UPDATE twitch_live_state
                 SET is_live = 0, last_seen_at = $1, active_session_id = NULL
               WHERE twitch_user_id = $2",
+            now_iso,
+            broadcaster_user_id,
         )
-        .bind(now_iso)
-        .bind(broadcaster_user_id)
         .execute(&self.pool)
         .await?;
         Ok(())
@@ -433,13 +447,13 @@ impl LiveStateStore {
     /// Alterungsprüfung explizit als `timestamptz` interpretiert werden.
     pub async fn sweep_stale_live(&self, max_age_secs: i64) -> Result<u64, sqlx::Error> {
         let max_age_secs = max_age_secs.max(0).to_string();
-        let result = sqlx::query(
+        let result = sqlx::query!(
             "UPDATE twitch_live_state
                 SET is_live = 0, active_session_id = NULL
               WHERE is_live = 1
                 AND last_seen_at::timestamptz < now() - ($1 || ' seconds')::interval",
+            max_age_secs,
         )
-        .bind(max_age_secs)
         .execute(&self.pool)
         .await?;
         let healed = result.rows_affected();
@@ -459,23 +473,29 @@ impl LiveStateStore {
         if logins.is_empty() {
             return Ok(std::collections::HashMap::new());
         }
-        #[derive(sqlx::FromRow)]
-        struct LoginStateRow {
-            streamer_login: String,
-            #[sqlx(flatten)]
-            state: OfflineSourceState,
-        }
-        let rows: Vec<LoginStateRow> = sqlx::query_as(
+        let rows = sqlx::query!(
             "SELECT streamer_login, is_live, last_game, had_deadlock_in_session,
                     last_deadlock_seen_at, last_viewer_count, last_started_at
                FROM twitch_live_state WHERE streamer_login = ANY($1)",
+            logins,
         )
-        .bind(logins)
         .fetch_all(&self.pool)
         .await?;
         Ok(rows
             .into_iter()
-            .map(|row| (row.streamer_login.trim().to_lowercase(), row.state))
+            .map(|row| {
+                (
+                    row.streamer_login.trim().to_lowercase(),
+                    OfflineSourceState {
+                        is_live: row.is_live,
+                        last_game: row.last_game,
+                        had_deadlock_in_session: row.had_deadlock_in_session,
+                        last_deadlock_seen_at: row.last_deadlock_seen_at,
+                        last_viewer_count: row.last_viewer_count,
+                        last_started_at: row.last_started_at,
+                    },
+                )
+            })
             .collect())
     }
 
@@ -486,26 +506,27 @@ impl LiveStateStore {
         &self,
         broadcaster_user_id: &str,
     ) -> Result<Option<OfflineSourceState>, sqlx::Error> {
-        sqlx::query_as(
+        sqlx::query_as!(
+            OfflineSourceState,
             "SELECT is_live, last_game, had_deadlock_in_session, last_deadlock_seen_at,
                     last_viewer_count, last_started_at
                FROM twitch_live_state WHERE twitch_user_id = $1",
+            broadcaster_user_id,
         )
-        .bind(broadcaster_user_id)
         .fetch_optional(&self.pool)
         .await
     }
 
     /// Login zu einer user_id (Python `_resolve_eventsub_broadcaster_login`).
     pub async fn login_for_user_id(&self, user_id: &str) -> Result<Option<String>, sqlx::Error> {
-        let login: Option<String> = sqlx::query_scalar(
+        let login: Option<String> = sqlx::query_scalar!(
             "SELECT streamer_login
                FROM twitch_live_state
               WHERE twitch_user_id = $1
               ORDER BY last_seen_at DESC NULLS LAST
               LIMIT 1",
+            user_id,
         )
-        .bind(user_id)
         .fetch_optional(&self.pool)
         .await?;
         let login = login
@@ -515,14 +536,14 @@ impl LiveStateStore {
             return Ok(login);
         }
 
-        let identity_login: Option<String> = sqlx::query_scalar(
+        let identity_login: Option<String> = sqlx::query_scalar!(
             "SELECT twitch_login
                FROM twitch_streamer_identities
               WHERE twitch_user_id = $1
                 AND COALESCE(BTRIM(twitch_login), '') <> ''
               LIMIT 1",
+            user_id,
         )
-        .bind(user_id)
         .fetch_optional(&self.pool)
         .await?;
         Ok(identity_login
@@ -532,11 +553,14 @@ impl LiveStateStore {
 
     /// Liest den Finalize-relevanten Zustand eines Logins.
     pub async fn finalize_state(&self, login: &str) -> Result<Option<FinalizeState>, sqlx::Error> {
-        sqlx::query_as(
-            "SELECT twitch_user_id, last_game, had_deadlock_in_session
-               FROM twitch_live_state WHERE streamer_login = $1",
+        sqlx::query_as!(
+            FinalizeState,
+            r#"
+            SELECT twitch_user_id AS "twitch_user_id?", last_game, had_deadlock_in_session
+              FROM twitch_live_state WHERE streamer_login = $1
+            "#,
+            login,
         )
-        .bind(login)
         .fetch_optional(&self.pool)
         .await
     }

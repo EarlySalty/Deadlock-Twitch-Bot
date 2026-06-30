@@ -1,0 +1,22 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n            SELECT COALESCE(followers_end, followers_start) AS \"follower_count?\"\n              FROM twitch_stream_sessions\n             WHERE streamer_login = $1\n               AND COALESCE(followers_end, followers_start) IS NOT NULL\n             ORDER BY COALESCE(ended_at, started_at) DESC\n             LIMIT 1\n            ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "follower_count?",
+        "type_info": "Int4"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Text"
+      ]
+    },
+    "nullable": [
+      null
+    ]
+  },
+  "hash": "8cfdf6700b358645efacec917e35733f16db11c5ac62ef611df89fb64338e129"
+}

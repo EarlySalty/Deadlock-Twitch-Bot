@@ -1,0 +1,22 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT sc.chatter_login\n               FROM twitch_session_chatters sc\n               JOIN twitch_live_state ls ON ls.active_session_id = sc.session_id\n              WHERE LOWER(ls.streamer_login) = LOWER($1)\n                AND ls.is_live = 1\n                AND TRIM(COALESCE(sc.chatter_login, '')) <> ''",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "chatter_login",
+        "type_info": "Text"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Text"
+      ]
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "90db2a10246be3285eb4be8880143408b37098dba822328c74b329f2674b8fb6"
+}

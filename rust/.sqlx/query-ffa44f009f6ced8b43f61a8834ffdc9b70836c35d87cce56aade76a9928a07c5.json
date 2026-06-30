@@ -1,0 +1,54 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n            WITH due AS (\n                SELECT work_id\n                  FROM twitch_eventsub_processing_inbox\n                 WHERE next_attempt_at <= $1\n                 ORDER BY queued_at ASC\n                 LIMIT $2\n                 FOR UPDATE SKIP LOCKED\n            )\n            UPDATE twitch_eventsub_processing_inbox AS inbox\n               SET next_attempt_at = $3\n              FROM due\n             WHERE inbox.work_id = due.work_id\n            RETURNING inbox.work_id AS \"work_id!\", inbox.work_type AS \"work_type!\",\n                      inbox.message_id, inbox.payload_json AS \"payload_json!\",\n                      inbox.queued_at AS \"queued_at!\", inbox.attempt_count AS \"attempt_count!\"\n            ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "work_id!",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 1,
+        "name": "work_type!",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 2,
+        "name": "message_id",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 3,
+        "name": "payload_json!",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 4,
+        "name": "queued_at!",
+        "type_info": "Float8"
+      },
+      {
+        "ordinal": 5,
+        "name": "attempt_count!",
+        "type_info": "Int4"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Float8",
+        "Int8",
+        "Float8"
+      ]
+    },
+    "nullable": [
+      false,
+      false,
+      true,
+      false,
+      false,
+      false
+    ]
+  },
+  "hash": "ffa44f009f6ced8b43f61a8834ffdc9b70836c35d87cce56aade76a9928a07c5"
+}

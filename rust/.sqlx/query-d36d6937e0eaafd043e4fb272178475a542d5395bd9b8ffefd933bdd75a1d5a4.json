@@ -1,0 +1,14 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "UPDATE twitch_scam_guard_verdicts SET action_taken = 'banned' WHERE id = $1 AND action_taken = 'suggested'",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Int8"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "d36d6937e0eaafd043e4fb272178475a542d5395bd9b8ffefd933bdd75a1d5a4"
+}

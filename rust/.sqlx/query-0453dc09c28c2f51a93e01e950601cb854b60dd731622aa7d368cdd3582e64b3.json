@@ -1,0 +1,19 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n                UPDATE twitch_hype_train_events\n                   SET ended_at = $1,\n                       duration_seconds = $2,\n                       level = COALESCE($3, level),\n                       total_progress = COALESCE($4, total_progress)\n                 WHERE twitch_user_id = $5\n                   AND started_at IS NOT DISTINCT FROM $6\n                   AND ended_at IS NULL\n                ",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Timestamptz",
+        "Int4",
+        "Int4",
+        "Int4",
+        "Text",
+        "Timestamptz"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "0453dc09c28c2f51a93e01e950601cb854b60dd731622aa7d368cdd3582e64b3"
+}

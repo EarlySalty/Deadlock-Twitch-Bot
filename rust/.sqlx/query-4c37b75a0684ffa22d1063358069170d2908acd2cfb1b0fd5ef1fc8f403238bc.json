@@ -1,0 +1,22 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT active_session_id FROM twitch_live_state WHERE LOWER(streamer_login) = $1 AND is_live = 1",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "active_session_id",
+        "type_info": "Int8"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Text"
+      ]
+    },
+    "nullable": [
+      true
+    ]
+  },
+  "hash": "4c37b75a0684ffa22d1063358069170d2908acd2cfb1b0fd5ef1fc8f403238bc"
+}

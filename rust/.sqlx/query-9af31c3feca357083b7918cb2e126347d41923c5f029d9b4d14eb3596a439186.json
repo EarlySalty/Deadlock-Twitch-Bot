@@ -1,0 +1,28 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT COUNT(*) AS \"unique!\",\n                    COUNT(*) FILTER (WHERE is_first_time_streamer) AS \"first_time!\"\n               FROM twitch_session_chatters WHERE session_id = $1",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "unique!",
+        "type_info": "Int8"
+      },
+      {
+        "ordinal": 1,
+        "name": "first_time!",
+        "type_info": "Int8"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Int8"
+      ]
+    },
+    "nullable": [
+      null,
+      null
+    ]
+  },
+  "hash": "9af31c3feca357083b7918cb2e126347d41923c5f029d9b4d14eb3596a439186"
+}

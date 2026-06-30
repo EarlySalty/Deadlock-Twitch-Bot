@@ -86,7 +86,7 @@ impl ProcessingInboxStore {
         let work_type = work_type.trim();
         let payload_json = payload.to_string();
         with_write_retry(self.retry, || async {
-            sqlx::query(
+            sqlx::query!(
                 r#"
                 INSERT INTO twitch_eventsub_processing_inbox (
                     work_id, work_type, message_id, payload_json,
@@ -94,12 +94,12 @@ impl ProcessingInboxStore {
                 )
                 VALUES ($1, $2, $3, $4, $5, $5, 0, NULL)
                 "#,
+                &work_id,
+                work_type,
+                message_id,
+                &payload_json,
+                now,
             )
-            .bind(&work_id)
-            .bind(work_type)
-            .bind(message_id)
-            .bind(&payload_json)
-            .bind(now)
             .execute(&self.pool)
             .await
         })
@@ -117,7 +117,8 @@ impl ProcessingInboxStore {
         limit: i64,
     ) -> Result<Vec<LeasedWork>, sqlx::Error> {
         let lease_until = now + lease_seconds.max(1.0);
-        sqlx::query_as::<_, LeasedWork>(
+        sqlx::query_as!(
+            LeasedWork,
             r#"
             WITH due AS (
                 SELECT work_id
@@ -131,13 +132,14 @@ impl ProcessingInboxStore {
                SET next_attempt_at = $3
               FROM due
              WHERE inbox.work_id = due.work_id
-            RETURNING inbox.work_id, inbox.work_type, inbox.message_id,
-                      inbox.payload_json, inbox.queued_at, inbox.attempt_count
+            RETURNING inbox.work_id AS "work_id!", inbox.work_type AS "work_type!",
+                      inbox.message_id, inbox.payload_json AS "payload_json!",
+                      inbox.queued_at AS "queued_at!", inbox.attempt_count AS "attempt_count!"
             "#,
+            now,
+            limit.max(1),
+            lease_until,
         )
-        .bind(now)
-        .bind(limit.max(1))
-        .bind(lease_until)
         .fetch_all(&self.pool)
         .await
     }
@@ -145,10 +147,12 @@ impl ProcessingInboxStore {
     /// Erfolgreich verarbeitet → Auftrag löschen.
     pub async fn mark_delivered(&self, work_id: &str) -> Result<(), sqlx::Error> {
         with_write_retry(self.retry, || async {
-            sqlx::query("DELETE FROM twitch_eventsub_processing_inbox WHERE work_id = $1")
-                .bind(work_id)
-                .execute(&self.pool)
-                .await
+            sqlx::query!(
+                "DELETE FROM twitch_eventsub_processing_inbox WHERE work_id = $1",
+                work_id,
+            )
+            .execute(&self.pool)
+            .await
         })
         .await?;
         Ok(())
@@ -164,7 +168,7 @@ impl ProcessingInboxStore {
     ) -> Result<(), sqlx::Error> {
         let last_error = truncate_error(error_message);
         with_write_retry(self.retry, || async {
-            sqlx::query(
+            sqlx::query!(
                 r#"
                 UPDATE twitch_eventsub_processing_inbox
                    SET attempt_count = $1,
@@ -172,11 +176,11 @@ impl ProcessingInboxStore {
                        last_error = $3
                  WHERE work_id = $4
                 "#,
+                attempt_count.max(1),
+                next_attempt_at,
+                last_error.as_deref(),
+                work_id,
             )
-            .bind(attempt_count.max(1))
-            .bind(next_attempt_at)
-            .bind(last_error.as_deref())
-            .bind(work_id)
             .execute(&self.pool)
             .await
         })
@@ -203,7 +207,7 @@ impl ProcessingInboxStore {
         // frische Transaktion.
         with_write_retry(self.retry, || async {
             let mut tx = self.pool.begin().await?;
-            sqlx::query(
+            sqlx::query!(
                 r#"
                 INSERT INTO twitch_eventsub_processing_dead_letter (
                     work_id, work_type, message_id, payload_json,
@@ -219,21 +223,23 @@ impl ProcessingInboxStore {
                        attempt_count = EXCLUDED.attempt_count,
                        last_error = EXCLUDED.last_error
                 "#,
+                &work.work_id,
+                &work.work_type,
+                message_id,
+                &work.payload_json,
+                work.queued_at,
+                dead_lettered_at,
+                attempt_count.max(1),
+                last_error.as_deref(),
             )
-            .bind(&work.work_id)
-            .bind(&work.work_type)
-            .bind(message_id)
-            .bind(&work.payload_json)
-            .bind(work.queued_at)
-            .bind(dead_lettered_at)
-            .bind(attempt_count.max(1))
-            .bind(last_error.as_deref())
             .execute(&mut *tx)
             .await?;
-            sqlx::query("DELETE FROM twitch_eventsub_processing_inbox WHERE work_id = $1")
-                .bind(&work.work_id)
-                .execute(&mut *tx)
-                .await?;
+            sqlx::query!(
+                "DELETE FROM twitch_eventsub_processing_inbox WHERE work_id = $1",
+                &work.work_id,
+            )
+            .execute(&mut *tx)
+            .await?;
             tx.commit().await
         })
         .await?;
@@ -242,32 +248,38 @@ impl ProcessingInboxStore {
 
     /// Offene Aufträge, älteste zuerst (Admin-Snapshot).
     pub async fn list_pending(&self, limit: i64) -> Result<Vec<PendingEntry>, sqlx::Error> {
-        sqlx::query_as::<_, PendingEntry>(
+        sqlx::query_as!(
+            PendingEntry,
             r#"
-            SELECT work_id, work_type, message_id, payload_json,
-                   queued_at, next_attempt_at, attempt_count, last_error
+            SELECT work_id AS "work_id!", work_type AS "work_type!", message_id,
+                   payload_json AS "payload_json!", queued_at AS "queued_at!",
+                   next_attempt_at AS "next_attempt_at!",
+                   attempt_count AS "attempt_count!", last_error
               FROM twitch_eventsub_processing_inbox
              ORDER BY queued_at ASC
              LIMIT $1
             "#,
+            limit.max(1),
         )
-        .bind(limit.max(1))
         .fetch_all(&self.pool)
         .await
     }
 
     /// Dead-Letters, neueste zuerst (Admin-Snapshot).
     pub async fn list_dead_letters(&self, limit: i64) -> Result<Vec<DeadLetterEntry>, sqlx::Error> {
-        sqlx::query_as::<_, DeadLetterEntry>(
+        sqlx::query_as!(
+            DeadLetterEntry,
             r#"
-            SELECT work_id, work_type, message_id, payload_json,
-                   queued_at, dead_lettered_at, attempt_count, last_error
+            SELECT work_id AS "work_id!", work_type AS "work_type!", message_id,
+                   payload_json AS "payload_json!", queued_at AS "queued_at!",
+                   dead_lettered_at AS "dead_lettered_at!",
+                   attempt_count AS "attempt_count!", last_error
               FROM twitch_eventsub_processing_dead_letter
              ORDER BY dead_lettered_at DESC
              LIMIT $1
             "#,
+            limit.max(1),
         )
-        .bind(limit.max(1))
         .fetch_all(&self.pool)
         .await
     }
@@ -281,20 +293,21 @@ impl ProcessingInboxStore {
         }
         with_write_retry(self.retry, || async {
             let mut tx = self.pool.begin().await?;
-            let row: Option<(String, String, Option<String>, String)> = sqlx::query_as(
+            let row = sqlx::query!(
                 r#"
                 DELETE FROM twitch_eventsub_processing_dead_letter
                  WHERE work_id = $1
-             RETURNING work_id, work_type, message_id, payload_json
+             RETURNING work_id AS "work_id!", work_type AS "work_type!",
+                       message_id, payload_json AS "payload_json!"
                 "#,
+                work_id,
             )
-            .bind(work_id)
             .fetch_optional(&mut *tx)
             .await?;
-            let Some((work_id, work_type, message_id, payload_json)) = row else {
+            let Some(row) = row else {
                 return Ok(false);
             };
-            sqlx::query(
+            sqlx::query!(
                 r#"
                 INSERT INTO twitch_eventsub_processing_inbox (
                     work_id, work_type, message_id, payload_json,
@@ -302,12 +315,12 @@ impl ProcessingInboxStore {
                 )
                 VALUES ($1, $2, $3, $4, $5, $5, 0, NULL)
                 "#,
+                &row.work_id,
+                &row.work_type,
+                row.message_id.as_deref(),
+                &row.payload_json,
+                now,
             )
-            .bind(&work_id)
-            .bind(&work_type)
-            .bind(&message_id)
-            .bind(&payload_json)
-            .bind(now)
             .execute(&mut *tx)
             .await?;
             tx.commit().await?;

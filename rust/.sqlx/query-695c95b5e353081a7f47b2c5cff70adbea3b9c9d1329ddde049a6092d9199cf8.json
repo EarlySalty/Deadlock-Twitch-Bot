@@ -1,0 +1,26 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT pattern AS \"pattern?\", pattern_type AS \"pattern_type?\" FROM twitch_auto_learned_spam_patterns WHERE pattern IS NOT NULL AND pattern_type IS NOT NULL",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "pattern?",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 1,
+        "name": "pattern_type?",
+        "type_info": "Text"
+      }
+    ],
+    "parameters": {
+      "Left": []
+    },
+    "nullable": [
+      false,
+      false
+    ]
+  },
+  "hash": "695c95b5e353081a7f47b2c5cff70adbea3b9c9d1329ddde049a6092d9199cf8"
+}

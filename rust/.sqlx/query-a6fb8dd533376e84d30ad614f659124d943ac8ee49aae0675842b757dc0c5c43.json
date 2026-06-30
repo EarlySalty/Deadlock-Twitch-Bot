@@ -1,0 +1,17 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "UPDATE exp_sessions SET ended_at = $1, follower_delta = $2, duration_min = $3 WHERE id = $4",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Text",
+        "Int4",
+        "Float4",
+        "Int8"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "a6fb8dd533376e84d30ad614f659124d943ac8ee49aae0675842b757dc0c5c43"
+}

@@ -379,7 +379,7 @@ impl LearnedPatterns {
     /// Fehler beim Laden werden als Warn geloggt und mit leerer Muster-Menge
     /// beantwortet (fail-open wie Python: `except Exception: pass`).
     pub async fn load(pool: &PgPool) -> Self {
-        // Dynamische Query (kein sqlx::query! — DATABASE_URL nicht immer gesetzt).
+        // Compile-time-geprüfte Loads; Fehler bleiben fail-open wie im Python-Pfad.
         #[derive(sqlx::FromRow)]
         struct SpamRow {
             pattern: Option<String>,
@@ -390,8 +390,10 @@ impl LearnedPatterns {
             pattern: Option<String>,
         }
 
-        let spam = match sqlx::query_as::<_, SpamRow>(
-            "SELECT pattern, pattern_type FROM twitch_auto_learned_spam_patterns \
+        let spam = match sqlx::query_as!(
+            SpamRow,
+            "SELECT pattern AS \"pattern?\", pattern_type AS \"pattern_type?\" \
+             FROM twitch_auto_learned_spam_patterns \
              WHERE pattern IS NOT NULL AND pattern_type IS NOT NULL",
         )
         .fetch_all(pool)
@@ -411,8 +413,10 @@ impl LearnedPatterns {
             }
         };
 
-        let safe = match sqlx::query_as::<_, SafeRow>(
-            "SELECT pattern FROM twitch_auto_learned_safe_patterns \
+        let safe = match sqlx::query_as!(
+            SafeRow,
+            "SELECT pattern AS \"pattern?\" \
+             FROM twitch_auto_learned_safe_patterns \
              WHERE pattern IS NOT NULL",
         )
         .fetch_all(pool)

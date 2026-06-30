@@ -1,0 +1,23 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT NOT EXISTS ( SELECT 1 FROM twitch_chatter_rollup WHERE LOWER(streamer_login) = $1 AND LOWER(chatter_login) = $2 ) AS \"is_first_time_streamer!\"",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "is_first_time_streamer!",
+        "type_info": "Bool"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Text",
+        "Text"
+      ]
+    },
+    "nullable": [
+      null
+    ]
+  },
+  "hash": "58750fa99f57df4dde14ac95b808ede597878d5f51c337b4fe08cc2535c53124"
+}

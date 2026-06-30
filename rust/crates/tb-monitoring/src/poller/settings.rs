@@ -22,10 +22,10 @@ impl PollIntervalStore {
     /// Aktuelles Intervall: DB-Wert wenn gültig, sonst Default.
     /// Lesefehler sind nicht fatal (Default, debug-Log).
     pub async fn current_seconds(&self) -> u64 {
-        let raw: Result<Option<String>, sqlx::Error> = sqlx::query_scalar(
+        let raw: Result<Option<String>, sqlx::Error> = sqlx::query_scalar!(
             "SELECT setting_value FROM twitch_global_settings WHERE setting_key = $1 LIMIT 1",
+            SETTING_KEY,
         )
-        .bind(SETTING_KEY)
         .fetch_optional(&self.pool)
         .await;
         match raw {

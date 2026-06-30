@@ -1,0 +1,21 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "INSERT INTO twitch_channel_points_events\n                (session_id, twitch_user_id, user_login, reward_id, reward_title,\n                 reward_cost, user_input, redeemed_at)\n             VALUES ($1, $2, $3, $4, $5, $6, $7, $8)",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Int8",
+        "Text",
+        "Text",
+        "Text",
+        "Text",
+        "Int4",
+        "Text",
+        "Timestamptz"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "27ad2486566eafeec660f90ec0f802e30ab66bb14374130223af823cf8a4a94a"
+}

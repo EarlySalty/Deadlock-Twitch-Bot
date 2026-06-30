@@ -1,0 +1,14 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "DELETE FROM twitch_live_state WHERE LOWER(streamer_login) = LOWER($1)",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Text"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "1d05b513e0c194e0655e4f025af1a28c69ed47ffb38922b80749d339c26f8ca0"
+}

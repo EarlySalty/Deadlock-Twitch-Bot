@@ -1,0 +1,23 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT EXISTS( SELECT 1 FROM twitch_raid_auth WHERE ($1 <> '' AND twitch_user_id = $1) OR ($2 <> '' AND LOWER(twitch_login) = $2) ) AS \"has_raid_auth!\"",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "has_raid_auth!",
+        "type_info": "Bool"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Text",
+        "Text"
+      ]
+    },
+    "nullable": [
+      null
+    ]
+  },
+  "hash": "312619eded4262f9f1b9a4c6f2dc6174f88de9742f778ea653d2f43109328169"
+}

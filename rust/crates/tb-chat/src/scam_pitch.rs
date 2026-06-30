@@ -1199,17 +1199,17 @@ impl ScamPitchDetector {
     /// Cache-TTL). Er ist mit 3 s gebounded und **fail-open** (None = „assume small"),
     /// damit ein DB-Hiccup die Pipeline nicht stallt.
     async fn load_follower_count(&self, login: &str) -> Option<i32> {
-        let query = sqlx::query_scalar::<_, Option<i32>>(
+        let query = sqlx::query_scalar!(
             r#"
-            SELECT COALESCE(followers_end, followers_start)
+            SELECT COALESCE(followers_end, followers_start) AS "follower_count?"
               FROM twitch_stream_sessions
              WHERE streamer_login = $1
                AND COALESCE(followers_end, followers_start) IS NOT NULL
              ORDER BY COALESCE(ended_at, started_at) DESC
              LIMIT 1
             "#,
+            login,
         )
-        .bind(login)
         .fetch_optional(&self.pool);
 
         match tokio::time::timeout(std::time::Duration::from_secs(3), query).await {
@@ -1792,7 +1792,7 @@ async fn save_spam_pattern(
 
     // Prod: created_at = TIMESTAMPTZ → DateTime<Utc> binden (NIE ISO-String).
     // twitch_auto_learned_spam_patterns.hit_count = integer → i32 implizit via DEFAULT
-    let result = sqlx::query(
+    let result = sqlx::query!(
         r#"
         INSERT INTO twitch_auto_learned_spam_patterns
             (pattern, pattern_type, source_message, source_channel, minimax_reasoning, created_at)
@@ -1800,13 +1800,13 @@ async fn save_spam_pattern(
         ON CONFLICT (pattern) DO UPDATE SET
             hit_count = twitch_auto_learned_spam_patterns.hit_count + 1
         "#,
+        &pat,
+        pattern_type,
+        &src_msg,
+        source_channel,
+        &reasoning_short,
+        created_at,
     )
-    .bind(&pat)
-    .bind(pattern_type)
-    .bind(&src_msg)
-    .bind(source_channel)
-    .bind(&reasoning_short)
-    .bind(created_at)
     .execute(pool)
     .await;
 
@@ -1831,7 +1831,7 @@ async fn save_safe_pattern(
     let created_at = Utc::now();
 
     // Prod: created_at = TIMESTAMPTZ → DateTime<Utc> binden.
-    let result = sqlx::query(
+    let result = sqlx::query!(
         r#"
         INSERT INTO twitch_auto_learned_safe_patterns
             (pattern, source_message, source_channel, minimax_reasoning, created_at)
@@ -1839,12 +1839,12 @@ async fn save_safe_pattern(
         ON CONFLICT (pattern) DO UPDATE SET
             hit_count = twitch_auto_learned_safe_patterns.hit_count + 1
         "#,
+        &pat,
+        &src_msg,
+        source_channel,
+        &reasoning_short,
+        created_at,
     )
-    .bind(&pat)
-    .bind(&src_msg)
-    .bind(source_channel)
-    .bind(&reasoning_short)
-    .bind(created_at)
     .execute(pool)
     .await;
 

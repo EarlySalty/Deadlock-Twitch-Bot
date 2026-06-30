@@ -1,0 +1,18 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "INSERT INTO twitch_ban_events\n                   (twitch_user_id, event_type, target_login, target_id, reason, received_at)\n               VALUES ($1, 'ban', $2, $3, $4, $5)",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Text",
+        "Text",
+        "Text",
+        "Text",
+        "Timestamptz"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "87f3f4fac732e8c506ff76f7b3b26a01a7fb1365e2076af51b38348f0be1ad19"
+}

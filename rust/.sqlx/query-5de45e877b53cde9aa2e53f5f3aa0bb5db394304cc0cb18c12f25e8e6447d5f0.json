@@ -1,0 +1,15 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n        INSERT INTO twitch_chatter_global_ban_applied (chatter_login, broadcaster_id)\n        VALUES ($1, $2)\n        ON CONFLICT (chatter_login, broadcaster_id) DO NOTHING\n        ",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Text",
+        "Text"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "5de45e877b53cde9aa2e53f5f3aa0bb5db394304cc0cb18c12f25e8e6447d5f0"
+}

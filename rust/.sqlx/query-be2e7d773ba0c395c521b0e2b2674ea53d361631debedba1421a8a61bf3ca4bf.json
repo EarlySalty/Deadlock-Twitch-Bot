@@ -1,0 +1,23 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT COALESCE(sc.is_first_time_streamer, FALSE) AS \"is_first_time_streamer!\" FROM twitch_session_chatters sc JOIN twitch_stream_sessions ss ON ss.id = sc.session_id WHERE LOWER(sc.streamer_login) = $1 AND LOWER(sc.chatter_login) = $2 AND ss.ended_at IS NULL ORDER BY ss.started_at DESC LIMIT 1",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "is_first_time_streamer!",
+        "type_info": "Bool"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Text",
+        "Text"
+      ]
+    },
+    "nullable": [
+      null
+    ]
+  },
+  "hash": "be2e7d773ba0c395c521b0e2b2674ea53d361631debedba1421a8a61bf3ca4bf"
+}

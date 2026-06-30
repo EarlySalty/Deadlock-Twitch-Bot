@@ -1,0 +1,22 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT scopes AS \"scopes?\" FROM twitch_raid_auth\n              WHERE LOWER(COALESCE(twitch_login,'')) = $1\n              LIMIT 1",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "scopes?",
+        "type_info": "Text"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Text"
+      ]
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "1147bd6ba10279e2faaec6a54f361a3d977b2c327db25739f5c6b2c09d1d5eaf"
+}

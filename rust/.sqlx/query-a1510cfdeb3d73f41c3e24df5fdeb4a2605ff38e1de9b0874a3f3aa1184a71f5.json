@@ -1,0 +1,29 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT AVG(avg_viewers) AS avg_viewers, COUNT(*)::bigint AS \"sample_count!\"\n               FROM (\n                 SELECT avg_viewers FROM twitch_stream_sessions\n                  WHERE streamer_login = $1 AND ended_at IS NOT NULL AND avg_viewers > 0\n                  ORDER BY started_at DESC LIMIT $2\n               ) recent_sessions",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "avg_viewers",
+        "type_info": "Float8"
+      },
+      {
+        "ordinal": 1,
+        "name": "sample_count!",
+        "type_info": "Int8"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Text",
+        "Int8"
+      ]
+    },
+    "nullable": [
+      null,
+      null
+    ]
+  },
+  "hash": "a1510cfdeb3d73f41c3e24df5fdeb4a2605ff38e1de9b0874a3f3aa1184a71f5"
+}

@@ -118,7 +118,8 @@ impl SessionStore {
 
     /// Alle offenen Sessions (Cache-Rehydrierung beim Start).
     pub async fn list_open(&self) -> Result<Vec<OpenSession>, sqlx::Error> {
-        sqlx::query_as(
+        sqlx::query_as!(
+            OpenSession,
             "SELECT id, streamer_login FROM twitch_stream_sessions WHERE ended_at IS NULL",
         )
         .fetch_all(&self.pool)
@@ -127,22 +128,23 @@ impl SessionStore {
 
     /// Jüngste offene Session eines Logins.
     pub async fn find_open_id(&self, login: &str) -> Result<Option<i64>, sqlx::Error> {
-        sqlx::query_scalar(
+        sqlx::query_scalar!(
             "SELECT id FROM twitch_stream_sessions
               WHERE streamer_login = $1 AND ended_at IS NULL
               ORDER BY started_at DESC LIMIT 1",
+            login,
         )
-        .bind(login)
         .fetch_optional(&self.pool)
         .await
     }
 
     pub async fn stream_id_of(&self, session_id: i64) -> Result<Option<String>, sqlx::Error> {
-        let row: Option<Option<String>> =
-            sqlx::query_scalar("SELECT stream_id FROM twitch_stream_sessions WHERE id = $1")
-                .bind(session_id)
-                .fetch_optional(&self.pool)
-                .await?;
+        let row: Option<Option<String>> = sqlx::query_scalar!(
+            "SELECT stream_id FROM twitch_stream_sessions WHERE id = $1",
+            session_id,
+        )
+        .fetch_optional(&self.pool)
+        .await?;
         Ok(row.flatten())
     }
 
@@ -151,57 +153,56 @@ impl SessionStore {
     /// zurückgegeben statt eine zweite anzulegen.
     pub async fn start_session(&self, new: &NewSession) -> Result<StartOutcome, sqlx::Error> {
         let mut tx = self.pool.begin().await?;
-        sqlx::query(
-            "SELECT pg_advisory_xact_lock(hashtextextended('twitch_stream_session:' || $1, 0))",
+        sqlx::query!(
+            "WITH _lock AS (
+                 SELECT pg_advisory_xact_lock(hashtextextended('twitch_stream_session:' || $1, 0))
+             )
+             SELECT 1 AS \"one!\"",
+            &new.streamer_login,
         )
-        .bind(&new.streamer_login)
-        .execute(&mut *tx)
+        .fetch_one(&mut *tx)
         .await?;
-        let existing: Option<i64> = sqlx::query_scalar(
+        let existing: Option<i64> = sqlx::query_scalar!(
             "SELECT id FROM twitch_stream_sessions
               WHERE streamer_login = $1 AND ended_at IS NULL
               ORDER BY started_at DESC LIMIT 1",
+            &new.streamer_login,
         )
-        .bind(&new.streamer_login)
         .fetch_optional(&mut *tx)
         .await?;
         if let Some(id) = existing {
             tx.commit().await?;
             return Ok(StartOutcome::AlreadyOpen(id));
         }
-        let session_id: i64 = sqlx::query_scalar(
+        let session_id: i64 = sqlx::query_scalar!(
             r#"
             INSERT INTO twitch_stream_sessions (
                 streamer_login, stream_id, started_at, start_viewers, peak_viewers,
                 end_viewers, avg_viewers, samples, followers_start, stream_title,
                 language, is_mature, tags, game_name, had_deadlock_in_session
-            ) VALUES ($1, $2, $3::timestamptz, $4, $4, $4, $5, 0, $6, $7, $8, $9, $10, $11, $12)
+            ) VALUES ($1, $2, $3::text::timestamptz, $4, $4, $4, $5, 0, $6, $7, $8, $9, $10, $11, $12)
             RETURNING id
             "#,
+            &new.streamer_login,
+            new.stream_id.as_deref(),
+            iso_seconds(new.started_at),
+            new.viewer_count,
+            f64::from(new.viewer_count),
+            new.followers_start,
+            &new.title,
+            &new.language,
+            new.is_mature,
+            &new.tags,
+            new.game_name.as_deref(),
+            new.had_deadlock,
         )
-        .bind(&new.streamer_login)
-        .bind(&new.stream_id)
-        // started_at als ISO-TEXT binden, im SQL nach timestamptz casten — die
-        // Prod-Spalte ist timestamptz (der Text-Bind ohne Cast schlug fehl:
-        // "column started_at is of type timestamptz but expression is of type text").
-        // Der Cast funktioniert sowohl für timestamptz- als auch (Legacy-)TEXT-Spalten.
-        .bind(iso_seconds(new.started_at))
-        .bind(new.viewer_count)
-        .bind(f64::from(new.viewer_count))
-        .bind(new.followers_start)
-        .bind(&new.title)
-        .bind(&new.language)
-        .bind(new.is_mature)
-        .bind(&new.tags)
-        .bind(&new.game_name)
-        .bind(new.had_deadlock)
         .fetch_one(&mut *tx)
         .await?;
-        sqlx::query(
+        sqlx::query!(
             "UPDATE twitch_live_state SET active_session_id = $1 WHERE streamer_login = $2",
+            session_id,
+            &new.streamer_login,
         )
-        .bind(session_id)
-        .bind(&new.streamer_login)
         .execute(&mut *tx)
         .await?;
         tx.commit().await?;
@@ -229,11 +230,14 @@ impl SessionStore {
             peak_viewers: Option<i32>,
         }
         let mut tx = self.pool.begin().await?;
-        let row: Option<SampleSource> = sqlx::query_as(
-            "SELECT started_at::text AS started_at, samples, avg_viewers, start_viewers, peak_viewers
-               FROM twitch_stream_sessions WHERE id = $1",
+        let row: Option<SampleSource> = sqlx::query_as!(
+            SampleSource,
+            r#"
+            SELECT started_at::text AS "started_at?", samples, avg_viewers, start_viewers, peak_viewers
+              FROM twitch_stream_sessions WHERE id = $1
+            "#,
+            session_id,
         )
-        .bind(session_id)
         .fetch_optional(&mut *tx)
         .await?;
         let Some(SampleSource {
@@ -253,7 +257,7 @@ impl SessionStore {
             .and_then(parse_dt_utc)
             .unwrap_or(now);
         let minutes_from_start = ((now - started_at).num_seconds().max(0) / 60) as i32;
-        sqlx::query(
+        sqlx::query!(
             r#"
             INSERT INTO twitch_session_viewers (session_id, ts_utc, minutes_from_start, viewer_count)
             VALUES ($1, $2, $3, $4)
@@ -261,11 +265,11 @@ impl SessionStore {
                 minutes_from_start = EXCLUDED.minutes_from_start,
                 viewer_count = EXCLUDED.viewer_count
             "#,
+            session_id,
+            now,
+            minutes_from_start,
+            viewer_count,
         )
-        .bind(session_id)
-        .bind(now)
-        .bind(minutes_from_start)
-        .bind(viewer_count)
         .execute(&mut *tx)
         .await?;
 
@@ -279,18 +283,18 @@ impl SessionStore {
             v => v,
         };
         let peak_viewers = peak_viewers.unwrap_or(0).max(viewer_count);
-        sqlx::query(
+        sqlx::query!(
             "UPDATE twitch_stream_sessions
                 SET samples = $1, avg_viewers = $2, peak_viewers = $3,
                     end_viewers = $4, start_viewers = $5
               WHERE id = $6",
+            new_samples,
+            new_avg,
+            peak_viewers,
+            viewer_count,
+            start_viewers,
+            session_id,
         )
-        .bind(new_samples)
-        .bind(new_avg)
-        .bind(peak_viewers)
-        .bind(viewer_count)
-        .bind(start_viewers)
-        .bind(session_id)
         .execute(&mut *tx)
         .await?;
         tx.commit().await?;
@@ -307,7 +311,7 @@ impl SessionStore {
         had_deadlock: bool,
         stream_title: Option<&str>,
     ) -> Result<(), sqlx::Error> {
-        sqlx::query(
+        sqlx::query!(
             r#"
             UPDATE twitch_stream_sessions
                SET start_viewers = $1,
@@ -317,12 +321,12 @@ impl SessionStore {
                    stream_title = COALESCE(stream_title, $4)
              WHERE id = $5 AND samples = 0 AND start_viewers = 0
             "#,
+            viewer_count,
+            had_deadlock,
+            game_name,
+            stream_title,
+            session_id,
         )
-        .bind(viewer_count)
-        .bind(had_deadlock)
-        .bind(game_name)
-        .bind(stream_title)
-        .bind(session_id)
         .execute(&self.pool)
         .await?;
         Ok(())
@@ -335,11 +339,13 @@ impl SessionStore {
         session_id: i64,
         text: &str,
     ) -> Result<(), sqlx::Error> {
-        sqlx::query("UPDATE twitch_stream_sessions SET notification_text = $1 WHERE id = $2")
-            .bind(text)
-            .bind(session_id)
-            .execute(&self.pool)
-            .await?;
+        sqlx::query!(
+            "UPDATE twitch_stream_sessions SET notification_text = $1 WHERE id = $2",
+            text,
+            session_id,
+        )
+        .execute(&self.pool)
+        .await?;
         Ok(())
     }
 
@@ -359,12 +365,15 @@ impl SessionStore {
             samples: Option<i32>,
             followers_start: Option<i32>,
         }
-        let raw: Option<Raw> = sqlx::query_as(
-            "SELECT started_at::text AS started_at, start_viewers, end_viewers, peak_viewers,
-                    avg_viewers, samples, followers_start
-               FROM twitch_stream_sessions WHERE id = $1",
+        let raw: Option<Raw> = sqlx::query_as!(
+            Raw,
+            r#"
+            SELECT started_at::text AS "started_at?", start_viewers, end_viewers, peak_viewers,
+                   avg_viewers, samples, followers_start
+              FROM twitch_stream_sessions WHERE id = $1
+            "#,
+            session_id,
         )
-        .bind(session_id)
         .fetch_optional(&self.pool)
         .await?;
         Ok(raw.map(|r| FinalizeSource {
@@ -386,18 +395,18 @@ impl SessionStore {
 
     /// Viewer-Samples chronologisch (Python sortiert nach `ts_utc`).
     pub async fn viewer_samples(&self, session_id: i64) -> Result<Vec<ViewerSample>, sqlx::Error> {
-        let rows: Vec<(Option<i32>, i32)> = sqlx::query_as(
+        let rows = sqlx::query!(
             "SELECT minutes_from_start, viewer_count
                FROM twitch_session_viewers WHERE session_id = $1 ORDER BY ts_utc",
+            session_id,
         )
-        .bind(session_id)
         .fetch_all(&self.pool)
         .await?;
         Ok(rows
             .into_iter()
-            .map(|(minutes, viewers)| ViewerSample {
-                minutes_from_start: minutes.unwrap_or(0),
-                viewer_count: viewers,
+            .map(|row| ViewerSample {
+                minutes_from_start: row.minutes_from_start.unwrap_or(0),
+                viewer_count: row.viewer_count,
             })
             .collect())
     }
@@ -405,15 +414,15 @@ impl SessionStore {
     /// Chatter-Zählung fürs Finalize — mit `FILTER` statt Pythons kaputtem
     /// `SUM(boolean)`. Liefert (unique, first_time).
     pub async fn chatter_counts(&self, session_id: i64) -> Result<(i64, i64), sqlx::Error> {
-        let row: (i64, i64) = sqlx::query_as(
-            "SELECT COUNT(*),
-                    COUNT(*) FILTER (WHERE is_first_time_streamer)
+        let row = sqlx::query!(
+            "SELECT COUNT(*) AS \"unique!\",
+                    COUNT(*) FILTER (WHERE is_first_time_streamer) AS \"first_time!\"
                FROM twitch_session_chatters WHERE session_id = $1",
+            session_id,
         )
-        .bind(session_id)
         .fetch_one(&self.pool)
         .await?;
-        Ok(row)
+        Ok((row.unique, row.first_time))
     }
 
     /// Session abschließen + Live-State-Verknüpfung lösen (eine Transaktion).
@@ -423,10 +432,10 @@ impl SessionStore {
     /// `false` = Session war bereits abgeschlossen.
     pub async fn apply_finalize(&self, update: &FinalizeUpdate) -> Result<bool, sqlx::Error> {
         let mut tx = self.pool.begin().await?;
-        let updated = sqlx::query(
+        let updated = sqlx::query!(
             r#"
             UPDATE twitch_stream_sessions
-               SET ended_at = $1::timestamptz,
+               SET ended_at = $1::text::timestamptz,
                    duration_seconds = $2,
                    end_viewers = $3,
                    peak_viewers = $4,
@@ -447,35 +456,33 @@ impl SessionStore {
                    game_name = COALESCE(game_name, $19)
              WHERE id = $20 AND ended_at IS NULL
             "#,
+            iso_seconds(update.ended_at),
+            update.duration_seconds,
+            update.end_viewers,
+            update.peak_viewers,
+            update.avg_viewers,
+            update.samples,
+            update.retention_5m,
+            update.retention_10m,
+            update.retention_20m,
+            update.dropoff_pct,
+            &update.dropoff_label,
+            update.unique_chatters,
+            update.first_time_chatters,
+            update.returning_chatters,
+            update.followers_end,
+            update.follower_delta,
+            &update.notes,
+            update.had_deadlock_in_session,
+            update.fallback_game_name.as_deref(),
+            update.session_id,
         )
-        // ended_at als ISO-TEXT binden, im SQL nach timestamptz casten
-        // (Prod-Spalte ist timestamptz — siehe started_at-Begründung im INSERT).
-        .bind(iso_seconds(update.ended_at))
-        .bind(update.duration_seconds)
-        .bind(update.end_viewers)
-        .bind(update.peak_viewers)
-        .bind(update.avg_viewers)
-        .bind(update.samples)
-        .bind(update.retention_5m)
-        .bind(update.retention_10m)
-        .bind(update.retention_20m)
-        .bind(update.dropoff_pct)
-        .bind(&update.dropoff_label)
-        .bind(update.unique_chatters)
-        .bind(update.first_time_chatters)
-        .bind(update.returning_chatters)
-        .bind(update.followers_end)
-        .bind(update.follower_delta)
-        .bind(&update.notes)
-        .bind(update.had_deadlock_in_session)
-        .bind(&update.fallback_game_name)
-        .bind(update.session_id)
         .execute(&mut *tx)
         .await?;
-        sqlx::query(
+        sqlx::query!(
             "UPDATE twitch_live_state SET active_session_id = NULL WHERE streamer_login = $1",
+            &update.streamer_login,
         )
-        .bind(&update.streamer_login)
         .execute(&mut *tx)
         .await?;
         tx.commit().await?;
@@ -487,10 +494,11 @@ impl SessionStore {
     pub async fn orphan_candidates(
         &self,
     ) -> Result<(Vec<OrphanCandidate>, Vec<OrphanCandidate>), sqlx::Error> {
-        let zero_sample: Vec<OrphanCandidate> = sqlx::query_as(
+        let zero_sample: Vec<OrphanCandidate> = sqlx::query_as!(
+            OrphanCandidate,
             r#"
             SELECT id, streamer_login,
-                   COALESCE(started_at::timestamptz, NOW()) AS finalized_at
+                   COALESCE(started_at::timestamptz, NOW()) AS "finalized_at!"
             FROM twitch_stream_sessions
             WHERE ended_at IS NULL
               AND samples = 0
@@ -499,9 +507,10 @@ impl SessionStore {
         )
         .fetch_all(&self.pool)
         .await?;
-        let stale: Vec<OrphanCandidate> = sqlx::query_as(
+        let stale: Vec<OrphanCandidate> = sqlx::query_as!(
+            OrphanCandidate,
             r#"
-            SELECT ss.id, ss.streamer_login, MAX(sv.ts_utc) AS finalized_at
+            SELECT ss.id, ss.streamer_login, MAX(sv.ts_utc) AS "finalized_at!"
             FROM twitch_session_viewers sv
             JOIN twitch_stream_sessions ss ON ss.id = sv.session_id
             WHERE ss.ended_at IS NULL

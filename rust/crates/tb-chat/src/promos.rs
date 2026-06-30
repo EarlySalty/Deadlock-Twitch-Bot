@@ -1137,16 +1137,16 @@ impl PromoEngine {
     /// Streamer-spezifische Promo laden (promos.py:945, streamer_plans.promo_message).
     async fn load_streamer_promo_message(&self, login: &str, invite: &str) -> Option<String> {
         // streamer_plans.promo_message = text (prod schema)
-        let row: Option<(Option<String>,)> = sqlx::query_as(
+        let row = sqlx::query_scalar!(
             "SELECT promo_message FROM streamer_plans WHERE LOWER(COALESCE(twitch_login,'')) = $1 LIMIT 1",
+            login.to_lowercase(),
         )
-        .bind(login.to_lowercase())
         .fetch_optional(&self.pool)
         .await
         .ok()
         .flatten();
 
-        if let Some((Some(msg),)) = row {
+        if let Some(Some(msg)) = row {
             if !msg.trim().is_empty() {
                 return Some(msg.replace("{invite}", invite));
             }
@@ -1195,13 +1195,13 @@ impl PromoEngine {
             return;
         }
         let now = Utc::now().to_rfc3339();
-        if let Err(e) = sqlx::query(
+        if let Err(e) = sqlx::query!(
             "UPDATE twitch_streamer_invites
                 SET last_sent_at = $1
               WHERE LOWER(streamer_login) = $2",
+            now,
+            &login_norm,
         )
-        .bind(now)
-        .bind(&login_norm)
         .execute(&self.pool)
         .await
         {
@@ -1310,22 +1310,22 @@ impl PromoEngine {
         if login.trim().is_empty() {
             return HashSet::new();
         }
-        let rows: Vec<(String,)> = sqlx::query_as(
+        let rows = sqlx::query!(
             "SELECT sc.chatter_login
                FROM twitch_session_chatters sc
                JOIN twitch_live_state ls ON ls.active_session_id = sc.session_id
               WHERE LOWER(ls.streamer_login) = LOWER($1)
                 AND ls.is_live = 1
                 AND TRIM(COALESCE(sc.chatter_login, '')) <> ''",
+            login,
         )
-        .bind(login)
         .fetch_all(&self.pool)
         .await
         .unwrap_or_default();
 
         rows.into_iter()
-            .filter_map(|(login,)| {
-                let normalized = login.trim().to_lowercase();
+            .filter_map(|row| {
+                let normalized = row.chatter_login.trim().to_lowercase();
                 (!normalized.is_empty()).then_some(normalized)
             })
             .collect()
@@ -1403,23 +1403,26 @@ impl PromoEngine {
     /// Viewer-Spike-Erkennung (promos.py:1152: `_get_viewer_spike_context`).
     async fn get_viewer_spike_context(&self, login: &str) -> bool {
         // SQL 1 — Session-Baseline (promos.py:1152).
-        let session_baseline: Option<(Option<f64>, Option<i64>)> = sqlx::query_as(
-            "SELECT AVG(avg_viewers), COUNT(*)::bigint
+        let session_baseline = sqlx::query!(
+            "SELECT AVG(avg_viewers) AS avg_viewers, COUNT(*)::bigint AS \"sample_count!\"
                FROM (
                  SELECT avg_viewers FROM twitch_stream_sessions
                   WHERE streamer_login = $1 AND ended_at IS NOT NULL AND avg_viewers > 0
                   ORDER BY started_at DESC LIMIT $2
                ) recent_sessions",
+            login,
+            PROMO_VIEWER_SPIKE_SESSION_SAMPLE_LIMIT,
         )
-        .bind(login)
-        .bind(PROMO_VIEWER_SPIKE_SESSION_SAMPLE_LIMIT)
         .fetch_optional(&self.pool)
         .await
         .ok()
         .flatten();
 
-        let baseline = if let Some((Some(avg), Some(cnt))) = session_baseline {
-            if cnt >= PROMO_VIEWER_SPIKE_MIN_SESSIONS && avg > 0.0 {
+        let baseline = if let Some(row) = session_baseline {
+            if row.sample_count >= PROMO_VIEWER_SPIKE_MIN_SESSIONS
+                && row.avg_viewers.is_some_and(|avg| avg > 0.0)
+            {
+                let avg = row.avg_viewers.unwrap_or_default();
                 Some(avg)
             } else {
                 None
@@ -1430,23 +1433,26 @@ impl PromoEngine {
 
         // SQL 2 — Stats-Baseline als Fallback (promos.py:1152).
         let baseline = if baseline.is_none() {
-            let stats_baseline: Option<(Option<f64>, Option<i64>)> = sqlx::query_as(
-                "SELECT AVG(viewer_count::float), COUNT(*)::bigint
+            let stats_baseline = sqlx::query!(
+                "SELECT AVG(viewer_count::float) AS avg_viewers, COUNT(*)::bigint AS \"sample_count!\"
                    FROM (
                      SELECT viewer_count FROM twitch_stats_tracked
                       WHERE LOWER(streamer) = $1 AND viewer_count > 0
                       ORDER BY ts_utc DESC LIMIT $2
                    ) recent_stats",
+                login.to_lowercase(),
+                PROMO_VIEWER_SPIKE_STATS_SAMPLE_LIMIT,
             )
-            .bind(login.to_lowercase())
-            .bind(PROMO_VIEWER_SPIKE_STATS_SAMPLE_LIMIT)
             .fetch_optional(&self.pool)
             .await
             .ok()
             .flatten();
 
-            if let Some((Some(avg), Some(cnt))) = stats_baseline {
-                if cnt >= PROMO_VIEWER_SPIKE_MIN_STATS_SAMPLES && avg > 0.0 {
+            if let Some(row) = stats_baseline {
+                if row.sample_count >= PROMO_VIEWER_SPIKE_MIN_STATS_SAMPLES
+                    && row.avg_viewers.is_some_and(|avg| avg > 0.0)
+                {
+                    let avg = row.avg_viewers.unwrap_or_default();
                     Some(avg)
                 } else {
                     None
@@ -1463,17 +1469,17 @@ impl PromoEngine {
         };
 
         // SQL 3 — Live-Viewer (promos.py:1152, twitch_live_state.last_viewer_count = integer).
-        let live_viewers: Option<(Option<i32>,)> = sqlx::query_as(
+        let live_viewers = sqlx::query_scalar!(
             "SELECT last_viewer_count FROM twitch_live_state WHERE streamer_login = $1 AND is_live = 1",
+            login,
         )
-        .bind(login)
         .fetch_optional(&self.pool)
         .await
         .ok()
         .flatten();
 
         let current = match live_viewers {
-            Some((Some(v),)) if v > 0 => v as f64,
+            Some(Some(v)) if v > 0 => v as f64,
             _ => return false,
         };
 
@@ -1499,21 +1505,21 @@ impl PromoEngine {
 
         // Lurker-Tax-Settings prüfen (promos.py:193: _load_lurker_tax_settings).
         // streamer_plans.lurker_tax_enabled = integer (Opt-in-Flag, default 0).
-        let settings: Option<(Option<i32>, Option<String>)> = sqlx::query_as(
-            "SELECT p.lurker_tax_enabled,
-                    COALESCE(p.twitch_user_id, '')
+        let settings = sqlx::query!(
+            "SELECT p.lurker_tax_enabled AS \"lurker_tax_enabled?\",
+                    COALESCE(p.twitch_user_id, '') AS \"twitch_user_id!\"
                FROM streamer_plans p
               WHERE LOWER(COALESCE(p.twitch_login,'')) = $1
               LIMIT 1",
+            login.to_lowercase(),
         )
-        .bind(login.to_lowercase())
         .fetch_optional(&self.pool)
         .await
         .ok()
         .flatten();
 
         let (enabled, plan_user_id) = match settings {
-            Some((v, uid)) => (v.unwrap_or(0) != 0, uid.unwrap_or_default()),
+            Some(row) => (row.lurker_tax_enabled.unwrap_or(0) != 0, row.twitch_user_id),
             None => return,
         };
         if !enabled {
@@ -1527,11 +1533,11 @@ impl PromoEngine {
         let user_id = if !plan_user_id.is_empty() {
             plan_user_id
         } else {
-            sqlx::query_scalar::<_, Option<String>>(
-                "SELECT twitch_user_id FROM twitch_streamer_identities
+            sqlx::query_scalar!(
+                "SELECT twitch_user_id AS \"twitch_user_id?\" FROM twitch_streamer_identities
                   WHERE LOWER(twitch_login) = $1 LIMIT 1",
+                login.to_lowercase(),
             )
-            .bind(login.to_lowercase())
             .fetch_optional(&self.pool)
             .await
             .ok()
@@ -1545,17 +1551,17 @@ impl PromoEngine {
 
         // has_moderator_read_chatters: Scope muss im Auth-Store vorliegen (promos.py:1410).
         // Prüft twitch_raid_auth.scopes für diesen Streamer.
-        let auth_scopes: Option<(Option<String>,)> = sqlx::query_as(
-            "SELECT scopes FROM twitch_raid_auth
+        let auth_scopes = sqlx::query_scalar!(
+            "SELECT scopes AS \"scopes?\" FROM twitch_raid_auth
               WHERE LOWER(COALESCE(twitch_login,'')) = $1
               LIMIT 1",
+            login.to_lowercase(),
         )
-        .bind(login.to_lowercase())
         .fetch_optional(&self.pool)
         .await
         .ok()
         .flatten();
-        let scopes_raw = auth_scopes.and_then(|(s,)| s).unwrap_or_default();
+        let scopes_raw = auth_scopes.flatten().unwrap_or_default();
         if !self.has_chatters_scope(&scopes_raw).await {
             return;
         }
@@ -1567,10 +1573,10 @@ impl PromoEngine {
         }
 
         // Aktive Session-ID fürs Per-Session-Dedup.
-        let session_id: i64 = sqlx::query_scalar::<_, Option<i64>>(
+        let session_id: i64 = sqlx::query_scalar!(
             "SELECT active_session_id FROM twitch_live_state WHERE streamer_login = $1",
+            login,
         )
-        .bind(login)
         .fetch_optional(&self.pool)
         .await
         .ok()
@@ -1900,31 +1906,32 @@ impl PromoEngine {
         for chatter in candidates {
             // chatter_id aus DB (targeted_promo.py: SELECT chatter_id FROM twitch_session_chatters).
             // twitch_session_chatters.chatter_id = text (prod schema)
-            let row: Option<(String,)> = sqlx::query_as(
-                "SELECT chatter_id FROM twitch_session_chatters
-                  WHERE LOWER(chatter_login) = LOWER($1)
-                    AND LOWER(streamer_login) = LOWER($2)
-                  ORDER BY last_seen_at DESC LIMIT 1",
+            let row = sqlx::query_scalar!(
+	                "SELECT chatter_id AS \"chatter_id!\" FROM twitch_session_chatters
+	                  WHERE LOWER(chatter_login) = LOWER($1)
+	                    AND LOWER(streamer_login) = LOWER($2)
+	                    AND chatter_id IS NOT NULL
+	                  ORDER BY last_seen_at DESC LIMIT 1",
+                chatter.as_str(),
+                channel_login,
             )
-            .bind(chatter.as_str())
-            .bind(channel_login)
             .fetch_optional(&self.pool)
             .await
             .ok()
             .flatten();
 
-            let Some((chatter_id,)) = row else { continue };
+            let Some(chatter_id) = row else { continue };
 
             // Stammgast-Check (targeted_promo.py: _sync_is_stammgast).
             // twitch_engagement_conversation: role=text, ts=timestamptz, twitch_user_id=text (prod schema)
-            let count: i64 = sqlx::query_scalar(
-                "SELECT COUNT(*) FROM twitch_engagement_conversation
+            let count: i64 = sqlx::query_scalar!(
+                "SELECT COUNT(*) AS \"count!\" FROM twitch_engagement_conversation
                   WHERE channel_login = $1 AND twitch_user_id = $2 AND role = 'user'
-                    AND ts > NOW() - ($3 || ' days')::INTERVAL",
+                    AND ts > NOW() - ($3::int8 * INTERVAL '1 day')",
+                channel_login,
+                &chatter_id,
+                STAMMGAST_DAYS,
             )
-            .bind(channel_login)
-            .bind(&chatter_id)
-            .bind(STAMMGAST_DAYS)
             .fetch_one(&self.pool)
             .await
             .unwrap_or(0);
@@ -1941,18 +1948,18 @@ impl PromoEngine {
     /// User-Context-Snippets laden (targeted_promo.py: `_sync_user_context_snippets`).
     async fn load_user_context_snippets(&self, user_id: &str, channel_login: &str) -> Vec<String> {
         // twitch_engagement_conversation.content = text, ts = timestamptz (prod schema)
-        let rows: Vec<(String,)> = sqlx::query_as(
-            "SELECT content FROM twitch_engagement_conversation
+        let rows = sqlx::query!(
+            "SELECT content AS \"content!\" FROM twitch_engagement_conversation
               WHERE channel_login = $1 AND twitch_user_id = $2 AND role = 'user'
               ORDER BY ts DESC LIMIT 5",
+            channel_login,
+            user_id,
         )
-        .bind(channel_login)
-        .bind(user_id)
         .fetch_all(&self.pool)
         .await
         .unwrap_or_default();
 
-        rows.into_iter().map(|(c,)| c).collect()
+        rows.into_iter().map(|row| row.content).collect()
     }
 
     /// Aktive Chatter aus dem Aktivitäts-Bucket (promos.py:1466).
@@ -1982,19 +1989,19 @@ impl PromoEngine {
         if DELAY_SECS == 0 {
             return true;
         }
-        let row: Option<(Option<String>,)> = sqlx::query_as(
+        let row = sqlx::query_scalar!(
             "SELECT last_started_at FROM twitch_live_state
               WHERE LOWER(streamer_login) = LOWER($1)
                 AND is_live = 1
               LIMIT 1",
+            login,
         )
-        .bind(login)
         .fetch_optional(&self.pool)
         .await
         .ok()
         .flatten();
 
-        let Some((Some(started_at_str),)) = row else {
+        let Some(Some(started_at_str)) = row else {
             return true; // fail-open
         };
         let normalized = started_at_str.replace('Z', "+00:00");
@@ -2012,13 +2019,13 @@ impl PromoEngine {
             return false;
         }
 
-        let row: Option<(Option<i32>, Option<String>)> = sqlx::query_as(
+        let row = sqlx::query!(
             "SELECT is_partner_active, archived_at
                FROM twitch_streamers_partner_state
               WHERE LOWER(twitch_login) = LOWER($1)
               LIMIT 1",
+            login,
         )
-        .bind(login)
         .fetch_optional(&self.pool)
         .await
         .ok()
@@ -2026,9 +2033,9 @@ impl PromoEngine {
 
         match row {
             None => false,
-            Some((active, archived)) => {
-                let is_active = active.unwrap_or(0) != 0;
-                let not_archived = archived.is_none();
+            Some(row) => {
+                let is_active = row.is_partner_active.unwrap_or(0) != 0;
+                let not_archived = row.archived_at.is_none();
                 is_active && not_archived
             }
         }
@@ -2059,21 +2066,19 @@ impl PromoEngine {
         }
 
         // 1. Harte promo_disabled-Spalte (greift vor jeder Override-Auswertung).
-        let promo_disabled: Option<(Option<i32>,)> = sqlx::query_as(
-            "SELECT COALESCE(promo_disabled, 0)
+        let promo_disabled = sqlx::query_scalar!(
+            "SELECT COALESCE(promo_disabled, 0) AS \"promo_disabled!\"
                FROM streamer_plans
               WHERE LOWER(COALESCE(twitch_login,'')) = $1
               LIMIT 1",
+            &normalized,
         )
-        .bind(&normalized)
         .fetch_optional(&self.pool)
         .await
         .ok()
         .flatten();
-        if let Some((flag,)) = promo_disabled {
-            if flag.unwrap_or(0) != 0 {
-                return true;
-            }
+        if promo_disabled.is_some_and(|flag| flag != 0) {
+            return true;
         }
 
         // 2. Entitlement-Pfad über volle Plan-Snapshot-Resolution.
@@ -2099,28 +2104,33 @@ impl PromoEngine {
     /// twitch_live_state.is_live = integer, twitch_live_state.last_game = text (prod schema)
     async fn get_live_channels_for_promo(&self) -> Result<Vec<(String, String)>, String> {
         // SUBSCRIPTION_PLANS_ENABLED=True → mit promo_disabled-Filter.
-        let rows: Vec<(String, String)> = sqlx::query_as(
-            "SELECT s.twitch_login, s.twitch_user_id
+        let rows = sqlx::query!(
+            "SELECT s.twitch_login AS \"twitch_login!\",
+                    s.twitch_user_id AS \"twitch_user_id!\"
                FROM twitch_streamer_identities s
                JOIN twitch_live_state l ON s.twitch_user_id = l.twitch_user_id
                LEFT JOIN streamer_plans p ON s.twitch_user_id = p.twitch_user_id
               WHERE l.is_live = 1
                 AND LOWER(COALESCE(l.last_game, '')) = $1
                 AND COALESCE(p.promo_disabled, 0) = 0",
+            "deadlock",
         )
-        .bind("deadlock")
         .fetch_all(&self.pool)
         .await
         .map_err(|e| e.to_string())?;
 
-        Ok(rows)
+        Ok(rows
+            .into_iter()
+            .map(|row| (row.twitch_login, row.twitch_user_id))
+            .collect())
     }
 
     /// Live-Kanäle für Lurker-Tax laden (promos.py:1636:
     /// `_get_live_channels_for_lurker_tax`).
     async fn get_live_channels_for_lurker_tax(&self) -> Result<Vec<(String, String)>, String> {
-        let rows: Vec<(String, String)> = sqlx::query_as(
-            "SELECT streamer_login, twitch_user_id
+        let rows = sqlx::query!(
+            "SELECT streamer_login AS \"streamer_login!\",
+                    twitch_user_id AS \"twitch_user_id!\"
                FROM twitch_live_state
               WHERE is_live = 1
                 AND active_session_id IS NOT NULL
@@ -2133,7 +2143,12 @@ impl PromoEngine {
 
         Ok(rows
             .into_iter()
-            .map(|(login, user_id)| (login.trim().to_lowercase(), user_id.trim().to_string()))
+            .map(|row| {
+                (
+                    row.streamer_login.trim().to_lowercase(),
+                    row.twitch_user_id.trim().to_string(),
+                )
+            })
             .filter(|(login, user_id)| !login.is_empty() && !user_id.is_empty())
             .collect())
     }
@@ -2141,27 +2156,31 @@ impl PromoEngine {
     /// Cooldowns aus DB laden (promos.py:1452: `_restore_promo_cooldowns`).
     /// twitch_promo_cooldowns.wall_ts = double precision, login = text, cooldown_type = text (prod schema).
     async fn restore_promo_cooldowns(&self) {
-        let rows: Vec<(String, String, f64)> =
-            sqlx::query_as("SELECT login, cooldown_type, wall_ts FROM twitch_promo_cooldowns")
-                .fetch_all(&self.pool)
-                .await
-                .unwrap_or_default();
+        let rows = sqlx::query!(
+            "SELECT login AS \"login!\", \
+                    cooldown_type AS \"cooldown_type!\", \
+                    wall_ts AS \"wall_ts!\" \
+             FROM twitch_promo_cooldowns",
+        )
+        .fetch_all(&self.pool)
+        .await
+        .unwrap_or_default();
 
         let wall_now = Utc::now().timestamp() as f64;
         let mono_now = Instant::now();
 
-        for (login, cooldown_type, wall_ts) in rows {
-            let age_secs = (wall_now - wall_ts).max(0.0) as u64;
+        for row in rows {
+            let age_secs = (wall_now - row.wall_ts).max(0.0) as u64;
             // Monotonic-Zeitstempel rekonstruieren (promos.py:903).
             let mono_restored = mono_now.checked_sub(Duration::from_secs(age_secs));
 
             let state_ref = self
                 .channel_states
-                .entry(login.clone())
+                .entry(row.login.clone())
                 .or_insert_with(|| Mutex::new(ChannelState::new()));
             let mut state = state_ref.lock().await;
 
-            match cooldown_type.as_str() {
+            match row.cooldown_type.as_str() {
                 "sent" => {
                     // setdefault: bereits gesetzter Wert bleibt (promos.py:903).
                     if state.last_promo_sent.is_none() {
@@ -2186,16 +2205,16 @@ impl PromoEngine {
     /// updated_at = TIMESTAMPTZ (prod schema — DateTime<Utc> binden, nicht ISO-String).
     async fn save_promo_cooldown(&self, login: &str, cooldown_type: &str, wall_ts: f64) {
         let updated_at: DateTime<Utc> = Utc::now();
-        if let Err(e) = sqlx::query(
+        if let Err(e) = sqlx::query!(
             "INSERT INTO twitch_promo_cooldowns (login, cooldown_type, wall_ts, updated_at)
              VALUES ($1, $2, $3, $4)
              ON CONFLICT (login, cooldown_type) DO UPDATE
              SET wall_ts = EXCLUDED.wall_ts, updated_at = EXCLUDED.updated_at",
+            login,
+            cooldown_type,
+            wall_ts,
+            updated_at,
         )
-        .bind(login)
-        .bind(cooldown_type)
-        .bind(wall_ts)
-        .bind(updated_at)
         .execute(&self.pool)
         .await
         {
@@ -2209,10 +2228,12 @@ impl PromoEngine {
     /// Alte Cooldown-Einträge bereinigen (promos.py: `cleanup_stale_promo_cooldowns(24)`).
     pub async fn cleanup_stale_promo_cooldowns(&self) {
         let cutoff = (Utc::now().timestamp() as f64) - 86400.0;
-        if let Err(e) = sqlx::query("DELETE FROM twitch_promo_cooldowns WHERE wall_ts < $1")
-            .bind(cutoff)
-            .execute(&self.pool)
-            .await
+        if let Err(e) = sqlx::query!(
+            "DELETE FROM twitch_promo_cooldowns WHERE wall_ts < $1",
+            cutoff,
+        )
+        .execute(&self.pool)
+        .await
         {
             warn!("cleanup_stale_promo_cooldowns fehlgeschlagen: {e}");
         }

@@ -71,10 +71,10 @@ impl TelemetryStore {
 
     /// Aktive Session über den Live-State (Sessions tragen keine user_id).
     async fn session_id_for(&self, broadcaster_user_id: &str) -> Option<i64> {
-        sqlx::query_scalar::<_, Option<i64>>(
+        sqlx::query_scalar!(
             "SELECT active_session_id FROM twitch_live_state WHERE twitch_user_id = $1",
+            broadcaster_user_id,
         )
-        .bind(broadcaster_user_id)
         .fetch_optional(&self.pool)
         .await
         .ok()
@@ -110,7 +110,7 @@ impl TelemetryStore {
             _ => int_field(event, &["total", "gift_total"]).filter(|v| *v != 0),
         };
         let session_id = self.session_id_for(broadcaster_user_id).await;
-        sqlx::query(
+        sqlx::query!(
             r#"
             INSERT INTO twitch_subscription_events
                 (session_id, twitch_user_id, event_type, user_login, tier,
@@ -118,19 +118,19 @@ impl TelemetryStore {
                  message, total_gifted, received_at)
             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
             "#,
+            session_id,
+            broadcaster_user_id,
+            event_type,
+            user_login,
+            tier,
+            is_gift,
+            gifter_login,
+            cumulative_months,
+            streak_months,
+            message,
+            total_gifted,
+            now,
         )
-        .bind(session_id)
-        .bind(broadcaster_user_id)
-        .bind(event_type)
-        .bind(user_login)
-        .bind(tier)
-        .bind(is_gift)
-        .bind(gifter_login)
-        .bind(cumulative_months)
-        .bind(streak_months)
-        .bind(message)
-        .bind(total_gifted)
-        .bind(now)
         .execute(&self.pool)
         .await?;
         Ok(())
@@ -149,16 +149,16 @@ impl TelemetryStore {
             .map(|v| v.as_bool().unwrap_or_else(|| !v.is_null()))
             .unwrap_or(false);
         let session_id = self.session_id_for(broadcaster_user_id).await;
-        sqlx::query(
+        sqlx::query!(
             "INSERT INTO twitch_ad_break_events
                 (session_id, twitch_user_id, duration_seconds, is_automatic, started_at)
              VALUES ($1, $2, $3, $4, $5)",
+            session_id,
+            broadcaster_user_id,
+            duration_seconds,
+            is_automatic,
+            now,
         )
-        .bind(session_id)
-        .bind(broadcaster_user_id)
-        .bind(duration_seconds)
-        .bind(is_automatic)
-        .bind(now)
         .execute(&self.pool)
         .await?;
         Ok(())
@@ -178,17 +178,17 @@ impl TelemetryStore {
         }
         let message = message_text(event);
         let session_id = self.session_id_for(broadcaster_user_id).await;
-        sqlx::query(
+        sqlx::query!(
             "INSERT INTO twitch_bits_events
                 (session_id, twitch_user_id, donor_login, amount, message, received_at)
              VALUES ($1, $2, $3, $4, $5, $6)",
+            session_id,
+            broadcaster_user_id,
+            donor_login,
+            amount,
+            message,
+            now,
         )
-        .bind(session_id)
-        .bind(broadcaster_user_id)
-        .bind(donor_login)
-        .bind(amount)
-        .bind(message)
-        .bind(now)
         .execute(&self.pool)
         .await?;
         Ok(())
@@ -214,20 +214,20 @@ impl TelemetryStore {
             .and_then(|raw| parse_dt_utc(&raw))
             .unwrap_or(now);
         let session_id = self.session_id_for(broadcaster_user_id).await;
-        sqlx::query(
+        sqlx::query!(
             "INSERT INTO twitch_channel_points_events
                 (session_id, twitch_user_id, user_login, reward_id, reward_title,
                  reward_cost, user_input, redeemed_at)
              VALUES ($1, $2, $3, $4, $5, $6, $7, $8)",
+            session_id,
+            broadcaster_user_id,
+            user_login,
+            reward_id,
+            reward_title,
+            reward_cost,
+            user_input,
+            redeemed_at,
         )
-        .bind(session_id)
-        .bind(broadcaster_user_id)
-        .bind(user_login)
-        .bind(reward_id)
-        .bind(reward_title)
-        .bind(reward_cost)
-        .bind(user_input)
-        .bind(redeemed_at)
         .execute(&self.pool)
         .await?;
         Ok(())
@@ -256,7 +256,7 @@ impl TelemetryStore {
         let session_id = self.session_id_for(broadcaster_user_id).await;
 
         if phase == HypeTrainPhase::End {
-            let updated = sqlx::query(
+            let updated = sqlx::query!(
                 r#"
                 UPDATE twitch_hype_train_events
                    SET ended_at = $1,
@@ -267,13 +267,13 @@ impl TelemetryStore {
                    AND started_at IS NOT DISTINCT FROM $6
                    AND ended_at IS NULL
                 "#,
+                ended_at,
+                duration_seconds,
+                level,
+                total_progress,
+                broadcaster_user_id,
+                started_at,
             )
-            .bind(ended_at)
-            .bind(duration_seconds)
-            .bind(level)
-            .bind(total_progress)
-            .bind(broadcaster_user_id)
-            .bind(started_at)
             .execute(&self.pool)
             .await?;
             if updated.rows_affected() > 0 {
@@ -285,20 +285,20 @@ impl TelemetryStore {
             HypeTrainPhase::Progress => "progress",
             HypeTrainPhase::End => "end",
         };
-        sqlx::query(
+        sqlx::query!(
             "INSERT INTO twitch_hype_train_events
                 (session_id, twitch_user_id, started_at, ended_at,
                  duration_seconds, level, total_progress, event_phase)
              VALUES ($1, $2, $3, $4, $5, $6, $7, $8)",
+            session_id,
+            broadcaster_user_id,
+            started_at,
+            ended_at,
+            duration_seconds,
+            level,
+            total_progress,
+            event_phase,
         )
-        .bind(session_id)
-        .bind(broadcaster_user_id)
-        .bind(started_at)
-        .bind(ended_at)
-        .bind(duration_seconds)
-        .bind(level)
-        .bind(total_progress)
-        .bind(event_phase)
         .execute(&self.pool)
         .await?;
         Ok(())
@@ -321,21 +321,21 @@ impl TelemetryStore {
         // None = permanent.
         let ends_at = str_field(event, &["ends_at"]).and_then(|raw| parse_dt_utc(&raw));
         let session_id = self.session_id_for(broadcaster_user_id).await;
-        sqlx::query(
+        sqlx::query!(
             "INSERT INTO twitch_ban_events
                 (session_id, twitch_user_id, event_type, target_login, target_id,
                  moderator_login, reason, ends_at, received_at)
              VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)",
+            session_id,
+            broadcaster_user_id,
+            event_type,
+            target_login,
+            target_id.as_deref(),
+            moderator_login,
+            reason,
+            ends_at,
+            now,
         )
-        .bind(session_id)
-        .bind(broadcaster_user_id)
-        .bind(event_type)
-        .bind(target_login)
-        .bind(&target_id)
-        .bind(moderator_login)
-        .bind(reason)
-        .bind(ends_at)
-        .bind(now)
         .execute(&self.pool)
         .await?;
         self.record_inbound_bot_timeout(broadcaster_login, event, unbanned, ends_at, &target_id);
@@ -407,19 +407,19 @@ impl TelemetryStore {
             ShoutoutDirection::Sent => "sent",
             ShoutoutDirection::Received => "received",
         };
-        sqlx::query(
+        sqlx::query!(
             "INSERT INTO twitch_shoutout_events
                 (twitch_user_id, direction, other_broadcaster_id, other_broadcaster_login,
                  moderator_login, viewer_count, received_at)
              VALUES ($1, $2, $3, $4, $5, $6, $7)",
+            broadcaster_user_id,
+            direction_text,
+            other_id,
+            other_login,
+            moderator_login,
+            viewer_count,
+            now,
         )
-        .bind(broadcaster_user_id)
-        .bind(direction_text)
-        .bind(other_id)
-        .bind(other_login)
-        .bind(moderator_login)
-        .bind(viewer_count)
-        .bind(now)
         .execute(&self.pool)
         .await?;
         Ok(())
@@ -438,16 +438,16 @@ impl TelemetryStore {
         let followed_at = str_field(event, &["followed_at"])
             .and_then(|raw| parse_dt_utc(&raw))
             .unwrap_or(now);
-        sqlx::query(
+        sqlx::query!(
             "INSERT INTO twitch_follow_events
                 (streamer_login, twitch_user_id, follower_login, follower_id, followed_at)
              VALUES ($1, $2, $3, $4, $5)",
+            broadcaster_login,
+            broadcaster_user_id,
+            follower_login,
+            follower_id,
+            followed_at,
         )
-        .bind(broadcaster_login)
-        .bind(broadcaster_user_id)
-        .bind(follower_login)
-        .bind(follower_id)
-        .bind(followed_at)
         .execute(&self.pool)
         .await?;
         Ok(())
@@ -478,19 +478,19 @@ impl TelemetryStore {
 
         // Python schreibt Insert + Session-Flag in EINER Transaktion (atomar).
         let mut tx = self.pool.begin().await?;
-        sqlx::query(
+        sqlx::query!(
             "INSERT INTO twitch_first_message_events
                 (streamer_login, broadcaster_id, chatter_login, chatter_id,
                  message_id, message_text, event_ts)
              VALUES ($1, $2, $3, $4, $5, $6, $7)",
+            broadcaster_login,
+            broadcaster_user_id,
+            &chatter_login,
+            chatter_id,
+            message_id,
+            message_text,
+            now,
         )
-        .bind(broadcaster_login)
-        .bind(broadcaster_user_id)
-        .bind(&chatter_login)
-        .bind(chatter_id)
-        .bind(message_id)
-        .bind(message_text)
-        .bind(now)
         .execute(&mut *tx)
         .await?;
 
@@ -498,7 +498,7 @@ impl TelemetryStore {
         // eventsub_mixin.py:2461-2469) — nur wenn eine offene Session existiert.
         // Der Session-Lookup steckt als Subquery im UPDATE: ohne offene Session
         // liefert sie NULL → keine Zeile getroffen (= Pythons `if session_id`).
-        sqlx::query(
+        sqlx::query!(
             "UPDATE twitch_session_chatters
                 SET confirmed_first_ever = TRUE
               WHERE chatter_login = $1
@@ -508,9 +508,9 @@ impl TelemetryStore {
                      ORDER BY started_at DESC
                      LIMIT 1
                 )",
+            &chatter_login,
+            broadcaster_login,
         )
-        .bind(&chatter_login)
-        .bind(broadcaster_login)
         .execute(&mut *tx)
         .await?;
 
@@ -532,26 +532,26 @@ impl TelemetryStore {
         // `broadcaster_language` bleibt als Fallback für alte Payloads.
         let language = str_field(event, &["language", "broadcaster_language"]);
         let mut tx = self.pool.begin().await?;
-        sqlx::query(
+        sqlx::query!(
             "INSERT INTO twitch_channel_updates (twitch_user_id, title, game_name, language, recorded_at)
              VALUES ($1, $2, $3, $4, $5)",
+            broadcaster_user_id,
+            title.as_deref(),
+            game_name.as_deref(),
+            language.as_deref(),
+            now,
         )
-        .bind(broadcaster_user_id)
-        .bind(&title)
-        .bind(&game_name)
-        .bind(&language)
-        .bind(now)
         .execute(&mut *tx)
         .await?;
-        sqlx::query(
+        sqlx::query!(
             "UPDATE twitch_live_state
                 SET last_title = COALESCE($1, last_title),
                     last_game  = COALESCE($2, last_game)
               WHERE twitch_user_id = $3 AND is_live = 1",
+            title.as_deref(),
+            game_name.as_deref(),
+            broadcaster_user_id,
         )
-        .bind(&title)
-        .bind(&game_name)
-        .bind(broadcaster_user_id)
         .execute(&mut *tx)
         .await?;
         tx.commit().await?;

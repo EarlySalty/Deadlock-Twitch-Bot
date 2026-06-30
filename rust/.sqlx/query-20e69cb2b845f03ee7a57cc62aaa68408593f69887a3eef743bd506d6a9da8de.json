@@ -1,0 +1,40 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n            SELECT to_broadcaster_login AS \"to_broadcaster_login?\",\n                   viewer_count,\n                   executed_at AS \"executed_at?\",\n                   success\n            FROM twitch_raid_history\n            WHERE from_broadcaster_id = $1\n            ORDER BY executed_at DESC\n            LIMIT 3\n            ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "to_broadcaster_login?",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 1,
+        "name": "viewer_count",
+        "type_info": "Int4"
+      },
+      {
+        "ordinal": 2,
+        "name": "executed_at?",
+        "type_info": "Timestamptz"
+      },
+      {
+        "ordinal": 3,
+        "name": "success",
+        "type_info": "Bool"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Text"
+      ]
+    },
+    "nullable": [
+      false,
+      true,
+      false,
+      true
+    ]
+  },
+  "hash": "20e69cb2b845f03ee7a57cc62aaa68408593f69887a3eef743bd506d6a9da8de"
+}

@@ -48,12 +48,17 @@ impl TrackedStore {
     pub async fn load(
         &self,
     ) -> Result<(Vec<TrackedEntry>, std::collections::HashSet<String>), sqlx::Error> {
-        let rows: Vec<TrackedRow> = sqlx::query_as(
+        let rows: Vec<TrackedRow> = sqlx::query_as!(
+            TrackedRow,
             r#"
-            SELECT twitch_login, twitch_user_id, require_discord_link,
-                   archived_at::text AS archived_at, is_partner_active, discord_user_id,
-                   operational_state, live_ping_role_id,
-                   COALESCE(live_ping_enabled, 1) AS live_ping_enabled
+            SELECT twitch_login AS "twitch_login!", twitch_user_id,
+                   require_discord_link AS "require_discord_link?",
+                   archived_at::text AS "archived_at?",
+                   is_partner_active AS "is_partner_active?",
+                   discord_user_id,
+                   operational_state AS "operational_state?",
+                   live_ping_role_id,
+                   COALESCE(live_ping_enabled, 1) AS "live_ping_enabled?"
               FROM twitch_streamers_partner_state
             UNION ALL
             -- Monitored-only Kanäle sind keine Partner: Partner-Config als
@@ -122,19 +127,12 @@ impl TrackedStore {
         _target_game: &str,
         cutoff: DateTime<Utc>,
     ) -> Result<Vec<String>, sqlx::Error> {
-        let rows: Vec<(
-            String,
-            Option<String>,
-            Option<String>,
-            Option<DateTime<Utc>>,
-        )> = sqlx::query_as(
+        let rows = sqlx::query!(
             r#"
-            SELECT s.twitch_login,
-                   s.archived_at::text AS archived_at,
-                   s.operational_state,
-                   MAX(
-                       NULLIF(COALESCE(sess.ended_at, sess.started_at), '')::timestamptz
-                    ) AS last_stream_at
+            SELECT s.twitch_login AS "twitch_login!",
+                   s.archived_at::text AS "archived_at?",
+                   s.operational_state AS "operational_state?",
+                   MAX(COALESCE(sess.ended_at, sess.started_at)) AS "last_stream_at?"
               FROM twitch_streamers_partner_state s
               LEFT JOIN twitch_stream_sessions sess
                 ON LOWER(sess.streamer_login) = LOWER(s.twitch_login)
@@ -147,22 +145,24 @@ impl TrackedStore {
         .await?;
         Ok(rows
             .into_iter()
-            .filter_map(|(login, archived_at, operational_state, last_stream)| {
+            .filter_map(|row| {
+                let login = row.twitch_login;
                 let login = login.trim().to_lowercase();
                 if login.is_empty() {
                     return None;
                 }
-                if archived_at.is_some_and(|a| !a.trim().is_empty()) {
+                if row.archived_at.is_some_and(|a| !a.trim().is_empty()) {
                     return None;
                 }
-                if operational_state
+                if row
+                    .operational_state
                     .as_deref()
                     .is_some_and(|state| state.eq_ignore_ascii_case("inactive"))
                 {
                     return None;
                 }
                 // Keine Historie → keine automatische Inaktivitätsmarkierung.
-                let last = last_stream?;
+                let last = row.last_stream_at?;
                 (last < cutoff).then_some(login)
             })
             .collect())

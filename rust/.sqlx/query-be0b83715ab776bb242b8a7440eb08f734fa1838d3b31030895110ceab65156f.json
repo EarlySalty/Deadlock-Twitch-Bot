@@ -1,0 +1,24 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n            SELECT 1 AS \"one!\"\n              FROM eventsub_guard_state\n             WHERE kind = $1\n               AND guard_key = $2\n               AND expires_at > $3\n             LIMIT 1\n            ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "one!",
+        "type_info": "Int4"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Text",
+        "Text",
+        "Float8"
+      ]
+    },
+    "nullable": [
+      null
+    ]
+  },
+  "hash": "be0b83715ab776bb242b8a7440eb08f734fa1838d3b31030895110ceab65156f"
+}

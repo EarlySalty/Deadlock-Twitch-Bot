@@ -1,0 +1,22 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n            SELECT COUNT(*) AS \"count!\"\n            FROM twitch_streamers_partner_state ps\n            WHERE LOWER(ps.twitch_login) = $1\n              AND ps.is_partner_active = 1\n              AND NOT EXISTS (\n                  SELECT 1 FROM twitch_streamers s\n                  WHERE LOWER(s.twitch_login) = LOWER(ps.twitch_login)\n                    AND NOT EXISTS (\n                        SELECT 1 FROM twitch_partners pp\n                        WHERE pp.twitch_user_id = s.twitch_user_id\n                           OR LOWER(pp.twitch_login) = LOWER(s.twitch_login)\n                  )\n              )\n            ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "count!",
+        "type_info": "Int8"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Text"
+      ]
+    },
+    "nullable": [
+      null
+    ]
+  },
+  "hash": "361e89c7ddeb8bb535e1bae619c6d18e2ed5926a63f2cdcb1063b59a279dde73"
+}

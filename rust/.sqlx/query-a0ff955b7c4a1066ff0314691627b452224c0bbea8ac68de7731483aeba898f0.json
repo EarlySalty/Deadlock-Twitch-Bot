@@ -1,0 +1,28 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT s.twitch_login AS \"twitch_login!\",\n                    s.twitch_user_id AS \"twitch_user_id!\"\n               FROM twitch_streamer_identities s\n               JOIN twitch_live_state l ON s.twitch_user_id = l.twitch_user_id\n               LEFT JOIN streamer_plans p ON s.twitch_user_id = p.twitch_user_id\n              WHERE l.is_live = 1\n                AND LOWER(COALESCE(l.last_game, '')) = $1\n                AND COALESCE(p.promo_disabled, 0) = 0",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "twitch_login!",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 1,
+        "name": "twitch_user_id!",
+        "type_info": "Text"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Text"
+      ]
+    },
+    "nullable": [
+      false,
+      false
+    ]
+  },
+  "hash": "a0ff955b7c4a1066ff0314691627b452224c0bbea8ac68de7731483aeba898f0"
+}

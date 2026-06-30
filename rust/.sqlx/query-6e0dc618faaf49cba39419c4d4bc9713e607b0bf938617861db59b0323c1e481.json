@@ -1,0 +1,21 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "INSERT INTO twitch_raw_chat_ingest_health ( streamer_login, last_raw_chat_message_at, last_raw_chat_insert_ok_at, last_raw_chat_insert_error_at, last_raw_chat_error, raw_chat_lag_seconds, updated_at ) VALUES ($1, $2, $3, $4, $5, $6, $7) ON CONFLICT (streamer_login) DO UPDATE SET last_raw_chat_message_at = COALESCE( EXCLUDED.last_raw_chat_message_at, twitch_raw_chat_ingest_health.last_raw_chat_message_at ), last_raw_chat_insert_ok_at = COALESCE( EXCLUDED.last_raw_chat_insert_ok_at, twitch_raw_chat_ingest_health.last_raw_chat_insert_ok_at ), last_raw_chat_insert_error_at = COALESCE( EXCLUDED.last_raw_chat_insert_error_at, twitch_raw_chat_ingest_health.last_raw_chat_insert_error_at ), last_raw_chat_error = CASE WHEN $8 THEN EXCLUDED.last_raw_chat_error ELSE twitch_raw_chat_ingest_health.last_raw_chat_error END, raw_chat_lag_seconds = COALESCE( EXCLUDED.raw_chat_lag_seconds, twitch_raw_chat_ingest_health.raw_chat_lag_seconds ), updated_at = EXCLUDED.updated_at",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Text",
+        "Text",
+        "Text",
+        "Text",
+        "Text",
+        "Int4",
+        "Text",
+        "Bool"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "6e0dc618faaf49cba39419c4d4bc9713e607b0bf938617861db59b0323c1e481"
+}

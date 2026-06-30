@@ -1,0 +1,22 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT NOT EXISTS ( SELECT 1 FROM twitch_chatter_rollup WHERE LOWER(chatter_login) = $1 ) AS \"is_first_global!\"",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "is_first_global!",
+        "type_info": "Bool"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Text"
+      ]
+    },
+    "nullable": [
+      null
+    ]
+  },
+  "hash": "75f071117577536b5334b6435d2eeb7afec350d0f44c972ca68e9869f2351cd1"
+}

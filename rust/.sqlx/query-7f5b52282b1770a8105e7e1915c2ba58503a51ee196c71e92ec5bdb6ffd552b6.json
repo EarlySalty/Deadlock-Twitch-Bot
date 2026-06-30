@@ -1,0 +1,15 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n            INSERT INTO twitch_streamers (twitch_login, twitch_user_id)\n            VALUES ($1, $2)\n            ON CONFLICT (twitch_login) DO NOTHING\n            ",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Text",
+        "Text"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "7f5b52282b1770a8105e7e1915c2ba58503a51ee196c71e92ec5bdb6ffd552b6"
+}

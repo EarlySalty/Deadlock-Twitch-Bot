@@ -1,0 +1,14 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "UPDATE twitch_live_state\n                SET is_live = 0, active_session_id = NULL\n              WHERE is_live = 1\n                AND last_seen_at::timestamptz < now() - ($1 || ' seconds')::interval",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Text"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "70528d57f7f97fbf4b7121ee869e5e5f604f81d0353c2de29bba8a934a2e6b0e"
+}

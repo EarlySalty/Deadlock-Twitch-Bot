@@ -308,23 +308,23 @@ impl MentionResolver for PgHelixMentionResolver {
         }
 
         // session_chatters zuerst, dann rollup (moderation.py Z. 315–333).
-        let known = sqlx::query_scalar::<_, i32>(
+        let known = sqlx::query_scalar!(
             "SELECT 1 FROM twitch_session_chatters \
              WHERE streamer_login = $1 AND chatter_login = $2 LIMIT 1",
+            &streamer,
+            &mention,
         )
-        .bind(&streamer)
-        .bind(&mention)
         .fetch_optional(&self.pool)
         .await
         .ok()
         .flatten()
         .is_some()
-            || sqlx::query_scalar::<_, i32>(
+            || sqlx::query_scalar!(
                 "SELECT 1 FROM twitch_chatter_rollup \
                  WHERE streamer_login = $1 AND chatter_login = $2 LIMIT 1",
+                &streamer,
+                &mention,
             )
-            .bind(&streamer)
-            .bind(&mention)
             .fetch_optional(&self.pool)
             .await
             .ok()
@@ -777,12 +777,12 @@ impl ChatPipeline {
     /// `silent_ban`-Flag des Partners (moderation.py Z. 1775–1790 via
     /// `load_active_partner`; View-Spalte ist INTEGER). Fail-safe: false.
     async fn is_silent_ban(&self, channel_login: &str) -> bool {
-        sqlx::query_scalar::<_, i32>(
-            "SELECT COALESCE(silent_ban, 0) \
+        sqlx::query_scalar!(
+            "SELECT COALESCE(silent_ban, 0) AS \"silent_ban!\" \
              FROM twitch_streamers_partner_state \
              WHERE LOWER(twitch_login) = $1",
+            channel_login,
         )
-        .bind(channel_login)
         .fetch_optional(&self.parts.pool)
         .await
         .unwrap_or(None)
@@ -845,12 +845,12 @@ async fn is_first_message_for_streamer(
     if channel_login.is_empty() || chatter_login.is_empty() {
         return false;
     }
-    match sqlx::query_scalar::<_, i32>(
+    match sqlx::query_scalar!(
         "SELECT 1 FROM twitch_chatter_rollup \
          WHERE streamer_login = $1 AND chatter_login = $2 LIMIT 1",
+        channel_login,
+        chatter_login,
     )
-    .bind(channel_login)
-    .bind(chatter_login)
     .fetch_optional(pool)
     .await
     {

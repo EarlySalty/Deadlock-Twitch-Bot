@@ -1,0 +1,20 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT twitch_login FROM twitch_streamers WHERE NOT EXISTS ( SELECT 1 FROM twitch_partners p WHERE p.twitch_user_id = twitch_streamers.twitch_user_id OR LOWER(p.twitch_login) = LOWER(twitch_streamers.twitch_login) )",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "twitch_login",
+        "type_info": "Text"
+      }
+    ],
+    "parameters": {
+      "Left": []
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "11f93655e9bcea3f0e39dd5debe66b6ad95f7e953730910877542f449a604f55"
+}

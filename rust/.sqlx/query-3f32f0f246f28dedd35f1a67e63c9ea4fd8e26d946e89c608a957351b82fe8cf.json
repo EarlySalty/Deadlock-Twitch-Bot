@@ -1,0 +1,15 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "DELETE FROM eventsub_guard_state WHERE kind = $1 AND guard_key = $2",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Text",
+        "Text"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "3f32f0f246f28dedd35f1a67e63c9ea4fd8e26d946e89c608a957351b82fe8cf"
+}

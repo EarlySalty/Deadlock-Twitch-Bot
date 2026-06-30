@@ -1,0 +1,22 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT COALESCE(manual_partner_opt_out, 0) AS \"manual_partner_opt_out!\" FROM twitch_streamers_partner_state WHERE LOWER(twitch_login) = LOWER($1) LIMIT 1",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "manual_partner_opt_out!",
+        "type_info": "Int4"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Text"
+      ]
+    },
+    "nullable": [
+      null
+    ]
+  },
+  "hash": "8709076b7d182cfb6b32d8e6317c70059a210c8ff9c4742d8b4ae4b8bd5cbff9"
+}

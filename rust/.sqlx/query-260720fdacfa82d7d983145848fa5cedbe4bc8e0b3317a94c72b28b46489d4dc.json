@@ -1,0 +1,28 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n            INSERT INTO exp_sessions (\n                streamer, stream_id, started_at, game_name, stream_title,\n                peak_viewers, avg_viewers, samples\n            ) VALUES ($1, $2, $3, $4, $5, $6, $7, 0)\n            ON CONFLICT (stream_id) WHERE stream_id IS NOT NULL DO NOTHING\n            RETURNING id\n            ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id",
+        "type_info": "Int8"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Text",
+        "Text",
+        "Text",
+        "Text",
+        "Text",
+        "Int4",
+        "Float4"
+      ]
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "260720fdacfa82d7d983145848fa5cedbe4bc8e0b3317a94c72b28b46489d4dc"
+}

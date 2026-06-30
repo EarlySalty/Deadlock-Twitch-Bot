@@ -1,0 +1,15 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "UPDATE twitch_live_state\n                SET is_live = 0, last_seen_at = $1, active_session_id = NULL\n              WHERE twitch_user_id = $2",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Text",
+        "Text"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "371baa4fb415228e462178938f8c02a6d05b88d8aae79d42b8709f043f8682ed"
+}

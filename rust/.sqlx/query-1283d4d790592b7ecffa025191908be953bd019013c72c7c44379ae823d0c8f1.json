@@ -1,0 +1,47 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT id AS \"id!\", chatter_login AS \"chatter_login!\", category AS \"category!\", reasoning AS \"reasoning!\", transcript_snapshot AS \"transcript_snapshot!\" FROM twitch_scam_guard_verdicts WHERE channel_login = $1 AND verdict = 'scam' AND ($2::text IS NULL OR chatter_login = $2) ORDER BY created_at DESC, id DESC LIMIT 1",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id!",
+        "type_info": "Int8"
+      },
+      {
+        "ordinal": 1,
+        "name": "chatter_login!",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 2,
+        "name": "category!",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 3,
+        "name": "reasoning!",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 4,
+        "name": "transcript_snapshot!",
+        "type_info": "Text"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Text",
+        "Text"
+      ]
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      false,
+      false
+    ]
+  },
+  "hash": "1283d4d790592b7ecffa025191908be953bd019013c72c7c44379ae823d0c8f1"
+}

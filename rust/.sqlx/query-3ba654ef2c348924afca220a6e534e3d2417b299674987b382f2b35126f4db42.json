@@ -1,0 +1,17 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "INSERT INTO twitch_promo_cooldowns (login, cooldown_type, wall_ts, updated_at)\n             VALUES ($1, $2, $3, $4)\n             ON CONFLICT (login, cooldown_type) DO UPDATE\n             SET wall_ts = EXCLUDED.wall_ts, updated_at = EXCLUDED.updated_at",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Text",
+        "Text",
+        "Float8",
+        "Timestamptz"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "3ba654ef2c348924afca220a6e534e3d2417b299674987b382f2b35126f4db42"
+}

@@ -1,0 +1,23 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT content AS \"content!\" FROM twitch_engagement_conversation\n              WHERE channel_login = $1 AND twitch_user_id = $2 AND role = 'user'\n              ORDER BY ts DESC LIMIT 5",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "content!",
+        "type_info": "Text"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Text",
+        "Text"
+      ]
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "054047d4a80bfdeb7f3836bca0ebaa8fa1427c18296508c5ec45ee9118190b9a"
+}

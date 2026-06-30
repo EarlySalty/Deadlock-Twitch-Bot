@@ -191,24 +191,25 @@ impl ReauthReminderPollHooks {
         if twitch_user_id.is_empty() {
             return None;
         }
-        let row = sqlx::query_as::<_, (Option<bool>, Option<String>)>(
-            "SELECT ra.needs_reauth, NULLIF(ls.last_stream_id, '') \
+        let row = sqlx::query!(
+            "SELECT ra.needs_reauth, NULLIF(ls.last_stream_id, '') AS \"last_stream_id?\" \
                FROM twitch_raid_auth ra \
           LEFT JOIN twitch_live_state ls ON ls.twitch_user_id = ra.twitch_user_id \
               WHERE ra.twitch_user_id = $1",
+            twitch_user_id,
         )
-        .bind(twitch_user_id)
         .fetch_optional(&self.pool)
         .await;
 
         match row {
-            Ok(Some((Some(true), Some(stream_id)))) => {
-                Some(ReminderKey::Stream(format!("stream:{stream_id}")))
+            Ok(Some(row)) if row.needs_reauth == Some(true) => {
+                if let Some(stream_id) = row.last_stream_id {
+                    Some(ReminderKey::Stream(format!("stream:{stream_id}")))
+                } else {
+                    Some(ReminderKey::Fallback(format!("fallback:{twitch_user_id}")))
+                }
             }
-            Ok(Some((Some(true), None))) => {
-                Some(ReminderKey::Fallback(format!("fallback:{twitch_user_id}")))
-            }
-            Ok(_) => None,
+            Ok(Some(_)) | Ok(None) => None,
             Err(error) => {
                 tracing::debug!(%error, twitch_user_id, "ReAuth-Reminder: needs_reauth-Check fehlgeschlagen");
                 None
@@ -243,7 +244,6 @@ impl ReauthReminderPollHooks {
             }
         }
     }
-
     async fn maybe_send_reauth_reminder(&self, twitch_user_id: &str, login: &str) {
         let Some(key) = self.reminder_key(twitch_user_id).await else {
             return;

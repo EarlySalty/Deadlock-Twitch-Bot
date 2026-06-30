@@ -114,7 +114,7 @@ impl ScoutRepository {
 
     /// Gibt alle aktuell nur beobachteten Logins ohne Partner-Eintrag zurück.
     pub async fn load_monitored_only_logins(&self) -> Result<Vec<String>, sqlx::Error> {
-        sqlx::query_scalar(
+        sqlx::query_scalar!(
             "SELECT twitch_login \
              FROM twitch_streamers \
              WHERE NOT EXISTS ( \
@@ -130,10 +130,10 @@ impl ScoutRepository {
     /// Trägt einen neuen Monitoring-only-Streamer ein. Gibt `true` zurück wenn
     /// er tatsächlich neu war (nicht nur ein Konflikt-Update).
     pub async fn upsert_monitored(&self, login: &str, user_id: &str) -> Result<bool, sqlx::Error> {
-        let existing: Option<i32> = sqlx::query_scalar(
-            "SELECT 1 FROM twitch_streamers WHERE LOWER(twitch_login) = LOWER($1) LIMIT 1",
+        let existing: Option<i32> = sqlx::query_scalar!(
+            "SELECT 1 AS \"one!\" FROM twitch_streamers WHERE LOWER(twitch_login) = LOWER($1) LIMIT 1",
+            login,
         )
-        .bind(login)
         .fetch_optional(&self.pool)
         .await?;
 
@@ -141,15 +141,15 @@ impl ScoutRepository {
             return Ok(false);
         }
 
-        sqlx::query(
+        sqlx::query!(
             r#"
             INSERT INTO twitch_streamers (twitch_login, twitch_user_id)
             VALUES ($1, $2)
             ON CONFLICT (twitch_login) DO NOTHING
             "#,
+            login,
+            user_id,
         )
-        .bind(login)
-        .bind(user_id)
         .execute(&self.pool)
         .await?;
 
@@ -158,7 +158,7 @@ impl ScoutRepository {
 
     /// Schließt offene Stream-Sessions für einen Streamer (auto-closed: scout-removed).
     pub async fn close_open_sessions(&self, login: &str) {
-        let result = sqlx::query(
+        let result = sqlx::query!(
             r#"
             UPDATE twitch_stream_sessions
             SET ended_at = NOW(),
@@ -167,8 +167,8 @@ impl ScoutRepository {
             WHERE LOWER(streamer_login) = LOWER($1)
               AND ended_at IS NULL
             "#,
+            login,
         )
-        .bind(login)
         .execute(&self.pool)
         .await;
 
@@ -179,11 +179,12 @@ impl ScoutRepository {
 
     /// Löscht den Live-State-Eintrag eines Streamers.
     pub async fn delete_live_state(&self, login: &str) {
-        let result =
-            sqlx::query("DELETE FROM twitch_live_state WHERE LOWER(streamer_login) = LOWER($1)")
-                .bind(login)
-                .execute(&self.pool)
-                .await;
+        let result = sqlx::query!(
+            "DELETE FROM twitch_live_state WHERE LOWER(streamer_login) = LOWER($1)",
+            login,
+        )
+        .execute(&self.pool)
+        .await;
 
         if let Err(e) = result {
             tracing::debug!("scout: Live-State-Delete für {login} fehlgeschlagen: {e}");
@@ -197,6 +198,7 @@ impl ScoutRepository {
     pub async fn delete_monitored_streamer(&self, login: &str) -> Result<bool, sqlx::Error> {
         // Kaskadierende Clip-Tabellen (meist no-op für monitoring-only Streamer,
         // aber korrekt für den Fall dass Clips existieren).
+        // dyn: mehrere feste Kaskaden-Deletes laufen über dieselbe Schleife.
         for sql in [
             "DELETE FROM twitch_clips_social_analytics WHERE clip_id IN \
              (SELECT id FROM twitch_clips_social_media WHERE LOWER(streamer_login) = LOWER($1))",
@@ -210,15 +212,15 @@ impl ScoutRepository {
             }
         }
 
-        let rows = sqlx::query(
+        let rows = sqlx::query!(
             "DELETE FROM twitch_streamers WHERE LOWER(twitch_login) = LOWER($1) \
              AND NOT EXISTS ( \
                  SELECT 1 FROM twitch_partners p \
                  WHERE p.twitch_user_id = twitch_streamers.twitch_user_id \
                     OR LOWER(p.twitch_login) = LOWER(twitch_streamers.twitch_login) \
              )",
+            login,
         )
-        .bind(login)
         .execute(&self.pool)
         .await?
         .rows_affected();

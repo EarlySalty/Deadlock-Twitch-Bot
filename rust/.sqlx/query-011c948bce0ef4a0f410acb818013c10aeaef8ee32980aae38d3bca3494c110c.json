@@ -1,0 +1,14 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n            INSERT INTO twitch_user_engagement_optout (twitch_user_id)\n            VALUES ($1)\n            ON CONFLICT (twitch_user_id) DO NOTHING\n            ",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Text"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "011c948bce0ef4a0f410acb818013c10aeaef8ee32980aae38d3bca3494c110c"
+}

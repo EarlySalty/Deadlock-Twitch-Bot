@@ -1,0 +1,15 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "INSERT INTO twitch_scam_guard_learnings (id, guidance, source_count, updated_at) VALUES (TRUE, $1, $2, NOW()) ON CONFLICT (id) DO UPDATE SET guidance = EXCLUDED.guidance, source_count = EXCLUDED.source_count, updated_at = EXCLUDED.updated_at",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Text",
+        "Int4"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "4cc7958ed78f41256854f19f34d4edf23c4fc75da3f71d80775454e25cbae85b"
+}

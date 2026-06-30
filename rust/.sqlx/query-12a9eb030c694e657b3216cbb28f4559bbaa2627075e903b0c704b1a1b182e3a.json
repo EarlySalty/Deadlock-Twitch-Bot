@@ -1,0 +1,22 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT COALESCE(silent_ban, 0) AS \"silent_ban!\" FROM twitch_streamers_partner_state WHERE LOWER(twitch_login) = $1",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "silent_ban!",
+        "type_info": "Int4"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Text"
+      ]
+    },
+    "nullable": [
+      null
+    ]
+  },
+  "hash": "12a9eb030c694e657b3216cbb28f4559bbaa2627075e903b0c704b1a1b182e3a"
+}

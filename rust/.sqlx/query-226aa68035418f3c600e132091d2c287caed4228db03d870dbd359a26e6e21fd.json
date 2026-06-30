@@ -1,0 +1,40 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT channel_login AS \"channel_login!\", chatter_login AS \"chatter_login!\", chatter_id, action_taken AS \"action_taken!\" FROM twitch_scam_guard_verdicts WHERE id = $1",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "channel_login!",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 1,
+        "name": "chatter_login!",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 2,
+        "name": "chatter_id",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 3,
+        "name": "action_taken!",
+        "type_info": "Text"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Int8"
+      ]
+    },
+    "nullable": [
+      false,
+      false,
+      true,
+      false
+    ]
+  },
+  "hash": "226aa68035418f3c600e132091d2c287caed4228db03d870dbd359a26e6e21fd"
+}

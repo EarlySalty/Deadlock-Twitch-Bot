@@ -151,10 +151,10 @@ impl TimeoutTrackingChatApi {
     /// (PK `twitch_user_id`, vom Promo-Pfad ebenfalls als Identitäts-Join genutzt,
     /// promos.rs:1653). Findet die Abfrage keinen Login (oder DB-Fehler) → `None`.
     async fn resolve_login(&self, broadcaster_id: &str) -> Option<String> {
-        let login: Option<String> = sqlx::query_scalar(
-            "SELECT twitch_login FROM twitch_streamer_identities WHERE twitch_user_id = $1",
+        let login: Option<String> = sqlx::query_scalar!(
+            "SELECT twitch_login AS \"twitch_login?\" FROM twitch_streamer_identities WHERE twitch_user_id = $1",
+            broadcaster_id,
         )
-        .bind(broadcaster_id)
         .fetch_optional(&self.pool)
         .await
         .unwrap_or(None)

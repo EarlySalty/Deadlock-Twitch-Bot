@@ -59,25 +59,28 @@ fn extract_keywords(title: &str) -> Vec<String> {
 /// (Python `_fetch_recent_sessions`).
 async fn fetch_recent_sessions(pool: &PgPool, days: i64) -> Vec<RecentSession> {
     let cutoff = Utc::now() - chrono::Duration::days(days);
-    sqlx::query_as::<_, (String, String, f64, i64)>(
-        "SELECT streamer_login, stream_title, avg_viewers::float8, followers_start::int8 \
+    sqlx::query!(
+        "SELECT streamer_login AS \"streamer_login!\", \
+                stream_title AS \"stream_title!\", \
+                avg_viewers::float8 AS \"avg_viewers!\", \
+                followers_start::int8 AS \"followers_start!\" \
          FROM twitch_stream_sessions \
          WHERE started_at >= $1 \
            AND streamer_login IS NOT NULL AND streamer_login != '' \
            AND stream_title IS NOT NULL AND stream_title != '' \
            AND avg_viewers IS NOT NULL \
            AND followers_start IS NOT NULL AND followers_start > 0",
+        cutoff,
     )
-    .bind(cutoff)
     .fetch_all(pool)
     .await
     .unwrap_or_default()
     .into_iter()
-    .map(|(streamer_login, title, avg_viewers, followers_start)| RecentSession {
-        streamer_login: streamer_login.trim().to_lowercase(),
-        title,
-        avg_viewers,
-        followers_start,
+    .map(|row| RecentSession {
+        streamer_login: row.streamer_login.trim().to_lowercase(),
+        title: row.stream_title,
+        avg_viewers: row.avg_viewers,
+        followers_start: row.followers_start,
     })
     .collect()
 }
@@ -85,13 +88,14 @@ async fn fetch_recent_sessions(pool: &PgPool, days: i64) -> Vec<RecentSession> {
 /// Löst die `twitch_user_id` zu einem Login auf (Python
 /// `_resolve_streamer_id_for_login`): kein Treffer → `None`.
 async fn resolve_streamer_id(pool: &PgPool, login: &str) -> Option<String> {
-    let id: Option<String> = sqlx::query_scalar(
+    let id: Option<String> = sqlx::query_scalar!(
         "SELECT twitch_user_id FROM twitch_streamers WHERE LOWER(twitch_login) = $1 LIMIT 1",
+        login.trim().to_lowercase(),
     )
-    .bind(login.trim().to_lowercase())
     .fetch_optional(pool)
     .await
     .ok()
+    .flatten()
     .flatten();
     id.map(|s| s.trim().to_string()).filter(|s| !s.is_empty())
 }
@@ -183,8 +187,8 @@ struct HistorySession {
 
 /// Aktive Partner-IDs (Python `_fetch_active_partner_ids`).
 async fn fetch_active_partner_ids(pool: &PgPool) -> Vec<String> {
-    sqlx::query_scalar::<_, String>(
-        "SELECT twitch_user_id FROM twitch_streamers_partner_state WHERE is_partner_active = 1",
+    sqlx::query_scalar!(
+        "SELECT twitch_user_id AS \"twitch_user_id!\" FROM twitch_streamers_partner_state WHERE is_partner_active = 1",
     )
     .fetch_all(pool)
     .await
@@ -198,8 +202,10 @@ async fn fetch_history_for_period(
     start: DateTime<Utc>,
     end: DateTime<Utc>,
 ) -> Vec<HistorySession> {
-    sqlx::query_as::<_, (String, f64, Option<i64>)>(
-        "SELECT s.stream_title, s.avg_viewers::float8, s.followers_start::int8 \
+    sqlx::query!(
+        "SELECT s.stream_title AS \"stream_title!\", \
+                s.avg_viewers::float8 AS \"avg_viewers!\", \
+                s.followers_start::int8 AS followers_start \
          FROM twitch_stream_sessions s \
          JOIN twitch_streamers t ON LOWER(t.twitch_login) = LOWER(s.streamer_login) \
          WHERE t.twitch_user_id = $1 \
@@ -207,18 +213,18 @@ async fn fetch_history_for_period(
            AND s.stream_title IS NOT NULL AND s.stream_title != '' \
            AND s.avg_viewers IS NOT NULL \
          ORDER BY s.started_at DESC",
+        streamer_id,
+        start,
+        end,
     )
-    .bind(streamer_id)
-    .bind(start)
-    .bind(end)
     .fetch_all(pool)
     .await
     .unwrap_or_default()
     .into_iter()
-    .map(|(title, avg_viewers, followers_start)| HistorySession {
-        title,
-        avg_viewers,
-        followers_start,
+    .map(|row| HistorySession {
+        title: row.stream_title,
+        avg_viewers: row.avg_viewers,
+        followers_start: row.followers_start,
     })
     .collect()
 }

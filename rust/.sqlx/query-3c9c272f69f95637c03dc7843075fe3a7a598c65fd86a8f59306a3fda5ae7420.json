@@ -1,0 +1,34 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n            SELECT decision AS \"decision?\", response_text, ts AS \"ts?\"\n            FROM twitch_engagement_log\n            WHERE channel_login = $1\n            ORDER BY ts DESC\n            LIMIT 1\n            ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "decision?",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 1,
+        "name": "response_text",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 2,
+        "name": "ts?",
+        "type_info": "Timestamptz"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Text"
+      ]
+    },
+    "nullable": [
+      false,
+      true,
+      false
+    ]
+  },
+  "hash": "3c9c272f69f95637c03dc7843075fe3a7a598c65fd86a8f59306a3fda5ae7420"
+}

@@ -1,0 +1,25 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n            INSERT INTO eventsub_guard_state (kind, guard_key, expires_at, updated_at)\n            VALUES ($1, $2, $3, $4)\n            ON CONFLICT (kind, guard_key) DO UPDATE\n               SET expires_at = EXCLUDED.expires_at,\n                   updated_at = EXCLUDED.updated_at\n             WHERE eventsub_guard_state.expires_at <= EXCLUDED.updated_at\n            RETURNING 1 AS \"one!\"\n            ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "one!",
+        "type_info": "Int4"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Text",
+        "Text",
+        "Float8",
+        "Float8"
+      ]
+    },
+    "nullable": [
+      null
+    ]
+  },
+  "hash": "b36af3590db22008ce2d127d818e6b14ff5a04e7e6a91f8e3b5209fdcd4ac018"
+}

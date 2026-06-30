@@ -1,0 +1,38 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT ls.twitch_user_id, ls.streamer_login,\n                ls.active_session_id AS \"active_session_id!\",\n                COALESCE(ps.is_partner_active, 0) AS \"is_partner_active!\" FROM twitch_live_state ls LEFT JOIN twitch_streamers_partner_state ps ON LOWER(ps.twitch_login) = LOWER(ls.streamer_login) WHERE ls.is_live = 1 AND ls.active_session_id IS NOT NULL AND ls.last_seen_at::timestamptz > now() - interval '15 minutes'",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "twitch_user_id",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 1,
+        "name": "streamer_login",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 2,
+        "name": "active_session_id!",
+        "type_info": "Int8"
+      },
+      {
+        "ordinal": 3,
+        "name": "is_partner_active!",
+        "type_info": "Int4"
+      }
+    ],
+    "parameters": {
+      "Left": []
+    },
+    "nullable": [
+      false,
+      false,
+      true,
+      null
+    ]
+  },
+  "hash": "012ee2f590df8c946ae014b1d1f704448b2e2ef607d1036b0a9a73f137792a6c"
+}

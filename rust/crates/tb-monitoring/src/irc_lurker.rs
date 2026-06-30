@@ -89,11 +89,11 @@ fn is_irc_word(c: char) -> bool {
 
 /// Aktive Session-ID eines live Kanals (`twitch_live_state`), sonst `None`.
 async fn resolve_active_session(pool: &PgPool, channel: &str) -> Option<i64> {
-    sqlx::query_scalar::<_, Option<i64>>(
+    sqlx::query_scalar!(
         "SELECT active_session_id FROM twitch_live_state \
          WHERE LOWER(streamer_login) = $1 AND is_live = 1",
+        channel,
     )
-    .bind(channel)
     .fetch_optional(pool)
     .await
     .ok()
@@ -116,6 +116,7 @@ pub async fn upsert_chatter_seen(pool: &PgPool, channel: &str, nick: &str, now: 
     let Some(session_id) = resolve_active_session(pool, channel).await else {
         return;
     };
+    // dyn: wiederverwendeter INSERT-Grundkörper mit variierendem ON-CONFLICT-Zweig.
     let _ = sqlx::query(&format!(
         "{INSERT_CHATTER} ON CONFLICT (session_id, chatter_login) \
          DO UPDATE SET last_seen_at = EXCLUDED.last_seen_at"
@@ -140,10 +141,10 @@ pub async fn upsert_names_batch(
     let Some(session_id) = resolve_active_session(pool, channel).await else {
         return (0, 0);
     };
-    let existing: HashSet<String> = sqlx::query_scalar::<_, String>(
+    let existing: HashSet<String> = sqlx::query_scalar!(
         "SELECT chatter_login FROM twitch_session_chatters WHERE session_id = $1",
+        session_id,
     )
-    .bind(session_id)
     .fetch_all(pool)
     .await
     .unwrap_or_default()
@@ -158,17 +159,18 @@ pub async fn upsert_names_batch(
             continue;
         }
         if existing.contains(&nick) {
-            let _ = sqlx::query(
+            let _ = sqlx::query!(
                 "UPDATE twitch_session_chatters SET last_seen_at = $1 \
                  WHERE session_id = $2 AND chatter_login = $3",
+                now,
+                session_id,
+                &nick,
             )
-            .bind(now)
-            .bind(session_id)
-            .bind(&nick)
             .execute(pool)
             .await;
             updates += 1;
         } else {
+            // dyn: gleicher INSERT-Grundkörper wie JOIN-Pfad, aber DO NOTHING statt UPDATE.
             let _ = sqlx::query(&format!(
                 "{INSERT_CHATTER} ON CONFLICT (session_id, chatter_login) DO NOTHING"
             ))
@@ -211,16 +213,16 @@ pub async fn record_presence_ticks(
     let mut inserted = 0u64;
     for viewer in viewer_logins {
         let viewer = viewer.to_lowercase();
-        let res = sqlx::query(
+        let res = sqlx::query!(
             "INSERT INTO twitch_viewer_presence_ticks \
              (session_id, streamer_login, viewer_login, tick_at) \
              VALUES ($1, $2, $3, $4) \
              ON CONFLICT (session_id, viewer_login, tick_at) DO NOTHING",
+            session_id,
+            &streamer,
+            &viewer,
+            tick_at,
         )
-        .bind(session_id)
-        .bind(&streamer)
-        .bind(&viewer)
-        .bind(tick_at)
         .execute(pool)
         .await;
         if let Ok(done) = res {

@@ -95,9 +95,10 @@ pub struct LiveStreamer {
 /// Lädt alle live Streamer mit aktiver Session (Python `collect_chatters_data`-
 /// Roster). `streamer_login` wird normalisiert (`lower().trim()`).
 pub async fn load_live_roster(pool: &PgPool) -> Result<Vec<LiveStreamer>, sqlx::Error> {
-    let rows: Vec<(String, String, i64, i32)> = sqlx::query_as(
-        "SELECT ls.twitch_user_id, ls.streamer_login, ls.active_session_id, \
-                COALESCE(ps.is_partner_active, 0) AS is_partner_active \
+    let rows = sqlx::query!(
+        "SELECT ls.twitch_user_id, ls.streamer_login,
+                ls.active_session_id AS \"active_session_id!\",
+                COALESCE(ps.is_partner_active, 0) AS \"is_partner_active!\" \
          FROM twitch_live_state ls \
          LEFT JOIN twitch_streamers_partner_state ps \
                 ON LOWER(ps.twitch_login) = LOWER(ls.streamer_login) \
@@ -110,14 +111,12 @@ pub async fn load_live_roster(pool: &PgPool) -> Result<Vec<LiveStreamer>, sqlx::
 
     Ok(rows
         .into_iter()
-        .map(
-            |(twitch_user_id, streamer_login, active_session_id, partner)| LiveStreamer {
-                twitch_user_id,
-                streamer_login: normalize_login(&streamer_login),
-                active_session_id,
-                is_partner_active: partner == 1,
-            },
-        )
+        .map(|row| LiveStreamer {
+            twitch_user_id: row.twitch_user_id,
+            streamer_login: normalize_login(&row.streamer_login),
+            active_session_id: row.active_session_id,
+            is_partner_active: row.is_partner_active == 1,
+        })
         .collect())
 }
 
@@ -416,12 +415,12 @@ pub async fn record_chatters_for_streamer(
     let logins: Vec<String> = viewers.iter().map(|(login, _)| login.clone()).collect();
 
     // 1) Pre-Read: wer ist im Rollup des Streamers bereits bekannt?
-    let seen_before: HashSet<String> = sqlx::query_scalar::<_, String>(
+    let seen_before: HashSet<String> = sqlx::query_scalar!(
         "SELECT chatter_login FROM twitch_chatter_rollup \
          WHERE streamer_login = $1 AND chatter_login = ANY($2)",
+        &streamer.streamer_login,
+        &logins,
     )
-    .bind(&streamer.streamer_login)
-    .bind(&logins)
     .fetch_all(pool)
     .await?
     .into_iter()
@@ -438,26 +437,26 @@ pub async fn record_chatters_for_streamer(
 
         // 2) session_chatters — Conflict aktualisiert NUR last_seen_at
         //    (chatter_id wie Python NICHT überschrieben).
-        sqlx::query(
+        sqlx::query!(
             "INSERT INTO twitch_session_chatters \
              (session_id, streamer_login, chatter_login, chatter_id, first_message_at, \
               messages, is_first_time_streamer, seen_via_chatters_api, last_seen_at) \
              VALUES ($1, $2, $3, $4, $5, 0, $6, TRUE, $5) \
              ON CONFLICT (session_id, chatter_login) \
              DO UPDATE SET last_seen_at = EXCLUDED.last_seen_at",
+            streamer.active_session_id,
+            &streamer.streamer_login,
+            login,
+            chatter_id.as_deref(),
+            tick_at,
+            is_first_time,
         )
-        .bind(streamer.active_session_id)
-        .bind(&streamer.streamer_login)
-        .bind(login)
-        .bind(chatter_id)
-        .bind(tick_at)
-        .bind(is_first_time)
         .execute(&mut *tx)
         .await?;
 
         // 3) rollup — total_messages/total_sessions NIE inkrementieren;
         //    chatter_id per COALESCE nachtragen (bestehende ID gewinnt, Python).
-        sqlx::query(
+        sqlx::query!(
             "INSERT INTO twitch_chatter_rollup \
              (streamer_login, chatter_login, chatter_id, first_seen_at, last_seen_at, \
               total_messages, total_sessions) \
@@ -465,11 +464,11 @@ pub async fn record_chatters_for_streamer(
              ON CONFLICT (streamer_login, chatter_login) DO UPDATE SET \
                last_seen_at = EXCLUDED.last_seen_at, \
                chatter_id = COALESCE(twitch_chatter_rollup.chatter_id, EXCLUDED.chatter_id)",
+            &streamer.streamer_login,
+            login,
+            chatter_id.as_deref(),
+            tick_at,
         )
-        .bind(&streamer.streamer_login)
-        .bind(login)
-        .bind(chatter_id)
-        .bind(tick_at)
         .execute(&mut *tx)
         .await?;
     }

@@ -1,0 +1,21 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "INSERT INTO twitch_hype_train_events\n                (session_id, twitch_user_id, started_at, ended_at,\n                 duration_seconds, level, total_progress, event_phase)\n             VALUES ($1, $2, $3, $4, $5, $6, $7, $8)",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Int8",
+        "Text",
+        "Timestamptz",
+        "Timestamptz",
+        "Int4",
+        "Int4",
+        "Int4",
+        "Text"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "ca96d88d26f38ce87b58094640abc26d404324bbeb9bad2558a748607bc144a6"
+}

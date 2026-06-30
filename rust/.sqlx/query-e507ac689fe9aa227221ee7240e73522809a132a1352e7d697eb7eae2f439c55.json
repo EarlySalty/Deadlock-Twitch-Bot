@@ -1,0 +1,22 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT streamer_login\n               FROM twitch_live_state\n              WHERE twitch_user_id = $1\n              ORDER BY last_seen_at DESC NULLS LAST\n              LIMIT 1",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "streamer_login",
+        "type_info": "Text"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Text"
+      ]
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "e507ac689fe9aa227221ee7240e73522809a132a1352e7d697eb7eae2f439c55"
+}

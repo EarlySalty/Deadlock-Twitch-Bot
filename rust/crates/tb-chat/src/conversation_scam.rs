@@ -541,20 +541,23 @@ impl PgScamGuardStore {
 #[async_trait]
 impl ScamGuardStore for PgScamGuardStore {
     async fn load_settings(&self, channel_login: &str) -> Result<GuardSettings, String> {
-        let row = sqlx::query_as::<_, (bool, String, f32, f32)>(
-            "SELECT enabled, mode, threshold, suggestion_floor \
+        let row = sqlx::query!(
+            "SELECT enabled AS \"enabled!\", \
+                    mode AS \"mode!\", \
+                    threshold AS \"threshold!\", \
+                    suggestion_floor AS \"suggestion_floor!\" \
              FROM twitch_scam_guard_settings WHERE channel_login = $1",
+            channel_login,
         )
-        .bind(channel_login)
         .fetch_optional(&self.pool)
         .await
         .map_err(|error| error.to_string())?;
         Ok(match row {
-            Some((enabled, mode, threshold, suggestion_floor)) => GuardSettings {
-                enabled,
-                mode: GuardMode::from_db(&mode),
-                threshold,
-                suggestion_floor,
+            Some(row) => GuardSettings {
+                enabled: row.enabled,
+                mode: GuardMode::from_db(&row.mode),
+                threshold: row.threshold,
+                suggestion_floor: row.suggestion_floor,
             },
             None => GuardSettings::default(),
         })
@@ -565,31 +568,31 @@ impl ScamGuardStore for PgScamGuardStore {
         channel_login: &str,
         chatter_login: &str,
     ) -> Result<Option<FirstTimeContext>, String> {
-        let session_value = sqlx::query_scalar::<_, bool>(
-            "SELECT COALESCE(sc.is_first_time_streamer, FALSE) \
+        let session_value = sqlx::query_scalar!(
+            "SELECT COALESCE(sc.is_first_time_streamer, FALSE) AS \"is_first_time_streamer!\" \
              FROM twitch_session_chatters sc \
              JOIN twitch_stream_sessions ss ON ss.id = sc.session_id \
              WHERE LOWER(sc.streamer_login) = $1 \
                AND LOWER(sc.chatter_login) = $2 \
                AND ss.ended_at IS NULL \
              ORDER BY ss.started_at DESC LIMIT 1",
+            channel_login,
+            chatter_login,
         )
-        .bind(channel_login)
-        .bind(chatter_login)
         .fetch_optional(&self.pool)
         .await
         .map_err(|error| error.to_string())?;
 
         let is_first_time_streamer = match session_value {
             Some(value) => value,
-            None => sqlx::query_scalar::<_, bool>(
+            None => sqlx::query_scalar!(
                 "SELECT NOT EXISTS ( \
                        SELECT 1 FROM twitch_chatter_rollup \
                        WHERE LOWER(streamer_login) = $1 AND LOWER(chatter_login) = $2 \
-                     )",
+                     ) AS \"is_first_time_streamer!\"",
+                channel_login,
+                chatter_login,
             )
-            .bind(channel_login)
-            .bind(chatter_login)
             .fetch_one(&self.pool)
             .await
             .map_err(|error| error.to_string())?,
@@ -601,12 +604,12 @@ impl ScamGuardStore for PgScamGuardStore {
             }));
         }
 
-        let is_first_global = sqlx::query_scalar::<_, bool>(
+        let is_first_global = sqlx::query_scalar!(
             "SELECT NOT EXISTS ( \
                SELECT 1 FROM twitch_chatter_rollup WHERE LOWER(chatter_login) = $1 \
-             )",
+             ) AS \"is_first_global!\"",
+            chatter_login,
         )
-        .bind(chatter_login)
         .fetch_one(&self.pool)
         .await
         .map_err(|error| error.to_string())?;
@@ -617,21 +620,21 @@ impl ScamGuardStore for PgScamGuardStore {
     }
 
     async fn persist_verdict(&self, record: &VerdictRecord) -> Result<i64, String> {
-        let id: i64 = sqlx::query_scalar(
+        let id: i64 = sqlx::query_scalar!(
             "INSERT INTO twitch_scam_guard_verdicts \
              (channel_login, chatter_login, chatter_id, verdict, confidence, category, \
               reasoning, transcript_snapshot, action_taken) \
-             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9) RETURNING id",
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9) RETURNING id AS \"id!\"",
+            &record.channel_login,
+            &record.chatter_login,
+            record.chatter_id.as_deref(),
+            record.verdict.as_str(),
+            record.confidence,
+            &record.category,
+            &record.reasoning,
+            &record.transcript_snapshot,
+            &record.action_taken,
         )
-        .bind(&record.channel_login)
-        .bind(&record.chatter_login)
-        .bind(record.chatter_id.as_deref())
-        .bind(record.verdict.as_str())
-        .bind(record.confidence)
-        .bind(&record.category)
-        .bind(&record.reasoning)
-        .bind(&record.transcript_snapshot)
-        .bind(&record.action_taken)
         .fetch_one(&self.pool)
         .await
         .map_err(|error| error.to_string())?;
@@ -972,27 +975,29 @@ impl ScamGuardCommands {
         target: Option<&str>,
     ) -> Result<Option<StoredVerdict>, String> {
         let target = target.map(|t| t.trim().trim_start_matches('@').to_lowercase());
-        let row = sqlx::query_as::<_, (i64, String, String, String, String)>(
-            "SELECT id, chatter_login, category, reasoning, transcript_snapshot \
+        let row = sqlx::query!(
+            "SELECT id AS \"id!\", \
+                    chatter_login AS \"chatter_login!\", \
+                    category AS \"category!\", \
+                    reasoning AS \"reasoning!\", \
+                    transcript_snapshot AS \"transcript_snapshot!\" \
              FROM twitch_scam_guard_verdicts \
              WHERE channel_login = $1 AND verdict = 'scam' \
                AND ($2::text IS NULL OR chatter_login = $2) \
              ORDER BY created_at DESC, id DESC LIMIT 1",
+            channel_login.to_lowercase(),
+            target.as_deref(),
         )
-        .bind(channel_login.to_lowercase())
-        .bind(target.as_deref())
         .fetch_optional(&self.pool)
         .await
         .map_err(|error| error.to_string())?;
-        Ok(row.map(
-            |(id, chatter_login, category, reasoning, transcript_snapshot)| StoredVerdict {
-                id,
-                chatter_login,
-                category,
-                reasoning,
-                transcript_snapshot,
-            },
-        ))
+        Ok(row.map(|row| StoredVerdict {
+            id: row.id,
+            chatter_login: row.chatter_login,
+            category: row.category,
+            reasoning: row.reasoning,
+            transcript_snapshot: row.transcript_snapshot,
+        }))
     }
 
     /// Liefert eine ausführliche, in Twitch-Häppchen gesplittete Erklärung des
@@ -1031,15 +1036,15 @@ impl ScamGuardCommands {
         if chatter_id.is_empty() {
             return false;
         }
-        sqlx::query(
+        sqlx::query!(
             "UPDATE twitch_scam_guard_verdicts SET action_taken = 'overturned' \
              WHERE id = ( \
                SELECT id FROM twitch_scam_guard_verdicts \
                WHERE channel_login = $1 AND chatter_id = $2 AND verdict = 'scam' \
                ORDER BY created_at DESC, id DESC LIMIT 1 )",
+            channel_login.to_lowercase(),
+            chatter_id,
         )
-        .bind(channel_login.to_lowercase())
-        .bind(chatter_id)
         .execute(&self.pool)
         .await
         .map(|result| result.rows_affected() > 0)
@@ -1103,25 +1108,27 @@ impl LearningCorpus {
 }
 
 async fn fetch_samples(pool: &PgPool, actions: &[&str], limit: i64) -> Vec<LearningSample> {
-    sqlx::query_as::<_, (String, String, String)>(
-        "SELECT category, reasoning, transcript_snapshot \
+    let actions_owned: Vec<String> = actions.iter().map(|s| s.to_string()).collect();
+
+    sqlx::query!(
+        "SELECT category AS \"category!\", \
+                reasoning AS \"reasoning!\", \
+                transcript_snapshot AS \"transcript_snapshot!\" \
          FROM twitch_scam_guard_verdicts \
-         WHERE verdict = 'scam' AND action_taken = ANY($1) \
+         WHERE verdict = 'scam' AND action_taken = ANY($1::text[]) \
          ORDER BY created_at DESC, id DESC LIMIT $2",
+        &actions_owned,
+        limit,
     )
-    .bind(actions)
-    .bind(limit)
     .fetch_all(pool)
     .await
     .unwrap_or_default()
     .into_iter()
-    .map(
-        |(category, reasoning, transcript_snapshot)| LearningSample {
-            category,
-            reasoning,
-            transcript_snapshot,
-        },
-    )
+    .map(|row| LearningSample {
+        category: row.category,
+        reasoning: row.reasoning,
+        transcript_snapshot: row.transcript_snapshot,
+    })
     .collect()
 }
 
@@ -1164,14 +1171,14 @@ pub async fn persist_learnings(
     guidance: &str,
     source_count: i32,
 ) -> Result<(), String> {
-    sqlx::query(
+    sqlx::query!(
         "INSERT INTO twitch_scam_guard_learnings (id, guidance, source_count, updated_at) \
          VALUES (TRUE, $1, $2, NOW()) \
          ON CONFLICT (id) DO UPDATE SET guidance = EXCLUDED.guidance, \
            source_count = EXCLUDED.source_count, updated_at = EXCLUDED.updated_at",
+        guidance,
+        source_count,
     )
-    .bind(guidance)
-    .bind(source_count)
     .execute(pool)
     .await
     .map_err(|error| error.to_string())?;
@@ -1181,8 +1188,8 @@ pub async fn persist_learnings(
 /// Lädt die aktuell gültigen Erkenntnisse (oder `None`, solange noch keine
 /// destilliert wurden bzw. leer).
 pub async fn load_learnings(pool: &PgPool) -> Result<Option<String>, String> {
-    sqlx::query_scalar::<_, String>(
-        "SELECT guidance FROM twitch_scam_guard_learnings WHERE id = TRUE",
+    sqlx::query_scalar!(
+        "SELECT guidance AS \"guidance!\" FROM twitch_scam_guard_learnings WHERE id = TRUE",
     )
     .fetch_optional(pool)
     .await
@@ -1276,33 +1283,36 @@ pub async fn load_revoke_target(
     pool: &PgPool,
     verdict_id: i64,
 ) -> Result<Option<RevokeTarget>, String> {
-    let row = sqlx::query_as::<_, (String, String, Option<String>, String)>(
-        "SELECT channel_login, chatter_login, chatter_id, action_taken \
+    let row = sqlx::query!(
+        "SELECT channel_login AS \"channel_login!\", \
+                chatter_login AS \"chatter_login!\", \
+                chatter_id, \
+                action_taken AS \"action_taken!\" \
          FROM twitch_scam_guard_verdicts WHERE id = $1",
+        verdict_id,
     )
-    .bind(verdict_id)
     .fetch_optional(pool)
     .await
     .map_err(|error| error.to_string())?;
-    Ok(
-        row.map(|(channel_login, chatter_login, chatter_id, action_taken)| RevokeTarget {
-            channel_login,
-            chatter_login,
-            chatter_id,
-            action_taken,
-        }),
-    )
+    Ok(row.map(|row| RevokeTarget {
+        channel_login: row.channel_login,
+        chatter_login: row.chatter_login,
+        chatter_id: row.chatter_id,
+        action_taken: row.action_taken,
+    }))
 }
 
 /// Markiert genau dieses Urteil als `overturned` (False-Positive-Spur fürs
 /// Self-Learning). Liefert `true`, wenn eine Zeile aktualisiert wurde.
 pub async fn mark_overturned_by_id(pool: &PgPool, verdict_id: i64) -> Result<bool, String> {
-    sqlx::query("UPDATE twitch_scam_guard_verdicts SET action_taken = 'overturned' WHERE id = $1")
-        .bind(verdict_id)
-        .execute(pool)
-        .await
-        .map(|result| result.rows_affected() > 0)
-        .map_err(|error| error.to_string())
+    sqlx::query!(
+        "UPDATE twitch_scam_guard_verdicts SET action_taken = 'overturned' WHERE id = $1",
+        verdict_id,
+    )
+    .execute(pool)
+    .await
+    .map(|result| result.rows_affected() > 0)
+    .map_err(|error| error.to_string())
 }
 
 /// Nimmt das Urteil `verdict_id` zurück: war es ein echter Ban/Timeout, wird auf
@@ -1410,32 +1420,34 @@ pub async fn load_enforce_target(
     pool: &PgPool,
     verdict_id: i64,
 ) -> Result<Option<EnforceTarget>, String> {
-    let row = sqlx::query_as::<_, (String, String, Option<String>, String, String)>(
-        "SELECT channel_login, chatter_login, chatter_id, action_taken, reasoning \
+    let row = sqlx::query!(
+        "SELECT channel_login AS \"channel_login!\", \
+                chatter_login AS \"chatter_login!\", \
+                chatter_id, \
+                action_taken AS \"action_taken!\", \
+                reasoning AS \"reasoning!\" \
          FROM twitch_scam_guard_verdicts WHERE id = $1",
+        verdict_id,
     )
-    .bind(verdict_id)
     .fetch_optional(pool)
     .await
     .map_err(|error| error.to_string())?;
-    Ok(row.map(
-        |(channel_login, chatter_login, chatter_id, action_taken, reasoning)| EnforceTarget {
-            channel_login,
-            chatter_login,
-            chatter_id,
-            action_taken,
-            reasoning,
-        },
-    ))
+    Ok(row.map(|row| EnforceTarget {
+        channel_login: row.channel_login,
+        chatter_login: row.chatter_login,
+        chatter_id: row.chatter_id,
+        action_taken: row.action_taken,
+        reasoning: row.reasoning,
+    }))
 }
 
 /// Promotet genau einen noch wartenden Vorschlag zum gespeicherten Ban.
 pub async fn mark_banned_by_id(pool: &PgPool, verdict_id: i64) -> Result<bool, String> {
-    sqlx::query(
+    sqlx::query!(
         "UPDATE twitch_scam_guard_verdicts SET action_taken = 'banned' \
          WHERE id = $1 AND action_taken = 'suggested'",
+        verdict_id,
     )
-    .bind(verdict_id)
     .execute(pool)
     .await
     .map(|result| result.rows_affected() > 0)

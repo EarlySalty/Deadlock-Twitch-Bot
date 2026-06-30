@@ -1,0 +1,64 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n            SELECT work_id AS \"work_id!\", work_type AS \"work_type!\", message_id,\n                   payload_json AS \"payload_json!\", queued_at AS \"queued_at!\",\n                   dead_lettered_at AS \"dead_lettered_at!\",\n                   attempt_count AS \"attempt_count!\", last_error\n              FROM twitch_eventsub_processing_dead_letter\n             ORDER BY dead_lettered_at DESC\n             LIMIT $1\n            ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "work_id!",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 1,
+        "name": "work_type!",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 2,
+        "name": "message_id",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 3,
+        "name": "payload_json!",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 4,
+        "name": "queued_at!",
+        "type_info": "Float8"
+      },
+      {
+        "ordinal": 5,
+        "name": "dead_lettered_at!",
+        "type_info": "Float8"
+      },
+      {
+        "ordinal": 6,
+        "name": "attempt_count!",
+        "type_info": "Int4"
+      },
+      {
+        "ordinal": 7,
+        "name": "last_error",
+        "type_info": "Text"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Int8"
+      ]
+    },
+    "nullable": [
+      false,
+      false,
+      true,
+      false,
+      false,
+      false,
+      false,
+      true
+    ]
+  },
+  "hash": "eba9d9a34c81bd01013bd2f9244e6c2640377744249cd737150ff76cf34ecee7"
+}

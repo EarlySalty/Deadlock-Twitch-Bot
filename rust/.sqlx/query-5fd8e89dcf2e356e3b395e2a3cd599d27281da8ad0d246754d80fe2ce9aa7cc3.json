@@ -1,0 +1,14 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "DELETE FROM twitch_streamers WHERE LOWER(twitch_login) = LOWER($1) AND NOT EXISTS ( SELECT 1 FROM twitch_partners p WHERE p.twitch_user_id = twitch_streamers.twitch_user_id OR LOWER(p.twitch_login) = LOWER(twitch_streamers.twitch_login) )",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Text"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "5fd8e89dcf2e356e3b395e2a3cd599d27281da8ad0d246754d80fe2ce9aa7cc3"
+}

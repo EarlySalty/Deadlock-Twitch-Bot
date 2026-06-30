@@ -79,18 +79,19 @@ pub struct LiveStatus {
 }
 
 pub async fn resolve_discord_id(pool: &PgPool, twitch_user_id: &str) -> Option<String> {
-    let row: Option<(Option<String>,)> = sqlx::query_as(
+    let discord_user_id = sqlx::query_scalar!(
         "SELECT discord_user_id \
          FROM twitch_streamer_identities \
          WHERE twitch_user_id = $1",
+        twitch_user_id,
     )
-    .bind(twitch_user_id)
     .fetch_optional(pool)
     .await
     .ok()
     .flatten();
 
-    row.and_then(|(discord_user_id,)| discord_user_id)
+    discord_user_id
+        .flatten()
         .map(|discord_user_id| discord_user_id.trim().to_string())
         .filter(|discord_user_id| !discord_user_id.is_empty())
 }

@@ -1,0 +1,35 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT COALESCE(messages, 0) AS \"messages!\", is_first_time_streamer, COALESCE(seen_via_chatters_api, FALSE) AS \"seen_via_chatters_api!\" FROM twitch_session_chatters WHERE session_id = $1 AND chatter_login = $2",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "messages!",
+        "type_info": "Int4"
+      },
+      {
+        "ordinal": 1,
+        "name": "is_first_time_streamer",
+        "type_info": "Bool"
+      },
+      {
+        "ordinal": 2,
+        "name": "seen_via_chatters_api!",
+        "type_info": "Bool"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Int8",
+        "Text"
+      ]
+    },
+    "nullable": [
+      null,
+      true,
+      null
+    ]
+  },
+  "hash": "43c9327504c9a5b09c1fa3931b793a3d697682f40f28e0274e284210e926c61b"
+}

@@ -1,0 +1,30 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "INSERT INTO twitch_scam_guard_verdicts (channel_login, chatter_login, chatter_id, verdict, confidence, category, reasoning, transcript_snapshot, action_taken) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9) RETURNING id AS \"id!\"",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id!",
+        "type_info": "Int8"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Text",
+        "Text",
+        "Text",
+        "Text",
+        "Float4",
+        "Text",
+        "Text",
+        "Text",
+        "Text"
+      ]
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "acfc3e078b09759511c69a5b05e413d45df9b2f920e32962ac47c5bcc741267e"
+}

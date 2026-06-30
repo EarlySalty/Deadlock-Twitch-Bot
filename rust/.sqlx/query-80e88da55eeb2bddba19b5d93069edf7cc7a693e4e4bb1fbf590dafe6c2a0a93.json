@@ -1,0 +1,28 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT ra.needs_reauth, NULLIF(ls.last_stream_id, '') AS \"last_stream_id?\" FROM twitch_raid_auth ra LEFT JOIN twitch_live_state ls ON ls.twitch_user_id = ra.twitch_user_id WHERE ra.twitch_user_id = $1",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "needs_reauth",
+        "type_info": "Bool"
+      },
+      {
+        "ordinal": 1,
+        "name": "last_stream_id?",
+        "type_info": "Text"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Text"
+      ]
+    },
+    "nullable": [
+      true,
+      null
+    ]
+  },
+  "hash": "80e88da55eeb2bddba19b5d93069edf7cc7a693e4e4bb1fbf590dafe6c2a0a93"
+}

@@ -1,0 +1,46 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT strengths, weaknesses, patterns, recommendations, generated_at AS \"generated_at?\" FROM title_generator_insights WHERE streamer_id = $1 ORDER BY generated_at DESC LIMIT 1",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "strengths",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 1,
+        "name": "weaknesses",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 2,
+        "name": "patterns",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 3,
+        "name": "recommendations",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 4,
+        "name": "generated_at?",
+        "type_info": "Timestamptz"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Text"
+      ]
+    },
+    "nullable": [
+      true,
+      true,
+      true,
+      true,
+      false
+    ]
+  },
+  "hash": "e17453e3ddd8071f80aa4d4d851233b2295087e59c23d53d9e1b38f5031f74e9"
+}

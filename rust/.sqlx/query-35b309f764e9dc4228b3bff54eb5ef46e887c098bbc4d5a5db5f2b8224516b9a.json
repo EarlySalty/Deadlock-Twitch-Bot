@@ -1,0 +1,33 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n            UPDATE twitch_stream_sessions\n               SET ended_at = $1::text::timestamptz,\n                   duration_seconds = $2,\n                   end_viewers = $3,\n                   peak_viewers = $4,\n                   avg_viewers = $5,\n                   samples = $6,\n                   retention_5m = $7,\n                   retention_10m = $8,\n                   retention_20m = $9,\n                   dropoff_pct = $10,\n                   dropoff_label = $11,\n                   unique_chatters = $12,\n                   first_time_chatters = $13,\n                   returning_chatters = $14,\n                   followers_end = $15,\n                   follower_delta = $16,\n                   notes = $17,\n                   had_deadlock_in_session = $18,\n                   game_name = COALESCE(game_name, $19)\n             WHERE id = $20 AND ended_at IS NULL\n            ",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Text",
+        "Int4",
+        "Int4",
+        "Int4",
+        "Float8",
+        "Int4",
+        "Float8",
+        "Float8",
+        "Float8",
+        "Float8",
+        "Text",
+        "Int4",
+        "Int4",
+        "Int4",
+        "Int4",
+        "Int4",
+        "Text",
+        "Bool",
+        "Text",
+        "Int8"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "35b309f764e9dc4228b3bff54eb5ef46e887c098bbc4d5a5db5f2b8224516b9a"
+}

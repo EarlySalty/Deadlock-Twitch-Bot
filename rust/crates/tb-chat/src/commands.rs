@@ -528,16 +528,19 @@ impl CommandEngine {
     /// - `raid_bot_enabled` = integer
     async fn get_partner(&self, channel_login: &str) -> Option<PartnerRow> {
         let normalized = Self::normalize_channel_login(channel_login);
-        sqlx::query_as::<_, PartnerRow>(
+        sqlx::query_as!(
+            PartnerRow,
             r#"
-            SELECT twitch_login, twitch_user_id, raid_bot_enabled
+            SELECT twitch_login AS "twitch_login!",
+                   twitch_user_id AS "twitch_user_id!",
+                   COALESCE(raid_bot_enabled, 0) AS "raid_bot_enabled!"
             FROM twitch_streamers_partner_state
             WHERE LOWER(twitch_login) = $1
               AND is_partner_active = 1
             LIMIT 1
             "#,
+            normalized,
         )
-        .bind(normalized)
         .fetch_optional(&self.pool)
         .await
         .unwrap_or(None)
@@ -549,9 +552,9 @@ impl CommandEngine {
     /// Partner — anders als `get_partner`, das `is_monitored_only` nicht prüft.
     async fn is_partner_channel(&self, channel_login: &str) -> bool {
         let normalized = Self::normalize_channel_login(channel_login);
-        let row = sqlx::query_as::<_, (i64,)>(
+        let row = sqlx::query_scalar!(
             r#"
-            SELECT COUNT(*)
+            SELECT COUNT(*) AS "count!"
             FROM twitch_streamers_partner_state ps
             WHERE LOWER(ps.twitch_login) = $1
               AND ps.is_partner_active = 1
@@ -562,14 +565,14 @@ impl CommandEngine {
                         SELECT 1 FROM twitch_partners pp
                         WHERE pp.twitch_user_id = s.twitch_user_id
                            OR LOWER(pp.twitch_login) = LOWER(s.twitch_login)
-                    )
+                  )
               )
             "#,
+            normalized,
         )
-        .bind(normalized)
         .fetch_one(&self.pool)
         .await;
-        matches!(row, Ok((n,)) if n > 0)
+        matches!(row, Ok(n) if n > 0)
     }
 
     /// `analytics/legacy_token.py:14` — `needs_reauth == FALSE` → vollständig
@@ -577,28 +580,28 @@ impl CommandEngine {
     ///
     /// Prod-Schema: `twitch_raid_auth.needs_reauth` = boolean
     async fn is_fully_authed(&self, twitch_user_id: &str) -> bool {
-        let row = sqlx::query_as::<_, (Option<bool>,)>(
+        let row = sqlx::query_scalar!(
             "SELECT needs_reauth FROM twitch_raid_auth WHERE twitch_user_id = $1",
+            twitch_user_id,
         )
-        .bind(twitch_user_id)
         .fetch_optional(&self.pool)
         .await;
         match row {
-            Ok(Some((needs_reauth,))) => needs_reauth == Some(false),
+            Ok(Some(needs_reauth)) => needs_reauth == Some(false),
             _ => false,
         }
     }
 
     /// `commands.py:640` / `has_enabled_auth` — `raid_enabled == TRUE`.
     async fn raid_enabled(&self, twitch_user_id: &str) -> Option<bool> {
-        let row = sqlx::query_as::<_, (Option<bool>,)>(
+        let row = sqlx::query_scalar!(
             "SELECT raid_enabled FROM twitch_raid_auth WHERE twitch_user_id = $1",
+            twitch_user_id,
         )
-        .bind(twitch_user_id)
         .fetch_optional(&self.pool)
         .await;
         match row {
-            Ok(Some((raid_enabled,))) => raid_enabled,
+            Ok(Some(raid_enabled)) => raid_enabled,
             _ => None,
         }
     }
@@ -814,18 +817,18 @@ impl CommandEngine {
             // Streamer-Existenz + discord_user_id. broadcaster_user_id ist die
             // twitch_user_id des Streamers (= der Kanal). Python sucht über den
             // Login; hier direkt über die schon bekannte ID.
-            let row: Option<(Option<String>,)> = sqlx::query_as(
-                "SELECT discord_user_id::text \
+            let row = sqlx::query!(
+                "SELECT discord_user_id::text AS \"discord_user_id?\" \
                  FROM twitch_streamer_identities \
                  WHERE twitch_user_id = $1 \
                  LIMIT 1",
+                &streamer_id,
             )
-            .bind(&streamer_id)
             .fetch_optional(&pool)
             .await
             .ok()
             .flatten();
-            let Some((discord_raw,)) = row else {
+            let Some(row) = row else {
                 let _ = api
                     .send_message(
                         &streamer_id,
@@ -834,7 +837,9 @@ impl CommandEngine {
                     .await;
                 return;
             };
-            let discord_id = discord_raw.and_then(|s| s.trim().parse::<i64>().ok());
+            let discord_id = row
+                .discord_user_id
+                .and_then(|s| s.trim().parse::<i64>().ok());
 
             // title_db: History + eigener AVG + Community-Knowledge.
             let history =
@@ -964,16 +969,20 @@ impl CommandEngine {
             success: Option<bool>,
         }
 
-        let rows = sqlx::query_as::<_, RaidRow>(
+        let rows = sqlx::query_as!(
+            RaidRow,
             r#"
-            SELECT to_broadcaster_login, viewer_count, executed_at, success
+            SELECT to_broadcaster_login AS "to_broadcaster_login?",
+                   viewer_count,
+                   executed_at AS "executed_at?",
+                   success
             FROM twitch_raid_history
             WHERE from_broadcaster_id = $1
             ORDER BY executed_at DESC
             LIMIT 3
             "#,
+            &partner.twitch_user_id,
         )
-        .bind(&partner.twitch_user_id)
         .fetch_all(&self.pool)
         .await
         .unwrap_or_default();
@@ -1337,11 +1346,11 @@ impl CommandEngine {
 
         // Schreibpfad — commands.py:585: lurker_tax_enabled = 0. Vorzustand für die
         // Antwort prüfen (war sie überhaupt an?).
-        let was_enabled: bool = sqlx::query_scalar::<_, Option<i32>>(
-            "SELECT lurker_tax_enabled FROM streamer_plans
+        let was_enabled: bool = sqlx::query_scalar!(
+            "SELECT lurker_tax_enabled AS \"lurker_tax_enabled?\" FROM streamer_plans
               WHERE LOWER(COALESCE(twitch_login, '')) = LOWER($1) LIMIT 1",
+            &partner.twitch_login,
         )
-        .bind(&partner.twitch_login)
         .fetch_optional(&self.pool)
         .await
         .ok()
@@ -1350,12 +1359,12 @@ impl CommandEngine {
         .map(|v| v != 0)
         .unwrap_or(false);
 
-        let updated = sqlx::query(
+        let updated = sqlx::query!(
             "UPDATE streamer_plans
                 SET lurker_tax_enabled = 0
               WHERE LOWER(COALESCE(twitch_login, '')) = LOWER($1)",
+            &partner.twitch_login,
         )
-        .bind(&partner.twitch_login)
         .execute(&self.pool)
         .await;
 
@@ -1560,10 +1569,10 @@ impl CommandEngine {
     async fn cmd_engagement_status(&self, event: &ChatMessageEvent) {
         let channel_login = event.broadcaster_user_login.to_lowercase();
 
-        let settings_row = sqlx::query_as::<_, (bool,)>(
+        let settings_row = sqlx::query_scalar!(
             "SELECT enabled FROM twitch_engagement_settings WHERE channel_login = $1",
+            &channel_login,
         )
-        .bind(&channel_login)
         .fetch_optional(&self.pool)
         .await
         .unwrap_or(None);
@@ -1577,7 +1586,7 @@ impl CommandEngine {
                 .await;
                 return;
             }
-            Some((v,)) => v,
+            Some(v) => v,
         };
 
         let status_str = if enabled { "AN" } else { "AUS" };
@@ -1590,16 +1599,17 @@ impl CommandEngine {
             ts: Option<DateTime<Utc>>,
         }
 
-        let log_row = sqlx::query_as::<_, LogRow>(
+        let log_row = sqlx::query_as!(
+            LogRow,
             r#"
-            SELECT decision, response_text, ts
+            SELECT decision AS "decision?", response_text, ts AS "ts?"
             FROM twitch_engagement_log
             WHERE channel_login = $1
             ORDER BY ts DESC
             LIMIT 1
             "#,
+            &channel_login,
         )
-        .bind(&channel_login)
         .fetch_optional(&self.pool)
         .await
         .unwrap_or(None);
@@ -1637,14 +1647,14 @@ impl CommandEngine {
             return;
         }
 
-        let result = sqlx::query(
+        let result = sqlx::query!(
             r#"
             INSERT INTO twitch_user_engagement_optout (twitch_user_id)
             VALUES ($1)
             ON CONFLICT (twitch_user_id) DO NOTHING
             "#,
+            user_id.as_str(),
         )
-        .bind(user_id.as_str())
         .execute(&self.pool)
         .await;
 
@@ -1673,11 +1683,12 @@ impl CommandEngine {
             return;
         }
 
-        let result =
-            sqlx::query("DELETE FROM twitch_user_engagement_optout WHERE twitch_user_id = $1")
-                .bind(user_id.as_str())
-                .execute(&self.pool)
-                .await;
+        let result = sqlx::query!(
+            "DELETE FROM twitch_user_engagement_optout WHERE twitch_user_id = $1",
+            user_id.as_str(),
+        )
+        .execute(&self.pool)
+        .await;
 
         match result {
             Ok(_) => {

@@ -31,10 +31,10 @@ pub struct KnowledgeTitle {
 /// Löst den `twitch_login` zu einer `twitch_user_id` auf (Python
 /// `_resolve_streamer_login_for_user_id`): leerer/fehlender Treffer → `None`.
 async fn resolve_streamer_login(pool: &PgPool, streamer_id: &str) -> Option<String> {
-    let login: Option<String> = sqlx::query_scalar(
+    let login: Option<String> = sqlx::query_scalar!(
         "SELECT twitch_login FROM twitch_streamers WHERE twitch_user_id = $1 LIMIT 1",
+        streamer_id,
     )
-    .bind(streamer_id)
     .fetch_optional(pool)
     .await
     .ok()
@@ -55,33 +55,33 @@ pub async fn get_streamer_title_history(
     let Some(login) = resolve_streamer_login(pool, streamer_id).await else {
         return Vec::new();
     };
-    let rows = sqlx::query_as::<_, (String, Option<f64>, Option<i64>, Option<i64>, Option<DateTime<Utc>>)>(
+    let rows = sqlx::query!(
         "SELECT \
-             s.stream_title, \
-             s.avg_viewers::float8, \
-             s.peak_viewers::int8, \
-             s.followers_start::int8, \
-             s.started_at \
+             s.stream_title AS \"stream_title!\", \
+             s.avg_viewers::float8 AS avg_viewers, \
+             s.peak_viewers::int8 AS peak_viewers, \
+             s.followers_start::int8 AS followers_start, \
+             s.started_at AS \"started_at?\" \
          FROM twitch_stream_sessions s \
          WHERE LOWER(s.streamer_login) = $1 \
            AND s.stream_title IS NOT NULL \
            AND s.stream_title != '' \
          ORDER BY s.started_at DESC \
          LIMIT $2",
+        &login,
+        limit,
     )
-    .bind(&login)
-    .bind(limit)
     .fetch_all(pool)
     .await;
     match rows {
         Ok(rows) => rows
             .into_iter()
-            .map(|(title, avg_viewers, peak_viewers, followers_start, started_at)| TitleHistoryItem {
-                title,
-                avg_viewers,
-                peak_viewers,
-                followers_start,
-                started_at,
+            .map(|row| TitleHistoryItem {
+                title: row.stream_title,
+                avg_viewers: row.avg_viewers,
+                peak_viewers: row.peak_viewers,
+                followers_start: row.followers_start,
+                started_at: row.started_at,
             })
             .collect(),
         Err(error) => {
@@ -97,11 +97,11 @@ pub async fn get_streamer_avg_viewers(pool: &PgPool, streamer_id: &str) -> f64 {
     let Some(login) = resolve_streamer_login(pool, streamer_id).await else {
         return 0.0;
     };
-    sqlx::query_scalar::<_, Option<f64>>(
-        "SELECT AVG(avg_viewers)::float8 FROM twitch_stream_sessions \
+    sqlx::query_scalar!(
+        "SELECT AVG(avg_viewers)::float8 AS avg_viewers FROM twitch_stream_sessions \
          WHERE LOWER(streamer_login) = $1 AND avg_viewers IS NOT NULL",
+        &login,
     )
-    .bind(&login)
     .fetch_one(pool)
     .await
     .ok()
@@ -113,24 +113,27 @@ pub async fn get_streamer_avg_viewers(pool: &PgPool, streamer_id: &str) -> f64 {
 /// `get_top_knowledge_titles`), gefiltert auf `game_context = 'deadlock'`.
 /// Query-Fehler (z. B. fehlende Tabelle) → leere Liste.
 pub async fn get_top_knowledge_titles(pool: &PgPool, limit: i64) -> Vec<KnowledgeTitle> {
-    let rows = sqlx::query_as::<_, (String, Option<f64>, Option<Vec<String>>, Option<i32>)>(
-        "SELECT title, normalized_score::float8, keywords, quality_tier::int4 \
+    let rows = sqlx::query!(
+        "SELECT title AS \"title!\", \
+                normalized_score::float8 AS \"normalized_score?\", \
+                keywords, \
+                quality_tier::int4 AS \"quality_tier?\" \
          FROM title_generator_knowledge \
          WHERE game_context = 'deadlock' \
          ORDER BY normalized_score DESC \
          LIMIT $1",
+        limit,
     )
-    .bind(limit)
     .fetch_all(pool)
     .await;
     match rows {
         Ok(rows) => rows
             .into_iter()
-            .map(|(title, normalized_score, keywords, quality_tier)| KnowledgeTitle {
-                title,
-                normalized_score,
-                keywords: keywords.unwrap_or_default(),
-                quality_tier,
+            .map(|row| KnowledgeTitle {
+                title: row.title,
+                normalized_score: row.normalized_score,
+                keywords: row.keywords.unwrap_or_default(),
+                quality_tier: row.quality_tier,
             })
             .collect(),
         Err(error) => {
@@ -150,10 +153,10 @@ pub async fn get_streamer_session_count(pool: &PgPool, streamer_id: &str) -> i64
     let Some(login) = resolve_streamer_login(pool, streamer_id).await else {
         return 0;
     };
-    sqlx::query_scalar::<_, i64>(
-        "SELECT COUNT(*)::int8 FROM twitch_stream_sessions WHERE LOWER(streamer_login) = $1",
+    sqlx::query_scalar!(
+        "SELECT COUNT(*)::int8 AS \"count!\" FROM twitch_stream_sessions WHERE LOWER(streamer_login) = $1",
+        &login,
     )
-    .bind(&login)
     .fetch_one(pool)
     .await
     .unwrap_or(0)
@@ -176,7 +179,7 @@ pub async fn upsert_knowledge_entry(
     streamer_size: &str,
     source_streamer: &str,
 ) -> Result<(), sqlx::Error> {
-    sqlx::query(
+    sqlx::query!(
         "INSERT INTO title_generator_knowledge \
          (title, keywords, relative_perf, engagement_rate, history_weight, \
           normalized_score, streamer_size, source_streamer) \
@@ -187,15 +190,15 @@ pub async fn upsert_knowledge_entry(
              quality_tier = CASE WHEN EXCLUDED.normalized_score > 2.0 THEN 3 \
                                  WHEN EXCLUDED.normalized_score > 1.5 THEN 2 \
                                  ELSE 1 END",
+        title,
+        keywords,
+        relative_perf,
+        engagement_rate,
+        history_weight,
+        normalized_score,
+        streamer_size,
+        source_streamer,
     )
-    .bind(title)
-    .bind(keywords)
-    .bind(relative_perf)
-    .bind(engagement_rate)
-    .bind(history_weight)
-    .bind(normalized_score)
-    .bind(streamer_size)
-    .bind(source_streamer)
     .execute(pool)
     .await?;
     Ok(())
@@ -216,20 +219,20 @@ pub async fn insert_insight(
     raw_response: &serde_json::Value,
 ) -> Result<(), sqlx::Error> {
     let raw = serde_json::to_string(raw_response).unwrap_or_else(|_| "{}".to_string());
-    sqlx::query(
+    sqlx::query!(
         "INSERT INTO title_generator_insights \
          (streamer_id, period_start, period_end, strengths, weaknesses, \
           patterns, recommendations, raw_response) \
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8::jsonb)",
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8::text::jsonb)",
+        streamer_id,
+        period_start,
+        period_end,
+        strengths,
+        weaknesses,
+        patterns,
+        recommendations,
+        raw,
     )
-    .bind(streamer_id)
-    .bind(period_start)
-    .bind(period_end)
-    .bind(strengths)
-    .bind(weaknesses)
-    .bind(patterns)
-    .bind(recommendations)
-    .bind(raw)
     .execute(pool)
     .await?;
     Ok(())
@@ -240,29 +243,23 @@ pub async fn get_latest_insight(
     pool: &PgPool,
     streamer_id: &str,
 ) -> Result<Option<serde_json::Value>, sqlx::Error> {
-    let row = sqlx::query_as::<_, (
-        Option<String>,
-        Option<String>,
-        Option<String>,
-        Option<String>,
-        Option<DateTime<Utc>>,
-    )>(
-        "SELECT strengths, weaknesses, patterns, recommendations, generated_at \
+    let row = sqlx::query!(
+        "SELECT strengths, weaknesses, patterns, recommendations, generated_at AS \"generated_at?\" \
          FROM title_generator_insights \
          WHERE streamer_id = $1 \
          ORDER BY generated_at DESC LIMIT 1",
+        streamer_id,
     )
-    .bind(streamer_id)
     .fetch_optional(pool)
     .await?;
 
-    Ok(row.map(|(strengths, weaknesses, patterns, recommendations, generated_at)| {
+    Ok(row.map(|row| {
         serde_json::json!({
-            "strengths": strengths.unwrap_or_default(),
-            "weaknesses": weaknesses.unwrap_or_default(),
-            "patterns": patterns.unwrap_or_default(),
-            "recommendations": recommendations.unwrap_or_default(),
-            "generated_at": generated_at,
+            "strengths": row.strengths.unwrap_or_default(),
+            "weaknesses": row.weaknesses.unwrap_or_default(),
+            "patterns": row.patterns.unwrap_or_default(),
+            "recommendations": row.recommendations.unwrap_or_default(),
+            "generated_at": row.generated_at,
         })
     }))
 }

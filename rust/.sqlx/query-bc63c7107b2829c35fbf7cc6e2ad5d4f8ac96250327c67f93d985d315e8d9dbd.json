@@ -1,0 +1,15 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "UPDATE twitch_session_chatters\n                SET confirmed_first_ever = TRUE\n              WHERE chatter_login = $1\n                AND session_id = (\n                    SELECT id FROM twitch_stream_sessions\n                     WHERE streamer_login = $2 AND ended_at IS NULL\n                     ORDER BY started_at DESC\n                     LIMIT 1\n                )",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Text",
+        "Text"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "bc63c7107b2829c35fbf7cc6e2ad5d4f8ac96250327c67f93d985d315e8d9dbd"
+}

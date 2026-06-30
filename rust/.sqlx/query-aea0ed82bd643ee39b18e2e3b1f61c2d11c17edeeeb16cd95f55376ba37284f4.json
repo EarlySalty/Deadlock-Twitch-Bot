@@ -1,0 +1,22 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT id::bigint AS \"id!\" FROM twitch_stream_sessions WHERE streamer_login = $1 AND ended_at IS NULL ORDER BY started_at DESC LIMIT 1",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id!",
+        "type_info": "Int8"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Text"
+      ]
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "aea0ed82bd643ee39b18e2e3b1f61c2d11c17edeeeb16cd95f55376ba37284f4"
+}

@@ -1,0 +1,19 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "INSERT INTO twitch_session_chatters (session_id, streamer_login, chatter_login, chatter_id, first_message_at, messages, is_first_time_streamer, seen_via_chatters_api, last_seen_at) VALUES ($1, $2, $3, $4, $5, 0, $6, TRUE, $5) ON CONFLICT (session_id, chatter_login) DO UPDATE SET last_seen_at = EXCLUDED.last_seen_at",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Int8",
+        "Text",
+        "Text",
+        "Text",
+        "Timestamptz",
+        "Bool"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "13f87a928b9b132d6f82f663475184f04bd26c2ae5971bd41bb7e89879e8275e"
+}

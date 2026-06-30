@@ -1,0 +1,15 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n                        DELETE FROM twitch_live_state\n                         WHERE LOWER(streamer_login) = LOWER($1)\n                           AND LOWER(COALESCE(twitch_user_id, '')) <> LOWER($2)\n                        ",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Text",
+        "Text"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "f5eae3b54aa958b0aa7cba0ac50db76ed8de5b07067de93aec6383cb0bc3acb4"
+}

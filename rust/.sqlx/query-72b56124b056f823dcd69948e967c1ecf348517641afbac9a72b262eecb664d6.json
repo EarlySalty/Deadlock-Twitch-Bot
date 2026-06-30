@@ -1,0 +1,16 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "UPDATE twitch_live_state\n                SET last_title = COALESCE($1, last_title),\n                    last_game  = COALESCE($2, last_game)\n              WHERE twitch_user_id = $3 AND is_live = 1",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Text",
+        "Text",
+        "Text"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "72b56124b056f823dcd69948e967c1ecf348517641afbac9a72b262eecb664d6"
+}

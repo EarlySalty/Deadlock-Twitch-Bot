@@ -1,0 +1,54 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT target_login, target_id, source, reason_code, reason_detail, suppressed_until\n               FROM twitch_outbound_chat_suppressions\n               WHERE target_login = $1 AND source = $2 AND suppressed_until > $3\n               LIMIT 1",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "target_login",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 1,
+        "name": "target_id",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 2,
+        "name": "source",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 3,
+        "name": "reason_code",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 4,
+        "name": "reason_detail",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 5,
+        "name": "suppressed_until",
+        "type_info": "Timestamptz"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Text",
+        "Text",
+        "Timestamptz"
+      ]
+    },
+    "nullable": [
+      false,
+      true,
+      false,
+      false,
+      true,
+      false
+    ]
+  },
+  "hash": "038484baceb7ad411c2ea8e75086cd3717486a501cb0b2408df20ac6c2c73b1b"
+}

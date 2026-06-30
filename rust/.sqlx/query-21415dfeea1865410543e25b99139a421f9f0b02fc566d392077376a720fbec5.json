@@ -1,0 +1,21 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "INSERT INTO twitch_outbound_chat_suppressions\n               (target_login, source, target_id, reason_code, reason_detail,\n                suppressed_until, created_at, updated_at)\n               VALUES ($1, $2, $3, $4, $5, $6, $7, $8)\n               ON CONFLICT (target_login, source) DO UPDATE SET\n                   target_id = COALESCE(EXCLUDED.target_id, twitch_outbound_chat_suppressions.target_id),\n                   reason_code = EXCLUDED.reason_code,\n                   reason_detail = EXCLUDED.reason_detail,\n                   suppressed_until = EXCLUDED.suppressed_until,\n                   updated_at = EXCLUDED.updated_at",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Text",
+        "Text",
+        "Text",
+        "Text",
+        "Text",
+        "Timestamptz",
+        "Timestamptz",
+        "Timestamptz"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "21415dfeea1865410543e25b99139a421f9f0b02fc566d392077376a720fbec5"
+}

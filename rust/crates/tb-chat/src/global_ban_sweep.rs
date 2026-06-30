@@ -332,9 +332,10 @@ fn build_reason(custom_reason: Option<&str>) -> String {
 /// Alle Einträge in `twitch_chatter_global_ban`, neueste zuerst.
 /// `pg.py:4217` — `list_chatter_global_bans`.
 async fn list_bans(pool: &PgPool) -> Vec<BanEntry> {
-    sqlx::query_as(
+    sqlx::query_as!(
+        BanEntry,
         r#"
-        SELECT chatter_login, chatter_id, reason
+        SELECT chatter_login AS "chatter_login!", chatter_id, reason
           FROM twitch_chatter_global_ban
          ORDER BY added_at DESC
         "#,
@@ -350,8 +351,10 @@ async fn list_bans(pool: &PgPool) -> Vec<BanEntry> {
 /// Lädt alle (chatter_login, broadcaster_id)-Paare aus dem Applied-Ledger.
 /// `pg.py:4270` — `load_applied_global_ban_pairs`.
 async fn load_applied_pairs(pool: &PgPool) -> HashSet<(String, String)> {
-    let rows: Vec<(String, String)> = sqlx::query_as(
-        "SELECT chatter_login, broadcaster_id FROM twitch_chatter_global_ban_applied",
+    let rows = sqlx::query!(
+        "SELECT chatter_login AS \"chatter_login!\", \
+                broadcaster_id AS \"broadcaster_id!\" \
+         FROM twitch_chatter_global_ban_applied",
     )
     .fetch_all(pool)
     .await
@@ -361,21 +364,21 @@ async fn load_applied_pairs(pool: &PgPool) -> HashSet<(String, String)> {
     });
 
     rows.into_iter()
-        .map(|(l, b)| (l.to_lowercase(), b))
+        .map(|row| (row.chatter_login.to_lowercase(), row.broadcaster_id))
         .collect()
 }
 
 /// Schreibt Ban-Anwendung in den Applied-Ledger. `pg.py:4257`.
 async fn record_applied(pool: &PgPool, chatter_login: &str, broadcaster_id: &str) {
-    let result = sqlx::query(
+    let result = sqlx::query!(
         r#"
         INSERT INTO twitch_chatter_global_ban_applied (chatter_login, broadcaster_id)
         VALUES ($1, $2)
         ON CONFLICT (chatter_login, broadcaster_id) DO NOTHING
         "#,
+        chatter_login.to_lowercase(),
+        broadcaster_id,
     )
-    .bind(chatter_login.to_lowercase())
-    .bind(broadcaster_id)
     .execute(pool)
     .await;
 
@@ -386,9 +389,10 @@ async fn record_applied(pool: &PgPool, chatter_login: &str, broadcaster_id: &str
 
 /// Lädt fällige Sweep-Einträge (`run_after <= NOW()`). `pg.py:4305`.
 async fn load_due_sweeps(pool: &PgPool) -> Vec<(String, String)> {
-    sqlx::query_as(
+    sqlx::query!(
         r#"
-        SELECT broadcaster_login, broadcaster_id
+        SELECT broadcaster_login AS "broadcaster_login!",
+               broadcaster_id AS "broadcaster_id!"
           FROM twitch_global_ban_sweep_due
          WHERE run_after <= NOW()
         "#,
@@ -399,14 +403,17 @@ async fn load_due_sweeps(pool: &PgPool) -> Vec<(String, String)> {
         tracing::debug!("GlobalBanSweep: load_due_sweeps fehlgeschlagen: {e}");
         vec![]
     })
+    .into_iter()
+    .map(|row| (row.broadcaster_login, row.broadcaster_id))
+    .collect()
 }
 
 /// Löscht einen fälligen Sweep-Eintrag. `pg.py:4323`.
 async fn delete_sweep_due(pool: &PgPool, broadcaster_login: &str) {
-    let result = sqlx::query(
+    let result = sqlx::query!(
         "DELETE FROM twitch_global_ban_sweep_due WHERE broadcaster_login = $1",
+        broadcaster_login.to_lowercase(),
     )
-    .bind(broadcaster_login.to_lowercase())
     .execute(pool)
     .await;
 
@@ -424,16 +431,16 @@ async fn delete_sweep_due(pool: &PgPool, broadcaster_login: &str) {
 /// Helix-Call) und das Matching numerisch statt über den veränderlichen Login
 /// läuft (Grillme `ban-sweep-lurker-01` — „behalten, robusteres Matching").
 async fn write_back_chatter_id(pool: &PgPool, login: &str, chatter_id: &str) {
-    let result = sqlx::query(
+    let result = sqlx::query!(
         r#"
         UPDATE twitch_chatter_global_ban
            SET chatter_id = $2
          WHERE chatter_login = $1
            AND chatter_id IS NULL
         "#,
+        login,
+        chatter_id,
     )
-    .bind(login)
-    .bind(chatter_id)
     .execute(pool)
     .await;
 

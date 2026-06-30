@@ -1,0 +1,18 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "UPDATE twitch_session_chatters SET messages               = messages + 1, last_seen_at           = $1, seen_via_chatters_api  = FALSE, is_first_time_streamer = $2, chatter_id             = COALESCE(chatter_id, $3) WHERE session_id = $4 AND chatter_login = $5",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Timestamptz",
+        "Bool",
+        "Text",
+        "Int8",
+        "Text"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "ffd270cb405109b5a5979a6a8634a88f8499ca3ae098592f3774515a7a4cd220"
+}

@@ -1,0 +1,40 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n            SELECT started_at AS \"started_at!\", samples, avg_viewers, peak_viewers\n              FROM exp_sessions WHERE id = $1\n            ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "started_at!",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 1,
+        "name": "samples",
+        "type_info": "Int4"
+      },
+      {
+        "ordinal": 2,
+        "name": "avg_viewers",
+        "type_info": "Float4"
+      },
+      {
+        "ordinal": 3,
+        "name": "peak_viewers",
+        "type_info": "Int4"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Int8"
+      ]
+    },
+    "nullable": [
+      false,
+      true,
+      true,
+      true
+    ]
+  },
+  "hash": "528dcb5ece3fb5c747f465b22eefe924a13a6354f9a1edefdaedcec8d246a9d1"
+}

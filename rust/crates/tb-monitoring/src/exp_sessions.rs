@@ -28,10 +28,10 @@ impl ExpSessionStore {
     }
 
     async fn find_open_by_stream_id(&self, stream_id: &str) -> Result<Option<i64>, sqlx::Error> {
-        sqlx::query_scalar(
+        sqlx::query_scalar!(
             "SELECT id FROM exp_sessions WHERE stream_id = $1 AND ended_at IS NULL LIMIT 1",
+            stream_id,
         )
-        .bind(stream_id)
         .fetch_optional(&self.pool)
         .await
     }
@@ -48,7 +48,7 @@ impl ExpSessionStore {
         stream_title: Option<&str>,
         viewer_count: i32,
     ) -> Result<Option<i64>, sqlx::Error> {
-        let inserted: Option<i64> = sqlx::query_scalar(
+        let inserted: Option<i64> = sqlx::query_scalar!(
             r#"
             INSERT INTO exp_sessions (
                 streamer, stream_id, started_at, game_name, stream_title,
@@ -57,14 +57,14 @@ impl ExpSessionStore {
             ON CONFLICT (stream_id) WHERE stream_id IS NOT NULL DO NOTHING
             RETURNING id
             "#,
+            login,
+            stream_id,
+            started_at_text,
+            game_name,
+            stream_title,
+            viewer_count,
+            viewer_count as f32,
         )
-        .bind(login)
-        .bind(stream_id)
-        .bind(started_at_text)
-        .bind(game_name)
-        .bind(stream_title)
-        .bind(viewer_count)
-        .bind(viewer_count as f32)
         .fetch_optional(&self.pool)
         .await?;
         if inserted.is_some() {
@@ -90,11 +90,14 @@ impl ExpSessionStore {
             peak_viewers: Option<i32>,
         }
         let mut tx = self.pool.begin().await?;
-        let row: Option<AggregateRow> = sqlx::query_as(
-            "SELECT started_at, samples, avg_viewers, peak_viewers
-               FROM exp_sessions WHERE id = $1",
+        let row: Option<AggregateRow> = sqlx::query_as!(
+            AggregateRow,
+            r#"
+            SELECT started_at AS "started_at!", samples, avg_viewers, peak_viewers
+              FROM exp_sessions WHERE id = $1
+            "#,
+            exp_session_id,
         )
-        .bind(exp_session_id)
         .fetch_optional(&mut *tx)
         .await?;
         let Some(AggregateRow {
@@ -110,18 +113,18 @@ impl ExpSessionStore {
         let minutes_from_start =
             (((now - start).num_seconds().max(0) as f64 / 60.0) * 100.0).round() as f32 / 100.0;
 
-        let inserted: Option<i64> = sqlx::query_scalar(
+        let inserted: Option<i64> = sqlx::query_scalar!(
             r#"
             INSERT INTO exp_snapshots (exp_session_id, ts_utc, viewer_count, minutes_from_start)
             VALUES ($1, $2, $3, $4)
             ON CONFLICT (exp_session_id, ts_utc) DO NOTHING
             RETURNING id
             "#,
+            exp_session_id,
+            iso_seconds(now),
+            viewer_count,
+            minutes_from_start,
         )
-        .bind(exp_session_id)
-        .bind(iso_seconds(now))
-        .bind(viewer_count)
-        .bind(minutes_from_start)
         .fetch_optional(&mut *tx)
         .await?;
         if inserted.is_none() {
@@ -136,13 +139,13 @@ impl ExpSessionStore {
             + f64::from(viewer_count))
             / f64::from(new_samples.max(1));
         let new_peak = peak_prev.unwrap_or(0).max(viewer_count);
-        sqlx::query(
+        sqlx::query!(
             "UPDATE exp_sessions SET samples = $1, avg_viewers = $2, peak_viewers = $3 WHERE id = $4",
+            new_samples,
+            new_avg as f32,
+            new_peak,
+            exp_session_id,
         )
-        .bind(new_samples)
-        .bind(new_avg as f32)
-        .bind(new_peak)
-        .bind(exp_session_id)
         .execute(&mut *tx)
         .await?;
         tx.commit().await?;
@@ -158,17 +161,17 @@ impl ExpSessionStore {
         viewer_count: i32,
         now: DateTime<Utc>,
     ) -> Result<(), sqlx::Error> {
-        sqlx::query(
+        sqlx::query!(
             "INSERT INTO exp_game_transitions
                 (exp_session_id, streamer, ts_utc, from_game, to_game, viewer_count)
              VALUES ($1, $2, $3, $4, $5, $6)",
+            exp_session_id,
+            login,
+            iso_seconds(now),
+            from_game,
+            to_game,
+            viewer_count,
         )
-        .bind(exp_session_id)
-        .bind(login)
-        .bind(iso_seconds(now))
-        .bind(from_game)
-        .bind(to_game)
-        .bind(viewer_count)
         .execute(&self.pool)
         .await?;
         Ok(())
@@ -181,23 +184,24 @@ impl ExpSessionStore {
         follower_delta: Option<i32>,
     ) -> Result<(), sqlx::Error> {
         let mut tx = self.pool.begin().await?;
-        let started_at_raw: Option<String> =
-            sqlx::query_scalar("SELECT started_at FROM exp_sessions WHERE id = $1")
-                .bind(exp_session_id)
-                .fetch_optional(&mut *tx)
-                .await?;
+        let started_at_raw: Option<String> = sqlx::query_scalar!(
+            "SELECT started_at FROM exp_sessions WHERE id = $1",
+            exp_session_id,
+        )
+        .fetch_optional(&mut *tx)
+        .await?;
         let Some(started_at_raw) = started_at_raw else {
             return Ok(());
         };
         let duration_min: Option<f32> = parse_dt_utc(&started_at_raw)
             .map(|start| ((now - start).num_seconds().max(0) as f64 / 60.0) as f32);
-        sqlx::query(
+        sqlx::query!(
             "UPDATE exp_sessions SET ended_at = $1, follower_delta = $2, duration_min = $3 WHERE id = $4",
+            iso_seconds(now),
+            follower_delta,
+            duration_min,
+            exp_session_id,
         )
-        .bind(iso_seconds(now))
-        .bind(follower_delta)
-        .bind(duration_min)
-        .bind(exp_session_id)
         .execute(&mut *tx)
         .await?;
         tx.commit().await?;

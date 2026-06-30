@@ -1,0 +1,23 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT TRUE AS \"is_monitored_only!\" FROM twitch_streamers s WHERE (($1 <> '' AND s.twitch_user_id = $1) OR ($2 <> '' AND LOWER(s.twitch_login) = $2)) AND NOT EXISTS ( SELECT 1 FROM twitch_partners p WHERE p.twitch_user_id = s.twitch_user_id OR LOWER(p.twitch_login) = LOWER(s.twitch_login) ) LIMIT 1",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "is_monitored_only!",
+        "type_info": "Bool"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Text",
+        "Text"
+      ]
+    },
+    "nullable": [
+      null
+    ]
+  },
+  "hash": "9f697583a69ec3fdea58ba68085b55d7b375729f423607f41976ee2f94ff549e"
+}

@@ -1,0 +1,24 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT COUNT(*) AS \"count!\" FROM twitch_engagement_conversation\n                  WHERE channel_login = $1 AND twitch_user_id = $2 AND role = 'user'\n                    AND ts > NOW() - ($3::int8 * INTERVAL '1 day')",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "count!",
+        "type_info": "Int8"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Text",
+        "Text",
+        "Int8"
+      ]
+    },
+    "nullable": [
+      null
+    ]
+  },
+  "hash": "fd78fe617700585859f4ca00dede42dfee0950812eafe5813c68d8c912243812"
+}

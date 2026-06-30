@@ -39,12 +39,12 @@ impl ManualPartnerOptOutCheck for DbManualPartnerOptOutCheck {
             return false;
         }
 
-        let flag = sqlx::query_scalar::<_, i32>(
-            "SELECT COALESCE(manual_partner_opt_out, 0) \
+        let flag = sqlx::query_scalar!(
+            "SELECT COALESCE(manual_partner_opt_out, 0) AS \"manual_partner_opt_out!\" \
              FROM twitch_streamers_partner_state \
              WHERE LOWER(twitch_login) = LOWER($1) LIMIT 1",
+            login,
         )
-        .bind(login)
         .fetch_optional(&self.pool)
         .await;
 
