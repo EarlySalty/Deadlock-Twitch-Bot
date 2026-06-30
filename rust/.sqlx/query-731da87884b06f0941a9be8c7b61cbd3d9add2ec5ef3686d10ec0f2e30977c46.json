@@ -1,0 +1,28 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT tip_slug as \"tip_slug!\",\n                  FLOOR(EXTRACT(EPOCH FROM (NOW() - MAX(shown_at))) / 86400)::int8 as \"days!\"\n           FROM twitch_tip_history\n           WHERE twitch_user_id = $1\n           GROUP BY tip_slug",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "tip_slug!",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 1,
+        "name": "days!",
+        "type_info": "Int8"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Text"
+      ]
+    },
+    "nullable": [
+      false,
+      null
+    ]
+  },
+  "hash": "731da87884b06f0941a9be8c7b61cbd3d9add2ec5ef3686d10ec0f2e30977c46"
+}

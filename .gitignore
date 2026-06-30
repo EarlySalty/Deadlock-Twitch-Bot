@@ -48,6 +48,8 @@ data/highlight_clipper/state.json
 data/stream_coaching_audits/
 *.dem
 *.json
+# sqlx offline cache MUSS eingecheckt sein (Tier 3 compile-checked queries)
+!rust/.sqlx/*.json
 rust/bin/tb-bot/tb-bot
 
 # Added by ggshield

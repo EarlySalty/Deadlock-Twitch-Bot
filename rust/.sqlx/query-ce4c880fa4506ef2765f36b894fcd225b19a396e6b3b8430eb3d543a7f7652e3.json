@@ -1,0 +1,28 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT feature as \"feature!\",\n                  FLOOR(EXTRACT(EPOCH FROM (NOW() - last_used_at)) / 86400)::int8 as \"days!\"\n           FROM twitch_feature_usage\n           WHERE twitch_user_id = $1",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "feature!",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 1,
+        "name": "days!",
+        "type_info": "Int8"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Text"
+      ]
+    },
+    "nullable": [
+      false,
+      null
+    ]
+  },
+  "hash": "ce4c880fa4506ef2765f36b894fcd225b19a396e6b3b8430eb3d543a7f7652e3"
+}

@@ -11,19 +11,17 @@ pub struct TipSettings {
 }
 
 pub async fn tip_settings(pool: &PgPool, twitch_user_id: &str) -> Result<TipSettings, sqlx::Error> {
-    let row = sqlx::query_as::<_, (bool, Option<DateTime<Utc>>)>(
-        "SELECT opt_out, last_tip_sent_at FROM twitch_tip_settings WHERE twitch_user_id = $1",
+    let row = sqlx::query_as!(
+        TipSettings,
+        r#"SELECT opt_out as "opt_out!", last_tip_sent_at
+           FROM twitch_tip_settings
+           WHERE twitch_user_id = $1"#,
+        twitch_user_id
     )
-    .bind(twitch_user_id)
     .fetch_optional(pool)
     .await?;
 
-    Ok(row
-        .map(|(opt_out, last_tip_sent_at)| TipSettings {
-            opt_out,
-            last_tip_sent_at,
-        })
-        .unwrap_or_default())
+    Ok(row.unwrap_or_default())
 }
 
 pub async fn load_tip_state(
@@ -33,26 +31,31 @@ pub async fn load_tip_state(
 ) -> Result<HashMap<String, TipState>, sqlx::Error> {
     let mut out: HashMap<String, TipState> = HashMap::new();
 
-    let usage = sqlx::query_as::<_, (String, i64)>(
-        "SELECT feature, FLOOR(EXTRACT(EPOCH FROM (NOW() - last_used_at)) / 86400)::int8 \
-         FROM twitch_feature_usage WHERE twitch_user_id = $1",
+    let usage = sqlx::query!(
+        r#"SELECT feature as "feature!",
+                  FLOOR(EXTRACT(EPOCH FROM (NOW() - last_used_at)) / 86400)::int8 as "days!"
+           FROM twitch_feature_usage
+           WHERE twitch_user_id = $1"#,
+        twitch_user_id
     )
-    .bind(twitch_user_id)
     .fetch_all(pool)
     .await?;
-    for (feature, days) in usage {
-        out.entry(feature).or_default().feature_used_days_ago = Some(days);
+    for row in usage {
+        out.entry(row.feature).or_default().feature_used_days_ago = Some(row.days);
     }
 
-    let shown = sqlx::query_as::<_, (String, i64)>(
-        "SELECT tip_slug, FLOOR(EXTRACT(EPOCH FROM (NOW() - MAX(shown_at))) / 86400)::int8 \
-         FROM twitch_tip_history WHERE twitch_user_id = $1 GROUP BY tip_slug",
+    let shown = sqlx::query!(
+        r#"SELECT tip_slug as "tip_slug!",
+                  FLOOR(EXTRACT(EPOCH FROM (NOW() - MAX(shown_at))) / 86400)::int8 as "days!"
+           FROM twitch_tip_history
+           WHERE twitch_user_id = $1
+           GROUP BY tip_slug"#,
+        twitch_user_id
     )
-    .bind(twitch_user_id)
     .fetch_all(pool)
     .await?;
-    for (slug, days) in shown {
-        out.entry(slug).or_default().tip_shown_days_ago = Some(days);
+    for row in shown {
+        out.entry(row.tip_slug).or_default().tip_shown_days_ago = Some(row.days);
     }
 
     for slug in slugs {
@@ -69,19 +72,21 @@ pub async fn record_tip_shown(
 ) -> Result<(), sqlx::Error> {
     let mut tx = pool.begin().await?;
 
-    sqlx::query("INSERT INTO twitch_tip_history (twitch_user_id, tip_slug) VALUES ($1, $2)")
-        .bind(twitch_user_id)
-        .bind(slug)
-        .execute(&mut *tx)
-        .await?;
+    sqlx::query!(
+        "INSERT INTO twitch_tip_history (twitch_user_id, tip_slug) VALUES ($1, $2)",
+        twitch_user_id,
+        slug
+    )
+    .execute(&mut *tx)
+    .await?;
 
-    sqlx::query(
+    sqlx::query!(
         "INSERT INTO twitch_tip_settings (twitch_user_id, last_tip_sent_at, updated_at) \
          VALUES ($1, NOW(), NOW()) \
          ON CONFLICT (twitch_user_id) DO UPDATE \
          SET last_tip_sent_at = NOW(), updated_at = NOW()",
+        twitch_user_id
     )
-    .bind(twitch_user_id)
     .execute(&mut *tx)
     .await?;
 
@@ -93,14 +98,14 @@ pub async fn record_feature_used(
     twitch_user_id: &str,
     feature: &str,
 ) -> Result<(), sqlx::Error> {
-    sqlx::query(
+    sqlx::query!(
         "INSERT INTO twitch_feature_usage (twitch_user_id, feature, last_used_at, use_count) \
          VALUES ($1, $2, NOW(), 1) \
          ON CONFLICT (twitch_user_id, feature) DO UPDATE \
          SET last_used_at = NOW(), use_count = twitch_feature_usage.use_count + 1",
+        twitch_user_id,
+        feature
     )
-    .bind(twitch_user_id)
-    .bind(feature)
     .execute(pool)
     .await?;
 
@@ -115,7 +120,9 @@ mod tests {
     async fn test_pool() -> Option<PgPool> {
         let dsn = std::env::var("TB_TEST_DATABASE_URL").ok()?;
         let pool = PgPool::connect(&dsn).await.ok()?;
-        sqlx::query(include_str!(
+        // Bewusst kein sqlx-Makro: Multi-Statement-Migrations-Bootstrap im Test;
+        // dokumentierte dynamische Ausnahme, vgl. rust/docs/specs/2026-06-30-sqlx-checked-queries-design.md.
+        sqlx::raw_sql(include_str!(
             "../../../migrations/20260621070000_golive_tips.sql"
         ))
         .execute(&pool)

@@ -1,0 +1,14 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "INSERT INTO twitch_tip_settings (twitch_user_id, last_tip_sent_at, updated_at) VALUES ($1, NOW(), NOW()) ON CONFLICT (twitch_user_id) DO UPDATE SET last_tip_sent_at = NOW(), updated_at = NOW()",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Text"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "d007c206fb257fcad8831b4716ce984f62ddff6483dc6fc9a217daf00b8998a0"
+}

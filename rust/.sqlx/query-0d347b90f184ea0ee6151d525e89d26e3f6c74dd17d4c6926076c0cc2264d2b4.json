@@ -1,0 +1,28 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT opt_out as \"opt_out!\", last_tip_sent_at\n           FROM twitch_tip_settings\n           WHERE twitch_user_id = $1",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "opt_out!",
+        "type_info": "Bool"
+      },
+      {
+        "ordinal": 1,
+        "name": "last_tip_sent_at",
+        "type_info": "Timestamptz"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Text"
+      ]
+    },
+    "nullable": [
+      false,
+      true
+    ]
+  },
+  "hash": "0d347b90f184ea0ee6151d525e89d26e3f6c74dd17d4c6926076c0cc2264d2b4"
+}

@@ -1,0 +1,71 @@
+name: "Rust SQLx Check"
+
+on:
+  pull_request:
+    paths:
+      - "rust/**"
+      - ".github/workflows/rust-sqlx-check.yml"
+  push:
+    paths:
+      - "rust/**"
+      - ".github/workflows/rust-sqlx-check.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  offline-build:
+    name: "offline-build"
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+
+      - name: Install Rust stable
+        run: |
+          rustup toolchain install stable --profile minimal
+          rustup default stable
+
+      - name: Build workspace from SQLx cache
+        run: cd rust && SQLX_OFFLINE=true cargo build --workspace --locked
+
+  schema-gate:
+    name: "schema-gate"
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: timescale/timescaledb:latest-pg16
+        env:
+          POSTGRES_USER: postgres
+          # Ephemerer CI-Service: passwortlos (trust) statt Wegwerf-Passwort —
+          # kein Secret im Repo, kein false-positive im Secret-Scan.
+          POSTGRES_HOST_AUTH_METHOD: trust
+          POSTGRES_DB: twitchbot_sqlx
+        ports:
+          - "5432:5432"
+        options: >-
+          --health-cmd "pg_isready -U postgres -d twitchbot_sqlx"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      DATABASE_URL: postgres://postgres@localhost:5432/twitchbot_sqlx
+    steps:
+      - name: Checkout
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+
+      - name: Install Rust stable
+        run: |
+          rustup toolchain install stable --profile minimal
+          rustup default stable
+
+      - name: Install sqlx-cli
+        run: cargo install sqlx-cli --version 0.8.6 --locked --no-default-features --features postgres,rustls
+
+      - name: Apply migrations
+        run: cargo sqlx migrate run --source rust/migrations
+
+      - name: Check SQLx offline cache
+        env:
+          SQLX_OFFLINE: "false"
+        run: cd rust && cargo sqlx prepare --workspace --check

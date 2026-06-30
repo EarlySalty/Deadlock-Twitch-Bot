@@ -1,3 +1,11 @@
+## #307 — Datenbank-Abfragen werden ab jetzt schon beim Bauen geprüft (Pilot + Fundament)
+
+**Ausgangslage:** Ob eine Abfrage zur Datenbank passt — gibt es die Spalte, stimmt der Typ — stellte sich bisher erst zur Laufzeit heraus. Liefen Bauplan und Datenbank auseinander, fiel ein Fehler im schlimmsten Fall erst im Betrieb auf, als Absturz statt als klare Meldung. Genau diese Klasse von Brüchen hat die letzten Schema-Aufräumungen ausgelöst.
+
+**Änderung:** Wir stellen die Abfragen schrittweise auf eine Form um, die beim Bauen gegen ein frisch aus dem Bauplan erzeugtes Schema geprüft wird. Das Prüfergebnis wird als Zwischenstand mitversioniert, sodass das Bauen weiterhin ganz ohne Datenbank-Zugriff auskommt — wichtig für Auslieferung und nächtliche Abläufe. Ein neues Prüf-Tor vergleicht diesen Zwischenstand zusätzlich gegen das echte Schema. Den Anfang macht ein kleiner, vollständig umgestellter Baustein als Blaupause; die übrigen Bereiche folgen in Wellen.
+
+**Ergebnis:** Eine fehlende oder umbenannte Spalte ist jetzt ein Bau-Fehler statt eines Laufzeit-Absturzes. An einer nachgestellten Kopie bewiesen: das Bauen ohne Datenbank läuft, eine absichtlich gebrochene Abfrage lässt den Bau sofort scheitern, und die geprüften Abfragen laufen sauber gegen das echte Schema. Für den Betrieb ändert sich nichts.
+
 ## #306 — Schema-Aufräumung: beim Start angelegte Tabellen in den Bauplan überführt
 
 **Ausgangslage:** Elf Tabellen existierten in der laufenden Datenbank nur, weil der Programmcode sie beim Start selbst anlegte — im Bauplan fehlten sie. Eine frisch aus dem Bauplan aufgesetzte Datenbank hatte sie deshalb gar nicht, und das Schema ließ sich nicht allein aus dem Bauplan reproduzieren. Dieselbe Tabelle an zwei Stellen zu beschreiben (Lücke im Bauplan, Anlage zur Laufzeit) birgt die Gefahr, dass beide mit der Zeit auseinanderlaufen.

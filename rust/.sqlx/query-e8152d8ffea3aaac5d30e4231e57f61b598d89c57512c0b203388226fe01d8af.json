@@ -1,0 +1,15 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "INSERT INTO twitch_feature_usage (twitch_user_id, feature, last_used_at, use_count) VALUES ($1, $2, NOW(), 1) ON CONFLICT (twitch_user_id, feature) DO UPDATE SET last_used_at = NOW(), use_count = twitch_feature_usage.use_count + 1",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Text",
+        "Text"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "e8152d8ffea3aaac5d30e4231e57f61b598d89c57512c0b203388226fe01d8af"
+}
