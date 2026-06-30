@@ -10,8 +10,8 @@
 //! - `channel.moderate` → [`EventSubHooks`] (Raid-Subsystem,
 //!   Phase 6 — Cutover-Kopplung, siehe Plan-Doc).
 
-use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Arc;
 
 use chrono::{DateTime, TimeZone, Utc};
 use serde_json::Value;
@@ -701,6 +701,16 @@ impl EventSubDispatcher {
         let mut outcome = DispatchOutcome::new(sub_type);
 
         if CORE_DELIVERY_TYPES.contains(&sub_type) {
+            if context.broadcaster_id.trim().is_empty() {
+                tracing::warn!(
+                    sub_type,
+                    message_id = message_id.unwrap_or("n/a"),
+                    "EventSub: Core-Notification ohne broadcaster_id abgelehnt"
+                );
+                return Err(sqlx::Error::Protocol(
+                    "eventsub core notification missing broadcaster_id".into(),
+                ));
+            }
             let payload = serde_json::json!({
                 "broadcaster_id": context.broadcaster_id,
                 "broadcaster_login": context.broadcaster_login,
@@ -892,8 +902,8 @@ fn epoch_to_datetime(epoch: f64) -> DateTime<Utc> {
 #[cfg(test)]
 mod tests {
     use super::{
-        ChatNotificationKind, REGISTERED_SUB_TYPES, classify_chat_notification, extract_context,
-        has_registered_handler,
+        classify_chat_notification, extract_context, has_registered_handler, ChatNotificationKind,
+        REGISTERED_SUB_TYPES,
     };
 
     #[test]

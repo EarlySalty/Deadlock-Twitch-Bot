@@ -117,7 +117,7 @@ pub async fn upsert_chatter_seen(pool: &PgPool, channel: &str, nick: &str, now: 
         return;
     };
     // dyn: wiederverwendeter INSERT-Grundkörper mit variierendem ON-CONFLICT-Zweig.
-    let _ = sqlx::query(&format!(
+    match sqlx::query(&format!(
         "{INSERT_CHATTER} ON CONFLICT (session_id, chatter_login) \
          DO UPDATE SET last_seen_at = EXCLUDED.last_seen_at"
     ))
@@ -126,7 +126,19 @@ pub async fn upsert_chatter_seen(pool: &PgPool, channel: &str, nick: &str, now: 
     .bind(&nick)
     .bind(now)
     .execute(pool)
-    .await;
+    .await
+    {
+        Ok(_) => {}
+        Err(error) => {
+            tracing::warn!(
+                %error,
+                channel,
+                nick = %nick,
+                session_id,
+                "IRC-Lurker: JOIN-Upsert fehlgeschlagen"
+            );
+        }
+    }
 }
 
 /// NAMES-Liste: spiegelt alle Chatter der Session (Python `_on_names_list`).
@@ -159,7 +171,7 @@ pub async fn upsert_names_batch(
             continue;
         }
         if existing.contains(&nick) {
-            let _ = sqlx::query!(
+            match sqlx::query!(
                 "UPDATE twitch_session_chatters SET last_seen_at = $1 \
                  WHERE session_id = $2 AND chatter_login = $3",
                 now,
@@ -167,11 +179,24 @@ pub async fn upsert_names_batch(
                 &nick,
             )
             .execute(pool)
-            .await;
-            updates += 1;
+            .await
+            {
+                Ok(_) => {
+                    updates += 1;
+                }
+                Err(error) => {
+                    tracing::warn!(
+                        %error,
+                        channel,
+                        nick = %nick,
+                        session_id,
+                        "IRC-Lurker: NAMES-Update fehlgeschlagen"
+                    );
+                }
+            }
         } else {
             // dyn: gleicher INSERT-Grundkörper wie JOIN-Pfad, aber DO NOTHING statt UPDATE.
-            let _ = sqlx::query(&format!(
+            match sqlx::query(&format!(
                 "{INSERT_CHATTER} ON CONFLICT (session_id, chatter_login) DO NOTHING"
             ))
             .bind(session_id)
@@ -179,8 +204,21 @@ pub async fn upsert_names_batch(
             .bind(&nick)
             .bind(now)
             .execute(pool)
-            .await;
-            inserts += 1;
+            .await
+            {
+                Ok(_) => {
+                    inserts += 1;
+                }
+                Err(error) => {
+                    tracing::warn!(
+                        %error,
+                        channel,
+                        nick = %nick,
+                        session_id,
+                        "IRC-Lurker: NAMES-Insert fehlgeschlagen"
+                    );
+                }
+            }
         }
     }
     (inserts, updates)
@@ -352,7 +390,11 @@ impl IrcLurkerTracker {
 
     /// Aktuell beobachtete Chatter eines Kanals (Python `get_chatters`).
     pub fn get_chatters(&self, channel: &str) -> HashSet<String> {
-        let channel = channel.trim().to_lowercase();
+        let channel = channel
+            .trim()
+            .to_lowercase()
+            .trim_start_matches('#')
+            .to_string();
         self.chatters
             .lock()
             .unwrap()
@@ -434,8 +476,9 @@ impl IrcLurkerTracker {
                     let chans: Vec<String> = self.channels.lock().unwrap().iter().cloned().collect();
                     for ch in chans {
                         let _ = writer.write_all(format!("NAMES #{ch}\r\n").as_bytes()).await;
+                        let _ = writer.flush().await;
+                        tokio::time::sleep(IRC_JOIN_STAGGER).await;
                     }
-                    let _ = writer.flush().await;
                 }
                 Some(cmd) = rx.recv() => match cmd {
                     Cmd::Join(ch) => { let _ = writer.write_all(format!("JOIN #{ch}\r\n").as_bytes()).await; let _ = writer.flush().await; }
@@ -718,6 +761,16 @@ mod tests {
         assert!(t.partner_channels.lock().unwrap().contains("nani"));
         assert!(t.channels.lock().unwrap().contains("somecat"));
         assert!(!t.partner_channels.lock().unwrap().contains("somecat")); // category ≠ partner
+
+        t.chatters.lock().unwrap().insert(
+            "nani".to_string(),
+            ["alice".to_string(), "bob".to_string()]
+                .into_iter()
+                .collect(),
+        );
+        let chatters = t.get_chatters(" #NANI ");
+        assert!(chatters.contains("alice"));
+        assert!(chatters.contains("bob"));
 
         t.untrack_channel("nani");
         assert!(!t.channels.lock().unwrap().contains("nani"));

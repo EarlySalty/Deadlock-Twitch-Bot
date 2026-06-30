@@ -224,6 +224,7 @@ impl PollEngine {
         // komplett aus Sessions/last_game/Postings raus. Der Sprachfilter gilt
         // nur fürs Kategorie-Sampling (Discovery) unten.
         let mut streams_by_login: HashMap<String, StreamSnapshot> = HashMap::new();
+        let mut tracked_streams_loaded = true;
         if !logins.is_empty() {
             match self.source.streams_by_logins(&logins, None).await {
                 Ok(streams) => {
@@ -235,6 +236,7 @@ impl PollEngine {
                     }
                 }
                 Err(error) => {
+                    tracked_streams_loaded = false;
                     tracing::error!(%error, "Konnte Streams für tracked Logins nicht abrufen");
                 }
             }
@@ -290,7 +292,14 @@ impl PollEngine {
             }
         }
 
-        let score_refreshes = self.process_entries(&tracked, &streams_by_login).await;
+        let score_refreshes = if tracked_streams_loaded {
+            self.process_entries(&tracked, &streams_by_login).await
+        } else {
+            tracing::warn!(
+                "Poll-Tick: tracked Stream-Abruf fehlgeschlagen, Offline-Transitions übersprungen"
+            );
+            Vec::new()
+        };
 
         let tick_count = {
             let mut state = self.state.lock().expect("tick state lock");
@@ -760,7 +769,11 @@ impl PollEngine {
         if !due {
             return;
         }
-        if let Err(error) = self.live_state.sweep_stale_live(STALE_LIVE_MAX_AGE_SECS).await {
+        if let Err(error) = self
+            .live_state
+            .sweep_stale_live(STALE_LIVE_MAX_AGE_SECS)
+            .await
+        {
             tracing::debug!(%error, "Stale Live-State-Sweep fehlgeschlagen");
         }
     }

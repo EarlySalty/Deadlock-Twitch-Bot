@@ -162,7 +162,23 @@ impl InboxRuntime {
     async fn process_one(&self, work: LeasedWork) {
         let parsed = parse_payload(&work.payload_json);
         let result = match &parsed {
-            Ok(payload) => self.handler.handle(&work.work_type, payload).await,
+            Ok(payload) => {
+                let handler = self.handler.clone();
+                let work_type = work.work_type.clone();
+                let payload = payload.clone();
+                match tokio::spawn(async move { handler.handle(&work_type, &payload).await }).await
+                {
+                    Ok(result) => result,
+                    Err(join_error) if join_error.is_panic() => Err(format!(
+                        "eventsub inbox handler panicked while processing work: {join_error}"
+                    )
+                    .into()),
+                    Err(join_error) => Err(format!(
+                        "eventsub inbox handler task failed while processing work: {join_error}"
+                    )
+                    .into()),
+                }
+            }
             Err(parse_error) => {
                 Err(format!("invalid eventsub processing payload: {parse_error}").into())
             }
