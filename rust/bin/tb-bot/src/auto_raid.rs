@@ -336,6 +336,7 @@ impl OfflineRaidHandler {
             category_id: self.resolve_category_id().await,
             offline_trigger_ts: Some(offline_trigger_ts),
             reason: "auto_raid_on_offline".to_string(),
+            respect_soft_raid_blacklist: true,
         };
         match self.pipeline.run(&request).await {
             AutoRaidPipelineOutcome::Started { target_login, .. } => {
@@ -438,6 +439,7 @@ impl OfflineRaidHandler {
             category_id: self.resolve_category_id().await,
             offline_trigger_ts: None,
             reason: "manual_chat_command".to_string(),
+            respect_soft_raid_blacklist: false,
         };
         match self.pipeline.run(&request).await {
             AutoRaidPipelineOutcome::Started { target_login, .. } => {

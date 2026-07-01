@@ -310,6 +310,9 @@ pub struct AutoRaidRequest {
     pub offline_trigger_ts: Option<f64>,
     /// History-Grund, z. B. `auto_raid_on_offline`.
     pub reason: String,
+    /// Auto-Raids respektieren die weiche Raid-Blacklist; manuelle Raids nur
+    /// harte globale Bans.
+    pub respect_soft_raid_blacklist: bool,
 }
 
 /// Ergebnis eines Pipeline-Laufs (Python Status-Dict).
@@ -410,7 +413,12 @@ impl AutoRaidPipeline {
 
     pub async fn run(&self, req: &AutoRaidRequest) -> AutoRaidPipelineOutcome {
         let flow_start = Instant::now();
-        let (blacklist_ids, blacklist_logins) = match self.blacklist.load_all().await {
+        let blacklist_sets = if req.respect_soft_raid_blacklist {
+            self.blacklist.load_all().await
+        } else {
+            self.blacklist.load_hard_bans().await
+        };
+        let (blacklist_ids, blacklist_logins) = match blacklist_sets {
             Ok(sets) => sets,
             Err(error) => {
                 tracing::error!(%error, "Raid-Pipeline blockiert: Blacklist nicht ladbar");

@@ -187,19 +187,18 @@ pub fn plan_partner_raid_delivery(
     }
 }
 
-// WIRING-TODO(P1.11): bin/tb-bot Arrival-Sink (confirm-Pfad, raid_arrival_wiring.rs)
-// muss den Partner-Raid-Send verdrahten — analog zu Python
+// bin/tb-bot Arrival-Sink (confirm-Pfad, raid_arrival_wiring.rs) verdrahtet
+// den Partner-Raid-Send analog zu Python
 // PartnerRaidDeliveryService.send_partner_raid_message (partner_raid_delivery.py:224+)
-// und make_partner_raid_delivery_service (runtime_factories.py:104–142):
+// und make_partner_raid_delivery_service (runtime_factories.py:104–142).
+// Vertrag dieser Crate:
 //   1. get_chat_bot(); wenn keiner → skip.
 //   2. lookup_outbound_chat_suppression(target_login, target_id, source="partner_raid");
 //      wenn Some → skip (outbound_chat_suppressed=true).
 //   3. received_raid_count = count_received_network_raids(to_broadcaster_id); <=0 → 1.
 //   4. plan_partner_raid_delivery(request, &PartnerRaidDeliveryConfig::default());
 //      wenn !should_deliver oder message None → skip mit plan.reason.
-//   5. join_chat_channel(to_login, to_id) → sleep(plan.delay_seconds == 5.0)
-//      → erneut get_chat_bot (kann zwischenzeitlich weg sein) → send plan.message
-//      über den ChatApi mit source="partner_raid".
+//   5. sleep(plan.delay_seconds == 5.0) → send plan.message über den ChatApi.
 // Aufruf nur wenn ArrivalConfirmationDecision.should_send_partner_raid_message.
 
 #[cfg(test)]

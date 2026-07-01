@@ -1,5 +1,27 @@
 # Workflow
 
+## 2026-07-01 — Wave6 Rework tracked.rs schema-robust
+
+- Start: delegierter GPT-Implementierungsworker fuer gezielten Rework in `rust/crates/tb-monitoring/src/poller/tracked.rs`; Scope nur Archiv-Kandidaten-Query plus Workflow/Report, kein cargo fmt, kein Commit/Push/Stash.
+- Implementiert: `archive_candidates` rendert `sess.ended_at` und `sess.started_at` vor `NULLIF(..., '')` explizit als `text`, damit die Query sowohl auf TEXT-Fixtures als auch auf TIMESTAMPTZ-Prod-Schema laeuft.
+- Verifikation: Wegwerf-Postgres `wave6rw-pg` auf `127.0.0.1:55450`; `TB_TEST_DATABASE_URL=... TB_TEST_REQUIRE_DB=1 SQLX_OFFLINE=true cargo test -p tb-monitoring` gruen; manuelle TIMESTAMPTZ-Prod-Schema-Repro liefert 1 Zeile ohne `invalid input syntax`; `SQLX_OFFLINE=true cargo build -p tb-monitoring` gruen; `SQLX_OFFLINE=true cargo clippy --all-targets -p tb-monitoring` exit 0 mit bestehenden Warnungen; Container entfernt.
+
+## 2026-07-01 — Wave 6 Raid-Enforcement Kritiker
+
+- Start: READ-ONLY adversariale Pruefung der uncommitteten Wave6-Aenderungen auf Branch `fix/py-rust-parity-obvious-bugs`; Scope Diff gegen HEAD, keine Source-Fixes, kein Commit/Push/Stash/Checkout/cargo fmt.
+- Gelesen: Implementierer-Report `wave6_report.json`, aktueller Worktree/Diff und bestehender Workflow. Fokus jetzt auf RAID-RECRUIT-009/MON-RAID-009 fail-closed Enforcement, Guard-Reihenfolge und Paritaetsabweichungen.
+- Ergebnis: 1 MED-Befund in `rust/crates/tb-monitoring/src/poller/tracked.rs`, weil `NULLIF(COALESCE(sess.ended_at, sess.started_at), '')::timestamptz` auf migriertem TIMESTAMPTZ-Schema mit `invalid input syntax for type timestamp with time zone: ""` scheitert; Test-Fixtures mit TEXT-Spalten verdecken das.
+- Enforcement-Pruefung: Recruitment-Queue/Delivery, Auto/Manual-Pipeline, EventSub-Guard und Executor nutzen ID-ODER-Login bzw. fail-closed; manuelle `!raid` ignoriert weiche Raid-Blacklist und blockt Global-Ban. Restrisiko: Readiness-TOCTOU nach initialem Set-Load, aber kein bestaetigter Fail-Open fuer bereits geladene Bans.
+- Verifikation: Wegwerf-Postgres `wave6crit-pg` auf `127.0.0.1:55449`; SQL-Repros fuer Hard-/Soft-Sets und Tracked-TIMESTAMPTZ-Bug; `TB_TEST_DATABASE_URL=... TB_TEST_REQUIRE_DB=1 SQLX_OFFLINE=true cargo test -p tb-raid -p tb-monitoring` gruen; `SQLX_OFFLINE=true cargo build -p tb-raid -p tb-monitoring -p tb-bot -p tb-transport-discord` gruen; `SQLX_OFFLINE=true cargo clippy --all-targets -p tb-raid -p tb-monitoring -p tb-bot` exit 0 mit bestehenden Warnungen; zusaetzlich `cargo test -p tb-transport-discord` gruen; Container entfernt. Report: `scratchpad/triage/critic/wave6_crit.json`.
+
+## 2026-07-01 — Welle 6 Raid-Enforcement + Robustheit
+
+- Start: delegierter GPT-Implementierungsworker fuer Wave6 Raid-Enforcement+Robustheit; Scope Rust-Crates `tb-raid`, `tb-monitoring`, `tb-bot`-Binary plus Workflow/Report, kein Commit/Push, kein cargo fmt.
+- Recon: Rust-Hotspots gelesen: `auto_raid_pipeline.rs`, `raid_executor.rs`, `raid_blacklist.rs`, `outreach_boost.rs`, `signal_correlation.rs`, `pending_raids.rs`, `score_tracking_store.rs`, `partner_raid_delivery.rs`, `auto_raid.rs`, `eventsub_hooks.rs`, `raid_arrival_wiring.rs`, `partner_recruit.rs`, `confirm_resolver.rs`, `oauth_followups.rs`, `wiring.rs`; Python-Referenzen: `raid/services/raid_blacklist.py`, `raid/raid_pipeline.py`, `raid/services/outreach_boost_targets.py`, `raid/services/followers.py`, `raid/runtime_factories.py`, `raid/signal_correlation.py`, `raid/partner_raid_score_tracking.py`, `monitoring/eventsub_mixin.py`, `discord_role_sync.py`.
+- Befund bisher: Auto-Raid filtert Blacklist/global gemeinsam; manueller Pfad nutzt dieselbe Pipeline und der `channel.moderate`-Guard cancelt weiche Blacklist; Recruitment-Follower bleibt `None`; Partner-/Recruitment-Send-Tasks haben keinen JoinHandle-Watcher; Outreach-Boost-Query nimmt `queued`/`detected_at` und schliesst aktive Partner aus, abweichend von Python.
+- Implementiert bisher: harte globale Bans separat in `RaidBlacklistStore`; Executor/Pipeline/Manual-Guard fail-closed; Recruitment-Erkennung/Queue mit global-ban ID/Login-Ausschluss; Recruitment-Follower-Fallback und Send-Task-Watcher im Arrival-Sink; Outreach-Boost-Query auf Python-`sent`/`contacted_at`; Rollen-Sync-Fallback ueber Broker-Guilds; Confirm nutzt Pending-Score-Snapshot; Manual-Suppression nach Arrival-Insert.
+- Verifikation: `SQLX_OFFLINE=true cargo build -p tb-raid -p tb-monitoring -p tb-bot` gruen; `SQLX_OFFLINE=true cargo clippy --all-targets -p tb-raid -p tb-monitoring -p tb-bot` exit 0 mit bestehenden Warnungen ausserhalb der geaenderten Wave6-Zeilen; Wegwerf-Postgres `wave6-raid-pg` auf `127.0.0.1:55447` fuer `TB_TEST_DATABASE_URL=... TB_TEST_REQUIRE_DB=1 SQLX_OFFLINE=true cargo test -p tb-raid -p tb-monitoring` gruen; Container entfernt.
+
 ## 2026-07-01 — Welle 5 Chat/IRC-Robustheit
 
 - Start: delegierter GPT-Implementierungsworker fuer 7 Findings CHAT-API-014, CHAT-IRC-015/009/010/003/014 und CHAT-PIPE-006; Scope strikt `tb-monitoring`, `tb-bot`, `tb-chat`, `tb-engagement`, kein Commit/Push.

@@ -373,13 +373,8 @@ impl RaidArrivalCoordinator {
 
 // ─── channel.moderate → Blacklist-Raid-Guard ────────────────────────────────
 
-/// Bricht manuell gestartete Raids auf Blacklist-Ziele ab. Port von
+/// Bricht manuell gestartete Raids auf hart global gebannte Ziele ab. Port von
 /// `eventsub_mixin.py` `_guard_blacklisted_outgoing_raid`.
-///
-/// Der Streamer-Whisper folgt mit dem Chat-Cutover (Schritt 5): der
-/// Bot-Token wird vom Python-Chat-Prozess verwaltet (Auto-Refresh mit
-/// Rotation) — ein zweiter Refresher in Rust würde die Refresh-Token-Kette
-/// beider Prozesse gegenseitig invalidieren. Bis dahin: Cancel + Warn-Log.
 pub struct BlacklistRaidGuard {
     blacklist: RaidBlacklistStore,
     token_provider: Arc<TokenProvider>,
@@ -412,25 +407,25 @@ impl BlacklistRaidGuard {
             return;
         }
 
-        let blacklisted = match self
+        let hard_banned = match self
             .blacklist
-            .is_blacklisted(Some(&target_id), &target_login)
+            .is_hard_banned(Some(&target_id), &target_login)
             .await
         {
             Ok(hit) => hit,
             Err(error) => {
-                tracing::error!(%error, target = %target_login, "Blacklist-Prüfung fehlgeschlagen");
-                return;
+                tracing::error!(%error, target = %target_login, "Global-Ban-Prüfung fehlgeschlagen; fail-closed");
+                true
             }
         };
-        if !blacklisted {
+        if !hard_banned {
             return;
         }
 
         tracing::warn!(
             streamer = login,
             target = %target_login,
-            "Manueller Raid auf Blacklist-Ziel erkannt — versuche Abbruch"
+            "Manueller Raid auf global gebanntes Ziel erkannt — versuche Abbruch"
         );
 
         let cancelled = self.cancel_raid(broadcaster_id).await;
@@ -438,13 +433,13 @@ impl BlacklistRaidGuard {
             tracing::warn!(
                 streamer = login,
                 target = %target_login,
-                "Raid auf Blacklist-Ziel abgebrochen (Streamer-Hinweis folgt mit Chat-Cutover)"
+                "Raid auf global gebanntes Ziel abgebrochen"
             );
         } else {
             tracing::warn!(
                 streamer = login,
                 target = %target_login,
-                "Raid-Abbruch nicht möglich — Raid auf Blacklist-Ziel lief durch"
+                "Raid-Abbruch nicht möglich — Raid auf global gebanntes Ziel lief durch"
             );
         }
     }

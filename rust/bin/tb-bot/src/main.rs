@@ -728,6 +728,7 @@ async fn main() {
                 }),
                 token_provider.clone(),
                 RaidHistoryStore::new(pool.clone()),
+                RaidBlacklistStore::new(pool.clone()),
             );
             let sink = Arc::new(RaidArrivalSinkImpl::new(
                 pool.clone(),
@@ -741,6 +742,7 @@ async fn main() {
                 Some(Arc::new(
                     tb_chat::moderation::OutboundSuppressionStore::new(pool.clone()),
                 )),
+                Some(followers.clone()),
             ));
             let pipeline = AutoRaidPipeline::new(
                 RaidBlacklistStore::new(pool.clone()),
@@ -841,6 +843,7 @@ async fn main() {
                     loop {
                         tick.tick().await;
                         due_sink.process_due_recruitment_blacklists().await;
+                        due_sink.process_due_external_bot_ban_checks().await;
                     }
                 });
             }

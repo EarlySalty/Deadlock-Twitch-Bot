@@ -39,8 +39,7 @@ fn env_u64(name: &str) -> Option<u64> {
 /// Rollen-Sync + User-Auflösung über den Master-Broker.
 ///
 /// Guild-Kandidaten wie Python `iter_role_guild_candidates`:
-/// `STREAMER_GUILD_ID` → `MAIN_GUILD_ID` (erste gesetzte gewinnt — der Broker
-/// braucht eine konkrete Guild, das "alle Guilds des Bots"-Fallback entfällt).
+/// `STREAMER_GUILD_ID` → `MAIN_GUILD_ID` → alle vom Broker gemeldeten Guilds.
 pub struct BrokerDiscordDirectory {
     relay: Option<BrokerRelay>,
     guild_id: Option<u64>,
@@ -54,6 +53,28 @@ impl BrokerDiscordDirectory {
             guild_id: env_u64("STREAMER_GUILD_ID").or_else(|| env_u64("MAIN_GUILD_ID")),
             role_id: env_u64("STREAMER_ROLE_ID").unwrap_or(DEFAULT_STREAMER_ROLE_ID),
         }
+    }
+
+    async fn role_guild_ids(&self, relay: &BrokerRelay) -> Vec<u64> {
+        if let Some(guild_id) = self.guild_id {
+            return vec![guild_id];
+        }
+        let members = match relay.list_members().await {
+            Ok(members) => members,
+            Err(error) => {
+                tracing::warn!(
+                    "Streamer-Rollen-Sync: Guild-Fallback via Broker-Mitglieder fehlgeschlagen: {error}"
+                );
+                return Vec::new();
+            }
+        };
+        let mut ids = std::collections::BTreeSet::new();
+        for member in members {
+            if let Some(guild_id) = member.guild_id.filter(|id| *id > 0) {
+                ids.insert(guild_id);
+            }
+        }
+        ids.into_iter().collect()
     }
 }
 
@@ -77,25 +98,27 @@ impl DiscordDirectoryPort for BrokerDiscordDirectory {
             tracing::warn!("Streamer-Rollen-Sync übersprungen: kein BrokerRelay konfiguriert");
             return;
         };
-        let Some(guild_id) = self.guild_id else {
-            tracing::warn!(
-                "Streamer-Rollen-Sync übersprungen: STREAMER_GUILD_ID/MAIN_GUILD_ID nicht gesetzt"
-            );
-            return;
-        };
         let Ok(user_id) = discord_user_id.parse::<u64>() else {
+            tracing::warn!("Streamer-Rollen-Sync übersprungen: ungültige Discord-User-ID {discord_user_id}");
             return;
         };
-        match relay
-            .add_member_role(guild_id, user_id, self.role_id, reason)
-            .await
-        {
-            Ok(()) => tracing::info!(
-                "Streamer role granted to {discord_user_id} in guild {guild_id}"
-            ),
-            Err(e) => tracing::warn!(
-                "Streamer-Rollen-Sync für {discord_user_id} fehlgeschlagen: {e}"
-            ),
+        let guild_ids = self.role_guild_ids(relay).await;
+        if guild_ids.is_empty() {
+            tracing::warn!("Streamer-Rollen-Sync übersprungen: keine Guild-Kandidaten verfügbar");
+            return;
+        }
+        for guild_id in guild_ids {
+            match relay
+                .add_member_role(guild_id, user_id, self.role_id, reason)
+                .await
+            {
+                Ok(()) => tracing::info!(
+                    "Streamer role granted to {discord_user_id} in guild {guild_id}"
+                ),
+                Err(e) => tracing::warn!(
+                    "Streamer-Rollen-Sync für {discord_user_id} in Guild {guild_id} fehlgeschlagen: {e}"
+                ),
+            }
         }
     }
 
@@ -104,26 +127,28 @@ impl DiscordDirectoryPort for BrokerDiscordDirectory {
             tracing::warn!("Streamer-Rollen-Entzug übersprungen: kein BrokerRelay konfiguriert");
             return;
         };
-        let Some(guild_id) = self.guild_id else {
-            tracing::warn!(
-                "Streamer-Rollen-Entzug übersprungen: STREAMER_GUILD_ID/MAIN_GUILD_ID nicht gesetzt"
-            );
-            return;
-        };
         let Ok(user_id) = discord_user_id.parse::<u64>() else {
+            tracing::warn!("Streamer-Rollen-Entzug übersprungen: ungültige Discord-User-ID {discord_user_id}");
             return;
         };
+        let guild_ids = self.role_guild_ids(relay).await;
+        if guild_ids.is_empty() {
+            tracing::warn!("Streamer-Rollen-Entzug übersprungen: keine Guild-Kandidaten verfügbar");
+            return;
+        }
         // B10: Fehler NUR loggen, kein Hard-Fail.
-        match relay
-            .remove_member_role(guild_id, user_id, self.role_id, reason)
-            .await
-        {
-            Ok(()) => tracing::info!(
-                "Streamer role removed from {discord_user_id} in guild {guild_id}"
-            ),
-            Err(e) => tracing::warn!(
-                "Streamer-Rollen-Entzug für {discord_user_id} fehlgeschlagen: {e}"
-            ),
+        for guild_id in guild_ids {
+            match relay
+                .remove_member_role(guild_id, user_id, self.role_id, reason)
+                .await
+            {
+                Ok(()) => tracing::info!(
+                    "Streamer role removed from {discord_user_id} in guild {guild_id}"
+                ),
+                Err(e) => tracing::warn!(
+                    "Streamer-Rollen-Entzug für {discord_user_id} in Guild {guild_id} fehlgeschlagen: {e}"
+                ),
+            }
         }
     }
 }

@@ -8,6 +8,7 @@ use std::sync::Arc;
 
 use chrono::{DateTime, Utc};
 
+use crate::raid_blacklist::RaidBlacklistStore;
 use crate::raid_history_store::{RaidHistoryStore, RecordRaidInput};
 use crate::token_provider::TokenProvider;
 
@@ -48,6 +49,7 @@ pub struct RaidExecutor {
     api: Arc<dyn RaidApi>,
     token_provider: Arc<TokenProvider>,
     history: RaidHistoryStore,
+    hard_bans: RaidBlacklistStore,
 }
 
 impl RaidExecutor {
@@ -55,11 +57,13 @@ impl RaidExecutor {
         api: Arc<dyn RaidApi>,
         token_provider: Arc<TokenProvider>,
         history: RaidHistoryStore,
+        hard_bans: RaidBlacklistStore,
     ) -> Self {
         Self {
             api,
             token_provider,
             history,
+            hard_bans,
         }
     }
 
@@ -70,6 +74,37 @@ impl RaidExecutor {
         req: &RaidRequest,
         now: DateTime<Utc>,
     ) -> Result<RaidOutcome, sqlx::Error> {
+        match self
+            .hard_bans
+            .is_hard_banned(Some(&req.to_broadcaster_id), &req.to_broadcaster_login)
+            .await
+        {
+            Ok(true) => {
+                tracing::warn!(
+                    from = %req.from_broadcaster_login,
+                    to = %req.to_broadcaster_login,
+                    to_id = %req.to_broadcaster_id,
+                    "Raid-Ausführung hart blockiert: Ziel ist global gebannt"
+                );
+                self.record(req, false, Some("target_hard_banned".to_string()))
+                    .await?;
+                return Ok(RaidOutcome::Failed("target_hard_banned".to_string()));
+            }
+            Ok(false) => {}
+            Err(error) => {
+                tracing::error!(
+                    %error,
+                    from = %req.from_broadcaster_login,
+                    to = %req.to_broadcaster_login,
+                    to_id = %req.to_broadcaster_id,
+                    "Raid-Ausführung hart blockiert: Global-Ban-Prüfung fehlgeschlagen"
+                );
+                self.record(req, false, Some("hard_ban_check_failed".to_string()))
+                    .await?;
+                return Ok(RaidOutcome::Failed("hard_ban_check_failed".to_string()));
+            }
+        }
+
         let token = self
             .token_provider
             .get_valid_token(&req.from_broadcaster_id, now)

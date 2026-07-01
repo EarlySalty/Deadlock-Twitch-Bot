@@ -359,7 +359,12 @@ fn build_with_enricher(
         errors_by_target,
         calls: Mutex::new(Vec::new()),
     });
-    let executor = RaidExecutor::new(api.clone(), provider, RaidHistoryStore::new(pool.clone()));
+    let executor = RaidExecutor::new(
+        api.clone(),
+        provider,
+        RaidHistoryStore::new(pool.clone()),
+        RaidBlacklistStore::new(pool.clone()),
+    );
     let pending = Arc::new(Mutex::new(PendingRaidStore::new()));
     let readiness = Arc::new(StubReadiness {
         calls: Mutex::new(Vec::new()),
@@ -396,6 +401,7 @@ fn request(partners: Vec<OnlineCandidate>) -> AutoRaidRequest {
         category_id: Some("cat-deadlock".to_string()),
         offline_trigger_ts: Some(1000.0),
         reason: "auto_raid_on_offline".to_string(),
+        respect_soft_raid_blacklist: true,
     }
 }
 
@@ -444,6 +450,58 @@ async fn partner_pfad_startet_raid_und_registriert_pending() {
     assert_eq!(pending.registered_viewer_count, 42);
     assert_eq!(pending.offline_trigger_ts, Some(1000.0));
     assert_eq!(pending.channel_raid_ready, Some(true));
+}
+
+#[tokio::test]
+async fn manueller_raid_ignoriert_weiche_raid_blacklist() {
+    let pool = pool_or_skip!("t6w_pipe_manual_soft_blacklist");
+    seed_source_token(&pool, "100").await;
+    seed_score(&pool, "200", 0.9, 1).await;
+    sqlx::query(
+        "INSERT INTO twitch_raid_blacklist (target_login, target_id, reason, added_at) \
+         VALUES ('ziel', '200', 'soft', 'now')",
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
+    let h = build(&pool, HashMap::new(), vec![]);
+    let mut req = request(vec![partner("200", "ziel")]);
+    req.reason = "manual_chat_command".to_string();
+    req.respect_soft_raid_blacklist = false;
+
+    let outcome = h.pipeline.run(&req).await;
+
+    assert_eq!(
+        outcome,
+        AutoRaidPipelineOutcome::Started {
+            target_login: "ziel".to_string(),
+            is_partner_raid: true,
+        }
+    );
+    assert_eq!(h.api.calls.lock().unwrap().clone(), vec!["200"]);
+}
+
+#[tokio::test]
+async fn manueller_raid_schliesst_global_ban_vor_auswahl_aus() {
+    let pool = pool_or_skip!("t6w_pipe_manual_globalban");
+    seed_source_token(&pool, "100").await;
+    seed_score(&pool, "200", 0.9, 1).await;
+    sqlx::query(
+        "INSERT INTO twitch_chatter_global_ban (chatter_login, chatter_id) \
+         VALUES ('anderer_login', '200')",
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
+    let h = build(&pool, HashMap::new(), vec![]);
+    let mut req = request(vec![partner("200", "ziel")]);
+    req.reason = "manual_chat_command".to_string();
+    req.respect_soft_raid_blacklist = false;
+
+    let outcome = h.pipeline.run(&req).await;
+
+    assert_eq!(outcome, AutoRaidPipelineOutcome::NoTarget);
+    assert!(h.api.calls.lock().unwrap().is_empty());
 }
 
 #[tokio::test]
