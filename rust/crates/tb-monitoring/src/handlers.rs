@@ -227,14 +227,32 @@ impl MonitoringEventHandler {
             .await?;
         }
 
+        self.run_stream_online_followups(
+            &work.broadcaster_id,
+            &login,
+            stream_id,
+            work.message_id.as_deref(),
+        )
+        .await?;
+        Ok(())
+    }
+
+    async fn run_stream_online_followups(
+        &self,
+        broadcaster_id: &str,
+        login: &str,
+        stream_id: Option<&str>,
+        message_id: Option<&str>,
+    ) -> Result<(), HandlerError> {
+        let (epoch, _) = self.now_pair();
         let executed = run_business_effect_once(
             &self.guard,
-            work.message_id.as_deref(),
+            message_id,
             "stream_online_went_live",
             epoch,
             || async {
                 self.hooks
-                    .on_stream_went_live(&work.broadcaster_id, &login)
+                    .on_stream_went_live_with_stream_id(broadcaster_id, login, stream_id)
                     .await;
                 Ok(())
             },
@@ -243,24 +261,60 @@ impl MonitoringEventHandler {
         if executed {
             tracing::info!(
                 login = %login,
-                broadcaster_id = %work.broadcaster_id,
+                broadcaster_id,
                 "EventSub stream.online: Go-Live-Handler getriggert"
             );
         }
         run_business_effect_once(
             &self.guard,
-            work.message_id.as_deref(),
+            message_id,
             "stream_online_refresh",
             epoch,
             || async {
                 self.hooks
-                    .on_score_refresh(&work.broadcaster_id, Some(&login), "eventsub_stream_online")
+                    .on_score_refresh(broadcaster_id, Some(login), "eventsub_stream_online")
                     .await;
                 Ok(())
             },
         )
         .await?;
         Ok(())
+    }
+
+    async fn handle_stream_online_followups(&self, payload: &Value) -> Result<(), HandlerError> {
+        let text = |key: &str| {
+            payload
+                .get(key)
+                .and_then(Value::as_str)
+                .map(str::trim)
+                .unwrap_or("")
+                .to_string()
+        };
+        let broadcaster_id = {
+            let id = text("broadcaster_user_id");
+            if id.is_empty() {
+                text("broadcaster_id")
+            } else {
+                id
+            }
+        };
+        if broadcaster_id.is_empty() {
+            return Err("invalid stream.online.followups processing payload".into());
+        }
+        let broadcaster_login = text("broadcaster_login");
+        let login_value = text("login_value").to_lowercase();
+        let login = if login_value.is_empty() {
+            broadcaster_login.to_lowercase()
+        } else {
+            login_value
+        };
+        let stream_id = text("stream_id");
+        let stream_id = Some(stream_id.as_str()).filter(|s| !s.is_empty());
+        let message_id = text("message_id");
+        let message_id = Some(message_id.as_str()).filter(|m| !m.is_empty());
+
+        self.run_stream_online_followups(&broadcaster_id, &login, stream_id, message_id)
+            .await
     }
 
     /// stream.offline (Python `_on_eventsub_stream_offline`). Reihenfolge der
@@ -438,6 +492,7 @@ impl InboxHandler for MonitoringEventHandler {
         let work = WorkPayload::from(payload);
         match work_type.trim().to_lowercase().as_str() {
             "stream.online" => self.handle_stream_online(&work).await,
+            "stream.online.followups" => self.handle_stream_online_followups(payload).await,
             "stream.offline" => self.handle_stream_offline(&work).await,
             "channel.update" => self.handle_channel_update(&work).await,
             "channel.raid" => self.handle_channel_raid(&work).await,

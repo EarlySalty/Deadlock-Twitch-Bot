@@ -182,6 +182,16 @@ pub trait EventSubHooks: Send + Sync {
     async fn on_channel_moderate(&self, _broadcaster_id: &str, _login: &str, _event: &Value) {}
     /// Go-Live-Followup: stream.offline-Subscription fürs Raid-Ziel (4d-ii).
     async fn on_stream_went_live(&self, _twitch_user_id: &str, _login: &str) {}
+    /// Go-Live-Followup mit aktuellem Stream-Kontext. Implementierungen, die
+    /// die `stream_id` nicht brauchen, fallen auf den alten Hook zurück.
+    async fn on_stream_went_live_with_stream_id(
+        &self,
+        twitch_user_id: &str,
+        login: &str,
+        _stream_id: Option<&str>,
+    ) {
+        self.on_stream_went_live(twitch_user_id, login).await;
+    }
     /// Partner-Raid-Score-Refresh (Raid-Subsystem).
     async fn on_score_refresh(
         &self,
@@ -293,6 +303,17 @@ impl EventSubHooks for ChatSubscriptionTelemetryHooks {
 
     async fn on_stream_went_live(&self, twitch_user_id: &str, login: &str) {
         self.inner.on_stream_went_live(twitch_user_id, login).await;
+    }
+
+    async fn on_stream_went_live_with_stream_id(
+        &self,
+        twitch_user_id: &str,
+        login: &str,
+        stream_id: Option<&str>,
+    ) {
+        self.inner
+            .on_stream_went_live_with_stream_id(twitch_user_id, login, stream_id)
+            .await;
     }
 
     async fn on_score_refresh(

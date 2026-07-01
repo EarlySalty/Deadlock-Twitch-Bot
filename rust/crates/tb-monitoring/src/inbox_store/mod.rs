@@ -291,7 +291,7 @@ impl ProcessingInboxStore {
         if work_id.is_empty() {
             return Ok(false);
         }
-        with_write_retry(self.retry, || async {
+        let requeued = with_write_retry(self.retry, || async {
             let mut tx = self.pool.begin().await?;
             let row = sqlx::query!(
                 r#"
@@ -326,7 +326,11 @@ impl ProcessingInboxStore {
             tx.commit().await?;
             Ok(true)
         })
-        .await
+        .await?;
+        if requeued {
+            crate::inbox_runtime::notify_requeue_wakeups();
+        }
+        Ok(requeued)
     }
 }
 

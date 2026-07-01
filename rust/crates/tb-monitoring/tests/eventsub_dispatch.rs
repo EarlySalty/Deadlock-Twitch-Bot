@@ -687,6 +687,47 @@ async fn monitoring_handler_gibt_unknown_work_type_als_fehler_zurueck() {
 }
 
 #[tokio::test]
+async fn monitoring_handler_verarbeitet_stream_online_followups_work_type() {
+    let pool = pool_or_skip!("t4d_stream_online_followups");
+    let guard = GuardStore::new(pool.clone());
+    let live_state = LiveStateStore::new(pool.clone());
+    let tracker = Arc::new(SessionTracker::new(
+        SessionStore::new(pool.clone()),
+        live_state.clone(),
+        ExpSessionTracker::new(ExpSessionStore::new(pool.clone())),
+        Arc::new(NoFollowerSource),
+        "Deadlock",
+    ));
+    let hooks = Arc::new(RecordingHooks::default());
+    let handler = MonitoringEventHandler::new(
+        guard,
+        live_state,
+        tracker,
+        TelemetryStore::new(pool),
+        hooks.clone(),
+        None,
+        Arc::new(epoch_clock),
+    );
+
+    handler
+        .handle(
+            "stream.online.followups",
+            &serde_json::json!({
+                "broadcaster_user_id": "42",
+                "broadcaster_login": "Drag",
+                "login_value": "drag",
+                "stream_id": "s-2",
+                "message_id": "m-followups-1"
+            }),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(hooks.went_live.load(Ordering::SeqCst), 1);
+    assert_eq!(hooks.score_refresh.load(Ordering::SeqCst), 1);
+}
+
+#[tokio::test]
 async fn chat_subscription_telemetry_hook_persistiert_mit_should_capture_gate() {
     let pool = pool_or_skip!("t4d_chat_sub_telemetry_hook");
     let has_dedicated_sub = Arc::new(AtomicBool::new(false));

@@ -393,20 +393,6 @@ impl PollEngine {
             let twitch_user_id = entry.twitch_user_id.as_deref();
             let is_archived = entry.is_archived;
 
-            // Go-Live: 4d registriert hier die stream.offline-Subscription.
-            if !was_live && is_live && entry.is_partner_active {
-                if let Some(user_id) = twitch_user_id {
-                    if let Err(error) = self
-                        .guard
-                        .release(GuardKind::OfflineThrottle, user_id)
-                        .await
-                    {
-                        tracing::debug!(%error, twitch_user_id = %user_id, "Poller Go-Live: OfflineThrottle konnte nicht freigegeben werden");
-                    }
-                    self.hooks.on_stream_went_live(user_id, &login_lower).await;
-                }
-            }
-
             let previous_game = prev_state
                 .and_then(|s| s.last_game.as_deref())
                 .unwrap_or("")
@@ -430,6 +416,26 @@ impl PollEngine {
                 .unwrap_or("")
                 .trim()
                 .to_string();
+
+            // Go-Live: 4d registriert hier die stream.offline-Subscription.
+            if !was_live && is_live && entry.is_partner_active {
+                if let Some(user_id) = twitch_user_id {
+                    if let Err(error) = self
+                        .guard
+                        .release(GuardKind::OfflineThrottle, user_id)
+                        .await
+                    {
+                        tracing::debug!(%error, twitch_user_id = %user_id, "Poller Go-Live: OfflineThrottle konnte nicht freigegeben werden");
+                    }
+                    self.hooks
+                        .on_stream_went_live_with_stream_id(
+                            user_id,
+                            &login_lower,
+                            Some(current_stream_id.as_str()).filter(|s| !s.is_empty()),
+                        )
+                        .await;
+                }
+            }
             let stream_id_value = if !current_stream_id.is_empty() {
                 Some(current_stream_id.clone())
             } else if !previous_stream_id.is_empty() {

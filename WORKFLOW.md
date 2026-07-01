@@ -1,5 +1,12 @@
 # Workflow
 
+## 2026-07-02 — Wave7 Monitoring Inbox/Poll
+
+- Start: delegierter GPT-Implementierungsworker fuer Wave7 `tb-monitoring` Inbox/Poll + `tb-bot` Wiring; Scope Python nur lesen, Rust minimal, kein Commit/Push/Stash/Checkout und kein repo-weites `cargo fmt`.
+- Recon bisher: Inbox-Requeue-Wakeup in Rust bestaetigt fehlend (Python weckt Runtime nach Requeue); Python-Inbox kennt zusaetzlich `stream.online.followups`; Dashboard-EventSub-Bridge-Outbox ist in Rust architektonisch durch nativen WebhookReceiver/EventSubDispatcher/InboxRuntime ersetzt; Poll-ScoreRefresh ist in `SubscriptionPollHooks::after_tick` bereits verdrahtet; ReAuth-Dedupe braucht aktuellen Stream-Kontext statt stale/fehlendem `stream_id`.
+- Implementiert: Requeue weckt aktive Inbox-Runtimes; `stream.online.followups` wird als Inbox-Worktype verarbeitet; EventSub-/Poll-Go-Live-Hooks transportieren optional den aktuellen `stream_id`; ReAuth-Reminder dedupt mit aktuellem Stream-Kontext und Poller nutzt den Tick-Stream vor dem DB-Fallback.
+- Verifikation: Wegwerf-Postgres `wave7-pg` auf `127.0.0.1:55458`; gezielte Regressionstests fuer Requeue-Wakeup, Followup-Worktype und ReAuth-Stream-Dedupe gruen; `SQLX_OFFLINE=true cargo build -p tb-monitoring -p tb-bot` gruen; `cargo clippy --all-targets -p tb-monitoring -p tb-bot` exit 0 mit bestehenden Warnungen ausserhalb der Wave7-Aenderung; `cargo test -p tb-monitoring -p tb-bot --no-fail-fast` gruen mit 287 passed / 0 failed. Report geschrieben nach `scratchpad/triage/fix/wave7_report.json`.
+
 ## 2026-07-01 — Reauth Opt-out AuthWriter Fix
 
 - Start: delegierter GPT-Implementierungsworker fuer `Fix RAID-REAUTH-OPTOUT auth_writer`; Diagnose `reauth_optout_diag.json` vollstaendig gelesen. Scope minimal auf `tb-raid` AuthWriter/Test plus Workflow/Report, kein Commit/Push/Stash, kein cargo fmt.

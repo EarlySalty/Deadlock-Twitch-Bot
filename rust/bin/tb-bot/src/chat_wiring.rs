@@ -1295,7 +1295,19 @@ impl EventSubHooks for ChatHooks {
             .await;
     }
     async fn on_stream_went_live(&self, twitch_user_id: &str, login: &str) {
-        self.inner.on_stream_went_live(twitch_user_id, login).await;
+        self.on_stream_went_live_with_stream_id(twitch_user_id, login, None)
+            .await;
+    }
+
+    async fn on_stream_went_live_with_stream_id(
+        &self,
+        twitch_user_id: &str,
+        login: &str,
+        stream_id: Option<&str>,
+    ) {
+        self.inner
+            .on_stream_went_live_with_stream_id(twitch_user_id, login, stream_id)
+            .await;
         self.maybe_send_golive_tip(twitch_user_id, login).await;
 
         // Werbefrei-Pitch (Python eventsub_mixin.py:1523-1555): War der Bot in

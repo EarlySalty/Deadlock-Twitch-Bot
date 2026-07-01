@@ -637,6 +637,16 @@ pub struct RaidEventSubHooks {
 #[async_trait::async_trait]
 impl EventSubHooks for RaidEventSubHooks {
     async fn on_stream_went_live(&self, twitch_user_id: &str, login: &str) {
+        self.on_stream_went_live_with_stream_id(twitch_user_id, login, None)
+            .await;
+    }
+
+    async fn on_stream_went_live_with_stream_id(
+        &self,
+        twitch_user_id: &str,
+        login: &str,
+        stream_id: Option<&str>,
+    ) {
         self.manager
             .ensure_offline_subscription(twitch_user_id, login)
             .await;
@@ -644,7 +654,9 @@ impl EventSubHooks for RaidEventSubHooks {
         // an die fällige Re-Authentifizierung erinnern. Best-effort, eigener
         // Dedupe-Guard — der stream.offline-Sub-Pfad bleibt davon unberührt.
         if let Some(reminder) = &self.reauth_reminder {
-            reminder.maybe_remind(twitch_user_id, login).await;
+            reminder
+                .maybe_remind_for_stream(twitch_user_id, login, stream_id)
+                .await;
         }
     }
 
