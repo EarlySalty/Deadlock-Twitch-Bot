@@ -245,12 +245,21 @@ fn spawn_token_lifecycle_tasks(
                     0
                 };
                 let restored = reactor.restore_ready_bot_banned_channels().await;
+                let token_reactivated = reactor
+                    .reactivate_token_error_partners_with_valid_auth()
+                    .await;
                 let reconciled = reactor.reconcile_healthy_raid_toggles().await;
-                if notified > 0 || expired > 0 || restored > 0 || reconciled > 0 {
+                if notified > 0
+                    || expired > 0
+                    || restored > 0
+                    || token_reactivated > 0
+                    || reconciled > 0
+                {
                     tracing::info!(
                         notified,
                         grace_expired = expired,
                         bot_ban_restored = restored,
+                        token_error_reactivated = token_reactivated,
                         raid_toggle_reconciled = reconciled,
                         "Token-Lifecycle-Sweep abgeschlossen"
                     );
