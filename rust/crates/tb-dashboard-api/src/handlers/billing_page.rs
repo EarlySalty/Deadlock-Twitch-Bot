@@ -1045,6 +1045,17 @@ async fn persist_cancelled_subscription(
     )
     .await?;
     tx.commit().await?;
+    if let Some(sync) = tb_analytics::stripe::webhook_apply::streamer_plan_sync_from_event(
+        "customer.subscription.updated",
+        subscription,
+        None,
+    ) {
+        if let Err(error) =
+            tb_analytics::stripe::webhook_apply::sync_plan_to_streamer_plans(pool, &sync).await
+        {
+            tracing::warn!(%error, "billing cancel fallback streamer plan sync failed");
+        }
+    }
     Ok(())
 }
 

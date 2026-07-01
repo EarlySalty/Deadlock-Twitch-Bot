@@ -340,16 +340,15 @@ pub enum AiModel {
 /// Wählt das KI-Modell anhand der Plan-Entitlements: das konsolidierte
 /// `analytics`-Flag → Opus, sonst `None` (kein KI-Zugang). Die frühere
 /// ai_mini→MiniMax-Stufe entfällt mit der Analytics-Konsolidierung.
-pub async fn plan_ai_model(pool: &PgPool, streamer: &str) -> Option<AiModel> {
+pub async fn plan_ai_model(pool: &PgPool, streamer: &str) -> Result<Option<AiModel>, sqlx::Error> {
     // Nur Login (kein user_id) → der Trial-Auto-Grant in resolve_plan_snapshot
     // bleibt aus (braucht beides), reine Lese-Auflösung.
     let snapshot = crate::plan::resolve_plan_snapshot(pool, streamer, "")
-        .await
-        .ok()?;
+        .await?;
     if snapshot.entitlements.contains(&"analytics") {
-        Some(AiModel::Opus)
+        Ok(Some(AiModel::Opus))
     } else {
-        None
+        Ok(None)
     }
 }
 
@@ -2085,8 +2084,23 @@ pub async fn trigger_post_stream_analysis(
     // Plan-basiertes Modell: ohne das konsolidierte `analytics`-Flag gibt es
     // KEINEN KI-Report mehr (kein MiniMax-Default-Fallback). Streamer ohne
     // Analytics-Zugang lösen also keinen Post-Stream-Report aus.
-    let Some(model) = plan_ai_model(pool, &streamer).await else {
-        return;
+    let model = match plan_ai_model(pool, &streamer).await {
+        Ok(Some(model)) => model,
+        Ok(None) => {
+            tracing::debug!(
+                streamer = %streamer,
+                "PostStream: kein Analytics-Entitlement, Report bewusst gegated"
+            );
+            return;
+        }
+        Err(e) => {
+            tracing::warn!(
+                error = ?e,
+                streamer = %streamer,
+                "PostStream: Plan-Resolver fehlgeschlagen, Report nicht gestartet"
+            );
+            return;
+        }
     };
 
     // Session-Lookup, wenn keine ID übergeben (letzte abgeschlossene Session).
@@ -2673,7 +2687,7 @@ mod tests {
             .await
             .unwrap();
         // Plan-Resolver-Tabellen: ohne sie liefert resolve_plan_snapshot einen
-        // Fehler → plan_ai_model None → kein Report. Leer = raid_free (kein
+        // Fehler, der sichtbar geloggt wird. Leer = raid_free (kein
         // analytics-Flag); Tests, die einen Report erwarten, tragen einen
         // analysis_dashboard-Override ein.
         sqlx::query(
@@ -2693,6 +2707,14 @@ mod tests {
         .await
         .unwrap();
         Some(pool)
+    }
+
+    #[tokio::test]
+    async fn plan_ai_model_gibt_resolver_fehler_zurueck() {
+        let Some(pool) = pool_or_skip("t6e_plan_model_err").await else {
+            return;
+        };
+        assert!(plan_ai_model(&pool, "streamer").await.is_err());
     }
 
     #[tokio::test]
