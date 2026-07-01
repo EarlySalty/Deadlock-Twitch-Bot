@@ -25,6 +25,9 @@ pub use auth::session::{
 pub use handlers::auth_login::{oauth_login_config_from_env, OAuthLoginConfig};
 pub use handlers::billing_page::{billing_page_config_from_env, BillingPageConfig};
 pub use handlers::billing_webhook::{stripe_webhook_config_from_env, StripeWebhookConfig};
+pub use handlers::health_probe::{
+    analytics_db_fingerprint_startup_check, AnalyticsDbFingerprintStartup,
+};
 
 use axum::{
     http::{header::HeaderName, HeaderValue},
@@ -1250,7 +1253,7 @@ pub fn build_social_media_admin_router(pool: PgPool) -> Router {
 /// Marketing-Seite, `/twitch/dashboard` und `/twitch/verwaltung` liefern nur
 /// die SPA-Shell; Auth/Gates passieren clientseitig bzw. in den JSON-APIs.
 pub fn build_v2_spa_pages_router() -> Router {
-    use handlers::spa;
+    use handlers::{obsolete_routes, spa};
 
     Router::new()
         .route("/twitch/dashboard", get(spa::main_domain_spa_shell_handler))
@@ -1284,6 +1287,19 @@ pub fn build_v2_spa_pages_router() -> Router {
         .route(
             "/twitch/live-announcement",
             get(spa::analyse_root_redirect_handler),
+        )
+        .route(
+            "/twitch/api/live-announcement/config",
+            get(obsolete_routes::live_announcement_builder_gone_handler)
+                .post(obsolete_routes::live_announcement_builder_gone_handler),
+        )
+        .route(
+            "/twitch/api/live-announcement/preview",
+            get(obsolete_routes::live_announcement_builder_gone_handler),
+        )
+        .route(
+            "/twitch/api/live-announcement/test",
+            post(obsolete_routes::live_announcement_builder_gone_handler),
         )
 }
 
@@ -1485,5 +1501,34 @@ mod router_wiring_tests {
         assert_eq!(h.get("cross-origin-opener-policy").unwrap(), "same-origin");
         assert_eq!(h.get("x-xss-protection").unwrap(), "0");
         assert_eq!(h.get(header::LOCATION).unwrap(), "/streamer/foo");
+    }
+
+    #[tokio::test]
+    async fn live_announcement_legacy_api_pfade_liefern_410_json() {
+        let app = build_router(lazy_pool(), "smoke-token".into());
+        for (method, uri) in [
+            ("GET", "/twitch/api/live-announcement/config"),
+            ("POST", "/twitch/api/live-announcement/config"),
+            ("GET", "/twitch/api/live-announcement/preview"),
+            ("POST", "/twitch/api/live-announcement/test"),
+        ] {
+            let resp = app
+                .clone()
+                .oneshot(
+                    Request::builder()
+                        .method(method)
+                        .uri(uri)
+                        .header("host", "dashboard.example.com")
+                        .body(Body::empty())
+                        .unwrap(),
+                )
+                .await
+                .unwrap();
+            assert_eq!(resp.status(), StatusCode::GONE, "{method} {uri}");
+            let body = axum::body::to_bytes(resp.into_body(), 4096).await.unwrap();
+            let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+            assert_eq!(json["error"], "live_announcement_builder_removed");
+            assert!(json.get("message").and_then(|v| v.as_str()).is_some());
+        }
     }
 }

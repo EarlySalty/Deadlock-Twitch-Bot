@@ -6,7 +6,9 @@
 use axum::{
     http::{header, StatusCode},
     response::{IntoResponse, Redirect, Response},
+    Json,
 };
+use serde_json::json;
 
 /// `GET /twitch/raid/callback` — alter Python-Alias.
 ///
@@ -45,6 +47,20 @@ pub async fn raid_requirements_gone_handler() -> Response {
 /// das aktuelle Dashboard zurück.
 pub async fn social_media_admin_stub_redirect_handler() -> Response {
     Redirect::to("/twitch/dashboard").into_response()
+}
+
+/// `/twitch/api/live-announcement/{config,preview,test}` — der alte Builder ist
+/// im Rust-Cutover bewusst entfernt. Diese API darf nicht in den Python-Fallback
+/// fallen, sondern terminiert nativ mit einem JSON-Tombstone.
+pub async fn live_announcement_builder_gone_handler() -> Response {
+    (
+        StatusCode::GONE,
+        Json(json!({
+            "error": "live_announcement_builder_removed",
+            "message": "Live announcement builder API has been removed.",
+        })),
+    )
+        .into_response()
 }
 
 fn legacy_gone_page(title: &str, body: &str) -> String {

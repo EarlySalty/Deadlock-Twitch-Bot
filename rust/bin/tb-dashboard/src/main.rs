@@ -42,7 +42,9 @@ async fn main() {
 
     let addr = SocketAddr::from(([127, 0, 0, 1], port));
     let token = settings.internal_api.token.clone();
+    let readiness_fingerprint = tb_dashboard_api::analytics_db_fingerprint_startup_check().await;
     let mut app = build_router(pool.clone(), token);
+    app = app.layer(axum::Extension(readiness_fingerprint));
 
     // Welle D: Strangler-Fallback-Proxy → Python (8765) für noch nicht
     // portierte Dashboard-Routen. Ohne konfigurierte URL bleibt der Proxy
