@@ -1,5 +1,126 @@
 # Workflow
 
+## 2026-07-01 — Welle 5 Chat/IRC-Robustheit
+
+- Start: delegierter GPT-Implementierungsworker fuer 7 Findings CHAT-API-014, CHAT-IRC-015/009/010/003/014 und CHAT-PIPE-006; Scope strikt `tb-monitoring`, `tb-bot`, `tb-chat`, `tb-engagement`, kein Commit/Push.
+- Recon: Rust-Hotspots und Python-Referenzen gelesen: `irc_lurker.rs`/`irc_lurker_tracker.py`, `irc_lurker_wiring.rs`/`base.py`, `chatters_wiring.rs`/Chatters-Pythonpfade, `pipeline.rs`/`bot.py`, `irc_reader.rs`/`bot/engagement/irc_reader.py`.
+- Implementiert bisher: IRC-Lurker-Locks poison-tolerant + Stop-Signal, tb-bot IRC-Task-JoinHandle-Logging, Chatters-Poll Noop-Fallbacks bei fehlendem TokenProvider, IRC-Partner/Category-Klassifizierung, Engagement-IRC sequenziell, Chat-Pipeline-Step-Isolation. `SQLX_OFFLINE=true cargo check -p tb-monitoring -p tb-bot -p tb-chat -p tb-engagement` gruen.
+- Verifiziert final: `SQLX_OFFLINE=true cargo build -p tb-bot -p tb-monitoring -p tb-chat -p tb-engagement` gruen; `SQLX_OFFLINE=true cargo test -p tb-monitoring -p tb-chat -p tb-engagement` gruen (tb-chat 431 unit + 30 integration + 4 ignored doctests, tb-engagement 129 unit, tb-monitoring 76 unit + 90 integration); `SQLX_OFFLINE=true cargo clippy --message-format=short -p tb-bot -p tb-monitoring -p tb-chat -p tb-engagement --all-targets` exit 0 mit bestehenden Warnungen ausserhalb der geaenderten Stellen. Report: `/home/naniadm/.claude/projects/-home-naniadm-Claude-Native-Workspace/5b3905c3-f094-4325-b670-f7f72c2d4352/scratchpad/triage/fix/wave5_report.json`.
+
+## 2026-07-01 — Welle 4 tb-dashboard-api Vertraege
+
+- Start: delegierter GPT-Implementierungsworker fuer DASH-GATE-011/DASH-LIVEANN-005, DASH-GATE-014, DASH-BILL-002/OPS-RUNTIME-001; Scope strikt `tb-dashboard-api`, kein Commit/Push.
+- Recon: Python-Referenzen gelesen: Live-Announcement-Routen in `bot/dashboard/live/live_announcement_mixin.py`/`routes_mixin.py`, Dashboard-Readiness in `bot/dashboard_service/app.py`; Rust-Router/Handler in `rust/crates/tb-dashboard-api`.
+- Befund bisher: Demo-Router ist statisch/DB-frei; Live-Announcement-API-Tombstones fehlen; Readiness ist DB-only und muss auf Upstream/OAuth/Fingerprint-Paritaet gebracht werden.
+- Implementiert: native JSON-410-Tombstones fuer `/twitch/api/live-announcement/config` (GET/POST), `/preview` (GET), `/test` (POST); `/readyz`/`/health` pruefen jetzt Internal-API-Health, OAuth-Konfiguration und Analytics-DB-Fingerprint-Mismatch mit 503 bei Nicht-Bereitschaft.
+- Verifiziert: Demo-API in `handlers/demo.rs` bleibt statisch/DB-frei, kein echter Streamer-/DB-Zugriff. `SQLX_OFFLINE=true cargo build -p tb-dashboard-api`, `cargo test -p tb-dashboard-api` (700 passed, 1 ignored, Doc-Tests 0/2 ignored) und `cargo clippy -p tb-dashboard-api` gruen; Clippy meldet nur bestehende Warnungen ausserhalb der geaenderten Dateien. Report: `/home/naniadm/.claude/projects/-home-naniadm-Claude-Native-Workspace/5b3905c3-f094-4325-b670-f7f72c2d4352/scratchpad/triage/fix/wave4_report.json`.
+- Kritiker-Review: 1 HIGH-Befund dokumentiert, weil Rust den Analytics-Fingerprint-Mismatch live in `/readyz`/`/health` berechnet, waehrend Python nur den Startup-Cache als 503-Grund nutzt. Tombstones/Demo/Text/Scope/unwrap unauffaellig. Verifikation aus `rust/`: Build gruen, Tests 700 passed/1 ignored plus Doc-Tests 0 passed/2 ignored, Clippy exit 0 mit bestehenden Warnungen. Report: `scratchpad/triage/critic/wave4_crit.json`.
+
+## 2026-07-01 — Welle 3 tb-raid Kritiker Token/Grace-Lifecycle
+
+- Start: READ-ONLY adversariale Pruefung der uncommitteten Aenderungen in `rust/crates/tb-raid/src/token_lifecycle.rs` und `rust/bin/tb-bot/src/token_lifecycle_wiring.rs`; kein Source-Fix, kein Commit/Push/Stash.
+- Geprueft: Implementierer-Report `scratchpad/triage/fix/wave3_report.json`, `git diff`, Fail-Closed-Guards fuer Token-Error-Reactivation, Bot-Ban-Restore und Grace-Expiry; zusaetzliche SQL-Repros in isolierten Wegwerf-Containern.
+- Ergebnis: 3 High-Befunde dokumentiert: Login-OR-Auth kann falsche UID reaktivieren, Bot-Ban-Blacklist wird im Reconcile nur per Login statt ID/oder Login geprueft, Grace-Expiry ueberschreibt `blocked`/`bot_banned` zu `token_error_expired`. Report: `/home/naniadm/.claude/projects/-home-naniadm-Claude-Native-Workspace/5b3905c3-f094-4325-b670-f7f72c2d4352/scratchpad/triage/critic/wave3_crit.json`.
+- Verifikation: `SQLX_OFFLINE=true cargo build -p tb-raid` gruen; `SQLX_OFFLINE=true cargo check -p tb-bot` gruen; isolierter `postgres:16` auf `127.0.0.1:55437` fuer `TB_TEST_DATABASE_URL=... SQLX_OFFLINE=true cargo test -p tb-raid` gruen (264 Unit-Tests + 90 Integrationstests + 0 Doc-Tests); Container entfernt; `SQLX_OFFLINE=true cargo clippy -p tb-raid` gruen.
+
+## 2026-07-01 — Welle 2 tb-analytics Observability + Billing
+
+- Start: delegierter GPT-Implementierungsworker fuer ANA-REPORT-016/017/007 und DASH-BILL-012; Recherche aus `scratchpad/triage/answers/worker_1.json` und `worker_2.json` gelesen, kein Commit/Push.
+- Implementiert: `save_analysis` loggt DB-Fehler best-effort; AI-Parser loggt sanitisierten Parse-Failure-Kontext; Post-Stream-Planfehler werden von fehlendem Analytics-Entitlement unterschieden; Stripe-Webhook-Plan-Sync laeuft nach Commit best-effort.
+- Verifikation: `SQLX_OFFLINE=true cargo build -p tb-analytics`, `SQLX_OFFLINE=true cargo test -p tb-analytics`, `SQLX_OFFLINE=true cargo clippy -p tb-analytics` gruen; zusaetzlich `SQLX_OFFLINE=true cargo check -p tb-dashboard-api` gruen.
+
+## 2026-07-01 — Parity Triage Worker 2 Gruppe B
+
+- Start: READ-ONLY Analyse fuer CHAT-PIPE-002, DASH-BILL-012, MON-SUB-005, MON-SUB-006 und DASH-INTERNAL-019; keine Source-Edits, keine Builds/Tests/Commits.
+- Geprueft: Rust- und Python-/Altstellen fuer Chat-EventSub-Deserialisierung, Stripe-Webhook-Plan-Sync, EventSub-401/429-Reconcile-Luecke und Rust-only diagnose/scam-guard Error-Shapes.
+- Ergebnis: JSON-Report geschrieben nach `/home/naniadm/.claude/projects/-home-naniadm-Claude-Native-Workspace/5b3905c3-f094-4325-b670-f7f72c2d4352/scratchpad/triage/answers/worker_2.json`; Syntax per `jq empty` validiert.
+
+## 2026-06-30 — Kritiker-Rework 5 Befunde
+
+- Start: delegierter GPT-Implementierungsworker fuer CHAT-PIPE-007, ANA-OVERVIEW-006, CHAT-IRC-007, MON-POLL-003 und RAID-SCORE-003; Scope strikt auf die genannten Dateien plus Report, kein Commit/Push.
+- Recon: Befundstellen in `chat_wiring.rs`, `overview.rs`, `irc_lurker.rs`, `poller/engine.rs` und `scoring.rs` bestaetigt; bestehende Tests/Fixtures werden lokal in denselben Dateien erweitert.
+- Implementiert: Chat-Engagement an Pipeline-Bool gegated; Overview-Zeitbinds wieder `::text::TIMESTAMPTZ` inkl. Category-Fixture; IRC-DB-Fehler werden geloggt/Batch bricht ab; Poller skippt offline-schreibende Wartung im tracked-Stream-Fehler-Tick; `round_score` auf CPython-kompatibles 6-Stellen-Rounding umgestellt.
+- Tests/Verifikation: `cargo check -p tb-bot`, `-p tb-analytics`, `-p tb-monitoring`, `-p tb-raid` gruen; `cargo test -p tb-bot -p tb-analytics -p tb-monitoring -p tb-raid --no-run` gruen; gezielte Regressionstests fuer Raid/Bot/Monitoring gruen (DB-optionale Tests skippen ohne `TB_TEST_DATABASE_URL`). Report: `/tmp/claude-1000/-home-naniadm-Claude-Native-Workspace/5b3905c3-f094-4325-b670-f7f72c2d4352/scratchpad/triage/critic/rework_report.json`.
+
+## 2026-06-30 - tb-dashboard-api Critic Worker 3
+
+- Start: READ-ONLY adversariale Pruefung fuer `rust/crates/tb-dashboard-api`; Spec/Findings gelesen, Scope `git diff origin/main..HEAD -- rust/crates/tb-dashboard-api`, keine Code-Fixes/kein Commit.
+- Ergebnis: 1 MED-Befund (`DASH-AUTH-007`), weil Rust nur den OAuth-Kontext-Cookie-Namen angleicht, aber Set/Clear weiter mit `Path=/` ausfuehrt, waehrend Python callback-spezifische Pfade nutzt. Billing-, Scope-, Affiliate- und Promo-Aenderungen ohne weiteren belastbaren Befund.
+- Verifikation: `git diff --check origin/main..HEAD -- rust/crates/tb-dashboard-api` gruen; `cargo test -p tb-dashboard-api --no-run` aus `rust/` gruen. Report geschrieben nach `/tmp/claude-1000/-home-naniadm-Claude-Native-Workspace/5b3905c3-f094-4325-b670-f7f72c2d4352/scratchpad/triage/critic/crit_dashboard.json`.
+
+## 2026-06-30 - Critic tb-analytics + tb-internal-api
+
+- Start: READ-ONLY adversariale Pruefung fuer `rust/crates/tb-analytics` und `rust/crates/tb-internal-api`; Spezifikation/Finding-Referenzen gelesen, keine Code-Fixes.
+- Geprueft: `git diff origin/main..HEAD -- rust/crates/tb-analytics rust/crates/tb-internal-api`, Python-Referenzen fuer EventSub-Requeue/Debug und Overview-Aufrufer.
+- Ergebnis: 1 high-Befund in `overview_category_rank` wegen Rueckbau der `ts_utc`-Zeitfilter-Typisierung gegen den aktuellen TIMESTAMPTZ-Migrationsvertrag; Internal-API-Findings ohne Befund.
+- Verifikation: `git diff --check -- rust/crates/tb-analytics rust/crates/tb-internal-api` gruen; `cargo test -p tb-analytics -p tb-internal-api --no-run` aus `rust/` gruen. Report: `/tmp/claude-1000/-home-naniadm-Claude-Native-Workspace/5b3905c3-f094-4325-b670-f7f72c2d4352/scratchpad/triage/critic/crit_analytics_internal.json`.
+
+## 2026-06-30 — tb-raid Critic Worker 4
+
+- Start: READ-ONLY adversariale Pruefung fuer `rust/crates/tb-raid`; Scope Diff `origin/main..HEAD`, Fokus `RAID-SETUP-017`, `RAID-SCORE-003`, `RAID-SCORE-016`, Restore-Pfad und i32/i64-Stellen; keine Rust-Source-Edits/kein Commit.
+- Ergebnis: 1 MED-Befund (`RAID-SCORE-003`), weil der neue `round_score`-Helper mathematische .5-Mikroeinheiten anders rundet als CPython `round(float, 6)` (`0.1234575`: Rust-Test 0.123458, Python 0.123457). `token_error`-Cleanup/Restore-Pfad und Upsert-Guard ohne weiteren Befund.
+- Verifikation: `cargo test -p tb-raid --no-run` aus `rust/` gruen; `git diff --check` gruen. Report geschrieben nach `/tmp/claude-1000/-home-naniadm-Claude-Native-Workspace/5b3905c3-f094-4325-b670-f7f72c2d4352/scratchpad/triage/critic/crit_raid.json`.
+
+## 2026-06-30 — tb-bot Critic Worker 5
+
+- Start: READ-ONLY adversariale Pruefung fuer `rust/bin/tb-bot`; Scope Diff `origin/main..HEAD`, Fokus RAID-SETUP-014, RAID-ARR-011 und CHAT-PIPE-007-Caller-Nutzung; keine Source-Edits/kein Commit.
+- Ergebnis: 1 High-Befund in `chat_wiring.rs`, weil `ChatPipeline::handle()`-Bool ignoriert und `spawn_engagement` weiter bedingungslos gestartet wird; RAID-SETUP-014 und RAID-ARR-011 ohne Befund.
+- Report geschrieben nach `/tmp/claude-1000/-home-naniadm-Claude-Native-Workspace/5b3905c3-f094-4325-b670-f7f72c2d4352/scratchpad/triage/critic/crit_bot.json`.
+
+## 2026-06-30 — tb-chat Critic Worker 6
+
+- Start: READ-ONLY adversariale Pruefung fuer `rust/crates/tb-chat`; Scope Diff `origin/main..HEAD`, Python-Paritaet fuer Commands/Promos und Caller-Nutzung von `should_spawn_engagement`; keine Source-Edits/kein Commit.
+- Ergebnis: 1 high Finding (`CHAT-PIPE-007`) dokumentiert, weil `tb-bot` den neuen `ChatPipeline::handle()`-Bool ignoriert und Engagement weiter bedingungslos spawnt; Commands-/Promo-Texte ohne belastbaren Zusatzbefund. Report: `/tmp/claude-1000/-home-naniadm-Claude-Native-Workspace/5b3905c3-f094-4325-b670-f7f72c2d4352/scratchpad/triage/critic/crit_chat.json`.
+
+## 2026-06-30 — tb-bot Paritaetsfixes
+
+- Start: delegierter GPT-Implementierungsworker fuer 6 Findings in `rust/bin/tb-bot`; Scope nur Binary-Crate plus lokale Tests, kein Commit/Push.
+- Eingabe gelesen: `FIX_SPEC.md` und `tb-bot.json`; Evidence-Stellen gegen aktuellen Code geprueft. Sichtbarer Text nur als `PLATZHALTER_TEXT` mit Report-Stelle.
+- Implementiert: Re-Auth-Followup nur mit Discord-ID, Chat-HTTP-Body-Snippet, Announcement-Chat-Fallback mit Platzhalter-Erfolgslabel, Stream-Fetch-Fehler als leerer Kandidaten-Snapshot, atomarer Orphan-Claim und Grace-Expiry unabhaengig vom Discord-Broker.
+- Tests ergaenzt: Existing-Auth-Followup-Gate, Chat-Error/Fallback-Mapping, Stream-Fetch-Err-Fallback, Orphan-Claim und Token-Lifecycle-Sweep-Policy.
+- Verifikation: `cargo check -p tb-bot` aus `rust/` gruen; `cargo test -p tb-bot --no-run` gruen; `git diff --check` gruen. Report geschrieben nach `/tmp/claude-1000/-home-naniadm-Claude-Native-Workspace/5b3905c3-f094-4325-b670-f7f72c2d4352/scratchpad/triage/fix/report_tb-bot.json`.
+
+## 2026-06-30 — tb-raid Paritaetsfixes
+
+- Start: delegierter GPT-Implementierungsworker fuer 9 Findings in `rust/crates/tb-raid`; Scope nur dieses Crate plus Tests, kein Commit/Push.
+- Eingabe gelesen: `FIX_SPEC.md` und `tb-raid.json`; Evidence-Gegenpruefung gestartet. Besonderheiten: RAID-SETUP-017 nur `clear_failure_count` exakt `token_error`; Restore-/Sweep-Pfade bleiben unveraendert. RAID-OAUTH-008 nur bei realem Multi-Version-Bedarf aendern.
+- Implementiert: Follower-Unknown-Sentinel im Partnerpfad, eingefrorener Target-/Score-Snapshot im Pending, ScoreStore-Fehler-Fallback, Banker's Rounding fuer Scores/avg_duration, timestamp-guarded Score-Upsert, exakter `token_error`-Cleanup, Recruitment-Due-Limit 50 und History-Fehler nach erfolgreicher Helix-Antwort als best-effort.
+- NO_CHANGE: RAID-OAUTH-008, weil die realen Writer/Migrationen aktuell ausschliesslich `enc_version=1` nutzen; kein spekulativer Multi-Version-Re-Read.
+- Tests ergaenzt/angepasst: Target-Resolution Follower/Snapshot, Auto-Raid Pending/ScoreStore/History-Fallbacks, ScoreStore Timestamp-Guard, Banker's-Rounding, Token-Cleanup exakt, Recruitment-Due-Limit.
+- Verifikation: `cargo check -p tb-raid` aus `rust/` gruen; `cargo test -p tb-raid --no-run` gruen; `git diff --check` gruen.
+
+## 2026-06-30 — tb-dashboard-api Paritaetsfixes
+
+- Start: delegierter GPT-Implementierungsworker fuer 12 Findings in `rust/crates/tb-dashboard-api`; Scope nur dieses Crate plus Tests, kein Commit/Push.
+- Eingabe gelesen: `FIX_SPEC.md` und `tb-dashboard-api.json`; Evidence-Stellen gegen aktuellen Code geprueft.
+- Implementiert: Audience-Fehlerpfade und Bot-Filter, geteilter dynamischer Viewer-Exclusion-Helper, tb_analytics-rawChatStatus-Fallback, Owner-Scope in AI-Chat/Viewer-Timeline, Checkout-customer_email, Cancel-Fallback-Persistenz, OAuth-Kontext-Cookie-Name, Affiliate-Commission-Route, Overview-Streamer-Echo, Self-Explainer-Leak-Marker und Promo-Message-POST.
+- Tests ergaenzt/angepasst: Audience-Filter/DB-Fehler, AI-Chat Owner-Mismatch, Overview effektiver Streamer, Viewer-Timeline Pfad-Scope, Billing Checkout/Cancel/Promo, Affiliate-Commissions, Self-Explainer DOKUMENTE-Leak.
+- Verifikation: `cargo check -p tb-dashboard-api` aus `rust/` gruen; `cargo test -p tb-dashboard-api --no-run` gruen; `git diff --check` gruen. Report geschrieben nach `/tmp/claude-1000/-home-naniadm-Claude-Native-Workspace/5b3905c3-f094-4325-b670-f7f72c2d4352/scratchpad/triage/fix/report_tb-dashboard-api.json`.
+
+## 2026-06-30 — tb-analytics + tb-internal-api Paritaetsfixes
+
+- Start: delegierter GPT-Implementierungsworker fuer 4 Findings in `rust/crates/tb-analytics` und `rust/crates/tb-internal-api`; Scope nur diese Crates plus Tests, kein Commit/Push.
+- Eingabe gelesen: `FIX_SPEC.md`, `tb-analytics.json`, `tb-internal-api.json`; Evidence-Stellen gegen aktuellen Code geprueft.
+- Implementiert: `overview_category_rank` propagiert Query-Fehler; Requeue- und EventSub-Debug-Fehlerformen auf Python-Paritaet gemappt; direkter EventSub-Dispatch nutzt vorab `ensure_dispatch_ready`.
+- Tests ergaenzt: Category-Rank-Query-Fail, Requeue-Error-Shapes, EventSub-Unknown-Dispatch-503, Debug-DB-Fehler-Message.
+- Verifikation: `cargo check -p tb-analytics -p tb-internal-api` aus `rust/` gruen; `cargo test -p tb-analytics -p tb-internal-api --no-run` gruen; `git diff --check` gruen. Report geschrieben nach `/tmp/claude-1000/-home-naniadm-Claude-Native-Workspace/5b3905c3-f094-4325-b670-f7f72c2d4352/scratchpad/triage/fix/report_analytics-internal.json`.
+
+## 2026-06-30 — tb-chat Paritaetsfixes
+
+- Start: delegierter GPT-Implementierungsworker fuer 9 Findings in `rust/crates/tb-chat`; Scope nur dieses Crate plus Tests, kein Commit/Push.
+- Eingabe gelesen: `FIX_SPEC.md` und `tb-chat.json`; Evidence-Stellen gegen aktuellen Code geprueft. Wichtige Text-Regel: betroffene user-sichtbare deutsche Chat-Texte werden nur als `PLATZHALTER_TEXT` gesetzt und im Report mit Python-Referenz dokumentiert.
+- Befund: `CHAT-PIPE-007` braucht zum vollstaendigen Runtime-Gate auch `rust/bin/tb-bot/src/chat_wiring.rs`; wegen Scope-Grenze wird im Crate nur der Pipeline-Outcome vorbereitet und die Caller-Verdrahtung im Report als offen markiert.
+- Implementiert bisher: AutoBan-Notice-Send-Outcome-Logging, Silentban/Silentraid-Reauth-Gates, Engagement-On/Off/Status-Fehlerpfade mit Platzhaltern, Promo-Template-Renderer/Streamer-Validation und Pipeline-Engagement-Outcome im Crate.
+
+## 2026-06-30 — tb-monitoring Paritäts-Bugfixes
+
+- Start: delegierter GPT-Implementierungsworker fuer 8 Findings in `rust/crates/tb-monitoring`; Scope auf dieses Crate plus Tests, kein Commit/Push.
+- Eingabe gelesen: Fix-Spezifikation und `tb-monitoring.json`; Gegenprüfung der Evidence-Stellen gestartet.
+- Implementiert: IRC-Channel-Normalisierung fuer `get_chatters`, IRC-DB-Fehlerwarnungen mit Kontext, NAMES-Flush/Stagger, EventSub-Receiver-Fail-Closed fuer fehlenden `message-type` und leere Challenge, Core-Delivery-Ablehnung ohne `broadcaster_id`, Inbox-Panic-Supervision und Poller-API-Fehler ohne Offline-Transition.
+- Tests ergänzt: Webhook-Header/Challenge-Helper, IRC-`get_chatters` mit `#`, Core-Delivery ohne Broadcaster, Inbox-Panic-Retry/Worker lebt weiter, Poller-API-Fehler erhält Live-State.
+- Verifikation: `cargo check --manifest-path rust/Cargo.toml -p tb-monitoring` gruen; `cargo test --manifest-path rust/Cargo.toml -p tb-monitoring --no-run` gruen; `git diff --check` gruen.
+- Kritiker-Review: committeten Diff gegen `tb-monitoring` read-only geprüft. Zwei MED-Befunde geschrieben nach `/tmp/claude-1000/-home-naniadm-Claude-Native-Workspace/5b3905c3-f094-4325-b670-f7f72c2d4352/scratchpad/triage/critic/crit_monitoring.json`: IRC-DB-Fehler vor execute bleiben still, Poller-Stale-Sweep kann API-Fehler-Fix umgehen. Verifikation im Review: `cargo check --manifest-path rust/Cargo.toml -p tb-monitoring`, `cargo test --manifest-path rust/Cargo.toml -p tb-monitoring --no-run`, `git diff --check origin/main..HEAD -- rust/crates/tb-monitoring` gruen.
+
 ## 2026-06-30 — sqlx Welle 5 Rework-4 tb-social-media Test-i64
 
 - Start: delegierter GPT-Implementierungsworker fuer 3 Test-Build-Typfehler in `clip_queue.rs`, `insights_worker.rs` und `retention.rs`; kein Commit/Push, keine Git-Kommandos, Scope nur `#[cfg(test)]`-Module.
