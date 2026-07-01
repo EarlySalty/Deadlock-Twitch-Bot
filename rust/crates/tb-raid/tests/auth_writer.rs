@@ -73,6 +73,7 @@ async fn pool_in_schema(dsn: &str, schema: &str) -> PgPool {
     sqlx::query(
         "CREATE TABLE twitch_partners (
             twitch_user_id TEXT, technical_pause_reason TEXT,
+            manual_partner_opt_out INTEGER DEFAULT 0,
             raid_bot_enabled INTEGER DEFAULT 0
         )",
     )
@@ -109,6 +110,8 @@ fn base_auth(user_id: &str, activate: bool) -> NewAuth {
         activate_raid_features: activate,
     }
 }
+
+type PartnerPauseRow = (String, Option<String>, Option<i32>, Option<i32>);
 
 #[tokio::test]
 async fn neuer_auth_wird_verschluesselt_gespeichert_und_ist_lesbar() {
@@ -197,8 +200,9 @@ async fn reauth_entfernt_blacklist_und_loest_token_error_pause() {
     .await
     .unwrap();
     sqlx::query(
-        "INSERT INTO twitch_partners (twitch_user_id, technical_pause_reason, raid_bot_enabled)
-         VALUES ('42', 'token_error', 0)",
+        "INSERT INTO twitch_partners (twitch_user_id, technical_pause_reason,
+            manual_partner_opt_out, raid_bot_enabled)
+         VALUES ('42', 'token_error', 1, 0)",
     )
     .execute(&pool)
     .await
@@ -226,13 +230,15 @@ async fn reauth_entfernt_blacklist_und_loest_token_error_pause() {
             .unwrap();
     assert_eq!(bl, 0, "Blacklist-Eintrag nach Re-Auth gelöscht");
 
-    // technical_pause_reason='token_error' aufgehoben und Raid wieder aktiviert.
-    let (pause, raid_enabled): (Option<String>, Option<i32>) =
-        sqlx::query_as("SELECT technical_pause_reason, raid_bot_enabled FROM twitch_partners WHERE twitch_user_id='42'")
+    // technical_pause_reason='token_error' aufgehoben, technischer Opt-out
+    // zurückgesetzt und Raid wieder aktiviert.
+    let (pause, opt_out, raid_enabled): (Option<String>, Option<i32>, Option<i32>) =
+        sqlx::query_as("SELECT technical_pause_reason, manual_partner_opt_out, raid_bot_enabled FROM twitch_partners WHERE twitch_user_id='42'")
             .fetch_one(&pool)
             .await
             .unwrap();
     assert_eq!(pause, None, "token_error-Pause aufgehoben");
+    assert_eq!(opt_out, Some(0), "technischer Opt-out zurückgesetzt");
     assert_eq!(
         raid_enabled,
         Some(1),
@@ -252,7 +258,7 @@ async fn reauth_entfernt_blacklist_und_loest_token_error_pause() {
 }
 
 #[tokio::test]
-async fn reauth_ohne_aktivierung_loest_token_error_suffix_pause_nicht() {
+async fn reauth_loest_token_error_suffix_pause_auch_ohne_aktivierung() {
     let pool = pool_or_skip!("t6a_authwrite_suffix_pause");
     let writer = AuthWriter::new(pool.clone(), cipher());
 
@@ -263,8 +269,9 @@ async fn reauth_ohne_aktivierung_loest_token_error_suffix_pause_nicht() {
     .await
     .unwrap();
     sqlx::query(
-        "INSERT INTO twitch_partners (twitch_user_id, technical_pause_reason, raid_bot_enabled)
-         VALUES ('43', 'token_error_expired', 0)",
+        "INSERT INTO twitch_partners (twitch_user_id, technical_pause_reason,
+            manual_partner_opt_out, raid_bot_enabled)
+         VALUES ('43', 'token_error_expired', 1, 0)",
     )
     .execute(&pool)
     .await
@@ -282,13 +289,14 @@ async fn reauth_ohne_aktivierung_loest_token_error_suffix_pause_nicht() {
             .unwrap();
     assert_eq!(bl, 0, "Blacklist-Eintrag nach Re-Auth gelöscht");
 
-    let (pause, raid_enabled): (Option<String>, Option<i32>) =
-        sqlx::query_as("SELECT technical_pause_reason, raid_bot_enabled FROM twitch_partners WHERE twitch_user_id='43'")
+    let (pause, opt_out, raid_enabled): (Option<String>, Option<i32>, Option<i32>) =
+        sqlx::query_as("SELECT technical_pause_reason, manual_partner_opt_out, raid_bot_enabled FROM twitch_partners WHERE twitch_user_id='43'")
             .fetch_one(&pool)
             .await
             .unwrap();
-    assert_eq!(pause.as_deref(), Some("token_error_expired"));
-    assert_eq!(raid_enabled, Some(0));
+    assert_eq!(pause, None, "token_error*-Pause aufgehoben");
+    assert_eq!(opt_out, Some(0), "technischer Opt-out zurückgesetzt");
+    assert_eq!(raid_enabled, Some(1));
 }
 
 #[tokio::test]
@@ -320,5 +328,69 @@ async fn reauth_reaktiviert_hard_pause_nicht() {
         raid_enabled,
         Some(0),
         "Hard-Pause darf Reauth nicht aktivieren"
+    );
+}
+
+#[tokio::test]
+async fn reauth_respektiert_echte_optouts_und_hard_pauses() {
+    let pool = pool_or_skip!("t6a_authwrite_optout_hardpauses");
+    let writer = AuthWriter::new(pool.clone(), cipher());
+
+    sqlx::query(
+        "INSERT INTO twitch_partners
+            (twitch_user_id, technical_pause_reason, manual_partner_opt_out, raid_bot_enabled)
+         VALUES
+            ('60', NULL, 1, 0),
+            ('61', 'paused_by_admin', 1, 0),
+            ('62', 'blocked', 0, 0),
+            ('63', 'bot_banned', 0, 0),
+            ('64', 'blocked', 1, 0),
+            ('65', 'bot_banned', 1, 0)",
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
+
+    for user_id in ["60", "61", "62", "63", "64", "65"] {
+        let mut auth = base_auth(user_id, true);
+        auth.twitch_login = format!("drag{user_id}");
+        writer.store_new_auth(&auth, Utc::now()).await.unwrap();
+    }
+
+    let rows: Vec<PartnerPauseRow> = sqlx::query_as(
+        "SELECT twitch_user_id, technical_pause_reason,
+                manual_partner_opt_out, raid_bot_enabled
+         FROM twitch_partners
+         ORDER BY twitch_user_id",
+    )
+    .fetch_all(&pool)
+    .await
+    .unwrap();
+
+    assert_eq!(
+        rows,
+        vec![
+            ("60".to_string(), None, Some(1), Some(0)),
+            (
+                "61".to_string(),
+                Some("paused_by_admin".to_string()),
+                Some(1),
+                Some(0),
+            ),
+            ("62".to_string(), Some("blocked".to_string()), Some(0), Some(0)),
+            (
+                "63".to_string(),
+                Some("bot_banned".to_string()),
+                Some(0),
+                Some(0),
+            ),
+            ("64".to_string(), Some("blocked".to_string()), Some(1), Some(0)),
+            (
+                "65".to_string(),
+                Some("bot_banned".to_string()),
+                Some(1),
+                Some(0),
+            ),
+        ]
     );
 }

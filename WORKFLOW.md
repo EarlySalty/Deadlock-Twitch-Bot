@@ -1,5 +1,19 @@
 # Workflow
 
+## 2026-07-01 — Reauth Opt-out AuthWriter Fix
+
+- Start: delegierter GPT-Implementierungsworker fuer `Fix RAID-REAUTH-OPTOUT auth_writer`; Diagnose `reauth_optout_diag.json` vollstaendig gelesen. Scope minimal auf `tb-raid` AuthWriter/Test plus Workflow/Report, kein Commit/Push/Stash, kein cargo fmt.
+- Implementiert: `AuthWriter::store_new_auth` heilt jetzt `token_error*`-Pausen, setzt dabei nur fuer diese technischen Pausegruende `manual_partner_opt_out=0`, und haelt die allgemeine `raid_bot_enabled`-Aktivierung an `activate_raid_features`, `manual_partner_opt_out=0` und nicht-`blocked`/`bot_banned` gebunden.
+- Tests ergaenzt/angepasst: `auth_writer`-Fixture um `manual_partner_opt_out`; Regression fuer echte manuelle Opt-outs ohne token_error-Pause sowie `blocked`/`bot_banned`; bestehender Suffix-Test auf gewollte `token_error_expired`-Heilung angepasst.
+- Verifikation: Wegwerf-Postgres `reauthfix-pg` auf `127.0.0.1:55456`; roter Callback-Test gruen; `cargo test -p tb-raid --test auth_writer` gruen; `cargo test -p tb-raid -p tb-bot --no-fail-fast` gruen mit 476 passed / 0 failed; `SQLX_OFFLINE=true cargo build -p tb-raid -p tb-bot` gruen; `SQLX_OFFLINE=true cargo clippy --all-targets -p tb-raid -p tb-bot` exit 0 mit bestehenden Warnungen ausserhalb der geaenderten AuthWriter-Stellen; `git diff --check` gruen. Report geschrieben nach `scratchpad/triage/fix/reauth_optout_fix_report.json`; Container entfernt.
+
+## 2026-07-01 — Reauth Opt-out Diagnose
+
+- Start: READ-ONLY Diagnose fuer roten tb-bot-Test `raid_oauth_impl::callback_tests::reauth_ohne_discord_state_fuehrt_partner_sync_aus`; Scope nur temp-Worktrees, Wegwerf-Postgres, Workflow/Report. Keine Source-Edits, kein Commit/Push, kein cargo fmt, Haupt-Worktree-HEAD bleibt unveraendert.
+- Ergebnis: Branch-Base `0ca35c30` ist bereits rot; HEAD `89248195` reproduziert `(Some(1), Some(1), None)`. Relevante OAuth/AuthWriter/PartnerSetup-Dateien sind zwischen Base und HEAD unveraendert; nur `token_lifecycle.rs` aendert sich in W1-W6 und zeigt bereits den token_error*-Reconcile mit `manual_partner_opt_out=0`.
+- Entscheidung: Hypothese A. Python `save_auth(... activate_raid_features=True)` setzt `manual_partner_opt_out=0` und `raid_bot_enabled=1`; Rust-AuthWriter heilt Pause/Raid, laesst Opt-out aber stehen. Empfehlung: enger Code-Fix in `rust/crates/tb-raid/src/auth_writer.rs`, Opt-out nur fuer altes `technical_pause_reason LIKE 'token_error%'` resetten, harte Pausen und echte manuelle Opt-outs erhalten.
+- Verifikation: Wegwerf-Postgres `reauthdiag-pg` auf `127.0.0.1:55455`; `TB_TEST_DATABASE_URL=... TB_TEST_REQUIRE_DB=1 SQLX_OFFLINE=true cargo test -p tb-bot reauth_ohne_discord_state_fuehrt_partner_sync_aus` fuer `89248195` und mit eigenem Target fuer `0ca35c30` jeweils rot wie erwartet; Report JSON per `jq empty` validiert: `/home/naniadm/.claude/projects/-home-naniadm-Claude-Native-Workspace/5b3905c3-f094-4325-b670-f7f72c2d4352/scratchpad/triage/critic/reauth_optout_diag.json`.
+
 ## 2026-07-01 — Wave6 Rework tracked.rs schema-robust
 
 - Start: delegierter GPT-Implementierungsworker fuer gezielten Rework in `rust/crates/tb-monitoring/src/poller/tracked.rs`; Scope nur Archiv-Kandidaten-Query plus Workflow/Report, kein cargo fmt, kein Commit/Push/Stash.
