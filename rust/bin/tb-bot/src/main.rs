@@ -616,7 +616,7 @@ async fn main() {
                 let partner_setup = oauth_followups::build_partner_setup_service(
                     pool.clone(),
                     helix_client.clone(),
-                    followup_relay,
+                    followup_relay.clone(),
                     chat_api_handle.as_ref().map(|h| h.api.clone()),
                 );
                 if partner_setup.is_none() {
@@ -624,7 +624,7 @@ async fn main() {
                         "PartnerSetupService nicht konstruierbar — OAuth-Followups entfallen"
                     );
                 }
-                raid_oauth_port = Some(Arc::new(raid_oauth_impl::TbRaidOAuthImpl::new(
+                let raid_oauth_impl = raid_oauth_impl::TbRaidOAuthImpl::new(
                     pool.clone(),
                     tb_raid::state_store::StateStore::new(pool.clone(), raid_redirect_uri.clone()),
                     tb_raid::auth_writer::AuthWriter::new(pool.clone(), cipher.clone()),
@@ -635,9 +635,11 @@ async fn main() {
                     client_id,
                     raid_redirect_uri.clone(),
                     partner_setup,
-                )));
+                )
+                .with_requirements_relay(followup_relay);
+                raid_oauth_port = Some(Arc::new(raid_oauth_impl));
                 tracing::info!(
-                    "Raid-OAuth-Strecke nativ aktiv (auth-url/auth-state/block-state/go-url/oauth-callback inkl. Followups); requirements weiter via Proxy"
+                    "Raid-OAuth-Strecke nativ aktiv (auth-url/auth-state/block-state/go-url/requirements/oauth-callback inkl. Followups)"
                 );
             }
 

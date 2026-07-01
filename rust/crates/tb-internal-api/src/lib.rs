@@ -170,10 +170,8 @@ pub fn build_internal_router(
         // verschlüsselter Persist + Background-Followups (complete_setup /
         // sync_partner_state via PartnerSetupService); Idempotenz cacht das
         // Ergebnis als HTTP 200 wie Python.
-        // BEWUSST NICHT nativ:
-        // - POST /raid/requirements — sendet in Python eine echte Discord-DM;
-        //   ohne Discord-Bridge bleibt die Route unregistriert und fällt auf
-        //   den Legacy-Proxy.
+        // requirements ist seit Wave8 nativ: tb-bot sendet die Discord-DM
+        // ueber den Broker und dedupliziert persistent pro Partner/Zweck.
         .route(
             &format!("{base}/raid/auth-url"),
             get(oauth::auth_url_handler),
@@ -191,6 +189,10 @@ pub fn build_internal_router(
             get(oauth::block_state_handler),
         )
         .route(&format!("{base}/raid/go-url"), get(oauth::go_url_handler))
+        .route(
+            &format!("{base}/raid/requirements"),
+            post(oauth::requirements_handler),
+        )
         // P3.7: Admin-Bulk-Re-Auth — flaggt alle token-tragenden Streamer in
         // einem Schwung zur Neu-Autorisierung (Scope-Profil-Wechsel). KEIN
         // Discord-DM (B10-Ausschluss). Port nicht verdrahtet → 503.
@@ -240,8 +242,8 @@ pub fn build_internal_router(
         // den echten Dead-Letter-Store.
         // chat-action: echtes Senden über den ChatActionPort (Bot-Token-Bridge,
         //   tb-bot-Composition-Root); ohne Port (Chat aus) antwortet der Handler 503.
-        // raid/requirements bleibt bewusst unregistriert: Fallback zu Python,
-        // weil nur dort die Discord-DM 1:1 gesendet wird.
+        // raid/requirements ist nativ verdrahtet; Legacy-Proxy bleibt nur fuer
+        // nicht portierte Debug-/Recovery-Pfade.
         .route(
             &format!("{base}/debug/observability"),
             get(python_stubs::observability_handler),

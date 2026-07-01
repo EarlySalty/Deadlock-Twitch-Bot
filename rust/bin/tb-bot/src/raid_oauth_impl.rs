@@ -28,15 +28,13 @@
 //! Allowlists aus `TWITCH_INTERNAL_API_ALLOWED_GUILD_IDS`, `..._CHANNEL_IDS`,
 //! `..._ROLE_IDS` (kommagetrennte Integer-IDs) — identisch zu Python.
 //!
-//! # Idempotenz (open_risk)
+//! # Idempotenz
 //!
 //! Python `_prepare_idempotency` + `_release_idempotency_owner` deduplicieren
-//! `requirements` und `oauth_callback` via `X-Idempotency-Key`. OAuth-Codes
-//! sind single-use; ein zweites `exchange_code` mit demselben Code liefert einen
-//! Fehler. Der native Port liefert korrekte Antworten ohne Deduplizierung —
-//! ein zweiter Aufruf mit demselben Code schlägt beim Token-Exchange fehl und
-//! landet als 500. Clients, die idempotente Wiederholungen erwarten, erhalten
-//! keine gecachten Antworten (open_risk: Idempotenz-Layer fehlt nativ).
+//! `requirements` und `oauth_callback` via `X-Idempotency-Key`. Der Handler
+//! bildet diesen Layer nativ ab. `requirements` hat zusaetzlich einen
+//! persistenten Marker pro Twitch-User/Zweck, damit ein Partner nicht doppelt
+//! angeschrieben wird.
 //!
 //! # StreamerContextResolver-Impl
 //!
@@ -53,7 +51,8 @@ use std::sync::Arc;
 
 use async_trait::async_trait;
 use chrono::Utc;
-use sqlx::PgPool;
+use sqlx::{PgPool, Row};
+use tb_transport_discord::{BrokerRelay, DiscordBackend, SendUserDm};
 
 use tb_internal_api::handlers::raid_oauth::{
     OAuthCallbackResult, RaidOAuthError, RaidOAuthPort, RaidStatePayload,
@@ -66,6 +65,11 @@ use tb_raid::{
     state_store::StateStore,
     token_refresher::TwitchTokenClient,
 };
+
+const RAID_REQUIREMENTS_PURPOSE: &str = "raid_requirements_oauth";
+const RAID_REQUIREMENTS_DM_BODY: &str = "Hey! Du bist als Partner im Auto-Raid-Netzwerk der deutschen Deadlock-Community dabei – jetzt fehlt nur noch deine einmalige Twitch-Freigabe. Damit raidet der Bot deinen Stream am Ende automatisch zu einem anderen aktiven Deadlock-Streamer, statt deine Zuschauer ins Leere laufen zu lassen, und schickt dir umgekehrt selbst Raids. Du gibst nur die Raid-Berechtigung frei, sonst nichts – dauert keine Minute:";
+const RAID_REQUIREMENTS_BUTTON_LABEL: &str = "Jetzt Raid-Freigabe erteilen";
+const RAID_REQUIREMENTS_RESULT_MESSAGE: &str = "Partner wurde zur Raid-Freigabe angeschrieben.";
 
 // ---------------------------------------------------------------------------
 // Lokale Login-Normalisierung für DB-Werte
@@ -88,6 +92,14 @@ fn normalize_login_db(value: &str) -> Option<String> {
         return None;
     }
     Some(s)
+}
+
+fn normalize_discord_user_id_db(value: &str) -> Option<String> {
+    let s = value.trim();
+    if s.is_empty() || !s.chars().all(|c| c.is_ascii_digit()) {
+        return None;
+    }
+    Some(s.to_string())
 }
 
 // ---------------------------------------------------------------------------
@@ -661,6 +673,8 @@ pub struct TbRaidOAuthImpl {
     /// `sync_partner_state_after_auth`). `None` → Followups entfallen mit
     /// Warning (z. B. Token-Env fehlt) — der Callback persistiert trotzdem.
     partner_setup: Option<Arc<PartnerSetupService>>,
+    /// Broker-Relay fuer Raid-Requirements-DMs.
+    requirements_relay: Option<BrokerRelay>,
     client_id: String,
     redirect_uri: String,
     /// Ziel-URL nach erfolgreicher Autorisierung (Python:
@@ -717,6 +731,7 @@ impl TbRaidOAuthImpl {
             auth_writer,
             token_client,
             partner_setup,
+            requirements_relay: None,
             client_id,
             redirect_uri,
             success_redirect_url,
@@ -724,6 +739,11 @@ impl TbRaidOAuthImpl {
             allowed_channel_ids,
             allowed_role_ids,
         }
+    }
+
+    pub fn with_requirements_relay(mut self, relay: Option<BrokerRelay>) -> Self {
+        self.requirements_relay = relay;
+        self
     }
 
     /// Prüft guild_id / channel_id / role_id gegen die konfigurierten Allowlists.
@@ -739,6 +759,185 @@ impl TbRaidOAuthImpl {
         enforce_scope_allowlist(role_id, &self.allowed_role_ids)?;
         Ok(())
     }
+
+    async fn ensure_requirements_dedupe_table(&self) -> Result<(), RaidOAuthError> {
+        sqlx::query(
+            r#"
+            CREATE TABLE IF NOT EXISTS twitch_raid_requirements_dm_dedupe (
+                twitch_user_id TEXT NOT NULL,
+                purpose TEXT NOT NULL,
+                twitch_login TEXT NOT NULL DEFAULT '',
+                discord_user_id TEXT NOT NULL DEFAULT '',
+                status TEXT NOT NULL DEFAULT 'pending',
+                message_id TEXT,
+                error_message TEXT,
+                claimed_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                sent_at TEXT,
+                updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                PRIMARY KEY (twitch_user_id, purpose)
+            )
+            "#,
+        )
+        .execute(&self.pool)
+        .await
+        .map_err(|error| {
+            tracing::error!(%error, "raid requirements Dedupe-Tabelle konnte nicht angelegt werden");
+            RaidOAuthError::Internal
+        })?;
+        Ok(())
+    }
+
+    async fn load_requirements_partner(
+        &self,
+        login: &str,
+    ) -> Result<RequirementsPartner, RaidOAuthError> {
+        let row = sqlx::query(
+            r#"
+            SELECT COALESCE(twitch_user_id, '') AS twitch_user_id,
+                   COALESCE(twitch_login, '') AS twitch_login,
+                   COALESCE(discord_user_id, '') AS discord_user_id
+            FROM twitch_partners_all_state
+            WHERE LOWER(COALESCE(twitch_login, '')) = LOWER($1)
+            ORDER BY CASE WHEN COALESCE(is_partner_active, 0) <> 0 THEN 0 ELSE 1 END,
+                     twitch_user_id
+            LIMIT 1
+            "#,
+        )
+        .bind(login)
+        .fetch_optional(&self.pool)
+        .await
+        .map_err(|error| {
+            tracing::error!(%error, login, "raid requirements Partner-Lookup fehlgeschlagen");
+            RaidOAuthError::Internal
+        })?;
+
+        let Some(row) = row else {
+            return Err(RaidOAuthError::NotFound);
+        };
+        let twitch_user_id: String = row.try_get("twitch_user_id").unwrap_or_default();
+        let twitch_login: String = row.try_get("twitch_login").unwrap_or_default();
+        let discord_user_id: String = row.try_get("discord_user_id").unwrap_or_default();
+        let twitch_user_id = twitch_user_id.trim().to_string();
+        let twitch_login = normalize_login_db(&twitch_login)
+            .or_else(|| normalize_login_db(login))
+            .ok_or_else(|| {
+                tracing::warn!(login, "raid requirements Partner hat keinen validen Twitch-Login");
+                RaidOAuthError::NotFound
+            })?;
+        let discord_user_id = normalize_discord_user_id_db(&discord_user_id).ok_or_else(|| {
+            tracing::warn!(login = %twitch_login, "raid requirements Partner ohne valide Discord-ID");
+            RaidOAuthError::NotFound
+        })?;
+        if twitch_user_id.is_empty() {
+            tracing::warn!(login = %twitch_login, "raid requirements Partner ohne twitch_user_id");
+            return Err(RaidOAuthError::NotFound);
+        }
+        Ok(RequirementsPartner {
+            twitch_user_id,
+            twitch_login,
+            discord_user_id,
+        })
+    }
+
+    async fn claim_requirements_marker(
+        &self,
+        partner: &RequirementsPartner,
+    ) -> Result<bool, RaidOAuthError> {
+        let inserted: Option<i32> = sqlx::query_scalar(
+            r#"
+            INSERT INTO twitch_raid_requirements_dm_dedupe
+                (twitch_user_id, purpose, twitch_login, discord_user_id, status, claimed_at, updated_at)
+            VALUES ($1, $2, $3, $4, 'pending', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+            ON CONFLICT (twitch_user_id, purpose) DO NOTHING
+            RETURNING 1
+            "#,
+        )
+        .bind(&partner.twitch_user_id)
+        .bind(RAID_REQUIREMENTS_PURPOSE)
+        .bind(&partner.twitch_login)
+        .bind(&partner.discord_user_id)
+        .fetch_optional(&self.pool)
+        .await
+        .map_err(|error| {
+            tracing::error!(
+                %error,
+                twitch_user_id = %partner.twitch_user_id,
+                "raid requirements Dedupe-Claim fehlgeschlagen"
+            );
+            RaidOAuthError::Internal
+        })?;
+        Ok(inserted.is_some())
+    }
+
+    async fn clear_requirements_marker(&self, twitch_user_id: &str) {
+        if let Err(error) = sqlx::query(
+            "DELETE FROM twitch_raid_requirements_dm_dedupe \
+             WHERE twitch_user_id = $1 AND purpose = $2 AND status = 'pending'",
+        )
+        .bind(twitch_user_id)
+        .bind(RAID_REQUIREMENTS_PURPOSE)
+        .execute(&self.pool)
+        .await
+        {
+            tracing::error!(
+                %error,
+                twitch_user_id,
+                "raid requirements Dedupe-Claim konnte nicht freigegeben werden"
+            );
+        }
+    }
+
+    async fn mark_requirements_failed(&self, twitch_user_id: &str, error_message: &str) {
+        if let Err(error) = sqlx::query(
+            "UPDATE twitch_raid_requirements_dm_dedupe \
+                SET status = 'failed', error_message = $3, updated_at = CURRENT_TIMESTAMP \
+              WHERE twitch_user_id = $1 AND purpose = $2",
+        )
+        .bind(twitch_user_id)
+        .bind(RAID_REQUIREMENTS_PURPOSE)
+        .bind(error_message.chars().take(240).collect::<String>())
+        .execute(&self.pool)
+        .await
+        {
+            tracing::error!(
+                %error,
+                twitch_user_id,
+                "raid requirements Fehlerstatus konnte nicht persistiert werden"
+            );
+        }
+    }
+
+    async fn mark_requirements_sent(
+        &self,
+        twitch_user_id: &str,
+        message_id: &str,
+    ) -> Result<(), RaidOAuthError> {
+        sqlx::query(
+            "UPDATE twitch_raid_requirements_dm_dedupe \
+                SET status = 'sent', message_id = $3, sent_at = CURRENT_TIMESTAMP, updated_at = CURRENT_TIMESTAMP \
+              WHERE twitch_user_id = $1 AND purpose = $2",
+        )
+        .bind(twitch_user_id)
+        .bind(RAID_REQUIREMENTS_PURPOSE)
+        .bind(message_id)
+        .execute(&self.pool)
+        .await
+        .map_err(|error| {
+            tracing::error!(
+                %error,
+                twitch_user_id,
+                "raid requirements Sendemarker konnte nicht aktualisiert werden"
+            );
+            RaidOAuthError::Internal
+        })?;
+        Ok(())
+    }
+}
+
+struct RequirementsPartner {
+    twitch_user_id: String,
+    twitch_login: String,
+    discord_user_id: String,
 }
 
 #[async_trait]
@@ -831,18 +1030,80 @@ impl RaidOAuthPort for TbRaidOAuthImpl {
     ///
     /// In Python ruft `_raid_requirements` `auth_manager.generate_requirements_dm_embed`
     /// auf, sendet eine Discord-DM und gibt eine Status-Nachricht zurück.
-    /// Die Discord-DM-Sendung ist noch nicht nativ portiert — deshalb
-    /// antwortet diese Impl ehrlich mit 503 (`upstream_unavailable`) statt
-    /// einen Erfolg vorzutäuschen, den es nie gab. Die Route
-    /// `POST /raid/requirements` bleibt bewusst UNregistriert und läuft über
-    /// den Legacy-Proxy zu Python, das die DM wirklich sendet; dieser Pfad
-    /// ist nur ein Sicherheitsnetz gegen versehentliches Wiren.
     async fn requirements(&self, login: &str) -> Result<String, RaidOAuthError> {
-        tracing::warn!(
-            login,
-            "raid requirements nativ aufgerufen, aber Discord-DM ist nicht portiert — 503"
+        let Some(relay) = self.requirements_relay.as_ref() else {
+            tracing::error!(login, "raid requirements ohne Discord-Broker aufgerufen");
+            return Err(RaidOAuthError::Upstream);
+        };
+
+        self.ensure_requirements_dedupe_table().await?;
+        let partner = self.load_requirements_partner(login).await?;
+        let claimed = self.claim_requirements_marker(&partner).await?;
+        if !claimed {
+            tracing::info!(
+                twitch_user_id = %partner.twitch_user_id,
+                login = %partner.twitch_login,
+                "raid requirements DM bereits markiert — No-op"
+            );
+            return Ok(RAID_REQUIREMENTS_RESULT_MESSAGE.to_string());
+        }
+
+        let auth_url = match self
+            .auth_url(&partner.twitch_login, Some(&partner.discord_user_id), None)
+            .await
+        {
+            Ok(url) => url,
+            Err(error) => {
+                self.clear_requirements_marker(&partner.twitch_user_id).await;
+                return Err(error);
+            }
+        };
+        let Ok(user_id) = partner.discord_user_id.parse::<u64>() else {
+            self.clear_requirements_marker(&partner.twitch_user_id).await;
+            tracing::warn!(
+                login = %partner.twitch_login,
+                "raid requirements Partner hat ungueltige Discord-ID nach Normalisierung"
+            );
+            return Err(RaidOAuthError::NotFound);
+        };
+        let content = format!(
+            "{RAID_REQUIREMENTS_DM_BODY}\n\n[{RAID_REQUIREMENTS_BUTTON_LABEL}]({auth_url})"
         );
-        Err(RaidOAuthError::Upstream)
+        let result = match relay
+            .send_user_dm(SendUserDm { user_id, content })
+            .await
+        {
+            Ok(result) => result,
+            Err(error) => {
+                tracing::error!(
+                    %error,
+                    twitch_user_id = %partner.twitch_user_id,
+                    login = %partner.twitch_login,
+                    "raid requirements Discord-DM fehlgeschlagen"
+                );
+                self.mark_requirements_failed(&partner.twitch_user_id, &error.to_string())
+                    .await;
+                return Err(RaidOAuthError::Upstream);
+            }
+        };
+        if !result.ok {
+            tracing::error!(
+                twitch_user_id = %partner.twitch_user_id,
+                login = %partner.twitch_login,
+                "raid requirements Broker meldete ok=false"
+            );
+            self.mark_requirements_failed(&partner.twitch_user_id, "broker ok=false")
+                .await;
+            return Err(RaidOAuthError::Upstream);
+        }
+        self.mark_requirements_sent(&partner.twitch_user_id, &result.result.message_id)
+            .await?;
+        tracing::info!(
+            twitch_user_id = %partner.twitch_user_id,
+            login = %partner.twitch_login,
+            "raid requirements DM ueber Broker gesendet"
+        );
+        Ok(RAID_REQUIREMENTS_RESULT_MESSAGE.to_string())
     }
 
     /// Discord-Scope-Guard: prüft guild_id/channel_id/role_id gegen Allowlists.
@@ -1395,6 +1656,12 @@ mod tests {
 mod db_tests {
     use super::*;
     use sqlx::postgres::PgPoolOptions;
+    use tb_crypto::{FieldCipher, KID};
+    use tb_raid::token_refresher::{RefreshError, TokenOwnerInfo, TokenResponse};
+    use wiremock::matchers::{header, method, path};
+    use wiremock::{Mock, MockServer, ResponseTemplate};
+
+    const TEST_KEY_HEX: &str = "0f0e0d0c0b0a09080706050403020100ffeeddccbbaa99887766554433221100";
 
     fn test_dsn() -> Option<String> {
         std::env::var("TB_TEST_DATABASE_URL").ok()
@@ -1520,6 +1787,23 @@ mod db_tests {
         .await
         .expect("DDL twitch_streamer_identities");
 
+        sqlx::query(
+            r#"
+            CREATE VIEW twitch_partners_all_state AS
+            SELECT
+                p.twitch_user_id,
+                p.twitch_login,
+                COALESCE(NULLIF(i.discord_user_id, ''), p.discord_user_id) AS discord_user_id,
+                CASE WHEN p.status = 'active' AND COALESCE(p.manual_partner_opt_out, 0) = 0
+                     THEN 1 ELSE 0 END AS is_partner_active
+            FROM twitch_partners p
+            LEFT JOIN twitch_streamer_identities i ON i.twitch_user_id = p.twitch_user_id
+            "#,
+        )
+        .execute(pool)
+        .await
+        .expect("DDL VIEW twitch_partners_all_state");
+
         // twitch_token_blacklist
         sqlx::query(
             r#"
@@ -1570,6 +1854,37 @@ mod db_tests {
         .execute(pool)
         .await
         .expect("DDL oauth_state_tokens");
+    }
+
+    struct UnusedTokenClient;
+
+    #[async_trait]
+    impl TwitchTokenClient for UnusedTokenClient {
+        async fn refresh(&self, _refresh_token: &str) -> Result<TokenResponse, RefreshError> {
+            unreachable!("refresh im Requirements-Test ungenutzt")
+        }
+
+        async fn exchange_code(&self, _code: &str) -> Result<TokenResponse, RefreshError> {
+            unreachable!("exchange_code im Requirements-Test ungenutzt")
+        }
+
+        async fn token_owner(&self, _access_token: &str) -> Result<TokenOwnerInfo, RefreshError> {
+            unreachable!("token_owner im Requirements-Test ungenutzt")
+        }
+    }
+
+    fn make_requirements_impl(pool: &PgPool, relay: BrokerRelay) -> TbRaidOAuthImpl {
+        let cipher = Arc::new(FieldCipher::from_hex_key(TEST_KEY_HEX, KID).unwrap());
+        TbRaidOAuthImpl::new(
+            pool.clone(),
+            StateStore::new(pool.clone(), "https://example.test/callback"),
+            AuthWriter::new(pool.clone(), cipher),
+            Arc::new(UnusedTokenClient),
+            "cid".to_string(),
+            "https://example.test/callback".to_string(),
+            None,
+        )
+        .with_requirements_relay(Some(relay))
     }
 
     // ── has_existing_streamer_context ─────────────────────────────────────────
@@ -1632,6 +1947,56 @@ mod db_tests {
             resolver.has_existing_streamer_context("partneronly").await,
             "active partner ohne Auth-Zeile muss Kontext liefern"
         );
+    }
+
+    #[tokio::test]
+    async fn requirements_dm_wird_persistent_deduped() {
+        let dsn = db_dsn_or_skip!();
+        let pool = make_pool(&dsn, "test_ro_requirements_dedupe").await;
+        sqlx::query(
+            "INSERT INTO twitch_partners (twitch_login, twitch_user_id, discord_user_id, status) \
+             VALUES ($1, $2, $3, 'active')",
+        )
+        .bind("dragscope")
+        .bind("uid_req")
+        .bind("424242")
+        .execute(&pool)
+        .await
+        .expect("partner insert");
+
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/internal/master/v1/discord/send-dm"))
+            .and(header("X-Internal-Token", "broker-token"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "ok": true,
+                "result": { "message_id": "dm-1" }
+            })))
+            .expect(1)
+            .mount(&server)
+            .await;
+        let relay = BrokerRelay::new(&tb_config::BrokerConfig {
+            base_url: server.uri(),
+            token: "broker-token".to_string(),
+        })
+        .unwrap();
+        let port = make_requirements_impl(&pool, relay);
+
+        let first = port.requirements("dragscope").await.expect("first requirements");
+        let second = port.requirements("dragscope").await.expect("second requirements");
+        assert_eq!(first, RAID_REQUIREMENTS_RESULT_MESSAGE);
+        assert_eq!(second, RAID_REQUIREMENTS_RESULT_MESSAGE);
+        server.verify().await;
+
+        let count: i64 = sqlx::query_scalar(
+            "SELECT COUNT(*) FROM twitch_raid_requirements_dm_dedupe \
+             WHERE twitch_user_id = 'uid_req' AND purpose = $1 AND status = 'sent'",
+        )
+        .bind(RAID_REQUIREMENTS_PURPOSE)
+        .fetch_one(&pool)
+        .await
+        .expect("dedupe count");
+        assert_eq!(count, 1);
     }
 
     // P1.8: pending/disabled Auth-Zeile (raid_enabled=false UND authorized_at NULL)

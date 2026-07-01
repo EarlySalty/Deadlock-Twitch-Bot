@@ -1,5 +1,14 @@
 # Workflow
 
+## 2026-07-02 — Wave8 internal-api + raid/requirements
+
+- Start: delegierter GPT-Implementierungsworker fuer Wave8 `tb-internal-api`, `tb-dashboard-api`, `tb-raid`, `tb-bot` Route-Wiring; Scope Rust unter `rust/` plus Workflow/Report, Python nur lesend, kein Commit/Push/Stash/Checkout, kein repo-weites `cargo fmt`.
+- Recon laeuft: Python-Referenz fuer `raid/requirements`, Rust-interne Raid-Routen, manuelle Raid-Route und diagnose/scam-guard-Fehlerformen werden belegt, bevor Fixes umgesetzt werden.
+- Implementiert bisher: `POST /raid/requirements` im internen Router registriert und an den Idempotency-Layer gehaengt; tb-bot sendet Requirements-DM ueber Broker mit persistentem Dedupe-Marker pro `twitch_user_id`/Zweck; `raid/manual` validiert Auth/Input fail-closed vor Port-Aufruf; Scam-Guard-Fehlerformen in internal/dashboard auf `{error,message}` mit snake_case-Codes umgestellt.
+- Verifikation: Wegwerf-Postgres `wave8-pg` auf `127.0.0.1:55460`; `cargo build -p tb-internal-api -p tb-dashboard-api -p tb-raid -p tb-bot` gruen; `cargo clippy --all-targets -p tb-internal-api -p tb-dashboard-api -p tb-raid -p tb-bot` exit 0 mit bestehenden Warnungen ausserhalb der Wave8-Aenderungen; `git diff --check` gruen.
+- Fokussierte Regressionen gruen: `tb-bot requirements_dm_wird_persistent_deduped`, `tb-internal-api raid::tests`, `tb-internal-api requirements`, `tb-internal-api scam_guard::tests`, `tb-dashboard-api scam_guard`.
+- Gesamt-Testlauf laut Auftrag bleibt rot: `cargo test -p tb-internal-api -p tb-dashboard-api -p tb-raid -p tb-bot --no-fail-fast` exit 101; rot sind bestehende/umfangsfremde Lib-Tests in `tb-dashboard-api --lib` (15) und `tb-internal-api --lib` (4), waehrend `tb-bot`, `tb-raid` und Wave8-Fokustests gruen sind. Report: `/home/naniadm/.claude/projects/-home-naniadm-Claude-Native-Workspace/5b3905c3-f094-4325-b670-f7f72c2d4352/scratchpad/triage/fix/wave8_report.json`.
+
 ## 2026-07-02 — Wave7 Monitoring Inbox/Poll
 
 - Start: delegierter GPT-Implementierungsworker fuer Wave7 `tb-monitoring` Inbox/Poll + `tb-bot` Wiring; Scope Python nur lesen, Rust minimal, kein Commit/Push/Stash/Checkout und kein repo-weites `cargo fmt`.

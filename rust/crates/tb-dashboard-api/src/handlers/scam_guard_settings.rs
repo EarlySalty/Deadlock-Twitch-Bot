@@ -41,21 +41,27 @@ fn resolve_login(auth: &DashboardAuthLevel, streamer: &Option<String>) -> Result
                 Some(s) => Ok(s.to_lowercase()),
                 None => Err((
                     StatusCode::BAD_REQUEST,
-                    Json(json!({ "error": "streamer required" })),
+                    Json(json!({
+                        "error": "streamer_required",
+                        "message": "streamer is required"
+                    })),
                 )
                     .into_response()),
             }
         }
         DashboardAuthLevel::None => Err((
             StatusCode::UNAUTHORIZED,
-            Json(json!({ "error": "unauthorized" })),
+            Json(json!({
+                "error": "unauthorized",
+                "message": "authentication required"
+            })),
         )
             .into_response()),
     }
 }
 
-fn error_response(status: StatusCode, code: &str) -> Response {
-    (status, Json(json!({ "error": code }))).into_response()
+fn error_response(status: StatusCode, code: &str, message: &str) -> Response {
+    (status, Json(json!({ "error": code, "message": message }))).into_response()
 }
 
 fn valid_thresholds(threshold: f32, suggestion_floor: f32) -> bool {
@@ -106,7 +112,11 @@ pub async fn get_handler(
         .into_response(),
         Err(error) => {
             tracing::error!(%error, "scam-guard settings GET database error");
-            error_response(StatusCode::INTERNAL_SERVER_ERROR, "db")
+            error_response(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "database_error",
+                "failed to load scam-guard settings",
+            )
         }
     }
 }
@@ -123,10 +133,14 @@ pub async fn post_handler(
     };
 
     if !VALID_MODES.contains(&body.mode.as_str()) {
-        return error_response(StatusCode::BAD_REQUEST, "invalid mode");
+        return error_response(StatusCode::BAD_REQUEST, "invalid_mode", "invalid mode");
     }
     if !valid_thresholds(body.threshold, body.suggestion_floor) {
-        return error_response(StatusCode::BAD_REQUEST, "invalid thresholds");
+        return error_response(
+            StatusCode::BAD_REQUEST,
+            "invalid_thresholds",
+            "invalid thresholds",
+        );
     }
 
     let result = sqlx::query(
@@ -158,7 +172,11 @@ pub async fn post_handler(
         .into_response(),
         Err(error) => {
             tracing::error!(%error, "scam-guard settings POST database error");
-            error_response(StatusCode::INTERNAL_SERVER_ERROR, "db")
+            error_response(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "database_error",
+                "failed to save scam-guard settings",
+            )
         }
     }
 }
@@ -324,7 +342,10 @@ mod tests {
         .await;
 
         assert_eq!(status, StatusCode::BAD_REQUEST);
-        assert_eq!(body, json!({ "error": "invalid mode" }));
+        assert_eq!(
+            body,
+            json!({ "error": "invalid_mode", "message": "invalid mode" })
+        );
     }
 
     #[tokio::test]
@@ -350,6 +371,9 @@ mod tests {
         .await;
 
         assert_eq!(status, StatusCode::BAD_REQUEST);
-        assert_eq!(body, json!({ "error": "invalid thresholds" }));
+        assert_eq!(
+            body,
+            json!({ "error": "invalid_thresholds", "message": "invalid thresholds" })
+        );
     }
 }
