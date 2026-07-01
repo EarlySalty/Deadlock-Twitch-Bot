@@ -10,10 +10,10 @@ use tb_monitoring::poller::source::{ChannelInfo, ChannelInfoSource, SourceError,
 use tb_monitoring::sessions::tracker::{FollowerCountSource, FollowerFetch};
 use tb_monitoring::{
     AnnouncementTransport, EventSubHooks, LivePingRoleProvider, RemoteSubscription, StreamSnapshot,
-    SubscriptionManager, SubscriptionTransport, VodPreviewSource,
+    SubscriptionCreateError, SubscriptionManager, SubscriptionTransport, VodPreviewSource,
 };
 use tb_transport_discord::{BrokerRelay, DiscordBackend, EditRichMessage, SendRichMessage};
-use tb_transport_twitch::eventsub::CreateOutcome;
+use tb_transport_twitch::eventsub::{CreateOutcome, EventSubCreateError};
 use tb_transport_twitch::{HelixClient, HelixStream};
 
 /// Helix-Adapter für den Subscription-Port (App-Token, Core-Subs).
@@ -31,7 +31,7 @@ impl SubscriptionTransport for HelixSubscriptionTransport {
         callback: &str,
         secret: &str,
         bearer_override: Option<&str>,
-    ) -> Result<bool, SourceError> {
+    ) -> Result<bool, SubscriptionCreateError> {
         let outcome = self
             .helix
             .create_eventsub_webhook_subscription(
@@ -42,8 +42,21 @@ impl SubscriptionTransport for HelixSubscriptionTransport {
                 secret,
                 bearer_override,
             )
-            .await?;
+            .await
+            .map_err(map_eventsub_create_error)?;
         Ok(outcome == CreateOutcome::AlreadyExists)
+    }
+
+    async fn refresh_auth(
+        &self,
+        _broadcaster_id: &str,
+        _login: &str,
+        bearer_override: Option<&str>,
+    ) -> Result<(), SourceError> {
+        if bearer_override.is_none() {
+            self.helix.invalidate_app_token().await;
+        }
+        Ok(())
     }
 
     async fn list(&self) -> Result<Vec<RemoteSubscription>, SourceError> {
@@ -75,6 +88,17 @@ impl SubscriptionTransport for HelixSubscriptionTransport {
     async fn delete(&self, id: &str) -> Result<(), SourceError> {
         self.helix.delete_eventsub_subscription(id).await?;
         Ok(())
+    }
+}
+
+fn map_eventsub_create_error(error: EventSubCreateError) -> SubscriptionCreateError {
+    match error {
+        EventSubCreateError::Status {
+            status,
+            retry_after,
+            body,
+        } => SubscriptionCreateError::http_status(status, retry_after, body),
+        EventSubCreateError::Helix(helix_error) => SubscriptionCreateError::transport(helix_error),
     }
 }
 

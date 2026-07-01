@@ -481,7 +481,7 @@ async fn main() {
                 // P1.2: Mod-Provisioner für die 403-Selbstheilung im Chat-/Sub-Pfad
                 // (Python `_ensure_bot_is_mod`). Braucht den Streamer-Token-Resolver
                 // (cipher-gated) + die Bot-User-ID aus dem gebooteten Chat-Handle.
-                // Fehlt eines, bleibt es beim Alt-Verhalten (403 → perm_failed).
+                // Fehlt eines, bleibt es beim Cooldown-Pfad ohne Re-Mod.
                 let bot_user_id = chat_api_handle
                     .as_ref()
                     .map(|h| h.bot_user_id.clone())
@@ -502,7 +502,7 @@ async fn main() {
                     );
                     } else {
                         tracing::info!(
-                            "DB_MASTER_KEY_V1 fehlt — Mod-Provisioner aus (403 → perm_failed)"
+                            "DB_MASTER_KEY_V1 fehlt — Mod-Provisioner aus (403-Cooldown aktiv)"
                         );
                     }
                 }
@@ -1760,13 +1760,16 @@ async fn subscription_maintenance_loop(
         };
 
         let mut ensured = 0usize;
+        let mut ensure_failed = 0usize;
         let mut telemetry_ensured = 0usize;
+        let mut raid_failed = 0usize;
         for row in &rows {
             let login = row.login.as_str();
             let uid = row.twitch_user_id.as_str();
             if row.core_subscriptions {
-                manager.ensure_core_subscriptions(uid, login).await;
-                ensured += 1;
+                let report = manager.ensure_core_subscriptions(uid, login).await;
+                ensured += report.succeeded;
+                ensure_failed += report.failed();
             }
 
             // channel.raid (Arrival) proaktiv pro Partner abonnieren — Python
@@ -1774,8 +1777,13 @@ async fn subscription_maintenance_loop(
             // damit eingehende/manuelle Raids erkannt werden, unabhängig von
             // eigenen Outgoing-Raids. Partner-only: die Raid-Dankesnachricht ist
             // partner-gebunden, monitored-only Kanäle haben keinen Konsumenten.
-            if row.is_partner {
-                manager.ensure_raid_subscription(uid, login).await;
+            if row.is_partner && !manager.ensure_raid_subscription(uid, login).await {
+                raid_failed += 1;
+                tracing::warn!(
+                    uid,
+                    login,
+                    "sub-maintenance: channel.raid-Ensure fehlgeschlagen"
+                );
             }
 
             // Broadcaster-Telemetrie-Subs (B9): nur mit gültigem Broadcaster-
@@ -1805,6 +1813,8 @@ async fn subscription_maintenance_loop(
         tracing::info!(
             kanäle = rows.len(),
             ensured,
+            ensure_failed,
+            raid_failed,
             telemetry_ensured,
             deleted,
             "sub-maintenance: Core-Sub-Reconcile abgeschlossen"

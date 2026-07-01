@@ -10,11 +10,13 @@
 
 use std::collections::{HashMap, HashSet};
 use std::sync::{Arc, Mutex};
+use std::time::Duration as StdDuration;
 
 use chrono::{DateTime, Duration, Utc};
 use serde_json::Value;
 use sqlx::PgPool;
 use tb_chat::{is_passive_lurker_channel, PASSIVE_LURKER_DETAIL, PASSIVE_LURKER_STATE};
+use thiserror::Error;
 
 use crate::inbox_runtime::{epoch_clock, ClockFn};
 use crate::poller::source::SourceError;
@@ -38,6 +40,234 @@ const CHAT_MOD_RETRY_SUB_TYPES: &[&str] = &[
 /// 10 Minuten). Solange aktiv wird der Subscribe-Versuch übersprungen; nach
 /// Ablauf läuft er automatisch erneut (laufzeit-clearbar statt Neustart-Pflicht).
 const MOD_RETRY_COOLDOWN_SECONDS: f64 = 600.0;
+
+/// Dauer, nach der ein nicht-chat-spezifischer 403 erneut versucht werden darf.
+/// Das verhindert den alten Neustart-Wedge, bleibt aber konservativ genug, um
+/// bei echter fehlender Berechtigung nicht dauerhaft gegen Twitch zu feuern.
+const PERMISSION_RETRY_COOLDOWN_SECONDS: f64 = 30.0 * 60.0;
+
+/// Maximalanzahl Create-Versuche inkl. Erstversuch für transiente Fehler.
+const CREATE_RETRY_MAX_ATTEMPTS: u32 = 3;
+const CREATE_RETRY_BASE_DELAY_SECONDS: u64 = 5;
+const CREATE_RETRY_MAX_DELAY_SECONDS: u64 = 60;
+const CREATE_RETRY_AFTER_MAX_SECONDS: u64 = 60;
+const CREATE_RETRY_JITTER_MS: u64 = 750;
+
+/// Webhook EventSub-Limit aus Twitch/Python-Pfad.
+const WEBHOOK_EVENTSUB_TOTAL_SLOTS: i64 = 10_000;
+
+#[derive(Debug, Clone, Copy)]
+struct SubscriptionRetryConfig {
+    max_attempts: u32,
+    base_delay: StdDuration,
+    max_delay: StdDuration,
+    max_retry_after: StdDuration,
+    jitter_ms: u64,
+}
+
+impl Default for SubscriptionRetryConfig {
+    fn default() -> Self {
+        Self {
+            max_attempts: CREATE_RETRY_MAX_ATTEMPTS,
+            base_delay: StdDuration::from_secs(CREATE_RETRY_BASE_DELAY_SECONDS),
+            max_delay: StdDuration::from_secs(CREATE_RETRY_MAX_DELAY_SECONDS),
+            max_retry_after: StdDuration::from_secs(CREATE_RETRY_AFTER_MAX_SECONDS),
+            jitter_ms: CREATE_RETRY_JITTER_MS,
+        }
+    }
+}
+
+/// Capacity-Felder im Webhook-Modus.
+#[derive(Debug, Clone, Copy)]
+pub struct EventSubCapacityValues {
+    pub used_slots: i64,
+    pub total_slots: i64,
+    pub headroom_slots: i64,
+    pub listeners_at_limit: i64,
+    pub utilization_pct: f64,
+}
+
+pub fn eventsub_webhook_capacity_values(used_slots: i64) -> EventSubCapacityValues {
+    let used_slots = used_slots.max(0);
+    let total_slots = WEBHOOK_EVENTSUB_TOTAL_SLOTS;
+    let headroom_slots = (total_slots - used_slots).max(0);
+    let utilization_pct = if total_slots > 0 {
+        ((used_slots as f64 / total_slots as f64) * 10_000.0).round() / 100.0
+    } else {
+        0.0
+    };
+    EventSubCapacityValues {
+        used_slots,
+        total_slots,
+        headroom_slots,
+        listeners_at_limit: i64::from(headroom_slots == 0),
+        utilization_pct,
+    }
+}
+
+fn saturating_i32(value: i64) -> i32 {
+    match i32::try_from(value) {
+        Ok(value) => value,
+        Err(_) if value < 0 => i32::MIN,
+        Err(_) => i32::MAX,
+    }
+}
+
+/// Typisierter Create-Fehler auf dem Monitoring-Port. Der Transport-Adapter
+/// mappt Helix-Status, Retry-After und Body hierauf, damit der Manager nicht
+/// mehr per String-Matching entscheiden muss.
+#[derive(Debug, Clone, Error)]
+pub enum SubscriptionCreateError {
+    #[error("EventSub-Create HTTP {status}")]
+    HttpStatus {
+        status: u16,
+        retry_after: Option<StdDuration>,
+        body: Option<String>,
+    },
+    #[error("EventSub-Create Transportfehler: {message}")]
+    Transport { message: String },
+}
+
+impl SubscriptionCreateError {
+    pub fn http_status(
+        status: u16,
+        retry_after: Option<StdDuration>,
+        body: Option<String>,
+    ) -> Self {
+        Self::HttpStatus {
+            status,
+            retry_after,
+            body,
+        }
+    }
+
+    pub fn transport(error: impl std::fmt::Display) -> Self {
+        Self::Transport {
+            message: error.to_string(),
+        }
+    }
+
+    pub fn status(&self) -> Option<u16> {
+        match self {
+            Self::HttpStatus { status, .. } => Some(*status),
+            Self::Transport { .. } => None,
+        }
+    }
+
+    pub fn retry_after(&self) -> Option<StdDuration> {
+        match self {
+            Self::HttpStatus { retry_after, .. } => *retry_after,
+            Self::Transport { .. } => None,
+        }
+    }
+
+    fn body(&self) -> Option<&str> {
+        match self {
+            Self::HttpStatus { body, .. } => body.as_deref(),
+            Self::Transport { .. } => None,
+        }
+    }
+
+    fn reason(&self) -> &'static str {
+        match self.status() {
+            Some(401) => "auth_unauthorized",
+            Some(403) => "permission_failed",
+            Some(429) if self.is_hard_quota_or_cost_limit() => "rate_limit_quota",
+            Some(429) => "rate_limited",
+            Some(400) => "bad_request",
+            Some(_) => "http_status",
+            None => "transport_error",
+        }
+    }
+
+    fn is_hard_quota_or_cost_limit(&self) -> bool {
+        let Some(body) = self.body() else {
+            return false;
+        };
+        let body = normalized_error_message(body);
+        [
+            "maximum total cost",
+            "total cost exceeded",
+            "subscription limit",
+            "quota exceeded",
+            "too many subscriptions",
+        ]
+        .into_iter()
+        .any(|phrase| body.contains(phrase))
+    }
+}
+
+fn normalized_error_message(body: &str) -> String {
+    let body = body.trim();
+    if let Ok(value) = serde_json::from_str::<Value>(body) {
+        if let Some(message) = value.get("message").and_then(Value::as_str) {
+            return message.to_ascii_lowercase();
+        }
+    }
+    body.to_ascii_lowercase()
+}
+
+/// Sichtbarer Status eines fehlgeschlagenen Ensures.
+#[derive(Debug, Clone)]
+pub struct SubscriptionFailureStatus {
+    pub sub_type: String,
+    pub broadcaster_id: String,
+    pub login: String,
+    pub reason: String,
+    pub http_status: Option<u16>,
+    pub retry_after_seconds: Option<u64>,
+    pub attempts: u32,
+    pub total_failures: u64,
+    pub first_failed_at: f64,
+    pub last_failed_at: f64,
+    pub next_retry_at: Option<f64>,
+    pub hard_failure: bool,
+}
+
+#[derive(Debug, Clone)]
+pub struct SubscriptionFailureCounter {
+    pub sub_type: String,
+    pub broadcaster_id: String,
+    pub reason: String,
+    pub count: u64,
+}
+
+#[derive(Debug, Clone, Default)]
+pub struct SubscriptionEnsureReport {
+    pub attempted: usize,
+    pub succeeded: usize,
+    pub skipped: usize,
+    pub failures: Vec<SubscriptionFailureStatus>,
+}
+
+impl SubscriptionEnsureReport {
+    pub fn failed(&self) -> usize {
+        self.failures.len()
+    }
+}
+
+#[derive(Debug, Clone)]
+struct SubscriptionFailureState {
+    login: String,
+    reason: String,
+    http_status: Option<u16>,
+    retry_after_seconds: Option<u64>,
+    attempts: u32,
+    total_failures: u64,
+    first_failed_at: f64,
+    last_failed_at: f64,
+    next_retry_at: Option<f64>,
+    hard_failure: bool,
+}
+
+struct SubscriptionCreateContext<'a> {
+    sub_type: &'a str,
+    version: &'a str,
+    condition: &'a serde_json::Value,
+    broadcaster_id: &'a str,
+    login: &'a str,
+    bearer_override: Option<&'a str>,
+}
 
 /// Stellt den Bot zur Laufzeit als Moderator eines Kanals wieder her (Port von
 /// Pythons `_ensure_bot_is_mod`). Implementierung lebt in `tb-transport-twitch`
@@ -264,7 +494,18 @@ pub trait SubscriptionTransport: Send + Sync {
         callback: &str,
         secret: &str,
         bearer_override: Option<&str>,
-    ) -> Result<bool, SourceError>;
+    ) -> Result<bool, SubscriptionCreateError>;
+    /// Erzwingt einen frischen Auth-Kontext vor einem gezielten Retry. Adapter
+    /// mit App-Token können den Token-Cache invalidieren; User-Token-Pfade
+    /// dürfen hier no-op bleiben und beim nächsten Reconcile neu auflösen.
+    async fn refresh_auth(
+        &self,
+        _broadcaster_id: &str,
+        _login: &str,
+        _bearer_override: Option<&str>,
+    ) -> Result<(), SourceError> {
+        Ok(())
+    }
     async fn list(&self) -> Result<Vec<RemoteSubscription>, SourceError>;
     async fn delete(&self, id: &str) -> Result<(), SourceError>;
 }
@@ -304,9 +545,14 @@ pub struct SubscriptionManager {
     /// In-Memory-Tracking (Typ, broadcaster_user_id) — wie Pythons
     /// `_eventsub_has_sub`, beim Start via [`Self::rehydrate`] gefüllt.
     tracked: Mutex<HashSet<(String, String)>>,
-    /// Permanent-Fehler (Typ, broadcaster_user_id): 403 = Bot gebannt oder
-    /// Kanal sperrt externe Subs. Kein Retry bis Neustart.
-    perm_failed: Mutex<HashSet<(String, String)>>,
+    /// Laufzeit-403-Cooldown (Typ, broadcaster_user_id): verhindert Retry-Spam,
+    /// läuft aber aus, damit Reauth/Reconcile ohne Neustart erneut versuchen.
+    perm_failed: Mutex<HashMap<(String, String), f64>>,
+    /// Fehlgeschlagene Ensures mit letztem Status und Retry-Zeitpunkt.
+    failed_subscriptions: Mutex<HashMap<(String, String), SubscriptionFailureState>>,
+    /// In-Memory-Counter je Sub/Reason. Dient als lokale Metrik ohne neue
+    /// Observability-Abhängigkeit im Monitoring-Crate.
+    failure_counters: Mutex<HashMap<(String, String, String), u64>>,
     /// Subscription-State pro Kanal (login → sub_type → State) — Port von Pythons
     /// `_channel_subscription_state`. Hält den Passive-Lurker-Marker für die
     /// Join-Diagnose, ohne einen Subscribe-Versuch zu starten (B8-07).
@@ -316,7 +562,7 @@ pub struct SubscriptionManager {
     /// Monotone Uhr (Epoch-Sek.) für die Throttle-Fenster — in Tests injizierbar.
     clock: ClockFn,
     /// Optionaler Mod-Provisioner für die 403-Selbstheilung im Chat-Pfad
-    /// (Python `_ensure_bot_is_mod`). `None` → Alt-Verhalten (403 = perm_failed).
+    /// (Python `_ensure_bot_is_mod`). `None` → 403-Cooldown statt Re-Mod.
     moderator_provisioner: Option<Arc<dyn ModeratorProvisioner>>,
     /// Optionaler Broadcaster-Token-Provider für Moderator-Telemetrie-Fallbacks
     /// (Python `auth_attempts = [bot-token, broadcaster-token]`).
@@ -325,6 +571,7 @@ pub struct SubscriptionManager {
     /// (Python `_mod_retry_cooldown`). Ersetzt den permanenten perm_failed-Eintrag
     /// im Chat-Pfad: nach Ablauf wird automatisch erneut versucht.
     mod_retry_cooldown: Mutex<HashMap<(String, String), f64>>,
+    retry_config: SubscriptionRetryConfig,
 }
 
 impl SubscriptionManager {
@@ -340,13 +587,16 @@ impl SubscriptionManager {
             capacity,
             pool,
             tracked: Mutex::new(HashSet::new()),
-            perm_failed: Mutex::new(HashSet::new()),
+            perm_failed: Mutex::new(HashMap::new()),
+            failed_subscriptions: Mutex::new(HashMap::new()),
+            failure_counters: Mutex::new(HashMap::new()),
             subscription_state: Mutex::new(HashMap::new()),
             capacity_throttle: Mutex::new(CapacityThrottle::default()),
             clock: Arc::new(epoch_clock),
             moderator_provisioner: None,
             broadcaster_token_provider: None,
             mod_retry_cooldown: Mutex::new(HashMap::new()),
+            retry_config: SubscriptionRetryConfig::default(),
         }
     }
 
@@ -357,9 +607,15 @@ impl SubscriptionManager {
         self
     }
 
+    #[cfg(test)]
+    fn with_retry_config(mut self, retry_config: SubscriptionRetryConfig) -> Self {
+        self.retry_config = retry_config;
+        self
+    }
+
     /// Verdrahtet den Mod-Provisioner für die 403-Selbstheilung im Chat-Pfad
     /// (Python `_ensure_bot_is_mod`). Ohne ihn bleibt es beim Alt-Verhalten
-    /// (403 → permanenter perm_failed-Eintrag, kein Retry bis Neustart).
+    /// (403 → auslaufender Cooldown statt Re-Mod).
     /// Live verdrahtet in `bin/tb-bot` (`with_moderator_provisioner`, main.rs).
     #[must_use]
     pub fn with_moderator_provisioner(
@@ -422,17 +678,29 @@ impl SubscriptionManager {
     }
 
     fn is_perm_failed(&self, sub_type: &str, broadcaster_id: &str) -> bool {
-        self.perm_failed
-            .lock()
-            .expect("perm_failed lock")
-            .contains(&(sub_type.to_string(), broadcaster_id.to_string()))
+        let key = (sub_type.to_string(), broadcaster_id.to_string());
+        let now = (self.clock)();
+        let Ok(mut failures) = self.perm_failed.lock() else {
+            tracing::warn!("EventSub: perm_failed-Cooldown-State nicht lesbar");
+            return false;
+        };
+        match failures.get(&key).copied() {
+            Some(until) if until > now => true,
+            Some(_) => {
+                failures.remove(&key);
+                false
+            }
+            None => false,
+        }
     }
 
     fn mark_perm_failed(&self, sub_type: &str, broadcaster_id: &str) {
-        self.perm_failed
-            .lock()
-            .expect("perm_failed lock")
-            .insert((sub_type.to_string(), broadcaster_id.to_string()));
+        let until = (self.clock)() + PERMISSION_RETRY_COOLDOWN_SECONDS;
+        if let Ok(mut failures) = self.perm_failed.lock() {
+            failures.insert((sub_type.to_string(), broadcaster_id.to_string()), until);
+        } else {
+            tracing::warn!("EventSub: perm_failed-Cooldown-State nicht schreibbar");
+        }
     }
 
     fn track(&self, sub_type: &str, broadcaster_id: &str) {
@@ -440,6 +708,157 @@ impl SubscriptionManager {
             .lock()
             .expect("tracked lock")
             .insert((sub_type.to_string(), broadcaster_id.to_string()));
+        self.clear_subscription_failure(sub_type, broadcaster_id);
+    }
+
+    fn failure_status_for(
+        sub_type: String,
+        broadcaster_id: String,
+        state: SubscriptionFailureState,
+    ) -> SubscriptionFailureStatus {
+        SubscriptionFailureStatus {
+            sub_type,
+            broadcaster_id,
+            login: state.login,
+            reason: state.reason,
+            http_status: state.http_status,
+            retry_after_seconds: state.retry_after_seconds,
+            attempts: state.attempts,
+            total_failures: state.total_failures,
+            first_failed_at: state.first_failed_at,
+            last_failed_at: state.last_failed_at,
+            next_retry_at: state.next_retry_at,
+            hard_failure: state.hard_failure,
+        }
+    }
+
+    pub fn failed_subscription_statuses(&self) -> Vec<SubscriptionFailureStatus> {
+        let Ok(failures) = self.failed_subscriptions.lock() else {
+            tracing::warn!("EventSub: Failed-Subscription-State nicht lesbar");
+            return Vec::new();
+        };
+        let mut out: Vec<SubscriptionFailureStatus> = failures
+            .iter()
+            .map(|((sub_type, broadcaster_id), state)| {
+                Self::failure_status_for(sub_type.clone(), broadcaster_id.clone(), state.clone())
+            })
+            .collect();
+        out.sort_by(|a, b| {
+            a.sub_type
+                .cmp(&b.sub_type)
+                .then_with(|| a.broadcaster_id.cmp(&b.broadcaster_id))
+        });
+        out
+    }
+
+    pub fn subscription_failure_counters(&self) -> Vec<SubscriptionFailureCounter> {
+        let Ok(counters) = self.failure_counters.lock() else {
+            tracing::warn!("EventSub: Subscription-Failure-Counter nicht lesbar");
+            return Vec::new();
+        };
+        let mut out: Vec<SubscriptionFailureCounter> = counters
+            .iter()
+            .map(
+                |((sub_type, broadcaster_id, reason), count)| SubscriptionFailureCounter {
+                    sub_type: sub_type.clone(),
+                    broadcaster_id: broadcaster_id.clone(),
+                    reason: reason.clone(),
+                    count: *count,
+                },
+            )
+            .collect();
+        out.sort_by(|a, b| {
+            a.sub_type
+                .cmp(&b.sub_type)
+                .then_with(|| a.broadcaster_id.cmp(&b.broadcaster_id))
+                .then_with(|| a.reason.cmp(&b.reason))
+        });
+        out
+    }
+
+    fn subscription_failure_status(
+        &self,
+        sub_type: &str,
+        broadcaster_id: &str,
+    ) -> Option<SubscriptionFailureStatus> {
+        let Ok(failures) = self.failed_subscriptions.lock() else {
+            tracing::warn!("EventSub: Failed-Subscription-State nicht lesbar");
+            return None;
+        };
+        failures
+            .get(&(sub_type.to_string(), broadcaster_id.to_string()))
+            .cloned()
+            .map(|state| {
+                Self::failure_status_for(sub_type.to_string(), broadcaster_id.to_string(), state)
+            })
+    }
+
+    fn clear_subscription_failure(&self, sub_type: &str, broadcaster_id: &str) {
+        if let Ok(mut failures) = self.failed_subscriptions.lock() {
+            failures.remove(&(sub_type.to_string(), broadcaster_id.to_string()));
+        } else {
+            tracing::warn!("EventSub: Failed-Subscription-State nicht schreibbar");
+        }
+    }
+
+    fn increment_failure_counter(&self, sub_type: &str, broadcaster_id: &str, reason: &str) -> u64 {
+        let Ok(mut counters) = self.failure_counters.lock() else {
+            tracing::warn!("EventSub: Subscription-Failure-Counter nicht schreibbar");
+            return 0;
+        };
+        let key = (
+            sub_type.to_string(),
+            broadcaster_id.to_string(),
+            reason.to_string(),
+        );
+        let entry = counters.entry(key).or_insert(0);
+        *entry += 1;
+        *entry
+    }
+
+    fn record_subscription_failure(
+        &self,
+        sub_type: &str,
+        broadcaster_id: &str,
+        login: &str,
+        error: &SubscriptionCreateError,
+        attempts: u32,
+        next_retry_at: Option<f64>,
+    ) -> u64 {
+        let reason = error.reason();
+        let total_failures = self.increment_failure_counter(sub_type, broadcaster_id, reason);
+        let now = (self.clock)();
+        let state = SubscriptionFailureState {
+            login: normalize_login(login),
+            reason: reason.to_string(),
+            http_status: error.status(),
+            retry_after_seconds: error.retry_after().map(|d| d.as_secs()),
+            attempts,
+            total_failures,
+            first_failed_at: now,
+            last_failed_at: now,
+            next_retry_at,
+            hard_failure: error.is_hard_quota_or_cost_limit(),
+        };
+        let Ok(mut failures) = self.failed_subscriptions.lock() else {
+            tracing::warn!("EventSub: Failed-Subscription-State nicht schreibbar");
+            return total_failures;
+        };
+        failures
+            .entry((sub_type.to_string(), broadcaster_id.to_string()))
+            .and_modify(|existing| {
+                existing.login = state.login.clone();
+                existing.reason = state.reason.clone();
+                existing.http_status = state.http_status;
+                existing.retry_after_seconds = state.retry_after_seconds;
+                existing.attempts = state.attempts;
+                existing.total_failures = state.total_failures;
+                existing.last_failed_at = state.last_failed_at;
+                existing.next_retry_at = state.next_retry_at;
+                existing.hard_failure = state.hard_failure;
+            })
+            .or_insert(state);
+        total_failures
     }
 
     /// Tracking aus dem Twitch-Bestand aufbauen (enabled + unsere Callback).
@@ -489,11 +908,37 @@ impl SubscriptionManager {
     }
 
     /// Alle Core-Subscriptions für einen Broadcaster sicherstellen.
-    pub async fn ensure_core_subscriptions(&self, broadcaster_id: &str, login: &str) {
+    pub async fn ensure_core_subscriptions(
+        &self,
+        broadcaster_id: &str,
+        login: &str,
+    ) -> SubscriptionEnsureReport {
+        let mut report = SubscriptionEnsureReport::default();
         for (sub_type, version) in CORE_SUBSCRIPTIONS {
-            self.ensure_subscription(sub_type, version, broadcaster_id, login)
-                .await;
+            report.attempted += 1;
+            if self
+                .ensure_subscription(sub_type, version, broadcaster_id, login)
+                .await
+            {
+                report.succeeded += 1;
+            } else if let Some(failure) = self.subscription_failure_status(sub_type, broadcaster_id)
+            {
+                report.failures.push(failure);
+            } else {
+                report.skipped += 1;
+            }
         }
+        if !report.failures.is_empty() {
+            tracing::warn!(
+                login,
+                broadcaster_id,
+                attempted = report.attempted,
+                succeeded = report.succeeded,
+                failed = report.failures.len(),
+                "EventSub Core-Ensure unvollständig"
+            );
+        }
+        report
     }
 
     async fn ensure_subscription(
@@ -571,12 +1016,7 @@ impl SubscriptionManager {
         let broadcaster_id = broadcaster_id.trim();
         ["channel.chat.message", "channel.chat.notification"]
             .into_iter()
-            .any(|sub_type| {
-                self.perm_failed
-                    .lock()
-                    .expect("perm_failed lock")
-                    .contains(&(sub_type.to_string(), broadcaster_id.to_string()))
-            })
+            .any(|sub_type| self.is_perm_failed(sub_type, broadcaster_id))
     }
 
     /// `true`, wenn der Kanal ein passiver Lurker ist — monitored-only **und**
@@ -693,10 +1133,12 @@ impl SubscriptionManager {
         if broadcaster_id.is_empty() {
             return;
         }
-        self.perm_failed
-            .lock()
-            .expect("perm_failed lock")
-            .retain(|(_, bid)| bid != broadcaster_id);
+        if let Ok(mut perm_failed) = self.perm_failed.lock() {
+            perm_failed.retain(|(_, bid), _| bid != broadcaster_id);
+        }
+        if let Ok(mut failed_subscriptions) = self.failed_subscriptions.lock() {
+            failed_subscriptions.retain(|(_, bid), _| bid != broadcaster_id);
+        }
         self.mod_retry_cooldown
             .lock()
             .expect("mod_retry_cooldown lock")
@@ -715,13 +1157,18 @@ impl SubscriptionManager {
             return true;
         }
         let broadcaster_id = broadcaster_id.trim();
-        !broadcaster_id.is_empty()
-            && self
-                .perm_failed
-                .lock()
-                .expect("perm_failed lock")
-                .iter()
-                .any(|(_, bid)| bid == broadcaster_id)
+        if broadcaster_id.is_empty() {
+            return false;
+        }
+        let now = (self.clock)();
+        self.perm_failed
+            .lock()
+            .map(|failures| {
+                failures
+                    .iter()
+                    .any(|((_, bid), until)| bid == broadcaster_id && *until > now)
+            })
+            .unwrap_or(false)
     }
 
     /// Subscription-States eines Kanals als `(sub_type, state, detail)`-Tripel —
@@ -753,7 +1200,7 @@ impl SubscriptionManager {
     /// `{broadcaster_user_id, moderator_user_id: <bot>}`, Auth = **Bot-User-Token**
     /// (braucht `channel:moderate`-Scope). Speist den `BlacklistRaidGuard`, der
     /// manuelle Raids auf Blacklist-Ziele abbricht. Ist der Bot kein Moderator im
-    /// Kanal, liefert Twitch 403 → `perm_failed` (kein Retry-Spam).
+    /// Kanal, liefert Twitch 403 → auslaufender Cooldown (kein Retry-Spam).
     pub async fn ensure_moderator_subscription(
         &self,
         broadcaster_id: &str,
@@ -998,7 +1445,7 @@ impl SubscriptionManager {
             return true;
         }
         if self.is_perm_failed(sub_type, broadcaster_id) {
-            tracing::debug!(sub_type, login, "EventSub: 403-gebannt, überspringe");
+            tracing::debug!(sub_type, login, "EventSub: 403-Cooldown aktiv, überspringe");
             return false;
         }
         // Chat-Pfad-Selbstheilung (P1.2): während des 10-Min-Cooldowns nach
@@ -1013,7 +1460,7 @@ impl SubscriptionManager {
             return false;
         }
         match self
-            .create_subscription_once(
+            .create_subscription_with_retries(
                 sub_type,
                 version,
                 &condition,
@@ -1025,16 +1472,15 @@ impl SubscriptionManager {
         {
             Ok(_) => true,
             Err(error) => {
-                self.handle_subscription_create_error(
-                    error,
+                let context = SubscriptionCreateContext {
                     sub_type,
                     version,
-                    &condition,
+                    condition: &condition,
                     broadcaster_id,
                     login,
                     bearer_override,
-                )
-                .await
+                };
+                self.handle_subscription_create_error(error, &context).await
             }
         }
     }
@@ -1047,7 +1493,7 @@ impl SubscriptionManager {
         broadcaster_id: &str,
         login: &str,
         bearer_override: Option<&str>,
-    ) -> Result<bool, SourceError> {
+    ) -> Result<bool, SubscriptionCreateError> {
         let already_exists = self
             .transport
             .create(
@@ -1077,88 +1523,251 @@ impl SubscriptionManager {
         Ok(already_exists)
     }
 
-    async fn handle_subscription_create_error(
+    async fn create_subscription_with_retries(
         &self,
-        error: SourceError,
         sub_type: &str,
         version: &str,
         condition: &serde_json::Value,
         broadcaster_id: &str,
         login: &str,
         bearer_override: Option<&str>,
-    ) -> bool {
-        let msg = error.to_string();
-        if msg.contains("403") {
-            if CHAT_MOD_RETRY_SUB_TYPES.contains(&sub_type)
-                && self
-                    .is_stale_removed_channel_after_403(broadcaster_id, login)
-                    .await
-                && (self.has_local_channel_state(broadcaster_id, login)
-                    || self.moderator_provisioner.is_none())
-            {
-                self.record_subscription_state(
-                    login,
+    ) -> Result<bool, SubscriptionCreateError> {
+        let max_attempts = self.retry_config.max_attempts.max(1);
+        let mut attempt = 1;
+        loop {
+            match self
+                .create_subscription_once(
                     sub_type,
-                    "stale_removed_channel",
-                    Some("channel no longer tracked locally or authorized"),
-                );
-                self.purge_local_channel_state(broadcaster_id, login);
-                tracing::info!(
-                    sub_type,
+                    version,
+                    condition,
+                    broadcaster_id,
                     login,
-                    "EventSub 403: stale/removed channel erkannt — lokaler Subscription-State gepurged"
-                );
-                return false;
-            }
-            // P1.2: Chat-Pfad heilt einen Laufzeit-403 (Bot demoddet)
-            // selbst: Bot re-modden, 1s warten, ein Re-Subscribe.
-            // Gelingt das, ist der Kanal sofort wieder live; scheitert
-            // es, greift ein 10-Min-Cooldown (clearbar) STATT eines
-            // permanenten perm_failed-Eintrags.
-            if CHAT_MOD_RETRY_SUB_TYPES.contains(&sub_type) && self.moderator_provisioner.is_some()
+                    bearer_override,
+                )
+                .await
             {
-                return self
-                    .retry_chat_subscription_after_mod(
+                Ok(already_exists) => return Ok(already_exists),
+                Err(error) => {
+                    let retryable =
+                        self.should_retry_create(&error, attempt, max_attempts, bearer_override);
+                    let delay = if retryable {
+                        Some(self.create_retry_delay(&error, attempt, sub_type, broadcaster_id))
+                    } else {
+                        None
+                    };
+                    let next_retry_at = delay.map(|d| (self.clock)() + d.as_secs_f64());
+                    let failure_count = self.record_subscription_failure(
                         sub_type,
-                        version,
-                        condition,
                         broadcaster_id,
                         login,
-                        bearer_override,
-                    )
-                    .await;
+                        &error,
+                        attempt,
+                        next_retry_at,
+                    );
+
+                    if !retryable {
+                        return Err(error);
+                    }
+
+                    if error.status() == Some(401) {
+                        if let Err(refresh_error) = self
+                            .transport
+                            .refresh_auth(broadcaster_id, login, bearer_override)
+                            .await
+                        {
+                            tracing::warn!(
+                                %refresh_error,
+                                sub_type,
+                                login,
+                                broadcaster_id,
+                                "EventSub 401: Auth-Refresh vor Retry fehlgeschlagen"
+                            );
+                        }
+                    }
+
+                    let Some(delay) = delay else {
+                        return Err(error);
+                    };
+                    tracing::warn!(
+                        sub_type,
+                        login,
+                        broadcaster_id,
+                        status = error.status(),
+                        reason = error.reason(),
+                        attempt,
+                        max_attempts,
+                        failure_count,
+                        retry_delay_ms = delay.as_millis() as u64,
+                        "EventSub: Subscription-Create gezielt erneut geplant"
+                    );
+                    tokio::time::sleep(delay).await;
+                    attempt += 1;
+                }
             }
-            self.mark_perm_failed(sub_type, broadcaster_id);
-            tracing::warn!(
-                sub_type,
-                login,
-                "EventSub 403: Bot gebannt oder Kanal gesperrt — \
-                 kein weiterer Retry bis Neustart"
-            );
-        } else if msg.contains("429") {
-            // Rate-Limit: transient, nächster Reconcile-Zyklus versucht erneut.
-            // debug! statt warn! — sonst gleicher Spam wie 403 (48 Kanäle × 30 min).
-            tracing::debug!(
-                sub_type,
-                login,
-                "EventSub 429: Rate-Limit — Retry nächster Zyklus"
-            );
-        } else if msg.contains("401") {
-            // App-Token abgelaufen/ungültig: TokenManager übernimmt Refresh.
-            // debug! — betrifft alle Kanäle gleichzeitig, würde sonst 48× spammen.
-            tracing::debug!(sub_type, login, "EventSub 401: App-Token temporär ungültig");
-        } else if msg.contains("400") {
-            // Kanal für diesen Sub-Typ nicht berechtigt (z. B. hype_train
-            // braucht Affiliate/Partner-Tier) oder Scope-Edge-Case. Python
-            // fängt das in den broadcaster_subs still auf debug ab — nächster
-            // Reconcile-Zyklus versucht es erneut, falls sich die Lage ändert.
-            tracing::debug!(
-                sub_type,
-                login,
-                "EventSub 400: Kanal nicht berechtigt — Retry nächster Zyklus"
-            );
-        } else {
-            tracing::warn!(%error, sub_type, login, "EventSub: Subscription fehlgeschlagen");
+        }
+    }
+
+    fn should_retry_create(
+        &self,
+        error: &SubscriptionCreateError,
+        attempt: u32,
+        max_attempts: u32,
+        bearer_override: Option<&str>,
+    ) -> bool {
+        if attempt >= max_attempts {
+            return false;
+        }
+        match error.status() {
+            // App-Token lässt sich im Transport invalidieren. User-Token werden
+            // beim nächsten Provider/Reconcile neu geholt, nicht mit demselben
+            // Bearer aggressiv wiederholt.
+            Some(401) => bearer_override.is_none(),
+            Some(429) => !error.is_hard_quota_or_cost_limit(),
+            _ => false,
+        }
+    }
+
+    fn create_retry_delay(
+        &self,
+        error: &SubscriptionCreateError,
+        attempt: u32,
+        sub_type: &str,
+        broadcaster_id: &str,
+    ) -> StdDuration {
+        if let Some(retry_after) = error.retry_after() {
+            return retry_after.min(self.retry_config.max_retry_after);
+        }
+        let exponent = attempt.saturating_sub(1).min(5);
+        let multiplier = 1u64 << exponent;
+        let base_ms = self.retry_config.base_delay.as_millis() as u64;
+        let backoff = StdDuration::from_millis(base_ms.saturating_mul(multiplier))
+            .min(self.retry_config.max_delay);
+        backoff + StdDuration::from_millis(self.retry_jitter_ms(sub_type, broadcaster_id, attempt))
+    }
+
+    fn retry_jitter_ms(&self, sub_type: &str, broadcaster_id: &str, attempt: u32) -> u64 {
+        if self.retry_config.jitter_ms == 0 {
+            return 0;
+        }
+        let mut hash = 0xcbf29ce484222325u64;
+        for byte in sub_type
+            .bytes()
+            .chain(broadcaster_id.bytes())
+            .chain(attempt.to_le_bytes())
+        {
+            hash ^= u64::from(byte);
+            hash = hash.wrapping_mul(0x100000001b3);
+        }
+        hash % self.retry_config.jitter_ms
+    }
+
+    async fn handle_subscription_create_error(
+        &self,
+        error: SubscriptionCreateError,
+        context: &SubscriptionCreateContext<'_>,
+    ) -> bool {
+        match error.status() {
+            Some(403) => {
+                if CHAT_MOD_RETRY_SUB_TYPES.contains(&context.sub_type)
+                    && self
+                        .is_stale_removed_channel_after_403(context.broadcaster_id, context.login)
+                        .await
+                    && (self.has_local_channel_state(context.broadcaster_id, context.login)
+                        || self.moderator_provisioner.is_none())
+                {
+                    self.record_subscription_state(
+                        context.login,
+                        context.sub_type,
+                        "stale_removed_channel",
+                        Some("channel no longer tracked locally or authorized"),
+                    );
+                    self.purge_local_channel_state(context.broadcaster_id, context.login);
+                    tracing::info!(
+                        sub_type = context.sub_type,
+                        login = context.login,
+                        "EventSub 403: stale/removed channel erkannt — lokaler Subscription-State gepurged"
+                    );
+                    return false;
+                }
+                // P1.2: Chat-Pfad heilt einen Laufzeit-403 (Bot demoddet)
+                // selbst: Bot re-modden, 1s warten, ein Re-Subscribe.
+                // Gelingt das, ist der Kanal sofort wieder live; scheitert
+                // es, greift ein 10-Min-Cooldown (clearbar) STATT eines
+                // permanenten perm_failed-Eintrags.
+                if CHAT_MOD_RETRY_SUB_TYPES.contains(&context.sub_type)
+                    && self.moderator_provisioner.is_some()
+                {
+                    return self
+                        .retry_chat_subscription_after_mod(
+                            context.sub_type,
+                            context.version,
+                            context.condition,
+                            context.broadcaster_id,
+                            context.login,
+                            context.bearer_override,
+                        )
+                        .await;
+                }
+                self.mark_perm_failed(context.sub_type, context.broadcaster_id);
+                tracing::warn!(
+                    status = 403u16,
+                    sub_type = context.sub_type,
+                    login = context.login,
+                    broadcaster_id = context.broadcaster_id,
+                    cooldown_seconds = PERMISSION_RETRY_COOLDOWN_SECONDS as u64,
+                    "EventSub 403: Berechtigung fehlt — Retry nach Cooldown/Reauth möglich"
+                );
+            }
+            Some(429) if error.is_hard_quota_or_cost_limit() => {
+                tracing::error!(
+                    status = 429u16,
+                    sub_type = context.sub_type,
+                    login = context.login,
+                    broadcaster_id = context.broadcaster_id,
+                    "EventSub 429: harte Quota-/Cost-Grenze beim Subscription-Create"
+                );
+            }
+            Some(429) => {
+                tracing::warn!(
+                    status = 429u16,
+                    retry_after_seconds = error.retry_after().map(|d| d.as_secs()),
+                    sub_type = context.sub_type,
+                    login = context.login,
+                    broadcaster_id = context.broadcaster_id,
+                    "EventSub 429: Rate-Limit nach begrenztem Retry weiter aktiv"
+                );
+            }
+            Some(401) => {
+                tracing::warn!(
+                    status = 401u16,
+                    sub_type = context.sub_type,
+                    login = context.login,
+                    broadcaster_id = context.broadcaster_id,
+                    "EventSub 401: Auth-Fehler beim Subscription-Create nach begrenztem Retry"
+                );
+            }
+            Some(400) => {
+                // Kanal für diesen Sub-Typ nicht berechtigt (z. B. hype_train
+                // braucht Affiliate/Partner-Tier) oder Scope-Edge-Case. Python
+                // fängt das in den broadcaster_subs still auf debug ab — nächster
+                // Reconcile-Zyklus versucht es erneut, falls sich die Lage ändert.
+                tracing::debug!(
+                    status = 400u16,
+                    sub_type = context.sub_type,
+                    login = context.login,
+                    broadcaster_id = context.broadcaster_id,
+                    "EventSub 400: Kanal nicht berechtigt — Retry nächster Zyklus"
+                );
+            }
+            _ => {
+                tracing::warn!(
+                    %error,
+                    sub_type = context.sub_type,
+                    login = context.login,
+                    broadcaster_id = context.broadcaster_id,
+                    "EventSub: Subscription fehlgeschlagen"
+                );
+            }
         }
         false
     }
@@ -1180,14 +1789,14 @@ impl SubscriptionManager {
             return true;
         }
         if self.is_perm_failed(sub_type, broadcaster_id) {
-            tracing::debug!(sub_type, login, "EventSub: 403-gebannt, überspringe");
+            tracing::debug!(sub_type, login, "EventSub: 403-Cooldown aktiv, überspringe");
             return false;
         }
 
         let mut saw_403 = false;
         for (auth_label, condition, token) in attempts {
             match self
-                .create_subscription_once(
+                .create_subscription_with_retries(
                     sub_type,
                     version,
                     &condition,
@@ -1215,11 +1824,11 @@ impl SubscriptionManager {
                     return true;
                 }
                 Err(error) => {
-                    let msg = error.to_string();
-                    if msg.contains("403") {
+                    if error.status() == Some(403) {
                         saw_403 = true;
                     }
                     tracing::debug!(
+                        %error,
                         sub_type,
                         login,
                         auth_label,
@@ -1232,10 +1841,12 @@ impl SubscriptionManager {
         if saw_403 {
             self.mark_perm_failed(sub_type, broadcaster_id);
             tracing::warn!(
+                status = 403u16,
                 sub_type,
                 login,
-                "EventSub 403: Moderator-Telemetrie nicht autorisiert — \
-                 kein weiterer Retry bis Neustart"
+                broadcaster_id,
+                cooldown_seconds = PERMISSION_RETRY_COOLDOWN_SECONDS as u64,
+                "EventSub 403: Moderator-Telemetrie nicht autorisiert — Retry nach Cooldown/Reauth möglich"
             );
         }
         false
@@ -1360,6 +1971,14 @@ impl SubscriptionManager {
                 true
             }
             Err(error) => {
+                self.record_subscription_failure(
+                    sub_type,
+                    broadcaster_id,
+                    login,
+                    &error,
+                    1,
+                    Some((self.clock)() + MOD_RETRY_COOLDOWN_SECONDS),
+                );
                 self.set_mod_retry_cooldown(sub_type, broadcaster_id);
                 tracing::warn!(
                     %error,
@@ -1454,10 +2073,10 @@ impl SubscriptionManager {
         let key = (sub_type.to_string(), broadcaster_id.to_string());
         // 403-Bann zurücksetzen: nach einer Revocation ist die alte Sperre
         // hinfällig, der Re-Subscribe-Versuch soll wieder laufen dürfen.
-        self.perm_failed
-            .lock()
-            .expect("perm_failed lock")
-            .remove(&key);
+        if let Ok(mut perm_failed) = self.perm_failed.lock() {
+            perm_failed.remove(&key);
+        }
+        self.clear_subscription_failure(sub_type, broadcaster_id);
         let removed = self.tracked.lock().expect("tracked lock").remove(&key);
         if removed {
             tracing::info!(
@@ -1563,18 +2182,26 @@ impl CapacitySnapshotStore {
         used_slots: i32,
         ts: DateTime<Utc>,
     ) -> Result<(), sqlx::Error> {
-        sqlx::query!(
+        let capacity = eventsub_webhook_capacity_values(i64::from(used_slots));
+        let total_slots = saturating_i32(capacity.total_slots);
+        let headroom_slots = saturating_i32(capacity.headroom_slots);
+        let listeners_at_limit = saturating_i32(capacity.listeners_at_limit);
+        sqlx::query(
             r#"
             INSERT INTO twitch_eventsub_capacity_snapshot
                 (ts_utc, trigger_reason, listener_count, ready_listeners,
                  failed_listeners, used_slots, total_slots, headroom_slots,
                  listeners_at_limit, utilization_pct, listeners_json)
-            VALUES ($1, $2, 0, 0, 0, $3, 0, 0, 0, 0.0, '[]')
+            VALUES ($1, $2, 0, 0, 0, $3, $4, $5, $6, $7, '[]')
             "#,
-            ts,
-            trigger,
-            used_slots,
         )
+        .bind(ts)
+        .bind(trigger)
+        .bind(used_slots)
+        .bind(total_slots)
+        .bind(headroom_slots)
+        .bind(listeners_at_limit)
+        .bind(capacity.utilization_pct)
         .execute(&self.pool)
         .await?;
         Ok(())
@@ -1598,7 +2225,7 @@ impl CapacitySnapshotStore {
 mod tests {
     use super::*;
 
-    use std::collections::HashSet;
+    use std::collections::{HashSet, VecDeque};
     use std::str::FromStr;
     use std::sync::atomic::{AtomicU64, Ordering};
 
@@ -1682,6 +2309,8 @@ mod tests {
         creates: Mutex<Vec<CreateCall>>,
         fail_all_403: bool,
         fail_bearers_403: Mutex<HashSet<String>>,
+        failures: Mutex<VecDeque<SubscriptionCreateError>>,
+        auth_refreshes: AtomicU64,
     }
 
     #[async_trait::async_trait]
@@ -1694,12 +2323,15 @@ mod tests {
             _callback: &str,
             _secret: &str,
             bearer_override: Option<&str>,
-        ) -> Result<bool, SourceError> {
+        ) -> Result<bool, SubscriptionCreateError> {
             self.creates.lock().expect("creates lock").push(CreateCall {
                 sub_type: sub_type.to_string(),
                 condition: condition.clone(),
                 bearer: bearer_override.map(str::to_string),
             });
+            if let Some(error) = self.failures.lock().expect("failures lock").pop_front() {
+                return Err(error);
+            }
             if self.fail_all_403
                 || bearer_override.is_some_and(|bearer| {
                     self.fail_bearers_403
@@ -1708,11 +2340,23 @@ mod tests {
                         .contains(bearer)
                 })
             {
-                return Err(SourceError::from(
-                    "HTTP 403 subscription missing proper authorization",
+                return Err(SubscriptionCreateError::http_status(
+                    403,
+                    None,
+                    Some("subscription missing proper authorization".to_string()),
                 ));
             }
             Ok(false)
+        }
+
+        async fn refresh_auth(
+            &self,
+            _broadcaster_id: &str,
+            _login: &str,
+            _bearer_override: Option<&str>,
+        ) -> Result<(), SourceError> {
+            self.auth_refreshes.fetch_add(1, Ordering::SeqCst);
+            Ok(())
         }
 
         async fn list(&self) -> Result<Vec<RemoteSubscription>, SourceError> {
@@ -1741,6 +2385,220 @@ mod tests {
                 vec!["moderator:read:followers".to_string()],
             ))
         }
+    }
+
+    fn lazy_test_pool() -> PgPool {
+        sqlx::PgPool::connect_lazy("postgres://invalid:invalid@127.0.0.1:1/unused")
+            .expect("lazy pool")
+    }
+
+    fn zero_retry_config(max_attempts: u32) -> SubscriptionRetryConfig {
+        SubscriptionRetryConfig {
+            max_attempts,
+            base_delay: StdDuration::ZERO,
+            max_delay: StdDuration::ZERO,
+            max_retry_after: StdDuration::ZERO,
+            jitter_ms: 0,
+        }
+    }
+
+    #[tokio::test]
+    async fn eventsub_capacity_values_fuellen_total_headroom_und_utilization() {
+        let values = eventsub_webhook_capacity_values(25);
+        assert_eq!(values.used_slots, 25);
+        assert_eq!(values.total_slots, 10_000);
+        assert_eq!(values.headroom_slots, 9_975);
+        assert_eq!(values.listeners_at_limit, 0);
+        assert_eq!(values.utilization_pct, 0.25);
+    }
+
+    #[tokio::test]
+    async fn create_401_invalidiert_auth_retryt_und_zaehlt_failure() {
+        let transport = Arc::new(UnitTransport::default());
+        transport.failures.lock().expect("failures lock").push_back(
+            SubscriptionCreateError::http_status(
+                401,
+                None,
+                Some("invalid oauth token".to_string()),
+            ),
+        );
+        let manager = SubscriptionManager::new(
+            transport.clone(),
+            SubscriptionConfig {
+                callback_url: "https://cb/test".to_string(),
+                secret: "secret".to_string(),
+            },
+            CapacitySnapshotStore::new(lazy_test_pool()),
+        )
+        .with_retry_config(zero_retry_config(2));
+
+        assert!(
+            manager
+                .ensure_subscription("stream.online", "1", "42", "drag")
+                .await
+        );
+        assert_eq!(transport.auth_refreshes.load(Ordering::SeqCst), 1);
+        let creates = transport.creates.lock().expect("creates lock").clone();
+        assert_eq!(
+            creates
+                .iter()
+                .filter(|call| call.sub_type == "stream.online")
+                .count(),
+            2,
+            "nur die fehlgeschlagene stream.online-Sub wird direkt erneut versucht"
+        );
+        assert!(manager.failed_subscription_statuses().is_empty());
+        let counters = manager.subscription_failure_counters();
+        assert!(counters.iter().any(|counter| {
+            counter.sub_type == "stream.online"
+                && counter.broadcaster_id == "42"
+                && counter.reason == "auth_unauthorized"
+                && counter.count == 1
+        }));
+    }
+
+    #[tokio::test]
+    async fn create_429_quota_wird_hart_markiert_ohne_retry() {
+        let transport = Arc::new(UnitTransport::default());
+        transport.failures.lock().expect("failures lock").push_back(
+            SubscriptionCreateError::http_status(
+                429,
+                Some(StdDuration::from_secs(30)),
+                Some("maximum total cost exceeded".to_string()),
+            ),
+        );
+        let manager = SubscriptionManager::new(
+            transport.clone(),
+            SubscriptionConfig {
+                callback_url: "https://cb/test".to_string(),
+                secret: "secret".to_string(),
+            },
+            CapacitySnapshotStore::new(lazy_test_pool()),
+        )
+        .with_retry_config(zero_retry_config(3));
+
+        assert!(!manager.ensure_raid_subscription("55", "target").await);
+        let creates = transport.creates.lock().expect("creates lock").clone();
+        assert_eq!(creates.len(), 1, "harte Quota wird nicht erneut versucht");
+        let statuses = manager.failed_subscription_statuses();
+        assert_eq!(statuses.len(), 1);
+        assert_eq!(statuses[0].reason, "rate_limit_quota");
+        assert_eq!(statuses[0].http_status, Some(429));
+        assert_eq!(statuses[0].retry_after_seconds, Some(30));
+        assert!(statuses[0].hard_failure);
+    }
+
+    #[tokio::test]
+    async fn create_429_maximum_request_rate_bleibt_retrybar() {
+        let transport = Arc::new(UnitTransport::default());
+        transport.failures.lock().expect("failures lock").push_back(
+            SubscriptionCreateError::http_status(
+                429,
+                None,
+                Some("maximum request rate exceeded".to_string()),
+            ),
+        );
+        let manager = SubscriptionManager::new(
+            transport.clone(),
+            SubscriptionConfig {
+                callback_url: "https://cb/test".to_string(),
+                secret: "secret".to_string(),
+            },
+            CapacitySnapshotStore::new(lazy_test_pool()),
+        )
+        .with_retry_config(zero_retry_config(2));
+
+        assert!(manager.ensure_raid_subscription("55", "target").await);
+        let creates = transport.creates.lock().expect("creates lock").clone();
+        assert_eq!(
+            creates.len(),
+            2,
+            "transientes Rate-Limit wird erneut versucht"
+        );
+        assert!(manager.failed_subscription_statuses().is_empty());
+        assert!(manager
+            .subscription_failure_counters()
+            .iter()
+            .any(|counter| counter.sub_type == "channel.raid"
+                && counter.broadcaster_id == "55"
+                && counter.reason == "rate_limited"
+                && counter.count == 1));
+    }
+
+    #[tokio::test]
+    async fn core_ensure_report_meldet_fehlgeschlagene_subscriptions() {
+        let transport = Arc::new(UnitTransport::default());
+        {
+            let mut failures = transport.failures.lock().expect("failures lock");
+            for _ in 0..CORE_SUBSCRIPTIONS.len() {
+                failures.push_back(SubscriptionCreateError::http_status(
+                    403,
+                    None,
+                    Some("missing authorization".to_string()),
+                ));
+            }
+        }
+        let manager = SubscriptionManager::new(
+            transport,
+            SubscriptionConfig {
+                callback_url: "https://cb/test".to_string(),
+                secret: "secret".to_string(),
+            },
+            CapacitySnapshotStore::new(lazy_test_pool()),
+        )
+        .with_retry_config(zero_retry_config(1));
+
+        let report = manager.ensure_core_subscriptions("66", "core").await;
+        assert_eq!(report.attempted, 3);
+        assert_eq!(report.succeeded, 0);
+        assert_eq!(report.failed(), 3);
+        let reasons: HashSet<&str> = report
+            .failures
+            .iter()
+            .map(|failure| failure.reason.as_str())
+            .collect();
+        assert_eq!(reasons, HashSet::from(["permission_failed"]));
+    }
+
+    #[tokio::test]
+    async fn permission_403_cooldown_laeuft_aus_und_reconcile_versucht_neu() {
+        let now = Arc::new(AtomicU64::new(1_000));
+        let now_clk = now.clone();
+        let transport = Arc::new(UnitTransport::default());
+        transport.failures.lock().expect("failures lock").push_back(
+            SubscriptionCreateError::http_status(
+                403,
+                None,
+                Some("missing authorization".to_string()),
+            ),
+        );
+        let manager = SubscriptionManager::new(
+            transport.clone(),
+            SubscriptionConfig {
+                callback_url: "https://cb/test".to_string(),
+                secret: "secret".to_string(),
+            },
+            CapacitySnapshotStore::new(lazy_test_pool()),
+        )
+        .with_retry_config(zero_retry_config(1))
+        .with_clock(Arc::new(move || now_clk.load(Ordering::SeqCst) as f64));
+
+        assert!(!manager.ensure_raid_subscription("77", "target").await);
+        assert!(!manager.failed_subscription_statuses().is_empty());
+        let creates_after_403 = transport.creates.lock().expect("creates lock").len();
+        assert!(!manager.ensure_raid_subscription("77", "target").await);
+        assert_eq!(
+            transport.creates.lock().expect("creates lock").len(),
+            creates_after_403,
+            "während 403-Cooldown kein weiterer Create"
+        );
+
+        now.store(
+            1_000 + PERMISSION_RETRY_COOLDOWN_SECONDS as u64 + 1,
+            Ordering::SeqCst,
+        );
+        assert!(manager.ensure_raid_subscription("77", "target").await);
+        assert!(manager.failed_subscription_statuses().is_empty());
     }
 
     #[tokio::test]

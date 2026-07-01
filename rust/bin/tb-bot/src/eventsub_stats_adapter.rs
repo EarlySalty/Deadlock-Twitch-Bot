@@ -4,7 +4,7 @@
 //! Webhook-Modell (ADR 0004): Es gibt keine WebSocket-Listener wie in Pythons
 //! In-Process-State — die Listener-Felder bleiben 0 (konsistent mit
 //! `record_capacity_snapshot`). Der Live-Mehrwert sind `subscription_count`,
-//! `used_slots` und die Typ-/Kanal-Aufschlüsselung aus dem getrackten Set.
+//! Capacity-Felder und die Typ-/Kanal-Aufschlüsselung aus dem getrackten Set.
 //! Shapes 1:1 zu Python `_collect_eventsub_capacity_snapshot`
 //! (`eventsub_mixin.py:594-636`).
 
@@ -14,7 +14,7 @@ use std::sync::Arc;
 use serde_json::json;
 use sqlx::PgPool;
 use tb_internal_api::{EventSubCurrentSnapshot, EventSubStatsSource};
-use tb_monitoring::SubscriptionManager;
+use tb_monitoring::{eventsub_webhook_capacity_values, SubscriptionManager};
 
 /// Live-EventSub-Stats aus dem SubscriptionManager + DB-Login-Auflösung.
 pub struct ManagerEventSubStats {
@@ -34,6 +34,7 @@ impl EventSubStatsSource for ManagerEventSubStats {
         // (sub_type, broadcaster_id)-Paare des Live-Sets.
         let pairs = self.manager.tracked_pairs();
         let count = pairs.len() as i64;
+        let capacity = eventsub_webhook_capacity_values(count);
 
         // Aufschlüsselung nach Typ und nach Kanal.
         let mut type_counts: BTreeMap<String, i64> = BTreeMap::new();
@@ -65,7 +66,11 @@ impl EventSubStatsSource for ManagerEventSubStats {
             .collect();
         chan_vec.sort_by(|a, b| {
             b.1.cmp(&a.1)
-                .then_with(|| a.3.clone().unwrap_or_default().cmp(&b.3.clone().unwrap_or_default()))
+                .then_with(|| {
+                    a.3.clone()
+                        .unwrap_or_default()
+                        .cmp(&b.3.clone().unwrap_or_default())
+                })
                 .then_with(|| a.0.cmp(&b.0))
         });
         let active_subscription_channels = chan_vec
@@ -99,10 +104,10 @@ impl EventSubStatsSource for ManagerEventSubStats {
             ready_listeners: 0,
             failed_listeners: 0,
             used_slots: count,
-            total_slots: 0,
-            headroom_slots: 0,
-            listeners_at_limit: 0,
-            utilization_pct: 0.0,
+            total_slots: capacity.total_slots,
+            headroom_slots: capacity.headroom_slots,
+            listeners_at_limit: capacity.listeners_at_limit,
+            utilization_pct: capacity.utilization_pct,
             subscription_count: count,
             active_subscriptions,
             active_subscription_types,

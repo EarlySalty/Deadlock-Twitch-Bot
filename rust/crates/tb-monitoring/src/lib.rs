@@ -73,8 +73,10 @@ pub use sessions::{
 pub use stats::{StatsSample, StatsStore};
 pub use stream::StreamSnapshot;
 pub use subscriptions::{
-    BroadcasterEventSubTokenProvider, CapacitySnapshotStore, EventSubUserToken, ModeratorProvisioner,
-    RemoteSubscription, RevocationSink, SubscriptionConfig, SubscriptionManager,
+    eventsub_webhook_capacity_values, BroadcasterEventSubTokenProvider, CapacitySnapshotStore,
+    EventSubCapacityValues, EventSubUserToken, ModeratorProvisioner, RemoteSubscription,
+    RevocationSink, SubscriptionConfig, SubscriptionCreateError, SubscriptionEnsureReport,
+    SubscriptionFailureCounter, SubscriptionFailureStatus, SubscriptionManager,
     SubscriptionTransport, EVENTSUB_CORE_SUB_TYPES,
 };
 pub use telemetry::{HypeTrainPhase, TelemetryStore};

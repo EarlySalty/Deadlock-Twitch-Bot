@@ -257,6 +257,12 @@ impl AppTokenManager {
             Err(other) => Err(other),
         }
     }
+
+    /// Verwirft den gecachten App-Token. Der nächste [`Self::access_token`]-
+    /// Aufruf holt dadurch gezielt einen frischen Token.
+    pub async fn invalidate(&self) {
+        *self.token.lock().await = None;
+    }
 }
 
 #[cfg(test)]
@@ -302,8 +308,7 @@ mod tests {
     fn token_response_expires_in_default_3600() {
         // Fehlt `expires_in`, fällt serde auf 3600 zurück (Python-Parität)
         // statt das Parsen mit "missing field" abzubrechen.
-        let parsed: TokenResponse =
-            serde_json::from_str(r#"{"access_token":"abc"}"#).unwrap();
+        let parsed: TokenResponse = serde_json::from_str(r#"{"access_token":"abc"}"#).unwrap();
         assert_eq!(parsed.access_token, "abc");
         assert_eq!(parsed.expires_in, 3600);
     }
@@ -321,7 +326,10 @@ mod tests {
         // Nur HTTP 400 + „invalid client" (Roh-Body) zählt.
         assert!(is_invalid_client(400, "invalid client"));
         assert!(is_invalid_client(400, r#"{"message":"Invalid client"}"#));
-        assert!(is_invalid_client(400, r#"{"error":"invalid client secret"}"#));
+        assert!(is_invalid_client(
+            400,
+            r#"{"error":"invalid client secret"}"#
+        ));
         // Anderer Status oder andere Meldung → kein invalid_client.
         assert!(!is_invalid_client(401, "invalid client"));
         assert!(!is_invalid_client(400, r#"{"message":"server error"}"#));
