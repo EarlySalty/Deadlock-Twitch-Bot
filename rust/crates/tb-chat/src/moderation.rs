@@ -12,7 +12,7 @@
 //!
 //! Port: `bot/chat/moderation.py:1293–1903`, `bot/chat/timeout_guard.py`.
 
-use crate::api::{BanOutcome, ChatApi};
+use crate::api::{AnnouncementOutcome, BanOutcome, ChatApi};
 use crate::commands::{AutobanEntry, LastAutobanStore};
 use crate::promos::OutboundSuppressionCheck as PromoSuppressionCheck;
 use crate::suppression_guard::{
@@ -178,14 +178,25 @@ impl ChatApi for HelixChatClient {
         })
     }
 
-    /// Sendet Ankündigung — 2-Attempt.
-    /// moderator_id = Bot-User-ID, intern via token_mgr bezogen.
     async fn send_announcement(
         &self,
         broadcaster_id: &str,
         message: &str,
         color: &str,
     ) -> Result<bool, String> {
+        self.send_announcement_detailed(broadcaster_id, message, color)
+            .await
+            .map(|outcome| outcome.accepted)
+    }
+
+    /// Sendet Ankündigung — 2-Attempt.
+    /// moderator_id = Bot-User-ID, intern via token_mgr bezogen.
+    async fn send_announcement_detailed(
+        &self,
+        broadcaster_id: &str,
+        message: &str,
+        color: &str,
+    ) -> Result<AnnouncementOutcome, String> {
         let moderator_id = self.token_mgr.bot_user_id().await;
         for attempt in 0..2usize {
             let force = attempt > 0;
@@ -195,22 +206,25 @@ impl ChatApi for HelixChatClient {
             };
             match self
                 .helix
-                .send_announcement(broadcaster_id, &moderator_id, message, color, &token)
+                .send_announcement_detailed(broadcaster_id, &moderator_id, message, color, &token)
                 .await
             {
-                Ok(true) => return Ok(true),
-                Ok(false) if attempt == 0 => {
-                    // Könnte 401 sein — retry mit force_refresh
+                Ok(outcome) if outcome.accepted => return Ok(outcome),
+                Ok(outcome) if outcome.status == Some(401) && attempt == 0 => {
                     continue;
                 }
-                Ok(false) => return Ok(false),
+                Ok(outcome) => return Ok(outcome),
                 Err(e) => {
                     warn!("Announcement-Fehler: {e}");
                     return Err(e.to_string());
                 }
             }
         }
-        Ok(false)
+        Ok(AnnouncementOutcome {
+            accepted: false,
+            status: Some(401),
+            detail: Some("nach force_refresh noch 401".to_string()),
+        })
     }
 
     /// Permanenter Ban — 2-Attempt bei 401.

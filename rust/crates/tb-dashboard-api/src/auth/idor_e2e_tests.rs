@@ -12,7 +12,7 @@
 //!   (a) `auth-status` antwortet 200 (kein 401/Loop) und meldet `level=partner`.
 //!   (b) Ein streamer-scoped Read mit FREMDEM `?streamer=` → 403 (IDOR-Klemme).
 //!   (c) Ein same-origin Schreib-POST (engagement-Mode-Toggle) MIT Session-Cookie,
-//!       aber OHNE `X-CSRF-Token`, läuft durch (NICHT `csrf_failed`) — der
+//!       aber OHNE `X-CSRF-Token`, läuft durch (NICHT `invalid_csrf`) — der
 //!       tokenlose SameSite/Origin-Fallback hält den #235-Login-Loop fern.
 //!
 //! Gated auf `TB_TEST_DATABASE_URL` (echte Postgres-Verbindung nötig).
@@ -224,7 +224,7 @@ async fn partner_pfad_e2e_auth_status_scope_und_csrf() {
         "eigener Login darf nicht von der IDOR-Klemme abgelehnt werden"
     );
 
-    // ── (c) same-origin Schreib-POST OHNE X-CSRF-Token → NICHT csrf_failed ───
+    // ── (c) same-origin Schreib-POST OHNE X-CSRF-Token → NICHT invalid_csrf ─
     // Origin == Host, gültige Partner-Session, kein X-CSRF-Token: der
     // tokenlose SameSite/Origin-Fallback muss durchlassen (Vorfall #235).
     let addr: SocketAddr = PEER.parse().unwrap();
@@ -245,7 +245,7 @@ async fn partner_pfad_e2e_auth_status_scope_und_csrf() {
     assert_eq!(
         res.status(),
         StatusCode::OK,
-        "same-origin Partner-Write ohne CSRF-Token muss durchlaufen (kein csrf_failed)"
+        "same-origin Partner-Write ohne CSRF-Token muss durchlaufen (kein invalid_csrf)"
     );
     let body = axum::body::to_bytes(res.into_body(), 1 << 16)
         .await
@@ -254,6 +254,6 @@ async fn partner_pfad_e2e_auth_status_scope_und_csrf() {
     // Der Write hat den CSRF-Gate passiert UND den Handler erreicht (Upsert ok).
     assert_eq!(v["ok"], true);
     assert_eq!(v["output_mode"], "off");
-    // Doppelt absichern: keinesfalls die csrf_failed-Antwort.
-    assert_ne!(v["error"], "csrf_failed");
+    // Doppelt absichern: keinesfalls die invalid_csrf-Antwort.
+    assert_ne!(v["error"], "invalid_csrf");
 }

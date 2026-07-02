@@ -1,20 +1,23 @@
 //! AuthLevel-Kaskade für das Dashboard-API.
 //!
 //! Reihenfolge:
-//! 1. **Partner/Twitch-Admin** — Cookie `twitch_dash_session` ist gültig in der DB
+//! 1. **Internal Admin** — gültiger `X-Internal-Token` über `ExpectedToken`.
+//!    Loopback-Requests werden nur in `promote_dashboard_admin_session` für
+//!    Admin-Router auf `AuthLevel::Admin` gebrückt (Python `localhost`/`admin`).
+//! 2. **Partner/Twitch-Admin** — Cookie `twitch_dash_session` ist gültig in der DB
 //!    (Twitch-OAuth-Session, Typ `twitch`) UND in `twitch_partners` vorhanden
 //!    (gleiche WHERE-Bedingung wie Python `_is_partner_allowed`,
 //!    `auth_mixin.py:741-780`). KEINE `twitch_token_blacklist`-Prüfung — ein
 //!    token_error-Blacklist-Eintrag sperrt den Dashboard-Zugang nicht.
-//! 2. **Admin** — Cookie `master_dash_session` ist gültig in der DB
+//! 3. **Admin** — Cookie `master_dash_session` ist gültig in der DB
 //!    (Discord-Admin-Session, Typ `discord_admin`)
-//! 3. **None** — alles andere
+//! 4. **None** — alles andere
 
 use axum::{
     async_trait,
     body::Body,
     extract::FromRequestParts,
-    http::{request::Parts, Request},
+    http::{request::Parts, Extensions, HeaderMap, Request},
     middleware::Next,
     response::Response,
 };
@@ -84,7 +87,7 @@ pub async fn promote_dashboard_admin_session(
     mut request: Request<Body>,
     next: Next,
 ) -> Response {
-    if auth.is_privileged() {
+    if auth.is_privileged() || is_local_request_from_request(&request) {
         request
             .extensions_mut()
             .insert(tb_http_core::AuthLevel::Admin);
@@ -149,14 +152,13 @@ fn strip_port(raw: &str) -> &str {
 /// Caddy setzt bei proxied Requests `X-Forwarded-For`; ein echter Direkt-
 /// Loopback-curl trägt keine Forwarding-Header. Der Bypass bleibt damit
 /// fail-closed, auch wenn Reverse-Proxy-Routing falsch konfiguriert ist.
-pub(crate) fn is_local_request(parts: &Parts) -> bool {
-    if parts.headers.contains_key("x-forwarded-for") || parts.headers.contains_key("x-forwarded-host") {
+fn is_local_headers_extensions(headers: &HeaderMap, extensions: &Extensions) -> bool {
+    if headers.contains_key("x-forwarded-for") || headers.contains_key("x-forwarded-host") {
         return false;
     }
 
     // Host-Header muss Loopback sein
-    let host_header = parts
-        .headers
+    let host_header = headers
         .get(axum::http::header::HOST)
         .and_then(|v| v.to_str().ok())
         .unwrap_or("");
@@ -165,8 +167,7 @@ pub(crate) fn is_local_request(parts: &Parts) -> bool {
     }
 
     // Peer-IP muss Loopback sein
-    let peer_ip = parts
-        .extensions
+    let peer_ip = extensions
         .get::<axum::extract::ConnectInfo<SocketAddr>>()
         .map(|ci| ci.0.ip());
 
@@ -175,6 +176,14 @@ pub(crate) fn is_local_request(parts: &Parts) -> bool {
         // Kein ConnectInfo → konservativ false
         None => false,
     }
+}
+
+pub(crate) fn is_local_request(parts: &Parts) -> bool {
+    is_local_headers_extensions(&parts.headers, &parts.extensions)
+}
+
+fn is_local_request_from_request(request: &Request<Body>) -> bool {
+    is_local_headers_extensions(request.headers(), request.extensions())
 }
 
 /// Liest den Session-Cookie-Wert aus dem `Cookie`-Header.
@@ -245,8 +254,15 @@ where
 
     async fn from_request_parts(
         parts: &mut Parts,
-        _state: &S,
+        state: &S,
     ) -> Result<Self, Self::Rejection> {
+        if matches!(
+            tb_http_core::AuthLevel::from_request_parts(parts, state).await,
+            Ok(tb_http_core::AuthLevel::Admin)
+        ) {
+            return Ok(DashboardAuthLevel::admin());
+        }
+
         // Auth-State-Extension holen (enthält Pool + Cache)
         let Some(state) = parts.extensions.get::<crate::auth::session::DashboardAuthState>().cloned() else {
             return Ok(DashboardAuthLevel::None);

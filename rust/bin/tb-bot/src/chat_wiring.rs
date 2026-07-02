@@ -320,6 +320,7 @@ fn chat_action_result_from_send_outcome(
         SendOutcome::Dropped { code, message } => ChatActionResult::Dropped { code, message },
         SendOutcome::HttpError { status, body } => ChatActionResult::Failed {
             reason: chat_http_error_reason(status, &body),
+            detail: Some(body),
         },
     }
 }
@@ -336,7 +337,10 @@ async fn send_chat_message_action(
         Ok(outcome) => {
             chat_action_result_from_send_outcome(login, mode, outcome, sent_label_override)
         }
-        Err(reason) => ChatActionResult::Failed { reason },
+        Err(reason) => ChatActionResult::Failed {
+            reason,
+            detail: None,
+        },
     }
 }
 
@@ -357,8 +361,9 @@ async fn send_announcement_fallback(
     )
     .await
     {
-        ChatActionResult::Failed { reason } => ChatActionResult::Failed {
+        ChatActionResult::Failed { reason, detail } => ChatActionResult::Failed {
             reason: format!("announcement failed: {original_failure}; fallback failed: {reason}"),
+            detail,
         },
         other => other,
     }
@@ -399,19 +404,23 @@ impl ChatActionPort for ChatActionAdapter {
         if mode == "announcement" {
             match self
                 .api
-                .send_announcement(&broadcaster_id, &send_text, color)
+                .send_announcement_detailed(&broadcaster_id, &send_text, color)
                 .await
             {
-                Ok(true) => ChatActionResult::Sent {
+                Ok(outcome) if outcome.accepted => ChatActionResult::Sent {
                     label: format!("Announcement an {login} gesendet"),
                 },
-                Ok(false) => {
+                Ok(outcome) => {
+                    let original_failure = outcome
+                        .detail
+                        .as_deref()
+                        .unwrap_or("announcement not accepted");
                     send_announcement_fallback(
                         self.api.as_ref(),
                         &broadcaster_id,
                         login,
                         &send_text,
-                        "announcement not accepted",
+                        original_failure,
                     )
                     .await
                 }
@@ -2602,7 +2611,8 @@ mod chat_notification_tests {
         assert_eq!(
             result,
             ChatActionResult::Failed {
-                reason: "helix http 403: {\"message\":\"missing scope\"}".to_string()
+                reason: "helix http 403: {\"message\":\"missing scope\"}".to_string(),
+                detail: Some("{\"message\":\"missing scope\"}".to_string())
             }
         );
     }

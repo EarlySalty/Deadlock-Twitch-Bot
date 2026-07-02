@@ -24,7 +24,7 @@
 //! Port: `bot/chat/moderation.py:1519–1546`, `bot/chat/promos.py:1132–1137`,
 //! `bot/chat/timeout_guard.py`.
 
-use crate::api::{BanOutcome, ChatApi};
+use crate::api::{AnnouncementOutcome, BanOutcome, ChatApi};
 use crate::moderation::{TimeoutGuard, BOT_TIMEOUT_DROP_CODES};
 use crate::types::SendOutcome;
 use async_trait::async_trait;
@@ -216,6 +216,17 @@ impl ChatApi for TimeoutTrackingChatApi {
     ) -> Result<bool, String> {
         self.inner
             .send_announcement(broadcaster_id, message, color)
+            .await
+    }
+
+    async fn send_announcement_detailed(
+        &self,
+        broadcaster_id: &str,
+        message: &str,
+        color: &str,
+    ) -> Result<AnnouncementOutcome, String> {
+        self.inner
+            .send_announcement_detailed(broadcaster_id, message, color)
             .await
     }
 

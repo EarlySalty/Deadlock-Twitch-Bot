@@ -1,5 +1,6 @@
 //! Handler-Module: je ein Modul pro Endpoint.
 pub mod admin_affiliate;
+pub mod admin_actor;
 pub mod admin_announcements;
 pub mod admin_audit_log;
 pub mod admin_billing;

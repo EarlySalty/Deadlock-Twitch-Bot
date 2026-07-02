@@ -369,15 +369,19 @@ pub async fn chat_action_handler(
                 "message": format!("Für {login} fehlt die Twitch User-ID")
             })),
         ),
-        ChatActionResult::Failed { reason } => {
+        ChatActionResult::Failed { reason, detail } => {
             tracing::warn!(login, reason, "chat-action fehlgeschlagen");
+            let mut body = serde_json::json!({
+                "ok": false,
+                "login": login,
+                "message": format!("Chat-Aktion für {login} konnte nicht gesendet werden")
+            });
+            if let Some(detail) = detail {
+                body["detail"] = serde_json::json!(detail);
+            }
             (
                 StatusCode::OK,
-                Json(serde_json::json!({
-                    "ok": false,
-                    "login": login,
-                    "message": format!("Chat-Aktion für {login} konnte nicht gesendet werden")
-                })),
+                Json(body),
             )
         }
     }
@@ -730,6 +734,24 @@ mod chat_action_tests {
             body["drop_reason"]["code"],
             serde_json::json!("channel_settings")
         );
+    }
+
+    #[tokio::test]
+    async fn failed_detail_wird_additiv_durchgereicht() {
+        let port = FakePort::new(ChatActionResult::Failed {
+            reason: "announcement failed".to_string(),
+            detail: Some("HTTP 403 missing scope".to_string()),
+        });
+        let (status, body) = run(
+            Some(port),
+            "nani",
+            Some(serde_json::json!({"mode": "announcement", "message": "x"})),
+            AuthLevel::Admin,
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(body["ok"], serde_json::json!(false));
+        assert_eq!(body["detail"], serde_json::json!("HTTP 403 missing scope"));
     }
 
     #[tokio::test]

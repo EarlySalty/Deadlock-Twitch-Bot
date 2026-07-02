@@ -6,7 +6,7 @@
 //! (chat) auf allen aktiven Partnern und geben Aggregat-Snapshots zurück.
 //!
 //! CSRF wird — wie im übrigen Rust-Dashboard etabliert — nicht geprüft; Admin
-//! über `AuthLevel::is_privileged`. updated_by = "admin" (Rust-Auth ohne
+//! über `DashboardAuthLevel`. updated_by = "admin" (Rust-Auth ohne
 //! Discord-User-ID, = Pythons Fallback).
 
 use axum::{
@@ -18,7 +18,8 @@ use chrono::SecondsFormat;
 use serde::Deserialize;
 use serde_json::{json, Value};
 use sqlx::PgPool;
-use tb_http_core::{ApiError, AuthLevel};
+use crate::auth::level::DashboardAuthLevel;
+use tb_http_core::ApiError;
 
 use tb_analytics::admin_config::{
     bulk_update_partner_flags, load_streamer_config_snapshots, parse_admin_scope, PartnerFlagUpdate,
@@ -85,12 +86,12 @@ pub struct OverviewQuery {
 /// Der Python-Snapshot-Loader baut zusätzlich changelog/raid_history, die der
 /// Overview-Endpoint aber NICHT in seine Antwort übernimmt — daher hier weggelassen.
 pub async fn config_overview_handler(
-    auth: AuthLevel,
+    auth: DashboardAuthLevel,
     State(pool): State<PgPool>,
     Query(params): Query<OverviewQuery>,
 ) -> Result<impl IntoResponse, ApiError> {
-    if !auth.is_privileged() {
-        return Err(ApiError::unauthorized());
+    if let Some(err) = crate::auth::require_admin(&auth) {
+        return Err(err);
     }
     let scope = parse_admin_scope(params.scope.as_deref()).ok_or_else(|| {
         ApiError::bad_request_with_body(json!({
@@ -116,12 +117,12 @@ pub async fn config_overview_handler(
 
 /// `POST /twitch/api/admin/config/raids` — Raid-/Live-Ping-Flags netzweit setzen.
 pub async fn config_raids_handler(
-    auth: AuthLevel,
+    auth: DashboardAuthLevel,
     State(pool): State<PgPool>,
     body: axum::body::Bytes,
 ) -> Result<impl IntoResponse, ApiError> {
-    if !auth.is_privileged() {
-        return Err(ApiError::unauthorized());
+    if let Some(err) = crate::auth::require_admin(&auth) {
+        return Err(err);
     }
     let payload = parse_object_body(&body)?;
 
@@ -168,12 +169,12 @@ pub async fn config_raids_handler(
 
 /// `POST /twitch/api/admin/config/chat` — Silent-Ban/Silent-Raid netzweit setzen.
 pub async fn config_chat_handler(
-    auth: AuthLevel,
+    auth: DashboardAuthLevel,
     State(pool): State<PgPool>,
     body: axum::body::Bytes,
 ) -> Result<impl IntoResponse, ApiError> {
-    if !auth.is_privileged() {
-        return Err(ApiError::unauthorized());
+    if let Some(err) = crate::auth::require_admin(&auth) {
+        return Err(err);
     }
     let payload = parse_object_body(&body)?;
 
@@ -273,9 +274,9 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn raids_unauth_401() {
+    async fn raids_unauth_auth_required_401() {
         let Some(pool) = make_pool("t_acfg_raids_unauth").await else { return };
-        let (s, _) = body_json(config_raids_handler(AuthLevel::None, State(pool), Bytes::from("{}")).await).await;
+        let (s, _) = body_json(config_raids_handler(DashboardAuthLevel::None, State(pool), Bytes::from("{}")).await).await;
         assert_eq!(s, StatusCode::UNAUTHORIZED);
     }
 
@@ -283,11 +284,11 @@ mod tests {
     async fn raids_validation_und_scope() {
         let Some(pool) = make_pool("t_acfg_raids_val").await else { return };
         // fehlende bools → validation_failed.
-        let (s, _) = body_json(config_raids_handler(AuthLevel::Admin, State(pool.clone()), Bytes::from(r#"{"scope":"active"}"#)).await).await;
+        let (s, _) = body_json(config_raids_handler(DashboardAuthLevel::admin(), State(pool.clone()), Bytes::from(r#"{"scope":"active"}"#)).await).await;
         assert_eq!(s, StatusCode::BAD_REQUEST);
         // ungültiger scope → invalid_scope.
         let body = r#"{"raid_bot_enabled":true,"live_ping_enabled":true,"scope":"bogus"}"#;
-        let (s, j) = body_json(config_raids_handler(AuthLevel::Admin, State(pool), Bytes::from(body)).await).await;
+        let (s, j) = body_json(config_raids_handler(DashboardAuthLevel::admin(), State(pool), Bytes::from(body)).await).await;
         assert_eq!(s, StatusCode::BAD_REQUEST);
         assert_eq!(j["error"], "invalid_scope");
     }
@@ -296,7 +297,7 @@ mod tests {
     async fn raids_happy_setzt_und_snapshot() {
         let Some(pool) = make_pool("t_acfg_raids_ok").await else { return };
         let body = r#"{"raid_bot_enabled":true,"live_ping_enabled":false,"scope":"active"}"#;
-        let (s, j) = body_json(config_raids_handler(AuthLevel::Admin, State(pool.clone()), Bytes::from(body)).await).await;
+        let (s, j) = body_json(config_raids_handler(DashboardAuthLevel::admin(), State(pool.clone()), Bytes::from(body)).await).await;
         assert_eq!(s, StatusCode::OK);
         assert_eq!(j["ok"], true);
         assert_eq!(j["updatedCount"], 1);
@@ -313,7 +314,7 @@ mod tests {
     async fn overview_aggregiert_promo_raids_chat() {
         let Some(pool) = make_pool("t_acfg_overview").await else { return };
         // scope=None → active. load_global_promo_mode legt seine Tabelle selbst an.
-        let r = config_overview_handler(AuthLevel::Admin, State(pool.clone()), Query(OverviewQuery { scope: None })).await;
+        let r = config_overview_handler(DashboardAuthLevel::admin(), State(pool.clone()), Query(OverviewQuery { scope: None })).await;
         let (s, j) = body_json(r).await;
         assert_eq!(s, StatusCode::OK);
         assert_eq!(j["promo"]["status"], "standard"); // Default ohne gesetzten Modus
@@ -323,10 +324,10 @@ mod tests {
         assert!(j["csrfToken"].is_null());
         assert!(j["csrf_token"].is_null());
 
-        // unauth → 401, bad scope → 400.
-        let (s, _) = body_json(config_overview_handler(AuthLevel::None, State(pool.clone()), Query(OverviewQuery { scope: None })).await).await;
+        // unauth → auth_required, bad scope → 400.
+        let (s, _) = body_json(config_overview_handler(DashboardAuthLevel::None, State(pool.clone()), Query(OverviewQuery { scope: None })).await).await;
         assert_eq!(s, StatusCode::UNAUTHORIZED);
-        let (s, j) = body_json(config_overview_handler(AuthLevel::Admin, State(pool), Query(OverviewQuery { scope: Some("bogus".into()) })).await).await;
+        let (s, j) = body_json(config_overview_handler(DashboardAuthLevel::admin(), State(pool), Query(OverviewQuery { scope: Some("bogus".into()) })).await).await;
         assert_eq!(s, StatusCode::BAD_REQUEST);
         assert_eq!(j["error"], "invalid_scope");
     }
@@ -335,7 +336,7 @@ mod tests {
     async fn chat_happy_setzt_silent() {
         let Some(pool) = make_pool("t_acfg_chat_ok").await else { return };
         let body = r#"{"silent_ban":true,"silent_raid":true,"scope":"active"}"#;
-        let (s, j) = body_json(config_chat_handler(AuthLevel::Admin, State(pool.clone()), Bytes::from(body)).await).await;
+        let (s, j) = body_json(config_chat_handler(DashboardAuthLevel::admin(), State(pool.clone()), Bytes::from(body)).await).await;
         assert_eq!(s, StatusCode::OK);
         assert_eq!(j["chat"]["silentBan"], true);
         assert_eq!(j["chat"]["allSilentRaid"], true);

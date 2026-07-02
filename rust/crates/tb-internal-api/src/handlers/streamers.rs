@@ -116,9 +116,12 @@ pub enum ChatActionResult {
     Dropped { code: String, message: String },
     /// Broadcaster-User-ID zu diesem Login nicht auflösbar.
     UnknownChannel,
-    /// Senden schlug fehl (HTTP-Fehler/Token nicht verfügbar). `reason` ist
-    /// log-tauglich (enthält NIE den Token).
-    Failed { reason: String },
+    /// Senden schlug fehl (HTTP-Fehler/Token nicht verfügbar). `detail` ist
+    /// zentral redigiert und auf ein kurzes Twitch-Body-Snippet gekappt.
+    Failed {
+        reason: String,
+        detail: Option<String>,
+    },
 }
 
 /// Port für die Owner-Chat-Action: sendet über den live rotierten Bot-User-Token.

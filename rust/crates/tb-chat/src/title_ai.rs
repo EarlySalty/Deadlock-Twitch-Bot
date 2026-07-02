@@ -1,10 +1,5 @@
-//! `!title`-Generator-Kernlogik (B11, Slice 3a): Rate-Limiter + Response-
-//! Verarbeitung (JSON-Extraktion, Titel-Sanitization, Parsing). Port der reinen
-//! Teile aus `bot/title_generator/title_ai.py`.
-//!
-//! NICHT in dieser Slice: `build_title_prompt` (Prompt-Template, Slice 3b) und
-//! der MiniMax-HTTP-Call `generate_title` (Slice 3c). Hier nur die seiteneffekt-
-//! freie, vollständig unit-testbare Logik.
+//! `!title`-Generator-Kernlogik: Rate-Limiter, Promptbau, MiniMax-HTTP-Call,
+//! Usage-Ledger und Response-Verarbeitung aus `bot/title_generator/title_ai.py`.
 
 use std::collections::{HashMap, HashSet};
 use std::sync::Mutex;
@@ -479,6 +474,7 @@ pub enum GenerateTitleError {
 #[derive(serde::Deserialize)]
 struct ChatResponse {
     choices: Vec<ChatChoice>,
+    usage: Option<serde_json::Value>,
 }
 
 #[derive(serde::Deserialize)]
@@ -489,6 +485,29 @@ struct ChatChoice {
 #[derive(serde::Deserialize)]
 struct ChatMessage {
     content: Option<String>,
+}
+
+struct MiniMaxCompletion {
+    content: String,
+    tokens_in: i64,
+    tokens_out: i64,
+}
+
+fn usage_i64(usage: &serde_json::Value, keys: &[&str]) -> i64 {
+    keys.iter()
+        .find_map(|key| usage.get(*key).and_then(serde_json::Value::as_i64))
+        .unwrap_or(0)
+        .max(0)
+}
+
+fn usage_tokens(usage: Option<&serde_json::Value>) -> (i64, i64) {
+    let Some(usage) = usage else {
+        return (0, 0);
+    };
+    (
+        usage_i64(usage, &["prompt_tokens", "tokens_in", "input_tokens"]),
+        usage_i64(usage, &["completion_tokens", "tokens_out", "output_tokens"]),
+    )
 }
 
 /// MiniMax-Key aus der Umgebung (Python `_load_secret`-Reihenfolge):
@@ -519,7 +538,7 @@ async fn minimax_chat_completion(
     prompt: &str,
     temperature: f64,
     max_tokens: u32,
-) -> Result<String, String> {
+) -> Result<MiniMaxCompletion, String> {
     let url = format!("{}/chat/completions", base_url.trim_end_matches('/'));
     let body = serde_json::json!({
         "model": MINIMAX_MODEL,
@@ -542,12 +561,18 @@ async fn minimax_chat_completion(
         return Err(format!("HTTP {}", resp.status()));
     }
     let parsed: ChatResponse = resp.json().await.map_err(|e| e.to_string())?;
-    Ok(parsed
+    let (tokens_in, tokens_out) = usage_tokens(parsed.usage.as_ref());
+    let content = parsed
         .choices
         .into_iter()
         .next()
         .and_then(|c| c.message.content)
-        .unwrap_or_default())
+        .unwrap_or_default();
+    Ok(MiniMaxCompletion {
+        content,
+        tokens_in,
+        tokens_out,
+    })
 }
 
 /// Kern von `generate_title` mit injizierbarem `base_url` + `api_key` (für Tests).
@@ -572,11 +597,19 @@ pub async fn generate_title_with(
         ratio,
         live_state,
     );
-    let raw = minimax_chat_completion(base_url, api_key, &prompt, 0.35, 2000)
+    let completion = minimax_chat_completion(base_url, api_key, &prompt, 0.35, 2000)
         .await
         .map_err(GenerateTitleError::Http)?;
+    tb_llm::ledger::record(
+        "title",
+        MINIMAX_MODEL,
+        completion.tokens_in,
+        completion.tokens_out,
+        true,
+    )
+    .await;
     Ok(sanitize_title_result(
-        parse_title_response(&raw),
+        parse_title_response(&completion.content),
         keywords,
         rank_display,
     ))
@@ -726,10 +759,18 @@ pub async fn generate_insight_with(
         return None;
     }
     let prompt = build_insight_prompt(history, period_label);
-    let raw = minimax_chat_completion(base_url, api_key, &prompt, 0.5, 1500)
+    let completion = minimax_chat_completion(base_url, api_key, &prompt, 0.5, 1500)
         .await
         .ok()?;
-    parse_insight_response(&raw)
+    tb_llm::ledger::record(
+        "title-insight",
+        MINIMAX_MODEL,
+        completion.tokens_in,
+        completion.tokens_out,
+        true,
+    )
+    .await;
+    parse_insight_response(&completion.content)
 }
 
 /// Wöchentliche Insight-Analyse via MiniMax (Python `generate_insight`).
@@ -777,6 +818,15 @@ mod tests {
         assert_eq!(format_metric(Some(1.2345), 2), "1.23");
         assert_eq!(format_metric(Some(0.5), 3), "0.500");
         assert_eq!(format_metric(None, 2), "n/a");
+    }
+
+    #[test]
+    fn usage_tokens_liest_minimax_usage() {
+        let usage = serde_json::json!({
+            "prompt_tokens": 123,
+            "completion_tokens": 45,
+        });
+        assert_eq!(usage_tokens(Some(&usage)), (123, 45));
     }
 
     #[test]

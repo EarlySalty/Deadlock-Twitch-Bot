@@ -5,7 +5,8 @@ use chrono::{DateTime, Utc};
 use serde::Serialize;
 use sqlx::PgPool;
 use tb_analytics::system_health::{raw_chat_health, system_last_tick};
-use tb_http_core::{ApiError, AuthLevel};
+use crate::auth::level::DashboardAuthLevel;
+use tb_http_core::ApiError;
 
 use crate::process_info;
 
@@ -156,11 +157,11 @@ async fn fetch_internal_fingerprint() -> Option<String> {
 
 /// `GET /twitch/api/admin/system/health`
 pub async fn health_handler(
-    auth: AuthLevel,
+    auth: DashboardAuthLevel,
     State(pool): State<PgPool>,
 ) -> Result<impl IntoResponse, ApiError> {
-    if !auth.is_privileged() {
-        return Err(ApiError::unauthorized());
+    if let Some(err) = crate::auth::require_admin(&auth) {
+        return Err(err);
     }
 
     // Bug A: ApiError::internal() ohne Argument

@@ -1,5 +1,31 @@
 # Workflow
 
+## 2026-07-02 — W10 Rework Auth-Split + Announcement-Redaction
+
+- Start: delegierter GPT-Implementierungsworker fuer W10-Rework; Scope Admin-Auth 401/403-Split und Announcement-Detail-Redaktion; kein Commit/Push/Stash/Checkout/Reset, kein repo-weites `cargo fmt`.
+- Recon bisher: Python `api_admin.py` nutzt fuer die gelisteten Admin-API-Routen durchgehend `_admin_auth_error(... _require_v2_admin_api ...)`; Rust-Handler in Admin-/System-Dateien haengen noch am gebrueckten `AuthLevel` und verlieren Partner-vs-None.
+- Implementiert bisher: zentraler `require_admin(DashboardAuthLevel)` mit 401 `auth_required` fuer None und 403 `admin_required` fuer Partner; Admin-/System-Handler auf `DashboardAuthLevel` umgestellt; AnnouncementOutcome redigiert tokenartige Detail-Bodies vor Trim/Kappung.
+- Verifikation bisher: `rust/target` war voll und wurde per `cargo clean` als Build-Artefakt bereinigt; danach `SQLX_OFFLINE=true cargo check -p tb-http-core -p tb-transport-twitch -p tb-dashboard-api -p tb-internal-api` gruen.
+- Abschluss: `ApiError::unauthorized_with_body`, `auth_required_error`/`require_admin`, Admin-Handler-Umstellung und Announcement-Detail-Redactor implementiert; `admin_streamers`-Mutationshandler haben keinen direkten `api_admin.py`-Gegenpart, bleiben aber Admin-only mit demselben Split.
+- Verifikation final: Timescale `tb-w10rw` auf `127.0.0.1:55495`; `cargo build` und `cargo clippy --all-targets` fuer `tb-http-core`, `tb-transport-twitch`, `tb-dashboard-api`, `tb-internal-api` gruen. Fokustests gruen: `unauth_auth_required_401` 6/0, `partner_admin_required_403` 1/0, `announcement_detail_redigiert_tokenartige_werte` 1/0.
+- Gesamt-Tests: `tb-http-core` 15/0, `tb-transport-twitch` 77/0, `tb-dashboard-api` 688/15 (bekannte DB-Fixture-Fails), `tb-internal-api` 279/4 (bekannte DB-Fixture-Fails). Report geschrieben und validiert: `/home/naniadm/.claude/projects/-home-naniadm-Claude-Native-Workspace/5b3905c3-f094-4325-b670-f7f72c2d4352/scratchpad/triage/fix/wave10_rework_report.json`.
+
+## 2026-07-02 — Wave10 adversarial critic
+
+- Start: READ-ONLY adversariale Pruefung der uncommitteten W10-Aenderungen auf Branch `fix/py-rust-parity-obvious-bugs`; Fokus Admin-Auth/CSRF-Entscheidungen, Actor-Threading, Announcement-Details, Title-Ledger und `/twitch/market`; keine Code-Fixes, kein Commit/Push/Stash/Checkout/Reset.
+- Recon laeuft: W10-Diff gegen HEAD, Python-Referenz `bot/analytics/api_admin.py` und betroffene Rust-Handler werden zeilenbasiert verglichen; Reportziel `scratchpad/triage/critic/wave10_crit.json`.
+- Befund bisher: W10 dreht echte `AuthLevel::None`-Admin-API-Faelle pauschal auf 403 `admin_required`, obwohl Python `_require_v2_admin_api` fuer `auth_level == "none"` 401 `auth_required` liefert; Partner/Admin-Entscheidung selbst bleibt nicht aufgeweicht.
+- Befund bisher: Announcement-Detailpfad uebernimmt rohen Twitch-HTTP-Body in `AnnouncementOutcome.detail`; das Detail wird spaeter als interne API-JSON-`detail` weitergereicht bzw. in Dashboard-Bridge-Logs verwendet, ohne Secret-Redaktion.
+- Verifikation bisher: Timescale-Container `tb-w10crit` auf `127.0.0.1:55494`; gezielte Tests fuer Admin-CSRF/Auth-Wiring, Market-HTML, Title-Ledger-Fail-Best-Effort, Announcement-Detail und Admin-Actor-Fallback laufen gruen.
+- Abschluss: Report geschrieben und per `jq empty` validiert: `/home/naniadm/.claude/projects/-home-naniadm-Claude-Native-Workspace/5b3905c3-f094-4325-b670-f7f72c2d4352/scratchpad/triage/critic/wave10_crit.json`; Container `tb-w10crit` entfernt.
+
+## 2026-07-02 — Wave10 misc parity fixes
+
+- Start: delegierter GPT-Implementierungsworker fuer W10 misc parity fixes; Scope nur belegte Python/Rust-Paritaetsluecken, kein Commit/Push/Stash/Checkout, kein repo-weites `cargo fmt`.
+- Recon laeuft: Python-Referenzen und aktuelle Rust-Luecken fuer Title-LLM-Ledger, stale Title-Test/Kommentar, ChatApi-Announcement-Details, Admin-Promo-Actor, `/twitch/market` und Admin-Auth/CSRF-Error-Shapes werden vor Code-Aenderungen belegt.
+- Implementiert bisher: Title-MiniMax-Usage wird ins gemeinsame Ledger geschrieben; stale `!title`-Nicht-portiert-Kommentare/Test entfernt; Announcement-Ergebnisvertrag additiv um Status-/Detaildaten erweitert; Admin-Promo/Announcements schreiben echten Discord-Actor aus der Admin-Session; Admin-Auth/CSRF-Shapes auf Python-Body umgestellt; `/twitch/market` rendert die vorhandene Market-Data-Payload mit Platzhalter-Labels.
+- Verifikation: Timescale-Container `tb-w10` auf `127.0.0.1:55492`; `cargo build -p tb-http-core -p tb-transport-twitch -p tb-chat -p tb-internal-api -p tb-dashboard-api -p tb-bot` gruen; `cargo clippy --all-targets` fuer dieselben Crates gruen. `cargo test --no-fail-fast` fuer dieselben Crates bleibt rot in bestehenden umfangsfremden Lib-Tests von `tb-dashboard-api` (686 passed / 16 failed / 1 ignored) und `tb-internal-api` (279 passed / 4 failed); `tb-http-core`, `tb-transport-twitch`, `tb-chat`, `tb-bot` und alle W10-Fokustests gruen. Kein stash/HEAD-Vergleich wegen ausdruecklichem No-Stash/No-Checkout-Auftrag. Report: `scratchpad/triage/fix/wave10_report.json`.
+
 ## 2026-07-02 — W9 Ownership-Marker Concurrency Fix
 
 - Start: delegierter GPT-Implementierungsworker fuer `Fix W9 ownership-marker concurrency`; Scope Code nur `rust/crates/tb-db/src/migrate.rs`, kein Commit/Push/Stash/Checkout, kein cargo fmt.

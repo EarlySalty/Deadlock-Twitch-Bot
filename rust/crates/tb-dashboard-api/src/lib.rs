@@ -1425,7 +1425,7 @@ mod csrf_wiring_tests {
     }
 
     /// GET passiert den CSRF-Layer (Safe-Methode); ohne Auth liefert der Handler
-    /// 401, aber NICHT das CSRF-403 — beweist, dass GET nicht vom Layer geblockt wird.
+    /// 401 auth_required, aber NICHT invalid_csrf — beweist, dass GET nicht vom Layer geblockt wird.
     #[tokio::test]
     async fn admin_read_passiert_csrf_layer() {
         let Some(pool) = pool().await else { return };
@@ -1442,6 +1442,9 @@ mod csrf_wiring_tests {
             .await
             .unwrap();
         assert_eq!(resp.status(), StatusCode::UNAUTHORIZED);
+        let body = axum::body::to_bytes(resp.into_body(), 65536).await.unwrap();
+        let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(json["error"], "auth_required");
     }
 }
 

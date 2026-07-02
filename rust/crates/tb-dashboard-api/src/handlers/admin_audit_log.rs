@@ -10,7 +10,7 @@
 //! **Quellen:** promo, roadmap, legal, streamer_history, manual_plan, billing
 //! (Webhook-Events mit Abo-Tabelle als Fallback) — alle sechs portiert.
 //!
-//! CSRF irrelevant (GET); Admin über `AuthLevel::is_privileged`.
+//! CSRF irrelevant (GET); Admin über `DashboardAuthLevel`.
 
 use std::collections::BTreeSet;
 use std::path::PathBuf;
@@ -19,7 +19,8 @@ use axum::{extract::RawQuery, extract::State, response::IntoResponse, Json};
 use chrono::{DateTime, SecondsFormat, Utc};
 use serde_json::{json, Value};
 use sqlx::PgPool;
-use tb_http_core::{ApiError, AuthLevel};
+use crate::auth::level::DashboardAuthLevel;
+use tb_http_core::ApiError;
 
 use tb_analytics::promo_mode::{load_global_promo_mode, parse_utc_datetime};
 
@@ -587,12 +588,12 @@ fn combine_and_filter(
 
 /// `GET /twitch/api/admin/audit-log` — aggregiertes Audit-Log (Admin).
 pub async fn handler(
-    auth: AuthLevel,
+    auth: DashboardAuthLevel,
     State(pool): State<PgPool>,
     RawQuery(query): RawQuery,
 ) -> Result<impl IntoResponse, ApiError> {
-    if !auth.is_privileged() {
-        return Err(ApiError::unauthorized());
+    if let Some(err) = crate::auth::require_admin(&auth) {
+        return Err(err);
     }
 
     let mut since_raw = String::new();

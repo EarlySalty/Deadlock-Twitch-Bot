@@ -88,7 +88,7 @@ pub async fn link_handler(
     // Ein nachweislich fremder Origin auf der Link-Ausstellung → 403 (Vorfall #235:
     // kein harter X-CSRF-Header-Zwang, sondern Origin/Referer same-origin).
     if !is_allowed_origin(&headers) {
-        return (StatusCode::FORBIDDEN, Json(json!({ "error": "csrf_failed" }))).into_response();
+        return (StatusCode::FORBIDDEN, Json(json!({ "error": "invalid_csrf" }))).into_response();
     }
     let Some(Extension(state)) = state else {
         // Ohne Auth-State kein Persistenz-Pfad → Feature aus.

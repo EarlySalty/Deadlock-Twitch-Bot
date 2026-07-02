@@ -495,8 +495,7 @@ impl CommandEngine {
                 self.cmd_mostplayed(event, args).await;
                 true
             }
-            // !title / !titel: bewusst nicht portiert — KI-Abhängigkeit außerhalb Scope.
-            // Handle als false → Pipeline fährt fort.
+            // !title / !titel: portierter KI-Titelpfad.
             "!title" | "!titel" => {
                 self.cmd_title(event, args).await;
                 true
@@ -1826,18 +1825,6 @@ impl CommandEngine {
     }
 }
 
-// ---------------------------------------------------------------------------
-// LÜCKE: !title / !titel (commands.py:770)
-// ---------------------------------------------------------------------------
-//
-// Bewusst nicht portiert. Abhängigkeiten:
-// - `bot.title_generator.title_ai.generate_title()` — LLM-Generierung.
-// - Eigene DB-Tabellen (title_history, knowledge_titles) außerhalb des Vertrags.
-// - `RateLimitExceeded`-Handling mit `retry_after`.
-//
-// `handle()` gibt `false` für "!title" / "!titel" — Pipeline fährt fort.
-// Erweiterbar über künftigen `TitlePort`-Trait.
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -2199,17 +2186,6 @@ mod tests {
         assert!(CLIP_OAUTH_MISSING_REPLY.starts_with("OAuth fehlt. Bitte"));
         assert!(CLIP_OAUTH_MISSING_REPLY.contains("autorisieren"));
         assert!(!CLIP_OAUTH_MISSING_REPLY.contains("!raid_enable"));
-    }
-
-    #[test]
-    fn title_command_ist_nicht_portiert() {
-        // !title / !titel → handle() gibt false zurück (in der match-Tabelle explizit)
-        let cmd = "!title";
-        let is_unimplemented = matches!(cmd, "!title" | "!titel");
-        assert!(
-            is_unimplemented,
-            "!title muss als nicht-portiert markiert sein"
-        );
     }
 
     #[test]
