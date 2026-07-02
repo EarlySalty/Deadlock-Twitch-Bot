@@ -7,14 +7,15 @@ use std::time::Duration;
 use sqlx::PgPool;
 use sqlx::Row;
 use tb_monitoring::{IrcLurkerTracker, TrackMode};
-use tokio::task::JoinHandle;
+
+use crate::task_supervisor::TaskSupervisor;
 
 const SYNC_INTERVAL: Duration = Duration::from_secs(60);
 // 600ms/Track = ~16 JOINs/10s, sicher unter Twitchs 20-JOINs/10s-Limit.
 const TRACK_STAGGER: Duration = Duration::from_millis(600);
 const MAX_TRACKED_CHANNELS: usize = 250;
 
-pub fn spawn_irc_lurker(pool: PgPool) {
+pub fn spawn_irc_lurker(supervisor: &TaskSupervisor, pool: PgPool) {
     if std::env::var("TB_IRC_LURKER_ENABLED").as_deref() != Ok("1") {
         tracing::info!("IRC-Lurker (anon Presence) deaktiviert (TB_IRC_LURKER_ENABLED!=1)");
         return;
@@ -30,13 +31,11 @@ pub fn spawn_irc_lurker(pool: PgPool) {
     ));
 
     let runner = Arc::clone(&tracker);
-    let runner_handle = tokio::spawn(async move {
+    supervisor.spawn("irc_lurker_runner", async move {
         runner.run().await;
     });
-    monitor_irc_task("irc-lurker-runner", runner_handle);
 
-    let sync_handle = tokio::spawn(sync_loop(pool, tracker));
-    monitor_irc_task("irc-lurker-sync", sync_handle);
+    supervisor.spawn("irc_lurker_sync", sync_loop(pool, tracker));
 }
 
 async fn sync_loop(pool: PgPool, tracker: Arc<IrcLurkerTracker>) {
@@ -55,18 +54,6 @@ async fn sync_loop(pool: PgPool, tracker: Arc<IrcLurkerTracker>) {
             }
         }
     }
-}
-
-fn monitor_irc_task(name: &'static str, handle: JoinHandle<()>) {
-    tokio::spawn(async move {
-        match handle.await {
-            Ok(()) => tracing::warn!(task = name, "IRC-Lurker Task wurde beendet"),
-            Err(error) if error.is_panic() => {
-                tracing::error!(task = name, %error, "IRC-Lurker Task ist gepanickt")
-            }
-            Err(error) => tracing::warn!(task = name, %error, "IRC-Lurker Task abgebrochen"),
-        }
-    });
 }
 
 async fn load_live_channels(pool: &PgPool) -> Result<Vec<TrackedChannel>, sqlx::Error> {

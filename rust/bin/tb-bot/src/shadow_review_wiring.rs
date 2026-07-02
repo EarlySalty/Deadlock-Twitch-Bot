@@ -25,6 +25,8 @@ use tb_engagement::shadow_review::{
 };
 use tb_transport_discord::{BrokerRelay, DiscordBackend, SendRichMessage};
 
+use crate::task_supervisor::TaskSupervisor;
+
 /// Scheduler-Intervall: alle 60 s einen Batch ausliefern.
 const FORWARD_INTERVAL: Duration = Duration::from_secs(60);
 /// Maximale Items pro Lauf (FIFO, älteste zuerst).
@@ -106,7 +108,11 @@ impl ShadowReviewSink for DiscordShadowReviewSink {
 
 /// Spawnt den Shadow-Review-Scheduler. No-op (mit einmaligem Hinweis), wenn der
 /// Review-Kanal nicht konfiguriert ist oder kein BrokerRelay konstruierbar ist.
-pub fn spawn_shadow_review_scheduler(pool: PgPool, broker: &tb_config::BrokerConfig) {
+pub fn spawn_shadow_review_scheduler(
+    supervisor: &TaskSupervisor,
+    pool: PgPool,
+    broker: &tb_config::BrokerConfig,
+) {
     let Some(channel_id) = review_channel_id_from_env() else {
         tracing::info!(
             "Shadow-Review-Scheduler aus — ENGAGEMENT_SHADOW_REVIEW_CHANNEL_ID nicht gesetzt"
@@ -124,7 +130,7 @@ pub fn spawn_shadow_review_scheduler(pool: PgPool, broker: &tb_config::BrokerCon
     };
     let sink = Arc::new(DiscordShadowReviewSink { relay, channel_id });
 
-    tokio::spawn(async move {
+    supervisor.spawn("shadow_review_forwarder", async move {
         let mut tick = tokio::time::interval(FORWARD_INTERVAL);
         tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
         loop {

@@ -1,5 +1,19 @@
 # Workflow
 
+## 2026-07-02 — W9 Ownership-Marker Concurrency Fix
+
+- Start: delegierter GPT-Implementierungsworker fuer `Fix W9 ownership-marker concurrency`; Scope Code nur `rust/crates/tb-db/src/migrate.rs`, kein Commit/Push/Stash/Checkout, kein cargo fmt.
+- Implementiert: `ensure_schema_owner_marker` in `tb-db::migrate` ohne Runtime-`CREATE TABLE` und ohne per-Startup-`UPDATE`; nur idempotentes `INSERT ... ON CONFLICT DO NOTHING` plus Owner-/Versionspruefung gegen `public.tb_schema_ownership`.
+- Verifikation: Timescale-Postgres `w9fix-pg` auf `127.0.0.1:55490`; `cargo build -p tb-db` gruen; `cargo clippy --all-targets -p tb-db` gruen; paralleles `cargo test -p tb-db --no-fail-fast` gruen mit 17 passed / 0 failed; Container entfernt.
+
+## 2026-07-02 — Wave9 Startup/Schema/Config-Ops
+
+- Start: delegierter GPT-Implementierungsworker fuer Wave9 Startup/Schema/Config-Ops; Scope Rust unter `rust/`, Python nur lesend, kein Commit/Push/Stash/Checkout, kein repo-weites `cargo fmt`.
+- Recon belegt: Rust-Binaries liefen bei Migrationsfehlern weiter; `tb-config` war bei ungueltigen optionalen Zahlen fatal; Python-Referenz degradiert optionale numerische Env-Werte mit Default/Clamp; Dashboard-Python erzwingt Role/Port plus PID-Lock; EventSub-Capacity-Retention nutzt 45 Tage, Clamp 7..365.
+- Implementiert: Migrationsfehler in `tb-bot`/`tb-dashboard` sind fail-fast; Rust-Schema-Ownership-Marker als Migration + `tb-db`-Pruefung; optionale Config-/Retry-/Startup-Env-Parser warnen und defaulten/clampen; Dashboard Role-/Port-Guard + PID-Lock; zentraler `tb-bot`-TaskSupervisor fuer zentrale Dauerlaeufer; Observability-Event-Retention in `tb-monitoring` und stuendlicher Cleanup im bestehenden Retention-Loop.
+- STOR-SCHEMA-005 untersucht: mehrere destruktive/lockende Migrationen identifiziert (`DROP COLUMN`, Constraint-Rebuilds, Hypertable `migrate_data => TRUE`, Typ-ALTERs); kein sauberer Einzelfix ohne Migrationsstrategie, als offener Punkt reportet.
+- Verifikation: `wave9-pg` auf `127.0.0.1:55463` mit Timescale Community im vorgegebenen `postgres:16`-Container; `cargo build`, `cargo clippy --all-targets` und `cargo test --no-fail-fast` fuer `tb-config`, `tb-db`, `tb-monitoring`, `tb-bot`, `tb-dashboard` gruen. Regressionen gruen: Migrationsfehler stoppt Startup mit Exit 1; ungueltige optionale Env warnt/defaultet und startet weiter; Dashboard Role-Guard/PID-Lock blockieren falsche Rolle/Doppelstart; Observability-Retention entfernt alte Zeilen.
+
 ## 2026-07-02 — Wave8 internal-api + raid/requirements
 
 - Start: delegierter GPT-Implementierungsworker fuer Wave8 `tb-internal-api`, `tb-dashboard-api`, `tb-raid`, `tb-bot` Route-Wiring; Scope Rust unter `rust/` plus Workflow/Report, Python nur lesend, kein Commit/Push/Stash/Checkout, kein repo-weites `cargo fmt`.

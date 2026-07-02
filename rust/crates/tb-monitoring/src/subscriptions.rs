@@ -373,12 +373,32 @@ fn capacity_retention_days() -> i64 {
 
 fn parse_env_clamped<T>(key: &str, default: T, min: T, max: T) -> T
 where
-    T: std::str::FromStr + Ord,
+    T: std::str::FromStr + Ord + std::fmt::Display + Copy,
 {
     match std::env::var(key) {
         Ok(raw) => match raw.trim().parse::<T>() {
-            Ok(value) => value.clamp(min, max),
-            Err(_) => default,
+            Ok(value) => {
+                let clamped = value.clamp(min, max);
+                if clamped != value {
+                    tracing::warn!(
+                        setting = key,
+                        value = %value,
+                        minimum = %min,
+                        maximum = %max,
+                        "Optionaler EventSub-Capacity-Env-Wert ausserhalb des Bereichs; Clamp wird verwendet"
+                    );
+                }
+                clamped
+            }
+            Err(_) => {
+                tracing::warn!(
+                    setting = key,
+                    value = %raw,
+                    default = %default,
+                    "Ungültiger optionaler EventSub-Capacity-Env-Wert; Default wird verwendet"
+                );
+                default
+            }
         },
         Err(_) => default,
     }

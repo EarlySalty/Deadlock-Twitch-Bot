@@ -58,6 +58,7 @@ use tb_raid::{RaidAuthStore, RaidTokenRefresher, TokenBlacklistStore, TokenProvi
 use tb_transport_discord::BrokerRelay;
 use tb_transport_twitch::HelixClient;
 
+use crate::task_supervisor::TaskSupervisor;
 use crate::raid_adapters::HelixTokenClient;
 
 /// Reconcile-Intervall für Chat-Subscriptions (Python: periodischer
@@ -494,6 +495,7 @@ pub struct ChatRuntime {
     /// Bot-Self-Timeouts (`channel.ban` mit `ends_at`) dieselbe Stumm-Zählung
     /// füttern wie der ausgehende Send-Pfad.
     timeout_guard: Arc<TimeoutGuard>,
+    supervisor: TaskSupervisor,
 }
 
 /// Phase 1: bootet den Bot-Token und baut die ChatApi, wenn `TB_CHAT_ENABLED=1`
@@ -591,6 +593,7 @@ pub async fn build_runtime(
     pool: PgPool,
     ports: ChatRuntimePorts,
     inner_hooks: Arc<dyn EventSubHooks>,
+    supervisor: TaskSupervisor,
 ) -> ChatRuntime {
     let ChatRuntimePorts {
         manual_raid,
@@ -711,7 +714,7 @@ pub async fn build_runtime(
     {
         let spam_filter = Arc::clone(&spam_filter);
         let pool = pool.clone();
-        tokio::spawn(async move {
+        supervisor.spawn("chat_spam_filter_reload", async move {
             let mut tick = tokio::time::interval(Duration::from_secs(120));
             tick.tick().await; // erster Tick feuert sofort — überspringen (frisch geladen)
             loop {
@@ -773,7 +776,8 @@ pub async fn build_runtime(
     // IRC-Reader: zweiter Chat-Input für `irc_read`-Kanäle (einwilligende
     // Streamer OHNE EventSub-`channel:bot`). Disjunkte Kanal-Menge zum
     // EventSub-Pfad → kein Doppel-Processing. No-op, wenn keine irc_read-Kanäle.
-    tokio::spawn(
+    supervisor.spawn(
+        "engagement_irc_reader",
         EngagementIrcReader::new(pool.clone(), Arc::clone(&engagement), stealth.clone()).run(),
     );
 
@@ -805,6 +809,7 @@ pub async fn build_runtime(
         pool,
         bot_user_id,
         timeout_guard,
+        supervisor,
     }
 }
 
@@ -850,7 +855,7 @@ impl ChatRuntime {
         let pool = self.pool.clone();
         let bot_user_id = self.bot_user_id.clone();
         let token_manager = Arc::clone(&self.token_manager);
-        tokio::spawn(async move {
+        self.supervisor.spawn("chat_subscription_reconcile", async move {
             let mut tick = tokio::time::interval(CHAT_SUB_RECONCILE_INTERVAL);
             tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
             loop {

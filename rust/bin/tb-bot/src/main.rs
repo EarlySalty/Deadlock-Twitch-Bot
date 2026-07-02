@@ -57,14 +57,115 @@ mod score_refresh;
 mod scout_chat;
 mod shadow_review_wiring;
 mod streamer_link;
+mod task_supervisor;
 mod token_lifecycle_wiring;
 mod user_id_backfill;
 mod wiring;
 
+fn optional_env_bool(name: &str, default: bool) -> bool {
+    match std::env::var(name) {
+        Ok(value) => {
+            let raw = value.trim().to_lowercase();
+            match raw.as_str() {
+                "" => default,
+                "1" | "true" | "yes" | "on" => true,
+                "0" | "false" | "no" | "off" => false,
+                _ => {
+                    tracing::warn!(
+                        setting = name,
+                        value = %value,
+                        default,
+                        "Ungültiger optionaler Bool-Env-Wert; Default wird verwendet"
+                    );
+                    default
+                }
+            }
+        }
+        Err(_) => default,
+    }
+}
+
 fn opt_in_enabled(name: &str) -> bool {
-    std::env::var(name)
-        .map(|value| value.trim() == "1")
-        .unwrap_or(false)
+    optional_env_bool(name, false)
+}
+
+fn optional_env_u16(name: &str, default: u16) -> u16 {
+    match std::env::var(name) {
+        Ok(value) if value.trim().is_empty() => default,
+        Ok(value) => match value.trim().parse::<u16>() {
+            Ok(parsed) if parsed > 0 => parsed,
+            _ => {
+                tracing::warn!(
+                    setting = name,
+                    value = %value,
+                    default,
+                    "Ungültiger optionaler Port-Env-Wert; Default wird verwendet"
+                );
+                default
+            }
+        },
+        Err(_) => default,
+    }
+}
+
+fn optional_env_i64(name: &str, default: i64) -> i64 {
+    match std::env::var(name) {
+        Ok(value) if value.trim().is_empty() => default,
+        Ok(value) => match value.trim().parse::<i64>() {
+            Ok(parsed) => parsed,
+            Err(_) => {
+                tracing::warn!(
+                    setting = name,
+                    value = %value,
+                    default,
+                    "Ungültiger optionaler Integer-Env-Wert; Default wird verwendet"
+                );
+                default
+            }
+        },
+        Err(_) => default,
+    }
+}
+
+fn optional_env_u64_with_fallback(primary: &str, fallback: &str, default: u64) -> u64 {
+    for name in [primary, fallback] {
+        match std::env::var(name) {
+            Ok(value) if value.trim().is_empty() => {}
+            Ok(value) => match value.trim().parse::<u64>() {
+                Ok(parsed) if parsed > 0 => return parsed,
+                _ => {
+                    tracing::warn!(
+                        setting = name,
+                        value = %value,
+                        default,
+                        "Ungültiger optionaler Integer-Env-Wert; Default wird verwendet"
+                    );
+                    return default;
+                }
+            },
+            Err(_) => {}
+        }
+    }
+    default
+}
+
+fn optional_env_positive_i64(name: &str, default: i64) -> i64 {
+    match std::env::var(name) {
+        Ok(value) if value.trim().is_empty() => default,
+        Ok(value) => match value.trim().parse::<i64>() {
+            Ok(parsed) if parsed > 0 => parsed,
+            _ => {
+                tracing::warn!(
+                    setting = name,
+                    value = %value,
+                    default,
+                    "Ungültiger optionaler Integer-Env-Wert; Default wird verwendet"
+                );
+                default
+            }
+        },
+        Err(_) => default,
+    }
 }
 
 async fn bind_internal_listener_with_retry(
@@ -72,7 +173,8 @@ async fn bind_internal_listener_with_retry(
 ) -> std::io::Result<tokio::net::TcpListener> {
     const RETRY_DELAYS_MS: &[u64] = &[250, 500, 1_000, 2_000, 4_000];
 
-    for attempt in 0..=RETRY_DELAYS_MS.len() {
+    let mut attempt = 0usize;
+    loop {
         match tokio::net::TcpListener::bind(addr).await {
             Ok(listener) => return Ok(listener),
             Err(error)
@@ -87,12 +189,11 @@ async fn bind_internal_listener_with_retry(
                     "Internal-API Port belegt, versuche erneut"
                 );
                 tokio::time::sleep(delay).await;
+                attempt += 1;
             }
             Err(error) => return Err(error),
         }
     }
-
-    unreachable!("retry loop returns on success or final error")
 }
 
 use std::net::SocketAddr;
@@ -330,6 +431,7 @@ fn language_filters_from_env() -> Vec<String> {
 #[tokio::main]
 async fn main() {
     tracing_subscriber::fmt::init();
+    let supervisor = task_supervisor::TaskSupervisor::start();
 
     let settings = Settings::from_env().unwrap_or_else(|e| {
         tracing::error!("Konfigurationsfehler: {e}");
@@ -341,21 +443,21 @@ async fn main() {
         std::process::exit(1);
     });
 
-    // Native sqlx-Migrationen anwenden (idempotent, CREATE ... IF NOT EXISTS).
-    // Gegen das bestehende Prod-Schema no-op außer fehlenden Indizes/Tabellen;
-    // Python bleibt im Strangler-Betrieb Schema-Owner. Fehler werden geloggt,
-    // brechen den Bot aber NICHT ab. Abschaltbar via TB_DB_MIGRATE=0.
-    if std::env::var("TB_DB_MIGRATE").as_deref() != Ok("0") {
+    // Native sqlx-Migrationen anwenden. Schema-/Migrationsfehler sind fatal:
+    // mit kaputtem oder halb migriertem Schema darf der Bot nicht starten.
+    if optional_env_bool("TB_DB_MIGRATE", true) {
         match tb_db::run_migrations(&pool).await {
             Ok(()) => tracing::info!("DB-Migrationen angewendet (oder bereits aktuell)"),
-            Err(e) => tracing::warn!("DB-Migrationen fehlgeschlagen (übersprungen): {e}"),
+            Err(e) => {
+                tracing::error!("DB-Migrationen fehlgeschlagen; Startup wird abgebrochen: {e}");
+                std::process::exit(1);
+            }
         }
+    } else {
+        tracing::warn!("DB-Migrationen deaktiviert (TB_DB_MIGRATE=0)");
     }
 
-    let port: u16 = std::env::var("PORT")
-        .ok()
-        .and_then(|v| v.parse().ok())
-        .unwrap_or(8776);
+    let port: u16 = optional_env_u16("PORT", 8776);
 
     // HelixClient aus Env bauen — optional, Bot startet auch ohne Helix
     let helix: Arc<Option<HelixClient>> = {
@@ -537,7 +639,7 @@ async fn main() {
                     let m = manager.clone();
                     let p = pool.clone();
                     let telemetry_auth = build_telemetry_sub_auth(pool.clone(), helix_client);
-                    tokio::spawn(async move {
+                    supervisor.spawn("eventsub_subscription_maintenance", async move {
                         subscription_maintenance_loop(m, p, telemetry_auth).await;
                     });
                 }
@@ -671,7 +773,7 @@ async fn main() {
                     }),
                     token_blacklist.clone(),
                 );
-                tokio::spawn(async move {
+                supervisor.spawn("raid_token_proactive_refresh", async move {
                     let mut tick = tokio::time::interval(std::time::Duration::from_secs(300));
                     tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
                     loop {
@@ -798,7 +900,7 @@ async fn main() {
             // Arrival (Python ruft promote_stale_* bei jedem Tracking-Tick).
             {
                 let sweeper_sink = sink.clone();
-                tokio::spawn(async move {
+                supervisor.spawn("raid_orphan_sweeper", async move {
                     let mut tick = tokio::time::interval(std::time::Duration::from_secs(5));
                     tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
                     loop {
@@ -814,7 +916,7 @@ async fn main() {
             // nie bestätigt wurde; `sweep_stale` loggt je Eintrag das Timeout-Detail.
             {
                 let sweep_pending = pending.clone();
-                tokio::spawn(async move {
+                supervisor.spawn("raid_pending_sweeper", async move {
                     let mut tick = tokio::time::interval(std::time::Duration::from_secs(300));
                     tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
                     loop {
@@ -839,7 +941,7 @@ async fn main() {
             // process_due_external_recruitment_blacklist_pending, periodischer Tick).
             {
                 let due_sink = sink.clone();
-                tokio::spawn(async move {
+                supervisor.spawn("raid_recruitment_maintenance", async move {
                     let mut tick = tokio::time::interval(std::time::Duration::from_secs(300));
                     tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
                     loop {
@@ -856,7 +958,7 @@ async fn main() {
             // wurden — sonst veralten deren Scores dauerhaft.
             {
                 let refresh_pool = pool.clone();
-                tokio::spawn(async move {
+                supervisor.spawn("raid_partner_score_refresh", async move {
                     let resolver = ScoreRefreshResolver::new(refresh_pool.clone());
                     let mut tick = tokio::time::interval(std::time::Duration::from_secs(300));
                     tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
@@ -974,10 +1076,7 @@ async fn main() {
             // überschreibbar) mit Revoke-Button. Ohne Broker → None (kein Post).
             let scam_notifier = scam_notify_impl::build_scam_notifier(
                 &settings.broker,
-                std::env::var("SCAM_GUARD_DISCORD_CHANNEL_ID")
-                    .ok()
-                    .and_then(|v| v.parse().ok())
-                    .unwrap_or(1374364800817303632),
+                optional_env_positive_i64("SCAM_GUARD_DISCORD_CHANNEL_ID", 1374364800817303632),
             );
             let runtime = chat_wiring::build_runtime(
                 handle,
@@ -993,6 +1092,7 @@ async fn main() {
                     scam_notifier,
                 },
                 eventsub_hooks.clone(),
+                supervisor.clone(),
             )
             .await;
             runtime.start_background(subscription_manager.clone());
@@ -1047,10 +1147,7 @@ async fn main() {
     if let Ok(secret) = std::env::var("TWITCH_WEBHOOK_SECRET") {
         let secret = secret.trim().to_string();
         if !secret.is_empty() {
-            let receiver_port: u16 = std::env::var("TB_EVENTSUB_RECEIVER_PORT")
-                .ok()
-                .and_then(|v| v.parse().ok())
-                .unwrap_or(8786);
+            let receiver_port: u16 = optional_env_u16("TB_EVENTSUB_RECEIVER_PORT", 8786);
             // P1.17/18/20: Revocation-Sink verdrahten. Bei EventSub-Revocation
             // (z. B. stream.online/offline/channel.update widerrufen) untrackt der
             // SubscriptionManager die Sub, sodass der nächste Reconcile-Zyklus sie
@@ -1063,7 +1160,7 @@ async fn main() {
             }
             let receiver = Arc::new(receiver_builder);
             let router = receiver.router();
-            tokio::spawn(async move {
+            supervisor.spawn("eventsub_webhook_receiver", async move {
                 let addr = SocketAddr::from(([127, 0, 0, 1], receiver_port));
                 match tokio::net::TcpListener::bind(addr).await {
                     Ok(listener) => {
@@ -1091,21 +1188,21 @@ async fn main() {
         tokio::spawn(async move {
             tb_analytics::post_stream::backfill_post_stream_reports(&backfill_pool, 3).await;
         });
-        tokio::spawn(tb_analytics::post_stream::schedule_report_retry_job(
+        supervisor.spawn("post_stream_report_retry", tb_analytics::post_stream::schedule_report_retry_job(
             pool.clone(),
             1800,
         ));
-        tokio::spawn(tb_chat::title_jobs::schedule_nightly_knowledge_job(
+        supervisor.spawn("title_nightly_knowledge", tb_chat::title_jobs::schedule_nightly_knowledge_job(
             pool.clone(),
             300,
         ));
-        tokio::spawn(tb_chat::title_jobs::schedule_weekly_insight_job(
+        supervisor.spawn("title_weekly_insight", tb_chat::title_jobs::schedule_weekly_insight_job(
             pool.clone(),
             600,
         ));
         // Self-Learning des Conversation-Scam-Guards: erstmals nach 900s, danach
         // alle 6h aus bestätigten Scams + aufgehobenen Fehlalarmen destillieren.
-        tokio::spawn(tb_chat::conversation_scam::schedule_scam_learnings(
+        supervisor.spawn("conversation_scam_learning", tb_chat::conversation_scam::schedule_scam_learnings(
             pool.clone(),
             900,
         ));
@@ -1123,7 +1220,7 @@ async fn main() {
             build_telemetry_sub_auth(pool.clone(), helix_client.clone())
         {
             let collector_pool = pool.clone();
-            tokio::spawn(async move {
+            supervisor.spawn("subs_ads_collector", async move {
                 const INTERVAL: std::time::Duration = std::time::Duration::from_secs(6 * 60 * 60);
                 let mut tick = tokio::time::interval(INTERVAL);
                 tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
@@ -1212,7 +1309,7 @@ async fn main() {
                 }),
                 hc_config,
             );
-            tokio::spawn(async move {
+            supervisor.spawn("highlight_clipper", async move {
                 loop {
                     hc_worker.run_once().await;
                     tokio::time::sleep(std::time::Duration::from_secs(
@@ -1238,11 +1335,11 @@ async fn main() {
     {
         // Cipher-freie Worker: Retention-Cleanup, Approval-Queue, Report-Dispatcher.
         let retention = tb_social_media::retention_worker::RetentionWorker::new(pool.clone());
-        tokio::spawn(async move { retention.run().await });
+        supervisor.spawn("social_retention_worker", async move { retention.run().await });
         let approval = tb_social_media::approval_worker::ApprovalWorker::new(pool.clone());
-        tokio::spawn(async move { approval.run().await });
+        supervisor.spawn("social_approval_worker", async move { approval.run().await });
         let reports = tb_social_media::report_dispatcher::ReportDispatcher::new(pool.clone());
-        tokio::spawn(async move { reports.run().await });
+        supervisor.spawn("social_report_dispatcher", async move { reports.run().await });
 
         // Enrichment: LLM-Dispatcher (Consent aus Settings). Transkription ist
         // entfernt (B15-OFF-transcription: OpenAI-Whisper raus, kein Ersatz) —
@@ -1253,7 +1350,7 @@ async fn main() {
         );
         let enrichment =
             tb_social_media::enrichment_worker::EnrichmentWorker::new(pool.clone(), llm);
-        tokio::spawn(async move { enrichment.run().await });
+        supervisor.spawn("social_enrichment_worker", async move { enrichment.run().await });
 
         // Upload + Token-Refresh + Insights brauchen den Field-Cipher
         // (verschlüsselte Plattform-Tokens). Fehlt DB_MASTER_KEY_V1, laufen nur
@@ -1272,7 +1369,7 @@ async fn main() {
                 let upload =
                     tb_social_media::upload_worker::UploadWorker::new(pool.clone(), upload_creds)
                         .with_yt_dlp(cwd.join(".venv/bin/yt-dlp").to_string_lossy().into_owned());
-                tokio::spawn(async move { upload.run().await });
+                supervisor.spawn("social_upload_worker", async move { upload.run().await });
 
                 let refresh_oauth =
                     tb_social_media::oauth::OAuthManager::new(pool.clone(), cipher.clone());
@@ -1281,7 +1378,7 @@ async fn main() {
                     cipher.clone(),
                     refresh_oauth,
                 );
-                tokio::spawn(async move { refresh.run().await });
+                supervisor.spawn("social_token_refresh_worker", async move { refresh.run().await });
 
                 let insights_creds =
                     tb_social_media::credentials::CredentialManager::new(pool.clone(), cipher);
@@ -1289,7 +1386,7 @@ async fn main() {
                     pool.clone(),
                     insights_creds,
                 );
-                tokio::spawn(async move { insights.run().await });
+                supervisor.spawn("social_insights_worker", async move { insights.run().await });
             }
             Err(e) => {
                 tracing::warn!(
@@ -1302,16 +1399,11 @@ async fn main() {
 
     // Poll-Loop: das Cutover-Gate. Default AUS — Python bleibt alleiniger
     // Live-Writer, bis der Flip (04-cutover-plan) explizit erfolgt.
-    let poll_enabled = std::env::var("TB_MONITORING_POLL_ENABLED")
-        .map(|v| v.trim() == "1")
-        .unwrap_or(false);
+    let poll_enabled = opt_in_enabled("TB_MONITORING_POLL_ENABLED");
     let _poll_stop = if poll_enabled {
         match helix.as_ref().clone() {
             Some(helix_client) => {
-                let notify_channel_id: i64 = std::env::var("TWITCH_NOTIFY_CHANNEL_ID")
-                    .ok()
-                    .and_then(|v| v.trim().parse().ok())
-                    .unwrap_or(0);
+                let notify_channel_id: i64 = optional_env_i64("TWITCH_NOTIFY_CHANNEL_ID", 0);
                 let sink: Arc<dyn AnnouncementSink> = if notify_channel_id > 0 {
                     match BrokerRelay::new(&settings.broker) {
                         Ok(relay) => {
@@ -1325,12 +1417,11 @@ async fn main() {
                             // defaulten. Ohne Default wäre die Auto-Anlage still aus,
                             // sobald die Env-Var fehlt; der Notify-Channel liegt ohnehin
                             // in dieser Guild, also wird die Rolle dort angelegt.
-                            let live_ping_guild_id = std::env::var("STREAMER_GUILD_ID")
-                                .ok()
-                                .or_else(|| std::env::var("MAIN_GUILD_ID").ok())
-                                .and_then(|v| v.trim().parse::<u64>().ok())
-                                .filter(|&g| g > 0)
-                                .unwrap_or(1_289_721_245_281_292_288);
+                            let live_ping_guild_id = optional_env_u64_with_fallback(
+                                "STREAMER_GUILD_ID",
+                                "MAIN_GUILD_ID",
+                                1_289_721_245_281_292_288,
+                            );
                             tracing::info!(
                                 guild_id = live_ping_guild_id,
                                 "Live-Ping-Rollen-Auto-Anlage verdrahtet"
@@ -1398,7 +1489,7 @@ async fn main() {
                     },
                 ));
                 let (stop_tx, stop_rx) = tokio::sync::watch::channel(false);
-                tokio::spawn(engine.run(stop_rx));
+                supervisor.spawn("monitoring_poll_engine", engine.run(stop_rx));
                 tracing::info!("Monitoring-Poll-Loop gestartet (Cutover-Gate aktiv)");
                 Some(stop_tx)
             }
@@ -1453,13 +1544,21 @@ async fn main() {
     // Token-Fehler (1×/Streamer), 7-Tage-Grace-Sweep mit Rollen-Entzug
     // (stündlich) und Blacklist-Cleanup >30 Tage (3,5 h) — alles über den
     // F4-Master-Broker, da der Twitch-Bot keinen Discord-Zugang hat.
-    token_lifecycle_wiring::spawn_token_lifecycle_schedulers(pool.clone(), &settings.broker);
+    token_lifecycle_wiring::spawn_token_lifecycle_schedulers(
+        &supervisor,
+        pool.clone(),
+        &settings.broker,
+    );
 
     // Shadow-Review-Ausgang (B19): leitet gestagte Shadow-KI-Antworten periodisch
     // in den Engagement-Review-Discord-Kanal weiter (Master-Broker). Default AUS —
     // startet nur mit gesetztem ENGAGEMENT_SHADOW_REVIEW_CHANNEL_ID; ohne opt-in
     // output_mode='shadow' ist die Queue ohnehin leer (no-op).
-    shadow_review_wiring::spawn_shadow_review_scheduler(pool.clone(), &settings.broker);
+    shadow_review_wiring::spawn_shadow_review_scheduler(
+        &supervisor,
+        pool.clone(),
+        &settings.broker,
+    );
 
     // Streamer-Link-Matcher: verknüpft neue Twitch-Partner mit ihrem Discord-Account.
     // Läuft alle 6h, ist still wenn keine neuen Kandidaten vorhanden.
@@ -1468,7 +1567,7 @@ async fn main() {
         let sl_pool = pool.clone();
         let sl_base = format!("http://127.0.0.1:{port}");
         let sl_token = settings.internal_api.token.clone();
-        tokio::spawn(streamer_link::streamer_link_task(
+        supervisor.spawn("streamer_link_matcher", streamer_link::streamer_link_task(
             sl_pool, sl_relay, sl_config, sl_base, sl_token,
         ));
     }
@@ -1510,6 +1609,7 @@ async fn main() {
             _ => None,
         };
         chatters_wiring::spawn_chatters_schedulers(
+            &supervisor,
             pool.clone(),
             chatters_auth,
             chatters_streamer_tokens,
@@ -1518,7 +1618,7 @@ async fn main() {
         );
     }
 
-    irc_lurker_wiring::spawn_irc_lurker(pool.clone());
+    irc_lurker_wiring::spawn_irc_lurker(&supervisor, pool.clone());
 
     let addr = SocketAddr::from(([127, 0, 0, 1], port));
     let token = settings.internal_api.token.clone();
@@ -1599,12 +1699,15 @@ async fn main() {
             std::process::exit(1);
         });
 
-    axum::serve(
+    if let Err(error) = axum::serve(
         listener,
         app.into_make_service_with_connect_info::<SocketAddr>(),
     )
     .await
-    .unwrap();
+    {
+        tracing::error!(%error, "Internal-API Server beendet");
+        std::process::exit(1);
+    }
 }
 
 /// Startup-Cleanup + periodischer Core-Sub-Reconcile (alle 6h).

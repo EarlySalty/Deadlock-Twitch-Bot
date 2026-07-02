@@ -13,4 +13,7 @@ pub enum DbError {
 
     #[error("migration error: {0}")]
     Migrate(#[from] sqlx::migrate::MigrateError),
+
+    #[error("database integrity error: {0}")]
+    Integrity(String),
 }

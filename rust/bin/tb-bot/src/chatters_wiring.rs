@@ -12,6 +12,7 @@
 //!   verfügbar sind (sonst ist kein Poll möglich → Log + kein Spawn).
 //! - **Raid-Retention** — stündlich, unabhängig vom Token-Plumbing: berechnet
 //!   die 5/15/30-Minuten-Retention der letzten 7 Tage. Wird immer gestartet.
+//!   Im selben Takt laeuft der Observability-Event-Cleanup.
 //!
 //! Der [`ChattersCollector`] wird **einmal** vor dem Loop gebaut, damit
 //! Self-Heal-Cooldowns und der gemeinsame State über alle 30s-Ticks hinweg
@@ -29,6 +30,8 @@ use tb_monitoring::{
 };
 use tb_raid::TokenProvider;
 use tb_transport_twitch::{HelixClient, HelixError};
+
+use crate::task_supervisor::TaskSupervisor;
 
 /// Intervall des Chatters-Collect-Loops (Python `collect_chatters_data`, 30 s).
 const COLLECT_INTERVAL: Duration = Duration::from_secs(30);
@@ -198,17 +201,19 @@ pub fn build_chatters_fetcher(helix: Option<HelixClient>) -> Option<Arc<dyn Chat
 /// Token-Plumbing und wird immer gestartet. Fehler werden geloggt; beide Loops
 /// laufen weiter.
 pub fn spawn_chatters_schedulers(
+    supervisor: &TaskSupervisor,
     pool: PgPool,
     auth: Option<Arc<dyn BotChatterAuth>>,
     streamer_tokens: Option<Arc<dyn StreamerTokenSource>>,
     fetcher: Option<Arc<dyn ChattersFetcher>>,
     provisioner: Option<Arc<dyn ModeratorProvisioner>>,
 ) {
-    spawn_collect_loop(pool.clone(), auth, streamer_tokens, fetcher, provisioner);
-    spawn_retention_loop(pool);
+    spawn_collect_loop(supervisor, pool.clone(), auth, streamer_tokens, fetcher, provisioner);
+    spawn_retention_loop(supervisor, pool);
 }
 
 fn spawn_collect_loop(
+    supervisor: &TaskSupervisor,
     pool: PgPool,
     auth: Option<Arc<dyn BotChatterAuth>>,
     streamer_tokens: Option<Arc<dyn StreamerTokenSource>>,
@@ -255,7 +260,7 @@ fn spawn_collect_loop(
     // werden über alle 30s-Ticks geteilt.
     let collector = ChattersCollector::new(pool, auth, streamer_tokens, fetcher, provisioner);
 
-    tokio::spawn(async move {
+    supervisor.spawn("chatters_collect", async move {
         let mut tick = tokio::time::interval(COLLECT_INTERVAL);
         tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
         loop {
@@ -277,8 +282,8 @@ fn spawn_collect_loop(
     });
 }
 
-fn spawn_retention_loop(pool: PgPool) {
-    tokio::spawn(async move {
+fn spawn_retention_loop(supervisor: &TaskSupervisor, pool: PgPool) {
+    supervisor.spawn("raid_and_observability_retention", async move {
         let mut tick = tokio::time::interval(RETENTION_INTERVAL);
         tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
         loop {
@@ -292,6 +297,17 @@ fn spawn_retention_loop(pool: PgPool) {
                     "raid_retention: Lauf abgeschlossen"
                 ),
                 Err(error) => tracing::error!(%error, "raid_retention: Lauf fehlgeschlagen"),
+            }
+            match tb_monitoring::cleanup_observability_events(&pool).await {
+                Ok(deleted) if deleted > 0 => tracing::info!(
+                    deleted,
+                    retention_days = tb_monitoring::observability_retention_days(),
+                    "observability_retention: alte Events entfernt"
+                ),
+                Ok(_) => {}
+                Err(error) => {
+                    tracing::error!(%error, "observability_retention: Cleanup fehlgeschlagen")
+                }
             }
         }
     });
