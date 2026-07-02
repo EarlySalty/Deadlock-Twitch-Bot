@@ -1,3 +1,11 @@
+## #323 — Affiliate-/Partner-Abrechnung läuft jetzt auf der neuen Rust-Basis
+
+**Ausgangslage:** Das Affiliate-System — Anmeldung, Provisionen, monatliche Gutschriften und die interne Verwaltung — lief noch auf der alten Python-Oberfläche und fehlte in der neuen Dashboard-Basis komplett.
+
+**Änderung:** Das gesamte System ist jetzt in der neuen Basis nachgebaut: Anbindung an den Zahlungsdienstleister, verschlüsselte Stammdaten, monatliche Gutschriften mit Steuerausweis, automatische Erzeugung und die Verwaltungsansicht.
+
+**Ergebnis:** Die Grundlage steht vollständig auf der neuen Basis. Das Programm bleibt bis zur bewussten Freischaltung inaktiv — es zahlt nichts aus, solange nichts konfiguriert und niemand verknüpft ist.
+
 ## #322 — Stream-Vorschaubild ist zurück in den Live-Ankündigungen
 
 **Problem:** Seit der Umstellung auf die neue Bot-Version fehlte in den Live-Ankündigungen das große Vorschaubild vom Stream — das Embed war nur noch Text. Die Bildinfo kam von Twitch zwar an, wurde intern aber schlicht nie bis ins Embed weitergereicht.
