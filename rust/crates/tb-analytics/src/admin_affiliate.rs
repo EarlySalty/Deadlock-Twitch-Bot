@@ -9,10 +9,11 @@
 
 use chrono::{SecondsFormat, Utc};
 use serde_json::{json, Value};
-use sqlx::PgPool;
+use sqlx::{PgPool, Row};
 use tb_crypto::FieldCipher;
 
-use crate::affiliate_pii::{build_readiness, load_affiliate_pii, PiiError};
+use crate::affiliate_gutschrift::{self, GutschriftError};
+use crate::affiliate_pii::{build_readiness, load_affiliate_pii, PiiError, PiiPayload};
 
 /// `true` wenn der DB-Fehler auf fehlendes Schema deutet (→ Nullwerte statt 500).
 fn is_missing_schema_error(e: &sqlx::Error) -> bool {
@@ -44,6 +45,18 @@ fn zero_stats() -> Value {
         "total_gutschrift_amount": 0.0,
         "pending_email_gutschriften": 0,
     })
+}
+
+async fn load_admin_pii(
+    pool: &PgPool,
+    cipher: &FieldCipher,
+    login: &str,
+) -> Result<PiiPayload, PiiError> {
+    match load_affiliate_pii(pool, cipher, login).await {
+        Ok(pii) => Ok(pii),
+        Err(PiiError::Db(e)) if is_missing_schema_error(&e) => Ok(PiiPayload::default_payload()),
+        Err(e) => Err(e),
+    }
 }
 
 /// Aggregierte Affiliate-Programm-Statistik (Python `load_admin_affiliate_stats`).
@@ -513,7 +526,7 @@ pub async fn load_gutschriften_for_login(
         return Err(ForLoginError::NotFound);
     };
 
-    let pii = load_affiliate_pii(pool, cipher, login)
+    let pii = load_admin_pii(pool, cipher, login)
         .await
         .map_err(|e| match e {
             PiiError::Db(e) => ForLoginError::Db(e),
@@ -614,33 +627,90 @@ pub async fn toggle_affiliate(pool: &PgPool, login: &str) -> Result<Value, Toggl
 pub async fn load_gutschrift_pdf(
     pool: &PgPool,
     gutschrift_id: i64,
-) -> Result<Option<(String, Vec<u8>)>, sqlx::Error> {
-    let row = match sqlx::query!(
-        "SELECT pdf_blob, gutschrift_number FROM affiliate_gutschriften WHERE id::bigint = $1",
-        gutschrift_id
+) -> Result<Option<(String, Vec<u8>)>, GutschriftError> {
+    let row = match sqlx::query_as::<_, (Option<String>,)>(
+        "SELECT affiliate_twitch_login FROM affiliate_gutschriften WHERE id::bigint = $1",
     )
+    .bind(gutschrift_id)
     .fetch_optional(pool)
     .await
     {
         Ok(v) => v,
-        Err(e) if is_missing_schema_error(&e) => return Ok(None),
-        Err(e) => return Err(e),
+        Err(e) if is_missing_schema_error(&e) => {
+            return load_gutschrift_pdf_direct(pool, gutschrift_id).await;
+        }
+        Err(e) => return Err(GutschriftError::Db(e)),
     };
     let Some(row) = row else {
         return Ok(None);
     };
-    let Some(blob) = row.pdf_blob.filter(|b| !b.is_empty()) else {
-        return Ok(None); // kein gespeichertes PDF
+    let login = row.0.unwrap_or_default();
+    let Some(login) = tb_domain::login::normalize_twitch_login(&login) else {
+        return load_gutschrift_pdf_direct(pool, gutschrift_id).await;
     };
-    let filename_base = {
-        let number = row.gutschrift_number.trim();
-        if number.is_empty() {
-            format!("gutschrift-{gutschrift_id}")
-        } else {
-            number.to_string()
+
+    match affiliate_gutschrift::get_pdf(pool, &login, gutschrift_id).await {
+        Ok(Some((metadata, bytes))) => {
+            let number = metadata.gutschrift_number.trim();
+            let filename_base = if number.is_empty() {
+                format!("gutschrift-{gutschrift_id}")
+            } else {
+                number.to_string()
+            };
+            Ok(Some((filename_base, bytes)))
         }
+        Ok(None) => load_gutschrift_pdf_direct(pool, gutschrift_id).await,
+        Err(GutschriftError::Db(e)) if is_missing_schema_error(&e) => {
+            load_gutschrift_pdf_direct(pool, gutschrift_id).await
+        }
+        Err(GutschriftError::InvalidLogin) => load_gutschrift_pdf_direct(pool, gutschrift_id).await,
+        Err(e) => Err(e),
+    }
+}
+
+async fn load_gutschrift_pdf_direct(
+    pool: &PgPool,
+    gutschrift_id: i64,
+) -> Result<Option<(String, Vec<u8>)>, GutschriftError> {
+    let row = match sqlx::query(
+        "SELECT id::bigint AS id, pdf_blob FROM affiliate_gutschriften WHERE id::bigint = $1",
+    )
+    .bind(gutschrift_id)
+    .fetch_optional(pool)
+    .await
+    {
+        Ok(row) => row,
+        Err(e) if is_missing_schema_error(&e) => return Ok(None),
+        Err(e) => return Err(GutschriftError::Db(e)),
     };
-    Ok(Some((filename_base, blob)))
+    let Some(row) = row else {
+        return Ok(None);
+    };
+    let pdf_blob = row
+        .try_get::<Option<Vec<u8>>, _>("pdf_blob")?
+        .filter(|blob| !blob.is_empty());
+    let Some(pdf_blob) = pdf_blob else {
+        return Ok(None);
+    };
+
+    let number = match sqlx::query_as::<_, (Option<String>,)>(
+        "SELECT gutschrift_number FROM affiliate_gutschriften WHERE id::bigint = $1",
+    )
+    .bind(gutschrift_id)
+    .fetch_optional(pool)
+    .await
+    {
+        Ok(Some((Some(number),))) => number,
+        Ok(_) => String::new(),
+        Err(e) if is_missing_schema_error(&e) => String::new(),
+        Err(e) => return Err(GutschriftError::Db(e)),
+    };
+    let filename_base = if number.trim().is_empty() {
+        format!("gutschrift-{gutschrift_id}")
+    } else {
+        number.trim().to_string()
+    };
+    Ok(Some((filename_base, pdf_blob)))
 }
 
 // ── Detail (Read mit PII-Readiness) ───────────────────────────────────────────
@@ -729,7 +799,7 @@ pub async fn load_affiliate_detail(
     .await
     .map_err(DetailError::Db)?;
 
-    let pii = load_affiliate_pii(pool, cipher, login)
+    let pii = load_admin_pii(pool, cipher, login)
         .await
         .map_err(|e| match e {
             PiiError::Db(e) => DetailError::Db(e),
@@ -737,7 +807,7 @@ pub async fn load_affiliate_detail(
         })?;
     let readiness = build_readiness(&pii);
 
-    let gutschriften = sqlx::query!(
+    let gutschriften = match sqlx::query!(
         r#"
         SELECT COUNT(*)::bigint AS "count!",
                COALESCE(SUM(gross_amount_cents), 0)::bigint AS "total_cents!"
@@ -748,7 +818,11 @@ pub async fn load_affiliate_detail(
     )
     .fetch_one(pool)
     .await
-    .map_err(DetailError::Db)?;
+    {
+        Ok(row) => (row.count, row.total_cents),
+        Err(e) if is_missing_schema_error(&e) => (0, 0),
+        Err(e) => return Err(DetailError::Db(e)),
+    };
 
     // Stripe-Account-ID maskieren (>12 Zeichen → erste 8 … letzte 4).
     let stripe_id = account.stripe_account_id.unwrap_or_default();
@@ -800,7 +874,7 @@ pub async fn load_affiliate_detail(
         },
         "ust_status": pii.ust_status,
         "pii_readiness": readiness,
-        "gutschriften_summary": { "count": gutschriften.count, "total_gross_cents": gutschriften.total_cents },
+        "gutschriften_summary": { "count": gutschriften.0, "total_gross_cents": gutschriften.1 },
     }))
 }
 
@@ -1081,13 +1155,13 @@ mod tests {
         // fehlendes Schema → None.
         assert!(load_gutschrift_pdf(&pool, 1).await.unwrap().is_none());
 
-        sqlx::query("CREATE TABLE affiliate_gutschriften (id INTEGER GENERATED BY DEFAULT AS IDENTITY PRIMARY KEY, gutschrift_number TEXT NOT NULL, pdf_blob BYTEA)").execute(&pool).await.unwrap();
+        sqlx::query("CREATE TABLE affiliate_gutschriften (id INTEGER GENERATED BY DEFAULT AS IDENTITY PRIMARY KEY, affiliate_twitch_login TEXT, period_year INTEGER, period_month INTEGER, gutschrift_number TEXT NOT NULL, net_amount_cents INTEGER, vat_amount_cents INTEGER, gross_amount_cents INTEGER, affiliate_ust_status TEXT, pdf_blob BYTEA, pdf_generated_at TEXT, email_sent_at TEXT, email_error TEXT, commission_ids TEXT, created_at TEXT)").execute(&pool).await.unwrap();
         // mit PDF → (filename, bytes).
-        sqlx::query("INSERT INTO affiliate_gutschriften (id, gutschrift_number, pdf_blob) VALUES (5, 'GS-2026-06-001', E'\\\\x255044462d')").execute(&pool).await.unwrap();
+        sqlx::query("INSERT INTO affiliate_gutschriften (id, affiliate_twitch_login, period_year, period_month, gutschrift_number, net_amount_cents, vat_amount_cents, gross_amount_cents, affiliate_ust_status, pdf_blob) VALUES (5, 'nani', 2026, 6, 'GS-2026-06-001', 1000, 0, 1000, 'kleinunternehmer', E'\\\\x255044462d')").execute(&pool).await.unwrap();
         // ohne PDF → None.
-        sqlx::query("INSERT INTO affiliate_gutschriften (id, gutschrift_number, pdf_blob) VALUES (6, 'GS-2026-06-002', NULL)").execute(&pool).await.unwrap();
+        sqlx::query("INSERT INTO affiliate_gutschriften (id, affiliate_twitch_login, period_year, period_month, gutschrift_number, net_amount_cents, vat_amount_cents, gross_amount_cents, affiliate_ust_status, pdf_blob) VALUES (6, 'nani', 2026, 6, 'GS-2026-06-002', 1000, 0, 1000, 'kleinunternehmer', NULL)").execute(&pool).await.unwrap();
         // ohne Nummer → Fallback-Dateiname.
-        sqlx::query("INSERT INTO affiliate_gutschriften (id, gutschrift_number, pdf_blob) VALUES (7, '', E'\\\\x255044')").execute(&pool).await.unwrap();
+        sqlx::query("INSERT INTO affiliate_gutschriften (id, affiliate_twitch_login, period_year, period_month, gutschrift_number, net_amount_cents, vat_amount_cents, gross_amount_cents, affiliate_ust_status, pdf_blob) VALUES (7, 'nani', 2026, 6, '', 1000, 0, 1000, 'kleinunternehmer', E'\\\\x255044')").execute(&pool).await.unwrap();
 
         let (name, bytes) = load_gutschrift_pdf(&pool, 5).await.unwrap().unwrap();
         assert_eq!(name, "GS-2026-06-001");
@@ -1096,6 +1170,47 @@ mod tests {
         assert!(load_gutschrift_pdf(&pool, 99).await.unwrap().is_none()); // fehlende Zeile
         let (name7, _) = load_gutschrift_pdf(&pool, 7).await.unwrap().unwrap();
         assert_eq!(name7, "gutschrift-7"); // Fallback
+
+        sqlx::query("DROP TABLE affiliate_gutschriften")
+            .execute(&pool)
+            .await
+            .unwrap();
+        sqlx::query("CREATE TABLE affiliate_gutschriften (id INTEGER GENERATED BY DEFAULT AS IDENTITY PRIMARY KEY, gutschrift_number TEXT, pdf_blob BYTEA)")
+            .execute(&pool)
+            .await
+            .unwrap();
+        sqlx::query("INSERT INTO affiliate_gutschriften (id, gutschrift_number, pdf_blob) VALUES (8, '', E'\\\\x255044')")
+            .execute(&pool)
+            .await
+            .unwrap();
+        let (name8, bytes8) = load_gutschrift_pdf(&pool, 8).await.unwrap().unwrap();
+        assert_eq!(name8, "gutschrift-8");
+        assert_eq!(bytes8, vec![0x25, 0x50, 0x44]);
+    }
+
+    #[tokio::test]
+    async fn for_login_ohne_pii_und_gutschrift_schema_nutzt_defaults() {
+        let Some(pool) = connect("t_aff_forlogin_defaults").await else {
+            return;
+        };
+        let cipher = FieldCipher::from_hex_key(&"ab".repeat(32), "v1").unwrap();
+        sqlx::query("CREATE TABLE affiliate_accounts (twitch_login TEXT PRIMARY KEY, display_name TEXT, is_active INTEGER NOT NULL DEFAULT 1, created_at TEXT, updated_at TEXT)")
+            .execute(&pool)
+            .await
+            .unwrap();
+        sqlx::query("INSERT INTO affiliate_accounts (twitch_login, display_name, is_active, created_at, updated_at) VALUES ('nani','Nani',1,'2026-06-01T00:00:00+00:00','2026-06-02T00:00:00+00:00')")
+            .execute(&pool)
+            .await
+            .unwrap();
+
+        let v = load_gutschriften_for_login(&pool, &cipher, "nani")
+            .await
+            .unwrap();
+        assert_eq!(v["affiliate"]["login"], "nani");
+        assert_eq!(v["ust_status"], "unknown");
+        assert_eq!(v["readiness"]["can_generate"], false);
+        assert_eq!(v["gutschriften_summary"]["total_gutschriften"], 0);
+        assert_eq!(v["gutschriften"], json!([]));
     }
 
     #[tokio::test]
@@ -1148,6 +1263,32 @@ mod tests {
             load_affiliate_detail(&pool, &cipher, "ghost").await,
             Err(DetailError::NotFound)
         ));
+    }
+
+    #[tokio::test]
+    async fn detail_ohne_pii_und_gutschrift_schema_nutzt_defaults() {
+        let Some(pool) = connect("t_aff_detail_defaults").await else {
+            return;
+        };
+        let cipher = FieldCipher::from_hex_key(&"ab".repeat(32), "v1").unwrap();
+        for ddl in [
+            "CREATE TABLE affiliate_accounts (twitch_login TEXT PRIMARY KEY, display_name TEXT, is_active INTEGER NOT NULL DEFAULT 1, created_at TEXT, email TEXT, stripe_connect_status TEXT, stripe_account_id TEXT, updated_at TEXT)",
+            "CREATE TABLE affiliate_streamer_claims (id INTEGER GENERATED BY DEFAULT AS IDENTITY PRIMARY KEY, affiliate_twitch_login TEXT, claimed_streamer_login TEXT, claimed_at TEXT)",
+            "CREATE TABLE affiliate_commissions (id INTEGER GENERATED BY DEFAULT AS IDENTITY PRIMARY KEY, affiliate_twitch_login TEXT, streamer_login TEXT, commission_cents INTEGER, status TEXT)",
+        ] {
+            sqlx::query(ddl).execute(&pool).await.unwrap();
+        }
+        sqlx::query("INSERT INTO affiliate_accounts (twitch_login, display_name, is_active, created_at, email, stripe_connect_status, stripe_account_id, updated_at) VALUES ('nani','Nani',1,'2026-06-01T00:00:00+00:00','a@b.de','active','acct_123', '2026-06-02T00:00:00+00:00')")
+            .execute(&pool)
+            .await
+            .unwrap();
+
+        let v = load_affiliate_detail(&pool, &cipher, "nani").await.unwrap();
+        assert_eq!(v["affiliate"]["login"], "nani");
+        assert_eq!(v["ust_status"], "unknown");
+        assert_eq!(v["pii_readiness"]["can_generate"], false);
+        assert_eq!(v["gutschriften_summary"]["count"], 0);
+        assert_eq!(v["gutschriften_summary"]["total_gross_cents"], 0);
     }
 
     #[tokio::test]

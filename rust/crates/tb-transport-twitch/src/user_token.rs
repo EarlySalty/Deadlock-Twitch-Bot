@@ -117,6 +117,10 @@ pub struct TokenOwner {
     /// Dashboard-Login für den Session-Display gebraucht.
     #[serde(default)]
     pub display_name: String,
+    /// E-Mail aus `user:read:email`-Scopes. Beim normalen Dashboard-Login leer,
+    /// beim Affiliate-Login PII-Quelle für das Profil.
+    #[serde(default)]
+    pub email: String,
 }
 
 #[derive(Deserialize)]
@@ -278,10 +282,12 @@ impl HelixClient {
         } else {
             owner.display_name.trim().to_string()
         };
+        let email = owner.email.trim().to_string();
         Ok(TokenOwner {
             id: owner.id.trim().to_string(),
             login: owner.login.trim().to_lowercase(),
             display_name,
+            email,
         })
     }
 }

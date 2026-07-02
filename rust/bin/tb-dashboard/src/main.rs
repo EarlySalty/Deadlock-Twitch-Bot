@@ -248,6 +248,33 @@ fn release_file_lock(handle: &File) {
 #[cfg(not(unix))]
 fn release_file_lock(_handle: &File) {}
 
+fn spawn_affiliate_gutschrift_loop(pool: sqlx::PgPool) {
+    tokio::spawn(async move {
+        const INITIAL_DELAY: std::time::Duration = std::time::Duration::from_secs(20);
+        const INTERVAL: std::time::Duration = std::time::Duration::from_secs(6 * 60 * 60);
+        let start = tokio::time::Instant::now() + INITIAL_DELAY;
+        let mut tick = tokio::time::interval_at(start, INTERVAL);
+        tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+        loop {
+            tick.tick().await;
+            match tb_dashboard_api::handlers::admin_affiliate::run_pending_gutschriften_for_background(
+                &pool,
+            )
+            .await
+            {
+                Ok(results) if !results.is_empty() => tracing::info!(
+                    count = results.len(),
+                    "affiliate.gutschrift.loop: Lauf abgeschlossen"
+                ),
+                Ok(_) => {}
+                Err(error) => {
+                    tracing::error!(%error, "affiliate.gutschrift.loop: Lauf fehlgeschlagen")
+                }
+            }
+        }
+    });
+}
+
 #[tokio::main]
 async fn main() {
     tracing_subscriber::fmt::init();
@@ -299,6 +326,7 @@ async fn main() {
     let addr = SocketAddr::from(([127, 0, 0, 1], port));
     let token = settings.internal_api.token.clone();
     let readiness_fingerprint = tb_dashboard_api::analytics_db_fingerprint_startup_check().await;
+    spawn_affiliate_gutschrift_loop(pool.clone());
     let mut app = build_router(pool.clone(), token);
     app = app.layer(axum::Extension(readiness_fingerprint));
 

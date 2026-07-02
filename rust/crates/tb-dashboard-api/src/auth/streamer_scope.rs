@@ -33,6 +33,7 @@ fn unauthorized() -> Response {
 /// wählen (oder `None` für „alle"). `None`-Auth → 401.
 ///
 /// Wird von allen Daten-Endpoints des Dashboards wiederverwendet.
+#[allow(clippy::result_large_err)]
 pub(crate) fn resolve_streamer_scope(
     auth: &DashboardAuthLevel,
     requested: Option<&str>,

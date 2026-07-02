@@ -59,6 +59,15 @@ pub struct PartnerSession {
     pub display_name: String,
 }
 
+/// Payload einer geladenen Affiliate-Session (`twitch_affiliate_session`).
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct AffiliateSession {
+    pub twitch_login: String,
+    pub twitch_user_id: String,
+    pub display_name: String,
+    pub email: String,
+}
+
 /// Sicherheitsrelevante Bindungs-Felder einer geladenen Admin-Session
 /// (`master_dash_session` / `discord_admin`), für den Forward-Auth-Check (P1.39).
 ///
@@ -188,6 +197,19 @@ pub struct OAuthLoginState {
     /// den Callback an denselben Browser → ein cookieloser/fremder Callback (CSRF-
     /// Login) wird abgelehnt. Leer = keine Bindung (Abwärtskompatibilität).
     pub context_token: String,
+}
+
+/// Persistierter Zustand des Affiliate-Twitch-OAuth-Flows.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AffiliateOAuthState {
+    pub redirect_uri: String,
+}
+
+/// Persistierter Zustand des Affiliate-Stripe-Connect-Flows.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AffiliateConnectState {
+    pub redirect_uri: String,
+    pub twitch_login: String,
 }
 
 /// `SameSite`-Politik eines Session-Cookies.
@@ -328,6 +350,8 @@ pub const SESSION_CREATE_TTL_SECS: u64 = 6 * 3600;
 pub const PARTNER_COOKIE_NAME: &str = "twitch_dash_session";
 /// Cookie-Name der Discord-Admin-Session (Python: state_store.py:18).
 pub const ADMIN_COOKIE_NAME: &str = "master_dash_session";
+/// Cookie-Name der Affiliate-Session (Python `_AFFILIATE_COOKIE`).
+pub const AFFILIATE_COOKIE_NAME: &str = "twitch_affiliate_session";
 
 /// Cookie-Name der durablen Partner-Access-Session (B3-9, Python
 /// `services.py:36` — `{base}_partner`, mit `base = "twitch_dash_session"`).
@@ -345,6 +369,12 @@ pub const PARTNER_ACCESS_SESSION_TYPE: &str = "partner_token";
 /// Der CSRF-State des Twitch-OAuth-Login-Flows wird als eigene Row mit diesem Typ
 /// abgelegt — atomar einmal verbraucht (DELETE … RETURNING) beim Callback.
 pub const OAUTH_STATE_SESSION_TYPE: &str = "oauth_state:twitch";
+/// Persistierter Session-Typ der Affiliate-Portal-Session.
+pub const AFFILIATE_SESSION_TYPE: &str = "affiliate";
+/// Persistierter State-Typ des Affiliate-Twitch-OAuth-Flows.
+pub const AFFILIATE_OAUTH_STATE_SESSION_TYPE: &str = "oauth_state:affiliate";
+/// Persistierter State-Typ des Affiliate-Stripe-Connect-Flows.
+pub const AFFILIATE_CONNECT_STATE_SESSION_TYPE: &str = "oauth_state:affiliate_connect";
 
 /// Plattform-Discriminator des geteilten Raid-OAuth-State-Stores
 /// (`oauth_state_tokens`), Python `_OAUTH_STATE_PLATFORM_RAID`.
@@ -353,6 +383,10 @@ const RAID_OAUTH_STATE_PLATFORM: &str = "twitch_raid";
 /// Gültigkeit eines OAuth-Login-State-Tokens (Python: `server_v2.py:189`,
 /// `_oauth_state_ttl_seconds = 600`). Hartkodiert — kein Env-Override.
 pub const OAUTH_STATE_TTL_SECS: u64 = 600;
+/// Affiliate-Session-TTL (Python `_AFFILIATE_SESSION_TTL`: 7 Tage).
+pub const AFFILIATE_SESSION_TTL_SECS: u64 = 7 * 24 * 3600;
+/// Affiliate OAuth-/Connect-State-TTL (Python: 600s).
+pub const AFFILIATE_STATE_TTL_SECS: u64 = 600;
 
 /// Session-Typ der Partner-Einmal-Login-State-Rows (B3-8, Python
 /// `state_store.py`, `"oauth_state:partner_login"`). Atomar einmal verbraucht.
@@ -446,6 +480,50 @@ impl DashboardAuthState {
 
         self.persist_new_session(&session_id, "twitch", &payload, now as f64, expires_at)
             .await?;
+
+        Ok(SessionCreation {
+            session_id,
+            csrf_token,
+        })
+    }
+
+    /// Legt eine neue Affiliate-Portal-Session an (Python
+    /// `_create_affiliate_session`, Typ `"affiliate"`, TTL 7 Tage).
+    pub async fn create_affiliate_session(
+        &self,
+        twitch_login: &str,
+        twitch_user_id: &str,
+        display_name: &str,
+        email: &str,
+    ) -> Result<SessionCreation, sqlx::Error> {
+        let now = unix_now();
+        let session_id = tb_crypto::random_urlsafe_token(SESSION_ID_BYTES);
+        let csrf_token = tb_crypto::random_urlsafe_token(SESSION_ID_BYTES);
+        let expires_at = now as f64 + AFFILIATE_SESSION_TTL_SECS as f64;
+        let login = twitch_login.trim().to_lowercase();
+        let display = if display_name.trim().is_empty() {
+            login.clone()
+        } else {
+            display_name.trim().to_string()
+        };
+
+        let payload = serde_json::json!({
+            "twitch_login": login,
+            "twitch_user_id": twitch_user_id.trim(),
+            "display_name": display,
+            "email": email.trim(),
+            "created_at": now as f64,
+            "expires_at": expires_at,
+        });
+
+        self.persist_new_session(
+            &session_id,
+            AFFILIATE_SESSION_TYPE,
+            &payload,
+            now as f64,
+            expires_at,
+        )
+        .await?;
 
         Ok(SessionCreation {
             session_id,
@@ -557,6 +635,7 @@ impl DashboardAuthState {
     /// TTL, Payload-Felder und `fp_pending` entsprechen Python: die Session wird mit
     /// 14 Tagen Laufzeit gemintet und erst nach `/twitch/auth/fingerprint` im
     /// Forward-Auth-Pfad akzeptiert.
+    #[allow(clippy::too_many_arguments)]
     pub async fn create_discord_admin_session(
         &self,
         user_id: u64,
@@ -797,6 +876,155 @@ impl DashboardAuthState {
             redirect_uri,
             context_token,
         }))
+    }
+
+    /// Persistiert einen Affiliate-Twitch-OAuth-State (Python
+    /// `_affiliate_save_oauth_state`).
+    pub async fn save_affiliate_oauth_state(
+        &self,
+        state_token: &str,
+        state: &AffiliateOAuthState,
+    ) -> Result<(), sqlx::Error> {
+        let now = unix_now();
+        let expires_at = now as f64 + AFFILIATE_STATE_TTL_SECS as f64;
+        let payload = serde_json::json!({
+            "redirect_uri": state.redirect_uri,
+            "created_at": now as f64,
+            "expires_at": expires_at,
+        });
+        self.persist_new_session(
+            state_token,
+            AFFILIATE_OAUTH_STATE_SESSION_TYPE,
+            &payload,
+            now as f64,
+            expires_at,
+        )
+        .await
+    }
+
+    /// Verbraucht einen Affiliate-Twitch-OAuth-State atomar und einmalig.
+    pub async fn consume_affiliate_oauth_state(
+        &self,
+        state_token: &str,
+    ) -> Result<Option<AffiliateOAuthState>, sqlx::Error> {
+        let Some(payload) = self
+            .consume_affiliate_state_payload(state_token, AFFILIATE_OAUTH_STATE_SESSION_TYPE)
+            .await?
+        else {
+            return Ok(None);
+        };
+        let redirect_uri = payload
+            .get("redirect_uri")
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .trim()
+            .to_string();
+        if redirect_uri.is_empty() {
+            return Ok(None);
+        }
+        Ok(Some(AffiliateOAuthState { redirect_uri }))
+    }
+
+    /// Persistiert einen Affiliate-Stripe-Connect-State (Python
+    /// `_affiliate_save_connect_state`).
+    pub async fn save_affiliate_connect_state(
+        &self,
+        state_token: &str,
+        state: &AffiliateConnectState,
+    ) -> Result<(), sqlx::Error> {
+        let now = unix_now();
+        let expires_at = now as f64 + AFFILIATE_STATE_TTL_SECS as f64;
+        let payload = serde_json::json!({
+            "redirect_uri": state.redirect_uri,
+            "twitch_login": state.twitch_login,
+            "created_at": now as f64,
+            "expires_at": expires_at,
+        });
+        self.persist_new_session(
+            state_token,
+            AFFILIATE_CONNECT_STATE_SESSION_TYPE,
+            &payload,
+            now as f64,
+            expires_at,
+        )
+        .await
+    }
+
+    /// Verbraucht einen Affiliate-Stripe-Connect-State atomar und einmalig.
+    pub async fn consume_affiliate_connect_state(
+        &self,
+        state_token: &str,
+    ) -> Result<Option<AffiliateConnectState>, sqlx::Error> {
+        let Some(payload) = self
+            .consume_affiliate_state_payload(state_token, AFFILIATE_CONNECT_STATE_SESSION_TYPE)
+            .await?
+        else {
+            return Ok(None);
+        };
+        let redirect_uri = payload
+            .get("redirect_uri")
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .trim()
+            .to_string();
+        let twitch_login = payload
+            .get("twitch_login")
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .trim()
+            .to_lowercase();
+        if redirect_uri.is_empty() || twitch_login.is_empty() {
+            return Ok(None);
+        }
+        Ok(Some(AffiliateConnectState {
+            redirect_uri,
+            twitch_login,
+        }))
+    }
+
+    async fn consume_affiliate_state_payload(
+        &self,
+        state_token: &str,
+        session_type: &str,
+    ) -> Result<Option<serde_json::Value>, sqlx::Error> {
+        let now = unix_now();
+        let row = sqlx::query!(
+            r#"
+            DELETE FROM dashboard_sessions
+            WHERE session_id = $1
+              AND session_type = $2
+              AND expires_at > $3
+            RETURNING payload_enc
+            "#,
+            state_token,
+            session_type,
+            now as f64
+        )
+        .fetch_optional(&self.pool)
+        .await?;
+
+        let Some(row) = row else {
+            return Ok(None);
+        };
+        let plaintext = match fernet::decrypt(&self.fernet_key, &encode_b64(&row.payload_enc), None)
+        {
+            Ok(p) => p,
+            Err(e) => {
+                warn!("Affiliate-State-Decrypt fehlgeschlagen: {e}");
+                return Ok(None);
+            }
+        };
+        let payload: serde_json::Value = match serde_json::from_slice(&plaintext) {
+            Ok(v) => v,
+            Err(e) => {
+                warn!("Affiliate-State-JSON ungültig: {e}");
+                return Ok(None);
+            }
+        };
+        if payload_expired(&payload, now) {
+            return Ok(None);
+        }
+        Ok(Some(payload))
     }
 
     /// Prüft, ob ein noch gültiger Raid-OAuth-State existiert, ohne ihn zu
@@ -1203,6 +1431,55 @@ impl DashboardAuthState {
             source: read("source"),
             js_fp: read("js_fp"),
             username,
+        }))
+    }
+
+    /// Lädt eine gültige Affiliate-Session (`session_type='affiliate'`).
+    /// Kein Partner-Gate und kein Sliding-Refresh, exakt wie Pythons
+    /// `_get_affiliate_session`: gültig bis `expires_at`, sonst `None`.
+    pub async fn load_affiliate_session(
+        &self,
+        session_id: &str,
+    ) -> Result<Option<AffiliateSession>, sqlx::Error> {
+        let now = unix_now();
+        let Some(payload) = self
+            .fetch_session_payload(session_id, AFFILIATE_SESSION_TYPE, now)
+            .await?
+        else {
+            return Ok(None);
+        };
+
+        if payload_expired(&payload, now) {
+            self.delete_session(session_id).await;
+            return Ok(None);
+        }
+
+        let read = |key: &str| -> String {
+            payload
+                .get(key)
+                .and_then(|v| v.as_str())
+                .unwrap_or("")
+                .trim()
+                .to_string()
+        };
+        let twitch_login = read("twitch_login").to_lowercase();
+        let twitch_user_id = read("twitch_user_id");
+        if twitch_login.is_empty() && twitch_user_id.is_empty() {
+            return Ok(None);
+        }
+        let display_name = {
+            let display = read("display_name");
+            if display.is_empty() {
+                twitch_login.clone()
+            } else {
+                display
+            }
+        };
+        Ok(Some(AffiliateSession {
+            twitch_login,
+            twitch_user_id,
+            display_name,
+            email: read("email"),
         }))
     }
 
@@ -2164,6 +2441,43 @@ print(f.encrypt(payload.encode()).decode(), end='')
             .load_partner_session("nicht-existent-partner-id-xyz")
             .await;
         assert!(matches!(result, Ok(None)));
+    }
+
+    #[tokio::test]
+    async fn affiliate_session_wird_per_session_type_geladen() {
+        let Some(pool) = maybe_pool().await else {
+            return;
+        };
+        ensure_sessions_table(&pool).await;
+        let state = DashboardAuthState::new(pool.clone(), test_fernet_key());
+        let created = state
+            .create_affiliate_session("Partner_One", "1001", "Partner One", "p@example.test")
+            .await
+            .unwrap();
+
+        let loaded = state
+            .load_affiliate_session(&created.session_id)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(loaded.twitch_login, "partner_one");
+        assert_eq!(loaded.twitch_user_id, "1001");
+        assert_eq!(loaded.display_name, "Partner One");
+        assert_eq!(loaded.email, "p@example.test");
+
+        let session_type: String =
+            sqlx::query_scalar("SELECT session_type FROM dashboard_sessions WHERE session_id = $1")
+                .bind(&created.session_id)
+                .fetch_one(&pool)
+                .await
+                .unwrap();
+        assert_eq!(session_type, AFFILIATE_SESSION_TYPE);
+
+        sqlx::query("DELETE FROM dashboard_sessions WHERE session_id = $1")
+            .bind(&created.session_id)
+            .execute(&pool)
+            .await
+            .unwrap();
     }
 
     #[tokio::test]

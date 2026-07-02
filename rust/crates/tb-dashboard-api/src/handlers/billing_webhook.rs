@@ -57,7 +57,10 @@ pub struct StripeWebhookConfig {
 /// Secret-Key (`STRIPE_SECRET_KEY`) ist optional — fehlt er, bleibt der Client
 /// `None` (Checkout-Pfad erfasst dann nur den dünnen Zustand).
 pub fn stripe_webhook_config_from_env() -> Option<StripeWebhookConfig> {
-    let webhook_secret = non_empty_env(&["STRIPE_WEBHOOK_SECRET", "TWITCH_BILLING_STRIPE_WEBHOOK_SECRET"])?;
+    let webhook_secret = non_empty_env(&[
+        "STRIPE_WEBHOOK_SECRET",
+        "TWITCH_BILLING_STRIPE_WEBHOOK_SECRET",
+    ])?;
     let client = non_empty_env(&["STRIPE_SECRET_KEY", "TWITCH_BILLING_STRIPE_SECRET_KEY"])
         .and_then(|key| StripeClient::new(key).ok())
         .map(Arc::new);
@@ -113,8 +116,14 @@ pub async fn stripe_webhook_handler(
 
     // Signatur über den ROHEN Body verifizieren. Ungültig → 400, KEINE DB-Schreibung.
     let now_unix = chrono::Utc::now().timestamp();
-    if verify_signature(&body, &signature, &config.webhook_secret, now_unix, DEFAULT_TOLERANCE_SECONDS)
-        .is_err()
+    if verify_signature(
+        &body,
+        &signature,
+        &config.webhook_secret,
+        now_unix,
+        DEFAULT_TOLERANCE_SECONDS,
+    )
+    .is_err()
     {
         // Python: 400 invalid_stripe_signature (generisch, kein Secret-Leak).
         return (
@@ -144,7 +153,10 @@ pub async fn stripe_webhook_handler(
         .cloned()
         .unwrap_or(Value::Null);
     let object_id = str_field(&event_object, "id");
-    let livemode = event.get("livemode").and_then(Value::as_bool).unwrap_or(false);
+    let livemode = event
+        .get("livemode")
+        .and_then(Value::as_bool)
+        .unwrap_or(false);
     let payload_text = String::from_utf8_lossy(&body).into_owned();
 
     match process_event(
@@ -197,10 +209,19 @@ async fn process_event(
 ) -> Result<(bool, &'static str), sqlx::Error> {
     // checkout.session.completed: volle Subscription VOR der Transaktion nachladen
     // (HTTP-Call gehört nicht in eine offene DB-Transaktion).
-    let retrieved_subscription = maybe_retrieve_subscription(config, event_type, event_object).await;
+    let retrieved_subscription =
+        maybe_retrieve_subscription(config, event_type, event_object).await;
 
     let mut tx = pool.begin().await?;
-    let is_new = record_event_once(&mut tx, event_id, event_type, object_id, livemode, payload_text).await?;
+    let is_new = record_event_once(
+        &mut tx,
+        event_id,
+        event_type,
+        object_id,
+        livemode,
+        payload_text,
+    )
+    .await?;
 
     let action = if is_new {
         apply_event(
@@ -258,11 +279,11 @@ async fn process_event(
 
     // Affiliate-Provision (30 %): NACH dem Commit, mit eigenem Pool/Advisory-Lock
     // (Python `affiliate_mixin._affiliate_process_commission` läuft ebenfalls
-    // außerhalb der Webhook-DB-Transaktion). Nur für frische
-    // `invoice.payment_succeeded`-Events; bei Replays hat `process_commission`
-    // ohnehin seine eigene Idempotenz (UNIQUE auf stripe_event_id). Fehler werden
-    // wie in Python geschluckt (Logeintrag), damit Stripe kein Retry auslöst.
-    if is_new && event_type.trim() == "invoice.payment_succeeded" {
+    // außerhalb der Webhook-DB-Transaktion). Auch Billing-Duplicates laufen hier
+    // durch, damit ein Crash nach `twitch_billing_events`-Commit, aber vor
+    // Commission-Ledger/Transfer, beim Stripe-Replay nachgeholt wird.
+    // `process_commission` ist selbst per stripe_event_id idempotent.
+    if event_type.trim() == "invoice.payment_succeeded" {
         if let Some(fields) = InvoiceFields::from_object(event_object) {
             let invoice = InvoicePayment {
                 stripe_event_id: event_id,
@@ -394,6 +415,8 @@ mod tests {
     use axum::http::HeaderValue;
     use hmac::{Hmac, Mac};
     use sha2::Sha256;
+    use wiremock::matchers::{body_string_contains, header, method, path};
+    use wiremock::{Mock, MockServer, ResponseTemplate};
 
     type HmacSha256 = Hmac<Sha256>;
 
@@ -417,11 +440,19 @@ mod tests {
         }
     }
 
+    fn cfg_with_client(client: StripeClient) -> StripeWebhookConfig {
+        StripeWebhookConfig {
+            webhook_secret: SECRET.to_string(),
+            client: Some(Arc::new(client)),
+        }
+    }
+
     // ── Signatur-Logik (DB-frei: prüft die 400-Pfade vor jedem DB-Zugriff) ───
 
     #[test]
     fn valid_signature_verifies_over_raw_body() {
-        let payload = br#"{"id":"evt_1","type":"customer.subscription.created","data":{"object":{}}}"#;
+        let payload =
+            br#"{"id":"evt_1","type":"customer.subscription.created","data":{"object":{}}}"#;
         let ts = chrono::Utc::now().timestamp();
         let header = sign(payload, ts, SECRET);
         assert!(
@@ -471,10 +502,23 @@ mod tests {
 
     async fn pool_or_skip(schema: &str) -> Option<PgPool> {
         let dsn = std::env::var("TB_TEST_DATABASE_URL").ok()?;
-        let pool = PgPoolOptions::new().max_connections(1).connect(&dsn).await.unwrap();
-        sqlx::query(&format!("DROP SCHEMA IF EXISTS {schema} CASCADE")).execute(&pool).await.unwrap();
-        sqlx::query(&format!("CREATE SCHEMA {schema}")).execute(&pool).await.unwrap();
-        sqlx::query(&format!("SET search_path TO {schema}")).execute(&pool).await.unwrap();
+        let pool = PgPoolOptions::new()
+            .max_connections(1)
+            .connect(&dsn)
+            .await
+            .unwrap();
+        sqlx::query(&format!("DROP SCHEMA IF EXISTS {schema} CASCADE"))
+            .execute(&pool)
+            .await
+            .unwrap();
+        sqlx::query(&format!("CREATE SCHEMA {schema}"))
+            .execute(&pool)
+            .await
+            .unwrap();
+        sqlx::query(&format!("SET search_path TO {schema}"))
+            .execute(&pool)
+            .await
+            .unwrap();
         sqlx::query(
             r#"CREATE TABLE twitch_billing_subscriptions (
                    stripe_subscription_id TEXT PRIMARY KEY, stripe_customer_id TEXT,
@@ -484,13 +528,19 @@ mod tests {
                    cancel_at_period_end INTEGER NOT NULL DEFAULT 0, canceled_at TEXT, ended_at TEXT,
                    last_event_id TEXT, updated_at TEXT NOT NULL
                )"#,
-        ).execute(&pool).await.unwrap();
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
         sqlx::query(
             r#"CREATE TABLE streamer_plans (
                    twitch_user_id TEXT PRIMARY KEY, twitch_login TEXT,
                    plan_name TEXT NOT NULL DEFAULT 'free', expires_at TEXT
                )"#,
-        ).execute(&pool).await.unwrap();
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
         sqlx::query(
             r#"CREATE TABLE twitch_streamers_partner_state (twitch_login TEXT, twitch_user_id TEXT)"#,
         ).execute(&pool).await.unwrap();
@@ -505,12 +555,18 @@ mod tests {
             r#"CREATE TABLE affiliate_streamer_claims (
                    affiliate_twitch_login TEXT, claimed_streamer_login TEXT
                )"#,
-        ).execute(&pool).await.unwrap();
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
         sqlx::query(
             r#"CREATE TABLE affiliate_accounts (
                    twitch_login TEXT PRIMARY KEY, stripe_account_id TEXT
                )"#,
-        ).execute(&pool).await.unwrap();
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
         sqlx::query(
             r#"CREATE TABLE affiliate_commissions (
                    id INTEGER GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
@@ -522,15 +578,22 @@ mod tests {
                    period_start TEXT, period_end TEXT, created_at TEXT NOT NULL,
                    transferred_at TEXT, error_message TEXT
                )"#,
-        ).execute(&pool).await.unwrap();
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
         Some(pool)
     }
 
     #[tokio::test]
     async fn valid_subscription_created_sets_plan_and_200() {
-        let Some(pool) = pool_or_skip("h_sub_created").await else { return };
+        let Some(pool) = pool_or_skip("h_sub_created").await else {
+            return;
+        };
         sqlx::query("INSERT INTO twitch_streamers_partner_state VALUES ('login','99')")
-            .execute(&pool).await.unwrap();
+            .execute(&pool)
+            .await
+            .unwrap();
         let payload = br#"{"id":"evt_h1","type":"customer.subscription.created","livemode":false,"data":{"object":{"id":"sub_h","customer":"cus","status":"active","metadata":{"customer_reference":"login","plan_id":"raid_boost"},"items":{"data":[{"price":{"recurring":{"interval":"month","interval_count":1}}}]}}}}"#;
         let ts = chrono::Utc::now().timestamp();
         let resp = stripe_webhook_handler(
@@ -542,14 +605,19 @@ mod tests {
         .await
         .into_response();
         assert_eq!(resp.status(), StatusCode::OK);
-        let plan: (String,) = sqlx::query_as("SELECT plan_name FROM streamer_plans WHERE twitch_user_id='99'")
-            .fetch_one(&pool).await.unwrap();
+        let plan: (String,) =
+            sqlx::query_as("SELECT plan_name FROM streamer_plans WHERE twitch_user_id='99'")
+                .fetch_one(&pool)
+                .await
+                .unwrap();
         assert_eq!(plan.0, "raid_boost");
     }
 
     #[tokio::test]
     async fn invalid_signature_returns_400_no_db_write() {
-        let Some(pool) = pool_or_skip("h_bad_sig").await else { return };
+        let Some(pool) = pool_or_skip("h_bad_sig").await else {
+            return;
+        };
         let payload = br#"{"id":"evt_bad","type":"customer.subscription.created","data":{"object":{"id":"sub"}}}"#;
         let ts = chrono::Utc::now().timestamp();
         // Mit FALSCHEM Secret signiert → Verifikation schlägt fehl.
@@ -564,58 +632,113 @@ mod tests {
         assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
         // KEINE Event-Zeile geschrieben.
         let count: (i64,) = sqlx::query_as("SELECT COUNT(*) FROM twitch_billing_events")
-            .fetch_one(&pool).await.unwrap();
+            .fetch_one(&pool)
+            .await
+            .unwrap();
         assert_eq!(count.0, 0, "ungültige Signatur darf nichts schreiben");
     }
 
     #[tokio::test]
     async fn replay_same_event_id_no_double_apply() {
-        let Some(pool) = pool_or_skip("h_replay").await else { return };
+        let Some(pool) = pool_or_skip("h_replay").await else {
+            return;
+        };
         sqlx::query("INSERT INTO twitch_streamers_partner_state VALUES ('l','5')")
-            .execute(&pool).await.unwrap();
+            .execute(&pool)
+            .await
+            .unwrap();
         let payload = br#"{"id":"evt_replay","type":"customer.subscription.created","data":{"object":{"id":"sub_r","customer":"c","status":"active","metadata":{"customer_reference":"l","plan_id":"raid_boost"},"items":{"data":[{"price":{"recurring":{"interval":"month","interval_count":1}}}]}}}}"#;
         let ts = chrono::Utc::now().timestamp();
         let header = sign(payload, ts, SECRET);
         // 1. Mal → processed.
-        let r1 = stripe_webhook_handler(State(pool.clone()), Some(Extension(cfg())), headers_with(Some(&header)), Bytes::from_static(payload)).await.into_response();
+        let r1 = stripe_webhook_handler(
+            State(pool.clone()),
+            Some(Extension(cfg())),
+            headers_with(Some(&header)),
+            Bytes::from_static(payload),
+        )
+        .await
+        .into_response();
         assert_eq!(r1.status(), StatusCode::OK);
         // 2. Mal (Replay) → 200, aber duplicate.
-        let r2 = stripe_webhook_handler(State(pool.clone()), Some(Extension(cfg())), headers_with(Some(&header)), Bytes::from_static(payload)).await.into_response();
+        let r2 = stripe_webhook_handler(
+            State(pool.clone()),
+            Some(Extension(cfg())),
+            headers_with(Some(&header)),
+            Bytes::from_static(payload),
+        )
+        .await
+        .into_response();
         assert_eq!(r2.status(), StatusCode::OK);
-        let body = axum::body::to_bytes(r2.into_body(), usize::MAX).await.unwrap();
+        let body = axum::body::to_bytes(r2.into_body(), usize::MAX)
+            .await
+            .unwrap();
         let v: Value = serde_json::from_slice(&body).unwrap();
         assert_eq!(v["status"], "duplicate");
         // Genau eine Event-Zeile.
-        let count: (i64,) = sqlx::query_as("SELECT COUNT(*) FROM twitch_billing_events WHERE stripe_event_id='evt_replay'")
-            .fetch_one(&pool).await.unwrap();
+        let count: (i64,) = sqlx::query_as(
+            "SELECT COUNT(*) FROM twitch_billing_events WHERE stripe_event_id='evt_replay'",
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap();
         assert_eq!(count.0, 1);
     }
 
     #[tokio::test]
     async fn unknown_event_type_returns_200_noop() {
-        let Some(pool) = pool_or_skip("h_unknown").await else { return };
+        let Some(pool) = pool_or_skip("h_unknown").await else {
+            return;
+        };
         let payload = br#"{"id":"evt_u","type":"customer.created","data":{"object":{"id":"x"}}}"#;
         let ts = chrono::Utc::now().timestamp();
-        let resp = stripe_webhook_handler(State(pool.clone()), Some(Extension(cfg())), headers_with(Some(&sign(payload, ts, SECRET))), Bytes::from_static(payload)).await.into_response();
+        let resp = stripe_webhook_handler(
+            State(pool.clone()),
+            Some(Extension(cfg())),
+            headers_with(Some(&sign(payload, ts, SECRET))),
+            Bytes::from_static(payload),
+        )
+        .await
+        .into_response();
         assert_eq!(resp.status(), StatusCode::OK);
-        let body = axum::body::to_bytes(resp.into_body(), usize::MAX).await.unwrap();
+        let body = axum::body::to_bytes(resp.into_body(), usize::MAX)
+            .await
+            .unwrap();
         let v: Value = serde_json::from_slice(&body).unwrap();
         assert_eq!(v["action"], "ignored_unsupported_event");
     }
 
     #[tokio::test]
     async fn missing_signature_returns_400() {
-        let Some(pool) = pool_or_skip("h_nosig").await else { return };
+        let Some(pool) = pool_or_skip("h_nosig").await else {
+            return;
+        };
         let payload = br#"{"id":"e","type":"x","data":{"object":{}}}"#;
-        let resp = stripe_webhook_handler(State(pool.clone()), Some(Extension(cfg())), headers_with(None), Bytes::from_static(payload)).await.into_response();
+        let resp = stripe_webhook_handler(
+            State(pool.clone()),
+            Some(Extension(cfg())),
+            headers_with(None),
+            Bytes::from_static(payload),
+        )
+        .await
+        .into_response();
         assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
     }
 
     #[tokio::test]
     async fn unconfigured_returns_503() {
-        let Some(pool) = pool_or_skip("h_unconfig").await else { return };
+        let Some(pool) = pool_or_skip("h_unconfig").await else {
+            return;
+        };
         let payload = br#"{}"#;
-        let resp = stripe_webhook_handler(State(pool.clone()), None, headers_with(Some("t=1,v1=ab")), Bytes::from_static(payload)).await.into_response();
+        let resp = stripe_webhook_handler(
+            State(pool.clone()),
+            None,
+            headers_with(Some("t=1,v1=ab")),
+            Bytes::from_static(payload),
+        )
+        .await
+        .into_response();
         assert_eq!(resp.status(), StatusCode::SERVICE_UNAVAILABLE);
     }
 
@@ -648,7 +771,9 @@ mod tests {
 
     #[tokio::test]
     async fn invoice_payment_verbucht_affiliate_provision() {
-        let Some(pool) = pool_or_skip("h_invoice_commission").await else { return };
+        let Some(pool) = pool_or_skip("h_invoice_commission").await else {
+            return;
+        };
         // Abo verknüpft Customer→Streamer, Streamer ist von einem Affiliate geworben.
         sqlx::query("INSERT INTO twitch_billing_subscriptions (stripe_subscription_id, stripe_customer_id, customer_reference, updated_at) VALUES ('sub_c','cus_c','StreamerX','now')")
             .execute(&pool).await.unwrap();
@@ -676,7 +801,9 @@ mod tests {
 
     #[tokio::test]
     async fn invoice_replay_verbucht_keine_doppelte_provision() {
-        let Some(pool) = pool_or_skip("h_invoice_replay_commission").await else { return };
+        let Some(pool) = pool_or_skip("h_invoice_replay_commission").await else {
+            return;
+        };
         sqlx::query("INSERT INTO twitch_billing_subscriptions (stripe_subscription_id, stripe_customer_id, customer_reference, updated_at) VALUES ('sub_r','cus_r','StreamerY','now')")
             .execute(&pool).await.unwrap();
         sqlx::query("INSERT INTO affiliate_streamer_claims (affiliate_twitch_login, claimed_streamer_login) VALUES ('aff2','streamery')")
@@ -684,14 +811,93 @@ mod tests {
         let payload = br#"{"id":"evt_inv_r","type":"invoice.payment_succeeded","livemode":false,"data":{"object":{"id":"in_r","customer":"cus_r","subscription":"sub_r","amount_paid":1000,"currency":"eur","lines":{"data":[{"period":{"start":1700000000,"end":1702000000}}]}}}}"#;
         let ts = chrono::Utc::now().timestamp();
         let header = sign(payload, ts, SECRET);
-        let r1 = stripe_webhook_handler(State(pool.clone()), Some(Extension(cfg())), headers_with(Some(&header)), Bytes::from_static(payload)).await.into_response();
+        let r1 = stripe_webhook_handler(
+            State(pool.clone()),
+            Some(Extension(cfg())),
+            headers_with(Some(&header)),
+            Bytes::from_static(payload),
+        )
+        .await
+        .into_response();
         assert_eq!(r1.status(), StatusCode::OK);
-        // Replay: Webhook-Dedup verhindert den 2. process_commission-Aufruf;
-        // selbst ohne das wäre die UNIQUE auf stripe_event_id idempotent.
-        let r2 = stripe_webhook_handler(State(pool.clone()), Some(Extension(cfg())), headers_with(Some(&header)), Bytes::from_static(payload)).await.into_response();
+        // Replay: Billing-Dedup meldet duplicate, der Commission-Pfad läuft trotzdem
+        // idempotent und nutzt die UNIQUE auf stripe_event_id.
+        let r2 = stripe_webhook_handler(
+            State(pool.clone()),
+            Some(Extension(cfg())),
+            headers_with(Some(&header)),
+            Bytes::from_static(payload),
+        )
+        .await
+        .into_response();
         assert_eq!(r2.status(), StatusCode::OK);
-        let count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM affiliate_commissions WHERE stripe_event_id='evt_inv_r'")
-            .fetch_one(&pool).await.unwrap();
+        let count: i64 = sqlx::query_scalar(
+            "SELECT COUNT(*) FROM affiliate_commissions WHERE stripe_event_id='evt_inv_r'",
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap();
         assert_eq!(count, 1, "genau eine Provisions-Zeile trotz Replay");
+    }
+
+    #[tokio::test]
+    async fn invoice_duplicate_billing_event_holt_fehlende_commission_und_transfer_nach() {
+        let Some(pool) = pool_or_skip("h_invoice_duplicate_recovers_commission").await else {
+            return;
+        };
+        sqlx::query("INSERT INTO twitch_billing_subscriptions (stripe_subscription_id, stripe_customer_id, customer_reference, updated_at) VALUES ('sub_lost','cus_lost','StreamerLost','now')")
+            .execute(&pool).await.unwrap();
+        sqlx::query("INSERT INTO affiliate_streamer_claims (affiliate_twitch_login, claimed_streamer_login) VALUES ('afflost','streamerlost')")
+            .execute(&pool).await.unwrap();
+        sqlx::query("INSERT INTO affiliate_accounts (twitch_login, stripe_account_id) VALUES ('afflost','acct_lost')")
+            .execute(&pool).await.unwrap();
+        let payload = br#"{"id":"evt_inv_lost","type":"invoice.payment_succeeded","livemode":false,"data":{"object":{"id":"in_lost","customer":"cus_lost","subscription":"sub_lost","amount_paid":1000,"currency":"eur","lines":{"data":[{"period":{"start":1700000000,"end":1702000000}}]}}}}"#;
+        sqlx::query(
+            "INSERT INTO twitch_billing_events (stripe_event_id, event_type, object_id, received_at, livemode, payload) VALUES ('evt_inv_lost', 'invoice.payment_succeeded', 'in_lost', 'now', 0, $1)",
+        )
+        .bind(std::str::from_utf8(payload).unwrap())
+        .execute(&pool)
+        .await
+        .unwrap();
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/v1/transfers"))
+            .and(header("Idempotency-Key", "affiliate-transfer:1"))
+            .and(body_string_contains("amount=300"))
+            .and(body_string_contains("destination=acct_lost"))
+            .and(body_string_contains("transfer_group=evt_inv_lost"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "id": "tr_lost"
+            })))
+            .expect(1)
+            .mount(&server)
+            .await;
+        let client = StripeClient::new("sk_test_secret")
+            .unwrap()
+            .with_api_base(server.uri());
+        let ts = chrono::Utc::now().timestamp();
+        let header = sign(payload, ts, SECRET);
+
+        let resp = stripe_webhook_handler(
+            State(pool.clone()),
+            Some(Extension(cfg_with_client(client))),
+            headers_with(Some(&header)),
+            Bytes::from_static(payload),
+        )
+        .await
+        .into_response();
+        assert_eq!(resp.status(), StatusCode::OK);
+        let body = axum::body::to_bytes(resp.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let v: Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(v["status"], "duplicate");
+
+        let (status, transfer_id, commission): (String, Option<String>, i32) = sqlx::query_as(
+            "SELECT status, stripe_transfer_id, commission_cents FROM affiliate_commissions WHERE stripe_event_id='evt_inv_lost'",
+        ).fetch_one(&pool).await.unwrap();
+        assert_eq!(status, "transferred");
+        assert_eq!(transfer_id.as_deref(), Some("tr_lost"));
+        assert_eq!(commission, 300);
     }
 }

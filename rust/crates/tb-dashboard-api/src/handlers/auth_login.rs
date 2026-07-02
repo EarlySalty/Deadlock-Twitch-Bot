@@ -899,6 +899,7 @@ mod tests {
             twitch_login: login.to_string(),
             twitch_user_id: uid.to_string(),
             display_name: format!("Display {login}"),
+            email: String::new(),
         }
     }
 

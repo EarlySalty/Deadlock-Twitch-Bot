@@ -60,6 +60,8 @@ chrono = { version = "0.4", features = ["serde"] }
 chrono-tz = "0.10"
 uuid = { version = "1", features = ["v4"] }
 wiremock = "0.6"
+printpdf = { version = "0.9.1", default-features = false }
+lettre = { version = "0.11.22", default-features = false, features = ["builder", "smtp-transport", "rustls-tls", "hostname"] }
 tb-error = { path = "crates/tb-error" }
 tb-crypto = { path = "crates/tb-crypto" }
 tb-domain = { path = "crates/tb-domain" }

@@ -86,6 +86,7 @@ pub struct TwitchIdentity {
     pub twitch_login: String,
     pub twitch_user_id: String,
     pub display_name: String,
+    pub email: String,
 }
 
 /// Abstrahiert den Twitch-OAuth-HTTP-Pfad (Code→Token→User), damit der Handler
@@ -138,6 +139,7 @@ impl TwitchOAuthClient for HelixOAuthClient {
             twitch_login: owner.login,
             twitch_user_id: owner.id,
             display_name: owner.display_name,
+            email: owner.email,
         })
     }
 }

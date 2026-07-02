@@ -11,7 +11,7 @@
 //! selbst werden NICHT ausgegeben.
 
 use serde_json::{json, Value};
-use sqlx::PgPool;
+use sqlx::{PgPool, Row};
 use tb_crypto::FieldCipher;
 
 const REQUIRED_GUTSCHRIFT_FIELDS: [&str; 6] = [
@@ -22,7 +22,11 @@ const REQUIRED_GUTSCHRIFT_FIELDS: [&str; 6] = [
     "address_zip",
     "address_country",
 ];
-const VALID_UST_STATUS: [&str; 3] = ["kleinunternehmer", "regelbesteuert", "unknown"];
+pub const VALID_UST_STATUS: [&str; 3] = ["kleinunternehmer", "regelbesteuert", "unknown"];
+
+pub fn is_valid_ust_status(value: &str) -> bool {
+    VALID_UST_STATUS.contains(&value.trim().to_lowercase().as_str())
+}
 
 fn field_label(field: &str) -> &'static str {
     match field {
@@ -45,7 +49,7 @@ fn pii_aad(field: &str, login: &str) -> String {
 
 fn normalize_ust_status(value: &str) -> String {
     let n = value.trim().to_lowercase();
-    if VALID_UST_STATUS.contains(&n.as_str()) {
+    if is_valid_ust_status(&n) {
         n
     } else {
         "unknown".to_string()
@@ -191,8 +195,8 @@ pub async fn load_affiliate_pii(
     cipher: &FieldCipher,
     login: &str,
 ) -> Result<PiiPayload, PiiError> {
-    let row: Option<PiiRow> = sqlx::query_as!(
-        PiiRow,
+    let normalized_login = login.trim().to_lowercase();
+    let row: Option<PiiRow> = sqlx::query_as::<_, PiiRow>(
         r#"
         SELECT full_name_enc,
                email_enc,
@@ -200,14 +204,16 @@ pub async fn load_affiliate_pii(
                address_city_enc,
                address_zip_enc,
                tax_id_enc,
-               address_country AS "address_country?",
-               ust_status AS "ust_status?",
-               updated_at AS "updated_at?"
+               address_country,
+               ust_status,
+               updated_at
         FROM affiliate_pii
-        WHERE twitch_login = $1
+        WHERE LOWER(twitch_login) = LOWER($1)
+        ORDER BY CASE WHEN twitch_login = $1 THEN 0 ELSE 1 END
+        LIMIT 1
         "#,
-        login
     )
+    .bind(&normalized_login)
     .fetch_optional(pool)
     .await
     .map_err(PiiError::Db)?;
@@ -217,16 +223,26 @@ pub async fn load_affiliate_pii(
     };
 
     let (tax_id, vat_id) = {
-        let raw = decrypt_blob(cipher, r.tax_id_enc, "tax_id", login)?;
+        let raw = decrypt_blob(cipher, r.tax_id_enc, "tax_id", &normalized_login)?;
         deserialize_tax_bundle(&raw)
     };
 
     Ok(PiiPayload {
-        full_name: decrypt_blob(cipher, r.full_name_enc, "full_name", login)?,
-        email: decrypt_blob(cipher, r.email_enc, "email", login)?,
-        address_line1: decrypt_blob(cipher, r.address_line1_enc, "address_line1", login)?,
-        address_city: decrypt_blob(cipher, r.address_city_enc, "address_city", login)?,
-        address_zip: decrypt_blob(cipher, r.address_zip_enc, "address_zip", login)?,
+        full_name: decrypt_blob(cipher, r.full_name_enc, "full_name", &normalized_login)?,
+        email: decrypt_blob(cipher, r.email_enc, "email", &normalized_login)?,
+        address_line1: decrypt_blob(
+            cipher,
+            r.address_line1_enc,
+            "address_line1",
+            &normalized_login,
+        )?,
+        address_city: decrypt_blob(
+            cipher,
+            r.address_city_enc,
+            "address_city",
+            &normalized_login,
+        )?,
+        address_zip: decrypt_blob(cipher, r.address_zip_enc, "address_zip", &normalized_login)?,
         tax_id,
         vat_id,
         address_country: normalize_country(&r.address_country.unwrap_or_default()),
@@ -257,6 +273,7 @@ pub struct PiiInput {
 /// Roh-Bestand (verschlüsselte Blobs + Klar-Spalten) für den Save-Merge.
 #[derive(sqlx::FromRow)]
 struct PiiExistingRow {
+    twitch_login: String,
     full_name_enc: Option<Vec<u8>>,
     email_enc: Option<Vec<u8>>,
     address_line1_enc: Option<Vec<u8>>,
@@ -299,25 +316,51 @@ pub async fn save_affiliate_pii(
     login: &str,
     input: &PiiInput,
 ) -> Result<(), PiiError> {
-    let existing: Option<PiiExistingRow> = sqlx::query_as!(
-        PiiExistingRow,
+    save_affiliate_pii_with_storage_login(pool, cipher, login, login, input).await
+}
+
+async fn save_affiliate_pii_with_storage_login(
+    pool: &PgPool,
+    cipher: &FieldCipher,
+    storage_login_hint: &str,
+    aad_login: &str,
+    input: &PiiInput,
+) -> Result<(), PiiError> {
+    let normalized_login = aad_login.trim().to_lowercase();
+    let storage_login_hint = storage_login_hint.trim();
+    let existing: Option<PiiExistingRow> = sqlx::query_as::<_, PiiExistingRow>(
         r#"
-        SELECT full_name_enc,
+        SELECT twitch_login,
+               full_name_enc,
                email_enc,
                address_line1_enc,
                address_city_enc,
                address_zip_enc,
                tax_id_enc,
-               address_country AS "address_country?",
-               ust_status AS "ust_status?"
+               address_country,
+               ust_status
         FROM affiliate_pii
-        WHERE twitch_login = $1
+        WHERE LOWER(twitch_login) = LOWER($1)
+        ORDER BY CASE WHEN twitch_login = $2 THEN 0 WHEN twitch_login = $1 THEN 1 ELSE 2 END
+        LIMIT 1
         "#,
-        login
     )
+    .bind(&normalized_login)
+    .bind(storage_login_hint)
     .fetch_optional(pool)
     .await
     .map_err(PiiError::Db)?;
+    let storage_login = existing
+        .as_ref()
+        .map(|row| row.twitch_login.trim().to_string())
+        .filter(|value| !value.is_empty())
+        .unwrap_or_else(|| {
+            if storage_login_hint.is_empty() {
+                normalized_login.clone()
+            } else {
+                storage_login_hint.to_string()
+            }
+        });
 
     // Encrypted Stamm-Felder mergen (Bestand-Fallback bei fehlendem Key).
     let take = |b: &Option<PiiExistingRow>, f: fn(&PiiExistingRow) -> &Option<Vec<u8>>| {
@@ -328,35 +371,35 @@ pub async fn save_affiliate_pii(
         input.full_name.as_ref(),
         take(&existing, |r| &r.full_name_enc),
         "full_name",
-        login,
+        &normalized_login,
     )?;
     let email_enc = encrypt_or_keep(
         cipher,
         input.email.as_ref(),
         take(&existing, |r| &r.email_enc),
         "email",
-        login,
+        &normalized_login,
     )?;
     let address_line1_enc = encrypt_or_keep(
         cipher,
         input.address_line1.as_ref(),
         take(&existing, |r| &r.address_line1_enc),
         "address_line1",
-        login,
+        &normalized_login,
     )?;
     let address_city_enc = encrypt_or_keep(
         cipher,
         input.address_city.as_ref(),
         take(&existing, |r| &r.address_city_enc),
         "address_city",
-        login,
+        &normalized_login,
     )?;
     let address_zip_enc = encrypt_or_keep(
         cipher,
         input.address_zip.as_ref(),
         take(&existing, |r| &r.address_zip_enc),
         "address_zip",
-        login,
+        &normalized_login,
     )?;
 
     // Tax-Bundle (tax_id + vat_id) zusammenführen — Bestand entschlüsseln, mit
@@ -367,7 +410,7 @@ pub async fn save_affiliate_pii(
         let (mut tax, mut vat) = match &existing_tax_blob {
             Some(b) if !b.is_empty() => {
                 let raw = cipher
-                    .decrypt_field(b, &pii_aad("tax_id", login))
+                    .decrypt_field(b, &pii_aad("tax_id", &normalized_login))
                     .map_err(|e| PiiError::Decrypt(e.to_string()))?;
                 deserialize_tax_bundle(&raw)
             }
@@ -385,7 +428,7 @@ pub async fn save_affiliate_pii(
         } else {
             Some(
                 cipher
-                    .encrypt_field(&serialized, &pii_aad("tax_id", login))
+                    .encrypt_field(&serialized, &pii_aad("tax_id", &normalized_login))
                     .map_err(|e| PiiError::Decrypt(e.to_string()))?,
             )
         }
@@ -429,7 +472,7 @@ pub async fn save_affiliate_pii(
             ust_status = excluded.ust_status,
             updated_at = excluded.updated_at
         "#,
-        login,
+        &storage_login,
         full_name_enc,
         email_enc,
         address_line1_enc,
@@ -444,6 +487,87 @@ pub async fn save_affiliate_pii(
     .await
     .map_err(PiiError::Db)?;
     Ok(())
+}
+
+/// Migriert alte Klartext-PII aus `affiliate_accounts` nach `affiliate_pii`
+/// und leert anschließend die Klartext-Spalten (Python `migrate_from_plaintext`).
+pub async fn migrate_from_plaintext(pool: &PgPool, cipher: &FieldCipher) -> Result<u64, PiiError> {
+    let rows = sqlx::query(
+        r#"
+        SELECT a.twitch_login, a.email, a.full_name, a.address_line1, a.address_city,
+               a.address_zip, a.address_country
+        FROM affiliate_accounts a
+        LEFT JOIN affiliate_pii p
+          ON LOWER(p.twitch_login) = LOWER(a.twitch_login)
+        WHERE p.twitch_login IS NULL
+          AND (
+            TRIM(COALESCE(a.email, '')) <> ''
+            OR TRIM(COALESCE(a.full_name, '')) <> ''
+            OR TRIM(COALESCE(a.address_line1, '')) <> ''
+            OR TRIM(COALESCE(a.address_city, '')) <> ''
+            OR TRIM(COALESCE(a.address_zip, '')) <> ''
+            OR TRIM(COALESCE(a.address_country, '')) <> ''
+          )
+        "#,
+    )
+    .fetch_all(pool)
+    .await
+    .map_err(PiiError::Db)?;
+
+    let mut migrated = 0_u64;
+    for row in rows {
+        let account_login = row
+            .try_get::<Option<String>, _>("twitch_login")
+            .map_err(PiiError::Db)?
+            .unwrap_or_default()
+            .trim()
+            .to_string();
+        if account_login.is_empty() {
+            continue;
+        }
+        let normalized_login = account_login.to_lowercase();
+        let value = |name: &str| -> Result<String, PiiError> {
+            Ok(row
+                .try_get::<Option<String>, _>(name)
+                .map_err(PiiError::Db)?
+                .unwrap_or_default())
+        };
+        let input = PiiInput {
+            email: Some(value("email")?),
+            full_name: Some(value("full_name")?),
+            address_line1: Some(value("address_line1")?),
+            address_city: Some(value("address_city")?),
+            address_zip: Some(value("address_zip")?),
+            address_country: Some(value("address_country")?),
+            ..PiiInput::default()
+        };
+        save_affiliate_pii_with_storage_login(
+            pool,
+            cipher,
+            &account_login,
+            &normalized_login,
+            &input,
+        )
+        .await?;
+        sqlx::query(
+            r#"
+            UPDATE affiliate_accounts
+            SET email = '',
+                full_name = '',
+                address_line1 = '',
+                address_city = '',
+                address_zip = '',
+                address_country = ''
+            WHERE twitch_login = $1
+            "#,
+        )
+        .bind(&account_login)
+        .execute(pool)
+        .await
+        .map_err(PiiError::Db)?;
+        migrated += 1;
+    }
+    Ok(migrated)
 }
 
 /// Fehlende Pflichtfelder für die Gutschrift-Generierung (Python `missing_gutschrift_fields`).
@@ -658,6 +782,75 @@ mod tests {
         assert_eq!(pii.ust_status, "unknown");
         assert_eq!(pii.address_country, "DE");
         assert!(pii.full_name.is_empty());
+    }
+
+    #[tokio::test]
+    async fn migrate_from_plaintext_verschiebt_und_leert_account_spalten() {
+        let Some(pool) = connect("t_pii_migrate").await else {
+            return;
+        };
+        sqlx::query(
+            r#"
+            CREATE TABLE affiliate_accounts (
+                twitch_login TEXT PRIMARY KEY,
+                email TEXT NOT NULL,
+                full_name TEXT NOT NULL,
+                address_line1 TEXT NOT NULL,
+                address_city TEXT NOT NULL,
+                address_zip TEXT NOT NULL,
+                address_country TEXT NOT NULL DEFAULT ''
+            )
+            "#,
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+        sqlx::query(
+            r#"
+            INSERT INTO affiliate_accounts
+                (twitch_login, email, full_name, address_line1, address_city, address_zip, address_country)
+            VALUES ('Affiliate_One', 'legacy@example.com', 'Legacy Partner', 'Altbau 5', 'Hamburg', '20095', 'DE')
+            "#,
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+
+        let cipher = test_cipher();
+        assert_eq!(migrate_from_plaintext(&pool, &cipher).await.unwrap(), 1);
+        let pii = load_affiliate_pii(&pool, &cipher, "affiliate_one")
+            .await
+            .unwrap();
+        assert_eq!(pii.email, "legacy@example.com");
+        assert_eq!(pii.full_name, "Legacy Partner");
+        assert_eq!(pii.address_line1, "Altbau 5");
+        assert_eq!(pii.address_city, "Hamburg");
+        assert_eq!(pii.address_zip, "20095");
+        assert_eq!(pii.address_country, "DE");
+        let pii_key: String = sqlx::query_scalar(
+            "SELECT twitch_login FROM affiliate_pii WHERE LOWER(twitch_login) = LOWER('affiliate_one')",
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert_eq!(pii_key, "Affiliate_One");
+        let row = sqlx::query(
+            "SELECT email, full_name, address_line1, address_city, address_zip, address_country FROM affiliate_accounts WHERE twitch_login = 'Affiliate_One'",
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        for column in [
+            "email",
+            "full_name",
+            "address_line1",
+            "address_city",
+            "address_zip",
+            "address_country",
+        ] {
+            assert_eq!(row.try_get::<String, _>(column).unwrap(), "");
+        }
+        assert_eq!(migrate_from_plaintext(&pool, &cipher).await.unwrap(), 0);
     }
 
     // ── Save-Pfad (B2-P1-affiliate-pii-write) ───────────────────────────────

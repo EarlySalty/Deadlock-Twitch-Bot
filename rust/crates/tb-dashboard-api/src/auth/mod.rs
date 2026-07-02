@@ -42,7 +42,9 @@ pub(crate) use streamer_scope::resolve_streamer_scope;
 // Migriert aus dem früheren auth.rs (IDOR-Guard + Plan-Gating)
 // ---------------------------------------------------------------------------
 
-use axum::http::StatusCode;
+use axum::body::Body;
+use axum::http::{Method, Request, StatusCode};
+use axum::middleware::Next;
 use axum::response::{IntoResponse, Response};
 use axum::Json;
 use serde_json::json;
@@ -90,6 +92,26 @@ pub fn require_admin(auth: &DashboardAuthLevel) -> Option<ApiError> {
     } else {
         Some(auth_required_error())
     }
+}
+
+fn is_write_method(method: &Method) -> bool {
+    matches!(
+        *method,
+        Method::POST | Method::PUT | Method::PATCH | Method::DELETE
+    )
+}
+
+pub async fn require_admin_before_csrf(
+    auth: DashboardAuthLevel,
+    request: Request<Body>,
+    next: Next,
+) -> Response {
+    if is_write_method(request.method()) {
+        if let Some(error) = require_admin(&auth) {
+            return error.into_response();
+        }
+    }
+    next.run(request).await
 }
 
 pub fn admin_required_response() -> Response {
