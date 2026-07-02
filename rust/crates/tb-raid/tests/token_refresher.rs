@@ -10,8 +10,8 @@ use sqlx::postgres::{PgConnectOptions, PgPoolOptions};
 use sqlx::PgPool;
 use tb_crypto::{aad, FieldCipher, KID};
 use tb_raid::{
-    RaidAuthStore, RaidTokenRefresher, RefreshError, RefreshOutcome, TokenBlacklist, TokenOwnerInfo, TokenResponse,
-    TwitchTokenClient,
+    RaidAuthStore, RaidTokenRefresher, RefreshError, RefreshOutcome, TokenBlacklist,
+    TokenOwnerInfo, TokenResponse, TwitchTokenClient,
 };
 
 const TEST_KEY_HEX: &str = "0f0e0d0c0b0a09080706050403020100ffeeddccbbaa99887766554433221100";
@@ -253,7 +253,10 @@ async fn refresh_all_due_kurzschliesst_bei_client_auth_block() {
     );
 
     let refreshed = refresher.refresh_all_due(Utc::now()).await.unwrap();
-    assert_eq!(refreshed, 0, "Sweep muss bei invalid_client-Cooldown 0 liefern");
+    assert_eq!(
+        refreshed, 0,
+        "Sweep muss bei invalid_client-Cooldown 0 liefern"
+    );
     // Klartext-Spalte unverändert (kein 'ENC'-Write → kein Refresh passiert).
     let acc_plain: Option<String> =
         sqlx::query_scalar("SELECT access_token FROM twitch_raid_auth WHERE twitch_user_id = '42'")

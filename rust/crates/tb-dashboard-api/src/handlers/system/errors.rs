@@ -19,7 +19,8 @@ use axum::{extract::Query, response::IntoResponse, Json};
 use regex::Regex;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
-use tb_http_core::{ApiError, AuthLevel};
+use crate::auth::level::DashboardAuthLevel;
+use tb_http_core::ApiError;
 
 // ── Konstanten (Python api_admin.py:69-70) ───────────────────────────────────
 
@@ -74,11 +75,11 @@ struct ErrorEntry {
 
 /// `GET /twitch/api/admin/system/errors[?page=1&page_size=25]`
 pub async fn errors_handler(
-    auth: AuthLevel,
+    auth: DashboardAuthLevel,
     Query(params): Query<ErrorsParams>,
 ) -> Result<impl IntoResponse, ApiError> {
-    if !auth.is_privileged() {
-        return Err(ApiError::unauthorized());
+    if let Some(err) = crate::auth::require_admin(&auth) {
+        return Err(err);
     }
 
     let page = params.page.max(1);

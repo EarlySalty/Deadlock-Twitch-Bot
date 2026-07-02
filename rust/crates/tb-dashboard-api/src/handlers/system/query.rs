@@ -10,6 +10,7 @@
 //! Python-Vorbild: `bot/analytics/api_admin.py::_api_admin_system_query`
 //! + `_run_admin_readonly_query`.
 
+use crate::auth::level::DashboardAuthLevel;
 use axum::{
     extract::{Query, State},
     http::StatusCode,
@@ -20,7 +21,6 @@ use serde::Deserialize;
 use serde_json::{json, Value};
 use sqlx::PgPool;
 use sqlx::{Column, Row, TypeInfo};
-use tb_http_core::AuthLevel;
 
 const MAX_ROWS: usize = 200;
 
@@ -97,12 +97,12 @@ fn contains_word(haystack: &str, word: &str) -> bool {
 
 /// `GET /twitch/api/admin/system/query`
 pub async fn query_handler(
-    auth: AuthLevel,
+    auth: DashboardAuthLevel,
     State(pool): State<PgPool>,
     Query(params): Query<QueryParams>,
 ) -> impl IntoResponse {
-    if !auth.is_privileged() {
-        return err(StatusCode::UNAUTHORIZED, "unauthorized");
+    if let Some(err) = crate::auth::require_admin(&auth) {
+        return err.into_response();
     }
 
     let sql = params.sql.unwrap_or_default();

@@ -2,10 +2,10 @@
 //! wurden. Python läuft nicht mehr — diese Handler ersetzen die Legacy-Routen.
 
 use axum::{
-    Extension, Json,
     extract::{Path, State},
     http::{HeaderMap, StatusCode},
     response::IntoResponse,
+    Extension, Json,
 };
 use chrono::Utc;
 use serde::Deserialize;
@@ -157,11 +157,18 @@ pub async fn eventsub_requeue_handler(
     State(pool): State<PgPool>,
     body: Option<Json<RequeueBody>>,
 ) -> impl IntoResponse {
-    let work_id = body.and_then(|b| b.work_id.clone()).unwrap_or_default();
-    if work_id.trim().is_empty() {
+    let work_id = body
+        .and_then(|b| b.work_id.clone())
+        .unwrap_or_default()
+        .trim()
+        .to_string();
+    if work_id.is_empty() {
         return (
             StatusCode::BAD_REQUEST,
-            Json(serde_json::json!({"ok": false, "error": "work_id_required"})),
+            Json(serde_json::json!({
+                "error": "bad_request",
+                "message": "invalid request body"
+            })),
         );
     }
     match ProcessingInboxStore::new(pool)
@@ -173,14 +180,20 @@ pub async fn eventsub_requeue_handler(
             Json(serde_json::json!({"ok": true, "requeued": 1, "work_id": work_id})),
         ),
         Ok(false) => (
-            StatusCode::NOT_FOUND,
-            Json(serde_json::json!({"ok": false, "requeued": 0, "work_id": work_id})),
+            StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({
+                "error": "bad_request",
+                "message": "invalid request body"
+            })),
         ),
         Err(error) => {
             tracing::error!(%error, work_id, "Dead-Letter-Requeue fehlgeschlagen");
             (
                 StatusCode::INTERNAL_SERVER_ERROR,
-                Json(serde_json::json!({"ok": false, "error": "internal_error"})),
+                Json(serde_json::json!({
+                    "error": "internal_error",
+                    "message": "failed to requeue eventsub processing entry"
+                })),
             )
         }
     }
@@ -356,15 +369,19 @@ pub async fn chat_action_handler(
                 "message": format!("Für {login} fehlt die Twitch User-ID")
             })),
         ),
-        ChatActionResult::Failed { reason } => {
+        ChatActionResult::Failed { reason, detail } => {
             tracing::warn!(login, reason, "chat-action fehlgeschlagen");
+            let mut body = serde_json::json!({
+                "ok": false,
+                "login": login,
+                "message": format!("Chat-Aktion für {login} konnte nicht gesendet werden")
+            });
+            if let Some(detail) = detail {
+                body["detail"] = serde_json::json!(detail);
+            }
             (
                 StatusCode::OK,
-                Json(serde_json::json!({
-                    "ok": false,
-                    "login": login,
-                    "message": format!("Chat-Aktion für {login} konnte nicht gesendet werden")
-                })),
+                Json(body),
             )
         }
     }
@@ -405,6 +422,121 @@ pub async fn raid_requirements_handler(
 // ---------------------------------------------------------------------------
 // Tests — chat-action gegen einen Fake-ChatActionPort (kein DB/Helix)
 // ---------------------------------------------------------------------------
+
+#[cfg(test)]
+mod eventsub_requeue_tests {
+    use super::*;
+    use axum::response::IntoResponse;
+    use sqlx::postgres::PgPoolOptions;
+
+    fn test_dsn() -> Option<String> {
+        std::env::var("TB_TEST_DATABASE_URL").ok()
+    }
+
+    async fn make_pool(dsn: &str, schema: &str, with_tables: bool) -> PgPool {
+        let pool = PgPoolOptions::new()
+            .max_connections(1)
+            .connect(dsn)
+            .await
+            .expect("connect");
+        sqlx::query(&format!("DROP SCHEMA IF EXISTS {schema} CASCADE"))
+            .execute(&pool)
+            .await
+            .expect("drop schema");
+        sqlx::query(&format!("CREATE SCHEMA {schema}"))
+            .execute(&pool)
+            .await
+            .expect("create schema");
+        sqlx::query(&format!("SET search_path TO {schema}"))
+            .execute(&pool)
+            .await
+            .expect("search_path");
+        if with_tables {
+            for ddl in [
+                "CREATE TABLE twitch_eventsub_processing_inbox (
+                    work_id TEXT PRIMARY KEY, work_type TEXT NOT NULL, message_id TEXT,
+                    payload_json TEXT NOT NULL, queued_at DOUBLE PRECISION NOT NULL,
+                    next_attempt_at DOUBLE PRECISION NOT NULL,
+                    attempt_count INTEGER NOT NULL DEFAULT 0, last_error TEXT)",
+                "CREATE TABLE twitch_eventsub_processing_dead_letter (
+                    work_id TEXT PRIMARY KEY, work_type TEXT NOT NULL, message_id TEXT,
+                    payload_json TEXT NOT NULL, queued_at DOUBLE PRECISION NOT NULL,
+                    dead_lettered_at DOUBLE PRECISION NOT NULL,
+                    attempt_count INTEGER NOT NULL, last_error TEXT)",
+            ] {
+                sqlx::query(ddl).execute(&pool).await.expect("inbox DDL");
+            }
+        }
+        pool
+    }
+
+    async fn call_requeue(pool: PgPool, work_id: Option<&str>) -> (StatusCode, serde_json::Value) {
+        let body = work_id.map(|work_id| {
+            Json(RequeueBody {
+                work_id: Some(work_id.to_string()),
+            })
+        });
+        let resp = eventsub_requeue_handler(State(pool), body)
+            .await
+            .into_response();
+        let status = resp.status();
+        let bytes = axum::body::to_bytes(resp.into_body(), 65536).await.unwrap();
+        let value: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+        (status, value)
+    }
+
+    #[tokio::test]
+    async fn requeue_leere_work_id_gibt_bad_request_shape() {
+        let pool = PgPoolOptions::new()
+            .connect_lazy("postgres://localhost/requeue_not_used")
+            .expect("lazy pool");
+
+        let (status, body) = call_requeue(pool, Some("   ")).await;
+
+        assert_eq!(status, StatusCode::BAD_REQUEST);
+        assert_eq!(body["error"], serde_json::json!("bad_request"));
+        assert_eq!(body["message"], serde_json::json!("invalid request body"));
+    }
+
+    #[tokio::test]
+    async fn requeue_unbekannte_work_id_gibt_bad_request_shape() {
+        let dsn = match test_dsn() {
+            Some(d) => d,
+            None => {
+                eprintln!("SKIP: TB_TEST_DATABASE_URL nicht gesetzt");
+                return;
+            }
+        };
+        let pool = make_pool(&dsn, "t_requeue_unknown", true).await;
+
+        let (status, body) = call_requeue(pool, Some("missing-work")).await;
+
+        assert_eq!(status, StatusCode::BAD_REQUEST);
+        assert_eq!(body["error"], serde_json::json!("bad_request"));
+        assert_eq!(body["message"], serde_json::json!("invalid request body"));
+    }
+
+    #[tokio::test]
+    async fn requeue_db_fehler_gibt_python_internal_error_message() {
+        let dsn = match test_dsn() {
+            Some(d) => d,
+            None => {
+                eprintln!("SKIP: TB_TEST_DATABASE_URL nicht gesetzt");
+                return;
+            }
+        };
+        let pool = make_pool(&dsn, "t_requeue_db_error", false).await;
+
+        let (status, body) = call_requeue(pool, Some("w1")).await;
+
+        assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR);
+        assert_eq!(body["error"], serde_json::json!("internal_error"));
+        assert_eq!(
+            body["message"],
+            serde_json::json!("failed to requeue eventsub processing entry")
+        );
+    }
+}
 
 #[cfg(test)]
 mod chat_action_tests {
@@ -602,6 +734,24 @@ mod chat_action_tests {
             body["drop_reason"]["code"],
             serde_json::json!("channel_settings")
         );
+    }
+
+    #[tokio::test]
+    async fn failed_detail_wird_additiv_durchgereicht() {
+        let port = FakePort::new(ChatActionResult::Failed {
+            reason: "announcement failed".to_string(),
+            detail: Some("HTTP 403 missing scope".to_string()),
+        });
+        let (status, body) = run(
+            Some(port),
+            "nani",
+            Some(serde_json::json!({"mode": "announcement", "message": "x"})),
+            AuthLevel::Admin,
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(body["ok"], serde_json::json!(false));
+        assert_eq!(body["detail"], serde_json::json!("HTTP 403 missing scope"));
     }
 
     #[tokio::test]

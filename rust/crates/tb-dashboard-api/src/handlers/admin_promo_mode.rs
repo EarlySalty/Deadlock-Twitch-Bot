@@ -8,23 +8,28 @@
 //!
 //! CSRF wird — wie im übrigen Rust-Dashboard (s. `internal_home.rs`, `auth_status`
 //! liefert `csrfToken: null`) — bewusst NICHT geprüft; der Admin-Zugriff ist
-//! über die Token-/Session-Auth (`AuthLevel::is_privileged`) abgesichert.
+//! über die Dashboard-Session-Auth (`DashboardAuthLevel`) abgesichert.
 
-use axum::{extract::State, response::IntoResponse, Json};
+use axum::{extract::{Extension, State}, http::HeaderMap, response::IntoResponse, Json};
 use serde_json::{json, Value};
 use sqlx::PgPool;
-use tb_http_core::{ApiError, AuthLevel};
+use crate::auth::level::DashboardAuthLevel;
+use tb_http_core::ApiError;
 
+use crate::auth::session::DashboardAuthState;
+use crate::handlers::admin_actor;
 use tb_analytics::promo_mode::{save_global_promo_mode, validate_global_promo_mode_config, SavePromoModeError};
 
 /// `POST /twitch/api/admin/config/promo` — globalen Promo-Modus setzen (Admin).
 pub async fn set_promo_handler(
-    auth: AuthLevel,
+    auth: DashboardAuthLevel,
+    config: Option<Extension<DashboardAuthState>>,
+    headers: HeaderMap,
     State(pool): State<PgPool>,
     body: axum::body::Bytes,
 ) -> Result<impl IntoResponse, ApiError> {
-    if !auth.is_privileged() {
-        return Err(ApiError::unauthorized());
+    if let Some(err) = crate::auth::require_admin(&auth) {
+        return Err(err);
     }
 
     let payload: Value = match serde_json::from_slice(&body) {
@@ -43,9 +48,8 @@ pub async fn set_promo_handler(
         })));
     }
 
-    // updated_by: das Rust-Admin-Auth-Modell trägt keine Discord-User-ID →
-    // "admin" (Pythons Fallback, wenn keine user_id in der Session steht).
-    match save_global_promo_mode(&pool, &payload, "admin").await {
+    let actor = admin_actor::admin_actor_label(config.as_ref(), &headers).await;
+    match save_global_promo_mode(&pool, &payload, &actor).await {
         Ok(config) => Ok(Json(config.to_json())),
         Err(SavePromoModeError::Validation(msg)) => {
             Err(ApiError::bad_request_with_body(json!({ "error": msg })))
@@ -76,15 +80,21 @@ mod tests {
         Some(PgPoolOptions::new().max_connections(2).connect_with(opts).await.unwrap())
     }
 
-    async fn status_of(r: Result<impl IntoResponse, ApiError>) -> StatusCode {
-        r.into_response().status()
+    async fn body_json(r: Result<impl IntoResponse, ApiError>) -> (StatusCode, Value) {
+        let resp = r.into_response();
+        let status = resp.status();
+        let bytes = axum::body::to_bytes(resp.into_body(), 65536).await.unwrap();
+        (status, serde_json::from_slice(&bytes).unwrap_or(Value::Null))
     }
 
     #[tokio::test]
-    async fn unauth_ist_401() {
+    async fn unauth_ist_auth_required_401() {
         let Some(pool) = make_pool("t_promo_unauth").await else { return };
-        let resp = set_promo_handler(AuthLevel::None, State(pool), Bytes::from("{}")).await;
-        assert_eq!(status_of(resp).await, StatusCode::UNAUTHORIZED);
+        let resp = set_promo_handler(DashboardAuthLevel::None, None, HeaderMap::new(), State(pool), Bytes::from("{}")).await;
+        let (status, body) = body_json(resp).await;
+        assert_eq!(status, StatusCode::UNAUTHORIZED);
+        assert_eq!(body["error"], "auth_required");
+        assert_eq!(body["required"], "admin");
     }
 
     #[tokio::test]
@@ -92,16 +102,18 @@ mod tests {
         let Some(pool) = make_pool("t_promo_validation").await else { return };
         // custom_event aktiv ohne custom_message → validation_failed.
         let body = Bytes::from(r#"{"mode":"custom_event","is_enabled":true}"#);
-        let resp = set_promo_handler(AuthLevel::Admin, State(pool), body).await;
-        assert_eq!(status_of(resp).await, StatusCode::BAD_REQUEST);
+        let resp = set_promo_handler(DashboardAuthLevel::admin(), None, HeaderMap::new(), State(pool), body).await;
+        let (status, _) = body_json(resp).await;
+        assert_eq!(status, StatusCode::BAD_REQUEST);
     }
 
     #[tokio::test]
     async fn standard_speichern_200() {
         let Some(pool) = make_pool("t_promo_save").await else { return };
         let body = Bytes::from(r#"{"mode":"standard"}"#);
-        let resp = set_promo_handler(AuthLevel::Admin, State(pool.clone()), body).await;
-        assert_eq!(status_of(resp).await, StatusCode::OK);
+        let resp = set_promo_handler(DashboardAuthLevel::admin(), None, HeaderMap::new(), State(pool.clone()), body).await;
+        let (status, _) = body_json(resp).await;
+        assert_eq!(status, StatusCode::OK);
         // Persistiert: load liefert standard.
         let cfg = tb_analytics::promo_mode::load_global_promo_mode(&pool).await.unwrap();
         assert_eq!(cfg.mode, "standard");
@@ -111,8 +123,9 @@ mod tests {
     async fn custom_event_speichern_und_aktiv() {
         let Some(pool) = make_pool("t_promo_custom").await else { return };
         let body = Bytes::from(r#"{"mode":"custom_event","is_enabled":true,"custom_message":"Event bei {invite}!"}"#);
-        let resp = set_promo_handler(AuthLevel::Admin, State(pool.clone()), body).await;
-        assert_eq!(status_of(resp).await, StatusCode::OK);
+        let resp = set_promo_handler(DashboardAuthLevel::admin(), None, HeaderMap::new(), State(pool.clone()), body).await;
+        let (status, _) = body_json(resp).await;
+        assert_eq!(status, StatusCode::OK);
         let cfg = tb_analytics::promo_mode::load_global_promo_mode(&pool).await.unwrap();
         let eval = tb_analytics::promo_mode::evaluate_global_promo_mode(&cfg.to_json(), None);
         assert_eq!(eval.status, "active");

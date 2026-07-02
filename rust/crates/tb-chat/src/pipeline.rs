@@ -34,6 +34,8 @@
 //! Z. 645–669) und `_send_moderation_alert` (Z. 905–951).
 
 use std::collections::HashSet;
+use std::future::Future;
+use std::panic::{catch_unwind, AssertUnwindSafe};
 use std::path::PathBuf;
 use std::sync::Arc;
 
@@ -43,7 +45,7 @@ use sqlx::PgPool;
 use tracing::{debug, info, warn};
 
 use crate::api::ChatApi;
-use crate::channel_classifier::ChannelClassifier;
+use crate::channel_classifier::{ChannelClass, ChannelClassifier};
 use crate::chatter_tracking::ChatterTracker;
 use crate::commands::CommandEngine;
 use crate::conversation_scam::ConversationScamGuard;
@@ -398,6 +400,7 @@ impl MentionResolver for PgHelixMentionResolver {
 // ---------------------------------------------------------------------------
 
 /// Alle Bausteine der Pipeline — gebündelt, damit der Konstruktor lesbar bleibt.
+#[derive(Clone)]
 pub struct ChatPipelineParts {
     pub bot_user_id: String,
     pub api: Arc<dyn ChatApi>,
@@ -420,6 +423,7 @@ pub struct ChatPipelineParts {
 }
 
 /// Orchestriert die 15 Pipeline-Schritte für jedes `channel.chat.message`-Event.
+#[derive(Clone)]
 pub struct ChatPipeline {
     parts: ChatPipelineParts,
 }
@@ -431,7 +435,10 @@ impl ChatPipeline {
 
     /// Verarbeitet ein eingehendes Chat-Event — Einstiegspunkt für den
     /// EventSub-Dispatch (`channel.chat.message`).
-    pub async fn handle(&self, event: &ChatMessageEvent) {
+    ///
+    /// Rueckgabe: `true`, wenn das Event den Python-aequivalenten
+    /// Engagement-Punkt erreicht hat. Fruehe Returns liefern `false`.
+    pub async fn handle(&self, event: &ChatMessageEvent) -> bool {
         let p = &self.parts;
 
         // Twitch Shared Chat: Stammt die Nachricht aus einem fremden Quell-Kanal
@@ -445,7 +452,7 @@ impl ChatPipeline {
 
         // Schritt 0: Echo-/Self-Filter (bot.py Z. 1528–1532)
         if event.chatter_user_id == p.bot_user_id {
-            return;
+            return false;
         }
 
         let channel_login = event.broadcaster_user_login.to_lowercase();
@@ -455,48 +462,119 @@ impl ChatPipeline {
 
         // Schritt 2: Known-Bot-Whitelist (bot.py Z. 1548–1557)
         if WHITELISTED_BOTS.contains(&chatter_login.as_str()) {
-            p.tracker.track(event).await;
-            p.commands.handle(event).await;
-            return;
+            let tracker = Arc::clone(&p.tracker);
+            let event_for_step = event.clone();
+            run_pipeline_step(
+                "known_bot.track",
+                &channel_login,
+                &chatter_login,
+                async move {
+                    tracker.track(&event_for_step).await;
+                },
+            )
+            .await;
+            let commands = Arc::clone(&p.commands);
+            let event_for_step = event.clone();
+            run_pipeline_step(
+                "known_bot.commands",
+                &channel_login,
+                &chatter_login,
+                async move { commands.handle(&event_for_step).await },
+            )
+            .await;
+            return false;
         }
 
         // Schritt 3: Kanal-Klassifizierung (bot.py Z. 1559–1572)
-        let class = p
-            .classifier
-            .classify(&channel_login, &event.broadcaster_user_id)
-            .await;
+        let classifier = Arc::clone(&p.classifier);
+        let classify_channel = channel_login.clone();
+        let classify_broadcaster = event.broadcaster_user_id.clone();
+        let class = run_pipeline_step("classify", &channel_login, &chatter_login, async move {
+            classifier
+                .classify(&classify_channel, &classify_broadcaster)
+                .await
+        })
+        .await
+        .unwrap_or(ChannelClass {
+            is_partner: false,
+            is_monitored_only: false,
+            is_deadlock_live: false,
+        });
 
         // Schritt 4: Non-Partner — nur Datensammlung, keine Moderation/Promos
         if !class.is_partner {
-            p.tracker.track(event).await;
-            return;
+            let tracker = Arc::clone(&p.tracker);
+            let event_for_step = event.clone();
+            run_pipeline_step(
+                "non_partner.track",
+                &channel_login,
+                &chatter_login,
+                async move {
+                    tracker.track(&event_for_step).await;
+                },
+            )
+            .await;
+            return false;
         }
 
         // Conversation-Scam-Guard: eigener, fehlertoleranter Hintergrundpfad.
         // Der Guard lädt sein per-Kanal-Opt-out selbst und blockiert die übrige
         // Chat-Pipeline weder durch DB- noch durch MiniMax-Latenz.
-        p.conversation_scam.observe(event);
+        let conversation_scam_observe = || {
+            p.conversation_scam.observe(event);
+        };
+        if catch_unwind(AssertUnwindSafe(conversation_scam_observe)).is_err() {
+            warn!(
+                channel = %channel_login,
+                chatter = %chatter_login,
+                "chat_pipeline: Schritt conversation_scam.observe panicked"
+            );
+        }
 
         // Schritt 5: Global-Chatter-Ban (Z. 1589–1595) — Aktion über die
         // ModerationEngine, exakt wie Python via _auto_ban_and_cleanup.
-        if p.global_ban.is_banned(event).await {
+        let global_ban = Arc::clone(&p.global_ban);
+        let event_for_step = event.clone();
+        let Some(is_global_banned) =
+            run_security_pipeline_step("global_ban", &channel_login, &chatter_login, async move {
+                global_ban.is_banned(&event_for_step).await
+            })
+            .await
+        else {
+            return false;
+        };
+        if is_global_banned {
             info!(
                 chatter = %chatter_login,
                 channel = %channel_login,
                 "Global-Ban-Treffer — führe Channel-Ban aus"
             );
-            if self
-                .execute_auto_ban(
-                    event,
-                    &channel_login,
-                    true,
-                    BAN_REASON_GLOBAL,
-                    Some(NOTICE_GLOBAL_BAN),
-                    "global_ban",
-                )
-                .await
-            {
-                return;
+            let pipeline = self.clone();
+            let event_for_step = event.clone();
+            let ban_channel = channel_login.clone();
+            let Some(enforced) = run_security_pipeline_step(
+                "global_ban.enforce",
+                &channel_login,
+                &chatter_login,
+                async move {
+                    pipeline
+                        .execute_auto_ban(
+                            &event_for_step,
+                            &ban_channel,
+                            true,
+                            BAN_REASON_GLOBAL,
+                            Some(NOTICE_GLOBAL_BAN),
+                            "global_ban",
+                        )
+                        .await
+                },
+            )
+            .await
+            else {
+                return false;
+            };
+            if enforced {
+                return false;
             }
             // Ban nicht durchsetzbar (z. B. Chatter ist Mod) → Pipeline läuft
             // weiter, wie Python (enforce gibt das auto_ban-Resultat zurück).
@@ -505,18 +583,39 @@ impl ChatPipeline {
         // Schritt 6: Scam-Pitch (Z. 1597–1601) — Detektor sendet Chat-Warnung intern.
         // Wie Python wird NIE gelöscht; ein Timeout erfolgt nur bei Eskalation
         // (StrongTimeout). Erst-Warnung (StrongWarn/PublicWarn) ist nicht-destruktiv.
-        let pitch = p.scam_pitch.observe(event).await;
+        let scam_pitch = Arc::clone(&p.scam_pitch);
+        let event_for_step = event.clone();
+        let pitch = run_pipeline_step("scam_pitch", &channel_login, &chatter_login, async move {
+            scam_pitch.observe(&event_for_step).await
+        })
+        .await
+        .unwrap_or(PitchDecision::None);
         match &pitch {
             PitchDecision::StrongTimeout { text, duration } => {
                 debug!(channel = %channel_login, chatter = %chatter_login, "Scam-Pitch: StrongTimeout (Eskalation) → Timeout (kein Delete)");
-                handle_strong_timeout(
-                    &p.api,
-                    &p.alerter,
-                    event,
+                let api = Arc::clone(&p.api);
+                let alerter = Arc::clone(&p.alerter);
+                let event_for_step = event.clone();
+                let timeout_channel = channel_login.clone();
+                let timeout_chatter = chatter_login.clone();
+                let timeout_text = text.clone();
+                let timeout_duration = *duration;
+                run_pipeline_step(
+                    "scam_pitch.timeout",
                     &channel_login,
                     &chatter_login,
-                    text,
-                    *duration,
+                    async move {
+                        handle_strong_timeout(
+                            &api,
+                            &alerter,
+                            &event_for_step,
+                            &timeout_channel,
+                            &timeout_chatter,
+                            &timeout_text,
+                            timeout_duration,
+                        )
+                        .await;
+                    },
                 )
                 .await;
             }
@@ -540,15 +639,35 @@ impl ChatPipeline {
         }
 
         // Schritt 7: Spam-Score + Auto-Ban (Z. 1602–1737)
-        if self
-            .run_spam_check(event, &channel_login, &chatter_login)
+        let pipeline = self.clone();
+        let event_for_step = event.clone();
+        let spam_channel = channel_login.clone();
+        let spam_chatter = chatter_login.clone();
+        let Some(spam_handled) =
+            run_security_pipeline_step("spam_check", &channel_login, &chatter_login, async move {
+                pipeline
+                    .run_spam_check(&event_for_step, &spam_channel, &spam_chatter)
+                    .await
+            })
             .await
-        {
-            return;
+        else {
+            return false;
+        };
+        if spam_handled {
+            return false;
         }
 
         // Schritt 8: Sus-Discord-Invite (Z. 1741–1743)
-        if let Some(hit) = p.sus_invite.check(event, &channel_login).await {
+        let sus_invite = Arc::clone(&p.sus_invite);
+        let event_for_step = event.clone();
+        let sus_channel = channel_login.clone();
+        if let Some(hit) =
+            run_pipeline_step("sus_invite", &channel_login, &chatter_login, async move {
+                sus_invite.check(&event_for_step, &sus_channel).await
+            })
+            .await
+            .flatten()
+        {
             p.review_log.record(
                 &channel_login,
                 &hit.chatter_login,
@@ -569,24 +688,62 @@ impl ChatPipeline {
 
         // Schritt 9: Fun-Responses, nur wenn Deadlock live (Z. 1745–1750)
         if class.is_deadlock_live {
-            p.fun.maybe_respond(event, &channel_login).await;
+            let fun = Arc::clone(&p.fun);
+            let event_for_step = event.clone();
+            let fun_channel = channel_login.clone();
+            run_pipeline_step("fun", &channel_login, &chatter_login, async move {
+                fun.maybe_respond(&event_for_step, &fun_channel).await;
+            })
+            .await;
         }
 
         // Schritt 10: Chat-Health-Tracking + Raw-Aktivität (Z. 1752–1755 + 2173)
-        p.tracker.track(event).await;
-        p.promos.record_raw_message(&channel_login).await;
+        let tracker = Arc::clone(&p.tracker);
+        let event_for_step = event.clone();
+        run_pipeline_step("track", &channel_login, &chatter_login, async move {
+            tracker.track(&event_for_step).await;
+        })
+        .await;
+        let promos = Arc::clone(&p.promos);
+        let raw_channel = channel_login.clone();
+        run_pipeline_step(
+            "promos.record_raw_message",
+            &channel_login,
+            &chatter_login,
+            async move {
+                promos.record_raw_message(&raw_channel).await;
+            },
+        )
+        .await;
 
         // Schritt 11: Engagement-AI — No-op bis Engagement-Phase (Modul-Doku).
+        let should_spawn_engagement = true;
 
         // Schritt 12/13: Activity-Promo, nur wenn Deadlock live (Z. 1813–1824).
         // !invite wird vom CommandEngine (Schritt 14) bedient; der
         // PROMO_IGNORE_COMMANDS-Guard deckt das sent_invite-Gate ab.
         if class.is_deadlock_live {
-            p.promos.on_message(event).await;
+            let promos = Arc::clone(&p.promos);
+            let event_for_step = event.clone();
+            run_pipeline_step(
+                "promos.on_message",
+                &channel_login,
+                &chatter_login,
+                async move {
+                    promos.on_message(&event_for_step).await;
+                },
+            )
+            .await;
         }
 
         // Schritt 14: Command-Processing — immer am Ende (Z. 1827)
-        p.commands.handle(event).await;
+        let commands = Arc::clone(&p.commands);
+        let event_for_step = event.clone();
+        run_pipeline_step("commands", &channel_login, &chatter_login, async move {
+            commands.handle(&event_for_step).await;
+        })
+        .await;
+        should_spawn_engagement
     }
 
     /// Spam-Schritt (bot.py Z. 1602–1737). Gibt `true` zurück wenn die
@@ -791,6 +948,63 @@ impl ChatPipeline {
     }
 }
 
+async fn run_pipeline_step<T, F>(
+    step: &'static str,
+    channel_login: &str,
+    chatter_login: &str,
+    future: F,
+) -> Option<T>
+where
+    T: Send + 'static,
+    F: Future<Output = T> + Send + 'static,
+{
+    match tokio::spawn(future).await {
+        Ok(value) => Some(value),
+        Err(error) if error.is_panic() => {
+            warn!(
+                channel = %channel_login,
+                chatter = %chatter_login,
+                step,
+                %error,
+                "chat_pipeline: Schritt panicked"
+            );
+            None
+        }
+        Err(error) => {
+            warn!(
+                channel = %channel_login,
+                chatter = %chatter_login,
+                step,
+                %error,
+                "chat_pipeline: Schritt abgebrochen"
+            );
+            None
+        }
+    }
+}
+
+async fn run_security_pipeline_step<T, F>(
+    step: &'static str,
+    channel_login: &str,
+    chatter_login: &str,
+    future: F,
+) -> Option<T>
+where
+    T: Send + 'static,
+    F: Future<Output = T> + Send + 'static,
+{
+    let result = run_pipeline_step(step, channel_login, chatter_login, future).await;
+    if result.is_none() {
+        warn!(
+            channel = %channel_login,
+            chatter = %chatter_login,
+            step,
+            "chat_pipeline: security step failed closed; stopping pipeline"
+        );
+    }
+    result
+}
+
 async fn handle_strong_timeout(
     api: &Arc<dyn ChatApi>,
     alerter: &Arc<ModAlerter>,
@@ -870,11 +1084,19 @@ async fn is_first_message_for_streamer(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::atomic::{AtomicBool, Ordering};
     use std::sync::Mutex;
 
     use crate::api::BanOutcome;
+    use crate::commands::{
+        AutobanEntry, DiscordLinkPort, InvitePort, LastAutobanStore, RaidCommandPort,
+        RaidStartResult, RaidStatusInfo, SuperModPort,
+    };
+    use crate::promos::OutboundSuppressionCheck;
+    use crate::scam_pitch::AccountAgePort;
     use crate::types::{ChatMessageBody, SendOutcome};
     use chrono::{DateTime, Utc};
+    use tb_engagement::minimax_chat::EngagementMinimaxClient;
     use tokio::time::{sleep, Duration};
     use wiremock::matchers::{method, path};
     use wiremock::{Mock, MockServer, ResponseTemplate};
@@ -891,6 +1113,116 @@ mod tests {
 
         fn push_call(&self, call: impl Into<String>) {
             self.calls.lock().unwrap().push(call.into());
+        }
+    }
+
+    struct NoopAccountAge;
+
+    #[async_trait::async_trait]
+    impl AccountAgePort for NoopAccountAge {
+        async fn user_created_at_days(&self, _user_id: &str, _login: &str) -> Option<i64> {
+            None
+        }
+    }
+
+    struct NoopMentionResolver;
+
+    #[async_trait::async_trait]
+    impl MentionResolver for NoopMentionResolver {
+        async fn is_known_chatter(&self, _channel_login: &str, _mention_login: &str) -> bool {
+            false
+        }
+
+        async fn resolve_existing(
+            &self,
+            _logins: &[&str],
+        ) -> (std::collections::HashSet<String>, bool) {
+            (std::collections::HashSet::new(), false)
+        }
+    }
+
+    struct NoopSuppression;
+
+    #[async_trait::async_trait]
+    impl OutboundSuppressionCheck for NoopSuppression {
+        async fn is_muted(&self, _channel_login: &str) -> bool {
+            false
+        }
+    }
+
+    struct NoopRaid;
+
+    #[async_trait::async_trait]
+    impl RaidCommandPort for NoopRaid {
+        async fn manual_raid(
+            &self,
+            _broadcaster_id: &str,
+            _broadcaster_login: &str,
+        ) -> Result<RaidStartResult, String> {
+            Ok(RaidStartResult {
+                status: "unavailable".to_string(),
+                target_login: None,
+            })
+        }
+
+        async fn raid_status(&self, _broadcaster_id: &str) -> Result<RaidStatusInfo, String> {
+            Ok(RaidStatusInfo {
+                raid_enabled: None,
+                authorized_at: None,
+                total_raids: 0,
+                successful_raids: 0,
+                last_raid_login: None,
+                last_raid_viewers: None,
+                last_raid_at: None,
+            })
+        }
+
+        async fn toggle_silent_ban(&self, _twitch_login: &str) -> Result<i32, String> {
+            Ok(0)
+        }
+
+        async fn toggle_silent_raid(&self, _twitch_login: &str) -> Result<i32, String> {
+            Ok(0)
+        }
+    }
+
+    struct NoopDiscordLink;
+
+    #[async_trait::async_trait]
+    impl DiscordLinkPort for NoopDiscordLink {
+        async fn discord_invite(&self, _channel_login: &str) -> Result<Option<String>, String> {
+            Ok(None)
+        }
+    }
+
+    struct NoopInvite;
+
+    #[async_trait::async_trait]
+    impl InvitePort for NoopInvite {
+        async fn invite_line(
+            &self,
+            _channel_login: &str,
+            _chatter_login: &str,
+        ) -> Result<Option<String>, String> {
+            Ok(None)
+        }
+    }
+
+    struct NoopSuperMod;
+
+    #[async_trait::async_trait]
+    impl SuperModPort for NoopSuperMod {
+        async fn is_super_mod(&self, _actor_id: &str) -> bool {
+            false
+        }
+    }
+
+    struct NoopAutoban;
+
+    #[async_trait::async_trait]
+    impl LastAutobanStore for NoopAutoban {
+        async fn last_autoban(&self, _channel_key: &str) -> Option<AutobanEntry> {
+            None
         }
     }
 
@@ -986,6 +1318,145 @@ mod tests {
         }
     }
 
+    fn pipeline_for_non_partner(api: Arc<RecordingChatApi>, pool: PgPool) -> ChatPipeline {
+        let api_trait: Arc<dyn ChatApi> = api;
+        let http = reqwest::Client::new();
+        let moderation = Arc::new(ModerationEngine::new(Arc::clone(&api_trait), pool.clone()));
+        ChatPipeline::new(ChatPipelineParts {
+            bot_user_id: "bot-id".to_string(),
+            api: Arc::clone(&api_trait),
+            pool: pool.clone(),
+            classifier: Arc::new(ChannelClassifier::new(pool.clone())),
+            tracker: Arc::new(ChatterTracker::new(pool.clone())),
+            global_ban: Arc::new(GlobalChatterBanEnforcer::new(pool.clone())),
+            scam_pitch: Arc::new(ScamPitchDetector::new(
+                Arc::clone(&api_trait),
+                Arc::new(NoopAccountAge),
+                pool.clone(),
+            )),
+            conversation_scam: Arc::new(ConversationScamGuard::new(
+                pool.clone(),
+                "bot-id".to_string(),
+                Arc::new(crate::conversation_scam::MiniMaxScamJudge::new(
+                    EngagementMinimaxClient::new(None, None, None, None),
+                )),
+                Arc::clone(&api_trait),
+                Arc::clone(&moderation),
+            )),
+            spam_filter: Arc::new(SpamFilter::new(Default::default())),
+            ai_reviewer: Arc::new(SpamAiReviewer::new(pool.clone(), http.clone())),
+            moderation,
+            sus_invite: Arc::new(SusInviteCheck::new(pool.clone())),
+            fun: Arc::new(FunResponses::new(Arc::clone(&api_trait), false)),
+            promos: Arc::new(PromoEngine::new(
+                pool.clone(),
+                Arc::clone(&api_trait),
+                Arc::new(NoopSuppression),
+            )),
+            commands: Arc::new(CommandEngine::new(
+                pool,
+                Arc::clone(&api_trait),
+                Arc::new(NoopRaid),
+                Arc::new(NoopDiscordLink),
+                Arc::new(NoopInvite),
+                Arc::new(NoopSuperMod),
+                Arc::new(NoopAutoban),
+            )),
+            mention_resolver: Arc::new(NoopMentionResolver),
+            review_log: Arc::new(ReviewLog::new(std::env::temp_dir())),
+            alerter: Arc::new(ModAlerter::with_endpoint(
+                http,
+                "http://127.0.0.1:1/changelog",
+            )),
+        })
+    }
+
+    #[derive(Default)]
+    struct FailClosedProbe {
+        auto_ban: AtomicBool,
+        promo: AtomicBool,
+        command: AtomicBool,
+        engagement: AtomicBool,
+    }
+
+    impl FailClosedProbe {
+        fn mark_downstream(&self) {
+            self.promo.store(true, Ordering::SeqCst);
+            self.command.store(true, Ordering::SeqCst);
+            self.engagement.store(true, Ordering::SeqCst);
+        }
+
+        fn assert_stopped_without_ban(&self) {
+            assert!(!self.auto_ban.load(Ordering::SeqCst));
+            assert!(!self.promo.load(Ordering::SeqCst));
+            assert!(!self.command.load(Ordering::SeqCst));
+            assert!(!self.engagement.load(Ordering::SeqCst));
+        }
+    }
+
+    #[tokio::test]
+    async fn global_ban_check_panic_fail_closed_stoppt_downstream() {
+        let probe = Arc::new(FailClosedProbe::default());
+        let result: Option<bool> =
+            run_security_pipeline_step("global_ban", "channel", "chatter", async move {
+                panic!("global_ban panic");
+            })
+            .await;
+
+        let Some(is_banned) = result else {
+            probe.assert_stopped_without_ban();
+            return;
+        };
+        if is_banned {
+            probe.auto_ban.store(true, Ordering::SeqCst);
+            return;
+        }
+        probe.mark_downstream();
+        probe.assert_stopped_without_ban();
+    }
+
+    #[tokio::test]
+    async fn global_ban_enforce_panic_fail_closed_stoppt_downstream() {
+        let probe = Arc::new(FailClosedProbe::default());
+        let result: Option<bool> =
+            run_security_pipeline_step("global_ban.enforce", "channel", "chatter", async move {
+                panic!("global_ban.enforce panic");
+            })
+            .await;
+
+        let Some(enforced) = result else {
+            probe.assert_stopped_without_ban();
+            return;
+        };
+        if enforced {
+            probe.auto_ban.store(true, Ordering::SeqCst);
+            return;
+        }
+        probe.mark_downstream();
+        probe.assert_stopped_without_ban();
+    }
+
+    #[tokio::test]
+    async fn spam_check_panic_fail_closed_stoppt_downstream() {
+        let probe = Arc::new(FailClosedProbe::default());
+        let result: Option<bool> =
+            run_security_pipeline_step("spam_check", "channel", "chatter", async move {
+                panic!("spam_check panic");
+            })
+            .await;
+
+        let Some(handled) = result else {
+            probe.assert_stopped_without_ban();
+            return;
+        };
+        if handled {
+            probe.auto_ban.store(true, Ordering::SeqCst);
+            return;
+        }
+        probe.mark_downstream();
+        probe.assert_stopped_without_ban();
+    }
+
     #[test]
     fn conversation_scam_guard_wird_nach_partner_gate_fire_and_forget_aufgerufen() {
         let source = include_str!("pipeline.rs");
@@ -997,6 +1468,15 @@ mod tests {
             .find(&call_needle)
             .expect("Conversation-Scam-Guard-Wiring fehlt");
         assert!(guard_call > partner_gate);
+    }
+
+    #[tokio::test]
+    async fn non_partner_event_erreicht_engagement_outcome_nicht() {
+        let pool = sqlx::PgPool::connect_lazy("postgres://x:x@127.0.0.1:1/x").unwrap();
+        let api = Arc::new(RecordingChatApi::default());
+        let pipeline = pipeline_for_non_partner(api, pool);
+
+        assert!(!pipeline.handle(&strong_timeout_event()).await);
     }
 
     #[tokio::test]

@@ -12,7 +12,7 @@
 //!
 //! Port: `bot/chat/moderation.py:1293–1903`, `bot/chat/timeout_guard.py`.
 
-use crate::api::{BanOutcome, ChatApi};
+use crate::api::{AnnouncementOutcome, BanOutcome, ChatApi};
 use crate::commands::{AutobanEntry, LastAutobanStore};
 use crate::promos::OutboundSuppressionCheck as PromoSuppressionCheck;
 use crate::suppression_guard::{
@@ -86,6 +86,42 @@ pub const WERBEFREI_PITCH_MSG: &str =
      das alle Bot-Features ohne automatische Nachrichten bietet: \
      https://deutsche-deadlock-community.de/twitch/pricing";
 
+fn log_autoban_notice_send_result(
+    channel_login: &str,
+    broadcaster_id: &str,
+    result: Result<SendOutcome, String>,
+) {
+    match result {
+        Ok(SendOutcome::Sent) => {}
+        Ok(SendOutcome::Dropped { code, message }) => {
+            warn!(
+                channel = %channel_login,
+                broadcaster_id = %broadcaster_id,
+                code = %code,
+                message = %message,
+                "AutoBan-Notice von Twitch verworfen"
+            );
+        }
+        Ok(SendOutcome::HttpError { status, body }) => {
+            warn!(
+                channel = %channel_login,
+                broadcaster_id = %broadcaster_id,
+                status = status,
+                body = %body,
+                "AutoBan-Notice HTTP-Fehler"
+            );
+        }
+        Err(err) => {
+            warn!(
+                channel = %channel_login,
+                broadcaster_id = %broadcaster_id,
+                err = %err,
+                "AutoBan-Notice send fehlgeschlagen"
+            );
+        }
+    }
+}
+
 // ---------------------------------------------------------------------------
 // HelixChatClient — impl ChatApi
 // ---------------------------------------------------------------------------
@@ -142,14 +178,25 @@ impl ChatApi for HelixChatClient {
         })
     }
 
-    /// Sendet Ankündigung — 2-Attempt.
-    /// moderator_id = Bot-User-ID, intern via token_mgr bezogen.
     async fn send_announcement(
         &self,
         broadcaster_id: &str,
         message: &str,
         color: &str,
     ) -> Result<bool, String> {
+        self.send_announcement_detailed(broadcaster_id, message, color)
+            .await
+            .map(|outcome| outcome.accepted)
+    }
+
+    /// Sendet Ankündigung — 2-Attempt.
+    /// moderator_id = Bot-User-ID, intern via token_mgr bezogen.
+    async fn send_announcement_detailed(
+        &self,
+        broadcaster_id: &str,
+        message: &str,
+        color: &str,
+    ) -> Result<AnnouncementOutcome, String> {
         let moderator_id = self.token_mgr.bot_user_id().await;
         for attempt in 0..2usize {
             let force = attempt > 0;
@@ -159,22 +206,25 @@ impl ChatApi for HelixChatClient {
             };
             match self
                 .helix
-                .send_announcement(broadcaster_id, &moderator_id, message, color, &token)
+                .send_announcement_detailed(broadcaster_id, &moderator_id, message, color, &token)
                 .await
             {
-                Ok(true) => return Ok(true),
-                Ok(false) if attempt == 0 => {
-                    // Könnte 401 sein — retry mit force_refresh
+                Ok(outcome) if outcome.accepted => return Ok(outcome),
+                Ok(outcome) if outcome.status == Some(401) && attempt == 0 => {
                     continue;
                 }
-                Ok(false) => return Ok(false),
+                Ok(outcome) => return Ok(outcome),
                 Err(e) => {
                     warn!("Announcement-Fehler: {e}");
                     return Err(e.to_string());
                 }
             }
         }
-        Ok(false)
+        Ok(AnnouncementOutcome {
+            accepted: false,
+            status: Some(401),
+            detail: Some("nach force_refresh noch 401".to_string()),
+        })
     }
 
     /// Permanenter Ban — 2-Attempt bei 401.
@@ -415,10 +465,7 @@ impl ModerationEngine {
     }
 
     /// Verdrahtet den zentralen Outbound-Suppression-Guard fuer Auto-Ban-Notices.
-    pub fn with_notice_suppression(
-        mut self,
-        suppression: Arc<dyn PromoSuppressionCheck>,
-    ) -> Self {
+    pub fn with_notice_suppression(mut self, suppression: Arc<dyn PromoSuppressionCheck>) -> Self {
         self.notice_suppression = Some(suppression);
         self
     }
@@ -433,13 +480,8 @@ impl ModerationEngine {
         self
     }
 
-    async fn send_autoban_notice(
-        &self,
-        channel_login: &str,
-        broadcaster_id: &str,
-        notice: &str,
-    ) {
-        if let Some(suppression) = self.notice_suppression.as_ref() {
+    async fn send_autoban_notice(&self, channel_login: &str, broadcaster_id: &str, notice: &str) {
+        let result = if let Some(suppression) = self.notice_suppression.as_ref() {
             let api = SuppressionGuardChatApi::new(
                 Arc::clone(&self.api),
                 Arc::clone(suppression),
@@ -447,10 +489,11 @@ impl ModerationEngine {
                 "promo",
                 channel_login,
             );
-            let _ = api.send_message(broadcaster_id, notice).await;
-            return;
-        }
-        let _ = self.api.send_message(broadcaster_id, notice).await;
+            api.send_message(broadcaster_id, notice).await
+        } else {
+            self.api.send_message(broadcaster_id, notice).await
+        };
+        log_autoban_notice_send_result(channel_login, broadcaster_id, result);
     }
 
     /// Führt AutoBan aus: 1. Nachricht löschen, 2. Ban (wenn `req.ban=true`).
@@ -1109,6 +1152,7 @@ mod tests {
         delete_calls: AtomicUsize,
         send_calls: AtomicUsize,
         ban_result: Mutex<BanOutcome>,
+        send_result: Mutex<Result<SendOutcome, String>>,
     }
 
     impl MockApi {
@@ -1118,7 +1162,14 @@ mod tests {
                 delete_calls: AtomicUsize::new(0),
                 send_calls: AtomicUsize::new(0),
                 ban_result: Mutex::new(result),
+                send_result: Mutex::new(Ok(SendOutcome::Sent)),
             })
+        }
+
+        fn with_send_result(result: Result<SendOutcome, String>) -> Arc<Self> {
+            let api = Self::with_ban_result(BanOutcome::Banned);
+            *api.send_result.lock().unwrap() = result;
+            api
         }
     }
 
@@ -1144,7 +1195,7 @@ mod tests {
     impl ChatApi for MockApi {
         async fn send_message(&self, _b: &str, _m: &str) -> Result<SendOutcome, String> {
             self.send_calls.fetch_add(1, Ordering::SeqCst);
-            Ok(SendOutcome::Sent)
+            self.send_result.lock().unwrap().clone()
         }
         async fn send_announcement(&self, _b: &str, _m: &str, _c: &str) -> Result<bool, String> {
             Ok(true)
@@ -1399,6 +1450,44 @@ mod tests {
             1,
             "kein silent → Chat-Notice gesendet"
         );
+    }
+
+    #[tokio::test]
+    async fn autoban_notice_send_fehler_unterbricht_autoban_nicht() {
+        for result in [
+            Ok(SendOutcome::Dropped {
+                code: "channel_settings".to_string(),
+                message: "muted".to_string(),
+            }),
+            Ok(SendOutcome::HttpError {
+                status: 500,
+                body: "server error".to_string(),
+            }),
+            Err("network down".to_string()),
+        ] {
+            let api = MockApi::with_send_result(result);
+            let pool = sqlx::PgPool::connect_lazy("postgres://x:x@127.0.0.1:1/x").unwrap();
+            let engine = ModerationEngine::new(api.clone(), pool);
+            let ok = engine
+                .auto_ban_and_cleanup(AutoBanRequest {
+                    channel_login: "kanal",
+                    broadcaster_id: "bid",
+                    bot_id: "bot",
+                    chatter_login: "user",
+                    chatter_id: "u1",
+                    message_id: "m1",
+                    content: "content",
+                    ban: true,
+                    reason_text: BAN_REASON_SPAM,
+                    notice_text: None,
+                    silent: false,
+                })
+                .await;
+
+            assert!(ok, "Notice-Sendfehler darf AutoBan nicht unterbrechen");
+            assert_eq!(api.ban_calls.load(Ordering::SeqCst), 1);
+            assert_eq!(api.send_calls.load(Ordering::SeqCst), 1);
+        }
     }
 
     #[tokio::test]

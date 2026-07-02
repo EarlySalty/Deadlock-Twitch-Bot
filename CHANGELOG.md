@@ -1,3 +1,11 @@
+## #318 — Etliche Rand-Unterschiede zwischen alter und neuer Bot-Version aufgeräumt
+
+**Ausgangslage:** Beim systematischen Vergleich der alten Python- mit der neuen Rust-Version sind viele kleine Abweichungen aufgefallen — Stellen, an denen die neue Version in Randfällen anders reagierte als gewollt: verschluckte Datenbankfehler, falsch gerundete Werte, fehlende Chat-Befehle und ein paar zu lockere Zugriffsprüfungen.
+
+**Änderung:** Die eindeutigen Bugs davon haben wir behoben — u.a. die AI-Engagement-Befehle (an/aus/status) wieder verfügbar gemacht, die Neu-Autorisierungs-Sperre für privilegierte Befehle nachgezogen, fehlerhafte Webhook-Antworten korrigiert und mehrere Stellen, die Fehler still verschluckten, zum Melden gebracht. Unklare oder bewusst gewollte Abweichungen haben wir stehen lassen.
+
+**Verhalten jetzt:** In diesen Randfällen verhält sich die neue Version wieder wie die alte.
+
 ## #317 — Siebte und letzte Welle: die Auswertungs-Engine wird beim Bauen geprüft
 
 **Ausgangslage:** Das Herzstück der Auswertung — Streamer- und Partner-Status, Affiliate- und Provisionsrechnung, Watch-Time, Raid-Historie, Post-Stream-Berichte, Stripe-Abgleich, Chat-Statistik — führte seine statischen Datenbank-Abfragen bisher als reine Textbausteine aus. Es ist der größte Brocken dieser Umstellung und der letzte.

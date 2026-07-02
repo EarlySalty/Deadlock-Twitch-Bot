@@ -7,7 +7,7 @@
 //! dort still), und kaputtes Payload-JSON läuft sauber in den
 //! Retry-/Dead-Letter-Pfad statt in einen NameError im Hook.
 
-use std::sync::Arc;
+use std::sync::{Arc, Mutex, OnceLock, Weak};
 use std::time::Duration;
 
 use tokio::sync::{watch, Notify};
@@ -21,6 +21,34 @@ pub const INBOX_IDLE_WAIT: Duration = Duration::from_secs(5);
 pub const INBOX_RETRY_BASE_SECONDS: f64 = 1.0;
 pub const INBOX_RETRY_MAX_SECONDS: f64 = 60.0;
 pub const INBOX_MAX_ATTEMPTS: i32 = 5;
+
+static REQUEUE_WAKEUPS: OnceLock<Mutex<Vec<Weak<Notify>>>> = OnceLock::new();
+
+fn requeue_wakeup_registry() -> &'static Mutex<Vec<Weak<Notify>>> {
+    REQUEUE_WAKEUPS.get_or_init(|| Mutex::new(Vec::new()))
+}
+
+fn register_requeue_wakeup(wakeup: &Arc<Notify>) {
+    let Ok(mut wakeups) = requeue_wakeup_registry().lock() else {
+        tracing::warn!("Inbox-Requeue-Wakeup-Registry vergiftet");
+        return;
+    };
+    wakeups.push(Arc::downgrade(wakeup));
+}
+
+pub(crate) fn notify_requeue_wakeups() {
+    let Ok(mut wakeups) = requeue_wakeup_registry().lock() else {
+        tracing::warn!("Inbox-Requeue-Wakeup-Registry vergiftet");
+        return;
+    };
+    wakeups.retain(|wakeup| {
+        let Some(wakeup) = wakeup.upgrade() else {
+            return false;
+        };
+        wakeup.notify_one();
+        true
+    });
+}
 
 /// Fehler aus der fachlichen Verarbeitung — führt zu Retry bzw. Dead-Letter.
 pub type HandlerError = Box<dyn std::error::Error + Send + Sync>;
@@ -96,6 +124,7 @@ impl InboxRuntime {
     /// Startet den Worker als Tokio-Task und gibt das Steuer-Handle zurück.
     pub fn start(self) -> InboxRuntimeHandle {
         let wakeup = Arc::new(Notify::new());
+        register_requeue_wakeup(&wakeup);
         let (stop_tx, stop_rx) = watch::channel(false);
         let store = self.store.clone();
         let clock = self.clock.clone();
@@ -162,7 +191,23 @@ impl InboxRuntime {
     async fn process_one(&self, work: LeasedWork) {
         let parsed = parse_payload(&work.payload_json);
         let result = match &parsed {
-            Ok(payload) => self.handler.handle(&work.work_type, payload).await,
+            Ok(payload) => {
+                let handler = self.handler.clone();
+                let work_type = work.work_type.clone();
+                let payload = payload.clone();
+                match tokio::spawn(async move { handler.handle(&work_type, &payload).await }).await
+                {
+                    Ok(result) => result,
+                    Err(join_error) if join_error.is_panic() => Err(format!(
+                        "eventsub inbox handler panicked while processing work: {join_error}"
+                    )
+                    .into()),
+                    Err(join_error) => Err(format!(
+                        "eventsub inbox handler task failed while processing work: {join_error}"
+                    )
+                    .into()),
+                }
+            }
             Err(parse_error) => {
                 Err(format!("invalid eventsub processing payload: {parse_error}").into())
             }

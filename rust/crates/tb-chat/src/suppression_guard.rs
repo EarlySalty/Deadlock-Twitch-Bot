@@ -5,7 +5,7 @@
 //! `send_announcement` vor dem echten Twitch-Call ab, wenn der Partner manuell
 //! opt-out gesetzt hat oder die verdrahtete Suppression aktiv ist.
 
-use crate::api::{BanOutcome, ChatApi};
+use crate::api::{AnnouncementOutcome, BanOutcome, ChatApi};
 use crate::promos::OutboundSuppressionCheck;
 use crate::types::SendOutcome;
 use async_trait::async_trait;
@@ -163,6 +163,24 @@ impl ChatApi for SuppressionGuardChatApi {
         }
         self.inner
             .send_announcement(broadcaster_id, message, color)
+            .await
+    }
+
+    async fn send_announcement_detailed(
+        &self,
+        broadcaster_id: &str,
+        message: &str,
+        color: &str,
+    ) -> Result<AnnouncementOutcome, String> {
+        if self.should_skip_send().await {
+            return Ok(AnnouncementOutcome {
+                accepted: false,
+                status: None,
+                detail: Some("outbound_suppressed".to_string()),
+            });
+        }
+        self.inner
+            .send_announcement_detailed(broadcaster_id, message, color)
             .await
     }
 

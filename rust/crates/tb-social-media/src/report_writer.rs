@@ -870,8 +870,8 @@ mod tests {
             .await
             .unwrap();
         for ddl in [
-            "CREATE TABLE twitch_clips_social_media (id SERIAL PRIMARY KEY, streamer_login TEXT, clip_title TEXT, clip_url TEXT, created_at TIMESTAMPTZ DEFAULT NOW(), game_name TEXT, discarded_at TIMESTAMPTZ)",
-            "CREATE TABLE twitch_clips_social_analytics (id SERIAL PRIMARY KEY, clip_id INTEGER, platform TEXT, bucket TEXT, views INTEGER, likes INTEGER, comments INTEGER, shares INTEGER, watch_time_seconds INTEGER, ctr_percent NUMERIC(5,2), engagement_rate NUMERIC(5,2), provider TEXT, synced_at TIMESTAMPTZ)",
+            "CREATE TABLE twitch_clips_social_media (id BIGSERIAL PRIMARY KEY, clip_id TEXT NOT NULL, clip_url TEXT NOT NULL, streamer_login TEXT NOT NULL, clip_title TEXT, created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(), game_name TEXT, source_kind TEXT NOT NULL DEFAULT 'twitch', discarded_at TIMESTAMPTZ)",
+            "CREATE TABLE twitch_clips_social_analytics (id BIGSERIAL PRIMARY KEY, clip_id BIGINT NOT NULL, platform TEXT NOT NULL, bucket TEXT, views INTEGER, likes INTEGER, comments INTEGER, shares INTEGER, watch_time_seconds INTEGER, ctr_percent NUMERIC, engagement_rate DOUBLE PRECISION, provider TEXT, synced_at TIMESTAMPTZ NOT NULL)",
             "CREATE TABLE social_media_reports (id SERIAL PRIMARY KEY, kind TEXT NOT NULL, streamer_login TEXT, period_start TIMESTAMPTZ NOT NULL, period_end TIMESTAMPTZ NOT NULL, content_md TEXT NOT NULL, model TEXT, created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP)",
         ] {
             sqlx::query(ddl).execute(&pool).await.unwrap();
@@ -884,7 +884,7 @@ mod tests {
         let Some(pool) = make_pool("t_sm_report_load").await else {
             return;
         };
-        let c: i32 = sqlx::query_scalar("INSERT INTO twitch_clips_social_media (streamer_login, clip_title) VALUES ('nani', 'Mein Clip') RETURNING id").fetch_one(&pool).await.unwrap();
+        let c: i64 = sqlx::query_scalar("INSERT INTO twitch_clips_social_media (clip_id, clip_url, streamer_login, clip_title) VALUES ('report-1', 'https://clips.test/report-1', 'nani', 'Mein Clip') RETURNING id").fetch_one(&pool).await.unwrap();
         // tiktok: alter + neuer Snapshot (nur neuer zählt).
         sqlx::query("INSERT INTO twitch_clips_social_analytics (clip_id, platform, bucket, views, likes, engagement_rate, provider, synced_at) VALUES ($1, 'tiktok', '7d', 50, 1, 5.0, 'ok', NOW() - INTERVAL '2 hours')").bind(c).execute(&pool).await.unwrap();
         sqlx::query("INSERT INTO twitch_clips_social_analytics (clip_id, platform, bucket, views, likes, engagement_rate, provider, synced_at) VALUES ($1, 'tiktok', '7d', 100, 10, 10.0, 'ok', NOW())").bind(c).execute(&pool).await.unwrap();
@@ -954,7 +954,7 @@ mod tests {
         assert_eq!(count, 1);
 
         // Mit Analytics im Zeitraum + force → Fallback-Wochenreport (Top 5 etc.).
-        let c: i32 = sqlx::query_scalar("INSERT INTO twitch_clips_social_media (streamer_login, clip_title) VALUES ('nani', 'Hot Clip') RETURNING id").fetch_one(&pool).await.unwrap();
+        let c: i64 = sqlx::query_scalar("INSERT INTO twitch_clips_social_media (clip_id, clip_url, streamer_login, clip_title) VALUES ('report-2', 'https://clips.test/report-2', 'nani', 'Hot Clip') RETURNING id").fetch_one(&pool).await.unwrap();
         sqlx::query("INSERT INTO twitch_clips_social_analytics (clip_id, platform, bucket, views, likes, engagement_rate, provider, synced_at) VALUES ($1, 'tiktok', '7d', 500, 50, 12.0, 'ok', '2026-06-10T12:00:00+00:00')").bind(c).execute(&pool).await.unwrap();
         let r3 = writer
             .write_streamer_report("nani", Some(start), Some(end), true)

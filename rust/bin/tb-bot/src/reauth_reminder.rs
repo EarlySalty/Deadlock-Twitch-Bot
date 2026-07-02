@@ -53,11 +53,14 @@ impl ReauthReminder {
         }
     }
 
-    /// Bei Go-Live aufzurufen. Liefert `true`, wenn ein Reminder gesendet wurde.
-    /// Kein Reminder, wenn der Kanal nie autorisiert war (keine Auth-Zeile),
-    /// voll autorisiert ist, gerade erst erinnert wurde, oder kein gültiger
-    /// Send-Pfad existiert.
-    pub async fn maybe_remind(&self, broadcaster_id: &str, login: &str) -> bool {
+    /// Variante mit aktuellem Stream-Kontext. Ist eine `stream_id` bekannt,
+    /// dedupt der Reminder pro Stream-Start statt pauschal pro 300s-Fenster.
+    pub async fn maybe_remind_for_stream(
+        &self,
+        broadcaster_id: &str,
+        login: &str,
+        stream_id: Option<&str>,
+    ) -> bool {
         let broadcaster_id = broadcaster_id.trim();
         let login = login.trim().to_lowercase();
         if broadcaster_id.is_empty() || login.is_empty() {
@@ -75,12 +78,14 @@ impl ReauthReminder {
         // Dedupe-Guard VOR dem Senden setzen (Python: race-condition-Fix gegen
         // gleichzeitige Trigger-Pfade).
         {
-            let mut guard = self.last_sent.lock().expect("reauth dedupe lock");
+            let Ok(mut guard) = self.last_sent.lock() else {
+                tracing::warn!("ReAuth-Reminder: Dedupe-Lock vergiftet");
+                return false;
+            };
             let now = Instant::now();
-            if !should_send(guard.get(broadcaster_id).copied(), now, REMINDER_DEDUPE_WINDOW) {
+            if !claim_dedupe(&mut guard, broadcaster_id, stream_id, now) {
                 return false;
             }
-            guard.insert(broadcaster_id.to_string(), now);
         }
 
         match self
@@ -160,6 +165,33 @@ fn should_send(last: Option<Instant>, now: Instant, window: Duration) -> bool {
     }
 }
 
+fn claim_dedupe(
+    sent: &mut HashMap<String, Instant>,
+    broadcaster_id: &str,
+    stream_id: Option<&str>,
+    now: Instant,
+) -> bool {
+    let stream_id = stream_id.map(str::trim).filter(|s| !s.is_empty());
+    let key = match stream_id {
+        Some(stream_id) => format!("stream:{broadcaster_id}:{stream_id}"),
+        None => format!("fallback:{broadcaster_id}"),
+    };
+    if stream_id.is_some() {
+        return match sent.entry(key) {
+            std::collections::hash_map::Entry::Vacant(entry) => {
+                entry.insert(now);
+                true
+            }
+            std::collections::hash_map::Entry::Occupied(_) => false,
+        };
+    }
+    if !should_send(sent.get(&key).copied(), now, REMINDER_DEDUPE_WINDOW) {
+        return false;
+    }
+    sent.insert(key, now);
+    true
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -214,6 +246,32 @@ mod tests {
             Some(now - Duration::from_secs(3600)),
             now,
             REMINDER_DEDUPE_WINDOW
+        ));
+    }
+
+    #[test]
+    fn stream_id_dedupe_erlaubt_neuen_stream_im_fenster() {
+        let now = Instant::now();
+        let mut sent = HashMap::new();
+        assert!(claim_dedupe(&mut sent, "42", Some("s-1"), now));
+        assert!(!claim_dedupe(
+            &mut sent,
+            "42",
+            Some("s-1"),
+            now + Duration::from_secs(10)
+        ));
+        assert!(claim_dedupe(
+            &mut sent,
+            "42",
+            Some("s-2"),
+            now + Duration::from_secs(10)
+        ));
+        assert!(claim_dedupe(&mut sent, "42", None, now));
+        assert!(!claim_dedupe(
+            &mut sent,
+            "42",
+            None,
+            now + Duration::from_secs(10)
         ));
     }
 

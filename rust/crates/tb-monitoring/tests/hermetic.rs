@@ -369,6 +369,46 @@ async fn runtime_verarbeitet_auftrag_und_loescht_ihn() {
 }
 
 #[tokio::test]
+async fn runtime_wacht_nach_dead_letter_requeue_sofort_auf() {
+    let dsn = skip_without_db!();
+    let pool = pool_in_schema(&dsn, "t4a_rt_requeue_wakeup").await;
+    let store = ProcessingInboxStore::new(pool);
+    let handler = Arc::new(CountingHandler {
+        calls: AtomicU64::new(0),
+    });
+
+    let id = store
+        .enqueue("stream.online", &serde_json::json!({"x": 1}), None, 1000.0)
+        .await
+        .unwrap();
+    let leased = store.lease_due(1000.0, 30.0, 20).await.unwrap();
+    store
+        .mark_dead_letter(&leased[0], 5, "boom", 1010.0)
+        .await
+        .unwrap();
+
+    let runtime = InboxRuntime::new(store.clone(), handler.clone()).start();
+    tokio::time::sleep(Duration::from_millis(100)).await;
+
+    assert!(store.requeue_dead_letter(&id, 1020.0).await.unwrap());
+    let woke = tokio::time::timeout(Duration::from_secs(1), async {
+        loop {
+            if handler.calls.load(Ordering::SeqCst) > 0 {
+                return true;
+            }
+            tokio::time::sleep(Duration::from_millis(25)).await;
+        }
+    })
+    .await
+    .unwrap_or(false);
+    runtime.shutdown().await;
+
+    assert!(woke, "Requeue hat den schlafenden Worker nicht geweckt");
+    assert!(store.list_pending(5).await.unwrap().is_empty());
+    assert!(store.list_dead_letters(5).await.unwrap().is_empty());
+}
+
+#[tokio::test]
 async fn runtime_dead_lettert_nach_max_versuchen() {
     let dsn = skip_without_db!();
     let pool = pool_in_schema(&dsn, "t4a_rt_dead").await;

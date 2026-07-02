@@ -16,7 +16,7 @@
 //! - Direkte Loopback-Requests → durchgelassen (kein Browser-CSRF-Vektor;
 //!   loopback-only interne Tools, vor allem Changelog-Spiegelung).
 //! - Write mit gültigem Token oder Same-Origin-Session → durchgelassen.
-//! - Cross-Origin oder Write ohne gültige Session → `403 csrf_failed`.
+//! - Cross-Origin oder Write ohne gültige Session → `403 invalid_csrf`.
 //! - Ohne `DashboardAuthState`-Extension (Auth aus) → fail-closed `403`.
 
 use axum::{
@@ -42,12 +42,11 @@ fn is_write_method(method: &Method) -> bool {
     )
 }
 
-fn csrf_failed() -> Response {
+fn invalid_csrf_response() -> Response {
     (
         StatusCode::FORBIDDEN,
         Json(serde_json::json!({
-            "error": "csrf_failed",
-            "message": "Ungültiges oder fehlendes CSRF-Token.",
+            "error": "invalid_csrf",
         })),
     )
         .into_response()
@@ -71,11 +70,11 @@ pub async fn csrf_protect(request: Request, next: Next) -> Response {
 
     let Some(state) = parts.extensions.get::<DashboardAuthState>().cloned() else {
         // Auth-State fehlt → kein Validierungspfad → fail-closed.
-        return csrf_failed();
+        return invalid_csrf_response();
     };
 
     if !is_allowed_origin(&parts.headers) {
-        return csrf_failed();
+        return invalid_csrf_response();
     }
 
     let presented = parts
@@ -123,7 +122,7 @@ pub async fn csrf_protect(request: Request, next: Next) -> Response {
     if valid {
         next.run(Request::from_parts(parts, body)).await
     } else {
-        csrf_failed()
+        invalid_csrf_response()
     }
 }
 
@@ -284,6 +283,9 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(resp.status(), StatusCode::FORBIDDEN);
+        let body = axum::body::to_bytes(resp.into_body(), 65536).await.unwrap();
+        let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(json["error"], "invalid_csrf");
     }
 
     #[tokio::test]
@@ -507,7 +509,7 @@ mod tests {
         // Regression: Browser trägt ein veraltetes `master_dash_session` (Discord-Admin)
         // NEBEN einer gültigen `twitch_dash_session`. Der CSRF-Layer darf nicht am stale
         // Admin-Cookie hängenbleiben, sondern muss die gültige Partner-Session
-        // akzeptieren — sonst csrf_failed auf allen Schreib-POSTs.
+        // akzeptieren — sonst invalid_csrf auf allen Schreib-POSTs.
         let Some((pool, state)) = maybe_test_state().await else { return; };
         ensure_partner(&pool, 9062403, "csrf_both", "9062403").await;
         let session = state

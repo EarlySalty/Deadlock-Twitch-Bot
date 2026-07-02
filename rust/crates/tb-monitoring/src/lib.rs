@@ -33,6 +33,7 @@ pub mod inbox_runtime;
 pub mod inbox_store;
 pub mod live_state;
 pub mod poller;
+pub mod observability_retention;
 pub mod raid_retention;
 pub mod sessions;
 pub mod stats;
@@ -73,8 +74,10 @@ pub use sessions::{
 pub use stats::{StatsSample, StatsStore};
 pub use stream::StreamSnapshot;
 pub use subscriptions::{
-    BroadcasterEventSubTokenProvider, CapacitySnapshotStore, EventSubUserToken, ModeratorProvisioner,
-    RemoteSubscription, RevocationSink, SubscriptionConfig, SubscriptionManager,
+    eventsub_webhook_capacity_values, BroadcasterEventSubTokenProvider, CapacitySnapshotStore,
+    EventSubCapacityValues, EventSubUserToken, ModeratorProvisioner, RemoteSubscription,
+    RevocationSink, SubscriptionConfig, SubscriptionCreateError, SubscriptionEnsureReport,
+    SubscriptionFailureCounter, SubscriptionFailureStatus, SubscriptionManager,
     SubscriptionTransport, EVENTSUB_CORE_SUB_TYPES,
 };
 pub use telemetry::{HypeTrainPhase, TelemetryStore};
@@ -84,5 +87,9 @@ pub use chatters_poller::{
     load_live_roster, record_chatters_for_streamer, BotChatterAuth, ChattersCollector,
     ChattersFetcher, CycleStats, KeyedCooldown, LiveStreamer, SelfHealCooldowns,
     StreamerTokenSource,
+};
+pub use observability_retention::{
+    cleanup_observability_events, cleanup_observability_events_before,
+    observability_retention_days, OBSERVABILITY_RETENTION_DEFAULT_DAYS,
 };
 pub use raid_retention::{compute_raid_retention, RetentionStats};

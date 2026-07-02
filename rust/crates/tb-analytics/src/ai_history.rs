@@ -40,7 +40,7 @@ pub async fn save_analysis(
     };
     let snapshot_text = data_snapshot.to_string();
     let points_text = points.to_string();
-    sqlx::query_scalar!(
+    match sqlx::query_scalar!(
         r#"
         INSERT INTO ai_analyses (streamer, days, model, generated_at, data_snapshot, points)
         VALUES ($1, $2, $3, $4, $5::text::jsonb, $6::text::jsonb)
@@ -55,7 +55,19 @@ pub async fn save_analysis(
     )
     .fetch_one(pool)
     .await
-    .ok()
+    {
+        Ok(id) => Some(id),
+        Err(e) => {
+            tracing::warn!(
+                error = ?e,
+                streamer = %streamer,
+                days,
+                model_name = %model_name,
+                "ai analysis persistence failed"
+            );
+            None
+        }
+    }
 }
 
 fn count_priority(points: &Value, priority: &str) -> i64 {
@@ -241,6 +253,24 @@ mod tests {
         assert_eq!(arr[0]["model"], "opus");
         assert_eq!(arr[0]["dataSnapshot"]["k"], "v");
         assert_eq!(arr[0]["kritischCount"], 1);
+    }
+
+    #[tokio::test]
+    async fn save_analysis_db_fehler_bleibt_best_effort_none() {
+        let Some(pool) = make_pool("t_aih_save_err").await else {
+            return;
+        };
+        let id = save_analysis(
+            &pool,
+            "nani",
+            30,
+            "claude-opus-4-6",
+            Utc::now(),
+            &json!({"k": "v"}),
+            &json!([{"priority": "kritisch"}]),
+        )
+        .await;
+        assert!(id.is_none());
     }
 
     #[tokio::test]

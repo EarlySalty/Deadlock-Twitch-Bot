@@ -11,6 +11,7 @@ use std::sync::{Arc, Mutex};
 
 use chrono::Utc;
 use sqlx::PgPool;
+use tb_monitoring::sessions::tracker::FollowerCountSource;
 use tb_raid::{
     build_partner_raid_message, build_recruitment_message, classify_partner_raid_arrival,
     classify_partner_raid_arrival_with_expectation, decide_blacklist_action,
@@ -21,6 +22,7 @@ use tb_raid::{
     RecruitmentDeliveryConfig, RecruitmentDeliveryRequest, ScoreTrackingStore,
     EXTERNAL_RECRUITMENT_BLACKLIST_GRACE_SECONDS, EXTERNAL_RECRUITMENT_RAID_LIMIT,
 };
+use tokio::task::JoinHandle;
 
 use crate::confirm_resolver::{ConfirmContext, ConfirmResolver};
 use crate::partner_lookup::{is_target_partner, known_source, PrefetchedLookups};
@@ -62,6 +64,20 @@ fn orphan_key(to_broadcaster_id: &str, from_broadcaster_login: &str) -> String {
     )
 }
 
+fn claim_stale_orphans(
+    map: &mut std::collections::HashMap<String, OrphanChatNotification>,
+) -> Vec<OrphanChatNotification> {
+    let stale_keys: Vec<String> = map
+        .iter()
+        .filter(|(_, orphan)| orphan.observed_at.elapsed().as_secs() >= ORPHAN_GRACE_SECS)
+        .map(|(key, _)| key.clone())
+        .collect();
+    stale_keys
+        .into_iter()
+        .filter_map(|key| map.remove(&key))
+        .collect()
+}
+
 /// Prozessweit eindeutige Flow-ID, wenn das Pending keine trägt (Python
 /// `_next_flow_id`). Da das Pending beim Confirm gepoppt wird, kann derselbe
 /// Raid nicht doppelt bestätigt werden — Zähler + Millis genügen.
@@ -70,6 +86,36 @@ fn next_flow_id(prefix: &str) -> String {
     static COUNTER: AtomicU64 = AtomicU64::new(0);
     let n = COUNTER.fetch_add(1, Ordering::Relaxed);
     format!("{prefix}-{}-{n}", Utc::now().timestamp_millis())
+}
+
+fn watch_send_task(label: &'static str, target_login: String, handle: JoinHandle<()>) {
+    tokio::spawn(async move {
+        match handle.await {
+            Ok(()) => tracing::debug!(
+                task = label,
+                to = %target_login,
+                "Send-Task abgeschlossen"
+            ),
+            Err(error) if error.is_panic() => tracing::error!(
+                task = label,
+                to = %target_login,
+                %error,
+                "Send-Task panicked"
+            ),
+            Err(error) if error.is_cancelled() => tracing::warn!(
+                task = label,
+                to = %target_login,
+                %error,
+                "Send-Task abgebrochen"
+            ),
+            Err(error) => tracing::error!(
+                task = label,
+                to = %target_login,
+                %error,
+                "Send-Task Join-Fehler"
+            ),
+        }
+    });
 }
 
 #[derive(Debug, Clone, Copy, Default)]
@@ -86,7 +132,7 @@ async fn load_recruitment_delivery_stops(
     target_id: &str,
     target_login: &str,
 ) -> RecruitmentDeliveryStops {
-    let target_blacklisted = match blacklist
+    let soft_blacklisted = match blacklist
         .is_blacklisted(Some(target_id), target_login)
         .await
     {
@@ -100,13 +146,27 @@ async fn load_recruitment_delivery_stops(
             true
         }
     };
+    let hard_banned = match blacklist
+        .is_hard_banned(Some(target_id), target_login)
+        .await
+    {
+        Ok(hit) => hit,
+        Err(error) => {
+            tracing::error!(
+                %error,
+                to = %target_login,
+                "Recruitment-Nachricht sicherheitshalber gestoppt: Global-Ban-Prüfung fehlgeschlagen"
+            );
+            true
+        }
+    };
     let target_is_partner = target_is_partner_fail_closed(pool, target_id, target_login).await;
     let outbound_chat_suppressed =
         outbound_suppression_lookup_fail_closed(pool, outbound_suppression.is_some(), target_login)
             .await;
 
     RecruitmentDeliveryStops {
-        target_blacklisted,
+        target_blacklisted: soft_blacklisted || hard_banned,
         target_is_partner,
         outbound_chat_suppressed,
     }
@@ -193,6 +253,7 @@ pub struct RaidArrivalSinkImpl {
     /// Verwaiste Chat-Notifications, vom Sweeper periodisch promotet
     /// (Python `orphan_chat_raid_notifications` in `raid_state_store.py`).
     orphans: Mutex<std::collections::HashMap<String, OrphanChatNotification>>,
+    followers: Option<Arc<dyn FollowerCountSource>>,
 }
 
 impl RaidArrivalSinkImpl {
@@ -203,6 +264,7 @@ impl RaidArrivalSinkImpl {
         target_game_lower: &str,
         chat_api: Option<Arc<dyn tb_chat::ChatApi>>,
         outbound_suppression: Option<Arc<tb_chat::moderation::OutboundSuppressionStore>>,
+        followers: Option<Arc<dyn FollowerCountSource>>,
     ) -> Self {
         Self {
             arrival_store: ArrivalTrackingStore::new(pool.clone()),
@@ -218,6 +280,7 @@ impl RaidArrivalSinkImpl {
             chat_api,
             outbound_suppression,
             orphans: Mutex::new(std::collections::HashMap::new()),
+            followers,
         }
     }
 
@@ -310,6 +373,80 @@ impl RaidArrivalSinkImpl {
         }
     }
 
+    pub async fn process_due_external_bot_ban_checks(&self) {
+        let due = match self.external_recruitment.load_due_bot_ban_checks().await {
+            Ok(rows) => rows,
+            Err(error) => {
+                tracing::error!(%error, "load_due_bot_ban_checks fehlgeschlagen");
+                return;
+            }
+        };
+
+        for entry in due {
+            let hard_banned = match self
+                .blacklist
+                .is_hard_banned(Some(&entry.target_id), &entry.target_login)
+                .await
+            {
+                Ok(hit) => hit,
+                Err(error) => {
+                    tracing::error!(
+                        %error,
+                        target = %entry.target_login,
+                        "External-Bot-Ban-Check: Global-Ban-Prüfung fehlgeschlagen; fail-closed"
+                    );
+                    true
+                }
+            };
+            if hard_banned {
+                if let Err(error) = self
+                    .external_recruitment
+                    .delete_bot_ban_check(&entry.target_id)
+                    .await
+                {
+                    tracing::error!(
+                        %error,
+                        target = %entry.target_login,
+                        "External-Bot-Ban-Check-Cleanup fehlgeschlagen"
+                    );
+                }
+                tracing::warn!(
+                    target = %entry.target_login,
+                    source = %entry.source,
+                    "External-Bot-Ban-Check: Ziel ist global gebannt"
+                );
+                continue;
+            }
+
+            if is_target_partner(&self.pool, &entry.target_id, &entry.target_login).await {
+                if let Err(error) = self
+                    .external_recruitment
+                    .delete_bot_ban_check(&entry.target_id)
+                    .await
+                {
+                    tracing::error!(
+                        %error,
+                        target = %entry.target_login,
+                        "External-Bot-Ban-Check-Cleanup für Partner fehlgeschlagen"
+                    );
+                }
+                continue;
+            }
+
+            if let Err(error) = self
+                .external_recruitment
+                .reschedule_bot_ban_check(&entry.target_id, 900)
+                .await
+            {
+                tracing::error!(
+                    %error,
+                    target = %entry.target_login,
+                    "External-Bot-Ban-Check-Reschedule fehlgeschlagen"
+                );
+            }
+        }
+    }
+
     /// Entfernt einen wartenden Orphan, sobald das korrelierende Raid-Event
     /// eintrifft (Python `raid_tracking_runtime.py:477-490` — nur Log).
     fn take_orphan(
@@ -340,14 +477,11 @@ impl RaidArrivalSinkImpl {
     /// periodisch aufgerufen.
     pub async fn promote_stale_orphans(&self) {
         let stale: Vec<OrphanChatNotification> = {
-            let map = self
+            let mut map = self
                 .orphans
                 .lock()
                 .unwrap_or_else(|poisoned| poisoned.into_inner());
-            map.values()
-                .filter(|o| o.observed_at.elapsed().as_secs() >= ORPHAN_GRACE_SECS)
-                .cloned()
-                .collect()
+            claim_stale_orphans(&mut map)
         };
 
         for orphan in stale {
@@ -361,21 +495,15 @@ impl RaidArrivalSinkImpl {
                 )
                 .await;
 
-            let drop_entry =
-                processed || orphan.observed_at.elapsed().as_secs() >= ORPHAN_RETENTION_SECS;
-            if drop_entry {
-                let key = orphan_key(&orphan.to_broadcaster_id, &orphan.from_broadcaster_login);
-                self.orphans
-                    .lock()
-                    .unwrap_or_else(|poisoned| poisoned.into_inner())
-                    .remove(&key);
-                if !processed {
-                    tracing::info!(
-                        from = %orphan.from_broadcaster_login,
-                        to = %orphan.to_broadcaster_login,
-                        "Verwaiste channel.chat.notification ohne Korrelation verworfen"
-                    );
-                }
+            if !processed {
+                let retention_expired =
+                    orphan.observed_at.elapsed().as_secs() >= ORPHAN_RETENTION_SECS;
+                tracing::info!(
+                    from = %orphan.from_broadcaster_login,
+                    to = %orphan.to_broadcaster_login,
+                    retention_expired,
+                    "Verwaiste channel.chat.notification ohne Korrelation verworfen"
+                );
             }
         }
     }
@@ -571,7 +699,8 @@ impl RaidArrivalSinkImpl {
         //    chat_wiring.rs). confirm_pending_raid darf nicht 5 s warten.
         let to_broadcaster_id = to_broadcaster_id.to_string();
         let to_broadcaster_login = to_broadcaster_login.to_string();
-        tokio::spawn(async move {
+        let watch_login = to_broadcaster_login.clone();
+        let handle = tokio::spawn(async move {
             tokio::time::sleep(std::time::Duration::from_secs(5)).await;
             match chat_api.send_message(&to_broadcaster_id, &message).await {
                 Ok(tb_chat::types::SendOutcome::Sent) => tracing::info!(
@@ -596,6 +725,7 @@ impl RaidArrivalSinkImpl {
                 ),
             }
         });
+        watch_send_task("partner_raid_message", watch_login, handle);
     }
 
     /// silent_raid-Lookup für den Ziel-Channel (Python `_lookup_silent_raid_enabled`,
@@ -620,6 +750,29 @@ impl RaidArrivalSinkImpl {
                     "silent_raid-Lookup fehlgeschlagen — als nicht-silent behandelt"
                 );
                 false
+            }
+        }
+    }
+
+    async fn recruitment_followers_total(
+        &self,
+        target_id: &str,
+        target_login: &str,
+    ) -> Option<i64> {
+        let Some(source) = &self.followers else {
+            return None;
+        };
+        let fetch = source.follower_total(Some(target_id), target_login).await;
+        match fetch.total {
+            Some(total) if total >= 0 => Some(i64::from(total)),
+            _ => {
+                tracing::debug!(
+                    to = %target_login,
+                    http_status = ?fetch.http_status,
+                    error_code = ?fetch.error_code,
+                    "Recruitment-Follower-Fallback ohne Ergebnis"
+                );
+                None
             }
         }
     }
@@ -679,15 +832,17 @@ impl RaidArrivalSinkImpl {
         .await
         .unwrap_or(0);
 
-        // followers_total = None: beeinflusst in Python nur invite_variant, das
-        // weder in die Nachricht noch in persistierten Zustand einfließt.
+        let followers_total = self
+            .recruitment_followers_total(to_broadcaster_id, to_broadcaster_login)
+            .await;
+
         let request = RecruitmentDeliveryRequest {
             from_broadcaster_login: from_broadcaster_login.to_string(),
             to_broadcaster_login: to_broadcaster_login.to_string(),
             target_id: Some(to_broadcaster_id.to_string()),
             recent_raid_count,
             total_recruitment_raid_count: Some(total_recruitment_raid_count),
-            followers_total: None,
+            followers_total,
             chat_bot_available: true,
             target_blacklisted: stops.target_blacklisted,
             target_is_partner: stops.target_is_partner,
@@ -713,7 +868,8 @@ impl RaidArrivalSinkImpl {
         let from_broadcaster_login = from_broadcaster_login.to_string();
         let to_broadcaster_id = to_broadcaster_id.to_string();
         let to_broadcaster_login = to_broadcaster_login.to_string();
-        tokio::spawn(async move {
+        let watch_login = to_broadcaster_login.clone();
+        let handle = tokio::spawn(async move {
             tokio::time::sleep(std::time::Duration::from_secs(15)).await;
             let blacklist = RaidBlacklistStore::new(pool.clone());
             let stops = load_recruitment_delivery_stops(
@@ -730,7 +886,7 @@ impl RaidArrivalSinkImpl {
                 target_id: Some(to_broadcaster_id.clone()),
                 recent_raid_count,
                 total_recruitment_raid_count: Some(total_recruitment_raid_count),
-                followers_total: None,
+                followers_total,
                 chat_bot_available: true,
                 target_blacklisted: stops.target_blacklisted,
                 target_is_partner: stops.target_is_partner,
@@ -782,6 +938,7 @@ impl RaidArrivalSinkImpl {
                 ),
             }
         });
+        watch_send_task("recruitment_message", watch_login, handle);
     }
 }
 
@@ -1015,6 +1172,7 @@ impl RaidArrivalSink for RaidArrivalSinkImpl {
                 from_broadcaster_login,
                 from_broadcaster_id,
                 viewer_count: effective_viewer_count,
+                pending_target_stream_data: decision.pending_raid.target_stream_data.as_ref(),
             };
             match self
                 .confirm_resolver
@@ -1389,7 +1547,10 @@ mod recruitment_stop_tests {
     async fn partner_lookup_fehler_blockt_recruitment_fail_closed() {
         let Some(pool) = setup(
             "trust_ladder_partner_lookup_fail_closed",
-            &["CREATE TABLE twitch_raid_blacklist (target_id TEXT, target_login TEXT)"],
+            &[
+                "CREATE TABLE twitch_raid_blacklist (target_id TEXT, target_login TEXT)",
+                "CREATE TABLE twitch_chatter_global_ban (chatter_login TEXT, chatter_id TEXT)",
+            ],
         )
         .await
         else {
@@ -1417,6 +1578,7 @@ mod recruitment_stop_tests {
             "trust_ladder_suppression_lookup_fail_closed",
             &[
                 "CREATE TABLE twitch_raid_blacklist (target_id TEXT, target_login TEXT)",
+                "CREATE TABLE twitch_chatter_global_ban (chatter_login TEXT, chatter_id TEXT)",
                 "CREATE TABLE twitch_partners (twitch_user_id TEXT, twitch_login TEXT, status TEXT)",
             ],
         )
@@ -1444,6 +1606,46 @@ mod recruitment_stop_tests {
             .reason,
             Some("outbound_chat_suppressed")
         );
+    }
+}
+
+#[cfg(test)]
+mod orphan_claim_tests {
+    use super::*;
+    use std::collections::HashMap;
+    use std::time::{Duration, Instant};
+
+    fn orphan(observed_at: Instant, from_login: &str) -> OrphanChatNotification {
+        OrphanChatNotification {
+            to_broadcaster_id: "200".to_string(),
+            to_broadcaster_login: "dst".to_string(),
+            from_broadcaster_id: Some("100".to_string()),
+            from_broadcaster_login: from_login.to_string(),
+            viewer_count: 12,
+            message_id: Some("msg".to_string()),
+            event_timestamp: Some("2026-06-10T16:00:00Z".to_string()),
+            observed_at,
+        }
+    }
+
+    #[test]
+    fn stale_orphans_werden_unter_mutex_geclaimt_und_entfernt() {
+        let mut map = HashMap::new();
+        map.insert(
+            orphan_key("200", "src"),
+            orphan(
+                Instant::now() - Duration::from_secs(ORPHAN_GRACE_SECS + 1),
+                "src",
+            ),
+        );
+        map.insert(orphan_key("200", "fresh"), orphan(Instant::now(), "fresh"));
+
+        let claimed = claim_stale_orphans(&mut map);
+
+        assert_eq!(claimed.len(), 1);
+        assert_eq!(claimed[0].from_broadcaster_login, "src");
+        assert!(!map.contains_key(&orphan_key("200", "src")));
+        assert!(map.contains_key(&orphan_key("200", "fresh")));
     }
 }
 
@@ -1516,6 +1718,7 @@ mod tests {
             "deadlock",
             None,
             None,
+            None,
         );
         sink.confirm_pending_raid("channel.raid", "200", "dst", "src", Some("100"), 42)
             .await;
@@ -1562,6 +1765,7 @@ mod tests {
             pending_store.clone(),
             suppression,
             "deadlock",
+            None,
             None,
             None,
         );
@@ -1616,6 +1820,7 @@ mod tests {
             "deadlock",
             None,
             None,
+            None,
         );
         sink.confirm_pending_raid("channel.raid", "200", "dst", "src", Some("100"), 42)
             .await;
@@ -1644,6 +1849,7 @@ mod tests {
             pending_store.clone(),
             suppression,
             "deadlock",
+            None,
             None,
             None,
         );
@@ -1682,6 +1888,7 @@ mod tests {
             pending_store,
             suppression,
             "deadlock",
+            None,
             None,
             None,
         );

@@ -7,7 +7,7 @@
 //! `<repo>/data/admin_dashboard/legal_pages.json`, als Dict pro Slug. Fehlt ein
 //! Eintrag, liefert GET den eingebetteten Default-Titel + -Body.
 //!
-//! Admin über `AuthLevel::is_privileged`; CSRF erzwingt der `csrf_protect`-Layer
+//! Admin über `DashboardAuthLevel`; CSRF erzwingt der `csrf_protect`-Layer
 //! des admin_config_routers (B3-7). updated_by = "admin" (Pythons Fallback).
 
 use std::path::{Path, PathBuf};
@@ -15,7 +15,8 @@ use std::path::{Path, PathBuf};
 use axum::{extract::Path as AxumPath, response::IntoResponse, Json};
 use chrono::SecondsFormat;
 use serde_json::{json, Value};
-use tb_http_core::{ApiError, AuthLevel};
+use crate::auth::level::DashboardAuthLevel;
+use tb_http_core::ApiError;
 
 const SLUGS: [&str; 4] = ["impressum", "datenschutz", "agb", "sicherheit"];
 const LEGAL_REL_PATH: &str = "data/admin_dashboard/legal_pages.json";
@@ -222,23 +223,23 @@ async fn save_legal(path: &Path, slug_raw: &str, body_bytes: &[u8]) -> Result<Va
 
 /// `GET /twitch/api/admin/legal/:slug` — Rechtsseite lesen (Admin).
 pub async fn get_handler(
-    auth: AuthLevel,
+    auth: DashboardAuthLevel,
     AxumPath(slug): AxumPath<String>,
 ) -> Result<impl IntoResponse, ApiError> {
-    if !auth.is_privileged() {
-        return Err(ApiError::unauthorized());
+    if let Some(err) = crate::auth::require_admin(&auth) {
+        return Err(err);
     }
     Ok(Json(load_legal(&legal_path(), &slug).await?))
 }
 
 /// `POST /twitch/api/admin/legal/:slug` — Rechtsseite speichern (Admin).
 pub async fn save_handler(
-    auth: AuthLevel,
+    auth: DashboardAuthLevel,
     AxumPath(slug): AxumPath<String>,
     body: axum::body::Bytes,
 ) -> Result<impl IntoResponse, ApiError> {
-    if !auth.is_privileged() {
-        return Err(ApiError::unauthorized());
+    if let Some(err) = crate::auth::require_admin(&auth) {
+        return Err(err);
     }
     Ok(Json(save_legal(&legal_path(), &slug, &body).await?))
 }
@@ -332,10 +333,10 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn handler_unauth_401() {
-        let r = get_handler(AuthLevel::None, AxumPath("impressum".to_string())).await;
+    async fn handler_unauth_auth_required_401() {
+        let r = get_handler(DashboardAuthLevel::None, AxumPath("impressum".to_string())).await;
         assert_eq!(r.into_response().status(), StatusCode::UNAUTHORIZED);
-        let r = save_handler(AuthLevel::None, AxumPath("impressum".to_string()), axum::body::Bytes::from(r#"{"body":"x"}"#)).await;
+        let r = save_handler(DashboardAuthLevel::None, AxumPath("impressum".to_string()), axum::body::Bytes::from(r#"{"body":"x"}"#)).await;
         assert_eq!(r.into_response().status(), StatusCode::UNAUTHORIZED);
     }
 }

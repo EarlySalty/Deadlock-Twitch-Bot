@@ -805,7 +805,7 @@ impl RaidSignalCorrelationService {
     /// - `!independent_manual_detected` → `no_pending`, leere Actions
     /// - `independent_manual_detected && source_key.is_some()` →
     ///   `independent_manual_arrival` mit
-    ///   [`mark_manual_raid_started`, `record_independent_raid_arrival`]
+    ///   [`record_independent_raid_arrival`, `mark_manual_raid_started`]
     /// - `independent_manual_detected && source_key.is_none()` →
     ///   `independent_manual_arrival` mit [`record_independent_raid_arrival`]
     #[allow(clippy::too_many_arguments)]
@@ -856,6 +856,7 @@ impl RaidSignalCorrelationService {
             // source_key trimmen (Z. 448: `str(manual_raid_source_key or "").strip()`)
             let trimmed = source_key.trim().to_string();
             vec![
+                arrival_action,
                 RaidSignalAction {
                     kind: RaidSignalActionKind::MarkManualRaidStarted,
                     data: ActionData::MarkManualRaidStarted {
@@ -863,7 +864,6 @@ impl RaidSignalCorrelationService {
                         ttl_seconds: 180.0,
                     },
                 },
-                arrival_action,
             ]
         } else {
             // Pfad: manuell ohne Source-Key (Z. 464–477)
@@ -1030,8 +1030,7 @@ mod tests {
 
     #[test]
     fn raid_arrival_independent_manual_mit_source_key() {
-        // Python Z. 443–463: manuell + source_key →
-        //   [mark_manual_raid_started, record_independent_raid_arrival]
+        // Manuell + source_key: erst Arrival speichern, danach Suppression setzen.
         let plan = svc().plan_raid_arrival(RaidArrivalInput {
             to_broadcaster_id: "to_id".to_string(),
             to_broadcaster_login: "to_login".to_string(),
@@ -1047,17 +1046,17 @@ mod tests {
         assert_eq!(plan.actions.len(), 2);
         assert_eq!(
             plan.actions[0].kind,
-            RaidSignalActionKind::MarkManualRaidStarted
+            RaidSignalActionKind::RecordIndependentRaidArrival
         );
         assert_eq!(
             plan.actions[1].kind,
-            RaidSignalActionKind::RecordIndependentRaidArrival
+            RaidSignalActionKind::MarkManualRaidStarted
         );
         // source_key wird getrimmt (Z. 448)
         if let ActionData::MarkManualRaidStarted {
             source_key,
             ttl_seconds,
-        } = &plan.actions[0].data
+        } = &plan.actions[1].data
         {
             assert_eq!(source_key, "src_key");
             assert_eq!(*ttl_seconds, 180.0);

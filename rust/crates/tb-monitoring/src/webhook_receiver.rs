@@ -140,11 +140,7 @@ fn is_timestamp_too_old(timestamp: &str, now: chrono::DateTime<chrono::Utc>) -> 
 /// über die [`RevocationSink`], damit der nächste Reconcile-Zyklus sie neu
 /// anlegt (Selbstheilung statt stillem Event-Verlust). Ohne Sink bleibt es beim
 /// reinen Logging (Alt-Verhalten).
-fn handle_revocation(
-    parsed: &Value,
-    header_sub_type: &str,
-    sink: Option<&dyn RevocationSink>,
-) {
+fn handle_revocation(parsed: &Value, header_sub_type: &str, sink: Option<&dyn RevocationSink>) {
     let reason = parsed
         .pointer("/subscription/status")
         .and_then(Value::as_str)
@@ -196,6 +192,23 @@ fn header<'h>(headers: &'h HeaderMap, name: &str) -> &'h str {
         .trim()
 }
 
+fn message_type_header(headers: &HeaderMap) -> Option<String> {
+    let message_type = header(headers, "twitch-eventsub-message-type").to_lowercase();
+    if message_type.is_empty() {
+        None
+    } else {
+        Some(message_type)
+    }
+}
+
+fn verification_challenge(parsed: &Value) -> Option<&str> {
+    let challenge = parsed
+        .get("challenge")
+        .and_then(Value::as_str)
+        .filter(|challenge| !challenge.trim().is_empty())?;
+    Some(challenge)
+}
+
 async fn handle_callback(
     State(receiver): State<Arc<WebhookReceiver>>,
     headers: HeaderMap,
@@ -204,7 +217,9 @@ async fn handle_callback(
     let message_id = header(&headers, "twitch-eventsub-message-id");
     let timestamp = header(&headers, "twitch-eventsub-message-timestamp");
     let signature = header(&headers, "twitch-eventsub-message-signature");
-    let message_type = header(&headers, "twitch-eventsub-message-type").to_lowercase();
+    let Some(message_type) = message_type_header(&headers) else {
+        return StatusCode::BAD_REQUEST.into_response();
+    };
     let header_sub_type = header(&headers, "twitch-eventsub-subscription-type").to_string();
 
     if message_id.is_empty() || timestamp.is_empty() {
@@ -242,10 +257,13 @@ async fn handle_callback(
     match message_type.as_str() {
         MSG_TYPE_VERIFICATION => {
             // Challenge-Echo als text/plain (Twitch-Vertrag).
-            let challenge = parsed
-                .get("challenge")
-                .and_then(Value::as_str)
-                .unwrap_or("");
+            let Some(challenge) = verification_challenge(&parsed) else {
+                tracing::warn!(
+                    sub_type = %header_sub_type,
+                    "eventsub_receiver: Challenge fehlt oder ist leer"
+                );
+                return StatusCode::BAD_REQUEST.into_response();
+            };
             tracing::info!(
                 sub_type = %header_sub_type,
                 "eventsub_receiver: Challenge beantwortet"
@@ -253,7 +271,11 @@ async fn handle_callback(
             (StatusCode::OK, challenge.to_string()).into_response()
         }
         MSG_TYPE_REVOCATION => {
-            handle_revocation(&parsed, &header_sub_type, receiver.revocation_sink.as_deref());
+            handle_revocation(
+                &parsed,
+                &header_sub_type,
+                receiver.revocation_sink.as_deref(),
+            );
             StatusCode::NO_CONTENT.into_response()
         }
         MSG_TYPE_NOTIFICATION => {
@@ -295,7 +317,10 @@ async fn handle_callback(
             }
         }
         other => {
-            tracing::debug!(message_type = other, "eventsub_receiver: unbekannter Typ — ack");
+            tracing::debug!(
+                message_type = other,
+                "eventsub_receiver: unbekannter Typ — ack"
+            );
             StatusCode::NO_CONTENT.into_response()
         }
     }
@@ -375,6 +400,38 @@ mod tests {
     }
 
     #[test]
+    fn message_type_header_muss_vorhanden_sein() {
+        let mut headers = HeaderMap::new();
+        assert_eq!(message_type_header(&headers), None);
+
+        headers.insert(
+            "twitch-eventsub-message-type",
+            "  NoTiFiCaTiOn  ".parse().unwrap(),
+        );
+        assert_eq!(
+            message_type_header(&headers).as_deref(),
+            Some("notification")
+        );
+    }
+
+    #[test]
+    fn verification_challenge_muss_nicht_leer_sein() {
+        assert_eq!(verification_challenge(&serde_json::json!({})), None);
+        assert_eq!(
+            verification_challenge(&serde_json::json!({"challenge": ""})),
+            None
+        );
+        assert_eq!(
+            verification_challenge(&serde_json::json!({"challenge": "   "})),
+            None
+        );
+        assert_eq!(
+            verification_challenge(&serde_json::json!({"challenge": "  abc  "})),
+            Some("  abc  ")
+        );
+    }
+
+    #[test]
     fn timestamp_replay_fenster() {
         use chrono::{Duration, Utc};
         let now = Utc::now();
@@ -382,15 +439,33 @@ mod tests {
 
         // Frisch → akzeptiert.
         assert!(!is_timestamp_too_old(&iso(now), now));
-        assert!(!is_timestamp_too_old(&iso(now - Duration::seconds(599)), now));
+        assert!(!is_timestamp_too_old(
+            &iso(now - Duration::seconds(599)),
+            now
+        ));
         // Genau am Limit (600s) → noch akzeptiert (Python: nur > 600 lehnt ab).
-        assert!(!is_timestamp_too_old(&iso(now - Duration::seconds(600)), now));
+        assert!(!is_timestamp_too_old(
+            &iso(now - Duration::seconds(600)),
+            now
+        ));
         // Älter als 600s → abgelehnt.
-        assert!(is_timestamp_too_old(&iso(now - Duration::seconds(601)), now));
-        assert!(is_timestamp_too_old(&iso(now - Duration::seconds(3600)), now));
+        assert!(is_timestamp_too_old(
+            &iso(now - Duration::seconds(601)),
+            now
+        ));
+        assert!(is_timestamp_too_old(
+            &iso(now - Duration::seconds(3600)),
+            now
+        ));
         // Zukunfts-Skew jenseits -600s → abgelehnt.
-        assert!(!is_timestamp_too_old(&iso(now + Duration::seconds(600)), now));
-        assert!(is_timestamp_too_old(&iso(now + Duration::seconds(601)), now));
+        assert!(!is_timestamp_too_old(
+            &iso(now + Duration::seconds(600)),
+            now
+        ));
+        assert!(is_timestamp_too_old(
+            &iso(now + Duration::seconds(601)),
+            now
+        ));
         // Unparsebar → abgelehnt (Fail-closed, wie Python).
         assert!(is_timestamp_too_old("", now));
         assert!(is_timestamp_too_old("nicht-ein-timestamp", now));
@@ -402,8 +477,14 @@ mod tests {
         // Twitch-Realformat: RFC3339 mit Sub-Sekunden + Z.
         let base = Utc.with_ymd_and_hms(2026, 6, 12, 10, 0, 0).unwrap();
         let ts = "2026-06-12T10:00:00.7726011Z";
-        assert!(!is_timestamp_too_old(ts, base + chrono::Duration::seconds(60)));
-        assert!(is_timestamp_too_old(ts, base + chrono::Duration::seconds(700)));
+        assert!(!is_timestamp_too_old(
+            ts,
+            base + chrono::Duration::seconds(60)
+        ));
+        assert!(is_timestamp_too_old(
+            ts,
+            base + chrono::Duration::seconds(700)
+        ));
     }
 
     #[test]
@@ -412,16 +493,52 @@ mod tests {
         let body = br#"{"subscription":{"type":"channel.chat.message"}}"#;
         let sig = sign(secret, "mid-1", "2026-06-12T10:00:00Z", body);
 
-        assert!(verify_eventsub_signature(secret, "mid-1", "2026-06-12T10:00:00Z", body, &sig));
+        assert!(verify_eventsub_signature(
+            secret,
+            "mid-1",
+            "2026-06-12T10:00:00Z",
+            body,
+            &sig
+        ));
         // Manipulierter Body → ungültig
-        assert!(!verify_eventsub_signature(secret, "mid-1", "2026-06-12T10:00:00Z", b"{}", &sig));
+        assert!(!verify_eventsub_signature(
+            secret,
+            "mid-1",
+            "2026-06-12T10:00:00Z",
+            b"{}",
+            &sig
+        ));
         // Falsche message_id → ungültig
-        assert!(!verify_eventsub_signature(secret, "mid-2", "2026-06-12T10:00:00Z", body, &sig));
+        assert!(!verify_eventsub_signature(
+            secret,
+            "mid-2",
+            "2026-06-12T10:00:00Z",
+            body,
+            &sig
+        ));
         // Fehlendes Präfix → ungültig
-        assert!(!verify_eventsub_signature(secret, "mid-1", "2026-06-12T10:00:00Z", body, "deadbeef"));
+        assert!(!verify_eventsub_signature(
+            secret,
+            "mid-1",
+            "2026-06-12T10:00:00Z",
+            body,
+            "deadbeef"
+        ));
         // Leere Signatur → ungültig
-        assert!(!verify_eventsub_signature(secret, "mid-1", "2026-06-12T10:00:00Z", body, ""));
+        assert!(!verify_eventsub_signature(
+            secret,
+            "mid-1",
+            "2026-06-12T10:00:00Z",
+            body,
+            ""
+        ));
         // Falsches Secret → ungültig
-        assert!(!verify_eventsub_signature("anderes", "mid-1", "2026-06-12T10:00:00Z", body, &sig));
+        assert!(!verify_eventsub_signature(
+            "anderes",
+            "mid-1",
+            "2026-06-12T10:00:00Z",
+            body,
+            &sig
+        ));
     }
 }

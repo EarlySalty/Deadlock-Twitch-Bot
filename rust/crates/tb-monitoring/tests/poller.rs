@@ -2,7 +2,7 @@
 //! Hook-/Refresh-Verhalten und Stats-Kadenz — mit Stub-StreamSource statt
 //! Helix, Noop-Announcements und Recording-Hooks.
 
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 
 use chrono::{Duration, Utc};
@@ -30,6 +30,7 @@ macro_rules! pool_or_skip {
 struct StubSource {
     streams: Mutex<Vec<StreamSnapshot>>,
     category: Mutex<Vec<StreamSnapshot>>,
+    fail_streams: AtomicBool,
 }
 
 impl StubSource {
@@ -37,10 +38,15 @@ impl StubSource {
         Self {
             streams: Mutex::new(Vec::new()),
             category: Mutex::new(Vec::new()),
+            fail_streams: AtomicBool::new(false),
         }
     }
     fn set_streams(&self, streams: Vec<StreamSnapshot>) {
         *self.streams.lock().unwrap() = streams;
+        self.fail_streams.store(false, Ordering::SeqCst);
+    }
+    fn set_streams_error(&self) {
+        self.fail_streams.store(true, Ordering::SeqCst);
     }
 }
 
@@ -51,6 +57,9 @@ impl StreamSource for StubSource {
         _logins: &[String],
         _language: Option<&str>,
     ) -> Result<Vec<StreamSnapshot>, tb_monitoring::poller::SourceError> {
+        if self.fail_streams.load(Ordering::SeqCst) {
+            return Err("stream api down".into());
+        }
         Ok(self.streams.lock().unwrap().clone())
     }
     async fn streams_by_category(
@@ -255,6 +264,44 @@ async fn tick_transitions_online_dann_offline() {
         hooks.offline_raid.load(Ordering::SeqCst),
         1,
         "Poller-Offline triggert Auto-Raid-Hook"
+    );
+}
+
+#[tokio::test]
+async fn tracked_stream_api_error_erhaelt_live_state() {
+    let pool = pool_or_skip!("t4c_tracked_api_error_preserves_live");
+    sqlx::query(
+        "INSERT INTO twitch_streamers_partner_state
+            (twitch_login, twitch_user_id, is_partner_active, is_partner)
+         VALUES ('drag', '42', 1, 1)",
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
+
+    let source = Arc::new(StubSource::new());
+    let hooks = Arc::new(RecordingHooks::new());
+    let engine = engine_with(&pool, source.clone(), hooks.clone());
+
+    source.set_streams(vec![live_stream("drag", "42", "s-1", 10)]);
+    engine.tick().await;
+
+    source.set_streams_error();
+    engine.tick().await;
+
+    let (is_live, active_session_id): (Option<i32>, Option<i64>) = sqlx::query_as(
+        "SELECT is_live, active_session_id FROM twitch_live_state WHERE twitch_user_id = '42'",
+    )
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!(is_live, Some(1));
+    assert!(active_session_id.is_some(), "Session bleibt offen");
+    assert_eq!(hooks.offline_raid.load(Ordering::SeqCst), 0);
+    let reports = hooks.reports.lock().unwrap();
+    assert!(
+        reports[1].score_refreshes.is_empty(),
+        "API-Fehler darf keinen Offline-Refresh erzeugen"
     );
 }
 

@@ -83,8 +83,8 @@ const NEG_WORDS: &[&str] = &[
 /// `GET /twitch/market` — interne Market-Research-Seite.
 ///
 /// Admin/Localhost-gated (Python `_require_token`). Die Seite lädt ihre Daten per
-/// JS aus `/twitch/api/market_data`. User-sichtbare Texte sind PLATZHALTER (Claude
-/// setzt den finalen Wortlaut).
+/// JS aus `/twitch/api/market_data`. User-sichtbare Texte stehen final als
+/// `MR_*`-Konstanten.
 pub async fn market_research_handler(auth: DashboardAuthLevel) -> Response {
     if !auth.is_privileged() {
         return (StatusCode::UNAUTHORIZED, "unauthorized").into_response();
@@ -92,12 +92,34 @@ pub async fn market_research_handler(auth: DashboardAuthLevel) -> Response {
     Html(render_market_research_page()).into_response()
 }
 
-/// Render-Gerüst der Market-Research-Seite. Texte sind PLATZHALTER.
+/// Render-Gerüst der Market-Research-Seite. Texte kommen aus den `MR_*`-Konstanten.
 fn render_market_research_page() -> String {
-    // PLATZHALTER: alle user-sichtbaren deutschen Texte (Titel, Headlines, KPI-
-    // Labels, Sektionsüberschriften) setzt Claude. Das Gerüst hält die Struktur
-    // (KPI-Kacheln, 24h-Chart, Meta-Snapshot, Sentiment, Overlap, Fragen-Radar,
-    // Live-Kanäle) und den Fetch auf /twitch/api/market_data.
+    let labels = json!({
+        "loading": MR_LOADING,
+        "error": MR_ERROR,
+        "empty": MR_EMPTY,
+        "kpiMonitored": MR_KPI_MONITORED,
+        "kpiViewers": MR_KPI_VIEWERS,
+        "kpiHealth": MR_KPI_HEALTH,
+        "kpiLurkers": MR_KPI_LURKERS,
+        "kpiMessages": MR_KPI_MESSAGES,
+        "channel": MR_TH_CHANNEL,
+        "viewers": MR_TH_VIEWERS,
+        "health": MR_TH_HEALTH,
+        "lurkers": MR_TH_LURKERS,
+        "messages": MR_TH_MESSAGES,
+        "topic": MR_TH_TOPIC,
+        "term": MR_TH_TERM,
+        "count": MR_TH_COUNT,
+        "streamer": MR_TH_STREAMER,
+        "question": MR_TH_QUESTION,
+        "source": MR_TH_SOURCE,
+        "target": MR_TH_TARGET,
+        "shared": MR_TH_SHARED,
+        "positive": MR_SENTIMENT_POSITIVE,
+        "negative": MR_SENTIMENT_NEGATIVE,
+    })
+    .to_string();
     format!(
         r#"<!DOCTYPE html>
 <html lang="de">
@@ -106,41 +128,218 @@ fn render_market_research_page() -> String {
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>{title}</title>
 <style>
-  body {{ font-family: system-ui, sans-serif; margin: 0; background: #0f1117; color: #e6e6e6; }}
-  .wrap {{ max-width: 1200px; margin: 0 auto; padding: 24px; }}
-  .kpis {{ display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 16px; }}
-  .kpi {{ background: #1a1d27; border-radius: 12px; padding: 16px; }}
-  .kpi .value {{ font-size: 1.8rem; font-weight: 700; }}
-  section {{ margin-top: 32px; }}
-  table {{ width: 100%; border-collapse: collapse; }}
-  th, td {{ padding: 8px; border-bottom: 1px solid #2a2e3a; text-align: left; }}
+  :root {{ color-scheme: dark; }}
+  body {{ font-family: system-ui, sans-serif; margin: 0; background: #101318; color: #f0f3f5; }}
+  .wrap {{ max-width: 1180px; margin: 0 auto; padding: 24px; }}
+  header {{ margin-bottom: 20px; }}
+  h1 {{ font-size: 2rem; margin: 0 0 8px; letter-spacing: 0; }}
+  h2 {{ font-size: 1.1rem; margin: 0 0 12px; letter-spacing: 0; }}
+  p {{ margin: 0; color: #b8c0c8; }}
+  .status {{ min-height: 24px; color: #b8c0c8; margin: 12px 0 0; }}
+  .kpis {{ display: grid; grid-template-columns: repeat(auto-fit, minmax(170px, 1fr)); gap: 12px; }}
+  .kpi {{ background: #1a2028; border: 1px solid #2c3642; border-radius: 8px; padding: 14px; }}
+  .kpi .label {{ color: #aeb8c2; font-size: .82rem; }}
+  .kpi .value {{ font-size: 1.7rem; font-weight: 700; margin-top: 6px; }}
+  section {{ margin-top: 28px; }}
+  .panel {{ background: #171c23; border: 1px solid #29333f; border-radius: 8px; padding: 14px; overflow-x: auto; }}
+  table {{ width: 100%; border-collapse: collapse; min-width: 520px; }}
+  th, td {{ padding: 9px 8px; border-bottom: 1px solid #2a3440; text-align: left; white-space: nowrap; }}
+  th {{ color: #aeb8c2; font-weight: 600; font-size: .82rem; }}
+  .bars {{ display: grid; gap: 10px; }}
+  .bar {{ display: grid; grid-template-columns: minmax(90px, 160px) 1fr 60px; gap: 10px; align-items: center; }}
+  .track {{ height: 10px; background: #28323d; border-radius: 999px; overflow: hidden; }}
+  .fill {{ height: 100%; background: #4fb286; }}
+  .fill.neg {{ background: #d36b64; }}
+  canvas {{ width: 100%; max-height: 260px; background: #171c23; border: 1px solid #29333f; border-radius: 8px; }}
+  @media (max-width: 640px) {{
+    .wrap {{ padding: 16px; }}
+    .bar {{ grid-template-columns: 1fr; }}
+  }}
 </style>
 </head>
 <body>
 <div class="wrap">
-  <h1>{title}</h1>
-  <p>{subtitle}</p>
+  <header>
+    <h1>{title}</h1>
+    <p>{subtitle}</p>
+    <div id="status" class="status">{loading}</div>
+  </header>
   <div class="kpis" id="kpis"></div>
   <section><h2>{h_history}</h2><canvas id="market-history" height="120"></canvas></section>
-  <section><h2>{h_meta}</h2><div id="meta-snapshot"></div></section>
-  <section><h2>{h_sentiment}</h2><div id="sentiment"></div></section>
-  <section><h2>{h_overlap}</h2><div id="overlap"></div></section>
-  <section><h2>{h_questions}</h2><div id="questions"></div></section>
-  <section><h2>{h_channels}</h2><table id="channels"><thead></thead><tbody></tbody></table></section>
+  <section><h2>{h_meta}</h2><div class="panel" id="meta-snapshot"></div></section>
+  <section><h2>{h_sentiment}</h2><div class="panel" id="sentiment"></div></section>
+  <section><h2>{h_overlap}</h2><div class="panel" id="overlap"></div></section>
+  <section><h2>{h_questions}</h2><div class="panel" id="questions"></div></section>
+  <section><h2>{h_channels}</h2><div class="panel"><table id="channels"><thead></thead><tbody></tbody></table></div></section>
 </div>
 <script>
+  const L = {labels};
+  const fmt = new Intl.NumberFormat('de-DE');
+  const pct = (v) => `${{Number(v || 0).toFixed(1)}}%`;
+  const byId = (id) => document.getElementById(id);
+  const cell = (tag, value) => {{
+    const node = document.createElement(tag);
+    node.textContent = value == null ? '' : String(value);
+    return node;
+  }};
+  const table = (headers, rows) => {{
+    const t = document.createElement('table');
+    const thead = document.createElement('thead');
+    const hrow = document.createElement('tr');
+    headers.forEach((h) => hrow.appendChild(cell('th', h)));
+    thead.appendChild(hrow);
+    const tbody = document.createElement('tbody');
+    rows.forEach((row) => {{
+      const tr = document.createElement('tr');
+      row.forEach((value) => tr.appendChild(cell('td', value)));
+      tbody.appendChild(tr);
+    }});
+    t.append(thead, tbody);
+    return t;
+  }};
+  const replace = (id, node) => {{
+    const target = byId(id);
+    target.replaceChildren(node);
+  }};
+  const emptyNode = () => cell('div', L.empty);
+
+  function renderKpis(data) {{
+    const items = [
+      [L.kpiMonitored, fmt.format(data.total_monitored || 0)],
+      [L.kpiViewers, fmt.format(data.total_viewers || 0)],
+      [L.kpiHealth, pct(data.avg_chat_health)],
+      [L.kpiLurkers, pct(data.avg_lurker_ratio)],
+      [L.kpiMessages, fmt.format(data.total_messages || 0)],
+    ];
+    byId('kpis').replaceChildren(...items.map(([label, value]) => {{
+      const card = document.createElement('div');
+      card.className = 'kpi';
+      const labelNode = document.createElement('div');
+      labelNode.className = 'label';
+      labelNode.textContent = label;
+      const valueNode = document.createElement('div');
+      valueNode.className = 'value';
+      valueNode.textContent = value;
+      card.append(labelNode, valueNode);
+      return card;
+    }}));
+  }}
+
+  function drawHistory(points) {{
+    const canvas = byId('market-history');
+    const ctx = canvas.getContext('2d');
+    const width = canvas.clientWidth || 900;
+    const height = 240;
+    canvas.width = width * window.devicePixelRatio;
+    canvas.height = height * window.devicePixelRatio;
+    ctx.scale(window.devicePixelRatio, window.devicePixelRatio);
+    ctx.clearRect(0, 0, width, height);
+    const values = (points || []).map((p) => Number(p.total_viewers || p.viewers || 0));
+    if (!values.length) return;
+    const max = Math.max(...values, 1);
+    ctx.strokeStyle = '#4fb286';
+    ctx.lineWidth = 2;
+    ctx.beginPath();
+    values.forEach((value, i) => {{
+      const x = values.length === 1 ? 0 : (i / (values.length - 1)) * (width - 20) + 10;
+      const y = height - 16 - (value / max) * (height - 32);
+      if (i === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
+    }});
+    ctx.stroke();
+  }}
+
+  function renderMeta(items) {{
+    if (!items || !items.length) return replace('meta-snapshot', emptyNode());
+    replace('meta-snapshot', table([L.term, L.count], items.map((item) => [
+      item.term,
+      fmt.format(item.count || 0),
+    ])));
+  }}
+
+  function renderSentiment(sentiment) {{
+    const pos = Number(sentiment?.positive || 0);
+    const neg = Number(sentiment?.negative || 0);
+    const max = Math.max(pos, neg, 1);
+    const wrap = document.createElement('div');
+    wrap.className = 'bars';
+    [[L.positive, pos, ''], [L.negative, neg, 'neg']].forEach(([label, value, kind]) => {{
+      const row = document.createElement('div');
+      row.className = 'bar';
+      row.appendChild(cell('div', label));
+      const track = document.createElement('div');
+      track.className = 'track';
+      const fill = document.createElement('div');
+      fill.className = `fill ${{kind}}`;
+      fill.style.width = `${{(Number(value) / max) * 100}}%`;
+      track.appendChild(fill);
+      row.appendChild(track);
+      row.appendChild(cell('div', fmt.format(value)));
+      wrap.appendChild(row);
+    }});
+    replace('sentiment', wrap);
+  }}
+
+  function renderOverlap(items) {{
+    if (!items || !items.length) return replace('overlap', emptyNode());
+    replace('overlap', table([L.source, L.target, L.shared], items.map((item) => [
+      item.source_login || item.source || item.a || '',
+      item.target_login || item.target || item.b || '',
+      fmt.format(item.shared_viewers || item.shared || item.count || 0),
+    ])));
+  }}
+
+  function renderQuestions(items) {{
+    if (!items || !items.length) return replace('questions', emptyNode());
+    replace('questions', table([L.streamer, L.question], items.map((item) => [
+      item.streamer_login || item.streamer || '',
+      item.content || item.message || item.question || '',
+    ])));
+  }}
+
+  function renderChannels(items) {{
+    const tableNode = byId('channels');
+    const rows = (items || []).map((item) => [
+      item.login || '',
+      fmt.format(item.viewers || 0),
+      pct(item.chat_health),
+      pct(item.lurker_ratio),
+      Number(item.msg_per_min || 0).toFixed(2),
+      item.top_topic || '',
+    ]);
+    tableNode.querySelector('thead').replaceChildren();
+    tableNode.querySelector('tbody').replaceChildren();
+    const rendered = table([L.channel, L.viewers, L.health, L.lurkers, L.messages, L.topic], rows);
+    tableNode.querySelector('thead').replaceWith(rendered.querySelector('thead'));
+    tableNode.querySelector('tbody').replaceWith(rendered.querySelector('tbody'));
+  }}
+
+  function renderMarket(data) {{
+    byId('status').textContent = '';
+    renderKpis(data);
+    drawHistory(data.market_history);
+    renderMeta(data.meta_snapshot);
+    renderSentiment(data.sentiment || {{}});
+    renderOverlap(data.overlap);
+    renderQuestions(data.questions);
+    renderChannels(data.channels);
+  }}
+
   async function loadMarketData() {{
-    const res = await fetch('/twitch/api/market_data', {{ credentials: 'same-origin' }});
-    if (!res.ok) return;
-    const data = await res.json();
-    window.__marketData = data;
-    document.dispatchEvent(new CustomEvent('market-data-ready', {{ detail: data }}));
+    try {{
+      const res = await fetch('/twitch/api/market_data', {{ credentials: 'same-origin' }});
+      if (!res.ok) throw new Error(String(res.status));
+      const data = await res.json();
+      window.__marketData = data;
+      renderMarket(data);
+      document.dispatchEvent(new CustomEvent('market-data-ready', {{ detail: data }}));
+    }} catch (_error) {{
+      byId('status').textContent = L.error;
+    }}
   }}
   loadMarketData();
 </script>
 </body>
 </html>"#,
-        // PLATZHALTER-Texte:
         title = MR_TITLE,
         subtitle = MR_SUBTITLE,
         h_history = MR_H_HISTORY,
@@ -149,18 +348,44 @@ fn render_market_research_page() -> String {
         h_overlap = MR_H_OVERLAP,
         h_questions = MR_H_QUESTIONS,
         h_channels = MR_H_CHANNELS,
+        loading = MR_LOADING,
+        labels = labels,
     )
 }
 
 // User-sichtbare deutsche Seitentexte der Market-Research-Seite (P2.115).
 const MR_TITLE: &str = "Markt-Recherche";
-const MR_SUBTITLE: &str = "Überblick über die Deadlock-Streaming-Landschaft im DACH-Raum";
-const MR_H_HISTORY: &str = "Zuschauer-Verlauf (24 Stunden)";
-const MR_H_META: &str = "Markt-Schnappschuss";
+const MR_SUBTITLE: &str =
+    "Überblick über die beobachtete Deadlock-Streaming-Landschaft: Reichweite, Chat-Aktivität, Themen und Fragen.";
+const MR_H_HISTORY: &str = "Reichweite im Zeitverlauf";
+const MR_H_META: &str = "Meta-Snapshot";
 const MR_H_SENTIMENT: &str = "Stimmung im Chat";
 const MR_H_OVERLAP: &str = "Zuschauer-Überschneidung";
-const MR_H_QUESTIONS: &str = "Offene Fragen";
-const MR_H_CHANNELS: &str = "Beobachtete Kanäle";
+const MR_H_QUESTIONS: &str = "Häufige Fragen";
+const MR_H_CHANNELS: &str = "Kanäle";
+const MR_LOADING: &str = "Lädt …";
+const MR_ERROR: &str = "Daten konnten nicht geladen werden.";
+const MR_EMPTY: &str = "Noch keine Daten vorhanden.";
+const MR_KPI_MONITORED: &str = "Beobachtete Kanäle";
+const MR_KPI_VIEWERS: &str = "Zuschauer gesamt";
+const MR_KPI_HEALTH: &str = "Chat-Health";
+const MR_KPI_LURKERS: &str = "Lurker";
+const MR_KPI_MESSAGES: &str = "Nachrichten";
+const MR_TH_CHANNEL: &str = "Kanal";
+const MR_TH_VIEWERS: &str = "Zuschauer";
+const MR_TH_HEALTH: &str = "Health";
+const MR_TH_LURKERS: &str = "Lurker";
+const MR_TH_MESSAGES: &str = "Nachrichten";
+const MR_TH_TOPIC: &str = "Thema";
+const MR_TH_TERM: &str = "Begriff";
+const MR_TH_COUNT: &str = "Anzahl";
+const MR_TH_STREAMER: &str = "Streamer";
+const MR_TH_QUESTION: &str = "Frage";
+const MR_TH_SOURCE: &str = "Quelle";
+const MR_TH_TARGET: &str = "Ziel";
+const MR_TH_SHARED: &str = "Gemeinsam";
+const MR_SENTIMENT_POSITIVE: &str = "Positiv";
+const MR_SENTIMENT_NEGATIVE: &str = "Negativ";
 
 // ── Markt-Daten-API (P2.105 / P2.116) ─────────────────────────────────────────
 
@@ -848,6 +1073,8 @@ mod tests {
             html.contains("/twitch/api/market_data"),
             "page must fetch market_data"
         );
+        assert!(html.contains("function renderMarket"), "page must render data");
+        assert!(html.contains(MR_TITLE), "page must carry the final German title");
         assert!(html.contains("<html"), "must be HTML");
     }
 

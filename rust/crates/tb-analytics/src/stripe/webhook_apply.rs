@@ -84,6 +84,28 @@ pub struct SubscriptionState {
     pub last_event_id: String,
 }
 
+/// Nachgelagerter Sync in `streamer_plans`.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct StreamerPlanSync {
+    pub customer_reference: String,
+    pub plan_id: String,
+    pub status: String,
+    pub current_period_end: Option<String>,
+    pub bonus_months: i64,
+}
+
+impl StreamerPlanSync {
+    fn from_subscription_state(state: &SubscriptionState, bonus_months: i64) -> Self {
+        Self {
+            customer_reference: state.customer_reference.clone(),
+            plan_id: state.plan_id.clone(),
+            status: state.status.clone(),
+            current_period_end: state.current_period_end.clone(),
+            bonus_months,
+        }
+    }
+}
+
 /// `plan_id` (Stripe-/Katalog-seitig) → `streamer_plans.plan_name`.
 ///
 /// 1:1 `_billing_plan_name_from_id`: nur drei Pläne mappen auf einen
@@ -205,6 +227,99 @@ pub fn subscription_payload_from_object(sub: &Value) -> SubscriptionState {
         ended_at: epoch_to_iso(sub, "ended_at"),
         last_event_id: String::new(),
     }
+}
+
+fn checkout_subscription_state_from_event(
+    event_id: &str,
+    event_object: &Value,
+    retrieved_subscription: Option<&Value>,
+) -> (SubscriptionState, i64) {
+    let metadata = event_object.get("metadata").cloned().unwrap_or(Value::Null);
+    // customer_reference: metadata.customer_reference → client_reference_id.
+    let customer_reference = {
+        let from_meta = str_field(&metadata, "customer_reference");
+        if !from_meta.is_empty() {
+            from_meta
+        } else {
+            str_field(event_object, "client_reference_id")
+        }
+    };
+
+    // Dünner Basis-Zustand aus der Checkout-Session.
+    let mut payload = SubscriptionState {
+        stripe_subscription_id: str_field(event_object, "subscription"),
+        stripe_customer_id: str_field(event_object, "customer"),
+        customer_reference: customer_reference.clone(),
+        status: "active".to_string(),
+        plan_id: str_field(&metadata, "plan_id"),
+        cycle_months: i32::try_from(normalize_billing_cycle(
+            metadata
+                .get("cycle_months")
+                .and_then(value_as_i64)
+                .and_then(|c| u32::try_from(c).ok())
+                .unwrap_or(1),
+        ))
+        .unwrap_or(1),
+        quantity: metadata
+            .get("quantity")
+            .and_then(value_as_i64)
+            .and_then(|q| i32::try_from(q).ok())
+            .filter(|q| *q >= 1)
+            .unwrap_or(1),
+        cancel_at_period_end: false,
+        last_event_id: event_id.to_string(),
+        ..SubscriptionState::default()
+    };
+
+    // Volle Subscription nachladen (vom Aufrufer) → überschreibt den dünnen
+    // Zustand, aber customer_reference aus der Session bleibt Fallback.
+    if !payload.stripe_subscription_id.is_empty() {
+        if let Some(sub) = retrieved_subscription {
+            let mut sub_payload = subscription_payload_from_object(sub);
+            if sub_payload.customer_reference.trim().is_empty() {
+                sub_payload.customer_reference = customer_reference;
+            }
+            sub_payload.last_event_id = event_id.to_string();
+            payload = sub_payload;
+        }
+    }
+
+    // bonus_months (annual) aus der NACHGELADENEN Subscription-Metadata lesen
+    // (Python liest sub_meta.bonus_months erst NACH dem Subscription-Retrieve,
+    // billing_mixin.py:707-712). Nur der full-subscription-Pfad trägt sie.
+    let bonus_months = retrieved_subscription
+        .filter(|_| !payload.stripe_subscription_id.is_empty())
+        .and_then(|sub| sub.get("metadata"))
+        .and_then(|meta| meta.get("bonus_months"))
+        .and_then(value_as_i64)
+        .filter(|n| *n > 0)
+        .unwrap_or(0);
+
+    (payload, bonus_months)
+}
+
+/// Leitet den nachgelagerten `streamer_plans`-Sync aus einem Webhook-Event ab.
+pub fn streamer_plan_sync_from_event(
+    event_type: &str,
+    event_object: &Value,
+    retrieved_subscription: Option<&Value>,
+) -> Option<StreamerPlanSync> {
+    let event_name = event_type.trim();
+    if event_name.starts_with("customer.subscription.") {
+        let payload = subscription_payload_from_object(event_object);
+        return Some(StreamerPlanSync::from_subscription_state(&payload, 0));
+    }
+    if event_name == "checkout.session.completed"
+        && str_field(event_object, "mode") == "subscription"
+    {
+        let (payload, bonus_months) =
+            checkout_subscription_state_from_event("", event_object, retrieved_subscription);
+        return Some(StreamerPlanSync::from_subscription_state(
+            &payload,
+            bonus_months,
+        ));
+    }
+    None
 }
 
 /// UPSERT in `twitch_billing_subscriptions` mit Merge gegen den Bestand
@@ -364,7 +479,7 @@ struct ExistingRow {
 /// `streamer_plans` (Konflikt auf `twitch_user_id`) geschrieben. Aktiv
 /// (`active`/`trialing`) → gemappter Plan-Name, sonst `free`. `expires_at` wird
 /// auf `NULL` gesetzt (Billing-Abo läuft, kein manuelles Ablaufdatum).
-async fn sync_plan_to_streamer_plans(
+async fn sync_plan_to_streamer_plans_tx(
     tx: &mut sqlx::PgConnection,
     customer_reference: &str,
     plan_id: &str,
@@ -394,6 +509,34 @@ async fn sync_plan_to_streamer_plans(
     )
     .execute(&mut *tx)
     .await?;
+    Ok(())
+}
+
+/// Wendet den aus einem Webhook abgeleiteten Plan-Sync nachgelagert in eigener
+/// Transaktion an.
+pub async fn sync_plan_to_streamer_plans(
+    pool: &PgPool,
+    sync: &StreamerPlanSync,
+) -> Result<(), sqlx::Error> {
+    let mut tx = pool.begin().await?;
+    sync_plan_to_streamer_plans_tx(
+        &mut tx,
+        &sync.customer_reference,
+        &sync.plan_id,
+        &sync.status,
+    )
+    .await?;
+    if sync.bonus_months > 0 && !sync.customer_reference.trim().is_empty() {
+        grant_bonus_access_months(
+            &mut tx,
+            &sync.customer_reference,
+            &sync.plan_id,
+            sync.current_period_end.as_deref().unwrap_or(""),
+            sync.bonus_months,
+        )
+        .await?;
+    }
+    tx.commit().await?;
     Ok(())
 }
 
@@ -563,13 +706,6 @@ pub async fn apply_event(
         let mut payload = subscription_payload_from_object(event_object);
         payload.last_event_id = event_id.to_string();
         upsert_subscription_state(tx, &payload).await?;
-        sync_plan_to_streamer_plans(
-            tx,
-            &payload.customer_reference,
-            &payload.plan_id,
-            &payload.status,
-        )
-        .await?;
         return Ok(WebhookAction::SubscriptionStateUpdated);
     }
 
@@ -578,88 +714,10 @@ pub async fn apply_event(
         if mode != "subscription" {
             return Ok(WebhookAction::CheckoutIgnoredNonSubscription);
         }
-        let metadata = event_object.get("metadata").cloned().unwrap_or(Value::Null);
-        // customer_reference: metadata.customer_reference → client_reference_id.
-        let customer_reference = {
-            let from_meta = str_field(&metadata, "customer_reference");
-            if !from_meta.is_empty() {
-                from_meta
-            } else {
-                str_field(event_object, "client_reference_id")
-            }
-        };
-
-        // Dünner Basis-Zustand aus der Checkout-Session.
-        let mut payload = SubscriptionState {
-            stripe_subscription_id: str_field(event_object, "subscription"),
-            stripe_customer_id: str_field(event_object, "customer"),
-            customer_reference: customer_reference.clone(),
-            status: "active".to_string(),
-            plan_id: str_field(&metadata, "plan_id"),
-            cycle_months: i32::try_from(normalize_billing_cycle(
-                metadata
-                    .get("cycle_months")
-                    .and_then(value_as_i64)
-                    .and_then(|c| u32::try_from(c).ok())
-                    .unwrap_or(1),
-            ))
-            .unwrap_or(1),
-            quantity: metadata
-                .get("quantity")
-                .and_then(value_as_i64)
-                .and_then(|q| i32::try_from(q).ok())
-                .filter(|q| *q >= 1)
-                .unwrap_or(1),
-            cancel_at_period_end: false,
-            last_event_id: event_id.to_string(),
-            ..SubscriptionState::default()
-        };
-
-        // Volle Subscription nachladen (vom Aufrufer) → überschreibt den dünnen
-        // Zustand, aber customer_reference aus der Session bleibt Fallback.
-        if !payload.stripe_subscription_id.is_empty() {
-            if let Some(sub) = retrieved_subscription {
-                let mut sub_payload = subscription_payload_from_object(sub);
-                if sub_payload.customer_reference.trim().is_empty() {
-                    sub_payload.customer_reference = customer_reference.clone();
-                }
-                sub_payload.last_event_id = event_id.to_string();
-                payload = sub_payload;
-            }
-        }
-
-        // bonus_months (annual) aus der NACHGELADENEN Subscription-Metadata lesen
-        // (Python liest sub_meta.bonus_months erst NACH dem Subscription-Retrieve,
-        // billing_mixin.py:707-712). Nur der full-subscription-Pfad trägt sie.
-        let bonus_months = retrieved_subscription
-            .filter(|_| !payload.stripe_subscription_id.is_empty())
-            .and_then(|sub| sub.get("metadata"))
-            .and_then(|meta| meta.get("bonus_months"))
-            .and_then(value_as_i64)
-            .filter(|n| *n > 0)
-            .unwrap_or(0);
+        let (payload, _bonus_months) =
+            checkout_subscription_state_from_event(event_id, event_object, retrieved_subscription);
 
         upsert_subscription_state(tx, &payload).await?;
-        sync_plan_to_streamer_plans(
-            tx,
-            &payload.customer_reference,
-            &payload.plan_id,
-            &payload.status,
-        )
-        .await?;
-        // P1.50: bezahlter Annual-Bonus → manual_plan_expires_at = period_end +
-        // bonus_months*31 Tage (Port von `_billing_grant_bonus_access_months`,
-        // billing_mixin.py:589-630). Nur wenn bonus_months > 0 und ein Login da ist.
-        if bonus_months > 0 && !payload.customer_reference.trim().is_empty() {
-            grant_bonus_access_months(
-                tx,
-                &payload.customer_reference,
-                &payload.plan_id,
-                payload.current_period_end.as_deref().unwrap_or(""),
-                bonus_months,
-            )
-            .await?;
-        }
         return Ok(WebhookAction::CheckoutSubscriptionRecorded);
     }
 
@@ -1000,7 +1058,11 @@ mod tests {
         assert_eq!(row.0, "active");
         assert_eq!(row.1.as_deref(), Some("raid_boost"));
         assert_eq!(row.2.as_deref(), Some("evt_1"));
-        // streamer_plans synchronisiert: raid_boost → plan_name "raid_boost".
+        // streamer_plans synchronisiert nachgelagert: raid_boost → plan_name "raid_boost".
+        let sync =
+            streamer_plan_sync_from_event("customer.subscription.created", &event_object, None)
+                .expect("subscription sync");
+        sync_plan_to_streamer_plans(&pool, &sync).await.unwrap();
         let plan: (String, Option<String>) = sqlx::query_as(
             "SELECT plan_name, expires_at FROM streamer_plans WHERE twitch_user_id = '42'",
         )
@@ -1035,6 +1097,9 @@ mod tests {
         .await
         .unwrap();
         drop(tx);
+        let sync = streamer_plan_sync_from_event("customer.subscription.created", &active, None)
+            .expect("active sync");
+        sync_plan_to_streamer_plans(&pool, &sync).await.unwrap();
         // Dann löschen (status canceled) → free.
         let deleted = json!({
             "id": "sub_d", "customer": "c", "status": "canceled",
@@ -1052,6 +1117,9 @@ mod tests {
         .await
         .unwrap();
         drop(tx);
+        let sync = streamer_plan_sync_from_event("customer.subscription.deleted", &deleted, None)
+            .expect("deleted sync");
+        sync_plan_to_streamer_plans(&pool, &sync).await.unwrap();
         let plan: (String,) =
             sqlx::query_as("SELECT plan_name FROM streamer_plans WHERE twitch_user_id = '7'")
                 .fetch_one(&pool)
@@ -1088,6 +1156,59 @@ mod tests {
         .await
         .unwrap();
         assert!(!second, "Replay desselben event_id ist Duplikat");
+    }
+
+    #[tokio::test]
+    async fn plan_sync_fehler_rollt_webhook_kern_nicht_zurueck() {
+        let Some(pool) = pool_or_skip("wh_sync_err_no_rollback").await else {
+            return;
+        };
+        sqlx::query("DROP TABLE twitch_streamers_partner_state")
+            .execute(&pool)
+            .await
+            .unwrap();
+        let event_object = json!({
+            "id": "sub_sync_err", "customer": "cus_x", "status": "active",
+            "metadata": { "customer_reference": "streamerlogin", "plan_id": "raid_boost" },
+            "items": { "data": [ { "price": {
+                "recurring": { "interval": "month", "interval_count": 1 }
+            } } ] }
+        });
+
+        let mut tx = pool.begin().await.unwrap();
+        let is_new = record_event_once(
+            &mut tx,
+            "evt_sync_err",
+            "customer.subscription.created",
+            "sub_sync_err",
+            false,
+            "{}",
+        )
+        .await
+        .unwrap();
+        assert!(is_new);
+        apply_event(
+            &mut tx,
+            "evt_sync_err",
+            "customer.subscription.created",
+            &event_object,
+            None,
+        )
+        .await
+        .unwrap();
+        tx.commit().await.unwrap();
+
+        let sync =
+            streamer_plan_sync_from_event("customer.subscription.created", &event_object, None)
+                .expect("sync payload");
+        assert!(sync_plan_to_streamer_plans(&pool, &sync).await.is_err());
+        assert!(sub_row(&pool, "sub_sync_err").await.is_some());
+        let event_count: i64 =
+            sqlx::query_scalar("SELECT COUNT(*)::bigint FROM twitch_billing_events WHERE stripe_event_id = 'evt_sync_err'")
+                .fetch_one(&pool)
+                .await
+                .unwrap();
+        assert_eq!(event_count, 1);
     }
 
     #[tokio::test]
@@ -1256,6 +1377,10 @@ mod tests {
         .unwrap();
         assert_eq!(action, WebhookAction::CheckoutSubscriptionRecorded);
         drop(tx);
+        let sync =
+            streamer_plan_sync_from_event("checkout.session.completed", &session, Some(&retrieved))
+                .expect("checkout sync");
+        sync_plan_to_streamer_plans(&pool, &sync).await.unwrap();
 
         // manual_plan_expires_at = period_end + 2*31 Tage.
         let row: (Option<String>, Option<String>, Option<String>) = sqlx::query_as(
@@ -1300,6 +1425,10 @@ mod tests {
         .await
         .unwrap();
         drop(tx);
+        let sync =
+            streamer_plan_sync_from_event("checkout.session.completed", &session, Some(&retrieved))
+                .expect("checkout sync");
+        sync_plan_to_streamer_plans(&pool, &sync).await.unwrap();
         // streamer_plans-Row existiert (sync), aber manual_plan_expires_at bleibt NULL.
         let row: (Option<String>,) = sqlx::query_as(
             "SELECT manual_plan_expires_at FROM streamer_plans WHERE twitch_user_id='11'",

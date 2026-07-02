@@ -22,8 +22,8 @@ impl OutreachBoostStore {
         Self { pool }
     }
 
-    /// Logins (lowercase) aller frischen, noch nicht boost-geraidten
-    /// Outreach-Empfänger. Aktive Partner werden ausgeschlossen.
+    /// Logins (lowercase) aller frisch kontaktierten, noch nicht
+    /// boost-geraidten Outreach-Empfänger.
     pub async fn load_boost_logins(
         &self,
         lookback_hours: i32,
@@ -31,32 +31,22 @@ impl OutreachBoostStore {
         if lookback_hours <= 0 {
             return Ok(HashSet::new());
         }
-        let rows = sqlx::query!(
+        let rows = sqlx::query_scalar::<_, Option<String>>(
             r#"
-            SELECT o.streamer_login AS "streamer_login?"
+            SELECT o.streamer_login
             FROM twitch_partner_outreach o
-            WHERE o.status IN ('sent', 'queued')
+            WHERE o.status = 'sent'
               AND raid_used_at IS NULL
-              AND COALESCE(NULLIF(o.contacted_at::text, ''), NULLIF(o.detected_at::text, '')) IS NOT NULL
-              AND COALESCE(NULLIF(o.contacted_at::text, '')::timestamptz, NULLIF(o.detected_at::text, '')::timestamptz) >= NOW() - (($1::text || ' hours')::interval)
-              AND NOT EXISTS (
-                    SELECT 1
-                    FROM twitch_partners p
-                    WHERE p.status = 'active'
-                      AND (
-                            LOWER(p.twitch_login) = LOWER(o.streamer_login)
-                         OR (NULLIF(o.streamer_user_id, '') IS NOT NULL
-                             AND p.twitch_user_id = o.streamer_user_id)
-                      )
-              )
+              AND NULLIF(o.contacted_at::text, '') IS NOT NULL
+              AND NULLIF(o.contacted_at::text, '')::timestamptz >= NOW() - (($1::text || ' hours')::interval)
             "#,
-            lookback_hours.to_string()
         )
+        .bind(lookback_hours.to_string())
         .fetch_all(&self.pool)
         .await?;
         Ok(rows
             .into_iter()
-            .filter_map(|row| row.streamer_login)
+            .flatten()
             .map(|l| l.trim().to_lowercase())
             .filter(|l| !l.is_empty())
             .collect())

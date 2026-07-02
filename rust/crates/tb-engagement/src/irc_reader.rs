@@ -144,8 +144,18 @@ fn build_incoming(parsed: &ParsedPrivmsg, self_login: &str) -> Option<(IncomingM
     if login == self_login || is_known_chat_bot(&login) {
         return None;
     }
-    let room_id = parsed.tags.get("room-id").map(|s| s.trim()).unwrap_or("").to_string();
-    let user_id = parsed.tags.get("user-id").map(|s| s.trim()).unwrap_or("").to_string();
+    let room_id = parsed
+        .tags
+        .get("room-id")
+        .map(|s| s.trim())
+        .unwrap_or("")
+        .to_string();
+    let user_id = parsed
+        .tags
+        .get("user-id")
+        .map(|s| s.trim())
+        .unwrap_or("")
+        .to_string();
     if room_id.is_empty() || user_id.is_empty() {
         return None;
     }
@@ -210,8 +220,12 @@ impl EngagementIrcReader {
     async fn connect(&self) -> Option<(BufReader<OwnedReadHalf>, OwnedWriteHalf)> {
         let stream = TcpStream::connect((IRC_HOST, IRC_PORT)).await.ok()?;
         let (rd, mut wr) = stream.into_split();
-        wr.write_all(format!("NICK {ANON_NICK}\r\n").as_bytes()).await.ok()?;
-        wr.write_all(b"CAP REQ :twitch.tv/tags twitch.tv/commands\r\n").await.ok()?;
+        wr.write_all(format!("NICK {ANON_NICK}\r\n").as_bytes())
+            .await
+            .ok()?;
+        wr.write_all(b"CAP REQ :twitch.tv/tags twitch.tv/commands\r\n")
+            .await
+            .ok()?;
         wr.flush().await.ok()?;
 
         let mut reader = BufReader::new(rd);
@@ -284,23 +298,39 @@ impl EngagementIrcReader {
         let Some((incoming, room_id)) = build_incoming(&parsed, &self.self_login) else {
             return;
         };
-        // Pipeline + Send in eigener Task — MiniMax-Latenz blockiert den Read-Loop nicht.
+        // Python verarbeitet IRC-Events strikt in Read-Reihenfolge:
+        // Pipeline abwarten, danach ggf. Stealth-Send. Keine per-Message-Tasks,
+        // damit Antworten nicht ueberholen.
         let pipeline = Arc::clone(&self.pipeline);
         let stealth = self.stealth.clone();
         let channel = incoming.channel_login.clone();
-        tokio::spawn(async move {
-            let result = pipeline.handle(&incoming).await;
-            let Some(text) = result.response_text else {
+        let result = match tokio::spawn(async move { pipeline.handle(&incoming).await }).await {
+            Ok(result) => result,
+            Err(error) => {
+                tracing::error!(channel = %channel, %error, "Engagement-IRC: Pipeline-Task fehlgeschlagen");
                 return;
-            };
-            match &stealth {
-                Some(sender) if sender.send(&room_id, &text).await.is_none() => {
-                    tracing::info!(channel = %channel, "Engagement-IRC: kein Sende-Account, Antwort verworfen");
-                }
-                Some(_) => {}
-                None => tracing::debug!(channel = %channel, "Engagement-IRC: Stealth-Sender nicht verfügbar"),
             }
-        });
+        };
+        let Some(text) = result.response_text else {
+            return;
+        };
+        match stealth {
+            Some(sender) => {
+                let send = tokio::spawn(async move { sender.send(&room_id, &text).await }).await;
+                match send {
+                    Ok(None) => {
+                        tracing::info!(channel = %channel, "Engagement-IRC: kein Sende-Account, Antwort verworfen");
+                    }
+                    Ok(Some(_)) => {}
+                    Err(error) => {
+                        tracing::error!(channel = %channel, %error, "Engagement-IRC: Stealth-Send-Task fehlgeschlagen");
+                    }
+                }
+            }
+            None => {
+                tracing::debug!(channel = %channel, "Engagement-IRC: Stealth-Sender nicht verfügbar")
+            }
+        }
     }
 }
 
@@ -314,7 +344,9 @@ async fn pong(writer: &mut OwnedWriteHalf, ping: &str) {
 
 /// Joint einen Kanal (`JOIN #channel`).
 async fn join(writer: &mut OwnedWriteHalf, channel: &str) {
-    let _ = writer.write_all(format!("JOIN #{channel}\r\n").as_bytes()).await;
+    let _ = writer
+        .write_all(format!("JOIN #{channel}\r\n").as_bytes())
+        .await;
     let _ = writer.flush().await;
 }
 
@@ -387,7 +419,8 @@ mod tests {
 
     #[test]
     fn skip_eigener_account() {
-        let line = "@room-id=9;user-id=1 :iamspyingthroughtyourcam!s@s PRIVMSG #nani :test nachricht";
+        let line =
+            "@room-id=9;user-id=1 :iamspyingthroughtyourcam!s@s PRIVMSG #nani :test nachricht";
         let p = parse_privmsg(line).unwrap();
         assert!(build_incoming(&p, "iamspyingthroughtyourcam").is_none());
     }

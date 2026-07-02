@@ -18,8 +18,11 @@
 
 use std::collections::{HashMap, HashSet};
 
+use serde_json::{json, Value};
+
 use crate::candidate_selection::{
     select_by_score, select_fairest, FairnessCandidate, ScoredCandidate, SelectionReason,
+    FOLLOWERS_UNKNOWN,
 };
 use crate::partner_roster::OnlineCandidate;
 use crate::score_store::PartnerRaidScoreRow;
@@ -39,6 +42,8 @@ pub struct ResolvedTarget {
     pub is_outreach_boost: bool,
     /// Größe des Kandidaten-Pools, aus dem gewählt wurde (für History/Logs).
     pub candidates_count: i32,
+    /// Eingefrorener Ziel-Stream-/Score-Snapshot für die spätere Arrival-Korrelation.
+    pub target_stream_data: Option<Value>,
 }
 
 /// Diagnose-Zahlen des Partner-Pfads (Python-Log-Parität).
@@ -72,6 +77,77 @@ fn is_filtered(
         || exclude_ids.contains(user_id)
         || blacklist_ids.contains(user_id)
         || blacklist_logins.contains(user_login)
+}
+
+fn normalized_followers_total(followers_total: i32) -> i32 {
+    if followers_total > 0 {
+        followers_total
+    } else {
+        FOLLOWERS_UNKNOWN
+    }
+}
+
+fn target_stream_snapshot(
+    user_id: &str,
+    user_login: &str,
+    viewer_count: i32,
+    followers_total: i32,
+    started_at: Option<&str>,
+) -> Value {
+    json!({
+        "user_id": user_id,
+        "user_login": user_login,
+        "viewer_count": viewer_count,
+        "followers_total": followers_total,
+        "started_at": started_at,
+    })
+}
+
+fn partner_score_snapshot(row: &PartnerRaidScoreRow) -> Value {
+    json!({
+        "twitch_user_id": row.twitch_user_id.as_str(),
+        "twitch_login": row.twitch_login.as_str(),
+        "is_live": row.is_live != 0,
+        "final_score": row.final_score,
+        "today_received_raids": row.today_received_raids,
+        "duration_score": row.duration_score,
+        "time_pattern_score": row.time_pattern_score,
+        "readiness_score": row.readiness_score,
+        "fairness_score": row.fairness_score,
+        "base_score": row.base_score,
+        "new_partner_multiplier": row.new_partner_multiplier,
+        "raid_boost_multiplier": row.raid_boost_multiplier,
+        "last_computed_at": row.last_computed_at.as_str(),
+    })
+}
+
+fn partner_target_stream_data(candidate: &ScoredCandidate, row: &PartnerRaidScoreRow) -> Value {
+    let started_at =
+        (candidate.started_at != STARTED_AT_SENTINEL).then_some(candidate.started_at.as_str());
+    let mut data = target_stream_snapshot(
+        &candidate.user_id,
+        &candidate.user_login,
+        candidate.viewer_count,
+        candidate.followers_total,
+        started_at,
+    );
+    if let Value::Object(ref mut obj) = data {
+        obj.insert("_partner_score".to_string(), partner_score_snapshot(row));
+    }
+    data
+}
+
+fn fairness_target_stream_data(candidate: &FairnessCandidate) -> Value {
+    let started_at = (!candidate.started_at.trim().is_empty()
+        && candidate.started_at != STARTED_AT_SENTINEL)
+        .then_some(candidate.started_at.as_str());
+    target_stream_snapshot(
+        candidate.user_id.trim(),
+        &candidate.user_login.trim().to_lowercase(),
+        candidate.viewer_count,
+        candidate.followers_total,
+        started_at,
+    )
 }
 
 /// Partner-Pfad: filtert + joint den Score-Cache und wählt per `select_by_score`.
@@ -119,7 +195,7 @@ pub fn resolve_partner_target(
             today_received_raids: row.today_received_raids,
             is_live: true,
             viewer_count: candidate.stream.viewer_count,
-            followers_total: candidate.stream.followers_total,
+            followers_total: normalized_followers_total(candidate.stream.followers_total),
             started_at: candidate
                 .stream
                 .started_at
@@ -135,13 +211,20 @@ pub fn resolve_partner_target(
     let selection = select_by_score(&scored);
     PartnerResolution {
         reason: selection.as_ref().map(|s| s.reason.clone()),
-        target: selection.map(|s| ResolvedTarget {
-            user_id: s.candidate.user_id.clone(),
-            user_login: s.candidate.user_login.clone(),
-            started_at: Some(s.candidate.started_at.clone()).filter(|v| v != STARTED_AT_SENTINEL),
-            is_partner_raid: true,
-            is_outreach_boost: false,
-            candidates_count,
+        target: selection.map(|s| {
+            let target_stream_data = scores
+                .get(&s.candidate.user_id)
+                .map(|row| partner_target_stream_data(s.candidate, row));
+            ResolvedTarget {
+                user_id: s.candidate.user_id.clone(),
+                user_login: s.candidate.user_login.clone(),
+                started_at: Some(s.candidate.started_at.clone())
+                    .filter(|v| v != STARTED_AT_SENTINEL),
+                is_partner_raid: true,
+                is_outreach_boost: false,
+                candidates_count,
+                target_stream_data,
+            }
         }),
         stats,
     }
@@ -190,6 +273,7 @@ pub fn select_fallback_from_pool(
         is_partner_raid: false,
         is_outreach_boost: false,
         candidates_count,
+        target_stream_data: Some(fairness_target_stream_data(chosen)),
     })
 }
 
@@ -250,6 +334,7 @@ pub fn resolve_boost_target(
         is_partner_raid: false,
         is_outreach_boost: true,
         candidates_count: matches.len() as i32,
+        target_stream_data: Some(fairness_target_stream_data(chosen)),
     })
 }
 
@@ -373,6 +458,38 @@ mod tests {
         let res = resolve_partner_target(&partners, &scores, &bl_ids, &bl_logins, &excl);
         assert_eq!(res.target.unwrap().user_login, "gross");
         assert_eq!(res.reason, Some(SelectionReason::HighestFinalScore));
+    }
+
+    #[test]
+    fn partner_unbekannte_follower_sortieren_ans_ende_und_snapshot_wird_gesetzt() {
+        let unknown = online("1", "unbekannt", true, 5);
+        let mut known = online("2", "bekannt", true, 5);
+        known.stream.followers_total = 500;
+        let partners = vec![unknown, known];
+        let scores: HashMap<String, PartnerRaidScoreRow> = [
+            ("1".to_string(), score_row("1", 0.9, 1)),
+            ("2".to_string(), score_row("2", 0.9, 1)),
+        ]
+        .into();
+        let (bl_ids, bl_logins, excl) = sets();
+
+        let res = resolve_partner_target(&partners, &scores, &bl_ids, &bl_logins, &excl);
+        let target = res.target.unwrap();
+
+        assert_eq!(
+            target.user_login, "bekannt",
+            "bekannte Follower-Zahl gewinnt gegen unbekannte 0 aus StreamData"
+        );
+        let snapshot = target.target_stream_data.expect("target snapshot");
+        assert_eq!(snapshot["followers_total"], serde_json::json!(500));
+        assert_eq!(
+            snapshot["_partner_score"]["final_score"],
+            serde_json::json!(0.9)
+        );
+        assert_eq!(
+            snapshot["_partner_score"]["last_computed_at"],
+            serde_json::json!("2026-06-10T17:30:00+00:00")
+        );
     }
 
     #[test]

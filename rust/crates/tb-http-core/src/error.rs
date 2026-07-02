@@ -66,6 +66,30 @@ impl ApiError {
         }
     }
 
+    /// 403 Forbidden mit dynamischem JSON-Body.
+    pub fn forbidden_with_body(body: serde_json::Value) -> Self {
+        Self {
+            status: StatusCode::FORBIDDEN,
+            body: ApiErrorBody {
+                error: "forbidden",
+                message: "forbidden",
+            },
+            dyn_body: Some(body),
+        }
+    }
+
+    /// 401 Unauthorized mit dynamischem JSON-Body.
+    pub fn unauthorized_with_body(body: serde_json::Value) -> Self {
+        Self {
+            status: StatusCode::UNAUTHORIZED,
+            body: ApiErrorBody {
+                error: "unauthorized",
+                message: "missing or invalid internal token",
+            },
+            dyn_body: Some(body),
+        }
+    }
+
     /// 401 Unauthorized — fehlendes oder falsches Token.
     pub fn unauthorized() -> Self {
         Self {

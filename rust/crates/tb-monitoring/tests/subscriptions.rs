@@ -8,9 +8,9 @@ use std::sync::{Arc, Mutex};
 use chrono::Utc;
 use tb_monitoring::poller::source::SourceError;
 use tb_monitoring::{
-    BroadcasterEventSubTokenProvider, CapacitySnapshotStore, EventSubUserToken, ModeratorProvisioner,
-    RemoteSubscription, RevocationSink, SubscriptionConfig, SubscriptionManager,
-    SubscriptionTransport,
+    BroadcasterEventSubTokenProvider, CapacitySnapshotStore, EventSubUserToken,
+    ModeratorProvisioner, RemoteSubscription, RevocationSink, SubscriptionConfig,
+    SubscriptionCreateError, SubscriptionManager, SubscriptionTransport,
 };
 
 mod support;
@@ -53,11 +53,15 @@ impl SubscriptionTransport for StubTransport {
         _callback: &str,
         _secret: &str,
         bearer_override: Option<&str>,
-    ) -> Result<bool, SourceError> {
+    ) -> Result<bool, SubscriptionCreateError> {
         // Programmierter 403 (P1.2): die ersten N Creates scheitern mit 403.
         if self.fail_403_count.load(Ordering::SeqCst) > 0 {
             self.fail_403_count.fetch_sub(1, Ordering::SeqCst);
-            return Err(SourceError::from("HTTP 403 subscription missing proper authorization"));
+            return Err(SubscriptionCreateError::http_status(
+                403,
+                None,
+                Some("subscription missing proper authorization".to_string()),
+            ));
         }
         // Jeweils erster Create eines Sub-Typs → 403 (Retry danach gelingt).
         if self
@@ -66,7 +70,11 @@ impl SubscriptionTransport for StubTransport {
             .unwrap()
             .remove(sub_type)
         {
-            return Err(SourceError::from("HTTP 403 subscription missing proper authorization"));
+            return Err(SubscriptionCreateError::http_status(
+                403,
+                None,
+                Some("subscription missing proper authorization".to_string()),
+            ));
         }
         self.versions
             .lock()
@@ -139,7 +147,10 @@ impl BroadcasterEventSubTokenProvider for StubBroadcasterTokenProvider {
         _login: &str,
     ) -> Option<EventSubUserToken> {
         self.calls.fetch_add(1, Ordering::SeqCst);
-        Some(EventSubUserToken::new(self.token.clone(), self.scopes.clone()))
+        Some(EventSubUserToken::new(
+            self.token.clone(),
+            self.scopes.clone(),
+        ))
     }
 }
 
@@ -156,15 +167,23 @@ async fn chat_403_mod_retry_erfolg_trackt_statt_perm_failed() {
         f.insert("channel.chat.message".to_string());
         f.insert("channel.chat.notification".to_string());
     }
-    let provisioner = Arc::new(StubProvisioner { succeed: true, calls: AtomicU64::new(0) });
+    let provisioner = Arc::new(StubProvisioner {
+        succeed: true,
+        calls: AtomicU64::new(0),
+    });
     let manager = SubscriptionManager::new(
         transport.clone(),
-        SubscriptionConfig { callback_url: "https://cb/x".into(), secret: "s".into() },
+        SubscriptionConfig {
+            callback_url: "https://cb/x".into(),
+            secret: "s".into(),
+        },
         CapacitySnapshotStore::new(pool.clone()),
     )
     .with_moderator_provisioner(provisioner.clone());
 
-    let ok = manager.ensure_chat_subscriptions("555", "bot1", "partner").await;
+    let ok = manager
+        .ensure_chat_subscriptions("555", "bot1", "partner")
+        .await;
     assert!(ok, "Re-Subscribe nach Re-Mod erfolgreich → join ok");
     // Re-Mod wurde je Sub-Typ einmal versucht (2 Chat-Subs).
     assert_eq!(provisioner.calls.load(Ordering::SeqCst), 2);
@@ -191,20 +210,28 @@ async fn chat_403_mod_retry_fehlschlag_setzt_cooldown_statt_perm_failed() {
     let pool = pool_or_skip!("t_chat_403_retry_cooldown");
     let transport = Arc::new(StubTransport::default());
     transport.fail_403_count.store(2, Ordering::SeqCst);
-    let provisioner = Arc::new(StubProvisioner { succeed: false, calls: AtomicU64::new(0) });
+    let provisioner = Arc::new(StubProvisioner {
+        succeed: false,
+        calls: AtomicU64::new(0),
+    });
 
     // Steuerbare Uhr: erlaubt das Testen des Cooldown-Ablaufs.
     let now = Arc::new(AtomicU64::new(1_000));
     let now_clk = now.clone();
     let manager = SubscriptionManager::new(
         transport.clone(),
-        SubscriptionConfig { callback_url: "https://cb/x".into(), secret: "s".into() },
+        SubscriptionConfig {
+            callback_url: "https://cb/x".into(),
+            secret: "s".into(),
+        },
         CapacitySnapshotStore::new(pool.clone()),
     )
     .with_moderator_provisioner(provisioner.clone())
     .with_clock(Arc::new(move || now_clk.load(Ordering::SeqCst) as f64));
 
-    let ok = manager.ensure_chat_subscriptions("777", "bot1", "partner").await;
+    let ok = manager
+        .ensure_chat_subscriptions("777", "bot1", "partner")
+        .await;
     assert!(!ok, "Re-Mod fehlgeschlagen → join scheitert (vorerst)");
     // NICHT permanent blockiert — der entscheidende Unterschied zu vorher.
     assert!(
@@ -215,7 +242,9 @@ async fn chat_403_mod_retry_fehlschlag_setzt_cooldown_statt_perm_failed() {
     // Innerhalb des Cooldowns: kein neuer Create-Versuch (Gate greift).
     transport.fail_403_count.store(0, Ordering::SeqCst); // ab jetzt würde Create gelingen
     let creates_before = transport.creates.lock().unwrap().len();
-    let ok_during = manager.ensure_chat_subscriptions("777", "bot1", "partner").await;
+    let ok_during = manager
+        .ensure_chat_subscriptions("777", "bot1", "partner")
+        .await;
     assert!(!ok_during, "während Cooldown übersprungen");
     assert_eq!(
         transport.creates.lock().unwrap().len(),
@@ -225,9 +254,17 @@ async fn chat_403_mod_retry_fehlschlag_setzt_cooldown_statt_perm_failed() {
 
     // Uhr über den 10-Min-Cooldown hinaus → automatischer Retry, jetzt Erfolg.
     now.store(1_000 + 601, Ordering::SeqCst);
-    let ok_after = manager.ensure_chat_subscriptions("777", "bot1", "partner").await;
-    assert!(ok_after, "nach Cooldown-Ablauf automatischer Retry erfolgreich");
-    assert!(manager.tracked_pairs().iter().any(|(t, bid)| t == "channel.chat.message" && bid == "777"));
+    let ok_after = manager
+        .ensure_chat_subscriptions("777", "bot1", "partner")
+        .await;
+    assert!(
+        ok_after,
+        "nach Cooldown-Ablauf automatischer Retry erfolgreich"
+    );
+    assert!(manager
+        .tracked_pairs()
+        .iter()
+        .any(|(t, bid)| t == "channel.chat.message" && bid == "777"));
 }
 
 #[tokio::test]
@@ -273,7 +310,11 @@ async fn revocation_untrackt_und_loest_resubscribe_aus() {
     let removed = RevocationSink::on_revocation(&manager, "stream.online", "99");
     assert!(removed, "stream.online war getrackt → untrack entfernt es");
     // Unbekannte Sub → nichts zu entfernen.
-    assert!(!RevocationSink::on_revocation(&manager, "channel.raid", "99"));
+    assert!(!RevocationSink::on_revocation(
+        &manager,
+        "channel.raid",
+        "99"
+    ));
 
     // Nächster Reconcile legt NUR die widerrufene Sub neu an (die anderen zwei
     // bleiben getrackt) → genau ein zusätzlicher stream.online-Create.
@@ -719,7 +760,13 @@ async fn moderator_telemetry_broadcaster_fallback_fuellt_scope_luecke_ohne_doppe
     // Bot-Token deckt NUR Shoutout — ban/unban/follow fehlt der Scope.
     let bot_scopes = vec!["moderator:manage:shoutouts".to_string()];
     let ensured = manager
-        .ensure_moderator_telemetry_subscriptions("555", "BOTID", "BOTTOKEN", &bot_scopes, "partner")
+        .ensure_moderator_telemetry_subscriptions(
+            "555",
+            "BOTID",
+            "BOTTOKEN",
+            &bot_scopes,
+            "partner",
+        )
         .await;
     // Alle 5 Subs sichergestellt: 2 via Bot, 3 via Broadcaster-Fallback.
     assert_eq!(ensured, 5);
@@ -747,7 +794,8 @@ async fn moderator_telemetry_broadcaster_fallback_fuellt_scope_luecke_ohne_doppe
     // Broadcaster mit moderator_user_id = broadcaster_id.
     let conditions = transport.conditions.lock().unwrap().clone();
     let bearers = transport.bearers.lock().unwrap().clone();
-    let bot_cond = serde_json::json!({ "broadcaster_user_id": "555", "moderator_user_id": "BOTID" });
+    let bot_cond =
+        serde_json::json!({ "broadcaster_user_id": "555", "moderator_user_id": "BOTID" });
     let brc_cond = serde_json::json!({ "broadcaster_user_id": "555", "moderator_user_id": "555" });
     for (sub_type, condition) in &conditions {
         let bearer = bearers
@@ -756,7 +804,11 @@ async fn moderator_telemetry_broadcaster_fallback_fuellt_scope_luecke_ohne_doppe
             .and_then(|(_, b)| b.as_deref());
         if sub_type.starts_with("channel.shoutout") {
             assert_eq!(condition, &bot_cond, "{sub_type} muss Bot-Condition tragen");
-            assert_eq!(bearer, Some("BOTTOKEN"), "{sub_type} muss Bot-Bearer nutzen");
+            assert_eq!(
+                bearer,
+                Some("BOTTOKEN"),
+                "{sub_type} muss Bot-Bearer nutzen"
+            );
         } else {
             assert_eq!(
                 condition, &brc_cond,
@@ -775,7 +827,13 @@ async fn moderator_telemetry_broadcaster_fallback_fuellt_scope_luecke_ohne_doppe
     // Zweiter Aufruf: alles getrackt → kein neuer Create, Provider nicht erneut
     // pro Sub-Typ befragt (is_tracked-Dedup greift im auth-attempts-Pfad).
     let again = manager
-        .ensure_moderator_telemetry_subscriptions("555", "BOTID", "BOTTOKEN", &bot_scopes, "partner")
+        .ensure_moderator_telemetry_subscriptions(
+            "555",
+            "BOTID",
+            "BOTTOKEN",
+            &bot_scopes,
+            "partner",
+        )
         .await;
     assert_eq!(again, 5);
     assert_eq!(transport.creates.lock().unwrap().len(), 5);

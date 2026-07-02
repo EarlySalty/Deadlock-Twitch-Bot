@@ -4,7 +4,8 @@ use axum::{extract::State, response::IntoResponse, Json};
 use serde::Serialize;
 use sqlx::PgPool;
 use tb_analytics::system_database::database_stats;
-use tb_http_core::{ApiError, AuthLevel};
+use crate::auth::level::DashboardAuthLevel;
+use tb_http_core::ApiError;
 
 const TRACKED_TABLES: &[&str] = &[
     "twitch_streamers",
@@ -36,11 +37,11 @@ pub struct DatabaseResponse {
 
 /// `GET /twitch/api/admin/system/database`
 pub async fn database_handler(
-    auth: AuthLevel,
+    auth: DashboardAuthLevel,
     State(pool): State<PgPool>,
 ) -> Result<impl IntoResponse, ApiError> {
-    if !auth.is_privileged() {
-        return Err(ApiError::unauthorized());
+    if let Some(err) = crate::auth::require_admin(&auth) {
+        return Err(err);
     }
 
     // Bug A: ApiError::internal() ohne Argument

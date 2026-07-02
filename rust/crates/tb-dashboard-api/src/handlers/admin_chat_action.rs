@@ -137,9 +137,14 @@ pub async fn chat_action_handler(
             };
             redirect_ok(&format!("{label} an {login} gesendet"))
         }
-        SendResult::Failed => redirect_err(&format!(
-            "Chat-Aktion für {login} konnte nicht gesendet werden"
-        )),
+        SendResult::Failed { detail } => {
+            if let Some(detail) = detail {
+                tracing::warn!(%detail, "chat_action bridge upstream failed");
+            }
+            redirect_err(&format!(
+                "Chat-Aktion für {login} konnte nicht gesendet werden"
+            ))
+        }
         SendResult::Unavailable => redirect_err("Twitch Chat Bot ist aktuell nicht verfügbar"),
     }
 }
@@ -245,7 +250,7 @@ async fn is_partner_chat_action_allowed(pool: &PgPool, login: &str) -> Result<bo
 
 enum SendResult {
     Sent,
-    Failed,
+    Failed { detail: Option<String> },
     Unavailable,
 }
 
@@ -284,13 +289,21 @@ async fn bridge_chat_action(login: &str, mode: &str, color: &str, message: &str)
         Ok(v) => v,
         Err(e) => {
             tracing::warn!("chat_action bridge body error: {e}");
-            return SendResult::Failed;
+            return SendResult::Failed { detail: None };
         }
     };
     if value.get("ok").and_then(|v| v.as_bool()).unwrap_or(false) {
         SendResult::Sent
     } else {
-        SendResult::Failed
+        let detail = value
+            .get("detail")
+            .or_else(|| value.get("drop_reason"))
+            .or_else(|| value.get("message"))
+            .map(|v| match v {
+                serde_json::Value::String(s) => s.clone(),
+                other => other.to_string(),
+            });
+        SendResult::Failed { detail }
     }
 }
 

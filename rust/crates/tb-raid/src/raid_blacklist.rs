@@ -1,5 +1,5 @@
-//! Raid-Ziel-Blacklist (`twitch_raid_blacklist`) — Kanäle, die nie angeraidet
-//! werden dürfen. Port von `raid/services/raid_blacklist.py`
+//! Raid-Ziel-Blacklist (`twitch_raid_blacklist`) plus harte globale Bans.
+//! Port von `raid/services/raid_blacklist.py`
 //! (`_is_blacklisted` + `_store_blacklist_entry`).
 //!
 //! Prod-Schema (verifiziert): `target_id`/`target_login`/`reason`/`added_at`
@@ -22,7 +22,7 @@ impl RaidBlacklistStore {
         Self { pool }
     }
 
-    /// Ist das Ziel geblacklistet? Match per `target_id` ODER `lower(target_login)`.
+    /// Ist das Ziel raid-geblacklistet? Match per `target_id` ODER `lower(target_login)`.
     pub async fn is_blacklisted(
         &self,
         target_id: Option<&str>,
@@ -40,6 +40,30 @@ impl RaidBlacklistStore {
             target_id,
             &login
         )
+        .fetch_optional(&self.pool)
+        .await?;
+        Ok(row.is_some())
+    }
+
+    /// Ist das Ziel hart global gebannt? Match per `chatter_id` ODER
+    /// `lower(chatter_login)`. Diese Sperre ist härter als die Raid-Blacklist.
+    pub async fn is_hard_banned(
+        &self,
+        target_id: Option<&str>,
+        target_login: &str,
+    ) -> Result<bool, sqlx::Error> {
+        let target_id = target_id.map(str::trim).filter(|s| !s.is_empty());
+        let login = target_login.trim().to_lowercase();
+        let row: Option<i32> = sqlx::query_scalar(
+            r#"
+            SELECT 1 FROM twitch_chatter_global_ban
+            WHERE (NULLIF(chatter_id, '') IS NOT NULL AND chatter_id = $1)
+               OR lower(chatter_login) = $2
+            LIMIT 1
+            "#,
+        )
+        .bind(target_id)
+        .bind(&login)
         .fetch_optional(&self.pool)
         .await?;
         Ok(row.is_some())
@@ -119,6 +143,33 @@ impl RaidBlacklistStore {
                 ids.insert(id);
             }
             let login = login.trim().to_lowercase();
+            if !login.is_empty() {
+                logins.insert(login);
+            }
+        }
+        Ok((ids, logins))
+    }
+
+    /// Lädt nur harte globale Bans als `(ids, logins)`-Sets.
+    pub async fn load_hard_bans(&self) -> Result<(HashSet<String>, HashSet<String>), sqlx::Error> {
+        let rows = sqlx::query_as::<_, (Option<String>, String)>(
+            r#"
+            SELECT NULLIF(chatter_id, ''), chatter_login
+            FROM twitch_chatter_global_ban
+            "#,
+        )
+        .fetch_all(&self.pool)
+        .await?;
+        let mut ids = HashSet::new();
+        let mut logins = HashSet::new();
+        for (target_id, target_login) in rows {
+            if let Some(id) = target_id
+                .map(|i| i.trim().to_string())
+                .filter(|i| !i.is_empty())
+            {
+                ids.insert(id);
+            }
+            let login = target_login.trim().to_lowercase();
             if !login.is_empty() {
                 logins.insert(login);
             }

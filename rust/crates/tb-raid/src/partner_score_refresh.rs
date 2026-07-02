@@ -32,7 +32,7 @@ use crate::score_store::{PartnerRaidScoreUpsert, ScoreStore};
 use crate::scoring::{
     compute_base_score, compute_fairness_score, compute_final_score,
     compute_new_partner_multiplier, compute_raid_boost_multiplier, compute_readiness_score,
-    round_score, NEUTRAL_SCORE, NEW_PARTNER_RAID_THRESHOLD,
+    round_score, round_ties_to_even, NEUTRAL_SCORE, NEW_PARTNER_RAID_THRESHOLD,
 };
 
 /// Lookback-Fenster für Sessions (Python `LOOKBACK_DAYS = 45`).
@@ -131,9 +131,8 @@ pub fn build_score_upsert(
         0
     } else {
         let sum: i64 = recent_durations.iter().sum();
-        // int(round(sum/len)) — Python round() ist banker's rounding, aber für
-        // positive Mittelwerte ist .round() (half-away) praktisch deckungsgleich.
-        (sum as f64 / recent_durations.len() as f64).round() as i64
+        // int(round(sum/len)) — Python round() nutzt banker's rounding.
+        round_ties_to_even(sum as f64 / recent_durations.len() as f64) as i64
     };
     let duration_history_reliable =
         recent_durations.len() >= MIN_RELIABLE_SESSIONS && avg_duration_sec > 0;
@@ -606,6 +605,31 @@ mod tests {
             upsert.current_started_at.as_deref(),
             Some(iso_utc_seconds(started).as_str())
         );
+    }
+
+    #[test]
+    fn build_avg_duration_nutzt_bankers_rounding() {
+        let now = Utc.with_ymd_and_hms(2026, 6, 21, 12, 0, 0).unwrap();
+        let sessions = |durations: &[i64]| {
+            durations
+                .iter()
+                .enumerate()
+                .map(|(idx, duration)| SessionRow {
+                    started_at: Some(now - chrono::Duration::days((idx + 1) as i64)),
+                    duration_seconds: *duration,
+                })
+                .collect()
+        };
+
+        let mut even_down = base_input("uid_avg_even_down");
+        even_down.sessions = sessions(&[10, 10, 11, 11]);
+        let upsert = build_score_upsert(&even_down, now);
+        assert_eq!(upsert.avg_duration_sec, 10, "10.5 rundet zur geraden 10");
+
+        let mut even_up = base_input("uid_avg_even_up");
+        even_up.sessions = sessions(&[11, 11, 12, 12]);
+        let upsert = build_score_upsert(&even_up, now);
+        assert_eq!(upsert.avg_duration_sec, 12, "11.5 rundet zur geraden 12");
     }
 
     #[test]

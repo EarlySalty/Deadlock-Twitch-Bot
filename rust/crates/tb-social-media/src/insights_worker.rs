@@ -306,8 +306,8 @@ mod tests {
             .await
             .unwrap();
         for ddl in [
-            "CREATE TABLE twitch_clips_social_media (id SERIAL PRIMARY KEY, streamer_login TEXT, created_at TIMESTAMPTZ DEFAULT NOW(), discarded_at TIMESTAMPTZ, uploaded_tiktok BOOLEAN DEFAULT FALSE, uploaded_youtube BOOLEAN DEFAULT FALSE, uploaded_instagram BOOLEAN DEFAULT FALSE, tiktok_video_id TEXT, youtube_video_id TEXT, instagram_media_id TEXT)",
-            "CREATE TABLE twitch_clips_social_analytics (id SERIAL PRIMARY KEY, clip_id INTEGER, platform TEXT, bucket TEXT, next_pull_at TIMESTAMPTZ)",
+            "CREATE TABLE twitch_clips_social_media (id BIGSERIAL PRIMARY KEY, clip_id TEXT NOT NULL, clip_url TEXT NOT NULL, streamer_login TEXT NOT NULL, created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(), source_kind TEXT NOT NULL DEFAULT 'twitch', discarded_at TIMESTAMPTZ, uploaded_tiktok BOOLEAN DEFAULT FALSE, uploaded_youtube BOOLEAN DEFAULT FALSE, uploaded_instagram BOOLEAN DEFAULT FALSE, tiktok_video_id TEXT, youtube_video_id TEXT, instagram_media_id TEXT)",
+            "CREATE TABLE twitch_clips_social_analytics (id BIGSERIAL PRIMARY KEY, clip_id BIGINT NOT NULL, platform TEXT NOT NULL, bucket TEXT, synced_at TIMESTAMPTZ NOT NULL, next_pull_at TIMESTAMPTZ)",
         ] {
             sqlx::query(ddl).execute(&pool).await.unwrap();
         }
@@ -320,14 +320,14 @@ mod tests {
             return;
         };
         // A: tiktok veröffentlicht, keine Analytics → 3 Buckets fällig.
-        let a: i64 = sqlx::query_scalar("INSERT INTO twitch_clips_social_media (streamer_login, uploaded_tiktok, tiktok_video_id) VALUES ('nani', TRUE, 'tt1') RETURNING id").fetch_one(&pool).await.unwrap();
+        let a: i64 = sqlx::query_scalar("INSERT INTO twitch_clips_social_media (clip_id, clip_url, streamer_login, uploaded_tiktok, tiktok_video_id) VALUES ('a', 'https://clips.test/a', 'nani', TRUE, 'tt1') RETURNING id").fetch_one(&pool).await.unwrap();
         // B: youtube uploaded aber video_id NULL → gar kein Kandidat.
-        sqlx::query("INSERT INTO twitch_clips_social_media (streamer_login, uploaded_youtube) VALUES ('nani', TRUE)").execute(&pool).await.unwrap();
+        sqlx::query("INSERT INTO twitch_clips_social_media (clip_id, clip_url, streamer_login, uploaded_youtube) VALUES ('b', 'https://clips.test/b', 'nani', TRUE)").execute(&pool).await.unwrap();
         // C: tiktok veröffentlicht, 24h hat next_pull in der Zukunft → nur 7d/30d fällig.
-        let c: i64 = sqlx::query_scalar("INSERT INTO twitch_clips_social_media (streamer_login, uploaded_tiktok, tiktok_video_id) VALUES ('nani', TRUE, 'tt3') RETURNING id").fetch_one(&pool).await.unwrap();
-        sqlx::query("INSERT INTO twitch_clips_social_analytics (clip_id, platform, bucket, next_pull_at) VALUES ($1, 'tiktok', '24h', NOW() + INTERVAL '1 day')").bind(c).execute(&pool).await.unwrap();
+        let c: i64 = sqlx::query_scalar("INSERT INTO twitch_clips_social_media (clip_id, clip_url, streamer_login, uploaded_tiktok, tiktok_video_id) VALUES ('c', 'https://clips.test/c', 'nani', TRUE, 'tt3') RETURNING id").fetch_one(&pool).await.unwrap();
+        sqlx::query("INSERT INTO twitch_clips_social_analytics (clip_id, platform, bucket, synced_at, next_pull_at) VALUES ($1, 'tiktok', '24h', NOW(), NOW() + INTERVAL '1 day')").bind(c).execute(&pool).await.unwrap();
         // D: verworfen → kein Kandidat.
-        sqlx::query("INSERT INTO twitch_clips_social_media (streamer_login, uploaded_tiktok, tiktok_video_id, discarded_at) VALUES ('nani', TRUE, 'tt4', NOW())").execute(&pool).await.unwrap();
+        sqlx::query("INSERT INTO twitch_clips_social_media (clip_id, clip_url, streamer_login, uploaded_tiktok, tiktok_video_id, discarded_at) VALUES ('d', 'https://clips.test/d', 'nani', TRUE, 'tt4', NOW())").execute(&pool).await.unwrap();
 
         let targets = collect_due_targets(&pool, 100).await;
         let keys: Vec<(i64, String)> = targets

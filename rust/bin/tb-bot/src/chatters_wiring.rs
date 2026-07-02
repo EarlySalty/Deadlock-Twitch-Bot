@@ -12,6 +12,7 @@
 //!   verfügbar sind (sonst ist kein Poll möglich → Log + kein Spawn).
 //! - **Raid-Retention** — stündlich, unabhängig vom Token-Plumbing: berechnet
 //!   die 5/15/30-Minuten-Retention der letzten 7 Tage. Wird immer gestartet.
+//!   Im selben Takt laeuft der Observability-Event-Cleanup.
 //!
 //! Der [`ChattersCollector`] wird **einmal** vor dem Loop gebaut, damit
 //! Self-Heal-Cooldowns und der gemeinsame State über alle 30s-Ticks hinweg
@@ -29,6 +30,8 @@ use tb_monitoring::{
 };
 use tb_raid::TokenProvider;
 use tb_transport_twitch::{HelixClient, HelixError};
+
+use crate::task_supervisor::TaskSupervisor;
 
 /// Intervall des Chatters-Collect-Loops (Python `collect_chatters_data`, 30 s).
 const COLLECT_INTERVAL: Duration = Duration::from_secs(30);
@@ -88,6 +91,49 @@ impl StreamerTokenSource for TokenProviderStreamerSource {
     }
 }
 
+struct MissingBotChatterAuth;
+
+#[async_trait]
+impl BotChatterAuth for MissingBotChatterAuth {
+    async fn bot_token(&self) -> Option<String> {
+        None
+    }
+
+    async fn bot_user_id(&self) -> Option<String> {
+        None
+    }
+
+    async fn bot_login(&self) -> Option<String> {
+        None
+    }
+
+    async fn has_chatters_scope(&self) -> bool {
+        false
+    }
+}
+
+struct MissingStreamerTokenSource;
+
+#[async_trait]
+impl StreamerTokenSource for MissingStreamerTokenSource {
+    async fn streamer_token(&self, _twitch_user_id: &str) -> Option<String> {
+        None
+    }
+}
+
+struct MissingModeratorProvisioner;
+
+#[async_trait]
+impl ModeratorProvisioner for MissingModeratorProvisioner {
+    async fn ensure_bot_is_mod(&self, _broadcaster_id: &str, login: &str) -> bool {
+        tracing::warn!(
+            channel = login,
+            "chatters: Mod-Self-Heal uebersprungen, Provisioner fehlt"
+        );
+        false
+    }
+}
+
 /// Realer [`ChattersFetcher`] über `HelixClient::get_chatters`.
 /// Reicht die `user_id` durch (leer → vom Aufrufer zu `None` normalisiert);
 /// 403 propagiert als [`HelixError::NotModerator`].
@@ -126,15 +172,17 @@ impl ChattersFetcher for HelixChattersFetcher {
 pub fn build_bot_chatter_auth(
     bot_token_manager: Option<Arc<BotTokenManager>>,
 ) -> Option<Arc<dyn BotChatterAuth>> {
-    bot_token_manager.map(|manager| Arc::new(BotTokenManagerAuth { manager }) as Arc<dyn BotChatterAuth>)
+    bot_token_manager
+        .map(|manager| Arc::new(BotTokenManagerAuth { manager }) as Arc<dyn BotChatterAuth>)
 }
 
 /// Baut den Streamer-Token-Port aus dem Mod-`TokenProvider`.
 pub fn build_streamer_token_source(
     token_provider: Option<Arc<TokenProvider>>,
 ) -> Option<Arc<dyn StreamerTokenSource>> {
-    token_provider
-        .map(|tp| Arc::new(TokenProviderStreamerSource { token_provider: tp }) as Arc<dyn StreamerTokenSource>)
+    token_provider.map(|tp| {
+        Arc::new(TokenProviderStreamerSource { token_provider: tp }) as Arc<dyn StreamerTokenSource>
+    })
 }
 
 /// Baut den Helix-Chatters-Fetcher (nur mit aktivem `HelixClient`).
@@ -153,52 +201,66 @@ pub fn build_chatters_fetcher(helix: Option<HelixClient>) -> Option<Arc<dyn Chat
 /// Token-Plumbing und wird immer gestartet. Fehler werden geloggt; beide Loops
 /// laufen weiter.
 pub fn spawn_chatters_schedulers(
+    supervisor: &TaskSupervisor,
     pool: PgPool,
     auth: Option<Arc<dyn BotChatterAuth>>,
     streamer_tokens: Option<Arc<dyn StreamerTokenSource>>,
     fetcher: Option<Arc<dyn ChattersFetcher>>,
     provisioner: Option<Arc<dyn ModeratorProvisioner>>,
 ) {
-    spawn_collect_loop(pool.clone(), auth, streamer_tokens, fetcher, provisioner);
-    spawn_retention_loop(pool);
+    spawn_collect_loop(supervisor, pool.clone(), auth, streamer_tokens, fetcher, provisioner);
+    spawn_retention_loop(supervisor, pool);
 }
 
 fn spawn_collect_loop(
+    supervisor: &TaskSupervisor,
     pool: PgPool,
     auth: Option<Arc<dyn BotChatterAuth>>,
     streamer_tokens: Option<Arc<dyn StreamerTokenSource>>,
     fetcher: Option<Arc<dyn ChattersFetcher>>,
     provisioner: Option<Arc<dyn ModeratorProvisioner>>,
 ) {
-    let (auth, streamer_tokens, fetcher, provisioner) =
-        match (auth, streamer_tokens, fetcher, provisioner) {
-            (Some(auth), Some(streamer_tokens), Some(fetcher), Some(provisioner)) => {
-                (auth, streamer_tokens, fetcher, provisioner)
-            }
-            (auth, streamer_tokens, fetcher, provisioner) => {
-                let mut missing: Vec<&str> = Vec::new();
-                if auth.is_none() {
-                    missing.push("Bot-Token-Manager");
-                }
-                if fetcher.is_none() {
-                    missing.push("HelixClient");
-                }
-                if streamer_tokens.is_none() || provisioner.is_none() {
-                    missing.push("DB_MASTER_KEY_V1/TokenProvider");
-                }
-                tracing::info!(
-                    missing = %missing.join(", "),
-                    "Chatters-Poll inaktiv: fehlende Ports"
-                );
-                return;
-            }
-        };
+    let Some(fetcher) = fetcher else {
+        tracing::warn!("Chatters-Poll inaktiv: HelixClient fehlt");
+        return;
+    };
+
+    if auth.is_none() && streamer_tokens.is_none() {
+        tracing::warn!(
+            "Chatters-Poll inaktiv: weder Bot-Token-Manager noch Streamer-TokenProvider verfuegbar"
+        );
+        return;
+    }
+
+    let auth = match auth {
+        Some(auth) => auth,
+        None => {
+            tracing::warn!("chatters: Bot-Token-Manager fehlt, nutze nur Streamer-Token-Fallback");
+            Arc::new(MissingBotChatterAuth) as Arc<dyn BotChatterAuth>
+        }
+    };
+    let streamer_tokens = match streamer_tokens {
+        Some(streamer_tokens) => streamer_tokens,
+        None => {
+            tracing::warn!(
+                "chatters: TokenProvider fehlt, Streamer-Token-Fallback wird uebersprungen"
+            );
+            Arc::new(MissingStreamerTokenSource) as Arc<dyn StreamerTokenSource>
+        }
+    };
+    let provisioner = match provisioner {
+        Some(provisioner) => provisioner,
+        None => {
+            tracing::warn!("chatters: Mod-Self-Heal-Port fehlt, Self-Heal wird uebersprungen");
+            Arc::new(MissingModeratorProvisioner) as Arc<dyn ModeratorProvisioner>
+        }
+    };
 
     // Collector EINMAL bauen → Self-Heal- + Bot-nicht-Mod-Backoff-Cooldowns
     // werden über alle 30s-Ticks geteilt.
     let collector = ChattersCollector::new(pool, auth, streamer_tokens, fetcher, provisioner);
 
-    tokio::spawn(async move {
+    supervisor.spawn("chatters_collect", async move {
         let mut tick = tokio::time::interval(COLLECT_INTERVAL);
         tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
         loop {
@@ -220,8 +282,8 @@ fn spawn_collect_loop(
     });
 }
 
-fn spawn_retention_loop(pool: PgPool) {
-    tokio::spawn(async move {
+fn spawn_retention_loop(supervisor: &TaskSupervisor, pool: PgPool) {
+    supervisor.spawn("raid_and_observability_retention", async move {
         let mut tick = tokio::time::interval(RETENTION_INTERVAL);
         tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
         loop {
@@ -235,6 +297,17 @@ fn spawn_retention_loop(pool: PgPool) {
                     "raid_retention: Lauf abgeschlossen"
                 ),
                 Err(error) => tracing::error!(%error, "raid_retention: Lauf fehlgeschlagen"),
+            }
+            match tb_monitoring::cleanup_observability_events(&pool).await {
+                Ok(deleted) if deleted > 0 => tracing::info!(
+                    deleted,
+                    retention_days = tb_monitoring::observability_retention_days(),
+                    "observability_retention: alte Events entfernt"
+                ),
+                Ok(_) => {}
+                Err(error) => {
+                    tracing::error!(%error, "observability_retention: Cleanup fehlgeschlagen")
+                }
             }
         }
     });

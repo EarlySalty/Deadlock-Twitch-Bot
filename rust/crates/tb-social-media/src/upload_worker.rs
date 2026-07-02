@@ -633,9 +633,9 @@ mod tests {
             .unwrap();
         for ddl in [
             "CREATE TABLE social_media_platform_auth (id SERIAL PRIMARY KEY, platform TEXT, streamer_login TEXT, enabled INTEGER DEFAULT 1)",
-            "CREATE TABLE twitch_clips_social_media (id SERIAL PRIMARY KEY, clip_id TEXT, clip_url TEXT, clip_title TEXT, streamer_login TEXT, local_file_path TEXT, converted_file_path TEXT, status TEXT DEFAULT 'pending', uploaded_tiktok BOOLEAN DEFAULT FALSE, uploaded_youtube BOOLEAN DEFAULT FALSE, uploaded_instagram BOOLEAN DEFAULT FALSE, tiktok_video_id TEXT, youtube_video_id TEXT, instagram_media_id TEXT, tiktok_uploaded_at TIMESTAMPTZ, youtube_uploaded_at TIMESTAMPTZ, instagram_uploaded_at TIMESTAMPTZ, discarded_at TIMESTAMPTZ)",
+            "CREATE TABLE twitch_clips_social_media (id BIGSERIAL PRIMARY KEY, clip_id TEXT NOT NULL, clip_url TEXT NOT NULL, clip_title TEXT, streamer_login TEXT NOT NULL, local_file_path TEXT, converted_file_path TEXT, status TEXT DEFAULT 'pending', source_kind TEXT NOT NULL DEFAULT 'twitch', created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(), uploaded_tiktok BOOLEAN DEFAULT FALSE, uploaded_youtube BOOLEAN DEFAULT FALSE, uploaded_instagram BOOLEAN DEFAULT FALSE, tiktok_video_id TEXT, youtube_video_id TEXT, instagram_media_id TEXT, tiktok_uploaded_at TIMESTAMPTZ, youtube_uploaded_at TIMESTAMPTZ, instagram_uploaded_at TIMESTAMPTZ, discarded_at TIMESTAMPTZ)",
             "CREATE TABLE social_media_clip_approval (clip_db_id INTEGER PRIMARY KEY, state TEXT NOT NULL DEFAULT 'awaiting_approval', approved_platforms JSONB NOT NULL DEFAULT '[]'::jsonb, approver_user_id TEXT, decided_at TIMESTAMPTZ, dm_message_id TEXT, dm_channel_id TEXT, last_sent_at TIMESTAMPTZ)",
-            "CREATE TABLE twitch_clips_upload_queue (id SERIAL PRIMARY KEY, clip_id INTEGER, platform TEXT, status TEXT DEFAULT 'pending', priority INTEGER DEFAULT 0, title TEXT, description TEXT, hashtags TEXT, scheduled_at TIMESTAMPTZ, attempts INTEGER DEFAULT 0, last_error TEXT, last_attempt_at TIMESTAMPTZ, created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP, completed_at TIMESTAMPTZ)",
+            "CREATE TABLE twitch_clips_upload_queue (id BIGSERIAL PRIMARY KEY, clip_id BIGINT NOT NULL, platform TEXT NOT NULL, status TEXT DEFAULT 'pending', priority INTEGER DEFAULT 0, title TEXT, description TEXT, hashtags TEXT, scheduled_at TIMESTAMPTZ, attempts INTEGER DEFAULT 0, last_error TEXT, last_attempt_at TIMESTAMPTZ, created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP, completed_at TIMESTAMPTZ)",
         ] {
             sqlx::query(ddl).execute(&pool).await.unwrap();
         }
@@ -667,9 +667,9 @@ mod tests {
             .await
             .unwrap();
         for ddl in [
-            "CREATE TABLE twitch_clips_social_media (id SERIAL PRIMARY KEY, clip_id TEXT, clip_url TEXT, clip_title TEXT, streamer_login TEXT, local_file_path TEXT, converted_file_path TEXT, status TEXT DEFAULT 'pending', uploaded_tiktok BOOLEAN DEFAULT FALSE, uploaded_youtube BOOLEAN DEFAULT FALSE, uploaded_instagram BOOLEAN DEFAULT FALSE, tiktok_video_id TEXT, youtube_video_id TEXT, instagram_media_id TEXT, youtube_uploaded_at TIMESTAMPTZ, instagram_uploaded_at TIMESTAMPTZ, discarded_at TIMESTAMPTZ)",
+            "CREATE TABLE twitch_clips_social_media (id BIGSERIAL PRIMARY KEY, clip_id TEXT NOT NULL, clip_url TEXT NOT NULL, clip_title TEXT, streamer_login TEXT NOT NULL, local_file_path TEXT, converted_file_path TEXT, status TEXT DEFAULT 'pending', source_kind TEXT NOT NULL DEFAULT 'twitch', created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(), uploaded_tiktok BOOLEAN DEFAULT FALSE, uploaded_youtube BOOLEAN DEFAULT FALSE, uploaded_instagram BOOLEAN DEFAULT FALSE, tiktok_video_id TEXT, youtube_video_id TEXT, instagram_media_id TEXT, youtube_uploaded_at TIMESTAMPTZ, instagram_uploaded_at TIMESTAMPTZ, discarded_at TIMESTAMPTZ)",
             "CREATE TABLE social_media_clip_approval (clip_db_id INTEGER PRIMARY KEY, state TEXT NOT NULL DEFAULT 'awaiting_approval', approved_platforms JSONB NOT NULL DEFAULT '[]'::jsonb, approver_user_id TEXT, decided_at TIMESTAMPTZ, dm_message_id TEXT, dm_channel_id TEXT, last_sent_at TIMESTAMPTZ)",
-            "CREATE TABLE twitch_clips_upload_queue (id SERIAL PRIMARY KEY, clip_id INTEGER, platform TEXT, status TEXT DEFAULT 'pending', priority INTEGER DEFAULT 0, title TEXT, description TEXT, hashtags TEXT, scheduled_at TIMESTAMPTZ, attempts INTEGER DEFAULT 0, last_error TEXT, last_attempt_at TIMESTAMPTZ, created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP, completed_at TIMESTAMPTZ)",
+            "CREATE TABLE twitch_clips_upload_queue (id BIGSERIAL PRIMARY KEY, clip_id BIGINT NOT NULL, platform TEXT NOT NULL, status TEXT DEFAULT 'pending', priority INTEGER DEFAULT 0, title TEXT, description TEXT, hashtags TEXT, scheduled_at TIMESTAMPTZ, attempts INTEGER DEFAULT 0, last_error TEXT, last_attempt_at TIMESTAMPTZ, created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP, completed_at TIMESTAMPTZ)",
         ] {
             sqlx::query(ddl).execute(&pool).await.unwrap();
         }
@@ -696,10 +696,10 @@ mod tests {
         }
     }
 
-    fn upload_item(queue_id: i32, clip: i32, local_file_path: Option<String>) -> UploadQueueItem {
+    fn upload_item(queue_id: i64, clip: i64, local_file_path: Option<String>) -> UploadQueueItem {
         UploadQueueItem {
-            id: queue_id as i64,
-            clip_db_id: clip as i64,
+            id: queue_id,
+            clip_db_id: clip,
             platform: "tiktok".to_string(),
             status: "processing".to_string(),
             priority: 0,
@@ -733,17 +733,17 @@ mod tests {
         let Some(pool) = make_pool("t_sm_upload_worker").await else {
             return;
         };
-        let clip: i32 =
-            sqlx::query_scalar("INSERT INTO twitch_clips_social_media DEFAULT VALUES RETURNING id")
+        let clip: i64 =
+            sqlx::query_scalar("INSERT INTO twitch_clips_social_media (clip_id, clip_url, streamer_login) VALUES ('approval-1', 'https://clips.test/approval-1', 'nani') RETURNING id")
                 .fetch_one(&pool)
                 .await
                 .unwrap();
-        let queue_id: i32 = sqlx::query_scalar("INSERT INTO twitch_clips_upload_queue (clip_id, platform, status) VALUES ($1, 'tiktok', 'pending') RETURNING id").bind(clip).fetch_one(&pool).await.unwrap();
+        let queue_id: i64 = sqlx::query_scalar("INSERT INTO twitch_clips_upload_queue (clip_id, platform, status) VALUES ($1, 'tiktok', 'pending') RETURNING id").bind(clip).fetch_one(&pool).await.unwrap();
 
         let task = task(pool.clone());
         let item = UploadQueueItem {
-            id: queue_id as i64,
-            clip_db_id: clip as i64,
+            id: queue_id,
+            clip_db_id: clip,
             platform: "tiktok".to_string(),
             status: "pending".to_string(),
             priority: 0,
@@ -787,16 +787,16 @@ mod tests {
         std::fs::write(&converted_path, b"converted").unwrap();
         let input_path_s = input_path.to_string_lossy().into_owned();
 
-        let clip: i32 = sqlx::query_scalar(
-            "INSERT INTO twitch_clips_social_media (clip_id, streamer_login, local_file_path) \
-             VALUES ('c1', 'nani', $1) RETURNING id",
+        let clip: i64 = sqlx::query_scalar(
+            "INSERT INTO twitch_clips_social_media (clip_id, clip_url, streamer_login, local_file_path) \
+             VALUES ('c1', 'https://clips.test/c1', 'nani', $1) RETURNING id",
         )
         .bind(&input_path_s)
         .fetch_one(&pool)
         .await
         .unwrap();
-        approve_tiktok(&pool, clip).await;
-        let queue_id: i32 = sqlx::query_scalar(
+        approve_tiktok(&pool, i32::try_from(clip).unwrap()).await;
+        let queue_id: i64 = sqlx::query_scalar(
             "INSERT INTO twitch_clips_upload_queue (clip_id, platform, status) \
              VALUES ($1, 'tiktok', 'processing') RETURNING id",
         )
@@ -838,15 +838,15 @@ mod tests {
         let Some(pool) = make_pool("t_sm_upload_existing_flag").await else {
             return;
         };
-        let clip: i32 = sqlx::query_scalar(
-            "INSERT INTO twitch_clips_social_media (clip_id, streamer_login, uploaded_tiktok, tiktok_video_id) \
-             VALUES ('c1', 'nani', TRUE, 'old_vid') RETURNING id",
+        let clip: i64 = sqlx::query_scalar(
+            "INSERT INTO twitch_clips_social_media (clip_id, clip_url, streamer_login, uploaded_tiktok, tiktok_video_id) \
+             VALUES ('c1', 'https://clips.test/c1', 'nani', TRUE, 'old_vid') RETURNING id",
         )
         .fetch_one(&pool)
         .await
         .unwrap();
-        approve_tiktok(&pool, clip).await;
-        let queue_id: i32 = sqlx::query_scalar(
+        approve_tiktok(&pool, i32::try_from(clip).unwrap()).await;
+        let queue_id: i64 = sqlx::query_scalar(
             "INSERT INTO twitch_clips_upload_queue (clip_id, platform, status) \
              VALUES ($1, 'tiktok', 'processing') RETURNING id",
         )

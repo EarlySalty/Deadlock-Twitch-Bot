@@ -37,8 +37,8 @@
 //!   body {login|streamer|twitch_login: <str>, [guild_id, channel_id, role_id]}
 //!   → 200 {ok:true, login:<str>, message:<str>}
 //!   → 400 / 403 / 404 / 503
-//!   NICHT verdrahtet: Discord-DM-Versand braucht die Python-Laufzeit;
-//!   die Port-Impl antwortet ehrlich 503 (Route läuft über den Proxy).
+//!   nativ verdrahtet: tb-bot sendet die Discord-DM ueber den Broker und
+//!   dedupliziert persistent pro Partner/Zweck.
 //!
 //! POST /internal/twitch/v1/raid/oauth-callback
 //!   body {code:<str>, state:<str>, error:<str>,
@@ -617,22 +617,66 @@ pub async fn go_url_handler(
 ///
 /// # Idempotenz
 /// Python implementiert hier `_prepare_idempotency` + `_release_idempotency_owner`.
-/// Dieser Port liefert korrekte Antworten, unterstützt aber noch **keine**
-/// Deduplizierung via `X-Idempotency-Key` — Clients, die das Key-Header
-/// schicken, erhalten keine gecachten Wiederholungsantworten.
-/// (open_risk: Idempotenz-Layer ist noch nicht nativ.)
+/// Der native Handler nutzt denselben Idempotency-Layer wie `oauth-callback`;
+/// der Port dedupliziert zusaetzlich persistent pro Partner/Zweck.
 pub async fn requirements_handler(
     auth: AuthLevel,
+    headers: axum::http::HeaderMap,
+    axum::extract::OriginalUri(uri): axum::extract::OriginalUri,
     Extension(port): Extension<RaidOAuthExt>,
-    Json(body): Json<RequirementsRequest>,
-) -> Result<impl IntoResponse, ApiError> {
+    Extension(idem): Extension<crate::idempotency::IdempotencyState>,
+    Json(raw_payload): Json<serde_json::Value>,
+) -> Result<axum::response::Response, ApiError> {
+    use crate::idempotency::{Prepared, IDEMPOTENCY_KEY_HEADER};
+
     if !auth.is_privileged() {
         return Err(ApiError::unauthorized());
     }
     let Some(port) = port.0 else {
+        tracing::error!("raid requirements ohne verdrahteten Port aufgerufen");
         return Err(ApiError::unavailable());
     };
+    let body: RequirementsRequest = serde_json::from_value(raw_payload.clone())
+        .map_err(|_| ApiError::bad_request("invalid request body"))?;
 
+    let raw_key = headers
+        .get(IDEMPOTENCY_KEY_HEADER)
+        .and_then(|v| v.to_str().ok());
+    let path = uri.path().to_string();
+    let path_qs = uri
+        .path_and_query()
+        .map(|pq| pq.as_str().to_string())
+        .unwrap_or_else(|| path.clone());
+    let owner = match idem
+        .prepare(raw_key, "POST", &path, &path_qs, &raw_payload)
+        .await
+    {
+        Prepared::Skip => None,
+        Prepared::Immediate(resp) => return Ok(resp),
+        Prepared::Owner(slot) => Some(slot),
+    };
+
+    let result = requirements_inner(port.as_ref(), body).await;
+    match result {
+        Ok(payload) => {
+            if let Some(slot) = owner {
+                slot.complete(200, &payload, true);
+            }
+            Ok((axum::http::StatusCode::OK, Json(payload)).into_response())
+        }
+        Err(error) => {
+            if let Some(slot) = owner {
+                slot.complete(error.status.as_u16(), &error.payload_json(), false);
+            }
+            Err(error)
+        }
+    }
+}
+
+async fn requirements_inner(
+    port: &dyn RaidOAuthPort,
+    body: RequirementsRequest,
+) -> Result<serde_json::Value, ApiError> {
     // Discord-Scope-Guard (Python: _enforce_discord_action_scope →
     // 403 {"error":"forbidden","message":"action outside configured scope"}).
     port.enforce_discord_action_scope(
@@ -670,7 +714,7 @@ pub async fn requirements_handler(
         ApiError::from(e)
     })?;
 
-    Ok(Json(RequirementsResponse {
+    Ok(serde_json::json!(RequirementsResponse {
         ok: true,
         login,
         message,

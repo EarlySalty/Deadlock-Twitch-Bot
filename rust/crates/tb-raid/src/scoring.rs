@@ -121,10 +121,31 @@ pub struct ScoreComponents {
     pub is_new_partner_preferred: bool,
 }
 
+/// Rundet auf die nächste ganze Zahl mit Banker's Rounding (ties-to-even),
+/// passend zu Python `round()` ohne `ndigits`.
+#[inline]
+pub(crate) fn round_ties_to_even(value: f64) -> f64 {
+    if !value.is_finite() {
+        return value;
+    }
+    let floor = value.floor();
+    let diff = value - floor;
+    let epsilon = f64::EPSILON * value.abs().max(1.0) * 4.0;
+    if diff < 0.5 - epsilon {
+        floor
+    } else if diff > 0.5 + epsilon {
+        floor + 1.0
+    } else if floor.rem_euclid(2.0) == 0.0 {
+        floor
+    } else {
+        floor + 1.0
+    }
+}
+
 /// `round(value, 6)` — identisch zu Pythons `_round_score` (Z. 207–208).
 #[inline]
 pub fn round_score(value: f64) -> f64 {
-    (value * 1_000_000.0).round() / 1_000_000.0
+    format!("{value:.6}").parse::<f64>().unwrap_or(value)
 }
 
 /// `max(minimum, min(maximum, value))` — identisch zu Pythons `_clamp` (Z. 185–186).
@@ -379,6 +400,14 @@ mod tests {
         assert_eq!(round_score(0.123456789), 0.123457);
         assert_eq!(round_score(0.5), 0.5);
         assert_eq!(round_score(1.0000001), 1.0);
+    }
+
+    #[test]
+    fn round_score_nutzt_bankers_rounding_bei_halben_mikroeinheiten() {
+        assert_eq!(round_score(0.1234565), 0.123456);
+        assert_eq!(round_score(0.1234575), 0.123457);
+        assert_eq!(round_score(-0.1234565), -0.123456);
+        assert_eq!(round_score(-0.1234575), -0.123457);
     }
 
     // ─── duration_score ──────────────────────────────────────────────────────

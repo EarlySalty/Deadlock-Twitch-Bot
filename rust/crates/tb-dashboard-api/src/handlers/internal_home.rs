@@ -2182,7 +2182,7 @@ pub async fn changelog_handler(
         return (
             StatusCode::FORBIDDEN,
             Json(json!({
-                "error": "csrf_failed",
+                "error": "invalid_csrf",
                 "message": "Cross-Origin-Anfrage abgelehnt.",
             })),
         )
@@ -2313,8 +2313,8 @@ async fn create_changelog_entry(
 #[cfg(test)]
 mod changelog_origin_tests {
     //! P1.32: Same-Origin-CSRF-Guard auf dem Changelog-POST. Browser-Admin mit
-    //! gültiger `master_dash_session` aber Cross-Origin → 403 csrf_failed;
-    //! same-origin → kein csrf_failed (passiert die Origin-Prüfung).
+    //! gültiger `master_dash_session` aber Cross-Origin → 403 invalid_csrf;
+    //! same-origin → kein invalid_csrf (passiert die Origin-Prüfung).
     use super::*;
     use crate::auth::session::{DashboardAuthState, ADMIN_COOKIE_NAME};
     use axum::body::Body;
@@ -2433,7 +2433,7 @@ mod changelog_origin_tests {
             .await
             .unwrap();
         let body: Value = serde_json::from_slice(&bytes).unwrap();
-        assert_eq!(body["error"], "csrf_failed");
+        assert_eq!(body["error"], "invalid_csrf");
     }
 
     #[tokio::test]
@@ -2446,7 +2446,7 @@ mod changelog_origin_tests {
             .oneshot(admin_request(&cookie, Some("https://dash.example.com")))
             .await
             .unwrap();
-        // Same-origin darf NICHT am csrf_failed scheitern (kein 403 csrf_failed).
+        // Same-origin darf NICHT am invalid_csrf scheitern (kein 403 invalid_csrf).
         // Der Write läuft danach gegen die Test-Fixture → 201.
         assert_ne!(resp.status(), StatusCode::FORBIDDEN);
         assert_eq!(resp.status(), StatusCode::CREATED);

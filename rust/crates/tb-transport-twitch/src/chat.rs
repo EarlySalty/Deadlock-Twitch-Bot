@@ -6,7 +6,9 @@
 
 use crate::client::{HelixClient, HelixError};
 use chrono::{DateTime, Utc};
+use regex::Regex;
 use serde::{Deserialize, Serialize};
+use std::sync::OnceLock;
 
 // ---------------------------------------------------------------------------
 // Typen
@@ -27,6 +29,111 @@ pub enum SendOutcome {
     Dropped { code: String, message: String },
     /// HTTP-Fehler (4xx/5xx) der nicht durch den 2-Attempt-Retry aufgelöst wurde.
     HttpError { status: u16, body: String },
+}
+
+/// Ergebnis eines `POST /chat/announcements`-Aufrufs.
+///
+/// Additiv zum alten bool-Vertrag: bestehende Aufrufer können weiter nur
+/// [`AnnouncementOutcome::accepted`] auswerten, Debug-Pfade bekommen Status und
+/// Body-Snippet für Twitch-Ablehnungen.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AnnouncementOutcome {
+    pub accepted: bool,
+    pub status: Option<u16>,
+    pub detail: Option<String>,
+}
+
+impl AnnouncementOutcome {
+    pub fn accepted() -> Self {
+        Self {
+            accepted: true,
+            status: None,
+            detail: None,
+        }
+    }
+
+    pub fn rejected(status: u16, detail: String) -> Self {
+        let detail = redact_announcement_detail(&detail);
+        let detail = detail.trim();
+        Self {
+            accepted: false,
+            status: Some(status),
+            detail: if detail.is_empty() {
+                None
+            } else {
+                Some(detail.chars().take(300).collect())
+            },
+        }
+    }
+
+    pub fn from_bool(accepted: bool) -> Self {
+        if accepted {
+            Self::accepted()
+        } else {
+            Self {
+                accepted: false,
+                status: None,
+                detail: None,
+            }
+        }
+    }
+}
+
+fn mask_secret(value: &str) -> String {
+    if value.is_empty() {
+        "[redacted]".to_string()
+    } else {
+        format!("[redacted:{}]", value.len().min(999))
+    }
+}
+
+struct AnnouncementSecretPatterns {
+    header: Regex,
+    bearer: Regex,
+    quoted_kv: Regex,
+    kv: Regex,
+    query: Regex,
+    jwt: Regex,
+}
+
+fn announcement_secret_patterns() -> &'static AnnouncementSecretPatterns {
+    static PATTERNS: OnceLock<AnnouncementSecretPatterns> = OnceLock::new();
+    PATTERNS.get_or_init(|| {
+        const KEYS: &str = r"access[_-]?token|refresh[_-]?token|id[_-]?token|client[_-]?secret|authorization";
+        let compile = |p: &str| Regex::new(p).unwrap_or_else(|_| Regex::new(r"$.^").unwrap());
+        AnnouncementSecretPatterns {
+            header: compile(r"(?i)\b(authorization\s*[:=]\s*(?:bearer\s+)?)([^\s,;}]+)"),
+            bearer: compile(r"(?i)\b(bearer\s+)([A-Za-z0-9._~+/=-]{8,})"),
+            quoted_kv: compile(&format!(
+                r#"(?i)((?:"|')(?:{KEYS})(?:"|')\s*:\s*)("[^"]*"|'[^']*'|[^\s,;}}]+)"#
+            )),
+            kv: compile(&format!(
+                r#"(?i)\b({KEYS})(\s*[:=]\s*)("[^"]+"|'[^']+'|[^\s,;&}}]+)"#
+            )),
+            query: compile(&format!(r"(?i)\b({KEYS})=([^&\s]+)")),
+            jwt: compile(r"\beyJ[a-zA-Z0-9_-]{8,}\.[a-zA-Z0-9._-]{8,}\.[a-zA-Z0-9._-]{8,}\b"),
+        }
+    })
+}
+
+fn redact_announcement_detail(raw: &str) -> String {
+    let p = announcement_secret_patterns();
+    let s = p
+        .header
+        .replace_all(raw, |c: &regex::Captures| format!("{}{}", &c[1], mask_secret(&c[2])));
+    let s = p
+        .bearer
+        .replace_all(&s, |c: &regex::Captures| format!("{}{}", &c[1], mask_secret(&c[2])));
+    let s = p
+        .quoted_kv
+        .replace_all(&s, |c: &regex::Captures| format!("{}{}", &c[1], mask_secret(&c[2])));
+    let s = p.kv.replace_all(&s, |c: &regex::Captures| {
+        format!("{}{}{}", &c[1], &c[2], mask_secret(&c[3]))
+    });
+    let s = p
+        .query
+        .replace_all(&s, |c: &regex::Captures| format!("{}={}", &c[1], mask_secret(&c[2])));
+    p.jwt.replace_all(&s, mask_secret("[jwt]").as_str()).into_owned()
 }
 
 /// Drop-Reason aus der Helix-Antwort auf `POST /chat/messages`.
@@ -211,14 +318,14 @@ impl HelixClient {
     ///
     /// Port: `moderation.py:1293–1387`.
     /// Scope: `moderator:manage:announcements`.
-    pub async fn send_announcement(
+    pub async fn send_announcement_detailed(
         &self,
         broadcaster_id: &str,
         moderator_id: &str,
         message: &str,
         color: &str,
         user_token: &str,
-    ) -> Result<bool, HelixError> {
+    ) -> Result<AnnouncementOutcome, HelixError> {
         let url = format!("{}/chat/announcements", self.helix_config().helix_base);
         let payload = AnnouncementPayload { message, color };
         let resp = self
@@ -235,7 +342,25 @@ impl HelixClient {
             .send()
             .await?;
 
-        Ok(matches!(resp.status().as_u16(), 200 | 204))
+        let status = resp.status().as_u16();
+        if matches!(status, 200 | 204) {
+            return Ok(AnnouncementOutcome::accepted());
+        }
+        let body = resp.text().await.unwrap_or_default();
+        Ok(AnnouncementOutcome::rejected(status, body))
+    }
+
+    pub async fn send_announcement(
+        &self,
+        broadcaster_id: &str,
+        moderator_id: &str,
+        message: &str,
+        color: &str,
+        user_token: &str,
+    ) -> Result<bool, HelixError> {
+        self.send_announcement_detailed(broadcaster_id, moderator_id, message, color, user_token)
+            .await
+            .map(|outcome| outcome.accepted)
     }
 
     /// Bannt einen User via `POST /moderation/bans`.
@@ -669,6 +794,59 @@ mod tests {
                 .await
                 .unwrap()
         );
+    }
+
+    #[tokio::test]
+    async fn announcement_detail_enthaelt_status_und_body() {
+        let server = MockServer::start().await;
+        let client = mock_client(&server).await;
+        Mock::given(method("POST"))
+            .and(path("/helix/chat/announcements"))
+            .respond_with(ResponseTemplate::new(403).set_body_string("missing scope"))
+            .mount(&server)
+            .await;
+        let outcome = client
+            .send_announcement_detailed("111", "bot1", "msg", "purple", "tok")
+            .await
+            .unwrap();
+        assert!(!outcome.accepted);
+        assert_eq!(outcome.status, Some(403));
+        assert_eq!(outcome.detail.as_deref(), Some("missing scope"));
+    }
+
+    #[tokio::test]
+    async fn announcement_detail_redigiert_tokenartige_werte() {
+        let server = MockServer::start().await;
+        let client = mock_client(&server).await;
+        // JWT-förmige Fixture zur Laufzeit zusammengesetzt, damit kein
+        // zusammenhängendes Token-Literal im Quelltext steht (Secret-Scanner).
+        let seg = "eyJ";
+        let jwt = format!(
+            "{seg}hbGciOiJIUzI1NiJ9.{seg}zdWIiOiIxMjM0NTY3ODkwIn0.SflKxwRJSMeKKF2QT4fwpMeJf36POk6yJV_adQssw5c"
+        );
+        let body = format!(
+            r#"{{"error":"bad","access_token":"secret-access-12345","refresh_token":"secret-refresh-12345","id_token":"{jwt}","client_secret":"secret-client-12345","authorization":"Bearer secret-bearer-12345"}}"#
+        );
+        Mock::given(method("POST"))
+            .and(path("/helix/chat/announcements"))
+            .respond_with(ResponseTemplate::new(401).set_body_string(body))
+            .mount(&server)
+            .await;
+
+        let outcome = client
+            .send_announcement_detailed("111", "bot1", "msg", "purple", "tok")
+            .await
+            .unwrap();
+
+        let detail = outcome.detail.unwrap();
+        assert_eq!(outcome.status, Some(401));
+        assert!(detail.contains("access_token"));
+        assert!(detail.contains("[redacted:"));
+        assert!(!detail.contains("secret-access-12345"), "detail={detail}");
+        assert!(!detail.contains("secret-refresh-12345"), "detail={detail}");
+        assert!(!detail.contains("secret-client-12345"), "detail={detail}");
+        assert!(!detail.contains("secret-bearer-12345"), "detail={detail}");
+        assert!(!detail.contains(jwt.as_str()), "detail={detail}");
     }
 
     // -----------------------------------------------------------------------

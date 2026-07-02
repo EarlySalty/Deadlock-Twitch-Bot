@@ -23,7 +23,7 @@ use crate::ai_state::{chat_session_key, ChatSession, AI_MODEL_OPUS, AI_STATE};
 use crate::auth::level::DashboardAuthLevel;
 use tb_analytics::ai_analysis::{
     build_ai_analysis_prompt, collect_ai_context, extract_text_response, model_name_for,
-    parse_ai_analysis_points, plan_ai_model,
+    parse_ai_analysis_points_with_context, plan_ai_model,
 };
 use tb_analytics::ai_history::save_analysis;
 use tb_engagement::claude_chat::ClaudeClient;
@@ -149,14 +149,18 @@ async fn call_ai_analysis(ai_model: &str, prompt: &str) -> Result<Vec<Value>, St
             .create_message(None, json!([{ "role": "user", "content": prompt }]), 60000)
             .await
             .map_err(|e| e.to_string())?;
-        Ok(parse_ai_analysis_points(&extract_text_response(&content)))
+        Ok(parse_ai_analysis_points_with_context(
+            &extract_text_response(&content),
+            ai_model,
+            "ai-analysis",
+        ))
     } else {
         let client = EngagementMinimaxClient::new(None, None, None, Some(Duration::from_secs(240)));
         let raw = client
             .raw_completion("", prompt, 60000, 0.5)
             .await
             .map_err(|e| e.to_string())?;
-        Ok(parse_ai_analysis_points(&raw))
+        Ok(parse_ai_analysis_points_with_context(&raw, ai_model, "ai-analysis"))
     }
 }
 

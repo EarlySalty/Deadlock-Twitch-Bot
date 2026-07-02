@@ -13,6 +13,7 @@ use sqlx::PgPool;
 use tb_chat::moderation::{OutboundSuppressionCheck, OutboundSuppressionStore};
 use tb_chat::ChatApi;
 use tb_monitoring::StreamSnapshot;
+use tb_raid::RaidBlacklistStore;
 
 /// Maximale Outreach-Sends pro Tag über alle Ticks (Python `RECRUIT_MAX_PER_DAY`).
 pub const RECRUIT_MAX_PER_DAY: i64 = 8;
@@ -59,6 +60,9 @@ pub async fn detect_recruit_candidates(pool: &PgPool) -> Vec<RecruitCandidate> {
                  SELECT streamer_login FROM twitch_partner_outreach WHERE cooldown_until > NOW()) \
            AND LOWER(streamer) NOT IN ( \
                  SELECT LOWER(target_login) FROM twitch_raid_blacklist) \
+           AND NOT EXISTS ( \
+                 SELECT 1 FROM twitch_chatter_global_ban gb \
+                 WHERE LOWER(gb.chatter_login) = LOWER(streamer)) \
          GROUP BY streamer \
          HAVING COUNT(DISTINCT DATE(ts_utc)) >= $2 \
             AND CAST(COUNT(*) AS REAL) / COUNT(DISTINCT DATE(ts_utc)) >= $3 \
@@ -169,6 +173,30 @@ pub fn select_outreach_targets<'a>(
 /// Merkt einen Kandidaten als Outreach-Boost-Ziel vor. Suppression-Check
 /// (source=recruitment) bleibt als Opt-out-Stop erhalten.
 async fn enqueue_partner_outreach(pool: &PgPool, login: &str, user_id: &str) {
+    match RaidBlacklistStore::new(pool.clone())
+        .is_hard_banned(Some(user_id), login)
+        .await
+    {
+        Ok(true) => {
+            tracing::warn!(
+                login,
+                user_id,
+                "PartnerRecruit: Kandidat hart ausgeschlossen (globaler Ban)"
+            );
+            return;
+        }
+        Ok(false) => {}
+        Err(error) => {
+            tracing::error!(
+                %error,
+                login,
+                user_id,
+                "PartnerRecruit: Global-Ban-Prüfung fehlgeschlagen; fail-closed"
+            );
+            return;
+        }
+    }
+
     if OutboundSuppressionStore::new(pool.clone())
         .check_suppression(login, "recruitment")
         .await
@@ -416,6 +444,7 @@ mod no_cold_send_tests {
             "CREATE TABLE twitch_streamer_identities (twitch_user_id TEXT, twitch_login TEXT)",
             "CREATE TABLE twitch_partners (twitch_user_id TEXT, twitch_login TEXT, status TEXT)",
             "CREATE TABLE twitch_raid_blacklist (target_login TEXT)",
+            "CREATE TABLE twitch_chatter_global_ban (chatter_login TEXT, chatter_id TEXT)",
             "CREATE TABLE twitch_partner_outreach (streamer_login TEXT PRIMARY KEY, streamer_user_id TEXT, \
              detected_at TIMESTAMPTZ, contacted_at TIMESTAMPTZ, status TEXT, cooldown_until TIMESTAMPTZ, raid_used_at TIMESTAMPTZ)",
         ] {
@@ -461,7 +490,34 @@ mod no_cold_send_tests {
     }
 
     #[tokio::test]
-    async fn requeue_setzt_raid_used_at_zurueck_und_boost_laedt_ziel_wieder() {
+    async fn recruit_tick_schliesst_global_gebannte_id_fail_closed_aus() {
+        let Some(pool) = setup("trust_ladder_global_ban_id").await else {
+            eprintln!("SKIP: TB_TEST_DATABASE_URL nicht gesetzt oder nicht erreichbar");
+            return;
+        };
+        seed_qualifying(&pool, "kandidat").await;
+        sqlx::query(
+            "INSERT INTO twitch_chatter_global_ban (chatter_login, chatter_id) \
+             VALUES ('anderer_login', '555')",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+        let chat_api = Arc::new(CountingChatApi::new());
+        let chat_api_trait: Arc<dyn ChatApi> = chat_api.clone();
+
+        run_partner_recruit(&pool, &chat_api_trait, &[snap("kandidat", "555")]).await;
+
+        assert_eq!(chat_api.send_count(), 0, "kein kalter Chat-Send");
+        let count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM twitch_partner_outreach")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+        assert_eq!(count, 0, "global gebannter Kandidat wird nicht vorgemerkt");
+    }
+
+    #[tokio::test]
+    async fn requeue_setzt_raid_used_at_zurueck_aber_boost_wartet_auf_send() {
         let Some(pool) = setup("trust_ladder_requeue_resets_raid_used").await else {
             eprintln!("SKIP: TB_TEST_DATABASE_URL nicht gesetzt oder nicht erreichbar");
             return;
@@ -487,15 +543,15 @@ mod no_cold_send_tests {
         .unwrap();
         assert_eq!(status, "queued");
         assert_eq!(user_id, "555");
-        assert!(raid_used_at_is_null, "Re-Queue macht Ziel wieder boostbar");
+        assert!(raid_used_at_is_null, "Re-Queue setzt Verbrauch zurück");
 
         let logins = OutreachBoostStore::new(pool)
             .load_boost_logins(48)
             .await
             .unwrap();
         assert!(
-            logins.contains("kandidat"),
-            "re-queued Ziel ist wieder im Boost-Pfad selektierbar"
+            !logins.contains("kandidat"),
+            "queued Ziel ist erst nach sent/contacted_at im Boost-Pfad"
         );
     }
 
@@ -587,6 +643,7 @@ mod tests {
             "CREATE TABLE twitch_streamer_identities (twitch_user_id TEXT, twitch_login TEXT)",
             "CREATE TABLE twitch_partners (twitch_user_id TEXT, twitch_login TEXT, status TEXT)",
             "CREATE TABLE twitch_raid_blacklist (target_login TEXT)",
+            "CREATE TABLE twitch_chatter_global_ban (chatter_login TEXT, chatter_id TEXT)",
             "CREATE TABLE twitch_partner_outreach (streamer_login TEXT PRIMARY KEY, streamer_user_id TEXT, \
              detected_at TIMESTAMPTZ, contacted_at TIMESTAMPTZ, status TEXT, cooldown_until TIMESTAMPTZ, raid_used_at TIMESTAMPTZ)",
         ] {
@@ -647,6 +704,15 @@ mod tests {
             .execute(&pool)
             .await
             .unwrap();
+        // Global gebannt → ausgeschlossen.
+        seed_qualifying(&pool, "globalban", 10).await;
+        sqlx::query(
+            "INSERT INTO twitch_chatter_global_ban (chatter_login, chatter_id) \
+             VALUES ('globalban', 'gb-1')",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
 
         let candidates = detect_recruit_candidates(&pool).await;
         let logins: Vec<&str> = candidates.iter().map(|c| c.streamer.as_str()).collect();

@@ -8,14 +8,15 @@
 //! eingebetteten Default-Body.
 //!
 //! CSRF wird — wie im übrigen Rust-Dashboard etabliert — nicht geprüft; Admin
-//! über `AuthLevel::is_privileged`. updated_by = "admin" (Pythons Fallback).
+//! über `DashboardAuthLevel`. updated_by = "admin" (Pythons Fallback).
 
 use std::path::{Path, PathBuf};
 
 use axum::{response::IntoResponse, Json};
 use chrono::SecondsFormat;
 use serde_json::{json, Value};
-use tb_http_core::{ApiError, AuthLevel};
+use crate::auth::level::DashboardAuthLevel;
+use tb_http_core::ApiError;
 
 /// Eingebetteter Default-Body (Python `_default_roadmap_body`, `.strip()`).
 const DEFAULT_BODY: &str = include_str!("../../templates/roadmap_default.html");
@@ -117,9 +118,9 @@ async fn save_roadmap_document_at(
 }
 
 /// `GET /twitch/api/admin/roadmap` — Roadmap-Dokument lesen (Admin).
-pub async fn get_handler(auth: AuthLevel) -> Result<impl IntoResponse, ApiError> {
-    if !auth.is_privileged() {
-        return Err(ApiError::unauthorized());
+pub async fn get_handler(auth: DashboardAuthLevel) -> Result<impl IntoResponse, ApiError> {
+    if let Some(err) = crate::auth::require_admin(&auth) {
+        return Err(err);
     }
     let doc = load_roadmap_document_at(&roadmap_path()).await;
     Ok(Json(text_document_payload(&doc)))
@@ -128,11 +129,11 @@ pub async fn get_handler(auth: AuthLevel) -> Result<impl IntoResponse, ApiError>
 /// `POST /twitch/api/admin/roadmap` — Roadmap-Dokument speichern (Admin).
 /// Fehlt der `body`-Schlüssel → 400 `validation_failed`.
 pub async fn save_handler(
-    auth: AuthLevel,
+    auth: DashboardAuthLevel,
     body: axum::body::Bytes,
 ) -> Result<impl IntoResponse, ApiError> {
-    if !auth.is_privileged() {
-        return Err(ApiError::unauthorized());
+    if let Some(err) = crate::auth::require_admin(&auth) {
+        return Err(err);
     }
     let payload: Value = serde_json::from_slice(&body).unwrap_or(Value::Null);
     let Some(body_val) = payload.as_object().and_then(|o| o.get("body")) else {
@@ -210,10 +211,10 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn unauth_401() {
-        assert_eq!(status_of(get_handler(AuthLevel::None).await).await, StatusCode::UNAUTHORIZED);
+    async fn unauth_auth_required_401() {
+        assert_eq!(status_of(get_handler(DashboardAuthLevel::None).await).await, StatusCode::UNAUTHORIZED);
         assert_eq!(
-            status_of(save_handler(AuthLevel::None, Bytes::from(r#"{"body":"x"}"#)).await).await,
+            status_of(save_handler(DashboardAuthLevel::None, Bytes::from(r#"{"body":"x"}"#)).await).await,
             StatusCode::UNAUTHORIZED
         );
     }
@@ -221,7 +222,7 @@ mod tests {
     #[tokio::test]
     async fn save_ohne_body_key_400() {
         // Kein fs-Zugriff (Validierung vor dem Schreiben).
-        let resp = save_handler(AuthLevel::Admin, Bytes::from(r#"{"foo":1}"#)).await;
+        let resp = save_handler(DashboardAuthLevel::admin(), Bytes::from(r#"{"foo":1}"#)).await;
         assert_eq!(status_of(resp).await, StatusCode::BAD_REQUEST);
     }
 }

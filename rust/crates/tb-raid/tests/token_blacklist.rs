@@ -186,26 +186,28 @@ async fn clear_loescht_den_eintrag() {
 }
 
 /// P2.28: Ein Partner, dessen Token via reinem Refresh (ohne Re-Auth) wieder
-/// funktioniert, muss `technical_pause_reason='token_error'` verlieren — sonst
-/// bleibt er in Dashboard/Analytics-Gates als pausiert hängen. clear_failure_count
-/// räumt den Pause-Grund wie Python (token_error_handler.py:852-867) mit auf.
+/// funktioniert, muss den exakten `technical_pause_reason='token_error'`
+/// verlieren. Suffix-Gründe wie `token_error_expired` gehören nicht zum
+/// Failure-Count-Clear-Pfad.
 #[tokio::test]
 async fn clear_raeumt_token_error_pause_reason() {
     let pool = pool_or_skip!("t6b_bl_clear_pause");
     let store = TokenBlacklistStore::new(pool.clone());
 
-    // Drei Partner: token_error (zu räumen), bot_banned (Guard), NULL (No-Op).
+    // Vier Partner: token_error (zu räumen), token_error_expired (nicht),
+    // bot_banned (Guard), NULL (No-Op).
     sqlx::query(
         "INSERT INTO twitch_partners (twitch_user_id, twitch_login, technical_pause_reason, raid_bot_enabled, manual_partner_opt_out)
-         VALUES ('42','drag','token_error',0,0), ('88','banned','bot_banned',1,0), ('99','clean',NULL,1,0)",
+         VALUES ('42','drag','token_error',0,0), ('77','expired','token_error_expired',0,0),
+                ('88','banned','bot_banned',1,0), ('99','clean',NULL,1,0)",
     )
     .execute(&pool)
     .await
     .unwrap();
-    // Blacklist-Eintrag für den token_error-Partner.
+    // Blacklist-Einträge für token_error und token_error_expired.
     sqlx::query(
         "INSERT INTO twitch_token_blacklist (twitch_user_id, twitch_login, error_count, last_error_at)
-         VALUES ('42','drag',2,$1)",
+         VALUES ('42','drag',2,$1), ('77','expired',2,$1)",
     )
     .bind(iso_ago(1))
     .execute(&pool)
@@ -229,7 +231,24 @@ async fn clear_raeumt_token_error_pause_reason() {
 
     // token_error → NULL geräumt.
     assert_eq!(reason("42").await, None, "token_error-Pause aufgehoben");
-    // Blacklist-Eintrag gelöscht.
+    // Blacklist-Eintrag für 42 gelöscht.
+    let count_42: i64 = sqlx::query_scalar(
+        "SELECT COUNT(*) FROM twitch_token_blacklist WHERE twitch_user_id = '42'",
+    )
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!(count_42, 0);
+
+    // token_error_expired bleibt auch dann erhalten, wenn der Blacklist-Eintrag
+    // durch clear_failure_count gelöscht wird.
+    store.clear_failure_count("77").await;
+    assert_eq!(
+        reason("77").await.as_deref(),
+        Some("token_error_expired"),
+        "Suffix-Token-Fehler bleibt im Failure-Count-Clear-Pfad erhalten"
+    );
+    // Beide Blacklist-Einträge gelöscht.
     let count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM twitch_token_blacklist")
         .fetch_one(&pool)
         .await
@@ -284,10 +303,17 @@ async fn add_spiegelt_token_error_in_partner_mit_guards() {
 
     // Manueller Opt-out: Pause-Grund unangetastet (Guard), aber raid_bot_enabled=0.
     let (reason, enabled) = row("77").await;
-    assert_eq!(reason, None, "manueller Opt-out überschreibt nicht auf token_error");
+    assert_eq!(
+        reason, None,
+        "manueller Opt-out überschreibt nicht auf token_error"
+    );
     assert_eq!(enabled, 0);
 
     // bot_banned: Pause-Grund bleibt bot_banned (Guard).
     let (reason, _) = row("88").await;
-    assert_eq!(reason.as_deref(), Some("bot_banned"), "bot_banned bleibt erhalten");
+    assert_eq!(
+        reason.as_deref(),
+        Some("bot_banned"),
+        "bot_banned bleibt erhalten"
+    );
 }

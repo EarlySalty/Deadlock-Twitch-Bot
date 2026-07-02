@@ -5,3 +5,4 @@ edition.workspace = true
 
 [dependencies]
 tb-error = { workspace = true }
+tracing  = { workspace = true }

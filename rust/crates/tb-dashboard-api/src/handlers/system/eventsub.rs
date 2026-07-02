@@ -5,7 +5,8 @@ use serde::Serialize;
 use serde_json::Value;
 use sqlx::PgPool;
 use tb_analytics::system_eventsub::eventsub_snapshot;
-use tb_http_core::{ApiError, AuthLevel};
+use crate::auth::level::DashboardAuthLevel;
+use tb_http_core::ApiError;
 
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -31,11 +32,11 @@ pub struct EventsubResponse {
 
 /// `GET /twitch/api/admin/system/eventsub`
 pub async fn eventsub_handler(
-    auth: AuthLevel,
+    auth: DashboardAuthLevel,
     State(pool): State<PgPool>,
 ) -> Result<impl IntoResponse, ApiError> {
-    if !auth.is_privileged() {
-        return Err(ApiError::unauthorized());
+    if let Some(err) = crate::auth::require_admin(&auth) {
+        return Err(err);
     }
 
     // Bug A: ApiError::internal() ohne Argument
