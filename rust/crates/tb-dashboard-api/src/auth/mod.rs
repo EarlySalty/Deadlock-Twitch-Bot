@@ -68,6 +68,38 @@ pub fn require_owner(
     }
 }
 
+pub fn admin_required_error() -> ApiError {
+    ApiError::forbidden_with_body(json!({
+        "error": "admin_required",
+        "required": "admin",
+    }))
+}
+
+pub fn auth_required_error() -> ApiError {
+    ApiError::unauthorized_with_body(json!({
+        "error": "auth_required",
+        "required": "admin",
+    }))
+}
+
+pub fn require_admin(auth: &DashboardAuthLevel) -> Option<ApiError> {
+    if auth.is_privileged() {
+        None
+    } else if auth.is_authenticated() {
+        Some(admin_required_error())
+    } else {
+        Some(auth_required_error())
+    }
+}
+
+pub fn admin_required_response() -> Response {
+    admin_required_error().into_response()
+}
+
+pub fn auth_required_response() -> Response {
+    auth_required_error().into_response()
+}
+
 /// Prüft ob `login` das konsolidierte `analytics`-Entitlement hat — über
 /// [`tb_analytics::plan::plan_has_analytics`], das die echten Plan-IDs aus
 /// `catalog.py` kennt (analysis_dashboard, die Analyse-Bundles, analytics_trial).

@@ -13,6 +13,7 @@ use crate::types::SendOutcome;
 
 /// Ban-/Timeout-Ergebnis: kanonisch im Transport definiert.
 pub use tb_transport_twitch::BanOutcome;
+pub use tb_transport_twitch::AnnouncementOutcome;
 
 /// Port für ausgehende Chat-/Moderations-Aktionen mit dem Bot-Token.
 #[async_trait]
@@ -34,6 +35,20 @@ pub trait ChatApi: Send + Sync {
         message: &str,
         color: &str,
     ) -> Result<bool, String>;
+
+    /// Detailvariante für Announcements: additiv zum alten bool-Vertrag.
+    /// Implementierungen ohne Detaildaten fallen über den Default auf `accepted`
+    /// ohne Status/Body zurück.
+    async fn send_announcement_detailed(
+        &self,
+        broadcaster_id: &str,
+        message: &str,
+        color: &str,
+    ) -> Result<AnnouncementOutcome, String> {
+        self.send_announcement(broadcaster_id, message, color)
+            .await
+            .map(AnnouncementOutcome::from_bool)
+    }
 
     /// `POST /helix/moderation/bans` ohne Dauer (permanenter Ban).
     async fn ban_user(

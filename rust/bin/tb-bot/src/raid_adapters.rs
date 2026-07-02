@@ -837,7 +837,7 @@ mod tests {
 
     use std::sync::Mutex;
     use tb_monitoring::poller::source::SourceError;
-    use tb_monitoring::{RemoteSubscription, SubscriptionTransport};
+    use tb_monitoring::{RemoteSubscription, SubscriptionCreateError, SubscriptionTransport};
 
     /// Stub-Transport: gibt bei jedem `list()`-Aufruf den nächsten
     /// vorbereiteten Status für eine `channel.raid`-Sub zurück (simuliert die
@@ -858,7 +858,7 @@ mod tests {
             _callback: &str,
             _secret: &str,
             _bearer_override: Option<&str>,
-        ) -> Result<bool, SourceError> {
+        ) -> Result<bool, SubscriptionCreateError> {
             Ok(false)
         }
         async fn list(&self) -> Result<Vec<RemoteSubscription>, SourceError> {

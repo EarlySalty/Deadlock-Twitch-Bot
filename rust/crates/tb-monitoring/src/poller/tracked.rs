@@ -33,6 +33,14 @@ struct TrackedRow {
     live_ping_enabled: Option<i32>,
 }
 
+#[derive(sqlx::FromRow)]
+struct ArchiveCandidateRow {
+    twitch_login: String,
+    archived_at: Option<String>,
+    operational_state: Option<String>,
+    last_stream_at: Option<DateTime<Utc>>,
+}
+
 #[derive(Clone)]
 pub struct TrackedStore {
     pool: PgPool,
@@ -127,12 +135,12 @@ impl TrackedStore {
         _target_game: &str,
         cutoff: DateTime<Utc>,
     ) -> Result<Vec<String>, sqlx::Error> {
-        let rows = sqlx::query!(
+        let rows: Vec<ArchiveCandidateRow> = sqlx::query_as(
             r#"
-            SELECT s.twitch_login AS "twitch_login!",
-                   s.archived_at::text AS "archived_at?",
-                   s.operational_state AS "operational_state?",
-                   MAX(COALESCE(sess.ended_at, sess.started_at)) AS "last_stream_at?"
+            SELECT s.twitch_login,
+                   s.archived_at::text AS archived_at,
+                   s.operational_state,
+                   MAX(NULLIF(COALESCE(sess.ended_at::text, sess.started_at::text), '')::timestamptz) AS last_stream_at
               FROM twitch_streamers_partner_state s
               LEFT JOIN twitch_stream_sessions sess
                 ON LOWER(sess.streamer_login) = LOWER(s.twitch_login)

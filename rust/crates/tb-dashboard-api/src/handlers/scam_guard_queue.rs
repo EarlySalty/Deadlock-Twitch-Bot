@@ -53,21 +53,27 @@ fn resolve_login(auth: &DashboardAuthLevel, streamer: &Option<String>) -> Result
                 Some(s) => Ok(s.to_lowercase()),
                 None => Err((
                     StatusCode::BAD_REQUEST,
-                    Json(json!({ "error": "streamer required" })),
+                    Json(json!({
+                        "error": "streamer_required",
+                        "message": "streamer is required"
+                    })),
                 )
                     .into_response()),
             }
         }
         DashboardAuthLevel::None => Err((
             StatusCode::UNAUTHORIZED,
-            Json(json!({ "error": "unauthorized" })),
+            Json(json!({
+                "error": "unauthorized",
+                "message": "authentication required"
+            })),
         )
             .into_response()),
     }
 }
 
-fn error_response(status: StatusCode, code: &str) -> Response {
-    (status, Json(json!({ "error": code }))).into_response()
+fn error_response(status: StatusCode, code: &str, message: &str) -> Response {
+    (status, Json(json!({ "error": code, "message": message }))).into_response()
 }
 
 pub async fn queue_handler(
@@ -113,7 +119,11 @@ pub async fn queue_handler(
         }
         Err(error) => {
             tracing::error!(%error, "scam-guard queue GET database error");
-            error_response(StatusCode::INTERNAL_SERVER_ERROR, "db")
+            error_response(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "database_error",
+                "failed to load scam-guard queue",
+            )
         }
     }
 }
@@ -155,10 +165,14 @@ pub async fn detail_handler(
             "created_at": row.created_at.to_rfc3339()
         }))
         .into_response(),
-        Ok(None) => error_response(StatusCode::NOT_FOUND, "not found"),
+        Ok(None) => error_response(StatusCode::NOT_FOUND, "not_found", "verdict not found"),
         Err(error) => {
             tracing::error!(%error, "scam-guard verdict detail GET database error");
-            error_response(StatusCode::INTERNAL_SERVER_ERROR, "db")
+            error_response(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "database_error",
+                "failed to load scam-guard verdict",
+            )
         }
     }
 }
@@ -185,10 +199,16 @@ pub async fn ignore_handler(
     .await
     {
         Ok(Some(action_taken)) => action_taken,
-        Ok(None) => return error_response(StatusCode::NOT_FOUND, "not found"),
+        Ok(None) => {
+            return error_response(StatusCode::NOT_FOUND, "not_found", "verdict not found")
+        }
         Err(error) => {
             tracing::error!(%error, "scam-guard queue ignore lookup database error");
-            return error_response(StatusCode::INTERNAL_SERVER_ERROR, "db");
+            return error_response(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "database_error",
+                "failed to load scam-guard verdict",
+            );
         }
     };
 
@@ -209,10 +229,14 @@ pub async fn ignore_handler(
     .await
     {
         Ok(result) if result.rows_affected() > 0 => Json(json!({ "ok": true })).into_response(),
-        Ok(_) => error_response(StatusCode::NOT_FOUND, "not found"),
+        Ok(_) => error_response(StatusCode::NOT_FOUND, "not_found", "verdict not found"),
         Err(error) => {
             tracing::error!(%error, "scam-guard queue ignore POST database error");
-            error_response(StatusCode::INTERNAL_SERVER_ERROR, "db")
+            error_response(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "database_error",
+                "failed to update scam-guard verdict",
+            )
         }
     }
 }
@@ -456,7 +480,10 @@ mod tests {
         .await;
 
         assert_eq!(status, StatusCode::NOT_FOUND);
-        assert_eq!(body, json!({ "error": "not found" }));
+        assert_eq!(
+            body,
+            json!({ "error": "not_found", "message": "verdict not found" })
+        );
     }
 
     #[tokio::test]
@@ -534,6 +561,9 @@ mod tests {
         )
         .await;
         assert_eq!(status, StatusCode::NOT_FOUND);
-        assert_eq!(body, json!({ "error": "not found" }));
+        assert_eq!(
+            body,
+            json!({ "error": "not_found", "message": "verdict not found" })
+        );
     }
 }

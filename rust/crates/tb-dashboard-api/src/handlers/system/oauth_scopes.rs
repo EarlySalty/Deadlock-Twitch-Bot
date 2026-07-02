@@ -12,7 +12,8 @@ use tb_analytics::system_oauth_scopes::{
     CRITICAL_SCOPES, REQUIRED_SCOPES, SCOPE_COLUMN_LABELS, load_oauth_scope_rows, partner_status,
     scope_snapshot,
 };
-use tb_http_core::{ApiError, AuthLevel};
+use crate::auth::level::DashboardAuthLevel;
+use tb_http_core::ApiError;
 
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -52,11 +53,11 @@ fn sorted_critical() -> Vec<String> {
 
 /// `GET /twitch/api/admin/system/oauth-scopes`
 pub async fn oauth_scopes_handler(
-    auth: AuthLevel,
+    auth: DashboardAuthLevel,
     State(pool): State<PgPool>,
 ) -> Result<impl IntoResponse, ApiError> {
-    if !auth.is_privileged() {
-        return Err(ApiError::unauthorized());
+    if let Some(err) = crate::auth::require_admin(&auth) {
+        return Err(err);
     }
 
     let rows = match load_oauth_scope_rows(&pool).await {

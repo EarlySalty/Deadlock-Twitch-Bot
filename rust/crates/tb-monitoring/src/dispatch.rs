@@ -10,8 +10,8 @@
 //! - `channel.moderate` → [`EventSubHooks`] (Raid-Subsystem,
 //!   Phase 6 — Cutover-Kopplung, siehe Plan-Doc).
 
-use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Arc;
 
 use chrono::{DateTime, TimeZone, Utc};
 use serde_json::Value;
@@ -182,6 +182,16 @@ pub trait EventSubHooks: Send + Sync {
     async fn on_channel_moderate(&self, _broadcaster_id: &str, _login: &str, _event: &Value) {}
     /// Go-Live-Followup: stream.offline-Subscription fürs Raid-Ziel (4d-ii).
     async fn on_stream_went_live(&self, _twitch_user_id: &str, _login: &str) {}
+    /// Go-Live-Followup mit aktuellem Stream-Kontext. Implementierungen, die
+    /// die `stream_id` nicht brauchen, fallen auf den alten Hook zurück.
+    async fn on_stream_went_live_with_stream_id(
+        &self,
+        twitch_user_id: &str,
+        login: &str,
+        _stream_id: Option<&str>,
+    ) {
+        self.on_stream_went_live(twitch_user_id, login).await;
+    }
     /// Partner-Raid-Score-Refresh (Raid-Subsystem).
     async fn on_score_refresh(
         &self,
@@ -293,6 +303,17 @@ impl EventSubHooks for ChatSubscriptionTelemetryHooks {
 
     async fn on_stream_went_live(&self, twitch_user_id: &str, login: &str) {
         self.inner.on_stream_went_live(twitch_user_id, login).await;
+    }
+
+    async fn on_stream_went_live_with_stream_id(
+        &self,
+        twitch_user_id: &str,
+        login: &str,
+        stream_id: Option<&str>,
+    ) {
+        self.inner
+            .on_stream_went_live_with_stream_id(twitch_user_id, login, stream_id)
+            .await;
     }
 
     async fn on_score_refresh(
@@ -701,6 +722,16 @@ impl EventSubDispatcher {
         let mut outcome = DispatchOutcome::new(sub_type);
 
         if CORE_DELIVERY_TYPES.contains(&sub_type) {
+            if context.broadcaster_id.trim().is_empty() {
+                tracing::warn!(
+                    sub_type,
+                    message_id = message_id.unwrap_or("n/a"),
+                    "EventSub: Core-Notification ohne broadcaster_id abgelehnt"
+                );
+                return Err(sqlx::Error::Protocol(
+                    "eventsub core notification missing broadcaster_id".into(),
+                ));
+            }
             let payload = serde_json::json!({
                 "broadcaster_id": context.broadcaster_id,
                 "broadcaster_login": context.broadcaster_login,
@@ -892,8 +923,8 @@ fn epoch_to_datetime(epoch: f64) -> DateTime<Utc> {
 #[cfg(test)]
 mod tests {
     use super::{
-        ChatNotificationKind, REGISTERED_SUB_TYPES, classify_chat_notification, extract_context,
-        has_registered_handler,
+        classify_chat_notification, extract_context, has_registered_handler, ChatNotificationKind,
+        REGISTERED_SUB_TYPES,
     };
 
     #[test]

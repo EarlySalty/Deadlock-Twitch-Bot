@@ -30,12 +30,66 @@ fn or_default(get: &Get, name: &str, default: &str) -> String {
         .unwrap_or_else(|| default.to_string())
 }
 
-fn parse_or<T: std::str::FromStr>(get: &Get, name: &str, default: T) -> Result<T, ConfigError> {
+fn parse_or<T>(get: &Get, name: &str, default: T) -> T
+where
+    T: std::str::FromStr + Copy + std::fmt::Display,
+{
     match get(name).and_then(non_empty) {
-        Some(v) => v
-            .parse::<T>()
-            .map_err(|_| ConfigError::Invalid(name.to_string())),
-        None => Ok(default),
+        Some(v) => match v.parse::<T>() {
+            Ok(parsed) => parsed,
+            Err(_) => {
+                tracing::warn!(
+                    setting = name,
+                    value = %v,
+                    default = %default,
+                    "Ungültiger optionaler Config-Wert; Default wird verwendet"
+                );
+                default
+            }
+        },
+        None => default,
+    }
+}
+
+fn parse_or_min<T>(get: &Get, name: &str, default: T, min: T) -> T
+where
+    T: std::str::FromStr + Copy + PartialOrd + std::fmt::Display,
+{
+    let parsed = parse_or(get, name, default);
+    if parsed < min {
+        tracing::warn!(
+            setting = name,
+            value = %parsed,
+            minimum = %min,
+            "Optionaler Config-Wert unter Minimum; Minimum wird verwendet"
+        );
+        min
+    } else {
+        parsed
+    }
+}
+
+fn parse_f64_or_min(get: &Get, name: &str, default: f64, min: f64) -> f64 {
+    let parsed = parse_or(get, name, default);
+    if !parsed.is_finite() {
+        tracing::warn!(
+            setting = name,
+            value = %parsed,
+            default = %default,
+            "Ungültiger optionaler Config-Wert; Default wird verwendet"
+        );
+        return default;
+    }
+    if parsed < min {
+        tracing::warn!(
+            setting = name,
+            value = %parsed,
+            minimum = %min,
+            "Optionaler Config-Wert unter Minimum; Minimum wird verwendet"
+        );
+        min
+    } else {
+        parsed
     }
 }
 
@@ -52,17 +106,19 @@ impl DbConfig {
     fn load(get: &Get) -> Result<Self, ConfigError> {
         Ok(Self {
             dsn: required(get, "TWITCH_ANALYTICS_DSN")?,
-            pool_max: parse_or(get, "TWITCH_ANALYTICS_POOL_MAXSIZE", 10u32)?,
-            acquire_timeout: Duration::from_secs_f64(parse_or(
+            pool_max: parse_or_min(get, "TWITCH_ANALYTICS_POOL_MAXSIZE", 10u32, 1u32),
+            acquire_timeout: Duration::from_secs_f64(parse_f64_or_min(
                 get,
                 "TWITCH_ANALYTICS_POOL_TIMEOUT_SECONDS",
                 5.0f64,
-            )?),
-            connect_timeout: Duration::from_secs(parse_or(
+                0.1f64,
+            )),
+            connect_timeout: Duration::from_secs(parse_or_min(
                 get,
                 "TWITCH_ANALYTICS_CONNECT_TIMEOUT_SECONDS",
                 5u64,
-            )?),
+                1u64,
+            )),
         })
     }
 }
@@ -80,7 +136,7 @@ impl InternalApiConfig {
         Ok(Self {
             token: required(get, "TWITCH_INTERNAL_API_TOKEN")?,
             host: or_default(get, "TWITCH_INTERNAL_API_HOST", "127.0.0.1"),
-            port: parse_or(get, "TWITCH_INTERNAL_API_PORT", 8776u16)?,
+            port: parse_or_min(get, "TWITCH_INTERNAL_API_PORT", 8776u16, 1u16),
         })
     }
 }
@@ -98,7 +154,7 @@ impl BrokerConfig {
             Some(u) => u,
             None => {
                 let host = or_default(get, "MASTER_BROKER_HOST", "127.0.0.1");
-                let port = parse_or(get, "MASTER_BROKER_PORT", 8770u16)?;
+                let port = parse_or_min(get, "MASTER_BROKER_PORT", 8770u16, 1u16);
                 format!("http://{host}:{port}")
             }
         };
@@ -186,11 +242,23 @@ mod tests {
     }
 
     #[test]
-    fn invalid_int_errors() {
+    fn invalid_optional_int_defaults() {
         let mut m = minimal();
         m.insert("TWITCH_ANALYTICS_POOL_MAXSIZE", "abc");
-        let err = Settings::load(&src(m)).unwrap_err();
-        assert!(matches!(err, ConfigError::Invalid(n) if n == "TWITCH_ANALYTICS_POOL_MAXSIZE"));
+        let s = Settings::load(&src(m)).unwrap();
+        assert_eq!(s.db.pool_max, 10);
+    }
+
+    #[test]
+    fn optional_minimums_are_clamped() {
+        let mut m = minimal();
+        m.insert("TWITCH_ANALYTICS_POOL_MAXSIZE", "0");
+        m.insert("TWITCH_ANALYTICS_POOL_TIMEOUT_SECONDS", "-1");
+        m.insert("TWITCH_INTERNAL_API_PORT", "0");
+        let s = Settings::load(&src(m)).unwrap();
+        assert_eq!(s.db.pool_max, 1);
+        assert_eq!(s.db.acquire_timeout, Duration::from_millis(100));
+        assert_eq!(s.internal_api.port, 1);
     }
 
     #[test]

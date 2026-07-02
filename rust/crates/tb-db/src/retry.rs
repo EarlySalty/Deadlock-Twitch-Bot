@@ -83,14 +83,13 @@ impl RetryPolicy {
     pub fn from_env() -> Self {
         let d = Self::default();
         Self {
-            max_attempts: env_u32("TWITCH_ANALYTICS_TX_RETRY_ATTEMPTS")
-                .map(|v| v.max(1))
+            max_attempts: env_u32_min("TWITCH_ANALYTICS_TX_RETRY_ATTEMPTS", 1)
                 .unwrap_or(d.max_attempts),
-            base_delay: env_secs_f64("TWITCH_ANALYTICS_TX_RETRY_BASE_DELAY_SECONDS")
-                .map(|s| Duration::from_secs_f64(s.max(0.01)))
+            base_delay: env_secs_f64_min("TWITCH_ANALYTICS_TX_RETRY_BASE_DELAY_SECONDS", 0.01)
+                .map(Duration::from_secs_f64)
                 .unwrap_or(d.base_delay),
-            max_delay: env_secs_f64("TWITCH_ANALYTICS_TX_RETRY_MAX_DELAY_SECONDS")
-                .map(|s| Duration::from_secs_f64(s.max(0.05)))
+            max_delay: env_secs_f64_min("TWITCH_ANALYTICS_TX_RETRY_MAX_DELAY_SECONDS", 0.05)
+                .map(Duration::from_secs_f64)
                 .unwrap_or(d.max_delay),
         }
     }
@@ -187,11 +186,71 @@ where
 }
 
 fn env_u32(key: &str) -> Option<u32> {
-    std::env::var(key).ok()?.trim().parse().ok()
+    match std::env::var(key) {
+        Ok(raw) if raw.trim().is_empty() => None,
+        Ok(raw) => match raw.trim().parse() {
+            Ok(value) => Some(value),
+            Err(_) => {
+                tracing::warn!(
+                    setting = key,
+                    value = %raw,
+                    "Ungültiger optionaler Retry-Env-Wert; Default wird verwendet"
+                );
+                None
+            }
+        },
+        Err(_) => None,
+    }
 }
 
 fn env_secs_f64(key: &str) -> Option<f64> {
-    std::env::var(key).ok()?.trim().parse().ok()
+    match std::env::var(key) {
+        Ok(raw) if raw.trim().is_empty() => None,
+        Ok(raw) => match raw.trim().parse::<f64>() {
+            Ok(value) if value.is_finite() => Some(value),
+            _ => {
+                tracing::warn!(
+                    setting = key,
+                    value = %raw,
+                    "Ungültiger optionaler Retry-Env-Wert; Default wird verwendet"
+                );
+                None
+            }
+        },
+        Err(_) => None,
+    }
+}
+
+fn env_u32_min(key: &str, min: u32) -> Option<u32> {
+    env_u32(key).map(|value| {
+        if value < min {
+            tracing::warn!(
+                setting = key,
+                value,
+                minimum = min,
+                "Optionaler Retry-Env-Wert unter Minimum; Minimum wird verwendet"
+            );
+            min
+        } else {
+            value
+        }
+    })
+}
+
+fn env_secs_f64_min(key: &str, min: f64) -> Option<f64> {
+    env_secs_f64(key).map(|value| {
+        if value < min {
+            tracing::warn!(
+                setting = key,
+                value,
+                minimum = min,
+                "Optionaler Retry-Env-Wert unter Minimum; Minimum wird verwendet"
+            );
+            min
+        } else {
+            value
+        }
+    })
 }
 
 #[cfg(test)]

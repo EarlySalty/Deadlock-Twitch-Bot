@@ -598,11 +598,7 @@ pub fn extract_json_array(text: &str) -> Option<String> {
     None // abgeschnitten – kein passendes ]
 }
 
-/// Parst + birgt das strukturierte JSON-Array einer Modell-Antwort (Port von
-/// `_parse_ai_analysis_points`). Drei Stufen: (1) Direktparse, (2) saubere
-/// Bracket-Extraktion (Präambel/Trailing), (3) Truncation-Salvage (komplette
-/// Objekte einsammeln). Liefert `[]`, wenn nichts Brauchbares gefunden wird.
-pub fn parse_ai_analysis_points(raw: &str) -> Vec<Value> {
+fn parse_ai_analysis_points_inner(raw: &str) -> (Vec<Value>, bool) {
     let mut raw = raw.trim().to_string();
 
     // Markdown-Code-Fences entfernen.
@@ -616,13 +612,13 @@ pub fn parse_ai_analysis_points(raw: &str) -> Vec<Value> {
 
     // 1) Direktparse – perfektes JSON.
     if let Ok(Value::Array(arr)) = serde_json::from_str::<Value>(&raw) {
-        return arr;
+        return (arr, true);
     }
 
     // 2) Bracket-Extraktion – Präambel/Trailing + `]` in Strings.
     if let Some(extracted) = extract_json_array(&raw) {
         if let Ok(Value::Array(arr)) = serde_json::from_str::<Value>(&extracted) {
-            return arr;
+            return (arr, true);
         }
     }
 
@@ -670,13 +666,36 @@ pub fn parse_ai_analysis_points(raw: &str) -> Vec<Value> {
             let candidate = format!("[{}]", salvaged.join(","));
             if let Ok(Value::Array(arr)) = serde_json::from_str::<Value>(&candidate) {
                 if !arr.is_empty() {
-                    return arr;
+                    return (arr, true);
                 }
             }
         }
     }
 
-    Vec::new()
+    (Vec::new(), false)
+}
+
+/// Parst + birgt das strukturierte JSON-Array einer Modell-Antwort (Port von
+/// `_parse_ai_analysis_points`). Drei Stufen: (1) Direktparse, (2) saubere
+/// Bracket-Extraktion (Präambel/Trailing), (3) Truncation-Salvage (komplette
+/// Objekte einsammeln). Liefert `[]`, wenn nichts Brauchbares gefunden wird.
+pub fn parse_ai_analysis_points(raw: &str) -> Vec<Value> {
+    parse_ai_analysis_points_inner(raw).0
+}
+
+/// Wie [`parse_ai_analysis_points`], aber mit sanitisiertem Warnlog bei komplett
+/// unparsebarer Modell-Antwort. Loggt absichtlich keinen rohen LLM-Text.
+pub fn parse_ai_analysis_points_with_context(raw: &str, model: &str, purpose: &str) -> Vec<Value> {
+    let (points, parsed) = parse_ai_analysis_points_inner(raw);
+    if !parsed {
+        tracing::warn!(
+            response_len = raw.len(),
+            model = %model,
+            purpose = %purpose,
+            "ai analysis response could not be parsed"
+        );
+    }
+    points
 }
 
 #[cfg(test)]

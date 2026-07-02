@@ -14,8 +14,9 @@
 #![allow(dead_code)]
 
 use chrono::{DateTime, Duration, SecondsFormat, Utc};
+use serde_json::Value;
 use sqlx::PgPool;
-use tb_raid::{ScoreStore, TrackConfirmedInput};
+use tb_raid::{PartnerRaidScoreRow, ScoreStore, TrackConfirmedInput};
 
 /// Eingabe-Kontext aus dem Bestätigungs-Signal.
 pub struct ConfirmContext<'a> {
@@ -25,6 +26,94 @@ pub struct ConfirmContext<'a> {
     pub from_broadcaster_login: &'a str,
     pub from_broadcaster_id: Option<&'a str>,
     pub viewer_count: i32,
+    pub pending_target_stream_data: Option<&'a Value>,
+}
+
+struct ScoreSnapshot {
+    last_computed_at: Option<String>,
+    final_score: f64,
+    base_score: f64,
+    duration_score: f64,
+    time_pattern_score: f64,
+    readiness_score: f64,
+    fairness_score: f64,
+    new_partner_multiplier: f64,
+    raid_boost_multiplier: f64,
+    today_received_raids: i32,
+}
+
+impl ScoreSnapshot {
+    fn defaults() -> Self {
+        Self {
+            last_computed_at: None,
+            final_score: 0.0,
+            base_score: 0.0,
+            duration_score: 0.5,
+            time_pattern_score: 0.5,
+            readiness_score: 0.5,
+            fairness_score: 0.5,
+            new_partner_multiplier: 1.0,
+            raid_boost_multiplier: 1.0,
+            today_received_raids: 0,
+        }
+    }
+
+    fn from_row(row: Option<&PartnerRaidScoreRow>) -> Self {
+        let Some(row) = row else {
+            return Self::defaults();
+        };
+        Self {
+            last_computed_at: Some(row.last_computed_at.clone()),
+            final_score: row.final_score,
+            base_score: row.base_score,
+            duration_score: row.duration_score,
+            time_pattern_score: row.time_pattern_score,
+            readiness_score: row.readiness_score,
+            fairness_score: row.fairness_score,
+            new_partner_multiplier: row.new_partner_multiplier,
+            raid_boost_multiplier: row.raid_boost_multiplier,
+            today_received_raids: row.today_received_raids,
+        }
+    }
+}
+
+fn score_f64(score: &serde_json::Map<String, Value>, key: &str, default: f64) -> f64 {
+    score.get(key).and_then(Value::as_f64).unwrap_or(default)
+}
+
+fn score_i32(score: &serde_json::Map<String, Value>, key: &str, default: i32) -> i32 {
+    score
+        .get(key)
+        .and_then(Value::as_i64)
+        .and_then(|v| i32::try_from(v).ok())
+        .unwrap_or(default)
+}
+
+fn score_string(score: &serde_json::Map<String, Value>, key: &str) -> Option<String> {
+    score
+        .get(key)
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .map(str::to_string)
+}
+
+fn score_snapshot_from_pending(target_stream_data: Option<&Value>) -> Option<ScoreSnapshot> {
+    let score = target_stream_data?
+        .get("_partner_score")?
+        .as_object()?;
+    Some(ScoreSnapshot {
+        last_computed_at: score_string(score, "last_computed_at"),
+        final_score: score_f64(score, "final_score", 0.0),
+        base_score: score_f64(score, "base_score", 0.0),
+        duration_score: score_f64(score, "duration_score", 0.5),
+        time_pattern_score: score_f64(score, "time_pattern_score", 0.5),
+        readiness_score: score_f64(score, "readiness_score", 0.5),
+        fairness_score: score_f64(score, "fairness_score", 0.5),
+        new_partner_multiplier: score_f64(score, "new_partner_multiplier", 1.0),
+        raid_boost_multiplier: score_f64(score, "raid_boost_multiplier", 1.0),
+        today_received_raids: score_i32(score, "today_received_raids", 0),
+    })
 }
 
 #[derive(sqlx::FromRow)]
@@ -112,7 +201,13 @@ impl ConfirmResolver {
         }
 
         // 2. Score-Snapshot (Defaults wie Python `_score_payload`).
-        let snapshot = self.score_store.load(ctx.to_broadcaster_id).await?;
+        let snapshot = match score_snapshot_from_pending(ctx.pending_target_stream_data) {
+            Some(snapshot) => snapshot,
+            None => {
+                let row = self.score_store.load(ctx.to_broadcaster_id).await?;
+                ScoreSnapshot::from_row(row.as_ref())
+            }
+        };
 
         // 3. Raid-History-Referenz (jüngster erfolgreicher Raid source→target
         //    bis confirmed_at + 10 min).
@@ -135,16 +230,16 @@ impl ConfirmResolver {
             // neutrale Defaults statt NULL — sonst verzerren NULLs die AVG-
             // Aggregationen über das Tracking. final/base=0.0, *_score=0.5,
             // multipliers=1.0, today=0. score_last_computed_at bleibt NULL.
-            score_last_computed_at: snapshot.as_ref().map(|s| s.last_computed_at.clone()),
-            final_score: Some(snapshot.as_ref().map(|s| s.final_score).unwrap_or(0.0)),
-            base_score: Some(snapshot.as_ref().map(|s| s.base_score).unwrap_or(0.0)),
-            duration_score: Some(snapshot.as_ref().map(|s| s.duration_score).unwrap_or(0.5)),
-            time_pattern_score: Some(snapshot.as_ref().map(|s| s.time_pattern_score).unwrap_or(0.5)),
-            readiness_score: Some(snapshot.as_ref().map(|s| s.readiness_score).unwrap_or(0.5)),
-            fairness_score: Some(snapshot.as_ref().map(|s| s.fairness_score).unwrap_or(0.5)),
-            new_partner_multiplier: Some(snapshot.as_ref().map(|s| s.new_partner_multiplier).unwrap_or(1.0)),
-            raid_boost_multiplier: Some(snapshot.as_ref().map(|s| s.raid_boost_multiplier).unwrap_or(1.0)),
-            today_received_raids: Some(snapshot.as_ref().map(|s| s.today_received_raids).unwrap_or(0)),
+            score_last_computed_at: snapshot.last_computed_at,
+            final_score: Some(snapshot.final_score),
+            base_score: Some(snapshot.base_score),
+            duration_score: Some(snapshot.duration_score),
+            time_pattern_score: Some(snapshot.time_pattern_score),
+            readiness_score: Some(snapshot.readiness_score),
+            fairness_score: Some(snapshot.fairness_score),
+            new_partner_multiplier: Some(snapshot.new_partner_multiplier),
+            raid_boost_multiplier: Some(snapshot.raid_boost_multiplier),
+            today_received_raids: Some(snapshot.today_received_raids),
             was_deadlock_at_raid: was_deadlock,
         })
     }
@@ -330,6 +425,7 @@ mod tests {
             from_broadcaster_login: "src",
             from_broadcaster_id: Some("100"),
             viewer_count: 42,
+            pending_target_stream_data: None,
         };
         let input = resolver.resolve(&ctx, now).await.unwrap();
 
@@ -361,6 +457,52 @@ mod tests {
             !input2.was_deadlock_at_raid,
             "Just Chatting → kein Deadlock"
         );
+    }
+
+    #[tokio::test]
+    async fn resolve_nutzt_pending_score_snapshot_vor_db_score() {
+        let pool = setup("t6e_confirm_pending_score_snapshot").await;
+        let now = chrono::DateTime::parse_from_rfc3339("2026-06-10T18:00:00+00:00")
+            .unwrap()
+            .with_timezone(&Utc);
+
+        sqlx::query("INSERT INTO twitch_live_state (twitch_user_id, streamer_login, last_started_at, last_game, active_session_id)
+                     VALUES ('200', 'dst', '2026-06-10T16:00:00+00:00', 'Deadlock', 77)")
+            .execute(&pool).await.unwrap();
+        sqlx::query("INSERT INTO twitch_partner_raid_scores (twitch_user_id, final_score, today_received_raids, last_computed_at)
+                     VALUES ('200', 0.11, 9, 'frisch')")
+            .execute(&pool).await.unwrap();
+        let pending_snapshot = serde_json::json!({
+            "_partner_score": {
+                "final_score": 0.91,
+                "base_score": 0.81,
+                "duration_score": 0.71,
+                "time_pattern_score": 0.61,
+                "readiness_score": 0.51,
+                "fairness_score": 0.41,
+                "new_partner_multiplier": 1.2,
+                "raid_boost_multiplier": 1.3,
+                "today_received_raids": 2,
+                "last_computed_at": "eingefroren"
+            }
+        });
+
+        let resolver = ConfirmResolver::new(pool.clone(), "deadlock");
+        let ctx = ConfirmContext {
+            signal_type: "channel.raid",
+            to_broadcaster_id: "200",
+            to_broadcaster_login: "dst",
+            from_broadcaster_login: "src",
+            from_broadcaster_id: Some("100"),
+            viewer_count: 42,
+            pending_target_stream_data: Some(&pending_snapshot),
+        };
+        let input = resolver.resolve(&ctx, now).await.unwrap();
+
+        assert_eq!(input.final_score, Some(0.91));
+        assert_eq!(input.base_score, Some(0.81));
+        assert_eq!(input.today_received_raids, Some(2));
+        assert_eq!(input.score_last_computed_at.as_deref(), Some("eingefroren"));
     }
 
     #[tokio::test]
@@ -400,6 +542,7 @@ mod tests {
             from_broadcaster_login: "src",
             from_broadcaster_id: Some("100"),
             viewer_count: 7,
+            pending_target_stream_data: None,
         };
         let input = resolver.resolve(&ctx, now).await.unwrap();
         assert_eq!(
@@ -432,6 +575,7 @@ mod tests {
             from_broadcaster_login: "src",
             from_broadcaster_id: Some("100"),
             viewer_count: 7,
+            pending_target_stream_data: None,
         };
         let input = resolver.resolve(&ctx, now).await.unwrap();
         assert_eq!(

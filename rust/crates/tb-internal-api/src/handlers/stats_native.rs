@@ -2162,7 +2162,7 @@ mod tests {
         sqlx::query(
             r#"CREATE TABLE twitch_ad_break_events (
             id BIGSERIAL PRIMARY KEY, session_id BIGINT, started_at TIMESTAMPTZ,
-            duration_seconds INTEGER, is_automatic INTEGER DEFAULT 0
+            duration_seconds INTEGER, is_automatic BOOLEAN DEFAULT FALSE
         )"#,
         )
         .execute(&pool)
@@ -2199,7 +2199,7 @@ mod tests {
 
         sqlx::query(
             r#"CREATE TABLE twitch_subscription_events (
-            id BIGSERIAL PRIMARY KEY, is_gift INTEGER DEFAULT 0, received_at TIMESTAMPTZ
+            id BIGSERIAL PRIMARY KEY, is_gift BOOLEAN DEFAULT FALSE, received_at TIMESTAMPTZ
         )"#,
         )
         .execute(&pool)

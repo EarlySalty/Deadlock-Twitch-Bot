@@ -36,7 +36,7 @@ pub struct ConfirmedExternalRecruitmentRaid {
 }
 
 /// Fällige verzögerte Blacklist-Eintragung (`blacklist_after <= now`).
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, sqlx::FromRow)]
 pub struct DueBlacklistPending {
     pub target_id: String,
     pub target_login: String,
@@ -222,28 +222,20 @@ impl ExternalRecruitmentStore {
     pub async fn load_due_blacklist_pending(
         &self,
     ) -> Result<Vec<DueBlacklistPending>, sqlx::Error> {
-        let rows = sqlx::query!(
+        sqlx::query_as::<_, DueBlacklistPending>(
             r#"
-            SELECT target_id AS "target_id!",
-                   target_login AS "target_login!",
-                   confirmed_raid_count AS "confirmed_raid_count!",
-                   threshold_reached_at AS "threshold_reached_at!"
+            SELECT target_id,
+                   target_login,
+                   confirmed_raid_count,
+                   threshold_reached_at
             FROM twitch_external_recruitment_blacklist_pending
             WHERE blacklist_after <= NOW()
             ORDER BY blacklist_after ASC
+            LIMIT 50
             "#,
         )
         .fetch_all(&self.pool)
-        .await?;
-        Ok(rows
-            .into_iter()
-            .map(|row| DueBlacklistPending {
-                target_id: row.target_id,
-                target_login: row.target_login,
-                confirmed_raid_count: row.confirmed_raid_count,
-                threshold_reached_at: row.threshold_reached_at,
-            })
-            .collect())
+        .await
     }
 
     /// UPSERT eines verzögerten Bot-Ban-Checks (`run_after = now + delay`).
@@ -545,6 +537,33 @@ mod tests {
 
         store.delete_blacklist_pending("t2").await.unwrap();
         assert!(store.load_due_blacklist_pending().await.unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn blacklist_pending_due_batch_ist_auf_50_begrenzt() {
+        skip_without_db!();
+        let pool = setup_db("er_pending_limit").await;
+        let store = ExternalRecruitmentStore::new(pool.clone());
+
+        for idx in 0..55 {
+            sqlx::query(
+                "INSERT INTO twitch_external_recruitment_blacklist_pending
+                    (target_id, target_login, confirmed_raid_count, blacklist_after)
+                 VALUES ($1, $2, $3, NOW() - ($4::bigint::double precision * INTERVAL '1 second'))",
+            )
+            .bind(format!("target_{idx:02}"))
+            .bind(format!("login_{idx:02}"))
+            .bind(idx)
+            .bind((55 - idx) as i64)
+            .execute(&pool)
+            .await
+            .unwrap();
+        }
+
+        let due = store.load_due_blacklist_pending().await.unwrap();
+        assert_eq!(due.len(), 50);
+        assert_eq!(due[0].target_id, "target_00");
+        assert_eq!(due[49].target_id, "target_49");
     }
 
     #[tokio::test]

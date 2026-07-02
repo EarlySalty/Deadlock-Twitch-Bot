@@ -31,21 +31,27 @@ fn resolve_login(auth: &DashboardAuthLevel, streamer: &Option<String>) -> Result
                 Some(s) => Ok(s.to_lowercase()),
                 None => Err((
                     StatusCode::BAD_REQUEST,
-                    Json(json!({ "error": "streamer required" })),
+                    Json(json!({
+                        "error": "streamer_required",
+                        "message": "streamer is required"
+                    })),
                 )
                     .into_response()),
             }
         }
         DashboardAuthLevel::None => Err((
             StatusCode::UNAUTHORIZED,
-            Json(json!({ "error": "unauthorized" })),
+            Json(json!({
+                "error": "unauthorized",
+                "message": "authentication required"
+            })),
         )
             .into_response()),
     }
 }
 
-fn error_response(status: StatusCode, code: &str) -> Response {
-    (status, Json(json!({ "error": code }))).into_response()
+fn error_response(status: StatusCode, code: &str, message: &str) -> Response {
+    (status, Json(json!({ "error": code, "message": message }))).into_response()
 }
 
 fn nonempty_env(key: &str) -> Option<String> {
@@ -95,15 +101,24 @@ pub(crate) async fn proxy_owned_verdict_by_login(
         Ok(owner) => owner,
         Err(error) => {
             tracing::error!(%error, "scam-guard enforce ownership database error");
-            return error_response(StatusCode::INTERNAL_SERVER_ERROR, "db");
+            return error_response(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "database_error",
+                "failed to load scam-guard verdict",
+            );
         }
     };
     if owner.as_deref() != Some(login) {
-        return error_response(StatusCode::NOT_FOUND, "not found");
+        return error_response(StatusCode::NOT_FOUND, "not_found", "verdict not found");
     }
 
     let Some(token) = nonempty_env("TWITCH_INTERNAL_API_TOKEN") else {
-        return StatusCode::SERVICE_UNAVAILABLE.into_response();
+        tracing::error!("scam-guard internal proxy ohne TWITCH_INTERNAL_API_TOKEN");
+        return error_response(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "internal_api_unavailable",
+            "internal API token missing",
+        );
     };
     let url = format!("{}{path}", worker_internal_base_url());
     let client = reqwest::Client::builder()
@@ -120,7 +135,11 @@ pub(crate) async fn proxy_owned_verdict_by_login(
         Ok(response) => response,
         Err(error) => {
             tracing::warn!(%error, "scam-guard internal proxy transport error");
-            return error_response(StatusCode::BAD_GATEWAY, "upstream");
+            return error_response(
+                StatusCode::BAD_GATEWAY,
+                "upstream_unavailable",
+                "internal scam-guard request failed",
+            );
         }
     };
     let status =
@@ -129,14 +148,31 @@ pub(crate) async fn proxy_owned_verdict_by_login(
         Ok(body) => body,
         Err(error) => {
             tracing::warn!(%error, "scam-guard internal proxy body error");
-            return error_response(StatusCode::BAD_GATEWAY, "upstream");
+            return error_response(
+                StatusCode::BAD_GATEWAY,
+                "upstream_unavailable",
+                "internal scam-guard response failed",
+            );
         }
     };
+    if !status.is_success() {
+        return error_response(
+            status,
+            "upstream_error",
+            "internal scam-guard request failed",
+        );
+    }
     Response::builder()
         .status(status)
         .header(header::CONTENT_TYPE, "application/json")
         .body(Body::from(body))
-        .unwrap_or_else(|_| error_response(StatusCode::BAD_GATEWAY, "upstream"))
+        .unwrap_or_else(|_| {
+            error_response(
+                StatusCode::BAD_GATEWAY,
+                "upstream_unavailable",
+                "failed to build scam-guard response",
+            )
+        })
 }
 
 pub async fn ban_handler(
@@ -220,6 +256,24 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn error_response_503_hat_json_body_mit_error_message() {
+        let (status, body) = body_of(error_response(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "internal_api_unavailable",
+            "internal API token missing",
+        ))
+        .await;
+        assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE);
+        assert_eq!(
+            body,
+            json!({
+                "error": "internal_api_unavailable",
+                "message": "internal API token missing"
+            })
+        );
+    }
+
+    #[tokio::test]
     async fn ban_und_revoke_verbergen_fremde_und_unbekannte_ids() {
         let Some(pool) = make_pool("t_scam_guard_enforce_ownership").await else {
             return;
@@ -244,7 +298,10 @@ mod tests {
             )
             .await;
             assert_eq!(status, StatusCode::NOT_FOUND);
-            assert_eq!(body, json!({ "error": "not found" }));
+            assert_eq!(
+                body,
+                json!({ "error": "not_found", "message": "verdict not found" })
+            );
 
             let (status, body) = body_of(
                 revoke_handler(
@@ -257,7 +314,10 @@ mod tests {
             )
             .await;
             assert_eq!(status, StatusCode::NOT_FOUND);
-            assert_eq!(body, json!({ "error": "not found" }));
+            assert_eq!(
+                body,
+                json!({ "error": "not_found", "message": "verdict not found" })
+            );
         }
     }
 }

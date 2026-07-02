@@ -38,6 +38,8 @@ pub struct BrokerRelay {
 /// Ein Guild-Member aus `GET /discord/members`.
 #[derive(Debug, Clone, serde::Deserialize)]
 pub struct GuildMember {
+    #[serde(default, deserialize_with = "deserialize_option_u64_flexible")]
+    pub guild_id: Option<u64>,
     pub id: String,
     pub name: String,
     pub global_name: Option<String>,
@@ -153,6 +155,33 @@ where
             .parse::<u64>()
             .map_err(|_| D::Error::custom("role_id-String ist keine gültige u64")),
         _ => Err(D::Error::custom("role_id hat unerwarteten Typ")),
+    }
+}
+
+fn deserialize_option_u64_flexible<'de, D>(deserializer: D) -> Result<Option<u64>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    use serde::de::Error;
+    use serde::Deserialize as _;
+    match Option::<serde_json::Value>::deserialize(deserializer)? {
+        None | Some(serde_json::Value::Null) => Ok(None),
+        Some(serde_json::Value::Number(n)) => n
+            .as_u64()
+            .map(Some)
+            .ok_or_else(|| D::Error::custom("guild_id ist keine gültige u64")),
+        Some(serde_json::Value::String(s)) => {
+            let trimmed = s.trim();
+            if trimmed.is_empty() {
+                Ok(None)
+            } else {
+                trimmed
+                    .parse::<u64>()
+                    .map(Some)
+                    .map_err(|_| D::Error::custom("guild_id-String ist keine gültige u64"))
+            }
+        }
+        Some(_) => Err(D::Error::custom("guild_id hat unerwarteten Typ")),
     }
 }
 

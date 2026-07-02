@@ -2,10 +2,17 @@
 //! Anlegen (409 = already exists = Erfolg, wie Python
 //! `subscribe_eventsub_webhook`), Auflisten (Cursor-Pagination) und Löschen.
 
+use std::time::Duration;
+
+use chrono::{DateTime, Utc};
+use reqwest::header::RETRY_AFTER;
 use serde::Deserialize;
 use serde_json::Value;
+use thiserror::Error;
 
 use crate::client::{HelixClient, HelixError};
+
+const EVENTSUB_CREATE_ERROR_BODY_LIMIT: usize = 1024;
 
 /// Eine bei Twitch registrierte EventSub-Subscription.
 #[derive(Debug, Clone, Deserialize)]
@@ -54,6 +61,77 @@ pub enum CreateOutcome {
     AlreadyExists,
 }
 
+/// Fehler beim Anlegen einer EventSub-Subscription.
+#[derive(Debug, Error)]
+pub enum EventSubCreateError {
+    #[error(transparent)]
+    Helix(#[from] HelixError),
+    #[error("Helix-Status {status} beim EventSub-Create")]
+    Status {
+        status: u16,
+        retry_after: Option<Duration>,
+        body: Option<String>,
+    },
+}
+
+impl EventSubCreateError {
+    pub fn status(&self) -> Option<u16> {
+        match self {
+            Self::Status { status, .. } => Some(*status),
+            Self::Helix(HelixError::Status { status }) => Some(*status),
+            Self::Helix(_) => None,
+        }
+    }
+
+    pub fn retry_after(&self) -> Option<Duration> {
+        match self {
+            Self::Status { retry_after, .. } => *retry_after,
+            Self::Helix(_) => None,
+        }
+    }
+
+    pub fn body(&self) -> Option<&str> {
+        match self {
+            Self::Status { body, .. } => body.as_deref(),
+            Self::Helix(_) => None,
+        }
+    }
+}
+
+fn parse_retry_after(resp: &reqwest::Response) -> Option<Duration> {
+    resp.headers()
+        .get(RETRY_AFTER)
+        .and_then(|value| value.to_str().ok())
+        .and_then(|raw| parse_retry_after_value(raw, Utc::now()))
+}
+
+fn parse_retry_after_value(raw: &str, now: DateTime<Utc>) -> Option<Duration> {
+    let raw = raw.trim();
+    if let Ok(seconds) = raw.parse::<u64>() {
+        return Some(Duration::from_secs(seconds));
+    }
+    let retry_at = DateTime::parse_from_rfc2822(raw).ok()?.with_timezone(&Utc);
+    match retry_at.signed_duration_since(now).to_std() {
+        Ok(duration) => Some(duration),
+        Err(_) => Some(Duration::ZERO),
+    }
+}
+
+async fn eventsub_create_status_error(resp: reqwest::Response) -> EventSubCreateError {
+    let status = resp.status().as_u16();
+    let retry_after = parse_retry_after(&resp);
+    let body = resp.text().await.ok().map(|text| {
+        text.chars()
+            .take(EVENTSUB_CREATE_ERROR_BODY_LIMIT)
+            .collect::<String>()
+    });
+    EventSubCreateError::Status {
+        status,
+        retry_after,
+        body,
+    }
+}
+
 impl HelixClient {
     /// Legt eine Webhook-Subscription an. `bearer_override` erlaubt
     /// User-/Bot-Tokens (Python-Parität); `None` = App-Token.
@@ -66,7 +144,7 @@ impl HelixClient {
         callback: &str,
         secret: &str,
         bearer_override: Option<&str>,
-    ) -> Result<CreateOutcome, HelixError> {
+    ) -> Result<CreateOutcome, EventSubCreateError> {
         let payload = serde_json::json!({
             "type": sub_type,
             "version": version,
@@ -81,15 +159,17 @@ impl HelixClient {
         if let Some(token) = bearer_override.map(str::trim).filter(|t| !t.is_empty()) {
             builder = builder.header("Authorization", format!("Bearer {token}"));
         }
-        let resp = builder.json(&payload).send().await?;
+        let resp = builder
+            .json(&payload)
+            .send()
+            .await
+            .map_err(HelixError::from)?;
         let status = resp.status();
         if status.as_u16() == 409 {
             return Ok(CreateOutcome::AlreadyExists);
         }
         if !status.is_success() {
-            return Err(HelixError::Status {
-                status: status.as_u16(),
-            });
+            return Err(eventsub_create_status_error(resp).await);
         }
         Ok(CreateOutcome::Created)
     }
@@ -165,8 +245,9 @@ impl HelixClient {
 
 #[cfg(test)]
 mod tests {
-    use super::CreateOutcome;
+    use super::{CreateOutcome, EventSubCreateError};
     use crate::client::{HelixClient, HelixConfig};
+    use chrono::{Duration as ChronoDuration, Utc};
     use wiremock::matchers::{body_partial_json, method, path, query_param};
     use wiremock::{Mock, MockServer, ResponseTemplate};
 
@@ -265,5 +346,84 @@ mod tests {
             .mount(&server)
             .await;
         assert!(client.delete_eventsub_subscription("sub-1").await.unwrap());
+    }
+
+    #[tokio::test]
+    async fn create_reicht_status_retry_after_und_body_durch() {
+        let server = MockServer::start().await;
+        let client = client_with(&server).await;
+        Mock::given(method("POST"))
+            .and(path("/helix/eventsub/subscriptions"))
+            .respond_with(
+                ResponseTemplate::new(429)
+                    .insert_header("retry-after", "7")
+                    .set_body_string("maximum total cost exceeded"),
+            )
+            .mount(&server)
+            .await;
+
+        let err = client
+            .create_eventsub_webhook_subscription(
+                "stream.online",
+                "1",
+                &serde_json::json!({"broadcaster_user_id": "42"}),
+                "https://cb/x",
+                "geheim",
+                None,
+            )
+            .await
+            .unwrap_err();
+
+        match err {
+            EventSubCreateError::Status {
+                status,
+                retry_after,
+                body,
+            } => {
+                assert_eq!(status, 429);
+                assert_eq!(retry_after.map(|d| d.as_secs()), Some(7));
+                assert_eq!(body.as_deref(), Some("maximum total cost exceeded"));
+            }
+            other => panic!("unerwarteter Fehler: {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn create_retry_after_akzeptiert_rfc1123_http_date_header() {
+        let server = MockServer::start().await;
+        let client = client_with(&server).await;
+        let retry_at = Utc::now() + ChronoDuration::seconds(300);
+        let retry_after = retry_at.format("%a, %d %b %Y %H:%M:%S GMT").to_string();
+        Mock::given(method("POST"))
+            .and(path("/helix/eventsub/subscriptions"))
+            .respond_with(
+                ResponseTemplate::new(429)
+                    .insert_header("retry-after", retry_after)
+                    .set_body_string("rate limited"),
+            )
+            .mount(&server)
+            .await;
+
+        let err = client
+            .create_eventsub_webhook_subscription(
+                "stream.online",
+                "1",
+                &serde_json::json!({"broadcaster_user_id": "42"}),
+                "https://cb/x",
+                "geheim",
+                None,
+            )
+            .await
+            .unwrap_err();
+
+        match err {
+            EventSubCreateError::Status { retry_after, .. } => {
+                assert!(matches!(
+                    retry_after.map(|duration| duration.as_secs()),
+                    Some(seconds) if seconds > 0 && seconds <= 300
+                ));
+            }
+            other => panic!("unerwarteter Fehler: {other:?}"),
+        }
     }
 }

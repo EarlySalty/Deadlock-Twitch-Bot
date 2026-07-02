@@ -116,9 +116,12 @@ pub enum ChatActionResult {
     Dropped { code: String, message: String },
     /// Broadcaster-User-ID zu diesem Login nicht auflösbar.
     UnknownChannel,
-    /// Senden schlug fehl (HTTP-Fehler/Token nicht verfügbar). `reason` ist
-    /// log-tauglich (enthält NIE den Token).
-    Failed { reason: String },
+    /// Senden schlug fehl (HTTP-Fehler/Token nicht verfügbar). `detail` ist
+    /// zentral redigiert und auf ein kurzes Twitch-Body-Snippet gekappt.
+    Failed {
+        reason: String,
+        detail: Option<String>,
+    },
 }
 
 /// Port für die Owner-Chat-Action: sendet über den live rotierten Bot-User-Token.
@@ -1479,7 +1482,7 @@ mod tests {
                 authorized_at TIMESTAMPTZ, token_expires_at TIMESTAMPTZ )"#,
             r#"CREATE TABLE IF NOT EXISTS twitch_stream_sessions (
                 id BIGSERIAL PRIMARY KEY, stream_id TEXT, streamer_login TEXT,
-                game_name TEXT, had_deadlock_in_session INTEGER DEFAULT 0,
+                game_name TEXT, had_deadlock_in_session BOOLEAN DEFAULT FALSE,
                 started_at TIMESTAMPTZ, ended_at TIMESTAMPTZ,
                 duration_seconds BIGINT, avg_viewers FLOAT8, peak_viewers BIGINT,
                 follower_delta BIGINT, followers_start BIGINT, followers_end BIGINT,

@@ -7,6 +7,8 @@
 //! `TB_IRC_LURKER_ENABLED=1` aktivierbar.
 
 use std::collections::{HashMap, HashSet};
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::MutexGuard;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
@@ -88,17 +90,15 @@ fn is_irc_word(c: char) -> bool {
 // ---- DB-Layer --------------------------------------------------------------
 
 /// Aktive Session-ID eines live Kanals (`twitch_live_state`), sonst `None`.
-async fn resolve_active_session(pool: &PgPool, channel: &str) -> Option<i64> {
-    sqlx::query_scalar!(
+async fn resolve_active_session(pool: &PgPool, channel: &str) -> Result<Option<i64>, sqlx::Error> {
+    Ok(sqlx::query_scalar!(
         "SELECT active_session_id FROM twitch_live_state \
          WHERE LOWER(streamer_login) = $1 AND is_live = 1",
         channel,
     )
     .fetch_optional(pool)
-    .await
-    .ok()
-    .flatten()
-    .flatten()
+    .await?
+    .flatten())
 }
 
 const INSERT_CHATTER: &str = "INSERT INTO twitch_session_chatters \
@@ -113,11 +113,21 @@ pub async fn upsert_chatter_seen(pool: &PgPool, channel: &str, nick: &str, now: 
     if is_known_chat_bot(&nick) {
         return;
     }
-    let Some(session_id) = resolve_active_session(pool, channel).await else {
-        return;
+    let session_id = match resolve_active_session(pool, channel).await {
+        Ok(Some(session_id)) => session_id,
+        Ok(None) => return,
+        Err(error) => {
+            tracing::warn!(
+                %error,
+                channel,
+                nick = %nick,
+                "IRC-Lurker: aktive Session-Query fehlgeschlagen"
+            );
+            return;
+        }
     };
     // dyn: wiederverwendeter INSERT-Grundkörper mit variierendem ON-CONFLICT-Zweig.
-    let _ = sqlx::query(&format!(
+    match sqlx::query(&format!(
         "{INSERT_CHATTER} ON CONFLICT (session_id, chatter_login) \
          DO UPDATE SET last_seen_at = EXCLUDED.last_seen_at"
     ))
@@ -126,7 +136,19 @@ pub async fn upsert_chatter_seen(pool: &PgPool, channel: &str, nick: &str, now: 
     .bind(&nick)
     .bind(now)
     .execute(pool)
-    .await;
+    .await
+    {
+        Ok(_) => {}
+        Err(error) => {
+            tracing::warn!(
+                %error,
+                channel,
+                nick = %nick,
+                session_id,
+                "IRC-Lurker: JOIN-Upsert fehlgeschlagen"
+            );
+        }
+    }
 }
 
 /// NAMES-Liste: spiegelt alle Chatter der Session (Python `_on_names_list`).
@@ -138,18 +160,37 @@ pub async fn upsert_names_batch(
     nicks: &[String],
     now: DateTime<Utc>,
 ) -> (usize, usize) {
-    let Some(session_id) = resolve_active_session(pool, channel).await else {
-        return (0, 0);
+    let session_id = match resolve_active_session(pool, channel).await {
+        Ok(Some(session_id)) => session_id,
+        Ok(None) => return (0, 0),
+        Err(error) => {
+            tracing::warn!(
+                %error,
+                channel,
+                nick_count = nicks.len(),
+                "IRC-Lurker: aktive Session-Query fuer NAMES fehlgeschlagen"
+            );
+            return (0, 0);
+        }
     };
-    let existing: HashSet<String> = sqlx::query_scalar!(
+    let existing: HashSet<String> = match sqlx::query_scalar!(
         "SELECT chatter_login FROM twitch_session_chatters WHERE session_id = $1",
         session_id,
     )
     .fetch_all(pool)
     .await
-    .unwrap_or_default()
-    .into_iter()
-    .collect();
+    {
+        Ok(rows) => rows.into_iter().collect(),
+        Err(error) => {
+            tracing::warn!(
+                %error,
+                channel,
+                session_id,
+                "IRC-Lurker: NAMES-existing-SELECT fehlgeschlagen"
+            );
+            return (0, 0);
+        }
+    };
 
     let mut inserts = 0;
     let mut updates = 0;
@@ -159,7 +200,7 @@ pub async fn upsert_names_batch(
             continue;
         }
         if existing.contains(&nick) {
-            let _ = sqlx::query!(
+            match sqlx::query!(
                 "UPDATE twitch_session_chatters SET last_seen_at = $1 \
                  WHERE session_id = $2 AND chatter_login = $3",
                 now,
@@ -167,11 +208,24 @@ pub async fn upsert_names_batch(
                 &nick,
             )
             .execute(pool)
-            .await;
-            updates += 1;
+            .await
+            {
+                Ok(_) => {
+                    updates += 1;
+                }
+                Err(error) => {
+                    tracing::warn!(
+                        %error,
+                        channel,
+                        nick = %nick,
+                        session_id,
+                        "IRC-Lurker: NAMES-Update fehlgeschlagen"
+                    );
+                }
+            }
         } else {
             // dyn: gleicher INSERT-Grundkörper wie JOIN-Pfad, aber DO NOTHING statt UPDATE.
-            let _ = sqlx::query(&format!(
+            match sqlx::query(&format!(
                 "{INSERT_CHATTER} ON CONFLICT (session_id, chatter_login) DO NOTHING"
             ))
             .bind(session_id)
@@ -179,8 +233,21 @@ pub async fn upsert_names_batch(
             .bind(&nick)
             .bind(now)
             .execute(pool)
-            .await;
-            inserts += 1;
+            .await
+            {
+                Ok(_) => {
+                    inserts += 1;
+                }
+                Err(error) => {
+                    tracing::warn!(
+                        %error,
+                        channel,
+                        nick = %nick,
+                        session_id,
+                        "IRC-Lurker: NAMES-Insert fehlgeschlagen"
+                    );
+                }
+            }
         }
     }
     (inserts, updates)
@@ -260,6 +327,7 @@ pub enum TrackMode {
 enum Cmd {
     Join(String),
     Part(String),
+    Stop,
 }
 
 /// Experimenteller IRC-Lurker-Tracker. Erst nach `run()` aktiv; `track_channel`
@@ -275,9 +343,11 @@ pub struct IrcLurkerTracker {
     authenticated: bool,
     channels: Arc<Mutex<HashSet<String>>>,
     partner_channels: Arc<Mutex<HashSet<String>>>,
+    category_channels: Arc<Mutex<HashSet<String>>>,
     chatters: Arc<Mutex<HashMap<String, HashSet<String>>>>,
     cmd_tx: mpsc::UnboundedSender<Cmd>,
     cmd_rx: Mutex<Option<mpsc::UnboundedReceiver<Cmd>>>,
+    stop_requested: Arc<AtomicBool>,
 }
 
 impl IrcLurkerTracker {
@@ -302,9 +372,11 @@ impl IrcLurkerTracker {
             authenticated,
             channels: Arc::new(Mutex::new(HashSet::new())),
             partner_channels: Arc::new(Mutex::new(HashSet::new())),
+            category_channels: Arc::new(Mutex::new(HashSet::new())),
             chatters: Arc::new(Mutex::new(HashMap::new())),
             cmd_tx,
             cmd_rx: Mutex::new(Some(cmd_rx)),
+            stop_requested: Arc::new(AtomicBool::new(false)),
         }
     }
 
@@ -319,16 +391,19 @@ impl IrcLurkerTracker {
         if channel.is_empty() {
             return;
         }
-        self.channels.lock().unwrap().insert(channel.clone());
+        lock_or_recover(&self.channels, "channels").insert(channel.clone());
         {
-            let mut partner = self.partner_channels.lock().unwrap();
+            let mut partner = lock_or_recover(&self.partner_channels, "partner_channels");
+            let mut category = lock_or_recover(&self.category_channels, "category_channels");
             match mode {
                 TrackMode::Partner => {
                     partner.insert(channel.clone());
+                    category.remove(&channel);
                 }
                 TrackMode::Category => {
                     partner.remove(&channel);
-                    self.chatters.lock().unwrap().remove(&channel);
+                    category.insert(channel.clone());
+                    lock_or_recover(&self.chatters, "chatters").remove(&channel);
                 }
             }
         }
@@ -342,37 +417,68 @@ impl IrcLurkerTracker {
             .to_lowercase()
             .trim_start_matches('#')
             .to_string();
-        if !self.channels.lock().unwrap().remove(&channel) {
+        if !lock_or_recover(&self.channels, "channels").remove(&channel) {
             return;
         }
-        self.partner_channels.lock().unwrap().remove(&channel);
-        self.chatters.lock().unwrap().remove(&channel);
+        lock_or_recover(&self.partner_channels, "partner_channels").remove(&channel);
+        lock_or_recover(&self.category_channels, "category_channels").remove(&channel);
+        lock_or_recover(&self.chatters, "chatters").remove(&channel);
         let _ = self.cmd_tx.send(Cmd::Part(channel));
     }
 
     /// Aktuell beobachtete Chatter eines Kanals (Python `get_chatters`).
     pub fn get_chatters(&self, channel: &str) -> HashSet<String> {
-        let channel = channel.trim().to_lowercase();
+        let channel = channel
+            .trim()
+            .to_lowercase()
+            .trim_start_matches('#')
+            .to_string();
         self.chatters
             .lock()
-            .unwrap()
+            .unwrap_or_else(|poisoned| {
+                tracing::warn!(
+                    lock = "chatters",
+                    "IRC-Lurker: Mutex war poisoned, nutze letzten Zustand weiter"
+                );
+                poisoned.into_inner()
+            })
             .get(&channel)
             .cloned()
             .unwrap_or_default()
     }
 
+    /// Fordert einen sauberen Stopp des Verbindungs-Loops an.
+    ///
+    /// Python `IRCLurkerTracker.stop()` cancelt Connection-/Read-/Poll-Tasks und
+    /// trennt die Verbindung. Der Rust-Tracker besitzt nur einen Loop; dieses
+    /// Signal beendet ihn beim nächsten Select-/Backoff-Punkt.
+    pub fn stop(&self) {
+        self.stop_requested.store(true, Ordering::SeqCst);
+        let _ = self.cmd_tx.send(Cmd::Stop);
+    }
+
     /// Verbindungs-Loop mit Auto-Reconnect. Läuft bis zum Programmende.
     pub async fn run(&self) {
-        let Some(mut rx) = self.cmd_rx.lock().unwrap().take() else {
+        let Some(mut rx) = lock_or_recover(&self.cmd_rx, "cmd_rx").take() else {
             tracing::warn!("IRC-Lurker: run() bereits aktiv");
             return;
         };
-        loop {
+        while !self.stop_requested.load(Ordering::SeqCst) {
             match self.connect().await {
                 Some((reader, writer)) => self.serve(reader, writer, &mut rx).await,
-                None => tokio::time::sleep(Duration::from_secs(CONNECT_BACKOFF_SECONDS)).await,
+                None => {
+                    tokio::select! {
+                        _ = tokio::time::sleep(Duration::from_secs(CONNECT_BACKOFF_SECONDS)) => {}
+                        cmd = rx.recv() => {
+                            if self.handle_disconnected_cmd(cmd) {
+                                break;
+                            }
+                        }
+                    }
+                }
             }
         }
+        tracing::info!("IRC-Lurker: Stop-Signal verarbeitet, Runner beendet");
     }
 
     async fn connect(&self) -> Option<(BufReader<OwnedReadHalf>, OwnedWriteHalf)> {
@@ -411,7 +517,10 @@ impl IrcLurkerTracker {
         mut writer: OwnedWriteHalf,
         rx: &mut mpsc::UnboundedReceiver<Cmd>,
     ) {
-        let channels: Vec<String> = self.channels.lock().unwrap().iter().cloned().collect();
+        let channels: Vec<String> = lock_or_recover(&self.channels, "channels")
+            .iter()
+            .cloned()
+            .collect();
         for ch in channels {
             let _ = writer.write_all(format!("JOIN #{ch}\r\n").as_bytes()).await;
             let _ = writer.flush().await;
@@ -422,6 +531,9 @@ impl IrcLurkerTracker {
 
         let mut line = String::new();
         loop {
+            if self.stop_requested.load(Ordering::SeqCst) {
+                break;
+            }
             line.clear();
             tokio::select! {
                 res = reader.read_line(&mut line) => {
@@ -431,15 +543,20 @@ impl IrcLurkerTracker {
                     }
                 }
                 _ = poll.tick() => {
-                    let chans: Vec<String> = self.channels.lock().unwrap().iter().cloned().collect();
+                    let chans: Vec<String> = lock_or_recover(&self.channels, "channels").iter().cloned().collect();
                     for ch in chans {
                         let _ = writer.write_all(format!("NAMES #{ch}\r\n").as_bytes()).await;
+                        let _ = writer.flush().await;
+                        tokio::time::sleep(IRC_JOIN_STAGGER).await;
                     }
-                    let _ = writer.flush().await;
                 }
                 Some(cmd) = rx.recv() => match cmd {
                     Cmd::Join(ch) => { let _ = writer.write_all(format!("JOIN #{ch}\r\n").as_bytes()).await; let _ = writer.flush().await; }
                     Cmd::Part(ch) => { let _ = writer.write_all(format!("PART #{ch}\r\n").as_bytes()).await; let _ = writer.flush().await; }
+                    Cmd::Stop => {
+                        self.stop_requested.store(true, Ordering::SeqCst);
+                        break;
+                    }
                 }
             }
         }
@@ -456,31 +573,37 @@ impl IrcLurkerTracker {
         let now = Utc::now();
         if let Some((nick, channel)) = parse_join(msg) {
             let (channel, nick) = (channel.to_lowercase(), nick.to_lowercase());
-            self.chatters
-                .lock()
-                .unwrap()
+            lock_or_recover(&self.chatters, "chatters")
                 .entry(channel.clone())
                 .or_default()
                 .insert(nick.clone());
             upsert_chatter_seen(&self.pool, &channel, &nick, now).await;
         } else if let Some((nick, channel)) = parse_part(msg) {
             let (channel, nick) = (channel.to_lowercase(), nick.to_lowercase());
-            if let Some(set) = self.chatters.lock().unwrap().get_mut(&channel) {
+            if let Some(set) = lock_or_recover(&self.chatters, "chatters").get_mut(&channel) {
                 set.remove(&nick);
             }
         } else if let Some((channel, nicks)) = parse_names(msg) {
             let channel = channel.to_lowercase();
             let nicks_lower: Vec<String> = nicks.iter().map(|n| n.to_lowercase()).collect();
             // NAMES nur für Partner-Kanäle im Speicher halten (RAM-Schonung).
-            if self.partner_channels.lock().unwrap().contains(&channel) {
-                self.chatters
-                    .lock()
-                    .unwrap()
+            if lock_or_recover(&self.partner_channels, "partner_channels").contains(&channel) {
+                lock_or_recover(&self.chatters, "chatters")
                     .insert(channel.clone(), nicks_lower.iter().cloned().collect());
             } else {
-                self.chatters.lock().unwrap().remove(&channel);
+                lock_or_recover(&self.chatters, "chatters").remove(&channel);
             }
             upsert_names_batch(&self.pool, &channel, &nicks_lower, now).await;
+        }
+    }
+
+    fn handle_disconnected_cmd(&self, cmd: Option<Cmd>) -> bool {
+        match cmd {
+            Some(Cmd::Stop) | None => {
+                self.stop_requested.store(true, Ordering::SeqCst);
+                true
+            }
+            Some(Cmd::Join(_)) | Some(Cmd::Part(_)) => false,
         }
     }
 
@@ -494,6 +617,16 @@ impl IrcLurkerTracker {
         commands.push("CAP REQ :twitch.tv/membership twitch.tv/commands\r\n".to_string());
         commands
     }
+}
+
+fn lock_or_recover<'a, T>(mutex: &'a Mutex<T>, name: &'static str) -> MutexGuard<'a, T> {
+    mutex.lock().unwrap_or_else(|poisoned| {
+        tracing::warn!(
+            lock = name,
+            "IRC-Lurker: Mutex war poisoned, nutze letzten Zustand weiter"
+        );
+        poisoned.into_inner()
+    })
 }
 
 /// Antwortet auf einen IRC-PING.
@@ -716,12 +849,28 @@ mod tests {
         t.track_channel("someCat", TrackMode::Category);
         assert!(t.channels.lock().unwrap().contains("nani"));
         assert!(t.partner_channels.lock().unwrap().contains("nani"));
+        assert!(!t.category_channels.lock().unwrap().contains("nani"));
         assert!(t.channels.lock().unwrap().contains("somecat"));
         assert!(!t.partner_channels.lock().unwrap().contains("somecat")); // category ≠ partner
+        assert!(t.category_channels.lock().unwrap().contains("somecat"));
+
+        t.chatters.lock().unwrap().insert(
+            "nani".to_string(),
+            ["alice".to_string(), "bob".to_string()]
+                .into_iter()
+                .collect(),
+        );
+        let chatters = t.get_chatters(" #NANI ");
+        assert!(chatters.contains("alice"));
+        assert!(chatters.contains("bob"));
 
         t.untrack_channel("nani");
         assert!(!t.channels.lock().unwrap().contains("nani"));
         assert!(!t.partner_channels.lock().unwrap().contains("nani"));
+        assert!(!t.category_channels.lock().unwrap().contains("nani"));
+
+        t.stop();
+        assert!(t.stop_requested.load(Ordering::SeqCst));
     }
 
     #[tokio::test]
@@ -742,5 +891,24 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(n, 0);
+    }
+
+    #[tokio::test]
+    async fn names_batch_bricht_bei_existing_select_fehler_ab() {
+        let Some(pool) = make_pool("t_irc_lurker_existing_error").await else {
+            return;
+        };
+        sqlx::query("INSERT INTO twitch_live_state (twitch_user_id, streamer_login, is_live, active_session_id) VALUES ('1', 'nani', 1, 42)")
+            .execute(&pool).await.unwrap();
+        sqlx::query("DROP TABLE twitch_session_chatters")
+            .execute(&pool)
+            .await
+            .unwrap();
+
+        let nicks = vec!["alice".to_string()];
+        assert_eq!(
+            upsert_names_batch(&pool, "nani", &nicks, Utc::now()).await,
+            (0, 0)
+        );
     }
 }

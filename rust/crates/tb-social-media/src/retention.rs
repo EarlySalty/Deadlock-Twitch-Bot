@@ -208,7 +208,7 @@ mod tests {
             .unwrap();
         sqlx::query("CREATE TABLE social_media_platform_auth (id SERIAL PRIMARY KEY, platform TEXT, streamer_login TEXT, enabled INTEGER DEFAULT 1)")
             .execute(&pool).await.unwrap();
-        sqlx::query("CREATE TABLE twitch_clips_social_media (id SERIAL PRIMARY KEY, clip_id TEXT, streamer_login TEXT, source_kind TEXT, upload_local_path TEXT, local_file_path TEXT, status TEXT DEFAULT 'pending', retention_until TIMESTAMPTZ, discarded_at TIMESTAMPTZ, uploaded_tiktok BOOLEAN DEFAULT FALSE, uploaded_youtube BOOLEAN DEFAULT FALSE, uploaded_instagram BOOLEAN DEFAULT FALSE)")
+        sqlx::query("CREATE TABLE twitch_clips_social_media (id BIGSERIAL PRIMARY KEY, clip_id TEXT NOT NULL, clip_url TEXT NOT NULL, streamer_login TEXT NOT NULL, source_kind TEXT NOT NULL DEFAULT 'twitch', upload_local_path TEXT, local_file_path TEXT, status TEXT DEFAULT 'pending', created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(), retention_until TIMESTAMPTZ, discarded_at TIMESTAMPTZ, uploaded_tiktok BOOLEAN DEFAULT FALSE, uploaded_youtube BOOLEAN DEFAULT FALSE, uploaded_instagram BOOLEAN DEFAULT FALSE)")
             .execute(&pool).await.unwrap();
         Some(pool)
     }
@@ -228,7 +228,7 @@ mod tests {
         );
 
         // Clip: nur tiktok hochgeladen → nicht alle aktiven.
-        let id: i32 = sqlx::query_scalar("INSERT INTO twitch_clips_social_media (streamer_login, uploaded_tiktok) VALUES ('nani', TRUE) RETURNING id").fetch_one(&pool).await.unwrap();
+        let id: i64 = sqlx::query_scalar("INSERT INTO twitch_clips_social_media (clip_id, clip_url, streamer_login, uploaded_tiktok) VALUES ('pub-1', 'https://clips.test/pub-1', 'nani', TRUE) RETURNING id").fetch_one(&pool).await.unwrap();
         assert!(!is_clip_published_on_all_active_platforms(&pool, id).await);
         assert!(!refresh_clip_publication_status(&pool, id).await);
 
@@ -254,7 +254,7 @@ mod tests {
             return;
         };
         let id: i64 = sqlx::query_scalar(
-            "INSERT INTO twitch_clips_social_media (streamer_login) VALUES ('x') RETURNING id",
+            "INSERT INTO twitch_clips_social_media (clip_id, clip_url, streamer_login) VALUES ('none-1', 'https://clips.test/none-1', 'x') RETURNING id",
         )
         .fetch_one(&pool)
         .await
@@ -269,8 +269,8 @@ mod tests {
             return;
         };
         // mark_clip_discarded setzt status + discarded_at, liefert true.
-        let id: i32 = sqlx::query_scalar(
-            "INSERT INTO twitch_clips_social_media (streamer_login) VALUES ('nani') RETURNING id",
+        let id: i64 = sqlx::query_scalar(
+            "INSERT INTO twitch_clips_social_media (clip_id, clip_url, streamer_login) VALUES ('discard-1', 'https://clips.test/discard-1', 'nani') RETURNING id",
         )
         .fetch_one(&pool)
         .await
@@ -289,9 +289,9 @@ mod tests {
         assert!(!mark_clip_discarded(&pool, 999_999).await);
 
         // Zwei abgelaufene + ein zukünftiger Clip.
-        let past1: i64 = sqlx::query_scalar("INSERT INTO twitch_clips_social_media (clip_id, source_kind, upload_local_path, retention_until) VALUES ('a', 'twitch', '/a.mp4', NOW() - INTERVAL '2 days') RETURNING id").fetch_one(&pool).await.unwrap();
-        let past2: i64 = sqlx::query_scalar("INSERT INTO twitch_clips_social_media (clip_id, retention_until) VALUES ('b', NOW() - INTERVAL '1 day') RETURNING id").fetch_one(&pool).await.unwrap();
-        sqlx::query("INSERT INTO twitch_clips_social_media (clip_id, retention_until) VALUES ('future', NOW() + INTERVAL '5 days')").execute(&pool).await.unwrap();
+        let past1: i64 = sqlx::query_scalar("INSERT INTO twitch_clips_social_media (clip_id, clip_url, streamer_login, source_kind, upload_local_path, retention_until) VALUES ('a', 'https://clips.test/a', 'nani', 'twitch', '/a.mp4', NOW() - INTERVAL '2 days') RETURNING id").fetch_one(&pool).await.unwrap();
+        let past2: i64 = sqlx::query_scalar("INSERT INTO twitch_clips_social_media (clip_id, clip_url, streamer_login, retention_until) VALUES ('b', 'https://clips.test/b', 'nani', NOW() - INTERVAL '1 day') RETURNING id").fetch_one(&pool).await.unwrap();
+        sqlx::query("INSERT INTO twitch_clips_social_media (clip_id, clip_url, streamer_login, retention_until) VALUES ('future', 'https://clips.test/future', 'nani', NOW() + INTERVAL '5 days')").execute(&pool).await.unwrap();
 
         let now = chrono::Utc::now().to_rfc3339();
         let expired = iter_expired_clips_for_retention(&pool, &now).await;

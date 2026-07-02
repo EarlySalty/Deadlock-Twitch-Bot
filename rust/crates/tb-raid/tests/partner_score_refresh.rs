@@ -195,7 +195,10 @@ async fn refresh_all_schreibt_live_und_offline_partner() {
     }
 
     // Live-Partner: ein erfolgreicher Raid heute, einer vor 2 Tagen → today=1, total=2.
-    for ts in [now - chrono::Duration::hours(2), now - chrono::Duration::days(2)] {
+    for ts in [
+        now - chrono::Duration::hours(2),
+        now - chrono::Duration::days(2),
+    ] {
         sqlx::query("INSERT INTO twitch_raid_history (from_broadcaster_id, to_broadcaster_id, executed_at, success) VALUES ('someone', 'uid_live', $1, TRUE)")
             .bind(ts)
             .execute(&pool)
@@ -219,7 +222,10 @@ async fn refresh_all_schreibt_live_und_offline_partner() {
     assert_eq!(is_live, 1);
     assert_eq!(today, 1, "ein Raid heute (Berlin-Datum)");
     assert_eq!(uptime, 3600);
-    assert!((dur - 0.5).abs() < 1e-9, "duration_score=0.5 bei halber avg-Zeit");
+    assert!(
+        (dur - 0.5).abs() < 1e-9,
+        "duration_score=0.5 bei halber avg-Zeit"
+    );
     assert!(final_score > 0.0, "final_score berechnet (nicht 0)");
     assert_eq!(last_computed, "2026-06-21T12:00:00+00:00");
 
@@ -234,7 +240,10 @@ async fn refresh_all_schreibt_live_und_offline_partner() {
     assert_eq!(off_today, 0);
     // Offline neuer Partner: fairness(0,0,0,0)=0.75, base=0.5875, *1.25 new-mult.
     let expected_final = ((0.5875_f64 * 1.25) * 1e6).round() / 1e6;
-    assert!((off_final - expected_final).abs() < 1e-6, "offline final_score Formel");
+    assert!(
+        (off_final - expected_final).abs() < 1e-6,
+        "offline final_score Formel"
+    );
 
     // last_computed_at schreitet beim zweiten Refresh voran.
     let later = now + chrono::Duration::minutes(5);
@@ -245,6 +254,9 @@ async fn refresh_all_schreibt_live_und_offline_partner() {
     .fetch_one(&pool)
     .await
     .unwrap();
-    assert_eq!(lc2, "2026-06-21T12:05:00+00:00", "last_computed_at advances");
+    assert_eq!(
+        lc2, "2026-06-21T12:05:00+00:00",
+        "last_computed_at advances"
+    );
     assert_ne!(lc2, last_computed);
 }

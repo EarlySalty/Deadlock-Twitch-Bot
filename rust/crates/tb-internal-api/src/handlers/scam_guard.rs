@@ -44,13 +44,12 @@ pub async fn scam_revoke_handler(
         return Err(ApiError::unauthorized());
     }
     let Some(port) = port.0 else {
+        tracing::error!("scam-guard revoke ohne verdrahteten Port aufgerufen");
         return Err(ApiError::unavailable());
     };
     if body.verdict_id <= 0 {
-        return Err(ApiError::bad_request_with_body(serde_json::json!({
-            "ok": false,
-            "error": "verdictId must be a positive integer"
-        })));
+        tracing::warn!("scam-guard revoke mit ungueltiger verdict_id abgelehnt");
+        return Err(ApiError::bad_request("verdict_id must be a positive integer"));
     }
 
     let result = port.revoke(body.verdict_id).await;
@@ -82,13 +81,12 @@ pub async fn scam_enforce_handler(
         return Err(ApiError::unauthorized());
     }
     let Some(port) = port.0 else {
+        tracing::error!("scam-guard enforce ohne verdrahteten Port aufgerufen");
         return Err(ApiError::unavailable());
     };
     if body.verdict_id <= 0 {
-        return Err(ApiError::bad_request_with_body(serde_json::json!({
-            "ok": false,
-            "error": "verdictId must be a positive integer"
-        })));
+        tracing::warn!("scam-guard enforce mit ungueltiger verdict_id abgelehnt");
+        return Err(ApiError::bad_request("verdict_id must be a positive integer"));
     }
 
     let result = port.enforce(body.verdict_id).await;

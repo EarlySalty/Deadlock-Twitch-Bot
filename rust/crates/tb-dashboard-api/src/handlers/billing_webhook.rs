@@ -10,8 +10,8 @@
 //!    Verarbeitung.
 //! 2. Event-JSON parsen, idempotent gegen `stripe_event_id` deduplizieren
 //!    ([`record_event_once`]); bei Replay kein erneutes Anwenden.
-//! 3. Subscription-Lifecycle-Events auf `twitch_billing_subscriptions` +
-//!    `streamer_plans` anwenden ([`apply_event`]).
+//! 3. Subscription-Lifecycle-Events auf `twitch_billing_subscriptions` anwenden
+//!    ([`apply_event`]); `streamer_plans` danach best-effort syncen.
 //! 4. 200 bei Erfolg (auch bei ignorierten Event-Typen — Stripe darf nicht
 //!    retrien), 400 nur bei Signatur-/Parse-Fehler.
 //!
@@ -31,7 +31,9 @@ use serde_json::{json, Value};
 use sqlx::PgPool;
 
 use tb_analytics::affiliate_commission::{process_commission, InvoicePayment};
-use tb_analytics::stripe::webhook_apply::{apply_event, record_event_once};
+use tb_analytics::stripe::webhook_apply::{
+    apply_event, record_event_once, streamer_plan_sync_from_event, sync_plan_to_streamer_plans,
+};
 use tb_analytics::stripe::{verify_signature, StripeClient, DEFAULT_TOLERANCE_SECONDS};
 
 /// Laufzeit-Konfiguration des Webhooks (als Extension injiziert).
@@ -215,6 +217,26 @@ async fn process_event(
     };
 
     tx.commit().await?;
+
+    // Plan-Sync NACH dem Commit: Dedup + Subscription-State bleiben atomar und
+    // ein lokaler streamer_plans-Fehler erzeugt keinen Stripe-Retry.
+    if is_new {
+        if let Some(sync) =
+            streamer_plan_sync_from_event(event_type, event_object, retrieved_subscription.as_ref())
+        {
+            if let Err(error) = sync_plan_to_streamer_plans(pool, &sync).await {
+                tracing::warn!(
+                    %error,
+                    event_id,
+                    event_type,
+                    customer_reference = %sync.customer_reference,
+                    plan_id = %sync.plan_id,
+                    status = %sync.status,
+                    "billing webhook streamer plan sync failed"
+                );
+            }
+        }
+    }
 
     // P2.127/P2.128: Partner-Raid-Score-Refresh NACH dem Commit (Python
     // fire-and-forget). Nur für frische Events; der betroffene Login wird aus

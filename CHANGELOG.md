@@ -1,3 +1,11 @@
+## #319 — Etliche Rand-Unterschiede zwischen alter und neuer Bot-Version aufgeräumt
+
+**Ausgangslage:** Beim systematischen Vergleich der alten Python- mit der neuen Rust-Version sind viele kleine Abweichungen aufgefallen — Stellen, an denen die neue Version in Randfällen anders reagierte als gewollt: verschluckte Datenbankfehler, falsch gerundete Werte, fehlende Chat-Befehle und ein paar zu lockere Zugriffsprüfungen.
+
+**Änderung:** Die eindeutigen Bugs davon haben wir behoben — u.a. die AI-Engagement-Befehle (an/aus/status) wieder verfügbar gemacht, die Neu-Autorisierungs-Sperre für privilegierte Befehle nachgezogen, fehlerhafte Webhook-Antworten korrigiert und mehrere Stellen, die Fehler still verschluckten, zum Melden gebracht. Unklare oder bewusst gewollte Abweichungen haben wir stehen lassen.
+
+**Verhalten jetzt:** In diesen Randfällen verhält sich die neue Version wieder wie die alte.
+
 ## #318 — MiniMax-Ledger wird getrennt gegen SQLite geprüft
 
 **Ausgangslage:** Das gemeinsame MiniMax-Verbrauchsledger nutzt eine SQLite-Datei, während die übrige SQLx-Prüfung gegen Postgres läuft. Seine Abfragen waren noch reine Laufzeit-SQL und durften nicht in den Postgres-Prüflauf geraten.

@@ -112,6 +112,166 @@ pub fn promo_invite_fallback(configured: Option<&str>) -> String {
         .unwrap_or(DEFAULT_PROMO_DISCORD_INVITE)
         .to_string()
 }
+
+fn render_promo_template(template: &str, invite: &str) -> Option<String> {
+    let chars: Vec<char> = template.chars().collect();
+    let mut out = String::new();
+    let mut i = 0;
+    while i < chars.len() {
+        match chars[i] {
+            '{' if i + 1 < chars.len() && chars[i + 1] == '{' => {
+                out.push('{');
+                i += 2;
+            }
+            '{' => {
+                let mut j = i + 1;
+                let mut field = String::new();
+                while j < chars.len() && chars[j] != '}' {
+                    field.push(chars[j]);
+                    j += 1;
+                }
+                if j >= chars.len() {
+                    return None;
+                }
+                out.push_str(&render_promo_field(&field, invite)?);
+                i = j + 1;
+            }
+            '}' if i + 1 < chars.len() && chars[i + 1] == '}' => {
+                out.push('}');
+                i += 2;
+            }
+            '}' => return None,
+            c => {
+                out.push(c);
+                i += 1;
+            }
+        }
+    }
+    Some(out)
+}
+
+fn render_promo_field(field: &str, invite: &str) -> Option<String> {
+    let field = field.trim();
+    if field.is_empty() {
+        return None;
+    }
+    let name_end = field
+        .find(['!', ':', '.', '['])
+        .unwrap_or(field.len());
+    if field[..name_end].trim() != "invite" {
+        return None;
+    }
+    let mut rest = &field[name_end..];
+    if rest.starts_with('.') || rest.starts_with('[') {
+        return None;
+    }
+    if let Some(after_bang) = rest.strip_prefix('!') {
+        let conversion_end = after_bang.find(':').unwrap_or(after_bang.len());
+        if after_bang[..conversion_end].trim() != "s" {
+            return None;
+        }
+        rest = &after_bang[conversion_end..];
+    }
+    let spec = rest.strip_prefix(':').unwrap_or(rest);
+    if spec.contains(['{', '}']) {
+        return None;
+    }
+    format_promo_invite(invite, spec)
+}
+
+fn format_promo_invite(invite: &str, spec: &str) -> Option<String> {
+    if spec.is_empty() {
+        return Some(invite.to_string());
+    }
+
+    let chars: Vec<char> = spec.chars().collect();
+    let mut idx = 0;
+    let mut fill = ' ';
+    let mut align = '<';
+    if chars.len() >= 2 && matches!(chars[1], '<' | '>' | '^') {
+        fill = chars[0];
+        align = chars[1];
+        idx = 2;
+    } else if chars.first().is_some_and(|c| matches!(c, '<' | '>' | '^')) {
+        align = chars[0];
+        idx = 1;
+    }
+
+    let width_start = idx;
+    while idx < chars.len() && chars[idx].is_ascii_digit() {
+        idx += 1;
+    }
+    let width = if idx > width_start {
+        Some(
+            chars[width_start..idx]
+                .iter()
+                .collect::<String>()
+                .parse::<usize>()
+                .ok()?,
+        )
+    } else {
+        None
+    };
+
+    let precision = if idx < chars.len() && chars[idx] == '.' {
+        idx += 1;
+        let precision_start = idx;
+        while idx < chars.len() && chars[idx].is_ascii_digit() {
+            idx += 1;
+        }
+        if idx == precision_start {
+            return None;
+        }
+        Some(
+            chars[precision_start..idx]
+                .iter()
+                .collect::<String>()
+                .parse::<usize>()
+                .ok()?,
+        )
+    } else {
+        None
+    };
+
+    if idx < chars.len() {
+        if idx + 1 != chars.len() || chars[idx] != 's' {
+            return None;
+        }
+        idx += 1;
+    }
+    if idx != chars.len() {
+        return None;
+    }
+
+    let mut value: String = match precision {
+        Some(max) => invite.chars().take(max).collect(),
+        None => invite.to_string(),
+    };
+    let len = value.chars().count();
+    if let Some(width) = width.filter(|w| *w > len) {
+        let pad = width - len;
+        match align {
+            '<' => value.extend(std::iter::repeat_n(fill, pad)),
+            '>' => {
+                let mut padded = String::new();
+                padded.extend(std::iter::repeat_n(fill, pad));
+                padded.push_str(&value);
+                value = padded;
+            }
+            '^' => {
+                let left = pad / 2;
+                let right = pad - left;
+                let mut padded = String::new();
+                padded.extend(std::iter::repeat_n(fill, left));
+                padded.push_str(&value);
+                padded.extend(std::iter::repeat_n(fill, right));
+                value = padded;
+            }
+            _ => return None,
+        }
+    }
+    Some(value)
+}
 /// Stammgast: mind. 10 Messages in 30 Tagen (targeted_promo.py:33–34).
 const STAMMGAST_MIN_MESSAGES: i64 = 10;
 const STAMMGAST_DAYS: i64 = 30;
@@ -1111,7 +1271,8 @@ impl PromoEngine {
             state.last_promo_text = Some(template.to_string());
         }
 
-        template.replace("{invite}", invite)
+        render_promo_template(template, invite)
+            .unwrap_or_else(|| template.replace("{invite}", invite))
     }
 
     /// Globalen Promo-Override laden (promos.py `_load_global_promo_message` +
@@ -1131,7 +1292,7 @@ impl PromoEngine {
         if message.is_empty() {
             return None;
         }
-        Some(message.replace("{invite}", invite))
+        render_promo_template(message, invite)
     }
 
     /// Streamer-spezifische Promo laden (promos.py:945, streamer_plans.promo_message).
@@ -1147,8 +1308,11 @@ impl PromoEngine {
         .flatten();
 
         if let Some(Some(msg)) = row {
-            if !msg.trim().is_empty() {
-                return Some(msg.replace("{invite}", invite));
+            let message = msg.trim();
+            if !message.is_empty()
+                && tb_analytics::promo_mode::validate_streamer_promo_message(message).is_empty()
+            {
+                return render_promo_template(message, invite);
             }
         }
         None
@@ -1907,7 +2071,7 @@ impl PromoEngine {
             // chatter_id aus DB (targeted_promo.py: SELECT chatter_id FROM twitch_session_chatters).
             // twitch_session_chatters.chatter_id = text (prod schema)
             let row = sqlx::query_scalar!(
-	                "SELECT chatter_id AS \"chatter_id!\" FROM twitch_session_chatters
+                "SELECT chatter_id AS \"chatter_id!\" FROM twitch_session_chatters
 	                  WHERE LOWER(chatter_login) = LOWER($1)
 	                    AND LOWER(streamer_login) = LOWER($2)
 	                    AND chatter_id IS NOT NULL
@@ -2291,6 +2455,30 @@ mod tests {
             promo_invite_fallback(Some(" https://discord.gg/custom ")),
             "https://discord.gg/custom"
         );
+    }
+
+    #[test]
+    fn promo_template_renderer_unterstuetzt_python_invite_formen() {
+        assert_eq!(
+            render_promo_template("Join {invite!s}", "discord").as_deref(),
+            Some("Join discord")
+        );
+        assert_eq!(
+            render_promo_template("Join {{ {invite:.4} }}", "discord").as_deref(),
+            Some("Join { disc }")
+        );
+        assert_eq!(
+            render_promo_template("Join {invite:*>9s}", "discord").as_deref(),
+            Some("Join **discord")
+        );
+    }
+
+    #[test]
+    fn promo_template_renderer_invalid_faellt_auf_none() {
+        assert!(render_promo_template("Join {streamer}", "discord").is_none());
+        assert!(render_promo_template("Join {invite!r}", "discord").is_none());
+        assert!(render_promo_template("Join {invite", "discord").is_none());
+        assert!(render_promo_template("Join }", "discord").is_none());
     }
 
     // -----------------------------------------------------------------------
@@ -3623,6 +3811,25 @@ mod db_tests {
             text.as_deref(),
             Some("Komm zu uns: http://example.com/invite")
         );
+    }
+
+    #[tokio::test]
+    async fn streamer_promo_message_invalid_faellt_auf_none() {
+        let pool = pool_or_skip!("promo_streamer_msg_invalid");
+        let engine = make_engine(pool.clone());
+
+        sqlx::query(
+            "INSERT INTO streamer_plans (twitch_user_id, twitch_login, promo_message)
+             VALUES ('u4', 'invalidkanal', 'Schau mal vorbei')",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+
+        let text = engine
+            .load_streamer_promo_message("invalidkanal", "http://example.com/invite")
+            .await;
+        assert!(text.is_none(), "ungueltiger Text muss Fallback erlauben");
     }
 
     #[tokio::test]

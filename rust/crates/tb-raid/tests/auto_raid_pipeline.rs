@@ -8,20 +8,20 @@ use std::sync::{Arc, Mutex};
 
 use chrono::{Duration, Utc};
 use serde_json::json;
-use sqlx::PgPool;
 use sqlx::postgres::{PgConnectOptions, PgPoolOptions};
-use tb_crypto::{FieldCipher, KID, aad};
+use sqlx::PgPool;
+use tb_crypto::{aad, FieldCipher, KID};
 use tb_observability::{
     AnalyticsObservabilityService, EventSink, MillisSource, ObservabilityEvent,
     RaidObservabilityService,
 };
 use tb_raid::{
     ArrivalReadiness, AutoRaidPipeline, AutoRaidPipelineOutcome, AutoRaidRequest,
-    FOLLOWERS_UNKNOWN, FairnessCandidate, FallbackStreamSource, FollowerEnricher,
-    FollowersEnrichmentObservation, OnlineCandidate, PendingRaidStore, RaidApi, RaidAuthStore,
-    RaidBlacklistStore, RaidExecutor, RaidHistoryStore, RaidTokenRefresher, RefreshError,
-    ScoreStore, StreamData, StrikesStore, TokenBlacklistStore, TokenOwnerInfo, TokenProvider,
-    TokenResponse, TwitchTokenClient,
+    FairnessCandidate, FallbackStreamSource, FollowerEnricher, FollowersEnrichmentObservation,
+    OnlineCandidate, PendingRaidStore, RaidApi, RaidAuthStore, RaidBlacklistStore, RaidExecutor,
+    RaidHistoryStore, RaidTokenRefresher, RefreshError, ScoreStore, StreamData, StrikesStore,
+    TokenBlacklistStore, TokenOwnerInfo, TokenProvider, TokenResponse, TwitchTokenClient,
+    FOLLOWERS_UNKNOWN,
 };
 
 const TEST_KEY_HEX: &str = "0f0e0d0c0b0a09080706050403020100ffeeddccbbaa99887766554433221100";
@@ -147,6 +147,17 @@ async fn seed_source_token(pool: &PgPool, user_id: &str) {
 }
 
 async fn seed_score(pool: &PgPool, user_id: &str, final_score: f64, is_live: i32) {
+    let last_computed_at = Utc::now().to_rfc3339();
+    seed_score_at(pool, user_id, final_score, is_live, &last_computed_at).await;
+}
+
+async fn seed_score_at(
+    pool: &PgPool,
+    user_id: &str,
+    final_score: f64,
+    is_live: i32,
+    last_computed_at: &str,
+) {
     sqlx::query(
         "INSERT INTO twitch_partner_raid_scores
             (twitch_user_id, twitch_login, is_live, final_score, last_computed_at)
@@ -155,7 +166,7 @@ async fn seed_score(pool: &PgPool, user_id: &str, final_score: f64, is_live: i32
     .bind(user_id)
     .bind(is_live)
     .bind(final_score)
-    .bind(Utc::now().to_rfc3339())
+    .bind(last_computed_at)
     .execute(pool)
     .await
     .unwrap();
@@ -348,7 +359,12 @@ fn build_with_enricher(
         errors_by_target,
         calls: Mutex::new(Vec::new()),
     });
-    let executor = RaidExecutor::new(api.clone(), provider, RaidHistoryStore::new(pool.clone()));
+    let executor = RaidExecutor::new(
+        api.clone(),
+        provider,
+        RaidHistoryStore::new(pool.clone()),
+        RaidBlacklistStore::new(pool.clone()),
+    );
     let pending = Arc::new(Mutex::new(PendingRaidStore::new()));
     let readiness = Arc::new(StubReadiness {
         calls: Mutex::new(Vec::new()),
@@ -385,6 +401,7 @@ fn request(partners: Vec<OnlineCandidate>) -> AutoRaidRequest {
         category_id: Some("cat-deadlock".to_string()),
         offline_trigger_ts: Some(1000.0),
         reason: "auto_raid_on_offline".to_string(),
+        respect_soft_raid_blacklist: true,
     }
 }
 
@@ -433,6 +450,136 @@ async fn partner_pfad_startet_raid_und_registriert_pending() {
     assert_eq!(pending.registered_viewer_count, 42);
     assert_eq!(pending.offline_trigger_ts, Some(1000.0));
     assert_eq!(pending.channel_raid_ready, Some(true));
+}
+
+#[tokio::test]
+async fn manueller_raid_ignoriert_weiche_raid_blacklist() {
+    let pool = pool_or_skip!("t6w_pipe_manual_soft_blacklist");
+    seed_source_token(&pool, "100").await;
+    seed_score(&pool, "200", 0.9, 1).await;
+    sqlx::query(
+        "INSERT INTO twitch_raid_blacklist (target_login, target_id, reason, added_at) \
+         VALUES ('ziel', '200', 'soft', 'now')",
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
+    let h = build(&pool, HashMap::new(), vec![]);
+    let mut req = request(vec![partner("200", "ziel")]);
+    req.reason = "manual_chat_command".to_string();
+    req.respect_soft_raid_blacklist = false;
+
+    let outcome = h.pipeline.run(&req).await;
+
+    assert_eq!(
+        outcome,
+        AutoRaidPipelineOutcome::Started {
+            target_login: "ziel".to_string(),
+            is_partner_raid: true,
+        }
+    );
+    assert_eq!(h.api.calls.lock().unwrap().clone(), vec!["200"]);
+}
+
+#[tokio::test]
+async fn manueller_raid_schliesst_global_ban_vor_auswahl_aus() {
+    let pool = pool_or_skip!("t6w_pipe_manual_globalban");
+    seed_source_token(&pool, "100").await;
+    seed_score(&pool, "200", 0.9, 1).await;
+    sqlx::query(
+        "INSERT INTO twitch_chatter_global_ban (chatter_login, chatter_id) \
+         VALUES ('anderer_login', '200')",
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
+    let h = build(&pool, HashMap::new(), vec![]);
+    let mut req = request(vec![partner("200", "ziel")]);
+    req.reason = "manual_chat_command".to_string();
+    req.respect_soft_raid_blacklist = false;
+
+    let outcome = h.pipeline.run(&req).await;
+
+    assert_eq!(outcome, AutoRaidPipelineOutcome::NoTarget);
+    assert!(h.api.calls.lock().unwrap().is_empty());
+}
+
+#[tokio::test]
+async fn pending_enthaelt_eingefrorenen_partner_score_snapshot() {
+    let pool = pool_or_skip!("t6w_pipe_snapshot");
+    seed_source_token(&pool, "100").await;
+    seed_score_at(&pool, "200", 0.91, 1, "2026-06-30T10:00:00+00:00").await;
+    let h = build(&pool, HashMap::new(), vec![]);
+
+    let outcome = h.pipeline.run(&request(vec![partner("200", "ziel")])).await;
+    assert!(matches!(outcome, AutoRaidPipelineOutcome::Started { .. }));
+
+    let store = h.pending.lock().unwrap();
+    let pending = store.get("200", Some("quelle")).unwrap();
+    let snapshot = pending.target_stream_data.as_ref().expect("snapshot");
+    assert_eq!(snapshot["user_id"], json!("200"));
+    assert_eq!(snapshot["user_login"], json!("ziel"));
+    assert_eq!(snapshot["_partner_score"]["final_score"], json!(0.91));
+    assert_eq!(
+        snapshot["_partner_score"]["last_computed_at"],
+        json!("2026-06-30T10:00:00+00:00")
+    );
+}
+
+#[tokio::test]
+async fn score_store_fehler_blockiert_nicht_und_nutzt_fallback() {
+    let pool = pool_or_skip!("t6w_pipe_score_error_fallback");
+    seed_source_token(&pool, "100").await;
+    sqlx::query("DROP TABLE twitch_partner_raid_scores")
+        .execute(&pool)
+        .await
+        .unwrap();
+    let h = build(&pool, HashMap::new(), vec![fairness("300", "fallback")]);
+
+    let outcome = h
+        .pipeline
+        .run(&request(vec![partner("200", "partner")]))
+        .await;
+
+    assert_eq!(
+        outcome,
+        AutoRaidPipelineOutcome::Started {
+            target_login: "fallback".to_string(),
+            is_partner_raid: false,
+        }
+    );
+    assert_eq!(h.api.calls.lock().unwrap().clone(), vec!["300"]);
+}
+
+#[tokio::test]
+async fn history_db_fehler_nach_api_erfolg_registriert_pending() {
+    let pool = pool_or_skip!("t6w_pipe_history_error_pending");
+    seed_source_token(&pool, "100").await;
+    seed_score(&pool, "200", 0.9, 1).await;
+    let h = build(&pool, HashMap::new(), vec![]);
+    sqlx::query("DROP TABLE twitch_raid_history")
+        .execute(&pool)
+        .await
+        .unwrap();
+
+    let outcome = h.pipeline.run(&request(vec![partner("200", "ziel")])).await;
+
+    assert_eq!(
+        outcome,
+        AutoRaidPipelineOutcome::Started {
+            target_login: "ziel".to_string(),
+            is_partner_raid: true,
+        }
+    );
+    assert_eq!(h.api.calls.lock().unwrap().clone(), vec!["200"]);
+    assert!(
+        h.pending
+            .lock()
+            .unwrap()
+            .get("200", Some("quelle"))
+            .is_some(),
+        "Pending wird trotz History-Fehler registriert"
+    );
 }
 
 #[tokio::test]
@@ -639,13 +786,12 @@ async fn register_pending_spielt_orphan_chat_notification_nach() {
     // … und genau einmal nachgespielt.
     assert_eq!(replay.replayed.lock().unwrap().clone(), vec![orphan]);
     // Pending ist registriert (Store-Schritt lief vor dem Replay).
-    assert!(
-        h.pending
-            .lock()
-            .unwrap()
-            .get("200", Some("quelle"))
-            .is_some()
-    );
+    assert!(h
+        .pending
+        .lock()
+        .unwrap()
+        .get("200", Some("quelle"))
+        .is_some());
 }
 
 /// P2.30: Ohne passenden Orphan wird nichts nachgespielt (Replay-Liste leer).

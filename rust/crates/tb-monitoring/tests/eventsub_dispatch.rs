@@ -1,8 +1,8 @@
 //! Hermetische Tests des EventSub-Ingress (Slice 4d): Dispatch-Dedup,
 //! Inbox-Verarbeitung der Core-Typen, Telemetrie-Inserts, Offline-Throttle.
 
-use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::Arc;
 
 use chrono::{Duration, Utc};
 use sqlx::PgPool;
@@ -12,10 +12,10 @@ use tb_monitoring::dispatch::ChatSubscriptionTelemetryHooks;
 use tb_monitoring::poller::source::{ChannelInfo, ChannelInfoSource, SourceError};
 use tb_monitoring::sessions::store::SessionStore;
 use tb_monitoring::{
-    ChatNotificationKind, EventSubDispatcher, EventSubHooks, ExpSessionStore, ExpSessionTracker,
-    GuardStore, HypeTrainPhase, InboxHandler, InboxRuntime, InboxRuntimeHandle, LiveStateStore,
-    MonitoringEventHandler, NoFollowerSource, ProcessingInboxStore, SessionTracker, StreamSnapshot,
-    TelemetryStore, epoch_clock,
+    epoch_clock, ChatNotificationKind, EventSubDispatcher, EventSubHooks, ExpSessionStore,
+    ExpSessionTracker, GuardStore, HandlerError, HypeTrainPhase, InboxHandler, InboxRuntime,
+    InboxRuntimeHandle, LiveStateStore, MonitoringEventHandler, NoFollowerSource,
+    ProcessingInboxStore, SessionTracker, StreamSnapshot, TelemetryStore,
 };
 
 mod support;
@@ -164,6 +164,102 @@ async fn wait_until_empty(store: &ProcessingInboxStore) -> bool {
         tokio::time::sleep(std::time::Duration::from_millis(50)).await;
     }
     false
+}
+
+struct PanicsOnceHandler {
+    calls: AtomicU64,
+}
+
+#[async_trait::async_trait]
+impl InboxHandler for PanicsOnceHandler {
+    async fn handle(
+        &self,
+        _work_type: &str,
+        _payload: &serde_json::Value,
+    ) -> Result<(), HandlerError> {
+        if self.calls.fetch_add(1, Ordering::SeqCst) == 0 {
+            panic!("test handler panic");
+        }
+        Ok(())
+    }
+}
+
+async fn wait_for_retry(
+    store: &ProcessingInboxStore,
+    work_type: &str,
+) -> Option<tb_monitoring::PendingEntry> {
+    for _ in 0..100 {
+        let pending = store.list_pending(10).await.unwrap();
+        if let Some(entry) = pending
+            .into_iter()
+            .find(|entry| entry.work_type == work_type && entry.attempt_count == 1)
+        {
+            return Some(entry);
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+    }
+    None
+}
+
+#[tokio::test]
+async fn inbox_handler_panic_wird_retry_statt_worker_abort() {
+    let pool = pool_or_skip!("t4d_inbox_panic_retry");
+    let store = ProcessingInboxStore::new(pool.clone());
+    let handler = Arc::new(PanicsOnceHandler {
+        calls: AtomicU64::new(0),
+    });
+    let runtime = InboxRuntime::new(store.clone(), handler.clone())
+        .with_clock(Arc::new(|| 100.0))
+        .start();
+
+    runtime
+        .enqueue("panic.once", &serde_json::json!({"n": 1}), Some("panic-1"))
+        .await
+        .unwrap();
+    let retry = wait_for_retry(&store, "panic.once")
+        .await
+        .expect("panic job should be marked retry");
+    assert_eq!(retry.attempt_count, 1);
+    assert!(retry
+        .last_error
+        .as_deref()
+        .unwrap_or_default()
+        .contains("panicked"));
+
+    runtime
+        .enqueue("after.panic", &serde_json::json!({"n": 2}), Some("ok-1"))
+        .await
+        .unwrap();
+    for _ in 0..100 {
+        let pending = store.list_pending(10).await.unwrap();
+        if pending.len() == 1 && pending[0].work_type == "panic.once" {
+            runtime.shutdown().await;
+            assert_eq!(handler.calls.load(Ordering::SeqCst), 2);
+            return;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+    }
+    runtime.shutdown().await;
+    panic!("worker did not process the post-panic job");
+}
+
+#[tokio::test]
+async fn core_notification_ohne_broadcaster_id_wird_fail_closed_abgelehnt() {
+    let pool = pool_or_skip!("t4d_core_missing_broadcaster");
+    let hooks = Arc::new(RecordingHooks::default());
+    let (dispatcher, runtime, store) = build_stack(&pool, hooks);
+
+    let malformed = serde_json::json!({
+        "subscription": {"type": "stream.online"},
+        "event": {"broadcaster_user_login": "drag"}
+    });
+    let err = dispatcher
+        .dispatch("stream.online", Some("missing-broadcaster-1"), &malformed)
+        .await
+        .expect_err("Core-Delivery ohne broadcaster_id muss abgelehnt werden");
+    assert!(err.to_string().contains("missing broadcaster_id"), "{err}");
+    assert!(store.list_pending(10).await.unwrap().is_empty());
+    runtime.shutdown().await;
 }
 
 #[tokio::test]
@@ -585,10 +681,50 @@ async fn monitoring_handler_gibt_unknown_work_type_als_fehler_zurueck() {
         .handle("future.eventsub.type", &serde_json::json!({"event": {}}))
         .await
         .expect_err("unbekannter Work-Type muss den Inbox-Retry-Pfad triggern");
-    assert!(
-        err.to_string()
-            .contains("unknown eventsub processing work_type")
+    assert!(err
+        .to_string()
+        .contains("unknown eventsub processing work_type"));
+}
+
+#[tokio::test]
+async fn monitoring_handler_verarbeitet_stream_online_followups_work_type() {
+    let pool = pool_or_skip!("t4d_stream_online_followups");
+    let guard = GuardStore::new(pool.clone());
+    let live_state = LiveStateStore::new(pool.clone());
+    let tracker = Arc::new(SessionTracker::new(
+        SessionStore::new(pool.clone()),
+        live_state.clone(),
+        ExpSessionTracker::new(ExpSessionStore::new(pool.clone())),
+        Arc::new(NoFollowerSource),
+        "Deadlock",
+    ));
+    let hooks = Arc::new(RecordingHooks::default());
+    let handler = MonitoringEventHandler::new(
+        guard,
+        live_state,
+        tracker,
+        TelemetryStore::new(pool),
+        hooks.clone(),
+        None,
+        Arc::new(epoch_clock),
     );
+
+    handler
+        .handle(
+            "stream.online.followups",
+            &serde_json::json!({
+                "broadcaster_user_id": "42",
+                "broadcaster_login": "Drag",
+                "login_value": "drag",
+                "stream_id": "s-2",
+                "message_id": "m-followups-1"
+            }),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(hooks.went_live.load(Ordering::SeqCst), 1);
+    assert_eq!(hooks.score_refresh.load(Ordering::SeqCst), 1);
 }
 
 #[tokio::test]

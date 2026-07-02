@@ -5,12 +5,13 @@
 //!   serviert die dashboard_v2-SPA-Shell nativ statt via Python-Fallback.
 
 use axum::{
-    extract::State,
+    extract::{Query, State},
     http::{header, StatusCode},
     response::{IntoResponse, Response},
     Json,
 };
 use chrono::{Datelike, Utc};
+use serde::Deserialize;
 use serde_json::json;
 use sqlx::PgPool;
 
@@ -158,6 +159,149 @@ pub async fn portal_handler(
     .into_response()
 }
 
+#[derive(Debug, Deserialize, Default)]
+pub struct CommissionsQuery {
+    #[serde(default)]
+    pub page: Option<i64>,
+    #[serde(default)]
+    pub page_size: Option<i64>,
+}
+
+pub async fn commissions_handler(
+    auth: DashboardAuthLevel,
+    State(pool): State<PgPool>,
+    Query(query): Query<CommissionsQuery>,
+) -> impl IntoResponse {
+    let Some(login) = authenticated_login(&auth) else {
+        return (
+            StatusCode::UNAUTHORIZED,
+            Json(json!({"error":"unauthorized"})),
+        )
+            .into_response();
+    };
+    let page = query.page.unwrap_or(1).max(1);
+    let page_size = query.page_size.unwrap_or(25).clamp(1, 100);
+    let offset = (page - 1) * page_size;
+
+    let total = match sqlx::query_scalar::<_, i64>(
+        "SELECT COUNT(*)::bigint FROM affiliate_commissions \
+         WHERE LOWER(affiliate_twitch_login) = $1",
+    )
+    .bind(&login)
+    .fetch_one(&pool)
+    .await
+    {
+        Ok(total) => total,
+        Err(error) => {
+            tracing::error!(%error, "affiliate commissions count failed");
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(json!({"error":"db"})),
+            )
+                .into_response();
+        }
+    };
+
+    type CommissionRow = (
+        i64,
+        String,
+        String,
+        Option<String>,
+        Option<String>,
+        Option<String>,
+        i64,
+        i64,
+        String,
+        String,
+        Option<String>,
+        Option<String>,
+        String,
+        Option<String>,
+        Option<String>,
+    );
+    let rows = match sqlx::query_as::<_, CommissionRow>(
+        r#"
+        SELECT id::bigint, affiliate_twitch_login, streamer_login,
+               stripe_event_id, stripe_invoice_id, stripe_customer_id,
+               COALESCE(brutto_cents, 0)::bigint,
+               COALESCE(commission_cents, 0)::bigint,
+               COALESCE(currency, 'eur'),
+               COALESCE(status, 'pending'),
+               period_start, period_end, created_at, transferred_at, error_message
+        FROM affiliate_commissions
+        WHERE LOWER(affiliate_twitch_login) = $1
+        ORDER BY created_at DESC, id DESC
+        LIMIT $2 OFFSET $3
+        "#,
+    )
+    .bind(&login)
+    .bind(page_size)
+    .bind(offset)
+    .fetch_all(&pool)
+    .await
+    {
+        Ok(rows) => rows,
+        Err(error) => {
+            tracing::error!(%error, "affiliate commissions lookup failed");
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(json!({"error":"db"})),
+            )
+                .into_response();
+        }
+    };
+
+    let items: Vec<_> = rows
+        .into_iter()
+        .map(
+            |(
+                id,
+                affiliate_twitch_login,
+                streamer_login,
+                stripe_event_id,
+                stripe_invoice_id,
+                stripe_customer_id,
+                brutto_cents,
+                commission_cents,
+                currency,
+                status,
+                period_start,
+                period_end,
+                created_at,
+                transferred_at,
+                error_message,
+            )| {
+                json!({
+                    "id": id,
+                    "affiliate_twitch_login": affiliate_twitch_login,
+                    "streamer_login": streamer_login,
+                    "stripe_event_id": stripe_event_id,
+                    "stripe_invoice_id": stripe_invoice_id,
+                    "stripe_customer_id": stripe_customer_id,
+                    "brutto_cents": brutto_cents,
+                    "commission_cents": commission_cents,
+                    "amount": commission_cents as f64 / 100.0,
+                    "currency": currency,
+                    "status": status,
+                    "period_start": period_start,
+                    "period_end": period_end,
+                    "created_at": created_at,
+                    "transferred_at": transferred_at,
+                    "error_message": error_message,
+                })
+            },
+        )
+        .collect();
+
+    Json(json!({
+        "page": page,
+        "page_size": page_size,
+        "total": total,
+        "commissions": items,
+    }))
+    .into_response()
+}
+
 /// `GET /twitch/affiliate/portal` (P1.26) — serviert die Portal-HTML-Seite
 /// (dashboard_v2-SPA-Shell) nativ. Die JSON-API bleibt unter
 /// `/twitch/api/v2/affiliate/portal`.
@@ -243,7 +387,7 @@ mod tests {
         for ddl in [
             "CREATE TABLE affiliate_accounts (twitch_login TEXT PRIMARY KEY, display_name TEXT, is_active INTEGER)",
             "CREATE TABLE affiliate_streamer_claims (affiliate_twitch_login TEXT, claimed_streamer_login TEXT, claimed_at TEXT)",
-            "CREATE TABLE affiliate_commissions (affiliate_twitch_login TEXT, streamer_login TEXT, commission_cents INTEGER, status TEXT, created_at TEXT)",
+            "CREATE TABLE affiliate_commissions (id INTEGER GENERATED ALWAYS AS IDENTITY PRIMARY KEY, affiliate_twitch_login TEXT NOT NULL, streamer_login TEXT NOT NULL, stripe_event_id TEXT, stripe_invoice_id TEXT, stripe_customer_id TEXT, stripe_transfer_id TEXT, brutto_cents INTEGER NOT NULL DEFAULT 0, commission_cents INTEGER NOT NULL, currency TEXT NOT NULL DEFAULT 'eur', status TEXT NOT NULL DEFAULT 'pending', period_start TEXT, period_end TEXT, created_at TEXT NOT NULL, transferred_at TEXT, error_message TEXT)",
             "CREATE TABLE twitch_streamers (twitch_login TEXT, twitch_user_id TEXT, display_name TEXT)",
         ] {
             sqlx::query(ddl).execute(&pool).await.ok()?;
@@ -266,7 +410,7 @@ mod tests {
             .execute(&pool)
             .await
             .unwrap();
-        sqlx::query("INSERT INTO affiliate_commissions VALUES ('nani','kunde',300,'pending','2099-01-01T00:00:00+00:00')")
+        sqlx::query("INSERT INTO affiliate_commissions (affiliate_twitch_login, streamer_login, stripe_event_id, brutto_cents, commission_cents, status, created_at) VALUES ('nani','kunde','evt_portal',1000,300,'pending','2099-01-01T00:00:00+00:00')")
             .execute(&pool)
             .await
             .unwrap();
@@ -287,6 +431,49 @@ mod tests {
         assert_eq!(value["stats"]["total_claims"], 1);
         assert_eq!(value["stats"]["pending_payout"], 3.0);
         assert_eq!(value["recent_claims"][0]["customer_display_name"], "Kunde");
+    }
+
+    #[tokio::test]
+    async fn commissions_route_liefert_page_total_und_sortierung() {
+        let Some(pool) = pool().await else { return };
+        sqlx::query("INSERT INTO affiliate_accounts VALUES ('nani','Nani',1)")
+            .execute(&pool)
+            .await
+            .unwrap();
+        sqlx::query(
+            "INSERT INTO affiliate_commissions \
+             (affiliate_twitch_login, streamer_login, stripe_event_id, brutto_cents, commission_cents, currency, status, created_at) \
+             VALUES \
+             ('nani','a','evt_old',1000,300,'eur','pending','2026-06-01T00:00:00+00:00'), \
+             ('nani','b','evt_new',2000,600,'eur','transferred','2026-06-02T00:00:00+00:00'), \
+             ('other','x','evt_other',500,150,'eur','pending','2026-06-03T00:00:00+00:00')",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+
+        let response = commissions_handler(
+            DashboardAuthLevel::Partner {
+                twitch_login: "nani".into(),
+                twitch_user_id: "1".into(),
+                display_name: "Nani".into(),
+            },
+            State(pool),
+            Query(CommissionsQuery {
+                page: Some(1),
+                page_size: Some(1),
+            }),
+        )
+        .await
+        .into_response();
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+        let value: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(value["page"], 1);
+        assert_eq!(value["page_size"], 1);
+        assert_eq!(value["total"], 2);
+        assert_eq!(value["commissions"][0]["streamer_login"], "b");
+        assert_eq!(value["commissions"][0]["commission_cents"], 600);
     }
 
     // P1.26: Portal-HTML-Seite wird nativ aus dem dist-Verzeichnis serviert.

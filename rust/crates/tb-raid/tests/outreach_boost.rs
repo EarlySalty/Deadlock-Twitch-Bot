@@ -83,7 +83,7 @@ async fn lader_filtert_status_frische_und_verbraucht() {
     insert(&pool, "alt", "sent", 72, false).await; // außerhalb 48h
     insert(&pool, "verbraucht", "sent", 2, true).await;
     insert(&pool, "nur_erkannt", "detected", 2, false).await;
-    insert(&pool, "partner", "queued", 2, false).await;
+    insert(&pool, "partner", "sent", 2, false).await;
     sqlx::query(
         "INSERT INTO twitch_partners (twitch_user_id, twitch_login, status)
          VALUES ('p1', 'partner', 'active')",
@@ -99,10 +99,10 @@ async fn lader_filtert_status_frische_und_verbraucht() {
         .unwrap();
     assert_eq!(
         logins,
-        ["frisch".to_string(), "queued".to_string()]
+        ["frisch".to_string(), "partner".to_string()]
             .into_iter()
             .collect(),
-        "nur frisch+sent/queued+unverbraucht+nicht Partner, Login lowercase"
+        "nur frisch+sent+kontaktiert+unverbraucht, Login lowercase"
     );
 }
 

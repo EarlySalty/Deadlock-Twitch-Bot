@@ -131,6 +131,17 @@ pub trait PollHooks: Send + Sync {
     /// `stream.offline`-Subscription.
     async fn on_stream_went_live(&self, _twitch_user_id: &str, _login: &str) {}
 
+    /// Go-Live mit aktuellem Stream-Kontext. Default bleibt kompatibel zu
+    /// Hooks, die die `stream_id` nicht brauchen.
+    async fn on_stream_went_live_with_stream_id(
+        &self,
+        twitch_user_id: &str,
+        login: &str,
+        _stream_id: Option<&str>,
+    ) {
+        self.on_stream_went_live(twitch_user_id, login).await;
+    }
+
     /// Aktiver Partner ist laut Poller offline gegangen — redundanter
     /// Auto-Raid-Trigger zum EventSub-`stream.offline`-Pfad.
     async fn on_stream_offline_raid(&self, _twitch_user_id: &str, _login: Option<&str>) {}
@@ -186,7 +197,11 @@ impl ReauthReminderPollHooks {
         }
     }
 
-    async fn reminder_key(&self, twitch_user_id: &str) -> Option<ReminderKey> {
+    async fn reminder_key(
+        &self,
+        twitch_user_id: &str,
+        current_stream_id: Option<&str>,
+    ) -> Option<ReminderKey> {
         let twitch_user_id = twitch_user_id.trim();
         if twitch_user_id.is_empty() {
             return None;
@@ -203,7 +218,12 @@ impl ReauthReminderPollHooks {
 
         match row {
             Ok(Some(row)) if row.needs_reauth == Some(true) => {
-                if let Some(stream_id) = row.last_stream_id {
+                let stream_id = current_stream_id
+                    .map(str::trim)
+                    .filter(|s| !s.is_empty())
+                    .map(str::to_string)
+                    .or(row.last_stream_id);
+                if let Some(stream_id) = stream_id {
                     Some(ReminderKey::Stream(format!("stream:{stream_id}")))
                 } else {
                     Some(ReminderKey::Fallback(format!("fallback:{twitch_user_id}")))
@@ -225,11 +245,12 @@ impl ReauthReminderPollHooks {
         let now = Instant::now();
         match key {
             ReminderKey::Stream(key) => {
-                if sent.contains_key(&key) {
-                    false
-                } else {
-                    sent.insert(key, now);
-                    true
+                match sent.entry(key) {
+                    std::collections::hash_map::Entry::Vacant(entry) => {
+                        entry.insert(now);
+                        true
+                    }
+                    std::collections::hash_map::Entry::Occupied(_) => false,
                 }
             }
             ReminderKey::Fallback(key) => {
@@ -244,8 +265,13 @@ impl ReauthReminderPollHooks {
             }
         }
     }
-    async fn maybe_send_reauth_reminder(&self, twitch_user_id: &str, login: &str) {
-        let Some(key) = self.reminder_key(twitch_user_id).await else {
+    async fn maybe_send_reauth_reminder(
+        &self,
+        twitch_user_id: &str,
+        login: &str,
+        stream_id: Option<&str>,
+    ) {
+        let Some(key) = self.reminder_key(twitch_user_id, stream_id).await else {
             return;
         };
         if !self.claim_send(key) {
@@ -286,7 +312,21 @@ enum ReminderKey {
 impl PollHooks for ReauthReminderPollHooks {
     async fn on_stream_went_live(&self, twitch_user_id: &str, login: &str) {
         self.inner.on_stream_went_live(twitch_user_id, login).await;
-        self.maybe_send_reauth_reminder(twitch_user_id, login).await;
+        self.maybe_send_reauth_reminder(twitch_user_id, login, None)
+            .await;
+    }
+
+    async fn on_stream_went_live_with_stream_id(
+        &self,
+        twitch_user_id: &str,
+        login: &str,
+        stream_id: Option<&str>,
+    ) {
+        self.inner
+            .on_stream_went_live_with_stream_id(twitch_user_id, login, stream_id)
+            .await;
+        self.maybe_send_reauth_reminder(twitch_user_id, login, stream_id)
+            .await;
     }
 
     async fn on_stream_offline_raid(&self, twitch_user_id: &str, login: Option<&str>) {
@@ -490,5 +530,43 @@ mod tests {
             ("42".to_string(), REAUTH_REMINDER_TEXT.to_string())
         );
         assert!(REAUTH_REMINDER_TEXT.contains("Twitch-Autorisierung"));
+    }
+
+    #[tokio::test]
+    async fn reauth_reminder_nutzt_aktuellen_stream_id_kontext_vor_db_stand() {
+        let Some(pool) = pool_in_schema("poll_hooks_reauth_current_stream").await else {
+            return;
+        };
+        sqlx::query(
+            "INSERT INTO twitch_raid_auth (twitch_user_id, needs_reauth) VALUES ('42', TRUE)",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+        sqlx::query(
+            "INSERT INTO twitch_live_state (twitch_user_id, last_stream_id) VALUES ('42', 's-1')",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+
+        let chat = Arc::new(RecordingChat::default());
+        let hooks = ReauthReminderPollHooks::new(
+            Arc::new(super::NoopPollHooks),
+            pool.clone(),
+            chat.clone(),
+        );
+        hooks
+            .on_stream_went_live_with_stream_id("42", "drag", Some("s-1"))
+            .await;
+        hooks
+            .on_stream_went_live_with_stream_id("42", "drag", Some("s-1"))
+            .await;
+        hooks
+            .on_stream_went_live_with_stream_id("42", "drag", Some("s-2"))
+            .await;
+
+        let sent = chat.sent.lock().unwrap().clone();
+        assert_eq!(sent.len(), 2);
     }
 }

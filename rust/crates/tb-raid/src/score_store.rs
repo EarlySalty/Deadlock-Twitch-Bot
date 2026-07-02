@@ -211,7 +211,7 @@ impl ScoreStore {
     /// Port von `PartnerRaidScoreService._upsert_scores` in `partner_scores.py`
     /// (INSERT … ON CONFLICT DO UPDATE, Z. 804–853).
     pub async fn upsert(&self, row: &PartnerRaidScoreUpsert) -> Result<(), sqlx::Error> {
-        sqlx::query!(
+        sqlx::query(
             r#"
             INSERT INTO twitch_partner_raid_scores (
                 twitch_user_id,
@@ -265,30 +265,31 @@ impl ScoreStore {
                 internal_received_raids_7d      = EXCLUDED.internal_received_raids_7d,
                 today_received_raids            = EXCLUDED.today_received_raids,
                 last_computed_at                = EXCLUDED.last_computed_at
+            WHERE EXCLUDED.last_computed_at >= twitch_partner_raid_scores.last_computed_at
             "#,
-            &row.twitch_user_id,
-            &row.twitch_login,
-            row.avg_duration_sec,
-            row.time_pattern_score_base,
-            row.received_successful_raids_total,
-            row.is_new_partner_preferred,
-            row.new_partner_multiplier,
-            row.raid_boost_multiplier,
-            row.is_live,
-            row.current_started_at.as_deref(),
-            row.current_uptime_sec,
-            row.duration_score,
-            row.time_pattern_score,
-            row.readiness_score,
-            row.fairness_score,
-            row.base_score,
-            row.final_score,
-            row.internal_sent_raids_30d,
-            row.internal_received_raids_30d,
-            row.internal_received_raids_7d,
-            row.today_received_raids,
-            &row.last_computed_at
         )
+        .bind(&row.twitch_user_id)
+        .bind(&row.twitch_login)
+        .bind(row.avg_duration_sec)
+        .bind(row.time_pattern_score_base)
+        .bind(row.received_successful_raids_total)
+        .bind(row.is_new_partner_preferred)
+        .bind(row.new_partner_multiplier)
+        .bind(row.raid_boost_multiplier)
+        .bind(row.is_live)
+        .bind(row.current_started_at.as_deref())
+        .bind(row.current_uptime_sec)
+        .bind(row.duration_score)
+        .bind(row.time_pattern_score)
+        .bind(row.readiness_score)
+        .bind(row.fairness_score)
+        .bind(row.base_score)
+        .bind(row.final_score)
+        .bind(row.internal_sent_raids_30d)
+        .bind(row.internal_received_raids_30d)
+        .bind(row.internal_received_raids_7d)
+        .bind(row.today_received_raids)
+        .bind(&row.last_computed_at)
         .execute(&self.pool)
         .await?;
         Ok(())
@@ -461,6 +462,33 @@ mod tests {
         assert!((loaded.final_score - 0.9).abs() < 1e-9);
         assert_eq!(loaded.is_live, 0);
         assert_eq!(loaded.current_started_at, None);
+        assert_eq!(loaded.last_computed_at, "2026-06-09T22:00:00+00:00");
+    }
+
+    #[tokio::test]
+    async fn upsert_aelterer_snapshot_ueberschreibt_neueren_nicht() {
+        let pool = setup_db("sc6c_upsert_timestamp_guard").await;
+        let store = ScoreStore::new(pool);
+
+        let newer = PartnerRaidScoreUpsert {
+            twitch_login: "newer_login".to_string(),
+            final_score: 0.9,
+            last_computed_at: "2026-06-09T22:00:00+00:00".to_string(),
+            ..sample_upsert("uid_003")
+        };
+        store.upsert(&newer).await.unwrap();
+
+        let older = PartnerRaidScoreUpsert {
+            twitch_login: "older_login".to_string(),
+            final_score: 0.1,
+            last_computed_at: "2026-06-09T20:00:00+00:00".to_string(),
+            ..sample_upsert("uid_003")
+        };
+        store.upsert(&older).await.unwrap();
+
+        let loaded = store.load("uid_003").await.unwrap().unwrap();
+        assert_eq!(loaded.twitch_login, "newer_login");
+        assert!((loaded.final_score - 0.9).abs() < 1e-9);
         assert_eq!(loaded.last_computed_at, "2026-06-09T22:00:00+00:00");
     }
 

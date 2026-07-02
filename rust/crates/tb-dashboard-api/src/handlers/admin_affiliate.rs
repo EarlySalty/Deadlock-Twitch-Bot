@@ -1,7 +1,7 @@
 //! Admin-Affiliate-Übersichten (Read-Only).
 //!
 //! Port von `bot/analytics/api_admin.py:_api_admin_affiliate_*`. Datenschicht in
-//! [`tb_analytics::admin_affiliate`]. Admin über `AuthLevel::is_privileged`.
+//! [`tb_analytics::admin_affiliate`]. Admin über `DashboardAuthLevel`.
 //!
 //! Status: stats portiert; list/detail/gutschriften folgen als Teil 2+.
 
@@ -16,7 +16,8 @@ use serde_json::json;
 use sqlx::PgPool;
 use tb_analytics::admin_affiliate::{DetailError, ForLoginError, ToggleError};
 use tb_crypto::FieldCipher;
-use tb_http_core::{ApiError, AuthLevel};
+use crate::auth::level::DashboardAuthLevel;
+use tb_http_core::ApiError;
 
 /// Monatsanfang (1. des aktuellen Monats, 00:00 UTC) als ISO-String — Python
 /// `datetime.now(UTC).replace(day=1, hour=0, ...).isoformat()`.
@@ -29,11 +30,11 @@ fn first_of_month_utc_iso() -> String {
 
 /// `GET /twitch/api/admin/affiliates/stats` — Affiliate-Programm-Statistik (Admin).
 pub async fn stats_handler(
-    auth: AuthLevel,
+    auth: DashboardAuthLevel,
     State(pool): State<PgPool>,
 ) -> Result<impl IntoResponse, ApiError> {
-    if !auth.is_privileged() {
-        return Err(ApiError::unauthorized());
+    if let Some(err) = crate::auth::require_admin(&auth) {
+        return Err(err);
     }
     let month_start = first_of_month_utc_iso();
     match tb_analytics::admin_affiliate::load_affiliate_stats(&pool, &month_start).await {
@@ -47,11 +48,11 @@ pub async fn stats_handler(
 
 /// `GET /twitch/api/admin/affiliates` — Affiliate-Liste mit Claims/Provisionen (Admin).
 pub async fn list_handler(
-    auth: AuthLevel,
+    auth: DashboardAuthLevel,
     State(pool): State<PgPool>,
 ) -> Result<impl IntoResponse, ApiError> {
-    if !auth.is_privileged() {
-        return Err(ApiError::unauthorized());
+    if let Some(err) = crate::auth::require_admin(&auth) {
+        return Err(err);
     }
     match tb_analytics::admin_affiliate::load_affiliates_list(&pool).await {
         Ok(v) => Ok(Json(v)),
@@ -64,11 +65,11 @@ pub async fn list_handler(
 
 /// `GET /twitch/api/admin/affiliates/gutschriften` — alle Gutschriften (Admin).
 pub async fn gutschriften_handler(
-    auth: AuthLevel,
+    auth: DashboardAuthLevel,
     State(pool): State<PgPool>,
 ) -> Result<impl IntoResponse, ApiError> {
-    if !auth.is_privileged() {
-        return Err(ApiError::unauthorized());
+    if let Some(err) = crate::auth::require_admin(&auth) {
+        return Err(err);
     }
     match tb_analytics::admin_affiliate::load_affiliate_gutschriften(&pool).await {
         Ok(v) => Ok(Json(v)),
@@ -83,12 +84,12 @@ pub async fn gutschriften_handler(
 /// gespeichertes Gutschrift-PDF herunterladen (Admin). Streamt das `pdf_blob`-
 /// BYTEA als `application/pdf` (kein Generieren).
 pub async fn gutschrift_pdf_handler(
-    auth: AuthLevel,
+    auth: DashboardAuthLevel,
     State(pool): State<PgPool>,
     Path(id_raw): Path<String>,
 ) -> Response {
-    if !auth.is_privileged() {
-        return ApiError::unauthorized().into_response();
+    if let Some(err) = crate::auth::require_admin(&auth) {
+        return err.into_response();
     }
     let invalid = || ApiError::bad_request_with_body(json!({ "error": "invalid_gutschrift_id" })).into_response();
     let id: i64 = match id_raw.trim().parse() {
@@ -119,12 +120,12 @@ pub async fn gutschrift_pdf_handler(
 /// `GET /twitch/api/admin/affiliates/:login` — Affiliate-Detail (Admin).
 /// Inkl. PII-Readiness (entschlüsselt verschlüsselte Stammdaten via Field-Cipher).
 pub async fn detail_handler(
-    auth: AuthLevel,
+    auth: DashboardAuthLevel,
     State(pool): State<PgPool>,
     Path(login_raw): Path<String>,
 ) -> Result<impl IntoResponse, ApiError> {
-    if !auth.is_privileged() {
-        return Err(ApiError::unauthorized());
+    if let Some(err) = crate::auth::require_admin(&auth) {
+        return Err(err);
     }
     let Some(login) = tb_domain::login::normalize_twitch_login(&login_raw) else {
         return Err(ApiError::bad_request_with_body(json!({ "error": "invalid_login" })));
@@ -153,12 +154,12 @@ pub async fn detail_handler(
 /// `GET /twitch/api/admin/affiliates/:login/gutschriften` — Gutschriften eines
 /// Affiliates inkl. Konto + PII-Readiness + Summary (Admin).
 pub async fn gutschriften_for_login_handler(
-    auth: AuthLevel,
+    auth: DashboardAuthLevel,
     State(pool): State<PgPool>,
     Path(login_raw): Path<String>,
 ) -> Result<impl IntoResponse, ApiError> {
-    if !auth.is_privileged() {
-        return Err(ApiError::unauthorized());
+    if let Some(err) = crate::auth::require_admin(&auth) {
+        return Err(err);
     }
     let Some(login) = tb_domain::login::normalize_twitch_login(&login_raw) else {
         return Err(ApiError::bad_request_with_body(json!({ "error": "invalid_login" })));
@@ -186,12 +187,12 @@ pub async fn gutschriften_for_login_handler(
 
 /// `POST /twitch/api/admin/affiliates/:login/toggle` — is_active flippen (Admin).
 pub async fn toggle_handler(
-    auth: AuthLevel,
+    auth: DashboardAuthLevel,
     State(pool): State<PgPool>,
     Path(login_raw): Path<String>,
 ) -> Result<impl IntoResponse, ApiError> {
-    if !auth.is_privileged() {
-        return Err(ApiError::unauthorized());
+    if let Some(err) = crate::auth::require_admin(&auth) {
+        return Err(err);
     }
     let Some(login) = tb_domain::login::normalize_twitch_login(&login_raw) else {
         return Err(ApiError::bad_request_with_body(json!({ "error": "invalid_login" })));
@@ -239,16 +240,18 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn unauth_401() {
+    async fn unauth_auth_required_401() {
         let Some(pool) = make_pool("t_affh_unauth").await else { return };
-        let (s, _) = body_json(stats_handler(AuthLevel::None, State(pool)).await).await;
+        let (s, j) = body_json(stats_handler(DashboardAuthLevel::None, State(pool)).await).await;
         assert_eq!(s, StatusCode::UNAUTHORIZED);
+        assert_eq!(j["error"], "auth_required");
+        assert_eq!(j["required"], "admin");
     }
 
     #[tokio::test]
     async fn ohne_tabellen_liefert_nullwerte_200() {
         let Some(pool) = make_pool("t_affh_empty").await else { return };
-        let (s, j) = body_json(stats_handler(AuthLevel::Admin, State(pool)).await).await;
+        let (s, j) = body_json(stats_handler(DashboardAuthLevel::admin(), State(pool)).await).await;
         assert_eq!(s, StatusCode::OK);
         assert_eq!(j["total_affiliates"], 0);
         assert_eq!(j["total_provision"], 0.0);
@@ -257,10 +260,10 @@ mod tests {
     #[tokio::test]
     async fn list_unauth_und_leer() {
         let Some(pool) = make_pool("t_affh_list").await else { return };
-        let (s, _) = body_json(list_handler(AuthLevel::None, State(pool.clone())).await).await;
+        let (s, _) = body_json(list_handler(DashboardAuthLevel::None, State(pool.clone())).await).await;
         assert_eq!(s, StatusCode::UNAUTHORIZED);
         // ohne Tabellen → {affiliates: []}.
-        let (s, j) = body_json(list_handler(AuthLevel::Admin, State(pool)).await).await;
+        let (s, j) = body_json(list_handler(DashboardAuthLevel::admin(), State(pool)).await).await;
         assert_eq!(s, StatusCode::OK);
         assert_eq!(j["affiliates"], serde_json::json!([]));
     }
@@ -268,9 +271,9 @@ mod tests {
     #[tokio::test]
     async fn gutschriften_unauth_und_leer() {
         let Some(pool) = make_pool("t_affh_gut").await else { return };
-        let (s, _) = body_json(gutschriften_handler(AuthLevel::None, State(pool.clone())).await).await;
+        let (s, _) = body_json(gutschriften_handler(DashboardAuthLevel::None, State(pool.clone())).await).await;
         assert_eq!(s, StatusCode::UNAUTHORIZED);
-        let (s, j) = body_json(gutschriften_handler(AuthLevel::Admin, State(pool)).await).await;
+        let (s, j) = body_json(gutschriften_handler(DashboardAuthLevel::admin(), State(pool)).await).await;
         assert_eq!(s, StatusCode::OK);
         assert_eq!(j["count"], 0);
         assert_eq!(j["gutschriften"], serde_json::json!([]));
@@ -279,21 +282,21 @@ mod tests {
     #[tokio::test]
     async fn pdf_auth_invalid_notfound() {
         let Some(pool) = make_pool("t_affh_pdf").await else { return };
-        // unauth → 401.
-        assert_eq!(gutschrift_pdf_handler(AuthLevel::None, State(pool.clone()), Path("5".into())).await.status(), StatusCode::UNAUTHORIZED);
+        // unauth → auth_required.
+        assert_eq!(gutschrift_pdf_handler(DashboardAuthLevel::None, State(pool.clone()), Path("5".into())).await.status(), StatusCode::UNAUTHORIZED);
         // ungültige ID → 400.
-        assert_eq!(gutschrift_pdf_handler(AuthLevel::Admin, State(pool.clone()), Path("0".into())).await.status(), StatusCode::BAD_REQUEST);
-        assert_eq!(gutschrift_pdf_handler(AuthLevel::Admin, State(pool.clone()), Path("abc".into())).await.status(), StatusCode::BAD_REQUEST);
+        assert_eq!(gutschrift_pdf_handler(DashboardAuthLevel::admin(), State(pool.clone()), Path("0".into())).await.status(), StatusCode::BAD_REQUEST);
+        assert_eq!(gutschrift_pdf_handler(DashboardAuthLevel::admin(), State(pool.clone()), Path("abc".into())).await.status(), StatusCode::BAD_REQUEST);
         // kein Schema/keine Gutschrift → 404.
-        assert_eq!(gutschrift_pdf_handler(AuthLevel::Admin, State(pool), Path("5".into())).await.status(), StatusCode::NOT_FOUND);
+        assert_eq!(gutschrift_pdf_handler(DashboardAuthLevel::admin(), State(pool), Path("5".into())).await.status(), StatusCode::NOT_FOUND);
     }
 
     #[tokio::test]
     async fn for_login_unauth_und_invalid() {
         let Some(pool) = make_pool("t_affh_forlogin").await else { return };
-        let (s, _) = body_json(gutschriften_for_login_handler(AuthLevel::None, State(pool.clone()), Path("nani".into())).await).await;
+        let (s, _) = body_json(gutschriften_for_login_handler(DashboardAuthLevel::None, State(pool.clone()), Path("nani".into())).await).await;
         assert_eq!(s, StatusCode::UNAUTHORIZED);
-        let (s, j) = body_json(gutschriften_for_login_handler(AuthLevel::Admin, State(pool), Path("!!!".into())).await).await;
+        let (s, j) = body_json(gutschriften_for_login_handler(DashboardAuthLevel::admin(), State(pool), Path("!!!".into())).await).await;
         assert_eq!(s, StatusCode::BAD_REQUEST);
         assert_eq!(j["error"], "invalid_login");
     }
@@ -301,9 +304,9 @@ mod tests {
     #[tokio::test]
     async fn detail_unauth_und_invalid_login() {
         let Some(pool) = make_pool("t_affh_detail").await else { return };
-        let (s, _) = body_json(detail_handler(AuthLevel::None, State(pool.clone()), Path("nani".into())).await).await;
+        let (s, _) = body_json(detail_handler(DashboardAuthLevel::None, State(pool.clone()), Path("nani".into())).await).await;
         assert_eq!(s, StatusCode::UNAUTHORIZED);
-        let (s, j) = body_json(detail_handler(AuthLevel::Admin, State(pool), Path("!!!".into())).await).await;
+        let (s, j) = body_json(detail_handler(DashboardAuthLevel::admin(), State(pool), Path("!!!".into())).await).await;
         assert_eq!(s, StatusCode::BAD_REQUEST);
         assert_eq!(j["error"], "invalid_login");
     }
@@ -311,20 +314,20 @@ mod tests {
     #[tokio::test]
     async fn toggle_auth_invalid_notfound_happy() {
         let Some(pool) = make_pool("t_affh_toggle").await else { return };
-        // unauth → 401.
-        let (s, _) = body_json(toggle_handler(AuthLevel::None, State(pool.clone()), Path("nani".into())).await).await;
+        // unauth → auth_required.
+        let (s, _) = body_json(toggle_handler(DashboardAuthLevel::None, State(pool.clone()), Path("nani".into())).await).await;
         assert_eq!(s, StatusCode::UNAUTHORIZED);
         // ungültiger Login → 400.
-        let (s, j) = body_json(toggle_handler(AuthLevel::Admin, State(pool.clone()), Path("!!!".into())).await).await;
+        let (s, j) = body_json(toggle_handler(DashboardAuthLevel::admin(), State(pool.clone()), Path("!!!".into())).await).await;
         assert_eq!(s, StatusCode::BAD_REQUEST);
         assert_eq!(j["error"], "invalid_login");
         // unbekannt (kein Schema) → 404.
-        let (s, _) = body_json(toggle_handler(AuthLevel::Admin, State(pool.clone()), Path("ghostuser".into())).await).await;
+        let (s, _) = body_json(toggle_handler(DashboardAuthLevel::admin(), State(pool.clone()), Path("ghostuser".into())).await).await;
         assert_eq!(s, StatusCode::NOT_FOUND);
         // happy: Tabelle + Zeile → 200, active false.
         sqlx::query("CREATE TABLE affiliate_accounts (twitch_login TEXT PRIMARY KEY, is_active INTEGER NOT NULL DEFAULT 1, updated_at TEXT)").execute(&pool).await.unwrap();
         sqlx::query("INSERT INTO affiliate_accounts (twitch_login, is_active) VALUES ('nani', 1)").execute(&pool).await.unwrap();
-        let (s, j) = body_json(toggle_handler(AuthLevel::Admin, State(pool), Path("nani".into())).await).await;
+        let (s, j) = body_json(toggle_handler(DashboardAuthLevel::admin(), State(pool), Path("nani".into())).await).await;
         assert_eq!(s, StatusCode::OK);
         assert_eq!(j["login"], "nani");
         assert_eq!(j["active"], false);

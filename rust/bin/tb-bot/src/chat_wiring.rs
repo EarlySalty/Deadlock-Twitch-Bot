@@ -58,6 +58,7 @@ use tb_raid::{RaidAuthStore, RaidTokenRefresher, TokenBlacklistStore, TokenProvi
 use tb_transport_discord::BrokerRelay;
 use tb_transport_twitch::HelixClient;
 
+use crate::task_supervisor::TaskSupervisor;
 use crate::raid_adapters::HelixTokenClient;
 
 /// Reconcile-Intervall für Chat-Subscriptions (Python: periodischer
@@ -241,6 +242,9 @@ use tb_internal_api::{ChatActionPort, ChatActionResult};
 const CHAT_ACTION_MODES: &[&str] = &["message", "action", "announcement"];
 /// Erlaubte Announcement-Farben (Python `_CHAT_ANNOUNCEMENT_COLORS`).
 const CHAT_ANNOUNCEMENT_COLORS: &[&str] = &["blue", "green", "orange", "purple", "primary"];
+const CHAT_HTTP_ERROR_BODY_SNIPPET_MAX_CHARS: usize = 240;
+const ANNOUNCEMENT_FALLBACK_SUCCESS_LABEL: &str =
+    "Announcement nicht möglich, als normale Chat-Nachricht gesendet";
 
 /// Bridge zwischen der internen API und dem nativen Chat-Send: sendet die
 /// Owner-Chat-Action über den live rotierten Bot-User-Token ([`ChatApi`], das
@@ -275,6 +279,93 @@ impl ChatActionAdapter {
             Ok(Some(id)) if !id.trim().is_empty() => Some(id),
             _ => None,
         }
+    }
+}
+
+fn chat_http_error_reason(status: u16, body: &str) -> String {
+    let body = body.trim();
+    if body.is_empty() {
+        return format!("helix http {status}");
+    }
+    let mut chars = body.chars();
+    let snippet: String = chars
+        .by_ref()
+        .take(CHAT_HTTP_ERROR_BODY_SNIPPET_MAX_CHARS)
+        .collect();
+    if chars.next().is_some() {
+        format!("helix http {status}: {snippet}...")
+    } else {
+        format!("helix http {status}: {snippet}")
+    }
+}
+
+fn chat_action_result_from_send_outcome(
+    login: &str,
+    mode: &str,
+    outcome: SendOutcome,
+    sent_label_override: Option<&str>,
+) -> ChatActionResult {
+    match outcome {
+        SendOutcome::Sent => {
+            let label = sent_label_override.map(str::to_string).unwrap_or_else(|| {
+                let label = if mode == "action" {
+                    "Action"
+                } else {
+                    "Nachricht"
+                };
+                format!("{label} an {login} gesendet")
+            });
+            ChatActionResult::Sent { label }
+        }
+        SendOutcome::Dropped { code, message } => ChatActionResult::Dropped { code, message },
+        SendOutcome::HttpError { status, body } => ChatActionResult::Failed {
+            reason: chat_http_error_reason(status, &body),
+            detail: Some(body),
+        },
+    }
+}
+
+async fn send_chat_message_action(
+    api: &dyn ChatApi,
+    broadcaster_id: &str,
+    login: &str,
+    mode: &str,
+    send_text: &str,
+    sent_label_override: Option<&str>,
+) -> ChatActionResult {
+    match api.send_message(broadcaster_id, send_text).await {
+        Ok(outcome) => {
+            chat_action_result_from_send_outcome(login, mode, outcome, sent_label_override)
+        }
+        Err(reason) => ChatActionResult::Failed {
+            reason,
+            detail: None,
+        },
+    }
+}
+
+async fn send_announcement_fallback(
+    api: &dyn ChatApi,
+    broadcaster_id: &str,
+    login: &str,
+    send_text: &str,
+    original_failure: &str,
+) -> ChatActionResult {
+    match send_chat_message_action(
+        api,
+        broadcaster_id,
+        login,
+        "message",
+        send_text,
+        Some(ANNOUNCEMENT_FALLBACK_SUCCESS_LABEL),
+    )
+    .await
+    {
+        ChatActionResult::Failed { reason, detail } => ChatActionResult::Failed {
+            reason: format!("announcement failed: {original_failure}; fallback failed: {reason}"),
+            detail,
+        },
+        other => other,
     }
 }
 
@@ -313,37 +404,47 @@ impl ChatActionPort for ChatActionAdapter {
         if mode == "announcement" {
             match self
                 .api
-                .send_announcement(&broadcaster_id, &send_text, color)
+                .send_announcement_detailed(&broadcaster_id, &send_text, color)
                 .await
             {
-                Ok(true) => ChatActionResult::Sent {
+                Ok(outcome) if outcome.accepted => ChatActionResult::Sent {
                     label: format!("Announcement an {login} gesendet"),
                 },
-                Ok(false) => ChatActionResult::Failed {
-                    reason: "announcement not accepted".to_string(),
-                },
-                Err(reason) => ChatActionResult::Failed { reason },
+                Ok(outcome) => {
+                    let original_failure = outcome
+                        .detail
+                        .as_deref()
+                        .unwrap_or("announcement not accepted");
+                    send_announcement_fallback(
+                        self.api.as_ref(),
+                        &broadcaster_id,
+                        login,
+                        &send_text,
+                        original_failure,
+                    )
+                    .await
+                }
+                Err(reason) => {
+                    send_announcement_fallback(
+                        self.api.as_ref(),
+                        &broadcaster_id,
+                        login,
+                        &send_text,
+                        &reason,
+                    )
+                    .await
+                }
             }
         } else {
-            match self.api.send_message(&broadcaster_id, &send_text).await {
-                Ok(SendOutcome::Sent) => {
-                    let label = if mode == "action" {
-                        "Action"
-                    } else {
-                        "Nachricht"
-                    };
-                    ChatActionResult::Sent {
-                        label: format!("{label} an {login} gesendet"),
-                    }
-                }
-                Ok(SendOutcome::Dropped { code, message }) => {
-                    ChatActionResult::Dropped { code, message }
-                }
-                Ok(SendOutcome::HttpError { status, .. }) => ChatActionResult::Failed {
-                    reason: format!("helix http {status}"),
-                },
-                Err(reason) => ChatActionResult::Failed { reason },
-            }
+            send_chat_message_action(
+                self.api.as_ref(),
+                &broadcaster_id,
+                login,
+                mode,
+                &send_text,
+                None,
+            )
+            .await
         }
     }
 }
@@ -403,6 +504,7 @@ pub struct ChatRuntime {
     /// Bot-Self-Timeouts (`channel.ban` mit `ends_at`) dieselbe Stumm-Zählung
     /// füttern wie der ausgehende Send-Pfad.
     timeout_guard: Arc<TimeoutGuard>,
+    supervisor: TaskSupervisor,
 }
 
 /// Phase 1: bootet den Bot-Token und baut die ChatApi, wenn `TB_CHAT_ENABLED=1`
@@ -500,6 +602,7 @@ pub async fn build_runtime(
     pool: PgPool,
     ports: ChatRuntimePorts,
     inner_hooks: Arc<dyn EventSubHooks>,
+    supervisor: TaskSupervisor,
 ) -> ChatRuntime {
     let ChatRuntimePorts {
         manual_raid,
@@ -620,7 +723,7 @@ pub async fn build_runtime(
     {
         let spam_filter = Arc::clone(&spam_filter);
         let pool = pool.clone();
-        tokio::spawn(async move {
+        supervisor.spawn("chat_spam_filter_reload", async move {
             let mut tick = tokio::time::interval(Duration::from_secs(120));
             tick.tick().await; // erster Tick feuert sofort — überspringen (frisch geladen)
             loop {
@@ -682,7 +785,8 @@ pub async fn build_runtime(
     // IRC-Reader: zweiter Chat-Input für `irc_read`-Kanäle (einwilligende
     // Streamer OHNE EventSub-`channel:bot`). Disjunkte Kanal-Menge zum
     // EventSub-Pfad → kein Doppel-Processing. No-op, wenn keine irc_read-Kanäle.
-    tokio::spawn(
+    supervisor.spawn(
+        "engagement_irc_reader",
         EngagementIrcReader::new(pool.clone(), Arc::clone(&engagement), stealth.clone()).run(),
     );
 
@@ -714,6 +818,7 @@ pub async fn build_runtime(
         pool,
         bot_user_id,
         timeout_guard,
+        supervisor,
     }
 }
 
@@ -759,7 +864,7 @@ impl ChatRuntime {
         let pool = self.pool.clone();
         let bot_user_id = self.bot_user_id.clone();
         let token_manager = Arc::clone(&self.token_manager);
-        tokio::spawn(async move {
+        self.supervisor.spawn("chat_subscription_reconcile", async move {
             let mut tick = tokio::time::interval(CHAT_SUB_RECONCILE_INTERVAL);
             tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
             loop {
@@ -1204,7 +1309,19 @@ impl EventSubHooks for ChatHooks {
             .await;
     }
     async fn on_stream_went_live(&self, twitch_user_id: &str, login: &str) {
-        self.inner.on_stream_went_live(twitch_user_id, login).await;
+        self.on_stream_went_live_with_stream_id(twitch_user_id, login, None)
+            .await;
+    }
+
+    async fn on_stream_went_live_with_stream_id(
+        &self,
+        twitch_user_id: &str,
+        login: &str,
+        stream_id: Option<&str>,
+    ) {
+        self.inner
+            .on_stream_went_live_with_stream_id(twitch_user_id, login, stream_id)
+            .await;
         self.maybe_send_golive_tip(twitch_user_id, login).await;
 
         // Werbefrei-Pitch (Python eventsub_mixin.py:1523-1555): War der Bot in
@@ -1248,8 +1365,9 @@ impl EventSubHooks for ChatHooks {
         self.inner.on_chat_message(event, message_id).await;
         match serde_json::from_value::<ChatMessageEvent>(event.clone()) {
             Ok(chat_event) => {
-                self.pipeline.handle(&chat_event).await;
-                self.spawn_engagement(&chat_event);
+                if self.pipeline.handle(&chat_event).await {
+                    self.spawn_engagement(&chat_event);
+                }
             }
             Err(e) => tracing::warn!("chat.message nicht deserialisierbar: {e}"),
         }
@@ -2102,6 +2220,418 @@ impl PartnerRoster for DbPartnerRoster {
 mod chat_notification_tests {
     use super::*;
     use serde_json::json;
+    use sqlx::postgres::{PgConnectOptions, PgPoolOptions};
+    use std::str::FromStr;
+    use std::sync::Mutex;
+    use tb_chat::types::ChatMessageBody;
+    use tb_chat::{AutobanEntry, MentionResolver};
+
+    struct FakeChatApi {
+        send_message_outcome: Mutex<Result<SendOutcome, String>>,
+        sent_messages: Mutex<Vec<(String, String)>>,
+    }
+
+    impl FakeChatApi {
+        fn new(send_message_outcome: Result<SendOutcome, String>) -> Self {
+            Self {
+                send_message_outcome: Mutex::new(send_message_outcome),
+                sent_messages: Mutex::new(Vec::new()),
+            }
+        }
+
+        fn sent_messages(&self) -> Vec<(String, String)> {
+            self.sent_messages
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner())
+                .clone()
+        }
+    }
+
+    #[async_trait::async_trait]
+    impl ChatApi for FakeChatApi {
+        async fn send_message(
+            &self,
+            broadcaster_id: &str,
+            message: &str,
+        ) -> Result<SendOutcome, String> {
+            self.sent_messages
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner())
+                .push((broadcaster_id.to_string(), message.to_string()));
+            self.send_message_outcome
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner())
+                .clone()
+        }
+
+        async fn send_announcement(
+            &self,
+            _broadcaster_id: &str,
+            _message: &str,
+            _color: &str,
+        ) -> Result<bool, String> {
+            Ok(false)
+        }
+
+        async fn ban_user(
+            &self,
+            _broadcaster_id: &str,
+            _target_user_id: &str,
+            _reason: &str,
+        ) -> Result<tb_chat::BanOutcome, String> {
+            Ok(tb_chat::BanOutcome::Banned)
+        }
+
+        async fn timeout_user(
+            &self,
+            _broadcaster_id: &str,
+            _target_user_id: &str,
+            _duration_secs: u32,
+            _reason: &str,
+        ) -> Result<tb_chat::BanOutcome, String> {
+            Ok(tb_chat::BanOutcome::Banned)
+        }
+
+        async fn unban_user(
+            &self,
+            _broadcaster_id: &str,
+            _target_user_id: &str,
+        ) -> Result<bool, String> {
+            Ok(true)
+        }
+
+        async fn delete_message(
+            &self,
+            _broadcaster_id: &str,
+            _message_id: &str,
+        ) -> Result<bool, String> {
+            Ok(true)
+        }
+
+        async fn user_created_at(
+            &self,
+            _user_id: &str,
+        ) -> Result<Option<chrono::DateTime<chrono::Utc>>, String> {
+            Ok(None)
+        }
+
+        async fn resolve_user_id(&self, _login: &str) -> Result<Option<String>, String> {
+            Ok(None)
+        }
+
+        async fn bot_user_id(&self) -> String {
+            "bot".to_string()
+        }
+    }
+
+    struct NoopAccountAge;
+
+    #[async_trait::async_trait]
+    impl AccountAgePort for NoopAccountAge {
+        async fn user_created_at_days(&self, _user_id: &str, _login: &str) -> Option<i64> {
+            None
+        }
+    }
+
+    struct NoopMentionResolver;
+
+    #[async_trait::async_trait]
+    impl MentionResolver for NoopMentionResolver {
+        async fn is_known_chatter(&self, _channel_login: &str, _mention_login: &str) -> bool {
+            false
+        }
+
+        async fn resolve_existing(
+            &self,
+            _logins: &[&str],
+        ) -> (std::collections::HashSet<String>, bool) {
+            (std::collections::HashSet::new(), false)
+        }
+    }
+
+    struct NoopRaid;
+
+    #[async_trait::async_trait]
+    impl RaidCommandPort for NoopRaid {
+        async fn manual_raid(
+            &self,
+            _broadcaster_id: &str,
+            _broadcaster_login: &str,
+        ) -> Result<RaidStartResult, String> {
+            Ok(RaidStartResult {
+                status: "unavailable".to_string(),
+                target_login: None,
+            })
+        }
+
+        async fn raid_status(&self, _broadcaster_id: &str) -> Result<RaidStatusInfo, String> {
+            Ok(RaidStatusInfo {
+                raid_enabled: None,
+                authorized_at: None,
+                total_raids: 0,
+                successful_raids: 0,
+                last_raid_login: None,
+                last_raid_viewers: None,
+                last_raid_at: None,
+            })
+        }
+
+        async fn toggle_silent_ban(&self, _twitch_login: &str) -> Result<i32, String> {
+            Ok(0)
+        }
+
+        async fn toggle_silent_raid(&self, _twitch_login: &str) -> Result<i32, String> {
+            Ok(0)
+        }
+    }
+
+    struct NoopDiscordLink;
+
+    #[async_trait::async_trait]
+    impl DiscordLinkPort for NoopDiscordLink {
+        async fn discord_invite(&self, _channel_login: &str) -> Result<Option<String>, String> {
+            Ok(None)
+        }
+    }
+
+    struct NoopInvite;
+
+    #[async_trait::async_trait]
+    impl InvitePort for NoopInvite {
+        async fn invite_line(
+            &self,
+            _channel_login: &str,
+            _chatter_login: &str,
+        ) -> Result<Option<String>, String> {
+            Ok(None)
+        }
+    }
+
+    struct NoopSuperMod;
+
+    #[async_trait::async_trait]
+    impl SuperModPort for NoopSuperMod {
+        async fn is_super_mod(&self, _actor_id: &str) -> bool {
+            false
+        }
+    }
+
+    struct NoopAutoban;
+
+    #[async_trait::async_trait]
+    impl LastAutobanStore for NoopAutoban {
+        async fn last_autoban(&self, _channel_key: &str) -> Option<AutobanEntry> {
+            None
+        }
+    }
+
+    fn non_partner_chat_event() -> ChatMessageEvent {
+        ChatMessageEvent {
+            broadcaster_user_id: "broadcaster-id".to_string(),
+            broadcaster_user_login: "nonpartner".to_string(),
+            broadcaster_user_name: String::new(),
+            chatter_user_id: "chatter-id".to_string(),
+            chatter_user_login: "viewer".to_string(),
+            chatter_user_name: String::new(),
+            message_id: "msg-1".to_string(),
+            message: ChatMessageBody {
+                text: "hallo".to_string(),
+                fragments: vec![],
+            },
+            badges: vec![],
+            color: String::new(),
+            source_broadcaster_user_id: None,
+            source_broadcaster_user_login: None,
+            source_message_id: None,
+        }
+    }
+
+    fn pipeline_for_non_partner(api: Arc<FakeChatApi>, pool: PgPool) -> ChatPipeline {
+        let api_trait: Arc<dyn ChatApi> = api;
+        let http = reqwest::Client::new();
+        let moderation = Arc::new(ModerationEngine::new(Arc::clone(&api_trait), pool.clone()));
+        ChatPipeline::new(ChatPipelineParts {
+            bot_user_id: "bot-id".to_string(),
+            api: Arc::clone(&api_trait),
+            pool: pool.clone(),
+            classifier: Arc::new(ChannelClassifier::new(pool.clone())),
+            tracker: Arc::new(ChatterTracker::new(pool.clone())),
+            global_ban: Arc::new(GlobalChatterBanEnforcer::new(pool.clone())),
+            scam_pitch: Arc::new(ScamPitchDetector::new(
+                Arc::clone(&api_trait),
+                Arc::new(NoopAccountAge),
+                pool.clone(),
+            )),
+            conversation_scam: Arc::new(ConversationScamGuard::new(
+                pool.clone(),
+                "bot-id".to_string(),
+                Arc::new(MiniMaxScamJudge::new(EngagementMinimaxClient::new(
+                    None, None, None, None,
+                ))),
+                Arc::clone(&api_trait),
+                Arc::clone(&moderation),
+            )),
+            spam_filter: Arc::new(SpamFilter::new(Default::default())),
+            ai_reviewer: Arc::new(SpamAiReviewer::new(pool.clone(), http.clone())),
+            moderation,
+            sus_invite: Arc::new(SusInviteCheck::new(pool.clone())),
+            fun: Arc::new(FunResponses::new(Arc::clone(&api_trait), false)),
+            promos: Arc::new(PromoEngine::new(
+                pool.clone(),
+                Arc::clone(&api_trait),
+                Arc::new(tb_chat::NoopSuppressionCheck),
+            )),
+            commands: Arc::new(CommandEngine::new(
+                pool,
+                Arc::clone(&api_trait),
+                Arc::new(NoopRaid),
+                Arc::new(NoopDiscordLink),
+                Arc::new(NoopInvite),
+                Arc::new(NoopSuperMod),
+                Arc::new(NoopAutoban),
+            )),
+            mention_resolver: Arc::new(NoopMentionResolver),
+            review_log: Arc::new(ReviewLog::new(std::env::temp_dir())),
+            alerter: Arc::new(ModAlerter::with_endpoint(
+                http,
+                "http://127.0.0.1:1/changelog",
+            )),
+        })
+    }
+
+    async fn setup_non_partner_pipeline_pool(schema: &str) -> Option<PgPool> {
+        let dsn = std::env::var("TB_TEST_DATABASE_URL").ok()?;
+        let admin = PgPoolOptions::new()
+            .max_connections(1)
+            .connect(&dsn)
+            .await
+            .unwrap();
+        sqlx::query(&format!("DROP SCHEMA IF EXISTS {schema} CASCADE"))
+            .execute(&admin)
+            .await
+            .unwrap();
+        sqlx::query(&format!("CREATE SCHEMA {schema}"))
+            .execute(&admin)
+            .await
+            .unwrap();
+        admin.close().await;
+
+        let opts = PgConnectOptions::from_str(&dsn)
+            .unwrap()
+            .options([("search_path", schema)]);
+        let pool = PgPoolOptions::new()
+            .max_connections(4)
+            .connect_with(opts)
+            .await
+            .unwrap();
+        for ddl in [
+            "CREATE TABLE twitch_partners (twitch_user_id TEXT, twitch_login TEXT)",
+            "CREATE TABLE twitch_streamers (twitch_login TEXT, twitch_user_id TEXT)",
+            "CREATE TABLE twitch_streamers_partner_state (
+                twitch_login TEXT,
+                is_partner_active INTEGER DEFAULT 0
+            )",
+            "CREATE TABLE twitch_live_state (
+                streamer_login TEXT PRIMARY KEY,
+                is_live INTEGER DEFAULT 0,
+                last_game TEXT
+            )",
+            "CREATE TABLE twitch_stream_sessions (
+                id BIGINT PRIMARY KEY,
+                streamer_login TEXT,
+                started_at TIMESTAMPTZ DEFAULT now(),
+                ended_at TIMESTAMPTZ,
+                game_name TEXT
+            )",
+            "CREATE TABLE twitch_raw_chat_ingest_health (
+                streamer_login TEXT PRIMARY KEY,
+                last_raw_chat_message_at TEXT,
+                last_raw_chat_insert_ok_at TEXT,
+                last_raw_chat_insert_error_at TEXT,
+                last_raw_chat_error TEXT,
+                raw_chat_lag_seconds INTEGER,
+                updated_at TEXT
+            )",
+        ] {
+            sqlx::query(ddl).execute(&pool).await.unwrap();
+        }
+        Some(pool)
+    }
+
+    #[test]
+    fn chat_http_error_reason_enthaelt_gekuerztes_body_detail() {
+        let body = format!(
+            "{}tail",
+            "x".repeat(CHAT_HTTP_ERROR_BODY_SNIPPET_MAX_CHARS + 20)
+        );
+        let reason = chat_http_error_reason(500, &body);
+
+        assert!(reason.starts_with("helix http 500: "));
+        assert!(reason.ends_with("..."));
+        assert!(reason.contains(&"x".repeat(CHAT_HTTP_ERROR_BODY_SNIPPET_MAX_CHARS)));
+        assert!(!reason.contains("tail"));
+    }
+
+    #[tokio::test]
+    async fn announcement_fallback_sendet_chat_mit_originaltext_und_placeholder_label() {
+        let api = FakeChatApi::new(Ok(SendOutcome::Sent));
+        let result = send_announcement_fallback(
+            &api,
+            "broadcaster_1",
+            "nani",
+            "Original Announcement",
+            "announcement not accepted",
+        )
+        .await;
+
+        assert_eq!(
+            result,
+            ChatActionResult::Sent {
+                label: ANNOUNCEMENT_FALLBACK_SUCCESS_LABEL.to_string()
+            }
+        );
+        assert_eq!(
+            api.sent_messages(),
+            vec![(
+                "broadcaster_1".to_string(),
+                "Original Announcement".to_string()
+            )]
+        );
+    }
+
+    #[tokio::test]
+    async fn send_message_http_error_uebernimmt_body_snippet() {
+        let api = FakeChatApi::new(Ok(SendOutcome::HttpError {
+            status: 403,
+            body: "{\"message\":\"missing scope\"}".to_string(),
+        }));
+        let result =
+            send_chat_message_action(&api, "broadcaster_1", "nani", "message", "Hi", None).await;
+
+        assert_eq!(
+            result,
+            ChatActionResult::Failed {
+                reason: "helix http 403: {\"message\":\"missing scope\"}".to_string(),
+                detail: Some("{\"message\":\"missing scope\"}".to_string())
+            }
+        );
+    }
+
+    #[tokio::test]
+    async fn non_partner_event_liefert_false_damit_engagement_nicht_startet() {
+        let Some(pool) = setup_non_partner_pipeline_pool("t_chat_wiring_nonpartner").await else {
+            eprintln!("SKIP: TB_TEST_DATABASE_URL nicht gesetzt");
+            return;
+        };
+        let api = Arc::new(FakeChatApi::new(Ok(SendOutcome::Sent)));
+        let pipeline = pipeline_for_non_partner(Arc::clone(&api), pool);
+
+        assert!(!pipeline.handle(&non_partner_chat_event()).await);
+        assert!(
+            api.sent_messages().is_empty(),
+            "Non-Partner-Pfad darf keine Chat-Aktion auslösen"
+        );
+    }
 
     // P2.15: notice_type-Klasse → dedizierter EventSub-Typ (Python
     // _subscription_notice_eventsub_type). Steuert das should_capture-Gate.

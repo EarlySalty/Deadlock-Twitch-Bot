@@ -159,6 +159,12 @@ impl HelixClient {
         Ok(self.token.access_token().await?)
     }
 
+    /// Verwirft den gecachten App-Token, damit der nächste Helix-Request ihn
+    /// frisch per client_credentials abruft.
+    pub async fn invalidate_app_token(&self) {
+        self.token.invalidate().await;
+    }
+
     /// Ist die App-Auth nach einer `invalid_client`-Ablehnung gesperrt
     /// (15-Min-Cooldown)? Synchron + lock-frei, damit der `tb-bot`-Adapter es
     /// direkt im synchronen `StreamSource::is_auth_blocked`-Trait-Gate des

@@ -4,9 +4,10 @@
 //! Schreibend (B11-PR-4): `POST …/{login}/verify`, `…/{login}/archive`,
 //! `…/{login}/block`, `…/{login}/discord-flag`. Die reine DB-Logik liegt in
 //! [`tb_analytics::streamers_crud`]; hier nur Routen-/Handler-Verdrahtung
-//! (Body-Parsing, AuthLevel, Status-Mapping) — Parität zu Pythons
+//! (Body-Parsing, DashboardAuthLevel, Status-Mapping) — Parität zu Pythons
 //! `partner_registry`-Dashboard-Routen.
 
+use crate::auth::level::DashboardAuthLevel;
 use axum::{
     extract::{Path, Query, State},
     response::IntoResponse,
@@ -24,7 +25,7 @@ use tb_analytics::streamers_crud::{
     archive_streamer, departner_streamer, set_discord_flag, verify_streamer, ArchiveMode,
     VerifyStreamerResult,
 };
-use tb_http_core::{ApiError, AuthLevel};
+use tb_http_core::ApiError;
 
 // ── Query-Parameter ──────────────────────────────────────────────────────────
 
@@ -190,9 +191,9 @@ pub struct StreamerOAuth {
 fn fmt_dt(dt: DateTime<Utc>) -> String {
     let micros = dt.timestamp_subsec_micros();
     if micros == 0 {
-        dt.format("%Y-%m-%dT%H:%M:%S+00").to_string()
+        dt.format("%Y-%m-%dT%H:%M:%S+00:00").to_string()
     } else {
-        format!("{}.{micros:06}+00", dt.format("%Y-%m-%dT%H:%M:%S"))
+        format!("{}.{micros:06}+00:00", dt.format("%Y-%m-%dT%H:%M:%S"))
     }
 }
 
@@ -200,12 +201,12 @@ fn fmt_dt(dt: DateTime<Utc>) -> String {
 
 /// `GET /twitch/api/admin/streamers?view=<view>`
 pub async fn list_handler(
-    auth: AuthLevel,
+    auth: DashboardAuthLevel,
     State(pool): State<PgPool>,
     Query(params): Query<ListQuery>,
 ) -> Result<impl IntoResponse, ApiError> {
-    if !auth.is_privileged() {
-        return Err(ApiError::unauthorized());
+    if let Some(err) = crate::auth::require_admin(&auth) {
+        return Err(err);
     }
 
     // P2.80: Default-View ist "active" (Python _admin_parse_streamer_view),
@@ -305,12 +306,12 @@ pub async fn list_handler(
 
 /// `GET /twitch/api/admin/streamers/{login}`
 pub async fn detail_handler(
-    auth: AuthLevel,
+    auth: DashboardAuthLevel,
     State(pool): State<PgPool>,
     Path(login): Path<String>,
 ) -> Result<impl IntoResponse, ApiError> {
-    if !auth.is_privileged() {
-        return Err(ApiError::unauthorized());
+    if let Some(err) = crate::auth::require_admin(&auth) {
+        return Err(err);
     }
 
     let row = streamer_detail(&pool, &login)
@@ -506,13 +507,13 @@ fn body_bool(body: &[u8], key: &str, default: bool) -> bool {
 ///   `tb-dashboard-api` nicht hat — bewusster Handoff (siehe `departner_streamer`).
 /// - unbekannte Modi → 200 `unknown_mode` (ohne Mutation).
 pub async fn verify_handler(
-    auth: AuthLevel,
+    auth: DashboardAuthLevel,
     State(pool): State<PgPool>,
     Path(login): Path<String>,
     body: axum::body::Bytes,
 ) -> Result<impl IntoResponse, ApiError> {
-    if !auth.is_privileged() {
-        return Err(ApiError::unauthorized());
+    if let Some(err) = crate::auth::require_admin(&auth) {
+        return Err(err);
     }
     let mode = body_str(&body, "mode").unwrap_or_else(|| "permanent".to_string());
 
@@ -577,13 +578,13 @@ async fn run_archive(
 /// Parität Python `_dashboard_archive`: unbekannte Modi fallen auf Toggle
 /// (kein 400). 404, wenn kein Partner-Eintrag betroffen war.
 pub async fn archive_handler(
-    auth: AuthLevel,
+    auth: DashboardAuthLevel,
     State(pool): State<PgPool>,
     Path(login): Path<String>,
     body: axum::body::Bytes,
 ) -> Result<impl IntoResponse, ApiError> {
-    if !auth.is_privileged() {
-        return Err(ApiError::unauthorized());
+    if let Some(err) = crate::auth::require_admin(&auth) {
+        return Err(err);
     }
     let mode = body_str(&body, "mode")
         .map(|m| ArchiveMode::parse(&m))
@@ -597,13 +598,13 @@ pub async fn archive_handler(
 /// Toggle). Parität Python `_dashboard_archive` Block-Pfad: setzt/löst
 /// `technical_pause_reason='blocked'`. 404, wenn kein Eintrag betroffen war.
 pub async fn block_handler(
-    auth: AuthLevel,
+    auth: DashboardAuthLevel,
     State(pool): State<PgPool>,
     Path(login): Path<String>,
     body: axum::body::Bytes,
 ) -> Result<impl IntoResponse, ApiError> {
-    if !auth.is_privileged() {
-        return Err(ApiError::unauthorized());
+    if let Some(err) = crate::auth::require_admin(&auth) {
+        return Err(err);
     }
     let mode = match body_str(&body, "mode").as_deref() {
         Some("block") | Some("blocked") | Some("ban") => ArchiveMode::Block,
@@ -620,13 +621,13 @@ pub async fn block_handler(
 /// `_dashboard_set_discord_flag`: setzt das `is_on_discord`-Flag (Partner- oder
 /// Non-Partner-Pfad). 404, wenn der Login unbekannt ist.
 pub async fn discord_flag_handler(
-    auth: AuthLevel,
+    auth: DashboardAuthLevel,
     State(pool): State<PgPool>,
     Path(login): Path<String>,
     body: axum::body::Bytes,
 ) -> Result<impl IntoResponse, ApiError> {
-    if !auth.is_privileged() {
-        return Err(ApiError::unauthorized());
+    if let Some(err) = crate::auth::require_admin(&auth) {
+        return Err(err);
     }
     let is_on_discord = body_bool(&body, "is_on_discord", true);
 
@@ -778,13 +779,13 @@ mod tests {
         sqlx::query(
             r#"
             CREATE TABLE IF NOT EXISTS dashboard_sessions (
-                session_id TEXT PRIMARY KEY,
-                session_type TEXT NOT NULL DEFAULT 'twitch',
-                payload_enc BYTEA NOT NULL,
-                created_at DOUBLE PRECISION NOT NULL,
-                expires_at DOUBLE PRECISION NOT NULL
+                session_id   TEXT NOT NULL PRIMARY KEY,
+                session_type TEXT NOT NULL,
+                payload_enc  BYTEA NOT NULL,
+                created_at   DOUBLE PRECISION NOT NULL,
+                expires_at   DOUBLE PRECISION NOT NULL
             )
-        "#,
+            "#,
         )
         .execute(&pool)
         .await
@@ -856,7 +857,7 @@ mod tests {
     // ── List-Tests ──────────────────────────────────────────────────────────
 
     #[tokio::test]
-    async fn list_returns_401_ohne_auth() {
+    async fn list_returns_auth_required_ohne_auth() {
         let dsn = db_dsn_or_skip!();
         let pool = make_pool(&dsn, "test_admin_h_list_unauth").await;
         let req = Request::builder()
@@ -1045,14 +1046,17 @@ mod tests {
         assert_eq!(v["items"][0]["login"], "boolreauth");
         assert_eq!(v["items"][0]["oauthNeedsReauth"], true);
         assert_eq!(v["items"][0]["oauthStatus"], "reauth");
-        assert_eq!(v["items"][0]["oauthAuthorizedAt"], "2026-06-29T12:10:00+00");
+        assert_eq!(
+            v["items"][0]["oauthAuthorizedAt"],
+            "2026-06-29T12:10:00+00:00"
+        );
         assert_eq!(v["items"][0]["planId"], "manual-list");
     }
 
     // ── Detail-Tests ────────────────────────────────────────────────────────
 
     #[tokio::test]
-    async fn detail_returns_401_ohne_auth() {
+    async fn detail_returns_auth_required_ohne_auth() {
         let dsn = db_dsn_or_skip!();
         let pool = make_pool(&dsn, "test_admin_h_detail_unauth").await;
         let req = Request::builder()
@@ -1109,7 +1113,7 @@ mod tests {
         assert_eq!(v["archived"], false);
         assert_eq!(v["isLive"], false);
         assert!(v["planId"].is_null()); // kein Plan gesetzt
-        // created_at = NOW()
+                                        // created_at = NOW()
         assert!(!v["createdAt"].is_null());
         // Stats: totalWatchHours statt totalDurationSeconds; Live-State-Felder vorhanden.
         assert_eq!(v["stats"]["totalWatchHours"], 0.0);
@@ -1216,7 +1220,7 @@ mod tests {
         assert_eq!(v["oauth"]["needsReauth"], true);
         assert_eq!(v["oauth"]["status"], "reauth");
         assert_eq!(v["oauth"]["raidEnabled"], false);
-        assert_eq!(v["oauth"]["authorizedAt"], "2026-06-29T13:10:00+00");
+        assert_eq!(v["oauth"]["authorizedAt"], "2026-06-29T13:10:00+00:00");
         assert_eq!(
             v["settings"]["manualPlanExpiresAt"],
             "2026-07-02T13:10:00+00"
@@ -1295,11 +1299,11 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn verify_unauth_ist_401() {
+    async fn verify_unauth_ist_auth_required_401() {
         let dsn = db_dsn_or_skip!();
         let pool = make_write_pool(&dsn, "test_admin_h_verify_unauth").await;
         let r = verify_handler(
-            AuthLevel::None,
+            DashboardAuthLevel::None,
             State(pool),
             Path("x".into()),
             axum::body::Bytes::new(),
@@ -1317,7 +1321,7 @@ mod tests {
             .await
             .unwrap();
         let r = verify_handler(
-            AuthLevel::Admin,
+            DashboardAuthLevel::admin(),
             State(pool.clone()),
             Path("vp".into()),
             axum::body::Bytes::from_static(br#"{"mode":"permanent"}"#),
@@ -1338,7 +1342,7 @@ mod tests {
         let dsn = db_dsn_or_skip!();
         let pool = make_write_pool(&dsn, "test_admin_h_verify_404").await;
         let r = verify_handler(
-            AuthLevel::Admin,
+            DashboardAuthLevel::admin(),
             State(pool),
             Path("niemand".into()),
             axum::body::Bytes::from_static(br#"{"mode":"permanent"}"#),
@@ -1366,7 +1370,7 @@ mod tests {
         .unwrap();
 
         let r = verify_handler(
-            AuthLevel::Admin,
+            DashboardAuthLevel::admin(),
             State(pool.clone()),
             Path("lc".into()),
             axum::body::Bytes::from_static(br#"{"mode":"clear"}"#),
@@ -1403,7 +1407,7 @@ mod tests {
         .await
         .unwrap();
         let r = verify_handler(
-            AuthLevel::Admin,
+            DashboardAuthLevel::admin(),
             State(pool.clone()),
             Path("lf".into()),
             axum::body::Bytes::from_static(br#"{"mode":"failed"}"#),
@@ -1424,7 +1428,7 @@ mod tests {
         let dsn = db_dsn_or_skip!();
         let pool = make_write_pool(&dsn, "test_admin_h_verify_clear_404").await;
         let r = verify_handler(
-            AuthLevel::Admin,
+            DashboardAuthLevel::admin(),
             State(pool),
             Path("gibtsnicht".into()),
             axum::body::Bytes::from_static(br#"{"mode":"clear"}"#),
@@ -1442,7 +1446,7 @@ mod tests {
             .await
             .unwrap();
         let r = archive_handler(
-            AuthLevel::Admin,
+            DashboardAuthLevel::admin(),
             State(pool.clone()),
             Path("arc".into()),
             axum::body::Bytes::from_static(br#"{}"#), // Default = toggle
@@ -1463,7 +1467,7 @@ mod tests {
         let dsn = db_dsn_or_skip!();
         let pool = make_write_pool(&dsn, "test_admin_h_archive_404").await;
         let r = archive_handler(
-            AuthLevel::Admin,
+            DashboardAuthLevel::admin(),
             State(pool),
             Path("weg".into()),
             axum::body::Bytes::from_static(br#"{"mode":"archive"}"#),
@@ -1481,7 +1485,7 @@ mod tests {
             .await
             .unwrap();
         let r = block_handler(
-            AuthLevel::Admin,
+            DashboardAuthLevel::admin(),
             State(pool.clone()),
             Path("blk".into()),
             axum::body::Bytes::from_static(br#"{"mode":"block"}"#),
@@ -1508,7 +1512,7 @@ mod tests {
         .await
         .unwrap();
         let r = discord_flag_handler(
-            AuthLevel::Admin,
+            DashboardAuthLevel::admin(),
             State(pool.clone()),
             Path("df".into()),
             axum::body::Bytes::from_static(br#"{"is_on_discord":true}"#),
@@ -1530,7 +1534,7 @@ mod tests {
         let dsn = db_dsn_or_skip!();
         let pool = make_write_pool(&dsn, "test_admin_h_discord_flag_404").await;
         let r = discord_flag_handler(
-            AuthLevel::Admin,
+            DashboardAuthLevel::admin(),
             State(pool),
             Path("nichtda".into()),
             axum::body::Bytes::from_static(br#"{"is_on_discord":true}"#),

@@ -18,19 +18,7 @@ use serde_json::json;
 use sqlx::{PgPool, Row};
 
 use crate::auth::level::DashboardAuthLevel;
-
-const KNOWN_CHAT_BOTS: &[&str] = &[
-    "botrix",
-    "deutschedeadlockcommunity",
-    "fossabot",
-    "moobot",
-    "nightbot",
-    "pretzelrocks",
-    "soundalerts",
-    "streamlabs",
-    "streamelements",
-    "wizebot",
-];
+use crate::handlers::viewer_exclusion::{is_known_or_dynamic_excluded, viewer_exclusion_logins};
 
 // ------------------------------------------------------------------
 // Viewer-Klassifikation (Python-Parität: api_viewers.py Z.87–128)
@@ -70,17 +58,12 @@ fn classify_viewer(
 // ------------------------------------------------------------------
 // Query-Hilfsfunktionen für Bot-Exclusion
 // ------------------------------------------------------------------
-fn bot_not_in_sql(start_idx: usize, col: &str, extra: &[String]) -> (String, Vec<String>) {
-    let all: Vec<String> = KNOWN_CHAT_BOTS
-        .iter()
-        .map(|s| s.to_string())
-        .chain(extra.iter().cloned())
-        .collect();
-    let placeholders: Vec<String> = (start_idx..start_idx + all.len())
+fn bot_not_in_sql(start_idx: usize, col: &str, excluded: &[String]) -> (String, Vec<String>) {
+    let placeholders: Vec<String> = (start_idx..start_idx + excluded.len())
         .map(|i| format!("${i}"))
         .collect();
     let clause = format!("{col} NOT IN ({})", placeholders.join(", "));
-    (clause, all)
+    (clause, excluded.to_vec())
 }
 
 // ------------------------------------------------------------------
@@ -119,14 +102,18 @@ pub async fn viewer_timeline_handler(
         return resp;
     }
 
-    let streamer = streamer_raw.trim().to_lowercase();
-    if streamer.is_empty() {
-        return (
-            StatusCode::BAD_REQUEST,
-            Json(json!({"error":"Streamer required"})),
-        )
-            .into_response();
-    }
+    let streamer = match crate::auth::resolve_streamer_scope(&auth, Some(streamer_raw.trim()), true)
+    {
+        Ok(Some(s)) => s,
+        Ok(None) => {
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(json!({"error":"Streamer required"})),
+            )
+                .into_response();
+        }
+        Err(resp) => return resp,
+    };
 
     let session_id = match params.session_id {
         Some(id) => id,
@@ -187,9 +174,8 @@ pub async fn viewer_timeline_handler(
     let session_start = session_row.started_at;
     let session_duration_min = session_row.duration_min.max(0);
 
-    // Exclusions: streamer selbst + bekannte Bots
-    let extra_excluded = vec![streamer.clone()];
-    let (span_bot_clause, span_bots) = bot_not_in_sql(3, "LOWER(viewer_login)", &extra_excluded);
+    let excluded_logins = viewer_exclusion_logins(&pool, &streamer).await;
+    let (span_bot_clause, span_bots) = bot_not_in_sql(3, "LOWER(viewer_login)", &excluded_logins);
 
     // 2. Presence-Spans per CTE aus twitch_viewer_presence_ticks
     let span_sql = format!(
@@ -261,7 +247,7 @@ pub async fn viewer_timeline_handler(
     }
 
     // 3. Chat-Messages aus twitch_session_chatters
-    let (msg_bot_clause, msg_bots) = bot_not_in_sql(3, "LOWER(chatter_login)", &extra_excluded);
+    let (msg_bot_clause, msg_bots) = bot_not_in_sql(3, "LOWER(chatter_login)", &excluded_logins);
     let msg_sql = format!(
         r#"SELECT LOWER(chatter_login) AS viewer_login, COALESCE(messages, 0)::bigint AS messages
            FROM twitch_session_chatters
@@ -289,7 +275,7 @@ pub async fn viewer_timeline_handler(
     // 4. Viewer-Profile (aggregiert über alle Sessions)
     let viewer_logins: Vec<String> = viewer_spans.keys().cloned().collect();
     let (prof_bot_clause, prof_bots) =
-        bot_not_in_sql(3, "LOWER(sc.chatter_login)", &extra_excluded);
+        bot_not_in_sql(3, "LOWER(sc.chatter_login)", &excluded_logins);
     let prof_sql = format!(
         r#"SELECT LOWER(sc.chatter_login) AS viewer_login,
                   COUNT(DISTINCT sc.session_id) AS total_sessions,
@@ -411,7 +397,18 @@ pub async fn viewer_timeline_profile_handler(
         return resp;
     }
 
-    let streamer = streamer_raw.trim().to_lowercase();
+    let streamer = match crate::auth::resolve_streamer_scope(&auth, Some(streamer_raw.trim()), true)
+    {
+        Ok(Some(s)) => s,
+        Ok(None) => {
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(json!({"error":"streamer and login required"})),
+            )
+                .into_response();
+        }
+        Err(resp) => return resp,
+    };
     let login = match params
         .login
         .as_deref()
@@ -428,16 +425,8 @@ pub async fn viewer_timeline_profile_handler(
         }
     };
 
-    if streamer.is_empty() {
-        return (
-            StatusCode::BAD_REQUEST,
-            Json(json!({"error":"streamer and login required"})),
-        )
-            .into_response();
-    }
-
-    // Bekannte Bots → 404
-    if KNOWN_CHAT_BOTS.contains(&login.as_str()) || login == streamer {
+    let excluded_logins = viewer_exclusion_logins(&pool, &streamer).await;
+    if is_known_or_dynamic_excluded(&login, &excluded_logins) {
         return (
             StatusCode::NOT_FOUND,
             Json(json!({"error":"Viewer not found"})),
@@ -585,6 +574,7 @@ mod tests {
                    twitch_user_id TEXT,
                    twitch_login TEXT,
                    manual_plan_id TEXT,
+                   manual_plan_notes TEXT,
                    manual_plan_expires_at TEXT,
                    manual_plan_updated_at TIMESTAMPTZ
                )"#,
@@ -721,6 +711,70 @@ mod tests {
             StatusCode::FORBIDDEN,
             "Free-Partner muss 403 erhalten"
         );
+    }
+
+    #[tokio::test]
+    async fn viewer_timeline_partner_fremder_pfad_403() {
+        let dsn = db_dsn_or_skip!();
+        let pool = make_plan_pool(&dsn, "timeline_owner_path").await;
+        sqlx::query(
+            "INSERT INTO twitch_billing_subscriptions \
+             (customer_reference, plan_id, status, current_period_end, updated_at) \
+             VALUES ('owner', 'analysis_dashboard', 'active', '2030-01-01T00:00:00Z', NOW())",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+
+        let resp = viewer_timeline_handler(
+            DashboardAuthLevel::Partner {
+                twitch_login: "owner".into(),
+                twitch_user_id: "42".into(),
+                display_name: "Owner".into(),
+            },
+            Path("other".to_string()),
+            State(pool),
+            Query(ViewerTimelineQuery {
+                session_id: Some(1),
+                min_present_min: None,
+                segment: None,
+                search: None,
+                limit: None,
+            }),
+        )
+        .await
+        .into_response();
+        assert_eq!(resp.status(), StatusCode::FORBIDDEN);
+    }
+
+    #[tokio::test]
+    async fn viewer_timeline_profile_partner_fremder_pfad_403() {
+        let dsn = db_dsn_or_skip!();
+        let pool = make_plan_pool(&dsn, "timeline_profile_owner_path").await;
+        sqlx::query(
+            "INSERT INTO twitch_billing_subscriptions \
+             (customer_reference, plan_id, status, current_period_end, updated_at) \
+             VALUES ('owner', 'analysis_dashboard', 'active', '2030-01-01T00:00:00Z', NOW())",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+
+        let resp = viewer_timeline_profile_handler(
+            DashboardAuthLevel::Partner {
+                twitch_login: "owner".into(),
+                twitch_user_id: "42".into(),
+                display_name: "Owner".into(),
+            },
+            Path("other".to_string()),
+            State(pool),
+            Query(ViewerProfileQuery {
+                login: Some("viewer".into()),
+            }),
+        )
+        .await
+        .into_response();
+        assert_eq!(resp.status(), StatusCode::FORBIDDEN);
     }
 
     #[tokio::test]

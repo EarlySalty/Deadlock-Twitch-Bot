@@ -435,7 +435,21 @@ mod integration_tests {
             return None;
         }
         let url = std::env::var("TB_TEST_DATABASE_URL").ok()?;
-        sqlx::PgPool::connect(&url).await.ok()
+        let schema = crate::auth::session::test_schema_name("auth_security");
+        let admin_pool = sqlx::PgPool::connect(&url).await.ok()?;
+        sqlx::query(&format!("CREATE SCHEMA {schema}"))
+            .execute(&admin_pool)
+            .await
+            .ok()?;
+        admin_pool.close().await;
+
+        let opts: sqlx::postgres::PgConnectOptions = url.parse().ok()?;
+        let opts = opts.options([("search_path", schema.as_str())]);
+        sqlx::postgres::PgPoolOptions::new()
+            .max_connections(2)
+            .connect_with(opts)
+            .await
+            .ok()
     }
 
     fn test_fernet_key() -> String {
@@ -514,6 +528,13 @@ mod integration_tests {
         ensure_table(&pool).await;
         let limiter = RateLimiter::new(pool.clone(), test_fernet_key());
         let config = RateLimitLayerConfig::new(limiter, "test_bucket", 2, 60);
+        let client = format!("ratelimit-mw-{}", tb_crypto::random_urlsafe_token(8));
+        let prefix = bucket_prefix(&format!("test_bucket:{client}"), 60);
+        sqlx::query("DELETE FROM dashboard_sessions WHERE session_id LIKE $1")
+            .bind(format!("{}%", super::escape_like(&prefix)))
+            .execute(&pool)
+            .await
+            .ok();
 
         let app = Router::new().route("/x", get(|| async { "ok" })).layer(
             axum::middleware::from_fn_with_state(config, super::rate_limit_middleware),
@@ -522,11 +543,12 @@ mod integration_tests {
         let make_req = || {
             let mut req = axum::http::Request::builder()
                 .uri("/x")
+                .header("x-forwarded-for", &client)
                 .body(axum::body::Body::empty())
                 .unwrap();
-            // Nicht-Loopback-Peer, damit der IP-Bucket greift.
+            // Loopback-Peer wie hinter dem lokalen Proxy; der Bucket kommt aus XFF.
             req.extensions_mut().insert(axum::extract::ConnectInfo(
-                "203.0.113.7:5555".parse::<SocketAddr>().unwrap(),
+                "127.0.0.1:5555".parse::<SocketAddr>().unwrap(),
             ));
             req
         };
@@ -546,6 +568,12 @@ mod integration_tests {
             .headers()
             .get(axum::http::header::RETRY_AFTER)
             .is_some());
+
+        sqlx::query("DELETE FROM dashboard_sessions WHERE session_id LIKE $1")
+            .bind(format!("{}%", super::escape_like(&prefix)))
+            .execute(&pool)
+            .await
+            .ok();
     }
 
     /// Abgelaufene Hits zählen nicht mehr → Slot wird wieder frei.

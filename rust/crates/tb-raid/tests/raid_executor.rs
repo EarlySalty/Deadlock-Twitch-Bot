@@ -11,8 +11,8 @@ use sqlx::PgPool;
 use tb_crypto::{aad, FieldCipher, KID};
 use tb_raid::{
     RaidApi, RaidAuthStore, RaidExecutor, RaidHistoryStore, RaidOutcome, RaidRequest,
-    RaidTokenRefresher, RefreshError, TokenBlacklistStore, TokenOwnerInfo, TokenProvider, TokenResponse,
-    TwitchTokenClient,
+    RaidTokenRefresher, RaidBlacklistStore, RefreshError, TokenBlacklistStore, TokenOwnerInfo,
+    TokenProvider, TokenResponse, TwitchTokenClient,
 };
 
 const TEST_KEY_HEX: &str = "0f0e0d0c0b0a09080706050403020100ffeeddccbbaa99887766554433221100";
@@ -72,6 +72,14 @@ async fn pool_in_schema(dsn: &str, schema: &str) -> PgPool {
             twitch_user_id TEXT PRIMARY KEY, twitch_login TEXT, error_message TEXT,
             error_count INTEGER DEFAULT 1, first_error_at TEXT, last_error_at TEXT,
             notified INTEGER DEFAULT 0, grace_expires_at TEXT )",
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
+    sqlx::query(
+        "CREATE TABLE twitch_chatter_global_ban (
+            chatter_login TEXT PRIMARY KEY, chatter_id TEXT, reason TEXT,
+            added_by TEXT, added_at TIMESTAMPTZ NOT NULL DEFAULT NOW() )",
     )
     .execute(&pool)
     .await
@@ -177,6 +185,7 @@ async fn gueltiger_token_startet_raid_und_schreibt_erfolg() {
         api.clone(),
         provider(&pool, cipher),
         RaidHistoryStore::new(pool.clone()),
+        RaidBlacklistStore::new(pool.clone()),
     );
 
     let outcome = exec.execute(&request(), Utc::now()).await.unwrap();
@@ -217,6 +226,7 @@ async fn kein_token_schreibt_fehlschlag_ohne_api_aufruf() {
         api.clone(),
         provider(&pool, cipher),
         RaidHistoryStore::new(pool.clone()),
+        RaidBlacklistStore::new(pool.clone()),
     );
 
     let outcome = exec.execute(&request(), Utc::now()).await.unwrap();
@@ -236,6 +246,45 @@ async fn kein_token_schreibt_fehlschlag_ohne_api_aufruf() {
 }
 
 #[tokio::test]
+async fn global_ban_blockt_raid_vor_token_und_api() {
+    let pool = pool_or_skip!("t6d_exec_globalban");
+    let cipher = cipher();
+    seed_valid(&pool, &cipher, "100", 60).await;
+    sqlx::query(
+        "INSERT INTO twitch_chatter_global_ban (chatter_login, chatter_id) \
+         VALUES ('anderer_login', '200')",
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
+    let api = Arc::new(StubRaidApi {
+        fail_with: None,
+        called_with: Mutex::new(None),
+    });
+    let exec = RaidExecutor::new(
+        api.clone(),
+        provider(&pool, cipher),
+        RaidHistoryStore::new(pool.clone()),
+        RaidBlacklistStore::new(pool.clone()),
+    );
+
+    let outcome = exec.execute(&request(), Utc::now()).await.unwrap();
+    assert_eq!(outcome, RaidOutcome::Failed("target_hard_banned".into()));
+    assert!(
+        api.called_with.lock().unwrap().is_none(),
+        "RaidApi nicht aufgerufen"
+    );
+    let (success, err): (bool, Option<String>) = sqlx::query_as(
+        "SELECT success, error_message FROM twitch_raid_history WHERE from_broadcaster_id='100'",
+    )
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert!(!success);
+    assert_eq!(err.as_deref(), Some("target_hard_banned"));
+}
+
+#[tokio::test]
 async fn api_fehler_wird_in_history_geschrieben() {
     let pool = pool_or_skip!("t6d_exec_apierr");
     let cipher = cipher();
@@ -248,6 +297,7 @@ async fn api_fehler_wird_in_history_geschrieben() {
         api,
         provider(&pool, cipher),
         RaidHistoryStore::new(pool.clone()),
+        RaidBlacklistStore::new(pool.clone()),
     );
 
     let outcome = exec.execute(&request(), Utc::now()).await.unwrap();

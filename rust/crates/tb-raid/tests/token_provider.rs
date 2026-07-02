@@ -181,11 +181,7 @@ async fn unrestricted_scope_token_entkoppelt_chatters_von_raid_enabled() {
     );
     assert_eq!(
         provider
-            .get_valid_token_unrestricted_with_scope(
-                "42",
-                Utc::now(),
-                "moderator:read:chatters",
-            )
+            .get_valid_token_unrestricted_with_scope("42", Utc::now(), "moderator:read:chatters",)
             .await
             .unwrap()
             .as_deref(),
@@ -210,11 +206,7 @@ async fn unrestricted_scope_token_liefert_ohne_chatters_scope_none() {
 
     assert!(
         provider
-            .get_valid_token_unrestricted_with_scope(
-                "99",
-                Utc::now(),
-                "moderator:read:chatters",
-            )
+            .get_valid_token_unrestricted_with_scope("99", Utc::now(), "moderator:read:chatters",)
             .await
             .unwrap()
             .is_none(),

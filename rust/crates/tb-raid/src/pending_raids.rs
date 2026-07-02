@@ -672,7 +672,10 @@ mod tests {
         assert_eq!(back.target_stream_data, raid.target_stream_data);
         // Python-Zugriff: target_stream_data.get("_partner_score").get("final_score")
         let tsd = back.target_stream_data.expect("target_stream_data present");
-        assert_eq!(tsd["_partner_score"]["final_score"], serde_json::json!(12.5));
+        assert_eq!(
+            tsd["_partner_score"]["final_score"],
+            serde_json::json!(12.5)
+        );
     }
 
     // --- B7-08: read-only Iterations-API ---
@@ -683,7 +686,10 @@ mod tests {
         s.store(PendingRaid::new("src_a", "tgt_1"));
         s.store(PendingRaid::new("src_b", "tgt_2"));
 
-        let mut froms: Vec<String> = s.values().map(|r| r.from_broadcaster_login.clone()).collect();
+        let mut froms: Vec<String> = s
+            .values()
+            .map(|r| r.from_broadcaster_login.clone())
+            .collect();
         froms.sort();
         assert_eq!(froms, vec!["src_a".to_string(), "src_b".to_string()]);
         assert_eq!(s.values().count(), s.len());
@@ -703,8 +709,10 @@ mod tests {
         // Unnormalisierter Input trifft trotzdem (trim + lowercase).
         let canceled = s.cancel_from_source("  RAIDER  ");
         assert_eq!(canceled.len(), 2, "beide Raids der Quelle storniert");
-        let mut targets: Vec<String> =
-            canceled.iter().map(|r| r.to_broadcaster_id.clone()).collect();
+        let mut targets: Vec<String> = canceled
+            .iter()
+            .map(|r| r.to_broadcaster_id.clone())
+            .collect();
         targets.sort();
         assert_eq!(targets, vec!["tgt_1".to_string(), "tgt_2".to_string()]);
 

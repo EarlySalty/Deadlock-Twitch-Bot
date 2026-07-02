@@ -130,10 +130,19 @@ pub async fn ai_chat_handler(
         Err(_) => return json_err(StatusCode::BAD_REQUEST, json!({ "error": "invalid_json" })),
     };
 
-    let streamer = payload.get("streamer").and_then(Value::as_str).unwrap_or("").trim().to_lowercase();
-    if streamer.is_empty() {
+    let requested_streamer =
+        payload.get("streamer").and_then(Value::as_str).unwrap_or("").trim();
+    if requested_streamer.is_empty() {
         return json_err(StatusCode::BAD_REQUEST, json!({ "error": "streamer required" }));
     }
+    let streamer =
+        match crate::auth::resolve_streamer_scope(&auth, Some(requested_streamer), true) {
+            Ok(Some(s)) => s,
+            Ok(None) => {
+                return json_err(StatusCode::BAD_REQUEST, json!({ "error": "streamer required" }))
+            }
+            Err(resp) => return resp,
+        };
     let analysis_id = match parse_analysis_id(payload.get("analysis_id")) {
         Some(id) => id,
         None => return json_err(StatusCode::BAD_REQUEST, json!({ "error": "analysis_id required" })),
@@ -305,6 +314,23 @@ mod tests {
         .await
         .into_response();
         assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+    }
+
+    #[tokio::test]
+    async fn partner_fremder_streamer_403() {
+        let Some(pool) = make_pool("t_ai_chat_owner_mismatch").await else { return };
+        let resp = ai_chat_handler(
+            DashboardAuthLevel::Partner {
+                twitch_login: "owner".into(),
+                twitch_user_id: "42".into(),
+                display_name: "Owner".into(),
+            },
+            State(pool),
+            json!({"streamer": "other", "analysis_id": 7, "message": "hi"}).to_string(),
+        )
+        .await
+        .into_response();
+        assert_eq!(resp.status(), StatusCode::FORBIDDEN);
     }
 
     #[tokio::test]

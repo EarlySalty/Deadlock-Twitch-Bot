@@ -37,6 +37,26 @@ fn to_stream_data(stream: &HelixStream) -> StreamData {
     }
 }
 
+fn streams_by_login_from_helix_result<E: std::fmt::Display>(
+    result: Result<Vec<HelixStream>, E>,
+    broadcaster_id: &str,
+) -> HashMap<String, StreamData> {
+    match result {
+        Ok(streams) => streams
+            .iter()
+            .map(|s| (s.user_login.trim().to_lowercase(), to_stream_data(s)))
+            .collect(),
+        Err(error) => {
+            tracing::warn!(
+                %error,
+                broadcaster_id,
+                "Raid: Helix-Streams nicht ladbar, Kategorie-Fallback bleibt moeglich"
+            );
+            HashMap::new()
+        }
+    }
+}
+
 /// Skip-Grund der Quell-Prüfung fürs Log (Python-Reasons in `mixin.py`).
 fn source_skip_reason(state: &OfflineSourceState, _target_game_lower: &str) -> &'static str {
     let game_lower = state
@@ -316,6 +336,7 @@ impl OfflineRaidHandler {
             category_id: self.resolve_category_id().await,
             offline_trigger_ts: Some(offline_trigger_ts),
             reason: "auto_raid_on_offline".to_string(),
+            respect_soft_raid_blacklist: true,
         };
         match self.pipeline.run(&request).await {
             AutoRaidPipelineOutcome::Started { target_login, .. } => {
@@ -418,6 +439,7 @@ impl OfflineRaidHandler {
             category_id: self.resolve_category_id().await,
             offline_trigger_ts: None,
             reason: "manual_chat_command".to_string(),
+            respect_soft_raid_blacklist: false,
         };
         match self.pipeline.run(&request).await {
             AutoRaidPipelineOutcome::Started { target_login, .. } => {
@@ -455,17 +477,10 @@ impl OfflineRaidHandler {
             }
         };
         let logins: Vec<String> = roster.iter().map(|p| p.twitch_login.clone()).collect();
-        let streams_by_login: HashMap<String, StreamData> =
-            match self.helix.get_streams_by_logins(&logins, None).await {
-                Ok(streams) => streams
-                    .iter()
-                    .map(|s| (s.user_login.trim().to_lowercase(), to_stream_data(s)))
-                    .collect(),
-                Err(error) => {
-                    tracing::error!(%error, broadcaster_id, "Raid: Helix-Streams nicht ladbar");
-                    return None;
-                }
-            };
+        let streams_by_login = streams_by_login_from_helix_result(
+            self.helix.get_streams_by_logins(&logins, None).await,
+            broadcaster_id,
+        );
         let flags = self
             .live_state
             .source_states_by_logins(&logins)
@@ -555,6 +570,15 @@ mod tests {
         assert_eq!(data.viewer_count, 12);
         assert!(data.started_at.is_none(), "leere Startzeit → None");
         assert_eq!(data.game_name.as_deref(), Some("Deadlock"));
+    }
+
+    #[test]
+    fn stream_fetch_error_degradiert_zu_leerer_stream_map() {
+        let streams = streams_by_login_from_helix_result::<&str>(Err("helix down"), "source_1");
+        assert!(
+            streams.is_empty(),
+            "Helix-Fehler darf Kandidatenassemblierung nicht abbrechen"
+        );
     }
 
     #[test]

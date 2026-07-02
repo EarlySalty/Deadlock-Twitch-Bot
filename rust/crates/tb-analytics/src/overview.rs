@@ -575,9 +575,9 @@ pub async fn overview_sessions(
         .collect())
 }
 
-/// Kategorie-Perzentil/Rang eines Streamers (Python `_get_category_percentiles`
-/// + `_percentile_of` + Rank-Berechnung). `percentile` speist den Reach-Score,
-/// `rank`/`total` die categoryRank/categoryTotal-Felder.
+/// Kategorie-Perzentil/Rang eines Streamers (Python `_get_category_percentiles`,
+/// `_percentile_of` und die Rank-Berechnung). `percentile` speist den Reach-Score;
+/// die Felder `rank` und `total` fuellen categoryRank/categoryTotal.
 #[derive(Debug, Clone, Copy)]
 pub struct CategoryRank {
     pub percentile: f64,
@@ -586,8 +586,8 @@ pub struct CategoryRank {
 }
 
 /// Liefert Perzentil/Rang aus `twitch_stats_category` (per-Streamer AVG der
-/// Viewer, ts_utc = TIMESTAMPTZ). Ohne Streamer, fehlende Tabelle, leere Daten
-/// oder Streamer nicht in den Kategorie-Daten → `None`.
+/// Viewer, `ts_utc` als `TIMESTAMPTZ`). Ohne Streamer, leere Daten oder Streamer nicht
+/// in den Kategorie-Daten → `None`; Query-Fehler werden propagiert.
 pub async fn overview_category_rank(
     pool: &PgPool,
     since: &str,
@@ -599,7 +599,7 @@ pub async fn overview_category_rank(
     let login = login.to_lowercase();
     // `since` bleibt API-kompatibel als ISO-String; Postgres castet ihn explizit
     // gegen die Prod-`TIMESTAMPTZ`-Spalte.
-    let rows = match sqlx::query!(
+    let rows = sqlx::query!(
         r#"
         SELECT streamer AS "streamer!", AVG(viewer_count)::FLOAT8 AS "avg_vc!"
         FROM twitch_stats_category
@@ -610,11 +610,7 @@ pub async fn overview_category_rank(
         since
     )
     .fetch_all(pool)
-    .await
-    {
-        Ok(r) => r,
-        Err(_) => return Ok(None),
-    };
+    .await?;
     if rows.is_empty() {
         return Ok(None);
     }
@@ -743,8 +739,8 @@ mod tests {
         sqlx::query(
             r#"
             CREATE TABLE twitch_stats_category (
-                ts_utc       TIMESTAMPTZ NOT NULL,
-                streamer     TEXT NOT NULL,
+                ts_utc       TIMESTAMPTZ,
+                streamer     TEXT,
                 viewer_count INTEGER
             )
             "#,
@@ -1008,5 +1004,39 @@ mod tests {
             .await
             .unwrap()
             .is_none());
+    }
+
+    #[tokio::test]
+    async fn category_rank_propagiert_query_fehler() {
+        let dsn = match test_dsn() {
+            Some(d) => d,
+            None => {
+                eprintln!("SKIP: TB_TEST_DATABASE_URL nicht gesetzt");
+                return;
+            }
+        };
+        let schema = "test_overview_category_query_fail";
+        let pool = PgPoolOptions::new()
+            .max_connections(1)
+            .connect(&dsn)
+            .await
+            .expect("connect test-db");
+        sqlx::query(&format!("DROP SCHEMA IF EXISTS {schema} CASCADE"))
+            .execute(&pool)
+            .await
+            .expect("Schema droppen fehlgeschlagen");
+        sqlx::query(&format!("CREATE SCHEMA {schema}"))
+            .execute(&pool)
+            .await
+            .expect("Schema anlegen fehlgeschlagen");
+        sqlx::query(&format!("SET search_path TO {schema}"))
+            .execute(&pool)
+            .await
+            .expect("search_path setzen fehlgeschlagen");
+
+        let err = overview_category_rank(&pool, "2000-01-01T00:00:00+00:00", Some("streamer_x"))
+            .await
+            .expect_err("fehlende twitch_stats_category muss sichtbar fehlschlagen");
+        assert!(matches!(err, sqlx::Error::Database(_)));
     }
 }

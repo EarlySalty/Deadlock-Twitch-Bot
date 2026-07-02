@@ -3,11 +3,12 @@
 //! Port von `bot/analytics/api_admin.py:_api_admin_billing_subscriptions` +
 //! `_api_admin_billing_affiliates`. Zwei GET-Endpoints liefern die Stripe-Abos
 //! (+ manuelle Plan-Overrides) bzw. die Affiliate-Konten. Admin über
-//! `AuthLevel::is_privileged`.
+//! `DashboardAuthLevel`.
 
 use axum::{extract::State, response::IntoResponse, Json};
 use sqlx::PgPool;
-use tb_http_core::{ApiError, AuthLevel};
+use crate::auth::level::DashboardAuthLevel;
+use tb_http_core::ApiError;
 
 fn db_error(e: sqlx::Error) -> ApiError {
     tracing::error!("admin_billing SELECT-Fehler: {e}");
@@ -16,11 +17,11 @@ fn db_error(e: sqlx::Error) -> ApiError {
 
 /// `GET /twitch/api/admin/billing/subscriptions` — Stripe-Abos (Admin).
 pub async fn subscriptions_handler(
-    auth: AuthLevel,
+    auth: DashboardAuthLevel,
     State(pool): State<PgPool>,
 ) -> Result<impl IntoResponse, ApiError> {
-    if !auth.is_privileged() {
-        return Err(ApiError::unauthorized());
+    if let Some(err) = crate::auth::require_admin(&auth) {
+        return Err(err);
     }
     let payload = tb_analytics::admin_billing::load_billing_subscriptions(&pool).await.map_err(db_error)?;
     Ok(Json(payload))
@@ -28,11 +29,11 @@ pub async fn subscriptions_handler(
 
 /// `GET /twitch/api/admin/billing/affiliates` — Affiliate-Konten (Admin).
 pub async fn affiliates_handler(
-    auth: AuthLevel,
+    auth: DashboardAuthLevel,
     State(pool): State<PgPool>,
 ) -> Result<impl IntoResponse, ApiError> {
-    if !auth.is_privileged() {
-        return Err(ApiError::unauthorized());
+    if let Some(err) = crate::auth::require_admin(&auth) {
+        return Err(err);
     }
     let payload = tb_analytics::admin_billing::load_billing_affiliates(&pool).await.map_err(db_error)?;
     Ok(Json(payload))
@@ -73,11 +74,11 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn unauth_401() {
+    async fn unauth_auth_required_401() {
         let Some(pool) = make_pool("t_acbill_unauth").await else { return };
-        let (s, _) = body_json(subscriptions_handler(AuthLevel::None, State(pool.clone())).await).await;
+        let (s, _) = body_json(subscriptions_handler(DashboardAuthLevel::None, State(pool.clone())).await).await;
         assert_eq!(s, StatusCode::UNAUTHORIZED);
-        let (s, _) = body_json(affiliates_handler(AuthLevel::None, State(pool)).await).await;
+        let (s, _) = body_json(affiliates_handler(DashboardAuthLevel::None, State(pool)).await).await;
         assert_eq!(s, StatusCode::UNAUTHORIZED);
     }
 
@@ -86,12 +87,12 @@ mod tests {
         let Some(pool) = make_pool("t_acbill_ok").await else { return };
         sqlx::query("INSERT INTO twitch_billing_subscriptions (stripe_subscription_id, customer_reference, status, updated_at) VALUES ('s1', 'nani', 'active', '2026-06-01T00:00:00+00:00')")
             .execute(&pool).await.unwrap();
-        let (s, j) = body_json(subscriptions_handler(AuthLevel::Admin, State(pool.clone())).await).await;
+        let (s, j) = body_json(subscriptions_handler(DashboardAuthLevel::admin(), State(pool.clone())).await).await;
         assert_eq!(s, StatusCode::OK);
         assert_eq!(j["count"], 1);
         assert_eq!(j["items"][0]["login"], "nani");
 
-        let (s, j) = body_json(affiliates_handler(AuthLevel::Admin, State(pool)).await).await;
+        let (s, j) = body_json(affiliates_handler(DashboardAuthLevel::admin(), State(pool)).await).await;
         assert_eq!(s, StatusCode::OK);
         assert_eq!(j["count"], 0);
         assert!(j["items"].is_array());
