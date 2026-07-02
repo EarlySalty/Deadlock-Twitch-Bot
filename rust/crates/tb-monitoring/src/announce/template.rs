@@ -176,11 +176,12 @@ fn stream_thumbnail_url(
     now: DateTime<Utc>,
     seed: Option<&str>,
 ) -> String {
+    let raw_url = raw_url.trim();
     if raw_url.is_empty() {
         return String::new();
     }
     let (width, height) = if ratio == "4:3" {
-        (960, 720)
+        (1024, 768)
     } else {
         (1280, 720)
     };
@@ -191,7 +192,10 @@ fn stream_thumbnail_url(
         return resolved;
     }
     let separator = if resolved.contains('?') { '&' } else { '?' };
-    format!("{resolved}{separator}cb={}", stable_cache_buster(seed, now))
+    format!(
+        "{resolved}{separator}rand={}",
+        stable_cache_buster(seed, now)
+    )
 }
 
 fn shorten_text(text: &str, max_length: usize) -> String {
@@ -279,8 +283,16 @@ pub fn build_context(
         "stream_thumbnail_url".to_string(),
         thumbnail_url.unwrap_or("").to_string(),
     );
-    // Helix /streams liefert kein Profilbild — leer wie im Poll-Pfad von Python.
-    ctx.insert("channel_avatar_url".to_string(), String::new());
+    ctx.insert(
+        "channel_avatar_url".to_string(),
+        stream
+            .profile_image_url
+            .as_deref()
+            .map(str::trim)
+            .filter(|url| !url.is_empty())
+            .unwrap_or("")
+            .to_string(),
+    );
     ctx.insert(
         "now".to_string(),
         now.to_rfc3339_opts(SecondsFormat::Secs, false),
@@ -640,7 +652,10 @@ mod tests {
         assert_eq!(rendered.embed["fields"][0]["value"], "42");
         assert_eq!(rendered.embed["fields"][1]["value"], "Deadlock");
         let image = rendered.embed["image"]["url"].as_str().unwrap();
-        assert!(image.starts_with("https://cdn/1280x720.jpg?cb="), "{image}");
+        assert!(
+            image.starts_with("https://cdn/1280x720.jpg?rand="),
+            "{image}"
+        );
         // Footer-Timestamp = started_at (Default-Modus).
         assert_eq!(rendered.embed["timestamp"], "2026-06-09T17:30:00+00:00");
         assert_eq!(rendered.button_label, "Auf Twitch ansehen");
@@ -770,6 +785,23 @@ mod tests {
             Some("s1"),
         );
         assert_eq!(a, b, "gleicher Seed → gleicher Buster (Retry-Stabilität)");
+    }
+
+    #[test]
+    fn stream_thumbnail_url_nutzt_python_dimensionen_und_rand_parameter() {
+        let now = parse_dt_utc("2026-06-09T18:00:00Z").unwrap();
+        let expected_buster = stable_cache_buster(Some("seed"), now);
+        let out = stream_thumbnail_url(
+            "https://x/{width}x{height}.jpg?existing=1",
+            "4:3",
+            true,
+            now,
+            Some("seed"),
+        );
+        assert_eq!(
+            out,
+            format!("https://x/1024x768.jpg?existing=1&rand={expected_buster}")
+        );
     }
 
     #[test]

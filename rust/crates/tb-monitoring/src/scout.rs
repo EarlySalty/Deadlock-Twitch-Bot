@@ -259,7 +259,10 @@ fn to_snapshot(s: HelixStream) -> StreamSnapshot {
         is_mature: s.is_mature,
         tags: s.tags.unwrap_or_default(),
         started_at: Some(s.started_at).filter(|v| !v.is_empty()),
-        thumbnail_url: None,
+        thumbnail_url: Some(s.thumbnail_url)
+            .map(|url| url.trim().to_string())
+            .filter(|url| !url.is_empty()),
+        profile_image_url: None,
     }
 }
 
@@ -785,6 +788,7 @@ mod tests {
             is_mature: true,
             tags: Some(vec!["de".into()]),
             started_at: "2026-06-16T10:00:00Z".into(),
+            thumbnail_url: "https://cdn/{width}x{height}.jpg".into(),
             ..Default::default()
         };
         let snap = to_snapshot(helix);
@@ -792,6 +796,10 @@ mod tests {
         assert_eq!(snap.user_id, "42");
         assert_eq!(snap.viewer_count, 1234);
         assert_eq!(snap.started_at.as_deref(), Some("2026-06-16T10:00:00Z"));
+        assert_eq!(
+            snap.thumbnail_url.as_deref(),
+            Some("https://cdn/{width}x{height}.jpg")
+        );
         assert!(snap.is_mature);
     }
 }

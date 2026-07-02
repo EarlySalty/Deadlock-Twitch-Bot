@@ -1,5 +1,15 @@
 # Workflow
 
+## 2026-07-02 — Twitch Live-Preview Embed
+
+- Start: delegierter GPT-Implementierungsworker fuer Live-Announcement-Preview in `tb-monitoring`; Scope Python-Paritaet fuer Stream-Thumbnail im Discord-Embed, kein Commit/Push, keine sqlx-Query-Aenderungen.
+- Baseline vor Code-Aenderung: `SQLX_OFFLINE=true cargo test -p tb-monitoring` gruen mit 179 passed / 0 failed.
+- Implementiert bisher: Helix `/streams.thumbnail_url` wird in `StreamSnapshot` durchgereicht; Live-Embed rendert Stream-Preview als `1280x720` bzw. Python-`4:3` `1024x768` mit `rand=`-Cache-Buster; leere Preview-URL erzeugt kein `image`; Profilbild-Thumbnail wird ueber optionales `profile_image_url` unterstuetzt und im `tb-bot`-Poller best-effort via `/users` ergaenzt.
+- Fokustest: `SQLX_OFFLINE=true cargo test -p tb-monitoring --test announce` gruen mit 9 passed / 0 failed.
+- Verifikation final: `SQLX_OFFLINE=true cargo test -p tb-monitoring` gruen mit 182 passed / 0 failed; `SQLX_OFFLINE=true cargo check -p tb-bot` gruen; `git diff --check` gruen. Exakter Clippy-Auftrag `SQLX_OFFLINE=true cargo clippy -p tb-monitoring --all-targets -- -D warnings` blockiert vorab in bestehenden `tb-analytics`-Lints; Zielcrate-Check mit `--no-deps` blockiert nur an bekannten Alt-Lints `duplicate_mod` und `bool_assert_comparison`, mit diesen Allows gruen. `cargo fmt -p tb-monitoring -- --check` bleibt wegen vorhandener umfangsfremder Formatabweichungen rot; keine repo-weite Formatierung vorgenommen.
+- Rework: ungecachten Helix-`/users`-Aufruf aus dem `tb-bot`-Poller entfernt; Poll-Ticks liefern `profile_image_url: None` wie Python, damit ein haengender User-Lookup Announcements/Offline-Erkennung nicht verzögert.
+- Rework-Verifikation: `SQLX_OFFLINE=true cargo test -p tb-monitoring` gruen mit 182 passed / 0 failed; `SQLX_OFFLINE=true cargo check -p tb-bot` gruen; `SQLX_OFFLINE=true cargo test -p tb-transport-twitch` gruen mit 77 passed / 0 failed; `git diff --check` gruen.
+
 ## 2026-07-02 — Rework IRC-Writes strikt additiv
 
 - Start: delegierter GPT-Implementierungsworker fuer gezielten Mini-Rework in `tb-monitoring::irc_lurker` und `tb-engagement::irc_reader`; Scope Kontrollfluss-Drift bei IRC-Writes/PONG, kein Commit/Push/Stash, kein repo-weites `cargo fmt`.

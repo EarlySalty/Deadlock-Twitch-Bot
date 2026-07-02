@@ -5,6 +5,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 
 use serde_json::Value;
+use sha2::{Digest, Sha256};
 use tb_monitoring::poller::hooks::{
     AnnounceLiveRequest, AnnouncementSink, EndAnnouncementOutcome, EndAnnouncementRequest,
 };
@@ -27,6 +28,12 @@ macro_rules! pool_or_skip {
 
 type SentMessage = (i64, Option<String>, Value, Vec<i64>, Option<Value>);
 type EditedMessage = (i64, String, Value, Option<Value>);
+
+fn stable_cache_buster(seed: &str) -> String {
+    let mut hasher = Sha256::new();
+    hasher.update(seed.as_bytes());
+    hex::encode(hasher.finalize())[..16].to_string()
+}
 
 #[derive(Default)]
 struct StubTransport {
@@ -136,6 +143,7 @@ fn live_request(login: &str) -> AnnounceLiveRequest {
             viewer_count: 42,
             started_at: Some("2026-06-09T17:30:00Z".to_string()),
             thumbnail_url: Some("https://cdn/{width}x{height}.jpg".to_string()),
+            profile_image_url: Some("https://avatar/drag.png".to_string()),
             ..Default::default()
         },
         previous_message_id: None,
@@ -178,12 +186,50 @@ async fn announce_live_default_config_und_mentions() {
     assert_eq!(content.as_deref(), Some(result.notification_text.as_str()));
     assert_eq!(embed["title"], "Drag ist LIVE in Deadlock!");
     assert_eq!(embed["url"], "https://www.twitch.tv/drag?ref=dc");
+    assert_eq!(embed["thumbnail"]["url"], "https://avatar/drag.png");
     assert!(roles.contains(&999) && roles.contains(&777));
     let view = view_spec.as_ref().expect("Tracking-View");
     assert_eq!(view["type"], "twitch_live_tracking");
     assert_eq!(
         view["tracking_token"].as_str(),
         result.tracking_token.as_deref()
+    );
+}
+
+#[tokio::test]
+async fn announce_live_setzt_stream_preview_mit_cache_buster() {
+    let transport = Arc::new(StubTransport::default());
+    let sink = sink_with(transport.clone());
+
+    let result = sink
+        .announce_live(live_request("drag"))
+        .await
+        .expect("gesendet");
+    let token = result.tracking_token.as_deref().expect("tracking token");
+    let expected = format!(
+        "https://cdn/1280x720.jpg?rand={}",
+        stable_cache_buster(token)
+    );
+
+    let sends = transport.sends.lock().unwrap();
+    let (_, _, embed, _, _) = &sends[0];
+    assert_eq!(embed["image"]["url"], expected);
+}
+
+#[tokio::test]
+async fn announce_live_ohne_stream_thumbnail_setzt_kein_image() {
+    let transport = Arc::new(StubTransport::default());
+    let sink = sink_with(transport.clone());
+    let mut request = live_request("drag");
+    request.stream.thumbnail_url = Some(String::new());
+
+    sink.announce_live(request).await.expect("gesendet");
+
+    let sends = transport.sends.lock().unwrap();
+    let (_, _, embed, _, _) = &sends[0];
+    assert!(
+        embed.get("image").is_none(),
+        "leere thumbnail_url darf kein kaputtes Image-Feld erzeugen"
     );
 }
 
@@ -229,8 +275,14 @@ async fn announce_live_suppress_role_pings_unterdrueckt_alle_rollen_mentions() {
         "Cooldown-Reannounce darf keine Rollen-Mention senden"
     );
     let sends = transport.sends.lock().unwrap();
-    let (_, content, _, roles, _) = &sends[0];
+    let (_, content, embed, roles, _) = &sends[0];
     assert!(content.is_none());
+    assert!(
+        embed["image"]["url"]
+            .as_str()
+            .is_some_and(|url| url.starts_with("https://cdn/1280x720.jpg?rand=")),
+        "Cooldown-Reannounce behaelt das Stream-Preview"
+    );
     assert!(
         roles.is_empty(),
         "Cooldown-Reannounce darf keine allowed role IDs setzen"
@@ -299,6 +351,10 @@ async fn end_announcement_editiert_offline_embed() {
     assert_eq!((*channel_id, message_id.as_str()), (555, "msg-7"));
     assert_eq!(embed["title"], "Drag ist OFFLINE");
     assert_eq!(embed["description"], "Letzter Titel");
+    assert!(
+        embed.get("image").is_none(),
+        "Offline-Embed bleibt ohne Live-Preview, wenn keine VOD-Vorschau vorhanden ist"
+    );
     let view = view_spec.as_ref().expect("Link-Button");
     assert_eq!(view["type"], "link_button");
     assert_eq!(view["url"], "https://www.twitch.tv/drag?ref=dc");

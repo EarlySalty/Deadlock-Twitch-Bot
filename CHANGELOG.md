@@ -1,3 +1,11 @@
+## #322 — Stream-Vorschaubild ist zurück in den Live-Ankündigungen
+
+**Problem:** Seit der Umstellung auf die neue Bot-Version fehlte in den Live-Ankündigungen das große Vorschaubild vom Stream — das Embed war nur noch Text. Die Bildinfo kam von Twitch zwar an, wurde intern aber schlicht nie bis ins Embed weitergereicht.
+
+**Änderung:** Die Kette ist geflickt: Live-Ankündigungen zeigen wieder das aktuelle Stream-Vorschaubild in voller Breite, genau wie früher. Damit Discord nicht tagelang ein altes gecachtes Bild anzeigt, bekommt jede Ankündigung ihre eigene Bild-Adresse. Auch die ping-freie Wiederankündigung nach kurzen Stream-Aussetzern bekommt das Bild.
+
+**Ergebnis:** Live-Posts sehen wieder nach was aus — Vorschaubild drin, Offline-Embeds bleiben wie gehabt.
+
 ## #321 — Dashboard akzeptiert wieder seinen konfigurierten Port
 
 **Ausgangslage:** Die neue Start-Absicherung des Dashboards verglich den Port gegen einen fest verdrahteten Standardwert statt gegen den tatsächlich konfigurierten. Auf dem regulären Live-Port hätte eine scharf geschaltete Absicherung den Start abgelehnt.

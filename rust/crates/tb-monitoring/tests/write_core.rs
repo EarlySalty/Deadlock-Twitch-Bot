@@ -72,6 +72,7 @@ fn deadlock_stream(stream_id: &str, login: &str, viewers: i32) -> StreamSnapshot
         tags: vec!["DE".to_string()],
         started_at: None,
         thumbnail_url: None,
+        profile_image_url: None,
     }
 }
 

@@ -24,6 +24,10 @@ pub struct StreamSnapshot {
     pub started_at: Option<String>,
     /// Vorschaubild-Template laut Helix (`{width}`/`{height}`-Platzhalter).
     pub thumbnail_url: Option<String>,
+    /// Optionales Kanalprofilbild fuer das kleine Embed-Thumbnail.
+    /// Der Poll-Pfad ruft aus Python-Paritaet kein `/users` auf und liefert
+    /// hier `None`; andere Pfade koennen ein bereits vorliegendes Profilbild setzen.
+    pub profile_image_url: Option<String>,
 }
 
 impl StreamSnapshot {

@@ -33,6 +33,8 @@ pub struct HelixStream {
     pub tags: Option<Vec<String>>,
     #[serde(default)]
     pub started_at: String,
+    #[serde(default)]
+    pub thumbnail_url: String,
 }
 
 #[derive(Debug, Deserialize)]

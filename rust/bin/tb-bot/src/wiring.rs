@@ -136,7 +136,10 @@ fn to_snapshot(stream: HelixStream) -> StreamSnapshot {
         is_mature: stream.is_mature,
         tags: stream.tags.unwrap_or_default(),
         started_at: Some(stream.started_at).filter(|s| !s.is_empty()),
-        thumbnail_url: None,
+        thumbnail_url: Some(stream.thumbnail_url)
+            .map(|url| url.trim().to_string())
+            .filter(|url| !url.is_empty()),
+        profile_image_url: None,
     }
 }
 
