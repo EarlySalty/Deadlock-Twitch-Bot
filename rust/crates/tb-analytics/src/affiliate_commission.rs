@@ -10,8 +10,9 @@
 //! 2. Werbenden Affiliate aus `affiliate_streamer_claims` lösen.
 //! 3. 30 % des bezahlten Brutto als `commission_cents` (Floor) berechnen.
 //! 4. Unter Affiliate-Advisory-Lock idempotent in `affiliate_commissions`
-//!    einfügen (UNIQUE auf `stripe_event_id` → Replays sind `duplicate`).
-//! 5. Hat der Affiliate ein Stripe-Connect-Konto, ausstehende Provisionen per
+//!    einfügen und committen (UNIQUE auf `stripe_event_id` → Replays sind
+//!    `duplicate`).
+//! 5. Erst danach in einer separaten Transaktion ausstehende Provisionen per
 //!    Stripe-Transfer auszahlen; sonst bleibt der Eintrag `pending` (bzw.
 //!    `skipped`, wenn die offene Summe den Sicherheitsdeckel überschreitet).
 //!
@@ -92,16 +93,25 @@ fn commission_lock_key(affiliate_login: &str) -> (i32, i32) {
     (LOCK_NAMESPACE, crc32_ieee(normalized.as_bytes()) as i32)
 }
 
-/// `true`, wenn der Fehler auf eine UNIQUE-/Duplicate-Verletzung deutet (Python:
-/// `"unique" in msg or "duplicate" in msg`).
-fn is_duplicate_error(e: &sqlx::Error) -> bool {
-    let msg = e.to_string().to_lowercase();
-    msg.contains("unique") || msg.contains("duplicate")
-}
-
 fn cents_to_int4(value: i64, field: &str) -> Result<i32, sqlx::Error> {
     i32::try_from(value)
         .map_err(|_| sqlx::Error::InvalidArgument(format!("{field} out of int4 range: {value}")))
+}
+
+async fn existing_commission_for_event(
+    pool: &PgPool,
+    stripe_event_id: &str,
+) -> Result<Option<(i32, String, String)>, sqlx::Error> {
+    sqlx::query_as::<_, (i32, String, String)>(
+        r#"
+        SELECT id, affiliate_twitch_login, status
+        FROM affiliate_commissions
+        WHERE stripe_event_id = $1
+        "#,
+    )
+    .bind(stripe_event_id)
+    .fetch_optional(pool)
+    .await
 }
 
 async fn acquire_commission_lock(
@@ -174,6 +184,13 @@ pub async fn process_commission(
     stripe: Option<&StripeClient>,
     invoice: &InvoicePayment<'_>,
 ) -> Result<CommissionOutcome, sqlx::Error> {
+    if let Some((_id, existing_affiliate_login, _status)) =
+        existing_commission_for_event(pool, invoice.stripe_event_id).await?
+    {
+        replay_pending_commissions_for_affiliate(pool, stripe, &existing_affiliate_login).await?;
+        return Ok(CommissionOutcome::Duplicate);
+    }
+
     // 1. Streamer aus dem Abo lösen. Der Streamer-Identifier ist
     // `customer_reference` (ein Twitch-Login, siehe stripe/webhook_apply.rs:351);
     // eine `twitch_login`-Spalte hat `twitch_billing_subscriptions` nie gehabt.
@@ -222,7 +239,10 @@ pub async fn process_commission(
     let commission_cents_i32 = cents_to_int4(commission_cents, "commission_cents")?;
     let now = chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Micros, false);
 
-    // 4. Unter Advisory-Lock idempotent einfügen.
+    // 4. Ledger-Phase: unter Advisory-Lock idempotent einfügen und committen,
+    // BEVOR ein Stripe-Transfer versucht wird. Crash nach externem Transfer darf
+    // die Commission-ID nie wieder verschwinden lassen, weil sie den
+    // Stripe-Idempotency-Key stabilisiert.
     let mut tx = pool.begin().await?;
     acquire_commission_lock(&mut tx, &affiliate_login).await?;
 
@@ -255,59 +275,68 @@ pub async fn process_commission(
         }
     }
 
-    let insert = sqlx::query!(
+    let inserted_row: Option<(i32, String, String)> = sqlx::query_as(
         r#"
         INSERT INTO affiliate_commissions
             (affiliate_twitch_login, streamer_login, stripe_event_id, stripe_invoice_id,
              stripe_customer_id, brutto_cents, commission_cents, currency,
              status, period_start, period_end, created_at)
         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
+        ON CONFLICT (stripe_event_id) DO NOTHING
+        RETURNING id, affiliate_twitch_login, status
         "#,
-        &affiliate_login,
-        &streamer_login,
-        invoice.stripe_event_id,
-        invoice.invoice_id,
-        invoice.stripe_customer_id,
-        brutto_cents_i32,
-        commission_cents_i32,
-        invoice.currency,
-        initial_status,
-        invoice.period_start,
-        invoice.period_end,
-        &now
     )
-    .execute(&mut *tx)
-    .await;
-
-    if let Err(e) = insert {
-        if is_duplicate_error(&e) {
-            tx.rollback().await?;
-            return Ok(CommissionOutcome::Duplicate);
-        }
-        return Err(e);
-    }
-
-    // 5. Ohne Connect-Konto bleibt es beim erfassten Status.
-    if stripe_account_id.is_empty() {
-        tx.commit().await?;
-        return Ok(CommissionOutcome::Recorded(initial_status.to_string()));
-    }
-
-    // Auszahlung: alle offenen Provisionen des Affiliates per Stripe-Transfer.
-    // Python hält den Affiliate-Advisory-Lock über Insert UND Replay.
-    replay_pending_commissions_in_tx(&mut tx, stripe, &stripe_account_id, &affiliate_login).await?;
-
-    // Finaler Status der gerade verbuchten Provision.
-    let status: Option<String> = sqlx::query_scalar!(
-        "SELECT status FROM affiliate_commissions WHERE stripe_event_id = $1",
-        invoice.stripe_event_id
-    )
+    .bind(&affiliate_login)
+    .bind(&streamer_login)
+    .bind(invoice.stripe_event_id)
+    .bind(invoice.invoice_id)
+    .bind(invoice.stripe_customer_id)
+    .bind(brutto_cents_i32)
+    .bind(commission_cents_i32)
+    .bind(invoice.currency)
+    .bind(initial_status)
+    .bind(invoice.period_start)
+    .bind(invoice.period_end)
+    .bind(&now)
     .fetch_optional(&mut *tx)
     .await?;
+
+    let (commission_id, ledger_affiliate_login, ledger_status, inserted_new) =
+        if let Some((id, affiliate, status)) = inserted_row {
+            (id, affiliate, status, true)
+        } else {
+            let (id, affiliate, status): (i32, String, String) = sqlx::query_as(
+                r#"
+                SELECT id, affiliate_twitch_login, status
+                FROM affiliate_commissions
+                WHERE stripe_event_id = $1
+                "#,
+            )
+            .bind(invoice.stripe_event_id)
+            .fetch_optional(&mut *tx)
+            .await?
+            .ok_or(sqlx::Error::RowNotFound)?;
+            (id, affiliate, status, false)
+        };
+
     tx.commit().await?;
-    Ok(CommissionOutcome::Recorded(
-        status.unwrap_or_else(|| "pending".to_string()),
-    ))
+
+    if inserted_new && stripe_account_id.is_empty() {
+        return Ok(CommissionOutcome::Recorded(ledger_status));
+    }
+
+    replay_pending_commissions_for_affiliate(pool, stripe, &ledger_affiliate_login).await?;
+
+    if !inserted_new {
+        return Ok(CommissionOutcome::Duplicate);
+    }
+
+    let status: Option<String> =
+        sqlx::query_scalar("SELECT status FROM affiliate_commissions WHERE id = $1")
+            .bind(commission_id)
+            .fetch_optional(pool)
+            .await?;
+    Ok(CommissionOutcome::Recorded(status.unwrap_or(ledger_status)))
 }
 
 /// Eine offene/fehlgeschlagene Provision (für Replay-Transfer).
@@ -336,6 +365,35 @@ pub async fn replay_pending_commissions(
     let mut tx = pool.begin().await?;
     acquire_commission_lock(&mut tx, &affiliate_login).await?;
     replay_pending_commissions_in_tx(&mut tx, stripe, stripe_account_id, &affiliate_login).await?;
+    tx.commit().await?;
+    Ok(())
+}
+
+async fn replay_pending_commissions_for_affiliate(
+    pool: &PgPool,
+    stripe: Option<&StripeClient>,
+    affiliate_login: &str,
+) -> Result<(), sqlx::Error> {
+    let affiliate_login = affiliate_login.trim().to_lowercase();
+    if affiliate_login.is_empty() {
+        return Ok(());
+    }
+    let mut tx = pool.begin().await?;
+    acquire_commission_lock(&mut tx, &affiliate_login).await?;
+    let stripe_account_id: String = sqlx::query_scalar!(
+        "SELECT stripe_account_id FROM affiliate_accounts WHERE twitch_login = $1",
+        &affiliate_login
+    )
+    .fetch_optional(&mut *tx)
+    .await?
+    .flatten()
+    .unwrap_or_default()
+    .trim()
+    .to_string();
+    if !stripe_account_id.is_empty() {
+        replay_pending_commissions_in_tx(&mut tx, stripe, &stripe_account_id, &affiliate_login)
+            .await?;
+    }
     tx.commit().await?;
     Ok(())
 }
@@ -419,7 +477,7 @@ async fn transfer_commission_in_tx(
                 .unwrap_or("");
             let transferred_at =
                 chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Micros, false);
-            sqlx::query!(
+            sqlx::query(
                 r#"
                 UPDATE affiliate_commissions
                 SET status = 'transferred',
@@ -427,11 +485,13 @@ async fn transfer_commission_in_tx(
                     transferred_at = $2,
                     error_message = NULL
                 WHERE id = $3
+                  AND stripe_transfer_id IS NULL
+                  AND transferred_at IS NULL
                 "#,
-                transfer_id,
-                &transferred_at,
-                commission_id
             )
+            .bind(transfer_id)
+            .bind(&transferred_at)
+            .bind(commission_id)
             .execute(&mut **tx)
             .await?;
         }
@@ -439,7 +499,7 @@ async fn transfer_commission_in_tx(
             tracing::warn!(%error, commission_id, "Affiliate Stripe-Transfer fehlgeschlagen");
             let mut msg = error.to_string();
             msg.truncate(500);
-            sqlx::query!(
+            sqlx::query(
                 r#"
                 UPDATE affiliate_commissions
                 SET status = 'pending',
@@ -447,10 +507,12 @@ async fn transfer_commission_in_tx(
                     transferred_at = NULL,
                     error_message = $1
                 WHERE id = $2
+                  AND stripe_transfer_id IS NULL
+                  AND transferred_at IS NULL
                 "#,
-                &msg,
-                commission_id
             )
+            .bind(&msg)
+            .bind(commission_id)
             .execute(&mut **tx)
             .await?;
         }
@@ -462,7 +524,12 @@ async fn transfer_commission_in_tx(
 mod tests {
     use super::*;
     use sqlx::postgres::{PgConnectOptions, PgPoolOptions};
+    use std::collections::HashMap;
     use std::str::FromStr;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::sync::{Arc, Mutex};
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    use tokio::sync::oneshot;
     use wiremock::matchers::{body_string_contains, header, method, path};
     use wiremock::{Mock, MockServer, ResponseTemplate};
 
@@ -590,6 +657,108 @@ mod tests {
             invoice_id: "in_1",
             period_start: "2026-06-01",
             period_end: "2026-07-01",
+        }
+    }
+
+    struct DedupeStripeServer {
+        base_url: String,
+        effective_transfers: Arc<AtomicUsize>,
+        requests: Arc<AtomicUsize>,
+        _task: tokio::task::JoinHandle<()>,
+    }
+
+    fn header_value(request: &str, name: &str) -> Option<String> {
+        request.lines().find_map(|line| {
+            let (header_name, value) = line.split_once(':')?;
+            header_name
+                .eq_ignore_ascii_case(name)
+                .then(|| value.trim().to_string())
+        })
+    }
+
+    fn request_complete(request: &[u8]) -> bool {
+        let Some(header_end) = request.windows(4).position(|w| w == b"\r\n\r\n") else {
+            return false;
+        };
+        let headers = String::from_utf8_lossy(&request[..header_end]);
+        let content_length = header_value(&headers, "content-length")
+            .and_then(|value| value.parse::<usize>().ok())
+            .unwrap_or(0);
+        request.len() >= header_end + 4 + content_length
+    }
+
+    async fn start_dedupe_stripe_server(
+        gate: Option<(oneshot::Sender<()>, oneshot::Receiver<()>)>,
+    ) -> DedupeStripeServer {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let base_url = format!("http://{}", listener.local_addr().unwrap());
+        let seen = Arc::new(Mutex::new(HashMap::<String, String>::new()));
+        let effective_transfers = Arc::new(AtomicUsize::new(0));
+        let requests = Arc::new(AtomicUsize::new(0));
+        let gate = Arc::new(Mutex::new(gate));
+        let task = {
+            let seen = Arc::clone(&seen);
+            let effective_transfers = Arc::clone(&effective_transfers);
+            let requests = Arc::clone(&requests);
+            let gate = Arc::clone(&gate);
+            tokio::spawn(async move {
+                loop {
+                    let Ok((mut stream, _addr)) = listener.accept().await else {
+                        break;
+                    };
+                    let seen = Arc::clone(&seen);
+                    let effective_transfers = Arc::clone(&effective_transfers);
+                    let requests = Arc::clone(&requests);
+                    let gate = Arc::clone(&gate);
+                    tokio::spawn(async move {
+                        requests.fetch_add(1, Ordering::SeqCst);
+                        let mut request = Vec::new();
+                        let mut buf = [0_u8; 1024];
+                        loop {
+                            let n = match stream.read(&mut buf).await {
+                                Ok(0) | Err(_) => return,
+                                Ok(n) => n,
+                            };
+                            request.extend_from_slice(&buf[..n]);
+                            if request_complete(&request) {
+                                break;
+                            }
+                        }
+                        let request_text = String::from_utf8_lossy(&request);
+                        let idempotency_key = header_value(&request_text, "idempotency-key")
+                            .unwrap_or_else(|| "missing".to_string());
+                        let transfer_id = {
+                            let mut seen = seen.lock().unwrap();
+                            if let Some(id) = seen.get(&idempotency_key) {
+                                id.clone()
+                            } else {
+                                effective_transfers.fetch_add(1, Ordering::SeqCst);
+                                let id = format!("tr_effective_{}", seen.len() + 1);
+                                seen.insert(idempotency_key, id.clone());
+                                id
+                            }
+                        };
+                        let gate_pair = { gate.lock().unwrap().take() };
+                        if let Some((seen_tx, release_rx)) = gate_pair {
+                            let _ = seen_tx.send(());
+                            let _ = release_rx.await;
+                        }
+                        let body = format!(r#"{{"id":"{transfer_id}"}}"#);
+                        let response = format!(
+                            "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                            body.len(),
+                            body
+                        );
+                        let _ = stream.write_all(response.as_bytes()).await;
+                    });
+                }
+            })
+        };
+        DedupeStripeServer {
+            base_url,
+            effective_transfers,
+            requests,
+            _task: task,
         }
     }
 
@@ -753,6 +922,133 @@ mod tests {
         ).fetch_one(&pool).await.unwrap();
         assert_eq!(status, "pending");
         assert!(err.is_some(), "Transfer-Fehler muss error_message setzen");
+    }
+
+    #[tokio::test]
+    async fn commission_ledger_is_pending_durable_before_transfer() {
+        let Some(pool) = connect("comm_ledger_before_transfer").await else {
+            return;
+        };
+        seed_claim(&pool).await;
+        sqlx::query(
+            "INSERT INTO affiliate_accounts (twitch_login, stripe_account_id) VALUES ('aff1', 'acct_123')",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+        let (seen_tx, seen_rx) = oneshot::channel();
+        let (release_tx, release_rx) = oneshot::channel();
+        let server = start_dedupe_stripe_server(Some((seen_tx, release_rx))).await;
+        let client = StripeClient::new("sk_test_secret")
+            .unwrap()
+            .with_api_base(server.base_url.clone());
+
+        let task_pool = pool.clone();
+        let task_client = client.clone();
+        let task = tokio::spawn(async move {
+            process_commission(
+                &task_pool,
+                Some(&task_client),
+                &invoice("evt_ledger", "cus_1", 1000),
+            )
+            .await
+        });
+
+        tokio::time::timeout(std::time::Duration::from_secs(5), seen_rx)
+            .await
+            .unwrap()
+            .unwrap();
+        let (status, transfer_id): (String, Option<String>) = sqlx::query_as(
+            "SELECT status, stripe_transfer_id FROM affiliate_commissions WHERE stripe_event_id = 'evt_ledger'",
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert_eq!(status, "pending");
+        assert!(
+            transfer_id.is_none(),
+            "Transfer darf vor Stripe-Antwort noch nicht markiert sein"
+        );
+
+        release_tx.send(()).unwrap();
+        let outcome = task.await.unwrap().unwrap();
+        assert_eq!(outcome, CommissionOutcome::Recorded("transferred".into()));
+        assert_eq!(server.effective_transfers.load(Ordering::SeqCst), 1);
+    }
+
+    #[tokio::test]
+    async fn successful_transfer_then_lost_commit_retries_same_idempotency_key() {
+        let Some(pool) = connect("comm_transfer_lost_commit").await else {
+            return;
+        };
+        sqlx::query(
+            "INSERT INTO affiliate_accounts (twitch_login, stripe_account_id) VALUES ('aff1', 'acct_123')",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+        sqlx::query(
+            "INSERT INTO affiliate_commissions \
+                (affiliate_twitch_login, streamer_login, stripe_event_id, stripe_invoice_id, \
+                 stripe_customer_id, brutto_cents, commission_cents, currency, status, created_at) \
+             VALUES ('aff1', 'streamerx', 'evt_lost_commit', 'in_1', 'cus_1', 1000, 300, 'eur', \
+                     'pending', '2026-06-01')",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+        let server = start_dedupe_stripe_server(None).await;
+        let client = StripeClient::new("sk_test_secret")
+            .unwrap()
+            .with_api_base(server.base_url.clone());
+
+        let mut tx = pool.begin().await.unwrap();
+        acquire_commission_lock(&mut tx, "aff1").await.unwrap();
+        transfer_commission_in_tx(
+            &mut tx,
+            Some(&client),
+            "acct_123",
+            1,
+            "evt_lost_commit",
+            300,
+            "eur",
+        )
+        .await
+        .unwrap();
+        tx.rollback().await.unwrap();
+
+        let (status_after_rollback, transfer_after_rollback): (String, Option<String>) =
+            sqlx::query_as(
+                "SELECT status, stripe_transfer_id FROM affiliate_commissions WHERE stripe_event_id = 'evt_lost_commit'",
+            )
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+        assert_eq!(status_after_rollback, "pending");
+        assert!(transfer_after_rollback.is_none());
+
+        replay_pending_commissions(&pool, Some(&client), "acct_123", "aff1")
+            .await
+            .unwrap();
+
+        let (status, transfer_id): (String, Option<String>) = sqlx::query_as(
+            "SELECT status, stripe_transfer_id FROM affiliate_commissions WHERE stripe_event_id = 'evt_lost_commit'",
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert_eq!(status, "transferred");
+        assert_eq!(transfer_id.as_deref(), Some("tr_effective_1"));
+        assert_eq!(
+            server.requests.load(Ordering::SeqCst),
+            2,
+            "Retry muss Stripe erneut mit demselben Key fragen"
+        );
+        assert_eq!(
+            server.effective_transfers.load(Ordering::SeqCst),
+            1,
+            "Stripe-Dedupe darf nur einen effektiven Transfer ausführen"
+        );
     }
 
     #[tokio::test]

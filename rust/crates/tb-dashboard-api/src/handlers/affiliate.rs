@@ -411,6 +411,7 @@ pub async fn claim_handler(
         return json_error(StatusCode::BAD_REQUEST, "invalid_login");
     }
     let twitch_login = session.twitch_login.trim().to_lowercase();
+    // POLICY(offen): jeder Affiliate claimt jeden ungeclaimten Streamer (Python-Parität); ggf. später Referral-Token/Consent/Admin-Freigabe.
     match claim_streamer(&pool, &twitch_login, &streamer_login).await {
         Ok(ClaimStatus::Ok) => {
             Json(json!({ "ok": true, "claimed": streamer_login })).into_response()
