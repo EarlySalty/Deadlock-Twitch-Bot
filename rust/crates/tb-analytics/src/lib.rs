@@ -7,6 +7,7 @@
 
 pub mod admin_affiliate;
 pub mod admin_billing;
+pub mod affiliate_claim_window;
 pub mod affiliate_commission;
 pub mod affiliate_gutschrift;
 pub mod affiliate_pii;

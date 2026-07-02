@@ -17,6 +17,7 @@ use serde::Deserialize;
 use serde_json::{json, Value};
 use sqlx::{PgPool, Row};
 use tb_analytics::{
+    affiliate_claim_window::{sql_activation_grace_predicate, sql_reservation_fresh_predicate},
     affiliate_commission::connect_account_and_replay,
     affiliate_gutschrift::{self, GutschriftError},
     affiliate_pii::{
@@ -415,7 +416,10 @@ pub async fn claim_handler(
         return json_error(StatusCode::BAD_REQUEST, "invalid_login");
     }
     let twitch_login = session.twitch_login.trim().to_lowercase();
-    // POLICY(offen): jeder Affiliate claimt jeden ungeclaimten Streamer (Python-Parität); ggf. später Referral-Token/Consent/Admin-Freigabe.
+    // POLICY: Claims sind Reservierungen. Nicht-Partner dürfen vorab reserviert
+    // werden, aktive Partner nur innerhalb der Nachfrist; frische oder bereits
+    // konvertierte Claims blockieren, abgelaufene Nicht-Partner-Reservierungen
+    // sind überschreibbar.
     match claim_streamer(&pool, &twitch_login, &streamer_login).await {
         Ok(ClaimStatus::Ok) => {
             Json(json!({ "ok": true, "claimed": streamer_login })).into_response()
@@ -777,32 +781,95 @@ async fn claim_streamer(
     twitch_login: &str,
     streamer_login: &str,
 ) -> Result<ClaimStatus, sqlx::Error> {
-    let partner_row = sqlx::query(
+    let twitch_login = twitch_login.trim().to_lowercase();
+    let streamer_login = streamer_login.trim().to_lowercase();
+    let now = chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Micros, false);
+
+    let mut tx = pool.begin().await?;
+    sqlx::query(
         r#"
-        SELECT twitch_login
+        SELECT 1
+        FROM (SELECT pg_advisory_xact_lock(hashtext(LOWER($1))::bigint)) AS claim_lock
+        "#,
+    )
+    .bind(&streamer_login)
+    .fetch_one(&mut *tx)
+    .await?;
+
+    let partner_state: Option<(i32, Option<String>)> = sqlx::query_as(
+        r#"
+        SELECT COALESCE(is_partner_active, 0) AS is_partner_active, created_at
         FROM twitch_streamers_partner_state
-        WHERE LOWER(twitch_login) = LOWER($1) AND is_partner_active = 1
+        WHERE LOWER(twitch_login) = LOWER($1)
+        ORDER BY COALESCE(is_partner_active, 0) DESC
         LIMIT 1
         "#,
     )
-    .bind(streamer_login)
-    .fetch_optional(pool)
+    .bind(&streamer_login)
+    .fetch_optional(&mut *tx)
     .await?;
-    if partner_row.is_some() {
-        return Ok(ClaimStatus::StreamerAlreadyRegistered);
+    let partner_active = partner_state
+        .as_ref()
+        .is_some_and(|(is_active, _)| *is_active != 0);
+    let partnered_at = partner_state
+        .as_ref()
+        .and_then(|(_, created_at)| created_at.as_deref())
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(ToOwned::to_owned);
+
+    let fresh_predicate = sql_reservation_fresh_predicate("$1", "claimed_at");
+    let existing_sql = format!(
+        r#"
+        SELECT affiliate_twitch_login,
+               claimed_at,
+               {fresh_predicate} AS reservation_fresh
+        FROM affiliate_streamer_claims
+        WHERE LOWER(claimed_streamer_login) = LOWER($2)
+        LIMIT 1
+        FOR UPDATE
+        "#
+    );
+    let existing_claim: Option<(String, String, bool)> = sqlx::query_as(&existing_sql)
+        .bind(&now)
+        .bind(&streamer_login)
+        .fetch_optional(&mut *tx)
+        .await?;
+    if let Some((_existing_affiliate, _claimed_at, reservation_fresh)) = existing_claim {
+        if partner_active || reservation_fresh {
+            tx.commit().await?;
+            return Ok(ClaimStatus::AlreadyClaimed);
+        }
+        sqlx::query(
+            r#"
+            DELETE FROM affiliate_streamer_claims
+            WHERE LOWER(claimed_streamer_login) = LOWER($1)
+            "#,
+        )
+        .bind(&streamer_login)
+        .execute(&mut *tx)
+        .await?;
     }
 
-    let existing_claim = sqlx::query(
-        "SELECT affiliate_twitch_login FROM affiliate_streamer_claims WHERE claimed_streamer_login = $1",
-    )
-    .bind(streamer_login)
-    .fetch_optional(pool)
-    .await?;
-    if existing_claim.is_some() {
-        return Ok(ClaimStatus::StreamerAlreadyRegistered);
+    if partner_active {
+        let Some(partnered_at) = partnered_at else {
+            tracing::warn!(streamer_login = %streamer_login, "Aktiver Partner ohne partnered_at im Affiliate-Claim-Gate");
+            tx.commit().await?;
+            return Ok(ClaimStatus::StreamerAlreadyRegistered);
+        };
+        let grace_predicate = sql_activation_grace_predicate("$1", "$2");
+        let grace_sql = format!("SELECT {grace_predicate} AS in_grace");
+        let in_grace: bool = sqlx::query_scalar(&grace_sql)
+            .bind(&now)
+            .bind(&partnered_at)
+            .fetch_one(&mut *tx)
+            .await?;
+        if !in_grace {
+            tx.commit().await?;
+            return Ok(ClaimStatus::StreamerAlreadyRegistered);
+        }
     }
 
-    let now = chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Micros, false);
     let insert = sqlx::query(
         r#"
         INSERT INTO affiliate_streamer_claims
@@ -810,14 +877,22 @@ async fn claim_streamer(
         VALUES ($1, $2, $3)
         "#,
     )
-    .bind(twitch_login)
-    .bind(streamer_login)
+    .bind(&twitch_login)
+    .bind(&streamer_login)
     .bind(&now)
-    .execute(pool)
+    .execute(&mut *tx)
     .await;
     match insert {
-        Ok(_) => Ok(ClaimStatus::Ok),
-        Err(error) if is_duplicate_sqlx_error(&error) => Ok(ClaimStatus::AlreadyClaimed),
+        Ok(_) => {
+            tx.commit().await?;
+            Ok(ClaimStatus::Ok)
+        }
+        Err(error) if is_duplicate_sqlx_error(&error) => {
+            if let Err(rollback_error) = tx.rollback().await {
+                tracing::warn!(%rollback_error, "Affiliate-Claim-Transaktion nach Unique-Race konnte nicht sauber zurueckrollen");
+            }
+            Ok(ClaimStatus::AlreadyClaimed)
+        }
         Err(error) => Err(error),
     }
 }
@@ -1309,7 +1384,8 @@ mod tests {
             r#"
             CREATE TABLE twitch_streamers_partner_state (
                 twitch_login TEXT,
-                is_partner_active INTEGER
+                is_partner_active INTEGER,
+                created_at TEXT
             )
             "#,
         )
@@ -1390,6 +1466,46 @@ mod tests {
 
     fn state(pool: PgPool) -> DashboardAuthState {
         DashboardAuthState::new(pool, TEST_FERNET_KEY.to_string())
+    }
+
+    fn ts_offset(offset: chrono::Duration) -> String {
+        (chrono::Utc::now() + offset).to_rfc3339_opts(chrono::SecondsFormat::Micros, false)
+    }
+
+    async fn insert_partner_state(
+        pool: &PgPool,
+        login: &str,
+        is_partner_active: i32,
+        created_at: Option<&str>,
+    ) {
+        sqlx::query(
+            r#"
+            INSERT INTO twitch_streamers_partner_state (twitch_login, is_partner_active, created_at)
+            VALUES ($1, $2, $3)
+            "#,
+        )
+        .bind(login)
+        .bind(is_partner_active)
+        .bind(created_at)
+        .execute(pool)
+        .await
+        .unwrap();
+    }
+
+    async fn insert_claim(pool: &PgPool, affiliate: &str, streamer: &str, claimed_at: &str) {
+        sqlx::query(
+            r#"
+            INSERT INTO affiliate_streamer_claims
+                (affiliate_twitch_login, claimed_streamer_login, claimed_at)
+            VALUES ($1, $2, $3)
+            "#,
+        )
+        .bind(affiliate)
+        .bind(streamer)
+        .bind(claimed_at)
+        .execute(pool)
+        .await
+        .unwrap();
     }
 
     #[test]
@@ -2205,5 +2321,165 @@ mod tests {
         let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
         let value: Value = serde_json::from_slice(&body).unwrap();
         assert_eq!(value["error"], "invalid_ust_status");
+    }
+
+    #[tokio::test]
+    async fn claim_nicht_partner_pre_claim_erfolgreich() {
+        let Some(pool) = pool("t_aff_claim_pre_claim").await else {
+            return;
+        };
+        create_tables(&pool).await;
+
+        let status = claim_streamer(&pool, "aff_one", "fresh_streamer")
+            .await
+            .unwrap();
+        assert_eq!(status, ClaimStatus::Ok);
+
+        let affiliate: String = sqlx::query_scalar(
+            "SELECT affiliate_twitch_login FROM affiliate_streamer_claims WHERE claimed_streamer_login = 'fresh_streamer'",
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert_eq!(affiliate, "aff_one");
+    }
+
+    #[tokio::test]
+    async fn claim_etablierter_aktiver_partner_wird_abgelehnt() {
+        let Some(pool) = pool("t_aff_claim_established_partner").await else {
+            return;
+        };
+        create_tables(&pool).await;
+        let partnered_at = ts_offset(chrono::Duration::hours(-25));
+        insert_partner_state(&pool, "established", 1, Some(&partnered_at)).await;
+
+        let status = claim_streamer(&pool, "aff_one", "established")
+            .await
+            .unwrap();
+        assert_eq!(status, ClaimStatus::StreamerAlreadyRegistered);
+    }
+
+    #[tokio::test]
+    async fn claim_frischer_aktiver_partner_in_nachfrist_erfolgreich() {
+        let Some(pool) = pool("t_aff_claim_grace_partner").await else {
+            return;
+        };
+        create_tables(&pool).await;
+        let partnered_at = ts_offset(chrono::Duration::hours(-23));
+        insert_partner_state(&pool, "new_partner", 1, Some(&partnered_at)).await;
+
+        let status = claim_streamer(&pool, "aff_one", "new_partner")
+            .await
+            .unwrap();
+        assert_eq!(status, ClaimStatus::Ok);
+    }
+
+    #[tokio::test]
+    async fn claim_bestehende_frische_reservierung_blockiert() {
+        let Some(pool) = pool("t_aff_claim_fresh_existing").await else {
+            return;
+        };
+        create_tables(&pool).await;
+        let claimed_at = ts_offset(chrono::Duration::days(-2));
+        insert_claim(&pool, "aff_old", "reserved", &claimed_at).await;
+
+        let status = claim_streamer(&pool, "aff_new", "reserved").await.unwrap();
+        assert_eq!(status, ClaimStatus::AlreadyClaimed);
+
+        let affiliate: String = sqlx::query_scalar(
+            "SELECT affiliate_twitch_login FROM affiliate_streamer_claims WHERE claimed_streamer_login = 'reserved'",
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert_eq!(affiliate, "aff_old");
+    }
+
+    #[tokio::test]
+    async fn claim_abgelaufene_reservierung_wird_ueberschrieben() {
+        let Some(pool) = pool("t_aff_claim_expired_reclaim").await else {
+            return;
+        };
+        create_tables(&pool).await;
+        let old_claimed_at = ts_offset(chrono::Duration::days(-5));
+        insert_claim(&pool, "aff_old", "stale_slot", &old_claimed_at).await;
+
+        let status = claim_streamer(&pool, "aff_new", "stale_slot")
+            .await
+            .unwrap();
+        assert_eq!(status, ClaimStatus::Ok);
+
+        let (affiliate, claimed_at): (String, String) = sqlx::query_as(
+            "SELECT affiliate_twitch_login, claimed_at FROM affiliate_streamer_claims WHERE claimed_streamer_login = 'stale_slot'",
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert_eq!(affiliate, "aff_new");
+        assert_ne!(claimed_at, old_claimed_at);
+    }
+
+    #[tokio::test]
+    async fn claim_konvertierter_claim_bleibt_blockiert() {
+        let Some(pool) = pool("t_aff_claim_converted_blocks").await else {
+            return;
+        };
+        create_tables(&pool).await;
+        let old_claimed_at = ts_offset(chrono::Duration::days(-10));
+        let partnered_at = ts_offset(chrono::Duration::days(-2));
+        insert_claim(&pool, "aff_old", "converted", &old_claimed_at).await;
+        insert_partner_state(&pool, "converted", 1, Some(&partnered_at)).await;
+
+        let status = claim_streamer(&pool, "aff_new", "converted").await.unwrap();
+        assert_eq!(status, ClaimStatus::AlreadyClaimed);
+
+        let affiliate: String = sqlx::query_scalar(
+            "SELECT affiliate_twitch_login FROM affiliate_streamer_claims WHERE claimed_streamer_login = 'converted'",
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert_eq!(affiliate, "aff_old");
+    }
+
+    #[tokio::test]
+    async fn claim_race_zwei_parallele_claims_einer_gewinnt() {
+        let Some(pool) = pool("t_aff_claim_race").await else {
+            return;
+        };
+        create_tables(&pool).await;
+
+        let first_pool = pool.clone();
+        let first =
+            tokio::spawn(async move { claim_streamer(&first_pool, "aff_a", "race_slot").await });
+        let second_pool = pool.clone();
+        let second =
+            tokio::spawn(async move { claim_streamer(&second_pool, "aff_b", "race_slot").await });
+
+        let outcomes = vec![
+            first.await.unwrap().unwrap(),
+            second.await.unwrap().unwrap(),
+        ];
+        assert_eq!(
+            outcomes
+                .iter()
+                .filter(|status| **status == ClaimStatus::Ok)
+                .count(),
+            1
+        );
+        assert_eq!(
+            outcomes
+                .iter()
+                .filter(|status| **status == ClaimStatus::AlreadyClaimed)
+                .count(),
+            1
+        );
+        let count: i64 = sqlx::query_scalar(
+            "SELECT COUNT(*) FROM affiliate_streamer_claims WHERE claimed_streamer_login = 'race_slot'",
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert_eq!(count, 1);
     }
 }

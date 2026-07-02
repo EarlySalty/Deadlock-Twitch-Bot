@@ -22,6 +22,7 @@
 
 use sqlx::{PgPool, Postgres, Transaction};
 
+use crate::affiliate_claim_window::sql_claim_window_predicate;
 use crate::stripe::StripeClient;
 
 /// 30 % Provision auf das bezahlte Brutto (Python `_COMMISSION_RATE`).
@@ -209,20 +210,60 @@ pub async fn process_commission(
         return Ok(CommissionOutcome::NoStreamer);
     };
 
-    // 2. Werbenden Affiliate lösen.
-    let affiliate_login: Option<String> = sqlx::query_scalar!(
+    // 2. Werbenden Affiliate und Aktivierungsanker lösen. Provisionsberechtigt
+    // ist der Claim nur im zentralen Claim-Zeitfenster relativ zu `partnered_at`.
+    let claim_row: Option<(String, Option<String>, Option<String>)> = sqlx::query_as(
         r#"
-        SELECT affiliate_twitch_login
-        FROM affiliate_streamer_claims
-        WHERE claimed_streamer_login = $1
+        SELECT c.affiliate_twitch_login,
+               c.claimed_at,
+               ps.created_at AS partnered_at
+        FROM affiliate_streamer_claims c
+        LEFT JOIN twitch_streamers_partner_state ps
+          ON LOWER(ps.twitch_login) = LOWER(c.claimed_streamer_login)
+         AND COALESCE(ps.is_partner_active, 0) = 1
+        WHERE LOWER(c.claimed_streamer_login) = LOWER($1)
+        ORDER BY COALESCE(ps.is_partner_active, 0) DESC
+        LIMIT 1
         "#,
-        &streamer_login
     )
+    .bind(&streamer_login)
     .fetch_optional(pool)
     .await?;
-    let Some(affiliate_login) = affiliate_login.filter(|s| !s.trim().is_empty()) else {
+    let Some((affiliate_login, claimed_at, partnered_at)) = claim_row else {
         return Ok(CommissionOutcome::NoAffiliate);
     };
+    let affiliate_login = affiliate_login.trim().to_lowercase();
+    if affiliate_login.is_empty() {
+        return Ok(CommissionOutcome::NoAffiliate);
+    }
+    let Some(claimed_at) = claimed_at
+        .as_deref()
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .map(ToOwned::to_owned)
+    else {
+        tracing::warn!(streamer_login = %streamer_login, "Affiliate-Claim ohne claimed_at; keine Provision");
+        return Ok(CommissionOutcome::NoAffiliate);
+    };
+    let Some(partnered_at) = partnered_at
+        .as_deref()
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .map(ToOwned::to_owned)
+    else {
+        tracing::warn!(streamer_login = %streamer_login, "Affiliate-Claim ohne partnered_at; keine Provision");
+        return Ok(CommissionOutcome::NoAffiliate);
+    };
+    let window_predicate = sql_claim_window_predicate("$1", "$2");
+    let window_sql = format!("SELECT {window_predicate} AS eligible");
+    let eligible: bool = sqlx::query_scalar(&window_sql)
+        .bind(&claimed_at)
+        .bind(&partnered_at)
+        .fetch_one(pool)
+        .await?;
+    if !eligible {
+        return Ok(CommissionOutcome::NoAffiliate);
+    }
 
     // 3. Provision (Floor von 30 %). Arithmetik in i64 (wie Pythons unbeschränktes
     // int), gespeichert wird in INTEGER-Spalten (siehe `commission_cents_i32`).
@@ -624,6 +665,14 @@ mod tests {
         .await
         .unwrap();
         sqlx::query(
+            "CREATE TABLE twitch_streamers_partner_state (\
+                twitch_login TEXT, is_partner_active INTEGER NOT NULL DEFAULT 1, \
+                created_at TEXT)",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+        sqlx::query(
             "CREATE TABLE affiliate_accounts (\
                 twitch_login TEXT PRIMARY KEY, stripe_account_id TEXT, \
                 stripe_connected_at TEXT, stripe_connect_status TEXT, updated_at TEXT)",
@@ -763,12 +812,39 @@ mod tests {
     }
 
     async fn seed_claim(pool: &PgPool) {
+        seed_claim_with_times(
+            pool,
+            "2026-06-01T00:00:00+00:00",
+            Some("2026-06-03T00:00:00+00:00"),
+        )
+        .await;
+    }
+
+    async fn seed_claim_with_times(pool: &PgPool, claimed_at: &str, partnered_at: Option<&str>) {
         // customer_reference trägt den Streamer-Login (gemischte Groß-/Kleinschreibung
         // → der Code normalisiert per LOWER/TRIM auf 'streamerx').
         sqlx::query("INSERT INTO twitch_billing_subscriptions (stripe_subscription_id, stripe_customer_id, customer_reference, updated_at) VALUES ('sub_1', 'cus_1', 'StreamerX', '2026-06-01')")
             .execute(pool).await.unwrap();
-        sqlx::query("INSERT INTO affiliate_streamer_claims (affiliate_twitch_login, claimed_streamer_login, claimed_at) VALUES ('aff1', 'streamerx', '2026-06-01')")
-            .execute(pool).await.unwrap();
+        sqlx::query(
+            "INSERT INTO affiliate_streamer_claims \
+                (affiliate_twitch_login, claimed_streamer_login, claimed_at) \
+             VALUES ('aff1', 'streamerx', $1)",
+        )
+        .bind(claimed_at)
+        .execute(pool)
+        .await
+        .unwrap();
+        if let Some(partnered_at) = partnered_at {
+            sqlx::query(
+                "INSERT INTO twitch_streamers_partner_state \
+                    (twitch_login, is_partner_active, created_at) \
+                 VALUES ('streamerx', 1, $1)",
+            )
+            .bind(partnered_at)
+            .execute(pool)
+            .await
+            .unwrap();
+        }
     }
 
     #[tokio::test]
@@ -812,6 +888,95 @@ mod tests {
         ).fetch_one(&pool).await.unwrap();
         assert_eq!(status, "pending");
         assert_eq!(commission, 300);
+    }
+
+    #[tokio::test]
+    async fn commission_claim_innerhalb_fenster_wird_attribuiert() {
+        let Some(pool) = connect("comm_claim_window_in").await else {
+            return;
+        };
+        seed_claim_with_times(
+            &pool,
+            "2026-06-01T00:00:00+00:00",
+            Some("2026-06-03T00:00:00+00:00"),
+        )
+        .await;
+
+        let out = process_commission(&pool, None, &invoice("evt_win", "cus_1", 1000))
+            .await
+            .unwrap();
+        assert_eq!(out, CommissionOutcome::Recorded("pending".into()));
+        let count: i64 = sqlx::query_scalar(
+            "SELECT COUNT(*) FROM affiliate_commissions WHERE stripe_event_id = 'evt_win'",
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert_eq!(count, 1);
+    }
+
+    #[tokio::test]
+    async fn commission_claim_vor_fenster_ist_no_affiliate() {
+        let Some(pool) = connect("comm_claim_window_before").await else {
+            return;
+        };
+        seed_claim_with_times(
+            &pool,
+            "2026-05-29T23:59:59+00:00",
+            Some("2026-06-03T00:00:00+00:00"),
+        )
+        .await;
+
+        let out = process_commission(&pool, None, &invoice("evt_before", "cus_1", 1000))
+            .await
+            .unwrap();
+        assert_eq!(out, CommissionOutcome::NoAffiliate);
+        let count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM affiliate_commissions")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+        assert_eq!(count, 0);
+    }
+
+    #[tokio::test]
+    async fn commission_claim_nach_fenster_ist_no_affiliate() {
+        let Some(pool) = connect("comm_claim_window_after").await else {
+            return;
+        };
+        seed_claim_with_times(
+            &pool,
+            "2026-06-04T00:00:01+00:00",
+            Some("2026-06-03T00:00:00+00:00"),
+        )
+        .await;
+
+        let out = process_commission(&pool, None, &invoice("evt_after", "cus_1", 1000))
+            .await
+            .unwrap();
+        assert_eq!(out, CommissionOutcome::NoAffiliate);
+        let count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM affiliate_commissions")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+        assert_eq!(count, 0);
+    }
+
+    #[tokio::test]
+    async fn commission_ohne_partnered_at_ist_no_affiliate() {
+        let Some(pool) = connect("comm_claim_window_missing_partnered").await else {
+            return;
+        };
+        seed_claim_with_times(&pool, "2026-06-01T00:00:00+00:00", None).await;
+
+        let out = process_commission(&pool, None, &invoice("evt_missing", "cus_1", 1000))
+            .await
+            .unwrap();
+        assert_eq!(out, CommissionOutcome::NoAffiliate);
+        let count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM affiliate_commissions")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+        assert_eq!(count, 0);
     }
 
     #[tokio::test]

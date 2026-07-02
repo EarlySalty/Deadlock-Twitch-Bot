@@ -542,8 +542,15 @@ mod tests {
         .await
         .unwrap();
         sqlx::query(
-            r#"CREATE TABLE twitch_streamers_partner_state (twitch_login TEXT, twitch_user_id TEXT)"#,
-        ).execute(&pool).await.unwrap();
+            r#"CREATE TABLE twitch_streamers_partner_state (
+                   twitch_login TEXT, twitch_user_id TEXT,
+                   is_partner_active INTEGER NOT NULL DEFAULT 1,
+                   created_at TEXT DEFAULT '2026-06-03T00:00:00+00:00'
+               )"#,
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
         sqlx::query(
             r#"CREATE TABLE twitch_billing_events (
                    stripe_event_id TEXT PRIMARY KEY, event_type TEXT NOT NULL, object_id TEXT,
@@ -553,7 +560,8 @@ mod tests {
         // Affiliate-Provisions-Tabellen (für den invoice.payment_succeeded-Hook).
         sqlx::query(
             r#"CREATE TABLE affiliate_streamer_claims (
-                   affiliate_twitch_login TEXT, claimed_streamer_login TEXT
+                   affiliate_twitch_login TEXT, claimed_streamer_login TEXT,
+                   claimed_at TEXT NOT NULL DEFAULT '2026-06-01T00:00:00+00:00'
                )"#,
         )
         .execute(&pool)
@@ -590,10 +598,12 @@ mod tests {
         let Some(pool) = pool_or_skip("h_sub_created").await else {
             return;
         };
-        sqlx::query("INSERT INTO twitch_streamers_partner_state VALUES ('login','99')")
-            .execute(&pool)
-            .await
-            .unwrap();
+        sqlx::query(
+            "INSERT INTO twitch_streamers_partner_state (twitch_login, twitch_user_id) VALUES ('login','99')",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
         let payload = br#"{"id":"evt_h1","type":"customer.subscription.created","livemode":false,"data":{"object":{"id":"sub_h","customer":"cus","status":"active","metadata":{"customer_reference":"login","plan_id":"raid_boost"},"items":{"data":[{"price":{"recurring":{"interval":"month","interval_count":1}}}]}}}}"#;
         let ts = chrono::Utc::now().timestamp();
         let resp = stripe_webhook_handler(
@@ -643,10 +653,12 @@ mod tests {
         let Some(pool) = pool_or_skip("h_replay").await else {
             return;
         };
-        sqlx::query("INSERT INTO twitch_streamers_partner_state VALUES ('l','5')")
-            .execute(&pool)
-            .await
-            .unwrap();
+        sqlx::query(
+            "INSERT INTO twitch_streamers_partner_state (twitch_login, twitch_user_id) VALUES ('l','5')",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
         let payload = br#"{"id":"evt_replay","type":"customer.subscription.created","data":{"object":{"id":"sub_r","customer":"c","status":"active","metadata":{"customer_reference":"l","plan_id":"raid_boost"},"items":{"data":[{"price":{"recurring":{"interval":"month","interval_count":1}}}]}}}}"#;
         let ts = chrono::Utc::now().timestamp();
         let header = sign(payload, ts, SECRET);
@@ -777,6 +789,12 @@ mod tests {
         // Abo verknüpft Customer→Streamer, Streamer ist von einem Affiliate geworben.
         sqlx::query("INSERT INTO twitch_billing_subscriptions (stripe_subscription_id, stripe_customer_id, customer_reference, updated_at) VALUES ('sub_c','cus_c','StreamerX','now')")
             .execute(&pool).await.unwrap();
+        sqlx::query(
+            "INSERT INTO twitch_streamers_partner_state (twitch_login, twitch_user_id) VALUES ('streamerx','100')",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
         sqlx::query("INSERT INTO affiliate_streamer_claims (affiliate_twitch_login, claimed_streamer_login) VALUES ('aff1','streamerx')")
             .execute(&pool).await.unwrap();
         let payload = br#"{"id":"evt_inv","type":"invoice.payment_succeeded","livemode":false,"data":{"object":{"id":"in_42","customer":"cus_c","subscription":"sub_c","amount_paid":1000,"currency":"eur","lines":{"data":[{"period":{"start":1700000000,"end":1702000000}}]}}}}"#;
@@ -806,6 +824,12 @@ mod tests {
         };
         sqlx::query("INSERT INTO twitch_billing_subscriptions (stripe_subscription_id, stripe_customer_id, customer_reference, updated_at) VALUES ('sub_r','cus_r','StreamerY','now')")
             .execute(&pool).await.unwrap();
+        sqlx::query(
+            "INSERT INTO twitch_streamers_partner_state (twitch_login, twitch_user_id) VALUES ('streamery','101')",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
         sqlx::query("INSERT INTO affiliate_streamer_claims (affiliate_twitch_login, claimed_streamer_login) VALUES ('aff2','streamery')")
             .execute(&pool).await.unwrap();
         let payload = br#"{"id":"evt_inv_r","type":"invoice.payment_succeeded","livemode":false,"data":{"object":{"id":"in_r","customer":"cus_r","subscription":"sub_r","amount_paid":1000,"currency":"eur","lines":{"data":[{"period":{"start":1700000000,"end":1702000000}}]}}}}"#;
@@ -847,6 +871,12 @@ mod tests {
         };
         sqlx::query("INSERT INTO twitch_billing_subscriptions (stripe_subscription_id, stripe_customer_id, customer_reference, updated_at) VALUES ('sub_lost','cus_lost','StreamerLost','now')")
             .execute(&pool).await.unwrap();
+        sqlx::query(
+            "INSERT INTO twitch_streamers_partner_state (twitch_login, twitch_user_id) VALUES ('streamerlost','102')",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
         sqlx::query("INSERT INTO affiliate_streamer_claims (affiliate_twitch_login, claimed_streamer_login) VALUES ('afflost','streamerlost')")
             .execute(&pool).await.unwrap();
         sqlx::query("INSERT INTO affiliate_accounts (twitch_login, stripe_account_id) VALUES ('afflost','acct_lost')")
