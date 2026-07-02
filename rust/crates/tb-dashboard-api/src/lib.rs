@@ -759,6 +759,10 @@ pub fn build_admin_config_router(pool: PgPool, token: String) -> Router {
             get(admin_affiliate::gutschrift_pdf_handler),
         )
         .route(
+            "/twitch/api/admin/affiliates/generate-gutschriften",
+            post(admin_affiliate::generate_gutschriften_handler),
+        )
+        .route(
             "/twitch/api/admin/affiliates/:login/gutschriften",
             get(admin_affiliate::gutschriften_for_login_handler),
         )
@@ -1500,6 +1504,27 @@ mod csrf_wiring_tests {
             .await
             .unwrap();
         assert_eq!(resp.status(), StatusCode::FORBIDDEN);
+    }
+
+    #[tokio::test]
+    async fn affiliate_generate_ohne_csrf_shape_403() {
+        let Some(pool) = pool().await else { return };
+        let app = build_admin_config_router(pool, "tok".into());
+        let resp = app
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/twitch/api/admin/affiliates/generate-gutschriften")
+                    .header("host", "dashboard.example.com")
+                    .body(Body::from("{}"))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::FORBIDDEN);
+        let body = axum::body::to_bytes(resp.into_body(), 65536).await.unwrap();
+        let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(json["error"], "invalid_csrf");
     }
 
     /// GET passiert den CSRF-Layer (Safe-Methode); ohne Auth liefert der Handler
