@@ -20,9 +20,10 @@
 //! i32) im Namespace `1_103_151_689`, sodass Rust- und Python-Pfad während des
 //! Cutovers denselben Postgres-Advisory-Lock teilen.
 
+use chrono::{DateTime, Utc};
 use sqlx::{PgPool, Postgres, Transaction};
 
-use crate::affiliate_claim_window::sql_claim_window_predicate;
+use crate::affiliate_claim_window::claim_in_activation_window;
 use crate::stripe::StripeClient;
 
 /// 30 % Provision auf das bezahlte Brutto (Python `_COMMISSION_RATE`).
@@ -97,6 +98,10 @@ fn commission_lock_key(affiliate_login: &str) -> (i32, i32) {
 fn cents_to_int4(value: i64, field: &str) -> Result<i32, sqlx::Error> {
     i32::try_from(value)
         .map_err(|_| sqlx::Error::InvalidArgument(format!("{field} out of int4 range: {value}")))
+}
+
+fn parse_rfc3339_utc(value: &str) -> Result<DateTime<Utc>, chrono::ParseError> {
+    DateTime::parse_from_rfc3339(value).map(|parsed| parsed.with_timezone(&Utc))
 }
 
 async fn existing_commission_for_event(
@@ -220,9 +225,8 @@ pub async fn process_commission(
         FROM affiliate_streamer_claims c
         LEFT JOIN twitch_streamers_partner_state ps
           ON LOWER(ps.twitch_login) = LOWER(c.claimed_streamer_login)
-         AND COALESCE(ps.is_partner_active, 0) = 1
         WHERE LOWER(c.claimed_streamer_login) = LOWER($1)
-        ORDER BY COALESCE(ps.is_partner_active, 0) DESC
+        ORDER BY ps.created_at ASC NULLS LAST
         LIMIT 1
         "#,
     )
@@ -254,14 +258,21 @@ pub async fn process_commission(
         tracing::warn!(streamer_login = %streamer_login, "Affiliate-Claim ohne partnered_at; keine Provision");
         return Ok(CommissionOutcome::NoAffiliate);
     };
-    let window_predicate = sql_claim_window_predicate("$1", "$2");
-    let window_sql = format!("SELECT {window_predicate} AS eligible");
-    let eligible: bool = sqlx::query_scalar(&window_sql)
-        .bind(&claimed_at)
-        .bind(&partnered_at)
-        .fetch_one(pool)
-        .await?;
-    if !eligible {
+    let claimed_at = match parse_rfc3339_utc(&claimed_at) {
+        Ok(value) => value,
+        Err(error) => {
+            tracing::warn!(%error, streamer_login = %streamer_login, "Affiliate-Claim claimed_at ist kein RFC3339-Zeitstempel; keine Provision");
+            return Ok(CommissionOutcome::NoAffiliate);
+        }
+    };
+    let partnered_at = match parse_rfc3339_utc(&partnered_at) {
+        Ok(value) => value,
+        Err(error) => {
+            tracing::warn!(%error, streamer_login = %streamer_login, "Affiliate-Claim partnered_at ist kein RFC3339-Zeitstempel; keine Provision");
+            return Ok(CommissionOutcome::NoAffiliate);
+        }
+    };
+    if !claim_in_activation_window(claimed_at, partnered_at) {
         return Ok(CommissionOutcome::NoAffiliate);
     }
 
@@ -916,6 +927,24 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn commission_claim_untere_fenstergrenze_ist_inklusiv() {
+        let Some(pool) = connect("comm_claim_window_lower_exact").await else {
+            return;
+        };
+        seed_claim_with_times(
+            &pool,
+            "2026-05-30T00:00:00+00:00",
+            Some("2026-06-03T00:00:00+00:00"),
+        )
+        .await;
+
+        let out = process_commission(&pool, None, &invoice("evt_lower_exact", "cus_1", 1000))
+            .await
+            .unwrap();
+        assert_eq!(out, CommissionOutcome::Recorded("pending".into()));
+    }
+
+    #[tokio::test]
     async fn commission_claim_vor_fenster_ist_no_affiliate() {
         let Some(pool) = connect("comm_claim_window_before").await else {
             return;
@@ -936,6 +965,24 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(count, 0);
+    }
+
+    #[tokio::test]
+    async fn commission_claim_obere_fenstergrenze_ist_inklusiv() {
+        let Some(pool) = connect("comm_claim_window_upper_exact").await else {
+            return;
+        };
+        seed_claim_with_times(
+            &pool,
+            "2026-06-04T00:00:00+00:00",
+            Some("2026-06-03T00:00:00+00:00"),
+        )
+        .await;
+
+        let out = process_commission(&pool, None, &invoice("evt_upper_exact", "cus_1", 1000))
+            .await
+            .unwrap();
+        assert_eq!(out, CommissionOutcome::Recorded("pending".into()));
     }
 
     #[tokio::test]
@@ -962,6 +1009,27 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn commission_departnered_historische_aktivierung_wird_attribuiert() {
+        let Some(pool) = connect("comm_claim_departnered").await else {
+            return;
+        };
+        seed_claim_with_times(&pool, "2026-06-01T00:00:00+00:00", None).await;
+        sqlx::query(
+            "INSERT INTO twitch_streamers_partner_state \
+                (twitch_login, is_partner_active, created_at) \
+             VALUES ('streamerx', 0, '2026-06-03T00:00:00+00:00')",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+
+        let out = process_commission(&pool, None, &invoice("evt_departnered", "cus_1", 1000))
+            .await
+            .unwrap();
+        assert_eq!(out, CommissionOutcome::Recorded("pending".into()));
+    }
+
+    #[tokio::test]
     async fn commission_ohne_partnered_at_ist_no_affiliate() {
         let Some(pool) = connect("comm_claim_window_missing_partnered").await else {
             return;
@@ -969,6 +1037,24 @@ mod tests {
         seed_claim_with_times(&pool, "2026-06-01T00:00:00+00:00", None).await;
 
         let out = process_commission(&pool, None, &invoice("evt_missing", "cus_1", 1000))
+            .await
+            .unwrap();
+        assert_eq!(out, CommissionOutcome::NoAffiliate);
+        let count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM affiliate_commissions")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+        assert_eq!(count, 0);
+    }
+
+    #[tokio::test]
+    async fn commission_malformed_claim_timestamp_ist_no_affiliate() {
+        let Some(pool) = connect("comm_claim_window_bad_claimed").await else {
+            return;
+        };
+        seed_claim_with_times(&pool, "not-a-timestamp", Some("2026-06-03T00:00:00+00:00")).await;
+
+        let out = process_commission(&pool, None, &invoice("evt_bad_claimed", "cus_1", 1000))
             .await
             .unwrap();
         assert_eq!(out, CommissionOutcome::NoAffiliate);

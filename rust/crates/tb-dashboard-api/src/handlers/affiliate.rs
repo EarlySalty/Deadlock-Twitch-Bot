@@ -13,11 +13,12 @@ use axum::{
     response::{IntoResponse, Redirect, Response},
     Json,
 };
+use chrono::{DateTime, Utc};
 use serde::Deserialize;
 use serde_json::{json, Value};
 use sqlx::{PgPool, Row};
 use tb_analytics::{
-    affiliate_claim_window::{sql_activation_grace_predicate, sql_reservation_fresh_predicate},
+    affiliate_claim_window::{sql_reservation_fresh_predicate, POST_ACTIVATION_GRACE},
     affiliate_commission::connect_account_and_replay,
     affiliate_gutschrift::{self, GutschriftError},
     affiliate_pii::{
@@ -781,9 +782,18 @@ async fn claim_streamer(
     twitch_login: &str,
     streamer_login: &str,
 ) -> Result<ClaimStatus, sqlx::Error> {
+    claim_streamer_at(pool, twitch_login, streamer_login, chrono::Utc::now()).await
+}
+
+async fn claim_streamer_at(
+    pool: &PgPool,
+    twitch_login: &str,
+    streamer_login: &str,
+    now_dt: DateTime<Utc>,
+) -> Result<ClaimStatus, sqlx::Error> {
     let twitch_login = twitch_login.trim().to_lowercase();
     let streamer_login = streamer_login.trim().to_lowercase();
-    let now = chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Micros, false);
+    let now = now_dt.to_rfc3339_opts(chrono::SecondsFormat::Micros, false);
 
     let mut tx = pool.begin().await?;
     sqlx::query(
@@ -857,13 +867,16 @@ async fn claim_streamer(
             tx.commit().await?;
             return Ok(ClaimStatus::StreamerAlreadyRegistered);
         };
-        let grace_predicate = sql_activation_grace_predicate("$1", "$2");
-        let grace_sql = format!("SELECT {grace_predicate} AS in_grace");
-        let in_grace: bool = sqlx::query_scalar(&grace_sql)
-            .bind(&now)
-            .bind(&partnered_at)
-            .fetch_one(&mut *tx)
-            .await?;
+        let partnered_at = match parse_rfc3339_utc(&partnered_at) {
+            Ok(value) => value,
+            Err(error) => {
+                tracing::warn!(%error, streamer_login = %streamer_login, "Aktiver Partner mit ungueltigem partnered_at im Affiliate-Claim-Gate");
+                tx.commit().await?;
+                return Ok(ClaimStatus::StreamerAlreadyRegistered);
+            }
+        };
+        let in_grace =
+            now_dt <= partnered_at + chrono::Duration::seconds(POST_ACTIVATION_GRACE.seconds());
         if !in_grace {
             tx.commit().await?;
             return Ok(ClaimStatus::StreamerAlreadyRegistered);
@@ -1204,6 +1217,10 @@ fn is_valid_twitch_login(value: &str) -> bool {
 fn is_duplicate_sqlx_error(error: &sqlx::Error) -> bool {
     let msg = error.to_string().to_lowercase();
     msg.contains("unique") || msg.contains("duplicate")
+}
+
+fn parse_rfc3339_utc(value: &str) -> Result<DateTime<Utc>, chrono::ParseError> {
+    DateTime::parse_from_rfc3339(value).map(|parsed| parsed.with_timezone(&Utc))
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -2372,6 +2389,58 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(status, ClaimStatus::Ok);
+    }
+
+    #[tokio::test]
+    async fn claim_aktiver_partner_exakt_an_grace_grenze_erlaubt() {
+        let Some(pool) = pool("t_aff_claim_grace_exact").await else {
+            return;
+        };
+        create_tables(&pool).await;
+        let now = chrono::DateTime::parse_from_rfc3339("2026-07-03T12:00:00+00:00")
+            .unwrap()
+            .with_timezone(&chrono::Utc);
+        let partnered_at = (now - chrono::Duration::seconds(POST_ACTIVATION_GRACE.seconds()))
+            .to_rfc3339_opts(chrono::SecondsFormat::Micros, false);
+        insert_partner_state(&pool, "new_partner_exact", 1, Some(&partnered_at)).await;
+
+        let status = claim_streamer_at(&pool, "aff_one", "new_partner_exact", now)
+            .await
+            .unwrap();
+        assert_eq!(status, ClaimStatus::Ok);
+    }
+
+    #[tokio::test]
+    async fn claim_aktiver_partner_eine_sekunde_nach_grace_wird_abgelehnt() {
+        let Some(pool) = pool("t_aff_claim_grace_plus_one").await else {
+            return;
+        };
+        create_tables(&pool).await;
+        let now = chrono::DateTime::parse_from_rfc3339("2026-07-03T12:00:00+00:00")
+            .unwrap()
+            .with_timezone(&chrono::Utc);
+        let partnered_at = (now - chrono::Duration::seconds(POST_ACTIVATION_GRACE.seconds() + 1))
+            .to_rfc3339_opts(chrono::SecondsFormat::Micros, false);
+        insert_partner_state(&pool, "new_partner_late", 1, Some(&partnered_at)).await;
+
+        let status = claim_streamer_at(&pool, "aff_one", "new_partner_late", now)
+            .await
+            .unwrap();
+        assert_eq!(status, ClaimStatus::StreamerAlreadyRegistered);
+    }
+
+    #[tokio::test]
+    async fn claim_aktiver_partner_malformed_partnered_at_wird_abgelehnt() {
+        let Some(pool) = pool("t_aff_claim_grace_malformed").await else {
+            return;
+        };
+        create_tables(&pool).await;
+        insert_partner_state(&pool, "bad_partnered_at", 1, Some("not-a-timestamp")).await;
+
+        let status = claim_streamer(&pool, "aff_one", "bad_partnered_at")
+            .await
+            .unwrap();
+        assert_eq!(status, ClaimStatus::StreamerAlreadyRegistered);
     }
 
     #[tokio::test]

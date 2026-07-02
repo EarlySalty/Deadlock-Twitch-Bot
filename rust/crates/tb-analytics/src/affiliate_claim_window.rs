@@ -1,8 +1,9 @@
 //! Gemeinsames Affiliate-Claim-Zeitfenster.
 //!
 //! `claimed_at` und `partnered_at` liegen in der Datenbank als TEXT vor. Die
-//! produktiven Gates verwenden deshalb die SQL-Prädikate aus diesem Modul und
-//! rechnen dort mit `::timestamptz` + `INTERVAL`.
+//! produktiven Pfade parsen Aktivierungsfenster deshalb in Rust und degradieren
+//! ungueltige Zeitstempel kontrolliert; SQL-Prädikate bleiben fuer einfache
+//! Datenbank-Zeitfenster wie frische Reservierungen.
 
 use chrono::{DateTime, Duration, Utc};
 
