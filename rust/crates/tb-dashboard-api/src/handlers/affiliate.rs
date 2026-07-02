@@ -14,6 +14,7 @@ use serde::Deserialize;
 use serde_json::{json, Value};
 use sqlx::{PgPool, Row};
 use tb_analytics::{
+    affiliate_commission::connect_account_and_replay,
     affiliate_pii::{
         build_readiness, is_valid_ust_status, load_affiliate_pii, migrate_from_plaintext,
         save_affiliate_pii, PiiInput, PiiPayload,
@@ -372,12 +373,57 @@ pub async fn connect_stripe_callback_handler(
         return text(StatusCode::BAD_GATEWAY, "Keine Stripe Account ID erhalten.");
     }
 
-    if let Err(error) = connect_stripe_account(state.pool(), &session_login, stripe_user_id).await {
+    if let Err(error) =
+        connect_account_and_replay(state.pool(), Some(client), &session_login, stripe_user_id).await
+    {
         tracing::error!(%error, "Affiliate Stripe Connect DB-Update fehlgeschlagen");
         return text(StatusCode::BAD_GATEWAY, "Stripe Connect fehlgeschlagen.");
     }
-    // TODO(Welle B): pending/failed Commissions replayen + Advisory-Lock um stripe_account_id-Update (Python _affiliate_replay_pending_commissions, affiliate_mixin.py:271-287; Helper tb_analytics::affiliate_commission.rs:269).
     Redirect::to("/twitch/affiliate/portal").into_response()
+}
+
+/// `POST /twitch/affiliate/claim`.
+pub async fn claim_handler(
+    state: Option<Extension<DashboardAuthState>>,
+    headers: HeaderMap,
+    State(pool): State<PgPool>,
+    body: Bytes,
+) -> Response {
+    let Some(session) =
+        affiliate_session_from_headers(state.as_ref().map(|s| &s.0), &headers).await
+    else {
+        return json_error(StatusCode::UNAUTHORIZED, "unauthorized");
+    };
+    let body: Value = match serde_json::from_slice(&body) {
+        Ok(body) => body,
+        Err(_) => return json_error(StatusCode::BAD_REQUEST, "invalid_json"),
+    };
+    let Some(obj) = body.as_object() else {
+        return json_error(StatusCode::BAD_REQUEST, "invalid_payload");
+    };
+    let streamer_login = obj
+        .get("streamer_login")
+        .map(value_to_string)
+        .unwrap_or_default()
+        .trim()
+        .to_lowercase();
+    if !is_valid_twitch_login(&streamer_login) {
+        return json_error(StatusCode::BAD_REQUEST, "invalid_login");
+    }
+    let twitch_login = session.twitch_login.trim().to_lowercase();
+    match claim_streamer(&pool, &twitch_login, &streamer_login).await {
+        Ok(ClaimStatus::Ok) => {
+            Json(json!({ "ok": true, "claimed": streamer_login })).into_response()
+        }
+        Ok(ClaimStatus::StreamerAlreadyRegistered) => {
+            json_error(StatusCode::CONFLICT, "streamer_already_registered")
+        }
+        Ok(ClaimStatus::AlreadyClaimed) => json_error(StatusCode::CONFLICT, "already_claimed"),
+        Err(error) => {
+            tracing::error!(%error, "Affiliate-Claim fehlgeschlagen");
+            json_error(StatusCode::INTERNAL_SERVER_ERROR, "db")
+        }
+    }
 }
 
 /// `GET /twitch/api/affiliate/me`.
@@ -539,6 +585,26 @@ pub async fn api_profile_update_handler(
     }
 }
 
+/// `GET /twitch/api/affiliate/claims`.
+pub async fn api_claims_handler(
+    state: Option<Extension<DashboardAuthState>>,
+    headers: HeaderMap,
+    State(pool): State<PgPool>,
+) -> Response {
+    let Some(session) =
+        affiliate_session_from_headers(state.as_ref().map(|s| &s.0), &headers).await
+    else {
+        return json_error(StatusCode::UNAUTHORIZED, "unauthorized");
+    };
+    match load_claims(&pool, session.twitch_login.trim()).await {
+        Ok(claims) => Json(json!({ "claims": claims })).into_response(),
+        Err(error) => {
+            tracing::error!(%error, "Affiliate-Claims-Lookup fehlgeschlagen");
+            json_error(StatusCode::INTERNAL_SERVER_ERROR, "db")
+        }
+    }
+}
+
 async fn upsert_account_and_pii(
     state: &DashboardAuthState,
     identity: &TwitchIdentity,
@@ -580,31 +646,6 @@ async fn upsert_account_and_pii(
     Ok(())
 }
 
-async fn connect_stripe_account(
-    pool: &PgPool,
-    twitch_login: &str,
-    stripe_user_id: &str,
-) -> Result<(), sqlx::Error> {
-    let now = chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Micros, false);
-    sqlx::query(
-        r#"
-        UPDATE affiliate_accounts
-        SET stripe_account_id = $1,
-            stripe_connected_at = $2,
-            stripe_connect_status = 'connected',
-            updated_at = $3
-        WHERE twitch_login = $4
-        "#,
-    )
-    .bind(stripe_user_id)
-    .bind(&now)
-    .bind(&now)
-    .bind(twitch_login)
-    .execute(pool)
-    .await?;
-    Ok(())
-}
-
 async fn load_profile(
     pool: &PgPool,
     cipher: &FieldCipher,
@@ -626,6 +667,98 @@ async fn migrate_legacy_plaintext_pii(
         tracing::info!(migrated, "Affiliate-PII-Legacy-Klartext migriert");
     }
     Ok(())
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ClaimStatus {
+    Ok,
+    StreamerAlreadyRegistered,
+    AlreadyClaimed,
+}
+
+async fn claim_streamer(
+    pool: &PgPool,
+    twitch_login: &str,
+    streamer_login: &str,
+) -> Result<ClaimStatus, sqlx::Error> {
+    let partner_row = sqlx::query(
+        r#"
+        SELECT twitch_login
+        FROM twitch_streamers_partner_state
+        WHERE LOWER(twitch_login) = LOWER($1) AND is_partner_active = 1
+        LIMIT 1
+        "#,
+    )
+    .bind(streamer_login)
+    .fetch_optional(pool)
+    .await?;
+    if partner_row.is_some() {
+        return Ok(ClaimStatus::StreamerAlreadyRegistered);
+    }
+
+    let existing_claim = sqlx::query(
+        "SELECT affiliate_twitch_login FROM affiliate_streamer_claims WHERE claimed_streamer_login = $1",
+    )
+    .bind(streamer_login)
+    .fetch_optional(pool)
+    .await?;
+    if existing_claim.is_some() {
+        return Ok(ClaimStatus::StreamerAlreadyRegistered);
+    }
+
+    let now = chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Micros, false);
+    let insert = sqlx::query(
+        r#"
+        INSERT INTO affiliate_streamer_claims
+            (affiliate_twitch_login, claimed_streamer_login, claimed_at)
+        VALUES ($1, $2, $3)
+        "#,
+    )
+    .bind(twitch_login)
+    .bind(streamer_login)
+    .bind(&now)
+    .execute(pool)
+    .await;
+    match insert {
+        Ok(_) => Ok(ClaimStatus::Ok),
+        Err(error) if is_duplicate_sqlx_error(&error) => Ok(ClaimStatus::AlreadyClaimed),
+        Err(error) => Err(error),
+    }
+}
+
+async fn load_claims(pool: &PgPool, twitch_login: &str) -> Result<Vec<Value>, sqlx::Error> {
+    type ClaimRow = (Option<String>, Option<String>, i64, i64);
+    let rows = sqlx::query_as::<_, ClaimRow>(
+        r#"
+        SELECT c.claimed_streamer_login,
+               c.claimed_at,
+               COUNT(co.id)::bigint AS commission_count,
+               COALESCE(SUM(co.commission_cents), 0)::bigint AS total_commission_cents
+        FROM affiliate_streamer_claims c
+        LEFT JOIN affiliate_commissions co
+          ON co.affiliate_twitch_login = c.affiliate_twitch_login
+         AND co.streamer_login = c.claimed_streamer_login
+        WHERE c.affiliate_twitch_login = $1
+        GROUP BY c.claimed_streamer_login, c.claimed_at
+        "#,
+    )
+    .bind(twitch_login)
+    .fetch_all(pool)
+    .await?;
+
+    Ok(rows
+        .into_iter()
+        .map(
+            |(streamer_login, claimed_at, commission_count, total_commission_cents)| {
+                json!({
+                    "streamer_login": streamer_login.unwrap_or_default(),
+                    "claimed_at": claimed_at,
+                    "commission_count": commission_count,
+                    "total_commission_cents": total_commission_cents,
+                })
+            },
+        )
+        .collect())
 }
 
 async fn load_account(pool: &PgPool, login: &str) -> Result<Option<AffiliateAccount>, sqlx::Error> {
@@ -889,6 +1022,19 @@ fn non_empty_env(keys: &[&str]) -> Option<String> {
     })
 }
 
+fn is_valid_twitch_login(value: &str) -> bool {
+    let len = value.len();
+    (3..=25).contains(&len)
+        && value
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || b == b'_')
+}
+
+fn is_duplicate_sqlx_error(error: &sqlx::Error) -> bool {
+    let msg = error.to_string().to_lowercase();
+    msg.contains("unique") || msg.contains("duplicate")
+}
+
 #[derive(Debug, thiserror::Error)]
 enum AffiliatePersistError {
     #[error("db")]
@@ -915,7 +1061,7 @@ mod tests {
     use std::str::FromStr;
     use std::sync::Mutex;
     use tb_transport_twitch::user_token::UserTokenError;
-    use wiremock::matchers::{body_string_contains, method, path};
+    use wiremock::matchers::{body_string_contains, header, method, path};
     use wiremock::{Mock, MockServer, ResponseTemplate};
 
     const TEST_FERNET_KEY: &str = "dGVzdGtleTEyMzQ1Njc4OTAxMjM0NTY3ODkwMTIzNDU=";
@@ -1055,6 +1201,55 @@ mod tests {
                 address_country TEXT NOT NULL DEFAULT 'DE',
                 ust_status TEXT NOT NULL DEFAULT 'unknown',
                 updated_at TEXT NOT NULL
+            )
+            "#,
+        )
+        .execute(pool)
+        .await
+        .unwrap();
+        sqlx::query(
+            r#"
+            CREATE TABLE twitch_streamers_partner_state (
+                twitch_login TEXT,
+                is_partner_active INTEGER
+            )
+            "#,
+        )
+        .execute(pool)
+        .await
+        .unwrap();
+        sqlx::query(
+            r#"
+            CREATE TABLE affiliate_streamer_claims (
+                id INTEGER GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+                affiliate_twitch_login TEXT NOT NULL,
+                claimed_streamer_login TEXT NOT NULL UNIQUE,
+                claimed_at TEXT NOT NULL
+            )
+            "#,
+        )
+        .execute(pool)
+        .await
+        .unwrap();
+        sqlx::query(
+            r#"
+            CREATE TABLE affiliate_commissions (
+                id INTEGER GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+                affiliate_twitch_login TEXT NOT NULL,
+                streamer_login TEXT NOT NULL,
+                stripe_event_id TEXT UNIQUE NOT NULL,
+                stripe_invoice_id TEXT,
+                stripe_customer_id TEXT,
+                stripe_transfer_id TEXT,
+                brutto_cents INTEGER NOT NULL,
+                commission_cents INTEGER NOT NULL,
+                currency TEXT NOT NULL DEFAULT 'eur',
+                status TEXT NOT NULL DEFAULT 'pending',
+                period_start TEXT,
+                period_end TEXT,
+                created_at TEXT NOT NULL,
+                transferred_at TEXT,
+                error_message TEXT
             )
             "#,
         )
@@ -1336,6 +1531,234 @@ mod tests {
                 .unwrap(),
             "connected"
         );
+    }
+
+    #[tokio::test]
+    async fn connect_callback_replayt_pending_commission() {
+        let Some(pool) = pool("t_affiliate_connect_replay").await else {
+            return;
+        };
+        create_tables(&pool).await;
+        sqlx::query(
+            r#"
+            INSERT INTO affiliate_accounts
+                (twitch_login, twitch_user_id, display_name, email, full_name, address_line1,
+                 address_city, address_zip, address_country, created_at, updated_at)
+            VALUES ('partner_one', '1001', 'Partner One', '', '', '', '', '', 'DE',
+                    '2026-01-01T00:00:00+00:00', '2026-01-01T00:00:00+00:00')
+            "#,
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+        sqlx::query(
+            r#"
+            INSERT INTO affiliate_commissions
+                (affiliate_twitch_login, streamer_login, stripe_event_id, stripe_invoice_id,
+                 stripe_customer_id, brutto_cents, commission_cents, currency, status, created_at)
+            VALUES ('partner_one', 'kunde', 'evt_cb', 'in_cb', 'cus_cb', 1000, 300,
+                    'eur', 'pending', '2026-01-02T00:00:00+00:00')
+            "#,
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+        let state = state(pool.clone());
+        let session = state
+            .create_affiliate_session("partner_one", "1001", "Partner One", "")
+            .await
+            .unwrap();
+        let redirect_uri =
+            "https://example.test/twitch/affiliate/connect/stripe/callback".to_string();
+        state
+            .save_affiliate_connect_state(
+                "connect-state",
+                &AffiliateConnectState {
+                    redirect_uri: redirect_uri.clone(),
+                    twitch_login: "partner_one".into(),
+                },
+            )
+            .await
+            .unwrap();
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/oauth/token"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                "stripe_user_id": "acct_123"
+            })))
+            .mount(&server)
+            .await;
+        Mock::given(method("POST"))
+            .and(path("/v1/transfers"))
+            .and(header("Idempotency-Key", "affiliate-transfer:1"))
+            .and(body_string_contains("amount=300"))
+            .and(body_string_contains("destination=acct_123"))
+            .and(body_string_contains("transfer_group=evt_cb"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                "id": "tr_cb"
+            })))
+            .expect(1)
+            .mount(&server)
+            .await;
+        let stripe_client = StripeClient::new("sk_test_secret")
+            .unwrap()
+            .with_connect_base(server.uri())
+            .with_api_base(server.uri());
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            COOKIE,
+            format!("{}={}", AFFILIATE_COOKIE_NAME, session.session_id)
+                .parse()
+                .unwrap(),
+        );
+
+        let response = connect_stripe_callback_handler(
+            Some(Extension(state)),
+            Some(Extension(AffiliateStripeConfig {
+                connect_client_id: None,
+                client: Some(stripe_client),
+            })),
+            headers,
+            Query(CallbackQuery {
+                code: Some("oauth-code".into()),
+                state: Some("connect-state".into()),
+                error: None,
+            }),
+        )
+        .await;
+        assert!(response.status().is_redirection());
+        let row = sqlx::query(
+            "SELECT status, stripe_transfer_id, error_message FROM affiliate_commissions WHERE stripe_event_id = 'evt_cb'",
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert_eq!(row.try_get::<String, _>("status").unwrap(), "transferred");
+        assert_eq!(
+            row.try_get::<Option<String>, _>("stripe_transfer_id")
+                .unwrap()
+                .as_deref(),
+            Some("tr_cb")
+        );
+        assert!(row
+            .try_get::<Option<String>, _>("error_message")
+            .unwrap()
+            .is_none());
+    }
+
+    #[tokio::test]
+    async fn claim_api_legt_claim_an_und_liefert_claims() {
+        let Some(pool) = pool("t_affiliate_claim_ok").await else {
+            return;
+        };
+        create_tables(&pool).await;
+        sqlx::query(
+            r#"
+            INSERT INTO affiliate_accounts
+                (twitch_login, twitch_user_id, display_name, email, full_name, address_line1,
+                 address_city, address_zip, address_country, created_at, updated_at)
+            VALUES ('partner_one', '1001', 'Partner One', '', '', '', '', '', 'DE',
+                    '2026-01-01T00:00:00+00:00', '2026-01-01T00:00:00+00:00')
+            "#,
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+        let state = state(pool.clone());
+        let session = state
+            .create_affiliate_session("partner_one", "1001", "Partner One", "")
+            .await
+            .unwrap();
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            COOKIE,
+            format!("{}={}", AFFILIATE_COOKIE_NAME, session.session_id)
+                .parse()
+                .unwrap(),
+        );
+
+        let response = claim_handler(
+            Some(Extension(state.clone())),
+            headers.clone(),
+            State(pool.clone()),
+            Bytes::from_static(br#"{"streamer_login":"Customer_One"}"#),
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+        let value: Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(value["ok"], true);
+        assert_eq!(value["claimed"], "customer_one");
+
+        sqlx::query(
+            r#"
+            INSERT INTO affiliate_commissions
+                (affiliate_twitch_login, streamer_login, stripe_event_id, brutto_cents,
+                 commission_cents, currency, status, created_at)
+            VALUES ('partner_one', 'customer_one', 'evt_claim', 1000, 300, 'eur',
+                    'pending', '2026-01-02T00:00:00+00:00')
+            "#,
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+        let claims = api_claims_handler(Some(Extension(state)), headers, State(pool.clone())).await;
+        assert_eq!(claims.status(), StatusCode::OK);
+        let body = to_bytes(claims.into_body(), usize::MAX).await.unwrap();
+        let value: Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(value["claims"][0]["streamer_login"], "customer_one");
+        assert_eq!(value["claims"][0]["commission_count"], 1);
+        assert_eq!(value["claims"][0]["total_commission_cents"], 300);
+    }
+
+    #[tokio::test]
+    async fn claim_api_blockt_aktive_partner() {
+        let Some(pool) = pool("t_affiliate_claim_partner").await else {
+            return;
+        };
+        create_tables(&pool).await;
+        sqlx::query(
+            r#"
+            INSERT INTO affiliate_accounts
+                (twitch_login, twitch_user_id, display_name, email, full_name, address_line1,
+                 address_city, address_zip, address_country, created_at, updated_at)
+            VALUES ('partner_one', '1001', 'Partner One', '', '', '', '', '', 'DE',
+                    '2026-01-01T00:00:00+00:00', '2026-01-01T00:00:00+00:00')
+            "#,
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+        sqlx::query(
+            "INSERT INTO twitch_streamers_partner_state (twitch_login, is_partner_active) VALUES ('customer_one', 1)",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+        let state = state(pool.clone());
+        let session = state
+            .create_affiliate_session("partner_one", "1001", "Partner One", "")
+            .await
+            .unwrap();
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            COOKIE,
+            format!("{}={}", AFFILIATE_COOKIE_NAME, session.session_id)
+                .parse()
+                .unwrap(),
+        );
+
+        let response = claim_handler(
+            Some(Extension(state)),
+            headers,
+            State(pool.clone()),
+            Bytes::from_static(br#"{"streamer_login":"customer_one"}"#),
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::CONFLICT);
+        let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+        let value: Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(value["error"], "streamer_already_registered");
     }
 
     #[tokio::test]

@@ -935,10 +935,15 @@ pub fn build_affiliate_router(pool: PgPool, rate_limiter: RateLimiter) -> Router
                 axum::middleware::from_fn_with_state(stripe_rl, rate_limit_middleware),
             ),
         )
+        .route("/twitch/affiliate/claim", post(affiliate::claim_handler))
         .route("/twitch/api/affiliate/me", get(affiliate::api_me_handler))
         .route(
             "/twitch/api/affiliate/profile",
             put(affiliate::api_profile_update_handler),
+        )
+        .route(
+            "/twitch/api/affiliate/claims",
+            get(affiliate::api_claims_handler),
         )
         .with_state(pool)
 }

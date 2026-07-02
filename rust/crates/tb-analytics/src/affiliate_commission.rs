@@ -19,7 +19,7 @@
 //! i32) im Namespace `1_103_151_689`, sodass Rust- und Python-Pfad während des
 //! Cutovers denselben Postgres-Advisory-Lock teilen.
 
-use sqlx::PgPool;
+use sqlx::{PgPool, Postgres, Transaction};
 
 use crate::stripe::StripeClient;
 
@@ -104,6 +104,68 @@ fn cents_to_int4(value: i64, field: &str) -> Result<i32, sqlx::Error> {
         .map_err(|_| sqlx::Error::InvalidArgument(format!("{field} out of int4 range: {value}")))
 }
 
+async fn acquire_commission_lock(
+    tx: &mut Transaction<'_, Postgres>,
+    affiliate_login: &str,
+) -> Result<(), sqlx::Error> {
+    let (lock_ns, lock_key) = commission_lock_key(affiliate_login);
+    // Transaktions-Advisory-Lock: löst beim Commit/Rollback automatisch aus
+    // (Python nimmt einen Session-Lock + explizites Unlock — selber Schlüssel,
+    // damit Python- und Rust-Pfad sich gegenseitig serialisieren).
+    sqlx::query!(
+        r#"SELECT 1 AS "locked!" FROM (SELECT pg_advisory_xact_lock($1, $2)) AS _lock"#,
+        lock_ns,
+        lock_key
+    )
+    .fetch_one(&mut **tx)
+    .await?;
+    Ok(())
+}
+
+/// Speichert die Stripe-Connect-Account-ID und replayt danach pending/failed
+/// Provisionen unter demselben Affiliate-Advisory-Lock.
+///
+/// Port von `affiliate_mixin.py:_affiliate_connect_stripe_sync`: erst
+/// `stripe_account_id`/Connect-Status aktualisieren, dann
+/// `_affiliate_replay_pending_commissions(..., commit=False)`.
+pub async fn connect_account_and_replay(
+    pool: &PgPool,
+    stripe: Option<&StripeClient>,
+    affiliate_login: &str,
+    stripe_account_id: &str,
+) -> Result<(), sqlx::Error> {
+    let affiliate_login = affiliate_login.trim().to_lowercase();
+    let stripe_account_id = stripe_account_id.trim();
+    if affiliate_login.is_empty() || stripe_account_id.is_empty() {
+        return Ok(());
+    }
+
+    let now = chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Micros, false);
+    let mut tx = pool.begin().await?;
+    acquire_commission_lock(&mut tx, &affiliate_login).await?;
+
+    sqlx::query(
+        r#"
+        UPDATE affiliate_accounts
+        SET stripe_account_id = $1,
+            stripe_connected_at = $2,
+            stripe_connect_status = 'connected',
+            updated_at = $3
+        WHERE twitch_login = $4
+        "#,
+    )
+    .bind(stripe_account_id)
+    .bind(&now)
+    .bind(&now)
+    .bind(&affiliate_login)
+    .execute(&mut *tx)
+    .await?;
+
+    replay_pending_commissions_in_tx(&mut tx, stripe, stripe_account_id, &affiliate_login).await?;
+    tx.commit().await?;
+    Ok(())
+}
+
 /// Verbucht (und zahlt ggf. aus) die Affiliate-Provision für eine bezahlte
 /// Invoice. `stripe` ist optional — ohne Client bleibt eine fällige Auszahlung
 /// `pending` (genau wie Pythons Pfad ohne Connect-Konto/Client).
@@ -161,18 +223,8 @@ pub async fn process_commission(
     let now = chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Micros, false);
 
     // 4. Unter Advisory-Lock idempotent einfügen.
-    let (lock_ns, lock_key) = commission_lock_key(&affiliate_login);
     let mut tx = pool.begin().await?;
-    // Transaktions-Advisory-Lock: löst beim Commit/Rollback automatisch aus
-    // (Python nimmt einen Session-Lock + explizites Unlock — selber Schlüssel,
-    // damit Python- und Rust-Pfad sich gegenseitig serialisieren).
-    sqlx::query!(
-        r#"SELECT 1 AS "locked!" FROM (SELECT pg_advisory_xact_lock($1, $2)) AS _lock"#,
-        lock_ns,
-        lock_key
-    )
-    .fetch_one(&mut *tx)
-    .await?;
+    acquire_commission_lock(&mut tx, &affiliate_login).await?;
 
     let stripe_account_id: String = sqlx::query_scalar!(
         "SELECT stripe_account_id FROM affiliate_accounts WHERE twitch_login = $1",
@@ -229,28 +281,30 @@ pub async fn process_commission(
 
     if let Err(e) = insert {
         if is_duplicate_error(&e) {
-            // Lock löst beim Drop/Rollback aus.
+            tx.rollback().await?;
             return Ok(CommissionOutcome::Duplicate);
         }
         return Err(e);
     }
-    tx.commit().await?;
 
     // 5. Ohne Connect-Konto bleibt es beim erfassten Status.
     if stripe_account_id.is_empty() {
+        tx.commit().await?;
         return Ok(CommissionOutcome::Recorded(initial_status.to_string()));
     }
 
     // Auszahlung: alle offenen Provisionen des Affiliates per Stripe-Transfer.
-    replay_pending_commissions(pool, stripe, &stripe_account_id, &affiliate_login).await?;
+    // Python hält den Affiliate-Advisory-Lock über Insert UND Replay.
+    replay_pending_commissions_in_tx(&mut tx, stripe, &stripe_account_id, &affiliate_login).await?;
 
     // Finaler Status der gerade verbuchten Provision.
     let status: Option<String> = sqlx::query_scalar!(
         "SELECT status FROM affiliate_commissions WHERE stripe_event_id = $1",
         invoice.stripe_event_id
     )
-    .fetch_optional(pool)
+    .fetch_optional(&mut *tx)
     .await?;
+    tx.commit().await?;
     Ok(CommissionOutcome::Recorded(
         status.unwrap_or_else(|| "pending".to_string()),
     ))
@@ -269,8 +323,25 @@ struct PendingCommission {
 /// Zahlt alle offenen Provisionen eines Affiliates per Stripe-Transfer aus
 /// (Python `_affiliate_replay_pending_commissions`). Reihenfolge wie Python:
 /// `created_at ASC, id ASC`.
-async fn replay_pending_commissions(
+pub async fn replay_pending_commissions(
     pool: &PgPool,
+    stripe: Option<&StripeClient>,
+    stripe_account_id: &str,
+    affiliate_login: &str,
+) -> Result<(), sqlx::Error> {
+    let affiliate_login = affiliate_login.trim().to_lowercase();
+    if affiliate_login.is_empty() {
+        return Ok(());
+    }
+    let mut tx = pool.begin().await?;
+    acquire_commission_lock(&mut tx, &affiliate_login).await?;
+    replay_pending_commissions_in_tx(&mut tx, stripe, stripe_account_id, &affiliate_login).await?;
+    tx.commit().await?;
+    Ok(())
+}
+
+async fn replay_pending_commissions_in_tx(
+    tx: &mut Transaction<'_, Postgres>,
     stripe: Option<&StripeClient>,
     stripe_account_id: &str,
     affiliate_login: &str,
@@ -291,12 +362,12 @@ async fn replay_pending_commissions(
         "#,
         affiliate_login
     )
-    .fetch_all(pool)
+    .fetch_all(&mut **tx)
     .await?;
 
     for row in pending {
-        transfer_commission(
-            pool,
+        transfer_commission_in_tx(
+            tx,
             stripe,
             stripe_account_id,
             row.id,
@@ -312,8 +383,8 @@ async fn replay_pending_commissions(
 /// Führt einen einzelnen Provisions-Transfer aus (Python
 /// `_affiliate_transfer_commission`). Ohne Client/bei Transfer-Fehler bleibt die
 /// Provision `pending` (mit `error_message`); bei Erfolg `transferred`.
-async fn transfer_commission(
-    pool: &PgPool,
+async fn transfer_commission_in_tx(
+    tx: &mut Transaction<'_, Postgres>,
     stripe: Option<&StripeClient>,
     stripe_account_id: &str,
     commission_id: i32,
@@ -361,7 +432,7 @@ async fn transfer_commission(
                 &transferred_at,
                 commission_id
             )
-            .execute(pool)
+            .execute(&mut **tx)
             .await?;
         }
         Err(error) => {
@@ -380,7 +451,7 @@ async fn transfer_commission(
                 &msg,
                 commission_id
             )
-            .execute(pool)
+            .execute(&mut **tx)
             .await?;
         }
     }
@@ -392,6 +463,8 @@ mod tests {
     use super::*;
     use sqlx::postgres::{PgConnectOptions, PgPoolOptions};
     use std::str::FromStr;
+    use wiremock::matchers::{body_string_contains, header, method, path};
+    use wiremock::{Mock, MockServer, ResponseTemplate};
 
     // ── crc32 / Lock-Schlüssel: bit-identisch zu Python zlib.crc32 ──────────
 
@@ -484,8 +557,13 @@ mod tests {
         .await
         .unwrap();
         sqlx::query(
-            "CREATE TABLE affiliate_accounts (twitch_login TEXT PRIMARY KEY, stripe_account_id TEXT)",
-        ).execute(&pool).await.unwrap();
+            "CREATE TABLE affiliate_accounts (\
+                twitch_login TEXT PRIMARY KEY, stripe_account_id TEXT, \
+                stripe_connected_at TEXT, stripe_connect_status TEXT, updated_at TEXT)",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
         sqlx::query(
             "CREATE TABLE affiliate_commissions (\
                 id INTEGER GENERATED ALWAYS AS IDENTITY PRIMARY KEY, \
@@ -675,5 +753,120 @@ mod tests {
         ).fetch_one(&pool).await.unwrap();
         assert_eq!(status, "pending");
         assert!(err.is_some(), "Transfer-Fehler muss error_message setzen");
+    }
+
+    #[tokio::test]
+    async fn replay_transfer_uses_idempotency_group_and_is_not_repeated() {
+        let Some(pool) = connect("comm_transfer_idem").await else {
+            return;
+        };
+        sqlx::query(
+            "INSERT INTO affiliate_accounts (twitch_login, stripe_account_id) VALUES ('aff1', 'acct_123')",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+        sqlx::query(
+            "INSERT INTO affiliate_commissions \
+                (affiliate_twitch_login, streamer_login, stripe_event_id, stripe_invoice_id, \
+                 stripe_customer_id, brutto_cents, commission_cents, currency, status, created_at) \
+             VALUES ('aff1', 'streamerx', 'evt_transfer', 'in_1', 'cus_1', 1000, 300, 'eur', \
+                     'pending', '2026-06-01')",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/v1/transfers"))
+            .and(header("Idempotency-Key", "affiliate-transfer:1"))
+            .and(body_string_contains("amount=300"))
+            .and(body_string_contains("currency=eur"))
+            .and(body_string_contains("destination=acct_123"))
+            .and(body_string_contains("transfer_group=evt_transfer"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "id": "tr_123"
+            })))
+            .expect(1)
+            .mount(&server)
+            .await;
+        let client = StripeClient::new("sk_test_secret")
+            .unwrap()
+            .with_api_base(server.uri());
+
+        replay_pending_commissions(&pool, Some(&client), "acct_123", "aff1")
+            .await
+            .unwrap();
+        replay_pending_commissions(&pool, Some(&client), "acct_123", "aff1")
+            .await
+            .unwrap();
+
+        let (status, transfer_id): (String, Option<String>) = sqlx::query_as(
+            "SELECT status, stripe_transfer_id FROM affiliate_commissions WHERE stripe_event_id = 'evt_transfer'",
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert_eq!(status, "transferred");
+        assert_eq!(transfer_id.as_deref(), Some("tr_123"));
+    }
+
+    #[tokio::test]
+    async fn connect_account_update_and_replay_share_helper() {
+        let Some(pool) = connect("comm_connect_replay").await else {
+            return;
+        };
+        sqlx::query("INSERT INTO affiliate_accounts (twitch_login) VALUES ('aff1')")
+            .execute(&pool)
+            .await
+            .unwrap();
+        sqlx::query(
+            "INSERT INTO affiliate_commissions \
+                (affiliate_twitch_login, streamer_login, stripe_event_id, brutto_cents, \
+                 commission_cents, currency, status, created_at) \
+             VALUES ('aff1', 'streamerx', 'evt_connect', 1000, 300, 'eur', 'pending', \
+                     '2026-06-01')",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/v1/transfers"))
+            .and(header("Idempotency-Key", "affiliate-transfer:1"))
+            .and(body_string_contains("destination=acct_456"))
+            .and(body_string_contains("transfer_group=evt_connect"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "id": "tr_connect"
+            })))
+            .expect(1)
+            .mount(&server)
+            .await;
+        let client = StripeClient::new("sk_test_secret")
+            .unwrap()
+            .with_api_base(server.uri());
+
+        connect_account_and_replay(&pool, Some(&client), "Aff1", "acct_456")
+            .await
+            .unwrap();
+
+        let (account_id, connect_status, status, transfer_id): (
+            Option<String>,
+            Option<String>,
+            String,
+            Option<String>,
+        ) = sqlx::query_as(
+            "SELECT a.stripe_account_id, a.stripe_connect_status, c.status, c.stripe_transfer_id \
+             FROM affiliate_accounts a \
+             JOIN affiliate_commissions c ON c.affiliate_twitch_login = a.twitch_login \
+             WHERE a.twitch_login = 'aff1'",
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert_eq!(account_id.as_deref(), Some("acct_456"));
+        assert_eq!(connect_status.as_deref(), Some("connected"));
+        assert_eq!(status, "transferred");
+        assert_eq!(transfer_id.as_deref(), Some("tr_connect"));
     }
 }
