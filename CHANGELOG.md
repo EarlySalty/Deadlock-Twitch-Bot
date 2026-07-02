@@ -1,3 +1,11 @@
+## #324 — Affiliate-Claims sind jetzt zeitlich gebundene Reservierungen
+
+**Ausgangslage:** Bisher konnte ein Affiliate jeden noch nicht beanspruchten Streamer beanspruchen — zeitlich unbegrenzt und egal, ob er ihn wirklich neu angeworben hat.
+
+**Änderung:** Ein Claim ist jetzt eine Reservierung rund um den Moment, in dem der geworbene Streamer bei uns aktiv wird: bis 4 Tage im Voraus reservierbar, bis 24 Stunden nach der Aktivierung nachholbar. Läuft die Reservierung ohne Aktivierung ab, wird der Streamer wieder frei. Provision fließt nur, wenn der Claim in diesem Fenster liegt.
+
+**Ergebnis:** Belohnt werden echte Neu-Anwerbungen statt Abgriffe auf längst etablierte Kanäle. Das Programm bleibt bis zur Freischaltung inaktiv.
+
 ## #323 — Affiliate-/Partner-Abrechnung läuft jetzt auf der neuen Rust-Basis
 
 **Ausgangslage:** Das Affiliate-System — Anmeldung, Provisionen, monatliche Gutschriften und die interne Verwaltung — lief noch auf der alten Python-Oberfläche und fehlte in der neuen Dashboard-Basis komplett.
