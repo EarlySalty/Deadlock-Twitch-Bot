@@ -241,7 +241,13 @@ async fn broker_post(path: &str, token: &str, payload: &Value) -> Option<Value> 
         tracing::warn!(status = %resp.status(), path, "discord broker non-200");
         return None;
     }
-    resp.json::<Value>().await.ok()
+    match resp.json::<Value>().await {
+        Ok(value) => Some(value),
+        Err(error) => {
+            tracing::warn!(%error, path, "discord broker JSON nicht lesbar");
+            None
+        }
+    }
 }
 
 /// Normalisiert `next` auf einen sicheren internen Pfad (kein offener Redirect):

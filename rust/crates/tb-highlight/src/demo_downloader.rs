@@ -57,19 +57,52 @@ pub async fn get_demo_path(base_url: &str, cache_dir: &Path, match_id: i64) -> O
 
 /// Löscht die gecachte `.dem`-Datei eines Matches (idempotent, Python `unlink(missing_ok=True)`).
 pub fn cleanup_demo(cache_dir: &Path, match_id: i64) {
-    let _ = std::fs::remove_file(cache_dir.join(format!("{match_id}.dem")));
+    let path = cache_dir.join(format!("{match_id}.dem"));
+    match std::fs::remove_file(&path) {
+        Ok(()) => {}
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+        Err(error) => tracing::warn!(
+            %error,
+            match_id,
+            path = %path.display(),
+            "HighlightClipper: Demo-Cache konnte nicht geloescht werden"
+        ),
+    }
 }
 
 /// Holt die `demo_url` aus der Salts-Antwort (10s Timeout). Nicht-200, fehlendes
 /// oder leeres Feld → `None` (Python `if not demo_url`).
 async fn get_demo_url(base_url: &str, match_id: i64) -> Option<String> {
     let url = format!("{base_url}/matches/{match_id}/salts");
-    let client = reqwest::Client::builder().timeout(SALTS_TIMEOUT).build().ok()?;
-    let resp = client.get(&url).send().await.ok()?;
+    let client = match reqwest::Client::builder().timeout(SALTS_TIMEOUT).build() {
+        Ok(client) => client,
+        Err(error) => {
+            tracing::warn!(%error, match_id, "HighlightClipper: Salts-Client konnte nicht gebaut werden");
+            return None;
+        }
+    };
+    let resp = match client.get(&url).send().await {
+        Ok(resp) => resp,
+        Err(error) => {
+            tracing::warn!(%error, match_id, "HighlightClipper: Salts-Request fehlgeschlagen");
+            return None;
+        }
+    };
     if !resp.status().is_success() {
+        tracing::warn!(
+            status = resp.status().as_u16(),
+            match_id,
+            "HighlightClipper: Salts-Request non-2xx"
+        );
         return None;
     }
-    let data = resp.json::<serde_json::Value>().await.ok()?;
+    let data = match resp.json::<serde_json::Value>().await {
+        Ok(data) => data,
+        Err(error) => {
+            tracing::warn!(%error, match_id, "HighlightClipper: Salts-JSON nicht lesbar");
+            return None;
+        }
+    };
     data.get("demo_url")?
         .as_str()
         .filter(|s| !s.is_empty())
@@ -78,23 +111,44 @@ async fn get_demo_url(base_url: &str, match_id: i64) -> Option<String> {
 
 /// Lädt die Bytes der Demo-URL (120s Timeout). HTTP ≠ 2xx oder Fehler → `None`.
 async fn download_bytes(url: &str) -> Option<Vec<u8>> {
-    let client = reqwest::Client::builder()
+    let client = match reqwest::Client::builder()
         .timeout(DOWNLOAD_TIMEOUT)
         .build()
-        .ok()?;
-    let resp = client.get(url).send().await.ok()?;
+    {
+        Ok(client) => client,
+        Err(error) => {
+            tracing::warn!(%error, "HighlightClipper: Demo-Download-Client konnte nicht gebaut werden");
+            return None;
+        }
+    };
+    let resp = match client.get(url).send().await {
+        Ok(resp) => resp,
+        Err(error) => {
+            tracing::warn!(%error, "HighlightClipper: Demo-Download fehlgeschlagen");
+            return None;
+        }
+    };
     if !resp.status().is_success() {
         tracing::warn!(status = %resp.status(), "HighlightClipper: Demo-Download HTTP-Fehler");
         return None;
     }
-    resp.bytes().await.ok().map(|b| b.to_vec())
+    match resp.bytes().await {
+        Ok(bytes) => Some(bytes.to_vec()),
+        Err(error) => {
+            tracing::warn!(%error, "HighlightClipper: Demo-Download-Body nicht lesbar");
+            None
+        }
+    }
 }
 
 /// Entpackt einen kompletten bz2-Puffer (Python `bz2.decompress`). Fehler → `None`.
 fn decompress_bz2(data: &[u8]) -> Option<Vec<u8>> {
     let mut decoder = bzip2_rs::DecoderReader::new(data);
     let mut out = Vec::new();
-    decoder.read_to_end(&mut out).ok()?;
+    if let Err(error) = decoder.read_to_end(&mut out) {
+        tracing::warn!(%error, "HighlightClipper: Demo-BZ2 konnte nicht entpackt werden");
+        return None;
+    }
     Some(out)
 }
 

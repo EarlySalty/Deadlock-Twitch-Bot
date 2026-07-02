@@ -35,7 +35,13 @@ impl HelixClient {
             200 | 204 => Ok(AddModeratorOutcome::Added),
             422 => Ok(AddModeratorOutcome::AlreadyModerator),
             _ => {
-                let body = resp.text().await.unwrap_or_default();
+                let body = match resp.text().await {
+                    Ok(body) => body,
+                    Err(error) => {
+                        tracing::warn!(%error, status, "Twitch Add-Moderator: Fehlerbody nicht lesbar");
+                        String::new()
+                    }
+                };
                 if status == 400 && body.to_lowercase().contains("already a mod") {
                     Ok(AddModeratorOutcome::AlreadyModerator)
                 } else {

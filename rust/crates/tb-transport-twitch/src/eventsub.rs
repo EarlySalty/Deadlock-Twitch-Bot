@@ -120,11 +120,17 @@ fn parse_retry_after_value(raw: &str, now: DateTime<Utc>) -> Option<Duration> {
 async fn eventsub_create_status_error(resp: reqwest::Response) -> EventSubCreateError {
     let status = resp.status().as_u16();
     let retry_after = parse_retry_after(&resp);
-    let body = resp.text().await.ok().map(|text| {
-        text.chars()
-            .take(EVENTSUB_CREATE_ERROR_BODY_LIMIT)
-            .collect::<String>()
-    });
+    let body = match resp.text().await {
+        Ok(text) => Some(
+            text.chars()
+                .take(EVENTSUB_CREATE_ERROR_BODY_LIMIT)
+                .collect::<String>(),
+        ),
+        Err(error) => {
+            tracing::warn!(%error, status, "EventSub-Create: Fehlerbody nicht lesbar");
+            None
+        }
+    };
     EventSubCreateError::Status {
         status,
         retry_after,

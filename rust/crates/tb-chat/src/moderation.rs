@@ -517,7 +517,15 @@ impl ModerationEngine {
         } = req;
 
         // Schritt 1: Nachricht löschen (moderation.py Z. 1631–1666)
-        let _ = self.api.delete_message(broadcaster_id, message_id).await;
+        if let Err(error) = self.api.delete_message(broadcaster_id, message_id).await {
+            warn!(
+                %error,
+                channel = %channel_login,
+                chatter = %chatter_login,
+                message_id = %message_id,
+                "AutoBan-Cleanup: Message-Delete fehlgeschlagen"
+            );
+        }
 
         if !ban {
             // Delete-Only-Pfad (moderation.py Z. 259–261)

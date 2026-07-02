@@ -223,7 +223,16 @@ impl MatchContext {
             Some(id) => self.ensure_hero_cache().await.get(&id).cloned(),
             None => None,
         };
-        let _ = self.upsert_match_state(channel_login, &extracted, hero_name.as_deref()).await;
+        if let Err(error) = self
+            .upsert_match_state(channel_login, &extracted, hero_name.as_deref())
+            .await
+        {
+            tracing::warn!(
+                %error,
+                channel = %channel_login,
+                "Match-State konnte nicht gespeichert werden"
+            );
+        }
         self.get_match_state(channel_login).await
     }
 }

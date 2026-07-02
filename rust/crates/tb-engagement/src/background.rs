@@ -7,6 +7,7 @@
 //! ist best-effort. Der Stream-Transkript-Loop (Audio-Capture + Whisper-STT)
 //! folgt separat, sobald das STT-Subsystem in Rust existiert.
 
+use std::future::Future;
 use std::time::{Duration, Instant};
 
 use chrono::Utc;
@@ -62,7 +63,7 @@ async fn load_enabled_channels(pool: &PgPool) -> Vec<(String, Option<String>)> {
 
 /// Trimmt den Conversation-Buffer auf die jüngsten `keep` Turns je Channel.
 async fn trim_conversation(pool: &PgPool, keep: i64) -> u64 {
-    sqlx::query!(
+    match sqlx::query!(
         "DELETE FROM twitch_engagement_conversation WHERE id IN (\
            SELECT id FROM (\
              SELECT id, ROW_NUMBER() OVER (\
@@ -73,8 +74,13 @@ async fn trim_conversation(pool: &PgPool, keep: i64) -> u64 {
     )
     .execute(pool)
     .await
-    .map(|r| r.rows_affected())
-    .unwrap_or(0)
+    {
+        Ok(result) => result.rows_affected(),
+        Err(error) => {
+            tracing::warn!(%error, keep, "Engagement-Conversation-Trim fehlgeschlagen");
+            0
+        }
+    }
 }
 
 /// Schlaf mit ±10% Jitter (gegen Thundering Herd), mindestens 1s.
@@ -169,7 +175,13 @@ async fn run_transcribe_capture(
         engine: result.engine,
         model: Some(result.model).filter(|m| !m.is_empty()),
     };
-    let _ = StreamTranscripts::new(pool.clone()).append_segment(&segment).await;
+    if let Err(error) = StreamTranscripts::new(pool.clone()).append_segment(&segment).await {
+        tracing::warn!(
+            %error,
+            channel,
+            "stream-transcripts: Segment konnte nicht gespeichert werden"
+        );
+    }
 }
 
 fn ai_client() -> EngagementMinimaxClient {
@@ -206,7 +218,7 @@ pub async fn schedule_auto_closer(pool: PgPool) {
 /// Conversation-Trim (alle 24h, behält 500/Channel).
 pub async fn schedule_conversation_trim(pool: PgPool) {
     loop {
-        let _ = trim_conversation(&pool, CONVERSATION_KEEP_PER_CHANNEL).await;
+        trim_conversation(&pool, CONVERSATION_KEEP_PER_CHANNEL).await;
         jittered_sleep(CONVERSATION_TRIM_INTERVAL).await;
     }
 }
@@ -258,7 +270,7 @@ pub async fn schedule_stream_transcripts(pool: PgPool) {
                     }
                     if last_trim.is_none_or(|t| t.elapsed() >= TRANSCRIPT_TRIM_INTERVAL) {
                         last_trim = Some(Instant::now());
-                        let _ = StreamTranscripts::new(pool.clone()).trim_segments(None, None).await;
+                        StreamTranscripts::new(pool.clone()).trim_segments(None, None).await;
                     }
                 }
                 None => tracing::debug!(
@@ -272,15 +284,15 @@ pub async fn schedule_stream_transcripts(pool: PgPool) {
 
 /// Spawnt alle acht Background-Loops als tokio-Tasks (Python `ensure_started`).
 pub fn spawn_all(pool: PgPool) {
-    tokio::spawn(schedule_thread_extractor(pool.clone()));
-    tokio::spawn(schedule_match_poller(pool.clone()));
-    tokio::spawn(schedule_auto_closer(pool.clone()));
-    tokio::spawn(schedule_conversation_trim(pool.clone()));
-    tokio::spawn(schedule_global_sentiment(pool.clone()));
-    tokio::spawn(schedule_soul_anchor(pool.clone()));
-    tokio::spawn(schedule_channel_profile(pool.clone()));
+    spawn_logged("engagement_thread_extractor", schedule_thread_extractor(pool.clone()));
+    spawn_logged("engagement_match_poller", schedule_match_poller(pool.clone()));
+    spawn_logged("engagement_auto_closer", schedule_auto_closer(pool.clone()));
+    spawn_logged("engagement_conversation_trim", schedule_conversation_trim(pool.clone()));
+    spawn_logged("engagement_global_sentiment", schedule_global_sentiment(pool.clone()));
+    spawn_logged("engagement_soul_anchor", schedule_soul_anchor(pool.clone()));
+    spawn_logged("engagement_channel_profile", schedule_channel_profile(pool.clone()));
     if stream_transcripts_enabled() {
-        tokio::spawn(schedule_stream_transcripts(pool));
+        spawn_logged("engagement_stream_transcripts", schedule_stream_transcripts(pool));
     } else {
         tracing::info!("Engagement-Stream-Transkription deaktiviert");
     }
@@ -289,6 +301,18 @@ pub fn spawn_all(pool: PgPool) {
          auto-closer=1h, conv-trim=24h, global-sentiment=20min, soul-anchor=3h, \
          channel-profile=4h, stream-transcripts=poll)"
     );
+}
+
+fn spawn_logged<F>(task: &'static str, future: F)
+where
+    F: Future<Output = ()> + Send + 'static,
+{
+    let handle = tokio::spawn(future);
+    tokio::spawn(async move {
+        if let Err(error) = handle.await {
+            tracing::error!(task, %error, "Engagement-Background-Task unerwartet beendet");
+        }
+    });
 }
 
 #[cfg(test)]

@@ -706,7 +706,15 @@ impl EventSubDispatcher {
             Err(error) => {
                 // Annahme fehlgeschlagen → Guard freigeben, Bridge retryt.
                 if let Some(message_id) = message_id {
-                    let _ = self.guard.release(GuardKind::MessageId, message_id).await;
+                    if let Err(release_error) =
+                        self.guard.release(GuardKind::MessageId, message_id).await
+                    {
+                        tracing::warn!(
+                            %release_error,
+                            message_id,
+                            "EventSub MessageId-Guard konnte nach Fehler nicht freigegeben werden"
+                        );
+                    }
                 }
                 Err(error)
             }

@@ -78,7 +78,14 @@ pub async fn register_manual_upload(
     let clip_db_id = row.id;
     let retention_until = row.retention_until;
 
-    let _ = apply_default_layout(pool, clip_db_id, streamer_login).await;
+    if let Err(error) = apply_default_layout(pool, clip_db_id, streamer_login).await {
+        tracing::warn!(
+            %error,
+            clip_db_id,
+            streamer_login,
+            "Social-Media-Clip: Default-Layout konnte nicht angewendet werden"
+        );
+    }
     Ok((clip_db_id, retention_until.unwrap_or_default()))
 }
 
@@ -90,7 +97,7 @@ pub async fn get_clips_for_dashboard(
     status: Option<&str>,
     limit: i64,
 ) -> Vec<Value> {
-    let rows = sqlx::query!(
+    let rows = match sqlx::query!(
         "SELECT to_jsonb(c)::text AS clip, \
                 COALESCE((SELECT COUNT(*) FROM twitch_clips_upload_queue q \
                           WHERE q.clip_id = c.id AND q.status = 'pending'), 0) AS \"pending_uploads!\" \
@@ -104,7 +111,18 @@ pub async fn get_clips_for_dashboard(
     )
     .fetch_all(pool)
     .await
-    .unwrap_or_default();
+    {
+        Ok(rows) => rows,
+        Err(error) => {
+            tracing::warn!(
+                %error,
+                streamer_login = streamer_login.unwrap_or(""),
+                status = status.unwrap_or(""),
+                "Social-Media-Clips: Dashboard-Liste nicht ladbar"
+            );
+            Vec::new()
+        }
+    };
 
     rows.iter()
         .map(|r| {

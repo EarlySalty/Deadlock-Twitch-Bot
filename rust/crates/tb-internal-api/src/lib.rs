@@ -19,6 +19,7 @@ use std::sync::Arc;
 use tb_http_core::{ExpectedToken, INTERNAL_API_BASE_PATH};
 use tb_monitoring::EventSubDispatcher;
 use tb_transport_twitch::HelixClient;
+use tower_http::trace::TraceLayer;
 
 pub use handlers::eventsub::EventSubDispatcherExt;
 pub use handlers::legacy_proxy::{LegacyProxy, LegacyProxyExt};
@@ -319,4 +320,25 @@ pub fn build_internal_router(
             security::internal_api_auth_guard,
         ))
         .layer(middleware::from_fn(security::internal_api_loopback_guard))
+        .layer(
+            TraceLayer::new_for_http()
+                .on_request(|request: &axum::http::Request<_>, _span: &tracing::Span| {
+                    tracing::info!(
+                        method = %request.method(),
+                        path = %request.uri().path(),
+                        "HTTP Request gestartet"
+                    );
+                })
+                .on_response(
+                    |response: &axum::http::Response<_>,
+                     latency: std::time::Duration,
+                     _span: &tracing::Span| {
+                        tracing::info!(
+                            status = response.status().as_u16(),
+                            latency_ms = latency.as_millis(),
+                            "HTTP Request abgeschlossen"
+                        );
+                    },
+                ),
+        )
 }

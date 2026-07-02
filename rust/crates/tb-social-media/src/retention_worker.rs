@@ -60,7 +60,15 @@ impl RetentionWorker {
                 match tokio::fs::remove_file(&file_path).await {
                     Ok(()) => {}
                     Err(e) if e.kind() == std::io::ErrorKind::NotFound => {} // missing_ok
-                    Err(_) => continue, // Datei nicht löschbar → Clip-Zeile behalten
+                    Err(error) => {
+                        tracing::warn!(
+                            %error,
+                            clip_id = clip.id,
+                            path = %file_path,
+                            "Social-Media-Retention: Datei konnte nicht geloescht werden"
+                        );
+                        continue; // Datei nicht löschbar → Clip-Zeile behalten
+                    }
                 }
             }
             deleted_ids.push(clip.id);

@@ -482,12 +482,24 @@ impl IrcLurkerTracker {
     }
 
     async fn connect(&self) -> Option<(BufReader<OwnedReadHalf>, OwnedWriteHalf)> {
-        let stream = TcpStream::connect((IRC_HOST, IRC_PORT)).await.ok()?;
+        let stream = match TcpStream::connect((IRC_HOST, IRC_PORT)).await {
+            Ok(stream) => stream,
+            Err(error) => {
+                tracing::warn!(%error, "IRC-Lurker: Connect fehlgeschlagen");
+                return None;
+            }
+        };
         let (rd, mut wr) = stream.into_split();
         for command in self.handshake_commands() {
-            wr.write_all(command.as_bytes()).await.ok()?;
+            if let Err(error) = wr.write_all(command.as_bytes()).await {
+                tracing::warn!(%error, "IRC-Lurker: Handshake-Write fehlgeschlagen");
+                return None;
+            }
         }
-        wr.flush().await.ok()?;
+        if let Err(error) = wr.flush().await {
+            tracing::warn!(%error, "IRC-Lurker: Handshake-Flush fehlgeschlagen");
+            return None;
+        }
 
         let mut reader = BufReader::new(rd);
         let mut line = String::new();
@@ -495,7 +507,14 @@ impl IrcLurkerTracker {
             line.clear();
             let n = match tokio::time::timeout(CONNECT_TIMEOUT, reader.read_line(&mut line)).await {
                 Ok(Ok(n)) => n,
-                _ => return None,
+                Ok(Err(error)) => {
+                    tracing::warn!(%error, "IRC-Lurker: Handshake-Read fehlgeschlagen");
+                    return None;
+                }
+                Err(_) => {
+                    tracing::warn!("IRC-Lurker: Handshake-Timeout");
+                    return None;
+                }
             };
             if n == 0 {
                 return None;
@@ -522,8 +541,7 @@ impl IrcLurkerTracker {
             .cloned()
             .collect();
         for ch in channels {
-            let _ = writer.write_all(format!("JOIN #{ch}\r\n").as_bytes()).await;
-            let _ = writer.flush().await;
+            write_irc_line(&mut writer, &format!("JOIN #{ch}\r\n"), "JOIN", Some(&ch)).await;
             tokio::time::sleep(IRC_JOIN_STAGGER).await;
         }
         let mut poll = tokio::time::interval(Duration::from_secs(NAMES_POLL_SECONDS));
@@ -538,21 +556,24 @@ impl IrcLurkerTracker {
             tokio::select! {
                 res = reader.read_line(&mut line) => {
                     match res {
-                        Ok(0) | Err(_) => break,
+                        Ok(0) => break,
+                        Err(error) => {
+                            tracing::warn!(%error, "IRC-Lurker: Read fehlgeschlagen");
+                            break;
+                        }
                         Ok(_) => self.handle_line(line.trim_end(), &mut writer).await,
                     }
                 }
                 _ = poll.tick() => {
                     let chans: Vec<String> = lock_or_recover(&self.channels, "channels").iter().cloned().collect();
                     for ch in chans {
-                        let _ = writer.write_all(format!("NAMES #{ch}\r\n").as_bytes()).await;
-                        let _ = writer.flush().await;
+                        write_irc_line(&mut writer, &format!("NAMES #{ch}\r\n"), "NAMES", Some(&ch)).await;
                         tokio::time::sleep(IRC_JOIN_STAGGER).await;
                     }
                 }
                 Some(cmd) = rx.recv() => match cmd {
-                    Cmd::Join(ch) => { let _ = writer.write_all(format!("JOIN #{ch}\r\n").as_bytes()).await; let _ = writer.flush().await; }
-                    Cmd::Part(ch) => { let _ = writer.write_all(format!("PART #{ch}\r\n").as_bytes()).await; let _ = writer.flush().await; }
+                    Cmd::Join(ch) => { write_irc_line(&mut writer, &format!("JOIN #{ch}\r\n"), "JOIN", Some(&ch)).await; }
+                    Cmd::Part(ch) => { write_irc_line(&mut writer, &format!("PART #{ch}\r\n"), "PART", Some(&ch)).await; }
                     Cmd::Stop => {
                         self.stop_requested.store(true, Ordering::SeqCst);
                         break;
@@ -632,9 +653,39 @@ fn lock_or_recover<'a, T>(mutex: &'a Mutex<T>, name: &'static str) -> MutexGuard
 /// Antwortet auf einen IRC-PING.
 async fn pong(writer: &mut OwnedWriteHalf, ping: &str) {
     let reply = ping.replacen("PING", "PONG", 1);
-    let _ = writer.write_all(reply.as_bytes()).await;
-    let _ = writer.write_all(b"\r\n").await;
-    let _ = writer.flush().await;
+    if let Err(error) = writer.write_all(reply.as_bytes()).await {
+        tracing::warn!(%error, "IRC-Lurker: PONG-Write fehlgeschlagen");
+    }
+    if let Err(error) = writer.write_all(b"\r\n").await {
+        tracing::warn!(%error, "IRC-Lurker: PONG-Newline fehlgeschlagen");
+    }
+    if let Err(error) = writer.flush().await {
+        tracing::warn!(%error, "IRC-Lurker: PONG-Flush fehlgeschlagen");
+    }
+}
+
+async fn write_irc_line(
+    writer: &mut OwnedWriteHalf,
+    line: &str,
+    action: &'static str,
+    channel: Option<&str>,
+) {
+    if let Err(error) = writer.write_all(line.as_bytes()).await {
+        tracing::warn!(
+            %error,
+            action,
+            channel = channel.unwrap_or(""),
+            "IRC-Lurker: Write fehlgeschlagen"
+        );
+    }
+    if let Err(error) = writer.flush().await {
+        tracing::warn!(
+            %error,
+            action,
+            channel = channel.unwrap_or(""),
+            "IRC-Lurker: Flush fehlgeschlagen"
+        );
+    }
 }
 
 #[cfg(test)]

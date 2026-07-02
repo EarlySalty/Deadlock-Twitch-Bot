@@ -701,8 +701,20 @@ impl ConversationScamGuard {
     pub fn observe(self: &Arc<Self>, event: &ChatMessageEvent) {
         let guard = Arc::clone(self);
         let event = event.clone();
-        tokio::spawn(async move {
+        let channel = event.broadcaster_user_login.clone();
+        let chatter = event.chatter_user_login.clone();
+        let handle = tokio::spawn(async move {
             guard.process(&event).await;
+        });
+        tokio::spawn(async move {
+            if let Err(error) = handle.await {
+                tracing::error!(
+                    channel = %channel,
+                    chatter = %chatter,
+                    %error,
+                    "Conversation-Scam-Task fehlerhaft beendet"
+                );
+            }
         });
     }
 
@@ -746,7 +758,13 @@ impl ConversationScamGuard {
             None => {
                 // Erkenntnisse nur einmal pro Chatter laden (beim ersten Treffer),
                 // nicht bei jeder Folgenachricht.
-                let learnings = self.store.load_learnings().await.ok().flatten();
+                let learnings = match self.store.load_learnings().await {
+                    Ok(learnings) => learnings,
+                    Err(error) => {
+                        warn!("Conversation-Scam-Learnings nicht ladbar: {error}");
+                        None
+                    }
+                };
                 self.states
                     .entry(key)
                     .or_insert_with(|| {
@@ -810,8 +828,17 @@ impl ConversationScamGuard {
             confidence: record.confidence,
             action_taken: record.action_taken.clone(),
         };
-        tokio::spawn(async move {
+        let handle = tokio::spawn(async move {
             notifier.notify(notification).await;
+        });
+        tokio::spawn(async move {
+            if let Err(error) = handle.await {
+                tracing::error!(
+                    verdict_id,
+                    %error,
+                    "Conversation-Scam-Notify-Task fehlerhaft beendet"
+                );
+            }
         });
     }
 

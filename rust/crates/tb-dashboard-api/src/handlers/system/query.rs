@@ -146,7 +146,9 @@ async fn run_readonly(
         .await
         .map_err(|e| e.to_string())?;
 
-    let _ = tx.rollback().await;
+    if let Err(error) = tx.rollback().await {
+        tracing::warn!(%error, "system-query Readonly-Transaktion Rollback fehlgeschlagen");
+    }
 
     let columns: Vec<String> = if let Some(first) = rows.first() {
         first

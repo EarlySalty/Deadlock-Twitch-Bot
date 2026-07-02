@@ -119,14 +119,21 @@ fn row_to_record(row: &PgRow) -> EnrichmentRecord {
 
 /// Lädt die Enrichment-Zeile eines Clips.
 pub async fn get_enrichment(pool: &PgPool, clip_db_id: i32) -> Option<EnrichmentRecord> {
-    sqlx::query(SELECT_SQL)
+    match sqlx::query(SELECT_SQL)
         .bind(clip_db_id)
         .fetch_optional(pool)
         .await
-        .ok()
-        .flatten()
-        .as_ref()
-        .map(row_to_record)
+    {
+        Ok(row) => row.as_ref().map(row_to_record),
+        Err(error) => {
+            tracing::warn!(
+                %error,
+                clip_db_id,
+                "Social-Media-Enrichment: Enrichment-Zeile nicht ladbar"
+            );
+            None
+        }
+    }
 }
 
 /// Stellt sicher, dass eine (pending-)Zeile existiert; liefert sie.
@@ -134,17 +141,29 @@ pub async fn ensure_enrichment_row(pool: &PgPool, clip_db_id: i32) -> Enrichment
     if let Some(existing) = get_enrichment(pool, clip_db_id).await {
         return existing;
     }
-    let _ = sqlx::query!(
+    if let Err(error) = sqlx::query!(
         "INSERT INTO social_media_clip_enrichment (clip_db_id, status, updated_at) \
          VALUES ($1, $2, CURRENT_TIMESTAMP) ON CONFLICT (clip_db_id) DO NOTHING",
         clip_db_id,
         STATUS_PENDING
     )
     .execute(pool)
-    .await;
-    get_enrichment(pool, clip_db_id)
-        .await
-        .unwrap_or(EnrichmentRecord {
+    .await
+    {
+        tracing::warn!(
+            %error,
+            clip_db_id,
+            "Social-Media-Enrichment: Pending-Zeile konnte nicht sichergestellt werden"
+        );
+    }
+    match get_enrichment(pool, clip_db_id).await {
+        Some(record) => record,
+        None => {
+            tracing::warn!(
+                clip_db_id,
+                "Social-Media-Enrichment: Pending-Zeile nicht ladbar, Fallback-Record"
+            );
+            EnrichmentRecord {
             clip_db_id,
             transcript_raw: None,
             transcript_corrected: None,
@@ -169,7 +188,9 @@ pub async fn ensure_enrichment_row(pool: &PgPool, clip_db_id: i32) -> Enrichment
             completed_at: None,
             edited_by: None,
             updated_at: None,
-        })
+            }
+        }
+    }
 }
 
 /// Setzt den Status (+ optionale Felder). Outer `None` = unverändert lassen

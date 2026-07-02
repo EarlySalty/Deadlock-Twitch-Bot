@@ -109,7 +109,17 @@ const SELECT_SQL: &str = "SELECT clip_db_id, state, approved_platforms::text, ap
 
 /// Approval-Zeile eines Clips.
 pub async fn get_approval_record(pool: &PgPool, clip_db_id: i32) -> Option<ApprovalRecord> {
-    fetch_approval_record(pool, clip_db_id).await.ok().flatten()
+    match fetch_approval_record(pool, clip_db_id).await {
+        Ok(record) => record,
+        Err(error) => {
+            tracing::warn!(
+                %error,
+                clip_db_id,
+                "Social-Media-Approval: Approval-Zeile nicht ladbar"
+            );
+            None
+        }
+    }
 }
 
 async fn fetch_approval_record(
@@ -128,14 +138,21 @@ pub async fn ensure_approval_row(pool: &PgPool, clip_db_id: i32) -> ApprovalReco
     if let Some(r) = get_approval_record(pool, clip_db_id).await {
         return r;
     }
-    let _ = sqlx::query!(
+    if let Err(error) = sqlx::query!(
         "INSERT INTO social_media_clip_approval (clip_db_id, state, approved_platforms) \
          VALUES ($1, $2, '[]'::jsonb) ON CONFLICT (clip_db_id) DO NOTHING",
         clip_db_id,
         STATE_AWAITING
     )
     .execute(pool)
-    .await;
+    .await
+    {
+        tracing::warn!(
+            %error,
+            clip_db_id,
+            "Social-Media-Approval: Awaiting-Zeile konnte nicht sichergestellt werden"
+        );
+    }
     get_approval_record(pool, clip_db_id)
         .await
         .unwrap_or(ApprovalRecord {
@@ -154,7 +171,7 @@ pub async fn ensure_approval_row(pool: &PgPool, clip_db_id: i32) -> ApprovalReco
 /// `mark_clip_awaiting_approval`; ersetzt den Orchestrator-Stub).
 pub async fn mark_clip_awaiting_approval(pool: &PgPool, clip_db_id: i32) {
     ensure_approval_row(pool, clip_db_id).await;
-    let _ = sqlx::query!(
+    if let Err(error) = sqlx::query!(
         "UPDATE social_media_clip_approval SET state = $1, approver_user_id = NULL, \
          decided_at = NULL, approved_platforms = '[]'::jsonb, dm_message_id = NULL, \
          dm_channel_id = NULL, last_sent_at = NULL WHERE clip_db_id = $2 AND state <> $1",
@@ -162,15 +179,29 @@ pub async fn mark_clip_awaiting_approval(pool: &PgPool, clip_db_id: i32) {
         clip_db_id
     )
     .execute(pool)
-    .await;
-    let _ = sqlx::query!(
+    .await
+    {
+        tracing::warn!(
+            %error,
+            clip_db_id,
+            "Social-Media-Approval: Awaiting-Status konnte nicht gesetzt werden"
+        );
+    }
+    if let Err(error) = sqlx::query!(
         "UPDATE twitch_clips_social_media SET status = $1 WHERE id = $2 \
          AND COALESCE(status, '') NOT IN ('published_all', 'published_partial', 'discarded')",
         STATE_AWAITING,
         clip_db_id as i64
     )
     .execute(pool)
-    .await;
+    .await
+    {
+        tracing::warn!(
+            %error,
+            clip_db_id,
+            "Social-Media-Approval: Clip-Status konnte nicht auf awaiting gesetzt werden"
+        );
+    }
 }
 
 /// Freigegebene Clips, die noch in die Queue müssen.
@@ -335,7 +366,7 @@ pub async fn ensure_queued_uploads(pool: &PgPool, clip_db_id: i32) -> Vec<(Strin
                         e.hashtags_instagram.clone(),
                     ),
                 });
-        if let Ok(queue_id) = queue_upload(
+        match queue_upload(
             pool,
             clip_db_id,
             platform,
@@ -347,7 +378,15 @@ pub async fn ensure_queued_uploads(pool: &PgPool, clip_db_id: i32) -> Vec<(Strin
         )
         .await
         {
-            queued.push((platform.clone(), queue_id));
+            Ok(queue_id) => queued.push((platform.clone(), queue_id)),
+            Err(error) => {
+                tracing::warn!(
+                    %error,
+                    clip_db_id,
+                    platform = %platform,
+                    "Social-Media-Approval: Upload konnte nicht eingereiht werden"
+                );
+            }
         }
     }
     queued

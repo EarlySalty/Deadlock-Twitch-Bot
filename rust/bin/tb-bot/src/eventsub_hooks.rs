@@ -731,8 +731,18 @@ impl EventSubHooks for RaidEventSubHooks {
         if let Some(login) = login.map(str::trim).filter(|l| !l.is_empty()) {
             let pool = self.pool.clone();
             let streamer = login.to_lowercase();
-            tokio::spawn(async move {
+            let task_streamer = streamer.clone();
+            let handle = tokio::spawn(async move {
                 tb_analytics::post_stream::trigger_post_stream_analysis(&pool, &streamer, None).await;
+            });
+            tokio::spawn(async move {
+                if let Err(error) = handle.await {
+                    tracing::error!(
+                        streamer = %task_streamer,
+                        %error,
+                        "PostStream-Analyse-Task fehlerhaft beendet"
+                    );
+                }
             });
         }
     }

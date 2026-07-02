@@ -64,7 +64,17 @@ fn is_invalid_client(status: u16, body: &str) -> bool {
     if body.to_lowercase().contains("invalid client") {
         return true;
     }
-    let parsed: OAuthErrorBody = serde_json::from_str(body).unwrap_or_default();
+    let parsed: OAuthErrorBody = match serde_json::from_str(body) {
+        Ok(parsed) => parsed,
+        Err(error) => {
+            tracing::warn!(
+                %error,
+                status,
+                "Twitch-User-Token: invalid_client-Body nicht als JSON lesbar"
+            );
+            OAuthErrorBody::default()
+        }
+    };
     parsed.message.to_lowercase().contains("invalid client")
         || parsed.error.to_lowercase().contains("invalid client")
 }
@@ -79,7 +89,17 @@ fn is_invalid_grant(status: u16, body: &str) -> bool {
     if lowered.contains("invalid refresh token") || lowered.contains("invalid_grant") {
         return true;
     }
-    let parsed: OAuthErrorBody = serde_json::from_str(body).unwrap_or_default();
+    let parsed: OAuthErrorBody = match serde_json::from_str(body) {
+        Ok(parsed) => parsed,
+        Err(error) => {
+            tracing::warn!(
+                %error,
+                status,
+                "Twitch-User-Token: invalid_grant-Body nicht als JSON lesbar"
+            );
+            OAuthErrorBody::default()
+        }
+    };
     let message = parsed.message.to_lowercase();
     let error = parsed.error.to_lowercase();
     message.contains("invalid refresh token")
@@ -165,7 +185,17 @@ impl HelixClient {
 
         let status = response.status().as_u16();
         if status != 200 {
-            let body = response.text().await.unwrap_or_default();
+            let body = match response.text().await {
+                Ok(body) => body,
+                Err(error) => {
+                    tracing::warn!(
+                        %error,
+                        status,
+                        "Twitch-User-Token: Fehlerbody nicht lesbar"
+                    );
+                    String::new()
+                }
+            };
             if is_invalid_client(status, &body) {
                 // P2.33: 15-Min-Block setzen (Python `_block_client_auth`), damit
                 // Exchange/Refresh/Sweep Twitch während einer Credentials-Panne
@@ -212,7 +242,17 @@ impl HelixClient {
 
         let status = response.status().as_u16();
         if status != 200 {
-            let body = response.text().await.unwrap_or_default();
+            let body = match response.text().await {
+                Ok(body) => body,
+                Err(error) => {
+                    tracing::warn!(
+                        %error,
+                        status,
+                        "Twitch-User-Token: Owner-Fehlerbody nicht lesbar"
+                    );
+                    String::new()
+                }
+            };
             let snippet: String = body.chars().take(300).collect();
             return Err(UserTokenError::Other(format!(
                 "user lookup HTTP {status}: {snippet}"

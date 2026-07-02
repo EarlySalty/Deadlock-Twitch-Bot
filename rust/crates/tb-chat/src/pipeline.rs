@@ -228,7 +228,7 @@ impl ModAlerter {
         });
 
         let this = Arc::clone(self);
-        tokio::spawn(async move {
+        let handle = tokio::spawn(async move {
             match this
                 .http
                 .post(&this.endpoint)
@@ -242,6 +242,11 @@ impl ModAlerter {
                 }
                 Err(e) => debug!("mod_alert: Discord-Post fehlgeschlagen: {e}"),
                 _ => {}
+            }
+        });
+        tokio::spawn(async move {
+            if let Err(error) = handle.await {
+                tracing::error!(%error, "mod_alert: Task fehlerhaft beendet");
             }
         });
     }

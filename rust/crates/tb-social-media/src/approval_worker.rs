@@ -38,7 +38,7 @@ impl ApprovalWorker {
         for clip_db_id in iter_approved_clips_pending_queue(&self.pool, self.batch_size).await {
             // best-effort je Clip (Python try/except, ein Fehler bricht den
             // Batch nicht ab).
-            let _ = ensure_queued_uploads(&self.pool, clip_db_id).await;
+            ensure_queued_uploads(&self.pool, clip_db_id).await;
         }
     }
 

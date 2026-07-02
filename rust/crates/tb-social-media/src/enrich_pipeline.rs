@@ -155,7 +155,7 @@ impl ClipEnrichmentPipeline {
     }
 
     async fn fail(&self, clip_db_id: i32, status: &str, message: String) -> EnrichmentOutcome {
-        let _ = update_enrichment_status(
+        if let Err(error) = update_enrichment_status(
             &self.pool,
             clip_db_id,
             status,
@@ -163,7 +163,15 @@ impl ClipEnrichmentPipeline {
             None,
             Some(Some(now_iso())),
         )
-        .await;
+        .await
+        {
+            tracing::warn!(
+                %error,
+                clip_db_id,
+                status,
+                "Clip-Enrichment: Failstatus konnte nicht gespeichert werden"
+            );
+        }
         EnrichmentOutcome {
             clip_db_id,
             status: status.to_string(),
@@ -194,7 +202,7 @@ impl ClipEnrichmentPipeline {
         }
 
         // ---- Transcribe ----
-        let _ = update_enrichment_status(
+        if let Err(error) = update_enrichment_status(
             &self.pool,
             clip_db_id,
             STATUS_TRANSCRIBING,
@@ -202,7 +210,15 @@ impl ClipEnrichmentPipeline {
             Some(Some(now_iso())),
             Some(None),
         )
-        .await;
+        .await
+        {
+            tracing::warn!(
+                %error,
+                clip_db_id,
+                status = STATUS_TRANSCRIBING,
+                "Clip-Enrichment: Statusupdate fehlgeschlagen"
+            );
+        }
         let mut transcript = TranscriptionOutput::default();
         let mut skipped = false;
         let video_path = ctx
@@ -223,19 +239,34 @@ impl ClipEnrichmentPipeline {
             },
             _ => skipped = true, // kein Pfad oder kein Transcriber
         }
-        let _ = save_transcript(
+        if let Err(error) = save_transcript(
             &self.pool,
             clip_db_id,
             Some(transcript.text.as_str()).filter(|s| !s.is_empty()),
             &transcript.segments,
             transcript.language.as_deref(),
         )
-        .await;
+        .await
+        {
+            tracing::warn!(
+                %error,
+                clip_db_id,
+                "Clip-Enrichment: Transkript konnte nicht gespeichert werden"
+            );
+        }
 
         // ---- Correct ----
-        let _ =
+        if let Err(error) =
             update_enrichment_status(&self.pool, clip_db_id, STATUS_CORRECTING, None, None, None)
-                .await;
+                .await
+        {
+            tracing::warn!(
+                %error,
+                clip_db_id,
+                status = STATUS_CORRECTING,
+                "Clip-Enrichment: Statusupdate fehlgeschlagen"
+            );
+        }
         let vocab = load_all_vocab(&self.pool).await;
         let correction: CorrectionResult = if transcript.text.is_empty() {
             CorrectionResult {
@@ -246,17 +277,32 @@ impl ClipEnrichmentPipeline {
         } else {
             correct_transcript(&transcript.text, &vocab)
         };
-        let _ = save_corrected(
+        if let Err(error) = save_corrected(
             &self.pool,
             clip_db_id,
             Some(correction.corrected.as_str()).filter(|s| !s.is_empty()),
             &correction.detected_terms,
         )
-        .await;
+        .await
+        {
+            tracing::warn!(
+                %error,
+                clip_db_id,
+                "Clip-Enrichment: korrigiertes Transkript konnte nicht gespeichert werden"
+            );
+        }
 
         // ---- LLM ----
-        let _ =
-            update_enrichment_status(&self.pool, clip_db_id, STATUS_LLM, None, None, None).await;
+        if let Err(error) =
+            update_enrichment_status(&self.pool, clip_db_id, STATUS_LLM, None, None, None).await
+        {
+            tracing::warn!(
+                %error,
+                clip_db_id,
+                status = STATUS_LLM,
+                "Clip-Enrichment: Statusupdate fehlgeschlagen"
+            );
+        }
         let request = LlmRequest {
             transcript: correction.corrected.clone(),
             detected_terms: correction.detected_terms.clone(),
@@ -286,7 +332,7 @@ impl ClipEnrichmentPipeline {
             }
         };
 
-        let _ = save_llm_output(
+        if let Err(error) = save_llm_output(
             &self.pool,
             clip_db_id,
             &response.youtube,
@@ -296,8 +342,17 @@ impl ClipEnrichmentPipeline {
             Some(response.model.as_str()),
             response.cost_usd_estimate,
         )
-        .await;
-        let _ = update_enrichment_status(
+        .await
+        {
+            tracing::warn!(
+                %error,
+                clip_db_id,
+                provider = %response.provider,
+                model = %response.model,
+                "Clip-Enrichment: LLM-Ausgabe konnte nicht gespeichert werden"
+            );
+        }
+        if let Err(error) = update_enrichment_status(
             &self.pool,
             clip_db_id,
             STATUS_DONE,
@@ -305,7 +360,15 @@ impl ClipEnrichmentPipeline {
             None,
             Some(Some(now_iso())),
         )
-        .await;
+        .await
+        {
+            tracing::warn!(
+                %error,
+                clip_db_id,
+                status = STATUS_DONE,
+                "Clip-Enrichment: Done-Status konnte nicht gespeichert werden"
+            );
+        }
         crate::approval::mark_clip_awaiting_approval(&self.pool, clip_db_id).await;
 
         Ok(Self::done_outcome(

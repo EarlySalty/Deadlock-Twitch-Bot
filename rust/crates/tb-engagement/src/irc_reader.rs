@@ -218,15 +218,26 @@ impl EngagementIrcReader {
 
     /// Baut die anonyme IRC-Verbindung auf (NICK + CAP) und wartet auf `001`.
     async fn connect(&self) -> Option<(BufReader<OwnedReadHalf>, OwnedWriteHalf)> {
-        let stream = TcpStream::connect((IRC_HOST, IRC_PORT)).await.ok()?;
+        let stream = match TcpStream::connect((IRC_HOST, IRC_PORT)).await {
+            Ok(stream) => stream,
+            Err(error) => {
+                tracing::warn!(%error, "Engagement-IRC: Connect fehlgeschlagen");
+                return None;
+            }
+        };
         let (rd, mut wr) = stream.into_split();
-        wr.write_all(format!("NICK {ANON_NICK}\r\n").as_bytes())
-            .await
-            .ok()?;
-        wr.write_all(b"CAP REQ :twitch.tv/tags twitch.tv/commands\r\n")
-            .await
-            .ok()?;
-        wr.flush().await.ok()?;
+        if let Err(error) = wr.write_all(format!("NICK {ANON_NICK}\r\n").as_bytes()).await {
+            tracing::warn!(%error, "Engagement-IRC: NICK-Handshake fehlgeschlagen");
+            return None;
+        }
+        if let Err(error) = wr.write_all(b"CAP REQ :twitch.tv/tags twitch.tv/commands\r\n").await {
+            tracing::warn!(%error, "Engagement-IRC: CAP-Handshake fehlgeschlagen");
+            return None;
+        }
+        if let Err(error) = wr.flush().await {
+            tracing::warn!(%error, "Engagement-IRC: Handshake-Flush fehlgeschlagen");
+            return None;
+        }
 
         let mut reader = BufReader::new(rd);
         let mut line = String::new();
@@ -234,7 +245,14 @@ impl EngagementIrcReader {
             line.clear();
             let n = match tokio::time::timeout(CONNECT_TIMEOUT, reader.read_line(&mut line)).await {
                 Ok(Ok(n)) => n,
-                _ => return None,
+                Ok(Err(error)) => {
+                    tracing::warn!(%error, "Engagement-IRC: Handshake-Read fehlgeschlagen");
+                    return None;
+                }
+                Err(_) => {
+                    tracing::warn!("Engagement-IRC: Handshake-Timeout");
+                    return None;
+                }
             };
             if n == 0 {
                 return None;
@@ -269,7 +287,11 @@ impl EngagementIrcReader {
             tokio::select! {
                 res = reader.read_line(&mut line) => {
                     match res {
-                        Ok(0) | Err(_) => break, // Abbruch → äußerer Reconnect.
+                        Ok(0) => break, // Abbruch → äußerer Reconnect.
+                        Err(error) => {
+                            tracing::warn!(%error, "Engagement-IRC: Read fehlgeschlagen");
+                            break;
+                        }
                         Ok(_) => self.handle_line(line.trim_end(), &mut writer).await,
                     }
                 }
@@ -337,17 +359,28 @@ impl EngagementIrcReader {
 /// Antwortet auf einen IRC-PING (`PING ...` → `PONG ...`).
 async fn pong(writer: &mut OwnedWriteHalf, ping: &str) {
     let reply = ping.replacen("PING", "PONG", 1);
-    let _ = writer.write_all(reply.as_bytes()).await;
-    let _ = writer.write_all(b"\r\n").await;
-    let _ = writer.flush().await;
+    if let Err(error) = writer.write_all(reply.as_bytes()).await {
+        tracing::warn!(%error, "Engagement-IRC: PONG-Write fehlgeschlagen");
+    }
+    if let Err(error) = writer.write_all(b"\r\n").await {
+        tracing::warn!(%error, "Engagement-IRC: PONG-Newline fehlgeschlagen");
+    }
+    if let Err(error) = writer.flush().await {
+        tracing::warn!(%error, "Engagement-IRC: PONG-Flush fehlgeschlagen");
+    }
 }
 
 /// Joint einen Kanal (`JOIN #channel`).
 async fn join(writer: &mut OwnedWriteHalf, channel: &str) {
-    let _ = writer
+    if let Err(error) = writer
         .write_all(format!("JOIN #{channel}\r\n").as_bytes())
-        .await;
-    let _ = writer.flush().await;
+        .await
+    {
+        tracing::warn!(%error, channel, "Engagement-IRC: JOIN-Write fehlgeschlagen");
+    }
+    if let Err(error) = writer.flush().await {
+        tracing::warn!(%error, channel, "Engagement-IRC: JOIN-Flush fehlgeschlagen");
+    }
 }
 
 /// Sortierte Kanal-Liste fürs Log (deterministisch).

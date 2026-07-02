@@ -58,7 +58,13 @@ where
         return Ok(false);
     }
     if let Err(error) = effect().await {
-        let _ = guard.release(GuardKind::BusinessEffect, &guard_key).await;
+        if let Err(release_error) = guard.release(GuardKind::BusinessEffect, &guard_key).await {
+            tracing::warn!(
+                %release_error,
+                guard_key,
+                "EventSub BusinessEffect-Guard konnte nach Fehler nicht freigegeben werden"
+            );
+        }
         return Err(error);
     }
     Ok(true)

@@ -302,7 +302,13 @@ impl HelixClient {
             }
             204 => Ok(SendOutcome::Sent),
             status => {
-                let body_text = resp.text().await.unwrap_or_default();
+                let body_text = match resp.text().await {
+                    Ok(body) => body,
+                    Err(error) => {
+                        tracing::warn!(%error, status, "Twitch Chat-Send: Fehlerbody nicht lesbar");
+                        String::new()
+                    }
+                };
                 let snippet: String = body_text.chars().take(300).collect();
                 Ok(SendOutcome::HttpError {
                     status,
@@ -346,7 +352,13 @@ impl HelixClient {
         if matches!(status, 200 | 204) {
             return Ok(AnnouncementOutcome::accepted());
         }
-        let body = resp.text().await.unwrap_or_default();
+        let body = match resp.text().await {
+            Ok(body) => body,
+            Err(error) => {
+                tracing::warn!(%error, status, "Twitch Announcement: Fehlerbody nicht lesbar");
+                String::new()
+            }
+        };
         Ok(AnnouncementOutcome::rejected(status, body))
     }
 
@@ -404,7 +416,13 @@ impl HelixClient {
         match status {
             200..=202 => Ok(BanOutcome::Banned),
             400 => {
-                let body_text = resp.text().await.unwrap_or_default();
+                let body_text = match resp.text().await {
+                    Ok(body) => body,
+                    Err(error) => {
+                        tracing::warn!(%error, status, "Twitch Ban: Fehlerbody nicht lesbar");
+                        String::new()
+                    }
+                };
                 if body_text.to_lowercase().contains("already banned") {
                     Ok(BanOutcome::AlreadyBanned)
                 } else {
@@ -417,7 +435,13 @@ impl HelixClient {
             }
             403 => Ok(BanOutcome::Forbidden),
             status => {
-                let body_text = resp.text().await.unwrap_or_default();
+                let body_text = match resp.text().await {
+                    Ok(body) => body,
+                    Err(error) => {
+                        tracing::warn!(%error, status, "Twitch Ban: Fehlerbody nicht lesbar");
+                        String::new()
+                    }
+                };
                 let snippet: String = body_text.chars().take(300).collect();
                 Ok(BanOutcome::Failed {
                     status,
@@ -457,7 +481,13 @@ impl HelixClient {
             200 | 204 => Ok(BanOutcome::Unbanned),
             403 => Ok(BanOutcome::Forbidden),
             status => {
-                let body_text = resp.text().await.unwrap_or_default();
+                let body_text = match resp.text().await {
+                    Ok(body) => body,
+                    Err(error) => {
+                        tracing::warn!(%error, status, "Twitch Unban: Fehlerbody nicht lesbar");
+                        String::new()
+                    }
+                };
                 let snippet: String = body_text.chars().take(300).collect();
                 Ok(BanOutcome::Failed {
                     status,

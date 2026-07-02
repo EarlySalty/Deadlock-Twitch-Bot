@@ -1896,7 +1896,17 @@ impl PromoEngine {
         for bot in crate::mention_scoring::WHITELISTED_BOTS {
             query = query.bind(bot.to_lowercase());
         }
-        let rows: Vec<(String,)> = query.fetch_all(&self.pool).await.unwrap_or_default();
+        let rows: Vec<(String,)> = match query.fetch_all(&self.pool).await {
+            Ok(rows) => rows,
+            Err(error) => {
+                tracing::warn!(
+                    %error,
+                    login,
+                    "Lurker-Tax-Kandidaten konnten nicht geladen werden"
+                );
+                Vec::new()
+            }
+        };
 
         rows.into_iter().map(|(l,)| l).collect()
     }
@@ -2230,7 +2240,7 @@ impl PromoEngine {
         }
 
         // 1. Harte promo_disabled-Spalte (greift vor jeder Override-Auswertung).
-        let promo_disabled = sqlx::query_scalar!(
+        let promo_disabled = match sqlx::query_scalar!(
             "SELECT COALESCE(promo_disabled, 0) AS \"promo_disabled!\"
                FROM streamer_plans
               WHERE LOWER(COALESCE(twitch_login,'')) = $1
@@ -2239,8 +2249,17 @@ impl PromoEngine {
         )
         .fetch_optional(&self.pool)
         .await
-        .ok()
-        .flatten();
+        {
+            Ok(value) => value,
+            Err(error) => {
+                tracing::warn!(
+                    %error,
+                    login = %normalized,
+                    "Promo-Disable-Flag konnte nicht geladen werden"
+                );
+                None
+            }
+        };
         if promo_disabled.is_some_and(|flag| flag != 0) {
             return true;
         }
@@ -2248,7 +2267,14 @@ impl PromoEngine {
         // 2. Entitlement-Pfad über volle Plan-Snapshot-Resolution.
         match tb_analytics::plan::resolve_plan_snapshot(&self.pool, &normalized, "").await {
             Ok(snapshot) => snapshot.entitlements.contains(&"chat.promos.disable"),
-            Err(_) => false, // Fail-open.
+            Err(error) => {
+                tracing::warn!(
+                    %error,
+                    login = %normalized,
+                    "Promo-Disable-Plan konnte nicht aufgeloest werden"
+                );
+                false
+            } // Fail-open.
         }
     }
 
@@ -2260,7 +2286,15 @@ impl PromoEngine {
     async fn lurker_tax_is_paid_plan(&self, login: &str, user_id: &str) -> bool {
         match tb_analytics::plan::resolve_plan_snapshot(&self.pool, login, user_id).await {
             Ok(snapshot) => snapshot.entitlements.contains(&"chat.lurker_tax"),
-            Err(_) => false,
+            Err(error) => {
+                tracing::warn!(
+                    %error,
+                    login,
+                    user_id,
+                    "Lurker-Tax-Plan konnte nicht aufgeloest werden"
+                );
+                false
+            }
         }
     }
 

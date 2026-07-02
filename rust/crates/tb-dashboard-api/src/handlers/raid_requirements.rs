@@ -141,7 +141,17 @@ async fn send_requirements(login: &str) -> RequirementsResult {
     };
 
     let status = resp.status();
-    let body = resp.json::<Value>().await.unwrap_or(Value::Null);
+    let body = match resp.json::<Value>().await {
+        Ok(body) => body,
+        Err(error) => {
+            tracing::warn!(
+                %error,
+                status = status.as_u16(),
+                "raid requirements bridge body nicht lesbar"
+            );
+            Value::Null
+        }
+    };
     if status.is_success() {
         let message = body
             .get("message")

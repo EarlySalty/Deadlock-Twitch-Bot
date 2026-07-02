@@ -28,7 +28,13 @@ impl HelixClient {
             Ok(Ok(()))
         } else {
             let status = resp.status().as_u16();
-            let body = resp.text().await.unwrap_or_default();
+            let body = match resp.text().await {
+                Ok(body) => body,
+                Err(error) => {
+                    tracing::warn!(%error, status, "Twitch Raid: Fehlerbody nicht lesbar");
+                    String::new()
+                }
+            };
             let snippet: String = body.chars().take(200).collect();
             Ok(Err(format!("Raid API failed: HTTP {status}: {snippet}")))
         }
@@ -49,7 +55,13 @@ impl HelixClient {
         match resp.status().as_u16() {
             200 | 204 => Ok(Ok(())),
             status => {
-                let body = resp.text().await.unwrap_or_default();
+                let body = match resp.text().await {
+                    Ok(body) => body,
+                    Err(error) => {
+                        tracing::warn!(%error, status, "Twitch Cancel-Raid: Fehlerbody nicht lesbar");
+                        String::new()
+                    }
+                };
                 let snippet: String = body.chars().take(200).collect();
                 Ok(Err(format!(
                     "Cancel-Raid API failed: HTTP {status}: {snippet}"

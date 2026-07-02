@@ -47,7 +47,7 @@ pub struct SessionChatData {
 /// Lädt Session-Metadaten + Chat-Nachrichten einer Session (Python
 /// `_load_session_chat_data`). `None`, wenn die Session nicht existiert.
 pub async fn load_session_chat_data(pool: &PgPool, session_id: i64) -> Option<SessionChatData> {
-    let row = sqlx::query!(
+    let row = match sqlx::query!(
         "SELECT s.streamer_login, \
                 s.started_at::text AS \"started_at?\", \
                 s.ended_at::text AS ended_at, \
@@ -61,12 +61,18 @@ pub async fn load_session_chat_data(pool: &PgPool, session_id: i64) -> Option<Se
     )
     .fetch_optional(pool)
     .await
-    .ok()
-    .flatten()?;
+    {
+        Ok(Some(row)) => row,
+        Ok(None) => return None,
+        Err(error) => {
+            tracing::warn!(%error, session_id, "PostStream: Session-Chatdaten nicht ladbar");
+            return None;
+        }
+    };
 
     let duration_seconds = row.duration_seconds.unwrap_or(0);
 
-    let messages: Vec<String> = sqlx::query_scalar!(
+    let messages: Vec<String> = match sqlx::query_scalar!(
         "SELECT content AS \"content!\" FROM twitch_chat_messages \
          WHERE session_id = $1 \
            AND is_command = FALSE \
@@ -78,20 +84,32 @@ pub async fn load_session_chat_data(pool: &PgPool, session_id: i64) -> Option<Se
     )
     .fetch_all(pool)
     .await
-    .unwrap_or_default()
+    {
+        Ok(messages) => messages,
+        Err(error) => {
+            tracing::warn!(%error, session_id, "PostStream: Chat-Nachrichten nicht ladbar");
+            Vec::new()
+        }
+    }
     .into_iter()
     .map(|c| c.trim().to_string())
     .filter(|c| !c.is_empty())
     .collect();
 
-    let unique_chatters = sqlx::query_scalar!(
+    let unique_chatters = match sqlx::query_scalar!(
         "SELECT COUNT(DISTINCT chatter_login)::int8 AS \"count!\" FROM twitch_chat_messages \
          WHERE session_id = $1 AND chatter_login IS NOT NULL",
         session_id
     )
     .fetch_one(pool)
     .await
-    .unwrap_or(0);
+    {
+        Ok(count) => count,
+        Err(error) => {
+            tracing::warn!(%error, session_id, "PostStream: Unique-Chatter nicht ladbar");
+            0
+        }
+    };
 
     // Python: max(1, duration_seconds // 60).
     let duration_min = (duration_seconds / 60).max(1);
@@ -1257,10 +1275,13 @@ pub async fn events_payload(
     .await
     {
         Ok(n) => payload.insert("subscriptions".into(), serde_json::json!(n)),
-        Err(_) => payload.insert(
-            "subscriptions".into(),
-            serde_json::json!({"unavailable": true}),
-        ),
+        Err(error) => {
+            tracing::warn!(%error, session_id, "PostStream Events: subscriptions nicht ladbar");
+            payload.insert(
+                "subscriptions".into(),
+                serde_json::json!({"unavailable": true}),
+            )
+        }
     };
 
     // bits_events — count + amount.
@@ -1272,7 +1293,10 @@ pub async fn events_payload(
     .await
     {
         Ok(row) => payload.insert("bits_events".into(), serde_json::json!({"count": row.count, "amount": row.amount})),
-        Err(_) => payload.insert("bits_events".into(), serde_json::json!({"unavailable": true})),
+        Err(error) => {
+            tracing::warn!(%error, session_id, "PostStream Events: bits_events nicht ladbar");
+            payload.insert("bits_events".into(), serde_json::json!({"unavailable": true}))
+        }
     };
 
     // channel_points — reiner Count.
@@ -1284,10 +1308,13 @@ pub async fn events_payload(
     .await
     {
         Ok(n) => payload.insert("channel_points".into(), serde_json::json!(n)),
-        Err(_) => payload.insert(
-            "channel_points".into(),
-            serde_json::json!({"unavailable": true}),
-        ),
+        Err(error) => {
+            tracing::warn!(%error, session_id, "PostStream Events: channel_points nicht ladbar");
+            payload.insert(
+                "channel_points".into(),
+                serde_json::json!({"unavailable": true}),
+            )
+        }
     };
 
     // hype_trains — count + max_level.
@@ -1299,7 +1326,10 @@ pub async fn events_payload(
     .await
     {
         Ok(row) => payload.insert("hype_trains".into(), serde_json::json!({"count": row.count, "max_level": row.max_level})),
-        Err(_) => payload.insert("hype_trains".into(), serde_json::json!({"unavailable": true})),
+        Err(error) => {
+            tracing::warn!(%error, session_id, "PostStream Events: hype_trains nicht ladbar");
+            payload.insert("hype_trains".into(), serde_json::json!({"unavailable": true}))
+        }
     };
 
     // ad_breaks — count + duration_seconds.
@@ -1311,7 +1341,10 @@ pub async fn events_payload(
     .await
     {
         Ok(row) => payload.insert("ad_breaks".into(), serde_json::json!({"count": row.count, "duration_seconds": row.duration_seconds})),
-        Err(_) => payload.insert("ad_breaks".into(), serde_json::json!({"unavailable": true})),
+        Err(error) => {
+            tracing::warn!(%error, session_id, "PostStream Events: ad_breaks nicht ladbar");
+            payload.insert("ad_breaks".into(), serde_json::json!({"unavailable": true}))
+        }
     };
 
     // moderation_events — Count über twitch_ban_events.
@@ -1323,10 +1356,13 @@ pub async fn events_payload(
     .await
     {
         Ok(n) => payload.insert("moderation_events".into(), serde_json::json!(n)),
-        Err(_) => payload.insert(
-            "moderation_events".into(),
-            serde_json::json!({"unavailable": true}),
-        ),
+        Err(error) => {
+            tracing::warn!(%error, session_id, "PostStream Events: moderation_events nicht ladbar");
+            payload.insert(
+                "moderation_events".into(),
+                serde_json::json!({"unavailable": true}),
+            )
+        }
     };
 
     // Zeitfenster-Events nur bei twitch_user_id UND (nicht-leerem) started_at.
@@ -1876,6 +1912,7 @@ pub fn process_report_v2_response(raw: &str, snapshot: &serde_json::Value) -> se
             }
         }
     }
+    tracing::warn!("PostStream: KI-Report-v2-Antwort nicht parsebar, Fallback aktiv");
     report_v2_fallback(snapshot)
 }
 
@@ -1886,20 +1923,28 @@ pub async fn generate_report_v2(model: AiModel, snapshot: &serde_json::Value) ->
     let raw = match model {
         AiModel::Minimax => {
             let Some(key) = resolve_minimax_key() else {
+                tracing::warn!("PostStream: MiniMax-Key fehlt, Fallback-Report aktiv");
                 return report_v2_fallback(snapshot);
             };
             match call_minimax(MINIMAX_BASE_URL, &key, &prompt).await {
                 Ok(r) => r,
-                Err(_) => return report_v2_fallback(snapshot),
+                Err(error) => {
+                    tracing::warn!(%error, "PostStream: MiniMax-Aufruf fehlgeschlagen");
+                    return report_v2_fallback(snapshot);
+                }
             }
         }
         AiModel::Opus => {
             let Some(key) = resolve_anthropic_key() else {
+                tracing::warn!("PostStream: Anthropic-Key fehlt, Fallback-Report aktiv");
                 return report_v2_fallback(snapshot);
             };
             match call_claude(ANTHROPIC_BASE_URL, &key, &prompt).await {
                 Ok(r) => r,
-                Err(_) => return report_v2_fallback(snapshot),
+                Err(error) => {
+                    tracing::warn!(%error, "PostStream: Claude-Aufruf fehlgeschlagen");
+                    return report_v2_fallback(snapshot);
+                }
             }
         }
     };
@@ -2135,12 +2180,14 @@ pub async fn trigger_post_stream_analysis(
     };
 
     // Report-Tabellen sicherstellen (best-effort).
-    let _ = ensure_report_ab_columns(pool).await;
+    if let Err(error) = ensure_report_ab_columns(pool).await {
+        tracing::warn!(%error, session_id, "PostStream: Report-AB-Spalten nicht sichergestellt");
+    }
 
     // Wortgruppen (nur bei vorhandenen Nachrichten).
     let messages = load_session_chat_data(pool, session_id)
         .await
-        .map(|d| d.messages)
+        .map(|data| data.messages)
         .unwrap_or_default();
     let word_groups = if messages.is_empty() {
         Vec::new()
@@ -2158,7 +2205,7 @@ pub async fn trigger_post_stream_analysis(
     let mut created_any = false;
     for variant in [REPORT_VARIANT_COMPACT, REPORT_VARIANT_FULL] {
         // Existierenden done/pending-Report überspringen (Idempotenz).
-        let existing = sqlx::query_scalar!(
+        let existing = match sqlx::query_scalar!(
             "SELECT id AS \"id!\" FROM twitch_stream_ai_reports \
              WHERE session_id = $1 AND streamer_login = $2 \
                AND COALESCE(report_variant, 'compact') = $3 \
@@ -2169,8 +2216,19 @@ pub async fn trigger_post_stream_analysis(
         )
         .fetch_optional(pool)
         .await
-        .ok()
-        .flatten();
+        {
+            Ok(existing) => existing,
+            Err(error) => {
+                tracing::warn!(
+                    %error,
+                    session_id,
+                    streamer = %streamer,
+                    variant,
+                    "PostStream: bestehender Report nicht pruefbar"
+                );
+                None
+            }
+        };
         if existing.is_some() {
             continue;
         }
@@ -2207,7 +2265,14 @@ pub async fn trigger_post_stream_analysis(
             }
             Err(e) => {
                 tracing::warn!(error = %e, variant, "PostStream: Report-UPDATE fehlgeschlagen");
-                let _ = mark_report_failed(pool, report_id, &e.to_string()).await;
+                if let Err(mark_error) = mark_report_failed(pool, report_id, &e.to_string()).await
+                {
+                    tracing::warn!(
+                        error = %mark_error,
+                        report_id,
+                        "PostStream: Report-Failstatus konnte nicht gespeichert werden"
+                    );
+                }
             }
         }
     }
@@ -2226,7 +2291,9 @@ pub async fn trigger_post_stream_analysis(
 /// Reports für die letzten N abgeschlossenen Sessions OHNE done-Report je aktivem
 /// Partner. 2s-Pause zwischen Triggern.
 pub async fn backfill_post_stream_reports(pool: &PgPool, sessions_per_streamer: i64) {
-    let _ = ensure_report_ab_columns(pool).await;
+    if let Err(error) = ensure_report_ab_columns(pool).await {
+        tracing::warn!(%error, "PostStream Backfill: Report-AB-Spalten nicht sichergestellt");
+    }
 
     let streamers: Vec<String> = match sqlx::query_scalar!(
         "SELECT COALESCE(LOWER(t.twitch_login), '') AS \"streamer_login!\" \

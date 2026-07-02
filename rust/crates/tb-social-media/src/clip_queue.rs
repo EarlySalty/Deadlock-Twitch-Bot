@@ -179,7 +179,18 @@ pub async fn get_upload_queue(
     if let Some(p) = platform {
         query = query.bind(p);
     }
-    let rows = query.fetch_all(pool).await.unwrap_or_default();
+    let rows = match query.fetch_all(pool).await {
+        Ok(rows) => rows,
+        Err(error) => {
+            tracing::warn!(
+                %error,
+                status,
+                platform = platform.unwrap_or(""),
+                "Social-Media-Upload-Queue: Jobs nicht ladbar"
+            );
+            Vec::new()
+        }
+    };
     rows.iter()
         .map(|r| UploadQueueItem {
             id: r.try_get("id").unwrap_or(0),

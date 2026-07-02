@@ -509,11 +509,28 @@ async fn fetch_steam_json<T>(client: &Client, url: &str, query: &[(&str, &str)])
 where
     T: DeserializeOwned,
 {
-    let response = client.get(url).query(query).send().await.ok()?;
+    let response = match client.get(url).query(query).send().await {
+        Ok(response) => response,
+        Err(error) => {
+            tracing::warn!(%error, url, "overlay steam json request fehlgeschlagen");
+            return None;
+        }
+    };
     if !response.status().is_success() {
+        tracing::warn!(
+            status = response.status().as_u16(),
+            url,
+            "overlay steam json non-2xx"
+        );
         return None;
     }
-    response.json::<T>().await.ok()
+    match response.json::<T>().await {
+        Ok(value) => Some(value),
+        Err(error) => {
+            tracing::warn!(%error, url, "overlay steam json decode fehlgeschlagen");
+            None
+        }
+    }
 }
 
 fn steam_bot_url(path: &str) -> String {

@@ -52,10 +52,28 @@ impl ReportDispatcher {
 
         // B10: Discord-DM an den Admin entfällt. Der Report wird trotzdem
         // generiert + persistiert (über das Dashboard abrufbar).
-        if self.writer.write_admin_weekly_report(Some(period_start), Some(period_end), false).await.is_err() {
+        if let Err(error) = self
+            .writer
+            .write_admin_weekly_report(Some(period_start), Some(period_end), false)
+            .await
+        {
+            tracing::warn!(%error, "Social-Media-Report: Wochenreport konnte nicht geschrieben werden");
             return false;
         }
-        let _ = set_setting(&self.pool, KEY_ADMIN_WEEKLY_REPORT_SENT, &marker, Some("social_media_report_dispatcher")).await;
+        if let Err(error) = set_setting(
+            &self.pool,
+            KEY_ADMIN_WEEKLY_REPORT_SENT,
+            &marker,
+            Some("social_media_report_dispatcher"),
+        )
+        .await
+        {
+            tracing::warn!(
+                %error,
+                marker = ?marker,
+                "Social-Media-Report: Sent-Marker konnte nicht gespeichert werden"
+            );
+        }
         true
     }
 

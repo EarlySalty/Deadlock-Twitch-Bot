@@ -92,7 +92,12 @@ impl ObservabilityWriter {
         let (tx, rx) = mpsc::channel::<ObservabilityRow>(capacity.max(1));
         let dropped = Arc::new(AtomicU64::new(0));
         let batch = batch_size.max(1);
-        tokio::spawn(writer_loop(pool, rx, batch));
+        let handle = tokio::spawn(writer_loop(pool, rx, batch));
+        tokio::spawn(async move {
+            if let Err(error) = handle.await {
+                tracing::error!(%error, "Observability-Writer-Task fehlerhaft beendet");
+            }
+        });
         Self { tx, dropped }
     }
 

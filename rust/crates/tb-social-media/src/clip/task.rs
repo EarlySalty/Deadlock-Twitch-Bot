@@ -36,7 +36,7 @@ impl ClipFetchTask {
             self.interval.as_secs(),
             self.initial_delay.as_secs(),
         );
-        tokio::spawn(self.run());
+        spawn_logged("clip_fetch", self.run());
     }
 
     /// Startet den Task, falls `TB_CLIP_FETCHER_ENABLED=1` gesetzt ist.
@@ -58,7 +58,7 @@ impl ClipFetchTask {
             self.initial_delay.as_secs(),
         );
 
-        tokio::spawn(self.run());
+        spawn_logged("clip_fetch", self.run());
         true
     }
 
@@ -70,4 +70,13 @@ impl ClipFetchTask {
             sleep(self.interval).await;
         }
     }
+}
+
+fn spawn_logged(task: &'static str, future: impl std::future::Future<Output = ()> + Send + 'static) {
+    let handle = tokio::spawn(future);
+    tokio::spawn(async move {
+        if let Err(error) = handle.await {
+            tracing::error!(task, %error, "Social-Media-Clip-Task fehlerhaft beendet");
+        }
+    });
 }

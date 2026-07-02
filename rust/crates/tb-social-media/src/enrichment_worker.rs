@@ -58,7 +58,17 @@ impl EnrichmentWorker {
         for clip_db_id in pending {
             // Pipeline-Fehler sind best-effort geloggt; ein Clip bricht den
             // Batch nicht ab (mirror Pythons try/except je Clip).
-            let _ = self.pipeline.run(clip_db_id, self.transcriber.as_deref(), self.llm.as_ref(), false).await;
+            if let Err(error) = self
+                .pipeline
+                .run(clip_db_id, self.transcriber.as_deref(), self.llm.as_ref(), false)
+                .await
+            {
+                tracing::warn!(
+                    %error,
+                    clip_db_id,
+                    "Clip-Enrichment-Worker: Pipeline-Durchlauf fehlgeschlagen"
+                );
+            }
         }
     }
 

@@ -98,73 +98,165 @@ pub async fn resolve_discord_id(pool: &PgPool, twitch_user_id: &str) -> Option<S
 
 pub async fn fetch_rank(discord_id: &str, include_stats: bool) -> Option<RankInfo> {
     let rank_url = steam_bot_rank_url();
-    let client = reqwest::Client::builder()
+    let client = match reqwest::Client::builder()
         .timeout(Duration::from_secs(if include_stats { 8 } else { 5 }))
         .build()
-        .ok()?;
+    {
+        Ok(client) => client,
+        Err(error) => {
+            tracing::warn!(%error, "Steam-Bot Rank: HTTP-Client konnte nicht gebaut werden");
+            return None;
+        }
+    };
     let mut request = client.get(rank_url).query(&[("discord_id", discord_id)]);
     if include_stats {
         request = request.query(&[("include_stats", "1")]);
     }
-    let response = request.send().await.ok()?;
+    let response = match request.send().await {
+        Ok(response) => response,
+        Err(error) => {
+            tracing::warn!(%error, discord_id, "Steam-Bot Rank: Request fehlgeschlagen");
+            return None;
+        }
+    };
     if !response.status().is_success() {
+        tracing::warn!(
+            status = response.status().as_u16(),
+            discord_id,
+            "Steam-Bot Rank: Non-2xx"
+        );
         return None;
     }
-    response.json::<RankInfo>().await.ok()
+    match response.json::<RankInfo>().await {
+        Ok(info) => Some(info),
+        Err(error) => {
+            tracing::warn!(%error, discord_id, "Steam-Bot Rank: JSON nicht lesbar");
+            None
+        }
+    }
 }
 
 pub async fn fetch_matches(discord_id: &str) -> Option<MatchHistory> {
     let matches_url = steam_bot_matches_url();
-    let client = reqwest::Client::builder()
+    let client = match reqwest::Client::builder()
         .timeout(Duration::from_secs(8))
         .build()
-        .ok()?;
-    let response = client
+    {
+        Ok(client) => client,
+        Err(error) => {
+            tracing::warn!(%error, "Steam-Bot Matches: HTTP-Client konnte nicht gebaut werden");
+            return None;
+        }
+    };
+    let response = match client
         .get(matches_url)
         .query(&[("discord_id", discord_id), ("limit", "150")])
         .send()
         .await
-        .ok()?;
+    {
+        Ok(response) => response,
+        Err(error) => {
+            tracing::warn!(%error, discord_id, "Steam-Bot Matches: Request fehlgeschlagen");
+            return None;
+        }
+    };
     if !response.status().is_success() {
+        tracing::warn!(
+            status = response.status().as_u16(),
+            discord_id,
+            "Steam-Bot Matches: Non-2xx"
+        );
         return None;
     }
-    response.json::<MatchHistory>().await.ok()
+    match response.json::<MatchHistory>().await {
+        Ok(history) => Some(history),
+        Err(error) => {
+            tracing::warn!(%error, discord_id, "Steam-Bot Matches: JSON nicht lesbar");
+            None
+        }
+    }
 }
 
 pub async fn fetch_mmr_trend(discord_id: &str) -> Option<MmrTrend> {
     let trend_url = steam_bot_mmr_trend_url();
-    let client = reqwest::Client::builder()
+    let client = match reqwest::Client::builder()
         .timeout(Duration::from_secs(8))
         .build()
-        .ok()?;
-    let response = client
+    {
+        Ok(client) => client,
+        Err(error) => {
+            tracing::warn!(%error, "Steam-Bot MMR-Trend: HTTP-Client konnte nicht gebaut werden");
+            return None;
+        }
+    };
+    let response = match client
         .get(trend_url)
         .query(&[("discord_id", discord_id), ("days", "7")])
         .send()
         .await
-        .ok()?;
+    {
+        Ok(response) => response,
+        Err(error) => {
+            tracing::warn!(%error, discord_id, "Steam-Bot MMR-Trend: Request fehlgeschlagen");
+            return None;
+        }
+    };
     if !response.status().is_success() {
+        tracing::warn!(
+            status = response.status().as_u16(),
+            discord_id,
+            "Steam-Bot MMR-Trend: Non-2xx"
+        );
         return None;
     }
-    response.json::<MmrTrend>().await.ok()
+    match response.json::<MmrTrend>().await {
+        Ok(trend) => Some(trend),
+        Err(error) => {
+            tracing::warn!(%error, discord_id, "Steam-Bot MMR-Trend: JSON nicht lesbar");
+            None
+        }
+    }
 }
 
 pub async fn fetch_live(discord_id: &str) -> Option<LiveStatus> {
     let live_url = steam_bot_live_url();
-    let client = reqwest::Client::builder()
+    let client = match reqwest::Client::builder()
         .timeout(Duration::from_secs(8))
         .build()
-        .ok()?;
-    let response = client
+    {
+        Ok(client) => client,
+        Err(error) => {
+            tracing::warn!(%error, "Steam-Bot Live: HTTP-Client konnte nicht gebaut werden");
+            return None;
+        }
+    };
+    let response = match client
         .get(live_url)
         .query(&[("discord_id", discord_id)])
         .send()
         .await
-        .ok()?;
+    {
+        Ok(response) => response,
+        Err(error) => {
+            tracing::warn!(%error, discord_id, "Steam-Bot Live: Request fehlgeschlagen");
+            return None;
+        }
+    };
     if !response.status().is_success() {
+        tracing::warn!(
+            status = response.status().as_u16(),
+            discord_id,
+            "Steam-Bot Live: Non-2xx"
+        );
         return None;
     }
-    response.json::<LiveStatus>().await.ok()
+    match response.json::<LiveStatus>().await {
+        Ok(live) => Some(live),
+        Err(error) => {
+            tracing::warn!(%error, discord_id, "Steam-Bot Live: JSON nicht lesbar");
+            None
+        }
+    }
 }
 
 pub fn rank_reply(name: &str, info: Option<&RankInfo>) -> String {

@@ -122,9 +122,17 @@ pub async fn fetch_app_token(
     let http_status = resp.status();
     let body = resp.text().await?;
     if !http_status.is_success() {
-        let message = serde_json::from_str::<TokenErrorBody>(&body)
-            .unwrap_or_default()
-            .message;
+        let message = match serde_json::from_str::<TokenErrorBody>(&body) {
+            Ok(parsed) => parsed.message,
+            Err(error) => {
+                tracing::warn!(
+                    %error,
+                    status = http_status.as_u16(),
+                    "Twitch-App-Token: Fehlerbody nicht als JSON lesbar"
+                );
+                String::new()
+            }
+        };
         return Err(TokenError::HttpStatus {
             status: http_status.as_u16(),
             message,
@@ -148,7 +156,17 @@ fn is_invalid_client(status: u16, body: &str) -> bool {
     if body.to_lowercase().contains("invalid client") {
         return true;
     }
-    let parsed: TokenErrorBody = serde_json::from_str(body).unwrap_or_default();
+    let parsed: TokenErrorBody = match serde_json::from_str(body) {
+        Ok(parsed) => parsed,
+        Err(error) => {
+            tracing::warn!(
+                %error,
+                status,
+                "Twitch-App-Token: invalid_client-Body nicht als JSON lesbar"
+            );
+            TokenErrorBody::default()
+        }
+    };
     parsed.message.to_lowercase().contains("invalid client")
         || parsed.error.to_lowercase().contains("invalid client")
 }

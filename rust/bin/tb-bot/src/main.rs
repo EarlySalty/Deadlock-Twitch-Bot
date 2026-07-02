@@ -89,6 +89,14 @@ fn opt_in_enabled(name: &str) -> bool {
     optional_env_bool(name, false)
 }
 
+fn watch_one_shot_task(task: &'static str, handle: tokio::task::JoinHandle<()>) {
+    tokio::spawn(async move {
+        if let Err(error) = handle.await {
+            tracing::error!(task, %error, "One-Shot-Task fehlerhaft beendet");
+        }
+    });
+}
+
 fn optional_env_u16(name: &str, default: u16) -> u16 {
     match std::env::var(name) {
         Ok(value) if value.trim().is_empty() => default,
@@ -374,9 +382,10 @@ impl PollHooks for SubscriptionPollHooks {
             if self.recruit_due() {
                 let pool = self.pool.clone();
                 let category_streams = report.category_streams;
-                tokio::spawn(async move {
+                let handle = tokio::spawn(async move {
                     partner_recruit::run_partner_recruit(&pool, &chat_api, &category_streams).await;
                 });
+                watch_one_shot_task("partner_recruit_tick", handle);
             }
         }
 
@@ -550,9 +559,10 @@ async fn main() {
     {
         let backfill_pool = pool.clone();
         let backfill_helix = helix.as_ref().clone();
-        tokio::spawn(async move {
+        let handle = tokio::spawn(async move {
             user_id_backfill::sync_missing_user_ids(&backfill_pool, backfill_helix.as_ref()).await;
         });
+        watch_one_shot_task("user_id_backfill", handle);
     }
     // Session-Tracker-Clone für den Scout-Task FRÜH ziehen: der Poll-Loop
     // konsumiert das `tracker`-Arc weiter unten (PollEngine::new), die
@@ -1185,9 +1195,10 @@ async fn main() {
     // wöchentlicher Insight-Job (nach 600s, dann alle 7 Tage).
     {
         let backfill_pool = pool.clone();
-        tokio::spawn(async move {
+        let handle = tokio::spawn(async move {
             tb_analytics::post_stream::backfill_post_stream_reports(&backfill_pool, 3).await;
         });
+        watch_one_shot_task("post_stream_report_backfill", handle);
         supervisor.spawn("post_stream_report_retry", tb_analytics::post_stream::schedule_report_retry_job(
             pool.clone(),
             1800,

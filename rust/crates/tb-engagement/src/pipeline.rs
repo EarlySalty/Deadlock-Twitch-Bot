@@ -376,7 +376,13 @@ impl EngagementPipeline {
 
         // `live`: normal senden — Sende-Seiteneffekte ausführen.
         self.rhythm.note_bot_post(&msg.channel_login, Utc::now());
-        let _ = self.conversation.append_assistant_turn(&msg.channel_login, &text).await;
+        if let Err(error) = self.conversation.append_assistant_turn(&msg.channel_login, &text).await {
+            tracing::warn!(
+                %error,
+                channel = %msg.channel_login,
+                "Engagement: Assistant-Turn konnte nicht gespeichert werden"
+            );
+        }
 
         let referenced_thread_ids: Option<Vec<i64>> = if threads.is_empty() {
             None
@@ -384,7 +390,14 @@ impl EngagementPipeline {
             Some(threads.iter().map(|t| t.id).collect())
         };
         if let Some(ids) = &referenced_thread_ids {
-            let _ = self.threads.mark_referenced(ids).await;
+            if let Err(error) = self.threads.mark_referenced(ids).await {
+                tracing::warn!(
+                    %error,
+                    channel = %msg.channel_login,
+                    thread_count = ids.len(),
+                    "Engagement: Thread-Referenzen konnten nicht markiert werden"
+                );
+            }
         }
 
         HandleResult {

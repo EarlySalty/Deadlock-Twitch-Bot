@@ -38,6 +38,7 @@ use sqlx::PgPool;
 use tb_http_core::ExpectedToken;
 use tower_http::{
     compression::CompressionLayer, cors::CorsLayer, set_header::SetResponseHeaderLayer,
+    trace::TraceLayer,
 };
 
 use auth::security::{rate_limit_middleware, RateLimitLayerConfig};
@@ -1375,6 +1376,27 @@ pub fn build_router(pool: PgPool, token: String) -> Router {
         .merge(handlers::admin_mode::build_admin_mode_router())
         .merge(handlers::legal::build_legal_router())
         .merge(handlers::roadmap_page::build_roadmap_page_router())
+        .layer(
+            TraceLayer::new_for_http()
+                .on_request(|request: &axum::http::Request<_>, _span: &tracing::Span| {
+                    tracing::info!(
+                        method = %request.method(),
+                        path = %request.uri().path(),
+                        "HTTP Request gestartet"
+                    );
+                })
+                .on_response(
+                    |response: &axum::http::Response<_>,
+                     latency: std::time::Duration,
+                     _span: &tracing::Span| {
+                        tracing::info!(
+                            status = response.status().as_u16(),
+                            latency_ms = latency.as_millis(),
+                            "HTTP Request abgeschlossen"
+                        );
+                    },
+                ),
+        )
         .layer(CompressionLayer::new());
 
     // P2.108: globaler Default-Security-Header-Bundle auf ALLE Antworten

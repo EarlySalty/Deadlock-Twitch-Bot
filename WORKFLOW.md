@@ -1,5 +1,28 @@
 # Workflow
 
+## 2026-07-02 — Rework IRC-Writes strikt additiv
+
+- Start: delegierter GPT-Implementierungsworker fuer gezielten Mini-Rework in `tb-monitoring::irc_lurker` und `tb-engagement::irc_reader`; Scope Kontrollfluss-Drift bei IRC-Writes/PONG, kein Commit/Push/Stash, kein repo-weites `cargo fmt`.
+- Implementiert: `irc_lurker::write_irc_line` bricht nach Write-Fehler nicht mehr vor Flush ab; beide `pong()`-Implementierungen schreiben Reply und CRLF wieder als zwei getrennte `write_all` plus Flush, jeweils best-effort mit Warn-Log; `irc_reader::join` flushed wieder trotz Write-Fehler.
+- Verifikation: `SQLX_OFFLINE=true cargo build` gruen. Wegwerf-Timescale `tb-logrw` auf `127.0.0.1:55091`, Extension vorhanden; `TB_TEST_DATABASE_URL=... TB_TEST_REQUIRE_DB=1 SQLX_OFFLINE=true cargo test -p tb-monitoring -p tb-engagement --no-fail-fast` gruen (`tb-engagement` 129/0, `tb-monitoring` 179/0); Container entfernt.
+
+## 2026-07-02 — Logging-Paritaet adversarial critic
+
+- Start: delegierter GPT-Implementierungsworker fuer additive-only Pruefung der uncommitteten Logging-Paritaets-Aenderungen im Worktree `/home/naniadm/.worktrees/twitch-logging`; Scope nur Diff-Analyse, Build/Tests und Report `critic.json`, kein Code-Fix, kein Commit/Push/Stash/Reset.
+- Recon laeuft: Implementierer-Report gelesen, `git diff -- rust/` wird hunkweise gegen HEAD geprueft; kritische Stellen `promos.rs`, `post_stream.rs`, IRC-Reconnect/break, `.ok()?`-Ketten und Twitch-Outcome-Enums werden explizit kontrolliert.
+- Befund bisher: Plan-/Fallback-Stellen in `promos.rs` und `post_stream.rs` bleiben fail-open bzw. liefern weiter dieselben Fallback-/`unavailable`-Objekte; Twitch-Outcome-Enums bleiben unveraendert. Adversarial markiert: IRC-Write/Flush-Hunks in `tb-engagement::irc_reader` und `tb-monitoring::irc_lurker`, weil auf `write_all`-Fehlern Folgeschreibungen/Flushes nicht mehr wie vorher ausgefuehrt werden.
+- Verifikation final: `SQLX_OFFLINE=true cargo build` gruen. Wegwerf-Timescale `tb-logcrit` auf `127.0.0.1:55081`, Extension vorhanden; gemeinsamer `cargo test --no-fail-fast` fuer `tb-observability`, `tb-transport-twitch`, `tb-monitoring`, `tb-chat`, `tb-analytics`, `tb-raid`, `tb-engagement`, `tb-dashboard-api`, `tb-social-media`, `tb-internal-api`, `tb-highlight`, `tb-bot` gruen; Container entfernt.
+- Abschluss: Verdict `drift_gefunden` mit 2 MED-Befunden, Report geschrieben und per `jq empty` validiert: `/home/naniadm/.claude/projects/-home-naniadm-Claude-Native-Workspace/5b3905c3-f094-4325-b670-f7f72c2d4352/scratchpad/triage/logging/critic.json`. Kein Code-Fix, kein Commit/Push/Stash/Reset.
+
+## 2026-07-02 — OPS-RUNTIME-003 Logging-Parität additiv
+
+- Start: delegierter GPT-Implementierungsworker fuer Logging-Paritaet im Worktree `/home/naniadm/.worktrees/twitch-logging`; Scope nur additive Logs in Rust-Produktionspfaden plus Report/Workflow, kein Commit/Push/Stash/Reset, kein repo-weites `cargo fmt`.
+- Audit laeuft: stille Fehlerpfade (`.ok()`, `let _ =`, maskierende Defaults/Err-Arme, ignorierte `if let Ok`, Spawn-JoinError) und HTTP-Access-Logging in `tb-dashboard`, `tb-internal-api` und `tb-bot` werden vor Code-Aenderungen enumeriert.
+- Implementiert: additive Fehlerlogs in HIGH/MED-Produktionspfaden (Twitch-Transport/Token, Chat/Moderation/Promos/Stats, Engagement/Monitoring/Analytics/Social-Media/Highlight/Raid/Bot-Tasks) und TraceLayer-Access-Logs fuer Dashboard-/Internal-API-Router.
+- Verifikation bisher: `SQLX_OFFLINE=true cargo build` im Rust-Workspace gruen; DB-Tests und Clippy stehen noch aus.
+- Verifikation final: Wegwerf-Timescale-Container `tb-loglog` auf `127.0.0.1:55071`, `timescaledb`-Extension vorhanden. `cargo test --no-fail-fast` fuer `tb-dashboard-api`, `tb-internal-api`, `tb-chat`, `tb-engagement`, `tb-monitoring`, `tb-observability`, `tb-analytics`, `tb-social-media`, `tb-highlight`, `tb-transport-twitch`, `tb-raid`, `tb-bot` jeweils gruen; `SQLX_OFFLINE=true cargo clippy ... --all-targets` exit 0 mit bestehenden Warnungen ausserhalb der Logging-Aenderungen.
+- Abschluss: Report geschrieben und per `jq empty` validiert: `/home/naniadm/.claude/projects/-home-naniadm-Claude-Native-Workspace/5b3905c3-f094-4325-b670-f7f72c2d4352/scratchpad/triage/logging/report.json`. Kein Commit/Push gemaess Auftrag.
+
 ## 2026-07-02 — Fix security.rs Test-Schema-Isolation
 
 - Start: delegierter GPT-Implementierungsworker fuer gezielten `security.rs`-Test-Harness-Fix im laufenden Merge-Worktree; kein Commit/Push/Stash/Checkout/Reset, kein repo-weites `cargo fmt`.

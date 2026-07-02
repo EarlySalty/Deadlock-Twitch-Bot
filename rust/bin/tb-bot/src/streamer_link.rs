@@ -92,18 +92,54 @@ struct LinkState {
 
 impl LinkState {
     fn load(path: &Path) -> Self {
-        std::fs::read_to_string(path)
-            .ok()
-            .and_then(|s| serde_json::from_str(&s).ok())
-            .unwrap_or_default()
+        let raw = match std::fs::read_to_string(path) {
+            Ok(raw) => raw,
+            Err(error) => {
+                tracing::debug!(
+                    %error,
+                    path = %path.display(),
+                    "streamer_link: State nicht lesbar, nutze Default"
+                );
+                return Self::default();
+            }
+        };
+        match serde_json::from_str(&raw) {
+            Ok(state) => state,
+            Err(error) => {
+                tracing::warn!(
+                    %error,
+                    path = %path.display(),
+                    "streamer_link: State-JSON nicht lesbar, nutze Default"
+                );
+                Self::default()
+            }
+        }
     }
 
     fn save(&self, path: &Path) {
-        if let Ok(json) = serde_json::to_string(self) {
-            let tmp = path.with_extension("tmp");
-            if std::fs::write(&tmp, &json).is_ok() {
-                let _ = std::fs::rename(&tmp, path);
+        let json = match serde_json::to_string(self) {
+            Ok(json) => json,
+            Err(error) => {
+                tracing::warn!(%error, "streamer_link: State konnte nicht serialisiert werden");
+                return;
             }
+        };
+        let tmp = path.with_extension("tmp");
+        if let Err(error) = std::fs::write(&tmp, &json) {
+            tracing::warn!(
+                %error,
+                path = %tmp.display(),
+                "streamer_link: State-Tempfile konnte nicht geschrieben werden"
+            );
+            return;
+        }
+        if let Err(error) = std::fs::rename(&tmp, path) {
+            tracing::warn!(
+                %error,
+                tmp = %tmp.display(),
+                path = %path.display(),
+                "streamer_link: State-Tempfile konnte nicht ersetzt werden"
+            );
         }
     }
 

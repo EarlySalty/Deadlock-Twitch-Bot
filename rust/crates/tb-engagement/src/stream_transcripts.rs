@@ -191,7 +191,7 @@ impl StreamTranscripts {
             .unwrap_or_else(|| env_int("ENGAGEMENT_TRANSCRIPT_KEEP_PER_CHANNEL", 40, 1));
         let cutoff = Utc::now() - Duration::minutes(max_age);
 
-        sqlx::query!(
+        match sqlx::query!(
             "DELETE FROM twitch_engagement_stream_transcripts \
              WHERE created_at < $1 OR id IN (\
                SELECT id FROM (\
@@ -204,8 +204,18 @@ impl StreamTranscripts {
         )
         .execute(&self.pool)
         .await
-        .map(|r| r.rows_affected())
-        .unwrap_or(0)
+        {
+            Ok(result) => result.rows_affected(),
+            Err(error) => {
+                tracing::warn!(
+                    %error,
+                    max_age_minutes = max_age,
+                    keep_per_channel = keep,
+                    "stream-transcripts: Trim fehlgeschlagen"
+                );
+                0
+            }
+        }
     }
 }
 

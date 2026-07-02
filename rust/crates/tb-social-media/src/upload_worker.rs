@@ -143,12 +143,12 @@ impl UploadTask {
         match is_clip_approved_for(&self.pool, clip_db_id, &item.platform).await {
             Ok(true) => {}
             Ok(false) => {
-                let _ = update_upload_status(
-                    &self.pool,
-                    item.id,
+                self.update_upload_status_logged(
+                    &item,
                     "failed",
                     None,
                     Some("approval_required"),
+                    "approval_required",
                 )
                 .await;
                 return false;
@@ -156,7 +156,14 @@ impl UploadTask {
             Err(e) => {
                 tracing::error!(queue_id = item.id, clip_db_id, %e, "approval check failed before upload");
                 let err = format!("approval_check_failed: {e}");
-                let _ = update_upload_status(&self.pool, item.id, "failed", None, Some(&err)).await;
+                self.update_upload_status_logged(
+                    &item,
+                    "failed",
+                    None,
+                    Some(&err),
+                    "approval_check_failed",
+                )
+                .await;
                 return false;
             }
         }
@@ -173,8 +180,14 @@ impl UploadTask {
                 {
                     tracing::error!(queue_id = item.id, %e, "completed-write failed for existing uploaded clip");
                     let err = format!("completed_write_failed: {e}");
-                    let _ =
-                        update_upload_status(&self.pool, item.id, "failed", None, Some(&err)).await;
+                    self.update_upload_status_logged(
+                        &item,
+                        "failed",
+                        None,
+                        Some(&err),
+                        "completed_write_failed_existing",
+                    )
+                    .await;
                 }
                 return true;
             }
@@ -182,7 +195,14 @@ impl UploadTask {
             Err(e) => {
                 tracing::error!(queue_id = item.id, %e, "uploaded-flag check failed before upload");
                 let err = format!("uploaded_flag_check_failed: {e}");
-                let _ = update_upload_status(&self.pool, item.id, "failed", None, Some(&err)).await;
+                self.update_upload_status_logged(
+                    &item,
+                    "failed",
+                    None,
+                    Some(&err),
+                    "uploaded_flag_check_failed",
+                )
+                .await;
                 return false;
             }
         }
@@ -209,24 +229,25 @@ impl UploadTask {
                         {
                             tracing::error!(queue_id = item.id, %e, "completed-write failed after successful upload");
                             let err = format!("completed_write_failed: {e}");
-                            let _ = update_upload_status(
-                                &self.pool,
-                                item.id,
+                            self.update_upload_status_logged(
+                                &item,
                                 "failed",
                                 None,
                                 Some(&err),
+                                "completed_write_failed_after_upload",
                             )
                             .await;
                         }
                         true
                     }
                     Err(e) => {
-                        let _ = update_upload_status(
-                            &self.pool,
-                            item.id,
+                        let err = e.to_string();
+                        self.update_upload_status_logged(
+                            &item,
                             "failed",
                             None,
-                            Some(&e.to_string()),
+                            Some(&err),
+                            "platform_upload_failed",
                         )
                         .await;
                         false
@@ -234,9 +255,15 @@ impl UploadTask {
                 }
             }
             Err(e) => {
-                let _ =
-                    update_upload_status(&self.pool, item.id, "failed", None, Some(&e.to_string()))
-                        .await;
+                let err = e.to_string();
+                self.update_upload_status_logged(
+                    &item,
+                    "failed",
+                    None,
+                    Some(&err),
+                    "upload_worker_failed",
+                )
+                .await;
                 false
             }
         }
@@ -244,20 +271,23 @@ impl UploadTask {
 
     /// Lädt (falls nötig) den Clip und konvertiert ihn; liefert die Upload-Daten.
     async fn do_upload(&self, item: &UploadQueueItem) -> Result<Converted, WorkerError> {
-        let _ = update_upload_status(&self.pool, item.id, "processing", None, None).await;
+        self.update_upload_status_logged(item, "processing", None, None, "processing_start")
+            .await;
 
         let mut local_path = item.local_file_path.clone().unwrap_or_default();
         if local_path.is_empty() || !Path::new(&local_path).exists() {
             local_path = self
                 .download_clip(item.clip_url.as_deref().unwrap_or(""), item.clip_db_id)
                 .await?;
-            let _ = update_upload_status(&self.pool, item.id, "processing", None, None).await;
+            self.update_upload_status_logged(item, "processing", None, None, "processing_downloaded")
+                .await;
         }
 
         let converted_path = self
             .convert_to_vertical(&local_path, &item.platform)
             .await?;
-        let _ = update_upload_status(&self.pool, item.id, "processing", None, None).await;
+        self.update_upload_status_logged(item, "processing", None, None, "processing_converted")
+            .await;
 
         let title = item
             .title
@@ -314,15 +344,47 @@ impl UploadTask {
                 "Downloaded file not found: {output_path}"
             )));
         }
-        let _ = sqlx::query!(
+        if let Err(error) = sqlx::query!(
             "UPDATE twitch_clips_social_media SET local_file_path = $1, downloaded_at = $2::text::timestamptz WHERE id = $3",
             &output_path,
             Utc::now().to_rfc3339(),
             clip_db_id
         )
             .execute(&self.pool)
-            .await;
+            .await
+        {
+            tracing::warn!(
+                %error,
+                clip_db_id,
+                path = %output_path,
+                "Upload-Worker: lokaler Clip-Pfad konnte nicht gespeichert werden"
+            );
+        }
         Ok(output_path)
+    }
+
+    async fn update_upload_status_logged(
+        &self,
+        item: &UploadQueueItem,
+        status: &str,
+        external_video_id: Option<&str>,
+        error_message: Option<&str>,
+        context: &'static str,
+    ) {
+        if let Err(error) =
+            update_upload_status(&self.pool, item.id, status, external_video_id, error_message)
+                .await
+        {
+            tracing::warn!(
+                %error,
+                queue_id = item.id,
+                clip_db_id = item.clip_db_id,
+                platform = %item.platform,
+                status,
+                context,
+                "Upload-Status konnte nicht aktualisiert werden"
+            );
+        }
     }
 
     async fn convert_to_vertical(
@@ -455,7 +517,11 @@ impl UploadWorker {
             let task = self.task.clone();
             set.spawn(async move { task.process(item, uploader).await });
         }
-        while set.join_next().await.is_some() {}
+        while let Some(result) = set.join_next().await {
+            if let Err(error) = result {
+                tracing::error!(%error, "Upload-Worker: Upload-Task fehlerhaft beendet");
+            }
+        }
     }
 
     /// Hintergrund-Loop (Initial-Delay + interval). Noch nicht in tb-bot

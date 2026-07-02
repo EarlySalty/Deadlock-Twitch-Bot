@@ -818,11 +818,12 @@ impl CommandEngine {
         let streamer_id = event.broadcaster_user_id.clone();
         let channel = event.broadcaster_user_login.clone();
 
-        tokio::spawn(async move {
+        let task_channel = channel.clone();
+        let handle = tokio::spawn(async move {
             // Streamer-Existenz + discord_user_id. broadcaster_user_id ist die
             // twitch_user_id des Streamers (= der Kanal). Python sucht über den
             // Login; hier direkt über die schon bekannte ID.
-            let row = sqlx::query!(
+            let row = match sqlx::query!(
                 "SELECT discord_user_id::text AS \"discord_user_id?\" \
                  FROM twitch_streamer_identities \
                  WHERE twitch_user_id = $1 \
@@ -831,15 +832,33 @@ impl CommandEngine {
             )
             .fetch_optional(&pool)
             .await
-            .ok()
-            .flatten();
+            {
+                Ok(row) => row,
+                Err(error) => {
+                    tracing::warn!(
+                        %error,
+                        channel = %channel,
+                        streamer_id = %streamer_id,
+                        "!title Streamer-Lookup fehlgeschlagen"
+                    );
+                    None
+                }
+            };
             let Some(row) = row else {
-                let _ = api
+                if let Err(error) = api
                     .send_message(
                         &streamer_id,
                         "Streamer nicht gefunden – bitte Onboarding prüfen.",
                     )
-                    .await;
+                    .await
+                {
+                    tracing::warn!(
+                        %error,
+                        channel = %channel,
+                        streamer_id = %streamer_id,
+                        "!title Onboarding-Hinweis konnte nicht gesendet werden"
+                    );
+                }
                 return;
             };
             let discord_id = row
@@ -880,20 +899,38 @@ impl CommandEngine {
             if let Some(did) = discord_id {
                 let db_path = crate::steam_lookup::steam_db_path();
                 let db_path2 = db_path.clone();
-                let rank = tokio::task::spawn_blocking(move || {
+                let rank = match tokio::task::spawn_blocking(move || {
                     crate::steam_lookup::get_rank_for_discord_user(&db_path, did)
                 })
                 .await
-                .ok()
-                .flatten();
+                {
+                    Ok(rank) => rank,
+                    Err(error) => {
+                        tracing::warn!(
+                            %error,
+                            channel = %channel,
+                            "!title Steam-Rank-Task fehlgeschlagen"
+                        );
+                        None
+                    }
+                };
                 rank_display = rank.map(|r| r.rank_display);
                 if include_live {
-                    let live_res = tokio::task::spawn_blocking(move || {
+                    let live_res = match tokio::task::spawn_blocking(move || {
                         crate::steam_lookup::get_live_state_for_discord_user(&db_path2, did)
                     })
                     .await
-                    .ok()
-                    .flatten();
+                    {
+                        Ok(live) => live,
+                        Err(error) => {
+                            tracing::warn!(
+                                %error,
+                                channel = %channel,
+                                "!title Steam-Live-Task fehlgeschlagen"
+                            );
+                            None
+                        }
+                    };
                     live = live_res.map(|l| crate::title_ai::PromptLiveState {
                         hero: l.hero,
                         party_hint: l.party_hint,
@@ -935,6 +972,15 @@ impl CommandEngine {
             };
             if let Err(e) = api.send_message(&streamer_id, &reply).await {
                 tracing::warn!(channel = %channel, err = %e, "!title-Antwort-Send fehlgeschlagen");
+            }
+        });
+        tokio::spawn(async move {
+            if let Err(error) = handle.await {
+                tracing::error!(
+                    channel = %task_channel,
+                    %error,
+                    "!title-Task unerwartet beendet"
+                );
             }
         });
     }

@@ -83,22 +83,36 @@ pub async fn refresh_clip_publication_status(pool: &PgPool, clip_db_id: impl Int
     let clip_db_id = clip_db_id.into();
     let published_all = is_clip_published_on_all_active_platforms(pool, clip_db_id).await;
     if published_all {
-        let _ = sqlx::query!(
+        if let Err(error) = sqlx::query!(
             "UPDATE twitch_clips_social_media SET status = 'published_all' \
              WHERE id = $1 AND discarded_at IS NULL",
             clip_db_id
         )
         .execute(pool)
-        .await;
+        .await
+        {
+            tracing::warn!(
+                %error,
+                clip_db_id,
+                "Social-Media-Retention: published_all-Status konnte nicht gesetzt werden"
+            );
+        }
     } else {
-        let _ = sqlx::query!(
+        if let Err(error) = sqlx::query!(
             "UPDATE twitch_clips_social_media \
              SET status = CASE WHEN discarded_at IS NOT NULL THEN status ELSE 'pending' END \
              WHERE id = $1 AND status = 'published_all'",
             clip_db_id
         )
         .execute(pool)
-        .await;
+        .await
+        {
+            tracing::warn!(
+                %error,
+                clip_db_id,
+                "Social-Media-Retention: pending-Status konnte nicht gesetzt werden"
+            );
+        }
     }
     published_all
 }
@@ -168,12 +182,19 @@ pub async fn delete_clips_by_ids(pool: &PgPool, clip_ids: &[i64]) {
     if clip_ids.is_empty() {
         return;
     }
-    let _ = sqlx::query!(
+    if let Err(error) = sqlx::query!(
         "DELETE FROM twitch_clips_social_media WHERE id = ANY($1::bigint[])",
         clip_ids
     )
     .execute(pool)
-    .await;
+    .await
+    {
+        tracing::warn!(
+            %error,
+            count = clip_ids.len(),
+            "Social-Media-Retention: Clip-Zeilen konnten nicht geloescht werden"
+        );
+    }
 }
 
 #[cfg(test)]

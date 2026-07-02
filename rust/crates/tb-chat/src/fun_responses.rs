@@ -116,8 +116,14 @@ impl FunResponses {
         }
 
         let reply = self.pick_reply();
-        // Fehler beim Senden werden still ignoriert (bot.py Z. 874 sendet ohne Fehlerbehandlung)
-        let _ = self.api.send_message(&event.broadcaster_user_id, reply).await;
+        // Fehler beim Senden werden weiter ignoriert (bot.py Z. 874), aber nicht verschluckt.
+        if let Err(error) = self.api.send_message(&event.broadcaster_user_id, reply).await {
+            tracing::warn!(
+                %error,
+                broadcaster_id = %event.broadcaster_user_id,
+                "Fun-Response konnte nicht gesendet werden"
+            );
+        }
     }
 
     /// Prüft Cooldown und aktualisiert ihn bei Ok.

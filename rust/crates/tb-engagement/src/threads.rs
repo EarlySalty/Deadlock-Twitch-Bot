@@ -291,16 +291,33 @@ impl Threads {
             .await
         {
             Ok(r) => r,
-            Err(_) => return 0,
+            Err(error) => {
+                tracing::warn!(
+                    %error,
+                    channel = %channel_login,
+                    "Thread-Extractor: MiniMax-Aufruf fehlgeschlagen"
+                );
+                return 0;
+            }
         };
         let Some(text) = response.text else {
+            tracing::warn!(channel = %channel_login, "Thread-Extractor: MiniMax ohne Text");
             return 0;
         };
         let cleaned = strip_codeblock(&text);
-        let Ok(items) = serde_json::from_str::<Value>(&cleaned) else {
-            return 0;
+        let items = match serde_json::from_str::<Value>(&cleaned) {
+            Ok(items) => items,
+            Err(error) => {
+                tracing::warn!(
+                    %error,
+                    channel = %channel_login,
+                    "Thread-Extractor: JSON nicht lesbar"
+                );
+                return 0;
+            }
         };
         let Some(arr) = items.as_array() else {
+            tracing::warn!(channel = %channel_login, "Thread-Extractor: JSON ist kein Array");
             return 0;
         };
 
@@ -322,12 +339,19 @@ impl Threads {
                 .filter(|s| !s.is_empty())
                 .and_then(parse_iso_date);
             let summary_trunc: String = summary.chars().take(80).collect();
-            if self
+            match self
                 .upsert_thread(uid, login, channel_login, ttype, &summary_trunc, due_at)
                 .await
-                .unwrap_or(false)
             {
-                inserted += 1;
+                Ok(true) => inserted += 1,
+                Ok(false) => {}
+                Err(error) => tracing::warn!(
+                    %error,
+                    channel = %channel_login,
+                    twitch_user_id = %uid,
+                    twitch_login = %login,
+                    "Thread-Extractor: Upsert fehlgeschlagen"
+                ),
             }
         }
         inserted

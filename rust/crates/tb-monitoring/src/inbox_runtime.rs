@@ -327,9 +327,13 @@ impl InboxRuntimeHandle {
 
     /// Stoppt den Worker geordnet; ein laufender Auftrag wird noch beendet.
     pub async fn shutdown(self) {
-        let _ = self.stop.send(true);
+        if self.stop.send(true).is_err() {
+            tracing::warn!("Inbox-Runtime: Stop-Signal ohne Empfaenger");
+        }
         self.wakeup.notify_one();
-        let _ = self.task.await;
+        if let Err(error) = self.task.await {
+            tracing::error!(%error, "Inbox-Runtime: Worker-Task fehlerhaft beendet");
+        }
     }
 }
 

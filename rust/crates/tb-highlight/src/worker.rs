@@ -206,7 +206,13 @@ impl HighlightClipperWorker {
             }
             self.process_match(state, login, account_id, m, &channel_id, &clip_dir)
                 .await;
-            let _ = std::fs::remove_dir_all(&clip_dir);
+            if let Err(error) = std::fs::remove_dir_all(&clip_dir) {
+                tracing::warn!(
+                    %error,
+                    path = %clip_dir.display(),
+                    "HighlightClipper: temp Clip-Verzeichnis konnte nicht geloescht werden"
+                );
+            }
         }
     }
 
@@ -220,10 +226,23 @@ impl HighlightClipperWorker {
         clip_dir: &Path,
     ) {
         let match_id = m.match_id;
-        let match_info =
-            deadlock_client::get_match_metadata(&self.config.deadlock_api_base, match_id)
-                .await
-                .unwrap_or_else(|_| serde_json::json!({}));
+        let match_info = match deadlock_client::get_match_metadata(
+            &self.config.deadlock_api_base,
+            match_id,
+        )
+        .await
+        {
+            Ok(match_info) => match_info,
+            Err(error) => {
+                tracing::warn!(
+                    %error,
+                    login,
+                    match_id,
+                    "HighlightClipper: Match-Metadaten nicht ladbar"
+                );
+                serde_json::json!({})
+            }
+        };
         let hero_id = get_hero_id(account_id, &match_info);
         let mut events: Vec<HighlightEvent> = Vec::new();
 
@@ -274,7 +293,16 @@ impl HighlightClipperWorker {
             Some(v) => v,
             None => {
                 tracing::warn!(login, match_id, "HighlightClipper: Kein VOD gefunden");
-                let _ = mark_match_processed(state, &self.config.state_path, login, match_id);
+                if let Err(error) =
+                    mark_match_processed(state, &self.config.state_path, login, match_id)
+                {
+                    tracing::warn!(
+                        %error,
+                        login,
+                        match_id,
+                        "HighlightClipper: Processed-Marker konnte nicht gespeichert werden"
+                    );
+                }
                 return;
             }
         };
@@ -319,7 +347,14 @@ impl HighlightClipperWorker {
             .await;
         }
 
-        let _ = mark_match_processed(state, &self.config.state_path, login, match_id);
+        if let Err(error) = mark_match_processed(state, &self.config.state_path, login, match_id) {
+            tracing::warn!(
+                %error,
+                login,
+                match_id,
+                "HighlightClipper: Processed-Marker konnte nicht gespeichert werden"
+            );
+        }
     }
 }
 

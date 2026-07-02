@@ -705,7 +705,14 @@ pub async fn backfill_tracked_stats_from_category(
     match res {
         Ok(r) => Ok(r.rows_affected() as i64),
         // Tabellen fehlen evtl. (Stats-Subsystem nicht migriert) → 0 wie Python.
-        Err(_) => Ok(0),
+        Err(error) => {
+            tracing::warn!(
+                %error,
+                login = %normalized,
+                "Streamer-Lifecycle: Stats-Archivierung fehlgeschlagen"
+            );
+            Ok(0)
+        }
     }
 }
 

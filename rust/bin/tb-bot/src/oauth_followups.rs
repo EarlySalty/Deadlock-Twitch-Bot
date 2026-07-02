@@ -315,7 +315,18 @@ impl ChatGreeterPort for LegacyChatGreeter {
             .map_err(|e| format!("chat-action request failed: {e}"))?;
         let status = resp.status().as_u16();
         if status != 200 {
-            let body = resp.text().await.unwrap_or_default();
+            let body = match resp.text().await {
+                Ok(body) => body,
+                Err(error) => {
+                    tracing::warn!(
+                        %error,
+                        status,
+                        login = %twitch_login,
+                        "Chat-Action-Fehlerbody nicht lesbar"
+                    );
+                    String::new()
+                }
+            };
             let snippet: String = body.chars().take(200).collect();
             return Err(format!("chat-action HTTP {status}: {snippet}"));
         }
