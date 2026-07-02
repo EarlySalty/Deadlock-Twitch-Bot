@@ -588,9 +588,12 @@ pub async fn due_periods(
         if created_at >= current_period_start {
             continue;
         }
-        periods.insert((login, created_at.year(), created_at.month() as i32));
+        periods.insert((created_at.year(), created_at.month() as i32, login));
     }
-    Ok(periods.into_iter().collect())
+    Ok(periods
+        .into_iter()
+        .map(|(year, month, login)| (login, year, month))
+        .collect())
 }
 
 pub async fn run_pending(
@@ -1222,6 +1225,7 @@ async fn next_gutschrift_number(
     tx: &mut Transaction<'_, Postgres>,
     year_month: &str,
 ) -> Result<String, GutschriftError> {
+    // Schema garantiert durch Migration 20260617030000 (year_month/last_seq); Pythons Legacy-counter_year/last_counter-Introspektion entfällt.
     if year_month.len() != 6 || !year_month.bytes().all(|byte| byte.is_ascii_digit()) {
         return Err(GutschriftError::InvalidYearMonth);
     }
@@ -1752,7 +1756,15 @@ mod tests {
     }
 
     async fn connect(schema: &str) -> Option<PgPool> {
-        let dsn = std::env::var("TB_TEST_DATABASE_URL").ok()?;
+        let dsn = match std::env::var("TB_TEST_DATABASE_URL") {
+            Ok(dsn) => dsn,
+            Err(_) => {
+                if std::env::var("TB_TEST_REQUIRE_DB").as_deref() == Ok("1") {
+                    panic!("TB_TEST_REQUIRE_DB=1 ist gesetzt, aber TB_TEST_DATABASE_URL fehlt");
+                }
+                return None;
+            }
+        };
         let admin = PgPoolOptions::new()
             .max_connections(1)
             .connect(&dsn)
@@ -2203,6 +2215,87 @@ mod tests {
         .await
         .unwrap();
         assert_eq!(periods, vec![("affiliate_one".to_string(), 2026, 2)]);
+    }
+
+    #[tokio::test]
+    async fn due_periods_and_run_pending_sort_by_period_then_login() {
+        let Some(pool) = connect("aff_gs_due_sort").await else {
+            eprintln!("SKIP: TB_TEST_DATABASE_URL nicht gesetzt");
+            return;
+        };
+        let cipher = test_cipher();
+        insert_affiliate(&pool, "affiliate_alpha", "1001", "Affiliate Alpha").await;
+        insert_affiliate(&pool, "affiliate_beta", "1002", "Affiliate Beta").await;
+        insert_affiliate(&pool, "affiliate_zulu", "1003", "Affiliate Zulu").await;
+        insert_commission(
+            &pool,
+            "affiliate_alpha",
+            "evt_sort_alpha_feb",
+            1000,
+            "2026-02-05T12:00:00+00:00",
+            "transferred",
+        )
+        .await;
+        insert_commission(
+            &pool,
+            "affiliate_zulu",
+            "evt_sort_zulu_jan",
+            900,
+            "2026-01-10T12:00:00+00:00",
+            "transferred",
+        )
+        .await;
+        insert_commission(
+            &pool,
+            "affiliate_beta",
+            "evt_sort_beta_jan",
+            800,
+            "2026-01-15T12:00:00+00:00",
+            "transferred",
+        )
+        .await;
+        save_profile(&pool, &cipher, "affiliate_beta", "kleinunternehmer", None).await;
+        save_profile(&pool, &cipher, "affiliate_zulu", "kleinunternehmer", None).await;
+
+        let periods = due_periods(
+            &pool,
+            Some(Utc.with_ymd_and_hms(2026, 3, 10, 0, 0, 0).unwrap()),
+        )
+        .await
+        .unwrap();
+        assert_eq!(
+            periods,
+            vec![
+                ("affiliate_beta".to_string(), 2026, 1),
+                ("affiliate_zulu".to_string(), 2026, 1),
+                ("affiliate_alpha".to_string(), 2026, 2),
+            ]
+        );
+
+        let results = run_pending(
+            &pool,
+            &cipher,
+            None,
+            Some(&seller()),
+            Some(Utc.with_ymd_and_hms(2026, 3, 10, 0, 0, 0).unwrap()),
+            2,
+        )
+        .await
+        .unwrap();
+        let processed = results
+            .iter()
+            .map(|result| {
+                (
+                    result.affiliate_login.as_str(),
+                    result.period_year,
+                    result.period_month,
+                )
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(
+            processed,
+            vec![("affiliate_beta", 2026, 1), ("affiliate_zulu", 2026, 1)]
+        );
     }
 
     #[tokio::test]
