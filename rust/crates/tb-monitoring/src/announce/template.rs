@@ -204,6 +204,18 @@ fn shorten_text(text: &str, max_length: usize) -> String {
     format!("{truncated}{suffix}")
 }
 
+fn should_skip_zero_viewer_field(
+    name: &str,
+    value: &str,
+    context: &BTreeMap<String, String>,
+) -> bool {
+    context
+        .get("viewer_count")
+        .is_some_and(|count| count.trim() == "0")
+        && name.trim().eq_ignore_ascii_case("viewer")
+        && value.trim() == "0"
+}
+
 /// Template-Kontext aus dem Stream-Payload (Python `build_template_context`),
 /// erweitert um `mention_role`/`rolle` und die Referral-URL.
 pub fn build_context(
@@ -388,14 +400,18 @@ pub fn render_announcement(
         "fields": config
             .fields
             .iter()
-            .take(MAX_FIELDS)
-            .map(|(name, value, inline)| {
-                serde_json::json!({
-                    "name": render_placeholders(name, context),
-                    "value": render_placeholders(value, context),
-                    "inline": inline,
+            .filter_map(|(name, value, inline)| {
+                let name = render_placeholders(name, context);
+                let value = render_placeholders(value, context);
+                (!should_skip_zero_viewer_field(&name, &value, context)).then(|| {
+                    serde_json::json!({
+                        "name": name,
+                        "value": value,
+                        "inline": *inline,
+                    })
                 })
             })
+            .take(MAX_FIELDS)
             .collect::<Vec<_>>(),
         "footer": {
             "text": render_placeholders(&config.footer_text_template, context),
@@ -628,6 +644,32 @@ mod tests {
         // Footer-Timestamp = started_at (Default-Modus).
         assert_eq!(rendered.embed["timestamp"], "2026-06-09T17:30:00+00:00");
         assert_eq!(rendered.button_label, "Auf Twitch ansehen");
+    }
+
+    #[test]
+    fn default_render_laesst_viewer_feld_bei_null_weg() {
+        let config = AnnouncementConfig::default();
+        let now = parse_dt_utc("2026-06-09T18:00:00Z").unwrap();
+        let stream = StreamSnapshot {
+            user_login: "drag".to_string(),
+            user_name: "Drag".to_string(),
+            title: "Ranked Grind".to_string(),
+            game_name: "Deadlock".to_string(),
+            viewer_count: 0,
+            ..Default::default()
+        };
+        let ctx = build_context("drag", &stream, "https://www.twitch.tv/drag", "", now, None);
+        let rendered = render_announcement(&config, &ctx, now, Some("token-1"));
+        let fields = rendered.embed["fields"].as_array().expect("fields array");
+
+        assert!(
+            !fields.iter().any(|field| field["name"] == "Viewer"),
+            "Viewer-Feld bei 0 nicht rendern"
+        );
+        assert!(
+            fields.iter().any(|field| field["name"] == "Kategorie"),
+            "Kategorie-Feld bleibt erhalten"
+        );
     }
 
     /// B18-7 (`embeds_mixin-2`): Steht kein explizites Bild zur Verfügung

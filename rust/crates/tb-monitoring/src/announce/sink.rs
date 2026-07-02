@@ -190,42 +190,44 @@ impl AnnouncementSink for BrokerAnnouncementSink {
             .filter(|id| *id > 0 && request.entry.live_ping_enabled);
         let mut mention_text = String::new();
         let mut allowed_role_ids: Vec<i64> = Vec::new();
-        for role_id in &config.static_ping_role_ids {
-            if !allowed_role_ids.contains(role_id) {
-                allowed_role_ids.push(*role_id);
-            }
-        }
-        if config.use_streamer_ping_role {
-            if let Some(role_id) = streamer_role_id {
-                if !allowed_role_ids.contains(&role_id) {
-                    allowed_role_ids.push(role_id);
+        if !request.suppress_role_pings {
+            for role_id in &config.static_ping_role_ids {
+                if !allowed_role_ids.contains(role_id) {
+                    allowed_role_ids.push(*role_id);
                 }
-                mention_text = format!("<@&{role_id}>");
-            } else if request.entry.live_ping_enabled {
-                // Live-Ping aktiviert, aber keine Rollen-ID gesetzt. Python
-                // (embeds_mixin.py:_ensure_live_ping_role) legte die Rolle beim
-                // Go-Live automatisch an. Ist ein Provider verdrahtet, holen wir
-                // hier die (ggf. frisch angelegte + persistierte) Rollen-ID und
-                // verwenden den Ping sofort. Ohne Provider bleibt der Fallback:
-                // den Ausfall sichtbar machen, damit die role_id im Dashboard
-                // nachgepflegt werden kann statt unbemerkt zu fehlen.
-                let twitch_user_id = request.entry.twitch_user_id.as_deref().unwrap_or("");
-                let created = match &self.live_ping_role_provider {
-                    Some(provider) => provider.ensure_role(&login, twitch_user_id).await,
-                    None => None,
-                };
-                match created {
-                    Some(role_id) if role_id > 0 => {
-                        if !allowed_role_ids.contains(&role_id) {
-                            allowed_role_ids.push(role_id);
-                        }
-                        mention_text = format!("<@&{role_id}>");
+            }
+            if config.use_streamer_ping_role {
+                if let Some(role_id) = streamer_role_id {
+                    if !allowed_role_ids.contains(&role_id) {
+                        allowed_role_ids.push(role_id);
                     }
-                    _ => {
-                        tracing::warn!(
-                            login = %login,
-                            "Live-Ping aktiviert, aber live_ping_role_id fehlt — Rollen-Ping übersprungen (role_id im Dashboard setzen)"
-                        );
+                    mention_text = format!("<@&{role_id}>");
+                } else if request.entry.live_ping_enabled {
+                    // Live-Ping aktiviert, aber keine Rollen-ID gesetzt. Python
+                    // (embeds_mixin.py:_ensure_live_ping_role) legte die Rolle beim
+                    // Go-Live automatisch an. Ist ein Provider verdrahtet, holen wir
+                    // hier die (ggf. frisch angelegte + persistierte) Rollen-ID und
+                    // verwenden den Ping sofort. Ohne Provider bleibt der Fallback:
+                    // den Ausfall sichtbar machen, damit die role_id im Dashboard
+                    // nachgepflegt werden kann statt unbemerkt zu fehlen.
+                    let twitch_user_id = request.entry.twitch_user_id.as_deref().unwrap_or("");
+                    let created = match &self.live_ping_role_provider {
+                        Some(provider) => provider.ensure_role(&login, twitch_user_id).await,
+                        None => None,
+                    };
+                    match created {
+                        Some(role_id) if role_id > 0 => {
+                            if !allowed_role_ids.contains(&role_id) {
+                                allowed_role_ids.push(role_id);
+                            }
+                            mention_text = format!("<@&{role_id}>");
+                        }
+                        _ => {
+                            tracing::warn!(
+                                login = %login,
+                                "Live-Ping aktiviert, aber live_ping_role_id fehlt — Rollen-Ping übersprungen (role_id im Dashboard setzen)"
+                            );
+                        }
                     }
                 }
             }
@@ -247,13 +249,15 @@ impl AnnouncementSink for BrokerAnnouncementSink {
         } else {
             rendered.content.clone()
         };
-        if let Some(alert) = self.settings.alert_mention.as_deref().map(str::trim) {
-            if !alert.is_empty() {
-                let alert = sanitize_live_content(alert);
-                content = format!("{alert} {content}").trim().to_string();
-                if let Some(role_id) = Self::role_id_from_mention(&alert) {
-                    if !allowed_role_ids.contains(&role_id) {
-                        allowed_role_ids.push(role_id);
+        if !request.suppress_role_pings {
+            if let Some(alert) = self.settings.alert_mention.as_deref().map(str::trim) {
+                if !alert.is_empty() {
+                    let alert = sanitize_live_content(alert);
+                    content = format!("{alert} {content}").trim().to_string();
+                    if let Some(role_id) = Self::role_id_from_mention(&alert) {
+                        if !allowed_role_ids.contains(&role_id) {
+                            allowed_role_ids.push(role_id);
+                        }
                     }
                 }
             }

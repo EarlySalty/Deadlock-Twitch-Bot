@@ -120,6 +120,27 @@ impl GuardStore {
         Ok(row.is_some())
     }
 
+    /// Beansprucht (kind, key) oder setzt das TTL-Fenster eines aktiven
+    /// Eintrags neu ab `now`. Nur fuer Effekte nutzen, deren Sperrfenster bei
+    /// wiederholtem Auftreten verlaengert werden soll.
+    pub async fn claim_or_extend(
+        &self,
+        kind: GuardKind,
+        key: &str,
+        ttl_seconds: f64,
+        now: f64,
+    ) -> Result<bool, sqlx::Error> {
+        let key = key.trim();
+        if key.is_empty() {
+            return Ok(false);
+        }
+        if self.claim(kind, key, ttl_seconds, now).await? {
+            return Ok(true);
+        }
+        self.release(kind, key).await?;
+        self.claim(kind, key, ttl_seconds, now).await
+    }
+
     /// Gibt einen Guard explizit frei — z. B. nach fehlgeschlagener
     /// Verarbeitung, damit eine Wiederholung nicht den TTL-Ablauf abwarten muss.
     pub async fn release(&self, kind: GuardKind, key: &str) -> Result<(), sqlx::Error> {

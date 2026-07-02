@@ -256,6 +256,36 @@
 - Tests ergänzt: Webhook-Header/Challenge-Helper, IRC-`get_chatters` mit `#`, Core-Delivery ohne Broadcaster, Inbox-Panic-Retry/Worker lebt weiter, Poller-API-Fehler erhält Live-State.
 - Verifikation: `cargo check --manifest-path rust/Cargo.toml -p tb-monitoring` gruen; `cargo test --manifest-path rust/Cargo.toml -p tb-monitoring --no-run` gruen; `git diff --check` gruen.
 - Kritiker-Review: committeten Diff gegen `tb-monitoring` read-only geprüft. Zwei MED-Befunde geschrieben nach `/tmp/claude-1000/-home-naniadm-Claude-Native-Workspace/5b3905c3-f094-4325-b670-f7f72c2d4352/scratchpad/triage/critic/crit_monitoring.json`: IRC-DB-Fehler vor execute bleiben still, Poller-Stale-Sweep kann API-Fehler-Fix umgehen. Verifikation im Review: `cargo check --manifest-path rust/Cargo.toml -p tb-monitoring`, `cargo test --manifest-path rust/Cargo.toml -p tb-monitoring --no-run`, `git diff --check origin/main..HEAD -- rust/crates/tb-monitoring` gruen.
+## 2026-07-02 — Verify-Kritiker P0 Twitch-Bot nach Rework
+
+- Start: delegierter GPT-Verifikationskritiker fuer Rework der zwei P0-Blocker in `tb-monitoring`; keine Code-Fixes, keine Commits/Pushes. Fokus: Altzustand-Announce, verlaengernder `ended_posting`-Guard, Call-Sites, Race-/Dedupe-Tests, `.sqlx`, Test-/Clippy-Verifikation.
+- Statisch verifiziert: `stream_restarted` behandelt leere/NULL `last_stream_id` bei vorhandener alter Message-ID und aktueller Stream-ID als Restart; Regressionstest setzt direkt `is_live=0`, `last_discord_message_id`, `last_stream_id NULL` und laeuft erst danach Helix-live. `claim_or_extend` wird nur vom Announcement-Reannounce-Cooldown im `ended_posting`-Pfad genutzt; alle anderen Guard-Callsites bleiben bei nicht-verlaengerndem `claim`.
+- Tests/Verifikation: `SQLX_OFFLINE=true cargo test -p tb-monitoring` gruen mit 161 Tests. Ohne `TB_TEST_DATABASE_URL` skippen DB-Tests harnessbedingt; Zusatzlauf mit eigener Wegwerf-DB und `TB_TEST_REQUIRE_DB=1` bestaetigt die 12 relevanten Poller-Tests gruen. Voller DB-erzwungener Paketlauf hat einen unveraenderten vorbestehenden Fehler in `archive_candidates_ignoriert_kuerzlich_aktive_nicht_deadlock_streamer` (Decode in bestehender Test-/Typstelle), nicht im Rework-Pfad.
+- Clippy: `SQLX_OFFLINE=true cargo clippy -p tb-monitoring --all-targets --no-deps -- -D warnings` blockiert nur an den bekannten bestehenden Kategorien `duplicate_mod`, `map_entry`, `too_many_arguments`. `git diff --check` gruen. `.sqlx` unveraendert, keine neuen Produktions-SQLx-Queries.
+
+## 2026-07-02 — Rework P0 Twitch-Bot Blocker
+
+- Start: delegierter GPT-Implementierungsworker fuer die zwei Kritiker-Blocker in `tb-monitoring`; keine Commits/Pushes, Scope auf Bestandszeilen-Announce und Reannounce-Cooldown-Verlaengerung.
+- Befund: `should_post` braucht einen Restart-Fall fuer alte Offline-Rows mit Message-ID aber leerer `last_stream_id`; `GuardStore::claim` wird auch fuer nicht-verlaengernde Guards genutzt, daher kein globaler Semantikwechsel.
+- Implementiert: fehlende `last_stream_id` zaehlt nur bei vorhandener alter Message-ID und aktueller Stream-ID als Restart; Reannounce-Cooldown nutzt dedizierten `GuardStore::claim_or_extend` nur im `ended_posting`-Pfad und bleibt ohne neue SQLx-Queries/.sqlx-Aenderungen.
+- Tests: neue Poller-Regression fuer `is_live=0` + Message-ID + `last_stream_id NULL` + Helix live; neue Flap-Kette offline t0 -> restart t5 ohne Ping -> offline t10 -> restart t16 ohne Ping -> restart t26 mit Ping.
+- Verifikation: `SQLX_OFFLINE=true cargo test -p tb-monitoring` gruen mit 161 Tests (vorher 159, +2). `git diff --check` gruen. Pflicht-Clippy `SQLX_OFFLINE=true cargo clippy -p tb-monitoring --all-targets -- -D warnings` blockiert vorbestehend in `tb-analytics`; Abgrenzung mit `--no-deps` blockiert an bekannten bestehenden `tb-monitoring`-Lints (`duplicate_mod`, `map_entry`, `too_many_arguments`).
+
+## 2026-07-02 — Kritiker-Review P0 Twitch-Bot
+
+- Start: delegierter GPT-Kritiker fuer uncommitteten Diff `phase0-fixes` gegen `origin/main`; keine Code-Fixes, keine Commits/Pushes.
+- Stand: Diff und zentrale Pfade in `tb-monitoring` gelesen; Fokus auf Announcement-Guard, 15-Min-Cooldown, Rollen-Ping-Suppression, Viewer-Feld und Race-Tests. Verifikation/Baseline-Vergleich laeuft noch.
+- Neustart-Review: Guard-/Cooldown-/Ping-/Viewer-Pfade erneut eigenstaendig gelesen; keine Produktivcode-Aenderungen. Auffaellig sind Altzustand `message_id` ohne `last_stream_id` und nicht verlaengerter Reannounce-Cooldown bei mehrfachen Flaps; Cargo-Diff/Baseline-Verifikation startet jetzt.
+- Abschluss: Review-Findings BLOCKER zu Bootstrap-Altzustand (`last_discord_message_id` gesetzt, `last_stream_id` leer) und zu nicht verlaengertem 15-Min-Reannounce-Cooldown bei mehreren `ended_posting`s. `SQLX_OFFLINE=true cargo test -p tb-monitoring` gruen mit 159 Tests. Workspace-Test diff/baseline beide unveraendert rot in `tb-raid` (27 DB-Auth-Fails). Workspace-Clippy diff/baseline beide unveraendert rot durch vorbestehende Lints ausserhalb des Diffs.
+
+## 2026-07-02 — P0 Twitch-Bot Announce-Dedupe + Cooldown
+
+- Start: delegierter GPT-Implementierungsworker fuer Phase-0-Fix im Twitch-Bot; Scope Worktree `twitch-bot-phase0`, keine Commits/Pushes.
+- Auftrag: Discord-Announce-Doppelposts bei EventSub-/Helix-Races verhindern, 15-Min-Reannounce-Cooldown ohne Rollen-Ping fuer echte Flaps, Viewer-Feld bei 0 ausblenden; Sessions/Stats/Auto-Raid nicht drosseln.
+- Implementiert: `should_post` postet nur noch bei fehlender Announcement-Message oder echtem `stream_id`-Wechsel; nach `end_announcement` wird per `GuardKind::BusinessEffect` ein 15-Min-Reannounce-Cooldown pro Login gesetzt. Echte Flaps im Cooldown posten weiter, aber `AnnounceLiveRequest::suppress_role_pings` unterdrueckt Streamer-/statische/Alert-Rollen-Pings im Broker-Sink. Live-Embed rendert `Viewer` nicht mehr bei `viewer_count == 0`.
+- Tests: Poller-Race-Tests fuer EventSub-offline+Helix-Lag und channel.update-Race, Flap innerhalb/nach Cooldown, Sink-Test fuer Ping-Suppression, Template-Test fuer Viewer-0-Feld.
+- Verifikation: `SQLX_OFFLINE=true cargo build --workspace` gruen; `cargo fmt --all` ausgefuehrt (scope-fremde rustfmt-Welle danach zurueckgesetzt, Ziel-Dateien bleiben formatiert); `git diff --check` gruen; `SQLX_OFFLINE=true cargo build -p tb-monitoring` gruen; `SQLX_OFFLINE=true cargo test -p tb-monitoring` gruen (159 Tests).
+- Auffaelligkeiten: `SQLX_OFFLINE=true cargo clippy --all-targets -- -D warnings` blockiert vorbestehend/scope-fremd an `tb-transport-twitch/src/chat.rs:182` (`redundant_closure`) und `tb-highlight/src/event_detector.rs:265` (`needless_lifetimes`); paketgezieltes Clippy kommt danach bis zu bestehenden `tb-monitoring`-Lint-Befunden ausserhalb des Announce-Pfads (`duplicate_mod`, `map_entry`, `too_many_arguments`). `SQLX_OFFLINE=true cargo test --workspace` blockiert in `tb-raid` wegen Test-DB-Auth (`password authentication failed for user "postgres"`, 27 DB-Tests).
 
 ## 2026-06-30 — sqlx Welle 5 Rework-4 tb-social-media Test-i64
 

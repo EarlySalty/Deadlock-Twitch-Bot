@@ -1,3 +1,10 @@
+## #320 — Stream-Ankündigungen: keine Doppel-Posts mehr, keine Pings bei Kurz-Aussetzern
+
+**Problem:** Ging ein Stream kurz offline oder meldete Twitch das Spiel kurzzeitig falsch, hielt der Bot das für einen neuen Stream und postete die Live-Ankündigung doppelt — inklusive erneutem Rollen-Ping. Dazu zeigten Ankündigungen direkt nach Stream-Start „0 Zuschauer", was billiger aussieht als es ist.
+
+**Änderung:** Der Bot erkennt jetzt am Stream selbst, ob es wirklich ein Neustart ist oder nur ein Flackern der Twitch-Daten — beim Flackern passiert nichts mehr. Startet ein Stream innerhalb von 15 Minuten nach dem Ende wirklich neu, kommt die Ankündigung ohne Rollen-Ping; das 15-Minuten-Fenster zählt dabei ab dem jeweils letzten Stream-Ende. Und solange Twitch noch keine Zuschauerzahl liefert, wird das Feld einfach weggelassen.
+
+**Ergebnis:** Eine Live-Ankündigung pro Stream, Pings nur wenn es sich lohnt, und keine peinliche Null mehr im Embed.
 ## #319 — Etliche Rand-Unterschiede zwischen alter und neuer Bot-Version aufgeräumt
 
 **Ausgangslage:** Beim systematischen Vergleich der alten Python- mit der neuen Rust-Version sind viele kleine Abweichungen aufgefallen — Stellen, an denen die neue Version in Randfällen anders reagierte als gewollt: verschluckte Datenbankfehler, falsch gerundete Werte, fehlende Chat-Befehle und ein paar zu lockere Zugriffsprüfungen.

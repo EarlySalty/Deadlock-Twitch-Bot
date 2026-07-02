@@ -7,12 +7,15 @@ use std::sync::{Arc, Mutex};
 
 use chrono::{Duration, Utc};
 use sqlx::PgPool;
-use tb_monitoring::poller::{NoopAnnouncementSink, PollHooks, TickReport};
+use tb_monitoring::poller::{
+    AnnounceLiveRequest, AnnounceLiveResult, AnnouncementSink, EndAnnouncementOutcome,
+    EndAnnouncementRequest, NoopAnnouncementSink, PollHooks, TickReport,
+};
 use tb_monitoring::sessions::store::SessionStore;
 use tb_monitoring::{
     ExpSessionStore, ExpSessionTracker, GuardKind, GuardStore, LiveStateStore, NoFollowerSource,
     PollConfig, PollEngine, PollIntervalStore, SessionTracker, StatsStore, StreamSnapshot,
-    StreamSource, TrackedStore,
+    StreamSource, TelemetryStore, TrackedStore,
 };
 
 mod support;
@@ -120,7 +123,55 @@ impl PollHooks for RecordingHooks {
     }
 }
 
+#[derive(Default)]
+struct RecordingAnnouncementSink {
+    sends: Mutex<Vec<AnnounceLiveRequest>>,
+    ends: Mutex<Vec<EndAnnouncementRequest>>,
+    not_live: AtomicU64,
+}
+
+#[async_trait::async_trait]
+impl AnnouncementSink for RecordingAnnouncementSink {
+    fn ready(&self) -> bool {
+        true
+    }
+
+    async fn announce_live(&self, request: AnnounceLiveRequest) -> Option<AnnounceLiveResult> {
+        let mut sends = self.sends.lock().unwrap();
+        let idx = sends.len() + 1;
+        sends.push(request);
+        Some(AnnounceLiveResult {
+            message_id: format!("msg-{idx}"),
+            tracking_token: Some(format!("tok-{idx}")),
+            notification_text: format!("notify-{idx}"),
+        })
+    }
+
+    async fn end_announcement(&self, request: EndAnnouncementRequest) -> EndAnnouncementOutcome {
+        self.ends.lock().unwrap().push(request);
+        EndAnnouncementOutcome::Updated
+    }
+
+    async fn on_stream_not_live(&self, _login: &str) {
+        self.not_live.fetch_add(1, Ordering::SeqCst);
+    }
+}
+
 fn engine_with(pool: &PgPool, source: Arc<StubSource>, hooks: Arc<RecordingHooks>) -> PollEngine {
+    engine_with_sink(
+        pool,
+        source,
+        hooks,
+        Arc::new(NoopAnnouncementSink) as Arc<dyn AnnouncementSink>,
+    )
+}
+
+fn engine_with_sink(
+    pool: &PgPool,
+    source: Arc<StubSource>,
+    hooks: Arc<RecordingHooks>,
+    sink: Arc<dyn AnnouncementSink>,
+) -> PollEngine {
     let tracker = Arc::new(SessionTracker::new(
         SessionStore::new(pool.clone()),
         LiveStateStore::new(pool.clone()),
@@ -136,11 +187,64 @@ fn engine_with(pool: &PgPool, source: Arc<StubSource>, hooks: Arc<RecordingHooks
         tracker,
         StatsStore::new(pool.clone()),
         GuardStore::new(pool.clone()),
-        Arc::new(NoopAnnouncementSink),
+        sink,
         hooks,
         PollIntervalStore::new(pool.clone()),
         PollConfig::default(),
     )
+}
+
+async fn insert_active_partner(pool: &PgPool, login: &str, user_id: &str) {
+    sqlx::query(
+        "INSERT INTO twitch_streamers_partner_state
+            (twitch_login, twitch_user_id, is_partner_active, is_partner,
+             live_ping_role_id, live_ping_enabled)
+         VALUES ($1, $2, 1, 1, 999, 1)",
+    )
+    .bind(login)
+    .bind(user_id)
+    .execute(pool)
+    .await
+    .unwrap();
+}
+
+fn epoch_now_for_test() -> f64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs_f64())
+        .unwrap_or(0.0)
+}
+
+async fn set_reannounce_cooldown_remaining(pool: &PgPool, login: &str, remaining_seconds: f64) {
+    let key = format!("announcement_reannounce:{login}");
+    let now = epoch_now_for_test();
+    let result = sqlx::query(
+        "UPDATE eventsub_guard_state
+            SET expires_at = $1, updated_at = $2
+          WHERE kind = 'business_effect' AND guard_key = $3",
+    )
+    .bind(now + remaining_seconds)
+    .bind(now)
+    .bind(key)
+    .execute(pool)
+    .await
+    .unwrap();
+    assert_eq!(result.rows_affected(), 1, "Cooldown-Guard muss existieren");
+}
+
+async fn advance_reannounce_cooldown(pool: &PgPool, login: &str, seconds: f64) {
+    let key = format!("announcement_reannounce:{login}");
+    let result = sqlx::query(
+        "UPDATE eventsub_guard_state
+            SET expires_at = expires_at - $1, updated_at = updated_at - $1
+          WHERE kind = 'business_effect' AND guard_key = $2",
+    )
+    .bind(seconds)
+    .bind(key)
+    .execute(pool)
+    .await
+    .unwrap();
+    assert_eq!(result.rows_affected(), 1, "Cooldown-Guard muss existieren");
 }
 
 fn live_stream(login: &str, user_id: &str, stream_id: &str, viewers: i32) -> StreamSnapshot {
@@ -346,6 +450,228 @@ async fn poll_offline_raid_hook_respektiert_offline_throttle_guard() {
     assert_eq!(
         reports[1].score_refreshes[0].trigger, "poll_stream_offline",
         "Score-Refresh bleibt trotz Raid-Dedup erhalten"
+    );
+}
+
+#[tokio::test]
+async fn eventsub_offline_helix_lag_race_postet_nicht_doppelt() {
+    let pool = pool_or_skip!("t4c_announce_eventsub_offline_race");
+    insert_active_partner(&pool, "drag", "42").await;
+
+    let source = Arc::new(StubSource::new());
+    let hooks = Arc::new(RecordingHooks::new());
+    let sink = Arc::new(RecordingAnnouncementSink::default());
+    let engine = engine_with_sink(&pool, source.clone(), hooks, sink.clone());
+
+    source.set_streams(vec![live_stream("drag", "42", "s-1", 10)]);
+    engine.tick().await;
+    assert_eq!(sink.sends.lock().unwrap().len(), 1);
+
+    LiveStateStore::new(pool.clone())
+        .apply_stream_offline("42", &Utc::now().to_rfc3339())
+        .await
+        .unwrap();
+
+    source.set_streams(vec![live_stream("drag", "42", "s-1", 11)]);
+    engine.tick().await;
+    assert_eq!(
+        sink.sends.lock().unwrap().len(),
+        1,
+        "Helix-Lag fuer denselben stream_id darf keinen zweiten Live-Post erzeugen"
+    );
+    assert!(
+        sink.ends.lock().unwrap().is_empty(),
+        "Lag-Tick bleibt live und editiert noch nicht offline"
+    );
+
+    source.set_streams(vec![]);
+    engine.tick().await;
+    let ends = sink.ends.lock().unwrap();
+    assert_eq!(ends.len(), 1);
+    assert_eq!(ends[0].message_id, "msg-1");
+}
+
+#[tokio::test]
+async fn channel_update_race_postet_nicht_doppelt() {
+    let pool = pool_or_skip!("t4c_announce_channel_update_race");
+    insert_active_partner(&pool, "drag", "42").await;
+
+    let source = Arc::new(StubSource::new());
+    let hooks = Arc::new(RecordingHooks::new());
+    let sink = Arc::new(RecordingAnnouncementSink::default());
+    let engine = engine_with_sink(&pool, source.clone(), hooks, sink.clone());
+
+    source.set_streams(vec![live_stream("drag", "42", "s-1", 10)]);
+    engine.tick().await;
+    assert_eq!(sink.sends.lock().unwrap().len(), 1);
+
+    TelemetryStore::new(pool.clone())
+        .store_channel_update(
+            "42",
+            &serde_json::json!({
+                "title": "Ranked",
+                "category_name": "Just Chatting",
+                "language": "de",
+            }),
+            Utc::now(),
+        )
+        .await
+        .unwrap();
+
+    source.set_streams(vec![live_stream("drag", "42", "s-1", 12)]);
+    engine.tick().await;
+
+    assert_eq!(
+        sink.sends.lock().unwrap().len(),
+        1,
+        "channel.update-Race mit vorhandener Announcement-Message darf nicht neu posten"
+    );
+}
+
+#[tokio::test]
+async fn bestandszeile_ohne_stream_id_mit_message_id_postet_neuen_stream() {
+    let pool = pool_or_skip!("t4c_announce_legacy_message_without_stream_id");
+    insert_active_partner(&pool, "drag", "42").await;
+    sqlx::query(
+        "INSERT INTO twitch_live_state
+            (twitch_user_id, streamer_login, is_live, last_discord_message_id,
+             last_stream_id, last_seen_at)
+         VALUES ('42', 'drag', 0, 'legacy-msg', NULL, $1)",
+    )
+    .bind(Utc::now().to_rfc3339())
+    .execute(&pool)
+    .await
+    .unwrap();
+
+    let source = Arc::new(StubSource::new());
+    let hooks = Arc::new(RecordingHooks::new());
+    let sink = Arc::new(RecordingAnnouncementSink::default());
+    let engine = engine_with_sink(&pool, source.clone(), hooks, sink.clone());
+
+    source.set_streams(vec![live_stream("drag", "42", "s-new", 12)]);
+    engine.tick().await;
+
+    let sends = sink.sends.lock().unwrap();
+    assert_eq!(
+        sends.len(),
+        1,
+        "Legacy-Offline-Row mit Message-ID aber ohne last_stream_id muss neu posten"
+    );
+    assert_eq!(sends[0].previous_message_id.as_deref(), Some("legacy-msg"));
+    assert!(
+        !sends[0].suppress_role_pings,
+        "ohne aktiven Reannounce-Cooldown pingt der neue Stream normal"
+    );
+}
+
+#[tokio::test]
+async fn echter_flap_innerhalb_cooldown_postet_ohne_ping() {
+    let pool = pool_or_skip!("t4c_announce_flap_cooldown");
+    insert_active_partner(&pool, "drag", "42").await;
+
+    let source = Arc::new(StubSource::new());
+    let hooks = Arc::new(RecordingHooks::new());
+    let sink = Arc::new(RecordingAnnouncementSink::default());
+    let engine = engine_with_sink(&pool, source.clone(), hooks, sink.clone());
+
+    source.set_streams(vec![live_stream("drag", "42", "s-1", 10)]);
+    engine.tick().await;
+    source.set_streams(vec![]);
+    engine.tick().await;
+    assert_eq!(sink.ends.lock().unwrap().len(), 1);
+
+    source.set_streams(vec![live_stream("drag", "42", "s-2", 12)]);
+    engine.tick().await;
+
+    let sends = sink.sends.lock().unwrap();
+    assert_eq!(sends.len(), 2);
+    assert!(
+        !sends[0].suppress_role_pings,
+        "erstes Announcement pingt normal"
+    );
+    assert!(
+        sends[1].suppress_role_pings,
+        "echter stream_id-Wechsel im Cooldown postet ohne Rollen-Ping"
+    );
+}
+
+#[tokio::test]
+async fn echter_flap_nach_cooldown_postet_mit_ping() {
+    let pool = pool_or_skip!("t4c_announce_flap_after_cooldown");
+    insert_active_partner(&pool, "drag", "42").await;
+
+    let source = Arc::new(StubSource::new());
+    let hooks = Arc::new(RecordingHooks::new());
+    let sink = Arc::new(RecordingAnnouncementSink::default());
+    let engine = engine_with_sink(&pool, source.clone(), hooks, sink.clone());
+
+    source.set_streams(vec![live_stream("drag", "42", "s-1", 10)]);
+    engine.tick().await;
+    source.set_streams(vec![]);
+    engine.tick().await;
+
+    GuardStore::new(pool.clone())
+        .release(GuardKind::BusinessEffect, "announcement_reannounce:drag")
+        .await
+        .unwrap();
+
+    source.set_streams(vec![live_stream("drag", "42", "s-2", 12)]);
+    engine.tick().await;
+
+    let sends = sink.sends.lock().unwrap();
+    assert_eq!(sends.len(), 2);
+    assert!(
+        !sends[1].suppress_role_pings,
+        "nach abgelaufenem Cooldown pingt der Reannounce wieder normal"
+    );
+}
+
+#[tokio::test]
+async fn reannounce_cooldown_verlaengert_sich_bei_jedem_ended_posting() {
+    let pool = pool_or_skip!("t4c_announce_flap_cooldown_extends");
+    insert_active_partner(&pool, "drag", "42").await;
+
+    let source = Arc::new(StubSource::new());
+    let hooks = Arc::new(RecordingHooks::new());
+    let sink = Arc::new(RecordingAnnouncementSink::default());
+    let engine = engine_with_sink(&pool, source.clone(), hooks, sink.clone());
+
+    source.set_streams(vec![live_stream("drag", "42", "s-1", 10)]);
+    engine.tick().await;
+
+    source.set_streams(vec![]);
+    engine.tick().await;
+    assert_eq!(sink.ends.lock().unwrap().len(), 1);
+
+    source.set_streams(vec![live_stream("drag", "42", "s-2", 12)]);
+    engine.tick().await;
+    assert!(sink.sends.lock().unwrap()[1].suppress_role_pings);
+
+    set_reannounce_cooldown_remaining(&pool, "drag", 5.0 * 60.0).await;
+    source.set_streams(vec![]);
+    engine.tick().await;
+    assert_eq!(sink.ends.lock().unwrap().len(), 2);
+
+    advance_reannounce_cooldown(&pool, "drag", 6.0 * 60.0).await;
+    source.set_streams(vec![live_stream("drag", "42", "s-3", 14)]);
+    engine.tick().await;
+    {
+        let sends = sink.sends.lock().unwrap();
+        assert_eq!(sends.len(), 3);
+        assert!(
+            sends[2].suppress_role_pings,
+            "restart t16 darf nicht pingen, weil das Fenster ab offline t10 zaehlt"
+        );
+    }
+
+    advance_reannounce_cooldown(&pool, "drag", 10.0 * 60.0).await;
+    source.set_streams(vec![live_stream("drag", "42", "s-4", 16)]);
+    engine.tick().await;
+    let sends = sink.sends.lock().unwrap();
+    assert_eq!(sends.len(), 4);
+    assert!(
+        !sends[3].suppress_role_pings,
+        "restart t26 darf wieder pingen, weil der t10-Cooldown abgelaufen ist"
     );
 }
 

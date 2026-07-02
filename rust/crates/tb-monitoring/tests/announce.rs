@@ -143,6 +143,7 @@ fn live_request(login: &str) -> AnnounceLiveRequest {
         stream_id: Some("s-1".to_string()),
         started_at_iso: Some("2026-06-09T17:30:00+00:00".to_string()),
         active_session_id: Some(1),
+        suppress_role_pings: false,
     }
 }
 
@@ -214,6 +215,29 @@ async fn announce_live_ping_disabled_unterdrueckt_streamer_rolle() {
 }
 
 #[tokio::test]
+async fn announce_live_suppress_role_pings_unterdrueckt_alle_rollen_mentions() {
+    let transport = Arc::new(StubTransport::default());
+    let sink = sink_with(transport.clone());
+
+    let mut request = live_request("drag");
+    request.suppress_role_pings = true;
+
+    let result = sink.announce_live(request).await.expect("gesendet");
+
+    assert!(
+        !result.notification_text.contains("<@&"),
+        "Cooldown-Reannounce darf keine Rollen-Mention senden"
+    );
+    let sends = transport.sends.lock().unwrap();
+    let (_, content, _, roles, _) = &sends[0];
+    assert!(content.is_none());
+    assert!(
+        roles.is_empty(),
+        "Cooldown-Reannounce darf keine allowed role IDs setzen"
+    );
+}
+
+#[tokio::test]
 async fn announce_live_ignoriert_config_json_row_und_nutzt_standard_mit_retry_token() {
     let pool = pool_or_skip!("t4e_config_retry");
     sqlx::query(
@@ -246,7 +270,10 @@ async fn announce_live_ignoriert_config_json_row_und_nutzt_standard_mit_retry_to
         view["tracking_token"].as_str(),
         result.tracking_token.as_deref()
     );
-    assert!(result.tracking_token.is_some(), "Standard-Button liefert Token");
+    assert!(
+        result.tracking_token.is_some(),
+        "Standard-Button liefert Token"
+    );
 }
 
 #[tokio::test]

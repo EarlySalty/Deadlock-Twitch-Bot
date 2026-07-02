@@ -43,6 +43,8 @@ pub struct AnnounceLiveRequest {
     pub stream_id: Option<String>,
     pub started_at_iso: Option<String>,
     pub active_session_id: Option<i64>,
+    /// Re-Announce innerhalb des Flap-Cooldowns: Posting ja, Rollen-Pings nein.
+    pub suppress_role_pings: bool,
 }
 
 /// Ergebnis eines erfolgreichen Go-Live-Postings.
@@ -354,7 +356,7 @@ impl PollHooks for ReauthReminderPollHooks {
 
 #[cfg(test)]
 mod tests {
-    use super::{PollHooks, REAUTH_REMINDER_TEXT, ReauthReminderPollHooks};
+    use super::{PollHooks, ReauthReminderPollHooks, REAUTH_REMINDER_TEXT};
 
     use std::str::FromStr;
     use std::sync::{Arc, Mutex};

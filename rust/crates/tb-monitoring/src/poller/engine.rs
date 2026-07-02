@@ -39,6 +39,9 @@ const AUTO_ARCHIVE_THROTTLE: Duration = Duration::from_secs(900);
 const AUTO_ARCHIVE_DAYS: i64 = 10;
 /// Gemeinsame Offline-Drossel mit EventSub gegen doppelte Auto-Raid-Trigger.
 const POLL_OFFLINE_RAID_THROTTLE_SECONDS: f64 = 120.0;
+/// Nach einem beendeten Announcement darf ein schneller echter Neustart posten,
+/// aber ohne Rollen-Ping.
+const ANNOUNCE_REANNOUNCE_COOLDOWN_SECONDS: f64 = 15.0 * 60.0;
 
 /// Statische Poll-Konfiguration (Env-getrieben, wie die Python-Konstanten).
 #[derive(Debug, Clone)]
@@ -187,6 +190,47 @@ impl PollEngine {
             }
             Err(error) => {
                 tracing::warn!(%error, twitch_user_id = %user_id, "Poller OfflineThrottle-Claim fehlgeschlagen");
+            }
+        }
+    }
+
+    async fn announcement_reannounce_cooldown_active(&self, login: &str) -> bool {
+        let Some(key) = announcement_reannounce_cooldown_key(login) else {
+            return false;
+        };
+        match self
+            .guard
+            .is_active(GuardKind::BusinessEffect, &key, epoch_now())
+            .await
+        {
+            Ok(active) => active,
+            Err(error) => {
+                tracing::debug!(%error, login = %login, "Announcement-Reannounce-Cooldown konnte nicht gelesen werden");
+                false
+            }
+        }
+    }
+
+    async fn claim_announcement_reannounce_cooldown(&self, login: &str) {
+        let Some(key) = announcement_reannounce_cooldown_key(login) else {
+            return;
+        };
+        match self
+            .guard
+            .claim_or_extend(
+                GuardKind::BusinessEffect,
+                &key,
+                ANNOUNCE_REANNOUNCE_COOLDOWN_SECONDS,
+                epoch_now(),
+            )
+            .await
+        {
+            Ok(true) => {}
+            Ok(false) => {
+                tracing::debug!(login = %login, "Announcement-Reannounce-Cooldown bereits aktiv");
+            }
+            Err(error) => {
+                tracing::debug!(%error, login = %login, "Announcement-Reannounce-Cooldown konnte nicht gesetzt werden");
             }
         }
     }
@@ -399,7 +443,6 @@ impl PollEngine {
                 .trim()
                 .to_string();
             let previous_game_lower = previous_game.to_lowercase();
-            let was_deadlock = previous_game_lower == self.target_game_lower;
             let prev_started_at = prev_state.and_then(|s| s.last_started_at.as_deref());
             let started_at_iso = extract_stream_start(
                 stream.and_then(|s| s.started_at.as_deref()),
@@ -448,6 +491,9 @@ impl PollEngine {
             let previous_last_deadlock_seen = prev_state
                 .and_then(|s| s.last_deadlock_seen_at.clone())
                 .filter(|v| !v.trim().is_empty());
+            let message_id_previous = prev_state
+                .and_then(|s| s.last_discord_message_id.clone())
+                .filter(|m| !m.trim().is_empty());
 
             // Session-Lebenszyklus.
             let mut active_session_id: Option<i64> = None;
@@ -467,9 +513,9 @@ impl PollEngine {
             }
 
             let stream_restarted = is_live
-                && !previous_stream_id.is_empty()
                 && !current_stream_id.is_empty()
-                && previous_stream_id != current_stream_id;
+                && ((!previous_stream_id.is_empty() && previous_stream_id != current_stream_id)
+                    || (previous_stream_id.is_empty() && message_id_previous.is_some()));
             if !was_live {
                 had_deadlock_prev = false;
             } else if stream_restarted {
@@ -488,9 +534,6 @@ impl PollEngine {
                 self.sink.on_stream_not_live(&login_lower).await;
             }
 
-            let message_id_previous = prev_state
-                .and_then(|s| s.last_discord_message_id.clone())
-                .filter(|m| !m.trim().is_empty());
             let mut message_id_to_store = message_id_previous.clone();
             let tracking_token_previous = prev_state
                 .and_then(|s| s.last_tracking_token.clone())
@@ -557,10 +600,14 @@ impl PollEngine {
             // Go-Live-Posting (Python `should_post`).
             let should_post = self.sink.ready()
                 && is_deadlock
-                && (!was_live || !was_deadlock || message_id_previous.is_none())
+                && (message_id_previous.is_none() || stream_restarted)
                 && entry.is_partner_active;
             if should_post {
                 if let Some(stream) = stream {
+                    let suppress_role_pings = stream_restarted
+                        && self
+                            .announcement_reannounce_cooldown_active(&login_lower)
+                            .await;
                     let result = self
                         .sink
                         .announce_live(AnnounceLiveRequest {
@@ -572,6 +619,7 @@ impl PollEngine {
                             stream_id: stream_id_value.clone(),
                             started_at_iso: started_at_iso.clone(),
                             active_session_id,
+                            suppress_role_pings,
                         })
                         .await;
                     if let Some(result) = result {
@@ -616,6 +664,8 @@ impl PollEngine {
                             .map(str::to_string)
                             .or_else(|| prev_state.map(|s| s.twitch_user_id.clone())),
                     })
+                    .await;
+                self.claim_announcement_reannounce_cooldown(&login_lower)
                     .await;
                 match outcome {
                     EndAnnouncementOutcome::Updated | EndAnnouncementOutcome::Gone => {
@@ -825,6 +875,11 @@ fn epoch_now() -> f64 {
         .duration_since(std::time::UNIX_EPOCH)
         .map(|d| d.as_secs_f64())
         .unwrap_or(0.0)
+}
+
+fn announcement_reannounce_cooldown_key(login: &str) -> Option<String> {
+    let login = login.trim().to_lowercase();
+    (!login.is_empty()).then(|| format!("announcement_reannounce:{login}"))
 }
 
 #[cfg(test)]
