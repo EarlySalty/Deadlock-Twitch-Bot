@@ -22,6 +22,10 @@ pub use auth::session::{
     SessionCreation, ADMIN_COOKIE_NAME, OAUTH_STATE_SESSION_TYPE, OAUTH_STATE_TTL_SECS,
     PARTNER_COOKIE_NAME, SESSION_CREATE_TTL_SECS,
 };
+pub use handlers::affiliate::{
+    affiliate_oauth_config_from_env, affiliate_stripe_config_from_env, AffiliateOAuthConfig,
+    AffiliateStripeConfig,
+};
 pub use handlers::auth_login::{oauth_login_config_from_env, OAuthLoginConfig};
 pub use handlers::billing_page::{billing_page_config_from_env, BillingPageConfig};
 pub use handlers::billing_webhook::{stripe_webhook_config_from_env, StripeWebhookConfig};
@@ -31,7 +35,7 @@ pub use handlers::health_probe::{
 
 use axum::{
     http::{header::HeaderName, HeaderValue},
-    routing::{get, post},
+    routing::{get, post, put},
     Extension, Router,
 };
 use sqlx::PgPool;
@@ -893,6 +897,52 @@ pub fn build_auth_router(rate_limiter: RateLimiter) -> Router {
         )
 }
 
+/// Baut den Router für Affiliate-Onboarding (separate Affiliate-Session,
+/// `session_type='affiliate'`, kein Partner-Gate).
+pub fn build_affiliate_router(pool: PgPool, rate_limiter: RateLimiter) -> Router {
+    use handlers::affiliate;
+
+    let login_rl = RateLimitLayerConfig::new(rate_limiter.clone(), "affiliate_auth_login", 30, 60);
+    let callback_rl =
+        RateLimitLayerConfig::new(rate_limiter.clone(), "affiliate_auth_callback", 30, 60);
+    let stripe_rl = RateLimitLayerConfig::new(rate_limiter, "affiliate_stripe_connect", 30, 60);
+
+    Router::new()
+        .route(
+            "/twitch/auth/affiliate/login",
+            get(affiliate::auth_login_handler).layer(axum::middleware::from_fn_with_state(
+                login_rl,
+                rate_limit_middleware,
+            )),
+        )
+        .route(
+            "/twitch/auth/affiliate/callback",
+            get(affiliate::auth_callback_handler).layer(axum::middleware::from_fn_with_state(
+                callback_rl,
+                rate_limit_middleware,
+            )),
+        )
+        .route(
+            "/twitch/affiliate/connect/stripe",
+            get(affiliate::connect_stripe_handler).layer(axum::middleware::from_fn_with_state(
+                stripe_rl.clone(),
+                rate_limit_middleware,
+            )),
+        )
+        .route(
+            "/twitch/affiliate/connect/stripe/callback",
+            get(affiliate::connect_stripe_callback_handler).layer(
+                axum::middleware::from_fn_with_state(stripe_rl, rate_limit_middleware),
+            ),
+        )
+        .route("/twitch/api/affiliate/me", get(affiliate::api_me_handler))
+        .route(
+            "/twitch/api/affiliate/profile",
+            put(affiliate::api_profile_update_handler),
+        )
+        .with_state(pool)
+}
+
 /// Baut den Router für den Partner-Einmal-Login via HMAC One-Time-Token (B3-8).
 ///
 /// - `POST /twitch/auth/partner/link` — Admin/Localhost stellt einen Einmal-Link
@@ -1350,6 +1400,7 @@ pub fn build_router(pool: PgPool, token: String) -> Router {
             pool.clone(),
             rate_limiter.clone(),
         ))
+        .merge(build_affiliate_router(pool.clone(), rate_limiter.clone()))
         .merge(build_roadmap_router(pool.clone(), token.clone()))
         .merge(build_market_router(pool.clone(), token.clone()))
         .merge(build_raid_pages_router(pool.clone()))

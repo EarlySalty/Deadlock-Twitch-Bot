@@ -1,0 +1,1435 @@
+//! Affiliate-Onboarding: Twitch-OAuth, Affiliate-Session, Stripe-Connect und
+//! Profil-PII. Port von `bot/dashboard/affiliate/affiliate_mixin.py` Welle A.
+
+use std::sync::Arc;
+
+use axum::{
+    body::Bytes,
+    extract::{Extension, Query, State},
+    http::{header::SET_COOKIE, HeaderMap, HeaderValue, StatusCode},
+    response::{IntoResponse, Redirect, Response},
+    Json,
+};
+use serde::Deserialize;
+use serde_json::{json, Value};
+use sqlx::{PgPool, Row};
+use tb_analytics::{
+    affiliate_pii::{
+        build_readiness, is_valid_ust_status, load_affiliate_pii, save_affiliate_pii, PiiInput,
+        PiiPayload,
+    },
+    stripe::StripeClient,
+};
+use tb_crypto::FieldCipher;
+
+use crate::auth::{
+    oauth_login::{TwitchIdentity, TwitchOAuthClient, TWITCH_AUTHORIZE_URL},
+    session::{
+        build_session_cookie, AffiliateConnectState, AffiliateOAuthState, AffiliateSession,
+        DashboardAuthState, SameSite, AFFILIATE_COOKIE_NAME, AFFILIATE_SESSION_TTL_SECS,
+    },
+};
+
+const DEFAULT_PUBLIC_ORIGIN: &str = "https://deutsche-deadlock-community.de";
+const AFFILIATE_AUTH_CALLBACK_PATH: &str = "/twitch/auth/affiliate/callback";
+const AFFILIATE_STRIPE_CALLBACK_PATH: &str = "/twitch/affiliate/connect/stripe/callback";
+const STRIPE_CONNECT_AUTHORIZE_URL: &str = "https://connect.stripe.com/oauth/authorize";
+
+/// Laufzeit-Konfiguration des Affiliate-Twitch-OAuth-Flows.
+#[derive(Clone)]
+pub struct AffiliateOAuthConfig {
+    pub client_id: String,
+    pub cookie_secure: bool,
+    pub client: Arc<dyn TwitchOAuthClient>,
+}
+
+/// Laufzeit-Konfiguration für Stripe-Connect. `client` ist nur für den Callback
+/// nötig; der Start-Redirect braucht lediglich die öffentliche Connect-Client-ID.
+#[derive(Clone, Default)]
+pub struct AffiliateStripeConfig {
+    pub connect_client_id: Option<String>,
+    pub client: Option<StripeClient>,
+}
+
+#[derive(Debug, Default, Deserialize)]
+pub struct CallbackQuery {
+    pub code: Option<String>,
+    pub state: Option<String>,
+    pub error: Option<String>,
+}
+
+#[derive(Debug, Clone)]
+struct AffiliateAccount {
+    twitch_login: String,
+    display_name: String,
+    stripe_account_id: String,
+    stripe_connect_status: String,
+    is_active: i32,
+    created_at: String,
+    updated_at: String,
+}
+
+pub fn affiliate_oauth_config_from_env() -> Option<AffiliateOAuthConfig> {
+    let client_id = non_empty_env(&["TWITCH_CLIENT_ID"])?;
+    let client_secret = non_empty_env(&["TWITCH_CLIENT_SECRET"])?;
+    let cookie_secure = std::env::var("TB_DASHBOARD_COOKIE_INSECURE").as_deref() != Ok("1");
+    let client =
+        crate::auth::oauth_login::HelixOAuthClient::new(&client_id, &client_secret).ok()?;
+    Some(AffiliateOAuthConfig {
+        client_id,
+        cookie_secure,
+        client: Arc::new(client),
+    })
+}
+
+pub fn affiliate_stripe_config_from_env() -> Option<AffiliateStripeConfig> {
+    let connect_client_id = non_empty_env(&["STRIPE_CONNECT_CLIENT_ID"]);
+    let client = non_empty_env(&["STRIPE_SECRET_KEY", "TWITCH_BILLING_STRIPE_SECRET_KEY"])
+        .and_then(|secret| StripeClient::new(secret).ok());
+    if connect_client_id.is_none() && client.is_none() {
+        return None;
+    }
+    Some(AffiliateStripeConfig {
+        connect_client_id,
+        client,
+    })
+}
+
+/// Gemeinsamer Affiliate-Session-Lookup für Affiliate-Handler und Portal-API.
+pub async fn affiliate_session_from_headers(
+    state: Option<&DashboardAuthState>,
+    headers: &HeaderMap,
+) -> Option<AffiliateSession> {
+    let state = state?;
+    let session_id = cookie_from_headers(headers, AFFILIATE_COOKIE_NAME)?;
+    if session_id.trim().is_empty() {
+        return None;
+    }
+    state
+        .load_affiliate_session(&session_id)
+        .await
+        .ok()
+        .flatten()
+}
+
+/// `GET /twitch/auth/affiliate/login`.
+pub async fn auth_login_handler(
+    state: Option<Extension<DashboardAuthState>>,
+    config: Option<Extension<AffiliateOAuthConfig>>,
+    headers: HeaderMap,
+) -> Response {
+    let Some(Extension(state)) = state else {
+        return text(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "OAuth ist nicht konfiguriert.",
+        );
+    };
+    let Some(config) = affiliate_oauth_config(config) else {
+        return text(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "OAuth ist nicht konfiguriert.",
+        );
+    };
+    if affiliate_session_from_headers(Some(&state), &headers)
+        .await
+        .is_some()
+    {
+        return Redirect::to("/twitch/affiliate/portal").into_response();
+    }
+
+    let redirect_uri = affiliate_auth_redirect_uri(&headers);
+    let state_token = tb_crypto::random_urlsafe_token(24);
+    let oauth_state = AffiliateOAuthState {
+        redirect_uri: redirect_uri.clone(),
+    };
+    if let Err(error) = state
+        .save_affiliate_oauth_state(&state_token, &oauth_state)
+        .await
+    {
+        tracing::warn!(%error, "Affiliate-OAuth-State konnte nicht persistiert werden");
+        return text(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "OAuth-Status konnte nicht sicher gespeichert werden. Bitte erneut versuchen.",
+        );
+    }
+
+    let url = build_affiliate_authorize_url(&config.client_id, &redirect_uri, &state_token);
+    Redirect::to(&url).into_response()
+}
+
+/// `GET /twitch/auth/affiliate/callback`.
+pub async fn auth_callback_handler(
+    state: Option<Extension<DashboardAuthState>>,
+    config: Option<Extension<AffiliateOAuthConfig>>,
+    headers: HeaderMap,
+    Query(query): Query<CallbackQuery>,
+) -> Response {
+    let Some(Extension(state)) = state else {
+        return text(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "OAuth ist nicht konfiguriert.",
+        );
+    };
+    let Some(config) = affiliate_oauth_config(config) else {
+        return text(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "OAuth ist nicht konfiguriert.",
+        );
+    };
+
+    let error = query.error.as_deref().map(str::trim).unwrap_or("");
+    if !error.is_empty() {
+        return text(StatusCode::UNAUTHORIZED, &format!("OAuth-Fehler: {error}"));
+    }
+
+    let state_token = query.state.as_deref().map(str::trim).unwrap_or("");
+    let code = query.code.as_deref().map(str::trim).unwrap_or("");
+    if state_token.is_empty() || code.is_empty() {
+        return text(StatusCode::BAD_REQUEST, "Fehlender OAuth state/code.");
+    }
+
+    let oauth_state = match state.consume_affiliate_oauth_state(state_token).await {
+        Ok(Some(state)) => state,
+        Ok(None) => {
+            return text(
+                StatusCode::BAD_REQUEST,
+                "OAuth state ungueltig oder abgelaufen.",
+            )
+        }
+        Err(error) => {
+            tracing::warn!(%error, "Affiliate-OAuth-State-Lookup fehlgeschlagen");
+            return text(
+                StatusCode::BAD_REQUEST,
+                "OAuth state ungueltig oder abgelaufen.",
+            );
+        }
+    };
+
+    let identity = match config
+        .client
+        .exchange_code_for_identity(code, &oauth_state.redirect_uri)
+        .await
+    {
+        Ok(identity) => identity,
+        Err(error) => {
+            tracing::warn!(?error, "Affiliate-OAuth-Austausch fehlgeschlagen");
+            return text(StatusCode::UNAUTHORIZED, "OAuth-Austausch fehlgeschlagen.");
+        }
+    };
+
+    let session = match state
+        .create_affiliate_session(
+            &identity.twitch_login,
+            &identity.twitch_user_id,
+            &identity.display_name,
+            &identity.email,
+        )
+        .await
+    {
+        Ok(session) => session,
+        Err(error) => {
+            tracing::warn!(%error, "Affiliate-Session-Erstellung fehlgeschlagen");
+            return text(
+                StatusCode::SERVICE_UNAVAILABLE,
+                "OAuth-Status konnte nicht sicher gespeichert werden. Bitte erneut versuchen.",
+            );
+        }
+    };
+
+    if let Err(error) = upsert_account_and_pii(&state, &identity).await {
+        tracing::warn!(?error, "Affiliate-Konto/PII-Upsert fehlgeschlagen");
+        return text(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "OAuth-Status konnte nicht sicher gespeichert werden. Bitte erneut versuchen.",
+        );
+    }
+
+    let cookie = build_session_cookie(
+        AFFILIATE_COOKIE_NAME,
+        &session.session_id,
+        cookie_secure(&headers, Some(&config)),
+        SameSite::Lax,
+        AFFILIATE_SESSION_TTL_SECS,
+    );
+    redirect_with_cookie("/twitch/affiliate/portal", &cookie)
+}
+
+/// `GET /twitch/affiliate/connect/stripe`.
+pub async fn connect_stripe_handler(
+    state: Option<Extension<DashboardAuthState>>,
+    config: Option<Extension<AffiliateStripeConfig>>,
+    headers: HeaderMap,
+) -> Response {
+    let Some(Extension(state)) = state else {
+        return Redirect::to("/twitch/auth/affiliate/login").into_response();
+    };
+    let Some(session) = affiliate_session_from_headers(Some(&state), &headers).await else {
+        return Redirect::to("/twitch/auth/affiliate/login").into_response();
+    };
+    let Some(stripe_config) = affiliate_stripe_config(config) else {
+        return text(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "Stripe Connect ist nicht konfiguriert.",
+        );
+    };
+    let Some(client_id) = stripe_config
+        .connect_client_id
+        .as_deref()
+        .map(str::trim)
+        .filter(|v| !v.is_empty())
+    else {
+        return text(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "Stripe Connect ist nicht konfiguriert.",
+        );
+    };
+
+    let state_token = tb_crypto::random_urlsafe_token(24);
+    let redirect_uri = affiliate_stripe_redirect_uri(&headers);
+    let connect_state = AffiliateConnectState {
+        redirect_uri: redirect_uri.clone(),
+        twitch_login: session.twitch_login.clone(),
+    };
+    if let Err(error) = state
+        .save_affiliate_connect_state(&state_token, &connect_state)
+        .await
+    {
+        tracing::warn!(%error, "Affiliate-Connect-State konnte nicht persistiert werden");
+        return text(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "State konnte nicht sicher gespeichert werden. Bitte erneut versuchen.",
+        );
+    }
+
+    let url = build_stripe_connect_authorize_url(client_id, &redirect_uri, &state_token);
+    Redirect::to(&url).into_response()
+}
+
+/// `GET /twitch/affiliate/connect/stripe/callback`.
+pub async fn connect_stripe_callback_handler(
+    state: Option<Extension<DashboardAuthState>>,
+    config: Option<Extension<AffiliateStripeConfig>>,
+    headers: HeaderMap,
+    Query(query): Query<CallbackQuery>,
+) -> Response {
+    let Some(Extension(state)) = state else {
+        return Redirect::to("/twitch/auth/affiliate/login").into_response();
+    };
+    let Some(session) = affiliate_session_from_headers(Some(&state), &headers).await else {
+        return Redirect::to("/twitch/auth/affiliate/login").into_response();
+    };
+    let state_token = query.state.as_deref().map(str::trim).unwrap_or("");
+    let code = query.code.as_deref().map(str::trim).unwrap_or("");
+    if state_token.is_empty() || code.is_empty() {
+        return text(StatusCode::BAD_REQUEST, "Fehlender state/code.");
+    }
+
+    let connect_state = match state.consume_affiliate_connect_state(state_token).await {
+        Ok(Some(state)) => state,
+        Ok(None) => return text(StatusCode::BAD_REQUEST, "State ungueltig oder abgelaufen."),
+        Err(error) => {
+            tracing::warn!(%error, "Affiliate-Connect-State-Lookup fehlgeschlagen");
+            return text(StatusCode::BAD_REQUEST, "State ungueltig oder abgelaufen.");
+        }
+    };
+    let session_login = session.twitch_login.trim().to_lowercase();
+    if connect_state.twitch_login.trim().to_lowercase() != session_login {
+        return text(
+            StatusCode::FORBIDDEN,
+            "Affiliate-Session passt nicht zum Stripe Connect state.",
+        );
+    }
+
+    let Some(stripe_config) = affiliate_stripe_config(config) else {
+        return text(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "Stripe ist nicht konfiguriert.",
+        );
+    };
+    let Some(client) = stripe_config.client.as_ref() else {
+        return text(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "Stripe ist nicht konfiguriert.",
+        );
+    };
+
+    let value = match client
+        .exchange_connect_oauth_code(code, &connect_state.redirect_uri)
+        .await
+    {
+        Ok(value) => value,
+        Err(error) => {
+            tracing::warn!(?error, "Stripe Connect token exchange failed");
+            return text(StatusCode::BAD_GATEWAY, "Stripe Connect fehlgeschlagen.");
+        }
+    };
+    let stripe_user_id = value
+        .get("stripe_user_id")
+        .and_then(Value::as_str)
+        .unwrap_or("")
+        .trim();
+    if stripe_user_id.is_empty() {
+        return text(StatusCode::BAD_GATEWAY, "Keine Stripe Account ID erhalten.");
+    }
+
+    if let Err(error) = connect_stripe_account(state.pool(), &session_login, stripe_user_id).await {
+        tracing::error!(%error, "Affiliate Stripe Connect DB-Update fehlgeschlagen");
+        return text(StatusCode::BAD_GATEWAY, "Stripe Connect fehlgeschlagen.");
+    }
+    Redirect::to("/twitch/affiliate/portal").into_response()
+}
+
+/// `GET /twitch/api/affiliate/me`.
+pub async fn api_me_handler(
+    state: Option<Extension<DashboardAuthState>>,
+    cipher: Option<Extension<Arc<FieldCipher>>>,
+    headers: HeaderMap,
+    State(pool): State<PgPool>,
+) -> Response {
+    let Some(session) =
+        affiliate_session_from_headers(state.as_ref().map(|s| &s.0), &headers).await
+    else {
+        return json_error(StatusCode::UNAUTHORIZED, "unauthorized");
+    };
+    let cipher = match resolve_cipher(cipher) {
+        Ok(cipher) => cipher,
+        Err(error) => {
+            tracing::error!(?error, "Affiliate-PII-Chiffre nicht verfügbar");
+            return json_error(StatusCode::INTERNAL_SERVER_ERROR, "db");
+        }
+    };
+    match load_profile(&pool, &cipher, &session.twitch_login).await {
+        Ok(Some((account, pii))) => {
+            let readiness = build_readiness(&pii);
+            Json(profile_payload(&account, &pii, readiness)).into_response()
+        }
+        Ok(None) => json_error(StatusCode::NOT_FOUND, "not_found"),
+        Err(error) => {
+            tracing::error!(?error, "Affiliate-Profil-Lookup fehlgeschlagen");
+            json_error(StatusCode::INTERNAL_SERVER_ERROR, "db")
+        }
+    }
+}
+
+/// `PUT /twitch/api/affiliate/profile`.
+pub async fn api_profile_update_handler(
+    state: Option<Extension<DashboardAuthState>>,
+    cipher: Option<Extension<Arc<FieldCipher>>>,
+    headers: HeaderMap,
+    State(pool): State<PgPool>,
+    body: Bytes,
+) -> Response {
+    let Some(session) =
+        affiliate_session_from_headers(state.as_ref().map(|s| &s.0), &headers).await
+    else {
+        return json_error(StatusCode::UNAUTHORIZED, "unauthorized");
+    };
+    let body: Value = match serde_json::from_slice(&body) {
+        Ok(body) => body,
+        Err(_) => return json_error(StatusCode::BAD_REQUEST, "invalid_json"),
+    };
+    let Some(obj) = body.as_object() else {
+        return json_error(StatusCode::BAD_REQUEST, "invalid_payload");
+    };
+    let ust_status = obj
+        .get("ust_status")
+        .map(value_to_string)
+        .unwrap_or_default()
+        .trim()
+        .to_lowercase();
+    if !ust_status.is_empty() && !is_valid_ust_status(&ust_status) {
+        return json_error(StatusCode::BAD_REQUEST, "invalid_ust_status");
+    }
+    let cipher = match resolve_cipher(cipher) {
+        Ok(cipher) => cipher,
+        Err(error) => {
+            tracing::error!(?error, "Affiliate-PII-Chiffre nicht verfügbar");
+            return json_error(StatusCode::INTERNAL_SERVER_ERROR, "db");
+        }
+    };
+
+    let login = session.twitch_login.trim().to_lowercase();
+    let account_exists = match load_account(&pool, &login).await {
+        Ok(Some(_)) => true,
+        Ok(None) => false,
+        Err(error) => {
+            tracing::error!(%error, "Affiliate-Konto-Lookup fehlgeschlagen");
+            return json_error(StatusCode::INTERNAL_SERVER_ERROR, "db");
+        }
+    };
+    if !account_exists {
+        return json_error(StatusCode::NOT_FOUND, "not_found");
+    }
+
+    let input = PiiInput {
+        full_name: Some(
+            obj.get("full_name")
+                .map(value_to_string)
+                .unwrap_or_default(),
+        ),
+        email: Some(obj.get("email").map(value_to_string).unwrap_or_default()),
+        address_line1: Some(
+            obj.get("address_line1")
+                .map(value_to_string)
+                .unwrap_or_default(),
+        ),
+        address_city: Some(
+            obj.get("address_city")
+                .map(value_to_string)
+                .unwrap_or_default(),
+        ),
+        address_zip: Some(
+            obj.get("address_zip")
+                .map(value_to_string)
+                .unwrap_or_default(),
+        ),
+        address_country: Some(
+            obj.get("address_country")
+                .map(value_to_string)
+                .unwrap_or_default(),
+        ),
+        tax_id: Some(obj.get("tax_id").map(value_to_string).unwrap_or_default()),
+        vat_id: Some(obj.get("vat_id").map(value_to_string).unwrap_or_default()),
+        ust_status: Some(if ust_status.is_empty() {
+            "unknown".to_string()
+        } else {
+            ust_status
+        }),
+    };
+
+    if let Err(error) = save_affiliate_pii(&pool, &cipher, &login, &input).await {
+        tracing::error!(?error, "Affiliate-PII-Speichern fehlgeschlagen");
+        return json_error(StatusCode::INTERNAL_SERVER_ERROR, "db");
+    }
+    let now = chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Micros, false);
+    if let Err(error) =
+        sqlx::query("UPDATE affiliate_accounts SET updated_at = $1 WHERE twitch_login = $2")
+            .bind(&now)
+            .bind(&login)
+            .execute(&pool)
+            .await
+    {
+        tracing::error!(%error, "Affiliate-Konto-updated_at fehlgeschlagen");
+        return json_error(StatusCode::INTERNAL_SERVER_ERROR, "db");
+    }
+
+    match load_profile(&pool, &cipher, &login).await {
+        Ok(Some((account, pii))) => {
+            let readiness = build_readiness(&pii);
+            Json(json!({
+                "ok": true,
+                "profile": profile_payload(&account, &pii, readiness),
+            }))
+            .into_response()
+        }
+        Ok(None) => json_error(StatusCode::NOT_FOUND, "not_found"),
+        Err(error) => {
+            tracing::error!(?error, "Affiliate-Profil-Reload fehlgeschlagen");
+            json_error(StatusCode::INTERNAL_SERVER_ERROR, "db")
+        }
+    }
+}
+
+async fn upsert_account_and_pii(
+    state: &DashboardAuthState,
+    identity: &TwitchIdentity,
+) -> Result<(), AffiliatePersistError> {
+    let pool = state.pool();
+    let login = identity.twitch_login.trim().to_lowercase();
+    if login.is_empty() {
+        return Ok(());
+    }
+    let exists = load_account(pool, &login).await?.is_some();
+    let now = chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Micros, false);
+    if !exists {
+        sqlx::query(
+            r#"
+            INSERT INTO affiliate_accounts
+                (twitch_login, twitch_user_id, display_name, email, full_name,
+                 address_line1, address_city, address_zip, address_country,
+                 created_at, updated_at)
+            VALUES ($1, $2, $3, '', '', '', '', '', 'DE', $4, $5)
+            ON CONFLICT (twitch_login) DO NOTHING
+            "#,
+        )
+        .bind(&login)
+        .bind(identity.twitch_user_id.trim())
+        .bind(display_or_login(identity))
+        .bind(&now)
+        .bind(&now)
+        .execute(pool)
+        .await?;
+    }
+    if !identity.email.trim().is_empty() {
+        let cipher = FieldCipher::from_env().map_err(AffiliatePersistError::Crypto)?;
+        let input = PiiInput {
+            email: Some(identity.email.trim().to_string()),
+            ..PiiInput::default()
+        };
+        save_affiliate_pii(pool, &cipher, &login, &input).await?;
+    }
+    Ok(())
+}
+
+async fn connect_stripe_account(
+    pool: &PgPool,
+    twitch_login: &str,
+    stripe_user_id: &str,
+) -> Result<(), sqlx::Error> {
+    let now = chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Micros, false);
+    sqlx::query(
+        r#"
+        UPDATE affiliate_accounts
+        SET stripe_account_id = $1,
+            stripe_connected_at = $2,
+            stripe_connect_status = 'connected',
+            updated_at = $3
+        WHERE twitch_login = $4
+        "#,
+    )
+    .bind(stripe_user_id)
+    .bind(&now)
+    .bind(&now)
+    .bind(twitch_login)
+    .execute(pool)
+    .await?;
+    Ok(())
+}
+
+async fn load_profile(
+    pool: &PgPool,
+    cipher: &FieldCipher,
+    login: &str,
+) -> Result<Option<(AffiliateAccount, PiiPayload)>, AffiliatePersistError> {
+    let Some(account) = load_account(pool, login).await? else {
+        return Ok(None);
+    };
+    let pii = load_affiliate_pii(pool, cipher, login).await?;
+    Ok(Some((account, pii)))
+}
+
+async fn load_account(pool: &PgPool, login: &str) -> Result<Option<AffiliateAccount>, sqlx::Error> {
+    let row = sqlx::query(
+        r#"
+        SELECT twitch_login, display_name, stripe_account_id, stripe_connect_status,
+               is_active, created_at, updated_at
+        FROM affiliate_accounts
+        WHERE twitch_login = $1
+        "#,
+    )
+    .bind(login)
+    .fetch_optional(pool)
+    .await?;
+    let Some(row) = row else {
+        return Ok(None);
+    };
+    Ok(Some(AffiliateAccount {
+        twitch_login: row.try_get::<String, _>("twitch_login")?,
+        display_name: row
+            .try_get::<Option<String>, _>("display_name")?
+            .unwrap_or_default(),
+        stripe_account_id: row
+            .try_get::<Option<String>, _>("stripe_account_id")?
+            .unwrap_or_default(),
+        stripe_connect_status: row
+            .try_get::<Option<String>, _>("stripe_connect_status")?
+            .unwrap_or_default(),
+        is_active: row.try_get::<i32, _>("is_active")?,
+        created_at: row.try_get::<String, _>("created_at")?,
+        updated_at: row.try_get::<String, _>("updated_at")?,
+    }))
+}
+
+fn profile_payload(account: &AffiliateAccount, pii: &PiiPayload, readiness: Value) -> Value {
+    let stripe_id = account.stripe_account_id.trim();
+    let masked = if stripe_id.len() > 12 {
+        format!(
+            "{}...{}",
+            &stripe_id[..8],
+            &stripe_id[stripe_id.len() - 4..]
+        )
+    } else {
+        stripe_id.to_string()
+    };
+    json!({
+        "twitch_login": account.twitch_login.as_str(),
+        "display_name": account.display_name.as_str(),
+        "email": pii.email.as_str(),
+        "full_name": pii.full_name.as_str(),
+        "address_line1": pii.address_line1.as_str(),
+        "address_city": pii.address_city.as_str(),
+        "address_zip": pii.address_zip.as_str(),
+        "address_country": pii.address_country.as_str(),
+        "tax_id": pii.tax_id.as_str(),
+        "vat_id": pii.vat_id.as_str(),
+        "ust_status": if pii.ust_status.trim().is_empty() { "unknown" } else { pii.ust_status.as_str() },
+        "stripe_connect_status": account.stripe_connect_status.as_str(),
+        "stripe_account_id": masked,
+        "is_active": account.is_active != 0,
+        "created_at": account.created_at.as_str(),
+        "updated_at": account.updated_at.as_str(),
+        "profile_updated_at": pii.updated_at.as_deref(),
+        "gutschrift_readiness": readiness,
+    })
+}
+
+fn affiliate_oauth_config(
+    config: Option<Extension<AffiliateOAuthConfig>>,
+) -> Option<AffiliateOAuthConfig> {
+    config.map(|c| c.0).or_else(affiliate_oauth_config_from_env)
+}
+
+fn affiliate_stripe_config(
+    config: Option<Extension<AffiliateStripeConfig>>,
+) -> Option<AffiliateStripeConfig> {
+    config
+        .map(|c| c.0)
+        .or_else(affiliate_stripe_config_from_env)
+}
+
+fn resolve_cipher(
+    cipher: Option<Extension<Arc<FieldCipher>>>,
+) -> Result<Arc<FieldCipher>, tb_error::CryptoError> {
+    if let Some(Extension(cipher)) = cipher {
+        return Ok(cipher);
+    }
+    FieldCipher::from_env().map(Arc::new)
+}
+
+fn build_affiliate_authorize_url(client_id: &str, redirect_uri: &str, state: &str) -> String {
+    let query = url::form_urlencoded::Serializer::new(String::new())
+        .append_pair("client_id", client_id)
+        .append_pair("redirect_uri", redirect_uri)
+        .append_pair("response_type", "code")
+        .append_pair("scope", "user:read:email")
+        .append_pair("state", state)
+        .finish();
+    format!("{TWITCH_AUTHORIZE_URL}?{query}")
+}
+
+fn build_stripe_connect_authorize_url(client_id: &str, redirect_uri: &str, state: &str) -> String {
+    let query = url::form_urlencoded::Serializer::new(String::new())
+        .append_pair("response_type", "code")
+        .append_pair("client_id", client_id)
+        .append_pair("redirect_uri", redirect_uri)
+        .append_pair("scope", "read_write")
+        .append_pair("state", state)
+        .finish();
+    format!("{STRIPE_CONNECT_AUTHORIZE_URL}?{query}")
+}
+
+fn affiliate_auth_redirect_uri(headers: &HeaderMap) -> String {
+    if let Some(uri) = non_empty_env(&["TWITCH_AFFILIATE_AUTH_REDIRECT_URI"]) {
+        return uri;
+    }
+    format!("{}{}", public_origin(headers), AFFILIATE_AUTH_CALLBACK_PATH)
+}
+
+fn affiliate_stripe_redirect_uri(headers: &HeaderMap) -> String {
+    format!(
+        "{}{}",
+        public_origin(headers),
+        AFFILIATE_STRIPE_CALLBACK_PATH
+    )
+}
+
+fn public_origin(headers: &HeaderMap) -> String {
+    request_origin(headers)
+        .or_else(|| {
+            non_empty_env(&[
+                "TWITCH_PUBLIC_DASHBOARD_BASE_URL",
+                "TWITCH_PUBLIC_URL",
+                "PUBLIC_URL",
+            ])
+            .and_then(|value| origin_from_urlish(&value))
+        })
+        .unwrap_or_else(|| DEFAULT_PUBLIC_ORIGIN.to_string())
+}
+
+fn request_origin(headers: &HeaderMap) -> Option<String> {
+    let host = forwarded_header_part(headers, "host")
+        .or_else(|| header_first(headers, "x-forwarded-host"))
+        .or_else(|| header_first(headers, "host"))?;
+    let host = sanitize_host(&host)?;
+    let proto = forwarded_header_part(headers, "proto")
+        .or_else(|| header_first(headers, "x-forwarded-proto"))
+        .unwrap_or_else(|| "https".to_string());
+    let proto = proto
+        .split(',')
+        .next()
+        .unwrap_or("")
+        .trim()
+        .trim_matches('"')
+        .to_lowercase();
+    let scheme = match proto.as_str() {
+        "http" if is_loopback_host(&host) => "http",
+        "https" | "" => "https",
+        _ => "https",
+    };
+    Some(format!("{scheme}://{host}"))
+}
+
+fn origin_from_urlish(raw: &str) -> Option<String> {
+    let raw = raw.trim().trim_end_matches('/');
+    if raw.is_empty() {
+        return None;
+    }
+    let with_scheme = if raw.contains("://") {
+        raw.to_string()
+    } else {
+        format!("https://{raw}")
+    };
+    let url = url::Url::parse(&with_scheme).ok()?;
+    let scheme = match url.scheme() {
+        "http" if url.host_str().is_some_and(is_loopback_host) => "http",
+        "https" => "https",
+        _ => "https",
+    };
+    let host = url.host_str()?;
+    let host = match url.port() {
+        Some(port) => format!("{host}:{port}"),
+        None => host.to_string(),
+    };
+    Some(format!("{scheme}://{}", sanitize_host(&host)?))
+}
+
+fn forwarded_header_part(headers: &HeaderMap, key: &str) -> Option<String> {
+    let raw = header_first(headers, "forwarded")?;
+    for part in raw.split(';') {
+        let (k, v) = part.split_once('=')?;
+        if k.trim().eq_ignore_ascii_case(key) {
+            return Some(v.trim().trim_matches('"').to_string());
+        }
+    }
+    None
+}
+
+fn header_first(headers: &HeaderMap, name: &str) -> Option<String> {
+    headers
+        .get(name)
+        .and_then(|v| v.to_str().ok())
+        .and_then(|v| v.split(',').next())
+        .map(str::trim)
+        .filter(|v| !v.is_empty())
+        .map(ToOwned::to_owned)
+}
+
+fn sanitize_host(raw: &str) -> Option<String> {
+    let host = raw.trim().trim_matches('"').trim();
+    if host.is_empty() || host.contains('/') || host.contains('@') {
+        return None;
+    }
+    if host
+        .chars()
+        .all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '-' | ':' | '[' | ']'))
+    {
+        Some(host.to_string())
+    } else {
+        None
+    }
+}
+
+fn is_loopback_host(host: &str) -> bool {
+    let host = host
+        .trim()
+        .trim_start_matches('[')
+        .trim_end_matches(']')
+        .split(':')
+        .next()
+        .unwrap_or("")
+        .to_lowercase();
+    matches!(host.as_str(), "localhost" | "127.0.0.1" | "::1")
+}
+
+fn cookie_secure(headers: &HeaderMap, config: Option<&AffiliateOAuthConfig>) -> bool {
+    if let Some(config) = config {
+        return config.cookie_secure;
+    }
+    if std::env::var("TB_DASHBOARD_COOKIE_INSECURE").as_deref() == Ok("1") {
+        return false;
+    }
+    header_first(headers, "x-forwarded-proto")
+        .map(|p| p.eq_ignore_ascii_case("https"))
+        .unwrap_or(true)
+}
+
+fn redirect_with_cookie(location: &str, cookie: &str) -> Response {
+    let mut response = Redirect::to(location).into_response();
+    if let Ok(value) = HeaderValue::from_str(cookie) {
+        response.headers_mut().append(SET_COOKIE, value);
+    }
+    response
+}
+
+fn cookie_from_headers(headers: &HeaderMap, name: &str) -> Option<String> {
+    let raw = headers.get(axum::http::header::COOKIE)?.to_str().ok()?;
+    for pair in raw.split(';') {
+        let pair = pair.trim();
+        if let Some((k, v)) = pair.split_once('=') {
+            if k.trim() == name {
+                return Some(v.trim().to_string());
+            }
+        }
+    }
+    None
+}
+
+fn value_to_string(value: &Value) -> String {
+    match value {
+        Value::Null => String::new(),
+        Value::String(value) => value.trim().to_string(),
+        Value::Bool(value) => value.to_string(),
+        Value::Number(value) => value.to_string(),
+        other => other.to_string(),
+    }
+}
+
+fn display_or_login(identity: &TwitchIdentity) -> &str {
+    let display = identity.display_name.trim();
+    if display.is_empty() {
+        identity.twitch_login.trim()
+    } else {
+        display
+    }
+}
+
+fn text(status: StatusCode, body: &str) -> Response {
+    (status, body.to_string()).into_response()
+}
+
+fn json_error(status: StatusCode, code: &str) -> Response {
+    (status, Json(json!({ "error": code }))).into_response()
+}
+
+fn non_empty_env(keys: &[&str]) -> Option<String> {
+    keys.iter().find_map(|key| {
+        std::env::var(key)
+            .ok()
+            .map(|value| value.trim().to_string())
+            .filter(|value| !value.is_empty())
+    })
+}
+
+#[derive(Debug, thiserror::Error)]
+enum AffiliatePersistError {
+    #[error("db")]
+    Db(#[from] sqlx::Error),
+    #[error("pii")]
+    Pii,
+    #[error("crypto")]
+    Crypto(#[from] tb_error::CryptoError),
+}
+
+impl From<tb_analytics::affiliate_pii::PiiError> for AffiliatePersistError {
+    fn from(_: tb_analytics::affiliate_pii::PiiError) -> Self {
+        Self::Pii
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use async_trait::async_trait;
+    use axum::body::to_bytes;
+    use axum::http::header::{COOKIE, LOCATION, SET_COOKIE};
+    use sqlx::postgres::{PgConnectOptions, PgPoolOptions};
+    use std::str::FromStr;
+    use tb_transport_twitch::user_token::UserTokenError;
+    use wiremock::matchers::{body_string_contains, method, path};
+    use wiremock::{Mock, MockServer, ResponseTemplate};
+
+    const TEST_FERNET_KEY: &str = "dGVzdGtleTEyMzQ1Njc4OTAxMjM0NTY3ODkwMTIzNDU=";
+
+    #[derive(Clone)]
+    struct FakeOAuth {
+        identity: TwitchIdentity,
+    }
+
+    #[async_trait]
+    impl TwitchOAuthClient for FakeOAuth {
+        async fn exchange_code_for_identity(
+            &self,
+            _code: &str,
+            _redirect_uri: &str,
+        ) -> Result<TwitchIdentity, UserTokenError> {
+            Ok(self.identity.clone())
+        }
+    }
+
+    fn test_cipher() -> FieldCipher {
+        FieldCipher::from_hex_key(&"ab".repeat(32), "v1").unwrap()
+    }
+
+    fn oauth_config(identity: TwitchIdentity) -> AffiliateOAuthConfig {
+        AffiliateOAuthConfig {
+            client_id: "cid".to_string(),
+            cookie_secure: false,
+            client: Arc::new(FakeOAuth { identity }),
+        }
+    }
+
+    async fn pool(schema: &str) -> Option<PgPool> {
+        let dsn = std::env::var("TB_TEST_DATABASE_URL").ok()?;
+        let admin = PgPoolOptions::new()
+            .max_connections(1)
+            .connect(&dsn)
+            .await
+            .ok()?;
+        sqlx::query(&format!("DROP SCHEMA IF EXISTS {schema} CASCADE"))
+            .execute(&admin)
+            .await
+            .ok()?;
+        sqlx::query(&format!("CREATE SCHEMA {schema}"))
+            .execute(&admin)
+            .await
+            .ok()?;
+        admin.close().await;
+        let opts = PgConnectOptions::from_str(&dsn)
+            .ok()?
+            .options([("search_path", schema)]);
+        PgPoolOptions::new()
+            .max_connections(2)
+            .connect_with(opts)
+            .await
+            .ok()
+    }
+
+    async fn create_tables(pool: &PgPool) {
+        sqlx::query(
+            r#"
+            CREATE TABLE dashboard_sessions (
+                session_id TEXT PRIMARY KEY,
+                session_type TEXT NOT NULL,
+                payload_enc BYTEA NOT NULL,
+                created_at DOUBLE PRECISION NOT NULL,
+                expires_at DOUBLE PRECISION NOT NULL
+            )
+            "#,
+        )
+        .execute(pool)
+        .await
+        .unwrap();
+        sqlx::query(
+            r#"
+            CREATE TABLE affiliate_accounts (
+                twitch_login TEXT PRIMARY KEY,
+                twitch_user_id TEXT NOT NULL,
+                display_name TEXT,
+                email TEXT NOT NULL,
+                full_name TEXT NOT NULL,
+                address_line1 TEXT NOT NULL,
+                address_city TEXT NOT NULL,
+                address_zip TEXT NOT NULL,
+                address_country TEXT NOT NULL DEFAULT 'DE',
+                stripe_account_id TEXT,
+                stripe_connected_at TEXT,
+                stripe_connect_status TEXT DEFAULT 'pending',
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL,
+                is_active INTEGER NOT NULL DEFAULT 1
+            )
+            "#,
+        )
+        .execute(pool)
+        .await
+        .unwrap();
+        sqlx::query(
+            r#"
+            CREATE TABLE affiliate_pii (
+                twitch_login TEXT PRIMARY KEY REFERENCES affiliate_accounts(twitch_login),
+                full_name_enc BYTEA,
+                email_enc BYTEA,
+                address_line1_enc BYTEA,
+                address_city_enc BYTEA,
+                address_zip_enc BYTEA,
+                tax_id_enc BYTEA,
+                address_country TEXT NOT NULL DEFAULT 'DE',
+                ust_status TEXT NOT NULL DEFAULT 'unknown',
+                updated_at TEXT NOT NULL
+            )
+            "#,
+        )
+        .execute(pool)
+        .await
+        .unwrap();
+    }
+
+    fn state(pool: PgPool) -> DashboardAuthState {
+        DashboardAuthState::new(pool, TEST_FERNET_KEY.to_string())
+    }
+
+    #[test]
+    fn authorize_url_enthaelt_email_scope() {
+        let url = build_affiliate_authorize_url(
+            "cid",
+            "https://example.test/twitch/auth/affiliate/callback",
+            "state-123",
+        );
+        assert!(url.starts_with(TWITCH_AUTHORIZE_URL));
+        assert!(url.contains("client_id=cid"));
+        assert!(url.contains("scope=user%3Aread%3Aemail"));
+        assert!(url.contains("state=state-123"));
+    }
+
+    #[test]
+    fn redirect_uri_nutzt_forwarded_host_und_proto() {
+        let mut headers = HeaderMap::new();
+        headers.insert("x-forwarded-host", "aff.example.test".parse().unwrap());
+        headers.insert("x-forwarded-proto", "https".parse().unwrap());
+        assert_eq!(
+            affiliate_stripe_redirect_uri(&headers),
+            "https://aff.example.test/twitch/affiliate/connect/stripe/callback"
+        );
+    }
+
+    #[tokio::test]
+    async fn callback_legt_affiliate_session_account_und_email_pii_an() {
+        let Some(pool) = pool("t_affiliate_callback").await else {
+            return;
+        };
+        create_tables(&pool).await;
+        std::env::set_var("DB_MASTER_KEY_V1", "ab".repeat(32));
+        let state = state(pool.clone());
+        state
+            .save_affiliate_oauth_state(
+                "state-123",
+                &AffiliateOAuthState {
+                    redirect_uri: "https://example.test/twitch/auth/affiliate/callback".into(),
+                },
+            )
+            .await
+            .unwrap();
+        let identity = TwitchIdentity {
+            twitch_login: "Partner_One".into(),
+            twitch_user_id: "1001".into(),
+            display_name: "Partner One".into(),
+            email: "partner@example.test".into(),
+        };
+
+        let response = auth_callback_handler(
+            Some(Extension(state.clone())),
+            Some(Extension(oauth_config(identity))),
+            HeaderMap::new(),
+            Query(CallbackQuery {
+                code: Some("oauth-code".into()),
+                state: Some("state-123".into()),
+                error: None,
+            }),
+        )
+        .await;
+        assert!(response.status().is_redirection());
+        assert_eq!(
+            response.headers().get(LOCATION).unwrap(),
+            "/twitch/affiliate/portal"
+        );
+        let set_cookie = response
+            .headers()
+            .get(SET_COOKIE)
+            .unwrap()
+            .to_str()
+            .unwrap();
+        assert!(set_cookie.starts_with("twitch_affiliate_session="));
+
+        let row = sqlx::query(
+            "SELECT email, full_name, address_line1, address_city, address_zip, address_country FROM affiliate_accounts WHERE twitch_login = 'partner_one'",
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        for column in [
+            "email",
+            "full_name",
+            "address_line1",
+            "address_city",
+            "address_zip",
+        ] {
+            assert_eq!(row.try_get::<String, _>(column).unwrap(), "");
+        }
+        assert_eq!(row.try_get::<String, _>("address_country").unwrap(), "DE");
+        let pii = load_affiliate_pii(&pool, &test_cipher(), "partner_one")
+            .await
+            .unwrap();
+        assert_eq!(pii.email, "partner@example.test");
+    }
+
+    #[tokio::test]
+    async fn connect_redirect_speichert_state_mit_redirect_uri() {
+        let Some(pool) = pool("t_affiliate_connect_start").await else {
+            return;
+        };
+        create_tables(&pool).await;
+        let state = state(pool.clone());
+        let session = state
+            .create_affiliate_session("partner_one", "1001", "Partner One", "")
+            .await
+            .unwrap();
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            COOKIE,
+            format!("{}={}", AFFILIATE_COOKIE_NAME, session.session_id)
+                .parse()
+                .unwrap(),
+        );
+        headers.insert("host", "deutsche-deadlock-community.de".parse().unwrap());
+
+        let response = connect_stripe_handler(
+            Some(Extension(state.clone())),
+            Some(Extension(AffiliateStripeConfig {
+                connect_client_id: Some("ca_code_123".into()),
+                client: None,
+            })),
+            headers,
+        )
+        .await;
+        assert!(response.status().is_redirection());
+        let location = response.headers().get(LOCATION).unwrap().to_str().unwrap();
+        assert!(location.starts_with("https://connect.stripe.com/oauth/authorize?"));
+        let parsed = url::Url::parse(location).unwrap();
+        let params: std::collections::HashMap<_, _> = parsed.query_pairs().collect();
+        assert_eq!(
+            params.get("client_id").map(|v| v.as_ref()),
+            Some("ca_code_123")
+        );
+        assert_eq!(
+            params.get("redirect_uri").map(|v| v.as_ref()),
+            Some("https://deutsche-deadlock-community.de/twitch/affiliate/connect/stripe/callback")
+        );
+        let state_token = params.get("state").unwrap().to_string();
+        let saved = state
+            .consume_affiliate_connect_state(&state_token)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(saved.twitch_login, "partner_one");
+        assert_eq!(
+            saved.redirect_uri,
+            "https://deutsche-deadlock-community.de/twitch/affiliate/connect/stripe/callback"
+        );
+    }
+
+    #[tokio::test]
+    async fn connect_callback_nutzt_stripe_user_id() {
+        let Some(pool) = pool("t_affiliate_connect_callback").await else {
+            return;
+        };
+        create_tables(&pool).await;
+        sqlx::query(
+            r#"
+            INSERT INTO affiliate_accounts
+                (twitch_login, twitch_user_id, display_name, email, full_name, address_line1,
+                 address_city, address_zip, address_country, created_at, updated_at)
+            VALUES ('partner_one', '1001', 'Partner One', '', '', '', '', '', 'DE',
+                    '2026-01-01T00:00:00+00:00', '2026-01-01T00:00:00+00:00')
+            "#,
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+        let state = state(pool.clone());
+        let session = state
+            .create_affiliate_session("partner_one", "1001", "Partner One", "")
+            .await
+            .unwrap();
+        let redirect_uri =
+            "https://example.test/twitch/affiliate/connect/stripe/callback".to_string();
+        state
+            .save_affiliate_connect_state(
+                "connect-state",
+                &AffiliateConnectState {
+                    redirect_uri: redirect_uri.clone(),
+                    twitch_login: "partner_one".into(),
+                },
+            )
+            .await
+            .unwrap();
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/oauth/token"))
+            .and(body_string_contains("grant_type=authorization_code"))
+            .and(body_string_contains("code=oauth-code"))
+            .and(body_string_contains(
+                "redirect_uri=https%3A%2F%2Fexample.test%2Ftwitch%2Faffiliate%2Fconnect%2Fstripe%2Fcallback",
+            ))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                "stripe_user_id": "acct_123"
+            })))
+            .mount(&server)
+            .await;
+        let stripe_client = StripeClient::new("sk_test_secret")
+            .unwrap()
+            .with_connect_base(server.uri());
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            COOKIE,
+            format!("{}={}", AFFILIATE_COOKIE_NAME, session.session_id)
+                .parse()
+                .unwrap(),
+        );
+
+        let response = connect_stripe_callback_handler(
+            Some(Extension(state)),
+            Some(Extension(AffiliateStripeConfig {
+                connect_client_id: None,
+                client: Some(stripe_client),
+            })),
+            headers,
+            Query(CallbackQuery {
+                code: Some("oauth-code".into()),
+                state: Some("connect-state".into()),
+                error: None,
+            }),
+        )
+        .await;
+        assert!(response.status().is_redirection());
+        let row = sqlx::query(
+            "SELECT stripe_account_id, stripe_connect_status FROM affiliate_accounts WHERE twitch_login = 'partner_one'",
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert_eq!(
+            row.try_get::<Option<String>, _>("stripe_account_id")
+                .unwrap()
+                .unwrap(),
+            "acct_123"
+        );
+        assert_eq!(
+            row.try_get::<Option<String>, _>("stripe_connect_status")
+                .unwrap()
+                .unwrap(),
+            "connected"
+        );
+    }
+
+    #[tokio::test]
+    async fn profile_put_schreibt_nur_verschluesselte_pii() {
+        let Some(pool) = pool("t_affiliate_profile_put").await else {
+            return;
+        };
+        create_tables(&pool).await;
+        sqlx::query(
+            r#"
+            INSERT INTO affiliate_accounts
+                (twitch_login, twitch_user_id, display_name, email, full_name, address_line1,
+                 address_city, address_zip, address_country, created_at, updated_at)
+            VALUES ('affiliate_one', '1001', 'Affiliate One', '', '', '', '', '', '',
+                    '2026-01-01T00:00:00+00:00', '2026-01-01T00:00:00+00:00')
+            "#,
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+        let state = state(pool.clone());
+        let session = state
+            .create_affiliate_session("affiliate_one", "1001", "Affiliate One", "")
+            .await
+            .unwrap();
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            COOKIE,
+            format!("{}={}", AFFILIATE_COOKIE_NAME, session.session_id)
+                .parse()
+                .unwrap(),
+        );
+        let body = Bytes::from(
+            json!({
+                "full_name": "Updated Affiliate",
+                "email": "updated@example.com",
+                "address_line1": "Neue Str. 8",
+                "address_city": "Munich",
+                "address_zip": "80331",
+                "address_country": "de",
+                "tax_id": "DE999",
+                "ust_status": "regelbesteuert"
+            })
+            .to_string(),
+        );
+
+        let response = api_profile_update_handler(
+            Some(Extension(state)),
+            Some(Extension(Arc::new(test_cipher()))),
+            headers,
+            State(pool.clone()),
+            body,
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+        let value: Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(value["ok"], true);
+        assert_eq!(value["profile"]["email"], "updated@example.com");
+        assert_eq!(value["profile"]["ust_status"], "regelbesteuert");
+
+        let account = sqlx::query(
+            "SELECT email, full_name, address_line1, address_city, address_zip, address_country FROM affiliate_accounts WHERE twitch_login = 'affiliate_one'",
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        for column in [
+            "email",
+            "full_name",
+            "address_line1",
+            "address_city",
+            "address_zip",
+            "address_country",
+        ] {
+            assert_eq!(account.try_get::<String, _>(column).unwrap(), "");
+        }
+        let raw = sqlx::query(
+            "SELECT email_enc, full_name_enc, tax_id_enc, address_country, ust_status FROM affiliate_pii WHERE twitch_login = 'affiliate_one'",
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert!(raw
+            .try_get::<Option<Vec<u8>>, _>("email_enc")
+            .unwrap()
+            .is_some());
+        assert!(raw
+            .try_get::<Option<Vec<u8>>, _>("full_name_enc")
+            .unwrap()
+            .is_some());
+        assert!(raw
+            .try_get::<Option<Vec<u8>>, _>("tax_id_enc")
+            .unwrap()
+            .is_some());
+        assert_eq!(raw.try_get::<String, _>("address_country").unwrap(), "DE");
+        assert_eq!(
+            raw.try_get::<String, _>("ust_status").unwrap(),
+            "regelbesteuert"
+        );
+    }
+
+    #[tokio::test]
+    async fn profile_put_rejects_invalid_ust_status() {
+        let Some(pool) = pool("t_affiliate_profile_invalid").await else {
+            return;
+        };
+        create_tables(&pool).await;
+        let state = state(pool.clone());
+        let session = state
+            .create_affiliate_session("affiliate_one", "1001", "Affiliate One", "")
+            .await
+            .unwrap();
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            COOKIE,
+            format!("{}={}", AFFILIATE_COOKIE_NAME, session.session_id)
+                .parse()
+                .unwrap(),
+        );
+        let response = api_profile_update_handler(
+            Some(Extension(state)),
+            Some(Extension(Arc::new(test_cipher()))),
+            headers,
+            State(pool),
+            Bytes::from(r#"{"ust_status":"foo"}"#),
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+        let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+        let value: Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(value["error"], "invalid_ust_status");
+    }
+}

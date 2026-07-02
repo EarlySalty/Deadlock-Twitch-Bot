@@ -5,8 +5,8 @@
 //!   serviert die dashboard_v2-SPA-Shell nativ statt via Python-Fallback.
 
 use axum::{
-    extract::{Query, State},
-    http::{header, StatusCode},
+    extract::{Extension, Query, State},
+    http::{header, HeaderMap, StatusCode},
     response::{IntoResponse, Response},
     Json,
 };
@@ -16,9 +16,11 @@ use serde_json::json;
 use sqlx::PgPool;
 
 use crate::auth::level::DashboardAuthLevel;
+use crate::auth::session::DashboardAuthState;
+use crate::handlers::affiliate::affiliate_session_from_headers;
 use crate::handlers::spa::dist_root;
 
-fn authenticated_login(auth: &DashboardAuthLevel) -> Option<String> {
+fn dashboard_authenticated_login(auth: &DashboardAuthLevel) -> Option<String> {
     match auth {
         DashboardAuthLevel::Partner { twitch_login, .. } => {
             Some(twitch_login.trim().to_lowercase())
@@ -31,11 +33,29 @@ fn authenticated_login(auth: &DashboardAuthLevel) -> Option<String> {
     .filter(|login| !login.is_empty())
 }
 
+async fn authenticated_login(
+    auth: &DashboardAuthLevel,
+    headers: &HeaderMap,
+    auth_state: Option<&DashboardAuthState>,
+) -> Option<String> {
+    if let Some(login) = dashboard_authenticated_login(auth) {
+        return Some(login);
+    }
+    affiliate_session_from_headers(auth_state, headers)
+        .await
+        .map(|session| session.twitch_login)
+        .filter(|login| !login.trim().is_empty())
+}
+
 pub async fn portal_handler(
     auth: DashboardAuthLevel,
+    auth_state: Option<Extension<DashboardAuthState>>,
+    headers: HeaderMap,
     State(pool): State<PgPool>,
 ) -> impl IntoResponse {
-    let Some(login) = authenticated_login(&auth) else {
+    let Some(login) =
+        authenticated_login(&auth, &headers, auth_state.as_ref().map(|state| &state.0)).await
+    else {
         return (
             StatusCode::UNAUTHORIZED,
             Json(json!({"error":"unauthorized"})),
@@ -169,10 +189,14 @@ pub struct CommissionsQuery {
 
 pub async fn commissions_handler(
     auth: DashboardAuthLevel,
+    auth_state: Option<Extension<DashboardAuthState>>,
+    headers: HeaderMap,
     State(pool): State<PgPool>,
     Query(query): Query<CommissionsQuery>,
 ) -> impl IntoResponse {
-    let Some(login) = authenticated_login(&auth) else {
+    let Some(login) =
+        authenticated_login(&auth, &headers, auth_state.as_ref().map(|state| &state.0)).await
+    else {
         return (
             StatusCode::UNAUTHORIZED,
             Json(json!({"error":"unauthorized"})),
@@ -339,7 +363,7 @@ mod tests {
     #[test]
     fn login_nur_aus_twitch_session() {
         assert_eq!(
-            authenticated_login(&DashboardAuthLevel::Partner {
+            dashboard_authenticated_login(&DashboardAuthLevel::Partner {
                 twitch_login: "Nani".into(),
                 twitch_user_id: "1".into(),
                 display_name: "Nani".into(),
@@ -347,9 +371,9 @@ mod tests {
             .as_deref(),
             Some("nani")
         );
-        assert!(authenticated_login(&DashboardAuthLevel::admin()).is_none());
+        assert!(dashboard_authenticated_login(&DashboardAuthLevel::admin()).is_none());
         assert_eq!(
-            authenticated_login(&DashboardAuthLevel::Admin {
+            dashboard_authenticated_login(&DashboardAuthLevel::Admin {
                 actor: Some(AdminActor {
                     twitch_login: "EarlySalty".into(),
                     twitch_user_id: "2".into(),
@@ -421,6 +445,8 @@ mod tests {
                 twitch_user_id: "1".into(),
                 display_name: "Nani".into(),
             },
+            None,
+            HeaderMap::new(),
             State(pool),
         )
         .await
@@ -458,6 +484,8 @@ mod tests {
                 twitch_user_id: "1".into(),
                 display_name: "Nani".into(),
             },
+            None,
+            HeaderMap::new(),
             State(pool),
             Query(CommissionsQuery {
                 page: Some(1),

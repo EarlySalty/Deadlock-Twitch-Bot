@@ -11,7 +11,7 @@
 //! selbst werden NICHT ausgegeben.
 
 use serde_json::{json, Value};
-use sqlx::PgPool;
+use sqlx::{PgPool, Row};
 use tb_crypto::FieldCipher;
 
 const REQUIRED_GUTSCHRIFT_FIELDS: [&str; 6] = [
@@ -22,7 +22,11 @@ const REQUIRED_GUTSCHRIFT_FIELDS: [&str; 6] = [
     "address_zip",
     "address_country",
 ];
-const VALID_UST_STATUS: [&str; 3] = ["kleinunternehmer", "regelbesteuert", "unknown"];
+pub const VALID_UST_STATUS: [&str; 3] = ["kleinunternehmer", "regelbesteuert", "unknown"];
+
+pub fn is_valid_ust_status(value: &str) -> bool {
+    VALID_UST_STATUS.contains(&value.trim().to_lowercase().as_str())
+}
 
 fn field_label(field: &str) -> &'static str {
     match field {
@@ -45,7 +49,7 @@ fn pii_aad(field: &str, login: &str) -> String {
 
 fn normalize_ust_status(value: &str) -> String {
     let n = value.trim().to_lowercase();
-    if VALID_UST_STATUS.contains(&n.as_str()) {
+    if is_valid_ust_status(&n) {
         n
     } else {
         "unknown".to_string()
@@ -446,6 +450,79 @@ pub async fn save_affiliate_pii(
     Ok(())
 }
 
+/// Migriert alte Klartext-PII aus `affiliate_accounts` nach `affiliate_pii`
+/// und leert anschließend die Klartext-Spalten (Python `migrate_from_plaintext`).
+pub async fn migrate_from_plaintext(pool: &PgPool, cipher: &FieldCipher) -> Result<u64, PiiError> {
+    let rows = sqlx::query(
+        r#"
+        SELECT a.twitch_login, a.email, a.full_name, a.address_line1, a.address_city,
+               a.address_zip, a.address_country
+        FROM affiliate_accounts a
+        LEFT JOIN affiliate_pii p
+          ON p.twitch_login = a.twitch_login
+        WHERE p.twitch_login IS NULL
+          AND (
+            TRIM(COALESCE(a.email, '')) <> ''
+            OR TRIM(COALESCE(a.full_name, '')) <> ''
+            OR TRIM(COALESCE(a.address_line1, '')) <> ''
+            OR TRIM(COALESCE(a.address_city, '')) <> ''
+            OR TRIM(COALESCE(a.address_zip, '')) <> ''
+            OR TRIM(COALESCE(a.address_country, '')) <> ''
+          )
+        "#,
+    )
+    .fetch_all(pool)
+    .await
+    .map_err(PiiError::Db)?;
+
+    let mut migrated = 0_u64;
+    for row in rows {
+        let login = row
+            .try_get::<Option<String>, _>("twitch_login")
+            .map_err(PiiError::Db)?
+            .unwrap_or_default()
+            .trim()
+            .to_lowercase();
+        if login.is_empty() {
+            continue;
+        }
+        let value = |name: &str| -> Result<String, PiiError> {
+            Ok(row
+                .try_get::<Option<String>, _>(name)
+                .map_err(PiiError::Db)?
+                .unwrap_or_default())
+        };
+        let input = PiiInput {
+            email: Some(value("email")?),
+            full_name: Some(value("full_name")?),
+            address_line1: Some(value("address_line1")?),
+            address_city: Some(value("address_city")?),
+            address_zip: Some(value("address_zip")?),
+            address_country: Some(value("address_country")?),
+            ..PiiInput::default()
+        };
+        save_affiliate_pii(pool, cipher, &login, &input).await?;
+        sqlx::query(
+            r#"
+            UPDATE affiliate_accounts
+            SET email = '',
+                full_name = '',
+                address_line1 = '',
+                address_city = '',
+                address_zip = '',
+                address_country = ''
+            WHERE twitch_login = $1
+            "#,
+        )
+        .bind(&login)
+        .execute(pool)
+        .await
+        .map_err(PiiError::Db)?;
+        migrated += 1;
+    }
+    Ok(migrated)
+}
+
 /// Fehlende Pflichtfelder für die Gutschrift-Generierung (Python `missing_gutschrift_fields`).
 pub fn missing_gutschrift_fields(pii: &PiiPayload) -> Vec<String> {
     let mut missing = Vec::new();
@@ -658,6 +735,68 @@ mod tests {
         assert_eq!(pii.ust_status, "unknown");
         assert_eq!(pii.address_country, "DE");
         assert!(pii.full_name.is_empty());
+    }
+
+    #[tokio::test]
+    async fn migrate_from_plaintext_verschiebt_und_leert_account_spalten() {
+        let Some(pool) = connect("t_pii_migrate").await else {
+            return;
+        };
+        sqlx::query(
+            r#"
+            CREATE TABLE affiliate_accounts (
+                twitch_login TEXT PRIMARY KEY,
+                email TEXT NOT NULL,
+                full_name TEXT NOT NULL,
+                address_line1 TEXT NOT NULL,
+                address_city TEXT NOT NULL,
+                address_zip TEXT NOT NULL,
+                address_country TEXT NOT NULL DEFAULT ''
+            )
+            "#,
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+        sqlx::query(
+            r#"
+            INSERT INTO affiliate_accounts
+                (twitch_login, email, full_name, address_line1, address_city, address_zip, address_country)
+            VALUES ('affiliate_one', 'legacy@example.com', 'Legacy Partner', 'Altbau 5', 'Hamburg', '20095', 'DE')
+            "#,
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+
+        let cipher = test_cipher();
+        assert_eq!(migrate_from_plaintext(&pool, &cipher).await.unwrap(), 1);
+        let pii = load_affiliate_pii(&pool, &cipher, "affiliate_one")
+            .await
+            .unwrap();
+        assert_eq!(pii.email, "legacy@example.com");
+        assert_eq!(pii.full_name, "Legacy Partner");
+        assert_eq!(pii.address_line1, "Altbau 5");
+        assert_eq!(pii.address_city, "Hamburg");
+        assert_eq!(pii.address_zip, "20095");
+        assert_eq!(pii.address_country, "DE");
+        let row = sqlx::query(
+            "SELECT email, full_name, address_line1, address_city, address_zip, address_country FROM affiliate_accounts WHERE twitch_login = 'affiliate_one'",
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        for column in [
+            "email",
+            "full_name",
+            "address_line1",
+            "address_city",
+            "address_zip",
+            "address_country",
+        ] {
+            assert_eq!(row.try_get::<String, _>(column).unwrap(), "");
+        }
+        assert_eq!(migrate_from_plaintext(&pool, &cipher).await.unwrap(), 0);
     }
 
     // ── Save-Pfad (B2-P1-affiliate-pii-write) ───────────────────────────────
