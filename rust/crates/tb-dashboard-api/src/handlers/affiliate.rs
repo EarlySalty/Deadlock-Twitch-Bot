@@ -5,8 +5,11 @@ use std::sync::Arc;
 
 use axum::{
     body::Bytes,
-    extract::{Extension, Query, State},
-    http::{header::SET_COOKIE, HeaderMap, HeaderValue, StatusCode},
+    extract::{Extension, Path, Query, State},
+    http::{
+        header::{CONTENT_DISPOSITION, CONTENT_TYPE, SET_COOKIE},
+        HeaderMap, HeaderValue, StatusCode,
+    },
     response::{IntoResponse, Redirect, Response},
     Json,
 };
@@ -15,6 +18,7 @@ use serde_json::{json, Value};
 use sqlx::{PgPool, Row};
 use tb_analytics::{
     affiliate_commission::connect_account_and_replay,
+    affiliate_gutschrift::{self, GutschriftError},
     affiliate_pii::{
         build_readiness, is_valid_ust_status, load_affiliate_pii, migrate_from_plaintext,
         save_affiliate_pii, PiiInput, PiiPayload,
@@ -606,6 +610,97 @@ pub async fn api_claims_handler(
     }
 }
 
+/// `GET /twitch/api/affiliate/gutschriften`.
+pub async fn api_gutschriften_handler(
+    state: Option<Extension<DashboardAuthState>>,
+    cipher: Option<Extension<Arc<FieldCipher>>>,
+    headers: HeaderMap,
+    State(pool): State<PgPool>,
+) -> Response {
+    let Some(session) =
+        affiliate_session_from_headers(state.as_ref().map(|s| &s.0), &headers).await
+    else {
+        return json_error(StatusCode::UNAUTHORIZED, "unauthorized");
+    };
+    let login = session.twitch_login.trim().to_lowercase();
+    let cipher = match resolve_cipher(cipher) {
+        Ok(cipher) => cipher,
+        Err(error) => {
+            tracing::error!(%error, "Affiliate-Gutschriften: FieldCipher fehlt");
+            return json_error(StatusCode::INTERNAL_SERVER_ERROR, "db");
+        }
+    };
+    let (account, pii) = match load_profile(&pool, &cipher, &login).await {
+        Ok(Some(profile)) => profile,
+        Ok(None) => return json_error(StatusCode::NOT_FOUND, "not_found"),
+        Err(error) => {
+            tracing::error!(?error, "Affiliate-Gutschriften-Profil fehlgeschlagen");
+            return json_error(StatusCode::INTERNAL_SERVER_ERROR, "db");
+        }
+    };
+    let documents = match affiliate_gutschrift::list_for_affiliate(&pool, &login).await {
+        Ok(documents) => documents,
+        Err(GutschriftError::InvalidLogin) => {
+            return json_error(StatusCode::NOT_FOUND, "not_found");
+        }
+        Err(error) => {
+            tracing::error!(%error, "Affiliate-Gutschriften-Liste fehlgeschlagen");
+            return json_error(StatusCode::INTERNAL_SERVER_ERROR, "db");
+        }
+    };
+    let readiness = build_readiness(&pii);
+    Json(json!({
+        "gutschriften": documents,
+        "readiness": readiness.clone(),
+        "profile": profile_payload(&account, &pii, readiness),
+    }))
+    .into_response()
+}
+
+/// `GET /twitch/api/affiliate/gutschriften/:gutschrift_id/pdf`.
+pub async fn api_gutschrift_pdf_handler(
+    state: Option<Extension<DashboardAuthState>>,
+    headers: HeaderMap,
+    State(pool): State<PgPool>,
+    Path(gutschrift_id): Path<String>,
+) -> Response {
+    let Some(session) =
+        affiliate_session_from_headers(state.as_ref().map(|s| &s.0), &headers).await
+    else {
+        return json_error(StatusCode::UNAUTHORIZED, "unauthorized");
+    };
+    let id = match gutschrift_id.trim().parse::<i64>() {
+        Ok(id) if id > 0 => id,
+        _ => return json_error(StatusCode::BAD_REQUEST, "invalid_gutschrift_id"),
+    };
+    let login = session.twitch_login.trim().to_lowercase();
+    match affiliate_gutschrift::get_pdf(&pool, &login, id).await {
+        Ok(Some((metadata, bytes))) => {
+            let raw_name = metadata.gutschrift_number.trim();
+            let filename = if raw_name.is_empty() {
+                format!("gutschrift-{id}")
+            } else {
+                raw_name.replace('"', "")
+            };
+            let mut response = (StatusCode::OK, bytes).into_response();
+            response
+                .headers_mut()
+                .insert(CONTENT_TYPE, HeaderValue::from_static("application/pdf"));
+            let disposition = format!("inline; filename=\"{filename}.pdf\"");
+            if let Ok(value) = HeaderValue::from_str(&disposition) {
+                response.headers_mut().insert(CONTENT_DISPOSITION, value);
+            }
+            response
+        }
+        Ok(None) => json_error(StatusCode::NOT_FOUND, "not_found"),
+        Err(GutschriftError::InvalidLogin) => json_error(StatusCode::NOT_FOUND, "not_found"),
+        Err(error) => {
+            tracing::error!(%error, "Affiliate-Gutschrift-PDF fehlgeschlagen");
+            json_error(StatusCode::INTERNAL_SERVER_ERROR, "db")
+        }
+    }
+}
+
 async fn upsert_account_and_pii(
     state: &DashboardAuthState,
     identity: &TwitchIdentity,
@@ -1056,12 +1151,14 @@ impl From<tb_analytics::affiliate_pii::PiiError> for AffiliatePersistError {
 mod tests {
     use super::*;
     use async_trait::async_trait;
-    use axum::body::to_bytes;
+    use axum::body::{to_bytes, Body};
     use axum::http::header::{COOKIE, LOCATION, SET_COOKIE};
+    use axum::http::Request;
     use sqlx::postgres::{PgConnectOptions, PgPoolOptions};
     use std::str::FromStr;
     use std::sync::Mutex;
     use tb_transport_twitch::user_token::UserTokenError;
+    use tower::ServiceExt;
     use wiremock::matchers::{body_string_contains, header, method, path};
     use wiremock::{Mock, MockServer, ResponseTemplate};
 
@@ -1251,6 +1348,38 @@ mod tests {
                 created_at TEXT NOT NULL,
                 transferred_at TEXT,
                 error_message TEXT
+            )
+            "#,
+        )
+        .execute(pool)
+        .await
+        .unwrap();
+        sqlx::query(
+            r#"
+            CREATE TABLE affiliate_gutschriften (
+                id INTEGER GENERATED BY DEFAULT AS IDENTITY PRIMARY KEY,
+                gutschrift_number TEXT UNIQUE NOT NULL,
+                affiliate_twitch_login TEXT NOT NULL,
+                period_year INTEGER NOT NULL,
+                period_month INTEGER NOT NULL,
+                net_amount_cents INTEGER NOT NULL,
+                vat_rate_percent NUMERIC(5,2) NOT NULL DEFAULT 0,
+                vat_amount_cents INTEGER NOT NULL DEFAULT 0,
+                gross_amount_cents INTEGER NOT NULL,
+                affiliate_name TEXT NOT NULL DEFAULT '',
+                affiliate_address TEXT NOT NULL DEFAULT '',
+                affiliate_tax_id TEXT,
+                affiliate_ust_status TEXT NOT NULL DEFAULT 'unknown',
+                issuer_name TEXT NOT NULL DEFAULT '',
+                issuer_address TEXT NOT NULL DEFAULT '',
+                issuer_tax_id TEXT NOT NULL DEFAULT '',
+                pdf_blob BYTEA,
+                pdf_generated_at TEXT,
+                email_sent_at TEXT,
+                email_error TEXT,
+                commission_ids TEXT,
+                created_at TEXT NOT NULL,
+                UNIQUE (affiliate_twitch_login, period_year, period_month)
             )
             "#,
         )
@@ -1710,6 +1839,124 @@ mod tests {
         assert_eq!(value["claims"][0]["streamer_login"], "customer_one");
         assert_eq!(value["claims"][0]["commission_count"], 1);
         assert_eq!(value["claims"][0]["total_commission_cents"], 300);
+    }
+
+    #[tokio::test]
+    async fn gutschriften_api_liste_pdf_und_ownership() {
+        let Some(pool) = pool("t_affiliate_gutschriften_api").await else {
+            return;
+        };
+        create_tables(&pool).await;
+        for (login, user_id, display) in [
+            ("affiliate_one", "1001", "Affiliate One"),
+            ("affiliate_two", "1002", "Affiliate Two"),
+        ] {
+            sqlx::query(
+                r#"
+                INSERT INTO affiliate_accounts
+                    (twitch_login, twitch_user_id, display_name, email, full_name, address_line1,
+                     address_city, address_zip, address_country, created_at, updated_at)
+                VALUES ($1, $2, $3, '', '', '', '', '', 'DE',
+                        '2026-01-01T00:00:00+00:00', '2026-01-01T00:00:00+00:00')
+                "#,
+            )
+            .bind(login)
+            .bind(user_id)
+            .bind(display)
+            .execute(&pool)
+            .await
+            .unwrap();
+        }
+        sqlx::query(
+            r#"
+            INSERT INTO affiliate_gutschriften (
+                id, gutschrift_number, affiliate_twitch_login, period_year, period_month,
+                net_amount_cents, vat_amount_cents, gross_amount_cents, affiliate_ust_status,
+                pdf_blob, pdf_generated_at, commission_ids, created_at
+            ) VALUES
+                (5, 'GS-202606-0001', 'affiliate_one', 2026, 6, 1000, 0, 1000,
+                 'kleinunternehmer', E'\\x255044462d', '2026-07-01T00:00:00+00:00', '[1]', '2026-07-01T00:00:00+00:00'),
+                (6, 'GS-202606-0002', 'affiliate_two', 2026, 6, 2000, 0, 2000,
+                 'kleinunternehmer', E'\\x255044462d', '2026-07-01T00:00:00+00:00', '[2]', '2026-07-01T00:00:00+00:00')
+            "#,
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+
+        let state = state(pool.clone());
+        let session = state
+            .create_affiliate_session("affiliate_one", "1001", "Affiliate One", "")
+            .await
+            .unwrap();
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            COOKIE,
+            format!("{}={}", AFFILIATE_COOKIE_NAME, session.session_id)
+                .parse()
+                .unwrap(),
+        );
+
+        let list = api_gutschriften_handler(
+            Some(Extension(state.clone())),
+            Some(Extension(Arc::new(test_cipher()))),
+            headers.clone(),
+            State(pool.clone()),
+        )
+        .await;
+        assert_eq!(list.status(), StatusCode::OK);
+        let body = to_bytes(list.into_body(), usize::MAX).await.unwrap();
+        let value: Value = serde_json::from_slice(&body).unwrap();
+        let docs = value["gutschriften"].as_array().unwrap();
+        assert_eq!(docs.len(), 1);
+        assert_eq!(docs[0]["id"], 5);
+        assert_eq!(
+            docs[0]["download_path"],
+            "/twitch/api/affiliate/gutschriften/5/pdf"
+        );
+
+        let own = api_gutschrift_pdf_handler(
+            Some(Extension(state.clone())),
+            headers.clone(),
+            State(pool.clone()),
+            Path("5".into()),
+        )
+        .await;
+        assert_eq!(own.status(), StatusCode::OK);
+        assert_eq!(own.headers().get(CONTENT_TYPE).unwrap(), "application/pdf");
+        let own_body = to_bytes(own.into_body(), usize::MAX).await.unwrap();
+        assert_eq!(&own_body[..5], b"%PDF-");
+
+        let app = crate::build_affiliate_router(
+            pool.clone(),
+            crate::auth::security::RateLimiter::new(pool.clone(), TEST_FERNET_KEY.to_string()),
+        )
+        .layer(Extension(Arc::new(test_cipher())))
+        .layer(Extension(state.clone()));
+        let routed = app
+            .oneshot(
+                Request::builder()
+                    .method("GET")
+                    .uri("/twitch/api/affiliate/gutschriften")
+                    .header(
+                        COOKIE,
+                        format!("{}={}", AFFILIATE_COOKIE_NAME, session.session_id),
+                    )
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(routed.status(), StatusCode::OK);
+
+        let foreign = api_gutschrift_pdf_handler(
+            Some(Extension(state)),
+            headers,
+            State(pool),
+            Path("6".into()),
+        )
+        .await;
+        assert_eq!(foreign.status(), StatusCode::NOT_FOUND);
     }
 
     #[tokio::test]

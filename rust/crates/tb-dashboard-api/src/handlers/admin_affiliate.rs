@@ -68,6 +68,20 @@ fn payload_from_body(body: &Bytes) -> serde_json::Value {
     }
 }
 
+fn strict_payload_from_body(body: &Bytes) -> Result<serde_json::Value, ApiError> {
+    if body.is_empty() {
+        return Ok(json!({}));
+    }
+    match serde_json::from_slice::<serde_json::Value>(body) {
+        Ok(value) if value.is_object() => Ok(value),
+        Ok(serde_json::Value::Null) => Ok(json!({})),
+        Ok(_) => Err(ApiError::bad_request_with_body(
+            json!({ "error": "invalid_payload" }),
+        )),
+        Err(_) => Ok(json!({})),
+    }
+}
+
 fn payload_text(value: &serde_json::Value) -> String {
     match value {
         serde_json::Value::Null => String::new(),
@@ -187,6 +201,78 @@ async fn run_gutschrift_job(
     }
 
     affiliate_gutschrift::run_pending(pool, cipher, sender_ref, Some(&seller), None, 100).await
+}
+
+async fn generate_gutschriften_payload(
+    pool: &PgPool,
+    payload: serde_json::Value,
+) -> Result<serde_json::Value, ApiError> {
+    let raw_login = first_payload_text(&payload, &["affiliate_login", "twitch_login", "login"]);
+    let affiliate_login = if raw_login.is_empty() {
+        None
+    } else {
+        Some(
+            tb_domain::login::normalize_twitch_login(&raw_login).ok_or_else(|| {
+                ApiError::bad_request_with_body(json!({ "error": "invalid_login" }))
+            })?,
+        )
+    };
+
+    let year_present = payload_field_present(&payload, "year");
+    let month_present = payload_field_present(&payload, "month");
+    let (year, month) = if year_present || month_present {
+        if !year_present || !month_present {
+            return Err(ApiError::bad_request_with_body(
+                json!({ "error": "invalid_period" }),
+            ));
+        }
+        let Some(year) = payload_i32(&payload, "year") else {
+            return Err(ApiError::bad_request_with_body(
+                json!({ "error": "invalid_period" }),
+            ));
+        };
+        let Some(month) = payload_i32(&payload, "month") else {
+            return Err(ApiError::bad_request_with_body(
+                json!({ "error": "invalid_period" }),
+            ));
+        };
+        if year < 2000 || !(1..=12).contains(&month) {
+            return Err(ApiError::bad_request_with_body(
+                json!({ "error": "invalid_period" }),
+            ));
+        }
+        (Some(year), Some(month))
+    } else {
+        (None, None)
+    };
+
+    let force = payload_bool(&payload, "force");
+    let cipher = FieldCipher::from_env().map_err(|error| {
+        tracing::error!("affiliate-gutschriften: FieldCipher unavailable: {error}");
+        ApiError::internal()
+    })?;
+    let results = run_gutschrift_job(
+        pool,
+        &cipher,
+        affiliate_login.as_deref(),
+        year,
+        month,
+        force,
+    )
+    .await
+    .map_err(gutschrift_error_to_api)?;
+
+    Ok(json!({ "ok": true, "results": results }))
+}
+
+pub async fn run_pending_gutschriften_for_background(
+    pool: &PgPool,
+) -> Result<Vec<GenerateGutschriftResult>, String> {
+    let cipher =
+        FieldCipher::from_env().map_err(|error| format!("FieldCipher unavailable: {error}"))?;
+    run_gutschrift_job(pool, &cipher, None, None, None, false)
+        .await
+        .map_err(|error| error.to_string())
 }
 
 /// `GET /twitch/api/admin/affiliates/stats` — Affiliate-Programm-Statistik (Admin).
@@ -391,63 +477,25 @@ pub async fn generate_gutschriften_handler(
         return Err(err);
     }
 
-    let payload = payload_from_body(&body);
-    let raw_login = first_payload_text(&payload, &["affiliate_login", "twitch_login", "login"]);
-    let affiliate_login = if raw_login.is_empty() {
-        None
-    } else {
-        Some(
-            tb_domain::login::normalize_twitch_login(&raw_login).ok_or_else(|| {
-                ApiError::bad_request_with_body(json!({ "error": "invalid_login" }))
-            })?,
-        )
-    };
+    Ok(Json(
+        generate_gutschriften_payload(&pool, payload_from_body(&body)).await?,
+    ))
+}
 
-    let year_present = payload_field_present(&payload, "year");
-    let month_present = payload_field_present(&payload, "month");
-    let (year, month) = if year_present || month_present {
-        if !year_present || !month_present {
-            return Err(ApiError::bad_request_with_body(
-                json!({ "error": "invalid_period" }),
-            ));
-        }
-        let Some(year) = payload_i32(&payload, "year") else {
-            return Err(ApiError::bad_request_with_body(
-                json!({ "error": "invalid_period" }),
-            ));
-        };
-        let Some(month) = payload_i32(&payload, "month") else {
-            return Err(ApiError::bad_request_with_body(
-                json!({ "error": "invalid_period" }),
-            ));
-        };
-        if year < 2000 || !(1..=12).contains(&month) {
-            return Err(ApiError::bad_request_with_body(
-                json!({ "error": "invalid_period" }),
-            ));
-        }
-        (Some(year), Some(month))
-    } else {
-        (None, None)
-    };
-
-    let force = payload_bool(&payload, "force");
-    let cipher = FieldCipher::from_env().map_err(|error| {
-        tracing::error!("affiliate-gutschriften: FieldCipher unavailable: {error}");
-        ApiError::internal()
-    })?;
-    let results = run_gutschrift_job(
-        &pool,
-        &cipher,
-        affiliate_login.as_deref(),
-        year,
-        month,
-        force,
-    )
-    .await
-    .map_err(gutschrift_error_to_api)?;
-
-    Ok(Json(json!({ "ok": true, "results": results })))
+/// `POST /twitch/api/affiliate/gutschriften/trigger` und Python-Alias
+/// `/twitch/api/affiliate/admin/generate-gutschriften` — admin-gated, ohne
+/// Header-CSRF-Layer wie Python `_affiliate_api_gutschrift_trigger`.
+pub async fn generate_gutschriften_trigger_handler(
+    auth: DashboardAuthLevel,
+    State(pool): State<PgPool>,
+    body: Bytes,
+) -> Result<impl IntoResponse, ApiError> {
+    if let Some(err) = crate::auth::require_admin(&auth) {
+        return Err(err);
+    }
+    Ok(Json(
+        generate_gutschriften_payload(&pool, strict_payload_from_body(&body)?).await?,
+    ))
 }
 
 #[cfg(test)]

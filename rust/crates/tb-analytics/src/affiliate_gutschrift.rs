@@ -59,13 +59,7 @@ const SELECT_GUTSCHRIFT_COLUMNS: &str = "\
     net_amount_cents::bigint AS net_amount_cents, \
     vat_amount_cents::bigint AS vat_amount_cents, \
     gross_amount_cents::bigint AS gross_amount_cents, \
-    affiliate_name, \
-    affiliate_address, \
-    affiliate_tax_id, \
     affiliate_ust_status, \
-    issuer_name, \
-    issuer_address, \
-    issuer_tax_id, \
     pdf_blob, \
     pdf_generated_at, \
     email_sent_at, \
@@ -106,6 +100,19 @@ impl From<PiiError> for GutschriftError {
             PiiError::Decrypt(error) => Self::PiiDecrypt(error),
         }
     }
+}
+
+fn is_missing_schema_error(error: &sqlx::Error) -> bool {
+    let text = error.to_string().to_lowercase();
+    [
+        "does not exist",
+        "no such table",
+        "undefined table",
+        "no such column",
+        "undefined column",
+    ]
+    .iter()
+    .any(|needle| text.contains(needle))
 }
 
 #[derive(Debug, Error)]
@@ -480,15 +487,25 @@ struct StoredGutschriftRow {
 impl StoredGutschriftRow {
     fn from_row(row: PgRow) -> Result<Self, sqlx::Error> {
         Ok(Self {
-            id: row.try_get("id")?,
-            period_year: row.try_get::<i64, _>("period_year")? as i32,
-            period_month: row.try_get::<i64, _>("period_month")? as i32,
+            id: row.try_get::<Option<i64>, _>("id")?.unwrap_or_default(),
+            period_year: row
+                .try_get::<Option<i64>, _>("period_year")?
+                .unwrap_or_default() as i32,
+            period_month: row
+                .try_get::<Option<i64>, _>("period_month")?
+                .unwrap_or_default() as i32,
             gutschrift_number: row
                 .try_get::<Option<String>, _>("gutschrift_number")?
                 .unwrap_or_default(),
-            net_amount_cents: row.try_get("net_amount_cents")?,
-            vat_amount_cents: row.try_get("vat_amount_cents")?,
-            gross_amount_cents: row.try_get("gross_amount_cents")?,
+            net_amount_cents: row
+                .try_get::<Option<i64>, _>("net_amount_cents")?
+                .unwrap_or_default(),
+            vat_amount_cents: row
+                .try_get::<Option<i64>, _>("vat_amount_cents")?
+                .unwrap_or_default(),
+            gross_amount_cents: row
+                .try_get::<Option<i64>, _>("gross_amount_cents")?
+                .unwrap_or_default(),
             commission_ids: row.try_get("commission_ids")?,
             affiliate_ust_status: row
                 .try_get::<Option<String>, _>("affiliate_ust_status")?
@@ -654,19 +671,84 @@ pub async fn get_pdf(
          FROM affiliate_gutschriften \
          WHERE id::bigint = $1 AND affiliate_twitch_login = $2"
     );
-    let row = sqlx::query(&sql)
+    let row = match sqlx::query(&sql)
         .bind(gutschrift_id)
         .bind(&login)
         .fetch_optional(pool)
-        .await?;
+        .await
+    {
+        Ok(row) => row,
+        Err(error) if is_missing_schema_error(&error) => {
+            return get_pdf_minimal(pool, &login, gutschrift_id).await;
+        }
+        Err(error) => return Err(GutschriftError::Db(error)),
+    };
     let Some(row) = row else {
         return Ok(None);
     };
-    let row = StoredGutschriftRow::from_row(row)?;
+    let row = match StoredGutschriftRow::from_row(row) {
+        Ok(row) => row,
+        Err(error) if is_missing_schema_error(&error) => {
+            return get_pdf_minimal(pool, &login, gutschrift_id).await;
+        }
+        Err(error) => return Err(GutschriftError::Db(error)),
+    };
     let Some(pdf_blob) = row.pdf_blob.clone().filter(|blob| !blob.is_empty()) else {
         return Ok(None);
     };
     Ok(Some((row_to_metadata(&row, false), pdf_blob)))
+}
+
+async fn get_pdf_minimal(
+    pool: &PgPool,
+    affiliate_login: &str,
+    gutschrift_id: i64,
+) -> Result<Option<(GutschriftMetadata, Vec<u8>)>, GutschriftError> {
+    let row = sqlx::query(
+        r#"
+        SELECT id::bigint AS id, gutschrift_number, pdf_blob
+        FROM affiliate_gutschriften
+        WHERE id::bigint = $1 AND affiliate_twitch_login = $2
+        "#,
+    )
+    .bind(gutschrift_id)
+    .bind(affiliate_login)
+    .fetch_optional(pool)
+    .await?;
+    let Some(row) = row else {
+        return Ok(None);
+    };
+    let pdf_blob = row
+        .try_get::<Option<Vec<u8>>, _>("pdf_blob")?
+        .filter(|blob| !blob.is_empty());
+    let Some(pdf_blob) = pdf_blob else {
+        return Ok(None);
+    };
+    let number = row
+        .try_get::<Option<String>, _>("gutschrift_number")?
+        .unwrap_or_default();
+    let id = row.try_get::<i64, _>("id").unwrap_or(gutschrift_id);
+    let metadata = GutschriftMetadata {
+        id,
+        period_year: 0,
+        period_month: 0,
+        period_label: String::new(),
+        gutschrift_number: number,
+        status: STATUS_GENERATED.to_string(),
+        net_amount_cents: 0,
+        vat_amount_cents: 0,
+        gross_amount_cents: 0,
+        commission_count: 0,
+        commission_ids: Vec::new(),
+        note_text: String::new(),
+        last_error: String::new(),
+        generated_at: None,
+        emailed_at: None,
+        created_at: None,
+        download_path: Some(format!("/twitch/api/affiliate/gutschriften/{id}/pdf")),
+        has_pdf: true,
+    };
+    Ok(Some((metadata, pdf_blob)))
 }
 
 #[allow(clippy::too_many_arguments)]

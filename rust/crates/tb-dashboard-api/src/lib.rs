@@ -722,11 +722,14 @@ pub fn build_admin_streamers_router(pool: PgPool, token: String) -> Router {
             post(admin_streamers::discord_flag_handler),
         )
         .with_state(pool)
-        .layer(Extension(ExpectedToken(token)))
+        .layer(axum::middleware::from_fn(crate::auth::csrf::csrf_protect))
+        .layer(axum::middleware::from_fn(
+            crate::auth::require_admin_before_csrf,
+        ))
         .layer(axum::middleware::from_fn(
             crate::auth::level::promote_dashboard_admin_session,
         ))
-        .layer(axum::middleware::from_fn(crate::auth::csrf::csrf_protect))
+        .layer(Extension(ExpectedToken(token)))
 }
 
 /// Baut den Router für Admin-Config-Endpoints (Schreib-Seite).
@@ -807,14 +810,17 @@ pub fn build_admin_config_router(pool: PgPool, token: String) -> Router {
             post(admin_config::config_chat_handler),
         )
         .with_state(pool)
-        .layer(Extension(ExpectedToken(token)))
-        .layer(axum::middleware::from_fn(
-            crate::auth::level::promote_dashboard_admin_session,
-        ))
         // B3-7: CSRF-Schutz auf alle Admin-JSON-Writes (announcements/legal/roadmap/
         // promo/config-POST). Die Middleware lässt GET/HEAD durch, prüft Writes
         // gegen das sessiongebundene Token (Localhost-Bypass für interne Tools).
         .layer(axum::middleware::from_fn(crate::auth::csrf::csrf_protect))
+        .layer(axum::middleware::from_fn(
+            crate::auth::require_admin_before_csrf,
+        ))
+        .layer(axum::middleware::from_fn(
+            crate::auth::level::promote_dashboard_admin_session,
+        ))
+        .layer(Extension(ExpectedToken(token)))
 }
 
 /// Baut den Router für den nativen Twitch-OAuth-Dashboard-Login (B3-2).
@@ -904,7 +910,7 @@ pub fn build_auth_router(rate_limiter: RateLimiter) -> Router {
 /// Baut den Router für Affiliate-Onboarding (separate Affiliate-Session,
 /// `session_type='affiliate'`, kein Partner-Gate).
 pub fn build_affiliate_router(pool: PgPool, rate_limiter: RateLimiter) -> Router {
-    use handlers::affiliate;
+    use handlers::{admin_affiliate, affiliate};
 
     let login_rl = RateLimitLayerConfig::new(rate_limiter.clone(), "affiliate_auth_login", 30, 60);
     let callback_rl =
@@ -948,6 +954,22 @@ pub fn build_affiliate_router(pool: PgPool, rate_limiter: RateLimiter) -> Router
         .route(
             "/twitch/api/affiliate/claims",
             get(affiliate::api_claims_handler),
+        )
+        .route(
+            "/twitch/api/affiliate/gutschriften",
+            get(affiliate::api_gutschriften_handler),
+        )
+        .route(
+            "/twitch/api/affiliate/gutschriften/:gutschrift_id/pdf",
+            get(affiliate::api_gutschrift_pdf_handler),
+        )
+        .route(
+            "/twitch/api/affiliate/gutschriften/trigger",
+            post(admin_affiliate::generate_gutschriften_trigger_handler),
+        )
+        .route(
+            "/twitch/api/affiliate/admin/generate-gutschriften",
+            post(admin_affiliate::generate_gutschriften_trigger_handler),
         )
         .with_state(pool)
 }
@@ -1486,10 +1508,9 @@ mod csrf_wiring_tests {
             .ok()
     }
 
-    /// Nicht-Loopback-POST auf einen Admin-Write ohne CSRF-Token → 403 vom Layer
-    /// (fail-closed, da keine DashboardAuthState-Extension). Beweist: Layer greift.
+    /// Nicht-Loopback-POST ohne Admin-Auth → 401 vor CSRF (Python-Parität).
     #[tokio::test]
-    async fn admin_write_ohne_csrf_403() {
+    async fn admin_write_ohne_auth_401_vor_csrf() {
         let Some(pool) = pool().await else { return };
         let app = build_admin_config_router(pool, "tok".into());
         let resp = app
@@ -1503,11 +1524,38 @@ mod csrf_wiring_tests {
             )
             .await
             .unwrap();
+        assert_eq!(resp.status(), StatusCode::UNAUTHORIZED);
+        let body = axum::body::to_bytes(resp.into_body(), 65536).await.unwrap();
+        let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(json["error"], "auth_required");
+        assert_eq!(json["required"], "admin");
+    }
+
+    /// Authentifizierter Admin-POST ohne CSRF-State bleibt 403 invalid_csrf.
+    #[tokio::test]
+    async fn admin_write_mit_auth_ohne_csrf_403() {
+        let Some(pool) = pool().await else { return };
+        let app = build_admin_config_router(pool, "tok".into());
+        let resp = app
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/twitch/api/admin/announcements")
+                    .header("host", "dashboard.example.com")
+                    .header(tb_http_core::INTERNAL_TOKEN_HEADER, "tok")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
         assert_eq!(resp.status(), StatusCode::FORBIDDEN);
+        let body = axum::body::to_bytes(resp.into_body(), 65536).await.unwrap();
+        let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(json["error"], "invalid_csrf");
     }
 
     #[tokio::test]
-    async fn affiliate_generate_ohne_csrf_shape_403() {
+    async fn affiliate_generate_ohne_auth_shape_401() {
         let Some(pool) = pool().await else { return };
         let app = build_admin_config_router(pool, "tok".into());
         let resp = app
@@ -1521,10 +1569,11 @@ mod csrf_wiring_tests {
             )
             .await
             .unwrap();
-        assert_eq!(resp.status(), StatusCode::FORBIDDEN);
+        assert_eq!(resp.status(), StatusCode::UNAUTHORIZED);
         let body = axum::body::to_bytes(resp.into_body(), 65536).await.unwrap();
         let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
-        assert_eq!(json["error"], "invalid_csrf");
+        assert_eq!(json["error"], "auth_required");
+        assert_eq!(json["required"], "admin");
     }
 
     /// GET passiert den CSRF-Layer (Safe-Methode); ohne Auth liefert der Handler
