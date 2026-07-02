@@ -17,8 +17,11 @@ hex        = { workspace = true }
 thiserror  = { workspace = true }
 tracing    = { workspace = true }
 tokio      = { workspace = true, features = ["time"] }
+printpdf   = { workspace = true }
+lettre     = { workspace = true }
 tb-error   = { workspace = true }
 tb-crypto  = { workspace = true }
+tb-domain  = { workspace = true }
 tb-raid    = { workspace = true }
 tb-llm     = { workspace = true }
 tb-transport-twitch = { workspace = true }
