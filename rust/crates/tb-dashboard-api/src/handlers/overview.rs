@@ -751,6 +751,18 @@ mod tests {
         .execute(&pool)
         .await
         .expect("DDL raid_history fehlgeschlagen");
+        sqlx::query(
+            r#"
+            CREATE TABLE IF NOT EXISTS twitch_stats_category (
+                ts_utc       TIMESTAMPTZ,
+                streamer     TEXT,
+                viewer_count INTEGER
+            )
+            "#,
+        )
+        .execute(&pool)
+        .await
+        .expect("DDL stats_category fehlgeschlagen");
         // Tabellen leeren damit Wiederholungsläufe nicht alte Daten sehen
         sqlx::query("TRUNCATE twitch_stream_sessions")
             .execute(&pool)

@@ -119,13 +119,25 @@ mod tests {
         let opts = PgConnectOptions::from_str(&dsn)
             .unwrap()
             .options([("search_path", schema)]);
-        Some(
-            PgPoolOptions::new()
-                .max_connections(2)
-                .connect_with(opts)
-                .await
-                .unwrap(),
+        let pool = PgPoolOptions::new()
+            .max_connections(2)
+            .connect_with(opts)
+            .await
+            .unwrap();
+        sqlx::query(
+            "CREATE TABLE ai_analyses ( \
+                id BIGSERIAL PRIMARY KEY, \
+                streamer TEXT NOT NULL, \
+                days INTEGER NOT NULL, \
+                model TEXT NOT NULL, \
+                generated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(), \
+                data_snapshot JSONB NOT NULL, \
+                points JSONB NOT NULL )",
         )
+        .execute(&pool)
+        .await
+        .unwrap();
+        Some(pool)
     }
 
     #[tokio::test]

@@ -771,6 +771,20 @@ mod tests {
         .execute(&pool)
         .await
         .expect("DDL");
+        sqlx::query(
+            r#"
+            CREATE TABLE IF NOT EXISTS dashboard_sessions (
+                session_id   TEXT NOT NULL PRIMARY KEY,
+                session_type TEXT NOT NULL,
+                payload_enc  BYTEA NOT NULL,
+                created_at   DOUBLE PRECISION NOT NULL,
+                expires_at   DOUBLE PRECISION NOT NULL
+            )
+            "#,
+        )
+        .execute(&pool)
+        .await
+        .expect("DDL dashboard_sessions");
 
         sqlx::query("DROP TABLE IF EXISTS twitch_stream_sessions")
             .execute(&pool)
@@ -1027,7 +1041,10 @@ mod tests {
         assert_eq!(v["items"][0]["login"], "boolreauth");
         assert_eq!(v["items"][0]["oauthNeedsReauth"], true);
         assert_eq!(v["items"][0]["oauthStatus"], "reauth");
-        assert_eq!(v["items"][0]["oauthAuthorizedAt"], "2026-06-29T12:10:00+00");
+        assert_eq!(
+            v["items"][0]["oauthAuthorizedAt"],
+            "2026-06-29T12:10:00+00:00"
+        );
         assert_eq!(v["items"][0]["planId"], "manual-list");
     }
 
@@ -1198,7 +1215,7 @@ mod tests {
         assert_eq!(v["oauth"]["needsReauth"], true);
         assert_eq!(v["oauth"]["status"], "reauth");
         assert_eq!(v["oauth"]["raidEnabled"], false);
-        assert_eq!(v["oauth"]["authorizedAt"], "2026-06-29T13:10:00+00");
+        assert_eq!(v["oauth"]["authorizedAt"], "2026-06-29T13:10:00+00:00");
         assert_eq!(
             v["settings"]["manualPlanExpiresAt"],
             "2026-07-02T13:10:00+00"

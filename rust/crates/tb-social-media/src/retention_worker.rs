@@ -111,7 +111,7 @@ mod tests {
             .await
             .unwrap();
         for ddl in [
-            "CREATE TABLE twitch_clips_social_media (id SERIAL PRIMARY KEY, clip_id TEXT, streamer_login TEXT, source_kind TEXT, upload_local_path TEXT, local_file_path TEXT, status TEXT DEFAULT 'pending', retention_until TIMESTAMPTZ, discarded_at TIMESTAMPTZ, uploaded_tiktok BOOLEAN DEFAULT FALSE, uploaded_youtube BOOLEAN DEFAULT FALSE, uploaded_instagram BOOLEAN DEFAULT FALSE)",
+            "CREATE TABLE twitch_clips_social_media (id BIGSERIAL PRIMARY KEY, clip_id TEXT NOT NULL, clip_url TEXT NOT NULL, streamer_login TEXT NOT NULL, source_kind TEXT NOT NULL DEFAULT 'twitch', upload_local_path TEXT, local_file_path TEXT, status TEXT DEFAULT 'pending', created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(), retention_until TIMESTAMPTZ, discarded_at TIMESTAMPTZ, uploaded_tiktok BOOLEAN DEFAULT FALSE, uploaded_youtube BOOLEAN DEFAULT FALSE, uploaded_instagram BOOLEAN DEFAULT FALSE)",
             "CREATE TABLE social_media_platform_auth (id SERIAL PRIMARY KEY, platform TEXT, streamer_login TEXT, enabled INTEGER DEFAULT 1)",
         ] {
             sqlx::query(ddl).execute(&pool).await.unwrap();
@@ -130,17 +130,17 @@ mod tests {
         // Clip A: abgelaufen + verworfen + reale Datei → wird gelöscht.
         let file_a = std::env::temp_dir().join("tb_retention_a.mp4");
         tokio::fs::write(&file_a, b"x").await.unwrap();
-        let _a: i32 = sqlx::query_scalar("INSERT INTO twitch_clips_social_media (clip_id, streamer_login, upload_local_path, discarded_at, retention_until) VALUES ('a', 'nani', $1, NOW(), NOW() - INTERVAL '1 day') RETURNING id")
+        let _a: i64 = sqlx::query_scalar("INSERT INTO twitch_clips_social_media (clip_id, clip_url, streamer_login, upload_local_path, discarded_at, retention_until) VALUES ('a', 'https://clips.test/a', 'nani', $1, NOW(), NOW() - INTERVAL '1 day') RETURNING id")
             .bind(file_a.to_string_lossy().into_owned()).fetch_one(&pool).await.unwrap();
 
         // Clip B: abgelaufen, NICHT verworfen, tiktok aktiv aber nicht hochgeladen → behalten.
-        let b: i32 = sqlx::query_scalar("INSERT INTO twitch_clips_social_media (clip_id, streamer_login, retention_until) VALUES ('b', 'nani', NOW() - INTERVAL '1 day') RETURNING id").fetch_one(&pool).await.unwrap();
+        let b: i64 = sqlx::query_scalar("INSERT INTO twitch_clips_social_media (clip_id, clip_url, streamer_login, retention_until) VALUES ('b', 'https://clips.test/b', 'nani', NOW() - INTERVAL '1 day') RETURNING id").fetch_one(&pool).await.unwrap();
 
         // Clip C: abgelaufen, NICHT verworfen, tiktok hochgeladen → voll veröffentlicht → gelöscht.
-        let _c: i32 = sqlx::query_scalar("INSERT INTO twitch_clips_social_media (clip_id, streamer_login, retention_until, uploaded_tiktok) VALUES ('c', 'nani', NOW() - INTERVAL '1 day', TRUE) RETURNING id").fetch_one(&pool).await.unwrap();
+        let _c: i64 = sqlx::query_scalar("INSERT INTO twitch_clips_social_media (clip_id, clip_url, streamer_login, retention_until, uploaded_tiktok) VALUES ('c', 'https://clips.test/c', 'nani', NOW() - INTERVAL '1 day', TRUE) RETURNING id").fetch_one(&pool).await.unwrap();
 
         // Clip D: in der Zukunft → gar kein Kandidat.
-        let d: i32 = sqlx::query_scalar("INSERT INTO twitch_clips_social_media (clip_id, streamer_login, retention_until) VALUES ('d', 'nani', NOW() + INTERVAL '5 days') RETURNING id").fetch_one(&pool).await.unwrap();
+        let d: i64 = sqlx::query_scalar("INSERT INTO twitch_clips_social_media (clip_id, clip_url, streamer_login, retention_until) VALUES ('d', 'https://clips.test/d', 'nani', NOW() + INTERVAL '5 days') RETURNING id").fetch_one(&pool).await.unwrap();
 
         RetentionWorker::new(pool.clone()).run_once().await;
 
@@ -149,7 +149,7 @@ mod tests {
                 .fetch_all(&pool)
                 .await
                 .unwrap();
-        assert_eq!(remaining, vec![b as i64, d as i64]); // A + C gelöscht, B + D bleiben
+        assert_eq!(remaining, vec![b, d]); // A + C gelöscht, B + D bleiben
         assert!(!file_a.exists()); // Datei von A entfernt
     }
 }

@@ -1015,7 +1015,21 @@ mod tests {
             return None;
         }
         let url = std::env::var("TB_TEST_DATABASE_URL").ok()?;
-        sqlx::PgPool::connect(&url).await.ok()
+        let schema = crate::auth::session::test_schema_name("auth_login");
+        let admin_pool = sqlx::PgPool::connect(&url).await.ok()?;
+        sqlx::query(&format!("CREATE SCHEMA {schema}"))
+            .execute(&admin_pool)
+            .await
+            .ok()?;
+        admin_pool.close().await;
+
+        let opts: sqlx::postgres::PgConnectOptions = url.parse().ok()?;
+        let opts = opts.options([("search_path", schema.as_str())]);
+        sqlx::postgres::PgPoolOptions::new()
+            .max_connections(2)
+            .connect_with(opts)
+            .await
+            .ok()
     }
 
     fn test_fernet_key() -> String {
@@ -1031,6 +1045,24 @@ mod tests {
                 payload_enc  BYTEA NOT NULL,
                 created_at   DOUBLE PRECISION NOT NULL,
                 expires_at   DOUBLE PRECISION NOT NULL
+            )
+            "#,
+        )
+        .execute(pool)
+        .await
+        .unwrap();
+        sqlx::query(
+            r#"
+            CREATE TABLE IF NOT EXISTS twitch_partners (
+                id BIGSERIAL PRIMARY KEY,
+                twitch_login TEXT NOT NULL,
+                twitch_user_id TEXT NOT NULL,
+                status TEXT NOT NULL DEFAULT 'active',
+                technical_pause_reason TEXT,
+                manual_partner_opt_out INTEGER DEFAULT 0,
+                departnered_at TEXT,
+                admin_archived_at TEXT,
+                partnered_at TEXT DEFAULT CURRENT_TIMESTAMP
             )
             "#,
         )

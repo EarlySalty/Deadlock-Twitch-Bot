@@ -1,5 +1,35 @@
 # Workflow
 
+## 2026-07-02 — Merge-Prep auth_login + tb-social-media
+
+- Start: delegierter GPT-Implementierungsworker fuer Merge-Prep `auth_login`-Concurrent-DDL-Flake plus 14 `tb-social-media`-Lib-Fails; vorhandene uncommitted Merge-Prep-Fixes bleiben unangetastet, kein Commit/Push/Stash/Checkout/Reset, kein repo-weites `cargo fmt`.
+- Teil 1 Recon/Implementierung: Dashboard-DB-Tests nutzen pro Test ein eigenes Schema mit `search_path` auf dem Pool; `handlers/auth_login.rs` hing noch direkt an der Basis-DB. `maybe_pool` dort auf schema-isolierten Pool nach bestehendem Muster umgestellt, damit `CREATE TABLE ... BIGSERIAL` nicht parallel im Shared-Schema raced.
+- Setup: Timescale-Container `tb-mprep` auf `127.0.0.1:55499`, `CREATE EXTENSION timescaledb` ausgefuehrt; weitere Tests mit `TB_TEST_DATABASE_URL=postgres://postgres:tbtest@127.0.0.1:55499/postgres`, `TB_TEST_REQUIRE_DB=1`, `SQLX_OFFLINE=true`.
+- Teil 2 Diagnose/Fix: 14 `tb-social-media`-Fails einzeln mit `--nocapture` reproduziert. Alle als stale Test-Fixtures kategorisiert: Clip-/Queue-/Template-/Analytics-Fixtures lagen noch auf `SERIAL`/`INTEGER` bzw. teils `TEXT`/nullable, waehrend `fresh_schema_snapshot.txt` fuer die betroffenen Prod-Spalten `BIGINT`, `TIMESTAMPTZ`, `BOOLEAN` und nicht-nullbare Clip-Felder vorgibt; `social_media_clip_approval.clip_db_id` bleibt bewusst `INTEGER` gemaess Snapshot.
+- Teil 2 Verifikation bisher: die 14 Einzelfaelle laufen gruen; `TB_TEST_DATABASE_URL=... TB_TEST_REQUIRE_DB=1 SQLX_OFFLINE=true cargo test -p tb-social-media --lib --no-fail-fast` gruen mit 107 passed / 0 failed.
+- Zusatz-Merge-Prep-Fix: bekannter Dashboard-Rate-Limit-Middleware-Test verwendete einen festen Shared-Bucket und konnte nach roten/parallel laufenden Tests aktive Hit-Rows hinterlassen; Test nutzt jetzt einen zufaelligen XFF-Bucket und raeumt seinen Prefix auf. Das war noetig, damit der beauftragte Dreier-Gesamtlauf reproduzierbar 0 failed erreicht.
+- Final verifiziert: `cargo build -p tb-dashboard-api -p tb-social-media` gruen; `cargo clippy -p tb-dashboard-api -p tb-social-media --all-targets` exit 0 mit bestehenden Warnungen; Zieltest `handlers::auth_login::tests::callback*` 8 passed / 0 failed.
+- Finaler Dreier-Gesamtlauf zweimal gruen: `cargo test -p tb-dashboard-api -p tb-internal-api -p tb-social-media --no-fail-fast` exit 0 in zwei aufeinanderfolgenden Laeufen. Kompakte Summaries: `tb-dashboard-api` 703 passed / 0 failed / 1 ignored, `tb-internal-api` 283 passed / 0 failed, `tb-social-media` 107 passed / 0 failed; Doc-tests ok.
+- Abschluss: Report geschrieben und per `jq empty` validiert: `/home/naniadm/.claude/projects/-home-naniadm-Claude-Native-Workspace/5b3905c3-f094-4325-b670-f7f72c2d4352/scratchpad/triage/fix/mergeprep2_report.json`.
+
+## 2026-07-02 — Fix C social_media BIGINT/BOOL Decode
+
+- Start: delegierter GPT-Implementierungsworker fuer echten Decode-Bug in `tb-dashboard-api` Social-Media-Handler; Scope Prod-Code plus betroffener Test/Report, kein Commit/Push/Stash/Checkout/Reset, kein repo-weites `cargo fmt`.
+- Recon: frischer Snapshot bestaetigt `twitch_clips_social_media.id` als BIGINT und `uploaded_tiktok/uploaded_youtube/uploaded_instagram` als BOOLEAN; Python-Referenz serialisiert `clip_db_id` direkt als int und `platform_status` per `bool(row.get(...))`.
+- Recon: Dashboard-Handler dekodiert `id`/Upload-Flags aktuell als `i32`/`Option<i32>` und maskiert `try_get`-Fehler; weitere Social-Media-Helfer nutzen teils `i32` wegen `social_media_clip_approval`/`social_media_clip_enrichment.clip_db_id` weiterhin INTEGER.
+- Implementiert bisher: `normalize_id`, Clip-Ownership/Existenz, Admin-Clip-Row und manuelles Upload-Markieren auf `i64`; Clip-Row-Decode auf `Result` ohne `unwrap_or`-Masking; Upload-Flags als `Option<bool>`; `created_at` im Clip-SELECT explizit `::text`; Admin-Clip-Handler propagieren Query-/Decode-Fehler als 500 mit `tracing::error!`.
+- Test nachgeschaerft: `admin_clips_list_detail_discard` prueft echte `clip_db_id != 0`, Detail-ID und boolsche `platform_status`-Flags.
+- Verifikation: Timescale-Container `tb-cfix` auf `127.0.0.1:55497`; `cargo build -p tb-dashboard-api` gruen; `cargo clippy -p tb-dashboard-api --all-targets` exit 0 mit bestehenden Warnungen; `cargo test -p tb-dashboard-api --no-fail-fast` gruen: 703 passed / 0 failed / 1 ignored, Doc-tests 0/0/2 ignored; Zieltest `handlers::social_media::tests::admin_clips_list_detail_discard` gruen.
+- Abschluss: Report geschrieben und per `jq empty` validiert: `/home/naniadm/.claude/projects/-home-naniadm-Claude-Native-Workspace/5b3905c3-f094-4325-b670-f7f72c2d4352/scratchpad/triage/fix/cfix_report.json`; `git diff --check` gruen; Container `tb-cfix` entfernt.
+
+## 2026-07-02 — DB19 Diagnose Merge-Prep
+
+- Start: delegierter GPT-Implementierungsworker fuer Diagnose der 19 bekannten DB-Env-Lib-Fails in `tb-internal-api` und `tb-dashboard-api`; kein Commit/Push/Stash/Checkout/Reset, kein repo-weites `cargo fmt`, keine Prod-Migrations-Edits.
+- Setup: Wegwerf-Timescale-Container `tb-diag` auf `127.0.0.1:55496`, `TB_TEST_REQUIRE_DB=1`, `SQLX_OFFLINE=true`; Einzeltest-Diagnose mit `-- --nocapture` laeuft.
+- Zwischenstand: 18/19 Zieltests durch reine Test-DDL-/Seed-/Assertion-Fixes gruen; verbleibend `handlers::social_media::tests::admin_clips_list_detail_discard` als C-Befund, weil frisches Schema `twitch_clips_social_media.id` BIGINT und `uploaded_*` BOOLEAN fuehrt, Handler aber `id`/Upload-Flags als `i32` liest.
+- Verifikation: Einzeltest-Recheck 18 gruen, 1 C rot. Gesamt `cargo test -p tb-internal-api -p tb-dashboard-api --no-fail-fast -- --nocapture`: `tb-internal-api` 283/0 gruen; `tb-dashboard-api` 701 passed / 2 failed / 1 ignored, davon bekannter Timing-Flake `auth::security::integration_tests::rate_limit_middleware_429_nach_limit` plus C-Befund `admin_clips_list_detail_discard`.
+- Abschluss: Report geschrieben und per `jq empty` validiert: `/home/naniadm/.claude/projects/-home-naniadm-Claude-Native-Workspace/5b3905c3-f094-4325-b670-f7f72c2d4352/scratchpad/triage/critic/db19_diag.json`; `git diff --check` gruen; Container `tb-diag` entfernt.
+
 ## 2026-07-02 — W10 Rework Auth-Split + Announcement-Redaction
 
 - Start: delegierter GPT-Implementierungsworker fuer W10-Rework; Scope Admin-Auth 401/403-Split und Announcement-Detail-Redaktion; kein Commit/Push/Stash/Checkout/Reset, kein repo-weites `cargo fmt`.

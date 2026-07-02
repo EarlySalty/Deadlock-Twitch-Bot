@@ -330,10 +330,10 @@ mod tests {
             .await
             .unwrap();
         for ddl in [
-            "CREATE TABLE clip_templates_global (id SERIAL PRIMARY KEY, template_name TEXT UNIQUE, description_template TEXT, hashtags TEXT, category TEXT, usage_count INTEGER DEFAULT 0, created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP, created_by TEXT)",
-            "CREATE TABLE clip_templates_streamer (id SERIAL PRIMARY KEY, streamer_login TEXT, template_name TEXT, description_template TEXT, hashtags TEXT, is_default BOOLEAN DEFAULT FALSE, created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP, updated_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP, UNIQUE (streamer_login, template_name))",
-            "CREATE TABLE clip_last_hashtags (streamer_login TEXT PRIMARY KEY, hashtags TEXT NOT NULL, last_used_at TEXT NOT NULL)",
-            "CREATE TABLE twitch_clips_social_media (id SERIAL PRIMARY KEY, clip_title TEXT, streamer_login TEXT, game_name TEXT, custom_description TEXT, hashtags TEXT)",
+            "CREATE TABLE clip_templates_global (id BIGSERIAL PRIMARY KEY, template_name TEXT NOT NULL UNIQUE, description_template TEXT NOT NULL, hashtags TEXT NOT NULL, category TEXT, usage_count INTEGER DEFAULT 0, created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP, created_by TEXT)",
+            "CREATE TABLE clip_templates_streamer (id BIGSERIAL PRIMARY KEY, streamer_login TEXT NOT NULL, template_name TEXT NOT NULL, description_template TEXT NOT NULL, hashtags TEXT NOT NULL, is_default BOOLEAN DEFAULT FALSE, created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP, updated_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP, UNIQUE (streamer_login, template_name))",
+            "CREATE TABLE clip_last_hashtags (streamer_login TEXT PRIMARY KEY, hashtags TEXT NOT NULL, last_used_at TIMESTAMPTZ NOT NULL)",
+            "CREATE TABLE twitch_clips_social_media (id BIGSERIAL PRIMARY KEY, clip_id TEXT NOT NULL, clip_url TEXT NOT NULL, clip_title TEXT, streamer_login TEXT NOT NULL, game_name TEXT, custom_description TEXT, hashtags TEXT, created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(), source_kind TEXT NOT NULL DEFAULT 'twitch')",
         ] {
             sqlx::query(ddl).execute(&pool).await.unwrap();
         }
@@ -365,7 +365,7 @@ mod tests {
         assert_eq!(list[0].hashtags, tags(&["#deadlock", "#{{game}}"]));
 
         // Clip + apply.
-        let clip: i32 = sqlx::query_scalar("INSERT INTO twitch_clips_social_media (clip_title, streamer_login, game_name) VALUES ('Insane 1v3', 'nani', 'Dead Lock') RETURNING id").fetch_one(&pool).await.unwrap();
+        let clip: i64 = sqlx::query_scalar("INSERT INTO twitch_clips_social_media (clip_id, clip_url, clip_title, streamer_login, game_name) VALUES ('tpl-1', 'https://clips.test/tpl-1', 'Insane 1v3', 'nani', 'Dead Lock') RETURNING id").fetch_one(&pool).await.unwrap();
         assert!(apply_template_to_clip(&pool, clip, tid, true).await);
         let (desc, ht): (Option<String>, Option<String>) = sqlx::query_as(
             "SELECT custom_description, hashtags FROM twitch_clips_social_media WHERE id = $1",

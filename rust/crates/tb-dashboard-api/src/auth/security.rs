@@ -489,6 +489,13 @@ mod integration_tests {
         ensure_table(&pool).await;
         let limiter = RateLimiter::new(pool.clone(), test_fernet_key());
         let config = RateLimitLayerConfig::new(limiter, "test_bucket", 2, 60);
+        let client = format!("ratelimit-mw-{}", tb_crypto::random_urlsafe_token(8));
+        let prefix = bucket_prefix(&format!("test_bucket:{client}"), 60);
+        sqlx::query("DELETE FROM dashboard_sessions WHERE session_id LIKE $1")
+            .bind(format!("{}%", super::escape_like(&prefix)))
+            .execute(&pool)
+            .await
+            .ok();
 
         let app = Router::new()
             .route("/x", get(|| async { "ok" }))
@@ -500,11 +507,12 @@ mod integration_tests {
         let make_req = || {
             let mut req = axum::http::Request::builder()
                 .uri("/x")
+                .header("x-forwarded-for", &client)
                 .body(axum::body::Body::empty())
                 .unwrap();
-            // Nicht-Loopback-Peer, damit der IP-Bucket greift.
+            // Loopback-Peer wie hinter dem lokalen Proxy; der Bucket kommt aus XFF.
             req.extensions_mut().insert(axum::extract::ConnectInfo(
-                "203.0.113.7:5555".parse::<SocketAddr>().unwrap(),
+                "127.0.0.1:5555".parse::<SocketAddr>().unwrap(),
             ));
             req
         };
@@ -515,6 +523,12 @@ mod integration_tests {
         let limited = app.clone().oneshot(make_req()).await.unwrap();
         assert_eq!(limited.status(), StatusCode::TOO_MANY_REQUESTS);
         assert!(limited.headers().get(axum::http::header::RETRY_AFTER).is_some());
+
+        sqlx::query("DELETE FROM dashboard_sessions WHERE session_id LIKE $1")
+            .bind(format!("{}%", super::escape_like(&prefix)))
+            .execute(&pool)
+            .await
+            .ok();
     }
 
     /// Abgelaufene Hits zählen nicht mehr → Slot wird wieder frei.
