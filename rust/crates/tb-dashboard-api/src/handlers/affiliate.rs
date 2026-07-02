@@ -15,8 +15,8 @@ use serde_json::{json, Value};
 use sqlx::{PgPool, Row};
 use tb_analytics::{
     affiliate_pii::{
-        build_readiness, is_valid_ust_status, load_affiliate_pii, save_affiliate_pii, PiiInput,
-        PiiPayload,
+        build_readiness, is_valid_ust_status, load_affiliate_pii, migrate_from_plaintext,
+        save_affiliate_pii, PiiInput, PiiPayload,
     },
     stripe::StripeClient,
 };
@@ -137,7 +137,7 @@ pub async fn auth_login_handler(
         return Redirect::to("/twitch/affiliate/portal").into_response();
     }
 
-    let redirect_uri = affiliate_auth_redirect_uri(&headers);
+    let redirect_uri = affiliate_auth_redirect_uri();
     let state_token = tb_crypto::random_urlsafe_token(24);
     let oauth_state = AffiliateOAuthState {
         redirect_uri: redirect_uri.clone(),
@@ -285,7 +285,7 @@ pub async fn connect_stripe_handler(
     };
 
     let state_token = tb_crypto::random_urlsafe_token(24);
-    let redirect_uri = affiliate_stripe_redirect_uri(&headers);
+    let redirect_uri = affiliate_stripe_redirect_uri();
     let connect_state = AffiliateConnectState {
         redirect_uri: redirect_uri.clone(),
         twitch_login: session.twitch_login.clone(),
@@ -376,6 +376,7 @@ pub async fn connect_stripe_callback_handler(
         tracing::error!(%error, "Affiliate Stripe Connect DB-Update fehlgeschlagen");
         return text(StatusCode::BAD_GATEWAY, "Stripe Connect fehlgeschlagen.");
     }
+    // TODO(Welle B): pending/failed Commissions replayen + Advisory-Lock um stripe_account_id-Update (Python _affiliate_replay_pending_commissions, affiliate_mixin.py:271-287; Helper tb_analytics::affiliate_commission.rs:269).
     Redirect::to("/twitch/affiliate/portal").into_response()
 }
 
@@ -398,6 +399,10 @@ pub async fn api_me_handler(
             return json_error(StatusCode::INTERNAL_SERVER_ERROR, "db");
         }
     };
+    if let Err(error) = migrate_legacy_plaintext_pii(&pool, cipher.as_ref()).await {
+        tracing::error!(?error, "Affiliate-PII-Legacy-Migration fehlgeschlagen");
+        return json_error(StatusCode::INTERNAL_SERVER_ERROR, "db");
+    }
     match load_profile(&pool, &cipher, &session.twitch_login).await {
         Ok(Some((account, pii))) => {
             let readiness = build_readiness(&pii);
@@ -447,6 +452,10 @@ pub async fn api_profile_update_handler(
             return json_error(StatusCode::INTERNAL_SERVER_ERROR, "db");
         }
     };
+    if let Err(error) = migrate_legacy_plaintext_pii(&pool, cipher.as_ref()).await {
+        tracing::error!(?error, "Affiliate-PII-Legacy-Migration fehlgeschlagen");
+        return json_error(StatusCode::INTERNAL_SERVER_ERROR, "db");
+    }
 
     let login = session.twitch_login.trim().to_lowercase();
     let account_exists = match load_account(&pool, &login).await {
@@ -608,6 +617,17 @@ async fn load_profile(
     Ok(Some((account, pii)))
 }
 
+async fn migrate_legacy_plaintext_pii(
+    pool: &PgPool,
+    cipher: &FieldCipher,
+) -> Result<(), AffiliatePersistError> {
+    let migrated = migrate_from_plaintext(pool, cipher).await?;
+    if migrated > 0 {
+        tracing::info!(migrated, "Affiliate-PII-Legacy-Klartext migriert");
+    }
+    Ok(())
+}
+
 async fn load_account(pool: &PgPool, login: &str) -> Result<Option<AffiliateAccount>, sqlx::Error> {
     let row = sqlx::query(
         r#"
@@ -718,55 +738,25 @@ fn build_stripe_connect_authorize_url(client_id: &str, redirect_uri: &str, state
     format!("{STRIPE_CONNECT_AUTHORIZE_URL}?{query}")
 }
 
-fn affiliate_auth_redirect_uri(headers: &HeaderMap) -> String {
+fn affiliate_auth_redirect_uri() -> String {
     if let Some(uri) = non_empty_env(&["TWITCH_AFFILIATE_AUTH_REDIRECT_URI"]) {
         return uri;
     }
-    format!("{}{}", public_origin(headers), AFFILIATE_AUTH_CALLBACK_PATH)
+    format!("{}{}", public_origin(), AFFILIATE_AUTH_CALLBACK_PATH)
 }
 
-fn affiliate_stripe_redirect_uri(headers: &HeaderMap) -> String {
-    format!(
-        "{}{}",
-        public_origin(headers),
-        AFFILIATE_STRIPE_CALLBACK_PATH
-    )
+fn affiliate_stripe_redirect_uri() -> String {
+    format!("{}{}", public_origin(), AFFILIATE_STRIPE_CALLBACK_PATH)
 }
 
-fn public_origin(headers: &HeaderMap) -> String {
-    request_origin(headers)
-        .or_else(|| {
-            non_empty_env(&[
-                "TWITCH_PUBLIC_DASHBOARD_BASE_URL",
-                "TWITCH_PUBLIC_URL",
-                "PUBLIC_URL",
-            ])
-            .and_then(|value| origin_from_urlish(&value))
-        })
-        .unwrap_or_else(|| DEFAULT_PUBLIC_ORIGIN.to_string())
-}
-
-fn request_origin(headers: &HeaderMap) -> Option<String> {
-    let host = forwarded_header_part(headers, "host")
-        .or_else(|| header_first(headers, "x-forwarded-host"))
-        .or_else(|| header_first(headers, "host"))?;
-    let host = sanitize_host(&host)?;
-    let proto = forwarded_header_part(headers, "proto")
-        .or_else(|| header_first(headers, "x-forwarded-proto"))
-        .unwrap_or_else(|| "https".to_string());
-    let proto = proto
-        .split(',')
-        .next()
-        .unwrap_or("")
-        .trim()
-        .trim_matches('"')
-        .to_lowercase();
-    let scheme = match proto.as_str() {
-        "http" if is_loopback_host(&host) => "http",
-        "https" | "" => "https",
-        _ => "https",
-    };
-    Some(format!("{scheme}://{host}"))
+fn public_origin() -> String {
+    non_empty_env(&[
+        "TWITCH_PUBLIC_DASHBOARD_BASE_URL",
+        "TWITCH_PUBLIC_URL",
+        "PUBLIC_URL",
+    ])
+    .and_then(|value| origin_from_urlish(&value))
+    .unwrap_or_else(|| DEFAULT_PUBLIC_ORIGIN.to_string())
 }
 
 fn origin_from_urlish(raw: &str) -> Option<String> {
@@ -791,17 +781,6 @@ fn origin_from_urlish(raw: &str) -> Option<String> {
         None => host.to_string(),
     };
     Some(format!("{scheme}://{}", sanitize_host(&host)?))
-}
-
-fn forwarded_header_part(headers: &HeaderMap, key: &str) -> Option<String> {
-    let raw = header_first(headers, "forwarded")?;
-    for part in raw.split(';') {
-        let (k, v) = part.split_once('=')?;
-        if k.trim().eq_ignore_ascii_case(key) {
-            return Some(v.trim().trim_matches('"').to_string());
-        }
-    }
-    None
 }
 
 fn header_first(headers: &HeaderMap, name: &str) -> Option<String> {
@@ -934,11 +913,41 @@ mod tests {
     use axum::http::header::{COOKIE, LOCATION, SET_COOKIE};
     use sqlx::postgres::{PgConnectOptions, PgPoolOptions};
     use std::str::FromStr;
+    use std::sync::Mutex;
     use tb_transport_twitch::user_token::UserTokenError;
     use wiremock::matchers::{body_string_contains, method, path};
     use wiremock::{Mock, MockServer, ResponseTemplate};
 
     const TEST_FERNET_KEY: &str = "dGVzdGtleTEyMzQ1Njc4OTAxMjM0NTY3ODkwMTIzNDU=";
+    static ENV_LOCK: Mutex<()> = Mutex::new(());
+
+    struct EnvGuard {
+        key: &'static str,
+        previous: Option<String>,
+    }
+
+    impl EnvGuard {
+        fn set(key: &'static str, value: &str) -> Self {
+            let previous = std::env::var(key).ok();
+            std::env::set_var(key, value);
+            Self { key, previous }
+        }
+
+        fn remove(key: &'static str) -> Self {
+            let previous = std::env::var(key).ok();
+            std::env::remove_var(key);
+            Self { key, previous }
+        }
+    }
+
+    impl Drop for EnvGuard {
+        fn drop(&mut self) {
+            match &self.previous {
+                Some(value) => std::env::set_var(self.key, value),
+                None => std::env::remove_var(self.key),
+            }
+        }
+    }
 
     #[derive(Clone)]
     struct FakeOAuth {
@@ -1072,13 +1081,44 @@ mod tests {
     }
 
     #[test]
-    fn redirect_uri_nutzt_forwarded_host_und_proto() {
-        let mut headers = HeaderMap::new();
-        headers.insert("x-forwarded-host", "aff.example.test".parse().unwrap());
-        headers.insert("x-forwarded-proto", "https".parse().unwrap());
+    fn redirect_uri_nutzt_secret_und_public_url_env() {
+        let _guard = ENV_LOCK.lock().unwrap_or_else(|p| p.into_inner());
+        let _auth = EnvGuard::set(
+            "TWITCH_AFFILIATE_AUTH_REDIRECT_URI",
+            "https://auth.example.test/custom/callback",
+        );
+        let _public = EnvGuard::set(
+            "TWITCH_PUBLIC_DASHBOARD_BASE_URL",
+            "https://public.example.test",
+        );
+        let _legacy_public = EnvGuard::remove("TWITCH_PUBLIC_URL");
+        let _generic_public = EnvGuard::remove("PUBLIC_URL");
+
         assert_eq!(
-            affiliate_stripe_redirect_uri(&headers),
-            "https://aff.example.test/twitch/affiliate/connect/stripe/callback"
+            affiliate_auth_redirect_uri(),
+            "https://auth.example.test/custom/callback"
+        );
+        assert_eq!(
+            affiliate_stripe_redirect_uri(),
+            "https://public.example.test/twitch/affiliate/connect/stripe/callback"
+        );
+    }
+
+    #[test]
+    fn redirect_uri_fallback_ignoriert_request_host() {
+        let _guard = ENV_LOCK.lock().unwrap_or_else(|p| p.into_inner());
+        let _auth = EnvGuard::remove("TWITCH_AFFILIATE_AUTH_REDIRECT_URI");
+        let _public_dashboard = EnvGuard::remove("TWITCH_PUBLIC_DASHBOARD_BASE_URL");
+        let _legacy_public = EnvGuard::remove("TWITCH_PUBLIC_URL");
+        let _generic_public = EnvGuard::remove("PUBLIC_URL");
+
+        assert_eq!(
+            affiliate_auth_redirect_uri(),
+            "https://deutsche-deadlock-community.de/twitch/auth/affiliate/callback"
+        );
+        assert_eq!(
+            affiliate_stripe_redirect_uri(),
+            "https://deutsche-deadlock-community.de/twitch/affiliate/connect/stripe/callback"
         );
     }
 
@@ -1170,7 +1210,7 @@ mod tests {
                 .parse()
                 .unwrap(),
         );
-        headers.insert("host", "deutsche-deadlock-community.de".parse().unwrap());
+        headers.insert("host", "attacker.test".parse().unwrap());
 
         let response = connect_stripe_handler(
             Some(Extension(state.clone())),
@@ -1190,10 +1230,10 @@ mod tests {
             params.get("client_id").map(|v| v.as_ref()),
             Some("ca_code_123")
         );
-        assert_eq!(
-            params.get("redirect_uri").map(|v| v.as_ref()),
-            Some("https://deutsche-deadlock-community.de/twitch/affiliate/connect/stripe/callback")
-        );
+        let redirect_uri = params.get("redirect_uri").map(|v| v.as_ref()).unwrap();
+        let expected_redirect_uri = affiliate_stripe_redirect_uri();
+        assert_eq!(redirect_uri, expected_redirect_uri.as_str());
+        assert!(!redirect_uri.contains("attacker.test"));
         let state_token = params.get("state").unwrap().to_string();
         let saved = state
             .consume_affiliate_connect_state(&state_token)
@@ -1201,10 +1241,7 @@ mod tests {
             .unwrap()
             .unwrap();
         assert_eq!(saved.twitch_login, "partner_one");
-        assert_eq!(
-            saved.redirect_uri,
-            "https://deutsche-deadlock-community.de/twitch/affiliate/connect/stripe/callback"
-        );
+        assert_eq!(saved.redirect_uri, expected_redirect_uri);
     }
 
     #[tokio::test]
@@ -1399,6 +1436,72 @@ mod tests {
             raw.try_get::<String, _>("ust_status").unwrap(),
             "regelbesteuert"
         );
+    }
+
+    #[tokio::test]
+    async fn api_me_migriert_legacy_plaintext_pii() {
+        let Some(pool) = pool("t_affiliate_api_me_migrate").await else {
+            return;
+        };
+        create_tables(&pool).await;
+        sqlx::query(
+            r#"
+            INSERT INTO affiliate_accounts
+                (twitch_login, twitch_user_id, display_name, email, full_name, address_line1,
+                 address_city, address_zip, address_country, created_at, updated_at)
+            VALUES ('affiliate_one', '1001', 'Affiliate One', 'legacy@example.com',
+                    'Legacy Partner', 'Altbau 5', 'Hamburg', '20095', 'DE',
+                    '2026-01-01T00:00:00+00:00', '2026-01-01T00:00:00+00:00')
+            "#,
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+        let state = state(pool.clone());
+        let session = state
+            .create_affiliate_session("affiliate_one", "1001", "Affiliate One", "")
+            .await
+            .unwrap();
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            COOKIE,
+            format!("{}={}", AFFILIATE_COOKIE_NAME, session.session_id)
+                .parse()
+                .unwrap(),
+        );
+
+        let response = api_me_handler(
+            Some(Extension(state)),
+            Some(Extension(Arc::new(test_cipher()))),
+            headers,
+            State(pool.clone()),
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+        let value: Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(value["email"], "legacy@example.com");
+        assert_eq!(value["full_name"], "Legacy Partner");
+        assert_eq!(value["address_line1"], "Altbau 5");
+        assert_eq!(value["address_city"], "Hamburg");
+        assert_eq!(value["address_zip"], "20095");
+
+        let account = sqlx::query(
+            "SELECT email, full_name, address_line1, address_city, address_zip, address_country FROM affiliate_accounts WHERE twitch_login = 'affiliate_one'",
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        for column in [
+            "email",
+            "full_name",
+            "address_line1",
+            "address_city",
+            "address_zip",
+            "address_country",
+        ] {
+            assert_eq!(account.try_get::<String, _>(column).unwrap(), "");
+        }
     }
 
     #[tokio::test]

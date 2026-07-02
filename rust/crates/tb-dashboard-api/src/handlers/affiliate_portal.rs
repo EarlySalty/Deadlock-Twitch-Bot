@@ -20,27 +20,10 @@ use crate::auth::session::DashboardAuthState;
 use crate::handlers::affiliate::affiliate_session_from_headers;
 use crate::handlers::spa::dist_root;
 
-fn dashboard_authenticated_login(auth: &DashboardAuthLevel) -> Option<String> {
-    match auth {
-        DashboardAuthLevel::Partner { twitch_login, .. } => {
-            Some(twitch_login.trim().to_lowercase())
-        }
-        DashboardAuthLevel::Admin { actor: Some(actor) } => {
-            Some(actor.twitch_login.trim().to_lowercase())
-        }
-        _ => None,
-    }
-    .filter(|login| !login.is_empty())
-}
-
 async fn authenticated_login(
-    auth: &DashboardAuthLevel,
     headers: &HeaderMap,
     auth_state: Option<&DashboardAuthState>,
 ) -> Option<String> {
-    if let Some(login) = dashboard_authenticated_login(auth) {
-        return Some(login);
-    }
     affiliate_session_from_headers(auth_state, headers)
         .await
         .map(|session| session.twitch_login)
@@ -48,13 +31,13 @@ async fn authenticated_login(
 }
 
 pub async fn portal_handler(
-    auth: DashboardAuthLevel,
+    _auth: DashboardAuthLevel,
     auth_state: Option<Extension<DashboardAuthState>>,
     headers: HeaderMap,
     State(pool): State<PgPool>,
 ) -> impl IntoResponse {
     let Some(login) =
-        authenticated_login(&auth, &headers, auth_state.as_ref().map(|state| &state.0)).await
+        authenticated_login(&headers, auth_state.as_ref().map(|state| &state.0)).await
     else {
         return (
             StatusCode::UNAUTHORIZED,
@@ -188,14 +171,14 @@ pub struct CommissionsQuery {
 }
 
 pub async fn commissions_handler(
-    auth: DashboardAuthLevel,
+    _auth: DashboardAuthLevel,
     auth_state: Option<Extension<DashboardAuthState>>,
     headers: HeaderMap,
     State(pool): State<PgPool>,
     Query(query): Query<CommissionsQuery>,
 ) -> impl IntoResponse {
     let Some(login) =
-        authenticated_login(&auth, &headers, auth_state.as_ref().map(|state| &state.0)).await
+        authenticated_login(&headers, auth_state.as_ref().map(|state| &state.0)).await
     else {
         return (
             StatusCode::UNAUTHORIZED,
@@ -355,60 +338,40 @@ pub async fn portal_page_handler() -> Response {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::auth::level::AdminActor;
+    use crate::auth::session::{DashboardAuthState, AFFILIATE_COOKIE_NAME};
+    use axum::http::header::COOKIE;
     use axum::{body::to_bytes, response::IntoResponse};
     use sqlx::postgres::{PgConnectOptions, PgPoolOptions};
     use std::str::FromStr;
 
-    #[test]
-    fn login_nur_aus_twitch_session() {
-        assert_eq!(
-            dashboard_authenticated_login(&DashboardAuthLevel::Partner {
-                twitch_login: "Nani".into(),
-                twitch_user_id: "1".into(),
-                display_name: "Nani".into(),
-            })
-            .as_deref(),
-            Some("nani")
-        );
-        assert!(dashboard_authenticated_login(&DashboardAuthLevel::admin()).is_none());
-        assert_eq!(
-            dashboard_authenticated_login(&DashboardAuthLevel::Admin {
-                actor: Some(AdminActor {
-                    twitch_login: "EarlySalty".into(),
-                    twitch_user_id: "2".into(),
-                }),
-            })
-            .as_deref(),
-            Some("earlysalty")
-        );
-    }
+    const TEST_FERNET_KEY: &str = "dGVzdGtleTEyMzQ1Njc4OTAxMjM0NTY3ODkwMTIzNDU=";
 
-    async fn pool() -> Option<PgPool> {
+    async fn pool(schema: &str) -> Option<PgPool> {
         let dsn = std::env::var("TB_TEST_DATABASE_URL").ok()?;
         let admin = PgPoolOptions::new()
             .max_connections(1)
             .connect(&dsn)
             .await
             .ok()?;
-        sqlx::query("DROP SCHEMA IF EXISTS t_affiliate_portal CASCADE")
+        sqlx::query(&format!("DROP SCHEMA IF EXISTS {schema} CASCADE"))
             .execute(&admin)
             .await
             .ok()?;
-        sqlx::query("CREATE SCHEMA t_affiliate_portal")
+        sqlx::query(&format!("CREATE SCHEMA {schema}"))
             .execute(&admin)
             .await
             .ok()?;
         admin.close().await;
         let options = PgConnectOptions::from_str(&dsn)
             .ok()?
-            .options([("search_path", "t_affiliate_portal")]);
+            .options([("search_path", schema)]);
         let pool = PgPoolOptions::new()
             .max_connections(2)
             .connect_with(options)
             .await
             .ok()?;
         for ddl in [
+            "CREATE TABLE dashboard_sessions (session_id TEXT PRIMARY KEY, session_type TEXT NOT NULL, payload_enc BYTEA NOT NULL, created_at DOUBLE PRECISION NOT NULL, expires_at DOUBLE PRECISION NOT NULL)",
             "CREATE TABLE affiliate_accounts (twitch_login TEXT PRIMARY KEY, display_name TEXT, is_active INTEGER)",
             "CREATE TABLE affiliate_streamer_claims (affiliate_twitch_login TEXT, claimed_streamer_login TEXT, claimed_at TEXT)",
             "CREATE TABLE affiliate_commissions (id INTEGER GENERATED ALWAYS AS IDENTITY PRIMARY KEY, affiliate_twitch_login TEXT NOT NULL, streamer_login TEXT NOT NULL, stripe_event_id TEXT, stripe_invoice_id TEXT, stripe_customer_id TEXT, stripe_transfer_id TEXT, brutto_cents INTEGER NOT NULL DEFAULT 0, commission_cents INTEGER NOT NULL, currency TEXT NOT NULL DEFAULT 'eur', status TEXT NOT NULL DEFAULT 'pending', period_start TEXT, period_end TEXT, created_at TEXT NOT NULL, transferred_at TEXT, error_message TEXT)",
@@ -419,9 +382,71 @@ mod tests {
         Some(pool)
     }
 
+    fn state(pool: PgPool) -> DashboardAuthState {
+        DashboardAuthState::new(pool, TEST_FERNET_KEY.to_string())
+    }
+
+    fn partner_auth() -> DashboardAuthLevel {
+        DashboardAuthLevel::Partner {
+            twitch_login: "nani".into(),
+            twitch_user_id: "1".into(),
+            display_name: "Nani".into(),
+        }
+    }
+
+    async fn affiliate_cookie_headers(state: &DashboardAuthState) -> HeaderMap {
+        let session = state
+            .create_affiliate_session("nani", "1", "Nani", "")
+            .await
+            .unwrap();
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            COOKIE,
+            format!("{}={}", AFFILIATE_COOKIE_NAME, session.session_id)
+                .parse()
+                .unwrap(),
+        );
+        headers
+    }
+
+    #[tokio::test]
+    async fn dashboard_session_ohne_affiliate_cookie_wird_abgewiesen() {
+        let Some(pool) = pool("t_affiliate_portal_auth").await else {
+            return;
+        };
+        sqlx::query("INSERT INTO affiliate_accounts VALUES ('nani','Nani',1)")
+            .execute(&pool)
+            .await
+            .unwrap();
+        let auth_state = state(pool.clone());
+
+        let response = portal_handler(
+            partner_auth(),
+            Some(Extension(auth_state.clone())),
+            HeaderMap::new(),
+            State(pool.clone()),
+        )
+        .await
+        .into_response();
+        assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+
+        let response = commissions_handler(
+            partner_auth(),
+            Some(Extension(auth_state)),
+            HeaderMap::new(),
+            State(pool),
+            Query(CommissionsQuery::default()),
+        )
+        .await
+        .into_response();
+        assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+    }
+
     #[tokio::test]
     async fn portal_liefert_claims_und_provisionen() {
-        let Some(pool) = pool().await else { return };
+        let Some(pool) = pool("t_affiliate_portal_stats").await else {
+            return;
+        };
         sqlx::query("INSERT INTO affiliate_accounts VALUES ('nani','Nani',1)")
             .execute(&pool)
             .await
@@ -438,15 +463,13 @@ mod tests {
             .execute(&pool)
             .await
             .unwrap();
+        let auth_state = state(pool.clone());
+        let headers = affiliate_cookie_headers(&auth_state).await;
 
         let response = portal_handler(
-            DashboardAuthLevel::Partner {
-                twitch_login: "nani".into(),
-                twitch_user_id: "1".into(),
-                display_name: "Nani".into(),
-            },
-            None,
-            HeaderMap::new(),
+            partner_auth(),
+            Some(Extension(auth_state)),
+            headers,
             State(pool),
         )
         .await
@@ -461,7 +484,9 @@ mod tests {
 
     #[tokio::test]
     async fn commissions_route_liefert_page_total_und_sortierung() {
-        let Some(pool) = pool().await else { return };
+        let Some(pool) = pool("t_affiliate_portal_commissions").await else {
+            return;
+        };
         sqlx::query("INSERT INTO affiliate_accounts VALUES ('nani','Nani',1)")
             .execute(&pool)
             .await
@@ -477,15 +502,13 @@ mod tests {
         .execute(&pool)
         .await
         .unwrap();
+        let auth_state = state(pool.clone());
+        let headers = affiliate_cookie_headers(&auth_state).await;
 
         let response = commissions_handler(
-            DashboardAuthLevel::Partner {
-                twitch_login: "nani".into(),
-                twitch_user_id: "1".into(),
-                display_name: "Nani".into(),
-            },
-            None,
-            HeaderMap::new(),
+            partner_auth(),
+            Some(Extension(auth_state)),
+            headers,
             State(pool),
             Query(CommissionsQuery {
                 page: Some(1),
