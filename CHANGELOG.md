@@ -1,3 +1,11 @@
+## #321 — Dashboard akzeptiert wieder seinen konfigurierten Port
+
+**Ausgangslage:** Die neue Start-Absicherung des Dashboards verglich den Port gegen einen fest verdrahteten Standardwert statt gegen den tatsächlich konfigurierten. Auf dem regulären Live-Port hätte eine scharf geschaltete Absicherung den Start abgelehnt.
+
+**Änderung:** Die Absicherung akzeptiert jetzt jeden konfigurierten Port und blockiert nur noch den fürs Master-Backend reservierten Port.
+
+**Ergebnis:** Die Start-Absicherung lässt sich gefahrlos aktivieren, ohne den laufenden Betrieb auf dem regulären Port zu behindern.
+
 ## #320 — Stream-Ankündigungen: keine Doppel-Posts mehr, keine Pings bei Kurz-Aussetzern
 
 **Problem:** Ging ein Stream kurz offline oder meldete Twitch das Spiel kurzzeitig falsch, hielt der Bot das für einen neuen Stream und postete die Live-Ankündigung doppelt — inklusive erneutem Rollen-Ping. Dazu zeigten Ankündigungen direkt nach Stream-Start „0 Zuschauer", was billiger aussieht als es ist.

@@ -88,6 +88,13 @@ fn split_runtime_enforced() -> bool {
     optional_env_bool("TWITCH_SPLIT_RUNTIME_ENFORCE", true)
 }
 
+fn resolve_runtime_role(raw: &str) -> String {
+    match raw.trim().to_lowercase().replace('-', "_").as_str() {
+        "bot" | "worker" | "twitch_worker" => ROLE_TWITCH_WORKER.to_string(),
+        other => other.to_string(),
+    }
+}
+
 fn runtime_role_from_env() -> String {
     let raw = std::env::var("TWITCH_RUNTIME_ROLE")
         .ok()
@@ -98,21 +105,21 @@ fn runtime_role_from_env() -> String {
                 .filter(|v| !v.trim().is_empty())
         })
         .unwrap_or_default();
-    match raw.trim().to_lowercase().replace('-', "_").as_str() {
-        "bot" | "worker" | "twitch_worker" => ROLE_TWITCH_WORKER.to_string(),
-        other => other.to_string(),
-    }
+    resolve_runtime_role(&raw)
 }
 
-fn enforce_dashboard_runtime(port: u16) -> Result<String, String> {
-    let role = runtime_role_from_env();
+fn enforce_dashboard_runtime(role: Option<&str>, port: u16) -> Result<String, String> {
+    let role = match role {
+        Some(value) => resolve_runtime_role(value),
+        None => runtime_role_from_env(),
+    };
     if !split_runtime_enforced() {
         return Ok(role);
     }
     if role != ROLE_DASHBOARD {
         return Err(role_error_message(&role));
     }
-    if port != DASHBOARD_SERVICE_PORT {
+    if port == MASTER_API_RESERVED_PORT {
         return Err(port_error_message(port));
     }
     Ok(role)
@@ -134,13 +141,9 @@ fn role_error_message(got_role: &str) -> String {
 }
 
 fn port_error_message(got_port: u16) -> String {
-    if got_port == MASTER_API_RESERVED_PORT {
-        return format!(
-            "Runtime hardening violation for dashboard_service: port {MASTER_API_RESERVED_PORT} is reserved for the master API service."
-        );
-    }
+    debug_assert_eq!(got_port, MASTER_API_RESERVED_PORT);
     format!(
-        "Runtime hardening violation for dashboard_service: expected port {DASHBOARD_SERVICE_PORT}, got {got_port}."
+        "Runtime hardening violation for dashboard_service: port {got_port} is reserved for the master API service."
     )
 }
 
@@ -161,7 +164,9 @@ impl RuntimePidLock {
             .create(true)
             .truncate(false)
             .open(&lock_path)
-            .map_err(|error| format!("Runtime-Lock-Datei nicht oeffenbar ({lock_path:?}): {error}"))?;
+            .map_err(|error| {
+                format!("Runtime-Lock-Datei nicht oeffenbar ({lock_path:?}): {error}")
+            })?;
         acquire_file_lock(&handle).map_err(|error| {
             let owner = fs::read_to_string(&pid_path).unwrap_or_else(|_| String::new());
             if owner.trim().is_empty() {
@@ -182,7 +187,9 @@ impl RuntimePidLock {
         }
         if let Err(error) = handle.seek(SeekFrom::Start(0)) {
             release_file_lock(&handle);
-            return Err(format!("Runtime-Lock-Metadaten nicht positionierbar: {error}"));
+            return Err(format!(
+                "Runtime-Lock-Metadaten nicht positionierbar: {error}"
+            ));
         }
         if let Err(error) = handle.write_all(metadata.as_bytes()) {
             release_file_lock(&handle);
@@ -274,7 +281,7 @@ async fn main() {
 
     let port: u16 = dashboard_port_from_env();
 
-    match enforce_dashboard_runtime(port) {
+    match enforce_dashboard_runtime(None, port) {
         Ok(role) => {
             tracing::info!(runtime_role = %role, port, "Dashboard Runtime-Härtung bestanden");
         }
@@ -407,5 +414,78 @@ async fn main() {
     {
         tracing::error!(%error, "Dashboard-Server beendet");
         std::process::exit(1);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    struct EnvGuard {
+        saved: Vec<(&'static str, Option<String>)>,
+    }
+
+    impl EnvGuard {
+        fn capture(names: &[&'static str]) -> Self {
+            Self {
+                saved: names
+                    .iter()
+                    .map(|name| (*name, std::env::var(name).ok()))
+                    .collect(),
+            }
+        }
+    }
+
+    impl Drop for EnvGuard {
+        fn drop(&mut self) {
+            for (name, value) in &self.saved {
+                match value {
+                    Some(value) => std::env::set_var(name, value),
+                    None => std::env::remove_var(name),
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn dashboard_runtime_enforcement_contract() {
+        let _guard = EnvGuard::capture(&[
+            "TWITCH_RUNTIME_ENFORCE",
+            "TWITCH_SPLIT_RUNTIME_ENFORCE",
+            "TWITCH_RUNTIME_ROLE",
+            "TWITCH_SPLIT_RUNTIME_ROLE",
+        ]);
+        std::env::set_var("TWITCH_RUNTIME_ENFORCE", "1");
+        std::env::remove_var("TWITCH_SPLIT_RUNTIME_ENFORCE");
+        std::env::remove_var("TWITCH_RUNTIME_ROLE");
+        std::env::remove_var("TWITCH_SPLIT_RUNTIME_ROLE");
+
+        assert_eq!(
+            enforce_dashboard_runtime(Some(ROLE_DASHBOARD), 8769).as_deref(),
+            Ok(ROLE_DASHBOARD)
+        );
+        assert_eq!(
+            enforce_dashboard_runtime(Some(ROLE_DASHBOARD), DASHBOARD_SERVICE_PORT).as_deref(),
+            Ok(ROLE_DASHBOARD)
+        );
+
+        let reserved_error =
+            enforce_dashboard_runtime(Some(ROLE_DASHBOARD), MASTER_API_RESERVED_PORT).unwrap_err();
+        assert!(reserved_error.contains("reserved for the master API service"));
+
+        assert!(enforce_dashboard_runtime(Some("master"), DASHBOARD_SERVICE_PORT).is_err());
+        assert!(enforce_dashboard_runtime(Some(""), DASHBOARD_SERVICE_PORT).is_err());
+
+        std::env::set_var("TWITCH_RUNTIME_ROLE", ROLE_DASHBOARD);
+        assert_eq!(
+            enforce_dashboard_runtime(None, 8769).as_deref(),
+            Ok(ROLE_DASHBOARD)
+        );
+
+        std::env::set_var("TWITCH_RUNTIME_ENFORCE", "0");
+        assert_eq!(
+            enforce_dashboard_runtime(Some("bot"), MASTER_API_RESERVED_PORT).as_deref(),
+            Ok(ROLE_TWITCH_WORKER)
+        );
     }
 }
