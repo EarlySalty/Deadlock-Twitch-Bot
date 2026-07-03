@@ -1748,14 +1748,25 @@ impl SubscriptionManager {
                         .await;
                 }
                 self.mark_perm_failed(context.sub_type, context.broadcaster_id);
-                tracing::warn!(
-                    status = 403u16,
-                    sub_type = context.sub_type,
-                    login = context.login,
-                    broadcaster_id = context.broadcaster_id,
-                    cooldown_seconds = PERMISSION_RETRY_COOLDOWN_SECONDS as u64,
-                    "EventSub 403: Berechtigung fehlt — Retry nach Cooldown/Reauth möglich"
-                );
+                if context.sub_type == "channel.moderate" {
+                    tracing::info!(
+                        status = 403u16,
+                        sub_type = context.sub_type,
+                        login = context.login,
+                        broadcaster_id = context.broadcaster_id,
+                        cooldown_seconds = PERMISSION_RETRY_COOLDOWN_SECONDS as u64,
+                        "EventSub 403: Moderator-Guard nicht autorisiert — Retry nach Cooldown/Reauth möglich"
+                    );
+                } else {
+                    tracing::warn!(
+                        status = 403u16,
+                        sub_type = context.sub_type,
+                        login = context.login,
+                        broadcaster_id = context.broadcaster_id,
+                        cooldown_seconds = PERMISSION_RETRY_COOLDOWN_SECONDS as u64,
+                        "EventSub 403: Berechtigung fehlt — Retry nach Cooldown/Reauth möglich"
+                    );
+                }
             }
             Some(429) if error.is_hard_quota_or_cost_limit() => {
                 tracing::error!(
