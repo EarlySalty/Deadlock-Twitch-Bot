@@ -36,14 +36,34 @@ pub async fn overview_metrics(
     streamer_login: Option<&str>,
     until: Option<&str>,
 ) -> Result<Option<OverviewMetricsRow>, sqlx::Error> {
-    sqlx::query_as!(
-        OverviewMetricsRow,
+    sqlx::query_as::<_, OverviewMetricsRow>(
         r#"
+        WITH sessions AS (
+            SELECT
+                s.*,
+                CASE
+                    WHEN s.started_at IS NOT NULL AND s.ended_at IS NOT NULL
+                    THEN GREATEST(
+                        0.0::FLOAT8,
+                        EXTRACT(EPOCH FROM (
+                            s.ended_at::text::TIMESTAMPTZ
+                            - s.started_at::text::TIMESTAMPTZ
+                        ))::FLOAT8
+                    )
+                    ELSE GREATEST(COALESCE(s.duration_seconds, 0)::FLOAT8, 0.0::FLOAT8)
+                END AS effective_duration_seconds
+            FROM twitch_stream_sessions s
+            WHERE s.started_at::text::TIMESTAMPTZ >= $1::text::TIMESTAMPTZ
+              AND s.ended_at IS NOT NULL
+              AND ($2::TEXT IS NULL OR LOWER(s.streamer_login) = LOWER($2))
+              AND ($3::TEXT IS NULL OR s.started_at::text::TIMESTAMPTZ < $3::text::TIMESTAMPTZ)
+        )
         SELECT
             AVG(s.avg_viewers)::FLOAT8                                AS avg_avg_viewers,
             MAX(s.peak_viewers)::BIGINT                               AS max_peak_viewers,
-            SUM(s.avg_viewers * s.duration_seconds / 3600.0)::FLOAT8  AS total_hours_watched,
-            SUM(s.duration_seconds / 3600.0)::FLOAT8                  AS total_airtime_hours,
+            SUM(s.avg_viewers * s.effective_duration_seconds / 3600.0)::FLOAT8
+                                                                        AS total_hours_watched,
+            SUM(s.effective_duration_seconds / 3600.0)::FLOAT8        AS total_airtime_hours,
             SUM(CASE
                     WHEN s.follower_delta IS NOT NULL
                      AND NOT (s.followers_end = 0 AND s.followers_start > 0)
@@ -64,27 +84,23 @@ pub async fn overview_metrics(
             COUNT(CASE
                     WHEN s.avg_viewers >= 3 AND s.peak_viewers > 0 AND s.retention_10m IS NOT NULL
                     THEN 1
-                END)::BIGINT                                          AS "retention_sample_count?",
+                END)::BIGINT                                          AS retention_sample_count,
             COUNT(CASE
                     WHEN s.avg_viewers >= 3 AND s.peak_viewers > 0 AND s.unique_chatters IS NOT NULL
                     THEN 1
-                END)::BIGINT                                          AS "chat_sample_count?",
+                END)::BIGINT                                          AS chat_sample_count,
             COUNT(CASE
                     WHEN s.follower_delta IS NOT NULL
                      AND NOT (s.followers_end = 0 AND s.followers_start > 0)
                     THEN 1
-                END)::BIGINT                                          AS "follower_valid_count?",
-            COUNT(*)::BIGINT                                          AS "session_count?"
-        FROM twitch_stream_sessions s
-        WHERE s.started_at >= $1::text::TIMESTAMPTZ
-          AND s.ended_at IS NOT NULL
-          AND ($2::TEXT IS NULL OR LOWER(s.streamer_login) = LOWER($2))
-          AND ($3::TEXT IS NULL OR s.started_at < $3::text::TIMESTAMPTZ)
+                END)::BIGINT                                          AS follower_valid_count,
+            COUNT(*)::BIGINT                                          AS session_count
+        FROM sessions s
         "#,
-        since,
-        streamer_login,
-        until
     )
+    .bind(since)
+    .bind(streamer_login)
+    .bind(until)
     .fetch_optional(pool)
     .await
 }
@@ -95,17 +111,17 @@ pub async fn overview_session_count(
     since: &str,
     streamer_login: Option<&str>,
 ) -> Result<i64, sqlx::Error> {
-    let count = sqlx::query_scalar!(
+    let count: i64 = sqlx::query_scalar(
         r#"
-        SELECT COUNT(*)::BIGINT AS "count!"
+        SELECT COUNT(*)::BIGINT
         FROM twitch_stream_sessions s
-        WHERE s.started_at >= $1::text::TIMESTAMPTZ
+        WHERE s.started_at::text::TIMESTAMPTZ >= $1::text::TIMESTAMPTZ
           AND s.ended_at IS NOT NULL
           AND ($2::TEXT IS NULL OR LOWER(s.streamer_login) = LOWER($2))
         "#,
-        since,
-        streamer_login
     )
+    .bind(since)
+    .bind(streamer_login)
     .fetch_one(pool)
     .await?;
     Ok(count)
@@ -478,18 +494,29 @@ pub async fn overview_sessions(
     limit: i64,
 ) -> Result<Vec<OverviewSession>, sqlx::Error> {
     let bots: Vec<String> = KNOWN_CHAT_BOTS.iter().map(|b| b.to_string()).collect();
-    let raws = sqlx::query_as!(
-        SessionRaw,
+    let raws: Vec<SessionRaw> = sqlx::query_as(
         r#"
         WITH base_sessions AS (
-            SELECT s.id, s.started_at, s.duration_seconds, s.start_viewers, s.peak_viewers,
+            SELECT s.id, s.started_at,
+                   CASE
+                       WHEN s.started_at IS NOT NULL AND s.ended_at IS NOT NULL
+                       THEN GREATEST(
+                           0::BIGINT,
+                           FLOOR(EXTRACT(EPOCH FROM (
+                               s.ended_at::text::TIMESTAMPTZ
+                               - s.started_at::text::TIMESTAMPTZ
+                           )))::BIGINT
+                       )
+                       ELSE GREATEST(COALESCE(s.duration_seconds, 0)::BIGINT, 0::BIGINT)
+                   END AS duration_seconds,
+                   s.start_viewers, s.peak_viewers,
                    s.end_viewers, s.avg_viewers, s.retention_5m, s.retention_10m, s.retention_20m,
                    s.dropoff_pct, s.unique_chatters, s.first_time_chatters, s.returning_chatters,
                    s.followers_start, s.followers_end, s.stream_title
             FROM twitch_stream_sessions s
-            WHERE s.started_at >= $1::text::TIMESTAMPTZ AND s.ended_at IS NOT NULL
+            WHERE s.started_at::text::TIMESTAMPTZ >= $1::text::TIMESTAMPTZ AND s.ended_at IS NOT NULL
               AND ($2::TEXT IS NULL OR LOWER(s.streamer_login) = LOWER($2))
-            ORDER BY s.started_at DESC
+            ORDER BY s.started_at::text::TIMESTAMPTZ DESC
             LIMIT $3
         ),
         filtered_chatters AS (
@@ -515,37 +542,37 @@ pub async fn overview_sessions(
             GROUP BY sc.session_id
         )
         SELECT
-            bs.id AS "id!",
-            CAST(bs.started_at AS DATE) AS "start_date!",
-            CAST(bs.started_at AS TIME) AS "start_time!",
+            bs.id AS id,
+            CAST(bs.started_at AS DATE) AS start_date,
+            CAST(bs.started_at AS TIME) AS start_time,
             bs.duration_seconds::BIGINT AS duration_seconds,
             bs.start_viewers::BIGINT AS start_viewers,
             bs.peak_viewers::BIGINT AS peak_viewers,
             bs.end_viewers::BIGINT AS end_viewers,
             bs.avg_viewers::FLOAT8 AS avg_viewers,
-            COALESCE(bs.retention_5m, 0)::FLOAT8 AS "retention_5m?",
-            COALESCE(bs.retention_10m, 0)::FLOAT8 AS "retention_10m?",
-            COALESCE(bs.retention_20m, 0)::FLOAT8 AS "retention_20m?",
-            COALESCE(bs.dropoff_pct, 0)::FLOAT8 AS "dropoff_pct?",
+            COALESCE(bs.retention_5m, 0)::FLOAT8 AS retention_5m,
+            COALESCE(bs.retention_10m, 0)::FLOAT8 AS retention_10m,
+            COALESCE(bs.retention_20m, 0)::FLOAT8 AS retention_20m,
+            COALESCE(bs.dropoff_pct, 0)::FLOAT8 AS dropoff_pct,
             (CASE WHEN scp.has_any_chatters = 1 THEN COALESCE(fc.unique_chatters, 0)
-                  ELSE COALESCE(bs.unique_chatters, 0) END)::BIGINT AS "unique_chatters?",
+                  ELSE COALESCE(bs.unique_chatters, 0) END)::BIGINT AS unique_chatters,
             (CASE WHEN scp.has_any_chatters = 1 THEN COALESCE(fc.first_time_chatters, 0)
-                  ELSE COALESCE(bs.first_time_chatters, 0) END)::BIGINT AS "first_time_chatters?",
+                  ELSE COALESCE(bs.first_time_chatters, 0) END)::BIGINT AS first_time_chatters,
             (CASE WHEN scp.has_any_chatters = 1 THEN COALESCE(fc.returning_chatters, 0)
-                  ELSE COALESCE(bs.returning_chatters, 0) END)::BIGINT AS "returning_chatters?",
-            COALESCE(bs.followers_start, 0)::BIGINT AS "followers_start?",
-            COALESCE(bs.followers_end, 0)::BIGINT AS "followers_end?",
-            COALESCE(bs.stream_title, '') AS "title?"
+                  ELSE COALESCE(bs.returning_chatters, 0) END)::BIGINT AS returning_chatters,
+            COALESCE(bs.followers_start, 0)::BIGINT AS followers_start,
+            COALESCE(bs.followers_end, 0)::BIGINT AS followers_end,
+            COALESCE(bs.stream_title, '') AS title
         FROM base_sessions bs
         LEFT JOIN filtered_chatters fc ON fc.session_id = bs.id
         LEFT JOIN session_chatter_presence scp ON scp.session_id = bs.id
-        ORDER BY bs.started_at DESC
+        ORDER BY bs.started_at::text::TIMESTAMPTZ DESC
         "#,
-        since,
-        streamer_login,
-        limit,
-        &bots
     )
+    .bind(since)
+    .bind(streamer_login)
+    .bind(limit)
+    .bind(&bots)
     .fetch_all(pool)
     .await?;
 
@@ -815,6 +842,41 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn metrics_nutzen_zeitspanne_statt_korrupter_duration_seconds() {
+        let dsn = match test_dsn() {
+            Some(d) => d,
+            None => {
+                eprintln!("SKIP: TB_TEST_DATABASE_URL nicht gesetzt");
+                return;
+            }
+        };
+        let pool = make_pool(&dsn, "test_overview_duration_corrupt").await;
+        sqlx::query(
+            r#"
+            INSERT INTO twitch_stream_sessions
+                (streamer_login, started_at, ended_at, avg_viewers, peak_viewers, duration_seconds)
+            VALUES
+                ('streamer_x', NOW() - INTERVAL '1 day', NOW() - INTERVAL '23 hours',
+                 100.0, 200, 1782860400)
+            "#,
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+
+        let since = "2000-01-01T00:00:00+00:00";
+        let metrics = overview_metrics(&pool, since, Some("streamer_x"), None)
+            .await
+            .unwrap()
+            .expect("Sollte Metriken liefern");
+        assert!(
+            (metrics.total_airtime_hours.unwrap() - 1.0).abs() < 0.01,
+            "1h aus ended_at-started_at statt 495238h aus duration_seconds"
+        );
+        assert!((metrics.total_hours_watched.unwrap() - 100.0).abs() < 0.01);
+    }
+
+    #[tokio::test]
     async fn chatter_metrics_bot_gefiltert_und_engagement() {
         let dsn = match test_dsn() {
             Some(d) => d,
@@ -922,7 +984,7 @@ mod tests {
                  duration_seconds, retention_5m, retention_10m, retention_20m, dropoff_pct,
                  start_viewers, end_viewers, followers_start, followers_end, stream_title)
             VALUES (2, 'streamer_x', NOW() - INTERVAL '1 day', NOW() - INTERVAL '22 hours',
-                    50.0, 100, 7200, 0.7, 0.6, 0.5, 0.1, 10, 40, 1000, 1010, 'Test Titel')
+                    50.0, 100, 1782860400, 0.7, 0.6, 0.5, 0.1, 10, 40, 1000, 1010, 'Test Titel')
             "#,
         )
         .execute(&pool)
@@ -950,6 +1012,7 @@ mod tests {
         assert_eq!(s.peak_viewers, 100);
         assert_eq!(s.start_viewers, 10);
         assert_eq!(s.end_viewers, 40);
+        assert_eq!(s.duration, 7200);
         assert!((s.retention_10m - 60.0).abs() < 0.01);
         assert!((s.retention_5m - 70.0).abs() < 0.01);
         assert!((s.retention_20m - 50.0).abs() < 0.01);

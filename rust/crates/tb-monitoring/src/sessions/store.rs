@@ -377,13 +377,13 @@ impl SessionStore {
         .fetch_optional(&self.pool)
         .await?;
         Ok(raw.map(|r| FinalizeSource {
-            // Unparsebar/fehlend → Unix-Epoch (Finalize berechnet daraus eine
-            // große, geklammerte Dauer; verhindert Crash bei Alt-/Defektdaten).
+            // Unparsebar/fehlend → jetzt. Das finalisiert defensiv mit 0s statt
+            // 1970-Fallback und verhindert absurd große Dashboard-Dauern.
             started_at: r
                 .started_at
                 .as_deref()
                 .and_then(parse_dt_utc)
-                .unwrap_or_else(|| DateTime::<Utc>::from_timestamp(0, 0).unwrap_or_default()),
+                .unwrap_or_else(Utc::now),
             start_viewers: r.start_viewers,
             end_viewers: r.end_viewers,
             peak_viewers: r.peak_viewers,

@@ -1,3 +1,11 @@
+## #328 — Twitch-Analyse zeigt wieder echte Session-Dauern
+
+**Problem:** Im Twitch-Analyse-Dashboard konnten beendete Streams plötzlich Laufzeiten von mehreren hunderttausend Stunden anzeigen. Ursache war ein Zeitformat, das beim Speichern nicht sauber verstanden wurde und dadurch wie ein Start im Jahr 1970 behandelt wurde.
+
+**Änderung:** Stream-Zeiten werden jetzt auch in den Datenbankformaten korrekt erkannt. Die Übersicht berechnet beendete Sessions zusätzlich aus Start- und Endzeit, damit bereits gespeicherte kaputte Dauerwerte nicht weiter die Anzeige verfälschen.
+
+**Verhalten jetzt:** Neue Sessions bekommen keine absurden Laufzeiten mehr. Alte betroffene Sessions werden im Dashboard wieder mit ihrer tatsächlichen Dauer angezeigt.
+
 ## #327 — Bekannte Twitch-Nebenpfade melden nicht mehr als Warnung
 
 **Problem:** Bekannte Sonderfälle tauchten nach einem Neustart weiter als Warn-/Fehlerrauschen auf: gebannte Kanäle wurden im Folgepfad erneut für Moderator-Events versucht, der reauth-abhängige Moderator-Guard meldete erwartbare 403er als Warnung, und der optionale IRC-Reader meldete sein bewusstes Nichtstarten als Task-Fehler.

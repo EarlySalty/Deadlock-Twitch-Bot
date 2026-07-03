@@ -88,16 +88,43 @@ pub fn parse_dt_utc(raw: &str) -> Option<DateTime<Utc>> {
     if raw.is_empty() {
         return None;
     }
-    let normalized = raw.replace('Z', "+00:00");
+    let normalized = normalize_for_rfc3339(raw);
     if let Ok(dt) = DateTime::parse_from_rfc3339(&normalized) {
         return Some(dt.with_timezone(&Utc));
     }
-    for fmt in ["%Y-%m-%dT%H:%M:%S%.f", "%Y-%m-%d %H:%M:%S%.f"] {
+    for fmt in [
+        "%Y-%m-%dT%H:%M:%S%.f",
+        "%Y-%m-%d %H:%M:%S%.f",
+        "%Y-%m-%dT%H:%M:%S%.f%:z",
+        "%Y-%m-%d %H:%M:%S%.f%:z",
+    ] {
         if let Ok(naive) = NaiveDateTime::parse_from_str(raw, fmt) {
             return Some(DateTime::from_naive_utc_and_offset(naive, Utc));
         }
+        if let Ok(dt) = DateTime::parse_from_str(raw, fmt) {
+            return Some(dt.with_timezone(&Utc));
+        }
     }
     None
+}
+
+fn normalize_for_rfc3339(raw: &str) -> String {
+    let mut s = raw.replace('Z', "+00:00");
+    if let Some(idx) = s.find(' ') {
+        s.replace_range(idx..=idx, "T");
+    }
+    let bytes = s.as_bytes();
+    let len = bytes.len();
+    if len >= 3 {
+        let sign = bytes[len - 3];
+        let has_short_offset = (sign == b'+' || sign == b'-')
+            && bytes[len - 2].is_ascii_digit()
+            && bytes[len - 1].is_ascii_digit();
+        if has_short_offset {
+            s.push_str(":00");
+        }
+    }
+    s
 }
 
 /// Stream-Start bestimmen (Python `_extract_stream_start`): Helix-`started_at`,
@@ -129,6 +156,8 @@ mod tests {
         assert!(parse_dt_utc("2026-06-09T18:00:00+00:00").is_some());
         assert!(parse_dt_utc("2026-06-09T18:00:00").is_some());
         assert!(parse_dt_utc("2026-06-09 18:00:00").is_some());
+        assert!(parse_dt_utc("2026-06-09 18:00:00+00").is_some());
+        assert!(parse_dt_utc("2026-06-09 20:00:00.5+02").is_some());
         assert!(parse_dt_utc("").is_none());
         assert!(parse_dt_utc("kein-datum").is_none());
     }
