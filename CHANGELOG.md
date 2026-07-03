@@ -1,3 +1,11 @@
+## #326 — Twitch-403-Wellen bei Moderator-Telemetrie beruhigt
+
+**Problem:** Kanäle, in denen der Bot nicht als Moderator nutzbar war oder sogar gebannt ist, haben regelmäßig ganze Wellen von Twitch-403-Meldungen ausgelöst. Das war meist kein akuter Ausfall, sah im Audit aber wie eine Störung aus.
+
+**Änderung:** Der Bot versucht die zusätzliche Moderator-Telemetrie nur noch über seinen eigenen Token, wenn der Moderator-Guard für den Kanal wirklich steht. Ist der Bot im Kanal gebannt, wird das als eigener Zustand behandelt und nicht mehr im kurzen Re-Mod-Kreis wiederholt.
+
+**Verhalten jetzt:** Echte Chat- und Core-Subscriptions heilen weiter automatisch. Erwartbare Reauth-/Mod-Lücken bleiben intern sichtbar, erzeugen aber keine Warnwelle mehr.
+
 ## #325 — Affiliate-Anmeldung läuft über dieselbe Twitch-Anmeldung
 
 **Ausgangslage:** Für die Affiliate-Anmeldung gab es bisher eine eigene, zweite Twitch-Rückleitung — getrennt von der normalen Twitch-Anmeldung.

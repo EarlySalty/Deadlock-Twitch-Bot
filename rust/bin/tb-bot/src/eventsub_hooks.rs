@@ -18,7 +18,10 @@ use std::sync::{Arc, Mutex};
 use chrono::Utc;
 use serde_json::Value;
 use sqlx::PgPool;
-use tb_monitoring::{EventSubHooks, LiveStateStore, ModeratorProvisioner, SubscriptionManager};
+use tb_monitoring::{
+    EventSubHooks, LiveStateStore, ModeratorProvisionOutcome, ModeratorProvisioner,
+    SubscriptionManager,
+};
 use tb_raid::pending_raids::normalize_broadcaster_login;
 use tb_raid::signal_correlation::{ChatNotificationInput, ChatUnraidInput};
 use tb_raid::{
@@ -85,13 +88,21 @@ impl RaidArrivalCoordinator {
     /// `_handle_secondary_confirmed_signal` (raid_arrival_runtime.py:102-166),
     /// das jeder Handler ZUERST aufruft. Fehler beim Lookup → `false`
     /// (fail-open auf den normalen Korrelationspfad).
-    async fn recent_arrival_present(&self, to_broadcaster_id: &str, from_broadcaster_login: &str) -> bool {
+    async fn recent_arrival_present(
+        &self,
+        to_broadcaster_id: &str,
+        from_broadcaster_login: &str,
+    ) -> bool {
         if to_broadcaster_id.is_empty() || from_broadcaster_login.is_empty() {
             return false;
         }
         match self
             .arrival_store
-            .find_recent_arrival(to_broadcaster_id, from_broadcaster_login, RECENT_ARRIVAL_TTL_SECS)
+            .find_recent_arrival(
+                to_broadcaster_id,
+                from_broadcaster_login,
+                RECENT_ARRIVAL_TTL_SECS,
+            )
             .await
         {
             Ok(found) => found.is_some(),
@@ -505,10 +516,19 @@ impl HelixModeratorProvisioner {
 #[async_trait::async_trait]
 impl ModeratorProvisioner for HelixModeratorProvisioner {
     async fn ensure_bot_is_mod(&self, broadcaster_id: &str, login: &str) -> bool {
+        self.ensure_bot_is_mod_outcome(broadcaster_id, login).await
+            == ModeratorProvisionOutcome::Ready
+    }
+
+    async fn ensure_bot_is_mod_outcome(
+        &self,
+        broadcaster_id: &str,
+        login: &str,
+    ) -> ModeratorProvisionOutcome {
         // Python connection.py:975-978: ohne Bot-ID kein Remod.
         if self.bot_user_id.trim().is_empty() {
             tracing::debug!(channel = login, "ensure_bot_is_mod: keine Bot-ID verfügbar");
-            return false;
+            return ModeratorProvisionOutcome::RetryLater;
         }
         // Streamer-Token auflösen (connection.py:986 `get_tokens_for_user`) —
         // unrestricted, da der Remod auch bei deaktivierten Raids greifen muss.
@@ -523,7 +543,7 @@ impl ModeratorProvisioner for HelixModeratorProvisioner {
                     channel = login,
                     "ensure_bot_is_mod: keine gültige Streamer-Autorisierung verfügbar"
                 );
-                return false;
+                return ModeratorProvisionOutcome::RetryLater;
             }
             Err(error) => {
                 tracing::error!(
@@ -531,7 +551,7 @@ impl ModeratorProvisioner for HelixModeratorProvisioner {
                     channel = login,
                     "ensure_bot_is_mod: Streamer-Token-Lookup fehlgeschlagen"
                 );
-                return false;
+                return ModeratorProvisionOutcome::RetryLater;
             }
         };
         match self
@@ -547,11 +567,21 @@ impl ModeratorProvisioner for HelixModeratorProvisioner {
                     bot_user_id = %self.bot_user_id,
                     "ensure_bot_is_mod: Bot wieder als Moderator gesetzt"
                 );
-                true
+                ModeratorProvisionOutcome::Ready
             }
             Ok(AddModeratorOutcome::AlreadyModerator) => {
-                tracing::info!(channel = login, "ensure_bot_is_mod: Bot ist bereits Moderator");
-                true
+                tracing::info!(
+                    channel = login,
+                    "ensure_bot_is_mod: Bot ist bereits Moderator"
+                );
+                ModeratorProvisionOutcome::Ready
+            }
+            Ok(AddModeratorOutcome::BotBanned) => {
+                tracing::warn!(
+                    channel = login,
+                    "ensure_bot_is_mod: Bot ist im Kanal gebannt"
+                );
+                ModeratorProvisionOutcome::BotBanned
             }
             Ok(AddModeratorOutcome::Failed { status, body }) => {
                 tracing::warn!(
@@ -560,7 +590,7 @@ impl ModeratorProvisioner for HelixModeratorProvisioner {
                     body = %body,
                     "ensure_bot_is_mod: Remod fehlgeschlagen"
                 );
-                false
+                ModeratorProvisionOutcome::RetryLater
             }
             Err(error) => {
                 tracing::error!(
@@ -568,7 +598,7 @@ impl ModeratorProvisioner for HelixModeratorProvisioner {
                     channel = login,
                     "ensure_bot_is_mod: Remod-Request fehlgeschlagen"
                 );
-                false
+                ModeratorProvisionOutcome::RetryLater
             }
         }
     }
@@ -733,7 +763,8 @@ impl EventSubHooks for RaidEventSubHooks {
             let streamer = login.to_lowercase();
             let task_streamer = streamer.clone();
             let handle = tokio::spawn(async move {
-                tb_analytics::post_stream::trigger_post_stream_analysis(&pool, &streamer, None).await;
+                tb_analytics::post_stream::trigger_post_stream_analysis(&pool, &streamer, None)
+                    .await;
             });
             tokio::spawn(async move {
                 if let Err(error) = handle.await {
@@ -940,8 +971,16 @@ mod arrival_dedupe_tests {
         });
         coord.handle_channel_raid(&event).await;
 
-        assert_eq!(sink.secondary.load(Ordering::SeqCst), 1, "genau ein Sekundär-Signal");
-        assert_eq!(sink.independent.load(Ordering::SeqCst), 0, "kein zweiter eigenständiger Arrival");
+        assert_eq!(
+            sink.secondary.load(Ordering::SeqCst),
+            1,
+            "genau ein Sekundär-Signal"
+        );
+        assert_eq!(
+            sink.independent.load(Ordering::SeqCst),
+            0,
+            "kein zweiter eigenständiger Arrival"
+        );
         assert_eq!(sink.orphan.load(Ordering::SeqCst), 0);
         assert_eq!(sink.confirm.load(Ordering::SeqCst), 0);
 
@@ -981,7 +1020,11 @@ mod arrival_dedupe_tests {
             .await;
 
         assert_eq!(sink.secondary.load(Ordering::SeqCst), 1);
-        assert_eq!(sink.orphan.load(Ordering::SeqCst), 0, "kein Orphan trotz fehlendem Pending");
+        assert_eq!(
+            sink.orphan.load(Ordering::SeqCst),
+            0,
+            "kein Orphan trotz fehlendem Pending"
+        );
     }
 
     /// Ohne jüngeren Arrival im Fenster greift das Gate NICHT: der Plan läuft
@@ -1011,6 +1054,10 @@ mod arrival_dedupe_tests {
         });
         coord.handle_channel_raid(&event).await;
 
-        assert_eq!(sink.secondary.load(Ordering::SeqCst), 0, "alter Arrival → kein Sekundär-Signal");
+        assert_eq!(
+            sink.secondary.load(Ordering::SeqCst),
+            0,
+            "alter Arrival → kein Sekundär-Signal"
+        );
     }
 }

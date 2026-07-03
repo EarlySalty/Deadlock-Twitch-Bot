@@ -24,17 +24,17 @@
 pub mod announce;
 pub mod chatters_poller;
 pub mod dispatch;
-pub mod scout;
 pub mod exp_sessions;
 pub mod guard;
 pub mod handlers;
-pub mod irc_lurker;
 pub mod inbox_runtime;
 pub mod inbox_store;
+pub mod irc_lurker;
 pub mod live_state;
-pub mod poller;
 pub mod observability_retention;
+pub mod poller;
 pub mod raid_retention;
+pub mod scout;
 pub mod sessions;
 pub mod stats;
 pub mod stream;
@@ -46,6 +46,11 @@ pub use webhook_receiver::WebhookReceiver;
 pub use announce::{
     AnnouncementSettings, AnnouncementTransport, BrokerAnnouncementSink, LivePingRoleProvider,
     NoVodPreview, VodPreviewSource,
+};
+pub use chatters_poller::{
+    load_live_roster, record_chatters_for_streamer, BotChatterAuth, ChattersCollector,
+    ChattersFetcher, CycleStats, KeyedCooldown, LiveStreamer, SelfHealCooldowns,
+    StreamerTokenSource,
 };
 pub use dispatch::{
     classify_chat_notification, has_registered_handler, ChatNotificationKind, DispatchNotReady,
@@ -59,14 +64,21 @@ pub use inbox_runtime::{
     InboxHandler, InboxRuntime, InboxRuntimeHandle,
 };
 pub use inbox_store::{DeadLetterEntry, LeasedWork, PendingEntry, ProcessingInboxStore};
+pub use irc_lurker::{record_presence_ticks, IrcLurkerTracker, TrackMode};
 pub use live_state::{
     FinalizeState, LiveStateRow, LiveStateStore, LiveStateUpsert, OfflineSourceState,
     SnapshotEntry, TrackedStreamer,
+};
+pub use observability_retention::{
+    cleanup_observability_events, cleanup_observability_events_before,
+    observability_retention_days, OBSERVABILITY_RETENTION_DEFAULT_DAYS,
 };
 pub use poller::{
     AnnouncementSink, NoopAnnouncementSink, NoopPollHooks, PollConfig, PollEngine, PollHooks,
     PollIntervalStore, ScoreRefresh, StreamSource, TickReport, TrackedEntry, TrackedStore,
 };
+pub use raid_retention::{compute_raid_retention, RetentionStats};
+pub use scout::{build_scout_task, NoopScoutChatSink, ScoutChatSink, ScoutTask};
 pub use sessions::{
     FollowerCountSource, FollowerFetch, NewSession, NoFollowerSource, NoRaidTrackingResolver,
     RaidTrackingResolver, SessionStore, SessionTracker, StartOutcome,
@@ -75,21 +87,9 @@ pub use stats::{StatsSample, StatsStore};
 pub use stream::StreamSnapshot;
 pub use subscriptions::{
     eventsub_webhook_capacity_values, BroadcasterEventSubTokenProvider, CapacitySnapshotStore,
-    EventSubCapacityValues, EventSubUserToken, ModeratorProvisioner, RemoteSubscription,
-    RevocationSink, SubscriptionConfig, SubscriptionCreateError, SubscriptionEnsureReport,
-    SubscriptionFailureCounter, SubscriptionFailureStatus, SubscriptionManager,
-    SubscriptionTransport, EVENTSUB_CORE_SUB_TYPES,
+    EventSubCapacityValues, EventSubUserToken, ModeratorProvisionOutcome, ModeratorProvisioner,
+    RemoteSubscription, RevocationSink, SubscriptionConfig, SubscriptionCreateError,
+    SubscriptionEnsureReport, SubscriptionFailureCounter, SubscriptionFailureStatus,
+    SubscriptionManager, SubscriptionTransport, EVENTSUB_CORE_SUB_TYPES,
 };
 pub use telemetry::{HypeTrainPhase, TelemetryStore};
-pub use scout::{build_scout_task, NoopScoutChatSink, ScoutChatSink, ScoutTask};
-pub use irc_lurker::{record_presence_ticks, IrcLurkerTracker, TrackMode};
-pub use chatters_poller::{
-    load_live_roster, record_chatters_for_streamer, BotChatterAuth, ChattersCollector,
-    ChattersFetcher, CycleStats, KeyedCooldown, LiveStreamer, SelfHealCooldowns,
-    StreamerTokenSource,
-};
-pub use observability_retention::{
-    cleanup_observability_events, cleanup_observability_events_before,
-    observability_retention_days, OBSERVABILITY_RETENTION_DEFAULT_DAYS,
-};
-pub use raid_retention::{compute_raid_retention, RetentionStats};

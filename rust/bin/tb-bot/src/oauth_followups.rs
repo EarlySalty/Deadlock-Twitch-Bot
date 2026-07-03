@@ -99,7 +99,9 @@ impl DiscordDirectoryPort for BrokerDiscordDirectory {
             return;
         };
         let Ok(user_id) = discord_user_id.parse::<u64>() else {
-            tracing::warn!("Streamer-Rollen-Sync übersprungen: ungültige Discord-User-ID {discord_user_id}");
+            tracing::warn!(
+                "Streamer-Rollen-Sync übersprungen: ungültige Discord-User-ID {discord_user_id}"
+            );
             return;
         };
         let guild_ids = self.role_guild_ids(relay).await;
@@ -128,7 +130,9 @@ impl DiscordDirectoryPort for BrokerDiscordDirectory {
             return;
         };
         let Ok(user_id) = discord_user_id.parse::<u64>() else {
-            tracing::warn!("Streamer-Rollen-Entzug übersprungen: ungültige Discord-User-ID {discord_user_id}");
+            tracing::warn!(
+                "Streamer-Rollen-Entzug übersprungen: ungültige Discord-User-ID {discord_user_id}"
+            );
             return;
         };
         let guild_ids = self.role_guild_ids(relay).await;
@@ -199,6 +203,9 @@ impl ModeratorInstallPort for HelixModeratorInstaller {
             Ok(AddModeratorOutcome::AlreadyModerator) => tracing::info!(
                 "Bot (ID: {bot_user_id}) is already moderator in channel {broadcaster_id}"
             ),
+            Ok(AddModeratorOutcome::BotBanned) => tracing::warn!(
+                "Bot (ID: {bot_user_id}) is banned in channel {broadcaster_id}; moderator setup skipped"
+            ),
             Ok(AddModeratorOutcome::Failed { status, body }) => tracing::warn!(
                 "Failed to add bot as moderator in channel {broadcaster_id}: HTTP {status}: {body}"
             ),
@@ -231,7 +238,9 @@ impl ChatGreeterPort for NoopChatGreeter {
         twitch_login: &str,
         _message: &str,
     ) -> Result<bool, String> {
-        tracing::warn!("Chat-Begrüßung übersprungen: Kein Chat-Greeter verfügbar für {twitch_login}");
+        tracing::warn!(
+            "Chat-Begrüßung übersprungen: Kein Chat-Greeter verfügbar für {twitch_login}"
+        );
         Ok(false)
     }
 }

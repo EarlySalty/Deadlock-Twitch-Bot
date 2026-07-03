@@ -9,8 +9,8 @@ use chrono::Utc;
 use tb_monitoring::poller::source::SourceError;
 use tb_monitoring::{
     BroadcasterEventSubTokenProvider, CapacitySnapshotStore, EventSubUserToken,
-    ModeratorProvisioner, RemoteSubscription, RevocationSink, SubscriptionConfig,
-    SubscriptionCreateError, SubscriptionManager, SubscriptionTransport,
+    ModeratorProvisionOutcome, ModeratorProvisioner, RemoteSubscription, RevocationSink,
+    SubscriptionConfig, SubscriptionCreateError, SubscriptionManager, SubscriptionTransport,
 };
 
 mod support;
@@ -121,6 +121,7 @@ fn sub(id: &str, sub_type: &str, callback: &str, bid: &str) -> RemoteSubscriptio
 /// Mock-Provisioner: zählt Re-Mod-Aufrufe, liefert ein konfiguriertes Ergebnis.
 struct StubProvisioner {
     succeed: bool,
+    outcome: Option<ModeratorProvisionOutcome>,
     calls: AtomicU64,
 }
 #[async_trait::async_trait]
@@ -128,6 +129,19 @@ impl ModeratorProvisioner for StubProvisioner {
     async fn ensure_bot_is_mod(&self, _broadcaster_id: &str, _login: &str) -> bool {
         self.calls.fetch_add(1, Ordering::SeqCst);
         self.succeed
+    }
+
+    async fn ensure_bot_is_mod_outcome(
+        &self,
+        _broadcaster_id: &str,
+        _login: &str,
+    ) -> ModeratorProvisionOutcome {
+        self.calls.fetch_add(1, Ordering::SeqCst);
+        self.outcome.unwrap_or(if self.succeed {
+            ModeratorProvisionOutcome::Ready
+        } else {
+            ModeratorProvisionOutcome::RetryLater
+        })
     }
 }
 
@@ -169,6 +183,7 @@ async fn chat_403_mod_retry_erfolg_trackt_statt_perm_failed() {
     }
     let provisioner = Arc::new(StubProvisioner {
         succeed: true,
+        outcome: None,
         calls: AtomicU64::new(0),
     });
     let manager = SubscriptionManager::new(
@@ -212,6 +227,7 @@ async fn chat_403_mod_retry_fehlschlag_setzt_cooldown_statt_perm_failed() {
     transport.fail_403_count.store(2, Ordering::SeqCst);
     let provisioner = Arc::new(StubProvisioner {
         succeed: false,
+        outcome: None,
         calls: AtomicU64::new(0),
     });
 
@@ -265,6 +281,47 @@ async fn chat_403_mod_retry_fehlschlag_setzt_cooldown_statt_perm_failed() {
         .tracked_pairs()
         .iter()
         .any(|(t, bid)| t == "channel.chat.message" && bid == "777"));
+}
+
+#[tokio::test]
+async fn chat_403_bot_banned_geht_in_permission_cooldown() {
+    let pool = pool_or_skip!("t_chat_403_bot_banned");
+    let transport = Arc::new(StubTransport::default());
+    transport.fail_403_count.store(1, Ordering::SeqCst);
+    let provisioner = Arc::new(StubProvisioner {
+        succeed: false,
+        outcome: Some(ModeratorProvisionOutcome::BotBanned),
+        calls: AtomicU64::new(0),
+    });
+    let manager = SubscriptionManager::new(
+        transport.clone(),
+        SubscriptionConfig {
+            callback_url: "https://cb/x".into(),
+            secret: "s".into(),
+        },
+        CapacitySnapshotStore::new(pool),
+    )
+    .with_moderator_provisioner(provisioner.clone());
+
+    assert!(
+        !manager
+            .ensure_first_message_subscription("888", "bot1", "BOT_TOKEN", "banned")
+            .await
+    );
+    assert_eq!(provisioner.calls.load(Ordering::SeqCst), 1);
+
+    // Der zweite Lauf würde ohne Permission-Cooldown sofort wieder remodden.
+    // BotBanned nutzt aber den längeren 403-Cooldown statt des 10-Min-Remod-Loops.
+    assert!(
+        !manager
+            .ensure_first_message_subscription("888", "bot1", "BOT_TOKEN", "banned")
+            .await
+    );
+    assert_eq!(
+        provisioner.calls.load(Ordering::SeqCst),
+        1,
+        "Bot-Ban darf keinen sofortigen zweiten Re-Mod-Versuch auslösen"
+    );
 }
 
 #[tokio::test]

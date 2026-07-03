@@ -273,11 +273,30 @@ struct SubscriptionCreateContext<'a> {
 /// Pythons `_ensure_bot_is_mod`). Implementierung lebt in `tb-transport-twitch`
 /// (`HelixClient::add_channel_moderator`, Broadcaster-Token) und wird von außen
 /// injiziert, damit tb-monitoring nicht aufs Transport-Crate verweisen muss.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ModeratorProvisionOutcome {
+    Ready,
+    RetryLater,
+    BotBanned,
+}
+
 #[async_trait::async_trait]
 pub trait ModeratorProvisioner: Send + Sync {
     /// `true`, wenn der Bot (wieder) Mod im Kanal ist. `broadcaster_id` = Ziel-
     /// Kanal, `login` = dessen Login (für Logging/Token-Auflösung).
     async fn ensure_bot_is_mod(&self, broadcaster_id: &str, login: &str) -> bool;
+
+    async fn ensure_bot_is_mod_outcome(
+        &self,
+        broadcaster_id: &str,
+        login: &str,
+    ) -> ModeratorProvisionOutcome {
+        if self.ensure_bot_is_mod(broadcaster_id, login).await {
+            ModeratorProvisionOutcome::Ready
+        } else {
+            ModeratorProvisionOutcome::RetryLater
+        }
+    }
 }
 
 /// User-Token für EventSub-Subscribe-Versuche. Kein `Debug`, damit Tokens nicht
@@ -1860,7 +1879,7 @@ impl SubscriptionManager {
 
         if saw_403 {
             self.mark_perm_failed(sub_type, broadcaster_id);
-            tracing::warn!(
+            tracing::debug!(
                 status = 403u16,
                 sub_type,
                 login,
@@ -1954,14 +1973,30 @@ impl SubscriptionManager {
             login,
             "EventSub 403: versuche Bot automatisch als Mod zu setzen"
         );
-        if !provisioner.ensure_bot_is_mod(broadcaster_id, login).await {
-            self.set_mod_retry_cooldown(sub_type, broadcaster_id);
-            tracing::warn!(
-                sub_type,
-                login,
-                "EventSub 403: Re-Mod fehlgeschlagen — 10-Min-Cooldown (Retry danach)"
-            );
-            return false;
+        match provisioner
+            .ensure_bot_is_mod_outcome(broadcaster_id, login)
+            .await
+        {
+            ModeratorProvisionOutcome::Ready => {}
+            ModeratorProvisionOutcome::RetryLater => {
+                self.set_mod_retry_cooldown(sub_type, broadcaster_id);
+                tracing::warn!(
+                    sub_type,
+                    login,
+                    "EventSub 403: Re-Mod fehlgeschlagen — 10-Min-Cooldown (Retry danach)"
+                );
+                return false;
+            }
+            ModeratorProvisionOutcome::BotBanned => {
+                self.mark_perm_failed(sub_type, broadcaster_id);
+                tracing::warn!(
+                    sub_type,
+                    login,
+                    cooldown_seconds = PERMISSION_RETRY_COOLDOWN_SECONDS as u64,
+                    "EventSub 403: Bot ist im Kanal gebannt — Re-Mod bis Unban/Reauth ausgesetzt"
+                );
+                return false;
+            }
         }
         // Kurze Pause, damit Twitch den Mod-Status propagiert (Python: sleep 1s).
         tokio::time::sleep(std::time::Duration::from_secs(1)).await;

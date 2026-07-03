@@ -11,6 +11,9 @@ pub enum AddModeratorOutcome {
     Added,
     /// 422 oder 400 mit "already a mod" im Body — war bereits Moderator.
     AlreadyModerator,
+    /// 400 mit "user is banned" — der Bot ist im Zielkanal gebannt und kann
+    /// nicht automatisch wieder als Moderator gesetzt werden.
+    BotBanned,
     /// Alle übrigen Antworten (Python: Warning, kein Abbruch).
     Failed { status: u16, body: String },
 }
@@ -42,8 +45,11 @@ impl HelixClient {
                         String::new()
                     }
                 };
-                if status == 400 && body.to_lowercase().contains("already a mod") {
+                let body_lower = body.to_lowercase();
+                if status == 400 && body_lower.contains("already a mod") {
                     Ok(AddModeratorOutcome::AlreadyModerator)
+                } else if status == 400 && body_lower.contains("user is banned") {
+                    Ok(AddModeratorOutcome::BotBanned)
                 } else {
                     let snippet: String = body.chars().take(200).collect();
                     Ok(AddModeratorOutcome::Failed {
@@ -136,5 +142,22 @@ mod tests {
             outcome,
             AddModeratorOutcome::Failed { status: 401, .. }
         ));
+    }
+
+    #[tokio::test]
+    async fn bot_banned_bei_400_body() {
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .respond_with(
+                ResponseTemplate::new(400).set_body_string(r#"{"message":"user is banned"}"#),
+            )
+            .mount(&server)
+            .await;
+        let client = client_with(&server).await;
+        let outcome = client
+            .add_channel_moderator("111", "bot", "tok")
+            .await
+            .unwrap();
+        assert_eq!(outcome, AddModeratorOutcome::BotBanned);
     }
 }

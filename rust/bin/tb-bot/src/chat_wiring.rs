@@ -58,8 +58,8 @@ use tb_raid::{RaidAuthStore, RaidTokenRefresher, TokenBlacklistStore, TokenProvi
 use tb_transport_discord::BrokerRelay;
 use tb_transport_twitch::HelixClient;
 
-use crate::task_supervisor::TaskSupervisor;
 use crate::raid_adapters::HelixTokenClient;
+use crate::task_supervisor::TaskSupervisor;
 
 /// Reconcile-Intervall für Chat-Subscriptions (Python: periodischer
 /// Channel-Join alle 30 Minuten, connection.py).
@@ -641,10 +641,11 @@ pub async fn build_runtime(
     // TimeoutGuard: der Promo-Pfad sendet weder in DB-stummgeschaltete noch in
     // per Bot-Timeout stummgeschaltete Kanäle (Port: promos.py:1137 prüft
     // timeout_guard.is_muted vor jedem Promo-Send).
-    let suppression: Arc<dyn tb_chat::promos::OutboundSuppressionCheck> = Arc::new(CombinedSuppression::new(
-        Arc::new(OutboundSuppressionStore::new(pool.clone())),
-        Arc::clone(&timeout_guard),
-    ));
+    let suppression: Arc<dyn tb_chat::promos::OutboundSuppressionCheck> =
+        Arc::new(CombinedSuppression::new(
+            Arc::new(OutboundSuppressionStore::new(pool.clone())),
+            Arc::clone(&timeout_guard),
+        ));
     let moderation = Arc::new(
         ModerationEngine::new(Arc::clone(&api), pool.clone())
             .with_notice_suppression(Arc::clone(&suppression)),
@@ -864,14 +865,16 @@ impl ChatRuntime {
         let pool = self.pool.clone();
         let bot_user_id = self.bot_user_id.clone();
         let token_manager = Arc::clone(&self.token_manager);
-        self.supervisor.spawn("chat_subscription_reconcile", async move {
-            let mut tick = tokio::time::interval(CHAT_SUB_RECONCILE_INTERVAL);
-            tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
-            loop {
-                tick.tick().await;
-                reconcile_chat_subscriptions(&manager, &pool, &bot_user_id, &token_manager).await;
-            }
-        });
+        self.supervisor
+            .spawn("chat_subscription_reconcile", async move {
+                let mut tick = tokio::time::interval(CHAT_SUB_RECONCILE_INTERVAL);
+                tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+                loop {
+                    tick.tick().await;
+                    reconcile_chat_subscriptions(&manager, &pool, &bot_user_id, &token_manager)
+                        .await;
+                }
+            });
     }
 
     /// P2.14: Startet den einmaligen Eager-Partner-Invite-Backfill als
@@ -1066,11 +1069,11 @@ async fn reconcile_chat_subscriptions(
     let mut first_msg_ok = 0usize;
     let mut mod_telemetry = 0usize;
     for (login, broadcaster_id) in &rows {
-        if has_moderate
+        let moderator_subscription_ok = has_moderate
             && manager
                 .ensure_moderator_subscription(broadcaster_id, bot_user_id, &bot_token, login)
-                .await
-        {
+                .await;
+        if moderator_subscription_ok {
             mod_ok += 1;
         }
         // B5-01: First-Message-Subscription (braucht user:read:chat — der Bot
@@ -1082,13 +1085,27 @@ async fn reconcile_chat_subscriptions(
             first_msg_ok += 1;
         }
         // B5-02: Moderator-Daten-Telemetrie (follow/ban/unban/shoutout). Scope-
-        // Filter in der Methode überspringt fehlende Scopes still.
+        // Filter in der Methode überspringt fehlende Scopes still. Wenn der
+        // channel.moderate-Guard mit demselben Bot-Token 403 liefert, ist der
+        // Bot für diesen Kanal nicht als Moderator nutzbar; dann keinen
+        // zusätzlichen Bot-Token-Versuch für ban/unban/shoutout/follow feuern.
+        // Der Broadcaster-Fallback bleibt aktiv, weil er einen anderen
+        // moderator_user_id nutzt.
+        let (telemetry_bot_user_id, telemetry_bot_token, telemetry_scopes): (
+            &str,
+            &str,
+            &[String],
+        ) = if has_moderate && !moderator_subscription_ok {
+            ("", "", &[])
+        } else {
+            (bot_user_id, bot_token.as_str(), scopes.as_slice())
+        };
         mod_telemetry += manager
             .ensure_moderator_telemetry_subscriptions(
                 broadcaster_id,
-                bot_user_id,
-                &bot_token,
-                &scopes,
+                telemetry_bot_user_id,
+                telemetry_bot_token,
+                telemetry_scopes,
                 login,
             )
             .await;
