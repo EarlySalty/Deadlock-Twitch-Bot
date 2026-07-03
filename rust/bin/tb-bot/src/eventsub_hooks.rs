@@ -577,7 +577,7 @@ impl ModeratorProvisioner for HelixModeratorProvisioner {
                 ModeratorProvisionOutcome::Ready
             }
             Ok(AddModeratorOutcome::BotBanned) => {
-                tracing::warn!(
+                tracing::info!(
                     channel = login,
                     "ensure_bot_is_mod: Bot ist im Kanal gebannt"
                 );

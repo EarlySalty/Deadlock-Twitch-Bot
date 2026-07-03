@@ -14,6 +14,7 @@
 //!   `logs` relativ zum WorkingDirectory = Repo-Root, identisch zu Python)
 
 use std::collections::HashSet;
+use std::future;
 use std::path::PathBuf;
 use std::sync::{Arc, OnceLock};
 use std::time::Duration;
@@ -786,10 +787,12 @@ pub async fn build_runtime(
     // IRC-Reader: zweiter Chat-Input für `irc_read`-Kanäle (einwilligende
     // Streamer OHNE EventSub-`channel:bot`). Disjunkte Kanal-Menge zum
     // EventSub-Pfad → kein Doppel-Processing. No-op, wenn keine irc_read-Kanäle.
-    supervisor.spawn(
-        "engagement_irc_reader",
-        EngagementIrcReader::new(pool.clone(), Arc::clone(&engagement), stealth.clone()).run(),
-    );
+    let engagement_irc_reader =
+        EngagementIrcReader::new(pool.clone(), Arc::clone(&engagement), stealth.clone());
+    supervisor.spawn("engagement_irc_reader", async move {
+        engagement_irc_reader.run().await;
+        future::pending::<()>().await;
+    });
 
     // P2.15: geteilte Zelle für den SubscriptionManager (erst in
     // start_background bekannt). ChatHooks und ChatRuntime halten denselben Arc.
@@ -1069,7 +1072,9 @@ async fn reconcile_chat_subscriptions(
     let mut first_msg_ok = 0usize;
     let mut mod_telemetry = 0usize;
     for (login, broadcaster_id) in &rows {
-        let moderator_subscription_ok = has_moderate
+        let chat_blocked = manager.chat_subscriptions_permanently_blocked(broadcaster_id);
+        let moderator_subscription_ok = !chat_blocked
+            && has_moderate
             && manager
                 .ensure_moderator_subscription(broadcaster_id, bot_user_id, &bot_token, login)
                 .await;
@@ -1078,9 +1083,10 @@ async fn reconcile_chat_subscriptions(
         }
         // B5-01: First-Message-Subscription (braucht user:read:chat — der Bot
         // hat denselben Token wie für die Chat-Subs, der Scope ist also gegeben).
-        if manager
-            .ensure_first_message_subscription(broadcaster_id, bot_user_id, &bot_token, login)
-            .await
+        if !chat_blocked
+            && manager
+                .ensure_first_message_subscription(broadcaster_id, bot_user_id, &bot_token, login)
+                .await
         {
             first_msg_ok += 1;
         }
@@ -1095,7 +1101,7 @@ async fn reconcile_chat_subscriptions(
             &str,
             &str,
             &[String],
-        ) = if has_moderate && !moderator_subscription_ok {
+        ) = if chat_blocked || (has_moderate && !moderator_subscription_ok) {
             ("", "", &[])
         } else {
             (bot_user_id, bot_token.as_str(), scopes.as_slice())

@@ -1989,7 +1989,7 @@ impl SubscriptionManager {
             }
             ModeratorProvisionOutcome::BotBanned => {
                 self.mark_perm_failed(sub_type, broadcaster_id);
-                tracing::warn!(
+                tracing::info!(
                     sub_type,
                     login,
                     cooldown_seconds = PERMISSION_RETRY_COOLDOWN_SECONDS as u64,

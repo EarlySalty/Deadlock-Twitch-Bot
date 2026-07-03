@@ -1,3 +1,11 @@
+## #327 — Bekannte Twitch-Nebenpfade melden nicht mehr als Warnung
+
+**Problem:** Zwei bekannte Sonderfälle tauchten nach einem Neustart weiter als Warn-/Fehlerrauschen auf: gebannte Kanäle wurden im Folgepfad erneut für Moderator-Events versucht, und der optionale IRC-Reader meldete sein bewusstes Nichtstarten als Task-Fehler.
+
+**Änderung:** Blockierte Chat-Kanäle werden jetzt auch beim Moderator- und First-Message-Abgleich übersprungen. Der optionale IRC-Reader bleibt bei leerer Konfiguration still aktiv statt als beendeter Hintergrundtask zu erscheinen.
+
+**Verhalten jetzt:** Bekannte Bot-Bans bleiben sichtbar, aber nicht mehr als Warnwelle. Ein leerer IRC-Reader ist kein Fehler mehr.
+
 ## #326 — Twitch-403-Wellen bei Moderator-Telemetrie beruhigt
 
 **Problem:** Kanäle, in denen der Bot nicht als Moderator nutzbar war oder sogar gebannt ist, haben regelmäßig ganze Wellen von Twitch-403-Meldungen ausgelöst. Das war meist kein akuter Ausfall, sah im Audit aber wie eine Störung aus.
