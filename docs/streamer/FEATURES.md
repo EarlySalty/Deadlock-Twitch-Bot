@@ -205,7 +205,7 @@ Das Portal zeigt:
 ### Aktueller Onboarding- und Verwaltungsflow
 
 - `GET /twitch/auth/affiliate/login`
-- `GET /twitch/auth/affiliate/callback`
+- `GET /callback/twitch` (geteilter Twitch-Callback; das Backend erkennt per OAuth-`state`-Typ automatisch Affiliate- vs. Dashboard-Login. Die frühere eigene Route `/twitch/auth/affiliate/callback` bleibt als Alias erhalten.)
 - `GET /twitch/affiliate/signup`
 - `POST /twitch/affiliate/signup/complete`
 - `GET /twitch/affiliate/connect/stripe`

@@ -1,3 +1,11 @@
+## #325 — Affiliate-Anmeldung läuft über dieselbe Twitch-Anmeldung
+
+**Ausgangslage:** Für die Affiliate-Anmeldung gab es bisher eine eigene, zweite Twitch-Rückleitung — getrennt von der normalen Twitch-Anmeldung.
+
+**Änderung:** Beide laufen jetzt über genau eine Twitch-Rückleitung. Das Backend erkennt beim Zurückkommen automatisch, ob sich jemand fürs Dashboard oder fürs Affiliate-Programm anmeldet, und leitet an die richtige Stelle weiter.
+
+**Ergebnis:** Nur noch eine Anmelde-Adresse statt zwei; am Ablauf ändert sich für dich nichts. Das Programm bleibt bis zur Freischaltung inaktiv.
+
 ## #324 — Affiliate-Claims sind jetzt zeitlich gebundene Reservierungen
 
 **Ausgangslage:** Bisher konnte ein Affiliate jeden noch nicht beanspruchten Streamer beanspruchen — zeitlich unbegrenzt und egal, ob er ihn wirklich neu angeworben hat.

@@ -220,6 +220,18 @@ async fn callback_handler_inner(
     let login_state = match state.consume_oauth_login_state(state_token).await {
         Ok(Some(s)) => s,
         Ok(None) => {
+            if let Some(response) = crate::handlers::affiliate::try_shared_affiliate_callback(
+                &state,
+                config.client.as_ref(),
+                config.cookie_secure,
+                code,
+                state_token,
+                error,
+            )
+            .await
+            {
+                return response;
+            }
             if allow_raid_delegate {
                 if let Some(response) =
                     maybe_delegate_raid_oauth_callback(&state, &config, code, state_token, error)
@@ -1072,6 +1084,69 @@ mod tests {
         .unwrap();
     }
 
+    async fn ensure_affiliate_tables(pool: &sqlx::PgPool) {
+        sqlx::query(
+            r#"
+            CREATE TABLE IF NOT EXISTS affiliate_accounts (
+                twitch_login TEXT PRIMARY KEY,
+                twitch_user_id TEXT NOT NULL,
+                display_name TEXT,
+                email TEXT NOT NULL,
+                full_name TEXT NOT NULL,
+                address_line1 TEXT NOT NULL,
+                address_city TEXT NOT NULL,
+                address_zip TEXT NOT NULL,
+                address_country TEXT NOT NULL DEFAULT 'DE',
+                stripe_account_id TEXT,
+                stripe_connected_at TEXT,
+                stripe_connect_status TEXT DEFAULT 'pending',
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL,
+                is_active INTEGER NOT NULL DEFAULT 1
+            )
+            "#,
+        )
+        .execute(pool)
+        .await
+        .unwrap();
+        sqlx::query(
+            r#"
+            CREATE TABLE IF NOT EXISTS affiliate_pii (
+                twitch_login TEXT PRIMARY KEY REFERENCES affiliate_accounts(twitch_login),
+                full_name_enc BYTEA,
+                email_enc BYTEA,
+                address_line1_enc BYTEA,
+                address_city_enc BYTEA,
+                address_zip_enc BYTEA,
+                tax_id_enc BYTEA,
+                address_country TEXT NOT NULL DEFAULT 'DE',
+                ust_status TEXT NOT NULL DEFAULT 'unknown',
+                updated_at TEXT NOT NULL
+            )
+            "#,
+        )
+        .execute(pool)
+        .await
+        .unwrap();
+    }
+
+    async fn ensure_raid_state_table(pool: &sqlx::PgPool) {
+        sqlx::query(
+            r#"
+            CREATE TABLE IF NOT EXISTS oauth_state_tokens (
+                state_token TEXT PRIMARY KEY,
+                platform TEXT,
+                streamer_login TEXT,
+                expires_at TIMESTAMPTZ,
+                consumed_at TIMESTAMPTZ
+            )
+            "#,
+        )
+        .execute(pool)
+        .await
+        .unwrap();
+    }
+
     /// Hilfsfunktion: legt einen gültigen OAuth-State an und gibt das Token zurück.
     async fn seed_state(state: &DashboardAuthState, redirect_uri: &str, next: &str) -> String {
         let token = format!("cbtok-{}", uuid_like());
@@ -1251,6 +1326,142 @@ mod tests {
             .execute(&pool)
             .await
             .ok();
+    }
+
+    #[tokio::test]
+    async fn shared_callback_mit_affiliate_state_legt_affiliate_session_an() {
+        let Some(pool) = maybe_pool().await else { return; };
+        ensure_tables(&pool).await;
+        ensure_affiliate_tables(&pool).await;
+        let state = DashboardAuthState::new(pool.clone(), test_fernet_key());
+        let token = format!("affcb-{}", uuid_like());
+        state
+            .save_affiliate_oauth_state(
+                &token,
+                &crate::auth::session::AffiliateOAuthState {
+                    redirect_uri: "https://x.test/callback/twitch".to_string(),
+                },
+            )
+            .await
+            .unwrap();
+        let cfg = config_with(Ok(identity("affiliate_cb", "999101")));
+
+        let resp = shared_callback_handler(
+            Some(Extension(state.clone())),
+            Some(Extension(cfg)),
+            HeaderMap::new(),
+            Query(CallbackQuery {
+                code: Some("good-code".to_string()),
+                state: Some(token),
+                error: None,
+            }),
+        )
+        .await;
+
+        assert_eq!(resp.status(), StatusCode::SEE_OTHER);
+        assert_eq!(
+            resp.headers().get(axum::http::header::LOCATION).unwrap(),
+            "/twitch/affiliate/portal"
+        );
+        let cookie = resp.headers().get(SET_COOKIE).unwrap().to_str().unwrap();
+        let affiliate_cookie = crate::auth::session::AFFILIATE_COOKIE_NAME;
+        assert!(cookie.starts_with(&format!("{affiliate_cookie}=")));
+        assert!(cookie.contains("HttpOnly"));
+        assert!(cookie.contains("SameSite=Lax"));
+        let sid = cookie
+            .strip_prefix(&format!("{affiliate_cookie}="))
+            .and_then(|s| s.split(';').next())
+            .unwrap()
+            .to_string();
+        let affiliate_session = state.load_affiliate_session(&sid).await.unwrap().unwrap();
+        assert_eq!(affiliate_session.twitch_login, "affiliate_cb");
+        assert!(state.load_partner_session(&sid).await.unwrap().is_none());
+    }
+
+    #[tokio::test]
+    async fn shared_callback_mit_partner_state_bleibt_partner_login() {
+        let Some(pool) = maybe_pool().await else { return; };
+        ensure_tables(&pool).await;
+        let state = DashboardAuthState::new(pool.clone(), test_fernet_key());
+        sqlx::query(
+            "INSERT INTO twitch_partners (twitch_login, twitch_user_id, status)
+             VALUES ($1, $2, 'active') ON CONFLICT DO NOTHING",
+        )
+        .bind("sharedpartner")
+        .bind("999102")
+        .execute(&pool)
+        .await
+        .ok();
+
+        let cfg = config_with(Ok(identity("sharedpartner", "999102")));
+        let token = seed_state(&state, &cfg.redirect_uri, "/twitch/dashboard").await;
+
+        let resp = shared_callback_handler(
+            Some(Extension(state.clone())),
+            Some(Extension(cfg)),
+            HeaderMap::new(),
+            Query(CallbackQuery {
+                code: Some("good-code".to_string()),
+                state: Some(token),
+                error: None,
+            }),
+        )
+        .await;
+
+        assert_eq!(resp.status(), StatusCode::SEE_OTHER);
+        assert_eq!(
+            resp.headers().get(axum::http::header::LOCATION).unwrap(),
+            "/twitch/dashboard"
+        );
+        let cookies: Vec<&str> = resp
+            .headers()
+            .get_all(SET_COOKIE)
+            .iter()
+            .filter_map(|value| value.to_str().ok())
+            .collect();
+        let partner_cookie = cookies
+            .iter()
+            .copied()
+            .find(|cookie| cookie.starts_with("twitch_dash_session="))
+            .unwrap();
+        assert!(!cookies.iter().any(|cookie| {
+            cookie.starts_with(crate::auth::session::AFFILIATE_COOKIE_NAME)
+        }));
+        let sid = partner_cookie
+            .strip_prefix("twitch_dash_session=")
+            .and_then(|s| s.split(';').next())
+            .unwrap()
+            .to_string();
+        assert!(state.load_partner_session(&sid).await.unwrap().is_some());
+
+        sqlx::query("DELETE FROM twitch_partners WHERE twitch_login = 'sharedpartner'")
+            .execute(&pool)
+            .await
+            .ok();
+    }
+
+    #[tokio::test]
+    async fn shared_callback_unbekannter_state_bleibt_bisheriger_fehler() {
+        let Some(pool) = maybe_pool().await else { return; };
+        ensure_tables(&pool).await;
+        ensure_raid_state_table(&pool).await;
+        let state = DashboardAuthState::new(pool.clone(), test_fernet_key());
+        let cfg = config_with(Ok(identity("egal", "1")));
+
+        let resp = shared_callback_handler(
+            Some(Extension(state)),
+            Some(Extension(cfg)),
+            HeaderMap::new(),
+            Query(CallbackQuery {
+                code: Some("good-code".to_string()),
+                state: Some("gibt-es-nicht".to_string()),
+                error: None,
+            }),
+        )
+        .await;
+
+        assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+        assert!(resp.headers().get(SET_COOKIE).is_none());
     }
 
     /// Callback, aber Twitch-User ist KEIN Partner → 403, KEINE Session.

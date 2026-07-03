@@ -38,7 +38,7 @@ use crate::auth::{
 };
 
 const DEFAULT_PUBLIC_ORIGIN: &str = "https://deutsche-deadlock-community.de";
-const AFFILIATE_AUTH_CALLBACK_PATH: &str = "/twitch/auth/affiliate/callback";
+const SHARED_TWITCH_CALLBACK_PATH: &str = "/callback/twitch";
 const AFFILIATE_STRIPE_CALLBACK_PATH: &str = "/twitch/affiliate/connect/stripe/callback";
 const STRIPE_CONNECT_AUTHORIZE_URL: &str = "https://connect.stripe.com/oauth/authorize";
 
@@ -212,8 +212,24 @@ pub async fn auth_callback_handler(
         }
     };
 
-    let identity = match config
-        .client
+    complete_affiliate_login(
+        &state,
+        config.client.as_ref(),
+        oauth_state,
+        cookie_secure(&headers, Some(&config)),
+        code,
+    )
+    .await
+}
+
+pub(crate) async fn complete_affiliate_login(
+    state: &DashboardAuthState,
+    client: &dyn TwitchOAuthClient,
+    oauth_state: AffiliateOAuthState,
+    cookie_secure: bool,
+    code: &str,
+) -> Response {
+    let identity = match client
         .exchange_code_for_identity(code, &oauth_state.redirect_uri)
         .await
     {
@@ -243,7 +259,7 @@ pub async fn auth_callback_handler(
         }
     };
 
-    if let Err(error) = upsert_account_and_pii(&state, &identity).await {
+    if let Err(error) = upsert_account_and_pii(state, &identity).await {
         tracing::warn!(?error, "Affiliate-Konto/PII-Upsert fehlgeschlagen");
         return text(
             StatusCode::SERVICE_UNAVAILABLE,
@@ -254,11 +270,39 @@ pub async fn auth_callback_handler(
     let cookie = build_session_cookie(
         AFFILIATE_COOKIE_NAME,
         &session.session_id,
-        cookie_secure(&headers, Some(&config)),
+        cookie_secure,
         SameSite::Lax,
         AFFILIATE_SESSION_TTL_SECS,
     );
     redirect_with_cookie("/twitch/affiliate/portal", &cookie)
+}
+
+pub(crate) async fn try_shared_affiliate_callback(
+    state: &DashboardAuthState,
+    client: &dyn TwitchOAuthClient,
+    cookie_secure: bool,
+    code: &str,
+    state_token: &str,
+    error: &str,
+) -> Option<Response> {
+    let oauth_state = match state.consume_affiliate_oauth_state(state_token).await {
+        Ok(Some(state)) => state,
+        Ok(None) => return None,
+        Err(error) => {
+            tracing::warn!(%error, "Affiliate-OAuth-State-Lookup fehlgeschlagen");
+            return None;
+        }
+    };
+    if !error.is_empty() {
+        return Some(text(
+            StatusCode::UNAUTHORIZED,
+            &format!("OAuth-Fehler: {error}"),
+        ));
+    }
+    if code.is_empty() {
+        return Some(text(StatusCode::BAD_REQUEST, "Fehlender OAuth state/code."));
+    }
+    Some(complete_affiliate_login(state, client, oauth_state, cookie_secure, code).await)
 }
 
 /// `GET /twitch/affiliate/connect/stripe`.
@@ -1059,7 +1103,7 @@ fn affiliate_auth_redirect_uri() -> String {
     if let Some(uri) = non_empty_env(&["TWITCH_AFFILIATE_AUTH_REDIRECT_URI"]) {
         return uri;
     }
-    format!("{}{}", public_origin(), AFFILIATE_AUTH_CALLBACK_PATH)
+    format!("{}{}", public_origin(), SHARED_TWITCH_CALLBACK_PATH)
 }
 
 fn affiliate_stripe_redirect_uri() -> String {
@@ -1572,8 +1616,9 @@ mod tests {
 
         assert_eq!(
             affiliate_auth_redirect_uri(),
-            "https://deutsche-deadlock-community.de/twitch/auth/affiliate/callback"
+            "https://deutsche-deadlock-community.de/callback/twitch"
         );
+        assert!(affiliate_auth_redirect_uri().ends_with("/callback/twitch"));
         assert_eq!(
             affiliate_stripe_redirect_uri(),
             "https://deutsche-deadlock-community.de/twitch/affiliate/connect/stripe/callback"
