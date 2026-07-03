@@ -78,7 +78,7 @@ fn with_query(location: String, uri: &Uri) -> String {
     }
 }
 
-fn website_dist_root() -> PathBuf {
+pub(crate) fn website_dist_root() -> PathBuf {
     let base = std::env::var("WEBSITE_DIST_PATH")
         .unwrap_or_else(|_| DEFAULT_WEBSITE_DIST_PATH.to_string());
     PathBuf::from(base)

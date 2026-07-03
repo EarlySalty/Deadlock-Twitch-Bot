@@ -1300,8 +1300,11 @@ pub fn build_raid_pages_router(pool: PgPool) -> Router {
 
 /// Baut den Router für die Affiliate-Portal-HTML-Seite (P1.26).
 ///
-/// `GET /twitch/affiliate/portal` — serviert die dashboard_v2-SPA-Shell. Die
-/// JSON-API unter `/twitch/api/v2/affiliate/portal` bleibt im authed-Router.
+/// `GET /twitch/affiliate/portal` — serviert das dedizierte Affiliate-Portal-
+/// Bundle aus `website/dist/affiliate-portal`. Dessen Assets werden bereits
+/// über die bestehende `/streamer/*`-Route (`website::streamer_asset_handler`)
+/// ausgeliefert; eine zusätzliche Asset-Route ist nicht nötig. Die JSON-API
+/// unter `/twitch/api/v2/affiliate/portal` bleibt im authed-Router.
 pub fn build_affiliate_portal_router() -> Router {
     use handlers::affiliate_portal;
 

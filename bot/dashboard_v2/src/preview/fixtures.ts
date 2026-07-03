@@ -3,8 +3,6 @@ import type {
   InternalHomeChangelogEntry,
   InternalHomeData,
 } from '@/api/home';
-import type { AffiliatePortalData } from '@/api/affiliate';
-import type { Affiliate, AffiliateDetail, AffiliateStats } from '@/api/admin';
 import type { AuthStatus } from '@/api/auth';
 import type { CatalogPlan } from '@/types/billing';
 
@@ -383,78 +381,6 @@ const SESSION_EVENTS_FIXTURE = {
   subscriptions: [{ minute: 77, count: 3 }],
 };
 
-const AFFILIATE_PORTAL_FIXTURE: AffiliatePortalData = {
-  affiliate: {
-    login: 'local-preview-affiliate',
-    display_name: 'Local Preview Affiliate',
-    active: true,
-    referral_code: 'PREVIEW42',
-    referral_url: 'http://localhost:4174/pricing?ref=PREVIEW42',
-  },
-  stats: {
-    total_claims: 18,
-    total_provision: 274,
-    this_month_claims: 6,
-    this_month_provision: 82,
-    pending_payout: 55,
-  },
-  recent_claims: [
-    {
-      customer_display_name: 'Creator One',
-      plan_name: 'Extended',
-      amount: 29.99,
-      created_at: NOW_ISO,
-    },
-  ],
-};
-
-const ADMIN_AFFILIATES_FIXTURE: { affiliates: Affiliate[] } = {
-  affiliates: [
-    {
-      login: 'local-preview-affiliate',
-      display_name: 'Local Preview Affiliate',
-      active: true,
-      total_claims: 18,
-      total_provision: 274,
-      created_at: '2026-01-10T12:00:00Z',
-      last_claim_at: NOW_ISO,
-    },
-  ],
-};
-
-const ADMIN_AFFILIATE_STATS_FIXTURE: AffiliateStats = {
-  total_affiliates: 1,
-  active_affiliates: 1,
-  total_claims: 18,
-  total_provision: 274,
-  this_month_claims: 6,
-  this_month_provision: 82,
-};
-
-const ADMIN_AFFILIATE_DETAIL_FIXTURE: AffiliateDetail = {
-  affiliate: {
-    login: 'local-preview-affiliate',
-    display_name: 'Local Preview Affiliate',
-    active: true,
-    created_at: '2026-01-10T12:00:00Z',
-  },
-  claims: [
-    {
-      id: 1,
-      customer_login: 'creator_one',
-      claimed_at: NOW_ISO,
-      commission_cents: 599,
-      commission_count: 1,
-    },
-  ],
-  stats: {
-    total_claims: 18,
-    total_provision: 274,
-    avg_provision: 15.2,
-    active_customers: 9,
-  },
-};
-
 export function getPreviewApiFixture(
   endpoint: string,
   _params: Record<string, string | number | boolean> = {}
@@ -470,17 +396,11 @@ export function getPreviewApiFixture(
   if (endpoint === '/stream-report') return STREAM_REPORT_FIXTURE;
   if (endpoint.startsWith('/session/') && endpoint.endsWith('/events')) return SESSION_EVENTS_FIXTURE;
   if (endpoint.startsWith('/session/')) return SESSION_DETAIL_FIXTURE;
-  if (endpoint === '/affiliate/portal') return AFFILIATE_PORTAL_FIXTURE;
   return undefined;
 }
 
 export function getPreviewAdminFixture(pathname: string): unknown | undefined {
-  if (pathname === '/twitch/api/admin/affiliates') return ADMIN_AFFILIATES_FIXTURE;
-  if (pathname === '/twitch/api/admin/affiliates/stats') return ADMIN_AFFILIATE_STATS_FIXTURE;
-  if (pathname.startsWith('/twitch/api/admin/affiliates/') && pathname.endsWith('/toggle')) {
-    return { login: 'local-preview-affiliate', active: false };
-  }
-  if (pathname.startsWith('/twitch/api/admin/affiliates/')) return ADMIN_AFFILIATE_DETAIL_FIXTURE;
+  void pathname;
   return undefined;
 }
 

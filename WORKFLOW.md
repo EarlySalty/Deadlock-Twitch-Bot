@@ -1,5 +1,13 @@
 # Workflow
 
+## 2026-07-03 — Affiliate-Portal-Fix und dashboard_v2-Aufraeumung
+
+- Start: delegierter GPT-Implementierungsworker fuer Affiliate-Portal-Handler und tote dashboard_v2-/dashboard_preview-Affiliate-Seiten; Scope Rust-Handler/Docs plus Frontend-Routen/API-Referenzen, kein Commit/Push/Stash/Reset/Checkout/Branch, kein repo-weites `cargo fmt`.
+- Recon laeuft: dediziertes Affiliate-Portal-Bundle unter `website/dist/affiliate-portal`, Rust-Router/Handler und Erreichbarkeit der alten Analytics-/Preview-Seiten werden vor Code-Aenderungen geprueft.
+- Implementiert: `portal_page_handler` nutzt jetzt `website_dist_root().join("affiliate-portal/index.html")`, Docs verweisen auf das dedizierte Website-Bundle und bestehende `/streamer/*`-Assets; `website_dist_root` ist crate-intern sichtbar. Alte Affiliate-/AdminAffiliates-Seiten, Hooks, API-Exporte und Preview-Fixtures wurden aus `dashboard_v2` (der LIVE-Analytics-SPA) entfernt; dedizierte `website/src/...`-Affiliate-SPA blieb unangetastet.
+- Reachability: `AffiliatePortal` und `AdminAffiliates` waren in beiden Analytics-SPAs nicht importiert/registriert und damit nicht erreichbar; Live-Ersatz bleibt das dedizierte Affiliate-Portal plus Rust-APIs/Admin-Portierung. `dashboard_preview` ist nicht deployed und wurde bewusst NICHT angefasst — die vom Worker dort noetigen vorbestehenden Build-Paritaetsfixes wurden als Scope-Creep revertiert; nur `dashboard_v2` (live) wurde bereinigt.
+- Verifikation: `SQLX_OFFLINE=true cargo build -p tb-dashboard-api` gruen (`Finished dev profile ... in 1m 01s`); `SQLX_OFFLINE=true cargo test -p tb-dashboard-api affiliate_portal` gruen (`4 passed; 0 failed; 733 filtered out`); `SQLX_OFFLINE=true cargo clippy -p tb-dashboard-api --all-targets` exit 0 mit bestehenden Warnungen ausserhalb der geaenderten Stellen. `bot/dashboard_v2 npm run build` gruen (`2849 modules transformed`, `built in 494ms`), `npm test` gruen (`15 pass / 0 fail`). `git diff --check` gruen. (`dashboard_preview`-Aenderungen des Workers revertiert.)
+
 ## 2026-07-02 — Twitch Live-Preview Embed
 
 - Start: delegierter GPT-Implementierungsworker fuer Live-Announcement-Preview in `tb-monitoring`; Scope Python-Paritaet fuer Stream-Thumbnail im Discord-Embed, kein Commit/Push, keine sqlx-Query-Aenderungen.

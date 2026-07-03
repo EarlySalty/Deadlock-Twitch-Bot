@@ -133,20 +133,7 @@ test('cookie-based dashboard requests stay same-origin without token bootstrappi
     assert.equal(apiRequest?.headers.get('X-Partner-Token'), null);
     assert.equal(apiRequest?.credentials, 'same-origin');
 
-    await clientModule.fetchAdminAffiliates();
-    const adminRequest = requests.at(-1);
-    assert.equal(adminRequest?.url.includes('partner_token='), false);
-    assert.equal(adminRequest?.headers.get('X-Partner-Token'), null);
-    assert.equal(adminRequest?.method, 'GET');
-    assert.equal(adminRequest?.credentials, 'same-origin');
-
-    await clientModule.toggleAffiliate('midcore_live', 'csrf-123');
-    const toggleRequest = requests.at(-1);
-    assert.equal(toggleRequest?.url.includes('partner_token='), false);
-    assert.equal(toggleRequest?.headers.get('X-Partner-Token'), null);
-    assert.equal(toggleRequest?.headers.get('X-CSRF-Token'), 'csrf-123');
-    assert.equal(toggleRequest?.method, 'POST');
-    assert.equal(toggleRequest?.credentials, 'same-origin');
+    assert.equal(requests.length, 1);
   } finally {
     globalThis.fetch = previousFetch;
     globalThis.window = previousWindow;

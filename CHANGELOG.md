@@ -1,3 +1,11 @@
+## #330 — Affiliate-Portal zeigt wieder das Affiliate-Portal statt der Analytics-Ansicht
+
+**Problem:** Wer das Affiliate-Portal öffnete, landete auf der Analytics-Dashboard-Oberfläche statt auf der eigentlichen Affiliate-Ansicht mit Login, Streamer-Claims, Provisionen und Stripe-Auszahlungen — die Portal-Adresse lieferte schlicht das falsche Bundle.
+
+**Änderung:** Das Affiliate-Portal liefert jetzt seine eigene, dedizierte Oberfläche aus. Verwaiste Affiliate-Altkopien in der Analytics-Ansicht wurden entfernt, damit beide Bereiche sauber getrennt bleiben.
+
+**Verhalten jetzt:** Das Affiliate-Portal öffnet die richtige Affiliate-Ansicht; das Analytics-Dashboard bleibt unberührt. Das Programm bleibt bis zur Freischaltung inaktiv.
+
 ## #329 — Verdächtige Twitch-Spam-Nachrichten gehen wieder ins AI-Learning
 
 **Ausgangslage:** Eine verdächtige Twitch-Nachricht mit Zuschauer-Kauf-Muster wurde zwar gemeldet, aber nicht an das Lernmodul weitergegeben, weil intern zusätzlich eine bereits bekannte Spam-Domain verlangt wurde. Genau dadurch konnten neue oder absichtlich verschleierte Schreibweisen nicht gelernt werden.

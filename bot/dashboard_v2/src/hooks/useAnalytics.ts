@@ -51,12 +51,6 @@ import {
 } from '@/api/analytics';
 import { fetchAuthStatus } from '@/api/auth';
 import { fetchBillingCatalog } from '@/api/billing';
-import {
-  fetchAdminAffiliates,
-  fetchAdminAffiliateStats,
-  fetchAdminAffiliateDetail,
-} from '@/api/admin';
-import { fetchAffiliatePortal } from '@/api/affiliate';
 import type { StreamReport, StreamReportABResponse, StreamReportVariant, TimeRange, ViewerSortField, ViewerFilterType } from '@/types/analytics';
 
 // Stale time: 5 minutes
@@ -518,38 +512,6 @@ export function useBillingCatalog(cycle: 1 | 12 = 1) {
     queryKey: ['billing-catalog', cycle],
     queryFn: () => fetchBillingCatalog(cycle),
     staleTime: STALE_TIME,
-  });
-}
-
-// ── Admin Affiliates ───────────────────────────────
-export function useAdminAffiliates() {
-  return useQuery({
-    queryKey: ['admin-affiliates'],
-    queryFn: fetchAdminAffiliates,
-  });
-}
-
-export function useAdminAffiliateStats() {
-  return useQuery({
-    queryKey: ['admin-affiliate-stats'],
-    queryFn: fetchAdminAffiliateStats,
-  });
-}
-
-export function useAdminAffiliateDetail(login: string | null) {
-  return useQuery({
-    queryKey: ['admin-affiliate-detail', login],
-    queryFn: () => fetchAdminAffiliateDetail(login!),
-    enabled: !!login,
-  });
-}
-
-// ── Affiliate Portal ───────────────────────────────
-export function useAffiliatePortal() {
-  return useQuery({
-    queryKey: ['affiliate-portal'],
-    queryFn: fetchAffiliatePortal,
-    retry: false,
   });
 }
 

@@ -2,7 +2,8 @@
 //!
 //! - `portal_handler` — JSON-API (`/twitch/api/v2/affiliate/portal`).
 //! - `portal_page_handler` — HTML-Seite (`/twitch/affiliate/portal`, P1.26):
-//!   serviert die dashboard_v2-SPA-Shell nativ statt via Python-Fallback.
+//!   serviert das dedizierte Bundle aus `website/dist/affiliate-portal`.
+//!   Assets daraus laufen über die bestehende `/streamer/*`-Route.
 
 use axum::{
     extract::{Extension, Query, State},
@@ -18,7 +19,7 @@ use sqlx::PgPool;
 use crate::auth::level::DashboardAuthLevel;
 use crate::auth::session::DashboardAuthState;
 use crate::handlers::affiliate::affiliate_session_from_headers;
-use crate::handlers::spa::dist_root;
+use crate::handlers::website::website_dist_root;
 
 async fn authenticated_login(
     headers: &HeaderMap,
@@ -309,11 +310,14 @@ pub async fn commissions_handler(
     .into_response()
 }
 
-/// `GET /twitch/affiliate/portal` (P1.26) — serviert die Portal-HTML-Seite
-/// (dashboard_v2-SPA-Shell) nativ. Die JSON-API bleibt unter
-/// `/twitch/api/v2/affiliate/portal`.
+/// `GET /twitch/affiliate/portal` (P1.26) — serviert das dedizierte
+/// Affiliate-Portal-Bundle aus `website/dist/affiliate-portal`.
+///
+/// Das gebaute `index.html` referenziert Assets unter `/streamer/assets/...`;
+/// diese werden bereits über `website::streamer_asset_handler` ausgeliefert.
+/// Die JSON-API bleibt unter `/twitch/api/v2/affiliate/portal`.
 pub async fn portal_page_handler() -> Response {
-    let index = dist_root().join("index.html");
+    let index = website_dist_root().join("affiliate-portal/index.html");
     let html = match tokio::fs::read_to_string(&index).await {
         Ok(s) => s,
         Err(_) => {
@@ -527,20 +531,41 @@ mod tests {
         assert_eq!(value["commissions"][0]["commission_cents"], 600);
     }
 
-    // P1.26: Portal-HTML-Seite wird nativ aus dem dist-Verzeichnis serviert.
+    // P1.26: Portal-HTML-Seite wird nativ aus dem website-dist-Verzeichnis serviert.
     #[tokio::test]
     async fn portal_page_serviert_html() {
         use std::time::{SystemTime, UNIX_EPOCH};
+        struct EnvGuard {
+            key: &'static str,
+            previous: Option<String>,
+        }
+        impl EnvGuard {
+            fn set_path(key: &'static str, value: &std::path::Path) -> Self {
+                let previous = std::env::var(key).ok();
+                std::env::set_var(key, value);
+                Self { key, previous }
+            }
+        }
+        impl Drop for EnvGuard {
+            fn drop(&mut self) {
+                match self.previous.as_ref() {
+                    Some(value) => std::env::set_var(self.key, value),
+                    None => std::env::remove_var(self.key),
+                }
+            }
+        }
+
         let unique = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .unwrap()
             .as_nanos();
         let root = std::env::temp_dir().join(format!("tb_affiliate_portal_{unique}"));
-        tokio::fs::create_dir_all(&root).await.unwrap();
-        tokio::fs::write(root.join("index.html"), b"<html>portal</html>")
+        let portal_root = root.join("affiliate-portal");
+        tokio::fs::create_dir_all(&portal_root).await.unwrap();
+        tokio::fs::write(portal_root.join("index.html"), b"<html>portal</html>")
             .await
             .unwrap();
-        std::env::set_var("DASHBOARD_V2_DIST_PATH", &root);
+        let _guard = EnvGuard::set_path("WEBSITE_DIST_PATH", &root);
 
         let res = portal_page_handler().await;
         assert_eq!(res.status(), StatusCode::OK);
@@ -549,7 +574,6 @@ mod tests {
             "text/html; charset=utf-8"
         );
 
-        std::env::remove_var("DASHBOARD_V2_DIST_PATH");
         tokio::fs::remove_dir_all(root).await.ok();
     }
 }
