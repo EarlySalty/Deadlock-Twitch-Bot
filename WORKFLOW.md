@@ -369,6 +369,13 @@
 - Recon: gelistete Produktions-Callsites mit aktuellen `sqlx::query*`-Treffern abgeglichen; `token_store::load_inner` bleibt als DYNAMIC-Stelle unveraendert. Schema-Check: `twitch_stream_sessions.started_at` ist im frischen Snapshot `timestamptz`, `twitch_live_state.last_started_at` bleibt TEXT; Makro-Konvertierung liest beide robust ueber `::text`/`NULLIF(..., '')::timestamptz` und meldet `last_started_at` als Typ-Auffaelligkeit.
 - Implementiert: alle 107 gelisteten CONVERTIBLE_PG-Callsites in `rust/crates/tb-raid/src` auf `sqlx::query!`, `query_as!` oder `query_scalar!` umgestellt. Datei-Counts: arrival_tracking_store 4, auth_writer 5, external_recruitment_store 10, offline_eligibility 2, outreach_boost 2, partner_roster 1, partner_score_refresh 9, partner_setup 11, raid_blacklist 5, raid_history_store 3, reauth_admin 1, score_store 4, score_tracking_store 7, state_store 4, strikes_store 1, token_blacklist 10, token_lifecycle 23, token_refresher 4, token_store 1.
 - Verifikation: `rustfmt --edition 2021` auf den 19 geaenderten Rust-Dateien erfolgreich; statische Suche zaehlt exakt 107 sqlx-Makros in den Scope-Dateien. Verbleibende `sqlx::query*(`-Treffer sind die 5 DYNAMIC-Stellen (`token_store::load_inner`, `partner_setup::normalize_related_tables`) oder TEST_ONLY-Queries. Kein Build, kein Prepare, keine Tests gemaess Auftrag.
+## 2026-06-30 — Raid-Blacklist LEFT JOIN ID-only Bans
+
+- Start: delegierter GPT-Implementierungsworker; Scope strikt auf `rust/crates/tb-raid/src/raid_blacklist.rs`, `rust/crates/tb-raid/tests/auto_raid_pipeline.rs` und Workflow-Notiz. Kein Commit/Push/Deploy.
+- Befund: bestehender uncommitted Fix lädt Exclusion-Bans per `INNER JOIN twitch_streamers`; ID-only-Bans ohne Streamer-Zeile fallen dadurch aus dem Sperrset.
+- Implementiert: Query auf `LEFT JOIN twitch_streamers` + `COALESCE(s.twitch_login, '')`; Set-Aufbau ueberspringt weiterhin leere IDs/Logins, setzt aber die ID. Pipeline-Test um ID-only-Fallback-Kandidaten ohne `twitch_streamers`-Zeile erweitert.
+- Rot-vor/Grün-nach: neuer Test `blacklist_globale_bans_und_id_only_exclusions_filtern_fallback` scheitert mit altem `INNER JOIN` auf Ziel `id_only_exclusion_banned`; mit finalem `LEFT JOIN` gruen.
+- Verifikation: eigener Wegwerf-Timescale-Container `tb-raid-test-postgres` auf `127.0.0.1:55432`; `cargo test -p tb-raid` mit `TB_TEST_DATABASE_URL` gruen, 343 passed / 0 failed. Query bleibt `sqlx::query_as(` Runtime, keine `.sqlx`-Cache-Regenerierung noetig.
 
 ## 2026-06-30 — Ticket 1.2 Runtime Tables to Migrations
 

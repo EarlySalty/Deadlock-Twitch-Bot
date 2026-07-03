@@ -1,0 +1,875 @@
+<!doctype html>
+<html lang="de">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Python/Rust Parity Audit</title>
+  <style>
+    :root {
+      color-scheme: light;
+      --bg: #f6f7f9;
+      --panel: #ffffff;
+      --text: #1f2933;
+      --muted: #667085;
+      --border: #d8dee8;
+      --accent: #1769aa;
+      --accent-2: #6b4eff;
+      --warn: #9a5b00;
+      --ok: #0f7b45;
+      --danger: #b42318;
+      --shadow: 0 1px 2px rgba(16, 24, 40, 0.08);
+    }
+
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      background: var(--bg);
+      color: var(--text);
+      line-height: 1.45;
+    }
+
+    header.page {
+      background: #102033;
+      color: white;
+      padding: 22px 28px;
+    }
+
+    header.page h1 {
+      margin: 0 0 6px;
+      font-size: clamp(1.45rem, 2vw, 2rem);
+      letter-spacing: 0;
+    }
+
+    header.page p {
+      max-width: 1100px;
+      margin: 0;
+      color: #d7e2ef;
+    }
+
+    nav {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+      padding: 12px 28px;
+      background: #e9edf3;
+      border-bottom: 1px solid var(--border);
+      position: sticky;
+      top: 0;
+      z-index: 10;
+    }
+
+    nav a {
+      color: #12385c;
+      text-decoration: none;
+      border: 1px solid #c8d2df;
+      background: white;
+      padding: 6px 9px;
+      border-radius: 4px;
+      font-size: 0.92rem;
+    }
+
+    main {
+      max-width: 1320px;
+      margin: 0 auto;
+      padding: 22px;
+    }
+
+    section {
+      margin: 0 0 24px;
+      padding: 18px;
+      background: var(--panel);
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      box-shadow: var(--shadow);
+    }
+
+    h2 {
+      margin: 0 0 12px;
+      font-size: 1.25rem;
+      letter-spacing: 0;
+    }
+
+    h3 {
+      margin: 18px 0 8px;
+      font-size: 1rem;
+      letter-spacing: 0;
+    }
+
+    p, ul, ol, dl { margin-top: 0; }
+    li { margin: 4px 0; }
+
+    .metrics {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(170px, 1fr));
+      gap: 10px;
+      margin: 14px 0;
+    }
+
+    .metric {
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      padding: 12px;
+      background: #fbfcfe;
+    }
+
+    .metric strong {
+      display: block;
+      font-size: 1.45rem;
+      line-height: 1.1;
+      color: #102033;
+    }
+
+    .metric span {
+      color: var(--muted);
+      font-size: 0.9rem;
+    }
+
+    .definitions {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+      gap: 10px;
+      margin: 12px 0 0;
+    }
+
+    .definition {
+      border-left: 4px solid var(--accent);
+      background: #f3f8fd;
+      padding: 10px 12px;
+    }
+
+    .toolbar {
+      display: grid;
+      grid-template-columns: repeat(4, minmax(150px, 1fr)) auto;
+      gap: 10px;
+      align-items: end;
+      margin: 12px 0 16px;
+    }
+
+    label.filter-label {
+      display: grid;
+      gap: 4px;
+      color: var(--muted);
+      font-size: 0.85rem;
+      font-weight: 600;
+    }
+
+    select, input[type="search"], textarea, button {
+      font: inherit;
+      border: 1px solid var(--border);
+      border-radius: 4px;
+      background: white;
+      color: var(--text);
+    }
+
+    select, input[type="search"], button {
+      min-height: 36px;
+      padding: 6px 8px;
+    }
+
+    button {
+      cursor: pointer;
+      background: #173b61;
+      color: white;
+      border-color: #173b61;
+    }
+
+    button.secondary {
+      background: white;
+      color: #173b61;
+      border-color: #b9c6d4;
+    }
+
+    .hint {
+      color: var(--muted);
+      font-size: 0.92rem;
+    }
+
+    .finding-list {
+      display: grid;
+      gap: 12px;
+    }
+
+    article.finding {
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      background: white;
+      overflow: hidden;
+    }
+
+    .finding-head {
+      display: grid;
+      grid-template-columns: 1fr auto;
+      gap: 10px;
+      padding: 12px 14px;
+      border-bottom: 1px solid var(--border);
+      background: #fbfcfe;
+    }
+
+    .finding-title {
+      margin: 0;
+      font-size: 1rem;
+    }
+
+    .badges {
+      display: flex;
+      flex-wrap: wrap;
+      justify-content: flex-end;
+      gap: 6px;
+    }
+
+    .badge {
+      display: inline-flex;
+      align-items: center;
+      border: 1px solid var(--border);
+      border-radius: 999px;
+      padding: 2px 8px;
+      background: white;
+      color: #314154;
+      font-size: 0.78rem;
+      white-space: nowrap;
+    }
+
+    .badge.status-unklar { border-color: #f3c36a; color: var(--warn); background: #fff8e8; }
+    .badge.status-gewollt { border-color: #79c697; color: var(--ok); background: #ecfdf3; }
+    .badge.status-sicher { border-color: #9ab7e5; color: #174f95; background: #eef5ff; }
+
+    .finding-body {
+      padding: 12px 14px 14px;
+    }
+
+    .fields {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(220px, 1fr));
+      gap: 10px;
+      margin: 0;
+    }
+
+    .field {
+      border: 1px solid #e4e8ef;
+      border-radius: 4px;
+      padding: 8px;
+      background: #fff;
+      min-width: 0;
+    }
+
+    .field dt {
+      color: var(--muted);
+      font-size: 0.78rem;
+      font-weight: 700;
+      margin: 0 0 3px;
+    }
+
+    .field dd {
+      margin: 0;
+      overflow-wrap: anywhere;
+    }
+
+    .tracking {
+      display: grid;
+      grid-template-columns: repeat(4, minmax(140px, auto)) minmax(240px, 1fr);
+      gap: 10px;
+      align-items: start;
+      margin-top: 12px;
+      padding-top: 12px;
+      border-top: 1px solid #e9edf3;
+    }
+
+    .tracking label.checkbox {
+      display: inline-flex;
+      gap: 6px;
+      align-items: center;
+      min-height: 32px;
+      color: #263547;
+    }
+
+    textarea {
+      width: 100%;
+      min-height: 62px;
+      resize: vertical;
+      padding: 8px;
+    }
+
+    .two-col {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(240px, 1fr));
+      gap: 14px;
+    }
+
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      font-size: 0.95rem;
+    }
+
+    th, td {
+      text-align: left;
+      vertical-align: top;
+      border: 1px solid var(--border);
+      padding: 8px;
+    }
+
+    th { background: #eef2f7; }
+
+    @media (max-width: 900px) {
+      .toolbar, .fields, .tracking, .two-col, .finding-head {
+        grid-template-columns: 1fr;
+      }
+
+      .badges {
+        justify-content: flex-start;
+      }
+
+      nav {
+        position: static;
+      }
+    }
+  </style>
+</head>
+<body>
+  <header class="page">
+    <h1>Python/Rust Parity Audit</h1>
+    <p>Read-only Doku-Artefakt fuer den lokalen Vergleich von Python-Verhalten in <code>bot*/scripts/ops</code> und Rust-Ziel unter <code>rust/</code>. Diese Seite dokumentiert Findings, keine Fixes.</p>
+  </header>
+
+  <nav aria-label="Abschnitte">
+    <a href="#a">A Zusammenfassung</a>
+    <a href="#b">B Module</a>
+    <a href="#c">C Kritische Stellen</a>
+    <a href="#d">D Offene Fragen</a>
+    <a href="#e">E Rust-Architektur</a>
+    <a href="#f">F Auditplan</a>
+    <a href="#g">G Verbesserungen</a>
+  </nav>
+
+  <main>
+    <section id="a">
+      <h2>A Analyse-Zusammenfassung</h2>
+      <p>Grundlage ist die vorgegebene Finding-Liste. Wenn keine genaue Datei genannt wurde, werden Python-Quelle und Rust-Ziel absichtlich nur auf Bereichsebene benannt, damit keine genauen Quellen erfunden werden.</p>
+      <div class="metrics" aria-live="polite">
+        <div class="metric"><strong id="totalFindings">0</strong><span>Findings gesamt</span></div>
+        <div class="metric"><strong id="visibleFindings">0</strong><span>Findings im aktuellen Filter</span></div>
+        <div class="metric"><strong id="doneFindings">0</strong><span>als erledigt markiert</span></div>
+        <div class="metric"><strong id="checkedBoxes">0</strong><span>erledigte/gesetzte Checkboxes</span></div>
+      </div>
+      <div class="definitions">
+        <div class="definition"><strong>Kategorie</strong><br>Einordnung des Paritaetsrisikos: sicher additiv, potenziell verhaltensaendernd, gewollte Sicherheitsabweichung oder offener Vertrag.</div>
+        <div class="definition"><strong>Status/Typ</strong><br>Arbeitszustand fuer das Audit: offen, unklar, sicher oder gewollt. Die Checkbox "erledigt" ist der lokale Bearbeitungsstand.</div>
+        <div class="definition"><strong>Gewollte Abweichung</strong><br>Eine Abweichung, die laut Git/Doku oder Vorgabe bewusst ist. Einzelne API-Gaps koennen trotzdem offen bleiben.</div>
+        <div class="definition"><strong>Offene Frage</strong><br>Ein Finding, bei dem Intent, Route, Wiring oder Vertrag noch bestaetigt werden muss, bevor eine Migration als parity-clean gelten kann.</div>
+      </div>
+
+      <h3>Gewollte/positive globale Abweichungen</h3>
+      <ul>
+        <li>Webhook-only statt EventSub-WS ist dokumentiert/gewollt.</li>
+        <li>Dashboard native API/SPAs statt Flask/SSR/NOAUTH ist grundsaetzlich gewollt; konkrete API-Gaps bleiben als Findings offen.</li>
+        <li>Stripe-hosted/Connect statt eigener Rechnung/PDF/Payout kann gewollt sein; konkrete Affiliate/Billing-Routen sind teils offen.</li>
+        <li>OpenAI/Whisper Drop ist dokumentiert/gewollt.</li>
+        <li>Rust-only additive Features wie <code>PATCH /twitch/api/v2/channel/title</code> und diagnose/scam-guard werden als additive Abweichung bzw. offener Vertrag betrachtet.</li>
+      </ul>
+    </section>
+
+    <section id="b">
+      <h2>B Erkannte Module/Funktionen</h2>
+      <table>
+        <thead>
+          <tr><th>Bereich</th><th>Python-Quelle</th><th>Rust-Ziel</th><th>Fokus im Audit</th></tr>
+        </thead>
+        <tbody id="moduleRows"></tbody>
+      </table>
+    </section>
+
+    <section id="c">
+      <h2>C Kritische Stellen</h2>
+      <p class="hint">Filter und lokale Bearbeitungsfelder bleiben im Browser. Checkboxes und Notizen werden mit <code>localStorage</code> pro Finding-ID gespeichert.</p>
+      <div class="toolbar">
+        <label class="filter-label">Bereich
+          <select id="areaFilter"><option value="">Alle Bereiche</option></select>
+        </label>
+        <label class="filter-label">Status/Typ
+          <select id="statusFilter"><option value="">Alle Status</option></select>
+        </label>
+        <label class="filter-label">Kategorie
+          <select id="categoryFilter"><option value="">Alle Kategorien</option></select>
+        </label>
+        <label class="filter-label">Textsuche
+          <input id="searchFilter" type="search" placeholder="ID, Risiko, Route, Test ...">
+        </label>
+        <button type="button" class="secondary" id="resetFilters">Filter zuruecksetzen</button>
+      </div>
+      <div id="filterInfo" class="hint"></div>
+      <div id="findingsList" class="finding-list"></div>
+    </section>
+
+    <section id="d">
+      <h2>D Offene Fragen</h2>
+      <p>Offene Fragen sind Findings mit unklarem Intent, Route, Wiring oder Vertrag. Die Liste unten wird aus dem aktuellen Datenstand erzeugt.</p>
+      <ul id="openQuestions"></ul>
+    </section>
+
+    <section id="e">
+      <h2>E Vorgeschlagene Rust-Architektur</h2>
+      <ul>
+        <li>Ports fuer Chat, Helix, DB, Discord, Billing und Durable-Inbox explizit fail-safe machen; Fehler sollen sichtbar, gezaehlt und testbar sein.</li>
+        <li>Privilegierte Commands und interne Routen zentral ueber Reauth/Auth/CSRF/Idempotency-Gates fuehren.</li>
+        <li>Background-Tasks und spawned Sends zentral ueberwachen, Panic/Drop/Result melden und Readiness degradieren.</li>
+        <li>EventSub, Raid-Arrival und Inbox ueber idempotente Workflows mit Deadletter/Replay/Startup-Drain absichern.</li>
+        <li>Dashboard-APIs als stabile JSON-Vertraege dokumentieren; gewollte SPA/API-Abweichungen separat von fehlender Paritaet halten.</li>
+      </ul>
+    </section>
+
+    <section id="f">
+      <h2>F Migrations-/Auditplan</h2>
+      <ol>
+        <li>Routen-/Command-Matrix erstellen und alle unklaren API-/Command-Gaps entscheiden.</li>
+        <li>Fail-closed Tests fuer Auth, EventSub, Subscription-Coverage, DB-Fehler und Readiness priorisieren.</li>
+        <li>Raid/Scoring/Arrival mit Fixtures gegen Python-Verhalten bzw. gewollte Abweichungen shadow-diffen.</li>
+        <li>Dashboard/Billing/Affiliate JSON-Vertraege pruefen und gewollte Stripe-hosted/Connect-Entscheidung konkretisieren.</li>
+        <li>Runtime-Cutover nur mit Migration-Preflight, Dual-Writer-Gate, Task-Supervision und Health-Checks freigeben.</li>
+      </ol>
+    </section>
+
+    <section id="g">
+      <h2>G Verbesserungen</h2>
+      <div class="two-col">
+        <div>
+          <h3>Sicher ohne Verhaltensaenderung</h3>
+          <ul>
+            <li>Additive Logs, Access-Log-Senken und bessere Error-Details ohne Vertragsbruch.</li>
+            <li>Stale Kommentare/Tests korrigieren, wenn der echte Handler vorhanden ist.</li>
+            <li>Kosten-/Usage-Ledger additiv verdrahten, ohne Runtime-Entscheidungen zu aendern.</li>
+            <li>Alias-Routen fuer Legal/OAuth ergaenzen, wenn bestehende Links sonst 404 liefern.</li>
+          </ul>
+        </div>
+        <div>
+          <h3>Potenziell verhaltensaendernd</h3>
+          <ul>
+            <li>Scope-, Cookie-, Reauth-, CSRF- und Admin-Error-Vertraege.</li>
+            <li>Raid-Auswahl, Score-Rundung, Dedupe, Arrival-Replay und Fallbacks.</li>
+            <li>Monitoring-Scope, Subscription-Recovery, EventSub-Validierung und Dashboard-Bridge.</li>
+            <li>Billing/Affiliate-Routen, per-Streamer Live-Announcement-Config und Analytics-Zugriffsregeln.</li>
+          </ul>
+        </div>
+      </div>
+    </section>
+  </main>
+
+  <script>
+    const AREA_META = {
+      "Chat/IRC": {
+        py: "bot*/scripts/ops (TwitchIO, IRC, Chat-Commands)",
+        rust: "rust/ (Chat pipeline, IRC adapter, command/API ports)",
+        focus: "Chat-Event-Shape, Commands, Engagement, IRC-Lurker, Fallbacks"
+      },
+      "Monitoring/EventSub": {
+        py: "bot*/scripts/ops (Monitoring, EventSub, subscriptions, inbox)",
+        rust: "rust/ (Webhook/EventSub, polling, durable inbox, live announcements)",
+        focus: "Webhook-Validierung, Subscription-Coverage, Polling, Inbox, Raid-Events"
+      },
+      "Raid/OAuth/Scoring": {
+        py: "bot*/scripts/ops (Raid, OAuth, scoring, recruitment, setup)",
+        rust: "rust/ (Raid planner/executor, OAuth, scoring, recruitment, setup)",
+        focus: "Token-Lifecycle, Score-Paritaet, Arrival-Dedupe, Raid-Ausfuehrung"
+      },
+      "Dashboard/Auth/Admin/API": {
+        py: "bot*/scripts/ops (Dashboard/Auth/Admin/Billing/Affiliate APIs)",
+        rust: "rust/ (native dashboard API/SPAs, auth, admin, billing)",
+        focus: "Cookie/Auth-Vertraege, API-Routen, Billing/Affiliate, interne Tools"
+      },
+      "Analytics/Public/LLM": {
+        py: "bot*/scripts/ops (Analytics, public endpoints, LLM/title/reporting)",
+        rust: "rust/ (analytics/public API, AI report/title paths)",
+        focus: "Analytics-Zugriff, KPI-Definitionen, AI-Gates, Public Pages"
+      },
+      "Storage/Runtime/Ops": {
+        py: "bot*/scripts/ops (schema bootstrap, readiness, runtime scripts)",
+        rust: "rust/ (migrations, readiness, runtime services, logging)",
+        focus: "Migrationen, Readiness, Task-Supervision, Cutover"
+      },
+      "Engagement/Social/Highlights": {
+        py: "bot*/scripts/ops (Engagement, Social, Promo, Highlights)",
+        rust: "rust/ (engagement/social routes, promo send path, templates)",
+        focus: "Social-Legal, Promo Self-Service, Template-Paritaet, Audit-Attribution"
+      }
+    };
+
+    const DEFAULT_ASSESSMENT = "Keine globale gewollte Abweichung belegt; als Paritaetsfund pruefen.";
+    const DEFAULT_CATEGORY = "potenziell verhaltensaendernd";
+    const DEFAULT_STATUS = "offen";
+
+    const FINDINGS = [
+      {id:"CHAT-PIPE-002",area:"Chat/IRC",summary:"Rust deserialisiert strict ChatMessageEvent; Python normalisiert TwitchIO-3.x dynamisch.",risk:"Stille Drops bei Event-Shape.",test:"Fixture mit alternativen TwitchIO Event-Shapes."},
+      {id:"CHAT-PIPE-006",area:"Chat/IRC",summary:"Python isoliert Schritte per try/except, Rust ruft Ports direkt.",risk:"Crash/Panic wenn Ports nicht fail-safe sind.",test:"Ports werfen Fehler, Chatprozess bleibt lauffaehig."},
+      {id:"CHAT-PIPE-007",area:"Chat/IRC",summary:"Rust spawnt Engagement nach handle() fuer jedes Nicht-Bot-Event; Python Engagement nur nach Partner-Gate/fruehen Returns.",risk:"Non-Partner/Spam triggert Engagement.",test:"Non-Partner Event darf kein Engagement ausloesen."},
+      {id:"CHAT-CMD-013",area:"Chat/IRC",summary:"!engagement_on fehlt in Rust.",risk:"Aktivierung per Chat fehlt.",test:"Command parity."},
+      {id:"CHAT-CMD-014",area:"Chat/IRC",summary:"!engagement_off fehlt in Rust.",risk:"Deaktivierung per Chat fehlt.",test:"Command parity."},
+      {id:"CHAT-CMD-007",area:"Chat/IRC",summary:"!silentban in Rust ohne Reauth-Gate.",risk:"Privilegierter Pfad lockerer.",test:"Expired reauth blockt."},
+      {id:"CHAT-CMD-008",area:"Chat/IRC",summary:"!silentraid in Rust ohne Reauth-Gate.",risk:"Privilegierter Pfad lockerer.",test:"Expired reauth blockt."},
+      {id:"CHAT-CMD-015",area:"Chat/IRC",summary:"!engagement_status Rust schluckt DB-Fehler und zeigt Null-Log anders.",risk:"Falsche Admin-Auskunft.",test:"DB-Fehler ergibt sichtbaren Fehler."},
+      {id:"CHAT-API-003",area:"Chat/IRC",summary:"Announcement-Fallback fehlt oder driftet.",risk:"Chat-Mitteilung faellt bei API-Fehler anders aus.",test:"Helix/Chat Fallback."},
+      {id:"CHAT-API-004",area:"Chat/IRC",summary:"Announcement-Statusdetails gehen verloren.",risk:"Debugging schwerer.",test:"Statusdetail im Error."},
+      {id:"CHAT-API-011",area:"Chat/IRC",summary:"Suppression-DB-Fehler geschluckt.",risk:"Verbotene/gesperrte Pfade koennen falsch weiterlaufen.",test:"DB-Fehler fail-closed."},
+      {id:"CHAT-API-013",area:"Chat/IRC",summary:"AutoBan-Notice Send-Result ignoriert.",risk:"Fehlende Benachrichtigung bleibt unsichtbar.",test:"Send-Fehler wird geloggt/gezaehlt."},
+      {id:"CHAT-API-014",area:"Chat/IRC",summary:"Mutex::lock().unwrap() Poison-Panic-Risiko.",risk:"Prozesspanic.",test:"Poisoned lock simulieren."},
+      {id:"CHAT-IRC-003",area:"Chat/IRC",summary:"Rust trackt alle Chatters als Category, Python differenziert.",risk:"Analytics/Lurker-Kategorien driften.",test:"Category mapping."},
+      {id:"CHAT-IRC-004",area:"Chat/IRC",summary:"Kein NAMES-Stagger.",risk:"Burst/Rate-Limit beim Join.",test:"Mehrere Channels mit Timing."},
+      {id:"CHAT-IRC-007",area:"Chat/IRC",summary:"DB-Fehler still.",risk:"Verlorene Lurkerdaten.",test:"DB down wird gemeldet."},
+      {id:"CHAT-IRC-008",area:"Chat/IRC",summary:"get_chatters(\"#x\") leer.",risk:"Channel-Name-Format Bug.",test:"Mit/ohne #."},
+      {id:"CHAT-IRC-009",area:"Chat/IRC",summary:"Kein Stop-Signal.",risk:"Unsauberes Shutdown.",test:"Graceful stop."},
+      {id:"CHAT-IRC-010",area:"Chat/IRC",summary:"Chatters-Poll kann ohne TokenProvider ausfallen.",risk:"Lurker-Poll deaktiviert.",test:"Missing token provider sichtbar."},
+      {id:"CHAT-IRC-013",area:"Chat/IRC",summary:"Engagement-IRC dynamisch anders verdrahtet.",risk:"Ordering/Scope-Drift.",test:"Event-Reihenfolge."},
+      {id:"CHAT-IRC-014",area:"Chat/IRC",summary:"Engagement-IRC Ordering-Risiko.",risk:"Reaktionen vor Persistenz/Checks.",test:"Deterministic order."},
+      {id:"CHAT-IRC-015",area:"Chat/IRC",summary:"Task-Panic-Risiko im IRC Umfeld.",risk:"Stille Teilfunktion tot.",test:"Panic supervision."},
+      {id:"CHAT-IRC-016",area:"Chat/IRC",summary:"IRC-Fehlerbehandlung unvollstaendig.",risk:"Reconnect/Recovery driftet.",test:"Disconnect/reconnect."},
+
+      {id:"MON-EVENTSUB-002",area:"Monitoring/EventSub",summary:"Rust akzeptiert fehlenden message-type teils 204.",risk:"Fehlerhafte Webhook Requests werden als OK behandelt.",test:"Missing header => 4xx."},
+      {id:"MON-EVENTSUB-004",area:"Monitoring/EventSub",summary:"Challenge ohne challenge ergibt 200 leer.",risk:"Twitch-Verifikation kann falsch als Erfolg erscheinen.",test:"Malformed challenge."},
+      {id:"MON-EVENTSUB-005",area:"Monitoring/EventSub",summary:"Revocation-Folgen schwaecher.",risk:"Subscription-Ausfall bleibt laenger unbemerkt.",test:"Revoked event markiert Zustand."},
+      {id:"MON-EVENTSUB-009",area:"Monitoring/EventSub",summary:"Direct dispatch kann unknown droppen.",risk:"Eventverlust ohne DLQ.",test:"Unknown type sichtbar."},
+      {id:"MON-EVENTSUB-013",area:"Monitoring/EventSub",summary:"Fehlende broadcaster_id kann leer verarbeitet werden.",risk:"Falsche Zuordnung.",test:"Missing broadcaster fail-closed."},
+      {id:"MON-SUB-002",area:"Monitoring/EventSub",summary:"Rust core subscription ensure best-effort ohne Fehlerstatus; Python startup coverage fail-closed.",risk:"Bot startet ohne Coverage.",test:"Ensure failure => unhealthy."},
+      {id:"MON-SUB-005",area:"Monitoring/EventSub",summary:"401 nur debug und 6h reconcile.",risk:"Lange Event-Luecke.",test:"401 triggert schnelle Reparatur."},
+      {id:"MON-SUB-006",area:"Monitoring/EventSub",summary:"429 nur debug und 6h reconcile.",risk:"Lange Event-Luecke.",test:"Backoff/retry sichtbar."},
+      {id:"MON-SUB-010",area:"Monitoring/EventSub",summary:"403 perm_failed bis Neustart.",risk:"Permanenter Eventverlust.",test:"403 Recovery."},
+      {id:"MON-SUB-012",area:"Monitoring/EventSub",summary:"Capacity Rust schreibt nur used_slots; Dashboard/Alerts weniger aussagekraeftig.",risk:"Weniger Capacity-Diagnose.",test:"Capacity Felder."},
+      {id:"MON-POLL-002",area:"Monitoring/EventSub",summary:"Rust tracked alle Nicht-Partner aus twitch_streamers, Python nur is_monitored_only=1.",risk:"Monitoring-Scope driftet.",test:"Fixture Partner/Monitored."},
+      {id:"MON-POLL-003",area:"Monitoring/EventSub",summary:"API-Fehler kann live Kanaele als offline behandeln.",risk:"Falsche Offline-Events.",test:"API error preserves live state."},
+      {id:"MON-POLL-008",area:"Monitoring/EventSub",summary:"ScoreRefresh Konsum/Wiring unklar.",risk:"Stale Scores.",test:"Event consumption.",cat:"offene Frage/Vertrag unklar",status:"unklar",assessment:"Wiring ist laut Vorgabe unklar; als offene Frage klaeren."},
+      {id:"MON-POLL-009",area:"Monitoring/EventSub",summary:"Reauth reminder stale stream_id.",risk:"Reauth-Erinnerung kann falschen Stream-Kontext nutzen.",test:"stream_id refresh."},
+      {id:"MON-ANN-001",area:"Monitoring/EventSub",summary:"Rust rendert nur default config, Python laedt pro Streamer Config.",risk:"Falsche Live-Ankuendigungen.",test:"Per-streamer config."},
+      {id:"MON-ANN-003",area:"Monitoring/EventSub",summary:"Rust keine Config-Validation.",risk:"Kaputte Templates live.",test:"Invalid config rejected."},
+      {id:"MON-ANN-007",area:"Monitoring/EventSub",summary:"Rust Transport ohne Idempotency-Key.",risk:"Doppelpost bei Timeout.",test:"Retry timeout no duplicate."},
+      {id:"MON-INBOX-005",area:"Monitoring/EventSub",summary:"Requeue ohne Runtime-Wakeup.",risk:"Requeue bleibt liegen.",test:"Requeue wakes worker."},
+      {id:"MON-INBOX-009",area:"Monitoring/EventSub",summary:"Panickender Hook kann Worker beenden.",risk:"Durable inbox stoppt.",test:"Hook panic supervision."},
+      {id:"MON-INBOX-010",area:"Monitoring/EventSub",summary:"Rust Handler erlaubt nur 4 Worktypes.",risk:"Neue/alte Worktypes fallen raus.",test:"All known worktypes."},
+      {id:"MON-INBOX-011",area:"Monitoring/EventSub",summary:"Dashboard EventSub bridge Outbox in Rust nicht gefunden.",risk:"Dashboard-Events fehlen.",test:"Outbox path.",cat:"offene Frage/Vertrag unklar",status:"unklar",assessment:"Pfad nicht gefunden; Dashboard-Bridge-Vertrag klaeren."},
+      {id:"MON-INBOX-012",area:"Monitoring/EventSub",summary:"Deadletter in Rust nicht gefunden.",risk:"Verlorene Fehleranalyse.",test:"Exhausted retries => deadletter."},
+      {id:"MON-INBOX-013",area:"Monitoring/EventSub",summary:"Startup-pending in Rust nicht gefunden.",risk:"Alte Pending Jobs bleiben liegen.",test:"Startup drains pending."},
+      {id:"MON-INBOX-014",area:"Monitoring/EventSub",summary:"EventSub bridge Details unklar.",risk:"Dashboard/monitoring drift.",test:"Bridge contract.",cat:"offene Frage/Vertrag unklar",status:"unklar",assessment:"Bridge-Details sind laut Vorgabe unklar; als offene Frage behandeln."},
+      {id:"MON-RAID-004",area:"Monitoring/EventSub",summary:"Manual suppression vor arrival insert in Rust; Python erst nach Insert.",risk:"Race/Verlust.",test:"Suppression insert order."},
+      {id:"MON-RAID-009",area:"Monitoring/EventSub",summary:"Blacklist-Raid Whisper fehlt in Rust.",risk:"Nutzerinfo fehlt.",test:"Blacklist raid sends notice."},
+      {id:"MON-RAID-011",area:"Monitoring/EventSub",summary:"Guard/arrival-dedupe Tests fehlen.",risk:"Doppelverarbeitung.",test:"Duplicate EventSub."},
+      {id:"MON-RAID-012",area:"Monitoring/EventSub",summary:"Arrival dedupe unvollstaendig.",risk:"Doppelte raids.",test:"channel.raid plus chat.notification."},
+
+      {id:"RAID-OAUTH-006",area:"Raid/OAuth/Scoring",summary:"Rust Dashboard-Scope fordert zusaetzlich channel:manage:broadcast, Python nicht.",risk:"OAuth-Friktion/Scope-Diff.",test:"Scope set parity."},
+      {id:"RAID-OAUTH-008",area:"Raid/OAuth/Scoring",summary:"Rust decrypt re-read hart mit enc_version=1.",risk:"Token-Migration/Rotation bricht.",test:"Mehrere enc_version."},
+      {id:"RAID-OAUTH-010",area:"Raid/OAuth/Scoring",summary:"Grace expiry Rust setzt kein manual_partner_opt_out=1/token_error_expired.",risk:"Lifecycle-Status drift.",test:"Expired token state."},
+      {id:"RAID-OAUTH-012",area:"Raid/OAuth/Scoring",summary:"raid/requirements Rust legacy/fallback.",risk:"API fehlt/alt.",test:"Route contract.",cat:"offene Frage/Vertrag unklar",status:"unklar",assessment:"Route ist legacy/fallback; Vertrag vor Migration klaeren."},
+      {id:"RAID-OAUTH-013",area:"Raid/OAuth/Scoring",summary:"Rust raid/requirements Handler nicht registriert/ohne Idempotency, falls aktiviert.",risk:"Doppelter Effekt.",test:"Repeated call.",cat:"offene Frage/Vertrag unklar",status:"unklar",assessment:"Aktivierungszustand und Idempotency sind unklar."},
+      {id:"RAID-ARR-003",area:"Raid/OAuth/Scoring",summary:"Parallele channel.raid + chat.notification koennen same pending doppelt bestaetigen.",risk:"Doppelzaehlung.",test:"Concurrent events."},
+      {id:"RAID-ARR-011",area:"Raid/OAuth/Scoring",summary:"Orphan sweeper vs pending replay Race/Doppelzaehlung.",risk:"Doppelzaehlung.",test:"Replay+sweeper race."},
+      {id:"RAID-ARR-013",area:"Raid/OAuth/Scoring",summary:"Score snapshot drift.",risk:"Falsche Fairness.",test:"Score snapshot fixed."},
+      {id:"RAID-ARR-014",area:"Raid/OAuth/Scoring",summary:"Rust laedt post-confirm DB Score statt Pending _partner_score.",risk:"Readiness/Fairness anders.",test:"Changed score after pending."},
+      {id:"RAID-SCORE-003",area:"Raid/OAuth/Scoring",summary:"Python round ties-to-even, Rust .round().",risk:"Score-Kantenwerte anders.",test:".5 cases."},
+      {id:"RAID-SCORE-009",area:"Raid/OAuth/Scoring",summary:"ScoreStore-Error blockt Rust, Python kann fallback.",risk:"Raid-Ausfall bei Store-Fehler.",test:"Store error fallback."},
+      {id:"RAID-SCORE-011",area:"Raid/OAuth/Scoring",summary:"Follower-Tie-Break: Rust 0, Python 1e9 ans Ende.",risk:"Ranking anders.",test:"Null followers."},
+      {id:"RAID-SCORE-014",area:"Raid/OAuth/Scoring",summary:"Outreach boost queued/detected/aktive Partner anders.",risk:"Zielauswahl driftet.",test:"Boost states."},
+      {id:"RAID-SCORE-016",area:"Raid/OAuth/Scoring",summary:"Rust score refresh blind upsert; aeltere Berechnung kann neuere ueberschreiben.",risk:"Stale overwrite.",test:"Timestamp ordering."},
+      {id:"RAID-EXEC-004",area:"Raid/OAuth/Scoring",summary:"Rust bricht bei Partner stream fetch error ab; Python kann Kategorie-Fallback versuchen.",risk:"Kein Raid trotz moeglichem Fallback.",test:"Stream fetch fail."},
+      {id:"RAID-EXEC-009",area:"Raid/OAuth/Scoring",summary:"Helix Erfolg + History DB Fehler -> Raid gestartet ohne Pending.",risk:"Nachverfolgung kaputt.",test:"DB fail after Helix."},
+      {id:"RAID-EXEC-012",area:"Raid/OAuth/Scoring",summary:"Partner delivery Side-Effect in Rust Ziel-Datei nur Planner/TODO; Wiring abhaengig.",risk:"Partner wird nicht informiert.",test:"Delivery side-effect.",cat:"offene Frage/Vertrag unklar",status:"unklar",assessment:"Wiring laut Vorgabe abhaengig/unklar; vor Freigabe klaeren."},
+      {id:"RAID-EXEC-013",area:"Raid/OAuth/Scoring",summary:"Rust manual internal route neu/privilegiert mit wenig Checks.",risk:"Missbrauch/Fehlbedienung.",test:"Auth/idempotency."},
+      {id:"RAID-EXEC-014",area:"Raid/OAuth/Scoring",summary:"Python fallback kann doppelten Versuch machen.",risk:"Doppelraid.",test:"Fallback duplicate."},
+      {id:"RAID-EXEC-015",area:"Raid/OAuth/Scoring",summary:"Rust Chat Errordetail verliert.",risk:"Debugging schwach.",test:"Error detail."},
+      {id:"RAID-RECRUIT-005",area:"Raid/OAuth/Scoring",summary:"Rust setzt followers_total=None, Python Bot-OAuth/Streamer fallback.",risk:"Schlechtere Rekrutierungsdaten.",test:"Follower fallback."},
+      {id:"RAID-RECRUIT-009",area:"Raid/OAuth/Scoring",summary:"Due external bot-ban-check processor in Rust nicht gefunden.",risk:"Bot-ban Check bleibt liegen.",test:"Due work processed.",cat:"offene Frage/Vertrag unklar",status:"unklar",assessment:"Processor nicht gefunden; Wiring/Worktype klaeren."},
+      {id:"RAID-RECRUIT-010",area:"Raid/OAuth/Scoring",summary:"Rust spawnt send ohne Join/Rebind/Follow.",risk:"Drop/Crash unsichtbar.",test:"Spawned task result."},
+      {id:"RAID-RECRUIT-011",area:"Raid/OAuth/Scoring",summary:"Rust send task Crash/Drop-Risiko.",risk:"Send task kann unbemerkt scheitern.",test:"Panic/result supervision."},
+      {id:"RAID-RECRUIT-013",area:"Raid/OAuth/Scoring",summary:"Rust due batch unlimitiert.",risk:"Lastspitze.",test:"Batch limit."},
+      {id:"RAID-RECRUIT-015",area:"Raid/OAuth/Scoring",summary:"Rust blacklist laedt auch globale chatter bans; Python nur raid blacklist.",risk:"Zu breite Sperre.",test:"Blacklist source."},
+      {id:"RAID-SETUP-004",area:"Raid/OAuth/Scoring",summary:"Rust blockt OAuth reactivation bei blocked/bot_banned, Python raeumt Pause pauschal.",risk:"Reaktivierung anders.",test:"Paused blocked states."},
+      {id:"RAID-SETUP-007",area:"Raid/OAuth/Scoring",summary:"Rust braucht konkrete Guild-ID fuer role sync, Python fallback alle guilds.",risk:"Rollen sync fehlt.",test:"No guild id fallback."},
+      {id:"RAID-SETUP-008",area:"Raid/OAuth/Scoring",summary:"Rust grants onboarding trial direkt.",risk:"Billing/Lifecycle-Diff.",test:"Onboarding state."},
+      {id:"RAID-SETUP-009",area:"Raid/OAuth/Scoring",summary:"Rust re-sync jede bestehende auth.",risk:"Seiteneffekte bei Login.",test:"Existing auth."},
+      {id:"RAID-SETUP-013",area:"Raid/OAuth/Scoring",summary:"Grace expiry anders.",risk:"Partnerstatus drift.",test:"Grace expiry."},
+      {id:"RAID-SETUP-014",area:"Raid/OAuth/Scoring",summary:"Grace expiry skipped wenn Discord broker fehlt.",risk:"Status bleibt falsch.",test:"Broker absent."},
+      {id:"RAID-SETUP-016",area:"Raid/OAuth/Scoring",summary:"Rust restauriert token_error% anders.",risk:"Tokenstatus drift.",test:"Token error restore."},
+      {id:"RAID-SETUP-017",area:"Raid/OAuth/Scoring",summary:"Rust raeumt token_error% anders/exakter.",risk:"Status drift.",test:"Token cleanup."},
+
+      {id:"DASH-AUTH-007",area:"Dashboard/Auth/Admin/API",summary:"OAuth context cookie name/path differs; mixed Python-login/Rust-callback risk.",risk:"Cross-runtime OAuth kann brechen.",test:"Cross-runtime oauth."},
+      {id:"DASH-AUTH-011",area:"Dashboard/Auth/Admin/API",summary:"Partner cookie Python SameSite=Strict, TTL 1800; Rust Lax, 21600.",risk:"Cookie-Security/Sessiondauer drift.",test:"Set-Cookie contract."},
+      {id:"DASH-GATE-014",area:"Dashboard/Auth/Admin/API",summary:"Public demo API muss verifiziert werden, dass keine echten Daten leaken.",risk:"Demo-API koennte echte Daten ausgeben.",test:"Demo API fixture/no real data.",cat:"offene Frage/Vertrag unklar",status:"unklar",assessment:"Verifikation explizit offen; vor Freigabe pruefen."},
+      {id:"DASH-GATE-011",area:"Dashboard/Auth/Admin/API",summary:"live-announcement API removed/redirected; Page wohl gewollt, API intent unklar.",risk:"API Consumer brechen.",test:"Route contract.",cat:"offene Frage/Vertrag unklar",status:"unklar",assessment:"Page-Redirect wohl gewollt; API-Intent bleibt offen."},
+      {id:"DASH-BILL-001",area:"Dashboard/Auth/Admin/API",summary:"Catalog Rust response reduced.",risk:"Weniger Diagnose/UI-Daten.",test:"JSON contract."},
+      {id:"DASH-BILL-002",area:"Dashboard/Auth/Admin/API",summary:"Readiness Rust response reduced.",risk:"Weniger Diagnose.",test:"Readiness fields."},
+      {id:"DASH-BILL-004",area:"Dashboard/Auth/Admin/API",summary:"Checkout Rust setzt kein customer_email.",risk:"Stripe UX/Zuordnung.",test:"Checkout payload."},
+      {id:"DASH-BILL-006",area:"Dashboard/Auth/Admin/API",summary:"Cancel fallback Rust kein local subscription state update.",risk:"Status bleibt aktiv.",test:"Stripe fail fallback."},
+      {id:"DASH-BILL-008",area:"Dashboard/Auth/Admin/API",summary:"invoice-preview fehlt/unklar.",risk:"UI-Funktion fehlt.",test:"Route exists.",cat:"offene Frage/Vertrag unklar",status:"unklar",assessment:"Route ist fehlt/unklar; Stripe-hosted Intent konkret klaeren."},
+      {id:"DASH-BILL-009",area:"Dashboard/Auth/Admin/API",summary:"rechnung/stripe-settings missing/unclear.",risk:"Billing Self-Service drift.",test:"Route contract.",cat:"offene Frage/Vertrag unklar",status:"unklar",assessment:"Missing/unclear; moegliche Stripe-hosted Abweichung klaeren."},
+      {id:"DASH-BILL-012",area:"Dashboard/Auth/Admin/API",summary:"Rust webhook propagiert plan-sync errors in same TX; Python continues.",risk:"Webhook Retry/Duplikate.",test:"Plan sync fail."},
+      {id:"DASH-AFF-003",area:"Dashboard/Auth/Admin/API",summary:"Affiliate me/profile missing.",risk:"User Feature fehlt.",test:"Route."},
+      {id:"DASH-AFF-004",area:"Dashboard/Auth/Admin/API",summary:"Affiliate claims missing.",risk:"Auszahlung/Claim fehlt.",test:"Route."},
+      {id:"DASH-AFF-005",area:"Dashboard/Auth/Admin/API",summary:"Affiliate commissions missing.",risk:"Provisionssicht fehlt.",test:"Route."},
+      {id:"DASH-AFF-006",area:"Dashboard/Auth/Admin/API",summary:"Affiliate gutschriften/pdf missing.",risk:"Dokumente fehlen.",test:"Route.",cat:"offene Frage/Vertrag unklar",status:"unklar",assessment:"Stripe-hosted/Connect kann gewollt sein; konkrete Dokumentenroute bleibt offen."},
+      {id:"DASH-AFF-007",area:"Dashboard/Auth/Admin/API",summary:"Affiliate signup/connect missing.",risk:"Onboarding fehlt.",test:"Route."},
+      {id:"DASH-AFF-008",area:"Dashboard/Auth/Admin/API",summary:"Affiliate user-facing legacy mostly missing.",risk:"Feature-Parity fehlt.",test:"End-to-end.",cat:"offene Frage/Vertrag unklar",status:"unklar",assessment:"Legacy/Stripe-Connect Intent fuer User-Surface klaeren."},
+      {id:"DASH-AFF-011",area:"Dashboard/Auth/Admin/API",summary:"Admin auth/CSRF error shape drift.",risk:"Frontend/Tests brechen.",test:"Error contract."},
+      {id:"DASH-LIVEANN-002",area:"Dashboard/Auth/Admin/API",summary:"Native config API missing.",risk:"Keine Konfiguration.",test:"Route."},
+      {id:"DASH-LIVEANN-003",area:"Dashboard/Auth/Admin/API",summary:"Native test API missing.",risk:"Testfunktion fehlt.",test:"Route."},
+      {id:"DASH-LIVEANN-004",area:"Dashboard/Auth/Admin/API",summary:"Native preview API missing.",risk:"Preview fehlt.",test:"Route."},
+      {id:"DASH-LIVEANN-005",area:"Dashboard/Auth/Admin/API",summary:"Page redirect gewollt, API intent unklar.",risk:"API Consumer brechen.",test:"API contract.",cat:"offene Frage/Vertrag unklar",status:"unklar",assessment:"Redirect ist gewollt markiert; API-Vertrag offen."},
+      {id:"DASH-LIVEANN-006",area:"Dashboard/Auth/Admin/API",summary:"Schema existiert aber API nutzt es nicht.",risk:"Tote Daten.",test:"Config read/write."},
+      {id:"DASH-LIVEANN-008",area:"Dashboard/Auth/Admin/API",summary:"Live announcement dashboard gaps.",risk:"Bedienung fehlt.",test:"UI smoke."},
+      {id:"DASH-LIVEANN-010",area:"Dashboard/Auth/Admin/API",summary:"Native APIs missing/unclear.",risk:"Feature drift.",test:"Route map.",cat:"offene Frage/Vertrag unklar",status:"unklar",assessment:"API-Set ist missing/unclear; Vertrag klaeren."},
+      {id:"DASH-LIVEANN-011",area:"Dashboard/Auth/Admin/API",summary:"Schema exists but not used by dashboard API.",risk:"Config unwirksam.",test:"Integration."},
+      {id:"DASH-INTERNAL-006",area:"Dashboard/Auth/Admin/API",summary:"eventsub/debug error shape drift.",risk:"Tools brechen.",test:"Error json."},
+      {id:"DASH-INTERNAL-007",area:"Dashboard/Auth/Admin/API",summary:"requeue error shape drift.",risk:"Tools brechen.",test:"Error json."},
+      {id:"DASH-INTERNAL-008",area:"Dashboard/Auth/Admin/API",summary:"internal API error handling drift.",risk:"Ops unklar.",test:"Contract."},
+      {id:"DASH-INTERNAL-012",area:"Dashboard/Auth/Admin/API",summary:"/raid/requirements nicht registriert.",risk:"Route fehlt.",test:"Route.",cat:"offene Frage/Vertrag unklar",status:"unklar",assessment:"Registrierung/Vertrag fuer /raid/requirements klaeren."},
+      {id:"DASH-INTERNAL-017",area:"Dashboard/Auth/Admin/API",summary:"streamer-link DB error returns empty list in Rust vs Python 500.",risk:"Fehler verdeckt.",test:"DB fail => 500."},
+      {id:"DASH-INTERNAL-019",area:"Dashboard/Auth/Admin/API",summary:"diagnose/scam-guard Rust-only, error shapes mixed.",risk:"API-Vertrag unklar.",test:"Docs/contract.",cat:"offene Frage/Vertrag unklar",status:"unklar",assessment:"Rust-only additive Feature; Error-Shape-Vertrag separat dokumentieren."},
+
+      {id:"ANA-OVERVIEW-001",area:"Analytics/Public/LLM",summary:"Overview Rust clamps partner to self but echoes requested params.streamer.",risk:"Falsche Response streamer.",test:"Partner requests other streamer."},
+      {id:"ANA-OVERVIEW-004",area:"Analytics/Public/LLM",summary:"viewer_timeline path streamer lacks scope check.",risk:"Datenzugriff.",test:"Partner cannot access other streamer."},
+      {id:"ANA-OVERVIEW-005",area:"Analytics/Public/LLM",summary:"Dynamic bot exclusion missing.",risk:"Analytics verfaelscht.",test:"Bot list fixture."},
+      {id:"ANA-OVERVIEW-006",area:"Analytics/Public/LLM",summary:"Rust swallows extra query errors.",risk:"Null/leer statt Fehler.",test:"Query fail visible."},
+      {id:"ANA-OVERVIEW-009",area:"Analytics/Public/LLM",summary:"Audience insights own calc weaker filters.",risk:"KPI drift.",test:"Fixture filters."},
+      {id:"ANA-OVERVIEW-010",area:"Analytics/Public/LLM",summary:"Audience insights masks errors as zero/empty.",risk:"Falsche Analyse.",test:"DB error."},
+      {id:"ANA-OVERVIEW-012",area:"Analytics/Public/LLM",summary:"Viewer handler inline rawChatStatus missing health fallback and stronger error swallowing.",risk:"UI zeigt falschen Zustand.",test:"Health fallback."},
+      {id:"ANA-REPORT-007",area:"Analytics/Public/LLM",summary:"Rust no-plan report blocked, Python MiniMax fallback.",risk:"Reports fehlen ohne Plan.",test:"No plan fallback."},
+      {id:"ANA-REPORT-013",area:"Analytics/Public/LLM",summary:"AI follow-up chat ownership not checked; Rust weniger strict als analysis/history.",risk:"Zugriff auf fremde Analyse.",test:"Owner mismatch."},
+      {id:"ANA-REPORT-015",area:"Analytics/Public/LLM",summary:"AI plan gate/model drift; Python granular analytics.ai_mini/full, Rust consolidated analytics.",risk:"Berechtigungen anders.",test:"Plan matrix."},
+      {id:"ANA-REPORT-016",area:"Analytics/Public/LLM",summary:"Rust save_analysis DB error returns None silently.",risk:"Speicherfehler unsichtbar.",test:"DB fail returns error."},
+      {id:"ANA-REPORT-017",area:"Analytics/Public/LLM",summary:"Python logs raw AI parse response prefix, Rust vermeidet.",risk:"Sichere Verbesserung/gewollte Sicherheitsabweichung.",test:"No raw AI log.",cat:"gewollte Sicherheitsabweichung",status:"gewollt",assessment:"Rust-Verhalten vermeidet raw AI Log; als positive Sicherheitsabweichung dokumentieren."},
+      {id:"ANA-PUBLIC-001",area:"Analytics/Public/LLM",summary:"recent-bans zaehlt/listet anders als Python; Rust nur event_type='ban', today CURRENT_DATE, channels_protected aktive Partner.",risk:"KPI/Feed drift.",test:"Ban+unban+UTC fixture.",cat:"offene Frage/Vertrag unklar",status:"unklar",assessment:"Git/Doku: event_type gewollt, channels_protected offen."},
+      {id:"ANA-PUBLIC-002",area:"Analytics/Public/LLM",summary:"market_data Monitor-Definition geaendert: Python is_monitored_only=1, Rust nicht in twitch_partners.",risk:"Admin-Market Aggregate driften.",test:"Shadow diff.",cat:"offene Frage/Vertrag unklar",status:"unklar",assessment:"Git/Doku: Schema cleanup, Contract unklar."},
+      {id:"ANA-PUBLIC-003",area:"Analytics/Public/LLM",summary:"/twitch/market HTML nicht voll portiert.",risk:"Interne Research-Seite schwach.",test:"Playwright KPI/table smoke."},
+      {id:"LLM-TITLE-001",area:"Analytics/Public/LLM",summary:"Title-MiniMax-Ledger fehlt in Rust.",risk:"Kosten/Budget unsichtbar.",test:"Wiremock usage ledger.",cat:"sicher ohne Verhaltensaenderung",status:"sicher",assessment:"Additive Beobachtbarkeit; sicher ohne Verhaltensaenderung."},
+      {id:"LLM-TITLE-002",area:"Analytics/Public/LLM",summary:"Self-Explainer Leak-Guard blockt fakten: aber Rust Prompt nutzt DOKUMENTE:.",risk:"Grounding-Leak.",test:"DOKUMENTE output fallback."},
+      {id:"LLM-TITLE-003",area:"Analytics/Public/LLM",summary:"Stale Rust-Kommentar/Test behauptet !title nicht portiert.",risk:"Falsche Maintainerentscheidung.",test:"Echter !title handler.",cat:"sicher ohne Verhaltensaenderung",status:"sicher",assessment:"Kommentar/Test-Korrektur sicher, wenn echter Handler bestaetigt ist."},
+
+      {id:"STOR-SCHEMA-001",area:"Storage/Runtime/Ops",summary:"Rust startet trotz fehlgeschlagener Migration weiter.",risk:"Altes/halb migriertes Schema.",test:"Migration failure => exit/health degraded."},
+      {id:"STOR-SCHEMA-002",area:"Storage/Runtime/Ops",summary:"Observability-Retention fehlt in Rust.",risk:"Unbegrenztes Wachstum.",test:"Timescale retention policy."},
+      {id:"STOR-SCHEMA-003",area:"Storage/Runtime/Ops",summary:"twitch_auto_raid_pause in Rust entfernt, Python/Doku kennen es noch.",risk:"Stale Python/Doku oder entfernte Funktion unklar.",test:"Callgraph beweist tot.",cat:"offene Frage/Vertrag unklar",status:"unklar",assessment:"Git/Doku: wahrscheinlich gewollt, aber Doku/Python stale."},
+      {id:"STOR-SCHEMA-004",area:"Storage/Runtime/Ops",summary:"Legacy-Python kann Rust-Zielschema wieder anfassen.",risk:"Versehentlicher Python-Start beschaedigt/driftet Schema.",test:"Bootstrap guard."},
+      {id:"STOR-SCHEMA-005",area:"Storage/Runtime/Ops",summary:"Destruktive/lockende Migrationen laufen automatisch.",risk:"Locks/Fehler.",test:"Migration preflight/timeout."},
+      {id:"STOR-SCHEMA-006",area:"Storage/Runtime/Ops",summary:"Config-/Retry-Parity nicht vollstaendig; Rust fatal bei invalid optional env.",risk:"Service-Ausfall bei Typos.",test:"Env matrix."},
+      {id:"OPS-RUNTIME-001",area:"Storage/Runtime/Ops",summary:"Dashboard-Readiness schwaecher; Rust DB-only/200 degraded, Python upstream/OAuth/Fingerprint/503.",risk:"Orchestrierung sieht ready trotz Defekt.",test:"Degraded => 503 + reasons."},
+      {id:"OPS-RUNTIME-002",area:"Storage/Runtime/Ops",summary:"Rust-Dashboard ohne Role/Port-Guard und PID-Lock.",risk:"Falsche Rolle/Doppelstart.",test:"Wrong role/double start."},
+      {id:"OPS-RUNTIME-003",area:"Storage/Runtime/Ops",summary:"Logging-Paritaet fehlt; Rust stdout/journald, Python rotating/access logs.",risk:"Betriebsdiagnose schwach, wenn nicht additiv geloest.",test:"Log sink/access log.",cat:"sicher ohne Verhaltensaenderung",status:"sicher",assessment:"Sicher, wenn Logging additiv bleibt und Verhalten nicht aendert."},
+      {id:"OPS-RUNTIME-004",area:"Storage/Runtime/Ops",summary:"Background-Tasks in Rust nicht zentral ueberwacht.",risk:"Task-Panic/Teilfunktion tot.",test:"Panicking task sets degraded/log."},
+      {id:"OPS-RUNTIME-005",area:"Storage/Runtime/Ops",summary:"Config-Validierung strenger/anders.",risk:"Degraded vs fail-fast drift.",test:"Env missing/invalid matrix."},
+      {id:"OPS-RUNTIME-006",area:"Storage/Runtime/Ops",summary:"Live-Cutover haengt an externer Ops-Kopplung.",risk:"Dual-Writer.",test:"Gate combination preflight.",cat:"offene Frage/Vertrag unklar",status:"unklar",assessment:"Cutover-Gate haengt an externer Ops-Kopplung; Freigabevertrag klaeren."},
+
+      {id:"ENG-SOCIAL-001",area:"Engagement/Social/Highlights",summary:"Social-Legal-Aliases fehlen; Rust Templates linken /privacy und /terms, Router nur /social-media/*.",risk:"404 bei Legal/OAuth.",test:"Alias route/template links.",cat:"sicher ohne Verhaltensaenderung",status:"sicher",assessment:"Additive Alias-Routen sind sicher, solange bestehende Routen unveraendert bleiben."},
+      {id:"ENG-SOCIAL-002",area:"Engagement/Social/Highlights",summary:"Streamer-Promo-Message Self-Service /twitch/abbo/promo-message fehlt nativ.",risk:"Streamer koennen Promo nicht setzen/clearen.",test:"Partner POST updates DB."},
+      {id:"ENG-SOCIAL-003",area:"Engagement/Social/Highlights",summary:"Streamer-Promo-Text im Rust-Sendepfad nicht validiert.",risk:"Invalider Chattext.",test:"Invalid text falls back."},
+      {id:"ENG-SOCIAL-004",area:"Engagement/Social/Highlights",summary:"Promo-Template-Rendering nicht Python-kompatibel: format vs replace.",risk:"Sichtbare Platzhalter.",test:"{invite!s}, format specs, escaped braces."},
+      {id:"ENG-SOCIAL-005",area:"Engagement/Social/Highlights",summary:"Admin-Promo/Announcements verlieren Actor-Attribution, Rust immer admin.",risk:"Audit-Log ungenau.",test:"Discord-ID saved."}
+    ];
+
+    const CHECKS = [
+      ["checked", "geprueft"],
+      ["approval", "Freigabe benoetigt"],
+      ["testPlanned", "Test geplant"],
+      ["done", "erledigt"]
+    ];
+
+    const $ = (id) => document.getElementById(id);
+    const norm = (finding) => ({
+      ...finding,
+      cat: finding.cat || DEFAULT_CATEGORY,
+      status: finding.status || DEFAULT_STATUS,
+      assessment: finding.assessment || DEFAULT_ASSESSMENT
+    });
+    const DATA = FINDINGS.map(norm);
+
+    function escapeHtml(value) {
+      return String(value)
+        .replaceAll("&", "&amp;")
+        .replaceAll("<", "&lt;")
+        .replaceAll(">", "&gt;")
+        .replaceAll('"', "&quot;")
+        .replaceAll("'", "&#039;");
+    }
+
+    function key(id, field) {
+      return `python-rust-parity-audit:v1:${id}:${field}`;
+    }
+
+    function isChecked(id, field) {
+      return localStorage.getItem(key(id, field)) === "1";
+    }
+
+    function setChecked(id, field, checked) {
+      localStorage.setItem(key(id, field), checked ? "1" : "0");
+    }
+
+    function getNote(id) {
+      return localStorage.getItem(key(id, "note")) || "";
+    }
+
+    function setNote(id, value) {
+      localStorage.setItem(key(id, "note"), value);
+    }
+
+    function uniqueValues(field) {
+      return [...new Set(DATA.map((item) => item[field]))].sort((a, b) => a.localeCompare(b));
+    }
+
+    function populateSelect(id, values) {
+      const select = $(id);
+      for (const value of values) {
+        const option = document.createElement("option");
+        option.value = value;
+        option.textContent = value;
+        select.appendChild(option);
+      }
+    }
+
+    function renderModules() {
+      $("moduleRows").innerHTML = Object.entries(AREA_META).map(([area, meta]) => `
+        <tr>
+          <td>${escapeHtml(area)}</td>
+          <td>${escapeHtml(meta.py)}</td>
+          <td>${escapeHtml(meta.rust)}</td>
+          <td>${escapeHtml(meta.focus)}</td>
+        </tr>
+      `).join("");
+    }
+
+    function currentFilters() {
+      return {
+        area: $("areaFilter").value,
+        status: $("statusFilter").value,
+        cat: $("categoryFilter").value,
+        search: $("searchFilter").value.trim().toLowerCase()
+      };
+    }
+
+    function matches(finding, filters) {
+      if (filters.area && finding.area !== filters.area) return false;
+      if (filters.status && finding.status !== filters.status) return false;
+      if (filters.cat && finding.cat !== filters.cat) return false;
+      if (!filters.search) return true;
+      const meta = AREA_META[finding.area] || {};
+      const haystack = [
+        finding.id, finding.area, finding.summary, finding.risk, finding.test,
+        finding.cat, finding.status, finding.assessment, meta.py, meta.rust, meta.focus
+      ].join(" ").toLowerCase();
+      return haystack.includes(filters.search);
+    }
+
+    function renderFinding(finding) {
+      const meta = AREA_META[finding.area] || {py:"bot*/scripts/ops", rust:"rust/"};
+      const statusClass = `status-${finding.status.replace(/[^a-z0-9]+/gi, "-").toLowerCase()}`;
+      const checkboxHtml = CHECKS.map(([field, label]) => `
+        <label class="checkbox">
+          <input type="checkbox" data-id="${escapeHtml(finding.id)}" data-field="${field}" ${isChecked(finding.id, field) ? "checked" : ""}>
+          <span>${escapeHtml(label)}</span>
+        </label>
+      `).join("");
+      return `
+        <article class="finding" data-id="${escapeHtml(finding.id)}">
+          <div class="finding-head">
+            <h3 class="finding-title">${escapeHtml(finding.id)}: ${escapeHtml(finding.summary)}</h3>
+            <div class="badges">
+              <span class="badge">${escapeHtml(finding.area)}</span>
+              <span class="badge ${statusClass}">${escapeHtml(finding.status)}</span>
+              <span class="badge">${escapeHtml(finding.cat)}</span>
+            </div>
+          </div>
+          <div class="finding-body">
+            <dl class="fields">
+              <div class="field"><dt>ID</dt><dd>${escapeHtml(finding.id)}</dd></div>
+              <div class="field"><dt>Bereich</dt><dd>${escapeHtml(finding.area)}</dd></div>
+              <div class="field"><dt>Kurzbeschreibung</dt><dd>${escapeHtml(finding.summary)}</dd></div>
+              <div class="field"><dt>Risiko</dt><dd>${escapeHtml(finding.risk)}</dd></div>
+              <div class="field"><dt>Python-Quelle</dt><dd>${escapeHtml(meta.py)}</dd></div>
+              <div class="field"><dt>Rust-Ziel</dt><dd>${escapeHtml(meta.rust)}</dd></div>
+              <div class="field"><dt>Git/Doku-Bewertung</dt><dd>${escapeHtml(finding.assessment)}</dd></div>
+              <div class="field"><dt>Testidee</dt><dd>${escapeHtml(finding.test)}</dd></div>
+              <div class="field"><dt>Kategorie</dt><dd>${escapeHtml(finding.cat)}</dd></div>
+              <div class="field"><dt>Status</dt><dd>${escapeHtml(finding.status)}</dd></div>
+            </dl>
+            <div class="tracking">
+              ${checkboxHtml}
+              <label class="filter-label">Notizfeld
+                <textarea data-id="${escapeHtml(finding.id)}" placeholder="Lokale Notiz...">${escapeHtml(getNote(finding.id))}</textarea>
+              </label>
+            </div>
+          </div>
+        </article>
+      `;
+    }
+
+    function visibleData() {
+      const filters = currentFilters();
+      return DATA.filter((finding) => matches(finding, filters));
+    }
+
+    function renderFindings() {
+      const filters = currentFilters();
+      const visible = DATA.filter((finding) => matches(finding, filters));
+      $("findingsList").innerHTML = visible.map(renderFinding).join("") || "<p>Keine Findings fuer diesen Filter.</p>";
+      const active = [
+        filters.area && `Bereich: ${filters.area}`,
+        filters.status && `Status: ${filters.status}`,
+        filters.cat && `Kategorie: ${filters.cat}`,
+        filters.search && `Suche: ${filters.search}`
+      ].filter(Boolean);
+      $("filterInfo").textContent = active.length ? `Aktive Filter: ${active.join(" | ")}` : "Keine Filter aktiv.";
+      updateSummary();
+    }
+
+    function renderOpenQuestions() {
+      const questions = DATA.filter((finding) => finding.status === "unklar" || finding.cat.includes("offene Frage"));
+      $("openQuestions").innerHTML = questions.map((finding) => `
+        <li><strong>${escapeHtml(finding.id)}</strong> (${escapeHtml(finding.area)}): ${escapeHtml(finding.summary)}</li>
+      `).join("");
+    }
+
+    function updateSummary() {
+      const visible = visibleData();
+      let checkedCount = 0;
+      for (const finding of DATA) {
+        for (const [field] of CHECKS) {
+          if (isChecked(finding.id, field)) checkedCount += 1;
+        }
+      }
+      $("totalFindings").textContent = DATA.length;
+      $("visibleFindings").textContent = visible.length;
+      $("doneFindings").textContent = DATA.filter((finding) => isChecked(finding.id, "done")).length;
+      $("checkedBoxes").textContent = `${checkedCount} / ${DATA.length * CHECKS.length}`;
+    }
+
+    function init() {
+      renderModules();
+      populateSelect("areaFilter", uniqueValues("area"));
+      populateSelect("statusFilter", uniqueValues("status"));
+      populateSelect("categoryFilter", uniqueValues("cat"));
+      renderOpenQuestions();
+      renderFindings();
+
+      for (const id of ["areaFilter", "statusFilter", "categoryFilter", "searchFilter"]) {
+        $(id).addEventListener("input", renderFindings);
+        $(id).addEventListener("change", renderFindings);
+      }
+      $("resetFilters").addEventListener("click", () => {
+        $("areaFilter").value = "";
+        $("statusFilter").value = "";
+        $("categoryFilter").value = "";
+        $("searchFilter").value = "";
+        renderFindings();
+      });
+
+      document.addEventListener("change", (event) => {
+        const target = event.target;
+        if (target.matches("input[type='checkbox'][data-id][data-field]")) {
+          setChecked(target.dataset.id, target.dataset.field, target.checked);
+          updateSummary();
+        }
+      });
+
+      document.addEventListener("input", (event) => {
+        const target = event.target;
+        if (target.matches("textarea[data-id]")) {
+          setNote(target.dataset.id, target.value);
+        }
+      });
+    }
+
+    init();
+  </script>
+</body>
+</html>
