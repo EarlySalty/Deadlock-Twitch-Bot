@@ -39,7 +39,10 @@ base64 = "0.22"
 hex = "0.4"
 pbkdf2 = { version = "0.12", default-features = false, features = ["hmac"] }
 hmac = "0.12"
-pulldown-cmark = "0.10"
+# default-features=false: wir nutzen nur die HTML-Renderer-Funktion (html::push_html);
+# das Default-Feature "getopts" gehört zum bundled CLI-Tool des Crates und wird
+# von uns als Library-Dependency nie aufgerufen — zieht sonst getopts+deps unnötig mit.
+pulldown-cmark = { version = "0.10", default-features = false, features = ["html"] }
 rand = "0.8"
 zeroize = "1"
 serde_json = "1"
