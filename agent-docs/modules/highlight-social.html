@@ -1,0 +1,140 @@
+<!doctype html>
+<html lang="de">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Modul: Highlight-Clipper &amp; Social Media — Deadlock Twitch Bot</title>
+<style>
+:root{--fg:#1a1a1a;--bg:#fff;--muted:#555;--line:#ddd;--accent:#0a7d33;--box:#f6f8fa;--warn:#b00020;--ok:#0a7d33}
+@media(prefers-color-scheme:dark){:root{--fg:#e6e6e6;--bg:#141414;--muted:#a5a5a5;--line:#333;--box:#1e1e1e;--accent:#4ec978;--warn:#ff6b7a}}
+*{box-sizing:border-box}
+body{margin:0;font:16px/1.6 system-ui,-apple-system,Segoe UI,Roboto,sans-serif;color:var(--fg);background:var(--bg)}
+main{max-width:900px;margin:0 auto;padding:1.5rem}
+h1{font-size:1.8rem;line-height:1.25;margin:.2rem 0 1rem}
+h2{font-size:1.35rem;margin:2.2rem 0 .6rem;border-bottom:1px solid var(--line);padding-bottom:.3rem}
+h3{font-size:1.08rem;margin:1.4rem 0 .4rem}
+a{color:var(--accent)}
+nav.crumbs{font-size:.85rem;margin-bottom:1rem;color:var(--muted)}
+p.summary{font-size:1.05rem;background:var(--box);border-left:4px solid var(--accent);padding:.8rem 1rem;border-radius:4px}
+table{border-collapse:collapse;width:100%;margin:1rem 0;font-size:.95rem}
+th,td{border:1px solid var(--line);padding:.5rem .6rem;text-align:left;vertical-align:top}
+th{background:var(--box)}
+code{background:var(--box);padding:.1rem .3rem;border-radius:3px;font-size:.9em}
+ul,ol{padding-left:1.3rem}
+.box{background:var(--box);border:1px solid var(--line);border-radius:6px;padding:.7rem 1rem;margin:1rem 0}
+.say{border-left:4px solid var(--ok)}
+.nosay{border-left:4px solid var(--warn)}
+.tag{display:inline-block;font-size:.72rem;font-weight:600;padding:.1rem .5rem;border-radius:10px;background:var(--box);border:1px solid var(--line)}
+footer{margin-top:3rem;padding-top:1rem;border-top:1px solid var(--line);font-size:.8rem;color:var(--muted)}
+</style>
+</head>
+<body>
+<main>
+<nav class="crumbs"><a href="../index.html">Startseite</a> › Module › Highlight-Clipper &amp; Social Media</nav>
+<h1>Modul: Highlight-Clipper &amp; Social Media</h1>
+<p class="summary">Zwei zusammenhängende Stufen: Der <strong>Highlight-Clipper</strong> erstellt nach Spielende automatisch kurze Clips der besten Deadlock-Szenen aus dem Twitch-VOD. Der <strong>Social-Media-Upload</strong> macht daraus fertige Hochkant-Videos für TikTok, Instagram Reels und YouTube Shorts — aber erst nach ausdrücklicher Freigabe.</p>
+
+<section id="highlight-clipper">
+<h2>Highlight-Clipper</h2>
+<h3 id="clipper-worum">Worum es geht</h3>
+<p>Der Bot erstellt für betreute Partner-Streamer automatisch kurze Highlight-Clips aus ihren Deadlock-Spielen — Outplays, Multikills, Teamfights und knappe Clutch-Situationen, nicht jeder Kill. Der Streamer muss dafür nichts tun: Nach Spielende sucht der Bot die starken Szenen, schneidet sie aus der Stream-Aufzeichnung und stellt sie als fertige Clips bereit, damit gute Momente nicht im langen VOD untergehen.</p>
+<h3 id="clipper-ablauf">Ablauf</h3>
+<ul>
+<li>Der Bot beobachtet abgeschlossene Deadlock-Matches der betreuten Partner und analysiert je Match den Spielverlauf.</li>
+<li>Reine Solo-Kills ohne besonderen Wert werden bewusst aussortiert; gewollt sind Multikills, Teamfights und knappe Outplay-/Clutch-Situationen.</li>
+<li>Als Videoquelle dient ausschließlich die Twitch-Aufzeichnung (das VOD). Der Bot rechnet die Spielzeit auf die VOD-Zeitachse um und schneidet genau diesen Ausschnitt heraus.</li>
+<li>Jeder Clip wird knapp um die Action geschnitten (kurzer An- und Nachlauf, mit Längen-Obergrenze), komprimiert und mit einer kurzen Beschriftung versehen, die die Szene einordnet.</li>
+<li>Die fertigen Clips werden automatisch bereitgestellt, sodass Team und Streamer sie ansehen und weiterverwenden können.</li>
+</ul>
+<h3 id="clipper-voraussetzungen">Voraussetzungen &amp; Grenzen</h3>
+<table>
+<thead><tr><th>Voraussetzung</th><th>Ohne diese Voraussetzung</th></tr></thead>
+<tbody>
+<tr><td>Aktiver Partner mit zugeordnetem Spiel-/Steam-Account</td><td>Der Bot kann Matches nicht der richtigen Person zuordnen — kein Clip.</td></tr>
+<tr><td>Passendes Twitch-VOD, das den Match-Zeitraum abdeckt</td><td>Ist VOD-Speichern aus, gelöscht oder abgelaufen, gibt es keine Videoquelle — kein Clip.</td></tr>
+<tr><td>Frisches Match (sehr alte Spiele werden nicht nachgeholt)</td><td>Jedes Match wird nur einmal verarbeitet; keine doppelten Clips.</td></tr>
+</tbody>
+</table>
+<p>Dass zu einem Spiel kein Clip entsteht, ist normal und kein Fehler — der Bot ist bewusst selektiv. Die Verarbeitung läuft in Abständen nach Spielende, daher erscheinen Clips mit etwas Verzögerung. Welche Merkmale die interne Bewertung zu einem Highlight verdichtet und welche Grenzwerte gelten, ist bewusst nicht offengelegt — das ist der Kern der Clipper-Erkennung.</p>
+</section>
+
+<section id="social-media">
+<h2>Social-Media-Clips &amp; Uploads</h2>
+<h3 id="social-worum">Worum es geht</h3>
+<p>Der Bot nimmt Highlight-Clips von Twitch und macht daraus fertige Kurzvideos für TikTok, Instagram Reels und YouTube Shorts. Er holt die Clips, erzeugt passende Titel, Beschreibungen und Hashtags, bringt das Video ins Hochkant-Format und lädt es <strong>nach Freigabe</strong> auf die verbundenen Konten hoch — damit Reichweite über Twitch hinaus entsteht, ohne dass jemand jeden Clip von Hand schneidet und postet.</p>
+<h3 id="social-ablauf">Verarbeitungsstufen</h3>
+<ol>
+<li><strong>Einsammeln:</strong> Regelmäßig (mehrmals täglich) neue Twitch-Clips aktiver, verifizierter Partner sowie Clips des Highlight-Clippers. Reine Beobachtungs-Kanäle bleiben außen vor; pro Streamer wird nur eine begrenzte Zahl der neuesten Clips eingelesen.</li>
+<li><strong>Transkribieren:</strong> Der Ton wird in Text umgewandelt; Deadlock-Begriffe (Helden, Items) werden korrigiert, damit Untertitel und Texte stimmen.</li>
+<li><strong>Anreichern:</strong> Pro Plattform ein eigener Vorschlag für Titel, Beschreibung und Hashtags.</li>
+<li><strong>Freigabe vorlegen:</strong> Erst wenn die Texte fertig sind, geht der Clip in den Freigabe-Zustand.</li>
+<li><strong>Rendern:</strong> Video ins richtige Seitenverhältnis und in die erlaubte Länge bringen, optional mit Untertiteln.</li>
+<li><strong>Hochladen:</strong> Erst nach Freigabe, mit übernommenen Texten.</li>
+<li><strong>Auswerten &amp; Aufräumen:</strong> Plattform-Statistiken werden wiederholt nachgezogen; alte Dateien werden nach einer Aufbewahrungsfrist entfernt.</li>
+</ol>
+<h3 id="freigabe-flow">Freigabe-Flow</h3>
+<p>Die Freigabe ist der zentrale Kontrollpunkt: <strong>Ohne Freigabe wird nichts veröffentlicht.</strong> Automatischer Upload passiert nur dort, wo die Auto-Freigabe pro Plattform bewusst eingeschaltet wurde; standardmäßig ist sie aus (manuelle Review ist der Default).</p>
+<ul>
+<li>Die zuständige Person erhält eine Nachricht mit Clip-Vorschau (Titel, Streamer, Aufrufzahl, Thumbnail) und den vorgeschlagenen Titeln und Hashtags je Plattform.</li>
+<li>Dazu gehören eine Plattform-Auswahl (YouTube Shorts, TikTok, Instagram Reels) und drei Aktionen: <strong>Posten</strong>, <strong>Bearbeiten</strong> und <strong>Skip</strong>.</li>
+<li>Nach einer Entscheidung wechselt die Anzeige die Farbe (grün = freigegeben, rot = übersprungen, gelb = in Bearbeitung) und zeigt, wer wann entschieden hat.</li>
+<li>Über <strong>Bearbeiten</strong> lassen sich die automatischen Texte vor dem Upload überschreiben; die manuelle Version hat Vorrang.</li>
+</ul>
+<p>Einen detaillierten Schritt-für-Schritt-Ablauf beschreibt der <a href="../workflows/social-media-upload-flow.html">Social-Media-Upload-Flow</a>.</p>
+<h3 id="social-einstellungen">Einstellungen</h3>
+<ul>
+<li><strong>Plattform-Konten verbinden:</strong> TikTok, Instagram und YouTube werden über einen Anmelde-/Verbindungs-Flow gekoppelt; nur verbundene, aktive Plattformen kommen als Upload-Ziel infrage.</li>
+<li><strong>Plattformen pro Clip wählen:</strong> Im Freigabe-Schritt einzeln auswählbar, auch nur eine Teilmenge.</li>
+<li><strong>Automatische Freigabe je Plattform:</strong> Pro Plattform aktivierbar; standardmäßig aus.</li>
+<li><strong>Externe-KI-Zustimmung:</strong> Ein ausdrücklicher Schalter, ob Clip-Inhalte zur Texterzeugung an einen externen KI-Dienst gehen dürfen. Ohne Zustimmung verlässt nichts den Bot; Texte werden dann lokal oder gar nicht erzeugt und müssen ggf. manuell ergänzt werden.</li>
+</ul>
+<h3 id="social-grenzen">Grenzen &amp; Sonderfälle</h3>
+<table>
+<thead><tr><th>Situation</th><th>Verhalten</th></tr></thead>
+<tbody>
+<tr><td>Plattform nicht verbunden/deaktiviert</td><td>Wird beim Upload nicht bedient, auch wenn im Dialog angehakt.</td></tr>
+<tr><td>Konto-Verbindung abgelaufen</td><td>Uploads scheitern mit Anmeldefehlern, obwohl „verbunden" angezeigt wird — erneut verbinden.</td></tr>
+<tr><td>Clip erfüllt Format-/Längenregeln nicht</td><td>Wird vor dem Upload aussortiert statt fehlerhaft hochgeladen.</td></tr>
+<tr><td>Clip „hängt"</td><td>Steckt in der Regel in genau einer Verarbeitungsstufe fest (z. B. Transkription oder Texterzeugung).</td></tr>
+<tr><td>Skip gewählt</td><td>Endgültig für diesen Clip; er geht nicht online, bleibt als übersprungen vermerkt.</td></tr>
+<tr><td>Bereits hochgeladen/eingereiht</td><td>Mehrfach-Upload wird verhindert.</td></tr>
+</tbody>
+</table>
+</section>
+
+<section id="agent-hinweise">
+<h2>Hinweise für KI-Agenten &amp; Support</h2>
+<div class="box say"><strong>Der Agent darf sagen:</strong>
+<ul>
+<li>Dass der Clipper nach Spielende arbeitet, nur aus dem Twitch-VOD schneidet und bewusst selektiv ist (kein Clip = oft normal).</li>
+<li>Dass Clips ein aktives Partner-Konto mit zugeordnetem Spiel-Account und ein passendes, aktiviertes VOD voraussetzen.</li>
+<li>Dass Social-Media-Uploads standardmäßig eine manuelle Freigabe erfordern und nur mit ausdrücklicher Auto-Freigabe automatisch posten.</li>
+<li>Die Plattformen (TikTok, Instagram Reels, YouTube Shorts) und die Freigabe-Aktionen Posten, Bearbeiten, Skip inkl. Farbcodierung.</li>
+<li>Dass Clip-Inhalte nur mit ausdrücklicher Zustimmung an einen externen KI-Dienst gehen.</li>
+<li>Typische Gründe, warum ein Clip nicht online ging (Freigabe/Skip, Konto-Verbindung, Format-/Längenregeln).</li>
+</ul>
+</div>
+<div class="box nosay"><strong>Der Agent darf nicht sagen / offenlegen:</strong>
+<ul>
+<li>Die internen Merkmale, Gewichtungen oder Grenzwerte der Highlight-Bewertung (Kern der Clipper-Erkennung).</li>
+<li>Exakte Zeitfenster, Abfrage-Intervalle, Clip-Obergrenzen oder Aufbewahrungsfristen als konkrete Werte.</li>
+<li>Interne Prompt-Inhalte, Modell-Details, API-Keys, Tokens oder Infrastruktur der externen Dienste.</li>
+<li>Details der internen Zeitachsen-Umrechnung über das fachliche Verhalten hinaus.</li>
+</ul>
+</div>
+<p>Bei Unsicherheit oder Verdacht auf Fehlentscheidung: an menschlichen Support eskalieren.</p>
+</section>
+
+<section id="weiter">
+<h2>Weiterführend</h2>
+<ul>
+<li><a href="../workflows/social-media-upload-flow.html">Workflow: Social-Media-Upload-Flow</a></li>
+<li><a href="../support/troubleshooting.html">Troubleshooting</a></li>
+<li><a href="../reference/glossary.html">Glossar</a></li>
+</ul>
+</section>
+
+<footer>Teil der agentenfreundlichen Doku des Deadlock Twitch Bot. Interne Mechanik ist bewusst abstrahiert — siehe <a href="../security/redaction-notes.html">Redaction Notes</a>.</footer>
+</main>
+</body>
+</html>

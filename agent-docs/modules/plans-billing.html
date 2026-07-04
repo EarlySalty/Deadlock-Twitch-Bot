@@ -1,0 +1,135 @@
+<!doctype html>
+<html lang="de">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Modul: Pläne, Features &amp; Abrechnung — Deadlock Twitch Bot</title>
+<style>
+:root{--fg:#1a1a1a;--bg:#fff;--muted:#555;--line:#ddd;--accent:#0a7d33;--box:#f6f8fa;--warn:#b00020;--ok:#0a7d33}
+@media(prefers-color-scheme:dark){:root{--fg:#e6e6e6;--bg:#141414;--muted:#a5a5a5;--line:#333;--box:#1e1e1e;--accent:#4ec978;--warn:#ff6b7a}}
+*{box-sizing:border-box}
+body{margin:0;font:16px/1.6 system-ui,-apple-system,Segoe UI,Roboto,sans-serif;color:var(--fg);background:var(--bg)}
+main{max-width:900px;margin:0 auto;padding:1.5rem}
+h1{font-size:1.8rem;line-height:1.25;margin:.2rem 0 1rem}
+h2{font-size:1.35rem;margin:2.2rem 0 .6rem;border-bottom:1px solid var(--line);padding-bottom:.3rem}
+h3{font-size:1.08rem;margin:1.4rem 0 .4rem}
+a{color:var(--accent)}
+nav.crumbs{font-size:.85rem;margin-bottom:1rem;color:var(--muted)}
+p.summary{font-size:1.05rem;background:var(--box);border-left:4px solid var(--accent);padding:.8rem 1rem;border-radius:4px}
+table{border-collapse:collapse;width:100%;margin:1rem 0;font-size:.95rem}
+th,td{border:1px solid var(--line);padding:.5rem .6rem;text-align:left;vertical-align:top}
+th{background:var(--box)}
+code{background:var(--box);padding:.1rem .3rem;border-radius:3px;font-size:.9em}
+ul,ol{padding-left:1.3rem}
+.box{background:var(--box);border:1px solid var(--line);border-radius:6px;padding:.7rem 1rem;margin:1rem 0}
+.say{border-left:4px solid var(--ok)}
+.nosay{border-left:4px solid var(--warn)}
+.tag{display:inline-block;font-size:.72rem;font-weight:600;padding:.1rem .5rem;border-radius:10px;background:var(--box);border:1px solid var(--line)}
+footer{margin-top:3rem;padding-top:1rem;border-top:1px solid var(--line);font-size:.8rem;color:var(--muted)}
+</style>
+</head>
+<body>
+<main>
+<nav class="crumbs"><a href="../index.html">Startseite</a> › Module › Pläne, Features &amp; Abrechnung</nav>
+<h1>Modul: Pläne, Features &amp; Abrechnung</h1>
+<p class="summary">Der Bot ist in der Grundfunktion kostenlos und bietet darüber hinaus bezahlte Pläne, die Zusatz-Features freischalten. Diese Seite beschreibt die Plan-Stufen, die enthaltenen Features, die Abrechnung über das Streamer-Dashboard und das Empfehlungs-Programm (Affiliate) — jeweils aus fachlicher Sicht, ohne interne Berechnungslogik.</p>
+
+<section id="worum-es-geht">
+<h2>Worum es geht</h2>
+<p>Die Grundfunktion des Bots ist dauerhaft kostenlos: Die automatischen Raids und die komplette Auto-Moderation laufen auch ohne Bezahlung. Bezahlte Pläne schalten optionale Zusatz-Features frei — werbefreier Chat, bevorzugte Raid-Platzierung, das volle Analyse-Dashboard und die Lurker-Steuer-Erinnerung. Bezahlt wird monatlich oder jährlich über das Streamer-Dashboard; die Zahlung selbst läuft über einen externen Zahlungsdienstleister.</p>
+<p>Jeder Streamer hat genau <strong>einen</strong> aktiven Plan. Welcher Plan aktiv ist, entscheidet, welche Zusatz-Features für seinen Kanal scharf geschaltet sind. Wer andere Streamer wirbt, kann über ein Empfehlungs-Programm eine Provision auf deren bezahlte Abos verdienen.</p>
+</section>
+
+<section id="plan-stufen">
+<h2>Die Plan-Stufen im Überblick</h2>
+<p>Es gibt drei grobe Stufen — kostenlos, Basis und Erweitert — mit mehreren Einzel- bzw. Paket-Plänen. Alle Preise sind Netto-Monatspreise. Pakete sind günstiger als die Summe der enthaltenen Einzelpläne. Abgerechnet wird wahlweise monatlich oder jährlich.</p>
+<table>
+<thead>
+<tr><th>Plan</th><th>Preis (Netto/Monat)</th><th>Was er zusätzlich freischaltet</th></tr>
+</thead>
+<tbody>
+<tr><td><strong>Raid Free</strong> (kostenlos)</td><td>0,00 €</td><td>Nichts Zusätzliches — die Basis (Auto-Raids, Moderation) läuft ohnehin.</td></tr>
+<tr><td><strong>Werbefrei</strong></td><td>1,99 €</td><td>Schaltet die Werbe-Nachrichten des Bots im eigenen Chat dauerhaft ab.</td></tr>
+<tr><td><strong>Raid Boost</strong></td><td>1,99 €</td><td>Bevorzugte Platzierung als Raid-Ziel im Netzwerk + Lurker-Steuer-Erinnerung.</td></tr>
+<tr><td><strong>Analyse Dashboard</strong> (empfohlen)</td><td>1,99 €</td><td>Volles Analytics-Dashboard inkl. KI-Auswertung + Lurker-Steuer-Erinnerung.</td></tr>
+<tr><td><strong>Werbefrei + Raid Boost</strong></td><td>3,49 €</td><td>Werbefrei und Raid Boost zusammen, günstiger als einzeln.</td></tr>
+<tr><td><strong>Werbefrei + Analyse</strong></td><td>3,49 €</td><td>Werbefrei und volles Analytics zusammen.</td></tr>
+<tr><td><strong>Analyse + Raid Boost</strong></td><td>3,49 €</td><td>Volles Analytics und Raid Boost zusammen.</td></tr>
+<tr><td><strong>Alles drin</strong></td><td>4,99 €</td><td>Alle Features aus allen Plänen gebündelt.</td></tr>
+</tbody>
+</table>
+<p>Preise sind Netto-Angaben und stehen öffentlich in der Plan-Auswahl des Dashboards.</p>
+</section>
+
+<section id="features">
+<h2>Freischaltbare Features</h2>
+<ul>
+<li><strong>Werbefreier Chat</strong> — der Bot postet keine Discord-/Werbe-Nachrichten mehr im eigenen Kanal. Greift auch dann, wenn netzwerkweit gerade eine Aktion/Promo läuft. Die Moderation bleibt davon unberührt.</li>
+<li><strong>Bevorzugte Raid-Platzierung (Raid Boost)</strong> — der eigene Kanal wird im Raid-Netzwerk bevorzugt als Ziel vorgeschlagen, also häufiger angeraidet. Wirkt auch dann, wenn man selbst gerade offline ist. Die genaue Gewichtung der Ziel-Auswahl ist bewusst nicht offengelegt.</li>
+<li><strong>Volles Analyse-Dashboard</strong> — Viewer-Verlauf und Peaks pro Stream, Zeitraum-Vergleiche, Wachstumstrends, Follower- und Retention-Übersichten sowie KI-gestützte Auswertung.</li>
+<li><strong>Lurker-Steuer-Erinnerung</strong> — der Bot erinnert bekannte, gerade anwesende stille Mitleser sanft im Chat. Ein- und ausschaltbar über die Abo-Seite.</li>
+</ul>
+</section>
+
+<section id="ablauf">
+<h2>Ablauf: Freischaltung &amp; Abrechnung</h2>
+<ul>
+<li><strong>Feature-Freischaltung:</strong> Sobald ein Plan aktiv wird (nach erfolgreicher Zahlung oder durch einen vom Team gesetzten Plan), sind dessen Features sofort scharf — ohne dass der Streamer etwas konfigurieren muss. Bei Plan-Wechsel oder Kündigung passt sich der Funktionsumfang entsprechend an.</li>
+<li><strong>Gesperrte Features</strong> erscheinen im Dashboard als gesperrte Vorschau-Karte mit dem Hinweis, welches Upgrade sie freischalten würde.</li>
+<li><strong>Testphase:</strong> Neue Nutzer erhalten für eine begrenzte Zeit automatisch erweiterten Zugang, um die bezahlten Features auszuprobieren. Läuft die Testphase ohne Abo aus, fällt das Konto auf den kostenlosen Plan zurück.</li>
+<li><strong>Kündigung:</strong> Läuft zum Ende des bereits bezahlten Zeitraums. Bis dahin bleiben die Features aktiv, danach gilt wieder der kostenlose Plan. Eine Rückerstattung des laufenden Zeitraums ist nicht vorgesehen.</li>
+</ul>
+</section>
+
+<section id="affiliate">
+<h2>Empfehlungs-Programm (Affiliate)</h2>
+<p>Wer andere Streamer wirbt und sie dem eigenen Empfehlungs-Konto zuordnet, bekommt eine Provision auf deren bezahlte Abos. Der Ablauf: als Werbepartner anmelden, ein Auszahlungs-Konto verbinden und geworbene Streamer dem eigenen Konto zuordnen. Für jedes bezahlte Abo dieser Streamer entsteht eine Provision, die in der Regel monatlich als Gutschrift ausgezahlt wird.</p>
+<ul>
+<li>Ein geworbener Streamer kann nur <strong>einem</strong> Affiliate-Konto zugeordnet werden.</li>
+<li>Bereits anderweitig zugeordnete oder schon länger registrierte Streamer lassen sich nicht nachträglich beanspruchen.</li>
+<li>Ohne verbundenes Auszahlungs-Konto sammeln sich Provisionen nur bis zu einer Obergrenze an, bevor weitere pausiert werden.</li>
+</ul>
+<p>Wie Provisions- bzw. Margenhöhen intern berechnet werden, ist nicht Gegenstand dieser Doku und bleibt bewusst offengelegt.</p>
+</section>
+
+<section id="was-sichtbar-ist">
+<h2>Was Streamer und Viewer sehen</h2>
+<ul>
+<li><strong>Streamer</strong> sehen im Dashboard die Plan-Auswahl mit Preisen (umschaltbar zwischen monatlicher und jährlicher Abrechnung), den aktuell aktiven Plan, eine Rechnungsübersicht sowie die Abo-Seite mit Profil, Kündigung und den schaltbaren Feature-Optionen ihres Plans.</li>
+<li><strong>Viewer</strong> merken die Pläne nur indirekt: Im werbefreien Plan entfallen die Werbe-Nachrichten; bei aktivem Raid Boost erreichen den Kanal tendenziell mehr eingehende Raids; die Lurker-Steuer-Erinnerung erscheint als gelegentliche, sanfte Chat-Nachricht.</li>
+<li><strong>Affiliates</strong> sehen in ihrem eigenen Portal die geworbenen Streamer, die aufgelaufenen Provisionen und ihre Gutschriften.</li>
+</ul>
+</section>
+
+<section id="grenzen">
+<h2>Grenzen &amp; Sonderfälle</h2>
+<ul>
+<li><strong>Ein Plan pro Streamer.</strong> Es ist immer genau ein Plan aktiv; die enthaltenen Features bestimmen sich aus diesem Plan.</li>
+<li><strong>Kostenlos bleibt vollwertig moderiert.</strong> Auto-Moderation und automatische Raids sind nie an einen bezahlten Plan gekoppelt.</li>
+<li><strong>Vom Team gesetzte Pläne haben Vorrang.</strong> Setzt das Team einem Konto manuell einen Plan (z. B. Sonderregelung oder verlängerte Testphase), gilt dieser vor einem etwaigen Abo. Solche Sonderfälle sind nicht selbst über das Dashboard buchbar.</li>
+<li><strong>Lurker-Steuer braucht drei Dinge:</strong> den passenden Plan, den aktivierten Schalter und den nötigen Chat-Lesezugriff des Bots. Fehlt eines davon, passiert nichts; das Dashboard weist auf einen fehlenden Zugriff hin.</li>
+</ul>
+</section>
+
+<section id="agent-hinweise">
+<h2>Hinweise für KI-Agenten &amp; Support</h2>
+<div class="box say"><strong>Der Agent darf sagen:</strong><ul>
+<li>Der Bot ist in der Grundfunktion kostenlos; Auto-Raids und Auto-Moderation laufen ohne Abo.</li>
+<li>Die öffentlichen Preise: Einzelpläne je 1,99 €, Zweier-Pakete 3,49 €, Komplettpaket „Alles drin" 4,99 € (netto/Monat), monatlich oder jährlich abrechenbar.</li>
+<li>Welche Features welcher Plan freischaltet und dass immer genau ein Plan aktiv ist.</li>
+<li>Dass eine Kündigung zum Ende des bezahlten Zeitraums greift und keine anteilige Rückerstattung erfolgt.</li>
+<li>Ablauf des Affiliate-Programms und die Zuordnungs-Regel (ein Streamer, ein Werbepartner).</li>
+</ul></div>
+<div class="box nosay"><strong>Der Agent darf nicht sagen / offenlegen:</strong><ul>
+<li>Wie Margen, Provisionshöhen oder interne Preis-/Abrechnungslogik berechnet werden.</li>
+<li>Die genaue Gewichtung der Raid-Ziel-Auswahl oder interne Schwellenwerte.</li>
+<li>Interne Kriterien, ab wann ein Konto einen Team-Override oder eine verlängerte Testphase erhält.</li>
+<li>Vertragsinterna, Kostenmodelle oder nichtöffentliche Zahlungsdienstleister-Details.</li>
+</ul></div>
+<p>Bei Unsicherheit oder Verdacht auf Fehlentscheidung: an menschlichen Support eskalieren.</p>
+</section>
+
+<footer>Teil der agentenfreundlichen Doku des Deadlock Twitch Bot. Interne Mechanik ist bewusst abstrahiert — siehe <a href="../security/redaction-notes.html">Redaction Notes</a>. Verwandt: <a href="../workflows/subscription-billing-flow.html">Abrechnungs-Flow</a>, <a href="../support/agent-guide.html">Agent-Leitfaden</a>, <a href="../reference/glossary.html">Glossar</a>.</footer>
+</main>
+</body>
+</html>

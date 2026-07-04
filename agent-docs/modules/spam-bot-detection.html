@@ -1,0 +1,156 @@
+<!doctype html>
+<html lang="de">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Modul: Spam- & Bot-Erkennung — Deadlock Twitch Bot</title>
+<style>
+:root{--fg:#1a1a1a;--bg:#fff;--muted:#555;--line:#ddd;--accent:#0a7d33;--box:#f6f8fa;--warn:#b00020;--ok:#0a7d33}
+@media(prefers-color-scheme:dark){:root{--fg:#e6e6e6;--bg:#141414;--muted:#a5a5a5;--line:#333;--box:#1e1e1e;--accent:#4ec978;--warn:#ff6b7a}}
+*{box-sizing:border-box}
+body{margin:0;font:16px/1.6 system-ui,-apple-system,Segoe UI,Roboto,sans-serif;color:var(--fg);background:var(--bg)}
+main{max-width:900px;margin:0 auto;padding:1.5rem}
+h1{font-size:1.8rem;line-height:1.25;margin:.2rem 0 1rem}
+h2{font-size:1.35rem;margin:2.2rem 0 .6rem;border-bottom:1px solid var(--line);padding-bottom:.3rem}
+h3{font-size:1.08rem;margin:1.4rem 0 .4rem}
+a{color:var(--accent)}
+nav.crumbs{font-size:.85rem;margin-bottom:1rem;color:var(--muted)}
+p.summary{font-size:1.05rem;background:var(--box);border-left:4px solid var(--accent);padding:.8rem 1rem;border-radius:4px}
+table{border-collapse:collapse;width:100%;margin:1rem 0;font-size:.95rem}
+th,td{border:1px solid var(--line);padding:.5rem .6rem;text-align:left;vertical-align:top}
+th{background:var(--box)}
+code{background:var(--box);padding:.1rem .3rem;border-radius:3px;font-size:.9em}
+ul,ol{padding-left:1.3rem}
+.box{background:var(--box);border:1px solid var(--line);border-radius:6px;padding:.7rem 1rem;margin:1rem 0}
+.say{border-left:4px solid var(--ok)}
+.nosay{border-left:4px solid var(--warn)}
+.tag{display:inline-block;font-size:.72rem;font-weight:600;padding:.1rem .5rem;border-radius:10px;background:var(--box);border:1px solid var(--line)}
+footer{margin-top:3rem;padding-top:1rem;border-top:1px solid var(--line);font-size:.8rem;color:var(--muted)}
+</style>
+</head>
+<body>
+<main>
+<nav class="crumbs"><a href="../index.html">Startseite</a> › Module › Spam- &amp; Bot-Erkennung</nav>
+<h1>Modul: Spam- &amp; Bot-Erkennung</h1>
+<p class="summary">Dieses Modul beschreibt, wie der Bot in betreuten Partner-Kanälen automatisch Spam und Fake-/Viewer-Bots erkennt, auffällige Nachrichten löscht und die dahinterstehenden Accounts bannt – konservativ ausgelegt, damit echte Zuschauer praktisch nie fälschlich getroffen werden.</p>
+
+<section id="worum-es-geht">
+<h2>Worum es geht</h2>
+<p>Der Bot hört in jedem betreuten Partner-Kanal den Chat mit und erkennt automatisch Spam sowie gefälschte Accounts (z. B. Fake-/Viewer-Bots, die mit Werbe- oder Scam-Nachrichten schreiben). Auffällige Nachrichten werden gelöscht und der Account gebannt – ohne dass der Streamer eingreifen muss. Ziel ist ein sauberer Chat, ohne echte Zuschauer zu gefährden.</p>
+</section>
+
+<section id="was-der-bot-tut">
+<h2>Was der Bot tut</h2>
+<ul>
+<li>Prüft eingehende Chat-Nachrichten laufend auf Anzeichen für Spam und automatisierte Fake-Accounts.</li>
+<li>Löscht bei einem klaren Spam-/Bot-Fall die Nachricht und bannt den Account im jeweiligen Kanal.</li>
+<li>Führt den Ban über den Bot-Account selbst aus (der Bot ist als Moderator aktiv), nicht über den Streamer-Account.</li>
+<li>Hinterlässt nach einem Ban standardmäßig einen kurzen Hinweis im Chat, inklusive Hinweis auf den Rückgängig-Befehl.</li>
+<li>Meldet den Vorfall parallel an den internen Discord-Moderations-Kanal, damit das Team den Überblick behält.</li>
+<li>Wird laufend nachgeschärft und verbessert sich über die Zeit. Wie das im Detail geschieht, ist bewusst nicht dokumentiert.</li>
+<li>Ist bewusst konservativ ausgelegt: Es muss ein deutliches Gesamtbild zusammenkommen, bevor gehandelt wird.</li>
+</ul>
+</section>
+
+<section id="wann-es-passiert">
+<h2>Wann es passiert</h2>
+<ul>
+<li>Die Erkennung läuft permanent und automatisch, solange der Bot im Kanal ist – nicht an- oder abschaltbar.</li>
+<li>Gehandelt wird erst, wenn sich ein hinreichend klares Spam-/Bot-Bild ergibt. Die einzelnen Hinweise, ihre Gewichtung und die genaue Auslöseschwelle sind bewusst nicht dokumentiert, damit der Filter nicht gezielt umgangen werden kann.</li>
+<li>Für einen technisch ausgeführten Ban braucht der Bot Moderator-Rechte im Kanal. Ohne diese kann er erkennen, aber nicht durchgreifen.</li>
+</ul>
+<h3>Ausgenommene Accounts</h3>
+<p>Bestimmte Accounts werden grundsätzlich nicht automatisch gebannt:</p>
+<table>
+<thead><tr><th>Gruppe</th><th>Grund</th></tr></thead>
+<tbody>
+<tr><td>Der Streamer selbst</td><td>Eigentümer des Kanals</td></tr>
+<tr><td>Moderatoren des Kanals</td><td>Vertrauensrolle im Kanal</td></tr>
+<tr><td>Der Bot-Account</td><td>Handelnde Instanz selbst</td></tr>
+<tr><td>Bekannte/etablierte Stammgäste</td><td>Schutz treuer Community-Mitglieder</td></tr>
+<tr><td>Offiziell bekannte Chat-Bots</td><td>Legitime, erwartete Automatisierung</td></tr>
+</tbody>
+</table>
+</section>
+
+<section id="was-nutzer-sehen">
+<h2>Was Streamer und Zuschauer sehen</h2>
+<ul>
+<li>Spam- und Fake-Bot-Nachrichten verschwinden meist sehr schnell, oft bevor echte Zuschauer sie mitbekommen.</li>
+<li>Nach einem Ban erscheint standardmäßig ein kurzer Auto-Mod-Hinweis im Chat, inklusive Hinweis, wie sich ein Fehlgriff rückgängig machen lässt.</li>
+<li>Für den Streamer bedeutet das weniger Werbe-Spam und Scam-Bots, ohne selbst ständig moderieren zu müssen.</li>
+<li>Echte Zuschauer merken im Normalfall nichts von der Moderation.</li>
+</ul>
+</section>
+
+<section id="einstellungen">
+<h2>Was Streamer einstellen können</h2>
+<ul>
+<li>Die Erkennung ist immer an und nicht als Funktion abschaltbar – sie gehört zum Grundverhalten in jedem betreuten Kanal.</li>
+<li>Voraussetzung ist, dass der Bot im Kanal als Moderator hinterlegt ist; ohne Mod-Rechte kann er nicht löschen oder bannen.</li>
+<li>Ein versehentlich getroffener Account lässt sich über den Unban-Befehl wieder freigeben.</li>
+<li>Optional gibt es einen „stillen“ Modus, in dem der Ban weiterhin ausgeführt, der erklärende Chat-Hinweis aber unterdrückt wird. Das richtet das Team auf Wunsch ein.</li>
+</ul>
+</section>
+
+<section id="grenzen">
+<h2>Grenzen &amp; Sonderfälle</h2>
+<ul>
+<li>Die Erkennung greift nur in Kanälen, in denen der Bot aktiv ist und Moderator-Rechte hat.</li>
+<li>Ist ein Account bereits gebannt, wird das sauber als Erfolg behandelt und nicht doppelt versucht.</li>
+<li>Ausgenommene Accounts werden bewusst nicht automatisch moderiert – das schützt vor Fehlbann, kann aber bedeuten, dass ein als Mod eingetragener Account nicht über diese Automatik gebannt wird.</li>
+<li>In seltenen Fällen kann es kurzzeitig zu einer Fehleinschätzung kommen; dafür gibt es den Unban-Befehl.</li>
+<li>Die Spam-/Bot-Erkennung ist getrennt von der netzwerkweiten Bannliste und der Scam-/Fake-Server-Warnung – diese haben eigene Auslöser und Abläufe.</li>
+</ul>
+</section>
+
+<section id="fehler">
+<h2>Typische Situationen &amp; Erklärungen</h2>
+<table>
+<thead><tr><th>Situation</th><th>Erklärung</th></tr></thead>
+<tbody>
+<tr><td>Jemand wurde automatisch gebannt</td><td>Die Nachricht wurde als eindeutiger Spam-/Bot-Versuch eingestuft. Fehlgriffe sind mit dem Unban-Befehl korrigierbar.</td></tr>
+<tr><td>Bot bannt nicht, obwohl Spam sichtbar ist</td><td>Vermutlich fehlen dem Bot die Moderator-Rechte im Kanal, oder das Gesamtbild war nicht eindeutig genug.</td></tr>
+<tr><td>Mod/Stammgast wird nicht gebannt</td><td>Diese Gruppen sind von der Automatik ausgenommen.</td></tr>
+<tr><td>Kein Chat-Hinweis nach Ban</td><td>Der stille Modus ist aktiv; der Ban läuft trotzdem.</td></tr>
+</tbody>
+</table>
+</section>
+
+<section id="agent-hinweise">
+<h2>Hinweise für KI-Agenten &amp; Support</h2>
+<div class="box say"><strong>Der Agent darf sagen:</strong>
+<ul>
+<li>Dass die Spam-/Bot-Erkennung immer aktiv und nicht abschaltbar ist und Mod-Rechte des Bots voraussetzt.</li>
+<li>Dass nur eindeutige Fälle zu Löschung und Ban führen und die Erkennung bewusst konservativ ist.</li>
+<li>Welche Account-Gruppen von der Automatik ausgenommen sind.</li>
+<li>Dass Fehlgriffe mit dem Unban-Befehl sofort korrigierbar sind und Aktionen intern an Discord gemeldet werden.</li>
+<li>Dass es einen stillen Modus gibt, der den Chat-Hinweis unterdrückt, den Ban aber nicht.</li>
+</ul>
+</div>
+<div class="box nosay"><strong>Der Agent darf nicht sagen / offenlegen:</strong>
+<ul>
+<li>Die einzelnen Erkennungs-Signale, ihre Gewichtung oder die genaue Auslöseschwelle.</li>
+<li>Wie Verschleierungs-Tricks konkret durchschaut werden.</li>
+<li>Interne Details, wie die Erkennung nachgeschärft wird.</li>
+<li>Secrets, Tokens oder interne Kanal-/Infrastruktur-Details.</li>
+</ul>
+</div>
+<p>Bei Unsicherheit oder Verdacht auf Fehlentscheidung: an menschlichen Support eskalieren.</p>
+</section>
+
+<section id="verwandte-seiten">
+<h2>Verwandte Seiten</h2>
+<ul>
+<li><a href="../workflows/spam-moderation-flow.html">Workflow: Spam- &amp; Moderations-Ablauf</a></li>
+<li><a href="chat-moderation.html">Modul: Chat-Moderation &amp; Befehle</a></li>
+<li><a href="network-protection.html">Modul: Netzwerk-Schutz (Bannliste &amp; Scam-Warnung)</a></li>
+<li><a href="../support/troubleshooting.html">Troubleshooting</a></li>
+<li><a href="../reference/glossary.html">Glossar</a></li>
+</ul>
+</section>
+
+<footer>Teil der agentenfreundlichen Doku des Deadlock Twitch Bot. Interne Mechanik ist bewusst abstrahiert — siehe <a href="../security/redaction-notes.html">Redaction Notes</a>.</footer>
+</main>
+</body>
+</html>

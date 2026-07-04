@@ -1,0 +1,115 @@
+<!doctype html>
+<html lang="de">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Modul: Website &amp; Onboarding — Deadlock Twitch Bot</title>
+<style>
+:root{--fg:#1a1a1a;--bg:#fff;--muted:#555;--line:#ddd;--accent:#0a7d33;--box:#f6f8fa;--warn:#b00020;--ok:#0a7d33}
+@media(prefers-color-scheme:dark){:root{--fg:#e6e6e6;--bg:#141414;--muted:#a5a5a5;--line:#333;--box:#1e1e1e;--accent:#4ec978;--warn:#ff6b7a}}
+*{box-sizing:border-box}
+body{margin:0;font:16px/1.6 system-ui,-apple-system,Segoe UI,Roboto,sans-serif;color:var(--fg);background:var(--bg)}
+main{max-width:900px;margin:0 auto;padding:1.5rem}
+h1{font-size:1.8rem;line-height:1.25;margin:.2rem 0 1rem}
+h2{font-size:1.35rem;margin:2.2rem 0 .6rem;border-bottom:1px solid var(--line);padding-bottom:.3rem}
+h3{font-size:1.08rem;margin:1.4rem 0 .4rem}
+a{color:var(--accent)}
+nav.crumbs{font-size:.85rem;margin-bottom:1rem;color:var(--muted)}
+p.summary{font-size:1.05rem;background:var(--box);border-left:4px solid var(--accent);padding:.8rem 1rem;border-radius:4px}
+table{border-collapse:collapse;width:100%;margin:1rem 0;font-size:.95rem}
+th,td{border:1px solid var(--line);padding:.5rem .6rem;text-align:left;vertical-align:top}
+th{background:var(--box)}
+code{background:var(--box);padding:.1rem .3rem;border-radius:3px;font-size:.9em}
+ul,ol{padding-left:1.3rem}
+.box{background:var(--box);border:1px solid var(--line);border-radius:6px;padding:.7rem 1rem;margin:1rem 0}
+.say{border-left:4px solid var(--ok)}
+.nosay{border-left:4px solid var(--warn)}
+.tag{display:inline-block;font-size:.72rem;font-weight:600;padding:.1rem .5rem;border-radius:10px;background:var(--box);border:1px solid var(--line)}
+footer{margin-top:3rem;padding-top:1rem;border-top:1px solid var(--line);font-size:.8rem;color:var(--muted)}
+</style>
+</head>
+<body>
+<main>
+<nav class="crumbs"><a href="../index.html">Startseite</a> › Module › Website &amp; Onboarding</nav>
+<h1>Modul: Website &amp; Onboarding</h1>
+<p class="summary">Die öffentliche Website ist der Einstiegspunkt für alle, die den Bot noch nicht nutzen: Sie erklärt die Funktionen, führt neue Deadlock-Streamer per Twitch-Login durch die Anmeldung, stellt das Affiliate-Programm vor und bündelt die rechtlichen Seiten. Diese Seite beschreibt die Bereiche, den Onboarding-Ablauf, die „Frag den Bot"-Box und den Dashboard-Zugang.</p>
+
+<section id="worum-es-geht">
+<h2>Worum es geht</h2>
+<p>Ziel der Website ist, dass ein Besucher den Bot versteht, ohne sich anmelden zu müssen, und dass ein interessierter Streamer in wenigen Minuten seinen Kanal verbinden kann. Der Kernsatz: Wenn ein Stream endet, sollen die Zuschauer nicht ins Leere laufen, sondern automatisch zum nächsten passenden Deadlock-Partner weitergeleitet werden.</p>
+</section>
+
+<section id="bereiche">
+<h2>Bereiche der Website</h2>
+<table>
+<thead>
+<tr><th>Bereich</th><th>Funktion</th></tr>
+</thead>
+<tbody>
+<tr><td>Landing-Page</td><td>Erklärt Auto-Raid-Netzwerk, Spam-Schutz, Dashboard und Community an Beispielen.</td></tr>
+<tr><td>Streamer-Onboarding</td><td>Schritt-für-Schritt (Verbinden → Auto-Raid → Dashboard → Start). Zentraler Knopf: „Bot für deinen Kanal aktivieren" / „Kanal verbinden".</td></tr>
+<tr><td>FAQ</td><td>Durchsuchbare Wissensbasis zu Einstieg, Dashboard, Auto-Raid, Community, Affiliate, Plänen &amp; Preisen, Chat-Werbung und Rechtlichem. Dieselbe Basis nutzt der Bot zum Beantworten von Fragen.</td></tr>
+<tr><td>„Frag den Bot"-Box</td><td>Eingabefeld, in das jeder Besucher direkt eine Frage tippen kann; der Bot antwortet sofort, gestützt nur auf das, was er tatsächlich tut.</td></tr>
+<tr><td>Live-Ban-Feed</td><td>Zeigt nahezu in Echtzeit, welche Werbe-/Spam-Bots zuletzt entfernt wurden, plus Kennzahlen (Bans heute, Bans 30 Tage, geschützte Kanäle).</td></tr>
+<tr><td>Demo-Dashboard</td><td>Öffentlich begehbares Dashboard mit Beispieldaten, ohne Login.</td></tr>
+<tr><td>Affiliate-/Vertriebler-Portal</td><td>Erklärt das Provisionsmodell und führt Werber in ihre Anmeldung.</td></tr>
+<tr><td>Rechtliche Seiten</td><td>Impressum, Datenschutz und AGB — frei und ohne Login, im Footer jeder Seite verlinkt.</td></tr>
+</tbody>
+</table>
+</section>
+
+<section id="twitch-login">
+<h2>Twitch-Login &amp; Dashboard-Zugang</h2>
+<ul>
+<li>Sobald ein Besucher auf „Bot für deinen Kanal aktivieren" / „Kanal verbinden" klickt, startet die Anmeldung über den eigenen Twitch-Account. Ein extra Konto oder Formular ist nicht nötig.</li>
+<li>Nach der Bestätigung der Berechtigungen landet der Streamer direkt im Dashboard. Der gesamte Vorgang dauert in der Regel unter einer Minute.</li>
+<li>Auch die Affiliate-Anmeldung läuft über den Twitch-Login; erst danach folgen Auszahlungskonto verbinden, Streamer werben und beanspruchen.</li>
+<li>Ohne Twitch-Login kommt man nicht über das Verbinden hinaus — beide Anmeldungen setzen einen bestehenden Twitch-Account voraus.</li>
+</ul>
+</section>
+
+<section id="frag-den-bot">
+<h2>„Frag den Bot"</h2>
+<p>Die „Frag den Bot"-Box auf der Onboarding-Seite beantwortet Fragen rund um das, was der Bot tatsächlich tut (z. B. „Ist das nicht Scam?", „Muss ich was einrichten?", „Wann raidet der Bot?"). Der Bot antwortet ehrlich und ohne Verkaufsgerede, gestützt auf dieselbe Wissensbasis wie die FAQ. Er darf sich kurz Zeit nehmen („Denkt nach…"); die Antwort erscheint danach direkt auf der Seite.</p>
+<ul>
+<li>Es ist kein allgemeiner Chatbot: Die Box ist bewusst gegen Versuche abgesichert, sie zu Aussagen außerhalb ihres Rahmens zu verleiten.</li>
+<li>Bei zu vielen Anfragen in kurzer Zeit oder einem Verbindungsproblem bittet sie kurz, es noch einmal zu versuchen, und verweist auf die FAQ.</li>
+</ul>
+</section>
+
+<section id="verbindung-entfernen">
+<h2>Bot wieder entfernen</h2>
+<p>Auf der öffentlichen Website selbst gibt es nichts einzustellen — alle persönlichen Einstellungen (Chat-Werbetext, Pläne, Affiliate-Links) macht ein Streamer erst nach dem Login im Dashboard. Wer den Bot wieder loswerden will, widerruft die Verbindung jederzeit selbst in den Twitch-Einstellungen (Twitch → Einstellungen → Verbindungen → „Deutsche Deadlock Community" entfernen). Danach hat der Bot keinen Zugriff mehr. Für eine vollständige Löschung der gespeicherten Daten ist eine Meldung im Discord nötig.</p>
+</section>
+
+<section id="grenzen">
+<h2>Grenzen &amp; Sonderfälle</h2>
+<ul>
+<li><strong>Ban-Feed ist öffentlich, aber kein Pranger:</strong> Angezeigt werden die vom Spam-Schutz erwischten Bot-Accounts, nicht echte Personen. Fällt die Live-Verbindung kurz aus, zeigt die Seite Beispieldaten, damit der Bereich nie leer wirkt.</li>
+<li><strong>Mehrere getrennte Seiten:</strong> Startseite, FAQ, Onboarding, Affiliate-Programm und Vertriebler-Portal sind eigenständige Seiten, erreichbar über Navigation und Footer.</li>
+<li><strong>Geteilte Wissensbasis:</strong> Was in der FAQ steht, ist auch das, was der Bot „weiß".</li>
+<li><strong>Affiliate-Abwicklung läuft nicht auf der öffentlichen Seite:</strong> Die Website erklärt das Programm und startet die Anmeldung; Werben, Beanspruchen und Provisionsübersicht passieren im eingeloggten Portal.</li>
+</ul>
+</section>
+
+<section id="agent-hinweise">
+<h2>Hinweise für KI-Agenten &amp; Support</h2>
+<div class="box say"><strong>Der Agent darf sagen:</strong><ul>
+<li>Dass die Anmeldung über den eigenen Twitch-Account läuft, kein Extra-Konto braucht und meist unter einer Minute dauert.</li>
+<li>Dass man den Bot kostenlos ausprobieren kann und niemand ungefragt in ein kostenpflichtiges Abo gesteckt wird.</li>
+<li>Dass es ein öffentliches Demo-Dashboard, eine FAQ und die „Frag den Bot"-Box gibt.</li>
+<li>Wie man die Verbindung selbst über die Twitch-Einstellungen widerruft und die Datenlöschung im Discord anfragt.</li>
+</ul></div>
+<div class="box nosay"><strong>Der Agent darf nicht sagen / offenlegen:</strong><ul>
+<li>Interne URLs, Hostnamen, Ports, verwendete Zugangs-Scopes oder Infrastruktur-Details.</li>
+<li>Wie die „Frag den Bot"-Box technisch gegen Missbrauch abgesichert ist oder welche exakten Anfrage-Limits gelten.</li>
+<li>Wie der Live-Ban-Feed intern die anzuzeigenden Bots auswählt oder maskiert.</li>
+<li>Nichtöffentliche Details des Affiliate-Provisionsmodells über die öffentlich genannten Angaben hinaus.</li>
+</ul></div>
+<p>Bei Unsicherheit oder Verdacht auf Fehlentscheidung: an menschlichen Support eskalieren.</p>
+</section>
+
+<footer>Teil der agentenfreundlichen Doku des Deadlock Twitch Bot. Interne Mechanik ist bewusst abstrahiert — siehe <a href="../security/redaction-notes.html">Redaction Notes</a>. Verwandt: <a href="../workflows/onboarding-flow.html">Onboarding-Flow</a>, <a href="../support/troubleshooting.html">Troubleshooting</a>, <a href="../reference/glossary.html">Glossar</a>.</footer>
+</main>
+</body>
+</html>

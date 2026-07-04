@@ -1,0 +1,152 @@
+<!doctype html>
+<html lang="de">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Modul: Raids (automatisch & manuell) — Deadlock Twitch Bot</title>
+<style>
+:root{--fg:#1a1a1a;--bg:#fff;--muted:#555;--line:#ddd;--accent:#0a7d33;--box:#f6f8fa;--warn:#b00020;--ok:#0a7d33}
+@media(prefers-color-scheme:dark){:root{--fg:#e6e6e6;--bg:#141414;--muted:#a5a5a5;--line:#333;--box:#1e1e1e;--accent:#4ec978;--warn:#ff6b7a}}
+*{box-sizing:border-box}
+body{margin:0;font:16px/1.6 system-ui,-apple-system,Segoe UI,Roboto,sans-serif;color:var(--fg);background:var(--bg)}
+main{max-width:900px;margin:0 auto;padding:1.5rem}
+h1{font-size:1.8rem;line-height:1.25;margin:.2rem 0 1rem}
+h2{font-size:1.35rem;margin:2.2rem 0 .6rem;border-bottom:1px solid var(--line);padding-bottom:.3rem}
+h3{font-size:1.08rem;margin:1.4rem 0 .4rem}
+a{color:var(--accent)}
+nav.crumbs{font-size:.85rem;margin-bottom:1rem;color:var(--muted)}
+p.summary{font-size:1.05rem;background:var(--box);border-left:4px solid var(--accent);padding:.8rem 1rem;border-radius:4px}
+table{border-collapse:collapse;width:100%;margin:1rem 0;font-size:.95rem}
+th,td{border:1px solid var(--line);padding:.5rem .6rem;text-align:left;vertical-align:top}
+th{background:var(--box)}
+code{background:var(--box);padding:.1rem .3rem;border-radius:3px;font-size:.9em}
+ul,ol{padding-left:1.3rem}
+.box{background:var(--box);border:1px solid var(--line);border-radius:6px;padding:.7rem 1rem;margin:1rem 0}
+.say{border-left:4px solid var(--ok)}
+.nosay{border-left:4px solid var(--warn)}
+.tag{display:inline-block;font-size:.72rem;font-weight:600;padding:.1rem .5rem;border-radius:10px;background:var(--box);border:1px solid var(--line)}
+footer{margin-top:3rem;padding-top:1rem;border-top:1px solid var(--line);font-size:.8rem;color:var(--muted)}
+</style>
+</head>
+<body>
+<main>
+<nav class="crumbs"><a href="../index.html">Startseite</a> › Module › Raids</nav>
+<h1>Modul: Raids (automatisch &amp; manuell)</h1>
+<p class="summary">Dieses Modul beschreibt, wie der Bot am Stream-Ende automatisch andere Deadlock-Kanäle raidet, wie manuelle Raids behandelt werden und wie der Schutz vor Raids auf gesperrte Kanäle funktioniert. Beschrieben wird das Verhalten aus Sicht von Streamern und Zuschauern, nicht die interne Zielauswahl-Mechanik.</p>
+
+<section id="worum-es-geht">
+<h2>Worum es geht</h2>
+<p>Ein Raid schickt am Stream-Ende die eigenen Zuschauer gesammelt in den Stream eines anderen Kanals. Der Bot kann diesen Schritt automatisch übernehmen: Geht ein teilnehmender Deadlock-Streamer offline, sucht der Bot einen anderen passenden Deadlock-Kanal, der gerade live ist, und raidet ihn. So bleiben Zuschauer in der Deadlock-Community und die teilnehmenden Streamer schicken sich gegenseitig Publikum zu.</p>
+<p>Manuelle Raids, die der Streamer selbst startet, bleiben jederzeit möglich. Der Bot greift dort nur ein, um Raids auf gesperrte Kanäle zu verhindern.</p>
+</section>
+
+<section id="was-der-bot-tut">
+<h2>Was der Bot tut</h2>
+<ul>
+<li><strong>Automatischer Raid am Stream-Ende:</strong> Geht ein teilnehmender Streamer offline und war die beendete Session eine Deadlock-Session, startet der Bot bei erfüllten Voraussetzungen automatisch einen Raid auf einen anderen Kanal.</li>
+<li><strong>Zielauswahl unter Deadlock-Kanälen:</strong> Geraidet werden nur andere teilnehmende Streamer, die gerade live Deadlock spielen. Der Bot bewertet die infrage kommenden Live-Kanäle anhand interner Kriterien und wählt automatisch ein geeignetes Ziel. Die genaue Gewichtung ist bewusst nicht offengelegt.</li>
+<li><strong>Faire Verteilung:</strong> Der Bot sorgt dafür, dass nicht immer derselbe Kanal die Raids abbekommt. Kürzlich beraidete Kanäle werden eine Weile übersprungen, damit sich das Publikum breit verteilt.</li>
+<li><strong>Raid im Namen des Streamers:</strong> Der Raid wird über die einmalig erteilte Berechtigung des Streamers ausgelöst, so als hätte er ihn selbst gestartet. Ohne diese Erlaubnis raidet der Bot nicht.</li>
+<li><strong>Erfolg messen:</strong> Nach dem Raid prüft der Bot über mehrere unabhängige Signale, ob der Raid angekommen ist und die Zuschauer im Deadlock-Umfeld geblieben sind. Ein einzelnes Signal reicht nicht.</li>
+<li><strong>Schutz vor Raids auf gesperrte Kanäle:</strong> Der Bot führt eine Sperrliste von Kanälen, die für Raids nicht unterstützt werden. Startet ein Streamer manuell einen Raid dorthin, versucht der Bot ihn abzubrechen und informiert den Streamer per privater Nachricht.</li>
+<li><strong>Einladung an externe Deadlock-Streamer:</strong> Raidet ein noch nicht teilnehmender Deadlock-Streamer wiederholt in einen Partner-Kanal, schickt der Bot gestufte Einladungs-Nachrichten, um ihn aufs Mitmachen aufmerksam zu machen.</li>
+</ul>
+</section>
+
+<section id="wann-es-passiert">
+<h2>Wann es passiert</h2>
+<p>Ein <strong>automatischer Raid</strong> wird ausgelöst, sobald ein teilnehmender Streamer offline geht – aber nur, wenn alle Voraussetzungen gleichzeitig erfüllt sind. Fehlt eine davon, endet der Stream einfach ohne Raid.</p>
+<table>
+<thead><tr><th>Voraussetzung</th><th>Bedeutung</th></tr></thead>
+<tbody>
+<tr><td>Netzwerk-Teilnahme</td><td>Der Streamer ist ein aktiver Teilnehmer am Raid-Netzwerk.</td></tr>
+<tr><td>Deadlock-Session</td><td>Die gerade beendete Session war eine Deadlock-Session.</td></tr>
+<tr><td>Autorisierung</td><td>Der Streamer hat den Bot einmalig autorisiert, in seinem Namen zu raiden.</td></tr>
+<tr><td>Auto-Raid aktiv</td><td>Der automatische Raid ist für diesen Streamer eingeschaltet.</td></tr>
+<tr><td>Passendes Ziel</td><td>Ein anderer teilnehmender Kanal ist live in Deadlock und wurde nicht erst kürzlich beraidet.</td></tr>
+</tbody>
+</table>
+<p>Ein <strong>manueller Raid</strong> ist jederzeit vom Streamer selbst über Twitch startbar. Der Bot mischt sich bei der Zielwahl nicht ein – außer das Ziel steht auf der Raid-Sperrliste, dann greift er ein (Abbruch und Hinweis). Startet ein Streamer kurz vor dem Offline-Gehen selbst einen Raid, setzt der Bot für eine kurze Zeit keinen eigenen Auto-Raid nach, damit nicht zwei Raids kollidieren.</p>
+</section>
+
+<section id="was-nutzer-sehen">
+<h2>Was Streamer und Zuschauer sehen</h2>
+<ul>
+<li><strong>Zuschauer beim Auto-Raid:</strong> Ein automatischer Raid sieht für Zuschauer genauso aus wie ein normaler, vom Streamer gestarteter Raid. Sie werden am Stream-Ende gesammelt in den Zielkanal mitgenommen.</li>
+<li><strong>Im Zielkanal:</strong> Der raidende Kanal taucht als Raid-Hinweis im Chat des Zielkanals auf, wie bei jedem Twitch-Raid.</li>
+<li><strong>Raid-Verlauf:</strong> Teilnehmende Streamer können ihre eigene Raid-History sowie Raid-Statistiken und Retention im Dashboard einsehen.</li>
+<li><strong>Sperrlisten-Hinweis:</strong> Bei einem manuellen Raid auf einen gesperrten Kanal erhält der Streamer eine private Nachricht (Whisper). Konnte der Raid noch gestoppt werden, weist sie auf den Abbruch hin; lief er schon zu weit, weist sie darauf hin, dass er nicht mehr stoppbar war und der Kanal künftig gemieden werden sollte.</li>
+</ul>
+</section>
+
+<section id="einstellungen">
+<h2>Was Streamer einstellen können</h2>
+<ul>
+<li><strong>Berechtigung erteilen:</strong> Der Streamer autorisiert den Bot einmalig über einen Anmelde-Link. Ohne diese Autorisierung findet kein automatischer Raid statt.</li>
+<li><strong>Auto-Raid ein-/ausschalten:</strong> Der automatische Raid lässt sich pro Streamer aktivieren oder deaktivieren. Ist er aus, raidet der Bot am Stream-Ende nicht automatisch; manuelle Raids bleiben davon unberührt.</li>
+<li><strong>Status &amp; Verlauf abrufen:</strong> Der Streamer kann den aktuellen Raid-Status (autorisiert ja/nein, Auto-Raid an/aus) und die eigene Raid-History abfragen.</li>
+</ul>
+</section>
+
+<section id="grenzen">
+<h2>Grenzen &amp; Sonderfälle</h2>
+<ul>
+<li><strong>Nur Deadlock:</strong> Auto-Raids laufen ausschließlich von Deadlock-Sessions in andere Deadlock-Kanäle.</li>
+<li><strong>Kein Ziel verfügbar:</strong> Ist gerade kein passender teilnehmender Kanal live, unterbleibt der Auto-Raid. Es wird nicht „irgendwohin“ geraidet.</li>
+<li><strong>Sperrliste nicht immer rechtzeitig stoppbar:</strong> Twitch lässt einen Raid nur in einem kurzen Fenster vor dem Start abbrechen. War der Raid schon durchgelaufen, kann der Bot ihn nicht mehr rückgängig machen und weist nur noch per Nachricht darauf hin.</li>
+<li><strong>Hinweis-Nachricht nicht garantiert:</strong> Twitch stellt private Nachrichten an fremde Konten nicht immer zu. Der Abbruch wirkt trotzdem, nur der Hinweis kommt eventuell nicht an.</li>
+<li><strong>Erfolg wird konservativ gewertet:</strong> Erst wenn mehrere Signale übereinstimmen, gilt ein Raid als bestätigt angekommen.</li>
+<li><strong>Externe Einladungen sind geduldig:</strong> Ein externer Streamer landet nicht sofort auf der Sperrliste; es gibt eine Karenzzeit, in der er einsteigen kann. Wird er Teilnehmer, entfällt die Sperrung.</li>
+</ul>
+</section>
+
+<section id="fehler">
+<h2>Typische Situationen &amp; Erklärungen</h2>
+<table>
+<thead><tr><th>Situation</th><th>Erklärung</th></tr></thead>
+<tbody>
+<tr><td>Stream hat ohne Zutun geraidet</td><td>Automatischer Raid: Bei Teilnahme, Autorisierung und eingeschaltetem Auto-Raid sucht der Bot am Stream-Ende ein passendes Deadlock-Ziel.</td></tr>
+<tr><td>Kein Raid trotz Offline-Gehen</td><td>Mindestens eine Voraussetzung fehlte – etwa kein anderer teilnehmender Deadlock-Kanal live.</td></tr>
+<tr><td>Nachricht „Raid abgebrochen“</td><td>Das Ziel steht auf der Raid-Sperrliste. Der Bot hat den Raid abgebrochen oder – falls zu spät – auf künftiges Meiden hingewiesen.</td></tr>
+<tr><td>Einladung erhalten, obwohl kein Teilnehmer</td><td>Der Kanal ist wiederholt in einen Partner-Kanal hereingeraidet; die Einladung ist ein Angebot, keine Verpflichtung.</td></tr>
+</tbody>
+</table>
+</section>
+
+<section id="agent-hinweise">
+<h2>Hinweise für KI-Agenten &amp; Support</h2>
+<div class="box say"><strong>Der Agent darf sagen:</strong>
+<ul>
+<li>Dass es automatische und manuelle Raids gibt und welche Voraussetzungen ein Auto-Raid braucht.</li>
+<li>Dass sich der Auto-Raid pro Streamer ein- und ausschalten lässt und manuelle Raids davon unberührt bleiben.</li>
+<li>Dass nur teilnehmende, live Deadlock spielende Kanäle als Ziel infrage kommen und faire Verteilung berücksichtigt wird.</li>
+<li>Dass Raids auf gesperrte Kanäle abgebrochen werden und der Streamer dazu eine Nachricht erhält.</li>
+<li>Dass Raid-Erfolg über mehrere Signale konservativ bewertet wird.</li>
+</ul>
+</div>
+<div class="box nosay"><strong>Der Agent darf nicht sagen / offenlegen:</strong>
+<ul>
+<li>Die genaue Gewichtung, Formeln oder Faktoren der Zielauswahl.</li>
+<li>Exakte Zeitfenster, Schwellenwerte oder Karenzzeiten (z. B. für Wiederholungs-Skips oder externe Einladungen).</li>
+<li>Interne Kriterien, nach denen Kanäle auf der Raid-Sperrliste landen.</li>
+<li>Details der Erfolgs-Signale oder deren interne Bedingungen.</li>
+</ul>
+</div>
+<p>Bei Unsicherheit oder Verdacht auf Fehlentscheidung: an menschlichen Support eskalieren.</p>
+</section>
+
+<section id="verwandte-seiten">
+<h2>Verwandte Seiten</h2>
+<ul>
+<li><a href="../workflows/auto-raid-flow.html">Workflow: Auto-Raid-Ablauf</a></li>
+<li><a href="network-protection.html">Modul: Netzwerk-Schutz (Bannliste &amp; Scam-Warnung)</a></li>
+<li><a href="chat-moderation.html">Modul: Chat-Moderation &amp; Befehle</a></li>
+<li><a href="../support/agent-guide.html">Agenten-Leitfaden</a></li>
+<li><a href="../reference/glossary.html">Glossar</a></li>
+</ul>
+</section>
+
+<footer>Teil der agentenfreundlichen Doku des Deadlock Twitch Bot. Interne Mechanik ist bewusst abstrahiert — siehe <a href="../security/redaction-notes.html">Redaction Notes</a>.</footer>
+</main>
+</body>
+</html>

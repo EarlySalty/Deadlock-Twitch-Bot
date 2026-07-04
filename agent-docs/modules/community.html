@@ -1,0 +1,133 @@
+<!doctype html>
+<html lang="de">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Modul: Community-Funktionen — Deadlock Twitch Bot</title>
+<style>
+:root{--fg:#1a1a1a;--bg:#fff;--muted:#555;--line:#ddd;--accent:#0a7d33;--box:#f6f8fa;--warn:#b00020;--ok:#0a7d33}
+@media(prefers-color-scheme:dark){:root{--fg:#e6e6e6;--bg:#141414;--muted:#a5a5a5;--line:#333;--box:#1e1e1e;--accent:#4ec978;--warn:#ff6b7a}}
+*{box-sizing:border-box}
+body{margin:0;font:16px/1.6 system-ui,-apple-system,Segoe UI,Roboto,sans-serif;color:var(--fg);background:var(--bg)}
+main{max-width:900px;margin:0 auto;padding:1.5rem}
+h1{font-size:1.8rem;line-height:1.25;margin:.2rem 0 1rem}
+h2{font-size:1.35rem;margin:2.2rem 0 .6rem;border-bottom:1px solid var(--line);padding-bottom:.3rem}
+h3{font-size:1.08rem;margin:1.4rem 0 .4rem}
+a{color:var(--accent)}
+nav.crumbs{font-size:.85rem;margin-bottom:1rem;color:var(--muted)}
+p.summary{font-size:1.05rem;background:var(--box);border-left:4px solid var(--accent);padding:.8rem 1rem;border-radius:4px}
+table{border-collapse:collapse;width:100%;margin:1rem 0;font-size:.95rem}
+th,td{border:1px solid var(--line);padding:.5rem .6rem;text-align:left;vertical-align:top}
+th{background:var(--box)}
+code{background:var(--box);padding:.1rem .3rem;border-radius:3px;font-size:.9em}
+ul,ol{padding-left:1.3rem}
+.box{background:var(--box);border:1px solid var(--line);border-radius:6px;padding:.7rem 1rem;margin:1rem 0}
+.say{border-left:4px solid var(--ok)}
+.nosay{border-left:4px solid var(--warn)}
+.tag{display:inline-block;font-size:.72rem;font-weight:600;padding:.1rem .5rem;border-radius:10px;background:var(--box);border:1px solid var(--line)}
+footer{margin-top:3rem;padding-top:1rem;border-top:1px solid var(--line);font-size:.8rem;color:var(--muted)}
+</style>
+</head>
+<body>
+<main>
+<nav class="crumbs"><a href="../index.html">Startseite</a> › Module › Community-Funktionen</nav>
+<h1>Modul: Community-Funktionen</h1>
+<p class="summary">Drei Funktionen bringen die Deadlock-Streamer-Community zusammen: das <strong>Leaderboard</strong> als interaktive Rangliste im Discord, das <strong>Partner-Recruiting</strong>, das aktive deutsche Deadlock-Streamer findet und einlädt, und die <strong>Voice-Reaction</strong>, mit der der Bot kurz in einen Stream reinhört und passend im Chat reagiert.</p>
+
+<section id="ueberblick">
+<h2>Überblick</h2>
+<table>
+<thead><tr><th>Funktion</th><th>Auslösung</th><th>Sichtbarkeit</th><th>Zielgruppe</th></tr></thead>
+<tbody>
+<tr><td>Leaderboard</td><td>Discord-Befehl <code>!twl</code></td><td>Rangliste mit Bedien-Knöpfen im Discord</td><td>Community allgemein</td></tr>
+<tr><td>Partner-Recruiting</td><td>Automatisch im Hintergrund</td><td>Einmalige Einladung im Chat des Kandidaten</td><td>Betreiber-Funktion</td></tr>
+<tr><td>Voice-Reaction</td><td>Opt-in, dann automatisch</td><td>Gelegentliche Chat-Nachricht des Bots</td><td>Betreiber-Funktion</td></tr>
+</tbody>
+</table>
+</section>
+
+<section id="leaderboard">
+<h2>Leaderboard</h2>
+<p>Der Discord-Befehl <code>!twl</code> zeigt eine interaktive Rangliste der getrackten und beobachteten Deadlock-Streamer. Ausgewertet werden die Zuschauerzahlen der letzten 30 Tage; pro Streamer erscheinen Durchschnitt, Höchstwert und Anzahl der Messpunkte. Die Anzeige trennt aktive Partner der Community von sonstigen Deadlock-Streamern der Spielkategorie.</p>
+<h3 id="leaderboard-steuerung">Steuerung</h3>
+<p>Unter der Nachricht liegen Knöpfe, mit denen sich die Ansicht sofort umsortieren und filtern lässt, ohne den Befehl neu einzugeben:</p>
+<ul>
+<li>Sortierkriterium (Durchschnitts-Zuschauer, Messpunkte, Spitzenwert oder Name) und Reihenfolge (auf-/absteigend).</li>
+<li>Partner-Filter (alle, nur Partner, ohne Partner), eine Mindestzahl an Messpunkten, ein Mindest-Durchschnitt an Zuschauern und die Anzahl angezeigter Plätze.</li>
+<li>Knöpfe zum Neuladen, zum Zurücksetzen aller Filter und zum Schließen der Ansicht.</li>
+</ul>
+<p>Alternativ lassen sich Optionen direkt am Befehl angeben, z. B. <code>!twl samples=15 avg=25 partner=only sort=avg order=desc</code>. <code>!twl help</code> zeigt die verfügbaren Optionen.</p>
+<h3 id="leaderboard-grenzen">Grenzen</h3>
+<ul>
+<li>Funktioniert nur in den freigegebenen Discord-Statistik-Kanälen; anderswo nennt der Bot die erlaubten Kanäle.</li>
+<li>Nur wer den Befehl abgesetzt hat, kann die Knöpfe bedienen; nach längerer Inaktivität werden sie deaktiviert.</li>
+<li>Datenbasis sind die letzten 30 Tage — Streamer ohne aktuelle Messdaten tauchen nicht auf.</li>
+</ul>
+</section>
+
+<section id="partner-recruiting">
+<h2>Partner-Recruiting</h2>
+<p>Das Recruiting beobachtet im Hintergrund laufend, welche Streamer regelmäßig Deadlock spielen, aber noch nicht Teil der Community sind, erkennt geeignete Kandidaten und spricht sie an, sobald sie live sind. Der Bot folgt dem Kanal, tritt ihm bei und schickt dann eine einmalige, freundliche Vorstellungs-Nachricht in den Chat, die auf Details in der Bio verweist. Links werden nicht direkt in den Chat geschrieben. Jeder Kontaktversuch wird vermerkt; derselbe Streamer wird eine ganze Weile nicht erneut angesprochen.</p>
+<h3 id="recruiting-schutz">Schutz vor Spam-Wirkung</h3>
+<ul>
+<li>Pro Tag und pro Durchlauf gelten feste Obergrenzen, wie viele Streamer angesprochen werden; zwischen Nachrichten liegt eine Pause.</li>
+<li>Auch ein fehlgeschlagener Versuch setzt die Pause — niemand wird doppelt angeschrieben.</li>
+<li>Streamer auf internen Sperr-/Schutzlisten werden gar nicht erst als Kandidaten betrachtet.</li>
+<li>Größere Kanäle werden mit dieser Ansprache bewusst nicht angesprochen; die Einladung richtet sich an den kleineren bis mittleren Bereich.</li>
+</ul>
+<p>Nach welchen Kriterien jemand als geeignet gilt, ist bewusst nicht offengelegt, damit sich die Auswahl nicht gezielt austricksen lässt.</p>
+</section>
+
+<section id="voice-reaction">
+<h2>Voice-Reaction</h2>
+<p>Bei einem laufenden Stream nimmt der Bot einen kurzen Audio-Ausschnitt auf, wandelt ihn in Text um und lässt eine KI entscheiden, ob und wie er im Chat reagiert. So kann es wirken, als würde der Bot dem Stream tatsächlich zuhören. Zusätzlich reagiert er, wenn der Streamer den Bot direkt anschreibt oder per @-Erwähnung anspricht.</p>
+<h3 id="voice-sicherheit">Sicherheitsfilter</h3>
+<p>Jede mögliche Antwort läuft vor dem Senden durch einen Sicherheitsfilter, der Links, fremde Erwähnungen und zu lange Texte entfernt und unpassende Antworten ganz verwirft. Bleibt nichts Sinnvolles übrig, schweigt der Bot. Interessante Gesprächsverläufe kann er zusätzlich als Hinweis ins Discord-Team weiterleiten.</p>
+<h3 id="voice-grenzen">Grenzen</h3>
+<ul>
+<li>Standardmäßig ausgeschaltet; sie wird nur aktiv, wenn der Betreiber sie ausdrücklich einschaltet.</li>
+<li>Greift dann bei Streamern mit einem offenen Gesprächsfaden — etwa nach einer Recruiting-Ansprache oder einem Raid.</li>
+<li>Im Chat reagiert der Bot nur auf den Streamer selbst oder auf direkte @-Erwähnungen, nicht auf beliebige Zuschauer.</li>
+</ul>
+</section>
+
+<section id="einstellungen">
+<h2>Einstellungen</h2>
+<p>Das Leaderboard steuern Nutzer über die Knöpfe unter der Nachricht oder über Text-Optionen am Befehl. Partner-Recruiting und Voice-Reaction sind reine Betreiber-Funktionen und haben für einzelne Streamer keine sichtbaren Einstellungen.</p>
+</section>
+
+<section id="agent-hinweise">
+<h2>Hinweise für KI-Agenten &amp; Support</h2>
+<div class="box say"><strong>Der Agent darf sagen:</strong>
+<ul>
+<li>Wie das Leaderboard mit <code>!twl</code> aufgerufen und über Knöpfe bzw. Text-Optionen sortiert und gefiltert wird.</li>
+<li>Dass das Leaderboard die letzten 30 Tage betrachtet und Durchschnitt, Höchstwert und Messpunkte zeigt, getrennt nach Partnern und übrigen Streamern.</li>
+<li>Dass das Partner-Recruiting eine einmalige, freundliche Einladung ist, mit Verweis auf die Bio und ohne Links im Chat.</li>
+<li>Dass niemand doppelt angeschrieben wird, es harte Tageslimits gibt und größere Kanäle bewusst nicht angesprochen werden.</li>
+<li>Dass die Voice-Reaction standardmäßig aus ist, nur gezielt eingeschaltet wird und jede Antwort einen Sicherheitsfilter durchläuft.</li>
+</ul>
+</div>
+<div class="box nosay"><strong>Der Agent darf nicht sagen / offenlegen:</strong>
+<ul>
+<li>Die genauen Auswahlkriterien, Schwellen oder Zeitfenster des Recruitings (Regelmäßigkeit, Pausenlängen, exakte Limits).</li>
+<li>Interne Sperr-/Schutzlisten-Inhalte oder wie Kandidaten intern bewertet werden.</li>
+<li>Interne Filter-Regeln, Prompt-Inhalte, Modell- oder Infrastruktur-Details der Voice-Reaction.</li>
+<li>Zusicherungen, ob ein bestimmter Streamer kontaktiert wird oder wurde.</li>
+</ul>
+</div>
+<p>Bei Unsicherheit oder Verdacht auf Fehlentscheidung: an menschlichen Support eskalieren.</p>
+</section>
+
+<section id="weiter">
+<h2>Weiterführend</h2>
+<ul>
+<li><a href="../support/agent-guide.html">Agent-Leitfaden</a></li>
+<li><a href="../support/troubleshooting.html">Troubleshooting</a></li>
+<li><a href="../reference/glossary.html">Glossar</a></li>
+</ul>
+</section>
+
+<footer>Teil der agentenfreundlichen Doku des Deadlock Twitch Bot. Interne Mechanik ist bewusst abstrahiert — siehe <a href="../security/redaction-notes.html">Redaction Notes</a>.</footer>
+</main>
+</body>
+</html>

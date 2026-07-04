@@ -1,0 +1,132 @@
+<!doctype html>
+<html lang="de">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Glossar — Deadlock Twitch Bot</title>
+<style>
+:root{--fg:#1a1a1a;--bg:#fff;--muted:#555;--line:#ddd;--accent:#0a7d33;--box:#f6f8fa;--warn:#b00020;--ok:#0a7d33}
+@media(prefers-color-scheme:dark){:root{--fg:#e6e6e6;--bg:#141414;--muted:#a5a5a5;--line:#333;--box:#1e1e1e;--accent:#4ec978;--warn:#ff6b7a}}
+*{box-sizing:border-box}
+body{margin:0;font:16px/1.6 system-ui,-apple-system,Segoe UI,Roboto,sans-serif;color:var(--fg);background:var(--bg)}
+main{max-width:900px;margin:0 auto;padding:1.5rem}
+h1{font-size:1.8rem;line-height:1.25;margin:.2rem 0 1rem}
+h2{font-size:1.3rem;margin:2rem 0 .6rem;border-bottom:1px solid var(--line);padding-bottom:.3rem}
+a{color:var(--accent)}
+nav.crumbs{font-size:.85rem;margin-bottom:1rem;color:var(--muted)}
+p.summary{font-size:1.05rem;background:var(--box);border-left:4px solid var(--accent);padding:.8rem 1rem;border-radius:4px}
+dl{margin:1rem 0}
+dt{font-weight:600;margin-top:1rem}
+dd{margin:.15rem 0 0 0;color:var(--fg)}
+code{background:var(--box);padding:.1rem .3rem;border-radius:3px;font-size:.9em}
+footer{margin-top:3rem;padding-top:1rem;border-top:1px solid var(--line);font-size:.8rem;color:var(--muted)}
+</style>
+</head>
+<body>
+<main>
+<nav class="crumbs"><a href="../index.html">Startseite</a> › Referenz › Glossar</nav>
+<h1>Glossar</h1>
+<p class="summary">Einheitliche Begriffe, damit KI-Agenten konsistent formulieren. Einfach, eindeutig, ohne unnötige Fachsprache.</p>
+
+<section id="begriffe">
+<h2>Begriffe</h2>
+<dl>
+<dt>Partner-Netzwerk</dt>
+<dd>Der Zusammenschluss teilnehmender deutscher Deadlock-Streamer, die sich gegenseitig unterstützen (Raids, Sichtbarkeit, Schutz).</dd>
+
+<dt>Partner / teilnehmender Streamer</dt>
+<dd>Ein verifizierter Streamer, dessen Kanal vom Bot betreut wird.</dd>
+
+<dt>Raid</dt>
+<dd>Am Stream-Ende werden die eigenen Zuschauer gesammelt in einen anderen Kanal geschickt. Ein normaler Twitch-Mechanismus.</dd>
+
+<dt>Auto-Raid</dt>
+<dd>Ein vom Bot automatisch am Stream-Ende ausgelöster Raid auf einen passenden, live spielenden Deadlock-Partner. Pro Streamer ein-/ausschaltbar und an eine erteilte Berechtigung gebunden.</dd>
+
+<dt>Manueller Raid</dt>
+<dd>Ein vom Streamer selbst gestarteter Raid. Der Bot mischt sich nur ein, um Raids auf gesperrte Kanäle zu verhindern.</dd>
+
+<dt>Raid-Sperrliste (Raid-Blacklist)</dt>
+<dd>Kanäle, die nicht als Raid-Ziel unterstützt werden. Manuelle Raids dorthin versucht der Bot abzubrechen.</dd>
+
+<dt>Raid Boost</dt>
+<dd>Bezahltes Feature: der eigene Kanal wird im Netzwerk bevorzugt als Raid-Ziel vorgeschlagen.</dd>
+
+<dt>Go-Live-Ankündigung</dt>
+<dd>Discord-Nachricht, die der Bot postet, wenn ein Partner mit Deadlock live geht. Wird beim Stream-Ende in eine Offline-/VOD-Ansicht umgewandelt.</dd>
+
+<dt>Live-Ping-Rolle</dt>
+<dd>Optionale Discord-Rolle, die Community-Mitglieder abonnieren können, um beim Go-Live benachrichtigt zu werden.</dd>
+
+<dt>VOD</dt>
+<dd>Video on Demand — der aufgezeichnete Mitschnitt eines beendeten Streams.</dd>
+
+<dt>Auto-Moderation</dt>
+<dd>Die durchgehend aktive, konservativ ausgelegte automatische Chat-Moderation in jedem betreuten Kanal (Spam-/Bot-Entfernung).</dd>
+
+<dt>Spam-/Bot-Erkennung</dt>
+<dd>Automatisches Erkennen und Entfernen von Werbe-Spam und Fake-/Viewer-Bots. Bewusst konservativ, damit echte Zuschauer praktisch nie getroffen werden.</dd>
+
+<dt>Netzwerkweite Bannliste (Global Ban)</dt>
+<dd>Bekannte Störer werden über alle Partner-Kanäle hinweg ferngehalten.</dd>
+
+<dt>Scam-/Fake-Server-Warnung</dt>
+<dd>Vorsichtiger Chat-Hinweis vor gefälschten „offiziellen" Servern und verdächtigen Fremd-Angeboten.</dd>
+
+<dt>Lurker</dt>
+<dd>Stille Mitleser im Chat, die zusehen, aber nicht schreiben.</dd>
+
+<dt>Lurker-Steuer-Erinnerung</dt>
+<dd>Bezahltes, schaltbares Feature: der Bot erinnert bekannte, anwesende Lurker sanft im Chat.</dd>
+
+<dt>AI-Chat-Engagement</dt>
+<dd>Eine ruhige Plauder-KI, die an laufende Gespräche andockt. Aktuell im beobachtenden Shadow-Modus.</dd>
+
+<dt>Shadow-Modus</dt>
+<dd>Ein Beobachtungs-/Testbetrieb, in dem eine Funktion mitläuft, aber (noch) nicht sichtbar in den Chat schreibt.</dd>
+
+<dt>Highlight-Clipper</dt>
+<dd>Erkennt gute Spielmomente in Deadlock-Matches und schneidet daraus automatisch Clips.</dd>
+
+<dt>Social-Media-Upload</dt>
+<dd>Aus freigegebenen Clips erzeugte Kurzvideos für TikTok, Instagram und YouTube. Vor dem Upload steht ein Freigabe-/Review-Schritt.</dd>
+
+<dt>KI-Titelgenerator</dt>
+<dd>Schlägt Stream-Titel auf Basis der eigenen Historie vor.</dd>
+
+<dt>Analyse-Dashboard</dt>
+<dd>Weboberfläche, die gesammelte Stream-Daten in Kennzahlen, Diagramme und Coaching-Empfehlungen übersetzt.</dd>
+
+<dt>Coaching-Empfehlung</dt>
+<dd>Datenbasierte Hinweise zur Kanal-Entwicklung (keine Zuschauer-Garantie).</dd>
+
+<dt>Plan / Plan-Stufe</dt>
+<dd>Der aktive Funktionsumfang eines Streamers. Es ist immer genau ein Plan aktiv; kostenlose Basis plus optionale bezahlte Pläne.</dd>
+
+<dt>Plan-Override <span style="font-size:.7rem">intern</span></dt>
+<dd>Ein vom Betreiber-Team manuell gesetzter Plan, der Vorrang vor dem regulären Abo hat (für Kulanz/Reparatur).</dd>
+
+<dt>Affiliate / Empfehlungs-Programm</dt>
+<dd>Wer andere Streamer wirbt und zuordnet, verdient eine Provision auf deren bezahlte Abos.</dd>
+
+<dt>Dashboard (Streamer)</dt>
+<dd>Selbstbedien-Oberfläche eines Streamers für den eigenen Kanal.</dd>
+
+<dt>Admin-Dashboard <span style="font-size:.7rem">intern</span></dt>
+<dd>Betreiber-Oberfläche zur Verwaltung des gesamten Netzwerks. Für normale Streamer unsichtbar.</dd>
+
+<dt>Verifizierung</dt>
+<dd>Bestätigung durch das Team, dass ein aufgenommener Streamer als Partner betreut wird.</dd>
+
+<dt>Testphase</dt>
+<dd>Zeitlich begrenzter erweiterter Zugang für neue Nutzer; danach ohne Abo Rückfall auf den kostenlosen Plan.</dd>
+
+<dt>Interne Kriterien / systemseitige Bewertung</dt>
+<dd>Sammelbegriff für bewusst nicht offengelegte Entscheidungslogik (z. B. Raid-Zielauswahl, Spam-Bewertung). Der Agent nennt nur den fachlichen Effekt.</dd>
+</dl>
+</section>
+
+<footer>Teil der agentenfreundlichen Doku des Deadlock Twitch Bot. Interne Mechanik ist bewusst abstrahiert — siehe <a href="../security/redaction-notes.html">Redaction Notes</a>.</footer>
+</main>
+</body>
+</html>

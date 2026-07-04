@@ -1,0 +1,176 @@
+<!doctype html>
+<html lang="de">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Modul: Chat-Moderation & Befehle — Deadlock Twitch Bot</title>
+<style>
+:root{--fg:#1a1a1a;--bg:#fff;--muted:#555;--line:#ddd;--accent:#0a7d33;--box:#f6f8fa;--warn:#b00020;--ok:#0a7d33}
+@media(prefers-color-scheme:dark){:root{--fg:#e6e6e6;--bg:#141414;--muted:#a5a5a5;--line:#333;--box:#1e1e1e;--accent:#4ec978;--warn:#ff6b7a}}
+*{box-sizing:border-box}
+body{margin:0;font:16px/1.6 system-ui,-apple-system,Segoe UI,Roboto,sans-serif;color:var(--fg);background:var(--bg)}
+main{max-width:900px;margin:0 auto;padding:1.5rem}
+h1{font-size:1.8rem;line-height:1.25;margin:.2rem 0 1rem}
+h2{font-size:1.35rem;margin:2.2rem 0 .6rem;border-bottom:1px solid var(--line);padding-bottom:.3rem}
+h3{font-size:1.08rem;margin:1.4rem 0 .4rem}
+a{color:var(--accent)}
+nav.crumbs{font-size:.85rem;margin-bottom:1rem;color:var(--muted)}
+p.summary{font-size:1.05rem;background:var(--box);border-left:4px solid var(--accent);padding:.8rem 1rem;border-radius:4px}
+table{border-collapse:collapse;width:100%;margin:1rem 0;font-size:.95rem}
+th,td{border:1px solid var(--line);padding:.5rem .6rem;text-align:left;vertical-align:top}
+th{background:var(--box)}
+code{background:var(--box);padding:.1rem .3rem;border-radius:3px;font-size:.9em}
+ul,ol{padding-left:1.3rem}
+.box{background:var(--box);border:1px solid var(--line);border-radius:6px;padding:.7rem 1rem;margin:1rem 0}
+.say{border-left:4px solid var(--ok)}
+.nosay{border-left:4px solid var(--warn)}
+.tag{display:inline-block;font-size:.72rem;font-weight:600;padding:.1rem .5rem;border-radius:10px;background:var(--box);border:1px solid var(--line)}
+footer{margin-top:3rem;padding-top:1rem;border-top:1px solid var(--line);font-size:.8rem;color:var(--muted)}
+</style>
+</head>
+<body>
+<main>
+<nav class="crumbs"><a href="../index.html">Startseite</a> › Module › Chat-Moderation &amp; Befehle</nav>
+<h1>Modul: Chat-Moderation &amp; Befehle</h1>
+<p class="summary">Dieses Modul beschreibt, was der Bot als eigener Twitch-Account in Partner-Kanälen im Chat tut: automatische Moderation, Community-Hinweise, Fake-Server-Warnungen, die „Lurker Steuer“ und die verfügbaren Chat-Befehle mit ihren Rechten.</p>
+
+<section id="worum-es-geht">
+<h2>Worum es geht</h2>
+<p>Der Bot ist als eigener Twitch-Account in den Kanälen der Partner-Streamer aktiv. Er moderiert den Chat automatisch, schützt vor Werbe- und Viewer-Bots, postet gelegentlich Community-Hinweise, warnt vor verdächtigen Fremd-Angeboten und reagiert auf eine Reihe von Chat-Befehlen. Diese Seite beschreibt, was Zuschauer, Mods und Streamer im Chat tatsächlich sehen und bedienen können.</p>
+</section>
+
+<section id="was-der-bot-tut">
+<h2>Was der Bot tut</h2>
+<ul>
+<li><strong>Moderiert automatisch und durchgehend.</strong> Die Moderation läuft immer mit und lässt sich nicht pausieren oder in der Schärfe verändern – sie ist bewusst ein fester Schutz.</li>
+<li><strong>Schützt vor Werbe- und Viewer-Bots.</strong> Typische Spam- und Bot-Nachrichten werden erkannt und entfernt; bei klaren Treffern wird die Nachricht gelöscht und der Absender gebannt.</li>
+<li><strong>Erkennt Verschleierungs-Tricks.</strong> Verändern Spammer ihre Nachrichten, um einfache Filter zu umgehen, durchschaut der Bot solche Versuche.</li>
+<li><strong>Warnt vor verdächtigen Fremd-Angeboten (Fake-Server-Warnung).</strong> Bei einem mutmaßlichen Anwerbe-/Betrugsversuch postet der Bot einen kurzen, vorsichtig formulierten Hinweis.</li>
+<li><strong>Postet Community-Hinweise (Promos).</strong> In größeren Abständen und nur bei Chat-Betrieb verweist der Bot auf den Community-Discord des Streamers.</li>
+<li><strong>Trackt anwesende Zuschauer (Presence).</strong> Der Bot merkt sich, wer anwesend ist, auch ohne dass die Person schreibt – Grundlage u. a. für die Lurker Steuer.</li>
+<li><strong>Reagiert auf Chat-Befehle.</strong> Streamer, Mods und Zuschauer können den Bot über Befehle steuern oder abfragen.</li>
+<li><strong>Reagiert gelegentlich auf „Danke“.</strong> Eine optionale, zurückhaltende Spielerei mit frecher Kurzantwort in laufenden Deadlock-Streams.</li>
+</ul>
+</section>
+
+<section id="wann-es-passiert">
+<h2>Wann es passiert</h2>
+<ul>
+<li><strong>Moderation:</strong> bei jeder eingehenden Chat-Nachricht in einem betreuten Kanal, unabhängig davon, ob der Stream live ist.</li>
+<li><strong>Bann/Löschung:</strong> nur bei einem eindeutigen Spam-/Bot-Treffer. Die Erkennung verdichtet mehrere Hinweise zu einer Gesamteinschätzung und ist bewusst konservativ, sodass echte Zuschauer praktisch nie fälschlich getroffen werden.</li>
+<li><strong>Fake-Server-Warnung:</strong> bei Verhalten, das auf einen Betrugsversuch hindeutet. Die genauen Auslöse-Kriterien sind bewusst nicht öffentlich.</li>
+<li><strong>Promos:</strong> im laufenden Stream in größeren Abständen und nur bei genügend frischer Chat-Aktivität. Steht eine Fake-Server-Warnung an, ersetzt sie in diesem Moment die Promo.</li>
+<li><strong>Befehle:</strong> wirken sofort; bei rechte-beschränkten Befehlen prüft der Bot vorher die Berechtigung.</li>
+</ul>
+</section>
+
+<section id="was-nutzer-sehen">
+<h2>Was Streamer und Zuschauer sehen</h2>
+<ul>
+<li><strong>Bei einem Bann:</strong> Die Spam-Nachricht verschwindet, der Absender ist gebannt. Standardmäßig hinterlässt der Bot eine kurze Notiz im Chat; diese lässt sich per <code>!silentban</code> abschalten. Der Bann selbst bleibt immer aktiv.</li>
+<li><strong>Bei einer Fake-Server-Warnung:</strong> Eine kurze, vorsichtig formulierte Hinweis-Nachricht; der Wortlaut wechselt, damit nie zweimal hintereinander derselbe Text erscheint.</li>
+<li><strong>Bei einer Promo:</strong> Eine kurze, locker formulierte Nachricht mit Verweis auf den Community-Discord.</li>
+<li><strong>Keine Links im Chat:</strong> Da Twitch-AutoMod fremde Links oft blockt, verweist der Bot in automatischen Nachrichten über Bio/Einlade-Mechanismus statt nackter URLs. Befehle wie <code>!dldc</code> oder <code>!invite</code>, bei denen ein Zuschauer aktiv nach dem Link fragt, geben ihn direkt aus.</li>
+<li><strong>Bei Befehlen:</strong> eine direkte Antwort des Bots, meist mit <code>@Name</code> an die auslösende Person.</li>
+</ul>
+</section>
+
+<section id="befehle">
+<h2>Befehlsübersicht</h2>
+<p>Rechte: „Broadcaster“ = der Streamer selbst, „Mods“ = Moderatoren des Kanals, „Alle“ = jeder Zuschauer. Befehle funktionieren nur in als Partner registrierten Kanälen; sonst weist der Bot darauf hin oder bleibt still.</p>
+<table>
+<thead><tr><th>Befehl (Aliase)</th><th>Recht</th><th>Wirkung</th></tr></thead>
+<tbody>
+<tr><td><code>!ping</code> (<code>!health</code>, <code>!status</code>, <code>!bot</code>)</td><td>Alle</td><td>Prüft, ob der Bot online ist; lockere „Ich lebe noch“-Meldung.</td></tr>
+<tr><td><code>!clip</code> (<code>!createclip</code>)</td><td>Alle</td><td>Erstellt einen Clip aus dem aktuellen Stream (rund letzte 60 s), optional mit Titel; antwortet mit Link.</td></tr>
+<tr><td><code>!dldc</code> (<code>!dlde</code>)</td><td>Alle</td><td>Gibt den hinterlegten Discord-Invite des Streamers aus.</td></tr>
+<tr><td><code>!invite</code></td><td>Alle</td><td>Gibt im laufenden Deadlock-Stream den Community-Discord-Link aus; pro Person und Kanal nur einmal innerhalb eines Zeitfensters.</td></tr>
+<tr><td><code>!raid_status</code> (<code>!raidbot_status</code>)</td><td>Alle</td><td>Zeigt, ob Auto-Raid aktiv ist, plus kurze Statistik und letzten Raid.</td></tr>
+<tr><td><code>!raid_history</code> (<code>!raidbot_history</code>)</td><td>Alle</td><td>Zeigt die letzten Raids des Kanals.</td></tr>
+<tr><td><code>!engagement_status</code></td><td>Alle</td><td>Zeigt, ob der AI-Engagement-Layer an/aus ist und wann er zuletzt aktiv war.</td></tr>
+<tr><td><code>!engagement_ignore_me</code></td><td>Alle</td><td>Persönliches Opt-out: Die AI ignoriert die Nachrichten der Person.</td></tr>
+<tr><td><code>!engagement_remember_me</code></td><td>Alle</td><td>Nimmt das persönliche Opt-out zurück.</td></tr>
+<tr><td><code>!raid_enable</code> (<code>!raidbot</code>)</td><td>Broadcaster/Mods</td><td>Aktiviert den Auto-Raid; weist bei fehlender Autorisierung auf den Anmelde-Link hin.</td></tr>
+<tr><td><code>!raid</code> (<code>!traid</code>)</td><td>Broadcaster/Mods</td><td>Startet sofort einen Raid auf den passendsten Partner; nur bei Deadlock-Stream und verfügbarem Ziel.</td></tr>
+<tr><td><code>!uban</code> (<code>!unban</code>)</td><td>Broadcaster/Mods</td><td>Hebt den letzten automatischen Bann im Kanal auf.</td></tr>
+<tr><td><code>!silentban</code></td><td>Broadcaster/Mods</td><td>Schaltet die Chat-Notiz bei Auto-Bans an/aus (Bans laufen weiter).</td></tr>
+<tr><td><code>!silentraid</code></td><td>Broadcaster/Mods</td><td>Schaltet die Chat-Ansage bei Raids an/aus (Raids laufen weiter).</td></tr>
+<tr><td><code>!title</code> (<code>!titel</code>)</td><td>Broadcaster/Mods</td><td>Generiert einen Titelvorschlag (Haupt- und ggf. Alternativvorschläge); <code>--live</code> bezieht den Live-Status ein.</td></tr>
+<tr><td><code>!engagement_on</code> / <code>!engagement_off</code></td><td>Broadcaster/Mods (auch Super-Mod)</td><td>Schaltet den AI-Engagement-Layer ein/aus; schaltet sich bei Stream-Ende automatisch ab.</td></tr>
+<tr><td><code>!lurkersteuer_off</code> (<code>!lurkersteuer_aus</code>, <code>!lurker_tax_off</code>)</td><td>Nur Broadcaster</td><td>Deaktiviert die Lurker Steuer dauerhaft; Reaktivierung nur über den Abo-Bereich im Dashboard.</td></tr>
+</tbody>
+</table>
+</section>
+
+<section id="lurker-steuer">
+<h2>Lurker Steuer</h2>
+<p>Die „Lurker Steuer“ ist eine optionale Funktion für bezahlte Pläne. Sie erinnert bekannte, gerade anwesende Dauer-Zuschauer sanft im Chat. Der Ton bleibt bewusst weich, ohne Druck oder Bloßstellen; es werden keine Punktestände oder Belohnungs-Kosten behauptet.</p>
+<ul>
+<li><strong>Wann:</strong> nur im laufenden Stream, nur bei bezahltem Plan, nur wenn eingeschaltet und die nötigen Anwesenheits-Daten vorliegen.</li>
+<li><strong>Wen:</strong> aktuell still anwesende Personen mit erkennbarer Lurk-Historie auf diesem Kanal.</li>
+<li><strong>Wie oft:</strong> pro Live-Session dieselbe Person nur einmal, höchstens zwei Namen pro Erinnerung. Sie teilt sich den Sende-Rhythmus der Promo-/Discord-Nachrichten.</li>
+</ul>
+</section>
+
+<section id="einstellungen">
+<h2>Was Streamer einstellen können</h2>
+<ul>
+<li><strong>Auto-Ban-Benachrichtigung</strong> im Chat an/aus: <code>!silentban</code>.</li>
+<li><strong>Raid-Benachrichtigung</strong> im Chat an/aus: <code>!silentraid</code>.</li>
+<li><strong>Auto-Raid</strong> an/aus: <code>!raid_enable</code> bzw. Dashboard (Bot muss autorisiert sein).</li>
+<li><strong>AI-Engagement-Layer</strong> pro Kanal an/aus: <code>!engagement_on</code> / <code>!engagement_off</code>.</li>
+<li><strong>Lurker Steuer</strong> abschalten per <code>!lurkersteuer_off</code>, wieder einschalten im Abo-Bereich des Dashboards.</li>
+<li><strong>Eigene Promo-Nachricht:</strong> über das Dashboard hinterlegbar (maximal 500 Zeichen, muss den Platzhalter <code>{invite}</code> enthalten).</li>
+<li><strong>Nicht einstellbar:</strong> die automatische Moderation selbst. Sie ist immer an; nur die Chat-Notiz zu Bans ist abschaltbar, nicht der Schutz.</li>
+</ul>
+</section>
+
+<section id="grenzen">
+<h2>Grenzen &amp; Sonderfälle</h2>
+<ul>
+<li><strong>Nur Partner-Kanäle:</strong> Befehle und Moderation greifen nur in registrierten Kanälen.</li>
+<li><strong>Bot braucht Rechte:</strong> Ohne die nötigen Rechte (z. B. Mod-Status) stellt der Bot das Senden im Kanal automatisch ein, statt vergeblich weiterzuversuchen.</li>
+<li><strong>Re-Autorisierung:</strong> Für manche Aktionen muss die Autorisierung aktuell sein; ist eine Neu-Autorisierung fällig, weist der Bot darauf hin.</li>
+<li><code>!raid</code> <strong>ist an Deadlock gebunden</strong> und funktioniert nur mit passendem Live-Ziel.</li>
+<li><strong>Fehlbann sehr selten, Korrektur da:</strong> Die Moderation ist konservativ; ein versehentlicher Treffer lässt sich mit <code>!uban</code> sofort zurücknehmen.</li>
+<li><strong>AI-Engagement endet mit dem Stream</strong> und muss bei Bedarf erneut aktiviert werden.</li>
+</ul>
+</section>
+
+<section id="agent-hinweise">
+<h2>Hinweise für KI-Agenten &amp; Support</h2>
+<div class="box say"><strong>Der Agent darf sagen:</strong>
+<ul>
+<li>Dass die automatische Moderation immer an ist und sich nicht abschalten oder in der Schärfe verändern lässt – nur die Chat-Notiz zu Bans (<code>!silentban</code>).</li>
+<li>Dass Auto-Bans nur bei eindeutigen Spam-/Bot-Treffern erfolgen und mit <code>!uban</code> rückgängig gemacht werden können.</li>
+<li>Welche Befehle es gibt, welche Rechte sie brauchen und was sie bewirken.</li>
+<li>Dass automatische Nachrichten keine nackten Links posten (AutoMod), Zuschauer aber per <code>!dldc</code>/<code>!invite</code> den Link direkt erhalten.</li>
+<li>Dass die Lurker Steuer nur in bezahlten Plänen läuft und ihre Reaktivierung übers Dashboard erfolgt.</li>
+</ul>
+</div>
+<div class="box nosay"><strong>Der Agent darf nicht sagen / offenlegen:</strong>
+<ul>
+<li>Die genauen Signale, Gewichtungen oder Schwellen der Spam-/Bot- oder Fake-Server-Erkennung.</li>
+<li>Exakte Abstände, Zeitfenster oder Häufigkeiten von Promos, Warnungen oder Lurker-Erinnerungen.</li>
+<li>Interne Auslöse-Bedingungen der Fake-Server-Warnung als exakte Regeln.</li>
+<li>Secrets, Tokens oder interne Kanal-/Infrastruktur-Details des Bot-Accounts.</li>
+</ul>
+</div>
+<p>Bei Unsicherheit oder Verdacht auf Fehlentscheidung: an menschlichen Support eskalieren.</p>
+</section>
+
+<section id="verwandte-seiten">
+<h2>Verwandte Seiten</h2>
+<ul>
+<li><a href="../workflows/spam-moderation-flow.html">Workflow: Spam- &amp; Moderations-Ablauf</a></li>
+<li><a href="spam-bot-detection.html">Modul: Spam- &amp; Bot-Erkennung</a></li>
+<li><a href="network-protection.html">Modul: Netzwerk-Schutz (Bannliste &amp; Scam-Warnung)</a></li>
+<li><a href="raids.html">Modul: Raids</a></li>
+<li><a href="../support/agent-guide.html">Agenten-Leitfaden</a></li>
+</ul>
+</section>
+
+<footer>Teil der agentenfreundlichen Doku des Deadlock Twitch Bot. Interne Mechanik ist bewusst abstrahiert — siehe <a href="../security/redaction-notes.html">Redaction Notes</a>.</footer>
+</main>
+</body>
+</html>

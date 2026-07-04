@@ -1,0 +1,121 @@
+<!doctype html>
+<html lang="de">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Modul: Stream-Coaching-Audit (intern) — Deadlock Twitch Bot</title>
+<style>
+:root{--fg:#1a1a1a;--bg:#fff;--muted:#555;--line:#ddd;--accent:#0a7d33;--box:#f6f8fa;--warn:#b00020;--ok:#0a7d33}
+@media(prefers-color-scheme:dark){:root{--fg:#e6e6e6;--bg:#141414;--muted:#a5a5a5;--line:#333;--box:#1e1e1e;--accent:#4ec978;--warn:#ff6b7a}}
+*{box-sizing:border-box}
+body{margin:0;font:16px/1.6 system-ui,-apple-system,Segoe UI,Roboto,sans-serif;color:var(--fg);background:var(--bg)}
+main{max-width:900px;margin:0 auto;padding:1.5rem}
+h1{font-size:1.8rem;line-height:1.25;margin:.2rem 0 1rem}
+h2{font-size:1.35rem;margin:2.2rem 0 .6rem;border-bottom:1px solid var(--line);padding-bottom:.3rem}
+h3{font-size:1.08rem;margin:1.4rem 0 .4rem}
+a{color:var(--accent)}
+nav.crumbs{font-size:.85rem;margin-bottom:1rem;color:var(--muted)}
+p.summary{font-size:1.05rem;background:var(--box);border-left:4px solid var(--accent);padding:.8rem 1rem;border-radius:4px}
+table{border-collapse:collapse;width:100%;margin:1rem 0;font-size:.95rem}
+th,td{border:1px solid var(--line);padding:.5rem .6rem;text-align:left;vertical-align:top}
+th{background:var(--box)}
+code{background:var(--box);padding:.1rem .3rem;border-radius:3px;font-size:.9em}
+ul,ol{padding-left:1.3rem}
+.box{background:var(--box);border:1px solid var(--line);border-radius:6px;padding:.7rem 1rem;margin:1rem 0}
+.say{border-left:4px solid var(--ok)}
+.nosay{border-left:4px solid var(--warn)}
+.tag{display:inline-block;font-size:.72rem;font-weight:600;padding:.1rem .5rem;border-radius:10px;background:var(--box);border:1px solid var(--line)}
+footer{margin-top:3rem;padding-top:1rem;border-top:1px solid var(--line);font-size:.8rem;color:var(--muted)}
+</style>
+</head>
+<body>
+<main>
+<nav class="crumbs"><a href="../index.html">Startseite</a> › Module › Stream-Coaching-Audit</nav>
+<h1>Modul: Stream-Coaching-Audit <span class="tag">intern</span></h1>
+<p class="summary">Der Stream-Coaching-Audit ist ein internes Admin-Werkzeug, mit dem das Team eine ausdrücklich freigegebene Twitch-Aufnahme auf problematische Sprache (v. a. Slurs) prüft. Es entsteht ein privates Protokoll mit Zeitstempeln als Grundlage für ein Coaching-Gespräch oder eine Partner-Prüfung. Das Werkzeug moderiert nichts automatisch und veröffentlicht nichts.</p>
+
+<section id="worum-es-geht">
+<h2>Worum es geht</h2>
+<p>Das Werkzeug prüft ausschließlich <strong>ausdrücklich autorisierte</strong> Aufnahmen auf heikle gesprochene Äußerungen und liefert ein belegbares, privates Protokoll. Es verhängt keine Sanktionen, bannt und verwarnt niemanden und postet nichts öffentlich — es liefert nur Belege für eine menschliche Entscheidung.</p>
+</section>
+
+<section id="ablauf">
+<h2>Ablauf (fachlich)</h2>
+<ul>
+<li>Nimmt von einer freigegebenen Quelle einen Ausschnitt auf — ein fertiges Twitch-VOD oder einen kurzen, zeitlich begrenzten Mitschnitt eines laufenden Live-Streams.</li>
+<li>Verarbeitet ausschließlich den <strong>Ton</strong> (kein Video) und wandelt ihn in Text um (Transkription).</li>
+<li>Prüft das Transkript in mehreren Stufen: zuerst über lokale, treffsichere Regeln, danach optional über eine zusätzliche KI-Kontextprüfung, die weichere Grenzfälle einordnet.</li>
+<li>Erstellt ein privates Protokoll, in dem jede Fundstelle mit Zeitpunkt und — bei VODs — einem direkten Sprunglink hinterlegt ist.</li>
+<li>Stellt das Ergebnis nur bei tatsächlichen Funden zu (private Nachricht ans Team). Gibt es nichts zu melden, bleibt es still.</li>
+<li>Räumt Roh-Audio- und Zwischendateien nach dem Lauf wieder weg; dauerhaft gespeichert wird nur das private Protokoll.</li>
+</ul>
+</section>
+
+<section id="ausloeser">
+<h2>Auslöser &amp; Modi</h2>
+<table>
+<thead>
+<tr><th>Modus</th><th>Verhalten</th></tr>
+</thead>
+<tbody>
+<tr><td>Manueller VOD-Audit</td><td>Nachträgliche Prüfung eines bestehenden VODs (z. B. Nachbesprechung), mit direkten Sprunglinks auf die Fundstellen.</td></tr>
+<tr><td>Live-Beobachtung</td><td>Schneidet einen laufenden Stream in kurzen Abschnitten mit, transkribiert und prüft fortlaufend; neue Funde erscheinen mit geringer Verzögerung. Beim Start geht eine kurze private Status-Nachricht ans Team.</td></tr>
+<tr><td>Archiv-Weg</td><td>Ein Mitschnitt/VOD wird privat zur automatischen Untertitelung abgelegt und das Ergebnis geprüft; plattformseitig zensierte Stellen werden lokal nachgeprüft, damit der echte Wortlaut ins Protokoll gelangt.</td></tr>
+</tbody>
+</table>
+<p>Ist ein zu beobachtender Kanal gerade offline, wartet die Beobachtung von selbst auf den nächsten Live-Start, statt abzubrechen.</p>
+</section>
+
+<section id="sichtbarkeit">
+<h2>Sichtbarkeit</h2>
+<ul>
+<li>Zuschauer im Twitch-Chat sehen davon nichts; es wird nichts öffentlich geschrieben oder veröffentlicht.</li>
+<li>Streamer und reguläre Zuschauer bemerken im laufenden Betrieb in der Regel nichts — es ist eine interne Prüfung, kein sichtbares Feature.</li>
+<li>Sichtbar ist das Ergebnis nur für das Team: ein privates Protokoll und, nur bei Funden, eine private Nachricht mit Fundstellen, Zeitpunkten und ggf. Sprunglinks.</li>
+</ul>
+</section>
+
+<section id="datenschutz">
+<h2>Datenschutz</h2>
+<ul>
+<li>Ein Audit läuft nur auf ausdrücklich freigegebenen Aufnahmen — die Autorisierung ist Pflicht und kein Standardverhalten.</li>
+<li>Es wird kein vollständiges Rohtranskript dauerhaft aufbewahrt; Roh-Audio- und Zwischendateien werden nach dem Lauf entfernt. Dauerhaft bleibt nur das private Protokoll mit den Fundstellen.</li>
+<li>Heikle Begriffe werden für die breiter sichtbaren Ausgabewege maskiert. Den unmaskierten Klartext-Beleg gibt es ausschließlich im streng privaten, zugriffsbeschränkten Admin-Protokoll — damit ein Fund nachprüfbar bleibt.</li>
+<li>Eine Übertragung von Ton oder Text an externe Dienste (Transkription oder zusätzliche KI-Prüfung) ist nicht automatisch aktiv, sondern muss pro Lauf gesondert freigegeben werden. Standardmäßig läuft die Transkription lokal.</li>
+<li>Protokolle sind privat und nicht zum Teilen bestimmt.</li>
+</ul>
+</section>
+
+<section id="grenzen">
+<h2>Grenzen &amp; Sonderfälle</h2>
+<ul>
+<li><strong>Keine automatischen Maßnahmen:</strong> Das Werkzeug sanktioniert niemanden; jede Konsequenz entscheidet ein Mensch nach manueller Prüfung.</li>
+<li><strong>Funde sind Hinweise, keine Urteile:</strong> Transkription und KI-Einordnung können sich irren (verhörte Wörter, falsch eingeordneter Kontext). Jede Fundstelle ist am echten Aufnahme-Kontext manuell gegenzuprüfen.</li>
+<li><strong>Nur gesprochene Sprache:</strong> Bildinhalte, Texteinblendungen oder reiner Chat-Text sind nicht Gegenstand der Prüfung.</li>
+<li><strong>Stille ist das Normalergebnis:</strong> Kein Fund bedeutet keine Nachricht — ausbleibende Meldungen heißen nicht, dass etwas defekt ist.</li>
+<li><strong>Abschnittsweise Live-Prüfung:</strong> Eine Äußerung genau an einer Abschnittsgrenze kann theoretisch ungünstig fallen; für die belastbare Auswertung dient ohnehin die VOD-/Archiv-Prüfung mit Sprunglinks.</li>
+<li><strong>Prüfmechanik bewusst abstrahiert:</strong> Ab wann eine Stelle als auffällig gilt, ist bewusst nicht im Detail dokumentiert. Die lokalen Regeln sind auf hohe Treffsicherheit ausgelegt; die KI-Prüfung fängt weichere Grenzfälle ab.</li>
+</ul>
+</section>
+
+<section id="agent-hinweise">
+<h2>Hinweise für KI-Agenten &amp; Support</h2>
+<div class="box say"><strong>Der Agent darf sagen:</strong><ul>
+<li>Dass es ein internes Werkzeug ist, das nur auf ausdrücklich freigegebenen Aufnahmen läuft und nichts öffentlich postet.</li>
+<li>Dass keine automatischen Sanktionen erfolgen — es liefert nur Belege für eine menschliche Entscheidung.</li>
+<li>Dass nur der Ton geprüft wird, Rohdateien nach dem Lauf gelöscht werden und dauerhaft nur ein privates Protokoll bleibt.</li>
+<li>Dass „keine Meldung" das erwartete Normalergebnis ist und kein Fehler.</li>
+</ul></div>
+<div class="box nosay"><strong>Der Agent darf nicht sagen / offenlegen:</strong><ul>
+<li>Die genauen Kriterien, Schwellen, Regeln oder Zeitfenster, ab wann eine Stelle als auffällig gilt.</li>
+<li>Welche konkreten Begriffe geprüft werden oder wie die Maskierung/Nachprüfung technisch funktioniert.</li>
+<li>Welche externen Dienste beteiligt sind, Speicherorte, Zugriffswege oder Infrastruktur-Details des privaten Protokolls.</li>
+<li>Inhalte einzelner Funde oder unmaskierten Klartext.</li>
+</ul></div>
+<p>Bei Unsicherheit oder Verdacht auf Fehlentscheidung: an menschlichen Support eskalieren.</p>
+</section>
+
+<footer>Teil der agentenfreundlichen Doku des Deadlock Twitch Bot. Interne Mechanik ist bewusst abstrahiert — siehe <a href="../security/redaction-notes.html">Redaction Notes</a>. Verwandt: <a href="../support/agent-guide.html">Agent-Leitfaden</a>, <a href="../reference/states-and-errors.html">Zustände &amp; Fehler</a>, <a href="../reference/glossary.html">Glossar</a>.</footer>
+</main>
+</body>
+</html>

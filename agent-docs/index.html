@@ -1,0 +1,128 @@
+<!doctype html>
+<html lang="de">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Deadlock Twitch Bot — Doku-Übersicht</title>
+<style>
+:root{--fg:#1a1a1a;--bg:#fff;--muted:#555;--line:#ddd;--accent:#0a7d33;--box:#f6f8fa;--warn:#b00020;--ok:#0a7d33}
+@media(prefers-color-scheme:dark){:root{--fg:#e6e6e6;--bg:#141414;--muted:#a5a5a5;--line:#333;--box:#1e1e1e;--accent:#4ec978;--warn:#ff6b7a}}
+*{box-sizing:border-box}
+body{margin:0;font:16px/1.6 system-ui,-apple-system,Segoe UI,Roboto,sans-serif;color:var(--fg);background:var(--bg)}
+main{max-width:900px;margin:0 auto;padding:1.5rem}
+h1{font-size:1.9rem;line-height:1.25;margin:.2rem 0 1rem}
+h2{font-size:1.35rem;margin:2.2rem 0 .6rem;border-bottom:1px solid var(--line);padding-bottom:.3rem}
+h3{font-size:1.08rem;margin:1.4rem 0 .4rem}
+a{color:var(--accent)}
+p.summary{font-size:1.05rem;background:var(--box);border-left:4px solid var(--accent);padding:.8rem 1rem;border-radius:4px}
+table{border-collapse:collapse;width:100%;margin:1rem 0;font-size:.95rem}
+th,td{border:1px solid var(--line);padding:.5rem .6rem;text-align:left;vertical-align:top}
+th{background:var(--box)}
+code{background:var(--box);padding:.1rem .3rem;border-radius:3px;font-size:.9em}
+ul,ol{padding-left:1.3rem}
+.box{background:var(--box);border:1px solid var(--line);border-radius:6px;padding:.7rem 1rem;margin:1rem 0}
+.warnbox{border-left:4px solid var(--warn)}
+.tag{display:inline-block;font-size:.72rem;font-weight:600;padding:.1rem .5rem;border-radius:10px;background:var(--box);border:1px solid var(--line)}
+.cards{display:grid;grid-template-columns:repeat(auto-fill,minmax(230px,1fr));gap:.8rem;margin:1rem 0}
+.card{border:1px solid var(--line);border-radius:8px;padding:.8rem 1rem;background:var(--box)}
+.card h3{margin:.1rem 0 .3rem}
+footer{margin-top:3rem;padding-top:1rem;border-top:1px solid var(--line);font-size:.8rem;color:var(--muted)}
+</style>
+</head>
+<body>
+<main>
+<h1>Deadlock Twitch Bot — Doku-Übersicht</h1>
+<p class="summary">Agentenfreundliche Wissensbasis für KI-Support und spätere Entwickler. Sie beschreibt <strong>was</strong> das System tut und <strong>warum</strong> — die interne Mechanik sensibler Funktionen (Scoring, Zielauswahl, Spam-Erkennung, Preis-/Risk-Logik) ist bewusst abstrahiert. Siehe <a href="security/redaction-notes.html">Redaction Notes</a>.</p>
+
+<section id="was-ist-das">
+<h2>Was das Projekt ist</h2>
+<p>Der Deadlock Twitch Bot ist das Werkzeug eines <strong>Partner-Netzwerks für deutsche Deadlock-Streamer</strong>. Leitgedanke ist Gegenseitigkeit: Wenn ein Stream endet, sollen die Zuschauer nicht ins Leere laufen, sondern automatisch zum nächsten passenden, gerade live spielenden Deadlock-Streamer weitergeleitet werden. Rund um dieses Raid-Netzwerk bündelt der Bot Schutz (automatische Moderation), Sichtbarkeit (Go-Live-Ankündigungen, Clips), Einblick (Analyse-Dashboard) und Community-Funktionen.</p>
+<p><strong>Zielgruppe</strong> sind vor allem kleinere und mittlere Streamer. Der Bot verspricht keine Zuschauerzahlen — er hilft Teilnehmern, sich gegenseitig zu stützen und den eigenen Kanal besser zu verstehen.</p>
+</section>
+
+<section id="nutzergruppen">
+<h2>Wichtigste Nutzergruppen</h2>
+<table>
+<thead><tr><th>Gruppe</th><th>Nutzt</th></tr></thead>
+<tbody>
+<tr><td><strong>Streamer (Partner)</strong></td><td>Auto-Raids, Go-Live-Ankündigungen, Chat-Moderation, Analyse-Dashboard, optionale bezahlte Zusatz-Features, Affiliate-Programm.</td></tr>
+<tr><td><strong>Viewer / Community</strong></td><td>Werden bei Raids weitergeleitet, sehen Go-Live-Posts, erleben moderierten Chat, können dem Bot Fragen stellen.</td></tr>
+<tr><td><strong>Betreiber / Admins</strong> <span class="tag">intern</span></td><td>Verwalten das Netzwerk (Partner aufnehmen/verifizieren, Monitoring, Abrechnung, globale Einstellungen) über ein separates Admin-Dashboard.</td></tr>
+<tr><td><strong>KI-/Support-Agenten</strong></td><td>Beantworten Kundenfragen auf Basis dieser Doku — siehe <a href="support/agent-guide.html">Agentenleitfaden</a>.</td></tr>
+</tbody>
+</table>
+</section>
+
+<section id="architektur">
+<h2>Grobe Architektur (sicheres Abstraktionsniveau)</h2>
+<p>Das System besteht aus zwei eigenständig lauffähigen Diensten, die sich eine gemeinsame Datenbank teilen, aber nicht direkt voneinander abhängen:</p>
+<ul>
+<li><strong>Twitch-Bot-Dienst</strong> — Live-Monitoring, Chat-Moderation, Raids und Community-Funktionen in den betreuten Kanälen.</li>
+<li><strong>Dashboard-Dienst</strong> — Weboberflächen für Streamer (Analytics, Einstellungen, Abo) und Betreiber (Admin), plus die zugehörigen APIs.</li>
+</ul>
+<p>Ergänzend laufen Hintergrund-Worker (z. B. Highlight-Clipping, Social-Media-Upload, Titel-Lernjobs). Details zu Ports, Hosts, Secrets und interner Verdrahtung sind in dieser Doku bewusst nicht enthalten.</p>
+</section>
+
+<section id="bereiche">
+<h2>Wichtigste Systembereiche</h2>
+<div class="cards">
+<div class="card"><h3><a href="modules/raids.html">Raids</a></h3>Automatische & manuelle Weiterleitung von Zuschauern am Stream-Ende.</div>
+<div class="card"><h3><a href="modules/go-live.html">Go-Live &amp; Ankündigungen</a></h3>Live-Erkennung und Discord-Ankündigungen mit Offline-/VOD-Umwandlung.</div>
+<div class="card"><h3><a href="modules/chat-moderation.html">Chat-Moderation &amp; Befehle</a></h3>Automatische Moderation, Promos, Chat-Befehle.</div>
+<div class="card"><h3><a href="modules/spam-bot-detection.html">Spam- &amp; Bot-Erkennung</a></h3>Konservatives Entfernen von Spam und Fake-Accounts.</div>
+<div class="card"><h3><a href="modules/network-protection.html">Netzwerk-Schutz</a></h3>Netzwerkweite Bannliste und Scam-/Fake-Server-Warnungen.</div>
+<div class="card"><h3><a href="modules/ai-engagement.html">AI-Chat-Engagement</a></h3>Ruhige Plauder-KI im Chat (Shadow-Modus).</div>
+<div class="card"><h3><a href="modules/community.html">Community-Funktionen</a></h3>Leaderboard, Partner-Recruiting, Voice-Reaction.</div>
+<div class="card"><h3><a href="modules/highlight-social.html">Highlight-Clipper &amp; Social Media</a></h3>Auto-Clips und Kurzvideos nach Freigabe.</div>
+<div class="card"><h3><a href="modules/title-generator.html">KI-Titelgenerator</a></h3>Titelvorschläge auf Basis der eigenen Historie.</div>
+<div class="card"><h3><a href="modules/analytics-dashboard.html">Analyse-Dashboard</a></h3>Kennzahlen, Diagramme, Coaching-Empfehlungen.</div>
+<div class="card"><h3><a href="modules/plans-billing.html">Pläne &amp; Abrechnung</a></h3>Kostenlose Basis plus optionale bezahlte Features.</div>
+<div class="card"><h3><a href="modules/onboarding.html">Website &amp; Onboarding</a></h3>Twitch-Login, Dashboard-Zugang, „Frag den Bot".</div>
+<div class="card"><h3><a href="modules/admin.html">Admin-Funktionen</a> <span class="tag">intern</span></h3>Betreiber-Dashboard zur Netzwerk-Verwaltung.</div>
+<div class="card"><h3><a href="modules/stream-coaching-audit.html">Stream-Coaching-Audit</a> <span class="tag">intern</span></h3>Privates Sprach-/Slur-Audit.</div>
+</div>
+</section>
+
+<section id="workflows">
+<h2>Abläufe (Workflows)</h2>
+<ul>
+<li><a href="workflows/onboarding-flow.html">Streamer-Onboarding</a></li>
+<li><a href="workflows/auto-raid-flow.html">Automatischer Raid am Stream-Ende</a></li>
+<li><a href="workflows/go-live-cycle.html">Go-Live- &amp; Offline-Zyklus</a></li>
+<li><a href="workflows/spam-moderation-flow.html">Automatische Spam-/Bot-Moderation</a></li>
+<li><a href="workflows/social-media-upload-flow.html">Highlight-Clip zu Social Media</a></li>
+<li><a href="workflows/subscription-billing-flow.html">Abo &amp; Abrechnung</a></li>
+</ul>
+</section>
+
+<section id="support-referenz">
+<h2>Support &amp; Referenz</h2>
+<ul>
+<li><a href="support/agent-guide.html">Support- &amp; Agentenleitfaden</a> — wie ein KI-Agent Kundenfragen sicher beantwortet <em>(wichtigste Seite für Agenten)</em>.</li>
+<li><a href="support/troubleshooting.html">Troubleshooting</a> — strukturierte Erste-Hilfe zu typischen Problemen.</li>
+<li><a href="reference/states-and-errors.html">Zustände, Fehler &amp; Meldungen</a> — Statuswerte und ihre Bedeutung.</li>
+<li><a href="reference/glossary.html">Glossar</a> — konsistente Begriffe.</li>
+<li><a href="security/redaction-notes.html">Redaction Notes</a> — was bewusst abstrahiert wurde und warum.</li>
+</ul>
+</section>
+
+<section id="leitprinzipien">
+<h2>Leitprinzipien (helfen beim Einordnen des Verhaltens)</h2>
+<ul>
+<li><strong>Gegenseitigkeit statt Einbahnstraße</strong> — jeder unterstützt jeden.</li>
+<li><strong>Ruhig statt Hype</strong> — wo der Bot schreibt, bleibt der Ton zurückhaltend.</li>
+<li><strong>Andocken, nicht aufschlagen</strong> — die Chat-KI knüpft an Bestehendes an, eröffnet nichts aus dem Nichts.</li>
+<li><strong>Konservativ moderieren</strong> — lieber einen Spam-Bot durchlassen als einen echten Zuschauer zu Unrecht bannen; Fehlgriffe sind korrigierbar.</li>
+<li><strong>Ehrlich und transparent</strong> — der Bot gibt sich als Bot zu erkennen und erfindet keine Spielfakten.</li>
+<li><strong>Keine Viewer-Versprechen</strong> — er hilft beim gegenseitigen Stützen, nicht mit Zahlenzusagen.</li>
+</ul>
+</section>
+
+<div class="box warnbox">
+<strong>Grundregel für alle Seiten:</strong> Dokumentiere das Verhalten und den Zweck des Systems, aber nicht die geheimen Mechanismen dahinter. Fragt jemand nach exakten Werten, Formeln, Schwellen oder Gewichtungen, lautet die ehrliche Antwort: das ist bewusst nicht offengelegt.
+</div>
+
+<footer>Agentenfreundliche Doku des Deadlock Twitch Bot. Interne Mechanik ist bewusst abstrahiert — siehe <a href="security/redaction-notes.html">Redaction Notes</a>. Stand aus dem bereitgestellten Code; unklare Punkte sind auf den Einzelseiten markiert.</footer>
+</main>
+</body>
+</html>
