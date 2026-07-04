@@ -103,4 +103,4 @@ jobs:
       - name: Check SQLx offline cache
         env:
           SQLX_OFFLINE: "false"
-        run: cd rust && cargo sqlx prepare --workspace --check -- --exclude tb-llm
+        run: cd rust && cargo sqlx prepare --workspace --check -- --workspace --exclude tb-llm
