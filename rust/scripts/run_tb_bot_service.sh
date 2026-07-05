@@ -80,6 +80,12 @@ export TWITCH_BOT_USER_ID="${TWITCH_BOT_USER_ID:-1422558159}"
 # IMMER zuerst den Python-Chat ausschalten (TWITCH_RUST_CHAT_TAKEOVER=1 im
 # Worker-Drop-in), sonst Dual-Refresh-Race auf dem Bot-Token.
 export TB_CHAT_ENABLED="${TB_CHAT_ENABLED:-0}"
+# Crew-Guard (Shadow): erkennt die koordinierte Abwerbe-/Diffamierungs-Kampagne
+# (Ricky/blackhusky45-Kreis) im Partner-Chat und meldet Treffer AUSSCHLIESSLICH
+# nach Discord (an nani). KEIN Ban/Chat-Post/Whisper. Modell fuer den Judge der
+# unbekannten Accounts via OPENAI_API_KEY (aus Infisical).
+export CREW_GUARD_ENABLED="${CREW_GUARD_ENABLED:-1}"
+export CREW_GUARD_MODEL="${CREW_GUARD_MODEL:-gpt-5.4-mini}"
 export RUST_LOG="${RUST_LOG:-info}"
 # Bot-Token-Write-Back (ADR 0005): mangels reinem Write-Token in Infisical
 # nutzt der Bot den ohnehin vorhandenen all-rights Service-Token. Ein explizit
