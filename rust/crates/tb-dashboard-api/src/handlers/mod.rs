@@ -61,6 +61,7 @@ pub mod lurker_tax_settings;
 pub mod market;
 pub mod monetization;
 pub mod network;
+pub mod network_stats;
 pub mod obsolete_routes;
 pub mod onboarding;
 pub mod overlay;

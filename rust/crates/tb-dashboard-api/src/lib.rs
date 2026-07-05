@@ -81,7 +81,9 @@ fn security_header_layers() -> [SetResponseHeaderLayer<HeaderValue>; 5] {
 /// (`api_public.py:52-58`). Authed/Admin-Routen bleiben ohne CORS-Header,
 /// sonst wäre die Token-API cross-origin per Browser ansprechbar.
 pub fn build_public_router(pool: PgPool) -> Router {
-    use handlers::{bans, health_probe, network, overlay, raids, self_explainer, social_media};
+    use handlers::{
+        bans, health_probe, network, network_stats, overlay, raids, self_explainer, social_media,
+    };
 
     Router::new()
         .route("/healthz", get(health_probe::healthz_handler))
@@ -103,6 +105,10 @@ pub fn build_public_router(pool: PgPool) -> Router {
         .route(
             "/twitch/api/v2/public/network",
             get(network::network_handler),
+        )
+        .route(
+            "/twitch/api/v2/public/network-stats",
+            get(network_stats::network_stats_handler),
         )
         .route(
             "/twitch/api/v2/public/overlay",
