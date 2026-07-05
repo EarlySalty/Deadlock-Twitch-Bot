@@ -1,5 +1,5 @@
 //! Tests des Broker-Announcement-Sinks (Slice 4e): Standard-Rendering,
-//! Retry-Token-Stabilität, Rollen-Ping und Offline-Edit.
+//! Retry-Token-Stabilität, deaktivierte Rollen-Pings und Offline-Edit.
 
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
@@ -155,8 +155,8 @@ fn live_request(login: &str) -> AnnounceLiveRequest {
     }
 }
 
-/// Live-Ping aktiviert, aber noch KEINE Rollen-ID gesetzt → triggert im Sink
-/// den Auto-Anlage-Pfad (Provider) bzw. den Warn-Fallback ohne Provider.
+/// Live-Ping aktiviert, aber noch KEINE Rollen-ID gesetzt → bleibt im
+/// Announcement-Pfad dormant; der Provider darf nicht getriggert werden.
 fn live_request_no_role(login: &str) -> AnnounceLiveRequest {
     let mut req = live_request(login);
     req.entry.live_ping_role_id = None;
@@ -165,7 +165,7 @@ fn live_request_no_role(login: &str) -> AnnounceLiveRequest {
 }
 
 #[tokio::test]
-async fn announce_live_default_config_und_mentions() {
+async fn announce_live_default_config_ohne_rollen_ping() {
     let transport = Arc::new(StubTransport::default());
     let sink = sink_with(transport.clone());
 
@@ -176,18 +176,22 @@ async fn announce_live_default_config_und_mentions() {
         .expect("gesendet");
     assert_eq!(result.message_id, "msg-1");
     assert!(result.tracking_token.is_some());
-    // Alert-Mention + Streamer-Ping-Rolle im Content.
-    assert!(result.notification_text.starts_with("<@&777>"));
-    assert!(result.notification_text.contains("<@&999>"));
+    assert!(
+        !result.notification_text.contains("<@&"),
+        "Live-Announce darf keine Rollen-Mention im Content enthalten"
+    );
 
     let sends = transport.sends.lock().unwrap();
     let (channel_id, content, embed, roles, view_spec) = &sends[0];
     assert_eq!(*channel_id, 555);
-    assert_eq!(content.as_deref(), Some(result.notification_text.as_str()));
+    assert!(content.is_none(), "Default-Content war nur Rollen-Mention");
     assert_eq!(embed["title"], "Drag ist LIVE in Deadlock!");
     assert_eq!(embed["url"], "https://www.twitch.tv/drag?ref=dc");
     assert_eq!(embed["thumbnail"]["url"], "https://avatar/drag.png");
-    assert!(roles.contains(&999) && roles.contains(&777));
+    assert!(
+        roles.is_empty(),
+        "allowed_role_ids muss trotz live_ping_role_id und TWITCH_ALERT_MENTION leer bleiben"
+    );
     let view = view_spec.as_ref().expect("Tracking-View");
     assert_eq!(view["type"], "twitch_live_tracking");
     assert_eq!(
@@ -233,11 +237,8 @@ async fn announce_live_ohne_stream_thumbnail_setzt_kein_image() {
     );
 }
 
-/// #222 Verify: `live_ping_enabled = false` muss den Streamer-Rollen-Ping
-/// vollständig unterdrücken (Python `_ensure_live_ping_role` → frühes
-/// `("", None)`). Trotz gesetzter `live_ping_role_id` darf weder die Mention
-/// im Content noch die Rollen-ID in `allowed_role_ids` landen; die statische
-/// Alert-Mention (`<@&777>`) bleibt unberührt.
+/// Rollen-Pings bleiben auch dann komplett aus, wenn der alte Streamer-Ping
+/// deaktiviert ist und eine dormant `live_ping_role_id` in der Entry steht.
 #[tokio::test]
 async fn announce_live_ping_disabled_unterdrueckt_streamer_rolle() {
     let transport = Arc::new(StubTransport::default());
@@ -248,15 +249,16 @@ async fn announce_live_ping_disabled_unterdrueckt_streamer_rolle() {
 
     let result = sink.announce_live(request).await.expect("gesendet");
 
-    // Nur die statische Alert-Mention, kein Streamer-Rollen-Ping.
-    assert!(result.notification_text.starts_with("<@&777>"));
-    assert!(!result.notification_text.contains("<@&999>"));
-    let sends = transport.sends.lock().unwrap();
-    let (_, _, _, roles, _) = &sends[0];
-    assert!(roles.contains(&777));
     assert!(
-        !roles.contains(&999),
-        "Streamer-Rolle bei disabled Ping verboten"
+        !result.notification_text.contains("<@&"),
+        "auch die Alert-Rollen-Mention muss entfernt bleiben"
+    );
+    let sends = transport.sends.lock().unwrap();
+    let (_, content, _, roles, _) = &sends[0];
+    assert!(content.is_none(), "Default-Content war nur Rollen-Mention");
+    assert!(
+        roles.is_empty(),
+        "keine Rollen-ID darf in allowed_mentions landen"
     );
 }
 
@@ -314,8 +316,10 @@ async fn announce_live_ignoriert_config_json_row_und_nutzt_standard_mit_retry_to
     let sends = transport.sends.lock().unwrap();
     let (_, _, embed, roles, view_spec) = &sends[0];
     assert_eq!(embed["title"], "Drag ist LIVE in Deadlock!");
-    assert!(roles.contains(&999), "Streamer-Rollen-Ping bleibt aktiv");
-    assert!(roles.contains(&777), "Alert-Mention bleibt erlaubt");
+    assert!(
+        roles.is_empty(),
+        "Retry-Announce darf keine Rollen-Pings erlauben"
+    );
     let view = view_spec.as_ref().expect("Standard-Button bleibt aktiv");
     assert_eq!(view["button_label"], "Auf Twitch ansehen");
     assert_eq!(
@@ -361,7 +365,7 @@ async fn end_announcement_editiert_offline_embed() {
 }
 
 #[tokio::test]
-async fn live_ping_auto_anlage_nutzt_provider_rolle() {
+async fn live_ping_auto_anlage_wird_im_announce_pfad_nicht_getriggert() {
     let transport = Arc::new(StubTransport::default());
     let provider = Arc::new(StubRoleProvider {
         role_id: Some(424242),
@@ -374,20 +378,23 @@ async fn live_ping_auto_anlage_nutzt_provider_rolle() {
         .await
         .expect("gesendet");
 
-    // Provider wurde mit login + twitch_user_id aufgerufen.
     let calls = provider.calls.lock().unwrap();
-    assert_eq!(calls.as_slice(), &[("drag".to_string(), "42".to_string())]);
-    // Frisch angelegte Rolle landet im Ping-Text und in allowed_role_ids.
-    assert!(result.notification_text.contains("<@&424242>"));
+    assert!(
+        calls.is_empty(),
+        "Live-Ping-Provider darf im Announce-Pfad nicht mehr aufgerufen werden"
+    );
+    assert!(
+        !result.notification_text.contains("<@&"),
+        "Provider-Rolle darf nicht als Mention gerendert werden"
+    );
     let sends = transport.sends.lock().unwrap();
     let (_, _, _, roles, _) = &sends[0];
-    assert!(roles.contains(&424242));
+    assert!(roles.is_empty());
 }
 
 #[tokio::test]
-async fn live_ping_ohne_provider_faellt_auf_warn_zurueck() {
+async fn live_ping_ohne_role_id_bleibt_ohne_rollen_ping() {
     let transport = Arc::new(StubTransport::default());
-    // Provider liefert None (z. B. Discord-Anlage scheitert) → kein Rollen-Ping.
     let provider = Arc::new(StubRoleProvider {
         role_id: None,
         ..Default::default()
@@ -399,11 +406,12 @@ async fn live_ping_ohne_provider_faellt_auf_warn_zurueck() {
         .await
         .expect("gesendet");
 
-    assert_eq!(provider.calls.lock().unwrap().len(), 1);
-    // Nur Alert-Mention, KEIN Rollen-Ping (kein zusätzliches <@&…> über 777).
-    assert!(result.notification_text.starts_with("<@&777>"));
-    assert!(!result.notification_text.contains("<@&424242>"));
+    assert!(provider.calls.lock().unwrap().is_empty());
+    assert!(
+        !result.notification_text.contains("<@&"),
+        "keine Alert-, statische oder Streamer-Rollen-Mention"
+    );
     let sends = transport.sends.lock().unwrap();
     let (_, _, _, roles, _) = &sends[0];
-    assert!(!roles.iter().any(|&r| r != 777));
+    assert!(roles.is_empty());
 }

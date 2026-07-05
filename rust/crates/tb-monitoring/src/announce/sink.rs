@@ -5,8 +5,8 @@
 //! Bewusste Abweichung: Der Retry-Zustand hält Tracking-Token + Render-Zeit
 //! (für stabile Cache-Buster/Tokens über Versuche hinweg), aber nicht den
 //! Original-Stream-Payload — beim Retry rendert der aktuelle Tick. Die
-//! Live-Ping-Rollen-**Erstellung** braucht das Discord-Gateway und bleibt
-//! eine Cutover-Kopplung; verwendet wird die Rollen-ID aus der Partner-Config.
+//! Live-Ping-Rollen bleiben als dormant Datenmodell erhalten, werden im
+//! Live-Announcement-Pfad aber bewusst nicht mehr erwähnt oder angelegt.
 
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
@@ -83,7 +83,7 @@ impl VodPreviewSource for NoVodPreview {
 pub struct AnnouncementSettings {
     /// Discord-Kanal der Go-Live-Postings.
     pub notify_channel_id: i64,
-    /// Optionale Alert-Mention (z. B. `<@&123>`), wird dem Content vorangestellt.
+    /// Dormant: Rollen-Mentions werden im Live-Announce-Pfad nicht mehr gesendet.
     pub alert_mention: Option<String>,
     /// Referral-Code für die Twitch-URL (`?ref=`).
     pub ref_code: Option<String>,
@@ -99,6 +99,7 @@ pub struct BrokerAnnouncementSink {
     transport: Arc<dyn AnnouncementTransport>,
     vod: Arc<dyn VodPreviewSource>,
     settings: AnnouncementSettings,
+    #[allow(dead_code)]
     live_ping_role_provider: Option<Arc<dyn LivePingRoleProvider>>,
     retry: Mutex<HashMap<String, RetryState>>,
 }
@@ -159,6 +160,7 @@ impl BrokerAnnouncementSink {
     }
 
     /// Rollen-ID aus einer Mention wie `<@&123>` (Python `_extract_role_id_from_mention`).
+    #[allow(dead_code)]
     fn role_id_from_mention(text: &str) -> Option<i64> {
         let trimmed = text.trim();
         let inner = trimmed.strip_prefix("<@&")?.strip_suffix('>')?;
@@ -183,55 +185,10 @@ impl AnnouncementSink for BrokerAnnouncementSink {
         };
         let config = AnnouncementConfig::default();
 
-        // Mention: Live-Ping-Rolle aus der Partner-Config + statische Rollen.
-        let streamer_role_id = request
-            .entry
-            .live_ping_role_id
-            .filter(|id| *id > 0 && request.entry.live_ping_enabled);
-        let mut mention_text = String::new();
-        let mut allowed_role_ids: Vec<i64> = Vec::new();
-        if !request.suppress_role_pings {
-            for role_id in &config.static_ping_role_ids {
-                if !allowed_role_ids.contains(role_id) {
-                    allowed_role_ids.push(*role_id);
-                }
-            }
-            if config.use_streamer_ping_role {
-                if let Some(role_id) = streamer_role_id {
-                    if !allowed_role_ids.contains(&role_id) {
-                        allowed_role_ids.push(role_id);
-                    }
-                    mention_text = format!("<@&{role_id}>");
-                } else if request.entry.live_ping_enabled {
-                    // Live-Ping aktiviert, aber keine Rollen-ID gesetzt. Python
-                    // (embeds_mixin.py:_ensure_live_ping_role) legte die Rolle beim
-                    // Go-Live automatisch an. Ist ein Provider verdrahtet, holen wir
-                    // hier die (ggf. frisch angelegte + persistierte) Rollen-ID und
-                    // verwenden den Ping sofort. Ohne Provider bleibt der Fallback:
-                    // den Ausfall sichtbar machen, damit die role_id im Dashboard
-                    // nachgepflegt werden kann statt unbemerkt zu fehlen.
-                    let twitch_user_id = request.entry.twitch_user_id.as_deref().unwrap_or("");
-                    let created = match &self.live_ping_role_provider {
-                        Some(provider) => provider.ensure_role(&login, twitch_user_id).await,
-                        None => None,
-                    };
-                    match created {
-                        Some(role_id) if role_id > 0 => {
-                            if !allowed_role_ids.contains(&role_id) {
-                                allowed_role_ids.push(role_id);
-                            }
-                            mention_text = format!("<@&{role_id}>");
-                        }
-                        _ => {
-                            tracing::warn!(
-                                login = %login,
-                                "Live-Ping aktiviert, aber live_ping_role_id fehlt — Rollen-Ping übersprungen (role_id im Dashboard setzen)"
-                            );
-                        }
-                    }
-                }
-            }
-        }
+        // Rollen-Pings sind im Go-Live-Announcement hart deaktiviert:
+        // keine Template-Mention, keine allowed_role_ids und kein Provider-Aufruf.
+        let mention_text = String::new();
+        let allowed_role_ids: Vec<i64> = Vec::new();
 
         let referral_url = self.referral_url(&login);
         let context = build_context(
@@ -244,24 +201,11 @@ impl AnnouncementSink for BrokerAnnouncementSink {
         );
         let rendered = render_announcement(&config, &context, render_now, Some(&tracking_token));
 
-        let mut content = if rendered.content.is_empty() {
-            mention_text.clone()
+        let content = if rendered.content.is_empty() {
+            mention_text
         } else {
             rendered.content.clone()
         };
-        if !request.suppress_role_pings {
-            if let Some(alert) = self.settings.alert_mention.as_deref().map(str::trim) {
-                if !alert.is_empty() {
-                    let alert = sanitize_live_content(alert);
-                    content = format!("{alert} {content}").trim().to_string();
-                    if let Some(role_id) = Self::role_id_from_mention(&alert) {
-                        if !allowed_role_ids.contains(&role_id) {
-                            allowed_role_ids.push(role_id);
-                        }
-                    }
-                }
-            }
-        }
         let content = sanitize_live_content(&content);
 
         // Tracking-Button (Klick-Zählung vor Redirect, Python view_spec).
