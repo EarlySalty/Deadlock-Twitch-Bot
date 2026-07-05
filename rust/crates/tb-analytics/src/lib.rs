@@ -32,6 +32,7 @@ pub mod global_ban;
 pub mod market;
 pub mod monetization;
 pub mod network;
+pub mod network_stats;
 pub mod overview;
 pub mod partner_access;
 pub mod peer_group;
