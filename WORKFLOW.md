@@ -1,5 +1,11 @@
 # Workflow
 
+## 2026-07-05 — Twitch Announce ohne Rollen-Ping
+
+- Start: delegierter GPT-Implementierungsworker fuer Rust-Twitch-Bot; Scope strikt Live-Announcement-Rollen-Ping entfernen, keine DB-Migration, kein Commit/Push/Branch-Wechsel. `WORKFLOW.md` nur gemaess Arbeitsregel gelesen; stale Cutover-/Migrationsplaene ignoriert.
+- Implementiert: `tb-monitoring` Live-Announce baut `mention_role` hart als leer und sendet `allowed_role_ids = []`; `TWITCH_ALERT_MENTION`, statische Rollen, `live_ping_role_id` und Provider-Auto-Anlage werden im Announce-Pfad nicht mehr genutzt. Tests in `tb-monitoring/tests/announce.rs` assertieren keine `<@&...>`-Mention, leere Rollen-Erlaubnis und keinen Provider-Aufruf.
+- Verifikation: `cargo build -p tb-monitoring -p tb-bot` gruen (`Finished dev profile ... in 35.52s`). `SQLX_OFFLINE=true cargo test -p tb-monitoring` gruen mit 183 passed / 0 failed; Announce-Test 9 passed / 0 failed. `SQLX_OFFLINE=true cargo test -p tb-bot streams_ping` gruen, aber 0 passed / 0 failed / 119 filtered out, weil kein `ping`/`streams_ping`-Test in `tb-bot` existiert. Exakter Clippy-Pflichtlauf `cargo clippy -p tb-monitoring -p tb-bot --all-targets -- -D warnings` bleibt rot an vorbestehenden, scope-fremden Lints in `tb-highlight` (1) und `tb-social-media` (5); zusaetzlicher Kontrolllauf mit `--no-deps` und bekannten Allows fuer `tb-monitoring`-Altlasten `duplicate_mod`/`bool_assert_comparison` gruen.
+
 ## 2026-07-03 — Affiliate-Portal-Fix und dashboard_v2-Aufraeumung
 
 - Start: delegierter GPT-Implementierungsworker fuer Affiliate-Portal-Handler und tote dashboard_v2-/dashboard_preview-Affiliate-Seiten; Scope Rust-Handler/Docs plus Frontend-Routen/API-Referenzen, kein Commit/Push/Stash/Reset/Checkout/Branch, kein repo-weites `cargo fmt`.

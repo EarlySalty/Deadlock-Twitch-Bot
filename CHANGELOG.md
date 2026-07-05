@@ -1,3 +1,11 @@
+## #331 — Go-Live-Ankündigung pingt keine Rolle mehr
+
+**Problem:** Wenn ein Streamer live ging, hat der Ankündigungs-Post im Discord eine Rolle angepingt. Das war als Benachrichtigung gedacht, wurde aber als unnötiges Rauschen empfunden.
+
+**Änderung:** Der Go-Live-Post erwähnt und pingt jetzt keine Rolle mehr — weder eine feste, noch eine pro Streamer, noch eine automatisch angelegte. Die eigentliche Ankündigung (Embed mit Titel, Vorschau und Link) bleibt unverändert.
+
+**Verhalten jetzt:** Live-Posts erscheinen wie gewohnt im Kanal, nur ohne Rollen-Ping. Es wird niemand mehr per Ping über einen Go-Live benachrichtigt.
+
 ## #330 — Affiliate-Portal zeigt wieder das Affiliate-Portal statt der Analytics-Ansicht
 
 **Problem:** Wer das Affiliate-Portal öffnete, landete auf der Analytics-Dashboard-Oberfläche statt auf der eigentlichen Affiliate-Ansicht mit Login, Streamer-Claims, Provisionen und Stripe-Auszahlungen — die Portal-Adresse lieferte schlicht das falsche Bundle.
