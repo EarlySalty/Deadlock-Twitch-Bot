@@ -8,6 +8,9 @@ pub struct SendRichMessage {
     pub channel_id: i64,
     pub content: Option<String>,
     pub embed: serde_json::Value,
+    /// Fertiger Discord-Components-V2-Array (top-level), ohne Button.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub components: Option<serde_json::Value>,
     pub allowed_role_ids: Vec<i64>,
     pub view_spec: Option<serde_json::Value>,
 }
@@ -19,6 +22,9 @@ pub struct EditRichMessage {
     pub message_id: String,
     pub content: Option<String>,
     pub embed: serde_json::Value,
+    /// Fertiger Discord-Components-V2-Array (top-level), ohne Button.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub components: Option<serde_json::Value>,
     pub view_spec: Option<serde_json::Value>,
 }
 
@@ -104,8 +110,7 @@ pub trait DiscordBackend: Send + Sync {
     async fn send_user_dm(&self, payload: SendUserDm) -> Result<SendResult, DiscordError>;
 
     /// Sendet ein Embed in den Alert-Channel und liefert die `message_id`.
-    async fn send_alert_embed(&self, payload: SendAlertEmbed)
-        -> Result<SendResult, DiscordError>;
+    async fn send_alert_embed(&self, payload: SendAlertEmbed) -> Result<SendResult, DiscordError>;
 
     /// Entfernt eine Rolle von einem Guild-Mitglied
     /// (`POST /discord/member/remove-role`).

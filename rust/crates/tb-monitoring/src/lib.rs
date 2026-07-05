@@ -44,8 +44,8 @@ pub mod webhook_receiver;
 pub use webhook_receiver::WebhookReceiver;
 
 pub use announce::{
-    AnnouncementSettings, AnnouncementTransport, BrokerAnnouncementSink, LivePingRoleProvider,
-    NoVodPreview, VodPreviewSource,
+    AnnouncementSettings, AnnouncementTransport, BrokerAnnouncementSink, ChannelProfileSource,
+    LivePingRoleProvider, NoChannelProfile, NoVodPreview, VodPreviewSource,
 };
 pub use chatters_poller::{
     load_live_roster, record_chatters_for_streamer, BotChatterAuth, ChattersCollector,

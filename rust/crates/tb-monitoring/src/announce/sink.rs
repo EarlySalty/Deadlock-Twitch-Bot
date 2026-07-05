@@ -15,8 +15,8 @@ use chrono::{DateTime, Utc};
 use serde_json::Value;
 
 use crate::announce::template::{
-    build_context, build_offline_embed, render_announcement, sanitize_live_content,
-    AnnouncementConfig, TWITCH_VOD_BUTTON_LABEL,
+    build_context, build_offline_components, build_offline_embed, render_announcement,
+    sanitize_live_content, AnnouncementConfig, OfflineComponentsContext, TWITCH_VOD_BUTTON_LABEL,
 };
 use crate::poller::hooks::{
     AnnounceLiveRequest, AnnounceLiveResult, AnnouncementSink, EndAnnouncementOutcome,
@@ -35,6 +35,7 @@ pub trait AnnouncementTransport: Send + Sync {
         channel_id: i64,
         content: Option<String>,
         embed: Value,
+        components: Option<Value>,
         allowed_role_ids: Vec<i64>,
         view_spec: Option<Value>,
     ) -> Result<String, SourceError>;
@@ -45,6 +46,7 @@ pub trait AnnouncementTransport: Send + Sync {
         message_id: String,
         content: Option<String>,
         embed: Value,
+        components: Option<Value>,
         view_spec: Option<Value>,
     ) -> Result<(), SourceError>;
 }
@@ -53,6 +55,12 @@ pub trait AnnouncementTransport: Send + Sync {
 #[async_trait::async_trait]
 pub trait VodPreviewSource: Send + Sync {
     async fn latest_preview(&self, twitch_user_id: Option<&str>, login: &str) -> Option<String>;
+}
+
+/// Kanalprofilbild fürs Components-V2-Thumbnail (Helix `/users` in `tb-bot`).
+#[async_trait::async_trait]
+pub trait ChannelProfileSource: Send + Sync {
+    async fn profile_image_url(&self, login: &str) -> Option<String>;
 }
 
 /// Auto-Anlage der Live-Ping-Rolle, wenn ein Partner mit `live_ping_enabled`
@@ -78,6 +86,16 @@ impl VodPreviewSource for NoVodPreview {
     }
 }
 
+/// Quelle ohne Profilbild-Lookup.
+pub struct NoChannelProfile;
+
+#[async_trait::async_trait]
+impl ChannelProfileSource for NoChannelProfile {
+    async fn profile_image_url(&self, _login: &str) -> Option<String> {
+        None
+    }
+}
+
 /// Statische Announcement-Einstellungen (Env/Runtime-Config).
 #[derive(Debug, Clone)]
 pub struct AnnouncementSettings {
@@ -98,6 +116,7 @@ struct RetryState {
 pub struct BrokerAnnouncementSink {
     transport: Arc<dyn AnnouncementTransport>,
     vod: Arc<dyn VodPreviewSource>,
+    profile: Arc<dyn ChannelProfileSource>,
     settings: AnnouncementSettings,
     #[allow(dead_code)]
     live_ping_role_provider: Option<Arc<dyn LivePingRoleProvider>>,
@@ -108,12 +127,14 @@ impl BrokerAnnouncementSink {
     pub fn new(
         transport: Arc<dyn AnnouncementTransport>,
         vod: Arc<dyn VodPreviewSource>,
+        profile: Arc<dyn ChannelProfileSource>,
         settings: AnnouncementSettings,
         live_ping_role_provider: Option<Arc<dyn LivePingRoleProvider>>,
     ) -> Self {
         Self {
             transport,
             vod,
+            profile,
             settings,
             live_ping_role_provider,
             retry: Mutex::new(HashMap::new()),
@@ -166,6 +187,27 @@ impl BrokerAnnouncementSink {
         let inner = trimmed.strip_prefix("<@&")?.strip_suffix('>')?;
         inner.parse::<i64>().ok().filter(|id| *id > 0)
     }
+
+    async fn fill_profile_image_url(
+        &self,
+        login: &str,
+        stream: &mut crate::stream::StreamSnapshot,
+    ) {
+        if stream
+            .profile_image_url
+            .as_deref()
+            .map(str::trim)
+            .is_some_and(|url| !url.is_empty())
+        {
+            return;
+        }
+        stream.profile_image_url = self
+            .profile
+            .profile_image_url(login)
+            .await
+            .map(|url| url.trim().to_string())
+            .filter(|url| !url.is_empty());
+    }
 }
 
 #[async_trait::async_trait]
@@ -184,6 +226,8 @@ impl AnnouncementSink for BrokerAnnouncementSink {
             }
         };
         let config = AnnouncementConfig::default();
+        let mut stream = request.stream.clone();
+        self.fill_profile_image_url(&login, &mut stream).await;
 
         // Rollen-Pings sind im Go-Live-Announcement hart deaktiviert:
         // keine Template-Mention, keine allowed_role_ids und kein Provider-Aufruf.
@@ -193,11 +237,11 @@ impl AnnouncementSink for BrokerAnnouncementSink {
         let referral_url = self.referral_url(&login);
         let context = build_context(
             &login,
-            &request.stream,
+            &stream,
             &referral_url,
             &mention_text,
             render_now,
-            request.stream.thumbnail_url.as_deref(),
+            stream.thumbnail_url.as_deref(),
         );
         let rendered = render_announcement(&config, &context, render_now, Some(&tracking_token));
 
@@ -225,6 +269,7 @@ impl AnnouncementSink for BrokerAnnouncementSink {
                 self.settings.notify_channel_id,
                 Some(content.clone()).filter(|c| !c.is_empty()),
                 rendered.embed,
+                rendered.components,
                 allowed_role_ids,
                 view_spec.clone(),
             )
@@ -255,6 +300,8 @@ impl AnnouncementSink for BrokerAnnouncementSink {
 
     async fn end_announcement(&self, request: EndAnnouncementRequest) -> EndAnnouncementOutcome {
         let login = request.login.to_lowercase();
+        let now = Utc::now();
+        let avatar_url = self.profile.profile_image_url(&login).await;
         let preview = self
             .vod
             .latest_preview(request.twitch_user_id.as_deref(), &login)
@@ -265,8 +312,21 @@ impl AnnouncementSink for BrokerAnnouncementSink {
             request.last_game.as_deref(),
             preview.as_deref(),
             &self.settings.target_game,
-            Utc::now(),
+            now,
         );
+        let components = build_offline_components(OfflineComponentsContext {
+            display_name: &request.display_name,
+            last_title: request.last_title.as_deref(),
+            last_game: request.last_game.as_deref(),
+            preview_image_url: preview.as_deref(),
+            channel_avatar_url: avatar_url.as_deref(),
+            target_game: &self.settings.target_game,
+            started_at: request
+                .started_at_iso
+                .as_deref()
+                .and_then(crate::stream::parse_dt_utc),
+            now,
+        });
         let referral_url = self.referral_url(&login);
         let view_spec = serde_json::json!({
             "type": "link_button",
@@ -280,6 +340,7 @@ impl AnnouncementSink for BrokerAnnouncementSink {
                 request.message_id,
                 None,
                 embed,
+                Some(components),
                 Some(view_spec),
             )
             .await

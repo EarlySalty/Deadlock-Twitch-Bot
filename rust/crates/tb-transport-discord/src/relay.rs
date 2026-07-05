@@ -519,6 +519,7 @@ mod tests {
             channel_id: 12345,
             content: Some("Hallo".to_string()),
             embed: serde_json::json!({"title": "Test"}),
+            components: None,
             allowed_role_ids: vec![99],
             view_spec: None,
         }
@@ -990,6 +991,7 @@ mod tests {
             message_id: "x".to_string(),
             content: None,
             embed: serde_json::Value::Null,
+            components: None,
             view_spec: None,
         };
         noop.edit_rich_message(edit).await.unwrap();

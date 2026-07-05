@@ -1,3 +1,11 @@
+## #332 — Twitch-Live- und Offline-Post im frischen Deadlock-Look
+
+**Ausgangslage:** Wenn jemand live ging, sah der Discord-Post aus wie bei jedem beliebigen Twitch-Bot — Twitch-Lila, die Infos als kleine Tabelle, und das Profilbild des Streamers fehlte komplett.
+
+**Änderung:** Live- und Offline-Post sind neu aufgebaut: Deadlock-Gold statt Lila, eine klare Kopfzeile mit 🔴 „live" bzw. 💤 „Stream beendet", eine kompakte Info-Zeile (Zuschauer · Uptime · Sprache, offline: Kategorie · Laufzeit), die Tags des Streams und endlich das echte Twitch-Profilbild. Der Offline-Post wirkt bewusst ruhiger.
+
+**Verhalten jetzt:** Der Button „Auf Twitch ansehen" bzw. „VOD anschauen" bleibt inklusive Klick-Zählung erhalten. Alle anderen Bot-Nachrichten sind unverändert.
+
 ## #331 — Go-Live-Ankündigung pingt keine Rolle mehr
 
 **Problem:** Wenn ein Streamer live ging, hat der Ankündigungs-Post im Discord eine Rolle angepingt. Das war als Benachrichtigung gedacht, wurde aber als unnötiges Rauschen empfunden.
