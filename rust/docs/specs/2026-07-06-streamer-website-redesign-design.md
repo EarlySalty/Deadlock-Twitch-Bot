@@ -65,7 +65,9 @@ Hauptnavigation enthält nur, was auf die Conversion einzahlt: Landing, Features
 
 ## Technik & Umsetzung
 
-- Umbau der bestehenden Vite/React-SPA in `website/`, ausgeliefert wie bisher über tb-dashboard (:8769). Kein Greenfield.
+- **V2-Ansatz (Nachtrag 2026-07-06):** Das Redesign wird als paralleles V2 gebaut, nicht als Ersatz der Live-Seite. Neuer Vite-Entry `website/v2/index.html` + `website/src/v2/` → landet in `dist/v2/` → ist über das bestehende statische Serving (`GET /streamer/{path}` aus `website/dist`, `handlers/website.rs`) automatisch unter `/streamer/v2/` erreichbar. Keine Rust-Routing-Änderung nötig; `/streamer/` bleibt unverändert die alte Seite, bis der User den Cutover freigibt. Vorbild: `deutsche-deadlock-community.de/new/`.
+- **Design-Sprache:** Gold-Teal-System der Community-Website (`Website/dl-brand/tokens.css` + `deco-elevator-new/`): Ink-Hintergründe (`#0b0907`), Bone-Text (`#ece0c8`), Gold (`#c8a86b`/`#efd49d`/`#806534`), Teal (`#55978f`), Rust-Akzent (`#ad4932`), Sora (Display) + Manrope (Body), Grain+Vignette-Textur, Uppercase-Letterspaced-Nav, Gold-CTA mit Ink-Text. Tokens werden ins V2 kopiert (Twitch-Bot-Repo bleibt eigenständig deploybar).
+- Bestehende Vite/React-SPA in `website/` (React 19, Tailwind 4, framer-motion), ausgeliefert wie bisher über tb-dashboard (:8769). Kein Greenfield.
 - Live-Zahlen: neuer/erweiterter öffentlicher Read-only-Endpoint in `tb-dashboard-api`, der aggregierte Netzwerk-Metriken liefert (keine sensiblen Einzeldaten).
 - FAQ-Rendering: Build- oder Serverzeit-Rendering der `faq-*.md` aus `rust/knowledge/bot/`.
 - **User-sichtbare Texte (gesamte Copy): Deutsch, Dev-Ton, locker-nüchtern, konkret. Finale Copy schreibt Claude, nicht Codex** (Codex liefert nur Platzhalter).
