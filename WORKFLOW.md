@@ -1,5 +1,11 @@
 # Workflow
 
+## 2026-07-06 - network-stats public Endpoint
+
+- Start: delegierter GPT-Implementierungsworker fuer `GET /twitch/api/v2/public/network-stats` in `tb-dashboard-api`; Codearbeit im separaten Worktree `/home/naniadm/.worktrees/Deadlock-Twitch-Bot-network-stats` auf Branch `feature/website-v2-stats`. Scope strikt API/Tests, `website/` tabu. Commit/Push werden gemaess verbindlicher Regel nicht ausgefuehrt.
+- Implementiert bisher: Public-Route im bestehenden Public-Router, Handler-Tests nach `recent-bans`-Muster, Query-Schicht `tb_analytics::network_stats`. Tabellen: `twitch_streamers_partner_state` fuer aktive Partner, `twitch_raid_history` fuer erfolgreiche Raid-Aggregate, `twitch_live_state` fuer Live-Presence mit offener `active_session_id`. Fokustests gegen Wegwerf-Timescale `127.0.0.1:55488` gruen (3 passed / 0 failed).
+- Verifikation final: `SQLX_OFFLINE=true cargo clippy -p tb-dashboard-api` exit 0 mit bestehenden Warnungen in Dependency-Crates; `TB_TEST_DATABASE_URL=postgres://postgres:tbtest@127.0.0.1:55488/postgres TB_TEST_REQUIRE_DB=1 SQLX_OFFLINE=true cargo test -p tb-dashboard-api` gruen (739 passed / 0 failed / 1 ignored, Doc-tests 0 failed / 2 ignored). `git diff --check` gruen; Test-Container `tb-netstats-pg` entfernt. Kein Commit/Push.
+
 ## 2026-07-05 — Twitch Announce ohne Rollen-Ping
 
 - Start: delegierter GPT-Implementierungsworker fuer Rust-Twitch-Bot; Scope strikt Live-Announcement-Rollen-Ping entfernen, keine DB-Migration, kein Commit/Push/Branch-Wechsel. `WORKFLOW.md` nur gemaess Arbeitsregel gelesen; stale Cutover-/Migrationsplaene ignoriert.

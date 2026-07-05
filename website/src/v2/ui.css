@@ -1,0 +1,260 @@
+/* V2 — Komponenten-Styles (Header, Sektionen, Karten, FAQ). Tokens: brand.css */
+
+/* ── Header ───────────────────────────────────────────────────── */
+.site-header {
+  position: sticky;
+  top: 0;
+  z-index: 50;
+  background: rgba(11, 9, 7, 0.82);
+  border-bottom: 1px solid var(--line-soft);
+  backdrop-filter: blur(14px);
+}
+.header-inner {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+  min-height: 66px;
+}
+.wordmark {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.65rem;
+  text-decoration: none;
+  font-family: var(--display);
+  font-size: 0.92rem;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--bone-dim);
+  white-space: nowrap;
+}
+.wordmark b { color: var(--gold-bright); font-weight: 800; }
+.wordmark-jewel {
+  width: 9px;
+  height: 9px;
+  background: var(--gold);
+  transform: rotate(45deg);
+  box-shadow: 0 0 10px var(--gold-glow);
+}
+.main-nav { display: flex; align-items: center; gap: clamp(0.9rem, 2.3vw, 2rem); }
+.main-nav a {
+  text-decoration: none;
+  text-transform: uppercase;
+  font-size: 0.69rem;
+  font-weight: 800;
+  letter-spacing: 0.16em;
+  color: var(--bone-dim);
+  transition: color 0.25s;
+}
+.main-nav a:hover { color: var(--gold-bright); }
+.main-nav .nav-cta {
+  color: var(--ink);
+  background: linear-gradient(var(--gold-bright), #d8bd7d 58%, var(--gold));
+  padding: 0.7rem 1.05rem;
+  border: 1px solid var(--gold-bright);
+}
+.main-nav .nav-cta:hover { color: var(--ink); filter: brightness(1.06); }
+@media (max-width: 640px) {
+  .main-nav a:not(.nav-cta) { display: none; }
+}
+
+/* ── Hero ─────────────────────────────────────────────────────── */
+.hero { padding-top: clamp(5rem, 12vw, 9rem); }
+.hero h1 { max-width: 21ch; margin-top: 1.1rem; }
+.hero .lede { margin-top: 1.4rem; }
+.hero-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.9rem;
+  margin-top: 2.2rem;
+}
+.hero-note { margin-top: 1rem; font-size: 0.86rem; color: var(--bone-faint); }
+.hero-note a { color: var(--gold); }
+
+/* ── Proof / Stat-Kacheln ─────────────────────────────────────── */
+.proof h2, .livewall h2, .circuit h2, .switcher h2 { margin-top: 0.9rem; }
+.stat-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+  gap: 1rem;
+  margin-top: 2rem;
+}
+.stat-tile { display: flex; flex-direction: column; gap: 0.4rem; }
+.stat-tile strong {
+  font-family: var(--display);
+  font-size: clamp(1.9rem, 3.4vw, 2.7rem);
+  font-weight: 800;
+  color: var(--gold-bright);
+  font-variant-numeric: tabular-nums;
+  line-height: 1.1;
+}
+.stat-tile span {
+  text-transform: uppercase;
+  letter-spacing: 0.14em;
+  font-size: 0.68rem;
+  font-weight: 800;
+  color: var(--bone-faint);
+}
+.proof-note { margin-top: 1.3rem; font-size: 0.86rem; color: var(--bone-faint); max-width: 62ch; }
+
+/* ── Live-Wall ────────────────────────────────────────────────── */
+.live-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+  gap: 0.9rem;
+  margin-top: 2rem;
+}
+.live-card {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  align-items: center;
+  column-gap: 0.75rem;
+  text-decoration: none;
+  transition: border-color 0.25s, transform 0.25s var(--ease);
+}
+.live-card:hover { border-color: var(--teal); transform: translateY(-2px); }
+.live-name { font-family: var(--display); font-weight: 700; color: var(--bone); }
+.live-login {
+  grid-column: 2;
+  font-size: 0.78rem;
+  color: var(--bone-faint);
+  letter-spacing: 0.04em;
+}
+.live-empty { margin-top: 2rem; color: var(--bone-dim); max-width: 46ch; }
+
+/* ── Kreislauf / Steps ────────────────────────────────────────── */
+.step-grid {
+  list-style: none;
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+  gap: 1rem;
+  margin-top: 2rem;
+  counter-reset: step;
+}
+.step-card h3 { margin-top: 0.9rem; }
+.step-card p { margin-top: 0.5rem; color: var(--bone-dim); font-size: 0.94rem; }
+.step-jewel {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 2rem;
+  height: 2rem;
+  transform: rotate(45deg);
+  border: 1px solid var(--gold-border);
+  background: var(--gold-glow);
+  color: var(--gold-bright);
+  font-family: var(--display);
+  font-weight: 800;
+  font-size: 0.9rem;
+  line-height: 1;
+}
+.step-jewel i { transform: rotate(-45deg); font-style: normal; }
+.honest { margin-top: 2rem; border-color: var(--gold-border); }
+.honest p { color: var(--bone-dim); max-width: 70ch; }
+.honest strong { color: var(--gold-bright); }
+
+/* ── Karten (Switcher, Features) ──────────────────────────────── */
+.card-grid, .feature-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+  gap: 1rem;
+  margin-top: 2rem;
+}
+.info-card p, .feature-teaser { margin-top: 0.55rem; color: var(--bone-dim); font-size: 0.94rem; }
+.feature-card h3 { color: var(--gold-bright); }
+.feature-details { margin-top: 0.9rem; }
+.feature-details summary,
+.faq-item summary {
+  cursor: pointer;
+  text-transform: uppercase;
+  letter-spacing: 0.14em;
+  font-size: 0.72rem;
+  font-weight: 800;
+  color: var(--gold);
+  list-style: none;
+}
+.feature-details summary::before,
+.faq-item summary::before {
+  content: "◆";
+  margin-right: 0.55rem;
+  font-size: 0.6rem;
+  color: var(--gold-dark);
+  transition: transform 0.2s;
+  display: inline-block;
+}
+.feature-details[open] summary::before,
+.faq-item[open] summary::before { transform: rotate(90deg); color: var(--gold-bright); }
+.feature-details summary::-webkit-details-marker,
+.faq-item summary::-webkit-details-marker { display: none; }
+
+/* ── Finaler CTA ──────────────────────────────────────────────── */
+.final-cta { text-align: center; }
+.final-inner { display: flex; flex-direction: column; align-items: center; gap: 0.4rem; margin-top: 2.2rem; }
+.final-inner .lede { margin-inline: auto; }
+.final-inner .hero-actions { justify-content: center; margin-top: 1.4rem; }
+.final-cta .lede { margin: 1.2rem auto 0; }
+.final-cta .hero-actions { justify-content: center; }
+
+/* ── FAQ ──────────────────────────────────────────────────────── */
+.faq-toc {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.55rem;
+  margin-top: 1.8rem;
+}
+.faq-toc a {
+  text-decoration: none;
+  font-size: 0.72rem;
+  font-weight: 800;
+  text-transform: uppercase;
+  letter-spacing: 0.13em;
+  color: var(--bone-dim);
+  border: 1px solid var(--line);
+  padding: 0.5rem 0.85rem;
+  transition: color 0.2s, border-color 0.2s;
+}
+.faq-toc a:hover { color: var(--gold-bright); border-color: var(--gold-border); }
+.faq-group { margin-top: clamp(2.5rem, 5vw, 4rem); scroll-margin-top: 90px; }
+.faq-group > .md { margin-top: 0.8rem; color: var(--bone-dim); }
+.faq-item { margin-top: 0.8rem; }
+.faq-item summary { font-family: var(--display); font-size: 0.95rem; text-transform: none; letter-spacing: 0.01em; color: var(--bone); font-weight: 700; }
+.faq-item[open] summary { color: var(--gold-bright); }
+.faq-item .md { margin-top: 0.8rem; }
+
+/* ── Markdown-Inhalt ──────────────────────────────────────────── */
+.md { display: grid; gap: 0.7rem; color: var(--bone-dim); font-size: 0.95rem; }
+.md h3, .md h4 { color: var(--bone); margin-top: 0.4rem; }
+.md ul { padding-left: 1.1rem; display: grid; gap: 0.35rem; }
+.md li::marker { color: var(--gold-dark); }
+.md code {
+  font-size: 0.85em;
+  background: rgba(201, 168, 106, 0.1);
+  border: 1px solid var(--line-soft);
+  padding: 0.1em 0.4em;
+  color: var(--gold-bright);
+}
+.md-link, .md a { color: var(--gold); text-underline-offset: 3px; }
+.md-link:hover, .md a:hover { color: var(--gold-bright); }
+
+/* ── Footer ───────────────────────────────────────────────────── */
+.site-footer { padding-block: clamp(2.5rem, 5vw, 4rem) 3rem; }
+.footer-inner {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 1rem;
+  margin-top: 2rem;
+}
+.footer-brand { font-size: 0.85rem; color: var(--bone-faint); }
+.footer-nav { display: flex; flex-wrap: wrap; gap: 1.1rem; }
+.footer-nav a {
+  text-decoration: none;
+  font-size: 0.72rem;
+  font-weight: 800;
+  text-transform: uppercase;
+  letter-spacing: 0.13em;
+  color: var(--bone-faint);
+  transition: color 0.2s;
+}
+.footer-nav a:hover { color: var(--gold-bright); }
