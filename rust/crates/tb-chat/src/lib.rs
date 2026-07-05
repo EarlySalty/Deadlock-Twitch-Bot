@@ -28,6 +28,7 @@ pub mod channel_classifier;
 pub mod chatter_tracking;
 pub mod commands;
 pub mod conversation_scam;
+pub mod crew_guard;
 pub mod fun_responses;
 pub mod global_ban_sweep;
 pub mod global_chatter_ban;
@@ -60,6 +61,9 @@ pub use commands::{
 pub use conversation_scam::{
     ConversationScamGuard, DialogState, GuardMode, GuardSettings, MiniMaxScamJudge, ScamJudge,
     Verdict, VerdictKind,
+};
+pub use crew_guard::{
+    screen as crew_screen, CrewGuard, CrewJudge, CrewSignal, CrewVerdict, OpenAiCrewJudge,
 };
 pub use fun_responses::FunResponses;
 pub use global_ban_sweep::{GlobalBanSweeper, PartnerRoster};

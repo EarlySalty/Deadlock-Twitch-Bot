@@ -49,6 +49,7 @@ use crate::channel_classifier::{ChannelClass, ChannelClassifier};
 use crate::chatter_tracking::ChatterTracker;
 use crate::commands::CommandEngine;
 use crate::conversation_scam::ConversationScamGuard;
+use crate::crew_guard::CrewGuard;
 use crate::fun_responses::FunResponses;
 use crate::global_chatter_ban::GlobalChatterBanEnforcer;
 use crate::mention_scoring::{score_mention_patterns, MentionResolver, WHITELISTED_BOTS};
@@ -250,6 +251,41 @@ impl ModAlerter {
             }
         });
     }
+
+    /// Crew-Guard-Shadow-Meldung über **denselben** Discord-Pfad wie die
+    /// `sus_invite`-Alerts (Changelog-Cog → nani-Kanal, kein Mod-Ping). Der
+    /// Nachrichtentext ist bereits final formatiert (crew_guard). Fire-and-forget.
+    pub fn send_crew_campaign(self: &Arc<Self>, message: String) {
+        let payload = serde_json::json!({
+            "title": "🕵️ Crew-Guard (Shadow)",
+            "content": message,
+            "channel_id": self.channel_id,
+            "token": "changeme-local",
+        });
+
+        let this = Arc::clone(self);
+        let handle = tokio::spawn(async move {
+            match this
+                .http
+                .post(&this.endpoint)
+                .json(&payload)
+                .timeout(std::time::Duration::from_secs(5))
+                .send()
+                .await
+            {
+                Ok(resp) if !matches!(resp.status().as_u16(), 200 | 201 | 204) => {
+                    debug!("crew_guard: Discord-Post HTTP {}", resp.status());
+                }
+                Err(e) => debug!("crew_guard: Discord-Post fehlgeschlagen: {e}"),
+                _ => {}
+            }
+        });
+        tokio::spawn(async move {
+            if let Err(error) = handle.await {
+                tracing::error!(%error, "crew_guard: Task fehlerhaft beendet");
+            }
+        });
+    }
 }
 
 fn alert_channel_id_from_env() -> u64 {
@@ -431,11 +467,15 @@ pub struct ChatPipelineParts {
 #[derive(Clone)]
 pub struct ChatPipeline {
     parts: ChatPipelineParts,
+    /// Crew-Guard (Shadow-Mode): aus der Umgebung gebaut, teilt sich den
+    /// Discord-Alert-Pfad des `alerter`. Default AUS (`CREW_GUARD_ENABLED`).
+    crew_guard: Arc<CrewGuard>,
 }
 
 impl ChatPipeline {
     pub fn new(parts: ChatPipelineParts) -> Self {
-        Self { parts }
+        let crew_guard = Arc::new(CrewGuard::from_env(Arc::clone(&parts.alerter)));
+        Self { parts, crew_guard }
     }
 
     /// Verarbeitet ein eingehendes Chat-Event — Einstiegspunkt für den
@@ -533,6 +573,22 @@ impl ChatPipeline {
                 channel = %channel_login,
                 chatter = %chatter_login,
                 "chat_pipeline: Schritt conversation_scam.observe panicked"
+            );
+        }
+
+        // Crew-Guard (Shadow-Mode): koordinierte Abwerbe-/Diffamierungs-Kampagne
+        // erkennen und im Shadow NUR nach Discord melden — KEIN Ban, KEIN
+        // Chat-Post, KEIN Whisper. Nur Partner-Kanäle (hier). Fire-and-forget
+        // hinter Feature-Flag CREW_GUARD_ENABLED (default AUS): bei Aus ein
+        // sofortiger No-op, sonst screenen + ggf. GPT-Prüfung im Hintergrund.
+        let crew_guard_observe = || {
+            self.crew_guard.observe(event);
+        };
+        if catch_unwind(AssertUnwindSafe(crew_guard_observe)).is_err() {
+            warn!(
+                channel = %channel_login,
+                chatter = %chatter_login,
+                "chat_pipeline: Schritt crew_guard.observe panicked"
             );
         }
 
