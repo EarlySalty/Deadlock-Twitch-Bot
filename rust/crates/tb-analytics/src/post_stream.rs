@@ -2488,11 +2488,13 @@ mod tests {
     async fn call_minimax_liefert_content() {
         use wiremock::matchers::{method, path};
         use wiremock::{Mock, MockServer, ResponseTemplate};
-        // Ledger NIE auf die echte ~/.claude-Datei schreiben lassen: vor dem ersten
-        // record() (lazy Pool-Bind) auf eine prozess-eigene Temp-DB umlenken.
-        let mut ledger_path = std::env::temp_dir();
-        ledger_path.push(format!("tb_an_test_ledger_{}.db", std::process::id()));
-        std::env::set_var("MINIMAX_USAGE_DB", &ledger_path);
+        // Ledger NIE die echte zentrale DB anfassen lassen: vor dem ersten record()
+        // (lazy Pool-Bind) den zentralen DSN aus der Umgebung nehmen, damit der
+        // best-effort-`record()` keinen Pool baut und zum No-op wird. Dieser Test
+        // prüft nur `call_minimax`, nicht den Ledger-Seiteneffekt.
+        std::env::remove_var("TWITCH_ANALYTICS_DSN");
+        std::env::remove_var("DATABASE_URL");
+        std::env::remove_var("MINIMAX_USAGE_DB");
         let server = MockServer::start().await;
         let body = serde_json::json!({"choices": [{"message": {"content": "ANTWORT"}}]});
         Mock::given(method("POST"))

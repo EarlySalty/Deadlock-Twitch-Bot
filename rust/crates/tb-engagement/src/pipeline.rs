@@ -518,7 +518,7 @@ mod tests {
     async fn spoke_voller_pfad() {
         // Ledger auf Temp umbiegen, damit der MiniMax-Call den echten Usage-Ledger
         // nicht anfasst (greift nur, wenn dieser DB-Test überhaupt läuft).
-        crate::minimax_chat::redirect_ledger_to_temp();
+        crate::minimax_chat::redirect_ledger_for_tests();
         let Some(pool) = make_pool("t_eng_pipe_spoke").await else { return };
         // output_mode='live' → senden (Default wäre 'off' = no-op).
         sqlx::query("INSERT INTO twitch_engagement_settings (channel_login, enabled, output_mode) VALUES ('nani', TRUE, 'live')").execute(&pool).await.unwrap();
@@ -557,7 +557,7 @@ mod tests {
     /// user-Turn), damit der Live-Kontext nicht verfälscht wird.
     #[tokio::test]
     async fn shadow_erzeugt_aber_sendet_nicht() {
-        crate::minimax_chat::redirect_ledger_to_temp();
+        crate::minimax_chat::redirect_ledger_for_tests();
         let Some(pool) = make_pool("t_eng_pipe_shadow").await else { return };
         sqlx::query("INSERT INTO twitch_engagement_settings (channel_login, enabled, output_mode) VALUES ('nani', TRUE, 'shadow')").execute(&pool).await.unwrap();
         sqlx::query("INSERT INTO twitch_streamers_partner_state (twitch_login, is_partner_active) VALUES ('nani', 1)").execute(&pool).await.unwrap();

@@ -14,9 +14,11 @@
 //! [`tracing::warn`] geloggt und verschluckt — der Aufrufer läuft weiter. Secrets
 //! landen niemals im Ledger oder Log.
 //!
-//! **Verbindung:** DSN aus Env `DATABASE_URL`, sonst `TWITCH_ANALYTICS_DSN`
-//! (der zentrale DSN dieses Bots, siehe `tb-config`). Ohne DSN bleibt das Ledger
-//! still inaktiv (best-effort).
+//! **Verbindung:** DSN aus Env `TWITCH_ANALYTICS_DSN` (der kanonische zentrale
+//! DSN dieses Bots, siehe `tb-config`), sonst `DATABASE_URL`. `TWITCH_ANALYTICS_DSN`
+//! hat bewusst Vorrang: `DATABASE_URL` kann in manchen Prod/CI-Umgebungen auf eine
+//! andere/Test-DB zeigen — sonst schriebe das Ledger still in die falsche DB. Ohne
+//! DSN bleibt das Ledger still inaktiv (best-effort).
 //!
 //! **Zeitspalte:** `ts` bleibt bewusst `TEXT` (ISO-8601 UTC mit Sekunden und
 //! `+00:00`-Offset, byte-gleich zum Python-Stil `isoformat(timespec="seconds")`).
@@ -37,12 +39,12 @@ use tokio::sync::{Mutex, OnceCell};
 /// Quellen-Kennung dieses Bots im geteilten Ledger (Python: `source="twitch-bot"`).
 pub const SOURCE: &str = "twitch-bot";
 
-/// Primäre Env-Variable für den zentralen DSN.
-const ENV_DSN_PRIMARY: &str = "DATABASE_URL";
-/// Fallback-Env-Variable: der zentrale DSN dieses Bots (siehe `tb-config`,
-/// `TwitchConfig.dsn`). Der laufende Bot exportiert `TWITCH_ANALYTICS_DSN`, nicht
-/// zwingend `DATABASE_URL` — der Fallback hält das Ledger in Prod ohne Extra-Wiring lebendig.
-const ENV_DSN_FALLBACK: &str = "TWITCH_ANALYTICS_DSN";
+/// Primäre Env-Variable: der kanonische zentrale DSN dieses Bots (siehe
+/// `tb-config`, `TwitchConfig.dsn`). Bewusst VOR `DATABASE_URL`, damit das Ledger
+/// nicht versehentlich in eine abweichende `DATABASE_URL`-DB (z. B. Test) schreibt.
+const ENV_DSN_PRIMARY: &str = "TWITCH_ANALYTICS_DSN";
+/// Fallback-Env-Variable, falls `TWITCH_ANALYTICS_DSN` nicht gesetzt ist.
+const ENV_DSN_FALLBACK: &str = "DATABASE_URL";
 /// Env-Variable für das rollierende 5h-Token-Budget (0/leer = aus).
 const ENV_BUDGET: &str = "MINIMAX_5H_TOKEN_BUDGET";
 /// Standard-Fensterbreite in Stunden (Python: `WINDOW_HOURS = 5`).
@@ -63,7 +65,7 @@ static POOL: OnceCell<PgPool> = OnceCell::const_new();
 /// [`BUDGET_CHECK_INTERVAL`], damit das Fenster-`SUM` nicht bei jedem Call läuft.
 static LAST_BUDGET_CHECK: Mutex<Option<Instant>> = Mutex::const_new(None);
 
-/// Liest den zentralen DSN: Env `DATABASE_URL`, sonst `TWITCH_ANALYTICS_DSN`.
+/// Liest den zentralen DSN: Env `TWITCH_ANALYTICS_DSN`, sonst `DATABASE_URL`.
 /// Leere/whitespace-Werte zählen als nicht gesetzt.
 fn dsn_from_env() -> Option<String> {
     for key in [ENV_DSN_PRIMARY, ENV_DSN_FALLBACK] {
@@ -86,12 +88,12 @@ fn budget_from_env() -> i64 {
 }
 
 /// Baut den Ledger-Pool gegen die zentrale Postgres und stellt das Schema sicher.
-/// Ohne DSN (`DATABASE_URL`/`TWITCH_ANALYTICS_DSN`) scheitert der Aufbau bewusst —
+/// Ohne DSN (`TWITCH_ANALYTICS_DSN`/`DATABASE_URL`) scheitert der Aufbau bewusst —
 /// der Aufrufer loggt und macht best-effort weiter.
 async fn build_pool() -> sqlx::Result<PgPool> {
     let dsn = dsn_from_env().ok_or_else(|| {
         sqlx::Error::Configuration(
-            "kein DSN (DATABASE_URL/TWITCH_ANALYTICS_DSN) gesetzt".into(),
+            "kein DSN (TWITCH_ANALYTICS_DSN/DATABASE_URL) gesetzt".into(),
         )
     })?;
     // Wenige Verbindungen genügen — das Ledger wird nur sporadisch beschrieben.
@@ -512,7 +514,7 @@ mod tests {
         assert_eq!(
             dsn_from_env().as_deref(),
             Some("postgres://primary"),
-            "DATABASE_URL hat Vorrang"
+            "TWITCH_ANALYTICS_DSN hat Vorrang"
         );
 
         // Whitespace-only zählt als nicht gesetzt → Fallback greift.
