@@ -14,7 +14,8 @@
 //!   2. [`CrewJudge`] — konservativer LLM-Klassifikator, der nur dann `is_crew`
 //!      setzt, wenn das Kampagnen-Muster klar erkennbar ist. Fail-safe „unsure".
 
-use std::sync::{Arc, OnceLock};
+use std::collections::{HashMap, VecDeque};
+use std::sync::{Arc, Mutex, OnceLock, PoisonError};
 use std::time::Duration;
 
 use async_trait::async_trait;
@@ -306,12 +307,22 @@ impl CrewJudge for OpenAiCrewJudge {
     }
 }
 
+/// Baut den User-Prompt: der bisherige Chatverlauf DIESES Users (chronologisch,
+/// je Zeile als `> …` vorangestellt) plus die aktuelle Nachricht. Die Kampagne
+/// ist ein Mehr-Nachrichten-Bogen — einzelne Zeilen sind bewusst zu wenig, der
+/// Kontext ist deshalb ausschlaggebend für die Recall.
 fn build_user_content(content: &str, recent_context: &[String]) -> String {
     if recent_context.is_empty() {
-        format!("Zu pruefende Nachricht:\n{content}")
+        format!("Zu pruefende (aktuelle) Nachricht dieses Users:\n{content}")
     } else {
-        let ctx = recent_context.join("\n");
-        format!("Kontext (vorherige Nachrichten):\n{ctx}\n\nZu pruefende Nachricht:\n{content}")
+        let history = recent_context
+            .iter()
+            .map(|line| format!("> {line}"))
+            .collect::<Vec<_>>()
+            .join("\n");
+        format!(
+            "Bisheriger Chatverlauf dieses Users (chronologisch):\n{history}\n\nZu pruefende (aktuelle) Nachricht dieses Users:\n{content}"
+        )
     }
 }
 
@@ -453,6 +464,79 @@ fn hard_id_patterns(content: &str, has_evidence: bool) -> String {
 }
 
 // ---------------------------------------------------------------------------
+// Kontextfenster je (channel, chatter) — In-Memory, speicherbegrenzt
+// ---------------------------------------------------------------------------
+
+/// Anzahl der letzten Nachrichten je User, die als Judge-Kontext dienen.
+const CONTEXT_WINDOW: usize = 6;
+/// Deckel gegen unbegrenztes Wachstum: max. so viele (channel, chatter)-Keys.
+const CONTEXT_MAX_KEYS: usize = 4096;
+
+#[derive(Default)]
+struct ContextStore {
+    /// (channel, chatter-identity) → letzte Nachrichten (chronologisch).
+    windows: HashMap<(String, String), VecDeque<String>>,
+    /// Einfüge-Reihenfolge der Keys (vorne = ältester) für FIFO-Verdrängung.
+    order: VecDeque<(String, String)>,
+}
+
+/// Speicherbegrenzter In-Memory-Puffer der letzten Nachrichten je User.
+/// Threadsicher via `Mutex`; der Lock wird nur kurz und **await-frei** gehalten.
+struct ChatterContextBuffer {
+    inner: Mutex<ContextStore>,
+}
+
+impl ChatterContextBuffer {
+    fn new() -> Self {
+        Self {
+            inner: Mutex::new(ContextStore::default()),
+        }
+    }
+
+    /// Liefert die BISHERIGEN Nachrichten dieses Users (ohne die aktuelle) und
+    /// schiebt die aktuelle Nachricht danach in den Puffer. Ein einzelner,
+    /// kurzer Lock ohne `await` — clippy-sauber und race-frei zur Reihenfolge.
+    fn snapshot_then_push(&self, channel: &str, identity: &str, content: &str) -> Vec<String> {
+        let key = (channel.to_string(), identity.to_string());
+        let mut guard = self.inner.lock().unwrap_or_else(PoisonError::into_inner);
+        let store = &mut *guard;
+
+        let existing = store.windows.get(&key);
+        let prev: Vec<String> = existing
+            .map(|window| window.iter().cloned().collect())
+            .unwrap_or_default();
+        let existed = existing.is_some();
+
+        let window = store.windows.entry(key.clone()).or_default();
+        window.push_back(content.to_string());
+        while window.len() > CONTEXT_WINDOW {
+            window.pop_front();
+        }
+
+        if !existed {
+            store.order.push_back(key);
+            while store.order.len() > CONTEXT_MAX_KEYS {
+                if let Some(oldest) = store.order.pop_front() {
+                    store.windows.remove(&oldest);
+                } else {
+                    break;
+                }
+            }
+        }
+        prev
+    }
+}
+
+/// Kontext-Key-Identität: bevorzugt die stabile Twitch-User-ID, sonst der Login.
+fn context_identity<'a>(chatter_id: &'a str, login: &'a str) -> &'a str {
+    if chatter_id.trim().is_empty() {
+        login
+    } else {
+        chatter_id
+    }
+}
+
+// ---------------------------------------------------------------------------
 // CrewGuard — Verdrahtung (Shadow-Mode, fire-and-forget)
 // ---------------------------------------------------------------------------
 
@@ -478,6 +562,7 @@ pub struct CrewGuard {
     threshold: f32,
     judge: Arc<dyn CrewJudge>,
     alerter: Arc<ModAlerter>,
+    context: ChatterContextBuffer,
 }
 
 impl CrewGuard {
@@ -487,6 +572,7 @@ impl CrewGuard {
             threshold: JUDGE_CONFIDENCE_THRESHOLD,
             judge,
             alerter,
+            context: ChatterContextBuffer::new(),
         }
     }
 
@@ -512,6 +598,16 @@ impl CrewGuard {
         let channel = event.broadcaster_user_login.to_lowercase();
         let login = event.chatter_user_login.clone();
         let chatter_id = event.chatter_user_id.clone();
+
+        // Kontextfenster: vorherige Nachrichten dieses Users holen (OHNE die
+        // aktuelle) und die aktuelle danach in den Puffer schieben. Kurzer,
+        // await-freier Lock — läuft synchron vor dem Spawn, damit die
+        // chronologische Reihenfolge bei Nachrichten-Bursts erhalten bleibt.
+        let identity = context_identity(&chatter_id, &login);
+        let recent_context = self
+            .context
+            .snapshot_then_push(&channel, identity, &content);
+
         let judge = Arc::clone(&self.judge);
         let alerter = Arc::clone(&self.alerter);
         let threshold = self.threshold;
@@ -524,6 +620,7 @@ impl CrewGuard {
                 &login,
                 threshold,
                 judge.as_ref(),
+                &recent_context,
                 &alerter,
             )
             .await;
@@ -531,8 +628,63 @@ impl CrewGuard {
     }
 }
 
-/// Kern der Shadow-Auswertung: screenen, ggf. Judge fragen, ggf. melden.
-/// Meldet ausschliesslich nach Discord — nie ein Ban/Chat-Post/Whisper.
+/// Entscheidet OHNE Seiteneffekt, ob (und mit welchem Text) gemeldet würde.
+/// Trennt die Erkennung von der Discord-Zustellung, damit der Backtest die
+/// Detektion messen kann, ohne echte Alerts zu senden. `None` = keine Meldung.
+///
+/// Der `recent_context` (vorherige Nachrichten desselben Users) fliesst NUR in
+/// den Trigger→Judge-Pfad ein; `HardId`/`HardInvite` bleiben deterministisch.
+async fn decide(
+    content: &str,
+    chatter_id: &str,
+    channel: &str,
+    login: &str,
+    threshold: f32,
+    judge: &dyn CrewJudge,
+    recent_context: &[String],
+) -> Option<String> {
+    match screen(content, Some(chatter_id)) {
+        CrewSignal::HardId {
+            login: registry_login,
+            has_evidence,
+        } => {
+            let patterns = hard_id_patterns(content, has_evidence);
+            Some(format_known_account_alert(
+                registry_login,
+                channel,
+                &patterns,
+            ))
+        }
+        CrewSignal::HardInvite { code } => {
+            let patterns = format!("Rival-Invite {code}");
+            Some(format_known_account_alert(login, channel, &patterns))
+        }
+        CrewSignal::Trigger { hits } => {
+            let verdict = judge.judge(content, recent_context).await;
+            if verdict.is_crew && verdict.confidence >= threshold {
+                let patterns = if verdict.patterns.is_empty() {
+                    hits.join(", ")
+                } else {
+                    verdict.patterns.join(", ")
+                };
+                Some(format_new_account_alert(
+                    login,
+                    channel,
+                    &patterns,
+                    verdict.confidence,
+                    content,
+                ))
+            } else {
+                None
+            }
+        }
+        CrewSignal::None => None,
+    }
+}
+
+/// Kern der Shadow-Auswertung: entscheiden, dann ggf. NUR nach Discord melden —
+/// nie ein Ban/Chat-Post/Whisper.
+#[allow(clippy::too_many_arguments)]
 async fn evaluate(
     content: &str,
     chatter_id: &str,
@@ -540,42 +692,21 @@ async fn evaluate(
     login: &str,
     threshold: f32,
     judge: &dyn CrewJudge,
+    recent_context: &[String],
     alerter: &Arc<ModAlerter>,
 ) {
-    match screen(content, Some(chatter_id)) {
-        CrewSignal::HardId {
-            login: registry_login,
-            has_evidence,
-        } => {
-            let patterns = hard_id_patterns(content, has_evidence);
-            alerter.send_crew_campaign(format_known_account_alert(
-                registry_login,
-                channel,
-                &patterns,
-            ));
-        }
-        CrewSignal::HardInvite { code } => {
-            let patterns = format!("Rival-Invite {code}");
-            alerter.send_crew_campaign(format_known_account_alert(login, channel, &patterns));
-        }
-        CrewSignal::Trigger { hits } => {
-            let verdict = judge.judge(content, &[]).await;
-            if verdict.is_crew && verdict.confidence >= threshold {
-                let patterns = if verdict.patterns.is_empty() {
-                    hits.join(", ")
-                } else {
-                    verdict.patterns.join(", ")
-                };
-                alerter.send_crew_campaign(format_new_account_alert(
-                    login,
-                    channel,
-                    &patterns,
-                    verdict.confidence,
-                    content,
-                ));
-            }
-        }
-        CrewSignal::None => {}
+    if let Some(message) = decide(
+        content,
+        chatter_id,
+        channel,
+        login,
+        threshold,
+        judge,
+        recent_context,
+    )
+    .await
+    {
+        alerter.send_crew_campaign(message);
     }
 }
 
@@ -767,5 +898,230 @@ mod tests {
         eprintln!(
             "crew_guard Judge-Backtest (5+5): TP={true_pos} FP={false_pos} FN={false_neg} TN={true_neg} | precision={precision:.2} recall={recall:.2}"
         );
+    }
+
+    #[test]
+    fn context_identity_bevorzugt_id_sonst_login() {
+        assert_eq!(context_identity("12345", "loginx"), "12345");
+        assert_eq!(context_identity("", "loginx"), "loginx");
+        assert_eq!(context_identity("   ", "loginx"), "loginx");
+    }
+
+    #[test]
+    fn kontextpuffer_liefert_vorherige_ohne_aktuelle_und_verdraengt() {
+        let buf = ChatterContextBuffer::new();
+        // Erste Nachricht: kein Vorlauf.
+        assert!(buf.snapshot_then_push("nani", "u1", "m1").is_empty());
+        // Zweite sieht m1, aber NICHT sich selbst.
+        assert_eq!(
+            buf.snapshot_then_push("nani", "u1", "m2"),
+            vec!["m1".to_string()]
+        );
+        assert_eq!(
+            buf.snapshot_then_push("nani", "u1", "m3"),
+            vec!["m1".to_string(), "m2".to_string()]
+        );
+        // Anderer User im selben Kanal ist getrennt.
+        assert!(buf.snapshot_then_push("nani", "u2", "x1").is_empty());
+        // Fenster begrenzt: nur die letzten CONTEXT_WINDOW Nachrichten.
+        for i in 0..20 {
+            buf.snapshot_then_push("nani", "u3", &format!("n{i}"));
+        }
+        let prev = buf.snapshot_then_push("nani", "u3", "final");
+        assert_eq!(prev.len(), CONTEXT_WINDOW);
+        assert_eq!(prev.last().map(String::as_str), Some("n19"));
+    }
+
+    #[test]
+    fn user_prompt_bettet_kontext_als_zitatzeilen_ein() {
+        let ctx = vec!["erste zeile".to_string(), "zweite zeile".to_string()];
+        let prompt = build_user_content("aktuelle nachricht", &ctx);
+        assert!(prompt.contains("> erste zeile"), "war: {prompt}");
+        assert!(prompt.contains("> zweite zeile"), "war: {prompt}");
+        assert!(prompt.contains("aktuelle nachricht"));
+        // Ohne Kontext kein Verlaufsblock.
+        let bare = build_user_content("nur eine", &[]);
+        assert!(!bare.contains('>'), "war: {bare}");
+        assert!(bare.contains("nur eine"));
+    }
+
+    fn precision_recall(true_pos: usize, false_pos: usize, false_neg: usize) -> (f32, f32) {
+        let precision = if true_pos + false_pos == 0 {
+            0.0
+        } else {
+            true_pos as f32 / (true_pos + false_pos) as f32
+        };
+        let recall = if true_pos + false_neg == 0 {
+            0.0
+        } else {
+            true_pos as f32 / (true_pos + false_neg) as f32
+        };
+        (precision, recall)
+    }
+
+    /// Echter DB-Backtest gegen `twitch_chat_messages` (NUR lesend, keine
+    /// Writes). Gated auf TB_TEST_DATABASE_URL + OPENAI_API_KEY + CREW_GUARD_MODEL
+    /// und `#[ignore]` — läuft nur auf explizite Anforderung mit DSN+Key. Er
+    /// misst zwei Dinge: (A) das End-to-End-System (screen + Judge mit Kontext)
+    /// und (B) die EHRLICHE Judge-Recall auf realem Kampagnentext, indem der
+    /// deterministische HardId-Kurzschluss bewusst umgangen wird.
+    #[tokio::test]
+    #[ignore = "DB-Backtest: braucht TB_TEST_DATABASE_URL + OPENAI_API_KEY + CREW_GUARD_MODEL; nur lesend"]
+    async fn crew_guard_db_backtest_realdaten() {
+        let (Some(dsn), Some(_), Some(_)) = (
+            non_empty_env("TB_TEST_DATABASE_URL"),
+            non_empty_env("OPENAI_API_KEY"),
+            non_empty_env("CREW_GUARD_MODEL"),
+        ) else {
+            eprintln!(
+                "SKIP crew_guard_db_backtest_realdaten: TB_TEST_DATABASE_URL/OPENAI_API_KEY/CREW_GUARD_MODEL nicht gesetzt"
+            );
+            return;
+        };
+
+        let pool = match sqlx::postgres::PgPoolOptions::new()
+            .max_connections(2)
+            .connect(&dsn)
+            .await
+        {
+            Ok(pool) => pool,
+            Err(err) => {
+                eprintln!(
+                    "SKIP crew_guard_db_backtest_realdaten: DB-Connect fehlgeschlagen: {err}"
+                );
+                return;
+            }
+        };
+
+        // Die 5 Crew-Logins (lowercase) als Bind-Parameter.
+        let crew_logins: Vec<String> = CREW_REGISTRY
+            .iter()
+            .map(|acc| acc.login.to_string())
+            .collect();
+
+        // Positiva: echte Nachrichten der Crew-Logins, je User chronologisch.
+        let positives = match sqlx::query_as::<_, (String, String, String, String)>(
+            "SELECT streamer_login, COALESCE(chatter_login, ''), COALESCE(chatter_id, ''), content \
+             FROM twitch_chat_messages \
+             WHERE lower(chatter_login) = ANY($1) \
+               AND content IS NOT NULL AND length(btrim(content)) > 0 \
+             ORDER BY chatter_login, message_ts",
+        )
+        .bind(crew_logins.clone())
+        .fetch_all(&pool)
+        .await
+        {
+            Ok(rows) => rows,
+            Err(err) => {
+                eprintln!("crew_guard_db_backtest_realdaten: Positiv-Query fehlgeschlagen: {err}");
+                return;
+            }
+        };
+
+        // Negativa: Zufallsstichprobe sonstiger Nachrichten (KEINE Crew), LIMIT 500.
+        let negatives = match sqlx::query_as::<_, (String, String, String, String)>(
+            "SELECT streamer_login, COALESCE(chatter_login, ''), COALESCE(chatter_id, ''), content \
+             FROM twitch_chat_messages \
+             WHERE (chatter_login IS NULL OR lower(chatter_login) <> ALL($1)) \
+               AND content IS NOT NULL AND length(btrim(content)) > 0 \
+             ORDER BY random() LIMIT 500",
+        )
+        .bind(crew_logins.clone())
+        .fetch_all(&pool)
+        .await
+        {
+            Ok(rows) => rows,
+            Err(err) => {
+                eprintln!("crew_guard_db_backtest_realdaten: Negativ-Query fehlgeschlagen: {err}");
+                return;
+            }
+        };
+
+        eprintln!(
+            "crew_guard_db_backtest_realdaten: {} Crew-Nachrichten, {} Negativ-Stichprobe",
+            positives.len(),
+            negatives.len()
+        );
+
+        let judge = OpenAiCrewJudge::from_env();
+        let threshold = JUDGE_CONFIDENCE_THRESHOLD;
+
+        // ---- Metrik A: End-to-End (screen() + Judge mit Kontext) ----
+        let ctx_pos = ChatterContextBuffer::new();
+        let mut a_tp = 0usize;
+        let mut a_false_neg = 0usize;
+        for (streamer, login, chatter_id, content) in &positives {
+            let channel = streamer.to_lowercase();
+            let identity = context_identity(chatter_id, login);
+            let prev = ctx_pos.snapshot_then_push(&channel, identity, content);
+            if decide(
+                content, chatter_id, &channel, login, threshold, &judge, &prev,
+            )
+            .await
+            .is_some()
+            {
+                a_tp += 1;
+            } else {
+                a_false_neg += 1;
+            }
+        }
+        let ctx_neg = ChatterContextBuffer::new();
+        let mut a_fp = 0usize;
+        let mut a_tn = 0usize;
+        for (streamer, login, chatter_id, content) in &negatives {
+            let channel = streamer.to_lowercase();
+            let identity = context_identity(chatter_id, login);
+            let prev = ctx_neg.snapshot_then_push(&channel, identity, content);
+            if decide(
+                content, chatter_id, &channel, login, threshold, &judge, &prev,
+            )
+            .await
+            .is_some()
+            {
+                a_fp += 1;
+            } else {
+                a_tn += 1;
+            }
+        }
+        let (a_precision, a_recall) = precision_recall(a_tp, a_fp, a_false_neg);
+        eprintln!(
+            "Metrik A (End-to-End screen+judge+Kontext): TP={a_tp} FP={a_fp} FN={a_false_neg} TN={a_tn} | precision={a_precision:.2} recall={a_recall:.2}"
+        );
+
+        // ---- Metrik B: ehrliche Judge-Recall auf realem Kampagnentext ----
+        // HardId-Kurzschluss bewusst umgangen: Judge DIREKT auf die Crew-Texte,
+        // mit den vorherigen Nachrichten desselben Users als Kontext.
+        let ctx_b_pos = ChatterContextBuffer::new();
+        let mut b_tp = 0usize;
+        let mut b_false_neg = 0usize;
+        for (streamer, login, chatter_id, content) in &positives {
+            let channel = streamer.to_lowercase();
+            let identity = context_identity(chatter_id, login);
+            let prev = ctx_b_pos.snapshot_then_push(&channel, identity, content);
+            if judge.judge(content, &prev).await.is_crew {
+                b_tp += 1;
+            } else {
+                b_false_neg += 1;
+            }
+        }
+        let ctx_b_neg = ChatterContextBuffer::new();
+        let mut b_fp = 0usize;
+        let mut b_tn = 0usize;
+        for (streamer, login, chatter_id, content) in &negatives {
+            let channel = streamer.to_lowercase();
+            let identity = context_identity(chatter_id, login);
+            let prev = ctx_b_neg.snapshot_then_push(&channel, identity, content);
+            if judge.judge(content, &prev).await.is_crew {
+                b_fp += 1;
+            } else {
+                b_tn += 1;
+            }
+        }
+        let (b_precision, b_recall) = precision_recall(b_tp, b_fp, b_false_neg);
+        eprintln!(
+            "Metrik B (Judge direkt, HardId umgangen): TP={b_tp} FP={b_fp} FN={b_false_neg} TN={b_tn} | precision={b_precision:.2} recall={b_recall:.2}"
+        );
+
+        pool.close().await;
     }
 }
