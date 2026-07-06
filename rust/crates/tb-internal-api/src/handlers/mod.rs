@@ -15,6 +15,7 @@ pub mod reauth_all;
 pub mod scam_guard;
 pub mod self_explainer_log;
 pub mod session_detail;
+pub mod spam_learning;
 pub mod stats_native;
 pub mod streamer_analytics_native;
 pub mod streamer_link;

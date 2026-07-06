@@ -59,6 +59,7 @@ Auth: Header `X-Internal-Token`, Loopback-Pflicht, `X-Idempotency-Key` für muti
 - **Stats/Analytics:** `stats`, `analytics/streamer/{login}`, `analytics/comparison`, `sessions/{id}`
 - **Raid:** `raid/auth-url`, `raid/auth-state`, `raid/block-state`, `raid/go-url`, `raid/requirements` (POST), `raid/oauth-callback` (POST), `raid/blacklist(/add|/remove|/check)`
 - **Global-Ban:** `globalban(/add|/remove|/check)`
+- **Spam-Learning:** `spam-learning` (POST) — schreibt manuell bestätigte Spam-/Safe-Muster in die vorhandenen Lernlisten.
 - **EventSub/Telemetry:** `eventsub/dispatch` (POST), `eventsub/processing/requeue` (POST), `debug/eventsub-processing`, `debug/observability`, `debug/chatters/{login}`, `live/active-announcements`, `live/link-click` (POST)
 - **Discord-Relay:** `discord/self-explainer-log` (POST)
 - `healthz`

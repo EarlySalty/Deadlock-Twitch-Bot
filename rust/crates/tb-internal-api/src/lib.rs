@@ -66,8 +66,8 @@ pub fn build_internal_router(
     use handlers::{
         chat_command, diagnose, discord_invite, eventsub, global_ban, healthz, market_share,
         python_stubs, raid, raid_blacklist, raid_oauth as oauth, reauth_all, scam_guard,
-        self_explainer_log, session_detail, stats_native, streamer_analytics_native, streamer_link,
-        streamers, telemetry_routes,
+        self_explainer_log, session_detail, spam_learning, stats_native, streamer_analytics_native,
+        streamer_link, streamers, telemetry_routes,
     };
 
     let base = INTERNAL_API_BASE_PATH; // "/internal/twitch/v1"
@@ -162,6 +162,10 @@ pub fn build_internal_router(
         .route(
             &format!("{base}/scam-guard/enforce"),
             post(scam_guard::scam_enforce_handler),
+        )
+        .route(
+            &format!("{base}/spam-learning"),
+            post(spam_learning::learn_handler),
         )
         // Raid-OAuth-Strecke (Welle B): nativ via RaidOAuthPort +
         // Composition-Root in tb-bot (raid_oauth_impl.rs). auth-url schreibt

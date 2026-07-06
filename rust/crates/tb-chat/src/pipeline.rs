@@ -157,6 +157,21 @@ pub struct ModAlerter {
     channel_id: u64,
 }
 
+fn spam_learning_pattern(content: &str) -> Option<String> {
+    let text = content
+        .replace(['\r', '\n', '`'], " ")
+        .split_whitespace()
+        .filter(|part| !part.starts_with('@'))
+        .collect::<Vec<_>>()
+        .join(" ");
+    let pattern = text.trim();
+    if pattern.chars().count() >= 4 {
+        Some(pattern.chars().take(200).collect())
+    } else {
+        None
+    }
+}
+
 impl ModAlerter {
     pub fn new(http: reqwest::Client) -> Self {
         Self::with_endpoint(http, "http://localhost:8899/changelog")
@@ -221,12 +236,23 @@ impl ModAlerter {
             lines.push(format!("**Nachricht:** `{safe}`"));
         }
 
-        let payload = serde_json::json!({
+        let mut payload = serde_json::json!({
             "title": title,
             "content": lines.join("\n"),
             "channel_id": self.channel_id,
             "token": "changeme-local",
         });
+        if kind == "sus_spam" {
+            if let Some(pattern) = spam_learning_pattern(content) {
+                payload["spam_learning"] = serde_json::json!({
+                    "pattern": pattern,
+                    "pattern_type": "phrase",
+                    "source_message": content.chars().take(500).collect::<String>(),
+                    "source_channel": channel_login,
+                    "reason": reason,
+                });
+            }
+        }
 
         let this = Arc::clone(self);
         let handle = tokio::spawn(async move {
@@ -1631,6 +1657,13 @@ mod tests {
         let bans = std::fs::read_to_string(dir.join("twitch_autobans.log")).unwrap();
         assert!(bans.contains("\t[BANNED]\tkanal1\t-\t456\t-\tx"));
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn spam_learning_pattern_entfernt_mentions() {
+        let pattern = spam_learning_pattern("@MiracleGhost9 aha, so sammelt man also viewer Kappa")
+            .expect("pattern");
+        assert_eq!(pattern, "aha, so sammelt man also viewer Kappa");
     }
 
     #[test]
