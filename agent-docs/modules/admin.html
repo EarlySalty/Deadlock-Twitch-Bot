@@ -1,0 +1,120 @@
+<!doctype html>
+<html lang="de">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Modul: Admin-Funktionen (intern) — Deadlock Twitch Bot</title>
+<style>
+:root{--fg:#1a1a1a;--bg:#fff;--muted:#555;--line:#ddd;--accent:#0a7d33;--box:#f6f8fa;--warn:#b00020;--ok:#0a7d33}
+@media(prefers-color-scheme:dark){:root{--fg:#e6e6e6;--bg:#141414;--muted:#a5a5a5;--line:#333;--box:#1e1e1e;--accent:#4ec978;--warn:#ff6b7a}}
+*{box-sizing:border-box}
+body{margin:0;font:16px/1.6 system-ui,-apple-system,Segoe UI,Roboto,sans-serif;color:var(--fg);background:var(--bg)}
+main{max-width:900px;margin:0 auto;padding:1.5rem}
+h1{font-size:1.8rem;line-height:1.25;margin:.2rem 0 1rem}
+h2{font-size:1.35rem;margin:2.2rem 0 .6rem;border-bottom:1px solid var(--line);padding-bottom:.3rem}
+h3{font-size:1.08rem;margin:1.4rem 0 .4rem}
+a{color:var(--accent)}
+nav.crumbs{font-size:.85rem;margin-bottom:1rem;color:var(--muted)}
+p.summary{font-size:1.05rem;background:var(--box);border-left:4px solid var(--accent);padding:.8rem 1rem;border-radius:4px}
+table{border-collapse:collapse;width:100%;margin:1rem 0;font-size:.95rem}
+th,td{border:1px solid var(--line);padding:.5rem .6rem;text-align:left;vertical-align:top}
+th{background:var(--box)}
+code{background:var(--box);padding:.1rem .3rem;border-radius:3px;font-size:.9em}
+ul,ol{padding-left:1.3rem}
+.box{background:var(--box);border:1px solid var(--line);border-radius:6px;padding:.7rem 1rem;margin:1rem 0}
+.say{border-left:4px solid var(--ok)}
+.nosay{border-left:4px solid var(--warn)}
+.tag{display:inline-block;font-size:.72rem;font-weight:600;padding:.1rem .5rem;border-radius:10px;background:var(--box);border:1px solid var(--line)}
+footer{margin-top:3rem;padding-top:1rem;border-top:1px solid var(--line);font-size:.8rem;color:var(--muted)}
+</style>
+</head>
+<body>
+<main>
+<nav class="crumbs"><a href="../index.html">Startseite</a> › Module › Admin-Funktionen</nav>
+<h1>Modul: Admin-Funktionen <span class="tag">intern</span></h1>
+<p class="summary">Das Admin-Dashboard ist die Betreiber-Oberfläche des Bots: Aufnahme und Verifizierung von Streamern, Monitoring, Billing-Überblick, globale Konfiguration und punktuelle Moderationseingriffe. Diese Seite beschreibt die betriebs- und supportrelevante Ebene — nicht die internen Rechte- oder Zugangsmechaniken.</p>
+
+<section id="worum-es-geht">
+<h2>Worum es geht</h2>
+<p>Das Admin-Dashboard ist klar vom Streamer-Dashboard getrennt: Streamer sehen und steuern dort nur ihren eigenen Kanal, während das Admin-Dashboard den Überblick und die Steuerung über alle Kanäle hinweg bietet. Es ist ausschließlich für berechtigte Betreiber gedacht und für normale Streamer und Viewer unsichtbar.</p>
+</section>
+
+<section id="aufgabenbereiche">
+<h2>Aufgabenbereiche</h2>
+<table>
+<thead>
+<tr><th>Bereich</th><th>Zweck</th></tr>
+</thead>
+<tbody>
+<tr><td>Streamer- &amp; Partnerverwaltung</td><td>Liste aller registrierten Streamer mit Status; pro Streamer eine Detailansicht als Ausgangspunkt für weitere Aktionen.</td></tr>
+<tr><td>Monitoring</td><td>Übersicht über Systemzustand, Live-Erkennung, allgemeine Datenbank-Kennzahlen und aufgetretene Fehler. Reine Ansicht.</td></tr>
+<tr><td>Konfiguration</td><td>Zentrale Stellschrauben für Bot-Verhalten, Chat-Moderation und Raid-Funktion.</td></tr>
+<tr><td>Community-Steuerung</td><td>Moderations-Aktionen in Partner-Kanälen, Einblick in Engagement/Raid-Aktivität sowie eine Marktübersicht zum Anteil des Netzwerks an der Deadlock-Kategorie.</td></tr>
+<tr><td>Billing-Überblick</td><td>Abo-Status der Streamer, Affiliate-/Partnervergütungen und Gutschriften; inkl. manuellem Plan-Override.</td></tr>
+<tr><td>Inhalte</td><td>Verwaltung von Ankündigungen, Changelog, rechtlichen Seiten und Roadmap.</td></tr>
+</tbody>
+</table>
+</section>
+
+<section id="ablauf">
+<h2>Wann etwas passiert</h2>
+<ul>
+<li>Das Admin-Dashboard ist eine <strong>manuelle</strong> Steuer- und Übersichtsoberfläche, kein automatischer Hintergrundprozess. Aktionen passieren genau dann, wenn ein Admin sie auslöst.</li>
+<li>Die meisten Bereiche sind reine Ansichten (Monitoring, Listen, Billing-Überblick). Schreibende Aktionen — etwa einen Streamer verifizieren, einen Plan überschreiben oder eine Chat-Aktion senden — finden nur nach ausdrücklicher Bestätigung statt.</li>
+<li>Der Zugang ist auf Betreiber beschränkt; normale Streamer-Konten haben keinen Zugriff und können keine Aktionen gegen fremde Kanäle ausführen.</li>
+</ul>
+</section>
+
+<section id="steuermoeglichkeiten">
+<h2>Steuermöglichkeiten der Betreiber</h2>
+<ul>
+<li><strong>Streamer aufnehmen</strong> per Twitch-Link oder Login-Name, manuell verifizieren, archivieren oder entfernen.</li>
+<li><strong>Discord-Verknüpfung</strong> eines Streamers setzen oder korrigieren.</li>
+<li><strong>Abo-Plan manuell überschreiben</strong> oder einen bestehenden Override wieder entfernen, sodass wieder der reguläre Abo-Status greift.</li>
+<li><strong>Globale Ankündigungs- und Promo-Modi</strong> steuern — zentral bei den Admins, bewusst nicht in der Streamer-Selbstverwaltung.</li>
+<li><strong>Bot-, Chat- und Raid-Konfiguration</strong> anpassen.</li>
+<li><strong>Chat-Moderationsaktionen</strong> für Partner-Kanäle auslösen (unabhängig von der ohnehin laufenden Auto-Moderation).</li>
+<li><strong>Inhalte pflegen:</strong> Ankündigungen, Changelog, Roadmap und rechtliche Seiten.</li>
+</ul>
+</section>
+
+<section id="was-streamer-merken">
+<h2>Was Streamer indirekt merken</h2>
+<ul>
+<li>Nach Aufnahme und Verifizierung beginnt der Bot, den Kanal zu betreuen (Monitoring, Live-Ankündigungen, Raids, Analytics — je nach Plan).</li>
+<li>Ein manueller Plan-Override (z. B. für Kulanz, Bonusmonat oder Reparatur nach einem Abrechnungsproblem) ändert entsprechend den Funktionsumfang.</li>
+<li>Beim Archivieren oder Entfernen endet die Betreuung des Kanals.</li>
+</ul>
+</section>
+
+<section id="grenzen">
+<h2>Grenzen &amp; Sonderfälle</h2>
+<ul>
+<li><strong>Strikte Trennung Admin/Streamer:</strong> Ein normales Streamer-Konto kommt nicht ins Admin-Dashboard und kann keine fremden Kanäle steuern. Diese Trennung ist bewusst und wird abgesichert.</li>
+<li><strong>Manuelle Plan-Overrides sparsam einsetzen:</strong> Die reguläre Abrechnung bleibt die primäre Quelle für den Plan. Ein Override ist für Support-Fälle, Kulanz oder Reparaturen gedacht; wird er entfernt, greift wieder der normale Abo-Status.</li>
+<li><strong>Die Datenbank-Ansicht im Monitoring ist nur lesend:</strong> Kennzahlen und Zustände lassen sich einsehen, aber nicht direkt verändern.</li>
+<li><strong>Saubere Partnerpflege ist die Grundlage:</strong> Billing, Raids und Analytics bauen auf einem korrekt gepflegten Streamer-Bestand auf; falsche oder verwaiste Einträge sollten archiviert oder entfernt werden.</li>
+</ul>
+</section>
+
+<section id="agent-hinweise">
+<h2>Hinweise für KI-Agenten &amp; Support</h2>
+<div class="box say"><strong>Der Agent darf sagen:</strong><ul>
+<li>Dass es ein internes Admin-Dashboard nur für Betreiber gibt, klar getrennt vom Streamer-Dashboard.</li>
+<li>Dass Betreiber Streamer aufnehmen, verifizieren, archivieren und Plan-Overrides setzen/entfernen können.</li>
+<li>Dass ein Plan-Override für Kulanz, Bonusmonat oder Reparatur genutzt wird und die reguläre Abrechnung die primäre Quelle bleibt.</li>
+<li>Dass die Monitoring-/Datenbank-Ansicht rein lesend ist und schreibende Aktionen eine ausdrückliche Bestätigung erfordern.</li>
+</ul></div>
+<div class="box nosay"><strong>Der Agent darf nicht sagen / offenlegen:</strong><ul>
+<li>Interne Zugangs-, Rechte- oder Freigabe-Mechaniken über das kundenrelevante Maß hinaus.</li>
+<li>Versteckte Admin-Pfade, URLs, Hostnamen, Ports oder Infrastruktur-Details.</li>
+<li>Wie Overrides technisch abgesichert sind oder wie die Trennung Admin/Streamer intern durchgesetzt wird.</li>
+<li>Namen, Zugangsdaten oder Kennzahlen einzelner Betreiber oder fremder Kanäle.</li>
+</ul></div>
+<p>Bei Unsicherheit oder Verdacht auf Fehlentscheidung: an menschlichen Support eskalieren.</p>
+</section>
+
+<footer>Teil der agentenfreundlichen Doku des Deadlock Twitch Bot. Interne Mechanik ist bewusst abstrahiert — siehe <a href="../security/redaction-notes.html">Redaction Notes</a>. Verwandt: <a href="../support/agent-guide.html">Agent-Leitfaden</a>, <a href="../support/troubleshooting.html">Troubleshooting</a>, <a href="../reference/states-and-errors.html">Zustände &amp; Fehler</a>.</footer>
+</main>
+</body>
+</html>

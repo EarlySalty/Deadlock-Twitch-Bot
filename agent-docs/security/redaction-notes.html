@@ -1,0 +1,73 @@
+<!doctype html>
+<html lang="de">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Redaction Notes — Deadlock Twitch Bot</title>
+<style>
+:root{--fg:#1a1a1a;--bg:#fff;--muted:#555;--line:#ddd;--accent:#0a7d33;--box:#f6f8fa;--warn:#b00020;--ok:#0a7d33}
+@media(prefers-color-scheme:dark){:root{--fg:#e6e6e6;--bg:#141414;--muted:#a5a5a5;--line:#333;--box:#1e1e1e;--accent:#4ec978;--warn:#ff6b7a}}
+*{box-sizing:border-box}
+body{margin:0;font:16px/1.6 system-ui,-apple-system,Segoe UI,Roboto,sans-serif;color:var(--fg);background:var(--bg)}
+main{max-width:900px;margin:0 auto;padding:1.5rem}
+h1{font-size:1.8rem;line-height:1.25;margin:.2rem 0 1rem}
+h2{font-size:1.3rem;margin:2rem 0 .6rem;border-bottom:1px solid var(--line);padding-bottom:.3rem}
+a{color:var(--accent)}
+nav.crumbs{font-size:.85rem;margin-bottom:1rem;color:var(--muted)}
+p.summary{font-size:1.05rem;background:var(--box);border-left:4px solid var(--accent);padding:.8rem 1rem;border-radius:4px}
+table{border-collapse:collapse;width:100%;margin:1rem 0;font-size:.93rem}
+th,td{border:1px solid var(--line);padding:.5rem .6rem;text-align:left;vertical-align:top}
+th{background:var(--box)}
+ul{padding-left:1.3rem}
+.box{background:var(--box);border:1px solid var(--line);border-radius:6px;padding:.7rem 1rem;margin:1rem 0;border-left:4px solid var(--warn)}
+footer{margin-top:3rem;padding-top:1rem;border-top:1px solid var(--line);font-size:.8rem;color:var(--muted)}
+</style>
+</head>
+<body>
+<main>
+<nav class="crumbs"><a href="../index.html">Startseite</a> › Security › Redaction Notes</nav>
+<h1>Redaction Notes</h1>
+<p class="summary">Diese Seite listet, <strong>welche Arten von Informationen bewusst nicht aufgenommen</strong> wurden — nur Kategorien, nicht die geheimen Inhalte selbst. Sie hilft Agenten und Entwicklern zu verstehen, wo diese Doku absichtlich abstrahiert.</p>
+
+<div class="box"><strong>Leitprinzip:</strong> Die Doku beschreibt Verhalten und Zweck (<em>was</em> und <em>warum</em>), nicht die geheimen Mechanismen (<em>wie genau</em>). Würde man die exakte Funktionsweise offenlegen, ließe sie sich gezielt umgehen oder missbrauchen — das würde den Schutz für alle Kanäle schwächen.</div>
+
+<section id="kategorien">
+<h2>Bewusst abstrahierte oder ausgelassene Kategorien</h2>
+<table>
+<thead><tr><th>Bereich</th><th>Was abstrahiert wurde</th></tr></thead>
+<tbody>
+<tr><td>Raid-Zielauswahl</td><td>Die genauen Faktoren, ihre Gewichtung und Reihenfolge sowie die Fairness-/Cooldown-Werte wurden nicht dokumentiert. Nur der fachliche Effekt („Auswahl aus mehreren Faktoren, faire Verteilung") ist beschrieben.</td></tr>
+<tr><td>Spam- &amp; Bot-Erkennung</td><td>Die einzelnen Signale, ihre Gewichtung und die Auslöseschwelle wurden nicht dokumentiert. Beschrieben ist nur, dass die Erkennung konservativ ein Gesamtbild verdichtet.</td></tr>
+<tr><td>Scam-/Fake-Server-Warnung</td><td>Die Erkennungsmerkmale und Muster wurden nicht offengelegt — nur der Zweck (vorsichtige Warnung).</td></tr>
+<tr><td>Netzwerkweite Bannliste</td><td>Aufnahmekriterien, interne Verwaltung und Listeninhalte wurden nicht dokumentiert.</td></tr>
+<tr><td>Preis-, Margen- &amp; Provisionslogik</td><td>Öffentliche Plan-Preise sind genannt; die interne Berechnung von Margen, Provisionshöhen und Sonderkonditionen wurde ausgelassen.</td></tr>
+<tr><td>Raid-Erfolgsmessung</td><td>Dass mehrere Signale korrelieren, ist beschrieben; die konkreten Signale, Fenster und Bestätigungsregeln nicht.</td></tr>
+<tr><td>Highlight-Auswahl des Clippers</td><td>Was als „guter Moment" erkannt wird, ist nur fachlich benannt, nicht als Regelwerk mit Schwellen.</td></tr>
+<tr><td>Administrative Spezialfunktionen</td><td>Nur auf Rollen-/Zweck-Ebene beschrieben. Versteckte Adminpfade, interne Berechtigungsmodelle und sensible Bedienabläufe wurden nicht aufgenommen.</td></tr>
+<tr><td>Sicherheits- &amp; Missbrauchsschutz</td><td>Prüfmechanismen, die Umgehung erleichtern könnten, wurden nicht im Detail beschrieben.</td></tr>
+<tr><td>Infrastruktur &amp; Zugangsdaten</td><td>Secrets, Tokens, API-Keys, interne URLs, Hosts, Ports und Deployment-Interna sind grundsätzlich nicht enthalten.</td></tr>
+<tr><td>Prompt-/KI-Interna</td><td>System-Prompts, Grounding-Details und Anti-Injection-Mechanik der KI-Funktionen wurden nicht offengelegt.</td></tr>
+<tr><td>Interne Datenquellen</td><td>Nichtöffentliche Datenquellen und interne Datenmodelle wurden nur so weit benannt, wie es fachlich nötig ist.</td></tr>
+</tbody>
+</table>
+</section>
+
+<section id="warum">
+<h2>Warum das so ist</h2>
+<ul>
+<li><strong>Schutz vor Umgehung:</strong> Exakte Schwellen und Signale der Moderation/Erkennung würden Spammern und Störern erlauben, gezielt darunter zu bleiben.</li>
+<li><strong>Fairness des Netzwerks:</strong> Offengelegte Raid-Gewichtungen ließen sich manipulieren, um Vorteile zu erschleichen.</li>
+<li><strong>Sicherheit:</strong> Secrets und Infrastruktur-Details gehören nie in kundengerichtete Doku.</li>
+<li><strong>Geschäftsschutz:</strong> Interne Preis-/Margen-/Provisionslogik ist geschäftskritisch.</li>
+</ul>
+</section>
+
+<section id="agenten">
+<h2>Konsequenz für Agenten</h2>
+<p>Fragt jemand nach einem dieser abstrahierten Bereiche, verweigert der Agent freundlich die Detail-Offenlegung und erklärt stattdessen den sichtbaren, fachlichen Effekt sowie mögliche nächste Schritte. Formulierungshilfen im <a href="../support/agent-guide.html">Agentenleitfaden</a>.</p>
+</section>
+
+<footer>Teil der agentenfreundlichen Doku des Deadlock Twitch Bot. Diese Seite nennt nur Kategorien, keine geheimen Inhalte.</footer>
+</main>
+</body>
+</html>

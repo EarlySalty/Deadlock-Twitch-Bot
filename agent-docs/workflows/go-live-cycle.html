@@ -1,0 +1,126 @@
+<!doctype html>
+<html lang="de">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Workflow: Go-Live- &amp; Offline-Zyklus — Deadlock Twitch Bot</title>
+<style>
+:root{--fg:#1a1a1a;--bg:#fff;--muted:#555;--line:#ddd;--accent:#0a7d33;--box:#f6f8fa;--warn:#b00020;--ok:#0a7d33}
+@media(prefers-color-scheme:dark){:root{--fg:#e6e6e6;--bg:#141414;--muted:#a5a5a5;--line:#333;--box:#1e1e1e;--accent:#4ec978;--warn:#ff6b7a}}
+*{box-sizing:border-box}
+body{margin:0;font:16px/1.6 system-ui,-apple-system,Segoe UI,Roboto,sans-serif;color:var(--fg);background:var(--bg)}
+main{max-width:900px;margin:0 auto;padding:1.5rem}
+h1{font-size:1.8rem;line-height:1.25;margin:.2rem 0 1rem}
+h2{font-size:1.35rem;margin:2.2rem 0 .6rem;border-bottom:1px solid var(--line);padding-bottom:.3rem}
+h3{font-size:1.08rem;margin:1.4rem 0 .4rem}
+a{color:var(--accent)}
+nav.crumbs{font-size:.85rem;margin-bottom:1rem;color:var(--muted)}
+p.summary{font-size:1.05rem;background:var(--box);border-left:4px solid var(--accent);padding:.8rem 1rem;border-radius:4px}
+table{border-collapse:collapse;width:100%;margin:1rem 0;font-size:.95rem}
+th,td{border:1px solid var(--line);padding:.5rem .6rem;text-align:left;vertical-align:top}
+th{background:var(--box)}
+code{background:var(--box);padding:.1rem .3rem;border-radius:3px;font-size:.9em}
+ul,ol{padding-left:1.3rem}
+.box{background:var(--box);border:1px solid var(--line);border-radius:6px;padding:.7rem 1rem;margin:1rem 0}
+.say{border-left:4px solid var(--ok)}
+.nosay{border-left:4px solid var(--warn)}
+.tag{display:inline-block;font-size:.72rem;font-weight:600;padding:.1rem .5rem;border-radius:10px;background:var(--box);border:1px solid var(--line)}
+footer{margin-top:3rem;padding-top:1rem;border-top:1px solid var(--line);font-size:.8rem;color:var(--muted)}
+</style>
+</head>
+<body>
+<main>
+<nav class="crumbs"><a href="../index.html">Startseite</a> › Workflows › Go-Live- &amp; Offline-Zyklus</nav>
+<h1>Workflow: Go-Live- &amp; Offline-Zyklus</h1>
+<p class="summary">Beschreibt Schritt für Schritt den Lebenszyklus einer Stream-Ankündigung: von der Live-Erkennung über die Deadlock-Kategorie-Prüfung und die Discord-Ankündigung, das Session-Sampling während des Streams bis zum Stream-Ende und der Umwandlung derselben Nachricht in eine Offline-/VOD-Ansicht.</p>
+
+<section id="ausloeser">
+<h2>Auslöser</h2>
+<p>Der Ablauf startet, wenn ein betreuter/freigeschalteter Kanal von offline auf live wechselt. Erkannt wird das über zwei kombinierte Wege: direkte Live-/Offline-Meldungen von Twitch in Echtzeit (schneller Weg) und ein zusätzlicher gleichmäßiger Nachprüf-Takt als Absicherung. Ein Go-Live wird in der Regel innerhalb weniger Sekunden erkannt.</p>
+</section>
+
+<section id="module">
+<h2>Beteiligte Module</h2>
+<ul>
+<li><span class="tag">Modul</span> <a href="../modules/go-live.html">Go-Live &amp; Ankündigungen</a> — Erkennung, Discord-Embed, Session-Sampling und Offline-Umwandlung.</li>
+<li><span class="tag">Modul</span> <a href="../modules/plans-billing.html">Pläne &amp; Abrechnung</a> — das Session-Sampling ist Grundlage des Analyse-Dashboards.</li>
+<li><span class="tag">extern</span> Twitch (Live-/Offline-Signale, Titel, Kategorie, Zuschauerzahl, VOD) und Discord (Ankündigungs-Kanal).</li>
+</ul>
+</section>
+
+<section id="ablauf">
+<h2>Fachlicher Ablauf</h2>
+<ol>
+<li><strong>Live-Erkennung:</strong> Der Bot bemerkt, dass ein betreuter Kanal live gegangen ist, und kennt Titel, Kategorie und Zuschauerzahl.</li>
+<li><strong>Deadlock-Kategorie-Prüfung:</strong> Er prüft, ob in der Deadlock-Kategorie gestreamt wird. Nur dann wird angekündigt. Läuft ein anderes Spiel, kommt zunächst keine Ankündigung.</li>
+<li><strong>Ankündigung posten:</strong> Bei Deadlock schickt der Bot ein Discord-Embed in den Ankündigungs-Kanal — mit Titel, Kategorie, Zuschauerzahl, frisch geladenem Vorschaubild und einem Button zum Twitch-Kanal. Optional wird die Live-Ping-Rolle erwähnt.</li>
+<li><strong>Session-Sampling:</strong> Während der Stream läuft, hält der Bot eine Sitzung offen und sammelt regelmäßig Werte wie Zuschauerzahl und Titel — die Grundlage für die spätere Statistik.</li>
+<li><strong>Stream-Ende erkennen:</strong> Geht der Streamer offline (per Echtzeitmeldung oder nächstem Nachprüf-Takt), schließt der Bot die Sitzung ab.</li>
+<li><strong>Umwandlung in VOD-Ansicht:</strong> Statt einer zweiten Nachricht wird die bestehende Go-Live-Nachricht inhaltlich ersetzt: klar als offline markiert, mit letztem Titel, Vorschaubild des letzten Streams und einem Button zum Mitschnitt (VOD).</li>
+</ol>
+</section>
+
+<section id="reaktionen">
+<h2>Nutzeraktionen &amp; Systemreaktionen</h2>
+<table>
+<tr><th>Nutzeraktion / Ereignis</th><th>Systemreaktion</th></tr>
+<tr><td>Betreuter Kanal geht mit Deadlock live</td><td>Discord-Ankündigung mit Embed und Kanal-Button wird gepostet.</td></tr>
+<tr><td>Kanal geht mit anderem Spiel live</td><td>Keine Ankündigung; sie wird nachgeholt, sobald auf Deadlock gewechselt wird.</td></tr>
+<tr><td>Streamer geht offline</td><td>Sitzung wird abgeschlossen; die Live-Nachricht wird zur Offline-/VOD-Ansicht.</td></tr>
+<tr><td>Kurzes Flackern (offline/online in Sekunden)</td><td>Wird bewusst abgefedert; keine Doppel-Postings.</td></tr>
+<tr><td>Streamer passt Embed im Dashboard an</td><td>Vorschau und Test-Senden verfügbar; Platzhalter werden beim Posten ersetzt.</td></tr>
+</table>
+</section>
+
+<section id="ergebnisse">
+<h2>Mögliche Ergebnisse</h2>
+<ul>
+<li><strong>Angekündigt:</strong> Go-Live-Embed steht im Ankündigungs-Kanal und führt zum laufenden Stream.</li>
+<li><strong>Nachgeholt:</strong> Kanal startete in anderem Spiel; die Ankündigung erscheint beim Wechsel auf Deadlock.</li>
+<li><strong>Zur VOD-Ansicht umgewandelt:</strong> Nach Stream-Ende zeigt dieselbe Nachricht Offline-Status und einen VOD-Button.</li>
+<li><strong>Aus Überwachung entfernt:</strong> War ein Kanal längere Zeit (Größenordnung gut eine Woche) nicht live, wird er automatisch aus der aktiven Überwachung genommen — gewollt, kein Fehler.</li>
+</ul>
+</section>
+
+<section id="fehler">
+<h2>Typische Fehlerfälle</h2>
+<table>
+<tr><th>Symptom</th><th>Wahrscheinliche Ursache</th><th>Sichere Hilfe</th></tr>
+<tr><td>Live gegangen, aber keine Ankündigung</td><td>Anderes Spiel als Deadlock oder Kanal nicht freigeschaltet</td><td>Deadlock-Kategorie und Freischaltung prüfen; bei Wechsel auf Deadlock kommt sie nach.</td></tr>
+<tr><td>Offline-Nachricht wird nicht erzeugt</td><td>Ursprüngliche Go-Live-Nachricht in Discord gelöscht</td><td>Erklären, dass eine gelöschte Nachricht nicht mehr umgewandelt werden kann.</td></tr>
+<tr><td>Veraltetes Vorschaubild</td><td>Twitch aktualisiert Thumbnails nicht sekundengenau</td><td>Kurz warten; das Bild wird pro Ankündigung frisch geladen.</td></tr>
+<tr><td>Keine Live-Ping-Erwähnung</td><td>Live-Ping-Rolle im Dashboard ausgeschaltet</td><td>Rolle im Dashboard aktivieren, falls gewünscht.</td></tr>
+<tr><td>Kanal aus der Übersicht verschwunden</td><td>Längere Inaktivität → automatisches Archivieren</td><td>Erklären, dass er bei regelmäßigem Live-Gehen wieder aufgenommen wird.</td></tr>
+</table>
+</section>
+
+<section id="support-hinweise">
+<h2>Sichere Support-Hinweise</h2>
+<ul>
+<li>Nur Deadlock löst die Ankündigung aus, und nur bei betreuten/freigeschalteten Kanälen.</li>
+<li>Beim Stream-Ende kommt keine zweite Nachricht — die bestehende wird ersetzt.</li>
+<li>Aussehen, Platzhalter und Live-Ping sind über das Dashboard einstellbar (mit Vorschau/Test).</li>
+<li>Zur bewusst abstrahierten Takt-/Timing-Mechanik siehe <a href="../security/redaction-notes.html">Redaction Notes</a>.</li>
+</ul>
+</section>
+
+<section id="agent-hinweise">
+<h2>Hinweise für KI-Agenten &amp; Support</h2>
+<div class="box say"><strong>Der Agent darf sagen:</strong><ul>
+<li>Dass ein Go-Live meist innerhalb weniger Sekunden erkannt und nur bei Deadlock angekündigt wird.</li>
+<li>Dass die Offline-Ansicht dieselbe Nachricht ersetzt und einen VOD-Button anbietet.</li>
+<li>Welche Platzhalter (z. B. <code>{title}</code>, <code>{viewer_count}</code>) es gibt und dass das Embed anpassbar ist.</li>
+<li>Dass längere Inaktivität zur automatischen Archivierung führt.</li>
+</ul></div>
+<div class="box nosay"><strong>Der Agent darf nicht sagen / offenlegen:</strong><ul>
+<li>Exakte Nachprüf-Intervalle, Flacker-Fenster oder die genaue Inaktivitäts-Schwelle in Zahlen.</li>
+<li>Interne Twitch-/Discord-Schnittstellen, Tokens, Webhook- oder Kanal-IDs.</li>
+<li>Nichtöffentliche Details des Session-Samplings über den beschriebenen Zweck hinaus.</li>
+</ul></div>
+<p>Bei Unsicherheit oder Verdacht auf Fehlentscheidung: an menschlichen Support eskalieren.</p>
+</section>
+
+<footer>Teil der agentenfreundlichen Doku des Deadlock Twitch Bot. Interne Mechanik ist bewusst abstrahiert — siehe <a href="../security/redaction-notes.html">Redaction Notes</a>.</footer>
+</main>
+</body>
+</html>

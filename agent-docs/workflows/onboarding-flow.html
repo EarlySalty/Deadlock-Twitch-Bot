@@ -1,0 +1,125 @@
+<!doctype html>
+<html lang="de">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Workflow: Streamer-Onboarding — Deadlock Twitch Bot</title>
+<style>
+:root{--fg:#1a1a1a;--bg:#fff;--muted:#555;--line:#ddd;--accent:#0a7d33;--box:#f6f8fa;--warn:#b00020;--ok:#0a7d33}
+@media(prefers-color-scheme:dark){:root{--fg:#e6e6e6;--bg:#141414;--muted:#a5a5a5;--line:#333;--box:#1e1e1e;--accent:#4ec978;--warn:#ff6b7a}}
+*{box-sizing:border-box}
+body{margin:0;font:16px/1.6 system-ui,-apple-system,Segoe UI,Roboto,sans-serif;color:var(--fg);background:var(--bg)}
+main{max-width:900px;margin:0 auto;padding:1.5rem}
+h1{font-size:1.8rem;line-height:1.25;margin:.2rem 0 1rem}
+h2{font-size:1.35rem;margin:2.2rem 0 .6rem;border-bottom:1px solid var(--line);padding-bottom:.3rem}
+h3{font-size:1.08rem;margin:1.4rem 0 .4rem}
+a{color:var(--accent)}
+nav.crumbs{font-size:.85rem;margin-bottom:1rem;color:var(--muted)}
+p.summary{font-size:1.05rem;background:var(--box);border-left:4px solid var(--accent);padding:.8rem 1rem;border-radius:4px}
+table{border-collapse:collapse;width:100%;margin:1rem 0;font-size:.95rem}
+th,td{border:1px solid var(--line);padding:.5rem .6rem;text-align:left;vertical-align:top}
+th{background:var(--box)}
+code{background:var(--box);padding:.1rem .3rem;border-radius:3px;font-size:.9em}
+ul,ol{padding-left:1.3rem}
+.box{background:var(--box);border:1px solid var(--line);border-radius:6px;padding:.7rem 1rem;margin:1rem 0}
+.say{border-left:4px solid var(--ok)}
+.nosay{border-left:4px solid var(--warn)}
+.tag{display:inline-block;font-size:.72rem;font-weight:600;padding:.1rem .5rem;border-radius:10px;background:var(--box);border:1px solid var(--line)}
+footer{margin-top:3rem;padding-top:1rem;border-top:1px solid var(--line);font-size:.8rem;color:var(--muted)}
+</style>
+</head>
+<body>
+<main>
+<nav class="crumbs"><a href="../index.html">Startseite</a> › Workflows › Streamer-Onboarding</nav>
+<h1>Workflow: Streamer-Onboarding</h1>
+<p class="summary">Beschreibt Schritt für Schritt, wie ein neuer Deadlock-Streamer den Bot für seinen Kanal aktiviert: vom Klick auf der Website über den Twitch-Login und die Berechtigungen bis ins Dashboard, die Partner-Verifizierung und die laufende Betreuung des Kanals.</p>
+
+<section id="ausloeser">
+<h2>Auslöser</h2>
+<p>Der Ablauf startet, sobald ein Besucher auf der öffentlichen Website einen der Aktivierungs-Knöpfe anklickt (<code>Bot für deinen Kanal aktivieren</code> bzw. <code>Kanal verbinden</code>). Voraussetzung ist ein bestehender Twitch-Account; ein zusätzliches Konto oder Formular ist nicht nötig. Der gesamte Vorgang dauert in der Regel unter einer Minute.</p>
+</section>
+
+<section id="module">
+<h2>Beteiligte Module</h2>
+<ul>
+<li><span class="tag">Modul</span> <a href="../modules/onboarding.html">Website &amp; Onboarding</a> — Landing-Page, Onboarding-Strecke, FAQ und „Frag den Bot“-Box.</li>
+<li><span class="tag">Modul</span> <a href="../modules/plans-billing.html">Pläne &amp; Abrechnung</a> — Plan-Zuordnung und kostenlose Basis nach dem Verbinden.</li>
+<li><span class="tag">extern</span> Twitch-Login &amp; Berechtigungsdialog (OAuth-Anmeldung über den eigenen Twitch-Account).</li>
+</ul>
+</section>
+
+<section id="ablauf">
+<h2>Fachlicher Ablauf</h2>
+<ol>
+<li><strong>Einstieg über die Website:</strong> Der Besucher liest auf der Startseite/Onboarding-Seite, was der Bot tut (Auto-Raid-Netzwerk, Spam-Schutz, Dashboard, Community) und klickt auf den Aktivierungs-Knopf.</li>
+<li><strong>Twitch-Login:</strong> Er wird zur Anmeldung über seinen eigenen Twitch-Account geleitet. Ohne Twitch-Login kommt man nicht über diesen Schritt hinaus.</li>
+<li><strong>Berechtigungen bestätigen:</strong> Twitch zeigt die vom Bot angefragten Berechtigungen. Erst mit deren Bestätigung darf der Bot im Namen des Kanals tätig werden (u. a. Grundlage für Auto-Raid und Moderation).</li>
+<li><strong>Weiterleitung ins Dashboard:</strong> Nach der Bestätigung landet der Streamer direkt in seinem persönlichen Dashboard — dort werden alle weiteren Einstellungen gemacht (die öffentliche Website selbst regelt keine Einstellungen).</li>
+<li><strong>Partner-Verifizierung / Freischaltung:</strong> Der Kanal wird als betreuter/freigeschalteter Partner geführt. Ab diesem Punkt gilt der Streamer als aktiver Teilnehmer und die Basis-Funktionen laufen.</li>
+<li><strong>Laufende Betreuung:</strong> Der Bot überwacht ab jetzt Go-Live/Offline, moderiert den Chat (sofern als Moderator hinterlegt) und nimmt den Kanal ins Raid-Netzwerk auf.</li>
+</ol>
+</section>
+
+<section id="reaktionen">
+<h2>Nutzeraktionen &amp; Systemreaktionen</h2>
+<table>
+<tr><th>Nutzeraktion</th><th>Systemreaktion</th></tr>
+<tr><td>Klick auf „Kanal verbinden“</td><td>Weiterleitung zum Twitch-Login.</td></tr>
+<tr><td>Anmeldung mit Twitch-Account</td><td>Anzeige des Berechtigungsdialogs.</td></tr>
+<tr><td>Berechtigungen bestätigt</td><td>Bot erhält die einmalige Autorisierung; Weiterleitung ins Dashboard.</td></tr>
+<tr><td>Berechtigungen abgelehnt/abgebrochen</td><td>Keine Verbindung; der Bot bekommt keinen Zugriff, der Streamer bleibt ohne Betreuung.</td></tr>
+<tr><td>Verbindung später in Twitch widerrufen</td><td>Bot verliert den Zugriff; keine automatischen Aktionen mehr im Kanal.</td></tr>
+</table>
+</section>
+
+<section id="ergebnisse">
+<h2>Mögliche Ergebnisse</h2>
+<ul>
+<li><strong>Erfolgreich verbunden:</strong> Kanal ist freigeschaltet, Dashboard erreichbar, Basis-Funktionen (Auto-Raid, Auto-Moderation, Go-Live-Posts, Chat-Commands) sind ohne Abo aktiv.</li>
+<li><strong>Abgebrochen:</strong> Ohne bestätigte Berechtigungen entsteht keine Verbindung; der Streamer kann den Vorgang jederzeit erneut starten.</li>
+<li><strong>Später getrennt:</strong> Der Streamer widerruft die Verbindung selbst in den Twitch-Einstellungen (Verbindungen → „Deutsche Deadlock Community“ entfernen). Danach hat der Bot keinen Zugriff mehr; für eine vollständige Datenlöschung ist eine Meldung im Discord nötig.</li>
+</ul>
+</section>
+
+<section id="fehler">
+<h2>Typische Fehlerfälle</h2>
+<table>
+<tr><th>Symptom</th><th>Wahrscheinliche Ursache</th><th>Sichere Hilfe</th></tr>
+<tr><td>Anmeldung kommt nicht über „Verbinden“ hinaus</td><td>Kein Twitch-Login möglich / Anmeldung abgebrochen</td><td>Twitch-Login erneut durchführen; ein Twitch-Account ist Pflicht.</td></tr>
+<tr><td>Nach dem Login kein Dashboard sichtbar</td><td>Berechtigungen nicht bestätigt</td><td>Vorgang neu starten und den Berechtigungsdialog bestätigen.</td></tr>
+<tr><td>Bot moderiert den Chat nicht</td><td>Bot ist im Kanal nicht als Moderator hinterlegt</td><td>Bot als Moderator eintragen (nötig für Löschen/Bannen).</td></tr>
+<tr><td>Bot reagiert plötzlich gar nicht mehr</td><td>Verbindung in Twitch widerrufen</td><td>Verbindung in den Twitch-Einstellungen prüfen und ggf. neu verbinden.</td></tr>
+<tr><td>„Frag den Bot“ bittet um erneuten Versuch</td><td>Zu viele Anfragen in kurzer Zeit oder Verbindungsproblem</td><td>Kurz warten und erneut fragen; auf die FAQ verweisen.</td></tr>
+</table>
+</section>
+
+<section id="support-hinweise">
+<h2>Sichere Support-Hinweise</h2>
+<ul>
+<li>Die Anmeldung ist kostenlos; niemand wird ungefragt in ein kostenpflichtiges Abo gesteckt.</li>
+<li>Interessierte können vor dem Verbinden das öffentliche Demo-Dashboard, die FAQ und die „Frag den Bot“-Box nutzen.</li>
+<li>Beim Entfernen des Bots immer auf den Twitch-Weg (Verbindungen widerrufen) und für vollständige Löschung auf den Discord verweisen.</li>
+<li>Erklärungen zur bewusst abstrahierten Mechanik: siehe <a href="../security/redaction-notes.html">Redaction Notes</a>.</li>
+</ul>
+</section>
+
+<section id="agent-hinweise">
+<h2>Hinweise für KI-Agenten &amp; Support</h2>
+<div class="box say"><strong>Der Agent darf sagen:</strong><ul>
+<li>Dass die Anmeldung über den eigenen Twitch-Account läuft, kostenlos ist und meist unter einer Minute dauert.</li>
+<li>Dass nach der Berechtigungsbestätigung das Dashboard erscheint und Basis-Funktionen ohne Abo laufen.</li>
+<li>Wie man den Bot wieder entfernt (Twitch → Verbindungen) und dass volle Datenlöschung über Discord geht.</li>
+<li>Dass der Bot für die Chat-Moderation Moderator-Rechte im Kanal braucht.</li>
+</ul></div>
+<div class="box nosay"><strong>Der Agent darf nicht sagen / offenlegen:</strong><ul>
+<li>Interne URLs, Redirect-Adressen, Client-IDs, Tokens oder Details des OAuth-/Freischaltungs-Ablaufs.</li>
+<li>Interne Kriterien oder Admin-Pfade der Partner-Verifizierung über das kundenrelevante Maß hinaus.</li>
+<li>Nichtöffentliche Datenspeicherungs- oder Infrastruktur-Details.</li>
+</ul></div>
+<p>Bei Unsicherheit oder Verdacht auf Fehlentscheidung: an menschlichen Support eskalieren.</p>
+</section>
+
+<footer>Teil der agentenfreundlichen Doku des Deadlock Twitch Bot. Interne Mechanik ist bewusst abstrahiert — siehe <a href="../security/redaction-notes.html">Redaction Notes</a>.</footer>
+</main>
+</body>
+</html>

@@ -1,0 +1,129 @@
+<!doctype html>
+<html lang="de">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Workflow: Abo &amp; Abrechnung — Deadlock Twitch Bot</title>
+<style>
+:root{--fg:#1a1a1a;--bg:#fff;--muted:#555;--line:#ddd;--accent:#0a7d33;--box:#f6f8fa;--warn:#b00020;--ok:#0a7d33}
+@media(prefers-color-scheme:dark){:root{--fg:#e6e6e6;--bg:#141414;--muted:#a5a5a5;--line:#333;--box:#1e1e1e;--accent:#4ec978;--warn:#ff6b7a}}
+*{box-sizing:border-box}
+body{margin:0;font:16px/1.6 system-ui,-apple-system,Segoe UI,Roboto,sans-serif;color:var(--fg);background:var(--bg)}
+main{max-width:900px;margin:0 auto;padding:1.5rem}
+h1{font-size:1.8rem;line-height:1.25;margin:.2rem 0 1rem}
+h2{font-size:1.35rem;margin:2.2rem 0 .6rem;border-bottom:1px solid var(--line);padding-bottom:.3rem}
+h3{font-size:1.08rem;margin:1.4rem 0 .4rem}
+a{color:var(--accent)}
+nav.crumbs{font-size:.85rem;margin-bottom:1rem;color:var(--muted)}
+p.summary{font-size:1.05rem;background:var(--box);border-left:4px solid var(--accent);padding:.8rem 1rem;border-radius:4px}
+table{border-collapse:collapse;width:100%;margin:1rem 0;font-size:.95rem}
+th,td{border:1px solid var(--line);padding:.5rem .6rem;text-align:left;vertical-align:top}
+th{background:var(--box)}
+code{background:var(--box);padding:.1rem .3rem;border-radius:3px;font-size:.9em}
+ul,ol{padding-left:1.3rem}
+.box{background:var(--box);border:1px solid var(--line);border-radius:6px;padding:.7rem 1rem;margin:1rem 0}
+.say{border-left:4px solid var(--ok)}
+.nosay{border-left:4px solid var(--warn)}
+.tag{display:inline-block;font-size:.72rem;font-weight:600;padding:.1rem .5rem;border-radius:10px;background:var(--box);border:1px solid var(--line)}
+footer{margin-top:3rem;padding-top:1rem;border-top:1px solid var(--line);font-size:.8rem;color:var(--muted)}
+</style>
+</head>
+<body>
+<main>
+<nav class="crumbs"><a href="../index.html">Startseite</a> › Workflows › Abo &amp; Abrechnung</nav>
+<h1>Workflow: Abo &amp; Abrechnung</h1>
+<p class="summary">Beschreibt Schritt für Schritt, wie ein Streamer einen Plan wählt, über einen externen Zahlungsdienstleister bezahlt, die enthaltenen Features sofort freigeschaltet bekommt, sein Abo zum Ende des bezahlten Zeitraums kündigt und danach auf den kostenlosen Plan zurückfällt. Die kostenlose Basis (Auto-Raids, Auto-Moderation) läuft immer.</p>
+
+<section id="ausloeser">
+<h2>Auslöser</h2>
+<p>Der Ablauf startet, wenn ein Streamer im Dashboard auf der Abo-Seite einen Plan wählt (oder up-/downgraded) bzw. eine bestehende Testphase ausläuft. Jeder Streamer hat genau einen aktiven Plan; dieser bestimmt, welche Zusatz-Features scharf geschaltet sind.</p>
+</section>
+
+<section id="module">
+<h2>Beteiligte Module</h2>
+<ul>
+<li><span class="tag">Modul</span> <a href="../modules/plans-billing.html">Pläne &amp; Abrechnung</a> — Plan-Auswahl, Feature-Freischaltung, Kündigung, Empfehlungs-Programm.</li>
+<li><span class="tag">Modul</span> <a href="../modules/raids.html">Raids</a> — Raid Boost (bevorzugte Raid-Platzierung) als freischaltbares Feature.</li>
+<li><span class="tag">extern</span> Externer Zahlungsdienstleister (Zahlungsabwicklung, Rechnungen).</li>
+</ul>
+</section>
+
+<section id="ablauf">
+<h2>Fachlicher Ablauf</h2>
+<ol>
+<li><strong>Plan wählen:</strong> Der Streamer wählt im Dashboard einen Plan und den Abrechnungszeitraum (monatlich oder jährlich). Verfügbare Pläne mit Netto-Monatspreisen: Einzelpläne je 1,99 €, Zweier-Pakete 3,49 €, das Komplettpaket „Alles drin“ 4,99 €. Pakete sind günstiger als die enthaltenen Einzelpläne zusammen.</li>
+<li><strong>Zahlung über externen Dienstleister:</strong> Bezahlung, Rechnungsübersicht und Profildaten für die Rechnung laufen über die Abo-Seite; die Zahlung selbst wickelt ein externer Zahlungsdienstleister ab.</li>
+<li><strong>Feature-Freischaltung sofort:</strong> Sobald der Plan aktiv ist, sind seine Features sofort scharf — ohne dass der Streamer etwas konfigurieren muss. Nicht enthaltene Features erscheinen als gesperrte Vorschau-Karte mit Upgrade-Hinweis.</li>
+<li><strong>Nutzung:</strong> Je nach Plan greifen z. B. werbefreier Chat, bevorzugte Raid-Platzierung, volles Analyse-Dashboard und die (zusätzlich einschaltbare) Lurker-Steuer-Erinnerung.</li>
+<li><strong>Kündigung zum Zeitraum-Ende:</strong> Eine Kündigung über die Abo-Seite wird zum Ende des bereits bezahlten Zeitraums wirksam. Bis dahin bleiben die Features aktiv; eine Rückerstattung des laufenden Zeitraums ist nicht vorgesehen.</li>
+<li><strong>Rückfall auf kostenlos:</strong> Nach Ablauf gilt wieder „Raid Free“ (0,00 €). Auto-Raids und die komplette Auto-Moderation laufen auch dann weiter — sie sind nie an einen bezahlten Plan gebunden.</li>
+</ol>
+</section>
+
+<section id="reaktionen">
+<h2>Nutzeraktionen &amp; Systemreaktionen</h2>
+<table>
+<tr><th>Nutzeraktion / Ereignis</th><th>Systemreaktion</th></tr>
+<tr><td>Plan gewählt und bezahlt</td><td>Plan wird aktiv; enthaltene Features sofort freigeschaltet.</td></tr>
+<tr><td>Up-/Downgrade</td><td>Funktionsumfang passt sich an den neuen Plan an.</td></tr>
+<tr><td>Feature nicht im Plan geöffnet</td><td>Anzeige als gesperrte Vorschau-Karte mit Upgrade-Hinweis.</td></tr>
+<tr><td>Abo gekündigt</td><td>Features bleiben bis zum Zeitraum-Ende aktiv, danach kostenloser Plan.</td></tr>
+<tr><td>Testphase läuft ohne Abo aus</td><td>Konto fällt automatisch auf den kostenlosen Plan zurück.</td></tr>
+<tr><td>Team setzt manuell einen Plan</td><td>Dieser hat Vorrang vor einem etwaigen Abo (nicht selbst buchbar).</td></tr>
+</table>
+</section>
+
+<section id="ergebnisse">
+<h2>Mögliche Ergebnisse</h2>
+<ul>
+<li><strong>Plan aktiv:</strong> Bezahlt, Features sofort scharf, Rechnung über den externen Dienstleister einsehbar.</li>
+<li><strong>Gekündigt, aber laufend:</strong> Bis zum Ende des bezahlten Zeitraums bleiben die Features aktiv.</li>
+<li><strong>Zurück auf kostenlos:</strong> Nach Ablauf/Testphasen-Ende gilt „Raid Free“; Basis-Funktionen laufen weiter.</li>
+<li><strong>Feature scheinbar fehlend:</strong> Plan enthält es nicht (gesperrte Karte) oder eine Zusatzbedingung fehlt (z. B. Lurker-Steuer braucht Plan + Schalter + Chat-Lesezugriff).</li>
+</ul>
+</section>
+
+<section id="fehler">
+<h2>Typische Fehlerfälle</h2>
+<table>
+<tr><th>Symptom</th><th>Wahrscheinliche Ursache</th><th>Sichere Hilfe</th></tr>
+<tr><td>Feature freigeschaltet, aber nicht sichtbar</td><td>Aktueller Plan enthält es nicht</td><td>Plan prüfen; gesperrte Vorschau-Karte zeigt das nötige Upgrade.</td></tr>
+<tr><td>Lurker-Steuer-Erinnerung feuert nicht</td><td>Schalter aus oder Bot fehlt Chat-Lesezugriff</td><td>Plan + Schalter + Chat-Lesezugriff prüfen (Dashboard weist darauf hin).</td></tr>
+<tr><td>Nach Kündigung noch Features aktiv</td><td>Bezahlter Zeitraum läuft noch</td><td>Erklären, dass die Kündigung erst zum Zeitraum-Ende greift.</td></tr>
+<tr><td>Erwartete Rückerstattung bleibt aus</td><td>Keine Erstattung des laufenden Zeitraums vorgesehen</td><td>Auf die Regel hinweisen; Sonderfälle ans Team.</td></tr>
+<tr><td>Provision wird pausiert</td><td>Kein Auszahlungs-Konto verbunden (Obergrenze erreicht)</td><td>Auszahlungs-Konto verbinden; eine Zuordnung pro Streamer.</td></tr>
+<tr><td>Zahlung schlägt fehl</td><td>Problem beim externen Zahlungsdienstleister</td><td>Zahlung erneut versuchen; bei Bestehen an das Team eskalieren.</td></tr>
+</table>
+</section>
+
+<section id="support-hinweise">
+<h2>Sichere Support-Hinweise</h2>
+<ul>
+<li>Die Grundfunktion ist kostenlos; Auto-Raids und Auto-Moderation laufen immer, auch ohne Abo.</li>
+<li>Preise dürfen genannt werden (Netto/Monat): Einzelpläne 1,99 €, Zweier-Pakete 3,49 €, Komplettpaket 4,99 €.</li>
+<li>Kündigung wirkt zum Ende des bezahlten Zeitraums; danach Rückfall auf den kostenlosen Plan.</li>
+<li>Vom Team gesetzte Pläne haben Vorrang und sind nicht selbst über das Dashboard buchbar.</li>
+<li>Zur bewusst abstrahierten Preis-/Provisions-Logik siehe <a href="../security/redaction-notes.html">Redaction Notes</a>.</li>
+</ul>
+</section>
+
+<section id="agent-hinweise">
+<h2>Hinweise für KI-Agenten &amp; Support</h2>
+<div class="box say"><strong>Der Agent darf sagen:</strong><ul>
+<li>Die öffentlichen Netto-Preise (1,99 € / 3,49 € / 4,99 €) und dass Pakete günstiger als Einzelpläne sind.</li>
+<li>Dass Features sofort nach aktivem Plan freigeschaltet werden und die Basis kostenlos bleibt.</li>
+<li>Dass die Zahlung über einen externen Dienstleister läuft und Rechnungen im Dashboard einsehbar sind.</li>
+<li>Dass die Kündigung zum Zeitraum-Ende greift und danach der kostenlose Plan gilt.</li>
+</ul></div>
+<div class="box nosay"><strong>Der Agent darf nicht sagen / offenlegen:</strong><ul>
+<li>Wie Margen, Provisionshöhen oder Kostenmodelle intern berechnet werden.</li>
+<li>Interne Preis-/Rabatt-Logik, Vertragsinterna oder Details des Zahlungsdienstleisters (Keys, Endpunkte).</li>
+<li>Exakte Dauer/Umfang der Testphase oder interne Grenzwerte des Empfehlungs-Programms in Zahlen.</li>
+</ul></div>
+<p>Bei Unsicherheit oder Verdacht auf Fehlentscheidung: an menschlichen Support eskalieren.</p>
+</section>
+
+<footer>Teil der agentenfreundlichen Doku des Deadlock Twitch Bot. Interne Mechanik ist bewusst abstrahiert — siehe <a href="../security/redaction-notes.html">Redaction Notes</a>.</footer>
+</main>
+</body>
+</html>

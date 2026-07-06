@@ -1,0 +1,121 @@
+<!doctype html>
+<html lang="de">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Troubleshooting — Deadlock Twitch Bot</title>
+<style>
+:root{--fg:#1a1a1a;--bg:#fff;--muted:#555;--line:#ddd;--accent:#0a7d33;--box:#f6f8fa;--warn:#b00020;--ok:#0a7d33}
+@media(prefers-color-scheme:dark){:root{--fg:#e6e6e6;--bg:#141414;--muted:#a5a5a5;--line:#333;--box:#1e1e1e;--accent:#4ec978;--warn:#ff6b7a}}
+*{box-sizing:border-box}
+body{margin:0;font:16px/1.6 system-ui,-apple-system,Segoe UI,Roboto,sans-serif;color:var(--fg);background:var(--bg)}
+main{max-width:900px;margin:0 auto;padding:1.5rem}
+h1{font-size:1.8rem;line-height:1.25;margin:.2rem 0 1rem}
+h2{font-size:1.3rem;margin:2.2rem 0 .6rem;border-bottom:1px solid var(--line);padding-bottom:.3rem}
+h3{font-size:1.05rem;margin:1.4rem 0 .4rem}
+a{color:var(--accent)}
+nav.crumbs{font-size:.85rem;margin-bottom:1rem;color:var(--muted)}
+p.summary{font-size:1.05rem;background:var(--box);border-left:4px solid var(--accent);padding:.8rem 1rem;border-radius:4px}
+table{border-collapse:collapse;width:100%;margin:1rem 0;font-size:.93rem}
+th,td{border:1px solid var(--line);padding:.5rem .6rem;text-align:left;vertical-align:top}
+th{background:var(--box)}
+code{background:var(--box);padding:.1rem .3rem;border-radius:3px;font-size:.9em}
+ul,ol{padding-left:1.3rem}
+.case{border:1px solid var(--line);border-radius:8px;padding:.2rem 1rem 1rem;margin:1.2rem 0;background:var(--box)}
+.case h3{border-bottom:1px solid var(--line);padding-bottom:.3rem}
+.nosay{color:var(--warn);font-weight:600}
+footer{margin-top:3rem;padding-top:1rem;border-top:1px solid var(--line);font-size:.8rem;color:var(--muted)}
+</style>
+</head>
+<body>
+<main>
+<nav class="crumbs"><a href="../index.html">Startseite</a> › Support › Troubleshooting</nav>
+<h1>Troubleshooting — strukturierte Erste-Hilfe</h1>
+<p class="summary">Für jedes typische Problem: Symptom, mögliche fachliche Ursache, sichere Erklärung für Nutzer, empfohlene erste Schritte, wann eskaliert wird und was nicht behauptet werden darf. Kein exakter interner Mechanismus.</p>
+
+<section id="go-live-fehlt" class="case">
+<h3>1 · Keine Go-Live-Ankündigung erschienen</h3>
+<p><strong>Symptom:</strong> Streamer ist live, aber es kam keine Discord-Ankündigung.</p>
+<p><strong>Mögliche Ursache:</strong> Stream läuft nicht in der Deadlock-Kategorie; Kanal nicht freigeschaltet/betreut; ursprüngliche Nachricht wurde gelöscht; kurzes Live-Status-Flackern.</p>
+<p><strong>Sichere Erklärung:</strong> „Die Ankündigung wird nur ausgelöst, wenn du in der Deadlock-Kategorie streamst und dein Kanal betreut wird. Wechselst du im laufenden Stream auf Deadlock, wird sie nachgeholt."</p>
+<p><strong>Erste Schritte:</strong> Kategorie prüfen → Betreuungs-/Freischaltstatus prüfen → auf Deadlock wechseln und kurz warten.</p>
+<p><strong>Eskalieren, wenn:</strong> Kategorie stimmt, Kanal ist betreut, und es kommt dennoch nichts.</p>
+<p><span class="nosay">Nicht behaupten:</span> exakte Poll-/Erkennungsintervalle oder interne EventSub-Details.</p>
+</section>
+
+<section id="kein-auto-raid" class="case">
+<h3>2 · Kein automatischer Raid am Stream-Ende</h3>
+<p><strong>Symptom:</strong> Stream endete ohne Auto-Raid.</p>
+<p><strong>Mögliche Ursache:</strong> Eine der Voraussetzungen fehlt: aktive Netzwerk-Teilnahme, beendete Deadlock-Session, erteilte Raid-Berechtigung, Auto-Raid eingeschaltet, passendes Live-Ziel vorhanden.</p>
+<p><strong>Sichere Erklärung:</strong> „Ein Auto-Raid braucht mehrere Voraussetzungen. Fehlt eine — etwa wenn gerade kein anderer teilnehmender Deadlock-Kanal live ist — endet der Stream ohne Raid."</p>
+<p><strong>Erste Schritte:</strong> Raid-Status prüfen (autorisiert? Auto-Raid an?) → war die Session Deadlock? → war ein Ziel live?</p>
+<p><strong>Eskalieren, wenn:</strong> Alle Voraussetzungen erfüllt scheinen, aber nie geraidet wird.</p>
+<p><span class="nosay">Nicht behaupten:</span> nach welchen Faktoren/Gewichten das Ziel gewählt wird.</p>
+</section>
+
+<section id="raid-abgebrochen" class="case">
+<h3>3 · Meldung „Dein Raid wurde abgebrochen"</h3>
+<p><strong>Symptom:</strong> Streamer erhält eine private Nachricht über einen abgebrochenen Raid.</p>
+<p><strong>Mögliche Ursache:</strong> Das Raid-Ziel steht auf der Raid-Sperrliste (Kanäle, die nicht für Raids unterstützt werden).</p>
+<p><strong>Sichere Erklärung:</strong> „Der Zielkanal steht auf unserer Raid-Sperrliste. Konnte der Raid rechtzeitig gestoppt werden, wurde er abgebrochen; war er schon durchgelaufen, bitten wir, den Kanal künftig nicht mehr als Ziel zu wählen."</p>
+<p><strong>Erste Schritte:</strong> Anderes Ziel wählen; erklären, dass Twitch nur ein kurzes Abbruch-Fenster erlaubt.</p>
+<p><strong>Eskalieren, wenn:</strong> Streamer meint, das Ziel sei zu Unrecht gesperrt.</p>
+<p><span class="nosay">Nicht behaupten:</span> die konkreten Aufnahmekriterien der Sperrliste oder deren Inhalt.</p>
+</section>
+
+<section id="falsch-gebannt" class="case">
+<h3>4 · Echter Zuschauer wurde gebannt</h3>
+<p><strong>Symptom:</strong> Ein legitimer Account wurde als Spam eingestuft und gebannt.</p>
+<p><strong>Mögliche Ursache:</strong> Seltene Fehleinschätzung der konservativen Moderation.</p>
+<p><strong>Sichere Erklärung:</strong> „Das kommt sehr selten vor, weil die Erkennung bewusst konservativ ist. Ein Treffer lässt sich mit dem Unban-Befehl sofort korrigieren, und die Erkennung wird laufend nachgeschärft."</p>
+<p><strong>Erste Schritte:</strong> Unban-Befehl nutzen; ggf. dem Team melden, damit das Muster geprüft wird.</p>
+<p><strong>Eskalieren, wenn:</strong> Fehltreffer wiederholt denselben Account/dasselbe Muster betreffen.</p>
+<p><span class="nosay">Nicht behaupten:</span> welche Signale den Ban ausgelöst haben.</p>
+</section>
+
+<section id="bot-moderiert-nicht" class="case">
+<h3>5 · Bot moderiert den Chat nicht</h3>
+<p><strong>Symptom:</strong> Spam bleibt stehen, Bot bannt nicht.</p>
+<p><strong>Mögliche Ursache:</strong> Der Bot hat im Kanal keine Moderator-Rechte; ohne diese kann er erkennen, aber nicht durchgreifen.</p>
+<p><strong>Sichere Erklärung:</strong> „Der Bot braucht Moderator-Rechte in deinem Kanal, um Nachrichten zu löschen und zu bannen. Bitte trage ihn als Mod ein."</p>
+<p><strong>Erste Schritte:</strong> Bot als Moderator setzen; kurz beobachten.</p>
+<p><strong>Eskalieren, wenn:</strong> Mod-Rechte gesetzt sind und trotzdem nichts passiert.</p>
+</section>
+
+<section id="feature-fehlt" class="case">
+<h3>6 · Freigeschaltetes Feature ist nicht sichtbar</h3>
+<p><strong>Symptom:</strong> Ein bezahltes/erwartetes Feature erscheint nicht.</p>
+<p><strong>Mögliche Ursache:</strong> Der aktive Plan enthält das Feature nicht (dann erscheint eine gesperrte Vorschau-Karte); bei der Lurker-Steuer-Erinnerung fehlt der aktivierte Schalter oder der Chat-Lesezugriff.</p>
+<p><strong>Sichere Erklärung:</strong> „Prüfe zuerst, ob dein aktueller Plan dieses Feature enthält. Bei der Lurker-Steuer-Erinnerung muss zusätzlich der Schalter an sein und der Bot Chat-Lesezugriff haben."</p>
+<p><strong>Erste Schritte:</strong> Plan prüfen → Schalter prüfen → Chat-Zugriff prüfen (Dashboard-Hinweis beachten).</p>
+<p><strong>Eskalieren, wenn:</strong> Plan enthält das Feature nachweislich, es bleibt aber gesperrt.</p>
+</section>
+
+<section id="abo-problem" class="case">
+<h3>7 · Zahlung/Abo-Status stimmt nicht</h3>
+<p><strong>Symptom:</strong> Bezahlt, aber Plan nicht aktiv — oder Kündigung/Rechnung unklar.</p>
+<p><strong>Mögliche Ursache:</strong> Verzögerte Abo-Synchronisation, offener Zahlungsvorgang beim externen Zahlungsdienstleister, oder ein vom Team gesetzter Plan-Override.</p>
+<p><strong>Sichere Erklärung:</strong> „Zahlungen laufen über einen externen Zahlungsdienstleister; der Plan wird kurz nach erfolgreicher Zahlung aktiv. In Sonderfällen kann das Team einen Plan manuell gesetzt haben."</p>
+<p><strong>Erste Schritte:</strong> Abo-Seite/Rechnungsübersicht prüfen; kurz auf Synchronisation warten.</p>
+<p><strong>Eskalieren, wenn:</strong> Abrechnungsdifferenz, Rückerstattung, Override-Wunsch — <strong>immer ans Team.</strong></p>
+<p><span class="nosay">Nicht behaupten:</span> interne Preis-/Margen-Berechnung; keine Zahlungsdetails Dritter.</p>
+</section>
+
+<section id="kanal-verschwunden" class="case">
+<h3>8 · Kanal aus der Überwachung verschwunden</h3>
+<p><strong>Symptom:</strong> Ein Kanal wird nicht mehr angekündigt/überwacht, obwohl technisch alles in Ordnung scheint.</p>
+<p><strong>Mögliche Ursache:</strong> Nach längerer Inaktivität (Größenordnung gut eine Woche ohne Live) nimmt der Bot Kanäle automatisch aus der aktiven Überwachung — gewolltes Verhalten. Alternativ wurde der Kanal von einem Admin archiviert.</p>
+<p><strong>Sichere Erklärung:</strong> „War ein Kanal länger nicht live, wird er automatisch pausiert. Sobald du wieder regelmäßig live gehst, wird er wieder berücksichtigt."</p>
+<p><strong>Erste Schritte:</strong> Wieder live gehen; falls dauerhaft, ans Team.</p>
+<p><strong>Eskalieren, wenn:</strong> Kanal war aktiv und wurde dennoch entfernt/archiviert.</p>
+</section>
+
+<section id="eskalationsregel">
+<h2>Allgemeine Eskalationsregel</h2>
+<p>Sobald ein Fall Abrechnung, Konto-/Zugriffsrechte, rechtliche Themen, Datenschutz/Löschung oder eine bestrittene automatische Entscheidung betrifft und nicht eindeutig ist: an den menschlichen Support weitergeben, statt zu spekulieren. Siehe auch <a href="agent-guide.html">Agentenleitfaden</a> und <a href="../reference/states-and-errors.html">Zustände &amp; Fehler</a>.</p>
+</section>
+
+<footer>Teil der agentenfreundlichen Doku des Deadlock Twitch Bot. Interne Mechanik ist bewusst abstrahiert — siehe <a href="../security/redaction-notes.html">Redaction Notes</a>.</footer>
+</main>
+</body>
+</html>

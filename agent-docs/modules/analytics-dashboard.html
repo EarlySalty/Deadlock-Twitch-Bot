@@ -1,0 +1,141 @@
+<!doctype html>
+<html lang="de">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Modul: Analyse-Dashboard — Deadlock Twitch Bot</title>
+<style>
+:root{--fg:#1a1a1a;--bg:#fff;--muted:#555;--line:#ddd;--accent:#0a7d33;--box:#f6f8fa;--warn:#b00020;--ok:#0a7d33}
+@media(prefers-color-scheme:dark){:root{--fg:#e6e6e6;--bg:#141414;--muted:#a5a5a5;--line:#333;--box:#1e1e1e;--accent:#4ec978;--warn:#ff6b7a}}
+*{box-sizing:border-box}
+body{margin:0;font:16px/1.6 system-ui,-apple-system,Segoe UI,Roboto,sans-serif;color:var(--fg);background:var(--bg)}
+main{max-width:900px;margin:0 auto;padding:1.5rem}
+h1{font-size:1.8rem;line-height:1.25;margin:.2rem 0 1rem}
+h2{font-size:1.35rem;margin:2.2rem 0 .6rem;border-bottom:1px solid var(--line);padding-bottom:.3rem}
+h3{font-size:1.08rem;margin:1.4rem 0 .4rem}
+a{color:var(--accent)}
+nav.crumbs{font-size:.85rem;margin-bottom:1rem;color:var(--muted)}
+p.summary{font-size:1.05rem;background:var(--box);border-left:4px solid var(--accent);padding:.8rem 1rem;border-radius:4px}
+table{border-collapse:collapse;width:100%;margin:1rem 0;font-size:.95rem}
+th,td{border:1px solid var(--line);padding:.5rem .6rem;text-align:left;vertical-align:top}
+th{background:var(--box)}
+code{background:var(--box);padding:.1rem .3rem;border-radius:3px;font-size:.9em}
+ul,ol{padding-left:1.3rem}
+.box{background:var(--box);border:1px solid var(--line);border-radius:6px;padding:.7rem 1rem;margin:1rem 0}
+.say{border-left:4px solid var(--ok)}
+.nosay{border-left:4px solid var(--warn)}
+.tag{display:inline-block;font-size:.72rem;font-weight:600;padding:.1rem .5rem;border-radius:10px;background:var(--box);border:1px solid var(--line)}
+footer{margin-top:3rem;padding-top:1rem;border-top:1px solid var(--line);font-size:.8rem;color:var(--muted)}
+</style>
+</head>
+<body>
+<main>
+<nav class="crumbs"><a href="../index.html">Startseite</a> › Module › Analyse-Dashboard</nav>
+<h1>Modul: Analyse-Dashboard</h1>
+<p class="summary">Jeder freigeschaltete Partner bekommt ein eigenes Dashboard, das die während der Streams gesammelten Daten in verständliche Kennzahlen, Diagramme und konkrete Handlungsempfehlungen übersetzt. Es ist außerdem die zentrale Stelle für die Konfiguration der Bot-Funktionen. Ein öffentliches Demo mit Beispieldaten steht zum Ausprobieren bereit.</p>
+
+<section id="worum-es-geht">
+<h2>Worum es geht</h2>
+<p>Während ein betreuter Kanal live ist, erfasst der Bot laufend Zuschauerzahlen, Chat-Aktivität, Wachstum, Publikum, Raids und mehr. Aus diesen Rohdaten entsteht über Tage und Wochen eine Statistik-Historie pro Streamer, die das Dashboard aufbereitet. Streamer sehen dabei ausschließlich den eigenen Account.</p>
+</section>
+
+<section id="was-der-bot-tut">
+<h2>Was der Bot tut</h2>
+<ul>
+<li><strong>Daten im Hintergrund sammeln:</strong> Zuschauerzahlen, Titel, Kategorie, aktive Chatter, neue Follower und Abos, solange der Kanal live ist.</li>
+<li><strong>Kennzahlen berechnen:</strong> z. B. Spitzen- und Durchschnitts-Zuschauer, Wachstum, durchschnittliche Verweildauer, Chat-Aktivität und beste Tageszeiten.</li>
+<li><strong>Startseite (Home) zeigen:</strong> Status, Health Score mit Teilwertungen, Zusammenfassung des letzten Streams, Wochenvergleich, Schnellzugriffe, ein Aktionslog des Bots und Changelog-Einträge.</li>
+<li><strong>Analyse-Dashboard bereitstellen:</strong> Eine in Reiter gegliederte, interaktive Oberfläche mit Diagrammen, Heatmaps, Tabellen und Listen.</li>
+<li><strong>Coaching-Empfehlungen erstellen:</strong> Priorisierte, konkrete Handlungsempfehlungen, deterministisch aus den eigenen Zahlen berechnet — keine frei textende KI.</li>
+<li><strong>Post-Stream-Bericht erstellen:</strong> Nach Stream-Ende eine Zusammenfassung mit Vergleich zu vorherigen Streams; daraus kann zusätzlich eine narrative KI-Auswertung formuliert werden.</li>
+<li><strong>Konfiguration entgegennehmen:</strong> Von Go-Live-Ankündigung über Abo/Plan bis zu Promo- und Lurker-Steuer-Optionen.</li>
+</ul>
+</section>
+
+<section id="reiter">
+<h2>Analyse-Reiter im Überblick</h2>
+<table>
+<thead><tr><th>Reiter</th><th>Typische Inhalte</th></tr></thead>
+<tbody>
+<tr><td>Übersicht</td><td>Zentrale Kennzahlen, Health-Bewertung, Stream-Liste, Heatmaps, Zuschauer-Verlauf.</td></tr>
+<tr><td>Einzelne Streams</td><td>Anklickbare Stream-Liste mit Zuschauer-Verlauf, Bindung und aktivsten Chattern.</td></tr>
+<tr><td>Sendeplan</td><td>Beste Tageszeiten und Wochentage als Heatmap, mit Timing-Tipps.</td></tr>
+<tr><td>Kategorie</td><td>Deadlock-Ranglisten mit Filter, Suche und Sortierung.</td></tr>
+<tr><td>Chat-Analyse</td><td>Chat-Kennzahlen, Zuschauer-Treue, aktive Zeiten, Chatter-Profile, „Hype-Momente", Themen.</td></tr>
+<tr><td>Wachstum</td><td>Monats-/Wochenwachstum, Titel- und Tag-Auswertung, Raid-Bindung.</td></tr>
+<tr><td>Publikum</td><td>Verweildauer, Weg vom Zuschauer zum Follower, Demografie, Lurker-Anteil.</td></tr>
+<tr><td>Vergleich</td><td>Benchmark gegen die Kategorie, Zuschauer-Überschneidung, geteiltes Publikum.</td></tr>
+<tr><td>Viewer-Verzeichnis</td><td>Durchsuchbare Zuschauerliste, Segmente, Abwanderungs-Risiko, Einzelprofile.</td></tr>
+<tr><td>Coaching</td><td>Die priorisierten Handlungsempfehlungen.</td></tr>
+<tr><td>Monetarisierung</td><td>Werbung, Zuschauer-Einbrüche und Erholung, Bits, Subs, Hype-Train.</td></tr>
+</tbody>
+</table>
+</section>
+
+<section id="plaene">
+<h2>Pläne &amp; Freischaltung</h2>
+<p>Es gibt gestaffelte Pläne (Free, Basic, Erweitert). Je höher der Plan, desto mehr Analyse-Reiter und -Karten sind freigeschaltet. Höhere Inhalte sind sichtbar, aber als gesperrt markiert, mit Upgrade-Hinweis und Vorschau statt der Daten. Eine Vergleichsseite zeigt, was welcher Plan enthält, und führt zur Abo-/Bezahlseite.</p>
+<p>Öffentlich genannte Preise (netto/Monat): Einzelpläne 1,99 €, Zweierpakete 3,49 €, Komplett 4,99 €.</p>
+<p><strong>Wichtig:</strong> Plan-Grenzen werden serverseitig durchgesetzt — selbst wenn ein gesperrter Bereich in der Oberfläche sichtbar gemacht wird, liefert der Server ohne passenden Plan keine echten Daten.</p>
+</section>
+
+<section id="konfiguration">
+<h2>Was Streamer einstellen können</h2>
+<ul>
+<li><strong>Plan/Tier wählen</strong> und das <strong>Abo verwalten</strong> (buchen, Rechnungsdaten, Rechnungen, kündigen, Zahlungs-Portal).</li>
+<li><strong>Go-Live-Ankündigung gestalten</strong> (Aussehen, Text, Farbe, Bilder, Button, Ping-Rolle) mit Vorschau und Test-Senden.</li>
+<li><strong>Promo-Nachricht setzen</strong> (mit Pflichtbestandteil und Längenbegrenzung, planabhängig).</li>
+<li><strong>Lurker-Steuer</strong> ein-/ausschalten (Feature höherer Tiers).</li>
+<li><strong>Verbindungen pflegen:</strong> Twitch-/Discord-Status, vorhandene oder nötige Berechtigungen (Scopes), Login und Account-ID.</li>
+<li><strong>Ansicht umschalten:</strong> Vorschau auf den erweiterten Funktionsumfang höherer Pläne.</li>
+</ul>
+</section>
+
+<section id="grenzen">
+<h2>Grenzen &amp; Sonderfälle</h2>
+<ul>
+<li><strong>Nur der eigene Account:</strong> Zugriffe auf fremde Accounts werden blockiert; nur Admins können den Kontext wechseln.</li>
+<li><strong>Wenig Daten am Anfang:</strong> Verlaufs- und Vergleichs-Auswertungen brauchen mehrere Streams. „Noch keine Daten" bei einem frischen Account ist normal und kein Fehler — das Dashboard zeigt dann einen Hinweis statt erfundener Werte.</li>
+<li><strong>Coaching ist Statistik, keine KI-Meinung:</strong> Gleiche Daten ergeben gleiche Empfehlungen. Eine echte KI kommt nur im separaten KI-Bereich zum Einsatz (z. B. narrativer Post-Stream-Bericht).</li>
+<li><strong>Einige Analysen sind bewusst ausgeblendet:</strong> Bestimmte Auswertungen sind im Produkt absichtlich nicht sichtbar (Produktentscheidung, kein Defekt) und können später wieder aktiviert werden.</li>
+<li><strong>KI-Analyse-Reiter noch nicht produktiv:</strong> Für reguläre Partner aktuell ohne nutzbare Daten (derzeit auf Admins beschränkt).</li>
+<li><strong>Demo ≠ echte Daten:</strong> Das öffentliche Demo zeigt nur Beispieldaten und greift nie auf echte Streamer-Accounts zu.</li>
+</ul>
+</section>
+
+<section id="agent-hinweise">
+<h2>Hinweise für KI-Agenten &amp; Support</h2>
+<div class="box say"><strong>Der Agent darf sagen:</strong>
+<ul>
+<li>Dass das Dashboard Kennzahlen, Diagramme, Reiter und Coaching-Empfehlungen aus den eigenen Stream-Daten zeigt und Daten erst live gesammelt werden.</li>
+<li>Dass ein fast leeres Dashboard bei frischen Accounts normal ist und sich mit jedem Stream füllt.</li>
+<li>Dass Coaching deterministisch aus den Zahlen berechnet ist und nur der separate KI-Bereich echte KI nutzt.</li>
+<li>Dass Reiter/Karten planabhängig freigeschaltet und Plan-Grenzen serverseitig durchgesetzt sind.</li>
+<li>Die öffentlichen Preise (1,99 € / 3,49 € / 4,99 € netto pro Monat) und dass ein Demo-Dashboard nur Beispieldaten zeigt.</li>
+<li>Dass Streamer nur ihren eigenen Account sehen und im Dashboard ihre Bot-Funktionen und Verbindungen konfigurieren.</li>
+</ul>
+</div>
+<div class="box nosay"><strong>Der Agent darf nicht sagen / offenlegen:</strong>
+<ul>
+<li>Die genauen Formeln, Gewichtungen oder Schwellen des Health Score, der Coaching-Empfehlungen oder anderer Kennzahlen.</li>
+<li>Wie Margen, Provisionen oder Kostenmodelle intern berechnet werden.</li>
+<li>Interne Admin-Pfade, Kontextwechsel-Mechaniken, Datenbank- oder Infrastruktur-Details, Zugangsdaten.</li>
+<li>Inhalte bewusst ausgeblendeter Analysen über das fachliche „ist ausgeblendet" hinaus.</li>
+</ul>
+</div>
+<p>Bei Unsicherheit oder Verdacht auf Fehlentscheidung: an menschlichen Support eskalieren.</p>
+</section>
+
+<section id="weiter">
+<h2>Weiterführend</h2>
+<ul>
+<li><a href="../support/agent-guide.html">Agent-Leitfaden</a></li>
+<li><a href="../support/troubleshooting.html">Troubleshooting</a></li>
+<li><a href="../reference/glossary.html">Glossar</a></li>
+</ul>
+</section>
+
+<footer>Teil der agentenfreundlichen Doku des Deadlock Twitch Bot. Interne Mechanik ist bewusst abstrahiert — siehe <a href="../security/redaction-notes.html">Redaction Notes</a>.</footer>
+</main>
+</body>
+</html>

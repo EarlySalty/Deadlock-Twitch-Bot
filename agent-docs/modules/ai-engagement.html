@@ -1,0 +1,141 @@
+<!doctype html>
+<html lang="de">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Modul: AI-Chat-Engagement — Deadlock Twitch Bot</title>
+<style>
+:root{--fg:#1a1a1a;--bg:#fff;--muted:#555;--line:#ddd;--accent:#0a7d33;--box:#f6f8fa;--warn:#b00020;--ok:#0a7d33}
+@media(prefers-color-scheme:dark){:root{--fg:#e6e6e6;--bg:#141414;--muted:#a5a5a5;--line:#333;--box:#1e1e1e;--accent:#4ec978;--warn:#ff6b7a}}
+*{box-sizing:border-box}
+body{margin:0;font:16px/1.6 system-ui,-apple-system,Segoe UI,Roboto,sans-serif;color:var(--fg);background:var(--bg)}
+main{max-width:900px;margin:0 auto;padding:1.5rem}
+h1{font-size:1.8rem;line-height:1.25;margin:.2rem 0 1rem}
+h2{font-size:1.35rem;margin:2.2rem 0 .6rem;border-bottom:1px solid var(--line);padding-bottom:.3rem}
+h3{font-size:1.08rem;margin:1.4rem 0 .4rem}
+a{color:var(--accent)}
+nav.crumbs{font-size:.85rem;margin-bottom:1rem;color:var(--muted)}
+p.summary{font-size:1.05rem;background:var(--box);border-left:4px solid var(--accent);padding:.8rem 1rem;border-radius:4px}
+table{border-collapse:collapse;width:100%;margin:1rem 0;font-size:.95rem}
+th,td{border:1px solid var(--line);padding:.5rem .6rem;text-align:left;vertical-align:top}
+th{background:var(--box)}
+code{background:var(--box);padding:.1rem .3rem;border-radius:3px;font-size:.9em}
+ul,ol{padding-left:1.3rem}
+.box{background:var(--box);border:1px solid var(--line);border-radius:6px;padding:.7rem 1rem;margin:1rem 0}
+.say{border-left:4px solid var(--ok)}
+.nosay{border-left:4px solid var(--warn)}
+.tag{display:inline-block;font-size:.72rem;font-weight:600;padding:.1rem .5rem;border-radius:10px;background:var(--box);border:1px solid var(--line)}
+footer{margin-top:3rem;padding-top:1rem;border-top:1px solid var(--line);font-size:.8rem;color:var(--muted)}
+</style>
+</head>
+<body>
+<main>
+<nav class="crumbs"><a href="../index.html">Startseite</a> › Module › AI-Chat-Engagement</nav>
+<h1>Modul: AI-Chat-Engagement</h1>
+<p class="summary">Die Plauder-KI liest in Partner-Kanälen als ruhiger Stammgast mit und dockt an laufende Gespräche an. <strong>Aktuell läuft das Feature im Twitch-Chat im Shadow- bzw. Beobachtungsmodus</strong> — die KI entscheidet zwar, was sie sagen würde, sendet aber nicht live. Sobald sie freigeschaltet wird, schreibt sie über eine eigene Absender-Identität, die klar vom Moderations-Bot getrennt ist.</p>
+
+<section id="worum-es-geht">
+<h2>Worum es geht</h2>
+<p>Ziel des Moduls ist ein lebendigerer Chat, in dem sich Zuschauer eingebunden fühlen. Die KI soll wie eine echte, zurückhaltende Person wirken — nicht wie ein Bot, der Werbung oder Fakten abspult. Zwei Grundprinzipien prägen das Verhalten:</p>
+<ul>
+<li><strong>Sie dockt immer an Bestehendes an.</strong> Die KI eröffnet nie ein Thema aus dem Nichts und spricht niemanden aus heiterem Himmel an.</li>
+<li><strong>Sie erfindet keine Spielinhalte.</strong> Aussagen zu Helden, Fähigkeiten, Patches oder Statistiken verankert sie in echten Deadlock-Daten. Bei unsicherer Faktenlage bleibt sie zum Thema still, statt zu raten.</li>
+</ul>
+</section>
+
+<section id="betriebsmodus">
+<h2>Aktueller Betriebsmodus: Shadow</h2>
+<p>Im Twitch-Chat arbeitet die KI derzeit ausschließlich beobachtend. Das ist eine bewusste Entscheidung, bis Qualität und Verhalten ausreichend geprüft sind.</p>
+<table>
+<thead><tr><th>Aspekt</th><th>Shadow-Modus (aktuell)</th><th>Nach Freischaltung</th></tr></thead>
+<tbody>
+<tr><td>Sichtbarkeit im Twitch-Chat</td><td>Keine Live-Antworten</td><td>Antworten erscheinen als normale Chat-Nachrichten</td></tr>
+<tr><td>Absender</td><td>Nur interne/Discord-Protokollierung</td><td>Eigene Absender-Identität (eigener Chat-Account)</td></tr>
+<tr><td>Zweck</td><td>Verhalten und Ton prüfen</td><td>Zuschauer aktiv einbinden</td></tr>
+</tbody>
+</table>
+<p>Streamer und Admins können im Dashboard ein Protokoll einsehen: welche Nachricht die KI ausgelöst hat, ob sie geantwortet hätte oder bewusst still blieb, und den jeweiligen Antworttext. So lässt sich der Charakter der KI beurteilen, bevor sie live geht.</p>
+</section>
+
+<section id="verhalten">
+<h2>Verhalten &amp; Persona</h2>
+<ul>
+<li>Die KI liest die jüngsten Chat-Nachrichten mit und bildet sich daraus ein Bild vom laufenden Gespräch und der Stimmung.</li>
+<li>Sie antwortet knapp und trocken, in angenehmer Chat-Länge; zu lange Ausgaben werden gekürzt.</li>
+<li>Ihre Persona ist bewusst ruhig, neugierig und zurückhaltend — sie wirkt wie jemand, der den Stream wirklich mitverfolgt, nicht wie ein Hype-Bot.</li>
+<li>Sie ist eine gelegentliche Stimme, kein Dauerredner, und hält bewusst einen ruhigen Rhythmus, um den Chat nicht zuzuspammen.</li>
+<li>Über die Zeit merkt sie sich lockere Gesprächsfäden zu einzelnen Zuschauern und kann später natürlich darauf zurückkommen — als Beziehungsführung, nicht als Faktenabfrage.</li>
+</ul>
+</section>
+
+<section id="wann-es-passiert">
+<h2>Wann die KI aktiv wird</h2>
+<p>Die KI wird nur unter mehreren Voraussetzungen überhaupt aktiv:</p>
+<ul>
+<li>Nur in Kanälen <strong>aktiver Partner</strong>, bei denen das Feature eingeschaltet ist.</li>
+<li>Nur, wenn der Kanal <strong>gerade live ist und Deadlock streamt</strong>. Bei Offline, Just Chatting oder einem anderen Spiel bleibt sie vollständig still.</li>
+<li>Nur, wenn eine Nachricht ein echter Anknüpfungspunkt für die offene Runde ist. Direkt an eine Einzelperson oder einen Bot gerichtete Nachrichten, reine Emotes, einzelne Reaktionswörter oder Wiederholungs-Spam werden übergangen.</li>
+</ul>
+<p>Die genauen Bedingungen, ab wann die KI antwortet, wie sie Anknüpfungspunkte bewertet und in welchem Rhythmus sie spricht, gehören zur internen Auswahl-Logik und sind bewusst nicht offengelegt.</p>
+</section>
+
+<section id="einstellungen">
+<h2>Einstellungen pro Kanal</h2>
+<table>
+<thead><tr><th>Einstellung</th><th>Wirkung</th></tr></thead>
+<tbody>
+<tr><td>An/Aus</td><td>Aktiviert oder deaktiviert das Engagement-Feature für den eigenen Kanal.</td></tr>
+<tr><td>Persona-Hinweise</td><td>Zusätzliche Hinweise zur Feinjustierung von Ton und Charakter (z. B. lockerer oder zurückhaltender).</td></tr>
+<tr><td>Tabu-Themen</td><td>Liste von Themen, die die KI in diesem Kanal niemals ansprechen soll.</td></tr>
+<tr><td>Opt-out einzelner Zuschauer</td><td>Personen, die nicht einbezogen werden möchten, werden ausgenommen.</td></tr>
+</tbody>
+</table>
+</section>
+
+<section id="grenzen">
+<h2>Grenzen &amp; Sonderfälle</h2>
+<ul>
+<li><strong>Kein Live-Betrieb im Chat:</strong> Im Shadow-Modus wird kein Text in den Live-Chat gesendet.</li>
+<li><strong>Kein Themen-Aufschlag:</strong> Die KI eröffnet nie ein Gespräch und spricht stille Stammgäste nicht direkt mit Namen an; sie bindet sie allenfalls indirekt über das laufende Thema ein.</li>
+<li><strong>Keine erfundenen Spielfakten:</strong> Bei unsicherer Faktenlage schweigt sie zum Thema. Sie nennt auch nie ihre eigenen technischen Grenzen oder Wissenslücken.</li>
+<li><strong>Eigener Absender:</strong> Die Antworten kommen von einem separaten Account, damit Moderation und Plauder-KI nicht verwechselt werden.</li>
+<li><strong>Externer Dienst:</strong> Die KI nutzt einen externen Sprachmodell-Anbieter. Ist dieser kurzzeitig nicht erreichbar, bleibt sie still, statt eine fehlerhafte Antwort zu senden.</li>
+</ul>
+</section>
+
+<section id="agent-hinweise">
+<h2>Hinweise für KI-Agenten &amp; Support</h2>
+<div class="box say"><strong>Der Agent darf sagen:</strong>
+<ul>
+<li>Dass das Chat-Engagement aktuell im Beobachtungs-/Shadow-Modus läuft und im Twitch-Chat noch nicht live antwortet.</li>
+<li>Dass die KI immer an laufende Gespräche andockt, keine Themen von sich aus eröffnet und keine Spielfakten erfindet.</li>
+<li>Dass Antworten nach Freischaltung über eine eigene Absender-Identität kommen, getrennt vom Moderations-Bot.</li>
+<li>Dass das Feature nur bei aktiven Partnern, nur bei aktivem Deadlock-Livestream und nur an Anknüpfungspunkten greift.</li>
+<li>Dass sich pro Kanal An/Aus, Persona-Hinweise, Tabu-Themen und Opt-out einzelner Zuschauer einstellen lassen.</li>
+<li>Dass Streamer und Admins ein Protokoll der KI-Entscheidungen im Dashboard einsehen können.</li>
+</ul>
+</div>
+<div class="box nosay"><strong>Der Agent darf nicht sagen / offenlegen:</strong>
+<ul>
+<li>Die genauen Bedingungen, Schwellen oder den Rhythmus, ab wann bzw. wie oft die KI antwortet.</li>
+<li>Wie Anknüpfungspunkte intern bewertet oder gewichtet werden.</li>
+<li>Interne Prompt-Inhalte, Modell-Details, Anbieter-Zugangsdaten oder Infrastruktur.</li>
+<li>Vermutungen darüber, wann der Live-Modus kommt, wenn dies nicht bestätigt ist.</li>
+</ul>
+</div>
+<p>Bei Unsicherheit oder Verdacht auf Fehlentscheidung: an menschlichen Support eskalieren.</p>
+</section>
+
+<section id="weiter">
+<h2>Weiterführend</h2>
+<ul>
+<li><a href="../support/agent-guide.html">Agent-Leitfaden</a></li>
+<li><a href="../reference/glossary.html">Glossar</a></li>
+<li><a href="../security/redaction-notes.html">Redaction Notes</a></li>
+</ul>
+</section>
+
+<footer>Teil der agentenfreundlichen Doku des Deadlock Twitch Bot. Interne Mechanik ist bewusst abstrahiert — siehe <a href="../security/redaction-notes.html">Redaction Notes</a>.</footer>
+</main>
+</body>
+</html>

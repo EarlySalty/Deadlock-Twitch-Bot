@@ -1,0 +1,191 @@
+<!doctype html>
+<html lang="de">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Modul: Netzwerk-Schutz (Bannliste & Scam-Warnung) — Deadlock Twitch Bot</title>
+<style>
+:root{--fg:#1a1a1a;--bg:#fff;--muted:#555;--line:#ddd;--accent:#0a7d33;--box:#f6f8fa;--warn:#b00020;--ok:#0a7d33}
+@media(prefers-color-scheme:dark){:root{--fg:#e6e6e6;--bg:#141414;--muted:#a5a5a5;--line:#333;--box:#1e1e1e;--accent:#4ec978;--warn:#ff6b7a}}
+*{box-sizing:border-box}
+body{margin:0;font:16px/1.6 system-ui,-apple-system,Segoe UI,Roboto,sans-serif;color:var(--fg);background:var(--bg)}
+main{max-width:900px;margin:0 auto;padding:1.5rem}
+h1{font-size:1.8rem;line-height:1.25;margin:.2rem 0 1rem}
+h2{font-size:1.35rem;margin:2.2rem 0 .6rem;border-bottom:1px solid var(--line);padding-bottom:.3rem}
+h3{font-size:1.08rem;margin:1.4rem 0 .4rem}
+a{color:var(--accent)}
+nav.crumbs{font-size:.85rem;margin-bottom:1rem;color:var(--muted)}
+p.summary{font-size:1.05rem;background:var(--box);border-left:4px solid var(--accent);padding:.8rem 1rem;border-radius:4px}
+table{border-collapse:collapse;width:100%;margin:1rem 0;font-size:.95rem}
+th,td{border:1px solid var(--line);padding:.5rem .6rem;text-align:left;vertical-align:top}
+th{background:var(--box)}
+code{background:var(--box);padding:.1rem .3rem;border-radius:3px;font-size:.9em}
+ul,ol{padding-left:1.3rem}
+.box{background:var(--box);border:1px solid var(--line);border-radius:6px;padding:.7rem 1rem;margin:1rem 0}
+.say{border-left:4px solid var(--ok)}
+.nosay{border-left:4px solid var(--warn)}
+.tag{display:inline-block;font-size:.72rem;font-weight:600;padding:.1rem .5rem;border-radius:10px;background:var(--box);border:1px solid var(--line)}
+footer{margin-top:3rem;padding-top:1rem;border-top:1px solid var(--line);font-size:.8rem;color:var(--muted)}
+</style>
+</head>
+<body>
+<main>
+<nav class="crumbs"><a href="../index.html">Startseite</a> › Module › Netzwerk-Schutz</nav>
+<h1>Modul: Netzwerk-Schutz (Bannliste &amp; Scam-Warnung)</h1>
+<p class="summary">Dieses Modul kombiniert zwei netzwerkweite Schutzmechanismen: die netzwerkweite Bannliste samt Schutzlisten für Raids (Abschnitt A) und die Scam-Warnungen im Chat vor gefälschten „offiziellen“ Servern und verdächtigen Chattern (Abschnitt B). Beide haben eigene Auslöser und Abläufe.</p>
+
+<!-- ============ ABSCHNITT A ============ -->
+<section id="bannliste">
+<h2>Abschnitt A — Schutzlisten &amp; netzwerkweite Bannliste</h2>
+
+<h3 id="a-worum-es-geht">Worum es geht</h3>
+<p>Der Bot betreibt mehrere Kanäle desselben Partner-Netzwerks gemeinsam. Damit ein Störer, der in einem Kanal auffällt, nicht einfach zum nächsten weiterzieht, gibt es eine netzwerkweite Bannliste und weitere Schutzlisten. Ihr Zweck: bekannte Störer und unseriöse Kanäle einmal zentral erfassen und dann über alle angeschlossenen Partner-Kanäle hinweg fernhalten – ohne dass jeder Streamer das selbst nachpflegen muss.</p>
+
+<h3 id="a-was-der-bot-tut">Was der Bot tut</h3>
+<ul>
+<li><strong>Netzwerkweite Bannliste:</strong> Wer als Störer eingestuft ist, wird über alle aktiven Partner-Kanäle hinweg gebannt – nicht nur dort, wo er ursprünglich auffiel.</li>
+<li><strong>Proaktive Durchsetzung:</strong> Auch wenn ein gelisteter Account in einem Kanal nie geschrieben hat, wird er dort vorsorglich gesperrt.</li>
+<li><strong>Reaktives Sicherheitsnetz:</strong> Schreibt ein gelisteter Account in irgendeinem Partner-Kanal, wird er sofort dort gebannt und seine Nachricht entfernt – selbst wenn die vorsorgliche Sperre diesen Kanal noch nicht erreicht hatte.</li>
+<li><strong>Schutzliste gegen unseriöse Kanäle (Raid):</strong> Als problematisch bekannte Kanäle werden als Raid-Ziel ausgeschlossen.</li>
+<li><strong>Schutz der eigenen Streamer:</strong> Ein Partner-Kanal oder der Streamer selbst landet nie auf der Bannliste und wird nie als Ziel gebannt.</li>
+</ul>
+
+<h3 id="a-wann-es-passiert">Wann es passiert</h3>
+<ul>
+<li>Die <strong>vorsorgliche Durchsetzung</strong> läuft im Hintergrund und ist bewusst so getaktet, dass sie zu unauffälligen Zeitpunkten greift und nicht mitten im Stream sichtbar wird. Die genaue Auslöselogik und Taktung sind nicht öffentlich.</li>
+<li>Das <strong>reaktive Sicherheitsnetz</strong> greift, sobald ein gelisteter Account in einem Partner-Kanal schreibt.</li>
+<li>Der <strong>Raid-Ausschluss</strong> greift bei jeder automatischen Raid-Zielauswahl.</li>
+<li>Welche Accounts oder Kanäle auf eine Liste kommen und nach welchen Kriterien, ist bewusst nicht offengelegt.</li>
+</ul>
+
+<h3 id="a-was-nutzer-sehen">Was Streamer und Zuschauer sehen</h3>
+<ul>
+<li>Wird ein gelisteter Account beim Schreiben erwischt, erscheint ein kurzer Hinweis, dass die Person netzwerkweit auf der Bannliste steht (Verstoß gegen die Community-Richtlinien); ihre Nachricht verschwindet.</li>
+<li>Die vorsorglichen Bans laufen still – keine Chat-Nachricht, keine Ankündigung. Das ist gewollt.</li>
+<li>Beim automatischen Raiden merken Streamer und Zuschauer von der Schutzliste nichts Direktes; sie sorgt nur dafür, dass Raids zu geeigneten Zielen gehen.</li>
+</ul>
+
+<h3 id="a-grenzen">Grenzen &amp; Sonderfälle</h3>
+<ul>
+<li>Der Bot kann nur bannen, wenn er im Kanal die nötigen Moderationsrechte hat; sonst wird der Ban später erneut versucht.</li>
+<li>Den Streamer selbst und andere Partner-Kanäle bannt der Bot grundsätzlich nie – diese Absicherung hat immer Vorrang.</li>
+<li>Steht ein Account im Kanal schon auf der Sperrliste, wird das als erledigt behandelt; doppelte Bans entstehen nicht.</li>
+<li>Externe Kanäle, die wiederholt auffällig hereinraiden, werden mit einer Schonfrist behandelt; wird ein solcher Kanal zwischenzeitlich seriöser Partner, wird kein Ausschluss angewandt. Genaue Schwellen und Fristen sind nicht öffentlich.</li>
+<li>Die Listen wirken nur in Kanälen des Partner-Netzwerks, nicht auf Twitch allgemein.</li>
+<li>Ein Ban lässt sich über die Listenpflege rückgängig machen – das ist eine Admin-Aufgabe.</li>
+</ul>
+</section>
+
+<!-- ============ ABSCHNITT B ============ -->
+<section id="scam-warnung">
+<h2>Abschnitt B — Scam-Warnungen im Chat</h2>
+
+<h3 id="b-worum-es-geht">Worum es geht</h3>
+<p>Im Umfeld kleiner Deadlock-Streamer tauchen immer wieder Betrugsversuche auf: gefälschte „offizielle“ Discord-Server und fremde Chatter, die Streamern Dienstleistungen, mehr Viewer oder Designs andrehen oder sie auf andere Plattformen locken wollen. Der Bot warnt Zuschauer und Streamer vor solchen mutmaßlichen Scams. Er formuliert bewusst vorsichtig („könnte Scam sein“) statt mit einem harten Vorwurf und macht transparent, was er tut.</p>
+
+<h3 id="b-was-der-bot-tut">Was der Bot tut</h3>
+<p>Es gibt zwei getrennte Arten von Scam-Warnungen:</p>
+<h4>1. Warnung vor gefälschten „offiziellen“ Servern (an den ganzen Chat)</h4>
+<ul>
+<li>Der Bot postet eine kurze Warnung, dass bestimmte kursierende Discord-Server, die sich als die offizielle deutsche Deadlock-Community ausgeben, <strong>nicht</strong> die echten sind und Fake/Scam sein könnten.</li>
+<li>In derselben Nachricht nennt er den einzigen echten, offiziellen Discord.</li>
+<li>Der Text ist bewusst zurückhaltend formuliert – ein Hinweis, keine harte Anschuldigung.</li>
+<li>Mehrere Formulierungen wechseln sich ab, sodass nie zweimal hintereinander derselbe Wortlaut erscheint.</li>
+</ul>
+<h4>2. Warnung vor verdächtigen Chattern (Scam-/Service-Pitches)</h4>
+<ul>
+<li>Sieht die Nachricht eines fremden Chatters wie ein typischer Scam-/Verkaufs-Pitch aus (z. B. „mehr Viewer“, Designs/Overlays, „Zusammenarbeit“ oder Abwerben auf eine andere Plattform), erkennt der Bot das und kann reagieren.</li>
+<li>Bei klarem Verdacht postet er eine kurze, sichtbare Warnung an den Streamer mit der Empfehlung, die Person zu ignorieren bzw. zu bannen.</li>
+<li>Auch hier bleibt die Wortwahl vorsichtig.</li>
+<li>Bei leichteren Verdachtsfällen hält sich der Bot zurück und wartet ab.</li>
+<li>Ignoriert die Person eine bereits ausgesprochene Warnung und macht weiter, kann der Bot sie kurz in den Timeout setzen und eine letzte Warnung mit Bann-Empfehlung posten.</li>
+</ul>
+<p>Beide Warnungen erscheinen unter dem eigenen Bot-Account und sind damit klar als Bot-Nachricht erkennbar, nicht als Aussage des Streamers.</p>
+
+<h3 id="b-wann-es-passiert">Wann es passiert</h3>
+<p><strong>Server-Warnung an den Chat:</strong></p>
+<ul>
+<li>Läuft im selben Takt wie die normalen Promo-Nachrichten und nutzt einen Werbe-Slot – nur bei laufendem Stream und genügend Chat-Aktivität.</li>
+<li>Erscheint <strong>statt</strong> einer regulären Promo, nicht zusätzlich.</li>
+<li>Kommt deutlich seltener als gewöhnliche Promos; pro Kanal gibt es einen eigenen Abstand.</li>
+<li>Nach einem Bot-Neustart geht der Abstand nicht verloren – der Bot merkt sich, wann er zuletzt gewarnt hat.</li>
+</ul>
+<p><strong>Warnung vor verdächtigen Chattern:</strong></p>
+<ul>
+<li>Wird ausgelöst, wenn die Nachricht eines fremden Chatters wie ein Scam-/Verkaufs-Pitch wirkt. Die genaue Erkennungslogik ist bewusst nicht dokumentiert; der Bot wägt mehrere Hinweise zu einer Gesamteinschätzung ab und ist dabei eher vorsichtig.</li>
+<li>Nachrichten von Moderatoren und vom Streamer selbst lösen nie eine Warnung aus.</li>
+<li>Befehle (Nachrichten mit dem Befehls-Präfix) werden ebenfalls ignoriert.</li>
+<li>Nach einer Warnung gibt es eine Ruhephase pro Person und pro Kanal, damit der Chat nicht zugespammt wird.</li>
+</ul>
+
+<h3 id="b-was-nutzer-sehen">Was Streamer und Zuschauer sehen</h3>
+<ul>
+<li><strong>Server-Warnung:</strong> Eine kurze, hervorgehobene Bot-Nachricht, die vor den gefälschten Servern warnt und den echten Discord nennt (über Invite-/Bio-Mechanismus, nicht als nackter Link).</li>
+<li><strong>Chatter-Warnung:</strong> Eine kurze Bot-Nachricht mit @-Mention an die verdächtige Person, die sie als möglichen Pitcher/Scam einordnet und empfiehlt, sie zu ignorieren bzw. zu bannen. Bei Wiederholungstätern zusätzlich ein kurzer Timeout plus abschließende Warnung.</li>
+<li>Beide Warnungen erscheinen unter dem Bot-Account.</li>
+</ul>
+
+<h3 id="b-grenzen">Grenzen &amp; Sonderfälle</h3>
+<ul>
+<li><strong>Keine Links im Chat:</strong> Twitch-AutoMod blockt URLs; die Warnungen verweisen daher über den Invite-/Bio-Mechanismus statt als nackte URL.</li>
+<li><strong>Warnung „stiehlt“ den Promo-Slot:</strong> Ist die Server-Warnung fällig, kommt sie statt der Promo, nicht beides.</li>
+<li><strong>Bewusst vorsichtige Wortwahl:</strong> Der Bot behauptet nie als Tatsache, dass etwas Scam ist – aus Fairness und aus rechtlichen Gründen.</li>
+<li><strong>Konservative Erkennung:</strong> Im Zweifel wird eher nicht gewarnt, damit harmlose (auch neue oder fremdsprachige) Zuschauer nicht getroffen werden. Ein geschickt formulierter Pitch kann dadurch im Einzelfall durchrutschen.</li>
+<li><strong>Eskalation nur bei Hartnäckigkeit:</strong> Der kurze Timeout greift erst, wenn jemand eine bereits ausgesprochene Warnung ignoriert und weitermacht.</li>
+<li><strong>Abgrenzung zur normalen Moderation:</strong> Diese Scam-Warnungen sind nicht dasselbe wie der automatische Anti-Viewer-Bot-Schutz. Werbe-Bots räumt der Bot über die normale Moderation eigenständig weg; diese Warnungen sind ein zusätzlicher, sichtbarer Hinweis für Fälle, die eher den Streamer betreffen.</li>
+</ul>
+</section>
+
+<section id="fehler">
+<h2>Typische Situationen &amp; Erklärungen</h2>
+<table>
+<thead><tr><th>Situation</th><th>Erklärung</th></tr></thead>
+<tbody>
+<tr><td>Jemand in meinem Kanal gebannt, obwohl er nie schrieb</td><td>Der Account steht netzwerkweit auf der Bannliste; der Bot hält ihn vorsorglich aus allen Kanälen heraus.</td></tr>
+<tr><td>Ban ganz ohne Chat-Nachricht</td><td>Vorsorglicher (proaktiver) Ban – läuft bewusst still.</td></tr>
+<tr><td>Bot nennt einen Discord „Fake/Scam“</td><td>Server-Warnung vor gefälschten „offiziellen“ Servern; nennt zugleich den echten Discord.</td></tr>
+<tr><td>Chatter als möglicher Scammer markiert</td><td>Chatter-Warnung bei deutlichem Verdacht; bleibt eine Einschätzung, die Entscheidung liegt beim Streamer.</td></tr>
+<tr><td>Externer Dauer-Raider nicht sofort ausgeschlossen</td><td>Schonfrist; entwickelt sich der Kanal zum seriösen Partner, passiert nichts weiter.</td></tr>
+</tbody>
+</table>
+</section>
+
+<section id="agent-hinweise">
+<h2>Hinweise für KI-Agenten &amp; Support</h2>
+<div class="box say"><strong>Der Agent darf sagen:</strong>
+<ul>
+<li>Dass die netzwerkweite Bannliste Störer über alle Partner-Kanäle hinweg fernhält (proaktiv und reaktiv).</li>
+<li>Dass Streamer und Partner-Kanäle grundsätzlich geschützt sind und nie auf die Liste geraten.</li>
+<li>Dass proaktive Bans still laufen und reaktive Bans mit einem kurzen Chat-Hinweis erscheinen.</li>
+<li>Dass Raids unseriöse Kanäle über eine Schutzliste ausschließen.</li>
+<li>Dass Scam-Warnungen bewusst vorsichtig formuliert sind, unter dem Bot-Account erscheinen und Mods/Streamer nie auslösen.</li>
+<li>Dass die Chatter-Warnung eine Einschätzung ist und die Entscheidung beim Streamer liegt.</li>
+</ul>
+</div>
+<div class="box nosay"><strong>Der Agent darf nicht sagen / offenlegen:</strong>
+<ul>
+<li>Nach welchen Kriterien Accounts oder Kanäle auf eine Liste kommen.</li>
+<li>Die genaue Taktung/Auslöselogik der vorsorglichen Durchsetzung sowie exakte Schonfristen und Schwellen.</li>
+<li>Die Erkennungs-Signale, Gewichtungen oder Schwellen der Chatter-Scam-Erkennung.</li>
+<li>Exakte Abstände der Server-Warnung oder interne Bedingungen als konkrete Regeln.</li>
+<li>Secrets, Tokens, interne Kanal-IDs oder Infrastruktur-Details.</li>
+</ul>
+</div>
+<p>Bei Unsicherheit oder Verdacht auf Fehlentscheidung: an menschlichen Support eskalieren.</p>
+</section>
+
+<section id="verwandte-seiten">
+<h2>Verwandte Seiten</h2>
+<ul>
+<li><a href="spam-bot-detection.html">Modul: Spam- &amp; Bot-Erkennung</a></li>
+<li><a href="chat-moderation.html">Modul: Chat-Moderation &amp; Befehle</a></li>
+<li><a href="raids.html">Modul: Raids</a></li>
+<li><a href="../workflows/spam-moderation-flow.html">Workflow: Spam- &amp; Moderations-Ablauf</a></li>
+<li><a href="../support/agent-guide.html">Agenten-Leitfaden</a></li>
+</ul>
+</section>
+
+<footer>Teil der agentenfreundlichen Doku des Deadlock Twitch Bot. Interne Mechanik ist bewusst abstrahiert — siehe <a href="../security/redaction-notes.html">Redaction Notes</a>.</footer>
+</main>
+</body>
+</html>

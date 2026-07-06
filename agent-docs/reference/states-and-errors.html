@@ -1,0 +1,108 @@
+<!doctype html>
+<html lang="de">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Zustände, Fehler &amp; Meldungen — Deadlock Twitch Bot</title>
+<style>
+:root{--fg:#1a1a1a;--bg:#fff;--muted:#555;--line:#ddd;--accent:#0a7d33;--box:#f6f8fa;--warn:#b00020;--ok:#0a7d33}
+@media(prefers-color-scheme:dark){:root{--fg:#e6e6e6;--bg:#141414;--muted:#a5a5a5;--line:#333;--box:#1e1e1e;--accent:#4ec978;--warn:#ff6b7a}}
+*{box-sizing:border-box}
+body{margin:0;font:16px/1.6 system-ui,-apple-system,Segoe UI,Roboto,sans-serif;color:var(--fg);background:var(--bg)}
+main{max-width:960px;margin:0 auto;padding:1.5rem}
+h1{font-size:1.8rem;line-height:1.25;margin:.2rem 0 1rem}
+h2{font-size:1.3rem;margin:2.2rem 0 .6rem;border-bottom:1px solid var(--line);padding-bottom:.3rem}
+a{color:var(--accent)}
+nav.crumbs{font-size:.85rem;margin-bottom:1rem;color:var(--muted)}
+p.summary{font-size:1.05rem;background:var(--box);border-left:4px solid var(--accent);padding:.8rem 1rem;border-radius:4px}
+table{border-collapse:collapse;width:100%;margin:1rem 0;font-size:.92rem}
+th,td{border:1px solid var(--line);padding:.5rem .6rem;text-align:left;vertical-align:top}
+th{background:var(--box)}
+code{background:var(--box);padding:.1rem .3rem;border-radius:3px;font-size:.9em}
+footer{margin-top:3rem;padding-top:1rem;border-top:1px solid var(--line);font-size:.8rem;color:var(--muted)}
+</style>
+</head>
+<body>
+<main>
+<nav class="crumbs"><a href="../index.html">Startseite</a> › Referenz › Zustände &amp; Fehler</nav>
+<h1>Zustände, Fehler &amp; Meldungen</h1>
+<p class="summary">Sichtbare Zustände und typische Meldungen mit fachlicher Bedeutung, sicherer Kunden-Erklärung und nächsten Schritten. Interne Fehlercodes, Log-Interna und Schwellen sind nicht enthalten.</p>
+
+<section id="streamer-zustaende">
+<h2>Streamer- &amp; Kanal-Zustände</h2>
+<table>
+<thead><tr><th>Zustand</th><th>Bedeutung</th><th>Sichere Erklärung / nächster Schritt</th></tr></thead>
+<tbody>
+<tr><td>Betreut / freigeschaltet</td><td>Kanal ist verifizierter Partner; Bot überwacht, kündigt an, moderiert.</td><td>„Dein Kanal wird aktiv betreut."</td></tr>
+<tr><td>Nicht verifiziert / ausstehend</td><td>Aufgenommen, aber noch nicht als Partner bestätigt.</td><td>„Die Verifizierung durch das Team steht noch aus."</td></tr>
+<tr><td>Pausiert (Inaktivität)</td><td>Länger nicht live → automatisch aus aktiver Überwachung genommen.</td><td>„Wieder regelmäßig live gehen; der Kanal wird dann wieder berücksichtigt."</td></tr>
+<tr><td>Archiviert</td><td>Von einem Admin deaktiviert; Betreuung beendet.</td><td>Bei Bedarf ans Team zur Reaktivierung.</td></tr>
+<tr><td>Testphase aktiv</td><td>Zeitlich begrenzter erweiterter Zugang für neue Nutzer.</td><td>„Nach Ablauf ohne Abo gilt wieder der kostenlose Plan."</td></tr>
+</tbody>
+</table>
+</section>
+
+<section id="live-zustaende">
+<h2>Live- &amp; Ankündigungs-Zustände</h2>
+<table>
+<thead><tr><th>Zustand</th><th>Bedeutung</th><th>Sichere Erklärung</th></tr></thead>
+<tbody>
+<tr><td>Live (Deadlock)</td><td>Stream in der Deadlock-Kategorie erkannt.</td><td>Go-Live-Ankündigung wird gepostet.</td></tr>
+<tr><td>Live (anderes Spiel)</td><td>Stream läuft, aber nicht in Deadlock.</td><td>„Keine Ankündigung; sie kommt beim Wechsel auf Deadlock."</td></tr>
+<tr><td>Offline / VOD</td><td>Stream beendet; Ankündigung in Offline-Ansicht umgewandelt.</td><td>„Die bestehende Nachricht zeigt jetzt Offline + VOD-Button."</td></tr>
+<tr><td>Flackern abgefangen</td><td>Kurzer Aussetzer offline↔online wird bewusst geglättet.</td><td>Kein Doppel-Posting; keine Aktion nötig.</td></tr>
+</tbody>
+</table>
+</section>
+
+<section id="raid-zustaende">
+<h2>Raid-Zustände &amp; -Meldungen</h2>
+<table>
+<thead><tr><th>Zustand / Meldung</th><th>Bedeutung</th><th>Sichere Erklärung</th></tr></thead>
+<tbody>
+<tr><td>Autorisiert</td><td>Bot darf im Namen des Streamers raiden.</td><td>Voraussetzung für Auto-Raid.</td></tr>
+<tr><td>Nicht autorisiert</td><td>Keine Berechtigung erteilt.</td><td>„Über den Anmelde-Link autorisieren, um Auto-Raids zu ermöglichen."</td></tr>
+<tr><td>Auto-Raid an/aus</td><td>Pro Streamer schaltbar.</td><td>Manuelle Raids bleiben unberührt.</td></tr>
+<tr><td>Kein Ziel verfügbar</td><td>Kein passender teilnehmender Deadlock-Kanal live.</td><td>„Es wird nicht ‚irgendwohin' geraidet — dann bleibt der Raid aus."</td></tr>
+<tr><td>„Raid wurde abgebrochen"</td><td>Ziel steht auf der Raid-Sperrliste.</td><td>Anderes Ziel wählen; siehe <a href="../support/troubleshooting.html#raid-abgebrochen">Troubleshooting</a>.</td></tr>
+<tr><td>Raid bestätigt angekommen</td><td>Mehrere Signale stimmen überein.</td><td>Konservative Erfolgswertung; einzelnes Signal reicht nicht.</td></tr>
+</tbody>
+</table>
+</section>
+
+<section id="moderation-zustaende">
+<h2>Moderations-Meldungen</h2>
+<table>
+<thead><tr><th>Meldung / Zustand</th><th>Bedeutung</th><th>Sichere Erklärung</th></tr></thead>
+<tbody>
+<tr><td>Auto-Mod-Hinweis nach Ban</td><td>Kurzer Chat-Hinweis, dass wegen Spam-Verdachts gebannt wurde.</td><td>Enthält Hinweis auf den Unban-Befehl.</td></tr>
+<tr><td>Stiller Modus</td><td>Ban wird ausgeführt, Chat-Hinweis unterdrückt.</td><td>„Auf Wunsch vom Team eingerichtet."</td></tr>
+<tr><td>Ausgenommener Account</td><td>Streamer, Mods, Stammgäste, bekannte Bots, Bot selbst.</td><td>Werden nicht automatisch gebannt.</td></tr>
+<tr><td>Kein Ban möglich</td><td>Bot ohne Moderator-Rechte im Kanal.</td><td>„Bot als Moderator eintragen."</td></tr>
+</tbody>
+</table>
+</section>
+
+<section id="billing-zustaende">
+<h2>Abo- &amp; Feature-Zustände</h2>
+<table>
+<thead><tr><th>Zustand</th><th>Bedeutung</th><th>Sichere Erklärung</th></tr></thead>
+<tbody>
+<tr><td>Kostenloser Plan</td><td>Basis: Auto-Raids + volle Moderation.</td><td>„Läuft dauerhaft ohne Bezahlung."</td></tr>
+<tr><td>Bezahlter Plan aktiv</td><td>Zusatz-Features scharf geschaltet.</td><td>Sofort nach erfolgreicher Zahlung aktiv.</td></tr>
+<tr><td>Gesperrte Vorschau-Karte</td><td>Feature nicht im aktuellen Plan.</td><td>„Upgrade schaltet es frei."</td></tr>
+<tr><td>Plan-Override (Team) <span style="font-size:.7rem">intern</span></td><td>Manuell gesetzter Plan hat Vorrang.</td><td>Nur als „vom Team gesetzt" benennen; keine Interna.</td></tr>
+<tr><td>Gekündigt</td><td>Läuft zum Ende des bezahlten Zeitraums aus.</td><td>„Bis dahin bleiben Features aktiv, danach kostenloser Plan."</td></tr>
+</tbody>
+</table>
+</section>
+
+<section id="hinweis-intern">
+<h2>Interner Hinweis (ohne Details)</h2>
+<p>Das System kennt zusätzlich technische Fehler- und Health-Zustände (z. B. Token-/Verbindungs-Themen, Monitoring-Health). Diese sind für Betrieb und Entwickler relevant, aber nicht kundengerichtet und werden hier bewusst ohne interne Details geführt. Bei entsprechenden Symptomen: an den technischen Support/Betrieb eskalieren.</p>
+</section>
+
+<footer>Teil der agentenfreundlichen Doku des Deadlock Twitch Bot. Interne Mechanik ist bewusst abstrahiert — siehe <a href="../security/redaction-notes.html">Redaction Notes</a>.</footer>
+</main>
+</body>
+</html>

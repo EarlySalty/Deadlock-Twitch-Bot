@@ -1,0 +1,169 @@
+<!doctype html>
+<html lang="de">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Modul: Go-Live-Erkennung & Ankündigungen — Deadlock Twitch Bot</title>
+<style>
+:root{--fg:#1a1a1a;--bg:#fff;--muted:#555;--line:#ddd;--accent:#0a7d33;--box:#f6f8fa;--warn:#b00020;--ok:#0a7d33}
+@media(prefers-color-scheme:dark){:root{--fg:#e6e6e6;--bg:#141414;--muted:#a5a5a5;--line:#333;--box:#1e1e1e;--accent:#4ec978;--warn:#ff6b7a}}
+*{box-sizing:border-box}
+body{margin:0;font:16px/1.6 system-ui,-apple-system,Segoe UI,Roboto,sans-serif;color:var(--fg);background:var(--bg)}
+main{max-width:900px;margin:0 auto;padding:1.5rem}
+h1{font-size:1.8rem;line-height:1.25;margin:.2rem 0 1rem}
+h2{font-size:1.35rem;margin:2.2rem 0 .6rem;border-bottom:1px solid var(--line);padding-bottom:.3rem}
+h3{font-size:1.08rem;margin:1.4rem 0 .4rem}
+a{color:var(--accent)}
+nav.crumbs{font-size:.85rem;margin-bottom:1rem;color:var(--muted)}
+p.summary{font-size:1.05rem;background:var(--box);border-left:4px solid var(--accent);padding:.8rem 1rem;border-radius:4px}
+table{border-collapse:collapse;width:100%;margin:1rem 0;font-size:.95rem}
+th,td{border:1px solid var(--line);padding:.5rem .6rem;text-align:left;vertical-align:top}
+th{background:var(--box)}
+code{background:var(--box);padding:.1rem .3rem;border-radius:3px;font-size:.9em}
+ul,ol{padding-left:1.3rem}
+.box{background:var(--box);border:1px solid var(--line);border-radius:6px;padding:.7rem 1rem;margin:1rem 0}
+.say{border-left:4px solid var(--ok)}
+.nosay{border-left:4px solid var(--warn)}
+.tag{display:inline-block;font-size:.72rem;font-weight:600;padding:.1rem .5rem;border-radius:10px;background:var(--box);border:1px solid var(--line)}
+footer{margin-top:3rem;padding-top:1rem;border-top:1px solid var(--line);font-size:.8rem;color:var(--muted)}
+</style>
+</head>
+<body>
+<main>
+<nav class="crumbs"><a href="../index.html">Startseite</a> › Module › Go-Live &amp; Ankündigungen</nav>
+<h1>Modul: Go-Live-Erkennung &amp; Ankündigungen</h1>
+<p class="summary">Dieses Modul beschreibt, wie der Bot betreute Twitch-Kanäle überwacht, beim Go-Live in Deadlock eine Discord-Ankündigung postet und diese am Stream-Ende in eine Offline-/VOD-Ansicht umwandelt. Streamer können das Aussehen der Ankündigung im Dashboard anpassen.</p>
+
+<section id="worum-es-geht">
+<h2>Worum es geht</h2>
+<p>Der Bot überwacht laufend die betreuten Twitch-Kanäle und erkennt automatisch, sobald ein Streamer live geht oder seinen Stream beendet. Geht ein Streamer mit Deadlock live, postet der Bot eine Discord-Ankündigung mit Stream-Vorschau, Titel und einem Button zum Kanal. Endet der Stream, wird dieselbe Ankündigung in eine Offline-/VOD-Ansicht umgewandelt. Das Aussehen lässt sich pro Streamer im Dashboard anpassen.</p>
+</section>
+
+<section id="was-der-bot-tut">
+<h2>Was der Bot tut</h2>
+<ul>
+<li><strong>Live-Status erkennen:</strong> Der Bot weiß zu jedem Zeitpunkt, welche betreuten Kanäle live sind, mit welchem Titel, welcher Kategorie und wie vielen Zuschauern.</li>
+<li><strong>Go-Live-Ankündigung posten:</strong> Beim Go-Live in Deadlock schickt der Bot ein Discord-Embed in den Ankündigungs-Kanal – mit Titel, Kategorie, Zuschauerzahl, aktueller Vorschau und einem Button zum Twitch-Kanal.</li>
+<li><strong>Optional Live-Ping-Rolle anpingen:</strong> Wenn aktiviert, wird beim Go-Live eine Rolle erwähnt, die Community-Mitglieder abonnieren können. Der Bot legt diese Rolle bei Bedarf automatisch an.</li>
+<li><strong>Stream-Sitzung mitschreiben:</strong> Während des Streams sammelt der Bot regelmäßig Werte wie Zuschauerzahl und Titel – Grundlage der späteren Statistik-Auswertung.</li>
+<li><strong>Stream-Ende erkennen und umwandeln:</strong> Beim Offline-Gehen schließt der Bot die Sitzung ab und wandelt die Go-Live-Nachricht in eine Offline-Ansicht: klar als beendet markiert, mit letztem Titel, Vorschaubild und Button zum Mitschnitt (VOD).</li>
+<li><strong>Vorschaubild aktuell halten:</strong> Das Thumbnail wird bei jeder Ankündigung frisch geladen, damit nicht das Bild eines früheren Streams hängenbleibt.</li>
+</ul>
+</section>
+
+<section id="wann-es-passiert">
+<h2>Wann es passiert</h2>
+<p>Der Bot kombiniert zwei Erkennungswege: direkte Live-/Offline-Meldungen von Twitch in Echtzeit (der schnelle Weg) und eine zusätzliche eigene Nachprüfung in gleichmäßigem Takt als Absicherung. So wird ein Go-Live in der Regel innerhalb weniger Sekunden erkannt.</p>
+<p>Eine Go-Live-Ankündigung wird gepostet, wenn alle folgenden Punkte zutreffen:</p>
+<ul>
+<li>Der Kanal gehört zu den betreuten/freigeschalteten Streamern.</li>
+<li>Der Streamer wechselt von offline auf live.</li>
+<li>Er streamt dabei in der <strong>Deadlock-Kategorie</strong>.</li>
+</ul>
+<p>Geht ein betreuter Streamer in einem anderen Spiel live, gibt es zunächst keine Ankündigung; sie wird nachgeholt, sobald er im laufenden Stream auf Deadlock wechselt. Die Offline-/VOD-Umwandlung passiert, sobald der Bot das Stream-Ende erkennt. Kurzes Flackern des Live-Status wird bewusst abgefedert, sodass keine Doppel-Postings entstehen. War ein Kanal längere Zeit gar nicht mehr live, nimmt der Bot ihn von selbst aus der aktiven Überwachung – das ist gewollt.</p>
+</section>
+
+<section id="was-nutzer-sehen">
+<h2>Was Streamer und Zuschauer sehen</h2>
+<ul>
+<li><strong>Beim Go-Live:</strong> Eine Discord-Nachricht im Ankündigungs-Kanal mit Embed (Titel, Kategorie, Zuschauerzahl, Vorschaubild) und Button zum Twitch-Kanal. Bei aktiver Live-Ping-Rolle steht darüber eine Erwähnung dieser Rolle.</li>
+<li><strong>Während des Streams:</strong> Die Ankündigung bleibt stehen; der Button führt zum laufenden Stream.</li>
+<li><strong>Nach dem Stream-Ende:</strong> Keine zweite Nachricht – die bestehende Go-Live-Nachricht wird inhaltlich ersetzt: Sie zeigt nun Offline-Status, letzten Titel und Kategorie, ein Vorschaubild des letzten Streams und einen Button zum Mitschnitt (VOD).</li>
+</ul>
+</section>
+
+<section id="einstellungen">
+<h2>Was Streamer einstellen können</h2>
+<p>Jeder Streamer kann das Aussehen seiner Go-Live-Ankündigung im Dashboard anpassen:</p>
+<ul>
+<li><strong>Titel</strong> der Ankündigung (optional auf den Stream verlinkt).</li>
+<li><strong>Beschreibung</strong> – Streamtitel, eigener Text oder beides; optional automatisch gekürzt.</li>
+<li><strong>Zusatzfelder</strong> (z. B. „Zuschauer“, „Kategorie“) mit eigenen Beschriftungen und Werten.</li>
+<li><strong>Autorzeile, Fußzeile und Farbe</strong> des Embeds.</li>
+<li><strong>Bilder:</strong> Live-Vorschau oder eigenes Bild, plus optionales kleines Vorschaubild.</li>
+<li><strong>Button-Beschriftung</strong> und Ziel.</li>
+<li><strong>Live-Ping-Rolle</strong> ein- oder ausschalten.</li>
+</ul>
+
+<h3>Platzhalter</h3>
+<p>In den Textfeldern lassen sich Platzhalter verwenden, die der Bot beim Posten mit echten Stream-Werten ersetzt. Ein unbekannter Platzhalter bleibt unverändert stehen; nicht angepasste Felder behalten sinnvolle Standardwerte.</p>
+<table>
+<thead><tr><th>Platzhalter</th><th>Bedeutung</th></tr></thead>
+<tbody>
+<tr><td><code>{channel}</code></td><td>Anzeigename des Streamers</td></tr>
+<tr><td><code>{url}</code></td><td>Link zum Twitch-Kanal</td></tr>
+<tr><td><code>{title}</code></td><td>Aktueller Streamtitel</td></tr>
+<tr><td><code>{game}</code></td><td>Kategorie/Spiel (in der Regel Deadlock)</td></tr>
+<tr><td><code>{viewer_count}</code></td><td>Aktuelle Zuschauerzahl</td></tr>
+<tr><td><code>{uptime}</code></td><td>Bisherige Stream-Laufzeit</td></tr>
+<tr><td><code>{started_at}</code></td><td>Startzeitpunkt</td></tr>
+<tr><td><code>{language}</code></td><td>Sprache des Streams</td></tr>
+<tr><td><code>{tags}</code></td><td>Gesetzte Stream-Tags</td></tr>
+<tr><td><code>{mention_role}</code></td><td>Erwähnung der Live-Ping-Rolle</td></tr>
+</tbody>
+</table>
+<h3>Vorschau und Test</h3>
+<p>Das Dashboard bietet eine Vorschau der Ankündigung und eine Test-Senden-Funktion. Discord begrenzt die Länge einzelner Felder; sehr lange Texte werden beim Posten automatisch gekürzt, und das Dashboard warnt vorab, wenn eine Konfiguration zu lang werden könnte.</p>
+</section>
+
+<section id="grenzen">
+<h2>Grenzen &amp; Sonderfälle</h2>
+<ul>
+<li><strong>Nur Deadlock löst die Ankündigung aus.</strong> Andere Kategorien werden zunächst nicht angekündigt; die Ankündigung kommt beim Wechsel auf Deadlock nach.</li>
+<li><strong>Nur betreute/freigeschaltete Kanäle</strong> werden überwacht und angekündigt.</li>
+<li><strong>Die Offline-Nachricht ersetzt die Live-Nachricht.</strong> Wurde die ursprüngliche Nachricht in Discord gelöscht, kann der Bot sie nicht mehr umwandeln.</li>
+<li><strong>Vorschaubild kann kurz hinterherhinken.</strong> Twitch aktualisiert Vorschaubilder nicht sekundengenau.</li>
+<li><strong>Kurzes Flackern</strong> des Live-Status wird bewusst abgefedert und führt nicht zu Doppel-Postings.</li>
+<li><strong>Längere Inaktivität</strong> führt zum automatischen Entfernen aus der aktiven Überwachung; bei erneuter Aktivität wird der Kanal wieder aufgenommen.</li>
+</ul>
+</section>
+
+<section id="fehler">
+<h2>Typische Situationen &amp; Erklärungen</h2>
+<table>
+<thead><tr><th>Situation</th><th>Erklärung</th></tr></thead>
+<tbody>
+<tr><td>Live gegangen, keine Ankündigung</td><td>Kein Deadlock in der Kategorie, oder Kanal nicht freigeschaltet. Bei Wechsel auf Deadlock wird nachgeholt.</td></tr>
+<tr><td>Ankündigung zeigt veraltetes Bild</td><td>Twitch liefert Vorschaubilder verzögert; kurz nach Streamstart kann das Bild leicht hinterherhinken.</td></tr>
+<tr><td>Kanal aus der Übersicht verschwunden</td><td>Längere Inaktivität; der Bot hat den Kanal automatisch aus der Überwachung genommen.</td></tr>
+<tr><td>Keine zweite Nachricht nach Stream-Ende</td><td>Gewollt: Die Live-Nachricht wird in die Offline-/VOD-Ansicht umgewandelt statt ergänzt.</td></tr>
+</tbody>
+</table>
+</section>
+
+<section id="agent-hinweise">
+<h2>Hinweise für KI-Agenten &amp; Support</h2>
+<div class="box say"><strong>Der Agent darf sagen:</strong>
+<ul>
+<li>Dass Ankündigungen nur bei Go-Live in der Deadlock-Kategorie und nur für betreute Kanäle erfolgen.</li>
+<li>Dass die Erkennung Twitch-Echtzeitmeldungen und eine eigene Nachprüfung kombiniert und meist in Sekunden greift.</li>
+<li>Dass die Go-Live-Nachricht am Stream-Ende in eine Offline-/VOD-Ansicht umgewandelt wird (keine zweite Nachricht).</li>
+<li>Dass Aussehen, Platzhalter und Live-Ping-Rolle im Dashboard einstellbar sind, inkl. Vorschau und Test-Senden.</li>
+<li>Dass längere Inaktivität zum automatischen Entfernen aus der Überwachung führt.</li>
+</ul>
+</div>
+<div class="box nosay"><strong>Der Agent darf nicht sagen / offenlegen:</strong>
+<ul>
+<li>Exakte Takt- und Intervallwerte der Nachprüfung oder des Flacker-Schutzes.</li>
+<li>Die genaue Inaktivitätsdauer bis zum Archivieren als exakten Zahlenwert.</li>
+<li>Interne Endpunkte, Tokens, Kanal-IDs oder Infrastruktur-Details.</li>
+<li>Interne Bedingungen der Sitzungs-Erfassung über den beschriebenen Effekt hinaus.</li>
+</ul>
+</div>
+<p>Bei Unsicherheit oder Verdacht auf Fehlentscheidung: an menschlichen Support eskalieren.</p>
+</section>
+
+<section id="verwandte-seiten">
+<h2>Verwandte Seiten</h2>
+<ul>
+<li><a href="../workflows/go-live-cycle.html">Workflow: Go-Live-Zyklus</a></li>
+<li><a href="chat-moderation.html">Modul: Chat-Moderation &amp; Befehle</a></li>
+<li><a href="../support/agent-guide.html">Agenten-Leitfaden</a></li>
+<li><a href="../reference/glossary.html">Glossar</a></li>
+</ul>
+</section>
+
+<footer>Teil der agentenfreundlichen Doku des Deadlock Twitch Bot. Interne Mechanik ist bewusst abstrahiert — siehe <a href="../security/redaction-notes.html">Redaction Notes</a>.</footer>
+</main>
+</body>
+</html>

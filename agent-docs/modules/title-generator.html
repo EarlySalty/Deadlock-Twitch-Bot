@@ -1,0 +1,138 @@
+<!doctype html>
+<html lang="de">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Modul: KI-Titelgenerator — Deadlock Twitch Bot</title>
+<style>
+:root{--fg:#1a1a1a;--bg:#fff;--muted:#555;--line:#ddd;--accent:#0a7d33;--box:#f6f8fa;--warn:#b00020;--ok:#0a7d33}
+@media(prefers-color-scheme:dark){:root{--fg:#e6e6e6;--bg:#141414;--muted:#a5a5a5;--line:#333;--box:#1e1e1e;--accent:#4ec978;--warn:#ff6b7a}}
+*{box-sizing:border-box}
+body{margin:0;font:16px/1.6 system-ui,-apple-system,Segoe UI,Roboto,sans-serif;color:var(--fg);background:var(--bg)}
+main{max-width:900px;margin:0 auto;padding:1.5rem}
+h1{font-size:1.8rem;line-height:1.25;margin:.2rem 0 1rem}
+h2{font-size:1.35rem;margin:2.2rem 0 .6rem;border-bottom:1px solid var(--line);padding-bottom:.3rem}
+h3{font-size:1.08rem;margin:1.4rem 0 .4rem}
+a{color:var(--accent)}
+nav.crumbs{font-size:.85rem;margin-bottom:1rem;color:var(--muted)}
+p.summary{font-size:1.05rem;background:var(--box);border-left:4px solid var(--accent);padding:.8rem 1rem;border-radius:4px}
+table{border-collapse:collapse;width:100%;margin:1rem 0;font-size:.95rem}
+th,td{border:1px solid var(--line);padding:.5rem .6rem;text-align:left;vertical-align:top}
+th{background:var(--box)}
+code{background:var(--box);padding:.1rem .3rem;border-radius:3px;font-size:.9em}
+ul,ol{padding-left:1.3rem}
+.box{background:var(--box);border:1px solid var(--line);border-radius:6px;padding:.7rem 1rem;margin:1rem 0}
+.say{border-left:4px solid var(--ok)}
+.nosay{border-left:4px solid var(--warn)}
+.tag{display:inline-block;font-size:.72rem;font-weight:600;padding:.1rem .5rem;border-radius:10px;background:var(--box);border:1px solid var(--line)}
+footer{margin-top:3rem;padding-top:1rem;border-top:1px solid var(--line);font-size:.8rem;color:var(--muted)}
+</style>
+</head>
+<body>
+<main>
+<nav class="crumbs"><a href="../index.html">Startseite</a> › Module › KI-Titelgenerator</nav>
+<h1>Modul: KI-Titelgenerator</h1>
+<p class="summary">Der Titelgenerator schlägt Streamern fertige Deadlock-Stream-Titel vor. Aus ein paar Stichworten formt der Bot einen einladenden Hauptvorschlag plus bis zu zwei Alternativen — orientiert an den eigenen erfolgreichen Titeln, an vergleichbaren Deadlock-Streamern und, falls hinterlegt, am eigenen Rang und aktuell gespielten Helden. Übernommen wird nur, was der Streamer selbst einträgt.</p>
+
+<section id="worum-es-geht">
+<h2>Worum es geht</h2>
+<p>Statt selbst zu grübeln, gibt der Streamer Keywords zum geplanten Stream an (z. B. <code>ranked solo grind</code>), und der Bot baut daraus einen kompletten, lesbaren Titel. Der Vorschlag bleibt bewusst nah an dem, was beim Streamer schon funktioniert hat, statt wild Neues zu erfinden; bei ungewohnten Keywords formuliert er eher konservativ.</p>
+</section>
+
+<section id="was-der-bot-tut">
+<h2>Was der Bot tut</h2>
+<ul>
+<li>Nimmt Keywords entgegen und liefert einen Hauptvorschlag plus bis zu zwei Alternativen.</li>
+<li>Stützt sich auf die bisherige Titel-Historie des Streamers und darauf, welche Titel besser oder schlechter liefen, sowie auf gelerntes Wissen über erfolgreiche Titel vergleichbarer Deadlock-Streamer.</li>
+<li>Übernimmt den Deadlock-Rang in den Titel, wenn dieser bekannt ist und zu den Keywords passt.</li>
+<li>Kann auf Wunsch den aktuellen Live-Spielzustand einbeziehen (welcher Held, solo oder Party).</li>
+<li>Passt den Stil an die eigenen Gewohnheiten an (z. B. sparsame Emojis nur, wenn der Streamer sie sonst nutzt).</li>
+<li>Räumt typische KI-Macken auf: keine erfundenen Ränge, keine generischen Füllphrasen, keine umgeschriebenen Keywords, und hält die für Twitch zulässige Titel-Länge ein.</li>
+<li>Lernt im Hintergrund laufend dazu und erstellt für aktive Partner regelmäßig eine Auswertung der eigenen Titel-Performance.</li>
+</ul>
+</section>
+
+<section id="wann-es-passiert">
+<h2>Wann es passiert</h2>
+<table>
+<thead><tr><th>Auslöser</th><th>Beschreibung</th></tr></thead>
+<tbody>
+<tr><td>Auf Abruf im Chat</td><td>Streamer oder Moderator tippt den Titel-Befehl mit Keywords; der Bot meldet kurz „Generiere deinen Titel…" und liefert den Vorschlag.</td></tr>
+<tr><td>Auf Abruf im Dashboard</td><td>Titelvorschlag mit denselben Eingaben (Keywords, optional Live-Bezug).</td></tr>
+<tr><td>Live-Bezug (optional)</td><td>Nur auf ausdrücklichen Wunsch und nur, während der Streamer tatsächlich Deadlock spielt.</td></tr>
+<tr><td>Rang-Bezug (automatisch)</td><td>Bei verknüpftem Spiel-Account, ohne Zutun.</td></tr>
+<tr><td>Wissensaufbau (nächtlich)</td><td>Einmal pro Tag im Hintergrund.</td></tr>
+<tr><td>Insight-Auswertung (wöchentlich)</td><td>Einmal pro Woche automatisch für aktive Partner.</td></tr>
+</tbody>
+</table>
+</section>
+
+<section id="sichtbarkeit">
+<h2>Was Streamer &amp; Viewer sehen</h2>
+<ul>
+<li><strong>Im Chat:</strong> Eine kurze Bestätigung, dann der Hauptvorschlag und – falls vorhanden – die Alternativen.</li>
+<li><strong>Im Dashboard:</strong> Hauptvorschlag, Alternativen und eine Übersicht der letzten eigenen Titel mit Leistungswerten.</li>
+<li><strong>Insights:</strong> Falls eine aktuelle Auswertung vorliegt, sieht der Partner Stärken, Schwächen, erkannte Muster und drei konkrete Empfehlungen.</li>
+<li><strong>Viewer:</strong> Bekommen vom Generator selbst nichts mit; der Befehl ist Streamern und Moderatoren vorbehalten.</li>
+</ul>
+</section>
+
+<section id="einstellungen">
+<h2>Was Streamer einstellen können</h2>
+<ul>
+<li><strong>Keywords</strong> sind die Hauptsteuerung dafür, worum es im Titel geht.</li>
+<li><strong>Live-Bezug an/aus</strong> über einen Zusatz-Schalter am Befehl bzw. eine Dashboard-Option.</li>
+<li><strong>Übernahme bleibt freiwillig:</strong> Der Bot setzt den Titel nicht selbst bei Twitch — der Streamer entscheidet.</li>
+</ul>
+<p>Eine darüber hinausgehende Konfiguration (Tonalität, Emoji-Verhalten) gibt es nicht; der Bot leitet das aus den bisherigen Titeln ab.</p>
+</section>
+
+<section id="grenzen">
+<h2>Grenzen &amp; Sonderfälle</h2>
+<ul>
+<li><strong>Tempolimit:</strong> Pro Streamer ist die Zahl der Generierungen in einem kurzen Zeitfenster begrenzt (im Dashboard großzügiger als im Chat). Wird es erreicht, nennt der Bot die Wartezeit in Sekunden.</li>
+<li><strong>Rang nur mit Verknüpfung:</strong> Ohne verknüpften Spiel-Account wird ohne Rang generiert.</li>
+<li><strong>Live-Daten nur im Spiel:</strong> Der Live-Bezug greift nur, während der Streamer in Deadlock ist.</li>
+<li><strong>Frische Wissensbasis ist dünn:</strong> Anfangs fallen Vorschläge generischer aus und werden mit mehr Daten treffsicherer.</li>
+<li><strong>Performance ist eine Näherung:</strong> Die Bewertung „guter" vs. „schlechter" Titel beruht auf indirekten Anhaltspunkten aus den Stream-Daten, nicht auf echten Klickraten — sie zeigt Tendenzen.</li>
+<li><strong>Insights brauchen genug Daten:</strong> Die wöchentliche Auswertung entsteht nur bei ausreichend Streams mit Titeln.</li>
+<li><strong>Nur Streamer/Mods:</strong> Der Chat-Befehl reagiert nicht auf normale Zuschauer.</li>
+</ul>
+</section>
+
+<section id="agent-hinweise">
+<h2>Hinweise für KI-Agenten &amp; Support</h2>
+<div class="box say"><strong>Der Agent darf sagen:</strong>
+<ul>
+<li>Wie man einen Titel anfordert (Chat-Befehl mit Keywords oder Dashboard) und dass es einen Haupt- plus bis zu zwei Alternativvorschläge gibt.</li>
+<li>Dass sich der Bot an eigenen erfolgreichen Titeln und an vergleichbaren Streamern orientiert und den Stil aus bisherigen Titeln ableitet.</li>
+<li>Dass Rang nur mit verknüpftem Spiel-Account und Live-Bezug nur während eines Deadlock-Spiels einfließen.</li>
+<li>Dass es ein Tempolimit gibt und der Bot bei Erreichen die Wartezeit nennt.</li>
+<li>Dass der Bot nur vorschlägt und der Streamer den Titel selbst übernimmt.</li>
+<li>Dass die Performance-Bewertung eine Näherung aus Stream-Daten ist, keine echten Klickraten.</li>
+</ul>
+</div>
+<div class="box nosay"><strong>Der Agent darf nicht sagen / offenlegen:</strong>
+<ul>
+<li>Die exakten Tempolimit-Werte, Zeitfenster oder Kontingente.</li>
+<li>Wie die Titel-Performance intern berechnet oder gewichtet wird (welche Signale mit welchem Gewicht).</li>
+<li>Interne Prompt-Inhalte, Modell-Details, Trainings-/Wissensbasis-Interna oder Zugangsdaten.</li>
+<li>Zusicherungen über die Qualität oder den Erfolg eines konkreten Titels.</li>
+</ul>
+</div>
+<p>Bei Unsicherheit oder Verdacht auf Fehlentscheidung: an menschlichen Support eskalieren.</p>
+</section>
+
+<section id="weiter">
+<h2>Weiterführend</h2>
+<ul>
+<li><a href="../support/agent-guide.html">Agent-Leitfaden</a></li>
+<li><a href="../reference/glossary.html">Glossar</a></li>
+<li><a href="../security/redaction-notes.html">Redaction Notes</a></li>
+</ul>
+</section>
+
+<footer>Teil der agentenfreundlichen Doku des Deadlock Twitch Bot. Interne Mechanik ist bewusst abstrahiert — siehe <a href="../security/redaction-notes.html">Redaction Notes</a>.</footer>
+</main>
+</body>
+</html>

@@ -1,0 +1,132 @@
+<!doctype html>
+<html lang="de">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Workflow: Highlight-Clip zu Social Media — Deadlock Twitch Bot</title>
+<style>
+:root{--fg:#1a1a1a;--bg:#fff;--muted:#555;--line:#ddd;--accent:#0a7d33;--box:#f6f8fa;--warn:#b00020;--ok:#0a7d33}
+@media(prefers-color-scheme:dark){:root{--fg:#e6e6e6;--bg:#141414;--muted:#a5a5a5;--line:#333;--box:#1e1e1e;--accent:#4ec978;--warn:#ff6b7a}}
+*{box-sizing:border-box}
+body{margin:0;font:16px/1.6 system-ui,-apple-system,Segoe UI,Roboto,sans-serif;color:var(--fg);background:var(--bg)}
+main{max-width:900px;margin:0 auto;padding:1.5rem}
+h1{font-size:1.8rem;line-height:1.25;margin:.2rem 0 1rem}
+h2{font-size:1.35rem;margin:2.2rem 0 .6rem;border-bottom:1px solid var(--line);padding-bottom:.3rem}
+h3{font-size:1.08rem;margin:1.4rem 0 .4rem}
+a{color:var(--accent)}
+nav.crumbs{font-size:.85rem;margin-bottom:1rem;color:var(--muted)}
+p.summary{font-size:1.05rem;background:var(--box);border-left:4px solid var(--accent);padding:.8rem 1rem;border-radius:4px}
+table{border-collapse:collapse;width:100%;margin:1rem 0;font-size:.95rem}
+th,td{border:1px solid var(--line);padding:.5rem .6rem;text-align:left;vertical-align:top}
+th{background:var(--box)}
+code{background:var(--box);padding:.1rem .3rem;border-radius:3px;font-size:.9em}
+ul,ol{padding-left:1.3rem}
+.box{background:var(--box);border:1px solid var(--line);border-radius:6px;padding:.7rem 1rem;margin:1rem 0}
+.say{border-left:4px solid var(--ok)}
+.nosay{border-left:4px solid var(--warn)}
+.tag{display:inline-block;font-size:.72rem;font-weight:600;padding:.1rem .5rem;border-radius:10px;background:var(--box);border:1px solid var(--line)}
+footer{margin-top:3rem;padding-top:1rem;border-top:1px solid var(--line);font-size:.8rem;color:var(--muted)}
+</style>
+</head>
+<body>
+<main>
+<nav class="crumbs"><a href="../index.html">Startseite</a> › Workflows › Highlight-Clip zu Social Media</nav>
+<h1>Workflow: Highlight-Clip zu Social Media</h1>
+<p class="summary">Beschreibt Schritt für Schritt, wie aus einem erkannten Deadlock-Highlight ein fertiges Kurzvideo für TikTok, Instagram Reels und YouTube Shorts wird: Erkennung, Clip-Schnitt, Anreicherung mit Titel/Beschreibung/Hashtags, der verpflichtende Freigabe-/Review-Schritt und schließlich der Upload. Ohne Freigabe geht standardmäßig nichts online.</p>
+
+<section id="ausloeser">
+<h2>Auslöser</h2>
+<p>Der Ablauf startet, wenn nach einem abgeschlossenen Deadlock-Match ein sehenswerter Moment erkannt wird oder wenn der Bot regelmäßig (mehrmals täglich) neue Twitch-Clips aktiver, verifizierter Partner-Streamer der letzten Tage einsammelt. Reine Beobachtungs-Kanäle und abgemeldete Streamer bleiben außen vor.</p>
+</section>
+
+<section id="module">
+<h2>Beteiligte Module</h2>
+<ul>
+<li><span class="tag">Modul</span> <a href="../modules/highlight-social.html">Highlight-Clipper &amp; Social Media</a> — Highlight-Erkennung, Clip-Schnitt, Anreicherung, Freigabe und Upload.</li>
+<li><span class="tag">extern</span> Twitch (VOD als Videoquelle, Twitch-Clips).</li>
+<li><span class="tag">extern</span> TikTok, Instagram Reels, YouTube Shorts (Upload-Ziele, nur verbundene Konten).</li>
+<li><span class="tag">extern</span> optionaler externer KI-Dienst zur Texterzeugung — nur mit ausdrücklicher Zustimmung.</li>
+</ul>
+</section>
+
+<section id="ablauf">
+<h2>Fachlicher Ablauf</h2>
+<ol>
+<li><strong>Highlight-Erkennung:</strong> Der Bot sichtet abgeschlossene Deadlock-Matches und wählt über eine interne Bewertung die sehenswerten Szenen (Outplays, Multikills, Teamfights, Clutches). Reine Solo-Kills werden aussortiert. Welche Merkmale wie zusammenwirken, ist bewusst nicht dokumentiert.</li>
+<li><strong>Clip schneiden:</strong> Aus der Twitch-Aufzeichnung (VOD) wird der Ausschnitt herausgeschnitten — kurzer Anlauf, kurzer Nachlauf, mit Längen-Obergrenze. Ohne passendes VOD entsteht kein Clip.</li>
+<li><strong>Transkribieren:</strong> Der Ton wird in Text umgewandelt und um Deadlock-Begriffe (Helden, Items) korrigiert — Grundlage für Untertitel und Texte.</li>
+<li><strong>Anreichern:</strong> Pro Plattform erzeugt der Bot einen eigenen Vorschlag für Titel, Beschreibung und Hashtags.</li>
+<li><strong>Freigabe / Review (Pflicht):</strong> Bevor irgendetwas online geht, legt der Bot den Clip mit Vorschau, Texten und Plattform-Auswahl zur Freigabe vor. Aktionen: <strong>Posten</strong>, <strong>Bearbeiten</strong>, <strong>Skip</strong>. Standard ist die manuelle Review; Auto-Freigabe gilt nur, wo sie ausdrücklich eingeschaltet wurde.</li>
+<li><strong>Plattformgerecht rendern:</strong> Das Video wird ins Hochkant-Format und die erlaubte Länge gebracht, optional mit Untertiteln.</li>
+<li><strong>Upload:</strong> Nach Freigabe lädt der Bot auf die freigegebenen, verbundenen Plattformen hoch und übernimmt Titel, Beschreibung und Hashtags.</li>
+<li><strong>Auswertung:</strong> Nach der Veröffentlichung zieht der Bot in Abständen die Plattform-Statistiken (z. B. Aufrufe) nach und fasst sie in Reports zusammen.</li>
+</ol>
+</section>
+
+<section id="reaktionen">
+<h2>Nutzeraktionen &amp; Systemreaktionen</h2>
+<table>
+<tr><th>Nutzeraktion / Ereignis</th><th>Systemreaktion</th></tr>
+<tr><td>Neuer Clip eingesammelt</td><td>Transkription, Korrektur und Texterzeugung laufen im Hintergrund.</td></tr>
+<tr><td>Texte fertig</td><td>Clip geht in den Freigabe-Zustand; Freigabe-Nachricht wird ausgelöst.</td></tr>
+<tr><td>Zuständige Person klickt „Posten“</td><td>Video wird gerendert und auf die gewählten Plattformen hochgeladen.</td></tr>
+<tr><td>„Bearbeiten“</td><td>Texte lassen sich vor dem Upload anpassen (überschreibt Bot-Vorschlag, Status gelb).</td></tr>
+<tr><td>„Skip“</td><td>Clip geht nicht online, bleibt als übersprungen vermerkt (Status rot).</td></tr>
+<tr><td>Auto-Freigabe je Plattform aktiv</td><td>Diese Plattform wird bei einer Freigabe automatisch mit aufgenommen.</td></tr>
+</table>
+</section>
+
+<section id="ergebnisse">
+<h2>Mögliche Ergebnisse</h2>
+<ul>
+<li><strong>Veröffentlicht:</strong> Hochkant-Kurzvideo ist auf den freigegebenen, verbundenen Plattformen online; Statistiken werden nachgezogen.</li>
+<li><strong>Übersprungen (Skip):</strong> Clip geht nicht online, bleibt aber als übersprungen vermerkt — endgültig für diesen Clip.</li>
+<li><strong>Wartet auf Freigabe:</strong> Ohne manuelle Entscheidung oder aktive Auto-Freigabe bleibt der Clip im Freigabe-Zustand.</li>
+<li><strong>Aussortiert:</strong> Kein passendes VOD, keine plattformgerechte Aufbereitung möglich oder kein passender Highlight — dann entsteht kein/kein hochladbarer Clip.</li>
+</ul>
+</section>
+
+<section id="fehler">
+<h2>Typische Fehlerfälle</h2>
+<table>
+<tr><th>Symptom</th><th>Wahrscheinliche Ursache</th><th>Sichere Hilfe</th></tr>
+<tr><td>Kein Clip trotz guter Szene</td><td>Kein passendes VOD, Account nicht zugeordnet oder Szene aussortiert</td><td>VOD-Speicherung aktivieren, Account-Zuordnung prüfen; Selektivität ist gewollt.</td></tr>
+<tr><td>Clip nicht online gegangen</td><td>Nicht freigegeben oder per Skip übersprungen</td><td>Freigabe-Status prüfen; Skip ist endgültig für diesen Clip.</td></tr>
+<tr><td>Upload schlägt mit Anmeldefehler fehl</td><td>Plattform-Verbindung abgelaufen (trotz Anzeige „verbunden“)</td><td>Plattform-Konto neu verbinden.</td></tr>
+<tr><td>Clip auf einer Plattform ausgelassen</td><td>Konto nicht verbunden/deaktiviert oder Format-/Längenregeln nicht erfüllt</td><td>Verbindung prüfen; nicht aufbereitbare Clips werden bewusst aussortiert.</td></tr>
+<tr><td>Clip hängt in einer Stufe fest</td><td>Verarbeitung steckt in genau einer Stufe (z. B. Transkription)</td><td>An das Team weitergeben; meist eine Stufe, kein verlorener Einzelversuch.</td></tr>
+<tr><td>Keine automatischen Texte</td><td>Externe-KI-Zustimmung nicht gesetzt</td><td>Zustimmung ist Voraussetzung; sonst Texte lokal oder manuell ergänzen.</td></tr>
+</table>
+</section>
+
+<section id="support-hinweise">
+<h2>Sichere Support-Hinweise</h2>
+<ul>
+<li>Freigabe ist Pflicht (Default): Ohne Freigabe wird nichts veröffentlicht; Auto-Upload nur, wo ausdrücklich eingeschaltet.</li>
+<li>Nur verbundene, aktive Plattformen kommen als Upload-Ziel infrage.</li>
+<li>Externe KI zur Texterzeugung nur mit ausdrücklicher Zustimmung; ohne sie verlässt nichts den Bot.</li>
+<li>Ein bereits hochgeladener/eingereihter Clip wird nicht erneut gepostet.</li>
+<li>Zur bewusst abstrahierten Highlight-Bewertung siehe <a href="../security/redaction-notes.html">Redaction Notes</a>.</li>
+</ul>
+</section>
+
+<section id="agent-hinweise">
+<h2>Hinweise für KI-Agenten &amp; Support</h2>
+<div class="box say"><strong>Der Agent darf sagen:</strong><ul>
+<li>Dass jeder Clip standardmäßig vor der Veröffentlichung freigegeben werden muss (Posten/Bearbeiten/Skip).</li>
+<li>Dass auf TikTok, Instagram Reels und YouTube Shorts gepostet wird und Ziele pro Clip wählbar sind.</li>
+<li>Dass Titel/Beschreibung/Hashtags automatisch erzeugt und vor dem Upload anpassbar sind.</li>
+<li>Dass externe KI nur mit ausdrücklicher Zustimmung genutzt wird und die Quelle stets das Twitch-VOD ist.</li>
+</ul></div>
+<div class="box nosay"><strong>Der Agent darf nicht sagen / offenlegen:</strong><ul>
+<li>Welche Merkmale/Grenzwerte die Highlight-Bewertung intern verwendet (Kern der Clipper-Funktion).</li>
+<li>Zugangsdaten, Tokens oder interne Endpunkte der Plattform-Verbindungen bzw. des externen KI-Dienstes.</li>
+<li>Exakte Aufbewahrungsfristen, Intervalle oder Mengen-/Längen-Limits in Zahlen.</li>
+</ul></div>
+<p>Bei Unsicherheit oder Verdacht auf Fehlentscheidung: an menschlichen Support eskalieren.</p>
+</section>
+
+<footer>Teil der agentenfreundlichen Doku des Deadlock Twitch Bot. Interne Mechanik ist bewusst abstrahiert — siehe <a href="../security/redaction-notes.html">Redaction Notes</a>.</footer>
+</main>
+</body>
+</html>
