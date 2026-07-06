@@ -333,6 +333,7 @@ async fn notify_embed(relay: &BrokerRelay, channel_id: u64, title: &str, descrip
             "description": description,
             "color": color,
         }),
+        components: None,
         allowed_role_ids: vec![],
         view_spec: None,
     };

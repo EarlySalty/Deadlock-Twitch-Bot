@@ -60,6 +60,7 @@ impl ScamGuardNotifier for ScamDiscordNotifier {
             channel_id: self.channel_id,
             content: None,
             embed,
+            components: None,
             allowed_role_ids: Vec::new(),
             view_spec: Some(view_spec),
         };

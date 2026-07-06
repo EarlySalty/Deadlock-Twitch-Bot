@@ -94,6 +94,7 @@ impl ShadowReviewSink for DiscordShadowReviewSink {
                 channel_id: self.channel_id,
                 content: None,
                 embed: self.embed_for(item),
+                components: None,
                 allowed_role_ids: vec![],
                 view_spec: None,
             };

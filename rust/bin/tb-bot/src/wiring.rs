@@ -9,8 +9,9 @@ use sqlx::PgPool;
 use tb_monitoring::poller::source::{ChannelInfo, ChannelInfoSource, SourceError, StreamSource};
 use tb_monitoring::sessions::tracker::{FollowerCountSource, FollowerFetch};
 use tb_monitoring::{
-    AnnouncementTransport, EventSubHooks, LivePingRoleProvider, RemoteSubscription, StreamSnapshot,
-    SubscriptionCreateError, SubscriptionManager, SubscriptionTransport, VodPreviewSource,
+    AnnouncementTransport, ChannelProfileSource, EventSubHooks, LivePingRoleProvider,
+    RemoteSubscription, StreamSnapshot, SubscriptionCreateError, SubscriptionManager,
+    SubscriptionTransport, VodPreviewSource,
 };
 use tb_transport_discord::{BrokerRelay, DiscordBackend, EditRichMessage, SendRichMessage};
 use tb_transport_twitch::eventsub::{CreateOutcome, EventSubCreateError};
@@ -442,6 +443,24 @@ impl VodPreviewSource for HelixVodPreview {
     }
 }
 
+/// Helix-Adapter fürs Kanalprofilbild der Components-V2-Ansage.
+pub struct HelixChannelProfile {
+    pub helix: HelixClient,
+}
+
+#[async_trait::async_trait]
+impl ChannelProfileSource for HelixChannelProfile {
+    async fn profile_image_url(&self, login: &str) -> Option<String> {
+        let users = self.helix.get_users(&[login]).await.ok()?;
+        users
+            .get(&login.trim().to_lowercase())
+            .and_then(|user| user.profile_image_url.as_deref())
+            .map(str::trim)
+            .filter(|url| !url.is_empty())
+            .map(str::to_string)
+    }
+}
+
 /// Broker-Adapter für den Announcement-Port — inklusive des
 /// `view_resolver_unavailable`-Fallbacks auf einen einfachen Link-Button
 /// (Python `_send_live_announcement_via_broker`).
@@ -483,6 +502,7 @@ impl AnnouncementTransport for BrokerAnnouncementTransport {
         channel_id: i64,
         content: Option<String>,
         embed: Value,
+        components: Option<Value>,
         allowed_role_ids: Vec<i64>,
         view_spec: Option<Value>,
     ) -> Result<String, SourceError> {
@@ -490,6 +510,7 @@ impl AnnouncementTransport for BrokerAnnouncementTransport {
             channel_id,
             content: content.clone(),
             embed: embed.clone(),
+            components: components.clone(),
             allowed_role_ids: allowed_role_ids.clone(),
             view_spec: view_spec.clone(),
         };
@@ -510,6 +531,7 @@ impl AnnouncementTransport for BrokerAnnouncementTransport {
                         channel_id,
                         content,
                         embed,
+                        components,
                         allowed_role_ids,
                         view_spec: Some(fallback),
                     })
@@ -526,6 +548,7 @@ impl AnnouncementTransport for BrokerAnnouncementTransport {
         message_id: String,
         content: Option<String>,
         embed: Value,
+        components: Option<Value>,
         view_spec: Option<Value>,
     ) -> Result<(), SourceError> {
         self.relay
@@ -534,6 +557,7 @@ impl AnnouncementTransport for BrokerAnnouncementTransport {
                 message_id,
                 content,
                 embed,
+                components,
                 view_spec,
             })
             .await?;

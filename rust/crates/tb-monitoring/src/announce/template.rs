@@ -12,6 +12,8 @@ use sha2::{Digest, Sha256};
 use crate::stream::{parse_dt_utc, StreamSnapshot};
 
 pub const TWITCH_BRAND_COLOR: i64 = 0x9146FF;
+pub const TWITCH_LIVE_COMPONENT_ACCENT: i64 = 0xC8A86B;
+pub const TWITCH_OFFLINE_COMPONENT_ACCENT: i64 = 0x8F7A4E;
 pub const TWITCH_ICON_URL: &str =
     "https://static.twitchcdn.net/assets/favicon-32-e29e246c157142c94346.png";
 pub const TWITCH_BUTTON_LABEL: &str = "Auf Twitch ansehen";
@@ -158,6 +160,10 @@ fn fmt_uptime(started_at: Option<DateTime<Utc>>, now: DateTime<Utc>) -> String {
     }
 }
 
+fn fmt_duration(started_at: DateTime<Utc>, ended_at: DateTime<Utc>) -> String {
+    fmt_uptime(Some(started_at), ended_at)
+}
+
 fn stable_cache_buster(seed: Option<&str>, now: DateTime<Utc>) -> String {
     match seed.map(str::trim).filter(|s| !s.is_empty()) {
         Some(seed) => {
@@ -218,6 +224,107 @@ fn should_skip_zero_viewer_field(
         .is_some_and(|count| count.trim() == "0")
         && name.trim().eq_ignore_ascii_case("viewer")
         && value.trim() == "0"
+}
+
+fn v2_text_display(content: impl Into<String>) -> Value {
+    serde_json::json!({
+        "type": 10,
+        "content": content.into(),
+    })
+}
+
+fn v2_separator() -> Value {
+    serde_json::json!({
+        "type": 14,
+        "divider": true,
+        "spacing": 1,
+    })
+}
+
+fn v2_media_gallery(url: &str) -> Value {
+    serde_json::json!({
+        "type": 12,
+        "items": [{
+            "media": {
+                "url": url,
+            },
+        }],
+    })
+}
+
+fn v2_section_with_thumbnail(content: String, thumbnail_url: &str) -> Value {
+    let thumbnail_url = thumbnail_url.trim();
+    let thumbnail_url = if thumbnail_url.is_empty() {
+        TWITCH_ICON_URL
+    } else {
+        thumbnail_url
+    };
+    serde_json::json!({
+        "type": 9,
+        "components": [v2_text_display(content)],
+        "accessory": {
+            "type": 11,
+            "media": {
+                "url": thumbnail_url,
+            },
+        },
+    })
+}
+
+fn v2_container(accent_color: i64, components: Vec<Value>) -> Value {
+    serde_json::json!({
+        "type": 17,
+        "accent_color": accent_color,
+        "components": components,
+    })
+}
+
+fn context_value<'a>(context: &'a BTreeMap<String, String>, key: &str) -> &'a str {
+    context.get(key).map(String::as_str).unwrap_or("")
+}
+
+fn live_stat_text(context: &BTreeMap<String, String>) -> String {
+    let mut parts = Vec::new();
+    let viewer_count = context_value(context, "viewer_count").trim();
+    if !viewer_count.is_empty() && viewer_count != "0" {
+        parts.push(format!("👁 **{viewer_count}** Zuschauer"));
+    }
+    parts.push(format!("⏱ seit **{}**", context_value(context, "uptime")));
+    parts.push(format!("🌐 {}", context_value(context, "language")));
+    parts.join("   ·   ")
+}
+
+fn tags_text(context: &BTreeMap<String, String>) -> Option<String> {
+    let tags = context_value(context, "tags")
+        .split(',')
+        .map(str::trim)
+        .filter(|tag| !tag.is_empty())
+        .take(3)
+        .collect::<Vec<_>>();
+    (!tags.is_empty()).then(|| format!("-# 🏷 {}", tags.join(" · ")))
+}
+
+fn live_components(context: &BTreeMap<String, String>, image_url: &str) -> Value {
+    let mut children = vec![
+        v2_section_with_thumbnail(
+            format!(
+                "🔴 **LIVE** · {} spielt {}\n## {}",
+                context_value(context, "channel"),
+                context_value(context, "game"),
+                context_value(context, "title")
+            ),
+            context_value(context, "channel_avatar_url"),
+        ),
+        v2_text_display(live_stat_text(context)),
+        v2_separator(),
+    ];
+    if !image_url.trim().is_empty() {
+        children.push(v2_media_gallery(image_url.trim()));
+    }
+    if let Some(tags) = tags_text(context) {
+        children.push(v2_text_display(tags));
+    }
+    Value::Array(vec![v2_container(TWITCH_LIVE_COMPONENT_ACCENT, children)])
 }
 
 /// Template-Kontext aus dem Stream-Payload (Python `build_template_context`),
@@ -302,11 +409,12 @@ pub fn build_context(
     ctx
 }
 
-/// Gerendertes Announcement: Content + Discord-Embed-Dict + Button.
+/// Gerendertes Announcement: Content + Discord-Embed-Dict + V2-Components + Button.
 #[derive(Debug, Clone)]
 pub struct RenderedAnnouncement {
     pub content: String,
     pub embed: Value,
+    pub components: Option<Value>,
     pub button_label: String,
     pub button_enabled: bool,
 }
@@ -445,7 +553,7 @@ pub fn render_announcement(
         embed["thumbnail"] = serde_json::json!({ "url": thumbnail_url });
     }
     if !image_url.is_empty() {
-        embed["image"] = serde_json::json!({ "url": image_url });
+        embed["image"] = serde_json::json!({ "url": image_url.clone() });
     }
     if let Some(timestamp) = timestamp {
         embed["timestamp"] = Value::from(timestamp);
@@ -459,6 +567,7 @@ pub fn render_announcement(
         .trim()
         .to_string(),
         embed,
+        components: Some(live_components(context, &image_url)),
         button_label: {
             let label = render_placeholders(&config.button_label_template, context);
             let label = label.trim();
@@ -586,6 +695,65 @@ pub fn build_offline_embed(
         embed["image"] = serde_json::json!({ "url": url });
     }
     embed
+}
+
+#[derive(Debug, Clone, Copy)]
+pub struct OfflineComponentsContext<'a> {
+    pub display_name: &'a str,
+    pub last_title: Option<&'a str>,
+    pub last_game: Option<&'a str>,
+    pub preview_image_url: Option<&'a str>,
+    pub channel_avatar_url: Option<&'a str>,
+    pub target_game: &'a str,
+    pub started_at: Option<DateTime<Utc>>,
+    pub now: DateTime<Utc>,
+}
+
+/// Offline-/VOD-Components V2. Der Button bleibt Broker-Sache und wird hier
+/// bewusst nicht in den Komponentenbaum aufgenommen.
+pub fn build_offline_components(context: OfflineComponentsContext<'_>) -> Value {
+    let game = context
+        .last_game
+        .map(str::trim)
+        .filter(|g| !g.is_empty())
+        .unwrap_or(if context.target_game.is_empty() {
+            "Twitch"
+        } else {
+            context.target_game
+        });
+    let title = context
+        .last_title
+        .map(str::trim)
+        .filter(|t| !t.is_empty())
+        .unwrap_or("Letzten Stream als VOD ansehen.");
+    let mut children = vec![v2_section_with_thumbnail(
+        format!(
+            "💤 **Stream beendet** · {}\n## {title}",
+            context.display_name
+        ),
+        context.channel_avatar_url.unwrap_or(""),
+    )];
+    if let Some(started_at) = context.started_at {
+        children.push(v2_text_display(format!(
+            "🎮 {game}   ·   ⏱ Stream lief **{}**",
+            fmt_duration(started_at, context.now)
+        )));
+    }
+    children.push(v2_separator());
+    if let Some(url) = context
+        .preview_image_url
+        .map(str::trim)
+        .filter(|u| !u.is_empty())
+    {
+        children.push(v2_media_gallery(url));
+    }
+    children.push(v2_text_display(
+        "-# Die Aufzeichnung gibt's über den Button — solange Twitch sie hält.",
+    ));
+    Value::Array(vec![v2_container(
+        TWITCH_OFFLINE_COMPONENT_ACCENT,
+        children,
+    )])
 }
 
 #[cfg(test)]
@@ -801,6 +969,161 @@ mod tests {
         assert_eq!(
             out,
             format!("https://x/1024x768.jpg?existing=1&rand={expected_buster}")
+        );
+    }
+
+    #[test]
+    fn live_components_v2_enthalten_gold_container_thumbnail_stats_preview_und_tags() {
+        let config = AnnouncementConfig::default();
+        let now = parse_dt_utc("2026-06-09T18:00:00Z").unwrap();
+        let stream = StreamSnapshot {
+            user_login: "drag".to_string(),
+            user_name: "Drag".to_string(),
+            title: "Ranked Grind".to_string(),
+            game_name: "Deadlock".to_string(),
+            language: "de".to_string(),
+            viewer_count: 42,
+            tags: vec![
+                "Deutsch".to_string(),
+                "Ranked".to_string(),
+                "Deadlock".to_string(),
+                "Extra".to_string(),
+            ],
+            started_at: Some("2026-06-09T17:30:00Z".to_string()),
+            thumbnail_url: Some("https://cdn/{width}x{height}.jpg".to_string()),
+            profile_image_url: Some("https://avatar/drag.png".to_string()),
+            ..Default::default()
+        };
+        let ctx = build_context(
+            "drag",
+            &stream,
+            "https://www.twitch.tv/drag?ref=dc",
+            "",
+            now,
+            stream.thumbnail_url.as_deref(),
+        );
+        let rendered = render_announcement(&config, &ctx, now, Some("token-1"));
+        let components = rendered
+            .components
+            .as_ref()
+            .and_then(Value::as_array)
+            .expect("components array");
+        assert_eq!(components.len(), 1);
+        let container = &components[0];
+        assert_eq!(container["type"], 17);
+        assert_eq!(container["accent_color"], 0xC8A86B);
+
+        let children = container["components"]
+            .as_array()
+            .expect("container components");
+        assert_eq!(children[0]["type"], 9);
+        assert_eq!(children[0]["components"][0]["type"], 10);
+        assert_eq!(
+            children[0]["components"][0]["content"],
+            "🔴 **LIVE** · Drag spielt Deadlock\n## Ranked Grind"
+        );
+        assert_eq!(children[0]["accessory"]["type"], 11);
+        assert_eq!(
+            children[0]["accessory"]["media"]["url"],
+            "https://avatar/drag.png"
+        );
+        assert_eq!(children[1]["type"], 10);
+        assert_eq!(
+            children[1]["content"],
+            "👁 **42** Zuschauer   ·   ⏱ seit **30m**   ·   🌐 de"
+        );
+        assert_eq!(children[2]["type"], 14);
+        assert_eq!(children[3]["type"], 12);
+        assert_eq!(
+            children[3]["items"][0]["media"]["url"],
+            format!(
+                "https://cdn/1280x720.jpg?rand={}",
+                stable_cache_buster(Some("token-1"), now)
+            )
+        );
+        assert_eq!(children[4]["type"], 10);
+        assert_eq!(children[4]["content"], "-# 🏷 Deutsch · Ranked · Deadlock");
+        assert!(
+            children
+                .iter()
+                .all(|component| component.get("custom_id").is_none()),
+            "Button bleibt Broker-Sache"
+        );
+    }
+
+    #[test]
+    fn live_components_lassen_viewer_stat_bei_null_weg() {
+        let config = AnnouncementConfig::default();
+        let now = parse_dt_utc("2026-06-09T18:00:00Z").unwrap();
+        let stream = StreamSnapshot {
+            user_login: "drag".to_string(),
+            user_name: "Drag".to_string(),
+            title: "Ranked Grind".to_string(),
+            game_name: "Deadlock".to_string(),
+            language: "de".to_string(),
+            viewer_count: 0,
+            started_at: Some("2026-06-09T17:30:00Z".to_string()),
+            profile_image_url: Some("https://avatar/drag.png".to_string()),
+            ..Default::default()
+        };
+        let ctx = build_context("drag", &stream, "https://www.twitch.tv/drag", "", now, None);
+        let rendered = render_announcement(&config, &ctx, now, Some("token-1"));
+        let components = rendered.components.as_ref().expect("components");
+        let stat = components[0]["components"][1]["content"]
+            .as_str()
+            .expect("stat text");
+
+        assert!(
+            !stat.contains("Zuschauer"),
+            "Viewer-Stat muss bei 0 entfallen: {stat}"
+        );
+        assert_eq!(stat, "⏱ seit **30m**   ·   🌐 de");
+    }
+
+    #[test]
+    fn offline_components_v2_enthalten_gold_container_thumbnail_stats_preview_und_hinweis() {
+        let now = parse_dt_utc("2026-06-09T18:00:00Z").unwrap();
+        let started_at = parse_dt_utc("2026-06-09T17:00:00Z");
+        let components = build_offline_components(OfflineComponentsContext {
+            display_name: "Drag",
+            last_title: Some("Letzter Titel"),
+            last_game: Some("Deadlock"),
+            preview_image_url: Some("https://vod/p.jpg"),
+            channel_avatar_url: Some("https://avatar/drag.png"),
+            target_game: "Deadlock",
+            started_at,
+            now,
+        });
+        let components = components.as_array().expect("components array");
+        assert_eq!(components.len(), 1);
+        let container = &components[0];
+        assert_eq!(container["type"], 17);
+        assert_eq!(container["accent_color"], 0x8F7A4E);
+        let children = container["components"]
+            .as_array()
+            .expect("container components");
+
+        assert_eq!(children[0]["type"], 9);
+        assert_eq!(
+            children[0]["components"][0]["content"],
+            "💤 **Stream beendet** · Drag\n## Letzter Titel"
+        );
+        assert_eq!(children[0]["accessory"]["type"], 11);
+        assert_eq!(
+            children[0]["accessory"]["media"]["url"],
+            "https://avatar/drag.png"
+        );
+        assert_eq!(children[1]["type"], 10);
+        assert_eq!(
+            children[1]["content"],
+            "🎮 Deadlock   ·   ⏱ Stream lief **1h 00m**"
+        );
+        assert_eq!(children[2]["type"], 14);
+        assert_eq!(children[3]["type"], 12);
+        assert_eq!(children[3]["items"][0]["media"]["url"], "https://vod/p.jpg");
+        assert_eq!(
+            children[4]["content"],
+            "-# Die Aufzeichnung gibt's über den Button — solange Twitch sie hält."
         );
     }
 

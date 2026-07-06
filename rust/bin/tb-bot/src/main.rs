@@ -240,9 +240,9 @@ use reauth_reminder::ReauthReminder;
 use score_refresh::ScoreRefreshResolver;
 use wiring::{
     BotFollowerTokenSource, BrokerAnnouncementTransport, FollowerTokenSource,
-    FollowerTokenSourceWithStreamerFallback, HelixFollowerSource, HelixStreamSource,
-    HelixSubscriptionTransport, HelixVodPreview, HelixVodSource, LivePingRoleAuto,
-    SubscriptionEventSubHooks,
+    FollowerTokenSourceWithStreamerFallback, HelixChannelProfile, HelixFollowerSource,
+    HelixStreamSource, HelixSubscriptionTransport, HelixVodPreview, HelixVodSource,
+    LivePingRoleAuto, SubscriptionEventSubHooks,
 };
 
 struct InternalBulkReauthAdapter {
@@ -1421,6 +1421,10 @@ async fn main() {
                             let vod: Arc<dyn VodPreviewSource> = Arc::new(HelixVodPreview {
                                 helix: helix_client.clone(),
                             });
+                            let profile: Arc<dyn tb_monitoring::ChannelProfileSource> =
+                                Arc::new(HelixChannelProfile {
+                                    helix: helix_client.clone(),
+                                });
                             // Ziel-Guild der Live-Ping-Rolle: Env-Override
                             // (STREAMER_GUILD_ID → MAIN_GUILD_ID) oder Default auf
                             // die Haupt-Community-Guild — identisch zu streamer_link.rs,
@@ -1448,6 +1452,7 @@ async fn main() {
                             Arc::new(BrokerAnnouncementSink::new(
                                 Arc::new(BrokerAnnouncementTransport { relay }),
                                 vod,
+                                profile,
                                 AnnouncementSettings {
                                     notify_channel_id,
                                     alert_mention: std::env::var("TWITCH_ALERT_MENTION").ok(),

@@ -663,6 +663,7 @@ impl PollEngine {
                         twitch_user_id: twitch_user_id
                             .map(str::to_string)
                             .or_else(|| prev_state.map(|s| s.twitch_user_id.clone())),
+                        started_at_iso: started_at_iso.clone(),
                     })
                     .await;
                 self.claim_announcement_reannounce_cooldown(&login_lower)

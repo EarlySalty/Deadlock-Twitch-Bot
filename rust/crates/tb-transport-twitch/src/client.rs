@@ -378,6 +378,8 @@ pub struct TwitchUser {
     pub id: String,
     pub login: String,
     pub display_name: String,
+    #[serde(default)]
+    pub profile_image_url: Option<String>,
 }
 
 #[derive(Debug, serde::Deserialize)]
