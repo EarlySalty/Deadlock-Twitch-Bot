@@ -3,207 +3,276 @@ import { CtaLink, Shell } from "../components/Shell";
 import { DISCORD_INVITE_URL, twitchChannelUrl, V2_FAQ } from "../lib/links";
 import { formatCount, useNetworkStats, type NetworkStats } from "../lib/useNetworkStats";
 
+/* ── Hero: Cityscape + Kategorie-Leaderboard ─────────────────── */
+
+const BOARD_ROWS: Array<{ rank: string; width: number; viewers: string; you?: boolean }> = [
+  { rank: "1", width: 92, viewers: "214" },
+  { rank: "2", width: 70, viewers: "121" },
+  { rank: "3", width: 52, viewers: "63", you: true },
+  { rank: "4", width: 38, viewers: "41" },
+  { rank: "5", width: 27, viewers: "22" },
+];
+
+function Leaderboard(): JSX.Element {
+  return (
+    <aside className="board" aria-label="Stilisierte Deadlock-Kategorie">
+      <div className="board-title">
+        <span>Kategorie</span>
+        <b>Deadlock · DE</b>
+      </div>
+      <div className="board-rows">
+        {BOARD_ROWS.map((row) => (
+          <div key={row.rank} className={row.you ? "board-row is-you" : "board-row"}>
+            <span className="board-rank">{row.rank}</span>
+            {row.you ? (
+              <span className="board-you-label">
+                <span className="live-dot" aria-hidden="true" /> Du
+              </span>
+            ) : (
+              <span className="board-bar" style={{ width: `${row.width}%` }} aria-hidden="true" />
+            )}
+            <span className="board-viewers">{row.viewers} Viewer</span>
+          </div>
+        ))}
+      </div>
+      <p className="board-caption">Deine Zahlen. Endlich sichtbar.</p>
+    </aside>
+  );
+}
+
 function Hero(): JSX.Element {
   return (
-    <section className="section hero">
-      <div className="container">
-        <p className="overline reveal">Deutsches Deadlock-Partnernetzwerk</p>
-        <h1 className="reveal">
-          Die deutsche Deadlock-Kategorie wird gerade verteilt.{" "}
-          <span className="gold">Die Plätze oben sind noch frei.</span>
-        </h1>
-        <p className="lede reveal">
-          Mit 50 Viewern bist du in Fortnite unsichtbar — in Deadlock stehst du
-          damit ganz oben in der Kategorie, sichtbar für jeden, der das Spiel
-          anklickt. Genau jetzt entsteht die deutsche Szene. Wir bauen die
-          Infrastruktur dafür: automatische Raids, Stats-Overlay, Analytics,
-          Coaching. Der Bot ist dein Mitgliedsausweis.
-        </p>
-        <div className="hero-actions reveal">
-          <CtaLink>Bot in deinen Kanal holen</CtaLink>
-          <a className="btn btn-ghost" href="#netzwerk">
-            Wie das Netzwerk funktioniert
-          </a>
+    <section className="hero">
+      <div className="hero-art" aria-hidden="true" />
+      <div className="hero-shade" aria-hidden="true" />
+      <div className="container hero-inner">
+        <div className="stagger">
+          <p className="overline">Deutsches Deadlock-Partnernetzwerk</p>
+          <h1>
+            Die Kategorie wird gerade verteilt.{" "}
+            <span className="gold">Oben ist noch frei.</span>
+          </h1>
+          <p className="lede">
+            Dieselben Viewer, die dich woanders unsichtbar machen, bringen dich
+            in Deadlock nach oben. Der Bot ist dein Mitgliedsausweis.
+          </p>
+          <div className="hero-actions">
+            <CtaLink>Bot in deinen Kanal holen</CtaLink>
+            <a className="btn btn-ghost" href="#netzwerk">
+              So funktioniert&rsquo;s
+            </a>
+          </div>
+          <p className="hero-note">Kostenlos. 30 Sekunden. Jederzeit raus.</p>
         </div>
-        <p className="hero-note reveal">
-          Kostenlos für Streamer. In 30 Sekunden drin, jederzeit wieder raus.
+        <Leaderboard />
+      </div>
+      <a className="scroll-cue" href="#signal" aria-label="Weiter scrollen">
+        ▼
+      </a>
+    </section>
+  );
+}
+
+/* ── Signal-Strip: echte Zahlen als Band ─────────────────────── */
+
+function SignalStrip({ stats }: { stats: NetworkStats | null }): JSX.Element {
+  return (
+    <div className="signal-strip" id="signal" aria-label="Live-Netzwerkzahlen">
+      <div>
+        <span className="live-dot" aria-hidden="true" />
+        <b>{formatCount(stats?.live.length)}</b> gerade live
+      </div>
+      <div>
+        <b>{formatCount(stats?.active_partners)}</b> Partner
+      </div>
+      <div>
+        <b>{formatCount(stats?.raids_total)}</b> Raids vermittelt
+      </div>
+      <div>
+        <b>{formatCount(stats?.raids_7d)}</b> diese Woche
+      </div>
+    </div>
+  );
+}
+
+/* ── Raid-Kreislauf: animierter Ring ─────────────────────────── */
+
+function RaidRing(): JSX.Element {
+  // Kreis r=44 bei viewBox 100 → Umfang ~276; dasharray/offset in ui.css darauf abgestimmt.
+  return (
+    <div className="ring-wrap" aria-hidden="true">
+      <svg className="ring-svg" viewBox="0 0 100 100">
+        <circle className="ring-track" cx="50" cy="50" r="44" />
+        <circle className="ring-flow" cx="50" cy="50" r="44" />
+        <g>
+          <circle className="ring-node" cx="50" cy="6" r="7" />
+          <text className="ring-node-label" x="50" y="6.4">1</text>
+          <circle className="ring-node" cx="88" cy="72" r="7" />
+          <text className="ring-node-label" x="88" y="72.4">2</text>
+          <circle className="ring-node" cx="12" cy="72" r="7" />
+          <text className="ring-node-label" x="12" y="72.4">3</text>
+        </g>
+        <text className="ring-center-label" x="50" y="47">
+          DAS NETZWERK
+        </text>
+        <text className="ring-center-live" x="50" y="58">
+          LÄUFT 24/7
+        </text>
+      </svg>
+    </div>
+  );
+}
+
+const STEPS: Array<{ title: string; text: string }> = [
+  { title: "Du streamst Deadlock", text: "Der Bot kennt alle, die gerade live sind." },
+  { title: "Du machst Feierabend", text: "Dein Stream raidet automatisch den passenden Partner." },
+  { title: "Der Kreislauf dreht sich", text: "Hört ein anderer auf, landen seine Viewer bei dir." },
+];
+
+function Circuit(): JSX.Element {
+  return (
+    <section className="section" id="netzwerk">
+      <div className="container">
+        <div className="section-head reveal">
+          <p className="overline">So funktioniert es</p>
+          <h2>Kein Stream endet im Nichts.</h2>
+        </div>
+        <div className="circuit-grid">
+          <RaidRing />
+          <ol className="step-list">
+            {STEPS.map((step, i) => (
+              <li key={step.title} className="reveal">
+                <span className="step-jewel" aria-hidden="true">
+                  <i>{i + 1}</i>
+                </span>
+                <div>
+                  <h3>{step.title}</h3>
+                  <p>{step.text}</p>
+                </div>
+              </li>
+            ))}
+          </ol>
+        </div>
+        <p className="honest-line reveal">
+          Wir machen dich nicht groß. Wir sorgen dafür, dass nichts verpufft.
         </p>
       </div>
     </section>
   );
 }
 
-function ProofStrip({
-  stats,
-  failed,
-}: {
-  stats: NetworkStats | null;
-  failed: boolean;
-}): JSX.Element {
-  const tiles: Array<{ label: string; value: string }> = [
-    { label: "Aktive Partner", value: formatCount(stats?.active_partners) },
-    { label: "Raids vermittelt — gesamt", value: formatCount(stats?.raids_total) },
-    { label: "Raids — letzte 7 Tage", value: formatCount(stats?.raids_7d) },
-  ];
-  if (stats?.viewers_forwarded_total != null) {
-    tiles.push({
-      label: "Weitergereichte Viewer",
-      value: formatCount(stats.viewers_forwarded_total),
-    });
-  }
+/* ── Umsteiger: Kategorie-Vergleich ──────────────────────────── */
+
+function Switcher(): JSX.Element {
   return (
-    <section className="section proof" aria-label="Netzwerk-Zahlen">
+    <section className="section">
       <div className="container">
-        <p className="overline reveal">Live aus der Datenbank</p>
-        <h2 className="reveal">Keine Marketing-Zahlen. Unsere echten.</h2>
-        <div className="stat-grid reveal">
-          {tiles.map((tile) => (
-            <div key={tile.label} className="panel panel-corners stat-tile">
-              <strong>{tile.value}</strong>
-              <span>{tile.label}</span>
-            </div>
-          ))}
+        <div className="section-head reveal">
+          <p className="overline">Für Wechsler</p>
+          <h2>
+            Gleiche Viewer. <span className="gold">Andere Liga.</span>
+          </h2>
+          <p className="lede">
+            Ein Game-Wechsel kostet normalerweise alles. Im Netzwerk wechselst
+            du nicht allein.
+          </p>
         </div>
-        <p className="proof-note reveal">
-          {failed && !stats
-            ? "Die Live-Zahlen sind gerade nicht erreichbar — schau in ein paar Minuten wieder rein."
-            : "Diese Zahlen kommen ungefiltert aus der Live-Datenbank des Netzwerks. Wenn hier wenig steht, ist da wenig — wir runden nichts schön."}
-        </p>
+        <div className="compare-grid reveal">
+          <div className="cat-card is-lose">
+            <div className="cat-head">
+              <span className="cat-name">Großes Game</span>
+              <span className="cat-meta">4.000+ Streams</span>
+            </div>
+            <div className="cat-rows">
+              <div className="cat-row"><span>#1</span><span className="board-bar" style={{ width: "95%" }} /></div>
+              <div className="cat-row"><span>#2</span><span className="board-bar" style={{ width: "80%" }} /></div>
+              <div className="cat-gap">· · ·</div>
+              <div className="cat-row is-you-row"><span>#4.083</span><span className="board-bar" style={{ width: "7%" }} /></div>
+            </div>
+            <p className="cat-verdict">Niemand scrollt zu dir</p>
+          </div>
+          <div className="cat-card is-win">
+            <div className="cat-head">
+              <span className="cat-name">Deadlock · DE</span>
+              <span className="cat-meta">Kategorie im Aufbau</span>
+            </div>
+            <div className="cat-rows">
+              <div className="cat-row"><span>#1</span><span className="board-bar" style={{ width: "85%" }} /></div>
+              <div className="cat-row"><span>#2</span><span className="board-bar" style={{ width: "62%" }} /></div>
+              <div className="cat-row is-you-row"><span>#3</span><span className="board-bar" style={{ width: "48%" }} /></div>
+              <div className="cat-row"><span>#4</span><span className="board-bar" style={{ width: "30%" }} /></div>
+            </div>
+            <p className="cat-verdict">Erste Seite der Kategorie</p>
+          </div>
+        </div>
+        <div className="switcher-points reveal">
+          <span>Raids ab deinem ersten Stream</span>
+          <span>Die Szene kennt dich, bevor du ankommst</span>
+          <span>Coaching &amp; Scrims, wenn du willst</span>
+        </div>
       </div>
     </section>
   );
 }
+
+/* ── Live-Wall ───────────────────────────────────────────────── */
 
 function LiveWall({ stats }: { stats: NetworkStats | null }): JSX.Element {
   const live = stats?.live ?? [];
   return (
-    <section className="section livewall" aria-label="Gerade live">
+    <section className="section" aria-label="Gerade live">
       <div className="container">
-        <p className="overline reveal">Das Netzwerk, jetzt gerade</p>
-        <h2 className="reveal">Gerade live</h2>
+        <div className="section-head reveal">
+          <p className="overline">Das Netzwerk, jetzt gerade</p>
+          <h2>Gerade live</h2>
+        </div>
         {live.length ? (
           <div className="live-grid reveal">
             {live.map((s) => (
               <a
                 key={s.login}
-                className="panel live-card"
+                className="live-card"
                 href={twitchChannelUrl(s.login)}
                 target="_blank"
                 rel="noreferrer"
               >
-                <span className="live-dot" aria-hidden="true" />
+                <span className="monogram" aria-hidden="true">
+                  <i>{(s.display_name || s.login).charAt(0).toUpperCase()}</i>
+                </span>
                 <span className="live-name">{s.display_name}</span>
+                <span className="live-badge">
+                  <span className="live-dot" aria-hidden="true" /> LIVE
+                </span>
                 <span className="live-login">twitch.tv/{s.login}</span>
               </a>
             ))}
           </div>
         ) : (
-          <p className="live-empty panel reveal">
+          <p className="live-empty reveal">
             Gerade streamt niemand aus dem Netzwerk. Sei der, der online ist,
             wenn andere zuschauen wollen.
           </p>
         )}
-        <p className="proof-note reveal">
-          Jeder Partner taucht hier automatisch auf, sobald er live geht —
-          Gratis-Sichtbarkeit inklusive.
+        <p className="wall-note reveal">
+          Jeder Partner landet hier automatisch, sobald er live geht.
         </p>
       </div>
     </section>
   );
 }
 
-const STEPS: Array<{ title: string; text: string }> = [
-  {
-    title: "Du streamst Deadlock",
-    text: "Der Bot weiß, wer aus dem Netzwerk gerade live ist — du musst niemanden suchen und niemanden kennen.",
-  },
-  {
-    title: "Du machst Feierabend",
-    text: "Statt ins Leere zu enden, raidet dein Stream automatisch den passenden nächsten Kanal im Netzwerk.",
-  },
-  {
-    title: "Der Kreislauf dreht sich",
-    text: "Beendet ein anderer Partner seinen Stream, landen seine Viewer bei dir. Wer streamt, wird gefunden.",
-  },
-];
-
-function Circuit(): JSX.Element {
-  return (
-    <section className="section circuit" id="netzwerk">
-      <div className="container">
-        <p className="overline reveal">So funktioniert es</p>
-        <h2 className="reveal">Kein Stream endet mehr im Nichts.</h2>
-        <ol className="step-grid">
-          {STEPS.map((step, i) => (
-            <li key={step.title} className="panel panel-corners step-card reveal">
-              <span className="step-jewel" aria-hidden="true">
-                <i>{i + 1}</i>
-              </span>
-              <h3>{step.title}</h3>
-              <p>{step.text}</p>
-            </li>
-          ))}
-        </ol>
-        <div className="panel panel-corners honest reveal">
-          <p>
-            <strong>Ehrlich gesagt:</strong> Wir machen dich nicht groß — das
-            kann kein Bot. Wir sorgen dafür, dass nichts von dem verpufft, was
-            du selbst reinsteckst. Jeder Stream zahlt aufs Netzwerk ein, und
-            das Netzwerk zahlt zurück.
-          </p>
-        </div>
-      </div>
-    </section>
-  );
-}
-
-const SWITCHER_CARDS: Array<{ title: string; text: string }> = [
-  {
-    title: "Sichtbarkeit ab Tag 1",
-    text: "Die deutsche Deadlock-Kategorie ist klein genug, dass du mit deinen jetzigen Zahlen oben mitspielst — und wächst schnell genug, dass es sich lohnt.",
-  },
-  {
-    title: "Anschluss statt Kaltstart",
-    text: "Raids aus dem Netzwerk ab deinem ersten Stream. Die Szene kennt dich, bevor dein Overlay fertig eingerichtet ist.",
-  },
-  {
-    title: "Besser werden, wenn du willst",
-    text: "Coaching und Scrims aus der Community — für alle, die nicht nur das Spiel wechseln, sondern damit wachsen wollen.",
-  },
-];
-
-function Switcher(): JSX.Element {
-  return (
-    <section className="section switcher">
-      <div className="container">
-        <p className="overline reveal">Für Wechsler</p>
-        <h2 className="reveal">Du überlegst, zu Deadlock zu wechseln?</h2>
-        <p className="lede reveal">
-          Ein Game-Wechsel ist der Moment, in dem Streamer am meisten
-          verlieren: Stammpublikum weg, fremde Kategorie, null Anschluss.
-          Genau dafür ist das Netzwerk gebaut — du wechselst nicht allein.
-        </p>
-        <div className="card-grid reveal">
-          {SWITCHER_CARDS.map((card) => (
-            <div key={card.title} className="panel panel-corners info-card">
-              <h3>{card.title}</h3>
-              <p>{card.text}</p>
-            </div>
-          ))}
-        </div>
-      </div>
-    </section>
-  );
-}
+/* ── Finale: CTA-Band auf der Bühne ──────────────────────────── */
 
 function FinalCta(): JSX.Element {
   return (
-    <section className="section final-cta">
-      <div className="container final-inner">
-        <h2 className="reveal">Werde Teil, solange die Plätze frei sind.</h2>
+    <section className="cta-band">
+      <div className="cta-band-art" aria-hidden="true" />
+      <div className="container">
+        <h2 className="reveal">
+          Werde Teil, <span className="gold">solange oben frei ist.</span>
+        </h2>
         <p className="lede reveal">
-          Der Bot ist kostenlos, die Einrichtung dauert eine halbe Minute — und
-          wenn es nichts für dich ist, bist du genauso schnell wieder draußen.
+          Kostenlos, in 30 Sekunden drin — und genauso schnell wieder raus.
         </p>
         <div className="hero-actions reveal">
           <CtaLink>Bot in deinen Kanal holen</CtaLink>
@@ -220,17 +289,16 @@ function FinalCta(): JSX.Element {
 }
 
 export function LandingPage(): JSX.Element {
-  const { stats, failed } = useNetworkStats();
+  const { stats } = useNetworkStats();
   return (
     <Shell>
       <Hero />
-      <div className="deco-divider" aria-hidden="true"><span /></div>
-      <ProofStrip stats={stats} failed={failed} />
-      <LiveWall stats={stats} />
-      <div className="deco-divider" aria-hidden="true"><span /></div>
+      <SignalStrip stats={stats} />
       <Circuit />
+      <div className="deco-divider" aria-hidden="true"><span /></div>
       <Switcher />
       <div className="deco-divider" aria-hidden="true"><span /></div>
+      <LiveWall stats={stats} />
       <FinalCta />
     </Shell>
   );
