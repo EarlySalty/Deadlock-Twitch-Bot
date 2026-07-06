@@ -7,17 +7,17 @@ export function FaqPage(): JSX.Element {
   const groups = loadFaqGroups();
   return (
     <Shell>
-      <section className="section">
-        <div className="container">
-          <p className="overline reveal">Fragen &amp; Antworten</p>
-          <h1 className="reveal">
-            FAQ — <span className="gold">kurz und ehrlich beantwortet.</span>
+      <section className="page-head">
+        <div className="page-head-art" aria-hidden="true" />
+        <div className="container stagger">
+          <p className="overline">Fragen &amp; Antworten</p>
+          <h1>
+            Kurz und <span className="gold">ehrlich beantwortet.</span>
           </h1>
-          <p className="lede reveal">
-            Diese Antworten kommen aus derselben Wissensbasis, mit der auch der
-            Bot selbst Fragen beantwortet — eine Quelle, immer aktuell.
-          </p>
-
+        </div>
+      </section>
+      <section className="section" style={{ paddingTop: "0" }}>
+        <div className="container">
           <nav className="faq-toc reveal" aria-label="FAQ-Themen">
             {groups.map((group) => (
               <a key={group.key} href={`#${group.key}`}>
