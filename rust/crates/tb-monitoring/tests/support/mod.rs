@@ -237,6 +237,19 @@ pub async fn pool_in_schema(schema: &str) -> Option<PgPool> {
             event_type TEXT, target_login TEXT, target_id TEXT,
             moderator_login TEXT, reason TEXT, ends_at TIMESTAMPTZ, received_at TIMESTAMPTZ
         )",
+        "CREATE TABLE twitch_chatter_global_ban (
+            chatter_login TEXT PRIMARY KEY,
+            chatter_id TEXT,
+            reason TEXT,
+            added_by TEXT,
+            added_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+        )",
+        "CREATE TABLE twitch_chatter_global_ban_applied (
+            chatter_login TEXT NOT NULL,
+            broadcaster_id TEXT NOT NULL,
+            applied_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+            PRIMARY KEY (chatter_login, broadcaster_id)
+        )",
         "CREATE TABLE twitch_shoutout_events (
             id BIGSERIAL PRIMARY KEY, twitch_user_id TEXT, direction TEXT,
             other_broadcaster_id TEXT, other_broadcaster_login TEXT,
