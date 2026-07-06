@@ -1,3 +1,11 @@
+## #334 — Verdächtige Twitch-Spam-Alerts können manuell lernen
+
+**Problem:** Verdächtige Twitch-Spam-Nachrichten wurden im Discord gemeldet, hatten aber keinen direkten Weg für menschliches Feedback. Positiv/negativ lernen gab es nur in einem anderen Scam-Pfad, nicht global für normale Spam-Alerts.
+
+**Änderung:** Spam-Alerts liefern jetzt Lern-Metadaten mit und die interne Twitch-Schnittstelle kann ein Muster als Spam oder als harmlos speichern. Gespeichert wird in den vorhandenen Lernlisten des Spam-Filters.
+
+**Verhalten jetzt:** Ein gemeldeter Fall kann nachträglich als „Spam" oder „harmlos" bestätigt werden. Dadurch landen auch neue Scam-/Viewerbot-Maschen in denselben Lernlisten statt nur im Alert-Verlauf.
+
 ## #333 — Streamer-Unban stoppt sofortige Global-Ban-Wiederholung
 
 **Problem:** Wenn ein Streamer einen global gebannten Nutzer im eigenen Kanal wieder entbannt hat, konnte der Bot ihn bei der nächsten Chat-Nachricht direkt erneut bannen. Dadurch wirkte die Entscheidung des Streamers wirkungslos und die Bot-Nachricht wurde mehrfach wiederholt.
