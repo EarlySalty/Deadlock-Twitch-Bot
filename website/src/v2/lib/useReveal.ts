@@ -8,8 +8,9 @@ export function useReveal(): void {
   useEffect(() => {
     document.documentElement.classList.add("js");
     const elements = Array.from(document.querySelectorAll<HTMLElement>(".reveal"));
+    const showAll = () => elements.forEach((el) => el.classList.add("is-visible"));
     if (!("IntersectionObserver" in window)) {
-      elements.forEach((el) => el.classList.add("is-visible"));
+      showAll();
       return;
     }
     const observer = new IntersectionObserver(
@@ -24,6 +25,12 @@ export function useReveal(): void {
       { threshold: 0.12 },
     );
     elements.forEach((el) => observer.observe(el));
-    return () => observer.disconnect();
+    // Sicherheitsnetz: falls der Observer nie feuert (Snapshot-Rendering,
+    // exotische Browser), bleibt nichts dauerhaft versteckt.
+    const failsafe = window.setTimeout(showAll, 1200);
+    return () => {
+      window.clearTimeout(failsafe);
+      observer.disconnect();
+    };
   }, []);
 }

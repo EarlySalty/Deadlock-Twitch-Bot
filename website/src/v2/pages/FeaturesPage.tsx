@@ -75,17 +75,21 @@ function FeatureCard({ feature }: { feature: Feature }): JSX.Element {
 export function FeaturesPage(): JSX.Element {
   return (
     <Shell>
-      <section className="section">
-        <div className="container">
-          <p className="overline reveal">Was du bekommst</p>
-          <h1 className="reveal">
+      <section className="page-head">
+        <div className="page-head-art" aria-hidden="true" />
+        <div className="container stagger">
+          <p className="overline">Was du bekommst</p>
+          <h1>
             Ein Bot. <span className="gold">Die ganze Ausstattung.</span>
           </h1>
-          <p className="lede reveal">
-            Alles hier ist im Partnernetzwerk enthalten — kein Premium-Gate
-            vor den Kernfunktionen. Die Detailtexte kommen aus derselben
-            Wissensbasis, aus der auch der Bot selbst antwortet.
+          <p className="lede">
+            Alles im Netzwerk enthalten — kein Premium-Gate vor den
+            Kernfunktionen.
           </p>
+        </div>
+      </section>
+      <section className="section" style={{ paddingTop: "0" }}>
+        <div className="container">
           <div className="feature-grid">
             {FEATURES.map((feature) => (
               <FeatureCard key={feature.title} feature={feature} />
