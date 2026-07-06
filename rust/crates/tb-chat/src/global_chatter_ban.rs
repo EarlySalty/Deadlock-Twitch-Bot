@@ -15,7 +15,7 @@ use crate::types::ChatMessageEvent;
 use dashmap::DashMap;
 use sqlx::PgPool;
 use std::time::Instant;
-use tracing::warn;
+use tracing::{debug, warn};
 
 // ---------------------------------------------------------------------------
 // Konstanten
@@ -57,30 +57,67 @@ impl GlobalChatterBanEnforcer {
         }
 
         // Cache-Prüfung: positiver Treffer < 300s (moderation.py Z. 736–738)
+        let mut globally_banned = false;
         if let Some(entry) = self.cache.get(&chatter_login) {
             if entry.elapsed().as_secs() < BAN_CACHE_TTL_SECS {
-                return true;
+                globally_banned = true;
+            } else {
+                // Abgelaufen → entfernen und DB befragen
+                drop(entry);
+                self.cache.remove(&chatter_login);
             }
-            // Abgelaufen → entfernen und DB befragen
-            drop(entry);
-            self.cache.remove(&chatter_login);
         }
 
-        // DB-Check (pg.py Z. 4119–4134: Login ODER ID)
+        if !globally_banned {
+            // DB-Check (pg.py Z. 4119–4134: Login ODER ID)
+            match self
+                .is_globally_banned(&chatter_login, &event.chatter_user_id)
+                .await
+            {
+                Ok(true) => {
+                    globally_banned = true;
+                }
+                Ok(false) => return false,
+                Err(e) => {
+                    warn!("global_chatter_ban: DB-Fehler — {}", e);
+                    return false;
+                }
+            }
+        }
+
+        if !globally_banned {
+            return false;
+        }
+
         match self
-            .is_globally_banned(&chatter_login, &event.chatter_user_id)
+            .has_newer_channel_unban(
+                &event.broadcaster_user_id,
+                &chatter_login,
+                &event.chatter_user_id,
+            )
             .await
         {
             Ok(true) => {
+                self.cache.remove(&chatter_login);
+                debug!(
+                    channel = %event.broadcaster_user_login,
+                    chatter = %chatter_login,
+                    "global_chatter_ban: Sofort-Reban nach Channel-Unban unterdrückt"
+                );
+                false
+            }
+            Ok(false) => {
                 // Positiven Treffer cachen (moderation.py Z. 744–749)
                 self.cache.insert(chatter_login, Instant::now());
                 self.evict_if_needed();
                 true
             }
-            Ok(false) => false,
             Err(e) => {
-                warn!("global_chatter_ban: DB-Fehler — {}", e);
-                false
+                warn!(
+                    "global_chatter_ban: Unban-Override-Check fehlgeschlagen — {}",
+                    e
+                );
+                true
             }
         }
     }
@@ -103,6 +140,63 @@ impl GlobalChatterBanEnforcer {
         .fetch_optional(&self.pool)
         .await?;
         Ok(row.is_some())
+    }
+
+    /// `true`, wenn der Kanal den User nach dem letzten Bot-/Sweep-Ban wieder
+    /// entbannt hat. Dann kein Sofort-Reban im Chat; der Offline-Sweep darf
+    /// später erneut entscheiden.
+    async fn has_newer_channel_unban(
+        &self,
+        broadcaster_id: &str,
+        chatter_login: &str,
+        chatter_id: &str,
+    ) -> Result<bool, sqlx::Error> {
+        if broadcaster_id.trim().is_empty() {
+            return Ok(false);
+        }
+
+        sqlx::query_scalar::<_, bool>(
+            r#"
+            SELECT EXISTS (
+                SELECT 1
+                  FROM twitch_ban_events u
+                 WHERE u.twitch_user_id = $1
+                   AND u.event_type = 'unban'
+                   AND (
+                        LOWER(COALESCE(u.target_login, '')) = $2
+                        OR ($3 <> '' AND COALESCE(u.target_id, '') = $3)
+                   )
+                   AND u.received_at > GREATEST(
+                        COALESCE((
+                            SELECT MAX(b.received_at)
+                              FROM twitch_ban_events b
+                             WHERE b.twitch_user_id = $1
+                               AND b.event_type = 'ban'
+                               AND (
+                                    LOWER(COALESCE(b.target_login, '')) = $2
+                                    OR ($3 <> '' AND COALESCE(b.target_id, '') = $3)
+                               )
+                        ), '-infinity'::timestamptz),
+                        COALESCE((
+                            SELECT MAX(a.applied_at)
+                              FROM twitch_chatter_global_ban_applied a
+                              JOIN twitch_chatter_global_ban g
+                                ON LOWER(g.chatter_login) = a.chatter_login
+                             WHERE a.broadcaster_id = $1
+                               AND (
+                                    LOWER(g.chatter_login) = $2
+                                    OR ($3 <> '' AND COALESCE(g.chatter_id, '') = $3)
+                               )
+                        ), '-infinity'::timestamptz)
+                   )
+            )
+            "#,
+        )
+        .bind(broadcaster_id)
+        .bind(chatter_login)
+        .bind(chatter_id)
+        .fetch_one(&self.pool)
+        .await
     }
 
     /// Entfernt abgelaufene Cache-Einträge wenn der Cache zu groß wird

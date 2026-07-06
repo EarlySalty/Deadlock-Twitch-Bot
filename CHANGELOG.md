@@ -1,3 +1,11 @@
+## #333 — Streamer-Unban stoppt sofortige Global-Ban-Wiederholung
+
+**Problem:** Wenn ein Streamer einen global gebannten Nutzer im eigenen Kanal wieder entbannt hat, konnte der Bot ihn bei der nächsten Chat-Nachricht direkt erneut bannen. Dadurch wirkte die Entscheidung des Streamers wirkungslos und die Bot-Nachricht wurde mehrfach wiederholt.
+
+**Änderung:** Ein Kanal-Unban wird jetzt als bewusste Streamer-Entscheidung gespeichert. Danach greift der direkte Chat-Sofortban nicht mehr; der Eintrag wird erst wieder von der späteren Sweep-Welle geprüft.
+
+**Verhalten jetzt:** Entbannt der Streamer jemanden im Kanal, lässt der Bot diese Person im laufenden Chat erst einmal in Ruhe. Die netzwerkweite Bannliste bleibt bestehen und wird beim nächsten Sweep wieder angewendet.
+
 ## #332 — Twitch-Live- und Offline-Post im frischen Deadlock-Look
 
 **Ausgangslage:** Wenn jemand live ging, sah der Discord-Post aus wie bei jedem beliebigen Twitch-Bot — Twitch-Lila, die Infos als kleine Tabelle, und das Profilbild des Streamers fehlte komplett.

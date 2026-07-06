@@ -329,7 +329,7 @@ impl TelemetryStore {
             session_id,
             broadcaster_user_id,
             event_type,
-            target_login,
+            target_login.as_deref(),
             target_id.as_deref(),
             moderator_login,
             reason,
@@ -338,8 +338,88 @@ impl TelemetryStore {
         )
         .execute(&self.pool)
         .await?;
+        if unbanned {
+            self.clear_global_ban_applied(broadcaster_user_id, target_login.as_deref(), &target_id)
+                .await;
+        }
         self.record_inbound_bot_timeout(broadcaster_login, event, unbanned, ends_at, &target_id);
         Ok(())
+    }
+
+    /// `channel.moderate` liefert Ban/Unban-Aktionen ebenfalls. Für den
+    /// Global-Ban-Sofortpfad brauchen wir nur Unbans als Streamer-Entscheidung.
+    pub async fn store_moderate_unban_event(
+        &self,
+        broadcaster_user_id: &str,
+        broadcaster_login: Option<&str>,
+        event: &Value,
+        now: DateTime<Utc>,
+    ) -> Result<(), sqlx::Error> {
+        let action = str_lower(event, &["action"]).unwrap_or_default();
+        if action != "unban" {
+            return Ok(());
+        }
+
+        let details = event
+            .get("unban")
+            .filter(|value| value.is_object())
+            .unwrap_or(event);
+        let target_login = str_lower(details, &["user_login", "user_name", "target_user_login"]);
+        let target_id = str_field(details, &["user_id", "target_user_id"]);
+        if target_login.as_deref().unwrap_or_default().is_empty()
+            && target_id.as_deref().unwrap_or_default().is_empty()
+        {
+            return Ok(());
+        }
+
+        let normalized = serde_json::json!({
+            "user_login": target_login,
+            "user_id": target_id,
+            "moderator_user_login": str_lower(event, &["moderator_user_login", "moderator_user_name"]),
+            "reason": str_field(details, &["reason"]),
+        });
+        self.store_ban_event(
+            broadcaster_user_id,
+            broadcaster_login,
+            &normalized,
+            true,
+            now,
+        )
+        .await
+    }
+
+    async fn clear_global_ban_applied(
+        &self,
+        broadcaster_user_id: &str,
+        target_login: Option<&str>,
+        target_id: &Option<String>,
+    ) {
+        let login = target_login.unwrap_or_default().trim().to_lowercase();
+        let target_id = target_id.as_deref().unwrap_or_default().trim();
+        if broadcaster_user_id.trim().is_empty() || (login.is_empty() && target_id.is_empty()) {
+            return;
+        }
+
+        if let Err(error) = sqlx::query(
+            r#"
+            DELETE FROM twitch_chatter_global_ban_applied a
+             USING twitch_chatter_global_ban g
+             WHERE a.broadcaster_id = $1
+               AND a.chatter_login = LOWER(g.chatter_login)
+               AND (
+                    LOWER(g.chatter_login) = $2
+                    OR ($3 <> '' AND COALESCE(g.chatter_id, '') = $3)
+               )
+            "#,
+        )
+        .bind(broadcaster_user_id)
+        .bind(&login)
+        .bind(target_id)
+        .execute(&self.pool)
+        .await
+        {
+            tracing::debug!(%error, broadcaster_id = %broadcaster_user_id, "Global-Ban-Applied-Ledger konnte nach Unban nicht bereinigt werden");
+        }
     }
 
     fn record_inbound_bot_timeout(

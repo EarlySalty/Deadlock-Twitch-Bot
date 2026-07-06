@@ -55,8 +55,8 @@ async fn pool_in_schema(dsn: &str, schema: &str) -> PgPool {
 }
 
 async fn apply_ddl(pool: &PgPool) {
-    // twitch_chatter_global_ban — added_at = TIMESTAMPTZ (Prod-Schema)
-    sqlx::query(
+    for ddl in [
+        // twitch_chatter_global_ban — added_at = TIMESTAMPTZ (Prod-Schema)
         "CREATE TABLE IF NOT EXISTS twitch_chatter_global_ban (
             chatter_login  TEXT PRIMARY KEY,
             chatter_id     TEXT,
@@ -64,10 +64,23 @@ async fn apply_ddl(pool: &PgPool) {
             added_by       TEXT,
             added_at       TIMESTAMPTZ NOT NULL DEFAULT NOW()
         )",
-    )
-    .execute(pool)
-    .await
-    .unwrap();
+        "CREATE TABLE IF NOT EXISTS twitch_ban_events (
+            id BIGSERIAL PRIMARY KEY,
+            twitch_user_id TEXT NOT NULL,
+            event_type TEXT NOT NULL,
+            target_login TEXT,
+            target_id TEXT,
+            received_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+        )",
+        "CREATE TABLE IF NOT EXISTS twitch_chatter_global_ban_applied (
+            chatter_login TEXT NOT NULL,
+            broadcaster_id TEXT NOT NULL,
+            applied_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+            PRIMARY KEY (chatter_login, broadcaster_id)
+        )",
+    ] {
+        sqlx::query(ddl).execute(pool).await.unwrap();
+    }
 }
 
 fn make_event(chatter_login: &str, chatter_id: &str) -> ChatMessageEvent {
@@ -161,7 +174,10 @@ async fn positiver_treffer_wird_gecacht() {
 
     let enforcer = GlobalChatterBanEnforcer::new(pool.clone());
     let event = make_event("gecachter", "uid-cache");
-    assert!(enforcer.is_banned(&event).await, "Erster Aufruf: DB-Treffer");
+    assert!(
+        enforcer.is_banned(&event).await,
+        "Erster Aufruf: DB-Treffer"
+    );
 
     // Eintrag aus der DB löschen — der 300s-Positiv-Cache muss weiter greifen
     // (moderation.py Z. 736–738)
@@ -172,5 +188,55 @@ async fn positiver_treffer_wird_gecacht() {
     assert!(
         enforcer.is_banned(&event).await,
         "Zweiter Aufruf: Cache-Treffer trotz DB-Löschung"
+    );
+}
+
+#[tokio::test]
+async fn channel_unban_stoppt_sofort_reban_trotz_cache_bis_zum_sweep() {
+    let pool = pool_or_skip!("gcb_unban_override");
+
+    sqlx::query(
+        "INSERT INTO twitch_chatter_global_ban (chatter_login, chatter_id, reason, added_by)
+         VALUES ('alter_login', 'uid-unban', 'Global', 'test')",
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
+
+    let enforcer = GlobalChatterBanEnforcer::new(pool.clone());
+    let event = make_event("neuer_login", "uid-unban");
+    assert!(
+        enforcer.is_banned(&event).await,
+        "Erster Treffer füllt den Cache"
+    );
+
+    sqlx::query(
+        "INSERT INTO twitch_ban_events
+             (twitch_user_id, event_type, target_login, target_id, received_at)
+         VALUES
+             ('broadcaster-123', 'ban', 'neuer_login', 'uid-unban', NOW() - INTERVAL '2 minutes'),
+             ('broadcaster-123', 'unban', 'neuer_login', 'uid-unban', NOW() - INTERVAL '1 minute')",
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
+
+    assert!(
+        !enforcer.is_banned(&event).await,
+        "Streamer-Unban unterdrückt den Sofort-Reban auch bei positivem Cache"
+    );
+
+    sqlx::query(
+        "INSERT INTO twitch_chatter_global_ban_applied
+             (chatter_login, broadcaster_id, applied_at)
+         VALUES ('alter_login', 'broadcaster-123', NOW())",
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
+
+    assert!(
+        enforcer.is_banned(&event).await,
+        "Nach Sweep-Applied darf der globale Ban wieder greifen"
     );
 }

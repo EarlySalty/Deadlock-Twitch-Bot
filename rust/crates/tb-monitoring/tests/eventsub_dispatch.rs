@@ -656,6 +656,69 @@ async fn channel_ban_bot_self_timeout_armt_timeout_guard() {
 }
 
 #[tokio::test]
+async fn channel_moderate_unban_speichert_unban_und_entfernt_global_ban_applied() {
+    let pool = pool_or_skip!("t4d_moderate_unban_global_applied");
+    let hooks = Arc::new(RecordingHooks::default());
+    let (dispatcher, runtime, _store) = build_stack(&pool, hooks);
+
+    sqlx::query(
+        "INSERT INTO twitch_chatter_global_ban (chatter_login, chatter_id)
+         VALUES ('helmbombenricky', '147713656')",
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
+    sqlx::query(
+        "INSERT INTO twitch_chatter_global_ban_applied (chatter_login, broadcaster_id)
+         VALUES ('helmbombenricky', '58819840')",
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
+
+    let payload = serde_json::json!({
+        "subscription": {"type": "channel.moderate"},
+        "event": {
+            "broadcaster_user_id": "58819840",
+            "broadcaster_user_login": "ismile_e",
+            "action": "unban",
+            "moderator_user_login": "ismile_e",
+            "unban": {
+                "user_login": "helmbombenricky",
+                "user_id": "147713656"
+            }
+        }
+    });
+    let outcome = dispatcher
+        .dispatch("channel.moderate", Some("m-moderate-unban"), &payload)
+        .await
+        .unwrap();
+    runtime.shutdown().await;
+    assert!(outcome.processed && !outcome.queued);
+
+    let events: i64 = sqlx::query_scalar(
+        "SELECT COUNT(*) FROM twitch_ban_events
+         WHERE twitch_user_id = '58819840'
+           AND event_type = 'unban'
+           AND target_login = 'helmbombenricky'
+           AND target_id = '147713656'",
+    )
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    let applied: i64 = sqlx::query_scalar(
+        "SELECT COUNT(*) FROM twitch_chatter_global_ban_applied
+         WHERE broadcaster_id = '58819840'",
+    )
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+
+    assert_eq!(events, 1);
+    assert_eq!(applied, 0, "Unban macht den nächsten Sweep wieder fällig");
+}
+
+#[tokio::test]
 async fn monitoring_handler_gibt_unknown_work_type_als_fehler_zurueck() {
     let pool = pool_or_skip!("t4d_unknown_work_type");
     let guard = GuardStore::new(pool.clone());

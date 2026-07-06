@@ -764,6 +764,23 @@ impl EventSubDispatcher {
                     .await;
             }
             "channel.moderate" => {
+                let now = epoch_to_datetime((self.clock)());
+                if let Err(error) = self
+                    .telemetry
+                    .store_moderate_unban_event(
+                        &context.broadcaster_id,
+                        Some(&context.broadcaster_login),
+                        &context.event,
+                        now,
+                    )
+                    .await
+                {
+                    tracing::warn!(
+                        %error,
+                        broadcaster_id = %context.broadcaster_id,
+                        "channel.moderate-Unban-Telemetrie fehlgeschlagen"
+                    );
+                }
                 self.hooks
                     .on_channel_moderate(
                         &context.broadcaster_id,
