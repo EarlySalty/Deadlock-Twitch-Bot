@@ -38,7 +38,7 @@ testpaths = ["tests"]
 addopts = "-q"
 
 [build-system]
-requires = ["setuptools>=82.0.1"]
+requires = ["setuptools>=83.0.0"]
 build-backend = "setuptools.build_meta"
 
 [tool.setuptools]
