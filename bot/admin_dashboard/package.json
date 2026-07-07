@@ -17,7 +17,7 @@
     "react-dom": "^19.2.7",
     "react-router-dom": "^7.17.0",
     "recharts": "^3.8.1",
-    "tailwindcss": "^4.3.0"
+    "tailwindcss": "^4.3.2"
   },
   "devDependencies": {
     "@tailwindcss/oxide-linux-x64-gnu": "^4.3.2",
