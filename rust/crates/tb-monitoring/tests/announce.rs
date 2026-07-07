@@ -12,7 +12,7 @@ use tb_monitoring::poller::hooks::{
 use tb_monitoring::poller::source::SourceError;
 use tb_monitoring::{
     AnnouncementSettings, AnnouncementTransport, BrokerAnnouncementSink, ChannelProfileSource,
-    LivePingRoleProvider, NoVodPreview, StreamSnapshot, TrackedEntry,
+    LivePingRoleProvider, NoVodPreview, StreamSnapshot, TrackedEntry, VodPreviewSource,
 };
 
 mod support;
@@ -124,6 +124,18 @@ impl ChannelProfileSource for StubProfileSource {
     }
 }
 
+#[derive(Default)]
+struct StubVodPreview {
+    preview_url: Option<String>,
+}
+
+#[async_trait::async_trait]
+impl VodPreviewSource for StubVodPreview {
+    async fn latest_preview(&self, _twitch_user_id: Option<&str>, _login: &str) -> Option<String> {
+        self.preview_url.clone()
+    }
+}
+
 fn sink_with(transport: Arc<StubTransport>) -> BrokerAnnouncementSink {
     sink_with_provider(transport, None)
 }
@@ -144,9 +156,23 @@ fn sink_with_profile(
     profile: Arc<dyn ChannelProfileSource>,
     live_ping_role_provider: Option<Arc<dyn LivePingRoleProvider>>,
 ) -> BrokerAnnouncementSink {
-    BrokerAnnouncementSink::new(
+    sink_with_vod_and_profile(
         transport,
         Arc::new(NoVodPreview),
+        profile,
+        live_ping_role_provider,
+    )
+}
+
+fn sink_with_vod_and_profile(
+    transport: Arc<StubTransport>,
+    vod: Arc<dyn VodPreviewSource>,
+    profile: Arc<dyn ChannelProfileSource>,
+    live_ping_role_provider: Option<Arc<dyn LivePingRoleProvider>>,
+) -> BrokerAnnouncementSink {
+    BrokerAnnouncementSink::new(
+        transport,
+        vod,
         profile,
         AnnouncementSettings {
             notify_channel_id: 555,
@@ -265,10 +291,15 @@ async fn announce_live_setzt_stream_preview_mit_cache_buster() {
 
     let sends = transport.sends.lock().unwrap();
     let (_, _, embed, components, _, _) = &sends[0];
-    assert_eq!(embed["image"]["url"], expected);
+    let embed_url = embed["image"]["url"].as_str().expect("embed image url");
+    assert_ne!(
+        embed_url, expected,
+        "Live-Preview darf nicht mehr nur am konstanten Tracking-Token cachen"
+    );
+    assert!(embed_url.starts_with("https://cdn/1280x720.jpg?rand="));
     assert_eq!(
         components.as_ref().expect("components")[0]["components"][3]["items"][0]["media"]["url"],
-        expected
+        embed_url
     );
 }
 
@@ -467,13 +498,145 @@ async fn end_announcement_editiert_offline_embed() {
         components[0]["components"][0]["accessory"]["media"]["url"],
         "https://avatar/offline.png"
     );
-    assert!(
-        embed.get("image").is_none(),
-        "Offline-Embed bleibt ohne Live-Preview, wenn keine VOD-Vorschau vorhanden ist"
+    assert_eq!(
+        embed["image"]["url"], "https://avatar/offline.png",
+        "Offline-Embed nutzt das Avatarbild, wenn Twitch noch keine VOD-Vorschau liefert"
+    );
+    assert_eq!(
+        components[0]["components"][3]["items"][0]["media"]["url"], "https://avatar/offline.png",
+        "Offline-Components nutzen denselben Avatar-Fallback als großes Bild"
     );
     let view = view_spec.as_ref().expect("Link-Button");
     assert_eq!(view["type"], "link_button");
     assert_eq!(view["url"], "https://www.twitch.tv/drag?ref=dc");
+}
+
+#[tokio::test]
+async fn end_announcement_vod_preview_gewinnt_vor_avatar_fallback() {
+    let transport = Arc::new(StubTransport::default());
+    let profile = Arc::new(StubProfileSource {
+        avatar_url: Some("https://avatar/offline.png".to_string()),
+        ..Default::default()
+    });
+    let vod = Arc::new(StubVodPreview {
+        preview_url: Some("https://vod/preview.jpg".to_string()),
+    });
+    let sink = sink_with_vod_and_profile(transport.clone(), vod, profile, None);
+
+    let outcome = sink
+        .end_announcement(EndAnnouncementRequest {
+            login: "drag".to_string(),
+            display_name: "Drag".to_string(),
+            message_id: "msg-7".to_string(),
+            previous_tracking_token: None,
+            last_title: Some("Letzter Titel".to_string()),
+            last_game: Some("Deadlock".to_string()),
+            twitch_user_id: Some("42".to_string()),
+            started_at_iso: Some("2026-06-09T17:00:00+00:00".to_string()),
+        })
+        .await;
+    assert_eq!(outcome, EndAnnouncementOutcome::Updated);
+
+    let edits = transport.edits.lock().unwrap();
+    let (_, _, embed, components, _) = &edits[0];
+    assert_eq!(embed["image"]["url"], "https://vod/preview.jpg");
+    let components = components.as_ref().expect("Offline Components V2");
+    assert_eq!(
+        components[0]["components"][0]["accessory"]["media"]["url"], "https://avatar/offline.png",
+        "Avatar bleibt Thumbnail"
+    );
+    assert_eq!(
+        components[0]["components"][3]["items"][0]["media"]["url"], "https://vod/preview.jpg",
+        "VOD-Preview bleibt grosses Bild, wenn vorhanden"
+    );
+}
+
+#[tokio::test]
+async fn sync_live_announcement_resume_editiert_offline_message_ohne_send() {
+    let transport = Arc::new(StubTransport::default());
+    let profile = Arc::new(StubProfileSource {
+        avatar_url: Some("https://avatar/offline.png".to_string()),
+        ..Default::default()
+    });
+    let sink = sink_with_profile(transport.clone(), profile, None);
+
+    let live = sink
+        .announce_live(live_request("drag"))
+        .await
+        .expect("gesendet");
+    let token = live.tracking_token.expect("tracking token");
+    sink.end_announcement(EndAnnouncementRequest {
+        login: "drag".to_string(),
+        display_name: "Drag".to_string(),
+        message_id: "msg-1".to_string(),
+        previous_tracking_token: Some(token.clone()),
+        last_title: Some("Letzter Titel".to_string()),
+        last_game: Some("Deadlock".to_string()),
+        twitch_user_id: Some("42".to_string()),
+        started_at_iso: Some("2026-06-09T17:00:00+00:00".to_string()),
+    })
+    .await;
+    transport.edits.lock().unwrap().clear();
+
+    let mut request = live_request("drag");
+    request.previous_message_id = Some("msg-1".to_string());
+    request.previous_tracking_token = Some(token);
+    let outcome = sink.sync_live_announcement(request.clone()).await;
+    assert_eq!(outcome, EndAnnouncementOutcome::Updated);
+    let outcome = sink.sync_live_announcement(request).await;
+    assert_eq!(outcome, EndAnnouncementOutcome::Failed);
+
+    assert_eq!(
+        transport.sends.lock().unwrap().len(),
+        1,
+        "Resume editiert statt neu zu senden"
+    );
+    let edits = transport.edits.lock().unwrap();
+    assert_eq!(
+        edits.len(),
+        1,
+        "zweiter Sync im selben Bucket ist gedrosselt"
+    );
+    let (channel_id, message_id, embed, components, _) = &edits[0];
+    assert_eq!((*channel_id, message_id.as_str()), (555, "msg-1"));
+    assert_eq!(embed["title"], "Drag ist LIVE in Deadlock!");
+    assert_eq!(
+        components.as_ref().expect("Live Components V2")[0]["accent_color"],
+        0xC8A86B
+    );
+}
+
+#[tokio::test]
+async fn end_announcement_ist_offline_idempotent() {
+    let transport = Arc::new(StubTransport::default());
+    let sink = sink_with(transport.clone());
+    let request = EndAnnouncementRequest {
+        login: "drag".to_string(),
+        display_name: "Drag".to_string(),
+        message_id: "msg-7".to_string(),
+        previous_tracking_token: None,
+        last_title: Some("Letzter Titel".to_string()),
+        last_game: Some("Deadlock".to_string()),
+        twitch_user_id: Some("42".to_string()),
+        started_at_iso: Some("2026-06-09T17:00:00+00:00".to_string()),
+    };
+
+    assert_eq!(
+        sink.end_announcement(request.clone()).await,
+        EndAnnouncementOutcome::Updated
+    );
+    // Der Poller ruft on_stream_not_live bei JEDEM Offline-Tick vor
+    // end_announcement — das darf den Offline-Dedup nicht zurücksetzen.
+    sink.on_stream_not_live("drag").await;
+    assert_eq!(
+        sink.end_announcement(request).await,
+        EndAnnouncementOutcome::Failed
+    );
+    assert_eq!(
+        transport.edits.lock().unwrap().len(),
+        1,
+        "Offline-Edit darf pro Prozesszustand nur einmal rausgehen"
+    );
 }
 
 #[tokio::test]

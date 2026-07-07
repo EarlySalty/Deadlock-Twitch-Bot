@@ -113,6 +113,19 @@ struct RetryState {
     render_now: DateTime<Utc>,
 }
 
+struct LiveSyncState {
+    bucket: u64,
+    shows_offline: bool,
+}
+
+struct LivePayload {
+    content: Option<String>,
+    notification_text: String,
+    embed: Value,
+    components: Option<Value>,
+    view_spec: Option<Value>,
+}
+
 pub struct BrokerAnnouncementSink {
     transport: Arc<dyn AnnouncementTransport>,
     vod: Arc<dyn VodPreviewSource>,
@@ -121,6 +134,7 @@ pub struct BrokerAnnouncementSink {
     #[allow(dead_code)]
     live_ping_role_provider: Option<Arc<dyn LivePingRoleProvider>>,
     retry: Mutex<HashMap<String, RetryState>>,
+    live_sync: Mutex<HashMap<String, LiveSyncState>>,
 }
 
 impl BrokerAnnouncementSink {
@@ -138,6 +152,7 @@ impl BrokerAnnouncementSink {
             settings,
             live_ping_role_provider,
             retry: Mutex::new(HashMap::new()),
+            live_sync: Mutex::new(HashMap::new()),
         }
     }
 
@@ -180,6 +195,14 @@ impl BrokerAnnouncementSink {
             .collect()
     }
 
+    fn live_bucket(render_now: DateTime<Utc>) -> u64 {
+        (render_now.timestamp().max(0) / 300) as u64
+    }
+
+    fn live_cache_seed(tracking_token: &str, render_now: DateTime<Utc>) -> String {
+        format!("{tracking_token}:{}", Self::live_bucket(render_now))
+    }
+
     /// Rollen-ID aus einer Mention wie `<@&123>` (Python `_extract_role_id_from_mention`).
     #[allow(dead_code)]
     fn role_id_from_mention(text: &str) -> Option<i64> {
@@ -208,6 +231,108 @@ impl BrokerAnnouncementSink {
             .map(|url| url.trim().to_string())
             .filter(|url| !url.is_empty());
     }
+
+    async fn render_live_payload(
+        &self,
+        login: &str,
+        request: &AnnounceLiveRequest,
+        tracking_token: &str,
+        render_now: DateTime<Utc>,
+    ) -> LivePayload {
+        let config = AnnouncementConfig::default();
+        let mut stream = request.stream.clone();
+        self.fill_profile_image_url(login, &mut stream).await;
+
+        let referral_url = self.referral_url(login);
+        let context = build_context(
+            login,
+            &stream,
+            &referral_url,
+            "",
+            render_now,
+            stream.thumbnail_url.as_deref(),
+        );
+        let cache_seed = Self::live_cache_seed(tracking_token, render_now);
+        let rendered = render_announcement(&config, &context, render_now, Some(&cache_seed));
+        let notification_text = sanitize_live_content(&rendered.content);
+        let view_spec = rendered.button_enabled.then(|| {
+            serde_json::json!({
+                "type": "twitch_live_tracking",
+                "streamer_login": login,
+                "tracking_token": tracking_token,
+                "referral_url": referral_url,
+                "button_label": rendered.button_label,
+            })
+        });
+
+        LivePayload {
+            content: Some(notification_text.clone()).filter(|c| !c.is_empty()),
+            notification_text,
+            embed: rendered.embed,
+            components: rendered.components,
+            view_spec,
+        }
+    }
+
+    async fn sync_live_announcement_at(
+        &self,
+        request: AnnounceLiveRequest,
+        render_now: DateTime<Utc>,
+    ) -> EndAnnouncementOutcome {
+        let login = request.login.to_lowercase();
+        let Some(message_id) = request
+            .previous_message_id
+            .as_deref()
+            .map(str::trim)
+            .filter(|id| !id.is_empty())
+            .map(str::to_string)
+        else {
+            return EndAnnouncementOutcome::Failed;
+        };
+        let bucket = Self::live_bucket(render_now);
+        let should_edit = {
+            let live_sync = self.live_sync.lock().expect("live sync lock");
+            live_sync
+                .get(&login)
+                .map(|state| state.shows_offline || state.bucket != bucket)
+                .unwrap_or(true)
+        };
+        if !should_edit {
+            return EndAnnouncementOutcome::Failed;
+        }
+
+        let tracking_token = Self::tracking_token(&request);
+        let payload = self
+            .render_live_payload(&login, &request, &tracking_token, render_now)
+            .await;
+        match self
+            .transport
+            .edit(
+                self.settings.notify_channel_id,
+                message_id,
+                payload.content,
+                payload.embed,
+                payload.components,
+                payload.view_spec,
+            )
+            .await
+        {
+            Ok(()) => {
+                self.live_sync.lock().expect("live sync lock").insert(
+                    login,
+                    LiveSyncState {
+                        bucket,
+                        shows_offline: false,
+                    },
+                );
+                EndAnnouncementOutcome::Updated
+            }
+            Err(error) => {
+                tracing::warn!(%error, login, "Live-Sync via Broker fehlgeschlagen");
+                EndAnnouncementOutcome::Failed
+            }
+        }
+    }
 }
 
 #[async_trait::async_trait]
@@ -225,62 +350,36 @@ impl AnnouncementSink for BrokerAnnouncementSink {
                 None => (Self::tracking_token(&request), Utc::now()),
             }
         };
-        let config = AnnouncementConfig::default();
-        let mut stream = request.stream.clone();
-        self.fill_profile_image_url(&login, &mut stream).await;
-
-        // Rollen-Pings sind im Go-Live-Announcement hart deaktiviert:
-        // keine Template-Mention, keine allowed_role_ids und kein Provider-Aufruf.
-        let mention_text = String::new();
-        let allowed_role_ids: Vec<i64> = Vec::new();
-
-        let referral_url = self.referral_url(&login);
-        let context = build_context(
-            &login,
-            &stream,
-            &referral_url,
-            &mention_text,
-            render_now,
-            stream.thumbnail_url.as_deref(),
-        );
-        let rendered = render_announcement(&config, &context, render_now, Some(&tracking_token));
-
-        let content = if rendered.content.is_empty() {
-            mention_text
-        } else {
-            rendered.content.clone()
-        };
-        let content = sanitize_live_content(&content);
-
-        // Tracking-Button (Klick-Zählung vor Redirect, Python view_spec).
-        let view_spec = rendered.button_enabled.then(|| {
-            serde_json::json!({
-                "type": "twitch_live_tracking",
-                "streamer_login": login,
-                "tracking_token": tracking_token,
-                "referral_url": referral_url,
-                "button_label": rendered.button_label,
-            })
-        });
+        let bucket = Self::live_bucket(render_now);
+        let payload = self
+            .render_live_payload(&login, &request, &tracking_token, render_now)
+            .await;
 
         let send_result = self
             .transport
             .send(
                 self.settings.notify_channel_id,
-                Some(content.clone()).filter(|c| !c.is_empty()),
-                rendered.embed,
-                rendered.components,
-                allowed_role_ids,
-                view_spec.clone(),
+                payload.content.clone(),
+                payload.embed,
+                payload.components,
+                Vec::new(),
+                payload.view_spec.clone(),
             )
             .await;
         match send_result {
             Ok(message_id) if !message_id.trim().is_empty() => {
                 self.retry.lock().expect("retry lock").remove(&login);
+                self.live_sync.lock().expect("live sync lock").insert(
+                    login,
+                    LiveSyncState {
+                        bucket,
+                        shows_offline: false,
+                    },
+                );
                 Some(AnnounceLiveResult {
                     message_id: message_id.trim().to_string(),
-                    tracking_token: view_spec.is_some().then_some(tracking_token),
-                    notification_text: content,
+                    tracking_token: payload.view_spec.is_some().then_some(tracking_token),
+                    notification_text: payload.notification_text,
                 })
             }
             Ok(_) => None,
@@ -300,17 +399,36 @@ impl AnnouncementSink for BrokerAnnouncementSink {
 
     async fn end_announcement(&self, request: EndAnnouncementRequest) -> EndAnnouncementOutcome {
         let login = request.login.to_lowercase();
+        if self
+            .live_sync
+            .lock()
+            .expect("live sync lock")
+            .get(&login)
+            .is_some_and(|state| state.shows_offline)
+        {
+            return EndAnnouncementOutcome::Failed;
+        }
         let now = Utc::now();
         let avatar_url = self.profile.profile_image_url(&login).await;
         let preview = self
             .vod
             .latest_preview(request.twitch_user_id.as_deref(), &login)
             .await;
+        let preview_image_url = preview
+            .as_deref()
+            .map(str::trim)
+            .filter(|url| !url.is_empty())
+            .or_else(|| {
+                avatar_url
+                    .as_deref()
+                    .map(str::trim)
+                    .filter(|url| !url.is_empty())
+            });
         let embed = build_offline_embed(
             &request.display_name,
             request.last_title.as_deref(),
             request.last_game.as_deref(),
-            preview.as_deref(),
+            preview_image_url,
             &self.settings.target_game,
             now,
         );
@@ -318,7 +436,7 @@ impl AnnouncementSink for BrokerAnnouncementSink {
             display_name: &request.display_name,
             last_title: request.last_title.as_deref(),
             last_game: request.last_game.as_deref(),
-            preview_image_url: preview.as_deref(),
+            preview_image_url,
             channel_avatar_url: avatar_url.as_deref(),
             target_game: &self.settings.target_game,
             started_at: request
@@ -345,7 +463,16 @@ impl AnnouncementSink for BrokerAnnouncementSink {
             )
             .await
         {
-            Ok(()) => EndAnnouncementOutcome::Updated,
+            Ok(()) => {
+                let bucket = Self::live_bucket(now);
+                let mut live_sync = self.live_sync.lock().expect("live sync lock");
+                let state = live_sync.entry(login).or_insert(LiveSyncState {
+                    bucket,
+                    shows_offline: false,
+                });
+                state.shows_offline = true;
+                EndAnnouncementOutcome::Updated
+            }
             Err(error) => {
                 tracing::warn!(%error, login, "Offline-Edit via Broker fehlgeschlagen");
                 EndAnnouncementOutcome::Failed
@@ -353,10 +480,62 @@ impl AnnouncementSink for BrokerAnnouncementSink {
         }
     }
 
+    async fn sync_live_announcement(&self, request: AnnounceLiveRequest) -> EndAnnouncementOutcome {
+        self.sync_live_announcement_at(request, Utc::now()).await
+    }
+
     async fn on_stream_not_live(&self, login: &str) {
+        // Bewusst nur `retry` verwerfen, NICHT `live_sync`: on_stream_not_live
+        // feuert im Poller bei JEDEM Offline-Tick (engine `!is_live`). Würde hier
+        // das shows_offline-Flag gelöscht, editierte end_announcement das
+        // Offline-Embed jeden Tick neu (inkl. Helix-Avatar/VOD-Calls). Ein neuer
+        // Stream überschreibt den live_sync-Zustand ohnehin via announce_live,
+        // ein Kategoriewechsel via end_announcement.
         self.retry
             .lock()
             .expect("retry lock")
             .remove(&login.to_lowercase());
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use chrono::Duration;
+
+    use super::*;
+    use crate::stream::{parse_dt_utc, StreamSnapshot};
+
+    #[test]
+    fn live_cache_seed_bucket_rendert_stabile_und_rollende_preview_urls() {
+        let config = AnnouncementConfig::default();
+        let base = parse_dt_utc("2026-06-09T18:00:00Z").expect("valid time");
+        let same_bucket = base + Duration::seconds(299);
+        let next_bucket = base + Duration::seconds(300);
+        let stream = StreamSnapshot {
+            user_login: "drag".to_string(),
+            user_name: "Drag".to_string(),
+            title: "Ranked Grind".to_string(),
+            game_name: "Deadlock".to_string(),
+            thumbnail_url: Some("https://cdn/{width}x{height}.jpg".to_string()),
+            ..Default::default()
+        };
+        let context = build_context(
+            "drag",
+            &stream,
+            "https://www.twitch.tv/drag",
+            "",
+            base,
+            stream.thumbnail_url.as_deref(),
+        );
+        let image_for = |now| {
+            let seed = BrokerAnnouncementSink::live_cache_seed("token-1", now);
+            render_announcement(&config, &context, now, Some(&seed)).embed["image"]["url"]
+                .as_str()
+                .expect("image url")
+                .to_string()
+        };
+
+        assert_eq!(image_for(base), image_for(same_bucket));
+        assert_ne!(image_for(base), image_for(next_bucket));
     }
 }

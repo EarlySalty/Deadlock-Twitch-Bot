@@ -641,6 +641,25 @@ impl PollEngine {
                 }
             }
 
+            if self.sink.ready() && is_deadlock && message_id_previous.is_some() && !should_post {
+                if let Some(stream) = stream {
+                    let _ = self
+                        .sink
+                        .sync_live_announcement(AnnounceLiveRequest {
+                            login: login_lower.clone(),
+                            entry: entry.clone(),
+                            stream: stream.clone(),
+                            previous_message_id: message_id_previous.clone(),
+                            previous_tracking_token: tracking_token_previous.clone(),
+                            stream_id: stream_id_value.clone(),
+                            started_at_iso: started_at_iso.clone(),
+                            active_session_id,
+                            suppress_role_pings: false,
+                        })
+                        .await;
+                }
+            }
+
             // Posting beenden, wenn offline oder Kategorie verlassen.
             let ended_posting =
                 self.sink.ready() && message_id_previous.is_some() && (!is_live || !is_deadlock);
@@ -666,12 +685,10 @@ impl PollEngine {
                         started_at_iso: started_at_iso.clone(),
                     })
                     .await;
-                self.claim_announcement_reannounce_cooldown(&login_lower)
-                    .await;
                 match outcome {
                     EndAnnouncementOutcome::Updated | EndAnnouncementOutcome::Gone => {
-                        message_id_to_store = None;
-                        tracking_token_to_store = None;
+                        self.claim_announcement_reannounce_cooldown(&login_lower)
+                            .await;
                     }
                     EndAnnouncementOutcome::Failed => {}
                 }
@@ -885,8 +902,8 @@ fn announcement_reannounce_cooldown_key(login: &str) -> Option<String> {
 
 #[cfg(test)]
 mod tests {
-    use std::sync::atomic::{AtomicU64, Ordering};
     use std::str::FromStr;
+    use std::sync::atomic::{AtomicU64, Ordering};
 
     use sqlx::postgres::{PgConnectOptions, PgPoolOptions};
 
@@ -1041,10 +1058,12 @@ mod tests {
             .execute(&pool)
             .await
             .unwrap();
-        sqlx::query("CREATE TABLE twitch_streamer_identities (twitch_user_id TEXT, discord_user_id TEXT)")
-            .execute(&pool)
-            .await
-            .unwrap();
+        sqlx::query(
+            "CREATE TABLE twitch_streamer_identities (twitch_user_id TEXT, discord_user_id TEXT)",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
         sqlx::query("CREATE TABLE twitch_partners (twitch_user_id TEXT, twitch_login TEXT)")
             .execute(&pool)
             .await
