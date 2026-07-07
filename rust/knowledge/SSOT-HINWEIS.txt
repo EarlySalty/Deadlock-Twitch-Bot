@@ -1,0 +1,7 @@
+SSOT-HINWEIS (2026-07-07)
+
+Kopien dieser Dateien liegen im Wissens-Repo Deadlock-Docs (public/twitch-bot/).
+Bis der Bot umgestellt ist (P4), bleibt dieses Verzeichnis die Live-Quelle (tb-knowledge lädt von hier):
+Änderungen hier machen UND nach Deadlock-Docs spiegeln.
+
+(.txt statt .md, damit der Knowledge-Loader diese Notiz nicht als Bot-Wissen lädt.)
