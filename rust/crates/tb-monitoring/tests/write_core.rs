@@ -323,8 +323,8 @@ async fn session_lifecycle_start_sample_finalize() {
     );
     assert_eq!(row.follower_delta, Some(15), "follower_delta 25-10");
     assert_eq!(row.notes, "done");
-    assert_eq!(
-        row.had_deadlock_in_session, true,
+    assert!(
+        row.had_deadlock_in_session,
         "had_deadlock aus Live-State/Game"
     );
 

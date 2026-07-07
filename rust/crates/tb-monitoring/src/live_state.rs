@@ -14,9 +14,7 @@ use std::collections::{BTreeSet, HashMap};
 
 use sqlx::PgPool;
 
-#[path = "inbox_store/retry.rs"]
-mod write_retry;
-use write_retry::{with_write_retry, RetryPolicy};
+use crate::inbox_store::retry::{with_write_retry, RetryPolicy};
 
 /// Vollständige Lesesicht einer `twitch_live_state`-Row (Spalten wie Prod).
 #[derive(Debug, Clone, sqlx::FromRow)]

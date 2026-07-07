@@ -11,7 +11,7 @@
 use sqlx::PgPool;
 use uuid::Uuid;
 
-mod retry;
+pub(crate) mod retry;
 
 use retry::{with_write_retry, RetryPolicy};
 

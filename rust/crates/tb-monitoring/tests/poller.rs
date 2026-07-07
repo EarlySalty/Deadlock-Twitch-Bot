@@ -126,6 +126,7 @@ impl PollHooks for RecordingHooks {
 #[derive(Default)]
 struct RecordingAnnouncementSink {
     sends: Mutex<Vec<AnnounceLiveRequest>>,
+    syncs: Mutex<Vec<AnnounceLiveRequest>>,
     ends: Mutex<Vec<EndAnnouncementRequest>>,
     not_live: AtomicU64,
 }
@@ -149,6 +150,11 @@ impl AnnouncementSink for RecordingAnnouncementSink {
 
     async fn end_announcement(&self, request: EndAnnouncementRequest) -> EndAnnouncementOutcome {
         self.ends.lock().unwrap().push(request);
+        EndAnnouncementOutcome::Updated
+    }
+
+    async fn sync_live_announcement(&self, request: AnnounceLiveRequest) -> EndAnnouncementOutcome {
+        self.syncs.lock().unwrap().push(request);
         EndAnnouncementOutcome::Updated
     }
 
@@ -527,6 +533,45 @@ async fn channel_update_race_postet_nicht_doppelt() {
         1,
         "channel.update-Race mit vorhandener Announcement-Message darf nicht neu posten"
     );
+}
+
+#[tokio::test]
+async fn reconnect_mit_gleicher_stream_id_synct_live_statt_neu_zu_posten() {
+    let pool = pool_or_skip!("t4c_announce_reconnect_same_stream_syncs");
+    insert_active_partner(&pool, "drag", "42").await;
+
+    let source = Arc::new(StubSource::new());
+    let hooks = Arc::new(RecordingHooks::new());
+    let sink = Arc::new(RecordingAnnouncementSink::default());
+    let engine = engine_with_sink(&pool, source.clone(), hooks, sink.clone());
+
+    source.set_streams(vec![live_stream("drag", "42", "s-1", 10)]);
+    engine.tick().await;
+    assert_eq!(sink.sends.lock().unwrap().len(), 1);
+
+    source.set_streams(vec![]);
+    engine.tick().await;
+    assert_eq!(sink.ends.lock().unwrap().len(), 1);
+    let stored_message_id: Option<String> = sqlx::query_scalar(
+        "SELECT last_discord_message_id FROM twitch_live_state WHERE twitch_user_id = '42'",
+    )
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!(stored_message_id.as_deref(), Some("msg-1"));
+
+    source.set_streams(vec![live_stream("drag", "42", "s-1", 12)]);
+    engine.tick().await;
+
+    assert_eq!(
+        sink.sends.lock().unwrap().len(),
+        1,
+        "Reconnect mit gleicher stream_id darf keinen zweiten Live-Post senden"
+    );
+    let syncs = sink.syncs.lock().unwrap();
+    assert_eq!(syncs.len(), 1);
+    assert_eq!(syncs[0].previous_message_id.as_deref(), Some("msg-1"));
+    assert_eq!(syncs[0].stream_id.as_deref(), Some("s-1"));
 }
 
 #[tokio::test]

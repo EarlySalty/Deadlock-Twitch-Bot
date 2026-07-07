@@ -1,3 +1,11 @@
+## #335 — Live-Post: Offline-Bild, frische Vorschau, kein Doppel-Post bei kurzem Ausfall
+
+**Problem:** Ging ein Stream offline, blieb das Bild im Post oft leer. Die Vorschau im Live-Post fror auf dem ersten Moment ein und aktualisierte sich nie. Und ein kurzer Verbindungsabbruch führte zu einem komplett neuen Post, statt den bestehenden weiterzuverwenden.
+
+**Änderung:** Fehlt direkt nach Stream-Ende noch das Aufzeichnungs-Bild, zeigt der Post jetzt das Kanalbild statt nichts. Die Vorschau frischt sich alle paar Minuten mit dem aktuellen Stand auf. Kommt derselbe Stream nach einem kurzen Ausfall zurück, wird der bestehende Post von Offline wieder auf Live gestellt statt neu gepostet.
+
+**Aktuelles Verhalten:** Ein Live-Post bleibt über den ganzen Stream dieselbe, aktuell gehaltene Nachricht — nur ein echter Neustart bekommt weiterhin einen frischen Post.
+
 ## #334 — Verdächtige Twitch-Spam-Alerts können manuell lernen
 
 **Problem:** Verdächtige Twitch-Spam-Nachrichten wurden im Discord gemeldet, hatten aber keinen direkten Weg für menschliches Feedback. Positiv/negativ lernen gab es nur in einem anderen Scam-Pfad, nicht global für normale Spam-Alerts.

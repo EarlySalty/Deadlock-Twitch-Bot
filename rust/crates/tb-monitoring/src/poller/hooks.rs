@@ -71,11 +71,11 @@ pub struct EndAnnouncementRequest {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum EndAnnouncementOutcome {
-    /// Posting wurde zum Offline-Embed editiert → message_id austragen.
+    /// Posting wurde editiert.
     Updated,
-    /// Posting existiert nicht mehr → message_id austragen.
+    /// Posting existiert nicht mehr.
     Gone,
-    /// Edit fehlgeschlagen → message_id behalten, nächster Tick versucht erneut.
+    /// Edit fehlgeschlagen oder bewusst übersprungen.
     Failed,
 }
 
@@ -91,6 +91,14 @@ pub trait AnnouncementSink: Send + Sync {
 
     /// Bestehendes Posting auf „Deadlock beendet" umstellen.
     async fn end_announcement(&self, request: EndAnnouncementRequest) -> EndAnnouncementOutcome;
+
+    /// Bestehendes Live-Posting bei Resume/Preview-Bucket-Wechsel aktualisieren.
+    async fn sync_live_announcement(
+        &self,
+        _request: AnnounceLiveRequest,
+    ) -> EndAnnouncementOutcome {
+        EndAnnouncementOutcome::Updated
+    }
 
     /// Streamer ist offline/neu gestartet — Retry-Zustand fürs Posting verwerfen.
     async fn on_stream_not_live(&self, _login: &str) {}
@@ -247,15 +255,13 @@ impl ReauthReminderPollHooks {
         };
         let now = Instant::now();
         match key {
-            ReminderKey::Stream(key) => {
-                match sent.entry(key) {
-                    std::collections::hash_map::Entry::Vacant(entry) => {
-                        entry.insert(now);
-                        true
-                    }
-                    std::collections::hash_map::Entry::Occupied(_) => false,
+            ReminderKey::Stream(key) => match sent.entry(key) {
+                std::collections::hash_map::Entry::Vacant(entry) => {
+                    entry.insert(now);
+                    true
                 }
-            }
+                std::collections::hash_map::Entry::Occupied(_) => false,
+            },
             ReminderKey::Fallback(key) => {
                 let due = sent
                     .get(&key)
