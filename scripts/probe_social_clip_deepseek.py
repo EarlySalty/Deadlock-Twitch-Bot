@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""One-clip probe: Twitch clip -> OpenAI Whisper transcript -> DeepSeek copy."""
+"""One-clip probe: Twitch clip -> OpenAI Whisper transcript -> Fireworks DeepSeek copy."""
 
 from __future__ import annotations
 
@@ -20,7 +20,7 @@ if str(ROOT) not in sys.path:
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
-        description="Probe one existing Twitch clip through Whisper + DeepSeek."
+        description="Probe one existing Twitch clip through Whisper + Fireworks DeepSeek."
     )
     parser.add_argument("source", nargs="?", help="Twitch clip URL or local video file.")
     parser.add_argument("--streamer", default="earlysalty")
@@ -28,7 +28,11 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--title", default=None)
     parser.add_argument("--game", default="Deadlock")
     parser.add_argument("--language", default="de")
-    parser.add_argument("--model", default=None, help="DeepSeek model, default deepseek-v4-pro.")
+    parser.add_argument(
+        "--model",
+        default=None,
+        help="DeepSeek model path, default accounts/fireworks/models/deepseek-v4-pro.",
+    )
     parser.add_argument("--workdir", default="data/social_clip_probe")
     parser.add_argument("--keep-video", action="store_true")
     return parser.parse_args()
