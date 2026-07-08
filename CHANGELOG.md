@@ -1,3 +1,11 @@
+## #344 — Clip-Vorschläge liefern bessere Titelvarianten
+
+**Problem:** Die ersten Clip-Vorschläge waren technisch korrekt, aber zu generisch: Titel enthielten teils Hashtags oder Emoji, Beschreibungen wiederholten Tags und pro Plattform gab es kaum Auswahl.
+
+**Änderung:** Die Vorgaben für Social-Vorschläge sind enger: Titel bleiben sauber, pro Plattform entstehen mehrere Varianten, Beschreibungen bleiben frei von Tag-Blöcken und breite Füll-Tags werden begrenzt.
+
+**Aktuelles Verhalten:** Ein Clip-Test zeigt jetzt pro Plattform einen Haupttitel plus mehrere auswählbare Alternativen. Tags stehen separat und die Texte sind näher am gesprochenen Clip-Moment.
+
 ## #343 — Dashboard liest Kennzahlen wieder aus den richtigen Spalten
 
 **Problem:** Einige Dashboard-Abfragen benannten ihre Ergebnis-Spalten so, dass die Anwendung die Werte nicht unter dem erwarteten Namen fand. Dadurch konnten Monatswerte, Kategorievergleich und Raw-Chat-Status trotz vorhandener Daten auf Null oder „offline" zurückfallen.

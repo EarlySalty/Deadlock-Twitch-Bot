@@ -20,6 +20,7 @@ _PLATFORM_TITLE_LIMITS: dict[str, int] = {
 }
 
 _HASHTAG_TOKEN_RE = re.compile(r"^[A-Za-z][A-Za-z0-9_]{0,49}$")
+_BROAD_FILLER_HASHTAGS = {"#gaming", "#clip", "#funny", "#lustig", "#twitchclip"}
 
 
 def _coerce_str(value: Any, fallback: str = "") -> str:
@@ -49,6 +50,7 @@ def _normalize_hashtag(raw: Any) -> str | None:
 def _coerce_hashtags(raw: Any, ensure_default: bool = True) -> list[str]:
     out: list[str] = []
     seen: set[str] = set()
+    used_broad_filler = False
     if isinstance(raw, list):
         for entry in raw:
             normalized = _normalize_hashtag(entry)
@@ -56,6 +58,10 @@ def _coerce_hashtags(raw: Any, ensure_default: bool = True) -> list[str]:
                 continue
             if normalized.lower() in seen:
                 continue
+            if normalized.lower() in _BROAD_FILLER_HASHTAGS:
+                if used_broad_filler:
+                    continue
+                used_broad_filler = True
             seen.add(normalized.lower())
             out.append(normalized)
     elif isinstance(raw, str):
@@ -65,6 +71,10 @@ def _coerce_hashtags(raw: Any, ensure_default: bool = True) -> list[str]:
                 continue
             if normalized.lower() in seen:
                 continue
+            if normalized.lower() in _BROAD_FILLER_HASHTAGS:
+                if used_broad_filler:
+                    continue
+                used_broad_filler = True
             seen.add(normalized.lower())
             out.append(normalized)
     if ensure_default:
@@ -83,12 +93,31 @@ def _truncate(text: str, limit: int) -> str:
     return cut + "…"
 
 
+def _coerce_title_options(raw: Any, title: str, limit: int) -> tuple[str, ...]:
+    values = raw if isinstance(raw, list) else []
+    out: list[str] = []
+    seen: set[str] = set()
+    for entry in [title, *values]:
+        option = _truncate(_coerce_str(entry), limit)
+        if not option or option.lower() in seen:
+            continue
+        seen.add(option.lower())
+        out.append(option)
+        if len(out) == 5:
+            break
+    return tuple(out)
+
+
+def _strip_trailing_hashtags(text: str) -> str:
+    return re.sub(r"(?:\s+#[A-Za-z][A-Za-z0-9_]{0,49})+\s*$", "", text).strip()
+
+
 def _extract_platform(payload: dict[str, Any], platform: str) -> PlatformEnrichment:
     block = payload.get(platform)
     if not isinstance(block, dict):
         raise LLMProviderError(f"missing platform block: {platform}")
     title = _coerce_str(block.get("title"))
-    description = _coerce_str(block.get("description"))
+    description = _strip_trailing_hashtags(_coerce_str(block.get("description")))
     hashtags = _coerce_hashtags(block.get("hashtags"))
     if not title:
         raise LLMProviderError(f"empty title for platform: {platform}")
@@ -97,6 +126,11 @@ def _extract_platform(payload: dict[str, Any], platform: str) -> PlatformEnrichm
         title=title,
         description=description,
         hashtags=tuple(hashtags),
+        title_options=_coerce_title_options(
+            block.get("title_options"),
+            title,
+            _PLATFORM_TITLE_LIMITS[platform],
+        ),
     )
 
 

@@ -12,24 +12,35 @@ YouTube Shorts, TikTok and Instagram Reels.
 
 Hard rules:
 - Output STRICT JSON only. No prose, no markdown, no code fences.
-- Each platform must have: title (string), description (string), hashtags (array of strings).
+- Each platform must have: title (string), title_options (array of 5 strings),
+  description (string), hashtags (array of strings).
 - Never invent facts not present in the transcript or the detected terms.
 - Use 'Deadlock' as the game tag. Always include #Deadlock as one hashtag per platform.
 - Hashtags: 5-10 each, lowercase preferred where it makes sense, no duplicates,
-  no spaces inside a hashtag, never start with a number.
+  no spaces inside a hashtag, never start with a number. Avoid filler tags like
+  #gaming unless no more specific tag fits. Use at most one broad filler from
+  #gaming, #clip, #funny, #lustig, #twitchclip per platform.
 - Title char limits: youtube <= 100, instagram <= 125, tiktok <= 150.
+- Titles are plain text: no hashtags, no emoji, no "Clip it", no generic
+  "Fail des Tages" or "Highlight" unless the transcript actually supports it.
+- Make title_options meaningfully different: quote hook, question hook,
+  consequence hook, streamer-voice hook, clean SEO hook.
+- Platform blocks must not be identical: YouTube gets the clearest searchable
+  title, TikTok the strongest hook, Instagram the cleanest caption-friendly line.
 - Description: 1-3 short sentences. Crisp, on-brand.
+- Do not repeat the full hashtag list inside the description.
 - Language: write in the streamer's primary language if given, otherwise English.
 - Be concrete: name the hero/item/ability that appears in detected_terms when relevant.
+- Preserve the clip's spoken punchline when it is stronger than generic copy.
 """
 
 
 JSON_SCHEMA_HINT = """\
 Required JSON schema:
 {
-  "youtube":   {"title": "...", "description": "...", "hashtags": ["..."]},
-  "tiktok":    {"title": "...", "description": "...", "hashtags": ["..."]},
-  "instagram": {"title": "...", "description": "...", "hashtags": ["..."]}
+  "youtube":   {"title": "...", "title_options": ["...", "...", "...", "...", "..."], "description": "...", "hashtags": ["..."]},
+  "tiktok":    {"title": "...", "title_options": ["...", "...", "...", "...", "..."], "description": "...", "hashtags": ["..."]},
+  "instagram": {"title": "...", "title_options": ["...", "...", "...", "...", "..."], "description": "...", "hashtags": ["..."]}
 }
 """
 

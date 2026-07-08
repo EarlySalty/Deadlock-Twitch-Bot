@@ -44,6 +44,7 @@ class PlatformEnrichment:
     title: str
     description: str
     hashtags: tuple[str, ...]
+    title_options: tuple[str, ...] = field(default_factory=tuple)
 
 
 @dataclass(frozen=True)
