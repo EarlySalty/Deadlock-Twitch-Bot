@@ -94,6 +94,15 @@ pub struct OfflineSourceState {
     pub last_started_at: Option<String>,
 }
 
+/// Minimaler Zustand, den `stream.online` braucht, bevor es den Live-State
+/// aktualisiert.
+#[derive(Debug, Clone, sqlx::FromRow)]
+pub struct OnlineAnnouncementState {
+    pub last_stream_id: Option<String>,
+    pub last_discord_message_id: Option<String>,
+    pub is_live: Option<i32>,
+}
+
 #[derive(Clone)]
 pub struct LiveStateStore {
     pool: PgPool,
@@ -352,6 +361,7 @@ impl LiveStateStore {
         stream_id: Option<&str>,
         started_at: Option<&str>,
         now_iso: &str,
+        clear_announcement: bool,
     ) -> Result<(), sqlx::Error> {
         let mut tx = self.pool.begin().await?;
         if !login_lower.is_empty() {
@@ -367,7 +377,7 @@ impl LiveStateStore {
             .execute(&mut *tx)
             .await?;
         }
-        sqlx::query!(
+        sqlx::query(
             r#"
             INSERT INTO twitch_live_state (
                 twitch_user_id, streamer_login, is_live, last_seen_at, last_stream_id, last_started_at
@@ -378,22 +388,53 @@ impl LiveStateStore {
                     is_live = 1,
                     last_seen_at = EXCLUDED.last_seen_at,
                     last_stream_id = COALESCE(EXCLUDED.last_stream_id, twitch_live_state.last_stream_id),
-                    last_started_at = COALESCE(EXCLUDED.last_started_at, twitch_live_state.last_started_at)
+                    last_started_at = COALESCE(EXCLUDED.last_started_at, twitch_live_state.last_started_at),
+                    last_discord_message_id = CASE
+                        WHEN $6
+                          OR (NULLIF(EXCLUDED.last_stream_id, '') IS NOT NULL
+                         AND COALESCE(twitch_live_state.last_stream_id, '') <> EXCLUDED.last_stream_id
+                         )
+                        THEN NULL
+                        ELSE twitch_live_state.last_discord_message_id
+                    END,
+                    last_tracking_token = CASE
+                        WHEN $6
+                          OR (NULLIF(EXCLUDED.last_stream_id, '') IS NOT NULL
+                         AND COALESCE(twitch_live_state.last_stream_id, '') <> EXCLUDED.last_stream_id
+                         )
+                        THEN NULL
+                        ELSE twitch_live_state.last_tracking_token
+                    END
             "#,
-            broadcaster_user_id,
-            if login_lower.is_empty() {
-                broadcaster_user_id
-            } else {
-                login_lower
-            },
-            now_iso,
-            stream_id,
-            started_at,
         )
+        .bind(broadcaster_user_id)
+        .bind(if login_lower.is_empty() {
+            broadcaster_user_id
+        } else {
+            login_lower
+        })
+        .bind(now_iso)
+        .bind(stream_id)
+        .bind(started_at)
+        .bind(clear_announcement)
         .execute(&mut *tx)
         .await?;
         tx.commit().await?;
         Ok(())
+    }
+
+    pub async fn online_announcement_state(
+        &self,
+        broadcaster_user_id: &str,
+    ) -> Result<Option<OnlineAnnouncementState>, sqlx::Error> {
+        sqlx::query_as::<_, OnlineAnnouncementState>(
+            "SELECT last_stream_id, last_discord_message_id, is_live
+               FROM twitch_live_state
+              WHERE twitch_user_id = $1",
+        )
+        .bind(broadcaster_user_id)
+        .fetch_optional(&self.pool)
+        .await
     }
 
     /// Go-Live-Enrichment: Titel/Kategorie aus dem gezielten `/channels`-Lookup

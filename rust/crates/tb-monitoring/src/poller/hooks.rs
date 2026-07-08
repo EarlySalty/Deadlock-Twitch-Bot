@@ -19,6 +19,15 @@ use tb_chat::{ChatApi, SendOutcome};
 use crate::poller::tracked::TrackedEntry;
 use crate::stream::StreamSnapshot;
 
+/// Kurzer Crash-/Reconnect-Korridor: In diesem Fenster wird ein beendeter
+/// Live-Post wieder auf Live editiert; danach gibt es einen frischen Post.
+pub(crate) const ANNOUNCE_REANNOUNCE_COOLDOWN_SECONDS: f64 = 5.0 * 60.0;
+
+pub(crate) fn announcement_reannounce_cooldown_key(login: &str) -> Option<String> {
+    let login = login.trim().to_lowercase();
+    (!login.is_empty()).then(|| format!("announcement_reannounce:{login}"))
+}
+
 /// User-sichtbarer Chat-Text für den Poller-basierten Re-Auth-Reminder.
 /// Byte-identisch zum kanonischen EventSub-Pfad (`bin/tb-bot/src/reauth_reminder.rs`).
 ///

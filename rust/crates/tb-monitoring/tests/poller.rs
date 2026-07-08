@@ -575,6 +575,33 @@ async fn reconnect_mit_gleicher_stream_id_synct_live_statt_neu_zu_posten() {
 }
 
 #[tokio::test]
+async fn reconnect_mit_gleicher_stream_id_nach_cooldown_postet_neu() {
+    let pool = pool_or_skip!("t4c_announce_same_stream_after_cooldown");
+    insert_active_partner(&pool, "drag", "42").await;
+
+    let source = Arc::new(StubSource::new());
+    let hooks = Arc::new(RecordingHooks::new());
+    let sink = Arc::new(RecordingAnnouncementSink::default());
+    let engine = engine_with_sink(&pool, source.clone(), hooks, sink.clone());
+
+    source.set_streams(vec![live_stream("drag", "42", "s-1", 10)]);
+    engine.tick().await;
+    source.set_streams(vec![]);
+    engine.tick().await;
+
+    advance_reannounce_cooldown(&pool, "drag", 6.0 * 60.0).await;
+
+    source.set_streams(vec![live_stream("drag", "42", "s-1", 12)]);
+    engine.tick().await;
+
+    let sends = sink.sends.lock().unwrap();
+    assert_eq!(sends.len(), 2);
+    assert_eq!(sends[1].previous_message_id.as_deref(), Some("msg-1"));
+    assert!(!sends[1].suppress_role_pings);
+    assert!(sink.syncs.lock().unwrap().is_empty());
+}
+
+#[tokio::test]
 async fn bestandszeile_ohne_stream_id_mit_message_id_postet_neuen_stream() {
     let pool = pool_or_skip!("t4c_announce_legacy_message_without_stream_id");
     insert_active_partner(&pool, "drag", "42").await;
@@ -705,8 +732,8 @@ async fn reannounce_cooldown_verlaengert_sich_bei_jedem_ended_posting() {
         let sends = sink.sends.lock().unwrap();
         assert_eq!(sends.len(), 3);
         assert!(
-            sends[2].suppress_role_pings,
-            "restart t16 darf nicht pingen, weil das Fenster ab offline t10 zaehlt"
+            !sends[2].suppress_role_pings,
+            "nach mehr als 5 Minuten ist es ein normaler neuer Post"
         );
     }
 

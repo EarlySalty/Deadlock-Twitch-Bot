@@ -1,3 +1,11 @@
+## #337 — Neue Streams bekommen wieder einen frischen Live-Post
+
+**Problem:** Wenn ein Streamer am Vortag schon angekündigt wurde, konnte ein neuer Stream nur den alten Discord-Post aktualisieren. Dadurch erschien im Kanal kein neuer sichtbarer Go-Live-Post.
+
+**Änderung:** Beim neuen Online-Signal wird ein alter Ankündigungsstatus verworfen, sobald Twitch eine neue Stream-Sitzung meldet oder derselbe Stream erst nach mehr als fünf Minuten zurückkommt.
+
+**Aktuelles Verhalten:** Ein echter neuer Stream bekommt wieder einen neuen Discord-Post. Kurze Aussetzer desselben Streams bleiben bis fünf Minuten beim bestehenden Post.
+
 ## #336 — Offline-Posts zeigen VOD-Bilder wieder korrekt
 
 **Problem:** Manche Stream-Ende-Posts bekamen von Twitch eine Aufzeichnungs-Vorschau mit Platzhaltern. Discord konnte diese URL nicht laden und zeigte deshalb ein leeres Bildfeld statt der VOD-Vorschau.
