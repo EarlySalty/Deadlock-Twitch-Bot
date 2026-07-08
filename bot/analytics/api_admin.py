@@ -548,13 +548,15 @@ def _fetch_raw_chat_health_snapshot(conn: Any) -> dict[str, Any]:
             h.last_raw_chat_insert_ok_at,
             h.last_raw_chat_insert_error_at,
             h.last_raw_chat_error,
+            h.raw_chat_lag_seconds,
             h.updated_at
         FROM twitch_raw_chat_ingest_health h
         JOIN twitch_live_state ls
           ON LOWER(ls.streamer_login) = LOWER(h.streamer_login)
         WHERE COALESCE(ls.is_live, 0) = 1
           AND COALESCE(ls.last_seen_at, ls.last_started_at) >= NOW() - INTERVAL '4 hours'
-        ORDER BY COALESCE(
+        ORDER BY COALESCE(h.raw_chat_lag_seconds, 0) DESC,
+            COALESCE(
             h.last_raw_chat_message_at,
             h.last_raw_chat_insert_ok_at,
             h.last_raw_chat_insert_error_at,
@@ -574,6 +576,7 @@ def _fetch_raw_chat_health_snapshot(conn: Any) -> dict[str, Any]:
                 last_raw_chat_insert_ok_at,
                 last_raw_chat_insert_error_at,
                 last_raw_chat_error,
+                raw_chat_lag_seconds,
                 updated_at
             FROM twitch_raw_chat_ingest_health
             ORDER BY COALESCE(
@@ -595,27 +598,13 @@ def _fetch_raw_chat_health_snapshot(conn: Any) -> dict[str, Any]:
         _row_get_value(row, "last_raw_chat_insert_error_at", 3, None) if row else None
     )
     last_error = str(_row_get_value(row, "last_raw_chat_error", 4, "") or "").strip() or None
-    updated_at = _row_get_value(row, "updated_at", 5, None) if row else None
+    raw_chat_lag_seconds = _row_get_value(row, "raw_chat_lag_seconds", 5, None) if row else None
+    updated_at = _row_get_value(row, "updated_at", 6, None) if row else None
 
-    signal_ts = max(
-        (
-            dt
-            for dt in (
-                _coerce_utc_datetime(last_message_at),
-                _coerce_utc_datetime(last_insert_ok_at),
-                _coerce_utc_datetime(last_insert_error_at),
-                _coerce_utc_datetime(updated_at),
-            )
-            if dt is not None
-        ),
-        default=None,
-    )
-    raw_chat_lag_seconds = None
-    if signal_ts is not None:
-        raw_chat_lag_seconds = max(
-            0,
-            int((datetime.now(UTC) - signal_ts).total_seconds()),
-        )
+    try:
+        raw_chat_lag_seconds = int(raw_chat_lag_seconds)
+    except (TypeError, ValueError):
+        raw_chat_lag_seconds = None
 
     return {
         "streamerLogin": streamer_login,

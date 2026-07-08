@@ -1001,7 +1001,7 @@ mod tests {
                 id: 0, date: String::new(), start_time: String::new(),
                 duration, start_viewers: 0, peak_viewers: 0, end_viewers: 0,
                 avg_viewers: avg, retention_5m: 0.0, retention_10m: ret, retention_20m: 0.0,
-                dropoff_pct: 0.0, unique_chatters: chatters, first_time_chatters: 0,
+                dropoff_pct: 0.0, unique_chatters: chatters, total_chatter_sessions: chatters, first_time_chatters: 0,
                 returning_chatters: 0, followers_start: 0, followers_end: 0, title: String::new(),
             }
         }

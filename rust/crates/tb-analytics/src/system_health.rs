@@ -4,7 +4,7 @@
 //! Raw-Chat-Ingest-Gesundheit aus `twitch_raw_chat_ingest_health`.
 
 use chrono::{DateTime, Utc};
-use sqlx::PgPool;
+use sqlx::{PgPool, Row};
 
 /// Letzter bekannter Tick aus `twitch_live_state`.
 ///
@@ -33,8 +33,7 @@ pub struct RawChatHealth {
     pub last_insert_ok_at: Option<DateTime<Utc>>,
     pub last_insert_error_at: Option<DateTime<Utc>>,
     pub last_error: Option<String>,
-    /// Sekunden seit dem neuesten der vier Zeitstempel (last_message_at,
-    /// last_insert_ok_at, last_insert_error_at, updated_at).
+    /// Ingest-Lag in Sekunden, wie vom Raw-Chat-Writer gemeldet.
     pub lag_seconds: Option<i64>,
     /// Ob die Zeile aus dem Live-Scope kommt (Streamer gerade live).
     /// Nur wenn `true` soll ein RAW_CHAT_LAG-Warning ausgelöst werden.
@@ -47,16 +46,14 @@ pub struct RawChatHealth {
 /// Bug C: LOWER()-JOIN für case-insensitiven Vergleich.
 /// Bug D: `is_live_scope`-Spalte in beiden CTEs.
 ///
-/// Auswahl-Richtung (Python `_fetch_raw_chat_health_snapshot`,
-/// `api_admin.py:557-564`): `ORDER BY <signal> ASC NULLS LAST LIMIT 1` —
-/// es wird der live Streamer mit dem **ältesten** (stärksten verzögerten)
-/// Signal gewählt, damit der Worst-Case-`RAW_CHAT_LAG`-Warning anschlägt.
+/// Auswahl-Richtung: live Streamer zuerst, darin der höchste gemeldete
+/// Ingest-Lag. Alte Chat-Stille allein ist kein Raw-Chat-Lag.
 ///
 /// Alle Timestamp-Spalten in `twitch_raw_chat_ingest_health` und
 /// `last_seen_at` in `twitch_live_state` sind in Prod TEXT → expliziter
 /// Cast auf timestamptz für Vergleiche und EXTRACT.
 pub async fn raw_chat_health(pool: &PgPool) -> Result<Option<RawChatHealth>, sqlx::Error> {
-    let row = sqlx::query!(
+    let row = sqlx::query(
         r#"
         WITH live_scope AS (
             SELECT
@@ -65,6 +62,7 @@ pub async fn raw_chat_health(pool: &PgPool) -> Result<Option<RawChatHealth>, sql
                 h.last_raw_chat_insert_ok_at::timestamptz  AS last_raw_chat_insert_ok_at,
                 h.last_raw_chat_insert_error_at::timestamptz AS last_raw_chat_insert_error_at,
                 h.last_raw_chat_error AS last_error,
+                h.raw_chat_lag_seconds::BIGINT AS lag_seconds,
                 GREATEST(
                     h.last_raw_chat_message_at::timestamptz,
                     h.last_raw_chat_insert_ok_at::timestamptz,
@@ -85,6 +83,7 @@ pub async fn raw_chat_health(pool: &PgPool) -> Result<Option<RawChatHealth>, sql
                 h.last_raw_chat_insert_ok_at::timestamptz  AS last_raw_chat_insert_ok_at,
                 h.last_raw_chat_insert_error_at::timestamptz AS last_raw_chat_insert_error_at,
                 h.last_raw_chat_error AS last_error,
+                h.raw_chat_lag_seconds::BIGINT AS lag_seconds,
                 GREATEST(
                     h.last_raw_chat_message_at::timestamptz,
                     h.last_raw_chat_insert_ok_at::timestamptz,
@@ -106,14 +105,10 @@ pub async fn raw_chat_health(pool: &PgPool) -> Result<Option<RawChatHealth>, sql
             last_raw_chat_insert_ok_at,
             last_raw_chat_insert_error_at,
             last_error,
-            CASE
-                WHEN newest_signal_at IS NOT NULL
-                THEN EXTRACT(EPOCH FROM (NOW() - newest_signal_at))::BIGINT
-                ELSE NULL
-            END AS lag_seconds,
+            lag_seconds,
             is_live_scope AS "is_live_scope!"
         FROM chosen
-        ORDER BY newest_signal_at ASC NULLS LAST
+        ORDER BY is_live_scope DESC, lag_seconds DESC NULLS LAST, newest_signal_at DESC NULLS LAST
         LIMIT 1
         "#,
     )
@@ -121,13 +116,13 @@ pub async fn raw_chat_health(pool: &PgPool) -> Result<Option<RawChatHealth>, sql
     .await?;
 
     Ok(row.map(|row| RawChatHealth {
-        streamer_login: row.streamer_login,
-        last_message_at: row.last_raw_chat_message_at,
-        last_insert_ok_at: row.last_raw_chat_insert_ok_at,
-        last_insert_error_at: row.last_raw_chat_insert_error_at,
-        last_error: row.last_error,
-        lag_seconds: row.lag_seconds,
-        is_live_scope: row.is_live_scope,
+        streamer_login: row.try_get("streamer_login").ok(),
+        last_message_at: row.try_get("last_raw_chat_message_at").ok().flatten(),
+        last_insert_ok_at: row.try_get("last_raw_chat_insert_ok_at").ok().flatten(),
+        last_insert_error_at: row.try_get("last_raw_chat_insert_error_at").ok().flatten(),
+        last_error: row.try_get("last_error").ok().flatten(),
+        lag_seconds: row.try_get("lag_seconds").ok().flatten(),
+        is_live_scope: row.try_get("is_live_scope").unwrap_or(false),
     }))
 }
 
@@ -178,6 +173,7 @@ mod tests {
                 last_raw_chat_insert_ok_at    TEXT,
                 last_raw_chat_insert_error_at TEXT,
                 last_raw_chat_error           TEXT,
+                raw_chat_lag_seconds          INTEGER,
                 updated_at                    TEXT NOT NULL DEFAULT TO_CHAR(NOW(), 'YYYY-MM-DD"T"HH24:MI:SS"Z"')
             )
             "#,
@@ -251,8 +247,8 @@ mod tests {
         // Timestamp-Spalten in twitch_raw_chat_ingest_health sind TEXT in Prod
         sqlx::query(
             "INSERT INTO twitch_raw_chat_ingest_health \
-             (streamer_login, last_raw_chat_message_at, updated_at) \
-             VALUES ('live_s', (NOW() - INTERVAL '10 seconds')::TEXT, NOW()::TEXT)",
+             (streamer_login, last_raw_chat_message_at, raw_chat_lag_seconds, updated_at) \
+             VALUES ('live_s', (NOW() - INTERVAL '10 seconds')::TEXT, 0, NOW()::TEXT)",
         )
         .execute(&pool)
         .await
@@ -260,8 +256,8 @@ mod tests {
         // Offline-Streamer mit neuerem Signal — darf nicht bevorzugt werden
         sqlx::query(
             "INSERT INTO twitch_raw_chat_ingest_health \
-             (streamer_login, last_raw_chat_message_at, updated_at) \
-             VALUES ('offline_s', (NOW() - INTERVAL '1 second')::TEXT, NOW()::TEXT)",
+             (streamer_login, last_raw_chat_message_at, raw_chat_lag_seconds, updated_at) \
+             VALUES ('offline_s', (NOW() - INTERVAL '1 second')::TEXT, 0, NOW()::TEXT)",
         )
         .execute(&pool)
         .await
@@ -294,12 +290,12 @@ mod tests {
         .execute(&pool)
         .await
         .unwrap();
-        // fresh_s: frisches Signal (10s); stale_s: altes Signal (2h)
+        // fresh_s: kein Lag; stale_s: hoher gemeldeter Ingest-Lag.
         sqlx::query(
             "INSERT INTO twitch_raw_chat_ingest_health \
-                (streamer_login, last_raw_chat_message_at, updated_at) VALUES \
-             ('fresh_s', (NOW() - INTERVAL '10 seconds')::TEXT, (NOW() - INTERVAL '10 seconds')::TEXT), \
-             ('stale_s', (NOW() - INTERVAL '2 hours')::TEXT,    (NOW() - INTERVAL '2 hours')::TEXT)",
+                (streamer_login, last_raw_chat_message_at, raw_chat_lag_seconds, updated_at) VALUES \
+             ('fresh_s', (NOW() - INTERVAL '10 seconds')::TEXT, 0,    (NOW() - INTERVAL '10 seconds')::TEXT), \
+             ('stale_s', (NOW() - INTERVAL '2 hours')::TEXT,    7200, (NOW() - INTERVAL '2 hours')::TEXT)",
         )
         .execute(&pool)
         .await

@@ -72,9 +72,8 @@ const RAW_CHAT_ERROR_LIMIT: usize = 300;
 /// `twitch_raw_chat_ingest_health`-Heartbeat. Fehler werden intern geloggt.
 pub struct ChatterTracker {
     pool: PgPool,
-    /// login → (session_id oder None, Unix-Sekunden des Cache-Eintrags).
-    /// Python cached auch None-Ergebnisse (bot.py Z. 2170–2176).
-    session_cache: DashMap<String, (Option<i64>, i64)>,
+    /// login → (session_id, Unix-Sekunden des Cache-Eintrags).
+    session_cache: DashMap<String, (i64, i64)>,
     /// Wenn `true` (Default), wird das Target-Game-Gate (Gate 6) übersprungen
     /// und Chat aller Spiele persistiert — nötig, damit Scam-Accounts auch
     /// außerhalb von Deadlock-Sessions erfasst werden. Abschaltbar über
@@ -177,13 +176,13 @@ impl ChatterTracker {
     }
 
     /// Offene Session via `twitch_stream_sessions` (bot.py Z. 2168–2190).
-    /// Cached auch None-Ergebnisse für 60s — exakt wie Python.
+    /// Nur Treffer werden gecacht; None-Cache verursacht Raw-Chat-Startlag.
     async fn resolve_session_id(&self, login: &str) -> Result<Option<i64>, sqlx::Error> {
         let now_secs = Utc::now().timestamp();
         if let Some(entry) = self.session_cache.get(login) {
             let (cached_id, cached_at) = *entry;
             if now_secs - cached_at < SESSION_CACHE_TTL_SECS {
-                return Ok(cached_id);
+                return Ok(Some(cached_id));
             }
         }
 
@@ -197,8 +196,9 @@ impl ChatterTracker {
         .fetch_optional(&self.pool)
         .await?;
 
-        self.session_cache
-            .insert(login.to_string(), (session_id, now_secs));
+        if let Some(id) = session_id {
+            self.session_cache.insert(login.to_string(), (id, now_secs));
+        }
         Ok(session_id)
     }
 
@@ -706,6 +706,26 @@ mod db_tests {
             .fetch_one(pool)
             .await
             .unwrap()
+    }
+
+    #[tokio::test]
+    async fn keine_session_wird_nicht_gecached() {
+        let pool = pool_or_skip!("ct_no_none_cache");
+        let tracker = ChatterTracker::with_persist_all_games(pool.clone(), true);
+
+        assert_eq!(tracker.resolve_session_id("cheazycrust").await.unwrap(), None);
+        sqlx::query(
+            "INSERT INTO twitch_stream_sessions (id, streamer_login, ended_at, game_name) \
+             VALUES (1, 'cheazycrust', NULL, 'Deadlock')",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+
+        assert_eq!(
+            tracker.resolve_session_id("cheazycrust").await.unwrap(),
+            Some(1)
+        );
     }
 
     #[tokio::test]

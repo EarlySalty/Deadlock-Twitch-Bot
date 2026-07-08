@@ -1203,15 +1203,17 @@ async fn main() {
     // 1800s), nächtlicher Knowledge-Job (nach 300s, dann täglich) und
     // wöchentlicher Insight-Job (nach 600s, dann alle 7 Tage).
     {
-        let backfill_pool = pool.clone();
-        let handle = tokio::spawn(async move {
-            tb_analytics::post_stream::backfill_post_stream_reports(&backfill_pool, 3).await;
-        });
-        watch_one_shot_task("post_stream_report_backfill", handle);
-        supervisor.spawn("post_stream_report_retry", tb_analytics::post_stream::schedule_report_retry_job(
-            pool.clone(),
-            1800,
-        ));
+        if tb_analytics::post_stream::post_stream_reports_enabled() {
+            let backfill_pool = pool.clone();
+            let handle = tokio::spawn(async move {
+                tb_analytics::post_stream::backfill_post_stream_reports(&backfill_pool, 3).await;
+            });
+            watch_one_shot_task("post_stream_report_backfill", handle);
+            supervisor.spawn(
+                "post_stream_report_retry",
+                tb_analytics::post_stream::schedule_report_retry_job(pool.clone(), 1800),
+            );
+        }
         supervisor.spawn("title_nightly_knowledge", tb_chat::title_jobs::schedule_nightly_knowledge_job(
             pool.clone(),
             300,
