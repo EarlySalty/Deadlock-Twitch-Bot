@@ -124,6 +124,7 @@ async def main() -> int:
 def _platform(value: Any) -> dict[str, Any]:
     return {
         "title": value.title,
+        "title_options": list(value.title_options),
         "description": value.description,
         "hashtags": list(value.hashtags),
     }
@@ -195,12 +196,19 @@ def render_markdown(result: dict[str, Any]) -> str:
         return "\n".join(lines).rstrip() + "\n"
     for platform in ("youtube", "tiktok", "instagram"):
         item = deepseek[platform]
+        title_options = item.get("title_options") or []
         lines.extend(
             [
                 f"### {platform}",
                 "",
                 f"Title: {item['title']}",
                 "",
+            ]
+        )
+        if title_options:
+            lines.extend(["Titeloptionen:", *[f"- {option}" for option in title_options], ""])
+        lines.extend(
+            [
                 item["description"],
                 "",
                 " ".join(item["hashtags"]),

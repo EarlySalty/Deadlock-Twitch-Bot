@@ -17,9 +17,9 @@ class _FakeCompletions:
         self.kwargs = kwargs
         content = """
         {
-          "youtube": {"title": "Big Deadlock Moment", "description": "Kurz und stark.", "hashtags": ["Deadlock", "gaming"]},
-          "tiktok": {"title": "Deadlock clip", "description": "Sauberer Fight.", "hashtags": ["Deadlock", "twitch"]},
-          "instagram": {"title": "Deadlock Highlight", "description": "Der Moment sitzt.", "hashtags": ["Deadlock", "reels"]}
+          "youtube": {"title": "Er hat gelernt", "title_options": ["Er hat gelernt", "Der schnellste Throw"], "description": "Kurz und stark. #Deadlock #Fail", "hashtags": ["Deadlock", "gaming", "clip", "fail"]},
+          "tiktok": {"title": "Deadlock clip", "title_options": ["Deadlock clip"], "description": "Sauberer Fight.", "hashtags": ["Deadlock", "twitch"]},
+          "instagram": {"title": "Deadlock Highlight", "title_options": ["Deadlock Highlight"], "description": "Der Moment sitzt.", "hashtags": ["Deadlock", "reels"]}
         }
         """
         usage = SimpleNamespace(
@@ -79,7 +79,10 @@ class DeepSeekProviderTests(unittest.IsolatedAsyncioTestCase):
 
         response = await provider.generate(LLMRequest(transcript="Pocket gewinnt den Fight."))
 
-        self.assertEqual(response.youtube.title, "Big Deadlock Moment")
+        self.assertEqual(response.youtube.title, "Er hat gelernt")
+        self.assertEqual(response.youtube.title_options, ("Er hat gelernt", "Der schnellste Throw"))
+        self.assertEqual(response.youtube.description, "Kurz und stark.")
+        self.assertEqual(response.youtube.hashtags, ("#Deadlock", "#gaming", "#fail"))
         self.assertEqual(response.provider, "deepseek")
         self.assertEqual(client.completions.kwargs["response_format"], {"type": "json_object"})
         self.assertNotIn("extra_body", client.completions.kwargs)
@@ -99,13 +102,19 @@ class SocialClipProbeHelpersTests(unittest.TestCase):
                 "correction": {"text": "corrected"},
                 "deepseek": {
                     "youtube": {"title": "YT", "description": "D", "hashtags": ["#Deadlock"]},
-                    "tiktok": {"title": "TT", "description": "D", "hashtags": ["#Deadlock"]},
+                    "tiktok": {
+                        "title": "TT",
+                        "title_options": ["TT", "TikTok Hook"],
+                        "description": "D",
+                        "hashtags": ["#Deadlock"],
+                    },
                     "instagram": {"title": "IG", "description": "D", "hashtags": ["#Deadlock"]},
                 },
             }
         )
         self.assertIn("corrected", markdown)
         self.assertIn("Title: YT", markdown)
+        self.assertIn("- TikTok Hook", markdown)
 
     def test_render_markdown_keeps_transcript_without_deepseek(self) -> None:
         markdown = render_markdown(
