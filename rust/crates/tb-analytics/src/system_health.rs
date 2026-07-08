@@ -106,7 +106,7 @@ pub async fn raw_chat_health(pool: &PgPool) -> Result<Option<RawChatHealth>, sql
             last_raw_chat_insert_error_at,
             last_error,
             lag_seconds,
-            is_live_scope AS "is_live_scope!"
+            is_live_scope
         FROM chosen
         ORDER BY is_live_scope DESC, lag_seconds DESC NULLS LAST, newest_signal_at DESC NULLS LAST
         LIMIT 1

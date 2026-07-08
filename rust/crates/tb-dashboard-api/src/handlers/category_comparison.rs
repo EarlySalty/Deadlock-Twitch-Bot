@@ -4,10 +4,10 @@
 //! 8 SQL-Queries, Python-seitige Percentile-Berechnungen in Rust repliziert.
 
 use axum::{
+    Json,
     extract::{Query, State},
     http::StatusCode,
     response::IntoResponse,
-    Json,
 };
 use chrono::{DateTime, Duration, Utc};
 use serde::Deserialize;
@@ -150,13 +150,13 @@ pub async fn category_comparison_handler(
             FROM twitch_session_chatters
             GROUP BY session_id
         )
-        SELECT AVG(s.avg_viewers) AS "avg_v?",
-               MAX(s.peak_viewers)::float8 AS "peak_v?",
-               AVG(s.retention_10m) AS "ret10?",
+        SELECT AVG(s.avg_viewers) AS "avg_v",
+               MAX(s.peak_viewers)::float8 AS "peak_v",
+               AVG(s.retention_10m) AS "ret10",
                AVG(CASE WHEN s.avg_viewers > 0
                    THEN (CASE WHEN scp.has_any_chatters = 1 THEN COALESCE(fc.active_chatters, 0)
                               ELSE COALESCE(s.unique_chatters, 0) END) * 100.0 / s.avg_viewers
-                   ELSE 0 END) AS "chat_h?"
+                   ELSE 0 END) AS "chat_h"
         FROM twitch_stream_sessions s
         LEFT JOIN filtered_chatters fc ON fc.session_id = s.id
         LEFT JOIN session_chatter_presence scp ON scp.session_id = s.id
@@ -283,11 +283,11 @@ pub async fn category_comparison_handler(
                 FROM twitch_session_chatters
                 GROUP BY session_id
             )
-            SELECT AVG(s.retention_10m) AS "avg_ret?",
+            SELECT AVG(s.retention_10m) AS "avg_ret",
                    AVG(CASE WHEN s.avg_viewers > 0
                        THEN (CASE WHEN scp.has_any_chatters = 1 THEN COALESCE(fc.active_chatters, 0)
                                   ELSE COALESCE(s.unique_chatters, 0) END) * 100.0 / s.avg_viewers
-                       ELSE 0 END) AS "avg_chat?"
+                       ELSE 0 END) AS "avg_chat"
             FROM twitch_stream_sessions s
             LEFT JOIN filtered_chatters fc ON fc.session_id = s.id
             LEFT JOIN session_chatter_presence scp ON scp.session_id = s.id
@@ -331,11 +331,11 @@ pub async fn category_comparison_handler(
                 FROM twitch_session_chatters
                 GROUP BY session_id
             )
-            SELECT AVG(s.retention_10m) AS "avg_ret?",
+            SELECT AVG(s.retention_10m) AS "avg_ret",
                    AVG(CASE WHEN s.avg_viewers > 0
                        THEN (CASE WHEN scp.has_any_chatters = 1 THEN COALESCE(fc.active_chatters, 0)
                                   ELSE COALESCE(s.unique_chatters, 0) END) * 100.0 / s.avg_viewers
-                       ELSE 0 END) AS "avg_chat?"
+                       ELSE 0 END) AS "avg_chat"
             FROM twitch_stream_sessions s
             LEFT JOIN filtered_chatters fc ON fc.session_id = s.id
             LEFT JOIN session_chatter_presence scp ON scp.session_id = s.id
@@ -449,7 +449,7 @@ pub async fn category_comparison_handler(
             SELECT AVG(CASE WHEN s.avg_viewers > 0
                        THEN (CASE WHEN scp.has_any_chatters = 1 THEN COALESCE(fc.active_chatters, 0)
                                   ELSE COALESCE(s.unique_chatters, 0) END) * 100.0 / s.avg_viewers
-                       ELSE 0 END) AS "ch?"
+                       ELSE 0 END) AS "ch"
             FROM twitch_stream_sessions s
             LEFT JOIN filtered_chatters fc ON fc.session_id = s.id
             LEFT JOIN session_chatter_presence scp ON scp.session_id = s.id
@@ -558,14 +558,14 @@ pub async fn category_comparison_handler(
                     FROM twitch_session_chatters
                     GROUP BY session_id
                 )
-                SELECT LOWER(s.streamer_login) AS "login!",
-                       AVG(s.avg_viewers) AS "avg_v?",
-                       MAX(s.peak_viewers)::float8 AS "peak_v?",
-                       AVG(s.retention_10m) AS "ret10?",
+                SELECT LOWER(s.streamer_login) AS "login",
+                       AVG(s.avg_viewers) AS "avg_v",
+                       MAX(s.peak_viewers)::float8 AS "peak_v",
+                       AVG(s.retention_10m) AS "ret10",
                        AVG(CASE WHEN s.avg_viewers > 0
                            THEN (CASE WHEN scp.has_any_chatters = 1 THEN COALESCE(fc.active_chatters, 0)
                                       ELSE COALESCE(s.unique_chatters, 0) END) * 100.0 / s.avg_viewers
-                           ELSE 0 END) AS "chat_h?"
+                           ELSE 0 END) AS "chat_h"
                 FROM twitch_stream_sessions s
                 LEFT JOIN filtered_chatters fc ON fc.session_id = s.id
                 LEFT JOIN session_chatter_presence scp ON scp.session_id = s.id
