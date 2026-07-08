@@ -451,6 +451,8 @@ pub struct OverviewSession {
     pub dropoff_pct: f64,
     #[serde(rename = "uniqueChatters")]
     pub unique_chatters: i64,
+    #[serde(rename = "totalChatterSessions")]
+    pub total_chatter_sessions: i64,
     #[serde(rename = "firstTimeChatters")]
     pub first_time_chatters: i64,
     #[serde(rename = "returningChatters")]
@@ -593,6 +595,7 @@ pub async fn overview_sessions(
             retention_20m: clamp_pct(r.retention_20m.unwrap_or(0.0)),
             dropoff_pct: r.dropoff_pct.unwrap_or(0.0) * 100.0,
             unique_chatters: r.unique_chatters.unwrap_or(0),
+            total_chatter_sessions: r.unique_chatters.unwrap_or(0),
             first_time_chatters: r.first_time_chatters.unwrap_or(0),
             returning_chatters: r.returning_chatters.unwrap_or(0),
             followers_start: r.followers_start.unwrap_or(0),

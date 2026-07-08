@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 import re
 from typing import Any
 
@@ -34,6 +35,15 @@ log = logging.getLogger("TwitchStreams.PostStreamAnalysis")
 
 REPORT_VARIANTS_AB = (REPORT_VARIANT_COMPACT, REPORT_VARIANT_FULL)
 REPORT_PROMPT_VERSION = "post_stream_report_v3_twitch_2026-05-01"
+
+
+def _post_stream_reports_enabled() -> bool:
+    return os.getenv("TWITCH_POST_STREAM_REPORTS_ENABLED", "").strip().lower() in {
+        "1",
+        "true",
+        "yes",
+        "on",
+    }
 
 
 def _sanitize_log_value(value: Any) -> str:
@@ -657,15 +667,22 @@ async def trigger_post_stream_analysis(
     session_id: int | None = None,
 ) -> None:
     """Triggere nach Stream-Ende eine planbasierte Post-Stream-Analyse."""
+    if not _post_stream_reports_enabled():
+        log.debug("PostStream: automatische Reports sind deaktiviert")
+        return
+
     streamer = str(streamer_login or "").strip().lower()
     if not streamer:
         return
 
     try:
-        model = _plan_ai_model(streamer) or AI_MODEL_MINIMAX
+        model = _plan_ai_model(streamer)
     except Exception:
-        log.exception("PostStream: Plan-Check fehlgeschlagen fuer %s, verwende Minimax", streamer)
-        model = AI_MODEL_MINIMAX
+        log.exception("PostStream: Plan-Check fehlgeschlagen fuer %s", streamer)
+        return
+    if not model:
+        log.debug("PostStream: kein Analytics-Entitlement fuer %s", streamer)
+        return
 
     if session_id is None:
         try:
@@ -861,6 +878,10 @@ async def backfill_post_stream_reports(*, sessions_per_streamer: int = 3) -> Non
 
     Wird beim Bot-Start einmalig aufgerufen.
     """
+    if not _post_stream_reports_enabled():
+        log.debug("PostStream Backfill: automatische Reports sind deaktiviert")
+        return
+
     log.info("PostStream Backfill: Starte (max. %d Sessions pro Streamer)", sessions_per_streamer)
     try:
         with storage.transaction() as conn:
@@ -933,6 +954,10 @@ async def retry_failed_reports() -> None:
     Wird periodisch aufgerufen (alle 30 Minuten).
     """
     import asyncio as _asyncio
+
+    if not _post_stream_reports_enabled():
+        log.debug("PostStream Retry: automatische Reports sind deaktiviert")
+        return
 
     # 1. Stuck-Pending-Cleanup: Eintraege die >10 Minuten in 'pending' stecken → failed
     try:
@@ -1018,6 +1043,9 @@ async def retry_failed_reports() -> None:
 async def schedule_report_retry_job(start_delay_s: float = 1800) -> None:
     """Periodischer Job: retried failed Reports alle 30 Minuten. Via asyncio.create_task() starten."""
     import asyncio as _asyncio
+    if not _post_stream_reports_enabled():
+        log.debug("PostStream Retry: automatischer Job ist deaktiviert")
+        return
     await _asyncio.sleep(start_delay_s)
     while True:
         try:

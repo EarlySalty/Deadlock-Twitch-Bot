@@ -1,11 +1,11 @@
 //! Handler für `GET /twitch/api/admin/system/health`.
 
+use crate::auth::level::DashboardAuthLevel;
 use axum::{extract::State, response::IntoResponse, Json};
 use chrono::{DateTime, Utc};
 use serde::Serialize;
 use sqlx::PgPool;
 use tb_analytics::system_health::{raw_chat_health, system_last_tick};
-use crate::auth::level::DashboardAuthLevel;
 use tb_http_core::ApiError;
 
 use crate::process_info;
@@ -285,9 +285,7 @@ mod tests {
                 Some(d) => d,
                 None => {
                     if std::env::var("TB_TEST_REQUIRE_DB").as_deref() == Ok("1") {
-                        panic!(
-                            "TB_TEST_REQUIRE_DB=1 ist gesetzt, aber TB_TEST_DATABASE_URL fehlt"
-                        );
+                        panic!("TB_TEST_REQUIRE_DB=1 ist gesetzt, aber TB_TEST_DATABASE_URL fehlt");
                     }
                     eprintln!("SKIP: TB_TEST_DATABASE_URL nicht gesetzt");
                     return;
@@ -336,6 +334,7 @@ mod tests {
                 last_raw_chat_insert_ok_at    TEXT,
                 last_raw_chat_insert_error_at TEXT,
                 last_raw_chat_error           TEXT,
+                raw_chat_lag_seconds          INTEGER,
                 updated_at                    TEXT NOT NULL DEFAULT (NOW()::text)
             )
             "#,
@@ -444,8 +443,8 @@ mod tests {
         .unwrap();
         sqlx::query(
             "INSERT INTO twitch_raw_chat_ingest_health \
-             (streamer_login, last_raw_chat_message_at) \
-             VALUES ('lag_streamer', (NOW() - INTERVAL '180 seconds')::text)",
+             (streamer_login, last_raw_chat_message_at, raw_chat_lag_seconds) \
+             VALUES ('lag_streamer', (NOW() - INTERVAL '180 seconds')::text, 180)",
         )
         .execute(&pool)
         .await
@@ -464,9 +463,7 @@ mod tests {
         let v: serde_json::Value = serde_json::from_slice(&b).unwrap();
         let warnings = v["serviceWarnings"].as_array().unwrap();
         assert!(
-            !warnings
-                .iter()
-                .any(|w| w["code"] == "RAW_CHAT_LAG"),
+            !warnings.iter().any(|w| w["code"] == "RAW_CHAT_LAG"),
             "180s-Lag darf keine RAW_CHAT_LAG-Warnung erzeugen"
         );
     }

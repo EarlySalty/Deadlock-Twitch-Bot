@@ -87,9 +87,28 @@ pub async fn monthly_stats_handler(
             Ok(s) => s,
             Err(resp) => return resp,
         };
+    let bots: Vec<String> = tb_analytics::overview::KNOWN_CHAT_BOTS
+        .iter()
+        .map(|s| s.to_string())
+        .collect();
 
-    let rows = sqlx::query!(
+    let rows = sqlx::query(
         r#"
+        WITH filtered_chatters AS (
+            SELECT sc.session_id,
+                   COUNT(DISTINCT CASE WHEN COALESCE(sc.messages, 0) > 0
+                        THEN COALESCE(NULLIF(sc.chatter_login, ''), sc.chatter_id) END)::BIGINT
+                        AS active_chatters
+            FROM twitch_session_chatters sc
+            WHERE sc.chatter_login IS NULL OR sc.chatter_login = ''
+               OR LOWER(sc.chatter_login) <> ALL($3::text[])
+            GROUP BY sc.session_id
+        ),
+        session_chatter_presence AS (
+            SELECT session_id, 1 AS has_any_chatters
+            FROM twitch_session_chatters
+            GROUP BY session_id
+        )
         SELECT
             EXTRACT(YEAR  FROM s.started_at)::integer AS "year!",
             EXTRACT(MONTH FROM s.started_at)::integer AS "month!",
@@ -100,18 +119,22 @@ pub async fn monthly_stats_handler(
             SUM(CASE WHEN s.follower_delta IS NOT NULL
                      AND NOT (s.followers_end = 0 AND s.followers_start > 0)
                      THEN s.follower_delta ELSE 0 END) AS "follower_delta!",
-            SUM(s.unique_chatters) AS "total_chatter_sessions?",
+            SUM(CASE WHEN scp.has_any_chatters = 1 THEN COALESCE(fc.active_chatters, 0)
+                     ELSE COALESCE(s.unique_chatters, 0) END)::BIGINT AS "total_chatter_sessions?",
             COUNT(*) AS "stream_count!"
         FROM twitch_stream_sessions s
+        LEFT JOIN filtered_chatters fc ON fc.session_id = s.id
+        LEFT JOIN session_chatter_presence scp ON scp.session_id = s.id
         WHERE s.started_at >= $1
           AND s.ended_at IS NOT NULL
           AND (COALESCE($2, '') = '' OR LOWER(s.streamer_login) = $2)
         GROUP BY 1, 2
         ORDER BY 1 DESC, 2 DESC
         "#,
-        since,
-        streamer.as_deref()
     )
+    .bind(since)
+    .bind(streamer.as_deref())
+    .bind(&bots)
     .fetch_all(&pool)
     .await;
 
@@ -124,20 +147,20 @@ pub async fn monthly_stats_handler(
             let items: Vec<serde_json::Value> = rows
                 .into_iter()
                 .map(|r| {
-                    let year = r.year;
-                    let month = r.month;
+                    let year: i32 = r.try_get("year").unwrap_or(0);
+                    let month: i32 = r.try_get("month").unwrap_or(0);
                     let label = MONTH_LABELS.get(month as usize).copied().unwrap_or("");
                     json!({
                         "year": year,
                         "month": month,
                         "monthLabel": label,
-                        "totalHoursWatched": r.hours_watched.unwrap_or(0.0),
-                        "totalAirtime": r.airtime.unwrap_or(0.0),
-                        "avgViewers": r.avg_viewers.unwrap_or(0.0),
-                        "peakViewers": r.peak_viewers.unwrap_or(0),
-                        "followerDelta": r.follower_delta,
-                        "totalChatterSessions": r.total_chatter_sessions.unwrap_or(0),
-                        "streamCount": r.stream_count,
+                        "totalHoursWatched": r.try_get::<Option<f64>, _>("hours_watched").ok().flatten().unwrap_or(0.0),
+                        "totalAirtime": r.try_get::<Option<f64>, _>("airtime").ok().flatten().unwrap_or(0.0),
+                        "avgViewers": r.try_get::<Option<f64>, _>("avg_viewers").ok().flatten().unwrap_or(0.0),
+                        "peakViewers": r.try_get::<Option<i64>, _>("peak_viewers").ok().flatten().unwrap_or(0),
+                        "followerDelta": r.try_get::<i64, _>("follower_delta").unwrap_or(0),
+                        "totalChatterSessions": r.try_get::<Option<i64>, _>("total_chatter_sessions").ok().flatten().unwrap_or(0),
+                        "streamCount": r.try_get::<i64, _>("stream_count").unwrap_or(0),
                     })
                 })
                 .collect();
@@ -497,6 +520,13 @@ mod tests {
                  follower_delta INTEGER, followers_start INTEGER, followers_end INTEGER, \
                  unique_chatters INTEGER, \
                  started_at TIMESTAMPTZ, ended_at TIMESTAMPTZ)",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+        sqlx::query(
+            "CREATE TABLE twitch_session_chatters (\
+                 session_id BIGINT, chatter_login TEXT, chatter_id TEXT, messages INTEGER)",
         )
         .execute(&pool)
         .await

@@ -1729,6 +1729,21 @@ pub async fn build_post_stream_snapshot(
 /// Prompt-Version für die Persistenz (Python `REPORT_PROMPT_VERSION`).
 pub const REPORT_PROMPT_VERSION: &str = "post_stream_report_v3_twitch_2026-05-01";
 
+fn post_stream_reports_enabled_value(value: Option<&str>) -> bool {
+    matches!(
+        value.map(str::trim).map(str::to_ascii_lowercase).as_deref(),
+        Some("1" | "true" | "yes" | "on")
+    )
+}
+
+pub fn post_stream_reports_enabled() -> bool {
+    post_stream_reports_enabled_value(
+        std::env::var("TWITCH_POST_STREAM_REPORTS_ENABLED")
+            .ok()
+            .as_deref(),
+    )
+}
+
 /// Großes v2-Report-Prompt (Python `_REPORT_V2_PROMPT_TEMPLATE`, ASCII-Umschrift
 /// wie in der Quelle). `{snapshot_json}` wird durch das JSON-Datenpaket ersetzt.
 const REPORT_V2_PROMPT_TEMPLATE: &str = r#"SPRACHE: Antworte AUSSCHLIESSLICH auf Deutsch. Verwende keine chinesischen Zeichen, keine japanischen Zeichen und keine anderen nicht-lateinischen Schriften. Nur deutsches Alphabet.
@@ -2128,6 +2143,11 @@ pub async fn trigger_post_stream_analysis(
     streamer_login: &str,
     session_id: Option<i64>,
 ) {
+    if !post_stream_reports_enabled() {
+        tracing::debug!("PostStream: automatische Reports sind deaktiviert");
+        return;
+    }
+
     let streamer = streamer_login.trim().to_lowercase();
     if streamer.is_empty() {
         return;
@@ -2291,6 +2311,11 @@ pub async fn trigger_post_stream_analysis(
 /// Reports für die letzten N abgeschlossenen Sessions OHNE done-Report je aktivem
 /// Partner. 2s-Pause zwischen Triggern.
 pub async fn backfill_post_stream_reports(pool: &PgPool, sessions_per_streamer: i64) {
+    if !post_stream_reports_enabled() {
+        tracing::debug!("PostStream Backfill: automatische Reports sind deaktiviert");
+        return;
+    }
+
     if let Err(error) = ensure_report_ab_columns(pool).await {
         tracing::warn!(%error, "PostStream Backfill: Report-AB-Spalten nicht sichergestellt");
     }
@@ -2348,6 +2373,11 @@ pub async fn backfill_post_stream_reports(pool: &PgPool, sessions_per_streamer: 
 /// aktiver Partner mit retry_count<3, (3) erhöht retry_count, (4) re-triggert je
 /// Session (3s-Pause).
 pub async fn retry_failed_reports(pool: &PgPool) {
+    if !post_stream_reports_enabled() {
+        tracing::debug!("PostStream Retry: automatische Reports sind deaktiviert");
+        return;
+    }
+
     // 1. Stuck-Pending-Cleanup (>10 min in pending → failed).
     match sqlx::query_scalar!(
         "UPDATE twitch_stream_ai_reports \
@@ -2429,6 +2459,11 @@ pub async fn retry_failed_reports(pool: &PgPool) {
 /// `start_delay_s`, dann ruft alle 30 min `retry_failed_reports`. Als tokio-Task
 /// starten (läuft endlos, schluckt eigene Fehler).
 pub async fn schedule_report_retry_job(pool: PgPool, start_delay_s: u64) {
+    if !post_stream_reports_enabled() {
+        tracing::debug!("PostStream Retry: automatischer Job ist deaktiviert");
+        return;
+    }
+
     tokio::time::sleep(std::time::Duration::from_secs(start_delay_s)).await;
     loop {
         retry_failed_reports(&pool).await;
@@ -2536,6 +2571,15 @@ mod tests {
     fn ledger_purpose_ist_post_stream_report() {
         // Vertrag mit dem Audit (P2.70): purpose='post-stream-report'.
         assert_eq!(MINIMAX_LEDGER_PURPOSE, "post-stream-report");
+    }
+
+    #[test]
+    fn post_stream_reports_sind_default_off() {
+        assert!(!post_stream_reports_enabled_value(None));
+        assert!(!post_stream_reports_enabled_value(Some("")));
+        assert!(post_stream_reports_enabled_value(Some("1")));
+        assert!(post_stream_reports_enabled_value(Some("true")));
+        assert!(post_stream_reports_enabled_value(Some("on")));
     }
 
     #[tokio::test]
@@ -3441,6 +3485,7 @@ mod tests {
 
     #[tokio::test]
     async fn trigger_persistiert_ab_reports() {
+        std::env::set_var("TWITCH_POST_STREAM_REPORTS_ENABLED", "1");
         let Some(pool) = core_pool_or_skip("t6l_post_stream_trigger").await else {
             return;
         };
@@ -3533,6 +3578,7 @@ mod tests {
 
     #[tokio::test]
     async fn backfill_nur_sessions_ohne_done_report() {
+        std::env::set_var("TWITCH_POST_STREAM_REPORTS_ENABLED", "1");
         let Some(pool) = core_pool_or_skip("t6n_post_stream_backfill").await else {
             return;
         };
@@ -3583,6 +3629,7 @@ mod tests {
 
     #[tokio::test]
     async fn retry_stuck_cleanup_und_requeue() {
+        std::env::set_var("TWITCH_POST_STREAM_REPORTS_ENABLED", "1");
         let Some(pool) = core_pool_or_skip("t6o_post_stream_retry").await else {
             return;
         };

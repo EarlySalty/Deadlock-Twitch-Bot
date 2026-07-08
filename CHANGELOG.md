@@ -1,3 +1,11 @@
+## #341 — Twitch-Dashboard zählt Chat und Raw-Chat wieder korrekt
+
+**Problem:** Einige Dashboard-Auswertungen nutzten aufsummierte Session-Werte statt echte aktive Chatter. Raw-Chat konnte beim Streamstart bis zu einer Minute Nachrichten überspringen, wenn die Session noch nicht angelegt war. Außerdem liefen automatische KI-Stream-Reports ohne explizites Opt-in an.
+
+**Änderung:** Die Dashboard-Zahlen lesen aktive Chatteilnehmer aus den Detaildaten und filtern bekannte Bots. Raw-Chat cached fehlende Sessions nicht mehr und die Health-Anzeige nutzt den gemessenen Ingest-Lag statt alte Chat-Stille. KI-Reports starten nur noch, wenn sie ausdrücklich aktiviert sind.
+
+**Aktuelles Verhalten:** Monatswerte, Kategorievergleich und Session-Tabellen zeigen konsistent echte Chatwerte. Raw-Chat verliert beim Start keine Nachrichten mehr durch den Session-Cache, stille Chats erzeugen keinen falschen Lag-Alarm, und KI-Stream-Reports bleiben standardmäßig aus.
+
 ## #340 — Clip-Probe erstellt Transcript und Social-Vorschläge
 
 **Problem:** Für bestehende Twitch-Clips fehlte ein schneller Testlauf, der zeigt, ob aus einem einzelnen Clip genug verwertbarer Kontext für Social-Titel und Tags entsteht.
