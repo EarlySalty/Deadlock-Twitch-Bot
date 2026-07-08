@@ -638,7 +638,7 @@ async fn bestandszeile_ohne_stream_id_mit_message_id_postet_neuen_stream() {
 }
 
 #[tokio::test]
-async fn echter_flap_innerhalb_cooldown_postet_ohne_ping() {
+async fn echter_flap_innerhalb_cooldown_editiert_bestehenden_post() {
     let pool = pool_or_skip!("t4c_announce_flap_cooldown");
     insert_active_partner(&pool, "drag", "42").await;
 
@@ -657,15 +657,16 @@ async fn echter_flap_innerhalb_cooldown_postet_ohne_ping() {
     engine.tick().await;
 
     let sends = sink.sends.lock().unwrap();
-    assert_eq!(sends.len(), 2);
+    assert_eq!(sends.len(), 1);
     assert!(
         !sends[0].suppress_role_pings,
         "erstes Announcement pingt normal"
     );
-    assert!(
-        sends[1].suppress_role_pings,
-        "echter stream_id-Wechsel im Cooldown postet ohne Rollen-Ping"
-    );
+    drop(sends);
+    let syncs = sink.syncs.lock().unwrap();
+    assert_eq!(syncs.len(), 1);
+    assert_eq!(syncs[0].previous_message_id.as_deref(), Some("msg-1"));
+    assert_eq!(syncs[0].stream_id.as_deref(), Some("s-2"));
 }
 
 #[tokio::test]
@@ -718,7 +719,8 @@ async fn reannounce_cooldown_verlaengert_sich_bei_jedem_ended_posting() {
 
     source.set_streams(vec![live_stream("drag", "42", "s-2", 12)]);
     engine.tick().await;
-    assert!(sink.sends.lock().unwrap()[1].suppress_role_pings);
+    assert_eq!(sink.sends.lock().unwrap().len(), 1);
+    assert_eq!(sink.syncs.lock().unwrap().len(), 1);
 
     set_reannounce_cooldown_remaining(&pool, "drag", 5.0 * 60.0).await;
     source.set_streams(vec![]);
@@ -730,9 +732,9 @@ async fn reannounce_cooldown_verlaengert_sich_bei_jedem_ended_posting() {
     engine.tick().await;
     {
         let sends = sink.sends.lock().unwrap();
-        assert_eq!(sends.len(), 3);
+        assert_eq!(sends.len(), 2);
         assert!(
-            !sends[2].suppress_role_pings,
+            !sends[1].suppress_role_pings,
             "nach mehr als 5 Minuten ist es ein normaler neuer Post"
         );
     }
@@ -741,9 +743,9 @@ async fn reannounce_cooldown_verlaengert_sich_bei_jedem_ended_posting() {
     source.set_streams(vec![live_stream("drag", "42", "s-4", 16)]);
     engine.tick().await;
     let sends = sink.sends.lock().unwrap();
-    assert_eq!(sends.len(), 4);
+    assert_eq!(sends.len(), 3);
     assert!(
-        !sends[3].suppress_role_pings,
+        !sends[2].suppress_role_pings,
         "restart t26 darf wieder pingen, weil der t10-Cooldown abgelaufen ist"
     );
 }

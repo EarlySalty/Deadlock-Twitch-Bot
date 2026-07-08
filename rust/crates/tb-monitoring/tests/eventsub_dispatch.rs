@@ -379,7 +379,8 @@ async fn stream_online_gleicher_stream_respektiert_reconnect_fenster() {
              last_discord_message_id, last_tracking_token)
          VALUES
             ('42', 'drag', 0, 'same-stream', 'keep-msg', 'keep-token'),
-            ('43', 'flip', 0, 'same-stream', 'drop-msg', 'drop-token')",
+            ('43', 'flip', 0, 'same-stream', 'drop-msg', 'drop-token'),
+            ('44', 'crash', 0, 'old-stream', 'crash-msg', 'crash-token')",
     )
     .execute(&pool)
     .await
@@ -402,19 +403,34 @@ async fn stream_online_gleicher_stream_respektiert_reconnect_fenster() {
         )
         .await
         .unwrap();
+    GuardStore::new(pool.clone())
+        .claim(
+            GuardKind::BusinessEffect,
+            "announcement_reannounce:crash",
+            5.0 * 60.0,
+            epoch_clock(),
+        )
+        .await
+        .unwrap();
 
     let hooks = Arc::new(RecordingHooks::default());
     let (dispatcher, runtime, store) = build_stack(&pool, hooks);
     for (user_id, login, message_id) in [
         ("42", "drag", "m-same-active"),
         ("43", "flip", "m-same-expired"),
+        ("44", "crash", "m-changed-active"),
     ] {
+        let stream_id = if login == "crash" {
+            "new-stream"
+        } else {
+            "same-stream"
+        };
         let body = serde_json::json!({
             "subscription": {"type": "stream.online"},
             "event": {
                 "broadcaster_user_id": user_id,
                 "broadcaster_user_login": login,
-                "id": "same-stream",
+                "id": stream_id,
                 "started_at": "2026-06-09T17:00:00Z"
             }
         });
@@ -438,8 +454,15 @@ async fn stream_online_gleicher_stream_respektiert_reconnect_fenster() {
     .fetch_one(&pool)
     .await
     .unwrap();
+    let crash_kept: Option<String> = sqlx::query_scalar(
+        "SELECT last_discord_message_id FROM twitch_live_state WHERE twitch_user_id = '44'",
+    )
+    .fetch_one(&pool)
+    .await
+    .unwrap();
     assert_eq!(kept.as_deref(), Some("keep-msg"));
     assert_eq!(dropped, None);
+    assert_eq!(crash_kept.as_deref(), Some("crash-msg"));
 }
 
 /// Go-Live-Enrichment: stream.online holt Titel/Kategorie über den
