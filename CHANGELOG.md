@@ -1,3 +1,11 @@
+## #343 — Dashboard liest Kennzahlen wieder aus den richtigen Spalten
+
+**Problem:** Einige Dashboard-Abfragen benannten ihre Ergebnis-Spalten so, dass die Anwendung die Werte nicht unter dem erwarteten Namen fand. Dadurch konnten Monatswerte, Kategorievergleich und Raw-Chat-Status trotz vorhandener Daten auf Null oder „offline" zurückfallen.
+
+**Änderung:** Die betroffenen Abfragen verwenden jetzt dieselben Spaltennamen, die beim Auslesen erwartet werden. Der Monats-Test prüft zusätzlich die echten Kennzahlen statt nur eine erfolgreiche Antwort.
+
+**Aktuelles Verhalten:** Monatsstatistik, Kategorievergleich und Raw-Chat-Health übernehmen die berechneten Werte wieder direkt aus der Datenbank statt still auf Defaults zu fallen.
+
 ## #342 — Clip-Probe nutzt Fireworks für DeepSeek
 
 **Problem:** Der Clip-Test erwartete einen direkten DeepSeek-Zugang, obwohl der vorhandene KI-Zugang im Bot über Fireworks läuft.

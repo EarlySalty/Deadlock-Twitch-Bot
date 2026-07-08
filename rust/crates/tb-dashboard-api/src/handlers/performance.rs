@@ -10,10 +10,10 @@
 //! Auth: `DashboardAuthLevel::None` → 401; sonst erlaubt.
 
 use axum::{
+    Json,
     extract::{Query, State},
     http::StatusCode,
     response::IntoResponse,
-    Json,
 };
 use chrono::{DateTime, Duration, Utc};
 use serde::Deserialize;
@@ -110,18 +110,18 @@ pub async fn monthly_stats_handler(
             GROUP BY session_id
         )
         SELECT
-            EXTRACT(YEAR  FROM s.started_at)::integer AS "year!",
-            EXTRACT(MONTH FROM s.started_at)::integer AS "month!",
-            SUM(s.avg_viewers * s.duration_seconds / 3600.0) AS "hours_watched?",
-            SUM(s.duration_seconds / 3600.0)::float8 AS "airtime?",
-            AVG(s.avg_viewers) AS "avg_viewers?",
-            MAX(s.peak_viewers)::bigint AS "peak_viewers?",
+            EXTRACT(YEAR  FROM s.started_at)::integer AS "year",
+            EXTRACT(MONTH FROM s.started_at)::integer AS "month",
+            SUM(s.avg_viewers * s.duration_seconds / 3600.0) AS "hours_watched",
+            SUM(s.duration_seconds / 3600.0)::float8 AS "airtime",
+            AVG(s.avg_viewers) AS "avg_viewers",
+            MAX(s.peak_viewers)::bigint AS "peak_viewers",
             SUM(CASE WHEN s.follower_delta IS NOT NULL
                      AND NOT (s.followers_end = 0 AND s.followers_start > 0)
-                     THEN s.follower_delta ELSE 0 END) AS "follower_delta!",
+                     THEN s.follower_delta ELSE 0 END) AS "follower_delta",
             SUM(CASE WHEN scp.has_any_chatters = 1 THEN COALESCE(fc.active_chatters, 0)
-                     ELSE COALESCE(s.unique_chatters, 0) END)::BIGINT AS "total_chatter_sessions?",
-            COUNT(*) AS "stream_count!"
+                     ELSE COALESCE(s.unique_chatters, 0) END)::BIGINT AS "total_chatter_sessions",
+            COUNT(*) AS "stream_count"
         FROM twitch_stream_sessions s
         LEFT JOIN filtered_chatters fc ON fc.session_id = s.id
         LEFT JOIN session_chatter_presence scp ON scp.session_id = s.id
@@ -403,7 +403,7 @@ pub async fn viewer_count_timeline_handler(
                     StatusCode::BAD_REQUEST,
                     Json(json!({"error":"Streamer required"})),
                 )
-                    .into_response()
+                    .into_response();
             }
             Err(resp) => return resp,
         };
@@ -463,6 +463,8 @@ fn viewer_timeline_bucket_sql(days: i64) -> &'static str {
 
 #[cfg(test)]
 mod tests {
+    use chrono::Datelike;
+
     use super::viewer_timeline_bucket_sql;
     use super::*;
     use sqlx::postgres::{PgConnectOptions, PgPoolOptions};
@@ -565,15 +567,28 @@ mod tests {
             .await
             .unwrap();
         let body: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
-        // Mindestens ein Monatseintrag mit der Session.
-        let items = body
-            .get("items")
-            .or_else(|| body.get("months"))
-            .or(Some(&body));
-        assert!(
-            items.is_some(),
-            "Response sollte Monatsdaten enthalten: {body}"
+        let items = body.as_array().expect("Response ist ein Array");
+        assert_eq!(
+            items.len(),
+            1,
+            "Response sollte genau einen Monat enthalten"
         );
+        let item = &items[0];
+        assert_eq!(item["year"].as_i64(), Some(started.year() as i64));
+        assert_eq!(item["month"].as_i64(), Some(started.month() as i64));
+        assert!(
+            (item["totalHoursWatched"].as_f64().unwrap() - 200.0).abs() < 0.001,
+            "Hours watched falsch: {body}"
+        );
+        assert!(
+            (item["totalAirtime"].as_f64().unwrap() - 2.0).abs() < 0.001,
+            "Airtime falsch: {body}"
+        );
+        assert_eq!(item["avgViewers"].as_f64(), Some(100.0));
+        assert_eq!(item["peakViewers"].as_i64(), Some(150));
+        assert_eq!(item["followerDelta"].as_i64(), Some(5));
+        assert_eq!(item["totalChatterSessions"].as_i64(), Some(20));
+        assert_eq!(item["streamCount"].as_i64(), Some(1));
     }
 
     /// IDOR: Ein eingeloggter Partner darf via `?streamer=<fremd>` NICHT die
