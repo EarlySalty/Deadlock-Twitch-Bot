@@ -63,7 +63,7 @@ class DeepSeekProvider:
         text_response = await self.generate_text(
             SYSTEM_PROMPT + "\n- No analysis. Return the JSON object only; first character must be `{`.",
             render_user_prompt(request),
-            max_tokens=2200,
+            max_tokens=6500,
             temperature=self.temperature,
         )
         return parse_llm_payload(

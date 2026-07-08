@@ -10,6 +10,7 @@ import os
 import re
 import subprocess
 import sys
+import unicodedata
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
@@ -95,6 +96,7 @@ async def main() -> int:
         result["deepseek"] = {
             "model": response.model,
             "cost_usd_estimate": response.cost_usd_estimate,
+            "editorial": _editorial(response.raw_payload),
             "youtube": _platform(response.youtube),
             "tiktok": _platform(response.tiktok),
             "instagram": _platform(response.instagram),
@@ -127,6 +129,81 @@ def _platform(value: Any) -> dict[str, Any]:
         "title_options": list(value.title_options),
         "description": value.description,
         "hashtags": list(value.hashtags),
+    }
+
+
+def _str_list(value: Any, limit: int) -> list[str]:
+    if not isinstance(value, list):
+        return []
+    out: list[str] = []
+    for item in value:
+        text = str(item or "").strip()
+        if text:
+            out.append(text)
+        if len(out) == limit:
+            break
+    return out
+
+
+def _tag_list(value: Any, limit: int) -> list[str]:
+    tags: list[str] = []
+    for item in _str_list(value, limit):
+        tag = item.lstrip("#").replace(" ", "")
+        tag = re.sub(r"[^A-Za-z0-9_]", "", tag)
+        if tag:
+            tags.append(f"#{tag}")
+    return tags
+
+
+def _clean_title_text(value: Any) -> str:
+    text = str(value or "").strip()
+    text = re.sub(r"\s+#[A-Za-z][A-Za-z0-9_]{0,49}\b", "", text)
+    text = re.sub(r"\b(unfassbar\w*|weltrekord|pro player|cheater)\b:?\s*", "", text, flags=re.I)
+    text = "".join(ch for ch in text if unicodedata.category(ch) != "So")
+    return re.sub(r"\s+", " ", text).strip(" -|")
+
+
+def _clean_description_text(value: Any) -> str:
+    text = str(value or "").strip()
+    text = re.sub(r"\s*#[A-Za-z][A-Za-z0-9_]{0,49}\b", "", text)
+    return re.sub(r"\s+", " ", text).strip()
+
+
+def _title_list(value: Any, limit: int) -> list[str]:
+    out: list[str] = []
+    for item in _str_list(value, limit):
+        title = _clean_title_text(item)
+        if title:
+            out.append(title)
+    return out
+
+
+def _editorial(payload: Any) -> dict[str, Any]:
+    if not isinstance(payload, dict):
+        return {}
+    captions = payload.get("captions") if isinstance(payload.get("captions"), dict) else {}
+    hashtag_groups = (
+        payload.get("hashtag_groups") if isinstance(payload.get("hashtag_groups"), dict) else {}
+    )
+    return {
+        "main_moment": str(payload.get("main_moment") or "").strip(),
+        "content_angle": str(payload.get("content_angle") or "").strip(),
+        "title_options": _title_list(payload.get("title_options"), 10),
+        "best_title": _clean_title_text(payload.get("best_title")),
+        "best_title_reason": str(payload.get("best_title_reason") or "").strip(),
+        "captions": {
+            "tiktok": _str_list(captions.get("tiktok"), 3),
+            "instagram": _str_list(captions.get("instagram"), 3),
+            "youtube": _str_list(captions.get("youtube"), 3),
+        },
+        "hashtag_groups": {
+            "game_specific": _tag_list(hashtag_groups.get("game_specific"), 5),
+            "gaming_clip": _tag_list(hashtag_groups.get("gaming_clip"), 5),
+            "german": _tag_list(hashtag_groups.get("german"), 3),
+        },
+        "pin_comments": _str_list(payload.get("pin_comments"), 3),
+        "calls_to_action": _str_list(payload.get("calls_to_action"), 3),
+        "video_hooks": _str_list(payload.get("video_hooks"), 3),
     }
 
 
@@ -194,14 +271,59 @@ def render_markdown(result: dict[str, Any]) -> str:
     if not isinstance(deepseek, dict):
         lines.append(f"Fehler: {result.get('deepseek_error', 'nicht ausgefuehrt')}")
         return "\n".join(lines).rstrip() + "\n"
+    editorial = deepseek.get("editorial")
+    if isinstance(editorial, dict) and editorial.get("best_title"):
+        best_title = _clean_title_text(editorial.get("best_title"))
+        title_options = _title_list(editorial.get("title_options"), 10)
+        lines.extend(
+            [
+                "### Editor-Auswertung",
+                "",
+                f"Hauptmoment: {editorial.get('main_moment', '')}",
+                f"Angle: {editorial.get('content_angle', '')}",
+                f"Bester Titel: {best_title}",
+                f"Warum: {editorial.get('best_title_reason', '')}",
+                "",
+                "10 Titel:",
+                *[f"- {title}" for title in title_options],
+                "",
+            ]
+        )
+        captions = editorial.get("captions") if isinstance(editorial.get("captions"), dict) else {}
+        for label, key in (("TikTok", "tiktok"), ("Instagram Reels", "instagram"), ("YouTube Shorts", "youtube")):
+            values = captions.get(key, []) if isinstance(captions, dict) else []
+            if values:
+                lines.extend([f"{label} Captions:", *[f"- {caption}" for caption in values], ""])
+        hashtag_groups = (
+            editorial.get("hashtag_groups")
+            if isinstance(editorial.get("hashtag_groups"), dict)
+            else {}
+        )
+        for label, key in (
+            ("Game-Hashtags", "game_specific"),
+            ("Gaming-/Clip-Hashtags", "gaming_clip"),
+            ("Deutschsprachige Hashtags", "german"),
+        ):
+            values = hashtag_groups.get(key, []) if isinstance(hashtag_groups, dict) else []
+            if values:
+                lines.extend([f"{label}: {' '.join(values)}", ""])
+        for label, key in (
+            ("Pin-Kommentare", "pin_comments"),
+            ("Call-to-Actions", "calls_to_action"),
+            ("Video-Hooks", "video_hooks"),
+        ):
+            values = editorial.get(key, [])
+            if values:
+                lines.extend([f"{label}:", *[f"- {value}" for value in values], ""])
     for platform in ("youtube", "tiktok", "instagram"):
         item = deepseek[platform]
-        title_options = item.get("title_options") or []
+        title = _clean_title_text(item.get("title"))
+        title_options = _title_list(item.get("title_options"), 5)
         lines.extend(
             [
                 f"### {platform}",
                 "",
-                f"Title: {item['title']}",
+                f"Title: {title}",
                 "",
             ]
         )
@@ -209,7 +331,7 @@ def render_markdown(result: dict[str, Any]) -> str:
             lines.extend(["Titeloptionen:", *[f"- {option}" for option in title_options], ""])
         lines.extend(
             [
-                item["description"],
+                _clean_description_text(item.get("description")),
                 "",
                 " ".join(item["hashtags"]),
                 "",

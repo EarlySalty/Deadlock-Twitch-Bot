@@ -17,7 +17,25 @@ class _FakeCompletions:
         self.kwargs = kwargs
         content = """
         {
-          "youtube": {"title": "Er hat gelernt", "title_options": ["Er hat gelernt", "Der schnellste Throw"], "description": "Kurz und stark. #Deadlock #Fail", "hashtags": ["Deadlock", "gaming", "clip", "fail"]},
+          "main_moment": "Der Gegner lernt mitten im Clip dazu.",
+          "content_angle": "Comedy",
+          "title_options": ["Er hat gelernt, Digga!", "Wie verliert man so schnell?", "Der Gegner hat einfach gelernt", "Deadlock bestraft sofort", "Dieser Hero macht fertig", "Wenn dein Plan live zerlegt wird", "Der Chat wollte den Clip", "Er klippt es selbst", "Deadlock Fail mit Ansage", "Der schnellste Lernmoment"],
+          "best_title": "Er hat gelernt, Digga! #Deadlock 😳",
+          "best_title_reason": "Der Satz ist der Punchline-Moment des Clips.",
+          "captions": {
+            "tiktok": ["Er hat wirklich gelernt.", "Wer kennt den Moment?", "Clip oder Skill Issue?"],
+            "instagram": ["Manchmal lernt der Gegner schneller.", "Der Chat wusste sofort Bescheid.", "Deadlock nimmt keine Ruecksicht."],
+            "youtube": ["Deadlock Fail mit Punchline.", "earlysalty merkt, dass der Gegner gelernt hat.", "Kurzer Deadlock-Clip mit sauberem Comedy-Moment."]
+          },
+          "hashtag_groups": {
+            "game_specific": ["#deadlock", "#deadlockgame", "#deadlockclip", "#valve", "#heroshooter"],
+            "gaming_clip": ["#gaming", "#twitchclip", "#fail", "#moba", "#streamer"],
+            "german": ["#deutsch", "#gamingdeutschland", "#zocken"]
+          },
+          "pin_comments": ["War das Skill Issue?", "Welcher Hero tiltet euch?", "Hat er wirklich gelernt?"],
+          "calls_to_action": ["Schreib den Hero in die Kommentare.", "Folgen fuer mehr Deadlock-Clips.", "Speichern, wenn du den Moment kennst."],
+          "video_hooks": ["Er dachte, er hat ihn gelesen.", "Der Gegner hat einfach gelernt.", "So schnell kippt ein Deadlock-Clip."],
+          "youtube": {"title": "Unfassbar: Er hat gelernt #Deadlock 😳", "title_options": ["Unfassbar: Er hat gelernt #Deadlock 😳", "Der schnellste Throw"], "description": "Kurz und stark. #Deadlock #Fail", "hashtags": ["Deadlock", "gaming", "clip", "fail"]},
           "tiktok": {"title": "Deadlock clip", "title_options": ["Deadlock clip"], "description": "Sauberer Fight.", "hashtags": ["Deadlock", "twitch"]},
           "instagram": {"title": "Deadlock Highlight", "title_options": ["Deadlock Highlight"], "description": "Der Moment sitzt.", "hashtags": ["Deadlock", "reels"]}
         }
@@ -83,8 +101,10 @@ class DeepSeekProviderTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(response.youtube.title_options, ("Er hat gelernt", "Der schnellste Throw"))
         self.assertEqual(response.youtube.description, "Kurz und stark.")
         self.assertEqual(response.youtube.hashtags, ("#Deadlock", "#gaming", "#fail"))
+        self.assertEqual(response.raw_payload["best_title"], "Er hat gelernt, Digga! #Deadlock 😳")
         self.assertEqual(response.provider, "deepseek")
         self.assertEqual(client.completions.kwargs["response_format"], {"type": "json_object"})
+        self.assertEqual(client.completions.kwargs["max_tokens"], 6500)
         self.assertNotIn("extra_body", client.completions.kwargs)
 
 
@@ -101,7 +121,27 @@ class SocialClipProbeHelpersTests(unittest.TestCase):
                 "transcript": {"text": "raw"},
                 "correction": {"text": "corrected"},
                 "deepseek": {
-                    "youtube": {"title": "YT", "description": "D", "hashtags": ["#Deadlock"]},
+                    "editorial": {
+                        "main_moment": "Moment",
+                        "content_angle": "Comedy",
+                        "title_options": ["Hook 1 #Deadlock 😳", "Hook 2"],
+                        "best_title": "Hook 1 #Deadlock 😳",
+                        "best_title_reason": "Trifft den Moment.",
+                        "captions": {"tiktok": ["Kurz"], "instagram": [], "youtube": []},
+                        "hashtag_groups": {
+                            "game_specific": ["#Deadlock"],
+                            "gaming_clip": ["#fail"],
+                            "german": ["#deutsch"],
+                        },
+                        "pin_comments": ["War das Skill Issue?"],
+                        "calls_to_action": ["Kommentier den Hero."],
+                        "video_hooks": ["Er dachte, er gewinnt."],
+                    },
+                    "youtube": {
+                        "title": "YT #Deadlock 😳",
+                        "description": "D #Deadlock",
+                        "hashtags": ["#Deadlock"],
+                    },
                     "tiktok": {
                         "title": "TT",
                         "title_options": ["TT", "TikTok Hook"],
@@ -114,6 +154,11 @@ class SocialClipProbeHelpersTests(unittest.TestCase):
         )
         self.assertIn("corrected", markdown)
         self.assertIn("Title: YT", markdown)
+        self.assertNotIn("Title: YT #Deadlock", markdown)
+        self.assertNotIn("D #Deadlock", markdown)
+        self.assertIn("Bester Titel: Hook 1", markdown)
+        self.assertNotIn("Bester Titel: Hook 1 #Deadlock", markdown)
+        self.assertIn("- War das Skill Issue?", markdown)
         self.assertIn("- TikTok Hook", markdown)
 
     def test_render_markdown_keeps_transcript_without_deepseek(self) -> None:
