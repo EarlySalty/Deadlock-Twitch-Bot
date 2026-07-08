@@ -1,3 +1,11 @@
+## #339 — Raid-Hinweis erinnert ans Hallo im Zielchat
+
+**Problem:** Nach Auto-Raids kamen einige Streamer im Zielchat nicht sichtbar an oder sagten dort nicht kurz Hallo. Dadurch wirkte der Zuschauer-Übergang unpersönlich.
+
+**Änderung:** Der Bot schreibt beim Raid einen kurzen Hinweis in den Quellchat und merkt sich den Raid für ein kurzes Zielchat-Fenster. Sagt der raidende Streamer dort nicht Hallo, folgt eine freundliche Whisper-Erinnerung.
+
+**Aktuelles Verhalten:** Bei Bot-Raids sehen Streamer und Chat sofort das Ziel und den Hallo-/Tschüss-Hinweis. Bleibt die Begrüßung im Zielchat aus, erinnert der Bot den Streamer privat.
+
 ## #338 — !rank zeigt die Unterstufe mit an
 
 **Problem:** `!rank` zeigte nur den Hauptrang, obwohl der Steam-Dienst die Unterstufe kennt. Aus „Phantom 1" wurde dadurch im Chat nur „Phantom".

@@ -178,6 +178,34 @@ impl ChatApi for HelixChatClient {
         })
     }
 
+    /// Sendet Whisper — 2-Attempt: 401 → force_refresh → retry.
+    async fn send_whisper(&self, to_user_id: &str, message: &str) -> Result<bool, String> {
+        let from_user_id = self.token_mgr.bot_user_id().await;
+        for attempt in 0..2usize {
+            let force = attempt > 0;
+            let token = self.token_mgr.get_valid_token(force).await?;
+            match self
+                .helix
+                .send_whisper(&from_user_id, to_user_id, message, &token)
+                .await
+            {
+                Ok(outcome) if outcome.accepted => return Ok(true),
+                Ok(outcome) if outcome.status == Some(401) && attempt == 0 => continue,
+                Ok(outcome) => {
+                    warn!(
+                        to_user_id,
+                        status = ?outcome.status,
+                        detail = ?outcome.detail,
+                        "Whisper nicht akzeptiert"
+                    );
+                    return Ok(false);
+                }
+                Err(e) => return Err(e.to_string()),
+            }
+        }
+        Ok(false)
+    }
+
     async fn send_announcement(
         &self,
         broadcaster_id: &str,

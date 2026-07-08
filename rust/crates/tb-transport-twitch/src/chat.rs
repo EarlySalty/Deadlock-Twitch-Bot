@@ -79,6 +79,38 @@ impl AnnouncementOutcome {
     }
 }
 
+/// Ergebnis eines `POST /whispers`-Aufrufs.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct WhisperOutcome {
+    pub accepted: bool,
+    pub status: Option<u16>,
+    pub detail: Option<String>,
+}
+
+impl WhisperOutcome {
+    pub fn accepted() -> Self {
+        Self {
+            accepted: true,
+            status: None,
+            detail: None,
+        }
+    }
+
+    pub fn rejected(status: u16, detail: String) -> Self {
+        let detail = redact_announcement_detail(&detail);
+        let detail = detail.trim();
+        Self {
+            accepted: false,
+            status: Some(status),
+            detail: if detail.is_empty() {
+                None
+            } else {
+                Some(detail.chars().take(300).collect())
+            },
+        }
+    }
+}
+
 fn mask_secret(value: &str) -> String {
     if value.is_empty() {
         "[redacted]".to_string()
@@ -312,6 +344,46 @@ impl HelixClient {
                     status,
                     body: snippet,
                 })
+            }
+        }
+    }
+
+    /// Sendet einen Whisper via `POST /whispers`.
+    ///
+    /// Scope: `user:manage:whispers`; `from_user_id` muss zur User-Token-
+    /// Identität passen.
+    pub async fn send_whisper(
+        &self,
+        from_user_id: &str,
+        to_user_id: &str,
+        message: &str,
+        user_token: &str,
+    ) -> Result<WhisperOutcome, HelixError> {
+        let url = format!("{}/whispers", self.helix_config().helix_base);
+        let body = serde_json::json!({ "message": message });
+        let resp = self
+            .http_client()
+            .post(&url)
+            .query(&[("from_user_id", from_user_id), ("to_user_id", to_user_id)])
+            .header("Client-Id", &self.helix_config().client_id)
+            .header("Authorization", format!("Bearer {user_token}"))
+            .header("Content-Type", "application/json")
+            .json(&body)
+            .send()
+            .await?;
+
+        let status = resp.status().as_u16();
+        match status {
+            200 | 204 => Ok(WhisperOutcome::accepted()),
+            status => {
+                let body_text = match resp.text().await {
+                    Ok(body) => body,
+                    Err(error) => {
+                        tracing::warn!(%error, status, "Twitch Whisper: Fehlerbody nicht lesbar");
+                        String::new()
+                    }
+                };
+                Ok(WhisperOutcome::rejected(status, body_text))
             }
         }
     }
@@ -875,6 +947,48 @@ mod tests {
         assert!(!detail.contains("secret-client-12345"), "detail={detail}");
         assert!(!detail.contains("secret-bearer-12345"), "detail={detail}");
         assert!(!detail.contains(jwt.as_str()), "detail={detail}");
+    }
+
+    #[tokio::test]
+    async fn whisper_204_ergibt_accepted() {
+        let server = MockServer::start().await;
+        let client = mock_client(&server).await;
+        Mock::given(method("POST"))
+            .and(path("/helix/whispers"))
+            .and(query_param("from_user_id", "bot1"))
+            .and(query_param("to_user_id", "raider1"))
+            .and(header("Authorization", "Bearer tok"))
+            .respond_with(ResponseTemplate::new(204))
+            .mount(&server)
+            .await;
+
+        let outcome = client
+            .send_whisper("bot1", "raider1", "Bitte kurz Hallo sagen.", "tok")
+            .await
+            .unwrap();
+
+        assert!(outcome.accepted);
+        assert_eq!(outcome.status, None);
+    }
+
+    #[tokio::test]
+    async fn whisper_403_liefert_status_und_body() {
+        let server = MockServer::start().await;
+        let client = mock_client(&server).await;
+        Mock::given(method("POST"))
+            .and(path("/helix/whispers"))
+            .respond_with(ResponseTemplate::new(403).set_body_string("missing scope"))
+            .mount(&server)
+            .await;
+
+        let outcome = client
+            .send_whisper("bot1", "raider1", "msg", "tok")
+            .await
+            .unwrap();
+
+        assert!(!outcome.accepted);
+        assert_eq!(outcome.status, Some(403));
+        assert_eq!(outcome.detail.as_deref(), Some("missing scope"));
     }
 
     // -----------------------------------------------------------------------

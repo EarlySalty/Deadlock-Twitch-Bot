@@ -60,6 +60,7 @@ use tb_transport_discord::BrokerRelay;
 use tb_transport_twitch::HelixClient;
 
 use crate::raid_adapters::HelixTokenClient;
+use crate::raid_greeting::RaidGreetingMonitor;
 use crate::task_supervisor::TaskSupervisor;
 
 /// Reconcile-Intervall für Chat-Subscriptions (Python: periodischer
@@ -572,7 +573,12 @@ pub async fn try_build_api(helix: Option<HelixClient>) -> Option<ChatApiHandle> 
         scopes = %scopes.join(" "),
         "Chat-Bot-Token validiert"
     );
-    for required in ["user:bot", "user:read:chat", "user:write:chat"] {
+    for required in [
+        "user:bot",
+        "user:read:chat",
+        "user:write:chat",
+        "user:manage:whispers",
+    ] {
         if !scopes.iter().any(|s| s == required) {
             tracing::warn!("Bot-Token ohne Scope {required} — Chat-Funktionen eingeschränkt");
         }
@@ -596,6 +602,7 @@ pub struct ChatRuntimePorts {
     pub bot_ban_handler: Option<Arc<dyn BotBannedChannelHandler>>,
     pub invite_relay: Option<BrokerRelay>,
     pub scam_notifier: Option<Arc<dyn ScamGuardNotifier>>,
+    pub raid_greeting: Option<Arc<RaidGreetingMonitor>>,
 }
 
 pub async fn build_runtime(
@@ -611,6 +618,7 @@ pub async fn build_runtime(
         bot_ban_handler,
         invite_relay,
         scam_notifier,
+        raid_greeting,
     } = ports;
     let ChatApiHandle {
         api,
@@ -812,6 +820,7 @@ pub async fn build_runtime(
             bot_user_id: bot_user_id.clone(),
             telemetry: TelemetryStore::new(pool.clone()),
             subscriptions: Arc::clone(&subscriptions_cell),
+            raid_greeting,
         }),
         token_manager,
         promos,
@@ -1156,6 +1165,7 @@ struct ChatHooks {
     /// Doppel-Count vermeiden). Leer/ungesetzt → Fallback an (Python: kein
     /// `has_sub`-Checker ⇒ `return True`).
     subscriptions: Arc<OnceLock<Arc<SubscriptionManager>>>,
+    raid_greeting: Option<Arc<RaidGreetingMonitor>>,
 }
 
 impl ChatHooks {
@@ -1388,6 +1398,9 @@ impl EventSubHooks for ChatHooks {
         self.inner.on_chat_message(event, message_id).await;
         match serde_json::from_value::<ChatMessageEvent>(event.clone()) {
             Ok(chat_event) => {
+                if let Some(monitor) = &self.raid_greeting {
+                    monitor.observe_chat(&chat_event);
+                }
                 if self.pipeline.handle(&chat_event).await {
                     self.spawn_engagement(&chat_event);
                 }
