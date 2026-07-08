@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import re
+import unicodedata
 from typing import Any
 
 from .base import (
@@ -20,6 +21,8 @@ _PLATFORM_TITLE_LIMITS: dict[str, int] = {
 }
 
 _HASHTAG_TOKEN_RE = re.compile(r"^[A-Za-z][A-Za-z0-9_]{0,49}$")
+_HASHTAG_IN_TEXT_RE = re.compile(r"\s+#[A-Za-z][A-Za-z0-9_]{0,49}\b")
+_BANNED_TITLE_WORDS_RE = re.compile(r"\b(unfassbar\w*|weltrekord|pro player|cheater)\b:?\s*", re.IGNORECASE)
 _BROAD_FILLER_HASHTAGS = {"#gaming", "#clip", "#funny", "#lustig", "#twitchclip"}
 
 
@@ -93,12 +96,19 @@ def _truncate(text: str, limit: int) -> str:
     return cut + "…"
 
 
+def _clean_title(text: str) -> str:
+    without_tags = _HASHTAG_IN_TEXT_RE.sub("", text)
+    without_hype = _BANNED_TITLE_WORDS_RE.sub("", without_tags)
+    without_symbols = "".join(ch for ch in without_hype if unicodedata.category(ch) != "So")
+    return re.sub(r"\s+", " ", without_symbols).strip(" -|")
+
+
 def _coerce_title_options(raw: Any, title: str, limit: int) -> tuple[str, ...]:
     values = raw if isinstance(raw, list) else []
     out: list[str] = []
     seen: set[str] = set()
     for entry in [title, *values]:
-        option = _truncate(_coerce_str(entry), limit)
+        option = _truncate(_clean_title(_coerce_str(entry)), limit)
         if not option or option.lower() in seen:
             continue
         seen.add(option.lower())
@@ -116,7 +126,7 @@ def _extract_platform(payload: dict[str, Any], platform: str) -> PlatformEnrichm
     block = payload.get(platform)
     if not isinstance(block, dict):
         raise LLMProviderError(f"missing platform block: {platform}")
-    title = _coerce_str(block.get("title"))
+    title = _clean_title(_coerce_str(block.get("title")))
     description = _strip_trailing_hashtags(_coerce_str(block.get("description")))
     hashtags = _coerce_hashtags(block.get("hashtags"))
     if not title:

@@ -1,3 +1,11 @@
+## #345 — Clip-Test nutzt den Gaming-Editor-Prompt
+
+**Problem:** Der Clip-Test lieferte zwar Titel und Tags, aber noch nicht genug Material, um mehrere Clips sinnvoll zu bewerten oder direkt Social-Posts daraus abzuleiten.
+
+**Änderung:** Die Vorschläge enthalten jetzt Hauptmoment, Content-Angle, zehn Titelideen, Captions, Hashtag-Gruppen, Pin-Kommentare, Handlungsaufrufe und Video-Hooks. Titel werden zusätzlich von Hashtags, Emoji und übertriebenen Hype-Wörtern bereinigt.
+
+**Aktuelles Verhalten:** Mehrere bestehende Clips können in einem Testlauf ausgewertet werden. Die Ergebnisdateien zeigen pro Clip eine Editor-Auswertung plus Plattformvorschläge.
+
 ## #344 — Clip-Vorschläge liefern bessere Titelvarianten
 
 **Problem:** Die ersten Clip-Vorschläge waren technisch korrekt, aber zu generisch: Titel enthielten teils Hashtags oder Emoji, Beschreibungen wiederholten Tags und pro Plattform gab es kaum Auswahl.
