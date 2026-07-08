@@ -80,7 +80,7 @@ pub use auth_writer::{AuthWriteError, AuthWriter, NewAuth};
 pub use auto_raid_pipeline::{
     ArrivalReadiness, AutoRaidPipeline, AutoRaidPipelineOutcome, AutoRaidRequest,
     FallbackStreamSource, FollowerEnricher, FollowersEnrichmentObservation, OrphanChatNotification,
-    OrphanReplay,
+    OrphanReplay, RaidGreetingMonitorPort, RaidGreetingRegistration,
 };
 pub use bot_oauth::{
     normalize_bot_oauth_context, resolve_bot_oauth_context, BotOAuthContext, BotOAuthSource,

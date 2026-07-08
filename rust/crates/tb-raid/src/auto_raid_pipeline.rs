@@ -295,6 +295,21 @@ pub trait OrphanReplay: Send + Sync {
     async fn replay(&self, orphan: OrphanChatNotification);
 }
 
+/// Meldung eines erfolgreich gestarteten Raids an optionale Side-Effects
+/// außerhalb der Raid-Crate (z. B. Chat-Hinweis und Greeting-Monitoring).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RaidGreetingRegistration {
+    pub from_broadcaster_id: String,
+    pub from_broadcaster_login: String,
+    pub to_broadcaster_id: String,
+    pub to_broadcaster_login: String,
+}
+
+#[async_trait::async_trait]
+pub trait RaidGreetingMonitorPort: Send + Sync {
+    async fn raid_started(&self, registration: RaidGreetingRegistration);
+}
+
 /// Eingabe eines Pipeline-Laufs.
 #[derive(Debug, Clone)]
 pub struct AutoRaidRequest {
@@ -356,6 +371,8 @@ pub struct AutoRaidPipeline {
     observability_raid: Option<Arc<RaidObservabilityService>>,
     /// Analytics-Decision-Events fuer Followers-Enrichment. `None` = kein Log.
     observability_analytics: Option<Arc<AnalyticsObservabilityService>>,
+    /// Optionaler Side-Effect nach erfolgreichem Raid-Start.
+    raid_greeting: Option<Arc<dyn RaidGreetingMonitorPort>>,
 }
 
 impl AutoRaidPipeline {
@@ -386,6 +403,7 @@ impl AutoRaidPipeline {
             orphan_replay: None,
             observability_raid: None,
             observability_analytics: None,
+            raid_greeting: None,
         }
     }
 
@@ -408,6 +426,12 @@ impl AutoRaidPipeline {
     ) -> Self {
         self.observability_raid = raid;
         self.observability_analytics = analytics;
+        self
+    }
+
+    #[must_use]
+    pub fn with_greeting_monitor(mut self, monitor: Arc<dyn RaidGreetingMonitorPort>) -> Self {
+        self.raid_greeting = Some(monitor);
         self
     }
 
@@ -611,6 +635,16 @@ impl AutoRaidPipeline {
                 RaidOutcome::Started => {
                     self.register_pending(req, &target, &flow_id, channel_raid_ready)
                         .await;
+                    if let Some(monitor) = &self.raid_greeting {
+                        monitor
+                            .raid_started(RaidGreetingRegistration {
+                                from_broadcaster_id: req.broadcaster_id.clone(),
+                                from_broadcaster_login: req.broadcaster_login.clone(),
+                                to_broadcaster_id: target.user_id.clone(),
+                                to_broadcaster_login: target.user_login.clone(),
+                            })
+                            .await;
+                    }
                     if target.is_outreach_boost {
                         self.consume_outreach_boost(&target.user_login).await;
                     }

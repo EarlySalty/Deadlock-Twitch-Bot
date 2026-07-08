@@ -26,6 +26,12 @@ pub trait ChatApi: Send + Sync {
         message: &str,
     ) -> Result<SendOutcome, String>;
 
+    /// `POST /helix/whispers` — braucht `user:manage:whispers` auf dem
+    /// Bot-User-Token.
+    async fn send_whisper(&self, _to_user_id: &str, _message: &str) -> Result<bool, String> {
+        Err("whisper_not_supported".to_string())
+    }
+
     /// `POST /helix/chat/announcements` (Farbe: blue/green/orange/purple/primary).
     /// Python fällt bei Fehlern auf `send_message` zurück — das macht der
     /// Aufrufer, nicht diese Methode.

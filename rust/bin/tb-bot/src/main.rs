@@ -48,6 +48,7 @@ mod partner_lookup;
 mod partner_recruit;
 mod raid_adapters;
 mod raid_arrival_wiring;
+mod raid_greeting;
 mod raid_oauth_impl;
 mod reauth_reminder;
 mod scam_enforce_impl;
@@ -686,6 +687,9 @@ async fn main() {
     // da `chat_api_handle` weiter unten beim Pipeline-Aufbau konsumiert wird.
     let chatters_bot_token_manager: Option<Arc<tb_chat::token::BotTokenManager>> =
         chat_api_handle.as_ref().map(|h| h.bot_token_manager());
+    let raid_greeting_monitor: Option<Arc<raid_greeting::RaidGreetingMonitor>> = chat_api_handle
+        .as_ref()
+        .map(|h| Arc::new(raid_greeting::RaidGreetingMonitor::new(h.api.clone())));
 
     // Raid-Verdrahtung: mit Manager + Helix + Krypto-Key sind alle vier
     // Raid-Kopplungen echt (Auto-Raid, Arrival, Score-Refresh, Blacklist-Guard).
@@ -858,7 +862,7 @@ async fn main() {
                 )),
                 Some(followers.clone()),
             ));
-            let pipeline = AutoRaidPipeline::new(
+            let mut pipeline = AutoRaidPipeline::new(
                 RaidBlacklistStore::new(pool.clone()),
                 ScoreStore::new(pool.clone()),
                 RaidHistoryStore::new(pool.clone()),
@@ -894,6 +898,10 @@ async fn main() {
                 Some(raid_observability.clone()),
                 Some(analytics_observability.clone()),
             );
+            if let Some(monitor) = raid_greeting_monitor.as_ref() {
+                let monitor: Arc<dyn tb_raid::RaidGreetingMonitorPort> = monitor.clone();
+                pipeline = pipeline.with_greeting_monitor(monitor);
+            }
             let offline = Arc::new(OfflineRaidHandler::new(
                 suppression.clone(),
                 OfflineEligibilityStore::new(pool.clone()),
@@ -1100,6 +1108,7 @@ async fn main() {
                     )),
                     invite_relay: BrokerRelay::new(&settings.broker).ok(),
                     scam_notifier,
+                    raid_greeting: raid_greeting_monitor.clone(),
                 },
                 eventsub_hooks.clone(),
                 supervisor.clone(),
