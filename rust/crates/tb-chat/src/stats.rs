@@ -16,6 +16,7 @@ const DEFAULT_STEAM_BOT_LIVE_URL: &str = "http://127.0.0.1:8783/player-live";
 pub struct RankInfo {
     pub linked: bool,
     pub rank_name: Option<String>,
+    pub subrank: Option<i64>,
     pub badge_level: Option<i64>,
     pub wins: Option<i64>,
     pub losses: Option<i64>,
@@ -262,7 +263,10 @@ pub async fn fetch_live(discord_id: &str) -> Option<LiveStatus> {
 pub fn rank_reply(name: &str, info: Option<&RankInfo>) -> String {
     match info {
         Some(info) if info.linked => match &info.rank_name {
-            Some(rank) => format!("Rang von {name}: {rank}"),
+            Some(rank) => match info.subrank {
+                Some(subrank @ 1..=6) => format!("Rang von {name}: {rank} {subrank}"),
+                _ => format!("Rang von {name}: {rank}"),
+            },
             None => {
                 format!("{name} hat einen verknüpften Account, aber noch keinen Rang erkannt.")
             }
@@ -605,6 +609,7 @@ mod tests {
         let info = RankInfo {
             linked: true,
             rank_name: Some("Archon".into()),
+            subrank: None,
             badge_level: Some(61),
             wins: None,
             losses: None,
@@ -614,10 +619,25 @@ mod tests {
     }
 
     #[test]
+    fn rang_mit_subrank() {
+        let info = RankInfo {
+            linked: true,
+            rank_name: Some("Phantom".into()),
+            subrank: Some(1),
+            badge_level: Some(91),
+            wins: None,
+            losses: None,
+            matches: None,
+        };
+        assert_eq!(rank_reply("nani", Some(&info)), "Rang von nani: Phantom 1");
+    }
+
+    #[test]
     fn verknuepft_ohne_rang() {
         let info = RankInfo {
             linked: true,
             rank_name: None,
+            subrank: None,
             badge_level: None,
             wins: None,
             losses: None,
@@ -631,6 +651,7 @@ mod tests {
         let info = RankInfo {
             linked: false,
             rank_name: None,
+            subrank: None,
             badge_level: None,
             wins: None,
             losses: None,
@@ -645,6 +666,7 @@ mod tests {
         let info = RankInfo {
             linked: true,
             rank_name: None,
+            subrank: None,
             badge_level: None,
             wins: Some(1164),
             losses: None,
@@ -662,6 +684,7 @@ mod tests {
         let info = RankInfo {
             linked: true,
             rank_name: None,
+            subrank: None,
             badge_level: None,
             wins: None,
             losses: None,
@@ -676,6 +699,7 @@ mod tests {
         let info = RankInfo {
             linked: false,
             rank_name: None,
+            subrank: None,
             badge_level: None,
             wins: None,
             losses: None,
