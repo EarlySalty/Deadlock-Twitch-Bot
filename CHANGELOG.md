@@ -1,3 +1,11 @@
+## #338 — !rank zeigt die Unterstufe mit an
+
+**Problem:** `!rank` zeigte nur den Hauptrang, obwohl der Steam-Dienst die Unterstufe kennt. Aus „Phantom 1" wurde dadurch im Chat nur „Phantom".
+
+**Änderung:** Die Chat-Antwort liest die Unterstufe aus der Steam-Rangantwort und hängt sie an den Rang an.
+
+**Aktuelles Verhalten:** `!rank` zeigt jetzt den exakten Rang, zum Beispiel „Phantom 1".
+
 ## #337 — Neue Streams bekommen wieder einen frischen Live-Post
 
 **Problem:** Wenn ein Streamer am Vortag schon angekündigt wurde, konnte ein neuer Stream nur den alten Discord-Post aktualisieren. Dadurch erschien im Kanal kein neuer sichtbarer Go-Live-Post.
