@@ -254,7 +254,11 @@ impl HelixClient {
             .map(|v| v.thumbnail_url.trim().to_string())
             .filter(|t| !t.is_empty());
         Ok(thumb.map(|t| {
-            let resolved = t.replace("{width}", "1280").replace("{height}", "720");
+            let resolved = t
+                .replace("%{width}", "1280")
+                .replace("%{height}", "720")
+                .replace("{width}", "1280")
+                .replace("{height}", "720");
             let rand = std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)
                 .map(|d| d.as_secs())
@@ -329,7 +333,11 @@ impl HelixClient {
         let resp = self
             .get("/videos")
             .await?
-            .query(&[("user_id", user_id), ("type", "archive"), ("first", first.as_str())])
+            .query(&[
+                ("user_id", user_id),
+                ("type", "archive"),
+                ("first", first.as_str()),
+            ])
             .send()
             .await?;
         if !resp.status().is_success() {
@@ -722,7 +730,39 @@ mod tests {
         assert_eq!(vods[0].id, "v1");
         assert_eq!(vods[0].duration, "2h3m4s");
         // Leerer Login → keine Anfrage, leere Liste.
-        assert!(client.get_archive_videos("  ", 20).await.unwrap().is_empty());
+        assert!(client
+            .get_archive_videos("  ", 20)
+            .await
+            .unwrap()
+            .is_empty());
+    }
+
+    #[tokio::test]
+    async fn latest_vod_thumbnail_ersetzt_twitch_prozentplatzhalter() {
+        let server = MockServer::start().await;
+        let client = client_with(&server).await;
+        Mock::given(method("GET"))
+            .and(path("/helix/videos"))
+            .and(query_param("user_id", "42"))
+            .and(query_param("type", "archive"))
+            .and(query_param("first", "1"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "data": [{
+                    "thumbnail_url": "https://static-cdn.jtvnw.net/vod/thumb-%{width}x%{height}.jpg"
+                }]
+            })))
+            .mount(&server)
+            .await;
+
+        let thumb = client
+            .get_latest_vod_thumbnail("42")
+            .await
+            .unwrap()
+            .unwrap();
+
+        assert!(thumb.starts_with("https://static-cdn.jtvnw.net/vod/thumb-1280x720.jpg?rand="));
+        assert!(!thumb.contains("%{width}"));
+        assert!(!thumb.contains("%{height}"));
     }
 
     #[tokio::test]
@@ -799,7 +839,10 @@ mod tests {
         assert_eq!(ad.preroll_free_time, 90);
         assert_eq!(ad.snooze_count, 2);
         assert_eq!(ad.next_ad_at.as_deref(), Some("1750000000"));
-        assert_eq!(ad.snooze_refresh_at.as_deref(), Some("2026-06-15T12:00:00Z"));
+        assert_eq!(
+            ad.snooze_refresh_at.as_deref(),
+            Some("2026-06-15T12:00:00Z")
+        );
     }
 
     #[tokio::test]
@@ -808,9 +851,7 @@ mod tests {
         let client = client_with(&server).await;
         Mock::given(method("GET"))
             .and(path("/helix/channels/ads"))
-            .respond_with(
-                ResponseTemplate::new(200).set_body_json(serde_json::json!({"data": []})),
-            )
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({"data": []})))
             .mount(&server)
             .await;
         let ad = client.get_ad_schedule("42", "user-tok").await.unwrap();

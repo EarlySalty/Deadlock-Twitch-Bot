@@ -1,3 +1,11 @@
+## #336 — Offline-Posts zeigen VOD-Bilder wieder korrekt
+
+**Problem:** Manche Stream-Ende-Posts bekamen von Twitch eine Aufzeichnungs-Vorschau mit Platzhaltern. Discord konnte diese URL nicht laden und zeigte deshalb ein leeres Bildfeld statt der VOD-Vorschau.
+
+**Änderung:** Die Aufzeichnungs-Vorschau wird jetzt vor dem Senden vollständig aufgelöst, auch wenn Twitch die Platzhalter in einer anderen Schreibweise liefert.
+
+**Aktuelles Verhalten:** Offline-Posts zeigen wieder ein echtes VOD-Bild oder fallen wie bisher auf das Kanalbild zurück.
+
 ## #335 — Live-Post: Offline-Bild, frische Vorschau, kein Doppel-Post bei kurzem Ausfall
 
 **Problem:** Ging ein Stream offline, blieb das Bild im Post oft leer. Die Vorschau im Live-Post fror auf dem ersten Moment ein und aktualisierte sich nie. Und ein kurzer Verbindungsabbruch führte zu einem komplett neuen Post, statt den bestehenden weiterzuverwenden.
