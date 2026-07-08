@@ -16,9 +16,10 @@ use crate::dispatch::EventSubHooks;
 use crate::guard::{GuardKind, GuardStore};
 use crate::inbox_runtime::{ClockFn, HandlerError, InboxHandler};
 use crate::live_state::LiveStateStore;
+use crate::poller::hooks::announcement_reannounce_cooldown_key;
 use crate::poller::source::ChannelInfoSource;
 use crate::sessions::SessionTracker;
-use crate::stream::{StreamSnapshot, iso_seconds};
+use crate::stream::{iso_seconds, StreamSnapshot};
 use crate::telemetry::TelemetryStore;
 
 /// Business-Effect-TTL (Python: 7 Tage).
@@ -111,6 +112,72 @@ impl MonitoringEventHandler {
         (epoch, dt)
     }
 
+    async fn clear_announcement_on_stream_online(
+        &self,
+        broadcaster_id: &str,
+        login: &str,
+        stream_id: Option<&str>,
+        epoch: f64,
+    ) -> bool {
+        let state = match self
+            .live_state
+            .online_announcement_state(broadcaster_id)
+            .await
+        {
+            Ok(Some(state)) => state,
+            Ok(None) => return false,
+            Err(error) => {
+                tracing::debug!(%error, broadcaster_id, "stream.online: Announcement-State nicht lesbar");
+                return false;
+            }
+        };
+        let has_message = state
+            .last_discord_message_id
+            .as_deref()
+            .map(str::trim)
+            .is_some_and(|id| !id.is_empty());
+        if !has_message {
+            return false;
+        }
+
+        if let Some(current_stream_id) = stream_id.map(str::trim).filter(|id| !id.is_empty()) {
+            let previous_stream_id = state
+                .last_stream_id
+                .as_deref()
+                .map(str::trim)
+                .filter(|id| !id.is_empty());
+            if previous_stream_id != Some(current_stream_id) {
+                return true;
+            }
+        }
+
+        if state.is_live.unwrap_or(0) != 0 {
+            return false;
+        }
+        let Some(key) = announcement_reannounce_cooldown_key(login) else {
+            return false;
+        };
+        match self.guard.has_entry(GuardKind::BusinessEffect, &key).await {
+            Ok(true) => {}
+            Ok(false) => return false,
+            Err(error) => {
+                tracing::debug!(%error, login, "stream.online: Reannounce-Cooldown-Marker nicht lesbar");
+                return false;
+            }
+        }
+        match self
+            .guard
+            .is_active(GuardKind::BusinessEffect, &key, epoch)
+            .await
+        {
+            Ok(active) => !active,
+            Err(error) => {
+                tracing::debug!(%error, login, "stream.online: Reannounce-Cooldown nicht lesbar");
+                false
+            }
+        }
+    }
+
     /// stream.online (Python `_handle_stream_online` + Followups):
     /// minimaler Live-State + Go-Live-Hook + Score-Refresh, beide
     /// exactly-once pro Message.
@@ -129,6 +196,9 @@ impl MonitoringEventHandler {
             .map(str::trim)
             .filter(|s| !s.is_empty());
         let login = work.login_lower();
+        let clear_announcement = self
+            .clear_announcement_on_stream_online(&work.broadcaster_id, &login, stream_id, epoch)
+            .await;
         self.live_state
             .apply_stream_online(
                 &work.broadcaster_id,
@@ -136,6 +206,7 @@ impl MonitoringEventHandler {
                 stream_id,
                 started_at,
                 &iso_seconds(now),
+                clear_announcement,
             )
             .await
             .map_err(|e| Box::new(e) as HandlerError)?;

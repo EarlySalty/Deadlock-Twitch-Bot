@@ -13,8 +13,8 @@ use tb_monitoring::poller::source::{ChannelInfo, ChannelInfoSource, SourceError}
 use tb_monitoring::sessions::store::SessionStore;
 use tb_monitoring::{
     epoch_clock, ChatNotificationKind, EventSubDispatcher, EventSubHooks, ExpSessionStore,
-    ExpSessionTracker, GuardStore, HandlerError, HypeTrainPhase, InboxHandler, InboxRuntime,
-    InboxRuntimeHandle, LiveStateStore, MonitoringEventHandler, NoFollowerSource,
+    ExpSessionTracker, GuardKind, GuardStore, HandlerError, HypeTrainPhase, InboxHandler,
+    InboxRuntime, InboxRuntimeHandle, LiveStateStore, MonitoringEventHandler, NoFollowerSource,
     ProcessingInboxStore, SessionTracker, StreamSnapshot, TelemetryStore,
 };
 
@@ -317,6 +317,129 @@ async fn stream_online_dispatch_dedup_und_verarbeitung() {
     );
     assert_eq!(hooks.went_live.load(Ordering::SeqCst), 1);
     assert_eq!(hooks.score_refresh.load(Ordering::SeqCst), 1);
+}
+
+#[tokio::test]
+async fn stream_online_neuer_stream_leert_altes_announcement() {
+    let pool = pool_or_skip!("t4d_online_resets_old_announcement");
+    sqlx::query(
+        "INSERT INTO twitch_live_state
+            (twitch_user_id, streamer_login, is_live, last_stream_id,
+             last_discord_message_id, last_tracking_token)
+         VALUES ('42', 'drag', 0, 'old-stream', 'old-msg', 'old-token')",
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
+
+    let hooks = Arc::new(RecordingHooks::default());
+    let (dispatcher, runtime, store) = build_stack(&pool, hooks);
+    let body = serde_json::json!({
+        "subscription": {"type": "stream.online"},
+        "event": {
+            "broadcaster_user_id": "42",
+            "broadcaster_user_login": "drag",
+            "id": "new-stream",
+            "started_at": "2026-06-09T17:00:00Z"
+        }
+    });
+
+    dispatcher
+        .dispatch("stream.online", Some("m-reset-1"), &body)
+        .await
+        .unwrap();
+    assert!(wait_until_empty(&store).await, "Inbox nicht abgearbeitet");
+    runtime.shutdown().await;
+
+    #[derive(sqlx::FromRow)]
+    struct StateRow {
+        last_stream_id: Option<String>,
+        last_discord_message_id: Option<String>,
+        last_tracking_token: Option<String>,
+    }
+    let state: StateRow = sqlx::query_as(
+        "SELECT last_stream_id, last_discord_message_id, last_tracking_token
+           FROM twitch_live_state WHERE twitch_user_id = '42'",
+    )
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+
+    assert_eq!(state.last_stream_id.as_deref(), Some("new-stream"));
+    assert_eq!(state.last_discord_message_id, None);
+    assert_eq!(state.last_tracking_token, None);
+}
+
+#[tokio::test]
+async fn stream_online_gleicher_stream_respektiert_reconnect_fenster() {
+    let pool = pool_or_skip!("t4d_online_same_stream_reconnect_window");
+    sqlx::query(
+        "INSERT INTO twitch_live_state
+            (twitch_user_id, streamer_login, is_live, last_stream_id,
+             last_discord_message_id, last_tracking_token)
+         VALUES
+            ('42', 'drag', 0, 'same-stream', 'keep-msg', 'keep-token'),
+            ('43', 'flip', 0, 'same-stream', 'drop-msg', 'drop-token')",
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
+    GuardStore::new(pool.clone())
+        .claim(
+            GuardKind::BusinessEffect,
+            "announcement_reannounce:drag",
+            5.0 * 60.0,
+            epoch_clock(),
+        )
+        .await
+        .unwrap();
+    GuardStore::new(pool.clone())
+        .claim(
+            GuardKind::BusinessEffect,
+            "announcement_reannounce:flip",
+            5.0 * 60.0,
+            epoch_clock() - 6.0 * 60.0,
+        )
+        .await
+        .unwrap();
+
+    let hooks = Arc::new(RecordingHooks::default());
+    let (dispatcher, runtime, store) = build_stack(&pool, hooks);
+    for (user_id, login, message_id) in [
+        ("42", "drag", "m-same-active"),
+        ("43", "flip", "m-same-expired"),
+    ] {
+        let body = serde_json::json!({
+            "subscription": {"type": "stream.online"},
+            "event": {
+                "broadcaster_user_id": user_id,
+                "broadcaster_user_login": login,
+                "id": "same-stream",
+                "started_at": "2026-06-09T17:00:00Z"
+            }
+        });
+        dispatcher
+            .dispatch("stream.online", Some(message_id), &body)
+            .await
+            .unwrap();
+    }
+    assert!(wait_until_empty(&store).await, "Inbox nicht abgearbeitet");
+    runtime.shutdown().await;
+
+    let kept: Option<String> = sqlx::query_scalar(
+        "SELECT last_discord_message_id FROM twitch_live_state WHERE twitch_user_id = '42'",
+    )
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    let dropped: Option<String> = sqlx::query_scalar(
+        "SELECT last_discord_message_id FROM twitch_live_state WHERE twitch_user_id = '43'",
+    )
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!(kept.as_deref(), Some("keep-msg"));
+    assert_eq!(dropped, None);
 }
 
 /// Go-Live-Enrichment: stream.online holt Titel/Kategorie über den

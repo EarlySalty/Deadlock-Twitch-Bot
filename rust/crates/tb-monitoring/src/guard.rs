@@ -83,6 +83,25 @@ impl GuardStore {
         Ok(row.is_some())
     }
 
+    /// Existiert für (kind, key) überhaupt ein Eintrag, auch wenn er abgelaufen ist?
+    pub async fn has_entry(&self, kind: GuardKind, key: &str) -> Result<bool, sqlx::Error> {
+        let key = key.trim();
+        if key.is_empty() {
+            return Ok(false);
+        }
+        let row: Option<i32> = sqlx::query_scalar(
+            "SELECT 1
+               FROM eventsub_guard_state
+              WHERE kind = $1 AND guard_key = $2
+              LIMIT 1",
+        )
+        .bind(kind.as_str())
+        .bind(key)
+        .fetch_optional(&self.pool)
+        .await?;
+        Ok(row.is_some())
+    }
+
     /// Versucht, (kind, key) für `ttl_seconds` zu beanspruchen.
     ///
     /// `true` = Claim gewonnen, der Aufrufer darf den Effekt ausführen.
@@ -161,10 +180,12 @@ impl GuardStore {
     /// Garbage-Collection: löscht abgelaufene Einträge, liefert die Anzahl.
     /// Periodisch aufrufen (z. B. aus dem Poll-Loop) — nicht im Claim-Hot-Path.
     pub async fn sweep_expired(&self, now: f64) -> Result<u64, sqlx::Error> {
-        let result = sqlx::query!(
-            "DELETE FROM eventsub_guard_state WHERE expires_at <= $1",
-            now,
+        let result = sqlx::query(
+            "DELETE FROM eventsub_guard_state
+              WHERE expires_at <= $1
+                AND NOT (kind = 'business_effect' AND guard_key LIKE 'announcement_reannounce:%')",
         )
+        .bind(now)
         .execute(&self.pool)
         .await?;
         Ok(result.rows_affected())

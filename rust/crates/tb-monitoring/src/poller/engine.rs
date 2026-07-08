@@ -17,8 +17,9 @@ use chrono::Utc;
 use crate::guard::{GuardKind, GuardStore};
 use crate::live_state::{LiveStateRow, LiveStateStore, LiveStateUpsert, TrackedStreamer};
 use crate::poller::hooks::{
-    AnnounceLiveRequest, AnnouncementSink, EndAnnouncementOutcome, EndAnnouncementRequest,
-    PollHooks, ScoreRefresh, TickReport,
+    announcement_reannounce_cooldown_key, AnnounceLiveRequest, AnnouncementSink,
+    EndAnnouncementOutcome, EndAnnouncementRequest, PollHooks, ScoreRefresh, TickReport,
+    ANNOUNCE_REANNOUNCE_COOLDOWN_SECONDS,
 };
 use crate::poller::settings::PollIntervalStore;
 use crate::poller::source::StreamSource;
@@ -39,10 +40,6 @@ const AUTO_ARCHIVE_THROTTLE: Duration = Duration::from_secs(900);
 const AUTO_ARCHIVE_DAYS: i64 = 10;
 /// Gemeinsame Offline-Drossel mit EventSub gegen doppelte Auto-Raid-Trigger.
 const POLL_OFFLINE_RAID_THROTTLE_SECONDS: f64 = 120.0;
-/// Nach einem beendeten Announcement darf ein schneller echter Neustart posten,
-/// aber ohne Rollen-Ping.
-const ANNOUNCE_REANNOUNCE_COOLDOWN_SECONDS: f64 = 15.0 * 60.0;
-
 /// Statische Poll-Konfiguration (Env-getrieben, wie die Python-Konstanten).
 #[derive(Debug, Clone)]
 pub struct PollConfig {
@@ -206,6 +203,20 @@ impl PollEngine {
             Ok(active) => active,
             Err(error) => {
                 tracing::debug!(%error, login = %login, "Announcement-Reannounce-Cooldown konnte nicht gelesen werden");
+                false
+            }
+        }
+    }
+
+    async fn announcement_reannounce_cooldown_expired(&self, login: &str) -> bool {
+        let Some(key) = announcement_reannounce_cooldown_key(login) else {
+            return false;
+        };
+        match self.guard.has_entry(GuardKind::BusinessEffect, &key).await {
+            Ok(true) => !self.announcement_reannounce_cooldown_active(login).await,
+            Ok(false) => false,
+            Err(error) => {
+                tracing::debug!(%error, login = %login, "Announcement-Reannounce-Cooldown-Marker konnte nicht gelesen werden");
                 false
             }
         }
@@ -516,6 +527,20 @@ impl PollEngine {
                 && !current_stream_id.is_empty()
                 && ((!previous_stream_id.is_empty() && previous_stream_id != current_stream_id)
                     || (previous_stream_id.is_empty() && message_id_previous.is_some()));
+            let reannounce_cooldown_active =
+                if is_live && message_id_previous.is_some() && (!was_live || stream_restarted) {
+                    self.announcement_reannounce_cooldown_active(&login_lower)
+                        .await
+                } else {
+                    false
+                };
+            let same_stream_reconnect_after_cooldown = is_live
+                && !was_live
+                && message_id_previous.is_some()
+                && !stream_restarted
+                && self
+                    .announcement_reannounce_cooldown_expired(&login_lower)
+                    .await;
             if !was_live {
                 had_deadlock_prev = false;
             } else if stream_restarted {
@@ -530,7 +555,7 @@ impl PollEngine {
                     }
                 }
             }
-            if !is_live || stream_restarted {
+            if !is_live || stream_restarted || same_stream_reconnect_after_cooldown {
                 self.sink.on_stream_not_live(&login_lower).await;
             }
 
@@ -600,14 +625,13 @@ impl PollEngine {
             // Go-Live-Posting (Python `should_post`).
             let should_post = self.sink.ready()
                 && is_deadlock
-                && (message_id_previous.is_none() || stream_restarted)
+                && (message_id_previous.is_none()
+                    || stream_restarted
+                    || same_stream_reconnect_after_cooldown)
                 && entry.is_partner_active;
             if should_post {
                 if let Some(stream) = stream {
-                    let suppress_role_pings = stream_restarted
-                        && self
-                            .announcement_reannounce_cooldown_active(&login_lower)
-                            .await;
+                    let suppress_role_pings = stream_restarted && reannounce_cooldown_active;
                     let result = self
                         .sink
                         .announce_live(AnnounceLiveRequest {
@@ -893,11 +917,6 @@ fn epoch_now() -> f64 {
         .duration_since(std::time::UNIX_EPOCH)
         .map(|d| d.as_secs_f64())
         .unwrap_or(0.0)
-}
-
-fn announcement_reannounce_cooldown_key(login: &str) -> Option<String> {
-    let login = login.trim().to_lowercase();
-    (!login.is_empty()).then(|| format!("announcement_reannounce:{login}"))
 }
 
 #[cfg(test)]
