@@ -2,8 +2,9 @@ from __future__ import annotations
 
 import unittest
 from types import SimpleNamespace
+from unittest import mock
 
-from bot.social_media.llm.base import LLMRequest
+from bot.social_media.llm.base import LLMProviderUnavailable, LLMRequest
 from bot.social_media.llm.deepseek import DeepSeekProvider
 from scripts.probe_social_clip_deepseek import is_url, render_markdown, safe_stem
 
@@ -41,6 +42,37 @@ class _FakeClient:
 
 
 class DeepSeekProviderTests(unittest.IsolatedAsyncioTestCase):
+    def test_uses_fireworks_alias_and_endpoint(self) -> None:
+        calls = []
+
+        class FakeAsyncOpenAI:
+            def __init__(self, **kwargs) -> None:
+                calls.append(kwargs)
+
+        with (
+            mock.patch.dict("os.environ", {"FIREWORK_API_KEY": "test-key"}, clear=True),
+            mock.patch.dict(
+                "sys.modules",
+                {"openai": SimpleNamespace(AsyncOpenAI=FakeAsyncOpenAI)},
+            ),
+        ):
+            provider = DeepSeekProvider()
+
+        self.assertEqual(provider.model, "accounts/fireworks/models/deepseek-v4-pro")
+        self.assertEqual(provider.base_url, "https://api.fireworks.ai/inference/v1")
+        self.assertEqual(
+            calls,
+            [{"api_key": "test-key", "base_url": "https://api.fireworks.ai/inference/v1"}],
+        )
+
+    def test_legacy_deepseek_key_is_not_enough_for_fireworks_default(self) -> None:
+        with mock.patch.dict("os.environ", {"DEEPSEEK_API_KEY": "legacy-key"}, clear=True):
+            with self.assertRaisesRegex(
+                LLMProviderUnavailable,
+                "FIREWORKS_API_KEY/FIREWORK_API_KEY not set",
+            ):
+                DeepSeekProvider()
+
     async def test_generate_requests_json_and_parses_platforms(self) -> None:
         client = _FakeClient()
         provider = DeepSeekProvider(client=client, model="deepseek-v4-pro")
@@ -50,10 +82,7 @@ class DeepSeekProviderTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(response.youtube.title, "Big Deadlock Moment")
         self.assertEqual(response.provider, "deepseek")
         self.assertEqual(client.completions.kwargs["response_format"], {"type": "json_object"})
-        self.assertEqual(
-            client.completions.kwargs["extra_body"],
-            {"thinking": {"type": "disabled"}},
-        )
+        self.assertNotIn("extra_body", client.completions.kwargs)
 
 
 class SocialClipProbeHelpersTests(unittest.TestCase):
@@ -84,11 +113,11 @@ class SocialClipProbeHelpersTests(unittest.TestCase):
                 "source": "clip",
                 "transcript": {"text": "raw"},
                 "correction": {"text": "corrected"},
-                "deepseek_error": "DEEPSEEK_API_KEY not set",
+                "deepseek_error": "FIREWORKS_API_KEY/FIREWORK_API_KEY not set",
             }
         )
         self.assertIn("corrected", markdown)
-        self.assertIn("DEEPSEEK_API_KEY not set", markdown)
+        self.assertIn("FIREWORKS_API_KEY/FIREWORK_API_KEY not set", markdown)
 
 
 if __name__ == "__main__":

@@ -1,3 +1,11 @@
+## #342 — Clip-Probe nutzt Fireworks für DeepSeek
+
+**Problem:** Der Clip-Test erwartete einen direkten DeepSeek-Zugang, obwohl der vorhandene KI-Zugang im Bot über Fireworks läuft.
+
+**Änderung:** Der Vorschlags-Schritt nutzt jetzt den vorhandenen Fireworks-Zugang und bleibt sonst beim gleichen Ablauf: Clip holen, transkribieren, Titel und Tags erzeugen.
+
+**Aktuelles Verhalten:** Ein vorhandener Fireworks-Key reicht für den Titel- und Tag-Test aus. Ohne eigenen DeepSeek-Key muss nichts zusätzlich konfiguriert werden.
+
 ## #341 — Twitch-Dashboard zählt Chat und Raw-Chat wieder korrekt
 
 **Problem:** Einige Dashboard-Auswertungen nutzten aufsummierte Session-Werte statt echte aktive Chatter. Raw-Chat konnte beim Streamstart bis zu einer Minute Nachrichten überspringen, wenn die Session noch nicht angelegt war. Außerdem liefen automatische KI-Stream-Reports ohne explizites Opt-in an.
