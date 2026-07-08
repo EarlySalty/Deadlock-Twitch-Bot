@@ -140,40 +140,45 @@ impl MonitoringEventHandler {
             return false;
         }
 
-        if let Some(current_stream_id) = stream_id.map(str::trim).filter(|id| !id.is_empty()) {
-            let previous_stream_id = state
-                .last_stream_id
-                .as_deref()
-                .map(str::trim)
-                .filter(|id| !id.is_empty());
-            if previous_stream_id != Some(current_stream_id) {
-                return true;
+        let previous_stream_id = state
+            .last_stream_id
+            .as_deref()
+            .map(str::trim)
+            .filter(|id| !id.is_empty());
+        let current_stream_id = stream_id.map(str::trim).filter(|id| !id.is_empty());
+        let stream_changed = current_stream_id.is_some() && previous_stream_id != current_stream_id;
+
+        let Some(key) = announcement_reannounce_cooldown_key(login) else {
+            return stream_changed;
+        };
+        let has_reconnect_marker = match self.guard.has_entry(GuardKind::BusinessEffect, &key).await
+        {
+            Ok(has_entry) => has_entry,
+            Err(error) => {
+                tracing::debug!(%error, login, "stream.online: Reannounce-Cooldown-Marker nicht lesbar");
+                return stream_changed;
             }
+        };
+        if has_reconnect_marker {
+            return match self
+                .guard
+                .is_active(GuardKind::BusinessEffect, &key, epoch)
+                .await
+            {
+                Ok(active) => !active,
+                Err(error) => {
+                    tracing::debug!(%error, login, "stream.online: Reannounce-Cooldown nicht lesbar");
+                    stream_changed
+                }
+            };
         }
 
         if state.is_live.unwrap_or(0) != 0 {
-            return false;
-        }
-        let Some(key) = announcement_reannounce_cooldown_key(login) else {
-            return false;
-        };
-        match self.guard.has_entry(GuardKind::BusinessEffect, &key).await {
-            Ok(true) => {}
-            Ok(false) => return false,
-            Err(error) => {
-                tracing::debug!(%error, login, "stream.online: Reannounce-Cooldown-Marker nicht lesbar");
-                return false;
-            }
-        }
-        match self
-            .guard
-            .is_active(GuardKind::BusinessEffect, &key, epoch)
-            .await
-        {
-            Ok(active) => !active,
-            Err(error) => {
-                tracing::debug!(%error, login, "stream.online: Reannounce-Cooldown nicht lesbar");
-                false
+            stream_changed
+        } else {
+            match (previous_stream_id, current_stream_id) {
+                (Some(previous), Some(current)) => previous != current,
+                _ => false,
             }
         }
     }

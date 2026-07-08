@@ -390,19 +390,11 @@ impl LiveStateStore {
                     last_stream_id = COALESCE(EXCLUDED.last_stream_id, twitch_live_state.last_stream_id),
                     last_started_at = COALESCE(EXCLUDED.last_started_at, twitch_live_state.last_started_at),
                     last_discord_message_id = CASE
-                        WHEN $6
-                          OR (NULLIF(EXCLUDED.last_stream_id, '') IS NOT NULL
-                         AND COALESCE(twitch_live_state.last_stream_id, '') <> EXCLUDED.last_stream_id
-                         )
-                        THEN NULL
+                        WHEN $6 THEN NULL
                         ELSE twitch_live_state.last_discord_message_id
                     END,
                     last_tracking_token = CASE
-                        WHEN $6
-                          OR (NULLIF(EXCLUDED.last_stream_id, '') IS NOT NULL
-                         AND COALESCE(twitch_live_state.last_stream_id, '') <> EXCLUDED.last_stream_id
-                         )
-                        THEN NULL
+                        WHEN $6 THEN NULL
                         ELSE twitch_live_state.last_tracking_token
                     END
             "#,

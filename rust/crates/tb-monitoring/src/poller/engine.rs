@@ -626,7 +626,7 @@ impl PollEngine {
             let should_post = self.sink.ready()
                 && is_deadlock
                 && (message_id_previous.is_none()
-                    || stream_restarted
+                    || (stream_restarted && !reannounce_cooldown_active)
                     || same_stream_reconnect_after_cooldown)
                 && entry.is_partner_active;
             if should_post {
