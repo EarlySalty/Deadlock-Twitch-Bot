@@ -46,6 +46,7 @@ docs/superpowers/
 security-reports/
 data/highlight_clipper/state.json
 data/stream_coaching_audits/
+data/social_clip_probe/
 *.dem
 *.json
 # sqlx offline cache MUSS eingecheckt sein (Tier 3 compile-checked queries)
