@@ -1,3 +1,11 @@
+## #340 — Clip-Probe erstellt Transcript und Social-Vorschläge
+
+**Problem:** Für bestehende Twitch-Clips fehlte ein schneller Testlauf, der zeigt, ob aus einem einzelnen Clip genug verwertbarer Kontext für Social-Titel und Tags entsteht.
+
+**Änderung:** Ein interner Probe-Lauf kann den neuesten Clip eines Kanals holen, per Whisper transkribieren und die Ergebnisse für Social-Vorschläge vorbereiten. Fehlt der DeepSeek-Zugang, bleibt das Transcript trotzdem erhalten.
+
+**Aktuelles Verhalten:** Für einen Clip entsteht eine auswertbare Datei mit Quelle, Transcript und späteren Titel-/Tag-Vorschlägen. Der Test kann ohne Dashboard und ohne Upload laufen.
+
 ## #339 — Raid-Hinweis erinnert ans Hallo im Zielchat
 
 **Problem:** Nach Auto-Raids kamen einige Streamer im Zielchat nicht sichtbar an oder sagten dort nicht kurz Hallo. Dadurch wirkte der Zuschauer-Übergang unpersönlich.

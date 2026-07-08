@@ -2,12 +2,12 @@
 
 Default: lokales Ollama (`bot/social_media/llm/ollama.py`).
 
-Externe Provider (MiniMax, Claude Haiku) werden *nur* aufgerufen, wenn
+Externe Provider (MiniMax, Claude Haiku, DeepSeek) werden *nur* aufgerufen, wenn
 beide Bedingungen erfuellt sind:
 
 1. Globaler Consent-Toggle in `social_media_settings.external_llm_consent` ist `true`.
 2. Per Env-Variable `SOCIAL_MEDIA_LLM_PROVIDER` ist explizit ein externer
-   Provider gewaehlt (`minimax` oder `claude_haiku`).
+   Provider gewaehlt (`minimax`, `claude_haiku` oder `deepseek`).
 
 Ohne Consent oder ohne explizite Provider-Wahl: lokales Ollama.
 Bei Fehlern auf dem gewaehlten Provider erfolgt - sofern moeglich -
@@ -33,7 +33,7 @@ from .base import (
 log = logging.getLogger("TwitchStreams.SocialMedia.LLM.Dispatcher")
 
 _DEFAULT_LOCAL = "ollama"
-_EXTERNAL_PROVIDERS = frozenset({"minimax", "claude_haiku"})
+_EXTERNAL_PROVIDERS = frozenset({"minimax", "claude_haiku", "deepseek"})
 
 
 class LLMDispatcher:
@@ -71,6 +71,9 @@ class LLMDispatcher:
         if name == "claude_haiku":
             from .claude_haiku import ClaudeHaikuProvider
             return ClaudeHaikuProvider()
+        if name == "deepseek":
+            from .deepseek import DeepSeekProvider
+            return DeepSeekProvider()
         raise LLMProviderUnavailable(f"Unknown LLM provider: {name!r}")
 
     async def generate(self, request: LLMRequest) -> LLMResponse:
