@@ -490,7 +490,13 @@ pub async fn call_claude(base_url: &str, api_key: &str, prompt: &str) -> Result<
         .await
         .map_err(|e| e.to_string())?;
     if !resp.status().is_success() {
-        return Err(format!("HTTP {}", resp.status()));
+        let status = resp.status();
+        // Der Fehlerbody nennt die Ursache (ungueltiges Modell, Limit, ...);
+        // ohne ihn ist ein 4xx im Journal nicht diagnostizierbar. Er enthaelt
+        // keine Credentials — die API echot den Key nicht zurueck.
+        let body = resp.text().await.unwrap_or_default();
+        let body = body.chars().take(300).collect::<String>();
+        return Err(format!("HTTP {status} — {body}"));
     }
     let parsed: ClaudeResponse = resp.json().await.map_err(|e| e.to_string())?;
     Ok(parsed
@@ -2599,6 +2605,29 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(out, "CLAUDE-ANTWORT");
+    }
+
+    #[tokio::test]
+    async fn call_claude_fehlerbody_landet_in_der_meldung() {
+        use wiremock::matchers::{method, path};
+        use wiremock::{Mock, MockServer, ResponseTemplate};
+        let server = MockServer::start().await;
+        let body = serde_json::json!({
+            "type": "error",
+            "error": {"type": "invalid_request_error", "message": "model: unknown-model"}
+        });
+        Mock::given(method("POST"))
+            .and(path("/v1/messages"))
+            .respond_with(ResponseTemplate::new(400).set_body_json(body))
+            .mount(&server)
+            .await;
+        let err = call_claude(&server.uri(), "secret", "prompt")
+            .await
+            .unwrap_err();
+        // Ohne Body ist ein 400 nicht diagnostizierbar (Modellname? Limit?).
+        assert!(err.contains("400"), "Status fehlt: {err}");
+        assert!(err.contains("invalid_request_error"), "Body fehlt: {err}");
+        assert!(err.contains("model: unknown-model"), "Body fehlt: {err}");
     }
 
     #[test]
