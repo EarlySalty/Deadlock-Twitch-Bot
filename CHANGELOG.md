@@ -4,7 +4,7 @@
 
 **Änderung:** Solche Fragen werden wieder erkannt, aber nicht mehr allein per Stichwort. Ein grober Vorfilter sortiert vor, danach entscheidet die KI des Bots. Bei einem klaren Ja kommt der Weg zum Invite, bei Unsicherheit fragt der Bot einmal kurz nach, sonst bleibt er still.
 
-**Aktuelles Verhalten:** Neue Zuschauer mit einer echten Zugangsfrage bekommen den Hinweis auf den Discord und den Tipp, ihren Steam-Freundescode gleich mitzuschicken. Das greift nur in Kanälen, die live Deadlock streamen. Pro Kanal liegen mindestens zwei Minuten zwischen zwei Antworten, pro Person eine Stunde. Antwortet die KI gar nicht, sagt der Bot lieber nichts, und Streamer mit abgeschalteter Bot-Werbung bekommen den Hinweis nie.
+**Aktuelles Verhalten:** Neue Zuschauer mit einer echten Zugangsfrage bekommen den Hinweis auf den Discord und den Tipp, ihren Steam-Freundescode gleich mitzuschicken. Das greift nur in Kanälen, die live Deadlock streamen. Nach einer Antwort hält sich der Bot zurück, mindestens zwei Minuten im Kanal und eine Stunde bei derselben Person. Nur wer direkt auf seine Rückfrage mit ja antwortet, bekommt den Invite sofort. Antwortet die KI gar nicht, sagt der Bot lieber nichts, und Streamer mit abgeschalteter Bot-Werbung bekommen den Hinweis nie.
 ## #348 — Befehle im Blick, und nur wenn Deadlock läuft
 
 **Problem:** `!commands` hat bloß einen Link gepostet, statt zu zeigen, was der Bot kann. Und die Deadlock-Befehle liefen in jeder Kategorie, auch wenn gerade gar nicht Deadlock lief.
