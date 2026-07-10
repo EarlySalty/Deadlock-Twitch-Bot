@@ -5,7 +5,7 @@
 //!
 //! ```ignore
 //! let engine = CommandEngine::new(pool, api, raid_port, discord_link_port, invite_port, super_mod_port, autoban_store);
-//! let handled = engine.handle(&event).await; // true = war Command, Pipeline stoppt
+//! let handled = engine.handle(&event, deadlock_live).await; // true = war Command, Pipeline stoppt
 //! ```
 //!
 //! # Architektur-Hinweis
@@ -32,6 +32,7 @@ use tb_knowledge::{KnowledgeBase, Namespace};
 use tokio::sync::Mutex;
 
 use crate::api::ChatApi;
+use crate::catalog::{self, CommandGroup};
 use crate::types::{ChatMessageEvent, SendOutcome};
 
 // ---------------------------------------------------------------------------
@@ -96,7 +97,16 @@ fn knowledge_base() -> &'static KnowledgeBase {
 }
 
 fn commands_reply() -> String {
-    format!("Alle Befehle findest du hier: {COMMANDS_URL}")
+    let groups = catalog::grouped()
+        .into_iter()
+        .filter(|(group, _)| *group != CommandGroup::Mod)
+        .map(|(group, items)| {
+            let names = items.iter().map(|c| c.name).collect::<Vec<_>>().join(" ");
+            format!("{}: {names}", group.label())
+        })
+        .collect::<Vec<_>>()
+        .join(" · ");
+    format!("{groups} · Alle Befehle: {COMMANDS_URL}")
 }
 
 fn help_reply(kb: &KnowledgeBase, topic: &str) -> String {
@@ -361,7 +371,7 @@ impl CommandEngine {
     /// `false` wenn kein Match.
     ///
     /// `commands.py` — RaidCommandsMixin dispatch-Tabelle.
-    pub async fn handle(&self, event: &ChatMessageEvent) -> bool {
+    pub async fn handle(&self, event: &ChatMessageEvent, deadlock_live: bool) -> bool {
         let text_lower = event.text().to_lowercase();
 
         let (cmd, args) = if let Some(pos) = text_lower.find(' ') {
@@ -369,6 +379,10 @@ impl CommandEngine {
         } else {
             (text_lower.as_str(), "")
         };
+
+        if !deadlock_live && crate::catalog::deadlock_only(cmd) {
+            return false;
+        }
 
         match cmd {
             "!ping" | "!health" | "!status" | "!bot" => {
@@ -439,7 +453,7 @@ impl CommandEngine {
                 }
                 true
             }
-            "!dldc" | "!dlde" => {
+            "!dldc" | "!dlde" | "!discord" => {
                 self.cmd_dldc(event).await;
                 true
             }
@@ -2200,6 +2214,19 @@ mod tests {
     }
 
     #[test]
+    fn commands_reply_kommt_aus_oeffentlichem_katalog() {
+        let reply = commands_reply();
+        assert!(
+            reply.len() <= 480,
+            "Twitch-Antwort zu lang: {}",
+            reply.len()
+        );
+        assert!(reply.contains("/streamer/commands"), "{reply}");
+        assert!(reply.contains("!rank"), "{reply}");
+        assert!(!reply.contains("!uban"), "{reply}");
+    }
+
+    #[test]
     fn help_reply_findet_thema() {
         let kb = help_fixture_kb();
         let r = help_reply(&kb, "raid");
@@ -2522,6 +2549,96 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn deadlock_gate_blockt_rank_stumm_wenn_nicht_live() {
+        let pool = pool_or_skip!("cmd_gate_rank_blocked");
+        apply_ddl(&pool).await;
+        let api = MockApi::new();
+        let engine = make_engine_with_pool(pool, api.clone());
+
+        let handled = engine
+            .handle(&make_event("!rank", false, false), false)
+            .await;
+
+        assert!(!handled);
+        assert_eq!(api.message_count().await, 0);
+    }
+
+    #[tokio::test]
+    async fn deadlock_gate_erlaubt_rank_wenn_live() {
+        let pool = pool_or_skip!("cmd_gate_rank_live");
+        apply_ddl(&pool).await;
+        let api = MockApi::new();
+        let engine = make_engine_with_pool(pool, api);
+
+        assert!(
+            engine
+                .handle(&make_event("!rank", false, false), true)
+                .await
+        );
+    }
+
+    #[tokio::test]
+    async fn deadlock_gate_erlaubt_commands_wenn_nicht_live() {
+        let pool = pool_or_skip!("cmd_gate_commands");
+        apply_ddl(&pool).await;
+        let api = MockApi::new();
+        let engine = make_engine_with_pool(pool, api.clone());
+
+        let handled = engine
+            .handle(&make_event("!commands", false, false), false)
+            .await;
+
+        assert!(handled);
+        assert_eq!(api.message_count().await, 1);
+    }
+
+    #[tokio::test]
+    async fn deadlock_gate_erlaubt_engagement_ignore_me_wenn_nicht_live() {
+        let pool = pool_or_skip!("cmd_gate_engagement_ignore");
+        apply_ddl(&pool).await;
+        let api = MockApi::new();
+        let engine = make_engine_with_pool(pool, api);
+
+        assert!(
+            engine
+                .handle(&make_event("!engagement_ignore_me", false, false), false)
+                .await
+        );
+    }
+
+    #[tokio::test]
+    async fn deadlock_gate_erlaubt_uban_wenn_nicht_live() {
+        let pool = pool_or_skip!("cmd_gate_uban");
+        apply_ddl(&pool).await;
+        let api = MockApi::new();
+        let engine = make_engine_with_pool(pool, api);
+
+        assert!(
+            engine
+                .handle(&make_event("!uban", true, false), false)
+                .await
+        );
+    }
+
+    /// `!raid` wird am Stream-Ende gebraucht, wenn die Kategorie laengst nicht mehr
+    /// Deadlock ist (CHANGELOG #123). Der Raid-Pfad prueft die Deadlock-Regel selbst
+    /// und antwortet erklaerend; das grobe Vor-Gate darf ihn nicht stumm schlucken.
+    #[tokio::test]
+    async fn deadlock_gate_erlaubt_raid_wenn_nicht_live() {
+        let pool = pool_or_skip!("cmd_gate_raid");
+        apply_ddl(&pool).await;
+        let api = MockApi::new();
+        let engine = make_engine_with_pool(pool, api);
+
+        assert!(
+            engine
+                .handle(&make_event("!raid", true, false), false)
+                .await,
+            "!raid muss den Raid-Pfad erreichen, auch wenn gerade kein Deadlock laeuft"
+        );
+    }
+
+    #[tokio::test]
     async fn engagement_ignore_me_schreibt_optout() {
         let pool = pool_or_skip!("cmd_engagement_ignore");
         apply_ddl(&pool).await;
@@ -2529,7 +2646,7 @@ mod tests {
         let engine = make_engine_with_pool(pool.clone(), api.clone());
 
         let event = make_event("!engagement_ignore_me", false, false);
-        engine.handle(&event).await;
+        engine.handle(&event, true).await;
 
         let row = sqlx::query_as::<_, (String,)>(
             "SELECT twitch_user_id FROM twitch_user_engagement_optout WHERE twitch_user_id = 'u999'",
@@ -2556,7 +2673,7 @@ mod tests {
             .unwrap();
 
         let event = make_event("!engagement_remember_me", false, false);
-        engine.handle(&event).await;
+        engine.handle(&event, true).await;
 
         let row = sqlx::query_as::<_, (String,)>(
             "SELECT twitch_user_id FROM twitch_user_engagement_optout WHERE twitch_user_id = 'u999'",
@@ -2575,7 +2692,7 @@ mod tests {
         let engine = make_engine_with_pool(pool.clone(), api.clone());
 
         let event = make_event("!engagement_status", false, false);
-        engine.handle(&event).await;
+        engine.handle(&event, true).await;
 
         let msg = api.last_message().await.unwrap();
         assert!(msg.contains("nie konfiguriert"), "Meldung: {msg}");
@@ -2588,7 +2705,7 @@ mod tests {
         let engine = make_engine_with_pool(pool, api.clone());
 
         engine
-            .handle(&make_event("!engagement_status", false, false))
+            .handle(&make_event("!engagement_status", false, false), true)
             .await;
 
         let msg = api.last_message().await.unwrap();
@@ -2603,7 +2720,7 @@ mod tests {
         let engine = make_engine_with_pool(pool.clone(), api.clone());
 
         engine
-            .handle(&make_event("!engagement_on", true, false))
+            .handle(&make_event("!engagement_on", true, false), true)
             .await;
         let enabled: bool = sqlx::query_scalar(
             "SELECT enabled FROM twitch_engagement_settings WHERE channel_login = 'testchannel'",
@@ -2614,7 +2731,7 @@ mod tests {
         assert!(enabled);
 
         engine
-            .handle(&make_event("!engagement_off", true, false))
+            .handle(&make_event("!engagement_off", true, false), true)
             .await;
         let enabled: bool = sqlx::query_scalar(
             "SELECT enabled FROM twitch_engagement_settings WHERE channel_login = 'testchannel'",
@@ -2636,7 +2753,7 @@ mod tests {
         let engine = make_engine_with_pool(pool.clone(), api.clone());
 
         engine
-            .handle(&make_event("!engagement_on", false, false))
+            .handle(&make_event("!engagement_on", false, false), true)
             .await;
 
         let count: i64 =
@@ -2664,7 +2781,7 @@ mod tests {
 
         let engine = make_engine_with_pool(pool.clone(), api.clone());
         let event = make_event("!raid_history", false, false);
-        engine.handle(&event).await;
+        engine.handle(&event, true).await;
 
         let msg = api.last_message().await.unwrap();
         assert!(msg.contains("Noch keine Raids"), "Meldung: {msg}");
@@ -2692,7 +2809,7 @@ mod tests {
 
         let engine = make_engine_with_pool(pool.clone(), api.clone());
         let event = make_event("!raid_history", false, false);
-        engine.handle(&event).await;
+        engine.handle(&event, true).await;
 
         let msg = api.last_message().await.unwrap();
         assert!(msg.contains("Letzte Raids"), "Meldung: {msg}");
@@ -2707,7 +2824,7 @@ mod tests {
         let engine = make_engine_with_pool(pool.clone(), api.clone());
 
         let event = make_event("!raid_status", false, false);
-        engine.handle(&event).await;
+        engine.handle(&event, true).await;
 
         let msg = api.last_message().await.unwrap();
         assert!(
@@ -2740,7 +2857,7 @@ mod tests {
             Arc::new(MockAutoban(None)),
         );
 
-        engine.handle(&make_event("!raid", true, false)).await;
+        engine.handle(&make_event("!raid", true, false), true).await;
 
         assert_eq!(raid.manual_call_count().await, 0);
         let msg = api.last_message().await.unwrap();
@@ -2774,7 +2891,7 @@ mod tests {
             Arc::new(MockAutoban(None)),
         );
 
-        engine.handle(&make_event("!raid", true, false)).await;
+        engine.handle(&make_event("!raid", true, false), true).await;
 
         let msg = api.last_message().await.unwrap();
         assert!(msg.contains("Raid auf"), "Meldung: {msg}");
@@ -2810,7 +2927,7 @@ mod tests {
             let event = make_event(cmd, true, false);
             // !raid_enable fällt in `_ => false` — keine Command-Behandlung.
             assert!(
-                !engine.handle(&event).await,
+                !engine.handle(&event, true).await,
                 "{cmd} sollte kein Befehl sein"
             );
         }
@@ -2845,7 +2962,9 @@ mod tests {
             Arc::new(MockAutoban(None)),
         );
 
-        engine.handle(&make_event("!silentban", true, false)).await;
+        engine
+            .handle(&make_event("!silentban", true, false), true)
+            .await;
 
         assert_eq!(raid.silent_ban_call_count().await, 0);
         let msg = api.last_message().await.unwrap();
@@ -2879,7 +2998,9 @@ mod tests {
             Arc::new(MockAutoban(None)),
         );
 
-        engine.handle(&make_event("!silentraid", true, false)).await;
+        engine
+            .handle(&make_event("!silentraid", true, false), true)
+            .await;
 
         assert_eq!(raid.silent_raid_call_count().await, 0);
         let msg = api.last_message().await.unwrap();
@@ -2913,7 +3034,7 @@ mod tests {
         );
 
         let event = make_event("!uban", true, false);
-        engine.handle(&event).await;
+        engine.handle(&event, true).await;
 
         let msg = api.last_message().await.unwrap();
         assert!(msg.contains("Kein Auto-Ban-Eintrag"), "Meldung: {msg}");
@@ -2939,11 +3060,11 @@ mod tests {
 
         // Erster Aufruf
         let event = make_event("!invite", false, false);
-        engine.handle(&event).await;
+        engine.handle(&event, true).await;
         let count_first = api.message_count().await;
 
         // Zweiter Aufruf sofort — Cooldown aktiv
-        engine.handle(&event).await;
+        engine.handle(&event, true).await;
         let count_second = api.message_count().await;
 
         assert_eq!(
@@ -2971,10 +3092,10 @@ mod tests {
         );
 
         let event = make_event("!invite", false, false);
-        engine.handle(&event).await;
+        engine.handle(&event, true).await;
         assert_eq!(api.message_count().await, 0);
 
-        engine.handle(&event).await;
+        engine.handle(&event, true).await;
         assert_eq!(api.message_count().await, 1);
         let msg = api.last_message().await.unwrap();
         assert!(msg.contains("invite-ok"), "Meldung: {msg}");
@@ -3000,10 +3121,10 @@ mod tests {
         );
 
         let event = make_event("!invite", false, false);
-        engine.handle(&event).await;
+        engine.handle(&event, true).await;
         assert_eq!(api.message_count().await, 0);
 
-        engine.handle(&event).await;
+        engine.handle(&event, true).await;
         assert_eq!(api.message_count().await, 1);
         let msg = api.last_message().await.unwrap();
         assert!(msg.contains("invite-ok"), "Meldung: {msg}");
@@ -3029,7 +3150,9 @@ mod tests {
         )
         .set_invite_reply_notifier(notifier.clone());
 
-        engine.handle(&make_event("!invite", false, false)).await;
+        engine
+            .handle(&make_event("!invite", false, false), true)
+            .await;
 
         assert_eq!(api.message_count().await, 1);
         assert_eq!(notifier.channels().await, vec!["testchannel".to_string()]);
@@ -3076,7 +3199,7 @@ mod tests {
         seed_lurker_partner(&pool, 1, true).await;
 
         let event = make_event("!lurkersteuer_off", false, true);
-        let handled = engine.handle(&event).await;
+        let handled = engine.handle(&event, true).await;
         assert!(
             handled,
             "!lurkersteuer_off muss als Command behandelt werden"
@@ -3103,7 +3226,7 @@ mod tests {
         seed_lurker_partner(&pool, 1, true).await;
 
         let handled = engine
-            .handle(&make_event("!lurker_tax_off", false, true))
+            .handle(&make_event("!lurker_tax_off", false, true), true)
             .await;
         assert!(handled, "Alias !lurker_tax_off muss greifen");
 
@@ -3126,7 +3249,7 @@ mod tests {
 
         // Mod, aber nicht Broadcaster → Ablehnung, Flag bleibt 1.
         let handled = engine
-            .handle(&make_event("!lurkersteuer_off", true, false))
+            .handle(&make_event("!lurkersteuer_off", true, false), true)
             .await;
         assert!(handled);
 
@@ -3152,7 +3275,7 @@ mod tests {
         seed_lurker_partner(&pool, 1, false).await;
 
         let handled = engine
-            .handle(&make_event("!lurkersteuer_off", false, true))
+            .handle(&make_event("!lurkersteuer_off", false, true), true)
             .await;
         assert!(handled);
 
