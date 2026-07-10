@@ -1518,15 +1518,6 @@ pub async fn enforce_verdict(pool: &PgPool, api: &dyn ChatApi, verdict_id: i64) 
 /// Löst Broadcaster- und Chatter-ID auf und führt den Ban aus. Die gespeicherte
 /// Chatter-ID hat Vorrang; fehlt sie, wird sie über den Login aufgelöst.
 async fn try_ban(api: &dyn ChatApi, target: &EnforceTarget) -> bool {
-    // Safe-List: dieser Pfad bannt direkt, ohne auto_ban_and_cleanup.
-    if crate::safe_list::is_safe(target.chatter_id.as_deref(), &target.chatter_login) {
-        tracing::warn!(
-            chatter = %target.chatter_login,
-            "conversation_scam: Ban gegen Safe-List-Konto unterdrückt"
-        );
-        return false;
-    }
-
     let Some(broadcaster_id) = api
         .resolve_user_id(&target.channel_login)
         .await
@@ -1546,6 +1537,18 @@ async fn try_ban(api: &dyn ChatApi, target: &EnforceTarget) -> bool {
     let Some(chatter_id) = chatter_id else {
         return false;
     };
+
+    // Safe-List: dieser Pfad bannt direkt, ohne auto_ban_and_cleanup. Der Check
+    // steht NACH der ID-Auflösung: ein Eintrag ohne gespeicherte ID kann über
+    // den Login auf ein Safe-Konto auflösen (etwa nach einer Umbenennung).
+    if crate::safe_list::is_safe(Some(&chatter_id), &target.chatter_login) {
+        tracing::warn!(
+            chatter = %target.chatter_login,
+            "conversation_scam: Ban gegen Safe-List-Konto unterdrückt"
+        );
+        return false;
+    }
+
     matches!(
         api.ban_user(&broadcaster_id, &chatter_id, &target.reasoning)
             .await,
@@ -1873,11 +1876,11 @@ mod tests {
         }
     }
 
-    fn enforce_target(login: &str, id: &str) -> EnforceTarget {
+    fn enforce_target(login: &str, id: Option<&str>) -> EnforceTarget {
         EnforceTarget {
             channel_login: "kanal".to_string(),
             chatter_login: login.to_string(),
-            chatter_id: Some(id.to_string()),
+            chatter_id: id.map(str::to_string),
             action_taken: String::new(),
             reasoning: "Scam-Verdacht".to_string(),
         }
@@ -1887,8 +1890,8 @@ mod tests {
     #[tokio::test]
     async fn try_ban_verschont_safe_konten() {
         for safe in crate::safe_list::SAFE_ACCOUNTS {
-            let api = MockApi::resolving();
-            let target = enforce_target(safe.login, safe.twitch_user_id);
+            let api = MockApi::resolving("broadcast-id");
+            let target = enforce_target(safe.login, Some(safe.twitch_user_id));
 
             assert!(!try_ban(&api, &target).await, "Safe-Konto {}", safe.login);
             assert!(
@@ -1899,11 +1902,45 @@ mod tests {
         }
     }
 
+    /// Merge-Kritiker 2026-07-10: Ein Eintrag OHNE gespeicherte chatter_id löst
+    /// den Login per Helix auf. Zeigt die Auflösung auf ein Safe-Konto, darf
+    /// trotzdem kein Ban fallen — der Guard muss NACH der Auflösung greifen.
+    #[tokio::test]
+    async fn try_ban_verschont_safe_konto_das_erst_per_login_aufloest() {
+        for safe in crate::safe_list::SAFE_ACCOUNTS {
+            // Der gespeicherte Login ist unverdächtig (z. B. nach Umbenennung),
+            // erst die Auflösung liefert die Safe-ID.
+            let api = MockApi::resolving(safe.twitch_user_id);
+            let target = enforce_target("unbekannter_alias", None);
+
+            assert!(
+                !try_ban(&api, &target).await,
+                "aufgeloeste Safe-ID {} wurde gebannt",
+                safe.twitch_user_id
+            );
+            assert!(
+                api.ban_reasons.lock().unwrap().is_empty(),
+                "Safe-Konto {} wurde nach Login-Aufloesung gebannt",
+                safe.login
+            );
+        }
+    }
+
     /// Gegenprobe: ohne Safe-List-Treffer bannt derselbe Pfad wirklich.
     #[tokio::test]
     async fn try_ban_bannt_fremdes_konto() {
-        let api = MockApi::resolving();
-        let target = enforce_target("irgendwer", "999999999");
+        let api = MockApi::resolving("broadcast-id");
+        let target = enforce_target("irgendwer", Some("999999999"));
+
+        assert!(try_ban(&api, &target).await);
+        assert_eq!(api.ban_reasons.lock().unwrap().len(), 1);
+    }
+
+    /// Gegenprobe zur Login-Auflösung: fremde ID wird gebannt.
+    #[tokio::test]
+    async fn try_ban_bannt_fremdes_konto_nach_login_aufloesung() {
+        let api = MockApi::resolving("999999999");
+        let target = enforce_target("irgendwer", None);
 
         assert!(try_ban(&api, &target).await);
         assert_eq!(api.ban_reasons.lock().unwrap().len(), 1);
@@ -1929,11 +1966,11 @@ mod tests {
             }
         }
 
-        /// Lässt `resolve_user_id` erfolgreich auflösen — nötig, damit `try_ban`
+        /// Lässt `resolve_user_id` auf `id` auflösen — nötig, damit `try_ban`
         /// überhaupt bis zum Ban-Aufruf kommt.
-        fn resolving() -> Self {
+        fn resolving(id: &str) -> Self {
             let api = Self::new();
-            *api.resolve_id.lock().unwrap() = Some("broadcast-id".to_string());
+            *api.resolve_id.lock().unwrap() = Some(id.to_string());
             api
         }
     }

@@ -257,6 +257,17 @@ impl GlobalBanSweeper {
                 continue;
             }
 
+            // Safe-List: NACH der ID-Auflösung, denn Banlisten-Einträge dürfen
+            // ohne gespeicherte ID existieren und per Login auflösen. Der Check
+            // sitzt unmittelbar vor der Aktion, damit ihn kein Pfad umgeht.
+            if crate::safe_list::is_safe(Some(&target_id), &login_lower) {
+                tracing::warn!(
+                    chatter = %login_lower,
+                    "GlobalBanSweep: Safe-List-Konto steht auf der Banliste, kein Ban"
+                );
+                continue;
+            }
+
             let reason = build_reason(entry.reason.as_deref());
 
             let outcome = self
@@ -332,7 +343,7 @@ fn build_reason(custom_reason: Option<&str>) -> String {
 /// Alle Einträge in `twitch_chatter_global_ban`, neueste zuerst.
 /// `pg.py:4217` — `list_chatter_global_bans`.
 async fn list_bans(pool: &PgPool) -> Vec<BanEntry> {
-    let entries: Vec<BanEntry> = sqlx::query_as!(
+    sqlx::query_as!(
         BanEntry,
         r#"
         SELECT chatter_login AS "chatter_login!", chatter_id, reason
@@ -345,23 +356,7 @@ async fn list_bans(pool: &PgPool) -> Vec<BanEntry> {
     .unwrap_or_else(|e| {
         tracing::debug!("GlobalBanSweep: list_bans fehlgeschlagen: {e}");
         vec![]
-    });
-
-    // Safe-List schlägt die Banliste. Der Filter sitzt hier statt im
-    // API-Handler, damit auch ein direkter DB-Eintrag wirkungslos bleibt.
-    entries
-        .into_iter()
-        .filter(|entry| {
-            let safe = crate::safe_list::is_safe(entry.chatter_id.as_deref(), &entry.chatter_login);
-            if safe {
-                tracing::warn!(
-                    chatter = %entry.chatter_login,
-                    "GlobalBanSweep: Safe-List-Konto steht auf der Banliste und wird uebersprungen"
-                );
-            }
-            !safe
-        })
-        .collect()
+    })
 }
 
 /// Lädt alle (chatter_login, broadcaster_id)-Paare aus dem Applied-Ledger.
@@ -915,6 +910,77 @@ mod tests {
             .await;
 
         assert_eq!(count, 0, "live Kanal wird übersprungen");
+    }
+
+    /// Safe-List: steht ein Safe-Konto (per ID) auf der Banliste, bannt der
+    /// Sweep es nicht.
+    #[tokio::test]
+    async fn apply_bans_verschont_safe_konto_mit_id() {
+        let pool = pool_or_skip!("gbs_safe_id");
+        let safe = &crate::safe_list::SAFE_ACCOUNTS[0];
+
+        sqlx::query("INSERT INTO twitch_chatter_global_ban (chatter_login, chatter_id) VALUES ($1, $2)")
+            .bind(safe.login)
+            .bind(safe.twitch_user_id)
+            .execute(&pool)
+            .await
+            .unwrap();
+
+        let api = Arc::new(MockApi::default());
+        let roster = MockRoster::new(vec![("ziel", "bid_z")], vec![], vec!["bid_z"], vec!["ziel"]);
+        let sw = sweeper(pool.clone(), api.clone());
+        let mut applied = load_applied_pairs(&pool).await;
+
+        let count = sw
+            .apply_bans_to_channel("ziel", "bid_z", &roster, &mut applied)
+            .await;
+
+        assert_eq!(count, 0, "Safe-Konto darf nicht gebannt werden");
+        assert!(
+            api.ban_calls.lock().unwrap().is_empty(),
+            "ban_user wurde fuer Safe-Konto gerufen"
+        );
+    }
+
+    /// Merge-Kritiker 2026-07-10: Banlisten-Eintrag OHNE chatter_id, dessen
+    /// Login per Helix auf ein Safe-Konto auflöst. Der Guard muss NACH der
+    /// Auflösung greifen, sonst bannt der Sweep das Safe-Konto.
+    #[tokio::test]
+    async fn apply_bans_verschont_safe_konto_das_erst_per_login_aufloest() {
+        let pool = pool_or_skip!("gbs_safe_resolve");
+        let safe = &crate::safe_list::SAFE_ACCOUNTS[0];
+
+        sqlx::query(
+            "INSERT INTO twitch_chatter_global_ban (chatter_login, chatter_id)
+             VALUES ('alter_alias', NULL)",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+
+        let api = Arc::new(MockApi::default());
+        {
+            let mut m = api.resolve_map.lock().unwrap();
+            // Der Login loest auf die Safe-ID auf.
+            m.insert(
+                "alter_alias".to_string(),
+                Some(safe.twitch_user_id.to_string()),
+            );
+        }
+
+        let roster = MockRoster::new(vec![("ziel", "bid_z")], vec![], vec!["bid_z"], vec!["ziel"]);
+        let sw = sweeper(pool.clone(), api.clone());
+        let mut applied = load_applied_pairs(&pool).await;
+
+        let count = sw
+            .apply_bans_to_channel("ziel", "bid_z", &roster, &mut applied)
+            .await;
+
+        assert_eq!(count, 0, "aufgeloeste Safe-ID darf nicht gebannt werden");
+        assert!(
+            api.ban_calls.lock().unwrap().is_empty(),
+            "ban_user wurde fuer aufgeloestes Safe-Konto gerufen"
+        );
     }
 
     #[tokio::test]
