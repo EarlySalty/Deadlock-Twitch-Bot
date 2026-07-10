@@ -1,28 +1,12 @@
-import { StrictMode } from "react";
-import { createRoot, hydrateRoot } from "react-dom/client";
-import "./brand.css";
-import "./ui.css";
-import { LandingPage } from "./pages/LandingPage";
+import { StrictMode } from 'react'
+import { createRoot } from 'react-dom/client'
+import '../index.css'
+import './theme.css'
+import App from '../App'
 
-if (typeof window !== "undefined") {
-  const container = document.getElementById("root")!;
-  const app = (
-    <StrictMode>
-      <LandingPage />
-    </StrictMode>
-  );
-  if (container.hasChildNodes()) {
-    hydrateRoot(container, app);
-  } else {
-    createRoot(container).render(app);
-  }
-}
-
-export async function prerender() {
-  const { renderToString } = await import("react-dom/server");
-  return renderToString(
-    <StrictMode>
-      <LandingPage />
-    </StrictMode>,
-  );
-}
+// Gleiche App wie v1, nur mit Teal-Gold-Theme. CSR ohne Prerender (noindex-Preview).
+createRoot(document.getElementById('root')!).render(
+  <StrictMode>
+    <App />
+  </StrictMode>,
+)

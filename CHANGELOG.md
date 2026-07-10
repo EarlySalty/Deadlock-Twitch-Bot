@@ -1,3 +1,11 @@
+## #346 — Streamer-Seite: Die v2-Vorschau trägt jetzt den Community-Look
+
+**Problem:** Die v2-Vorschau der Streamer-Seite war ein eigener Entwurf und driftete optisch von Hauptseite und Coaching-Bereich weg. Daneben lagen noch mehrere alte Testseiten herum.
+
+**Änderung:** Die v2-Vorschau zeigt jetzt exakt die bekannte Streamer-Seite, nur in den Gold- und Teal-Tönen der Hauptseite. Die alten Vorschau-Unterseiten und Testseiten sind gelöscht.
+
+**Aktuelles Verhalten:** Die Live-Seite bleibt unverändert. Unter der v2-Adresse lässt sich der neue Look ansehen, bis er gut genug für die Übernahme ist.
+
 ## #345 — Clip-Test nutzt den Gaming-Editor-Prompt
 
 **Problem:** Der Clip-Test lieferte zwar Titel und Tags, aber noch nicht genug Material, um mehrere Clips sinnvoll zu bewerten oder direkt Social-Posts daraus abzuleiten.

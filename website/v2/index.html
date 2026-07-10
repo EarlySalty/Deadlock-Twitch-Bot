@@ -2,24 +2,25 @@
 <html lang="de">
   <head>
     <meta charset="UTF-8" />
-    <link rel="icon" type="image/svg+xml" href="/streamer/favicon.svg" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <!-- V2-Preview: noindex bis zum Cutover, sonst Duplicate-Content zur Live-Seite -->
     <meta name="robots" content="noindex,nofollow" />
-    <meta
-      name="description"
-      content="Das deutsche Deadlock-Partnernetzwerk: automatische Raids, Stats-Overlay, Analytics und Coaching. Kein Stream endet mehr im Nichts."
-    />
-    <meta property="og:title" content="Deadlock Partner-Netzwerk" />
-    <meta
-      property="og:description"
-      content="Die deutsche Deadlock-Kategorie wird gerade verteilt — die Plätze oben sind noch frei."
-    />
-    <meta name="theme-color" content="#0b0907" />
-    <title>Deadlock Partner-Netzwerk — Die Plätze oben sind noch frei</title>
+
+    <title>Deadlock Auto-Raid Bot für Twitch — Streamer-Netzwerk · Deutsche Deadlock Community</title>
+    <meta name="description" content="Größtes Deadlock-Raid-Netzwerk auf Twitch. Wenn dein Stream endet, schickt unser Bot deine Viewer automatisch zum nächsten Deadlock-Streamer. Auto-Raid, Live-Dashboard, Clip-Manager und Discord-Community für deutsche Deadlock-Streamer." />
+
+    <link rel="canonical" href="https://deutsche-deadlock-community.de/streamer/" />
+    <link rel="icon" type="image/png" href="/brand/logo/favicon-64.png" />
+    <meta name="theme-color" content="#241c11" />
+
+    <script type="module" src="/src/v2/main.tsx"></script>
+
+    <!-- Einheitliche Brand-Aufzug-Nav (dl-brand, von Caddy unter /brand/* gedient) -->
+    <link rel="stylesheet" href="/brand/tokens.css" />
+    <link rel="stylesheet" href="/brand/nav.css" />
+    <script src="/brand/nav.js" defer></script>
   </head>
   <body>
     <div id="root"></div>
-    <script type="module" src="/src/v2/main.tsx"></script>
   </body>
 </html>
