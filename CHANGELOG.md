@@ -4,7 +4,7 @@
 
 **Änderung:** Der öffentliche Dashboard-Pfad behandelt jetzt auch diese Admin-Session als reine Berechtigung. Der Vollzugriff hängt dort ausschließlich am ausdrücklich gesetzten Admin-Modus.
 
-**Aktuelles Verhalten:** „Beenden“ entfernt den Vollzugriff sofort und zeigt den Owner-Kanal mit seinem echten Plan. Admin-Host und interne Aufrufe bleiben unverändert administrativ.
+**Aktuelles Verhalten:** „Beenden“ entfernt den Vollzugriff sofort und zeigt ausschließlich den Owner-Kanal mit seinem echten Plan. Fremde Kanäle bleiben in dieser Nutzeransicht gesperrt; Admin-Host und interne Aufrufe bleiben unverändert administrativ.
 
 ## #350 — Admin-Modus bleibt wirklich Opt-in
 
