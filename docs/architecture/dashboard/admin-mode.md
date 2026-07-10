@@ -25,9 +25,10 @@ entsperrte.
   gelten bewusst als inaktiv, damit ein bestehender Browser nicht ungefragt im
   Override startet.
 
-Der **Admin-Host** (`admin.*`, Discord-Admin via `master_dash_session`) und
-**Localhost** bleiben unberührt voll-Admin: dort gibt es keinen Schalter
-(`adminEligible = false`).
+Auf dem **öffentlichen Dashboard** gilt das Opt-in auch für eine vorhandene
+Discord-Admin-Session (`master_dash_session`). Ohne Modus-Cookie zeigt sie die
+echte Nutzeransicht des Owner-Kanals. Der **Admin-Host** (`admin.*`) und interne
+Aufrufe bleiben unberührt voll-Admin.
 
 ## Architektur — genau ein Hebel
 
@@ -57,13 +58,15 @@ Felder:
 |-------|--------|---------|-----------------|-------------|
 | `Admin { actor: Some }` | aktiv | `admin_response` | `true` | `true` |
 | `Admin { actor: Some }` | inaktiv (Default) | `partner_response` (echter Plan) | `true` | `false` |
-| `Admin { actor: None }` (Discord) | — | `admin_response` | `false` | `true` |
+| `Admin { actor: None }` (Discord, öffentlich) | aktiv | `admin_response` | `true` | `true` |
+| `Admin { actor: None }` (Discord, öffentlich) | inaktiv | `partner_response` für Owner-Kanal | `true` | `false` |
+| `Admin { actor: None }` (Admin-Host/intern) | — | `admin_response` | `false` | `true` |
 | `Localhost` | — | `admin_response` | `false` | `true` |
 | `Partner` | — | `partner_response` | `false` | `false` |
 | `None` | — | unauth | `false` | `false` |
 
 `handlers/admin_mode.rs` — `POST /twitch/api/v2/admin-mode`, Body `{ "enabled": bool }`.
-- Gate: nur `Admin { actor: Some(_) }`, sonst `403`.
+- Gate: Twitch-Owner oder gültige Admin-Session, sonst `403`.
 - `enabled:true` → Set-Cookie `tb_admin_mode=2` (HttpOnly, SameSite=Lax, Path=/,
   Secure in prod, **kein Max-Age**). `enabled:false` → Cookie löschen.
 - Antwort `{ "adminMode": bool }`.

@@ -9,11 +9,11 @@
 //! `SameSite=Lax`-Session-Cookie.
 
 use axum::{
+    Json, Router,
     extract::Extension,
-    http::{header::SET_COOKIE, HeaderValue},
+    http::{HeaderValue, header::SET_COOKIE},
     response::{IntoResponse, Response},
     routing::post,
-    Json, Router,
 };
 use serde::Deserialize;
 use serde_json::json;
@@ -22,7 +22,7 @@ use tb_http_core::ApiError;
 use crate::{
     auth::{
         level::{DashboardAuthLevel, is_admin_login},
-        session::{build_transient_session_cookie, clear_session_cookie, SameSite},
+        session::{SameSite, build_transient_session_cookie, clear_session_cookie},
     },
     handlers::{auth_login::OAuthLoginConfig, auth_status::ADMIN_MODE_COOKIE},
 };
@@ -40,12 +40,12 @@ pub async fn set_admin_mode_handler(
     config: Option<Extension<OAuthLoginConfig>>,
     Json(body): Json<AdminModeRequest>,
 ) -> Response {
-    let login = match &auth {
-        DashboardAuthLevel::Partner { twitch_login, .. } => Some(twitch_login.as_str()),
-        DashboardAuthLevel::Admin { actor: Some(actor) } => Some(actor.twitch_login.as_str()),
-        DashboardAuthLevel::Admin { actor: None } | DashboardAuthLevel::None => None,
-    };
-    if !login.map(is_admin_login).unwrap_or(false) {
+    let allowed = auth.is_privileged()
+        || matches!(
+            &auth,
+            DashboardAuthLevel::Partner { twitch_login, .. } if is_admin_login(twitch_login)
+        );
+    if !allowed {
         return ApiError::forbidden_generic().into_response();
     }
 
@@ -86,9 +86,9 @@ mod tests {
     use super::*;
     use crate::auth::level::AdminActor;
     use axum::{
-        http::{header::SET_COOKIE, StatusCode},
-        response::IntoResponse,
         Json,
+        http::{StatusCode, header::SET_COOKIE},
+        response::IntoResponse,
     };
 
     fn twitch_admin() -> DashboardAuthLevel {
@@ -181,12 +181,28 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn nicht_admin_partner_und_unauth_erhalten_403() {
-        for auth in [
-            partner(),
-            DashboardAuthLevel::None,
+    async fn discord_admin_darf_admin_modus_beenden() {
+        let response = set_admin_mode_handler(
             DashboardAuthLevel::admin(),
-        ] {
+            None,
+            Json(AdminModeRequest { enabled: false }),
+        )
+        .await
+        .into_response();
+
+        assert_eq!(response.status(), StatusCode::OK);
+        let cookie = response
+            .headers()
+            .get(SET_COOKIE)
+            .and_then(|value| value.to_str().ok())
+            .unwrap();
+        assert!(cookie.starts_with("tb_admin_mode=;"));
+        assert!(cookie.contains("Max-Age=0"));
+    }
+
+    #[tokio::test]
+    async fn nicht_admin_partner_und_unauth_erhalten_403() {
+        for auth in [partner(), DashboardAuthLevel::None] {
             let response =
                 set_admin_mode_handler(auth, None, Json(AdminModeRequest { enabled: true }))
                     .await
