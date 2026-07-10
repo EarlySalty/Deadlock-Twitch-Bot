@@ -102,15 +102,22 @@ impl GlobalBanSweeper {
     /// - alle 120 s: `run_due_sweeps`
     /// - einmal pro Tag ab 6 Uhr: `run_full_sweep`
     ///
-    /// Der „einmal pro Tag"-Merker liegt in der DB, nicht im Prozessspeicher.
-    /// Sonst startet der Bot mit leerem Merker, der erste Interval-Tick feuert
-    /// sofort, und jeder Neustart ab 6 Uhr zieht einen kompletten Voll-Sweep
-    /// nach sich (beobachtet am 2026-07-10: 06:00 planmäßig, 14:12 und 14:50
-    /// durch Restarts).
+    /// Der „einmal pro Tag"-Merker liegt in der DB **und** im Prozessspeicher.
+    ///
+    /// Nur im Speicher (so war es bis 2026-07-10) heisst: der Bot startet mit
+    /// leerem Merker, der erste Interval-Tick feuert sofort, und jeder Neustart
+    /// ab 6 Uhr zieht einen kompletten Voll-Sweep nach sich (belegt am
+    /// 2026-07-10: 06:00 planmäßig, 14:12 und 14:50 durch Restarts).
+    ///
+    /// Nur in der DB heisst: fehlt die Tabelle oder scheitert der Schreibzugriff,
+    /// liest der nächste Tick 120 s später wieder `None` und sweept erneut, im
+    /// Ergebnis alle zwei Minuten. Deshalb beide, kombiniert über
+    /// [`effective_last_run`].
     pub fn spawn(self: Arc<Self>, roster: Arc<dyn PartnerRoster>) {
         tokio::spawn(async move {
             let mut interval = tokio::time::interval(DUE_CHECK_INTERVAL);
             interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+            let mut last_full_sweep_day: Option<NaiveDate> = None;
 
             loop {
                 interval.tick().await;
@@ -121,9 +128,14 @@ impl GlobalBanSweeper {
                 // Voll-Sweep: einmal pro Tag ab 6 Uhr (raid/bot.py:330–339)
                 let now_local = Local::now();
                 let today = now_local.date_naive();
-                let last_run = load_last_full_sweep_day(&self.pool).await;
+                let from_db = load_last_full_sweep_day(&self.pool).await;
+                let last_run = effective_last_run(from_db, last_full_sweep_day);
+
                 if should_run_full_sweep(now_local.hour(), today, last_run) {
                     self.run_full_sweep(roster.as_ref()).await;
+                    // Speicher-Merker zuerst und bedingungslos: er ist die
+                    // Schleifenbremse, wenn der DB-Schreibzugriff scheitert.
+                    last_full_sweep_day = Some(today);
                     record_full_sweep_day(&self.pool, today).await;
                 }
             }
@@ -424,8 +436,6 @@ async fn load_due_sweeps(pool: &PgPool) -> Vec<(String, String)> {
 /// Entscheidet, ob der tägliche Voll-Sweep jetzt laufen soll.
 ///
 /// Rein und ohne Seiteneffekt, damit die Zeitlogik testbar bleibt.
-/// `last_run` kommt aus der DB, nicht aus dem Prozessspeicher: sonst vergisst
-/// ein Neustart den Merker und der Sweep läuft sofort erneut.
 ///
 /// Lief heute noch keiner (etwa weil der Bot um 6 Uhr gerade nicht lief), wird
 /// er beim nächsten Tick nachgeholt. Andernfalls fiele der Sweep an jedem Tag
@@ -434,8 +444,24 @@ fn should_run_full_sweep(hour: u32, today: NaiveDate, last_run: Option<NaiveDate
     hour >= FULL_SWEEP_EARLIEST_HOUR && last_run != Some(today)
 }
 
-/// Tag des letzten Voll-Sweeps. `None` = noch nie gelaufen (oder DB-Fehler,
-/// dann lieber einmal zu viel sweepen als den Tag auslassen).
+/// Der spätere der beiden Merker: DB (überlebt Neustarts) und Prozessspeicher
+/// (überlebt DB-Ausfälle).
+///
+/// Beide werden gebraucht. Ohne den Speicher-Merker wäre ein „lieber einmal zu
+/// viel sweepen"-Fallback in Wahrheit eine Endlosschleife: schlägt der
+/// DB-Schreibzugriff fehl, liest der nächste Tick 120 s später wieder `None`
+/// und sweept erneut. Ohne den DB-Merker vergisst jeder Neustart den Tag.
+/// `None` ist kleiner als jedes `Some`, `max` liefert also den jüngeren Tag.
+fn effective_last_run(
+    from_db: Option<NaiveDate>,
+    from_memory: Option<NaiveDate>,
+) -> Option<NaiveDate> {
+    from_db.max(from_memory)
+}
+
+/// Tag des letzten Voll-Sweeps laut DB. `None` = noch nie gelaufen **oder**
+/// DB-Fehler. Der Aufrufer muss das mit dem Speicher-Merker kombinieren, siehe
+/// [`effective_last_run`].
 async fn load_last_full_sweep_day(pool: &PgPool) -> Option<NaiveDate> {
     sqlx::query_scalar::<_, NaiveDate>(
         "SELECT last_run_day FROM twitch_global_ban_full_sweep_state WHERE id = TRUE",
@@ -1007,6 +1033,50 @@ mod tests {
         assert!(!should_run_full_sweep(14, heute, Some(heute)));
         assert!(!should_run_full_sweep(6, heute, Some(heute)));
         assert!(!should_run_full_sweep(23, heute, Some(heute)));
+    }
+
+    /// Merge-Kritiker 2026-07-10: Fehlt die Tabelle (Migration nicht gelaufen),
+    /// liefert die DB dauerhaft `None`. Ohne Speicher-Merker sweept der Loop
+    /// dann alle 120 s statt einmal taeglich. Der Speicher-Merker bremst.
+    #[test]
+    fn db_ausfall_erzeugt_keinen_sweep_loop() {
+        let heute = tag(2026, 7, 10);
+
+        // Tick 1: DB kennt nichts, Speicher auch nicht → Sweep laeuft.
+        let last = effective_last_run(None, None);
+        assert!(should_run_full_sweep(14, heute, last));
+
+        // Der Loop setzt den Speicher-Merker, der DB-Schreibzugriff scheitert.
+        let speicher = Some(heute);
+
+        // Tick 2 (120 s spaeter): DB liefert weiterhin None.
+        let last = effective_last_run(None, speicher);
+        assert!(
+            !should_run_full_sweep(14, heute, last),
+            "ohne Tabelle darf der Sweep nicht alle 120 s erneut laufen"
+        );
+    }
+
+    #[test]
+    fn effective_last_run_nimmt_den_juengeren_tag() {
+        let alt = Some(tag(2026, 7, 9));
+        let neu = Some(tag(2026, 7, 10));
+        assert_eq!(effective_last_run(None, None), None);
+        assert_eq!(effective_last_run(neu, None), neu);
+        assert_eq!(effective_last_run(None, neu), neu);
+        assert_eq!(effective_last_run(alt, neu), neu, "Speicher ist voraus");
+        assert_eq!(effective_last_run(neu, alt), neu, "DB ist voraus");
+    }
+
+    /// Nach einem Neustart ist der Speicher leer, die DB traegt den Tag.
+    #[test]
+    fn db_merker_gewinnt_nach_neustart() {
+        let heute = tag(2026, 7, 10);
+        let last = effective_last_run(Some(heute), None);
+        assert!(
+            !should_run_full_sweep(14, heute, last),
+            "Neustart am selben Tag darf keinen Voll-Sweep ausloesen"
+        );
     }
 
     #[tokio::test]
