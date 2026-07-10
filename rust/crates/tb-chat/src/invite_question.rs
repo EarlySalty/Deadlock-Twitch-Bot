@@ -25,6 +25,7 @@ use crate::types::{ChatMessageEvent, SendOutcome};
 
 const INVITE_QUESTION_CHANNEL_COOLDOWN: Duration = Duration::from_secs(120);
 const INVITE_QUESTION_USER_COOLDOWN: Duration = Duration::from_secs(3600);
+const INVITE_QUESTION_JUDGED_COOLDOWN: Duration = Duration::from_secs(30);
 const PENDING_CONFIRMATION_WINDOW: Duration = Duration::from_secs(120);
 
 const GO_REPLY: &str = "Wenn du Zugang zu Deadlock brauchst: Auf unserem Discord bekommst du eine Einladung und Hilfe beim Einstieg.";
@@ -42,6 +43,18 @@ Regeln:
 - "yes" nur, wenn die Nachricht wirklich nach Zugang zu Deadlock fragt.
 - "no" bei normalem Gameplay, Meinung, Smalltalk oder Discord ohne Zugangsfrage.
 - "unsure" wenn die Absicht unklar ist."#;
+
+trait InviteQuestionClock: Send + Sync {
+    fn now(&self) -> Instant;
+}
+
+struct SystemInviteQuestionClock;
+
+impl InviteQuestionClock for SystemInviteQuestionClock {
+    fn now(&self) -> Instant {
+        Instant::now()
+    }
+}
 
 fn invite_question_re() -> &'static Regex {
     static RE: OnceLock<Regex> = OnceLock::new();
@@ -351,9 +364,16 @@ pub struct InviteQuestionResponder {
     discord_link: Arc<dyn DiscordLinkPort>,
     store: Arc<dyn InviteQuestionStore>,
     judge: Arc<dyn InviteQuestionJudge>,
+    clock: Arc<dyn InviteQuestionClock>,
     channel_cooldowns: Mutex<HashMap<String, Instant>>,
-    user_cooldowns: Mutex<HashMap<(String, String), Instant>>,
+    user_cooldowns: Mutex<HashMap<(String, String), (Instant, CooldownKind)>>,
     pending_confirmations: Mutex<HashMap<(String, String), Instant>>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum CooldownKind {
+    Judged,
+    Replied,
 }
 
 impl InviteQuestionResponder {
@@ -363,11 +383,28 @@ impl InviteQuestionResponder {
         store: Arc<dyn InviteQuestionStore>,
         judge: Arc<dyn InviteQuestionJudge>,
     ) -> Self {
+        Self::new_with_clock(
+            api,
+            discord_link,
+            store,
+            judge,
+            Arc::new(SystemInviteQuestionClock),
+        )
+    }
+
+    fn new_with_clock(
+        api: Arc<dyn ChatApi>,
+        discord_link: Arc<dyn DiscordLinkPort>,
+        store: Arc<dyn InviteQuestionStore>,
+        judge: Arc<dyn InviteQuestionJudge>,
+        clock: Arc<dyn InviteQuestionClock>,
+    ) -> Self {
         Self {
             api,
             discord_link,
             store,
             judge,
+            clock,
             channel_cooldowns: Mutex::new(HashMap::new()),
             user_cooldowns: Mutex::new(HashMap::new()),
             pending_confirmations: Mutex::new(HashMap::new()),
@@ -404,9 +441,10 @@ impl InviteQuestionResponder {
             return;
         }
 
-        if !self.reserve_cooldown(&channel_login, &chatter_login) {
+        if !self.cooldown_allows(&channel_login, &chatter_login) {
             return;
         }
+        self.mark_judged(&channel_login, &chatter_login);
 
         let verdict = self
             .judge
@@ -419,12 +457,15 @@ impl InviteQuestionResponder {
 
         match verdict.verdict {
             InviteQuestionVerdictKind::Yes if verdict.confidence >= 0.7 => {
-                self.send_go(event, &channel_login, &chatter_login).await;
+                if self.send_go(event, &channel_login, &chatter_login).await {
+                    self.mark_replied(&channel_login, &chatter_login);
+                }
             }
             InviteQuestionVerdictKind::Yes | InviteQuestionVerdictKind::Unsure if is_newcomer => {
                 if !self.send_confirmation_question(event, &chatter_login).await {
                     return;
                 }
+                self.mark_replied(&channel_login, &chatter_login);
                 self.remember_pending_confirmation(&channel_login, &chatter_login);
             }
             _ => {}
@@ -442,9 +483,9 @@ impl InviteQuestionResponder {
         }
     }
 
-    fn reserve_cooldown(&self, channel_login: &str, chatter_login: &str) -> bool {
-        let now = Instant::now();
-        let Ok(mut channels) = self.channel_cooldowns.lock() else {
+    fn cooldown_allows(&self, channel_login: &str, chatter_login: &str) -> bool {
+        let now = self.clock.now();
+        let Ok(channels) = self.channel_cooldowns.lock() else {
             return false;
         };
         if channels
@@ -455,19 +496,52 @@ impl InviteQuestionResponder {
         }
 
         let key = (channel_login.to_string(), chatter_login.to_string());
-        let Ok(mut users) = self.user_cooldowns.lock() else {
+        let Ok(users) = self.user_cooldowns.lock() else {
             return false;
         };
         if users
             .get(&key)
-            .is_some_and(|last| now.duration_since(*last) < INVITE_QUESTION_USER_COOLDOWN)
+            .is_some_and(|(last, kind)| self.user_cooldown_active(now, *last, *kind))
         {
             return false;
         }
 
-        channels.insert(channel_login.to_string(), now);
-        users.insert(key, now);
         true
+    }
+
+    fn user_cooldown_active(&self, now: Instant, last: Instant, kind: CooldownKind) -> bool {
+        let ttl = match kind {
+            CooldownKind::Judged => INVITE_QUESTION_JUDGED_COOLDOWN,
+            CooldownKind::Replied => INVITE_QUESTION_USER_COOLDOWN,
+        };
+        now.duration_since(last) < ttl
+    }
+
+    fn mark_judged(&self, channel_login: &str, chatter_login: &str) {
+        let now = self.clock.now();
+        let key = (channel_login.to_string(), chatter_login.to_string());
+        let Ok(mut users) = self.user_cooldowns.lock() else {
+            return;
+        };
+        if users.get(&key).is_some_and(|(last, kind)| {
+            *kind == CooldownKind::Replied && self.user_cooldown_active(now, *last, *kind)
+        }) {
+            return;
+        }
+        users.insert(key, (now, CooldownKind::Judged));
+    }
+
+    fn mark_replied(&self, channel_login: &str, chatter_login: &str) {
+        let now = self.clock.now();
+        if let Ok(mut channels) = self.channel_cooldowns.lock() {
+            channels.insert(channel_login.to_string(), now);
+        }
+        if let Ok(mut users) = self.user_cooldowns.lock() {
+            users.insert(
+                (channel_login.to_string(), chatter_login.to_string()),
+                (now, CooldownKind::Replied),
+            );
+        }
     }
 
     async fn maybe_handle_pending_confirmation(
@@ -478,7 +552,7 @@ impl InviteQuestionResponder {
         raw: &str,
     ) -> bool {
         let key = (channel_login.to_string(), chatter_login.to_string());
-        let now = Instant::now();
+        let now = self.clock.now();
         let is_open = {
             let Ok(mut pending) = self.pending_confirmations.lock() else {
                 return false;
@@ -498,7 +572,9 @@ impl InviteQuestionResponder {
         if let Ok(mut pending) = self.pending_confirmations.lock() {
             pending.remove(&key);
         }
-        self.send_go(event, channel_login, chatter_login).await;
+        if self.send_go(event, channel_login, chatter_login).await {
+            self.mark_replied(channel_login, chatter_login);
+        }
         true
     }
 
@@ -506,7 +582,7 @@ impl InviteQuestionResponder {
         if let Ok(mut pending) = self.pending_confirmations.lock() {
             pending.insert(
                 (channel_login.to_string(), chatter_login.to_string()),
-                Instant::now(),
+                self.clock.now(),
             );
         }
     }
@@ -585,6 +661,7 @@ mod tests {
     use crate::types::{ChatMessageBody, ChatMessageEvent, SendOutcome};
     use async_trait::async_trait;
     use std::collections::VecDeque;
+    use std::sync::atomic::{AtomicUsize, Ordering};
     use std::sync::{Arc, Mutex};
     use std::time::{Duration, Instant};
     use tb_engagement::minimax_chat::EngagementMinimaxClient;
@@ -669,6 +746,29 @@ mod tests {
         }
     }
 
+    struct FakeClock {
+        now: Mutex<Instant>,
+    }
+
+    impl FakeClock {
+        fn new() -> Arc<Self> {
+            Arc::new(Self {
+                now: Mutex::new(Instant::now()),
+            })
+        }
+
+        fn advance(&self, duration: Duration) {
+            let mut now = self.now.lock().unwrap();
+            *now += duration;
+        }
+    }
+
+    impl InviteQuestionClock for FakeClock {
+        fn now(&self) -> Instant {
+            *self.now.lock().unwrap()
+        }
+    }
+
     struct FakeStore {
         rollup: InviteQuestionRollup,
     }
@@ -687,6 +787,7 @@ mod tests {
     struct FakeJudge {
         verdicts: Mutex<VecDeque<InviteQuestionVerdict>>,
         calls: Mutex<Vec<InviteQuestionJudgeInput>>,
+        call_count: AtomicUsize,
     }
 
     impl FakeJudge {
@@ -694,17 +795,23 @@ mod tests {
             Arc::new(Self {
                 verdicts: Mutex::new(verdicts.into()),
                 calls: Mutex::new(vec![]),
+                call_count: AtomicUsize::new(0),
             })
         }
 
         fn calls(&self) -> Vec<InviteQuestionJudgeInput> {
             self.calls.lock().unwrap().clone()
         }
+
+        fn call_count(&self) -> usize {
+            self.call_count.load(Ordering::SeqCst)
+        }
     }
 
     #[async_trait]
     impl InviteQuestionJudge for FakeJudge {
         async fn judge(&self, input: InviteQuestionJudgeInput) -> InviteQuestionVerdict {
+            self.call_count.fetch_add(1, Ordering::SeqCst);
             self.calls.lock().unwrap().push(input);
             self.verdicts
                 .lock()
@@ -751,7 +858,23 @@ mod tests {
         store: Arc<dyn InviteQuestionStore>,
         judge: Arc<dyn InviteQuestionJudge>,
     ) -> InviteQuestionResponder {
-        InviteQuestionResponder::new(api, Arc::new(FakeDiscordLink), store, judge)
+        responder_with_clock(api, store, judge).0
+    }
+
+    fn responder_with_clock(
+        api: Arc<MockApi>,
+        store: Arc<dyn InviteQuestionStore>,
+        judge: Arc<dyn InviteQuestionJudge>,
+    ) -> (InviteQuestionResponder, Arc<FakeClock>) {
+        let clock = FakeClock::new();
+        let invite = InviteQuestionResponder::new_with_clock(
+            api,
+            Arc::new(FakeDiscordLink),
+            store,
+            judge,
+            clock.clone(),
+        );
+        (invite, clock)
     }
 
     #[test]
@@ -948,7 +1071,7 @@ mod tests {
         );
 
         let api = MockApi::new();
-        let invite = responder(
+        let (invite, clock) = responder_with_clock(
             api.clone(),
             Arc::new(FakeStore {
                 rollup: rollup(1, false),
@@ -961,10 +1084,7 @@ mod tests {
                 "streamer",
             )
             .await;
-        invite.pending_confirmations.lock().unwrap().insert(
-            ("streamer".to_string(), "viewer".to_string()),
-            Instant::now() - Duration::from_secs(121),
-        );
+        clock.advance(Duration::from_secs(121));
         invite
             .maybe_respond(&event("viewer", "ja"), "streamer")
             .await;
@@ -988,6 +1108,192 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn judge_no_verbraucht_keinen_antwort_cooldown() {
+        let api = MockApi::new();
+        let judge = FakeJudge::new(vec![
+            verdict(InviteQuestionVerdictKind::No, 1.0),
+            verdict(InviteQuestionVerdictKind::Yes, 0.9),
+        ]);
+        let (invite, clock) = responder_with_clock(
+            api.clone(),
+            Arc::new(FakeStore {
+                rollup: rollup(1, false),
+            }),
+            judge.clone(),
+        );
+
+        invite
+            .maybe_respond(
+                &event("viewer", "Wie bekomme ich einen invite?"),
+                "streamer",
+            )
+            .await;
+        assert!(api.messages().is_empty());
+        assert_eq!(judge.call_count(), 1);
+
+        clock.advance(Duration::from_secs(31));
+        invite
+            .maybe_respond(
+                &event("viewer", "Wie bekomme ich einen invite?"),
+                "streamer",
+            )
+            .await;
+        assert_eq!(judge.call_count(), 2);
+        assert_eq!(
+            api.messages(),
+            vec!["@viewer Wenn du Zugang zu Deadlock brauchst: Auf unserem Discord bekommst du eine Einladung und Hilfe beim Einstieg. https://discord.gg/test"]
+        );
+    }
+
+    #[tokio::test]
+    async fn judge_bremse_blockt_zweiten_call_binnen_30s() {
+        let api = MockApi::new();
+        let judge = FakeJudge::new(vec![
+            verdict(InviteQuestionVerdictKind::No, 1.0),
+            verdict(InviteQuestionVerdictKind::Yes, 0.9),
+        ]);
+        let (invite, _) = responder_with_clock(
+            api.clone(),
+            Arc::new(FakeStore {
+                rollup: rollup(1, false),
+            }),
+            judge.clone(),
+        );
+
+        invite
+            .maybe_respond(
+                &event("viewer", "Wie bekomme ich einen invite?"),
+                "streamer",
+            )
+            .await;
+        invite
+            .maybe_respond(
+                &event("viewer", "Wie bekomme ich einen invite?"),
+                "streamer",
+            )
+            .await;
+
+        assert_eq!(judge.call_count(), 1);
+        assert!(api.messages().is_empty());
+    }
+
+    #[tokio::test]
+    async fn gesendete_antwort_sperrt_user_eine_stunde() {
+        let api = MockApi::new();
+        let judge = FakeJudge::new(vec![
+            verdict(InviteQuestionVerdictKind::Yes, 0.9),
+            verdict(InviteQuestionVerdictKind::Yes, 0.9),
+        ]);
+        let (invite, clock) = responder_with_clock(
+            api.clone(),
+            Arc::new(FakeStore {
+                rollup: rollup(1, false),
+            }),
+            judge.clone(),
+        );
+
+        invite
+            .maybe_respond(
+                &event("viewer", "Wie bekomme ich einen invite?"),
+                "streamer",
+            )
+            .await;
+        clock.advance(Duration::from_secs(59 * 60));
+        invite
+            .maybe_respond(
+                &event("viewer", "Wie bekomme ich einen invite?"),
+                "streamer",
+            )
+            .await;
+        assert_eq!(judge.call_count(), 1);
+        assert_eq!(api.messages().len(), 1);
+
+        clock.advance(Duration::from_secs(2 * 60));
+        invite
+            .maybe_respond(
+                &event("viewer", "Wie bekomme ich einen invite?"),
+                "streamer",
+            )
+            .await;
+        assert_eq!(judge.call_count(), 2);
+        assert_eq!(api.messages().len(), 2);
+    }
+
+    #[tokio::test]
+    async fn gesendete_antwort_sperrt_kanal_120s() {
+        let api = MockApi::new();
+        let judge = FakeJudge::new(vec![
+            verdict(InviteQuestionVerdictKind::Yes, 0.9),
+            verdict(InviteQuestionVerdictKind::Yes, 0.9),
+        ]);
+        let (invite, clock) = responder_with_clock(
+            api.clone(),
+            Arc::new(FakeStore {
+                rollup: rollup(1, false),
+            }),
+            judge.clone(),
+        );
+
+        invite
+            .maybe_respond(
+                &event("viewer", "Wie bekomme ich einen invite?"),
+                "streamer",
+            )
+            .await;
+        clock.advance(Duration::from_secs(60));
+        invite
+            .maybe_respond(&event("other", "Wie bekomme ich einen invite?"), "streamer")
+            .await;
+        assert_eq!(judge.call_count(), 1);
+        assert_eq!(api.messages().len(), 1);
+
+        clock.advance(Duration::from_secs(61));
+        invite
+            .maybe_respond(&event("other", "Wie bekomme ich einen invite?"), "streamer")
+            .await;
+        assert_eq!(judge.call_count(), 2);
+        assert_eq!(api.messages().len(), 2);
+    }
+
+    #[tokio::test]
+    async fn rueckfrage_zaehlt_als_gesendete_antwort() {
+        let api = MockApi::new();
+        let judge = FakeJudge::new(vec![
+            verdict(InviteQuestionVerdictKind::Unsure, 0.0),
+            verdict(InviteQuestionVerdictKind::Yes, 0.9),
+        ]);
+        let (invite, clock) = responder_with_clock(
+            api.clone(),
+            Arc::new(FakeStore {
+                rollup: rollup(1, false),
+            }),
+            judge.clone(),
+        );
+
+        invite
+            .maybe_respond(
+                &event("viewer", "Wie kann man Deadlock spielen?"),
+                "streamer",
+            )
+            .await;
+        invite
+            .maybe_respond(&event("other", "Wie bekomme ich einen invite?"), "streamer")
+            .await;
+        assert_eq!(judge.call_count(), 1);
+        assert_eq!(api.messages().len(), 1);
+
+        clock.advance(Duration::from_secs(121));
+        invite
+            .maybe_respond(
+                &event("viewer", "Wie bekomme ich einen invite?"),
+                "streamer",
+            )
+            .await;
+        assert_eq!(judge.call_count(), 1);
+        assert_eq!(api.messages().len(), 1);
+    }
+
+    #[tokio::test]
     async fn cooldowns_blocken_kanal_und_user_wiederholungen() {
         let api = MockApi::new();
         let judge = FakeJudge::new(vec![
@@ -995,7 +1301,7 @@ mod tests {
             verdict(InviteQuestionVerdictKind::Yes, 0.7),
             verdict(InviteQuestionVerdictKind::Yes, 0.7),
         ]);
-        let invite = responder(
+        let (invite, clock) = responder_with_clock(
             api.clone(),
             Arc::new(FakeStore {
                 rollup: rollup(1, false),
@@ -1018,10 +1324,7 @@ mod tests {
         assert_eq!(api.messages().len(), 1);
         assert_eq!(judge.calls().len(), 1);
 
-        invite.channel_cooldowns.lock().unwrap().insert(
-            "streamer".to_string(),
-            Instant::now() - Duration::from_secs(121),
-        );
+        clock.advance(Duration::from_secs(121));
         invite
             .maybe_respond(
                 &event("viewer", "Wie kann man Deadlock spielen?"),
