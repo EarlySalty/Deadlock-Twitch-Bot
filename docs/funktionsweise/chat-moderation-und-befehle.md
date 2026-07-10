@@ -27,7 +27,7 @@ Der Bot ist als eigener Twitch-Account in den Kanälen der Partner-Streamer akti
 
 - **Bei einem Bann:** Die Spam-Nachricht verschwindet und der Absender ist gebannt. Standardmäßig kann der Bot dazu eine kurze Notiz im Chat hinterlassen — diese Benachrichtigung lässt sich pro Kanal abschalten (siehe `!silentban`). Der Bann selbst bleibt immer aktiv, egal ob die Notiz an oder aus ist.
 - **Bei einer Fake-Server-Warnung:** Eine kurze Hinweis-Nachricht im Chat, die Zuschauer vorsichtig vor einem möglichen Betrugsversuch warnt. Der Text wechselt, damit nie zweimal hintereinander derselbe Wortlaut erscheint.
-- **Bei einer Promo:** Eine kurze, locker formulierte Nachricht mit Verweis auf den Community-Discord.
+- **Bei einer Promo:** Eine kurze, locker formulierte Nachricht mit Verweis auf den Community-Discord. Der Wortlaut wechselt: Der Bot greift auf mehrere vorformulierte Texte zurück und wiederholt nie zweimal hintereinander denselben.
 - **Keine Links im Chat:** Twitch blockiert über AutoMod oft fremde Links. Deshalb postet der Bot in seinen automatischen Nachrichten keine nackten URLs, sondern verweist über die Profil-Bio bzw. den Einlade-Mechanismus. (Befehle wie `!dldc` oder `!invite`, bei denen ein Zuschauer aktiv nach dem Link fragt, geben den Discord-Link direkt aus.)
 - **Bei Befehlen:** eine direkte Antwort des Bots im Chat, meist mit `@Name` an die Person, die den Befehl ausgelöst hat.
 
@@ -76,7 +76,8 @@ Die "Lurker Steuer" ist eine optionale Funktion für bezahlte Pläne. Sie erinne
 - **Auto-Raid** an/aus: per `!raid_enable` bzw. über das Dashboard (Voraussetzung: Bot autorisiert).
 - **AI-Engagement-Layer** pro Kanal an/aus: per `!engagement_on` / `!engagement_off`.
 - **Lurker Steuer** abschalten per `!lurkersteuer_off`, wieder einschalten im Abo-Bereich des Dashboards.
-- **Eigene Promo-Nachricht:** Streamer können einen eigenen Promo-Text hinterlegen (über das Dashboard). Dieser darf maximal 500 Zeichen lang sein und muss den Platzhalter `{invite}` enthalten, an dessen Stelle dann der Einladungslink eingesetzt wird.
+- **Eigene Promo-Nachricht:** Streamer können einen eigenen Promo-Text hinterlegen (über das Dashboard). Dieser darf maximal 500 Zeichen lang sein und muss den Platzhalter `{invite}` enthalten, an dessen Stelle dann der Einladungslink eingesetzt wird. Ist kein eigener Text hinterlegt, nimmt der Bot einen der vorformulierten Standard-Texte. Läuft netzwerkweit gerade eine Aktion, geht deren Text in dieser Zeit vor.
+- **Promos ganz abschalten:** Das ist keine Chat-Einstellung, sondern ein Plan-Vorteil („Werbefreier Chat", siehe [plaene-und-billing.md](plaene-und-billing.md)).
 - **Was nicht einstellbar ist:** Die automatische Moderation selbst (Spam-/Bot-Schutz) lässt sich nicht abschalten oder in der Schärfe verändern. Sie ist immer an. Abschaltbar ist lediglich die Chat-*Notiz* zu Bans, nicht der Schutz.
 
 ## Grenzen & Sonderfälle

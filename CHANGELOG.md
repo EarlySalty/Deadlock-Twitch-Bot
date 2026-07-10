@@ -1,3 +1,11 @@
+## #347 — Neue Promo-Texte für den Community-Discord
+
+**Problem:** Die Discord-Hinweise im Chat zogen aus einem recht kleinen Satz an Formulierungen. Wer öfter im Stream war, kannte sie irgendwann alle auswendig.
+
+**Änderung:** Drei neue Texte kommen dazu. Sie spielen darauf an, dass die Community auch dann weiterläuft, wenn der Stream längst offline ist.
+
+**Aktuelles Verhalten:** Der Bot nimmt sie in die normale Rotation auf und sendet weiterhin nie zweimal hintereinander denselben Text. Wer einen eigenen Promo-Text hinterlegt hat, merkt von der Änderung nichts.
+
 ## #346 — Streamer-Seite: Die v2-Vorschau trägt jetzt den Community-Look
 
 **Problem:** Die v2-Vorschau der Streamer-Seite war ein eigener Entwurf und driftete optisch von Hauptseite und Coaching-Bereich weg. Daneben lagen noch mehrere alte Testseiten herum.
