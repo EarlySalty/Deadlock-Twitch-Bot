@@ -16,7 +16,7 @@
     <link rel="alternate" hreflang="de" href="https://deutsche-deadlock-community.de/streamer/" />
     <link rel="alternate" hreflang="x-default" href="https://deutsche-deadlock-community.de/streamer/" />
     <link rel="sitemap" type="application/xml" href="/sitemap.xml" />
-    <link rel="icon" type="image/svg+xml" href="/streamer/favicon.svg" />
+    <link rel="icon" type="image/png" href="/brand/logo/favicon-64.png" />
 
     <meta property="og:type" content="website" />
     <meta property="og:site_name" content="Deutsche Deadlock Community" />
@@ -154,6 +154,11 @@
     </script>
 
     <script type="module" src="/src/main.tsx" prerender></script>
+
+    <!-- Einheitliche Brand-Aufzug-Nav (dl-brand, von Caddy unter /brand/* gedient) -->
+    <link rel="stylesheet" href="/brand/tokens.css" />
+    <link rel="stylesheet" href="/brand/nav.css" />
+    <script src="/brand/nav.js" defer></script>
   </head>
   <body>
     <div id="root"></div>
