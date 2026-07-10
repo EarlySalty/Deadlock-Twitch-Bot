@@ -242,10 +242,22 @@ pub async fn login_handler(
     }
 
     let next_path = normalize_discord_admin_next_path(query.next.as_deref());
+    // Ein vorhandenes Cookie gilt nur dann als „schon eingeloggt", wenn die
+    // Session-Bindung es trägt — also mit demselben Maßstab, den der Forward-Auth
+    // anlegt (`handlers::forward_auth::validate_admin_session`). Prüfte der Login
+    // nur Existenz + TTL, während der Forward-Auth zusätzlich IP/Passive-FP/
+    // fp_pending verlangt, schickten sich beide gegenseitig im Kreis: Panel → 401 →
+    // Login → Panel, bis das Rate-Limit greift (Vorfall 2026-07-10).
+    let mut unbrauchbares_admin_cookie = false;
     if let Some(session_id) = cookie_from_headers(&headers, ADMIN_COOKIE_NAME) {
         if !session_id.is_empty() {
-            match state.load_admin_session(&session_id).await {
-                Ok(Some(_)) => {
+            match state.load_admin_session_fingerprint(&session_id).await {
+                Ok(Some(fingerprint))
+                    if fingerprint.verify(
+                        &client_ip_from_headers(&headers),
+                        &passive_fp_from_headers(&headers),
+                    ) =>
+                {
                     let destination = safe_internal_redirect(
                         &canonical_discord_admin_post_login_path(Some(&next_path)),
                         ADMIN_FALLBACK_PATH,
@@ -253,6 +265,12 @@ pub async fn login_handler(
                     let cookie = build_admin_cookie(&config, &session_id);
                     return redirect_with_cookie(&destination, &cookie);
                 }
+                // Session da, Bindung trägt nicht (IP-Wechsel, neuer Passive-FP nach
+                // Browser-Update, oder Fingerprint-Schritt offen). Cookie räumen und
+                // frisch anmelden lassen. Die Session bleibt serverseitig bestehen:
+                // sie hier zu löschen, hieße, dass jeder mit einem alten Cookie die
+                // laufende Sitzung des echten Admins abschießen kann.
+                Ok(Some(_)) => unbrauchbares_admin_cookie = true,
                 Ok(None) => {}
                 Err(error) => {
                     tracing::warn!(%error, "Discord-Admin-Session-Lookup beim Login fehlgeschlagen");
@@ -286,6 +304,10 @@ pub async fn login_handler(
     };
 
     let safe_auth_url = safe_discord_admin_login_redirect(&auth.authorize_url, &config);
+    if unbrauchbares_admin_cookie {
+        let cookie = clear_admin_cookie(config.cookie_secure, config.cookie_domain.as_deref());
+        return redirect_with_cookie(&safe_auth_url, &cookie);
+    }
     no_store(Redirect::to(&safe_auth_url).into_response())
 }
 
@@ -1236,6 +1258,156 @@ mod tests {
         assert_eq!(
             response.headers().get(header::CACHE_CONTROL).unwrap(),
             "no-store, max-age=0"
+        );
+    }
+
+    /// Headers mit abweichendem User-Agent → anderer Passive-Fingerprint als
+    /// [`base_headers`], gleiche IP.
+    fn headers_mit_anderem_user_agent(session_id: &str) -> HeaderMap {
+        let mut headers = base_headers();
+        headers.insert(
+            header::USER_AGENT,
+            HeaderValue::from_static("Mozilla/5.0 Test Neuer Browser"),
+        );
+        headers.insert(
+            header::COOKIE,
+            HeaderValue::from_str(&format!("{ADMIN_COOKIE_NAME}={session_id}")).unwrap(),
+        );
+        headers
+    }
+
+    fn headers_mit_cookie(session_id: &str) -> HeaderMap {
+        let mut headers = base_headers();
+        headers.insert(
+            header::COOKIE,
+            HeaderValue::from_str(&format!("{ADMIN_COOKIE_NAME}={session_id}")).unwrap(),
+        );
+        headers
+    }
+
+    /// Legt eine Discord-Admin-Session an, die an die Bindung von `headers` gebunden
+    /// ist, und schließt den Fingerprint-Schritt ab (`fp_pending = false`).
+    async fn gebundene_admin_session(state: &DashboardAuthState, headers: &HeaderMap) -> String {
+        let created = state
+            .create_discord_admin_session(
+                42,
+                "earlysalty",
+                "EarlySalty",
+                "owner",
+                &client_ip_from_headers(headers),
+                &passive_fp_from_headers(headers),
+                ADMIN_FALLBACK_PATH,
+            )
+            .await
+            .expect("Session anlegen");
+        state
+            .complete_admin_session_fingerprint(&created.session_id, "js-fp-abc")
+            .await
+            .expect("Fingerprint-Schritt abschließen");
+        created.session_id
+    }
+
+    fn geloeschtes_admin_cookie(response: &Response) -> bool {
+        cookies(response).iter().any(|c| {
+            c.starts_with(&format!("{ADMIN_COOKIE_NAME}=;")) && c.contains("Max-Age=0")
+        })
+    }
+
+    /// Live-Vorfall 2026-07-10: Der Passive-FP änderte sich (Browser-Update), der
+    /// Forward-Auth lehnte die Session mit 401 ab, der Login-Handler hielt sie für
+    /// gültig und schickte zurück ins Panel → Endlos-Redirect-Loop bis zum
+    /// Rate-Limit. Der Login-Handler muss dieselbe Bindung prüfen wie der
+    /// Forward-Auth und den Nutzer in den frischen OAuth-Flow schicken.
+    #[tokio::test]
+    async fn login_bei_passive_fp_mismatch_startet_oauth_statt_panel_redirect() {
+        let Some(pool) = maybe_pool("discord_admin_login_fp_mismatch").await else { return; };
+        ensure_sessions_table(&pool).await;
+        let state = DashboardAuthState::new(pool, test_fernet_key());
+        let session_id = gebundene_admin_session(&state, &base_headers()).await;
+        let cfg = config(fake_client(Vec::new()));
+
+        let response = login_handler(
+            Some(Extension(state)),
+            Some(Extension(cfg)),
+            headers_mit_anderem_user_agent(&session_id),
+            Query(AdminLoginQuery { next: None }),
+        )
+        .await;
+
+        let location = response.headers().get(header::LOCATION).unwrap().to_str().unwrap();
+        assert!(
+            location.starts_with("https://discord.com/oauth2/authorize"),
+            "muss frischen OAuth-Flow starten, nicht ins Panel zurueckschicken: {location}"
+        );
+        assert!(
+            geloeschtes_admin_cookie(&response),
+            "das nicht mehr nutzbare Cookie muss geraeumt werden, sonst loopt der naechste Aufruf erneut"
+        );
+    }
+
+    /// `fp_pending` heißt: der JS-Fingerprint-Schritt steht noch aus, der
+    /// Forward-Auth antwortet 401. Auch hier darf der Login nicht ins Panel
+    /// zurückschicken.
+    #[tokio::test]
+    async fn login_bei_fp_pending_startet_oauth_statt_panel_redirect() {
+        let Some(pool) = maybe_pool("discord_admin_login_fp_pending").await else { return; };
+        ensure_sessions_table(&pool).await;
+        let state = DashboardAuthState::new(pool, test_fernet_key());
+        let headers = base_headers();
+        let created = state
+            .create_discord_admin_session(
+                42,
+                "earlysalty",
+                "EarlySalty",
+                "owner",
+                &client_ip_from_headers(&headers),
+                &passive_fp_from_headers(&headers),
+                ADMIN_FALLBACK_PATH,
+            )
+            .await
+            .expect("Session anlegen");
+        let cfg = config(fake_client(Vec::new()));
+
+        let response = login_handler(
+            Some(Extension(state)),
+            Some(Extension(cfg)),
+            headers_mit_cookie(&created.session_id),
+            Query(AdminLoginQuery { next: None }),
+        )
+        .await;
+
+        let location = response.headers().get(header::LOCATION).unwrap().to_str().unwrap();
+        assert!(
+            location.starts_with("https://discord.com/oauth2/authorize"),
+            "fp_pending-Session darf nicht als eingeloggt gelten: {location}"
+        );
+    }
+
+    /// Regression: passende Bindung → weiterhin „schon eingeloggt", Redirect ins
+    /// Panel, Session-Cookie bleibt gesetzt.
+    #[tokio::test]
+    async fn login_bei_gueltiger_bindung_redirectet_ins_panel() {
+        let Some(pool) = maybe_pool("discord_admin_login_bindung_ok").await else { return; };
+        ensure_sessions_table(&pool).await;
+        let state = DashboardAuthState::new(pool, test_fernet_key());
+        let session_id = gebundene_admin_session(&state, &base_headers()).await;
+        let cfg = config(fake_client(Vec::new()));
+
+        let response = login_handler(
+            Some(Extension(state)),
+            Some(Extension(cfg)),
+            headers_mit_cookie(&session_id),
+            Query(AdminLoginQuery { next: None }),
+        )
+        .await;
+
+        let location = response.headers().get(header::LOCATION).unwrap().to_str().unwrap();
+        assert_eq!(location, ADMIN_FALLBACK_PATH);
+        assert!(
+            cookies(&response)
+                .iter()
+                .any(|c| c.starts_with(&format!("{ADMIN_COOKIE_NAME}={session_id}"))),
+            "gueltige Session behaelt ihr Cookie"
         );
     }
 
