@@ -450,6 +450,11 @@ pub enum SilentReason {
     CooldownUserReplied,
     CooldownJudgeBrake,
     JudgeNo,
+    /// Judge-Provider hat nicht geantwortet; kein Modellurteil.
+    JudgeProviderError,
+    /// Judge-Output war nicht parsebar; kein verwertbares Modellurteil.
+    JudgeParseError,
+    /// Echtes Modell-`unsure` bei einem Stammgast.
     JudgeUnsureRegular,
     JudgeYesLowConfidenceRegular,
 }
@@ -466,6 +471,8 @@ impl SilentReason {
             Self::CooldownUserReplied => "cooldown_user_replied",
             Self::CooldownJudgeBrake => "cooldown_judge_brake",
             Self::JudgeNo => "judge_no",
+            Self::JudgeProviderError => "judge_provider_error",
+            Self::JudgeParseError => "judge_parse_error",
             Self::JudgeUnsureRegular => "judge_unsure_regular",
             Self::JudgeYesLowConfidenceRegular => "judge_yes_low_confidence_regular",
         }
@@ -750,20 +757,32 @@ impl InviteQuestionResponder {
             })
             .await;
 
-        let action = match verdict.verdict {
-            InviteQuestionVerdictKind::Yes if verdict.confidence >= 0.7 => {
-                InviteQuestionAction::SendGo
+        let action = match verdict.source {
+            InviteQuestionVerdictSource::ProviderError => {
+                InviteQuestionAction::Silent(SilentReason::JudgeProviderError)
             }
-            InviteQuestionVerdictKind::Yes | InviteQuestionVerdictKind::Unsure if is_newcomer => {
-                InviteQuestionAction::AskConfirmation
+            InviteQuestionVerdictSource::ParseError => {
+                InviteQuestionAction::Silent(SilentReason::JudgeParseError)
             }
-            InviteQuestionVerdictKind::No => InviteQuestionAction::Silent(SilentReason::JudgeNo),
-            InviteQuestionVerdictKind::Unsure => {
-                InviteQuestionAction::Silent(SilentReason::JudgeUnsureRegular)
-            }
-            InviteQuestionVerdictKind::Yes => {
-                InviteQuestionAction::Silent(SilentReason::JudgeYesLowConfidenceRegular)
-            }
+            InviteQuestionVerdictSource::Model => match verdict.verdict {
+                InviteQuestionVerdictKind::Yes if verdict.confidence >= 0.7 => {
+                    InviteQuestionAction::SendGo
+                }
+                InviteQuestionVerdictKind::Yes | InviteQuestionVerdictKind::Unsure
+                    if is_newcomer =>
+                {
+                    InviteQuestionAction::AskConfirmation
+                }
+                InviteQuestionVerdictKind::No => {
+                    InviteQuestionAction::Silent(SilentReason::JudgeNo)
+                }
+                InviteQuestionVerdictKind::Unsure => {
+                    InviteQuestionAction::Silent(SilentReason::JudgeUnsureRegular)
+                }
+                InviteQuestionVerdictKind::Yes => {
+                    InviteQuestionAction::Silent(SilentReason::JudgeYesLowConfidenceRegular)
+                }
+            },
         };
         InviteQuestionDecision::judged(
             action,
@@ -780,17 +799,35 @@ impl InviteQuestionResponder {
         let message = truncate_log_message(&decision.message);
         match (decision.verdict, decision.action) {
             (Some(verdict), InviteQuestionAction::Silent(reason)) => {
-                info!(
-                    channel = %decision.channel_login,
-                    chatter = %decision.chatter_login,
-                    message = %message,
-                    verdict = verdict.as_str(),
-                    confidence = decision.confidence,
-                    is_newcomer = decision.is_newcomer,
-                    has_strong_access = decision.has_strong_access,
-                    action = decision.action.as_str(),
-                    silent_reason = reason.as_str(),
-                );
+                if matches!(
+                    verdict,
+                    InviteQuestionLoggedVerdict::ProviderError
+                        | InviteQuestionLoggedVerdict::ParseError
+                ) {
+                    warn!(
+                        channel = %decision.channel_login,
+                        chatter = %decision.chatter_login,
+                        message = %message,
+                        verdict = verdict.as_str(),
+                        confidence = decision.confidence,
+                        is_newcomer = decision.is_newcomer,
+                        has_strong_access = decision.has_strong_access,
+                        action = decision.action.as_str(),
+                        silent_reason = reason.as_str(),
+                    );
+                } else {
+                    info!(
+                        channel = %decision.channel_login,
+                        chatter = %decision.chatter_login,
+                        message = %message,
+                        verdict = verdict.as_str(),
+                        confidence = decision.confidence,
+                        is_newcomer = decision.is_newcomer,
+                        has_strong_access = decision.has_strong_access,
+                        action = decision.action.as_str(),
+                        silent_reason = reason.as_str(),
+                    );
+                }
             }
             (Some(verdict), _) => {
                 info!(
@@ -1281,6 +1318,18 @@ mod tests {
                 verdict(InviteQuestionVerdictKind::No, 1.0),
             ),
             (
+                SilentReason::JudgeProviderError,
+                "Wie bekomme ich einen invite?",
+                rollup(1, false),
+                InviteQuestionVerdict::provider_error(),
+            ),
+            (
+                SilentReason::JudgeParseError,
+                "Wie bekomme ich einen invite?",
+                rollup(1, false),
+                parse_invite_verdict("kaputt"),
+            ),
+            (
                 SilentReason::JudgeUnsureRegular,
                 "Wie bekomme ich einen invite?",
                 rollup(50, false),
@@ -1413,11 +1462,11 @@ mod tests {
 
         assert_eq!(
             provider_decision.action,
-            InviteQuestionAction::Silent(SilentReason::JudgeUnsureRegular)
+            InviteQuestionAction::Silent(SilentReason::JudgeProviderError)
         );
         assert_eq!(
             parse_decision.action,
-            InviteQuestionAction::Silent(SilentReason::JudgeUnsureRegular)
+            InviteQuestionAction::Silent(SilentReason::JudgeParseError)
         );
         assert_eq!(
             provider_decision.verdict,
@@ -1498,7 +1547,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn provider_fehler_wird_unsure_und_niemals_go() {
+    async fn provider_fehler_schweigt_immer() {
         let server = MockServer::start().await;
         Mock::given(method("POST"))
             .and(path("/chat/completions"))
@@ -1528,10 +1577,7 @@ mod tests {
                 "streamer",
             )
             .await;
-        assert_eq!(
-            api.messages(),
-            vec!["@newbie Suchst du einen Invite für Deadlock? Sag einfach kurz ja, dann schick ich dir den Weg."]
-        );
+        assert!(api.messages().is_empty());
 
         let api = MockApi::new();
         let invite = responder(
@@ -1548,6 +1594,136 @@ mod tests {
             )
             .await;
         assert!(api.messages().is_empty());
+    }
+
+    #[tokio::test]
+    async fn provider_fehler_schweigt_auch_bei_newcomer() {
+        let api = MockApi::new();
+        let invite = responder(
+            api.clone(),
+            Arc::new(FakeStore {
+                rollup: rollup(1, false),
+            }),
+            FakeJudge::new(vec![
+                InviteQuestionVerdict::provider_error(),
+                InviteQuestionVerdict::provider_error(),
+            ]),
+        );
+
+        let decision = decide_action(&invite, "newbie", "Wie bekomme ich einen invite?").await;
+        assert_eq!(
+            decision.action,
+            InviteQuestionAction::Silent(SilentReason::JudgeProviderError)
+        );
+
+        invite
+            .maybe_respond(
+                &event("newbie", "Wie bekomme ich einen invite?"),
+                "streamer",
+            )
+            .await;
+        assert!(api.messages().is_empty());
+    }
+
+    #[tokio::test]
+    async fn parse_fehler_schweigt_auch_bei_newcomer() {
+        let api = MockApi::new();
+        let invite = responder(
+            api.clone(),
+            Arc::new(FakeStore {
+                rollup: rollup(1, false),
+            }),
+            FakeJudge::new(vec![
+                parse_invite_verdict("kaputt"),
+                parse_invite_verdict("kaputt"),
+            ]),
+        );
+
+        let decision = decide_action(&invite, "newbie", "Wie bekomme ich einen invite?").await;
+        assert_eq!(
+            decision.action,
+            InviteQuestionAction::Silent(SilentReason::JudgeParseError)
+        );
+
+        invite
+            .maybe_respond(
+                &event("newbie", "Wie bekomme ich einen invite?"),
+                "streamer",
+            )
+            .await;
+        assert!(api.messages().is_empty());
+    }
+
+    #[tokio::test]
+    async fn modell_unsure_fragt_newcomer_weiterhin_nach() {
+        let api = MockApi::new();
+        let invite = responder(
+            api.clone(),
+            Arc::new(FakeStore {
+                rollup: rollup(1, false),
+            }),
+            FakeJudge::new(vec![
+                parse_invite_verdict(r#"{"verdict":"unsure","confidence":0.4,"reasoning":"test"}"#),
+                parse_invite_verdict(r#"{"verdict":"unsure","confidence":0.4,"reasoning":"test"}"#),
+            ]),
+        );
+
+        let decision = decide_action(&invite, "newbie", "Wie bekomme ich einen invite?").await;
+        assert_eq!(decision.action, InviteQuestionAction::AskConfirmation);
+
+        invite
+            .maybe_respond(
+                &event("newbie", "Wie bekomme ich einen invite?"),
+                "streamer",
+            )
+            .await;
+        assert_eq!(api.messages().len(), 1);
+    }
+
+    #[tokio::test]
+    async fn provider_fehler_verbraucht_keinen_antwort_cooldown() {
+        let api = MockApi::new();
+        let judge = FakeJudge::new(vec![
+            InviteQuestionVerdict::provider_error(),
+            verdict(InviteQuestionVerdictKind::Yes, 0.9),
+        ]);
+        let (invite, clock) = responder_with_clock(
+            api.clone(),
+            Arc::new(FakeStore {
+                rollup: rollup(1, false),
+            }),
+            judge.clone(),
+        );
+
+        invite
+            .maybe_respond(
+                &event("newbie", "Wie bekomme ich einen invite?"),
+                "streamer",
+            )
+            .await;
+        assert!(api.messages().is_empty());
+        assert_eq!(
+            invite
+                .user_cooldowns
+                .lock()
+                .unwrap()
+                .get(&("streamer".to_string(), "newbie".to_string()))
+                .map(|(_, kind)| *kind),
+            Some(CooldownKind::Judged)
+        );
+
+        clock.advance(Duration::from_secs(31));
+        invite
+            .maybe_respond(
+                &event("newbie", "Wie bekomme ich einen invite?"),
+                "streamer",
+            )
+            .await;
+        assert_eq!(judge.call_count(), 2);
+        assert_eq!(
+            api.messages(),
+            vec!["@newbie Wenn du Zugang zu Deadlock brauchst: Auf unserem Discord bekommst du eine Einladung und Hilfe beim Einstieg. https://discord.gg/test"]
+        );
     }
 
     #[tokio::test]
