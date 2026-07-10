@@ -37,6 +37,7 @@ pub mod mention_scoring;
 pub mod moderation;
 pub mod pipeline;
 pub mod promos;
+pub mod safe_list;
 pub mod scam_pitch;
 pub mod secret_sink;
 pub mod spam_filter;
@@ -85,6 +86,7 @@ pub use promos::{
     NoopSuppressionCheck, PartnerChannelCheck, PresetPicker, PromoEngine, RandomPresetPicker,
     StaticInviteResolver, promo_invite_fallback, DEFAULT_PROMO_DISCORD_INVITE,
 };
+pub use safe_list::{is_safe as is_safe_account, SafeAccount, SAFE_ACCOUNTS};
 pub use scam_pitch::{AccountAgePort, PitchDecision, ScamPitchDetector, SpamAiReviewer};
 pub use secret_sink::{InfisicalWriter, SecretSink, SecretWriteError};
 pub use spam_filter::{LearnedPatterns, SpamAction, SpamContext, SpamFilter, SpamVerdict};

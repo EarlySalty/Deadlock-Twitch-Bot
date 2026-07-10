@@ -544,6 +544,19 @@ impl ModerationEngine {
             silent,
         } = req;
 
+        // Schritt 0: Safe-List. Hier laufen alle Auto-Ban-Pfade der Chat-
+        // Pipeline zusammen (Spam, Scam, Crew, Global-Ban). Der Guard steht vor
+        // dem Message-Delete, sonst verlöre ein Safe-Konto trotzdem Nachrichten.
+        if crate::safe_list::is_safe(Some(chatter_id), chatter_login) {
+            warn!(
+                channel = %channel_login,
+                chatter = %chatter_login,
+                reason = %reason_text,
+                "AutoBan gegen Safe-List-Konto unterdrückt"
+            );
+            return false;
+        }
+
         // Schritt 1: Nachricht löschen (moderation.py Z. 1631–1666)
         if let Err(error) = self.api.delete_message(broadcaster_id, message_id).await {
             warn!(
@@ -1336,6 +1349,71 @@ mod tests {
             "Delete aufgerufen"
         );
         assert_eq!(api.ban_calls.load(Ordering::SeqCst), 1, "Ban aufgerufen");
+    }
+
+    /// Safe-List: weder Ban noch Message-Delete, egal welcher Pfad ruft.
+    #[tokio::test]
+    async fn autoban_verschont_safe_konten() {
+        for safe in crate::safe_list::SAFE_ACCOUNTS {
+            let api = MockApi::with_ban_result(BanOutcome::Banned);
+            let pool = sqlx::PgPool::connect_lazy("postgres://x:x@127.0.0.1:1/x").unwrap();
+            let engine = ModerationEngine::new(api.clone(), pool);
+            let result = engine
+                .auto_ban_and_cleanup(AutoBanRequest {
+                    channel_login: "kanal",
+                    broadcaster_id: "broadcast-id",
+                    bot_id: "bot-id",
+                    chatter_login: safe.login,
+                    chatter_id: safe.twitch_user_id,
+                    message_id: "msg-id",
+                    content: "jaja frag mal ricky",
+                    ban: true,
+                    reason_text: BAN_REASON_SPAM,
+                    notice_text: None,
+                    silent: false,
+                })
+                .await;
+
+            assert!(!result, "Safe-Konto {} darf kein true liefern", safe.login);
+            assert_eq!(
+                api.ban_calls.load(Ordering::SeqCst),
+                0,
+                "Safe-Konto {} wurde gebannt",
+                safe.login
+            );
+            assert_eq!(
+                api.delete_calls.load(Ordering::SeqCst),
+                0,
+                "Nachricht von Safe-Konto {} wurde geloescht",
+                safe.login
+            );
+        }
+    }
+
+    /// Der Login allein schützt nicht: fremde ID mit übernommenem Namen bannt.
+    #[tokio::test]
+    async fn autoban_bannt_bei_uebernommenem_safe_login() {
+        let api = MockApi::with_ban_result(BanOutcome::Banned);
+        let pool = sqlx::PgPool::connect_lazy("postgres://x:x@127.0.0.1:1/x").unwrap();
+        let engine = ModerationEngine::new(api.clone(), pool);
+        let result = engine
+            .auto_ban_and_cleanup(AutoBanRequest {
+                channel_login: "kanal",
+                broadcaster_id: "broadcast-id",
+                bot_id: "bot-id",
+                chatter_login: "kubi_kubi_kubi",
+                chatter_id: "999999999",
+                message_id: "msg-id",
+                content: "Spam-Text",
+                ban: true,
+                reason_text: BAN_REASON_SPAM,
+                notice_text: None,
+                silent: false,
+            })
+            .await;
+
+        assert!(result, "fremde ID darf nicht vom Login profitieren");
+        assert_eq!(api.ban_calls.load(Ordering::SeqCst), 1);
     }
 
     #[tokio::test]

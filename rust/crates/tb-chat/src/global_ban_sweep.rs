@@ -332,7 +332,7 @@ fn build_reason(custom_reason: Option<&str>) -> String {
 /// Alle Einträge in `twitch_chatter_global_ban`, neueste zuerst.
 /// `pg.py:4217` — `list_chatter_global_bans`.
 async fn list_bans(pool: &PgPool) -> Vec<BanEntry> {
-    sqlx::query_as!(
+    let entries: Vec<BanEntry> = sqlx::query_as!(
         BanEntry,
         r#"
         SELECT chatter_login AS "chatter_login!", chatter_id, reason
@@ -345,7 +345,23 @@ async fn list_bans(pool: &PgPool) -> Vec<BanEntry> {
     .unwrap_or_else(|e| {
         tracing::debug!("GlobalBanSweep: list_bans fehlgeschlagen: {e}");
         vec![]
-    })
+    });
+
+    // Safe-List schlägt die Banliste. Der Filter sitzt hier statt im
+    // API-Handler, damit auch ein direkter DB-Eintrag wirkungslos bleibt.
+    entries
+        .into_iter()
+        .filter(|entry| {
+            let safe = crate::safe_list::is_safe(entry.chatter_id.as_deref(), &entry.chatter_login);
+            if safe {
+                tracing::warn!(
+                    chatter = %entry.chatter_login,
+                    "GlobalBanSweep: Safe-List-Konto steht auf der Banliste und wird uebersprungen"
+                );
+            }
+            !safe
+        })
+        .collect()
 }
 
 /// Lädt alle (chatter_login, broadcaster_id)-Paare aus dem Applied-Ledger.
