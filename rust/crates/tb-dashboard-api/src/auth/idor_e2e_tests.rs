@@ -6,9 +6,9 @@
 //! echte Sessions verifiziert. Genau dort entstand der 401-Login-Loop (Backend
 //! verlangte einen Streamer-Override, den die Partner-Sicht nie setzte).
 //!
-//! Dieser Test führt earlysalty als reinen Partner (KEIN `tb_admin_mode`-Cookie)
-//! durch den realen Request-Fluss und beweist die drei Invarianten des neuen
-//! Modells gegen EINE Session-Identität:
+//! Die Tests führen earlysalty per Twitch- und Discord-Session ohne
+//! `tb_admin_mode` durch den realen Request-Fluss und beweisen die Invarianten
+//! des neuen Modells gegen jeweils EINE Session-Identität:
 //!   (a) `auth-status` antwortet 200 (kein 401/Loop) und meldet `level=partner`.
 //!   (b) Ein streamer-scoped Read mit FREMDEM `?streamer=` → 403 (IDOR-Klemme).
 //!   (c) Ein same-origin Schreib-POST (engagement-Mode-Toggle) MIT Session-Cookie,
@@ -18,20 +18,20 @@
 //! Gated auf `TB_TEST_DATABASE_URL` (echte Postgres-Verbindung nötig).
 
 use axum::{
+    Extension, Router,
     body::Body,
     extract::ConnectInfo,
-    http::{header, Request, StatusCode},
+    http::{Request, StatusCode, header},
     routing::{get, post},
-    Extension, Router,
 };
-use sqlx::postgres::{PgConnectOptions, PgPoolOptions};
 use sqlx::PgPool;
+use sqlx::postgres::{PgConnectOptions, PgPoolOptions};
 use std::net::SocketAddr;
 use std::str::FromStr;
 use tower::ServiceExt;
 
 use crate::auth::csrf::csrf_protect;
-use crate::auth::session::{DashboardAuthState, PARTNER_COOKIE_NAME};
+use crate::auth::session::{ADMIN_COOKIE_NAME, DashboardAuthState, PARTNER_COOKIE_NAME};
 use crate::handlers::{auth_status, engagement_mode, performance};
 
 const TEST_FERNET_KEY: &str = "dGVzdGtleTEyMzQ1Njc4OTAxMjM0NTY3ODkwMTIzNDU=";
@@ -145,9 +145,52 @@ fn get_req(uri: &str, cookie: &str) -> Request<Body> {
         .uri(uri)
         .extension(ConnectInfo(addr))
         .header(header::HOST, HOST)
+        .header("x-dashboard-context", "public")
         .header(header::COOKIE, cookie)
         .body(Body::empty())
         .unwrap()
+}
+
+#[tokio::test]
+async fn discord_admin_ohne_mode_cookie_hat_im_public_dashboard_partner_scope() {
+    let Some(pool) = make_pool("test_idor_discord_admin_user_view").await else {
+        eprintln!("SKIP: TB_TEST_DATABASE_URL nicht gesetzt");
+        return;
+    };
+
+    let auth_state = DashboardAuthState::new(pool.clone(), TEST_FERNET_KEY.to_string());
+    let session = auth_state
+        .create_admin_session("discord-owner", "Discord Owner")
+        .await
+        .unwrap();
+    let cookie = format!("{ADMIN_COOKIE_NAME}={}", session.session_id);
+
+    let res = make_router(pool.clone(), auth_state.clone())
+        .oneshot(get_req("/twitch/api/v2/auth-status", &cookie))
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::OK);
+    let body = axum::body::to_bytes(res.into_body(), 1 << 16)
+        .await
+        .unwrap();
+    let status: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(status["level"], "partner");
+    assert_eq!(status["twitchLogin"], "earlysalty");
+    assert_eq!(status["adminEligible"], true);
+    assert_eq!(status["adminMode"], false);
+
+    let res = make_router(pool, auth_state)
+        .oneshot(get_req(
+            "/twitch/api/v2/monthly-stats?streamer=ismile_e",
+            &cookie,
+        ))
+        .await
+        .unwrap();
+    assert_eq!(
+        res.status(),
+        StatusCode::FORBIDDEN,
+        "öffentliche Nutzeransicht darf keine fremden Streamer-Daten lesen"
+    );
 }
 
 #[tokio::test]
@@ -233,6 +276,7 @@ async fn partner_pfad_e2e_auth_status_scope_und_csrf() {
         .uri("/twitch/api/v2/engagement/mode")
         .extension(ConnectInfo(addr))
         .header(header::HOST, HOST)
+        .header("x-dashboard-context", "public")
         .header(header::ORIGIN, format!("https://{HOST}"))
         .header(header::COOKIE, &cookie)
         .header(header::CONTENT_TYPE, "application/json")
