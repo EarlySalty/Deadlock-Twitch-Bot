@@ -34,7 +34,12 @@ User-sichtbare Dashboard-Seiten dürfen nicht unter der Admin-Subdomain leben. D
 Was der Admin-Host **erlaubt** (Reihenfolge = Caddy-`handle`-Auswertung, erster Treffer gewinnt):
 
 - `/twitch` , `/twitch/` → `redir /twitch/admin`
-- `/twitch/admin`, `/twitch/admin/*` → `forward_auth` (Session-Gate) → Backend
+- `/twitch/admin`, `/twitch/admin/*` → `forward_auth` (Session-Gate) → Backend.
+  Antwortet `/twitch/auth/validate` mit **401/403**, redirectet Caddy auf den Discord-Login
+  (`handle_response @unauthorized`). Das Gate darf **niemals** an der bloßen *Präsenz* des
+  `master_dash_session`-Cookies hängen, nur an dessen *Gültigkeit*: ein abgelaufenes oder per
+  Device-Bindung (IP/Passive-FP, `forward_auth.rs`) verworfenes Cookie bleibt im Browser stehen
+  und sperrte den Admin sonst dauerhaft aus — nackter 401, Login unerreichbar (Vorfall 2026-07-10).
 - `/twitch/auth/*` → Login-/Logout-/Fingerprint-Flows → Backend
 - `@twitch_admin_support` → explizite Admin-API-Allowlist (`/twitch/api/admin/*`,
   `/twitch/auth/logout`, `/twitch/auth/discord/logout`, …) → Backend
