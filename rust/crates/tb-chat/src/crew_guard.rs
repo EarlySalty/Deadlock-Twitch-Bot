@@ -66,6 +66,14 @@ const CREW_REGISTRY: &[CrewAccount] = &[
         login: "mr_horizont",
         has_behavioral_evidence: false,
     },
+    // Zweitkonto derselben Person wie mr_horizont (Ansage nani). Eigener
+    // Verhaltensbeleg: ismile_e, 2026-07-06 — trug die Kampagne weiter,
+    // nachdem helmbombenricky dort gebannt wurde.
+    CrewAccount {
+        twitch_user_id: "771345179",
+        login: "wall_horizon",
+        has_behavioral_evidence: true,
+    },
 ];
 
 /// Bekannte Rival-Invite-Codes (hart). Ein `discord.gg/<code>` mit einem dieser
@@ -450,6 +458,22 @@ fn format_new_account_alert(
     )
 }
 
+/// Leise Meldung für einen Trigger-Treffer, den der Judge NICHT als Kampagne
+/// wertet. Kein Alarm, sondern ein Logbuch: nani sieht jeden Treffer selbst und
+/// merkt so auch, wenn der Judge danebenliegt oder ausfällt.
+fn format_trigger_log(
+    login: &str,
+    channel: &str,
+    patterns: &str,
+    confidence: f32,
+    content: &str,
+) -> String {
+    let preview = truncate_content(content, CONTENT_PREVIEW_MAX);
+    format!(
+        "🔎 Crew-Guard (Log): {login} in #{channel} hat Trigger ausgelöst ({patterns}). Der Judge sagt: kein Kampagnen-Muster (Confidence {confidence:.2}). Ich hab nichts getan, guck selbst drauf. Nachricht: \"{preview}\""
+    )
+}
+
 /// Patterns-Text für eine HardId-Meldung: getroffene Trigger, sonst „bekanntes
 /// Konto" (mit Nachweis-Vermerk, wenn Verhaltens-Evidenz vorliegt).
 fn hard_id_patterns(content: &str, has_evidence: bool) -> String {
@@ -643,6 +667,12 @@ async fn decide(
     judge: &dyn CrewJudge,
     recent_context: &[String],
 ) -> Option<String> {
+    // Safe-List zuerst: diese Konten reden über die Kampagne, gehören ihr aber
+    // nicht an. Sie treffen die Trigger-Wörter zwangsläufig — nie melden.
+    if crate::safe_list::is_safe(Some(chatter_id), login) {
+        return None;
+    }
+
     match screen(content, Some(chatter_id)) {
         CrewSignal::HardId {
             login: registry_login,
@@ -675,7 +705,17 @@ async fn decide(
                     content,
                 ))
             } else {
-                None
+                // Der Judge verneint — trotzdem melden, nur leiser. Am
+                // 2026-07-06 verschluckte genau dieser Zweig `wall_horizon`:
+                // Trigger sass, Judge sagte nein, nani erfuhr nie davon. Bei
+                // rund 0,8 Trigger-Treffern pro Tag ist das keine Flut.
+                Some(format_trigger_log(
+                    login,
+                    channel,
+                    &hits.join(", "),
+                    verdict.confidence,
+                    content,
+                ))
             }
         }
         CrewSignal::None => None,
@@ -733,6 +773,102 @@ mod tests {
         "ricky komm ins game",
         "welcher discord invite war das nochmal fuers turnier",
     ];
+
+    /// Judge-Attrappe mit festem Urteil — kein Netz.
+    struct StubJudge(CrewVerdict);
+
+    #[async_trait]
+    impl CrewJudge for StubJudge {
+        async fn judge(&self, _content: &str, _recent_context: &[String]) -> CrewVerdict {
+            self.0.clone()
+        }
+    }
+
+    fn judge_nein() -> StubJudge {
+        StubJudge(CrewVerdict::unsure())
+    }
+
+    fn judge_ja() -> StubJudge {
+        StubJudge(CrewVerdict {
+            is_crew: true,
+            confidence: 0.9,
+            patterns: vec!["b".into(), "c".into()],
+            reasoning: "klar".into(),
+        })
+    }
+
+    /// Der Vorfall vom 2026-07-06: `wall_horizon` fuhr das Skript, der Judge
+    /// verneinte, es kam KEINE Meldung. Ab jetzt: Trigger meldet immer.
+    #[tokio::test]
+    async fn trigger_meldet_auch_wenn_judge_verneint() {
+        let msg = decide(
+            "helmbombenricky wollte nochmal nachdeinem dc fragen aber er ist gebant",
+            "771345179",
+            "ismile_e",
+            "wall_horizon",
+            JUDGE_CONFIDENCE_THRESHOLD,
+            &judge_nein(),
+            &[],
+        )
+        .await
+        .expect("Trigger muss auch bei Judge-Nein gemeldet werden");
+
+        assert!(msg.contains("wall_horizon"), "Login fehlt: {msg}");
+        assert!(msg.contains("ismile_e"), "Kanal fehlt: {msg}");
+    }
+
+    #[tokio::test]
+    async fn trigger_mit_judge_ja_bleibt_neu_account_alarm() {
+        let msg = decide(
+            "hast du den bot von nani drin? der bannt unbewusst viele wegen der bannliste",
+            "555000111",
+            "ismile_e",
+            "neuer_account",
+            JUDGE_CONFIDENCE_THRESHOLD,
+            &judge_ja(),
+            &[],
+        )
+        .await
+        .expect("Judge-Ja muss melden");
+
+        assert!(msg.contains("Neuer Account"), "kein Neu-Alarm: {msg}");
+    }
+
+    /// Safe-Konten treffen die Trigger-Wörter, dürfen aber NIE gemeldet werden.
+    #[tokio::test]
+    async fn safe_konto_erzeugt_keine_meldung() {
+        for safe in crate::safe_list::SAFE_ACCOUNTS {
+            let msg = decide(
+                "jaja frag mal ricky, der is einfach ueberall gebannt",
+                safe.twitch_user_id,
+                "ismile_e",
+                safe.login,
+                JUDGE_CONFIDENCE_THRESHOLD,
+                &judge_ja(),
+                &[],
+            )
+            .await;
+            assert!(
+                msg.is_none(),
+                "Safe-Konto {} wurde gemeldet: {msg:?}",
+                safe.login
+            );
+        }
+    }
+
+    #[test]
+    fn wall_horizon_ist_bekanntes_konto() {
+        match screen("alles gut bei dir?", Some("771345179")) {
+            CrewSignal::HardId {
+                login,
+                has_evidence,
+            } => {
+                assert_eq!(login, "wall_horizon");
+                assert!(has_evidence, "Verhaltensbeleg vom 2026-07-06 liegt vor");
+            }
+            other => panic!("erwartet HardId, war {other:?}"),
+        }
+    }
 
     #[test]
     fn textbasierte_positiva_ohne_invite_sind_trigger() {

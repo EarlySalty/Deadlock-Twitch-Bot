@@ -1104,6 +1104,8 @@ async fn handle_strong_timeout(
     if event.chatter_user_id.is_empty()
         || event.chatter_user_id == event.broadcaster_user_id
         || event.is_mod_or_broadcaster()
+        // Safe-List: dieser Pfad timeoutet direkt, ohne ModerationEngine.
+        || crate::safe_list::is_safe(Some(&event.chatter_user_id), chatter_login)
     {
         return;
     }
@@ -1564,6 +1566,49 @@ mod tests {
         let pipeline = pipeline_for_non_partner(api, pool);
 
         assert!(!pipeline.handle(&strong_timeout_event()).await);
+    }
+
+    /// Safe-List: `handle_strong_timeout` timeoutet direkt, ohne
+    /// ModerationEngine. Kein Timeout, kein Chat-Text, kein Discord-Alert.
+    #[tokio::test]
+    async fn strong_timeout_verschont_safe_konten() {
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/changelog"))
+            .respond_with(ResponseTemplate::new(204))
+            .expect(0)
+            .mount(&server)
+            .await;
+
+        for safe in crate::safe_list::SAFE_ACCOUNTS {
+            let api = Arc::new(RecordingChatApi::default());
+            let api_trait: Arc<dyn ChatApi> = api.clone();
+            let alerter = Arc::new(ModAlerter::with_endpoint(
+                reqwest::Client::new(),
+                format!("{}/changelog", server.uri()),
+            ));
+            let mut event = strong_timeout_event();
+            event.chatter_user_id = safe.twitch_user_id.to_string();
+            event.chatter_user_login = safe.login.to_string();
+
+            handle_strong_timeout(
+                &api_trait,
+                &alerter,
+                &event,
+                "channel",
+                safe.login,
+                "built escalation text",
+                Duration::from_secs(600),
+            )
+            .await;
+
+            assert!(
+                api.calls().is_empty(),
+                "Safe-Konto {} loeste Aktionen aus: {:?}",
+                safe.login,
+                api.calls()
+            );
+        }
     }
 
     #[tokio::test]
