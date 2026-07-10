@@ -7,10 +7,10 @@
 //! All-null-Payload beantwortet.
 
 use axum::{
-    extract::State,
-    http::{header, HeaderMap},
-    response::{IntoResponse, Response},
     Json,
+    extract::State,
+    http::{HeaderMap, header},
+    response::{IntoResponse, Response},
 };
 use serde::Serialize;
 use serde_json::json;
@@ -70,18 +70,53 @@ fn now_secs() -> u64 {
 pub async fn auth_status_handler(
     auth: DashboardAuthLevel,
     State(pool): State<PgPool>,
-    _headers: HeaderMap,
+    headers: HeaderMap,
 ) -> Response {
     match &auth {
         DashboardAuthLevel::None => unauth_response().await,
-        DashboardAuthLevel::Admin { actor: Some(_) } => admin_response("admin", true, true),
+        DashboardAuthLevel::Admin { actor: Some(actor) } => {
+            if admin_mode_header_active(&headers) {
+                admin_response("admin", true, true)
+            } else {
+                partner_response(
+                    &pool,
+                    &actor.twitch_login,
+                    &actor.twitch_user_id,
+                    true,
+                    false,
+                )
+                .await
+            }
+        }
         DashboardAuthLevel::Admin { actor: None } => admin_response("admin", false, true),
         DashboardAuthLevel::Partner {
             twitch_login,
             twitch_user_id,
             ..
-        } => partner_response(&pool, twitch_login, twitch_user_id, is_admin_login(twitch_login), false).await,
+        } => {
+            partner_response(
+                &pool,
+                twitch_login,
+                twitch_user_id,
+                is_admin_login(twitch_login),
+                false,
+            )
+            .await
+        }
     }
+}
+
+fn admin_mode_header_active(headers: &HeaderMap) -> bool {
+    headers
+        .get(header::COOKIE)
+        .and_then(|value| value.to_str().ok())
+        .and_then(|cookie| {
+            cookie.split(';').find_map(|pair| {
+                let (name, value) = pair.trim().split_once('=')?;
+                (name.trim() == ADMIN_MODE_COOKIE).then_some(value.trim())
+            })
+        })
+        == Some("2")
 }
 
 // ── Unauthentifiziert ───────────────────────────────────────────────────────
@@ -290,11 +325,11 @@ mod tests {
     use super::*;
     use crate::auth::level::AdminActor;
     use axum::{
+        Extension, Router,
         body::Body,
         extract::ConnectInfo,
         http::{HeaderMap, Request, StatusCode},
         routing::get,
-        Extension, Router,
     };
     use sqlx::postgres::{PgConnectOptions, PgPoolOptions};
     use std::net::SocketAddr;
@@ -305,9 +340,7 @@ mod tests {
     fn make_router(token: &str) -> Router {
         // Kein echtes Pool in Unit-Tests — nur auth-level basierte Tests
         // (Admin). Partner-Tests nutzen einen absichtlich nicht erreichbaren Pool.
-        let pool = sqlx::Pool::connect_lazy_with(
-            sqlx::postgres::PgConnectOptions::new(),
-        );
+        let pool = sqlx::Pool::connect_lazy_with(sqlx::postgres::PgConnectOptions::new());
         Router::new()
             .route("/twitch/api/v2/auth-status", get(auth_status_handler))
             .with_state(pool)
@@ -355,12 +388,13 @@ mod tests {
 
     #[tokio::test]
     async fn twitch_admin_sieht_admin_praesentation() {
-        let response = auth_status_handler(
-            twitch_admin(),
-            State(unavailable_pool()),
-            HeaderMap::new(),
-        )
-        .await;
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            axum::http::header::COOKIE,
+            axum::http::HeaderValue::from_static("tb_admin_mode=2"),
+        );
+        let response =
+            auth_status_handler(twitch_admin(), State(unavailable_pool()), headers).await;
         let value = json_body(response).await;
 
         assert_eq!(value["isAdmin"], true);
@@ -368,6 +402,19 @@ mod tests {
         assert_eq!(value["adminMode"], true);
         assert_eq!(value["plan"]["tier"], "extended");
         assert_eq!(value["plan"]["planName"], "Erweitert (Admin)");
+    }
+
+    #[tokio::test]
+    async fn twitch_admin_actor_ohne_mode_cookie_sieht_partner_praesentation() {
+        let response =
+            auth_status_handler(twitch_admin(), State(unavailable_pool()), HeaderMap::new()).await;
+        let value = json_body(response).await;
+
+        assert_eq!(value["isAdmin"], false);
+        assert_eq!(value["adminEligible"], true);
+        assert_eq!(value["adminMode"], false);
+        assert_eq!(value["level"], "partner");
+        assert_eq!(value["twitchLogin"], "earlysalty");
     }
 
     #[tokio::test]
@@ -411,7 +458,10 @@ mod tests {
     #[tokio::test]
     async fn unauth_returns_all_false() {
         let app = make_router("tok");
-        let res = app.oneshot(req("1.2.3.4", "example.com", None)).await.unwrap();
+        let res = app
+            .oneshot(req("1.2.3.4", "example.com", None))
+            .await
+            .unwrap();
         assert_eq!(res.status(), StatusCode::OK);
         let b = axum::body::to_bytes(res.into_body(), 4096).await.unwrap();
         let v: serde_json::Value = serde_json::from_slice(&b).unwrap();
@@ -448,17 +498,36 @@ mod tests {
     #[tokio::test]
     async fn unauth_has_correct_shape() {
         let app = make_router("tok");
-        let res = app.oneshot(req("1.2.3.4", "example.com", None)).await.unwrap();
+        let res = app
+            .oneshot(req("1.2.3.4", "example.com", None))
+            .await
+            .unwrap();
         let b = axum::body::to_bytes(res.into_body(), 4096).await.unwrap();
         let v: serde_json::Value = serde_json::from_slice(&b).unwrap();
         // Alle erwarteten Felder müssen vorhanden sein
         for field in &[
-            "authenticated", "level", "authLevel", "demoMode", "isAdmin",
-            "adminEligible", "adminMode",
-            "isLocalhost", "canViewAllStreamers", "twitchLogin", "adminDefaultStreamer",
-            "displayName", "partnerStatus", "technicalPauseReason", "operationalState",
-            "canAccessAnalyticsDashboard", "tokenErrorGraceExpiresAt", "csrfToken",
-            "csrf_token", "plan", "access", "permissions",
+            "authenticated",
+            "level",
+            "authLevel",
+            "demoMode",
+            "isAdmin",
+            "adminEligible",
+            "adminMode",
+            "isLocalhost",
+            "canViewAllStreamers",
+            "twitchLogin",
+            "adminDefaultStreamer",
+            "displayName",
+            "partnerStatus",
+            "technicalPauseReason",
+            "operationalState",
+            "canAccessAnalyticsDashboard",
+            "tokenErrorGraceExpiresAt",
+            "csrfToken",
+            "csrf_token",
+            "plan",
+            "access",
+            "permissions",
         ] {
             assert!(v.get(field).is_some(), "Feld '{field}' fehlt");
         }
