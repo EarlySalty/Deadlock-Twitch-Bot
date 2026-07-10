@@ -1,3 +1,11 @@
+## #350 — Admin-Modus bleibt wirklich Opt-in
+
+**Problem:** Im Twitch-Dashboard konnte die Admin-Ansicht nach dem Beenden oder über einen vorgelagerten Admin-Kontext wieder aktiv wirken. Dadurch waren Inhalte entsperrt, obwohl die echte Nutzeransicht gebraucht wurde.
+
+**Änderung:** Die Status-Antwort des Dashboards prüft den Admin-Modus jetzt selbst noch einmal gegen das Session-Cookie. Ohne aktives Opt-in wird ein Twitch-Admin als normaler Partner angezeigt.
+
+**Aktuelles Verhalten:** Der Admin-Modus ist nur aktiv, wenn er in der laufenden Browser-Sitzung ausdrücklich eingeschaltet wurde. „Beenden" fällt auf die echte Kanalansicht zurück und ein fehlendes oder gelöschtes Cookie reicht nicht mehr für Admin-Entsperrung.
+
 ## #349 — Der Bot erkennt Fragen nach Deadlock-Zugang wieder
 
 **Problem:** Wer im Chat gefragt hat, wie man das Spiel überhaupt spielen kann oder wie man an eine Einladung kommt, bekam keine Antwort. Die frühere automatische Erkennung sprang zu oft auf harmlose Sätze an und wurde deshalb abgeschaltet. Ersetzt wurde sie durch einen Befehl, den neue Zuschauer naturgemäß nicht kennen.
