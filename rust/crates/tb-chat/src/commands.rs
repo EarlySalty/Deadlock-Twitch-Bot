@@ -2614,6 +2614,24 @@ mod tests {
         );
     }
 
+    /// `!raid` wird am Stream-Ende gebraucht, wenn die Kategorie laengst nicht mehr
+    /// Deadlock ist (CHANGELOG #123). Der Raid-Pfad prueft die Deadlock-Regel selbst
+    /// und antwortet erklaerend; das grobe Vor-Gate darf ihn nicht stumm schlucken.
+    #[tokio::test]
+    async fn deadlock_gate_erlaubt_raid_wenn_nicht_live() {
+        let pool = pool_or_skip!("cmd_gate_raid");
+        apply_ddl(&pool).await;
+        let api = MockApi::new();
+        let engine = make_engine_with_pool(pool, api);
+
+        assert!(
+            engine
+                .handle(&make_event("!raid", true, false), false)
+                .await,
+            "!raid muss den Raid-Pfad erreichen, auch wenn gerade kein Deadlock laeuft"
+        );
+    }
+
     #[tokio::test]
     async fn engagement_ignore_me_schreibt_optout() {
         let pool = pool_or_skip!("cmd_engagement_ignore");

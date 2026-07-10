@@ -157,14 +157,17 @@ pub fn catalog() -> &'static [CommandInfo] {
             name: "!raid",
             aliases: &["!traid"],
             group: Mod,
-            deadlock_only: true,
+            // Kein Gate: der Raid-Pfad prueft die Deadlock-Regel selbst und laesst den
+            // Nachlauf nach Stream-Ende bewusst zu (CHANGELOG #123).
+            deadlock_only: false,
             summary: "Startet einen Raid zu einem Deadlock-Streamer (Mods/Broadcaster).",
         },
         CommandInfo {
             name: "!title",
             aliases: &["!titel"],
             group: Mod,
-            deadlock_only: true,
+            // Kein Gate: einen Stream-Titel setzt man vor dem Stream, nicht mittendrin.
+            deadlock_only: false,
             summary: "Schlägt einen Stream-Titel vor: !title <stichworte>.",
         },
         CommandInfo {
@@ -325,6 +328,22 @@ mod tests {
         );
     }
 
+    /// Broadcaster- und Mod-Werkzeuge sind Betriebsmittel: sie muessen auch dann
+    /// laufen, wenn die Kategorie nicht (mehr) Deadlock ist. `!raid` zielt sogar
+    /// genau auf das Stream-Ende (CHANGELOG #123).
+    #[test]
+    fn mod_werkzeuge_sind_nie_deadlock_gegatet() {
+        let gegatet: Vec<&str> = catalog()
+            .iter()
+            .filter(|c| c.group == CommandGroup::Mod && c.deadlock_only)
+            .map(|c| c.name)
+            .collect();
+        assert!(
+            gegatet.is_empty(),
+            "Mod-Befehle duerfen kein Deadlock-Gate tragen: {gegatet:?}"
+        );
+    }
+
     #[test]
     fn deadlock_only_findet_name_und_alias() {
         assert!(deadlock_only("!rank"));
@@ -333,6 +352,11 @@ mod tests {
         assert!(!deadlock_only("!commands"));
         assert!(!deadlock_only("!uban"));
         assert!(!deadlock_only("!unbekannt"));
+        // Das Vor-Gate in `handle` fragt genau diese Funktion. `!raid` muss es
+        // passieren, sonst schluckt es den Raid nach Stream-Ende (CHANGELOG #123).
+        assert!(!deadlock_only("!raid"));
+        assert!(!deadlock_only("!traid"));
+        assert!(!deadlock_only("!title"));
     }
 
     #[test]
