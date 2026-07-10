@@ -42,10 +42,11 @@ use tb_chat::timeout_tracking::{
 use tb_chat::token::BotTokenManager;
 use tb_chat::types::ChatMessageEvent;
 use tb_chat::{
-    promo_invite_fallback, ChannelClassifier, ChatApi, ChatPipeline, ChatPipelineParts,
-    ChatterTracker, FunResponses, GlobalBanSweeper, GlobalChatterBanEnforcer,
-    InviteQuestionInviteUrlPort, InviteQuestionResponder, MiniMaxInviteQuestionJudge, ModAlerter,
-    PartnerRoster, PgHelixMentionResolver, PgInviteQuestionStore, ReviewLog, SusInviteCheck,
+    lfg_pitch_enabled_from_env, promo_invite_fallback, ChannelClassifier, ChatApi, ChatPipeline,
+    ChatPipelineParts, ChatterTracker, FunResponses, GlobalBanSweeper, GlobalChatterBanEnforcer,
+    InviteQuestionInviteUrlPort, InviteQuestionResponder, LfgPitchResponder,
+    MiniMaxInviteQuestionJudge, MiniMaxLfgJudge, ModAlerter, PartnerRoster, PgHelixMentionResolver,
+    PgInviteQuestionStore, ReviewLog, SusInviteCheck,
 };
 use tb_crypto::FieldCipher;
 use tb_engagement::irc_reader::EngagementIrcReader;
@@ -773,6 +774,16 @@ pub async fn build_runtime(
             Arc::new(MiniMaxInviteQuestionJudge::new(
                 EngagementMinimaxClient::new(None, None, None, None),
             )),
+            Some(Arc::clone(&promos) as Arc<dyn tb_chat::commands::PromoBlockCheck>),
+            Some(Arc::clone(&promos) as Arc<dyn tb_chat::commands::InviteReplyNotifier>),
+        )),
+        lfg_pitch: Arc::new(LfgPitchResponder::new(
+            Arc::clone(&api),
+            Arc::new(DbInviteUrlWithFallback { pool: pool.clone() }),
+            Arc::new(MiniMaxLfgJudge::new(EngagementMinimaxClient::new(
+                None, None, None, None,
+            ))),
+            lfg_pitch_enabled_from_env(),
             Some(Arc::clone(&promos) as Arc<dyn tb_chat::commands::PromoBlockCheck>),
             Some(Arc::clone(&promos) as Arc<dyn tb_chat::commands::InviteReplyNotifier>),
         )),
@@ -2570,6 +2581,16 @@ mod chat_notification_tests {
                 Arc::new(MiniMaxInviteQuestionJudge::new(
                     EngagementMinimaxClient::new(None, None, None, None),
                 )),
+                Some(Arc::clone(&promos) as Arc<dyn tb_chat::commands::PromoBlockCheck>),
+                Some(Arc::clone(&promos) as Arc<dyn tb_chat::commands::InviteReplyNotifier>),
+            )),
+            lfg_pitch: Arc::new(LfgPitchResponder::new(
+                Arc::clone(&api_trait),
+                Arc::new(NoopDiscordLink),
+                Arc::new(MiniMaxLfgJudge::new(EngagementMinimaxClient::new(
+                    None, None, None, None,
+                ))),
+                false,
                 Some(Arc::clone(&promos) as Arc<dyn tb_chat::commands::PromoBlockCheck>),
                 Some(Arc::clone(&promos) as Arc<dyn tb_chat::commands::InviteReplyNotifier>),
             )),

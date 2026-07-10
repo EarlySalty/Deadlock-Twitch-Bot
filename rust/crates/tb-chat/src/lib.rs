@@ -76,6 +76,10 @@ pub use invite_question::{
     InviteQuestionResponder, InviteQuestionRollup, InviteQuestionStore, InviteQuestionVerdict,
     InviteQuestionVerdictKind, MiniMaxInviteQuestionJudge, PgInviteQuestionStore,
 };
+pub use lfg_pitch::{
+    lfg_pitch_enabled_from_env, LfgJudge, LfgJudgeInput, LfgPitchResponder, LfgVerdict,
+    LfgVerdictKind, MiniMaxLfgJudge, LFG_PITCH_COPY_PLACEHOLDER,
+};
 pub use lurker_policy::{
     is_passive_lurker_channel, should_attempt_runtime_heal, PASSIVE_LURKER_DETAIL,
     PASSIVE_LURKER_STATE,
