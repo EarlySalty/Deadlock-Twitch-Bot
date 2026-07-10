@@ -207,6 +207,12 @@ pub trait InviteReplyNotifier: Send + Sync {
     async fn note_invite_reply(&self, channel_login: &str);
 }
 
+#[async_trait]
+pub trait PromoBlockCheck: Send + Sync {
+    /// true = Bot-Werbung für diesen Kanal ist per Plan/Flag abgeschaltet.
+    async fn is_promo_blocked(&self, channel_login: &str) -> bool;
+}
+
 /// Port für Super-Mod-Prüfung (Engagement-Commands).
 /// `engagement_commands.py:101` — `bot.engagement.admin.is_super_mod(actor_id)`
 #[async_trait]
@@ -413,8 +419,11 @@ impl CommandEngine {
                 if event.is_mod_or_broadcaster() {
                     self.cmd_silentban(event).await;
                 } else {
-                    self.reply(event, "Nur der Broadcaster oder Mods können den Bot steuern.")
-                        .await;
+                    self.reply(
+                        event,
+                        "Nur der Broadcaster oder Mods können den Bot steuern.",
+                    )
+                    .await;
                 }
                 true
             }
@@ -422,8 +431,11 @@ impl CommandEngine {
                 if event.is_mod_or_broadcaster() {
                     self.cmd_silentraid(event).await;
                 } else {
-                    self.reply(event, "Nur der Broadcaster oder Mods können den Bot steuern.")
-                        .await;
+                    self.reply(
+                        event,
+                        "Nur der Broadcaster oder Mods können den Bot steuern.",
+                    )
+                    .await;
                 }
                 true
             }
@@ -2837,7 +2849,10 @@ mod tests {
 
         assert_eq!(raid.silent_ban_call_count().await, 0);
         let msg = api.last_message().await.unwrap();
-        assert!(msg.contains("Neu-Autorisierung erforderlich"), "Meldung: {msg}");
+        assert!(
+            msg.contains("Neu-Autorisierung erforderlich"),
+            "Meldung: {msg}"
+        );
     }
 
     #[tokio::test]
@@ -2868,7 +2883,10 @@ mod tests {
 
         assert_eq!(raid.silent_raid_call_count().await, 0);
         let msg = api.last_message().await.unwrap();
-        assert!(msg.contains("Neu-Autorisierung erforderlich"), "Meldung: {msg}");
+        assert!(
+            msg.contains("Neu-Autorisierung erforderlich"),
+            "Meldung: {msg}"
+        );
     }
 
     #[tokio::test]

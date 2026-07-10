@@ -773,6 +773,8 @@ pub async fn build_runtime(
             Arc::new(MiniMaxInviteQuestionJudge::new(
                 EngagementMinimaxClient::new(None, None, None, None),
             )),
+            Some(Arc::clone(&promos) as Arc<dyn tb_chat::commands::PromoBlockCheck>),
+            Some(Arc::clone(&promos) as Arc<dyn tb_chat::commands::InviteReplyNotifier>),
         )),
         promos: Arc::clone(&promos),
         commands,
@@ -2496,6 +2498,11 @@ mod chat_notification_tests {
         let api_trait: Arc<dyn ChatApi> = api;
         let http = reqwest::Client::new();
         let moderation = Arc::new(ModerationEngine::new(Arc::clone(&api_trait), pool.clone()));
+        let promos = Arc::new(PromoEngine::new(
+            pool.clone(),
+            Arc::clone(&api_trait),
+            Arc::new(tb_chat::NoopSuppressionCheck),
+        ));
         ChatPipeline::new(ChatPipelineParts {
             bot_user_id: "bot-id".to_string(),
             api: Arc::clone(&api_trait),
@@ -2529,12 +2536,10 @@ mod chat_notification_tests {
                 Arc::new(MiniMaxInviteQuestionJudge::new(
                     EngagementMinimaxClient::new(None, None, None, None),
                 )),
+                Some(Arc::clone(&promos) as Arc<dyn tb_chat::commands::PromoBlockCheck>),
+                Some(Arc::clone(&promos) as Arc<dyn tb_chat::commands::InviteReplyNotifier>),
             )),
-            promos: Arc::new(PromoEngine::new(
-                pool.clone(),
-                Arc::clone(&api_trait),
-                Arc::new(tb_chat::NoopSuppressionCheck),
-            )),
+            promos,
             commands: Arc::new(CommandEngine::new(
                 pool,
                 Arc::clone(&api_trait),

@@ -20,7 +20,7 @@ use tb_engagement::minimax_chat::EngagementMinimaxClient;
 use tracing::{debug, info, warn};
 
 use crate::api::ChatApi;
-use crate::commands::DiscordLinkPort;
+use crate::commands::{DiscordLinkPort, InviteReplyNotifier, PromoBlockCheck};
 use crate::types::{ChatMessageEvent, SendOutcome};
 
 const INVITE_QUESTION_CHANNEL_COOLDOWN: Duration = Duration::from_secs(120);
@@ -28,9 +28,9 @@ const INVITE_QUESTION_USER_COOLDOWN: Duration = Duration::from_secs(3600);
 const INVITE_QUESTION_JUDGED_COOLDOWN: Duration = Duration::from_secs(30);
 const PENDING_CONFIRMATION_WINDOW: Duration = Duration::from_secs(120);
 
-const GO_REPLY: &str = "Wenn du Zugang zu Deadlock brauchst: Auf unserem Discord bekommst du eine Einladung und Hilfe beim Einstieg.";
+const GO_REPLY: &str = "@{chatter} Für einen Deadlock-Invite: Komm auf unseren Discord und frag im Channel frag-die-community nach einem Invite, am besten gleich mit deinem Steam Freundescode. Dann geht das schnell und unkompliziert. {invite}";
 const CONFIRM_REPLY: &str =
-    "Suchst du einen Invite für Deadlock? Sag einfach kurz ja, dann schick ich dir den Weg.";
+    "@{chatter} Suchst du einen Invite für Deadlock? Sag einfach kurz ja, dann schick ich dir den Weg.";
 
 const INVITE_JUDGE_SYSTEM_PROMPT: &str = r#"Du bist ein vorsichtiger deutschsprachiger Twitch-Chat-Moderator für einen Deadlock-Stream.
 
@@ -449,6 +449,7 @@ pub enum SilentReason {
     CooldownChannel,
     CooldownUserReplied,
     CooldownJudgeBrake,
+    PromoBlockedByPlan,
     JudgeNo,
     /// Judge-Provider hat nicht geantwortet; kein Modellurteil.
     JudgeProviderError,
@@ -470,6 +471,7 @@ impl SilentReason {
             Self::CooldownChannel => "cooldown_channel",
             Self::CooldownUserReplied => "cooldown_user_replied",
             Self::CooldownJudgeBrake => "cooldown_judge_brake",
+            Self::PromoBlockedByPlan => "promo_blocked_by_plan",
             Self::JudgeNo => "judge_no",
             Self::JudgeProviderError => "judge_provider_error",
             Self::JudgeParseError => "judge_parse_error",
@@ -563,6 +565,8 @@ pub struct InviteQuestionResponder {
     discord_link: Arc<dyn DiscordLinkPort>,
     store: Arc<dyn InviteQuestionStore>,
     judge: Arc<dyn InviteQuestionJudge>,
+    promo_block_check: Option<Arc<dyn PromoBlockCheck>>,
+    invite_reply_notifier: Option<Arc<dyn InviteReplyNotifier>>,
     clock: Arc<dyn InviteQuestionClock>,
     channel_cooldowns: Mutex<HashMap<String, Instant>>,
     user_cooldowns: Mutex<HashMap<(String, String), (Instant, CooldownKind)>>,
@@ -581,6 +585,8 @@ impl InviteQuestionResponder {
         discord_link: Arc<dyn DiscordLinkPort>,
         store: Arc<dyn InviteQuestionStore>,
         judge: Arc<dyn InviteQuestionJudge>,
+        promo_block_check: Option<Arc<dyn PromoBlockCheck>>,
+        invite_reply_notifier: Option<Arc<dyn InviteReplyNotifier>>,
     ) -> Self {
         Self::new_with_clock(
             api,
@@ -588,6 +594,8 @@ impl InviteQuestionResponder {
             store,
             judge,
             Arc::new(SystemInviteQuestionClock),
+            promo_block_check,
+            invite_reply_notifier,
         )
     }
 
@@ -597,12 +605,16 @@ impl InviteQuestionResponder {
         store: Arc<dyn InviteQuestionStore>,
         judge: Arc<dyn InviteQuestionJudge>,
         clock: Arc<dyn InviteQuestionClock>,
+        promo_block_check: Option<Arc<dyn PromoBlockCheck>>,
+        invite_reply_notifier: Option<Arc<dyn InviteReplyNotifier>>,
     ) -> Self {
         Self {
             api,
             discord_link,
             store,
             judge,
+            promo_block_check,
+            invite_reply_notifier,
             clock,
             channel_cooldowns: Mutex::new(HashMap::new()),
             user_cooldowns: Mutex::new(HashMap::new()),
@@ -632,6 +644,7 @@ impl InviteQuestionResponder {
                     .await
                 {
                     self.mark_replied(&decision.channel_login, &decision.chatter_login);
+                    self.note_invite_reply(&decision.channel_login).await;
                 }
             }
             InviteQuestionAction::AskConfirmation => {
@@ -640,6 +653,7 @@ impl InviteQuestionResponder {
                     .await
                 {
                     self.mark_replied(&decision.channel_login, &decision.chatter_login);
+                    self.note_invite_reply(&decision.channel_login).await;
                     self.remember_pending_confirmation(
                         &decision.channel_login,
                         &decision.chatter_login,
@@ -745,6 +759,18 @@ impl InviteQuestionResponder {
                 is_newcomer,
                 signal.has_strong_access,
             );
+        }
+        if let Some(promo_block_check) = &self.promo_block_check {
+            if promo_block_check.is_promo_blocked(&channel_login).await {
+                return InviteQuestionDecision::silent(
+                    SilentReason::PromoBlockedByPlan,
+                    channel_login,
+                    chatter_login,
+                    raw.to_string(),
+                    is_newcomer,
+                    signal.has_strong_access,
+                );
+            }
         }
         before_judge(&channel_login, &chatter_login);
 
@@ -960,12 +986,18 @@ impl InviteQuestionResponder {
         }
     }
 
+    async fn note_invite_reply(&self, channel_login: &str) {
+        if let Some(notifier) = &self.invite_reply_notifier {
+            notifier.note_invite_reply(channel_login).await;
+        }
+    }
+
     async fn send_confirmation_question(
         &self,
         event: &ChatMessageEvent,
         chatter_login: &str,
     ) -> bool {
-        let msg = format!("@{chatter_login} {CONFIRM_REPLY}");
+        let msg = CONFIRM_REPLY.replace("{chatter}", chatter_login);
         self.send(event, &msg).await
     }
 
@@ -983,7 +1015,9 @@ impl InviteQuestionResponder {
                 return false;
             }
         };
-        let msg = format!("@{chatter_login} {GO_REPLY} {invite}");
+        let msg = GO_REPLY
+            .replace("{chatter}", chatter_login)
+            .replace("{invite}", &invite);
         self.send(event, &msg).await
     }
 
@@ -1030,7 +1064,7 @@ fn is_affirmative(raw: &str) -> bool {
 mod tests {
     use super::*;
     use crate::api::{BanOutcome, ChatApi};
-    use crate::commands::DiscordLinkPort;
+    use crate::commands::{DiscordLinkPort, InviteReplyNotifier, PromoBlockCheck};
     use crate::types::{ChatMessageBody, ChatMessageEvent, SendOutcome};
     use async_trait::async_trait;
     use std::collections::VecDeque;
@@ -1116,6 +1150,46 @@ mod tests {
     impl DiscordLinkPort for FakeDiscordLink {
         async fn discord_invite(&self, _channel_login: &str) -> Result<Option<String>, String> {
             Ok(Some("https://discord.gg/test".to_string()))
+        }
+    }
+
+    struct FakePromoBlock {
+        blocked: bool,
+    }
+
+    impl FakePromoBlock {
+        fn new(blocked: bool) -> Arc<Self> {
+            Arc::new(Self { blocked })
+        }
+    }
+
+    #[async_trait]
+    impl PromoBlockCheck for FakePromoBlock {
+        async fn is_promo_blocked(&self, _channel_login: &str) -> bool {
+            self.blocked
+        }
+    }
+
+    struct FakeNotifier {
+        calls: Mutex<Vec<String>>,
+    }
+
+    impl FakeNotifier {
+        fn new() -> Arc<Self> {
+            Arc::new(Self {
+                calls: Mutex::new(vec![]),
+            })
+        }
+
+        fn calls(&self) -> Vec<String> {
+            self.calls.lock().unwrap().clone()
+        }
+    }
+
+    #[async_trait]
+    impl InviteReplyNotifier for FakeNotifier {
+        async fn note_invite_reply(&self, channel_login: &str) {
+            self.calls.lock().unwrap().push(channel_login.to_string());
         }
     }
 
@@ -1232,13 +1306,34 @@ mod tests {
         store: Arc<dyn InviteQuestionStore>,
         judge: Arc<dyn InviteQuestionJudge>,
     ) -> InviteQuestionResponder {
-        responder_with_clock(api, store, judge).0
+        responder_with_ports(api, store, judge, None, None)
+    }
+
+    fn responder_with_ports(
+        api: Arc<MockApi>,
+        store: Arc<dyn InviteQuestionStore>,
+        judge: Arc<dyn InviteQuestionJudge>,
+        promo_block_check: Option<Arc<dyn PromoBlockCheck>>,
+        invite_reply_notifier: Option<Arc<dyn InviteReplyNotifier>>,
+    ) -> InviteQuestionResponder {
+        responder_with_clock_and_ports(api, store, judge, promo_block_check, invite_reply_notifier)
+            .0
     }
 
     fn responder_with_clock(
         api: Arc<MockApi>,
         store: Arc<dyn InviteQuestionStore>,
         judge: Arc<dyn InviteQuestionJudge>,
+    ) -> (InviteQuestionResponder, Arc<FakeClock>) {
+        responder_with_clock_and_ports(api, store, judge, None, None)
+    }
+
+    fn responder_with_clock_and_ports(
+        api: Arc<MockApi>,
+        store: Arc<dyn InviteQuestionStore>,
+        judge: Arc<dyn InviteQuestionJudge>,
+        promo_block_check: Option<Arc<dyn PromoBlockCheck>>,
+        invite_reply_notifier: Option<Arc<dyn InviteReplyNotifier>>,
     ) -> (InviteQuestionResponder, Arc<FakeClock>) {
         let clock = FakeClock::new();
         let invite = InviteQuestionResponder::new_with_clock(
@@ -1247,8 +1342,22 @@ mod tests {
             store,
             judge,
             clock.clone(),
+            promo_block_check,
+            invite_reply_notifier,
         );
         (invite, clock)
+    }
+
+    fn expected_go(chatter: &str) -> String {
+        format!(
+            "@{chatter} Für einen Deadlock-Invite: Komm auf unseren Discord und frag im Channel frag-die-community nach einem Invite, am besten gleich mit deinem Steam Freundescode. Dann geht das schnell und unkompliziert. https://discord.gg/test"
+        )
+    }
+
+    fn expected_confirm(chatter: &str) -> String {
+        format!(
+            "@{chatter} Suchst du einen Invite für Deadlock? Sag einfach kurz ja, dann schick ich dir den Weg."
+        )
     }
 
     async fn decide_action(
@@ -1436,6 +1545,189 @@ mod tests {
         assert_eq!(judge.call_count(), 1);
         assert!(invite.user_cooldowns.lock().unwrap().is_empty());
         assert!(invite.channel_cooldowns.lock().unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn promo_blockiert_verhindert_go_und_judge() {
+        let api = MockApi::new();
+        let judge = FakeJudge::new(vec![verdict(InviteQuestionVerdictKind::Yes, 0.9)]);
+        let promo_block: Arc<dyn PromoBlockCheck> = FakePromoBlock::new(true);
+        let invite = responder_with_ports(
+            api.clone(),
+            Arc::new(FakeStore {
+                rollup: rollup(1, false),
+            }),
+            judge.clone(),
+            Some(promo_block),
+            None,
+        );
+
+        let decision = decide_action(&invite, "viewer", "Wie bekomme ich einen invite?").await;
+
+        assert_eq!(
+            decision.action,
+            InviteQuestionAction::Silent(SilentReason::PromoBlockedByPlan)
+        );
+        assert_eq!(judge.call_count(), 0);
+
+        invite
+            .maybe_respond(
+                &event("viewer", "Wie bekomme ich einen invite?"),
+                "streamer",
+            )
+            .await;
+        assert!(api.messages().is_empty());
+        assert_eq!(judge.call_count(), 0);
+    }
+
+    #[tokio::test]
+    async fn promo_erlaubt_laesst_go_durch() {
+        let api = MockApi::new();
+        let promo_block: Arc<dyn PromoBlockCheck> = FakePromoBlock::new(false);
+        let invite = responder_with_ports(
+            api.clone(),
+            Arc::new(FakeStore {
+                rollup: rollup(1, false),
+            }),
+            FakeJudge::new(vec![verdict(InviteQuestionVerdictKind::Yes, 0.9)]),
+            Some(promo_block),
+            None,
+        );
+
+        invite
+            .maybe_respond(
+                &event("viewer", "Wie bekomme ich einen invite?"),
+                "streamer",
+            )
+            .await;
+
+        assert_eq!(api.messages(), vec![expected_go("viewer")]);
+    }
+
+    #[tokio::test]
+    async fn gesendete_go_meldet_promo_kadenz() {
+        let api = MockApi::new();
+        let notifier = FakeNotifier::new();
+        let notifier_port: Arc<dyn InviteReplyNotifier> = notifier.clone();
+        let invite = responder_with_ports(
+            api,
+            Arc::new(FakeStore {
+                rollup: rollup(1, false),
+            }),
+            FakeJudge::new(vec![verdict(InviteQuestionVerdictKind::Yes, 0.9)]),
+            None,
+            Some(notifier_port),
+        );
+
+        invite
+            .maybe_respond(
+                &event("viewer", "Wie bekomme ich einen invite?"),
+                "streamer",
+            )
+            .await;
+
+        assert_eq!(notifier.calls(), vec!["streamer"]);
+    }
+
+    #[tokio::test]
+    async fn gesendete_rueckfrage_meldet_promo_kadenz() {
+        let api = MockApi::new();
+        let notifier = FakeNotifier::new();
+        let notifier_port: Arc<dyn InviteReplyNotifier> = notifier.clone();
+        let invite = responder_with_ports(
+            api,
+            Arc::new(FakeStore {
+                rollup: rollup(1, false),
+            }),
+            FakeJudge::new(vec![verdict(InviteQuestionVerdictKind::Unsure, 0.0)]),
+            None,
+            Some(notifier_port),
+        );
+
+        invite
+            .maybe_respond(
+                &event("viewer", "Wie kann man Deadlock spielen?"),
+                "streamer",
+            )
+            .await;
+
+        assert_eq!(notifier.calls(), vec!["streamer"]);
+    }
+
+    #[tokio::test]
+    async fn bestaetigtes_ja_meldet_promo_kadenz() {
+        let api = MockApi::new();
+        let notifier = FakeNotifier::new();
+        let notifier_port: Arc<dyn InviteReplyNotifier> = notifier.clone();
+        let invite = responder_with_ports(
+            api,
+            Arc::new(FakeStore {
+                rollup: rollup(1, false),
+            }),
+            FakeJudge::new(vec![verdict(InviteQuestionVerdictKind::Unsure, 0.0)]),
+            None,
+            Some(notifier_port),
+        );
+
+        invite
+            .maybe_respond(
+                &event("viewer", "Wie kann man Deadlock spielen?"),
+                "streamer",
+            )
+            .await;
+        invite
+            .maybe_respond(&event("viewer", "ja"), "streamer")
+            .await;
+
+        assert_eq!(notifier.calls(), vec!["streamer", "streamer"]);
+    }
+
+    #[tokio::test]
+    async fn silent_meldet_keine_promo_kadenz() {
+        let api = MockApi::new();
+        let notifier = FakeNotifier::new();
+        let notifier_port: Arc<dyn InviteReplyNotifier> = notifier.clone();
+        let invite = responder_with_ports(
+            api,
+            Arc::new(FakeStore {
+                rollup: rollup(1, false),
+            }),
+            FakeJudge::new(vec![verdict(InviteQuestionVerdictKind::No, 1.0)]),
+            None,
+            Some(notifier_port),
+        );
+
+        invite
+            .maybe_respond(
+                &event("viewer", "Wie bekomme ich einen invite?"),
+                "streamer",
+            )
+            .await;
+
+        assert!(notifier.calls().is_empty());
+    }
+
+    #[test]
+    fn go_text_unter_twitch_limit() {
+        assert_eq!(
+            GO_REPLY,
+            "@{chatter} Für einen Deadlock-Invite: Komm auf unseren Discord und frag im Channel frag-die-community nach einem Invite, am besten gleich mit deinem Steam Freundescode. Dann geht das schnell und unkompliziert. {invite}"
+        );
+        assert_eq!(
+            CONFIRM_REPLY,
+            "@{chatter} Suchst du einen Invite für Deadlock? Sag einfach kurz ja, dann schick ich dir den Weg."
+        );
+
+        let chatter = "abcdefghijklmnopqrstuvwxy";
+        let invite = "https://discord.gg/abcdefghijklmnopqrstu";
+        assert_eq!(chatter.len(), 25);
+        assert_eq!(invite.len(), 40);
+
+        let rendered = GO_REPLY
+            .replace("{chatter}", chatter)
+            .replace("{invite}", invite);
+
+        assert!(rendered.len() < 500);
     }
 
     #[tokio::test]
@@ -1720,10 +2012,7 @@ mod tests {
             )
             .await;
         assert_eq!(judge.call_count(), 2);
-        assert_eq!(
-            api.messages(),
-            vec!["@newbie Wenn du Zugang zu Deadlock brauchst: Auf unserem Discord bekommst du eine Einladung und Hilfe beim Einstieg. https://discord.gg/test"]
-        );
+        assert_eq!(api.messages(), vec![expected_go("newbie")]);
     }
 
     #[tokio::test]
@@ -1742,10 +2031,7 @@ mod tests {
                 "streamer",
             )
             .await;
-        assert_eq!(
-            api.messages(),
-            vec!["@viewer Suchst du einen Invite für Deadlock? Sag einfach kurz ja, dann schick ich dir den Weg."]
-        );
+        assert_eq!(api.messages(), vec![expected_confirm("viewer")]);
 
         let api = MockApi::new();
         let invite = responder(
@@ -1761,10 +2047,7 @@ mod tests {
                 "streamer",
             )
             .await;
-        assert_eq!(
-            api.messages(),
-            vec!["@viewer Wenn du Zugang zu Deadlock brauchst: Auf unserem Discord bekommst du eine Einladung und Hilfe beim Einstieg. https://discord.gg/test"]
-        );
+        assert_eq!(api.messages(), vec![expected_go("viewer")]);
     }
 
     #[tokio::test]
@@ -1791,10 +2074,7 @@ mod tests {
             .await;
         assert_eq!(
             api.messages(),
-            vec![
-                "@viewer Suchst du einen Invite für Deadlock? Sag einfach kurz ja, dann schick ich dir den Weg.",
-                "@viewer Wenn du Zugang zu Deadlock brauchst: Auf unserem Discord bekommst du eine Einladung und Hilfe beim Einstieg. https://discord.gg/test",
-            ]
+            vec![expected_confirm("viewer"), expected_go("viewer")]
         );
 
         let api = MockApi::new();
@@ -1815,10 +2095,7 @@ mod tests {
         invite
             .maybe_respond(&event("viewer", "ja"), "streamer")
             .await;
-        assert_eq!(
-            api.messages(),
-            vec!["@viewer Suchst du einen Invite für Deadlock? Sag einfach kurz ja, dann schick ich dir den Weg."]
-        );
+        assert_eq!(api.messages(), vec![expected_confirm("viewer")]);
 
         let api = MockApi::new();
         let invite = responder(
@@ -1866,10 +2143,7 @@ mod tests {
             )
             .await;
         assert_eq!(judge.call_count(), 2);
-        assert_eq!(
-            api.messages(),
-            vec!["@viewer Wenn du Zugang zu Deadlock brauchst: Auf unserem Discord bekommst du eine Einladung und Hilfe beim Einstieg. https://discord.gg/test"]
-        );
+        assert_eq!(api.messages(), vec![expected_go("viewer")]);
     }
 
     #[tokio::test]

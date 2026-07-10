@@ -1463,6 +1463,8 @@ mod tests {
                 Arc::new(crate::invite_question::MiniMaxInviteQuestionJudge::new(
                     EngagementMinimaxClient::new(None, None, None, None),
                 )),
+                None,
+                None,
             )),
             promos: Arc::new(PromoEngine::new(
                 pool.clone(),

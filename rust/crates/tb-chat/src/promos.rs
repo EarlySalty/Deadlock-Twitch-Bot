@@ -43,7 +43,7 @@ use tokio::sync::Mutex;
 use tracing::{debug, info, warn};
 
 use crate::api::ChatApi;
-use crate::commands::InviteReplyNotifier;
+use crate::commands::{InviteReplyNotifier, PromoBlockCheck};
 use crate::suppression_guard::SuppressionGuardChatApi;
 use crate::types::ChatMessageEvent;
 
@@ -155,9 +155,7 @@ fn render_promo_field(field: &str, invite: &str) -> Option<String> {
     if field.is_empty() {
         return None;
     }
-    let name_end = field
-        .find(['!', ':', '.', '['])
-        .unwrap_or(field.len());
+    let name_end = field.find(['!', ':', '.', '[']).unwrap_or(field.len());
     if field[..name_end].trim() != "invite" {
         return None;
     }
@@ -2460,6 +2458,13 @@ impl InviteReplyNotifier for PromoEngine {
             Utc::now().timestamp() as f64,
         )
         .await;
+    }
+}
+
+#[async_trait]
+impl PromoBlockCheck for PromoEngine {
+    async fn is_promo_blocked(&self, channel_login: &str) -> bool {
+        self.promo_blocked_by_plan_or_flag(channel_login).await
     }
 }
 
