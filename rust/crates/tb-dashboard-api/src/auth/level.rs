@@ -221,16 +221,18 @@ fn admin_mode_cookie_active(parts: &Parts) -> bool {
     extract_cookie(parts, crate::handlers::auth_status::ADMIN_MODE_COOKIE) == Some("2")
 }
 
-fn public_dashboard_context(parts: &Parts) -> bool {
-    parts
+fn admin_dashboard_context(parts: &Parts) -> bool {
+    let explicit_admin = parts
         .headers
         .get("x-dashboard-context")
         .and_then(|value| value.to_str().ok())
-        .is_some_and(|value| value.eq_ignore_ascii_case("public"))
+        .is_some_and(|value| value.eq_ignore_ascii_case("admin"));
+
+    explicit_admin || parts.uri.path() == "/twitch/auth/validate"
 }
 
-fn master_session_auth(public_dashboard: bool, admin_mode_active: bool) -> DashboardAuthLevel {
-    if public_dashboard && !admin_mode_active {
+fn master_session_auth(admin_dashboard: bool, admin_mode_active: bool) -> DashboardAuthLevel {
+    if !admin_dashboard && !admin_mode_active {
         return DashboardAuthLevel::Partner {
             twitch_login: DEFAULT_ADMIN_LOGIN.to_string(),
             twitch_user_id: String::new(),
@@ -328,7 +330,7 @@ where
             if !session_id.is_empty() {
                 if let Ok(Some(_)) = state.load_admin_session(session_id).await {
                     return Ok(master_session_auth(
-                        public_dashboard_context(parts),
+                        admin_dashboard_context(parts),
                         admin_mode_active,
                     ));
                 }
@@ -584,17 +586,20 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn reine_master_session_wird_admin_none() {
+    async fn reine_master_session_ohne_admin_kontext_wird_partner() {
         let Some((pool, state)) = maybe_test_state().await else { return; };
         let admin = state.create_admin_session("discord-9062304", "Discord Admin").await.unwrap();
         let auth = extract_auth(request_parts(Some(format!("{}={}", crate::auth::session::ADMIN_COOKIE_NAME, admin.session_id))), state.clone()).await;
-        assert_eq!(auth, DashboardAuthLevel::admin());
+        assert!(matches!(
+            auth,
+            DashboardAuthLevel::Partner { ref twitch_login, .. } if twitch_login == "earlysalty"
+        ));
         sqlx::query("DELETE FROM dashboard_sessions WHERE session_id = $1").bind(&admin.session_id).execute(&pool).await.unwrap();
     }
 
     #[test]
-    fn master_session_ist_im_public_dashboard_nur_mit_mode_cookie_admin() {
-        let user_view = master_session_auth(true, false);
+    fn master_session_ist_nur_mit_admin_kontext_oder_mode_cookie_admin() {
+        let user_view = master_session_auth(false, false);
         assert!(matches!(
             &user_view,
             DashboardAuthLevel::Partner { ref twitch_login, .. } if twitch_login == "earlysalty"
@@ -607,11 +612,48 @@ mod tests {
         .unwrap_err();
         assert_eq!(foreign.status(), axum::http::StatusCode::FORBIDDEN);
 
-        assert_eq!(master_session_auth(true, true), DashboardAuthLevel::admin());
+        assert_eq!(master_session_auth(false, true), DashboardAuthLevel::admin());
         assert_eq!(
-            master_session_auth(false, false),
+            master_session_auth(true, false),
             DashboardAuthLevel::admin()
         );
+    }
+
+    #[test]
+    fn admin_kontext_ist_explizit_oder_forward_auth() {
+        let parts = axum::http::Request::builder()
+            .uri("/twitch/api/v2/overview")
+            .body(())
+            .unwrap()
+            .into_parts()
+            .0;
+        assert!(!admin_dashboard_context(&parts));
+
+        let parts = axum::http::Request::builder()
+            .uri("/twitch/api/v2/overview")
+            .header("x-dashboard-context", "public")
+            .body(())
+            .unwrap()
+            .into_parts()
+            .0;
+        assert!(!admin_dashboard_context(&parts));
+
+        let parts = axum::http::Request::builder()
+            .uri("/twitch/api/v2/overview")
+            .header("x-dashboard-context", "admin")
+            .body(())
+            .unwrap()
+            .into_parts()
+            .0;
+        assert!(admin_dashboard_context(&parts));
+
+        let parts = axum::http::Request::builder()
+            .uri("/twitch/auth/validate")
+            .body(())
+            .unwrap()
+            .into_parts()
+            .0;
+        assert!(admin_dashboard_context(&parts));
     }
 
     #[tokio::test]

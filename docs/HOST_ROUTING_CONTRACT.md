@@ -13,9 +13,10 @@ Es gibt **zwei Hosts**, die auf **dasselbe** Backend (`tb-dashboard`, `127.0.0.1
 | `deutsche-deadlock-community.de` | öffentlich / Partner | **erlaubt** |
 | `admin.deutsche-deadlock-community.de` | Admin-Dashboard | **bewusst 404** |
 
-Caddy unterscheidet die beiden nur über den weitergereichten `Host`-Header
-(`header_up Host …`) plus `X-Dashboard-Context: admin` für Admin-Flows. **Derselbe
-Pfad verhält sich je nach Host unterschiedlich.** Darum gilt die eine goldene Regel:
+Caddy unterscheidet die beiden über den weitergereichten `Host`-Header
+(`header_up Host …`) plus `X-Dashboard-Context: public` für öffentliche Dashboard-Routen
+beziehungsweise `X-Dashboard-Context: admin` für Admin-Flows. **Derselbe Pfad verhält
+sich je nach Host unterschiedlich.** Darum gilt die eine goldene Regel:
 
 > **Jeder Redirect, den ein Handler erzeugt, der vom Admin-Host erreichbar ist, muss
 > host-bewusst sein. Ein nackter relativer Pfad (`/analyse`) wird vom Browser gegen den
@@ -51,6 +52,14 @@ Was der Admin-Host **erlaubt** (Reihenfolge = Caddy-`handle`-Auswertung, erster 
 - `@twitch_admin_support` → explizite Admin-API-Allowlist (`/twitch/api/admin/*`,
   `/twitch/auth/logout`, `/twitch/auth/discord/logout`, …) → Backend
 - alles andere user-facing → **404** (siehe oben)
+
+## Admin-Modus im öffentlichen Dashboard
+
+Eine gültige `master_dash_session` allein gewährt auf gemeinsamen Dashboard-Routen keinen
+Admin-Vollzugriff. Ohne `tb_admin_mode=2` wird sie zentral als normale Owner-Ansicht
+behandelt; das gilt auch, wenn der Proxy-Kontext einmal fehlt. Vollzugriff entsteht nur
+durch das explizite Mode-Cookie oder einen ausdrücklich als `admin` markierten Flow. Der
+dedizierte Forward-Auth-Pfad `/twitch/auth/validate` zählt ebenfalls als Admin-Flow.
 
 ## Die wiederkehrende Bug-Klasse
 
