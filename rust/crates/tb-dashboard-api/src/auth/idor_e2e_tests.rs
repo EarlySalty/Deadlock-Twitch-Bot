@@ -128,6 +128,9 @@ fn make_router(pool: PgPool, auth_state: DashboardAuthState) -> Router {
             "/twitch/api/v2/engagement/mode",
             post(engagement_mode::post_handler),
         )
+        .layer(axum::middleware::from_fn(
+            crate::auth::partner_gate::partner_status_gate,
+        ))
         .layer(axum::middleware::from_fn(csrf_protect))
         .layer(Extension(auth_state))
         .with_state(pool)
@@ -178,6 +181,19 @@ async fn discord_admin_ohne_mode_cookie_hat_im_public_dashboard_partner_scope() 
     assert_eq!(status["twitchLogin"], "earlysalty");
     assert_eq!(status["adminEligible"], true);
     assert_eq!(status["adminMode"], false);
+
+    let res = make_router(pool.clone(), auth_state.clone())
+        .oneshot(get_req(
+            "/twitch/api/v2/monthly-stats?streamer=earlysalty",
+            &cookie,
+        ))
+        .await
+        .unwrap();
+    assert_eq!(
+        res.status(),
+        StatusCode::FORBIDDEN,
+        "öffentliche Nutzeransicht muss den Partner-Status des Owners beachten"
+    );
 
     let res = make_router(pool, auth_state)
         .oneshot(get_req(
