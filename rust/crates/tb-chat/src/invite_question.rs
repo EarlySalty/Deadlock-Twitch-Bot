@@ -17,7 +17,7 @@ use serde_json::Value;
 use sqlx::postgres::PgRow;
 use sqlx::{PgPool, Row};
 use tb_engagement::minimax_chat::EngagementMinimaxClient;
-use tracing::{debug, warn};
+use tracing::{debug, info, warn};
 
 use crate::api::ChatApi;
 use crate::commands::DiscordLinkPort;
@@ -224,11 +224,19 @@ pub enum InviteQuestionVerdictKind {
     Unsure,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum InviteQuestionVerdictSource {
+    Model,
+    ProviderError,
+    ParseError,
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub struct InviteQuestionVerdict {
     pub verdict: InviteQuestionVerdictKind,
     pub confidence: f32,
     pub reasoning: String,
+    pub source: InviteQuestionVerdictSource,
 }
 
 impl InviteQuestionVerdict {
@@ -237,6 +245,60 @@ impl InviteQuestionVerdict {
             verdict: InviteQuestionVerdictKind::Unsure,
             confidence: 0.0,
             reasoning: String::new(),
+            source: InviteQuestionVerdictSource::Model,
+        }
+    }
+
+    pub fn provider_error() -> Self {
+        Self {
+            verdict: InviteQuestionVerdictKind::Unsure,
+            confidence: 0.0,
+            reasoning: String::new(),
+            source: InviteQuestionVerdictSource::ProviderError,
+        }
+    }
+
+    fn parse_error() -> Self {
+        Self {
+            verdict: InviteQuestionVerdictKind::Unsure,
+            confidence: 0.0,
+            reasoning: String::new(),
+            source: InviteQuestionVerdictSource::ParseError,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum InviteQuestionLoggedVerdict {
+    Yes,
+    No,
+    Unsure,
+    ProviderError,
+    ParseError,
+}
+
+impl InviteQuestionLoggedVerdict {
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::Yes => "yes",
+            Self::No => "no",
+            Self::Unsure => "unsure",
+            Self::ProviderError => "provider_error",
+            Self::ParseError => "parse_error",
+        }
+    }
+}
+
+impl From<&InviteQuestionVerdict> for InviteQuestionLoggedVerdict {
+    fn from(verdict: &InviteQuestionVerdict) -> Self {
+        match verdict.source {
+            InviteQuestionVerdictSource::ProviderError => Self::ProviderError,
+            InviteQuestionVerdictSource::ParseError => Self::ParseError,
+            InviteQuestionVerdictSource::Model => match verdict.verdict {
+                InviteQuestionVerdictKind::Yes => Self::Yes,
+                InviteQuestionVerdictKind::No => Self::No,
+                InviteQuestionVerdictKind::Unsure => Self::Unsure,
+            },
         }
     }
 }
@@ -288,7 +350,7 @@ impl InviteQuestionJudge for MiniMaxInviteQuestionJudge {
             Ok(raw) => parse_invite_verdict(&raw),
             Err(error) => {
                 debug!("Invite-Question-Judge nicht verfügbar: {error}");
-                InviteQuestionVerdict::unsure()
+                InviteQuestionVerdict::provider_error()
             }
         }
     }
@@ -308,21 +370,22 @@ fn parse_invite_verdict(raw: &str) -> InviteQuestionVerdict {
             .and_then(serde_json::from_str::<RawInviteVerdict>)
     });
     let Ok(parsed) = parsed else {
-        return InviteQuestionVerdict::unsure();
+        return InviteQuestionVerdict::parse_error();
     };
     if !parsed.confidence.is_finite() {
-        return InviteQuestionVerdict::unsure();
+        return InviteQuestionVerdict::parse_error();
     }
     let verdict = match parsed.verdict.as_str() {
         "yes" => InviteQuestionVerdictKind::Yes,
         "no" => InviteQuestionVerdictKind::No,
         "unsure" => InviteQuestionVerdictKind::Unsure,
-        _ => return InviteQuestionVerdict::unsure(),
+        _ => return InviteQuestionVerdict::parse_error(),
     };
     InviteQuestionVerdict {
         verdict,
         confidence: parsed.confidence.clamp(0.0, 1.0),
         reasoning: parsed.reasoning,
+        source: InviteQuestionVerdictSource::Model,
     }
 }
 
@@ -357,6 +420,135 @@ fn extract_json_object(raw: &str) -> Option<&str> {
         }
     }
     None
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum InviteQuestionAction {
+    Silent(SilentReason),
+    SendGo,
+    AskConfirmation,
+}
+
+impl InviteQuestionAction {
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::Silent(_) => "silent",
+            Self::SendGo => "send_go",
+            Self::AskConfirmation => "ask_confirmation",
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SilentReason {
+    EmptyMessage,
+    CommandPrefix,
+    MissingLogin,
+    NoRegexMatch,
+    RegularWithoutStrongAccess,
+    CooldownChannel,
+    CooldownUserReplied,
+    CooldownJudgeBrake,
+    JudgeNo,
+    JudgeUnsureRegular,
+    JudgeYesLowConfidenceRegular,
+}
+
+impl SilentReason {
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::EmptyMessage => "empty_message",
+            Self::CommandPrefix => "command_prefix",
+            Self::MissingLogin => "missing_login",
+            Self::NoRegexMatch => "no_regex_match",
+            Self::RegularWithoutStrongAccess => "regular_without_strong_access",
+            Self::CooldownChannel => "cooldown_channel",
+            Self::CooldownUserReplied => "cooldown_user_replied",
+            Self::CooldownJudgeBrake => "cooldown_judge_brake",
+            Self::JudgeNo => "judge_no",
+            Self::JudgeUnsureRegular => "judge_unsure_regular",
+            Self::JudgeYesLowConfidenceRegular => "judge_yes_low_confidence_regular",
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct InviteQuestionDecision {
+    pub action: InviteQuestionAction,
+    pub verdict: Option<InviteQuestionLoggedVerdict>,
+    pub confidence: f32,
+    pub is_newcomer: bool,
+    pub has_strong_access: bool,
+    channel_login: String,
+    chatter_login: String,
+    message: String,
+    pending_confirmation: bool,
+}
+
+impl InviteQuestionDecision {
+    fn silent(
+        reason: SilentReason,
+        channel_login: String,
+        chatter_login: String,
+        message: String,
+        is_newcomer: bool,
+        has_strong_access: bool,
+    ) -> Self {
+        Self {
+            action: InviteQuestionAction::Silent(reason),
+            verdict: None,
+            confidence: 0.0,
+            is_newcomer,
+            has_strong_access,
+            channel_login,
+            chatter_login,
+            message,
+            pending_confirmation: false,
+        }
+    }
+
+    fn pending_send_go(channel_login: String, chatter_login: String, message: String) -> Self {
+        Self {
+            action: InviteQuestionAction::SendGo,
+            verdict: None,
+            confidence: 0.0,
+            is_newcomer: false,
+            has_strong_access: false,
+            channel_login,
+            chatter_login,
+            message,
+            pending_confirmation: true,
+        }
+    }
+
+    fn judged(
+        action: InviteQuestionAction,
+        verdict: &InviteQuestionVerdict,
+        is_newcomer: bool,
+        has_strong_access: bool,
+        channel_login: String,
+        chatter_login: String,
+        message: String,
+    ) -> Self {
+        Self {
+            action,
+            verdict: Some(InviteQuestionLoggedVerdict::from(verdict)),
+            confidence: verdict.confidence,
+            is_newcomer,
+            has_strong_access,
+            channel_login,
+            chatter_login,
+            message,
+            pending_confirmation: false,
+        }
+    }
+}
+
+fn truncate_log_message(raw: &str) -> String {
+    match raw.char_indices().nth(120) {
+        Some((index, _)) => format!("{}…", &raw[..index]),
+        None => raw.to_string(),
+    }
 }
 
 pub struct InviteQuestionResponder {
@@ -412,39 +604,142 @@ impl InviteQuestionResponder {
     }
 
     pub async fn maybe_respond(&self, event: &ChatMessageEvent, channel_login: &str) {
-        let raw = event.text();
-        if raw.is_empty() || raw.starts_with('!') {
-            return;
-        }
+        // Judged-Cooldown bleibt im Orchestratorpfad und läuft direkt vor dem Modellcall.
+        let decision = self
+            .decide_with_before_judge(event, channel_login, |channel_login, chatter_login| {
+                self.mark_judged(channel_login, chatter_login);
+            })
+            .await;
+        self.log_decision(&decision);
 
+        match decision.action {
+            InviteQuestionAction::SendGo => {
+                if decision.pending_confirmation {
+                    self.forget_pending_confirmation(
+                        &decision.channel_login,
+                        &decision.chatter_login,
+                    );
+                }
+                if self
+                    .send_go(event, &decision.channel_login, &decision.chatter_login)
+                    .await
+                {
+                    self.mark_replied(&decision.channel_login, &decision.chatter_login);
+                }
+            }
+            InviteQuestionAction::AskConfirmation => {
+                if self
+                    .send_confirmation_question(event, &decision.chatter_login)
+                    .await
+                {
+                    self.mark_replied(&decision.channel_login, &decision.chatter_login);
+                    self.remember_pending_confirmation(
+                        &decision.channel_login,
+                        &decision.chatter_login,
+                    );
+                }
+            }
+            InviteQuestionAction::Silent(_) => {}
+        }
+    }
+
+    pub async fn decide(
+        &self,
+        event: &ChatMessageEvent,
+        channel_login: &str,
+    ) -> InviteQuestionDecision {
+        self.decide_with_before_judge(event, channel_login, |_, _| {})
+            .await
+    }
+
+    async fn decide_with_before_judge<F>(
+        &self,
+        event: &ChatMessageEvent,
+        channel_login: &str,
+        before_judge: F,
+    ) -> InviteQuestionDecision
+    where
+        F: FnOnce(&str, &str),
+    {
+        let raw = event.text();
         let channel_login = normalize_login(channel_login);
         let chatter_login = normalize_login(&event.chatter_user_login);
+
+        if raw.is_empty() {
+            return InviteQuestionDecision::silent(
+                SilentReason::EmptyMessage,
+                channel_login,
+                chatter_login,
+                raw.to_string(),
+                false,
+                false,
+            );
+        }
+        if raw.starts_with('!') {
+            return InviteQuestionDecision::silent(
+                SilentReason::CommandPrefix,
+                channel_login,
+                chatter_login,
+                raw.to_string(),
+                false,
+                false,
+            );
+        }
         if channel_login.is_empty() || chatter_login.is_empty() {
-            return;
+            return InviteQuestionDecision::silent(
+                SilentReason::MissingLogin,
+                channel_login,
+                chatter_login,
+                raw.to_string(),
+                false,
+                false,
+            );
         }
 
-        if self
-            .maybe_handle_pending_confirmation(event, &channel_login, &chatter_login, raw)
-            .await
-        {
-            return;
+        if self.pending_confirmation_open(&channel_login, &chatter_login) && is_affirmative(raw) {
+            return InviteQuestionDecision::pending_send_go(
+                channel_login,
+                chatter_login,
+                raw.to_string(),
+            );
         }
 
         let signal = classify_invite_question(raw);
         if !signal.is_candidate {
-            return;
+            return InviteQuestionDecision::silent(
+                SilentReason::NoRegexMatch,
+                channel_login,
+                chatter_login,
+                raw.to_string(),
+                false,
+                signal.has_strong_access,
+            );
         }
 
         let is_newcomer = self.is_newcomer(&channel_login, &chatter_login).await;
         // ponytail: Stammgäste nur bei explizitem Zugangswort, Schwelle statt Schalter
         if !is_newcomer && !signal.has_strong_access {
-            return;
+            return InviteQuestionDecision::silent(
+                SilentReason::RegularWithoutStrongAccess,
+                channel_login,
+                chatter_login,
+                raw.to_string(),
+                is_newcomer,
+                signal.has_strong_access,
+            );
         }
 
-        if !self.cooldown_allows(&channel_login, &chatter_login) {
-            return;
+        if let Some(reason) = self.cooldown_block_reason(&channel_login, &chatter_login) {
+            return InviteQuestionDecision::silent(
+                reason,
+                channel_login,
+                chatter_login,
+                raw.to_string(),
+                is_newcomer,
+                signal.has_strong_access,
+            );
         }
-        self.mark_judged(&channel_login, &chatter_login);
+        before_judge(&channel_login, &chatter_login);
 
         let verdict = self
             .judge
@@ -455,20 +750,70 @@ impl InviteQuestionResponder {
             })
             .await;
 
-        match verdict.verdict {
+        let action = match verdict.verdict {
             InviteQuestionVerdictKind::Yes if verdict.confidence >= 0.7 => {
-                if self.send_go(event, &channel_login, &chatter_login).await {
-                    self.mark_replied(&channel_login, &chatter_login);
-                }
+                InviteQuestionAction::SendGo
             }
             InviteQuestionVerdictKind::Yes | InviteQuestionVerdictKind::Unsure if is_newcomer => {
-                if !self.send_confirmation_question(event, &chatter_login).await {
-                    return;
-                }
-                self.mark_replied(&channel_login, &chatter_login);
-                self.remember_pending_confirmation(&channel_login, &chatter_login);
+                InviteQuestionAction::AskConfirmation
             }
-            _ => {}
+            InviteQuestionVerdictKind::No => InviteQuestionAction::Silent(SilentReason::JudgeNo),
+            InviteQuestionVerdictKind::Unsure => {
+                InviteQuestionAction::Silent(SilentReason::JudgeUnsureRegular)
+            }
+            InviteQuestionVerdictKind::Yes => {
+                InviteQuestionAction::Silent(SilentReason::JudgeYesLowConfidenceRegular)
+            }
+        };
+        InviteQuestionDecision::judged(
+            action,
+            &verdict,
+            is_newcomer,
+            signal.has_strong_access,
+            channel_login,
+            chatter_login,
+            raw.to_string(),
+        )
+    }
+
+    fn log_decision(&self, decision: &InviteQuestionDecision) {
+        let message = truncate_log_message(&decision.message);
+        match (decision.verdict, decision.action) {
+            (Some(verdict), InviteQuestionAction::Silent(reason)) => {
+                info!(
+                    channel = %decision.channel_login,
+                    chatter = %decision.chatter_login,
+                    message = %message,
+                    verdict = verdict.as_str(),
+                    confidence = decision.confidence,
+                    is_newcomer = decision.is_newcomer,
+                    has_strong_access = decision.has_strong_access,
+                    action = decision.action.as_str(),
+                    silent_reason = reason.as_str(),
+                );
+            }
+            (Some(verdict), _) => {
+                info!(
+                    channel = %decision.channel_login,
+                    chatter = %decision.chatter_login,
+                    message = %message,
+                    verdict = verdict.as_str(),
+                    confidence = decision.confidence,
+                    is_newcomer = decision.is_newcomer,
+                    has_strong_access = decision.has_strong_access,
+                    action = decision.action.as_str(),
+                );
+            }
+            (None, InviteQuestionAction::Silent(reason)) => {
+                debug!(
+                    channel = %decision.channel_login,
+                    chatter = %decision.chatter_login,
+                    message = %message,
+                    action = decision.action.as_str(),
+                    silent_reason = reason.as_str(),
+                );
+            }
+            (None, _) => {}
         }
     }
 
@@ -483,30 +828,37 @@ impl InviteQuestionResponder {
         }
     }
 
-    fn cooldown_allows(&self, channel_login: &str, chatter_login: &str) -> bool {
+    fn cooldown_block_reason(
+        &self,
+        channel_login: &str,
+        chatter_login: &str,
+    ) -> Option<SilentReason> {
         let now = self.clock.now();
         let Ok(channels) = self.channel_cooldowns.lock() else {
-            return false;
+            return Some(SilentReason::CooldownChannel);
         };
         if channels
             .get(channel_login)
             .is_some_and(|last| now.duration_since(*last) < INVITE_QUESTION_CHANNEL_COOLDOWN)
         {
-            return false;
+            return Some(SilentReason::CooldownChannel);
         }
+        drop(channels);
 
         let key = (channel_login.to_string(), chatter_login.to_string());
         let Ok(users) = self.user_cooldowns.lock() else {
-            return false;
+            return Some(SilentReason::CooldownJudgeBrake);
         };
-        if users
-            .get(&key)
-            .is_some_and(|(last, kind)| self.user_cooldown_active(now, *last, *kind))
-        {
-            return false;
+        if let Some((last, kind)) = users.get(&key) {
+            if self.user_cooldown_active(now, *last, *kind) {
+                return Some(match kind {
+                    CooldownKind::Judged => SilentReason::CooldownJudgeBrake,
+                    CooldownKind::Replied => SilentReason::CooldownUserReplied,
+                });
+            }
         }
 
-        true
+        None
     }
 
     fn user_cooldown_active(&self, now: Instant, last: Instant, kind: CooldownKind) -> bool {
@@ -544,38 +896,22 @@ impl InviteQuestionResponder {
         }
     }
 
-    async fn maybe_handle_pending_confirmation(
-        &self,
-        event: &ChatMessageEvent,
-        channel_login: &str,
-        chatter_login: &str,
-        raw: &str,
-    ) -> bool {
+    fn pending_confirmation_open(&self, channel_login: &str, chatter_login: &str) -> bool {
         let key = (channel_login.to_string(), chatter_login.to_string());
         let now = self.clock.now();
-        let is_open = {
-            let Ok(mut pending) = self.pending_confirmations.lock() else {
-                return false;
-            };
-            match pending.get(&key).copied() {
-                Some(last) if now.duration_since(last) <= PENDING_CONFIRMATION_WINDOW => true,
-                Some(_) => {
-                    pending.remove(&key);
-                    false
-                }
-                None => false,
-            }
-        };
-        if !is_open || !is_affirmative(raw) {
+        let Ok(pending) = self.pending_confirmations.lock() else {
             return false;
-        }
+        };
+        pending
+            .get(&key)
+            .is_some_and(|last| now.duration_since(*last) <= PENDING_CONFIRMATION_WINDOW)
+    }
+
+    fn forget_pending_confirmation(&self, channel_login: &str, chatter_login: &str) {
+        let key = (channel_login.to_string(), chatter_login.to_string());
         if let Ok(mut pending) = self.pending_confirmations.lock() {
             pending.remove(&key);
         }
-        if self.send_go(event, channel_login, chatter_login).await {
-            self.mark_replied(channel_login, chatter_login);
-        }
-        true
     }
 
     fn remember_pending_confirmation(&self, channel_login: &str, chatter_login: &str) {
@@ -850,6 +1186,7 @@ mod tests {
             verdict: kind,
             confidence,
             reasoning: "test".to_string(),
+            source: InviteQuestionVerdictSource::Model,
         }
     }
 
@@ -877,6 +1214,14 @@ mod tests {
         (invite, clock)
     }
 
+    async fn decide_action(
+        invite: &InviteQuestionResponder,
+        chatter: &str,
+        text: &str,
+    ) -> InviteQuestionDecision {
+        invite.decide(&event(chatter, text), "streamer").await
+    }
+
     #[test]
     fn regex_klassifikation_erkennt_nur_zugangsfragen() {
         assert!(classify_invite_question("Wie kann man das Spiel denn spielen?").is_candidate);
@@ -894,6 +1239,212 @@ mod tests {
         assert!(!classify_invite_question("Lategame... das Rasiere ich richtig").is_candidate);
         assert!(!classify_invite_question("bleib bei Mo").is_candidate);
         assert!(!classify_invite_question("!dldc").is_candidate);
+    }
+
+    #[tokio::test]
+    async fn decide_liefert_silent_reason_fuer_jeden_ausstieg() {
+        let cases = [
+            (
+                SilentReason::EmptyMessage,
+                "",
+                rollup(1, false),
+                verdict(InviteQuestionVerdictKind::Yes, 0.9),
+            ),
+            (
+                SilentReason::CommandPrefix,
+                "!dldc",
+                rollup(1, false),
+                verdict(InviteQuestionVerdictKind::Yes, 0.9),
+            ),
+            (
+                SilentReason::MissingLogin,
+                "Wie bekomme ich einen invite?",
+                rollup(1, false),
+                verdict(InviteQuestionVerdictKind::Yes, 0.9),
+            ),
+            (
+                SilentReason::NoRegexMatch,
+                "ja",
+                rollup(1, false),
+                verdict(InviteQuestionVerdictKind::Yes, 0.9),
+            ),
+            (
+                SilentReason::RegularWithoutStrongAccess,
+                "Wie kann man das Spiel denn spielen?",
+                rollup(50, false),
+                verdict(InviteQuestionVerdictKind::Yes, 0.9),
+            ),
+            (
+                SilentReason::JudgeNo,
+                "Wie bekomme ich einen invite?",
+                rollup(1, false),
+                verdict(InviteQuestionVerdictKind::No, 1.0),
+            ),
+            (
+                SilentReason::JudgeUnsureRegular,
+                "Wie bekomme ich einen invite?",
+                rollup(50, false),
+                verdict(InviteQuestionVerdictKind::Unsure, 0.0),
+            ),
+            (
+                SilentReason::JudgeYesLowConfidenceRegular,
+                "Wie bekomme ich einen invite?",
+                rollup(50, false),
+                verdict(InviteQuestionVerdictKind::Yes, 0.69),
+            ),
+        ];
+
+        for (reason, text, rollup, verdict) in cases {
+            let invite = responder(
+                MockApi::new(),
+                Arc::new(FakeStore { rollup }),
+                FakeJudge::new(vec![verdict]),
+            );
+            let channel = if reason == SilentReason::MissingLogin {
+                ""
+            } else {
+                "streamer"
+            };
+            assert_eq!(
+                invite.decide(&event("viewer", text), channel).await.action,
+                InviteQuestionAction::Silent(reason)
+            );
+        }
+
+        let api = MockApi::new();
+        let judge = FakeJudge::new(vec![verdict(InviteQuestionVerdictKind::Yes, 0.9)]);
+        let (invite, _) = responder_with_clock(
+            api,
+            Arc::new(FakeStore {
+                rollup: rollup(1, false),
+            }),
+            judge,
+        );
+        let decision = decide_action(&invite, "viewer", "Wie bekomme ich einen invite?").await;
+        assert_eq!(decision.action, InviteQuestionAction::SendGo);
+        invite.mark_replied("streamer", "viewer");
+        assert_eq!(
+            decide_action(&invite, "other", "Wie bekomme ich einen invite?")
+                .await
+                .action,
+            InviteQuestionAction::Silent(SilentReason::CooldownChannel)
+        );
+
+        let api = MockApi::new();
+        let judge = FakeJudge::new(vec![verdict(InviteQuestionVerdictKind::Yes, 0.9)]);
+        let (invite, _) = responder_with_clock(
+            api,
+            Arc::new(FakeStore {
+                rollup: rollup(1, false),
+            }),
+            judge,
+        );
+        invite.user_cooldowns.lock().unwrap().insert(
+            ("streamer".to_string(), "viewer".to_string()),
+            (invite.clock.now(), CooldownKind::Replied),
+        );
+        assert_eq!(
+            decide_action(&invite, "viewer", "Wie bekomme ich einen invite?")
+                .await
+                .action,
+            InviteQuestionAction::Silent(SilentReason::CooldownUserReplied)
+        );
+
+        let api = MockApi::new();
+        let judge = FakeJudge::new(vec![verdict(InviteQuestionVerdictKind::Yes, 0.9)]);
+        let (invite, _) = responder_with_clock(
+            api,
+            Arc::new(FakeStore {
+                rollup: rollup(1, false),
+            }),
+            judge,
+        );
+        invite.mark_judged("streamer", "viewer");
+        assert_eq!(
+            decide_action(&invite, "viewer", "Wie bekomme ich einen invite?")
+                .await
+                .action,
+            InviteQuestionAction::Silent(SilentReason::CooldownJudgeBrake)
+        );
+    }
+
+    #[tokio::test]
+    async fn decide_sendet_nichts() {
+        let api = MockApi::new();
+        let judge = FakeJudge::new(vec![verdict(InviteQuestionVerdictKind::Yes, 0.9)]);
+        let invite = responder(
+            api.clone(),
+            Arc::new(FakeStore {
+                rollup: rollup(1, false),
+            }),
+            judge.clone(),
+        );
+
+        let decision = decide_action(&invite, "viewer", "Wie bekomme ich einen invite?").await;
+
+        assert_eq!(decision.action, InviteQuestionAction::SendGo);
+        assert!(api.messages().is_empty());
+        assert_eq!(judge.call_count(), 1);
+        assert!(invite.user_cooldowns.lock().unwrap().is_empty());
+        assert!(invite.channel_cooldowns.lock().unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn provider_fehler_und_parse_fehler_sind_unterscheidbar() {
+        let provider_error = responder(
+            MockApi::new(),
+            Arc::new(FakeStore {
+                rollup: rollup(50, false),
+            }),
+            FakeJudge::new(vec![InviteQuestionVerdict::provider_error()]),
+        );
+        let parse_error = responder(
+            MockApi::new(),
+            Arc::new(FakeStore {
+                rollup: rollup(50, false),
+            }),
+            FakeJudge::new(vec![parse_invite_verdict("kaputt")]),
+        );
+
+        let provider_decision =
+            decide_action(&provider_error, "viewer", "Wie bekomme ich einen invite?").await;
+        let parse_decision =
+            decide_action(&parse_error, "viewer", "Wie bekomme ich einen invite?").await;
+
+        assert_eq!(
+            provider_decision.action,
+            InviteQuestionAction::Silent(SilentReason::JudgeUnsureRegular)
+        );
+        assert_eq!(
+            parse_decision.action,
+            InviteQuestionAction::Silent(SilentReason::JudgeUnsureRegular)
+        );
+        assert_eq!(
+            provider_decision.verdict,
+            Some(InviteQuestionLoggedVerdict::ProviderError)
+        );
+        assert_eq!(
+            parse_decision.verdict,
+            Some(InviteQuestionLoggedVerdict::ParseError)
+        );
+    }
+
+    #[test]
+    fn gekuerzte_message_im_log() {
+        let exactly_120 = "a".repeat(120);
+        assert_eq!(truncate_log_message(&exactly_120), exactly_120);
+
+        let over_120 = format!("{}b", "a".repeat(120));
+        assert_eq!(
+            truncate_log_message(&over_120),
+            format!("{}…", "a".repeat(120))
+        );
+
+        let utf8 = format!("{}ä😀b", "a".repeat(118));
+        assert_eq!(
+            truncate_log_message(&utf8),
+            format!("{}ä😀…", "a".repeat(118))
+        );
     }
 
     #[tokio::test]
