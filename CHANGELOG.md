@@ -1,3 +1,10 @@
+## #349 — Der Bot erkennt Fragen nach Deadlock-Zugang wieder
+
+**Problem:** Wer im Chat gefragt hat, wie man das Spiel überhaupt spielen kann oder wie man an eine Einladung kommt, bekam keine Antwort. Die frühere automatische Erkennung sprang zu oft auf harmlose Sätze an und wurde deshalb abgeschaltet. Ersetzt wurde sie durch einen Befehl, den neue Zuschauer naturgemäß nicht kennen.
+
+**Änderung:** Solche Fragen werden wieder erkannt, aber nicht mehr allein per Stichwort. Ein grober Vorfilter sortiert vor, danach entscheidet die KI des Bots. Bei einem klaren Ja kommt der Weg zum Invite, bei Unsicherheit fragt der Bot einmal kurz nach, sonst bleibt er still.
+
+**Aktuelles Verhalten:** Neue Zuschauer mit einer echten Zugangsfrage bekommen den Hinweis auf den Discord und den Tipp, ihren Steam-Freundescode gleich mitzuschicken. Das greift nur in Kanälen, die live Deadlock streamen. Nach einer Antwort hält sich der Bot zurück, mindestens zwei Minuten im Kanal und eine Stunde bei derselben Person. Nur wer direkt auf seine Rückfrage mit ja antwortet, bekommt den Invite sofort. Antwortet die KI gar nicht, sagt der Bot lieber nichts, und Streamer mit abgeschalteter Bot-Werbung bekommen den Hinweis nie.
 ## #348 — Befehle im Blick, und nur wenn Deadlock läuft
 
 **Problem:** `!commands` hat bloß einen Link gepostet, statt zu zeigen, was der Bot kann. Und die Deadlock-Befehle liefen in jeder Kategorie, auch wenn gerade gar nicht Deadlock lief.

@@ -217,6 +217,12 @@ pub trait InviteReplyNotifier: Send + Sync {
     async fn note_invite_reply(&self, channel_login: &str);
 }
 
+#[async_trait]
+pub trait PromoBlockCheck: Send + Sync {
+    /// true = Bot-Werbung für diesen Kanal ist per Plan/Flag abgeschaltet.
+    async fn is_promo_blocked(&self, channel_login: &str) -> bool;
+}
+
 /// Port für Super-Mod-Prüfung (Engagement-Commands).
 /// `engagement_commands.py:101` — `bot.engagement.admin.is_super_mod(actor_id)`
 #[async_trait]
