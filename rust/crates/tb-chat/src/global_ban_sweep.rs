@@ -26,7 +26,7 @@ use std::collections::HashSet;
 use std::sync::Arc;
 use std::time::Duration;
 
-use chrono::{Local, Timelike};
+use chrono::{Local, NaiveDate, Timelike};
 use sqlx::PgPool;
 use tokio::sync::Mutex;
 
@@ -42,6 +42,9 @@ const REASON_MAX_LEN: usize = 500;
 
 /// Intervall des Due-Check-Loops. `raid/bot.py:257`.
 const DUE_CHECK_INTERVAL: Duration = Duration::from_secs(120);
+
+/// Frühestens ab dieser Stunde läuft der tägliche Voll-Sweep. `raid/bot.py:330`.
+const FULL_SWEEP_EARLIEST_HOUR: u32 = 6;
 
 // ── Integrations-Trait (Orchestrator verdrahtet) ───────────────────────────────
 
@@ -97,12 +100,17 @@ impl GlobalBanSweeper {
     ///
     /// Loop-Logik aus `raid/bot.py:257–339`:
     /// - alle 120 s: `run_due_sweeps`
-    /// - einmal pro Tag wenn `hour >= 6`: `run_full_sweep`
+    /// - einmal pro Tag ab 6 Uhr: `run_full_sweep`
+    ///
+    /// Der „einmal pro Tag"-Merker liegt in der DB, nicht im Prozessspeicher.
+    /// Sonst startet der Bot mit leerem Merker, der erste Interval-Tick feuert
+    /// sofort, und jeder Neustart ab 6 Uhr zieht einen kompletten Voll-Sweep
+    /// nach sich (beobachtet am 2026-07-10: 06:00 planmäßig, 14:12 und 14:50
+    /// durch Restarts).
     pub fn spawn(self: Arc<Self>, roster: Arc<dyn PartnerRoster>) {
         tokio::spawn(async move {
             let mut interval = tokio::time::interval(DUE_CHECK_INTERVAL);
             interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
-            let mut last_full_sweep_day: Option<chrono::NaiveDate> = None;
 
             loop {
                 interval.tick().await;
@@ -110,12 +118,13 @@ impl GlobalBanSweeper {
                 // Due-Sweeps immer (raid/bot.py:318)
                 self.run_due_sweeps(roster.as_ref()).await;
 
-                // 6-Uhr-Vollsweep: einmal pro Tag (raid/bot.py:330–339)
+                // Voll-Sweep: einmal pro Tag ab 6 Uhr (raid/bot.py:330–339)
                 let now_local = Local::now();
                 let today = now_local.date_naive();
-                if now_local.hour() >= 6 && last_full_sweep_day != Some(today) {
+                let last_run = load_last_full_sweep_day(&self.pool).await;
+                if should_run_full_sweep(now_local.hour(), today, last_run) {
                     self.run_full_sweep(roster.as_ref()).await;
-                    last_full_sweep_day = Some(today);
+                    record_full_sweep_day(&self.pool, today).await;
                 }
             }
         });
@@ -205,11 +214,7 @@ impl GlobalBanSweeper {
             return 0;
         }
         // Guard: live-Check (`global_ban_sweep.py:196`)
-        if roster
-            .live_broadcaster_ids()
-            .await
-            .contains(broadcaster_id)
-        {
+        if roster.live_broadcaster_ids().await.contains(broadcaster_id) {
             return 0;
         }
 
@@ -270,10 +275,7 @@ impl GlobalBanSweeper {
 
             let reason = build_reason(entry.reason.as_deref());
 
-            let outcome = self
-                .api
-                .ban_user(broadcaster_id, &target_id, &reason)
-                .await;
+            let outcome = self.api.ban_user(broadcaster_id, &target_id, &reason).await;
 
             match outcome {
                 Ok(BanOutcome::Banned) | Ok(BanOutcome::AlreadyBanned) => {
@@ -419,6 +421,50 @@ async fn load_due_sweeps(pool: &PgPool) -> Vec<(String, String)> {
     .collect()
 }
 
+/// Entscheidet, ob der tägliche Voll-Sweep jetzt laufen soll.
+///
+/// Rein und ohne Seiteneffekt, damit die Zeitlogik testbar bleibt.
+/// `last_run` kommt aus der DB, nicht aus dem Prozessspeicher: sonst vergisst
+/// ein Neustart den Merker und der Sweep läuft sofort erneut.
+///
+/// Lief heute noch keiner (etwa weil der Bot um 6 Uhr gerade nicht lief), wird
+/// er beim nächsten Tick nachgeholt. Andernfalls fiele der Sweep an jedem Tag
+/// mit einem Deploy um 6 Uhr komplett aus.
+fn should_run_full_sweep(hour: u32, today: NaiveDate, last_run: Option<NaiveDate>) -> bool {
+    hour >= FULL_SWEEP_EARLIEST_HOUR && last_run != Some(today)
+}
+
+/// Tag des letzten Voll-Sweeps. `None` = noch nie gelaufen (oder DB-Fehler,
+/// dann lieber einmal zu viel sweepen als den Tag auslassen).
+async fn load_last_full_sweep_day(pool: &PgPool) -> Option<NaiveDate> {
+    sqlx::query_scalar::<_, NaiveDate>(
+        "SELECT last_run_day FROM twitch_global_ban_full_sweep_state WHERE id = TRUE",
+    )
+    .fetch_optional(pool)
+    .await
+    .unwrap_or_else(|e| {
+        tracing::debug!("GlobalBanSweep: load_last_full_sweep_day fehlgeschlagen: {e}");
+        None
+    })
+}
+
+/// Schreibt den Tag des letzten Voll-Sweeps fest (Single-Row-Upsert).
+async fn record_full_sweep_day(pool: &PgPool, day: NaiveDate) {
+    let result = sqlx::query(
+        "INSERT INTO twitch_global_ban_full_sweep_state (id, last_run_day, updated_at)
+         VALUES (TRUE, $1, NOW())
+         ON CONFLICT (id) DO UPDATE SET last_run_day = EXCLUDED.last_run_day,
+                                        updated_at   = NOW()",
+    )
+    .bind(day)
+    .execute(pool)
+    .await;
+
+    if let Err(e) = result {
+        tracing::warn!("GlobalBanSweep: record_full_sweep_day fehlgeschlagen: {e}");
+    }
+}
+
 /// Löscht einen fälligen Sweep-Eintrag. `pg.py:4323`.
 async fn delete_sweep_due(pool: &PgPool, broadcaster_login: &str) {
     let result = sqlx::query!(
@@ -477,9 +523,9 @@ mod tests {
     use super::*;
     use async_trait::async_trait;
     use chrono::{DateTime, Utc};
+    use sqlx::postgres::{PgConnectOptions, PgPoolOptions};
     use std::str::FromStr;
     use std::sync::Mutex as StdMutex;
-    use sqlx::postgres::{PgConnectOptions, PgPoolOptions};
 
     // ── Pool-Helpers ───────────────────────────────────────────────────────────
 
@@ -568,6 +614,12 @@ mod tests {
                 twitch_login   TEXT,
                 status         TEXT
             )"#,
+            // Persistenter Merker des täglichen Voll-Sweeps (Single-Row).
+            r#"CREATE TABLE twitch_global_ban_full_sweep_state (
+                id           BOOLEAN PRIMARY KEY DEFAULT TRUE CHECK (id),
+                last_run_day DATE NOT NULL,
+                updated_at   TIMESTAMPTZ NOT NULL DEFAULT NOW()
+            )"#,
         ] {
             sqlx::query(ddl).execute(pool).await.unwrap();
         }
@@ -605,7 +657,11 @@ mod tests {
 
     #[async_trait]
     impl ChatApi for MockApi {
-        async fn send_message(&self, _: &str, _: &str) -> Result<crate::types::SendOutcome, String> {
+        async fn send_message(
+            &self,
+            _: &str,
+            _: &str,
+        ) -> Result<crate::types::SendOutcome, String> {
             unimplemented!()
         }
         async fn send_announcement(&self, _: &str, _: &str, _: &str) -> Result<bool, String> {
@@ -625,7 +681,13 @@ mod tests {
             let r = self.ban_result.lock().unwrap().clone();
             Ok(r)
         }
-        async fn timeout_user(&self, _: &str, _: &str, _: u32, _: &str) -> Result<BanOutcome, String> {
+        async fn timeout_user(
+            &self,
+            _: &str,
+            _: &str,
+            _: u32,
+            _: &str,
+        ) -> Result<BanOutcome, String> {
             unimplemented!()
         }
         async fn unban_user(&self, _: &str, _: &str) -> Result<bool, String> {
@@ -728,7 +790,10 @@ mod tests {
                 .fetch_one(&pool)
                 .await
                 .unwrap();
-        assert_eq!(count, 1, "doppeltes record_applied darf keinen Fehler/Duplikat erzeugen");
+        assert_eq!(
+            count, 1,
+            "doppeltes record_applied darf keinen Fehler/Duplikat erzeugen"
+        );
     }
 
     #[tokio::test]
@@ -912,6 +977,80 @@ mod tests {
         assert_eq!(count, 0, "live Kanal wird übersprungen");
     }
 
+    // ── Voll-Sweep: einmal pro Tag, nicht nach jedem Neustart ─────────────────
+
+    fn tag(y: i32, m: u32, d: u32) -> NaiveDate {
+        NaiveDate::from_ymd_opt(y, m, d).unwrap()
+    }
+
+    #[test]
+    fn full_sweep_laeuft_ab_sechs_wenn_heute_noch_keiner_lief() {
+        assert!(should_run_full_sweep(6, tag(2026, 7, 10), None));
+        assert!(should_run_full_sweep(
+            14,
+            tag(2026, 7, 10),
+            Some(tag(2026, 7, 9))
+        ));
+    }
+
+    #[test]
+    fn full_sweep_laeuft_nicht_vor_sechs() {
+        assert!(!should_run_full_sweep(5, tag(2026, 7, 10), None));
+        assert!(!should_run_full_sweep(0, tag(2026, 7, 10), None));
+    }
+
+    /// Der Kern des Fixes: ein Neustart um 14:12 darf keinen zweiten Voll-Sweep
+    /// auslösen, wenn der 6-Uhr-Sweep desselben Tages bereits lief.
+    #[test]
+    fn full_sweep_laeuft_nicht_zweimal_am_selben_tag() {
+        let heute = tag(2026, 7, 10);
+        assert!(!should_run_full_sweep(14, heute, Some(heute)));
+        assert!(!should_run_full_sweep(6, heute, Some(heute)));
+        assert!(!should_run_full_sweep(23, heute, Some(heute)));
+    }
+
+    #[tokio::test]
+    async fn full_sweep_merker_ueberlebt_den_prozess() {
+        let pool = pool_or_skip!("gbs_full_sweep_state");
+        let heute = tag(2026, 7, 10);
+
+        // Frische DB: noch nie gelaufen → Sweep faellig.
+        assert_eq!(load_last_full_sweep_day(&pool).await, None);
+        assert!(should_run_full_sweep(14, heute, None));
+
+        record_full_sweep_day(&pool, heute).await;
+
+        // Ein "Neustart" liest den Merker erneut aus der DB.
+        let nach_neustart = load_last_full_sweep_day(&pool).await;
+        assert_eq!(nach_neustart, Some(heute));
+        assert!(
+            !should_run_full_sweep(14, heute, nach_neustart),
+            "Neustart am selben Tag darf keinen Voll-Sweep ausloesen"
+        );
+
+        // Naechster Tag → wieder faellig.
+        assert!(should_run_full_sweep(6, tag(2026, 7, 11), nach_neustart));
+    }
+
+    #[tokio::test]
+    async fn full_sweep_merker_ist_single_row_und_idempotent() {
+        let pool = pool_or_skip!("gbs_full_sweep_upsert");
+
+        record_full_sweep_day(&pool, tag(2026, 7, 10)).await;
+        record_full_sweep_day(&pool, tag(2026, 7, 11)).await;
+
+        let rows: i64 =
+            sqlx::query_scalar("SELECT count(*) FROM twitch_global_ban_full_sweep_state")
+                .fetch_one(&pool)
+                .await
+                .unwrap();
+        assert_eq!(rows, 1, "Upsert darf keine zweite Zeile anlegen");
+        assert_eq!(
+            load_last_full_sweep_day(&pool).await,
+            Some(tag(2026, 7, 11))
+        );
+    }
+
     /// Safe-List: steht ein Safe-Konto (per ID) auf der Banliste, bannt der
     /// Sweep es nicht.
     #[tokio::test]
@@ -919,12 +1058,14 @@ mod tests {
         let pool = pool_or_skip!("gbs_safe_id");
         let safe = &crate::safe_list::SAFE_ACCOUNTS[0];
 
-        sqlx::query("INSERT INTO twitch_chatter_global_ban (chatter_login, chatter_id) VALUES ($1, $2)")
-            .bind(safe.login)
-            .bind(safe.twitch_user_id)
-            .execute(&pool)
-            .await
-            .unwrap();
+        sqlx::query(
+            "INSERT INTO twitch_chatter_global_ban (chatter_login, chatter_id) VALUES ($1, $2)",
+        )
+        .bind(safe.login)
+        .bind(safe.twitch_user_id)
+        .execute(&pool)
+        .await
+        .unwrap();
 
         let api = Arc::new(MockApi::default());
         let roster = MockRoster::new(vec![("ziel", "bid_z")], vec![], vec!["bid_z"], vec!["ziel"]);
@@ -1002,12 +1143,7 @@ mod tests {
             m.insert("noname".to_string(), Some("uid_resolved".to_string()));
         }
 
-        let roster = MockRoster::new(
-            vec![("ziel", "bid_z")],
-            vec![],
-            vec!["bid_z"],
-            vec!["ziel"],
-        );
+        let roster = MockRoster::new(vec![("ziel", "bid_z")], vec![], vec!["bid_z"], vec!["ziel"]);
 
         let sw = sweeper(pool.clone(), api.clone());
         let mut applied = load_applied_pairs(&pool).await;
@@ -1023,7 +1159,11 @@ mod tests {
         .fetch_one(&pool)
         .await
         .unwrap();
-        assert_eq!(stored_id.as_deref(), Some("uid_resolved"), "ID zurückgeschrieben");
+        assert_eq!(
+            stored_id.as_deref(),
+            Some("uid_resolved"),
+            "ID zurückgeschrieben"
+        );
     }
 
     #[tokio::test]
@@ -1104,7 +1244,7 @@ mod tests {
         let api = Arc::new(MockApi::default());
         let roster = Arc::new(MockRoster::new(
             vec![("kanal_a", "bid_a"), ("kanal_b", "bid_b")],
-            vec![],           // beide offline
+            vec![], // beide offline
             vec!["bid_a", "bid_b"],
             vec!["kanal_a", "kanal_b"],
         ));
@@ -1136,7 +1276,11 @@ mod tests {
         );
 
         let targets = offline_partner_targets(&roster).await;
-        assert_eq!(targets.len(), 1, "nur 1 Kanal soll durch alle Filter kommen");
+        assert_eq!(
+            targets.len(),
+            1,
+            "nur 1 Kanal soll durch alle Filter kommen"
+        );
         assert_eq!(targets[0].0, "offline_partner");
     }
 
