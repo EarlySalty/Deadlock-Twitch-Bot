@@ -33,6 +33,7 @@ pub mod fun_responses;
 pub mod global_ban_sweep;
 pub mod global_chatter_ban;
 pub mod invite_question;
+pub mod lfg_pitch;
 pub mod lurker_policy;
 pub mod mention_scoring;
 pub mod moderation;
