@@ -71,9 +71,9 @@ pub use fun_responses::FunResponses;
 pub use global_ban_sweep::{GlobalBanSweeper, PartnerRoster};
 pub use global_chatter_ban::GlobalChatterBanEnforcer;
 pub use invite_question::{
-    InviteQuestionJudge, InviteQuestionJudgeInput, InviteQuestionResponder, InviteQuestionRollup,
-    InviteQuestionStore, InviteQuestionVerdict, InviteQuestionVerdictKind,
-    MiniMaxInviteQuestionJudge, PgInviteQuestionStore,
+    InviteQuestionInviteUrlPort, InviteQuestionJudge, InviteQuestionJudgeInput,
+    InviteQuestionResponder, InviteQuestionRollup, InviteQuestionStore, InviteQuestionVerdict,
+    InviteQuestionVerdictKind, MiniMaxInviteQuestionJudge, PgInviteQuestionStore,
 };
 pub use lurker_policy::{
     is_passive_lurker_channel, should_attempt_runtime_heal, PASSIVE_LURKER_DETAIL,

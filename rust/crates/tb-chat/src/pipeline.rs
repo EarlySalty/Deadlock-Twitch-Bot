@@ -1303,6 +1303,13 @@ mod tests {
         }
     }
 
+    #[async_trait::async_trait]
+    impl crate::invite_question::InviteQuestionInviteUrlPort for NoopDiscordLink {
+        async fn invite_url(&self, _channel_login: &str) -> Result<Option<String>, String> {
+            Ok(None)
+        }
+    }
+
     struct NoopInvite;
 
     #[async_trait::async_trait]

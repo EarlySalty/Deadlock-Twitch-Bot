@@ -44,8 +44,8 @@ use tb_chat::types::ChatMessageEvent;
 use tb_chat::{
     promo_invite_fallback, ChannelClassifier, ChatApi, ChatPipeline, ChatPipelineParts,
     ChatterTracker, FunResponses, GlobalBanSweeper, GlobalChatterBanEnforcer,
-    InviteQuestionResponder, MiniMaxInviteQuestionJudge, ModAlerter, PartnerRoster,
-    PgHelixMentionResolver, PgInviteQuestionStore, ReviewLog, SusInviteCheck,
+    InviteQuestionInviteUrlPort, InviteQuestionResponder, MiniMaxInviteQuestionJudge, ModAlerter,
+    PartnerRoster, PgHelixMentionResolver, PgInviteQuestionStore, ReviewLog, SusInviteCheck,
 };
 use tb_crypto::FieldCipher;
 use tb_engagement::irc_reader::EngagementIrcReader;
@@ -768,7 +768,7 @@ pub async fn build_runtime(
         fun: Arc::new(FunResponses::new(Arc::clone(&api), false)),
         invite_question: Arc::new(InviteQuestionResponder::new(
             Arc::clone(&api),
-            discord_link,
+            Arc::new(DbInviteUrlWithFallback { pool: pool.clone() }),
             Arc::new(PgInviteQuestionStore::new(pool.clone())),
             Arc::new(MiniMaxInviteQuestionJudge::new(
                 EngagementMinimaxClient::new(None, None, None, None),
@@ -1902,6 +1902,33 @@ impl DiscordLinkPort for DbDiscordLink {
     }
 }
 
+/// Invite-Question — URL wie `!invite`: Streamer-Invite, sonst Env-Fallback.
+struct DbInviteUrlWithFallback {
+    pool: PgPool,
+}
+
+#[async_trait::async_trait]
+impl InviteQuestionInviteUrlPort for DbInviteUrlWithFallback {
+    async fn invite_url(&self, channel_login: &str) -> Result<Option<String>, String> {
+        let row: Option<(String,)> = sqlx::query_as(
+            "SELECT invite_url FROM twitch_streamer_invites \
+             WHERE LOWER(streamer_login) = $1 LIMIT 1",
+        )
+        .bind(channel_login)
+        .fetch_optional(&self.pool)
+        .await
+        .map_err(|e| e.to_string())?;
+        Ok(row
+            .map(|(url,)| url)
+            .filter(|url| !url.trim().is_empty())
+            .or_else(|| {
+                std::env::var(PROMO_DISCORD_INVITE_ENV)
+                    .ok()
+                    .filter(|url| !url.trim().is_empty())
+            }))
+    }
+}
+
 /// !invite — Antwortzeile, Port der chat_command.rs-Logik (Deadlock-live-Gate
 /// + streamer-spezifischer Invite mit Env-Fallback).
 struct DbInvitePort {
@@ -2438,6 +2465,13 @@ mod chat_notification_tests {
     #[async_trait::async_trait]
     impl DiscordLinkPort for NoopDiscordLink {
         async fn discord_invite(&self, _channel_login: &str) -> Result<Option<String>, String> {
+            Ok(None)
+        }
+    }
+
+    #[async_trait::async_trait]
+    impl InviteQuestionInviteUrlPort for NoopDiscordLink {
+        async fn invite_url(&self, _channel_login: &str) -> Result<Option<String>, String> {
             Ok(None)
         }
     }

@@ -5,6 +5,12 @@
 //! gehalten: Command-Präfix, Rückfragefenster, Regex, Rollup-Neuheit und
 //! In-Memory-Cooldowns müssen vorher passieren. Dadurch blockiert nur der sehr
 //! seltene Kandidatenpfad.
+//!
+//! Der Invite-URL-Lookup sitzt direkt nach Promo-Gate und vor Judge: Regex,
+//! Newcomer-Check und Cooldowns bleiben davor billig, danach verhindert der
+//! DB-Lesezugriff Rückfragen ohne einlösbare URL und spart bei fehlender
+//! Konfiguration den Modellcall. Ein bestätigtes "ja" aus dem Rückfragefenster
+//! löst die URL erneut auf; fehlt sie dann, wird das Fenster verbraucht.
 
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex, OnceLock};
@@ -20,7 +26,7 @@ use tb_engagement::minimax_chat::EngagementMinimaxClient;
 use tracing::{debug, info, warn};
 
 use crate::api::ChatApi;
-use crate::commands::{DiscordLinkPort, InviteReplyNotifier, PromoBlockCheck};
+use crate::commands::{InviteReplyNotifier, PromoBlockCheck};
 use crate::types::{ChatMessageEvent, SendOutcome};
 
 const INVITE_QUESTION_CHANNEL_COOLDOWN: Duration = Duration::from_secs(120);
@@ -315,6 +321,11 @@ pub trait InviteQuestionJudge: Send + Sync {
     async fn judge(&self, input: InviteQuestionJudgeInput) -> InviteQuestionVerdict;
 }
 
+#[async_trait]
+pub trait InviteQuestionInviteUrlPort: Send + Sync {
+    async fn invite_url(&self, channel_login: &str) -> Result<Option<String>, String>;
+}
+
 pub struct MiniMaxInviteQuestionJudge {
     client: EngagementMinimaxClient,
 }
@@ -450,6 +461,7 @@ pub enum SilentReason {
     CooldownUserReplied,
     CooldownJudgeBrake,
     PromoBlockedByPlan,
+    NoInviteUrl,
     JudgeNo,
     /// Judge-Provider hat nicht geantwortet; kein Modellurteil.
     JudgeProviderError,
@@ -472,6 +484,7 @@ impl SilentReason {
             Self::CooldownUserReplied => "cooldown_user_replied",
             Self::CooldownJudgeBrake => "cooldown_judge_brake",
             Self::PromoBlockedByPlan => "promo_blocked_by_plan",
+            Self::NoInviteUrl => "no_invite_url",
             Self::JudgeNo => "judge_no",
             Self::JudgeProviderError => "judge_provider_error",
             Self::JudgeParseError => "judge_parse_error",
@@ -492,6 +505,7 @@ pub struct InviteQuestionDecision {
     chatter_login: String,
     message: String,
     pending_confirmation: bool,
+    invite_url: Option<String>,
 }
 
 impl InviteQuestionDecision {
@@ -513,10 +527,28 @@ impl InviteQuestionDecision {
             chatter_login,
             message,
             pending_confirmation: false,
+            invite_url: None,
         }
     }
 
-    fn pending_send_go(channel_login: String, chatter_login: String, message: String) -> Self {
+    fn pending_silent(
+        reason: SilentReason,
+        channel_login: String,
+        chatter_login: String,
+        message: String,
+    ) -> Self {
+        Self {
+            pending_confirmation: true,
+            ..Self::silent(reason, channel_login, chatter_login, message, false, false)
+        }
+    }
+
+    fn pending_send_go(
+        channel_login: String,
+        chatter_login: String,
+        message: String,
+        invite_url: String,
+    ) -> Self {
         Self {
             action: InviteQuestionAction::SendGo,
             verdict: None,
@@ -527,6 +559,7 @@ impl InviteQuestionDecision {
             chatter_login,
             message,
             pending_confirmation: true,
+            invite_url: Some(invite_url),
         }
     }
 
@@ -549,6 +582,7 @@ impl InviteQuestionDecision {
             chatter_login,
             message,
             pending_confirmation: false,
+            invite_url: None,
         }
     }
 }
@@ -562,7 +596,7 @@ fn truncate_log_message(raw: &str) -> String {
 
 pub struct InviteQuestionResponder {
     api: Arc<dyn ChatApi>,
-    discord_link: Arc<dyn DiscordLinkPort>,
+    invite_url: Arc<dyn InviteQuestionInviteUrlPort>,
     store: Arc<dyn InviteQuestionStore>,
     judge: Arc<dyn InviteQuestionJudge>,
     promo_block_check: Option<Arc<dyn PromoBlockCheck>>,
@@ -582,7 +616,7 @@ enum CooldownKind {
 impl InviteQuestionResponder {
     pub fn new(
         api: Arc<dyn ChatApi>,
-        discord_link: Arc<dyn DiscordLinkPort>,
+        invite_url: Arc<dyn InviteQuestionInviteUrlPort>,
         store: Arc<dyn InviteQuestionStore>,
         judge: Arc<dyn InviteQuestionJudge>,
         promo_block_check: Option<Arc<dyn PromoBlockCheck>>,
@@ -590,7 +624,7 @@ impl InviteQuestionResponder {
     ) -> Self {
         Self::new_with_clock(
             api,
-            discord_link,
+            invite_url,
             store,
             judge,
             Arc::new(SystemInviteQuestionClock),
@@ -601,7 +635,7 @@ impl InviteQuestionResponder {
 
     fn new_with_clock(
         api: Arc<dyn ChatApi>,
-        discord_link: Arc<dyn DiscordLinkPort>,
+        invite_url: Arc<dyn InviteQuestionInviteUrlPort>,
         store: Arc<dyn InviteQuestionStore>,
         judge: Arc<dyn InviteQuestionJudge>,
         clock: Arc<dyn InviteQuestionClock>,
@@ -610,7 +644,7 @@ impl InviteQuestionResponder {
     ) -> Self {
         Self {
             api,
-            discord_link,
+            invite_url,
             store,
             judge,
             promo_block_check,
@@ -630,21 +664,20 @@ impl InviteQuestionResponder {
             })
             .await;
         self.log_decision(&decision);
+        if decision.pending_confirmation {
+            self.forget_pending_confirmation(&decision.channel_login, &decision.chatter_login);
+        }
 
         match decision.action {
             InviteQuestionAction::SendGo => {
-                if decision.pending_confirmation {
-                    self.forget_pending_confirmation(
-                        &decision.channel_login,
-                        &decision.chatter_login,
-                    );
-                }
-                if self
-                    .send_go(event, &decision.channel_login, &decision.chatter_login)
-                    .await
-                {
-                    self.mark_replied(&decision.channel_login, &decision.chatter_login);
-                    self.note_invite_reply(&decision.channel_login).await;
+                if let Some(invite_url) = decision.invite_url.as_deref() {
+                    if self
+                        .send_go(event, &decision.chatter_login, invite_url)
+                        .await
+                    {
+                        self.mark_replied(&decision.channel_login, &decision.chatter_login);
+                        self.note_invite_reply(&decision.channel_login).await;
+                    }
                 }
             }
             InviteQuestionAction::AskConfirmation => {
@@ -718,10 +751,19 @@ impl InviteQuestionResponder {
         }
 
         if self.pending_confirmation_open(&channel_login, &chatter_login) && is_affirmative(raw) {
+            let Some(invite_url) = self.resolve_invite_url(&channel_login).await else {
+                return InviteQuestionDecision::pending_silent(
+                    SilentReason::NoInviteUrl,
+                    channel_login,
+                    chatter_login,
+                    raw.to_string(),
+                );
+            };
             return InviteQuestionDecision::pending_send_go(
                 channel_login,
                 chatter_login,
                 raw.to_string(),
+                invite_url,
             );
         }
 
@@ -772,6 +814,16 @@ impl InviteQuestionResponder {
                 );
             }
         }
+        let Some(invite_url) = self.resolve_invite_url(&channel_login).await else {
+            return InviteQuestionDecision::silent(
+                SilentReason::NoInviteUrl,
+                channel_login,
+                chatter_login,
+                raw.to_string(),
+                is_newcomer,
+                signal.has_strong_access,
+            );
+        };
         before_judge(&channel_login, &chatter_login);
 
         let verdict = self
@@ -810,7 +862,7 @@ impl InviteQuestionResponder {
                 }
             },
         };
-        InviteQuestionDecision::judged(
+        let mut decision = InviteQuestionDecision::judged(
             action,
             &verdict,
             is_newcomer,
@@ -818,7 +870,11 @@ impl InviteQuestionResponder {
             channel_login,
             chatter_login,
             raw.to_string(),
-        )
+        );
+        if action == InviteQuestionAction::SendGo {
+            decision.invite_url = Some(invite_url);
+        }
+        decision
     }
 
     fn log_decision(&self, decision: &InviteQuestionDecision) {
@@ -868,13 +924,23 @@ impl InviteQuestionResponder {
                 );
             }
             (None, InviteQuestionAction::Silent(reason)) => {
-                debug!(
-                    channel = %decision.channel_login,
-                    chatter = %decision.chatter_login,
-                    message = %message,
-                    action = decision.action.as_str(),
-                    silent_reason = reason.as_str(),
-                );
+                if reason == SilentReason::NoInviteUrl {
+                    warn!(
+                        channel = %decision.channel_login,
+                        chatter = %decision.chatter_login,
+                        message = %message,
+                        action = decision.action.as_str(),
+                        silent_reason = reason.as_str(),
+                    );
+                } else {
+                    debug!(
+                        channel = %decision.channel_login,
+                        chatter = %decision.chatter_login,
+                        message = %message,
+                        action = decision.action.as_str(),
+                        silent_reason = reason.as_str(),
+                    );
+                }
             }
             (None, _) => {}
         }
@@ -986,6 +1052,17 @@ impl InviteQuestionResponder {
         }
     }
 
+    async fn resolve_invite_url(&self, channel_login: &str) -> Option<String> {
+        match self.invite_url.invite_url(channel_login).await {
+            Ok(Some(url)) if !url.trim().is_empty() => Some(url),
+            Ok(_) => None,
+            Err(error) => {
+                debug!(%error, channel_login, "Invite-Question-Invite-URL nicht lesbar");
+                None
+            }
+        }
+    }
+
     async fn note_invite_reply(&self, channel_login: &str) {
         if let Some(notifier) = &self.invite_reply_notifier {
             notifier.note_invite_reply(channel_login).await;
@@ -1001,23 +1078,10 @@ impl InviteQuestionResponder {
         self.send(event, &msg).await
     }
 
-    async fn send_go(
-        &self,
-        event: &ChatMessageEvent,
-        channel_login: &str,
-        chatter_login: &str,
-    ) -> bool {
-        let invite = match self.discord_link.discord_invite(channel_login).await {
-            Ok(Some(url)) if !url.trim().is_empty() => url,
-            Ok(_) => return false,
-            Err(error) => {
-                debug!(%error, channel_login, "Invite-Question-Discord-Link nicht lesbar");
-                return false;
-            }
-        };
+    async fn send_go(&self, event: &ChatMessageEvent, chatter_login: &str, invite: &str) -> bool {
         let msg = GO_REPLY
             .replace("{chatter}", chatter_login)
-            .replace("{invite}", &invite);
+            .replace("{invite}", invite);
         self.send(event, &msg).await
     }
 
@@ -1064,7 +1128,7 @@ fn is_affirmative(raw: &str) -> bool {
 mod tests {
     use super::*;
     use crate::api::{BanOutcome, ChatApi};
-    use crate::commands::{DiscordLinkPort, InviteReplyNotifier, PromoBlockCheck};
+    use crate::commands::{InviteReplyNotifier, PromoBlockCheck};
     use crate::types::{ChatMessageBody, ChatMessageEvent, SendOutcome};
     use async_trait::async_trait;
     use std::collections::VecDeque;
@@ -1144,12 +1208,50 @@ mod tests {
         }
     }
 
-    struct FakeDiscordLink;
+    const TEST_INVITE_URL: &str = "https://discord.gg/test";
+
+    struct FakeDiscordLink {
+        urls: Mutex<VecDeque<Option<String>>>,
+        default: Option<String>,
+    }
+
+    impl FakeDiscordLink {
+        fn with_url(url: Option<&str>) -> Self {
+            Self {
+                urls: Mutex::new(VecDeque::new()),
+                default: url.map(str::to_string),
+            }
+        }
+
+        fn with_sources(db_url: Option<&str>, fallback_url: Option<&str>) -> Self {
+            let url = db_url
+                .filter(|url| !url.trim().is_empty())
+                .or_else(|| fallback_url.filter(|url| !url.trim().is_empty()));
+            Self::with_url(url)
+        }
+
+        fn with_sequence(urls: Vec<Option<&str>>) -> Self {
+            Self {
+                urls: Mutex::new(
+                    urls.into_iter()
+                        .map(|url| url.map(str::to_string))
+                        .collect(),
+                ),
+                default: None,
+            }
+        }
+    }
 
     #[async_trait]
-    impl DiscordLinkPort for FakeDiscordLink {
-        async fn discord_invite(&self, _channel_login: &str) -> Result<Option<String>, String> {
-            Ok(Some("https://discord.gg/test".to_string()))
+    impl InviteQuestionInviteUrlPort for FakeDiscordLink {
+        async fn invite_url(&self, _channel_login: &str) -> Result<Option<String>, String> {
+            Ok(self
+                .urls
+                .lock()
+                .unwrap()
+                .pop_front()
+                .or_else(|| Some(self.default.clone()))
+                .flatten())
         }
     }
 
@@ -1335,10 +1437,47 @@ mod tests {
         promo_block_check: Option<Arc<dyn PromoBlockCheck>>,
         invite_reply_notifier: Option<Arc<dyn InviteReplyNotifier>>,
     ) -> (InviteQuestionResponder, Arc<FakeClock>) {
+        responder_with_clock_ports_and_discord_link(
+            api,
+            store,
+            judge,
+            Arc::new(FakeDiscordLink::with_url(Some(TEST_INVITE_URL))),
+            promo_block_check,
+            invite_reply_notifier,
+        )
+    }
+
+    fn responder_with_discord_link(
+        api: Arc<MockApi>,
+        store: Arc<dyn InviteQuestionStore>,
+        judge: Arc<dyn InviteQuestionJudge>,
+        discord_link: Arc<dyn InviteQuestionInviteUrlPort>,
+        promo_block_check: Option<Arc<dyn PromoBlockCheck>>,
+        invite_reply_notifier: Option<Arc<dyn InviteReplyNotifier>>,
+    ) -> InviteQuestionResponder {
+        responder_with_clock_ports_and_discord_link(
+            api,
+            store,
+            judge,
+            discord_link,
+            promo_block_check,
+            invite_reply_notifier,
+        )
+        .0
+    }
+
+    fn responder_with_clock_ports_and_discord_link(
+        api: Arc<MockApi>,
+        store: Arc<dyn InviteQuestionStore>,
+        judge: Arc<dyn InviteQuestionJudge>,
+        discord_link: Arc<dyn InviteQuestionInviteUrlPort>,
+        promo_block_check: Option<Arc<dyn PromoBlockCheck>>,
+        invite_reply_notifier: Option<Arc<dyn InviteReplyNotifier>>,
+    ) -> (InviteQuestionResponder, Arc<FakeClock>) {
         let clock = FakeClock::new();
         let invite = InviteQuestionResponder::new_with_clock(
             api,
-            Arc::new(FakeDiscordLink),
+            discord_link,
             store,
             judge,
             clock.clone(),
@@ -1349,8 +1488,12 @@ mod tests {
     }
 
     fn expected_go(chatter: &str) -> String {
+        expected_go_with_invite(chatter, TEST_INVITE_URL)
+    }
+
+    fn expected_go_with_invite(chatter: &str, invite: &str) -> String {
         format!(
-            "@{chatter} Für einen Deadlock-Invite: Komm auf unseren Discord und frag im Channel frag-die-community nach einem Invite, am besten gleich mit deinem Steam Freundescode. Dann geht das schnell und unkompliziert. https://discord.gg/test"
+            "@{chatter} Für einen Deadlock-Invite: Komm auf unseren Discord und frag im Channel frag-die-community nach einem Invite, am besten gleich mit deinem Steam Freundescode. Dann geht das schnell und unkompliziert. {invite}"
         )
     }
 
@@ -1468,6 +1611,23 @@ mod tests {
                 InviteQuestionAction::Silent(reason)
             );
         }
+
+        let invite = responder_with_discord_link(
+            MockApi::new(),
+            Arc::new(FakeStore {
+                rollup: rollup(1, false),
+            }),
+            FakeJudge::new(vec![verdict(InviteQuestionVerdictKind::Yes, 0.9)]),
+            Arc::new(FakeDiscordLink::with_url(None)),
+            None,
+            None,
+        );
+        assert_eq!(
+            decide_action(&invite, "viewer", "Wie bekomme ich einen invite?")
+                .await
+                .action,
+            InviteQuestionAction::Silent(SilentReason::NoInviteUrl)
+        );
 
         let api = MockApi::new();
         let judge = FakeJudge::new(vec![verdict(InviteQuestionVerdictKind::Yes, 0.9)]);
@@ -1705,6 +1865,196 @@ mod tests {
             .await;
 
         assert!(notifier.calls().is_empty());
+    }
+
+    #[tokio::test]
+    async fn keine_invite_url_keine_rueckfrage() {
+        let api = MockApi::new();
+        let notifier = FakeNotifier::new();
+        let notifier_port: Arc<dyn InviteReplyNotifier> = notifier.clone();
+        let judge = FakeJudge::new(vec![
+            verdict(InviteQuestionVerdictKind::Unsure, 0.0),
+            verdict(InviteQuestionVerdictKind::Unsure, 0.0),
+        ]);
+        let invite = responder_with_discord_link(
+            api.clone(),
+            Arc::new(FakeStore {
+                rollup: rollup(1, false),
+            }),
+            judge,
+            Arc::new(FakeDiscordLink::with_url(None)),
+            None,
+            Some(notifier_port),
+        );
+
+        let decision = decide_action(&invite, "viewer", "Wie kann man Deadlock spielen?").await;
+        assert_eq!(
+            decision.action,
+            InviteQuestionAction::Silent(SilentReason::NoInviteUrl)
+        );
+
+        invite
+            .maybe_respond(
+                &event("viewer", "Wie kann man Deadlock spielen?"),
+                "streamer",
+            )
+            .await;
+        assert!(api.messages().is_empty());
+        assert!(notifier.calls().is_empty());
+        assert_eq!(SilentReason::NoInviteUrl.as_str(), "no_invite_url");
+    }
+
+    #[tokio::test]
+    async fn keine_invite_url_kein_go() {
+        let api = MockApi::new();
+        let notifier = FakeNotifier::new();
+        let notifier_port: Arc<dyn InviteReplyNotifier> = notifier.clone();
+        let judge = FakeJudge::new(vec![
+            verdict(InviteQuestionVerdictKind::Yes, 0.9),
+            verdict(InviteQuestionVerdictKind::Yes, 0.9),
+        ]);
+        let invite = responder_with_discord_link(
+            api.clone(),
+            Arc::new(FakeStore {
+                rollup: rollup(1, false),
+            }),
+            judge,
+            Arc::new(FakeDiscordLink::with_url(None)),
+            None,
+            Some(notifier_port),
+        );
+
+        let decision = decide_action(&invite, "viewer", "Wie bekomme ich einen invite?").await;
+        assert_eq!(
+            decision.action,
+            InviteQuestionAction::Silent(SilentReason::NoInviteUrl)
+        );
+
+        invite
+            .maybe_respond(
+                &event("viewer", "Wie bekomme ich einen invite?"),
+                "streamer",
+            )
+            .await;
+        assert!(api.messages().is_empty());
+        assert!(notifier.calls().is_empty());
+    }
+
+    #[tokio::test]
+    async fn keine_invite_url_spart_judge_call() {
+        let api = MockApi::new();
+        let judge = FakeJudge::new(vec![verdict(InviteQuestionVerdictKind::Yes, 0.9)]);
+        let invite = responder_with_discord_link(
+            api.clone(),
+            Arc::new(FakeStore {
+                rollup: rollup(1, false),
+            }),
+            judge.clone(),
+            Arc::new(FakeDiscordLink::with_url(None)),
+            None,
+            None,
+        );
+
+        invite
+            .maybe_respond(
+                &event("viewer", "Wie bekomme ich einen invite?"),
+                "streamer",
+            )
+            .await;
+
+        assert_eq!(judge.call_count(), 0);
+        assert!(api.messages().is_empty());
+    }
+
+    #[tokio::test]
+    async fn env_fallback_wird_genutzt() {
+        let api = MockApi::new();
+        let fallback = "https://discord.gg/fallback";
+        let invite = responder_with_discord_link(
+            api.clone(),
+            Arc::new(FakeStore {
+                rollup: rollup(1, false),
+            }),
+            FakeJudge::new(vec![verdict(InviteQuestionVerdictKind::Yes, 0.9)]),
+            Arc::new(FakeDiscordLink::with_sources(None, Some(fallback))),
+            None,
+            None,
+        );
+
+        invite
+            .maybe_respond(
+                &event("viewer", "Wie bekomme ich einen invite?"),
+                "streamer",
+            )
+            .await;
+
+        assert_eq!(
+            api.messages(),
+            vec![expected_go_with_invite("viewer", fallback)]
+        );
+    }
+
+    #[tokio::test]
+    async fn db_invite_schlaegt_env_fallback() {
+        let api = MockApi::new();
+        let db_url = "https://discord.gg/db";
+        let env_url = "https://discord.gg/env";
+        let invite = responder_with_discord_link(
+            api.clone(),
+            Arc::new(FakeStore {
+                rollup: rollup(1, false),
+            }),
+            FakeJudge::new(vec![verdict(InviteQuestionVerdictKind::Yes, 0.9)]),
+            Arc::new(FakeDiscordLink::with_sources(Some(db_url), Some(env_url))),
+            None,
+            None,
+        );
+
+        invite
+            .maybe_respond(
+                &event("viewer", "Wie bekomme ich einen invite?"),
+                "streamer",
+            )
+            .await;
+
+        assert_eq!(
+            api.messages(),
+            vec![expected_go_with_invite("viewer", db_url)]
+        );
+    }
+
+    #[tokio::test]
+    async fn url_verschwindet_zwischen_rueckfrage_und_ja() {
+        let api = MockApi::new();
+        let notifier = FakeNotifier::new();
+        let notifier_port: Arc<dyn InviteReplyNotifier> = notifier.clone();
+        let invite = responder_with_discord_link(
+            api.clone(),
+            Arc::new(FakeStore {
+                rollup: rollup(1, false),
+            }),
+            FakeJudge::new(vec![verdict(InviteQuestionVerdictKind::Unsure, 0.0)]),
+            Arc::new(FakeDiscordLink::with_sequence(vec![
+                Some(TEST_INVITE_URL),
+                None,
+            ])),
+            None,
+            Some(notifier_port),
+        );
+
+        invite
+            .maybe_respond(
+                &event("viewer", "Wie kann man Deadlock spielen?"),
+                "streamer",
+            )
+            .await;
+        invite
+            .maybe_respond(&event("viewer", "ja"), "streamer")
+            .await;
+
+        assert_eq!(api.messages(), vec![expected_confirm("viewer")]);
+        assert!(invite.pending_confirmations.lock().unwrap().is_empty());
+        assert_eq!(notifier.calls(), vec!["streamer"]);
     }
 
     #[test]
