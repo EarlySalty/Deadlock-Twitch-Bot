@@ -33,38 +33,32 @@ anderen Kanal wird in der öffentlichen Nutzeransicht mit `403` abgewiesen.
 
 ## Architektur — genau ein Hebel
 
-Das Frontend bezieht `isAdmin` + `plan` ausschließlich aus der `auth-status`-Antwort
-(`PlanContext`: `hasFullAccess = isAdmin || isLocalhost || isDemoMode`). Es genügt
-daher, **nur die Präsentation** in `auth-status` umzuschalten — die ~364
-Daten-Endpunkte und die Frontend-Gate-Logik bleiben unangetastet.
+Die Entscheidung fällt zentral im `DashboardAuthLevel`-Extractor. Im öffentlichen
+Dashboard wird eine admin-berechtigte Twitch- oder Discord-Session ohne aktives
+`tb_admin_mode=2` als Partner des Owner-Kanals aufgelöst. Damit greifen dieselben
+Scope-, Plan- und Daten-Gates wie bei jedem anderen Partner; fremde
+`?streamer=`-Overrides enden zentral mit `403`.
 
-> **Bewusst NICHT angefasst:** der `DashboardAuthLevel`-Extractor (Security-Boundary).
-> Ein Hard-Downgrade auf `Partner`-Level würde `partner_gate` triggern und den Admin
-> aus seinen eigenen Daten aussperren (er steht evtl. nicht in `twitch_partners`).
-> Das Auth-Level bleibt `Admin`; nur die ausgelieferte Payload wechselt.
-
-Die Startseite löst `Admin { actor: Some(..) }` ohne `?streamer=` über die
-Twitch-Identität des Admin-Actors auf. Das ist nötig, weil die Nutzer-Präsentation
-bewusst keinen Admin-Streamer-Override mitsendet. Im aktiven Admin-Modus bleibt
-ein expliziter Override möglich. Localhost und Admin-Sessions ohne Twitch-Actor
-benötigen weiterhin `?streamer=`.
+Mit aktivem Modus-Cookie sowie auf dem Admin-Host und bei internen Aufrufen bleibt
+das Auth-Level `Admin`. Einzelne Daten-Endpunkte brauchen dadurch keine eigenen
+Admin-Modus-Sonderfälle.
 
 ### Backend (`tb-dashboard-api`)
 
-`handlers/auth_status.rs` — Verzweigung nach Auth-Level **und** Cookie
-`tb_admin_mode` (aktiv = vorhanden und `== "2"`). Jede Payload trägt zwei neue
-Felder:
+`auth/level.rs` löst Session, Dashboard-Kontext und Modus-Cookie gemeinsam auf:
 
-| Level | Cookie | Antwort | `adminEligible` | `adminMode` |
-|-------|--------|---------|-----------------|-------------|
-| `Admin { actor: Some }` | aktiv | `admin_response` | `true` | `true` |
-| `Admin { actor: Some }` | inaktiv (Default) | `partner_response` (echter Plan) | `true` | `false` |
-| `Admin { actor: None }` (Discord, öffentlich) | aktiv | `admin_response` | `true` | `true` |
-| `Admin { actor: None }` (Discord, öffentlich) | inaktiv | `partner_response` für Owner-Kanal | `true` | `false` |
-| `Admin { actor: None }` (Admin-Host/intern) | — | `admin_response` | `false` | `true` |
-| `Localhost` | — | `admin_response` | `false` | `true` |
-| `Partner` | — | `partner_response` | `false` | `false` |
-| `None` | — | unauth | `false` | `false` |
+| Quelle | Kontext / Cookie | Effektives Level |
+|--------|------------------|------------------|
+| Twitch-Owner | Modus aktiv | `Admin { actor: Some }` |
+| Twitch-Owner | Modus inaktiv | `Partner` (Owner) |
+| Discord-Admin | öffentlich, Modus aktiv | `Admin { actor: None }` |
+| Discord-Admin | öffentlich, Modus inaktiv | `Partner` (Owner) |
+| Discord-Admin | Admin-Host / intern | `Admin { actor: None }` |
+| normaler Streamer | — | `Partner` |
+| keine gültige Session | — | `None` |
+
+`handlers/auth_status.rs` serialisiert dieses effektive Level. Seine Payload trägt
+`adminEligible` und `adminMode`, damit das Frontend den Schalter darstellen kann.
 
 `handlers/admin_mode.rs` — `POST /twitch/api/v2/admin-mode`, Body `{ "enabled": bool }`.
 - Gate: Twitch-Owner oder gültige Admin-Session, sonst `403`.

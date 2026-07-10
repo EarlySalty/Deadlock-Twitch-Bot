@@ -9,8 +9,10 @@
 //!    (gleiche WHERE-Bedingung wie Python `_is_partner_allowed`,
 //!    `auth_mixin.py:741-780`). KEINE `twitch_token_blacklist`-Prüfung — ein
 //!    token_error-Blacklist-Eintrag sperrt den Dashboard-Zugang nicht.
-//! 3. **Admin** — Cookie `master_dash_session` ist gültig in der DB
-//!    (Discord-Admin-Session, Typ `discord_admin`)
+//! 3. **Discord-Admin** — Cookie `master_dash_session` ist gültig in der DB.
+//!    Im öffentlichen Dashboard ohne aktiven Admin-Modus wird diese Session
+//!    zentral auf den Owner als Partner begrenzt; auf dem Admin-Host, intern
+//!    oder mit Modus-Cookie bleibt sie Admin.
 //! 4. **None** — alles andere
 
 use axum::{
@@ -56,7 +58,7 @@ pub enum DashboardAuthLevel {
 }
 
 impl DashboardAuthLevel {
-    /// Admin-Level ohne Twitch-Session-Identität (Discord-Admin / Tests).
+    /// Admin-Level ohne Twitch-Session-Identität (aktive Discord-Admin-Ansicht / Tests).
     /// Kurzform für `Admin { actor: None }`.
     pub fn admin() -> Self {
         Self::Admin { actor: None }
@@ -207,7 +209,8 @@ pub(crate) fn extract_cookie<'a>(parts: &'a Parts, name: &str) -> Option<&'a str
 
 /// Twitch-Logins mit Admin-Zugriff (wie Discord-Admin).
 /// Spiegelt Python `_TWITCH_ADMIN_LOGINS` (api_v2.py:464), kleingeschrieben.
-const TWITCH_ADMIN_LOGINS: &[&str] = &["earlysalty"];
+pub(crate) const DEFAULT_ADMIN_LOGIN: &str = "earlysalty";
+const TWITCH_ADMIN_LOGINS: &[&str] = &[DEFAULT_ADMIN_LOGIN];
 
 pub(crate) fn is_admin_login(login: &str) -> bool {
     let login = login.trim().to_lowercase();
@@ -216,6 +219,27 @@ pub(crate) fn is_admin_login(login: &str) -> bool {
 
 fn admin_mode_cookie_active(parts: &Parts) -> bool {
     extract_cookie(parts, crate::handlers::auth_status::ADMIN_MODE_COOKIE) == Some("2")
+}
+
+fn admin_dashboard_context(parts: &Parts) -> bool {
+    let explicit_admin = parts
+        .headers
+        .get("x-dashboard-context")
+        .and_then(|value| value.to_str().ok())
+        .is_some_and(|value| value.eq_ignore_ascii_case("admin"));
+
+    explicit_admin || parts.uri.path() == "/twitch/auth/validate"
+}
+
+fn master_session_auth(admin_dashboard: bool, admin_mode_active: bool) -> DashboardAuthLevel {
+    if !admin_dashboard && !admin_mode_active {
+        return DashboardAuthLevel::Partner {
+            twitch_login: DEFAULT_ADMIN_LOGIN.to_string(),
+            twitch_user_id: String::new(),
+            display_name: DEFAULT_ADMIN_LOGIN.to_string(),
+        };
+    }
+    DashboardAuthLevel::admin()
 }
 
 /// Macht aus einer geladenen Partner-Session das Auth-Level: Admin-Login-Promotion
@@ -305,8 +329,10 @@ where
         if let Some(session_id) = extract_cookie(parts, crate::auth::session::ADMIN_COOKIE_NAME) {
             if !session_id.is_empty() {
                 if let Ok(Some(_)) = state.load_admin_session(session_id).await {
-                    // Discord-Admin: keine Twitch-Session-Identität → keine Attribution.
-                    return Ok(DashboardAuthLevel::admin());
+                    return Ok(master_session_auth(
+                        admin_dashboard_context(parts),
+                        admin_mode_active,
+                    ));
                 }
             }
         }
@@ -560,12 +586,74 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn reine_master_session_wird_admin_none() {
+    async fn reine_master_session_ohne_admin_kontext_wird_partner() {
         let Some((pool, state)) = maybe_test_state().await else { return; };
         let admin = state.create_admin_session("discord-9062304", "Discord Admin").await.unwrap();
         let auth = extract_auth(request_parts(Some(format!("{}={}", crate::auth::session::ADMIN_COOKIE_NAME, admin.session_id))), state.clone()).await;
-        assert_eq!(auth, DashboardAuthLevel::admin());
+        assert!(matches!(
+            auth,
+            DashboardAuthLevel::Partner { ref twitch_login, .. } if twitch_login == "earlysalty"
+        ));
         sqlx::query("DELETE FROM dashboard_sessions WHERE session_id = $1").bind(&admin.session_id).execute(&pool).await.unwrap();
+    }
+
+    #[test]
+    fn master_session_ist_nur_mit_admin_kontext_oder_mode_cookie_admin() {
+        let user_view = master_session_auth(false, false);
+        assert!(matches!(
+            &user_view,
+            DashboardAuthLevel::Partner { ref twitch_login, .. } if twitch_login == "earlysalty"
+        ));
+        let foreign = crate::auth::streamer_scope::resolve_streamer_scope(
+            &user_view,
+            Some("andererpartner"),
+            false,
+        )
+        .unwrap_err();
+        assert_eq!(foreign.status(), axum::http::StatusCode::FORBIDDEN);
+
+        assert_eq!(master_session_auth(false, true), DashboardAuthLevel::admin());
+        assert_eq!(
+            master_session_auth(true, false),
+            DashboardAuthLevel::admin()
+        );
+    }
+
+    #[test]
+    fn admin_kontext_ist_explizit_oder_forward_auth() {
+        let parts = axum::http::Request::builder()
+            .uri("/twitch/api/v2/overview")
+            .body(())
+            .unwrap()
+            .into_parts()
+            .0;
+        assert!(!admin_dashboard_context(&parts));
+
+        let parts = axum::http::Request::builder()
+            .uri("/twitch/api/v2/overview")
+            .header("x-dashboard-context", "public")
+            .body(())
+            .unwrap()
+            .into_parts()
+            .0;
+        assert!(!admin_dashboard_context(&parts));
+
+        let parts = axum::http::Request::builder()
+            .uri("/twitch/api/v2/overview")
+            .header("x-dashboard-context", "admin")
+            .body(())
+            .unwrap()
+            .into_parts()
+            .0;
+        assert!(admin_dashboard_context(&parts));
+
+        let parts = axum::http::Request::builder()
+            .uri("/twitch/auth/validate")
+            .body(())
+            .unwrap()
+            .into_parts()
+            .0;
+        assert!(admin_dashboard_context(&parts));
     }
 
     #[tokio::test]

@@ -10,6 +10,7 @@
 
 use axum::{
     body::Body,
+    extract::FromRequestParts,
     http::{header::ACCEPT, Method, Request, StatusCode},
     middleware::Next,
     response::{IntoResponse, Redirect, Response},
@@ -17,7 +18,7 @@ use axum::{
 };
 use serde_json::json;
 
-use crate::auth::level::extract_cookie;
+use crate::auth::level::DashboardAuthLevel;
 use crate::auth::session::DashboardAuthState;
 
 /// Python `_PASSIVE_ALLOWED_EXACT_PATHS`.
@@ -103,10 +104,21 @@ fn path_is_public(path: &str) -> bool {
     PUBLIC_PATH_PREFIXES.iter().any(|p| path.starts_with(p))
 }
 
+fn partner_identity(auth: &DashboardAuthLevel) -> Option<(&str, &str)> {
+    match auth {
+        DashboardAuthLevel::Partner {
+            twitch_login,
+            twitch_user_id,
+            ..
+        } => Some((twitch_login, twitch_user_id)),
+        DashboardAuthLevel::Admin { .. } | DashboardAuthLevel::None => None,
+    }
+}
+
 /// Middleware: lehnt active-only-Routen für passive Partner ab. Admin- und
 /// nicht-eingeloggte Requests sowie passive-allowed/public-Pfade gehen durch.
 pub async fn partner_status_gate(req: Request<Body>, next: Next) -> Response {
-    let (parts, body) = req.into_parts();
+    let (mut parts, body) = req.into_parts();
     let path = parts.uri.path().to_string();
 
     if parts.method == Method::OPTIONS || path_is_public(&path) {
@@ -117,8 +129,6 @@ pub async fn partner_status_gate(req: Request<Body>, next: Next) -> Response {
         return next.run(Request::from_parts(parts, body)).await;
     };
 
-    let admin_cookie = extract_cookie(&parts, "master_dash_session").map(str::to_string);
-    let partner_cookie = extract_cookie(&parts, "twitch_dash_session").map(str::to_string);
     let wants_json = path.starts_with("/twitch/api/")
         || parts
             .headers
@@ -128,19 +138,13 @@ pub async fn partner_status_gate(req: Request<Body>, next: Next) -> Response {
             .unwrap_or(false);
     let passive_allowed = path_matches_passive_allowed(&path);
 
-    // Admin-Session → durchlassen.
-    if let Some(sid) = admin_cookie.as_deref().filter(|s| !s.is_empty()) {
-        if let Ok(Some(_)) = state.load_admin_session(sid).await {
-            return next.run(Request::from_parts(parts, body)).await;
-        }
+    let auth = DashboardAuthLevel::from_request_parts(&mut parts, &())
+        .await
+        .unwrap_or(DashboardAuthLevel::None);
+    if auth.is_privileged() {
+        return next.run(Request::from_parts(parts, body)).await;
     }
-
-    // Partner-Session laden; ohne gültige → durchlassen (Handler-Auth greift).
-    let partner = match partner_cookie.as_deref().filter(|s| !s.is_empty()) {
-        Some(sid) => state.load_partner_session(sid).await.ok().flatten(),
-        None => None,
-    };
-    let Some(partner) = partner else {
+    let Some((twitch_login, twitch_user_id)) = partner_identity(&auth) else {
         return next.run(Request::from_parts(parts, body)).await;
     };
 
@@ -151,14 +155,14 @@ pub async fn partner_status_gate(req: Request<Body>, next: Next) -> Response {
 
     // Active-Status prüfen.
     if state
-        .is_partner_active(&partner.twitch_login, &partner.twitch_user_id)
+        .is_partner_active(twitch_login, twitch_user_id)
         .await
     {
         return next.run(Request::from_parts(parts, body)).await;
     }
 
     // Passiver Partner auf active-only-Route → ablehnen (Python 1882-1903).
-    tracing::info!(login = %partner.twitch_login, path = %path, "partner_status_gate: passiver Partner abgelehnt");
+    tracing::info!(login = %twitch_login, path = %path, "partner_status_gate: passiver Partner abgelehnt");
     if wants_json {
         // P2.85: für `/twitch/api/*` den Python-Access-Denied-Vertrag liefern
         // (account_blocked vs dashboard_access_restricted + redirectUrl/
@@ -167,12 +171,12 @@ pub async fn partner_status_gate(req: Request<Body>, next: Next) -> Response {
         if path.starts_with("/twitch/api/") {
             let access = tb_analytics::partner_access::load_partner_access_state(
                 state.pool(),
-                &partner.twitch_login,
-                &partner.twitch_user_id,
+                twitch_login,
+                twitch_user_id,
             )
             .await
             .unwrap_or_else(|e| {
-                tracing::warn!("partner_status_gate: Access-State-Fehler für {}: {e}", partner.twitch_login);
+                tracing::warn!("partner_status_gate: Access-State-Fehler für {twitch_login}: {e}");
                 tb_analytics::partner_access::AccessState {
                     partner_status: "active".into(),
                     analytics_access_allowed: true,
@@ -206,6 +210,7 @@ pub async fn partner_status_gate(req: Request<Body>, next: Next) -> Response {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::auth::level::DashboardAuthLevel;
 
     #[test]
     fn public_paths_erkannt() {
@@ -225,5 +230,18 @@ mod tests {
         assert!(!path_matches_passive_allowed("/twitch/api/v2/overview"));
         assert!(!path_matches_passive_allowed("/analyse"));
         assert!(!path_matches_passive_allowed(""));
+    }
+
+    #[test]
+    fn nur_effektive_partner_auth_wird_statusgeprueft() {
+        let partner = DashboardAuthLevel::Partner {
+            twitch_login: "earlysalty".into(),
+            twitch_user_id: "42".into(),
+            display_name: "EarlySalty".into(),
+        };
+
+        assert_eq!(partner_identity(&partner), Some(("earlysalty", "42")));
+        assert_eq!(partner_identity(&DashboardAuthLevel::admin()), None);
+        assert_eq!(partner_identity(&DashboardAuthLevel::None), None);
     }
 }

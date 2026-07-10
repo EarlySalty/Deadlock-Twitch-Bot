@@ -32,9 +32,6 @@ use serde_json::{Value, json};
 use sqlx::{PgPool, Row, postgres::PgRow};
 
 use crate::auth::level::{DashboardAuthLevel, is_local_request};
-use crate::handlers::auth_status::{
-    ADMIN_DEFAULT_STREAMER, admin_mode_header_active, is_public_dashboard,
-};
 
 // ── Konstanten (Python api_v2.py:466-492) ────────────────────────────────────
 
@@ -128,7 +125,6 @@ struct ResolvedIdentity {
 fn resolve_identity(
     auth: &DashboardAuthLevel,
     streamer_override: &Option<String>,
-    public_user_view: bool,
 ) -> Result<ResolvedIdentity, Response> {
     let override_login = normalize_override(streamer_override);
 
@@ -218,19 +214,6 @@ fn resolve_identity(
             })
         }
         DashboardAuthLevel::Admin { actor: None } => {
-            if public_user_view {
-                if !override_login.is_empty() && override_login != ADMIN_DEFAULT_STREAMER {
-                    return Err(forbidden_json(
-                        "streamer_override_requires_admin",
-                        "Only admin sessions may view another streamer's profile.",
-                    ));
-                }
-                return Ok(ResolvedIdentity {
-                    twitch_login: ADMIN_DEFAULT_STREAMER.to_string(),
-                    twitch_user_id: String::new(),
-                    display_name: ADMIN_DEFAULT_STREAMER.to_string(),
-                });
-            }
             if override_login.is_empty() {
                 // Python: keine Twitch-Session vorhanden → auth_required/streamer_session_required.
                 return Err(unauthorized_json(
@@ -328,7 +311,6 @@ pub async fn get_handler(
     auth: DashboardAuthLevel,
     State(pool): State<PgPool>,
     Query(query): Query<InternalHomeQuery>,
-    headers: HeaderMap,
 ) -> Response {
     // days parsen + clamp 1..=365 (api_v2.py:2015-2020)
     let days = query
@@ -340,14 +322,11 @@ pub async fn get_handler(
         .unwrap_or(DEFAULT_DAYS)
         .clamp(1, 365);
 
-    let public_user_view = matches!(auth, DashboardAuthLevel::Admin { actor: None })
-        && is_public_dashboard(&headers)
-        && !admin_mode_header_active(&headers);
-    let identity = match resolve_identity(&auth, &query.streamer, public_user_view) {
+    let identity = match resolve_identity(&auth, &query.streamer) {
         Ok(id) => id,
         Err(resp) => return resp,
     };
-    let has_admin_access = auth.is_privileged() && !public_user_view;
+    let has_admin_access = auth.is_privileged();
 
     // Identity-Resolve (DB): twitch_streamer_identities (internal_home.py:403-446)
     let (resolved_login, resolved_user_id, discord_connected) =
@@ -2491,22 +2470,21 @@ mod identity_tests {
 
     #[test]
     fn partner_eigener_display_name() {
-        let id = resolve_identity(&partner("nani", "NaNiAdm"), &None, false).unwrap();
+        let id = resolve_identity(&partner("nani", "NaNiAdm"), &None).unwrap();
         assert_eq!(id.twitch_login, "nani");
         assert_eq!(id.display_name, "NaNiAdm");
     }
 
     #[test]
     fn partner_leerer_display_name_faellt_auf_login() {
-        let id = resolve_identity(&partner("nani", "  "), &None, false).unwrap();
+        let id = resolve_identity(&partner("nani", "  "), &None).unwrap();
         assert_eq!(id.display_name, "nani");
     }
 
     #[test]
     fn partner_eigener_override_behaelt_display_name() {
         // Override == eigener Login → echter display_name bleibt erhalten.
-        let id =
-            resolve_identity(&partner("nani", "NaNiAdm"), &Some("NANI".into()), false).unwrap();
+        let id = resolve_identity(&partner("nani", "NaNiAdm"), &Some("NANI".into())).unwrap();
         assert_eq!(id.twitch_login, "nani");
         assert_eq!(id.display_name, "NaNiAdm");
     }
@@ -2520,7 +2498,7 @@ mod identity_tests {
             }),
         };
 
-        let id = resolve_identity(&auth, &None, false).unwrap();
+        let id = resolve_identity(&auth, &None).unwrap();
 
         assert_eq!(id.twitch_login, "earlysalty");
         assert_eq!(id.twitch_user_id, "42");
@@ -2536,34 +2514,11 @@ mod identity_tests {
             }),
         };
 
-        let id = resolve_identity(&auth, &Some("AndererPartner".into()), false).unwrap();
+        let id = resolve_identity(&auth, &Some("AndererPartner".into())).unwrap();
 
         assert_eq!(id.twitch_login, "andererpartner");
         assert!(id.twitch_user_id.is_empty());
         assert_eq!(id.display_name, "andererpartner");
-    }
-
-    #[test]
-    fn discord_admin_in_public_user_view_nutzt_owner_identitaet() {
-        let id = resolve_identity(&DashboardAuthLevel::admin(), &None, true).unwrap();
-
-        assert_eq!(id.twitch_login, "earlysalty");
-        assert!(id.twitch_user_id.is_empty());
-        assert_eq!(id.display_name, "earlysalty");
-    }
-
-    #[test]
-    fn discord_admin_in_public_user_view_darf_keinen_fremden_override_nutzen() {
-        let result = resolve_identity(
-            &DashboardAuthLevel::admin(),
-            &Some("andererpartner".into()),
-            true,
-        );
-        let Err(response) = result else {
-            panic!("fremder Override wurde akzeptiert");
-        };
-
-        assert_eq!(response.status(), StatusCode::FORBIDDEN);
     }
 }
 
