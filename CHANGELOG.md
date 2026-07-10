@@ -1,3 +1,11 @@
+## #348 — Der Bot erkennt Fragen nach Deadlock-Zugang wieder
+
+**Problem:** Wer im Chat gefragt hat, wie man das Spiel überhaupt spielen kann oder wie man an eine Einladung kommt, bekam keine Antwort. Die frühere automatische Erkennung sprang zu oft auf harmlose Sätze an und wurde deshalb abgeschaltet. Ersetzt wurde sie durch einen Befehl, den neue Zuschauer naturgemäß nicht kennen.
+
+**Änderung:** Solche Fragen werden wieder erkannt, aber nicht mehr allein per Stichwort. Ein grober Vorfilter sortiert vor, danach entscheidet die KI des Bots. Bei einem klaren Ja kommt der Weg zum Invite, bei Unsicherheit fragt der Bot einmal kurz nach, sonst bleibt er still.
+
+**Aktuelles Verhalten:** Neue Zuschauer mit einer echten Zugangsfrage bekommen den Hinweis auf den Discord und den Tipp, ihren Steam-Freundescode gleich mitzuschicken. Das greift nur in Kanälen, die live Deadlock streamen. Pro Kanal liegen mindestens zwei Minuten zwischen zwei Antworten, pro Person eine Stunde. Antwortet die KI gar nicht, sagt der Bot lieber nichts, und Streamer mit abgeschalteter Bot-Werbung bekommen den Hinweis nie.
+
 ## #347 — Neue Promo-Texte für den Community-Discord
 
 **Problem:** Die Discord-Hinweise im Chat zogen aus einem recht kleinen Satz an Formulierungen. Wer öfter im Stream war, kannte sie irgendwann alle auswendig.
