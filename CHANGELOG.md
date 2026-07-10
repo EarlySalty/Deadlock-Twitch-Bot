@@ -1,3 +1,11 @@
+## #348 — Befehle im Blick, und nur wenn Deadlock läuft
+
+**Problem:** `!commands` hat bloß einen Link gepostet, statt zu zeigen, was der Bot kann. Und die Deadlock-Befehle liefen in jeder Kategorie, auch wenn gerade gar nicht Deadlock lief.
+
+**Änderung:** `!commands` listet die Befehle jetzt direkt im Chat, mit Link zur vollen Übersicht. `!discord` ist neu und postet den Einladungslink. Jeder Befehl entscheidet außerdem selbst, ob er eine laufende Deadlock-Kategorie braucht.
+
+**Aktuelles Verhalten:** Stats-Befehle wie `!rank` oder `!lastmatch` antworten nur, wenn der Kanal gerade Deadlock streamt, sonst bleibt der Bot still. `!commands`, `!help` und `!ping` gehen immer, ebenso die Mod-Befehle und das Abmelden vom Engagement-Tracking.
+
 ## #347 — Neue Promo-Texte für den Community-Discord
 
 **Problem:** Die Discord-Hinweise im Chat zogen aus einem recht kleinen Satz an Formulierungen. Wer öfter im Stream war, kannte sie irgendwann alle auswendig.
