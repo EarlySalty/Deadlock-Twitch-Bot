@@ -632,6 +632,16 @@ impl ModerationEngine {
         duration_secs: u32,
         reason_text: &str,
     ) -> bool {
+        // Safe-List: Timeout ist ebenfalls Moderation. Guard vor dem Delete.
+        if crate::safe_list::is_safe(Some(chatter_id), "") {
+            warn!(
+                chatter_id = %chatter_id,
+                reason = %reason_text,
+                "Timeout gegen Safe-List-Konto unterdrückt"
+            );
+            return false;
+        }
+
         if let Err(error) = self.api.delete_message(broadcaster_id, message_id).await {
             warn!("Timeout-Cleanup Delete-Fehler: {error}");
         }
@@ -1200,6 +1210,7 @@ mod tests {
         ban_calls: AtomicUsize,
         delete_calls: AtomicUsize,
         send_calls: AtomicUsize,
+        timeout_calls: AtomicUsize,
         ban_result: Mutex<BanOutcome>,
         send_result: Mutex<Result<SendOutcome, String>>,
     }
@@ -1210,6 +1221,7 @@ mod tests {
                 ban_calls: AtomicUsize::new(0),
                 delete_calls: AtomicUsize::new(0),
                 send_calls: AtomicUsize::new(0),
+                timeout_calls: AtomicUsize::new(0),
                 ban_result: Mutex::new(result),
                 send_result: Mutex::new(Ok(SendOutcome::Sent)),
             })
@@ -1260,6 +1272,7 @@ mod tests {
             _d: u32,
             _r: &str,
         ) -> Result<BanOutcome, String> {
+            self.timeout_calls.fetch_add(1, Ordering::SeqCst);
             Ok(BanOutcome::Banned)
         }
         async fn unban_user(&self, _b: &str, _u: &str) -> Result<bool, String> {
@@ -1388,6 +1401,53 @@ mod tests {
                 safe.login
             );
         }
+    }
+
+    /// Timeout ist auch Moderation: Safe-Konten bekommen weder Timeout noch
+    /// Message-Delete. (Merge-Kritiker 2026-07-10: Pfad war ungeschützt.)
+    #[tokio::test]
+    async fn timeout_verschont_safe_konten() {
+        for safe in crate::safe_list::SAFE_ACCOUNTS {
+            let api = MockApi::with_ban_result(BanOutcome::Banned);
+            let pool = sqlx::PgPool::connect_lazy("postgres://x:x@127.0.0.1:1/x").unwrap();
+            let engine = ModerationEngine::new(api.clone(), pool);
+            let result = engine
+                .timeout_and_cleanup(
+                    "broadcast-id",
+                    safe.twitch_user_id,
+                    "msg-id",
+                    600,
+                    "Scam-Verdacht",
+                )
+                .await;
+
+            assert!(!result, "Safe-Konto {} darf kein true liefern", safe.login);
+            assert_eq!(
+                api.timeout_calls.load(Ordering::SeqCst),
+                0,
+                "Safe-Konto {} wurde getimeoutet",
+                safe.login
+            );
+            assert_eq!(
+                api.delete_calls.load(Ordering::SeqCst),
+                0,
+                "Nachricht von Safe-Konto {} wurde geloescht",
+                safe.login
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn timeout_greift_bei_fremdem_konto() {
+        let api = MockApi::with_ban_result(BanOutcome::Banned);
+        let pool = sqlx::PgPool::connect_lazy("postgres://x:x@127.0.0.1:1/x").unwrap();
+        let engine = ModerationEngine::new(api.clone(), pool);
+        let result = engine
+            .timeout_and_cleanup("broadcast-id", "999999999", "msg-id", 600, "Scam")
+            .await;
+
+        assert!(result);
+        assert_eq!(api.timeout_calls.load(Ordering::SeqCst), 1);
     }
 
     /// Der Login allein schützt nicht: fremde ID mit übernommenem Namen bannt.

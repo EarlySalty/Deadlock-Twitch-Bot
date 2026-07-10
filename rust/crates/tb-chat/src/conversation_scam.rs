@@ -1518,6 +1518,15 @@ pub async fn enforce_verdict(pool: &PgPool, api: &dyn ChatApi, verdict_id: i64) 
 /// Löst Broadcaster- und Chatter-ID auf und führt den Ban aus. Die gespeicherte
 /// Chatter-ID hat Vorrang; fehlt sie, wird sie über den Login aufgelöst.
 async fn try_ban(api: &dyn ChatApi, target: &EnforceTarget) -> bool {
+    // Safe-List: dieser Pfad bannt direkt, ohne auto_ban_and_cleanup.
+    if crate::safe_list::is_safe(target.chatter_id.as_deref(), &target.chatter_login) {
+        tracing::warn!(
+            chatter = %target.chatter_login,
+            "conversation_scam: Ban gegen Safe-List-Konto unterdrückt"
+        );
+        return false;
+    }
+
     let Some(broadcaster_id) = api
         .resolve_user_id(&target.channel_login)
         .await
@@ -1864,11 +1873,49 @@ mod tests {
         }
     }
 
+    fn enforce_target(login: &str, id: &str) -> EnforceTarget {
+        EnforceTarget {
+            channel_login: "kanal".to_string(),
+            chatter_login: login.to_string(),
+            chatter_id: Some(id.to_string()),
+            action_taken: String::new(),
+            reasoning: "Scam-Verdacht".to_string(),
+        }
+    }
+
+    /// `try_ban` bannt direkt, an `auto_ban_and_cleanup` vorbei.
+    #[tokio::test]
+    async fn try_ban_verschont_safe_konten() {
+        for safe in crate::safe_list::SAFE_ACCOUNTS {
+            let api = MockApi::resolving();
+            let target = enforce_target(safe.login, safe.twitch_user_id);
+
+            assert!(!try_ban(&api, &target).await, "Safe-Konto {}", safe.login);
+            assert!(
+                api.ban_reasons.lock().unwrap().is_empty(),
+                "Safe-Konto {} wurde gebannt",
+                safe.login
+            );
+        }
+    }
+
+    /// Gegenprobe: ohne Safe-List-Treffer bannt derselbe Pfad wirklich.
+    #[tokio::test]
+    async fn try_ban_bannt_fremdes_konto() {
+        let api = MockApi::resolving();
+        let target = enforce_target("irgendwer", "999999999");
+
+        assert!(try_ban(&api, &target).await);
+        assert_eq!(api.ban_reasons.lock().unwrap().len(), 1);
+    }
+
     struct MockApi {
         ban_result: StdMutex<BanOutcome>,
         timeout_result: StdMutex<BanOutcome>,
         ban_reasons: StdMutex<Vec<String>>,
         timeout_reasons: StdMutex<Vec<String>>,
+        /// Ergebnis von `resolve_user_id`. Default `None` (bisheriges Verhalten).
+        resolve_id: StdMutex<Option<String>>,
     }
 
     impl MockApi {
@@ -1878,7 +1925,16 @@ mod tests {
                 timeout_result: StdMutex::new(BanOutcome::Banned),
                 ban_reasons: StdMutex::new(Vec::new()),
                 timeout_reasons: StdMutex::new(Vec::new()),
+                resolve_id: StdMutex::new(None),
             }
+        }
+
+        /// Lässt `resolve_user_id` erfolgreich auflösen — nötig, damit `try_ban`
+        /// überhaupt bis zum Ban-Aufruf kommt.
+        fn resolving() -> Self {
+            let api = Self::new();
+            *api.resolve_id.lock().unwrap() = Some("broadcast-id".to_string());
+            api
         }
     }
 
@@ -1920,7 +1976,7 @@ mod tests {
             Ok(None)
         }
         async fn resolve_user_id(&self, _: &str) -> Result<Option<String>, String> {
-            Ok(None)
+            Ok(self.resolve_id.lock().unwrap().clone())
         }
         async fn bot_user_id(&self) -> String {
             "bot-id".to_string()

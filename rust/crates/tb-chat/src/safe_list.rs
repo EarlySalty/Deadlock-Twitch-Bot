@@ -6,14 +6,22 @@
 //! ausdrücklich nicht an. Sie lösen deshalb weder Auto-Ban noch
 //! Nachrichten-Löschung noch einen Crew-Guard-Alarm aus.
 //!
-//! Die Liste wirkt an genau zwei Stellen, an denen alle Ban-Pfade
-//! zusammenlaufen:
-//!   1. [`crate::moderation::ModerationEngine::auto_ban_and_cleanup`] — jeder
-//!      Ban und jedes Message-Delete aus der Chat-Pipeline.
-//!   2. `tb-internal-api` `globalban/add` — ein Safe-Konto kommt gar nicht erst
-//!      auf die globale Banliste (und damit nie in den Sweep).
+//! Die Liste wirkt vor **jeder** Moderations-Aktion (Ban, Timeout,
+//! Message-Delete). Es gibt fünf Stellen, an denen der Bot gegen einen Chatter
+//! handelt, und jede prüft [`is_safe`]:
+//!   1. [`crate::moderation::ModerationEngine::auto_ban_and_cleanup`] — Ban +
+//!      Delete für Spam, Scam und Global-Ban aus der Chat-Pipeline.
+//!   2. [`crate::moderation::ModerationEngine::timeout_and_cleanup`] — Timeout
+//!      + Delete. Ein Timeout ist ebenfalls Moderation.
+//!   3. `conversation_scam::try_ban` — bannt direkt, an (1) vorbei.
+//!   4. `pipeline::handle_strong_timeout` — timeoutet direkt, an (2) vorbei.
+//!   5. `global_ban_sweep::list_bans` — filtert die Banliste, wirkt daher auch
+//!      bei einem direkten DB-Eintrag.
 //!
 //! Zusätzlich unterdrückt [`crate::crew_guard`] jede Meldung zu diesen Konten.
+//!
+//! Wer hier einen neuen Ban-/Timeout-/Delete-Pfad ergänzt, prüft [`is_safe`]
+//! davor. Suche nach `api.ban_user`, `api.timeout_user`, `api.delete_message`.
 
 /// Ein Konto, das von automatischer Moderation ausgenommen ist.
 pub struct SafeAccount {
