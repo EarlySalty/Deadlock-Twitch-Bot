@@ -963,6 +963,8 @@ mod tests {
         }
     }
 
+    // ponytail: local test fixture tuple; a named struct would only add noise here.
+    #[allow(clippy::type_complexity)]
     fn responder(
         enabled: bool,
         url: Option<&str>,
