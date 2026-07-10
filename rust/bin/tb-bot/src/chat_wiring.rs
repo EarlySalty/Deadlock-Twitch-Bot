@@ -43,8 +43,9 @@ use tb_chat::token::BotTokenManager;
 use tb_chat::types::ChatMessageEvent;
 use tb_chat::{
     promo_invite_fallback, ChannelClassifier, ChatApi, ChatPipeline, ChatPipelineParts,
-    ChatterTracker, FunResponses, GlobalBanSweeper, GlobalChatterBanEnforcer, ModAlerter,
-    PartnerRoster, PgHelixMentionResolver, ReviewLog, SusInviteCheck,
+    ChatterTracker, FunResponses, GlobalBanSweeper, GlobalChatterBanEnforcer,
+    InviteQuestionResponder, MiniMaxInviteQuestionJudge, ModAlerter, PartnerRoster,
+    PgHelixMentionResolver, PgInviteQuestionStore, ReviewLog, SusInviteCheck,
 };
 use tb_crypto::FieldCipher;
 use tb_engagement::irc_reader::EngagementIrcReader;
@@ -699,6 +700,7 @@ pub async fn build_runtime(
             ))),
     );
 
+    let discord_link: Arc<dyn DiscordLinkPort> = Arc::new(DbDiscordLink { pool: pool.clone() });
     let mut command_engine = CommandEngine::new(
         pool.clone(),
         Arc::clone(&api),
@@ -706,7 +708,7 @@ pub async fn build_runtime(
             manual: manual_raid,
             pool: pool.clone(),
         }),
-        Arc::new(DbDiscordLink { pool: pool.clone() }),
+        Arc::clone(&discord_link),
         Arc::new(DbInvitePort { pool: pool.clone() }),
         Arc::new(DbSuperMod { pool: pool.clone() }),
         Arc::clone(&moderation) as Arc<dyn LastAutobanStore>,
@@ -764,6 +766,14 @@ pub async fn build_runtime(
         sus_invite: Arc::new(SusInviteCheck::new(pool.clone())),
         // _fun_thanks_reply_enabled ist in Python default false (bot.py Z. 190).
         fun: Arc::new(FunResponses::new(Arc::clone(&api), false)),
+        invite_question: Arc::new(InviteQuestionResponder::new(
+            Arc::clone(&api),
+            discord_link,
+            Arc::new(PgInviteQuestionStore::new(pool.clone())),
+            Arc::new(MiniMaxInviteQuestionJudge::new(
+                EngagementMinimaxClient::new(None, None, None, None),
+            )),
+        )),
         promos: Arc::clone(&promos),
         commands,
         mention_resolver: Arc::new(PgHelixMentionResolver::new(pool.clone(), Arc::clone(&api))),
@@ -2512,6 +2522,14 @@ mod chat_notification_tests {
             moderation,
             sus_invite: Arc::new(SusInviteCheck::new(pool.clone())),
             fun: Arc::new(FunResponses::new(Arc::clone(&api_trait), false)),
+            invite_question: Arc::new(InviteQuestionResponder::new(
+                Arc::clone(&api_trait),
+                Arc::new(NoopDiscordLink),
+                Arc::new(PgInviteQuestionStore::new(pool.clone())),
+                Arc::new(MiniMaxInviteQuestionJudge::new(
+                    EngagementMinimaxClient::new(None, None, None, None),
+                )),
+            )),
             promos: Arc::new(PromoEngine::new(
                 pool.clone(),
                 Arc::clone(&api_trait),
