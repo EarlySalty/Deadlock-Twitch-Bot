@@ -32,7 +32,7 @@ const UNAUTH_CACHE_TTL_SECS: u64 = 5;
 ///
 /// Wird beim Admin-Login als `adminDefaultStreamer` zurückgegeben damit das
 /// Dashboard auf den eigenen Kanal defaultet statt auf den ersten Partner.
-const ADMIN_DEFAULT_STREAMER: &str = "earlysalty";
+pub(crate) const ADMIN_DEFAULT_STREAMER: &str = "earlysalty";
 
 /// Browser-Session-Cookie für die explizit aktivierte Admin-Präsentation.
 pub(crate) const ADMIN_MODE_COOKIE: &str = "tb_admin_mode";
@@ -88,6 +88,13 @@ pub async fn auth_status_handler(
                 .await
             }
         }
+        DashboardAuthLevel::Admin { actor: None } if is_public_dashboard(&headers) => {
+            if admin_mode_header_active(&headers) {
+                admin_response("admin", true, true)
+            } else {
+                partner_response(&pool, ADMIN_DEFAULT_STREAMER, "", true, false).await
+            }
+        }
         DashboardAuthLevel::Admin { actor: None } => admin_response("admin", false, true),
         DashboardAuthLevel::Partner {
             twitch_login,
@@ -106,7 +113,7 @@ pub async fn auth_status_handler(
     }
 }
 
-fn admin_mode_header_active(headers: &HeaderMap) -> bool {
+pub(crate) fn admin_mode_header_active(headers: &HeaderMap) -> bool {
     headers
         .get(header::COOKIE)
         .and_then(|value| value.to_str().ok())
@@ -117,6 +124,13 @@ fn admin_mode_header_active(headers: &HeaderMap) -> bool {
             })
         })
         == Some("2")
+}
+
+pub(crate) fn is_public_dashboard(headers: &HeaderMap) -> bool {
+    headers
+        .get("x-dashboard-context")
+        .and_then(|value| value.to_str().ok())
+        .is_some_and(|value| value.eq_ignore_ascii_case("public"))
 }
 
 // ── Unauthentifiziert ───────────────────────────────────────────────────────
@@ -415,6 +429,42 @@ mod tests {
         assert_eq!(value["adminMode"], false);
         assert_eq!(value["level"], "partner");
         assert_eq!(value["twitchLogin"], "earlysalty");
+    }
+
+    #[tokio::test]
+    async fn discord_admin_im_public_dashboard_ohne_cookie_sieht_partner_praesentation() {
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            "x-dashboard-context",
+            axum::http::HeaderValue::from_static("public"),
+        );
+        let response = auth_status_handler(
+            DashboardAuthLevel::admin(),
+            State(unavailable_pool()),
+            headers,
+        )
+        .await;
+        let value = json_body(response).await;
+
+        assert_eq!(value["isAdmin"], false);
+        assert_eq!(value["adminEligible"], true);
+        assert_eq!(value["adminMode"], false);
+        assert_eq!(value["level"], "partner");
+        assert_eq!(value["twitchLogin"], "earlysalty");
+    }
+
+    #[tokio::test]
+    async fn discord_admin_ausserhalb_des_public_dashboard_bleibt_admin() {
+        let response = auth_status_handler(
+            DashboardAuthLevel::admin(),
+            State(unavailable_pool()),
+            HeaderMap::new(),
+        )
+        .await;
+        let value = json_body(response).await;
+
+        assert_eq!(value["isAdmin"], true);
+        assert_eq!(value["adminMode"], true);
     }
 
     #[tokio::test]

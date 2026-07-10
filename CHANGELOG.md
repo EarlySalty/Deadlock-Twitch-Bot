@@ -1,3 +1,11 @@
+## #351 — Beenden beendet auch die Discord-Admin-Ansicht
+
+**Problem:** Wer im öffentlichen Twitch-Dashboard über eine Discord-Admin-Session erkannt wurde, sah den Admin-Modus dauerhaft. Der Beenden-Button wurde vom Server mit 403 abgewiesen und wirkte deshalb ohne sichtbare Reaktion.
+
+**Änderung:** Der öffentliche Dashboard-Pfad behandelt jetzt auch diese Admin-Session als reine Berechtigung. Der Vollzugriff hängt dort ausschließlich am ausdrücklich gesetzten Admin-Modus.
+
+**Aktuelles Verhalten:** „Beenden“ entfernt den Vollzugriff sofort und zeigt den Owner-Kanal mit seinem echten Plan. Admin-Host und interne Aufrufe bleiben unverändert administrativ.
+
 ## #350 — Admin-Modus bleibt wirklich Opt-in
 
 **Problem:** Im Twitch-Dashboard konnte die Admin-Ansicht nach dem Beenden oder über einen vorgelagerten Admin-Kontext wieder aktiv wirken. Dadurch waren Inhalte entsperrt, obwohl die echte Nutzeransicht gebraucht wurde.
