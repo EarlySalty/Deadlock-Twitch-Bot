@@ -92,6 +92,7 @@ async fn make_pool(schema: &str) -> Option<PgPool> {
             twitch_user_id          TEXT,
             status                  TEXT,
             technical_pause_reason  TEXT,
+            manual_partner_opt_out  INTEGER NOT NULL DEFAULT 0,
             departnered_at          TEXT,
             admin_archived_at       TEXT,
             partnered_at            TEXT
@@ -219,8 +220,9 @@ async fn partner_pfad_e2e_auth_status_scope_und_csrf() {
     // earlysalty als Partner im Gate hinterlegen (admin-eligibel, aber ohne
     // Admin-Mode-Cookie nur Partner).
     sqlx::query(
-        "INSERT INTO twitch_partners (twitch_login, twitch_user_id, status)
-         VALUES ('earlysalty', '42', 'active')",
+        "INSERT INTO twitch_partners
+            (twitch_login, twitch_user_id, status, manual_partner_opt_out)
+         VALUES ('earlysalty', '42', 'active', 0)",
     )
     .execute(&pool)
     .await
