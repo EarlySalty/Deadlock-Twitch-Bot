@@ -28,7 +28,8 @@ entsperrte.
 Auf dem **öffentlichen Dashboard** gilt das Opt-in auch für eine vorhandene
 Discord-Admin-Session (`master_dash_session`). Ohne Modus-Cookie zeigt sie die
 echte Nutzeransicht des Owner-Kanals. Der **Admin-Host** (`admin.*`) und interne
-Aufrufe bleiben unberührt voll-Admin.
+Aufrufe bleiben unberührt voll-Admin. Ein `?streamer=`-Override auf einen
+anderen Kanal wird in der öffentlichen Nutzeransicht mit `403` abgewiesen.
 
 ## Architektur — genau ein Hebel
 

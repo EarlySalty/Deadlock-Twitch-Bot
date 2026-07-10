@@ -218,14 +218,20 @@ fn resolve_identity(
             })
         }
         DashboardAuthLevel::Admin { actor: None } => {
-            if override_login.is_empty() {
-                if public_user_view {
-                    return Ok(ResolvedIdentity {
-                        twitch_login: ADMIN_DEFAULT_STREAMER.to_string(),
-                        twitch_user_id: String::new(),
-                        display_name: ADMIN_DEFAULT_STREAMER.to_string(),
-                    });
+            if public_user_view {
+                if !override_login.is_empty() && override_login != ADMIN_DEFAULT_STREAMER {
+                    return Err(forbidden_json(
+                        "streamer_override_requires_admin",
+                        "Only admin sessions may view another streamer's profile.",
+                    ));
                 }
+                return Ok(ResolvedIdentity {
+                    twitch_login: ADMIN_DEFAULT_STREAMER.to_string(),
+                    twitch_user_id: String::new(),
+                    display_name: ADMIN_DEFAULT_STREAMER.to_string(),
+                });
+            }
+            if override_login.is_empty() {
                 // Python: keine Twitch-Session vorhanden → auth_required/streamer_session_required.
                 return Err(unauthorized_json(
                     "streamer_session_required",
@@ -2544,6 +2550,20 @@ mod identity_tests {
         assert_eq!(id.twitch_login, "earlysalty");
         assert!(id.twitch_user_id.is_empty());
         assert_eq!(id.display_name, "earlysalty");
+    }
+
+    #[test]
+    fn discord_admin_in_public_user_view_darf_keinen_fremden_override_nutzen() {
+        let result = resolve_identity(
+            &DashboardAuthLevel::admin(),
+            &Some("andererpartner".into()),
+            true,
+        );
+        let Err(response) = result else {
+            panic!("fremder Override wurde akzeptiert");
+        };
+
+        assert_eq!(response.status(), StatusCode::FORBIDDEN);
     }
 }
 
