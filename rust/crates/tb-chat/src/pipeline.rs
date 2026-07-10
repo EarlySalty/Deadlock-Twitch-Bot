@@ -16,14 +16,15 @@
 //! 7. Spam-Score + Auto-Ban (1602–1737)
 //! 8. Sus-Discord-Invite (1741–1743)
 //! 9. Fun-Responses, nur wenn Deadlock live (1745–1750)
-//! 10. Chat-Health-Tracking + Raw-Aktivität (1752–1755)
-//! 11. Engagement-AI (1757–1811) — **bewusst No-op** bis zur Engagement-Phase
-//! 12. /13. Invite/Activity-Promo, nur wenn Deadlock live (1813–1824) —
-//!     !invite läuft über den CommandEngine (Schritt 14); das Python-Gate
+//! 10. Deadlock-Zugangsfrage, nur wenn Deadlock live
+//! 11. Chat-Health-Tracking + Raw-Aktivität (1752–1755)
+//! 12. Engagement-AI (1757–1811) — **bewusst No-op** bis zur Engagement-Phase
+//! 13. /14. Invite/Activity-Promo, nur wenn Deadlock live (1813–1824) —
+//!     !invite läuft über den CommandEngine (Schritt 15); das Python-Gate
 //!     „keine Activity-Promo wenn Invite gesendet" ist über den
 //!     PROMO_IGNORE_COMMANDS-Guard abgedeckt (jede !invite-Nachricht beginnt
 //!     mit `!` und wird vom Promo-Tracking ohnehin ignoriert)
-//! 14. Command-Processing (1827)
+//! 15. Command-Processing (1827)
 //!
 //! # Observer
 //!
@@ -52,6 +53,7 @@ use crate::conversation_scam::ConversationScamGuard;
 use crate::crew_guard::CrewGuard;
 use crate::fun_responses::FunResponses;
 use crate::global_chatter_ban::GlobalChatterBanEnforcer;
+use crate::invite_question::InviteQuestionResponder;
 use crate::mention_scoring::{score_mention_patterns, MentionResolver, WHITELISTED_BOTS};
 use crate::moderation::{
     AutoBanRequest, ModerationEngine, BAN_REASON_GLOBAL, BAN_REASON_SPAM, NOTICE_GLOBAL_BAN,
@@ -482,6 +484,7 @@ pub struct ChatPipelineParts {
     pub moderation: Arc<ModerationEngine>,
     pub sus_invite: Arc<SusInviteCheck>,
     pub fun: Arc<FunResponses>,
+    pub invite_question: Arc<InviteQuestionResponder>,
     pub promos: Arc<PromoEngine>,
     pub commands: Arc<CommandEngine>,
     pub mention_resolver: Arc<dyn MentionResolver>,
@@ -550,7 +553,10 @@ impl ChatPipeline {
                 "known_bot.commands",
                 &channel_login,
                 &chatter_login,
-                async move { commands.handle(&event_for_step).await },
+                // Deadlock-Gate hart auf `false`: die Kanal-Klassifizierung läuft erst in
+                // Schritt 3, hier ist `is_deadlock_live` noch unbekannt. Ein Bot aus der
+                // Whitelist bekommt damit nur die ungegateten Befehle (!ping, !help, …).
+                async move { commands.handle(&event_for_step, false).await },
             )
             .await;
             return false;
@@ -782,9 +788,25 @@ impl ChatPipeline {
                 fun.maybe_respond(&event_for_step, &fun_channel).await;
             })
             .await;
+
+            // Schritt 10: Deadlock-Zugangsfrage (Regex → KI → Antwort/Rückfrage)
+            let invite_question = Arc::clone(&p.invite_question);
+            let event_for_step = event.clone();
+            let invite_channel = channel_login.clone();
+            run_pipeline_step(
+                "invite_question",
+                &channel_login,
+                &chatter_login,
+                async move {
+                    invite_question
+                        .maybe_respond(&event_for_step, &invite_channel)
+                        .await;
+                },
+            )
+            .await;
         }
 
-        // Schritt 10: Chat-Health-Tracking + Raw-Aktivität (Z. 1752–1755 + 2173)
+        // Schritt 11: Chat-Health-Tracking + Raw-Aktivität (Z. 1752–1755 + 2173)
         let tracker = Arc::clone(&p.tracker);
         let event_for_step = event.clone();
         run_pipeline_step("track", &channel_login, &chatter_login, async move {
@@ -803,11 +825,11 @@ impl ChatPipeline {
         )
         .await;
 
-        // Schritt 11: Engagement-AI — No-op bis Engagement-Phase (Modul-Doku).
+        // Schritt 12: Engagement-AI — No-op bis Engagement-Phase (Modul-Doku).
         let should_spawn_engagement = true;
 
-        // Schritt 12/13: Activity-Promo, nur wenn Deadlock live (Z. 1813–1824).
-        // !invite wird vom CommandEngine (Schritt 14) bedient; der
+        // Schritt 13/14: Activity-Promo, nur wenn Deadlock live (Z. 1813–1824).
+        // !invite wird vom CommandEngine (Schritt 15) bedient; der
         // PROMO_IGNORE_COMMANDS-Guard deckt das sent_invite-Gate ab.
         if class.is_deadlock_live {
             let promos = Arc::clone(&p.promos);
@@ -823,11 +845,12 @@ impl ChatPipeline {
             .await;
         }
 
-        // Schritt 14: Command-Processing — immer am Ende (Z. 1827)
+        // Schritt 15: Command-Processing — immer am Ende; Deadlock-Gate pro Command.
         let commands = Arc::clone(&p.commands);
         let event_for_step = event.clone();
+        let deadlock_live = class.is_deadlock_live;
         run_pipeline_step("commands", &channel_login, &chatter_login, async move {
-            commands.handle(&event_for_step).await;
+            commands.handle(&event_for_step, deadlock_live).await;
         })
         .await;
         should_spawn_engagement
@@ -1284,6 +1307,13 @@ mod tests {
         }
     }
 
+    #[async_trait::async_trait]
+    impl crate::invite_question::InviteQuestionInviteUrlPort for NoopDiscordLink {
+        async fn invite_url(&self, _channel_login: &str) -> Result<Option<String>, String> {
+            Ok(None)
+        }
+    }
+
     struct NoopInvite;
 
     #[async_trait::async_trait]
@@ -1437,6 +1467,18 @@ mod tests {
             moderation,
             sus_invite: Arc::new(SusInviteCheck::new(pool.clone())),
             fun: Arc::new(FunResponses::new(Arc::clone(&api_trait), false)),
+            invite_question: Arc::new(crate::invite_question::InviteQuestionResponder::new(
+                Arc::clone(&api_trait),
+                Arc::new(NoopDiscordLink),
+                Arc::new(crate::invite_question::PgInviteQuestionStore::new(
+                    pool.clone(),
+                )),
+                Arc::new(crate::invite_question::MiniMaxInviteQuestionJudge::new(
+                    EngagementMinimaxClient::new(None, None, None, None),
+                )),
+                None,
+                None,
+            )),
             promos: Arc::new(PromoEngine::new(
                 pool.clone(),
                 Arc::clone(&api_trait),

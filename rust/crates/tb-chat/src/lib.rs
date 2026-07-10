@@ -32,6 +32,7 @@ pub mod crew_guard;
 pub mod fun_responses;
 pub mod global_ban_sweep;
 pub mod global_chatter_ban;
+pub mod invite_question;
 pub mod lurker_policy;
 pub mod mention_scoring;
 pub mod moderation;
@@ -69,6 +70,11 @@ pub use crew_guard::{
 pub use fun_responses::FunResponses;
 pub use global_ban_sweep::{GlobalBanSweeper, PartnerRoster};
 pub use global_chatter_ban::GlobalChatterBanEnforcer;
+pub use invite_question::{
+    InviteQuestionInviteUrlPort, InviteQuestionJudge, InviteQuestionJudgeInput,
+    InviteQuestionResponder, InviteQuestionRollup, InviteQuestionStore, InviteQuestionVerdict,
+    InviteQuestionVerdictKind, MiniMaxInviteQuestionJudge, PgInviteQuestionStore,
+};
 pub use lurker_policy::{
     is_passive_lurker_channel, should_attempt_runtime_heal, PASSIVE_LURKER_DETAIL,
     PASSIVE_LURKER_STATE,
@@ -83,8 +89,8 @@ pub use pipeline::{
     SCAM_PITCH_TIMEOUT_REASON,
 };
 pub use promos::{
-    NoopSuppressionCheck, PartnerChannelCheck, PresetPicker, PromoEngine, RandomPresetPicker,
-    StaticInviteResolver, promo_invite_fallback, DEFAULT_PROMO_DISCORD_INVITE,
+    promo_invite_fallback, NoopSuppressionCheck, PartnerChannelCheck, PresetPicker, PromoEngine,
+    RandomPresetPicker, StaticInviteResolver, DEFAULT_PROMO_DISCORD_INVITE,
 };
 pub use safe_list::{is_safe as is_safe_account, SafeAccount, SAFE_ACCOUNTS};
 pub use scam_pitch::{AccountAgePort, PitchDecision, ScamPitchDetector, SpamAiReviewer};

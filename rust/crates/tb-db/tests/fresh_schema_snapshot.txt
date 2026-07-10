@@ -149,6 +149,16 @@ internal_home_changelog|created_at|timestamp with time zone|NO|CURRENT_TIMESTAMP
 internal_home_changelog|entry_date|date|NO|CURRENT_DATE
 internal_home_changelog|id|bigint|NO|nextval('internal_home_changelog_id_seq'::regclass)
 internal_home_changelog|title|text|NO|''::text
+minimax_usage|id|bigint|NO|nextval('minimax_usage_id_seq'::regclass)
+minimax_usage|meta|text|YES|
+minimax_usage|model|text|YES|
+minimax_usage|purpose|text|YES|
+minimax_usage|source|text|NO|
+minimax_usage|success|bigint|YES|1
+minimax_usage|tokens_in|bigint|YES|0
+minimax_usage|tokens_out|bigint|YES|0
+minimax_usage|total|bigint|YES|0
+minimax_usage|ts|text|NO|
 oauth_state_tokens|consumed_at|timestamp with time zone|YES|
 oauth_state_tokens|created_at|timestamp with time zone|YES|CURRENT_TIMESTAMP
 oauth_state_tokens|expires_at|timestamp with time zone|NO|
@@ -266,6 +276,11 @@ tb_chat_autoban_log|chatter_id|text|NO|
 tb_chat_autoban_log|chatter_login|text|NO|
 tb_chat_autoban_log|content|text|YES|
 tb_chat_autoban_log|id|bigint|NO|nextval('tb_chat_autoban_log_id_seq'::regclass)
+tb_schema_ownership|component|text|NO|
+tb_schema_ownership|details_json|jsonb|NO|'{}'::jsonb
+tb_schema_ownership|marker_version|integer|NO|
+tb_schema_ownership|schema_owner|text|NO|
+tb_schema_ownership|updated_at|timestamp with time zone|NO|now()
 title_generator_insights|generated_at|timestamp with time zone|NO|now()
 title_generator_insights|id|integer|NO|nextval('title_generator_insights_id_seq'::regclass)
 title_generator_insights|patterns|text|YES|
@@ -636,6 +651,9 @@ twitch_follow_events|follower_login|text|NO|
 twitch_follow_events|id|bigint|NO|nextval('twitch_follow_events_id_seq'::regclass)
 twitch_follow_events|streamer_login|text|NO|
 twitch_follow_events|twitch_user_id|text|NO|
+twitch_global_ban_full_sweep_state|id|boolean|NO|true
+twitch_global_ban_full_sweep_state|last_run_day|date|NO|
+twitch_global_ban_full_sweep_state|updated_at|timestamp with time zone|NO|now()
 twitch_global_ban_sweep_due|broadcaster_id|text|NO|
 twitch_global_ban_sweep_due|broadcaster_login|text|NO|
 twitch_global_ban_sweep_due|run_after|timestamp with time zone|NO|

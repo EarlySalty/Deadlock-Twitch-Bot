@@ -43,8 +43,9 @@ use tb_chat::token::BotTokenManager;
 use tb_chat::types::ChatMessageEvent;
 use tb_chat::{
     promo_invite_fallback, ChannelClassifier, ChatApi, ChatPipeline, ChatPipelineParts,
-    ChatterTracker, FunResponses, GlobalBanSweeper, GlobalChatterBanEnforcer, ModAlerter,
-    PartnerRoster, PgHelixMentionResolver, ReviewLog, SusInviteCheck,
+    ChatterTracker, FunResponses, GlobalBanSweeper, GlobalChatterBanEnforcer,
+    InviteQuestionInviteUrlPort, InviteQuestionResponder, MiniMaxInviteQuestionJudge, ModAlerter,
+    PartnerRoster, PgHelixMentionResolver, PgInviteQuestionStore, ReviewLog, SusInviteCheck,
 };
 use tb_crypto::FieldCipher;
 use tb_engagement::irc_reader::EngagementIrcReader;
@@ -699,6 +700,7 @@ pub async fn build_runtime(
             ))),
     );
 
+    let discord_link: Arc<dyn DiscordLinkPort> = Arc::new(DbDiscordLink { pool: pool.clone() });
     let mut command_engine = CommandEngine::new(
         pool.clone(),
         Arc::clone(&api),
@@ -706,7 +708,7 @@ pub async fn build_runtime(
             manual: manual_raid,
             pool: pool.clone(),
         }),
-        Arc::new(DbDiscordLink { pool: pool.clone() }),
+        Arc::clone(&discord_link),
         Arc::new(DbInvitePort { pool: pool.clone() }),
         Arc::new(DbSuperMod { pool: pool.clone() }),
         Arc::clone(&moderation) as Arc<dyn LastAutobanStore>,
@@ -764,6 +766,16 @@ pub async fn build_runtime(
         sus_invite: Arc::new(SusInviteCheck::new(pool.clone())),
         // _fun_thanks_reply_enabled ist in Python default false (bot.py Z. 190).
         fun: Arc::new(FunResponses::new(Arc::clone(&api), false)),
+        invite_question: Arc::new(InviteQuestionResponder::new(
+            Arc::clone(&api),
+            Arc::new(DbInviteUrlWithFallback { pool: pool.clone() }),
+            Arc::new(PgInviteQuestionStore::new(pool.clone())),
+            Arc::new(MiniMaxInviteQuestionJudge::new(
+                EngagementMinimaxClient::new(None, None, None, None),
+            )),
+            Some(Arc::clone(&promos) as Arc<dyn tb_chat::commands::PromoBlockCheck>),
+            Some(Arc::clone(&promos) as Arc<dyn tb_chat::commands::InviteReplyNotifier>),
+        )),
         promos: Arc::clone(&promos),
         commands,
         mention_resolver: Arc::new(PgHelixMentionResolver::new(pool.clone(), Arc::clone(&api))),
@@ -1890,6 +1902,33 @@ impl DiscordLinkPort for DbDiscordLink {
     }
 }
 
+/// Invite-Question — URL wie `!invite`: Streamer-Invite, sonst Env-Fallback.
+struct DbInviteUrlWithFallback {
+    pool: PgPool,
+}
+
+#[async_trait::async_trait]
+impl InviteQuestionInviteUrlPort for DbInviteUrlWithFallback {
+    async fn invite_url(&self, channel_login: &str) -> Result<Option<String>, String> {
+        let row: Option<(String,)> = sqlx::query_as(
+            "SELECT invite_url FROM twitch_streamer_invites \
+             WHERE LOWER(streamer_login) = $1 LIMIT 1",
+        )
+        .bind(channel_login)
+        .fetch_optional(&self.pool)
+        .await
+        .map_err(|e| e.to_string())?;
+        Ok(row
+            .map(|(url,)| url)
+            .filter(|url| !url.trim().is_empty())
+            .or_else(|| {
+                std::env::var(PROMO_DISCORD_INVITE_ENV)
+                    .ok()
+                    .filter(|url| !url.trim().is_empty())
+            }))
+    }
+}
+
 /// !invite — Antwortzeile, Port der chat_command.rs-Logik (Deadlock-live-Gate
 /// + streamer-spezifischer Invite mit Env-Fallback).
 struct DbInvitePort {
@@ -2430,6 +2469,13 @@ mod chat_notification_tests {
         }
     }
 
+    #[async_trait::async_trait]
+    impl InviteQuestionInviteUrlPort for NoopDiscordLink {
+        async fn invite_url(&self, _channel_login: &str) -> Result<Option<String>, String> {
+            Ok(None)
+        }
+    }
+
     struct NoopInvite;
 
     #[async_trait::async_trait]
@@ -2486,6 +2532,11 @@ mod chat_notification_tests {
         let api_trait: Arc<dyn ChatApi> = api;
         let http = reqwest::Client::new();
         let moderation = Arc::new(ModerationEngine::new(Arc::clone(&api_trait), pool.clone()));
+        let promos = Arc::new(PromoEngine::new(
+            pool.clone(),
+            Arc::clone(&api_trait),
+            Arc::new(tb_chat::NoopSuppressionCheck),
+        ));
         ChatPipeline::new(ChatPipelineParts {
             bot_user_id: "bot-id".to_string(),
             api: Arc::clone(&api_trait),
@@ -2512,11 +2563,17 @@ mod chat_notification_tests {
             moderation,
             sus_invite: Arc::new(SusInviteCheck::new(pool.clone())),
             fun: Arc::new(FunResponses::new(Arc::clone(&api_trait), false)),
-            promos: Arc::new(PromoEngine::new(
-                pool.clone(),
+            invite_question: Arc::new(InviteQuestionResponder::new(
                 Arc::clone(&api_trait),
-                Arc::new(tb_chat::NoopSuppressionCheck),
+                Arc::new(NoopDiscordLink),
+                Arc::new(PgInviteQuestionStore::new(pool.clone())),
+                Arc::new(MiniMaxInviteQuestionJudge::new(
+                    EngagementMinimaxClient::new(None, None, None, None),
+                )),
+                Some(Arc::clone(&promos) as Arc<dyn tb_chat::commands::PromoBlockCheck>),
+                Some(Arc::clone(&promos) as Arc<dyn tb_chat::commands::InviteReplyNotifier>),
             )),
+            promos,
             commands: Arc::new(CommandEngine::new(
                 pool,
                 Arc::clone(&api_trait),
