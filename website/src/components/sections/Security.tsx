@@ -101,9 +101,9 @@ export function Security() {
               <div
                 className="rounded-xl p-4 font-mono text-[12px] leading-relaxed break-all select-all space-y-2"
                 style={{
-                  background: "#0a1722",
+                  background: "var(--theme-token-demo-bg, #0a1722)",
                   border: "1px solid var(--color-border)",
-                  color: "#5fd4cf",
+                  color: "var(--theme-token-demo-text, #5fd4cf)",
                 }}
               >
                 <div>

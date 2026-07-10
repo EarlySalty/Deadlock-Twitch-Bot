@@ -294,11 +294,14 @@ const MINIMAX_TIMEOUT_SEC: u64 = 5;
 const PROMO_STREAM_START_DELAY_MIN: u64 = 10;
 
 // ---------------------------------------------------------------------------
-// Promo-Texte — exakt aus constants.py:114–152
+// Promo-Texte — Ursprung constants.py:114–152, seitdem erweitert
 // ---------------------------------------------------------------------------
 
 /// Standard-Promo-Texte, kategorisiert. Placeholder `{invite}` wird ersetzt.
 /// Port von PROMO_MESSAGES_CATEGORIZED (constants.py).
+///
+/// Kategorie = Routing, nicht nur Ordnung: `generic`/`hype` fehlen im
+/// `chat_activity`-Pool (siehe [`activity_promo_messages`]).
 fn promo_messages_generic() -> Vec<&'static str> {
     vec![
         "Wir haben einen Discord! Komm vorbei, falls du dich mit anderen Deadlock-Spielern vernetzen willst: {invite}",
@@ -327,6 +330,9 @@ fn promo_messages_community() -> Vec<&'static str> {
         "Community-Events, Inhouses, Drafts — alles auf Discord: {invite}",
         "Falls ihr Deadlock-Mates sucht: {invite}",
         "Unsere Community wächst — kommt vorbei: {invite}",
+        "Sei nicht nur während des Streams Teil der Community, komm auf unseren Discord: {invite}",
+        "Der Stream geht irgendwann offline, die Community nicht: {invite}",
+        "Community ist mehr als der Chat hier. Wir sind auch zwischen den Streams da: {invite}",
     ]
 }
 
@@ -346,7 +352,7 @@ fn promo_messages_hype() -> Vec<&'static str> {
     ]
 }
 
-/// Alle Standard-Promo-Texte kombiniert (PROMO_MESSAGES, 22 Einträge gesamt).
+/// Alle Standard-Promo-Texte kombiniert (PROMO_MESSAGES, 25 Einträge gesamt).
 fn all_promo_messages() -> Vec<&'static str> {
     let mut all = Vec::new();
     all.extend(promo_messages_generic());
@@ -2478,6 +2484,29 @@ mod tests {
     use crate::types::SendOutcome;
     use std::sync::atomic::{AtomicUsize, Ordering};
     use tokio::sync::Mutex as TokioMutex;
+
+    /// Ein Pool-Text ohne `{invite}` wird still ohne Link gepostet, statt zu
+    /// scheitern. Doppelte Texte verzerren zusätzlich die Zufallsauswahl und
+    /// hebeln den Anti-Repeat-Filter aus (der nur auf Textgleichheit prüft).
+    #[test]
+    fn jeder_promo_text_traegt_den_invite_platzhalter_und_ist_einzigartig() {
+        let alle = all_promo_messages();
+        for text in &alle {
+            assert!(text.contains("{invite}"), "Promo ohne Invite-Link: {text}");
+        }
+        let unique: std::collections::HashSet<_> = alle.iter().collect();
+        assert_eq!(unique.len(), alle.len(), "doppelter Promo-Text im Pool");
+    }
+
+    /// Kategorie ist Routing: `community` muss im `chat_activity`-Pool landen,
+    /// sonst laufen die Texte nur bei generischen Anlässen.
+    #[test]
+    fn community_texte_liegen_im_chat_activity_pool() {
+        let activity = activity_promo_messages();
+        for text in promo_messages_community() {
+            assert!(activity.contains(&text), "community-Text fehlt: {text}");
+        }
+    }
 
     #[test]
     fn promo_invite_fallback_nutzt_default_bei_fehlender_oder_leerer_config() {

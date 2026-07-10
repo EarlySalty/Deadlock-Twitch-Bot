@@ -1,0 +1,54 @@
+/*
+ * Streamer-Seite v2 — Teal-Gold-Theme.
+ * Gleiche App wie v1; dieses Stylesheet biegt nur die Farb-Tokens auf die
+ * dl-brand-Palette der Hauptseite/Coaching-Seite um (Gold + Teal auf warmem Ink).
+ * Referenziert die dl-brand-Variablen aus /brand/tokens.css mit Hex-Fallbacks.
+ * Unlayered :root gewinnt gegen die @theme-Tokens aus index.css (@layer theme).
+ */
+:root {
+  --color-bg: #1c150d;
+  --color-background: #241c11;
+  --color-card: #2c2318;
+  --color-card-hover: #352a1b;
+  --color-primary: var(--gold, #c8a86b);
+  --color-primary-hover: var(--gold-bright, #efd49d);
+  --color-accent: var(--teal, #55978f);
+  --color-accent-hover: #6fb3aa;
+  --color-danger: var(--rust-bright, #dd6a4d);
+  --color-secondary: var(--bone-dim, #b7aa91);
+  --color-text-primary: var(--bone, #ece0c8);
+  --color-text-secondary: var(--bone-dim, #b7aa91);
+  --color-border: var(--line, rgba(201, 168, 106, 0.24));
+  --color-border-hover: var(--line-strong, rgba(201, 168, 106, 0.52));
+
+  /* Hardcodes in Komponenten lesen diese Vars mit v1-Fallback */
+  --theme-headline-gradient: linear-gradient(135deg, var(--gold-bright, #efd49d), var(--gold, #c8a86b) 45%, var(--teal, #55978f));
+  --theme-titlebar-bg: #352a1b;
+  --theme-chatbot-bg: #241c11f2;
+  --theme-token-demo-bg: #1c150d;
+  --theme-token-demo-text: var(--teal, #55978f);
+}
+
+body {
+  background:
+    radial-gradient(1200px 520px at 90% -10%, rgba(201, 168, 106, 0.14), transparent 65%),
+    radial-gradient(900px 460px at 12% -20%, rgba(85, 151, 143, 0.12), transparent 60%),
+    linear-gradient(180deg, #271f12, #241c11 45%, #1c150d);
+}
+
+.glass {
+  background: rgba(59, 47, 30, 0.72);
+}
+
+.panel-card {
+  background: linear-gradient(160deg, rgba(59, 47, 30, 0.92), rgba(44, 35, 24, 0.92));
+}
+
+::-webkit-scrollbar-track { background: #1c150d; }
+::-webkit-scrollbar-thumb {
+  background: linear-gradient(180deg, #4a3b24, #5c4a2c);
+  border: 2px solid #1c150d;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: linear-gradient(180deg, #5c4a2c, #6f5a36);
+}

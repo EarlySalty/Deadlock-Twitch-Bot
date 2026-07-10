@@ -123,7 +123,7 @@ export function SiteChatbot() {
         <section
           role="dialog"
           aria-label="Hilfe zum Twitch-Bot"
-          className="mb-3 flex h-[min(620px,calc(100vh-7rem))] w-[calc(100vw-2.5rem)] flex-col overflow-hidden rounded-2xl border border-border bg-[#091923]/95 shadow-2xl backdrop-blur-xl sm:w-[410px]"
+          className="mb-3 flex h-[min(620px,calc(100vh-7rem))] w-[calc(100vw-2.5rem)] flex-col overflow-hidden rounded-2xl border border-border bg-[color:var(--theme-chatbot-bg,#091923f2)] shadow-2xl backdrop-blur-xl sm:w-[410px]"
         >
           <header className="flex items-center justify-between border-b border-border px-5 py-4">
             <div className="flex items-center gap-3">
