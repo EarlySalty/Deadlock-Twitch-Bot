@@ -859,17 +859,22 @@ impl ChatPipeline {
         let invite_question = Arc::clone(&p.invite_question);
         let event_for_step = event.clone();
         let invite_channel = channel_login.to_string();
-        run_pipeline_step(
+        let invite_sent = run_pipeline_step(
             "invite_question",
             channel_login,
             chatter_login,
             async move {
                 invite_question
                     .maybe_respond(&event_for_step, &invite_channel)
-                    .await;
+                    .await
             },
         )
-        .await;
+        .await
+        .unwrap_or(false);
+
+        if invite_sent {
+            return;
+        }
 
         // Schritt 10b: LFG-Mitspieler-Pitch (Regex → KI → Discord-Link)
         let lfg_pitch = Arc::clone(&p.lfg_pitch);
@@ -1383,6 +1388,40 @@ mod tests {
         }
     }
 
+    struct NewcomerInviteStore;
+
+    #[async_trait::async_trait]
+    impl crate::invite_question::InviteQuestionStore for NewcomerInviteStore {
+        async fn rollup(
+            &self,
+            _channel_login: &str,
+            _chatter_login: &str,
+        ) -> Result<Option<crate::invite_question::InviteQuestionRollup>, String> {
+            Ok(Some(crate::invite_question::InviteQuestionRollup {
+                total_messages: 1,
+                total_sessions: 1,
+                is_first_time_streamer: false,
+            }))
+        }
+    }
+
+    struct AlwaysYesInviteJudge;
+
+    #[async_trait::async_trait]
+    impl crate::invite_question::InviteQuestionJudge for AlwaysYesInviteJudge {
+        async fn judge(
+            &self,
+            _input: crate::invite_question::InviteQuestionJudgeInput,
+        ) -> crate::invite_question::InviteQuestionVerdict {
+            crate::invite_question::InviteQuestionVerdict {
+                verdict: crate::invite_question::InviteQuestionVerdictKind::Yes,
+                confidence: 0.9,
+                reasoning: "test".to_string(),
+                source: crate::invite_question::InviteQuestionVerdictSource::Model,
+            }
+        }
+    }
+
     struct NoopInvite;
 
     #[async_trait::async_trait]
@@ -1579,11 +1618,16 @@ mod tests {
         })
     }
 
-    fn pipeline_for_lfg_detector(api: Arc<RecordingChatApi>, pool: PgPool) -> ChatPipeline {
+    fn pipeline_for_lfg_detector(
+        api: Arc<RecordingChatApi>,
+        pool: PgPool,
+    ) -> (ChatPipeline, Arc<RecordingChatApi>) {
+        let invite_api = Arc::new(RecordingChatApi::default());
+        let invite_api_trait: Arc<dyn ChatApi> = invite_api.clone();
         let api_trait: Arc<dyn ChatApi> = api;
         let http = reqwest::Client::new();
         let moderation = Arc::new(ModerationEngine::new(Arc::clone(&api_trait), pool.clone()));
-        ChatPipeline::new(ChatPipelineParts {
+        let pipeline = ChatPipeline::new(ChatPipelineParts {
             bot_user_id: "bot-id".to_string(),
             api: Arc::clone(&api_trait),
             pool: pool.clone(),
@@ -1610,14 +1654,10 @@ mod tests {
             sus_invite: Arc::new(SusInviteCheck::new(pool.clone())),
             fun: Arc::new(FunResponses::new(Arc::clone(&api_trait), false)),
             invite_question: Arc::new(crate::invite_question::InviteQuestionResponder::new(
-                Arc::clone(&api_trait),
-                Arc::new(NoopDiscordLink),
-                Arc::new(crate::invite_question::PgInviteQuestionStore::new(
-                    pool.clone(),
-                )),
-                Arc::new(crate::invite_question::MiniMaxInviteQuestionJudge::new(
-                    EngagementMinimaxClient::new(None, None, None, None),
-                )),
+                invite_api_trait,
+                Arc::new(StaticInviteUrl),
+                Arc::new(NewcomerInviteStore),
+                Arc::new(AlwaysYesInviteJudge),
                 None,
                 None,
             )),
@@ -1649,7 +1689,8 @@ mod tests {
                 http,
                 "http://127.0.0.1:1/changelog",
             )),
-        })
+        });
+        (pipeline, invite_api)
     }
 
     #[derive(Default)]
@@ -1764,7 +1805,7 @@ mod tests {
     async fn lfg_nachricht_erreicht_lfg_pitch_responder() {
         let pool = sqlx::PgPool::connect_lazy("postgres://x:x@127.0.0.1:1/x").unwrap();
         let api = Arc::new(RecordingChatApi::default());
-        let pipeline = pipeline_for_lfg_detector(Arc::clone(&api), pool);
+        let (pipeline, _) = pipeline_for_lfg_detector(Arc::clone(&api), pool);
         let mut event = strong_timeout_event();
         event.chatter_user_login = "viewer".to_string();
         event.chatter_user_id = "viewer-id".to_string();
@@ -1782,6 +1823,24 @@ mod tests {
             "{:?}",
             api.calls()
         );
+    }
+
+    #[tokio::test]
+    async fn invite_antwort_ueberspringt_lfg_pitch_bei_doppelintent() {
+        let pool = sqlx::PgPool::connect_lazy("postgres://x:x@127.0.0.1:1/x").unwrap();
+        let lfg_api = Arc::new(RecordingChatApi::default());
+        let (pipeline, invite_api) = pipeline_for_lfg_detector(Arc::clone(&lfg_api), pool);
+        let mut event = strong_timeout_event();
+        event.chatter_user_login = "viewer".to_string();
+        event.chatter_user_id = "viewer-id".to_string();
+        event.message.text = "Wie kann ich mitspielen, suche noch Leute für die Lobby?".to_string();
+
+        pipeline
+            .run_deadlock_chat_detectors(&event, "channel", "viewer")
+            .await;
+
+        assert_eq!(invite_api.calls().len(), 1, "{:?}", invite_api.calls());
+        assert_eq!(lfg_api.calls().len(), 0, "{:?}", lfg_api.calls());
     }
 
     /// Safe-List: `handle_strong_timeout` timeoutet direkt, ohne

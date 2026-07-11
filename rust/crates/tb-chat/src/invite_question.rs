@@ -656,7 +656,7 @@ impl InviteQuestionResponder {
         }
     }
 
-    pub async fn maybe_respond(&self, event: &ChatMessageEvent, channel_login: &str) {
+    pub async fn maybe_respond(&self, event: &ChatMessageEvent, channel_login: &str) -> bool {
         // Judged-Cooldown bleibt im Orchestratorpfad und läuft direkt vor dem Modellcall.
         let decision = self
             .decide_with_before_judge(event, channel_login, |channel_login, chatter_login| {
@@ -670,30 +670,35 @@ impl InviteQuestionResponder {
 
         match decision.action {
             InviteQuestionAction::SendGo => {
-                if let Some(invite_url) = decision.invite_url.as_deref() {
-                    if self
-                        .send_go(event, &decision.chatter_login, invite_url)
-                        .await
-                    {
-                        self.mark_replied(&decision.channel_login, &decision.chatter_login);
-                        self.note_invite_reply(&decision.channel_login).await;
-                    }
+                let Some(invite_url) = decision.invite_url.as_deref() else {
+                    return false;
+                };
+                if !self
+                    .send_go(event, &decision.chatter_login, invite_url)
+                    .await
+                {
+                    return false;
                 }
+                self.mark_replied(&decision.channel_login, &decision.chatter_login);
+                self.note_invite_reply(&decision.channel_login).await;
+                true
             }
             InviteQuestionAction::AskConfirmation => {
-                if self
+                if !self
                     .send_confirmation_question(event, &decision.chatter_login)
                     .await
                 {
-                    self.mark_replied(&decision.channel_login, &decision.chatter_login);
-                    self.note_invite_reply(&decision.channel_login).await;
-                    self.remember_pending_confirmation(
-                        &decision.channel_login,
-                        &decision.chatter_login,
-                    );
+                    return false;
                 }
+                self.mark_replied(&decision.channel_login, &decision.chatter_login);
+                self.note_invite_reply(&decision.channel_login).await;
+                self.remember_pending_confirmation(
+                    &decision.channel_login,
+                    &decision.chatter_login,
+                );
+                true
             }
-            InviteQuestionAction::Silent(_) => {}
+            InviteQuestionAction::Silent(_) => false,
         }
     }
 
@@ -1754,13 +1759,14 @@ mod tests {
             None,
         );
 
-        invite
+        let sent = invite
             .maybe_respond(
                 &event("viewer", "Wie bekomme ich einen invite?"),
                 "streamer",
             )
             .await;
 
+        assert!(sent);
         assert_eq!(api.messages(), vec![expected_go("viewer")]);
     }
 
@@ -1804,13 +1810,14 @@ mod tests {
             Some(notifier_port),
         );
 
-        invite
+        let sent = invite
             .maybe_respond(
                 &event("viewer", "Wie kann man Deadlock spielen?"),
                 "streamer",
             )
             .await;
 
+        assert!(sent);
         assert_eq!(notifier.calls(), vec!["streamer"]);
     }
 
@@ -1857,13 +1864,14 @@ mod tests {
             Some(notifier_port),
         );
 
-        invite
+        let sent = invite
             .maybe_respond(
                 &event("viewer", "Wie bekomme ich einen invite?"),
                 "streamer",
             )
             .await;
 
+        assert!(!sent);
         assert!(notifier.calls().is_empty());
     }
 
