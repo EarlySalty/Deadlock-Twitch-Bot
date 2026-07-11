@@ -1,3 +1,11 @@
+## #352 — Der Bot weist Mitspieler-Suchende auf den Discord
+
+**Problem:** Wer im Chat aktiv nach Mitspielern für Deadlock gesucht hat („suche noch zwei für Ranked", „wer hat Bock zu zocken"), bekam keinen Hinweis auf die Community, in der genau solche Leute zusammenfinden.
+
+**Änderung:** Läuft gerade Deadlock, erkennt der Bot eine echte Mitspieler-Suche und weist die Person einmal freundlich auf den Discord hin. Eine KI prüft vorher, ob wirklich nach Mitspielern gefragt ist; bei Zweifel oder Fehler bleibt der Bot still.
+
+**Aktuelles Verhalten:** Höchstens ein Hinweis pro Person mit langem Cooldown, Streamer im werbefreien Plan sind ausgenommen, und wenn schon eine Zugangs-Antwort rausging, schweigt der Hinweis, damit nie zwei Nachrichten auf einmal kommen.
+
 ## #351 — Beenden beendet auch die Discord-Admin-Ansicht
 
 **Problem:** Wer im öffentlichen Twitch-Dashboard über eine Discord-Admin-Session erkannt wurde, sah den Admin-Modus dauerhaft. Der Beenden-Button wurde vom Server mit 403 abgewiesen und wirkte deshalb ohne sichtbare Reaktion.

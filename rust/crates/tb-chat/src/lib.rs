@@ -33,6 +33,7 @@ pub mod fun_responses;
 pub mod global_ban_sweep;
 pub mod global_chatter_ban;
 pub mod invite_question;
+pub mod lfg_pitch;
 pub mod lurker_policy;
 pub mod mention_scoring;
 pub mod moderation;
@@ -74,6 +75,10 @@ pub use invite_question::{
     InviteQuestionInviteUrlPort, InviteQuestionJudge, InviteQuestionJudgeInput,
     InviteQuestionResponder, InviteQuestionRollup, InviteQuestionStore, InviteQuestionVerdict,
     InviteQuestionVerdictKind, MiniMaxInviteQuestionJudge, PgInviteQuestionStore,
+};
+pub use lfg_pitch::{
+    lfg_pitch_enabled_from_env, LfgJudge, LfgJudgeInput, LfgPitchResponder, LfgVerdict,
+    LfgVerdictKind, MiniMaxLfgJudge, LFG_PITCH_REPLY,
 };
 pub use lurker_policy::{
     is_passive_lurker_channel, should_attempt_runtime_heal, PASSIVE_LURKER_DETAIL,
