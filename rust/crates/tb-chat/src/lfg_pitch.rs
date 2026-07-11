@@ -381,6 +381,17 @@ impl LfgPitchDecision {
             invite_url: None,
         }
     }
+
+    fn log_level(&self) -> tracing::Level {
+        match self.action {
+            LfgPitchAction::Silent(
+                SilentReason::JudgeProviderError | SilentReason::JudgeParseError,
+            ) => tracing::Level::WARN,
+            LfgPitchAction::SendGo => tracing::Level::INFO,
+            LfgPitchAction::Silent(_) if self.verdict.is_some() => tracing::Level::INFO,
+            LfgPitchAction::Silent(_) => tracing::Level::DEBUG,
+        }
+    }
 }
 
 pub struct LfgPitchResponder {
@@ -565,15 +576,19 @@ impl LfgPitchResponder {
             .map(LfgLoggedVerdict::as_str)
             .unwrap_or("not_judged");
         match decision.action {
-            LfgPitchAction::Silent(reason)
-                if matches!(
-                    reason,
-                    SilentReason::JudgeProviderError
-                        | SilentReason::JudgeParseError
-                        | SilentReason::NoInviteUrl
-                ) =>
-            {
+            LfgPitchAction::Silent(reason) if decision.log_level() == tracing::Level::WARN => {
                 warn!(
+                    channel = %decision.channel_login,
+                    chatter = %decision.chatter_login,
+                    message = %message,
+                    verdict,
+                    confidence = decision.confidence,
+                    action = decision.action.as_str(),
+                    silent_reason = reason.as_str(),
+                );
+            }
+            LfgPitchAction::Silent(reason) if decision.log_level() == tracing::Level::INFO => {
+                info!(
                     channel = %decision.channel_login,
                     chatter = %decision.chatter_login,
                     message = %message,
@@ -1248,6 +1263,58 @@ mod tests {
         );
         assert!(api.messages().is_empty());
         assert!(notifier.calls().is_empty());
+    }
+
+    #[test]
+    fn judge_entscheidungen_sind_info_und_pre_judge_silents_debug() {
+        let judge_no = LfgPitchDecision::judged(
+            LfgPitchAction::Silent(SilentReason::JudgeNo),
+            &model_verdict(LfgVerdictKind::No, 0.9),
+            "streamer".to_string(),
+            "viewer".to_string(),
+            "lfg".to_string(),
+        );
+        let judge_unsure = LfgPitchDecision::judged(
+            LfgPitchAction::Silent(SilentReason::JudgeUnsure),
+            &model_verdict(LfgVerdictKind::Unsure, 0.5),
+            "streamer".to_string(),
+            "viewer".to_string(),
+            "lfg".to_string(),
+        );
+        let send_go = LfgPitchDecision::judged(
+            LfgPitchAction::SendGo,
+            &model_verdict(LfgVerdictKind::Yes, 0.9),
+            "streamer".to_string(),
+            "viewer".to_string(),
+            "lfg".to_string(),
+        );
+        let provider_error = LfgPitchDecision::judged(
+            LfgPitchAction::Silent(SilentReason::JudgeProviderError),
+            &LfgVerdict::provider_error(),
+            "streamer".to_string(),
+            "viewer".to_string(),
+            "lfg".to_string(),
+        );
+        let parse_error = LfgPitchDecision::judged(
+            LfgPitchAction::Silent(SilentReason::JudgeParseError),
+            &LfgVerdict::parse_error(),
+            "streamer".to_string(),
+            "viewer".to_string(),
+            "lfg".to_string(),
+        );
+        let pre_judge = LfgPitchDecision::silent(
+            SilentReason::NoInviteUrl,
+            "streamer".to_string(),
+            "viewer".to_string(),
+            "lfg".to_string(),
+        );
+
+        assert_eq!(judge_no.log_level(), tracing::Level::INFO);
+        assert_eq!(judge_unsure.log_level(), tracing::Level::INFO);
+        assert_eq!(send_go.log_level(), tracing::Level::INFO);
+        assert_eq!(provider_error.log_level(), tracing::Level::WARN);
+        assert_eq!(parse_error.log_level(), tracing::Level::WARN);
+        assert_eq!(pre_judge.log_level(), tracing::Level::DEBUG);
     }
 
     #[tokio::test]
