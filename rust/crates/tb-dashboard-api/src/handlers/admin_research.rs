@@ -245,9 +245,17 @@ fn build_score(subject: &SubjectMetrics, partners: &[PartnerAggregate]) -> Score
     viewer_values.sort_by(f64::total_cmp);
     hour_values.sort_by(f64::total_cmp);
     day_values.sort_by(f64::total_cmp);
-    let viewers_pct = percentile_of(&viewer_values, subject.avg_viewers);
-    let hours_pct = percentile_of(&hour_values, subject.total_hours);
-    let days_pct = percentile_of(&day_values, subject.active_days as f64);
+    // Ohne Vergleichsgruppe liefert percentile_of 50 („Mittelmaß") — bei
+    // leerer Partner-Baseline irreführend, daher Percentile 0.
+    let (viewers_pct, hours_pct, days_pct) = if partners.is_empty() {
+        (0, 0, 0)
+    } else {
+        (
+            percentile_of(&viewer_values, subject.avg_viewers),
+            percentile_of(&hour_values, subject.total_hours),
+            percentile_of(&day_values, subject.active_days as f64),
+        )
+    };
 
     Score {
         total: (0.5 * f64::from(viewers_pct)
@@ -336,6 +344,12 @@ pub async fn handler(
     .bind(since)
     .bind(&login)
     .fetch_all(&pool);
+    // `is_partner` setzt der Rust-Poller (tb-monitoring poller/engine.rs,
+    // `sample_of`) per Abgleich gegen das Partner-Login-Set aus der DB — NICHT
+    // aus dem Helix-Stream-Objekt. Der Python-Poller
+    // (bot/monitoring/monitoring.py) ist seit dem Twitch-Cutover außer
+    // Betrieb; sein `stream.get("is_partner")` ist tote Altlast. Live-Check
+    // 2026-07-11: 26 Partner-Streamer mit is_partner-Ticks in 30 Tagen.
     let baseline_query = sqlx::query_as::<_, PartnerAggregate>(
         r#"WITH partner_ticks AS (
                SELECT LOWER(streamer) AS streamer, ts_utc, viewer_count,
@@ -578,6 +592,28 @@ mod tests {
             high["score"]["components"]["viewers"]["percentile"].as_i64()
                 > low["score"]["components"]["viewers"]["percentile"].as_i64()
         );
+    }
+
+    #[tokio::test]
+    async fn empty_partner_baseline_scores_zero_not_fifty() {
+        let Some(pool) = pool_or_skip("admin_research_empty_baseline").await else {
+            return;
+        };
+        sqlx::query(
+            r#"INSERT INTO twitch_stats_category (ts_utc, streamer, viewer_count)
+            VALUES (NOW() - INTERVAL '1 hour', 'solo', 40)"#,
+        )
+        .execute(&pool)
+        .await
+        .expect("insert solo subject");
+
+        let (status, body) = request(DashboardAuthLevel::admin(), pool, "solo", None).await;
+
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(body["found"], true);
+        assert_eq!(body["baseline"]["partner_count"], 0);
+        assert_eq!(body["score"]["total"], 0);
+        assert_eq!(body["score"]["components"]["viewers"]["percentile"], 0);
     }
 
     #[tokio::test]
