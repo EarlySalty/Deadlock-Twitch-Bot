@@ -1199,20 +1199,7 @@ mod db_tests {
         assert!(after.matched.iter().any(|r| r.starts_with("Learned-Phrase")));
     }
 
-    #[tokio::test]
-    async fn null_pattern_wird_ignoriert() {
-        let pool = pool_or_skip!("sf_null_pat");
-        create_learned_tables(&pool).await;
-
-        // NULL-Wert — wird vom Filter ignoriert
-        sqlx::query(
-            "INSERT INTO twitch_auto_learned_spam_patterns (pattern, pattern_type) VALUES (NULL, 'phrase')",
-        )
-        .execute(&pool)
-        .await
-        .unwrap();
-
-        let lp = LearnedPatterns::load(&pool).await;
-        assert!(lp.spam.is_empty(), "NULL-Pattern muss herausgefiltert werden");
-    }
+    // Hinweis: Der frühere NULL-Pattern-Test entfiel mit der prod-treuen DDL —
+    // `pattern` ist PRIMARY KEY (NOT NULL), NULL-Zeilen kann es nicht geben.
+    // Die IS-NOT-NULL-Defense in `LearnedPatterns::load` bleibt trotzdem.
 }

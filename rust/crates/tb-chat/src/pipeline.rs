@@ -60,7 +60,7 @@ use crate::moderation::{
     AutoBanRequest, ModerationEngine, BAN_REASON_GLOBAL, BAN_REASON_SPAM, NOTICE_GLOBAL_BAN,
 };
 use crate::promos::PromoEngine;
-use crate::scam_pitch::{PitchDecision, ScamPitchDetector, SpamAiReviewer};
+use crate::scam_pitch::{AiReviewOutcome, PitchDecision, ScamPitchDetector, SpamAiReviewer};
 use crate::spam_filter::{SpamAction, SpamContext, SpamFilter, SPAM_MIN_MATCHES};
 use crate::sus_invite::SusInviteCheck;
 use crate::types::ChatMessageEvent;
@@ -160,20 +160,9 @@ pub struct ModAlerter {
     channel_id: u64,
 }
 
-fn spam_learning_pattern(content: &str) -> Option<String> {
-    let text = content
-        .replace(['\r', '\n', '`'], " ")
-        .split_whitespace()
-        .filter(|part| !part.starts_with('@'))
-        .collect::<Vec<_>>()
-        .join(" ");
-    let pattern = text.trim();
-    if pattern.chars().count() >= 4 {
-        Some(pattern.chars().take(200).collect())
-    } else {
-        None
-    }
-}
+/// Timeout-Dauer bei AI-bestätigtem Spam: 24h — bewusst reversibel statt Ban,
+/// damit ein Judge-Fehlurteil gegen echte Viewer per Button korrigierbar bleibt.
+const AI_SPAM_TIMEOUT_SECS: u32 = 24 * 60 * 60;
 
 impl ModAlerter {
     pub fn new(http: reqwest::Client) -> Self {
@@ -239,46 +228,113 @@ impl ModAlerter {
             lines.push(format!("**Nachricht:** `{safe}`"));
         }
 
-        let mut payload = serde_json::json!({
+        let payload = serde_json::json!({
             "title": title,
             "content": lines.join("\n"),
             "channel_id": self.channel_id,
             "token": "changeme-local",
         });
-        if kind == "sus_spam" {
-            if let Some(pattern) = spam_learning_pattern(content) {
-                payload["spam_learning"] = serde_json::json!({
-                    "pattern": pattern,
-                    "pattern_type": "phrase",
-                    "source_message": content.chars().take(500).collect::<String>(),
-                    "source_channel": channel_login,
-                    "reason": reason,
-                });
+        self.post("mod_alert", payload);
+    }
+
+    /// sus_spam-Alert mit Judge-Urteil — Payload-Vertrag v2 für die
+    /// Korrektur-Buttons im Discord-Bot (dl-changelog):
+    /// `spam_learning = {v:2, verdict, ai_reason, learned:[{table,id,pattern}]}`.
+    ///
+    /// Wird für JEDEN Judge-Ausgang gerufen (spam/safe/error/skipped) — der
+    /// Judge gatet die Aktion, nie die Sichtbarkeit.
+    pub fn send_sus_spam(
+        self: &Arc<Self>,
+        channel_login: &str,
+        chatter_login: &str,
+        chatter_id: &str,
+        content: &str,
+        rule_reason: &str,
+        outcome: &AiReviewOutcome,
+        action_taken: &str,
+    ) {
+        let (title, verdict_key, ai_line) = match outcome {
+            AiReviewOutcome::Spam { reason, .. } => (
+                "🤖 Spam bestätigt — Aktion ausgeführt",
+                "spam",
+                format!("**AI-Urteil:** Spam — {reason}"),
+            ),
+            AiReviewOutcome::Safe { reason } => (
+                "👀 Verdächtige Nachricht — AI: harmlos",
+                "safe",
+                format!("**AI-Urteil:** harmlos — {reason}"),
+            ),
+            AiReviewOutcome::Error { detail } => (
+                "⚠️ Verdächtige Nachricht — AI-Review fehlgeschlagen",
+                "error",
+                format!("**AI-Urteil:** Fehler — {detail}"),
+            ),
+            AiReviewOutcome::Skipped => (
+                "👀 Verdächtige Nachricht — AI übersprungen",
+                "skipped",
+                "**AI-Urteil:** übersprungen (Cooldown, kürzlich schon geprüft)".to_string(),
+            ),
+        };
+
+        let mut lines = vec![
+            format!("**Kanal:** #{channel_login}"),
+            format!("**Chatter:** {chatter_login}"),
+        ];
+        if !chatter_id.is_empty() {
+            lines.push(format!("**ID:** {chatter_id}"));
+        }
+        lines.push(format!("**Regel-Treffer:** {rule_reason}"));
+        lines.push(ai_line);
+        lines.push(format!("**Aktion:** {action_taken}"));
+
+        let mut ai_reason = String::new();
+        let mut learned_entries: Vec<serde_json::Value> = Vec::new();
+        match outcome {
+            AiReviewOutcome::Spam { reason, learned, rejected_pattern } => {
+                ai_reason = reason.clone();
+                if let Some(l) = learned {
+                    lines.push(format!("**Gelernt:** `{}`", l.pattern.replace('`', "'")));
+                    learned_entries.push(serde_json::json!({
+                        "table": "spam",
+                        "id": l.id,
+                        "pattern": l.pattern,
+                    }));
+                }
+                if let Some(rej) = rejected_pattern {
+                    lines.push(format!(
+                        "**Nicht gelernt:** `{}` (zu generisch, Distinktivitäts-Gate)",
+                        rej.replace('`', "'")
+                    ));
+                }
             }
+            AiReviewOutcome::Safe { reason } | AiReviewOutcome::Error { detail: reason } => {
+                ai_reason = reason.clone();
+            }
+            AiReviewOutcome::Skipped => {}
         }
 
-        let this = Arc::clone(self);
-        let handle = tokio::spawn(async move {
-            match this
-                .http
-                .post(&this.endpoint)
-                .json(&payload)
-                .timeout(std::time::Duration::from_secs(5))
-                .send()
-                .await
-            {
-                Ok(resp) if !matches!(resp.status().as_u16(), 200 | 201 | 204) => {
-                    debug!("mod_alert: Discord-Post HTTP {}", resp.status());
-                }
-                Err(e) => debug!("mod_alert: Discord-Post fehlgeschlagen: {e}"),
-                _ => {}
-            }
+        if !content.is_empty() {
+            let safe: String = content
+                .chars()
+                .take(300)
+                .collect::<String>()
+                .replace('`', "'");
+            lines.push(format!("**Nachricht:** `{safe}`"));
+        }
+
+        let payload = serde_json::json!({
+            "title": title,
+            "content": lines.join("\n"),
+            "channel_id": self.channel_id,
+            "token": "changeme-local",
+            "spam_learning": {
+                "v": 2,
+                "verdict": verdict_key,
+                "ai_reason": ai_reason.chars().take(200).collect::<String>(),
+                "learned": learned_entries,
+            },
         });
-        tokio::spawn(async move {
-            if let Err(error) = handle.await {
-                tracing::error!(%error, "mod_alert: Task fehlerhaft beendet");
-            }
-        });
+        self.post("mod_alert", payload);
     }
 
     /// Crew-Guard-Shadow-Meldung über **denselben** Discord-Pfad wie die
@@ -291,7 +347,11 @@ impl ModAlerter {
             "channel_id": self.channel_id,
             "token": "changeme-local",
         });
+        self.post("crew_guard", payload);
+    }
 
+    /// Gemeinsamer Fire-and-forget-Post an den Changelog-Cog.
+    fn post(self: &Arc<Self>, scope: &'static str, payload: serde_json::Value) {
         let this = Arc::clone(self);
         let handle = tokio::spawn(async move {
             match this
@@ -303,15 +363,15 @@ impl ModAlerter {
                 .await
             {
                 Ok(resp) if !matches!(resp.status().as_u16(), 200 | 201 | 204) => {
-                    debug!("crew_guard: Discord-Post HTTP {}", resp.status());
+                    debug!("{scope}: Discord-Post HTTP {}", resp.status());
                 }
-                Err(e) => debug!("crew_guard: Discord-Post fehlgeschlagen: {e}"),
+                Err(e) => debug!("{scope}: Discord-Post fehlgeschlagen: {e}"),
                 _ => {}
             }
         });
         tokio::spawn(async move {
             if let Err(error) = handle.await {
-                tracing::error!(%error, "crew_guard: Task fehlerhaft beendet");
+                tracing::error!(%error, "mod_alert: Task fehlerhaft beendet");
             }
         });
     }
@@ -959,8 +1019,8 @@ impl ChatPipeline {
             }
 
             SpamAction::DeleteOnly | SpamAction::None if verdict.score > 0 => {
-                // Verdachts-Pfad (Z. 1672–1737): loggen, bei hartem Signal
-                // Delete-only, Alert + AI-Review fire-and-forget — KEIN Stopp.
+                // Verdachts-Pfad: loggen, bei hartem Signal Delete-only, dann
+                // Judge-Urteil + genau EIN Alert (asynchron) — KEIN Stopp.
                 let reasons_str = reasons.join(", ");
                 p.review_log.record(
                     channel_login,
@@ -985,22 +1045,126 @@ impl ChatPipeline {
                     "Verdächtige Nachricht"
                 );
 
-                p.alerter.send(
-                    "sus_spam",
-                    channel_login,
-                    chatter_login,
-                    &event.chatter_user_id,
-                    text,
-                    &format!("Score {}: {}", verdict.score, reasons_str),
-                );
-
-                // AI-Review lernt Muster (Z. 1726–1735) — fire-and-forget.
-                p.ai_reviewer
-                    .maybe_review_with_reasons(event, verdict.score, &reasons);
+                // Judge + Alert asynchron: der Review dauert bis ~20s pro
+                // Provider und darf die Chat-Pipeline nicht blockieren. Der
+                // Alert kommt NACH dem Urteil und enthält es — jeder Ausgang
+                // (spam/safe/error/skipped) erzeugt einen Alert.
+                let this = self.clone();
+                let event_owned = event.clone();
+                let channel_owned = channel_login.to_string();
+                let chatter_owned = chatter_login.to_string();
+                let rule_reason = format!("Score {}: {}", verdict.score, reasons_str);
+                let already_deleted = verdict.hard_signal;
+                tokio::spawn(async move {
+                    this.judge_and_alert(
+                        &event_owned,
+                        &channel_owned,
+                        &chatter_owned,
+                        &rule_reason,
+                        already_deleted,
+                    )
+                    .await;
+                });
                 false
             }
             _ => false,
         }
+    }
+
+    /// Verdachtsfall (Score 1–2): Judge fragen, bei Spam-Urteil handeln
+    /// (Nachricht löschen + 24h-Timeout, reversibel), und in JEDEM Fall genau
+    /// einen Alert mit Urteil, Begründung und Aktion schicken.
+    async fn judge_and_alert(
+        &self,
+        event: &ChatMessageEvent,
+        channel_login: &str,
+        chatter_login: &str,
+        rule_reason: &str,
+        already_deleted: bool,
+    ) {
+        let p = &self.parts;
+        let text = event.message.text.as_str();
+
+        let outcome = p.ai_reviewer.review_for_verdict(event).await;
+
+        // Jede Judge-Entscheidung sichtbar machen: Review-Log + Tracing.
+        let (status, log_reason) = match &outcome {
+            AiReviewOutcome::Spam { reason, .. } => ("AI_SPAM", reason.clone()),
+            AiReviewOutcome::Safe { reason } => ("AI_SAFE", reason.clone()),
+            AiReviewOutcome::Error { detail } => ("AI_ERROR", detail.clone()),
+            AiReviewOutcome::Skipped => ("AI_SKIPPED", "Cooldown aktiv".to_string()),
+        };
+        p.review_log.record(
+            channel_login,
+            chatter_login,
+            &event.chatter_user_id,
+            text,
+            status,
+            &log_reason,
+        );
+        info!(
+            channel = %channel_login,
+            chatter = %chatter_login,
+            urteil = status,
+            grund = %log_reason,
+            "Judge-Entscheidung"
+        );
+
+        // Aktion nur bei Spam-Urteil — mit denselben Pre-Checks wie der
+        // Auto-Ban-Pfad (nie Broadcaster/Mods, Safe-List greift in
+        // timeout_and_cleanup).
+        let mut action_taken = if already_deleted {
+            "Nachricht gelöscht (hartes Signal)".to_string()
+        } else {
+            "keine".to_string()
+        };
+        if matches!(outcome, AiReviewOutcome::Spam { .. }) {
+            if event.chatter_user_id.is_empty()
+                || event.chatter_user_id == event.broadcaster_user_id
+                || event.is_mod_or_broadcaster()
+            {
+                action_taken = "übersprungen (Mod/Broadcaster)".to_string();
+            } else {
+                let enforced = p
+                    .moderation
+                    .timeout_and_cleanup(
+                        &event.broadcaster_user_id,
+                        &event.chatter_user_id,
+                        &event.message_id,
+                        AI_SPAM_TIMEOUT_SECS,
+                        BAN_REASON_SPAM,
+                    )
+                    .await;
+                if enforced {
+                    action_taken = "Nachricht gelöscht + 24h Timeout".to_string();
+                    p.review_log.record(
+                        channel_login,
+                        chatter_login,
+                        &event.chatter_user_id,
+                        text,
+                        "AI_TIMEOUT",
+                        BAN_REASON_SPAM,
+                    );
+                } else {
+                    action_taken = "Timeout nicht durchgesetzt".to_string();
+                    warn!(
+                        channel = %channel_login,
+                        chatter = %chatter_login,
+                        "AI-Spam bestätigt, aber Timeout konnte nicht durchgesetzt werden"
+                    );
+                }
+            }
+        }
+
+        p.alerter.send_sus_spam(
+            channel_login,
+            chatter_login,
+            &event.chatter_user_id,
+            text,
+            rule_reason,
+            &outcome,
+            &action_taken,
+        );
     }
 
     /// Gemeinsamer Auto-Ban-Pfad — Python `_auto_ban_and_cleanup` inkl. der
@@ -1979,10 +2143,10 @@ mod tests {
     }
 
     #[test]
-    fn spam_learning_pattern_entfernt_mentions() {
-        let pattern = spam_learning_pattern("@MiracleGhost9 aha, so sammelt man also viewer Kappa")
-            .expect("pattern");
-        assert_eq!(pattern, "aha, so sammelt man also viewer Kappa");
+    fn ai_spam_timeout_ist_24h() {
+        // Bewusst reversibel (kein Ban): Judge-Fehlurteile gegen echte Viewer
+        // müssen per Korrektur-Button + manuellem Untimeout heilbar sein.
+        assert_eq!(AI_SPAM_TIMEOUT_SECS, 86_400);
     }
 
     #[test]
