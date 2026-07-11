@@ -120,15 +120,34 @@ impl ReviewLog {
         };
         // Python: datetime.now(UTC).isoformat() — volle Mikrosekunden.
         let ts = Utc::now().format("%Y-%m-%dT%H:%M:%S%.6f+00:00");
-        let safe_content: String = content.replace('\n', " ").chars().take(500).collect();
+        // TSV-Hygiene für ALLE Felder: AI-Begründungen und Nachrichten sind
+        // unvertrauenswürdig — Tabs/Zeilenumbrüche dürfen das Log-Format
+        // nicht aufbrechen oder Einträge einschleusen.
+        let clean = |value: &str, cap: usize| -> String {
+            value
+                .replace(['\t', '\r', '\n'], " ")
+                .chars()
+                .take(cap)
+                .collect()
+        };
+        let safe_content = clean(content, 500);
+        let safe_channel = clean(channel, 100);
+        let safe_chatter = clean(chatter_login, 100);
+        let safe_chatter_id = clean(chatter_id, 50);
+        let safe_status = clean(status, 50);
+        let safe_reason = clean(reason, 300);
         let line = format!(
-            "{ts}\t[{status}]\t{channel}\t{}\t{chatter_id}\t{}\t{safe_content}\n",
-            if chatter_login.is_empty() {
+            "{ts}\t[{safe_status}]\t{safe_channel}\t{}\t{safe_chatter_id}\t{}\t{safe_content}\n",
+            if safe_chatter.is_empty() {
                 "-"
             } else {
-                chatter_login
+                &safe_chatter
             },
-            if reason.is_empty() { "-" } else { reason },
+            if safe_reason.is_empty() {
+                "-"
+            } else {
+                &safe_reason
+            },
         );
         if let Some(parent) = target.parent() {
             let _ = std::fs::create_dir_all(parent);
@@ -163,6 +182,17 @@ pub struct ModAlerter {
 /// Timeout-Dauer bei AI-bestätigtem Spam: 24h — bewusst reversibel statt Ban,
 /// damit ein Judge-Fehlurteil gegen echte Viewer per Button korrigierbar bleibt.
 const AI_SPAM_TIMEOUT_SECS: u32 = 24 * 60 * 60;
+
+/// Felder eines sus_spam-Alerts (Verdachtsfall mit Judge-Urteil).
+pub struct SusSpamAlert<'a> {
+    pub channel_login: &'a str,
+    pub chatter_login: &'a str,
+    pub chatter_id: &'a str,
+    pub content: &'a str,
+    pub rule_reason: &'a str,
+    pub outcome: &'a AiReviewOutcome,
+    pub action_taken: &'a str,
+}
 
 /// Muster-Vorschlag für den „Als Spam korrigieren"-Button: Nachricht ohne
 /// Mentions/Backticks, auf 78 Zeichen gekürzt — das Muster reist in der
@@ -263,16 +293,16 @@ impl ModAlerter {
     ///
     /// Wird für JEDEN Judge-Ausgang gerufen (spam/safe/error/skipped) — der
     /// Judge gatet die Aktion, nie die Sichtbarkeit.
-    pub fn send_sus_spam(
-        self: &Arc<Self>,
-        channel_login: &str,
-        chatter_login: &str,
-        chatter_id: &str,
-        content: &str,
-        rule_reason: &str,
-        outcome: &AiReviewOutcome,
-        action_taken: &str,
-    ) {
+    pub fn send_sus_spam(self: &Arc<Self>, alert: SusSpamAlert<'_>) {
+        let SusSpamAlert {
+            channel_login,
+            chatter_login,
+            chatter_id,
+            content,
+            rule_reason,
+            outcome,
+            action_taken,
+        } = alert;
         let (title, verdict_key, ai_line) = match outcome {
             AiReviewOutcome::Spam { reason, .. } => (
                 "🤖 Spam bestätigt — Aktion ausgeführt",
@@ -310,7 +340,7 @@ impl ModAlerter {
         let mut ai_reason = String::new();
         let mut learned_entries: Vec<serde_json::Value> = Vec::new();
         match outcome {
-            AiReviewOutcome::Spam { reason, learned, rejected_pattern } => {
+            AiReviewOutcome::Spam { reason, learned, rejected_pattern, save_failed } => {
                 ai_reason = reason.clone();
                 if let Some(l) = learned {
                     lines.push(format!("**Gelernt:** `{}`", l.pattern.replace('`', "'")));
@@ -325,6 +355,11 @@ impl ModAlerter {
                         "**Nicht gelernt:** `{}` (zu generisch, Distinktivitäts-Gate)",
                         rej.replace('`', "'")
                     ));
+                }
+                if *save_failed {
+                    lines.push(
+                        "**Nicht gelernt:** Speichern fehlgeschlagen (DB-Fehler)".to_string(),
+                    );
                 }
             }
             AiReviewOutcome::Safe { reason } | AiReviewOutcome::Error { detail: reason } => {
@@ -1054,8 +1089,11 @@ impl ChatPipeline {
                     &reasons_str,
                 );
 
+                // Ehrlicher Delete-Status: nur wenn der Delete wirklich
+                // durchging, darf der Alert „gelöscht" behaupten.
+                let mut already_deleted = false;
                 if verdict.hard_signal {
-                    let _ = self
+                    already_deleted = self
                         .execute_auto_ban(event, channel_login, false, BAN_REASON_SPAM, None, "ban")
                         .await;
                 }
@@ -1077,8 +1115,7 @@ impl ChatPipeline {
                 let channel_owned = channel_login.to_string();
                 let chatter_owned = chatter_login.to_string();
                 let rule_reason = format!("Score {}: {}", verdict.score, reasons_str);
-                let already_deleted = verdict.hard_signal;
-                tokio::spawn(async move {
+                let handle = tokio::spawn(async move {
                     this.judge_and_alert(
                         &event_owned,
                         &channel_owned,
@@ -1087,6 +1124,39 @@ impl ChatPipeline {
                         already_deleted,
                     )
                     .await;
+                });
+                // Panic-Wache: auch ein abgestürzter Judge-Task darf nie ein
+                // stilles Ende sein — Log + Error-Alert statt Schweigen.
+                let review_log = Arc::clone(&p.review_log);
+                let alerter = Arc::clone(&p.alerter);
+                let channel_owned = channel_login.to_string();
+                let chatter_owned = chatter_login.to_string();
+                let chatter_id_owned = event.chatter_user_id.clone();
+                let text_owned = text.to_string();
+                let rule_reason_owned = format!("Score {}: {}", verdict.score, reasons_str);
+                tokio::spawn(async move {
+                    if let Err(error) = handle.await {
+                        tracing::error!(%error, "judge_and_alert-Task abgestürzt");
+                        review_log.record(
+                            &channel_owned,
+                            &chatter_owned,
+                            &chatter_id_owned,
+                            &text_owned,
+                            "AI_ERROR",
+                            "judge_and_alert-Task abgestürzt (Panic)",
+                        );
+                        alerter.send_sus_spam(SusSpamAlert {
+                            channel_login: &channel_owned,
+                            chatter_login: &chatter_owned,
+                            chatter_id: &chatter_id_owned,
+                            content: &text_owned,
+                            rule_reason: &rule_reason_owned,
+                            outcome: &AiReviewOutcome::Error {
+                                detail: "interner Fehler (Judge-Task abgestürzt)".to_string(),
+                            },
+                            action_taken: "keine",
+                        });
+                    }
                 });
                 false
             }
@@ -1179,15 +1249,15 @@ impl ChatPipeline {
             }
         }
 
-        p.alerter.send_sus_spam(
+        p.alerter.send_sus_spam(SusSpamAlert {
             channel_login,
             chatter_login,
-            &event.chatter_user_id,
-            text,
+            chatter_id: &event.chatter_user_id,
+            content: text,
             rule_reason,
-            &outcome,
-            &action_taken,
-        );
+            outcome: &outcome,
+            action_taken: &action_taken,
+        });
     }
 
     /// Gemeinsamer Auto-Ban-Pfad — Python `_auto_ban_and_cleanup` inkl. der

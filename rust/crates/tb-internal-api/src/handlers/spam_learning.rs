@@ -155,6 +155,11 @@ pub async fn learn_handler(
 ///
 /// „Als harmlos korrigieren": löscht ein vom Judge gelerntes Spam-Muster
 /// anhand seiner Row-ID (steht in der custom_id des Discord-Buttons).
+///
+/// ponytail: Der SpamFilter-Cache lädt alle 120s neu — bis dahin kann das
+/// gelöschte Muster noch matchen. Bewusst akzeptiert: Korrekturen kommen
+/// ohnehin Minuten nach der Aktion; ein Invalidation-Kanal in den Filter
+/// lohnt erst, wenn das Fenster real stört.
 pub async fn correct_handler(
     auth: AuthLevel,
     State(pool): State<PgPool>,

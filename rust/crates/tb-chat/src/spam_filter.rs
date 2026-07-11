@@ -397,6 +397,17 @@ impl LearnedPatterns {
                 .filter_map(|r| {
                     let pattern = r.pattern.filter(|p| !p.is_empty())?;
                     let pattern_type = r.pattern_type.filter(|p| !p.is_empty())?;
+                    // Gate auch beim Laden: Altbestand aus der Zeit vor dem
+                    // Distinktivitäts-Gate darf nicht wirksam werden —
+                    // generische Muster wären harte Signale (+2) gegen
+                    // harmloses Viewer-Gerede.
+                    if !is_distinctive_spam_pattern(&pattern) {
+                        tracing::warn!(
+                            pattern = %pattern,
+                            "Gelerntes Spam-Muster ignoriert: nicht distinktiv (Altbestand)"
+                        );
+                        return None;
+                    }
                     Some(LearnedSpamPattern { pattern, pattern_type })
                 })
                 .collect(),
@@ -635,21 +646,42 @@ const GENERIC_PATTERN_TOKENS: &[&str] = &[
 ];
 
 /// True, wenn ein Muster unterscheidungskräftig genug ist, um gelernt zu
-/// werden: mindestens ein Token muss eine Domain sein (enthält einen Punkt)
-/// oder ein Nicht-Generikum mit >= 4 Zeichen (Service-Name wie „streamboo").
+/// werden: mindestens ein Token muss ein Nicht-Generikum mit >= 4 Zeichen
+/// sein (Service-Name wie „streamboo") oder eine Domain, deren registrierbarer
+/// Name selbst nicht generisch ist.
 ///
-/// „eballo.com" ✓ · „streamboo" ✓ · „best viewers" ✗ · „ai viewers" ✗
+/// Geprüft wird auf derselben Normalform wie das Matching (Kompaktform ohne
+/// Satzzeichen): „view.ers" kompaktiert zu „viewers" und ist damit genauso
+/// generisch wie „viewers" — sonst könnte ein gelerntes Punkt-Muster als
+/// hartes Signal (+2) harmloses Viewer-Gerede in Ban-Nähe rücken.
+///
+/// „eballo.com" ✓ · „streamboo" ✓ · „best viewers" ✗ · „view.ers" ✗ ·
+/// „viewer.com" ✗
 pub fn is_distinctive_spam_pattern(pattern: &str) -> bool {
-    pattern
-        .to_lowercase()
-        .split_whitespace()
-        .any(|token| {
-            let t = token.trim_matches(|c: char| !c.is_alphanumeric() && c != '.');
-            if t.contains('.') && t.len() >= 4 {
-                return true;
+    pattern.to_lowercase().split_whitespace().any(|token| {
+        let t = token.trim_matches(|c: char| !c.is_alphanumeric() && c != '.');
+        // Gleiche Normalform wie compact() im Matching: nur Alphanumerik.
+        let compacted: String = t.chars().filter(|c| c.is_alphanumeric()).collect();
+        if compacted.chars().count() < 4
+            || GENERIC_PATTERN_TOKENS.contains(&compacted.as_str())
+        {
+            return false;
+        }
+        let core = t.trim_matches('.');
+        if core.contains('.') {
+            // Domain-artig: der registrierbare Name (Label vor der TLD) muss
+            // selbst distinktiv sein — fängt „viewer.com" und „view.ers".
+            let labels: Vec<&str> = core.split('.').filter(|l| !l.is_empty()).collect();
+            if labels.len() < 2 {
+                return false;
             }
-            t.chars().count() >= 4 && !GENERIC_PATTERN_TOKENS.contains(&t)
-        })
+            let name = labels[labels.len() - 2];
+            name.chars().count() >= 4 && !GENERIC_PATTERN_TOKENS.contains(&name)
+        } else {
+            // Einzelwort: Kompaktform ist bereits >= 4 Zeichen und nicht generisch.
+            true
+        }
+    })
 }
 
 // ---------------------------------------------------------------------------
@@ -917,6 +949,21 @@ mod tests {
         assert!(!is_distinctive_spam_pattern(""));
         assert!(!is_distinctive_spam_pattern("abc"));
         assert!(!is_distinctive_spam_pattern("a b c"));
+        assert!(!is_distinctive_spam_pattern("...."));
+    }
+
+    #[test]
+    fn gate_prueft_auf_matching_normalform() {
+        // "view.ers" kompaktiert beim Matching zu "viewers" — muss genauso
+        // generisch behandelt werden wie das Wort selbst (Review-Blocker 11.7.).
+        assert!(!is_distinctive_spam_pattern("view.ers"));
+        assert!(!is_distinctive_spam_pattern("vie.wer"));
+        // Domain mit generischem registrierbarem Namen bleibt generisch.
+        assert!(!is_distinctive_spam_pattern("viewer.com"));
+        assert!(!is_distinctive_spam_pattern("best viewers view.ers"));
+        // Echte Dienstnamen/Domains bleiben lernbar.
+        assert!(is_distinctive_spam_pattern("peakpy. c0m"));
+        assert!(is_distinctive_spam_pattern("streambo\u{1d4f8} .com"));
     }
 
     // --- Leerer Input ---

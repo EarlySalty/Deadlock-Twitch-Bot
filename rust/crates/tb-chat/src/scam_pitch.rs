@@ -1471,6 +1471,9 @@ pub enum AiReviewOutcome {
         learned: Option<LearnedPatternRef>,
         /// Vorgeschlagenes, aber abgelehntes Muster (generisches Vokabular).
         rejected_pattern: Option<String>,
+        /// True, wenn das Gate zustimmte, aber der DB-Write scheiterte —
+        /// muss im Alert sichtbar sein (kein stilles Nicht-Lernen).
+        save_failed: bool,
     },
     /// Judge hält die Nachricht für harmlos. Es wird bewusst NICHTS gelernt.
     Safe { reason: String },
@@ -1538,11 +1541,11 @@ impl SpamAiReviewer {
         for provider in &providers {
             match call_judge(&self.http, provider, true, &content).await {
                 Ok(Some(review)) => {
-                    let (learned, rejected_pattern) =
+                    let (learned, rejected_pattern, save_failed) =
                         persist_spam_learning(&self.pool, &review, &content, &channel).await;
                     let reason = review.reason.unwrap_or_default();
                     return if review.is_spam {
-                        AiReviewOutcome::Spam { reason, learned, rejected_pattern }
+                        AiReviewOutcome::Spam { reason, learned, rejected_pattern, save_failed }
                     } else {
                         AiReviewOutcome::Safe { reason }
                     };
@@ -1610,28 +1613,28 @@ struct AiReview {
 ///
 /// Nur Spam-Muster werden gelernt, und nur wenn sie das Distinktivitäts-Gate
 /// passieren. Safe-Muster werden NIE gespeichert (Safe-List-Poisoning).
-/// Rückgabe: (gespeicherte Referenz, abgelehntes Muster).
+/// Rückgabe: (gespeicherte Referenz, abgelehntes Muster, DB-Write gescheitert).
 async fn persist_spam_learning(
     pool: &PgPool,
     review: &AiReview,
     content: &str,
     channel: &str,
-) -> (Option<LearnedPatternRef>, Option<String>) {
+) -> (Option<LearnedPatternRef>, Option<String>, bool) {
     if !review.is_spam {
-        return (None, None);
+        return (None, None, false);
     }
     let Some(pat) = review.pattern.as_deref() else {
-        return (None, None);
+        return (None, None, false);
     };
     if pat.chars().count() < PATTERN_MIN_LEN {
-        return (None, None);
+        return (None, None, false);
     }
     if !crate::spam_filter::is_distinctive_spam_pattern(pat) {
         warn!(
             pattern = %pat,
             "Judge-Muster abgelehnt: nur generisches Vokabular (Distinktivitäts-Gate)"
         );
-        return (None, Some(pat.to_string()));
+        return (None, Some(pat.to_string()), false);
     }
     let pattern_type = match review.pattern_type.as_deref() {
         Some("phrase") => "phrase",
@@ -1647,7 +1650,8 @@ async fn persist_spam_learning(
     )
     .await
     .map(|id| LearnedPatternRef { id, pattern: pat.to_lowercase() });
-    (learned, None)
+    let save_failed = learned.is_none();
+    (learned, None, save_failed)
 }
 
 /// Liest `usage.prompt_tokens` / `usage.completion_tokens` aus der MiniMax-Antwort.
@@ -1740,7 +1744,10 @@ fn extract_verdict(text: &str) -> Option<AiReview> {
     let mut parsed: Option<serde_json::Value> = None;
     for m in flat_json_re.find_iter(text) {
         if let Ok(v) = serde_json::from_str::<serde_json::Value>(m.as_str()) {
-            if v.get("is_spam").is_some() {
+            // is_spam muss ein echter Bool sein — ein String "true" o.ä. darf
+            // NICHT still als harmlos durchgehen, sondern gilt als unparsebar
+            // (→ Provider-Fallback bzw. Error-Alert).
+            if v.get("is_spam").is_some_and(serde_json::Value::is_boolean) {
                 parsed = Some(v);
             }
         }
@@ -1799,7 +1806,7 @@ async fn save_spam_pattern(
     match result {
         Ok(id) => Some(id),
         Err(e) => {
-            debug!("Spam-Pattern konnte nicht gespeichert werden: {e}");
+            warn!("Spam-Pattern konnte nicht gespeichert werden: {e}");
             None
         }
     }
@@ -2104,6 +2111,14 @@ mod tests {
         assert!(extract_verdict("{\"foo\": 1}").is_none());
     }
 
+    #[test]
+    fn extract_verdict_verlangt_echten_bool() {
+        // String-"true" darf NICHT still als Urteil durchgehen (Review-HIGH
+        // 11.7.): unparsebar → Provider-Fallback/Error statt fälschlich Safe.
+        assert!(extract_verdict("{\"is_spam\": \"true\"}").is_none());
+        assert!(extract_verdict("{\"is_spam\": 1}").is_none());
+    }
+
     // ── has_high_confidence_single_message_signal ─────────────────────────────
     #[test]
     fn high_conf_crew_threat() {
@@ -2325,8 +2340,9 @@ mod tests {
             reason: Some("obfuskierter viewer-service".to_string()),
         };
 
-        let (learned, rejected) =
+        let (learned, rejected, save_failed) =
             persist_spam_learning(&pool, &review, content, "cheazycrust").await;
+        assert!(!save_failed);
         let learned = learned.expect("distinktives Muster muss gespeichert werden");
         assert_eq!(learned.pattern, "peakpy c0m");
         assert!(rejected.is_none());
@@ -2360,8 +2376,9 @@ mod tests {
             reason: Some("viewer-bot werbung".to_string()),
         };
 
-        let (learned, rejected) =
+        let (learned, rejected, save_failed) =
             persist_spam_learning(&pool, &review, "Best Viewers kaufen!", "chan1").await;
+        assert!(!save_failed);
         assert!(learned.is_none(), "generisches Vokabular darf nie gelernt werden");
         assert_eq!(rejected.as_deref(), Some("best viewers"));
 
@@ -2406,7 +2423,8 @@ mod tests {
             .expect("Urteil muss parsebar sein");
         assert!(review.is_spam);
 
-        let (learned, _) = persist_spam_learning(&pool, &review, content, "cheazycrust").await;
+        let (learned, _, _) =
+            persist_spam_learning(&pool, &review, content, "cheazycrust").await;
         assert!(learned.is_some());
 
         let (pattern, source_channel, source_message): (String, Option<String>, Option<String>) =
@@ -2435,7 +2453,7 @@ mod tests {
             reason: Some("normales kompliment".to_string()),
         };
 
-        let (learned, rejected) =
+        let (learned, rejected, _) =
             persist_spam_learning(&pool, &review, "best viewers in chat today", "cheazycrust")
                 .await;
         assert!(learned.is_none());
