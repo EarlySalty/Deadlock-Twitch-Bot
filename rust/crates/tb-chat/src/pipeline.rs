@@ -164,6 +164,26 @@ pub struct ModAlerter {
 /// damit ein Judge-Fehlurteil gegen echte Viewer per Button korrigierbar bleibt.
 const AI_SPAM_TIMEOUT_SECS: u32 = 24 * 60 * 60;
 
+/// Muster-Vorschlag für den „Als Spam korrigieren"-Button: Nachricht ohne
+/// Mentions/Backticks, auf 78 Zeichen gekürzt — das Muster reist in der
+/// Discord-custom_id (Limit 100 Zeichen inkl. Präfix), damit der Button ohne
+/// jeden serverseitigen Zustand Restarts überlebt. Substring-Matching macht
+/// den Präfix-Schnitt unschädlich.
+fn correction_learn_pattern(content: &str) -> Option<String> {
+    let text = content
+        .replace(['\r', '\n', '`'], " ")
+        .split_whitespace()
+        .filter(|part| !part.starts_with('@'))
+        .collect::<Vec<_>>()
+        .join(" ");
+    let pattern = text.trim();
+    if pattern.chars().count() >= 4 {
+        Some(pattern.chars().take(78).collect())
+    } else {
+        None
+    }
+}
+
 impl ModAlerter {
     pub fn new(http: reqwest::Client) -> Self {
         Self::with_endpoint(http, "http://localhost:8899/changelog")
@@ -332,6 +352,9 @@ impl ModAlerter {
                 "verdict": verdict_key,
                 "ai_reason": ai_reason.chars().take(200).collect::<String>(),
                 "learned": learned_entries,
+                // Für „Als Spam korrigieren", wenn nichts gelernt wurde —
+                // reist in der Button-custom_id (restart-fest ohne Store).
+                "learn_pattern": correction_learn_pattern(content),
             },
         });
         self.post("mod_alert", payload);
@@ -2140,6 +2163,18 @@ mod tests {
         let bans = std::fs::read_to_string(dir.join("twitch_autobans.log")).unwrap();
         assert!(bans.contains("\t[BANNED]\tkanal1\t-\t456\t-\tx"));
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn correction_learn_pattern_entfernt_mentions_und_kappt() {
+        let pattern = correction_learn_pattern(
+            "@MiracleGhost9 aha, so sammelt man also viewer Kappa",
+        )
+        .expect("pattern");
+        assert_eq!(pattern, "aha, so sammelt man also viewer Kappa");
+        assert!(correction_learn_pattern("@nur @mentions").is_none());
+        let long = "x".repeat(300);
+        assert_eq!(correction_learn_pattern(&long).unwrap().chars().count(), 78);
     }
 
     #[test]
