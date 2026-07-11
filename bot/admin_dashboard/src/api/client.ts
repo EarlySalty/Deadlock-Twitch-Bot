@@ -32,6 +32,7 @@ import type {
   PiiReadiness,
   RaidConfigSnapshot,
   RaidConfigUpdatePayload,
+  ResearchResponse,
   ScopeStatusResponse,
   StreamerDetail,
   StreamerRow,
@@ -1196,5 +1197,11 @@ export async function fetchMarketShare(
 ): Promise<MarketShareResponse> {
   return request<MarketShareResponse>(
     `/twitch/api/v2/market-share?days=${encodeURIComponent(days)}&scope=${encodeURIComponent(scope)}`,
+  );
+}
+
+export async function fetchAdminResearch(login: string, days: number): Promise<ResearchResponse> {
+  return admin<ResearchResponse>(
+    `/research/${encodeURIComponent(login.trim())}?days=${encodeURIComponent(days)}`,
   );
 }

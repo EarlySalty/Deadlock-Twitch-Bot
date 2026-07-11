@@ -700,9 +700,13 @@ pub fn build_admin_system_router(pool: PgPool, token: String) -> Router {
 /// Writes laufen wie der Admin-Config-Router durch den CSRF-Schutz (GET/HEAD
 /// passieren, Localhost-Bypass für interne Tools).
 pub fn build_admin_streamers_router(pool: PgPool, token: String) -> Router {
-    use handlers::admin_streamers;
+    use handlers::{admin_research, admin_streamers};
 
     Router::new()
+        .route(
+            "/twitch/api/admin/research/:login",
+            get(admin_research::handler),
+        )
         .route(
             "/twitch/api/admin/streamers",
             get(admin_streamers::list_handler),

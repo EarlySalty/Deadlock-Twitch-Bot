@@ -12,6 +12,7 @@ pub mod admin_legal;
 pub mod admin_manual_plan;
 pub mod admin_mode;
 pub mod admin_promo_mode;
+pub mod admin_research;
 pub mod admin_roadmap;
 pub mod admin_spa;
 pub mod admin_streamers;

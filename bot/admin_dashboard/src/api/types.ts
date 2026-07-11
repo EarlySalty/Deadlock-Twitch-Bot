@@ -489,3 +489,58 @@ export interface MarketShareResponse {
   current: MarketShareCurrent | null;
   roster: MarketShareRoster;
 }
+
+export interface ResearchDistribution {
+  median: number;
+  p25: number;
+  p75: number;
+}
+
+export interface ResearchSubject {
+  sessions_count: number;
+  total_hours: number;
+  active_days: number;
+  avg_viewers: number;
+  median_viewers: number;
+  peak_viewers: number;
+  sample_count: number;
+  last_seen: string | null;
+  dominant_language: string | null;
+  de_share: number;
+  recent_titles: string[];
+}
+
+export interface ResearchBaseline {
+  partner_count: number;
+  avg_viewers: ResearchDistribution;
+  total_hours: ResearchDistribution;
+  active_days: ResearchDistribution;
+}
+
+export interface ResearchScoreComponent {
+  value: number;
+  percentile: number;
+  weight: number;
+}
+
+export interface ResearchResponse {
+  login: string;
+  days: number;
+  found: boolean;
+  is_already_partner: boolean;
+  partner_status: string | null;
+  subject: ResearchSubject;
+  baseline: ResearchBaseline;
+  score: {
+    total: number;
+    components: {
+      viewers: ResearchScoreComponent;
+      hours: ResearchScoreComponent;
+      consistency: ResearchScoreComponent;
+    };
+    tier: {
+      key: string;
+      label: string;
+    };
+  };
+}
