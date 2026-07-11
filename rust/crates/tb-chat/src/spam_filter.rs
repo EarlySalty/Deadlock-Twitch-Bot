@@ -646,17 +646,18 @@ const GENERIC_PATTERN_TOKENS: &[&str] = &[
 ];
 
 /// True, wenn ein Muster unterscheidungskräftig genug ist, um gelernt zu
-/// werden: mindestens ein Token muss ein Nicht-Generikum mit >= 4 Zeichen
-/// sein (Service-Name wie „streamboo") oder eine Domain, deren registrierbarer
-/// Name selbst nicht generisch ist.
+/// werden: mindestens ein Token muss eine Domain mit distinktivem
+/// registrierbarem Namen sein („eballo.com") oder ein Nicht-Generikum mit
+/// >= 6 Zeichen (Dienstname wie „streamboo", „clicknex", „peakpy") — kurze
+/// Alltagswörter („hello") tragen kein Muster, sie würden als Learned-*
+/// hartes Spam-Signal (+2) gegen normale Chat-Nachrichten wirken.
 ///
 /// Geprüft wird auf derselben Normalform wie das Matching (Kompaktform ohne
 /// Satzzeichen): „view.ers" kompaktiert zu „viewers" und ist damit genauso
-/// generisch wie „viewers" — sonst könnte ein gelerntes Punkt-Muster als
-/// hartes Signal (+2) harmloses Viewer-Gerede in Ban-Nähe rücken.
+/// generisch wie „viewers".
 ///
-/// „eballo.com" ✓ · „streamboo" ✓ · „best viewers" ✗ · „view.ers" ✗ ·
-/// „viewer.com" ✗
+/// „eballo.com" ✓ · „streamboo" ✓ · „best viewers" ✗ · „hello viewers" ✗ ·
+/// „view.ers" ✗ · „viewer.com" ✗
 pub fn is_distinctive_spam_pattern(pattern: &str) -> bool {
     pattern.to_lowercase().split_whitespace().any(|token| {
         let t = token.trim_matches(|c: char| !c.is_alphanumeric() && c != '.');
@@ -678,8 +679,10 @@ pub fn is_distinctive_spam_pattern(pattern: &str) -> bool {
             let name = labels[labels.len() - 2];
             name.chars().count() >= 4 && !GENERIC_PATTERN_TOKENS.contains(&name)
         } else {
-            // Einzelwort: Kompaktform ist bereits >= 4 Zeichen und nicht generisch.
-            true
+            // Einzelwort ohne Punkt: erst ab 6 Zeichen dienstnamen-tauglich —
+            // darunter überwiegen Alltagswörter, die das Gate nicht per
+            // Blockliste aufzählen kann.
+            compacted.chars().count() >= 6
         }
     })
 }
@@ -937,6 +940,17 @@ mod tests {
     }
 
     #[test]
+    fn gate_lehnt_kurze_alltagswoerter_ab() {
+        // Wörter ohne Punkt erst ab 6 Zeichen — sonst wird jedes ungelistete
+        // Alltagswort zum harten Learned-Signal (Merge-Kritiker 11.7.).
+        assert!(!is_distinctive_spam_pattern("hello"));
+        assert!(!is_distinctive_spam_pattern("hello viewers"));
+        assert!(!is_distinctive_spam_pattern("kaufe views"));
+        assert!(is_distinctive_spam_pattern("eballo"));
+        assert!(is_distinctive_spam_pattern("peakpy"));
+    }
+
+    #[test]
     fn gate_akzeptiert_domains_und_dienstnamen() {
         assert!(is_distinctive_spam_pattern("eballo.com"));
         assert!(is_distinctive_spam_pattern("streamboo"));
@@ -982,12 +996,12 @@ mod tests {
     fn gelerntes_spam_phrase_pattern() {
         let learned = LearnedPatterns {
             spam: vec![LearnedSpamPattern {
-                pattern: "kaufe views".to_string(),
+                pattern: "kaufe viewboost".to_string(),
                 pattern_type: "phrase".to_string(),
             }],
         };
         let f = SpamFilter::new(learned);
-        let v = f.evaluate("kaufe views günstig", &ctx_default());
+        let v = f.evaluate("kaufe viewboost günstig", &ctx_default());
         assert_eq!(v.score, 2);
         assert!(v.matched.iter().any(|r| r.starts_with("Learned-Phrase")));
         // ALLE Learned-* Reasons sind hard signals (moderation.py Z. 606: startswith "Learned-")
@@ -1174,7 +1188,7 @@ mod db_tests {
         sqlx::query(
             "INSERT INTO twitch_auto_learned_spam_patterns (pattern, pattern_type) VALUES ($1, $2)",
         )
-        .bind("kaufe views")
+        .bind("kaufe viewboost")
         .bind("phrase")
         .execute(&pool)
         .await
@@ -1191,7 +1205,7 @@ mod db_tests {
 
         let lp = LearnedPatterns::load(&pool).await;
         assert_eq!(lp.spam.len(), 2);
-        assert!(lp.spam.iter().any(|p| p.pattern == "kaufe views" && p.pattern_type == "phrase"));
+        assert!(lp.spam.iter().any(|p| p.pattern == "kaufe viewboost" && p.pattern_type == "phrase"));
         assert!(lp.spam.iter().any(|p| p.pattern == "viewbots" && p.pattern_type == "fragment"));
     }
 
@@ -1203,7 +1217,7 @@ mod db_tests {
         sqlx::query(
             "INSERT INTO twitch_auto_learned_spam_patterns (pattern, pattern_type) VALUES ($1, $2)",
         )
-        .bind("kaufe views")
+        .bind("kaufe viewboost")
         .bind("phrase")
         .execute(&pool)
         .await
@@ -1211,7 +1225,7 @@ mod db_tests {
 
         let lp = LearnedPatterns::load(&pool).await;
         let f = SpamFilter::new(lp);
-        let v = f.evaluate("kaufe views günstig", &SpamContext::default());
+        let v = f.evaluate("kaufe viewboost günstig", &SpamContext::default());
         assert_eq!(v.score, 2);
         assert!(v.matched.iter().any(|r| r.starts_with("Learned-Phrase")));
     }
@@ -1223,7 +1237,7 @@ mod db_tests {
 
         // Filter startet mit leeren Mustern.
         let f = SpamFilter::new(LearnedPatterns::load(&pool).await);
-        let before = f.evaluate("kaufe views günstig", &SpamContext::default());
+        let before = f.evaluate("kaufe viewboost günstig", &SpamContext::default());
         assert!(
             !before.matched.iter().any(|r| r.starts_with("Learned-Phrase")),
             "vor dem Lernen kein Learned-Phrase-Treffer"
@@ -1233,7 +1247,7 @@ mod db_tests {
         sqlx::query(
             "INSERT INTO twitch_auto_learned_spam_patterns (pattern, pattern_type) VALUES ($1, $2)",
         )
-        .bind("kaufe views")
+        .bind("kaufe viewboost")
         .bind("phrase")
         .execute(&pool)
         .await
@@ -1241,7 +1255,7 @@ mod db_tests {
 
         // ... und greift nach reload() OHNE neuen Filter (atomarer ArcSwap).
         f.reload(&pool).await;
-        let after = f.evaluate("kaufe views günstig", &SpamContext::default());
+        let after = f.evaluate("kaufe viewboost günstig", &SpamContext::default());
         assert_eq!(after.score, 2);
         assert!(after.matched.iter().any(|r| r.starts_with("Learned-Phrase")));
     }

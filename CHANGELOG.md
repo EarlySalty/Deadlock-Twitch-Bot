@@ -4,7 +4,7 @@
 
 **Änderung:** Bei verdächtigen Nachrichten urteilt jetzt zuerst eine KI (mit stärkerem Modell und Ersatz-Modell bei Ausfällen). Bestätigt sie Spam, wird die Nachricht gelöscht und die Person bekommt 24 Stunden Timeout, bewusst umkehrbar statt Ban. Jede Entscheidung, auch „harmlos", Fehler oder übersprungen, landet sichtbar im Mod-Kanal. Harmlos-Muster werden gar nicht mehr gelernt, und neue Spam-Muster nur noch, wenn sie einen echten Dienst- oder Domainnamen enthalten, nie bloß Allerweltswörter wie „viewer".
 
-**Aktuelles Verhalten:** Bekannte Spam-Phrasen führen weiter sofort zum Bann. Im Graubereich entscheidet die KI, handelt umkehrbar und zeigt euch Urteil, Begründung und Aktion. Liegt sie daneben, genügt ein Klick auf den Korrektur-Button im Alert.
+**Aktuelles Verhalten:** Bekannte Spam-Phrasen führen weiter sofort zum Bann. Im Graubereich entscheidet die KI, handelt umkehrbar und zeigt euch Urteil, Begründung und Aktion. Liegt sie daneben, nehmt ihr das gelernte Muster per Korrektur-Button im Alert zurück; einen bereits laufenden Timeout hebt ihr wie gewohnt im Twitch-Mod-Bereich auf.
 
 ---
 
