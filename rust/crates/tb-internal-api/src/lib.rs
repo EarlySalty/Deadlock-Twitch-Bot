@@ -167,6 +167,10 @@ pub fn build_internal_router(
             &format!("{base}/spam-learning"),
             post(spam_learning::learn_handler),
         )
+        .route(
+            &format!("{base}/spam-learning/correct"),
+            post(spam_learning::correct_handler),
+        )
         // Raid-OAuth-Strecke (Welle B): nativ via RaidOAuthPort +
         // Composition-Root in tb-bot (raid_oauth_impl.rs). auth-url schreibt
         // den State in oauth_state_tokens mit IDENTISCHEM SQL wie Python.
