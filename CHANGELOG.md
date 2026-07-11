@@ -1,3 +1,13 @@
+## #353 — Die Spam-Abwehr denkt jetzt selbst mit und lässt sich korrigieren
+
+**Problem:** Ein automatisch gelerntes „harmlos"-Muster hatte still dafür gesorgt, dass eindeutige Viewer-Bot-Werbung nur gemeldet statt entfernt wurde. Gleichzeitig konnte niemand sehen, was die KI eigentlich entschieden hatte.
+
+**Änderung:** Bei verdächtigen Nachrichten urteilt jetzt zuerst eine KI (mit stärkerem Modell und Ersatz-Modell bei Ausfällen). Bestätigt sie Spam, wird die Nachricht gelöscht und die Person bekommt 24 Stunden Timeout, bewusst umkehrbar statt Ban. Jede Entscheidung, auch „harmlos", Fehler oder übersprungen, landet sichtbar im Mod-Kanal. Harmlos-Muster werden gar nicht mehr gelernt, und neue Spam-Muster nur noch, wenn sie einen echten Dienst- oder Domainnamen enthalten, nie bloß Allerweltswörter wie „viewer".
+
+**Aktuelles Verhalten:** Bekannte Spam-Phrasen führen weiter sofort zum Bann. Im Graubereich entscheidet die KI, handelt umkehrbar und zeigt euch Urteil, Begründung und Aktion. Liegt sie daneben, nehmt ihr das gelernte Muster per Korrektur-Button im Alert zurück; einen bereits laufenden Timeout hebt ihr wie gewohnt im Twitch-Mod-Bereich auf.
+
+---
+
 ## #352 — Der Bot weist Mitspieler-Suchende auf den Discord
 
 **Problem:** Wer im Chat aktiv nach Mitspielern für Deadlock gesucht hat („suche noch zwei für Ranked", „wer hat Bock zu zocken"), bekam keinen Hinweis auf die Community, in der genau solche Leute zusammenfinden.

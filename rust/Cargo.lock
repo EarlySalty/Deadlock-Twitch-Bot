@@ -3015,6 +3015,7 @@ dependencies = [
  "sha2",
  "sqlx",
  "tb-analytics",
+ "tb-chat",
  "tb-domain",
  "tb-error",
  "tb-http-core",

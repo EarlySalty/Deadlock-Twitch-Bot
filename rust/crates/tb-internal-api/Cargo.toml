@@ -23,6 +23,9 @@ url          = { workspace = true }
 # UUID → str (Block-10-Serializer-Parität, json_default).
 uuid         = { workspace = true }
 tb-analytics        = { workspace = true }
+# Distinktivitäts-Gate für gelernte Spam-Muster (spam_filter) — ein Gate,
+# beide Schreibwege (AI-Reviewer + interner Lern-Endpoint).
+tb-chat             = { workspace = true }
 tb-domain           = { workspace = true }
 tb-error            = { workspace = true }
 tb-http-core        = { workspace = true }

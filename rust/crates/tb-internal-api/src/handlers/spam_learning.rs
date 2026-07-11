@@ -1,8 +1,13 @@
-//! Manuelles Lernen für Twitch-Spam-Alerts.
+//! Korrektur-Endpoints für den Spam-Judge.
 //!
-//! Discord-Buttons bestätigen ein bereits gemeldetes `sus_spam` entweder als
-//! echtes Spam-Muster oder als harmloses Safe-Muster. Gespeichert wird direkt
-//! in den vorhandenen Auto-Learning-Tabellen.
+//! Der Judge (tb-chat) lernt Spam-Muster selbst; die Discord-Buttons
+//! korrigieren ihn nur noch:
+//! - `POST …/spam-learning` („Als Spam korrigieren" bei Harmlos-Urteil):
+//!   lernt ein Spam-Muster — nur `verdict=spam`, Safe-Lernen ist abgeschafft
+//!   (Safe-List-Poisoning, 11.07.2026). Das Distinktivitäts-Gate aus
+//!   tb-chat gilt auch hier (ein Gate, beide Schreibwege).
+//! - `POST …/spam-learning/correct` („Als harmlos korrigieren" bei
+//!   Spam-Urteil): löscht die gelernte Zeile anhand ihrer Row-ID.
 
 use axum::{extract::State, response::IntoResponse, Json};
 use chrono::Utc;
@@ -34,6 +39,23 @@ pub struct SpamLearningResponse {
     pub ok: bool,
     pub verdict: String,
     pub pattern: String,
+    /// false, wenn das Distinktivitäts-Gate das Muster abgelehnt hat
+    /// (generisches Vokabular) — Request ok, aber nichts gespeichert.
+    pub learned: bool,
+}
+
+#[derive(Deserialize)]
+pub struct SpamCorrectRequest {
+    /// Bisher nur "spam" — Feld existiert für Vorwärtskompatibilität.
+    pub table: String,
+    pub id: i64,
+}
+
+#[derive(Serialize)]
+pub struct SpamCorrectResponse {
+    pub ok: bool,
+    pub deleted: bool,
+    pub pattern: Option<String>,
 }
 
 fn truncate_chars(value: &str, max: usize) -> String {
@@ -81,60 +103,101 @@ pub async fn learn_handler(
     let reason = normalize_optional(body.reason, MAX_REASON_CHARS);
     let now = Utc::now();
 
-    match verdict.as_str() {
-        "spam" => {
-            sqlx::query(
-                r#"
-                INSERT INTO twitch_auto_learned_spam_patterns
-                    (pattern, pattern_type, source_message, source_channel, minimax_reasoning, created_at)
-                VALUES ($1, $2, $3, $4, $5, $6)
-                ON CONFLICT (pattern) DO UPDATE SET
-                    hit_count = twitch_auto_learned_spam_patterns.hit_count + 1
-                "#,
-            )
-            .bind(&pattern)
-            .bind(&pattern_type)
-            .bind(&source_message)
-            .bind(&source_channel)
-            .bind(&reason)
-            .bind(now)
-            .execute(&pool)
-            .await
-            .map_err(|e| {
-                tracing::error!("spam-learning spam DB-Fehler: {e}");
-                ApiError::internal()
-            })?;
-        }
-        "safe" => {
-            sqlx::query(
-                r#"
-                INSERT INTO twitch_auto_learned_safe_patterns
-                    (pattern, source_message, source_channel, minimax_reasoning, created_at)
-                VALUES ($1, $2, $3, $4, $5)
-                ON CONFLICT (pattern) DO UPDATE SET
-                    hit_count = twitch_auto_learned_safe_patterns.hit_count + 1
-                "#,
-            )
-            .bind(&pattern)
-            .bind(&source_message)
-            .bind(&source_channel)
-            .bind(&reason)
-            .bind(now)
-            .execute(&pool)
-            .await
-            .map_err(|e| {
-                tracing::error!("spam-learning safe DB-Fehler: {e}");
-                ApiError::internal()
-            })?;
-        }
-        _ => return Err(ApiError::bad_request("verdict must be spam or safe")),
+    if verdict != "spam" {
+        // Safe-Lernen ist abgeschafft (Safe-List-Poisoning, 11.07.2026).
+        return Err(ApiError::bad_request("verdict must be spam"));
     }
+
+    if !tb_chat::spam_filter::is_distinctive_spam_pattern(&pattern) {
+        tracing::warn!(
+            pattern = %pattern,
+            "spam-learning: Muster abgelehnt (Distinktivitäts-Gate, nur generisches Vokabular)"
+        );
+        return Ok(Json(SpamLearningResponse {
+            ok: true,
+            verdict,
+            pattern,
+            learned: false,
+        }));
+    }
+
+    sqlx::query(
+        r#"
+        INSERT INTO twitch_auto_learned_spam_patterns
+            (pattern, pattern_type, source_message, source_channel, minimax_reasoning, created_at)
+        VALUES ($1, $2, $3, $4, $5, $6)
+        ON CONFLICT (pattern) DO UPDATE SET
+            hit_count = twitch_auto_learned_spam_patterns.hit_count + 1
+        "#,
+    )
+    .bind(&pattern)
+    .bind(&pattern_type)
+    .bind(&source_message)
+    .bind(&source_channel)
+    .bind(&reason)
+    .bind(now)
+    .execute(&pool)
+    .await
+    .map_err(|e| {
+        tracing::error!("spam-learning spam DB-Fehler: {e}");
+        ApiError::internal()
+    })?;
 
     Ok(Json(SpamLearningResponse {
         ok: true,
         verdict,
         pattern,
+        learned: true,
     }))
+}
+
+/// `POST /internal/twitch/v1/spam-learning/correct`
+///
+/// „Als harmlos korrigieren": löscht ein vom Judge gelerntes Spam-Muster
+/// anhand seiner Row-ID (steht in der custom_id des Discord-Buttons).
+///
+/// ponytail: Der SpamFilter-Cache lädt alle 120s neu — bis dahin kann das
+/// gelöschte Muster noch matchen. Bewusst akzeptiert: Korrekturen kommen
+/// ohnehin Minuten nach der Aktion; ein Invalidation-Kanal in den Filter
+/// lohnt erst, wenn das Fenster real stört.
+pub async fn correct_handler(
+    auth: AuthLevel,
+    State(pool): State<PgPool>,
+    Json(body): Json<SpamCorrectRequest>,
+) -> Result<impl IntoResponse, ApiError> {
+    if !auth.is_privileged() {
+        return Err(ApiError::unauthorized());
+    }
+    if body.table != "spam" {
+        return Err(ApiError::bad_request("table must be spam"));
+    }
+
+    let deleted: Option<String> = sqlx::query_scalar(
+        "DELETE FROM twitch_auto_learned_spam_patterns WHERE id = $1 RETURNING pattern",
+    )
+    .bind(body.id)
+    .fetch_optional(&pool)
+    .await
+    .map_err(|e| {
+        tracing::error!("spam-learning correct DB-Fehler: {e}");
+        ApiError::internal()
+    })?;
+
+    match deleted {
+        Some(pattern) => {
+            tracing::info!(
+                id = body.id,
+                pattern = %pattern,
+                "spam-learning: gelerntes Muster per Korrektur-Button entfernt"
+            );
+            Ok(Json(SpamCorrectResponse {
+                ok: true,
+                deleted: true,
+                pattern: Some(pattern),
+            }))
+        }
+        None => Err(ApiError::not_found()),
+    }
 }
 
 #[cfg(test)]
