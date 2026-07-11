@@ -78,7 +78,7 @@ pub use invite_question::{
 };
 pub use lfg_pitch::{
     lfg_pitch_enabled_from_env, LfgJudge, LfgJudgeInput, LfgPitchResponder, LfgVerdict,
-    LfgVerdictKind, MiniMaxLfgJudge, LFG_PITCH_COPY_PLACEHOLDER,
+    LfgVerdictKind, MiniMaxLfgJudge, LFG_PITCH_REPLY,
 };
 pub use lurker_policy::{
     is_passive_lurker_channel, should_attempt_runtime_heal, PASSIVE_LURKER_DETAIL,

@@ -20,8 +20,8 @@ const LFG_PITCH_CHANNEL_COOLDOWN: Duration = Duration::from_secs(120);
 const LFG_PITCH_USER_COOLDOWN: Duration = Duration::from_secs(6 * 60 * 60);
 const LFG_PITCH_JUDGE_COOLDOWN: Duration = Duration::from_secs(30);
 
-pub const LFG_PITCH_COPY_PLACEHOLDER: &str =
-    "PLATZHALTER: LFG-Mitspieler-Pitch-Antwort an @{chatter} mit Discord-Link {invite}";
+pub const LFG_PITCH_REPLY: &str =
+    "@{chatter} Bei uns findest du jederzeit Mitspieler, schau gerne mal in unserer Community vorbei: {invite} 👀";
 
 const LFG_JUDGE_SYSTEM_PROMPT: &str = r#"Du bist ein vorsichtiger deutschsprachiger Twitch-Chat-Moderator für einen Deadlock-Stream.
 
@@ -696,7 +696,7 @@ impl LfgPitchResponder {
     }
 
     async fn send_go(&self, event: &ChatMessageEvent, chatter_login: &str, invite: &str) -> bool {
-        let message = LFG_PITCH_COPY_PLACEHOLDER
+        let message = LFG_PITCH_REPLY
             .replace("{chatter}", chatter_login)
             .replace("{invite}", invite);
         self.send(event, &message).await
@@ -1318,7 +1318,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn go_sendet_placeholder_und_notifier_einmal_nach_send() {
+    async fn go_sendet_pitch_und_notifier_einmal_nach_send() {
         let (responder, api, notifier, _, order) = responder(
             true,
             Some("https://discord.gg/test"),
@@ -1332,7 +1332,7 @@ mod tests {
 
         let messages = api.messages();
         assert_eq!(messages.len(), 1);
-        assert!(messages[0].contains("PLATZHALTER"));
+        assert!(messages[0].contains("@viewer"));
         assert!(messages[0].contains("https://discord.gg/test"));
         assert_eq!(notifier.calls(), vec!["streamer"]);
         assert_eq!(order.lock().unwrap().clone(), vec!["send", "note"]);
