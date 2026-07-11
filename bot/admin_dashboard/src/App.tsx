@@ -16,6 +16,7 @@ import ChatActionsPage from '@/pages/community/ChatActions';
 import EngagementPage from '@/pages/community/Engagement';
 import MarketSharePage from '@/pages/community/MarketShare';
 import RaidsActivityPage from '@/pages/community/RaidsActivity';
+import ResearchPage from '@/pages/community/Research';
 import AnnouncementsPage from '@/pages/content/Announcements';
 import ChangelogPage from '@/pages/content/Changelog';
 import LegalPage from '@/pages/content/Legal';
@@ -63,6 +64,7 @@ const router = createBrowserRouter(
         { path: 'community/streamers/:login', element: <StreamerDetailPage /> },
         { path: 'community/raids', element: <RaidsActivityPage /> },
         { path: 'community/market', element: <MarketSharePage /> },
+        { path: 'community/research', element: <ResearchPage /> },
         { path: 'community/engagement', element: <EngagementPage /> },
         { path: 'community/chat', element: <ChatActionsPage /> },
         { path: 'content', element: <Navigate to="/content/announcements" replace /> },

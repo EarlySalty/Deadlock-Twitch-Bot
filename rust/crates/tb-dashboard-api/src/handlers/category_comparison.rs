@@ -19,7 +19,7 @@ use crate::query_int::parse_bounded_query_int;
 
 const EXTERNAL_REACH_AVG_THRESHOLD: f64 = 100.0;
 
-fn get_tier(avg: f64) -> (&'static str, &'static str) {
+pub fn get_tier(avg: f64) -> (&'static str, &'static str) {
     if avg < 15.0 {
         ("starter", "Starter (0–15 Ø)")
     } else if avg < 50.0 {
@@ -34,7 +34,7 @@ fn get_tier(avg: f64) -> (&'static str, &'static str) {
 }
 
 /// Python's `_percentile_of`: (below + 0.5*equal) / total * 100, als i32.
-fn percentile_of(sorted: &[f64], value: f64) -> i32 {
+pub(crate) fn percentile_of(sorted: &[f64], value: f64) -> i32 {
     if sorted.is_empty() {
         return 50;
     }
