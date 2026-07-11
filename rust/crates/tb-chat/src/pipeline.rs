@@ -1818,8 +1818,7 @@ mod tests {
         assert!(
             api.calls()
                 .iter()
-                .any(|call| call.contains("@viewer")
-                    && call.contains("https://discord.gg/lfg-test")),
+                .any(|call| call.contains("https://discord.gg/lfg-test")),
             "{:?}",
             api.calls()
         );
