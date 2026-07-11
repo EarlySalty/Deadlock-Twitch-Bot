@@ -14,6 +14,7 @@ use serde_json::json;
 use sqlx::PgPool;
 
 use crate::{
+    auth::level::DashboardAuthLevel,
     handlers::category_comparison::{get_tier, percentile_of},
     query_int::parse_bounded_query_int,
 };
@@ -288,10 +289,15 @@ fn internal_error(error: sqlx::Error) -> Response {
 
 /// `GET /twitch/api/admin/research/:login?days=30`
 pub async fn handler(
-    Path(raw_login): Path<String>,
+    auth: DashboardAuthLevel,
     State(pool): State<PgPool>,
+    Path(raw_login): Path<String>,
     Query(params): Query<ResearchQuery>,
 ) -> Response {
+    if let Some(err) = crate::auth::require_admin(&auth) {
+        return err.into_response();
+    }
+
     let days = match parse_bounded_query_int(params.days.as_deref(), "days", 30, 7, 90) {
         Ok(days) => days,
         Err(error) => return error.into_response(),
@@ -388,15 +394,9 @@ pub async fn handler(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use axum::{
-        body::Body,
-        http::{Request, StatusCode},
-        routing::get,
-        Router,
-    };
+    use axum::http::StatusCode;
     use serde_json::Value;
     use sqlx::{postgres::PgPoolOptions, PgPool};
-    use tower::ServiceExt;
 
     async fn pool_or_skip(schema: &str) -> Option<PgPool> {
         let dsn = std::env::var("TB_TEST_DATABASE_URL").ok()?;
@@ -444,22 +444,21 @@ mod tests {
         Some(pool)
     }
 
-    fn router(pool: PgPool) -> Router {
-        Router::new()
-            .route("/twitch/api/admin/research/:login", get(handler))
-            .with_state(pool)
-    }
-
-    async fn request(pool: PgPool, uri: &str) -> (StatusCode, Value) {
-        let response = router(pool)
-            .oneshot(
-                Request::builder()
-                    .uri(uri)
-                    .body(Body::empty())
-                    .expect("request"),
-            )
-            .await
-            .expect("response");
+    async fn request(
+        auth: DashboardAuthLevel,
+        pool: PgPool,
+        login: &str,
+        days: Option<&str>,
+    ) -> (StatusCode, Value) {
+        let response = handler(
+            auth,
+            State(pool),
+            Path(login.into()),
+            Query(ResearchQuery {
+                days: days.map(str::to_owned),
+            }),
+        )
+        .await;
         let status = response.status();
         let body = axum::body::to_bytes(response.into_body(), 64 * 1024)
             .await
@@ -481,13 +480,28 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn unauth_returns_auth_required_401() {
+        let Some(pool) = pool_or_skip("admin_research_unauth").await else {
+            return;
+        };
+
+        let (status, body) = request(DashboardAuthLevel::None, pool, "subject", None).await;
+
+        assert_eq!(status, StatusCode::UNAUTHORIZED);
+        assert_eq!(
+            body,
+            serde_json::json!({"error": "auth_required", "required": "admin"})
+        );
+    }
+
+    #[tokio::test]
     async fn unknown_login_returns_found_false_with_baseline() {
         let Some(pool) = pool_or_skip("admin_research_unknown").await else {
             return;
         };
         insert_baseline(&pool).await;
 
-        let (status, body) = request(pool, "/twitch/api/admin/research/missing").await;
+        let (status, body) = request(DashboardAuthLevel::admin(), pool, "missing", None).await;
 
         assert_eq!(status, StatusCode::OK);
         assert_eq!(body["login"], "missing");
@@ -516,7 +530,7 @@ mod tests {
         .await
         .expect("insert subject");
 
-        let (status, body) = request(pool, "/twitch/api/admin/research/subject?days=7").await;
+        let (status, body) = request(DashboardAuthLevel::admin(), pool, "subject", Some("7")).await;
 
         assert_eq!(status, StatusCode::OK);
         assert_eq!(body["found"], true);
@@ -557,8 +571,8 @@ mod tests {
         .await
         .expect("insert score rows");
 
-        let (_, low) = request(pool.clone(), "/twitch/api/admin/research/low").await;
-        let (_, high) = request(pool, "/twitch/api/admin/research/high").await;
+        let (_, low) = request(DashboardAuthLevel::admin(), pool.clone(), "low", None).await;
+        let (_, high) = request(DashboardAuthLevel::admin(), pool, "high", None).await;
 
         assert!(
             high["score"]["components"]["viewers"]["percentile"].as_i64()
@@ -578,7 +592,7 @@ mod tests {
         .await
         .expect("insert partner");
 
-        let (status, body) = request(pool, "/twitch/api/admin/research/known").await;
+        let (status, body) = request(DashboardAuthLevel::admin(), pool, "known", None).await;
 
         assert_eq!(status, StatusCode::OK);
         assert_eq!(body["is_already_partner"], true);
@@ -591,10 +605,15 @@ mod tests {
             return;
         };
 
-        let (invalid_status, invalid_body) =
-            request(pool.clone(), "/twitch/api/admin/research/test?days=abc").await;
+        let (invalid_status, invalid_body) = request(
+            DashboardAuthLevel::admin(),
+            pool.clone(),
+            "test",
+            Some("abc"),
+        )
+        .await;
         let (range_status, range_body) =
-            request(pool, "/twitch/api/admin/research/test?days=500").await;
+            request(DashboardAuthLevel::admin(), pool, "test", Some("500")).await;
 
         assert_eq!(invalid_status, StatusCode::BAD_REQUEST);
         assert_eq!(
@@ -614,9 +633,15 @@ mod tests {
             return;
         };
 
-        let (normalized_status, normalized) =
-            request(pool.clone(), "/twitch/api/admin/research/UPPER_Case%20").await;
-        let (invalid_status, invalid) = request(pool, "/twitch/api/admin/research/bad-name").await;
+        let (normalized_status, normalized) = request(
+            DashboardAuthLevel::admin(),
+            pool.clone(),
+            "UPPER_Case ",
+            None,
+        )
+        .await;
+        let (invalid_status, invalid) =
+            request(DashboardAuthLevel::admin(), pool, "bad-name", None).await;
 
         assert_eq!(normalized_status, StatusCode::OK);
         assert_eq!(normalized["login"], "upper_case");
