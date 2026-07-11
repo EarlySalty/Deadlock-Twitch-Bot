@@ -330,6 +330,7 @@ twitch_auto_learned_safe_patterns|source_channel|text|YES|
 twitch_auto_learned_safe_patterns|source_message|text|YES|
 twitch_auto_learned_spam_patterns|created_at|timestamp with time zone|NO|now()
 twitch_auto_learned_spam_patterns|hit_count|integer|NO|0
+twitch_auto_learned_spam_patterns|id|bigint|NO|
 twitch_auto_learned_spam_patterns|minimax_reasoning|text|YES|
 twitch_auto_learned_spam_patterns|pattern_type|text|NO|'fragment'::text
 twitch_auto_learned_spam_patterns|pattern|text|NO|
