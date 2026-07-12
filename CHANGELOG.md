@@ -1,10 +1,10 @@
-## #354 — PLATZHALTER: Titelgenerator zuverlässiger und konkreter
+## #354 — Titelgenerator zuverlässiger und konkreter
 
-**Problem:** PLATZHALTER: Technischen Ausfall und generische Vorschläge beschreiben.
+**Problem:** Wenn der Titel-Dienst kurz drosselte, brach die Generierung sofort ab oder lieferte kommentarlos gar nichts. Und wenn doch ein Titel kam, war er oft austauschbar statt auf den Stream bezogen.
 
-**Änderung:** PLATZHALTER: Begrenzte Wiederholungen, leere Antworten als Fehler und präziseren Kontext beschreiben.
+**Änderung:** Bei kurzzeitiger Drosselung probiert der Bot es jetzt automatisch bis zu drei Mal, bevor er aufgibt. Eine leere Antwort gilt als Fehler und wird gemeldet statt still verschluckt. Außerdem bekommt die KI mehr Kontext und klare Vorgaben: konkreter Aufhänger aus Keywords, Rang oder Anlass, 45 bis 100 Zeichen, keine Allerwelts-Titel wie „Ranked Grind".
 
-**Aktuelles Verhalten:** PLATZHALTER: Verhalten bei temporärer Drosselung und Qualität der Vorschläge beschreiben.
+**Aktuelles Verhalten:** Titel kommen auch bei kurzen Drosselphasen zuverlässig an. Schlägt es wirklich fehl, gibt es eine sichtbare Fehlermeldung statt Stille. Die Vorschläge orientieren sich an euren besten bisherigen Titeln und nennen einen konkreten Aufhänger.
 
 ## #353 — Die Spam-Abwehr denkt jetzt selbst mit und lässt sich korrigieren
 
