@@ -267,7 +267,7 @@ Ein Muster darf in einer frueheren Nachricht stehen und bleibt dann fuer den Ges
 - patterns=["a","b","c"] => is_crew=true, confidence mindestens 0.7
 3. Pruefe vor der Ausgabe Bool UND Confidence gegen diese Beispiele. Fehlt b oder fehlen sowohl a als auch c, MUSS is_crew=false und confidence hoechstens 0.3 sein, selbst wenn der Dialog allgemein verdaechtig wirkt. Erfinde keine Ausnahme.
 
-Die Woerter nani, Ricky, Freund gebannt und Bannliste sind mehrdeutig. Erfinde daraus kein Muster, wenn die jeweilige Bedeutung oben nicht im Dialog erkennbar ist. Im Zweifel is_crew=false. Antworte NUR als JSON: {"is_crew":bool,"confidence":0..1,"patterns":["a","b","c"],"reasoning":"kurz"}."#;
+Die Woerter nani, Ricky, Freund gebannt und Bannliste sind mehrdeutig. Erfinde daraus kein Muster, wenn die jeweilige Bedeutung oben nicht im Dialog erkennbar ist. Im Zweifel is_crew=false. Antworte NUR als JSON und erzeuge die Felder exakt in dieser Reihenfolge, damit is_crew aus den bereits festgelegten patterns folgt: {"patterns":["a","b","c"],"is_crew":bool,"confidence":0..1,"reasoning":"kurz"}."#;
 
 /// Timeout des Judge-HTTP-Calls.
 const CREW_JUDGE_TIMEOUT_SECS: u64 = 12;
