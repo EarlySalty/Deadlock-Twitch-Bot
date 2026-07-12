@@ -419,6 +419,7 @@ AUFGABE:
 3. Gib zusätzlich 2 Alternativen an.
 4. Bewerte kurz die 3 schlechtesten eigenen Titel (max. 1 Satz je Titel).
 
+KATEGORIE/SPIEL: Deadlock
 KEYWORDS (Intent des Streamers heute): {keywords}{rank_line}{live_line}
 
 BESTE EIGENE REFERENZEN (priorisieren, zuerst daran orientieren):
@@ -432,6 +433,9 @@ COMMUNITY BENCHMARKS (beste Deadlock-Titel nach normalisiertem Score):
 
 REGELN:
 - Der Titel soll vollständig und einladend sein - kein reiner Keyword-Dump.
+- Nutze einen konkreten Hook aus Keywords, Rang, Hero oder Party-Kontext statt austauschbarer Gaming-Floskeln.
+- Schreibe 45 bis 100 Zeichen; die harte Twitch-Obergrenze sind 140 Zeichen.
+- Erzeuge keine generischen Titel wie "Ranked Grind", "Gaming heute" oder "Wir sind live" ohne konkreten Anlass.
 - Passe dich stilistisch zuerst den BESTEN EIGENEN REFERENZEN an, erst danach den Community-Benchmarks.
 - Erfinde möglichst wenig neu. Bevorzuge bekannte Formulierungsbausteine, Satzrhythmus und Tonalität aus den Referenzen.
 - Wenn Keywords ungewohnt sind, formuliere konservativ statt kreativ.
@@ -550,13 +554,29 @@ async fn minimax_chat_completion(
         .timeout(std::time::Duration::from_secs(240))
         .build()
         .map_err(|e| e.to_string())?;
-    let resp = client
-        .post(&url)
-        .bearer_auth(api_key)
-        .json(&body)
-        .send()
-        .await
-        .map_err(|e| e.to_string())?;
+    let mut resp = None;
+    for attempt in 0..3 {
+        let current = client
+            .post(&url)
+            .bearer_auth(api_key)
+            .json(&body)
+            .send()
+            .await
+            .map_err(|e| e.to_string())?;
+        if current.status() != reqwest::StatusCode::TOO_MANY_REQUESTS || attempt == 2 {
+            resp = Some(current);
+            break;
+        }
+        let retry_after = current
+            .headers()
+            .get(reqwest::header::RETRY_AFTER)
+            .and_then(|value| value.to_str().ok())
+            .and_then(|value| value.parse::<u64>().ok())
+            .unwrap_or(1 << attempt)
+            .min(5);
+        tokio::time::sleep(Duration::from_secs(retry_after)).await;
+    }
+    let resp = resp.ok_or_else(|| "MiniMax request produced no response".to_string())?;
     if !resp.status().is_success() {
         return Err(format!("HTTP {}", resp.status()));
     }
@@ -608,11 +628,17 @@ pub async fn generate_title_with(
         true,
     )
     .await;
-    Ok(sanitize_title_result(
+    let result = sanitize_title_result(
         parse_title_response(&completion.content),
         keywords,
         rank_display,
-    ))
+    );
+    if result.primary.is_empty() {
+        return Err(GenerateTitleError::Http(
+            "MiniMax returned no usable title".to_string(),
+        ));
+    }
+    Ok(result)
 }
 
 /// Generiert einen Stream-Titel via MiniMax (Python `generate_title`).
@@ -947,6 +973,15 @@ mod tests {
         assert!(p.find("Stark").unwrap() < p.find("Schwach").unwrap());
     }
 
+    #[test]
+    fn prompt_gibt_spiel_hook_und_praezises_format_vor() {
+        let p = build_title_prompt("ranked solo", &[], &[], None, 0.0, None);
+        assert!(p.contains("KATEGORIE/SPIEL: Deadlock"));
+        assert!(p.contains("45 bis 100 Zeichen"));
+        assert!(p.contains("konkreten Hook"));
+        assert!(p.contains("keine generischen"));
+    }
+
     #[tokio::test]
     async fn generate_title_with_end_to_end() {
         use wiremock::matchers::{method, path};
@@ -981,6 +1016,60 @@ mod tests {
             .mount(&server)
             .await;
         let err = generate_title_with(&server.uri(), "k", "x", &[], &[], None, None)
+            .await
+            .unwrap_err();
+        assert!(matches!(err, GenerateTitleError::Http(_)));
+    }
+
+    #[tokio::test]
+    async fn generate_title_with_wiederholt_429_einmal() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        use std::sync::Arc;
+        use wiremock::matchers::{method, path};
+        use wiremock::{Mock, MockServer, ResponseTemplate};
+
+        let server = MockServer::start().await;
+        let calls = Arc::new(AtomicUsize::new(0));
+        Mock::given(method("POST"))
+            .and(path("/chat/completions"))
+            .respond_with({
+                let calls = Arc::clone(&calls);
+                move |_: &wiremock::Request| {
+                    if calls.fetch_add(1, Ordering::SeqCst) == 0 {
+                        ResponseTemplate::new(429).insert_header("Retry-After", "0")
+                    } else {
+                        ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                            "choices": [{"message": {"content":
+                                "{\"primary_title\":\"Ranked mit Plan\",\"alternatives\":[],\"title_analysis\":[]}"}}]
+                        }))
+                    }
+                }
+            })
+            .mount(&server)
+            .await;
+
+        let result = generate_title_with(&server.uri(), "k", "ranked", &[], &[], None, None)
+            .await
+            .unwrap();
+        assert_eq!(result.primary, "Ranked mit Plan");
+        assert_eq!(calls.load(Ordering::SeqCst), 2);
+    }
+
+    #[tokio::test]
+    async fn generate_title_with_leerer_modellantwort_ist_fehler() {
+        use wiremock::matchers::{method, path};
+        use wiremock::{Mock, MockServer, ResponseTemplate};
+
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/chat/completions"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "choices": [{"message": {"content": "kein JSON"}}]
+            })))
+            .mount(&server)
+            .await;
+
+        let err = generate_title_with(&server.uri(), "k", "ranked", &[], &[], None, None)
             .await
             .unwrap_err();
         assert!(matches!(err, GenerateTitleError::Http(_)));

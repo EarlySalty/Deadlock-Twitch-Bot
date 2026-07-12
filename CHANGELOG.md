@@ -1,3 +1,11 @@
+## #354 — PLATZHALTER: Titelgenerator zuverlässiger und konkreter
+
+**Problem:** PLATZHALTER: Technischen Ausfall und generische Vorschläge beschreiben.
+
+**Änderung:** PLATZHALTER: Begrenzte Wiederholungen, leere Antworten als Fehler und präziseren Kontext beschreiben.
+
+**Aktuelles Verhalten:** PLATZHALTER: Verhalten bei temporärer Drosselung und Qualität der Vorschläge beschreiben.
+
 ## #353 — Die Spam-Abwehr denkt jetzt selbst mit und lässt sich korrigieren
 
 **Problem:** Ein automatisch gelerntes „harmlos"-Muster hatte still dafür gesorgt, dass eindeutige Viewer-Bot-Werbung nur gemeldet statt entfernt wurde. Gleichzeitig konnte niemand sehen, was die KI eigentlich entschieden hatte.
