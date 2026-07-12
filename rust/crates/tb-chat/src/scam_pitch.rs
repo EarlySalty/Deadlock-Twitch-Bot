@@ -1459,6 +1459,37 @@ pub struct LearnedPatternRef {
     pub pattern: String,
 }
 
+#[derive(Debug, Clone, Copy)]
+enum SpamReviewVerdict {
+    Spam,
+    Clean,
+    Unsure,
+    Skipped,
+    Timeout,
+    ProviderError,
+    ParseError,
+}
+
+impl SpamReviewVerdict {
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::Spam => "spam",
+            Self::Clean => "clean",
+            Self::Unsure => "unsure",
+            Self::Skipped => "skipped",
+            Self::Timeout => "timeout",
+            Self::ProviderError => "provider_error",
+            Self::ParseError => "parse_error",
+        }
+    }
+}
+
+struct SpamReviewDecision {
+    verdict: SpamReviewVerdict,
+    confidence: Option<f32>,
+    reason: String,
+}
+
 /// Urteil des Judge im Verdachtspfad. Jede Variante MUSS beim Aufrufer einen
 /// Alert erzeugen — der Judge gatet die Aktion, nie die Sichtbarkeit.
 #[derive(Debug, Clone)]
@@ -1525,42 +1556,124 @@ impl SpamAiReviewer {
             }
             let cd_until = cds.get(&key).copied().unwrap_or(0.0);
             if now_mono < cd_until {
-                return AiReviewOutcome::Skipped;
+                return self
+                    .record_and_return(
+                        event,
+                        AiReviewOutcome::Skipped,
+                        SpamReviewVerdict::Skipped,
+                        None,
+                        "Cooldown aktiv".to_string(),
+                    )
+                    .await;
             }
             cds.insert(key, now_mono + REVIEW_COOLDOWN_SEC);
         }
 
         let providers = judge_providers();
         if providers.is_empty() {
-            return AiReviewOutcome::Error {
-                detail: "kein Judge-API-Key gesetzt (FIREWORK_API_KEY / MINIMAX_*)".to_string(),
-            };
+            let detail = "kein Judge-API-Key gesetzt (FIREWORK_API_KEY / MINIMAX_*)".to_string();
+            return self
+                .record_and_return(
+                    event,
+                    AiReviewOutcome::Error {
+                        detail: detail.clone(),
+                    },
+                    SpamReviewVerdict::ProviderError,
+                    None,
+                    detail,
+                )
+                .await;
         }
 
         let mut last_error = String::new();
+        let mut last_verdict = SpamReviewVerdict::Unsure;
         for provider in &providers {
             match call_judge(&self.http, provider, true, &content).await {
                 Ok(Some(review)) => {
                     let (learned, rejected_pattern, save_failed) =
                         persist_spam_learning(&self.pool, &review, &content, &channel).await;
                     let reason = review.reason.unwrap_or_default();
-                    return if review.is_spam {
-                        AiReviewOutcome::Spam { reason, learned, rejected_pattern, save_failed }
+                    let confidence = review.confidence;
+                    let (outcome, verdict) = if review.is_spam {
+                        (
+                            AiReviewOutcome::Spam {
+                                reason,
+                                learned,
+                                rejected_pattern,
+                                save_failed,
+                            },
+                            SpamReviewVerdict::Spam,
+                        )
                     } else {
-                        AiReviewOutcome::Safe { reason }
+                        (AiReviewOutcome::Safe { reason }, SpamReviewVerdict::Clean)
                     };
+                    let persisted_reason = match &outcome {
+                        AiReviewOutcome::Spam { reason, .. } | AiReviewOutcome::Safe { reason } => {
+                            reason.clone()
+                        }
+                        _ => String::new(),
+                    };
+                    return self
+                        .record_and_return(event, outcome, verdict, confidence, persisted_reason)
+                        .await;
                 }
                 Ok(None) => {
                     last_error = format!("{}: kein parsebares JSON", provider.model);
-                    warn!(model = provider.model, "Judge lieferte kein parsebares Urteil");
+                    last_verdict = SpamReviewVerdict::ParseError;
+                    warn!(
+                        model = provider.model,
+                        "Judge lieferte kein parsebares Urteil"
+                    );
                 }
                 Err(e) => {
-                    last_error = format!("{}: {e}", provider.model);
-                    warn!(model = provider.model, fehler = %e, "Judge-Call fehlgeschlagen");
+                    let (verdict, detail) = match e {
+                        JudgeCallError::Timeout(detail) => (SpamReviewVerdict::Timeout, detail),
+                        JudgeCallError::Provider(detail) => {
+                            (SpamReviewVerdict::ProviderError, detail)
+                        }
+                    };
+                    last_verdict = verdict;
+                    last_error = format!("{}: {detail}", provider.model);
+                    warn!(model = provider.model, fehler = %detail, "Judge-Call fehlgeschlagen");
                 }
             }
         }
-        AiReviewOutcome::Error { detail: last_error }
+        self.record_and_return(
+            event,
+            AiReviewOutcome::Error {
+                detail: last_error.clone(),
+            },
+            last_verdict,
+            None,
+            last_error,
+        )
+        .await
+    }
+
+    async fn record_and_return(
+        &self,
+        event: &ChatMessageEvent,
+        outcome: AiReviewOutcome,
+        verdict: SpamReviewVerdict,
+        confidence: Option<f32>,
+        reason: String,
+    ) -> AiReviewOutcome {
+        let decision = SpamReviewDecision {
+            verdict,
+            confidence,
+            reason,
+        };
+        match persist_spam_review_decision(&self.pool, event, &decision).await {
+            Ok(id) => debug!(
+                id,
+                verdict = decision.verdict.as_str(),
+                "Spam-Review-Entscheidung persistiert"
+            ),
+            Err(error) => {
+                warn!(verdict = decision.verdict.as_str(), %error, "Spam-Review-Entscheidung nicht persistiert")
+            }
+        }
+        outcome
     }
 }
 
@@ -1604,9 +1717,16 @@ fn judge_providers() -> Vec<JudgeProvider> {
 #[derive(Debug)]
 struct AiReview {
     is_spam: bool,
+    confidence: Option<f32>,
     pattern: Option<String>,
     pattern_type: Option<String>,
     reason: Option<String>,
+}
+
+#[derive(Debug)]
+enum JudgeCallError {
+    Timeout(String),
+    Provider(String),
 }
 
 /// Persistiert das Lern-Ergebnis eines Judge-Urteils.
@@ -1680,7 +1800,7 @@ async fn call_judge(
     provider: &JudgeProvider,
     record_usage: bool,
     content: &str,
-) -> Result<Option<AiReview>, String> {
+) -> Result<Option<AiReview>, JudgeCallError> {
     let truncated: String = content.chars().take(500).collect();
     let body = serde_json::json!({
         "model": provider.model,
@@ -1703,13 +1823,22 @@ async fn call_judge(
         .json(&body)
         .send()
         .await
-        .map_err(|e| e.to_string())?;
+        .map_err(|error| {
+            if error.is_timeout() {
+                JudgeCallError::Timeout(error.to_string())
+            } else {
+                JudgeCallError::Provider(error.to_string())
+            }
+        })?;
 
     let status = resp.status();
     if !status.is_success() {
-        return Err(format!("HTTP {status}"));
+        return Err(JudgeCallError::Provider(format!("HTTP {status}")));
     }
-    let json: serde_json::Value = resp.json().await.map_err(|e| e.to_string())?;
+    let json: serde_json::Value = resp
+        .json()
+        .await
+        .map_err(|error| JudgeCallError::Provider(error.to_string()))?;
 
     // Verbrauch ins gemeinsame LLM-Ledger (best-effort, wirft nie).
     // Verbucht direkt nach der Antwort, damit der Token-Verbrauch auch dann
@@ -1755,6 +1884,10 @@ fn extract_verdict(text: &str) -> Option<AiReview> {
     let parsed = parsed?;
     Some(AiReview {
         is_spam: parsed["is_spam"].as_bool().unwrap_or(false),
+        confidence: parsed["confidence"]
+            .as_f64()
+            .filter(|value| value.is_finite() && (0.0..=1.0).contains(value))
+            .map(|value| value as f32),
         pattern: parsed["pattern"].as_str().map(str::to_lowercase),
         pattern_type: parsed["pattern_type"].as_str().map(|s| s.to_string()),
         reason: parsed["reason"].as_str().map(|s| s.to_string()),
@@ -1762,6 +1895,31 @@ fn extract_verdict(text: &str) -> Option<AiReview> {
 }
 
 // ── DB-Schreiboperationen ─────────────────────────────────────────────────────
+
+async fn persist_spam_review_decision(
+    pool: &PgPool,
+    event: &ChatMessageEvent,
+    decision: &SpamReviewDecision,
+) -> Result<i64, sqlx::Error> {
+    let source_message: String = event.text().chars().take(500).collect();
+    let reason: String = decision.reason.chars().take(500).collect();
+    let chatter_id = (!event.chatter_user_id.is_empty()).then_some(event.chatter_user_id.as_str());
+
+    sqlx::query_scalar(
+        "INSERT INTO twitch_spam_review_decisions \
+         (channel_login, chatter_login, chatter_id, source_message, verdict, confidence, reason) \
+         VALUES ($1, $2, $3, $4, $5, $6, $7) RETURNING id",
+    )
+    .bind(event.broadcaster_user_login.to_lowercase())
+    .bind(event.chatter_user_login.to_lowercase())
+    .bind(chatter_id)
+    .bind(source_message)
+    .bind(decision.verdict.as_str())
+    .bind(decision.confidence)
+    .bind(reason)
+    .fetch_one(pool)
+    .await
+}
 
 /// Spam-Pattern in DB speichern (ON CONFLICT → hit_count++).
 /// spam_ai_review.py Z. 179–231
@@ -2288,10 +2446,113 @@ mod tests {
                 started_at TIMESTAMPTZ,
                 ended_at TIMESTAMPTZ
             )"#,
+            r#"CREATE TABLE twitch_spam_review_decisions (
+                id BIGSERIAL PRIMARY KEY,
+                channel_login TEXT NOT NULL,
+                chatter_login TEXT NOT NULL,
+                chatter_id TEXT,
+                source_message TEXT NOT NULL,
+                verdict TEXT NOT NULL,
+                confidence REAL,
+                reason TEXT NOT NULL,
+                created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+            )"#,
         ] {
             sqlx::query(ddl).execute(pool).await.unwrap();
         }
     }
+
+    macro_rules! spam_review_decision_persistence_test {
+        ($name:ident, $schema:literal, $verdict:ident, $confidence:expr) => {
+            #[tokio::test]
+            async fn $name() {
+                let pool = pool_or_skip!($schema);
+                let event = make_event(
+                    "TestChannel",
+                    "TestChatter",
+                    &format!("{}ende", "x".repeat(510)),
+                );
+                let decision = SpamReviewDecision {
+                    verdict: SpamReviewVerdict::$verdict,
+                    confidence: $confidence,
+                    reason: "Testgrund".to_string(),
+                };
+
+                persist_spam_review_decision(&pool, &event, &decision)
+                    .await
+                    .expect("Entscheidung muss persistiert werden");
+
+                let row: (
+                    String,
+                    String,
+                    Option<String>,
+                    String,
+                    String,
+                    Option<f32>,
+                    String,
+                    bool,
+                ) = sqlx::query_as(
+                    "SELECT channel_login, chatter_login, chatter_id, source_message, \
+                                verdict, confidence, reason, created_at IS NOT NULL \
+                         FROM twitch_spam_review_decisions",
+                )
+                .fetch_one(&pool)
+                .await
+                .unwrap();
+                assert_eq!(row.0, "testchannel");
+                assert_eq!(row.1, "testchatter");
+                assert_eq!(row.2.as_deref(), Some("456"));
+                assert_eq!(row.3.chars().count(), 500);
+                assert_eq!(row.4, decision.verdict.as_str());
+                assert_eq!(row.5, $confidence);
+                assert_eq!(row.6, "Testgrund");
+                assert!(row.7);
+            }
+        };
+    }
+
+    spam_review_decision_persistence_test!(
+        spam_review_spam_wird_persistiert,
+        "spam_review_decision_spam",
+        Spam,
+        Some(0.97)
+    );
+    spam_review_decision_persistence_test!(
+        spam_review_clean_wird_persistiert,
+        "spam_review_decision_clean",
+        Clean,
+        Some(0.88)
+    );
+    spam_review_decision_persistence_test!(
+        spam_review_unsure_wird_persistiert,
+        "spam_review_decision_unsure",
+        Unsure,
+        Some(0.40)
+    );
+    spam_review_decision_persistence_test!(
+        spam_review_skipped_wird_persistiert,
+        "spam_review_decision_skipped",
+        Skipped,
+        None
+    );
+    spam_review_decision_persistence_test!(
+        spam_review_timeout_wird_persistiert,
+        "spam_review_decision_timeout",
+        Timeout,
+        None
+    );
+    spam_review_decision_persistence_test!(
+        spam_review_provider_error_wird_persistiert,
+        "spam_review_decision_provider_error",
+        ProviderError,
+        None
+    );
+    spam_review_decision_persistence_test!(
+        spam_review_parse_error_wird_persistiert,
+        "spam_review_decision_parse_error",
+        ParseError,
+        None
+    );
 
     #[tokio::test]
     async fn db_spam_pattern_speichern_und_hit_count_inkrementieren() {
@@ -2335,6 +2596,7 @@ mod tests {
         let content = "@cheazycrust Targeted viewers PeakPy. c0m SSSsss remove space";
         let review = AiReview {
             is_spam: true,
+            confidence: None,
             pattern: Some("PeakPy c0m".to_string()),
             pattern_type: Some("fragment".to_string()),
             reason: Some("obfuskierter viewer-service".to_string()),
@@ -2371,6 +2633,7 @@ mod tests {
         let pool = pool_or_skip!("scam_ai_contract_gate_reject");
         let review = AiReview {
             is_spam: true,
+            confidence: None,
             pattern: Some("best viewers".to_string()),
             pattern_type: Some("phrase".to_string()),
             reason: Some("viewer-bot werbung".to_string()),
@@ -2448,6 +2711,7 @@ mod tests {
         let pool = pool_or_skip!("scam_ai_contract_safe_result");
         let review = AiReview {
             is_spam: false,
+            confidence: None,
             pattern: Some("best viewers".to_string()),
             pattern_type: Some("fragment".to_string()),
             reason: Some("normales kompliment".to_string()),
