@@ -205,7 +205,6 @@ pub struct CrewVerdict {
     pub confidence: f32,
     pub patterns: Vec<String>,
     pub reasoning: String,
-    pub failure_warning: bool,
 }
 
 impl CrewVerdict {
@@ -216,7 +215,6 @@ impl CrewVerdict {
             confidence: 0.0,
             patterns: Vec::new(),
             reasoning: String::new(),
-            failure_warning: false,
         }
     }
 }
@@ -227,6 +225,7 @@ pub trait CrewJudge: Send + Sync {
 }
 
 const JUDGE_FAILURE_WARNING_THRESHOLD: usize = 5;
+const JUDGE_FAILURE_WARNING_SENTINEL: &str = "__crew_guard_failure_warning__";
 
 #[derive(Default)]
 struct JudgeFailureTracker {
@@ -317,10 +316,12 @@ impl OpenAiCrewJudge {
             error = %detail,
             "crew_guard: Judge-Ausfall"
         );
-        CrewVerdict {
-            failure_warning,
-            ..CrewVerdict::unsure()
+        let mut verdict = CrewVerdict::unsure();
+        if failure_warning {
+            // ponytail: private sentinel keeps the public CrewJudge API unchanged.
+            verdict.reasoning = JUDGE_FAILURE_WARNING_SENTINEL.to_string();
         }
+        verdict
     }
 }
 
@@ -418,8 +419,11 @@ fn parse_crew_verdict(raw: &str) -> Option<CrewVerdict> {
         confidence: parsed.confidence.clamp(0.0, 1.0),
         patterns: parsed.patterns,
         reasoning: parsed.reasoning,
-        failure_warning: false,
     })
+}
+
+fn has_failure_warning(verdict: &CrewVerdict) -> bool {
+    verdict.reasoning == JUDGE_FAILURE_WARNING_SENTINEL
 }
 
 /// Erstes balanciertes JSON-Objekt aus einem String bergen (String-aware).
@@ -759,7 +763,7 @@ async fn decide(
         }
         CrewSignal::Trigger { hits } => {
             let verdict = judge.judge(content, recent_context).await;
-            if verdict.failure_warning {
+            if has_failure_warning(&verdict) {
                 Some(JUDGE_FAILURE_WARNING.to_string())
             } else if verdict.is_crew && verdict.confidence >= threshold {
                 let patterns = if verdict.patterns.is_empty() {
@@ -861,10 +865,9 @@ mod tests {
     #[async_trait]
     impl CrewJudge for WarningJudge {
         async fn judge(&self, _content: &str, _recent_context: &[String]) -> CrewVerdict {
-            CrewVerdict {
-                failure_warning: true,
-                ..CrewVerdict::unsure()
-            }
+            let mut verdict = CrewVerdict::unsure();
+            verdict.reasoning = JUDGE_FAILURE_WARNING_SENTINEL.to_string();
+            verdict
         }
     }
 
@@ -878,7 +881,6 @@ mod tests {
             confidence: 0.9,
             patterns: vec!["b".into(), "c".into()],
             reasoning: "klar".into(),
-            failure_warning: false,
         })
     }
 
@@ -936,10 +938,16 @@ mod tests {
         };
 
         for _ in 0..4 {
-            assert!(!judge.judge("nani bannliste", &[]).await.failure_warning);
+            assert!(!has_failure_warning(
+                &judge.judge("nani bannliste", &[]).await
+            ));
         }
-        assert!(judge.judge("nani bannliste", &[]).await.failure_warning);
-        assert!(!judge.judge("nani bannliste", &[]).await.failure_warning);
+        assert!(has_failure_warning(
+            &judge.judge("nani bannliste", &[]).await
+        ));
+        assert!(!has_failure_warning(
+            &judge.judge("nani bannliste", &[]).await
+        ));
     }
 
     #[tokio::test]
@@ -960,9 +968,13 @@ mod tests {
         };
 
         for _ in 0..4 {
-            assert!(!judge.judge("nani bannliste", &[]).await.failure_warning);
+            assert!(!has_failure_warning(
+                &judge.judge("nani bannliste", &[]).await
+            ));
         }
-        assert!(judge.judge("nani bannliste", &[]).await.failure_warning);
+        assert!(has_failure_warning(
+            &judge.judge("nani bannliste", &[]).await
+        ));
     }
 
     /// Der Vorfall vom 2026-07-06: `wall_horizon` fuhr das Skript, der Judge
