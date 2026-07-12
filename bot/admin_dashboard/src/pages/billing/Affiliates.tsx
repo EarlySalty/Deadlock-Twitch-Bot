@@ -10,7 +10,14 @@ import { KpiCard } from '@/components/shared/KpiCard';
 import { SearchInput } from '@/components/shared/SearchInput';
 import { StatusBadge } from '@/components/shared/StatusBadge';
 import { Toast } from '@/components/shared/Toast';
-import { useAffiliateStats, useAffiliatesList, useGenerateGutschriften, useToggleAffiliateActive } from '@/hooks/useAdmin';
+import {
+  useAffiliateStats,
+  useAffiliatesList,
+  useGenerateGutschriften,
+  useSetAffiliateCommissionRate,
+  useToggleAffiliateActive,
+} from '@/hooks/useAdmin';
+import { parseCommissionRate } from '@/utils/commissionRate';
 import { formatCurrencyEuro, formatDateTime } from '@/utils/formatters';
 
 type ToastState = {
@@ -44,12 +51,14 @@ export function Affiliates() {
   const [search, setSearch] = useState('');
   const [selectedLogin, setSelectedLogin] = useState<string | null>(null);
   const [toggleTarget, setToggleTarget] = useState<AffiliateListItem | null>(null);
+  const [rateDrafts, setRateDrafts] = useState<Record<string, string>>({});
   const [confirmGenerateAll, setConfirmGenerateAll] = useState(false);
   const [toast, setToast] = useState<ToastState>({ open: false, message: '', tone: 'success' });
 
   const statsQuery = useAffiliateStats();
   const affiliatesQuery = useAffiliatesList();
   const toggleMutation = useToggleAffiliateActive();
+  const rateMutation = useSetAffiliateCommissionRate();
   const generateMutation = useGenerateGutschriften();
 
   const rows = affiliatesQuery.data ?? [];
@@ -104,6 +113,36 @@ export function Affiliates() {
       sortable: true,
       sortValue: (row) => row.totalProvisionEuro,
       render: (row) => formatCurrencyEuro(row.totalProvisionEuro),
+    },
+    {
+      key: 'commissionRate',
+      title: 'Provision (%)',
+      render: (row) => (
+        <div className="flex min-w-48 items-center gap-2">
+          <input
+            type="number"
+            min="0"
+            max="100"
+            step="1"
+            aria-label={`Provision (%) für ${row.login}`}
+            className="admin-input w-20 px-3 py-2 text-sm"
+            value={rateDrafts[row.login] ?? String(row.commissionRatePct)}
+            onChange={(event) =>
+              setRateDrafts((current) => ({ ...current, [row.login]: event.target.value }))
+            }
+          />
+          <button
+            type="button"
+            className="admin-button admin-button-secondary whitespace-nowrap px-3 py-2 text-xs"
+            disabled={rateMutation.isPending}
+            onClick={() => {
+              void handleSaveRate(row);
+            }}
+          >
+            Satz speichern
+          </button>
+        </div>
+      ),
     },
     {
       key: 'lastClaim',
@@ -164,6 +203,22 @@ export function Affiliates() {
         tone: 'error',
         message: error instanceof Error ? error.message : 'Affiliate-Status konnte nicht aktualisiert werden.',
       });
+    }
+  }
+
+  async function handleSaveRate(row: AffiliateListItem) {
+    const commissionRatePct = parseCommissionRate(rateDrafts[row.login] ?? String(row.commissionRatePct));
+    if (commissionRatePct === null) {
+      setToast({ open: true, tone: 'error', message: 'Satz muss zwischen 0 und 100 liegen' });
+      return;
+    }
+
+    try {
+      await rateMutation.mutateAsync({ login: row.login, commissionRatePct });
+      setRateDrafts((current) => ({ ...current, [row.login]: String(commissionRatePct) }));
+      setToast({ open: true, tone: 'success', message: 'Provisionssatz gespeichert' });
+    } catch {
+      setToast({ open: true, tone: 'error', message: 'Speichern fehlgeschlagen' });
     }
   }
 

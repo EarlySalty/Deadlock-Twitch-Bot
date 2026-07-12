@@ -29,6 +29,7 @@ import {
   saveAnnouncements,
   saveLegalPage,
   saveRoadmap,
+  setAffiliateCommissionRate,
   sendPartnerChatAction,
   fetchSubscriptions,
   fetchSystemHealth,
@@ -392,6 +393,19 @@ export function useToggleAffiliateActive() {
       void queryClient.invalidateQueries({ queryKey: ['admin-affiliates'] });
       void queryClient.invalidateQueries({ queryKey: ['admin-affiliate-stats'] });
       void queryClient.invalidateQueries({ queryKey: ['admin-affiliate-detail', login] });
+    },
+  });
+}
+
+export function useSetAffiliateCommissionRate() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: ({ login, commissionRatePct }: { login: string; commissionRatePct: number }) =>
+      setAffiliateCommissionRate(login, commissionRatePct),
+    onSuccess: (_result, variables) => {
+      void queryClient.invalidateQueries({ queryKey: ['admin-affiliates'] });
+      void queryClient.invalidateQueries({ queryKey: ['admin-affiliate-stats'] });
+      void queryClient.invalidateQueries({ queryKey: ['admin-affiliate-detail', variables.login] });
     },
   });
 }
