@@ -1,3 +1,11 @@
+## #355 — Raid-Hinweis verlinkt den Zielkanal wieder richtig
+
+**Problem:** Im Hinweis nach einem Raid stand direkt hinter dem Namen ein Punkt. Twitch zieht das Satzzeichen mit in den Namen und macht aus der Erwähnung damit einen kaputten Link.
+
+**Änderung:** Hinter der Erwähnung steht jetzt kein Satzzeichen mehr.
+
+**Aktuelles Verhalten:** Der Zielkanal im Raid-Hinweis ist wieder anklickbar.
+
 ## #354 — Titelgenerator zuverlässiger und konkreter
 
 **Problem:** Wenn der Titel-Dienst kurz drosselte, brach die Generierung sofort ab oder lieferte kommentarlos gar nichts. Und wenn doch ein Titel kam, war er oft austauschbar statt auf den Stream bezogen.
