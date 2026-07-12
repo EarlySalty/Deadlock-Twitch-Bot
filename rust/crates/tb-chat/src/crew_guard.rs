@@ -502,7 +502,7 @@ fn non_empty_env(name: &str) -> Option<String> {
 
 /// Vorschau-Länge des Original-Nachrichtentexts in der Discord-Meldung.
 const CONTENT_PREVIEW_MAX: usize = 160;
-const JUDGE_FAILURE_WARNING: &str = "PLATZHALTER: Crew-Guard-Judge-Ausfallwarnung";
+const JUDGE_FAILURE_WARNING: &str = "⚠️ Crew-Guard: Der KI-Judge ist mehrfach in Folge ausgefallen (HTTP-Fehler oder unlesbare Antwort). Verdächtige Nachrichten werden solange als \"unsicher\" ohne Aktion durchgereicht. Bitte Logs prüfen, die Erkennung läuft gerade blind.";
 
 /// Kürzt `content` char-sicher auf `max` Zeichen.
 fn truncate_content(content: &str, max: usize) -> String {
