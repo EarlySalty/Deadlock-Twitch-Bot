@@ -193,7 +193,8 @@ fn source_hint_message(to_login: &str) -> String {
     if login.is_empty() {
         "Die Reise geht weiter. Vergesst nicht kurz hallo und tschüss zu sagen :)".to_string()
     } else {
-        format!("Die Reise geht an @{login}. Vergesst nicht kurz hallo und tschüss zu sagen :)")
+        // ponytail: kein Satzzeichen direkt hinter dem Mention, Twitch klebt es an den Login
+        format!("Die Reise geht an @{login} Vergesst nicht kurz hallo und tschüss zu sagen :)")
     }
 }
 
@@ -404,5 +405,16 @@ mod tests {
         assert_eq!(whispers.len(), 1);
         assert_eq!(whispers[0].0, "from1");
         assert!(whispers[0].1.contains("Hallo"));
+    }
+
+    #[test]
+    fn source_hint_haengt_kein_satzzeichen_an_den_mention() {
+        let message = source_hint_message("@DeusAsta");
+        assert!(message.contains("@deusasta"), "{message}");
+        let rest = message.split("@deusasta").nth(1).unwrap();
+        assert!(
+            !rest.starts_with(['.', ',', '!', '?', ':', ';']),
+            "Satzzeichen klebt am Mention: {message}"
+        );
     }
 }
