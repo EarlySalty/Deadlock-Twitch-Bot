@@ -4,9 +4,9 @@
 //! 1. Index aus (term, alias) → canonical bauen.
 //! 2. Multi-Word-Aliase (Bigrams/Trigrams) als Phrasen im Volltext ersetzen.
 //! 3. Token-für-Token: exakter Lookup, sonst Levenshtein ≤ adaptiver Schwelle.
-//! Liefert korrigierten Text + erkannte canonical-Begriffe (dedupe, in
-//! Vorkommens-Reihenfolge) für den späteren LLM-Domain-Hinweis. Reine
-//! Textverarbeitung (Vokabular lädt der Aufrufer via [`crate::vocab`]).
+//!    Liefert korrigierten Text + erkannte canonical-Begriffe (dedupe, in
+//!    Vorkommens-Reihenfolge) für den späteren LLM-Domain-Hinweis. Reine
+//!    Textverarbeitung (Vokabular lädt der Aufrufer via [`crate::vocab`]).
 
 use std::collections::HashMap;
 use std::sync::OnceLock;

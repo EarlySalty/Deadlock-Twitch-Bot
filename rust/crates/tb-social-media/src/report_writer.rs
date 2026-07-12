@@ -253,7 +253,7 @@ pub fn aggregate_streamers(clips: &[ClipPerformance]) -> Vec<StreamerPerformance
             }
         })
         .collect();
-    items.sort_by(|a, b| (b.views, b.watch_time_seconds).cmp(&(a.views, a.watch_time_seconds)));
+    items.sort_by_key(|item| std::cmp::Reverse((item.views, item.watch_time_seconds)));
     items
 }
 

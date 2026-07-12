@@ -2,8 +2,8 @@
 //!
 //! Port von `bot/analytics/admin_config_queries.py:load_admin_billing_subscriptions`
 //! + `load_admin_billing_affiliates`. Reine SELECTs über
-//! `twitch_billing_subscriptions` (+ `streamer_plans`-Join) bzw.
-//! `affiliate_accounts`; alle Timestamp-Spalten sind in Prod TEXT (ISO-Strings).
+//!   `twitch_billing_subscriptions` (+ `streamer_plans`-Join) bzw.
+//!   `affiliate_accounts`; alle Timestamp-Spalten sind in Prod TEXT (ISO-Strings).
 
 use serde_json::{json, Value};
 use sqlx::PgPool;

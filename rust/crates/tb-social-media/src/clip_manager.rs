@@ -183,6 +183,15 @@ pub struct BatchUploadStats {
     pub errors: i64,
 }
 
+type PendingClipRow = (
+    i64,
+    Option<String>,
+    Option<String>,
+    Option<String>,
+    Option<String>,
+    Option<String>,
+);
+
 fn parse_json_strings(raw: Option<&str>) -> Vec<String> {
     raw.and_then(|s| serde_json::from_str::<Vec<String>>(s).ok())
         .unwrap_or_default()
@@ -231,7 +240,7 @@ pub async fn batch_upload_all_new(
             "instagram" => "uploaded_instagram",
             _ => continue,
         };
-        let clips: Vec<(i64, Option<String>, Option<String>, Option<String>, Option<String>, Option<String>)> = sqlx::query_as(&format!(
+        let clips: Vec<PendingClipRow> = sqlx::query_as(&format!(
             "SELECT id, clip_title, streamer_login, game_name, custom_description, hashtags \
              FROM twitch_clips_social_media WHERE streamer_login = $1 AND {col} = FALSE ORDER BY created_at DESC"
         ))

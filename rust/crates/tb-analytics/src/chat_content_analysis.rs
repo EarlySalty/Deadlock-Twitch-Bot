@@ -2,7 +2,7 @@
 //!
 //! Port von `bot/analytics/api_chat_deep.py:_load_chat_content_analysis_payload_sync`
 //! + die Keyword-Heuristiken. Hero-/Topic-Erkennung, Sentiment-Scoring,
-//! Nachrichten-Klassifikation (reaction/greeting/social/smalltalk/community).
+//!   Nachrichten-Klassifikation (reaction/greeting/social/smalltalk/community).
 //!
 //! Die Keyword-Daten liegen exakt aus der Python-Quelle generiert in
 //! [`crate::chat_content_lexicon`]. Diese Datei enthält die (selbst geschriebene)

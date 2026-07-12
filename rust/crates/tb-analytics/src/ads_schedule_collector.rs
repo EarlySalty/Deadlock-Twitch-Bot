@@ -133,6 +133,17 @@ mod tests {
     use sqlx::postgres::PgPoolOptions;
     use tb_transport_twitch::AdSchedule;
 
+    type SnapshotRow = (
+        String,
+        String,
+        Option<String>,
+        Option<String>,
+        i32,
+        i32,
+        i32,
+        Option<String>,
+    );
+
     fn test_dsn() -> Option<String> {
         std::env::var("TB_TEST_DATABASE_URL").ok()
     }
@@ -199,16 +210,7 @@ mod tests {
             .await
             .expect("write");
 
-        let row: (
-            String,
-            String,
-            Option<String>,
-            Option<String>,
-            i32,
-            i32,
-            i32,
-            Option<String>,
-        ) = sqlx::query_as(
+        let row: SnapshotRow = sqlx::query_as(
             "SELECT twitch_user_id, twitch_login, \
                  to_char(next_ad_at AT TIME ZONE 'UTC', 'YYYY-MM-DD\"T\"HH24:MI:SS+00:00'), \
                  to_char(last_ad_at AT TIME ZONE 'UTC', 'YYYY-MM-DD\"T\"HH24:MI:SS+00:00'), \

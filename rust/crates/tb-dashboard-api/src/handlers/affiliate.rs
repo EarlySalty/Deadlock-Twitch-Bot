@@ -2570,7 +2570,7 @@ mod tests {
         let second =
             tokio::spawn(async move { claim_streamer(&second_pool, "aff_b", "race_slot").await });
 
-        let outcomes = vec![
+        let outcomes = [
             first.await.unwrap().unwrap(),
             second.await.unwrap().unwrap(),
         ];

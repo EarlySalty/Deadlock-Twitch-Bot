@@ -80,7 +80,7 @@ fn min_mean_index(data: &[Vec<f64>; 4]) -> Option<usize> {
             continue;
         }
         let m = mean(d);
-        if best.map_or(true, |(_, bm)| m < bm) {
+        if best.is_none_or(|(_, bm)| m < bm) {
             best = Some((i, m));
         }
     }
@@ -95,7 +95,7 @@ fn max_mean_index(data: &[Vec<f64>; 4]) -> Option<usize> {
             continue;
         }
         let m = mean(d);
-        if worst.map_or(true, |(_, wm)| m > wm) {
+        if worst.is_none_or(|(_, wm)| m > wm) {
             worst = Some((i, m));
         }
     }
@@ -582,7 +582,7 @@ mod tests {
             (13, 95),
         ] {
             sqlx::query("INSERT INTO twitch_session_viewers (session_id, ts_utc, minutes_from_start, viewer_count) VALUES (1, NOW(), $1, $2)")
-                .bind(m as i32).bind(vc as i32).execute(&pool).await.unwrap();
+                .bind(m).bind(vc).execute(&pool).await.unwrap();
         }
 
         let v = load_monetization_payload(&pool, "nani", 3650)

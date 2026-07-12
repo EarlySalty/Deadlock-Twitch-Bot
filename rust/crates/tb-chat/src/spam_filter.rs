@@ -649,8 +649,8 @@ const GENERIC_PATTERN_TOKENS: &[&str] = &[
 /// werden: mindestens ein Token muss eine Domain mit distinktivem
 /// registrierbarem Namen sein („eballo.com") oder ein Nicht-Generikum mit
 /// >= 6 Zeichen (Dienstname wie „streamboo", „clicknex", „peakpy") — kurze
-/// Alltagswörter („hello") tragen kein Muster, sie würden als Learned-*
-/// hartes Spam-Signal (+2) gegen normale Chat-Nachrichten wirken.
+/// > Alltagswörter („hello") tragen kein Muster, sie würden als Learned-*
+/// > hartes Spam-Signal (+2) gegen normale Chat-Nachrichten wirken.
 ///
 /// Geprüft wird auf derselben Normalform wie das Matching (Kompaktform ohne
 /// Satzzeichen): „view.ers" kompaktiert zu „viewers" und ist damit genauso
