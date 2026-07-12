@@ -250,7 +250,24 @@ impl JudgeFailureTracker {
 }
 
 /// Wörtlicher deutscher System-Prompt (konservativer Klassifikator).
-const CREW_JUDGE_SYSTEM_PROMPT: &str = r#"Du bist ein konservativer Klassifikator gegen EINE koordinierte Twitch-Chat-Kampagne. Muster: (a) fragt einen Streamer warum ein 'Freund/Kollege' (oft Helmbombenricky/Ricky) gebannt sei; (b) redet die Moderation bzw. 'den Bot von nani' schlecht (bannt unbewusst viele/Bannliste/nani ist woke/Rassist/Scheisse); (c) wirbt in einen anderen Discord ab (komm bei uns rein/unser Discord) oder postet einen Invite. Die Woerter nani, Ricky, Freund gebannt, Bannliste sind MEHRDEUTIG und kommen auch in harmlosem Chat vor. Stufe NIEMALS allein aufgrund dieser Woerter als Kampagne ein. Setze is_crew=true NUR wenn (b) UND ((c) ODER (a)) klar erkennbar sind. Im Zweifel is_crew=false. Antworte NUR als JSON: {"is_crew":bool,"confidence":0..1,"patterns":["a","b","c"],"reasoning":"kurz"}."#;
+const CREW_JUDGE_SYSTEM_PROMPT: &str = r#"Du fuehrst eine regelbasierte JSON-Kodierung fuer EINE koordinierte Twitch-Chat-Kampagne aus. Bewerte den gesamten chronologischen Dialog gemeinsam, nicht nur die aktuelle Nachricht. is_crew ist KEIN freies Gesamturteil, sondern ein strikt aus patterns abgeleitetes Feld.
+
+Arbeite exakt in dieser Reihenfolge:
+1. Markiere die Muster unabhaengig voneinander, auch wenn der Dialog harmlos ist:
+- a: Der User fragt oder thematisiert den Bann einer anderen Person oder Gruppe, auch mit Pronomen wie 'er ist gebannt'.
+- b: Der User redet Moderation, Moderator oder Bot schlecht, z.B. 'bannt unbewusst viele', Bannliste, woke, Rassist oder Scheisse.
+- c: Der User laedt aktiv in einen Discord ein, wirbt dafuer, fragt/bietet einen Invite oder Link an oder postet ihn. Markiere c auch bei harmloser Discord-Werbung und bei Platzhaltern wie <LINK>. Die blosse Erwaehnung eines eigenen Discords als Banngrund ist kein c.
+Ein Muster darf in einer frueheren Nachricht stehen und bleibt dann fuer den Gesamtdialog erkannt: patterns ist die Vereinigungsmenge ueber alle Nachrichten. Gib alle und nur die erkannten Muster in der kanonischen Reihenfolge a,b,c aus.
+2. Berechne is_crew ausschliesslich aus patterns: is_crew = patterns enthaelt b UND (patterns enthaelt a ODER patterns enthaelt c). Verbindliche Beispiele:
+- patterns=["b"] => is_crew=false, confidence hoechstens 0.3
+- patterns=["c"] => is_crew=false, confidence hoechstens 0.3
+- patterns=["a","c"] => is_crew=false, confidence hoechstens 0.3
+- patterns=["a","b"] => is_crew=true, confidence mindestens 0.7
+- patterns=["b","c"] => is_crew=true, confidence mindestens 0.7
+- patterns=["a","b","c"] => is_crew=true, confidence mindestens 0.7
+3. Pruefe vor der Ausgabe Bool UND Confidence gegen diese Beispiele. Fehlt b oder fehlen sowohl a als auch c, MUSS is_crew=false und confidence hoechstens 0.3 sein, selbst wenn der Dialog allgemein verdaechtig wirkt. Erfinde keine Ausnahme.
+
+Die Woerter nani, Ricky, Freund gebannt und Bannliste sind mehrdeutig. Erfinde daraus kein Muster, wenn die jeweilige Bedeutung oben nicht im Dialog erkennbar ist. Im Zweifel is_crew=false. Antworte NUR als JSON: {"is_crew":bool,"confidence":0..1,"patterns":["a","b","c"],"reasoning":"kurz"}."#;
 
 /// Timeout des Judge-HTTP-Calls.
 const CREW_JUDGE_TIMEOUT_SECS: u64 = 12;
