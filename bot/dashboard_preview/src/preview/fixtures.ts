@@ -345,6 +345,7 @@ const ADMIN_AFFILIATES_FIXTURE: { affiliates: Affiliate[] } = {
       login: 'local-preview-affiliate',
       display_name: 'Local Preview Affiliate',
       active: true,
+      commission_rate_pct: 30,
       total_claims: 18,
       total_provision: 274,
       created_at: '2026-01-10T12:00:00Z',
@@ -367,6 +368,7 @@ const ADMIN_AFFILIATE_DETAIL_FIXTURE: AffiliateDetail = {
     login: 'local-preview-affiliate',
     display_name: 'Local Preview Affiliate',
     active: true,
+    commission_rate_pct: 30,
     created_at: '2026-01-10T12:00:00Z',
   },
   claims: [
@@ -410,6 +412,9 @@ export function getPreviewAdminFixture(pathname: string): unknown | undefined {
   if (pathname === '/twitch/api/admin/affiliates/stats') return ADMIN_AFFILIATE_STATS_FIXTURE;
   if (pathname.startsWith('/twitch/api/admin/affiliates/') && pathname.endsWith('/toggle')) {
     return { login: 'local-preview-affiliate', active: false };
+  }
+  if (pathname.startsWith('/twitch/api/admin/affiliates/') && pathname.endsWith('/commission-rate')) {
+    return { login: 'local-preview-affiliate', commission_rate_pct: 40 };
   }
   if (pathname.startsWith('/twitch/api/admin/affiliates/')) return ADMIN_AFFILIATE_DETAIL_FIXTURE;
   return undefined;

@@ -6,6 +6,7 @@ export interface Affiliate {
   login: string;
   display_name: string;
   active: boolean;
+  commission_rate_pct: number;
   total_claims: number;
   total_provision: number;
   created_at: string;
@@ -22,7 +23,13 @@ export interface AffiliateStats {
 }
 
 export interface AffiliateDetail {
-  affiliate: { login: string; display_name: string; active: boolean; created_at: string };
+  affiliate: {
+    login: string;
+    display_name: string;
+    active: boolean;
+    commission_rate_pct: number;
+    created_at: string;
+  };
   claims: Array<{
     id: number;
     customer_login: string;
@@ -89,6 +96,37 @@ export async function toggleAffiliate(
         Accept: 'application/json',
         'X-CSRF-Token': csrfToken,
       },
+    }),
+    { loginFallback: DASHBOARD_V2_LOGIN_FALLBACK }
+  );
+}
+
+export async function setAffiliateCommissionRate(
+  login: string,
+  commissionRatePct: number,
+  csrfToken: string | null | undefined
+): Promise<{ login: string; commission_rate_pct: number }> {
+  if (!csrfToken) {
+    throw new Error('Missing CSRF token');
+  }
+
+  if (isPreviewLocalhost()) {
+    return getPreviewAdminFixture(`/twitch/api/admin/affiliates/${login}/commission-rate`) as {
+      login: string;
+      commission_rate_pct: number;
+    };
+  }
+
+  return fetchJson<{ login: string; commission_rate_pct: number }>(
+    new URL(`/twitch/api/admin/affiliates/${login}/commission-rate`, window.location.origin),
+    withCookieCredentials({
+      method: 'POST',
+      headers: {
+        Accept: 'application/json',
+        'Content-Type': 'application/json',
+        'X-CSRF-Token': csrfToken,
+      },
+      body: JSON.stringify({ commission_rate_pct: commissionRatePct }),
     }),
     { loginFallback: DASHBOARD_V2_LOGIN_FALLBACK }
   );
