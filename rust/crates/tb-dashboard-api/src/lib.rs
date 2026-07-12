@@ -784,6 +784,10 @@ pub fn build_admin_config_router(pool: PgPool, token: String) -> Router {
             post(admin_affiliate::toggle_handler),
         )
         .route(
+            "/twitch/api/admin/affiliates/:login/commission-rate",
+            post(admin_affiliate::set_commission_rate_handler),
+        )
+        .route(
             "/twitch/api/admin/affiliates/:login",
             get(admin_affiliate::detail_handler),
         )

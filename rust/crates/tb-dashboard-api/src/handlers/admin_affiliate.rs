@@ -16,7 +16,7 @@ use axum::{
 use chrono::{DateTime, Datelike, SecondsFormat, Utc};
 use serde_json::json;
 use sqlx::PgPool;
-use tb_analytics::admin_affiliate::{DetailError, ForLoginError, ToggleError};
+use tb_analytics::admin_affiliate::{DetailError, ForLoginError, RateError, ToggleError};
 use tb_analytics::affiliate_gutschrift::{
     self, AffiliateGutschriftEmailSender, AffiliateGutschriftSeller, GenerateGutschriftResult,
     GutschriftError, SmtpAffiliateEmailSender,
@@ -465,6 +465,55 @@ pub async fn toggle_handler(
     }
 }
 
+/// `POST /twitch/api/admin/affiliates/:login/commission-rate` — Provisionssatz setzen.
+pub async fn set_commission_rate_handler(
+    auth: DashboardAuthLevel,
+    State(pool): State<PgPool>,
+    Path(login_raw): Path<String>,
+    body: Bytes,
+) -> Result<impl IntoResponse, ApiError> {
+    if let Some(err) = crate::auth::require_admin(&auth) {
+        return Err(err);
+    }
+    let Some(login) = tb_domain::login::normalize_twitch_login(&login_raw) else {
+        return Err(ApiError::bad_request_with_body(
+            json!({ "error": "invalid_login" }),
+        ));
+    };
+    let rate_pct = serde_json::from_slice::<serde_json::Value>(&body)
+        .ok()
+        .and_then(|payload| payload.get("commission_rate_pct")?.as_i64())
+        .filter(|rate| (0..=100).contains(rate))
+        .and_then(|rate| i16::try_from(rate).ok())
+        .ok_or_else(|| ApiError::bad_request_with_body(json!({ "error": "invalid_rate" })))?;
+
+    let old_rate_pct = sqlx::query_scalar::<_, i16>(
+        "SELECT commission_rate_pct FROM affiliate_accounts WHERE twitch_login = $1",
+    )
+    .bind(&login)
+    .fetch_optional(&pool)
+    .await
+    .ok()
+    .flatten();
+
+    match tb_analytics::admin_affiliate::set_commission_rate(&pool, &login, rate_pct).await {
+        Ok(value) => {
+            tracing::info!(
+                affiliate_login = %login,
+                old_rate_pct = ?old_rate_pct,
+                new_rate_pct = rate_pct,
+                "Affiliate-Provisionssatz geändert"
+            );
+            Ok(Json(value))
+        }
+        Err(RateError::NotFound) => Err(ApiError::not_found()),
+        Err(RateError::Db(error)) => {
+            tracing::error!(affiliate_login = %login, "affiliate-commission-rate Fehler: {error}");
+            Err(ApiError::internal())
+        }
+    }
+}
+
 /// `POST /twitch/api/admin/affiliates/generate-gutschriften` — Gutschriften als
 /// Admin anstoßen. CSRF wird vom Admin-Config-Router geprüft; der Body wird wie
 /// Python tolerant als `{}` behandelt, wenn er fehlt oder kein JSON-Objekt ist.
@@ -777,6 +826,96 @@ mod tests {
         assert_eq!(s, StatusCode::OK);
         assert_eq!(j["login"], "nani");
         assert_eq!(j["active"], false);
+    }
+
+    #[tokio::test]
+    async fn set_commission_rate_auth_validation_notfound_and_happy() {
+        let Some(pool) = make_pool("t_affh_rate").await else {
+            return;
+        };
+        let valid_body = Bytes::from_static(br#"{"commission_rate_pct":40}"#);
+
+        let (s, _) = body_json(
+            set_commission_rate_handler(
+                DashboardAuthLevel::None,
+                State(pool.clone()),
+                Path("nani".into()),
+                valid_body.clone(),
+            )
+            .await,
+        )
+        .await;
+        assert_eq!(s, StatusCode::UNAUTHORIZED);
+        let (s, _) = body_json(
+            set_commission_rate_handler(
+                partner_auth(),
+                State(pool.clone()),
+                Path("nani".into()),
+                valid_body.clone(),
+            )
+            .await,
+        )
+        .await;
+        assert_eq!(s, StatusCode::FORBIDDEN);
+
+        for body in [
+            br#"{}"#.as_slice(),
+            br#"{"commission_rate_pct":"40"}"#.as_slice(),
+            br#"{"commission_rate_pct":101}"#.as_slice(),
+        ] {
+            let (s, j) = body_json(
+                set_commission_rate_handler(
+                    DashboardAuthLevel::admin(),
+                    State(pool.clone()),
+                    Path("nani".into()),
+                    Bytes::copy_from_slice(body),
+                )
+                .await,
+            )
+            .await;
+            assert_eq!(s, StatusCode::BAD_REQUEST);
+            assert_eq!(j["error"], "invalid_rate");
+        }
+
+        let (s, _) = body_json(
+            set_commission_rate_handler(
+                DashboardAuthLevel::admin(),
+                State(pool.clone()),
+                Path("ghost".into()),
+                valid_body.clone(),
+            )
+            .await,
+        )
+        .await;
+        assert_eq!(s, StatusCode::NOT_FOUND);
+
+        sqlx::query("CREATE TABLE affiliate_accounts (twitch_login TEXT PRIMARY KEY, commission_rate_pct SMALLINT NOT NULL DEFAULT 30, updated_at TEXT)")
+            .execute(&pool)
+            .await
+            .unwrap();
+        sqlx::query("INSERT INTO affiliate_accounts (twitch_login) VALUES ('nani')")
+            .execute(&pool)
+            .await
+            .unwrap();
+        let (s, j) = body_json(
+            set_commission_rate_handler(
+                DashboardAuthLevel::admin(),
+                State(pool.clone()),
+                Path("nani".into()),
+                valid_body,
+            )
+            .await,
+        )
+        .await;
+        assert_eq!(s, StatusCode::OK);
+        assert_eq!(j["commission_rate_pct"], 40);
+        let stored: i16 = sqlx::query_scalar(
+            "SELECT commission_rate_pct FROM affiliate_accounts WHERE twitch_login = 'nani'",
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert_eq!(stored, 40);
     }
 
     #[tokio::test]
