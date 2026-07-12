@@ -2485,6 +2485,8 @@ mod tests {
     use std::sync::atomic::{AtomicUsize, Ordering};
     use tokio::sync::Mutex as TokioMutex;
 
+    type SuppressionCall = (String, Option<String>, String, String);
+
     /// Ein Pool-Text ohne `{invite}` wird still ohne Link gepostet, statt zu
     /// scheitern. Doppelte Texte verzerren zusätzlich die Zufallsauswahl und
     /// hebeln den Anti-Repeat-Filter aus (der nur auf Textgleichheit prüft).
@@ -2941,7 +2943,7 @@ mod tests {
     /// Verdrahtung prüft, ohne eine echte DB anzufassen.
     #[derive(Clone, Default)]
     struct CapturingWriter {
-        calls: Arc<std::sync::Mutex<Vec<(String, Option<String>, String, String)>>>,
+        calls: Arc<std::sync::Mutex<Vec<SuppressionCall>>>,
     }
 
     #[async_trait]

@@ -9,6 +9,40 @@ use chrono::{DateTime, NaiveDate, SecondsFormat, Utc};
 use serde_json::{json, Value};
 use sqlx::PgPool;
 
+type OverviewRow = (
+    i64,
+    Option<f64>,
+    Option<f64>,
+    Option<i32>,
+    i64,
+    Option<f64>,
+    Option<f64>,
+    Option<f64>,
+);
+type SessionRow = (
+    NaiveDate,
+    Option<String>,
+    Option<f64>,
+    Option<f64>,
+    Option<i32>,
+    Option<f64>,
+    Option<f64>,
+    i64,
+    i64,
+);
+type RankedSessionRow = (String, Option<f64>, Option<i32>, Option<f64>, NaiveDate);
+type GameRow = (String, i64, Option<f64>, Option<i32>, Option<f64>);
+type GameSessionRow = (
+    String,
+    i64,
+    Option<f64>,
+    Option<i32>,
+    Option<f64>,
+    i64,
+    Option<i64>,
+    NaiveDate,
+);
+
 /// KI-Modell-Kennungen (Python `AI_MODEL_OPUS`/`AI_MODEL_MINIMAX`).
 pub const AI_MODEL_OPUS: &str = "opus";
 pub const AI_MODEL_MINIMAX: &str = "minimax";
@@ -78,7 +112,7 @@ pub async fn collect_ai_context(
     let since_iso = since.to_rfc3339_opts(SecondsFormat::Micros, false);
 
     // 1. Overview-KPIs.
-    let ov: (i64, Option<f64>, Option<f64>, Option<i32>, i64, Option<f64>, Option<f64>, Option<f64>) =
+    let ov: OverviewRow =
         sqlx::query_as(&format!(
             "SELECT COUNT(*)::bigint, \
                     ROUND((SUM(duration_seconds) / 3600.0)::numeric, 1)::float8, \
@@ -97,17 +131,7 @@ pub async fn collect_ai_context(
         .await?;
 
     // 2. Letzte 20 Sessions.
-    let sessions: Vec<(
-        NaiveDate,
-        Option<String>,
-        Option<f64>,
-        Option<f64>,
-        Option<i32>,
-        Option<f64>,
-        Option<f64>,
-        i64,
-        i64,
-    )> = sqlx::query_as(&format!(
+    let sessions: Vec<SessionRow> = sqlx::query_as(&format!(
         "SELECT started_at::date, stream_title, \
                     ROUND((duration_seconds / 3600.0)::numeric, 2)::float8, \
                     ROUND(avg_viewers::numeric, 1)::float8, peak_viewers, \
@@ -137,7 +161,7 @@ pub async fn collect_ai_context(
     .await?;
 
     // 4./5. Beste/schlechteste 5 Sessions.
-    let best: Vec<(String, Option<f64>, Option<i32>, Option<f64>, NaiveDate)> =
+    let best: Vec<RankedSessionRow> =
         sqlx::query_as(&format!(
             "SELECT COALESCE(stream_title, ''), avg_viewers::float8, peak_viewers, \
                 ROUND((retention_10m * 100)::numeric, 1)::float8, started_at::date \
@@ -149,7 +173,7 @@ pub async fn collect_ai_context(
         .bind(since)
         .fetch_all(pool)
         .await?;
-    let worst: Vec<(String, Option<f64>, Option<i32>, Option<f64>, NaiveDate)> =
+    let worst: Vec<RankedSessionRow> =
         sqlx::query_as(&format!(
             "SELECT COALESCE(stream_title, ''), avg_viewers::float8, peak_viewers, \
                 ROUND((retention_10m * 100)::numeric, 1)::float8, started_at::date \
@@ -168,7 +192,7 @@ pub async fn collect_ai_context(
     } else {
         ""
     };
-    let game_rows: Vec<(String, i64, Option<f64>, Option<i32>, Option<f64>)> =
+    let game_rows: Vec<GameRow> =
         sqlx::query_as(&format!(
             "SELECT COALESCE(game_name, 'Unbekannt'), COUNT(*)::bigint, \
                 ROUND(AVG(avg_viewers)::numeric, 1)::float8, MAX(peak_viewers), \
@@ -224,7 +248,7 @@ pub async fn collect_ai_context(
     );
 
     // 9. Per-Game-Breakdown aus Sessions (alle Kategorien).
-    let game_sessions: Vec<(String, i64, Option<f64>, Option<i32>, Option<f64>, i64, Option<i64>, NaiveDate)> = sqlx::query!(
+    let game_sessions: Vec<GameSessionRow> = sqlx::query!(
         r#"
         SELECT COALESCE(game_name, 'Unbekannt') AS "game_name!",
                COUNT(*)::bigint AS "session_count!",

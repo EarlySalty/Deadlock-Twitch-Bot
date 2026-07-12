@@ -352,11 +352,10 @@ mod route_tests {
     use axum::Router;
     use sqlx::postgres::{PgConnectOptions, PgPoolOptions};
     use std::str::FromStr;
-    use std::sync::Mutex;
     use tower::ServiceExt;
 
     /// Serialisiert Tests, die `TWITCH_PARTNER_TOKEN` setzen.
-    static ENV_LOCK: Mutex<()> = Mutex::new(());
+    static ENV_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
     const TEST_SECRET: &str = "test-partner-secret-xyz";
 
     fn test_fernet_key() -> String {
@@ -425,7 +424,7 @@ mod route_tests {
     #[tokio::test]
     async fn login_setzt_durable_partner_access_cookie() {
         let Some(pool) = make_pool("t_plogin_durable").await else { return; };
-        let _guard = ENV_LOCK.lock().unwrap_or_else(|p| p.into_inner());
+        let _guard = ENV_LOCK.lock().await;
         std::env::set_var("TWITCH_PARTNER_TOKEN", TEST_SECRET);
         let state = DashboardAuthState::new(pool.clone(), test_fernet_key());
         let wire = mint_token(&state).await;
@@ -465,7 +464,7 @@ mod route_tests {
     #[tokio::test]
     async fn login_short_circuit_bei_bestehender_session() {
         let Some(pool) = make_pool("t_plogin_shortcircuit").await else { return; };
-        let _guard = ENV_LOCK.lock().unwrap_or_else(|p| p.into_inner());
+        let _guard = ENV_LOCK.lock().await;
         std::env::set_var("TWITCH_PARTNER_TOKEN", TEST_SECRET);
         let state = DashboardAuthState::new(pool.clone(), test_fernet_key());
         let wire = mint_token(&state).await;

@@ -341,8 +341,7 @@ pub enum AiModel {
 pub async fn plan_ai_model(pool: &PgPool, streamer: &str) -> Result<Option<AiModel>, sqlx::Error> {
     // Nur Login (kein user_id) → der Trial-Auto-Grant in resolve_plan_snapshot
     // bleibt aus (braucht beides), reine Lese-Auflösung.
-    let snapshot = crate::plan::resolve_plan_snapshot(pool, streamer, "")
-        .await?;
+    let snapshot = crate::plan::resolve_plan_snapshot(pool, streamer, "").await?;
     if snapshot.entitlements.contains(&"analytics") {
         Ok(Some(AiModel::Opus))
     } else {
@@ -669,7 +668,7 @@ pub fn chat_digest(
             (*topic, count)
         })
         .collect();
-    topic_counts.sort_by(|a, b| b.1.cmp(&a.1));
+    topic_counts.sort_by_key(|entry| std::cmp::Reverse(entry.1));
     let topic_obj: serde_json::Map<String, serde_json::Value> = topic_counts
         .iter()
         .filter(|(_, c)| *c > 0)
@@ -2261,7 +2260,7 @@ pub async fn trigger_post_stream_analysis(
 
         // Snapshot bauen; leer → überspringen (Python: raise → kein report_id).
         let mut snapshot = build_post_stream_snapshot(pool, session_id, variant).await;
-        if snapshot.as_object().map_or(true, |o| o.is_empty()) {
+        if snapshot.as_object().is_none_or(|o| o.is_empty()) {
             tracing::warn!(variant, session_id, "PostStream: kein Snapshot");
             continue;
         }
@@ -2291,8 +2290,7 @@ pub async fn trigger_post_stream_analysis(
             }
             Err(e) => {
                 tracing::warn!(error = %e, variant, "PostStream: Report-UPDATE fehlgeschlagen");
-                if let Err(mark_error) = mark_report_failed(pool, report_id, &e.to_string()).await
-                {
+                if let Err(mark_error) = mark_report_failed(pool, report_id, &e.to_string()).await {
                     tracing::warn!(
                         error = %mark_error,
                         report_id,
@@ -2376,8 +2374,8 @@ pub async fn backfill_post_stream_reports(pool: &PgPool, sessions_per_streamer: 
 
 /// Periodischer Retry (Python `retry_failed_reports`, alle 30 min): (1) markiert
 /// >10 min festgesteckte pending-Einträge als failed, (2) lädt failed Reports
-/// aktiver Partner mit retry_count<3, (3) erhöht retry_count, (4) re-triggert je
-/// Session (3s-Pause).
+/// > aktiver Partner mit retry_count<3, (3) erhöht retry_count, (4) re-triggert je
+/// > Session (3s-Pause).
 pub async fn retry_failed_reports(pool: &PgPool) {
     if !post_stream_reports_enabled() {
         tracing::debug!("PostStream Retry: automatische Reports sind deaktiviert");

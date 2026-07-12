@@ -81,7 +81,7 @@ async fn query_scope_presence(
     scope: &Scope<'_>,
 ) -> Result<PresenceStats, sqlx::Error> {
     match scope {
-        Scope::Sessions(ids) if ids.is_empty() => Ok(PresenceStats {
+        Scope::Sessions([]) => Ok(PresenceStats {
             presence_rows: 0,
             sessions_with_presence: 0,
             gap_start: Value::Null,
@@ -154,7 +154,7 @@ async fn query_scope_raw(
     scope: &Scope<'_>,
 ) -> Result<RawStats, sqlx::Error> {
     let (rows, sessions, last): (i64, i64, Option<DateTime<Utc>>) = match scope {
-        Scope::Sessions(ids) if ids.is_empty() => {
+        Scope::Sessions([]) => {
             return Ok(RawStats {
                 raw_rows: 0,
                 sessions_with_raw: 0,

@@ -5,8 +5,8 @@
 //! Recommendations-Builder. Wird in verifizierten Teil-Slices portiert — je
 //! Analyse eine `pub fn`. **Teil 1: `_efficiency`** (Viewer-Stunden/Stream-Stunde
 //! + Wachstum/10h, je mit Kategorie-Schnitt [Top-15 % gefiltert] + Perzentil).
-//! **Teil 2: `_title_analysis` + `_extract_keywords`** (eigene vs. Kategorie-
-//! Titel, Keyword-Muster, Titel-Varianz vs. Peers).
+//!   **Teil 2: `_title_analysis` + `_extract_keywords`** (eigene vs. Kategorie-
+//!   Titel, Keyword-Muster, Titel-Varianz vs. Peers).
 
 use std::collections::{HashMap, HashSet};
 use std::sync::LazyLock;
@@ -15,6 +15,11 @@ use chrono::{DateTime, Utc};
 use regex::Regex;
 use serde_json::{json, Value};
 use sqlx::PgPool;
+
+type EfficiencyRow = (String, Option<f64>, Option<f64>, Option<f64>);
+type TitleRow = (String, Option<f64>, Option<i32>, Option<f64>, i64);
+type DurationRow = (i32, Option<f64>, Option<i32>, Option<f64>);
+type HourRow = (i32, i64, Option<f64>, Option<f64>, Option<f64>);
 
 fn round1(v: f64) -> f64 {
     (v * 10.0).round() / 10.0
@@ -84,7 +89,7 @@ pub async fn efficiency(
     since: DateTime<Utc>,
 ) -> Result<Value, sqlx::Error> {
     // 1) Viewer-Stunden / Stream-Stunden je Streamer.
-    let rows: Vec<(String, Option<f64>, Option<f64>, Option<f64>)> = sqlx::query!(
+    let rows: Vec<EfficiencyRow> = sqlx::query!(
         r#"
         SELECT s.streamer_login AS "streamer_login!",
                SUM(s.avg_viewers * s.duration_seconds / 3600.0)::float8 AS viewer_hours,
@@ -256,7 +261,7 @@ pub async fn title_analysis(
     since: DateTime<Utc>,
 ) -> Result<Value, sqlx::Error> {
     // 1) Eigene Titel, aggregiert.
-    let your_titles: Vec<(String, Option<f64>, Option<i32>, Option<f64>, i64)> = sqlx::query!(
+    let your_titles: Vec<TitleRow> = sqlx::query!(
         r#"
         SELECT s.stream_title AS "stream_title!",
                AVG(s.avg_viewers)::float8 AS avg_viewers,
@@ -549,7 +554,7 @@ pub async fn duration_analysis(
     streamer: &str,
     since: DateTime<Utc>,
 ) -> Result<Value, sqlx::Error> {
-    let rows: Vec<(i32, Option<f64>, Option<i32>, Option<f64>)> = sqlx::query!(
+    let rows: Vec<DurationRow> = sqlx::query!(
         r#"
         SELECT s.duration_seconds AS "duration_seconds!",
                s.avg_viewers::float8 AS avg_viewers,
@@ -589,8 +594,7 @@ pub async fn duration_analysis(
     // (label, streamCount, gerundete avgViewers) — Basis für die Optimal-Wahl.
     let mut meta: Vec<(&str, usize, f64)> = Vec::new();
     for (label, lo, hi) in DURATION_BUCKETS {
-        let subset: Vec<&(i32, Option<f64>, Option<i32>, Option<f64>)> =
-            rows.iter().filter(|r| *lo <= r.0 && r.0 < *hi).collect();
+        let subset: Vec<&DurationRow> = rows.iter().filter(|r| *lo <= r.0 && r.0 < *hi).collect();
         if subset.is_empty() {
             buckets.push(json!({
                 "label": label,
@@ -772,7 +776,7 @@ pub async fn cross_community(
 fn split_tags_from_rows(tag_strings: &[String]) -> HashSet<String> {
     let mut tags = HashSet::new();
     for raw in tag_strings {
-        for part in raw.split(|c| c == ',' || c == ';' || c == '|') {
+        for part in raw.split([',', ';', '|']) {
             let cleaned = part.trim().to_lowercase();
             if !cleaned.is_empty() {
                 tags.insert(cleaned);
@@ -1443,7 +1447,7 @@ pub async fn raid_network(
         ));
     }
     // Stabiler Sort absteigend nach Gesamt-Raids (Ties = Set-Order, frei wie Python).
-    entries.sort_by(|a, b| b.0.cmp(&a.0));
+    entries.sort_by_key(|entry| std::cmp::Reverse(entry.0));
 
     let total_sent: i64 = sent_map.values().map(|x| x.0).sum();
     let total_recv: i64 = recv_map.values().map(|x| x.0).sum();
@@ -1748,7 +1752,7 @@ pub async fn competition_density(
     .collect();
 
     // 2) Eigene Performance je Stunde (KEIN ended_at-Filter, 1:1 Python).
-    let own_hours: Vec<(i32, i64, Option<f64>, Option<f64>, Option<f64>)> = sqlx::query!(
+    let own_hours: Vec<HourRow> = sqlx::query!(
         r#"
         SELECT EXTRACT(HOUR FROM (s.started_at AT TIME ZONE 'UTC'))::int AS "hour!",
                COUNT(*)::bigint AS "count!",
@@ -1916,17 +1920,17 @@ fn value_truthy(v: &Value) -> bool {
     match v {
         Value::Null => false,
         Value::Bool(b) => *b,
-        Value::Number(n) => n.as_f64().map_or(false, |f| f != 0.0),
+        Value::Number(n) => n.as_f64().is_some_and(|f| f != 0.0),
         Value::String(s) => !s.is_empty(),
         Value::Array(a) => !a.is_empty(),
         Value::Object(o) => !o.is_empty(),
     }
 }
 fn truthy(obj: &Value, key: &str) -> bool {
-    obj.get(key).map_or(false, value_truthy)
+    obj.get(key).is_some_and(value_truthy)
 }
 fn present_non_null(obj: &Value, key: &str) -> bool {
-    obj.get(key).map_or(false, |v| !v.is_null())
+    obj.get(key).is_some_and(|v| !v.is_null())
 }
 /// Formatiert einen Wert wie Pythons `f"{value}"`: Float → kürzeste
 /// Round-Trip-Repr (`{:?}` = "50.0"/"0.2", wie CPython-`repr`), Integer als
@@ -2071,7 +2075,7 @@ pub fn build_recommendations(data: &Value) -> Vec<Value> {
             .and_then(Value::as_array)
             .cloned()
             .unwrap_or_default();
-        comp.sort_by(|a, b| int_of(b, "competitors").cmp(&int_of(a, "competitors")));
+        comp.sort_by_key(|slot| std::cmp::Reverse(int_of(slot, "competitors")));
         let take = comp.len() / 4;
         let high_comp_set: HashSet<(i64, i64)> = comp[..take]
             .iter()
@@ -2283,11 +2287,11 @@ pub fn build_recommendations(data: &Value) -> Vec<Value> {
     let sweet_non_empty = comp
         .get("sweetSpots")
         .and_then(Value::as_array)
-        .map_or(false, |a| !a.is_empty());
+        .is_some_and(|a| !a.is_empty());
     let hourly_non_empty = comp
         .get("hourly")
         .and_then(Value::as_array)
-        .map_or(false, |a| !a.is_empty());
+        .is_some_and(|a| !a.is_empty());
     if sweet_non_empty && hourly_non_empty {
         let best = &comp.get("sweetSpots").and_then(Value::as_array).unwrap()[0];
         if !truthy(best, "yourData") {

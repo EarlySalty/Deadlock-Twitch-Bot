@@ -1338,7 +1338,10 @@ mod tests {
         assert!(j["yourRank"].is_number());
         assert!(j.get("yourTier").is_some());
         assert_eq!(
-            entries.iter().filter(|entry| entry["isYou"] == true).count(),
+            entries
+                .iter()
+                .filter(|entry| entry["isYou"] == true)
+                .count(),
             1
         );
         assert!(j.get("categories").is_none());
@@ -1365,7 +1368,7 @@ mod tests {
         ] {
             assert!(j.get(key).is_some(), "coaching key {key} fehlt");
         }
-        assert!(j["recommendations"].as_array().unwrap().len() > 0);
+        assert!(!j["recommendations"].as_array().unwrap().is_empty());
         assert!(j.get("aiSummary").is_some());
         assert!(j.get("tips").is_none());
     }

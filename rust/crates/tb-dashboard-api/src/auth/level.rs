@@ -581,7 +581,7 @@ mod tests {
         let admin = state.create_admin_session("discord-9062303", "Discord Admin").await.unwrap();
         let auth = extract_auth(request_parts(Some(format!("{}={}; {}={}", crate::auth::session::PARTNER_COOKIE_NAME, partner.session_id, crate::auth::session::ADMIN_COOKIE_NAME, admin.session_id))), state.clone()).await;
         assert!(matches!(auth, DashboardAuthLevel::Partner { ref twitch_login, .. } if twitch_login == "earlysalty"));
-        sqlx::query("DELETE FROM dashboard_sessions WHERE session_id = ANY($1)").bind(&vec![partner.session_id, admin.session_id]).execute(&pool).await.unwrap();
+        sqlx::query("DELETE FROM dashboard_sessions WHERE session_id = ANY($1)").bind(vec![partner.session_id, admin.session_id]).execute(&pool).await.unwrap();
         sqlx::query("DELETE FROM twitch_partners WHERE id = 9062303").execute(&pool).await.unwrap();
     }
 

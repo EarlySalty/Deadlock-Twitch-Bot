@@ -626,7 +626,7 @@ pub async fn load_chat_analytics_payload(
     // messageTypes: nach count absteigend, Gleichstand → Erst-Auftreten (Counter.most_common).
     let mut message_types: Vec<(&'static str, i64)> =
         type_order.iter().map(|t| (*t, type_counts[t])).collect();
-    message_types.sort_by(|a, b| b.1.cmp(&a.1));
+    message_types.sort_by_key(|entry| std::cmp::Reverse(entry.1));
     let message_types_json: Vec<Value> = message_types
         .iter()
         .map(|(t, v)| {
@@ -851,7 +851,7 @@ mod tests {
         assert_eq!(v["hourlyActivity"].as_array().unwrap().len(), 24);
         assert_eq!(v["hourlyActivity"][18]["count"], 4);
         // messageTypes vorhanden + dataQuality-Struktur.
-        assert!(v["messageTypes"].as_array().unwrap().len() >= 1);
+        assert!(!v["messageTypes"].as_array().unwrap().is_empty());
         assert_eq!(v["dataQuality"]["botFilterApplied"], true);
         assert_eq!(v["dataQuality"]["sampleCount"], 4);
         assert_eq!(v["topChatters"][0]["totalMessages"], 4);

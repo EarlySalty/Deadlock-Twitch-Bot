@@ -650,8 +650,8 @@ pub fn affected_login_for_billing_refresh(
 /// Der Login wird über `twitch_streamers_partner_state` auf `twitch_user_id`
 /// aufgelöst und an [`PartnerScoreRefresher::refresh_for_ids`] übergeben (recompute
 /// + upsert in `twitch_partner_raid_scores`). Wie in Python ist das ein
-/// **best-effort**-Hook: ist der Login unbekannt oder existiert keine
-/// Partner-Zeile, passiert nichts (kein Fehler nach außen).
+///   **best-effort**-Hook: ist der Login unbekannt oder existiert keine
+///   Partner-Zeile, passiert nichts (kein Fehler nach außen).
 pub async fn refresh_partner_raid_score_for_login(
     pool: &PgPool,
     login: &str,

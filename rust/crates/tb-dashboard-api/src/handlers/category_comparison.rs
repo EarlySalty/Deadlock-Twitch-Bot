@@ -4,10 +4,10 @@
 //! 8 SQL-Queries, Python-seitige Percentile-Berechnungen in Rust repliziert.
 
 use axum::{
-    Json,
     extract::{Query, State},
     http::StatusCode,
     response::IntoResponse,
+    Json,
 };
 use chrono::{DateTime, Duration, Utc};
 use serde::Deserialize;
@@ -363,11 +363,11 @@ pub async fn category_comparison_handler(
     let mut ret_sorted: Vec<f64>;
     let mut chat_sorted: Vec<f64>;
     if exclude_external {
-        let ret_rows = sqlx::query(&format!(
+        let ret_rows = sqlx::query(
             "SELECT AVG(retention_10m) AS ret FROM twitch_stream_sessions
              WHERE started_at >= $1 AND ended_at IS NOT NULL
-             GROUP BY LOWER(streamer_login) HAVING AVG(avg_viewers) <= $2 ORDER BY ret"
-        ))
+             GROUP BY LOWER(streamer_login) HAVING AVG(avg_viewers) <= $2 ORDER BY ret",
+        )
         .bind(since)
         .bind(EXTERNAL_REACH_AVG_THRESHOLD)
         .fetch_all(&pool)

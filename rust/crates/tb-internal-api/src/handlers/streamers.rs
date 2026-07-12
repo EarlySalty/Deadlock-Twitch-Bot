@@ -665,6 +665,8 @@ fn ok_login_message(login: &str, message: String) -> (StatusCode, serde_json::Va
 ///
 /// Alle Geschäftsfälle antworten 200 `{ok, login, message}` (Python-Parität).
 /// DMs (`_notify_verification_success`, Fehler-DM) sind per B10-Direktive raus.
+// Axum requires each extractor as a separate handler argument; grouping them changes routing.
+#[allow(clippy::too_many_arguments)]
 pub async fn verify_handler(
     auth: AuthLevel,
     State(pool): State<PgPool>,
@@ -1011,6 +1013,8 @@ async fn active_partner_exists(pool: &PgPool, login: &str) -> Result<bool, sqlx:
 /// Body (Python/snake_case): `{"discord_user_id": "...", "discord_display_name": "...", "mark_member": true}`
 /// Aliases akzeptieren auch camelCase.
 /// Validierung: discord_user_id muss numerisch sein wenn angegeben (Python: `isdigit()`).
+// Axum requires each extractor as a separate handler argument; grouping them changes routing.
+#[allow(clippy::too_many_arguments)]
 pub async fn discord_profile_handler(
     auth: AuthLevel,
     State(pool): State<PgPool>,

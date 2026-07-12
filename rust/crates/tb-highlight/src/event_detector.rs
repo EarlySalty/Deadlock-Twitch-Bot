@@ -256,7 +256,7 @@ fn find_multikill_ranges(player_kills: &[&Death]) -> Vec<(usize, usize)> {
     ranges
 }
 
-fn find_teamfights<'a>(all_deaths: &'a [Death], player_slot: i64) -> Vec<Vec<&'a Death>> {
+fn find_teamfights(all_deaths: &[Death], player_slot: i64) -> Vec<Vec<&Death>> {
     if all_deaths.is_empty() {
         return Vec::new();
     }

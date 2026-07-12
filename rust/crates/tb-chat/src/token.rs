@@ -527,6 +527,8 @@ mod tests {
     use wiremock::matchers::{body_string_contains, header, method, path};
     use wiremock::{Mock, MockServer, ResponseTemplate};
 
+    type PersistedTokenCall = (String, Option<String>);
+
     async fn manager(server: &MockServer) -> BotTokenManager {
         BotTokenManager::new("cid".into(), "csec".into())
             .unwrap()
@@ -539,7 +541,7 @@ mod tests {
     /// Test-Senke: hält jeden persist-Aufruf fest (Access + optionaler Refresh).
     #[derive(Clone, Default)]
     struct CapturingSink {
-        calls: std::sync::Arc<std::sync::Mutex<Vec<(String, Option<String>)>>>,
+        calls: std::sync::Arc<std::sync::Mutex<Vec<PersistedTokenCall>>>,
     }
 
     #[async_trait::async_trait]
@@ -1221,10 +1223,12 @@ mod tests {
             .with_sink(std::sync::Arc::new(sink.clone()));
         m.initialize(None, "stable-refresh").await.unwrap();
 
-        let calls = sink.calls.lock().unwrap();
-        assert_eq!(calls.len(), 1);
-        assert_eq!(calls[0].0, "fresh");
-        assert_eq!(calls[0].1, None);
+        {
+            let calls = sink.calls.lock().unwrap();
+            assert_eq!(calls.len(), 1);
+            assert_eq!(calls[0].0, "fresh");
+            assert_eq!(calls[0].1, None);
+        }
         let state = m.state.read().await;
         assert_eq!(state.as_ref().unwrap().refresh_token, "stable-refresh");
     }

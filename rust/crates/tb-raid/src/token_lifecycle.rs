@@ -1071,6 +1071,8 @@ mod tests {
     use std::sync::atomic::{AtomicUsize, Ordering};
     use std::sync::Arc;
 
+    type PartnerStateRow = (String, Option<i32>, Option<String>, Option<i32>);
+
     /// Zählender Fake-Notifier: zählt Admin-Embeds / User-DMs / Rollen-Entzüge.
     #[derive(Default)]
     struct CountingNotifier {
@@ -1724,7 +1726,7 @@ mod tests {
             2
         );
 
-        let healed: Vec<(String, Option<i32>, Option<String>, Option<i32>)> = sqlx::query_as(
+        let healed: Vec<PartnerStateRow> = sqlx::query_as(
             "SELECT twitch_user_id, manual_partner_opt_out, technical_pause_reason, raid_bot_enabled
              FROM twitch_partners
              WHERE twitch_user_id IN ('800', '801', '802', '803', '804', '805', '806')
@@ -1834,7 +1836,7 @@ mod tests {
 
         assert_eq!(reactor.check_grace_periods().await, 2);
 
-        let partners: Vec<(String, Option<i32>, Option<String>, Option<i32>)> = sqlx::query_as(
+        let partners: Vec<PartnerStateRow> = sqlx::query_as(
             "SELECT twitch_user_id, manual_partner_opt_out, technical_pause_reason, raid_bot_enabled
              FROM twitch_partners
              ORDER BY twitch_user_id",
