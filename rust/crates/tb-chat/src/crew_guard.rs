@@ -916,10 +916,7 @@ mod tests {
         )
         .await;
 
-        assert_eq!(
-            message.as_deref(),
-            Some("PLATZHALTER: Crew-Guard-Judge-Ausfallwarnung")
-        );
+        assert_eq!(message.as_deref(), Some(JUDGE_FAILURE_WARNING));
     }
 
     #[tokio::test]
