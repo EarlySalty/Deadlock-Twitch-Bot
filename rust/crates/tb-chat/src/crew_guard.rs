@@ -15,13 +15,14 @@
 //!      setzt, wenn das Kampagnen-Muster klar erkennbar ist. Fail-safe „unsure".
 
 use std::collections::{HashMap, VecDeque};
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex, OnceLock, PoisonError};
 use std::time::Duration;
 
 use async_trait::async_trait;
 use regex::Regex;
 use serde::Deserialize;
-use tracing::{debug, warn};
+use tracing::{debug, error, warn};
 
 use crate::pipeline::ModAlerter;
 use crate::types::ChatMessageEvent;
@@ -223,8 +224,49 @@ pub trait CrewJudge: Send + Sync {
     async fn judge(&self, content: &str, recent_context: &[String]) -> CrewVerdict;
 }
 
+const JUDGE_FAILURE_WARNING_THRESHOLD: usize = 5;
+const JUDGE_FAILURE_WARNING_SENTINEL: &str = "__crew_guard_failure_warning__";
+
+#[derive(Default)]
+struct JudgeFailureTracker {
+    consecutive: AtomicUsize,
+}
+
+impl JudgeFailureTracker {
+    fn record_failure(&self) -> bool {
+        let previous = self
+            .consecutive
+            .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |count| {
+                Some(count.saturating_add(1))
+            })
+            .unwrap_or_else(|count| count);
+        previous == JUDGE_FAILURE_WARNING_THRESHOLD - 1
+    }
+
+    fn record_success(&self) {
+        self.consecutive.store(0, Ordering::Relaxed);
+    }
+}
+
 /// Wörtlicher deutscher System-Prompt (konservativer Klassifikator).
-const CREW_JUDGE_SYSTEM_PROMPT: &str = r#"Du bist ein konservativer Klassifikator gegen EINE koordinierte Twitch-Chat-Kampagne. Muster: (a) fragt einen Streamer warum ein 'Freund/Kollege' (oft Helmbombenricky/Ricky) gebannt sei; (b) redet die Moderation bzw. 'den Bot von nani' schlecht (bannt unbewusst viele/Bannliste/nani ist woke/Rassist/Scheisse); (c) wirbt in einen anderen Discord ab (komm bei uns rein/unser Discord) oder postet einen Invite. Die Woerter nani, Ricky, Freund gebannt, Bannliste sind MEHRDEUTIG und kommen auch in harmlosem Chat vor. Stufe NIEMALS allein aufgrund dieser Woerter als Kampagne ein. Setze is_crew=true NUR wenn (b) UND ((c) ODER (a)) klar erkennbar sind. Im Zweifel is_crew=false. Antworte NUR als JSON: {"is_crew":bool,"confidence":0..1,"patterns":["a","b","c"],"reasoning":"kurz"}."#;
+const CREW_JUDGE_SYSTEM_PROMPT: &str = r#"Du fuehrst eine regelbasierte JSON-Kodierung fuer EINE koordinierte Twitch-Chat-Kampagne aus. Bewerte den gesamten chronologischen Dialog gemeinsam, nicht nur die aktuelle Nachricht. is_crew ist KEIN freies Gesamturteil, sondern ein strikt aus patterns abgeleitetes Feld.
+
+Arbeite exakt in dieser Reihenfolge:
+1. Markiere die Muster unabhaengig voneinander, auch wenn der Dialog harmlos ist:
+- a: Der User fragt oder thematisiert den Bann einer anderen Person oder Gruppe, auch mit Pronomen wie 'er ist gebannt'.
+- b: Der User redet Moderation, Moderator oder Bot schlecht, z.B. 'bannt unbewusst viele', Bannliste, woke, Rassist oder Scheisse.
+- c: Der User laedt aktiv in einen Discord ein, wirbt dafuer, fragt/bietet einen Invite oder Link an oder postet ihn. Markiere c auch bei harmloser Discord-Werbung und bei Platzhaltern wie <LINK>. Die blosse Erwaehnung eines eigenen Discords als Banngrund ist kein c.
+Ein Muster darf in einer frueheren Nachricht stehen und bleibt dann fuer den Gesamtdialog erkannt: patterns ist die Vereinigungsmenge ueber alle Nachrichten. Gib alle und nur die erkannten Muster in der kanonischen Reihenfolge a,b,c aus.
+2. Berechne is_crew ausschliesslich aus patterns: is_crew = patterns enthaelt b UND (patterns enthaelt a ODER patterns enthaelt c). Verbindliche Beispiele:
+- patterns=["b"] => is_crew=false, confidence hoechstens 0.3
+- patterns=["c"] => is_crew=false, confidence hoechstens 0.3
+- patterns=["a","c"] => is_crew=false, confidence hoechstens 0.3
+- patterns=["a","b"] => is_crew=true, confidence mindestens 0.7
+- patterns=["b","c"] => is_crew=true, confidence mindestens 0.7
+- patterns=["a","b","c"] => is_crew=true, confidence mindestens 0.7
+3. Pruefe vor der Ausgabe Bool UND Confidence gegen diese Beispiele. Fehlt b oder fehlen sowohl a als auch c, MUSS is_crew=false und confidence hoechstens 0.3 sein, selbst wenn der Dialog allgemein verdaechtig wirkt. Erfinde keine Ausnahme.
+
+Die Woerter nani, Ricky, Freund gebannt und Bannliste sind mehrdeutig. Erfinde daraus kein Muster, wenn die jeweilige Bedeutung oben nicht im Dialog erkennbar ist. Im Zweifel is_crew=false. Antworte NUR als JSON und erzeuge die Felder exakt in dieser Reihenfolge, damit is_crew aus den bereits festgelegten patterns folgt: {"patterns":["a","b","c"],"is_crew":bool,"confidence":0..1,"reasoning":"kurz"}."#;
 
 /// Timeout des Judge-HTTP-Calls.
 const CREW_JUDGE_TIMEOUT_SECS: u64 = 12;
@@ -239,6 +281,7 @@ pub struct OpenAiCrewJudge {
     api_key: Option<String>,
     model: Option<String>,
     base_url: String,
+    failures: JudgeFailureTracker,
 }
 
 impl OpenAiCrewJudge {
@@ -253,7 +296,32 @@ impl OpenAiCrewJudge {
             model: non_empty_env("CREW_GUARD_MODEL"),
             base_url: non_empty_env("OPENAI_BASE_URL")
                 .unwrap_or_else(|| DEFAULT_OPENAI_BASE_URL.to_string()),
+            failures: JudgeFailureTracker::default(),
         }
+    }
+
+    fn failure(
+        &self,
+        content: &str,
+        error_kind: &'static str,
+        detail: impl std::fmt::Display,
+    ) -> CrewVerdict {
+        let failure_warning = self.failures.record_failure();
+        let consecutive_failures = self.failures.consecutive.load(Ordering::Relaxed);
+        let input = truncate_content(content, CONTENT_PREVIEW_MAX);
+        error!(
+            error_kind,
+            consecutive_failures,
+            input = %input,
+            error = %detail,
+            "crew_guard: Judge-Ausfall"
+        );
+        let mut verdict = CrewVerdict::unsure();
+        if failure_warning {
+            // ponytail: private sentinel keeps the public CrewJudge API unchanged.
+            verdict.reasoning = JUDGE_FAILURE_WARNING_SENTINEL.to_string();
+        }
+        verdict
     }
 }
 
@@ -290,19 +358,16 @@ impl CrewJudge for OpenAiCrewJudge {
         {
             Ok(resp) => resp,
             Err(err) => {
-                debug!("crew_guard: Judge-HTTP fehlgeschlagen: {err}");
-                return CrewVerdict::unsure();
+                return self.failure(content, "http_transport", err);
             }
         };
         if !resp.status().is_success() {
-            debug!("crew_guard: Judge-HTTP {}", resp.status());
-            return CrewVerdict::unsure();
+            return self.failure(content, "http_status", resp.status());
         }
         let parsed = match resp.json::<ChatCompletion>().await {
             Ok(parsed) => parsed,
             Err(err) => {
-                debug!("crew_guard: Judge-Antwort nicht lesbar: {err}");
-                return CrewVerdict::unsure();
+                return self.failure(content, "response_json", err);
             }
         };
         let raw = parsed
@@ -311,7 +376,11 @@ impl CrewJudge for OpenAiCrewJudge {
             .next()
             .and_then(|choice| choice.message.content)
             .unwrap_or_default();
-        parse_crew_verdict(&raw)
+        let Some(verdict) = parse_crew_verdict(&raw) else {
+            return self.failure(content, "verdict_json", "ungültiges Judge-Urteil");
+        };
+        self.failures.record_success();
+        verdict
     }
 }
 
@@ -335,24 +404,26 @@ fn build_user_content(content: &str, recent_context: &[String]) -> String {
 }
 
 /// Robustes Bergen des JSON-Urteils (Stil wie `conversation_scam::parse_verdict`).
-fn parse_crew_verdict(raw: &str) -> CrewVerdict {
+fn parse_crew_verdict(raw: &str) -> Option<CrewVerdict> {
     let parsed = serde_json::from_str::<RawCrewVerdict>(raw.trim()).or_else(|_| {
         extract_json_object(raw)
             .ok_or_else(|| serde_json::Error::io(std::io::Error::other("kein JSON-Objekt")))
             .and_then(serde_json::from_str::<RawCrewVerdict>)
     });
-    let Ok(parsed) = parsed else {
-        return CrewVerdict::unsure();
-    };
+    let Ok(parsed) = parsed else { return None };
     if !parsed.confidence.is_finite() {
-        return CrewVerdict::unsure();
+        return None;
     }
-    CrewVerdict {
+    Some(CrewVerdict {
         is_crew: parsed.is_crew,
         confidence: parsed.confidence.clamp(0.0, 1.0),
         patterns: parsed.patterns,
         reasoning: parsed.reasoning,
-    }
+    })
+}
+
+fn has_failure_warning(verdict: &CrewVerdict) -> bool {
+    verdict.reasoning == JUDGE_FAILURE_WARNING_SENTINEL
 }
 
 /// Erstes balanciertes JSON-Objekt aus einem String bergen (String-aware).
@@ -431,6 +502,7 @@ fn non_empty_env(name: &str) -> Option<String> {
 
 /// Vorschau-Länge des Original-Nachrichtentexts in der Discord-Meldung.
 const CONTENT_PREVIEW_MAX: usize = 160;
+const JUDGE_FAILURE_WARNING: &str = "⚠️ Crew-Guard: Der KI-Judge ist mehrfach in Folge ausgefallen (HTTP-Fehler oder unlesbare Antwort). Verdächtige Nachrichten werden solange als \"unsicher\" ohne Aktion durchgereicht. Bitte Logs prüfen, die Erkennung läuft gerade blind.";
 
 /// Kürzt `content` char-sicher auf `max` Zeichen.
 fn truncate_content(content: &str, max: usize) -> String {
@@ -691,7 +763,9 @@ async fn decide(
         }
         CrewSignal::Trigger { hits } => {
             let verdict = judge.judge(content, recent_context).await;
-            if verdict.is_crew && verdict.confidence >= threshold {
+            if has_failure_warning(&verdict) {
+                Some(JUDGE_FAILURE_WARNING.to_string())
+            } else if verdict.is_crew && verdict.confidence >= threshold {
                 let patterns = if verdict.patterns.is_empty() {
                     hits.join(", ")
                 } else {
@@ -757,6 +831,8 @@ async fn evaluate(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use wiremock::matchers::method;
+    use wiremock::{Mock, MockServer, ResponseTemplate};
 
     // Nur Texte — KEINE echten Usernamen als Chatter-Identität.
     const POSITIVES: [&str; 5] = [
@@ -784,6 +860,17 @@ mod tests {
         }
     }
 
+    struct WarningJudge;
+
+    #[async_trait]
+    impl CrewJudge for WarningJudge {
+        async fn judge(&self, _content: &str, _recent_context: &[String]) -> CrewVerdict {
+            let mut verdict = CrewVerdict::unsure();
+            verdict.reasoning = JUDGE_FAILURE_WARNING_SENTINEL.to_string();
+            verdict
+        }
+    }
+
     fn judge_nein() -> StubJudge {
         StubJudge(CrewVerdict::unsure())
     }
@@ -795,6 +882,99 @@ mod tests {
             patterns: vec!["b".into(), "c".into()],
             reasoning: "klar".into(),
         })
+    }
+
+    #[test]
+    fn judge_ausfallserie_warnt_genau_einmal_und_reset() {
+        let failures = JudgeFailureTracker::default();
+
+        for _ in 0..4 {
+            assert!(!failures.record_failure());
+        }
+        assert!(failures.record_failure(), "fünfter Ausfall muss warnen");
+        for _ in 0..5 {
+            assert!(!failures.record_failure(), "nur eine Warnung je Serie");
+        }
+
+        failures.record_success();
+        for _ in 0..4 {
+            assert!(!failures.record_failure());
+        }
+        assert!(failures.record_failure(), "neue Serie muss erneut warnen");
+    }
+
+    #[tokio::test]
+    async fn judge_ausfallwarnung_nutzt_shadow_meldeweg() {
+        let message = decide(
+            "hast du den bot von nani drin?",
+            "555000111",
+            "ismile_e",
+            "neuer_account",
+            JUDGE_CONFIDENCE_THRESHOLD,
+            &WarningJudge,
+            &[],
+        )
+        .await;
+
+        assert_eq!(
+            message.as_deref(),
+            Some("PLATZHALTER: Crew-Guard-Judge-Ausfallwarnung")
+        );
+    }
+
+    #[tokio::test]
+    async fn judge_http_fehler_zaehlen_bis_zur_einmalwarnung() {
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .respond_with(ResponseTemplate::new(503))
+            .mount(&server)
+            .await;
+        let judge = OpenAiCrewJudge {
+            client: reqwest::Client::new(),
+            api_key: Some("test-key".to_string()),
+            model: Some("test-model".to_string()),
+            base_url: server.uri(),
+            failures: JudgeFailureTracker::default(),
+        };
+
+        for _ in 0..4 {
+            assert!(!has_failure_warning(
+                &judge.judge("nani bannliste", &[]).await
+            ));
+        }
+        assert!(has_failure_warning(
+            &judge.judge("nani bannliste", &[]).await
+        ));
+        assert!(!has_failure_warning(
+            &judge.judge("nani bannliste", &[]).await
+        ));
+    }
+
+    #[tokio::test]
+    async fn unlesbares_judge_urteil_zaehlt_als_ausfall() {
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "choices": [{"message": {"content": "kein json"}}]
+            })))
+            .mount(&server)
+            .await;
+        let judge = OpenAiCrewJudge {
+            client: reqwest::Client::new(),
+            api_key: Some("test-key".to_string()),
+            model: Some("test-model".to_string()),
+            base_url: server.uri(),
+            failures: JudgeFailureTracker::default(),
+        };
+
+        for _ in 0..4 {
+            assert!(!has_failure_warning(
+                &judge.judge("nani bannliste", &[]).await
+            ));
+        }
+        assert!(has_failure_warning(
+            &judge.judge("nani bannliste", &[]).await
+        ));
     }
 
     /// Der Vorfall vom 2026-07-06: `wall_horizon` fuhr das Skript, der Judge
@@ -982,13 +1162,13 @@ mod tests {
     #[test]
     fn verdict_parsing_ist_robust() {
         let raw = "hier kommt: {\"is_crew\":true,\"confidence\":0.9,\"patterns\":[\"b\",\"c\"],\"reasoning\":\"klar\"} ok";
-        let verdict = parse_crew_verdict(raw);
+        let verdict = parse_crew_verdict(raw).expect("gültiges Urteil");
         assert!(verdict.is_crew);
         assert_eq!(verdict.confidence, 0.9);
         assert_eq!(verdict.patterns, vec!["b".to_string(), "c".to_string()]);
 
         // Müll → fail-safe unsure.
-        assert_eq!(parse_crew_verdict("kein json"), CrewVerdict::unsure());
+        assert_eq!(parse_crew_verdict("kein json"), None);
     }
 
     #[tokio::test]
