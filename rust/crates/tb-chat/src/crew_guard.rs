@@ -15,13 +15,14 @@
 //!      setzt, wenn das Kampagnen-Muster klar erkennbar ist. Fail-safe „unsure".
 
 use std::collections::{HashMap, VecDeque};
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex, OnceLock, PoisonError};
 use std::time::Duration;
 
 use async_trait::async_trait;
 use regex::Regex;
 use serde::Deserialize;
-use tracing::{debug, warn};
+use tracing::{debug, error, warn};
 
 use crate::pipeline::ModAlerter;
 use crate::types::ChatMessageEvent;
@@ -204,6 +205,7 @@ pub struct CrewVerdict {
     pub confidence: f32,
     pub patterns: Vec<String>,
     pub reasoning: String,
+    pub failure_warning: bool,
 }
 
 impl CrewVerdict {
@@ -214,6 +216,7 @@ impl CrewVerdict {
             confidence: 0.0,
             patterns: Vec::new(),
             reasoning: String::new(),
+            failure_warning: false,
         }
     }
 }
@@ -221,6 +224,29 @@ impl CrewVerdict {
 #[async_trait]
 pub trait CrewJudge: Send + Sync {
     async fn judge(&self, content: &str, recent_context: &[String]) -> CrewVerdict;
+}
+
+const JUDGE_FAILURE_WARNING_THRESHOLD: usize = 5;
+
+#[derive(Default)]
+struct JudgeFailureTracker {
+    consecutive: AtomicUsize,
+}
+
+impl JudgeFailureTracker {
+    fn record_failure(&self) -> bool {
+        let previous = self
+            .consecutive
+            .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |count| {
+                Some(count.saturating_add(1))
+            })
+            .unwrap_or_else(|count| count);
+        previous == JUDGE_FAILURE_WARNING_THRESHOLD - 1
+    }
+
+    fn record_success(&self) {
+        self.consecutive.store(0, Ordering::Relaxed);
+    }
 }
 
 /// Wörtlicher deutscher System-Prompt (konservativer Klassifikator).
@@ -239,6 +265,7 @@ pub struct OpenAiCrewJudge {
     api_key: Option<String>,
     model: Option<String>,
     base_url: String,
+    failures: JudgeFailureTracker,
 }
 
 impl OpenAiCrewJudge {
@@ -253,6 +280,29 @@ impl OpenAiCrewJudge {
             model: non_empty_env("CREW_GUARD_MODEL"),
             base_url: non_empty_env("OPENAI_BASE_URL")
                 .unwrap_or_else(|| DEFAULT_OPENAI_BASE_URL.to_string()),
+            failures: JudgeFailureTracker::default(),
+        }
+    }
+
+    fn failure(
+        &self,
+        content: &str,
+        error_kind: &'static str,
+        detail: impl std::fmt::Display,
+    ) -> CrewVerdict {
+        let failure_warning = self.failures.record_failure();
+        let consecutive_failures = self.failures.consecutive.load(Ordering::Relaxed);
+        let input = truncate_content(content, CONTENT_PREVIEW_MAX);
+        error!(
+            error_kind,
+            consecutive_failures,
+            input = %input,
+            error = %detail,
+            "crew_guard: Judge-Ausfall"
+        );
+        CrewVerdict {
+            failure_warning,
+            ..CrewVerdict::unsure()
         }
     }
 }
@@ -290,19 +340,16 @@ impl CrewJudge for OpenAiCrewJudge {
         {
             Ok(resp) => resp,
             Err(err) => {
-                debug!("crew_guard: Judge-HTTP fehlgeschlagen: {err}");
-                return CrewVerdict::unsure();
+                return self.failure(content, "http_transport", err);
             }
         };
         if !resp.status().is_success() {
-            debug!("crew_guard: Judge-HTTP {}", resp.status());
-            return CrewVerdict::unsure();
+            return self.failure(content, "http_status", resp.status());
         }
         let parsed = match resp.json::<ChatCompletion>().await {
             Ok(parsed) => parsed,
             Err(err) => {
-                debug!("crew_guard: Judge-Antwort nicht lesbar: {err}");
-                return CrewVerdict::unsure();
+                return self.failure(content, "response_json", err);
             }
         };
         let raw = parsed
@@ -311,7 +358,11 @@ impl CrewJudge for OpenAiCrewJudge {
             .next()
             .and_then(|choice| choice.message.content)
             .unwrap_or_default();
-        parse_crew_verdict(&raw)
+        let Some(verdict) = parse_crew_verdict(&raw) else {
+            return self.failure(content, "verdict_json", "ungültiges Judge-Urteil");
+        };
+        self.failures.record_success();
+        verdict
     }
 }
 
@@ -335,24 +386,23 @@ fn build_user_content(content: &str, recent_context: &[String]) -> String {
 }
 
 /// Robustes Bergen des JSON-Urteils (Stil wie `conversation_scam::parse_verdict`).
-fn parse_crew_verdict(raw: &str) -> CrewVerdict {
+fn parse_crew_verdict(raw: &str) -> Option<CrewVerdict> {
     let parsed = serde_json::from_str::<RawCrewVerdict>(raw.trim()).or_else(|_| {
         extract_json_object(raw)
             .ok_or_else(|| serde_json::Error::io(std::io::Error::other("kein JSON-Objekt")))
             .and_then(serde_json::from_str::<RawCrewVerdict>)
     });
-    let Ok(parsed) = parsed else {
-        return CrewVerdict::unsure();
-    };
+    let Ok(parsed) = parsed else { return None };
     if !parsed.confidence.is_finite() {
-        return CrewVerdict::unsure();
+        return None;
     }
-    CrewVerdict {
+    Some(CrewVerdict {
         is_crew: parsed.is_crew,
         confidence: parsed.confidence.clamp(0.0, 1.0),
         patterns: parsed.patterns,
         reasoning: parsed.reasoning,
-    }
+        failure_warning: false,
+    })
 }
 
 /// Erstes balanciertes JSON-Objekt aus einem String bergen (String-aware).
@@ -431,6 +481,7 @@ fn non_empty_env(name: &str) -> Option<String> {
 
 /// Vorschau-Länge des Original-Nachrichtentexts in der Discord-Meldung.
 const CONTENT_PREVIEW_MAX: usize = 160;
+const JUDGE_FAILURE_WARNING: &str = "PLATZHALTER: Crew-Guard-Judge-Ausfallwarnung";
 
 /// Kürzt `content` char-sicher auf `max` Zeichen.
 fn truncate_content(content: &str, max: usize) -> String {
@@ -691,7 +742,9 @@ async fn decide(
         }
         CrewSignal::Trigger { hits } => {
             let verdict = judge.judge(content, recent_context).await;
-            if verdict.is_crew && verdict.confidence >= threshold {
+            if verdict.failure_warning {
+                Some(JUDGE_FAILURE_WARNING.to_string())
+            } else if verdict.is_crew && verdict.confidence >= threshold {
                 let patterns = if verdict.patterns.is_empty() {
                     hits.join(", ")
                 } else {
@@ -757,6 +810,8 @@ async fn evaluate(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use wiremock::matchers::method;
+    use wiremock::{Mock, MockServer, ResponseTemplate};
 
     // Nur Texte — KEINE echten Usernamen als Chatter-Identität.
     const POSITIVES: [&str; 5] = [
@@ -784,6 +839,18 @@ mod tests {
         }
     }
 
+    struct WarningJudge;
+
+    #[async_trait]
+    impl CrewJudge for WarningJudge {
+        async fn judge(&self, _content: &str, _recent_context: &[String]) -> CrewVerdict {
+            CrewVerdict {
+                failure_warning: true,
+                ..CrewVerdict::unsure()
+            }
+        }
+    }
+
     fn judge_nein() -> StubJudge {
         StubJudge(CrewVerdict::unsure())
     }
@@ -794,7 +861,91 @@ mod tests {
             confidence: 0.9,
             patterns: vec!["b".into(), "c".into()],
             reasoning: "klar".into(),
+            failure_warning: false,
         })
+    }
+
+    #[test]
+    fn judge_ausfallserie_warnt_genau_einmal_und_reset() {
+        let failures = JudgeFailureTracker::default();
+
+        for _ in 0..4 {
+            assert!(!failures.record_failure());
+        }
+        assert!(failures.record_failure(), "fünfter Ausfall muss warnen");
+        for _ in 0..5 {
+            assert!(!failures.record_failure(), "nur eine Warnung je Serie");
+        }
+
+        failures.record_success();
+        for _ in 0..4 {
+            assert!(!failures.record_failure());
+        }
+        assert!(failures.record_failure(), "neue Serie muss erneut warnen");
+    }
+
+    #[tokio::test]
+    async fn judge_ausfallwarnung_nutzt_shadow_meldeweg() {
+        let message = decide(
+            "hast du den bot von nani drin?",
+            "555000111",
+            "ismile_e",
+            "neuer_account",
+            JUDGE_CONFIDENCE_THRESHOLD,
+            &WarningJudge,
+            &[],
+        )
+        .await;
+
+        assert_eq!(
+            message.as_deref(),
+            Some("PLATZHALTER: Crew-Guard-Judge-Ausfallwarnung")
+        );
+    }
+
+    #[tokio::test]
+    async fn judge_http_fehler_zaehlen_bis_zur_einmalwarnung() {
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .respond_with(ResponseTemplate::new(503))
+            .mount(&server)
+            .await;
+        let judge = OpenAiCrewJudge {
+            client: reqwest::Client::new(),
+            api_key: Some("test-key".to_string()),
+            model: Some("test-model".to_string()),
+            base_url: server.uri(),
+            failures: JudgeFailureTracker::default(),
+        };
+
+        for _ in 0..4 {
+            assert!(!judge.judge("nani bannliste", &[]).await.failure_warning);
+        }
+        assert!(judge.judge("nani bannliste", &[]).await.failure_warning);
+        assert!(!judge.judge("nani bannliste", &[]).await.failure_warning);
+    }
+
+    #[tokio::test]
+    async fn unlesbares_judge_urteil_zaehlt_als_ausfall() {
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "choices": [{"message": {"content": "kein json"}}]
+            })))
+            .mount(&server)
+            .await;
+        let judge = OpenAiCrewJudge {
+            client: reqwest::Client::new(),
+            api_key: Some("test-key".to_string()),
+            model: Some("test-model".to_string()),
+            base_url: server.uri(),
+            failures: JudgeFailureTracker::default(),
+        };
+
+        for _ in 0..4 {
+            assert!(!judge.judge("nani bannliste", &[]).await.failure_warning);
+        }
+        assert!(judge.judge("nani bannliste", &[]).await.failure_warning);
     }
 
     /// Der Vorfall vom 2026-07-06: `wall_horizon` fuhr das Skript, der Judge
@@ -982,13 +1133,13 @@ mod tests {
     #[test]
     fn verdict_parsing_ist_robust() {
         let raw = "hier kommt: {\"is_crew\":true,\"confidence\":0.9,\"patterns\":[\"b\",\"c\"],\"reasoning\":\"klar\"} ok";
-        let verdict = parse_crew_verdict(raw);
+        let verdict = parse_crew_verdict(raw).expect("gültiges Urteil");
         assert!(verdict.is_crew);
         assert_eq!(verdict.confidence, 0.9);
         assert_eq!(verdict.patterns, vec!["b".to_string(), "c".to_string()]);
 
         // Müll → fail-safe unsure.
-        assert_eq!(parse_crew_verdict("kein json"), CrewVerdict::unsure());
+        assert_eq!(parse_crew_verdict("kein json"), None);
     }
 
     #[tokio::test]
