@@ -44,7 +44,9 @@ Was der Admin-Host **erlaubt** (Reihenfolge = Caddy-`handle`-Auswertung, erster 
 - `/twitch/auth/*` → Login-/Logout-/Fingerprint-Flows → Backend.
   **Gegenstück zum Gate:** `discord_admin_login.rs::login_handler` muss die Session mit demselben
   Maßstab prüfen wie `/twitch/auth/validate` (`load_admin_session_fingerprint` + `verify`, also
-  IP + Passive-FP + abgeschlossener Fingerprint-Schritt). Prüft der Login nur Existenz und TTL,
+  IP + Passive-FP + abgeschlossener Fingerprint-Schritt). Dieser Maßstab umfasst auch die
+  zentrale `validate-session`-Prüfung; zentral unbekannte oder nicht prüfbare Sessions werden
+  nicht akzeptiert. Prüft der Login nur Existenz und TTL,
   hält er eine Session für gut, die das Gate ablehnt — dann schicken sich beide im Kreis
   (Panel → 401 → Login → Panel), bis das Login-Rate-Limit greift. Trägt die Bindung nicht, räumt
   der Login das Cookie und startet den OAuth-Flow neu; die Session bleibt serverseitig stehen,

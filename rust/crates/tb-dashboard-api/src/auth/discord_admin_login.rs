@@ -354,7 +354,8 @@ pub async fn login_handler(
     // anlegt (`handlers::forward_auth::validate_admin_session`). Prüfte der Login
     // nur Existenz + TTL, während der Forward-Auth zusätzlich IP/Passive-FP/
     // fp_pending verlangt, schickten sich beide gegenseitig im Kreis: Panel → 401 →
-    // Login → Panel, bis das Rate-Limit greift (Vorfall 2026-07-10).
+    // Login → Panel, bis das Rate-Limit greift (Vorfall 2026-07-10). Die zentrale
+    // Session-Prüfung gehört wie im Auth-Level-Extractor ebenfalls zum Maßstab.
     let mut unbrauchbares_admin_cookie = false;
     if let Some(session_id) = cookie_from_headers(&headers, ADMIN_COOKIE_NAME) {
         if !session_id.is_empty() {
@@ -365,12 +366,15 @@ pub async fn login_handler(
                         &passive_fp_from_headers(&headers),
                     ) =>
                 {
-                    let destination = safe_internal_redirect(
-                        &canonical_discord_admin_post_login_path(Some(&next_path)),
-                        ADMIN_FALLBACK_PATH,
-                    );
-                    let cookie = build_admin_cookie(&config, &session_id);
-                    return redirect_with_cookie(&destination, &cookie);
+                    if config.client.validate_session(&session_id).await.is_ok() {
+                        let destination = safe_internal_redirect(
+                            &canonical_discord_admin_post_login_path(Some(&next_path)),
+                            ADMIN_FALLBACK_PATH,
+                        );
+                        let cookie = build_admin_cookie(&config, &session_id);
+                        return redirect_with_cookie(&destination, &cookie);
+                    }
+                    unbrauchbares_admin_cookie = true;
                 }
                 // Session da, Bindung trägt nicht (IP-Wechsel, neuer Passive-FP nach
                 // Browser-Update, oder Fingerprint-Schritt offen). Cookie räumen und
@@ -1203,6 +1207,7 @@ mod tests {
     struct FakeDiscordClient {
         authorize: DiscordAuthorize,
         sessions: Arc<Mutex<HashMap<String, DiscordAdminSession>>>,
+        central_session_valid: bool,
         imported: Arc<Mutex<Vec<String>>>,
         revoked: Arc<Mutex<Vec<String>>>,
     }
@@ -1238,7 +1243,15 @@ mod tests {
             &self,
             _session_id: &str,
         ) -> Result<ValidatedAdminSession, DiscordAdminOAuthError> {
-            Err(DiscordAdminOAuthError)
+            if !self.central_session_valid {
+                return Err(DiscordAdminOAuthError);
+            }
+            Ok(ValidatedAdminSession {
+                user_id: 42,
+                username: "earlysalty".into(),
+                display_name: "EarlySalty".into(),
+                expires_at: 9_999_999_999.0,
+            })
         }
 
         async fn import_session(
@@ -1257,6 +1270,13 @@ mod tests {
     }
 
     fn fake_client(entries: Vec<(&str, DiscordAdminSession)>) -> Arc<FakeDiscordClient> {
+        fake_client_with_central_validation(entries, false)
+    }
+
+    fn fake_client_with_central_validation(
+        entries: Vec<(&str, DiscordAdminSession)>,
+        central_session_valid: bool,
+    ) -> Arc<FakeDiscordClient> {
         let sessions = entries
             .into_iter()
             .map(|(key, value)| (key.to_string(), value))
@@ -1267,6 +1287,7 @@ mod tests {
                 state_id: "broker-state".into(),
             },
             sessions: Arc::new(Mutex::new(sessions)),
+            central_session_valid,
             imported: Arc::new(Mutex::new(Vec::new())),
             revoked: Arc::new(Mutex::new(Vec::new())),
         })
@@ -1486,6 +1507,14 @@ mod tests {
         created.session_id
     }
 
+    async fn lokale_discord_dashboard_session(state: &DashboardAuthState) -> String {
+        state
+            .create_admin_session("42", "EarlySalty")
+            .await
+            .expect("lokale Discord-Dashboard-Session anlegen")
+            .session_id
+    }
+
     fn geloeschtes_admin_cookie(response: &Response) -> bool {
         cookies(response).iter().any(|c| {
             c.starts_with(&format!("{ADMIN_COOKIE_NAME}=;")) && c.contains("Max-Age=0")
@@ -1562,15 +1591,42 @@ mod tests {
         );
     }
 
-    /// Regression: passende Bindung → weiterhin „schon eingeloggt", Redirect ins
-    /// Panel, Session-Cookie bleibt gesetzt.
     #[tokio::test]
-    async fn login_bei_gueltiger_bindung_redirectet_ins_panel() {
-        let Some(pool) = maybe_pool("discord_admin_login_bindung_ok").await else { return; };
+    async fn login_bei_zentral_abgelehnter_session_startet_oauth_und_raeumt_cookie() {
+        let Some(pool) = maybe_pool("discord_admin_login_central_rejected").await else { return; };
         ensure_sessions_table(&pool).await;
         let state = DashboardAuthState::new(pool, test_fernet_key());
-        let session_id = gebundene_admin_session(&state, &base_headers()).await;
+        let session_id = lokale_discord_dashboard_session(&state).await;
         let cfg = config(fake_client(Vec::new()));
+
+        let response = login_handler(
+            Some(Extension(state)),
+            Some(Extension(cfg)),
+            headers_mit_cookie(&session_id),
+            Query(AdminLoginQuery { next: None }),
+        )
+        .await;
+
+        let location = response.headers().get(header::LOCATION).unwrap().to_str().unwrap();
+        assert!(
+            location.starts_with("https://discord.com/oauth2/authorize"),
+            "zentral abgelehnte Session muss frischen OAuth-Flow starten: {location}"
+        );
+        assert!(
+            geloeschtes_admin_cookie(&response),
+            "zentral abgelehntes Cookie muss geraeumt werden"
+        );
+    }
+
+    /// Regression: lokal und zentral gültig → weiterhin „schon eingeloggt",
+    /// Redirect ins Panel, Session-Cookie bleibt gesetzt.
+    #[tokio::test]
+    async fn login_bei_lokal_und_zentral_gueltiger_session_redirectet_ins_panel() {
+        let Some(pool) = maybe_pool("discord_admin_login_central_valid").await else { return; };
+        ensure_sessions_table(&pool).await;
+        let state = DashboardAuthState::new(pool, test_fernet_key());
+        let session_id = lokale_discord_dashboard_session(&state).await;
+        let cfg = config(fake_client_with_central_validation(Vec::new(), true));
 
         let response = login_handler(
             Some(Extension(state)),
