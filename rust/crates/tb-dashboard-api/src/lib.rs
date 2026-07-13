@@ -5,6 +5,7 @@
 //! Auth-Routen nutzen `AuthLevel`-Extractor aus tb-http-core.
 
 pub mod ai_state;
+pub mod admin_audit;
 pub mod auth;
 pub mod handlers;
 pub mod process_info;
@@ -1471,10 +1472,14 @@ pub fn build_router(pool: PgPool, token: String) -> Router {
         ))
         .merge(build_admin_system_router(pool.clone(), token.clone()))
         .merge(build_admin_streamers_router(pool.clone(), token.clone()))
-        .merge(build_admin_config_router(pool, token))
+        .merge(build_admin_config_router(pool.clone(), token))
         .merge(handlers::admin_mode::build_admin_mode_router())
         .merge(handlers::legal::build_legal_router())
         .merge(handlers::roadmap_page::build_roadmap_page_router())
+        .layer(axum::middleware::from_fn_with_state(
+            pool,
+            admin_audit::audit_admin_mutations,
+        ))
         .layer(
             TraceLayer::new_for_http()
                 .on_request(|request: &axum::http::Request<_>, _span: &tracing::Span| {
