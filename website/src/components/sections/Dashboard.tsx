@@ -1,6 +1,7 @@
 import { useState } from "react";
 import { AnimatePresence, motion } from "framer-motion";
 import {
+  ArrowUpRight,
   BarChart3,
   GraduationCap,
   LayoutDashboard,
@@ -11,7 +12,6 @@ import {
   Users,
 } from "lucide-react";
 import { SectionHeading } from "@/components/ui/SectionHeading";
-import { BrowserMockup } from "@/components/ui/BrowserMockup";
 import { ScrollReveal } from "@/components/ui/ScrollReveal";
 import { TWITCH_DEMO_DASHBOARD_URL } from "@/data/externalLinks";
 
@@ -192,37 +192,6 @@ export function Dashboard() {
           subtitle="13 spezialisierte Tabs für jeden Aspekt deines Streams. Chat, Audience, Viewer, Wachstum und Coaching greifen direkt ineinander statt isoliert nebeneinander zu stehen."
         />
 
-        {/* Live Demo iframe */}
-        <ScrollReveal delay={0.1}>
-          <div className="mt-12">
-            <BrowserMockup url="deutsche-deadlock-community.de/demo/twitch/demo">
-              <div className="relative overflow-hidden rounded bg-gradient-to-br from-[var(--color-card)] to-[var(--color-bg)]" style={{ paddingBottom: '47.8125%', height: 0 }}>
-                <iframe
-                  src={demoTabUrl(activeTab)}
-                  title="Twitch Analyse Demo Live View"
-                  className="absolute top-0 left-0 border-0"
-                  style={{ width: '117.65%', height: '117.65%', transform: 'scale(0.85)', transformOrigin: 'top left' }}
-                  loading="lazy"
-                  referrerPolicy="no-referrer"
-                />
-                <span className="pointer-events-none absolute left-3 top-3 rounded-full border border-[var(--color-border)] bg-[rgba(7,21,29,0.78)] px-2.5 py-1 text-[10px] font-semibold uppercase tracking-[0.12em] text-[var(--color-accent)]">
-                  Live Demo
-                </span>
-              </div>
-            </BrowserMockup>
-            <div className="mt-4 text-center">
-              <a
-                href={demoTabUrl(activeTab)}
-                target="_blank"
-                rel="noopener noreferrer"
-                className="text-[var(--color-primary)] hover:text-[var(--color-primary-hover)] font-semibold transition text-sm"
-              >
-                Vollansicht öffnen →
-              </a>
-            </div>
-          </div>
-        </ScrollReveal>
-
         {/* Tab buttons */}
         <ScrollReveal delay={0.15}>
           <div className="mt-12 flex flex-wrap gap-2 justify-center">
@@ -237,7 +206,7 @@ export function Dashboard() {
                   className={[
                     "rounded-lg px-4 py-2 text-sm transition inline-flex items-center gap-2",
                     isActive
-                      ? "gradient-accent text-white"
+                      ? "gradient-accent"
                       : "bg-[var(--color-card)] border border-[var(--color-border)] text-[var(--color-text-secondary)] hover:text-[var(--color-text-primary)]",
                   ].join(" ")}
                 >
@@ -309,6 +278,21 @@ export function Dashboard() {
                       </div>
                     ))}
                   </div>
+
+                  <div className="mt-6 border-t border-[var(--color-border)] pt-5">
+                    <a
+                      href={demoTabUrl(activeTab)}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="inline-flex items-center gap-2 text-sm font-semibold text-[var(--color-primary)] transition hover:text-[var(--color-primary-hover)]"
+                    >
+                      {activeDemo.label} in der Live-Demo ansehen
+                      <ArrowUpRight size={15} />
+                    </a>
+                    <p className="mt-1.5 text-xs text-[var(--color-text-secondary)]">
+                      Echtes Dashboard mit Beispieldaten, kein Login nötig.
+                    </p>
+                  </div>
                 </div>
               </motion.div>
             </AnimatePresence>
@@ -322,7 +306,7 @@ export function Dashboard() {
                 {secondaryTabs.map((tab) => (
                   <span
                     key={tab.id}
-                    className="rounded-full border border-[var(--color-border)] bg-[rgba(7,21,29,0.75)] px-3 py-1.5 text-xs text-[var(--color-text-secondary)]"
+                    className="rounded-full border border-[var(--color-border)] bg-[rgba(28, 21, 13, 0.75)] px-3 py-1.5 text-xs text-[var(--color-text-secondary)]"
                   >
                     {tab.label}
                     {tab.beta && (

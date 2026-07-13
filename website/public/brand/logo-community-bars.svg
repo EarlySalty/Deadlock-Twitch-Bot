@@ -1,14 +1,14 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 280 68" role="img" aria-label="Deutsche Deadlock Community">
   <defs>
     <linearGradient id="a1" x1="0%" y1="0%" x2="100%" y2="100%">
-      <stop offset="0%" stop-color="#06B6D4"></stop>
-      <stop offset="55%" stop-color="#6D4AE8"></stop>
-      <stop offset="100%" stop-color="#A855F7"></stop>
+      <stop offset="0%" stop-color="#c8a86b"></stop>
+      <stop offset="55%" stop-color="#55978f"></stop>
+      <stop offset="100%" stop-color="#55978f"></stop>
     </linearGradient>
     <linearGradient id="a2" x1="0%" y1="0%" x2="100%" y2="0%">
-      <stop offset="0%" stop-color="#06B6D4"></stop>
-      <stop offset="55%" stop-color="#6D4AE8"></stop>
-      <stop offset="100%" stop-color="#A855F7"></stop>
+      <stop offset="0%" stop-color="#c8a86b"></stop>
+      <stop offset="55%" stop-color="#55978f"></stop>
+      <stop offset="100%" stop-color="#55978f"></stop>
     </linearGradient>
   </defs>
   

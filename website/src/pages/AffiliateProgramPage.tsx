@@ -139,7 +139,7 @@ export default function AffiliateProgramPage() {
                 initial={{ opacity: 0, y: -12 }}
                 animate={{ opacity: 1, y: 0 }}
                 transition={{ duration: 0.5 }}
-                className="inline-flex rounded-full border border-border bg-[rgba(16,38,53,0.76)] px-4 py-1.5 text-sm text-accent"
+                className="inline-flex rounded-full border border-border bg-[rgba(44, 35, 24,0.76)] px-4 py-1.5 text-sm text-accent"
               >
                 Affiliate-Programm
               </motion.div>
@@ -176,7 +176,7 @@ export default function AffiliateProgramPage() {
               >
                 <a
                   href={TWITCH_AFFILIATE_URL}
-                  className="gradient-accent inline-flex items-center gap-2 rounded-xl px-7 py-3.5 font-semibold text-white no-underline transition-all duration-200 hover:brightness-110"
+                  className="gradient-accent inline-flex items-center gap-2 rounded-xl px-7 py-3.5 font-semibold no-underline transition-all duration-200 hover:brightness-110"
                 >
                   Jetzt Vertriebler werden
                   <ArrowRight size={18} />
@@ -205,7 +205,7 @@ export default function AffiliateProgramPage() {
                 {HERO_HIGHLIGHTS.map((highlight) => (
                   <div
                     key={highlight.label}
-                    className="rounded-2xl border border-border bg-[rgba(7,21,29,0.46)] p-4"
+                    className="rounded-2xl border border-border bg-[rgba(28, 21, 13, 0.46)] p-4"
                   >
                     <p className="text-xs uppercase tracking-[0.14em] text-text-secondary">
                       {highlight.label}
@@ -217,7 +217,7 @@ export default function AffiliateProgramPage() {
                 ))}
               </div>
 
-              <div className="mt-6 rounded-2xl border border-border bg-[rgba(11,29,40,0.74)] p-4">
+              <div className="mt-6 rounded-2xl border border-border bg-[rgba(36, 28, 17,0.74)] p-4">
                 <p className="text-sm font-semibold text-text-primary">
                   Start in wenigen Minuten
                 </p>
@@ -360,7 +360,7 @@ export default function AffiliateProgramPage() {
                 <div className="grid gap-4">
                   <a
                     href={TWITCH_AFFILIATE_URL}
-                    className="gradient-accent inline-flex items-center justify-between gap-4 rounded-2xl px-6 py-5 font-semibold text-white no-underline transition-all duration-200 hover:brightness-110"
+                    className="gradient-accent inline-flex items-center justify-between gap-4 rounded-2xl px-6 py-5 font-semibold no-underline transition-all duration-200 hover:brightness-110"
                   >
                     <span>Jetzt Vertriebler werden</span>
                     <ArrowRight size={18} />

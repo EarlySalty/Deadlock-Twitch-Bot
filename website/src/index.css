@@ -34,26 +34,52 @@
   unicode-range: U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA, U+02DC, U+0304, U+0308, U+0329, U+2000-206F, U+20AC, U+2122, U+2191, U+2193, U+2212, U+2215, U+FEFF, U+FFFD;
 }
 
-/* Brand Theme – mirrored from Dashboard */
+/* Gold-Teal-Ink brand theme */
 @theme {
-  --color-bg: #07151d;
-  --color-background: #0b1d28;
-  --color-card: #102635;
-  --color-card-hover: #173448;
-  --color-primary: #06B6D4;
-  --color-primary-hover: #22d3ee;
-  --color-accent: #A855F7;
-  --color-accent-hover: #c084fc;
-  --color-success: #2ecc71;
-  --color-warning: #f5b642;
-  --color-danger: #ff6b5e;
-  --color-secondary: #8ea8bb;
-  --color-text-primary: #e9f1f7;
-  --color-text-secondary: #9bb3c5;
-  --color-border: rgba(194, 221, 240, 0.14);
-  --color-border-hover: rgba(194, 221, 240, 0.3);
+  --color-bg: #1c150d;
+  --color-background: #241c11;
+  /* Karten heben sich vom Ink ab (warm + halbtransparent, wie dl-brand --bg-card). */
+  --color-card: rgba(59, 47, 30, 0.86);
+  --color-card-hover: rgba(74, 59, 38, 0.92);
+  --color-primary: #c8a86b;
+  --color-primary-hover: #efd49d;
+  --color-primary-soft: rgba(201, 168, 106, 0.20);
+  --color-accent: #55978f;
+  --color-accent-hover: #6fb3aa;
+  --color-accent-soft: rgba(85, 151, 143, 0.20);
+  --color-success: #3fa66b;
+  --color-warning: #e0912f;
+  --color-danger: #dd6a4d;
+  --color-info: #55978f;
+  --color-success-soft: rgba(63, 166, 107, 0.15);
+  --color-warning-soft: rgba(224, 145, 47, 0.15);
+  --color-danger-soft: rgba(221, 106, 77, 0.15);
+  --color-secondary: #b7aa91;
+  --color-text-primary: #ece0c8;
+  --color-text-secondary: #b7aa91;
+  --color-border: rgba(201, 168, 106, 0.24);
+  --color-border-strong: rgba(201, 168, 106, 0.52);
+  --color-border-hover: rgba(201, 168, 106, 0.42);
   --font-sans: "Manrope", "Segoe UI", sans-serif;
   --font-display: "Sora", "Manrope", sans-serif;
+}
+
+:root {
+  /* Headline bleibt durchgehend Gold: der frühere Teal-Ausklang verwusch großen
+     Text zu Grau-Beige. Vier Stopps ergeben den Metall-Verlauf der Coaching-Seite. */
+  --gradient-brand: linear-gradient(120deg, #f6ddb0 0%, #efd49d 28%, #c8a86b 66%, #a98746 100%);
+  --gradient-dash: linear-gradient(135deg, #c8a86b, #55978f);
+  --gradient-bg: linear-gradient(180deg, #271f12 0%, #241c11 45%, #1c150d 100%);
+  --gradient-hero: linear-gradient(160deg, #1c150d 0%, #241c11 55%, #2c2318 100%);
+  --shadow-card: 0 26px 70px rgba(0, 0, 0, 0.56), inset 0 1px 0 rgba(255, 255, 255, 0.025);
+  --shadow-card-soft: 0 16px 45px rgba(0, 0, 0, 0.38), inset 0 1px 0 rgba(255, 255, 255, 0.02);
+  --shadow-primary-glow: 0 12px 28px rgba(201, 168, 106, 0.22);
+  --shadow-primary-glow-hover: 0 0 38px rgba(201, 168, 106, 0.22), 0 18px 50px rgba(0, 0, 0, 0.5);
+  --theme-headline-gradient: var(--gradient-brand);
+  --theme-titlebar-bg: var(--color-card-hover);
+  --theme-chatbot-bg: color-mix(in srgb, var(--color-background) 95%, transparent);
+  --theme-token-demo-bg: var(--color-bg);
+  --theme-token-demo-text: var(--color-accent);
 }
 
 /* Base Styles */
@@ -69,26 +95,44 @@ body {
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
   min-height: 100vh;
+  /* Gestapelte Glows statt flachem Verlauf: Gold von oben, Teal in die Flanken. */
   background:
-    radial-gradient(1200px 520px at 90% -10%, rgba(6, 182, 212, 0.16), transparent 65%),
-    radial-gradient(900px 460px at 12% -20%, rgba(168, 85, 247, 0.2), transparent 60%),
-    linear-gradient(160deg, #07151d 0%, #081a24 55%, #0a202c 100%);
+    radial-gradient(100% 60% at 50% -5%, rgba(201, 168, 106, 0.13), transparent 60%),
+    radial-gradient(70% 52% at 86% 32%, rgba(85, 151, 143, 0.095), transparent 72%),
+    radial-gradient(66% 44% at 12% 28%, rgba(85, 151, 143, 0.068), transparent 70%),
+    radial-gradient(72% 46% at 86% 86%, rgba(85, 151, 143, 0.055), transparent 74%),
+    radial-gradient(62% 42% at 8% 78%, rgba(85, 151, 143, 0.045), transparent 72%),
+    radial-gradient(72% 38% at 52% 98%, rgba(201, 168, 106, 0.046), transparent 76%),
+    var(--gradient-bg);
+  background-attachment: fixed;
   color: var(--color-text-primary);
   position: relative;
 }
 
+/* Gitternetz in Gold statt Weiß — Weiß entsättigt den warmen Ink zu Grau. */
 body::before {
   content: "";
   position: fixed;
   inset: 0;
   pointer-events: none;
   background-image:
-    linear-gradient(rgba(255, 255, 255, 0.03) 1px, transparent 1px),
-    linear-gradient(90deg, rgba(255, 255, 255, 0.03) 1px, transparent 1px);
+    linear-gradient(rgba(201, 168, 106, 0.05) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(201, 168, 106, 0.05) 1px, transparent 1px);
   background-size: 36px 36px;
   mask-image: radial-gradient(ellipse at top, black 40%, transparent 75%);
-  opacity: 0.35;
+  opacity: 0.5;
   z-index: 0;
+}
+
+/* Vignette: drückt die Ränder ab und holt den Inhalt nach vorn. */
+body::after {
+  content: "";
+  position: fixed;
+  inset: 0;
+  pointer-events: none;
+  z-index: 0;
+  mix-blend-mode: multiply;
+  background: radial-gradient(120% 95% at 50% 45%, transparent 63%, rgba(0, 0, 0, 0.34));
 }
 
 #root {
@@ -123,34 +167,45 @@ h1, h2, h3, h4, .display-font {
 
 /* Scrollbar */
 ::-webkit-scrollbar { width: 10px; height: 10px; }
-::-webkit-scrollbar-track { background: #071923; }
+::-webkit-scrollbar-track { background: var(--color-bg); }
 ::-webkit-scrollbar-thumb {
-  background: linear-gradient(180deg, #1a3f57, #204e6b);
+  background: linear-gradient(180deg, var(--color-card), var(--color-card-hover));
   border-radius: 999px;
-  border: 2px solid #071923;
+  border: 2px solid var(--color-bg);
 }
 ::-webkit-scrollbar-thumb:hover {
-  background: linear-gradient(180deg, #20506f, #2c698e);
+  background: linear-gradient(180deg, var(--color-card-hover), var(--color-primary));
 }
 
 /* Shared Effects */
 .glass {
-  background: rgba(12, 35, 49, 0.72);
+  background:
+    linear-gradient(180deg, rgba(239, 212, 157, 0.045) 0%, transparent 46%),
+    var(--color-card);
   backdrop-filter: blur(16px);
   border: 1px solid var(--color-border);
-  box-shadow: 0 16px 40px rgba(0, 0, 0, 0.28), inset 0 1px 0 rgba(255, 255, 255, 0.04);
+  box-shadow: var(--shadow-card-soft);
 }
 
+/* Primary-Fläche: Gold auf Gold mit dunkler Schrift — der frühere Gold→Teal-Verlauf
+   kippte in der Mitte nach Graugrün. Farbe hier statt in den Komponenten, damit
+   jede Nutzung automatisch lesbaren Text bekommt. */
 .gradient-accent {
-  background: linear-gradient(135deg, var(--color-primary) 0%, var(--color-accent) 100%);
+  background: linear-gradient(135deg, #f6ddb0 0%, #efd49d 35%, #c8a86b 68%, #a98746 100%);
+  color: #16100a;
+  border: 1px solid #efd49d;
 }
 
 .panel-card {
   position: relative;
   overflow: hidden;
-  background: linear-gradient(160deg, rgba(16, 38, 53, 0.92), rgba(10, 30, 42, 0.92));
+  background:
+    linear-gradient(180deg, rgba(239, 212, 157, 0.045) 0%, transparent 46%),
+    radial-gradient(100% 90% at 100% 0%, rgba(85, 151, 143, 0.035), transparent 54%),
+    var(--color-card);
   border: 1px solid var(--color-border);
-  box-shadow: 0 10px 30px rgba(0, 0, 0, 0.25), inset 0 1px 0 rgba(255, 255, 255, 0.05);
+  box-shadow: var(--shadow-card-soft);
+  backdrop-filter: blur(8px);
 }
 
 .panel-card::after {
@@ -158,8 +213,7 @@ h1, h2, h3, h4, .display-font {
   position: absolute;
   inset: 0;
   pointer-events: none;
-  background: linear-gradient(120deg, rgba(255, 255, 255, 0.06), transparent 35%);
-  opacity: 0.4;
+  background: linear-gradient(135deg, rgba(255, 255, 255, 0.018), transparent 42%);
 }
 
 .soft-elevate {
@@ -169,7 +223,7 @@ h1, h2, h3, h4, .display-font {
 .soft-elevate:hover {
   transform: translateY(-2px);
   border-color: var(--color-border-hover);
-  box-shadow: 0 14px 28px rgba(0, 0, 0, 0.24);
+  box-shadow: var(--shadow-primary-glow-hover);
 }
 
 .faq-summary::-webkit-details-marker {

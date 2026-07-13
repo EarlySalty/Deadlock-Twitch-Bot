@@ -18,10 +18,17 @@ export default defineConfig({
     chunkSizeWarningLimit: 1000,
     rollupOptions: {
       output: {
-        manualChunks: {
-          react: ['react', 'react/jsx-runtime', 'react-dom', 'react-dom/client'],
-          charts: ['recharts'],
-          query: ['@tanstack/react-query'],
+        manualChunks(id: string) {
+          if (id.includes('/node_modules/react') || id.includes('/node_modules/react-dom')) {
+            return 'react'
+          }
+          if (id.includes('/node_modules/recharts')) {
+            return 'charts'
+          }
+          if (id.includes('/node_modules/@tanstack/react-query')) {
+            return 'query'
+          }
+          return undefined
         },
       },
     },

@@ -13,12 +13,12 @@ interface Streamer {
 const BASE = import.meta.env.BASE_URL.replace(/\/$/, '')
 
 const streamerPool: Streamer[] = [
-  { name: 'miracleghost9',  avatar: 'M',  color: '#ff7a18', viewers: 247, video: `${BASE}/clips/miracleghost9.mp4` },
-  { name: 'whysolowkey',    avatar: 'W',  color: '#10b7ad', viewers: 183, video: `${BASE}/clips/whysolowkey.mp4` },
-  { name: 'kdenos',         avatar: 'K',  color: '#8b5cf6', viewers: 312, video: `${BASE}/clips/kdenos.mp4` },
-  { name: 'johnnyblazedx',  avatar: 'J',  color: '#3b82f6', viewers: 421, video: `${BASE}/clips/johnnyblazedx.mp4` },
-  { name: 'derechtecoolys', avatar: 'D',  color: '#f59e0b', viewers: 158, video: `${BASE}/clips/derechtecoolys.mp4` },
-  { name: 'duzzel',         avatar: 'Du', color: '#ec4899', viewers: 534, video: `${BASE}/clips/duzzel.mp4` },
+  { name: 'miracleghost9',  avatar: 'M',  color: '#c8a86b', viewers: 247, video: `${BASE}/clips/miracleghost9.mp4` },
+  { name: 'whysolowkey',    avatar: 'W',  color: '#55978f', viewers: 183, video: `${BASE}/clips/whysolowkey.mp4` },
+  { name: 'kdenos',         avatar: 'K',  color: '#55978f', viewers: 312, video: `${BASE}/clips/kdenos.mp4` },
+  { name: 'johnnyblazedx',  avatar: 'J',  color: '#55978f', viewers: 421, video: `${BASE}/clips/johnnyblazedx.mp4` },
+  { name: 'derechtecoolys', avatar: 'D',  color: '#e0912f', viewers: 158, video: `${BASE}/clips/derechtecoolys.mp4` },
+  { name: 'duzzel',         avatar: 'Du', color: '#dd6a4d', viewers: 534, video: `${BASE}/clips/duzzel.mp4` },
 ]
 
 let lastPair: [number, number] = [-1, -1]
@@ -204,7 +204,7 @@ export function RaidDemo() {
     function spawnConfetti(originX: number, originY: number, count: number) {
       const container = middleAreaRef.current
       if (!container) return
-      const colors = ['#06B6D4', '#A855F7', '#f59e0b', '#8b5cf6', '#22c55e', '#ec4899']
+      const colors = ['#c8a86b', '#55978f', '#e0912f', '#55978f', '#3fa66b', '#dd6a4d']
       for (let i = 0; i < count; i++) {
         const c = document.createElement('div')
         const color = colors[Math.floor(Math.random() * colors.length)]
@@ -466,7 +466,7 @@ export function RaidDemo() {
         .rd-player {
           position: relative;
           aspect-ratio: 16 / 9;
-          background: #0a0a0a;
+          background: #241c11;
           overflow: hidden;
         }
         .rd-clip-iframe {
@@ -499,7 +499,7 @@ export function RaidDemo() {
         }
         .rd-live-badge {
           display: flex; align-items: center; gap: 5px;
-          background: #ef4444; color: #fff;
+          background: #dd6a4d; color: #fff;
           padding: 2px 8px; border-radius: 4px;
           font-size: 11px; font-weight: 700; letter-spacing: 1px;
           transition: opacity 0.4s;
@@ -584,8 +584,8 @@ export function RaidDemo() {
         .rd-step-badge {
           font-size: 12px; font-weight: 700;
           color: var(--color-accent);
-          background: rgba(16,183,173,0.12);
-          border: 1px solid rgba(16,183,173,0.3);
+          background: rgba(85, 151, 143, 0.12);
+          border: 1px solid rgba(85, 151, 143, 0.3);
           padding: 4px 10px; border-radius: 20px;
           text-align: center; min-height: 24px;
           transition: all 0.3s;
@@ -616,7 +616,7 @@ export function RaidDemo() {
         }
         .rd-final-text {
           font-size: 14px; font-weight: 700;
-          color: #22c55e; text-align: center;
+          color: #3fa66b; text-align: center;
           transition: opacity 0.4s;
         }
         .rd-energy-beam {
@@ -642,25 +642,25 @@ export function RaidDemo() {
           transition: all 0.35s cubic-bezier(0.4,0,0.2,1);
         }
         .rd-pill-active {
-          background: rgba(255,122,24,0.15);
+          background: rgba(201,168,106,0.15);
           border-color: var(--color-primary);
           color: var(--color-primary);
         }
         .rd-pill-done {
-          background: rgba(34,197,94,0.1);
-          border-color: #22c55e;
-          color: #22c55e;
+          background: rgba(63, 166, 107,0.1);
+          border-color: #3fa66b;
+          color: #3fa66b;
         }
         .rd-pill-active-raid {
-          background: rgba(16,183,173,0.15);
+          background: rgba(85, 151, 143, 0.15);
           border-color: var(--color-accent);
           color: var(--color-accent);
           animation: rd-glow-pulse 1s infinite alternate;
         }
         .rd-pill-active-success {
-          background: rgba(34,197,94,0.2);
-          border-color: #22c55e;
-          color: #22c55e;
+          background: rgba(63, 166, 107,0.2);
+          border-color: #3fa66b;
+          color: #3fa66b;
           animation: rd-bounce-in 0.4s cubic-bezier(0.4,0,0.2,1);
         }
         .rd-pill-arrow {
@@ -677,8 +677,8 @@ export function RaidDemo() {
           50%       { opacity: 0.4; transform: scale(0.8); }
         }
         @keyframes rd-glow-pulse {
-          from { box-shadow: 0 0 0 rgba(16,183,173,0); }
-          to   { box-shadow: 0 0 10px rgba(16,183,173,0.5); }
+          from { box-shadow: 0 0 0 rgba(85, 151, 143, 0); }
+          to   { box-shadow: 0 0 10px rgba(85, 151, 143, 0.5); }
         }
         @keyframes rd-bounce-in {
           0%   { transform: scale(0.8); opacity: 0; }
@@ -733,7 +733,7 @@ export function RaidDemo() {
             </div>
             <div className="rd-info-bar">
               <div className="rd-info-left">
-                <div className="rd-avatar" ref={sourceAvatarRef} style={{ background: '#06B6D4' }}>D</div>
+                <div className="rd-avatar" ref={sourceAvatarRef} style={{ background: '#c8a86b' }}>D</div>
                 <div>
                   <a className="rd-info-name rd-info-link" ref={sourceInfoNameRef} href="https://twitch.tv/miracleghost9" target="_blank" rel="noopener noreferrer">miracleghost9</a>
                   <div className="rd-info-game">Spielt Deadlock</div>
@@ -789,7 +789,7 @@ export function RaidDemo() {
             </div>
             <div className="rd-info-bar">
               <div className="rd-info-left">
-                <div className="rd-avatar" ref={targetAvatarRef} style={{ background: '#A855F7' }}>P</div>
+                <div className="rd-avatar" ref={targetAvatarRef} style={{ background: '#55978f' }}>P</div>
                 <div>
                   <a className="rd-info-name rd-info-link" ref={targetInfoNameRef} href="https://twitch.tv/whysolowkey" target="_blank" rel="noopener noreferrer">whysolowkey</a>
                   <div className="rd-info-game">Spielt Deadlock</div>

@@ -47,7 +47,7 @@ function FooterLinkItem({ link }: { link: FooterLink }) {
 
 export function Footer() {
   return (
-    <footer className="w-full border-t border-border" style={{ background: 'rgba(7,21,29,0.5)' }}>
+    <footer className="w-full border-t border-border" style={{ background: 'rgba(28, 21, 13, 0.5)' }}>
       <div className="max-w-7xl mx-auto px-6 py-12">
         {/* Three-column grid */}
         <div className="grid grid-cols-1 md:grid-cols-3 gap-8">

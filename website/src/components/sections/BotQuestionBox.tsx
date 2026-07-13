@@ -108,12 +108,12 @@ export function BotQuestionBox() {
           placeholder="z. B. Was macht der Bot und ist das Scam?"
           maxLength={500}
           disabled={loading}
-          className="flex-1 rounded-xl border border-border bg-[rgba(16,38,53,0.76)] px-5 py-4 text-text-primary outline-none transition-colors placeholder:text-text-secondary/60 focus:border-accent disabled:opacity-60"
+          className="flex-1 rounded-xl border border-border bg-[rgba(44, 35, 24,0.76)] px-5 py-4 text-text-primary outline-none transition-colors placeholder:text-text-secondary/60 focus:border-accent disabled:opacity-60"
         />
         <button
           type="submit"
           disabled={loading || !question.trim()}
-          className="gradient-accent inline-flex items-center justify-center gap-2 rounded-xl px-6 py-4 font-semibold text-white transition-all duration-200 hover:brightness-110 disabled:cursor-not-allowed disabled:opacity-50"
+          className="gradient-accent inline-flex items-center justify-center gap-2 rounded-xl px-6 py-4 font-semibold transition-all duration-200 hover:brightness-110 disabled:cursor-not-allowed disabled:opacity-50"
         >
           {loading ? <Loader2 size={18} className="animate-spin" /> : <Send size={18} />}
           {loading ? "Denkt nach…" : "Fragen"}
@@ -147,7 +147,7 @@ export function BotQuestionBox() {
         )}
 
         {error && !loading && (
-          <p className="rounded-xl border border-red-500/30 bg-red-500/10 px-5 py-4 text-sm text-red-200">
+          <p className="rounded-xl border border-danger/30 bg-danger-soft px-5 py-4 text-sm text-danger">
             {error}
           </p>
         )}
@@ -165,7 +165,7 @@ export function BotQuestionBox() {
                 <div className="mt-1 flex h-8 w-8 shrink-0 items-center justify-center rounded-full border border-accent/40 bg-accent/15">
                   <Bot size={16} className="text-accent" />
                 </div>
-                <div className="rounded-2xl rounded-tl-sm border border-border bg-[rgba(16,38,53,0.76)] px-5 py-3 leading-relaxed text-text-primary">
+                <div className="rounded-2xl rounded-tl-sm border border-border bg-[rgba(44, 35, 24,0.76)] px-5 py-3 leading-relaxed text-text-primary">
                   {part}
                 </div>
               </motion.div>

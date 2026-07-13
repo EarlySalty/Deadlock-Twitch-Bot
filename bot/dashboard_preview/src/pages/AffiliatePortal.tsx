@@ -78,7 +78,7 @@ export default function AffiliatePortal() {
           </code>
           <button
             onClick={copyLink}
-            className="flex items-center gap-2 px-4 py-2.5 rounded-lg bg-purple-500 hover:bg-purple-400 text-white text-sm font-medium transition-colors"
+            className="flex items-center gap-2 px-4 py-2.5 rounded-lg bg-primary hover:bg-primary text-[#16100a] text-sm font-medium transition-colors"
           >
             {copied ? <CheckCircle className="w-4 h-4" /> : <Copy className="w-4 h-4" />}
             {copied ? 'Kopiert!' : 'Kopieren'}
@@ -94,7 +94,7 @@ export default function AffiliatePortal() {
         </div>
         <div className="bg-card rounded-xl border border-border p-4">
           <div className="text-xs text-white/40 mb-1">Gesamt-Provision</div>
-          <div className="text-2xl font-bold text-emerald-400">{formatCurrency(data.stats.total_provision)}</div>
+          <div className="text-2xl font-bold text-success">{formatCurrency(data.stats.total_provision)}</div>
         </div>
         <div className="bg-card rounded-xl border border-border p-4">
           <div className="text-xs text-white/40 mb-1">Diesen Monat</div>
@@ -102,7 +102,7 @@ export default function AffiliatePortal() {
         </div>
         <div className="bg-card rounded-xl border border-border p-4">
           <div className="text-xs text-white/40 mb-1">Ausstehende Auszahlung</div>
-          <div className="text-2xl font-bold text-amber-400">{formatCurrency(data.stats.pending_payout)}</div>
+          <div className="text-2xl font-bold text-warning">{formatCurrency(data.stats.pending_payout)}</div>
         </div>
       </div>
 
@@ -125,7 +125,7 @@ export default function AffiliatePortal() {
               <tr key={i} className="border-b border-white/5">
                 <td className="p-3 text-white">{c.customer_display_name}</td>
                 <td className="p-3 text-white/50">{c.plan_name || '—'}</td>
-                <td className="p-3 text-right text-emerald-400">{formatCurrency(c.amount)}</td>
+                <td className="p-3 text-right text-success">{formatCurrency(c.amount)}</td>
                 <td className="p-3 text-right text-white/30">
                   {new Date(c.created_at).toLocaleDateString('de-DE')}
                 </td>

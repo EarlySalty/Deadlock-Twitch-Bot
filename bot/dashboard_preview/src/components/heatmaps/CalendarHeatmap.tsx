@@ -170,7 +170,7 @@ export function CalendarHeatmap({
                   <div
                     key={intensity}
                     className="w-3 h-3 rounded-sm"
-                    style={{ backgroundColor: `rgba(124, 58, 237, ${intensity})` }}
+                    style={{ backgroundColor: `rgba(85, 151, 143, ${intensity})` }}
                   />
                 ))}
               </div>

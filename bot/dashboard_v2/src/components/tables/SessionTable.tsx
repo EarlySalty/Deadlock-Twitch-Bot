@@ -72,7 +72,7 @@ export function SessionTable({
                 <td className="px-5 py-3">{formatNumber(session.peakViewers)}</td>
                 <td className="px-5 py-3">
                   <div className="flex items-center gap-2">
-                    <div className="w-16 h-1.5 bg-gray-700 rounded-full overflow-hidden">
+                    <div className="w-16 h-1.5 bg-border rounded-full overflow-hidden">
                       <div
                         className="h-full rounded-full transition-all"
                         style={{

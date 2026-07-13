@@ -40,10 +40,10 @@ export function ViewerTimelineChart({ data, title = 'Viewer Timeline' }: ViewerT
             <p className="text-accent">
               Avg: <span className="text-white">{formatNumber(payload[0]?.value)}</span>
             </p>
-            <p className="text-blue-400">
+            <p className="text-accent">
               Peak: <span className="text-white">{formatNumber(payload[1]?.value)}</span>
             </p>
-            <p className="text-gray-400">
+            <p className="text-text-secondary">
               Min: <span className="text-white">{formatNumber(payload[2]?.value)}</span>
             </p>
           </div>
@@ -77,17 +77,17 @@ export function ViewerTimelineChart({ data, title = 'Viewer Timeline' }: ViewerT
                 <stop offset="95%" stopColor="var(--color-secondary)" stopOpacity={0} />
               </linearGradient>
             </defs>
-            <CartesianGrid strokeDasharray="3 3" stroke="rgba(194, 221, 240, 0.2)" />
+            <CartesianGrid strokeDasharray="3 3" stroke="rgba(201, 168, 106, 0.24)" />
             <XAxis
               dataKey="label"
-              stroke="#9ca3af"
+              stroke="#b7aa91"
               fontSize={11}
               tickLine={false}
               axisLine={false}
               interval="preserveStartEnd"
             />
             <YAxis
-              stroke="#9ca3af"
+              stroke="#b7aa91"
               fontSize={12}
               tickLine={false}
               axisLine={false}
@@ -134,7 +134,7 @@ export function ViewerTimelineChart({ data, title = 'Viewer Timeline' }: ViewerT
                 dataKey="label"
                 height={30}
                 stroke="var(--color-primary)"
-                fill="#1f2937"
+                fill="#2c2318"
                 travellerWidth={10}
               />
             )}

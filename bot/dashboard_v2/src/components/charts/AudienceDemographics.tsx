@@ -47,7 +47,7 @@ interface AudienceDemographicsProps {
   data: AudienceDemographicsData;
 }
 
-const VIEWER_COLORS = ['#10b981', '#34d399', '#8b5cf6', '#6ee7b7', '#a7f3d0'];
+const VIEWER_COLORS = ['#c8a86b', '#55978f', '#dd6a4d', '#8f9e6b', '#b7aa91'];
 
 export function AudienceDemographics({ data }: AudienceDemographicsProps) {
   const activityLabels = {
@@ -150,8 +150,8 @@ export function AudienceDemographics({ data }: AudienceDemographicsProps) {
                     </Pie>
                     <Tooltip
                       contentStyle={{
-                        backgroundColor: '#1f2937',
-                        border: '1px solid #374151',
+                        backgroundColor: 'var(--color-popover)',
+                        border: '1px solid var(--color-border)',
                         borderRadius: '8px',
                       }}
                       formatter={(value) => {

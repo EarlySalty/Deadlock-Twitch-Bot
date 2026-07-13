@@ -48,7 +48,7 @@ export default function AdminAffiliates() {
         <div className="bg-card rounded-xl border border-border p-4">
           <div className="text-xs text-white/40 mb-1">Diesen Monat</div>
           <div className="text-2xl font-bold text-white">{stats?.this_month_claims ?? 0} Claims</div>
-          <div className="text-xs text-emerald-400">{formatCurrency(stats?.this_month_provision ?? 0)}</div>
+          <div className="text-xs text-success">{formatCurrency(stats?.this_month_provision ?? 0)}</div>
         </div>
       </div>
 
@@ -88,7 +88,7 @@ export default function AdminAffiliates() {
                       disabled={!csrfToken || toggleMutation.isPending}
                     >
                       {a.active ? (
-                        <ToggleRight className="w-6 h-6 text-emerald-400" />
+                        <ToggleRight className="w-6 h-6 text-success" />
                       ) : (
                         <ToggleLeft className="w-6 h-6 text-white/20" />
                       )}

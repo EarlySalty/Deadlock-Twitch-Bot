@@ -25,11 +25,11 @@ import type {
 import { RawChatStatusBanner } from './chatAnalyticsShared';
 
 const CHART_TOOLTIP_STYLE = {
-  backgroundColor: 'rgba(9, 12, 22, 0.92)',
-  border: '1px solid rgba(148, 163, 184, 0.18)',
+  backgroundColor: 'var(--color-popover)',
+  border: '1px solid var(--color-border)',
   borderRadius: 16,
-  boxShadow: '0 24px 60px rgba(2, 6, 23, 0.42)',
-  color: '#f8fafc',
+  boxShadow: '0 24px 60px rgba(0, 0, 0, 0.42)',
+  color: 'var(--color-text-primary)',
 } as const;
 
 const LOYALTY_LABELS: Record<string, { label: string; color: string }> = {
@@ -40,19 +40,19 @@ const LOYALTY_LABELS: Record<string, { label: string; color: string }> = {
 };
 
 const TOPIC_COLORS: Record<string, string> = {
-  heroes: '#3b82f6',
-  builds: '#f59e0b',
-  ranked: '#8b5cf6',
-  meta: '#ef4444',
-  gameplay: '#06b6d4',
-  backseat: '#f97316',
-  commands: '#60a5fa',
-  social: '#34d399',
-  smalltalk: '#facc15',
-  greeting: '#22d3ee',
-  community: '#10b981',
-  reaction: '#ec4899',
-  other: '#6b7280',
+  heroes: '#c8a86b',
+  builds: '#55978f',
+  ranked: '#dd6a4d',
+  meta: '#8f9e6b',
+  gameplay: '#b7aa91',
+  backseat: 'var(--color-warning)',
+  commands: '#c8a86b',
+  social: '#55978f',
+  smalltalk: '#dd6a4d',
+  greeting: '#8f9e6b',
+  community: '#b7aa91',
+  reaction: 'var(--color-warning)',
+  other: '#c8a86b',
 };
 
 const TOPIC_LABELS: Record<string, string> = {
@@ -299,7 +299,7 @@ export function StimmungTopicsSection({ data }: { data: ChatContentAnalysis }) {
   const donutData = topicEntries.map(([key, value]) => ({
     name: TOPIC_LABELS[key] || key,
     value,
-    color: TOPIC_COLORS[key] || '#6b7280',
+    color: TOPIC_COLORS[key] || '#b7aa91',
   }));
 
   return (

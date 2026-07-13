@@ -28,9 +28,9 @@ const typeConfig = {
   },
   info: {
     icon: Info,
-    bgClass: 'bg-blue-500/10 border-blue-500/30',
-    textClass: 'text-blue-400',
-    borderClass: 'border-l-blue-500',
+    bgClass: 'bg-accent/10 border-accent/30',
+    textClass: 'text-accent',
+    borderClass: 'border-l-info',
   },
 };
 

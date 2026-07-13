@@ -22,12 +22,12 @@ export default function MySubscriptionCard({ subscription, invoiceHref }: MySubs
       initial={{ opacity: 0, y: 16 }}
       animate={{ opacity: 1, y: 0 }}
       transition={{ duration: 0.4 }}
-      className="mb-10 rounded-2xl border border-[#10b7ad]/30 bg-gradient-to-r from-[#10b7ad]/10 to-transparent p-6"
+      className="mb-10 rounded-2xl border border-[#55978f]/30 bg-gradient-to-r from-[#55978f]/10 to-transparent p-6"
     >
       <div className="flex flex-col gap-5 sm:flex-row sm:items-center sm:justify-between">
         <div>
           <div className="mb-2 flex items-center gap-2">
-            <span className="inline-flex items-center gap-1.5 rounded-full bg-[#10b7ad]/15 px-2.5 py-0.5 text-xs font-semibold text-[#10b7ad]">
+            <span className="inline-flex items-center gap-1.5 rounded-full bg-[#55978f]/15 px-2.5 py-0.5 text-xs font-semibold text-[#55978f]">
               <CheckCircle2 className="h-3.5 w-3.5" />
               Aktives Abo
             </span>
@@ -40,7 +40,7 @@ export default function MySubscriptionCard({ subscription, invoiceHref }: MySubs
 
         <a
           href={invoiceHref}
-          className="inline-flex flex-shrink-0 items-center justify-center gap-2 rounded-xl bg-[#10b7ad] px-6 py-3 text-sm font-semibold text-white shadow-lg shadow-[#10b7ad]/20 transition-all duration-200 hover:bg-[#13cfc3]"
+          className="inline-flex flex-shrink-0 items-center justify-center gap-2 rounded-xl bg-[#55978f] px-6 py-3 text-sm font-semibold text-white shadow-lg shadow-[#55978f]/20 transition-all duration-200 hover:bg-[#55978f]"
         >
           <Receipt className="h-4 w-4" />
           Rechnungen &amp; Abo verwalten

@@ -9,12 +9,14 @@ interface CategoryRankBadgeProps {
 export function CategoryRankBadge({ rank, total }: CategoryRankBadgeProps) {
   const percentile = total > 0 ? Math.round(((total - rank) / total) * 100) : 0;
 
-  // Color based on ranking
+  // Ein Platz ist kein Erfolgssignal, sondern ein Rang: die Stufen laufen von Gold
+  // (Podium) ueber Teal bis gedaempft. Kein Ampelgruen — das steht hier fuer
+  // "gestiegen" und wuerde die Aussage verwaschen.
   const getRankColor = () => {
-    if (rank <= 3) return 'from-yellow-400 to-amber-600';
+    if (rank <= 3) return 'from-primary-hover to-primary';
     if (rank <= 10) return 'from-primary to-accent';
-    if (percentile >= 50) return 'from-emerald-400 to-teal-600';
-    return 'from-gray-400 to-gray-600';
+    if (percentile >= 50) return 'from-accent to-accent-hover';
+    return 'from-secondary to-card-hover';
   };
 
   return (
@@ -24,7 +26,7 @@ export function CategoryRankBadge({ rank, total }: CategoryRankBadgeProps) {
       className="bg-card rounded-xl border border-border p-4 flex items-center gap-4"
     >
       <div className={`w-12 h-12 rounded-full bg-gradient-to-br ${getRankColor()} flex items-center justify-center shrink-0`}>
-        <Trophy className="w-6 h-6 text-white" />
+        <Trophy className="w-6 h-6 text-[#16100a]" />
       </div>
       <div className="min-w-0">
         <div className="text-2xl font-bold text-transparent bg-gradient-to-r from-primary to-accent bg-clip-text">

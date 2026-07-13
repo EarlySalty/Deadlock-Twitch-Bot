@@ -37,8 +37,8 @@ export function BanFeedEntry({ ban, isNew = false }: BanFeedEntryProps) {
         <motion.div
           className="absolute inset-0 rounded-lg"
           style={{
-            boxShadow: "inset 0 0 12px rgba(239,68,68,0.25)",
-            border: "1px solid rgba(239,68,68,0.3)",
+            boxShadow: "inset 0 0 12px rgba(221, 106, 77,0.25)",
+            border: "1px solid rgba(221, 106, 77,0.3)",
           }}
           initial={{ opacity: 1 }}
           animate={{ opacity: 0 }}
@@ -47,7 +47,7 @@ export function BanFeedEntry({ ban, isNew = false }: BanFeedEntryProps) {
       )}
 
       {/* BANNED badge */}
-      <span className="shrink-0 rounded bg-red-500/20 px-2 py-0.5 text-xs font-semibold uppercase tracking-wider text-red-400">
+      <span className="shrink-0 rounded bg-danger-soft px-2 py-0.5 text-xs font-semibold uppercase tracking-wider text-danger">
         Banned
       </span>
 

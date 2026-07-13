@@ -272,7 +272,7 @@ export function SocialMedia({ streamer }: SocialMediaProps) {
               onClick={() => setActiveView(id)}
               className={`inline-flex items-center gap-2 px-4 py-2 rounded-xl text-sm font-semibold transition ${
                 active
-                  ? 'bg-gradient-to-r from-orange/85 to-teal/70 text-white shadow-[0_6px_24px_-10px_rgba(255,122,24,0.45)]'
+                  ? 'bg-gradient-to-r from-orange/85 to-teal/70 text-white shadow-[0_6px_24px_-10px_rgba(201, 168, 106, 0.45)]'
                   : 'text-text-secondary hover:text-white'
               }`}
             >
@@ -514,7 +514,7 @@ function StatusFilter({
             onClick={() => onChange(item.id)}
             className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition ${
               active
-                ? 'bg-gradient-to-r from-orange/80 to-teal/70 text-white shadow-[0_4px_18px_-6px_rgba(255,122,24,0.45)]'
+                ? 'bg-gradient-to-r from-orange/80 to-teal/70 text-white shadow-[0_4px_18px_-6px_rgba(201, 168, 106, 0.45)]'
                 : 'text-text-secondary hover:text-white'
             }`}
           >

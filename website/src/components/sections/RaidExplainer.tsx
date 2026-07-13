@@ -86,7 +86,7 @@ function OfflineSvg() {
         width="44"
         height="28"
         rx="3"
-        stroke="rgba(155,179,197,0.35)"
+        stroke="rgba(183, 170, 145,0.35)"
         strokeWidth="1.5"
         fill="none"
       />
@@ -96,7 +96,7 @@ function OfflineSvg() {
         y1="32"
         x2="30"
         y2="37"
-        stroke="rgba(155,179,197,0.35)"
+        stroke="rgba(183, 170, 145,0.35)"
         strokeWidth="1.5"
       />
       <line
@@ -104,7 +104,7 @@ function OfflineSvg() {
         y1="37"
         x2="38"
         y2="37"
-        stroke="rgba(155,179,197,0.35)"
+        stroke="rgba(183, 170, 145,0.35)"
         strokeWidth="1.5"
         strokeLinecap="round"
       />
@@ -219,7 +219,7 @@ function ViewerFlowSvg() {
         y1="20"
         x2="54"
         y2="20"
-        stroke="rgba(155,179,197,0.2)"
+        stroke="rgba(183, 170, 145,0.2)"
         strokeWidth="1"
         strokeDasharray="3 3"
       />
@@ -357,9 +357,9 @@ export function RaidExplainer() {
                     <motion.div
                       key={step.title}
                       variants={rowVariants}
-                      className="bg-[var(--color-bg)]/50 rounded-lg p-4 flex items-start gap-4"
+                      className="bg-[#1c150d80] rounded-lg p-4 flex items-start gap-4"
                       style={{
-                        border: "1px solid rgba(16,183,173,0.35)",
+                        border: "1px solid rgba(85, 151, 143, 0.35)",
                       }}
                     >
                       {/* Icon */}
@@ -367,8 +367,8 @@ export function RaidExplainer() {
                         className="w-11 h-11 rounded-xl shrink-0 flex items-center justify-center"
                         style={{
                           background:
-                            "linear-gradient(135deg, rgba(255,122,24,0.22), rgba(16,183,173,0.2))",
-                          border: "1px solid rgba(16,183,173,0.24)",
+                            "linear-gradient(135deg, rgba(201,168,106,0.22), rgba(85, 151, 143, 0.2))",
+                          border: "1px solid rgba(85, 151, 143, 0.24)",
                         }}
                       >
                         <Icon size={18} className="text-[var(--color-accent)]" />
@@ -395,24 +395,24 @@ export function RaidExplainer() {
                   variants={rowVariants}
                   className="relative rounded-xl p-4"
                   style={{
-                    border: "1px solid rgba(16,183,173,0.2)",
+                    border: "1px solid rgba(85, 151, 143, 0.2)",
                     background:
-                      "linear-gradient(135deg, rgba(255,122,24,0.1), rgba(16,183,173,0.08))",
+                      "linear-gradient(135deg, rgba(201,168,106,0.1), rgba(85, 151, 143, 0.08))",
                   }}
                 >
                   {/* Animated line behind the steps */}
                   <div className="relative">
                     <AnimatedFlowLine />
                     <div className="relative z-10 flex flex-wrap items-center gap-2 text-[11px] font-semibold uppercase tracking-[0.12em] text-[var(--color-accent)]">
-                      <span className="bg-[var(--color-bg)]/80 px-2 py-0.5 rounded">
+                      <span className="bg-[#1c150dcc] px-2 py-0.5 rounded">
                         Offline
                       </span>
                       <ArrowRight size={14} />
-                      <span className="bg-[var(--color-bg)]/80 px-2 py-0.5 rounded">
+                      <span className="bg-[#1c150dcc] px-2 py-0.5 rounded">
                         Partner
                       </span>
                       <ArrowRight size={14} />
-                      <span className="bg-[var(--color-bg)]/80 px-2 py-0.5 rounded">
+                      <span className="bg-[#1c150dcc] px-2 py-0.5 rounded">
                         Raid
                       </span>
                     </div>

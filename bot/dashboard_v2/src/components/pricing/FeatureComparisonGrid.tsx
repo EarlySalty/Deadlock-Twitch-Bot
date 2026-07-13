@@ -91,10 +91,10 @@ export default function FeatureComparisonGrid() {
             <tr className="border-b border-white/10">
               <th className="text-left py-3 text-white/40 font-normal px-4 md:px-0">Feature</th>
               <th className="text-center py-3 text-white/50 font-medium w-20">Free</th>
-              <th className="text-center py-3 font-medium w-20" style={{ color: '#ff7a18' }}>Werbefrei</th>
-              <th className="text-center py-3 font-medium w-20" style={{ color: '#10b7ad' }}>Raid Boost</th>
-              <th className="text-center py-3 font-medium w-20" style={{ color: '#a78bfa' }}>Analyse</th>
-              <th className="text-center py-3 font-medium w-20" style={{ color: '#f59e0b' }}>Alles drin</th>
+              <th className="text-center py-3 font-medium w-20" style={{ color: '#c8a86b' }}>Werbefrei</th>
+              <th className="text-center py-3 font-medium w-20" style={{ color: '#55978f' }}>Raid Boost</th>
+              <th className="text-center py-3 font-medium w-20" style={{ color: '#55978f' }}>Analyse</th>
+              <th className="text-center py-3 font-medium w-20" style={{ color: '#e0912f' }}>Alles drin</th>
             </tr>
           </thead>
           <tbody className="text-white/60">
@@ -111,10 +111,10 @@ export default function FeatureComparisonGrid() {
                   <tr key={f.name} className="border-b border-white/5 hover:bg-white/[0.02] transition-colors">
                     <td className="py-3 px-4 md:px-0">{f.name}</td>
                     <td className="text-center py-3"><Cell value={f.free}      color="text-white/30"    /></td>
-                    <td className="text-center py-3"><Cell value={f.werbefrei} color="text-[#ff7a18]"   /></td>
-                    <td className="text-center py-3"><Cell value={f.raid}      color="text-[#10b7ad]"   /></td>
-                    <td className="text-center py-3"><Cell value={f.analyse}   color="text-[#a78bfa]"   /></td>
-                    <td className="text-center py-3"><Cell value={f.bundle}    color="text-[#f59e0b]"   /></td>
+                    <td className="text-center py-3"><Cell value={f.werbefrei} color="text-[#c8a86b]"   /></td>
+                    <td className="text-center py-3"><Cell value={f.raid}      color="text-[#55978f]"   /></td>
+                    <td className="text-center py-3"><Cell value={f.analyse}   color="text-[#55978f]"   /></td>
+                    <td className="text-center py-3"><Cell value={f.bundle}    color="text-[#e0912f]"   /></td>
                   </tr>
                 ))}
               </>

@@ -11,7 +11,7 @@ interface AudienceSharingProps {
   data: AudienceSharingData | undefined;
 }
 
-const LINE_COLORS = ['var(--color-primary)', 'var(--color-accent)', 'var(--color-warning)'];
+const LINE_COLORS = ['#c8a86b', '#55978f', '#dd6a4d'];
 
 export function AudienceSharing({ data }: AudienceSharingProps) {
   const current = useMemo(() => data?.current ?? [], [data]);
@@ -82,22 +82,22 @@ export function AudienceSharing({ data }: AudienceSharingProps) {
           <div className="h-[300px]">
             <ResponsiveContainer width="100%" height="100%">
               <BarChart data={barData} layout="vertical" margin={{ left: 80 }}>
-                <XAxis type="number" stroke="#9ca3af" fontSize={12} />
+                <XAxis type="number" stroke="#b7aa91" fontSize={12} />
                 <YAxis
                   type="category"
                   dataKey="streamer"
-                  stroke="#9ca3af"
+                  stroke="#b7aa91"
                   fontSize={12}
                   width={75}
                 />
                 <Tooltip
                   contentStyle={{
-                    backgroundColor: '#1f2937',
-                    border: '1px solid rgba(194, 221, 240, 0.25)',
+                    backgroundColor: 'var(--color-popover)',
+                    border: '1px solid var(--color-border)',
                     borderRadius: '8px',
                   }}
-                  formatter={(value: number | string | undefined, name?: string) => {
-                    const numericValue = typeof value === 'number' ? value : Number(value ?? 0);
+                  formatter={(value, name) => {
+                    const numericValue = Array.isArray(value) ? Number(value[0] ?? 0) : Number(value ?? 0);
                     const displayName = name === 'sharedViewers' ? 'Geteilte Zuschauer' : name ?? '';
                     return [numericValue, displayName];
                   }}
@@ -109,14 +109,14 @@ export function AudienceSharing({ data }: AudienceSharingProps) {
                     const entry = barData.find(d => d.streamer === label);
                     if (!entry) return null;
                     return (
-                      <div className="bg-gray-800 border border-gray-700 rounded-lg p-3 text-sm">
+                      <div className="bg-card border border-border rounded-lg p-3 text-sm">
                         <div className="text-white font-medium mb-1">{entry.streamer}</div>
                         <div className="text-text-secondary">
                           Geteilt: {entry.sharedViewers}
                         </div>
                         <div className="flex gap-3 mt-1">
-                          <span className="text-green-400">Inflow: {entry.inflow}</span>
-                          <span className="text-red-400">Outflow: {entry.outflow}</span>
+                          <span className="text-success">Inflow: {entry.inflow}</span>
+                          <span className="text-danger">Outflow: {entry.outflow}</span>
                         </div>
                         <div className="text-text-secondary mt-1">
                           Jaccard: {(entry.jaccardSimilarity * 100).toFixed(1)}%
@@ -136,8 +136,8 @@ export function AudienceSharing({ data }: AudienceSharingProps) {
               <div key={entry.streamer} className="flex items-center justify-between text-sm">
                 <span className="text-text-secondary">{entry.streamer}</span>
                 <div className="flex items-center gap-3">
-                  <span className="text-green-400 text-xs">Inflow: {entry.inflow}</span>
-                  <span className="text-red-400 text-xs">Outflow: {entry.outflow}</span>
+                  <span className="text-success text-xs">Inflow: {entry.inflow}</span>
+                  <span className="text-danger text-xs">Outflow: {entry.outflow}</span>
                 </div>
               </div>
             ))}
@@ -159,12 +159,12 @@ export function AudienceSharing({ data }: AudienceSharingProps) {
           <div className="h-[250px]">
             <ResponsiveContainer width="100%" height="100%">
               <LineChart data={lineData}>
-                <XAxis dataKey="month" stroke="#9ca3af" fontSize={12} />
-                <YAxis stroke="#9ca3af" fontSize={12} />
+                <XAxis dataKey="month" stroke="#b7aa91" fontSize={12} />
+                <YAxis stroke="#b7aa91" fontSize={12} />
                 <Tooltip
                   contentStyle={{
-                    backgroundColor: '#1f2937',
-                    border: '1px solid rgba(194, 221, 240, 0.25)',
+                    backgroundColor: 'var(--color-popover)',
+                    border: '1px solid var(--color-border)',
                     borderRadius: '8px',
                   }}
                   labelStyle={{ color: '#fff' }}

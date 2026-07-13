@@ -257,14 +257,14 @@ export function ViewerTimeline({
                               style={{
                                 left: `${leftPct}%`,
                                 width: `${widthPct}%`,
-                                backgroundColor: segmentConfig?.color || '#94a3b8',
+                                backgroundColor: segmentConfig?.color || '#b7aa91',
                               }}
                             />
                           );
                         })}
                       </div>
 
-                      <div className="pointer-events-none absolute right-2 top-2 z-10 hidden min-w-[220px] rounded-xl border border-white/10 bg-slate-950/95 px-3 py-2 text-xs text-white shadow-2xl group-hover:block">
+                      <div className="pointer-events-none absolute right-2 top-2 z-10 hidden min-w-[220px] rounded-xl border border-white/10 bg-popover/95 px-3 py-2 text-xs text-white shadow-2xl group-hover:block">
                         <div className="font-semibold">{viewer.login}</div>
                         <div className="mt-1 text-text-secondary">
                           Presence: {formatPresenceMinutes(viewer.total_present_min)}

@@ -66,7 +66,7 @@ export function Security() {
                       className="w-11 h-11 rounded-xl flex items-center justify-center mb-4"
                       style={{
                         background:
-                          "linear-gradient(135deg, rgba(6,182,212,0.20), rgba(168,85,247,0.20))",
+                          "linear-gradient(135deg, rgba(201,168,106,0.20), rgba(85, 151, 143, 0.20))",
                         border: "1px solid var(--color-border)",
                       }}
                     >
@@ -101,9 +101,9 @@ export function Security() {
               <div
                 className="rounded-xl p-4 font-mono text-[12px] leading-relaxed break-all select-all space-y-2"
                 style={{
-                  background: "var(--theme-token-demo-bg, #0a1722)",
+                  background: "var(--theme-token-demo-bg, #1c150d)",
                   border: "1px solid var(--color-border)",
-                  color: "var(--theme-token-demo-text, #5fd4cf)",
+                  color: "var(--theme-token-demo-text, #55978f)",
                 }}
               >
                 <div>
@@ -132,7 +132,7 @@ export function Security() {
             <div className="mt-6 flex flex-wrap gap-4 items-center">
               <a
                 href={TWITCH_SECURITY_URL}
-                className="gradient-accent rounded-xl px-7 py-3.5 font-semibold text-white inline-flex items-center gap-2"
+                className="gradient-accent rounded-xl px-7 py-3.5 font-semibold inline-flex items-center gap-2"
               >
                 Ganzes Sicherheitskonzept lesen
                 <ArrowRight size={18} />

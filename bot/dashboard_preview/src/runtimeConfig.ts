@@ -27,7 +27,9 @@ const LOCAL_PREVIEW_ALLOWED_PROFILES = ['smallcore_focus', 'midcore_live', 'larg
 const LOCAL_PREVIEW_DEFAULT_PROFILE = 'midcore_live';
 
 function isLocalPreviewRuntime(): boolean {
-  const envMode = String(import.meta.env.VITE_PREVIEW_MODE || '').trim().toLowerCase();
+  // `import.meta.env` gibt es nur unter Vite. Die Tests laden dieses Modul direkt
+  // über tsx, dort ist es undefined — ohne den Guard stirbt der Import.
+  const envMode = String(import.meta.env?.VITE_PREVIEW_MODE || '').trim().toLowerCase();
   if (envMode === 'local-demo') {
     return true;
   }

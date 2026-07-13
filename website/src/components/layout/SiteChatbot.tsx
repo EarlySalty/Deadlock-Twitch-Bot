@@ -123,7 +123,7 @@ export function SiteChatbot() {
         <section
           role="dialog"
           aria-label="Hilfe zum Twitch-Bot"
-          className="mb-3 flex h-[min(620px,calc(100vh-7rem))] w-[calc(100vw-2.5rem)] flex-col overflow-hidden rounded-2xl border border-border bg-[color:var(--theme-chatbot-bg,#091923f2)] shadow-2xl backdrop-blur-xl sm:w-[410px]"
+          className="mb-3 flex h-[min(620px,calc(100vh-7rem))] w-[calc(100vw-2.5rem)] flex-col overflow-hidden rounded-2xl border border-border bg-[color:var(--theme-chatbot-bg,#241c11f2)] shadow-2xl backdrop-blur-xl sm:w-[410px]"
         >
           <header className="flex items-center justify-between border-b border-border px-5 py-4">
             <div className="flex items-center gap-3">
@@ -181,7 +181,7 @@ export function SiteChatbot() {
                 <div
                   className={`max-w-[88%] rounded-2xl px-4 py-3 text-sm leading-relaxed ${
                     message.role === "user"
-                      ? "rounded-tr-sm gradient-accent text-white"
+                      ? "rounded-tr-sm gradient-accent"
                       : "rounded-tl-sm border border-border bg-white/[0.05] text-text-primary"
                   }`}
                 >
@@ -203,7 +203,7 @@ export function SiteChatbot() {
             )}
 
             {error && (
-              <p className="rounded-xl border border-red-500/30 bg-red-500/10 px-4 py-3 text-sm text-red-200">
+              <p className="rounded-xl border border-danger/30 bg-danger-soft px-4 py-3 text-sm text-danger">
                 {error}
               </p>
             )}
@@ -224,7 +224,7 @@ export function SiteChatbot() {
               type="submit"
               disabled={loading || !question.trim()}
               aria-label="Frage senden"
-              className="gradient-accent flex h-11 w-11 shrink-0 items-center justify-center rounded-xl text-white transition-opacity disabled:cursor-not-allowed disabled:opacity-50"
+              className="gradient-accent flex h-11 w-11 shrink-0 items-center justify-center rounded-xl transition-opacity disabled:cursor-not-allowed disabled:opacity-50"
             >
               {loading ? <Loader2 size={18} className="animate-spin" /> : <Send size={18} />}
             </button>
@@ -237,7 +237,7 @@ export function SiteChatbot() {
         onClick={() => setOpen((current) => !current)}
         aria-label={open ? "Hilfe-Chat schließen" : "Hilfe bekommen"}
         aria-expanded={open}
-        className="ml-auto flex items-center gap-2 rounded-full gradient-accent px-5 py-3.5 font-semibold text-white shadow-[0_12px_40px_rgba(6,182,212,0.3)] transition-transform hover:scale-[1.03]"
+        className="ml-auto flex items-center gap-2 rounded-full gradient-accent px-5 py-3.5 font-semibold shadow-[0_12px_40px_rgba(201,168,106,0.3)] transition-transform hover:scale-[1.03]"
       >
         {open ? <X size={20} /> : <MessageCircle size={20} />}
         <span>{open ? "Schließen" : "Hilfe bekommen"}</span>

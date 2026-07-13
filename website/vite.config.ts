@@ -30,7 +30,6 @@ export default defineConfig({
         affiliateProgram: path.resolve(__dirname, 'vertriebler/index.html'),
         affiliatePortal: path.resolve(__dirname, 'affiliate-portal/index.html'),
         onboarding: path.resolve(__dirname, 'onboarding/index.html'),
-        v2: path.resolve(__dirname, 'v2/index.html'),
       },
     },
   },

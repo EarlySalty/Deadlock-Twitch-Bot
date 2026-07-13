@@ -124,21 +124,21 @@ export function getTrendColor(value: number): string {
 }
 
 export function getScoreColor(score: number): string {
-  if (score >= 80) return '#4ade80'; // green
-  if (score >= 60) return '#fbbf24'; // yellow
-  if (score >= 40) return '#fb923c'; // orange
-  return '#f87171'; // red
+  if (score >= 80) return '#3fa66b'; // green
+  if (score >= 60) return '#e0912f'; // yellow
+  if (score >= 40) return '#e0912f'; // orange
+  return '#dd6a4d'; // red
 }
 
 export function getHeatmapColor(value: number, max: number): string {
-  if (!max || !value) return 'rgba(124, 58, 237, 0.05)';
+  if (!max || !value) return 'rgba(85, 151, 143, 0.05)';
   const intensity = Math.min(value / max, 1);
-  return `rgba(124, 58, 237, ${0.1 + intensity * 0.7})`;
+  return `rgba(85, 151, 143, ${0.1 + intensity * 0.7})`;
 }
 
 export function getRetentionColor(retention: number): string {
-  if (retention >= 70) return '#4ade80';
-  if (retention >= 50) return '#fbbf24';
-  if (retention >= 30) return '#fb923c';
-  return '#f87171';
+  if (retention >= 70) return '#3fa66b';
+  if (retention >= 50) return '#e0912f';
+  if (retention >= 30) return '#e0912f';
+  return '#dd6a4d';
 }

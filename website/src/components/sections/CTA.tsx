@@ -11,7 +11,7 @@ export function CTA() {
   return (
     <section id="cta" className="py-24 relative overflow-hidden">
       {/* Background gradient */}
-      <div className="absolute inset-0 bg-gradient-to-br from-[var(--color-primary)]/5 via-transparent to-[var(--color-accent)]/5" />
+      <div className="absolute inset-0 bg-gradient-to-br from-[#c8a86b0d] via-transparent to-[#55978f0d]" />
 
       <div className="max-w-3xl mx-auto px-6 text-center relative z-10">
         <ScrollReveal>
@@ -30,7 +30,7 @@ export function CTA() {
           <div className="flex gap-4 justify-center flex-wrap">
             <a
               href={TWITCH_ONBOARDING_URL}
-              className="gradient-accent rounded-xl px-8 py-4 font-semibold text-white text-lg inline-flex items-center gap-2"
+              className="gradient-accent rounded-xl px-8 py-4 font-semibold text-lg inline-flex items-center gap-2"
             >
               <ExternalLink size={20} />
               Zum Onboarding

@@ -33,7 +33,7 @@ export function StepCard({
       }`}
     >
       {/* Visual Area */}
-      <div className="relative h-48 bg-[rgba(7,21,29,0.46)] border-b border-border overflow-hidden">
+      <div className="relative h-48 bg-[rgba(28, 21, 13, 0.46)] border-b border-border overflow-hidden">
         {visualType === "screenshot" && visualSrc && (
           <img
             src={visualSrc}

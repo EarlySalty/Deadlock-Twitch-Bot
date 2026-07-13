@@ -23,10 +23,10 @@ const FEATURES: {
     planId: 'chat_quiet',
     label: 'Werbefrei',
     icon: BellOff,
-    accentColor: '#ff7a18',
-    color: 'text-[#ff7a18]',
-    borderActive: 'border-[#ff7a18]/60',
-    bgActive: 'bg-[#ff7a18]/8',
+    accentColor: '#c8a86b',
+    color: 'text-[#c8a86b]',
+    borderActive: 'border-[#c8a86b]/60',
+    bgActive: 'bg-[#c8a86b]/8',
     desc: 'Keine Chat-Werbung mehr',
     highlights: ['Chat-Werbung dauerhaft aus', 'Greift auch bei Admin-Events'],
   },
@@ -35,10 +35,10 @@ const FEATURES: {
     planId: 'raid_boost',
     label: 'Raid Boost',
     icon: Zap,
-    accentColor: '#10b7ad',
-    color: 'text-[#10b7ad]',
-    borderActive: 'border-[#10b7ad]/60',
-    bgActive: 'bg-[#10b7ad]/8',
+    accentColor: '#55978f',
+    color: 'text-[#55978f]',
+    borderActive: 'border-[#55978f]/60',
+    bgActive: 'bg-[#55978f]/8',
     desc: 'Bessere Raid-Platzierung',
     highlights: ['Bevorzugte Raid-Platzierung', 'Lurker-Tax-Erinnerungen'],
   },
@@ -47,10 +47,10 @@ const FEATURES: {
     planId: 'analysis_dashboard',
     label: 'Analyse',
     icon: BarChart2,
-    accentColor: '#a78bfa',
-    color: 'text-[#a78bfa]',
-    borderActive: 'border-[#a78bfa]/60',
-    bgActive: 'bg-[#a78bfa]/8',
+    accentColor: '#dd6a4d',
+    color: 'text-[#dd6a4d]',
+    borderActive: 'border-[#dd6a4d]/60',
+    bgActive: 'bg-[#dd6a4d]/8',
     desc: 'KI-Coaching & Dashboard',
     highlights: ['Volles KI-Coaching', 'Viewer-Profile & Retention'],
   },
@@ -192,7 +192,7 @@ export default function FeaturePicker({ plans, cycle }: FeaturePickerProps) {
                     animate={{ opacity: 1, y: 0 }}
                     exit={{ opacity: 0, y: -4 }}
                     transition={{ duration: 0.15 }}
-                    className="absolute z-10 left-0 right-0 top-full mt-2 rounded-xl border border-white/10 bg-[#1a1a2e] p-3 shadow-xl"
+                    className="absolute z-10 left-0 right-0 top-full mt-2 rounded-xl border border-border bg-[var(--color-popover)] p-3 shadow-xl"
                   >
                     <ul className="space-y-1.5">
                       {f.highlights.map((h, i) => (
@@ -220,7 +220,7 @@ export default function FeaturePicker({ plans, cycle }: FeaturePickerProps) {
           transition={{ duration: 0.2 }}
           className={`rounded-2xl border p-6 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4 ${
             isBundle
-              ? 'border-[#10b7ad]/30 bg-gradient-to-r from-[#10b7ad]/8 to-transparent'
+              ? 'border-[#55978f]/30 bg-gradient-to-r from-[#55978f]/8 to-transparent'
               : isFree
               ? 'border-white/10 bg-white/3'
               : 'border-white/15 bg-white/5'
@@ -236,7 +236,7 @@ export default function FeaturePicker({ plans, cycle }: FeaturePickerProps) {
             ) : (
               <>
                 {isBundle && (
-                  <span className="inline-block text-xs font-semibold px-2 py-0.5 rounded-full bg-gradient-to-r from-[#10b7ad] to-[#ff7a18] text-white mb-2">
+                  <span className="inline-block text-xs font-semibold px-2 py-0.5 rounded-full bg-gradient-to-r from-[#55978f] to-[#c8a86b] text-white mb-2">
                     Bundle
                   </span>
                 )}
@@ -253,7 +253,7 @@ export default function FeaturePicker({ plans, cycle }: FeaturePickerProps) {
                   <p className="text-white/30 text-xs mt-0.5">jährlich abgerechnet</p>
                 )}
                 {savings > 0.005 && (
-                  <p className="text-[#10b7ad] text-sm mt-1.5">
+                  <p className="text-[#55978f] text-sm mt-1.5">
                     Du sparst {savings.toFixed(2).replace('.', ',')} € gegenüber Einzelkauf
                   </p>
                 )}
@@ -267,7 +267,7 @@ export default function FeaturePicker({ plans, cycle }: FeaturePickerProps) {
               isFree
                 ? 'bg-white/10 hover:bg-white/15 text-white'
                 : isBundle
-                ? 'bg-gradient-to-r from-[#10b7ad] to-[#ff7a18] hover:opacity-90 text-white shadow-lg shadow-[#10b7ad]/20'
+                ? 'bg-gradient-to-r from-[#55978f] to-[#c8a86b] hover:opacity-90 text-white shadow-lg shadow-[#55978f]/20'
                 : 'bg-white/15 hover:bg-white/20 text-white'
             }`}
           >

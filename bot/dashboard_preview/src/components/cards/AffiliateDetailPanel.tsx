@@ -18,15 +18,15 @@ export function AffiliateDetailPanel({ login }: Props) {
     <div className="bg-card rounded-xl border border-border p-5 space-y-5">
       {/* Header */}
       <div className="flex items-center gap-3">
-        <div className="w-10 h-10 rounded-full bg-purple-500/20 flex items-center justify-center">
-          <User className="w-5 h-5 text-purple-400" />
+        <div className="w-10 h-10 rounded-full bg-primary/20 flex items-center justify-center">
+          <User className="w-5 h-5 text-primary" />
         </div>
         <div>
           <div className="font-semibold text-white">{affiliate.display_name}</div>
           <div className="text-xs text-white/30">{affiliate.login}</div>
         </div>
         <span className={`ml-auto text-xs px-2 py-0.5 rounded-full ${
-          affiliate.active ? 'bg-emerald-400/10 text-emerald-400' : 'bg-white/5 text-white/30'
+          affiliate.active ? 'bg-success-soft text-success' : 'bg-white/5 text-white/30'
         }`}>
           {affiliate.active ? 'Aktiv' : 'Inaktiv'}
         </span>
@@ -64,7 +64,7 @@ export function AffiliateDetailPanel({ login }: Props) {
                   {new Date(c.claimed_at).toLocaleDateString('de-DE')} · {c.commission_count} Auszahlung(en)
                 </div>
               </div>
-              <span className="text-emerald-400 font-medium">
+              <span className="text-success font-medium">
                 {formatCurrency(c.commission_cents / 100)}
               </span>
             </div>

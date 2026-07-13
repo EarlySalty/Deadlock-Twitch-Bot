@@ -24,11 +24,11 @@ import { RawChatStatusBanner } from './chatAnalyticsShared';
 
 const CHAT_PENETRATION_ENABLED = false;
 const CHART_TOOLTIP_STYLE = {
-  backgroundColor: 'rgba(9, 12, 22, 0.92)',
-  border: '1px solid rgba(148, 163, 184, 0.18)',
+  backgroundColor: 'rgba(28, 21, 13, 0.92)',
+  border: '1px solid rgba(183, 170, 145, 0.18)',
   borderRadius: 16,
-  boxShadow: '0 24px 60px rgba(2, 6, 23, 0.42)',
-  color: '#f8fafc',
+  boxShadow: '0 24px 60px rgba(28, 21, 13, 0.42)',
+  color: '#ece0c8',
 } as const;
 
 export interface ChatAnalyticsContentProps {
@@ -404,11 +404,11 @@ function ChatterCard({
 }) {
   const rankStyle =
     rank === 1
-      ? 'bg-gradient-to-br from-yellow-400 to-yellow-600 text-black'
+      ? 'bg-gradient-to-br from-primary-hover to-primary text-black'
       : rank === 2
-        ? 'bg-gradient-to-br from-gray-300 to-gray-500 text-black'
+        ? 'bg-gradient-to-br from-text-secondary to-card-hover text-black'
         : rank === 3
-          ? 'bg-gradient-to-br from-amber-600 to-amber-800 text-white'
+          ? 'bg-gradient-to-br from-primary/70 to-primary/30 text-white'
           : 'bg-border text-text-secondary';
 
   return (

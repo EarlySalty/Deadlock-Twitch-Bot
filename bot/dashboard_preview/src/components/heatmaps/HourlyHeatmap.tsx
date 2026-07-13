@@ -96,7 +96,7 @@ export function HourlyHeatmap({ data, title = 'Beste Streaming-Zeiten' }: Hourly
                 <div
                   key={intensity}
                   className="w-4 h-4 rounded"
-                  style={{ backgroundColor: `rgba(124, 58, 237, ${intensity})` }}
+                  style={{ backgroundColor: `rgba(85, 151, 143, ${intensity})` }}
                 />
               ))}
             </div>

@@ -32,7 +32,7 @@ export function OnboardingProgress({
                   ? "bg-accent border-accent"
                   : isCurrent
                     ? "border-accent bg-accent/20"
-                    : "border-border bg-[rgba(7,21,29,0.46)]"
+                    : "border-border bg-[rgba(28, 21, 13, 0.46)]"
               }`}
             >
               {isCompleted ? (

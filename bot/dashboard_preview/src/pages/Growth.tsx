@@ -119,13 +119,13 @@ export function Growth({ streamer, days }: GrowthProps) {
         <div className="h-[300px]">
           <ResponsiveContainer width="100%" height="100%">
             <LineChart data={chartData}>
-              <CartesianGrid strokeDasharray="3 3" stroke="rgba(194, 221, 240, 0.2)" />
-              <XAxis dataKey="name" stroke="#9ca3af" fontSize={12} />
-              <YAxis stroke="#9ca3af" fontSize={12} />
+              <CartesianGrid strokeDasharray="3 3" stroke="rgba(201, 168, 106, 0.24)" />
+              <XAxis dataKey="name" stroke="#b7aa91" fontSize={12} />
+              <YAxis stroke="#b7aa91" fontSize={12} />
               <Tooltip
                 contentStyle={{
-                  backgroundColor: '#1f2937',
-                  border: '1px solid rgba(194, 221, 240, 0.25)',
+                  backgroundColor: 'var(--color-popover)',
+                  border: '1px solid var(--color-border)',
                   borderRadius: '8px',
                 }}
                 labelStyle={{ color: '#fff' }}
@@ -143,9 +143,9 @@ export function Growth({ streamer, days }: GrowthProps) {
                 type="monotone"
                 dataKey="avgViewers"
                 name="Ø Viewer"
-                stroke="#10b981"
+                stroke="#55978f"
                 strokeWidth={2}
-                dot={{ fill: '#10b981' }}
+                dot={{ fill: '#55978f' }}
               />
             </LineChart>
           </ResponsiveContainer>
@@ -276,7 +276,7 @@ function IncomingRaidsSection({ raidAnalyticsData }: IncomingRaidsSectionProps) 
   const topRaiders = computeTopRaiders(incomingRaids);
   const balanceData = summary ? [
     { name: 'Gesendet', value: summary.raid_balance.sent, fill: 'var(--color-primary)' },
-    { name: 'Empfangen', value: summary.raid_balance.received, fill: '#10b981' },
+    { name: 'Empfangen', value: summary.raid_balance.received, fill: '#55978f' },
   ] : [];
 
   return (
@@ -295,13 +295,13 @@ function IncomingRaidsSection({ raidAnalyticsData }: IncomingRaidsSectionProps) 
           <div className="h-[200px]">
             <ResponsiveContainer width="100%" height="100%">
               <BarChart data={balanceData} layout="vertical" margin={{ left: 20, right: 40 }}>
-                <CartesianGrid strokeDasharray="3 3" stroke="rgba(194, 221, 240, 0.15)" />
-                <XAxis type="number" stroke="#9ca3af" fontSize={12} />
-                <YAxis type="category" dataKey="name" stroke="#9ca3af" fontSize={13} width={90} />
+                <CartesianGrid strokeDasharray="3 3" stroke="rgba(201, 168, 106, 0.24)" />
+                <XAxis type="number" stroke="#b7aa91" fontSize={12} />
+                <YAxis type="category" dataKey="name" stroke="#b7aa91" fontSize={13} width={90} />
                 <Tooltip
                   contentStyle={{
-                    backgroundColor: '#1f2937',
-                    border: '1px solid rgba(194, 221, 240, 0.25)',
+                    backgroundColor: 'var(--color-popover)',
+                    border: '1px solid var(--color-border)',
                     borderRadius: '8px',
                   }}
                   labelStyle={{ color: '#fff' }}

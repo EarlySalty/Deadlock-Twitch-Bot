@@ -58,3 +58,6 @@ rust/bin/tb-bot/tb-bot
 .cache_ggshield
 .claude/worktrees/*
 *.mp4
+
+# Build-Output des Preview-Modus (vite.config.ts), wird nirgends serviert
+bot/dashboard_v2/dist-preview/

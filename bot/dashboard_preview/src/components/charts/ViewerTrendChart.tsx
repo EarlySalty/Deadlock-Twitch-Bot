@@ -36,7 +36,7 @@ export function ViewerTrendChart({ sessions, title = 'Viewer Trend' }: ViewerTre
             <p className="text-accent">
               Avg: <span className="text-white">{formatNumber(payload[0]?.value)}</span>
             </p>
-            <p className="text-blue-400">
+            <p className="text-accent">
               Peak: <span className="text-white">{formatNumber(payload[1]?.value)}</span>
             </p>
           </div>
@@ -66,16 +66,16 @@ export function ViewerTrendChart({ sessions, title = 'Viewer Trend' }: ViewerTre
                 <stop offset="95%" stopColor="var(--color-accent)" stopOpacity={0} />
               </linearGradient>
             </defs>
-            <CartesianGrid strokeDasharray="3 3" stroke="rgba(194, 221, 240, 0.2)" />
+            <CartesianGrid strokeDasharray="3 3" stroke="rgba(201, 168, 106, 0.24)" />
             <XAxis
               dataKey="date"
-              stroke="#9ca3af"
+              stroke="#b7aa91"
               fontSize={12}
               tickLine={false}
               axisLine={false}
             />
             <YAxis
-              stroke="#9ca3af"
+              stroke="#b7aa91"
               fontSize={12}
               tickLine={false}
               axisLine={false}

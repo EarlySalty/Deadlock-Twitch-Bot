@@ -44,11 +44,11 @@ interface ViewersProps {
 }
 
 export const SEGMENT_CONFIG: Record<string, { label: string; color: string; bgClass: string }> = {
-  dedicated: { label: 'Dedicated', color: '#22c55e', bgClass: 'bg-success/10 text-success border-success/20' },
-  regular: { label: 'Regular', color: '#3b82f6', bgClass: 'bg-primary/10 text-primary border-primary/20' },
-  casual: { label: 'Casual', color: '#f59e0b', bgClass: 'bg-warning/10 text-warning border-warning/20' },
-  lurker: { label: 'Lurker', color: '#8b5cf6', bgClass: 'bg-accent/10 text-accent border-accent/20' },
-  new: { label: 'Neu', color: '#06b6d4', bgClass: 'bg-cyan-500/10 text-cyan-400 border-cyan-500/20' },
+  dedicated: { label: 'Dedicated', color: '#c8a86b', bgClass: 'bg-primary/10 text-primary border-primary/20' },
+  regular: { label: 'Regular', color: '#55978f', bgClass: 'bg-accent/10 text-accent border-accent/20' },
+  casual: { label: 'Casual', color: '#dd6a4d', bgClass: 'bg-danger/10 text-danger border-danger/20' },
+  lurker: { label: 'Lurker', color: '#8f9e6b', bgClass: 'bg-secondary/10 text-secondary border-secondary/20' },
+  new: { label: 'Neu', color: '#b7aa91', bgClass: 'bg-secondary/10 text-secondary border-secondary/20' },
 };
 
 const FILTER_OPTIONS: { value: ViewerFilterType; label: string }[] = [
@@ -71,7 +71,7 @@ const PERSONALITY_LABELS: Record<string, string> = {
   'Other': 'Allrounder',
 };
 
-const PERSONALITY_COLORS = ['#3b82f6', '#22c55e', '#f59e0b', '#8b5cf6', '#ef4444', '#06b6d4', '#6b7280'];
+const PERSONALITY_COLORS = ['#c8a86b', '#55978f', '#dd6a4d', '#8f9e6b', '#b7aa91', 'var(--color-warning)', '#c8a86b'];
 
 function formatNumber(n: number): string {
   return n.toLocaleString('de-DE');
@@ -293,8 +293,8 @@ function ViewerExpandedRow({
                   <YAxis hide />
                   <Tooltip
                     contentStyle={{
-                      backgroundColor: '#1f2937',
-                      border: '1px solid rgba(194,221,240,0.25)',
+                      backgroundColor: 'var(--color-popover)',
+                      border: '1px solid var(--color-border)',
                       borderRadius: '8px',
                       fontSize: '12px',
                     }}
@@ -388,8 +388,8 @@ function ViewerExpandedRow({
                   </Pie>
                   <Tooltip
                     contentStyle={{
-                      backgroundColor: '#1f2937',
-                      border: '1px solid rgba(194,221,240,0.25)',
+                      backgroundColor: 'var(--color-popover)',
+                      border: '1px solid var(--color-border)',
                       borderRadius: '8px',
                       fontSize: '12px',
                     }}
@@ -470,8 +470,8 @@ export function Viewers({ streamer, days }: ViewersProps) {
   const donutData = useMemo(() => {
     if (!directory?.summary) return [];
     return [
-      { name: 'Exklusiv', value: directory.summary.exclusiveViewers, color: '#22c55e' },
-      { name: 'Shared', value: directory.summary.sharedViewers, color: '#8b5cf6' },
+      { name: 'Exklusiv', value: directory.summary.exclusiveViewers, color: '#c8a86b' },
+      { name: 'Shared', value: directory.summary.sharedViewers, color: '#55978f' },
     ];
   }, [directory?.summary]);
 
@@ -643,8 +643,8 @@ export function Viewers({ streamer, days }: ViewersProps) {
                   </Pie>
                   <Tooltip
                     contentStyle={{
-                      backgroundColor: '#1f2937',
-                      border: '1px solid rgba(194,221,240,0.25)',
+                      backgroundColor: 'var(--color-popover)',
+                      border: '1px solid var(--color-border)',
                       borderRadius: '8px',
                       fontSize: '12px',
                     }}
