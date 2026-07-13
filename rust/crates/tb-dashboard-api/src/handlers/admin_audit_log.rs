@@ -20,9 +20,8 @@ use axum::{extract::RawQuery, extract::State, response::IntoResponse, Json};
 use chrono::{DateTime, SecondsFormat, Utc};
 use serde_json::{json, Value};
 use sqlx::PgPool;
-use tb_http_core::ApiError;
-
 use tb_analytics::promo_mode::{load_global_promo_mode, parse_utc_datetime};
+use tb_http_core::ApiError;
 
 const DEFAULT_LIMIT: i64 = 100;
 const MAX_LIMIT: i64 = 500;
