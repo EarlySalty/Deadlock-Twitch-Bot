@@ -15,7 +15,7 @@ import {
 import { ONBOARDING_VISUAL_STEPS } from "@/data/twitchKnowledgeBase";
 
 const NAV_LINKS = [
-  { label: "Features", href: "#c8a86btures" },
+  { label: "Features", href: "#features" },
   { label: "Frag den Bot", href: "#frag-bot" },
   { label: "FAQ", href: "#faq-hinweis" },
 ];
