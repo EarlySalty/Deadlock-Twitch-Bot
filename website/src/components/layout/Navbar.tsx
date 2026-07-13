@@ -100,7 +100,7 @@ export function Navbar() {
           </a>
           <button
             onClick={openSiteChatbot}
-            className="gradient-accent whitespace-nowrap rounded-lg px-4 py-2 text-sm font-semibold text-white cursor-pointer border-none transition-opacity duration-200 hover:opacity-90"
+            className="gradient-accent whitespace-nowrap rounded-lg px-4 py-2 text-sm font-semibold cursor-pointer border-none transition-opacity duration-200 hover:opacity-90"
           >
             <span className="inline-flex items-center gap-2">
               <MessageCircle size={16} />
@@ -166,7 +166,7 @@ export function Navbar() {
                   openSiteChatbot();
                   setMenuOpen(false);
                 }}
-                className="gradient-accent rounded-lg px-4 py-2 text-sm font-semibold text-white cursor-pointer border-none transition-opacity duration-200 hover:opacity-90"
+                className="gradient-accent rounded-lg px-4 py-2 text-sm font-semibold cursor-pointer border-none transition-opacity duration-200 hover:opacity-90"
               >
                 <span className="inline-flex items-center justify-center gap-2">
                   <MessageCircle size={16} />

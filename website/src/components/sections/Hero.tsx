@@ -63,7 +63,7 @@ export function Hero() {
         >
           <a
             href={buildTwitchBotAuthUrl()}
-            className="gradient-accent rounded-xl px-7 py-3.5 font-semibold text-white inline-flex items-center gap-2 transition-all duration-200 hover:brightness-110 hover:shadow-[0_0_24px_4px_rgba(201, 168, 106, 0.3)]"
+            className="gradient-accent rounded-xl px-7 py-3.5 font-semibold inline-flex items-center gap-2 transition-all duration-200 hover:brightness-110 hover:shadow-[0_0_24px_4px_rgba(201,168,106,0.3)]"
           >
             <ExternalLink size={18} />
             Partner werden

@@ -144,7 +144,7 @@ export function RaidSystem() {
                         className="w-11 h-11 rounded-xl shrink-0 flex items-center justify-center"
                         style={{
                           background: step.highlight
-                            ? "linear-gradient(135deg, rgba(201, 168, 106, 0.22), rgba(85, 151, 143, 0.2))"
+                            ? "linear-gradient(135deg, rgba(201,168,106,0.22), rgba(85, 151, 143, 0.2))"
                             : "rgba(183, 170, 145,0.08)",
                           border: step.highlight
                             ? "1px solid rgba(85, 151, 143, 0.24)"
@@ -179,7 +179,7 @@ export function RaidSystem() {
                   style={{
                     border: "1px solid rgba(85, 151, 143, 0.2)",
                     background:
-                      "linear-gradient(135deg, rgba(201, 168, 106, 0.1), rgba(85, 151, 143, 0.08))",
+                      "linear-gradient(135deg, rgba(201,168,106,0.1), rgba(85, 151, 143, 0.08))",
                   }}
                 >
                   <div className="flex flex-wrap items-center gap-2 text-[11px] font-semibold uppercase tracking-[0.12em] text-[var(--color-accent)]">

@@ -14,7 +14,7 @@ interface OrbConfig {
 const ORBS: OrbConfig[] = [
   {
     size: 'w-[600px] h-[600px]',
-    color: 'rgba(201, 168, 106, 0.3)',
+    color: 'rgba(201,168,106,0.3)',
     position: { top: '-200px', right: '-100px' },
     animation: {
       x: [0, 30, -20, 0],
@@ -34,7 +34,7 @@ const ORBS: OrbConfig[] = [
   },
   {
     size: 'w-[400px] h-[400px]',
-    color: 'rgba(201, 168, 106, 0.18)',
+    color: 'rgba(201,168,106,0.18)',
     position: { top: '60%', right: '10%' },
     animation: {
       x: [0, 20, -30, 10, 0],

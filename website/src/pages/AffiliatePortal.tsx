@@ -418,11 +418,11 @@ export default function AffiliatePortal() {
             onClick={() => {
               window.location.href = "/twitch/auth/affiliate/login";
             }}
-            className="gradient-accent rounded-xl px-7 py-3.5 font-semibold text-white w-full transition-all duration-200 hover:brightness-110 hover:shadow-[0_0_24px_4px_rgba(201, 168, 106, 0.3)]"
+            className="gradient-accent rounded-xl px-7 py-3.5 font-semibold w-full transition-all duration-200 hover:brightness-110 hover:shadow-[0_0_24px_4px_rgba(201,168,106,0.3)]"
           >
             Mit Twitch anmelden
           </button>
-          <div className="mt-4 rounded-xl border border-[rgba(201, 168, 106, 0.25)] bg-[rgba(201, 168, 106, 0.08)] px-4 py-3 text-left">
+          <div className="mt-4 rounded-xl border border-[rgba(201,168,106,0.25)] bg-[rgba(201,168,106,0.08)] px-4 py-3 text-left">
             <div className="flex items-start gap-3">
               <AlertCircle size={18} className="text-[#c8a86b] mt-0.5 shrink-0" />
               <p className="text-xs leading-relaxed text-[#ece0c8]">
@@ -623,13 +623,13 @@ export default function AffiliatePortal() {
                   value={claimInput}
                   onChange={(event) => setClaimInput(event.target.value)}
                   onKeyDown={(event) => event.key === "Enter" && void handleClaim()}
-                  className="flex-1 bg-[#1c150d] border border-[rgba(201, 168, 106, 0.24)] rounded-lg px-4 py-2.5 text-sm text-[#ece0c8] placeholder-[#b7aa91]/50 focus:outline-none focus:border-[#c8a86b] transition-colors"
+                  className="flex-1 bg-[#1c150d] border border-[rgba(201,168,106,0.24)] rounded-lg px-4 py-2.5 text-sm text-[#ece0c8] placeholder-[#b7aa91]/50 focus:outline-none focus:border-[#c8a86b] transition-colors"
                 />
                 <button
                   onClick={() => {
                     void handleClaim();
                   }}
-                  className="gradient-accent rounded-lg px-5 py-2.5 text-sm font-semibold text-white transition-all hover:brightness-110"
+                  className="gradient-accent rounded-lg px-5 py-2.5 text-sm font-semibold transition-all hover:brightness-110"
                 >
                   Beanspruchen
                 </button>
@@ -649,7 +649,7 @@ export default function AffiliatePortal() {
             <div className="panel-card rounded-xl overflow-hidden">
               <table className="w-full text-sm">
                 <thead>
-                  <tr className="border-b border-[rgba(201, 168, 106, 0.24)] text-[#b7aa91] text-left">
+                  <tr className="border-b border-[rgba(201,168,106,0.24)] text-[#b7aa91] text-left">
                     <th className="px-6 py-3 font-medium">Login</th>
                     <th className="px-6 py-3 font-medium">Anzahl</th>
                     <th className="px-6 py-3 font-medium">Gesamtverdienst</th>
@@ -663,7 +663,7 @@ export default function AffiliatePortal() {
                     return (
                       <tr
                         key={`${claimLogin || "claim"}-${claim.claimed_at}-${index}`}
-                        className="border-b border-[rgba(201, 168, 106, 0.24)] last:border-0"
+                        className="border-b border-[rgba(201,168,106,0.24)] last:border-0"
                       >
                         <td className="px-6 py-3 font-medium">{claimLogin || "—"}</td>
                         <td className="px-6 py-3">{claim.commission_count}</td>
@@ -702,7 +702,7 @@ export default function AffiliatePortal() {
             <div className="panel-card rounded-xl overflow-hidden">
               <table className="w-full text-sm">
                 <thead>
-                  <tr className="border-b border-[rgba(201, 168, 106, 0.24)] text-[#b7aa91] text-left">
+                  <tr className="border-b border-[rgba(201,168,106,0.24)] text-[#b7aa91] text-left">
                     <th className="px-6 py-3 font-medium">Datum</th>
                     <th className="px-6 py-3 font-medium">Streamer</th>
                     <th className="px-6 py-3 font-medium">Brutto</th>
@@ -715,7 +715,7 @@ export default function AffiliatePortal() {
                   {commissions.map((commission) => (
                     <tr
                       key={commission.id}
-                      className="border-b border-[rgba(201, 168, 106, 0.24)] last:border-0"
+                      className="border-b border-[rgba(201,168,106,0.24)] last:border-0"
                     >
                       <td className="px-6 py-3 text-[#b7aa91]">
                         {formatDate(commission.created_at)}
@@ -799,7 +799,7 @@ export default function AffiliatePortal() {
             <div className="panel-card rounded-xl overflow-hidden">
               <table className="w-full text-sm">
                 <thead>
-                  <tr className="border-b border-[rgba(201, 168, 106, 0.24)] text-[#b7aa91] text-left">
+                  <tr className="border-b border-[rgba(201,168,106,0.24)] text-[#b7aa91] text-left">
                     <th className="px-6 py-3 font-medium">Zeitraum</th>
                     <th className="px-6 py-3 font-medium">Nummer</th>
                     <th className="px-6 py-3 font-medium">Buchungen</th>
@@ -815,7 +815,7 @@ export default function AffiliatePortal() {
                   {gutschriften.map((document) => (
                     <tr
                       key={document.id}
-                      className="border-b border-[rgba(201, 168, 106, 0.24)] last:border-0"
+                      className="border-b border-[rgba(201,168,106,0.24)] last:border-0"
                     >
                       <td className="px-6 py-4">
                         <div className="font-medium">{document.period_label || "—"}</div>
@@ -851,7 +851,7 @@ export default function AffiliatePortal() {
                               onClick={() => {
                                 window.location.href = document.download_path as string;
                               }}
-                              className="inline-flex items-center gap-2 rounded-lg border border-[rgba(201, 168, 106, 0.24)] bg-[#2c2318] px-3 py-2 text-xs font-semibold text-[#ece0c8] transition-colors hover:border-[rgba(201, 168, 106, 0.5)] hover:text-[#c8a86b]"
+                              className="inline-flex items-center gap-2 rounded-lg border border-[rgba(201,168,106,0.24)] bg-[#2c2318] px-3 py-2 text-xs font-semibold text-[#ece0c8] transition-colors hover:border-[rgba(201,168,106,0.5)] hover:text-[#c8a86b]"
                             >
                               <Download size={14} />
                               PDF
@@ -951,7 +951,7 @@ export default function AffiliatePortal() {
                     <span className="text-xs text-[#b7aa91] uppercase tracking-wider">
                       USt-Status
                     </span>
-                    <label className="flex items-start gap-3 rounded-xl border border-[rgba(201, 168, 106, 0.24)] bg-[#2c2318]/40 px-4 py-3 cursor-pointer">
+                    <label className="flex items-start gap-3 rounded-xl border border-[rgba(201,168,106,0.24)] bg-[#2c2318]/40 px-4 py-3 cursor-pointer">
                       <input
                         type="radio"
                         name="ust_status"
@@ -966,7 +966,7 @@ export default function AffiliatePortal() {
                         </div>
                       </div>
                     </label>
-                    <label className="flex items-start gap-3 rounded-xl border border-[rgba(201, 168, 106, 0.24)] bg-[#2c2318]/40 px-4 py-3 cursor-pointer">
+                    <label className="flex items-start gap-3 rounded-xl border border-[rgba(201,168,106,0.24)] bg-[#2c2318]/40 px-4 py-3 cursor-pointer">
                       <input
                         type="radio"
                         name="ust_status"
@@ -981,7 +981,7 @@ export default function AffiliatePortal() {
                         </div>
                       </div>
                     </label>
-                    <label className="flex items-start gap-3 rounded-xl border border-[rgba(201, 168, 106, 0.24)] bg-[#2c2318]/40 px-4 py-3 cursor-pointer">
+                    <label className="flex items-start gap-3 rounded-xl border border-[rgba(201,168,106,0.24)] bg-[#2c2318]/40 px-4 py-3 cursor-pointer">
                       <input
                         type="radio"
                         name="ust_status"
@@ -1011,7 +1011,7 @@ export default function AffiliatePortal() {
                         onChange={(value) => updateForm("vat_id", value)}
                       />
                     )}
-                    <div className="rounded-xl border border-[rgba(201, 168, 106, 0.2)] bg-[rgba(201, 168, 106, 0.08)] px-4 py-3 text-sm text-[#c8a86b]">
+                    <div className="rounded-xl border border-[rgba(201,168,106,0.2)] bg-[rgba(201,168,106,0.08)] px-4 py-3 text-sm text-[#c8a86b]">
                       {taxHint(settingsForm.ust_status)}
                     </div>
                   </div>
@@ -1037,7 +1037,7 @@ export default function AffiliatePortal() {
                 <button
                   type="submit"
                   disabled={savingProfile}
-                  className="gradient-accent rounded-lg px-5 py-3 text-sm font-semibold text-white transition-all hover:brightness-110 disabled:opacity-60 disabled:cursor-not-allowed"
+                  className="gradient-accent rounded-lg px-5 py-3 text-sm font-semibold transition-all hover:brightness-110 disabled:opacity-60 disabled:cursor-not-allowed"
                 >
                   {savingProfile ? "Speichert..." : "Einstellungen speichern"}
                 </button>
@@ -1096,9 +1096,9 @@ function MiniStat({
   tone: "orange" | "teal" | "gray";
 }) {
   const tones: Record<string, string> = {
-    orange: "text-[#c8a86b] border-[rgba(201, 168, 106, 0.18)]",
+    orange: "text-[#c8a86b] border-[rgba(201,168,106,0.18)]",
     teal: "text-[#6fb3aa] border-[rgba(85, 151, 143, 0.22)]",
-    gray: "text-[#ece0c8] border-[rgba(201, 168, 106, 0.24)]",
+    gray: "text-[#ece0c8] border-[rgba(201,168,106,0.24)]",
   };
   return (
     <div className={`rounded-xl border bg-[#2c2318]/40 px-4 py-4 ${tones[tone]}`}>
@@ -1118,7 +1118,7 @@ function ActionHint({
   text: string;
 }) {
   return (
-    <div className="flex items-start gap-3 rounded-xl border border-[rgba(201, 168, 106, 0.24)] bg-[#2c2318]/40 px-4 py-3">
+    <div className="flex items-start gap-3 rounded-xl border border-[rgba(201,168,106,0.24)] bg-[#2c2318]/40 px-4 py-3">
       {icon}
       <div>
         <p className="text-sm font-semibold text-[#ece0c8]">{title}</p>
@@ -1172,7 +1172,7 @@ function ReadinessCard({
           {readiness.warnings.map((warning) => (
             <div
               key={warning}
-              className="flex items-start gap-2 rounded-xl border border-[rgba(201, 168, 106, 0.24)] bg-[#2c2318]/40 px-4 py-3 text-sm text-[#ece0c8]"
+              className="flex items-start gap-2 rounded-xl border border-[rgba(201,168,106,0.24)] bg-[#2c2318]/40 px-4 py-3 text-sm text-[#ece0c8]"
             >
               <AlertCircle size={16} className="mt-0.5 shrink-0 text-[#c8a86b]" />
               <span>{warning}</span>
@@ -1223,7 +1223,7 @@ function StripeCard({ profile }: { profile: AffiliateProfile | null }) {
               onClick={() => {
                 window.location.href = "/twitch/affiliate/connect/stripe";
               }}
-              className="gradient-accent rounded-lg px-5 py-2.5 text-sm font-semibold text-white transition-all hover:brightness-110"
+              className="gradient-accent rounded-lg px-5 py-2.5 text-sm font-semibold transition-all hover:brightness-110"
             >
               Stripe-Konto verbinden
             </button>
@@ -1261,7 +1261,7 @@ function InputField({
         type={type}
         value={value}
         onChange={(event) => onChange(event.target.value)}
-        className="mt-2 w-full bg-[#1c150d] border border-[rgba(201, 168, 106, 0.24)] rounded-lg px-4 py-2.5 text-sm text-[#ece0c8] placeholder-[#b7aa91]/50 focus:outline-none focus:border-[#c8a86b] transition-colors"
+        className="mt-2 w-full bg-[#1c150d] border border-[rgba(201,168,106,0.24)] rounded-lg px-4 py-2.5 text-sm text-[#ece0c8] placeholder-[#b7aa91]/50 focus:outline-none focus:border-[#c8a86b] transition-colors"
       />
     </label>
   );
@@ -1284,7 +1284,7 @@ function SelectField({
       <select
         value={value}
         onChange={(event) => onChange(event.target.value)}
-        className="mt-2 w-full bg-[#1c150d] border border-[rgba(201, 168, 106, 0.24)] rounded-lg px-4 py-2.5 text-sm text-[#ece0c8] focus:outline-none focus:border-[#c8a86b] transition-colors"
+        className="mt-2 w-full bg-[#1c150d] border border-[rgba(201,168,106,0.24)] rounded-lg px-4 py-2.5 text-sm text-[#ece0c8] focus:outline-none focus:border-[#c8a86b] transition-colors"
       >
         {options.map((option) => (
           <option key={option.value} value={option.value}>

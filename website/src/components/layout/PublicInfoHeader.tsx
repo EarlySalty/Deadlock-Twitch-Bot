@@ -25,7 +25,7 @@ function ActionButton({ action }: { action: ActionLink }) {
   const variantClass =
     action.variant === "ghost"
       ? "border border-border text-text-primary hover:border-border-hover hover:bg-white/5"
-      : "gradient-accent text-white hover:brightness-110";
+      : "gradient-accent hover:brightness-110";
 
   return (
     <a

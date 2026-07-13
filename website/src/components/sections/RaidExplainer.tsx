@@ -367,7 +367,7 @@ export function RaidExplainer() {
                         className="w-11 h-11 rounded-xl shrink-0 flex items-center justify-center"
                         style={{
                           background:
-                            "linear-gradient(135deg, rgba(201, 168, 106, 0.22), rgba(85, 151, 143, 0.2))",
+                            "linear-gradient(135deg, rgba(201,168,106,0.22), rgba(85, 151, 143, 0.2))",
                           border: "1px solid rgba(85, 151, 143, 0.24)",
                         }}
                       >
@@ -397,7 +397,7 @@ export function RaidExplainer() {
                   style={{
                     border: "1px solid rgba(85, 151, 143, 0.2)",
                     background:
-                      "linear-gradient(135deg, rgba(201, 168, 106, 0.1), rgba(85, 151, 143, 0.08))",
+                      "linear-gradient(135deg, rgba(201,168,106,0.1), rgba(85, 151, 143, 0.08))",
                   }}
                 >
                   {/* Animated line behind the steps */}

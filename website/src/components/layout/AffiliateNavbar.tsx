@@ -23,7 +23,7 @@ export function AffiliateNavbar() {
 
         <a
           href="/twitch/affiliate/signup"
-          className="gradient-accent rounded-lg px-4 py-2 text-sm font-semibold text-white inline-flex items-center gap-2 whitespace-nowrap"
+          className="gradient-accent rounded-lg px-4 py-2 text-sm font-semibold inline-flex items-center gap-2 whitespace-nowrap"
         >
           <UserPlus size={16} />
           Jetzt Vertriebler werden

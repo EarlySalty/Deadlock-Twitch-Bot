@@ -30,7 +30,7 @@ export function CTA() {
           <div className="flex gap-4 justify-center flex-wrap">
             <a
               href={TWITCH_ONBOARDING_URL}
-              className="gradient-accent rounded-xl px-8 py-4 font-semibold text-white text-lg inline-flex items-center gap-2"
+              className="gradient-accent rounded-xl px-8 py-4 font-semibold text-lg inline-flex items-center gap-2"
             >
               <ExternalLink size={20} />
               Zum Onboarding

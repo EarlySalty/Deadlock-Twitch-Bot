@@ -113,7 +113,7 @@ export function BotQuestionBox() {
         <button
           type="submit"
           disabled={loading || !question.trim()}
-          className="gradient-accent inline-flex items-center justify-center gap-2 rounded-xl px-6 py-4 font-semibold text-white transition-all duration-200 hover:brightness-110 disabled:cursor-not-allowed disabled:opacity-50"
+          className="gradient-accent inline-flex items-center justify-center gap-2 rounded-xl px-6 py-4 font-semibold transition-all duration-200 hover:brightness-110 disabled:cursor-not-allowed disabled:opacity-50"
         >
           {loading ? <Loader2 size={18} className="animate-spin" /> : <Send size={18} />}
           {loading ? "Denkt nach…" : "Fragen"}

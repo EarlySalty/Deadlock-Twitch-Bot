@@ -642,7 +642,7 @@ export function RaidDemo() {
           transition: all 0.35s cubic-bezier(0.4,0,0.2,1);
         }
         .rd-pill-active {
-          background: rgba(201, 168, 106, 0.15);
+          background: rgba(201,168,106,0.15);
           border-color: var(--color-primary);
           color: var(--color-primary);
         }

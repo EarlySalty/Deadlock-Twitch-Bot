@@ -176,7 +176,7 @@ export default function AffiliateProgramPage() {
               >
                 <a
                   href={TWITCH_AFFILIATE_URL}
-                  className="gradient-accent inline-flex items-center gap-2 rounded-xl px-7 py-3.5 font-semibold text-white no-underline transition-all duration-200 hover:brightness-110"
+                  className="gradient-accent inline-flex items-center gap-2 rounded-xl px-7 py-3.5 font-semibold no-underline transition-all duration-200 hover:brightness-110"
                 >
                   Jetzt Vertriebler werden
                   <ArrowRight size={18} />
@@ -360,7 +360,7 @@ export default function AffiliateProgramPage() {
                 <div className="grid gap-4">
                   <a
                     href={TWITCH_AFFILIATE_URL}
-                    className="gradient-accent inline-flex items-center justify-between gap-4 rounded-2xl px-6 py-5 font-semibold text-white no-underline transition-all duration-200 hover:brightness-110"
+                    className="gradient-accent inline-flex items-center justify-between gap-4 rounded-2xl px-6 py-5 font-semibold no-underline transition-all duration-200 hover:brightness-110"
                   >
                     <span>Jetzt Vertriebler werden</span>
                     <ArrowRight size={18} />

@@ -206,7 +206,7 @@ export function Dashboard() {
                   className={[
                     "rounded-lg px-4 py-2 text-sm transition inline-flex items-center gap-2",
                     isActive
-                      ? "gradient-accent text-white"
+                      ? "gradient-accent"
                       : "bg-[var(--color-card)] border border-[var(--color-border)] text-[var(--color-text-secondary)] hover:text-[var(--color-text-primary)]",
                   ].join(" ")}
                 >

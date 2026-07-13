@@ -38,8 +38,9 @@
 @theme {
   --color-bg: #1c150d;
   --color-background: #241c11;
-  --color-card: #2c2318;
-  --color-card-hover: #352a1b;
+  /* Karten heben sich vom Ink ab (warm + halbtransparent, wie dl-brand --bg-card). */
+  --color-card: rgba(59, 47, 30, 0.86);
+  --color-card-hover: rgba(74, 59, 38, 0.92);
   --color-primary: #c8a86b;
   --color-primary-hover: #efd49d;
   --color-primary-soft: rgba(201, 168, 106, 0.20);
@@ -64,12 +65,16 @@
 }
 
 :root {
-  --gradient-brand: linear-gradient(120deg, #efd49d 10%, #c8a86b 55%, #55978f);
+  /* Headline bleibt durchgehend Gold: der frühere Teal-Ausklang verwusch großen
+     Text zu Grau-Beige. Vier Stopps ergeben den Metall-Verlauf der Coaching-Seite. */
+  --gradient-brand: linear-gradient(120deg, #f6ddb0 0%, #efd49d 28%, #c8a86b 66%, #a98746 100%);
   --gradient-dash: linear-gradient(135deg, #c8a86b, #55978f);
-  --gradient-bg: linear-gradient(160deg, #241c11 0%, #1c150d 55%, #241c11 100%);
+  --gradient-bg: linear-gradient(180deg, #271f12 0%, #241c11 45%, #1c150d 100%);
   --gradient-hero: linear-gradient(160deg, #1c150d 0%, #241c11 55%, #2c2318 100%);
+  --shadow-card: 0 26px 70px rgba(0, 0, 0, 0.56), inset 0 1px 0 rgba(255, 255, 255, 0.025);
+  --shadow-card-soft: 0 16px 45px rgba(0, 0, 0, 0.38), inset 0 1px 0 rgba(255, 255, 255, 0.02);
   --shadow-primary-glow: 0 12px 28px rgba(201, 168, 106, 0.22);
-  --shadow-primary-glow-hover: 0 16px 36px rgba(201, 168, 106, 0.35), 0 0 20px rgba(201, 168, 106, 0.12);
+  --shadow-primary-glow-hover: 0 0 38px rgba(201, 168, 106, 0.22), 0 18px 50px rgba(0, 0, 0, 0.5);
   --theme-headline-gradient: var(--gradient-brand);
   --theme-titlebar-bg: var(--color-card-hover);
   --theme-chatbot-bg: color-mix(in srgb, var(--color-background) 95%, transparent);
@@ -90,26 +95,44 @@ body {
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
   min-height: 100vh;
+  /* Gestapelte Glows statt flachem Verlauf: Gold von oben, Teal in die Flanken. */
   background:
-    radial-gradient(1200px 520px at 90% -10%, rgba(201, 168, 106, 0.14), transparent 65%),
-    radial-gradient(900px 460px at 12% -20%, rgba(85, 151, 143, 0.12), transparent 60%),
+    radial-gradient(100% 60% at 50% -5%, rgba(201, 168, 106, 0.13), transparent 60%),
+    radial-gradient(70% 52% at 86% 32%, rgba(85, 151, 143, 0.095), transparent 72%),
+    radial-gradient(66% 44% at 12% 28%, rgba(85, 151, 143, 0.068), transparent 70%),
+    radial-gradient(72% 46% at 86% 86%, rgba(85, 151, 143, 0.055), transparent 74%),
+    radial-gradient(62% 42% at 8% 78%, rgba(85, 151, 143, 0.045), transparent 72%),
+    radial-gradient(72% 38% at 52% 98%, rgba(201, 168, 106, 0.046), transparent 76%),
     var(--gradient-bg);
+  background-attachment: fixed;
   color: var(--color-text-primary);
   position: relative;
 }
 
+/* Gitternetz in Gold statt Weiß — Weiß entsättigt den warmen Ink zu Grau. */
 body::before {
   content: "";
   position: fixed;
   inset: 0;
   pointer-events: none;
   background-image:
-    linear-gradient(rgba(255, 255, 255, 0.03) 1px, transparent 1px),
-    linear-gradient(90deg, rgba(255, 255, 255, 0.03) 1px, transparent 1px);
+    linear-gradient(rgba(201, 168, 106, 0.05) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(201, 168, 106, 0.05) 1px, transparent 1px);
   background-size: 36px 36px;
   mask-image: radial-gradient(ellipse at top, black 40%, transparent 75%);
-  opacity: 0.35;
+  opacity: 0.5;
   z-index: 0;
+}
+
+/* Vignette: drückt die Ränder ab und holt den Inhalt nach vorn. */
+body::after {
+  content: "";
+  position: fixed;
+  inset: 0;
+  pointer-events: none;
+  z-index: 0;
+  mix-blend-mode: multiply;
+  background: radial-gradient(120% 95% at 50% 45%, transparent 63%, rgba(0, 0, 0, 0.34));
 }
 
 #root {
@@ -156,22 +179,33 @@ h1, h2, h3, h4, .display-font {
 
 /* Shared Effects */
 .glass {
-  background: color-mix(in srgb, var(--color-card) 72%, transparent);
+  background:
+    linear-gradient(180deg, rgba(239, 212, 157, 0.045) 0%, transparent 46%),
+    var(--color-card);
   backdrop-filter: blur(16px);
   border: 1px solid var(--color-border);
-  box-shadow: 0 16px 40px rgba(0, 0, 0, 0.28), inset 0 1px 0 rgba(255, 255, 255, 0.04);
+  box-shadow: var(--shadow-card-soft);
 }
 
+/* Primary-Fläche: Gold auf Gold mit dunkler Schrift — der frühere Gold→Teal-Verlauf
+   kippte in der Mitte nach Graugrün. Farbe hier statt in den Komponenten, damit
+   jede Nutzung automatisch lesbaren Text bekommt. */
 .gradient-accent {
-  background: linear-gradient(135deg, var(--color-primary) 0%, var(--color-accent) 100%);
+  background: linear-gradient(135deg, #f6ddb0 0%, #efd49d 35%, #c8a86b 68%, #a98746 100%);
+  color: #16100a;
+  border: 1px solid #efd49d;
 }
 
 .panel-card {
   position: relative;
   overflow: hidden;
-  background: linear-gradient(160deg, color-mix(in srgb, var(--color-card) 92%, transparent), color-mix(in srgb, var(--color-bg) 92%, transparent));
+  background:
+    linear-gradient(180deg, rgba(239, 212, 157, 0.045) 0%, transparent 46%),
+    radial-gradient(100% 90% at 100% 0%, rgba(85, 151, 143, 0.035), transparent 54%),
+    var(--color-card);
   border: 1px solid var(--color-border);
-  box-shadow: 0 10px 30px rgba(0, 0, 0, 0.25), inset 0 1px 0 rgba(255, 255, 255, 0.05);
+  box-shadow: var(--shadow-card-soft);
+  backdrop-filter: blur(8px);
 }
 
 .panel-card::after {
@@ -179,8 +213,7 @@ h1, h2, h3, h4, .display-font {
   position: absolute;
   inset: 0;
   pointer-events: none;
-  background: linear-gradient(120deg, rgba(255, 255, 255, 0.06), transparent 35%);
-  opacity: 0.4;
+  background: linear-gradient(135deg, rgba(255, 255, 255, 0.018), transparent 42%);
 }
 
 .soft-elevate {
@@ -190,7 +223,7 @@ h1, h2, h3, h4, .display-font {
 .soft-elevate:hover {
   transform: translateY(-2px);
   border-color: var(--color-border-hover);
-  box-shadow: 0 14px 28px rgba(0, 0, 0, 0.24);
+  box-shadow: var(--shadow-primary-glow-hover);
 }
 
 .faq-summary::-webkit-details-marker {
