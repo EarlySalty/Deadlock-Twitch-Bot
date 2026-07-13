@@ -747,7 +747,8 @@ mod tests {
             CREATE TABLE IF NOT EXISTS twitch_raid_auth (
                 id BIGSERIAL PRIMARY KEY, twitch_login TEXT, twitch_user_id TEXT,
                 scopes TEXT, needs_reauth BOOLEAN NOT NULL DEFAULT FALSE,
-                raid_enabled BOOLEAN NOT NULL DEFAULT TRUE, authorized_at TIMESTAMPTZ
+                raid_enabled BOOLEAN NOT NULL DEFAULT TRUE, authorized_at TIMESTAMPTZ,
+                created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
             )
         "#,
         )
@@ -924,6 +925,7 @@ mod tests {
             .uri("/twitch/api/admin/streamers?view=all")
             .extension(ConnectInfo(addr()))
             .header(axum::http::header::HOST, "example.com")
+            .header("x-dashboard-context", "admin")
             .header(
                 axum::http::header::COOKIE,
                 format!("{ADMIN_COOKIE_NAME}={}", session.session_id),

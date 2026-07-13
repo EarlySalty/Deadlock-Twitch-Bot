@@ -169,6 +169,7 @@ const SUGGESTIONS_SQL: &str = r#"WITH candidate_ticks AS (
               ) AS previous_ts
        FROM twitch_stats_category s
        WHERE s.ts_utc >= $1
+         AND s.is_partner = FALSE
          AND NOT EXISTS (
              SELECT 1 FROM twitch_partners p
              WHERE LOWER(p.twitch_login) = LOWER(s.streamer)
