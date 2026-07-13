@@ -2,8 +2,8 @@ import { useState } from 'react';
 import type { FormEvent } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { motion, useReducedMotion } from 'framer-motion';
-import { BadgeCheck, BarChart3, Search, SearchX } from 'lucide-react';
-import { fetchAdminResearch } from '@/api/client';
+import { BadgeCheck, BarChart3, Search, SearchX, Sparkles } from 'lucide-react';
+import { fetchAdminResearch, fetchAdminResearchSuggestions } from '@/api/client';
 import type { ResearchResponse, ResearchScoreComponent } from '@/api/types';
 import { PageHeader } from '@/components/layout/PageHeader';
 import { EmptyState } from '@/components/shared/EmptyState';
@@ -216,6 +216,11 @@ export default function ResearchPage() {
     enabled: submitted !== null,
     retry: false,
   });
+  const suggestionsQuery = useQuery({
+    queryKey: ['admin-research-suggestions', days],
+    queryFn: () => fetchAdminResearchSuggestions(days),
+    retry: false,
+  });
 
   function submit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -277,6 +282,67 @@ export default function ResearchPage() {
           </div>
         </fieldset>
       </form>
+
+      <article className="panel-card overflow-hidden rounded-[1.8rem]">
+        <div className="flex items-center gap-3 border-b border-white/8 px-6 py-5">
+          <Sparkles className="h-5 w-5 text-primary" />
+          <div>
+            <h2 className="font-semibold text-white">Onboarding-Vorschläge</h2>
+            <p className="mt-1 text-sm text-text-secondary">Noch nicht angebundene Streamer, nach Onboarding-Value sortiert.</p>
+          </div>
+        </div>
+        {suggestionsQuery.isLoading ? (
+          <div className="p-8 text-center text-sm text-text-secondary">Vorschläge werden berechnet …</div>
+        ) : suggestionsQuery.isError ? (
+          <div className="p-8">
+            <EmptyState icon={SearchX} title="Vorschläge nicht verfügbar" description={COPY.errorDescription} />
+          </div>
+        ) : suggestionsQuery.data?.items.length ? (
+          <div className="overflow-x-auto">
+            <table className="w-full min-w-[760px] text-left text-sm">
+              <thead className="bg-white/[0.025] text-xs uppercase tracking-[0.14em] text-text-secondary">
+                <tr>
+                  <th className="px-6 py-4 font-medium">Rang</th>
+                  <th className="px-6 py-4 font-medium">Streamer</th>
+                  <th className="px-6 py-4 font-medium">Value</th>
+                  <th className="px-6 py-4 font-medium">Ø Viewer</th>
+                  <th className="px-6 py-4 font-medium">Deadlock-Stunden</th>
+                  <th className="px-6 py-4 font-medium">Aktive Tage</th>
+                  <th className="px-6 py-4 font-medium">Aktion</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-white/8">
+                {suggestionsQuery.data.items.map((item, index) => (
+                  <tr key={item.login}>
+                    <td className="px-6 py-4 text-text-secondary">#{index + 1}</td>
+                    <td className="px-6 py-4 font-semibold text-white">{item.login}</td>
+                    <td className="px-6 py-4 font-semibold text-primary">{item.score.total}/100</td>
+                    <td className="px-6 py-4 text-white">{formatNumber(item.subject.avg_viewers)}</td>
+                    <td className="px-6 py-4 text-white">{formatNumber(item.subject.total_hours)} {COPY.hoursUnit}</td>
+                    <td className="px-6 py-4 text-white">{formatNumber(item.subject.active_days)}</td>
+                    <td className="px-6 py-4">
+                      <button
+                        type="button"
+                        className="rounded-xl border border-primary/35 bg-primary/10 px-3 py-2 font-semibold text-white transition hover:bg-primary/20"
+                        onClick={() => {
+                          setLogin(item.login);
+                          setSubmitted({ login: item.login, days });
+                        }}
+                      >
+                        Analysieren
+                      </button>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        ) : (
+          <div className="p-8">
+            <EmptyState icon={Search} title="Keine Vorschläge" description="Im gewählten Zeitraum wurden keine noch offenen Kandidaten gefunden." />
+          </div>
+        )}
+      </article>
 
       {query.isLoading ? (
         <div className="panel-card rounded-[1.8rem] p-8 text-center text-sm text-text-secondary">{COPY.loading}</div>

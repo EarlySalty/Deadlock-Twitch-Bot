@@ -2157,10 +2157,44 @@ impl SubscriptionManager {
     /// Kapazitäts-Snapshot fürs Admin-Dashboard. Webhook-Modus: keine
     /// WS-Listener — Listener-Felder 0, `used_slots` = getrackte Subs.
     pub async fn record_capacity_snapshot(&self, trigger: &str) {
-        let used = self.tracked.lock().expect("tracked lock").len() as i32;
-        if let Err(error) = self.capacity.record(trigger, used, Utc::now()).await {
+        let (used, subscriptions_json) = self.capacity_snapshot_payload();
+        if let Err(error) = self
+            .capacity
+            .record(trigger, used, &subscriptions_json, Utc::now())
+            .await
+        {
             tracing::debug!(%error, trigger, "Capacity-Snapshot fehlgeschlagen");
         }
+    }
+
+    fn capacity_snapshot_payload(&self) -> (i32, String) {
+        let mut pairs: Vec<(String, String)> = self
+            .tracked
+            .lock()
+            .expect("tracked lock")
+            .iter()
+            .cloned()
+            .collect();
+        pairs.sort();
+        let subscriptions: Vec<Value> = pairs
+            .iter()
+            .map(|(sub_type, broadcaster_id)| {
+                serde_json::json!({
+                    "id": format!("{sub_type}:{broadcaster_id}"),
+                    "type": sub_type,
+                    "status": "enabled",
+                    "transport": "webhook",
+                    "condition": {
+                        "broadcaster_user_id": broadcaster_id,
+                    },
+                })
+            })
+            .collect();
+        let json = serde_json::to_string(&subscriptions).unwrap_or_else(|error| {
+            tracing::debug!(%error, "EventSub-Snapshot-JSON konnte nicht serialisiert werden");
+            "[]".to_string()
+        });
+        (saturating_i32(pairs.len() as i64), json)
     }
 
     /// Periodischer Capacity-Snapshot im Poll-Tick (B5-08, Port von
@@ -2192,8 +2226,12 @@ impl SubscriptionManager {
             return;
         }
 
-        let used = self.tracked.lock().expect("tracked lock").len() as i32;
-        if let Err(error) = self.capacity.record(trigger, used, Utc::now()).await {
+        let (used, subscriptions_json) = self.capacity_snapshot_payload();
+        if let Err(error) = self
+            .capacity
+            .record(trigger, used, &subscriptions_json, Utc::now())
+            .await
+        {
             tracing::debug!(%error, trigger, "periodischer Capacity-Snapshot fehlgeschlagen");
             return;
         }
@@ -2246,6 +2284,7 @@ impl CapacitySnapshotStore {
         &self,
         trigger: &str,
         used_slots: i32,
+        subscriptions_json: &str,
         ts: DateTime<Utc>,
     ) -> Result<(), sqlx::Error> {
         let capacity = eventsub_webhook_capacity_values(i64::from(used_slots));
@@ -2258,7 +2297,7 @@ impl CapacitySnapshotStore {
                 (ts_utc, trigger_reason, listener_count, ready_listeners,
                  failed_listeners, used_slots, total_slots, headroom_slots,
                  listeners_at_limit, utilization_pct, listeners_json)
-            VALUES ($1, $2, 0, 0, 0, $3, $4, $5, $6, $7, '[]')
+            VALUES ($1, $2, 0, 0, 0, $3, $4, $5, $6, $7, $8)
             "#,
         )
         .bind(ts)
@@ -2268,6 +2307,7 @@ impl CapacitySnapshotStore {
         .bind(headroom_slots)
         .bind(listeners_at_limit)
         .bind(capacity.utilization_pct)
+        .bind(subscriptions_json)
         .execute(&self.pool)
         .await?;
         Ok(())

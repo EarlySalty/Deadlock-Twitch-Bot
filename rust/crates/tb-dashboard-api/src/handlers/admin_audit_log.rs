@@ -7,22 +7,21 @@
 //! und limitiert. Jede Quelle ist einzeln fehlertolerant (fehlendes Schema →
 //! Quelle übersprungen), 1:1 zu Pythons try/except je Loader.
 //!
-//! **Quellen:** promo, roadmap, legal, streamer_history, manual_plan, billing
-//! (Webhook-Events mit Abo-Tabelle als Fallback) — alle sechs portiert.
+//! **Quellen:** admin_request, promo, roadmap, legal, streamer_history,
+//! manual_plan, billing (Webhook-Events mit Abo-Tabelle als Fallback).
 //!
 //! CSRF irrelevant (GET); Admin über `DashboardAuthLevel`.
 
 use std::collections::BTreeSet;
 use std::path::PathBuf;
 
+use crate::auth::level::DashboardAuthLevel;
 use axum::{extract::RawQuery, extract::State, response::IntoResponse, Json};
 use chrono::{DateTime, SecondsFormat, Utc};
 use serde_json::{json, Value};
 use sqlx::PgPool;
-use crate::auth::level::DashboardAuthLevel;
-use tb_http_core::ApiError;
-
 use tb_analytics::promo_mode::{load_global_promo_mode, parse_utc_datetime};
+use tb_http_core::ApiError;
 
 const DEFAULT_LIMIT: i64 = 100;
 const MAX_LIMIT: i64 = 500;
@@ -661,6 +660,47 @@ async fn billing_subscription_entries(pool: &PgPool) -> Result<Vec<Value>, sqlx:
     Ok(entries)
 }
 
+#[derive(sqlx::FromRow)]
+struct AdminRequestAuditRow {
+    id: i64,
+    occurred_at: DateTime<Utc>,
+    actor: String,
+    method: String,
+    path: String,
+    status_code: i32,
+}
+
+/// Serverseitig persistierte, erfolgreiche Admin-Mutationen.
+async fn admin_request_entries(pool: &PgPool) -> Result<Vec<Value>, sqlx::Error> {
+    let rows = sqlx::query_as::<_, AdminRequestAuditRow>(
+        r#"SELECT id, occurred_at, actor, method, path, status_code
+           FROM dashboard_admin_audit_events
+           ORDER BY occurred_at DESC, id DESC
+           LIMIT 5000"#,
+    )
+    .fetch_all(pool)
+    .await?;
+
+    Ok(rows
+        .into_iter()
+        .filter_map(|row| {
+            let timestamp = row.occurred_at.to_rfc3339();
+            let method = row.method.trim().to_uppercase();
+            let path = row.path.trim();
+            make_entry(
+                format!("admin_request:{}", row.id),
+                "admin_request",
+                &method.to_lowercase(),
+                Some(&row.actor),
+                Some(path),
+                Some(&timestamp),
+                format!("Admin-Aktion {method} {path} abgeschlossen."),
+                Some(json!({ "statusCode": row.status_code })),
+            )
+        })
+        .collect())
+}
+
 // ── Aggregation ───────────────────────────────────────────────────────────────
 
 fn combine_and_filter(
@@ -779,6 +819,7 @@ pub async fn handler(
     let mut entries: Vec<Value> = Vec::new();
     // DB-Quellen: fehlendes Schema → Quelle überspringen, sonst 500 (Python try/except).
     for result in [
+        admin_request_entries(&pool).await,
         streamer_history_entries(&pool).await,
         manual_plan_entries(&pool).await,
     ] {
@@ -860,6 +901,7 @@ mod tests {
             "CREATE TABLE streamer_plans (twitch_login TEXT PRIMARY KEY, twitch_user_id TEXT, manual_plan_id TEXT, manual_plan_expires_at TEXT, manual_plan_notes TEXT, manual_plan_updated_at TEXT)",
             "CREATE TABLE twitch_billing_events (stripe_event_id TEXT PRIMARY KEY, event_type TEXT, object_id TEXT, received_at TEXT, livemode INTEGER, payload TEXT)",
             "CREATE TABLE twitch_billing_subscriptions (stripe_subscription_id TEXT PRIMARY KEY, customer_reference TEXT, status TEXT, plan_id TEXT, current_period_end TEXT, canceled_at TEXT, ended_at TEXT, updated_at TEXT)",
+            "CREATE TABLE dashboard_admin_audit_events (id BIGSERIAL PRIMARY KEY, occurred_at TIMESTAMPTZ NOT NULL DEFAULT NOW(), actor TEXT NOT NULL, method TEXT NOT NULL, path TEXT NOT NULL, status_code INTEGER NOT NULL)",
         ] {
             sqlx::query(ddl).execute(&pool).await.unwrap();
         }
@@ -1005,6 +1047,31 @@ mod tests {
             .find(|e| e["metadata"]["subscriptionId"] == "sub_b")
             .unwrap();
         assert_eq!(b["action"], "subscription_canceled");
+    }
+
+    #[tokio::test]
+    async fn admin_request_entry_aus_persistenter_audit_tabelle() {
+        let Some(pool) = make_pool("t_audit_requests").await else {
+            return;
+        };
+        sqlx::query(
+            "INSERT INTO dashboard_admin_audit_events \
+             (occurred_at, actor, method, path, status_code) \
+             VALUES ('2026-07-13T10:00:00Z', 'discord:123', 'POST', \
+                     '/twitch/api/admin/config/chat', 200)",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+
+        let entries = admin_request_entries(&pool).await.unwrap();
+
+        assert_eq!(entries.len(), 1);
+        assert_eq!(entries[0]["source"], "admin_request");
+        assert_eq!(entries[0]["action"], "post");
+        assert_eq!(entries[0]["actor"], "discord:123");
+        assert_eq!(entries[0]["target"], "/twitch/api/admin/config/chat");
+        assert_eq!(entries[0]["metadata"]["statusCode"], 200);
     }
 
     fn entry(ts: &str, source: &str) -> Value {

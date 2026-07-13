@@ -33,6 +33,7 @@ import type {
   RaidConfigSnapshot,
   RaidConfigUpdatePayload,
   ResearchResponse,
+  ResearchSuggestionsResponse,
   ScopeStatusResponse,
   StreamerDetail,
   StreamerRow,
@@ -635,6 +636,7 @@ export async function fetchAdminStreamers(view: StreamerView = 'active'): Promis
       grantedScopes: readStringArray(record.grantedScopes ?? record.granted_scopes),
       missingScopes: readStringArray(record.missingScopes ?? record.missing_scopes),
       oauthAuthorizedAt: readString(record, 'oauthAuthorizedAt', 'oauth_authorized_at') || null,
+      partnerSince: readString(record, 'partnerSince', 'partner_since') || null,
       promoDisabled: readBoolean(record, 'promoDisabled', 'promo_disabled'),
       notes: readString(record, 'notes', 'manual_plan_notes') || undefined,
       status: readString(record, 'status') || undefined,
@@ -1183,4 +1185,8 @@ export async function fetchAdminResearch(login: string, days: number): Promise<R
   return admin<ResearchResponse>(
     `/research/${encodeURIComponent(login.trim())}?days=${encodeURIComponent(days)}`,
   );
+}
+
+export async function fetchAdminResearchSuggestions(days: number): Promise<ResearchSuggestionsResponse> {
+  return admin<ResearchSuggestionsResponse>(`/research/suggestions?days=${encodeURIComponent(days)}`);
 }

@@ -1,4 +1,4 @@
-import { RadioTower } from 'lucide-react';
+import { RadioTower, TriangleAlert } from 'lucide-react';
 import { PageHeader } from '@/components/layout/PageHeader';
 import { DataTable, type TableColumn } from '@/components/shared/DataTable';
 import { EmptyState } from '@/components/shared/EmptyState';
@@ -12,8 +12,8 @@ export function EventSubStatusPage() {
   const eventSubQuery = useEventSubStatus();
   const data = eventSubQuery.data;
   const subscriptions = data?.subscriptions ?? [];
-  const lastKnown = (data as Record<string, unknown> | undefined)?.lastKnownSubscriptions as EventSubSubscription[] | undefined ?? [];
-  const lastKnownAt = (data as Record<string, unknown> | undefined)?.lastKnownSnapshotAt as string | undefined;
+  const lastKnown = data?.lastKnownSubscriptions ?? [];
+  const lastKnownAt = data?.lastKnownSnapshotAt;
 
   const columns: TableColumn<EventSubSubscription>[] = [
     {
@@ -46,13 +46,23 @@ export function EventSubStatusPage() {
 
   return (
     <section className="space-y-5">
-      <PageHeader title="EventSub Status" description="WebSocket-Status, Subscription-Lage und Raw-Conditions der Twitch-Integration." />
+      <PageHeader title="EventSub Status" description="Webhook-Transport, Subscription-Lage und Raw-Conditions der Twitch-Integration." />
 
       <div className="grid gap-4 md:grid-cols-3">
-        <KpiCard title="WebSocket" value={data?.websocketStatus || '—'} hint={data?.websocketSessionId || 'keine Session-ID'} tone="accent" />
-        <KpiCard title="Active Subs" value={String(data?.activeSubscriptionCount ?? subscriptions.length)} hint={data?.websocketConnectedAt ? `verbunden seit ${formatDateTime(data.websocketConnectedAt)}` : 'keine Connected-Zeit'} />
+        <KpiCard title="Transport" value={data?.websocketStatus || '—'} hint={data?.transportMode === 'connected' ? 'Webhook aktiv' : 'kein frischer Webhook-Snapshot'} tone="accent" />
+        <KpiCard title="Active Subs" value={String(data?.activeSubscriptionCount ?? subscriptions.length)} hint={data?.snapshotStale ? 'nur letzter bekannter Stand' : 'aus Bot-Tracking'} />
         <KpiCard title="Capacity" value={`${data?.capacity?.used ?? 0}/${data?.capacity?.max ?? 0}`} hint={data?.capacity?.lastSnapshotAt ? `Snapshot ${formatDateTime(data.capacity.lastSnapshotAt)}` : 'ohne Snapshot'} />
       </div>
+
+      {data?.snapshotStale ? (
+        <div className="flex items-start gap-3 rounded-2xl border border-amber-400/30 bg-amber-500/10 px-5 py-4 text-sm text-amber-100">
+          <TriangleAlert className="mt-0.5 h-5 w-5 shrink-0" />
+          <div>
+            <p className="font-semibold">EventSub-Snapshot veraltet</p>
+            <p className="mt-1 text-amber-100/75">Der Bot hat seit mehr als 15 Minuten keinen Status geschrieben. Die Werte unten sind nur der letzte bekannte Stand.</p>
+          </div>
+        </div>
+      ) : null}
 
       <article className="panel-card rounded-[1.8rem] p-6">
         <p className="text-xs font-semibold uppercase tracking-[0.2em] text-text-secondary">Subscriptions</p>
@@ -78,7 +88,7 @@ export function EventSubStatusPage() {
             Letzter bekannter Snapshot
             {lastKnownAt ? <span className="ml-2 font-normal normal-case text-text-secondary/70">{formatDateTime(lastKnownAt)}</span> : null}
           </p>
-          <p className="mt-1 text-xs text-text-secondary">WebSocket aktuell inaktiv — zeigt den letzten Snapshot mit aktiven Subscriptions.</p>
+          <p className="mt-1 text-xs text-text-secondary">Transport aktuell nicht aktiv — zeigt den letzten Snapshot mit bekannten Subscriptions.</p>
           <div className="mt-4">
             <DataTable
               columns={columns}

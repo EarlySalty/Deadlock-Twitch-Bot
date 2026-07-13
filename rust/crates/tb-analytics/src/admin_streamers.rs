@@ -244,6 +244,8 @@ pub struct AdminStreamerRow {
     pub needs_reauth: Option<bool>,
     /// TIMESTAMPTZ in Prod (twitch_raid_auth.authorized_at)
     pub authorized_at: Option<chrono::DateTime<chrono::Utc>>,
+    /// Erste erfolgreiche Bot-Autorisierung; bleibt bei Re-Auth unverändert.
+    pub partner_since: Option<chrono::DateTime<chrono::Utc>>,
     pub promo_disabled: Option<i32>,
     pub promo_message: Option<String>,
     pub raid_boost_enabled: Option<i32>,
@@ -408,9 +410,10 @@ const CTE_PARTNER_LIVE_STATE: &str = r#", partner_live_state AS (
 )"#;
 
 const CTE_PARTNER_OAUTH: &str = r#", partner_oauth AS (
-    SELECT partner_login, scopes, needs_reauth, raid_enabled, authorized_at
+    SELECT partner_login, scopes, needs_reauth, raid_enabled, authorized_at, partner_since
     FROM (
-        SELECT s.twitch_login AS partner_login, a.scopes, a.needs_reauth, a.raid_enabled, a.authorized_at,
+        SELECT s.twitch_login AS partner_login, a.scopes, a.needs_reauth, a.raid_enabled,
+            a.authorized_at, a.created_at AS partner_since,
             ROW_NUMBER() OVER (
                 PARTITION BY LOWER(s.twitch_login)
                 ORDER BY
@@ -467,7 +470,7 @@ SELECT
     COALESCE(s.is_verified, 0) AS is_verified, COALESCE(s.is_partner_active, 0) AS is_partner_active,
     COALESCE(pls.is_live, 0) AS is_live, pls.last_seen_at, pls.last_viewer_count,
     pls.active_session_id, pls.last_game, lss.last_stream_at,
-    po.scopes, po.needs_reauth, po.authorized_at,
+    po.scopes, po.needs_reauth, po.authorized_at, po.partner_since,
     sp.promo_disabled, sp.promo_message, sp.raid_boost_enabled,
     sp.manual_plan_id, sp.manual_plan_expires_at, sp.manual_plan_notes,
     lb.plan_id AS billing_plan_id, lb.status AS billing_status, lb.updated_at AS billing_updated_at,
@@ -689,7 +692,8 @@ mod tests {
                 scopes          TEXT,
                 needs_reauth    BOOLEAN NOT NULL DEFAULT FALSE,
                 raid_enabled    BOOLEAN NOT NULL DEFAULT TRUE,
-                authorized_at   TIMESTAMPTZ
+                authorized_at   TIMESTAMPTZ,
+                created_at      TIMESTAMPTZ NOT NULL DEFAULT NOW()
             )
         "#,
         )
@@ -942,8 +946,9 @@ mod tests {
         .expect("insert partner");
         sqlx::query(
             "INSERT INTO twitch_raid_auth \
-             (twitch_login, twitch_user_id, scopes, needs_reauth, raid_enabled, authorized_at) \
-             VALUES ('booloauth', '42', 'bits:read', TRUE, FALSE, '2026-06-29T12:00:00+00')",
+             (twitch_login, twitch_user_id, scopes, needs_reauth, raid_enabled, authorized_at, created_at) \
+             VALUES ('booloauth', '42', 'bits:read', TRUE, FALSE, \
+                     '2026-06-29T12:00:00+00', '2025-04-03T08:30:00+00')",
         )
         .execute(&pool)
         .await
@@ -973,6 +978,10 @@ mod tests {
         assert_eq!(
             rows[0].authorized_at.as_ref().map(|dt| dt.to_rfc3339()),
             Some("2026-06-29T12:00:00+00:00".to_string())
+        );
+        assert_eq!(
+            rows[0].partner_since.as_ref().map(|dt| dt.to_rfc3339()),
+            Some("2025-04-03T08:30:00+00:00".to_string())
         );
         assert_eq!(
             rows[0].manual_plan_expires_at.as_deref(),

@@ -39,6 +39,20 @@ struct ResearchResponse {
 }
 
 #[derive(Serialize)]
+struct ResearchSuggestionsResponse {
+    days: i64,
+    baseline: Baseline,
+    items: Vec<ResearchSuggestion>,
+}
+
+#[derive(Serialize)]
+struct ResearchSuggestion {
+    login: String,
+    subject: SubjectMetrics,
+    score: Score,
+}
+
+#[derive(Serialize)]
 struct SubjectMetrics {
     sessions_count: usize,
     total_hours: f64,
@@ -116,6 +130,70 @@ struct Tier {
 type SubjectTick = (DateTime<Utc>, i32, Option<String>, Option<String>);
 type PartnerAggregate = (String, f64, f64, i64);
 
+#[derive(sqlx::FromRow)]
+struct SuggestionAggregate {
+    login: String,
+    sessions_count: i64,
+    total_hours: f64,
+    active_days: i64,
+    avg_viewers: f64,
+    median_viewers: f64,
+    peak_viewers: i32,
+    sample_count: i64,
+    last_seen: DateTime<Utc>,
+    dominant_language: Option<String>,
+    de_share: f64,
+}
+
+const PARTNER_BASELINE_SQL: &str = r#"WITH partner_ticks AS (
+       SELECT LOWER(streamer) AS streamer, ts_utc, viewer_count,
+              LAG(ts_utc) OVER (PARTITION BY LOWER(streamer) ORDER BY ts_utc) AS previous_ts
+       FROM twitch_stats_category
+       WHERE ts_utc >= $1 AND is_partner = TRUE
+   )
+   SELECT streamer,
+          AVG(viewer_count)::float8 AS avg_viewers,
+          (SUM(CASE
+              WHEN previous_ts IS NULL OR ts_utc - previous_ts > INTERVAL '30 minutes' THEN 0
+              ELSE LEAST(EXTRACT(EPOCH FROM (ts_utc - previous_ts)), 1800)
+          END)::float8 / 3600.0) AS total_hours,
+          COUNT(DISTINCT (ts_utc AT TIME ZONE 'UTC')::date)::bigint AS active_days
+   FROM partner_ticks
+   GROUP BY streamer
+   ORDER BY streamer"#;
+
+const SUGGESTIONS_SQL: &str = r#"WITH candidate_ticks AS (
+       SELECT LOWER(s.streamer) AS login, s.ts_utc, s.viewer_count, s.language,
+              LAG(s.ts_utc) OVER (
+                  PARTITION BY LOWER(s.streamer) ORDER BY s.ts_utc
+              ) AS previous_ts
+       FROM twitch_stats_category s
+       WHERE s.ts_utc >= $1
+         AND s.is_partner = FALSE
+         AND NOT EXISTS (
+             SELECT 1 FROM twitch_partners p
+             WHERE LOWER(p.twitch_login) = LOWER(s.streamer)
+         )
+   )
+   SELECT login,
+          COUNT(*) FILTER (
+              WHERE previous_ts IS NULL OR ts_utc - previous_ts > INTERVAL '30 minutes'
+          )::bigint AS sessions_count,
+          (SUM(CASE
+              WHEN previous_ts IS NULL OR ts_utc - previous_ts > INTERVAL '30 minutes' THEN 0
+              ELSE LEAST(EXTRACT(EPOCH FROM (ts_utc - previous_ts)), 1800)
+          END)::float8 / 3600.0) AS total_hours,
+          COUNT(DISTINCT (ts_utc AT TIME ZONE 'UTC')::date)::bigint AS active_days,
+          AVG(viewer_count)::float8 AS avg_viewers,
+          PERCENTILE_CONT(0.5) WITHIN GROUP (ORDER BY viewer_count)::float8 AS median_viewers,
+          MAX(viewer_count)::int4 AS peak_viewers,
+          COUNT(*)::bigint AS sample_count,
+          MAX(ts_utc) AS last_seen,
+          MODE() WITHIN GROUP (ORDER BY NULLIF(LOWER(TRIM(language)), '')) AS dominant_language,
+          AVG(CASE WHEN LOWER(TRIM(COALESCE(language, ''))) = 'de' THEN 1.0 ELSE 0.0 END)::float8 AS de_share
+   FROM candidate_ticks
+   GROUP BY login"#;
+
 fn valid_login(login: &str) -> bool {
     (1..=25).contains(&login.len())
         && login
@@ -140,6 +218,37 @@ fn distribution(mut values: Vec<f64>) -> Distribution {
         p25: quantile(&values, 0.25),
         p75: quantile(&values, 0.75),
     }
+}
+
+fn baseline_from(partners: &[PartnerAggregate]) -> Baseline {
+    Baseline {
+        partner_count: partners.len(),
+        avg_viewers: distribution(partners.iter().map(|row| row.1).collect()),
+        total_hours: distribution(partners.iter().map(|row| row.2).collect()),
+        active_days: distribution(partners.iter().map(|row| row.3 as f64).collect()),
+    }
+}
+
+fn parse_days(params: &ResearchQuery) -> Result<i64, Box<Response>> {
+    let days = parse_bounded_query_int(params.days.as_deref(), "days", 30, 7, 90)
+        .map_err(|error| Box::new(error.into_response()))?;
+    if params
+        .days
+        .as_deref()
+        .map(str::trim)
+        .filter(|raw| !raw.is_empty())
+        .and_then(|raw| raw.parse::<i64>().ok())
+        .is_some_and(|raw| !(7..=90).contains(&raw))
+    {
+        return Err(Box::new(
+            (
+                StatusCode::BAD_REQUEST,
+                Json(json!({"error": "days must be between 7 and 90"})),
+            )
+                .into_response(),
+        ));
+    }
+    Ok(days)
 }
 
 fn aggregate_subject(ticks: &[SubjectTick]) -> SubjectMetrics {
@@ -306,24 +415,10 @@ pub async fn handler(
         return err.into_response();
     }
 
-    let days = match parse_bounded_query_int(params.days.as_deref(), "days", 30, 7, 90) {
+    let days = match parse_days(&params) {
         Ok(days) => days,
-        Err(error) => return error.into_response(),
+        Err(response) => return *response,
     };
-    if params
-        .days
-        .as_deref()
-        .map(str::trim)
-        .filter(|raw| !raw.is_empty())
-        .and_then(|raw| raw.parse::<i64>().ok())
-        .is_some_and(|raw| !(7..=90).contains(&raw))
-    {
-        return (
-            StatusCode::BAD_REQUEST,
-            Json(json!({"error": "days must be between 7 and 90"})),
-        )
-            .into_response();
-    }
 
     let login = raw_login.trim().to_lowercase();
     if !valid_login(&login) {
@@ -350,26 +445,9 @@ pub async fn handler(
     // (bot/monitoring/monitoring.py) ist seit dem Twitch-Cutover außer
     // Betrieb; sein `stream.get("is_partner")` ist tote Altlast. Live-Check
     // 2026-07-11: 26 Partner-Streamer mit is_partner-Ticks in 30 Tagen.
-    let baseline_query = sqlx::query_as::<_, PartnerAggregate>(
-        r#"WITH partner_ticks AS (
-               SELECT LOWER(streamer) AS streamer, ts_utc, viewer_count,
-                      LAG(ts_utc) OVER (PARTITION BY LOWER(streamer) ORDER BY ts_utc) AS previous_ts
-               FROM twitch_stats_category
-               WHERE ts_utc >= $1 AND is_partner = TRUE
-           )
-           SELECT streamer,
-                  AVG(viewer_count)::float8 AS avg_viewers,
-                  (SUM(CASE
-                      WHEN previous_ts IS NULL OR ts_utc - previous_ts > INTERVAL '30 minutes' THEN 0
-                      ELSE LEAST(EXTRACT(EPOCH FROM (ts_utc - previous_ts)), 1800)
-                  END)::float8 / 3600.0) AS total_hours,
-                  COUNT(DISTINCT (ts_utc AT TIME ZONE 'UTC')::date)::bigint AS active_days
-           FROM partner_ticks
-           GROUP BY streamer
-           ORDER BY streamer"#,
-    )
-    .bind(since)
-    .fetch_all(&pool);
+    let baseline_query = sqlx::query_as::<_, PartnerAggregate>(PARTNER_BASELINE_SQL)
+        .bind(since)
+        .fetch_all(&pool);
     let partner_query = sqlx::query_as::<_, (Option<String>,)>(
         "SELECT status FROM twitch_partners WHERE LOWER(twitch_login) = $1 LIMIT 1",
     )
@@ -382,12 +460,7 @@ pub async fn handler(
             Err(error) => return internal_error(error),
         };
     let subject = aggregate_subject(&ticks);
-    let baseline = Baseline {
-        partner_count: partners.len(),
-        avg_viewers: distribution(partners.iter().map(|row| row.1).collect()),
-        total_hours: distribution(partners.iter().map(|row| row.2).collect()),
-        active_days: distribution(partners.iter().map(|row| row.3 as f64).collect()),
-    };
+    let baseline = baseline_from(&partners);
     let score = build_score(&subject, &partners);
     let is_already_partner = partner_row.is_some();
     let partner_status = partner_row.and_then(|row| row.0);
@@ -401,6 +474,80 @@ pub async fn handler(
         subject,
         baseline,
         score,
+    })
+    .into_response()
+}
+
+/// `GET /twitch/api/admin/research/suggestions?days=30`
+pub async fn suggestions_handler(
+    auth: DashboardAuthLevel,
+    State(pool): State<PgPool>,
+    Query(params): Query<ResearchQuery>,
+) -> Response {
+    if let Some(err) = crate::auth::require_admin(&auth) {
+        return err.into_response();
+    }
+
+    let days = match parse_days(&params) {
+        Ok(days) => days,
+        Err(response) => return *response,
+    };
+    let since = Utc::now() - Duration::days(days);
+    let candidates_query = sqlx::query_as::<_, SuggestionAggregate>(SUGGESTIONS_SQL)
+        .bind(since)
+        .fetch_all(&pool);
+    let baseline_query = sqlx::query_as::<_, PartnerAggregate>(PARTNER_BASELINE_SQL)
+        .bind(since)
+        .fetch_all(&pool);
+    let (candidates, partners) = match tokio::try_join!(candidates_query, baseline_query) {
+        Ok(result) => result,
+        Err(error) => return internal_error(error),
+    };
+
+    let baseline = baseline_from(&partners);
+    let mut items: Vec<ResearchSuggestion> = candidates
+        .into_iter()
+        .map(|candidate| {
+            let subject = SubjectMetrics {
+                sessions_count: usize::try_from(candidate.sessions_count).unwrap_or_default(),
+                total_hours: candidate.total_hours,
+                active_days: usize::try_from(candidate.active_days).unwrap_or_default(),
+                avg_viewers: candidate.avg_viewers,
+                median_viewers: candidate.median_viewers,
+                peak_viewers: candidate.peak_viewers,
+                sample_count: usize::try_from(candidate.sample_count).unwrap_or_default(),
+                last_seen: Some(candidate.last_seen),
+                dominant_language: candidate.dominant_language,
+                de_share: candidate.de_share,
+                recent_titles: Vec::new(),
+            };
+            let score = build_score(&subject, &partners);
+            ResearchSuggestion {
+                login: candidate.login,
+                subject,
+                score,
+            }
+        })
+        .collect();
+    items.sort_by(|left, right| {
+        right
+            .score
+            .total
+            .cmp(&left.score.total)
+            .then_with(|| {
+                right
+                    .subject
+                    .avg_viewers
+                    .total_cmp(&left.subject.avg_viewers)
+            })
+            .then_with(|| left.login.cmp(&right.login))
+    });
+    items.truncate(12);
+
+    Json(ResearchSuggestionsResponse {
+        days,
+        baseline,
+        items,
     })
     .into_response()
 }
@@ -468,6 +615,26 @@ mod tests {
             auth,
             State(pool),
             Path(login.into()),
+            Query(ResearchQuery {
+                days: days.map(str::to_owned),
+            }),
+        )
+        .await;
+        let status = response.status();
+        let body = axum::body::to_bytes(response.into_body(), 64 * 1024)
+            .await
+            .expect("body");
+        (status, serde_json::from_slice(&body).expect("json"))
+    }
+
+    async fn suggestions_request(
+        auth: DashboardAuthLevel,
+        pool: PgPool,
+        days: Option<&str>,
+    ) -> (StatusCode, Value) {
+        let response = suggestions_handler(
+            auth,
+            State(pool),
             Query(ResearchQuery {
                 days: days.map(str::to_owned),
             }),
@@ -592,6 +759,51 @@ mod tests {
             high["score"]["components"]["viewers"]["percentile"].as_i64()
                 > low["score"]["components"]["viewers"]["percentile"].as_i64()
         );
+    }
+
+    #[tokio::test]
+    async fn suggestions_rank_non_partners_and_exclude_existing_partners() {
+        let Some(pool) = pool_or_skip("admin_research_suggestions").await else {
+            return;
+        };
+        insert_baseline(&pool).await;
+        sqlx::query(
+            "INSERT INTO twitch_partners (twitch_login, status) VALUES ('known', 'active')",
+        )
+        .execute(&pool)
+        .await
+        .expect("insert existing partner");
+        sqlx::query(
+            r#"INSERT INTO twitch_stats_category
+                (ts_utc, streamer, viewer_count, stream_title, language)
+            VALUES
+                (NOW() - INTERVAL '2 hours', 'low',   5, 'Low',   'de'),
+                (NOW() - INTERVAL '1 hour',  'low',  10, 'Low',   'de'),
+                (NOW() - INTERVAL '2 hours', 'high', 80, 'High',  'de'),
+                (NOW() - INTERVAL '1 hour',  'high', 90, 'High',  'de'),
+                (NOW() - INTERVAL '1 hour',  'known', 999, 'Known', 'de')"#,
+        )
+        .execute(&pool)
+        .await
+        .expect("insert candidates");
+
+        let (status, body) =
+            suggestions_request(DashboardAuthLevel::admin(), pool, Some("30")).await;
+
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(body["days"], 30);
+        assert_eq!(body["items"].as_array().expect("items").len(), 2);
+        assert_eq!(body["items"][0]["login"], "high");
+        assert_eq!(body["items"][1]["login"], "low");
+        assert!(
+            body["items"][0]["score"]["total"].as_i64()
+                > body["items"][1]["score"]["total"].as_i64()
+        );
+        assert!(body["items"]
+            .as_array()
+            .expect("items")
+            .iter()
+            .all(|item| item["login"] != "known"));
     }
 
     #[tokio::test]

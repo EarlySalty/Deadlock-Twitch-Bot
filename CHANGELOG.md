@@ -1,10 +1,18 @@
-## #356 — Ein Login gilt in beiden Admin-Dashboards
+## #357 — Ein Login gilt in beiden Admin-Dashboards
 
 **Problem:** Discord- und Twitch-Admin-Dashboard überschrieben sich gegenseitig mit getrennten Sitzungen; im Twitch-Dashboard fehlte dadurch zusätzlich der CSRF-Token.
 
 **Änderung:** Beide Dashboards prüfen und widerrufen jetzt dieselbe zentrale Admin-Sitzung, während Twitch den dazugehörigen CSRF-Token direkt aus dieser Sitzung liefert.
 
 **Aktuelles Verhalten:** Ein Login funktioniert in beiden Admin-Dashboards, ein Logout beendet beide, und Admin-Aktionen benötigen keine versteckte alte HTML-Seite mehr.
+
+## #356 — Admin-Daten zeigen wieder den echten Betriebszustand
+
+**Problem:** Bei Streamern fehlte der Zeitpunkt ihrer ersten Bot-Autorisierung, die Research-Seite lieferte keine Onboarding-Ideen und EventSub sowie Audit Log wirkten trotz laufendem System leer oder veraltet.
+
+**Änderung:** Die Streamer-Tabelle zeigt und filtert jetzt „Partner seit“ anhand der ersten Autorisierung, Research schlägt passende noch nicht onboardete Deadlock-Streamer vor, EventSub wertet die aktuellen Webhook-Snapshots aus und erfolgreiche Admin-Änderungen werden dauerhaft protokolliert.
+
+**Aktuelles Verhalten:** Neue Kandidaten lassen sich direkt analysieren, der EventSub-Status unterscheidet aktuelle und veraltete Snapshots, und das Audit Log füllt sich ab jetzt automatisch mit Zeitpunkt, Akteur, Aktion und Ziel.
 
 ## #355 — Raid-Hinweis verlinkt den Zielkanal wieder richtig
 
