@@ -629,6 +629,59 @@ impl DashboardAuthState {
         })
     }
 
+    /// Spiegelt eine vom zentralen Discord-Dashboard validierte Admin-Session.
+    pub async fn import_central_admin_session(
+        &self,
+        session_id: &str,
+        user_id: &str,
+        username: &str,
+        display_name: &str,
+        expires_at: f64,
+    ) -> Result<SessionCreation, sqlx::Error> {
+        let now = unix_now() as f64;
+        let expires_at = expires_at.min(now + ADMIN_SESSION_TTL_SECS as f64);
+        let csrf_token = tb_crypto::random_urlsafe_token(SESSION_ID_BYTES);
+        let payload = serde_json::json!({
+            "auth_type": "discord_admin",
+            "user_id": user_id.trim(),
+            "username": username.trim(),
+            "display_name": display_name.trim(),
+            "reason": "discord_dashboard",
+            "source": "discord_dashboard",
+            "csrf_token": csrf_token,
+            "created_at": now,
+            "last_seen_at": now,
+            "expires_at": expires_at,
+            "client_ip": "",
+            "passive_fp": "",
+            "fp_pending": false,
+            "js_fp": "discord_validated",
+        });
+
+        self.persist_new_session(session_id, "discord_admin", &payload, now, expires_at)
+            .await?;
+        self.admin_cache.lock().await.entries.remove(session_id);
+
+        Ok(SessionCreation {
+            session_id: session_id.to_string(),
+            csrf_token,
+        })
+    }
+
+    /// Liefert den CSRF-Token einer gültigen lokalen Admin-Session.
+    pub async fn admin_csrf_token(&self, session_id: &str) -> Result<Option<String>, sqlx::Error> {
+        Ok(self
+            .fetch_session_payload(session_id, "discord_admin", unix_now())
+            .await?
+            .and_then(|payload| {
+                payload
+                    .get("csrf_token")
+                    .and_then(serde_json::Value::as_str)
+                    .filter(|token| !token.is_empty())
+                    .map(str::to_string)
+            }))
+    }
+
     /// Legt eine neue native Discord-Admin-Session an (Python
     /// `discord_auth_complete`, auth_mixin.py:1584-1648).
     ///
@@ -2428,6 +2481,31 @@ print(f.encrypt(payload.encode()).decode(), end='')
             .load_admin_session("nicht-existent-session-id-xyz")
             .await;
         assert!(matches!(result, Ok(None)));
+    }
+
+    #[tokio::test]
+    async fn import_central_admin_session_behaelt_id_und_erzeugt_csrf() {
+        let Some(pool) = maybe_pool().await else {
+            return;
+        };
+        ensure_sessions_table(&pool).await;
+        let state = DashboardAuthState::new(pool, test_fernet_key());
+
+        let mirrored = state
+            .import_central_admin_session("central-id", "42", "admin", "Admin", 9_999_999_999.0)
+            .await
+            .unwrap();
+
+        assert_eq!(mirrored.session_id, "central-id");
+        assert!(!mirrored.csrf_token.is_empty());
+        assert_eq!(
+            state
+                .admin_csrf_token("central-id")
+                .await
+                .unwrap()
+                .as_deref(),
+            Some(mirrored.csrf_token.as_str())
+        );
     }
 
     #[tokio::test]

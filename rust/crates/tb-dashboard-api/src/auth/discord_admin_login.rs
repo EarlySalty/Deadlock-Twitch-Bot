@@ -11,7 +11,10 @@
 //! `POST /internal/v1/discord/initiate` und
 //! `POST /internal/v1/discord/consume-result`.
 
-use std::{sync::Arc, time::Duration};
+use std::{
+    sync::Arc,
+    time::{Duration, SystemTime, UNIX_EPOCH},
+};
 
 use async_trait::async_trait;
 use axum::{
@@ -34,6 +37,9 @@ const DEFAULT_DASHBOARD_MODERATOR_ROLE_ID: u64 = 1_337_518_124_647_579_661;
 const BROKER_BASE_URL: &str = "http://127.0.0.1:8766";
 const BROKER_INITIATE_PATH: &str = "/internal/v1/discord/initiate";
 const BROKER_CONSUME_PATH: &str = "/internal/v1/discord/consume-result";
+const BROKER_VALIDATE_SESSION_PATH: &str = "/internal/twitch/v1/discord/validate-session";
+const BROKER_IMPORT_SESSION_PATH: &str = "/internal/twitch/v1/discord/import-session";
+const BROKER_REVOKE_SESSION_PATH: &str = "/internal/twitch/v1/discord/revoke-session";
 const BROKER_TOKEN_HEADER: &str = "X-Internal-Token";
 const BROKER_TIMEOUT: Duration = Duration::from_secs(20);
 const FINGERPRINT_PATH: &str = "/twitch/auth/fingerprint";
@@ -79,6 +85,14 @@ pub struct DiscordAdminSession {
     pub service_metadata: Value,
 }
 
+#[derive(Debug, Clone, PartialEq)]
+pub struct ValidatedAdminSession {
+    pub user_id: u64,
+    pub username: String,
+    pub display_name: String,
+    pub expires_at: f64,
+}
+
 #[derive(Debug, Clone)]
 pub struct DiscordAdminOAuthError;
 
@@ -104,6 +118,19 @@ pub trait DiscordAdminOAuthClient: Send + Sync {
         &self,
         state_id: &str,
     ) -> Result<DiscordAdminSession, DiscordAdminOAuthError>;
+
+    async fn validate_session(
+        &self,
+        session_id: &str,
+    ) -> Result<ValidatedAdminSession, DiscordAdminOAuthError>;
+
+    async fn import_session(
+        &self,
+        session_id: &str,
+        session: &ValidatedAdminSession,
+    ) -> Result<(), DiscordAdminOAuthError>;
+
+    async fn revoke_session(&self, session_id: &str) -> Result<(), DiscordAdminOAuthError>;
 }
 
 #[derive(Clone)]
@@ -203,6 +230,85 @@ impl DiscordAdminOAuthClient for BrokerDiscordAdminOAuthClient {
             .post(BROKER_CONSUME_PATH, &json!({ "state_id": state_id }))
             .await?;
         parse_discord_admin_session(data).ok_or(DiscordAdminOAuthError)
+    }
+
+    async fn validate_session(
+        &self,
+        session_id: &str,
+    ) -> Result<ValidatedAdminSession, DiscordAdminOAuthError> {
+        let data = self
+            .post(
+                BROKER_VALIDATE_SESSION_PATH,
+                &json!({ "session_id": session_id }),
+            )
+            .await?;
+        if data.get("valid").and_then(Value::as_bool) != Some(true) {
+            return Err(DiscordAdminOAuthError);
+        }
+        let user_id = data
+            .get("user_id")
+            .and_then(|value| {
+                value
+                    .as_u64()
+                    .or_else(|| value.as_str()?.trim().parse::<u64>().ok())
+            })
+            .ok_or(DiscordAdminOAuthError)?;
+        let username = data
+            .get("username")
+            .and_then(Value::as_str)
+            .unwrap_or_default()
+            .trim()
+            .to_string();
+        let display_name = data
+            .get("display_name")
+            .and_then(Value::as_str)
+            .unwrap_or(&username)
+            .trim()
+            .to_string();
+        let expires_at = data
+            .get("expires_at")
+            .and_then(Value::as_f64)
+            .ok_or(DiscordAdminOAuthError)?;
+        Ok(ValidatedAdminSession {
+            user_id,
+            username,
+            display_name,
+            expires_at,
+        })
+    }
+
+    async fn import_session(
+        &self,
+        session_id: &str,
+        session: &ValidatedAdminSession,
+    ) -> Result<(), DiscordAdminOAuthError> {
+        let data = self
+            .post(
+                BROKER_IMPORT_SESSION_PATH,
+                &json!({
+                    "session_id": session_id,
+                    "user_id": session.user_id.to_string(),
+                    "username": session.username,
+                    "display_name": session.display_name,
+                    "expires_at": session.expires_at,
+                }),
+            )
+            .await?;
+        (data.get("ok").and_then(Value::as_bool) == Some(true))
+            .then_some(())
+            .ok_or(DiscordAdminOAuthError)
+    }
+
+    async fn revoke_session(&self, session_id: &str) -> Result<(), DiscordAdminOAuthError> {
+        let data = self
+            .post(
+                BROKER_REVOKE_SESSION_PATH,
+                &json!({ "session_id": session_id }),
+            )
+            .await?;
+        (data.get("ok").and_then(Value::as_bool) == Some(true))
+            .then_some(())
+            .ok_or(DiscordAdminOAuthError)
     }
 }
 
@@ -442,6 +548,29 @@ pub async fn complete_handler(
         }
     };
 
+    let central_session = ValidatedAdminSession {
+        user_id,
+        username: username.to_string(),
+        display_name: display_name.clone(),
+        expires_at: SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_secs_f64()
+            + ADMIN_SESSION_TTL_SECS as f64,
+    };
+    if config
+        .client
+        .import_session(&created.session_id, &central_session)
+        .await
+        .is_err()
+    {
+        state.invalidate_session(&created.session_id).await;
+        return no_store((
+            StatusCode::SERVICE_UNAVAILABLE,
+            "Die gemeinsame Admin-Session konnte nicht synchronisiert werden.",
+        ).into_response());
+    }
+
     tracing::info!(
         user_id = %user_id,
         reason = reason,
@@ -462,8 +591,14 @@ pub async fn logout_handler(
         .as_ref()
         .and_then(|c| c.0.cookie_domain.clone())
         .or_else(shared_admin_cookie_domain_from_env);
-    if let Some(Extension(state)) = state {
-        if let Some(session_id) = cookie_from_headers(&headers, ADMIN_COOKIE_NAME) {
+    let session_id = cookie_from_headers(&headers, ADMIN_COOKIE_NAME);
+    if let Some(session_id) = session_id {
+        if let Some(Extension(config)) = config.as_ref() {
+            if config.client.revoke_session(&session_id).await.is_err() {
+                tracing::warn!("Zentrale Admin-Session konnte beim Logout nicht widerrufen werden");
+            }
+        }
+        if let Some(Extension(state)) = state {
             state.invalidate_session(&session_id).await;
         }
     }
@@ -1049,6 +1184,8 @@ mod tests {
     struct FakeDiscordClient {
         authorize: DiscordAuthorize,
         sessions: Arc<Mutex<HashMap<String, DiscordAdminSession>>>,
+        imported: Arc<Mutex<Vec<String>>>,
+        revoked: Arc<Mutex<Vec<String>>>,
     }
 
     #[async_trait]
@@ -1077,6 +1214,27 @@ mod tests {
                 .remove(state_id)
                 .ok_or(DiscordAdminOAuthError)
         }
+
+        async fn validate_session(
+            &self,
+            _session_id: &str,
+        ) -> Result<ValidatedAdminSession, DiscordAdminOAuthError> {
+            Err(DiscordAdminOAuthError)
+        }
+
+        async fn import_session(
+            &self,
+            session_id: &str,
+            _session: &ValidatedAdminSession,
+        ) -> Result<(), DiscordAdminOAuthError> {
+            self.imported.lock().await.push(session_id.to_string());
+            Ok(())
+        }
+
+        async fn revoke_session(&self, session_id: &str) -> Result<(), DiscordAdminOAuthError> {
+            self.revoked.lock().await.push(session_id.to_string());
+            Ok(())
+        }
     }
 
     fn fake_client(entries: Vec<(&str, DiscordAdminSession)>) -> Arc<FakeDiscordClient> {
@@ -1090,6 +1248,8 @@ mod tests {
                 state_id: "broker-state".into(),
             },
             sessions: Arc::new(Mutex::new(sessions)),
+            imported: Arc::new(Mutex::new(Vec::new())),
+            revoked: Arc::new(Mutex::new(Vec::new())),
         })
     }
 
@@ -1447,10 +1607,11 @@ mod tests {
         ensure_sessions_table(&pool).await;
         let state = DashboardAuthState::new(pool, test_fernet_key());
         let roles = vec![DEFAULT_DASHBOARD_MODERATOR_ROLE_ID.to_string()];
-        let cfg = config(fake_client(vec![(
+        let client = fake_client(vec![(
             "admin",
             admin_session("/twitch/admin/legacy?tab=live", roles),
-        )]));
+        )]);
+        let cfg = config(client.clone());
 
         let response = complete_handler(
             Some(Extension(state.clone())),
@@ -1469,6 +1630,7 @@ mod tests {
         assert!(set_cookie.contains("Max-Age=1209600"));
 
         let sid = cookie_value(&response, ADMIN_COOKIE_NAME);
+        assert_eq!(client.imported.lock().await.as_slice(), std::slice::from_ref(&sid));
         let fp = state
             .load_admin_session_fingerprint(&sid)
             .await
@@ -1564,7 +1726,8 @@ mod tests {
             .await
             .unwrap();
         assert!(state.load_admin_session(&created.session_id).await.unwrap().is_some());
-        let cfg = config(fake_client(Vec::new()));
+        let client = fake_client(Vec::new());
+        let cfg = config(client.clone());
         let mut headers = HeaderMap::new();
         headers.insert(
             header::COOKIE,
@@ -1582,5 +1745,6 @@ mod tests {
         assert!(set_cookie.contains("Max-Age=0"));
         assert!(set_cookie.contains("Domain=deutsche-deadlock-community.de"));
         assert!(state.load_admin_session(&created.session_id).await.unwrap().is_none());
+        assert_eq!(client.revoked.lock().await.as_slice(), &[created.session_id]);
     }
 }
