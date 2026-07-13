@@ -1,9 +1,8 @@
 //! Discord-Notifier des Conversation-Scam-Guards (Sichtbarkeit + Revoke).
 //!
-//! Implementiert den tb-chat-Port [`ScamGuardNotifier`]: postet bei einem Ban,
-//! Timeout, Moderationsvorschlag oder sichtbaren Unsure-Verdacht ein deutsches
-//! Embed in den Aufsichts-Channel. Nur ausgeführte/vorgeschlagene Aktionen
-//! erhalten einen `scam_revoke`-`view_spec` für den „Rückgängig"-Button.
+//! Implementiert den tb-chat-Port [`ScamGuardNotifier`]: postet jedes Urteil als
+//! deutsches Embed in den Aufsichts-Channel. Nur ausgeführte/vorgeschlagene
+//! Aktionen erhalten einen `scam_revoke`-`view_spec` für den „Rückgängig"-Button.
 //!
 //! Sprache bewusst nur Deutsch (Entscheidung 2026-06-18: schlicht die
 //! MiniMax-Begründung zeigen, kein i18n-Layer).
@@ -18,6 +17,10 @@ use tb_transport_discord::{BrokerRelay, DiscordBackend, SendRichMessage};
 const COLOR_BAN: u32 = 0xE74C3C;
 /// Gelb — Moderationsvorschlag (kein automatischer Ban).
 const COLOR_SUGGEST: u32 = 0xF1C40F;
+/// Orange — Verdacht ohne Aktion.
+const COLOR_UNSURE: u32 = 0xE67E22;
+/// Grau — unauffällig, reine Protokollzeile.
+const COLOR_CLEAN: u32 = 0x95A5A6;
 
 struct ScamDiscordNotifier {
     backend: Arc<dyn DiscordBackend>,
@@ -27,11 +30,26 @@ struct ScamDiscordNotifier {
 #[async_trait]
 impl ScamGuardNotifier for ScamDiscordNotifier {
     async fn notify(&self, n: ScamNotification) {
-        let (icon, aktion, color) = match n.action_taken.as_str() {
-            "none" => ("⚠️", "PLATZHALTER_UNSURE_HINWEIS", COLOR_SUGGEST),
-            "suggested" => ("⚠️", "Moderationsvorschlag", COLOR_SUGGEST),
-            "timed_out" => ("🚨", "Stummgeschaltet (Timeout)", COLOR_BAN),
-            _ => ("🚨", "Gebannt", COLOR_BAN),
+        let (icon, aktion, color) = match (n.verdict.as_str(), n.action_taken.as_str()) {
+            (_, "banned") => ("🚨", "Gebannt", COLOR_BAN),
+            (_, "timed_out") => ("🚨", "Stummgeschaltet (Timeout)", COLOR_BAN),
+            (_, "ban_failed_no_mod") => (
+                "🚨",
+                "Ban nicht möglich, der Bot ist in diesem Kanal kein Mod",
+                COLOR_BAN,
+            ),
+            (_, "suggested") => (
+                "⚠️",
+                "Moderationsvorschlag, keine automatische Aktion",
+                COLOR_SUGGEST,
+            ),
+            ("clean", "none") => ("✅", "Unauffällig, keine Aktion", COLOR_CLEAN),
+            _ => ("🔍", "Verdacht beobachtet, keine Aktion", COLOR_UNSURE),
+        };
+        let urteil = match n.verdict.as_str() {
+            "scam" => "Betrug",
+            "clean" => "Unbedenklich",
+            _ => "Unklar",
         };
         let confidence_pct = (n.confidence * 100.0).round() as i64;
 
@@ -44,6 +62,7 @@ impl ScamGuardNotifier for ScamDiscordNotifier {
                 {"name": "Kategorie", "value": n.category, "inline": true},
                 {"name": "Konfidenz", "value": format!("{confidence_pct} %"), "inline": true},
                 {"name": "Aktion", "value": aktion, "inline": true},
+                {"name": "Urteil", "value": urteil, "inline": true},
             ],
         });
 
@@ -148,7 +167,7 @@ mod tests {
         }
     }
 
-    fn notification(action: &str) -> ScamNotification {
+    fn notification(verdict: &str, action: &str) -> ScamNotification {
         ScamNotification {
             verdict_id: 77,
             channel_login: "earlysalty".to_string(),
@@ -156,24 +175,25 @@ mod tests {
             category: "befriending_pivot".to_string(),
             reasoning: "Aufgesetzte Freundschafts-Masche mit Pivot zu Discord.".to_string(),
             confidence: 0.94,
+            verdict: verdict.to_string(),
             action_taken: action.to_string(),
         }
     }
 
-    async fn capture(action: &str) -> SendRichMessage {
+    async fn capture(verdict: &str, action: &str) -> SendRichMessage {
         let backend = Arc::new(CapturingBackend::default());
         let notifier = ScamDiscordNotifier {
             backend: backend.clone(),
             channel_id: 1374364800817303632,
         };
-        notifier.notify(notification(action)).await;
+        notifier.notify(notification(verdict, action)).await;
         let captured = backend.last.lock().unwrap().clone();
         captured.expect("kein Rich-Message-Post abgesetzt")
     }
 
     #[tokio::test]
     async fn ban_post_traegt_revoke_vertrag_und_minimax_begruendung() {
-        let p = capture("banned").await;
+        let p = capture("scam", "banned").await;
 
         assert_eq!(p.channel_id, 1374364800817303632);
         assert!(p.content.is_none(), "kein Plain-Content, nur Embed");
@@ -194,34 +214,67 @@ mod tests {
         );
         assert_eq!(p.embed["color"].as_u64(), Some(COLOR_BAN as u64));
         assert_eq!(p.embed["title"], "🚨 Scam-Wächter — sophiaa_star");
-        // Feld-Reihenfolge: Kanal, Kategorie, Konfidenz, Aktion.
+        // Feld-Reihenfolge: Kanal, Kategorie, Konfidenz, Aktion, Urteil.
         assert_eq!(p.embed["fields"][0]["value"], "earlysalty");
         assert_eq!(p.embed["fields"][1]["value"], "befriending_pivot");
         assert_eq!(p.embed["fields"][2]["value"], "94 %");
         assert_eq!(p.embed["fields"][3]["value"], "Gebannt");
+        assert_eq!(p.embed["fields"][4]["value"], "Betrug");
     }
 
     #[tokio::test]
     async fn vorschlag_post_ist_gelb_und_traegt_action_suggested() {
-        let p = capture("suggested").await;
+        let p = capture("scam", "suggested").await;
         assert_eq!(p.embed["color"].as_u64(), Some(COLOR_SUGGEST as u64));
-        assert_eq!(p.embed["fields"][3]["value"], "Moderationsvorschlag");
+        assert_eq!(
+            p.embed["fields"][3]["value"],
+            "Moderationsvorschlag, keine automatische Aktion"
+        );
+        assert_eq!(p.embed["fields"][4]["value"], "Betrug");
         assert_eq!(p.view_spec.unwrap()["action_taken"], "suggested");
     }
 
     #[tokio::test]
     async fn timeout_post_ist_rot_und_traegt_timeout_label() {
-        let p = capture("timed_out").await;
+        let p = capture("scam", "timed_out").await;
         assert_eq!(p.embed["color"].as_u64(), Some(COLOR_BAN as u64));
         assert_eq!(p.embed["fields"][3]["value"], "Stummgeschaltet (Timeout)");
+        assert_eq!(p.embed["fields"][4]["value"], "Betrug");
         assert_eq!(p.view_spec.unwrap()["action_taken"], "timed_out");
     }
 
     #[tokio::test]
     async fn unsure_post_zeigt_hinweis_ohne_revoke_button() {
-        let p = capture("none").await;
-        assert_eq!(p.embed["color"].as_u64(), Some(COLOR_SUGGEST as u64));
-        assert_eq!(p.embed["fields"][3]["value"], "PLATZHALTER_UNSURE_HINWEIS");
+        let p = capture("unsure", "none").await;
+        assert_eq!(p.embed["color"].as_u64(), Some(COLOR_UNSURE as u64));
+        assert_eq!(
+            p.embed["fields"][3]["value"],
+            "Verdacht beobachtet, keine Aktion"
+        );
+        assert_eq!(p.embed["fields"][4]["value"], "Unklar");
+        assert_eq!(p.embed["title"], "🔍 Scam-Wächter — sophiaa_star");
         assert!(p.view_spec.is_none());
+    }
+
+    #[tokio::test]
+    async fn clean_post_ist_grau_und_hat_keinen_revoke_button() {
+        let p = capture("clean", "none").await;
+        assert_eq!(p.embed["color"].as_u64(), Some(COLOR_CLEAN as u64));
+        assert_eq!(p.embed["fields"][3]["value"], "Unauffällig, keine Aktion");
+        assert_eq!(p.embed["fields"][4]["value"], "Unbedenklich");
+        assert_eq!(p.embed["title"], "✅ Scam-Wächter — sophiaa_star");
+        assert!(p.view_spec.is_none());
+    }
+
+    #[tokio::test]
+    async fn fehlgeschlagener_ban_wird_rot_mit_revoke_vertrag_gemeldet() {
+        let p = capture("scam", "ban_failed_no_mod").await;
+        assert_eq!(p.embed["color"].as_u64(), Some(COLOR_BAN as u64));
+        assert_eq!(
+            p.embed["fields"][3]["value"],
+            "Ban nicht möglich, der Bot ist in diesem Kanal kein Mod"
+        );
+        assert_eq!(p.embed["fields"][4]["value"], "Betrug");
+        assert_eq!(p.view_spec.unwrap()["action_taken"], "ban_failed_no_mod");
     }
 }

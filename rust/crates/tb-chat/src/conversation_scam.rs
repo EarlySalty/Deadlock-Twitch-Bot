@@ -581,6 +581,7 @@ pub struct ScamNotification {
     pub category: String,
     pub reasoning: String,
     pub confidence: f32,
+    pub verdict: String,
     pub action_taken: String,
 }
 
@@ -951,28 +952,18 @@ impl ConversationScamGuard {
             action_taken,
         };
         match self.store.persist_verdict(&record).await {
-            Ok(verdict_id) => self.maybe_notify(verdict_id, &record, &settings),
+            Ok(verdict_id) => self.notify_verdict(verdict_id, &record),
             Err(error) => warn!("Conversation-Scam-Verdict nicht persistiert: {error}"),
         }
         dialog.completed = completed;
     }
 
-    /// Postet Aktionen und ausreichend sichere Unsure-Verdachtsfälle
-    /// fire-and-forget in den Discord-Aufsichts-Feed. Ohne Notifier passiert
-    /// nichts.
-    fn maybe_notify(&self, verdict_id: i64, record: &VerdictRecord, settings: &GuardSettings) {
+    /// Postet jedes persistierte Urteil fire-and-forget in den
+    /// Discord-Aufsichts-Feed. Ohne Notifier passiert nichts.
+    fn notify_verdict(&self, verdict_id: i64, record: &VerdictRecord) {
         let Some(notifier) = &self.notifier else {
             return;
         };
-        let action_is_visible = matches!(
-            record.action_taken.as_str(),
-            "banned" | "timed_out" | "suggested"
-        );
-        let unsure_is_visible =
-            record.verdict == VerdictKind::Unsure && record.confidence >= settings.suggestion_floor;
-        if !action_is_visible && !unsure_is_visible {
-            return;
-        }
         let notifier = Arc::clone(notifier);
         let notification = ScamNotification {
             verdict_id,
@@ -981,6 +972,7 @@ impl ConversationScamGuard {
             category: record.category.clone(),
             reasoning: record.reasoning.clone(),
             confidence: record.confidence,
+            verdict: record.verdict.as_str().to_string(),
             action_taken: record.action_taken.clone(),
         };
         let handle = tokio::spawn(async move {
@@ -2395,6 +2387,7 @@ mod tests {
             "genau eine bestätigte Aktion → ein Discord-Post"
         );
         assert_eq!(seen[0].action_taken, "suggested");
+        assert_eq!(seen[0].verdict, "scam");
         assert_eq!(seen[0].verdict_id, 1);
         assert_eq!(seen[0].chatter_login, "sam_09995");
     }
@@ -2427,13 +2420,14 @@ mod tests {
         .expect("Unsure-Verdacht wurde nicht gemeldet");
         assert_eq!(store.records.lock().unwrap()[0].action_taken, "none");
         assert_eq!(seen.action_taken, "none");
+        assert_eq!(seen.verdict, "unsure");
         assert!(api.ban_reasons.lock().unwrap().is_empty());
         assert!(moderation.reasons.lock().unwrap().is_empty());
         assert!(moderation.timeout_reasons.lock().unwrap().is_empty());
     }
 
     #[tokio::test]
-    async fn unsure_unter_suggestion_floor_wird_nicht_gemeldet() {
+    async fn unsure_unter_suggestion_floor_wird_gemeldet() {
         let (guard, store, _, _, moderation) = build_guard(
             GuardSettings::default(),
             [verdict(VerdictKind::Unsure, 0.69)],
@@ -2448,14 +2442,25 @@ mod tests {
         )
         .await;
 
+        let seen = tokio::time::timeout(std::time::Duration::from_secs(1), async {
+            loop {
+                if let Some(notification) = notifier.seen.lock().unwrap().first().cloned() {
+                    break notification;
+                }
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .expect("Unsure unter suggestion_floor wurde nicht gemeldet");
         assert_eq!(store.records.lock().unwrap()[0].action_taken, "none");
-        assert!(notifier.seen.lock().unwrap().is_empty());
+        assert_eq!(seen.action_taken, "none");
+        assert_eq!(seen.verdict, "unsure");
         assert!(moderation.reasons.lock().unwrap().is_empty());
         assert!(moderation.timeout_reasons.lock().unwrap().is_empty());
     }
 
     #[tokio::test]
-    async fn clean_verdict_postet_nichts_nach_discord() {
+    async fn clean_verdict_wird_nach_discord_gemeldet() {
         let (guard, store, _, _, _) = build_guard(
             GuardSettings::default(),
             [verdict(VerdictKind::Clean, 0.98)],
@@ -2475,13 +2480,19 @@ mod tests {
         )
         .await;
 
-        // „none" spawnt erst gar keinen notify-Task — der Recorder ist
-        // deterministisch leer (kein Timing-Rennen).
+        let seen = tokio::time::timeout(std::time::Duration::from_secs(1), async {
+            loop {
+                if let Some(notification) = notifier.seen.lock().unwrap().first().cloned() {
+                    break notification;
+                }
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .expect("Clean-Urteil wurde nicht gemeldet");
         assert_eq!(store.records.lock().unwrap()[0].action_taken, "none");
-        assert!(
-            notifier.seen.lock().unwrap().is_empty(),
-            "ein sauberer Zuschauer darf nie im Discord-Feed landen"
-        );
+        assert_eq!(seen.action_taken, "none");
+        assert_eq!(seen.verdict, "clean");
     }
 
     #[tokio::test]
@@ -2603,6 +2614,8 @@ mod tests {
         let (guard, store, _, _, moderation) =
             build_guard(GuardSettings::default(), [verdict(VerdictKind::Scam, 0.97)]);
         *moderation.succeeds.lock().unwrap() = false;
+        let notifier = Arc::new(RecordingNotifier::default());
+        let guard = guard.with_notifier(Arc::clone(&notifier) as Arc<dyn ScamGuardNotifier>);
         feed(
             &guard,
             "forbidden_user",
@@ -2613,6 +2626,18 @@ mod tests {
             store.records.lock().unwrap()[0].action_taken,
             "ban_failed_no_mod"
         );
+        let seen = tokio::time::timeout(std::time::Duration::from_secs(1), async {
+            loop {
+                if let Some(notification) = notifier.seen.lock().unwrap().first().cloned() {
+                    break notification;
+                }
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .expect("Ban-Fehlschlag wurde nicht gemeldet");
+        assert_eq!(seen.action_taken, "ban_failed_no_mod");
+        assert_eq!(seen.verdict, "scam");
     }
 
     #[tokio::test]
