@@ -73,6 +73,7 @@ pub struct AdminStreamerItem {
     pub granted_scopes: Vec<String>,
     pub missing_scopes: Vec<String>,
     pub oauth_authorized_at: Option<String>,
+    pub partner_since: Option<String>,
     pub promo_disabled: bool,
     pub notes: Option<String>,
     pub technical_pause_reason: Option<String>,
@@ -287,6 +288,7 @@ pub async fn list_handler(
                 granted_scopes: snap.granted_scopes,
                 missing_scopes: snap.missing_scopes,
                 oauth_authorized_at: r.authorized_at.map(fmt_dt),
+                partner_since: r.partner_since.map(fmt_dt),
                 promo_disabled: r.promo_disabled.unwrap_or(0) != 0,
                 notes: r.manual_plan_notes, // Python: manual_plan_notes als notes
                 technical_pause_reason: r.technical_pause_reason,

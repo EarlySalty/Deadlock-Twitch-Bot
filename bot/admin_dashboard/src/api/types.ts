@@ -53,6 +53,7 @@ export interface StreamerRow {
   grantedScopes?: string[];
   missingScopes?: string[];
   oauthAuthorizedAt?: string | null;
+  partnerSince?: string | null;
   promoDisabled?: boolean;
   notes?: string;
   status?: string;
