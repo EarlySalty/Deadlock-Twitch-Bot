@@ -183,15 +183,15 @@ export function AnalyticsTab({ streamer, clips }: AnalyticsTabProps) {
                   <ResponsiveContainer width="100%" height="100%">
                     <BarChart data={analyticsRows}>
                       <CartesianGrid stroke="rgba(255,255,255,0.06)" vertical={false} />
-                      <XAxis dataKey="bucket" stroke="#96a0b5" tickLine={false} axisLine={false} />
-                      <YAxis stroke="#96a0b5" tickLine={false} axisLine={false} />
+                      <XAxis dataKey="bucket" stroke="var(--color-text-secondary)" tickLine={false} axisLine={false} />
+                      <YAxis stroke="var(--color-text-secondary)" tickLine={false} axisLine={false} />
                       <Tooltip
-                        contentStyle={{ background: '#0f1720', border: '1px solid rgba(255,255,255,0.08)', borderRadius: 16 }}
+                        contentStyle={{ background: 'var(--color-popover)', border: '1px solid var(--color-border)', borderRadius: 16 }}
                       />
                       <Legend />
-                      <Bar dataKey="youtube_views" name="YouTube" fill="#ff7a18" radius={[8, 8, 0, 0]} />
-                      <Bar dataKey="tiktok_views" name="TikTok" fill="#10b7ad" radius={[8, 8, 0, 0]} />
-                      <Bar dataKey="instagram_views" name="Instagram" fill="#ffb38a" radius={[8, 8, 0, 0]} />
+                      <Bar dataKey="youtube_views" name="YouTube" fill="#c8a86b" radius={[8, 8, 0, 0]} />
+                      <Bar dataKey="tiktok_views" name="TikTok" fill="#55978f" radius={[8, 8, 0, 0]} />
+                      <Bar dataKey="instagram_views" name="Instagram" fill="#dd6a4d" radius={[8, 8, 0, 0]} />
                     </BarChart>
                   </ResponsiveContainer>
                 </div>
@@ -205,16 +205,16 @@ export function AnalyticsTab({ streamer, clips }: AnalyticsTabProps) {
                   <ResponsiveContainer width="100%" height="100%">
                     <LineChart data={analyticsRows}>
                       <CartesianGrid stroke="rgba(255,255,255,0.06)" vertical={false} />
-                      <XAxis dataKey="bucket" stroke="#96a0b5" tickLine={false} axisLine={false} />
-                      <YAxis stroke="#96a0b5" tickLine={false} axisLine={false} />
+                      <XAxis dataKey="bucket" stroke="var(--color-text-secondary)" tickLine={false} axisLine={false} />
+                      <YAxis stroke="var(--color-text-secondary)" tickLine={false} axisLine={false} />
                       <Tooltip
                         formatter={(value) => (value == null ? '—' : `${Number(value).toFixed(2)}%`)}
-                        contentStyle={{ background: '#0f1720', border: '1px solid rgba(255,255,255,0.08)', borderRadius: 16 }}
+                        contentStyle={{ background: 'var(--color-popover)', border: '1px solid var(--color-border)', borderRadius: 16 }}
                       />
                       <Legend />
-                      <Line type="monotone" dataKey="youtube_er" name="YouTube" stroke="#ff7a18" strokeWidth={2.5} dot={{ r: 4 }} />
-                      <Line type="monotone" dataKey="tiktok_er" name="TikTok" stroke="#10b7ad" strokeWidth={2.5} dot={{ r: 4 }} />
-                      <Line type="monotone" dataKey="instagram_er" name="Instagram" stroke="#ffd0aa" strokeWidth={2.5} dot={{ r: 4 }} />
+                      <Line type="monotone" dataKey="youtube_er" name="YouTube" stroke="#c8a86b" strokeWidth={2.5} dot={{ r: 4 }} />
+                      <Line type="monotone" dataKey="tiktok_er" name="TikTok" stroke="#55978f" strokeWidth={2.5} dot={{ r: 4 }} />
+                      <Line type="monotone" dataKey="instagram_er" name="Instagram" stroke="#dd6a4d" strokeWidth={2.5} dot={{ r: 4 }} />
                     </LineChart>
                   </ResponsiveContainer>
                 </div>
@@ -303,7 +303,7 @@ export function AnalyticsTab({ streamer, clips }: AnalyticsTabProps) {
                 <div className="text-[11px] text-text-secondary">
                   Zeitraum: {formatDate(report.period_start)} bis {formatDate(report.period_end)}
                 </div>
-                <div className="rounded-xl border border-border bg-[#0d141d] p-3 max-h-[280px] overflow-auto">
+                <div className="rounded-xl border border-border bg-[var(--color-popover)] p-3 max-h-[280px] overflow-auto">
                   <pre className="whitespace-pre-wrap text-[12px] leading-6 text-slate-100 font-sans">
                     {report.content_md}
                   </pre>

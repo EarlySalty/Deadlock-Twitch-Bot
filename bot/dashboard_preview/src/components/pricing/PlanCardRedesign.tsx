@@ -11,7 +11,7 @@ interface PlanCardRedesignProps {
 const tierConfig = {
   free: {
     icon: Zap,
-    color: 'text-[#c1b3a7]',
+    color: 'text-[#b7aa91]',
     borderColor: 'border-border',
     gradient: '',
     badge: null,
@@ -19,19 +19,19 @@ const tierConfig = {
   },
   basic: {
     icon: Star,
-    color: 'text-[#ff7a18]',
-    borderColor: 'border-[#ff7a18]/40',
-    gradient: 'from-[#ff7a18]/8 to-transparent',
-    badge: { text: 'Beliebt', icon: Star, className: 'bg-[#ff7a18] text-white' },
-    ctaStyle: 'bg-[#ff7a18] hover:bg-[#ff8d39] text-white shadow-lg shadow-[#ff7a18]/15',
+    color: 'text-[#c8a86b]',
+    borderColor: 'border-[#c8a86b]/40',
+    gradient: 'from-[#c8a86b]/8 to-transparent',
+    badge: { text: 'Beliebt', icon: Star, className: 'bg-[#c8a86b] text-white' },
+    ctaStyle: 'bg-[#c8a86b] hover:bg-[#efd49d] text-white shadow-lg shadow-[#c8a86b]/15',
   },
   extended: {
     icon: Crown,
-    color: 'text-[#10b7ad]',
-    borderColor: 'border-[#10b7ad]/40',
-    gradient: 'from-[#10b7ad]/8 to-transparent',
-    badge: { text: 'Empfohlen', icon: Sparkles, className: 'bg-gradient-to-r from-[#2b6f6b] to-[#ff7a18] text-white' },
-    ctaStyle: 'bg-gradient-to-r from-[#2b6f6b] to-[#ff7a18] hover:opacity-90 text-white shadow-lg shadow-[#10b7ad]/14',
+    color: 'text-[#55978f]',
+    borderColor: 'border-[#55978f]/40',
+    gradient: 'from-[#55978f]/8 to-transparent',
+    badge: { text: 'Empfohlen', icon: Sparkles, className: 'bg-gradient-to-r from-[#55978f] to-[#c8a86b] text-white' },
+    ctaStyle: 'bg-gradient-to-r from-[#55978f] to-[#c8a86b] hover:opacity-90 text-white shadow-lg shadow-[#55978f]/14',
   },
 };
 
@@ -83,7 +83,7 @@ export default function PlanCardRedesign({ plan, index }: PlanCardRedesignProps)
   const isPopular = plan.id === 'raid_boost';
   const isRecommended = plan.tier === 'extended' && !isBundle;
   const badge = isBundle
-    ? { text: 'Bundle', icon: Sparkles, className: 'bg-gradient-to-r from-[#2b6f6b] to-[#d08a38] text-white' }
+    ? { text: 'Bundle', icon: Sparkles, className: 'bg-gradient-to-r from-[#55978f] to-[#e0912f] text-white' }
     : isPopular || isRecommended
     ? config.badge
     : null;
@@ -105,14 +105,14 @@ export default function PlanCardRedesign({ plan, index }: PlanCardRedesignProps)
       {/* Hover glow effect */}
       <div
         className={`absolute -inset-0.5 rounded-2xl opacity-0 group-hover:opacity-100 transition-opacity duration-300 blur-sm ${
-          isPopular ? 'bg-[#ff7a18]/14' : isRecommended ? 'bg-[#10b7ad]/14' : 'bg-white/8'
+          isPopular ? 'bg-[#c8a86b]/14' : isRecommended ? 'bg-[#55978f]/14' : 'bg-white/8'
         }`}
       />
 
       {/* Card */}
       <div
-        className={`relative h-full rounded-2xl border ${config.borderColor} bg-gradient-to-b ${config.gradient} bg-[#221a17] p-6 flex flex-col soft-elevate ${
-          isCurrent ? 'ring-2 ring-[#10b7ad]/35' : ''
+        className={`relative h-full rounded-2xl border ${config.borderColor} bg-gradient-to-b ${config.gradient} bg-[#241c11] p-6 flex flex-col soft-elevate ${
+          isCurrent ? 'ring-2 ring-[#55978f]/35' : ''
         }`}
       >
         {/* Popular/recommended/bundle badge */}
@@ -154,9 +154,9 @@ export default function PlanCardRedesign({ plan, index }: PlanCardRedesignProps)
               <Check
                 className={`w-4 h-4 mt-0.5 flex-shrink-0 ${
                   isRecommended || isBundle
-                    ? 'text-[#10b7ad]'
+                    ? 'text-[#55978f]'
                     : isPopular
-                    ? 'text-[#ff7a18]'
+                    ? 'text-[#c8a86b]'
                     : 'text-white/30'
                 }`}
               />
@@ -186,7 +186,7 @@ export default function PlanCardRedesign({ plan, index }: PlanCardRedesignProps)
         {/* Current plan indicator */}
         {isCurrent && (
           <div className="absolute top-4 right-4">
-            <div className="w-2 h-2 rounded-full bg-[#10b7ad]" />
+            <div className="w-2 h-2 rounded-full bg-[#55978f]" />
           </div>
         )}
       </div>

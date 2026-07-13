@@ -39,7 +39,7 @@ export function ScoreGauge({
             cx="50"
             cy="50"
             r="40"
-            stroke="rgba(194, 221, 240, 0.18)"
+            stroke="rgba(201, 168, 106, 0.24)"
             strokeWidth="8"
             fill="none"
           />

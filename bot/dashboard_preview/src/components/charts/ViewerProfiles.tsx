@@ -7,7 +7,7 @@ interface ViewerProfilesProps {
   data: ViewerProfilesData | undefined;
 }
 
-const PROFILE_COLORS = ['var(--color-primary)', 'var(--color-accent)', '#f5b642', '#2ecc71', 'var(--color-secondary)'];
+const PROFILE_COLORS = ['#c8a86b', '#55978f', '#dd6a4d', '#8f9e6b', '#b7aa91'];
 const PROFILE_LABELS: Record<string, string> = {
   exclusive: 'Exklusiv',
   loyalMulti: 'Treue Multi',
@@ -58,12 +58,12 @@ export function ViewerProfiles({ data }: ViewerProfilesProps) {
                 </Pie>
                 <Tooltip
                   contentStyle={{
-                    backgroundColor: '#1f2937',
-                    border: '1px solid rgba(194, 221, 240, 0.25)',
+                    backgroundColor: 'var(--color-popover)',
+                    border: '1px solid var(--color-border)',
                     borderRadius: '8px',
                   }}
-                  formatter={(value: number | string | undefined) => {
-                    const numericValue = typeof value === 'number' ? value : Number(value ?? 0);
+                  formatter={(value) => {
+                    const numericValue = Array.isArray(value) ? Number(value[0] ?? 0) : Number(value ?? 0);
                     return [numericValue, 'Zuschauer'];
                   }}
                 />
@@ -116,19 +116,19 @@ export function ViewerProfiles({ data }: ViewerProfilesProps) {
               <BarChart data={exclusivityDistribution}>
                 <XAxis
                   dataKey="streamerCount"
-                  stroke="#9ca3af"
+                  stroke="#b7aa91"
                   fontSize={12}
                   tickFormatter={(v: number) => `${v} Streamer`}
                 />
-                <YAxis stroke="#9ca3af" fontSize={12} />
+                <YAxis stroke="#b7aa91" fontSize={12} />
                 <Tooltip
                   contentStyle={{
-                    backgroundColor: '#1f2937',
-                    border: '1px solid rgba(194, 221, 240, 0.25)',
+                    backgroundColor: 'var(--color-popover)',
+                    border: '1px solid var(--color-border)',
                     borderRadius: '8px',
                   }}
-                  formatter={(value: number | string | undefined) => {
-                    const numericValue = typeof value === 'number' ? value : Number(value ?? 0);
+                  formatter={(value) => {
+                    const numericValue = Array.isArray(value) ? Number(value[0] ?? 0) : Number(value ?? 0);
                     return [numericValue, 'Zuschauer'];
                   }}
                   labelFormatter={(label: React.ReactNode, _payload) =>

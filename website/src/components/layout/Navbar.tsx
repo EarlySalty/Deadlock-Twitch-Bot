@@ -95,7 +95,7 @@ export function Navbar() {
             rel="noopener noreferrer"
             className="inline-flex items-center gap-2 whitespace-nowrap rounded-lg border border-[#5865F2]/50 bg-[#5865F2]/10 px-4 py-2 text-sm text-text-primary transition-colors duration-200 hover:border-[#5865F2] hover:bg-[#5865F2]/20"
           >
-            <DiscordLogo size={17} className="text-[#8b95ff]" />
+            <DiscordLogo size={17} className="text-[#5865f2]" />
             Community-Discord
           </a>
           <button
@@ -158,7 +158,7 @@ export function Navbar() {
                 className="inline-flex items-center justify-center gap-2 rounded-lg border border-[#5865F2]/50 bg-[#5865F2]/10 px-4 py-2 text-center text-sm text-text-primary transition-colors duration-200 hover:border-[#5865F2] hover:bg-[#5865F2]/20"
                 onClick={() => setMenuOpen(false)}
               >
-                <DiscordLogo size={17} className="text-[#8b95ff]" />
+                <DiscordLogo size={17} className="text-[#5865f2]" />
                 Community-Discord
               </a>
               <button

@@ -11,16 +11,16 @@ export default function TrialCallout() {
       className="relative mb-12"
     >
       {/* Animated border glow */}
-      <div className="absolute -inset-0.5 rounded-2xl bg-gradient-to-r from-[#06B6D4] via-[#6D4AE8] to-[#A855F7] opacity-28 blur-sm" />
-      <div className="absolute -inset-[1px] rounded-2xl bg-gradient-to-r from-[#20394d] via-[#2b3c67] to-[#41356c] opacity-90" />
+      <div className="absolute -inset-0.5 rounded-2xl bg-gradient-to-r from-[#c8a86b] via-[#55978f] to-[#55978f] opacity-28 blur-sm" />
+      <div className="absolute -inset-[1px] rounded-2xl bg-gradient-to-r from-[#2c2318] via-[#241c11] to-[#241c11] opacity-90" />
 
       {/* Main card */}
-      <div className="relative rounded-2xl bg-[#203545] p-6 md:p-8 border border-white/10">
+      <div className="relative rounded-2xl bg-[#2c2318] p-6 md:p-8 border border-white/10">
         <div className="flex flex-col md:flex-row items-center justify-between gap-6">
           {/* Left: Content */}
           <div className="flex items-center gap-4">
-            <div className="flex-shrink-0 w-14 h-14 rounded-xl bg-gradient-to-br from-[#06B6D4]/16 to-[#A855F7]/14 flex items-center justify-center border border-[#06B6D4]/22">
-              <Sparkles className="w-7 h-7 text-[#22d3ee]" />
+            <div className="flex-shrink-0 w-14 h-14 rounded-xl bg-gradient-to-br from-[#c8a86b]/16 to-[#55978f]/14 flex items-center justify-center border border-[#c8a86b]/22">
+              <Sparkles className="w-7 h-7 text-[#efd49d]" />
             </div>
             <div>
               <h3 className="text-xl font-bold text-white mb-1">
@@ -44,8 +44,8 @@ export default function TrialCallout() {
         </div>
 
         {/* Decorative elements */}
-        <div className="absolute top-0 right-0 w-32 h-32 bg-[#06B6D4]/6 rounded-full blur-3xl" />
-        <div className="absolute bottom-0 left-0 w-40 h-40 bg-[#A855F7]/5 rounded-full blur-3xl" />
+        <div className="absolute top-0 right-0 w-32 h-32 bg-[#c8a86b]/6 rounded-full blur-3xl" />
+        <div className="absolute bottom-0 left-0 w-40 h-40 bg-[#55978f]/5 rounded-full blur-3xl" />
       </div>
     </motion.div>
   );

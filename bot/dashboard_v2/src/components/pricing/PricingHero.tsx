@@ -8,7 +8,7 @@ type TrialState = 'idle' | 'loading' | 'granted' | 'already_used' | 'has_paid_pl
 async function startTrial(): Promise<TrialState> {
   try {
     // P1.45: Same-Origin-CSRF statt erzwungenem X-CSRF-Token-Header (auth-status
-    // liefert csrfToken:null → harter Header-Zwang erzeugte Prod-403, Vorfall #235).
+    // liefert csrfToken:null → harter Header-Zwang erzeugte Prod-403, Vorfall #241c11).
     // Same-Origin-Fetch (Browser sendet Origin/Referer) + same-site Session-Cookie
     // decken den CSRF-Vektor ab; X-Requested-With signalisiert einen XHR.
     const res = await fetch('/twitch/api/billing/trial/start', {
@@ -57,22 +57,22 @@ export default function PricingHero() {
   return (
     <section className="relative text-center mb-12 overflow-hidden">
       <div className="absolute inset-0 -z-10">
-        <div className="absolute inset-0 bg-gradient-to-b from-[#ff7a18]/10 via-transparent to-transparent" />
+        <div className="absolute inset-0 bg-gradient-to-b from-[#c8a86b]/10 via-transparent to-transparent" />
         <div
           className="absolute inset-0 opacity-30"
-          style={{ background: 'radial-gradient(ellipse 80% 50% at 50% 0%, rgba(255, 122, 24, 0.15), transparent 70%)' }}
+          style={{ background: 'radial-gradient(ellipse 80% 50% at 50% 0%, rgba(201, 168, 106, 0.15), transparent 70%)' }}
         />
       </div>
 
       <motion.div initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} transition={{ duration: 0.5 }}>
-        <div className="inline-flex items-center gap-2 px-4 py-1.5 rounded-full bg-[#ff7a18]/10 border border-[#ff7a18]/20 mb-6">
-          <Zap className="w-4 h-4 text-[#ff7a18]" />
-          <span className="text-sm font-medium text-[#ff7a18]">Dein Growth Coach für Twitch</span>
+        <div className="inline-flex items-center gap-2 px-4 py-1.5 rounded-full bg-[#c8a86b]/10 border border-[#c8a86b]/20 mb-6">
+          <Zap className="w-4 h-4 text-[#c8a86b]" />
+          <span className="text-sm font-medium text-[#c8a86b]">Dein Growth Coach für Twitch</span>
         </div>
 
         <h1 className="text-4xl md:text-5xl font-bold text-white mb-4 tracking-tight">
           Mehr Wachstum, mehr{' '}
-          <span className="text-transparent bg-clip-text bg-gradient-to-r from-[#ff7a18] to-[#10b7ad]">
+          <span className="text-transparent bg-clip-text bg-gradient-to-r from-[#c8a86b] to-[#55978f]">
             Insights
           </span>
         </h1>
@@ -84,11 +84,11 @@ export default function PricingHero() {
 
         <div className="flex flex-wrap justify-center gap-6 mb-8">
           <div className="flex items-center gap-2 text-white/50">
-            <TrendingUp className="w-5 h-5 text-[#10b7ad]" />
+            <TrendingUp className="w-5 h-5 text-[#55978f]" />
             <span>Tracke deinen Fortschritt</span>
           </div>
           <div className="flex items-center gap-2 text-white/50">
-            <Users className="w-5 h-5 text-[#10b7ad]" />
+            <Users className="w-5 h-5 text-[#55978f]" />
             <span>Verstehe deine Community</span>
           </div>
         </div>
@@ -98,12 +98,12 @@ export default function PricingHero() {
           disabled={trialState === 'loading' || trialState === 'granted' || isBlocked}
           className={`inline-flex items-center gap-2 px-8 py-4 rounded-xl font-semibold text-lg transition-all duration-200 ${
             trialState === 'granted'
-              ? 'bg-[#10b7ad] text-white shadow-lg shadow-[#10b7ad]/25'
+              ? 'bg-[#55978f] text-white shadow-lg shadow-[#55978f]/25'
               : isBlocked
               ? 'bg-white/10 text-white/40 cursor-default'
               : trialState === 'error'
               ? 'bg-red-500/80 text-white'
-              : 'bg-gradient-to-r from-[#ff7a18] to-[#ff8d39] text-white shadow-lg shadow-[#ff7a18]/25 hover:shadow-[#ff7a18]/40 hover:scale-105'
+              : 'bg-gradient-to-r from-[#c8a86b] to-[#efd49d] text-white shadow-lg shadow-[#c8a86b]/25 hover:shadow-[#c8a86b]/40 hover:scale-105'
           }`}
         >
           {trialState === 'loading' && <Loader2 className="w-5 h-5 animate-spin" />}
@@ -120,8 +120,8 @@ export default function PricingHero() {
         {/* Callout — visuell verbunden, kein separates Card */}
         <div className="mt-8 pt-6 border-t border-white/8 flex flex-col sm:flex-row items-center justify-between gap-4 max-w-xl mx-auto">
           <div className="flex items-center gap-3 text-left">
-            <div className="flex-shrink-0 w-9 h-9 rounded-xl bg-gradient-to-br from-[#ff7a18]/20 to-[#10b7ad]/20 flex items-center justify-center border border-[#ff7a18]/25">
-              <Sparkles className="w-4 h-4 text-[#ff7a18]" />
+            <div className="flex-shrink-0 w-9 h-9 rounded-xl bg-gradient-to-br from-[#c8a86b]/20 to-[#55978f]/20 flex items-center justify-center border border-[#c8a86b]/25">
+              <Sparkles className="w-4 h-4 text-[#c8a86b]" />
             </div>
             <div>
               <p className="text-white/80 text-sm font-medium flex items-center gap-1.5">

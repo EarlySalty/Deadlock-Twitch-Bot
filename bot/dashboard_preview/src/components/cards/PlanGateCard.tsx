@@ -30,7 +30,7 @@ export function PlanGateCard({ featureId, title, children }: PlanGateCardProps) 
           {isPreviewMode && (
             <a
               href={PREVIEW_PRICING_ROUTE}
-              className="inline-flex items-center gap-1 mt-3 px-3 py-1.5 rounded-lg bg-purple-500/20 text-purple-300 text-xs font-medium hover:bg-purple-500/30 transition-colors"
+              className="inline-flex items-center gap-1 mt-3 px-3 py-1.5 rounded-lg bg-primary/20 text-primary text-xs font-medium hover:bg-primary/30 transition-colors"
             >
               <Sparkles className="w-3 h-3" />
               Freischalten

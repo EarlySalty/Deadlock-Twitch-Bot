@@ -77,9 +77,9 @@ function buildEventMarkers(
     const gameChanged = prevGame !== null && cu.game !== prevGame;
     const titleChanged = prevTitle !== null && cu.title !== prevTitle;
     if (gameChanged) {
-      markers.push({ minute: min, color: '#a78bfa', label: cu.game || 'Spielwechsel' });
+      markers.push({ minute: min, color: '#55978f', label: cu.game || 'Spielwechsel' });
     } else if (titleChanged) {
-      markers.push({ minute: min, color: '#fbbf24', label: 'Titel' });
+      markers.push({ minute: min, color: '#e0912f', label: 'Titel' });
     }
     prevGame = cu.game;
     prevTitle = cu.title;
@@ -89,7 +89,7 @@ function buildEventMarkers(
     const min = Math.round((new Date(raid.at).getTime() - startMs) / 60000);
     markers.push({
       minute: min,
-      color: raid.direction === 'incoming' ? '#4ade80' : '#60a5fa',
+      color: raid.direction === 'incoming' ? '#3fa66b' : '#55978f',
       label: `${raid.direction === 'incoming' ? 'Raid von' : 'Raid an'} ${raid.channel}`,
     });
   }
@@ -279,13 +279,13 @@ export function SessionDetail({ sessionId, streamer: _streamer, onBack }: Sessio
                 <CartesianGrid strokeDasharray="3 3" stroke="rgba(255,255,255,0.06)" />
                 <XAxis
                   dataKey="minute"
-                  tick={{ fill: '#888', fontSize: 12 }}
+                  tick={{ fill: '#b7aa91', fontSize: 12 }}
                   tickFormatter={(v: number) => `${v}m`}
                 />
-                <YAxis tick={{ fill: '#888', fontSize: 12 }} />
+                <YAxis tick={{ fill: '#b7aa91', fontSize: 12 }} />
                 <Tooltip
                   contentStyle={{
-                    backgroundColor: '#1e1e2e',
+                    backgroundColor: '#241c11',
                     border: '1px solid rgba(255,255,255,0.1)',
                     borderRadius: '8px',
                     color: '#fff',
@@ -296,7 +296,7 @@ export function SessionDetail({ sessionId, streamer: _streamer, onBack }: Sessio
                 <Line
                   type="monotone"
                   dataKey="viewers"
-                  stroke="#7c3aed"
+                  stroke="#55978f"
                   strokeWidth={2}
                   dot={false}
                   activeDot={{ r: 4 }}

@@ -86,10 +86,10 @@ export function RetentionRadar({
       <div className="h-64 relative">
         <ResponsiveContainer width="100%" height="100%">
           <RadarChart data={data} margin={{ top: 20, right: 30, bottom: 20, left: 30 }}>
-            <PolarGrid stroke="rgba(194, 221, 240, 0.2)" />
+            <PolarGrid stroke="rgba(201, 168, 106, 0.24)" />
             <PolarAngleAxis
               dataKey="metric"
-              tick={{ fill: '#d1d5db', fontSize: 12 }}
+              tick={{ fill: '#ece0c8', fontSize: 12 }}
             />
             <PolarRadiusAxis
               angle={30}

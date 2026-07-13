@@ -39,20 +39,18 @@ interface ExperimentalProps {
 
 // ---------------------------------------------------------------------------
 //  Game Color System
-//  - Deadlock → Signature Orange (brand identity)
-//  - Just Chatting → Signature Purple
+//  - Deadlock / Just Chatting → first two categorical brand colors
 //  - Top-3 by avg viewers → Gold / Silver / Bronze (always, regardless of sort)
 //  - All other games → hash-based color from palette (same game = same color)
 // ---------------------------------------------------------------------------
 const SPECIAL_COLORS: Record<string, string> = {
-  'Deadlock':      '#f97316', // Deadlock brand orange
-  'Just Chatting': '#8b5cf6', // Twitch purple
+  'Deadlock':      '#c8a86b',
+  'Just Chatting': '#55978f',
 };
 
 const HASH_PALETTE = [
-  '#2563eb', '#059669', '#dc2626', '#db2777',
-  '#0891b2', '#65a30d', '#9333ea', '#0d9488',
-  '#c2410c', '#0369a1', '#15803d', '#b45309',
+  '#c8a86b', '#55978f', '#dd6a4d', '#8f9e6b', '#b7aa91', '#7a6ea8',
+  '#c8a86b', '#55978f', '#dd6a4d', '#8f9e6b', '#b7aa91', '#7a6ea8',
 ];
 
 function hashGameColor(name: string | null | undefined): string {
@@ -63,7 +61,7 @@ function hashGameColor(name: string | null | undefined): string {
 }
 
 // Medal tiers are always computed from avgViewers, independent of current sort
-const MEDAL = ['#eab308', '#94a3b8', '#b45309'] as const; // gold / silver / bronze
+const MEDAL = ['#c8a86b', '#b7aa91', '#dd6a4d'] as const; // gold / silver / bronze
 
 type SortKey = 'avgViewers' | 'sessions' | 'peakViewers';
 
@@ -158,15 +156,15 @@ function ExpGameBreakdownChart({ data }: { data: ExpGameBreakdown[] }) {
           <CartesianGrid strokeDasharray="3 3" stroke="rgba(255,255,255,0.06)" />
           <XAxis
             dataKey="shortGame"
-            tick={{ fill: '#9ca3af', fontSize: 11 }}
+            tick={{ fill: '#b7aa91', fontSize: 11 }}
             angle={-35}
             textAnchor="end"
             interval={0}
           />
-          <YAxis tick={{ fill: '#9ca3af', fontSize: 11 }} />
+          <YAxis tick={{ fill: '#b7aa91', fontSize: 11 }} />
           <Tooltip
             contentStyle={{
-              backgroundColor: '#1a1a2e',
+              backgroundColor: '#241c11',
               border: '1px solid rgba(255,255,255,0.1)',
               borderRadius: 8,
               color: '#fff',
@@ -225,13 +223,13 @@ function ExpGrowthCurvesChart({ data }: { data: ExpGrowthCurve[] }) {
         <CartesianGrid strokeDasharray="3 3" stroke="rgba(255,255,255,0.06)" />
         <XAxis
           dataKey="minute"
-          tick={{ fill: '#9ca3af', fontSize: 11 }}
+          tick={{ fill: '#b7aa91', fontSize: 11 }}
           tickFormatter={(v) => `${v}m`}
         />
-        <YAxis tick={{ fill: '#9ca3af', fontSize: 11 }} />
+        <YAxis tick={{ fill: '#b7aa91', fontSize: 11 }} />
         <Tooltip
           contentStyle={{
-            backgroundColor: '#1a1a2e',
+            backgroundColor: '#241c11',
             border: '1px solid rgba(255,255,255,0.1)',
             borderRadius: 8,
             color: '#fff',
@@ -239,7 +237,7 @@ function ExpGrowthCurvesChart({ data }: { data: ExpGrowthCurve[] }) {
           labelFormatter={(v) => `Minute ${v}`}
           formatter={((value: number) => [formatNumber(value, 1), 'Ø Viewer']) as any}
         />
-        <Legend wrapperStyle={{ color: '#9ca3af', fontSize: 12 }} />
+        <Legend wrapperStyle={{ color: '#b7aa91', fontSize: 12 }} />
         {games.map((game) => (
           <Line
             key={game}

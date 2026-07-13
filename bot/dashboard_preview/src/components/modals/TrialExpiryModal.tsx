@@ -52,7 +52,7 @@ export function TrialExpiryModal() {
       />
 
       {/* Modal */}
-      <div className="relative z-10 mx-4 w-full max-w-lg rounded-2xl border border-border bg-gradient-to-b from-[#1b1f2b] to-[#131722] p-6 shadow-2xl">
+      <div className="relative z-10 mx-4 w-full max-w-lg rounded-2xl border border-border bg-gradient-to-b from-[#2c2318] to-[#241c11] p-6 shadow-2xl">
         <button
           type="button"
           onClick={handleDismiss}

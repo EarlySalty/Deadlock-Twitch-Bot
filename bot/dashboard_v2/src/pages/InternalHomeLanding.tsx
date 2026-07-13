@@ -125,8 +125,8 @@ function WeekKpi({
         <div
           className={`flex h-8 w-8 shrink-0 items-center justify-center rounded-lg ${
             trendUp
-              ? 'bg-gradient-to-br from-success/40 to-teal/35 shadow-[0_0_18px_rgba(46,204,113,0.4)]'
-              : 'bg-gradient-to-br from-danger/45 to-orange/35 shadow-[0_0_18px_rgba(255,107,94,0.4)]'
+              ? 'bg-gradient-to-br from-success/40 to-teal/35 shadow-[0_0_18px_rgba(63, 166, 107, 0.4)]'
+              : 'bg-gradient-to-br from-danger/45 to-orange/35 shadow-[0_0_18px_rgba(221, 106, 77, 0.4)]'
           }`}
         >
           <Icon className="h-4 w-4 text-white" />

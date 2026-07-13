@@ -49,9 +49,9 @@ const PLATFORMS: Array<{
   titleLimit: number;
   hashtagTarget: string;
 }> = [
-  { id: 'youtube', label: 'YouTube Shorts', Icon: Video, tone: 'text-[#ff5b5b]', titleLimit: 100, hashtagTarget: '5–10' },
-  { id: 'tiktok', label: 'TikTok', Icon: Music2, tone: 'text-[#69e1ff]', titleLimit: 150, hashtagTarget: '8–12' },
-  { id: 'instagram', label: 'Instagram Reels', Icon: Camera, tone: 'text-[#ff8acc]', titleLimit: 125, hashtagTarget: '8–15' },
+  { id: 'youtube', label: 'YouTube Shorts', Icon: Video, tone: 'text-[#dd6a4d]', titleLimit: 100, hashtagTarget: '5–10' },
+  { id: 'tiktok', label: 'TikTok', Icon: Music2, tone: 'text-[#55978f]', titleLimit: 150, hashtagTarget: '8–12' },
+  { id: 'instagram', label: 'Instagram Reels', Icon: Camera, tone: 'text-[#dd6a4d]', titleLimit: 125, hashtagTarget: '8–15' },
 ];
 
 interface EnrichmentPanelProps {
@@ -249,7 +249,7 @@ export function EnrichmentPanel({ clipDbId, onClose }: EnrichmentPanelProps) {
               onClick={() => setActivePlatform(id)}
               className={`inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-semibold border transition ${
                 active
-                  ? 'bg-orange/15 text-orange border-orange/40 shadow-[0_4px_18px_-8px_rgba(255,122,24,0.5)]'
+                  ? 'bg-orange/15 text-orange border-orange/40 shadow-[0_4px_18px_-8px_rgba(201, 168, 106, 0.5)]'
                   : 'bg-bg/40 text-text-secondary border-border hover:text-white'
               }`}
             >
@@ -296,7 +296,7 @@ export function EnrichmentPanel({ clipDbId, onClose }: EnrichmentPanelProps) {
             type="button"
             disabled={!dirty || saveMutation.isPending}
             onClick={() => saveMutation.mutate(toPayload(enrichment, edit))}
-            className="px-4 py-2 rounded-xl text-xs font-bold inline-flex items-center gap-2 bg-orange text-white shadow-[0_8px_22px_-8px_rgba(255,122,24,0.6)] hover:bg-orange-hover transition disabled:opacity-40 disabled:cursor-not-allowed"
+            className="px-4 py-2 rounded-xl text-xs font-bold inline-flex items-center gap-2 bg-orange text-white shadow-[0_8px_22px_-8px_rgba(201, 168, 106, 0.6)] hover:bg-orange-hover transition disabled:opacity-40 disabled:cursor-not-allowed"
           >
             {saveMutation.isPending ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Save className="w-3.5 h-3.5" />}
             Speichern

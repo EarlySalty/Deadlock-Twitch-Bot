@@ -123,7 +123,7 @@ export function SiteChatbot() {
         <section
           role="dialog"
           aria-label="Hilfe zum Twitch-Bot"
-          className="mb-3 flex h-[min(620px,calc(100vh-7rem))] w-[calc(100vw-2.5rem)] flex-col overflow-hidden rounded-2xl border border-border bg-[color:var(--theme-chatbot-bg,#091923f2)] shadow-2xl backdrop-blur-xl sm:w-[410px]"
+          className="mb-3 flex h-[min(620px,calc(100vh-7rem))] w-[calc(100vw-2.5rem)] flex-col overflow-hidden rounded-2xl border border-border bg-[color:var(--theme-chatbot-bg,#241c11f2)] shadow-2xl backdrop-blur-xl sm:w-[410px]"
         >
           <header className="flex items-center justify-between border-b border-border px-5 py-4">
             <div className="flex items-center gap-3">
@@ -237,7 +237,7 @@ export function SiteChatbot() {
         onClick={() => setOpen((current) => !current)}
         aria-label={open ? "Hilfe-Chat schließen" : "Hilfe bekommen"}
         aria-expanded={open}
-        className="ml-auto flex items-center gap-2 rounded-full gradient-accent px-5 py-3.5 font-semibold text-white shadow-[0_12px_40px_rgba(6,182,212,0.3)] transition-transform hover:scale-[1.03]"
+        className="ml-auto flex items-center gap-2 rounded-full gradient-accent px-5 py-3.5 font-semibold text-white shadow-[0_12px_40px_rgba(201, 168, 106, 0.3)] transition-transform hover:scale-[1.03]"
       >
         {open ? <X size={20} /> : <MessageCircle size={20} />}
         <span>{open ? "Schließen" : "Hilfe bekommen"}</span>

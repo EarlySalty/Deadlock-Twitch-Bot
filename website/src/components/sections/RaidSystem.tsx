@@ -136,7 +136,7 @@ export function RaidSystem() {
                       className="bg-[var(--color-bg)]/50 rounded-lg p-4 flex items-start gap-4"
                       style={{
                         border: step.highlight
-                          ? "1px solid rgba(16,183,173,0.35)"
+                          ? "1px solid rgba(85, 151, 143, 0.35)"
                           : "1px solid var(--color-border)",
                       }}
                     >
@@ -144,11 +144,11 @@ export function RaidSystem() {
                         className="w-11 h-11 rounded-xl shrink-0 flex items-center justify-center"
                         style={{
                           background: step.highlight
-                            ? "linear-gradient(135deg, rgba(255,122,24,0.22), rgba(16,183,173,0.2))"
-                            : "rgba(155,179,197,0.08)",
+                            ? "linear-gradient(135deg, rgba(201, 168, 106, 0.22), rgba(85, 151, 143, 0.2))"
+                            : "rgba(183, 170, 145,0.08)",
                           border: step.highlight
-                            ? "1px solid rgba(16,183,173,0.24)"
-                            : "1px solid rgba(155,179,197,0.12)",
+                            ? "1px solid rgba(85, 151, 143, 0.24)"
+                            : "1px solid rgba(183, 170, 145,0.12)",
                         }}
                       >
                         <Icon
@@ -177,9 +177,9 @@ export function RaidSystem() {
                   variants={rowVariants}
                   className="rounded-xl p-4"
                   style={{
-                    border: "1px solid rgba(16,183,173,0.2)",
+                    border: "1px solid rgba(85, 151, 143, 0.2)",
                     background:
-                      "linear-gradient(135deg, rgba(255,122,24,0.1), rgba(16,183,173,0.08))",
+                      "linear-gradient(135deg, rgba(201, 168, 106, 0.1), rgba(85, 151, 143, 0.08))",
                   }}
                 >
                   <div className="flex flex-wrap items-center gap-2 text-[11px] font-semibold uppercase tracking-[0.12em] text-[var(--color-accent)]">

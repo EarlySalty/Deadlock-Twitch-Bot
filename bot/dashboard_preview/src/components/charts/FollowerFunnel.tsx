@@ -57,14 +57,14 @@ export function FollowerFunnel({ data, previousConversionRate }: FollowerFunnelP
       label: 'Unique Viewer',
       value: data.uniqueViewers,
       icon: Users,
-      color: 'from-blue-500 to-blue-600',
+      color: 'from-[#55978f] to-[#3f7a73]',
       width: 100,
     },
     {
       label: 'Wiederkehrend',
       value: data.returningViewers,
       icon: Heart,
-      color: 'from-purple-500 to-purple-600',
+      color: 'from-[#c8a86b] to-[#a08549]',
       width: data.uniqueViewers > 0 ? (data.returningViewers / data.uniqueViewers) * 100 : 0,
     },
     {
@@ -78,8 +78,8 @@ export function FollowerFunnel({ data, previousConversionRate }: FollowerFunnelP
 
   const sourceData = [
     { label: 'Organisch', value: data.followersBySource.organic, icon: Zap, color: 'text-green-500' },
-    { label: 'Raids', value: data.followersBySource.raids, icon: Radio, color: 'text-purple-500' },
-    { label: 'Hosts', value: data.followersBySource.hosts, icon: Share2, color: 'text-blue-500' },
+    { label: 'Raids', value: data.followersBySource.raids, icon: Radio, color: 'text-primary' },
+    { label: 'Hosts', value: data.followersBySource.hosts, icon: Share2, color: 'text-accent' },
     { label: 'Sonstige', value: data.followersBySource.other, icon: Users, color: 'text-gray-500' },
   ];
 

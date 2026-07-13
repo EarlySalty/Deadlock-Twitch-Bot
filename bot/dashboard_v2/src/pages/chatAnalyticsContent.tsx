@@ -25,11 +25,11 @@ import { RawChatStatusBanner } from './chatAnalyticsShared';
 
 const CHAT_PENETRATION_ENABLED = false;
 const CHART_TOOLTIP_STYLE = {
-  backgroundColor: 'rgba(9, 12, 22, 0.92)',
-  border: '1px solid rgba(148, 163, 184, 0.18)',
+  backgroundColor: 'rgba(28, 21, 13, 0.92)',
+  border: '1px solid rgba(183, 170, 145, 0.18)',
   borderRadius: 16,
-  boxShadow: '0 24px 60px rgba(2, 6, 23, 0.42)',
-  color: '#f8fafc',
+  boxShadow: '0 24px 60px rgba(28, 21, 13, 0.42)',
+  color: '#ece0c8',
 } as const;
 
 export interface ChatAnalyticsContentProps {

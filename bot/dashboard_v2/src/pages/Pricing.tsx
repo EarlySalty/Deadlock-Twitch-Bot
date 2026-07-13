@@ -115,7 +115,7 @@ export default function Pricing() {
             }`}
           >
             Jährlich
-            <span className="ml-2 px-1.5 py-0.5 rounded-md text-xs font-semibold bg-[#10b7ad]/20 text-[#10b7ad]">
+            <span className="ml-2 px-1.5 py-0.5 rounded-md text-xs font-semibold bg-[#55978f]/20 text-[#55978f]">
               2 Mo. gratis
             </span>
           </button>
@@ -143,7 +143,7 @@ export default function Pricing() {
         className="bg-card rounded-2xl border border-border p-6 md:p-8"
       >
         <div className="flex items-center gap-3 mb-6">
-          <HelpCircle className="w-5 h-5 text-[#ff7a18]" />
+          <HelpCircle className="w-5 h-5 text-[#c8a86b]" />
           <h2 className="text-xl font-bold text-white">Häufige Fragen</h2>
         </div>
         <div>
@@ -163,7 +163,7 @@ export default function Pricing() {
         <p className="text-white/40 mb-4">Noch nicht überzeugt?</p>
         <a
           href={PREVIEW_HOME_ROUTE}
-          className="inline-flex items-center gap-2 text-[#10b7ad] hover:text-[#1dd4ca] font-medium transition-colors"
+          className="inline-flex items-center gap-2 text-[#55978f] hover:text-[#6fb3aa] font-medium transition-colors"
         >
           Zurück zum Dashboard
         </a>

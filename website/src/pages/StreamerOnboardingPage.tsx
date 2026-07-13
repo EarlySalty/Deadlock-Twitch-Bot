@@ -15,7 +15,7 @@ import {
 import { ONBOARDING_VISUAL_STEPS } from "@/data/twitchKnowledgeBase";
 
 const NAV_LINKS = [
-  { label: "Features", href: "#features" },
+  { label: "Features", href: "#c8a86btures" },
   { label: "Frag den Bot", href: "#frag-bot" },
   { label: "FAQ", href: "#faq-hinweis" },
 ];
@@ -59,8 +59,8 @@ function NetworkVisualization() {
             cx={x}
             cy={y}
             r="10"
-            fill="rgba(0,212,170,0.3)"
-            stroke="rgba(0,212,170,0.8)"
+            fill="rgba(85, 151, 143,0.3)"
+            stroke="rgba(85, 151, 143,0.8)"
             strokeWidth="1.5"
             initial={{ scale: 0, opacity: 0 }}
             animate={{ scale: 1, opacity: 1 }}
@@ -81,7 +81,7 @@ function NetworkVisualization() {
             y1="60"
             x2={x}
             y2={y}
-            stroke="rgba(0,212,170,0.2)"
+            stroke="rgba(85, 151, 143,0.2)"
             strokeWidth="1"
             strokeDasharray="4 2"
             initial={{ pathLength: 0, opacity: 0 }}
@@ -93,8 +93,8 @@ function NetworkVisualization() {
 
       <defs>
         <linearGradient id="gradient" x1="0%" y1="0%" x2="100%" y2="100%">
-          <stop offset="0%" stopColor="#00d4aa" />
-          <stop offset="100%" stopColor="#00a8ff" />
+          <stop offset="0%" stopColor="#55978f" />
+          <stop offset="100%" stopColor="#55978f" />
         </linearGradient>
       </defs>
     </svg>
@@ -111,14 +111,14 @@ function RaidDiagram() {
         animate={{ opacity: 1, x: 0 }}
         transition={{ duration: 0.5 }}
       >
-        <rect x="10" y="30" width="50" height="40" rx="6" fill="rgba(255,100,100,0.2)" stroke="rgba(255,100,100,0.6)" />
-        <text x="35" y="55" textAnchor="middle" fill="rgba(255,150,150,0.9)" fontSize="9">OFFLINE</text>
+        <rect x="10" y="30" width="50" height="40" rx="6" fill="rgba(221, 106, 77,0.2)" stroke="rgba(221, 106, 77,0.6)" />
+        <text x="35" y="55" textAnchor="middle" fill="rgba(221, 106, 77,0.9)" fontSize="9">OFFLINE</text>
       </motion.g>
 
       {/* Arrow */}
       <motion.path
         d="M 65 50 L 90 50"
-        stroke="rgba(0,212,170,0.8)"
+        stroke="rgba(85, 151, 143,0.8)"
         strokeWidth="2"
         fill="none"
         markerEnd="url(#arrowhead)"
@@ -133,14 +133,14 @@ function RaidDiagram() {
         animate={{ opacity: 1, scale: 1 }}
         transition={{ delay: 0.3, duration: 0.4 }}
       >
-        <rect x="95" y="30" width="30" height="40" rx="6" fill="rgba(0,212,170,0.2)" stroke="rgba(0,212,170,0.8)" />
-        <text x="110" y="55" textAnchor="middle" fill="rgba(0,212,170,0.9)" fontSize="8">BOT</text>
+        <rect x="95" y="30" width="30" height="40" rx="6" fill="rgba(85, 151, 143,0.2)" stroke="rgba(85, 151, 143,0.8)" />
+        <text x="110" y="55" textAnchor="middle" fill="rgba(85, 151, 143,0.9)" fontSize="8">BOT</text>
       </motion.g>
 
       {/* Arrow */}
       <motion.path
         d="M 130 50 L 155 50"
-        stroke="rgba(0,212,170,0.8)"
+        stroke="rgba(85, 151, 143,0.8)"
         strokeWidth="2"
         fill="none"
         markerEnd="url(#arrowhead)"
@@ -155,13 +155,13 @@ function RaidDiagram() {
         animate={{ opacity: 1, x: 0 }}
         transition={{ delay: 0.6, duration: 0.5 }}
       >
-        <rect x="160" y="30" width="50" height="40" rx="6" fill="rgba(0,212,170,0.2)" stroke="rgba(0,212,170,0.8)" />
-        <text x="185" y="55" textAnchor="middle" fill="rgba(0,212,170,0.9)" fontSize="9">LIVE</text>
+        <rect x="160" y="30" width="50" height="40" rx="6" fill="rgba(85, 151, 143,0.2)" stroke="rgba(85, 151, 143,0.8)" />
+        <text x="185" y="55" textAnchor="middle" fill="rgba(85, 151, 143,0.9)" fontSize="9">LIVE</text>
       </motion.g>
 
       <defs>
         <marker id="arrowhead" markerWidth="6" markerHeight="6" refX="5" refY="3" orient="auto">
-          <path d="M0,0 L0,6 L6,3 z" fill="rgba(0,212,170,0.8)" />
+          <path d="M0,0 L0,6 L6,3 z" fill="rgba(85, 151, 143,0.8)" />
         </marker>
       </defs>
     </svg>
@@ -230,7 +230,7 @@ export function StreamerOnboardingPage() {
               initial={{ opacity: 0, y: -12 }}
               animate={{ opacity: 1, y: 0 }}
               transition={{ duration: 0.5 }}
-              className="inline-flex rounded-full border border-border bg-[rgba(16,38,53,0.76)] px-4 py-1.5 text-sm text-accent"
+              className="inline-flex rounded-full border border-border bg-[rgba(44, 35, 24,0.76)] px-4 py-1.5 text-sm text-accent"
             >
               Streamer Onboarding auf deutsche-deadlock-community.de
             </motion.div>

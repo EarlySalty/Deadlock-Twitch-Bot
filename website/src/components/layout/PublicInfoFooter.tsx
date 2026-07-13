@@ -24,7 +24,7 @@ const FOOTER_LINKS = [
 
 export function PublicInfoFooter() {
   return (
-    <footer className="border-t border-border bg-[rgba(7,21,29,0.56)]">
+    <footer className="border-t border-border bg-[rgba(28, 21, 13, 0.56)]">
       <div className="mx-auto max-w-7xl px-6 py-10">
         <div className="flex flex-col gap-4 md:flex-row md:items-end md:justify-between">
           <div className="max-w-xl">
@@ -59,5 +59,4 @@ export function PublicInfoFooter() {
     </footer>
   );
 }
-
 

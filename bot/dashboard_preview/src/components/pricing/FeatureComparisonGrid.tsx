@@ -89,9 +89,9 @@ export default function FeatureComparisonGrid() {
             <tr className="border-b border-white/10">
               <th className="text-left py-3 text-white/40 font-normal px-4 md:px-0">Feature</th>
               <th className="text-center py-3 text-white/50 font-medium w-20">Free</th>
-              <th className="text-center py-3 text-[#ff7a18] font-medium w-20">Basic</th>
-              <th className="text-center py-3 text-[#10b7ad] font-medium w-20">Erweitert</th>
-              <th className="text-center py-3 font-medium w-20" style={{ color: '#0ea5e9' }}>Bundle</th>
+              <th className="text-center py-3 text-[#c8a86b] font-medium w-20">Basic</th>
+              <th className="text-center py-3 text-[#55978f] font-medium w-20">Erweitert</th>
+              <th className="text-center py-3 font-medium w-20" style={{ color: '#55978f' }}>Bundle</th>
             </tr>
           </thead>
           <tbody className="text-white/60">
@@ -108,9 +108,9 @@ export default function FeatureComparisonGrid() {
                   <tr key={f.name} className="border-b border-white/5 hover:bg-white/[0.02] transition-colors">
                     <td className="py-3 px-4 md:px-0">{f.name}</td>
                     <td className="text-center py-3"><Cell value={f.free}     color="text-white/30" /></td>
-                    <td className="text-center py-3"><Cell value={f.basic}    color="text-[#ff7a18]" /></td>
-                    <td className="text-center py-3"><Cell value={f.extended} color="text-[#10b7ad]" /></td>
-                    <td className="text-center py-3"><Cell value={f.bundle}   color="text-[#0ea5e9]" /></td>
+                    <td className="text-center py-3"><Cell value={f.basic}    color="text-[#c8a86b]" /></td>
+                    <td className="text-center py-3"><Cell value={f.extended} color="text-[#55978f]" /></td>
+                    <td className="text-center py-3"><Cell value={f.bundle}   color="text-[#55978f]" /></td>
                   </tr>
                 ))}
               </>

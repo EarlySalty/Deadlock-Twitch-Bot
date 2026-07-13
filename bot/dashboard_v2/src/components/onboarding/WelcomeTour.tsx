@@ -413,13 +413,13 @@ export function WelcomeTour({ onComplete, completionLabel = 'Fertig' }: WelcomeT
             <div
               className="absolute inset-0 rounded-[12px]"
               style={{
-                boxShadow: '0 0 0 9999px rgba(7, 21, 29, 0.72)',
+                boxShadow: '0 0 0 9999px rgba(28, 21, 13, 0.72)',
               }}
             />
             <motion.div
               className="absolute inset-0 rounded-[12px] border-2 border-[color:var(--color-primary)]"
               style={{
-                boxShadow: '0 0 30px rgba(255, 122, 24, 0.5)',
+                boxShadow: '0 0 30px rgba(201, 168, 106, 0.5)',
               }}
               animate={{
                 scale: [1, 1.02, 1],
@@ -445,7 +445,7 @@ export function WelcomeTour({ onComplete, completionLabel = 'Fertig' }: WelcomeT
             }}
             transition={{ type: 'spring', stiffness: 380, damping: 36, mass: 0.9 }}
           >
-            <div className="panel-card rounded-[20px] border border-[color:rgba(255,122,24,0.3)] bg-[linear-gradient(160deg,#143048,#0d2232)] p-4 shadow-[0_24px_60px_-24px_rgba(0,0,0,0.78)]">
+            <div className="panel-card rounded-[20px] border border-[color:rgba(201, 168, 106, 0.3)] bg-[linear-gradient(160deg,#2c2318,#241c11)] p-4 shadow-[0_24px_60px_-24px_rgba(0,0,0,0.78)]">
               <button
                 type="button"
                 onClick={dismissTour}

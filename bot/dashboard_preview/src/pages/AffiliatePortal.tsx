@@ -78,7 +78,7 @@ export default function AffiliatePortal() {
           </code>
           <button
             onClick={copyLink}
-            className="flex items-center gap-2 px-4 py-2.5 rounded-lg bg-purple-500 hover:bg-purple-400 text-white text-sm font-medium transition-colors"
+            className="flex items-center gap-2 px-4 py-2.5 rounded-lg bg-primary hover:bg-primary text-white text-sm font-medium transition-colors"
           >
             {copied ? <CheckCircle className="w-4 h-4" /> : <Copy className="w-4 h-4" />}
             {copied ? 'Kopiert!' : 'Kopieren'}

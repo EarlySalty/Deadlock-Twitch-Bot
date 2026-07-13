@@ -373,12 +373,12 @@ function DurationSection({ data }: { data: CoachingData }) {
       <ResponsiveContainer width="100%" height={250}>
         <BarChart data={chartData}>
           <CartesianGrid strokeDasharray="3 3" stroke="rgba(255,255,255,0.1)" />
-          <XAxis dataKey="label" stroke="#888" fontSize={12} />
-          <YAxis stroke="#888" fontSize={12} />
+          <XAxis dataKey="label" stroke="#b7aa91" fontSize={12} />
+          <YAxis stroke="#b7aa91" fontSize={12} />
           <Tooltip
-            contentStyle={{ background: '#1a1a2e', border: '1px solid #333', borderRadius: '8px' }}
+            contentStyle={{ background: '#241c11', border: '1px solid #2c2318', borderRadius: '8px' }}
             labelStyle={{ color: '#fff' }}
-            itemStyle={{ color: '#ccc' }}
+            itemStyle={{ color: '#ece0c8' }}
             formatter={((value: number, name: string) => {
               if (name === 'avgViewers') return [`${value.toFixed(1)}`, 'Ø Viewer'];
               if (name === 'streamCount') return [value, 'Streams'];
@@ -389,8 +389,8 @@ function DurationSection({ data }: { data: CoachingData }) {
             {chartData.map((entry, idx) => (
               <Cell
                 key={idx}
-                fill={entry.isOptimal ? '#10b981' : 'rgba(124, 58, 237, 0.6)'}
-                stroke={entry.isOptimal ? '#10b981' : 'transparent'}
+                fill={entry.isOptimal ? '#3fa66b' : 'rgba(85, 151, 143, 0.6)'}
+                stroke={entry.isOptimal ? '#3fa66b' : 'transparent'}
                 strokeWidth={entry.isOptimal ? 2 : 0}
               />
             ))}
@@ -504,7 +504,7 @@ function ScheduleSection({ data }: { data: CoachingData }) {
                     key={hour}
                     className="flex-1 aspect-square rounded-sm mx-px relative"
                     style={{
-                      backgroundColor: `rgba(16, 185, 129, ${intensity * 0.8 + 0.05})`,
+                      backgroundColor: `rgba(63, 166, 107, ${intensity * 0.8 + 0.05})`,
                       minWidth: '12px',
                       minHeight: '12px',
                     }}
@@ -790,10 +790,10 @@ function RetentionSection({ data }: { data: CoachingData }) {
         <ResponsiveContainer width="100%" height={250}>
           <LineChart data={chartData}>
             <CartesianGrid strokeDasharray="3 3" stroke="rgba(255,255,255,0.1)" />
-            <XAxis dataKey="minute" stroke="#888" fontSize={12} tickFormatter={(m) => `${m}m`} />
-            <YAxis stroke="#888" fontSize={12} domain={[0, 100]} tickFormatter={(v) => `${v}%`} />
+            <XAxis dataKey="minute" stroke="#b7aa91" fontSize={12} tickFormatter={(m) => `${m}m`} />
+            <YAxis stroke="#b7aa91" fontSize={12} domain={[0, 100]} tickFormatter={(v) => `${v}%`} />
             <Tooltip
-              contentStyle={{ background: '#1a1a2e', border: '1px solid #333', borderRadius: '8px' }}
+              contentStyle={{ background: '#241c11', border: '1px solid #2c2318', borderRadius: '8px' }}
               labelFormatter={(m) => `Minute ${m}`}
               formatter={((value: number, name: string) => {
                 const label = name === 'you' ? 'Du' : 'Top-Performer';
@@ -802,7 +802,7 @@ function RetentionSection({ data }: { data: CoachingData }) {
             />
             <Legend formatter={(v) => v === 'you' ? 'Du' : 'Top-Performer'} />
             <Line type="monotone" dataKey="you" stroke="var(--color-primary)" strokeWidth={2} dot={false} />
-            <Line type="monotone" dataKey="top" stroke="#10b981" strokeWidth={2} dot={false} strokeDasharray="5 5" />
+            <Line type="monotone" dataKey="top" stroke="#55978f" strokeWidth={2} dot={false} strokeDasharray="5 5" />
           </LineChart>
         </ResponsiveContainer>
       )}
@@ -1217,10 +1217,10 @@ function CompetitionDensitySection({ data }: { data: CoachingData }) {
       <ResponsiveContainer width="100%" height={250}>
         <BarChart data={comp.hourly}>
           <CartesianGrid strokeDasharray="3 3" stroke="rgba(255,255,255,0.1)" />
-          <XAxis dataKey="hour" stroke="#888" fontSize={12} tickFormatter={(h) => `${h}:00`} />
-          <YAxis stroke="#888" fontSize={12} />
+          <XAxis dataKey="hour" stroke="#b7aa91" fontSize={12} tickFormatter={(h) => `${h}:00`} />
+          <YAxis stroke="#b7aa91" fontSize={12} />
           <Tooltip
-            contentStyle={{ background: '#1a1a2e', border: '1px solid #333', borderRadius: '8px' }}
+            contentStyle={{ background: '#241c11', border: '1px solid #2c2318', borderRadius: '8px' }}
             labelFormatter={(h) => `${h}:00 UTC`}
             formatter={((value: number, name: string) => {
               if (name === 'activeStreamers') return [value, 'Aktive Streamer'];
@@ -1232,7 +1232,7 @@ function CompetitionDensitySection({ data }: { data: CoachingData }) {
               <Cell
                 key={idx}
                 fill={entry.yourData
-                  ? 'rgba(124, 58, 237, 0.8)'
+                  ? 'rgba(85, 151, 143, 0.8)'
                   : `rgba(255, 255, 255, ${0.1 + (entry.activeStreamers / maxStreamers) * 0.4})`
                 }
               />
@@ -1254,8 +1254,8 @@ function CompetitionDensitySection({ data }: { data: CoachingData }) {
                   <div
                     className="rounded-lg p-2 border"
                     style={{
-                      backgroundColor: `rgba(124, 58, 237, ${intensity * 0.4 + 0.05})`,
-                      borderColor: w.yourData ? 'rgba(124, 58, 237, 0.6)' : 'transparent',
+                      backgroundColor: `rgba(85, 151, 143, ${intensity * 0.4 + 0.05})`,
+                      borderColor: w.yourData ? 'rgba(85, 151, 143, 0.6)' : 'transparent',
                     }}
                   >
                     <div className="text-sm font-bold text-white">{w.activeStreamers}</div>
@@ -1273,7 +1273,7 @@ function CompetitionDensitySection({ data }: { data: CoachingData }) {
 
       <div className="flex items-center gap-4 mt-4 text-xs text-text-secondary">
         <div className="flex items-center gap-1">
-          <div className="w-3 h-3 rounded-sm" style={{ backgroundColor: 'rgba(124, 58, 237, 0.8)' }} />
+          <div className="w-3 h-3 rounded-sm" style={{ backgroundColor: 'rgba(85, 151, 143, 0.8)' }} />
           <span>Deine Stunden</span>
         </div>
         <div className="flex items-center gap-1">

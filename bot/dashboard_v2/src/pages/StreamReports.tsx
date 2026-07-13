@@ -55,9 +55,9 @@ const SNAPSHOT_TONES: Record<
     accent: 'text-green-200',
   },
   solide: {
-    banner: 'border-cyan-400/30 bg-cyan-500/10',
-    badge: 'border-cyan-400/40 bg-cyan-500/20 text-cyan-100',
-    accent: 'text-cyan-200',
+    banner: 'border-accent/30 bg-accent/10',
+    badge: 'border-accent/40 bg-accent/20 text-accent',
+    accent: 'text-accent',
   },
   gemischt: {
     banner: 'border-yellow-400/30 bg-yellow-500/10',
@@ -137,8 +137,8 @@ const AB_VOTE_OPTIONS: Array<{
   {
     value: 'compact',
     label: '← A ist besser',
-    activeClass: 'border-cyan-400/40 bg-cyan-500/15 text-cyan-200',
-    idleClass: 'border-border bg-white/5 text-text-secondary hover:border-cyan-400/25 hover:text-white',
+    activeClass: 'border-accent/40 bg-accent/15 text-accent',
+    idleClass: 'border-border bg-white/5 text-text-secondary hover:border-accent/25 hover:text-white',
   },
   {
     value: 'gleich',
@@ -235,7 +235,7 @@ function VariantBadge({ variant }: { variant: StreamReportVariant }) {
       className={`rounded-full border px-2.5 py-1 text-xs font-bold uppercase tracking-wide ${
         isFull
           ? 'border-orange-400/30 bg-orange-500/15 text-orange-200'
-          : 'border-cyan-400/30 bg-cyan-500/15 text-cyan-200'
+          : 'border-accent/30 bg-accent/15 text-accent'
       }`}
     >
       {isFull ? 'B / Full' : 'A / Compact'}
@@ -369,7 +369,7 @@ function ReportBody({ report }: { report: StreamReport }) {
                   body.chat_diagnose.top_themen.map((item, index) => (
                     <span
                       key={`${item}-${index}`}
-                      className="rounded-full border border-cyan-400/20 bg-cyan-500/10 px-2.5 py-1 text-xs text-cyan-100"
+                      className="rounded-full border border-accent/20 bg-accent/10 px-2.5 py-1 text-xs text-accent"
                     >
                       {item}
                     </span>
@@ -536,7 +536,7 @@ function ReportBody({ report }: { report: StreamReport }) {
     return (
       <div className="space-y-5">
         {summary && (
-          <div className="rounded-xl border border-purple-500/20 bg-purple-500/10 p-4">
+          <div className="rounded-xl border border-primary/20 bg-primary/10 p-4">
             <div className="mb-2 flex items-center justify-between gap-3">
               <h3 className="font-semibold text-white">{summary.headline || 'Stream Report'}</h3>
               {summary.overall_rating && (
@@ -587,16 +587,16 @@ function ReportBody({ report }: { report: StreamReport }) {
 
         {(body.recommendations || []).length > 0 && (
           <section className="space-y-2">
-            <h4 className="flex items-center gap-2 text-xs font-bold uppercase tracking-wide text-purple-300">
+            <h4 className="flex items-center gap-2 text-xs font-bold uppercase tracking-wide text-primary">
               <Zap className="h-4 w-4" /> Empfehlungen
             </h4>
             {(body.recommendations || []).map((item, index) => (
-              <div key={index} className="rounded-xl border border-purple-500/20 bg-purple-500/10 p-3">
+              <div key={index} className="rounded-xl border border-primary/20 bg-primary/10 p-3">
                 <div className="mb-1 flex items-center gap-2">
-                  <span className="rounded-full bg-purple-500/20 px-2 py-0.5 text-[10px] font-bold uppercase text-purple-200">
+                  <span className="rounded-full bg-primary/20 px-2 py-0.5 text-[10px] font-bold uppercase text-primary">
                     {item.priority || 'medium'}
                   </span>
-                  <p className="text-sm font-semibold text-purple-200">{item.action}</p>
+                  <p className="text-sm font-semibold text-primary">{item.action}</p>
                 </div>
                 <p className="text-xs text-text-secondary">{item.reason}</p>
               </div>
@@ -640,8 +640,8 @@ function ReportBody({ report }: { report: StreamReport }) {
           </div>
         ))}
         {(body.empfehlungen || []).map((item, index) => (
-          <div key={`rec-${index}`} className="rounded-xl border border-purple-500/20 bg-purple-500/10 p-3">
-            <p className="text-sm font-semibold text-purple-200">{item.trend}</p>
+          <div key={`rec-${index}`} className="rounded-xl border border-primary/20 bg-primary/10 p-3">
+            <p className="text-sm font-semibold text-primary">{item.trend}</p>
             <p className="mt-1 text-xs text-text-secondary">{item.empfehlung}</p>
           </div>
         ))}
@@ -974,7 +974,7 @@ function ABVoteSection({
     <section className="panel-card rounded-2xl p-5">
       <div className="flex items-start gap-3">
         <div className="mt-0.5 rounded-xl border border-white/10 bg-white/5 p-2">
-          <BarChart2 className="h-5 w-5 text-cyan-200" />
+          <BarChart2 className="h-5 w-5 text-accent" />
         </div>
         <div>
           <h2 className="text-lg font-bold text-white">A/B Auswertung</h2>
@@ -1052,7 +1052,7 @@ function ABVoteSection({
         ) : (
           <>
             <div className="flex flex-wrap items-center gap-2 text-xs">
-              <span className="rounded-full border border-cyan-400/25 bg-cyan-500/10 px-2.5 py-1 text-cyan-100">
+              <span className="rounded-full border border-accent/25 bg-accent/10 px-2.5 py-1 text-accent">
                 A: {totals.compact} Stimmen
               </span>
               <span className="rounded-full border border-white/15 bg-white/10 px-2.5 py-1 text-white/80">
@@ -1068,7 +1068,7 @@ function ABVoteSection({
               <div className="space-y-2">
                 <div className="h-2.5 overflow-hidden rounded-full border border-white/10 bg-white/5">
                   <div className="flex h-full w-full">
-                    <div className="bg-cyan-400/80" style={{ width: `${compactPercent}%` }} />
+                    <div className="bg-accent/80" style={{ width: `${compactPercent}%` }} />
                     <div className="bg-white/40" style={{ width: `${gleichPercent}%` }} />
                     <div className="bg-orange-400/80" style={{ width: `${fullPercent}%` }} />
                   </div>
@@ -1190,8 +1190,8 @@ export function StreamReports({ streamer, days }: StreamReportsProps) {
       <div className="panel-card rounded-2xl p-6">
         <div className="flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
           <div className="flex items-center gap-4">
-            <div className="flex h-12 w-12 flex-shrink-0 items-center justify-center rounded-xl border border-purple-500/20 bg-purple-500/10">
-              <Sparkles className="h-6 w-6 text-purple-300" />
+            <div className="flex h-12 w-12 flex-shrink-0 items-center justify-center rounded-xl border border-primary/20 bg-primary/10">
+              <Sparkles className="h-6 w-6 text-primary" />
             </div>
             <div>
               <h1 className="text-2xl font-bold text-white">Stream Reports</h1>

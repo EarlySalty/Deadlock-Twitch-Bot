@@ -20,7 +20,7 @@ export function GlowButton({
 
   const variantClasses =
     variant === "primary"
-      ? "gradient-accent text-white shadow-[0_0_0_0_rgba(255,122,24,0)] hover:shadow-[0_0_24px_4px_rgba(255,122,24,0.35)] hover:brightness-110"
+      ? "gradient-accent text-white shadow-[0_0_0_0_rgba(201, 168, 106, 0)] hover:shadow-[0_0_24px_4px_rgba(201, 168, 106, 0.35)] hover:brightness-110"
       : "bg-transparent border border-[var(--color-border)] text-[var(--color-text-primary)] hover:border-[var(--color-border-hover)] hover:bg-white/5";
 
   return (

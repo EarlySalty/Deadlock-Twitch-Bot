@@ -59,8 +59,8 @@ export function BanFeed() {
                       className="w-11 h-11 rounded-xl shrink-0 flex items-center justify-center"
                       style={{
                         background:
-                          "linear-gradient(135deg, rgba(255,122,24,0.22), rgba(16,183,173,0.2))",
-                        border: "1px solid rgba(16,183,173,0.24)",
+                          "linear-gradient(135deg, rgba(201, 168, 106, 0.22), rgba(85, 151, 143, 0.2))",
+                        border: "1px solid rgba(85, 151, 143, 0.24)",
                       }}
                     >
                       <Icon size={18} className="text-[var(--color-accent)]" />

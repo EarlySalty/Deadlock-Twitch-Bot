@@ -226,7 +226,7 @@ function StatusBadge({ status }: { status: string }) {
   const styles: Record<string, string> = {
     transferred: "bg-emerald-500/20 text-emerald-400",
     emailed: "bg-emerald-500/20 text-emerald-400",
-    generated: "bg-sky-500/20 text-sky-300",
+    generated: "bg-accent/20 text-accent",
     skipped: "bg-yellow-500/20 text-yellow-400",
     pending: "bg-gray-500/20 text-gray-300",
     blocked: "bg-amber-500/20 text-amber-300",
@@ -394,23 +394,23 @@ export default function AffiliatePortal() {
 
   if (loading) {
     return (
-      <div className="min-h-screen bg-[#07151d] flex items-center justify-center">
-        <div className="w-8 h-8 border-2 border-[#06B6D4] border-t-transparent rounded-full animate-spin" />
+      <div className="min-h-screen bg-[#1c150d] flex items-center justify-center">
+        <div className="w-8 h-8 border-2 border-[#c8a86b] border-t-transparent rounded-full animate-spin" />
       </div>
     );
   }
 
   if (view === "login") {
     return (
-      <div className="min-h-screen bg-[#07151d] flex items-center justify-center p-6">
+      <div className="min-h-screen bg-[#1c150d] flex items-center justify-center p-6">
         <div className="panel-card rounded-2xl p-10 max-w-md w-full text-center">
           <div className="w-16 h-16 rounded-xl gradient-accent flex items-center justify-center mx-auto mb-6">
             <LogIn size={28} className="text-white" />
           </div>
-          <h1 className="text-2xl font-bold text-[#e9f1f7] font-[Sora] mb-3">
+          <h1 className="text-2xl font-bold text-[#ece0c8] font-[Sora] mb-3">
             Affiliate-Portal
           </h1>
-          <p className="text-[#9bb3c5] text-sm mb-8 leading-relaxed">
+          <p className="text-[#b7aa91] text-sm mb-8 leading-relaxed">
             Werde Vertriebler und verdiene 30% Provision auf jede Zahlung deiner
             geworbenen Streamer dauerhaft und ohne Limit.
           </p>
@@ -418,14 +418,14 @@ export default function AffiliatePortal() {
             onClick={() => {
               window.location.href = "/twitch/auth/affiliate/login";
             }}
-            className="gradient-accent rounded-xl px-7 py-3.5 font-semibold text-white w-full transition-all duration-200 hover:brightness-110 hover:shadow-[0_0_24px_4px_rgba(255,122,24,0.3)]"
+            className="gradient-accent rounded-xl px-7 py-3.5 font-semibold text-white w-full transition-all duration-200 hover:brightness-110 hover:shadow-[0_0_24px_4px_rgba(201, 168, 106, 0.3)]"
           >
             Mit Twitch anmelden
           </button>
-          <div className="mt-4 rounded-xl border border-[rgba(255,122,24,0.25)] bg-[rgba(255,122,24,0.08)] px-4 py-3 text-left">
+          <div className="mt-4 rounded-xl border border-[rgba(201, 168, 106, 0.25)] bg-[rgba(201, 168, 106, 0.08)] px-4 py-3 text-left">
             <div className="flex items-start gap-3">
-              <AlertCircle size={18} className="text-[#ffb067] mt-0.5 shrink-0" />
-              <p className="text-xs leading-relaxed text-[#d7e5f0]">
+              <AlertCircle size={18} className="text-[#c8a86b] mt-0.5 shrink-0" />
+              <p className="text-xs leading-relaxed text-[#ece0c8]">
                 Steuerhinweis: Du bist selbst für die steuerliche Behandlung
                 deiner Provisionen verantwortlich. Verbinde später Stripe,
                 damit Auszahlungen automatisch an dein Auszahlungs-Konto gehen
@@ -458,10 +458,10 @@ export default function AffiliatePortal() {
   );
 
   return (
-    <div className="min-h-screen bg-[#07151d] text-[#e9f1f7] font-[Manrope]">
+    <div className="min-h-screen bg-[#1c150d] text-[#ece0c8] font-[Manrope]">
       <nav className="glass sticky top-0 z-50">
         <div className="max-w-7xl mx-auto px-6 flex items-center gap-1 h-14 overflow-x-auto">
-          <span className="text-sm font-bold text-[#06B6D4] mr-4 shrink-0 font-[Sora]">
+          <span className="text-sm font-bold text-[#c8a86b] mr-4 shrink-0 font-[Sora]">
             Affiliate
           </span>
           {TABS.map((entry) => {
@@ -473,8 +473,8 @@ export default function AffiliatePortal() {
                 onClick={() => setTab(entry.id)}
                 className={`flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-medium transition-colors shrink-0 ${
                   active
-                    ? "bg-[#102635] text-[#06B6D4]"
-                    : "text-[#9bb3c5] hover:text-[#e9f1f7] hover:bg-[#102635]/50"
+                    ? "bg-[#2c2318] text-[#c8a86b]"
+                    : "text-[#b7aa91] hover:text-[#ece0c8] hover:bg-[#2c2318]/50"
                 }`}
               >
                 <Icon size={16} />
@@ -487,7 +487,7 @@ export default function AffiliatePortal() {
 
       <main className="max-w-7xl mx-auto px-6 py-10">
         {pageError && (
-          <div className="mb-6 rounded-xl border border-[rgba(248,113,113,0.35)] bg-[rgba(127,29,29,0.35)] px-5 py-4 text-sm text-[#fecaca]">
+          <div className="mb-6 rounded-xl border border-[rgba(221, 106, 77,0.35)] bg-[rgba(221, 106, 77,0.35)] px-5 py-4 text-sm text-[#dd6a4d]">
             {pageError}
           </div>
         )}
@@ -496,7 +496,7 @@ export default function AffiliatePortal() {
           <div className="space-y-6">
             <SectionCard>
               <h2 className="text-2xl font-bold font-[Sora]">Übersicht</h2>
-              <p className="mt-3 text-sm leading-relaxed text-[#9bb3c5]">
+              <p className="mt-3 text-sm leading-relaxed text-[#b7aa91]">
                 Willkommen zurück
                 {profile?.display_name ? `, ${profile.display_name}` : ""}. Hier
                 verwaltest du deine beanspruchten Streamer, deine Provisionen
@@ -508,13 +508,13 @@ export default function AffiliatePortal() {
 
             {needsNextSteps && (
               <SectionCard>
-                <h3 className="text-sm font-semibold text-[#9bb3c5] uppercase tracking-wider">
+                <h3 className="text-sm font-semibold text-[#b7aa91] uppercase tracking-wider">
                   Deine nächsten Schritte
                 </h3>
                 <div className="mt-4 space-y-3">
                   {claims.length === 0 && (
                     <ActionHint
-                      icon={<Users size={18} className="text-[#06B6D4] mt-0.5 shrink-0" />}
+                      icon={<Users size={18} className="text-[#c8a86b] mt-0.5 shrink-0" />}
                       title="Ersten Streamer beanspruchen"
                       text="Öffne den Tab Streamer und beanspruche einen Channel per Twitch-Login. Ab dann bekommst du 30% auf jede Zahlung dieses Streamers."
                     />
@@ -524,7 +524,7 @@ export default function AffiliatePortal() {
                       icon={
                         <ArrowRightLeft
                           size={18}
-                          className="text-[#A855F7] mt-0.5 shrink-0"
+                          className="text-[#55978f] mt-0.5 shrink-0"
                         />
                       }
                       title="Stripe für automatische Auszahlungen verbinden"
@@ -533,7 +533,7 @@ export default function AffiliatePortal() {
                   )}
                   {!readiness.can_generate && (
                     <ActionHint
-                      icon={<ShieldCheck size={18} className="text-[#f5b642] mt-0.5 shrink-0" />}
+                      icon={<ShieldCheck size={18} className="text-[#e0912f] mt-0.5 shrink-0" />}
                       title="Steuer- und Adressdaten vervollständigen"
                       text="Pflege im Tab Einstellungen deine Adresse, Kontakt-E-Mail und steuerlichen Angaben, damit Gutschriften automatisch erstellt werden können."
                     />
@@ -567,7 +567,7 @@ export default function AffiliatePortal() {
 
             <div className="grid grid-cols-1 xl:grid-cols-[1.2fr_0.8fr] gap-6">
               <SectionCard>
-                <h3 className="text-sm font-semibold text-[#9bb3c5] uppercase tracking-wider">
+                <h3 className="text-sm font-semibold text-[#b7aa91] uppercase tracking-wider">
                   Gutschrift-Status
                 </h3>
                 <div className="mt-4 grid grid-cols-1 md:grid-cols-3 gap-4">
@@ -591,7 +591,7 @@ export default function AffiliatePortal() {
                     tone="gray"
                   />
                 </div>
-                <p className="mt-4 text-sm leading-relaxed text-[#9bb3c5]">
+                <p className="mt-4 text-sm leading-relaxed text-[#b7aa91]">
                   {taxHint(readiness.ust_status)}
                 </p>
               </SectionCard>
@@ -605,7 +605,7 @@ export default function AffiliatePortal() {
           <div className="space-y-6">
             <SectionCard>
               <h2 className="text-2xl font-bold font-[Sora]">Streamer</h2>
-              <p className="mt-3 text-sm leading-relaxed text-[#9bb3c5]">
+              <p className="mt-3 text-sm leading-relaxed text-[#b7aa91]">
                 Beanspruche Streamer über ihren Twitch-Login. Sobald ein
                 Streamer dir zugeordnet ist, erhältst du 30% Provision auf jede
                 Zahlung dieses Accounts.
@@ -613,7 +613,7 @@ export default function AffiliatePortal() {
             </SectionCard>
 
             <SectionCard>
-              <h3 className="text-sm font-semibold text-[#9bb3c5] uppercase tracking-wider">
+              <h3 className="text-sm font-semibold text-[#b7aa91] uppercase tracking-wider">
                 Streamer beanspruchen
               </h3>
               <div className="mt-4 flex flex-col sm:flex-row gap-3">
@@ -623,7 +623,7 @@ export default function AffiliatePortal() {
                   value={claimInput}
                   onChange={(event) => setClaimInput(event.target.value)}
                   onKeyDown={(event) => event.key === "Enter" && void handleClaim()}
-                  className="flex-1 bg-[#07151d] border border-[rgba(194,221,240,0.14)] rounded-lg px-4 py-2.5 text-sm text-[#e9f1f7] placeholder-[#9bb3c5]/50 focus:outline-none focus:border-[#06B6D4] transition-colors"
+                  className="flex-1 bg-[#1c150d] border border-[rgba(201, 168, 106, 0.24)] rounded-lg px-4 py-2.5 text-sm text-[#ece0c8] placeholder-[#b7aa91]/50 focus:outline-none focus:border-[#c8a86b] transition-colors"
                 />
                 <button
                   onClick={() => {
@@ -649,7 +649,7 @@ export default function AffiliatePortal() {
             <div className="panel-card rounded-xl overflow-hidden">
               <table className="w-full text-sm">
                 <thead>
-                  <tr className="border-b border-[rgba(194,221,240,0.14)] text-[#9bb3c5] text-left">
+                  <tr className="border-b border-[rgba(201, 168, 106, 0.24)] text-[#b7aa91] text-left">
                     <th className="px-6 py-3 font-medium">Login</th>
                     <th className="px-6 py-3 font-medium">Anzahl</th>
                     <th className="px-6 py-3 font-medium">Gesamtverdienst</th>
@@ -663,14 +663,14 @@ export default function AffiliatePortal() {
                     return (
                       <tr
                         key={`${claimLogin || "claim"}-${claim.claimed_at}-${index}`}
-                        className="border-b border-[rgba(194,221,240,0.14)] last:border-0"
+                        className="border-b border-[rgba(201, 168, 106, 0.24)] last:border-0"
                       >
                         <td className="px-6 py-3 font-medium">{claimLogin || "—"}</td>
                         <td className="px-6 py-3">{claim.commission_count}</td>
                         <td className="px-6 py-3">
                           {formatCents(claim.total_commission_cents)}
                         </td>
-                        <td className="px-6 py-3 text-[#9bb3c5]">
+                        <td className="px-6 py-3 text-[#b7aa91]">
                           {formatDate(claim.claimed_at)}
                         </td>
                       </tr>
@@ -678,7 +678,7 @@ export default function AffiliatePortal() {
                   })}
                   {claims.length === 0 && (
                     <tr>
-                      <td colSpan={4} className="px-6 py-8 text-center text-[#9bb3c5]">
+                      <td colSpan={4} className="px-6 py-8 text-center text-[#b7aa91]">
                         Noch keine Streamer beansprucht.
                       </td>
                     </tr>
@@ -693,7 +693,7 @@ export default function AffiliatePortal() {
           <div className="space-y-6">
             <SectionCard>
               <h2 className="text-2xl font-bold font-[Sora]">Provisionen</h2>
-              <p className="mt-3 text-sm leading-relaxed text-[#9bb3c5]">
+              <p className="mt-3 text-sm leading-relaxed text-[#b7aa91]">
                 Jede Zahlung eines von dir beanspruchten Streamers erzeugt eine
                 Provision. Hier siehst du den Verlauf inklusive Status.
               </p>
@@ -702,7 +702,7 @@ export default function AffiliatePortal() {
             <div className="panel-card rounded-xl overflow-hidden">
               <table className="w-full text-sm">
                 <thead>
-                  <tr className="border-b border-[rgba(194,221,240,0.14)] text-[#9bb3c5] text-left">
+                  <tr className="border-b border-[rgba(201, 168, 106, 0.24)] text-[#b7aa91] text-left">
                     <th className="px-6 py-3 font-medium">Datum</th>
                     <th className="px-6 py-3 font-medium">Streamer</th>
                     <th className="px-6 py-3 font-medium">Brutto</th>
@@ -715,27 +715,27 @@ export default function AffiliatePortal() {
                   {commissions.map((commission) => (
                     <tr
                       key={commission.id}
-                      className="border-b border-[rgba(194,221,240,0.14)] last:border-0"
+                      className="border-b border-[rgba(201, 168, 106, 0.24)] last:border-0"
                     >
-                      <td className="px-6 py-3 text-[#9bb3c5]">
+                      <td className="px-6 py-3 text-[#b7aa91]">
                         {formatDate(commission.created_at)}
                       </td>
                       <td className="px-6 py-3 font-medium">{commission.streamer_login}</td>
                       <td className="px-6 py-3">{formatCents(commission.brutto_cents)}</td>
-                      <td className="px-6 py-3 text-[#A855F7] font-medium">
+                      <td className="px-6 py-3 text-[#55978f] font-medium">
                         {formatCents(commission.commission_cents)}
                       </td>
                       <td className="px-6 py-3">
                         <StatusBadge status={commission.status} />
                       </td>
-                      <td className="px-6 py-3 text-[#9bb3c5] font-mono text-xs">
+                      <td className="px-6 py-3 text-[#b7aa91] font-mono text-xs">
                         #{commission.id}
                       </td>
                     </tr>
                   ))}
                   {commissions.length === 0 && (
                     <tr>
-                      <td colSpan={6} className="px-6 py-8 text-center text-[#9bb3c5]">
+                      <td colSpan={6} className="px-6 py-8 text-center text-[#b7aa91]">
                         Noch keine Provisionen vorhanden.
                       </td>
                     </tr>
@@ -750,7 +750,7 @@ export default function AffiliatePortal() {
           <div className="space-y-6">
             <SectionCard>
               <h2 className="text-2xl font-bold font-[Sora]">Gutschriften</h2>
-              <p className="mt-3 text-sm leading-relaxed text-[#9bb3c5]">
+              <p className="mt-3 text-sm leading-relaxed text-[#b7aa91]">
                 Monatliche Gutschriften werden automatisch auf Basis deiner
                 Provisionen erzeugt und per E-Mail versendet, sobald dein Profil
                 vollständig ist.
@@ -778,16 +778,16 @@ export default function AffiliatePortal() {
             </div>
 
             <SectionCard>
-              <h3 className="text-sm font-semibold text-[#9bb3c5] uppercase tracking-wider">
+              <h3 className="text-sm font-semibold text-[#b7aa91] uppercase tracking-wider">
                 Steuerhinweis
               </h3>
-              <p className="mt-3 text-sm leading-relaxed text-[#9bb3c5]">
+              <p className="mt-3 text-sm leading-relaxed text-[#b7aa91]">
                 {taxHint(readiness.ust_status)}
               </p>
               {readiness.warnings.length > 0 && (
-                <div className="mt-4 rounded-xl border border-[rgba(245,182,66,0.25)] bg-[rgba(120,53,15,0.35)] px-4 py-3">
+                <div className="mt-4 rounded-xl border border-[rgba(224, 145, 47, 0.25)] bg-[rgba(224, 145, 47,0.35)] px-4 py-3">
                   {readiness.warnings.map((warning) => (
-                    <div key={warning} className="flex items-start gap-2 text-sm text-[#fde68a]">
+                    <div key={warning} className="flex items-start gap-2 text-sm text-[#c8a86b]">
                       <AlertCircle size={16} className="mt-0.5 shrink-0" />
                       <span>{warning}</span>
                     </div>
@@ -799,7 +799,7 @@ export default function AffiliatePortal() {
             <div className="panel-card rounded-xl overflow-hidden">
               <table className="w-full text-sm">
                 <thead>
-                  <tr className="border-b border-[rgba(194,221,240,0.14)] text-[#9bb3c5] text-left">
+                  <tr className="border-b border-[rgba(201, 168, 106, 0.24)] text-[#b7aa91] text-left">
                     <th className="px-6 py-3 font-medium">Zeitraum</th>
                     <th className="px-6 py-3 font-medium">Nummer</th>
                     <th className="px-6 py-3 font-medium">Buchungen</th>
@@ -815,15 +815,15 @@ export default function AffiliatePortal() {
                   {gutschriften.map((document) => (
                     <tr
                       key={document.id}
-                      className="border-b border-[rgba(194,221,240,0.14)] last:border-0"
+                      className="border-b border-[rgba(201, 168, 106, 0.24)] last:border-0"
                     >
                       <td className="px-6 py-4">
                         <div className="font-medium">{document.period_label || "—"}</div>
-                        <div className="text-xs text-[#9bb3c5]">
+                        <div className="text-xs text-[#b7aa91]">
                           erstellt: {formatDate(document.generated_at)}
                         </div>
                       </td>
-                      <td className="px-6 py-4 font-mono text-xs text-[#d7e5f0]">
+                      <td className="px-6 py-4 font-mono text-xs text-[#ece0c8]">
                         {document.gutschrift_number || "noch offen"}
                       </td>
                       <td className="px-6 py-4">{document.commission_count}</td>
@@ -833,13 +833,13 @@ export default function AffiliatePortal() {
                       <td className="px-6 py-4">
                         {formatCents(document.vat_amount_cents)}
                       </td>
-                      <td className="px-6 py-4 font-medium text-[#A855F7]">
+                      <td className="px-6 py-4 font-medium text-[#55978f]">
                         {formatCents(document.gross_amount_cents)}
                       </td>
                       <td className="px-6 py-4">
                         <StatusBadge status={document.status} />
                       </td>
-                      <td className="px-6 py-4 text-[#9bb3c5]">
+                      <td className="px-6 py-4 text-[#b7aa91]">
                         {document.status === "email_failed" && document.last_error
                           ? document.last_error
                           : formatDateTime(document.emailed_at)}
@@ -851,13 +851,13 @@ export default function AffiliatePortal() {
                               onClick={() => {
                                 window.location.href = document.download_path as string;
                               }}
-                              className="inline-flex items-center gap-2 rounded-lg border border-[rgba(194,221,240,0.14)] bg-[#102635] px-3 py-2 text-xs font-semibold text-[#e9f1f7] transition-colors hover:border-[rgba(255,122,24,0.5)] hover:text-[#ffb067]"
+                              className="inline-flex items-center gap-2 rounded-lg border border-[rgba(201, 168, 106, 0.24)] bg-[#2c2318] px-3 py-2 text-xs font-semibold text-[#ece0c8] transition-colors hover:border-[rgba(201, 168, 106, 0.5)] hover:text-[#c8a86b]"
                             >
                               <Download size={14} />
                               PDF
                             </button>
                           ) : (
-                            <span className="text-[#6c8394]">—</span>
+                            <span className="text-[#b7aa91]">—</span>
                           )}
                         </div>
                       </td>
@@ -865,7 +865,7 @@ export default function AffiliatePortal() {
                   ))}
                   {gutschriften.length === 0 && (
                     <tr>
-                      <td colSpan={9} className="px-6 py-8 text-center text-[#9bb3c5]">
+                      <td colSpan={9} className="px-6 py-8 text-center text-[#b7aa91]">
                         Noch keine Gutschriften vorhanden.
                       </td>
                     </tr>
@@ -880,7 +880,7 @@ export default function AffiliatePortal() {
           <div className="space-y-6">
             <SectionCard>
               <h2 className="text-2xl font-bold font-[Sora]">Einstellungen</h2>
-              <p className="mt-3 text-sm leading-relaxed text-[#9bb3c5]">
+              <p className="mt-3 text-sm leading-relaxed text-[#b7aa91]">
                 Pflege hier deine verschlüsselten Profil-, Adress- und
                 Steuerdaten für die automatische Gutschrift-Erstellung.
               </p>
@@ -892,15 +892,15 @@ export default function AffiliatePortal() {
               <SectionCard>
                 <div className="flex flex-col md:flex-row md:items-start md:justify-between gap-4">
                   <div>
-                    <h3 className="text-sm font-semibold text-[#9bb3c5] uppercase tracking-wider">
+                    <h3 className="text-sm font-semibold text-[#b7aa91] uppercase tracking-wider">
                       Adresse
                     </h3>
-                    <p className="mt-2 text-sm leading-relaxed text-[#9bb3c5]">
+                    <p className="mt-2 text-sm leading-relaxed text-[#b7aa91]">
                       Diese Daten werden verschlüsselt gespeichert und für die
                       automatische Gutschrift-Erstellung benötigt.
                     </p>
                   </div>
-                  <div className="rounded-xl border border-[rgba(16,183,173,0.22)] bg-[rgba(16,183,173,0.08)] px-4 py-3 text-sm text-[#d8f8f4] max-w-md">
+                  <div className="rounded-xl border border-[rgba(85, 151, 143, 0.22)] bg-[rgba(85, 151, 143, 0.08)] px-4 py-3 text-sm text-[#6fb3aa] max-w-md">
                     Diese Daten werden verschlüsselt gespeichert und für die
                     automatische Gutschrift-Erstellung benötigt.
                   </div>
@@ -943,55 +943,55 @@ export default function AffiliatePortal() {
               </SectionCard>
 
               <SectionCard>
-                <h3 className="text-sm font-semibold text-[#9bb3c5] uppercase tracking-wider">
+                <h3 className="text-sm font-semibold text-[#b7aa91] uppercase tracking-wider">
                   Steuerliche Angaben
                 </h3>
                 <div className="mt-5 grid grid-cols-1 lg:grid-cols-[1.05fr_0.95fr] gap-6">
                   <div className="space-y-3">
-                    <span className="text-xs text-[#9bb3c5] uppercase tracking-wider">
+                    <span className="text-xs text-[#b7aa91] uppercase tracking-wider">
                       USt-Status
                     </span>
-                    <label className="flex items-start gap-3 rounded-xl border border-[rgba(194,221,240,0.14)] bg-[#102635]/40 px-4 py-3 cursor-pointer">
+                    <label className="flex items-start gap-3 rounded-xl border border-[rgba(201, 168, 106, 0.24)] bg-[#2c2318]/40 px-4 py-3 cursor-pointer">
                       <input
                         type="radio"
                         name="ust_status"
                         checked={settingsForm.ust_status === "unknown"}
                         onChange={() => updateForm("ust_status", "unknown")}
-                        className="mt-1 accent-[#06B6D4]"
+                        className="mt-1 accent-[#c8a86b]"
                       />
                       <div>
                         <div className="font-medium">Noch nicht angegeben</div>
-                        <div className="text-sm text-[#9bb3c5]">
+                        <div className="text-sm text-[#b7aa91]">
                           Gutschrift-Generierung bleibt blockiert.
                         </div>
                       </div>
                     </label>
-                    <label className="flex items-start gap-3 rounded-xl border border-[rgba(194,221,240,0.14)] bg-[#102635]/40 px-4 py-3 cursor-pointer">
+                    <label className="flex items-start gap-3 rounded-xl border border-[rgba(201, 168, 106, 0.24)] bg-[#2c2318]/40 px-4 py-3 cursor-pointer">
                       <input
                         type="radio"
                         name="ust_status"
                         checked={settingsForm.ust_status === "kleinunternehmer"}
                         onChange={() => updateForm("ust_status", "kleinunternehmer")}
-                        className="mt-1 accent-[#06B6D4]"
+                        className="mt-1 accent-[#c8a86b]"
                       />
                       <div>
                         <div className="font-medium">Kleinunternehmer</div>
-                        <div className="text-sm text-[#9bb3c5]">
+                        <div className="text-sm text-[#b7aa91]">
                           Keine USt-Zeile, Hinweis nach § 19 UStG.
                         </div>
                       </div>
                     </label>
-                    <label className="flex items-start gap-3 rounded-xl border border-[rgba(194,221,240,0.14)] bg-[#102635]/40 px-4 py-3 cursor-pointer">
+                    <label className="flex items-start gap-3 rounded-xl border border-[rgba(201, 168, 106, 0.24)] bg-[#2c2318]/40 px-4 py-3 cursor-pointer">
                       <input
                         type="radio"
                         name="ust_status"
                         checked={settingsForm.ust_status === "regelbesteuert"}
                         onChange={() => updateForm("ust_status", "regelbesteuert")}
-                        className="mt-1 accent-[#06B6D4]"
+                        className="mt-1 accent-[#c8a86b]"
                       />
                       <div>
                         <div className="font-medium">Regelbesteuert</div>
-                        <div className="text-sm text-[#9bb3c5]">
+                        <div className="text-sm text-[#b7aa91]">
                           19 % Umsatzsteuer werden auf den Nettobetrag ausgewiesen.
                         </div>
                       </div>
@@ -1011,7 +1011,7 @@ export default function AffiliatePortal() {
                         onChange={(value) => updateForm("vat_id", value)}
                       />
                     )}
-                    <div className="rounded-xl border border-[rgba(255,122,24,0.2)] bg-[rgba(255,122,24,0.08)] px-4 py-3 text-sm text-[#ffd8b5]">
+                    <div className="rounded-xl border border-[rgba(201, 168, 106, 0.2)] bg-[rgba(201, 168, 106, 0.08)] px-4 py-3 text-sm text-[#c8a86b]">
                       {taxHint(settingsForm.ust_status)}
                     </div>
                   </div>
@@ -1019,7 +1019,7 @@ export default function AffiliatePortal() {
               </SectionCard>
 
               <SectionCard>
-                <h3 className="text-sm font-semibold text-[#9bb3c5] uppercase tracking-wider">
+                <h3 className="text-sm font-semibold text-[#b7aa91] uppercase tracking-wider">
                   Konto
                 </h3>
                 <div className="mt-4 grid grid-cols-1 md:grid-cols-2 xl:grid-cols-4 gap-4">
@@ -1078,8 +1078,8 @@ function StatCard({
   return (
     <div className="panel-card rounded-xl p-6">
       <div className="flex items-center justify-between mb-2">
-        <span className="text-sm text-[#9bb3c5]">{label}</span>
-        <span className="text-[#06B6D4]">{icon}</span>
+        <span className="text-sm text-[#b7aa91]">{label}</span>
+        <span className="text-[#c8a86b]">{icon}</span>
       </div>
       <p className="text-2xl font-bold font-[Sora]">{value}</p>
     </div>
@@ -1096,13 +1096,13 @@ function MiniStat({
   tone: "orange" | "teal" | "gray";
 }) {
   const tones: Record<string, string> = {
-    orange: "text-[#ffb067] border-[rgba(255,122,24,0.18)]",
-    teal: "text-[#7ce9df] border-[rgba(16,183,173,0.22)]",
-    gray: "text-[#e9f1f7] border-[rgba(194,221,240,0.14)]",
+    orange: "text-[#c8a86b] border-[rgba(201, 168, 106, 0.18)]",
+    teal: "text-[#6fb3aa] border-[rgba(85, 151, 143, 0.22)]",
+    gray: "text-[#ece0c8] border-[rgba(201, 168, 106, 0.24)]",
   };
   return (
-    <div className={`rounded-xl border bg-[#102635]/40 px-4 py-4 ${tones[tone]}`}>
-      <div className="text-xs uppercase tracking-wider text-[#9bb3c5]">{label}</div>
+    <div className={`rounded-xl border bg-[#2c2318]/40 px-4 py-4 ${tones[tone]}`}>
+      <div className="text-xs uppercase tracking-wider text-[#b7aa91]">{label}</div>
       <div className="mt-2 text-xl font-semibold font-[Sora]">{value}</div>
     </div>
   );
@@ -1118,11 +1118,11 @@ function ActionHint({
   text: string;
 }) {
   return (
-    <div className="flex items-start gap-3 rounded-xl border border-[rgba(194,221,240,0.14)] bg-[#102635]/40 px-4 py-3">
+    <div className="flex items-start gap-3 rounded-xl border border-[rgba(201, 168, 106, 0.24)] bg-[#2c2318]/40 px-4 py-3">
       {icon}
       <div>
-        <p className="text-sm font-semibold text-[#e9f1f7]">{title}</p>
-        <p className="mt-1 text-sm leading-relaxed text-[#9bb3c5]">{text}</p>
+        <p className="text-sm font-semibold text-[#ece0c8]">{title}</p>
+        <p className="mt-1 text-sm leading-relaxed text-[#b7aa91]">{text}</p>
       </div>
     </div>
   );
@@ -1144,10 +1144,10 @@ function ReadinessCard({
     <SectionCard>
       <div className="flex items-start justify-between gap-4">
         <div>
-          <h3 className="text-sm font-semibold text-[#9bb3c5] uppercase tracking-wider">
+          <h3 className="text-sm font-semibold text-[#b7aa91] uppercase tracking-wider">
             Gutschrift-Bereitschaft
           </h3>
-          <p className="mt-2 text-sm leading-relaxed text-[#9bb3c5]">
+          <p className="mt-2 text-sm leading-relaxed text-[#b7aa91]">
             {readiness.can_generate
               ? "Dein Profil ist bereit für die automatische Gutschrift-Erstellung."
               : "Dein Profil blockiert aktuell die automatische Gutschrift-Erstellung."}
@@ -1157,9 +1157,9 @@ function ReadinessCard({
       </div>
 
       {readiness.blockers.length > 0 && (
-        <div className="mt-4 rounded-xl border border-[rgba(245,182,66,0.28)] bg-[rgba(120,53,15,0.35)] px-4 py-4">
+        <div className="mt-4 rounded-xl border border-[rgba(224, 145, 47, 0.28)] bg-[rgba(224, 145, 47,0.35)] px-4 py-4">
           {readiness.blockers.map((blocker) => (
-            <div key={blocker} className="flex items-start gap-2 text-sm text-[#fde68a]">
+            <div key={blocker} className="flex items-start gap-2 text-sm text-[#c8a86b]">
               <AlertCircle size={16} className="mt-0.5 shrink-0" />
               <span>{blocker}</span>
             </div>
@@ -1172,9 +1172,9 @@ function ReadinessCard({
           {readiness.warnings.map((warning) => (
             <div
               key={warning}
-              className="flex items-start gap-2 rounded-xl border border-[rgba(194,221,240,0.14)] bg-[#102635]/40 px-4 py-3 text-sm text-[#d7e5f0]"
+              className="flex items-start gap-2 rounded-xl border border-[rgba(201, 168, 106, 0.24)] bg-[#2c2318]/40 px-4 py-3 text-sm text-[#ece0c8]"
             >
-              <AlertCircle size={16} className="mt-0.5 shrink-0 text-[#ffb067]" />
+              <AlertCircle size={16} className="mt-0.5 shrink-0 text-[#c8a86b]" />
               <span>{warning}</span>
             </div>
           ))}
@@ -1189,11 +1189,11 @@ function StripeCard({ profile }: { profile: AffiliateProfile | null }) {
   const connected = profile.stripe_connect_status === "connected";
   return (
     <div className="panel-card rounded-xl p-6">
-      <h3 className="text-sm font-semibold text-[#9bb3c5] uppercase tracking-wider mb-4">
+      <h3 className="text-sm font-semibold text-[#b7aa91] uppercase tracking-wider mb-4">
         Stripe Connect
       </h3>
       <div className="space-y-4">
-        <p className="text-sm leading-relaxed text-[#9bb3c5]">
+        <p className="text-sm leading-relaxed text-[#b7aa91]">
           Auszahlungen laufen automatisch über Stripe Connect auf dein
           verbundenes Auszahlungs-Konto.
         </p>
@@ -1203,7 +1203,7 @@ function StripeCard({ profile }: { profile: AffiliateProfile | null }) {
               <CheckCircle size={18} />
               <span className="font-medium">Verbunden</span>
             </div>
-            <p className="text-sm leading-relaxed text-[#9bb3c5]">
+            <p className="text-sm leading-relaxed text-[#b7aa91]">
               Neue Provisionen können automatisch für Auszahlungen
               verarbeitet werden, sobald Stripe Transfers auslöst.
             </p>
@@ -1214,7 +1214,7 @@ function StripeCard({ profile }: { profile: AffiliateProfile | null }) {
               <XCircle size={18} />
               <span className="text-sm">Nicht verbunden</span>
             </div>
-            <p className="text-sm leading-relaxed text-[#9bb3c5]">
+            <p className="text-sm leading-relaxed text-[#b7aa91]">
               Ohne Stripe werden Provisionen nur bis 50,00 EUR gespeichert.
               Sobald weitere Provisionen darüber hinaus anfallen, verfallen
               sie, bis du Stripe verbunden hast.
@@ -1237,7 +1237,7 @@ function StripeCard({ profile }: { profile: AffiliateProfile | null }) {
 function InfoField({ label, value }: { label: string; value: string }) {
   return (
     <div>
-      <span className="text-xs text-[#9bb3c5] uppercase tracking-wider">{label}</span>
+      <span className="text-xs text-[#b7aa91] uppercase tracking-wider">{label}</span>
       <p className="text-sm font-medium mt-1">{value || "—"}</p>
     </div>
   );
@@ -1256,12 +1256,12 @@ function InputField({
 }) {
   return (
     <label className="block">
-      <span className="text-xs text-[#9bb3c5] uppercase tracking-wider">{label}</span>
+      <span className="text-xs text-[#b7aa91] uppercase tracking-wider">{label}</span>
       <input
         type={type}
         value={value}
         onChange={(event) => onChange(event.target.value)}
-        className="mt-2 w-full bg-[#07151d] border border-[rgba(194,221,240,0.14)] rounded-lg px-4 py-2.5 text-sm text-[#e9f1f7] placeholder-[#9bb3c5]/50 focus:outline-none focus:border-[#06B6D4] transition-colors"
+        className="mt-2 w-full bg-[#1c150d] border border-[rgba(201, 168, 106, 0.24)] rounded-lg px-4 py-2.5 text-sm text-[#ece0c8] placeholder-[#b7aa91]/50 focus:outline-none focus:border-[#c8a86b] transition-colors"
       />
     </label>
   );
@@ -1280,11 +1280,11 @@ function SelectField({
 }) {
   return (
     <label className="block">
-      <span className="text-xs text-[#9bb3c5] uppercase tracking-wider">{label}</span>
+      <span className="text-xs text-[#b7aa91] uppercase tracking-wider">{label}</span>
       <select
         value={value}
         onChange={(event) => onChange(event.target.value)}
-        className="mt-2 w-full bg-[#07151d] border border-[rgba(194,221,240,0.14)] rounded-lg px-4 py-2.5 text-sm text-[#e9f1f7] focus:outline-none focus:border-[#06B6D4] transition-colors"
+        className="mt-2 w-full bg-[#1c150d] border border-[rgba(201, 168, 106, 0.24)] rounded-lg px-4 py-2.5 text-sm text-[#ece0c8] focus:outline-none focus:border-[#c8a86b] transition-colors"
       >
         {options.map((option) => (
           <option key={option.value} value={option.value}>

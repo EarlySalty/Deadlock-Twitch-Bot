@@ -31,7 +31,7 @@ export function FeatureHighlight({
   const IconComponent = iconMap[icon] || Rocket;
 
   return (
-    <article className="panel-card rounded-xl p-5 border border-border bg-[rgba(7,21,29,0.46)]">
+    <article className="panel-card rounded-xl p-5 border border-border bg-[rgba(28, 21, 13, 0.46)]">
       <div className="flex items-start gap-4">
         <div className="w-10 h-10 rounded-lg gradient-accent flex items-center justify-center shrink-0">
           <IconComponent size={18} className="text-white" />

@@ -257,18 +257,18 @@ function SessionDetails({ sessionId, session }: SessionDetailsProps) {
             <div className="h-48">
               <ResponsiveContainer width="100%" height="100%">
                 <LineChart data={detail.timeline}>
-                  <CartesianGrid strokeDasharray="3 3" stroke="rgba(194, 221, 240, 0.2)" />
+                  <CartesianGrid strokeDasharray="3 3" stroke="rgba(201, 168, 106, 0.24)" />
                   <XAxis
                     dataKey="minute"
-                    stroke="#9ca3af"
+                    stroke="#b7aa91"
                     fontSize={11}
                     tickFormatter={(val) => `${val}m`}
                   />
-                  <YAxis stroke="#9ca3af" fontSize={11} />
+                  <YAxis stroke="#b7aa91" fontSize={11} />
                   <Tooltip
                     contentStyle={{
-                      backgroundColor: '#1f2937',
-                      border: '1px solid rgba(194, 221, 240, 0.25)',
+                      backgroundColor: 'var(--color-popover)',
+                      border: '1px solid var(--color-border)',
                       borderRadius: '8px',
                     }}
                     labelFormatter={(val) => `Minute ${val}`}

@@ -45,11 +45,11 @@ interface ViewersProps {
 
 // eslint-disable-next-line react-refresh/only-export-components
 export const SEGMENT_CONFIG: Record<string, { label: string; color: string; bgClass: string }> = {
-  dedicated: { label: 'Dedicated', color: '#22c55e', bgClass: 'bg-success/10 text-success border-success/20' },
-  regular: { label: 'Regular', color: '#3b82f6', bgClass: 'bg-primary/10 text-primary border-primary/20' },
-  casual: { label: 'Casual', color: '#f59e0b', bgClass: 'bg-warning/10 text-warning border-warning/20' },
-  lurker: { label: 'Lurker', color: '#8b5cf6', bgClass: 'bg-accent/10 text-accent border-accent/20' },
-  new: { label: 'Neu', color: '#06b6d4', bgClass: 'bg-cyan-500/10 text-cyan-400 border-cyan-500/20' },
+  dedicated: { label: 'Dedicated', color: '#c8a86b', bgClass: 'bg-primary/10 text-primary border-primary/20' },
+  regular: { label: 'Regular', color: '#55978f', bgClass: 'bg-accent/10 text-accent border-accent/20' },
+  casual: { label: 'Casual', color: '#dd6a4d', bgClass: 'bg-danger/10 text-danger border-danger/20' },
+  lurker: { label: 'Lurker', color: '#8f9e6b', bgClass: 'bg-secondary/10 text-secondary border-secondary/20' },
+  new: { label: 'Neu', color: '#b7aa91', bgClass: 'bg-secondary/10 text-secondary border-secondary/20' },
 };
 
 const FILTER_OPTIONS: { value: ViewerFilterType; label: string }[] = [
@@ -76,16 +76,16 @@ const PERSONALITY_LABELS: Record<string, string> = {
 };
 
 const PERSONALITY_COLORS = [
-  '#3b82f6', // Command
-  '#22c55e', // Greeting
-  '#f59e0b', // Question
-  '#8b5cf6', // Reaction
-  '#ec4899', // Hype
-  '#ef4444', // Game-Related
-  '#10b981', // Feedback
-  '#f97316', // Technical
-  '#06b6d4', // Social
-  '#6b7280', // Other
+  '#c8a86b', // Command
+  '#55978f', // Greeting
+  '#dd6a4d', // Question
+  '#8f9e6b', // Reaction
+  '#b7aa91', // Hype
+  '#7a6ea8', // Game-Related
+  '#c8a86b', // Feedback
+  '#55978f', // Technical
+  '#dd6a4d', // Social
+  '#8f9e6b', // Other
 ];
 
 function formatNumber(n: number): string {
@@ -308,8 +308,8 @@ function ViewerExpandedRow({
                   <YAxis hide />
                   <Tooltip
                     contentStyle={{
-                      backgroundColor: '#1f2937',
-                      border: '1px solid rgba(194,221,240,0.25)',
+                      backgroundColor: 'var(--color-popover)',
+                      border: '1px solid var(--color-border)',
                       borderRadius: '8px',
                       fontSize: '12px',
                     }}
@@ -403,8 +403,8 @@ function ViewerExpandedRow({
                   </Pie>
                   <Tooltip
                     contentStyle={{
-                      backgroundColor: '#1f2937',
-                      border: '1px solid rgba(194,221,240,0.25)',
+                      backgroundColor: 'var(--color-popover)',
+                      border: '1px solid var(--color-border)',
                       borderRadius: '8px',
                       fontSize: '12px',
                     }}
@@ -485,8 +485,8 @@ export function Viewers({ streamer, days }: ViewersProps) {
   const donutData = useMemo(() => {
     if (!directory?.summary) return [];
     return [
-      { name: 'Exklusiv', value: directory.summary.exclusiveViewers, color: '#22c55e' },
-      { name: 'Shared', value: directory.summary.sharedViewers, color: '#8b5cf6' },
+      { name: 'Exklusiv', value: directory.summary.exclusiveViewers, color: '#c8a86b' },
+      { name: 'Shared', value: directory.summary.sharedViewers, color: '#55978f' },
     ];
   }, [directory?.summary]);
 
@@ -658,8 +658,8 @@ export function Viewers({ streamer, days }: ViewersProps) {
                   </Pie>
                   <Tooltip
                     contentStyle={{
-                      backgroundColor: '#1f2937',
-                      border: '1px solid rgba(194,221,240,0.25)',
+                      backgroundColor: 'var(--color-popover)',
+                      border: '1px solid var(--color-border)',
                       borderRadius: '8px',
                       fontSize: '12px',
                     }}

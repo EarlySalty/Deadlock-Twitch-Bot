@@ -54,8 +54,8 @@ function ChangeList({ items }: { items: StreamReportChange[] }) {
   return (
     <div className="space-y-2">
       {items.map((item, index) => (
-        <div key={index} className="rounded-lg border border-blue-500/20 bg-blue-500/10 p-3">
-          <p className="text-sm font-medium text-blue-300">{item.aspekt}</p>
+        <div key={index} className="rounded-lg border border-accent/20 bg-accent/10 p-3">
+          <p className="text-sm font-medium text-accent">{item.aspekt}</p>
           <p className="mt-1 text-xs text-text-secondary">{item.detail}</p>
         </div>
       ))}
@@ -67,8 +67,8 @@ function RecommendationList({ items }: { items: StreamReportRecommendation[] }) 
   return (
     <div className="space-y-2">
       {items.map((item, index) => (
-        <div key={index} className="rounded-lg border border-purple-500/20 bg-purple-500/10 p-3">
-          <p className="text-sm font-medium text-purple-300">{item.trend}</p>
+        <div key={index} className="rounded-lg border border-primary/20 bg-primary/10 p-3">
+          <p className="text-sm font-medium text-primary">{item.trend}</p>
           <p className="mt-1 text-xs text-text-secondary">{item.empfehlung}</p>
         </div>
       ))}
@@ -110,7 +110,7 @@ export function PostStreamReportCard({ streamer, sessionId }: PostStreamReportCa
     return (
       <div className="rounded-xl border border-border bg-card p-6">
         <div className="mb-4 flex items-center gap-2">
-          <Sparkles className="h-5 w-5 text-purple-400" />
+          <Sparkles className="h-5 w-5 text-primary" />
           <h3 className="text-sm font-bold uppercase tracking-wide text-text-secondary">
             Letzte Stream-Analyse
           </h3>
@@ -130,7 +130,7 @@ export function PostStreamReportCard({ streamer, sessionId }: PostStreamReportCa
     return (
       <div className="rounded-xl border border-border bg-card p-6">
         <div className="mb-4 flex items-center gap-2">
-          <Sparkles className="h-5 w-5 text-purple-400" />
+          <Sparkles className="h-5 w-5 text-primary" />
           <h3 className="text-sm font-bold uppercase tracking-wide text-text-secondary">
             Letzte Stream-Analyse
           </h3>
@@ -147,7 +147,7 @@ export function PostStreamReportCard({ streamer, sessionId }: PostStreamReportCa
     return (
       <div className="rounded-xl border border-border bg-card p-6">
         <div className="mb-4 flex items-center gap-2">
-          <Sparkles className="h-5 w-5 text-purple-400" />
+          <Sparkles className="h-5 w-5 text-primary" />
           <h3 className="text-sm font-bold uppercase tracking-wide text-text-secondary">
             Letzte Stream-Analyse
           </h3>
@@ -165,7 +165,7 @@ export function PostStreamReportCard({ streamer, sessionId }: PostStreamReportCa
     return (
       <div className="rounded-xl border border-border bg-card p-6">
         <div className="mb-4 flex items-center gap-2">
-          <Sparkles className="h-5 w-5 text-purple-400" />
+          <Sparkles className="h-5 w-5 text-primary" />
           <h3 className="text-sm font-bold uppercase tracking-wide text-text-secondary">
             Letzte Stream-Analyse
           </h3>
@@ -208,7 +208,7 @@ export function PostStreamReportCard({ streamer, sessionId }: PostStreamReportCa
     <div className="space-y-6 rounded-xl border border-border bg-card p-6">
       <div className="flex items-center justify-between">
         <div className="flex items-center gap-2">
-          <Sparkles className="h-5 w-5 text-purple-400" />
+          <Sparkles className="h-5 w-5 text-primary" />
           <h3 className="text-sm font-bold uppercase tracking-wide text-text-secondary">
             Letzte Stream-Analyse
           </h3>
@@ -256,8 +256,8 @@ export function PostStreamReportCard({ streamer, sessionId }: PostStreamReportCa
           {report.veraenderungen.length > 0 && (
             <div className="space-y-2">
               <div className="flex items-center gap-2">
-                <BarChart2 className="h-4 w-4 text-blue-400" />
-                <span className="text-xs font-bold uppercase tracking-wide text-blue-400">
+                <BarChart2 className="h-4 w-4 text-accent" />
+                <span className="text-xs font-bold uppercase tracking-wide text-accent">
                   Erkennbare Veränderungen
                 </span>
               </div>
@@ -268,8 +268,8 @@ export function PostStreamReportCard({ streamer, sessionId }: PostStreamReportCa
           {report.empfehlungen.length > 0 && (
             <div className="space-y-2">
               <div className="flex items-center gap-2">
-                <TrendingUp className="h-4 w-4 text-purple-400" />
-                <span className="text-xs font-bold uppercase tracking-wide text-purple-400">
+                <TrendingUp className="h-4 w-4 text-primary" />
+                <span className="text-xs font-bold uppercase tracking-wide text-primary">
                   Empfehlungen
                 </span>
               </div>

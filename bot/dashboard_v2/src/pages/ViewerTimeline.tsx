@@ -257,7 +257,7 @@ export function ViewerTimeline({
                               style={{
                                 left: `${leftPct}%`,
                                 width: `${widthPct}%`,
-                                backgroundColor: segmentConfig?.color || '#94a3b8',
+                                backgroundColor: segmentConfig?.color || '#b7aa91',
                               }}
                             />
                           );

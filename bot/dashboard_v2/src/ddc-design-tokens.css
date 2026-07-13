@@ -2,10 +2,8 @@
  * DDC — Deutsche Deadlock Community
  * Design Tokens: Colors & Typography
  * ─────────────────────────────────────
- * Two color contexts exist:
- *   - Marketing/Website: cyan + purple accent
- *   - Dashboard/Analytics: orange + teal accent
- * Shared: dark navy backgrounds, muted text, semantic statuses
+ * Website and dashboard share the Gold-Teal-Ink brand palette.
+ * Semantic status colors remain distinct from brand accents.
  */
 
 /* ── Google Font Imports (closest matches; self-hosted woff2 preferred) ── */
@@ -13,28 +11,28 @@
 
 :root {
   /* ── Background Scale ── */
-  --color-bg:           #07151d;   /* deepest background */
-  --color-bg-alt:       #0b1d28;   /* slightly lighter bg */
-  --color-bg-elevated:  #0c1a30;   /* page background (website) */
-  --color-card:         #102635;   /* card surface */
-  --color-card-hover:   #173448;   /* card hover */
-  --color-popover:      #0e2a3a;   /* popovers / dropdowns */
+  --color-bg:           #1c150d;   /* deepest background */
+  --color-bg-alt:       #241c11;   /* slightly lighter bg */
+  --color-bg-elevated:  #241c11;   /* page background */
+  --color-card:         #2c2318;   /* card surface */
+  --color-card-hover:   #352a1b;   /* card hover */
+  --color-popover:      #2c2318;   /* popovers / dropdowns */
 
-  /* ── Brand Primary: Website Context — Cyan ── */
-  --color-web-primary:        #06B6D4;
-  --color-web-primary-hover:  #22d3ee;
-  --color-web-primary-soft:   rgba(6, 182, 212, 0.22);
-  --color-web-accent:         #A855F7;
-  --color-web-accent-hover:   #c084fc;
-  --color-web-accent-soft:    rgba(168, 85, 247, 0.20);
+  /* ── Brand Primary: Website Context ── */
+  --color-web-primary:        #c8a86b;
+  --color-web-primary-hover:  #efd49d;
+  --color-web-primary-soft:   rgba(201, 168, 106, 0.20);
+  --color-web-accent:         #55978f;
+  --color-web-accent-hover:   #6fb3aa;
+  --color-web-accent-soft:    rgba(85, 151, 143, 0.20);
 
-  /* ── Brand Primary: Dashboard Context — Orange ── */
-  --color-dash-primary:       #ff7a18;
-  --color-dash-primary-hover: #ff8d39;
-  --color-dash-primary-soft:  rgba(255, 122, 24, 0.20);
-  --color-dash-accent:        #10b7ad;
-  --color-dash-accent-hover:  #1dd4ca;
-  --color-dash-accent-soft:   rgba(16, 183, 173, 0.20);
+  /* ── Brand Primary: Dashboard Context ── */
+  --color-dash-primary:       #c8a86b;
+  --color-dash-primary-hover: #efd49d;
+  --color-dash-primary-soft:  rgba(201, 168, 106, 0.20);
+  --color-dash-accent:        #55978f;
+  --color-dash-accent-hover:  #6fb3aa;
+  --color-dash-accent-soft:   rgba(85, 151, 143, 0.20);
 
   /* ── Semantic / Shared Aliases ── */
   --color-primary:       var(--color-web-primary);
@@ -45,30 +43,30 @@
   --color-accent-soft:   var(--color-web-accent-soft);
 
   /* ── Status ── */
-  --color-success:  #2ecc71;
-  --color-warning:  #f5b642;
-  --color-danger:   #ff6b5e;
-  --color-info:     #06B6D4;
+  --color-success:  #3fa66b;
+  --color-warning:  #e0912f;
+  --color-danger:   #dd6a4d;
+  --color-info:     #55978f;
 
-  --color-success-soft: rgba(46, 204, 113, 0.15);
-  --color-warning-soft: rgba(245, 182, 66, 0.15);
-  --color-danger-soft:  rgba(255, 107, 94, 0.15);
+  --color-success-soft: rgba(63, 166, 107, 0.15);
+  --color-warning-soft: rgba(224, 145, 47, 0.15);
+  --color-danger-soft:  rgba(221, 106, 77, 0.15);
 
   /* ── Text ── */
-  --color-text:     #e9f1f7;   /* primary text */
-  --color-muted:    #9bb3c5;   /* secondary / muted text */
-  --color-subtle:   #5a7a8e;   /* very muted / disabled */
+  --color-text:     #ece0c8;   /* primary text */
+  --color-muted:    #b7aa91;   /* secondary / muted text */
+  --color-subtle:   #746a57;   /* very muted / disabled */
 
   /* ── Border ── */
-  --color-border:        rgba(194, 221, 240, 0.14);
-  --color-border-strong: rgba(194, 221, 240, 0.28);
-  --color-border-hover:  rgba(194, 221, 240, 0.30);
+  --color-border:        rgba(201, 168, 106, 0.24);
+  --color-border-strong: rgba(201, 168, 106, 0.52);
+  --color-border-hover:  rgba(201, 168, 106, 0.42);
 
   /* ── Gradients ── */
-  --gradient-brand:   linear-gradient(120deg, var(--color-web-primary) 10%, #6D4AE8 60%, var(--color-web-accent));
-  --gradient-dash:    linear-gradient(135deg, var(--color-dash-primary), var(--color-dash-accent));
-  --gradient-bg:      linear-gradient(160deg, #0c1a30 0%, #091525 55%, #0b1a2e 100%);
-  --gradient-hero:    linear-gradient(160deg, #07151d 0%, #081a24 55%, #0a202c 100%);
+  --gradient-brand:   linear-gradient(120deg, #efd49d 10%, #c8a86b 55%, #55978f);
+  --gradient-dash:    linear-gradient(135deg, #c8a86b, #55978f);
+  --gradient-bg:      linear-gradient(160deg, #241c11 0%, #1c150d 55%, #241c11 100%);
+  --gradient-hero:    linear-gradient(160deg, #1c150d 0%, #241c11 55%, #2c2318 100%);
 
   /* ── Typography ── */
   --font-display: 'Sora', 'Manrope', sans-serif;
@@ -120,8 +118,8 @@
   --shadow-xl:  0 28px 56px rgba(0,0,0,0.35);
 
   /* ── Shadow: primary glow ── */
-  --shadow-primary-glow: 0 12px 28px rgba(6, 182, 212, 0.22);
-  --shadow-primary-glow-hover: 0 16px 36px rgba(6, 182, 212, 0.35), 0 0 20px rgba(6, 182, 212, 0.12);
+  --shadow-primary-glow: 0 12px 28px rgba(201, 168, 106, 0.22);
+  --shadow-primary-glow-hover: 0 16px 36px rgba(201, 168, 106, 0.35), 0 0 20px rgba(201, 168, 106, 0.12);
 
   /* ── Spacing Scale ── */
   --space-1:  0.25rem;  /* 4px */
@@ -218,11 +216,11 @@
 .code {
   font-family: var(--font-mono);
   font-size: 0.85em;
-  background: rgba(16, 38, 53, 0.8);
+  background: rgba(44, 35, 24, 0.8);
   border: 1px solid var(--color-border);
   border-radius: var(--radius-sm);
   padding: 0.15em 0.45em;
-  color: var(--color-web-primary);
+  color: var(--color-primary);
 }
 
 /* ── Gradient Text Utility ── */
