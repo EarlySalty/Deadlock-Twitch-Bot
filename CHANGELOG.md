@@ -1,3 +1,11 @@
+## #356 — Admin-Daten zeigen wieder den echten Betriebszustand
+
+**Problem:** Bei Streamern fehlte der Zeitpunkt ihrer ersten Bot-Autorisierung, die Research-Seite lieferte keine Onboarding-Ideen und EventSub sowie Audit Log wirkten trotz laufendem System leer oder veraltet.
+
+**Änderung:** Die Streamer-Tabelle zeigt und filtert jetzt „Partner seit“ anhand der ersten Autorisierung, Research schlägt passende noch nicht onboardete Deadlock-Streamer vor, EventSub wertet die aktuellen Webhook-Snapshots aus und erfolgreiche Admin-Änderungen werden dauerhaft protokolliert.
+
+**Aktuelles Verhalten:** Neue Kandidaten lassen sich direkt analysieren, der EventSub-Status unterscheidet aktuelle und veraltete Snapshots, und das Audit Log füllt sich ab jetzt automatisch mit Zeitpunkt, Akteur, Aktion und Ziel.
+
 ## #355 — Raid-Hinweis verlinkt den Zielkanal wieder richtig
 
 **Problem:** Im Hinweis nach einem Raid stand direkt hinter dem Namen ein Punkt. Twitch zieht das Satzzeichen mit in den Namen und macht aus der Erwähnung damit einen kaputten Link.

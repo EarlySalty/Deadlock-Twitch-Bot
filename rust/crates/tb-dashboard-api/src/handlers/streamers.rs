@@ -201,6 +201,7 @@ mod tests {
             .uri("/twitch/api/v2/streamers")
             .extension(ConnectInfo(addr))
             .header(axum::http::header::HOST, "example.com")
+            .header("x-dashboard-context", "admin")
             .header(
                 axum::http::header::COOKIE,
                 format!("master_dash_session={session_id}"),

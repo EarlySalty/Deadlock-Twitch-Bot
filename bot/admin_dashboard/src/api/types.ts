@@ -53,6 +53,7 @@ export interface StreamerRow {
   grantedScopes?: string[];
   missingScopes?: string[];
   oauthAuthorizedAt?: string | null;
+  partnerSince?: string | null;
   promoDisabled?: boolean;
   notes?: string;
   status?: string;
@@ -229,6 +230,7 @@ export interface EventSubSubscription {
 
 export interface EventSubStatusResponse {
   websocketStatus?: string;
+  transportMode?: string;
   websocketSessionId?: string;
   websocketConnectedAt?: string;
   websocketReconnectedAt?: string;
@@ -240,6 +242,9 @@ export interface EventSubStatusResponse {
     lastSnapshotAt?: string;
   };
   subscriptions?: EventSubSubscription[];
+  lastKnownSubscriptions?: EventSubSubscription[];
+  lastKnownSnapshotAt?: string;
+  snapshotStale?: boolean;
   raw?: Record<string, unknown>;
 }
 
@@ -543,4 +548,16 @@ export interface ResearchResponse {
       label: string;
     };
   };
+}
+
+export interface ResearchSuggestion {
+  login: string;
+  subject: ResearchSubject;
+  score: ResearchResponse['score'];
+}
+
+export interface ResearchSuggestionsResponse {
+  days: number;
+  baseline: ResearchBaseline;
+  items: ResearchSuggestion[];
 }

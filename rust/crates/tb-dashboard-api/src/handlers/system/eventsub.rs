@@ -1,12 +1,15 @@
 //! Handler für `GET /twitch/api/admin/system/eventsub`.
 
+use crate::auth::level::DashboardAuthLevel;
 use axum::{extract::State, response::IntoResponse, Json};
+use chrono::{Duration, Utc};
 use serde::Serialize;
 use serde_json::Value;
 use sqlx::PgPool;
 use tb_analytics::system_eventsub::eventsub_snapshot;
-use crate::auth::level::DashboardAuthLevel;
 use tb_http_core::ApiError;
+
+const SNAPSHOT_STALE_AFTER_MINUTES: i64 = 15;
 
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -28,6 +31,7 @@ pub struct EventsubResponse {
     pub subscriptions: Vec<Value>,
     pub last_known_subscriptions: Vec<Value>,
     pub last_known_snapshot_at: Option<String>,
+    pub snapshot_stale: bool,
 }
 
 /// `GET /twitch/api/admin/system/eventsub`
@@ -59,6 +63,7 @@ pub async fn eventsub_handler(
             subscriptions: vec![],
             last_known_subscriptions: vec![],
             last_known_snapshot_at: None,
+            snapshot_stale: false,
         },
         Some(s) => {
             // P2.78: Live-Kapazität aus dem Snapshot ableiten. Der
@@ -74,31 +79,37 @@ pub async fn eventsub_handler(
                 .take(200)
                 .map(|mut item| {
                     if let (Some(obj), Some(ts)) = (item.as_object_mut(), &last_snapshot_at) {
-                        obj.insert(
-                            "snapshotAt".to_string(),
-                            Value::String(ts.clone()),
-                        );
+                        obj.insert("snapshotAt".to_string(), Value::String(ts.clone()));
                     }
                     item
                 })
                 .collect();
-            // Transport gilt als aktiv, sobald Slots belegt/konfiguriert sind.
-            let active = s.total_slots > 0 || s.used_slots > 0;
-            let status = if active { "connected" } else { "inactive" };
+            let stale = Utc::now().signed_duration_since(s.ts_utc)
+                > Duration::minutes(SNAPSHOT_STALE_AFTER_MINUTES);
+            // Transport gilt nur mit frischem Snapshot als aktiv.
+            let active = !stale && (s.total_slots > 0 || s.used_slots > 0);
+            let status = if stale {
+                "stale"
+            } else if active {
+                "connected"
+            } else {
+                "inactive"
+            };
             let remaining = s.headroom_slots.max(0);
             EventsubResponse {
                 websocket_status: status,
                 transport_mode: status,
-                active_subscription_count: s.used_slots,
+                active_subscription_count: if active { s.used_slots } else { 0 },
                 capacity: EventsubCapacity {
                     used: s.used_slots,
                     max: s.total_slots,
                     remaining,
                     last_snapshot_at: last_snapshot_at.clone(),
                 },
-                subscriptions: vec![],
+                subscriptions: if active { last_known.clone() } else { vec![] },
                 last_known_subscriptions: last_known,
                 last_known_snapshot_at: last_snapshot_at,
+                snapshot_stale: stale,
             }
         }
     };
@@ -133,9 +144,7 @@ mod tests {
                 Some(d) => d,
                 None => {
                     if std::env::var("TB_TEST_REQUIRE_DB").as_deref() == Ok("1") {
-                        panic!(
-                            "TB_TEST_REQUIRE_DB=1 ist gesetzt, aber TB_TEST_DATABASE_URL fehlt"
-                        );
+                        panic!("TB_TEST_REQUIRE_DB=1 ist gesetzt, aber TB_TEST_DATABASE_URL fehlt");
                     }
                     eprintln!("SKIP: TB_TEST_DATABASE_URL nicht gesetzt");
                     return;
@@ -267,7 +276,7 @@ mod tests {
         sqlx::query(
             "INSERT INTO twitch_eventsub_capacity_snapshot \
              (listener_count, used_slots, total_slots, headroom_slots, listeners_json) \
-             VALUES (1, 7, 30, 23, '[{\"idx\":1,\"ready\":1}]')",
+             VALUES (0, 7, 30, 23, '[{\"id\":\"stream.online:42\",\"type\":\"stream.online\",\"status\":\"enabled\",\"transport\":\"webhook\"}]')",
         )
         .execute(&pool)
         .await
@@ -290,5 +299,39 @@ mod tests {
         assert_eq!(v["capacity"]["used"], 7);
         assert_eq!(v["capacity"]["remaining"], 23);
         assert_eq!(v["activeSubscriptionCount"], 7);
+        assert_eq!(v["subscriptions"].as_array().unwrap().len(), 1);
+        assert_eq!(v["snapshotStale"], false);
+    }
+
+    #[tokio::test]
+    async fn alter_snapshot_wird_nicht_als_live_gemeldet() {
+        let dsn = db_dsn_or_skip!();
+        let pool = make_pool(&dsn, "test_handler_eventsub_stale").await;
+        sqlx::query(
+            "INSERT INTO twitch_eventsub_capacity_snapshot \
+             (ts_utc, listener_count, used_slots, total_slots, headroom_slots, listeners_json) \
+             VALUES (NOW() - INTERVAL '1 hour', 0, 7, 10000, 9993, '[{\"id\":\"old\"}]')",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+        let addr: SocketAddr = "1.2.3.4:9999".parse().unwrap();
+        let req = Request::builder()
+            .uri("/twitch/api/admin/system/eventsub")
+            .extension(ConnectInfo(addr))
+            .header(axum::http::header::HOST, "example.com")
+            .header("x-internal-token", "tok")
+            .body(Body::empty())
+            .unwrap();
+
+        let res = make_router(pool, "tok").oneshot(req).await.unwrap();
+        let b = axum::body::to_bytes(res.into_body(), 4096).await.unwrap();
+        let v: serde_json::Value = serde_json::from_slice(&b).unwrap();
+
+        assert_eq!(v["websocketStatus"], "stale");
+        assert_eq!(v["activeSubscriptionCount"], 0);
+        assert_eq!(v["snapshotStale"], true);
+        assert!(v["subscriptions"].as_array().unwrap().is_empty());
+        assert_eq!(v["lastKnownSubscriptions"].as_array().unwrap().len(), 1);
     }
 }

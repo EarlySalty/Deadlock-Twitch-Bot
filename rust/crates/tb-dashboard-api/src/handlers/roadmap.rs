@@ -649,6 +649,7 @@ CREATE TABLE twitch_roadmap_items (
             .uri("/twitch/api/v2/roadmap")
             .extension(ConnectInfo(addr))
             .header(axum::http::header::HOST, "example.com")
+            .header("x-dashboard-context", "admin")
             .header(
                 axum::http::header::COOKIE,
                 format!("{ADMIN_COOKIE_NAME}={}", session.session_id),

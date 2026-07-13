@@ -33,6 +33,7 @@ import type {
   RaidConfigSnapshot,
   RaidConfigUpdatePayload,
   ResearchResponse,
+  ResearchSuggestionsResponse,
   ScopeStatusResponse,
   StreamerDetail,
   StreamerRow,
@@ -1204,4 +1205,8 @@ export async function fetchAdminResearch(login: string, days: number): Promise<R
   return admin<ResearchResponse>(
     `/research/${encodeURIComponent(login.trim())}?days=${encodeURIComponent(days)}`,
   );
+}
+
+export async function fetchAdminResearchSuggestions(days: number): Promise<ResearchSuggestionsResponse> {
+  return admin<ResearchSuggestionsResponse>(`/research/suggestions?days=${encodeURIComponent(days)}`);
 }

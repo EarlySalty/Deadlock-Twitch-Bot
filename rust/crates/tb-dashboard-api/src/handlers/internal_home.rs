@@ -21,17 +21,17 @@ use std::collections::VecDeque;
 use std::io::{BufRead, BufReader};
 
 use axum::{
-    Json,
     extract::{Query, State},
-    http::{HeaderMap, StatusCode, request::Parts},
+    http::{request::Parts, HeaderMap, StatusCode},
     response::{IntoResponse, Response},
+    Json,
 };
 use chrono::{DateTime, Duration, NaiveDate, Utc};
 use serde::Deserialize;
-use serde_json::{Value, json};
-use sqlx::{PgPool, Row, postgres::PgRow};
+use serde_json::{json, Value};
+use sqlx::{postgres::PgRow, PgPool, Row};
 
-use crate::auth::level::{DashboardAuthLevel, is_local_request};
+use crate::auth::level::{is_local_request, DashboardAuthLevel};
 
 // ── Konstanten (Python api_v2.py:466-492) ────────────────────────────────────
 
@@ -2316,7 +2316,7 @@ mod changelog_origin_tests {
     //! gültiger `master_dash_session` aber Cross-Origin → 403 invalid_csrf;
     //! same-origin → kein invalid_csrf (passiert die Origin-Prüfung).
     use super::*;
-    use crate::auth::session::{ADMIN_COOKIE_NAME, DashboardAuthState};
+    use crate::auth::session::{DashboardAuthState, ADMIN_COOKIE_NAME};
     use axum::body::Body;
     use axum::http::Request;
     use axum::routing::post;
@@ -2405,6 +2405,7 @@ mod changelog_origin_tests {
             .uri("/changelog")
             // Nicht-Loopback-Host erzwingen, sonst greift der Localhost-Bypass.
             .header("host", "dash.example.com")
+            .header("x-dashboard-context", "admin")
             .header("content-type", "application/json")
             .header(
                 axum::http::header::COOKIE,
