@@ -230,6 +230,7 @@ export interface EventSubSubscription {
 
 export interface EventSubStatusResponse {
   websocketStatus?: string;
+  transportMode?: string;
   websocketSessionId?: string;
   websocketConnectedAt?: string;
   websocketReconnectedAt?: string;
@@ -241,6 +242,9 @@ export interface EventSubStatusResponse {
     lastSnapshotAt?: string;
   };
   subscriptions?: EventSubSubscription[];
+  lastKnownSubscriptions?: EventSubSubscription[];
+  lastKnownSnapshotAt?: string;
+  snapshotStale?: boolean;
   raw?: Record<string, unknown>;
 }
 

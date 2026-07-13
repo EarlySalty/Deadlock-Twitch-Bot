@@ -1087,8 +1087,8 @@ async fn periodic_capacity_snapshot_throttelt_auf_sample_intervall() {
     manager.record_capacity_snapshot_periodic("poll_tick").await;
     assert_eq!(snapshot_count(&pool).await, base + 2);
 
-    let (trigger, used): (String, i32) = sqlx::query_as(
-        "SELECT trigger_reason, used_slots FROM twitch_eventsub_capacity_snapshot
+    let (trigger, used, listeners_json): (String, i32, String) = sqlx::query_as(
+        "SELECT trigger_reason, used_slots, listeners_json FROM twitch_eventsub_capacity_snapshot
           WHERE trigger_reason = 'poll_tick' ORDER BY id DESC LIMIT 1",
     )
     .fetch_one(&pool)
@@ -1096,6 +1096,13 @@ async fn periodic_capacity_snapshot_throttelt_auf_sample_intervall() {
     .unwrap();
     assert_eq!(trigger, "poll_tick");
     assert_eq!(used, 2);
+    let listeners: serde_json::Value = serde_json::from_str(&listeners_json).unwrap();
+    assert_eq!(listeners.as_array().unwrap().len(), 2);
+    assert!(listeners
+        .as_array()
+        .unwrap()
+        .iter()
+        .all(|listener| { listener["status"] == "enabled" && listener["transport"] == "webhook" }));
 }
 
 #[tokio::test]

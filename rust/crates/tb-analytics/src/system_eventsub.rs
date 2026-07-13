@@ -1,7 +1,6 @@
 //! Query für `GET /twitch/api/admin/system/eventsub`.
 //!
-//! Liest die neueste Zeile aus `twitch_eventsub_capacity_snapshot`
-//! mit `listener_count > 0 AND listeners_json IS NOT NULL`.
+//! Liest die neueste Zeile aus `twitch_eventsub_capacity_snapshot`.
 
 use chrono::{DateTime, Utc};
 use sqlx::PgPool;
@@ -9,11 +8,11 @@ use sqlx::PgPool;
 /// Neuester EventSub-Snapshot aus der DB.
 ///
 /// Die Capacity-Felder (`used_slots`/`total_slots`/`headroom_slots`) werden vom
-/// Monitoring-Prozess beim Schreiben des Snapshots aus dem Live-WebSocket-State
-/// abgeleitet (`bot/monitoring/eventsub_mixin.py`). Für den Dashboard-Prozess
-/// ist dieser Snapshot die einzige verfügbare Quelle der Live-Kapazität — der
-/// WebSocket-Listener läuft im Bot-Prozess, nicht hier.
-#[derive(Debug)]
+/// Monitoring-Prozess beim Schreiben des Snapshots aus dem Live-Webhook-State
+/// abgeleitet. Für den Dashboard-Prozess ist dieser Snapshot die einzige
+/// verfügbare Quelle der Live-Kapazität — der SubscriptionManager läuft im
+/// Bot-Prozess, nicht hier.
+#[derive(Debug, sqlx::FromRow)]
 pub struct EventsubSnapshot {
     pub ts_utc: DateTime<Utc>,
     pub listener_count: i64,
@@ -30,33 +29,23 @@ pub struct EventsubSnapshot {
 /// Slot-/Listener-Counts sind in Prod int4 → Cast auf bigint, damit sqlx i64
 /// dekodieren kann.
 pub async fn eventsub_snapshot(pool: &PgPool) -> Result<Option<EventsubSnapshot>, sqlx::Error> {
-    let row = sqlx::query!(
+    sqlx::query_as::<_, EventsubSnapshot>(
         r#"
         SELECT
-            ts_utc AS "ts_utc!",
-            listener_count::bigint AS "listener_count!",
-            COALESCE(used_slots, 0)::bigint AS "used_slots!",
-            COALESCE(total_slots, 0)::bigint AS "total_slots!",
-            COALESCE(headroom_slots, 0)::bigint AS "headroom_slots!",
-            listeners_json AS "listeners_json!"
+            ts_utc,
+            listener_count::bigint AS listener_count,
+            COALESCE(used_slots, 0)::bigint AS used_slots,
+            COALESCE(total_slots, 0)::bigint AS total_slots,
+            COALESCE(headroom_slots, 0)::bigint AS headroom_slots,
+            listeners_json
         FROM twitch_eventsub_capacity_snapshot
-        WHERE listener_count > 0
-          AND listeners_json IS NOT NULL
+        WHERE listeners_json IS NOT NULL
         ORDER BY ts_utc DESC
         LIMIT 1
         "#,
     )
     .fetch_optional(pool)
-    .await?;
-
-    Ok(row.map(|row| EventsubSnapshot {
-        ts_utc: row.ts_utc,
-        listener_count: row.listener_count,
-        used_slots: row.used_slots,
-        total_slots: row.total_slots,
-        headroom_slots: row.headroom_slots,
-        listeners_json: row.listeners_json,
-    }))
+    .await
 }
 
 #[cfg(test)]
@@ -154,6 +143,34 @@ mod tests {
         assert_eq!(s.headroom_slots, 23);
         let parsed: serde_json::Value = serde_json::from_str(&s.listeners_json).unwrap();
         assert!(parsed.is_array());
+    }
+
+    #[tokio::test]
+    async fn neuester_webhook_snapshot_ohne_listener_wird_bevorzugt() {
+        let dsn = match test_dsn() {
+            Some(d) => d,
+            None => {
+                eprintln!("SKIP: TB_TEST_DATABASE_URL nicht gesetzt");
+                return;
+            }
+        };
+        let pool = make_pool(&dsn, "test_eventsub_webhook_neu").await;
+        sqlx::query(
+            r#"INSERT INTO twitch_eventsub_capacity_snapshot
+                (ts_utc, listener_count, used_slots, total_slots, headroom_slots, listeners_json)
+            VALUES
+                (NOW() - INTERVAL '1 day', 88, 88, 10000, 9912, '[{"id":"stale"}]'),
+                (NOW(), 0, 2, 10000, 9998, '[{"id":"fresh-a"},{"id":"fresh-b"}]')"#,
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+
+        let snap = eventsub_snapshot(&pool).await.unwrap().expect("snapshot");
+
+        assert_eq!(snap.listener_count, 0);
+        assert_eq!(snap.used_slots, 2);
+        assert!(snap.listeners_json.contains("fresh-a"));
     }
 
     #[tokio::test]
