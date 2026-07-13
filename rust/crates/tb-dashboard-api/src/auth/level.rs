@@ -258,7 +258,10 @@ fn master_session_auth(admin_dashboard: bool, admin_mode_active: bool) -> Dashbo
 /// Macht aus einer geladenen Partner-Session das Auth-Level: Admin-Login-Promotion
 /// nur bei aktivem Admin-Mode-Cookie, sonst bleibt auch ein admin-eligibler Login
 /// Partner.
-fn partner_or_admin(partner: crate::auth::session::PartnerSession, admin_mode_active: bool) -> DashboardAuthLevel {
+fn partner_or_admin(
+    partner: crate::auth::session::PartnerSession,
+    admin_mode_active: bool,
+) -> DashboardAuthLevel {
     let login = partner.twitch_login.trim().to_lowercase();
     if is_admin_login(&login) && admin_mode_active {
         // senderauth-01: Twitch-Session-Identität an den Admin durchreichen, damit
@@ -289,10 +292,7 @@ where
 {
     type Rejection = std::convert::Infallible;
 
-    async fn from_request_parts(
-        parts: &mut Parts,
-        state: &S,
-    ) -> Result<Self, Self::Rejection> {
+    async fn from_request_parts(parts: &mut Parts, state: &S) -> Result<Self, Self::Rejection> {
         if matches!(
             tb_http_core::AuthLevel::from_request_parts(parts, state).await,
             Ok(tb_http_core::AuthLevel::Admin)
@@ -301,96 +301,107 @@ where
         }
 
         // Auth-State-Extension holen (enthält Pool + Cache)
-        let Some(state) = parts.extensions.get::<crate::auth::session::DashboardAuthState>().cloned() else {
+        let Some(state) = parts
+            .extensions
+            .get::<crate::auth::session::DashboardAuthState>()
+            .cloned()
+        else {
             return Ok(DashboardAuthLevel::None);
         };
 
         let admin_mode_active = admin_mode_cookie_active(parts);
+        let admin_dashboard = admin_dashboard_context(parts);
 
-        // Partner: twitch_dash_session
-        if let Some(session_id) = extract_cookie(parts, crate::auth::session::PARTNER_COOKIE_NAME) {
-            if !session_id.is_empty() {
-                if let Ok(Some(partner)) = state.load_partner_session(session_id).await {
-                    parts
-                        .extensions
-                        .insert(AuthenticatedPartnerSessionId(session_id.to_string()));
-                    return Ok(partner_or_admin(partner, admin_mode_active));
-                }
-            }
-        }
-
-        // Partner-Access-Session: twitch_dash_session_partner (B3-9). Durable
-        // Session nach Einmal-Login; überdauert die kurzlebige twitch_dash_session.
-        // Konsumiert wie Python `_get_partner_access_session` (api_v2.py:1349-1352)
-        // NACH dem Dashboard-Session-Check, mit Fingerprint-Bindung gegen den
-        // Request-User-Agent.
-        if let Some(session_id) =
-            extract_cookie(parts, crate::auth::session::PARTNER_ACCESS_COOKIE_NAME)
-        {
-            if !session_id.is_empty() {
-                let user_agent = parts
-                    .headers
-                    .get(axum::http::header::USER_AGENT)
-                    .and_then(|v| v.to_str().ok())
-                    .unwrap_or("");
-                if let Ok(Some(partner)) =
-                    state.load_partner_access_session(session_id, user_agent).await
+        // Admin-Kontexte prüfen die Master-Session zuerst; öffentlich bleibt die
+        // bestehende Partner-vor-Master-Reihenfolge unverändert.
+        for try_admin_session in [admin_dashboard, !admin_dashboard] {
+            if !try_admin_session {
+                // Partner: twitch_dash_session
+                if let Some(session_id) =
+                    extract_cookie(parts, crate::auth::session::PARTNER_COOKIE_NAME)
                 {
-                    return Ok(partner_or_admin(partner, admin_mode_active));
-                }
-            }
-        }
-
-        // Admin: master_dash_session. In Produktion ist das Discord-Dashboard
-        // die zentrale Wahrheit; eine dort gültige Session wird lokal nur mit
-        // einem eigenen CSRF-Token gespiegelt.
-        let central_config = parts
-            .extensions
-            .get::<crate::auth::discord_admin_login::DiscordAdminLoginConfig>()
-            .cloned();
-        let admin_session_ids: Vec<String> = cookie_values(
-            &parts.headers,
-            crate::auth::session::ADMIN_COOKIE_NAME,
-        )
-        .into_iter()
-        .filter(|session_id| !session_id.is_empty())
-        .map(str::to_string)
-        .collect();
-        for session_id in admin_session_ids {
-            if let Some(config) = central_config.as_ref() {
-                let Ok(session) = config.client.validate_session(&session_id).await else {
-                    continue;
-                };
-                match state.load_admin_session(&session_id).await {
-                    Ok(Some(_)) => {}
-                    Ok(None) => {
-                        if state
-                            .import_central_admin_session(
-                                &session_id,
-                                &session.user_id.to_string(),
-                                &session.username,
-                                &session.display_name,
-                                session.expires_at,
-                            )
-                            .await
-                            .is_err()
-                        {
-                            continue;
+                    if !session_id.is_empty() {
+                        if let Ok(Some(partner)) = state.load_partner_session(session_id).await {
+                            parts
+                                .extensions
+                                .insert(AuthenticatedPartnerSessionId(session_id.to_string()));
+                            return Ok(partner_or_admin(partner, admin_mode_active));
                         }
                     }
-                    Err(_) => continue,
                 }
-            } else if !matches!(state.load_admin_session(&session_id).await, Ok(Some(_))) {
+
+                // Partner-Access-Session: twitch_dash_session_partner (B3-9). Durable
+                // Session nach Einmal-Login; überdauert die kurzlebige twitch_dash_session.
+                // Konsumiert wie Python `_get_partner_access_session` (api_v2.py:1349-1352)
+                // NACH dem Dashboard-Session-Check, mit Fingerprint-Bindung gegen den
+                // Request-User-Agent.
+                if let Some(session_id) =
+                    extract_cookie(parts, crate::auth::session::PARTNER_ACCESS_COOKIE_NAME)
+                {
+                    if !session_id.is_empty() {
+                        let user_agent = parts
+                            .headers
+                            .get(axum::http::header::USER_AGENT)
+                            .and_then(|v| v.to_str().ok())
+                            .unwrap_or("");
+                        if let Ok(Some(partner)) = state
+                            .load_partner_access_session(session_id, user_agent)
+                            .await
+                        {
+                            return Ok(partner_or_admin(partner, admin_mode_active));
+                        }
+                    }
+                }
+
                 continue;
             }
 
-            parts
+            // Admin: master_dash_session. In Produktion ist das Discord-Dashboard
+            // die zentrale Wahrheit; eine dort gültige Session wird lokal nur mit
+            // einem eigenen CSRF-Token gespiegelt.
+            let central_config = parts
                 .extensions
-                .insert(AuthenticatedAdminSessionId(session_id));
-            return Ok(master_session_auth(
-                admin_dashboard_context(parts),
-                admin_mode_active,
-            ));
+                .get::<crate::auth::discord_admin_login::DiscordAdminLoginConfig>()
+                .cloned();
+            let admin_session_ids: Vec<String> =
+                cookie_values(&parts.headers, crate::auth::session::ADMIN_COOKIE_NAME)
+                    .into_iter()
+                    .filter(|session_id| !session_id.is_empty())
+                    .map(str::to_string)
+                    .collect();
+            for session_id in admin_session_ids {
+                if let Some(config) = central_config.as_ref() {
+                    let Ok(session) = config.client.validate_session(&session_id).await else {
+                        continue;
+                    };
+                    match state.load_admin_session(&session_id).await {
+                        Ok(Some(_)) => {}
+                        Ok(None) => {
+                            if state
+                                .import_central_admin_session(
+                                    &session_id,
+                                    &session.user_id.to_string(),
+                                    &session.username,
+                                    &session.display_name,
+                                    session.expires_at,
+                                )
+                                .await
+                                .is_err()
+                            {
+                                continue;
+                            }
+                        }
+                        Err(_) => continue,
+                    }
+                } else if !matches!(state.load_admin_session(&session_id).await, Ok(Some(_))) {
+                    continue;
+                }
+
+                parts
+                    .extensions
+                    .insert(AuthenticatedAdminSessionId(session_id));
+                return Ok(master_session_auth(admin_dashboard, admin_mode_active));
+            }
         }
 
         Ok(DashboardAuthLevel::None)
@@ -484,21 +495,32 @@ mod tests {
 
     #[test]
     fn cookie_extraktion_korrekt() {
-        use axum::http::{HeaderMap, HeaderValue, Request, header::COOKIE};
+        use axum::http::{header::COOKIE, HeaderMap, HeaderValue, Request};
 
         let mut headers = HeaderMap::new();
         headers.insert(
             COOKIE,
-            HeaderValue::from_static("twitch_dash_session=abc123; master_dash_session=xyz789; other=val"),
+            HeaderValue::from_static(
+                "twitch_dash_session=abc123; master_dash_session=xyz789; other=val",
+            ),
         );
         let req = Request::builder()
-            .header(COOKIE, "twitch_dash_session=abc123; master_dash_session=xyz789; other=val")
+            .header(
+                COOKIE,
+                "twitch_dash_session=abc123; master_dash_session=xyz789; other=val",
+            )
             .body(())
             .unwrap();
         let (parts, _) = req.into_parts();
 
-        assert_eq!(extract_cookie(&parts, "twitch_dash_session"), Some("abc123"));
-        assert_eq!(extract_cookie(&parts, "master_dash_session"), Some("xyz789"));
+        assert_eq!(
+            extract_cookie(&parts, "twitch_dash_session"),
+            Some("abc123")
+        );
+        assert_eq!(
+            extract_cookie(&parts, "master_dash_session"),
+            Some("xyz789")
+        );
         assert_eq!(extract_cookie(&parts, "other"), Some("val"));
         assert_eq!(extract_cookie(&parts, "missing"), None);
     }
@@ -583,12 +605,18 @@ mod tests {
 
     #[test]
     fn is_local_request_mit_forwarded_for_false() {
-        assert!(!is_local_request(&local_parts(Some(("x-forwarded-for", "203.0.113.1")))));
+        assert!(!is_local_request(&local_parts(Some((
+            "x-forwarded-for",
+            "203.0.113.1"
+        )))));
     }
 
     #[test]
     fn is_local_request_mit_forwarded_host_false() {
-        assert!(!is_local_request(&local_parts(Some(("x-forwarded-host", "dash.example.com")))));
+        assert!(!is_local_request(&local_parts(Some((
+            "x-forwarded-host",
+            "dash.example.com"
+        )))));
     }
 
     #[test]
@@ -603,7 +631,8 @@ mod tests {
         assert!(!DashboardAuthLevel::None.is_privileged());
     }
 
-    async fn maybe_test_state() -> Option<(sqlx::PgPool, crate::auth::session::DashboardAuthState)> {
+    async fn maybe_test_state() -> Option<(sqlx::PgPool, crate::auth::session::DashboardAuthState)>
+    {
         let url = std::env::var("TB_TEST_DATABASE_URL").ok()?;
         let schema = crate::auth::session::test_schema_name("auth_level");
         let admin_pool = sqlx::PgPool::connect(&url).await.ok()?;
@@ -651,18 +680,23 @@ mod tests {
         .execute(&pool)
         .await
         .ok()?;
-        let state = crate::auth::session::DashboardAuthState::new(pool.clone(), "dGVzdGtleTEyMzQ1Njc4OTAxMjM0NTY3ODkwMTIzNDU=".to_string());
+        let state = crate::auth::session::DashboardAuthState::new(
+            pool.clone(),
+            "dGVzdGtleTEyMzQ1Njc4OTAxMjM0NTY3ODkwMTIzNDU=".to_string(),
+        );
         Some((pool, state))
     }
 
     async fn ensure_partner(pool: &sqlx::PgPool, id: i64, login: &str, user_id: &str) {
-        sqlx::query("DELETE FROM twitch_partners WHERE id = $1 OR twitch_login = $2 OR twitch_user_id = $3")
-            .bind(id)
-            .bind(login)
-            .bind(user_id)
-            .execute(pool)
-            .await
-            .unwrap();
+        sqlx::query(
+            "DELETE FROM twitch_partners WHERE id = $1 OR twitch_login = $2 OR twitch_user_id = $3",
+        )
+        .bind(id)
+        .bind(login)
+        .bind(user_id)
+        .execute(pool)
+        .await
+        .unwrap();
         sqlx::query(
             "INSERT INTO twitch_partners (id, twitch_login, twitch_user_id, status)
              VALUES ($1, $2, $3, 'active')
@@ -684,14 +718,21 @@ mod tests {
         builder.body(()).unwrap().into_parts().0
     }
 
-    async fn extract_auth(mut parts: Parts, state: crate::auth::session::DashboardAuthState) -> DashboardAuthLevel {
+    async fn extract_auth(
+        mut parts: Parts,
+        state: crate::auth::session::DashboardAuthState,
+    ) -> DashboardAuthLevel {
         parts.extensions.insert(state);
-        DashboardAuthLevel::from_request_parts(&mut parts, &()).await.unwrap()
+        DashboardAuthLevel::from_request_parts(&mut parts, &())
+            .await
+            .unwrap()
     }
 
     #[tokio::test]
     async fn zentrale_admin_session_ignoriert_veralteten_doppel_cookie() {
-        let Some((pool, state)) = maybe_test_state().await else { return; };
+        let Some((pool, state)) = maybe_test_state().await else {
+            return;
+        };
         let mut parts = request_parts(Some(format!(
             "{0}=veraltet; {0}=zentral-gueltig",
             crate::auth::session::ADMIN_COOKIE_NAME
@@ -700,8 +741,9 @@ mod tests {
             .headers
             .insert("x-dashboard-context", "admin".parse().unwrap());
         parts.extensions.insert(state.clone());
-        parts.extensions.insert(
-            crate::auth::discord_admin_login::DiscordAdminLoginConfig {
+        parts
+            .extensions
+            .insert(crate::auth::discord_admin_login::DiscordAdminLoginConfig {
                 admin_base_url: "https://admin.test".into(),
                 cookie_secure: true,
                 cookie_domain: Some("example.com".into()),
@@ -709,8 +751,7 @@ mod tests {
                 moderator_role_id: 1,
                 admin_guild_ids: Vec::new(),
                 client: std::sync::Arc::new(CentralSessionClient),
-            },
-        );
+            });
 
         let auth = DashboardAuthLevel::from_request_parts(&mut parts, &())
             .await
@@ -737,20 +778,47 @@ mod tests {
 
     #[tokio::test]
     async fn twitch_admin_ohne_mode_cookie_bleibt_partner() {
-        let Some((pool, state)) = maybe_test_state().await else { return; };
+        let Some((pool, state)) = maybe_test_state().await else {
+            return;
+        };
         ensure_partner(&pool, 9062301, "earlysalty", "9062301").await;
-        let session = state.create_partner_session("earlysalty", "9062301", "EarlySalty").await.unwrap();
-        let auth = extract_auth(request_parts(Some(format!("{}={}", crate::auth::session::PARTNER_COOKIE_NAME, session.session_id))), state.clone()).await;
-        assert!(matches!(auth, DashboardAuthLevel::Partner { ref twitch_login, .. } if twitch_login == "earlysalty"));
-        sqlx::query("DELETE FROM dashboard_sessions WHERE session_id = $1").bind(&session.session_id).execute(&pool).await.unwrap();
-        sqlx::query("DELETE FROM twitch_partners WHERE id = 9062301").execute(&pool).await.unwrap();
+        let session = state
+            .create_partner_session("earlysalty", "9062301", "EarlySalty")
+            .await
+            .unwrap();
+        let auth = extract_auth(
+            request_parts(Some(format!(
+                "{}={}",
+                crate::auth::session::PARTNER_COOKIE_NAME,
+                session.session_id
+            ))),
+            state.clone(),
+        )
+        .await;
+        assert!(
+            matches!(auth, DashboardAuthLevel::Partner { ref twitch_login, .. } if twitch_login == "earlysalty")
+        );
+        sqlx::query("DELETE FROM dashboard_sessions WHERE session_id = $1")
+            .bind(&session.session_id)
+            .execute(&pool)
+            .await
+            .unwrap();
+        sqlx::query("DELETE FROM twitch_partners WHERE id = 9062301")
+            .execute(&pool)
+            .await
+            .unwrap();
     }
 
     #[tokio::test]
     async fn twitch_admin_mit_mode_cookie_wird_admin_actor() {
-        let Some((pool, state)) = maybe_test_state().await else { return; };
+        let Some((pool, state)) = maybe_test_state().await else {
+            return;
+        };
         ensure_partner(&pool, 9062302, "earlysalty", "9062302").await;
-        let session = state.create_partner_session("earlysalty", "9062302", "EarlySalty").await.unwrap();
+        let session = state
+            .create_partner_session("earlysalty", "9062302", "EarlySalty")
+            .await
+            .unwrap();
         let mut parts = request_parts(Some(format!(
             "{}={}; tb_admin_mode=2",
             crate::auth::session::PARTNER_COOKIE_NAME,
@@ -760,7 +828,9 @@ mod tests {
         let auth = DashboardAuthLevel::from_request_parts(&mut parts, &())
             .await
             .unwrap();
-        assert!(matches!(auth, DashboardAuthLevel::Admin { actor: Some(AdminActor { ref twitch_login, .. }) } if twitch_login == "earlysalty"));
+        assert!(
+            matches!(auth, DashboardAuthLevel::Admin { actor: Some(AdminActor { ref twitch_login, .. }) } if twitch_login == "earlysalty")
+        );
         assert_eq!(
             parts
                 .extensions
@@ -768,32 +838,118 @@ mod tests {
                 .map(|selected| selected.0.as_str()),
             Some(session.session_id.as_str())
         );
-        sqlx::query("DELETE FROM dashboard_sessions WHERE session_id = $1").bind(&session.session_id).execute(&pool).await.unwrap();
-        sqlx::query("DELETE FROM twitch_partners WHERE id = 9062302").execute(&pool).await.unwrap();
+        sqlx::query("DELETE FROM dashboard_sessions WHERE session_id = $1")
+            .bind(&session.session_id)
+            .execute(&pool)
+            .await
+            .unwrap();
+        sqlx::query("DELETE FROM twitch_partners WHERE id = 9062302")
+            .execute(&pool)
+            .await
+            .unwrap();
     }
 
     #[tokio::test]
     async fn twitch_session_schlaegt_master_session() {
-        let Some((pool, state)) = maybe_test_state().await else { return; };
+        let Some((pool, state)) = maybe_test_state().await else {
+            return;
+        };
         ensure_partner(&pool, 9062303, "earlysalty", "9062303").await;
-        let partner = state.create_partner_session("earlysalty", "9062303", "EarlySalty").await.unwrap();
-        let admin = state.create_admin_session("discord-9062303", "Discord Admin").await.unwrap();
-        let auth = extract_auth(request_parts(Some(format!("{}={}; {}={}", crate::auth::session::PARTNER_COOKIE_NAME, partner.session_id, crate::auth::session::ADMIN_COOKIE_NAME, admin.session_id))), state.clone()).await;
-        assert!(matches!(auth, DashboardAuthLevel::Partner { ref twitch_login, .. } if twitch_login == "earlysalty"));
-        sqlx::query("DELETE FROM dashboard_sessions WHERE session_id = ANY($1)").bind(vec![partner.session_id, admin.session_id]).execute(&pool).await.unwrap();
-        sqlx::query("DELETE FROM twitch_partners WHERE id = 9062303").execute(&pool).await.unwrap();
+        let partner = state
+            .create_partner_session("earlysalty", "9062303", "EarlySalty")
+            .await
+            .unwrap();
+        let admin = state
+            .create_admin_session("discord-9062303", "Discord Admin")
+            .await
+            .unwrap();
+        let auth = extract_auth(
+            request_parts(Some(format!(
+                "{}={}; {}={}",
+                crate::auth::session::PARTNER_COOKIE_NAME,
+                partner.session_id,
+                crate::auth::session::ADMIN_COOKIE_NAME,
+                admin.session_id
+            ))),
+            state.clone(),
+        )
+        .await;
+        assert!(
+            matches!(auth, DashboardAuthLevel::Partner { ref twitch_login, .. } if twitch_login == "earlysalty")
+        );
+        sqlx::query("DELETE FROM dashboard_sessions WHERE session_id = ANY($1)")
+            .bind(vec![partner.session_id, admin.session_id])
+            .execute(&pool)
+            .await
+            .unwrap();
+        sqlx::query("DELETE FROM twitch_partners WHERE id = 9062303")
+            .execute(&pool)
+            .await
+            .unwrap();
+    }
+
+    #[tokio::test]
+    async fn admin_validate_bevorzugt_master_session_vor_twitch_session() {
+        let Some((pool, state)) = maybe_test_state().await else {
+            return;
+        };
+        ensure_partner(&pool, 9062305, "earlysalty", "9062305").await;
+        let partner = state
+            .create_partner_session("earlysalty", "9062305", "EarlySalty")
+            .await
+            .unwrap();
+        let admin = state
+            .create_admin_session("discord-9062305", "Discord Admin")
+            .await
+            .unwrap();
+        let mut parts = request_parts(Some(format!(
+            "{}={}; {}={}",
+            crate::auth::session::PARTNER_COOKIE_NAME,
+            partner.session_id,
+            crate::auth::session::ADMIN_COOKIE_NAME,
+            admin.session_id
+        )));
+        parts.uri = "/twitch/auth/validate".parse().unwrap();
+        let auth = extract_auth(parts, state.clone()).await;
+        assert_eq!(auth, DashboardAuthLevel::admin());
+        sqlx::query("DELETE FROM dashboard_sessions WHERE session_id = ANY($1)")
+            .bind(vec![partner.session_id, admin.session_id])
+            .execute(&pool)
+            .await
+            .unwrap();
+        sqlx::query("DELETE FROM twitch_partners WHERE id = 9062305")
+            .execute(&pool)
+            .await
+            .unwrap();
     }
 
     #[tokio::test]
     async fn reine_master_session_ohne_admin_kontext_wird_partner() {
-        let Some((pool, state)) = maybe_test_state().await else { return; };
-        let admin = state.create_admin_session("discord-9062304", "Discord Admin").await.unwrap();
-        let auth = extract_auth(request_parts(Some(format!("{}={}", crate::auth::session::ADMIN_COOKIE_NAME, admin.session_id))), state.clone()).await;
+        let Some((pool, state)) = maybe_test_state().await else {
+            return;
+        };
+        let admin = state
+            .create_admin_session("discord-9062304", "Discord Admin")
+            .await
+            .unwrap();
+        let auth = extract_auth(
+            request_parts(Some(format!(
+                "{}={}",
+                crate::auth::session::ADMIN_COOKIE_NAME,
+                admin.session_id
+            ))),
+            state.clone(),
+        )
+        .await;
         assert!(matches!(
             auth,
             DashboardAuthLevel::Partner { ref twitch_login, .. } if twitch_login == "earlysalty"
         ));
-        sqlx::query("DELETE FROM dashboard_sessions WHERE session_id = $1").bind(&admin.session_id).execute(&pool).await.unwrap();
+        sqlx::query("DELETE FROM dashboard_sessions WHERE session_id = $1")
+            .bind(&admin.session_id)
+            .execute(&pool)
+            .await
+            .unwrap();
     }
 
     #[test]
@@ -811,7 +967,10 @@ mod tests {
         .unwrap_err();
         assert_eq!(foreign.status(), axum::http::StatusCode::FORBIDDEN);
 
-        assert_eq!(master_session_auth(false, true), DashboardAuthLevel::admin());
+        assert_eq!(
+            master_session_auth(false, true),
+            DashboardAuthLevel::admin()
+        );
         assert_eq!(
             master_session_auth(true, false),
             DashboardAuthLevel::admin()
@@ -858,7 +1017,9 @@ mod tests {
     #[tokio::test]
     async fn loopback_ohne_state_bleibt_none() {
         let mut parts = local_parts(None);
-        let auth = DashboardAuthLevel::from_request_parts(&mut parts, &()).await.unwrap();
+        let auth = DashboardAuthLevel::from_request_parts(&mut parts, &())
+            .await
+            .unwrap();
         assert_eq!(auth, DashboardAuthLevel::None);
     }
 }
