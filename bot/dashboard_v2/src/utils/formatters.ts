@@ -123,11 +123,18 @@ export function getTrendColor(value: number): string {
   return 'text-text-secondary';
 }
 
+// Vier Stufen, vier Farben. Die Marken-Palette kennt nur success/warning/danger,
+// deshalb liegt die Orange-Stufe als Zwischenton zwischen warning und danger.
+const SCORE_GOOD = '#3fa66b'; // success
+const SCORE_OK = '#e0912f'; // warning
+const SCORE_WEAK = '#de7d3e'; // Zwischenton warning→danger
+const SCORE_BAD = '#dd6a4d'; // danger
+
 export function getScoreColor(score: number): string {
-  if (score >= 80) return '#3fa66b'; // green
-  if (score >= 60) return '#e0912f'; // yellow
-  if (score >= 40) return '#e0912f'; // orange
-  return '#dd6a4d'; // red
+  if (score >= 80) return SCORE_GOOD;
+  if (score >= 60) return SCORE_OK;
+  if (score >= 40) return SCORE_WEAK;
+  return SCORE_BAD;
 }
 
 export function getHeatmapColor(value: number, max: number): string {
@@ -137,8 +144,8 @@ export function getHeatmapColor(value: number, max: number): string {
 }
 
 export function getRetentionColor(retention: number): string {
-  if (retention >= 70) return '#3fa66b';
-  if (retention >= 50) return '#e0912f';
-  if (retention >= 30) return '#e0912f';
-  return '#dd6a4d';
+  if (retention >= 70) return SCORE_GOOD;
+  if (retention >= 50) return SCORE_OK;
+  if (retention >= 30) return SCORE_WEAK;
+  return SCORE_BAD;
 }

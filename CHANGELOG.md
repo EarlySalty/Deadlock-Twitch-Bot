@@ -1,3 +1,11 @@
+## #358 — Streamer-Seite und Dashboard im neuen Community-Look
+
+**Problem:** Die Streamer-Website und die Dashboards liefen noch im alten Cyan-Lila-Design, während Hauptseite und Coaching längst im Gold-Look der Community sind. Das sah nach zwei verschiedenen Projekten aus.
+
+**Änderung:** Beide laufen jetzt auf denselben Marken-Farben, warmes Dunkel mit Gold und Teal. Die alte Vorschau-Adresse unter /streamer/v2 fällt weg, weil die normale Seite jetzt so aussieht.
+
+**Aktuelles Verhalten:** Streamer-Seite, Analyse-Dashboard und Verwaltung wirken wie ein zusammenhängendes Produkt. Inhalte, Zahlen und Funktionen bleiben unverändert, nur die Optik ist neu.
+
 ## #357 — Ein Login gilt in beiden Admin-Dashboards
 
 **Problem:** Discord- und Twitch-Admin-Dashboard überschrieben sich gegenseitig mit getrennten Sitzungen; im Twitch-Dashboard fehlte dadurch zusätzlich der CSRF-Token.
