@@ -577,7 +577,14 @@ pub async fn complete_handler(
         "AUDIT twitch-dashboard discord login success"
     );
     let cookie = build_admin_cookie(&config, &created.session_id);
-    redirect_with_cookie(FINGERPRINT_PATH, &cookie)
+    let mut response = redirect_with_cookie(FINGERPRINT_PATH, &cookie);
+    if config.cookie_domain.is_some() {
+        let legacy_cookie = clear_admin_cookie(config.cookie_secure, None);
+        if let Ok(value) = HeaderValue::from_str(&legacy_cookie) {
+            response.headers_mut().append(header::SET_COOKIE, value);
+        }
+    }
+    response
 }
 
 /// `GET /twitch/auth/discord/logout`
@@ -591,14 +598,18 @@ pub async fn logout_handler(
         .as_ref()
         .and_then(|c| c.0.cookie_domain.clone())
         .or_else(shared_admin_cookie_domain_from_env);
-    let session_id = cookie_from_headers(&headers, ADMIN_COOKIE_NAME);
-    if let Some(session_id) = session_id {
+    let session_ids: Vec<String> = crate::auth::level::cookie_values(&headers, ADMIN_COOKIE_NAME)
+        .into_iter()
+        .filter(|session_id| !session_id.is_empty())
+        .map(str::to_string)
+        .collect();
+    for session_id in session_ids {
         if let Some(Extension(config)) = config.as_ref() {
             if config.client.revoke_session(&session_id).await.is_err() {
                 tracing::warn!("Zentrale Admin-Session konnte beim Logout nicht widerrufen werden");
             }
         }
-        if let Some(Extension(state)) = state {
+        if let Some(Extension(state)) = state.as_ref() {
             state.invalidate_session(&session_id).await;
         }
     }
@@ -609,7 +620,14 @@ pub async fn logout_handler(
         .unwrap_or_else(|| DEFAULT_ADMIN_BASE_URL.to_string());
     let target = admin_route_url(&base_url, ADMIN_LOGIN_PATH, &[]);
     let cookie = clear_admin_cookie(cookie_secure, cookie_domain.as_deref());
-    redirect_with_cookie(&target, &cookie)
+    let mut response = redirect_with_cookie(&target, &cookie);
+    if cookie_domain.is_some() {
+        let legacy_cookie = clear_admin_cookie(cookie_secure, None);
+        if let Ok(value) = HeaderValue::from_str(&legacy_cookie) {
+            response.headers_mut().append(header::SET_COOKIE, value);
+        }
+    }
+    response
 }
 
 /// `GET /twitch/auth/fingerprint`
@@ -1622,7 +1640,9 @@ mod tests {
         .await;
         assert_eq!(response.status(), StatusCode::SEE_OTHER);
         assert_eq!(response.headers().get(header::LOCATION).unwrap(), FINGERPRINT_PATH);
-        let set_cookie = cookies(&response).join("\n");
+        let response_cookies = cookies(&response);
+        assert_eq!(response_cookies.len(), 2);
+        let set_cookie = response_cookies.join("\n");
         assert!(set_cookie.contains("master_dash_session="));
         assert!(set_cookie.contains("HttpOnly"));
         assert!(set_cookie.contains("SameSite=Lax"));
@@ -1731,7 +1751,11 @@ mod tests {
         let mut headers = HeaderMap::new();
         headers.insert(
             header::COOKIE,
-            HeaderValue::from_str(&format!("master_dash_session={}", created.session_id)).unwrap(),
+            HeaderValue::from_str(&format!(
+                "master_dash_session=veraltet; master_dash_session={}",
+                created.session_id
+            ))
+            .unwrap(),
         );
 
         let response = logout_handler(Some(Extension(state.clone())), Some(Extension(cfg)), headers).await;
@@ -1744,7 +1768,11 @@ mod tests {
         assert!(set_cookie.contains("master_dash_session=;"));
         assert!(set_cookie.contains("Max-Age=0"));
         assert!(set_cookie.contains("Domain=deutsche-deadlock-community.de"));
+        assert_eq!(cookies(&response).len(), 2);
         assert!(state.load_admin_session(&created.session_id).await.unwrap().is_none());
-        assert_eq!(client.revoked.lock().await.as_slice(), &[created.session_id]);
+        assert_eq!(
+            client.revoked.lock().await.as_slice(),
+            &["veraltet".to_string(), created.session_id]
+        );
     }
 }
