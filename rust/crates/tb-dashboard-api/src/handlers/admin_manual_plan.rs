@@ -28,7 +28,8 @@ use axum::{
 use sqlx::PgPool;
 
 use crate::auth::level::DashboardAuthLevel;
-use crate::auth::session::{DashboardAuthState, ADMIN_COOKIE_NAME, PARTNER_COOKIE_NAME};
+use crate::auth::session::DashboardAuthState;
+use crate::handlers::legacy_form::validate_form_csrf;
 
 /// Maximale Notizlänge (Python `notes_value[:1000]`).
 const MAX_NOTES_LEN: usize = 1000;
@@ -103,42 +104,10 @@ async fn gate(
         // Kein Auth-State → kein Validierungspfad → fail-closed.
         return Some(redirect_err("CSRF-Prüfung nicht verfügbar."));
     };
-    let (cookie, session_type) = csrf_cookie(headers);
-    let Some(cookie) = cookie else {
-        return Some(redirect_err("Sitzung fehlt."));
-    };
-    let valid = state
-        .validate_csrf(&cookie, session_type, &presented)
-        .await
-        .unwrap_or(false);
-    if valid {
-        None
-    } else {
-        Some(redirect_err("Ungültiges CSRF-Token."))
-    }
-}
-
-/// Wählt Session-Cookie + -Typ für die CSRF-Validierung (Admin vor Partner).
-fn csrf_cookie(headers: &axum::http::HeaderMap) -> (Option<String>, &'static str) {
-    let cookie_header = headers
-        .get(axum::http::header::COOKIE)
-        .and_then(|v| v.to_str().ok())
-        .unwrap_or("");
-    let read = |name: &str| -> Option<String> {
-        cookie_header.split(';').find_map(|pair| {
-            let pair = pair.trim();
-            pair.split_once('=')
-                .filter(|(k, _)| k.trim() == name)
-                .map(|(_, v)| v.trim().to_string())
-        })
-    };
-    if let Some(c) = read(ADMIN_COOKIE_NAME).filter(|s| !s.is_empty()) {
-        (Some(c), "discord_admin")
-    } else {
-        (
-            read(PARTNER_COOKIE_NAME).filter(|s| !s.is_empty()),
-            "twitch",
-        )
+    match validate_form_csrf(state, headers, &presented).await {
+        Some(true) => None,
+        Some(false) => Some(redirect_err("Ungültiges CSRF-Token.")),
+        None => Some(redirect_err("Sitzung fehlt.")),
     }
 }
 

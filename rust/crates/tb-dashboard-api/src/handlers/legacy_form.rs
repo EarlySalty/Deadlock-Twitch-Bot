@@ -13,7 +13,7 @@ use axum::{
     response::{IntoResponse, Redirect, Response},
 };
 
-use crate::auth::level::DashboardAuthLevel;
+use crate::auth::level::{cookie_values, DashboardAuthLevel};
 use crate::auth::session::{DashboardAuthState, ADMIN_COOKIE_NAME, PARTNER_COOKIE_NAME};
 
 /// Parst `application/x-www-form-urlencoded` in Key/Value-Paare.
@@ -51,40 +51,49 @@ pub(crate) async fn gate(
     let Some(Extension(state)) = config else {
         return Some(redirect_err("CSRF-Prüfung nicht verfügbar."));
     };
-    let (cookie, session_type) = csrf_cookie(headers);
-    let Some(cookie) = cookie else {
-        return Some(redirect_err("Sitzung fehlt."));
-    };
-    let valid = state
-        .validate_csrf(&cookie, session_type, &presented)
-        .await
-        .unwrap_or(false);
-    if valid {
-        None
-    } else {
-        Some(redirect_err("Ungültiges CSRF-Token."))
+    match validate_form_csrf(state, headers, &presented).await {
+        Some(true) => None,
+        Some(false) => Some(redirect_err("Ungültiges CSRF-Token.")),
+        None => Some(redirect_err("Sitzung fehlt.")),
     }
 }
 
-/// Wählt Session-Cookie + -Typ für die CSRF-Validierung (Admin vor Partner).
-fn csrf_cookie(headers: &axum::http::HeaderMap) -> (Option<String>, &'static str) {
-    let cookie_header = headers
-        .get(axum::http::header::COOKIE)
-        .and_then(|v| v.to_str().ok())
-        .unwrap_or("");
-    let read = |name: &str| -> Option<String> {
-        cookie_header.split(';').find_map(|pair| {
-            let pair = pair.trim();
-            pair.split_once('=')
-                .filter(|(k, _)| k.trim() == name)
-                .map(|(_, v)| v.trim().to_string())
-        })
-    };
-    if let Some(c) = read(ADMIN_COOKIE_NAME).filter(|s| !s.is_empty()) {
-        (Some(c), "discord_admin")
-    } else {
-        (read(PARTNER_COOKIE_NAME).filter(|s| !s.is_empty()), "twitch")
+fn csrf_cookie_candidates(
+    headers: &axum::http::HeaderMap,
+) -> Vec<(String, &'static str)> {
+    let mut candidates = Vec::new();
+    for session_id in cookie_values(headers, ADMIN_COOKIE_NAME) {
+        if !session_id.is_empty() {
+            candidates.push((session_id.to_string(), "discord_admin"));
+        }
     }
+    for session_id in cookie_values(headers, PARTNER_COOKIE_NAME) {
+        if !session_id.is_empty() {
+            candidates.push((session_id.to_string(), "twitch"));
+        }
+    }
+    candidates
+}
+
+pub(crate) async fn validate_form_csrf(
+    state: &DashboardAuthState,
+    headers: &axum::http::HeaderMap,
+    presented: &str,
+) -> Option<bool> {
+    let candidates = csrf_cookie_candidates(headers);
+    if candidates.is_empty() {
+        return None;
+    }
+    for (session_id, session_type) in candidates {
+        if state
+            .validate_csrf(&session_id, session_type, presented)
+            .await
+            .unwrap_or(false)
+        {
+            return Some(true);
+        }
+    }
+    Some(false)
 }
 
 /// Baut einen 302-Redirect mit URL-kodierter Statusmeldung im Query.
@@ -95,4 +104,28 @@ fn csrf_cookie(headers: &axum::http::HeaderMap) -> (Option<String>, &'static str
 pub(crate) fn redirect_with(target_path: &str, query_key: &str, message: &str) -> Response {
     let encoded: String = url::form_urlencoded::byte_serialize(message.as_bytes()).collect();
     Redirect::to(&format!("{target_path}?{query_key}={encoded}")).into_response()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn csrf_prueft_alle_gleichnamigen_admin_cookies() {
+        let mut headers = axum::http::HeaderMap::new();
+        headers.insert(
+            axum::http::header::COOKIE,
+            "master_dash_session=veraltet; master_dash_session=zentral-gueltig"
+                .parse()
+                .unwrap(),
+        );
+
+        assert_eq!(
+            csrf_cookie_candidates(&headers),
+            vec![
+                ("veraltet".to_string(), "discord_admin"),
+                ("zentral-gueltig".to_string(), "discord_admin"),
+            ]
+        );
+    }
 }
