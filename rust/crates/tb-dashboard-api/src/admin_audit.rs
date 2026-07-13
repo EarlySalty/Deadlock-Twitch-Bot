@@ -19,6 +19,20 @@ fn is_admin_path(path: &str) -> bool {
         || path.starts_with("/twitch/admin/")
         || path.starts_with("/social-media/api/admin/")
         || path == "/twitch/api/v2/internal-home/changelog"
+        || path == "/twitch/api/v2/roadmap"
+        || path.starts_with("/twitch/api/v2/roadmap/")
+        || matches!(
+            path,
+            "/twitch/add_streamer"
+                | "/twitch/add_url"
+                | "/twitch/add_login"
+                | "/twitch/add_any"
+                | "/twitch/remove"
+                | "/twitch/discord_link"
+                | "/twitch/verify"
+                | "/twitch/archive"
+                | "/twitch/discord_flag"
+        )
 }
 
 fn cookie_value<'a>(headers: &'a HeaderMap, name: &str) -> Option<&'a str> {
@@ -174,6 +188,11 @@ mod tests {
                 "/twitch/api/admin/failing-test",
                 post(|| async { StatusCode::INTERNAL_SERVER_ERROR }),
             )
+            .route(
+                "/twitch/api/v2/roadmap",
+                post(|| async { StatusCode::CREATED }),
+            )
+            .route("/twitch/verify", post(|| async { StatusCode::NO_CONTENT }))
             .route("/public-write", post(|| async { StatusCode::NO_CONTENT }))
             .layer(from_fn_with_state(pool.clone(), audit_admin_mutations));
 
@@ -182,6 +201,8 @@ mod tests {
             ("POST", "/public-write"),
             ("POST", "/twitch/api/admin/failing-test"),
             ("POST", "/twitch/api/admin/test"),
+            ("POST", "/twitch/api/v2/roadmap"),
+            ("POST", "/twitch/verify"),
         ] {
             let response = app
                 .clone()
@@ -202,19 +223,23 @@ mod tests {
         }
 
         let rows: Vec<(String, String, String, i32)> = sqlx::query_as(
-            "SELECT actor, method, path, status_code FROM dashboard_admin_audit_events",
+            "SELECT actor, method, path, status_code FROM dashboard_admin_audit_events ORDER BY id",
         )
         .fetch_all(&pool)
         .await
         .unwrap();
+        assert_eq!(rows.len(), 3);
         assert_eq!(
-            rows,
-            vec![(
+            rows[0],
+            (
                 "admin".to_string(),
                 "POST".to_string(),
                 "/twitch/api/admin/test".to_string(),
                 204,
-            )]
+            )
         );
+        assert_eq!(rows[1].2, "/twitch/api/v2/roadmap");
+        assert_eq!(rows[1].3, 201);
+        assert_eq!(rows[2].2, "/twitch/verify");
     }
 }
