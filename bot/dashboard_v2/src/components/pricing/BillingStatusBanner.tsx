@@ -84,7 +84,7 @@ function resolveMessage(): BannerMessage | null {
  * verständlichen Hinweis statt eines nackten URL-Parameters. Schließbar.
  */
 export default function BillingStatusBanner() {
-  const message = useMemo(resolveMessage, []);
+  const message = useMemo(() => resolveMessage(), []);
   const [dismissed, setDismissed] = useState(false);
 
   if (!message || dismissed) return null;
