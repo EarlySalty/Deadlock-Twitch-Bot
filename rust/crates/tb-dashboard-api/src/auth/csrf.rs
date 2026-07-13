@@ -21,13 +21,13 @@
 
 use axum::{
     extract::Request,
-    http::{Method, StatusCode},
+    http::{request::Parts, Method, StatusCode},
     middleware::Next,
     response::{IntoResponse, Response},
     Json,
 };
 
-use super::level::{extract_cookie, is_local_request};
+use super::level::{cookie_values, is_local_request};
 use super::session::{DashboardAuthState, ADMIN_COOKIE_NAME, PARTNER_COOKIE_NAME};
 
 /// Header, in dem der Client das sessiongebundene CSRF-Token präsentiert
@@ -50,6 +50,36 @@ fn invalid_csrf_response() -> Response {
         })),
     )
         .into_response()
+}
+
+fn admin_session_ids(parts: &Parts) -> Vec<String> {
+    if let Some(session) = parts
+        .extensions
+        .get::<crate::auth::level::AuthenticatedAdminSessionId>()
+        .filter(|session| !session.0.is_empty())
+    {
+        return vec![session.0.clone()];
+    }
+    cookie_values(&parts.headers, ADMIN_COOKIE_NAME)
+        .into_iter()
+        .filter(|session_id| !session_id.is_empty())
+        .map(str::to_string)
+        .collect()
+}
+
+fn partner_session_ids(parts: &Parts) -> Vec<String> {
+    if let Some(session) = parts
+        .extensions
+        .get::<crate::auth::level::AuthenticatedPartnerSessionId>()
+        .filter(|session| !session.0.is_empty())
+    {
+        return vec![session.0.clone()];
+    }
+    cookie_values(&parts.headers, PARTNER_COOKIE_NAME)
+        .into_iter()
+        .filter(|session_id| !session_id.is_empty())
+        .map(str::to_string)
+        .collect()
 }
 
 /// axum-Middleware: erzwingt das CSRF-Token auf Write-Requests.
@@ -89,33 +119,44 @@ pub async fn csrf_protect(request: Request, next: Next) -> Response {
     // (Discord-Admin) darf eine gültige `twitch_dash_session` NICHT verdecken — sonst
     // scheitern alle Schreib-POSTs, sobald beide Cookies im Browser liegen. Konsistent
     // zur Auth-Kaskade (level.rs), die die Twitch-Session ebenfalls vorrangig auflöst.
-    let admin_sid = extract_cookie(&parts, ADMIN_COOKIE_NAME).filter(|s| !s.is_empty());
-    let partner_sid = extract_cookie(&parts, PARTNER_COOKIE_NAME).filter(|s| !s.is_empty());
+    let admin_sids = admin_session_ids(&parts);
+    let partner_sids = partner_session_ids(&parts);
 
     // Gültig, sobald EIN Pfad trägt: korrektes `X-CSRF-Token` ODER (same-origin +
     // gültige DB-Session). F2: Der tokenlose Browser-Fallback trägt sicherheitlich
     // auf SameSite=Lax plus dem Origin/Referer-Gate oben; ohne gültige DB-Session
     // bleibt er zu.
     let mut valid = false;
-    if let Some(sid) = admin_sid {
+    for sid in admin_sids {
         valid = state
-            .validate_csrf(sid, ADMIN_COOKIE_NAME_TYPE, &presented)
+            .validate_csrf(&sid, ADMIN_COOKIE_NAME_TYPE, &presented)
             .await
             .unwrap_or(false)
-            || state.load_admin_session(sid).await.ok().flatten().is_some();
+            || state
+                .load_admin_session(&sid)
+                .await
+                .ok()
+                .flatten()
+                .is_some();
+        if valid {
+            break;
+        }
     }
     if !valid {
-        if let Some(sid) = partner_sid {
+        for sid in partner_sids {
             valid = state
-                .validate_csrf(sid, PARTNER_COOKIE_NAME_TYPE, &presented)
+                .validate_csrf(&sid, PARTNER_COOKIE_NAME_TYPE, &presented)
                 .await
                 .unwrap_or(false)
                 || state
-                    .load_partner_session(sid)
+                    .load_partner_session(&sid)
                     .await
                     .ok()
                     .flatten()
                     .is_some();
+            if valid {
+                break;
+            }
         }
     }
 
@@ -256,6 +297,40 @@ mod tests {
         assert!(!is_write_method(&Method::GET));
         assert!(!is_write_method(&Method::HEAD));
         assert!(!is_write_method(&Method::OPTIONS));
+    }
+
+    #[test]
+    fn csrf_nutzt_die_von_der_auth_kaskade_ausgewaehlte_admin_session() {
+        let request = Request::builder()
+            .header(
+                "cookie",
+                "master_dash_session=veraltet; master_dash_session=zentral-gueltig",
+            )
+            .body(Body::empty())
+            .unwrap();
+        let (mut parts, _) = request.into_parts();
+        parts.extensions.insert(
+            crate::auth::level::AuthenticatedAdminSessionId("zentral-gueltig".into()),
+        );
+
+        assert_eq!(admin_session_ids(&parts), vec!["zentral-gueltig"]);
+    }
+
+    #[test]
+    fn csrf_prueft_ohne_auth_marker_alle_admin_cookies() {
+        let request = Request::builder()
+            .header(
+                "cookie",
+                "master_dash_session=veraltet; master_dash_session=zentral-gueltig",
+            )
+            .body(Body::empty())
+            .unwrap();
+        let (parts, _) = request.into_parts();
+
+        assert_eq!(
+            admin_session_ids(&parts),
+            vec!["veraltet", "zentral-gueltig"]
+        );
     }
 
     /// Router mit aufgelegtem CSRF-Layer; KEINE DashboardAuthState-Extension

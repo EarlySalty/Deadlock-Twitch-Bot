@@ -33,6 +33,7 @@ import type {
   RaidConfigSnapshot,
   RaidConfigUpdatePayload,
   ResearchResponse,
+  ResearchSuggestionsResponse,
   ScopeStatusResponse,
   StreamerDetail,
   StreamerRow,
@@ -47,7 +48,6 @@ const ADMIN_API_BASE = '/twitch/api/admin';
 const ENGAGEMENT_API_BASE = '/twitch/api/v2/engagement';
 const AUTH_STATUS_URL = '/twitch/api/v2/auth-status';
 const INTERNAL_HOME_URL = '/twitch/api/v2/internal-home';
-const LEGACY_CSRF_PAGE = '/twitch/admin/announcements';
 let cachedCsrfToken = '';
 
 export class ApiError extends Error {
@@ -636,6 +636,7 @@ export async function fetchAdminStreamers(view: StreamerView = 'active'): Promis
       grantedScopes: readStringArray(record.grantedScopes ?? record.granted_scopes),
       missingScopes: readStringArray(record.missingScopes ?? record.missing_scopes),
       oauthAuthorizedAt: readString(record, 'oauthAuthorizedAt', 'oauth_authorized_at') || null,
+      partnerSince: readString(record, 'partnerSince', 'partner_since') || null,
       promoDisabled: readBoolean(record, 'promoDisabled', 'promo_disabled'),
       notes: readString(record, 'notes', 'manual_plan_notes') || undefined,
       status: readString(record, 'status') || undefined,
@@ -853,11 +854,9 @@ async function resolveJsonCsrfToken(body: Record<string, unknown>): Promise<stri
     if (authToken) {
       return authToken;
     }
-  } catch {
-    // Fall back to the legacy admin page token read below.
-  }
+  } catch {}
 
-  return cacheCsrfToken(await fetchLegacyCsrfToken());
+  throw new ApiError('CSRF-Token fehlt.', 403);
 }
 
 async function postAdminJson<T, TBody extends object = Record<string, unknown>>(path: string, body: TBody) {
@@ -1046,26 +1045,8 @@ export async function generateGutschriften(
   return parseGenerateGutschriftenResult(legacyPayload);
 }
 
-export async function fetchLegacyCsrfToken(): Promise<string> {
-  if (cachedCsrfToken) {
-    return cachedCsrfToken;
-  }
-  const response = await fetch(LEGACY_CSRF_PAGE, {
-    credentials: 'include',
-    headers: { Accept: 'text/html' },
-  });
-  const html = await response.text();
-  const match =
-    html.match(/name=["']csrf_token["'][^>]*value=["']([^"']+)["']/i) ??
-    html.match(/value=["']([^"']+)["'][^>]*name=["']csrf_token["']/i);
-  if (!match?.[1]) {
-    throw new ApiError('CSRF-Token konnte nicht gelesen werden.', 500);
-  }
-  return cacheCsrfToken(match[1]);
-}
-
 async function submitLegacyAction(path: string, fields: Record<string, string>): Promise<AdminActionResult> {
-  const csrfToken = fields.csrf_token || cachedCsrfToken || (await fetchLegacyCsrfToken());
+  const csrfToken = fields.csrf_token || cachedCsrfToken || (await resolveJsonCsrfToken(fields));
   const body = new URLSearchParams({ ...fields, csrf_token: csrfToken });
   const response = await fetch(path, {
     method: 'POST',
@@ -1204,4 +1185,8 @@ export async function fetchAdminResearch(login: string, days: number): Promise<R
   return admin<ResearchResponse>(
     `/research/${encodeURIComponent(login.trim())}?days=${encodeURIComponent(days)}`,
   );
+}
+
+export async function fetchAdminResearchSuggestions(days: number): Promise<ResearchSuggestionsResponse> {
+  return admin<ResearchSuggestionsResponse>(`/research/suggestions?days=${encodeURIComponent(days)}`);
 }

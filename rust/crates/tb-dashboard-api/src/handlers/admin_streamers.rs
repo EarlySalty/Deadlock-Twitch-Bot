@@ -73,6 +73,7 @@ pub struct AdminStreamerItem {
     pub granted_scopes: Vec<String>,
     pub missing_scopes: Vec<String>,
     pub oauth_authorized_at: Option<String>,
+    pub partner_since: Option<String>,
     pub promo_disabled: bool,
     pub notes: Option<String>,
     pub technical_pause_reason: Option<String>,
@@ -287,6 +288,7 @@ pub async fn list_handler(
                 granted_scopes: snap.granted_scopes,
                 missing_scopes: snap.missing_scopes,
                 oauth_authorized_at: r.authorized_at.map(fmt_dt),
+                partner_since: r.partner_since.map(fmt_dt),
                 promo_disabled: r.promo_disabled.unwrap_or(0) != 0,
                 notes: r.manual_plan_notes, // Python: manual_plan_notes als notes
                 technical_pause_reason: r.technical_pause_reason,
@@ -745,7 +747,8 @@ mod tests {
             CREATE TABLE IF NOT EXISTS twitch_raid_auth (
                 id BIGSERIAL PRIMARY KEY, twitch_login TEXT, twitch_user_id TEXT,
                 scopes TEXT, needs_reauth BOOLEAN NOT NULL DEFAULT FALSE,
-                raid_enabled BOOLEAN NOT NULL DEFAULT TRUE, authorized_at TIMESTAMPTZ
+                raid_enabled BOOLEAN NOT NULL DEFAULT TRUE, authorized_at TIMESTAMPTZ,
+                created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
             )
         "#,
         )
@@ -922,6 +925,7 @@ mod tests {
             .uri("/twitch/api/admin/streamers?view=all")
             .extension(ConnectInfo(addr()))
             .header(axum::http::header::HOST, "example.com")
+            .header("x-dashboard-context", "admin")
             .header(
                 axum::http::header::COOKIE,
                 format!("{ADMIN_COOKIE_NAME}={}", session.session_id),

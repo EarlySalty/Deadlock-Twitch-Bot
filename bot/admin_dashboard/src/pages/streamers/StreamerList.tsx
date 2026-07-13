@@ -85,6 +85,8 @@ function formatPartnerStatus(status: StreamerPartnerStatus | undefined) {
 export function StreamerList() {
   const [search, setSearch] = useState('');
   const [view, setView] = useState<StreamerPartnerStatus | 'all'>('active');
+  const [partnerSinceFrom, setPartnerSinceFrom] = useState('');
+  const [partnerSinceTo, setPartnerSinceTo] = useState('');
   const [density, setDensity] = useState<'comfortable' | 'compact'>('comfortable');
   const [newLogin, setNewLogin] = useState('');
   const [newDiscordUserId, setNewDiscordUserId] = useState('');
@@ -115,7 +117,18 @@ export function StreamerList() {
     blocked: allRows.filter((row) => row.partnerStatus === 'blocked').length,
     all: allRows.length,
   };
-  const rows = filterByView(allRows, view).filter((row) => matchesStreamerSearch(row, search));
+  const rows = filterByView(allRows, view)
+    .filter((row) => matchesStreamerSearch(row, search))
+    .filter((row) => {
+      if (!partnerSinceFrom && !partnerSinceTo) {
+        return true;
+      }
+      if (!row.partnerSince) {
+        return false;
+      }
+      const day = row.partnerSince.slice(0, 10);
+      return (!partnerSinceFrom || day >= partnerSinceFrom) && (!partnerSinceTo || day <= partnerSinceTo);
+    });
   const scopeRows = (scopeStatusQuery.data?.items ?? []).filter((row) => matchesScopeSearch(row, search));
 
   const header = (
@@ -219,6 +232,18 @@ export function StreamerList() {
           <div className="text-white">{row.discordDisplayName || 'Kein Anzeigename'}</div>
           <div className="text-xs text-text-secondary">{row.discordUserId || 'Keine Discord-ID'}</div>
           <StatusBadge status={row.isOnDiscord ? 'active' : 'inactive'} />
+        </div>
+      ),
+    },
+    {
+      key: 'partner-since',
+      title: 'Partner seit',
+      sortable: true,
+      sortValue: (row) => row.partnerSince || '',
+      render: (row) => (
+        <div className="space-y-1">
+          <div className="font-medium text-white">{row.partnerSince ? formatDateTime(row.partnerSince) : 'Nie autorisiert'}</div>
+          {row.partnerSince ? <div className="text-xs text-text-secondary">{formatRelativeTime(row.partnerSince)}</div> : null}
         </div>
       ),
     },
@@ -448,7 +473,30 @@ export function StreamerList() {
           </div>
         </div>
 
-        {view !== 'all' || search.trim() ? (
+        <div className="mt-4 grid gap-3 sm:grid-cols-2 lg:max-w-2xl">
+          <label className="text-sm text-text-secondary">
+            <span className="mb-2 block text-xs font-semibold uppercase tracking-[0.16em]">Partner seit – von</span>
+            <input
+              type="date"
+              value={partnerSinceFrom}
+              max={partnerSinceTo || undefined}
+              onChange={(event) => setPartnerSinceFrom(event.target.value)}
+              className="admin-input"
+            />
+          </label>
+          <label className="text-sm text-text-secondary">
+            <span className="mb-2 block text-xs font-semibold uppercase tracking-[0.16em]">Partner seit – bis</span>
+            <input
+              type="date"
+              value={partnerSinceTo}
+              min={partnerSinceFrom || undefined}
+              onChange={(event) => setPartnerSinceTo(event.target.value)}
+              className="admin-input"
+            />
+          </label>
+        </div>
+
+        {view !== 'all' || search.trim() || partnerSinceFrom || partnerSinceTo ? (
           <div className="mt-5 flex flex-wrap gap-2">
             {view !== 'all' && selectedView ? (
               <div className="filter-chip">
@@ -462,6 +510,21 @@ export function StreamerList() {
               <div className="filter-chip">
                 <span>Suche: {search}</span>
                 <button type="button" aria-label="Suche entfernen" onClick={() => setSearch('')}>
+                  <X className="h-3.5 w-3.5" />
+                </button>
+              </div>
+            ) : null}
+            {partnerSinceFrom || partnerSinceTo ? (
+              <div className="filter-chip">
+                <span>Partner seit: {partnerSinceFrom || 'offen'} bis {partnerSinceTo || 'offen'}</span>
+                <button
+                  type="button"
+                  aria-label="Partner-seit-Filter entfernen"
+                  onClick={() => {
+                    setPartnerSinceFrom('');
+                    setPartnerSinceTo('');
+                  }}
+                >
                   <X className="h-3.5 w-3.5" />
                 </button>
               </div>
@@ -500,13 +563,15 @@ export function StreamerList() {
                   : 'Für den gewählten Status sind aktuell keine Streamer vorhanden.'
               }
               action={
-                view !== 'all' || search.trim() ? (
+                view !== 'all' || search.trim() || partnerSinceFrom || partnerSinceTo ? (
                   <button
                     type="button"
                     className="admin-button admin-button-secondary"
                     onClick={() => {
                       setView('all');
                       setSearch('');
+                      setPartnerSinceFrom('');
+                      setPartnerSinceTo('');
                     }}
                   >
                     Filter zurücksetzen
