@@ -545,3 +545,15 @@ export interface ResearchResponse {
     };
   };
 }
+
+export interface ResearchSuggestion {
+  login: string;
+  subject: ResearchSubject;
+  score: ResearchResponse['score'];
+}
+
+export interface ResearchSuggestionsResponse {
+  days: number;
+  baseline: ResearchBaseline;
+  items: ResearchSuggestion[];
+}

@@ -704,6 +704,10 @@ pub fn build_admin_streamers_router(pool: PgPool, token: String) -> Router {
 
     Router::new()
         .route(
+            "/twitch/api/admin/research/suggestions",
+            get(admin_research::suggestions_handler),
+        )
+        .route(
             "/twitch/api/admin/research/:login",
             get(admin_research::handler),
         )
