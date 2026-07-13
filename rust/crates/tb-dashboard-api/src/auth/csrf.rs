@@ -21,7 +21,7 @@
 
 use axum::{
     extract::Request,
-    http::{Method, StatusCode},
+    http::{request::Parts, Method, StatusCode},
     middleware::Next,
     response::{IntoResponse, Response},
     Json,
@@ -50,6 +50,15 @@ fn invalid_csrf_response() -> Response {
         })),
     )
         .into_response()
+}
+
+fn admin_session_id(parts: &Parts) -> Option<&str> {
+    parts
+        .extensions
+        .get::<crate::auth::level::AuthenticatedAdminSessionId>()
+        .map(|session| session.0.as_str())
+        .filter(|session_id| !session_id.is_empty())
+        .or_else(|| extract_cookie(parts, ADMIN_COOKIE_NAME).filter(|sid| !sid.is_empty()))
 }
 
 /// axum-Middleware: erzwingt das CSRF-Token auf Write-Requests.
@@ -89,7 +98,7 @@ pub async fn csrf_protect(request: Request, next: Next) -> Response {
     // (Discord-Admin) darf eine gültige `twitch_dash_session` NICHT verdecken — sonst
     // scheitern alle Schreib-POSTs, sobald beide Cookies im Browser liegen. Konsistent
     // zur Auth-Kaskade (level.rs), die die Twitch-Session ebenfalls vorrangig auflöst.
-    let admin_sid = extract_cookie(&parts, ADMIN_COOKIE_NAME).filter(|s| !s.is_empty());
+    let admin_sid = admin_session_id(&parts);
     let partner_sid = extract_cookie(&parts, PARTNER_COOKIE_NAME).filter(|s| !s.is_empty());
 
     // Gültig, sobald EIN Pfad trägt: korrektes `X-CSRF-Token` ODER (same-origin +
@@ -256,6 +265,23 @@ mod tests {
         assert!(!is_write_method(&Method::GET));
         assert!(!is_write_method(&Method::HEAD));
         assert!(!is_write_method(&Method::OPTIONS));
+    }
+
+    #[test]
+    fn csrf_nutzt_die_von_der_auth_kaskade_ausgewaehlte_admin_session() {
+        let request = Request::builder()
+            .header(
+                "cookie",
+                "master_dash_session=veraltet; master_dash_session=zentral-gueltig",
+            )
+            .body(Body::empty())
+            .unwrap();
+        let (mut parts, _) = request.into_parts();
+        parts.extensions.insert(
+            crate::auth::level::AuthenticatedAdminSessionId("zentral-gueltig".into()),
+        );
+
+        assert_eq!(admin_session_id(&parts), Some("zentral-gueltig"));
     }
 
     /// Router mit aufgelegtem CSRF-Layer; KEINE DashboardAuthState-Extension

@@ -1,3 +1,11 @@
+## #356 — Ein Login gilt in beiden Admin-Dashboards
+
+**Problem:** Discord- und Twitch-Admin-Dashboard überschrieben sich gegenseitig mit getrennten Sitzungen; im Twitch-Dashboard fehlte dadurch zusätzlich der CSRF-Token.
+
+**Änderung:** Beide Dashboards prüfen und widerrufen jetzt dieselbe zentrale Admin-Sitzung, während Twitch den dazugehörigen CSRF-Token direkt aus dieser Sitzung liefert.
+
+**Aktuelles Verhalten:** Ein Login funktioniert in beiden Admin-Dashboards, ein Logout beendet beide, und Admin-Aktionen benötigen keine versteckte alte HTML-Seite mehr.
+
 ## #355 — Raid-Hinweis verlinkt den Zielkanal wieder richtig
 
 **Problem:** Im Hinweis nach einem Raid stand direkt hinter dem Namen ein Punkt. Twitch zieht das Satzzeichen mit in den Namen und macht aus der Erwähnung damit einen kaputten Link.
