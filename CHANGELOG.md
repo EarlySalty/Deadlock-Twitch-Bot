@@ -1,3 +1,11 @@
+## #359 — Scam-Wächter erkennt die Anmach-Masche jetzt am Netzwerk
+
+**Problem:** Ein Scam-Account lief in zwei Partner-Kanälen dieselbe englische Anmach-Masche, und der Wächter hat sie sogar erkannt. Gehandelt hat er trotzdem nicht, weil er auf den offensichtlichen Betrugssatz gewartet hat. Den gibt es aber nie, der Betrug passiert später in den Direktnachrichten. Gemeldet hat er den Verdacht auch niemandem.
+
+**Änderung:** Der Wächter sieht jetzt über den einzelnen Kanal hinaus. Taucht derselbe frische Account binnen einer Stunde bei mehreren Streamern neu im Chat auf und fährt überall dasselbe leere Skript, reicht das als Beweis. Außerdem landet ab sofort jede einzelne Entscheidung im Aufsichts-Channel, auch ein Freispruch und auch ein bloßer Verdacht.
+
+**Aktuelles Verhalten:** Die Masche fliegt schon bei der Begrüßung im zweiten Kanal auf. Flüssiges Umgangsdeutsch und echter Spielbezug bleiben die stärksten Freispruch-Signale, und ohne gesichertes Account-Alter wird nicht mehr gebannt, sondern nur stummgeschaltet.
+
 ## #358 — Streamer-Seite und Dashboard im neuen Community-Look
 
 **Problem:** Die Streamer-Website und die Dashboards liefen noch im alten Cyan-Lila-Design, während Hauptseite und Coaching längst im Gold-Look der Community sind. Das sah nach zwei verschiedenen Projekten aus.

@@ -41,6 +41,17 @@ GEWICHTUNG:
 - "unicode_obfuscation_detected": true (verfremdete Schrift, um Filter zu täuschen) ist ein echtes Warnsignal.
 - "is_first_global": true erhöht den Verdacht nur LEICHT und nur zusammen mit den Skript-Merkmalen — ein neuer oder Zweit-Account allein ist normal.
 
+NETZWERK-SIGNAL — DERSELBE ACCOUNT IN MEHREREN KANÄLEN:
+Du bekommst zusätzlich die Felder "account_age_days" (Alter des Twitch-Accounts in Tagen, null = unbekannt) und "other_channels_last_hour" (Anzahl ANDERER Kanäle im Netzwerk, in denen dieser Account in der letzten Stunde ebenfalls zum ersten Mal geschrieben hat).
+Ein echter Zuschauer, der einen Streamer entdeckt, taucht in genau EINEM Kanal auf. Wer binnen einer Stunde bei mehreren verschiedenen Streamern gleichzeitig neu im Chat steht und überall dieselbe generische Eröffnung fährt ("hey, how are you?"), arbeitet eine Liste ab. Das ist keine Neugier, das ist ein Skript.
+
+WARTE NICHT AUF DEN PIVOT:
+Bei der Beziehungs- und Vertrauens-Masche passiert der eigentliche Betrug fast nie im öffentlichen Chat, sondern später per Whisper oder Discord-Direktnachricht. Im Chat siehst du nur den Aufbau: Begrüßung, Dauerlob, Ausfragen, Füllsätze. Wenn du auf einen sichtbaren Pivot wartest, kommt er nie, und der Betrüger hat sein Ziel längst privat angeschrieben.
+Deshalb gilt: Wenn "other_channels_last_hour" mindestens 1 ist UND der Account frisch ist ("account_age_days" unter 90) UND die Sprache ins Skript-Muster passt (Englisch oder übersetztes Deutsch, kein echter Stream- oder Spielbezug), dann IST das die Masche. Urteile "scam" mit hoher confidence, auch wenn noch kein Discord-Link, kein Wachstums-Angebot und keine Ausrede gefallen ist. Der leere, gesichtslose Aufbau ist hier selbst der Beweis.
+
+DIE GEGENSIGNALE BLEIBEN STÄRKER:
+Flüssiges deutsches Umgangsdeutsch, echter Bezug zum Stream oder zum Spiel, ein alter Account ("account_age_days" deutlich über 90) oder eine plausible gemeinsame Vorgeschichte machen den Chatter "clean" — auch dann, wenn er in mehreren Kanälen unterwegs ist. Ein deutscher Zuschauer, der mehreren Deadlock-Streamern folgt und überall mal Hallo sagt, ist völlig normal und wird NICHT gebannt.
+
 URTEILSDISZIPLIN:
 Stufe nur dann als "scam" mit hoher confidence ein, wenn das fremdsprachige oder übersetzte Skript klar erkennbar ist UND echter Bezug fehlt. Reicht der Verlauf dafür nicht, antworte "unsure". Echte oder natürlich-deutschsprachige Zuschauer sind "clean". Lass deine confidence NICHT allein deshalb steigen, weil ein harmloses Gespräch weitergeht; bewerte jede Nachricht neu am realen Inhalt und behandle deine eigenen früheren Verdachtsmomente NICHT als Beweis.
 
@@ -50,6 +61,7 @@ const TIMEOUT_SECONDS: u32 = 600;
 /// Account gilt als "neu" unter dieser Tagesgrenze (konsistent mit scam_pitch::ACCOUNT_MAX_DAYS = 90).
 const ACCOUNT_NEW_MAX_DAYS: i64 = 90;
 const SUBSTANTIAL_MESSAGE_TARGET: usize = 3;
+const CROSS_CHANNEL_WINDOW_MINUTES: i64 = 60;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum VerdictKind {
@@ -143,18 +155,33 @@ pub struct DialogState {
     single_message_pitch: bool,
     is_first_global: bool,
     obfuscation_detected: bool,
+    account_age_days: Option<i64>,
+    other_channels_last_hour: i64,
+    channel_login: String,
+    chatter_login: String,
     completed: bool,
 }
 
 impl DialogState {
     pub fn new(is_first_global: bool) -> Self {
-        Self::with_learnings(is_first_global, None)
+        Self::with_context(is_first_global, None, 0, None, "", "")
     }
 
     /// Wie [`DialogState::new`], hängt aber die netzwerkweit destillierten
     /// Self-Learning-Erkenntnisse als Zusatzhinweis an den System-Prompt an
     /// (`None`/leer → unverändert).
     pub fn with_learnings(is_first_global: bool, learnings: Option<&str>) -> Self {
+        Self::with_context(is_first_global, None, 0, learnings, "", "")
+    }
+
+    fn with_context(
+        is_first_global: bool,
+        account_age_days: Option<i64>,
+        other_channels_last_hour: i64,
+        learnings: Option<&str>,
+        channel_login: &str,
+        chatter_login: &str,
+    ) -> Self {
         let mut system = SCAM_JUDGE_SYSTEM_PROMPT.to_string();
         if let Some(learnings) = learnings.map(str::trim).filter(|l| !l.is_empty()) {
             system.push_str(
@@ -174,6 +201,10 @@ impl DialogState {
             single_message_pitch: false,
             is_first_global,
             obfuscation_detected: false,
+            account_age_days,
+            other_channels_last_hour,
+            channel_login: channel_login.to_string(),
+            chatter_login: chatter_login.to_string(),
             completed: false,
         }
     }
@@ -196,6 +227,8 @@ impl DialogState {
             "message": normalized.text,
             "is_first_global": self.is_first_global,
             "unicode_obfuscation_detected": self.obfuscation_detected,
+            "account_age_days": self.account_age_days,
+            "other_channels_last_hour": self.other_channels_last_hour,
         })
         .to_string();
         self.messages.push(DialogMessage {
@@ -205,7 +238,9 @@ impl DialogState {
     }
 
     pub fn has_enough_substance(&self) -> bool {
-        self.single_message_pitch || self.substantial_messages >= SUBSTANTIAL_MESSAGE_TARGET
+        self.other_channels_last_hour >= 1
+            || self.single_message_pitch
+            || self.substantial_messages >= SUBSTANTIAL_MESSAGE_TARGET
     }
 
     pub fn messages(&self) -> &[DialogMessage] {
@@ -330,30 +365,44 @@ struct RawVerdict {
     reasoning: String,
 }
 
-pub fn parse_verdict(raw: &str) -> Verdict {
+fn parse_verdict(raw: &str, channel: &str, chatter: &str) -> Verdict {
+    match parse_verdict_result(raw) {
+        Ok(verdict) => verdict,
+        Err(reason) => {
+            warn!(
+                reason,
+                channel, chatter, "Conversation-Scam-Judge-Antwort unbrauchbar"
+            );
+            Verdict::unsure()
+        }
+    }
+}
+
+fn parse_verdict_result(raw: &str) -> Result<Verdict, &'static str> {
+    if raw.trim().is_empty() {
+        return Err("empty_response");
+    }
     let parsed = serde_json::from_str::<RawVerdict>(raw.trim()).or_else(|_| {
         extract_json_object(raw)
             .ok_or_else(|| serde_json::Error::io(std::io::Error::other("missing JSON object")))
             .and_then(serde_json::from_str::<RawVerdict>)
     });
-    let Ok(parsed) = parsed else {
-        return Verdict::unsure();
-    };
+    let parsed = parsed.map_err(|_| "parse_error")?;
     let kind = match parsed.verdict.as_str() {
         "scam" => VerdictKind::Scam,
         "clean" => VerdictKind::Clean,
         "unsure" => VerdictKind::Unsure,
-        _ => return Verdict::unsure(),
+        _ => return Err("invalid_verdict"),
     };
     if !parsed.confidence.is_finite() {
-        return Verdict::unsure();
+        return Err("invalid_confidence");
     }
-    Verdict {
+    Ok(Verdict {
         verdict: kind,
         confidence: parsed.confidence.clamp(0.0, 1.0),
         category: parsed.category,
         reasoning: parsed.reasoning,
-    }
+    })
 }
 
 fn extract_json_object(raw: &str) -> Option<&str> {
@@ -426,10 +475,16 @@ impl ScamJudge for MiniMaxScamJudge {
         {
             Ok(raw) => {
                 dialog.append_assistant(raw.clone());
-                parse_verdict(&raw)
+                parse_verdict(&raw, &dialog.channel_login, &dialog.chatter_login)
             }
             Err(error) => {
-                debug!("Conversation-Scam-Judge nicht verfügbar: {error}");
+                warn!(
+                    reason = "llm_error",
+                    channel = %dialog.channel_login,
+                    chatter = %dialog.chatter_login,
+                    %error,
+                    "Conversation-Scam-Judge nicht verfügbar"
+                );
                 Verdict::unsure()
             }
         }
@@ -457,6 +512,14 @@ pub trait ScamGuardStore: Send + Sync {
         channel_login: &str,
         chatter_login: &str,
     ) -> Result<Option<FirstTimeContext>, String>;
+    async fn cross_channel_first_messages(
+        &self,
+        _channel_login: &str,
+        _chatter_login: &str,
+        _window_minutes: i64,
+    ) -> Result<i64, String> {
+        Ok(0)
+    }
     /// Persistiert das Urteil und liefert dessen neue ID (für den Discord-Feed).
     async fn persist_verdict(&self, record: &VerdictRecord) -> Result<i64, String>;
 
@@ -518,6 +581,7 @@ pub struct ScamNotification {
     pub category: String,
     pub reasoning: String,
     pub confidence: f32,
+    pub verdict: String,
     pub action_taken: String,
 }
 
@@ -617,6 +681,30 @@ impl ScamGuardStore for PgScamGuardStore {
             is_first_time_streamer,
             is_first_global,
         }))
+    }
+
+    async fn cross_channel_first_messages(
+        &self,
+        channel_login: &str,
+        chatter_login: &str,
+        window_minutes: i64,
+    ) -> Result<i64, String> {
+        sqlx::query_scalar::<_, i64>(
+            "SELECT COUNT(*) FROM ( \
+               SELECT streamer_login \
+               FROM twitch_chat_messages \
+               WHERE LOWER(chatter_login) = $1 \
+                 AND LOWER(streamer_login) <> $2 \
+               GROUP BY streamer_login \
+               HAVING MIN(message_ts) >= NOW() - ($3 * INTERVAL '1 minute') \
+             ) t",
+        )
+        .bind(chatter_login.to_lowercase())
+        .bind(channel_login.to_lowercase())
+        .bind(window_minutes)
+        .fetch_one(&self.pool)
+        .await
+        .map_err(|error| error.to_string())
     }
 
     async fn persist_verdict(&self, record: &VerdictRecord) -> Result<i64, String> {
@@ -756,6 +844,53 @@ impl ConversationScamGuard {
         let state = match self.states.get(&key) {
             Some(existing) => existing.clone(),
             None => {
+                let other_channels_last_hour = match self
+                    .store
+                    .cross_channel_first_messages(
+                        &channel_login,
+                        &chatter_login,
+                        CROSS_CHANNEL_WINDOW_MINUTES,
+                    )
+                    .await
+                {
+                    Ok(count) => count,
+                    Err(error) => {
+                        warn!(
+                            reason = "cross_channel_error",
+                            channel = %channel_login,
+                            chatter = %chatter_login,
+                            %error,
+                            "Conversation-Scam-Netzwerk-Signal nicht ladbar; nutze 0"
+                        );
+                        0
+                    }
+                };
+                let account_age_days = if event.chatter_user_id.is_empty() {
+                    None
+                } else {
+                    match self.api.user_created_at(&event.chatter_user_id).await {
+                        Ok(Some(created)) => Some((Utc::now() - created).num_days()),
+                        Ok(None) => {
+                            warn!(
+                                reason = "account_age_unknown",
+                                channel = %channel_login,
+                                chatter = %chatter_login,
+                                "Conversation-Scam-Account-Alter unbekannt; AutoBan deaktiviert"
+                            );
+                            None
+                        }
+                        Err(error) => {
+                            warn!(
+                                reason = "account_age_error",
+                                channel = %channel_login,
+                                chatter = %chatter_login,
+                                %error,
+                                "Conversation-Scam-Account-Alter nicht ladbar; AutoBan deaktiviert"
+                            );
+                            None
+                        }
+                    }
+                };
                 // Erkenntnisse nur einmal pro Chatter laden (beim ersten Treffer),
                 // nicht bei jeder Folgenachricht.
                 let learnings = match self.store.load_learnings().await {
@@ -768,9 +903,13 @@ impl ConversationScamGuard {
                 self.states
                     .entry(key)
                     .or_insert_with(|| {
-                        Arc::new(Mutex::new(DialogState::with_learnings(
+                        Arc::new(Mutex::new(DialogState::with_context(
                             context.is_first_global,
+                            account_age_days,
+                            other_channels_last_hour,
                             learnings.as_deref(),
+                            &channel_login,
+                            &chatter_login,
                         )))
                     })
                     .clone()
@@ -786,7 +925,24 @@ impl ConversationScamGuard {
         }
 
         let verdict = self.judge.judge(&mut dialog).await;
-        let (action_taken, completed) = self.apply_decision(event, &settings, &verdict).await;
+        let (action_taken, completed) = self
+            .apply_decision(event, &settings, &verdict, dialog.account_age_days)
+            .await;
+        let message: String = event.text().chars().take(120).collect();
+        let reasoning: String = verdict.reasoning.chars().take(200).collect();
+        tracing::info!(
+            channel = %channel_login,
+            chatter = %chatter_login,
+            verdict = verdict.verdict.as_str(),
+            confidence = verdict.confidence,
+            category = %verdict.category,
+            action_taken = %action_taken,
+            cross_channel = dialog.other_channels_last_hour,
+            account_age_days = ?dialog.account_age_days,
+            message = %message,
+            reasoning = %reasoning,
+            "Conversation-Scam-Judge-Entscheidung"
+        );
         let record = VerdictRecord {
             channel_login,
             chatter_login,
@@ -799,25 +955,18 @@ impl ConversationScamGuard {
             action_taken,
         };
         match self.store.persist_verdict(&record).await {
-            Ok(verdict_id) => self.maybe_notify(verdict_id, &record),
+            Ok(verdict_id) => self.notify_verdict(verdict_id, &record),
             Err(error) => warn!("Conversation-Scam-Verdict nicht persistiert: {error}"),
         }
         dialog.completed = completed;
     }
 
-    /// Postet bestätigte Aktionen (Ban/Timeout/Vorschlag) fire-and-forget in den
-    /// Discord-Aufsichts-Feed. „none"/„ban_failed_no_mod" werden nicht gepostet
-    /// (keine zurücknehmbare Aktion). Ohne Notifier passiert nichts.
-    fn maybe_notify(&self, verdict_id: i64, record: &VerdictRecord) {
+    /// Postet jedes persistierte Urteil fire-and-forget in den
+    /// Discord-Aufsichts-Feed. Ohne Notifier passiert nichts.
+    fn notify_verdict(&self, verdict_id: i64, record: &VerdictRecord) {
         let Some(notifier) = &self.notifier else {
             return;
         };
-        if !matches!(
-            record.action_taken.as_str(),
-            "banned" | "timed_out" | "suggested"
-        ) {
-            return;
-        }
         let notifier = Arc::clone(notifier);
         let notification = ScamNotification {
             verdict_id,
@@ -826,6 +975,7 @@ impl ConversationScamGuard {
             category: record.category.clone(),
             reasoning: record.reasoning.clone(),
             confidence: record.confidence,
+            verdict: record.verdict.as_str().to_string(),
             action_taken: record.action_taken.clone(),
         };
         let handle = tokio::spawn(async move {
@@ -847,6 +997,7 @@ impl ConversationScamGuard {
         event: &ChatMessageEvent,
         settings: &GuardSettings,
         verdict: &Verdict,
+        account_age_days: Option<i64>,
     ) -> (String, bool) {
         match verdict.verdict {
             VerdictKind::Clean => ("none".to_string(), true),
@@ -880,13 +1031,11 @@ impl ConversationScamGuard {
                     if event.chatter_user_id.is_empty() {
                         return ("ban_failed_no_mod".to_string(), true);
                     }
-                    let is_old = match self.api.user_created_at(&event.chatter_user_id).await {
-                        Ok(Some(created)) => {
-                            (Utc::now() - created).num_days() >= ACCOUNT_NEW_MAX_DAYS
-                        }
-                        Ok(None) | Err(_) => false,
-                    };
-                    if is_old {
+                    let is_known_new = matches!(
+                        account_age_days,
+                        Some(age_days) if age_days < ACCOUNT_NEW_MAX_DAYS
+                    );
+                    if !is_known_new {
                         let timed_out = self
                             .moderation
                             .timeout_and_cleanup(
@@ -959,7 +1108,8 @@ pub fn chunk_for_twitch(text: &str, max_len: usize) -> Vec<String> {
             continue;
         }
         let separator = usize::from(!current.is_empty());
-        if current.chars().count() + separator + word.chars().count() > max_len && !current.is_empty()
+        if current.chars().count() + separator + word.chars().count() > max_len
+            && !current.is_empty()
         {
             chunks.push(std::mem::take(&mut current));
         }
@@ -1049,7 +1199,11 @@ impl ScamGuardCommands {
             }).to_string()},
         ]);
 
-        let text = match self.client.messages_completion_uncapped(messages, 0.3).await {
+        let text = match self
+            .client
+            .messages_completion_uncapped(messages, 0.3)
+            .await
+        {
             Ok(text) if !text.trim().is_empty() => text,
             _ => verdict.reasoning.clone(),
         };
@@ -1659,6 +1813,29 @@ mod tests {
     }
 
     #[test]
+    fn netzwerk_signal_macht_kurze_nachricht_sofort_substanziell_und_json_sichtbar() {
+        let mut dialog =
+            DialogState::with_context(true, Some(14), 1, None, "testchannel", "network_user");
+        dialog.push_user_message("hey");
+
+        assert!(dialog.has_enough_substance());
+        let input: Value = serde_json::from_str(&dialog.messages()[1].content).unwrap();
+        assert_eq!(input["account_age_days"], 14);
+        assert_eq!(input["other_channels_last_hour"], 1);
+    }
+
+    #[test]
+    fn unbekanntes_account_alter_steht_als_null_im_judge_json() {
+        let mut dialog =
+            DialogState::with_context(true, None, 0, None, "testchannel", "unknown_age_user");
+        dialog.push_user_message("hello there");
+
+        let input: Value = serde_json::from_str(&dialog.messages()[1].content).unwrap();
+        assert!(input["account_age_days"].is_null());
+        assert_eq!(input["other_channels_last_hour"], 0);
+    }
+
+    #[test]
     fn reply_me_opener_zaehlt_als_single_message_pitch() {
         assert!(is_single_message_pitch(
             "Sorry my headphones are not working can reply me on chat"
@@ -1702,7 +1879,9 @@ mod tests {
         let array = messages.as_array().expect("messages ist ein Array");
         assert_eq!(array[0]["role"], "system");
         assert_eq!(array[0]["content"], SCAM_LEARNING_SYSTEM_PROMPT);
-        let user = array[1]["content"].as_str().expect("user content ist String");
+        let user = array[1]["content"]
+            .as_str()
+            .expect("user content ist String");
         assert!(user.contains("BESTAETIGT_GRUND"));
         assert!(user.contains("FEHLALARM_GRUND"));
         assert!(user.contains("bestaetigte_faelle"));
@@ -1745,12 +1924,16 @@ mod tests {
     fn verdict_parser_akzeptiert_json_und_json_in_fliess_text() {
         let direct = parse_verdict(
             r#"{"verdict":"scam","confidence":0.93,"category":"social","reasoning":"clear pattern"}"#,
+            "testchannel",
+            "testchatter",
         );
         assert_eq!(direct.verdict, VerdictKind::Scam);
         assert!((direct.confidence - 0.93).abs() < f32::EPSILON);
 
         let wrapped = parse_verdict(
             "analysis follows\n```json\n{\"verdict\":\"clean\",\"confidence\":0.81,\"category\":\"viewer\",\"reasoning\":\"game-specific\"}\n```",
+            "testchannel",
+            "testchatter",
         );
         assert_eq!(wrapped.verdict, VerdictKind::Clean);
         assert!((wrapped.confidence - 0.81).abs() < f32::EPSILON);
@@ -1763,7 +1946,10 @@ mod tests {
             r#"{"verdict":"ban","confidence":1.0}"#,
             r#"{"verdict":"scam","confidence":"high"}"#,
         ] {
-            assert_eq!(parse_verdict(raw).verdict, VerdictKind::Unsure);
+            assert_eq!(
+                parse_verdict(raw, "testchannel", "testchatter").verdict,
+                VerdictKind::Unsure
+            );
         }
     }
 
@@ -1822,10 +2008,10 @@ mod tests {
         assert_eq!(second.verdict, VerdictKind::Scam);
     }
 
-    #[derive(Default)]
     struct MockStore {
         settings: StdMutex<GuardSettings>,
         context: StdMutex<Option<FirstTimeContext>>,
+        cross_channel: StdMutex<Result<i64, String>>,
         records: StdMutex<Vec<VerdictRecord>>,
     }
 
@@ -1841,6 +2027,15 @@ mod tests {
             _chatter_login: &str,
         ) -> Result<Option<FirstTimeContext>, String> {
             Ok(*self.context.lock().unwrap())
+        }
+
+        async fn cross_channel_first_messages(
+            &self,
+            _channel_login: &str,
+            _chatter_login: &str,
+            _window_minutes: i64,
+        ) -> Result<i64, String> {
+            self.cross_channel.lock().unwrap().clone()
         }
 
         async fn persist_verdict(&self, record: &VerdictRecord) -> Result<i64, String> {
@@ -1951,6 +2146,8 @@ mod tests {
         timeout_result: StdMutex<BanOutcome>,
         ban_reasons: StdMutex<Vec<String>>,
         timeout_reasons: StdMutex<Vec<String>>,
+        created_at: StdMutex<Result<Option<chrono::DateTime<Utc>>, String>>,
+        created_at_calls: AtomicUsize,
         /// Ergebnis von `resolve_user_id`. Default `None` (bisheriges Verhalten).
         resolve_id: StdMutex<Option<String>>,
     }
@@ -1962,6 +2159,8 @@ mod tests {
                 timeout_result: StdMutex::new(BanOutcome::Banned),
                 ban_reasons: StdMutex::new(Vec::new()),
                 timeout_reasons: StdMutex::new(Vec::new()),
+                created_at: StdMutex::new(Ok(Some(Utc::now() - chrono::Duration::days(10)))),
+                created_at_calls: AtomicUsize::new(0),
                 resolve_id: StdMutex::new(None),
             }
         }
@@ -2010,7 +2209,8 @@ mod tests {
             &self,
             _: &str,
         ) -> Result<Option<chrono::DateTime<chrono::Utc>>, String> {
-            Ok(None)
+            self.created_at_calls.fetch_add(1, Ordering::SeqCst);
+            self.created_at.lock().unwrap().clone()
         }
         async fn resolve_user_id(&self, _: &str) -> Result<Option<String>, String> {
             Ok(self.resolve_id.lock().unwrap().clone())
@@ -2080,6 +2280,7 @@ mod tests {
                 is_first_time_streamer: true,
                 is_first_global: true,
             })),
+            cross_channel: StdMutex::new(Ok(0)),
             records: StdMutex::new(Vec::new()),
         });
         let judge = Arc::new(MockJudge::new(verdicts));
@@ -2183,16 +2384,90 @@ mod tests {
         .await
         .expect("Notifier wurde nicht aufgerufen");
 
-        assert_eq!(seen.len(), 1, "genau eine bestätigte Aktion → ein Discord-Post");
+        assert_eq!(
+            seen.len(),
+            1,
+            "genau eine bestätigte Aktion → ein Discord-Post"
+        );
         assert_eq!(seen[0].action_taken, "suggested");
+        assert_eq!(seen[0].verdict, "scam");
         assert_eq!(seen[0].verdict_id, 1);
         assert_eq!(seen[0].chatter_login, "sam_09995");
     }
 
     #[tokio::test]
-    async fn clean_verdict_postet_nichts_nach_discord() {
-        let (guard, store, _, _, _) =
-            build_guard(GuardSettings::default(), [verdict(VerdictKind::Clean, 0.98)]);
+    async fn unsure_ab_suggestion_floor_wird_ohne_moderationsaktion_gemeldet() {
+        let (guard, store, _, api, moderation) = build_guard(
+            GuardSettings::default(),
+            [verdict(VerdictKind::Unsure, 0.75)],
+        );
+        let notifier = Arc::new(RecordingNotifier::default());
+        let guard = guard.with_notifier(Arc::clone(&notifier) as Arc<dyn ScamGuardNotifier>);
+
+        feed(
+            &guard,
+            "unsure_visible",
+            &["This is a sufficiently long generic opening message without any real stream context."],
+        )
+        .await;
+
+        let seen = tokio::time::timeout(std::time::Duration::from_secs(1), async {
+            loop {
+                if let Some(notification) = notifier.seen.lock().unwrap().first().cloned() {
+                    break notification;
+                }
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .expect("Unsure-Verdacht wurde nicht gemeldet");
+        assert_eq!(store.records.lock().unwrap()[0].action_taken, "none");
+        assert_eq!(seen.action_taken, "none");
+        assert_eq!(seen.verdict, "unsure");
+        assert!(api.ban_reasons.lock().unwrap().is_empty());
+        assert!(moderation.reasons.lock().unwrap().is_empty());
+        assert!(moderation.timeout_reasons.lock().unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn unsure_unter_suggestion_floor_wird_gemeldet() {
+        let (guard, store, _, _, moderation) = build_guard(
+            GuardSettings::default(),
+            [verdict(VerdictKind::Unsure, 0.69)],
+        );
+        let notifier = Arc::new(RecordingNotifier::default());
+        let guard = guard.with_notifier(Arc::clone(&notifier) as Arc<dyn ScamGuardNotifier>);
+
+        feed(
+            &guard,
+            "unsure_quiet",
+            &["This is a sufficiently long generic opening message without any real stream context."],
+        )
+        .await;
+
+        let seen = tokio::time::timeout(std::time::Duration::from_secs(1), async {
+            loop {
+                if let Some(notification) = notifier.seen.lock().unwrap().first().cloned() {
+                    break notification;
+                }
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .expect("Unsure unter suggestion_floor wurde nicht gemeldet");
+        assert_eq!(store.records.lock().unwrap()[0].action_taken, "none");
+        assert_eq!(seen.action_taken, "none");
+        assert_eq!(seen.verdict, "unsure");
+        assert!(moderation.reasons.lock().unwrap().is_empty());
+        assert!(moderation.timeout_reasons.lock().unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn clean_verdict_wird_nach_discord_gemeldet() {
+        let (guard, store, _, _, _) = build_guard(
+            GuardSettings::default(),
+            [verdict(VerdictKind::Clean, 0.98)],
+        );
         let notifier = Arc::new(RecordingNotifier::default());
         let guard = guard.with_notifier(Arc::clone(&notifier) as Arc<dyn ScamGuardNotifier>);
 
@@ -2208,13 +2483,19 @@ mod tests {
         )
         .await;
 
-        // „none" spawnt erst gar keinen notify-Task — der Recorder ist
-        // deterministisch leer (kein Timing-Rennen).
+        let seen = tokio::time::timeout(std::time::Duration::from_secs(1), async {
+            loop {
+                if let Some(notification) = notifier.seen.lock().unwrap().first().cloned() {
+                    break notification;
+                }
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .expect("Clean-Urteil wurde nicht gemeldet");
         assert_eq!(store.records.lock().unwrap()[0].action_taken, "none");
-        assert!(
-            notifier.seen.lock().unwrap().is_empty(),
-            "ein sauberer Zuschauer darf nie im Discord-Feed landen"
-        );
+        assert_eq!(seen.action_taken, "none");
+        assert_eq!(seen.verdict, "clean");
     }
 
     #[tokio::test]
@@ -2336,6 +2617,8 @@ mod tests {
         let (guard, store, _, _, moderation) =
             build_guard(GuardSettings::default(), [verdict(VerdictKind::Scam, 0.97)]);
         *moderation.succeeds.lock().unwrap() = false;
+        let notifier = Arc::new(RecordingNotifier::default());
+        let guard = guard.with_notifier(Arc::clone(&notifier) as Arc<dyn ScamGuardNotifier>);
         feed(
             &guard,
             "forbidden_user",
@@ -2346,6 +2629,89 @@ mod tests {
             store.records.lock().unwrap()[0].action_taken,
             "ban_failed_no_mod"
         );
+        let seen = tokio::time::timeout(std::time::Duration::from_secs(1), async {
+            loop {
+                if let Some(notification) = notifier.seen.lock().unwrap().first().cloned() {
+                    break notification;
+                }
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .expect("Ban-Fehlschlag wurde nicht gemeldet");
+        assert_eq!(seen.action_taken, "ban_failed_no_mod");
+        assert_eq!(seen.verdict, "scam");
+    }
+
+    #[tokio::test]
+    async fn auto_ban_timeoutet_bei_unbekanntem_account_alter() {
+        let (guard, store, _, api, moderation) =
+            build_guard(GuardSettings::default(), [verdict(VerdictKind::Scam, 0.97)]);
+        *api.created_at.lock().unwrap() = Ok(None);
+
+        feed(
+            &guard,
+            "unknown_age_user",
+            &["This long growth pitch asks the streamer to add somebody on Discord immediately."],
+        )
+        .await;
+
+        assert_eq!(store.records.lock().unwrap()[0].action_taken, "timed_out");
+        assert!(moderation.reasons.lock().unwrap().is_empty());
+        assert_eq!(moderation.timeout_reasons.lock().unwrap().len(), 1);
+        assert_eq!(api.created_at_calls.load(Ordering::SeqCst), 1);
+    }
+
+    #[tokio::test]
+    async fn auto_ban_timeoutet_bei_account_alter_api_fehler() {
+        let (guard, store, _, api, moderation) =
+            build_guard(GuardSettings::default(), [verdict(VerdictKind::Scam, 0.97)]);
+        *api.created_at.lock().unwrap() = Err("helix unavailable".to_string());
+
+        feed(
+            &guard,
+            "age_error_user",
+            &["This long growth pitch asks the streamer to add somebody on Discord immediately."],
+        )
+        .await;
+
+        assert_eq!(store.records.lock().unwrap()[0].action_taken, "timed_out");
+        assert!(moderation.reasons.lock().unwrap().is_empty());
+        assert_eq!(moderation.timeout_reasons.lock().unwrap().len(), 1);
+        assert_eq!(api.created_at_calls.load(Ordering::SeqCst), 1);
+    }
+
+    #[tokio::test]
+    async fn auto_ban_bannt_bei_sicher_bekanntem_frischem_account() {
+        let (guard, store, _, api, moderation) =
+            build_guard(GuardSettings::default(), [verdict(VerdictKind::Scam, 0.97)]);
+
+        feed(
+            &guard,
+            "young_account_user",
+            &["This long growth pitch asks the streamer to add somebody on Discord immediately."],
+        )
+        .await;
+
+        assert_eq!(store.records.lock().unwrap()[0].action_taken, "banned");
+        assert_eq!(moderation.reasons.lock().unwrap().len(), 1);
+        assert!(moderation.timeout_reasons.lock().unwrap().is_empty());
+        assert_eq!(api.created_at_calls.load(Ordering::SeqCst), 1);
+    }
+
+    #[tokio::test]
+    async fn cross_channel_db_fehler_faellt_auf_null_zurueck_und_bannt_nicht() {
+        let (guard, store, judge, api, moderation) =
+            build_guard(GuardSettings::default(), [verdict(VerdictKind::Scam, 0.99)]);
+        *store.cross_channel.lock().unwrap() = Err("database unavailable".to_string());
+
+        feed(&guard, "db_error_user", &["hey"]).await;
+
+        assert_eq!(judge.calls.load(Ordering::SeqCst), 0);
+        assert!(store.records.lock().unwrap().is_empty());
+        assert!(api.ban_reasons.lock().unwrap().is_empty());
+        assert!(moderation.reasons.lock().unwrap().is_empty());
+        assert!(moderation.timeout_reasons.lock().unwrap().is_empty());
     }
 
     #[tokio::test]
