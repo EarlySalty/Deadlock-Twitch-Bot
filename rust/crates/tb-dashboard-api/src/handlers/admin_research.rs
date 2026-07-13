@@ -229,9 +229,9 @@ fn baseline_from(partners: &[PartnerAggregate]) -> Baseline {
     }
 }
 
-fn parse_days(params: &ResearchQuery) -> Result<i64, Response> {
+fn parse_days(params: &ResearchQuery) -> Result<i64, Box<Response>> {
     let days = parse_bounded_query_int(params.days.as_deref(), "days", 30, 7, 90)
-        .map_err(IntoResponse::into_response)?;
+        .map_err(|error| Box::new(error.into_response()))?;
     if params
         .days
         .as_deref()
@@ -240,11 +240,13 @@ fn parse_days(params: &ResearchQuery) -> Result<i64, Response> {
         .and_then(|raw| raw.parse::<i64>().ok())
         .is_some_and(|raw| !(7..=90).contains(&raw))
     {
-        return Err((
-            StatusCode::BAD_REQUEST,
-            Json(json!({"error": "days must be between 7 and 90"})),
-        )
-            .into_response());
+        return Err(Box::new(
+            (
+                StatusCode::BAD_REQUEST,
+                Json(json!({"error": "days must be between 7 and 90"})),
+            )
+                .into_response(),
+        ));
     }
     Ok(days)
 }
@@ -415,7 +417,7 @@ pub async fn handler(
 
     let days = match parse_days(&params) {
         Ok(days) => days,
-        Err(response) => return response,
+        Err(response) => return *response,
     };
 
     let login = raw_login.trim().to_lowercase();
@@ -488,7 +490,7 @@ pub async fn suggestions_handler(
 
     let days = match parse_days(&params) {
         Ok(days) => days,
-        Err(response) => return response,
+        Err(response) => return *response,
     };
     let since = Utc::now() - Duration::days(days);
     let candidates_query = sqlx::query_as::<_, SuggestionAggregate>(SUGGESTIONS_SQL)
