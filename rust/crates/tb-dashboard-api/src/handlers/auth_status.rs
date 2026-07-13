@@ -8,7 +8,7 @@
 
 use axum::{
     Json,
-    extract::State,
+    extract::{Extension, State},
     http::{HeaderMap, header},
     response::{IntoResponse, Response},
 };
@@ -18,7 +18,12 @@ use sqlx::PgPool;
 use std::sync::OnceLock;
 use tokio::sync::Mutex;
 
-use crate::auth::level::{DEFAULT_ADMIN_LOGIN, DashboardAuthLevel, is_admin_login};
+use crate::auth::{
+    level::{
+        AuthenticatedAdminSessionId, DEFAULT_ADMIN_LOGIN, DashboardAuthLevel, is_admin_login,
+    },
+    session::DashboardAuthState,
+};
 
 // ── Konstanten ──────────────────────────────────────────────────────────────
 
@@ -69,14 +74,24 @@ fn now_secs() -> u64 {
 /// je nach Auth-Level.
 pub async fn auth_status_handler(
     auth: DashboardAuthLevel,
+    admin_session: Option<Extension<AuthenticatedAdminSessionId>>,
+    auth_state: Option<Extension<DashboardAuthState>>,
     State(pool): State<PgPool>,
     headers: HeaderMap,
 ) -> Response {
+    let csrf_token = match (admin_session, auth_state) {
+        (Some(Extension(session)), Some(Extension(state))) => state
+            .admin_csrf_token(&session.0)
+            .await
+            .ok()
+            .flatten(),
+        _ => None,
+    };
     match &auth {
         DashboardAuthLevel::None => unauth_response().await,
         DashboardAuthLevel::Admin { actor: Some(actor) } => {
             if admin_mode_header_active(&headers) {
-                admin_response("admin", true, true)
+                admin_response("admin", true, true, csrf_token.as_deref())
             } else {
                 partner_response(
                     &pool,
@@ -88,7 +103,9 @@ pub async fn auth_status_handler(
                 .await
             }
         }
-        DashboardAuthLevel::Admin { actor: None } => admin_response("admin", false, true),
+        DashboardAuthLevel::Admin { actor: None } => {
+            admin_response("admin", false, true, csrf_token.as_deref())
+        }
         DashboardAuthLevel::Partner {
             twitch_login,
             twitch_user_id,
@@ -174,7 +191,12 @@ fn unauth_payload() -> serde_json::Value {
 
 // ── Admin / Localhost ───────────────────────────────────────────────────────
 
-fn admin_response(level: &'static str, admin_eligible: bool, admin_mode: bool) -> Response {
+fn admin_response(
+    level: &'static str,
+    admin_eligible: bool,
+    admin_mode: bool,
+    csrf_token: Option<&str>,
+) -> Response {
     let plan = json!({
         "planId": "analysis_dashboard",
         "planName": "Erweitert (Admin)",
@@ -203,8 +225,8 @@ fn admin_response(level: &'static str, admin_eligible: bool, admin_mode: bool) -
         "operationalState": "active",
         "canAccessAnalyticsDashboard": true,
         "tokenErrorGraceExpiresAt": null,
-        "csrfToken": null,
-        "csrf_token": null,
+        "csrfToken": csrf_token,
+        "csrf_token": csrf_token,
         "plan": plan,
         "access": {
             "landing": true,
@@ -394,7 +416,14 @@ mod tests {
             axum::http::HeaderValue::from_static("tb_admin_mode=2"),
         );
         let response =
-            auth_status_handler(twitch_admin(), State(unavailable_pool()), headers).await;
+            auth_status_handler(
+                twitch_admin(),
+                None,
+                None,
+                State(unavailable_pool()),
+                headers,
+            )
+            .await;
         let value = json_body(response).await;
 
         assert_eq!(value["isAdmin"], true);
@@ -405,9 +434,24 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn admin_response_liefert_session_csrf() {
+        let value = json_body(admin_response("admin", false, true, Some("session-csrf"))).await;
+
+        assert_eq!(value["csrfToken"], "session-csrf");
+        assert_eq!(value["csrf_token"], "session-csrf");
+    }
+
+    #[tokio::test]
     async fn twitch_admin_actor_ohne_mode_cookie_sieht_partner_praesentation() {
         let response =
-            auth_status_handler(twitch_admin(), State(unavailable_pool()), HeaderMap::new()).await;
+            auth_status_handler(
+                twitch_admin(),
+                None,
+                None,
+                State(unavailable_pool()),
+                HeaderMap::new(),
+            )
+            .await;
         let value = json_body(response).await;
 
         assert_eq!(value["isAdmin"], false);
@@ -425,6 +469,8 @@ mod tests {
                 twitch_user_id: "42".to_string(),
                 display_name: "EarlySalty".to_string(),
             },
+            None,
+            None,
             State(unavailable_pool()),
             HeaderMap::new(),
         )
@@ -444,6 +490,8 @@ mod tests {
                 twitch_user_id: "99".to_string(),
                 display_name: "Partner".to_string(),
             },
+            None,
+            None,
             State(unavailable_pool()),
             HeaderMap::new(),
         )

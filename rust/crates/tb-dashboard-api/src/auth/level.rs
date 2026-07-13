@@ -39,6 +39,10 @@ pub struct AdminActor {
     pub twitch_login: String,
 }
 
+/// Von der Auth-Kaskade ausgewählte gemeinsame Admin-Session.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AuthenticatedAdminSessionId(pub String);
+
 /// Auth-Level eines eingehenden Dashboard-Requests.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum DashboardAuthLevel {
@@ -188,23 +192,28 @@ fn is_local_request_from_request(request: &Request<Body>) -> bool {
     is_local_headers_extensions(request.headers(), request.extensions())
 }
 
-/// Liest den Session-Cookie-Wert aus dem `Cookie`-Header.
-pub(crate) fn extract_cookie<'a>(parts: &'a Parts, name: &str) -> Option<&'a str> {
-    let cookie_header = parts
-        .headers
-        .get(axum::http::header::COOKIE)
-        .and_then(|v| v.to_str().ok())?;
-
-    // Cookie-Header: "name1=val1; name2=val2"
-    for pair in cookie_header.split(';') {
-        let pair = pair.trim();
-        if let Some((k, v)) = pair.split_once('=') {
-            if k.trim() == name {
-                return Some(v.trim());
+/// Liest alle gleichnamigen Cookie-Werte aus sämtlichen `Cookie`-Headern.
+pub(crate) fn cookie_values<'a>(headers: &'a HeaderMap, name: &str) -> Vec<&'a str> {
+    let mut values = Vec::new();
+    for cookie_header in headers.get_all(axum::http::header::COOKIE) {
+        let Ok(cookie_header) = cookie_header.to_str() else {
+            continue;
+        };
+        for pair in cookie_header.split(';') {
+            let pair = pair.trim();
+            if let Some((key, value)) = pair.split_once('=') {
+                if key.trim() == name {
+                    values.push(value.trim());
+                }
             }
         }
     }
-    None
+    values
+}
+
+/// Liest den ersten Session-Cookie-Wert aus dem `Cookie`-Header.
+pub(crate) fn extract_cookie<'a>(parts: &'a Parts, name: &str) -> Option<&'a str> {
+    cookie_values(&parts.headers, name).into_iter().next()
 }
 
 /// Twitch-Logins mit Admin-Zugriff (wie Discord-Admin).
@@ -325,16 +334,56 @@ where
             }
         }
 
-        // Admin: master_dash_session
-        if let Some(session_id) = extract_cookie(parts, crate::auth::session::ADMIN_COOKIE_NAME) {
-            if !session_id.is_empty() {
-                if let Ok(Some(_)) = state.load_admin_session(session_id).await {
-                    return Ok(master_session_auth(
-                        admin_dashboard_context(parts),
-                        admin_mode_active,
-                    ));
+        // Admin: master_dash_session. In Produktion ist das Discord-Dashboard
+        // die zentrale Wahrheit; eine dort gültige Session wird lokal nur mit
+        // einem eigenen CSRF-Token gespiegelt.
+        let central_config = parts
+            .extensions
+            .get::<crate::auth::discord_admin_login::DiscordAdminLoginConfig>()
+            .cloned();
+        let admin_session_ids: Vec<String> = cookie_values(
+            &parts.headers,
+            crate::auth::session::ADMIN_COOKIE_NAME,
+        )
+        .into_iter()
+        .filter(|session_id| !session_id.is_empty())
+        .map(str::to_string)
+        .collect();
+        for session_id in admin_session_ids {
+            if let Some(config) = central_config.as_ref() {
+                let Ok(session) = config.client.validate_session(&session_id).await else {
+                    continue;
+                };
+                match state.load_admin_session(&session_id).await {
+                    Ok(Some(_)) => {}
+                    Ok(None) => {
+                        if state
+                            .import_central_admin_session(
+                                &session_id,
+                                &session.user_id.to_string(),
+                                &session.username,
+                                &session.display_name,
+                                session.expires_at,
+                            )
+                            .await
+                            .is_err()
+                        {
+                            continue;
+                        }
+                    }
+                    Err(_) => continue,
                 }
+            } else if !matches!(state.load_admin_session(&session_id).await, Ok(Some(_))) {
+                continue;
             }
+
+            parts
+                .extensions
+                .insert(AuthenticatedAdminSessionId(session_id));
+            return Ok(master_session_auth(
+                admin_dashboard_context(parts),
+                admin_mode_active,
+            ));
         }
 
         Ok(DashboardAuthLevel::None)
@@ -344,6 +393,68 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[derive(Clone)]
+    struct CentralSessionClient;
+
+    #[async_trait]
+    impl crate::auth::discord_admin_login::DiscordAdminOAuthClient for CentralSessionClient {
+        async fn initiate(
+            &self,
+            _scope: &str,
+            _redirect_after: &str,
+            _requesting_service: &str,
+            _metadata: serde_json::Value,
+        ) -> Result<
+            crate::auth::discord_admin_login::DiscordAuthorize,
+            crate::auth::discord_admin_login::DiscordAdminOAuthError,
+        > {
+            Err(crate::auth::discord_admin_login::DiscordAdminOAuthError)
+        }
+
+        async fn consume_result(
+            &self,
+            _state_id: &str,
+        ) -> Result<
+            crate::auth::discord_admin_login::DiscordAdminSession,
+            crate::auth::discord_admin_login::DiscordAdminOAuthError,
+        > {
+            Err(crate::auth::discord_admin_login::DiscordAdminOAuthError)
+        }
+
+        async fn validate_session(
+            &self,
+            session_id: &str,
+        ) -> Result<
+            crate::auth::discord_admin_login::ValidatedAdminSession,
+            crate::auth::discord_admin_login::DiscordAdminOAuthError,
+        > {
+            if session_id != "zentral-gueltig" {
+                return Err(crate::auth::discord_admin_login::DiscordAdminOAuthError);
+            }
+            Ok(crate::auth::discord_admin_login::ValidatedAdminSession {
+                user_id: 42,
+                username: "admin".into(),
+                display_name: "Admin".into(),
+                expires_at: 9_999_999_999.0,
+            })
+        }
+
+        async fn import_session(
+            &self,
+            _session_id: &str,
+            _session: &crate::auth::discord_admin_login::ValidatedAdminSession,
+        ) -> Result<(), crate::auth::discord_admin_login::DiscordAdminOAuthError> {
+            Ok(())
+        }
+
+        async fn revoke_session(
+            &self,
+            _session_id: &str,
+        ) -> Result<(), crate::auth::discord_admin_login::DiscordAdminOAuthError> {
+            Ok(())
+        }
+    }
 
     #[test]
     fn loopback_hosts_erkannt() {
@@ -383,6 +494,26 @@ mod tests {
         assert_eq!(extract_cookie(&parts, "master_dash_session"), Some("xyz789"));
         assert_eq!(extract_cookie(&parts, "other"), Some("val"));
         assert_eq!(extract_cookie(&parts, "missing"), None);
+    }
+
+    #[test]
+    fn cookie_extraktion_prueft_alle_gleichnamigen_werte() {
+        use axum::http::{header::COOKIE, HeaderMap, HeaderValue};
+
+        let mut headers = HeaderMap::new();
+        headers.append(
+            COOKIE,
+            HeaderValue::from_static("master_dash_session=veraltet"),
+        );
+        headers.append(
+            COOKIE,
+            HeaderValue::from_static("master_dash_session=gueltig"),
+        );
+
+        assert_eq!(
+            cookie_values(&headers, "master_dash_session"),
+            vec!["veraltet", "gueltig"]
+        );
     }
 
     #[test]
@@ -549,6 +680,52 @@ mod tests {
     async fn extract_auth(mut parts: Parts, state: crate::auth::session::DashboardAuthState) -> DashboardAuthLevel {
         parts.extensions.insert(state);
         DashboardAuthLevel::from_request_parts(&mut parts, &()).await.unwrap()
+    }
+
+    #[tokio::test]
+    async fn zentrale_admin_session_ignoriert_veralteten_doppel_cookie() {
+        let Some((pool, state)) = maybe_test_state().await else { return; };
+        let mut parts = request_parts(Some(format!(
+            "{0}=veraltet; {0}=zentral-gueltig",
+            crate::auth::session::ADMIN_COOKIE_NAME
+        )));
+        parts
+            .headers
+            .insert("x-dashboard-context", "admin".parse().unwrap());
+        parts.extensions.insert(state.clone());
+        parts.extensions.insert(
+            crate::auth::discord_admin_login::DiscordAdminLoginConfig {
+                admin_base_url: "https://admin.test".into(),
+                cookie_secure: true,
+                cookie_domain: Some("example.com".into()),
+                owner_user_id: None,
+                moderator_role_id: 1,
+                admin_guild_ids: Vec::new(),
+                client: std::sync::Arc::new(CentralSessionClient),
+            },
+        );
+
+        let auth = DashboardAuthLevel::from_request_parts(&mut parts, &())
+            .await
+            .unwrap();
+        assert_eq!(auth, DashboardAuthLevel::admin());
+        assert_eq!(
+            parts
+                .extensions
+                .get::<AuthenticatedAdminSessionId>()
+                .map(|session| session.0.as_str()),
+            Some("zentral-gueltig")
+        );
+        assert!(state
+            .load_admin_session("zentral-gueltig")
+            .await
+            .unwrap()
+            .is_some());
+        sqlx::query("DELETE FROM dashboard_sessions WHERE session_id = $1")
+            .bind("zentral-gueltig")
+            .execute(&pool)
+            .await
+            .unwrap();
     }
 
     #[tokio::test]
