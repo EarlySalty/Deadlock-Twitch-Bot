@@ -637,6 +637,7 @@ export async function fetchAdminStreamers(view: StreamerView = 'active'): Promis
       grantedScopes: readStringArray(record.grantedScopes ?? record.granted_scopes),
       missingScopes: readStringArray(record.missingScopes ?? record.missing_scopes),
       oauthAuthorizedAt: readString(record, 'oauthAuthorizedAt', 'oauth_authorized_at') || null,
+      partnerSince: readString(record, 'partnerSince', 'partner_since') || null,
       promoDisabled: readBoolean(record, 'promoDisabled', 'promo_disabled'),
       notes: readString(record, 'notes', 'manual_plan_notes') || undefined,
       status: readString(record, 'status') || undefined,
