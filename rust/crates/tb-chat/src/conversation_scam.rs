@@ -690,14 +690,17 @@ impl ScamGuardStore for PgScamGuardStore {
         window_minutes: i64,
     ) -> Result<i64, String> {
         sqlx::query_scalar::<_, i64>(
-            "SELECT COUNT(DISTINCT LOWER(streamer_login)) \
-             FROM twitch_first_message_events \
-             WHERE LOWER(chatter_login) = $1 \
-               AND LOWER(streamer_login) <> $2 \
-               AND event_ts >= NOW() - ($3 * INTERVAL '1 minute')",
+            "SELECT COUNT(*) FROM ( \
+               SELECT streamer_login \
+               FROM twitch_chat_messages \
+               WHERE LOWER(chatter_login) = $1 \
+                 AND LOWER(streamer_login) <> $2 \
+               GROUP BY streamer_login \
+               HAVING MIN(message_ts) >= NOW() - ($3 * INTERVAL '1 minute') \
+             ) t",
         )
-        .bind(chatter_login)
-        .bind(channel_login)
+        .bind(chatter_login.to_lowercase())
+        .bind(channel_login.to_lowercase())
         .bind(window_minutes)
         .fetch_one(&self.pool)
         .await

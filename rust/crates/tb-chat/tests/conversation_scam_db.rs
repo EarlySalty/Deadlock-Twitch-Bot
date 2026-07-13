@@ -56,6 +56,21 @@ async fn pool_in_schema(dsn: &str, schema: &str) -> PgPool {
     pool
 }
 
+async fn drop_schema(pool: &PgPool, schema: &str) {
+    pool.close().await;
+    let dsn = std::env::var("TB_TEST_DATABASE_URL").unwrap();
+    let admin = PgPoolOptions::new()
+        .max_connections(1)
+        .connect(&dsn)
+        .await
+        .unwrap();
+    sqlx::query(&format!("DROP SCHEMA IF EXISTS {schema} CASCADE"))
+        .execute(&admin)
+        .await
+        .unwrap();
+    admin.close().await;
+}
+
 async fn apply_ddl(pool: &PgPool) {
     for ddl in [
         "CREATE TABLE twitch_scam_guard_settings (\
@@ -75,10 +90,8 @@ async fn apply_ddl(pool: &PgPool) {
             is_first_time_streamer BOOLEAN)",
         "CREATE TABLE twitch_chatter_rollup (\
             streamer_login TEXT NOT NULL, chatter_login TEXT NOT NULL)",
-        "CREATE TABLE twitch_first_message_events (\
-            id BIGSERIAL PRIMARY KEY, streamer_login TEXT NOT NULL, broadcaster_id TEXT NOT NULL, \
-            chatter_login TEXT NOT NULL, chatter_id TEXT, message_id TEXT, message_text TEXT, \
-            event_ts TIMESTAMPTZ NOT NULL DEFAULT NOW())",
+        "CREATE TABLE twitch_chat_messages \
+            (LIKE public.twitch_chat_messages INCLUDING ALL)",
         "CREATE TABLE twitch_scam_guard_learnings (\
             id BOOLEAN PRIMARY KEY DEFAULT TRUE, guidance TEXT NOT NULL, \
             source_count INTEGER NOT NULL DEFAULT 0, \
@@ -100,6 +113,22 @@ impl ScamJudge for FixedJudge {
             category: "growth-pitch".to_string(),
             reasoning: "clear Discord growth pitch".to_string(),
         }
+    }
+}
+
+struct CrossChannelRecordingJudge {
+    inputs: Arc<std::sync::Mutex<Vec<(String, i64)>>>,
+}
+
+#[async_trait]
+impl ScamJudge for CrossChannelRecordingJudge {
+    async fn judge(&self, dialog: &mut DialogState) -> Verdict {
+        let input: serde_json::Value = serde_json::from_str(&dialog.messages()[1].content).unwrap();
+        self.inputs.lock().unwrap().push((
+            input["message"].as_str().unwrap().to_string(),
+            input["other_channels_last_hour"].as_i64().unwrap(),
+        ));
+        FixedJudge.judge(dialog).await
     }
 }
 
@@ -491,11 +520,17 @@ async fn auto_ban_timeoutet_bei_unbekanntem_account_alter() {
     seed_first_time_guard(&pool, "auto_ban").await;
 
     let calls = run_action_guard(&pool, None).await;
-    assert_eq!(wait_action_taken(&pool).await, "timed_out");
+    let action_taken = wait_action_taken(&pool).await;
 
     let calls = calls.lock().unwrap();
-    assert!(calls.bans.is_empty());
-    assert_eq!(calls.timeouts.len(), 1);
+    let ban_count = calls.bans.len();
+    let timeout_count = calls.timeouts.len();
+    drop(calls);
+    drop_schema(&pool, "tb_conversation_scam_unknown_age_autoban").await;
+
+    assert_eq!(action_taken, "timed_out");
+    assert_eq!(ban_count, 0);
+    assert_eq!(timeout_count, 1);
 }
 
 #[tokio::test]
@@ -503,14 +538,26 @@ async fn cross_channel_erstnachricht_loest_judge_bei_kurzem_hallo_aus() {
     let pool = pool_or_skip!("tb_conversation_scam_cross_channel");
     seed_first_time_guard(&pool, "alert_only").await;
     sqlx::query(
-        "INSERT INTO twitch_first_message_events \
-         (streamer_login, broadcaster_id, chatter_login, event_ts) \
-         VALUES ('earlysalty', 'other-channel-id', 'sam_09995', NOW())",
+        "UPDATE twitch_scam_guard_settings SET channel_login = 'suelze_' \
+         WHERE channel_login = 'testchannel'",
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
+    sqlx::query(
+        "INSERT INTO twitch_chat_messages \
+         (id, session_id, streamer_login, chatter_login, message_ts, is_command, content) VALUES \
+         (-1, 1, 'EaRlYsAlTy', 'FrEyA_1278', NOW() - INTERVAL '3 minutes', FALSE, 'hello'), \
+         (-2, 2, 'SuElZe_', 'FrEyA_1278', NOW() - INTERVAL '1 minute', FALSE, 'hello'), \
+         (-3, 3, 'earlysalty', 'old_chatter', NOW() - INTERVAL '3 hours', FALSE, 'hello'), \
+         (-4, 4, 'suelze_', 'old_chatter', NOW() - INTERVAL '1 minute', FALSE, 'hello'), \
+         (-5, 5, 'suelze_', 'current_only', NOW() - INTERVAL '1 minute', FALSE, 'hello')",
     )
     .execute(&pool)
     .await
     .unwrap();
 
+    let judge_inputs = Arc::new(std::sync::Mutex::new(Vec::new()));
     let api: Arc<dyn ChatApi> = Arc::new(ActionRecordingApi {
         created_at: Some(Utc::now() - ChronoDuration::days(10)),
         calls: Arc::new(std::sync::Mutex::new(ActionCalls::default())),
@@ -519,15 +566,45 @@ async fn cross_channel_erstnachricht_loest_judge_bei_kurzem_hallo_aus() {
     let guard = Arc::new(ConversationScamGuard::new(
         pool.clone(),
         "bot-id".to_string(),
-        Arc::new(FixedJudge),
+        Arc::new(CrossChannelRecordingJudge {
+            inputs: Arc::clone(&judge_inputs),
+        }),
         api,
         moderation,
     ));
-    let mut event = scam_event();
-    event.message.text = "hey, how are you??".to_string();
-    guard.observe(&event);
+    for (chatter, message) in [
+        ("FREYA_1278", "hey, how are you??"),
+        ("old_chatter", "hello"),
+        ("current_only", "hi"),
+    ] {
+        let mut event = scam_event();
+        event.broadcaster_user_login = "SUELZE_".to_string();
+        event.chatter_user_login = chatter.to_string();
+        event.message.text = message.to_string();
+        guard.observe(&event);
+    }
 
-    assert_eq!(wait_action_taken(&pool).await, "suggested");
+    let judge_called = tokio::time::timeout(Duration::from_secs(1), async {
+        loop {
+            if !judge_inputs.lock().unwrap().is_empty() {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+    })
+    .await
+    .is_ok();
+    let action_taken = if judge_called {
+        Some(wait_action_taken(&pool).await)
+    } else {
+        None
+    };
+    let inputs = judge_inputs.lock().unwrap().clone();
+    drop(guard);
+    drop_schema(&pool, "tb_conversation_scam_cross_channel").await;
+
+    assert_eq!(action_taken.as_deref(), Some("suggested"));
+    assert_eq!(inputs, vec![("hey, how are you??".to_string(), 1)]);
 }
 
 #[tokio::test]
