@@ -670,8 +670,21 @@ impl DashboardAuthState {
 
     /// Liefert den CSRF-Token einer gültigen lokalen Admin-Session.
     pub async fn admin_csrf_token(&self, session_id: &str) -> Result<Option<String>, sqlx::Error> {
+        self.csrf_token_for_type(session_id, "discord_admin").await
+    }
+
+    /// Liefert den CSRF-Token einer gültigen Twitch-Partner-Session.
+    pub async fn partner_csrf_token(&self, session_id: &str) -> Result<Option<String>, sqlx::Error> {
+        self.csrf_token_for_type(session_id, "twitch").await
+    }
+
+    async fn csrf_token_for_type(
+        &self,
+        session_id: &str,
+        session_type: &str,
+    ) -> Result<Option<String>, sqlx::Error> {
         Ok(self
-            .fetch_session_payload(session_id, "discord_admin", unix_now())
+            .fetch_session_payload(session_id, session_type, unix_now())
             .await?
             .and_then(|payload| {
                 payload
@@ -2818,6 +2831,14 @@ print(f.encrypt(payload.encode()).decode(), end='')
             .validate_csrf(&created.session_id, "twitch", &created.csrf_token)
             .await
             .unwrap());
+        assert_eq!(
+            state
+                .partner_csrf_token(&created.session_id)
+                .await
+                .unwrap()
+                .as_deref(),
+            Some(created.csrf_token.as_str())
+        );
         // CSRF: falsches Token abgelehnt.
         assert!(!state
             .validate_csrf(&created.session_id, "twitch", "falsch")

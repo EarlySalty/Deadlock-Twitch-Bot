@@ -20,7 +20,8 @@ use tokio::sync::Mutex;
 
 use crate::auth::{
     level::{
-        AuthenticatedAdminSessionId, DEFAULT_ADMIN_LOGIN, DashboardAuthLevel, is_admin_login,
+        AuthenticatedAdminSessionId, AuthenticatedPartnerSessionId, DEFAULT_ADMIN_LOGIN,
+        DashboardAuthLevel, is_admin_login,
     },
     session::DashboardAuthState,
 };
@@ -75,13 +76,19 @@ fn now_secs() -> u64 {
 pub async fn auth_status_handler(
     auth: DashboardAuthLevel,
     admin_session: Option<Extension<AuthenticatedAdminSessionId>>,
+    partner_session: Option<Extension<AuthenticatedPartnerSessionId>>,
     auth_state: Option<Extension<DashboardAuthState>>,
     State(pool): State<PgPool>,
     headers: HeaderMap,
 ) -> Response {
-    let csrf_token = match (admin_session, auth_state) {
-        (Some(Extension(session)), Some(Extension(state))) => state
+    let csrf_token = match (admin_session, partner_session, auth_state) {
+        (Some(Extension(session)), _, Some(Extension(state))) => state
             .admin_csrf_token(&session.0)
+            .await
+            .ok()
+            .flatten(),
+        (_, Some(Extension(session)), Some(Extension(state))) => state
+            .partner_csrf_token(&session.0)
             .await
             .ok()
             .flatten(),
@@ -99,6 +106,7 @@ pub async fn auth_status_handler(
                     &actor.twitch_user_id,
                     true,
                     false,
+                    csrf_token.as_deref(),
                 )
                 .await
             }
@@ -117,6 +125,7 @@ pub async fn auth_status_handler(
                 twitch_user_id,
                 is_admin_login(twitch_login),
                 false,
+                csrf_token.as_deref(),
             )
             .await
         }
@@ -250,6 +259,7 @@ async fn partner_response(
     user_id: &str,
     admin_eligible: bool,
     admin_mode: bool,
+    csrf_token: Option<&str>,
 ) -> Response {
     let access = tb_analytics::partner_access::load_partner_access_state(pool, login, user_id)
         .await
@@ -299,8 +309,8 @@ async fn partner_response(
         "operationalState": access.operational_state,
         "canAccessAnalyticsDashboard": can_analytics,
         "tokenErrorGraceExpiresAt": access.token_error_grace_expires_at,
-        "csrfToken": null,
-        "csrf_token": null,
+        "csrfToken": csrf_token,
+        "csrf_token": csrf_token,
         "plan": plan,
         "access": {
             "landing": access.landing_access_allowed,
@@ -420,6 +430,7 @@ mod tests {
                 twitch_admin(),
                 None,
                 None,
+                None,
                 State(unavailable_pool()),
                 headers,
             )
@@ -442,10 +453,30 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn partner_response_liefert_session_csrf() {
+        let value = json_body(
+            partner_response(
+                &unavailable_pool(),
+                "partner",
+                "99",
+                false,
+                false,
+                Some("partner-csrf"),
+            )
+            .await,
+        )
+        .await;
+
+        assert_eq!(value["csrfToken"], "partner-csrf");
+        assert_eq!(value["csrf_token"], "partner-csrf");
+    }
+
+    #[tokio::test]
     async fn twitch_admin_actor_ohne_mode_cookie_sieht_partner_praesentation() {
         let response =
             auth_status_handler(
                 twitch_admin(),
+                None,
                 None,
                 None,
                 State(unavailable_pool()),
@@ -471,6 +502,7 @@ mod tests {
             },
             None,
             None,
+            None,
             State(unavailable_pool()),
             HeaderMap::new(),
         )
@@ -490,6 +522,7 @@ mod tests {
                 twitch_user_id: "99".to_string(),
                 display_name: "Partner".to_string(),
             },
+            None,
             None,
             None,
             State(unavailable_pool()),

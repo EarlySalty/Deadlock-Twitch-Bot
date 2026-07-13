@@ -43,6 +43,10 @@ pub struct AdminActor {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AuthenticatedAdminSessionId(pub String);
 
+/// Von der Auth-Kaskade ausgewählte Twitch-Partner-Session.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AuthenticatedPartnerSessionId(pub String);
+
 /// Auth-Level eines eingehenden Dashboard-Requests.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum DashboardAuthLevel {
@@ -307,6 +311,9 @@ where
         if let Some(session_id) = extract_cookie(parts, crate::auth::session::PARTNER_COOKIE_NAME) {
             if !session_id.is_empty() {
                 if let Ok(Some(partner)) = state.load_partner_session(session_id).await {
+                    parts
+                        .extensions
+                        .insert(AuthenticatedPartnerSessionId(session_id.to_string()));
                     return Ok(partner_or_admin(partner, admin_mode_active));
                 }
             }
@@ -744,8 +751,23 @@ mod tests {
         let Some((pool, state)) = maybe_test_state().await else { return; };
         ensure_partner(&pool, 9062302, "earlysalty", "9062302").await;
         let session = state.create_partner_session("earlysalty", "9062302", "EarlySalty").await.unwrap();
-        let auth = extract_auth(request_parts(Some(format!("{}={}; tb_admin_mode=2", crate::auth::session::PARTNER_COOKIE_NAME, session.session_id))), state.clone()).await;
+        let mut parts = request_parts(Some(format!(
+            "{}={}; tb_admin_mode=2",
+            crate::auth::session::PARTNER_COOKIE_NAME,
+            session.session_id
+        )));
+        parts.extensions.insert(state.clone());
+        let auth = DashboardAuthLevel::from_request_parts(&mut parts, &())
+            .await
+            .unwrap();
         assert!(matches!(auth, DashboardAuthLevel::Admin { actor: Some(AdminActor { ref twitch_login, .. }) } if twitch_login == "earlysalty"));
+        assert_eq!(
+            parts
+                .extensions
+                .get::<AuthenticatedPartnerSessionId>()
+                .map(|selected| selected.0.as_str()),
+            Some(session.session_id.as_str())
+        );
         sqlx::query("DELETE FROM dashboard_sessions WHERE session_id = $1").bind(&session.session_id).execute(&pool).await.unwrap();
         sqlx::query("DELETE FROM twitch_partners WHERE id = 9062302").execute(&pool).await.unwrap();
     }
