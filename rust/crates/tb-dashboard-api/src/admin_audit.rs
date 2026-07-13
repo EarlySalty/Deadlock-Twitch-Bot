@@ -1,6 +1,6 @@
 use axum::{
     extract::{Request, State},
-    http::{HeaderMap, Method},
+    http::{header::LOCATION, HeaderMap, Method},
     middleware::Next,
     response::Response,
 };
@@ -16,11 +16,15 @@ fn is_write_method(method: &Method) -> bool {
 fn is_admin_path(path: &str) -> bool {
     path.starts_with("/twitch/api/admin/")
         || path.starts_with("/twitch/api/v2/admin/")
-        || path.starts_with("/twitch/admin/")
         || path.starts_with("/social-media/api/admin/")
         || path == "/twitch/api/v2/internal-home/changelog"
         || path == "/twitch/api/v2/roadmap"
         || path.starts_with("/twitch/api/v2/roadmap/")
+        || is_legacy_admin_path(path)
+}
+
+fn is_legacy_admin_path(path: &str) -> bool {
+    path.starts_with("/twitch/admin/")
         || matches!(
             path,
             "/twitch/add_streamer"
@@ -33,6 +37,17 @@ fn is_admin_path(path: &str) -> bool {
                 | "/twitch/archive"
                 | "/twitch/discord_flag"
         )
+}
+
+fn response_marks_success(path: &str, response: &Response) -> bool {
+    response.status().is_success()
+        || (is_legacy_admin_path(path)
+            && response.status().is_redirection()
+            && response
+                .headers()
+                .get(LOCATION)
+                .and_then(|value| value.to_str().ok())
+                .is_some_and(|location| location.starts_with("/twitch/admin?ok=")))
 }
 
 fn cookie_value<'a>(headers: &'a HeaderMap, name: &str) -> Option<&'a str> {
@@ -101,7 +116,7 @@ pub async fn audit_admin_mutations(
         actor_from_request(auth_state, admin_session_id, partner_session_id, internal).await;
     let response = next.run(request).await;
     let status = response.status();
-    if status.is_success() {
+    if response_marks_success(&path, &response) {
         if let Err(error) = sqlx::query(
             r#"INSERT INTO dashboard_admin_audit_events
                 (actor, method, path, status_code)
@@ -127,6 +142,7 @@ mod tests {
         body::Body,
         http::{Request, StatusCode},
         middleware::from_fn_with_state,
+        response::Redirect,
         routing::{get, post},
         Router,
     };
@@ -192,7 +208,18 @@ mod tests {
                 "/twitch/api/v2/roadmap",
                 post(|| async { StatusCode::CREATED }),
             )
-            .route("/twitch/verify", post(|| async { StatusCode::NO_CONTENT }))
+            .route(
+                "/twitch/verify",
+                post(|| async { Redirect::to("/twitch/admin?ok=gespeichert") }),
+            )
+            .route(
+                "/twitch/archive",
+                post(|| async { Redirect::to("/twitch/admin?err=abgelehnt") }),
+            )
+            .route(
+                "/twitch/admin/manual-plan",
+                post(|| async { Redirect::to("/twitch/admin?ok=plan") }),
+            )
             .route("/public-write", post(|| async { StatusCode::NO_CONTENT }))
             .layer(from_fn_with_state(pool.clone(), audit_admin_mutations));
 
@@ -203,6 +230,8 @@ mod tests {
             ("POST", "/twitch/api/admin/test"),
             ("POST", "/twitch/api/v2/roadmap"),
             ("POST", "/twitch/verify"),
+            ("POST", "/twitch/archive"),
+            ("POST", "/twitch/admin/manual-plan"),
         ] {
             let response = app
                 .clone()
@@ -217,6 +246,11 @@ mod tests {
                 .unwrap();
             if uri == "/twitch/api/admin/failing-test" {
                 assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
+            } else if matches!(
+                uri,
+                "/twitch/verify" | "/twitch/archive" | "/twitch/admin/manual-plan"
+            ) {
+                assert!(response.status().is_redirection());
             } else {
                 assert!(response.status().is_success());
             }
@@ -228,7 +262,7 @@ mod tests {
         .fetch_all(&pool)
         .await
         .unwrap();
-        assert_eq!(rows.len(), 3);
+        assert_eq!(rows.len(), 4);
         assert_eq!(
             rows[0],
             (
@@ -241,5 +275,6 @@ mod tests {
         assert_eq!(rows[1].2, "/twitch/api/v2/roadmap");
         assert_eq!(rows[1].3, 201);
         assert_eq!(rows[2].2, "/twitch/verify");
+        assert_eq!(rows[3].2, "/twitch/admin/manual-plan");
     }
 }
