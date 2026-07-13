@@ -47,13 +47,13 @@ const TOPIC_COLORS: Record<string, string> = {
   ranked: '#dd6a4d',
   meta: '#8f9e6b',
   gameplay: '#b7aa91',
-  backseat: '#7a6ea8',
+  backseat: 'var(--color-warning)',
   commands: '#c8a86b',
   social: '#55978f',
   smalltalk: '#dd6a4d',
   greeting: '#8f9e6b',
   community: '#b7aa91',
-  reaction: '#7a6ea8',
+  reaction: 'var(--color-warning)',
   hype: '#c8a86b',
   feedback: '#55978f',
   technical: '#dd6a4d',
@@ -647,7 +647,7 @@ export function ChatMinimaxDeepSection({
         {!data && !isLoading && (
           <button
             onClick={handleAnalysis}
-            className="flex items-center gap-2 rounded-xl bg-primary px-4 py-2 text-sm font-bold text-white shadow-lg shadow-primary/20 transition-all hover:scale-105 active:scale-95"
+            className="flex items-center gap-2 rounded-xl bg-primary px-4 py-2 text-sm font-bold text-[#16100a] shadow-lg shadow-primary/20 transition-all hover:scale-105 active:scale-95"
           >
             <Sparkles className="h-4 w-4" />
             Analyse starten

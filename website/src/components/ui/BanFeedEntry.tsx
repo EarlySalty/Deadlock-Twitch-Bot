@@ -47,7 +47,7 @@ export function BanFeedEntry({ ban, isNew = false }: BanFeedEntryProps) {
       )}
 
       {/* BANNED badge */}
-      <span className="shrink-0 rounded bg-red-500/20 px-2 py-0.5 text-xs font-semibold uppercase tracking-wider text-red-400">
+      <span className="shrink-0 rounded bg-danger-soft px-2 py-0.5 text-xs font-semibold uppercase tracking-wider text-danger">
         Banned
       </span>
 

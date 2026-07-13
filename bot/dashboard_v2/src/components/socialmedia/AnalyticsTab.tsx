@@ -304,7 +304,7 @@ export function AnalyticsTab({ streamer, clips }: AnalyticsTabProps) {
                   Zeitraum: {formatDate(report.period_start)} bis {formatDate(report.period_end)}
                 </div>
                 <div className="rounded-xl border border-border bg-[var(--color-popover)] p-3 max-h-[280px] overflow-auto">
-                  <pre className="whitespace-pre-wrap text-[12px] leading-6 text-slate-100 font-sans">
+                  <pre className="whitespace-pre-wrap text-[12px] leading-6 text-text-primary font-sans">
                     {report.content_md}
                   </pre>
                 </div>

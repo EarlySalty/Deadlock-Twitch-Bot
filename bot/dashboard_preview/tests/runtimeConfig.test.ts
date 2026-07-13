@@ -1,9 +1,14 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
+// `location` muss mit im Stub stehen: das Modul liest beim Import
+// window.location.hostname. Bewusst der Produktions-Host — mit "localhost"
+// wuerde isLocalPreviewRuntime() greifen und der Test liefe durch den
+// Demo-Zweig statt durch den Live-Zweig, den er pruefen soll.
 (globalThis as typeof globalThis & {
   window: {
     __TWITCH_DASHBOARD_RUNTIME__?: Record<string, unknown>;
+    location: { hostname: string; pathname: string };
   };
 }).window = {
   __TWITCH_DASHBOARD_RUNTIME__: {
@@ -11,6 +16,10 @@ import test from 'node:test';
     demoMode: true,
     allowedDemoProfiles: ['midcore_live'],
     defaultDemoProfile: 'midcore_live',
+  },
+  location: {
+    hostname: 'deutsche-deadlock-community.de',
+    pathname: '/twitch/dashboard',
   },
 };
 

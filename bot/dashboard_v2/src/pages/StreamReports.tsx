@@ -50,9 +50,9 @@ const SNAPSHOT_TONES: Record<
   { banner: string; badge: string; accent: string }
 > = {
   stark: {
-    banner: 'border-green-400/30 bg-green-500/10',
-    badge: 'border-green-400/40 bg-green-500/20 text-green-100',
-    accent: 'text-green-200',
+    banner: 'border-success/30 bg-success-soft',
+    badge: 'border-success/40 bg-success-soft text-success',
+    accent: 'text-success',
   },
   solide: {
     banner: 'border-accent/30 bg-accent/10',
@@ -60,41 +60,41 @@ const SNAPSHOT_TONES: Record<
     accent: 'text-accent',
   },
   gemischt: {
-    banner: 'border-yellow-400/30 bg-yellow-500/10',
-    badge: 'border-yellow-400/40 bg-yellow-500/20 text-yellow-100',
-    accent: 'text-yellow-100',
+    banner: 'border-warning/30 bg-warning-soft',
+    badge: 'border-warning/40 bg-warning-soft text-warning',
+    accent: 'text-warning',
   },
   schwach: {
-    banner: 'border-red-400/30 bg-red-500/10',
-    badge: 'border-red-400/40 bg-red-500/20 text-red-100',
-    accent: 'text-red-200',
+    banner: 'border-danger/30 bg-danger-soft',
+    badge: 'border-danger/40 bg-danger-soft text-danger',
+    accent: 'text-danger',
   },
 };
 
 const MOMENT_TONES: Record<MomentType, string> = {
-  peak: 'bg-green-400/80',
-  einbruch: 'bg-red-400/80',
+  peak: 'bg-success/80',
+  einbruch: 'bg-danger/80',
   stabil: 'bg-white/25',
-  volatil: 'bg-yellow-400/80',
+  volatil: 'bg-warning/80',
 };
 
 const MOMENT_BADGES: Record<MomentType, string> = {
-  peak: 'bg-green-500/15 text-green-200',
-  einbruch: 'bg-red-500/15 text-red-200',
+  peak: 'bg-success-soft text-success',
+  einbruch: 'bg-danger-soft text-danger',
   stabil: 'bg-white/10 text-white/70',
-  volatil: 'bg-yellow-500/15 text-yellow-100',
+  volatil: 'bg-warning-soft text-warning',
 };
 
 const TREND_BADGES: Record<string, string> = {
-  wachsend: 'border-green-400/30 bg-green-500/15 text-green-200',
+  wachsend: 'border-success/30 bg-success-soft text-success',
   stagnierend: 'border-white/15 bg-white/10 text-white/75',
-  ruecklaeufig: 'border-red-400/30 bg-red-500/15 text-red-200',
-  'zu wenig Daten': 'border-yellow-400/30 bg-yellow-500/15 text-yellow-100',
+  ruecklaeufig: 'border-danger/30 bg-danger-soft text-danger',
+  'zu wenig Daten': 'border-warning/30 bg-warning-soft text-warning',
 };
 
 const ACTION_TONES = {
-  critical: 'border-red-400/35 bg-red-500/10',
-  warning: 'border-orange-400/35 bg-orange-500/10',
+  critical: 'border-danger/35 bg-danger-soft',
+  warning: 'border-warning/35 bg-warning-soft',
   neutral: 'border-border bg-white/5',
 };
 
@@ -109,8 +109,8 @@ const RATING_OPTIONS: Array<{
     value: 'gut',
     label: 'Gut',
     icon: ThumbsUp,
-    activeClass: 'border-green-400/40 bg-green-500/15 text-green-200',
-    idleClass: 'border-border bg-white/5 text-text-secondary hover:border-green-400/25 hover:text-white',
+    activeClass: 'border-success/40 bg-success-soft text-success',
+    idleClass: 'border-border bg-white/5 text-text-secondary hover:border-success/25 hover:text-white',
   },
   {
     value: 'neutral',
@@ -123,8 +123,8 @@ const RATING_OPTIONS: Array<{
     value: 'schlecht',
     label: 'Schlecht',
     icon: ThumbsDown,
-    activeClass: 'border-red-400/40 bg-red-500/15 text-red-200',
-    idleClass: 'border-border bg-white/5 text-text-secondary hover:border-red-400/25 hover:text-white',
+    activeClass: 'border-danger/40 bg-danger-soft text-danger',
+    idleClass: 'border-border bg-white/5 text-text-secondary hover:border-danger/25 hover:text-white',
   },
 ];
 
@@ -149,8 +149,8 @@ const AB_VOTE_OPTIONS: Array<{
   {
     value: 'full',
     label: 'B ist besser →',
-    activeClass: 'border-orange-400/40 bg-orange-500/15 text-orange-200',
-    idleClass: 'border-border bg-white/5 text-text-secondary hover:border-orange-400/25 hover:text-white',
+    activeClass: 'border-primary/40 bg-primary-soft text-primary',
+    idleClass: 'border-border bg-white/5 text-text-secondary hover:border-primary/25 hover:text-white',
   },
 ];
 
@@ -191,9 +191,9 @@ function formatRatingLabel(value: RatingValue): string {
 
 function sentimentBadgeClass(value: string): string {
   const normalized = value.toLowerCase();
-  if (normalized.startsWith('positiv')) return 'border-green-400/30 bg-green-500/15 text-green-200';
-  if (normalized.startsWith('negativ')) return 'border-red-400/30 bg-red-500/15 text-red-200';
-  if (normalized.startsWith('gemischt')) return 'border-yellow-400/30 bg-yellow-500/15 text-yellow-100';
+  if (normalized.startsWith('positiv')) return 'border-success/30 bg-success-soft text-success';
+  if (normalized.startsWith('negativ')) return 'border-danger/30 bg-danger-soft text-danger';
+  if (normalized.startsWith('gemischt')) return 'border-warning/30 bg-warning-soft text-warning';
   return 'border-white/15 bg-white/10 text-white/75';
 }
 
@@ -234,7 +234,7 @@ function VariantBadge({ variant }: { variant: StreamReportVariant }) {
     <span
       className={`rounded-full border px-2.5 py-1 text-xs font-bold uppercase tracking-wide ${
         isFull
-          ? 'border-orange-400/30 bg-orange-500/15 text-orange-200'
+          ? 'border-primary/30 bg-primary-soft text-primary'
           : 'border-accent/30 bg-accent/15 text-accent'
       }`}
     >
@@ -393,16 +393,16 @@ function ReportBody({ report }: { report: StreamReport }) {
               )}
             </div>
 
-            <div className="rounded-xl border border-orange-400/20 bg-orange-500/10 p-3">
-              <p className="text-[11px] font-bold uppercase tracking-wide text-orange-100/80">Verwirrung / Fragen</p>
+            <div className="rounded-xl border border-warning/20 bg-warning-soft p-3">
+              <p className="text-[11px] font-bold uppercase tracking-wide text-warning/80">Verwirrung / Fragen</p>
               {(body.chat_diagnose.verwirrung_oder_fragen || []).length > 0 ? (
-                <ul className="mt-3 space-y-2 text-sm text-orange-100/85">
+                <ul className="mt-3 space-y-2 text-sm text-warning/85">
                   {body.chat_diagnose.verwirrung_oder_fragen.map((item, index) => (
                     <li key={`${item}-${index}`}>• {item}</li>
                   ))}
                 </ul>
               ) : (
-                <p className="mt-3 text-sm text-orange-100/75">Keine nennenswerten Fragezeichen im Chat.</p>
+                <p className="mt-3 text-sm text-warning/75">Keine nennenswerten Fragezeichen im Chat.</p>
               )}
             </div>
 
@@ -425,9 +425,9 @@ function ReportBody({ report }: { report: StreamReport }) {
               <p
                 className={`mt-2 text-lg font-bold ${
                   body.wachstum.follower_delta > 0
-                    ? 'text-green-200'
+                    ? 'text-success'
                     : body.wachstum.follower_delta < 0
-                      ? 'text-red-200'
+                      ? 'text-danger'
                       : 'text-white'
                 }`}
               >
@@ -457,35 +457,35 @@ function ReportBody({ report }: { report: StreamReport }) {
             </span>
           </div>
           <div className="grid gap-3 md:grid-cols-2">
-            <div className="rounded-xl border border-green-400/20 bg-green-500/10 p-3">
-              <p className="text-[11px] font-bold uppercase tracking-wide text-green-200/80">Besser als sonst</p>
+            <div className="rounded-xl border border-success/20 bg-success-soft p-3">
+              <p className="text-[11px] font-bold uppercase tracking-wide text-success/80">Besser als sonst</p>
               {(body.vergleich.besser_als_sonst || []).length > 0 ? (
-                <ul className="mt-3 space-y-2 text-sm text-green-100/90">
+                <ul className="mt-3 space-y-2 text-sm text-success/90">
                   {body.vergleich.besser_als_sonst.map((item, index) => (
                     <li key={`${item}-${index}`}>• {item}</li>
                   ))}
                 </ul>
               ) : (
-                <p className="mt-3 text-sm text-green-100/75">Keine positiven Abweichungen markiert.</p>
+                <p className="mt-3 text-sm text-success/75">Keine positiven Abweichungen markiert.</p>
               )}
             </div>
-            <div className="rounded-xl border border-red-400/20 bg-red-500/10 p-3">
-              <p className="text-[11px] font-bold uppercase tracking-wide text-red-200/80">Schlechter als sonst</p>
+            <div className="rounded-xl border border-danger/20 bg-danger-soft p-3">
+              <p className="text-[11px] font-bold uppercase tracking-wide text-danger/80">Schlechter als sonst</p>
               {(body.vergleich.schlechter_als_sonst || []).length > 0 ? (
-                <ul className="mt-3 space-y-2 text-sm text-red-100/90">
+                <ul className="mt-3 space-y-2 text-sm text-danger/90">
                   {body.vergleich.schlechter_als_sonst.map((item, index) => (
                     <li key={`${item}-${index}`}>• {item}</li>
                   ))}
                 </ul>
               ) : (
-                <p className="mt-3 text-sm text-red-100/75">Keine negativen Abweichungen markiert.</p>
+                <p className="mt-3 text-sm text-danger/75">Keine negativen Abweichungen markiert.</p>
               )}
             </div>
           </div>
         </section>
 
         <section className="space-y-2">
-          <SectionHeading icon={Zap} title="Maßnahmen" accent="text-orange-200" />
+          <SectionHeading icon={Zap} title="Maßnahmen" accent="text-primary" />
           {sortedActions.length > 0 ? (
             <div className="space-y-2">
               {sortedActions.map((item, index) => {
@@ -557,12 +557,12 @@ function ReportBody({ report }: { report: StreamReport }) {
 
         {(body.highlights || []).length > 0 && (
           <section className="space-y-2">
-            <h4 className="flex items-center gap-2 text-xs font-bold uppercase tracking-wide text-green-400">
+            <h4 className="flex items-center gap-2 text-xs font-bold uppercase tracking-wide text-success">
               <CheckCircle2 className="h-4 w-4" /> Highlights
             </h4>
             {(body.highlights || []).map((item, index) => (
-              <div key={index} className="rounded-xl border border-green-500/20 bg-green-500/10 p-3">
-                <p className="text-sm font-semibold text-green-200">{item.title}</p>
+              <div key={index} className="rounded-xl border border-success/20 bg-success-soft p-3">
+                <p className="text-sm font-semibold text-success">{item.title}</p>
                 {item.evidence && <p className="mt-1 text-xs text-white/60">Beleg: {item.evidence}</p>}
                 {item.why_it_matters && <p className="mt-1 text-xs text-text-secondary">{item.why_it_matters}</p>}
               </div>
@@ -572,12 +572,12 @@ function ReportBody({ report }: { report: StreamReport }) {
 
         {(body.problems || []).length > 0 && (
           <section className="space-y-2">
-            <h4 className="flex items-center gap-2 text-xs font-bold uppercase tracking-wide text-red-400">
+            <h4 className="flex items-center gap-2 text-xs font-bold uppercase tracking-wide text-danger">
               <AlertCircle className="h-4 w-4" /> Probleme
             </h4>
             {(body.problems || []).map((item, index) => (
-              <div key={index} className="rounded-xl border border-red-500/20 bg-red-500/10 p-3">
-                <p className="text-sm font-semibold text-red-200">{item.title}</p>
+              <div key={index} className="rounded-xl border border-danger/20 bg-danger-soft p-3">
+                <p className="text-sm font-semibold text-danger">{item.title}</p>
                 {item.evidence && <p className="mt-1 text-xs text-white/60">Beleg: {item.evidence}</p>}
                 {item.impact && <p className="mt-1 text-xs text-text-secondary">{item.impact}</p>}
               </div>
@@ -628,14 +628,14 @@ function ReportBody({ report }: { report: StreamReport }) {
     return (
       <div className="space-y-4">
         {(body.gut || []).map((item, index) => (
-          <div key={`good-${index}`} className="rounded-xl border border-green-500/20 bg-green-500/10 p-3">
-            <p className="text-sm font-semibold text-green-200">{item.punkt}</p>
+          <div key={`good-${index}`} className="rounded-xl border border-success/20 bg-success-soft p-3">
+            <p className="text-sm font-semibold text-success">{item.punkt}</p>
             <p className="mt-1 text-xs text-text-secondary">{item.begruendung}</p>
           </div>
         ))}
         {(body.schlecht || []).map((item, index) => (
-          <div key={`bad-${index}`} className="rounded-xl border border-red-500/20 bg-red-500/10 p-3">
-            <p className="text-sm font-semibold text-red-200">{item.punkt}</p>
+          <div key={`bad-${index}`} className="rounded-xl border border-danger/20 bg-danger-soft p-3">
+            <p className="text-sm font-semibold text-danger">{item.punkt}</p>
             <p className="mt-1 text-xs text-text-secondary">{item.begruendung}</p>
           </div>
         ))}
@@ -806,12 +806,12 @@ function RatingBar({
           <div className="flex flex-wrap items-center justify-between gap-3">
             <div className="flex items-center gap-3 text-xs">
               {saved && (
-                <span className="inline-flex items-center gap-1 text-green-300">
+                <span className="inline-flex items-center gap-1 text-success">
                   <CheckCircle2 className="h-4 w-4" />
                   Gespeichert
                 </span>
               )}
-              {saveError && <span className="text-red-300">{saveError}</span>}
+              {saveError && <span className="text-danger">{saveError}</span>}
             </div>
 
             <button
@@ -1022,7 +1022,7 @@ function ABVoteSection({
           <div className="flex flex-wrap items-center justify-between gap-3">
             <div className="flex items-center gap-3 text-xs">
               {saved && (
-                <span className="inline-flex items-center gap-1 text-green-300">
+                <span className="inline-flex items-center gap-1 text-success">
                   <CheckCircle2 className="h-4 w-4" />
                   Gespeichert
                 </span>
@@ -1030,7 +1030,7 @@ function ABVoteSection({
               {currentVote?.updated_at && !saved && (
                 <span className="text-text-secondary">Letzte Stimme: {formatDate(currentVote.updated_at)}</span>
               )}
-              {saveError && <span className="text-red-300">{saveError}</span>}
+              {saveError && <span className="text-danger">{saveError}</span>}
             </div>
 
             <button
@@ -1058,7 +1058,7 @@ function ABVoteSection({
               <span className="rounded-full border border-white/15 bg-white/10 px-2.5 py-1 text-white/80">
                 Gleich: {totals.gleich} Stimmen
               </span>
-              <span className="rounded-full border border-orange-400/25 bg-orange-500/10 px-2.5 py-1 text-orange-100">
+              <span className="rounded-full border border-primary/25 bg-primary-soft px-2.5 py-1 text-primary">
                 B: {totals.full} Stimmen
               </span>
               <span className="text-text-secondary">Insgesamt {totalVotes}</span>
@@ -1070,7 +1070,7 @@ function ABVoteSection({
                   <div className="flex h-full w-full">
                     <div className="bg-accent/80" style={{ width: `${compactPercent}%` }} />
                     <div className="bg-white/40" style={{ width: `${gleichPercent}%` }} />
-                    <div className="bg-orange-400/80" style={{ width: `${fullPercent}%` }} />
+                    <div className="bg-primary/80" style={{ width: `${fullPercent}%` }} />
                   </div>
                 </div>
                 <div className="flex flex-wrap items-center gap-3 text-[11px] text-text-secondary">

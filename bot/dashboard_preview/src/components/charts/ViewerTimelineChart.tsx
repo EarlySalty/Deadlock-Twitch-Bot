@@ -43,7 +43,7 @@ export function ViewerTimelineChart({ data, title = 'Viewer Timeline' }: ViewerT
             <p className="text-accent">
               Peak: <span className="text-white">{formatNumber(payload[1]?.value)}</span>
             </p>
-            <p className="text-gray-400">
+            <p className="text-text-secondary">
               Min: <span className="text-white">{formatNumber(payload[2]?.value)}</span>
             </p>
           </div>

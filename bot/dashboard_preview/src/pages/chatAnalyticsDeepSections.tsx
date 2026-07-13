@@ -45,13 +45,13 @@ const TOPIC_COLORS: Record<string, string> = {
   ranked: '#dd6a4d',
   meta: '#8f9e6b',
   gameplay: '#b7aa91',
-  backseat: '#7a6ea8',
+  backseat: 'var(--color-warning)',
   commands: '#c8a86b',
   social: '#55978f',
   smalltalk: '#dd6a4d',
   greeting: '#8f9e6b',
   community: '#b7aa91',
-  reaction: '#7a6ea8',
+  reaction: 'var(--color-warning)',
   other: '#c8a86b',
 };
 

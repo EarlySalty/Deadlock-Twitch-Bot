@@ -104,7 +104,7 @@ export function TrialExpiryModal() {
             <button
               type="button"
               onClick={handleUpgrade}
-              className="flex-1 flex items-center justify-center gap-2 rounded-lg bg-primary px-4 py-2.5 text-sm font-semibold text-white transition hover:bg-primary/80"
+              className="flex-1 flex items-center justify-center gap-2 rounded-lg bg-primary px-4 py-2.5 text-sm font-semibold text-[#16100a] transition hover:bg-primary/80"
             >
               <Sparkles className="h-4 w-4" />
               Jetzt upgraden

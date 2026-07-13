@@ -147,7 +147,7 @@ export function BotQuestionBox() {
         )}
 
         {error && !loading && (
-          <p className="rounded-xl border border-red-500/30 bg-red-500/10 px-5 py-4 text-sm text-red-200">
+          <p className="rounded-xl border border-danger/30 bg-danger-soft px-5 py-4 text-sm text-danger">
             {error}
           </p>
         )}

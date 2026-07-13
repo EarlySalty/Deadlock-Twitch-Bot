@@ -224,14 +224,14 @@ function taxHint(status: UstStatus): string {
 
 function StatusBadge({ status }: { status: string }) {
   const styles: Record<string, string> = {
-    transferred: "bg-emerald-500/20 text-emerald-400",
-    emailed: "bg-emerald-500/20 text-emerald-400",
+    transferred: "bg-success-soft text-success",
+    emailed: "bg-success-soft text-success",
     generated: "bg-accent/20 text-accent",
-    skipped: "bg-yellow-500/20 text-yellow-400",
-    pending: "bg-gray-500/20 text-gray-300",
-    blocked: "bg-amber-500/20 text-amber-300",
-    email_failed: "bg-red-500/20 text-red-400",
-    failed: "bg-red-500/20 text-red-400",
+    skipped: "bg-warning-soft text-warning",
+    pending: "bg-card text-secondary",
+    blocked: "bg-warning-soft text-warning",
+    email_failed: "bg-danger-soft text-danger",
+    failed: "bg-danger-soft text-danger",
   };
   return (
     <span
@@ -637,7 +637,7 @@ export default function AffiliatePortal() {
               {claimMsg && (
                 <div
                   className={`mt-3 flex items-center gap-2 text-sm ${
-                    claimMsg.ok ? "text-emerald-400" : "text-red-400"
+                    claimMsg.ok ? "text-success" : "text-danger"
                   }`}
                 >
                   {claimMsg.ok ? <CheckCircle size={16} /> : <AlertCircle size={16} />}
@@ -1044,7 +1044,7 @@ export default function AffiliatePortal() {
                 {profileMsg && (
                   <div
                     className={`flex items-center gap-2 text-sm ${
-                      profileMsg.ok ? "text-emerald-400" : "text-red-400"
+                      profileMsg.ok ? "text-success" : "text-danger"
                     }`}
                   >
                     {profileMsg.ok ? <CheckCircle size={16} /> : <AlertCircle size={16} />}
@@ -1199,7 +1199,7 @@ function StripeCard({ profile }: { profile: AffiliateProfile | null }) {
         </p>
         {connected ? (
           <div className="space-y-2">
-            <div className="flex items-center gap-2 text-emerald-400">
+            <div className="flex items-center gap-2 text-success">
               <CheckCircle size={18} />
               <span className="font-medium">Verbunden</span>
             </div>
@@ -1210,7 +1210,7 @@ function StripeCard({ profile }: { profile: AffiliateProfile | null }) {
           </div>
         ) : (
           <div className="space-y-3">
-            <div className="flex items-center gap-2 text-yellow-400">
+            <div className="flex items-center gap-2 text-warning">
               <XCircle size={18} />
               <span className="text-sm">Nicht verbunden</span>
             </div>

@@ -81,7 +81,7 @@ const PERSONALITY_COLORS = [
   '#dd6a4d', // Question
   '#8f9e6b', // Reaction
   '#b7aa91', // Hype
-  '#7a6ea8', // Game-Related
+  'var(--color-warning)', // Game-Related
   '#c8a86b', // Feedback
   '#55978f', // Technical
   '#dd6a4d', // Social

@@ -71,7 +71,7 @@ const PERSONALITY_LABELS: Record<string, string> = {
   'Other': 'Allrounder',
 };
 
-const PERSONALITY_COLORS = ['#c8a86b', '#55978f', '#dd6a4d', '#8f9e6b', '#b7aa91', '#7a6ea8', '#c8a86b'];
+const PERSONALITY_COLORS = ['#c8a86b', '#55978f', '#dd6a4d', '#8f9e6b', '#b7aa91', 'var(--color-warning)', '#c8a86b'];
 
 function formatNumber(n: number): string {
   return n.toLocaleString('de-DE');

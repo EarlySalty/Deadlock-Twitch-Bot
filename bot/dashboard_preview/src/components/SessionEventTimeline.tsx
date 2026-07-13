@@ -95,7 +95,7 @@ function buildTimelineEntries(events: SessionEvent, sessionStart: string): Timel
       at: f.minute,
       relativeMin: relMin,
       icon: <Heart className="w-4 h-4" />,
-      color: 'text-pink-400',
+      color: 'text-info',
       label: 'Follow-Spike',
       detail: `${f.count} neue Follower`,
     });

@@ -49,8 +49,8 @@ const SPECIAL_COLORS: Record<string, string> = {
 };
 
 const HASH_PALETTE = [
-  '#c8a86b', '#55978f', '#dd6a4d', '#8f9e6b', '#b7aa91', '#7a6ea8',
-  '#c8a86b', '#55978f', '#dd6a4d', '#8f9e6b', '#b7aa91', '#7a6ea8',
+  '#c8a86b', '#55978f', '#dd6a4d', '#8f9e6b', '#b7aa91', 'var(--color-warning)',
+  '#c8a86b', '#55978f', '#dd6a4d', '#8f9e6b', '#b7aa91', 'var(--color-warning)',
 ];
 
 function hashGameColor(name: string | null | undefined): string {

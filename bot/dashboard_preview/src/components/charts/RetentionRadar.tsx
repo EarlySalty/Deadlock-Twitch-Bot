@@ -65,7 +65,7 @@ export function RetentionRadar({
               Du: <span className="text-white">{payload[0]?.value}</span>
             </p>
             {categoryAvg && (
-              <p className="text-gray-400">
+              <p className="text-text-secondary">
                 Kategorie: <span className="text-white">{payload[1]?.value}</span>
               </p>
             )}

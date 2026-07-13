@@ -220,7 +220,7 @@ export function TitleGenerator({ streamer }: TitleGeneratorProps) {
                 <button
                   onClick={() => handleSetOnTwitch(result.primary)}
                   disabled={setTitleStatus === 'loading'}
-                  className="flex items-center gap-1.5 px-2.5 py-1 text-xs rounded-lg bg-red-500/15 hover:bg-red-500/25 text-red-400 border border-red-500/20 transition-colors disabled:opacity-50"
+                  className="flex items-center gap-1.5 px-2.5 py-1 text-xs rounded-lg bg-danger-soft hover:bg-danger/25 text-danger border border-danger/20 transition-colors disabled:opacity-50"
                 >
                   {setTitleStatus === 'loading' ? (
                     <Loader2 className="w-3 h-3 animate-spin" />

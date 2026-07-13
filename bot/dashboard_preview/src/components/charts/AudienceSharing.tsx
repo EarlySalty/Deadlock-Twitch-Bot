@@ -109,14 +109,14 @@ export function AudienceSharing({ data }: AudienceSharingProps) {
                     const entry = barData.find(d => d.streamer === label);
                     if (!entry) return null;
                     return (
-                      <div className="bg-gray-800 border border-gray-700 rounded-lg p-3 text-sm">
+                      <div className="bg-card border border-border rounded-lg p-3 text-sm">
                         <div className="text-white font-medium mb-1">{entry.streamer}</div>
                         <div className="text-text-secondary">
                           Geteilt: {entry.sharedViewers}
                         </div>
                         <div className="flex gap-3 mt-1">
-                          <span className="text-green-400">Inflow: {entry.inflow}</span>
-                          <span className="text-red-400">Outflow: {entry.outflow}</span>
+                          <span className="text-success">Inflow: {entry.inflow}</span>
+                          <span className="text-danger">Outflow: {entry.outflow}</span>
                         </div>
                         <div className="text-text-secondary mt-1">
                           Jaccard: {(entry.jaccardSimilarity * 100).toFixed(1)}%
@@ -136,8 +136,8 @@ export function AudienceSharing({ data }: AudienceSharingProps) {
               <div key={entry.streamer} className="flex items-center justify-between text-sm">
                 <span className="text-text-secondary">{entry.streamer}</span>
                 <div className="flex items-center gap-3">
-                  <span className="text-green-400 text-xs">Inflow: {entry.inflow}</span>
-                  <span className="text-red-400 text-xs">Outflow: {entry.outflow}</span>
+                  <span className="text-success text-xs">Inflow: {entry.inflow}</span>
+                  <span className="text-danger text-xs">Outflow: {entry.outflow}</span>
                 </div>
               </div>
             ))}

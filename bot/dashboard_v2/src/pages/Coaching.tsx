@@ -16,7 +16,7 @@ const WEEKDAY_SHORT = ['So', 'Mo', 'Di', 'Mi', 'Do', 'Fr', 'Sa'];
 const PRIORITY_STYLES: Record<string, { bg: string; border: string; text: string; badge: string }> = {
   critical: { bg: 'bg-error/10', border: 'border-error/30', text: 'text-error', badge: 'bg-error text-white' },
   high: { bg: 'bg-warning/10', border: 'border-warning/30', text: 'text-warning', badge: 'bg-warning text-black' },
-  medium: { bg: 'bg-primary/10', border: 'border-primary/30', text: 'text-primary', badge: 'bg-primary text-white' },
+  medium: { bg: 'bg-primary/10', border: 'border-primary/30', text: 'text-primary', badge: 'bg-primary text-[#16100a]' },
   low: { bg: 'bg-text-secondary/10', border: 'border-border', text: 'text-text-secondary', badge: 'bg-text-secondary/30 text-text-secondary' },
 };
 

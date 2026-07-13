@@ -250,7 +250,7 @@ export function SessionDetail({ sessionId, streamer: _streamer, onBack }: Sessio
               onClick={() => setActiveTab(tabId as 'overview' | 'events' | 'viewer-timeline')}
               className={`rounded-xl px-4 py-2 text-sm font-medium transition ${
                 isActive
-                  ? 'bg-primary text-white shadow-lg shadow-primary/20'
+                  ? 'bg-primary text-[#16100a] shadow-lg shadow-primary/20'
                   : 'border border-white/10 bg-card text-text-secondary hover:text-white'
               }`}
             >

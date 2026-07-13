@@ -174,7 +174,7 @@ export function Category({ streamer, days, onStreamerSelect, onNavigate }: Categ
           label="Platz #1"
           value={top1?.streamer ?? '-'}
           sub={top1 ? `${top1.avgViewers.toLocaleString('de-DE', { maximumFractionDigits: 0 })} Ø` : undefined}
-          icon={<Crown className="w-4 h-4 text-yellow-400" />}
+          icon={<Crown className="w-4 h-4 text-primary" />}
         />
       </div>
 
@@ -503,7 +503,7 @@ function TopStreamerTable({
                     {entry.streamer}
                   </span>
                   {i === 0 && (
-                    <span className="ml-2 text-xs px-1.5 py-0.5 bg-yellow-400/20 text-yellow-400 rounded">#1</span>
+                    <span className="ml-2 text-xs px-1.5 py-0.5 bg-primary-soft text-primary rounded">#1</span>
                   )}
                 </td>
                 <td className="px-4 py-2 text-right font-bold text-white text-sm">
@@ -532,13 +532,13 @@ function TopStreamerTable({
 
 function RankBadge({ rank }: { rank: number }) {
   if (rank === 1) return (
-    <span className="w-7 h-7 rounded-full bg-gradient-to-br from-yellow-400 to-amber-600 flex items-center justify-center text-xs font-bold text-white">1</span>
+    <span className="w-7 h-7 rounded-full bg-gradient-to-br from-primary-hover to-primary flex items-center justify-center text-xs font-bold text-[#16100a]">1</span>
   );
   if (rank === 2) return (
-    <span className="w-7 h-7 rounded-full bg-gradient-to-br from-gray-300 to-gray-500 flex items-center justify-center text-xs font-bold text-white">2</span>
+    <span className="w-7 h-7 rounded-full bg-gradient-to-br from-text-secondary to-card-hover flex items-center justify-center text-xs font-bold text-white">2</span>
   );
   if (rank === 3) return (
-    <span className="w-7 h-7 rounded-full bg-gradient-to-br from-amber-600 to-amber-800 flex items-center justify-center text-xs font-bold text-white">3</span>
+    <span className="w-7 h-7 rounded-full bg-gradient-to-br from-primary/70 to-primary/30 flex items-center justify-center text-xs font-bold text-white">3</span>
   );
   return <span className="text-text-secondary text-xs font-mono">#{rank}</span>;
 }

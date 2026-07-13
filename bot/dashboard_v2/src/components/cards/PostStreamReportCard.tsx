@@ -90,8 +90,8 @@ function InsightList({
   tone: 'good' | 'bad';
 }) {
   if (!items.length) return null;
-  const color = tone === 'good' ? 'text-green-300' : 'text-red-300';
-  const border = tone === 'good' ? 'border-green-500/20 bg-green-500/10' : 'border-red-500/20 bg-red-500/10';
+  const color = tone === 'good' ? 'text-success' : 'text-danger';
+  const border = tone === 'good' ? 'border-success/20 bg-success-soft' : 'border-danger/20 bg-danger-soft';
   return (
     <div className="space-y-2">
       {items.map((item, index) => (
@@ -300,8 +300,8 @@ export function PostStreamReportCard({ streamer, sessionId }: PostStreamReportCa
           {v2Report && (v2Report.highlights || []).length > 0 && (
             <div className="space-y-2">
               <div className="flex items-center gap-2">
-                <ThumbsUp className="h-4 w-4 text-green-400" />
-                <span className="text-xs font-bold uppercase tracking-wide text-green-400">Highlights</span>
+                <ThumbsUp className="h-4 w-4 text-success" />
+                <span className="text-xs font-bold uppercase tracking-wide text-success">Highlights</span>
               </div>
               <InsightList items={v2Report.highlights || []} tone="good" />
             </div>
@@ -310,8 +310,8 @@ export function PostStreamReportCard({ streamer, sessionId }: PostStreamReportCa
           {v2Report && (v2Report.problems || []).length > 0 && (
             <div className="space-y-2">
               <div className="flex items-center gap-2">
-                <ThumbsDown className="h-4 w-4 text-red-400" />
-                <span className="text-xs font-bold uppercase tracking-wide text-red-400">Probleme</span>
+                <ThumbsDown className="h-4 w-4 text-danger" />
+                <span className="text-xs font-bold uppercase tracking-wide text-danger">Probleme</span>
               </div>
               <InsightList items={v2Report.problems || []} tone="bad" />
             </div>
@@ -330,14 +330,14 @@ export function PostStreamReportCard({ streamer, sessionId }: PostStreamReportCa
           {legacyGood.length > 0 && (
             <div className="space-y-2">
               <div className="flex items-center gap-2">
-                <ThumbsUp className="h-4 w-4 text-green-400" />
-                <span className="text-xs font-bold uppercase tracking-wide text-green-400">
+                <ThumbsUp className="h-4 w-4 text-success" />
+                <span className="text-xs font-bold uppercase tracking-wide text-success">
                   Was lief gut
                 </span>
               </div>
               <div className="space-y-2">
                 {legacyGood.map((item, index) => (
-                  <ExpandablePoint key={index} item={item} color="text-green-300" />
+                  <ExpandablePoint key={index} item={item} color="text-success" />
                 ))}
               </div>
             </div>
@@ -346,14 +346,14 @@ export function PostStreamReportCard({ streamer, sessionId }: PostStreamReportCa
           {legacyBad.length > 0 && (
             <div className="space-y-2">
               <div className="flex items-center gap-2">
-                <ThumbsDown className="h-4 w-4 text-red-400" />
-                <span className="text-xs font-bold uppercase tracking-wide text-red-400">
+                <ThumbsDown className="h-4 w-4 text-danger" />
+                <span className="text-xs font-bold uppercase tracking-wide text-danger">
                   Verbesserungspotenzial
                 </span>
               </div>
               <div className="space-y-2">
                 {legacyBad.map((item, index) => (
-                  <ExpandablePoint key={index} item={item} color="text-red-300" />
+                  <ExpandablePoint key={index} item={item} color="text-danger" />
                 ))}
               </div>
             </div>

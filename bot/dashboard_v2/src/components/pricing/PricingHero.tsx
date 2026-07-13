@@ -102,7 +102,7 @@ export default function PricingHero() {
               : isBlocked
               ? 'bg-white/10 text-white/40 cursor-default'
               : trialState === 'error'
-              ? 'bg-red-500/80 text-white'
+              ? 'bg-danger/80 text-white'
               : 'bg-gradient-to-r from-[#c8a86b] to-[#efd49d] text-white shadow-lg shadow-[#c8a86b]/25 hover:shadow-[#c8a86b]/40 hover:scale-105'
           }`}
         >

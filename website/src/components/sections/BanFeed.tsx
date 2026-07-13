@@ -85,8 +85,8 @@ export function BanFeed() {
               {/* Header with live indicator */}
               <div className="flex items-center gap-2 mb-4">
                 <span className="relative flex h-2.5 w-2.5">
-                  <span className="animate-ping absolute h-full w-full rounded-full bg-green-400 opacity-75" />
-                  <span className="relative rounded-full h-2.5 w-2.5 bg-green-500" />
+                  <span className="animate-ping absolute h-full w-full rounded-full bg-success opacity-75" />
+                  <span className="relative rounded-full h-2.5 w-2.5 bg-success" />
                 </span>
                 <span className="text-sm font-semibold text-[var(--color-text-primary)]">
                   Live Ban-Feed

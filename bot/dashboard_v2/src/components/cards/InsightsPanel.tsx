@@ -30,7 +30,7 @@ const typeConfig = {
     icon: Info,
     bgClass: 'bg-accent/10 border-accent/30',
     textClass: 'text-accent',
-    borderClass: 'border-l-blue-500',
+    borderClass: 'border-l-info',
   },
 };
 

@@ -203,7 +203,7 @@ export function SiteChatbot() {
             )}
 
             {error && (
-              <p className="rounded-xl border border-red-500/30 bg-red-500/10 px-4 py-3 text-sm text-red-200">
+              <p className="rounded-xl border border-danger/30 bg-danger-soft px-4 py-3 text-sm text-danger">
                 {error}
               </p>
             )}

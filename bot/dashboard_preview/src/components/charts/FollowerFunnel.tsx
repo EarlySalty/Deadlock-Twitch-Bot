@@ -35,7 +35,7 @@ function rateConversion(rate: number): { label: string; color: string; bgColor: 
   }
   const position = Math.min(98, 75 + ((rate - 5) / 5) * 25);
   return {
-    label: 'Exzellent', color: 'text-emerald-400', bgColor: 'bg-emerald-400/20',
+    label: 'Exzellent', color: 'text-success', bgColor: 'bg-success-soft',
     description: 'Herausragend - deine Nische und Community-Bindung sind stark.',
     position,
   };
@@ -71,16 +71,16 @@ export function FollowerFunnel({ data, previousConversionRate }: FollowerFunnelP
       label: 'Neue Follower',
       value: data.newFollowers,
       icon: UserPlus,
-      color: 'from-green-500 to-green-600',
+      color: 'from-success to-success',
       width: data.uniqueViewers > 0 ? (data.newFollowers / data.uniqueViewers) * 100 : 0,
     },
   ];
 
   const sourceData = [
-    { label: 'Organisch', value: data.followersBySource.organic, icon: Zap, color: 'text-green-500' },
+    { label: 'Organisch', value: data.followersBySource.organic, icon: Zap, color: 'text-success' },
     { label: 'Raids', value: data.followersBySource.raids, icon: Radio, color: 'text-primary' },
     { label: 'Hosts', value: data.followersBySource.hosts, icon: Share2, color: 'text-accent' },
-    { label: 'Sonstige', value: data.followersBySource.other, icon: Users, color: 'text-gray-500' },
+    { label: 'Sonstige', value: data.followersBySource.other, icon: Users, color: 'text-text-secondary' },
   ];
 
   const totalSourceFollowers = sourceData.reduce((sum, s) => sum + s.value, 0);
@@ -154,7 +154,7 @@ export function FollowerFunnel({ data, previousConversionRate }: FollowerFunnelP
                 <div className="text-[10px]">Gut</div>
               </div>
               <div className="text-center">
-                <div className="text-emerald-400 font-medium">&gt; 5%</div>
+                <div className="text-success font-medium">&gt; 5%</div>
                 <div className="text-[10px]">Exzellent</div>
               </div>
             </div>
@@ -203,10 +203,10 @@ export function FollowerFunnel({ data, previousConversionRate }: FollowerFunnelP
         {/* Benchmark Gauge */}
         <div className="mt-4">
           <div className="relative h-2 rounded-full overflow-hidden flex">
-            <div className="flex-1 bg-red-500/40" />
-            <div className="flex-1 bg-yellow-500/40" />
-            <div className="flex-1 bg-green-500/40" />
-            <div className="flex-1 bg-emerald-500/40" />
+            <div className="flex-1 bg-danger/40" />
+            <div className="flex-1 bg-warning/40" />
+            <div className="flex-1 bg-success/40" />
+            <div className="flex-1 bg-success/40" />
           </div>
           {rating.position > 0 && (
             <motion.div

@@ -224,14 +224,14 @@ export function PostStreamReportCard({ streamer, sessionId }: PostStreamReportCa
           {report.gut.length > 0 && (
             <div className="space-y-2">
               <div className="flex items-center gap-2">
-                <ThumbsUp className="h-4 w-4 text-green-400" />
-                <span className="text-xs font-bold uppercase tracking-wide text-green-400">
+                <ThumbsUp className="h-4 w-4 text-success" />
+                <span className="text-xs font-bold uppercase tracking-wide text-success">
                   Was lief gut
                 </span>
               </div>
               <div className="space-y-2">
                 {report.gut.map((item, index) => (
-                  <ExpandablePoint key={index} item={item} color="text-green-300" />
+                  <ExpandablePoint key={index} item={item} color="text-success" />
                 ))}
               </div>
             </div>
@@ -240,14 +240,14 @@ export function PostStreamReportCard({ streamer, sessionId }: PostStreamReportCa
           {report.schlecht.length > 0 && (
             <div className="space-y-2">
               <div className="flex items-center gap-2">
-                <ThumbsDown className="h-4 w-4 text-red-400" />
-                <span className="text-xs font-bold uppercase tracking-wide text-red-400">
+                <ThumbsDown className="h-4 w-4 text-danger" />
+                <span className="text-xs font-bold uppercase tracking-wide text-danger">
                   Verbesserungspotenzial
                 </span>
               </div>
               <div className="space-y-2">
                 {report.schlecht.map((item, index) => (
-                  <ExpandablePoint key={index} item={item} color="text-red-300" />
+                  <ExpandablePoint key={index} item={item} color="text-danger" />
                 ))}
               </div>
             </div>

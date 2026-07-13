@@ -167,9 +167,9 @@ interface TopTagCardProps {
 
 function TopTagCard({ tag, rank }: TopTagCardProps) {
   const rankStyles = {
-    1: 'from-yellow-500/20 to-yellow-600/10 border-yellow-500/30',
-    2: 'from-gray-400/20 to-gray-500/10 border-gray-400/30',
-    3: 'from-amber-700/20 to-amber-800/10 border-amber-700/30',
+    1: 'from-primary/20 to-primary/10 border-primary/30',
+    2: 'from-text-secondary/20 to-card/10 border-border',
+    3: 'from-primary/15 to-primary/5 border-primary/20',
   };
 
   const TrendIcon = tag.trend === 'up' ? TrendingUp : tag.trend === 'down' ? TrendingDown : Minus;
