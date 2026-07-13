@@ -75,6 +75,10 @@ async fn apply_ddl(pool: &PgPool) {
             is_first_time_streamer BOOLEAN)",
         "CREATE TABLE twitch_chatter_rollup (\
             streamer_login TEXT NOT NULL, chatter_login TEXT NOT NULL)",
+        "CREATE TABLE twitch_first_message_events (\
+            id BIGSERIAL PRIMARY KEY, streamer_login TEXT NOT NULL, broadcaster_id TEXT NOT NULL, \
+            chatter_login TEXT NOT NULL, chatter_id TEXT, message_id TEXT, message_text TEXT, \
+            event_ts TIMESTAMPTZ NOT NULL DEFAULT NOW())",
         "CREATE TABLE twitch_scam_guard_learnings (\
             id BOOLEAN PRIMARY KEY DEFAULT TRUE, guidance TEXT NOT NULL, \
             source_count INTEGER NOT NULL DEFAULT 0, \
@@ -344,11 +348,12 @@ fn scam_event() -> ChatMessageEvent {
 async fn wait_action_taken(pool: &PgPool) -> String {
     tokio::time::timeout(Duration::from_secs(2), async {
         loop {
-            if let Some(action) =
-                sqlx::query_scalar::<_, String>("SELECT action_taken FROM twitch_scam_guard_verdicts LIMIT 1")
-                    .fetch_optional(pool)
-                    .await
-                    .unwrap()
+            if let Some(action) = sqlx::query_scalar::<_, String>(
+                "SELECT action_taken FROM twitch_scam_guard_verdicts LIMIT 1",
+            )
+            .fetch_optional(pool)
+            .await
+            .unwrap()
             {
                 break action;
             }
@@ -481,16 +486,48 @@ async fn auto_ban_timeoutet_alten_account_und_loescht_nachricht() {
 }
 
 #[tokio::test]
-async fn auto_ban_bannt_bei_unbekanntem_account_alter() {
+async fn auto_ban_timeoutet_bei_unbekanntem_account_alter() {
     let pool = pool_or_skip!("tb_conversation_scam_unknown_age_autoban");
     seed_first_time_guard(&pool, "auto_ban").await;
 
     let calls = run_action_guard(&pool, None).await;
-    assert_eq!(wait_action_taken(&pool).await, "banned");
+    assert_eq!(wait_action_taken(&pool).await, "timed_out");
 
     let calls = calls.lock().unwrap();
-    assert_eq!(calls.bans.len(), 1);
-    assert!(calls.timeouts.is_empty());
+    assert!(calls.bans.is_empty());
+    assert_eq!(calls.timeouts.len(), 1);
+}
+
+#[tokio::test]
+async fn cross_channel_erstnachricht_loest_judge_bei_kurzem_hallo_aus() {
+    let pool = pool_or_skip!("tb_conversation_scam_cross_channel");
+    seed_first_time_guard(&pool, "alert_only").await;
+    sqlx::query(
+        "INSERT INTO twitch_first_message_events \
+         (streamer_login, broadcaster_id, chatter_login, event_ts) \
+         VALUES ('earlysalty', 'other-channel-id', 'sam_09995', NOW())",
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
+
+    let api: Arc<dyn ChatApi> = Arc::new(ActionRecordingApi {
+        created_at: Some(Utc::now() - ChronoDuration::days(10)),
+        calls: Arc::new(std::sync::Mutex::new(ActionCalls::default())),
+    });
+    let moderation = Arc::new(ModerationEngine::new(Arc::clone(&api), pool.clone()));
+    let guard = Arc::new(ConversationScamGuard::new(
+        pool.clone(),
+        "bot-id".to_string(),
+        Arc::new(FixedJudge),
+        api,
+        moderation,
+    ));
+    let mut event = scam_event();
+    event.message.text = "hey, how are you??".to_string();
+    guard.observe(&event);
+
+    assert_eq!(wait_action_taken(&pool).await, "suggested");
 }
 
 #[tokio::test]

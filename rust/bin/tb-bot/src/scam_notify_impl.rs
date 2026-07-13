@@ -1,9 +1,9 @@
 //! Discord-Notifier des Conversation-Scam-Guards (Sichtbarkeit + Revoke).
 //!
 //! Implementiert den tb-chat-Port [`ScamGuardNotifier`]: postet bei einem Ban,
-//! Timeout oder Moderationsvorschlag ein deutsches Embed in den Aufsichts-Channel
-//! und hängt einen `scam_revoke`-`view_spec` an, aus dem die Discord-Seite den
-//! „Rückgängig"-Button rendert (dieser ruft beim Klick `POST /scam-guard/revoke`).
+//! Timeout, Moderationsvorschlag oder sichtbaren Unsure-Verdacht ein deutsches
+//! Embed in den Aufsichts-Channel. Nur ausgeführte/vorgeschlagene Aktionen
+//! erhalten einen `scam_revoke`-`view_spec` für den „Rückgängig"-Button.
 //!
 //! Sprache bewusst nur Deutsch (Entscheidung 2026-06-18: schlicht die
 //! MiniMax-Begründung zeigen, kein i18n-Layer).
@@ -28,6 +28,7 @@ struct ScamDiscordNotifier {
 impl ScamGuardNotifier for ScamDiscordNotifier {
     async fn notify(&self, n: ScamNotification) {
         let (icon, aktion, color) = match n.action_taken.as_str() {
+            "none" => ("⚠️", "PLATZHALTER_UNSURE_HINWEIS", COLOR_SUGGEST),
             "suggested" => ("⚠️", "Moderationsvorschlag", COLOR_SUGGEST),
             "timed_out" => ("🚨", "Stummgeschaltet (Timeout)", COLOR_BAN),
             _ => ("🚨", "Gebannt", COLOR_BAN),
@@ -48,12 +49,14 @@ impl ScamGuardNotifier for ScamDiscordNotifier {
 
         // Die Discord-Seite (Master-Broker) interpretiert diesen Typ und rendert
         // den Revoke-Button; verdict_id adressiert exakt diesen Fall.
-        let view_spec = serde_json::json!({
-            "type": "scam_revoke",
-            "verdict_id": n.verdict_id,
-            "channel_login": n.channel_login,
-            "chatter_login": n.chatter_login,
-            "action_taken": n.action_taken,
+        let view_spec = (n.action_taken != "none").then(|| {
+            serde_json::json!({
+                "type": "scam_revoke",
+                "verdict_id": n.verdict_id,
+                "channel_login": n.channel_login,
+                "chatter_login": n.chatter_login,
+                "action_taken": n.action_taken,
+            })
         });
 
         let payload = SendRichMessage {
@@ -62,7 +65,7 @@ impl ScamGuardNotifier for ScamDiscordNotifier {
             embed,
             components: None,
             allowed_role_ids: Vec::new(),
-            view_spec: Some(view_spec),
+            view_spec,
         };
 
         if let Err(error) = self.backend.send_rich_message(payload).await {
@@ -212,5 +215,13 @@ mod tests {
         assert_eq!(p.embed["color"].as_u64(), Some(COLOR_BAN as u64));
         assert_eq!(p.embed["fields"][3]["value"], "Stummgeschaltet (Timeout)");
         assert_eq!(p.view_spec.unwrap()["action_taken"], "timed_out");
+    }
+
+    #[tokio::test]
+    async fn unsure_post_zeigt_hinweis_ohne_revoke_button() {
+        let p = capture("none").await;
+        assert_eq!(p.embed["color"].as_u64(), Some(COLOR_SUGGEST as u64));
+        assert_eq!(p.embed["fields"][3]["value"], "PLATZHALTER_UNSURE_HINWEIS");
+        assert!(p.view_spec.is_none());
     }
 }
