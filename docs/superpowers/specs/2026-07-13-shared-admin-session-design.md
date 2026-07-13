@@ -1,5 +1,8 @@
 # Gemeinsame Admin-Session für Discord und Twitch
 
+Zentraler Gegenpart: `Deadlock-Bots`-Commit `d2558e19`, enthalten in `origin/main`
+ab Merge `7fc95051`, stellt `/internal/twitch/v1/discord/revoke-session` bereit.
+
 Stand: 2026-07-13
 
 ## Problem

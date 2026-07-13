@@ -39,6 +39,7 @@ const BROKER_INITIATE_PATH: &str = "/internal/v1/discord/initiate";
 const BROKER_CONSUME_PATH: &str = "/internal/v1/discord/consume-result";
 const BROKER_VALIDATE_SESSION_PATH: &str = "/internal/twitch/v1/discord/validate-session";
 const BROKER_IMPORT_SESSION_PATH: &str = "/internal/twitch/v1/discord/import-session";
+// Gegenroute: Deadlock-Bots d2558e19, enthalten in origin/main ab 7fc95051.
 const BROKER_REVOKE_SESSION_PATH: &str = "/internal/twitch/v1/discord/revoke-session";
 const BROKER_TOKEN_HEADER: &str = "X-Internal-Token";
 const BROKER_TIMEOUT: Duration = Duration::from_secs(20);
