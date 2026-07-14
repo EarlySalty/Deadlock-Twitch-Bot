@@ -143,6 +143,14 @@ export function FaqDoormanPage() {
   return (
     <main className="lobby">
       <div className="relative z-10 mx-auto flex min-h-screen max-w-3xl flex-col px-4 py-8 md:py-12">
+        {/* Die goldene Tuer, durch die man hereingekommen ist */}
+        <img
+          src="/streamer/brand/doorman/deco-tuerbogen.svg"
+          alt=""
+          aria-hidden="true"
+          className="lobby-arch"
+        />
+
         <a
           href="/twitch/dashboard"
           className="mb-6 inline-flex w-fit items-center gap-2 text-sm text-[#b7aa91] no-underline transition-colors hover:text-[#efd49d]"
@@ -152,7 +160,14 @@ export function FaqDoormanPage() {
         </a>
 
         {/* Der Tresen */}
-        <header className="counter px-6 py-6 md:px-8 md:py-7">
+        <header className="counter px-6 py-6 md:px-8 md:py-7 md:pr-52">
+          {/* Der Portier selbst — steht hinter dem Tresen, ragt ueber die Kante */}
+          <img
+            src="/streamer/brand/doorman/concierge-key.png"
+            alt=""
+            aria-hidden="true"
+            className="concierge-portrait hidden md:block"
+          />
           <div className="flex items-center gap-5">
             <BellRing
               aria-hidden="true"
@@ -182,6 +197,16 @@ export function FaqDoormanPage() {
         >
           {empty ? (
             <div className="flex flex-col gap-4">
+              {/* Lobby-Kunst: haengt nur, solange niemand am Tresen spricht */}
+              <figure className="painting mx-auto mb-2 w-full max-w-sm">
+                <img
+                  src="/streamer/brand/doorman/doorman-tuer.webp"
+                  alt="Gemälde: der Doorman vor der goldenen Tür"
+                  width="640"
+                  height="418"
+                />
+                <figcaption className="plaque">Der Portier · stets im Dienst</figcaption>
+              </figure>
               <p className="text-sm text-[#b7aa91]">Womit fangen wir an?</p>
               <div className="flex flex-wrap gap-2">
                 {SUGGESTIONS.map((suggestion) => (
@@ -286,6 +311,12 @@ export function FaqDoormanPage() {
         </form>
 
         <footer className="pt-6 text-center text-xs leading-relaxed text-[color:rgba(183,170,145,0.75)]">
+          <img
+            src="/streamer/brand/doorman/deco-key.svg"
+            alt=""
+            aria-hidden="true"
+            className="key-divider"
+          />
           Der Concierge antwortet nur aus der Hausakte des Bots. Persönliche Anliegen, Beschwerden
           und alles, was er nicht weiß, gehören{" "}
           <a

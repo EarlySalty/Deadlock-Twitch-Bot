@@ -1,0 +1,24 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 420" fill="none">
+  <!-- Tuerbogen mit Strahlenkranz — die goldene Tuer hinter dem Empfang -->
+  <defs>
+    <linearGradient id="fade" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#efd49d"/>
+      <stop offset="0.75" stop-color="#c8a86b" stop-opacity="0.25"/>
+      <stop offset="1" stop-color="#c8a86b" stop-opacity="0"/>
+    </linearGradient>
+  </defs>
+  <g stroke="url(#fade)">
+    <path d="M20 420 V160 A140 140 0 0 1 300 160 V420" stroke-width="2.5"/>
+    <path d="M38 420 V164 A122 122 0 0 1 282 164 V420" stroke-width="1.2"/>
+    <!-- Strahlen vom Scheitel der Tuer -->
+    <line x1="198.6" y1="159.6" x2="274" y2="139.4" stroke-width="1.4"/>
+    <line x1="188.3" y1="141.7" x2="243.4" y2="86.6" stroke-width="1.4"/>
+    <line x1="170.4" y1="131.4" x2="190.5" y2="56" stroke-width="1.4"/>
+    <line x1="160" y1="130" x2="160" y2="52" stroke-width="1.4"/>
+    <line x1="149.6" y1="131.4" x2="129.5" y2="56" stroke-width="1.4"/>
+    <line x1="131.7" y1="141.7" x2="76.6" y2="86.6" stroke-width="1.4"/>
+    <line x1="121.4" y1="159.6" x2="46" y2="139.4" stroke-width="1.4"/>
+    <circle cx="160" cy="170" r="24" stroke-width="1.6"/>
+    <circle cx="160" cy="170" r="12" stroke-width="1"/>
+  </g>
+</svg>
