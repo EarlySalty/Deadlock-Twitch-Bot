@@ -13,7 +13,7 @@ use tb_engagement::scout_pitch::{
     PITCH_SYSTEM_PROMPT,
 };
 use tb_monitoring::{ScoutEventSink, StreamSnapshot};
-use tb_transport_discord::{BrokerRelay, DiscordBackend, SendRichMessage};
+use tb_transport_discord::{BrokerRelay, DiscordBackend, MessageReactions, SendRichMessage};
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::net::tcp::OwnedWriteHalf;
 use tokio::net::TcpStream;
@@ -23,6 +23,7 @@ use crate::task_supervisor::TaskSupervisor;
 
 const STAFF_CHANNEL_ID: i64 = 1_374_364_800_817_303_632;
 const ROSTER_INTERVAL: Duration = Duration::from_secs(30);
+const FEEDBACK_SYNC_INTERVAL: Duration = Duration::from_secs(10 * 60);
 const JUDGE_COOLDOWN: Duration = Duration::from_secs(5 * 60);
 const RECONNECT_DELAY: Duration = Duration::from_secs(30);
 const SCOUT_COLOR: i64 = 0xC8_A8_6B;
@@ -284,6 +285,59 @@ async fn roster_loop(
             }
             Err(error) => tracing::warn!(%error, "Scout-Pitch: Roster nicht lesbar"),
         }
+    }
+}
+
+fn feedback_counts(reactions: &MessageReactions) -> (i32, i32) {
+    let count = |emoji| {
+        reactions
+            .reactions
+            .iter()
+            .find(|reaction| reaction.emoji == emoji)
+            .map(|reaction| reaction.count)
+            .unwrap_or(0)
+    };
+    (count("👍"), count("👎"))
+}
+
+async fn sync_feedback_once(ledger: &ScoutPitchLedger, relay: &BrokerRelay, channel_id: &str) {
+    let targets = match ledger.feedback_sync_targets().await {
+        Ok(targets) => targets,
+        Err(error) => {
+            tracing::warn!(%error, "Scout-Pitch: Feedback-Sync-Ziele nicht lesbar");
+            return;
+        }
+    };
+    for target in targets {
+        let reactions = match relay
+            .get_message_reactions(channel_id, &target.discord_message_id)
+            .await
+        {
+            Ok(reactions) => reactions,
+            Err(error) => {
+                tracing::warn!(%error, ledger_id = target.id, "Scout-Pitch: Feedback-Abruf fehlgeschlagen");
+                continue;
+            }
+        };
+        let (up, down) = if reactions.found {
+            let (up, down) = feedback_counts(&reactions);
+            (Some(up), Some(down))
+        } else {
+            (None, None)
+        };
+        if let Err(error) = ledger.update_feedback(target.id, up, down).await {
+            tracing::warn!(%error, ledger_id = target.id, "Scout-Pitch: Feedback nicht speicherbar");
+        }
+    }
+}
+
+async fn feedback_sync_loop(ledger: ScoutPitchLedger, relay: Arc<BrokerRelay>, channel_id: i64) {
+    let channel_id = channel_id.to_string();
+    let mut tick = tokio::time::interval(FEEDBACK_SYNC_INTERVAL);
+    tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+    loop {
+        tick.tick().await;
+        sync_feedback_once(&ledger, &relay, &channel_id).await;
     }
 }
 
@@ -830,18 +884,21 @@ pub fn spawn_scout_pitch_pipeline(
             return None;
         }
     };
+    let relay = Arc::new(relay);
+    let ledger = ScoutPitchLedger::new(pool.clone());
+    let channel_id = configured_channel_id();
     let (event_tx, event_rx) = mpsc::unbounded_channel();
     let (reader_tx, reader_rx) = mpsc::unbounded_channel();
     let runtime = ScoutPitchRuntime {
-        ledger: ScoutPitchLedger::new(pool.clone()),
+        ledger: ledger.clone(),
         llm: Arc::new(EngagementMinimaxClient::new(
             None,
             None,
             None,
             Some(Duration::from_secs(40)),
         )),
-        discord: Arc::new(relay),
-        channel_id: configured_channel_id(),
+        discord: relay.clone(),
+        channel_id,
         channels: HashMap::new(),
         windows: HashMap::new(),
         last_judge: HashMap::new(),
@@ -855,8 +912,12 @@ pub fn spawn_scout_pitch_pipeline(
         "scout_pitch_roster",
         roster_loop(pool, reader_tx, event_tx.clone()),
     );
+    supervisor.spawn(
+        "scout_pitch_feedback_sync",
+        feedback_sync_loop(ledger, relay, channel_id),
+    );
     tracing::info!(
-        channel_id = configured_channel_id(),
+        channel_id,
         "Scout-Pitch-Pipeline aktiv (anonymer IRC-Read, Discord-Copilot)"
     );
     Some(Arc::new(ScoutPitchEventSink { events: event_tx }))
@@ -867,6 +928,7 @@ mod tests {
     use std::collections::HashMap;
 
     use tb_engagement::scout_pitch::{ChatLine, TriggerType};
+    use tb_transport_discord::{MessageReaction, MessageReactions};
 
     use super::*;
 
@@ -972,5 +1034,24 @@ mod tests {
             !components.to_string().contains("\"type\":2"),
             "keine Buttons"
         );
+    }
+
+    #[test]
+    fn feedback_counts_reads_thumbs_and_defaults_missing_to_zero() {
+        let reactions = MessageReactions {
+            found: true,
+            reactions: vec![
+                MessageReaction {
+                    emoji: "👍".to_string(),
+                    count: 3,
+                },
+                MessageReaction {
+                    emoji: "🎉".to_string(),
+                    count: 9,
+                },
+            ],
+        };
+
+        assert_eq!(feedback_counts(&reactions), (3, 0));
     }
 }

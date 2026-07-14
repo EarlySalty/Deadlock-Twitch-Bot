@@ -206,3 +206,106 @@ async fn ledger_writes_every_action_and_blacklist_is_case_insensitive() {
         .await
         .expect("Blacklist lesbar"));
 }
+
+#[tokio::test]
+async fn feedback_sync_selects_only_recent_posted_messages_and_updates_found_state() {
+    let Some(dsn) = std::env::var("TB_TEST_DATABASE_URL").ok() else {
+        eprintln!("SKIP: TB_TEST_DATABASE_URL nicht gesetzt");
+        return;
+    };
+    let schema = format!("tb_scout_feedback_{}", std::process::id());
+    let admin = PgPoolOptions::new()
+        .max_connections(1)
+        .connect(&dsn)
+        .await
+        .expect("Test-DB erreichbar");
+    sqlx::query(&format!("DROP SCHEMA IF EXISTS {schema} CASCADE"))
+        .execute(&admin)
+        .await
+        .expect("altes Schema loeschbar");
+    sqlx::query(&format!("CREATE SCHEMA {schema}"))
+        .execute(&admin)
+        .await
+        .expect("Schema erstellbar");
+    sqlx::query("CREATE EXTENSION IF NOT EXISTS timescaledb")
+        .execute(&admin)
+        .await
+        .expect("timescaledb-Extension verfuegbar");
+    admin.close().await;
+
+    let options = PgConnectOptions::from_str(&dsn)
+        .expect("valide Test-DSN")
+        .options([("search_path", format!("{schema},public").as_str())]);
+    let pool = PgPoolOptions::new()
+        .max_connections(2)
+        .connect_with(options)
+        .await
+        .expect("Schema-Pool erstellbar");
+    sqlx::migrate!("../../migrations")
+        .run(&pool)
+        .await
+        .expect("Migrationen laufen");
+
+    for (action, message_id, age) in [
+        ("posted", Some("recent"), "1 day"),
+        ("posted", Some("old"), "15 days"),
+        ("discord_error", Some("failed"), "1 day"),
+        ("posted", None, "1 day"),
+    ] {
+        sqlx::query(
+            "INSERT INTO twitch_scout_pitch_ledger \
+             (streamer_login, trigger_type, judge_verdict, action, discord_message_id, created_at) \
+             VALUES ('tester', 'spam_bots', 'spam_bots', $1, $2, NOW() - $3::interval)",
+        )
+        .bind(action)
+        .bind(message_id)
+        .bind(age)
+        .execute(&pool)
+        .await
+        .expect("Test-Ledger-Eintrag schreibbar");
+    }
+
+    let ledger = ScoutPitchLedger::new(pool.clone());
+    let targets = ledger
+        .feedback_sync_targets()
+        .await
+        .expect("Sync-Ziele lesbar");
+    assert_eq!(targets.len(), 1);
+    assert_eq!(targets[0].discord_message_id, "recent");
+
+    ledger
+        .update_feedback(targets[0].id, Some(4), Some(1))
+        .await
+        .expect("gefundenes Feedback aktualisierbar");
+    let found: (Option<i32>, Option<i32>, bool) = sqlx::query_as(
+        "SELECT feedback_up, feedback_down, feedback_synced_at IS NOT NULL \
+         FROM twitch_scout_pitch_ledger WHERE id = $1",
+    )
+    .bind(targets[0].id)
+    .fetch_one(&pool)
+    .await
+    .expect("Feedback lesbar");
+    assert_eq!(found, (Some(4), Some(1), true));
+
+    sqlx::query(
+        "UPDATE twitch_scout_pitch_ledger \
+         SET feedback_up = 7, feedback_down = 8, feedback_synced_at = NULL WHERE id = $1",
+    )
+    .bind(targets[0].id)
+    .execute(&pool)
+    .await
+    .expect("Feedback-Testzustand schreibbar");
+    ledger
+        .update_feedback(targets[0].id, None, None)
+        .await
+        .expect("nicht gefundenes Feedback als synchronisiert markierbar");
+    let not_found: (Option<i32>, Option<i32>, bool) = sqlx::query_as(
+        "SELECT feedback_up, feedback_down, feedback_synced_at IS NOT NULL \
+         FROM twitch_scout_pitch_ledger WHERE id = $1",
+    )
+    .bind(targets[0].id)
+    .fetch_one(&pool)
+    .await
+    .expect("unveraendertes Feedback lesbar");
+    assert_eq!(not_found, (Some(7), Some(8), true));
+}

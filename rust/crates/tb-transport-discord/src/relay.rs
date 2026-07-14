@@ -23,6 +23,7 @@ const CREATE_INVITE_PATH: &str = "/internal/master/v1/discord/create-invite";
 const SEND_DM_PATH: &str = "/internal/master/v1/discord/send-dm";
 const MEMBERS_PATH: &str = "/internal/master/v1/discord/members";
 const ROLES_PATH: &str = "/internal/master/v1/discord/roles";
+const MESSAGE_REACTIONS_PATH: &str = "/internal/master/v1/discord/message-reactions";
 const TIMEOUT: Duration = Duration::from_secs(10);
 const RETRY_WAIT: Duration = Duration::from_secs(2);
 const MAX_ATTEMPTS: u32 = 2;
@@ -67,6 +68,21 @@ pub struct InviteInfo {
     pub channel_id: u64,
     #[serde(deserialize_with = "deserialize_u64_flexible")]
     pub guild_id: u64,
+}
+
+/// Reaktionszähler einer Discord-Nachricht.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Deserialize)]
+pub struct MessageReaction {
+    pub emoji: String,
+    pub count: i32,
+}
+
+/// Antwort von `GET /discord/message-reactions`.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Deserialize)]
+pub struct MessageReactions {
+    pub found: bool,
+    #[serde(default)]
+    pub reactions: Vec<MessageReaction>,
 }
 
 impl ResolvedDiscordUser {
@@ -430,6 +446,28 @@ impl BrokerRelay {
         let env: Envelope = resp.json().await.map_err(DiscordError::Http)?;
         Ok(env.members)
     }
+
+    /// Liest die Reaktionszähler einer Discord-Nachricht über den Master-Broker.
+    pub async fn get_message_reactions(
+        &self,
+        channel_id: &str,
+        message_id: &str,
+    ) -> Result<MessageReactions, DiscordError> {
+        let url = format!("{}{}", self.base_url, MESSAGE_REACTIONS_PATH);
+        let resp = self
+            .client
+            .get(&url)
+            .header("X-Internal-Token", &self.token)
+            .query(&[("channel_id", channel_id), ("message_id", message_id)])
+            .send()
+            .await?;
+        if !resp.status().is_success() {
+            let status = resp.status().as_u16();
+            let body = resp.text().await.unwrap_or_default();
+            return Err(DiscordError::BrokerError { status, body });
+        }
+        Ok(resp.json().await?)
+    }
 }
 
 #[async_trait::async_trait]
@@ -504,7 +542,7 @@ impl DiscordBackend for BrokerRelay {
 mod tests {
     use super::*;
     use tb_config::BrokerConfig;
-    use wiremock::matchers::{header, method, path};
+    use wiremock::matchers::{header, method, path, query_param};
     use wiremock::{Mock, MockServer, ResponseTemplate};
 
     fn test_config(base_url: &str) -> BrokerConfig {
@@ -627,6 +665,73 @@ mod tests {
             .unwrap_err();
         assert!(matches!(err, DiscordError::BrokerError { status: 400, .. }));
         server.verify().await;
+    }
+
+    #[tokio::test]
+    async fn message_reactions_sendet_ids_und_parst_antwort() {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/internal/master/v1/discord/message-reactions"))
+            .and(query_param("channel_id", "1374364800817303632"))
+            .and(query_param("message_id", "1402558159123456789"))
+            .and(header("X-Internal-Token", "test-token"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "found": true,
+                "reactions": [
+                    {"emoji": "👍", "count": 2},
+                    {"emoji": "👎", "count": 1}
+                ]
+            })))
+            .mount(&server)
+            .await;
+
+        let relay = BrokerRelay::new(&test_config(&server.uri())).unwrap();
+        let result = relay
+            .get_message_reactions("1374364800817303632", "1402558159123456789")
+            .await
+            .unwrap();
+
+        assert!(result.found);
+        assert_eq!(result.reactions.len(), 2);
+        assert_eq!(result.reactions[0].emoji, "👍");
+        assert_eq!(result.reactions[0].count, 2);
+    }
+
+    #[tokio::test]
+    async fn message_reactions_502_ist_fehler() {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/internal/master/v1/discord/message-reactions"))
+            .respond_with(ResponseTemplate::new(502).set_body_string("discord unavailable"))
+            .mount(&server)
+            .await;
+
+        let relay = BrokerRelay::new(&test_config(&server.uri())).unwrap();
+        let error = relay.get_message_reactions("1", "2").await.unwrap_err();
+
+        assert!(matches!(
+            error,
+            DiscordError::BrokerError { status: 502, .. }
+        ));
+    }
+
+    #[tokio::test]
+    async fn message_reactions_parst_nicht_gefundene_nachricht() {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/internal/master/v1/discord/message-reactions"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "found": false,
+                "reactions": []
+            })))
+            .mount(&server)
+            .await;
+
+        let relay = BrokerRelay::new(&test_config(&server.uri())).unwrap();
+        let result = relay.get_message_reactions("1", "2").await.unwrap();
+
+        assert!(!result.found);
+        assert!(result.reactions.is_empty());
     }
 
     #[tokio::test]

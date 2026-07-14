@@ -250,6 +250,12 @@ pub struct LedgerEntry {
     pub discord_message_id: Option<String>,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FeedbackSyncTarget {
+    pub id: i64,
+    pub discord_message_id: String,
+}
+
 #[derive(Clone)]
 pub struct ScoutPitchLedger {
     pool: PgPool,
@@ -301,6 +307,46 @@ impl ScoutPitchLedger {
         .bind(entry.action.as_str())
         .bind(&entry.detail)
         .bind(&entry.discord_message_id)
+        .execute(&self.pool)
+        .await?;
+        Ok(())
+    }
+
+    pub async fn feedback_sync_targets(&self) -> Result<Vec<FeedbackSyncTarget>, sqlx::Error> {
+        sqlx::query_as::<_, (i64, String)>(
+            "SELECT id, discord_message_id FROM twitch_scout_pitch_ledger \
+             WHERE action = 'posted' AND discord_message_id IS NOT NULL \
+               AND created_at > NOW() - INTERVAL '14 days' \
+             ORDER BY id",
+        )
+        .fetch_all(&self.pool)
+        .await
+        .map(|rows| {
+            rows.into_iter()
+                .map(|(id, discord_message_id)| FeedbackSyncTarget {
+                    id,
+                    discord_message_id,
+                })
+                .collect()
+        })
+    }
+
+    pub async fn update_feedback(
+        &self,
+        id: i64,
+        feedback_up: Option<i32>,
+        feedback_down: Option<i32>,
+    ) -> Result<(), sqlx::Error> {
+        sqlx::query(
+            "UPDATE twitch_scout_pitch_ledger \
+             SET feedback_up = COALESCE($2, feedback_up), \
+                 feedback_down = COALESCE($3, feedback_down), \
+                 feedback_synced_at = NOW() \
+             WHERE id = $1",
+        )
+        .bind(id)
+        .bind(feedback_up)
+        .bind(feedback_down)
         .execute(&self.pool)
         .await?;
         Ok(())
