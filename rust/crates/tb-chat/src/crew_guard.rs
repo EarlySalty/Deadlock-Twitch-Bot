@@ -14,13 +14,13 @@
 //!   2. [`CrewJudge`] — konservativer LLM-Klassifikator, der nur dann `is_crew`
 //!      setzt, wenn das Kampagnen-Muster klar erkennbar ist. Fail-safe „unsure".
 
-use std::collections::{HashMap, HashSet, VecDeque};
+use std::collections::{HashMap, VecDeque};
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex, OnceLock, PoisonError};
 use std::time::Duration;
 
 use async_trait::async_trait;
-use chrono::{Timelike, Utc};
+use chrono::{DateTime, Timelike, Utc};
 use chrono_tz::Europe::Berlin;
 use regex::Regex;
 use serde::Deserialize;
@@ -131,6 +131,22 @@ async fn radar_logged_recently(
     .fetch_optional(pool)
     .await?
     .is_some())
+}
+
+type RadarChecks = HashMap<(String, String), DateTime<Utc>>;
+
+fn claim_radar_slot(
+    checked: &mut RadarChecks,
+    key: &(String, String),
+    now: DateTime<Utc>,
+    ttl: chrono::Duration,
+) -> bool {
+    checked.retain(|_, checked_at| now.signed_duration_since(*checked_at) < ttl);
+    if checked.contains_key(key) {
+        return false;
+    }
+    checked.insert(key.clone(), now);
+    true
 }
 
 // ---------------------------------------------------------------------------
@@ -937,7 +953,7 @@ pub struct CrewGuard {
     api: Arc<dyn ChatApi>,
     centroid: Arc<Centroid>,
     context: Arc<ChatterContextBuffer>,
-    radar_checked: Arc<Mutex<HashSet<(String, String)>>>,
+    radar_checked: Arc<Mutex<RadarChecks>>,
 }
 
 impl CrewGuard {
@@ -961,7 +977,7 @@ impl CrewGuard {
             api,
             centroid,
             context: Arc::new(ChatterContextBuffer::new()),
-            radar_checked: Arc::new(Mutex::new(HashSet::new())),
+            radar_checked: Arc::new(Mutex::new(HashMap::new())),
         }
     }
 
@@ -1037,11 +1053,12 @@ impl CrewGuard {
                     return;
                 }
                 let key = (channel.clone(), login.clone());
-                if !radar_checked
-                    .lock()
-                    .unwrap_or_else(PoisonError::into_inner)
-                    .insert(key.clone())
-                {
+                if !claim_radar_slot(
+                    &mut radar_checked.lock().unwrap_or_else(PoisonError::into_inner),
+                    &key,
+                    Utc::now(),
+                    chrono::Duration::hours(24),
+                ) {
                     return;
                 }
                 match radar_logged_recently(&pool, &channel, &login).await {
@@ -1193,6 +1210,71 @@ mod tests {
     use crate::style_score::{Centroid, StyleBreakdown, StyleScore};
     use wiremock::matchers::method;
     use wiremock::{Mock, MockServer, ResponseTemplate};
+
+    #[test]
+    fn radar_slot_claims_fresh_key() {
+        let mut checked = HashMap::new();
+        let key = ("channel".to_string(), "chatter".to_string());
+
+        assert!(claim_radar_slot(
+            &mut checked,
+            &key,
+            Utc::now(),
+            chrono::Duration::hours(24),
+        ));
+    }
+
+    #[test]
+    fn radar_slot_throttles_immediate_second_claim() {
+        let mut checked = HashMap::new();
+        let key = ("channel".to_string(), "chatter".to_string());
+        let now = Utc::now();
+
+        assert!(claim_radar_slot(
+            &mut checked,
+            &key,
+            now,
+            chrono::Duration::hours(24),
+        ));
+        assert!(!claim_radar_slot(
+            &mut checked,
+            &key,
+            now,
+            chrono::Duration::hours(24),
+        ));
+    }
+
+    #[test]
+    fn radar_slot_can_be_reclaimed_after_ttl() {
+        let mut checked = HashMap::new();
+        let key = ("channel".to_string(), "chatter".to_string());
+        let now = Utc::now();
+        let ttl = chrono::Duration::hours(24);
+
+        assert!(claim_radar_slot(&mut checked, &key, now, ttl));
+        assert!(claim_radar_slot(
+            &mut checked,
+            &key,
+            now + chrono::Duration::hours(25),
+            ttl,
+        ));
+    }
+
+    #[test]
+    fn radar_slot_removes_expired_foreign_entries() {
+        let now = Utc::now();
+        let expired_key = ("other-channel".to_string(), "other-chatter".to_string());
+        let key = ("channel".to_string(), "chatter".to_string());
+        let mut checked = HashMap::from([(expired_key.clone(), now - chrono::Duration::hours(25))]);
+
+        assert!(claim_radar_slot(
+            &mut checked,
+            &key,
+            now,
+            chrono::Duration::hours(24),
+        ));
+        assert!(!checked.contains_key(&expired_key));
+    }
 
     // Nur Texte — KEINE echten Usernamen als Chatter-Identität.
     const POSITIVES: [&str; 5] = [
