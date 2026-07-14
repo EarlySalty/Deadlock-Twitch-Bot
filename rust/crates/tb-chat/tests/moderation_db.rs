@@ -3,8 +3,10 @@
 //! Testet den DB-Schreibpfad von [`ModerationEngine::auto_ban_and_cleanup`].
 //! Schema-isoliert; tb_chat_autoban_log wird prod-treu wie beim Bot-Start angelegt.
 
+use std::io::{self, Write};
 use std::str::FromStr;
-use std::sync::Arc;
+use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::{Arc, Mutex};
 
 use async_trait::async_trait;
 use chrono::Utc;
@@ -63,9 +65,9 @@ async fn apply_ddl(pool: &PgPool) {
     sqlx::query(
         r#"CREATE TABLE IF NOT EXISTS tb_chat_autoban_log (
             id BIGSERIAL PRIMARY KEY,
-            channel_login TEXT NOT NULL,
+            channel_login TEXT,
             chatter_id TEXT NOT NULL,
-            chatter_login TEXT NOT NULL,
+            chatter_login TEXT,
             content TEXT,
             banned_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
             action TEXT,
@@ -116,7 +118,10 @@ async fn apply_ddl(pool: &PgPool) {
 // Mock-ChatApi
 // ---------------------------------------------------------------------------
 
-struct OkApi;
+#[derive(Default)]
+struct OkApi {
+    timeout_calls: AtomicUsize,
+}
 
 #[async_trait]
 impl ChatApi for OkApi {
@@ -136,6 +141,7 @@ impl ChatApi for OkApi {
         _d: u32,
         _r: &str,
     ) -> Result<BanOutcome, String> {
+        self.timeout_calls.fetch_add(1, Ordering::SeqCst);
         Ok(BanOutcome::Banned)
     }
     async fn unban_user(&self, _b: &str, _u: &str) -> Result<bool, String> {
@@ -158,6 +164,44 @@ impl ChatApi for OkApi {
     }
 }
 
+#[derive(Clone, Default)]
+struct LogCapture(Arc<Mutex<Vec<u8>>>);
+
+struct LogWriter(Arc<Mutex<Vec<u8>>>);
+
+impl Write for LogWriter {
+    fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
+        self.0.lock().unwrap().extend_from_slice(buf);
+        Ok(buf.len())
+    }
+
+    fn flush(&mut self) -> io::Result<()> {
+        Ok(())
+    }
+}
+
+impl<'a> tracing_subscriber::fmt::MakeWriter<'a> for LogCapture {
+    type Writer = LogWriter;
+
+    fn make_writer(&'a self) -> Self::Writer {
+        LogWriter(self.0.clone())
+    }
+}
+
+impl LogCapture {
+    fn text(&self) -> String {
+        String::from_utf8(self.0.lock().unwrap().clone()).unwrap()
+    }
+}
+
+fn assert_login_is_not_id(field: &str, login: Option<&str>) {
+    let login = login.unwrap_or_else(|| panic!("{field} fehlt"));
+    assert!(
+        !login.chars().all(|character| character.is_ascii_digit()),
+        "{field} enthaelt eine numerische ID statt eines Logins: {login}"
+    );
+}
+
 // ---------------------------------------------------------------------------
 // Tests
 // ---------------------------------------------------------------------------
@@ -165,7 +209,7 @@ impl ChatApi for OkApi {
 #[tokio::test]
 async fn autoban_schreibt_in_db() {
     let pool = pool_or_skip!("autoban_write");
-    let engine = ModerationEngine::new(Arc::new(OkApi), pool.clone());
+    let engine = ModerationEngine::new(Arc::new(OkApi::default()), pool.clone());
 
     sqlx::query("INSERT INTO twitch_chat_messages (message_id, content) VALUES ('msg-id-1', 'Spam-Inhalt hier')")
         .execute(&pool)
@@ -248,7 +292,7 @@ async fn autoban_schreibt_in_db() {
 #[tokio::test]
 async fn autoban_last_record_in_memory_gesetzt() {
     let pool = pool_or_skip!("autoban_mem");
-    let engine = ModerationEngine::new(Arc::new(OkApi), pool);
+    let engine = ModerationEngine::new(Arc::new(OkApi::default()), pool);
 
     engine
         .auto_ban_and_cleanup(AutoBanRequest {
@@ -278,7 +322,7 @@ async fn autoban_last_record_in_memory_gesetzt() {
 #[tokio::test]
 async fn delete_only_schreibt_auch_in_db() {
     let pool = pool_or_skip!("autoban_delete_only");
-    let engine = ModerationEngine::new(Arc::new(OkApi), pool.clone());
+    let engine = ModerationEngine::new(Arc::new(OkApi::default()), pool.clone());
 
     sqlx::query(
         "INSERT INTO twitch_chat_messages (message_id, content) VALUES ('del_msg', 'Del-Inhalt')",
@@ -327,7 +371,7 @@ async fn delete_only_schreibt_auch_in_db() {
 #[tokio::test]
 async fn safe_list_unterdrueckung_wird_sichtbar() {
     let pool = pool_or_skip!("autoban_safe_suppressed");
-    let engine = ModerationEngine::new(Arc::new(OkApi), pool.clone());
+    let engine = ModerationEngine::new(Arc::new(OkApi::default()), pool.clone());
     sqlx::query("INSERT INTO twitch_chat_messages (message_id, content) VALUES ('safe_msg', 'aiviewers bei streamboo')")
         .execute(&pool)
         .await
@@ -391,7 +435,7 @@ async fn normale_nachricht_bleibt_ohne_moderationsaktion() {
 #[tokio::test]
 async fn timeout_schreibt_aktion_und_judge_confidence() {
     let pool = pool_or_skip!("autoban_timeout");
-    let engine = ModerationEngine::new(Arc::new(OkApi), pool.clone());
+    let engine = ModerationEngine::new(Arc::new(OkApi::default()), pool.clone());
     sqlx::query("INSERT INTO twitch_chat_messages (message_id, content) VALUES ('timeout_msg', 'verdächtig')")
         .execute(&pool)
         .await
@@ -436,9 +480,141 @@ async fn timeout_schreibt_aktion_und_judge_confidence() {
 }
 
 #[tokio::test]
+async fn conversation_scam_timeout_schreibt_echte_evidence_und_message_action() {
+    let pool = pool_or_skip!("conversation_scam_timeout_evidence");
+    let engine = ModerationEngine::new(Arc::new(OkApi::default()), pool.clone());
+    sqlx::query(
+        "INSERT INTO twitch_chat_messages (message_id, content) \
+         VALUES ('scam_wrapper_msg', 'echter Scam-Inhalt')",
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
+
+    let enforced = engine
+        .timeout_and_cleanup(
+            Some("echter_kanal"),
+            "123456789",
+            Some("echter_chatter"),
+            "987654321",
+            "scam_wrapper_msg",
+            Some("echter Scam-Inhalt"),
+            86_400,
+            "Judge: Scam erkannt",
+        )
+        .await;
+
+    assert!(enforced);
+    let (channel, chatter, content, action, reason): (
+        Option<String>,
+        Option<String>,
+        Option<String>,
+        Option<String>,
+        Option<String>,
+    ) = sqlx::query_as(
+        "SELECT channel_login, chatter_login, content, action, reason \
+         FROM tb_chat_autoban_log WHERE chatter_id = '987654321'",
+    )
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!(channel.as_deref(), Some("echter_kanal"));
+    assert_eq!(chatter.as_deref(), Some("echter_chatter"));
+    assert_eq!(content.as_deref(), Some("echter Scam-Inhalt"));
+    assert_eq!(action.as_deref(), Some("timeout"));
+    assert_eq!(reason.as_deref(), Some("Judge: Scam erkannt"));
+
+    let (message_action, message_reason): (Option<String>, Option<String>) = sqlx::query_as(
+        "SELECT moderation_action, moderation_reason FROM twitch_chat_messages \
+         WHERE message_id = 'scam_wrapper_msg'",
+    )
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!(message_action.as_deref(), Some("timeout"));
+    assert_eq!(message_reason.as_deref(), Some("Judge: Scam erkannt"));
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn timeout_ohne_content_schreibt_null_warnt_und_wird_ausgefuehrt() {
+    let pool = pool_or_skip!("conversation_scam_timeout_missing_content");
+    let api = Arc::new(OkApi::default());
+    let engine = ModerationEngine::new(api.clone(), pool.clone());
+    let logs = LogCapture::default();
+    let subscriber = tracing_subscriber::fmt()
+        .with_max_level(tracing::Level::WARN)
+        .without_time()
+        .with_writer(logs.clone())
+        .finish();
+    let _guard = tracing::subscriber::set_default(subscriber);
+
+    let enforced = engine
+        .timeout_and_cleanup(
+            Some("contentloser_kanal"),
+            "123456789",
+            Some("contentloser_chatter"),
+            "987654321",
+            "contentlos_msg",
+            None,
+            600,
+            "Judge: Scam ohne archivierten Text",
+        )
+        .await;
+
+    assert!(
+        enforced,
+        "fehlende Evidence darf den Timeout nicht blockieren"
+    );
+    assert_eq!(api.timeout_calls.load(Ordering::SeqCst), 1);
+    let content: Option<String> = sqlx::query_scalar(
+        "SELECT content FROM tb_chat_autoban_log WHERE chatter_id = '987654321'",
+    )
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert!(content.is_none(), "unbekannter Inhalt muss NULL bleiben");
+    let logs = logs.text();
+    assert!(
+        logs.contains("content") && logs.contains("fehlt"),
+        "fehlendes Evidence-Feld wurde nicht als WARN geloggt: {logs}"
+    );
+}
+
+#[tokio::test]
+async fn timeout_evidence_login_felder_sind_keine_numerischen_ids() {
+    let pool = pool_or_skip!("conversation_scam_timeout_login_shape");
+    let engine = ModerationEngine::new(Arc::new(OkApi::default()), pool.clone());
+
+    assert!(
+        engine
+            .timeout_and_cleanup(
+                Some("login_shape_kanal"),
+                "123456789",
+                Some("login_shape_chatter"),
+                "987654321",
+                "login_shape_msg",
+                Some("Scam-Inhalt"),
+                600,
+                "Judge: Scam erkannt",
+            )
+            .await
+    );
+
+    let (channel, chatter): (Option<String>, Option<String>) = sqlx::query_as(
+        "SELECT channel_login, chatter_login FROM tb_chat_autoban_log \
+         WHERE chatter_id = '987654321'",
+    )
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_login_is_not_id("channel_login", channel.as_deref());
+    assert_login_is_not_id("chatter_login", chatter.as_deref());
+}
+
+#[tokio::test]
 async fn content_wird_auf_500_zeichen_begrenzt() {
     let pool = pool_or_skip!("autoban_trunc");
-    let engine = ModerationEngine::new(Arc::new(OkApi), pool.clone());
+    let engine = ModerationEngine::new(Arc::new(OkApi::default()), pool.clone());
 
     let long_content = "x".repeat(1000);
     engine

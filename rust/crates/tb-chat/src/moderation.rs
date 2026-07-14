@@ -697,21 +697,25 @@ impl ModerationEngine {
     }
 
     /// Löscht die auslösende Nachricht best-effort und setzt danach einen Timeout.
+    #[allow(clippy::too_many_arguments)]
     pub async fn timeout_and_cleanup(
         &self,
+        channel_login: Option<&str>,
         broadcaster_id: &str,
+        chatter_login: Option<&str>,
         chatter_id: &str,
         message_id: &str,
+        content: Option<&str>,
         duration_secs: u32,
         reason_text: &str,
     ) -> bool {
         self.timeout_and_cleanup_with_evidence(
+            channel_login.unwrap_or_default(),
             broadcaster_id,
-            broadcaster_id,
-            "",
+            chatter_login.unwrap_or_default(),
             chatter_id,
             message_id,
-            "",
+            content.unwrap_or_default(),
             duration_secs,
             reason_text,
             ModerationEvidence {
@@ -872,23 +876,49 @@ impl ModerationEngine {
         evidence: &ModerationEvidence<'_>,
         cache: bool,
     ) {
-        let key = channel_login.to_lowercase();
-        let record = AutoBanRecord {
-            user_id: chatter_id.to_string(),
-            login: chatter_login.to_string(),
-            content: content.chars().take(500).collect(),
-            ts: Utc::now(),
+        let normalize_login = |field: &'static str, value: &str| {
+            let value = value.trim();
+            if value.is_empty() {
+                warn!(field, "Moderations-Evidence-Feld fehlt");
+                None
+            } else if value.chars().all(|character| character.is_ascii_digit()) {
+                warn!(field, value, "Moderations-Evidence-Login sieht wie ID aus");
+                None
+            } else {
+                Some(value.to_lowercase())
+            }
         };
+        let channel_login = normalize_login("channel_login", channel_login);
+        let chatter_login = normalize_login("chatter_login", chatter_login);
+        let content = if content.trim().is_empty() {
+            warn!(field = "content", "Moderations-Evidence-Feld fehlt");
+            None
+        } else {
+            Some(content.chars().take(500).collect::<String>())
+        };
+        let ts = Utc::now();
 
         // In-Memory: Safe-List-Unterdrueckungen sind kein ruecknehmbarer Ban.
         if cache {
-            let mut guard = self.last_autoban.lock().unwrap();
-            guard.insert(key.clone(), record.clone());
+            if let (Some(channel_login), Some(chatter_login), Some(content)) =
+                (&channel_login, &chatter_login, &content)
+            {
+                self.last_autoban.lock().unwrap().insert(
+                    channel_login.clone(),
+                    AutoBanRecord {
+                        user_id: chatter_id.to_string(),
+                        login: chatter_login.clone(),
+                        content: content.clone(),
+                        ts,
+                    },
+                );
+            } else {
+                warn!("Unvollständige Moderations-Evidence nicht im AutoBan-Cache gespeichert");
+            }
         }
 
         // DB — Schema aus Migration 20260630141000.
-        let ts_str = record.ts.to_rfc3339();
-        let content_trunc: String = record.content.clone();
+        let ts_str = ts.to_rfc3339();
         if let Err(e) = sqlx::query(
             r#"INSERT INTO tb_chat_autoban_log
                (channel_login, chatter_id, chatter_login, content, banned_at,
@@ -896,11 +926,11 @@ impl ModerationEngine {
                VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
                ON CONFLICT DO NOTHING"#,
         )
-        .bind(&key)
+        .bind(channel_login.as_deref())
         .bind(chatter_id)
-        .bind(chatter_login)
-        .bind(&content_trunc)
-        .bind(record.ts)
+        .bind(chatter_login.as_deref())
+        .bind(content.as_deref())
+        .bind(ts)
         .bind(action)
         .bind(evidence.source_path)
         .bind(evidence.reason)
@@ -1585,9 +1615,12 @@ mod tests {
             let engine = ModerationEngine::new(api.clone(), pool);
             let result = engine
                 .timeout_and_cleanup(
+                    Some("kanal"),
                     "broadcast-id",
+                    Some(safe.login),
                     safe.twitch_user_id,
                     "msg-id",
+                    Some("Scam-Verdacht"),
                     600,
                     "Scam-Verdacht",
                 )
@@ -1615,7 +1648,16 @@ mod tests {
         let pool = sqlx::PgPool::connect_lazy("postgres://x:x@127.0.0.1:1/x").unwrap();
         let engine = ModerationEngine::new(api.clone(), pool);
         let result = engine
-            .timeout_and_cleanup("broadcast-id", "999999999", "msg-id", 600, "Scam")
+            .timeout_and_cleanup(
+                Some("kanal"),
+                "broadcast-id",
+                Some("fremdes_konto"),
+                "999999999",
+                "msg-id",
+                Some("Scam"),
+                600,
+                "Scam",
+            )
             .await;
 
         assert!(result);

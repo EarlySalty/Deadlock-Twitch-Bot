@@ -15,3 +15,6 @@ ALTER TABLE tb_chat_autoban_log ADD COLUMN IF NOT EXISTS source_path TEXT;
 ALTER TABLE tb_chat_autoban_log ADD COLUMN IF NOT EXISTS reason TEXT;
 ALTER TABLE tb_chat_autoban_log ADD COLUMN IF NOT EXISTS score REAL;
 ALTER TABLE tb_chat_autoban_log ADD COLUMN IF NOT EXISTS account_age_days BIGINT;
+
+ALTER TABLE tb_chat_autoban_log ALTER COLUMN channel_login DROP NOT NULL;
+ALTER TABLE tb_chat_autoban_log ALTER COLUMN chatter_login DROP NOT NULL;

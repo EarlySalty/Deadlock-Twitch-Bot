@@ -533,11 +533,15 @@ pub trait ScamGuardStore: Send + Sync {
 #[async_trait]
 pub trait ScamModeration: Send + Sync {
     async fn auto_ban_and_cleanup(&self, request: AutoBanRequest<'_>) -> bool;
+    #[allow(clippy::too_many_arguments)]
     async fn timeout_and_cleanup(
         &self,
+        channel_login: Option<&str>,
         broadcaster_id: &str,
+        chatter_login: Option<&str>,
         chatter_id: &str,
         message_id: &str,
+        content: Option<&str>,
         duration_secs: u32,
         reason_text: &str,
     ) -> bool;
@@ -551,17 +555,23 @@ impl ScamModeration for ModerationEngine {
 
     async fn timeout_and_cleanup(
         &self,
+        channel_login: Option<&str>,
         broadcaster_id: &str,
+        chatter_login: Option<&str>,
         chatter_id: &str,
         message_id: &str,
+        content: Option<&str>,
         duration_secs: u32,
         reason_text: &str,
     ) -> bool {
         ModerationEngine::timeout_and_cleanup(
             self,
+            channel_login,
             broadcaster_id,
+            chatter_login,
             chatter_id,
             message_id,
+            content,
             duration_secs,
             reason_text,
         )
@@ -1014,9 +1024,12 @@ impl ConversationScamGuard {
                     let timed_out = self
                         .moderation
                         .timeout_and_cleanup(
+                            Some(&event.broadcaster_user_login),
                             &event.broadcaster_user_id,
+                            Some(&event.chatter_user_login),
                             &event.chatter_user_id,
                             &event.message_id,
+                            Some(event.text()),
                             TIMEOUT_SECONDS,
                             &verdict.reasoning,
                         )
@@ -1039,9 +1052,12 @@ impl ConversationScamGuard {
                         let timed_out = self
                             .moderation
                             .timeout_and_cleanup(
+                                Some(&event.broadcaster_user_login),
                                 &event.broadcaster_user_id,
+                                Some(&event.chatter_user_login),
                                 &event.chatter_user_id,
                                 &event.message_id,
+                                Some(event.text()),
                                 TIMEOUT_SECONDS,
                                 &verdict.reasoning,
                             )
@@ -2224,6 +2240,7 @@ mod tests {
         succeeds: StdMutex<bool>,
         reasons: StdMutex<Vec<String>>,
         timeout_reasons: StdMutex<Vec<String>>,
+        timeout_evidence: StdMutex<Vec<(Option<String>, Option<String>, Option<String>)>>,
     }
 
     #[async_trait]
@@ -2238,9 +2255,12 @@ mod tests {
 
         async fn timeout_and_cleanup(
             &self,
+            channel_login: Option<&str>,
             _broadcaster_id: &str,
+            chatter_login: Option<&str>,
             _chatter_id: &str,
             _message_id: &str,
+            content: Option<&str>,
             _duration_secs: u32,
             reason_text: &str,
         ) -> bool {
@@ -2248,6 +2268,11 @@ mod tests {
                 .lock()
                 .unwrap()
                 .push(reason_text.to_string());
+            self.timeout_evidence.lock().unwrap().push((
+                channel_login.map(str::to_string),
+                chatter_login.map(str::to_string),
+                content.map(str::to_string),
+            ));
             true
         }
     }
@@ -2289,6 +2314,7 @@ mod tests {
             succeeds: StdMutex::new(true),
             reasons: StdMutex::new(Vec::new()),
             timeout_reasons: StdMutex::new(Vec::new()),
+            timeout_evidence: StdMutex::new(Vec::new()),
         });
         let guard = ConversationScamGuard::with_store(
             "bot-id".to_string(),
@@ -2609,6 +2635,17 @@ mod tests {
         assert_eq!(
             moderation.timeout_reasons.lock().unwrap().as_slice(),
             ["test reasoning"]
+        );
+        assert_eq!(
+            moderation.timeout_evidence.lock().unwrap().as_slice(),
+            [(
+                Some("testchannel".to_string()),
+                Some("timeout_user".to_string()),
+                Some(
+                    "This long growth pitch asks the streamer to add somebody on Discord immediately."
+                        .to_string()
+                ),
+            )]
         );
     }
 

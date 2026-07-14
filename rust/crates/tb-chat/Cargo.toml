@@ -27,5 +27,6 @@ tb-transport-twitch = { workspace = true }
 tb-llm      = { workspace = true }
 
 [dev-dependencies]
-tokio    = { workspace = true, features = ["rt-multi-thread", "macros"] }
-wiremock = { workspace = true }
+tokio              = { workspace = true, features = ["rt-multi-thread", "macros"] }
+tracing-subscriber = { workspace = true }
+wiremock           = { workspace = true }
