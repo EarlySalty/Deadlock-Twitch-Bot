@@ -115,6 +115,62 @@ async fn ledger_speichert_auch_clean_entscheidung_vollstaendig() {
     assert_eq!(row.10.as_deref(), Some("harmlos"));
     assert_eq!(row.11, "none");
     assert_eq!(row.12, "network");
+
+    for verdict in [
+        "error",
+        "timeout",
+        "unsure",
+        "skipped",
+        "campaign",
+        "hard_id",
+        "hard_invite",
+    ] {
+        let record = CrewRadarLog {
+            channel_login: "kanal".to_string(),
+            chatter_login: verdict.to_string(),
+            chatter_id: None,
+            account_age_days: None,
+            style_score: 0,
+            style_breakdown: StyleBreakdown {
+                pitch: 0,
+                campaign: 0,
+                typo: 0,
+                bro: 0,
+                lowercase: 0,
+                opener: 0,
+                cosine: 0,
+            },
+            time_window_match: false,
+            messages: Vec::new(),
+            llm_verdict: verdict.to_string(),
+            llm_confidence: None,
+            llm_reasoning: None,
+            action_taken: "none".to_string(),
+            source: "network".to_string(),
+        };
+        persist_radar_log(&pool, &record)
+            .await
+            .expect("Ledger schreiben");
+    }
+
+    let verdicts: Vec<String> =
+        sqlx::query_scalar("SELECT llm_verdict FROM twitch_crew_radar_log ORDER BY id")
+            .fetch_all(&pool)
+            .await
+            .expect("Verdicts lesen");
+    assert_eq!(
+        verdicts,
+        [
+            "clean",
+            "error",
+            "timeout",
+            "unsure",
+            "skipped",
+            "campaign",
+            "hard_id",
+            "hard_invite",
+        ]
+    );
 }
 
 #[tokio::test]
@@ -348,7 +404,7 @@ async fn observe_meldet_hard_id_auch_bei_etabliertem_chatter() {
 
     wait_for_ledger(&pool, 1).await;
     wait_for_alerts(&server, 1).await;
-    assert_eq!(ledger_verdicts(&pool).await, ["hard_hit"]);
+    assert_eq!(ledger_verdicts(&pool).await, ["hard_id"]);
 }
 
 #[tokio::test]
@@ -366,7 +422,7 @@ async fn observe_meldet_hard_id_auch_mit_subscriber_badge() {
 
     wait_for_ledger(&pool, 1).await;
     wait_for_alerts(&server, 1).await;
-    assert_eq!(ledger_verdicts(&pool).await, ["hard_hit"]);
+    assert_eq!(ledger_verdicts(&pool).await, ["hard_id"]);
 }
 
 #[tokio::test]
@@ -384,7 +440,7 @@ async fn observe_meldet_hard_invite_auch_bei_etabliertem_chatter() {
 
     wait_for_ledger(&pool, 1).await;
     wait_for_alerts(&server, 1).await;
-    assert_eq!(ledger_verdicts(&pool).await, ["hard_hit"]);
+    assert_eq!(ledger_verdicts(&pool).await, ["hard_invite"]);
 }
 
 #[tokio::test]
@@ -449,5 +505,5 @@ async fn observe_sendet_pro_vorfall_genau_eine_discord_meldung() {
             .len(),
         1
     );
-    assert_eq!(ledger_verdicts(&pool).await, ["hard_hit"]);
+    assert_eq!(ledger_verdicts(&pool).await, ["hard_id"]);
 }

@@ -56,6 +56,33 @@ struct RadarDecision {
     message: String,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum RadarVerdict {
+    Campaign,
+    HardId,
+    HardInvite,
+    Error,
+    Timeout,
+    Unsure,
+    Clean,
+    Skipped,
+}
+
+impl RadarVerdict {
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::Campaign => "campaign",
+            Self::HardId => "hard_id",
+            Self::HardInvite => "hard_invite",
+            Self::Error => "error",
+            Self::Timeout => "timeout",
+            Self::Unsure => "unsure",
+            Self::Clean => "clean",
+            Self::Skipped => "skipped",
+        }
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct CrewJudgeFacts {
     pub style_score: StyleScore,
@@ -676,23 +703,35 @@ fn format_radar_message(
     style: &StyleScore,
     account_age_days: Option<i64>,
     time_window_match: bool,
-    verdict: &str,
-    signal: &CrewSignal,
+    verdict: RadarVerdict,
     confidence: Option<f32>,
     reasoning: Option<&str>,
     messages: &[String],
 ) -> String {
-    let heading = match (verdict, signal) {
-        ("hard_hit", CrewSignal::HardId { .. }) => {
-            format!("🚨 **{login}** in #{channel} ist ein bekanntes Konto der Ricky-Gruppe.")
-        }
-        ("hard_hit", CrewSignal::HardInvite { .. }) => {
-            format!("🚨 **{login}** in #{channel} hat einen bekannten Rival-Invite gepostet.")
-        }
-        ("campaign", _) => {
+    let verdict_text = verdict.as_str();
+    let heading = match verdict {
+        RadarVerdict::Campaign => {
             format!("🆕 Neuer Account **{login}** in #{channel} zeigt das Kampagnen-Muster.")
         }
-        _ => format!("🔎 Radar-Log: **{login}** in #{channel} geprüft, kein Kampagnen-Muster."),
+        RadarVerdict::HardId => {
+            format!("🚨 **{login}** in #{channel} ist ein bekanntes Konto der Ricky-Gruppe.")
+        }
+        RadarVerdict::HardInvite => {
+            format!("🚨 **{login}** in #{channel} hat einen bekannten Rival-Invite gepostet.")
+        }
+        RadarVerdict::Error | RadarVerdict::Timeout => {
+            format!(
+                "⚠️ Radar-Log: **{login}** in #{channel} konnte NICHT geprüft werden — der Judge ist ausgefallen ({verdict_text}). Das ist KEIN Freispruch, ich hab kein Urteil. Guck selbst drauf."
+            )
+        }
+        RadarVerdict::Unsure => {
+            format!(
+                "❓ Radar-Log: **{login}** in #{channel} — der Judge ist sich nicht sicher, kein klares Urteil."
+            )
+        }
+        RadarVerdict::Clean | RadarVerdict::Skipped => {
+            format!("🔎 Radar-Log: **{login}** in #{channel} geprüft, kein Kampagnen-Muster.")
+        }
     };
     let age = account_age_days
         .map(|days| days.to_string())
@@ -712,13 +751,18 @@ fn format_radar_message(
         .map(|message| format!("> {}", message.replace(['\r', '\n'], " ")))
         .collect::<Vec<_>>()
         .join("\n");
-    let ending = if matches!(verdict, "campaign" | "hard_hit") {
-        "\nIch hab nichts getan."
-    } else {
-        ""
+    let ending = match verdict {
+        RadarVerdict::Campaign | RadarVerdict::HardId | RadarVerdict::HardInvite => {
+            "\nIch hab nichts getan."
+        }
+        RadarVerdict::Error
+        | RadarVerdict::Timeout
+        | RadarVerdict::Unsure
+        | RadarVerdict::Clean
+        | RadarVerdict::Skipped => "",
     };
     format!(
-        "{heading}\n**Ricky-Stil:** {} % ({})\n**Account-Alter:** {age} Tage\n**Rickys Zeitfenster:** {time_window}\n**Judge:** {verdict} ({confidence})\n{reasoning}\n**Nachrichten:**\n{messages}{ending}",
+        "{heading}\n**Ricky-Stil:** {} % ({})\n**Account-Alter:** {age} Tage\n**Rickys Zeitfenster:** {time_window}\n**Judge:** {verdict_text} ({confidence})\n{reasoning}\n**Nachrichten:**\n{messages}{ending}",
         style.total,
         format_breakdown(&style.breakdown),
     )
@@ -1030,28 +1074,29 @@ async fn decide(
         time_window_match,
     };
     let signal = screen(content, Some(chatter_id));
-    let (llm_verdict, llm_confidence, llm_reasoning) = match &signal {
+    let (verdict, llm_confidence, llm_reasoning) = match &signal {
         CrewSignal::Trigger { hits } => {
             let verdict = judge
                 .judge_with_facts(content, recent_context, &facts)
                 .await;
             let key = match verdict.status {
-                CrewVerdictStatus::Campaign if verdict.confidence >= threshold => "campaign",
-                CrewVerdictStatus::Campaign | CrewVerdictStatus::Unsure => "unsure",
-                CrewVerdictStatus::Clean => "clean",
-                CrewVerdictStatus::Error => "error",
-                CrewVerdictStatus::Timeout => "timeout",
+                CrewVerdictStatus::Campaign if verdict.confidence >= threshold => {
+                    RadarVerdict::Campaign
+                }
+                CrewVerdictStatus::Campaign | CrewVerdictStatus::Unsure => RadarVerdict::Unsure,
+                CrewVerdictStatus::Clean => RadarVerdict::Clean,
+                CrewVerdictStatus::Error => RadarVerdict::Error,
+                CrewVerdictStatus::Timeout => RadarVerdict::Timeout,
             };
             let reasoning = (!verdict.reasoning.is_empty()
                 && verdict.reasoning != JUDGE_FAILURE_WARNING_SENTINEL)
                 .then_some(verdict.reasoning);
             let _ = hits;
-            (key.to_string(), Some(verdict.confidence), reasoning)
+            (key, Some(verdict.confidence), reasoning)
         }
-        CrewSignal::HardId { .. } | CrewSignal::HardInvite { .. } => {
-            ("hard_hit".to_string(), Some(1.0), None)
-        }
-        CrewSignal::None => ("skipped".to_string(), None, None),
+        CrewSignal::HardId { .. } => (RadarVerdict::HardId, Some(1.0), None),
+        CrewSignal::HardInvite { .. } => (RadarVerdict::HardInvite, Some(1.0), None),
+        CrewSignal::None => (RadarVerdict::Skipped, None, None),
     };
     let message = format_radar_message(
         login,
@@ -1059,8 +1104,7 @@ async fn decide(
         &style,
         account_age_days,
         time_window_match,
-        &llm_verdict,
-        &signal,
+        verdict,
         llm_confidence,
         llm_reasoning.as_deref(),
         &messages,
@@ -1075,7 +1119,7 @@ async fn decide(
             style_breakdown: style.breakdown,
             time_window_match,
             messages,
-            llm_verdict,
+            llm_verdict: verdict.as_str().to_string(),
             llm_confidence,
             llm_reasoning,
             action_taken: "none".to_string(),
@@ -1148,6 +1192,16 @@ mod tests {
         })
     }
 
+    fn judge_status(status: CrewVerdictStatus) -> StubJudge {
+        StubJudge(CrewVerdict {
+            is_crew: false,
+            confidence: 0.0,
+            patterns: Vec::new(),
+            reasoning: String::new(),
+            status,
+        })
+    }
+
     fn radar_score() -> StyleScore {
         StyleScore {
             total: 85,
@@ -1201,8 +1255,7 @@ mod tests {
             &radar_score(),
             Some(3),
             true,
-            "campaign",
-            &CrewSignal::Trigger { hits: Vec::new() },
+            RadarVerdict::Campaign,
             Some(0.91),
             Some("klar"),
             &messages,
@@ -1220,20 +1273,19 @@ klar\n\
 Ich hab nichts getan."
         );
 
-        let clean = format_radar_message(
+        let skipped = format_radar_message(
             "viewer",
             "kanal",
             &radar_score(),
             None,
             false,
-            "skipped",
-            &CrewSignal::None,
+            RadarVerdict::Skipped,
             None,
             None,
             &["harmlos".to_string()],
         );
         assert_eq!(
-            clean,
+            skipped,
             "🔎 Radar-Log: **viewer** in #kanal geprüft, kein Kampagnen-Muster.\n\
 **Ricky-Stil:** 85 % (Pitch 40, Kampagne 30, Stil 8, Opener 5, Cosine 2)\n\
 **Account-Alter:** unbekannt Tage\n\
@@ -1243,6 +1295,93 @@ Ich hab nichts getan."
 **Nachrichten:**\n\
 > harmlos"
         );
+
+        let clean = format_radar_message(
+            "viewer",
+            "kanal",
+            &radar_score(),
+            None,
+            false,
+            RadarVerdict::Clean,
+            Some(0.2),
+            Some("harmlos"),
+            &["harmlos".to_string()],
+        );
+        assert!(
+            clean.starts_with("🔎 Radar-Log: **viewer** in #kanal geprüft, kein Kampagnen-Muster.")
+        );
+        assert!(clean.contains("**Judge:** clean (0.20)"));
+    }
+
+    #[tokio::test]
+    async fn error_wird_nie_als_freispruch_gemeldet() {
+        let decision = decide(
+            "hast du den bot von nani drin?",
+            "555000111",
+            "kanal",
+            "viewer",
+            JUDGE_CONFIDENCE_THRESHOLD,
+            &judge_status(CrewVerdictStatus::Error),
+            &[],
+            &Centroid::default(),
+            None,
+            false,
+        )
+        .await
+        .expect("Judge-Ausfall muss sichtbar bleiben");
+
+        assert!(decision.message.starts_with(
+            "⚠️ Radar-Log: **viewer** in #kanal konnte NICHT geprüft werden — der Judge ist ausgefallen (error). Das ist KEIN Freispruch, ich hab kein Urteil. Guck selbst drauf."
+        ));
+        assert!(decision.message.contains("NICHT geprüft"));
+        assert!(!decision.message.contains("kein Kampagnen-Muster"));
+    }
+
+    #[tokio::test]
+    async fn timeout_wird_nie_als_freispruch_gemeldet() {
+        let decision = decide(
+            "hast du den bot von nani drin?",
+            "555000111",
+            "kanal",
+            "viewer",
+            JUDGE_CONFIDENCE_THRESHOLD,
+            &judge_status(CrewVerdictStatus::Timeout),
+            &[],
+            &Centroid::default(),
+            None,
+            false,
+        )
+        .await
+        .expect("Judge-Timeout muss sichtbar bleiben");
+
+        assert!(decision.message.starts_with(
+            "⚠️ Radar-Log: **viewer** in #kanal konnte NICHT geprüft werden — der Judge ist ausgefallen (timeout). Das ist KEIN Freispruch, ich hab kein Urteil. Guck selbst drauf."
+        ));
+        assert!(decision.message.contains("NICHT geprüft"));
+        assert!(!decision.message.contains("kein Kampagnen-Muster"));
+    }
+
+    #[tokio::test]
+    async fn unsure_bekommt_eine_eigene_unsichere_meldung() {
+        let decision = decide(
+            "hast du den bot von nani drin?",
+            "555000111",
+            "kanal",
+            "viewer",
+            JUDGE_CONFIDENCE_THRESHOLD,
+            &judge_status(CrewVerdictStatus::Unsure),
+            &[],
+            &Centroid::default(),
+            None,
+            false,
+        )
+        .await
+        .expect("unsicheres Judge-Urteil muss sichtbar bleiben");
+
+        assert!(decision.message.starts_with(
+            "❓ Radar-Log: **viewer** in #kanal — der Judge ist sich nicht sicher, kein klares Urteil."
+        ));
+        assert!(!decision.message.contains("kein Kampagnen-Muster"));
     }
 
     #[tokio::test]
@@ -1282,7 +1421,7 @@ Ich hab nichts getan."
         .await
         .expect("HardId muss gemeldet werden");
 
-        assert_eq!(decision.log.llm_verdict, "hard_hit");
+        assert_eq!(decision.log.llm_verdict, "hard_id");
         assert_eq!(decision.log.llm_confidence, Some(1.0));
         assert_eq!(decision.log.llm_reasoning, None);
         assert!(decision.message.starts_with(
@@ -1308,7 +1447,7 @@ Ich hab nichts getan."
         .await
         .expect("HardInvite muss gemeldet werden");
 
-        assert_eq!(decision.log.llm_verdict, "hard_hit");
+        assert_eq!(decision.log.llm_verdict, "hard_invite");
         assert_eq!(decision.log.llm_confidence, Some(1.0));
         assert_eq!(decision.log.llm_reasoning, None);
         assert!(decision
