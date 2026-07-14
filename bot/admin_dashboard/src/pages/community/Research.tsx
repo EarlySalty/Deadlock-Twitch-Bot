@@ -256,7 +256,7 @@ export default function ResearchPage() {
             </div>
           </label>
           <button
-            className="rounded-2xl bg-primary px-6 py-3 font-semibold text-white transition hover:brightness-110 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary focus-visible:ring-offset-2 focus-visible:ring-offset-background"
+            className="rounded-2xl bg-primary px-6 py-3 font-semibold text-bg transition hover:brightness-110 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary focus-visible:ring-offset-2 focus-visible:ring-offset-background"
             type="submit"
           >
             {COPY.submit}

@@ -98,12 +98,12 @@ export default function PricingHero() {
           disabled={trialState === 'loading' || trialState === 'granted' || isBlocked}
           className={`inline-flex items-center gap-2 px-8 py-4 rounded-xl font-semibold text-lg transition-all duration-200 ${
             trialState === 'granted'
-              ? 'bg-[#00D9FF] text-white shadow-lg shadow-[#00D9FF]/25'
+              ? 'bg-[#00D9FF] text-bg shadow-lg shadow-[#00D9FF]/25'
               : isBlocked
               ? 'bg-white/10 text-white/40 cursor-default'
               : trialState === 'error'
               ? 'bg-danger/80 text-white'
-              : 'bg-gradient-to-r from-[#C5A059] to-[#F1D299] text-white shadow-lg shadow-[#C5A059]/25 hover:shadow-[#C5A059]/40 hover:scale-105'
+              : 'bg-gradient-to-r from-[#C5A059] to-[#F1D299] text-bg shadow-lg shadow-[#C5A059]/25 hover:shadow-[#C5A059]/40 hover:scale-105'
           }`}
         >
           {trialState === 'loading' && <Loader2 className="w-5 h-5 animate-spin" />}

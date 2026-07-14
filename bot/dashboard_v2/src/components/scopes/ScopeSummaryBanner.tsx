@@ -44,7 +44,7 @@ export function ScopeSummaryBanner({ onOpenTab }: ScopeSummaryBannerProps) {
           <button
             type="button"
             onClick={onOpenTab}
-            className="flex items-center gap-1 rounded-lg bg-accent px-3 py-2 text-sm font-semibold text-white transition hover:bg-accent/80"
+            className="flex items-center gap-1 rounded-lg bg-accent px-3 py-2 text-sm font-semibold text-bg transition hover:bg-accent/80"
           >
             Details
             <ChevronRight className="h-4 w-4" />

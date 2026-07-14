@@ -23,16 +23,16 @@ const tierConfig = {
     color: 'text-[#C5A059]',
     borderColor: 'border-[#C5A059]/40',
     gradient: 'from-[#C5A059]/5 to-transparent',
-    badge: { text: 'Beliebt', icon: Star, className: 'bg-[#C5A059] text-white' },
-    ctaStyle: 'bg-[#C5A059] hover:bg-[#F1D299] text-white shadow-lg shadow-[#C5A059]/20',
+    badge: { text: 'Beliebt', icon: Star, className: 'bg-[#C5A059] text-bg' },
+    ctaStyle: 'bg-[#C5A059] hover:bg-[#F1D299] text-bg shadow-lg shadow-[#C5A059]/20',
   },
   extended: {
     icon: Crown,
     color: 'text-[#00D9FF]',
     borderColor: 'border-[#00D9FF]/40',
     gradient: 'from-[#00D9FF]/5 to-transparent',
-    badge: { text: 'Empfohlen', icon: Sparkles, className: 'bg-gradient-to-r from-[#00D9FF] to-[#C5A059] text-white' },
-    ctaStyle: 'bg-gradient-to-r from-[#00D9FF] to-[#C5A059] hover:opacity-90 text-white shadow-lg shadow-[#00D9FF]/20',
+    badge: { text: 'Empfohlen', icon: Sparkles, className: 'bg-gradient-to-r from-[#00D9FF] to-[#C5A059] text-bg' },
+    ctaStyle: 'bg-gradient-to-r from-[#00D9FF] to-[#C5A059] hover:opacity-90 text-bg shadow-lg shadow-[#00D9FF]/20',
   },
 };
 
@@ -96,7 +96,7 @@ export default function PlanCardRedesign({ plan, index, cycle = 1 }: PlanCardRed
   const isPopular = plan.id === 'raid_boost';
   const isRecommended = plan.tier === 'extended' && !isBundle;
   const badge = isBundle
-    ? { text: 'Bundle', icon: Sparkles, className: 'bg-gradient-to-r from-[#00D9FF] to-[#00D9FF] text-white' }
+    ? { text: 'Bundle', icon: Sparkles, className: 'bg-gradient-to-r from-[#00D9FF] to-[#00D9FF] text-bg' }
     : isPopular || isRecommended
     ? config.badge
     : null;

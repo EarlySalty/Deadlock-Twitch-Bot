@@ -101,7 +101,7 @@ export function CategoryTimingsChart({ data }: CategoryTimingsChartProps) {
           <button
             onClick={() => setView('hourly')}
             className={`flex items-center gap-1.5 px-3 py-1.5 rounded-md text-xs font-medium transition-colors ${
-              view === 'hourly' ? 'bg-accent text-white' : 'text-text-secondary hover:text-white'
+              view === 'hourly' ? 'bg-accent text-bg' : 'text-text-secondary hover:text-white'
             }`}
           >
             <Clock className="w-3 h-3" /> Stunde
@@ -109,7 +109,7 @@ export function CategoryTimingsChart({ data }: CategoryTimingsChartProps) {
           <button
             onClick={() => setView('weekly')}
             className={`flex items-center gap-1.5 px-3 py-1.5 rounded-md text-xs font-medium transition-colors ${
-              view === 'weekly' ? 'bg-accent text-white' : 'text-text-secondary hover:text-white'
+              view === 'weekly' ? 'bg-accent text-bg' : 'text-text-secondary hover:text-white'
             }`}
           >
             <Calendar className="w-3 h-3" /> Wochentag

@@ -236,7 +236,7 @@ export default function FeaturePicker({ plans, cycle }: FeaturePickerProps) {
             ) : (
               <>
                 {isBundle && (
-                  <span className="inline-block text-xs font-semibold px-2 py-0.5 rounded-full bg-gradient-to-r from-[#00D9FF] to-[#C5A059] text-white mb-2">
+                  <span className="inline-block text-xs font-semibold px-2 py-0.5 rounded-full bg-gradient-to-r from-[#00D9FF] to-[#C5A059] text-bg mb-2">
                     Bundle
                   </span>
                 )}
@@ -267,7 +267,7 @@ export default function FeaturePicker({ plans, cycle }: FeaturePickerProps) {
               isFree
                 ? 'bg-white/10 hover:bg-white/15 text-white'
                 : isBundle
-                ? 'bg-gradient-to-r from-[#00D9FF] to-[#C5A059] hover:opacity-90 text-white shadow-lg shadow-[#00D9FF]/20'
+                ? 'bg-gradient-to-r from-[#00D9FF] to-[#C5A059] hover:opacity-90 text-bg shadow-lg shadow-[#00D9FF]/20'
                 : 'bg-white/15 hover:bg-white/20 text-white'
             }`}
           >

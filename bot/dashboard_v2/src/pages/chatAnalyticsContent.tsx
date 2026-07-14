@@ -437,7 +437,7 @@ function ChatterCard({
       : rank === 2
         ? 'bg-gradient-to-br from-text-secondary to-card-hover text-black'
         : rank === 3
-          ? 'bg-gradient-to-br from-primary/70 to-primary/30 text-white'
+          ? 'bg-gradient-to-br from-primary/60 to-primary/25 text-white'
           : 'bg-border text-text-secondary';
 
   return (

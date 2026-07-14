@@ -76,6 +76,44 @@ test('keine Tailwind-Standardfarben (die ueberleben jeden Farb-Remap)', () => {
   assert.deepEqual(strays, [], `Tailwind-Standardfarben gefunden:\n${strays.join('\n')}`);
 });
 
+test('kein weisser Text auf heller Markenflaeche', () => {
+  /*
+   * Das alte Teal (#55978f) war dunkel genug fuer weisse Schrift. Plasma-Blau
+   * (#00D9FF) und Antik-Gold (#C5A059) sind es nicht: Weiss liegt dort bei
+   * 1.70:1 bzw. 2.46:1 — die Billing-CTAs waren nach dem Rebrand faktisch
+   * unlesbar. Ein Build faengt das nicht, dieser Test schon.
+   *
+   * Geprueft wird zeilenweise: Flaeche und Textfarbe eines Ternary-Zweigs
+   * stehen immer zusammen, waehrend eine Datei durchaus daneben ein
+   * legitimes `bg-white/15 text-white` (weisse Transparenz auf dunklem
+   * Grund) enthalten darf.
+   */
+  const BRIGHT_SURFACE =
+    /\b(bg|from|to)-(\[#(00d9ff|00ff88|c5a059|f1d299|5ce7ff)\]|accent|primary|success)(\/(100|[7-9]\d))?(?=[\s"'`])/i;
+  // bg-primary/60 ist nachgerechnet: zu 60% deckendes Gold auf dunklem Grund
+  // ist selbst dunkel — Weiss 5.16:1 schlaegt dort Dunkel 3.73:1.
+  const ALLOWED = /bg-(primary|accent|success)\/[1-6]\d?\b/;
+  const WHITE_TEXT = /(?<!hover:)(?<!focus:)(?<!group-hover:)\btext-white\b/;
+
+  const strays: string[] = [];
+  for (const app of APPS) {
+    for (const file of sourceFiles(app)) {
+      const lines = readFileSync(file, 'utf8').split('\n');
+      lines.forEach((line, i) => {
+        if (!WHITE_TEXT.test(line)) return;
+        if (!BRIGHT_SURFACE.test(line)) return;
+        if (ALLOWED.test(line)) return;
+        strays.push(`${file}:${i + 1}: ${line.trim().slice(0, 90)}`);
+      });
+    }
+  }
+  assert.deepEqual(
+    strays,
+    [],
+    `Weisser Text auf heller Markenflaeche (unlesbar):\n${strays.join('\n')}`,
+  );
+});
+
 test('Pergament-Tinten halten Kontrast >= 4.5:1 gegen das Papier', () => {
   // Auf hellem Pergament sind Antik-Gold und Plasma unlesbar (~2.5:1).
   // Die ink-Toene sind genau dafuer da — hier wird das nachgerechnet.

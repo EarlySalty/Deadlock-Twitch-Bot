@@ -457,7 +457,7 @@ export function StimmungTopicsSection({ data }: { data: ChatContentAnalysis }) {
             )}
             {data.engagementDepth.discussionPct > 0 && (
               <div
-                className="flex items-center justify-center bg-success/60 text-xs font-medium text-white"
+                className="flex items-center justify-center bg-success/60 text-xs font-medium text-bg"
                 style={{
                   width: `${clampPercent(data.engagementDepth.discussionPct)}%`,
                   minWidth: clampPercent(data.engagementDepth.discussionPct) > 8 ? undefined : '2px',
