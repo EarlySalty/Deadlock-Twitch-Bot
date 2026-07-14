@@ -95,6 +95,24 @@ fn judge_json_parses_valid_and_rejects_broken_payloads() {
     assert!(parse_judge_json("kein json").is_err());
     assert!(parse_judge_json(r#"{"trigger":"unbekannt","confidence":0.8,"quote":"x"}"#).is_err());
     assert!(parse_judge_json(r#"{"trigger":"lfg","confidence":1.2,"quote":"x"}"#).is_err());
+
+    // MiniMax-M3-Realität (Live-judge_error 2026-07-14): Reasoning-Block,
+    // Code-Fence oder Prosa um das JSON herum muessen toleriert werden.
+    let think = parse_judge_json(
+        "<think>der streamer klagt ueber bots</think>\n{\"trigger\":\"spam_bots\",\"confidence\":0.8,\"quote\":\"bots overall\"}",
+    )
+    .expect("Think-Block vor dem JSON");
+    assert_eq!(think.trigger_type, Some(TriggerType::SpamBots));
+    let fenced = parse_judge_json(
+        "```json\n{\"trigger\":\"lfg\",\"confidence\":0.9,\"quote\":\"wer will zocken\"}\n```",
+    )
+    .expect("Code-Fence um das JSON");
+    assert_eq!(fenced.trigger_type, Some(TriggerType::Lfg));
+    let prose = parse_judge_json(
+        "Hier ist meine Analyse: {\"trigger\":\"none\",\"confidence\":0.3,\"quote\":\"\"} Ende.",
+    )
+    .expect("Prosa um das JSON");
+    assert_eq!(prose.trigger_type, None);
 }
 
 #[test]

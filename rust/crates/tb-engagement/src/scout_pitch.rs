@@ -219,16 +219,23 @@ pub fn parse_pitch_json(raw: &str) -> Result<Vec<String>, ParseError> {
 }
 
 fn json_body(raw: &str) -> &str {
-    let trimmed = raw.trim();
-    let without_open = trimmed
+    let mut body = raw.trim();
+    // MiniMax-M3 ist ein Reasoning-Modell: vor dem JSON kann ein
+    // <think>…</think>-Block stehen (wie in minimax_chat::process_response_text).
+    if let Some(end) = body.find("</think>") {
+        body = body[end + "</think>".len()..].trim();
+    }
+    body = body
         .strip_prefix("```json")
-        .or_else(|| trimmed.strip_prefix("```"))
-        .unwrap_or(trimmed)
+        .or_else(|| body.strip_prefix("```"))
+        .unwrap_or(body)
         .trim();
-    without_open
-        .strip_suffix("```")
-        .unwrap_or(without_open)
-        .trim()
+    body = body.strip_suffix("```").unwrap_or(body).trim();
+    // Catch-all gegen Prosa um das Objekt: erstes '{' bis letztes '}'.
+    match (body.find('{'), body.rfind('}')) {
+        (Some(start), Some(end)) if start < end => &body[start..=end],
+        _ => body,
+    }
 }
 
 #[derive(Debug, Clone)]
