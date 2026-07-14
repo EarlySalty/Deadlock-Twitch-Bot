@@ -9,4 +9,6 @@ pub use backend::{
     SendUserDm,
 };
 pub use noop::HeadlessNoop;
-pub use relay::{BrokerRelay, GuildMember, InviteInfo, ResolvedDiscordUser};
+pub use relay::{
+    BrokerRelay, GuildMember, InviteInfo, MessageReaction, MessageReactions, ResolvedDiscordUser,
+};

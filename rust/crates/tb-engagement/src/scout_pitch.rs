@@ -219,16 +219,23 @@ pub fn parse_pitch_json(raw: &str) -> Result<Vec<String>, ParseError> {
 }
 
 fn json_body(raw: &str) -> &str {
-    let trimmed = raw.trim();
-    let without_open = trimmed
+    let mut body = raw.trim();
+    // MiniMax-M3 ist ein Reasoning-Modell: vor dem JSON kann ein
+    // <think>…</think>-Block stehen (wie in minimax_chat::process_response_text).
+    if let Some(end) = body.find("</think>") {
+        body = body[end + "</think>".len()..].trim();
+    }
+    body = body
         .strip_prefix("```json")
-        .or_else(|| trimmed.strip_prefix("```"))
-        .unwrap_or(trimmed)
+        .or_else(|| body.strip_prefix("```"))
+        .unwrap_or(body)
         .trim();
-    without_open
-        .strip_suffix("```")
-        .unwrap_or(without_open)
-        .trim()
+    body = body.strip_suffix("```").unwrap_or(body).trim();
+    // Catch-all gegen Prosa um das Objekt: erstes '{' bis letztes '}'.
+    match (body.find('{'), body.rfind('}')) {
+        (Some(start), Some(end)) if start < end => &body[start..=end],
+        _ => body,
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -241,6 +248,12 @@ pub struct LedgerEntry {
     pub action: LedgerAction,
     pub detail: Option<String>,
     pub discord_message_id: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FeedbackSyncTarget {
+    pub id: i64,
+    pub discord_message_id: String,
 }
 
 #[derive(Clone)]
@@ -294,6 +307,46 @@ impl ScoutPitchLedger {
         .bind(entry.action.as_str())
         .bind(&entry.detail)
         .bind(&entry.discord_message_id)
+        .execute(&self.pool)
+        .await?;
+        Ok(())
+    }
+
+    pub async fn feedback_sync_targets(&self) -> Result<Vec<FeedbackSyncTarget>, sqlx::Error> {
+        sqlx::query_as::<_, (i64, String)>(
+            "SELECT id, discord_message_id FROM twitch_scout_pitch_ledger \
+             WHERE action = 'posted' AND discord_message_id IS NOT NULL \
+               AND created_at > NOW() - INTERVAL '14 days' \
+             ORDER BY id",
+        )
+        .fetch_all(&self.pool)
+        .await
+        .map(|rows| {
+            rows.into_iter()
+                .map(|(id, discord_message_id)| FeedbackSyncTarget {
+                    id,
+                    discord_message_id,
+                })
+                .collect()
+        })
+    }
+
+    pub async fn update_feedback(
+        &self,
+        id: i64,
+        feedback_up: Option<i32>,
+        feedback_down: Option<i32>,
+    ) -> Result<(), sqlx::Error> {
+        sqlx::query(
+            "UPDATE twitch_scout_pitch_ledger \
+             SET feedback_up = COALESCE($2, feedback_up), \
+                 feedback_down = COALESCE($3, feedback_down), \
+                 feedback_synced_at = NOW() \
+             WHERE id = $1",
+        )
+        .bind(id)
+        .bind(feedback_up)
+        .bind(feedback_down)
         .execute(&self.pool)
         .await?;
         Ok(())
