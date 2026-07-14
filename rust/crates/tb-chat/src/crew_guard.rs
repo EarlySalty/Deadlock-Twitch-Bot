@@ -677,14 +677,22 @@ fn format_radar_message(
     account_age_days: Option<i64>,
     time_window_match: bool,
     verdict: &str,
+    signal: &CrewSignal,
     confidence: Option<f32>,
     reasoning: Option<&str>,
     messages: &[String],
 ) -> String {
-    let heading = if verdict == "campaign" {
-        format!("🆕 Neuer Account **{login}** in #{channel} zeigt das Kampagnen-Muster.")
-    } else {
-        format!("🔎 Radar-Log: **{login}** in #{channel} geprüft, kein Kampagnen-Muster.")
+    let heading = match (verdict, signal) {
+        ("hard_hit", CrewSignal::HardId { .. }) => {
+            format!("🚨 **{login}** in #{channel} ist ein bekanntes Konto der Ricky-Gruppe.")
+        }
+        ("hard_hit", CrewSignal::HardInvite { .. }) => {
+            format!("🚨 **{login}** in #{channel} hat einen bekannten Rival-Invite gepostet.")
+        }
+        ("campaign", _) => {
+            format!("🆕 Neuer Account **{login}** in #{channel} zeigt das Kampagnen-Muster.")
+        }
+        _ => format!("🔎 Radar-Log: **{login}** in #{channel} geprüft, kein Kampagnen-Muster."),
     };
     let age = account_age_days
         .map(|days| days.to_string())
@@ -704,7 +712,7 @@ fn format_radar_message(
         .map(|message| format!("> {}", message.replace(['\r', '\n'], " ")))
         .collect::<Vec<_>>()
         .join("\n");
-    let ending = if verdict == "campaign" {
+    let ending = if matches!(verdict, "campaign" | "hard_hit") {
         "\nIch hab nichts getan."
     } else {
         ""
@@ -1024,7 +1032,7 @@ async fn decide(
     } else {
         screen(content, Some(chatter_id))
     };
-    let (llm_verdict, llm_confidence, llm_reasoning) = match signal {
+    let (llm_verdict, llm_confidence, llm_reasoning) = match &signal {
         CrewSignal::Trigger { hits } => {
             let verdict = judge
                 .judge_with_facts(content, recent_context, &facts)
@@ -1042,9 +1050,10 @@ async fn decide(
             let _ = hits;
             (key.to_string(), Some(verdict.confidence), reasoning)
         }
-        CrewSignal::HardId { .. } | CrewSignal::HardInvite { .. } | CrewSignal::None => {
-            ("skipped".to_string(), None, None)
+        CrewSignal::HardId { .. } | CrewSignal::HardInvite { .. } => {
+            ("hard_hit".to_string(), Some(1.0), None)
         }
+        CrewSignal::None => ("skipped".to_string(), None, None),
     };
     let message = format_radar_message(
         login,
@@ -1053,6 +1062,7 @@ async fn decide(
         account_age_days,
         time_window_match,
         &llm_verdict,
+        &signal,
         llm_confidence,
         llm_reasoning.as_deref(),
         &messages,
@@ -1194,6 +1204,7 @@ mod tests {
             Some(3),
             true,
             "campaign",
+            &CrewSignal::Trigger { hits: Vec::new() },
             Some(0.91),
             Some("klar"),
             &messages,
@@ -1218,6 +1229,7 @@ Ich hab nichts getan."
             None,
             false,
             "skipped",
+            &CrewSignal::None,
             None,
             None,
             &["harmlos".to_string()],
@@ -1253,6 +1265,65 @@ Ich hab nichts getan."
         .expect("unprivilegierte Erstschreiber-Prüfung muss sichtbar bleiben");
         assert_eq!(decision.log.llm_verdict, "skipped");
         assert!(decision.message.starts_with("🔎 Radar-Log:"));
+    }
+
+    #[tokio::test]
+    async fn hard_id_wird_als_harter_treffer_geloggt_und_gemeldet() {
+        let decision = decide(
+            "hallo zusammen, alles gut?",
+            "147713656",
+            "kanal",
+            "helmbombenricky",
+            JUDGE_CONFIDENCE_THRESHOLD,
+            &judge_nein(),
+            &[],
+            &Centroid::default(),
+            None,
+            false,
+        )
+        .await
+        .expect("HardId muss gemeldet werden");
+
+        assert_eq!(decision.log.llm_verdict, "hard_hit");
+        assert_eq!(decision.log.llm_confidence, Some(1.0));
+        assert_eq!(decision.log.llm_reasoning, None);
+        assert!(decision.message.starts_with(
+            "🚨 **helmbombenricky** in #kanal ist ein bekanntes Konto der Ricky-Gruppe."
+        ));
+        assert!(!decision.message.contains("kein Kampagnen-Muster"));
+    }
+
+    #[tokio::test]
+    async fn hard_invite_wird_als_harter_treffer_geloggt_und_gemeldet() {
+        let decision = decide(
+            "https://discord.gg/ZWSNyNfdG",
+            "999999999",
+            "kanal",
+            "viewer",
+            JUDGE_CONFIDENCE_THRESHOLD,
+            &judge_nein(),
+            &[],
+            &Centroid::default(),
+            None,
+            false,
+        )
+        .await
+        .expect("HardInvite muss gemeldet werden");
+
+        assert_eq!(decision.log.llm_verdict, "hard_hit");
+        assert_eq!(decision.log.llm_confidence, Some(1.0));
+        assert_eq!(decision.log.llm_reasoning, None);
+        assert!(decision
+            .message
+            .starts_with("🚨 **viewer** in #kanal hat einen bekannten Rival-Invite gepostet."));
+        assert!(!decision.message.contains("kein Kampagnen-Muster"));
+    }
+
+    #[test]
+    fn hard_id_hat_genau_einen_discord_meldeweg() {
+        let source = include_str!("crew_guard.rs");
+        let send_call = ["alerter", ".send_crew_campaign("].concat();
+        assert_eq!(source.matches(&send_call).count(), 1);
     }
 
     #[test]
