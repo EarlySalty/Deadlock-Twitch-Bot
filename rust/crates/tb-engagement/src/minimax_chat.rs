@@ -112,9 +112,11 @@ pub fn sanitize_chat_text(text: &str, max_len: usize) -> Option<String> {
 }
 
 fn is_emoji_component(c: char) -> bool {
+    // 0x1F000 statt 0x1F300: deckt auch Regional-Indicator-Flaggen (U+1F1E6..)
+    // und Enclosed-Blöcke ab; 0x2B00..=0x2BFF fängt ⭐/⬛-Symbole.
     matches!(
         c as u32,
-        0x1F300..=0x1FAFF | 0x2600..=0x27BF | 0xFE00..=0xFE0F | 0xE0100..=0xE01EF | 0x200D
+        0x1F000..=0x1FAFF | 0x2600..=0x27BF | 0x2B00..=0x2BFF | 0xFE00..=0xFE0F | 0xE0100..=0xE01EF | 0x200D
     )
 }
 
@@ -589,6 +591,10 @@ mod tests {
         assert_eq!(
             sanitize_chat_text("ne!! echt jetzt!!!", 120),
             Some("ne echt jetzt".to_string())
+        );
+        assert_eq!(
+            sanitize_chat_text("🇩🇪 sieg ⭐ easy 🀄", 120),
+            Some("sieg easy".to_string())
         );
     }
 
