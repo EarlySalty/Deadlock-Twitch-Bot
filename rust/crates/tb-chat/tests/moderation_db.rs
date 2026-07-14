@@ -12,7 +12,8 @@ use sqlx::postgres::{PgConnectOptions, PgPoolOptions};
 use sqlx::PgPool;
 use tb_chat::api::{BanOutcome, ChatApi};
 use tb_chat::moderation::{
-    AutoBanRequest, ModerationEngine, BAN_REASON_GLOBAL, BAN_REASON_SPAM, NOTICE_GLOBAL_BAN,
+    AutoBanRequest, ModerationEngine, ModerationEvidence, BAN_REASON_GLOBAL, BAN_REASON_SPAM,
+    NOTICE_GLOBAL_BAN,
 };
 use tb_chat::types::SendOutcome;
 
@@ -66,7 +67,25 @@ async fn apply_ddl(pool: &PgPool) {
             chatter_id TEXT NOT NULL,
             chatter_login TEXT NOT NULL,
             content TEXT,
-            banned_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+            banned_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+            action TEXT,
+            source_path TEXT,
+            reason TEXT,
+            score REAL,
+            account_age_days BIGINT
+        )"#,
+    )
+    .execute(pool)
+    .await
+    .unwrap();
+
+    sqlx::query(
+        r#"CREATE TABLE IF NOT EXISTS twitch_chat_messages (
+            id BIGSERIAL PRIMARY KEY,
+            message_id TEXT,
+            content TEXT,
+            moderation_action TEXT,
+            moderation_reason TEXT
         )"#,
     )
     .execute(pool)
@@ -148,26 +167,47 @@ async fn autoban_schreibt_in_db() {
     let pool = pool_or_skip!("autoban_write");
     let engine = ModerationEngine::new(Arc::new(OkApi), pool.clone());
 
+    sqlx::query("INSERT INTO twitch_chat_messages (message_id, content) VALUES ('msg-id-1', 'Spam-Inhalt hier')")
+        .execute(&pool)
+        .await
+        .unwrap();
+
     let ok = engine
-        .auto_ban_and_cleanup(AutoBanRequest {
-            channel_login: "testkanal",
-            broadcaster_id: "broadcaster-id",
-            bot_id: "bot-id",
-            chatter_login: "spammer42",
-            chatter_id: "user-42",
-            message_id: "msg-id-1",
-            content: "Spam-Inhalt hier",
-            ban: true,
-            reason_text: BAN_REASON_SPAM,
-            notice_text: None,
-            silent: true,
-        })
+        .auto_ban_and_cleanup_with_evidence(
+            AutoBanRequest {
+                channel_login: "testkanal",
+                broadcaster_id: "broadcaster-id",
+                bot_id: "bot-id",
+                chatter_login: "spammer42",
+                chatter_id: "user-42",
+                message_id: "msg-id-1",
+                content: "Spam-Inhalt hier",
+                ban: true,
+                reason_text: BAN_REASON_SPAM,
+                notice_text: None,
+                silent: true,
+            },
+            ModerationEvidence {
+                source_path: "spam",
+                reason: "Phrase(Exact): Best viewers streamboo.com",
+                score: Some(4.0),
+                account_age_days: Some(3),
+            },
+        )
         .await;
     assert!(ok, "AutoBan soll true zurückgeben");
 
     // DB-Eintrag prüfen
-    let (channel, chatter_login, content): (String, String, Option<String>) = sqlx::query_as(
-        "SELECT channel_login, chatter_login, content FROM tb_chat_autoban_log LIMIT 1",
+    let (channel, chatter_login, content, action, source_path, reason): (
+        String,
+        String,
+        Option<String>,
+        Option<String>,
+        Option<String>,
+        Option<String>,
+    ) = sqlx::query_as(
+        "SELECT channel_login, chatter_login, content, action, source_path, reason \
+         FROM tb_chat_autoban_log LIMIT 1",
     )
     .fetch_one(&pool)
     .await
@@ -176,6 +216,18 @@ async fn autoban_schreibt_in_db() {
     assert_eq!(channel, "testkanal");
     assert_eq!(chatter_login, "spammer42");
     assert_eq!(content.as_deref(), Some("Spam-Inhalt hier"));
+    assert_eq!(action.as_deref(), Some("ban"));
+    assert_eq!(source_path.as_deref(), Some("spam"));
+    assert!(reason.as_deref().unwrap().contains("streamboo.com"));
+
+    let (message_action, message_reason): (Option<String>, Option<String>) = sqlx::query_as(
+        "SELECT moderation_action, moderation_reason FROM twitch_chat_messages WHERE message_id = 'msg-id-1'",
+    )
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!(message_action.as_deref(), Some("ban"));
+    assert!(message_reason.as_deref().unwrap().contains("streamboo.com"));
 
     // Auto-Ban muss zusätzlich die öffentliche recent-bans-Statistik speisen:
     // ein 'ban'-Event in twitch_ban_events mit Spam-Inhalt als Grund.
@@ -228,29 +280,159 @@ async fn delete_only_schreibt_auch_in_db() {
     let pool = pool_or_skip!("autoban_delete_only");
     let engine = ModerationEngine::new(Arc::new(OkApi), pool.clone());
 
+    sqlx::query(
+        "INSERT INTO twitch_chat_messages (message_id, content) VALUES ('del_msg', 'Del-Inhalt')",
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
+
     engine
-        .auto_ban_and_cleanup(AutoBanRequest {
-            channel_login: "delkanal",
-            broadcaster_id: "bid",
-            bot_id: "bot",
-            chatter_login: "del_user",
-            chatter_id: "del_u1",
-            message_id: "del_msg",
-            content: "Del-Inhalt",
-            ban: false,
-            reason_text: BAN_REASON_SPAM,
-            notice_text: None,
-            silent: false,
-        })
+        .auto_ban_and_cleanup_with_evidence(
+            AutoBanRequest {
+                channel_login: "delkanal",
+                broadcaster_id: "bid",
+                bot_id: "bot",
+                chatter_login: "del_user",
+                chatter_id: "del_u1",
+                message_id: "del_msg",
+                content: "Del-Inhalt",
+                ban: false,
+                reason_text: BAN_REASON_SPAM,
+                notice_text: None,
+                silent: false,
+            },
+            ModerationEvidence {
+                source_path: "spam",
+                reason: "Fragment: streamboo",
+                score: Some(1.0),
+                account_age_days: None,
+            },
+        )
         .await;
 
-    let count: i64 = sqlx::query_scalar(
-        "SELECT COUNT(*)::bigint FROM tb_chat_autoban_log WHERE channel_login = 'delkanal'",
+    let (action, message_action): (Option<String>, Option<String>) = sqlx::query_as(
+        "SELECT l.action, m.moderation_action \
+         FROM tb_chat_autoban_log l \
+         JOIN twitch_chat_messages m ON m.message_id = 'del_msg' \
+         WHERE l.channel_login = 'delkanal'",
     )
     .fetch_one(&pool)
     .await
     .unwrap();
-    assert_eq!(count, 1, "Delete-only soll auch in DB persistiert werden");
+    assert_eq!(action.as_deref(), Some("delete_only"));
+    assert_eq!(message_action.as_deref(), Some("delete_only"));
+}
+
+#[tokio::test]
+async fn safe_list_unterdrueckung_wird_sichtbar() {
+    let pool = pool_or_skip!("autoban_safe_suppressed");
+    let engine = ModerationEngine::new(Arc::new(OkApi), pool.clone());
+    sqlx::query("INSERT INTO twitch_chat_messages (message_id, content) VALUES ('safe_msg', 'aiviewers bei streamboo')")
+        .execute(&pool)
+        .await
+        .unwrap();
+
+    let enforced = engine
+        .auto_ban_and_cleanup_with_evidence(
+            AutoBanRequest {
+                channel_login: "safechannel",
+                broadcaster_id: "bid",
+                bot_id: "bot",
+                chatter_login: "kubi_kubi_kubi",
+                chatter_id: "19123804",
+                message_id: "safe_msg",
+                content: "aiviewers bei streamboo",
+                ban: true,
+                reason_text: BAN_REASON_SPAM,
+                notice_text: None,
+                silent: false,
+            },
+            ModerationEvidence {
+                source_path: "spam",
+                reason: "Fragment: streamboo",
+                score: Some(3.0),
+                account_age_days: None,
+            },
+        )
+        .await;
+
+    assert!(!enforced);
+    let (log_action, message_action): (Option<String>, Option<String>) = sqlx::query_as(
+        "SELECT l.action, m.moderation_action \
+         FROM tb_chat_autoban_log l \
+         JOIN twitch_chat_messages m ON m.message_id = 'safe_msg' \
+         WHERE l.channel_login = 'safechannel'",
+    )
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!(log_action.as_deref(), Some("suppressed_safe_list"));
+    assert_eq!(message_action.as_deref(), Some("suppressed_safe_list"));
+}
+
+#[tokio::test]
+async fn normale_nachricht_bleibt_ohne_moderationsaktion() {
+    let pool = pool_or_skip!("autoban_normal_message");
+    sqlx::query("INSERT INTO twitch_chat_messages (message_id, content) VALUES ('normal_msg', 'Hallo zusammen')")
+        .execute(&pool)
+        .await
+        .unwrap();
+
+    let action: Option<String> = sqlx::query_scalar(
+        "SELECT moderation_action FROM twitch_chat_messages WHERE message_id = 'normal_msg'",
+    )
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert!(action.is_none());
+}
+
+#[tokio::test]
+async fn timeout_schreibt_aktion_und_judge_confidence() {
+    let pool = pool_or_skip!("autoban_timeout");
+    let engine = ModerationEngine::new(Arc::new(OkApi), pool.clone());
+    sqlx::query("INSERT INTO twitch_chat_messages (message_id, content) VALUES ('timeout_msg', 'verdächtig')")
+        .execute(&pool)
+        .await
+        .unwrap();
+
+    let enforced = engine
+        .timeout_and_cleanup_with_evidence(
+            "timeoutkanal",
+            "bid",
+            "timeout_user",
+            "timeout_uid",
+            "timeout_msg",
+            "verdächtig",
+            86_400,
+            BAN_REASON_SPAM,
+            ModerationEvidence {
+                source_path: "spam",
+                reason: "Judge: Werbung; Confidence: 0.92",
+                score: Some(0.92),
+                account_age_days: Some(2),
+            },
+        )
+        .await;
+
+    assert!(enforced);
+    let (log_action, source, reason, message_action): (
+        Option<String>,
+        Option<String>,
+        Option<String>,
+        Option<String>,
+    ) = sqlx::query_as(
+        "SELECT l.action, l.source_path, l.reason, m.moderation_action \
+         FROM tb_chat_autoban_log l JOIN twitch_chat_messages m ON m.message_id = 'timeout_msg'",
+    )
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!(log_action.as_deref(), Some("timeout"));
+    assert_eq!(source.as_deref(), Some("spam"));
+    assert!(reason.as_deref().unwrap().contains("0.92"));
+    assert_eq!(message_action.as_deref(), Some("timeout"));
 }
 
 #[tokio::test]

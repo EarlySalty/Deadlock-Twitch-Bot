@@ -97,11 +97,11 @@ impl ChatterTracker {
 
     /// Haupteintrittspunkt — entspricht `_track_chat_health` (moderation.py Z. 2098).
     /// Fehler-isoliert: loggt und kehrt bei jedem Fehler zurück.
-    pub async fn track(&self, event: &ChatMessageEvent) {
+    pub async fn track(&self, event: &ChatMessageEvent) -> Option<bool> {
         let login = event.broadcaster_user_login.to_lowercase();
         if login.is_empty() {
             debug!("chatter_tracking: fehlender channel-login — skip");
-            return;
+            return None;
         }
 
         let now = Utc::now();
@@ -110,14 +110,16 @@ impl ChatterTracker {
 
         // Gate 3: Chatter-Login vorhanden (Python Z. 2144–2155: Health-Heartbeat trotzdem).
         if chatter_login.is_empty() {
-            self.persist_health(&login, Some(&ts_iso), None, None, None).await;
-            return;
+            self.persist_health(&login, Some(&ts_iso), None, None, None)
+                .await;
+            return None;
         }
 
         // Gate 4: Known-Bot-Filter (Python Z. 2156–2166: Health-Heartbeat trotzdem).
         if KNOWN_CHAT_BOTS.contains(&chatter_login.as_str()) {
-            self.persist_health(&login, Some(&ts_iso), None, None, None).await;
-            return;
+            self.persist_health(&login, Some(&ts_iso), None, None, None)
+                .await;
+            return None;
         }
 
         // Gate 5: Session-Resolver (bot.py Z. 2168: offene Session, 60s-Cache).
@@ -125,13 +127,14 @@ impl ChatterTracker {
             Ok(id) => id,
             Err(e) => {
                 warn!(channel = %login, "chatter_tracking: session-resolve DB-Fehler — {e}");
-                return;
+                return None;
             }
         };
         let Some(session_id) = session_id else {
-            self.persist_health(&login, Some(&ts_iso), None, None, None).await;
+            self.persist_health(&login, Some(&ts_iso), None, None, None)
+                .await;
             debug!(channel = %login, "chatter_tracking: keine offene Session — skip");
-            return;
+            return None;
         };
 
         // Gate 6: Target-Game-Gate (moderation.py Z. 2191 + 2008–2080).
@@ -142,36 +145,41 @@ impl ChatterTracker {
             match self.is_target_game_live(&login, session_id).await {
                 Ok(true) => {}
                 Ok(false) => {
-                    self.persist_health(&login, Some(&ts_iso), None, None, None).await;
+                    self.persist_health(&login, Some(&ts_iso), None, None, None)
+                        .await;
                     debug!(channel = %login, "chatter_tracking: target-game gate blocked — skip");
-                    return;
+                    return None;
                 }
                 Err(e) => {
                     warn!(channel = %login, "chatter_tracking: game-gate DB-Fehler — {e}");
-                    return;
+                    return None;
                 }
             }
         }
 
         // --- Schreiben (eine Transaktion, Python Z. 2206–2343) ---
-        if let Err(e) = self
+        match self
             .write_tracked_message(event, &login, &chatter_login, session_id, now, &ts_iso)
             .await
         {
-            let error_text = truncate_raw_chat_error(&e.to_string());
-            self.persist_health(
-                &login,
-                Some(&ts_iso),
-                None,
-                Some(&ts_iso),
-                Some(error_text.as_deref()),
-            )
-            .await;
-            warn!(
-                channel = %login,
-                chatter = %chatter_login,
-                "chatter_tracking: insert fehlgeschlagen — {e}"
-            );
+            Ok(was_first_message) => Some(was_first_message),
+            Err(e) => {
+                let error_text = truncate_raw_chat_error(&e.to_string());
+                self.persist_health(
+                    &login,
+                    Some(&ts_iso),
+                    None,
+                    Some(&ts_iso),
+                    Some(error_text.as_deref()),
+                )
+                .await;
+                warn!(
+                    channel = %login,
+                    chatter = %chatter_login,
+                    "chatter_tracking: insert fehlgeschlagen — {e}"
+                );
+                None
+            }
         }
     }
 
@@ -205,11 +213,7 @@ impl ChatterTracker {
     /// Target-Game-Gate (`_is_target_game_live_for_chat`, moderation.py Z. 2008–2080):
     /// `twitch_live_state` zuerst; wenn keine Zeile existiert, Fallback auf die
     /// offene Session (`game_name`).
-    async fn is_target_game_live(
-        &self,
-        login: &str,
-        session_id: i64,
-    ) -> Result<bool, sqlx::Error> {
+    async fn is_target_game_live(&self, login: &str, session_id: i64) -> Result<bool, sqlx::Error> {
         let live_row = sqlx::query!(
             "SELECT COALESCE(is_live, 0) AS \"is_live!\", last_game \
              FROM twitch_live_state \
@@ -249,7 +253,7 @@ impl ChatterTracker {
         session_id: i64,
         now: DateTime<Utc>,
         ts_iso: &str,
-    ) -> Result<(), sqlx::Error> {
+    ) -> Result<bool, sqlx::Error> {
         let chatter_id: Option<&str> = if event.chatter_user_id.is_empty() {
             None
         } else {
@@ -414,7 +418,7 @@ impl ChatterTracker {
             "chatter_tracking: persisted"
         );
 
-        Ok(())
+        Ok(is_first_global)
     }
 
     /// Health-Upsert außerhalb einer Transaktion — best-effort, Fehler nur debug
@@ -713,7 +717,10 @@ mod db_tests {
         let pool = pool_or_skip!("ct_no_none_cache");
         let tracker = ChatterTracker::with_persist_all_games(pool.clone(), true);
 
-        assert_eq!(tracker.resolve_session_id("cheazycrust").await.unwrap(), None);
+        assert_eq!(
+            tracker.resolve_session_id("cheazycrust").await.unwrap(),
+            None
+        );
         sqlx::query(
             "INSERT INTO twitch_stream_sessions (id, streamer_login, ended_at, game_name) \
              VALUES (1, 'cheazycrust', NULL, 'Deadlock')",

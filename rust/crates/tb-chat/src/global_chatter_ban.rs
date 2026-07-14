@@ -34,8 +34,8 @@ const BAN_CACHE_MAX_ENTRIES: usize = 500;
 /// Entscheidet ob ein Chatter auf der globalen Bannliste steht.
 pub struct GlobalChatterBanEnforcer {
     pool: PgPool,
-    /// Positiver Cache: chatter_login (lowercase) → Instant des Eintragszeitpunkts.
-    cache: DashMap<String, Instant>,
+    /// Positiver Cache: chatter_login (lowercase) → Zeitpunkt + Banlisten-Grund.
+    cache: DashMap<String, (Instant, String)>,
 }
 
 impl GlobalChatterBanEnforcer {
@@ -51,16 +51,21 @@ impl GlobalChatterBanEnforcer {
     /// Fehler werden geloggt und geben `false` zurück (fail-safe: kein
     /// falscher Ban — Python Z. 751: `except: return False`).
     pub async fn is_banned(&self, event: &ChatMessageEvent) -> bool {
+        self.ban_reason(event).await.is_some()
+    }
+
+    /// Liefert bei einem Treffer den konkreten Grund aus der globalen Banliste.
+    pub async fn ban_reason(&self, event: &ChatMessageEvent) -> Option<String> {
         let chatter_login = event.chatter_user_login.to_lowercase();
         if chatter_login.is_empty() {
-            return false;
+            return None;
         }
 
         // Cache-Prüfung: positiver Treffer < 300s (moderation.py Z. 736–738)
-        let mut globally_banned = false;
+        let mut reason = None;
         if let Some(entry) = self.cache.get(&chatter_login) {
-            if entry.elapsed().as_secs() < BAN_CACHE_TTL_SECS {
-                globally_banned = true;
+            if entry.value().0.elapsed().as_secs() < BAN_CACHE_TTL_SECS {
+                reason = Some(entry.value().1.clone());
             } else {
                 // Abgelaufen → entfernen und DB befragen
                 drop(entry);
@@ -68,26 +73,22 @@ impl GlobalChatterBanEnforcer {
             }
         }
 
-        if !globally_banned {
+        if reason.is_none() {
             // DB-Check (pg.py Z. 4119–4134: Login ODER ID)
             match self
-                .is_globally_banned(&chatter_login, &event.chatter_user_id)
+                .global_ban_reason(&chatter_login, &event.chatter_user_id)
                 .await
             {
-                Ok(true) => {
-                    globally_banned = true;
-                }
-                Ok(false) => return false,
+                Ok(Some(db_reason)) => reason = Some(db_reason),
+                Ok(None) => return None,
                 Err(e) => {
                     warn!("global_chatter_ban: DB-Fehler — {}", e);
-                    return false;
+                    return None;
                 }
             }
         }
 
-        if !globally_banned {
-            return false;
-        }
+        let reason = reason?;
 
         match self
             .has_newer_channel_unban(
@@ -104,42 +105,44 @@ impl GlobalChatterBanEnforcer {
                     chatter = %chatter_login,
                     "global_chatter_ban: Sofort-Reban nach Channel-Unban unterdrückt"
                 );
-                false
+                None
             }
             Ok(false) => {
                 // Positiven Treffer cachen (moderation.py Z. 744–749)
-                self.cache.insert(chatter_login, Instant::now());
+                self.cache
+                    .insert(chatter_login, (Instant::now(), reason.clone()));
                 self.evict_if_needed();
-                true
+                Some(reason)
             }
             Err(e) => {
                 warn!(
                     "global_chatter_ban: Unban-Override-Check fehlgeschlagen — {}",
                     e
                 );
-                true
+                Some(reason)
             }
         }
     }
 
     /// DB-Abfrage: Login ODER ID — identisch mit `is_chatter_globally_banned`
     /// (pg.py Z. 4119–4134).
-    async fn is_globally_banned(
+    async fn global_ban_reason(
         &self,
         chatter_login: &str,
         chatter_id: &str,
-    ) -> Result<bool, sqlx::Error> {
-        let row = sqlx::query_scalar!(
-            "SELECT 1 FROM twitch_chatter_global_ban \
+    ) -> Result<Option<String>, sqlx::Error> {
+        sqlx::query_scalar::<_, String>(
+            "SELECT COALESCE(NULLIF(TRIM(reason), ''), 'Global-Banliste (kein Grund hinterlegt)') \
+                    AS reason \
+             FROM twitch_chatter_global_ban \
              WHERE chatter_login = $1 \
                 OR (chatter_id IS NOT NULL AND chatter_id = $2 AND chatter_id <> '') \
              LIMIT 1",
-            chatter_login,
-            chatter_id,
         )
+        .bind(chatter_login)
+        .bind(chatter_id)
         .fetch_optional(&self.pool)
-        .await?;
-        Ok(row.is_some())
+        .await
     }
 
     /// `true`, wenn der Kanal den User nach dem letzten Bot-/Sweep-Ban wieder
@@ -209,7 +212,7 @@ impl GlobalChatterBanEnforcer {
         let stale_keys: Vec<String> = self
             .cache
             .iter()
-            .filter(|e| now.duration_since(*e.value()).as_secs() >= BAN_CACHE_TTL_SECS)
+            .filter(|e| now.duration_since(e.value().0).as_secs() >= BAN_CACHE_TTL_SECS)
             .map(|e| e.key().clone())
             .collect();
         for key in stale_keys {

@@ -467,6 +467,14 @@ pub struct AutoBanRequest<'a> {
     pub silent: bool,
 }
 
+/// Nachvollziehbarer Ausloeser einer automatischen Moderationsaktion.
+pub struct ModerationEvidence<'a> {
+    pub source_path: &'a str,
+    pub reason: &'a str,
+    pub score: Option<f32>,
+    pub account_age_days: Option<i64>,
+}
+
 /// Moderations-Engine — koordiniert Delete + Ban + DB-Persistierung.
 ///
 /// Port: `moderation.py:_auto_ban_and_cleanup` (Z. 1561–1829).
@@ -530,6 +538,32 @@ impl ModerationEngine {
     ///
     /// Port: `moderation.py:_auto_ban_and_cleanup` (Z. 1561–1829).
     pub async fn auto_ban_and_cleanup(&self, req: AutoBanRequest<'_>) -> bool {
+        let source_path = if req.reason_text == BAN_REASON_GLOBAL {
+            "global_ban"
+        } else if req.reason_text == BAN_REASON_SPAM {
+            "spam"
+        } else {
+            "scam"
+        };
+        let reason = req.reason_text;
+        self.auto_ban_and_cleanup_with_evidence(
+            req,
+            ModerationEvidence {
+                source_path,
+                reason,
+                score: None,
+                account_age_days: None,
+            },
+        )
+        .await
+    }
+
+    /// Wie [`Self::auto_ban_and_cleanup`], aber mit beweiskraeftigem Regelkontext.
+    pub async fn auto_ban_and_cleanup_with_evidence(
+        &self,
+        req: AutoBanRequest<'_>,
+        evidence: ModerationEvidence<'_>,
+    ) -> bool {
         let AutoBanRequest {
             channel_login,
             broadcaster_id,
@@ -554,23 +588,52 @@ impl ModerationEngine {
                 reason = %reason_text,
                 "AutoBan gegen Safe-List-Konto unterdrückt"
             );
+            self.persist_autoban_record(
+                channel_login,
+                chatter_id,
+                chatter_login,
+                content,
+                "suppressed_safe_list",
+                &evidence,
+                false,
+            )
+            .await;
+            self.update_message_moderation(message_id, "suppressed_safe_list", evidence.reason)
+                .await;
             return false;
         }
 
         // Schritt 1: Nachricht löschen (moderation.py Z. 1631–1666)
-        if let Err(error) = self.api.delete_message(broadcaster_id, message_id).await {
-            warn!(
-                %error,
-                channel = %channel_login,
-                chatter = %chatter_login,
-                message_id = %message_id,
-                "AutoBan-Cleanup: Message-Delete fehlgeschlagen"
-            );
-        }
+        let deleted = match self.api.delete_message(broadcaster_id, message_id).await {
+            Ok(deleted) => deleted,
+            Err(error) => {
+                warn!(
+                    %error,
+                    channel = %channel_login,
+                    chatter = %chatter_login,
+                    message_id = %message_id,
+                    "AutoBan-Cleanup: Message-Delete fehlgeschlagen"
+                );
+                false
+            }
+        };
 
         if !ban {
+            if !deleted {
+                return false;
+            }
             // Delete-Only-Pfad (moderation.py Z. 259–261)
-            self.persist_autoban_record(channel_login, chatter_id, chatter_login, content)
+            self.persist_autoban_record(
+                channel_login,
+                chatter_id,
+                chatter_login,
+                content,
+                "delete_only",
+                &evidence,
+                true,
+            )
+            .await;
+            self.update_message_moderation(message_id, "delete_only", evidence.reason)
                 .await;
             return true;
         }
@@ -591,7 +654,17 @@ impl ModerationEngine {
         match &outcome {
             BanOutcome::Banned | BanOutcome::AlreadyBanned => {
                 // In-Memory immer (beide Pfade).
-                self.persist_autoban_record(channel_login, chatter_id, chatter_login, content)
+                self.persist_autoban_record(
+                    channel_login,
+                    chatter_id,
+                    chatter_login,
+                    content,
+                    "ban",
+                    &evidence,
+                    true,
+                )
+                .await;
+                self.update_message_moderation(message_id, "ban", evidence.reason)
                     .await;
 
                 // Nur ein FRISCHER Ban speist die öffentliche recent-bans-Statistik
@@ -632,13 +705,57 @@ impl ModerationEngine {
         duration_secs: u32,
         reason_text: &str,
     ) -> bool {
+        self.timeout_and_cleanup_with_evidence(
+            broadcaster_id,
+            broadcaster_id,
+            "",
+            chatter_id,
+            message_id,
+            "",
+            duration_secs,
+            reason_text,
+            ModerationEvidence {
+                source_path: "scam",
+                reason: reason_text,
+                score: None,
+                account_age_days: None,
+            },
+        )
+        .await
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub async fn timeout_and_cleanup_with_evidence(
+        &self,
+        channel_login: &str,
+        broadcaster_id: &str,
+        chatter_login: &str,
+        chatter_id: &str,
+        message_id: &str,
+        content: &str,
+        duration_secs: u32,
+        reason_text: &str,
+        evidence: ModerationEvidence<'_>,
+    ) -> bool {
         // Safe-List: Timeout ist ebenfalls Moderation. Guard vor dem Delete.
-        if crate::safe_list::is_safe(Some(chatter_id), "") {
+        if crate::safe_list::is_safe(Some(chatter_id), chatter_login) {
             warn!(
                 chatter_id = %chatter_id,
                 reason = %reason_text,
                 "Timeout gegen Safe-List-Konto unterdrückt"
             );
+            self.persist_autoban_record(
+                channel_login,
+                chatter_id,
+                chatter_login,
+                content,
+                "suppressed_safe_list",
+                &evidence,
+                false,
+            )
+            .await;
+            self.update_message_moderation(message_id, "suppressed_safe_list", evidence.reason)
+                .await;
             return false;
         }
 
@@ -646,7 +763,7 @@ impl ModerationEngine {
             warn!("Timeout-Cleanup Delete-Fehler: {error}");
         }
 
-        match self
+        let enforced = match self
             .api
             .timeout_user(broadcaster_id, chatter_id, duration_secs, reason_text)
             .await
@@ -657,7 +774,23 @@ impl ModerationEngine {
                 warn!("Timeout Fehler: {error}");
                 false
             }
+        };
+
+        if enforced {
+            self.persist_autoban_record(
+                channel_login,
+                chatter_id,
+                chatter_login,
+                content,
+                "timeout",
+                &evidence,
+                false,
+            )
+            .await;
+            self.update_message_moderation(message_id, "timeout", evidence.reason)
+                .await;
         }
+        enforced
     }
 
     /// Gibt den letzten AutoBan-Eintrag für einen Kanal zurück.
@@ -728,12 +861,16 @@ impl ModerationEngine {
     ///
     /// DB-Tabelle: `tb_chat_autoban_log` (Migration 20260630141000).
     /// Port: `self._last_autoban[channel_key] = {...}` (moderation.py Z. 235).
+    #[allow(clippy::too_many_arguments)]
     async fn persist_autoban_record(
         &self,
         channel_login: &str,
         chatter_id: &str,
         chatter_login: &str,
         content: &str,
+        action: &str,
+        evidence: &ModerationEvidence<'_>,
+        cache: bool,
     ) {
         let key = channel_login.to_lowercase();
         let record = AutoBanRecord {
@@ -743,8 +880,8 @@ impl ModerationEngine {
             ts: Utc::now(),
         };
 
-        // In-Memory
-        {
+        // In-Memory: Safe-List-Unterdrueckungen sind kein ruecknehmbarer Ban.
+        if cache {
             let mut guard = self.last_autoban.lock().unwrap();
             guard.insert(key.clone(), record.clone());
         }
@@ -752,22 +889,57 @@ impl ModerationEngine {
         // DB — Schema aus Migration 20260630141000.
         let ts_str = record.ts.to_rfc3339();
         let content_trunc: String = record.content.clone();
-        if let Err(e) = sqlx::query!(
+        if let Err(e) = sqlx::query(
             r#"INSERT INTO tb_chat_autoban_log
-               (channel_login, chatter_id, chatter_login, content, banned_at)
-               VALUES ($1, $2, $3, $4, $5)
+               (channel_login, chatter_id, chatter_login, content, banned_at,
+                action, source_path, reason, score, account_age_days)
+               VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
                ON CONFLICT DO NOTHING"#,
-            &key,
-            chatter_id,
-            chatter_login,
-            &content_trunc,
-            record.ts,
         )
+        .bind(&key)
+        .bind(chatter_id)
+        .bind(chatter_login)
+        .bind(&content_trunc)
+        .bind(record.ts)
+        .bind(action)
+        .bind(evidence.source_path)
+        .bind(evidence.reason)
+        .bind(evidence.score)
+        .bind(evidence.account_age_days)
         .execute(&self.pool)
         .await
         {
             // DB-Fehler sind nicht fatal — In-Memory ist primäre Quelle
             debug!("persist_autoban_record DB-Fehler: {e} (ts={ts_str})");
+        }
+    }
+
+    async fn update_message_moderation(&self, message_id: &str, action: &str, reason: &str) {
+        if message_id.trim().is_empty() {
+            warn!(
+                action,
+                reason, "Moderationsnachtrag ohne message_id ausgelassen"
+            );
+            return;
+        }
+
+        match sqlx::query(
+            "UPDATE twitch_chat_messages \
+             SET moderation_action = $1, moderation_reason = $2 \
+             WHERE message_id = $3",
+        )
+        .bind(action)
+        .bind(reason)
+        .bind(message_id)
+        .execute(&self.pool)
+        .await
+        {
+            Ok(result) if result.rows_affected() == 0 => warn!(
+                message_id,
+                action, "Moderationsnachtrag fand keine archivierte Nachricht"
+            ),
+            Ok(_) => {}
+            Err(error) => warn!(%error, message_id, action, "Moderationsnachtrag fehlgeschlagen"),
         }
     }
 

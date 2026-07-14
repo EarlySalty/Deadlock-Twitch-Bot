@@ -1,3 +1,9 @@
+## #362 — Der Ban-Knopf hinterlässt jetzt Beweise
+
+- Problem: Gelöschte oder gebannte Spam-Nachrichten verschwanden bisher vor dem Chat-Archiv – inklusive Auslöser und Safe-List-Rettungen.
+- Änderung: Nachrichten werden zuerst gesichert und danach mit Aktion, konkretem Grund, Score und Moderationspfad markiert.
+- Aktuell: Echte Werbung wird weiter moderiert; bei einer erkennbaren Meta-Frage antwortet der Bot nur dann locker, wenn garantiert keine Aktion ausgeführt wurde.
+
 ## #361 — Die Dashboards sehen jetzt nach Schmiede aus
 
 **Problem:** Das Analyse-Dashboard hatte zwar schon den Gold-Look, wirkte aber flach. Das Admin-Dashboard war beim letzten Rebrand komplett übersehen worden und leuchtete weiter in Petrol und Orange. Statusanzeigen zogen sich ihre Farben aus einer bunten Standardpalette, die mit der Marke nichts zu tun hatte.
