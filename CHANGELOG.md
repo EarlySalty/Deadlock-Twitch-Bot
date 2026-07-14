@@ -1,3 +1,11 @@
+## #363 — Der Analytics-Block fliegt von der Streamer-Seite
+
+**Problem:** Die Streamer-Seite hatte einen großen Abschnitt, der das Analyse-Dashboard mit 13 Tabs und Vorschau-Kacheln vorgeführt hat. Der Block hat viel Platz gefressen und wenig überzeugt.
+
+**Änderung:** Der Abschnitt ist raus, zusammen mit den Sprungmarken in Kopf- und Fußzeile, die sonst ins Leere gezeigt hätten.
+
+**Aktuelles Verhalten:** Die Streamer-Seite läuft ohne den Analytics-Abschnitt. Die Live-Demo bleibt erreichbar, der Link dorthin steht weiterhin in der Fußzeile.
+
 ## #362 — Ruhigeres Dashboard, echtes Profilbild
 
 **Problem:** Das Dashboard war so dunkel, dass Kacheln und Hintergrund zu einem schwarzen Block verschmolzen. Gleichzeitig knallte ein neonblauer Ton mitten ins Gold, am deutlichsten beim Knopf zum Analyse-Dashboard und in den Schleiern über der Startseite. Und oben links stand statt deines Profilbilds nur ein Kreis mit dem ersten Buchstaben deines Namens.
