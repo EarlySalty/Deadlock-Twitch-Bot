@@ -67,10 +67,10 @@ export function SystemOverview() {
             <ResponsiveContainer width="100%" height="100%">
               <AreaChart data={chartRows}>
                 <CartesianGrid stroke="rgba(255,255,255,0.06)" vertical={false} />
-                <XAxis dataKey="name" stroke="#9bb3c5" tickLine={false} axisLine={false} />
-                <YAxis stroke="#9bb3c5" tickLine={false} axisLine={false} />
-                <Tooltip contentStyle={{ background: '#0f2431', border: '1px solid rgba(255,255,255,0.1)', borderRadius: '16px' }} />
-                <Area type="monotone" dataKey="value" stroke="#10b7ad" fill="rgba(16,183,173,0.25)" />
+                <XAxis dataKey="name" stroke="#B5A488" tickLine={false} axisLine={false} />
+                <YAxis stroke="#B5A488" tickLine={false} axisLine={false} />
+                <Tooltip contentStyle={{ background: '#1A1210', border: '1px solid rgba(255,255,255,0.1)', borderRadius: '16px' }} />
+                <Area type="monotone" dataKey="value" stroke="#00D9FF" fill="rgba(0, 217, 255,0.25)" />
               </AreaChart>
             </ResponsiveContainer>
           </div>

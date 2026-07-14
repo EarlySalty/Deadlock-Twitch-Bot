@@ -58,10 +58,10 @@ function matchesStreamerSearch(row: StreamerRow, search: string) {
 function renderLabeledBadge(label: string, tone: 'ok' | 'warning' | 'error') {
   const toneClass =
     tone === 'ok'
-      ? 'border-emerald-400/35 bg-emerald-500/15 text-emerald-100'
+      ? 'border-success/35 bg-success/15 text-success'
       : tone === 'error'
-        ? 'border-red-400/35 bg-red-500/15 text-red-100'
-        : 'border-amber-400/35 bg-amber-500/15 text-amber-100';
+        ? 'border-danger/35 bg-danger/15 text-danger'
+        : 'border-warning/35 bg-warning/15 text-warning';
 
   return (
     <span
@@ -499,7 +499,7 @@ export default function EngagementPage() {
             </article>
           </div>
         ) : (
-          <div className="rounded-[1.5rem] border border-amber-400/20 bg-amber-500/[0.04] p-5 text-sm leading-6 text-text-secondary">
+          <div className="rounded-[1.5rem] border border-warning/20 bg-warning/[0.04] p-5 text-sm leading-6 text-text-secondary">
             Persona-Steuerung wird in einer späteren Iteration ergänzt.
           </div>
         )}

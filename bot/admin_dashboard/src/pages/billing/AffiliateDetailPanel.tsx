@@ -40,7 +40,7 @@ function summarizeGenerateResult(result: { results?: Array<{ ok?: boolean; actio
 
 function MetricTile({ label, value, hint }: { label: string; value: string; hint?: string }) {
   return (
-    <div className="rounded-[1.35rem] border border-white/10 bg-slate-950/35 px-4 py-4">
+    <div className="rounded-[1.35rem] border border-white/10 bg-bg/35 px-4 py-4">
       <p className="text-[0.68rem] font-semibold uppercase tracking-[0.18em] text-text-secondary">{label}</p>
       <p className="mt-2 text-xl font-semibold text-white">{value}</p>
       {hint ? <p className="mt-2 text-xs leading-5 text-text-secondary">{hint}</p> : null}
@@ -125,7 +125,7 @@ export function AffiliateDetailPanel({ login, onClose }: AffiliateDetailPanelPro
         </div>
 
         {detailQuery.isError ? (
-          <div className="mt-5 rounded-2xl border border-red-400/20 bg-red-500/10 px-4 py-3 text-sm text-red-100">
+          <div className="mt-5 rounded-2xl border border-danger/20 bg-danger/10 px-4 py-3 text-sm text-danger">
             {detailQuery.error instanceof Error ? detailQuery.error.message : 'Affiliate-Details konnten nicht geladen werden.'}
           </div>
         ) : null}
@@ -153,7 +153,7 @@ export function AffiliateDetailPanel({ login, onClose }: AffiliateDetailPanelPro
           />
         </div>
 
-        <section className="mt-6 space-y-3 rounded-[1.5rem] border border-white/10 bg-slate-950/30 p-4">
+        <section className="mt-6 space-y-3 rounded-[1.5rem] border border-white/10 bg-bg/30 p-4">
           <div className="flex items-start justify-between gap-4">
             <div>
               <p className="text-xs font-semibold uppercase tracking-[0.2em] text-text-secondary">Readiness</p>
@@ -167,9 +167,9 @@ export function AffiliateDetailPanel({ login, onClose }: AffiliateDetailPanelPro
           </div>
 
           {readiness.blockers.length ? (
-            <div className="space-y-2 rounded-2xl border border-amber-400/20 bg-amber-500/10 p-4">
+            <div className="space-y-2 rounded-2xl border border-warning/20 bg-warning/10 p-4">
               {readiness.blockers.map((blocker) => (
-                <div key={blocker} className="flex items-start gap-2 text-sm text-amber-100">
+                <div key={blocker} className="flex items-start gap-2 text-sm text-warning">
                   <TriangleAlert className="mt-0.5 h-4 w-4 shrink-0" />
                   <span>{blocker}</span>
                 </div>
@@ -204,13 +204,13 @@ export function AffiliateDetailPanel({ login, onClose }: AffiliateDetailPanelPro
           ) : null}
         </section>
 
-        <section className="mt-6 rounded-[1.5rem] border border-white/10 bg-slate-950/30 p-4">
+        <section className="mt-6 rounded-[1.5rem] border border-white/10 bg-bg/30 p-4">
           <div className="flex items-center gap-2 text-white">
             <FileText className="h-4 w-4 text-primary" />
             <h3 className="text-sm font-semibold uppercase tracking-[0.2em] text-text-secondary">Gutschriften</h3>
           </div>
 
-          <div className="mt-4 overflow-hidden rounded-[1.2rem] border border-white/10 bg-slate-950/35">
+          <div className="mt-4 overflow-hidden rounded-[1.2rem] border border-white/10 bg-bg/35">
             <table className="min-w-full text-sm">
               <thead className="bg-white/5 text-[0.68rem] uppercase tracking-[0.18em] text-text-secondary">
                 <tr>
@@ -265,7 +265,7 @@ export function AffiliateDetailPanel({ login, onClose }: AffiliateDetailPanelPro
           </div>
         </section>
 
-        <section className="mt-6 rounded-[1.5rem] border border-white/10 bg-slate-950/30 p-4">
+        <section className="mt-6 rounded-[1.5rem] border border-white/10 bg-bg/30 p-4">
           <div className="flex items-center gap-2 text-white">
             <Coins className="h-4 w-4 text-accent" />
             <h3 className="text-sm font-semibold uppercase tracking-[0.2em] text-text-secondary">Letzte Claims</h3>
@@ -299,7 +299,7 @@ export function AffiliateDetailPanel({ login, onClose }: AffiliateDetailPanelPro
           </div>
         </section>
 
-        <section className="mt-6 grid gap-3 rounded-[1.5rem] border border-white/10 bg-slate-950/30 p-4">
+        <section className="mt-6 grid gap-3 rounded-[1.5rem] border border-white/10 bg-bg/30 p-4">
           <div className="flex items-center gap-2 text-text-secondary">
             <Mail className="h-4 w-4" />
             <span className="text-sm text-white">{detail?.email || 'Keine E-Mail hinterlegt'}</span>

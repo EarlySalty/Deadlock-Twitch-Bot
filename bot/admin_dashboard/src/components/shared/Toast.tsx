@@ -32,13 +32,13 @@ export function Toast({ open, message, tone = 'success', onClose }: ToastProps) 
       <div
         className={[
           'glass flex items-start gap-3 rounded-2xl border px-4 py-3 shadow-2xl',
-          isError ? 'border-red-400/25' : 'border-emerald-400/25',
+          isError ? 'border-danger/25' : 'border-success/25',
         ].join(' ')}
       >
         {isError ? (
-          <CircleAlert className="mt-0.5 h-5 w-5 text-red-200" />
+          <CircleAlert className="mt-0.5 h-5 w-5 text-danger" />
         ) : (
-          <CheckCircle2 className="mt-0.5 h-5 w-5 text-emerald-200" />
+          <CheckCircle2 className="mt-0.5 h-5 w-5 text-success" />
         )}
         <p className="flex-1 text-sm leading-6 text-white">{message}</p>
         <button onClick={onClose} className="rounded-full p-1 text-white/60 transition hover:text-white">

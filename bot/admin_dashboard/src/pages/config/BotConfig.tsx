@@ -187,7 +187,7 @@ export function BotConfig() {
               Promo speichern
             </button>
 
-            <pre className="overflow-auto rounded-[1.4rem] border border-white/10 bg-slate-950/55 p-4 text-xs leading-6 text-emerald-100">
+            <pre className="overflow-auto rounded-[1.4rem] border border-white/10 bg-bg/55 p-4 text-xs leading-6 text-success">
               {JSON.stringify({ promo }, null, 2)}
             </pre>
           </div>

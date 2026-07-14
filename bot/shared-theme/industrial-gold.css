@@ -1,0 +1,237 @@
+/*
+ * Deadlock Industrial Gold — Materialschicht
+ * ──────────────────────────────────────────
+ * Gemeinsam genutzt von bot/dashboard_v2 und bot/admin_dashboard.
+ * Beide Apps definieren ihre Farb-Tokens selbst (Tailwind v4 @theme);
+ * hier liegen NUR die Material-, Textur- und Effekt-Klassen darueber.
+ *
+ * Texturen sind bewusst rein prozedural (Gradients), keine Bilddateien:
+ * kein Bundle-Gewicht, frei skalierbar auf jede Kachelgroesse.
+ */
+
+:root {
+  /* Material-Toene (ergaenzen die Farb-Tokens der Apps) */
+  --parchment: #E3D4B6;
+  --parchment-ink: #2A211B;
+  --parchment-rule: rgba(42, 33, 27, 0.16);
+
+  /* Tinten fuer Pergament. Antik-Gold und Plasma sind auf hellem Papier
+     unlesbar (~2.5:1) — auf Papier wird mit dunkler Tinte geschrieben,
+     nicht mit Neon. Diese Toene halten >= 4.5:1 gegen #E3D4B6. */
+  --ink-gold: #6B5320;
+  --ink-blue: #12545F;
+  --ink-ember: #7E4C10;
+  --ink-muted: rgba(42, 33, 27, 0.55);
+
+  --plasma-green: #00FF88;
+  --plasma-blue: #00D9FF;
+
+  --gold: #C5A059;
+  --gold-bright: #F1D299;
+  --gold-deep: #9A7C42;
+
+  /* Bevel: Licht faellt von oben — Kante oben hell, unten dunkel */
+  --bevel-light: rgba(241, 210, 153, 0.14);
+  --bevel-shadow: rgba(0, 0, 0, 0.55);
+
+  --iron: #1F1815;
+  --iron-deep: #140D0A;
+}
+
+/* ── Holzmaserung: unregelmaessige vertikale Faserung, sehr flach ──────── */
+.tex-wood {
+  background-image:
+    repeating-linear-gradient(
+      92deg,
+      rgba(0, 0, 0, 0.13) 0px,
+      rgba(0, 0, 0, 0) 2px,
+      rgba(241, 210, 153, 0.012) 3px,
+      rgba(0, 0, 0, 0) 6px,
+      rgba(0, 0, 0, 0.09) 9px,
+      rgba(0, 0, 0, 0) 14px
+    ),
+    repeating-linear-gradient(
+      88deg,
+      rgba(0, 0, 0, 0.07) 0px,
+      rgba(0, 0, 0, 0) 23px,
+      rgba(0, 0, 0, 0.05) 41px,
+      rgba(0, 0, 0, 0) 67px
+    );
+}
+
+/* ── Gebuerstetes Metall: feine horizontale Schleifspuren ──────────────── */
+.tex-brushed {
+  background-image: repeating-linear-gradient(
+    177deg,
+    rgba(255, 255, 255, 0.018) 0px,
+    rgba(255, 255, 255, 0) 1px,
+    rgba(0, 0, 0, 0.05) 2px,
+    rgba(255, 255, 255, 0) 3px
+  );
+}
+
+/* ── Grain: STATISCH. Eine animierte Koernung flackert auf grossen
+      Flaechen sichtbar — hier bewusst bewegungslos und <= 0.03 Alpha. ─── */
+.tex-grain::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  opacity: 0.025;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='140' height='140'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='3'/%3E%3C/filter%3E%3Crect width='140' height='140' filter='url(%23n)'/%3E%3C/svg%3E");
+}
+
+/* ── Gusseisen-Kachel: Material + Bevel + Nieten ───────────────────────── */
+.plate {
+  position: relative;
+  isolation: isolate;
+  background-color: var(--iron);
+  background-image:
+    /* Lichtabfall von oben links */
+    linear-gradient(158deg, rgba(241, 210, 153, 0.05) 0%, rgba(0, 0, 0, 0.18) 62%, rgba(0, 0, 0, 0.3) 100%),
+    repeating-linear-gradient(
+      177deg,
+      rgba(255, 255, 255, 0.016) 0px,
+      rgba(255, 255, 255, 0) 1px,
+      rgba(0, 0, 0, 0.045) 2px,
+      rgba(255, 255, 255, 0) 3px
+    );
+  border: 1px solid rgba(197, 160, 89, 0.22);
+  box-shadow:
+    inset 0 1px 0 var(--bevel-light),
+    inset 0 -1px 0 var(--bevel-shadow),
+    inset 1px 0 0 rgba(241, 210, 153, 0.05),
+    0 14px 34px rgba(0, 0, 0, 0.45);
+  transition: border-color 240ms ease, box-shadow 280ms ease, transform 240ms ease;
+}
+
+.plate:hover {
+  border-color: rgba(197, 160, 89, 0.44);
+  box-shadow:
+    inset 0 1px 0 rgba(241, 210, 153, 0.2),
+    inset 0 -1px 0 var(--bevel-shadow),
+    0 18px 42px rgba(0, 0, 0, 0.5),
+    0 0 26px -6px rgba(197, 160, 89, 0.32);
+}
+
+/* Nieten in den vier Ecken — je ein radialer Gradient (gewoelbter Kopf) */
+.plate-riveted::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  border-radius: inherit;
+  background-image:
+    radial-gradient(circle at 11px 11px, var(--gold-bright) 0.6px, var(--gold-deep) 1.7px, rgba(0, 0, 0, 0.5) 2.6px, transparent 3.2px),
+    radial-gradient(circle at calc(100% - 11px) 11px, var(--gold-bright) 0.6px, var(--gold-deep) 1.7px, rgba(0, 0, 0, 0.5) 2.6px, transparent 3.2px),
+    radial-gradient(circle at 11px calc(100% - 11px), var(--gold-bright) 0.6px, var(--gold-deep) 1.7px, rgba(0, 0, 0, 0.5) 2.6px, transparent 3.2px),
+    radial-gradient(circle at calc(100% - 11px) calc(100% - 11px), var(--gold-bright) 0.6px, var(--gold-deep) 1.7px, rgba(0, 0, 0, 0.5) 2.6px, transparent 3.2px);
+  opacity: 0.7;
+}
+
+/* ── Gold-Aetzrahmen: 1px Verlaufskante, wie eingelassenes Messing ─────── */
+.etched-gold {
+  position: relative;
+}
+
+.etched-gold::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  padding: 1px;
+  pointer-events: none;
+  background: linear-gradient(
+    145deg,
+    var(--gold-bright) 0%,
+    var(--gold) 22%,
+    rgba(154, 124, 66, 0.35) 48%,
+    rgba(197, 160, 89, 0.12) 70%,
+    var(--gold) 100%
+  );
+  -webkit-mask:
+    linear-gradient(#000 0 0) content-box,
+    linear-gradient(#000 0 0);
+  -webkit-mask-composite: xor;
+          mask-composite: exclude;
+  opacity: 0.55;
+  transition: opacity 260ms ease;
+}
+
+.etched-gold:hover::after {
+  opacity: 0.95;
+}
+
+/* ── Plasma-Status: das Leuchten ist der Zustand, nicht Deko ───────────── */
+.plasma {
+  --plasma: var(--plasma-green);
+  color: var(--plasma);
+  text-shadow: 0 0 12px color-mix(in srgb, var(--plasma) 55%, transparent);
+}
+
+.plasma-blue {
+  --plasma: var(--plasma-blue);
+}
+
+.plasma-dot {
+  width: 0.5rem;
+  height: 0.5rem;
+  border-radius: 999px;
+  background: var(--plasma, var(--plasma-green));
+  box-shadow:
+    0 0 0 2px color-mix(in srgb, var(--plasma, var(--plasma-green)) 22%, transparent),
+    0 0 14px color-mix(in srgb, var(--plasma, var(--plasma-green)) 75%, transparent);
+}
+
+/* Puls nur fuer den Live-/Verbunden-Zustand. Deckkraft statt Transform:
+   kein Layout-Thrash, laeuft auf dem Compositor. */
+@keyframes plasma-breathe {
+  0%, 100% { opacity: 1; }
+  50%      { opacity: 0.55; }
+}
+
+.plasma-dot-live {
+  animation: plasma-breathe 2.4s ease-in-out infinite;
+}
+
+/* ── Pergament: gealtertes Papier fuer Tabellen/Datenblaetter ──────────── */
+.parchment {
+  background-color: var(--parchment);
+  background-image:
+    radial-gradient(circle at 18% 12%, rgba(154, 124, 66, 0.1), transparent 42%),
+    radial-gradient(circle at 82% 88%, rgba(154, 124, 66, 0.09), transparent 46%),
+    repeating-linear-gradient(
+      93deg,
+      rgba(122, 108, 87, 0.035) 0px,
+      rgba(122, 108, 87, 0) 3px,
+      rgba(122, 108, 87, 0.02) 5px,
+      rgba(122, 108, 87, 0) 9px
+    );
+  color: var(--parchment-ink);
+  border: 1px solid var(--gold-deep);
+  box-shadow:
+    inset 0 0 42px rgba(154, 124, 66, 0.22),
+    0 14px 34px rgba(0, 0, 0, 0.45);
+}
+
+.parchment th {
+  color: var(--parchment-ink);
+  border-bottom: 2px solid var(--gold-deep);
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+}
+
+.parchment td {
+  border-bottom: 1px solid var(--parchment-rule);
+}
+
+.parchment tr:hover td {
+  background: rgba(154, 124, 66, 0.1);
+}
+
+/* ── Bewegung respektiert Systemeinstellung ────────────────────────────── */
+@media (prefers-reduced-motion: reduce) {
+  .plasma-dot-live {
+    animation: none;
+  }
+}

@@ -20,19 +20,19 @@ const tierConfig = {
   },
   basic: {
     icon: Star,
-    color: 'text-[#c8a86b]',
-    borderColor: 'border-[#c8a86b]/40',
-    gradient: 'from-[#c8a86b]/5 to-transparent',
-    badge: { text: 'Beliebt', icon: Star, className: 'bg-[#c8a86b] text-white' },
-    ctaStyle: 'bg-[#c8a86b] hover:bg-[#efd49d] text-white shadow-lg shadow-[#c8a86b]/20',
+    color: 'text-[#C5A059]',
+    borderColor: 'border-[#C5A059]/40',
+    gradient: 'from-[#C5A059]/5 to-transparent',
+    badge: { text: 'Beliebt', icon: Star, className: 'bg-[#C5A059] text-white' },
+    ctaStyle: 'bg-[#C5A059] hover:bg-[#F1D299] text-white shadow-lg shadow-[#C5A059]/20',
   },
   extended: {
     icon: Crown,
-    color: 'text-[#55978f]',
-    borderColor: 'border-[#55978f]/40',
-    gradient: 'from-[#55978f]/5 to-transparent',
-    badge: { text: 'Empfohlen', icon: Sparkles, className: 'bg-gradient-to-r from-[#55978f] to-[#c8a86b] text-white' },
-    ctaStyle: 'bg-gradient-to-r from-[#55978f] to-[#c8a86b] hover:opacity-90 text-white shadow-lg shadow-[#55978f]/20',
+    color: 'text-[#00D9FF]',
+    borderColor: 'border-[#00D9FF]/40',
+    gradient: 'from-[#00D9FF]/5 to-transparent',
+    badge: { text: 'Empfohlen', icon: Sparkles, className: 'bg-gradient-to-r from-[#00D9FF] to-[#C5A059] text-white' },
+    ctaStyle: 'bg-gradient-to-r from-[#00D9FF] to-[#C5A059] hover:opacity-90 text-white shadow-lg shadow-[#00D9FF]/20',
   },
 };
 
@@ -96,7 +96,7 @@ export default function PlanCardRedesign({ plan, index, cycle = 1 }: PlanCardRed
   const isPopular = plan.id === 'raid_boost';
   const isRecommended = plan.tier === 'extended' && !isBundle;
   const badge = isBundle
-    ? { text: 'Bundle', icon: Sparkles, className: 'bg-gradient-to-r from-[#55978f] to-[#55978f] text-white' }
+    ? { text: 'Bundle', icon: Sparkles, className: 'bg-gradient-to-r from-[#00D9FF] to-[#00D9FF] text-white' }
     : isPopular || isRecommended
     ? config.badge
     : null;
@@ -118,14 +118,14 @@ export default function PlanCardRedesign({ plan, index, cycle = 1 }: PlanCardRed
       {/* Hover glow effect */}
       <div
         className={`absolute -inset-0.5 rounded-2xl opacity-0 group-hover:opacity-100 transition-opacity duration-300 blur-sm ${
-          isPopular ? 'bg-[#c8a86b]/20' : isRecommended ? 'bg-[#55978f]/20' : 'bg-white/10'
+          isPopular ? 'bg-[#C5A059]/20' : isRecommended ? 'bg-[#00D9FF]/20' : 'bg-white/10'
         }`}
       />
 
       {/* Card */}
       <div
         className={`relative h-full rounded-2xl border ${config.borderColor} bg-gradient-to-b ${config.gradient} p-6 flex flex-col soft-elevate ${
-          isCurrent ? 'ring-2 ring-[#55978f]/50' : ''
+          isCurrent ? 'ring-2 ring-[#00D9FF]/50' : ''
         }`}
       >
         {/* Popular/recommended/bundle badge */}
@@ -170,9 +170,9 @@ export default function PlanCardRedesign({ plan, index, cycle = 1 }: PlanCardRed
               <Check
                 className={`w-4 h-4 mt-0.5 flex-shrink-0 ${
                   isRecommended || isBundle
-                    ? 'text-[#55978f]'
+                    ? 'text-[#00D9FF]'
                     : isPopular
-                    ? 'text-[#c8a86b]'
+                    ? 'text-[#C5A059]'
                     : 'text-white/30'
                 }`}
               />
@@ -202,7 +202,7 @@ export default function PlanCardRedesign({ plan, index, cycle = 1 }: PlanCardRed
         {/* Current plan indicator */}
         {isCurrent && (
           <div className="absolute top-4 right-4">
-            <div className="w-2 h-2 rounded-full bg-[#55978f]" />
+            <div className="w-2 h-2 rounded-full bg-[#00D9FF]" />
           </div>
         )}
       </div>

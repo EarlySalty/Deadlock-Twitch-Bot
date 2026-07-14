@@ -192,7 +192,7 @@ export function TopBar({ auth }: TopBarProps) {
                 }
               }}
               placeholder="Streamer suchen …"
-              className="admin-input rounded-full border-white/10 bg-[rgba(8,24,33,0.76)] py-3 pl-11 pr-11 text-sm"
+              className="admin-input rounded-full border-white/10 bg-[rgba(20, 13, 10,0.76)] py-3 pl-11 pr-11 text-sm"
             />
             {query ? (
               <button

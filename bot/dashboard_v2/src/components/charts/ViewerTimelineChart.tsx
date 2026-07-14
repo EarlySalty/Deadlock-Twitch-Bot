@@ -77,17 +77,17 @@ export function ViewerTimelineChart({ data, title = 'Viewer Timeline' }: ViewerT
                 <stop offset="95%" stopColor="var(--color-secondary)" stopOpacity={0} />
               </linearGradient>
             </defs>
-            <CartesianGrid strokeDasharray="3 3" stroke="rgba(201, 168, 106, 0.24)" />
+            <CartesianGrid strokeDasharray="3 3" stroke="rgba(197, 160, 89, 0.24)" />
             <XAxis
               dataKey="label"
-              stroke="#b7aa91"
+              stroke="#B5A488"
               fontSize={11}
               tickLine={false}
               axisLine={false}
               interval="preserveStartEnd"
             />
             <YAxis
-              stroke="#b7aa91"
+              stroke="#B5A488"
               fontSize={12}
               tickLine={false}
               axisLine={false}
@@ -134,7 +134,7 @@ export function ViewerTimelineChart({ data, title = 'Viewer Timeline' }: ViewerT
                 dataKey="label"
                 height={30}
                 stroke="var(--color-primary)"
-                fill="#2c2318"
+                fill="#1F1815"
                 travellerWidth={10}
               />
             )}

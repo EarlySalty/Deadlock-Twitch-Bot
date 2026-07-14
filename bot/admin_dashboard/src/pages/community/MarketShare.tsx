@@ -287,15 +287,15 @@ export default function MarketSharePage() {
                       <CartesianGrid stroke="rgba(255,255,255,0.06)" vertical={false} />
                       <XAxis
                         dataKey="label"
-                        stroke="#9bb3c5"
+                        stroke="#B5A488"
                         tickLine={false}
                         axisLine={false}
                         minTickGap={48}
                       />
-                      <YAxis stroke="#f5b94c" tickLine={false} axisLine={false} unit="%" />
+                      <YAxis stroke="#E8A33D" tickLine={false} axisLine={false} unit="%" />
                       <Tooltip
                         contentStyle={{
-                          background: '#0f2431',
+                          background: '#1A1210',
                           border: '1px solid rgba(255,255,255,0.1)',
                           borderRadius: '16px',
                         }}
@@ -303,9 +303,9 @@ export default function MarketSharePage() {
                       <Area
                         type="monotone"
                         dataKey="Anteil %"
-                        stroke="#f5b94c"
+                        stroke="#E8A33D"
                         strokeWidth={2}
-                        fill="rgba(245,185,76,0.18)"
+                        fill="rgba(232,163,61,0.18)"
                         connectNulls
                       />
                     </ComposedChart>
@@ -326,15 +326,15 @@ export default function MarketSharePage() {
                       <CartesianGrid stroke="rgba(255,255,255,0.06)" vertical={false} />
                       <XAxis
                         dataKey="label"
-                        stroke="#9bb3c5"
+                        stroke="#B5A488"
                         tickLine={false}
                         axisLine={false}
                         minTickGap={48}
                       />
-                      <YAxis stroke="#9bb3c5" tickLine={false} axisLine={false} />
+                      <YAxis stroke="#B5A488" tickLine={false} axisLine={false} />
                       <Tooltip
                         contentStyle={{
-                          background: '#0f2431',
+                          background: '#1A1210',
                           border: '1px solid rgba(255,255,255,0.1)',
                           borderRadius: '16px',
                         }}
@@ -344,15 +344,15 @@ export default function MarketSharePage() {
                         type="monotone"
                         dataKey="Netzwerk"
                         stackId="viewers"
-                        stroke="#10b7ad"
-                        fill="rgba(16,183,173,0.45)"
+                        stroke="#00D9FF"
+                        fill="rgba(0, 217, 255,0.45)"
                       />
                       <Area
                         type="monotone"
                         dataKey="Rest"
                         stackId="viewers"
-                        stroke="#3a566b"
-                        fill="rgba(58,86,107,0.30)"
+                        stroke="#7A6C57"
+                        fill="rgba(122, 108, 87,0.30)"
                       />
                     </ComposedChart>
                   </ResponsiveContainer>
@@ -368,15 +368,15 @@ export default function MarketSharePage() {
                       <CartesianGrid stroke="rgba(255,255,255,0.06)" vertical={false} />
                       <XAxis
                         dataKey="label"
-                        stroke="#9bb3c5"
+                        stroke="#B5A488"
                         tickLine={false}
                         axisLine={false}
                         minTickGap={48}
                       />
-                      <YAxis stroke="#10b7ad" tickLine={false} axisLine={false} />
+                      <YAxis stroke="#00D9FF" tickLine={false} axisLine={false} />
                       <Tooltip
                         contentStyle={{
-                          background: '#0f2431',
+                          background: '#1A1210',
                           border: '1px solid rgba(255,255,255,0.1)',
                           borderRadius: '16px',
                         }}
@@ -384,9 +384,9 @@ export default function MarketSharePage() {
                       <Area
                         type="monotone"
                         dataKey="Netzwerk"
-                        stroke="#10b7ad"
+                        stroke="#00D9FF"
                         strokeWidth={2}
-                        fill="rgba(16,183,173,0.30)"
+                        fill="rgba(0, 217, 255,0.30)"
                       />
                     </ComposedChart>
                   </ResponsiveContainer>
@@ -406,15 +406,15 @@ export default function MarketSharePage() {
                       <CartesianGrid stroke="rgba(255,255,255,0.06)" vertical={false} />
                       <XAxis
                         dataKey="label"
-                        stroke="#9bb3c5"
+                        stroke="#B5A488"
                         tickLine={false}
                         axisLine={false}
                         minTickGap={48}
                       />
-                      <YAxis stroke="#7aa2f7" tickLine={false} axisLine={false} unit="%" />
+                      <YAxis stroke="#00D9FF" tickLine={false} axisLine={false} unit="%" />
                       <Tooltip
                         contentStyle={{
-                          background: '#0f2431',
+                          background: '#1A1210',
                           border: '1px solid rgba(255,255,255,0.1)',
                           borderRadius: '16px',
                         }}
@@ -422,9 +422,9 @@ export default function MarketSharePage() {
                       <Area
                         type="monotone"
                         dataKey="Kanal-Anteil %"
-                        stroke="#7aa2f7"
+                        stroke="#00D9FF"
                         strokeWidth={2}
-                        fill="rgba(122,162,247,0.16)"
+                        fill="rgba(0,217,255,0.16)"
                         connectNulls
                       />
                     </ComposedChart>
@@ -445,15 +445,15 @@ export default function MarketSharePage() {
                       <CartesianGrid stroke="rgba(255,255,255,0.06)" vertical={false} />
                       <XAxis
                         dataKey="label"
-                        stroke="#9bb3c5"
+                        stroke="#B5A488"
                         tickLine={false}
                         axisLine={false}
                         minTickGap={48}
                       />
-                      <YAxis stroke="#9bb3c5" tickLine={false} axisLine={false} />
+                      <YAxis stroke="#B5A488" tickLine={false} axisLine={false} />
                       <Tooltip
                         contentStyle={{
-                          background: '#0f2431',
+                          background: '#1A1210',
                           border: '1px solid rgba(255,255,255,0.1)',
                           borderRadius: '16px',
                         }}
@@ -463,15 +463,15 @@ export default function MarketSharePage() {
                         type="monotone"
                         dataKey="Netzwerk-Kanäle"
                         stackId="streams"
-                        stroke="#10b7ad"
-                        fill="rgba(16,183,173,0.45)"
+                        stroke="#00D9FF"
+                        fill="rgba(0, 217, 255,0.45)"
                       />
                       <Area
                         type="monotone"
                         dataKey="Rest-Kanäle"
                         stackId="streams"
-                        stroke="#3a566b"
-                        fill="rgba(58,86,107,0.30)"
+                        stroke="#7A6C57"
+                        fill="rgba(122, 108, 87,0.30)"
                       />
                     </ComposedChart>
                   </ResponsiveContainer>

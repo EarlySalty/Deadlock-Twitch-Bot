@@ -11,7 +11,7 @@ interface AudienceSharingProps {
   data: AudienceSharingData | undefined;
 }
 
-const LINE_COLORS = ['#c8a86b', '#55978f', '#dd6a4d'];
+const LINE_COLORS = ['#C5A059', '#00D9FF', '#FF5A3C'];
 
 export function AudienceSharing({ data }: AudienceSharingProps) {
   const current = useMemo(() => data?.current ?? [], [data]);
@@ -82,11 +82,11 @@ export function AudienceSharing({ data }: AudienceSharingProps) {
           <div className="h-[300px]">
             <ResponsiveContainer width="100%" height="100%">
               <BarChart data={barData} layout="vertical" margin={{ left: 80 }}>
-                <XAxis type="number" stroke="#b7aa91" fontSize={12} />
+                <XAxis type="number" stroke="#B5A488" fontSize={12} />
                 <YAxis
                   type="category"
                   dataKey="streamer"
-                  stroke="#b7aa91"
+                  stroke="#B5A488"
                   fontSize={12}
                   width={75}
                 />
@@ -154,8 +154,8 @@ export function AudienceSharing({ data }: AudienceSharingProps) {
           <div className="h-[250px]">
             <ResponsiveContainer width="100%" height="100%">
               <LineChart data={lineData}>
-                <XAxis dataKey="month" stroke="#b7aa91" fontSize={12} />
-                <YAxis stroke="#b7aa91" fontSize={12} />
+                <XAxis dataKey="month" stroke="#B5A488" fontSize={12} />
+                <YAxis stroke="#B5A488" fontSize={12} />
                 <Tooltip
                   contentStyle={{
                     backgroundColor: 'var(--color-popover)',

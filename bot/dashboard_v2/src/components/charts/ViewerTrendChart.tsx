@@ -66,16 +66,16 @@ export function ViewerTrendChart({ sessions, title = 'Viewer Trend' }: ViewerTre
                 <stop offset="95%" stopColor="var(--color-accent)" stopOpacity={0} />
               </linearGradient>
             </defs>
-            <CartesianGrid strokeDasharray="3 3" stroke="rgba(201, 168, 106, 0.24)" />
+            <CartesianGrid strokeDasharray="3 3" stroke="rgba(197, 160, 89, 0.24)" />
             <XAxis
               dataKey="date"
-              stroke="#b7aa91"
+              stroke="#B5A488"
               fontSize={12}
               tickLine={false}
               axisLine={false}
             />
             <YAxis
-              stroke="#b7aa91"
+              stroke="#B5A488"
               fontSize={12}
               tickLine={false}
               axisLine={false}

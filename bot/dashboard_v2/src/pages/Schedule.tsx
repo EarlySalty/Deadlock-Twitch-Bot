@@ -186,7 +186,7 @@ export function Schedule({ streamer, days }: ScheduleProps) {
               <div
                 key={intensity}
                 className="w-4 h-4 rounded"
-                style={{ backgroundColor: `rgba(85, 151, 143, ${intensity})` }}
+                style={{ backgroundColor: `rgba(0, 217, 255, ${intensity})` }}
               />
             ))}
           </div>
@@ -286,8 +286,8 @@ function HeatmapGrid({ data, weekdayNames }: HeatmapGridProps) {
                   className="flex-1 h-8 rounded-sm relative group cursor-pointer"
                   style={{
                     backgroundColor: hasData
-                      ? `rgba(85, 151, 143, ${0.1 + intensity * 0.9})`
-                      : 'rgba(44, 35, 24, 0.3)',
+                      ? `rgba(0, 217, 255, ${0.1 + intensity * 0.9})`
+                      : 'rgba(31, 24, 21, 0.3)',
                   }}
                 >
                   {/* Tooltip */}

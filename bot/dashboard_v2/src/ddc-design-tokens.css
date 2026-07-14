@@ -11,28 +11,28 @@
 
 :root {
   /* ── Background Scale ── */
-  --color-bg:           #1c150d;   /* deepest background */
-  --color-bg-alt:       #241c11;   /* slightly lighter bg */
-  --color-bg-elevated:  #241c11;   /* page background */
-  --color-card:         #2c2318;   /* card surface */
-  --color-card-hover:   #352a1b;   /* card hover */
-  --color-popover:      #2c2318;   /* popovers / dropdowns */
+  --color-bg:           #140D0A;   /* deepest background */
+  --color-bg-alt:       #1A1210;   /* slightly lighter bg */
+  --color-bg-elevated:  #1A1210;   /* page background */
+  --color-card:         #1F1815;   /* card surface */
+  --color-card-hover:   #2A211B;   /* card hover */
+  --color-popover:      #1F1815;   /* popovers / dropdowns */
 
   /* ── Brand Primary: Website Context ── */
-  --color-web-primary:        #c8a86b;
-  --color-web-primary-hover:  #efd49d;
-  --color-web-primary-soft:   rgba(201, 168, 106, 0.20);
-  --color-web-accent:         #55978f;
-  --color-web-accent-hover:   #6fb3aa;
-  --color-web-accent-soft:    rgba(85, 151, 143, 0.20);
+  --color-web-primary:        #C5A059;
+  --color-web-primary-hover:  #F1D299;
+  --color-web-primary-soft:   rgba(197, 160, 89, 0.20);
+  --color-web-accent:         #00D9FF;
+  --color-web-accent-hover:   #5CE7FF;
+  --color-web-accent-soft:    rgba(0, 217, 255, 0.20);
 
   /* ── Brand Primary: Dashboard Context ── */
-  --color-dash-primary:       #c8a86b;
-  --color-dash-primary-hover: #efd49d;
-  --color-dash-primary-soft:  rgba(201, 168, 106, 0.20);
-  --color-dash-accent:        #55978f;
-  --color-dash-accent-hover:  #6fb3aa;
-  --color-dash-accent-soft:   rgba(85, 151, 143, 0.20);
+  --color-dash-primary:       #C5A059;
+  --color-dash-primary-hover: #F1D299;
+  --color-dash-primary-soft:  rgba(197, 160, 89, 0.20);
+  --color-dash-accent:        #00D9FF;
+  --color-dash-accent-hover:  #5CE7FF;
+  --color-dash-accent-soft:   rgba(0, 217, 255, 0.20);
 
   /* ── Semantic / Shared Aliases ── */
   --color-primary:       var(--color-web-primary);
@@ -43,30 +43,30 @@
   --color-accent-soft:   var(--color-web-accent-soft);
 
   /* ── Status ── */
-  --color-success:  #3fa66b;
-  --color-warning:  #e0912f;
-  --color-danger:   #dd6a4d;
-  --color-info:     #55978f;
+  --color-success:  #00FF88;
+  --color-warning:  #E8A33D;
+  --color-danger:   #FF5A3C;
+  --color-info:     #00D9FF;
 
-  --color-success-soft: rgba(63, 166, 107, 0.15);
-  --color-warning-soft: rgba(224, 145, 47, 0.15);
-  --color-danger-soft:  rgba(221, 106, 77, 0.15);
+  --color-success-soft: rgba(0, 255, 136, 0.15);
+  --color-warning-soft: rgba(232, 163, 61, 0.15);
+  --color-danger-soft:  rgba(255, 90, 60, 0.15);
 
   /* ── Text ── */
-  --color-text:     #ece0c8;   /* primary text */
-  --color-muted:    #b7aa91;   /* secondary / muted text */
-  --color-subtle:   #746a57;   /* very muted / disabled */
+  --color-text:     #EDE0C4;   /* primary text */
+  --color-muted:    #B5A488;   /* secondary / muted text */
+  --color-subtle:   #7A6C57;   /* very muted / disabled */
 
   /* ── Border ── */
-  --color-border:        rgba(201, 168, 106, 0.24);
-  --color-border-strong: rgba(201, 168, 106, 0.52);
-  --color-border-hover:  rgba(201, 168, 106, 0.42);
+  --color-border:        rgba(197, 160, 89, 0.24);
+  --color-border-strong: rgba(197, 160, 89, 0.52);
+  --color-border-hover:  rgba(197, 160, 89, 0.42);
 
   /* ── Gradients ── */
-  --gradient-brand:   linear-gradient(120deg, #efd49d 10%, #c8a86b 55%, #55978f);
-  --gradient-dash:    linear-gradient(135deg, #c8a86b, #55978f);
-  --gradient-bg:      linear-gradient(160deg, #241c11 0%, #1c150d 55%, #241c11 100%);
-  --gradient-hero:    linear-gradient(160deg, #1c150d 0%, #241c11 55%, #2c2318 100%);
+  --gradient-brand:   linear-gradient(120deg, #F1D299 10%, #C5A059 55%, #00D9FF);
+  --gradient-dash:    linear-gradient(135deg, #C5A059, #00D9FF);
+  --gradient-bg:      linear-gradient(160deg, #1A1210 0%, #140D0A 55%, #1A1210 100%);
+  --gradient-hero:    linear-gradient(160deg, #140D0A 0%, #1A1210 55%, #1F1815 100%);
 
   /* ── Typography ── */
   --font-display: 'Sora', 'Manrope', sans-serif;
@@ -118,8 +118,8 @@
   --shadow-xl:  0 28px 56px rgba(0,0,0,0.35);
 
   /* ── Shadow: primary glow ── */
-  --shadow-primary-glow: 0 12px 28px rgba(201, 168, 106, 0.22);
-  --shadow-primary-glow-hover: 0 16px 36px rgba(201, 168, 106, 0.35), 0 0 20px rgba(201, 168, 106, 0.12);
+  --shadow-primary-glow: 0 12px 28px rgba(197, 160, 89, 0.22);
+  --shadow-primary-glow-hover: 0 16px 36px rgba(197, 160, 89, 0.35), 0 0 20px rgba(197, 160, 89, 0.12);
 
   /* ── Spacing Scale ── */
   --space-1:  0.25rem;  /* 4px */
@@ -216,7 +216,7 @@
 .code {
   font-family: var(--font-mono);
   font-size: 0.85em;
-  background: rgba(44, 35, 24, 0.8);
+  background: rgba(31, 24, 21, 0.8);
   border: 1px solid var(--color-border);
   border-radius: var(--radius-sm);
   padding: 0.15em 0.45em;

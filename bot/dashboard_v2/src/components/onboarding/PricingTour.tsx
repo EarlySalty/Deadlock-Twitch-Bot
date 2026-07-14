@@ -285,11 +285,11 @@ export function PricingTour({ onComplete }: PricingTourProps) {
           >
             <div
               className="absolute inset-0 rounded-[12px]"
-              style={{ boxShadow: '0 0 0 9999px rgba(28, 21, 13, 0.72)' }}
+              style={{ boxShadow: '0 0 0 9999px rgba(20, 13, 10, 0.72)' }}
             />
             <motion.div
               className="absolute inset-0 rounded-[12px] border-2 border-[color:var(--color-primary)]"
-              style={{ boxShadow: '0 0 30px rgba(201, 168, 106, 0.5)' }}
+              style={{ boxShadow: '0 0 30px rgba(197, 160, 89, 0.5)' }}
               animate={{ scale: [1, 1.02, 1], opacity: [1, 0.7, 1] }}
               transition={{ duration: 2, ease: 'easeInOut', repeat: Number.POSITIVE_INFINITY }}
             />
@@ -304,7 +304,7 @@ export function PricingTour({ onComplete }: PricingTourProps) {
             animate={{ left: popoverPosition.left, top: popoverPosition.top }}
             transition={{ type: 'spring', stiffness: 380, damping: 36, mass: 0.9 }}
           >
-            <div className="panel-card rounded-[20px] border border-[color:rgba(201, 168, 106, 0.3)] bg-[linear-gradient(160deg,#2c2318,#241c11)] p-4 shadow-[0_24px_60px_-24px_rgba(0,0,0,0.78)]">
+            <div className="panel-card rounded-[20px] border border-[color:rgba(197, 160, 89, 0.3)] bg-[linear-gradient(160deg,#1F1815,#1A1210)] p-4 shadow-[0_24px_60px_-24px_rgba(0,0,0,0.78)]">
               <button
                 type="button"
                 onClick={() => dismissTour()}

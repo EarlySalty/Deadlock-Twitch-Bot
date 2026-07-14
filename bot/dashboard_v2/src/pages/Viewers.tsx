@@ -45,11 +45,11 @@ interface ViewersProps {
 
 // eslint-disable-next-line react-refresh/only-export-components
 export const SEGMENT_CONFIG: Record<string, { label: string; color: string; bgClass: string }> = {
-  dedicated: { label: 'Dedicated', color: '#c8a86b', bgClass: 'bg-primary/10 text-primary border-primary/20' },
-  regular: { label: 'Regular', color: '#55978f', bgClass: 'bg-accent/10 text-accent border-accent/20' },
-  casual: { label: 'Casual', color: '#dd6a4d', bgClass: 'bg-danger/10 text-danger border-danger/20' },
-  lurker: { label: 'Lurker', color: '#8f9e6b', bgClass: 'bg-secondary/10 text-secondary border-secondary/20' },
-  new: { label: 'Neu', color: '#b7aa91', bgClass: 'bg-secondary/10 text-secondary border-secondary/20' },
+  dedicated: { label: 'Dedicated', color: '#C5A059', bgClass: 'bg-primary/10 text-primary border-primary/20' },
+  regular: { label: 'Regular', color: '#00D9FF', bgClass: 'bg-accent/10 text-accent border-accent/20' },
+  casual: { label: 'Casual', color: '#FF5A3C', bgClass: 'bg-danger/10 text-danger border-danger/20' },
+  lurker: { label: 'Lurker', color: '#00C46A', bgClass: 'bg-secondary/10 text-secondary border-secondary/20' },
+  new: { label: 'Neu', color: '#B5A488', bgClass: 'bg-secondary/10 text-secondary border-secondary/20' },
 };
 
 const FILTER_OPTIONS: { value: ViewerFilterType; label: string }[] = [
@@ -76,16 +76,16 @@ const PERSONALITY_LABELS: Record<string, string> = {
 };
 
 const PERSONALITY_COLORS = [
-  '#c8a86b', // Command
-  '#55978f', // Greeting
-  '#dd6a4d', // Question
-  '#8f9e6b', // Reaction
-  '#b7aa91', // Hype
+  '#C5A059', // Command
+  '#00D9FF', // Greeting
+  '#FF5A3C', // Question
+  '#00C46A', // Reaction
+  '#B5A488', // Hype
   'var(--color-warning)', // Game-Related
-  '#c8a86b', // Feedback
-  '#55978f', // Technical
-  '#dd6a4d', // Social
-  '#8f9e6b', // Other
+  '#C5A059', // Feedback
+  '#00D9FF', // Technical
+  '#FF5A3C', // Social
+  '#00C46A', // Other
 ];
 
 function formatNumber(n: number): string {
@@ -485,8 +485,8 @@ export function Viewers({ streamer, days }: ViewersProps) {
   const donutData = useMemo(() => {
     if (!directory?.summary) return [];
     return [
-      { name: 'Exklusiv', value: directory.summary.exclusiveViewers, color: '#c8a86b' },
-      { name: 'Shared', value: directory.summary.sharedViewers, color: '#55978f' },
+      { name: 'Exklusiv', value: directory.summary.exclusiveViewers, color: '#C5A059' },
+      { name: 'Shared', value: directory.summary.sharedViewers, color: '#00D9FF' },
     ];
   }, [directory?.summary]);
 

@@ -52,7 +52,7 @@ export function TrialExpiryModal() {
       />
 
       {/* Modal */}
-      <div className="relative z-10 mx-4 w-full max-w-lg rounded-2xl border border-border bg-gradient-to-b from-[#2c2318] to-[#241c11] p-6 shadow-2xl">
+      <div className="relative z-10 mx-4 w-full max-w-lg rounded-2xl border border-border bg-gradient-to-b from-[#1F1815] to-[#1A1210] p-6 shadow-2xl">
         <button
           type="button"
           onClick={handleDismiss}
@@ -104,7 +104,7 @@ export function TrialExpiryModal() {
             <button
               type="button"
               onClick={handleUpgrade}
-              className="flex-1 flex items-center justify-center gap-2 rounded-lg bg-primary px-4 py-2.5 text-sm font-semibold text-[#16100a] transition hover:bg-primary/80"
+              className="flex-1 flex items-center justify-center gap-2 rounded-lg bg-primary px-4 py-2.5 text-sm font-semibold text-[#0D0806] transition hover:bg-primary/80"
             >
               <Sparkles className="h-4 w-4" />
               Jetzt upgraden

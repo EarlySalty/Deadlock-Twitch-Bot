@@ -42,22 +42,22 @@ const LOYALTY_LABELS: Record<string, { label: string; color: string }> = {
 };
 
 const TOPIC_COLORS: Record<string, string> = {
-  heroes: '#c8a86b',
-  builds: '#55978f',
-  ranked: '#dd6a4d',
-  meta: '#8f9e6b',
-  gameplay: '#b7aa91',
+  heroes: '#C5A059',
+  builds: '#00D9FF',
+  ranked: '#FF5A3C',
+  meta: '#00C46A',
+  gameplay: '#B5A488',
   backseat: 'var(--color-warning)',
-  commands: '#c8a86b',
-  social: '#55978f',
-  smalltalk: '#dd6a4d',
-  greeting: '#8f9e6b',
-  community: '#b7aa91',
+  commands: '#C5A059',
+  social: '#00D9FF',
+  smalltalk: '#FF5A3C',
+  greeting: '#00C46A',
+  community: '#B5A488',
   reaction: 'var(--color-warning)',
-  hype: '#c8a86b',
-  feedback: '#55978f',
-  technical: '#dd6a4d',
-  other: '#8f9e6b',
+  hype: '#C5A059',
+  feedback: '#00D9FF',
+  technical: '#FF5A3C',
+  other: '#00C46A',
 };
 
 const TOPIC_LABELS: Record<string, string> = {
@@ -307,7 +307,7 @@ export function StimmungTopicsSection({ data }: { data: ChatContentAnalysis }) {
   const donutData = topicEntries.map(([key, value]) => ({
     name: TOPIC_LABELS[key] || key,
     value,
-    color: TOPIC_COLORS[key] || '#b7aa91',
+    color: TOPIC_COLORS[key] || '#B5A488',
   }));
 
   return (
@@ -626,7 +626,7 @@ export function ChatMinimaxDeepSection({
   const donutData = topicEntries.map(([key, value]) => ({
     name: TOPIC_LABELS[key] || key,
     value: value as number,
-    color: TOPIC_COLORS[key.toLowerCase()] || '#b7aa91',
+    color: TOPIC_COLORS[key.toLowerCase()] || '#B5A488',
   }));
 
   return (
@@ -647,7 +647,7 @@ export function ChatMinimaxDeepSection({
         {!data && !isLoading && (
           <button
             onClick={handleAnalysis}
-            className="flex items-center gap-2 rounded-xl bg-primary px-4 py-2 text-sm font-bold text-[#16100a] shadow-lg shadow-primary/20 transition-all hover:scale-105 active:scale-95"
+            className="flex items-center gap-2 rounded-xl bg-primary px-4 py-2 text-sm font-bold text-[#0D0806] shadow-lg shadow-primary/20 transition-all hover:scale-105 active:scale-95"
           >
             <Sparkles className="h-4 w-4" />
             Analyse starten

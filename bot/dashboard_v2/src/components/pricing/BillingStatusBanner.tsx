@@ -58,9 +58,9 @@ const CANCEL_MESSAGES: Record<string, BannerMessage> = {
 };
 
 const TONE_STYLES: Record<Tone, string> = {
-  success: 'border-[#55978f]/30 bg-[#55978f]/10 text-[#6fb3aa]',
+  success: 'border-[#00D9FF]/30 bg-[#00D9FF]/10 text-[#5CE7FF]',
   info: 'border-white/15 bg-white/5 text-white/70',
-  warn: 'border-[#c8a86b]/30 bg-[#c8a86b]/10 text-[#c8a86b]',
+  warn: 'border-[#C5A059]/30 bg-[#C5A059]/10 text-[#C5A059]',
 };
 
 const TONE_ICON = {

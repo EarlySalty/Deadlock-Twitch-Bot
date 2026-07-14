@@ -122,7 +122,7 @@ export default function DatabaseQueryPage() {
           </Section>
 
           {error ? (
-            <div className="rounded-[1.4rem] border border-red-500/30 bg-red-500/[0.06] p-4 font-mono text-sm text-red-300">
+            <div className="rounded-[1.4rem] border border-danger/30 bg-danger/[0.06] p-4 font-mono text-sm text-danger">
               {error}
             </div>
           ) : null}

@@ -1,24 +1,25 @@
 @import "tailwindcss";
+@import "../../shared-theme/industrial-gold.css";
 
 @theme {
-  --color-bg: #07151d;
-  --color-background: #0b1d28;
-  --color-card: #102635;
-  --color-card-hover: #173448;
-  --color-primary: #ff7a18;
-  --color-primary-hover: #ff8d39;
-  --color-accent: #10b7ad;
-  --color-accent-hover: #1dd4ca;
-  --color-success: #2ecc71;
-  --color-warning: #f5b642;
-  --color-danger: #ff6b5e;
-  --color-error: #ff6b5e;
-  --color-secondary: #8ea8bb;
-  --color-text-primary: #e9f1f7;
-  --color-text-secondary: #9bb3c5;
-  --color-border: rgba(194, 221, 240, 0.14);
-  --color-border-hover: rgba(194, 221, 240, 0.3);
-  --color-popover: #0e2a3a;
+  --color-bg: #140D0A;
+  --color-background: #1A1210;
+  --color-card: #1F1815;
+  --color-card-hover: #2A211B;
+  --color-primary: #C5A059;
+  --color-primary-hover: #F1D299;
+  --color-accent: #00D9FF;
+  --color-accent-hover: #5CE7FF;
+  --color-success: #00FF88;
+  --color-warning: #E8A33D;
+  --color-danger: #FF5A3C;
+  --color-error: #FF5A3C;
+  --color-secondary: #B5A488;
+  --color-text-primary: #EDE0C4;
+  --color-text-secondary: #B5A488;
+  --color-border: rgba(227, 212, 182, 0.14);
+  --color-border-hover: rgba(227, 212, 182, 0.3);
+  --color-popover: #1F1815;
   --font-sans: "Manrope", "Segoe UI", sans-serif;
   --font-display: "Sora", "Manrope", sans-serif;
 }
@@ -37,11 +38,23 @@ body {
   margin: 0;
   min-height: 100vh;
   font-family: var(--font-sans);
+  /* Schmiede-Grund. Die Plasma-Glows waren als Petrol-Akzente stark gesetzt;
+     als Plasma sind sie Statusfarbe und muessen zurueckgenommen werden,
+     sonst dominiert Neon statt Gold. */
   background:
-    radial-gradient(1200px 540px at 92% -10%, rgba(255, 122, 24, 0.24), transparent 65%),
-    radial-gradient(940px 500px at 9% -18%, rgba(16, 183, 173, 0.3), transparent 60%),
-    radial-gradient(1040px 540px at 52% 106%, rgba(46, 204, 113, 0.22), transparent 68%),
-    linear-gradient(160deg, #07151d 0%, #081a24 55%, #0a202c 100%);
+    radial-gradient(1200px 540px at 92% -10%, rgba(197, 160, 89, 0.18), transparent 65%),
+    radial-gradient(940px 500px at 9% -18%, rgba(0, 217, 255, 0.08), transparent 60%),
+    radial-gradient(1040px 540px at 52% 106%, rgba(0, 255, 136, 0.05), transparent 68%),
+    repeating-linear-gradient(
+      92deg,
+      rgba(0, 0, 0, 0.13) 0px,
+      rgba(0, 0, 0, 0) 2px,
+      rgba(241, 210, 153, 0.012) 3px,
+      rgba(0, 0, 0, 0) 6px,
+      rgba(0, 0, 0, 0.09) 9px,
+      rgba(0, 0, 0, 0) 14px
+    ),
+    linear-gradient(160deg, #140D0A 0%, #0D0806 55%, #16100D 100%);
   color: var(--color-text-primary);
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
@@ -53,12 +66,23 @@ body::before {
   inset: 0;
   pointer-events: none;
   background-image:
-    linear-gradient(rgba(255, 255, 255, 0.025) 1px, transparent 1px),
-    linear-gradient(90deg, rgba(255, 255, 255, 0.025) 1px, transparent 1px);
+    linear-gradient(rgba(197, 160, 89, 0.05) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(197, 160, 89, 0.05) 1px, transparent 1px);
   background-size: 36px 36px;
   mask-image: radial-gradient(ellipse at top, black 42%, transparent 75%);
   opacity: 0.35;
   z-index: 0;
+}
+
+/* Koernung: statisch, siehe shared-theme/industrial-gold.css */
+body::after {
+  content: "";
+  position: fixed;
+  inset: 0;
+  pointer-events: none;
+  z-index: 0;
+  opacity: 0.028;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='140' height='140'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='3'/%3E%3C/filter%3E%3Crect width='140' height='140' filter='url(%23n)'/%3E%3C/svg%3E");
 }
 
 #root {
@@ -101,32 +125,52 @@ select {
 }
 
 ::-webkit-scrollbar-track {
-  background: #071923;
+  background: #0D0806;
 }
 
 ::-webkit-scrollbar-thumb {
-  background: linear-gradient(180deg, #1a3f57 0%, #204e6b 100%);
+  background: linear-gradient(180deg, #2A211B 0%, #3A2E25 100%);
   border-radius: 999px;
-  border: 2px solid #071923;
+  border: 2px solid #0D0806;
 }
 
+/* Kachel-Klassen tragen die Material-Optik (identisch zu dashboard_v2) */
 .glass {
-  background: rgba(12, 35, 49, 0.72);
-  backdrop-filter: blur(16px);
+  background-color: rgba(31, 24, 21, 0.82);
+  background-image: repeating-linear-gradient(
+    177deg,
+    rgba(255, 255, 255, 0.016) 0px,
+    rgba(255, 255, 255, 0) 1px,
+    rgba(0, 0, 0, 0.045) 2px,
+    rgba(255, 255, 255, 0) 3px
+  );
+  backdrop-filter: blur(14px);
   border: 1px solid var(--color-border);
   box-shadow:
-    0 16px 40px rgba(0, 0, 0, 0.28),
-    inset 0 1px 0 rgba(255, 255, 255, 0.04);
+    inset 0 1px 0 rgba(241, 210, 153, 0.12),
+    inset 0 -1px 0 rgba(0, 0, 0, 0.5),
+    0 16px 40px rgba(0, 0, 0, 0.4);
 }
 
 .panel-card {
   position: relative;
   overflow: hidden;
-  background: linear-gradient(160deg, rgba(16, 38, 53, 0.92) 0%, rgba(10, 30, 42, 0.92) 100%);
+  isolation: isolate;
+  background-color: var(--color-card);
+  background-image:
+    linear-gradient(158deg, rgba(241, 210, 153, 0.05) 0%, rgba(0, 0, 0, 0.18) 62%, rgba(0, 0, 0, 0.3) 100%),
+    repeating-linear-gradient(
+      177deg,
+      rgba(255, 255, 255, 0.016) 0px,
+      rgba(255, 255, 255, 0) 1px,
+      rgba(0, 0, 0, 0.045) 2px,
+      rgba(255, 255, 255, 0) 3px
+    );
   border: 1px solid var(--color-border);
   box-shadow:
-    0 10px 30px rgba(0, 0, 0, 0.25),
-    inset 0 1px 0 rgba(255, 255, 255, 0.05);
+    inset 0 1px 0 rgba(241, 210, 153, 0.14),
+    inset 0 -1px 0 rgba(0, 0, 0, 0.55),
+    0 14px 34px rgba(0, 0, 0, 0.45);
 }
 
 .panel-card::after {
@@ -134,8 +178,12 @@ select {
   position: absolute;
   inset: 0;
   pointer-events: none;
-  background: linear-gradient(120deg, rgba(255, 255, 255, 0.05), transparent 35%);
-  opacity: 0.4;
+  background-image:
+    radial-gradient(circle at 11px 11px, #F1D299 0.6px, #9A7C42 1.7px, rgba(0, 0, 0, 0.5) 2.6px, transparent 3.2px),
+    radial-gradient(circle at calc(100% - 11px) 11px, #F1D299 0.6px, #9A7C42 1.7px, rgba(0, 0, 0, 0.5) 2.6px, transparent 3.2px),
+    radial-gradient(circle at 11px calc(100% - 11px), #F1D299 0.6px, #9A7C42 1.7px, rgba(0, 0, 0, 0.5) 2.6px, transparent 3.2px),
+    radial-gradient(circle at calc(100% - 11px) calc(100% - 11px), #F1D299 0.6px, #9A7C42 1.7px, rgba(0, 0, 0, 0.5) 2.6px, transparent 3.2px);
+  opacity: 0.6;
 }
 
 .soft-elevate {
@@ -150,8 +198,8 @@ select {
 
 .metric-highlight {
   box-shadow:
-    0 0 0 1px rgba(255, 122, 24, 0.24),
-    0 12px 32px rgba(255, 122, 24, 0.16);
+    0 0 0 1px rgba(197, 160, 89, 0.24),
+    0 12px 32px rgba(197, 160, 89, 0.16);
 }
 
 .stat-pill {
@@ -160,7 +208,7 @@ select {
   gap: 0.4rem;
   border-radius: 999px;
   border: 1px solid var(--color-border);
-  background: rgba(8, 24, 33, 0.76);
+  background: rgba(20, 13, 10, 0.76);
   padding: 0.45rem 0.82rem;
   color: var(--color-text-secondary);
   font-size: 0.74rem;
@@ -188,15 +236,15 @@ select {
   width: 100%;
   border-radius: 1rem;
   border: 1px solid var(--color-border);
-  background: rgba(8, 24, 33, 0.72);
+  background: rgba(20, 13, 10, 0.72);
   color: var(--color-text-primary);
   padding: 0.9rem 1rem;
   outline: none;
 }
 
 .admin-input:focus {
-  border-color: rgba(255, 122, 24, 0.48);
-  box-shadow: 0 0 0 4px rgba(255, 122, 24, 0.12);
+  border-color: rgba(197, 160, 89, 0.48);
+  box-shadow: 0 0 0 4px rgba(197, 160, 89, 0.12);
 }
 
 .admin-button {
@@ -218,20 +266,20 @@ select {
 }
 
 .admin-button-primary {
-  background: linear-gradient(135deg, var(--color-primary), #ff934c);
-  color: #07151d;
+  background: linear-gradient(135deg, var(--color-primary), #F1D299);
+  color: #140D0A;
 }
 
 .admin-button-secondary {
-  background: rgba(8, 24, 33, 0.76);
+  background: rgba(20, 13, 10, 0.76);
   border-color: var(--color-border);
   color: var(--color-text-primary);
 }
 
 .admin-button-danger {
-  background: rgba(255, 107, 94, 0.16);
-  border-color: rgba(255, 107, 94, 0.32);
-  color: #ffd2ce;
+  background: rgba(255, 90, 60, 0.16);
+  border-color: rgba(255, 90, 60, 0.32);
+  color: #FFC9B8;
 }
 
 .admin-button:hover:not(:disabled) {
@@ -239,17 +287,17 @@ select {
 }
 
 .admin-button-primary:hover:not(:disabled) {
-  box-shadow: 0 12px 26px rgba(255, 122, 24, 0.24);
+  box-shadow: 0 12px 26px rgba(197, 160, 89, 0.24);
 }
 
 .admin-button-secondary:hover:not(:disabled) {
   border-color: var(--color-border-hover);
-  background: rgba(12, 30, 41, 0.82);
+  background: rgba(42, 33, 27, 0.86);
 }
 
 .admin-button-danger:hover:not(:disabled) {
-  border-color: rgba(255, 107, 94, 0.44);
-  background: rgba(255, 107, 94, 0.22);
+  border-color: rgba(255, 90, 60, 0.44);
+  background: rgba(255, 90, 60, 0.22);
 }
 
 .filter-chip {
@@ -258,7 +306,7 @@ select {
   gap: 0.45rem;
   border-radius: 999px;
   border: 1px solid var(--color-border);
-  background: rgba(8, 24, 33, 0.76);
+  background: rgba(20, 13, 10, 0.76);
   padding: 0.55rem 0.9rem;
   color: var(--color-text-primary);
   font-size: 0.8rem;
@@ -272,7 +320,7 @@ select {
 
 .filter-chip:hover {
   border-color: var(--color-border-hover);
-  background: rgba(14, 35, 47, 0.88);
+  background: rgba(42, 33, 27, 0.88);
 }
 
 .filter-chip button {
@@ -292,5 +340,5 @@ select {
   padding: 2rem;
   text-align: center;
   color: var(--color-text-secondary);
-  background: rgba(10, 24, 33, 0.48);
+  background: rgba(20, 13, 10, 0.52);
 }

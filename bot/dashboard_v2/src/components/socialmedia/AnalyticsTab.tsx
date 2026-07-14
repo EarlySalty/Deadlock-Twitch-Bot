@@ -189,9 +189,9 @@ export function AnalyticsTab({ streamer, clips }: AnalyticsTabProps) {
                         contentStyle={{ background: 'var(--color-popover)', border: '1px solid var(--color-border)', borderRadius: 16 }}
                       />
                       <Legend />
-                      <Bar dataKey="youtube_views" name="YouTube" fill="#c8a86b" radius={[8, 8, 0, 0]} />
-                      <Bar dataKey="tiktok_views" name="TikTok" fill="#55978f" radius={[8, 8, 0, 0]} />
-                      <Bar dataKey="instagram_views" name="Instagram" fill="#dd6a4d" radius={[8, 8, 0, 0]} />
+                      <Bar dataKey="youtube_views" name="YouTube" fill="#C5A059" radius={[8, 8, 0, 0]} />
+                      <Bar dataKey="tiktok_views" name="TikTok" fill="#00D9FF" radius={[8, 8, 0, 0]} />
+                      <Bar dataKey="instagram_views" name="Instagram" fill="#FF5A3C" radius={[8, 8, 0, 0]} />
                     </BarChart>
                   </ResponsiveContainer>
                 </div>
@@ -212,9 +212,9 @@ export function AnalyticsTab({ streamer, clips }: AnalyticsTabProps) {
                         contentStyle={{ background: 'var(--color-popover)', border: '1px solid var(--color-border)', borderRadius: 16 }}
                       />
                       <Legend />
-                      <Line type="monotone" dataKey="youtube_er" name="YouTube" stroke="#c8a86b" strokeWidth={2.5} dot={{ r: 4 }} />
-                      <Line type="monotone" dataKey="tiktok_er" name="TikTok" stroke="#55978f" strokeWidth={2.5} dot={{ r: 4 }} />
-                      <Line type="monotone" dataKey="instagram_er" name="Instagram" stroke="#dd6a4d" strokeWidth={2.5} dot={{ r: 4 }} />
+                      <Line type="monotone" dataKey="youtube_er" name="YouTube" stroke="#C5A059" strokeWidth={2.5} dot={{ r: 4 }} />
+                      <Line type="monotone" dataKey="tiktok_er" name="TikTok" stroke="#00D9FF" strokeWidth={2.5} dot={{ r: 4 }} />
+                      <Line type="monotone" dataKey="instagram_er" name="Instagram" stroke="#FF5A3C" strokeWidth={2.5} dot={{ r: 4 }} />
                     </LineChart>
                   </ResponsiveContainer>
                 </div>

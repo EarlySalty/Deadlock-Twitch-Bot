@@ -454,7 +454,7 @@ export function StreamerDetailPage() {
               <div className="mt-3 flex flex-wrap gap-2">
                 {grantedScopes.length ? (
                   grantedScopes.map((scope) => (
-                    <span key={scope} className="inline-flex items-center rounded-full border border-emerald-400/35 bg-emerald-500/14 px-2.5 py-1 text-[0.7rem] font-semibold uppercase tracking-[0.18em] text-emerald-100">
+                    <span key={scope} className="inline-flex items-center rounded-full border border-success/35 bg-success/14 px-2.5 py-1 text-[0.7rem] font-semibold uppercase tracking-[0.18em] text-success">
                       {scope}
                     </span>
                   ))
@@ -473,7 +473,7 @@ export function StreamerDetailPage() {
               <div className="mt-3 flex flex-wrap gap-2">
                 {missingScopes.length ? (
                   missingScopes.map((scope) => (
-                    <span key={scope} className="inline-flex items-center rounded-full border border-amber-400/35 bg-amber-500/14 px-2.5 py-1 text-[0.7rem] font-semibold uppercase tracking-[0.18em] text-amber-100">
+                    <span key={scope} className="inline-flex items-center rounded-full border border-warning/35 bg-warning/14 px-2.5 py-1 text-[0.7rem] font-semibold uppercase tracking-[0.18em] text-warning">
                       {scope}
                     </span>
                   ))
@@ -568,7 +568,7 @@ export function StreamerDetailPage() {
           </div>
           <button
             className={`relative inline-flex h-7 w-12 flex-shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200 focus:outline-none ${
-              engagementQuery.data?.enabled ? 'bg-emerald-500' : 'bg-white/20'
+              engagementQuery.data?.enabled ? 'bg-success' : 'bg-white/20'
             } ${engagementToggle.isPending ? 'opacity-50 cursor-not-allowed' : ''}`}
             disabled={engagementToggle.isPending}
             role="switch"
@@ -656,7 +656,7 @@ export function StreamerDetailPage() {
 
         <article className="panel-card rounded-[1.8rem] p-6">
           <p className="text-xs font-semibold uppercase tracking-[0.2em] text-text-secondary">Settings Snapshot</p>
-          <pre className="mt-4 overflow-auto rounded-[1.4rem] border border-white/10 bg-slate-950/55 p-4 text-xs leading-6 text-emerald-100">
+          <pre className="mt-4 overflow-auto rounded-[1.4rem] border border-white/10 bg-bg/55 p-4 text-xs leading-6 text-success">
             {JSON.stringify(settings, null, 2)}
           </pre>
         </article>

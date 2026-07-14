@@ -532,7 +532,7 @@ function TopStreamerTable({
 
 function RankBadge({ rank }: { rank: number }) {
   if (rank === 1) return (
-    <span className="w-7 h-7 rounded-full bg-gradient-to-br from-primary-hover to-primary flex items-center justify-center text-xs font-bold text-[#16100a]">1</span>
+    <span className="w-7 h-7 rounded-full bg-gradient-to-br from-primary-hover to-primary flex items-center justify-center text-xs font-bold text-[#0D0806]">1</span>
   );
   if (rank === 2) return (
     <span className="w-7 h-7 rounded-full bg-gradient-to-br from-text-secondary to-card-hover flex items-center justify-center text-xs font-bold text-white">2</span>

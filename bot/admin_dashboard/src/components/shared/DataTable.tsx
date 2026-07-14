@@ -53,7 +53,7 @@ export function DataTable<T>({
   });
 
   return (
-    <div className="overflow-hidden rounded-[1.5rem] border border-white/10 bg-slate-950/35">
+    <div className="overflow-hidden rounded-[1.5rem] border border-white/10 bg-bg/35">
       <div className="overflow-x-auto">
         <table className="min-w-full divide-y divide-white/10">
           <thead className="bg-white/5">

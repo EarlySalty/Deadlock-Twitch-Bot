@@ -175,7 +175,7 @@ export default function ChatActionsPage() {
               </div>
 
               {trimmedQuery ? (
-                <div className="rounded-[1.3rem] border border-white/10 bg-slate-950/35 p-2">
+                <div className="rounded-[1.3rem] border border-white/10 bg-bg/35 p-2">
                   {streamersQuery.isLoading && !streamersQuery.data ? (
                     <div className="px-3 py-3 text-sm text-text-secondary">Streamer werden geladen …</div>
                   ) : streamersQuery.isError ? (
@@ -263,7 +263,7 @@ export default function ChatActionsPage() {
             <div>
               <div className="flex items-center justify-between gap-3">
                 <p className="text-xs font-semibold uppercase tracking-[0.18em] text-text-secondary">Message</p>
-                <span className={`text-xs font-medium ${message.length > MESSAGE_LIMIT ? 'text-red-200' : 'text-text-secondary'}`}>
+                <span className={`text-xs font-medium ${message.length > MESSAGE_LIMIT ? 'text-danger' : 'text-text-secondary'}`}>
                   {message.length}/{MESSAGE_LIMIT}
                 </span>
               </div>
