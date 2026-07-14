@@ -11,6 +11,14 @@ import { ArrowLeft, BellRing, BookOpen, ExternalLink, Send } from "lucide-react"
  * nicht, verweigert es sie — hier wird also NICHT im Frontend nachgeholfen,
  * kein Fallback-Text, kein Raten. Ein Portier, der nichts weiss, nennt die
  * naechste Tuer; er erfindet keine Zimmernummer.
+ *
+ * WELCHER HANDLER BEDIENT DAS?
+ * `rust/crates/tb-dashboard-api/src/handlers/self_explainer.rs` — der Rust-Dienst
+ * tb-dashboard (:8769) ist live. Er liefert `{answer, parts, grounded, sources}`;
+ * `sources` wird dort aus dem Grounding befuellt und mitgesendet.
+ * NICHT `bot/dashboard/routes_self_explainer.py`: das ist die ausgemusterte
+ * Python-Vorlage des Ports, sie ist nirgends mehr eingebunden und laeuft nicht.
+ * Wer den Antwort-Vertrag dieser Seite pruefen will, liest den Rust-Handler.
  */
 
 const ASK_URL = "/twitch/api/v2/self-explainer/ask";
