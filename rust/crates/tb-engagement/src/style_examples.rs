@@ -25,13 +25,14 @@ const CACHE_TTL: Duration = Duration::from_secs(600);
 /// Kuratierter Stil-Fallback (DE/EN gemischt, klein, Slang, kurz) für kalte Channels.
 const SEED_EXAMPLES: &[&str] = &[
     "lol was war das für ein dive",
-    "brudi warum gehst du da solo rein 😭",
+    "brudi warum gehst du da solo rein",
     "der flick war einfach nasty ngl",
     "ok der gap close ist kriminell",
     "no shot dass der das überlebt hat",
     "warum peelt da eigentlich keiner",
-    "der teamfight grad war komplett wild",
-    "der heal kam mega clutch",
+    "der hat einfach so locked in aimbot",
+    "mach mal mehr seelen die minute",
+    "early kills machen nix aus",
     "sheesh die combo war eklig",
     "läuft bei dir heut richtig gut",
     "yo that dive was actually nasty",
@@ -259,6 +260,17 @@ mod tests {
         assert_eq!(out[0], "wilder take");
         // Channel-Zeile ist nach den Gold-Zeilen drin.
         assert!(out.contains(&"der dive war komplett wild".to_string()));
+    }
+
+    #[test]
+    fn feste_beispiele_erfuellen_den_sanitizer_vertrag() {
+        for example in GOLD_EXAMPLES.iter().chain(SEED_EXAMPLES) {
+            assert_eq!(
+                crate::minimax_chat::sanitize_chat_text(example, 120).as_deref(),
+                Some(*example),
+                "ungueltiges Beispiel: {example}"
+            );
+        }
     }
 
     async fn make_pool(schema: &str) -> Option<PgPool> {

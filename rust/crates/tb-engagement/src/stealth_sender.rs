@@ -12,6 +12,7 @@
 
 use std::sync::Arc;
 
+use crate::minimax_chat::sanitize_chat_text;
 use crate::sender_auth::SenderAuthStore;
 
 const DEFAULT_HELIX_URL: &str = "https://api.twitch.tv/helix/chat/messages";
@@ -47,8 +48,10 @@ impl StealthSender {
     /// `None` – kein Sende-Account onboarded (Aufrufer soll Fallback nutzen).
     pub async fn send(&self, broadcaster_id: &str, text: &str) -> Option<bool> {
         let broadcaster_id = broadcaster_id.trim();
-        let text = text.trim();
-        if broadcaster_id.is_empty() || text.is_empty() {
+        let Some(text) = sanitize_chat_text(text, 120) else {
+            return Some(false);
+        };
+        if broadcaster_id.is_empty() {
             return Some(false);
         }
 
@@ -117,7 +120,7 @@ mod tests {
     use sqlx::PgPool;
     use std::str::FromStr;
     use tb_crypto::{aad, FieldCipher};
-    use wiremock::matchers::{header, method, path};
+    use wiremock::matchers::{body_json, header, method, path};
     use wiremock::{Mock, MockServer, ResponseTemplate};
 
     fn cipher() -> Arc<FieldCipher> {
@@ -185,6 +188,11 @@ mod tests {
             .and(path("/helix/chat/messages"))
             .and(header("Client-ID", "cid"))
             .and(header("Authorization", "Bearer acc"))
+            .and(body_json(serde_json::json!({
+                "broadcaster_id": "123",
+                "sender_id": "77",
+                "message": "hallo, welt",
+            })))
             .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
                 "data": [{"message_id": "m", "is_sent": true}]
             })))
@@ -192,7 +200,7 @@ mod tests {
             .await;
         let sender = StealthSender::new(auth, "cid".into())
             .with_helix_url(format!("{}/helix/chat/messages", server.uri()));
-        assert_eq!(sender.send("123", "hallo").await, Some(true));
+        assert_eq!(sender.send("123", "hallo 😭 — welt!").await, Some(true));
     }
 
     #[tokio::test]

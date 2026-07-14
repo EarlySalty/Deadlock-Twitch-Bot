@@ -529,7 +529,7 @@ mod tests {
         Mock::given(method("POST"))
             .and(path("/chat/completions"))
             .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
-                "choices": [{"message": {"content": "klar haze ist stark grad"}}],
+                "choices": [{"message": {"content": "klar 😭 haze—stark! !clip"}}],
                 "usage": {"prompt_tokens": 100, "completion_tokens": 8}
             })))
             .mount(&server)
@@ -538,7 +538,7 @@ mod tests {
         let pipe = pipeline_with(pool.clone(), &server.uri());
         let r = pipe.handle(&msg()).await;
         assert_eq!(r.decision, Decision::Spoke);
-        assert_eq!(r.response_text.as_deref(), Some("klar haze ist stark grad"));
+        assert_eq!(r.response_text.as_deref(), Some("klar haze, stark !clip"));
         assert!(r.shadow_text.is_none(), "live setzt shadow_text nicht");
         // User- + Assistant-Turn persistiert.
         let n: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM twitch_engagement_conversation")
