@@ -17,6 +17,7 @@ pub const DEFAULT_BASE_URL: &str = "https://api.minimax.io/v1";
 pub const DEFAULT_MODEL: &str = "MiniMax-M3";
 /// Marker, mit dem das Modell bewusstes Schweigen signalisiert.
 pub const SILENT_MARKER: &str = "<silent>";
+const MAX_CHAT_TEXT_CHARS: usize = 120;
 
 /// Eine Chat-Nachricht für den Modell-Call.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -65,28 +66,56 @@ pub fn process_response_text(raw_text: &str, max_answer_len: usize) -> Option<St
     if without_think.is_empty() || without_think.to_lowercase().contains(SILENT_MARKER) {
         return None;
     }
-    let text = sanitize_chat_text(without_think, max_answer_len);
-    if text.is_empty() {
-        None
-    } else {
-        Some(text)
-    }
+    sanitize_chat_text(without_think, max_answer_len)
 }
 
-/// Säubert Bot-Text vor dem Senden an Twitch (Python `_sanitize_chat_text`):
-/// Newlines→Space, führende `/`/`.` weg (keine versehentlichen Commands),
-/// `@everyone`→`everyone`, Strip + Max-Länge mit `…`-Kürzung.
-pub fn sanitize_chat_text(text: &str, max_len: usize) -> String {
-    let mut cleaned = text.split_whitespace().collect::<Vec<_>>().join(" ");
+/// Säubert Bot-Text vor dem Senden an Twitch. `None` verwirft leere oder mehr
+/// als 120 Zeichen lange Ergebnisse; zu lange Nachrichten werden nie gekürzt.
+pub fn sanitize_chat_text(text: &str, max_len: usize) -> Option<String> {
+    let without_emoji: Vec<char> = text.chars().filter(|c| !is_emoji_component(*c)).collect();
+    let mut transformed = String::with_capacity(text.len());
+    let mut chars = without_emoji.into_iter().peekable();
+    while let Some(c) = chars.next() {
+        match c {
+            // `!` fällt weg, außer als Command-Präfix direkt vor Alphanumerik
+            // (`!clip`); so verschwindet auch Hype-Spam wie `wow!!` komplett.
+            '!' if chars.peek().is_none_or(|next| !next.is_alphanumeric()) => {}
+            '—' => {
+                while transformed.chars().last().is_some_and(char::is_whitespace) {
+                    transformed.pop();
+                }
+                transformed.push_str(", ");
+            }
+            '–' => transformed.push(' '),
+            '„' | '“' | '”' | '»' | '«' => transformed.push('"'),
+            '‚' | '‘' | '’' => transformed.push('\''),
+            _ => transformed.push(c),
+        }
+    }
+
+    let mut cleaned = transformed.split_whitespace().collect::<Vec<_>>().join(" ");
     while cleaned.starts_with('/') || cleaned.starts_with('.') {
         cleaned = cleaned[1..].trim_start().to_string();
     }
     cleaned = cleaned.replace("@everyone", "everyone");
-    if max_len > 0 && cleaned.chars().count() > max_len {
-        let truncated: String = cleaned.chars().take(max_len - 1).collect();
-        cleaned = format!("{}…", truncated.trim_end());
+    let cleaned = cleaned.trim();
+    let max_len = if max_len == 0 {
+        MAX_CHAT_TEXT_CHARS
+    } else {
+        max_len.min(MAX_CHAT_TEXT_CHARS)
+    };
+    if cleaned.is_empty() || cleaned.chars().count() > max_len {
+        None
+    } else {
+        Some(cleaned.to_string())
     }
-    cleaned.trim().to_string()
+}
+
+fn is_emoji_component(c: char) -> bool {
+    matches!(
+        c as u32,
+        0x1F300..=0x1FAFF | 0x2600..=0x27BF | 0xFE00..=0xFE0F | 0xE0100..=0xE01EF | 0x200D
+    )
 }
 
 /// Die „Soul" — Charakter/Stimme/Haltung (von MiniMax selbst geschrieben,
@@ -532,22 +561,48 @@ mod tests {
     }
 
     #[test]
-    fn sanitize_collapse_und_command_strip() {
+    fn sanitize_kurzen_text_und_bestehende_guards() {
         assert_eq!(
-            sanitize_chat_text("hallo   welt\nzeile", 480),
-            "hallo welt zeile"
+            sanitize_chat_text("hallo   welt\nzeile", 120),
+            Some("hallo welt zeile".to_string())
         );
-        assert_eq!(sanitize_chat_text("/me winkt", 480), "me winkt");
-        assert_eq!(sanitize_chat_text("..punkt", 480), "punkt");
-        assert_eq!(sanitize_chat_text("hi @everyone du", 480), "hi everyone du");
+        assert_eq!(
+            sanitize_chat_text("/me winkt", 120),
+            Some("me winkt".to_string())
+        );
+        assert_eq!(
+            sanitize_chat_text("..punkt", 120),
+            Some("punkt".to_string())
+        );
+        assert_eq!(
+            sanitize_chat_text("hi @everyone du", 120),
+            Some("hi everyone du".to_string())
+        );
     }
 
     #[test]
-    fn sanitize_kuerzt_mit_ellipse() {
-        let long = "a".repeat(500);
-        let out = sanitize_chat_text(&long, 480);
-        assert_eq!(out.chars().count(), 480); // 479 a + …
-        assert!(out.ends_with('…'));
+    fn sanitize_entfernt_emoji_ausrufezeichen_und_gedankenstriche() {
+        assert_eq!(
+            sanitize_chat_text("wow 😭 das war wild! !clip — echt – stark", 120),
+            Some("wow das war wild !clip, echt stark".to_string())
+        );
+        assert_eq!(
+            sanitize_chat_text("ne!! echt jetzt!!!", 120),
+            Some("ne echt jetzt".to_string())
+        );
+    }
+
+    #[test]
+    fn sanitize_begradigt_typografische_anfuehrungszeichen() {
+        assert_eq!(
+            sanitize_chat_text("„wow“ ‚ok‘ »ja«", 120),
+            Some("\"wow\" 'ok' \"ja\"".to_string())
+        );
+    }
+
+    #[test]
+    fn sanitize_verwirft_mehr_als_120_zeichen() {
+        assert_eq!(sanitize_chat_text(&"a".repeat(121), 120), None);
     }
 
     #[test]
