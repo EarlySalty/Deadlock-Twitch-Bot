@@ -1,3 +1,11 @@
+## #363 — Der Empfang hat aufgemacht
+
+**Problem:** Der Link „FAQ & Hilfe" im Dashboard führte auf eine Seite, die es nie gegeben hat. Wer draufgeklickt hat, landete auf einer Fehlermeldung. Fragen zum Bot konnte man zwar schon immer im kleinen Chat-Fenster unten rechts auf der Webseite stellen, aber das kannte kaum jemand, und einen richtigen Platz dafür gab es nicht.
+
+**Änderung:** Der Concierge hat jetzt einen eigenen Raum. Unter „FAQ & Hilfe" öffnet sich ein Empfang, an dem du ihm einfach deine Frage stellst: Einrichtung, Chat-Befehle, Auto-Raid, Overlay, Pläne, Datenschutz. Er antwortet nur mit dem, was tatsächlich über den Bot hinterlegt ist, und schreibt dir dazu, wo er es nachgeschlagen hat. Was er nicht weiß, erfindet er nicht, sondern schickt dich in den Discord.
+
+**Aktuelles Verhalten:** Der Link führt jetzt irgendwohin. Ein paar Startfragen liegen bereit, wenn dir gerade keine einfällt.
+
 ## #362 — Ruhigeres Dashboard, echtes Profilbild
 
 **Problem:** Das Dashboard war so dunkel, dass Kacheln und Hintergrund zu einem schwarzen Block verschmolzen. Gleichzeitig knallte ein neonblauer Ton mitten ins Gold, am deutlichsten beim Knopf zum Analyse-Dashboard und in den Schleiern über der Startseite. Und oben links stand statt deines Profilbilds nur ein Kreis mit dem ersten Buchstaben deines Namens.

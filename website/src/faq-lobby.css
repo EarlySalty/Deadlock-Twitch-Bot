@@ -1,0 +1,279 @@
+/*
+ * Empfangshalle — die Materialschicht der FAQ-Lobby.
+ *
+ * Metapher: eine Hotelrezeption, aber aus Gusseisen und Messing. Der Gast fragt
+ * ueber den Tresen; der Concierge schlaegt im Hausbuch nach und schiebt die
+ * Antwort als Pergamentblatt herueber. Was nicht in der Hausakte steht, wird
+ * nicht erfunden — dafuer gibt es die Tuer nach nebenan.
+ *
+ * Warum eigenes CSS statt reiner Tailwind-Utilities: Die Traeger dieses Looks
+ * sind Materialeffekte (gebuerstetes Messing, Pergamentfaserung, Deckenlicht,
+ * Praegung). Das sind mehrschichtige Gradients — als Utility-Ketten waeren sie
+ * unlesbar und nicht wiederverwendbar.
+ *
+ * Farbwelt = die der Website (Gold #C8A86B), nicht die des Dashboards. Beide
+ * Goldtoene liegen dicht beieinander; ein dritter Look waere der eigentliche Bruch.
+ */
+
+:root {
+  --lobby-iron: #1c150d;
+  --lobby-iron-deep: #140f08;
+  --lobby-counter: #2a2114;
+
+  --brass: #c8a86b;
+  --brass-bright: #efd49d;
+  --brass-deep: #8a7038;
+
+  /* Hausbuch: gealtertes Papier. Auf hellem Papier wird mit dunkler Tinte
+     geschrieben — Gold darauf laege bei ~2.5:1 und waere unlesbar. */
+  --paper: #e8dcc0;
+  --paper-edge: #d3c3a0;
+  --ink: #2b2318;
+  /* 0.72 ist nachgerechnet, nicht geschaetzt: verblasste Tinte soll alt aussehen,
+     nicht unlesbar sein. Bei 0.62 lag das Quellen-Label bei 3.97:1 — zu wenig fuer
+     Kleintext in Versalien. 0.72 ergibt 5.23:1. */
+  --ink-soft: rgba(43, 35, 24, 0.72);
+  --ink-rule: rgba(43, 35, 24, 0.14);
+}
+
+/* ── Der Raum ──────────────────────────────────────────────────────────────
+   Ein Lichtkegel von oben, als haenge eine Lampe ueber dem Tresen. Der Rest
+   der Halle liegt im Dunkeln — das fokussiert auf den Empfang. */
+.lobby {
+  position: relative;
+  min-height: 100vh;
+  background:
+    radial-gradient(1100px 520px at 50% -8%, rgba(200, 168, 107, 0.16), transparent 66%),
+    radial-gradient(760px 420px at 50% 104%, rgba(200, 168, 107, 0.06), transparent 70%),
+    linear-gradient(178deg, var(--lobby-iron) 0%, var(--lobby-iron-deep) 60%, var(--lobby-iron) 100%);
+  color: #ece0c8;
+  isolation: isolate;
+}
+
+/* Statische Koernung. Bewusst bewegungslos: animiertes Korn flackert auf
+   Vollflaeche sichtbar. */
+.lobby::after {
+  content: "";
+  position: fixed;
+  inset: 0;
+  z-index: 0;
+  pointer-events: none;
+  opacity: 0.028;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='140' height='140'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='3'/%3E%3C/filter%3E%3Crect width='140' height='140' filter='url(%23n)'/%3E%3C/svg%3E");
+}
+
+/* ── Der Tresen: eine gebuerstete Messingplatte ────────────────────────────
+   Die Schleifspuren laufen horizontal, das Licht faellt von oben — deshalb
+   Kante oben hell, unten dunkel. */
+.counter {
+  position: relative;
+  border-radius: 14px;
+  background-color: var(--lobby-counter);
+  background-image:
+    linear-gradient(163deg, rgba(239, 212, 157, 0.1) 0%, rgba(0, 0, 0, 0.2) 58%, rgba(0, 0, 0, 0.32) 100%),
+    repeating-linear-gradient(
+      178deg,
+      rgba(255, 255, 255, 0.02) 0px,
+      rgba(255, 255, 255, 0) 1px,
+      rgba(0, 0, 0, 0.05) 2px,
+      rgba(255, 255, 255, 0) 3px
+    );
+  border: 1px solid rgba(200, 168, 107, 0.28);
+  box-shadow:
+    inset 0 1px 0 rgba(239, 212, 157, 0.18),
+    inset 0 -1px 0 rgba(0, 0, 0, 0.55),
+    0 18px 44px rgba(0, 0, 0, 0.45);
+}
+
+/* Gravur: eingeschlagene Lettern. Der dunkle Schatten liegt oben, das Licht
+   unten — genau umgekehrt zur erhabenen Platte, sonst wirkt es aufgesetzt. */
+.engraved {
+  color: var(--brass);
+  text-shadow:
+    0 -1px 0 rgba(0, 0, 0, 0.55),
+    0 1px 0 rgba(239, 212, 157, 0.14);
+  letter-spacing: 0.34em;
+}
+
+/* ── Die Klingel ──────────────────────────────────────────────────────────*/
+.bell {
+  color: var(--brass);
+  filter: drop-shadow(0 0 10px rgba(200, 168, 107, 0.32));
+  transition: transform 200ms ease;
+}
+
+@keyframes bell-ring {
+  0%, 100% { transform: rotate(0deg); }
+  20% { transform: rotate(-13deg); }
+  40% { transform: rotate(10deg); }
+  60% { transform: rotate(-6deg); }
+  80% { transform: rotate(3deg); }
+}
+
+.bell-ringing {
+  animation: bell-ring 620ms ease-in-out;
+}
+
+/* ── Klingelknoepfe: die vorgeschlagenen Fragen ───────────────────────────*/
+.bell-button {
+  border: 1px solid rgba(200, 168, 107, 0.3);
+  border-radius: 999px;
+  background: linear-gradient(180deg, rgba(200, 168, 107, 0.13), rgba(200, 168, 107, 0.04));
+  color: var(--brass-bright);
+  box-shadow:
+    inset 0 1px 0 rgba(239, 212, 157, 0.16),
+    0 2px 10px rgba(0, 0, 0, 0.3);
+  transition: transform 160ms ease, border-color 160ms ease, box-shadow 160ms ease;
+}
+
+.bell-button:hover {
+  transform: translateY(-1px);
+  border-color: rgba(200, 168, 107, 0.62);
+  box-shadow:
+    inset 0 1px 0 rgba(239, 212, 157, 0.3),
+    0 6px 18px rgba(0, 0, 0, 0.38),
+    0 0 18px -4px rgba(200, 168, 107, 0.4);
+}
+
+.bell-button:active {
+  transform: translateY(1px);
+}
+
+/* ── Die Frage des Gastes: schlicht, dunkel, kein Material ────────────────
+   Der Gast spricht, er reicht nichts ueber den Tresen. Nur die Antwort ist
+   ein Dokument. */
+.guest-note {
+  border: 1px solid rgba(200, 168, 107, 0.26);
+  border-radius: 12px 12px 3px 12px;
+  background: rgba(42, 33, 20, 0.82);
+  color: #ece0c8;
+}
+
+/* ── Die Antwort: ein Blatt aus dem Hausbuch ──────────────────────────────
+   Der Kern der Metapher. Papierfaserung, angeschmutzte Ecken, minimal aus der
+   Achse gedreht — als haette es jemand ueber den Tresen geschoben. */
+.ledger-sheet {
+  position: relative;
+  border-radius: 3px 12px 12px 12px;
+  background-color: var(--paper);
+  background-image:
+    radial-gradient(circle at 16% 10%, rgba(138, 112, 56, 0.09), transparent 44%),
+    radial-gradient(circle at 84% 92%, rgba(138, 112, 56, 0.08), transparent 48%),
+    repeating-linear-gradient(
+      93deg,
+      rgba(120, 104, 78, 0.035) 0px,
+      rgba(120, 104, 78, 0) 3px,
+      rgba(120, 104, 78, 0.02) 5px,
+      rgba(120, 104, 78, 0) 9px
+    );
+  color: var(--ink);
+  border: 1px solid var(--paper-edge);
+  box-shadow:
+    inset 0 0 40px rgba(138, 112, 56, 0.16),
+    0 12px 30px rgba(0, 0, 0, 0.42);
+  transform: rotate(-0.25deg);
+}
+
+.ledger-sheet a {
+  color: #6b5320;
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+
+/* Auffalten: das Blatt kommt ueber den Tresen. Sanft, nicht huepfend. */
+@keyframes sheet-slide {
+  from {
+    opacity: 0;
+    transform: translateY(10px) rotate(-1.4deg) scale(0.985);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0) rotate(-0.25deg) scale(1);
+  }
+}
+
+.ledger-sheet {
+  animation: sheet-slide 380ms cubic-bezier(0.22, 0.9, 0.3, 1) both;
+}
+
+/* ── Quellenstempel: woher die Auskunft stammt ────────────────────────────
+   Ohne Quelle ist eine Auskunft nur eine Behauptung. */
+.ledger-rule {
+  border-top: 1px solid var(--ink-rule);
+}
+
+.source-stamp {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.3rem;
+  border: 1px solid rgba(107, 83, 32, 0.34);
+  border-radius: 4px;
+  padding: 0.12rem 0.42rem;
+  color: #6b5320;
+  background: rgba(107, 83, 32, 0.07);
+  font-size: 0.68rem;
+  letter-spacing: 0.02em;
+}
+
+/* ── Der Concierge blaettert ──────────────────────────────────────────────*/
+@keyframes page-turn {
+  0%, 80%, 100% { opacity: 0.25; transform: translateY(0); }
+  40% { opacity: 1; transform: translateY(-3px); }
+}
+
+.thinking-dot {
+  animation: page-turn 1.25s ease-in-out infinite;
+}
+
+.thinking-dot:nth-child(2) { animation-delay: 0.16s; }
+.thinking-dot:nth-child(3) { animation-delay: 0.32s; }
+
+/* ── Das Eingabefeld: die Theke, an der man spricht ───────────────────────*/
+.speak-field {
+  background: rgba(20, 15, 8, 0.72);
+  border: 1px solid rgba(200, 168, 107, 0.3);
+  color: #ece0c8;
+  transition: border-color 180ms ease, box-shadow 180ms ease;
+}
+
+.speak-field::placeholder {
+  color: rgba(183, 170, 145, 0.65);
+}
+
+.speak-field:focus {
+  outline: none;
+  border-color: rgba(200, 168, 107, 0.72);
+  box-shadow: 0 0 0 3px rgba(200, 168, 107, 0.14);
+}
+
+/* Messingflaeche traegt IMMER dunkle Tinte: Weiss auf #C8A86B liegt bei
+   ~2.4:1 und ist unlesbar. Kinder erben die Farbe mit. */
+.brass-action {
+  background: linear-gradient(135deg, var(--brass) 0%, var(--brass-bright) 100%);
+  color: #241a12;
+  box-shadow: 0 8px 20px -6px rgba(200, 168, 107, 0.5);
+  transition: transform 160ms ease, box-shadow 200ms ease, filter 160ms ease;
+}
+
+.brass-action:hover:not(:disabled) {
+  transform: translateY(-1px);
+  box-shadow: 0 12px 26px -6px rgba(200, 168, 107, 0.62);
+}
+
+.brass-action:disabled {
+  filter: grayscale(0.45) brightness(0.8);
+  cursor: not-allowed;
+  box-shadow: none;
+}
+
+/* ── Reduzierte Bewegung respektieren ─────────────────────────────────────*/
+@media (prefers-reduced-motion: reduce) {
+  .ledger-sheet,
+  .bell-ringing,
+  .thinking-dot {
+    animation: none;
+  }
+  .ledger-sheet {
+    transform: none;
+  }
+}
