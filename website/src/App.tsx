@@ -6,7 +6,6 @@ import { Stats } from '@/components/sections/Stats'
 import { Features } from '@/components/sections/Features'
 import { RaidExplainer } from '@/components/sections/RaidExplainer'
 import { BanFeed } from '@/components/sections/BanFeed'
-import { Dashboard } from '@/components/sections/Dashboard'
 import { ClipManager } from '@/components/sections/ClipManager'
 import { Community } from '@/components/sections/Community'
 import { Security } from '@/components/sections/Security'
@@ -23,7 +22,6 @@ export default function App() {
         <RaidExplainer />
         <BanFeed />
         <Stats />
-        <Dashboard />
         <Features />
         <ClipManager />
         <Community />

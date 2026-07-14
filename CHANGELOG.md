@@ -1,3 +1,11 @@
+## #362 — Der Analytics-Block fliegt von der Streamer-Seite
+
+**Problem:** Die Streamer-Seite hatte einen großen Abschnitt, der das Analyse-Dashboard mit 13 Tabs und Vorschau-Kacheln vorgeführt hat. Der Block hat viel Platz gefressen und wenig überzeugt.
+
+**Änderung:** Der Abschnitt ist raus, zusammen mit den Sprungmarken in Kopf- und Fußzeile, die sonst ins Leere gezeigt hätten.
+
+**Aktuelles Verhalten:** Die Streamer-Seite läuft ohne den Analytics-Abschnitt. Die Live-Demo bleibt erreichbar, der Link dorthin steht weiterhin in der Fußzeile.
+
 ## #361 — Die Dashboards sehen jetzt nach Schmiede aus
 
 **Problem:** Das Analyse-Dashboard hatte zwar schon den Gold-Look, wirkte aber flach. Das Admin-Dashboard war beim letzten Rebrand komplett übersehen worden und leuchtete weiter in Petrol und Orange. Statusanzeigen zogen sich ihre Farben aus einer bunten Standardpalette, die mit der Marke nichts zu tun hatte.

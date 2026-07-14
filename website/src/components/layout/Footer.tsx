@@ -13,7 +13,6 @@ interface FooterLink {
 
 const NAV_SECTION_LINKS: FooterLink[] = [
   { label: 'Features', href: `${WEBSITE_HOME_PATH}#features` },
-  { label: 'Dashboard', href: `${WEBSITE_HOME_PATH}#dashboard` },
   { label: 'Community', href: `${WEBSITE_HOME_PATH}#community` },
 ];
 
