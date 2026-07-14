@@ -1,3 +1,11 @@
+## #364 — Der Empfang hat aufgemacht
+
+**Problem:** Der Link „FAQ & Hilfe" im Dashboard führte auf eine Seite, die es nie gegeben hat. Wer draufgeklickt hat, landete auf einer Fehlermeldung. Fragen zum Bot konnte man zwar schon immer im kleinen Chat-Fenster unten rechts auf der Webseite stellen, aber das kannte kaum jemand, und einen richtigen Platz dafür gab es nicht.
+
+**Änderung:** Der Concierge hat jetzt einen eigenen Raum. Unter „FAQ & Hilfe" öffnet sich ein Empfang, an dem du ihm einfach deine Frage stellst: Einrichtung, Chat-Befehle, Auto-Raid, Overlay, Pläne, Datenschutz. Er antwortet nur mit dem, was tatsächlich über den Bot hinterlegt ist, und schreibt dir dazu, wo er es nachgeschlagen hat. Was er nicht weiß, erfindet er nicht, sondern schickt dich in den Discord.
+
+**Aktuelles Verhalten:** Der Link führt jetzt zum Empfang statt in eine Fehlermeldung. Ein paar Startfragen liegen bereit, falls dir gerade keine einfällt.
+
 ## #363 — Der Analytics-Block fliegt von der Streamer-Seite
 
 **Problem:** Die Streamer-Seite hatte einen großen Abschnitt, der das Analyse-Dashboard mit 13 Tabs und Vorschau-Kacheln vorgeführt hat. Der Block hat viel Platz gefressen und wenig überzeugt.
