@@ -508,7 +508,7 @@ async fn main() {
     // Quelle (P1.7) braucht den Bot-Token mit `moderator:read:followers`, und die
     // OAuth-Followup-Begrüßung den nativen Send statt des Python-Umwegs (8779).
     // Es gibt nur DIESEN einen BotTokenManager (kein zweiter Refresher).
-    let chat_api_handle = chat_wiring::try_build_api(helix.as_ref().clone()).await;
+    let chat_api_handle = chat_wiring::try_build_api(helix.as_ref().clone(), pool.clone()).await;
     // P1.7: Bot-Token-Quelle für den Follower-Total-Abruf (moderator:read:followers).
     // P1.19: mit verfügbarem Streamer-Token-Provider (Krypto-Key + Helix) wird die
     // Bot-Token-Quelle mit dem Streamer-OAuth-Token-Fallback umwickelt — bei 403
@@ -668,20 +668,20 @@ async fn main() {
     // wird weiter unten (Pipeline-Aufbau) konsumiert und ist bei der
     // SubscriptionPollHooks-Konstruktion sonst nicht mehr im Scope.
     let recruit_chat_api: Option<Arc<dyn tb_chat::ChatApi>> =
-        chat_api_handle.as_ref().map(|h| h.api.clone());
+        chat_api_handle.as_ref().map(|h| h.api());
     // Bot-Token-Bridge (F3): ChatApi-Clone für die Owner-Chat-Action der
     // internen API (POST /streamers/:login/chat-action). Früh gezogen, da das
     // Handle weiter unten beim Pipeline-Aufbau konsumiert wird. Der Send läuft
     // über den live rotierten Bot-User-Token (ChatApi → BotTokenManager).
     let chat_action_api: Option<Arc<dyn tb_chat::ChatApi>> =
-        chat_api_handle.as_ref().map(|h| h.api.clone());
+        chat_api_handle.as_ref().map(|h| h.api());
     // ChatApi-Clone für den Scam-Guard-Revoke-Port der internen API
     // (POST /scam-guard/revoke): der Unban läuft über den live rotierten
     // Bot-User-Token, identisch zum Auto-Ban-Pfad des Wächters.
     let scam_revoke_api: Option<Arc<dyn tb_chat::ChatApi>> =
-        chat_api_handle.as_ref().map(|h| h.api.clone());
+        chat_api_handle.as_ref().map(|h| h.api());
     let scam_enforce_api: Option<Arc<dyn tb_chat::ChatApi>> =
-        chat_api_handle.as_ref().map(|h| h.api.clone());
+        chat_api_handle.as_ref().map(|h| h.api());
     // BotTokenManager-Clone für den Chatters-Poller (#11): bot_token/-user_id/
     // -login + Scope-Check für den Helix-`GET /chat/chatters`-Call. Früh gezogen,
     // da `chat_api_handle` weiter unten beim Pipeline-Aufbau konsumiert wird.
@@ -689,7 +689,11 @@ async fn main() {
         chat_api_handle.as_ref().map(|h| h.bot_token_manager());
     let raid_greeting_monitor: Option<Arc<raid_greeting::RaidGreetingMonitor>> = chat_api_handle
         .as_ref()
-        .map(|h| Arc::new(raid_greeting::RaidGreetingMonitor::new(h.api.clone())));
+        .map(|h| {
+            Arc::new(raid_greeting::RaidGreetingMonitor::new(
+                h.api_for_context(tb_chat::channel_policy::PolicyContext::Raid),
+            ))
+        });
 
     // Raid-Verdrahtung: mit Manager + Helix + Krypto-Key sind alle vier
     // Raid-Kopplungen echt (Auto-Raid, Arrival, Score-Refresh, Blacklist-Guard).
@@ -733,7 +737,7 @@ async fn main() {
                     pool.clone(),
                     helix_client.clone(),
                     followup_relay.clone(),
-                    chat_api_handle.as_ref().map(|h| h.api.clone()),
+                    chat_api_handle.as_ref().map(|h| h.api()),
                 );
                 if partner_setup.is_none() {
                     tracing::warn!(
@@ -856,7 +860,7 @@ async fn main() {
                 // B3-2d: Chat-Send-Port + DB-Chat-Suppression für die
                 // Partner-Raid-Dankesnachricht durchreichen. chat_api ist None,
                 // wenn kein Bot-Token gebootet wurde (Python get_chat_bot()→None).
-                chat_api_handle.as_ref().map(|h| h.api.clone()),
+                chat_api_handle.as_ref().map(|h| h.api()),
                 Some(Arc::new(
                     tb_chat::moderation::OutboundSuppressionStore::new(pool.clone()),
                 )),
@@ -1041,7 +1045,7 @@ async fn main() {
             // Pipeline konsumiert) — gleiches Durchreich-Muster wie partner_setup.
             let reauth_reminder = chat_api_handle
                 .as_ref()
-                .map(|h| Arc::new(ReauthReminder::new(pool.clone(), h.api.clone())));
+                .map(|h| Arc::new(ReauthReminder::new(pool.clone(), h.api())));
             tracing::info!(
                 "Raid-EventSub-Hooks aktiv (Auto-Raid, Arrival, Score-Refresh, Blacklist-Guard{})",
                 if reauth_reminder.is_some() {

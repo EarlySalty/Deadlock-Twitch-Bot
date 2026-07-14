@@ -9,7 +9,8 @@
 //!
 //! Trennung der Transporte:
 //! - **Lesen**: anonymes IRC (`irc.chat.twitch.tv:6667`, CAP `tags`+`commands`).
-//! - **Schreiben**: Helix über den Smoke-Account ([`StealthSender`]).
+//! - **Schreiben**: absichtlich nicht möglich; der anonyme Reader besitzt
+//!   keinen Twitch-Schreib-Transport.
 //!
 //! Kanalquelle: `twitch_engagement_settings` mit `enabled = TRUE AND irc_read =
 //! TRUE`. Die Kanal-Menge ist disjunkt zum EventSub-Pfad → kein Doppel-Processing.
@@ -29,7 +30,6 @@ use tokio::net::TcpStream;
 
 use crate::pipeline::EngagementPipeline;
 use crate::sender_auth::SENDER_LOGIN;
-use crate::stealth_sender::StealthSender;
 use crate::types::IncomingMessage;
 
 const IRC_HOST: &str = "irc.chat.twitch.tv";
@@ -130,10 +130,10 @@ fn parse_privmsg(line: &str) -> Option<ParsedPrivmsg> {
     })
 }
 
-/// Baut aus einer geparsten PRIVMSG die [`IncomingMessage`] + Broadcaster-ID
-/// (room-id) — oder `None`, wenn übersprungen werden soll (leer, eigener
+/// Baut aus einer geparsten PRIVMSG die [`IncomingMessage`] — oder `None`,
+/// wenn übersprungen werden soll (leer, eigener
 /// Account, bekannter Bot, fehlende room-id/user-id). Pure (ohne I/O testbar).
-fn build_incoming(parsed: &ParsedPrivmsg, self_login: &str) -> Option<(IncomingMessage, String)> {
+fn build_incoming(parsed: &ParsedPrivmsg, self_login: &str) -> Option<IncomingMessage> {
     let login = parsed.login.trim().to_lowercase();
     let channel = parsed.channel.trim().to_lowercase();
     let text = parsed.text.trim().to_string();
@@ -164,36 +164,27 @@ fn build_incoming(parsed: &ParsedPrivmsg, self_login: &str) -> Option<(IncomingM
         .get("id")
         .map(|s| s.trim().to_string())
         .filter(|s| !s.is_empty());
-    Some((
-        IncomingMessage {
-            channel_login: channel,
-            twitch_user_id: user_id,
-            twitch_login: login,
-            content: text,
-            message_id,
-        },
-        room_id,
-    ))
+    Some(IncomingMessage {
+        channel_login: channel,
+        twitch_user_id: user_id,
+        twitch_login: login,
+        content: text,
+        message_id,
+    })
 }
 
 /// Anonymer IRC-Reader, der Chat in die Engagement-Pipeline speist.
 pub struct EngagementIrcReader {
     pool: PgPool,
     pipeline: Arc<EngagementPipeline>,
-    stealth: Option<Arc<StealthSender>>,
     self_login: String,
 }
 
 impl EngagementIrcReader {
-    pub fn new(
-        pool: PgPool,
-        pipeline: Arc<EngagementPipeline>,
-        stealth: Option<Arc<StealthSender>>,
-    ) -> Self {
+    pub fn new(pool: PgPool, pipeline: Arc<EngagementPipeline>) -> Self {
         Self {
             pool,
             pipeline,
-            stealth,
             self_login: SENDER_LOGIN.to_lowercase(),
         }
     }
@@ -317,40 +308,17 @@ impl EngagementIrcReader {
         let Some(parsed) = parse_privmsg(msg) else {
             return;
         };
-        let Some((incoming, room_id)) = build_incoming(&parsed, &self.self_login) else {
+        let Some(incoming) = build_incoming(&parsed, &self.self_login) else {
             return;
         };
-        // Python verarbeitet IRC-Events strikt in Read-Reihenfolge:
-        // Pipeline abwarten, danach ggf. Stealth-Send. Keine per-Message-Tasks,
-        // damit Antworten nicht ueberholen.
+        // Lurker bleibt Lurker: Der anonyme Reader kann die Pipeline speisen,
+        // besitzt aber absichtlich keinen Schreib-Transport.
         let pipeline = Arc::clone(&self.pipeline);
-        let stealth = self.stealth.clone();
         let channel = incoming.channel_login.clone();
-        let result = match tokio::spawn(async move { pipeline.handle(&incoming).await }).await {
-            Ok(result) => result,
+        match tokio::spawn(async move { pipeline.handle(&incoming).await }).await {
+            Ok(_) => {}
             Err(error) => {
                 tracing::error!(channel = %channel, %error, "Engagement-IRC: Pipeline-Task fehlgeschlagen");
-                return;
-            }
-        };
-        let Some(text) = result.response_text else {
-            return;
-        };
-        match stealth {
-            Some(sender) => {
-                let send = tokio::spawn(async move { sender.send(&room_id, &text).await }).await;
-                match send {
-                    Ok(None) => {
-                        tracing::info!(channel = %channel, "Engagement-IRC: kein Sende-Account, Antwort verworfen");
-                    }
-                    Ok(Some(_)) => {}
-                    Err(error) => {
-                        tracing::error!(channel = %channel, %error, "Engagement-IRC: Stealth-Send-Task fehlgeschlagen");
-                    }
-                }
-            }
-            None => {
-                tracing::debug!(channel = %channel, "Engagement-IRC: Stealth-Sender nicht verfügbar")
             }
         }
     }
@@ -441,8 +409,7 @@ mod tests {
     fn incoming_aus_privmsg() {
         let line = "@room-id=99;user-id=42;id=m1 :viewer!v@v PRIVMSG #Nani :lohnt sich haze";
         let p = parse_privmsg(line).unwrap();
-        let (im, room) = build_incoming(&p, "iamspyingthroughtyourcam").unwrap();
-        assert_eq!(room, "99");
+        let im = build_incoming(&p, "iamspyingthroughtyourcam").unwrap();
         assert_eq!(im.channel_login, "nani"); // kleingeschrieben
         assert_eq!(im.twitch_user_id, "42");
         assert_eq!(im.twitch_login, "viewer");

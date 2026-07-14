@@ -2840,6 +2840,7 @@ dependencies = [
  "tb-transport-twitch",
  "tokio",
  "tracing",
+ "tracing-subscriber",
  "unicode-normalization",
  "wiremock",
 ]
