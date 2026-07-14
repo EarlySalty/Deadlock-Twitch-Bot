@@ -127,11 +127,17 @@ async fn ledger_writes_every_action_and_blacklist_is_case_insensitive() {
         .execute(&admin)
         .await
         .expect("Schema erstellbar");
+    // Repo-Muster (tb-db/tests/hermetic.rs): die Migrationen brauchen
+    // create_hypertable, also muss die Extension vor dem Migrator existieren.
+    sqlx::query("CREATE EXTENSION IF NOT EXISTS timescaledb")
+        .execute(&admin)
+        .await
+        .expect("timescaledb-Extension verfuegbar");
     admin.close().await;
 
     let options = PgConnectOptions::from_str(&dsn)
         .expect("valide Test-DSN")
-        .options([("search_path", schema.as_str())]);
+        .options([("search_path", format!("{schema},public").as_str())]);
     let pool = PgPoolOptions::new()
         .max_connections(2)
         .connect_with(options)
