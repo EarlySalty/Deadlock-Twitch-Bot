@@ -1,3 +1,11 @@
+## #360 — Die Raid-Erinnerung klingt jetzt nach Mensch
+
+**Problem:** Wer nach einem Raid im anderen Chat nichts gesagt hat, bekam eine Erinnerung im Behördenton. Die Rede war vom "Zielchat" und davon, dass ein Hallo "dem Netzwerk hilft". Das las sich wie eine Ermahnung und nicht wie ein Tipp unter Streamern. Obendrein stand ein @-Mention in einer Direktnachricht, die ohnehin nur an eine Person geht.
+
+**Änderung:** Die Nachricht ist neu geschrieben, freundlich und in normalem Deutsch. Sie erklärt jetzt auch, warum sich das lohnt, nämlich dass man im Kopf bleibt und die Connection zu anderen Streamern stärkt. Das doppelte Mention ist raus.
+
+**Aktuelles Verhalten:** Wer den Gruß vergisst, bekommt weiterhin genau eine Erinnerung per Whisper, nur eben als netter Reminder statt als Rüffel.
+
 ## #359 — Scam-Wächter erkennt die Anmach-Masche jetzt am Netzwerk
 
 **Problem:** Ein Scam-Account lief in zwei Partner-Kanälen dieselbe englische Anmach-Masche, und der Wächter hat sie sogar erkannt. Gehandelt hat er trotzdem nicht, weil er auf den offensichtlichen Betrugssatz gewartet hat. Den gibt es aber nie, der Betrug passiert später in den Direktnachrichten. Gemeldet hat er den Verdacht auch niemandem.
