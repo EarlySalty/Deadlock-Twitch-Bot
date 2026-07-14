@@ -78,6 +78,18 @@ Gedankenstrich leuchtet zwischen echten Chat-Zeilen als Fremdkörper.
   Link), Website als Primärziel, Discord optional. Finale Prompt-/Beispieltexte
   schreibt Claude/EarlySalty, nicht der Implementierungs-Worker.
 
+## v1.1 — Feedback-Sync (Cross-Repo)
+
+Der 10-Minuten-Sync in `scout_pitch_wiring.rs` konsumiert
+`GET /internal/master/v1/discord/message-reactions` des Master-Brokers.
+Diese Route ist im **Deadlock-Bots-Repo** implementiert und deployt
+(Rust-Serving-Pfad `dl-broker`/`dl-discord`, main-Merge `7384d7bf`;
+eine Verhaltens-Referenz liegt zusätzlich in `service/master_broker.py`).
+Kontrakt: 200 `{"found": bool, "reactions": [{"emoji", "count"}]}`,
+404→`found:false`, Discord-Fehler→502; IDs immer Strings.
+`found=false`/Fehler lassen bestehendes Feedback unangetastet
+(COALESCE im Ledger-Update).
+
 ## Welle 3 — Review-Betrieb
 
 1–2 Wochen 👍/👎 sammeln; Shadow-Phase misst das echte Melde-Volumen (Judge-Regel:
