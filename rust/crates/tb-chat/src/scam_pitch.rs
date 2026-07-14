@@ -329,13 +329,9 @@ impl Patterns {
             stream_context: ri(
                 r"\b(?:deadlock|fight|boss|round|match|kill|build|lane|rank|aim|ability|ult|teamfight|objective|clip)\b",
             ),
-            link: ri(
-                r"(?:https?://|www\.|discord\.gg/|bit\.ly/|t\.me/|linktr\.ee/|tinyurl\.com/)",
-            ),
+            link: ri(r"(?:https?://|www\.|discord\.gg/|bit\.ly/|t\.me/|linktr\.ee/|tinyurl\.com/)"),
             handle: Regex::new(r"(?:^|\s)@[A-Za-z0-9_.]{3,}\b").unwrap(),
-            twitch_collab_invite: ri(
-                r"https?://(?:www\.)?twitch\.tv/collab/invite/[A-Za-z0-9_-]+",
-            ),
+            twitch_collab_invite: ri(r"https?://(?:www\.)?twitch\.tv/collab/invite/[A-Za-z0-9_-]+"),
             discord_handle_drop: ri(r"\bdiscord\s*[:：]\s*[A-Za-z0-9_.-]{3,}\b"),
             discord_teamup: ri(r"\b(?:let'?s|lets)\s+team\s+up(?:\s+on\s+discord)?\b"),
             platform_ref: ri(r"\b(?:discord|instagram|tiktok|youtube|yt|ig)\b"),
@@ -649,10 +645,7 @@ fn is_benign_social_checkin(content: &str, features: &HashSet<String>, p: &Patte
         return false;
     }
     // features ⊆ {greeting, wellbeing}
-    if !features
-        .iter()
-        .all(|f| f == "greeting" || f == "wellbeing")
-    {
+    if !features.iter().all(|f| f == "greeting" || f == "wellbeing") {
         return false;
     }
     if p.link.is_match(content) {
@@ -660,8 +653,9 @@ fn is_benign_social_checkin(content: &str, features: &HashSet<String>, p: &Patte
     }
     if p.handle.is_match(content) {
         let normalized = normalize_text(content);
-        let starts_with_mention =
-            Regex::new(r"^@[A-Za-z0-9_.]{3,}\b").unwrap().is_match(&normalized);
+        let starts_with_mention = Regex::new(r"^@[A-Za-z0-9_.]{3,}\b")
+            .unwrap()
+            .is_match(&normalized);
         let has_platform_ref = p.platform_ref.is_match(&normalized.to_lowercase());
         if !starts_with_mention || has_platform_ref {
             return false;
@@ -742,10 +736,7 @@ fn prune_ts_cache<K: std::hash::Hash + Eq + Clone>(
         return;
     }
     let overflow = cache.len() - max_len;
-    let mut by_ts: Vec<(f64, K)> = cache
-        .iter()
-        .map(|(k, (ts, _))| (*ts, k.clone()))
-        .collect();
+    let mut by_ts: Vec<(f64, K)> = cache.iter().map(|(k, (ts, _))| (*ts, k.clone())).collect();
     by_ts.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap_or(std::cmp::Ordering::Equal));
     for (_, k) in by_ts.into_iter().take(overflow) {
         cache.remove(&k);
@@ -801,11 +792,7 @@ pub struct ScamPitchDetector {
 
 impl ScamPitchDetector {
     /// Erzeugt einen neuen Detektor.
-    pub fn new(
-        api: Arc<dyn ChatApi>,
-        account_age: Arc<dyn AccountAgePort>,
-        pool: PgPool,
-    ) -> Self {
+    pub fn new(api: Arc<dyn ChatApi>, account_age: Arc<dyn AccountAgePort>, pool: PgPool) -> Self {
         Self {
             api,
             account_age,
@@ -858,7 +845,9 @@ impl ScamPitchDetector {
             return PitchDecision::None;
         }
         if is_first_observed_message {
-            scored.reasons.push("timing:first_observed_message".to_string());
+            scored
+                .reasons
+                .push("timing:first_observed_message".to_string());
         }
 
         // Schritt 4: Account-Alter (Z. 828–842)
@@ -873,12 +862,16 @@ impl ScamPitchDetector {
 
         if is_new_account {
             scored.score += 2;
-            scored.reasons.push("account:newer_than_3_months".to_string());
+            scored
+                .reasons
+                .push("account:newer_than_3_months".to_string());
             scored.features.insert("new_account".to_string());
         } else if account_age_days.is_none() {
             scored.reasons.push("account:unknown_age".to_string());
         } else {
-            scored.reasons.push("account:older_than_3_months".to_string());
+            scored
+                .reasons
+                .push("account:older_than_3_months".to_string());
         }
 
         // Schritt 5: Benign-Social-Check (Z. 844–845)
@@ -894,7 +887,9 @@ impl ScamPitchDetector {
             return PitchDecision::None;
         }
         if follower_count.is_none() {
-            scored.reasons.push("target:unknown_followers_assume_small".to_string());
+            scored
+                .reasons
+                .push("target:unknown_followers_assume_small".to_string());
         } else if let Some(fc) = follower_count {
             scored.reasons.push(format!("target:followers_{fc}"));
             if fc <= MAX_FOLLOWERS / 2 {
@@ -931,7 +926,11 @@ impl ScamPitchDetector {
                 content: raw_content.clone(),
                 features: scored.features.clone(),
             });
-            while hist.front().map(|e| now - e.ts > SEQUENCE_WINDOW_SEC).unwrap_or(false) {
+            while hist
+                .front()
+                .map(|e| now - e.ts > SEQUENCE_WINDOW_SEC)
+                .unwrap_or(false)
+            {
                 hist.pop_front();
             }
             if hist.len() > MESSAGE_HISTORY_MAXLEN {
@@ -952,7 +951,11 @@ impl ScamPitchDetector {
                 ts: now,
                 score: scored.score,
             });
-            while act.front().map(|e| now - e.ts > WINDOW_SEC).unwrap_or(false) {
+            while act
+                .front()
+                .map(|e| now - e.ts > WINDOW_SEC)
+                .unwrap_or(false)
+            {
                 act.pop_front();
             }
             if act.len() > ACTIVITY_BUCKET_MAXLEN {
@@ -987,9 +990,9 @@ impl ScamPitchDetector {
             "HINT"
         };
         let (severity, reasons) = if severity != "HINT" && !quick_action_eligible {
-            scored.reasons.push(
-                "quick_action:deferred_requires_new_account_first_message".to_string(),
-            );
+            scored
+                .reasons
+                .push("quick_action:deferred_requires_new_account_first_message".to_string());
             ("HINT", scored.reasons.clone())
         } else {
             if quick_action_eligible {
@@ -1014,7 +1017,8 @@ impl ScamPitchDetector {
                 if now < channel_cd || now < user_cd {
                     // Eskalation (Z. 928–981): STRONG + User bereits gewarnt
                     if severity == "WARNING_STRONG" && now < user_cd {
-                        st.user_cd.insert(bucket_key.clone(), now + USER_COOLDOWN_SEC);
+                        st.user_cd
+                            .insert(bucket_key.clone(), now + USER_COOLDOWN_SEC);
                         Some("escalate")
                     } else {
                         return PitchDecision::None;
@@ -1268,7 +1272,11 @@ impl ScamPitchDetector {
 
         // message_history-Buckets (Einträge älter als SEQUENCE_WINDOW_SEC)
         st.message_history.retain(|_, bucket| {
-            while bucket.front().map(|e| now - e.ts > SEQUENCE_WINDOW_SEC).unwrap_or(false) {
+            while bucket
+                .front()
+                .map(|e| now - e.ts > SEQUENCE_WINDOW_SEC)
+                .unwrap_or(false)
+            {
                 bucket.pop_front();
             }
             !bucket.is_empty()
@@ -1276,7 +1284,11 @@ impl ScamPitchDetector {
 
         // activity-Buckets (Einträge älter als WINDOW_SEC)
         st.activity.retain(|_, bucket| {
-            while bucket.front().map(|e| now - e.ts > WINDOW_SEC).unwrap_or(false) {
+            while bucket
+                .front()
+                .map(|e| now - e.ts > WINDOW_SEC)
+                .unwrap_or(false)
+            {
                 bucket.pop_front();
             }
             !bucket.is_empty()
@@ -1439,9 +1451,22 @@ fn format_service_warning_line(
     } else {
         reasons.join(",")
     };
-    let safe_content: String = content.replace('\n', " ").trim().chars().take(350).collect();
-    let chatter_login = if chatter_login.is_empty() { "-" } else { chatter_login };
-    let chatter_id = if chatter_id.is_empty() { "-" } else { chatter_id };
+    let safe_content: String = content
+        .replace('\n', " ")
+        .trim()
+        .chars()
+        .take(350)
+        .collect();
+    let chatter_login = if chatter_login.is_empty() {
+        "-"
+    } else {
+        chatter_login
+    };
+    let chatter_id = if chatter_id.is_empty() {
+        "-"
+    } else {
+        chatter_id
+    };
     format!(
         "{ts}\t{severity}\t{channel_login}\t{chatter_login}\t{chatter_id}\tage_days={account_age_safe}\t\
          followers={follower_text}\tscore={score}\tmsgs={msg_count}\t{reason_text}\t{safe_content}"
@@ -1498,6 +1523,8 @@ pub enum AiReviewOutcome {
     Spam {
         /// Begründung des Modells (max ~80 Zeichen laut Prompt).
         reason: String,
+        /// Confidence des Judge, sofern der Provider sie geliefert hat.
+        confidence: Option<f32>,
         /// Gespeichertes Muster, falls das Distinktivitäts-Gate es zuließ.
         learned: Option<LearnedPatternRef>,
         /// Vorgeschlagenes, aber abgelehntes Muster (generisches Vokabular).
@@ -1598,6 +1625,7 @@ impl SpamAiReviewer {
                         (
                             AiReviewOutcome::Spam {
                                 reason,
+                                confidence,
                                 learned,
                                 rejected_pattern,
                                 save_failed,
@@ -1769,7 +1797,10 @@ async fn persist_spam_learning(
         review.reason.as_deref().unwrap_or(""),
     )
     .await
-    .map(|id| LearnedPatternRef { id, pattern: pat.to_lowercase() });
+    .map(|id| LearnedPatternRef {
+        id,
+        pattern: pat.to_lowercase(),
+    });
     let save_failed = learned.is_none();
     (learned, None, save_failed)
 }
@@ -2046,7 +2077,11 @@ mod tests {
     fn score_growth_pitch() {
         let p = Patterns::build();
         let r = score_message("I can help you grow with more viewers!", &p);
-        assert!(r.features.contains("growth_pitch"), "features: {:?}", r.features);
+        assert!(
+            r.features.contains("growth_pitch"),
+            "features: {:?}",
+            r.features
+        );
         assert!(r.score >= 3);
     }
 
@@ -2054,7 +2089,11 @@ mod tests {
     fn score_design_pitch() {
         let p = Patterns::build();
         let r = score_message("do you have a logo? I can do graphic designer work", &p);
-        assert!(r.features.contains("design_pitch"), "features: {:?}", r.features);
+        assert!(
+            r.features.contains("design_pitch"),
+            "features: {:?}",
+            r.features
+        );
         assert!(r.score >= 4);
     }
 
@@ -2072,10 +2111,21 @@ mod tests {
         let p = Patterns::build();
         // Stream-Kontext-Wort → praise_score=1
         let r = score_message("cool kill there", &p);
-        assert!(r.features.contains("generic_praise"), "features: {:?}", r.features);
+        assert!(
+            r.features.contains("generic_praise"),
+            "features: {:?}",
+            r.features
+        );
         // score = 1 für generic_praise
-        let praise_reason = r.reasons.iter().find(|r| r.contains("generic_praise")).unwrap();
-        assert!(praise_reason.contains("(1)"), "Expected score 1: {praise_reason}");
+        let praise_reason = r
+            .reasons
+            .iter()
+            .find(|r| r.contains("generic_praise"))
+            .unwrap();
+        assert!(
+            praise_reason.contains("(1)"),
+            "Expected score 1: {praise_reason}"
+        );
     }
 
     #[test]
@@ -2169,7 +2219,11 @@ mod tests {
         f3.insert("wellbeing".to_string());
 
         let mut bucket: VecDeque<HistoryEntry> = VecDeque::new();
-        bucket.push_back(HistoryEntry { ts: 0.0, content: "hey there".to_string(), features: f1 });
+        bucket.push_back(HistoryEntry {
+            ts: 0.0,
+            content: "hey there".to_string(),
+            features: f1,
+        });
         bucket.push_back(HistoryEntry {
             ts: 1.0,
             content: "do you speak english".to_string(),
@@ -2181,7 +2235,10 @@ mod tests {
             features: f3,
         });
         let (s, reasons) = score_sequence_signals(&bucket);
-        assert!(reasons.contains(&"sequence:greeting_language_combo".to_string()), "reasons: {reasons:?}");
+        assert!(
+            reasons.contains(&"sequence:greeting_language_combo".to_string()),
+            "reasons: {reasons:?}"
+        );
         let _ = s;
     }
 
@@ -2200,7 +2257,11 @@ mod tests {
         let p = Patterns::build();
         let mut f = HashSet::new();
         f.insert("greeting".to_string());
-        assert!(!is_benign_social_checkin("hey check https://discord.gg/x", &f, &p));
+        assert!(!is_benign_social_checkin(
+            "hey check https://discord.gg/x",
+            &f,
+            &p
+        ));
     }
 
     #[test]
@@ -2558,15 +2619,31 @@ mod tests {
     async fn db_spam_pattern_speichern_und_hit_count_inkrementieren() {
         let pool = pool_or_skip!("scam_spam_pattern_test");
 
-        let id1 = save_spam_pattern(&pool, "smmhype.com", "phrase", "buy viewers smmhype.com", "chan1", "spam site").await;
-        let id2 = save_spam_pattern(&pool, "smmhype.com", "phrase", "buy viewers smmhype.com", "chan1", "spam site").await;
+        let id1 = save_spam_pattern(
+            &pool,
+            "smmhype.com",
+            "phrase",
+            "buy viewers smmhype.com",
+            "chan1",
+            "spam site",
+        )
+        .await;
+        let id2 = save_spam_pattern(
+            &pool,
+            "smmhype.com",
+            "phrase",
+            "buy viewers smmhype.com",
+            "chan1",
+            "spam site",
+        )
+        .await;
 
         // RETURNING id liefert bei INSERT wie bei ON-CONFLICT-Update dieselbe Zeile.
         assert!(id1.is_some());
         assert_eq!(id1, id2, "Konflikt-Update muss dieselbe Row-ID liefern");
 
         let (hit_count,): (i32,) = sqlx::query_as(
-            "SELECT hit_count FROM twitch_auto_learned_spam_patterns WHERE pattern = 'smmhype.com'"
+            "SELECT hit_count FROM twitch_auto_learned_spam_patterns WHERE pattern = 'smmhype.com'",
         )
         .fetch_one(&pool)
         .await
@@ -2642,7 +2719,10 @@ mod tests {
         let (learned, rejected, save_failed) =
             persist_spam_learning(&pool, &review, "Best Viewers kaufen!", "chan1").await;
         assert!(!save_failed);
-        assert!(learned.is_none(), "generisches Vokabular darf nie gelernt werden");
+        assert!(
+            learned.is_none(),
+            "generisches Vokabular darf nie gelernt werden"
+        );
         assert_eq!(rejected.as_deref(), Some("best viewers"));
 
         let count: i64 =
@@ -2686,8 +2766,7 @@ mod tests {
             .expect("Urteil muss parsebar sein");
         assert!(review.is_spam);
 
-        let (learned, _, _) =
-            persist_spam_learning(&pool, &review, content, "cheazycrust").await;
+        let (learned, _, _) = persist_spam_learning(&pool, &review, content, "cheazycrust").await;
         assert!(learned.is_some());
 
         let (pattern, source_channel, source_message): (String, Option<String>, Option<String>) =
@@ -2771,23 +2850,48 @@ mod tests {
 
     #[async_trait]
     impl ChatApi for MockApi {
-        async fn send_message(&self, _bid: &str, _msg: &str) -> Result<crate::types::SendOutcome, String> {
+        async fn send_message(
+            &self,
+            _bid: &str,
+            _msg: &str,
+        ) -> Result<crate::types::SendOutcome, String> {
             Ok(crate::types::SendOutcome::Sent)
         }
         async fn send_announcement(&self, _b: &str, _m: &str, _c: &str) -> Result<bool, String> {
             Ok(true)
         }
-        async fn ban_user(&self, _b: &str, _u: &str, _r: &str) -> Result<crate::api::BanOutcome, String> {
+        async fn ban_user(
+            &self,
+            _b: &str,
+            _u: &str,
+            _r: &str,
+        ) -> Result<crate::api::BanOutcome, String> {
             Ok(crate::api::BanOutcome::Banned)
         }
-        async fn timeout_user(&self, _b: &str, _u: &str, _d: u32, _r: &str) -> Result<crate::api::BanOutcome, String> {
+        async fn timeout_user(
+            &self,
+            _b: &str,
+            _u: &str,
+            _d: u32,
+            _r: &str,
+        ) -> Result<crate::api::BanOutcome, String> {
             Ok(crate::api::BanOutcome::Banned)
         }
-        async fn unban_user(&self, _b: &str, _u: &str) -> Result<bool, String> { Ok(true) }
-        async fn delete_message(&self, _b: &str, _m: &str) -> Result<bool, String> { Ok(true) }
-        async fn user_created_at(&self, _u: &str) -> Result<Option<chrono::DateTime<Utc>>, String> { Ok(None) }
-        async fn resolve_user_id(&self, _l: &str) -> Result<Option<String>, String> { Ok(None) }
-        async fn bot_user_id(&self) -> String { "bot".to_string() }
+        async fn unban_user(&self, _b: &str, _u: &str) -> Result<bool, String> {
+            Ok(true)
+        }
+        async fn delete_message(&self, _b: &str, _m: &str) -> Result<bool, String> {
+            Ok(true)
+        }
+        async fn user_created_at(&self, _u: &str) -> Result<Option<chrono::DateTime<Utc>>, String> {
+            Ok(None)
+        }
+        async fn resolve_user_id(&self, _l: &str) -> Result<Option<String>, String> {
+            Ok(None)
+        }
+        async fn bot_user_id(&self) -> String {
+            "bot".to_string()
+        }
     }
 
     struct MockAccountAge {
@@ -2852,7 +2956,10 @@ mod tests {
         let result = det.observe(&event).await;
         // crew_threat(5) + new_account(+2) = 7 → PUBLIC, quick_action_eligible → PublicWarn oder StrongWarn (erster Treffer, kein Timeout)
         assert!(
-            matches!(result, PitchDecision::PublicWarn { .. } | PitchDecision::StrongWarn { .. }),
+            matches!(
+                result,
+                PitchDecision::PublicWarn { .. } | PitchDecision::StrongWarn { .. }
+            ),
             "Erwartet Public/Strong, bekam: {result:?}"
         );
     }
@@ -2916,9 +3023,8 @@ mod tests {
     #[test]
     fn service_warning_line_leere_felder_werden_strich() {
         // Leerer chatter_login/-id -> "-"; keine Follower -> "-"; keine Reasons -> "-".
-        let line = format_service_warning_line(
-            "T", "HINT", "chan", "", "", -1, None, 4, 2, &[], "x",
-        );
+        let line =
+            format_service_warning_line("T", "HINT", "chan", "", "", -1, None, 4, 2, &[], "x");
         assert_eq!(
             line,
             "T\tHINT\tchan\t-\t-\tage_days=-1\tfollowers=-\tscore=4\tmsgs=2\t-\tx"
@@ -2929,9 +3035,8 @@ mod tests {
     fn service_warning_content_einzeilig_und_gekuerzt() {
         // Newlines werden zu Spaces, getrimmt, auf 350 Zeichen begrenzt.
         let raw = format!("  zeile1\nzeile2  {}", "y".repeat(400));
-        let line = format_service_warning_line(
-            "T", "HINT", "c", "u", "1", 0, None, 1, 1, &[], &raw,
-        );
+        let line =
+            format_service_warning_line("T", "HINT", "c", "u", "1", 0, None, 1, 1, &[], &raw);
         let content = line.rsplit('\t').next().unwrap();
         assert!(!content.contains('\n'));
         assert!(content.starts_with("zeile1 zeile2"));

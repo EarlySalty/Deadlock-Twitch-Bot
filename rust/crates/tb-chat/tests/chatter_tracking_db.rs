@@ -149,7 +149,9 @@ async fn apply_ddl(pool: &PgPool) {
             message_id     TEXT,
             message_ts     TIMESTAMPTZ,
             is_command     BOOLEAN,
-            content        TEXT
+            content        TEXT,
+            moderation_action TEXT,
+            moderation_reason TEXT
         )",
     )
     .execute(pool)
@@ -252,7 +254,7 @@ async fn erstmalige_nachricht_legt_session_und_rollup_an() {
     let tracker = ChatterTracker::new(pool.clone());
 
     let event = make_event("streamer1", "neuerchatter");
-    tracker.track(&event).await;
+    assert_eq!(tracker.track(&event).await, Some(true));
 
     // Rollup muss existieren
     let (msgs, sessions): (i32, i32) = sqlx::query_as(

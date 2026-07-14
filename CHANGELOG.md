@@ -1,3 +1,11 @@
+## #365 — Der Ban-Knopf hinterlässt jetzt Beweise
+
+**Problem:** Nachrichten, die zu einem Ban oder einer Löschung führten, landeten nie im Chat-Archiv. Die Pipeline hat sie vorher aussortiert. Damit fehlte ausgerechnet von den Fällen, die man später nachvollziehen will, jede Spur, und im Ban-Protokoll stand zwar der Text, aber nie der Grund.
+
+**Änderung:** Jede Nachricht wird gesichert, bevor irgendein Filter sie anfasst. Was danach mit ihr passiert, steht als Aktion und konkreter Grund an ihr dran. Auch die Fälle, in denen die Safe-List jemanden vor einem Fehlurteil bewahrt hat, sind jetzt sichtbar. Und wer den Bot fragt, ob er für ein Spam-Wort gebannt wird, bekommt eine Antwort statt Stille.
+
+**Aktuelles Verhalten:** Jede Moderationsentscheidung ist im Nachhinein prüfbar. Echte Werbung wird weiter gebannt, auch wenn jemand eine harmlos klingende Frage anhängt. Der lockere Spruch kommt nur, wenn ohnehin nichts moderiert wird.
+
 ## #364 — Der Empfang hat aufgemacht
 
 **Problem:** Der Link „FAQ & Hilfe" im Dashboard führte auf eine Seite, die es nie gegeben hat. Wer draufgeklickt hat, landete auf einer Fehlermeldung. Fragen zum Bot konnte man zwar schon immer im kleinen Chat-Fenster unten rechts auf der Webseite stellen, aber das kannte kaum jemand, und einen richtigen Platz dafür gab es nicht.

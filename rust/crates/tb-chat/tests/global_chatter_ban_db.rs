@@ -132,6 +132,10 @@ async fn gebannter_chatter_wird_erkannt() {
 
     let enforcer = GlobalChatterBanEnforcer::new(pool);
     let event = make_event("boser_user", "uid-boes");
+    assert_eq!(
+        enforcer.ban_reason(&event).await.as_deref(),
+        Some("Test-Ban")
+    );
     assert!(
         enforcer.is_banned(&event).await,
         "Gebannter Chatter soll erkannt werden"
