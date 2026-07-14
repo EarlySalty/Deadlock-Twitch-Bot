@@ -78,7 +78,10 @@ pub use poller::{
     PollIntervalStore, ScoreRefresh, StreamSource, TickReport, TrackedEntry, TrackedStore,
 };
 pub use raid_retention::{compute_raid_retention, RetentionStats};
-pub use scout::{build_scout_task, NoopScoutChatSink, ScoutChatSink, ScoutTask};
+pub use scout::{
+    build_scout_task, NoopScoutChatSink, NoopScoutEventSink, ScoutChatSink, ScoutEventSink,
+    ScoutTask,
+};
 pub use sessions::{
     FollowerCountSource, FollowerFetch, NewSession, NoFollowerSource, NoRaidTrackingResolver,
     RaidTrackingResolver, SessionStore, SessionTracker, StartOutcome,

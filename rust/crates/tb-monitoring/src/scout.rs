@@ -90,6 +90,16 @@ pub struct NoopScoutChatSink;
 
 impl ScoutChatSink for NoopScoutChatSink {}
 
+/// Signalisiert echte Neuentdeckungen an optionale Scout-Folgestrecken.
+#[async_trait::async_trait]
+pub trait ScoutEventSink: Send + Sync {
+    async fn on_new_streamer(&self, _stream: &StreamSnapshot) {}
+}
+
+pub struct NoopScoutEventSink;
+
+impl ScoutEventSink for NoopScoutEventSink {}
+
 /// Heal-Entscheidung — Port von `bot/chat/lurker_policy.py:should_attempt_runtime_heal`.
 /// Monitoring-only-Lurker-Kanäle sind **keine** Chat-Runtime-Heal-Ziele.
 pub(crate) fn should_attempt_runtime_heal(is_monitored_only: bool, is_ready: bool) -> bool {
@@ -280,6 +290,7 @@ pub struct ScoutTask {
     session_tracker: Option<Arc<SessionTracker>>,
     /// Optional: synchronisiert den Chat-Bot (join/part/heal).
     chat: Arc<dyn ScoutChatSink>,
+    events: Arc<dyn ScoutEventSink>,
 }
 
 impl ScoutTask {
@@ -298,6 +309,7 @@ impl ScoutTask {
             absent_cycles: HashMap::new(),
             session_tracker: None,
             chat: Arc::new(NoopScoutChatSink),
+            events: Arc::new(NoopScoutEventSink),
         }
     }
 
@@ -312,6 +324,12 @@ impl ScoutTask {
     #[must_use]
     pub fn with_chat_sink(mut self, chat: Arc<dyn ScoutChatSink>) -> Self {
         self.chat = chat;
+        self
+    }
+
+    #[must_use]
+    pub fn with_event_sink(mut self, events: Arc<dyn ScoutEventSink>) -> Self {
+        self.events = events;
         self
     }
 
@@ -430,6 +448,7 @@ impl ScoutTask {
                     tracing::debug!("scout: Neuer Monitoring-Streamer: {login}");
                     stats.new_streamers += 1;
                     new_logins.push(login.clone());
+                    self.events.on_new_streamer(snapshot).await;
                 }
                 Ok(false) => {} // bereits vorhanden (als Partner oder monitoring)
                 Err(e) => tracing::warn!("scout: DB-Fehler bei upsert für {login}: {e}"),
