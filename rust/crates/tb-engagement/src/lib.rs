@@ -29,6 +29,7 @@ pub mod minimax_chat;
 pub mod persona;
 pub mod pipeline;
 pub mod rhythm;
+pub mod scout_pitch;
 pub mod sender_auth;
 pub mod shadow_review;
 pub mod soul_store;
