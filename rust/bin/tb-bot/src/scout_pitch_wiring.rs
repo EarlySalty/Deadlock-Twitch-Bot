@@ -414,7 +414,9 @@ impl ScoutPitchRuntime {
             self.llm.raw_completion_tracked(
                 JUDGE_SYSTEM_PROMPT,
                 &user,
-                200,
+                // MiniMax-M3 reasoned vor der Antwort: 200 Tokens endeten im
+                // <think>-Block, das JSON kam nie (Live-judge_error "EOF at column 0").
+                1_000,
                 0.0,
                 "scout-pitch-judge",
             ),
@@ -683,7 +685,8 @@ impl ScoutPitchRuntime {
             self.llm.raw_completion_tracked(
                 PITCH_SYSTEM_PROMPT,
                 &user,
-                400,
+                // Gleiches Reasoning-Budget-Problem wie beim Judge.
+                1_200,
                 0.7,
                 "scout-pitch-copy",
             ),
