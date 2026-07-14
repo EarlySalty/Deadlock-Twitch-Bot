@@ -1,3 +1,11 @@
+## #366 — Der Portier zeigt sich am Empfang
+
+**Problem:** Der Empfang (die FAQ-Seite) hatte zwar schon Tresen und Hausbuch, aber vom Portier selbst war nichts zu sehen. Die Halle wirkte unbesetzt. Außerdem war das Vorschaubild, das beim Teilen der Streamer-Seite in Discord und Co. erscheinen sollte, seit jeher kaputt und zeigte einfach nichts.
+
+**Änderung:** Der Concierge steht jetzt mit seinem goldenen Zimmerschlüssel hinter dem Tresen, in der leeren Halle hängt ein gerahmtes Gemälde von ihm, und die Halle hat eine Art-Deco-Tapete samt goldenem Türbogen bekommen. Das Vorschaubild für geteilte Links gibt es jetzt wirklich, im gleichen Look.
+
+**Aktuelles Verhalten:** Wer den Empfang betritt, wird vom Portier begrüßt; sobald das Gespräch beginnt, macht das Gemälde Platz für die Antworten. Geteilte Links zur Streamer-Seite zeigen ein goldenes Vorschaubild statt einer leeren Fläche.
+
 ## #365 — Der Ban-Knopf hinterlässt jetzt Beweise
 
 **Problem:** Nachrichten, die zu einem Ban oder einer Löschung führten, landeten nie im Chat-Archiv. Die Pipeline hat sie vorher aussortiert. Damit fehlte ausgerechnet von den Fällen, die man später nachvollziehen will, jede Spur, und im Ban-Protokoll stand zwar der Text, aber nie der Grund.

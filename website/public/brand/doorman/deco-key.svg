@@ -1,0 +1,22 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 128 44" fill="none">
+  <!-- Goldener Zimmerschluessel — Ornament der Empfangshalle -->
+  <defs>
+    <linearGradient id="brass" x1="0" y1="0" x2="128" y2="0" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#8a7038"/>
+      <stop offset="0.45" stop-color="#efd49d"/>
+      <stop offset="1" stop-color="#c8a86b"/>
+    </linearGradient>
+  </defs>
+  <g stroke="url(#brass)" stroke-linecap="round">
+    <!-- Reide: Kleeblatt aus drei Ringen -->
+    <circle cx="19" cy="22" r="8.5" stroke-width="3"/>
+    <circle cx="10.5" cy="12.5" r="5" stroke-width="2.4"/>
+    <circle cx="10.5" cy="31.5" r="5" stroke-width="2.4"/>
+    <!-- Schaft mit Bund -->
+    <line x1="27.5" y1="22" x2="102" y2="22" stroke-width="3.4"/>
+    <circle cx="52" cy="22" r="2.6" fill="url(#brass)" stroke="none"/>
+    <!-- Bart: zwei gegenlaeufige Haken wie am Zimmerschluessel -->
+    <path d="M102 22 V12.5 h11 v4.5 h-6.5" stroke-width="3" stroke-linejoin="round"/>
+    <path d="M102 22 V31.5 h11 v-4.5 h-6.5" stroke-width="3" stroke-linejoin="round"/>
+  </g>
+</svg>

@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import type { FormEvent } from "react";
 import { ArrowLeft, BellRing, BookOpen, ExternalLink, Send } from "lucide-react";
-import { DoormanBadge, DoormanPortrait, KeyRackBackdrop } from "@/components/faq/LobbyArt";
+import { DoormanBadge, KeyRackBackdrop } from "@/components/faq/LobbyArt";
 
 /*
  * Der Empfang — die Seite hinter /twitch/faq.
@@ -161,9 +161,16 @@ export function FaqDoormanPage() {
         </a>
 
         {/* Der Tresen */}
-        <header className="counter px-6 py-6 md:px-8 md:py-7">
+        <header className="counter px-6 py-6 md:px-8 md:py-7 md:pr-52">
+          {/* Der Portier selbst — das Original-Artwork, freigestellt. Er steht
+              hinter dem Tresen und ragt ueber die Kante. */}
+          <img
+            src="/streamer/brand/doorman/concierge-key.png"
+            alt=""
+            aria-hidden="true"
+            className="concierge-portrait hidden md:block"
+          />
           <div className="flex items-start gap-5">
-            <DoormanPortrait className="doorman h-20 w-20 shrink-0 md:h-24 md:w-24" />
             <div className="min-w-0 flex-1">
               <div className="flex items-center gap-2.5">
                 <p className="engraved font-display text-[11px] font-semibold uppercase md:text-xs">
@@ -194,6 +201,16 @@ export function FaqDoormanPage() {
         >
           {empty ? (
             <div className="flex flex-col gap-4">
+              {/* Lobby-Kunst: haengt nur, solange niemand am Tresen spricht */}
+              <figure className="painting mx-auto mb-2 w-full max-w-sm">
+                <img
+                  src="/streamer/brand/doorman/doorman-tuer.webp"
+                  alt="Gemälde: der Doorman vor der goldenen Tür"
+                  width="640"
+                  height="418"
+                />
+                <figcaption className="plaque">Der Portier · stets im Dienst</figcaption>
+              </figure>
               <p className="text-sm text-[#b7aa91]">Womit fangen wir an?</p>
               <div className="flex flex-wrap gap-2">
                 {SUGGESTIONS.map((suggestion) => (
@@ -301,6 +318,12 @@ export function FaqDoormanPage() {
         </form>
 
         <footer className="pt-6 text-center text-xs leading-relaxed text-[color:rgba(183,170,145,0.75)]">
+          <img
+            src="/streamer/brand/doorman/deco-key.svg"
+            alt=""
+            aria-hidden="true"
+            className="key-divider"
+          />
           Der Concierge antwortet nur aus der Hausakte des Bots. Persönliche Anliegen, Beschwerden
           und alles, was er nicht weiß, gehören{" "}
           <a
