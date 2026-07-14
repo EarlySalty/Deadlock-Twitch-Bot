@@ -12,7 +12,7 @@
 
 **Änderung:** Der Concierge hat jetzt einen eigenen Raum. Unter „FAQ & Hilfe" öffnet sich ein Empfang, an dem du ihm einfach deine Frage stellst: Einrichtung, Chat-Befehle, Auto-Raid, Overlay, Pläne, Datenschutz. Er antwortet nur mit dem, was tatsächlich über den Bot hinterlegt ist, und schreibt dir dazu, wo er es nachgeschlagen hat. Was er nicht weiß, erfindet er nicht, sondern schickt dich in den Discord.
 
-**Aktuelles Verhalten:** Der Link führt jetzt zum Empfang statt in eine Fehlermeldung. Ein paar Startfragen liegen bereit, falls dir gerade keine einfällt.
+**Aktuelles Verhalten:** Der Link führt jetzt zum Empfang statt in eine Fehlermeldung. Ein paar Startfragen liegen bereit, falls dir gerade keine einfällt. Der Concierge steht hinter seinem Tresen, hinter ihm hängt das Schlüsselbrett, und seine Antworten kommen als Blatt aus dem Hausbuch.
 
 ## #363 — Der Analytics-Block fliegt von der Streamer-Seite
 

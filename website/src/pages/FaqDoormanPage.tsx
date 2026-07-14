@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import type { FormEvent } from "react";
 import { ArrowLeft, BellRing, BookOpen, ExternalLink, Send } from "lucide-react";
+import { DoormanBadge, DoormanPortrait, KeyRackBackdrop } from "@/components/faq/LobbyArt";
 
 /*
  * Der Empfang — die Seite hinter /twitch/faq.
@@ -142,7 +143,15 @@ export function FaqDoormanPage() {
 
   return (
     <main className="lobby">
-      <div className="relative z-10 mx-auto flex min-h-screen max-w-3xl flex-col px-4 py-8 md:py-12">
+      {/* Die Wand hinter dem Empfang. Reine Kulisse — sie liegt hinter allem und
+          faengt keine Klicks ab. */}
+      <KeyRackBackdrop className="key-rack" />
+
+      {/* Kein min-h-screen + flex-1 hier: das streckte die Halle immer auf volle
+          Fensterhoehe und riss zwischen der letzten Antwort und dem Eingabefeld
+          ein totes Loch auf. Die Halle selbst (.lobby) haelt den dunklen Grund
+          ueber den ganzen Viewport — der Inhalt darf kurz sein. */}
+      <div className="relative z-10 mx-auto flex max-w-3xl flex-col px-4 py-8 md:py-12">
         <a
           href="/twitch/dashboard"
           className="mb-6 inline-flex w-fit items-center gap-2 text-sm text-[#b7aa91] no-underline transition-colors hover:text-[#efd49d]"
@@ -153,15 +162,18 @@ export function FaqDoormanPage() {
 
         {/* Der Tresen */}
         <header className="counter px-6 py-6 md:px-8 md:py-7">
-          <div className="flex items-center gap-5">
-            <BellRing
-              aria-hidden="true"
-              className={`bell h-9 w-9 shrink-0 ${ringing ? "bell-ringing" : ""}`}
-            />
-            <div className="min-w-0">
-              <p className="engraved font-display text-[11px] font-semibold uppercase md:text-xs">
-                Empfang
-              </p>
+          <div className="flex items-start gap-5">
+            <DoormanPortrait className="doorman h-20 w-20 shrink-0 md:h-24 md:w-24" />
+            <div className="min-w-0 flex-1">
+              <div className="flex items-center gap-2.5">
+                <p className="engraved font-display text-[11px] font-semibold uppercase md:text-xs">
+                  Empfang
+                </p>
+                <BellRing
+                  aria-hidden="true"
+                  className={`bell h-4 w-4 shrink-0 ${ringing ? "bell-ringing" : ""}`}
+                />
+              </div>
               <h1 className="mt-1 font-display text-2xl font-semibold text-[#ece0c8] md:text-3xl">
                 Frag den Concierge
               </h1>
@@ -178,7 +190,7 @@ export function FaqDoormanPage() {
         <section
           aria-live="polite"
           aria-label="Gespräch mit dem Concierge"
-          className="flex flex-1 flex-col gap-4 py-8"
+          className="flex flex-col gap-4 py-8"
         >
           {empty ? (
             <div className="flex flex-col gap-4">
@@ -206,30 +218,33 @@ export function FaqDoormanPage() {
                 </p>
               </div>
             ) : (
-              <article key={entry.id} className="ledger-sheet max-w-[92%] px-5 py-4 md:px-6 md:py-5">
-                <p className="whitespace-pre-wrap text-[0.94rem] leading-relaxed">{entry.text}</p>
+              <div key={entry.id} className="flex items-start gap-3">
+                <DoormanBadge className="mt-1 h-10 w-10 shrink-0" />
+                <article className="ledger-sheet min-w-0 flex-1 px-5 py-4 md:px-6 md:py-5">
+                  <p className="whitespace-pre-wrap text-[0.94rem] leading-relaxed">{entry.text}</p>
 
-                {entry.sources?.length ? (
-                  <div className="ledger-rule mt-4 pt-3">
-                    <p className="mb-2 flex items-center gap-1.5 text-[0.68rem] font-semibold uppercase tracking-[0.14em] text-[color:var(--ink-soft)]">
-                      <BookOpen aria-hidden="true" className="h-3.5 w-3.5" />
-                      Nachgeschlagen in
-                    </p>
-                    <ul className="flex list-none flex-wrap gap-1.5 p-0">
-                      {entry.sources.map((source) => (
-                        <li key={source} className="source-stamp">
-                          {source}
-                        </li>
-                      ))}
-                    </ul>
-                  </div>
-                ) : null}
-              </article>
+                  {entry.sources?.length ? (
+                    <div className="ledger-rule mt-4 pt-3">
+                      <p className="mb-2 flex items-center gap-1.5 text-[0.68rem] font-semibold uppercase tracking-[0.14em] text-[color:var(--ink-soft)]">
+                        <BookOpen aria-hidden="true" className="h-3.5 w-3.5" />
+                        Nachgeschlagen in
+                      </p>
+                      <ul className="flex list-none flex-wrap gap-1.5 p-0">
+                        {entry.sources.map((source) => (
+                          <li key={source} className="source-stamp">
+                            {source}
+                          </li>
+                        ))}
+                      </ul>
+                    </div>
+                  ) : null}
+                </article>
+              </div>
             ),
           )}
 
           {loading ? (
-            <p className="flex items-center gap-2 text-sm text-[#b7aa91]">
+            <p className="flex items-center gap-2 pl-12 text-sm text-[#b7aa91]">
               Der Concierge blättert im Hausbuch
               <span aria-hidden="true" className="inline-flex gap-1">
                 <span className="thinking-dot inline-block h-1.5 w-1.5 rounded-full bg-[#c8a86b]" />
@@ -261,7 +276,7 @@ export function FaqDoormanPage() {
         </section>
 
         {/* Die Theke, an der man spricht */}
-        <form onSubmit={submit} className="sticky bottom-4 flex gap-2">
+        <form onSubmit={submit} className="sticky bottom-4 z-20 flex gap-2">
           <label htmlFor="question" className="sr-only">
             Deine Frage an den Concierge
           </label>
