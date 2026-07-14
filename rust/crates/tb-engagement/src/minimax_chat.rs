@@ -77,7 +77,9 @@ pub fn sanitize_chat_text(text: &str, max_len: usize) -> Option<String> {
     let mut chars = without_emoji.into_iter().peekable();
     while let Some(c) = chars.next() {
         match c {
-            '!' if chars.peek().is_none_or(|next| next.is_whitespace()) => {}
+            // `!` fällt weg, außer als Command-Präfix direkt vor Alphanumerik
+            // (`!clip`); so verschwindet auch Hype-Spam wie `wow!!` komplett.
+            '!' if chars.peek().is_none_or(|next| !next.is_alphanumeric()) => {}
             '—' => {
                 while transformed.chars().last().is_some_and(char::is_whitespace) {
                     transformed.pop();
@@ -583,6 +585,10 @@ mod tests {
         assert_eq!(
             sanitize_chat_text("wow 😭 das war wild! !clip — echt – stark", 120),
             Some("wow das war wild !clip, echt stark".to_string())
+        );
+        assert_eq!(
+            sanitize_chat_text("ne!! echt jetzt!!!", 120),
+            Some("ne echt jetzt".to_string())
         );
     }
 
