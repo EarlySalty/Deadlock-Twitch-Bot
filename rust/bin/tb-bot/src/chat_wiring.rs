@@ -231,9 +231,13 @@ async fn build_engagement_stealth(pool: PgPool) -> Option<Arc<StealthSender>> {
         .ok()
         .map(|v| v.trim().to_string())
         .filter(|v| !v.is_empty())?;
-    let auth = SenderAuthStore::from_env(pool, cipher)?;
+    let auth = SenderAuthStore::from_env(pool.clone(), cipher)?;
     auth.ensure_table().await;
-    Some(Arc::new(StealthSender::new(Arc::new(auth), client_id)))
+    Some(Arc::new(StealthSender::new(
+        Arc::new(auth),
+        client_id,
+        pool,
+    )))
 }
 
 // ---------------------------------------------------------------------------
@@ -1245,7 +1249,12 @@ impl ChatHooks {
                 return;
             };
             match &stealth {
-                Some(sender) if sender.send(&broadcaster_id, &text).await.is_none() => {
+                Some(sender)
+                    if sender
+                        .send(&broadcaster_id, &msg.channel_login, &text)
+                        .await
+                        .is_none() =>
+                {
                     tracing::info!(
                         "Engagement: kein Sende-Account onboarded, AI-Antwort verworfen"
                     );
