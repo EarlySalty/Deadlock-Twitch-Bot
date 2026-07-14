@@ -971,9 +971,23 @@ impl CrewGuard {
         if !self.enabled {
             return;
         }
-        if event.text().is_empty() {
+        let content = event.text().to_string();
+        if content.is_empty() {
             return;
         }
+        let channel = event.broadcaster_user_login.to_lowercase();
+        let login = event.chatter_user_login.to_lowercase();
+        let chatter_id = event.chatter_user_id.clone();
+
+        // Kontextfenster: vorherige Nachrichten dieses Users holen (OHNE die
+        // aktuelle) und die aktuelle danach in den Puffer schieben. Kurzer,
+        // await-freier Lock — läuft synchron vor dem Spawn, damit die
+        // chronologische Reihenfolge bei Nachrichten-Bursts erhalten bleibt.
+        let identity = context_identity(&chatter_id, &login);
+        let recent_context = self
+            .context
+            .snapshot_then_push(&channel, identity, &content);
+
         let event = event.clone();
         let judge = Arc::clone(&self.judge);
         let alerter = Arc::clone(&self.alerter);
@@ -981,14 +995,9 @@ impl CrewGuard {
         let bot_user_id = self.bot_user_id.clone();
         let api = Arc::clone(&self.api);
         let centroid = Arc::clone(&self.centroid);
-        let context = Arc::clone(&self.context);
         let threshold = self.threshold;
 
         tokio::spawn(async move {
-            let channel = event.broadcaster_user_login.to_lowercase();
-            let login = event.chatter_user_login.to_lowercase();
-            let content = event.text().to_string();
-            let chatter_id = event.chatter_user_id.clone();
             if matches!(screen(&content, Some(&chatter_id)), CrewSignal::None) {
                 let first_time = match first_time_context(&pool, &channel, &login).await {
                     Ok(context) => context,
@@ -1001,8 +1010,6 @@ impl CrewGuard {
                     return;
                 }
             }
-            let identity = context_identity(&chatter_id, &login);
-            let recent_context = context.snapshot_then_push(&channel, identity, &content);
             let account_age_days = if chatter_id.is_empty() {
                 None
             } else {

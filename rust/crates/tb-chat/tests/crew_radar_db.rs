@@ -1,5 +1,5 @@
 use std::str::FromStr;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
@@ -9,7 +9,8 @@ use tb_chat::crew_guard::{persist_radar_log, CrewJudge, CrewRadarLog, CrewVerdic
 use tb_chat::style_score::{build_centroid, score, StyleBreakdown};
 use tb_chat::types::{ChatBadge, ChatMessageBody};
 use tb_chat::{BanOutcome, ChatApi, ChatMessageEvent, CrewGuard, ModAlerter, SendOutcome};
-use tokio::time::{sleep, Duration};
+use tokio::sync::Semaphore;
+use tokio::time::{sleep, timeout, Duration};
 use wiremock::matchers::{method, path};
 use wiremock::{Mock, MockServer, ResponseTemplate};
 
@@ -215,6 +216,23 @@ struct StubJudge;
 #[async_trait]
 impl CrewJudge for StubJudge {
     async fn judge(&self, _content: &str, _recent_context: &[String]) -> CrewVerdict {
+        CrewVerdict::unsure()
+    }
+}
+
+struct RecordingJudge {
+    contexts: Arc<Mutex<Vec<Vec<String>>>>,
+    called: Arc<Semaphore>,
+}
+
+#[async_trait]
+impl CrewJudge for RecordingJudge {
+    async fn judge(&self, _content: &str, recent_context: &[String]) -> CrewVerdict {
+        self.contexts
+            .lock()
+            .expect("Judge-Kontexte sperren")
+            .push(recent_context.to_vec());
+        self.called.add_permits(1);
         CrewVerdict::unsure()
     }
 }
@@ -480,6 +498,64 @@ async fn observe_schreibt_radar_ledger_fuer_unprivilegierten_erstschreiber() {
 
     wait_for_ledger(&pool, 1).await;
     assert_eq!(ledger_verdicts(&pool).await, ["skipped"]);
+}
+
+#[tokio::test]
+async fn observe_gibt_zweitem_aufruf_den_kontext_des_ersten_mit() {
+    let pool = pool_or_skip!("tb_crew_observe_context_order");
+    prepare_observe_schema(&pool, true).await;
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/changelog"))
+        .respond_with(ResponseTemplate::new(204))
+        .mount(&server)
+        .await;
+
+    let contexts = Arc::new(Mutex::new(Vec::new()));
+    let judge_called = Arc::new(Semaphore::new(0));
+    let guard = CrewGuard::new(
+        true,
+        Arc::new(RecordingJudge {
+            contexts: Arc::clone(&contexts),
+            called: Arc::clone(&judge_called),
+        }),
+        Arc::new(ModAlerter::with_endpoint(
+            reqwest::Client::new(),
+            format!("{}/changelog", server.uri()),
+        )),
+        pool.clone(),
+        "bot-id".to_string(),
+        Arc::new(StubApi),
+        Arc::new(Default::default()),
+    );
+
+    let connection_one = pool.acquire().await.expect("erste DB-Verbindung halten");
+    let connection_two = pool.acquire().await.expect("zweite DB-Verbindung halten");
+    let first = "erste nachricht ohne signal";
+    let second =
+        "hast du den bot von nani drinne? du bannst unbewusst viele leute wegen der bannliste";
+
+    guard.observe(&event("viewer", "999999999", first, None));
+    guard.observe(&event("viewer", "999999999", second, None));
+
+    let _permit = timeout(Duration::from_secs(1), judge_called.acquire())
+        .await
+        .expect("zweiter Aufruf erreichte Judge nicht")
+        .expect("Judge-Semaphore geschlossen");
+    assert_eq!(
+        *contexts.lock().expect("Judge-Kontexte lesen"),
+        vec![vec![first.to_string()]]
+    );
+
+    drop((connection_one, connection_two));
+    wait_for_ledger(&pool, 2).await;
+    let messages: serde_json::Value = sqlx::query_scalar(
+        "SELECT messages FROM twitch_crew_radar_log WHERE llm_verdict = 'unsure'",
+    )
+    .fetch_one(&pool)
+    .await
+    .expect("Kontext aus Radar-Ledger lesen");
+    assert_eq!(messages, serde_json::json!([first, second]));
 }
 
 #[tokio::test]
