@@ -17,19 +17,23 @@
 //!   nicht die zusätzlichen `log_path`/Sibling-Kandidaten von Python.
 //! - Rate-Limit / CSRF-Origin-Check NICHT portiert (Python-spezifische Hooks).
 
-use std::collections::VecDeque;
+use std::collections::{HashMap, VecDeque};
 use std::io::{BufRead, BufReader};
+use std::sync::Arc;
+use std::time::{Duration as StdDuration, Instant};
 
 use axum::{
     extract::{Query, State},
     http::{request::Parts, HeaderMap, StatusCode},
     response::{IntoResponse, Response},
-    Json,
+    Extension, Json,
 };
 use chrono::{DateTime, Duration, NaiveDate, Utc};
 use serde::Deserialize;
 use serde_json::{json, Value};
 use sqlx::{postgres::PgRow, PgPool, Row};
+use tb_transport_twitch::{HelixClient, HelixConfig};
+use tokio::sync::Mutex;
 
 use crate::auth::level::{is_local_request, DashboardAuthLevel};
 
@@ -50,6 +54,7 @@ const AUTOBAN_LOG_FILENAME: &str = "twitch_autobans.log";
 const AUTOBAN_MAX_SCAN_LINES: usize = 5000;
 const AUTOBAN_MAX_EVENTS: usize = 20;
 const ACTIVITY_MAX_EVENTS: usize = 10;
+const AVATAR_CACHE_TTL: StdDuration = StdDuration::from_secs(6 * 60 * 60);
 
 const PARTNER_STATUS_ACTIVE: &str = "active";
 const PARTNER_STATUS_ARCHIVED: &str = "archived";
@@ -69,6 +74,80 @@ const INTERNAL_HOME_LOGIN_URL: &str = "/twitch/auth/login?next=%2Ftwitch%2Fdashb
 const INTERNAL_HOME_DISCORD_CONNECT_URL: &str =
     "/twitch/auth/discord/link?next=%2Ftwitch%2Fverwaltung";
 const STEAM_LINK_DEFAULT_BASE_URL: &str = "https://deutsche-deadlock-community.de/link";
+
+struct CachedAvatar {
+    value: Option<String>,
+    expires_at: Instant,
+}
+
+/// Prozesslokaler Cache für Twitch-Profilbilder. Auch fehlende/fehlgeschlagene
+/// Lookups werden gecacht, damit ein Helix-Ausfall nicht pro Request wiederholt wird.
+#[derive(Clone)]
+pub struct AvatarCache {
+    helix: HelixClient,
+    ttl: StdDuration,
+    entries: Arc<Mutex<HashMap<String, CachedAvatar>>>,
+}
+
+impl AvatarCache {
+    pub fn from_env() -> Option<Self> {
+        let client_id = std::env::var("TWITCH_CLIENT_ID")
+            .ok()
+            .map(|value| value.trim().to_string())
+            .filter(|value| !value.is_empty())?;
+        let client_secret = std::env::var("TWITCH_CLIENT_SECRET")
+            .ok()
+            .map(|value| value.trim().to_string())
+            .filter(|value| !value.is_empty())?;
+        HelixClient::new(HelixConfig::new(client_id, client_secret))
+            .ok()
+            .map(|helix| Self::new(helix, AVATAR_CACHE_TTL))
+    }
+
+    fn new(helix: HelixClient, ttl: StdDuration) -> Self {
+        Self {
+            helix,
+            ttl,
+            entries: Arc::new(Mutex::new(HashMap::new())),
+        }
+    }
+
+    async fn profile_image_url(&self, login: &str) -> Option<String> {
+        let login = login.trim().to_lowercase();
+        if login.is_empty() {
+            return None;
+        }
+
+        if let Some(cached) = self.entries.lock().await.get(&login) {
+            if cached.expires_at > Instant::now() {
+                return cached.value.clone();
+            }
+        }
+
+        let value = match self.helix.get_users(&[&login]).await {
+            Ok(users) => users
+                .get(&login)
+                .and_then(|user| user.profile_image_url.as_deref())
+                .map(str::trim)
+                .filter(|url| !url.is_empty())
+                .map(str::to_string),
+            Err(error) => {
+                tracing::warn!(%error, twitch_login = %login, "Twitch-Profilbild nicht abrufbar");
+                None
+            }
+        };
+
+        // ponytail: Prozesslokal reicht; persistent erst bei mehreren Dashboard-Instanzen.
+        self.entries.lock().await.insert(
+            login,
+            CachedAvatar {
+                value: value.clone(),
+                expires_at: Instant::now() + self.ttl,
+            },
+        );
+        value
+    }
+}
 
 /// Basis-URL für den Steam-Verknüpfungs-Flow (Steam-Link läuft über die
 /// Community-Seite, gekoppelt an die Discord-ID). Liest `STEAM_LINK_START_BASE_URL`
@@ -311,6 +390,7 @@ pub async fn get_handler(
     auth: DashboardAuthLevel,
     State(pool): State<PgPool>,
     Query(query): Query<InternalHomeQuery>,
+    avatar_cache: Option<Extension<AvatarCache>>,
 ) -> Response {
     // days parsen + clamp 1..=365 (api_v2.py:2015-2020)
     let days = query
@@ -331,6 +411,10 @@ pub async fn get_handler(
     // Identity-Resolve (DB): twitch_streamer_identities (internal_home.py:403-446)
     let (resolved_login, resolved_user_id, discord_connected) =
         identity_block(&pool, &identity.twitch_login, &identity.twitch_user_id).await;
+    let avatar_url = match avatar_cache {
+        Some(Extension(cache)) => cache.profile_image_url(&resolved_login).await,
+        None => None,
+    };
 
     let generated_at = Utc::now().to_rfc3339();
     let since: DateTime<Utc> = Utc::now() - Duration::days(days);
@@ -416,6 +500,7 @@ pub async fn get_handler(
             "twitch_login": resolved_login,
             "twitch_user_id": resolved_user_id,
             "display_name": if display_name.is_empty() { resolved_login.clone() } else { display_name },
+            "avatar_url": avatar_url,
         },
         "status": {
             "authenticated": true,
@@ -2557,5 +2642,81 @@ mod community_bot_filter_tests {
     fn leerer_login_nur_bots() {
         let (_clause, logins) = known_chat_bot_not_in_clause("sc.chatter_login", "  ", 3);
         assert_eq!(logins.len(), KNOWN_CHAT_BOTS.len());
+    }
+}
+
+#[cfg(test)]
+mod avatar_contract_tests {
+    use super::*;
+    use axum::body::{to_bytes, Body};
+    use axum::http::Request;
+    use axum::routing::get;
+    use axum::{Extension, Router};
+    use sqlx::postgres::PgPoolOptions;
+    use std::time::Duration as StdDuration;
+    use tb_http_core::ExpectedToken;
+    use tb_transport_twitch::{HelixClient, HelixConfig};
+    use tower::ServiceExt;
+    use wiremock::matchers::{method, path, query_param};
+    use wiremock::{Mock, MockServer, ResponseTemplate};
+
+    #[tokio::test]
+    async fn home_route_liefert_null_statt_500_wenn_helix_fehlschlaegt() {
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/oauth2/token"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                "access_token": "test-token",
+                "expires_in": 3600
+            })))
+            .expect(1)
+            .mount(&server)
+            .await;
+        Mock::given(method("GET"))
+            .and(path("/helix/users"))
+            .and(query_param("login", "nani"))
+            .respond_with(ResponseTemplate::new(403))
+            .expect(1)
+            .mount(&server)
+            .await;
+
+        let helix = HelixClient::new(HelixConfig {
+            client_id: "test-client-id".to_string(),
+            client_secret: "test-client-secret".to_string(),
+            token_url: format!("{}/oauth2/token", server.uri()),
+            helix_base: format!("{}/helix", server.uri()),
+        })
+        .unwrap();
+        let avatar_cache = AvatarCache::new(helix, StdDuration::from_secs(60));
+        let pool = PgPoolOptions::new()
+            .acquire_timeout(StdDuration::from_millis(20))
+            .connect_lazy("postgres://test:test@127.0.0.1:1/test")
+            .unwrap();
+        let app = Router::new()
+            .route("/", get(get_handler))
+            .layer(Extension(avatar_cache))
+            .layer(Extension(ExpectedToken("test-internal-token".to_string())))
+            .with_state(pool);
+
+        for _ in 0..2 {
+            let response = app
+                .clone()
+                .oneshot(
+                    Request::builder()
+                        .uri("/?streamer=nani")
+                        .header("x-internal-token", "test-internal-token")
+                        .body(Body::empty())
+                        .unwrap(),
+                )
+                .await
+                .unwrap();
+
+            assert_eq!(response.status(), StatusCode::OK);
+            let body: Value =
+                serde_json::from_slice(&to_bytes(response.into_body(), 1 << 20).await.unwrap())
+                    .unwrap();
+            assert!(body["profile"]["avatar_url"].is_null());
+        }
+        server.verify().await;
     }
 }
