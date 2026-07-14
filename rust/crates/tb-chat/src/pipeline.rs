@@ -179,6 +179,15 @@ pub struct ModAlerter {
     channel_id: u64,
 }
 
+pub struct CrewRadarAlert {
+    pub message: String,
+    pub chatter_login: String,
+    pub chatter_id: String,
+    pub channel_login: String,
+    pub style_score: u8,
+    pub verdict: String,
+}
+
 /// Timeout-Dauer bei AI-bestätigtem Spam: 24h — bewusst reversibel statt Ban,
 /// damit ein Judge-Fehlurteil gegen echte Viewer per Button korrigierbar bleibt.
 const AI_SPAM_TIMEOUT_SECS: u32 = 24 * 60 * 60;
@@ -398,12 +407,20 @@ impl ModAlerter {
     /// Crew-Guard-Shadow-Meldung über **denselben** Discord-Pfad wie die
     /// `sus_invite`-Alerts (Changelog-Cog → nani-Kanal, kein Mod-Ping). Der
     /// Nachrichtentext ist bereits final formatiert (crew_guard). Fire-and-forget.
-    pub fn send_crew_campaign(self: &Arc<Self>, message: String) {
+    pub fn send_crew_campaign(self: &Arc<Self>, alert: CrewRadarAlert) {
         let payload = serde_json::json!({
-            "title": "🕵️ Crew-Guard (Shadow)",
-            "content": message,
+            "title": "🕵️ Crew-Guard (Radar)",
+            "content": alert.message,
             "channel_id": self.channel_id,
             "token": "changeme-local",
+            "crew_radar": {
+                "v": 1,
+                "login": alert.chatter_login,
+                "chatter_id": alert.chatter_id,
+                "channel": alert.channel_login,
+                "style_score": alert.style_score,
+                "verdict": alert.verdict,
+            },
         });
         self.post("crew_guard", payload);
     }
@@ -610,6 +627,7 @@ pub struct ChatPipelineParts {
     pub mention_resolver: Arc<dyn MentionResolver>,
     pub review_log: Arc<ReviewLog>,
     pub alerter: Arc<ModAlerter>,
+    pub crew_centroid: Arc<crate::style_score::Centroid>,
 }
 
 /// Orchestriert die 15 Pipeline-Schritte für jedes `channel.chat.message`-Event.
@@ -623,7 +641,13 @@ pub struct ChatPipeline {
 
 impl ChatPipeline {
     pub fn new(parts: ChatPipelineParts) -> Self {
-        let crew_guard = Arc::new(CrewGuard::from_env(Arc::clone(&parts.alerter)));
+        let crew_guard = Arc::new(CrewGuard::from_env(
+            Arc::clone(&parts.alerter),
+            parts.pool.clone(),
+            parts.bot_user_id.clone(),
+            Arc::clone(&parts.api),
+            Arc::clone(&parts.crew_centroid),
+        ));
         Self { parts, crew_guard }
     }
 
@@ -1501,6 +1525,56 @@ mod tests {
     use wiremock::matchers::{method, path};
     use wiremock::{Mock, MockServer, ResponseTemplate};
 
+    #[tokio::test]
+    async fn crew_radar_payload_enthaelt_ban_button_vertrag_auch_bei_clean() {
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/changelog"))
+            .respond_with(ResponseTemplate::new(204))
+            .expect(1)
+            .mount(&server)
+            .await;
+        let alerter = Arc::new(ModAlerter::with_endpoint_and_channel_id(
+            reqwest::Client::new(),
+            format!("{}/changelog", server.uri()),
+            123,
+        ));
+        alerter.send_crew_campaign(CrewRadarAlert {
+            message: "fertig".to_string(),
+            chatter_login: "viewer".to_string(),
+            chatter_id: String::new(),
+            channel_login: "kanal".to_string(),
+            style_score: 5,
+            verdict: "clean".to_string(),
+        });
+
+        for _ in 0..20 {
+            let requests = server.received_requests().await.expect("Requests");
+            if let Some(request) = requests.first() {
+                let body: serde_json::Value =
+                    serde_json::from_slice(&request.body).expect("JSON-Payload");
+                assert_eq!(body["title"], "🕵️ Crew-Guard (Radar)");
+                assert_eq!(body["content"], "fertig");
+                assert_eq!(body["channel_id"], 123);
+                assert_eq!(body["token"], "changeme-local");
+                assert_eq!(
+                    body["crew_radar"],
+                    serde_json::json!({
+                        "v": 1,
+                        "login": "viewer",
+                        "chatter_id": "",
+                        "channel": "kanal",
+                        "style_score": 5,
+                        "verdict": "clean",
+                    })
+                );
+                return;
+            }
+            sleep(Duration::from_millis(25)).await;
+        }
+        panic!("kein Crew-Radar-Payload empfangen");
+    }
+
     #[derive(Default)]
     struct RecordingChatApi {
         calls: Mutex<Vec<String>>,
@@ -1872,6 +1946,7 @@ mod tests {
                 http,
                 "http://127.0.0.1:1/changelog",
             )),
+            crew_centroid: Arc::new(crate::style_score::Centroid::default()),
         })
     }
 
@@ -1946,6 +2021,7 @@ mod tests {
                 http,
                 "http://127.0.0.1:1/changelog",
             )),
+            crew_centroid: Arc::new(crate::style_score::Centroid::default()),
         });
         (pipeline, invite_api)
     }
