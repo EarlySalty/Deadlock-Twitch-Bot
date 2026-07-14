@@ -25,6 +25,7 @@
 pub mod api;
 pub mod catalog;
 pub mod channel_classifier;
+pub mod channel_policy;
 pub mod chatter_tracking;
 pub mod commands;
 pub mod conversation_scam;

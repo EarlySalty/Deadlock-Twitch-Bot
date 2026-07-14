@@ -21,6 +21,7 @@ use std::time::Duration;
 
 use serde_json::Value;
 use sqlx::PgPool;
+use tb_chat::channel_policy::{ChannelPolicyChatApi, PolicyContext};
 use tb_chat::commands::{
     ClipOutcome, ClipPort, CommandEngine, DiscordLinkPort, InvitePort, LastAutobanStore,
     RaidCommandPort, RaidStartResult, RaidStatusInfo, SuperModPort,
@@ -472,12 +473,27 @@ pub fn build_chat_action_port(
 /// Phase 1: Bot-Token + ChatApi — wird VOR der Hooks-Komposition gebaut,
 /// damit die OAuth-Followup-Begrüßung den nativen Send nutzen kann.
 pub struct ChatApiHandle {
-    pub api: Arc<dyn ChatApi>,
+    api: Arc<dyn ChatApi>,
     pub bot_user_id: String,
     token_manager: Arc<BotTokenManager>,
+    roster: Arc<DbPartnerRoster>,
 }
 
 impl ChatApiHandle {
+    /// Standardzugriff: jede Schreibaktion läuft durch die Partner-Policy.
+    pub fn api(&self) -> Arc<dyn ChatApi> {
+        let roster: Arc<dyn PartnerRoster> = self.roster.clone();
+        Arc::new(ChannelPolicyChatApi::new(
+            Arc::clone(&self.api),
+            PolicyContext::Standard(roster),
+        ))
+    }
+
+    /// Bewusst abweichender Kontext, aktuell ausschließlich für den Raid-Pfad.
+    pub fn api_for_context(&self, context: PolicyContext) -> Arc<dyn ChatApi> {
+        Arc::new(ChannelPolicyChatApi::new(Arc::clone(&self.api), context))
+    }
+
     /// Live rotierter Bot-User-Token-Manager — vom `!clip`-Fallback genutzt,
     /// bevor das Handle in die Pipeline verbaut wird.
     pub fn bot_token_manager(&self) -> Arc<BotTokenManager> {
@@ -515,7 +531,7 @@ pub struct ChatRuntime {
 /// Phase 1: bootet den Bot-Token und baut die ChatApi, wenn `TB_CHAT_ENABLED=1`
 /// und alle Voraussetzungen (Refresh-Token, Helix-Credentials) vorhanden sind.
 /// `None` = Chat bleibt aus (Python bedient weiter).
-pub async fn try_build_api(helix: Option<HelixClient>) -> Option<ChatApiHandle> {
+pub async fn try_build_api(helix: Option<HelixClient>, pool: PgPool) -> Option<ChatApiHandle> {
     let enabled = std::env::var("TB_CHAT_ENABLED")
         .map(|v| v.trim() == "1")
         .unwrap_or(false);
@@ -595,6 +611,7 @@ pub async fn try_build_api(helix: Option<HelixClient>) -> Option<ChatApiHandle> 
         api,
         bot_user_id,
         token_manager,
+        roster: Arc::new(DbPartnerRoster { pool }),
     })
 }
 
@@ -627,6 +644,7 @@ pub async fn build_runtime(
         api,
         bot_user_id,
         token_manager,
+        roster,
     } = handle;
 
     // TimeoutGuard verdrahten: zählt eigene Bot-Timeouts (Drop-Code
@@ -636,10 +654,15 @@ pub async fn build_runtime(
     // send_message (Moderation/Promos/Commands/Scam-Pitch/Fun/Pipeline/
     // Mention-Resolver) durch das Tracking.
     let timeout_guard = Arc::new(TimeoutGuard::new());
-    let api: Arc<dyn ChatApi> = Arc::new(
+    let tracked_api: Arc<dyn ChatApi> = Arc::new(
         TimeoutTrackingChatApi::new(api, Arc::clone(&timeout_guard), pool.clone())
             .with_bot_ban_handler(bot_ban_handler),
     );
+    let policy_roster: Arc<dyn PartnerRoster> = roster.clone();
+    let api: Arc<dyn ChatApi> = Arc::new(ChannelPolicyChatApi::new(
+        tracked_api,
+        PolicyContext::Standard(policy_roster),
+    ));
 
     // Lern-Muster einmalig laden (Python lädt sie beim Bot-Start).
     let learned = LearnedPatterns::load(&pool).await;
@@ -806,11 +829,9 @@ pub async fn build_runtime(
     }));
 
     let sweeper = Arc::new(GlobalBanSweeper::new(pool.clone(), Arc::clone(&api)));
-    let roster = Arc::new(DbPartnerRoster { pool: pool.clone() });
-
-    // Engagement-Layer (KI-Stammgast): läuft pro Partner-Message als eigene
-    // Gate-Kaskade + MiniMax-Call und antwortet ausschließlich über den
-    // separaten Smoke-Account (stealth_sender), nie über die Bot-Identität.
+    // Engagement-Layer (KI-Stammgast): Der EventSub-Partnerpfad darf weiterhin
+    // über den separaten Smoke-Account antworten. Der anonyme IRC-Reader weiter
+    // unten besitzt bewusst keinen Sender.
     // Die sieben Background-Jobs (Thread-Extractor, Match-Poller, …) laufen
     // unabhängig vom Sende-Account (Python `ensure_started`).
     let engagement = Arc::new(EngagementPipeline::with_defaults(
@@ -829,8 +850,7 @@ pub async fn build_runtime(
     // IRC-Reader: zweiter Chat-Input für `irc_read`-Kanäle (einwilligende
     // Streamer OHNE EventSub-`channel:bot`). Disjunkte Kanal-Menge zum
     // EventSub-Pfad → kein Doppel-Processing. No-op, wenn keine irc_read-Kanäle.
-    let engagement_irc_reader =
-        EngagementIrcReader::new(pool.clone(), Arc::clone(&engagement), stealth.clone());
+    let engagement_irc_reader = EngagementIrcReader::new(pool.clone(), Arc::clone(&engagement));
     supervisor.spawn("engagement_irc_reader", async move {
         engagement_irc_reader.run().await;
         future::pending::<()>().await;
@@ -1184,7 +1204,7 @@ struct ChatHooks {
     /// gesendet wird (Suppression-Check + Promo-Cooldown, Python-Parität).
     timeout_guard: Arc<TimeoutGuard>,
     promos: Arc<PromoEngine>,
-    /// KI-Engagement-Pipeline (läuft pro Message) + Smoke-Account-Sender.
+    /// KI-Engagement-Pipeline für den autorisierten EventSub-Partnerpfad.
     engagement: Arc<EngagementPipeline>,
     stealth: Option<Arc<StealthSender>>,
     /// User-ID des zentralen Bots — eigene Nachrichten überspringen das
@@ -1203,10 +1223,7 @@ struct ChatHooks {
 }
 
 impl ChatHooks {
-    /// Spawnt die Engagement-Verarbeitung als eigenständige Task, damit der
-    /// MiniMax-Call (bis ~5s) die Moderations-Pipeline nicht blockiert (entspricht
-    /// twitchios Task-pro-Event). Antwortet das Modell, geht der Text über den
-    /// Smoke-Account in den Chat — nie über die zentrale Bot-Identität.
+    /// Spawnt die Engagement-Verarbeitung für autorisierte EventSub-Partner.
     fn spawn_engagement(&self, event: &ChatMessageEvent) {
         // Eigene (zentrale) Bot-Nachrichten überspringen.
         if event.chatter_user_id == self.bot_user_id {
@@ -2295,12 +2312,13 @@ impl PartnerRoster for DbPartnerRoster {
         .collect()
     }
 
-    async fn is_operational_partner_channel(&self, login: &str) -> bool {
+    async fn is_operational_partner_channel(&self, channel: &str) -> bool {
         sqlx::query_scalar::<_, i32>(
             "SELECT COALESCE(is_partner_active, 0) \
-             FROM twitch_streamers_partner_state WHERE LOWER(twitch_login) = $1",
+             FROM twitch_streamers_partner_state \
+             WHERE LOWER(twitch_login) = LOWER($1) OR twitch_user_id = $1",
         )
-        .bind(login.to_lowercase())
+        .bind(channel)
         .fetch_optional(&self.pool)
         .await
         .unwrap_or(None)
