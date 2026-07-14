@@ -14,7 +14,7 @@
 //!   2. [`CrewJudge`] — konservativer LLM-Klassifikator, der nur dann `is_crew`
 //!      setzt, wenn das Kampagnen-Muster klar erkennbar ist. Fail-safe „unsure".
 
-use std::collections::{HashMap, VecDeque};
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex, OnceLock, PoisonError};
 use std::time::Duration;
@@ -28,7 +28,7 @@ use sqlx::PgPool;
 use tracing::{debug, error, warn};
 
 use crate::api::ChatApi;
-use crate::conversation_scam::{should_consider_event, FirstTimeContext};
+use crate::conversation_scam::{should_consider_event, DialogState, FirstTimeContext};
 use crate::pipeline::{CrewRadarAlert, ModAlerter};
 use crate::style_score::{score as style_score, Centroid, StyleBreakdown, StyleScore};
 use crate::types::ChatMessageEvent;
@@ -114,6 +114,23 @@ pub async fn persist_radar_log(pool: &PgPool, record: &CrewRadarLog) -> Result<(
     .execute(pool)
     .await?;
     Ok(())
+}
+
+async fn radar_logged_recently(
+    pool: &PgPool,
+    channel_login: &str,
+    chatter_login: &str,
+) -> Result<bool, sqlx::Error> {
+    Ok(sqlx::query_scalar::<_, i32>(
+        "SELECT 1 FROM twitch_crew_radar_log \
+         WHERE lower(chatter_login) = $1 AND channel_login = $2 \
+           AND created_at > now() - interval '24 hours' LIMIT 1",
+    )
+    .bind(chatter_login)
+    .bind(channel_login)
+    .fetch_optional(pool)
+    .await?
+    .is_some())
 }
 
 // ---------------------------------------------------------------------------
@@ -920,6 +937,7 @@ pub struct CrewGuard {
     api: Arc<dyn ChatApi>,
     centroid: Arc<Centroid>,
     context: Arc<ChatterContextBuffer>,
+    radar_checked: Arc<Mutex<HashSet<(String, String)>>>,
 }
 
 impl CrewGuard {
@@ -943,6 +961,7 @@ impl CrewGuard {
             api,
             centroid,
             context: Arc::new(ChatterContextBuffer::new()),
+            radar_checked: Arc::new(Mutex::new(HashSet::new())),
         }
     }
 
@@ -995,10 +1014,18 @@ impl CrewGuard {
         let bot_user_id = self.bot_user_id.clone();
         let api = Arc::clone(&self.api);
         let centroid = Arc::clone(&self.centroid);
+        let radar_checked = Arc::clone(&self.radar_checked);
         let threshold = self.threshold;
 
         tokio::spawn(async move {
             if matches!(screen(&content, Some(&chatter_id)), CrewSignal::None) {
+                let mut dialog = DialogState::new(false);
+                for message in recent_context.iter().chain(std::iter::once(&content)) {
+                    dialog.push_user_message(message);
+                }
+                if !dialog.has_enough_substance() {
+                    return;
+                }
                 let first_time = match first_time_context(&pool, &channel, &login).await {
                     Ok(context) => context,
                     Err(error) => {
@@ -1008,6 +1035,26 @@ impl CrewGuard {
                 };
                 if !should_consider_event(&event, &bot_user_id, first_time) {
                     return;
+                }
+                let key = (channel.clone(), login.clone());
+                if !radar_checked
+                    .lock()
+                    .unwrap_or_else(PoisonError::into_inner)
+                    .insert(key.clone())
+                {
+                    return;
+                }
+                match radar_logged_recently(&pool, &channel, &login).await {
+                    Ok(false) => {}
+                    Ok(true) => return,
+                    Err(error) => {
+                        radar_checked
+                            .lock()
+                            .unwrap_or_else(PoisonError::into_inner)
+                            .remove(&key);
+                        debug!(%error, channel, chatter = login, "crew_guard: Radar-Drossel-Check fehlgeschlagen");
+                        return;
+                    }
                 }
             }
             let account_age_days = if chatter_id.is_empty() {

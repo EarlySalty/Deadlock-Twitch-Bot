@@ -332,7 +332,12 @@ async fn observe_guard(pool: PgPool, server: &MockServer, event: &ChatMessageEve
         .respond_with(ResponseTemplate::new(204))
         .mount(server)
         .await;
-    let guard = CrewGuard::new(
+    let guard = crew_guard(pool, server);
+    guard.observe(event);
+}
+
+fn crew_guard(pool: PgPool, server: &MockServer) -> CrewGuard {
+    CrewGuard::new(
         true,
         Arc::new(StubJudge),
         Arc::new(ModAlerter::with_endpoint(
@@ -343,8 +348,7 @@ async fn observe_guard(pool: PgPool, server: &MockServer, event: &ChatMessageEve
         "bot-id".to_string(),
         Arc::new(StubApi),
         Arc::new(Default::default()),
-    );
-    guard.observe(event);
+    )
 }
 
 fn event(login: &str, chatter_id: &str, content: &str, badge: Option<&str>) -> ChatMessageEvent {
@@ -407,22 +411,38 @@ async fn ledger_verdicts(pool: &PgPool) -> Vec<String> {
         .expect("Ledger lesen")
 }
 
+async fn observation_counts(pool: &PgPool, server: &MockServer) -> (i64, usize) {
+    let ledger = sqlx::query_scalar("SELECT COUNT(*) FROM twitch_crew_radar_log")
+        .fetch_one(pool)
+        .await
+        .expect("Ledger zaehlen");
+    let alerts = server
+        .received_requests()
+        .await
+        .expect("Discord-Requests lesen")
+        .len();
+    (ledger, alerts)
+}
+
 #[tokio::test]
 async fn observe_meldet_hard_id_auch_bei_etabliertem_chatter() {
     let pool = pool_or_skip!("tb_crew_observe_hard_id_returning");
     prepare_observe_schema(&pool, false).await;
     let server = MockServer::start().await;
 
-    observe_guard(
-        pool.clone(),
-        &server,
-        &event("helmbombenricky", "147713656", "hallo", None),
-    )
-    .await;
+    Mock::given(method("POST"))
+        .and(path("/changelog"))
+        .respond_with(ResponseTemplate::new(204))
+        .mount(&server)
+        .await;
+    let guard = crew_guard(pool.clone(), &server);
+    for content in ["hallo", "noch da", "dritte nachricht"] {
+        guard.observe(&event("helmbombenricky", "147713656", content, None));
+    }
 
-    wait_for_ledger(&pool, 1).await;
-    wait_for_alerts(&server, 1).await;
-    assert_eq!(ledger_verdicts(&pool).await, ["hard_id"]);
+    wait_for_ledger(&pool, 3).await;
+    wait_for_alerts(&server, 3).await;
+    assert_eq!(ledger_verdicts(&pool).await, ["hard_id"; 3]);
 }
 
 #[tokio::test]
@@ -449,16 +469,24 @@ async fn observe_meldet_hard_invite_auch_bei_etabliertem_chatter() {
     prepare_observe_schema(&pool, false).await;
     let server = MockServer::start().await;
 
-    observe_guard(
-        pool.clone(),
-        &server,
-        &event("viewer", "999999999", "https://discord.gg/ZWSNyNfdG", None),
-    )
-    .await;
+    Mock::given(method("POST"))
+        .and(path("/changelog"))
+        .respond_with(ResponseTemplate::new(204))
+        .mount(&server)
+        .await;
+    let guard = crew_guard(pool.clone(), &server);
+    for _ in 0..2 {
+        guard.observe(&event(
+            "viewer",
+            "999999999",
+            "https://discord.gg/ZWSNyNfdG",
+            None,
+        ));
+    }
 
-    wait_for_ledger(&pool, 1).await;
-    wait_for_alerts(&server, 1).await;
-    assert_eq!(ledger_verdicts(&pool).await, ["hard_invite"]);
+    wait_for_ledger(&pool, 2).await;
+    wait_for_alerts(&server, 2).await;
+    assert_eq!(ledger_verdicts(&pool).await, ["hard_invite"; 2]);
 }
 
 #[tokio::test]
@@ -484,8 +512,8 @@ async fn observe_startet_keinen_stil_radar_fuer_etablierten_chatter() {
 }
 
 #[tokio::test]
-async fn observe_schreibt_radar_ledger_fuer_unprivilegierten_erstschreiber() {
-    let pool = pool_or_skip!("tb_crew_observe_first_time");
+async fn observe_meldet_eine_harmlose_nachricht_noch_nicht() {
+    let pool = pool_or_skip!("tb_crew_observe_no_substance");
     prepare_observe_schema(&pool, true).await;
     let server = MockServer::start().await;
 
@@ -495,9 +523,110 @@ async fn observe_schreibt_radar_ledger_fuer_unprivilegierten_erstschreiber() {
         &event("viewer", "999999999", "harmloser erster chat", None),
     )
     .await;
+    sleep(Duration::from_millis(250)).await;
+
+    assert_eq!(observation_counts(&pool, &server).await, (0, 0));
+}
+
+#[tokio::test]
+async fn observe_meldet_nach_drei_harmlosen_nachrichten_genau_einmal() {
+    let pool = pool_or_skip!("tb_crew_observe_three_messages");
+    prepare_observe_schema(&pool, true).await;
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/changelog"))
+        .respond_with(ResponseTemplate::new(204))
+        .mount(&server)
+        .await;
+    let guard = crew_guard(pool.clone(), &server);
+
+    for content in [
+        "wie geht es dir heute an diesem abend",
+        "welchen held spielst du gerade am liebsten",
+        "das war eben wirklich eine gute runde",
+    ] {
+        guard.observe(&event("viewer", "999999999", content, None));
+    }
 
     wait_for_ledger(&pool, 1).await;
+    wait_for_alerts(&server, 1).await;
+    sleep(Duration::from_millis(100)).await;
+    assert_eq!(observation_counts(&pool, &server).await, (1, 1));
     assert_eq!(ledger_verdicts(&pool).await, ["skipped"]);
+}
+
+#[tokio::test]
+async fn observe_drosselt_zehn_weitere_harmlose_nachrichten() {
+    let pool = pool_or_skip!("tb_crew_observe_once_per_chatter");
+    prepare_observe_schema(&pool, true).await;
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/changelog"))
+        .respond_with(ResponseTemplate::new(204))
+        .mount(&server)
+        .await;
+    let guard = crew_guard(pool.clone(), &server);
+
+    for number in 1..=3 {
+        guard.observe(&event(
+            "viewer",
+            "999999999",
+            &format!("das ist harmlose nachricht nummer {number} heute"),
+            None,
+        ));
+    }
+
+    wait_for_ledger(&pool, 1).await;
+    wait_for_alerts(&server, 1).await;
+    for number in 4..=13 {
+        guard.observe(&event(
+            "viewer",
+            "999999999",
+            &format!("das ist harmlose nachricht nummer {number} heute"),
+            None,
+        ));
+    }
+    sleep(Duration::from_millis(250)).await;
+    assert_eq!(observation_counts(&pool, &server).await, (1, 1));
+    assert_eq!(ledger_verdicts(&pool).await, ["skipped"]);
+}
+
+#[tokio::test]
+async fn observe_drosselung_ueberlebt_neuen_guard() {
+    let pool = pool_or_skip!("tb_crew_observe_restart");
+    prepare_observe_schema(&pool, true).await;
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/changelog"))
+        .respond_with(ResponseTemplate::new(204))
+        .mount(&server)
+        .await;
+
+    let guard = crew_guard(pool.clone(), &server);
+    for number in 1..=3 {
+        guard.observe(&event(
+            "viewer",
+            "999999999",
+            &format!("harmlose nachricht nummer {number} fuer den test"),
+            None,
+        ));
+    }
+    wait_for_ledger(&pool, 1).await;
+    wait_for_alerts(&server, 1).await;
+    drop(guard);
+
+    let restarted_guard = crew_guard(pool.clone(), &server);
+    for number in 1..=3 {
+        restarted_guard.observe(&event(
+            "viewer",
+            "999999999",
+            &format!("harmlose nachricht nummer {number} nach neustart"),
+            None,
+        ));
+    }
+    sleep(Duration::from_millis(250)).await;
+
+    assert_eq!(observation_counts(&pool, &server).await, (1, 1));
 }
 
 #[tokio::test]
@@ -548,7 +677,7 @@ async fn observe_gibt_zweitem_aufruf_den_kontext_des_ersten_mit() {
     );
 
     drop((connection_one, connection_two));
-    wait_for_ledger(&pool, 2).await;
+    wait_for_ledger(&pool, 1).await;
     let messages: serde_json::Value = sqlx::query_scalar(
         "SELECT messages FROM twitch_crew_radar_log WHERE llm_verdict = 'unsure'",
     )
