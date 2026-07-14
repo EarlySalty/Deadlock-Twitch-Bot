@@ -943,18 +943,20 @@ impl CrewGuard {
         tokio::spawn(async move {
             let channel = event.broadcaster_user_login.to_lowercase();
             let login = event.chatter_user_login.to_lowercase();
-            let first_time = match first_time_context(&pool, &channel, &login).await {
-                Ok(context) => context,
-                Err(error) => {
-                    debug!(%error, channel, chatter = login, "crew_guard: Erstschreiber-Check fehlgeschlagen");
-                    return;
-                }
-            };
-            if !should_consider_event(&event, &bot_user_id, first_time) {
-                return;
-            }
             let content = event.text().to_string();
             let chatter_id = event.chatter_user_id.clone();
+            if matches!(screen(&content, Some(&chatter_id)), CrewSignal::None) {
+                let first_time = match first_time_context(&pool, &channel, &login).await {
+                    Ok(context) => context,
+                    Err(error) => {
+                        debug!(%error, channel, chatter = login, "crew_guard: Erstschreiber-Check fehlgeschlagen");
+                        return;
+                    }
+                };
+                if !should_consider_event(&event, &bot_user_id, first_time) {
+                    return;
+                }
+            }
             let identity = context_identity(&chatter_id, &login);
             let recent_context = context.snapshot_then_push(&channel, identity, &content);
             let account_age_days = if chatter_id.is_empty() {
@@ -1027,11 +1029,7 @@ async fn decide(
         account_age_days,
         time_window_match,
     };
-    let signal = if crate::safe_list::is_safe(Some(chatter_id), login) {
-        CrewSignal::None
-    } else {
-        screen(content, Some(chatter_id))
-    };
+    let signal = screen(content, Some(chatter_id));
     let (llm_verdict, llm_confidence, llm_reasoning) = match &signal {
         CrewSignal::Trigger { hits } => {
             let verdict = judge
@@ -1509,9 +1507,9 @@ Ich hab nichts getan."
         );
     }
 
-    /// Safe-Konten bleiben handlungsfrei, ihre negative Prüfung gehört aber ins Ledger.
+    /// Safe-Konten bleiben handlungsfrei, Radar und Ledger bleiben sichtbar.
     #[tokio::test]
-    async fn safe_konto_wird_als_skipped_sichtbar() {
+    async fn safe_konto_bleibt_bei_trigger_im_radar_sichtbar() {
         for safe in crate::safe_list::SAFE_ACCOUNTS {
             let msg = decide(
                 "jaja frag mal ricky, der is einfach ueberall gebannt",
@@ -1527,7 +1525,7 @@ Ich hab nichts getan."
             )
             .await;
             let decision = msg.expect("Safe-Konto-Prüfung muss geloggt werden");
-            assert_eq!(decision.log.llm_verdict, "skipped", "{}", safe.login);
+            assert_eq!(decision.log.llm_verdict, "campaign", "{}", safe.login);
             assert_eq!(decision.log.action_taken, "none", "{}", safe.login);
         }
     }

@@ -1,9 +1,17 @@
 use std::str::FromStr;
+use std::sync::Arc;
 
+use async_trait::async_trait;
+use chrono::{DateTime, Utc};
 use sqlx::postgres::{PgConnectOptions, PgPoolOptions};
 use sqlx::PgPool;
-use tb_chat::crew_guard::{persist_radar_log, CrewRadarLog};
+use tb_chat::crew_guard::{persist_radar_log, CrewJudge, CrewRadarLog, CrewVerdict};
 use tb_chat::style_score::{build_centroid, score, StyleBreakdown};
+use tb_chat::types::{ChatBadge, ChatMessageBody};
+use tb_chat::{BanOutcome, ChatApi, ChatMessageEvent, CrewGuard, ModAlerter, SendOutcome};
+use tokio::time::{sleep, Duration};
+use wiremock::matchers::{method, path};
+use wiremock::{Mock, MockServer, ResponseTemplate};
 
 macro_rules! pool_or_skip {
     ($schema:expr) => {{
@@ -144,4 +152,302 @@ async fn centroid_wird_aus_chat_dokumenten_gebaut() {
         .expect("Zentroid bauen");
     let result = score(&["wir sind eine neue community".to_string()], &centroid);
     assert!(result.breakdown.cosine > 0, "{result:?}");
+}
+
+struct StubJudge;
+
+#[async_trait]
+impl CrewJudge for StubJudge {
+    async fn judge(&self, _content: &str, _recent_context: &[String]) -> CrewVerdict {
+        CrewVerdict::unsure()
+    }
+}
+
+struct StubApi;
+
+#[async_trait]
+impl ChatApi for StubApi {
+    async fn send_message(
+        &self,
+        _broadcaster_id: &str,
+        _message: &str,
+    ) -> Result<SendOutcome, String> {
+        unreachable!("CrewGuard darf keine Chat-Nachricht senden")
+    }
+
+    async fn send_announcement(
+        &self,
+        _broadcaster_id: &str,
+        _message: &str,
+        _color: &str,
+    ) -> Result<bool, String> {
+        unreachable!("CrewGuard darf kein Announcement senden")
+    }
+
+    async fn ban_user(
+        &self,
+        _broadcaster_id: &str,
+        _target_user_id: &str,
+        _reason: &str,
+    ) -> Result<BanOutcome, String> {
+        unreachable!("CrewGuard darf nicht bannen")
+    }
+
+    async fn timeout_user(
+        &self,
+        _broadcaster_id: &str,
+        _target_user_id: &str,
+        _duration_secs: u32,
+        _reason: &str,
+    ) -> Result<BanOutcome, String> {
+        unreachable!("CrewGuard darf keinen Timeout setzen")
+    }
+
+    async fn unban_user(
+        &self,
+        _broadcaster_id: &str,
+        _target_user_id: &str,
+    ) -> Result<bool, String> {
+        unreachable!("CrewGuard darf nicht entbannen")
+    }
+
+    async fn delete_message(
+        &self,
+        _broadcaster_id: &str,
+        _message_id: &str,
+    ) -> Result<bool, String> {
+        unreachable!("CrewGuard darf keine Nachricht loeschen")
+    }
+
+    async fn user_created_at(&self, _user_id: &str) -> Result<Option<DateTime<Utc>>, String> {
+        Ok(None)
+    }
+
+    async fn resolve_user_id(&self, _login: &str) -> Result<Option<String>, String> {
+        unreachable!("CrewGuard darf keine User-ID aufloesen")
+    }
+
+    async fn bot_user_id(&self) -> String {
+        "bot-id".to_string()
+    }
+}
+
+async fn prepare_observe_schema(pool: &PgPool, first_time: bool) {
+    for statement in [
+        "CREATE TABLE twitch_stream_sessions (id BIGINT PRIMARY KEY, started_at TIMESTAMPTZ NOT NULL DEFAULT now(), ended_at TIMESTAMPTZ)",
+        "CREATE TABLE twitch_session_chatters (session_id BIGINT NOT NULL, streamer_login TEXT NOT NULL, chatter_login TEXT NOT NULL, is_first_time_streamer BOOLEAN)",
+        "CREATE TABLE twitch_chatter_rollup (streamer_login TEXT NOT NULL, chatter_login TEXT NOT NULL)",
+        "CREATE TABLE twitch_crew_radar_log (id BIGSERIAL PRIMARY KEY, created_at TIMESTAMPTZ NOT NULL DEFAULT now(), channel_login TEXT NOT NULL, chatter_login TEXT NOT NULL, chatter_id TEXT, account_age_days BIGINT, style_score SMALLINT NOT NULL, style_breakdown JSONB NOT NULL, time_window_match BOOLEAN NOT NULL, messages JSONB NOT NULL, llm_verdict TEXT NOT NULL, llm_confidence REAL, llm_reasoning TEXT, action_taken TEXT NOT NULL DEFAULT 'none', source TEXT NOT NULL DEFAULT 'network')",
+        "INSERT INTO twitch_stream_sessions (id) VALUES (1)",
+    ] {
+        sqlx::query(statement)
+            .execute(pool)
+            .await
+            .expect("Observe-Fixture anlegen");
+    }
+    sqlx::query("INSERT INTO twitch_session_chatters (session_id, streamer_login, chatter_login, is_first_time_streamer) VALUES (1, 'kanal', 'viewer', $1), (1, 'kanal', 'helmbombenricky', $1)")
+        .bind(first_time)
+        .execute(pool)
+        .await
+        .expect("Erstschreiber-Fixture anlegen");
+}
+
+async fn observe_guard(pool: PgPool, server: &MockServer, event: &ChatMessageEvent) {
+    Mock::given(method("POST"))
+        .and(path("/changelog"))
+        .respond_with(ResponseTemplate::new(204))
+        .mount(server)
+        .await;
+    let guard = CrewGuard::new(
+        true,
+        Arc::new(StubJudge),
+        Arc::new(ModAlerter::with_endpoint(
+            reqwest::Client::new(),
+            format!("{}/changelog", server.uri()),
+        )),
+        pool,
+        "bot-id".to_string(),
+        Arc::new(StubApi),
+        Arc::new(Default::default()),
+    );
+    guard.observe(event);
+}
+
+fn event(login: &str, chatter_id: &str, content: &str, badge: Option<&str>) -> ChatMessageEvent {
+    ChatMessageEvent {
+        broadcaster_user_id: "channel-id".to_string(),
+        broadcaster_user_login: "kanal".to_string(),
+        chatter_user_id: chatter_id.to_string(),
+        chatter_user_login: login.to_string(),
+        message_id: "message-id".to_string(),
+        message: ChatMessageBody {
+            text: content.to_string(),
+            fragments: Vec::new(),
+        },
+        badges: badge
+            .map(|set_id| ChatBadge {
+                set_id: set_id.to_string(),
+                id: String::new(),
+                info: String::new(),
+            })
+            .into_iter()
+            .collect(),
+        ..Default::default()
+    }
+}
+
+async fn wait_for_ledger(pool: &PgPool, expected: i64) {
+    for _ in 0..50 {
+        let count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM twitch_crew_radar_log")
+            .fetch_one(pool)
+            .await
+            .expect("Ledger zaehlen");
+        if count >= expected {
+            return;
+        }
+        sleep(Duration::from_millis(20)).await;
+    }
+    panic!("Ledger erhielt nicht {expected} Zeilen");
+}
+
+async fn wait_for_alerts(server: &MockServer, expected: usize) {
+    for _ in 0..50 {
+        if server
+            .received_requests()
+            .await
+            .expect("Discord-Requests lesen")
+            .len()
+            >= expected
+        {
+            return;
+        }
+        sleep(Duration::from_millis(20)).await;
+    }
+    panic!("Discord erhielt nicht {expected} Meldungen");
+}
+
+async fn ledger_verdicts(pool: &PgPool) -> Vec<String> {
+    sqlx::query_scalar("SELECT llm_verdict FROM twitch_crew_radar_log ORDER BY id")
+        .fetch_all(pool)
+        .await
+        .expect("Ledger lesen")
+}
+
+#[tokio::test]
+async fn observe_meldet_hard_id_auch_bei_etabliertem_chatter() {
+    let pool = pool_or_skip!("tb_crew_observe_hard_id_returning");
+    prepare_observe_schema(&pool, false).await;
+    let server = MockServer::start().await;
+
+    observe_guard(
+        pool.clone(),
+        &server,
+        &event("helmbombenricky", "147713656", "hallo", None),
+    )
+    .await;
+
+    wait_for_ledger(&pool, 1).await;
+    wait_for_alerts(&server, 1).await;
+    assert_eq!(ledger_verdicts(&pool).await, ["hard_hit"]);
+}
+
+#[tokio::test]
+async fn observe_meldet_hard_id_auch_mit_subscriber_badge() {
+    let pool = pool_or_skip!("tb_crew_observe_hard_id_sub");
+    prepare_observe_schema(&pool, true).await;
+    let server = MockServer::start().await;
+
+    observe_guard(
+        pool.clone(),
+        &server,
+        &event("helmbombenricky", "147713656", "hallo", Some("subscriber")),
+    )
+    .await;
+
+    wait_for_ledger(&pool, 1).await;
+    wait_for_alerts(&server, 1).await;
+    assert_eq!(ledger_verdicts(&pool).await, ["hard_hit"]);
+}
+
+#[tokio::test]
+async fn observe_meldet_hard_invite_auch_bei_etabliertem_chatter() {
+    let pool = pool_or_skip!("tb_crew_observe_hard_invite_returning");
+    prepare_observe_schema(&pool, false).await;
+    let server = MockServer::start().await;
+
+    observe_guard(
+        pool.clone(),
+        &server,
+        &event("viewer", "999999999", "https://discord.gg/ZWSNyNfdG", None),
+    )
+    .await;
+
+    wait_for_ledger(&pool, 1).await;
+    wait_for_alerts(&server, 1).await;
+    assert_eq!(ledger_verdicts(&pool).await, ["hard_hit"]);
+}
+
+#[tokio::test]
+async fn observe_startet_keinen_stil_radar_fuer_etablierten_chatter() {
+    let pool = pool_or_skip!("tb_crew_observe_returning_clean");
+    prepare_observe_schema(&pool, false).await;
+    let server = MockServer::start().await;
+
+    observe_guard(
+        pool.clone(),
+        &server,
+        &event("viewer", "999999999", "harmloser etablierter chat", None),
+    )
+    .await;
+    sleep(Duration::from_millis(250)).await;
+
+    assert!(ledger_verdicts(&pool).await.is_empty());
+    assert!(server
+        .received_requests()
+        .await
+        .expect("Discord-Requests lesen")
+        .is_empty());
+}
+
+#[tokio::test]
+async fn observe_schreibt_radar_ledger_fuer_unprivilegierten_erstschreiber() {
+    let pool = pool_or_skip!("tb_crew_observe_first_time");
+    prepare_observe_schema(&pool, true).await;
+    let server = MockServer::start().await;
+
+    observe_guard(
+        pool.clone(),
+        &server,
+        &event("viewer", "999999999", "harmloser erster chat", None),
+    )
+    .await;
+
+    wait_for_ledger(&pool, 1).await;
+    assert_eq!(ledger_verdicts(&pool).await, ["skipped"]);
+}
+
+#[tokio::test]
+async fn observe_sendet_pro_vorfall_genau_eine_discord_meldung() {
+    let pool = pool_or_skip!("tb_crew_observe_single_alert");
+    prepare_observe_schema(&pool, true).await;
+    let server = MockServer::start().await;
+
+    observe_guard(
+        pool.clone(),
+        &server,
+        &event("helmbombenricky", "147713656", "hallo", None),
+    )
+    .await;
+
+    wait_for_alerts(&server, 1).await;
+    sleep(Duration::from_millis(100)).await;
+    assert_eq!(
+        server
+            .received_requests()
+            .await
+            .expect("Discord-Requests lesen")
+            .len(),
+        1
+    );
+    assert_eq!(ledger_verdicts(&pool).await, ["hard_hit"]);
 }
