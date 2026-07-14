@@ -28,15 +28,15 @@ export function ConfirmDialog({
   }
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/65 px-4 backdrop-blur-sm">
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-bg/65 px-4 backdrop-blur-sm">
       <div className="panel-card w-full max-w-md rounded-3xl p-6">
         <div className="flex items-start gap-4">
           <div
             className={[
               'rounded-2xl border p-3',
               tone === 'danger'
-                ? 'border-red-400/30 bg-red-500/10 text-red-100'
-                : 'border-amber-400/30 bg-amber-500/10 text-amber-100',
+                ? 'border-danger/30 bg-danger/10 text-danger'
+                : 'border-warning/30 bg-warning/10 text-warning',
             ].join(' ')}
           >
             <AlertTriangle className="h-5 w-5" />

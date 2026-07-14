@@ -210,7 +210,7 @@ export function Affiliates() {
         />
 
         {affiliatesQuery.isError ? (
-          <div className="rounded-2xl border border-red-400/20 bg-red-500/10 px-4 py-3 text-sm text-red-100">
+          <div className="rounded-2xl border border-danger/20 bg-danger/10 px-4 py-3 text-sm text-danger">
             {affiliatesQuery.error instanceof Error
               ? affiliatesQuery.error.message
               : 'Affiliate-Liste konnte nicht geladen werden.'}

@@ -76,7 +76,7 @@ export function Header({
                 onClick={() => setView('basic')}
                 className={`px-3 py-1.5 rounded-lg text-sm font-semibold transition-all ${
                   view === 'basic'
-                    ? 'bg-gradient-to-r from-primary to-accent text-[#16100a] shadow-lg shadow-primary/20'
+                    ? 'bg-gradient-to-r from-primary to-accent text-[#0D0806] shadow-lg shadow-primary/20'
                     : 'text-text-secondary hover:text-white'
                 }`}
               >
@@ -87,7 +87,7 @@ export function Header({
                 onClick={() => setView('extended')}
                 className={`px-3 py-1.5 rounded-lg text-sm font-semibold transition-all ${
                   view === 'extended'
-                    ? 'bg-gradient-to-r from-primary to-accent text-[#16100a] shadow-lg shadow-primary/20'
+                    ? 'bg-gradient-to-r from-primary to-accent text-[#0D0806] shadow-lg shadow-primary/20'
                     : 'text-text-secondary hover:text-white'
                 }`}
               >
@@ -206,7 +206,7 @@ export function Header({
                 onClick={() => onDaysChange(range.value)}
                 className={`px-4 py-1.5 rounded-lg text-sm font-semibold transition-all ${
                   days === range.value
-                    ? 'bg-gradient-to-r from-primary to-accent text-[#16100a] shadow-lg shadow-primary/20'
+                    ? 'bg-gradient-to-r from-primary to-accent text-[#0D0806] shadow-lg shadow-primary/20'
                     : 'text-text-secondary hover:text-white'
                 }`}
               >

@@ -166,7 +166,7 @@ export function TitleGenerator({ streamer }: TitleGeneratorProps) {
           <button
             onClick={() => mutation.mutate()}
             disabled={isLoading || !keywords.trim()}
-            className="flex items-center gap-2 px-4 py-2 rounded-xl bg-accent text-white text-sm font-medium disabled:opacity-40 hover:bg-accent-hover transition-colors"
+            className="flex items-center gap-2 px-4 py-2 rounded-xl bg-accent text-bg text-sm font-medium disabled:opacity-40 hover:bg-accent-hover transition-colors"
           >
             {isLoading ? (
               <Loader2 className="w-4 h-4 animate-spin" />

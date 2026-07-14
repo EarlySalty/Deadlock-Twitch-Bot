@@ -24,7 +24,7 @@ export function CategoryRankBadge({ rank, total }: CategoryRankBadgeProps) {
       className="bg-card rounded-xl border border-border p-4 flex items-center gap-4"
     >
       <div className={`w-12 h-12 rounded-full bg-gradient-to-br ${getRankColor()} flex items-center justify-center shrink-0`}>
-        <Trophy className="w-6 h-6 text-[#16100a]" />
+        <Trophy className="w-6 h-6 text-[#0D0806]" />
       </div>
       <div className="min-w-0">
         <div className="text-2xl font-bold text-transparent bg-gradient-to-r from-primary to-accent bg-clip-text">

@@ -7,7 +7,7 @@ interface ViewerProfilesProps {
   data: ViewerProfilesData | undefined;
 }
 
-const PROFILE_COLORS = ['#c8a86b', '#55978f', '#dd6a4d', '#8f9e6b', '#b7aa91'];
+const PROFILE_COLORS = ['#C5A059', '#00D9FF', '#FF5A3C', '#00C46A', '#B5A488'];
 const PROFILE_LABELS: Record<string, string> = {
   exclusive: 'Exklusiv',
   loyalMulti: 'Treue Multi',
@@ -116,11 +116,11 @@ export function ViewerProfiles({ data }: ViewerProfilesProps) {
               <BarChart data={exclusivityDistribution}>
                 <XAxis
                   dataKey="streamerCount"
-                  stroke="#b7aa91"
+                  stroke="#B5A488"
                   fontSize={12}
                   tickFormatter={(v: number) => `${v} Streamer`}
                 />
-                <YAxis stroke="#b7aa91" fontSize={12} />
+                <YAxis stroke="#B5A488" fontSize={12} />
                 <Tooltip
                   contentStyle={{
                     backgroundColor: 'var(--color-popover)',

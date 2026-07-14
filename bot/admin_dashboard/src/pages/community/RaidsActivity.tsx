@@ -285,7 +285,7 @@ export default function RaidsActivityPage() {
               </article>
             ))}
           </div>
-          <div className="rounded-[1.4rem] border border-amber-400/20 bg-amber-500/[0.04] p-4 text-sm text-text-secondary">
+          <div className="rounded-[1.4rem] border border-warning/20 bg-warning/[0.04] p-4 text-sm text-text-secondary">
             Konfiguration wird im finalen Visual-Pass auf editierbar gestellt.
           </div>
         </div>

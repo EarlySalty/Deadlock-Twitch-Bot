@@ -131,16 +131,16 @@ function SourcePreview({ layout, camEnabled, mode, onChange, selectedBox, onSele
 
     const borderColor =
       color === 'orange'
-        ? 'rgba(201, 168, 106, 0.95)'
+        ? 'rgba(197, 160, 89, 0.95)'
         : color === 'teal'
-        ? 'rgba(85, 151, 143, 0.95)'
-        : 'rgba(85, 151, 143, 0.95)';
+        ? 'rgba(0, 217, 255, 0.95)'
+        : 'rgba(0, 217, 255, 0.95)';
     const fillColor =
       color === 'orange'
-        ? 'rgba(201, 168, 106, 0.18)'
+        ? 'rgba(197, 160, 89, 0.18)'
         : color === 'teal'
-        ? 'rgba(85, 151, 143, 0.18)'
-        : 'rgba(85, 151, 143, 0.18)';
+        ? 'rgba(0, 217, 255, 0.18)'
+        : 'rgba(0, 217, 255, 0.18)';
 
     return (
       <div
@@ -189,7 +189,7 @@ function SourcePreview({ layout, camEnabled, mode, onChange, selectedBox, onSele
                 right: !isLeft ? -7 : 'auto',
                 background: borderColor,
                 borderRadius: 4,
-                border: '2px solid #1c150d',
+                border: '2px solid #140D0A',
               }}
             />
           );
@@ -208,7 +208,7 @@ function SourcePreview({ layout, camEnabled, mode, onChange, selectedBox, onSele
       style={{
         aspectRatio: `${layout.source.width} / ${layout.source.height}`,
         background:
-          'repeating-linear-gradient(45deg, rgba(255,255,255,0.04) 0 12px, transparent 12px 24px), linear-gradient(135deg,#2c2318,#1c150d)',
+          'repeating-linear-gradient(45deg, rgba(255,255,255,0.04) 0 12px, transparent 12px 24px), linear-gradient(135deg,#1F1815,#140D0A)',
         border: '1px solid var(--color-border)',
       }}
     >
@@ -253,8 +253,8 @@ function VerticalPreview({ layout, camEnabled, mode }: VerticalPreviewProps) {
           width: '100%',
           maxWidth: 320,
           aspectRatio: `${targetW} / ${targetH}`,
-          borderColor: 'rgba(201, 168, 106, 0.24)',
-          background: 'linear-gradient(160deg,#2c2318,#1c150d)',
+          borderColor: 'rgba(197, 160, 89, 0.24)',
+          background: 'linear-gradient(160deg,#1F1815,#140D0A)',
         }}
       >
         {/* Game fill */}
@@ -262,7 +262,7 @@ function VerticalPreview({ layout, camEnabled, mode }: VerticalPreviewProps) {
           className="absolute inset-0 flex items-center justify-center"
           style={{
             background:
-              'repeating-linear-gradient(45deg, rgba(201, 168, 106, 0.18) 0 14px, rgba(201, 168, 106, 0.06) 14px 28px)',
+              'repeating-linear-gradient(45deg, rgba(197, 160, 89, 0.18) 0 14px, rgba(197, 160, 89, 0.06) 14px 28px)',
           }}
         >
           <span className="text-white/80 text-xs font-bold uppercase tracking-[0.18em]">Game (gecroppt)</span>
@@ -277,9 +277,9 @@ function VerticalPreview({ layout, camEnabled, mode }: VerticalPreviewProps) {
               width: `${(pipW / targetW) * 100}%`,
               aspectRatio: `${pipW} / ${pipH}`,
               background:
-                'repeating-linear-gradient(45deg, rgba(85, 151, 143, 0.30) 0 10px, rgba(85, 151, 143, 0.10) 10px 20px)',
-              border: '2px solid rgba(85, 151, 143, 0.95)',
-              boxShadow: '0 6px 22px rgba(85, 151, 143, 0.35)',
+                'repeating-linear-gradient(45deg, rgba(0, 217, 255, 0.30) 0 10px, rgba(0, 217, 255, 0.10) 10px 20px)',
+              border: '2px solid rgba(0, 217, 255, 0.95)',
+              boxShadow: '0 6px 22px rgba(0, 217, 255, 0.35)',
             }}
           >
             <span className="text-white text-[10px] font-bold uppercase tracking-[0.16em]">Cam</span>
@@ -303,8 +303,8 @@ function VerticalPreview({ layout, camEnabled, mode }: VerticalPreviewProps) {
         width: '100%',
         maxWidth: 320,
         aspectRatio: `${targetW} / ${targetH}`,
-        borderColor: 'rgba(201, 168, 106, 0.24)',
-        background: 'linear-gradient(160deg,#2c2318,#1c150d)',
+        borderColor: 'rgba(197, 160, 89, 0.24)',
+        background: 'linear-gradient(160deg,#1F1815,#140D0A)',
       }}
     >
       {camEnabled && (
@@ -313,7 +313,7 @@ function VerticalPreview({ layout, camEnabled, mode }: VerticalPreviewProps) {
           style={{
             height: `${camRatio * 100}%`,
             background:
-              'repeating-linear-gradient(45deg, rgba(85, 151, 143, 0.30) 0 12px, rgba(85, 151, 143, 0.10) 12px 24px)',
+              'repeating-linear-gradient(45deg, rgba(0, 217, 255, 0.30) 0 12px, rgba(0, 217, 255, 0.10) 12px 24px)',
             borderBottom: '1px solid rgba(255,255,255,0.08)',
           }}
         >
@@ -324,7 +324,7 @@ function VerticalPreview({ layout, camEnabled, mode }: VerticalPreviewProps) {
         className="relative flex-1 flex items-center justify-center"
         style={{
           background:
-            'repeating-linear-gradient(45deg, rgba(201, 168, 106, 0.18) 0 14px, rgba(201, 168, 106, 0.06) 14px 28px)',
+            'repeating-linear-gradient(45deg, rgba(197, 160, 89, 0.18) 0 14px, rgba(197, 160, 89, 0.06) 14px 28px)',
         }}
       >
         <span className="text-white text-xs font-bold uppercase tracking-[0.18em]">Game</span>

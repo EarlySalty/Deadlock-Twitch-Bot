@@ -248,7 +248,7 @@ export function Category({ streamer, days, onStreamerSelect, onNavigate }: Categ
                 onClick={() => { setPartnerFilter(f); setPage(0); }}
                 className={`px-3 py-1 rounded-md text-xs font-medium transition-colors ${
                   partnerFilter === f
-                    ? 'bg-accent text-white'
+                    ? 'bg-accent text-bg'
                     : 'text-text-secondary hover:text-white'
                 }`}
               >
@@ -266,7 +266,7 @@ export function Category({ streamer, days, onStreamerSelect, onNavigate }: Categ
                   onClick={() => { setTierFilter(key); setPage(0); }}
                   className={`px-3 py-1 rounded-md text-xs font-medium transition-colors ${
                     tierFilter === key
-                      ? 'bg-accent text-white'
+                      ? 'bg-accent text-bg'
                       : 'text-text-secondary hover:text-white'
                   }`}
                 >
@@ -532,13 +532,13 @@ function TopStreamerTable({
 
 function RankBadge({ rank }: { rank: number }) {
   if (rank === 1) return (
-    <span className="w-7 h-7 rounded-full bg-gradient-to-br from-primary-hover to-primary flex items-center justify-center text-xs font-bold text-[#16100a]">1</span>
+    <span className="w-7 h-7 rounded-full bg-gradient-to-br from-primary-hover to-primary flex items-center justify-center text-xs font-bold text-[#0D0806]">1</span>
   );
   if (rank === 2) return (
     <span className="w-7 h-7 rounded-full bg-gradient-to-br from-text-secondary to-card-hover flex items-center justify-center text-xs font-bold text-white">2</span>
   );
   if (rank === 3) return (
-    <span className="w-7 h-7 rounded-full bg-gradient-to-br from-primary/70 to-primary/30 flex items-center justify-center text-xs font-bold text-white">3</span>
+    <span className="w-7 h-7 rounded-full bg-gradient-to-br from-primary/60 to-primary/25 flex items-center justify-center text-xs font-bold text-white">3</span>
   );
   return <span className="text-text-secondary text-xs font-mono">#{rank}</span>;
 }

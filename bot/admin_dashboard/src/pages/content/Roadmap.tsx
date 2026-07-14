@@ -101,7 +101,7 @@ export default function RoadmapPage() {
         </Section>
 
         <Section title="Preview" hint="Sichere Text-Vorschau des gespeicherten Roadmap-Bodys.">
-          <div className="rounded-[1.5rem] border border-white/10 bg-slate-950/35 p-5">
+          <div className="rounded-[1.5rem] border border-white/10 bg-bg/35 p-5">
             <TextPreview value={body} emptyMessage="Noch kein Roadmap-Body vorhanden." />
           </div>
         </Section>

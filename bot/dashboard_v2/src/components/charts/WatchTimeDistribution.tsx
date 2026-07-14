@@ -8,11 +8,11 @@ interface WatchTimeDistributionProps {
 }
 
 const SEGMENTS = [
-  { key: 'under5min' as const, label: '< 5 Min', shortLabel: '<5m', color: '#dd6a4d', description: 'Schnelle Absprünge' },
-  { key: 'min5to15' as const, label: '5-15 Min', shortLabel: '5-15m', color: '#e0912f', description: 'Kurze Sessions' },
-  { key: 'min15to30' as const, label: '15-30 Min', shortLabel: '15-30m', color: '#e0912f', description: 'Mittlere Sessions' },
-  { key: 'min30to60' as const, label: '30-60 Min', shortLabel: '30-60m', color: '#3fa66b', description: 'Längere Sessions' },
-  { key: 'over60min' as const, label: '> 60 Min', shortLabel: '60m+', color: '#3fa66b', description: 'Loyale Zuschauer' },
+  { key: 'under5min' as const, label: '< 5 Min', shortLabel: '<5m', color: '#FF5A3C', description: 'Schnelle Absprünge' },
+  { key: 'min5to15' as const, label: '5-15 Min', shortLabel: '5-15m', color: '#E8A33D', description: 'Kurze Sessions' },
+  { key: 'min15to30' as const, label: '15-30 Min', shortLabel: '15-30m', color: '#E8A33D', description: 'Mittlere Sessions' },
+  { key: 'min30to60' as const, label: '30-60 Min', shortLabel: '30-60m', color: '#00FF88', description: 'Längere Sessions' },
+  { key: 'over60min' as const, label: '> 60 Min', shortLabel: '60m+', color: '#00FF88', description: 'Loyale Zuschauer' },
 ] as const;
 
 export function WatchTimeDistribution({ data }: WatchTimeDistributionProps) {

@@ -47,7 +47,7 @@ interface AudienceDemographicsProps {
   data: AudienceDemographicsData;
 }
 
-const VIEWER_COLORS = ['#c8a86b', '#55978f', '#dd6a4d', '#8f9e6b', '#b7aa91'];
+const VIEWER_COLORS = ['#C5A059', '#00D9FF', '#FF5A3C', '#00C46A', '#B5A488'];
 
 export function AudienceDemographics({ data }: AudienceDemographicsProps) {
   const activityLabels = {

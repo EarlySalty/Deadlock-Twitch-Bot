@@ -49,9 +49,9 @@ const PLATFORMS: Array<{
   titleLimit: number;
   hashtagTarget: string;
 }> = [
-  { id: 'youtube', label: 'YouTube Shorts', Icon: Video, tone: 'text-[#dd6a4d]', titleLimit: 100, hashtagTarget: '5–10' },
-  { id: 'tiktok', label: 'TikTok', Icon: Music2, tone: 'text-[#55978f]', titleLimit: 150, hashtagTarget: '8–12' },
-  { id: 'instagram', label: 'Instagram Reels', Icon: Camera, tone: 'text-[#dd6a4d]', titleLimit: 125, hashtagTarget: '8–15' },
+  { id: 'youtube', label: 'YouTube Shorts', Icon: Video, tone: 'text-[#FF5A3C]', titleLimit: 100, hashtagTarget: '5–10' },
+  { id: 'tiktok', label: 'TikTok', Icon: Music2, tone: 'text-[#00D9FF]', titleLimit: 150, hashtagTarget: '8–12' },
+  { id: 'instagram', label: 'Instagram Reels', Icon: Camera, tone: 'text-[#FF5A3C]', titleLimit: 125, hashtagTarget: '8–15' },
 ];
 
 interface EnrichmentPanelProps {

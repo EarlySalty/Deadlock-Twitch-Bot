@@ -188,7 +188,7 @@ export default function BotControlPage() {
             <StatusBadge status={reloadMutation.isPending ? 'warning' : 'ok'} />
           </div>
 
-          <div className="rounded-[1.5rem] border border-red-400/20 bg-red-500/[0.04] p-5">
+          <div className="rounded-[1.5rem] border border-danger/20 bg-danger/[0.04] p-5">
             <div className="flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
               <div className="max-w-2xl">
                 <h3 className="text-lg font-semibold text-white">Reload aller Bot-Cogs</h3>
@@ -234,7 +234,7 @@ export default function BotControlPage() {
                 className={[
                   'relative inline-flex h-8 w-14 items-center rounded-full border transition',
                   promoSnapshot.enabled
-                    ? 'border-emerald-400/35 bg-emerald-500/18'
+                    ? 'border-success/35 bg-success/18'
                     : 'border-white/10 bg-white/10',
                 ].join(' ')}
               >
@@ -247,7 +247,7 @@ export default function BotControlPage() {
               </button>
             </div>
 
-            <div className="mt-5 rounded-[1.2rem] border border-white/10 bg-slate-950/35 p-4">
+            <div className="mt-5 rounded-[1.2rem] border border-white/10 bg-bg/35 p-4">
               <p className="text-xs font-semibold uppercase tracking-[0.16em] text-text-secondary">Promo Message</p>
               <p className="mt-3 whitespace-pre-wrap text-sm leading-6 text-white/90">
                 {promoSnapshot.message || '—'}
@@ -317,9 +317,9 @@ export default function BotControlPage() {
             </div>
           </div>
         ) : (
-          <div className="rounded-[1.5rem] border border-amber-400/20 bg-amber-500/[0.04] p-5">
+          <div className="rounded-[1.5rem] border border-warning/20 bg-warning/[0.04] p-5">
             <div className="flex items-start gap-3">
-              <TriangleAlert className="mt-0.5 h-5 w-5 text-amber-200" />
+              <TriangleAlert className="mt-0.5 h-5 w-5 text-warning" />
               <div>
                 <p className="text-sm font-semibold text-white">Editor folgt in Schritt 5 (Content & Comms)</p>
                 <p className="mt-2 text-sm leading-6 text-text-secondary">

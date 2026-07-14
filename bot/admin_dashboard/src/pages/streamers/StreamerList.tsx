@@ -70,12 +70,12 @@ function matchesScopeSearch(row: ScopeStatusRow, search: string) {
 function scopeCellClass(enabled: boolean, critical = false) {
   if (enabled) {
     return critical
-      ? 'border-emerald-400/35 bg-emerald-500/18 text-emerald-100'
-      : 'border-cyan-400/30 bg-cyan-500/14 text-cyan-100';
+      ? 'border-success/35 bg-success/18 text-success'
+      : 'border-accent/30 bg-accent/14 text-accent';
   }
   return critical
-    ? 'border-amber-400/35 bg-amber-500/18 text-amber-100'
-    : 'border-slate-500/40 bg-slate-700/30 text-slate-200';
+    ? 'border-warning/35 bg-warning/18 text-warning'
+    : 'border-border bg-card-hover/30 text-secondary';
 }
 
 function formatPartnerStatus(status: StreamerPartnerStatus | undefined) {

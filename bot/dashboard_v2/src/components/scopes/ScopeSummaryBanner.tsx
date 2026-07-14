@@ -10,7 +10,7 @@ export function ScopeSummaryBanner({ onOpenTab }: ScopeSummaryBannerProps) {
   const preview = summary.missing.slice(0, 3);
 
   return (
-    <div className="mb-6 rounded-xl border border-border bg-gradient-to-r from-[#2c2318] to-[#241c11] p-4 shadow-lg">
+    <div className="mb-6 rounded-xl border border-border bg-gradient-to-r from-[#1F1815] to-[#1A1210] p-4 shadow-lg">
       <div className="flex flex-col gap-4 md:flex-row md:items-center md:justify-between">
         <div className="flex items-start gap-3">
           <div className="rounded-lg bg-accent/20 p-2 text-accent">
@@ -44,7 +44,7 @@ export function ScopeSummaryBanner({ onOpenTab }: ScopeSummaryBannerProps) {
           <button
             type="button"
             onClick={onOpenTab}
-            className="flex items-center gap-1 rounded-lg bg-accent px-3 py-2 text-sm font-semibold text-white transition hover:bg-accent/80"
+            className="flex items-center gap-1 rounded-lg bg-accent px-3 py-2 text-sm font-semibold text-bg transition hover:bg-accent/80"
           >
             Details
             <ChevronRight className="h-4 w-4" />

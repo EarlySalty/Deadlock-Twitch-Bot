@@ -119,9 +119,9 @@ export function Growth({ streamer, days }: GrowthProps) {
         <div className="h-[300px]">
           <ResponsiveContainer width="100%" height="100%">
             <LineChart data={chartData}>
-              <CartesianGrid strokeDasharray="3 3" stroke="rgba(201, 168, 106, 0.24)" />
-              <XAxis dataKey="name" stroke="#b7aa91" fontSize={12} />
-              <YAxis stroke="#b7aa91" fontSize={12} />
+              <CartesianGrid strokeDasharray="3 3" stroke="rgba(197, 160, 89, 0.24)" />
+              <XAxis dataKey="name" stroke="#B5A488" fontSize={12} />
+              <YAxis stroke="#B5A488" fontSize={12} />
               <Tooltip
                 contentStyle={{
                   backgroundColor: 'var(--color-popover)',
@@ -143,9 +143,9 @@ export function Growth({ streamer, days }: GrowthProps) {
                 type="monotone"
                 dataKey="avgViewers"
                 name="Ø Viewer"
-                stroke="#55978f"
+                stroke="#00D9FF"
                 strokeWidth={2}
-                dot={{ fill: '#55978f' }}
+                dot={{ fill: '#00D9FF' }}
               />
             </LineChart>
           </ResponsiveContainer>
@@ -276,7 +276,7 @@ function IncomingRaidsSection({ raidAnalyticsData }: IncomingRaidsSectionProps) 
   const topRaiders = computeTopRaiders(incomingRaids);
   const balanceData = summary ? [
     { name: 'Gesendet', value: summary.raid_balance.sent, fill: 'var(--color-primary)' },
-    { name: 'Empfangen', value: summary.raid_balance.received, fill: '#55978f' },
+    { name: 'Empfangen', value: summary.raid_balance.received, fill: '#00D9FF' },
   ] : [];
 
   return (
@@ -295,9 +295,9 @@ function IncomingRaidsSection({ raidAnalyticsData }: IncomingRaidsSectionProps) 
           <div className="h-[200px]">
             <ResponsiveContainer width="100%" height="100%">
               <BarChart data={balanceData} layout="vertical" margin={{ left: 20, right: 40 }}>
-                <CartesianGrid strokeDasharray="3 3" stroke="rgba(201, 168, 106, 0.24)" />
-                <XAxis type="number" stroke="#b7aa91" fontSize={12} />
-                <YAxis type="category" dataKey="name" stroke="#b7aa91" fontSize={13} width={90} />
+                <CartesianGrid strokeDasharray="3 3" stroke="rgba(197, 160, 89, 0.24)" />
+                <XAxis type="number" stroke="#B5A488" fontSize={12} />
+                <YAxis type="category" dataKey="name" stroke="#B5A488" fontSize={13} width={90} />
                 <Tooltip
                   contentStyle={{
                     backgroundColor: 'var(--color-popover)',

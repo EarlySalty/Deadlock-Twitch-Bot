@@ -77,9 +77,9 @@ function buildEventMarkers(
     const gameChanged = prevGame !== null && cu.game !== prevGame;
     const titleChanged = prevTitle !== null && cu.title !== prevTitle;
     if (gameChanged) {
-      markers.push({ minute: min, color: '#55978f', label: cu.game || 'Spielwechsel' });
+      markers.push({ minute: min, color: '#00D9FF', label: cu.game || 'Spielwechsel' });
     } else if (titleChanged) {
-      markers.push({ minute: min, color: '#e0912f', label: 'Titel' });
+      markers.push({ minute: min, color: '#E8A33D', label: 'Titel' });
     }
     prevGame = cu.game;
     prevTitle = cu.title;
@@ -89,7 +89,7 @@ function buildEventMarkers(
     const min = Math.round((new Date(raid.at).getTime() - startMs) / 60000);
     markers.push({
       minute: min,
-      color: raid.direction === 'incoming' ? '#3fa66b' : '#55978f',
+      color: raid.direction === 'incoming' ? '#00FF88' : '#00D9FF',
       label: `${raid.direction === 'incoming' ? 'Raid von' : 'Raid an'} ${raid.channel}`,
     });
   }
@@ -250,7 +250,7 @@ export function SessionDetail({ sessionId, streamer: _streamer, onBack }: Sessio
               onClick={() => setActiveTab(tabId as 'overview' | 'events' | 'viewer-timeline')}
               className={`rounded-xl px-4 py-2 text-sm font-medium transition ${
                 isActive
-                  ? 'bg-primary text-[#16100a] shadow-lg shadow-primary/20'
+                  ? 'bg-primary text-[#0D0806] shadow-lg shadow-primary/20'
                   : 'border border-white/10 bg-card text-text-secondary hover:text-white'
               }`}
             >
@@ -279,13 +279,13 @@ export function SessionDetail({ sessionId, streamer: _streamer, onBack }: Sessio
                 <CartesianGrid strokeDasharray="3 3" stroke="rgba(255,255,255,0.06)" />
                 <XAxis
                   dataKey="minute"
-                  tick={{ fill: '#b7aa91', fontSize: 12 }}
+                  tick={{ fill: '#B5A488', fontSize: 12 }}
                   tickFormatter={(v: number) => `${v}m`}
                 />
-                <YAxis tick={{ fill: '#b7aa91', fontSize: 12 }} />
+                <YAxis tick={{ fill: '#B5A488', fontSize: 12 }} />
                 <Tooltip
                   contentStyle={{
-                    backgroundColor: '#241c11',
+                    backgroundColor: '#1A1210',
                     border: '1px solid rgba(255,255,255,0.1)',
                     borderRadius: '8px',
                     color: '#fff',
@@ -296,7 +296,7 @@ export function SessionDetail({ sessionId, streamer: _streamer, onBack }: Sessio
                 <Line
                   type="monotone"
                   dataKey="viewers"
-                  stroke="#55978f"
+                  stroke="#00D9FF"
                   strokeWidth={2}
                   dot={false}
                   activeDot={{ r: 4 }}

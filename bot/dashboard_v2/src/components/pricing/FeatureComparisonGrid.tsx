@@ -67,10 +67,17 @@ const featureData: FeatureCategory[] = [
 ];
 
 const Cell = ({ value, color }: { value: boolean | string; color: string }) => {
-  if (value === true)  return <Check className={`w-4 h-4 ${color} mx-auto`} />;
-  if (value === false) return <Minus className="w-4 h-4 text-white/10 mx-auto" />;
-  return <span className={`${color} text-xs font-medium`}>{value}</span>;
+  if (value === true)  return <Check className="w-4 h-4 mx-auto" style={{ color }} />;
+  if (value === false) return <Minus className="w-4 h-4 mx-auto" style={{ color: 'var(--ink-muted)', opacity: 0.4 }} />;
+  return <span className="text-xs font-medium" style={{ color }}>{value}</span>;
 };
+
+/* Das Datenblatt liegt auf Pergament: dunkle Tinte auf hellem Papier.
+   Antik-Gold und Plasma waeren hier unlesbar — dafuer gibt es die ink-Toene. */
+const INK_GOLD  = 'var(--ink-gold)';
+const INK_BLUE  = 'var(--ink-blue)';
+const INK_EMBER = 'var(--ink-ember)';
+const INK_MUTED = 'var(--ink-muted)';
 
 export default function FeatureComparisonGrid() {
   return (
@@ -78,43 +85,43 @@ export default function FeatureComparisonGrid() {
       initial={{ opacity: 0, y: 20 }}
       animate={{ opacity: 1, y: 0 }}
       transition={{ duration: 0.4, delay: 0.4 }}
-      className="bg-card rounded-2xl border border-border p-6 md:p-8 mb-12"
+      className="parchment rounded-2xl p-6 md:p-8 mb-12"
     >
       <div className="flex items-center justify-between mb-6">
-        <h2 className="text-xl font-bold text-white">Feature-Vergleich</h2>
-        <span className="text-sm text-white/40">Alle Features im Überblick</span>
+        <h2 className="text-xl font-bold" style={{ color: 'var(--parchment-ink)' }}>Feature-Vergleich</h2>
+        <span className="text-sm" style={{ color: INK_MUTED }}>Alle Features im Überblick</span>
       </div>
 
       <div className="overflow-x-auto -mx-4 md:mx-0">
         <table className="w-full min-w-[720px] md:min-w-0 text-sm">
           <thead>
-            <tr className="border-b border-white/10">
-              <th className="text-left py-3 text-white/40 font-normal px-4 md:px-0">Feature</th>
-              <th className="text-center py-3 text-white/50 font-medium w-20">Free</th>
-              <th className="text-center py-3 font-medium w-20" style={{ color: '#c8a86b' }}>Werbefrei</th>
-              <th className="text-center py-3 font-medium w-20" style={{ color: '#55978f' }}>Raid Boost</th>
-              <th className="text-center py-3 font-medium w-20" style={{ color: '#55978f' }}>Analyse</th>
-              <th className="text-center py-3 font-medium w-20" style={{ color: '#e0912f' }}>Alles drin</th>
+            <tr>
+              <th className="text-left py-3 font-normal px-4 md:px-0" style={{ color: INK_MUTED }}>Feature</th>
+              <th className="text-center py-3 font-medium w-20" style={{ color: INK_MUTED }}>Free</th>
+              <th className="text-center py-3 font-medium w-20" style={{ color: INK_GOLD }}>Werbefrei</th>
+              <th className="text-center py-3 font-medium w-20" style={{ color: INK_BLUE }}>Raid Boost</th>
+              <th className="text-center py-3 font-medium w-20" style={{ color: INK_BLUE }}>Analyse</th>
+              <th className="text-center py-3 font-medium w-20" style={{ color: INK_EMBER }}>Alles drin</th>
             </tr>
           </thead>
-          <tbody className="text-white/60">
+          <tbody style={{ color: 'var(--parchment-ink)' }}>
             {featureData.map((cat) => (
               <>
-                <tr key={`cat-${cat.category}`} className="border-b border-white/5">
+                <tr key={`cat-${cat.category}`}>
                   <td colSpan={6} className="py-3">
-                    <span className="text-xs font-semibold text-white/40 uppercase tracking-wider">
+                    <span className="text-xs font-semibold uppercase tracking-wider" style={{ color: INK_MUTED }}>
                       {cat.category}
                     </span>
                   </td>
                 </tr>
                 {cat.features.map((f) => (
-                  <tr key={f.name} className="border-b border-white/5 hover:bg-white/[0.02] transition-colors">
+                  <tr key={f.name} className="transition-colors">
                     <td className="py-3 px-4 md:px-0">{f.name}</td>
-                    <td className="text-center py-3"><Cell value={f.free}      color="text-white/30"    /></td>
-                    <td className="text-center py-3"><Cell value={f.werbefrei} color="text-[#c8a86b]"   /></td>
-                    <td className="text-center py-3"><Cell value={f.raid}      color="text-[#55978f]"   /></td>
-                    <td className="text-center py-3"><Cell value={f.analyse}   color="text-[#55978f]"   /></td>
-                    <td className="text-center py-3"><Cell value={f.bundle}    color="text-[#e0912f]"   /></td>
+                    <td className="text-center py-3"><Cell value={f.free}      color={INK_MUTED} /></td>
+                    <td className="text-center py-3"><Cell value={f.werbefrei} color={INK_GOLD}  /></td>
+                    <td className="text-center py-3"><Cell value={f.raid}      color={INK_BLUE}  /></td>
+                    <td className="text-center py-3"><Cell value={f.analyse}   color={INK_BLUE}  /></td>
+                    <td className="text-center py-3"><Cell value={f.bundle}    color={INK_EMBER} /></td>
                   </tr>
                 ))}
               </>
@@ -123,16 +130,19 @@ export default function FeatureComparisonGrid() {
         </table>
       </div>
 
-      <div className="flex flex-wrap items-center justify-center gap-6 mt-6 pt-6 border-t border-white/5">
-        <div className="flex items-center gap-2 text-white/40 text-xs">
-          <Check className="w-3.5 h-3.5 text-white/30" />
+      <div
+        className="flex flex-wrap items-center justify-center gap-6 mt-6 pt-6"
+        style={{ borderTop: '1px solid var(--parchment-rule)' }}
+      >
+        <div className="flex items-center gap-2 text-xs" style={{ color: INK_MUTED }}>
+          <Check className="w-3.5 h-3.5" style={{ color: 'var(--parchment-ink)' }} />
           <span>Inklusive</span>
         </div>
-        <div className="flex items-center gap-2 text-white/40 text-xs">
-          <Minus className="w-3.5 h-3.5 text-white/10" />
+        <div className="flex items-center gap-2 text-xs" style={{ color: INK_MUTED }}>
+          <Minus className="w-3.5 h-3.5" style={{ color: INK_MUTED, opacity: 0.4 }} />
           <span>Nicht verfügbar</span>
         </div>
-        <div className="text-white/25 text-xs">
+        <div className="text-xs" style={{ color: INK_MUTED }}>
           Bot-Werbung deaktivieren ist ausschließlich im Werbefrei-Plan enthalten — nicht im Trial.
         </div>
       </div>

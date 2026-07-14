@@ -45,7 +45,7 @@ export function TagPerformanceChart({ tagData, titleData, peerBenchmark }: TagPe
           onClick={() => setActiveTab('tags')}
           className={`px-4 py-2 rounded-lg text-sm font-medium transition-colors ${
             activeTab === 'tags'
-              ? 'bg-accent text-white'
+              ? 'bg-accent text-bg'
               : 'bg-background text-text-secondary hover:text-white'
           }`}
         >
@@ -57,7 +57,7 @@ export function TagPerformanceChart({ tagData, titleData, peerBenchmark }: TagPe
             onClick={() => setActiveTab('titles')}
             className={`px-4 py-2 rounded-lg text-sm font-medium transition-colors ${
               activeTab === 'titles'
-                ? 'bg-accent text-white'
+                ? 'bg-accent text-bg'
                 : 'bg-background text-text-secondary hover:text-white'
             }`}
           >

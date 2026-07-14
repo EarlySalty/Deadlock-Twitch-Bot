@@ -23,10 +23,10 @@ function InlineScopeChip({
 }) {
   const toneClass =
     tone === 'critical'
-      ? 'border-amber-400/35 bg-amber-500/14 text-amber-100'
+      ? 'border-warning/35 bg-warning/14 text-warning'
       : tone === 'missing'
-        ? 'border-red-400/35 bg-red-500/14 text-red-100'
-        : 'border-white/10 bg-white/[0.04] text-slate-100';
+        ? 'border-danger/35 bg-danger/14 text-danger'
+        : 'border-white/10 bg-white/[0.04] text-secondary';
 
   return (
     <span className={`inline-flex items-center gap-1.5 rounded-full border px-3 py-1 text-xs font-medium ${toneClass}`}>
@@ -77,7 +77,7 @@ function renderSummaryChip(label: string, value: number, tone: 'neutral' | 'warn
     <span
       className={[
         'stat-pill',
-        tone === 'warning' ? '!border-red-400/30 !bg-red-500/10 !text-red-100' : '',
+        tone === 'warning' ? '!border-danger/30 !bg-danger/10 !text-danger' : '',
       ].join(' ')}
     >
       {label}: {formatNumber(value)}
@@ -319,7 +319,7 @@ export default function ScopesPage() {
           <article className="rounded-[1.4rem] border border-white/10 bg-white/[0.03] p-5">
             <div className="flex items-center justify-between gap-3">
               <h3 className="text-sm font-semibold uppercase tracking-[0.2em] text-white">Critical Scopes</h3>
-              <span className="stat-pill !border-amber-400/30 !bg-amber-500/10 !text-amber-100">
+              <span className="stat-pill !border-warning/30 !bg-warning/10 !text-warning">
                 {formatNumber(response?.criticalScopes.length ?? 0)}
               </span>
             </div>

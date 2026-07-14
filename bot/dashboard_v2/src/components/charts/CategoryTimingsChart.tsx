@@ -101,7 +101,7 @@ export function CategoryTimingsChart({ data }: CategoryTimingsChartProps) {
           <button
             onClick={() => setView('hourly')}
             className={`flex items-center gap-1.5 px-3 py-1.5 rounded-md text-xs font-medium transition-colors ${
-              view === 'hourly' ? 'bg-accent text-white' : 'text-text-secondary hover:text-white'
+              view === 'hourly' ? 'bg-accent text-bg' : 'text-text-secondary hover:text-white'
             }`}
           >
             <Clock className="w-3 h-3" /> Stunde
@@ -109,7 +109,7 @@ export function CategoryTimingsChart({ data }: CategoryTimingsChartProps) {
           <button
             onClick={() => setView('weekly')}
             className={`flex items-center gap-1.5 px-3 py-1.5 rounded-md text-xs font-medium transition-colors ${
-              view === 'weekly' ? 'bg-accent text-white' : 'text-text-secondary hover:text-white'
+              view === 'weekly' ? 'bg-accent text-bg' : 'text-text-secondary hover:text-white'
             }`}
           >
             <Calendar className="w-3 h-3" /> Wochentag
@@ -123,39 +123,39 @@ export function CategoryTimingsChart({ data }: CategoryTimingsChartProps) {
             <CartesianGrid strokeDasharray="3 3" stroke="var(--color-border)" vertical={false} />
             <XAxis
               dataKey="label"
-              stroke="#b7aa91"
-              tick={{ fill: '#b7aa91', fontSize: view === 'hourly' ? 10 : 12 }}
+              stroke="#B5A488"
+              tick={{ fill: '#B5A488', fontSize: view === 'hourly' ? 10 : 12 }}
               interval={view === 'hourly' ? 1 : 0}
             />
             <YAxis
               yAxisId="yAvg"
-              stroke="#b7aa91"
-              tick={{ fill: '#b7aa91', fontSize: 11 }}
+              stroke="#B5A488"
+              tick={{ fill: '#B5A488', fontSize: 11 }}
               tickFormatter={tickFmt}
               width={45}
-              label={{ value: 'Ø Viewer', angle: -90, position: 'insideLeft', fill: '#c8a86b' }}
+              label={{ value: 'Ø Viewer', angle: -90, position: 'insideLeft', fill: '#C5A059' }}
             />
             {hasPeakSeries && (
               <YAxis
                 yAxisId="yPeak"
                 orientation="right"
-                stroke="#b7aa91"
-                tick={{ fill: '#b7aa91', fontSize: 11 }}
+                stroke="#B5A488"
+                tick={{ fill: '#B5A488', fontSize: 11 }}
                 tickFormatter={tickFmt}
                 width={45}
-                label={{ value: 'Peak Viewer', angle: 90, position: 'insideRight', fill: '#dd6a4d' }}
+                label={{ value: 'Peak Viewer', angle: 90, position: 'insideRight', fill: '#FF5A3C' }}
               />
             )}
-            <Tooltip content={<CustomTooltip />} cursor={{ stroke: '#b7aa91', strokeOpacity: 0.4 }} />
-            <Legend wrapperStyle={{ color: '#ece0c8', fontSize: '12px' }} />
+            <Tooltip content={<CustomTooltip />} cursor={{ stroke: '#B5A488', strokeOpacity: 0.4 }} />
+            <Legend wrapperStyle={{ color: '#EDE0C4', fontSize: '12px' }} />
 
             <Area
               yAxisId="yAvg"
               type="monotone"
               dataKey="categoryAvg"
               name="Kategorie Ø Viewer"
-              stroke="#c8a86b"
-              fill="#c8a86b"
+              stroke="#C5A059"
+              fill="#C5A059"
               fillOpacity={0.25}
               strokeWidth={2}
               connectNulls
@@ -168,8 +168,8 @@ export function CategoryTimingsChart({ data }: CategoryTimingsChartProps) {
               type="monotone"
               dataKey="trackedAvg"
               name="Tracked Ø Viewer"
-              stroke="#55978f"
-              fill="#55978f"
+              stroke="#00D9FF"
+              fill="#00D9FF"
               fillOpacity={0.2}
               strokeWidth={2}
               connectNulls
@@ -183,7 +183,7 @@ export function CategoryTimingsChart({ data }: CategoryTimingsChartProps) {
                 type="monotone"
                 dataKey="categoryPeak"
                 name="Kategorie Peak Viewer"
-                stroke="#dd6a4d"
+                stroke="#FF5A3C"
                 strokeDasharray="6 4"
                 strokeWidth={2}
                 connectNulls
@@ -198,7 +198,7 @@ export function CategoryTimingsChart({ data }: CategoryTimingsChartProps) {
                 type="monotone"
                 dataKey="trackedPeak"
                 name="Tracked Peak Viewer"
-                stroke="#8f9e6b"
+                stroke="#00C46A"
                 strokeDasharray="4 4"
                 strokeWidth={2}
                 connectNulls

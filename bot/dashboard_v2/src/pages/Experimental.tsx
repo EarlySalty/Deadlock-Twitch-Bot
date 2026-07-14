@@ -44,13 +44,13 @@ interface ExperimentalProps {
 //  - All other games → hash-based color from palette (same game = same color)
 // ---------------------------------------------------------------------------
 const SPECIAL_COLORS: Record<string, string> = {
-  'Deadlock':      '#c8a86b',
-  'Just Chatting': '#55978f',
+  'Deadlock':      '#C5A059',
+  'Just Chatting': '#00D9FF',
 };
 
 const HASH_PALETTE = [
-  '#c8a86b', '#55978f', '#dd6a4d', '#8f9e6b', '#b7aa91', 'var(--color-warning)',
-  '#c8a86b', '#55978f', '#dd6a4d', '#8f9e6b', '#b7aa91', 'var(--color-warning)',
+  '#C5A059', '#00D9FF', '#FF5A3C', '#00C46A', '#B5A488', 'var(--color-warning)',
+  '#C5A059', '#00D9FF', '#FF5A3C', '#00C46A', '#B5A488', 'var(--color-warning)',
 ];
 
 function hashGameColor(name: string | null | undefined): string {
@@ -61,7 +61,7 @@ function hashGameColor(name: string | null | undefined): string {
 }
 
 // Medal tiers are always computed from avgViewers, independent of current sort
-const MEDAL = ['#c8a86b', '#b7aa91', '#dd6a4d'] as const; // gold / silver / bronze
+const MEDAL = ['#C5A059', '#B5A488', '#FF5A3C'] as const; // gold / silver / bronze
 
 type SortKey = 'avgViewers' | 'sessions' | 'peakViewers';
 
@@ -156,15 +156,15 @@ function ExpGameBreakdownChart({ data }: { data: ExpGameBreakdown[] }) {
           <CartesianGrid strokeDasharray="3 3" stroke="rgba(255,255,255,0.06)" />
           <XAxis
             dataKey="shortGame"
-            tick={{ fill: '#b7aa91', fontSize: 11 }}
+            tick={{ fill: '#B5A488', fontSize: 11 }}
             angle={-35}
             textAnchor="end"
             interval={0}
           />
-          <YAxis tick={{ fill: '#b7aa91', fontSize: 11 }} />
+          <YAxis tick={{ fill: '#B5A488', fontSize: 11 }} />
           <Tooltip
             contentStyle={{
-              backgroundColor: '#241c11',
+              backgroundColor: '#1A1210',
               border: '1px solid rgba(255,255,255,0.1)',
               borderRadius: 8,
               color: '#fff',
@@ -223,13 +223,13 @@ function ExpGrowthCurvesChart({ data }: { data: ExpGrowthCurve[] }) {
         <CartesianGrid strokeDasharray="3 3" stroke="rgba(255,255,255,0.06)" />
         <XAxis
           dataKey="minute"
-          tick={{ fill: '#b7aa91', fontSize: 11 }}
+          tick={{ fill: '#B5A488', fontSize: 11 }}
           tickFormatter={(v) => `${v}m`}
         />
-        <YAxis tick={{ fill: '#b7aa91', fontSize: 11 }} />
+        <YAxis tick={{ fill: '#B5A488', fontSize: 11 }} />
         <Tooltip
           contentStyle={{
-            backgroundColor: '#241c11',
+            backgroundColor: '#1A1210',
             border: '1px solid rgba(255,255,255,0.1)',
             borderRadius: 8,
             color: '#fff',
@@ -237,7 +237,7 @@ function ExpGrowthCurvesChart({ data }: { data: ExpGrowthCurve[] }) {
           labelFormatter={(v) => `Minute ${v}`}
           formatter={((value: number) => [formatNumber(value, 1), 'Ø Viewer']) as any}
         />
-        <Legend wrapperStyle={{ color: '#b7aa91', fontSize: 12 }} />
+        <Legend wrapperStyle={{ color: '#B5A488', fontSize: 12 }} />
         {games.map((game) => (
           <Line
             key={game}

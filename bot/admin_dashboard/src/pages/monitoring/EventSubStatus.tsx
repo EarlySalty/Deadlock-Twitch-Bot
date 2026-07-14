@@ -55,11 +55,11 @@ export function EventSubStatusPage() {
       </div>
 
       {data?.snapshotStale ? (
-        <div className="flex items-start gap-3 rounded-2xl border border-amber-400/30 bg-amber-500/10 px-5 py-4 text-sm text-amber-100">
+        <div className="flex items-start gap-3 rounded-2xl border border-warning/30 bg-warning/10 px-5 py-4 text-sm text-warning">
           <TriangleAlert className="mt-0.5 h-5 w-5 shrink-0" />
           <div>
             <p className="font-semibold">EventSub-Snapshot veraltet</p>
-            <p className="mt-1 text-amber-100/75">Der Bot hat seit mehr als 15 Minuten keinen Status geschrieben. Die Werte unten sind nur der letzte bekannte Stand.</p>
+            <p className="mt-1 text-warning/75">Der Bot hat seit mehr als 15 Minuten keinen Status geschrieben. Die Werte unten sind nur der letzte bekannte Stand.</p>
           </div>
         </div>
       ) : null}
@@ -101,7 +101,7 @@ export function EventSubStatusPage() {
 
       <article className="panel-card rounded-[1.8rem] p-6">
         <p className="text-xs font-semibold uppercase tracking-[0.2em] text-text-secondary">Raw Condition Snapshot</p>
-        <pre className="mt-4 overflow-auto rounded-[1.4rem] border border-white/10 bg-slate-950/55 p-4 text-xs leading-6 text-emerald-100">
+        <pre className="mt-4 overflow-auto rounded-[1.4rem] border border-white/10 bg-bg/55 p-4 text-xs leading-6 text-success">
           {JSON.stringify(
             subscriptions.map((subscription) => ({
               id: subscription.id,

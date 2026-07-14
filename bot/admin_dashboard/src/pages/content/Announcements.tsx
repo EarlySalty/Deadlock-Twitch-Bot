@@ -101,7 +101,7 @@ export default function AnnouncementsPage() {
         </Section>
 
         <Section title="Preview" hint="Sichere Text-Vorschau ohne HTML-Ausfuehrung.">
-          <div className="rounded-[1.5rem] border border-white/10 bg-slate-950/35 p-5">
+          <div className="rounded-[1.5rem] border border-white/10 bg-bg/35 p-5">
             <TextPreview value={body} emptyMessage="Noch kein Announcement-Text vorhanden." />
           </div>
         </Section>

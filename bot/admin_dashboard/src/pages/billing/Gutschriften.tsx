@@ -199,7 +199,7 @@ export function Gutschriften() {
         />
 
         {documentsQuery.isError ? (
-          <div className="rounded-2xl border border-red-400/20 bg-red-500/10 px-4 py-3 text-sm text-red-100">
+          <div className="rounded-2xl border border-danger/20 bg-danger/10 px-4 py-3 text-sm text-danger">
             {documentsQuery.error instanceof Error
               ? documentsQuery.error.message
               : 'Gutschriften konnten nicht geladen werden.'}

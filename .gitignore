@@ -22,8 +22,8 @@ build/
 # Node.js (Dashboard V2 + Admin Dashboard)
 twitch_cog/dashboard_v2/node_modules/
 twitch_cog/analytics/dashboard_v2/node_modules/
-bot/admin_dashboard/node_modules/
-bot/dashboard_v2/node_modules/
+bot/admin_dashboard/node_modules
+bot/dashboard_v2/node_modules
 website/node_modules/
 website/dist/
 website/.vite/

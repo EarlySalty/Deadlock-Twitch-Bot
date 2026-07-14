@@ -73,7 +73,7 @@ export function TextPreview({ value, emptyMessage = 'Noch kein Inhalt vorhanden.
           return (
             <pre
               key={`code-${segmentIndex}`}
-              className="overflow-x-auto rounded-[1.25rem] border border-white/10 bg-slate-950/60 p-4 text-sm leading-6 text-amber-100"
+              className="overflow-x-auto rounded-[1.25rem] border border-white/10 bg-bg/60 p-4 text-sm leading-6 text-warning"
             >
               <code>{segment.content.trim()}</code>
             </pre>

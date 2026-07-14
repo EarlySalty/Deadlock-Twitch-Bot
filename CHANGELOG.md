@@ -1,3 +1,11 @@
+## #361 — Die Dashboards sehen jetzt nach Schmiede aus
+
+**Problem:** Das Analyse-Dashboard hatte zwar schon den Gold-Look, wirkte aber flach. Das Admin-Dashboard war beim letzten Rebrand komplett übersehen worden und leuchtete weiter in Petrol und Orange. Statusanzeigen zogen sich ihre Farben aus einer bunten Standardpalette, die mit der Marke nichts zu tun hatte.
+
+**Änderung:** Beide Dashboards laufen jetzt auf demselben Look: tiefes Schwarz-Braun als Grund, Kacheln aus gebürstetem Gusseisen mit Goldkante und Nieten in den Ecken, dazu eine ruhige Körnung. Grün und Blau leuchten nur noch da, wo wirklich etwas läuft oder verbunden ist. Der Feature-Vergleich liegt auf Pergament, mit dunkler Tinte statt Neon, damit er lesbar bleibt.
+
+**Aktuelles Verhalten:** Analyse- und Admin-Dashboard sehen aus wie aus einem Guss. Ein pulsierender Punkt bedeutet, dass gerade etwas aktiv ist, und nicht bloß Dekoration.
+
 ## #360 — Die Raid-Erinnerung klingt jetzt nach Mensch
 
 **Problem:** Wer nach einem Raid im anderen Chat nichts gesagt hat, bekam eine Erinnerung im Behördenton. Die Rede war vom "Zielchat" und davon, dass ein Hallo "dem Netzwerk hilft". Das las sich wie eine Ermahnung und nicht wie ein Tipp unter Streamern. Obendrein stand ein @-Mention in einer Direktnachricht, die ohnehin nur an eine Person geht.

@@ -106,7 +106,7 @@ export default function ChangelogPage() {
         </Section>
 
         <Section title="Preview" hint="Vorschau des nächsten Changelog-Eintrags.">
-          <div className="rounded-[1.5rem] border border-white/10 bg-slate-950/35 p-5">
+          <div className="rounded-[1.5rem] border border-white/10 bg-bg/35 p-5">
             <div className="space-y-4">
               <div>
                 <p className="text-xs font-semibold uppercase tracking-[0.18em] text-text-secondary">Datum</p>

@@ -127,7 +127,7 @@ export default function LegalPage() {
                 className={[
                   'rounded-full border px-4 py-2 text-sm transition',
                   activeSlug === tab.slug
-                    ? 'border-orange-300/40 bg-orange-500/15 text-orange-100'
+                    ? 'border-warning/40 bg-warning/15 text-warning'
                     : 'border-white/10 bg-white/[0.03] text-text-secondary hover:border-white/20 hover:text-white',
                 ].join(' ')}
               >
@@ -193,7 +193,7 @@ export default function LegalPage() {
             </Section>
 
             <Section title="Preview" hint="Sichere Vorschau des gespeicherten Inhalts.">
-              <div className="rounded-[1.5rem] border border-white/10 bg-slate-950/35 p-5">
+              <div className="rounded-[1.5rem] border border-white/10 bg-bg/35 p-5">
                 <div className="space-y-4">
                   <h3 className="text-2xl font-semibold text-white">{currentDraft.title || 'Ohne Titel'}</h3>
                   <TextPreview value={currentDraft.body} emptyMessage="Noch kein Body vorhanden." />

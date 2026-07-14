@@ -33,7 +33,7 @@ export function SubTabs({ tabs, active, onChange }: SubTabsProps) {
               type="button"
               onClick={() => onChange(tab.id)}
               className={`flex items-center gap-1.5 rounded-lg px-3.5 py-2 text-sm font-semibold transition-colors ${
-                isActive ? 'bg-primary/85 text-white' : 'text-text-secondary hover:text-white'
+                isActive ? 'bg-primary/85 text-bg' : 'text-text-secondary hover:text-white'
               }`}
             >
               {tab.label}
