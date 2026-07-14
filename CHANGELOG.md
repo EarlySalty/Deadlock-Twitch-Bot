@@ -1,3 +1,11 @@
+## #362 — Ruhigeres Dashboard, echtes Profilbild
+
+**Problem:** Das Dashboard war so dunkel, dass Kacheln und Hintergrund zu einem schwarzen Block verschmolzen. Gleichzeitig knallte ein neonblauer Ton mitten ins Gold, am deutlichsten beim Knopf zum Analyse-Dashboard und in den Schleiern über der Startseite. Und oben links stand statt deines Profilbilds nur ein Kreis mit dem ersten Buchstaben deines Namens.
+
+**Änderung:** Der Grund ist eine Stufe heller, damit man die Kanten der Kacheln wieder sieht. Blau und Grün leuchten jetzt ausschließlich da, wo sie etwas bedeuten, also in Statusanzeigen und in den Diagrammen. Alles andere, was man anfasst oder anschaut, ist Gold und Messing. Dein Twitch-Profilbild wird direkt von Twitch geladen und oben links angezeigt.
+
+**Aktuelles Verhalten:** Das Dashboard liest sich ruhiger, die Farbe führt dich zu dem, was gerade passiert. Lädt dein Profilbild einmal nicht, springt die Anzeige zurück auf den Buchstaben, statt ein leeres Kästchen zu zeigen.
+
 ## #361 — Die Dashboards sehen jetzt nach Schmiede aus
 
 **Problem:** Das Analyse-Dashboard hatte zwar schon den Gold-Look, wirkte aber flach. Das Admin-Dashboard war beim letzten Rebrand komplett übersehen worden und leuchtete weiter in Petrol und Orange. Statusanzeigen zogen sich ihre Farben aus einer bunten Standardpalette, die mit der Marke nichts zu tun hatte.

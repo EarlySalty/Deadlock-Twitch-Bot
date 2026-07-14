@@ -598,6 +598,9 @@ export function InternalHomeLanding() {
   );
   const [actionFilter, setActionFilter] = useState<ActionFilter>('all');
   const [actionLimit, setActionLimit] = useState<number>(ACTION_PAGE_SIZE);
+  // Laedt das Twitch-CDN-Bild nicht (geloescht, geblockt, veraltete URL), faellt der
+  // Avatar auf die Initiale zurueck statt ein leeres Kaestchen zu zeigen.
+  const [avatarFailed, setAvatarFailed] = useState(false);
   const normalizedSelectedStreamer = selectedStreamer?.trim().toLowerCase() || null;
 
   useEffect(() => {
@@ -778,6 +781,7 @@ export function InternalHomeLanding() {
   const home = data ?? {};
   const twitchLogin = home.twitchLogin?.trim() || '';
   const displayName = home.displayName?.trim() || twitchLogin || 'Creator';
+  const avatarUrl = avatarFailed ? null : home.avatarUrl?.trim() || null;
   const canAccessAnalyticsDashboard = Boolean(
     authStatus?.canAccessAnalyticsDashboard ?? authStatus?.access?.analytics ?? true
   );
@@ -879,9 +883,18 @@ export function InternalHomeLanding() {
           >
             <div className="space-y-4">
               <div className="flex items-center gap-3">
-                <div className="gradient-accent sidebar-avatar-glow flex h-10 w-10 shrink-0 items-center justify-center rounded-full text-sm font-bold text-white">
-                  {displayName?.[0]?.toUpperCase() ?? '?'}
-                </div>
+                {avatarUrl ? (
+                  <img
+                    src={avatarUrl}
+                    alt=""
+                    onError={() => setAvatarFailed(true)}
+                    className="sidebar-avatar-glow h-10 w-10 shrink-0 rounded-full border border-border object-cover"
+                  />
+                ) : (
+                  <div className="gradient-accent sidebar-avatar-glow flex h-10 w-10 shrink-0 items-center justify-center rounded-full text-sm font-bold">
+                    {displayName?.[0]?.toUpperCase() ?? '?'}
+                  </div>
+                )}
                 <div data-tour-id="tour-plan" className="min-w-0">
                   <div className="truncate text-sm font-semibold text-white">{displayName}</div>
                   <div className="mt-1 inline-flex max-w-full items-center rounded-full border border-accent/30 bg-accent/10 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-[0.18em] text-accent">
@@ -1110,7 +1123,7 @@ export function InternalHomeLanding() {
                 {canAccessAnalyticsDashboard ? (
                   <a
                     href={analyticsTabHref('overview')}
-                    className="gradient-accent inline-flex items-center gap-2 rounded-lg px-4 py-2 text-sm font-bold text-white no-underline shadow-lg shadow-primary/20 transition-transform hover:-translate-y-0.5"
+                    className="gradient-accent inline-flex items-center gap-2 rounded-lg px-4 py-2 text-sm font-bold no-underline shadow-lg shadow-primary/20 transition-transform hover:-translate-y-0.5"
                   >
                     Analyse Dashboard
                     <ArrowRight className="h-4 w-4" />
@@ -1152,7 +1165,7 @@ export function InternalHomeLanding() {
                 >
                   <div className="mb-5 flex items-center gap-3">
                     <div className="gradient-accent sidebar-avatar-glow flex h-9 w-9 items-center justify-center rounded-xl">
-                      <Heart className="h-4 w-4 text-white" />
+                      <Heart className="h-4 w-4 text-on-gold" />
                     </div>
                     <div>
                       <div className="text-[11px] font-semibold uppercase tracking-[0.18em] text-text-secondary">

@@ -164,7 +164,7 @@ function ExpGameBreakdownChart({ data }: { data: ExpGameBreakdown[] }) {
           <YAxis tick={{ fill: '#B5A488', fontSize: 11 }} />
           <Tooltip
             contentStyle={{
-              backgroundColor: '#1A1210',
+              backgroundColor: 'var(--color-card)',
               border: '1px solid rgba(255,255,255,0.1)',
               borderRadius: 8,
               color: '#fff',
@@ -229,7 +229,7 @@ function ExpGrowthCurvesChart({ data }: { data: ExpGrowthCurve[] }) {
         <YAxis tick={{ fill: '#B5A488', fontSize: 11 }} />
         <Tooltip
           contentStyle={{
-            backgroundColor: '#1A1210',
+            backgroundColor: 'var(--color-card)',
             border: '1px solid rgba(255,255,255,0.1)',
             borderRadius: 8,
             color: '#fff',

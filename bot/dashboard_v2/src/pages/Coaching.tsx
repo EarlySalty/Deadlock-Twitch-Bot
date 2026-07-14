@@ -257,7 +257,11 @@ export function DurationSection({ data }: { data: CoachingData }) {
           <XAxis dataKey="label" stroke="#B5A488" fontSize={12} />
           <YAxis stroke="#B5A488" fontSize={12} />
           <Tooltip
-            contentStyle={{ background: '#1A1210', border: '1px solid #1F1815', borderRadius: '8px' }}
+            contentStyle={{
+              background: 'var(--color-card)',
+              border: '1px solid var(--color-border)',
+              borderRadius: '8px',
+            }}
             labelStyle={{ color: '#fff' }}
             itemStyle={{ color: '#EDE0C4' }}
             formatter={((value: number, name: string) => {
@@ -674,7 +678,11 @@ export function RetentionSection({ data }: { data: CoachingData }) {
             <XAxis dataKey="minute" stroke="#B5A488" fontSize={12} tickFormatter={(m) => `${m}m`} />
             <YAxis stroke="#B5A488" fontSize={12} domain={[0, 100]} tickFormatter={(v) => `${v}%`} />
             <Tooltip
-              contentStyle={{ background: '#1A1210', border: '1px solid #1F1815', borderRadius: '8px' }}
+              contentStyle={{
+              background: 'var(--color-card)',
+              border: '1px solid var(--color-border)',
+              borderRadius: '8px',
+            }}
               labelFormatter={(m) => `Minute ${m}`}
               formatter={((value: number, name: string) => {
                 const label = name === 'you' ? 'Du' : 'Top-Performer';
@@ -1101,7 +1109,11 @@ export function CompetitionDensitySection({ data }: { data: CoachingData }) {
           <XAxis dataKey="hour" stroke="#B5A488" fontSize={12} tickFormatter={(h) => `${h}:00`} />
           <YAxis stroke="#B5A488" fontSize={12} />
           <Tooltip
-            contentStyle={{ background: '#1A1210', border: '1px solid #1F1815', borderRadius: '8px' }}
+            contentStyle={{
+              background: 'var(--color-card)',
+              border: '1px solid var(--color-border)',
+              borderRadius: '8px',
+            }}
             labelFormatter={(h) => `${h}:00 UTC`}
             formatter={((value: number, name: string) => {
               if (name === 'activeStreamers') return [value, 'Aktive Streamer'];
