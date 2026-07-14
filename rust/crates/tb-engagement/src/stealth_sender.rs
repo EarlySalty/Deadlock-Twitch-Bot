@@ -20,15 +20,17 @@ const DEFAULT_HELIX_URL: &str = "https://api.twitch.tv/helix/chat/messages";
 /// Versendet Engagement-Antworten über den Smoke-Account.
 pub struct StealthSender {
     auth: Arc<SenderAuthStore>,
+    pool: sqlx::PgPool,
     http: reqwest::Client,
     client_id: String,
     helix_url: String,
 }
 
 impl StealthSender {
-    pub fn new(auth: Arc<SenderAuthStore>, client_id: String) -> Self {
+    pub fn new(auth: Arc<SenderAuthStore>, client_id: String, pool: sqlx::PgPool) -> Self {
         Self {
             auth,
+            pool,
             http: reqwest::Client::new(),
             client_id,
             helix_url: DEFAULT_HELIX_URL.to_string(),
@@ -41,13 +43,27 @@ impl StealthSender {
         self
     }
 
-    /// Sendet `text` als Smoke-Account in den Chat von `broadcaster_id`.
+    /// Sendet `text` als Smoke-Account nur in operativ aktive Partner-Kanäle.
     ///
     /// `Some(true)` – Nachricht bestätigt versendet.
-    /// `Some(false)` – Account vorhanden, aber Versand fehlgeschlagen/gedroppt.
+    /// `Some(false)` – kein aktiver Partner (ohne HTTP-Call) oder Versand fehlgeschlagen/gedroppt.
     /// `None` – kein Sende-Account onboarded (Aufrufer soll Fallback nutzen).
-    pub async fn send(&self, broadcaster_id: &str, text: &str) -> Option<bool> {
+    pub async fn send(
+        &self,
+        broadcaster_id: &str,
+        channel_login: &str,
+        text: &str,
+    ) -> Option<bool> {
         let broadcaster_id = broadcaster_id.trim();
+        if !crate::gate::is_operational_partner(&self.pool, channel_login).await {
+            tracing::warn!(
+                channel_login,
+                broadcaster_id,
+                reason = "lurker_write_denied_non_partner",
+                "StealthSender: Nicht-Partner-Schreibversuch aus dem Engagement-Pfad blockiert"
+            );
+            return Some(false);
+        }
         let Some(text) = sanitize_chat_text(text, 120) else {
             return Some(false);
         };
@@ -135,7 +151,23 @@ mod tests {
         admin.close().await;
         let opts = PgConnectOptions::from_str(&dsn).unwrap().options([("search_path", schema)]);
         let pool = PgPoolOptions::new().max_connections(2).connect_with(opts).await.unwrap();
+        sqlx::query(
+            "CREATE TABLE twitch_streamers_partner_state (twitch_login TEXT, is_partner_active INTEGER)",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
         Some(pool)
+    }
+
+    async fn add_active_partner(pool: &PgPool, channel_login: &str) {
+        sqlx::query(
+            "INSERT INTO twitch_streamers_partner_state (twitch_login, is_partner_active) VALUES ($1, 1)",
+        )
+        .bind(channel_login)
+        .execute(pool)
+        .await
+        .unwrap();
     }
 
     /// SenderAuthStore mit einem frischen, entschlüsselbaren Token in der DB.
@@ -162,27 +194,49 @@ mod tests {
     #[tokio::test]
     async fn none_ohne_account() {
         let Some(pool) = make_pool("t_eng_stealth_none").await else { return };
-        let s = SenderAuthStore::new(pool, cipher(), "cid".into(), "csec".into());
+        add_active_partner(&pool, "partner").await;
+        let s = SenderAuthStore::new(pool.clone(), cipher(), "cid".into(), "csec".into());
         s.ensure_table().await;
-        let sender = StealthSender::new(Arc::new(s), "cid".into());
+        let sender = StealthSender::new(Arc::new(s), "cid".into(), pool);
         // Kein Token onboarded → None (Fallback-Signal).
-        assert_eq!(sender.send("123", "hi").await, None);
+        assert_eq!(sender.send("123", "partner", "hi").await, None);
     }
 
     #[tokio::test]
     async fn leerer_input_ist_false() {
         let Some(pool) = make_pool("t_eng_stealth_empty").await else { return };
-        let auth = auth_with_token(pool, cipher()).await;
-        let sender = StealthSender::new(auth, "cid".into());
-        assert_eq!(sender.send("", "hi").await, Some(false));
-        assert_eq!(sender.send("123", "   ").await, Some(false));
+        add_active_partner(&pool, "partner").await;
+        let auth = auth_with_token(pool.clone(), cipher()).await;
+        let sender = StealthSender::new(auth, "cid".into(), pool);
+        assert_eq!(sender.send("", "partner", "hi").await, Some(false));
+        assert_eq!(sender.send("123", "partner", "   ").await, Some(false));
     }
 
     #[tokio::test]
-    async fn is_sent_true_ist_versandt() {
+    async fn nicht_partner_wird_blockiert_ohne_http() {
+        let Some(pool) = make_pool("t_eng_stealth_non_partner").await else { return };
+        let auth = auth_with_token(pool.clone(), cipher()).await;
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/helix/chat/messages"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "data": [{"is_sent": true}]
+            })))
+            .expect(0)
+            .mount(&server)
+            .await;
+        let sender = StealthSender::new(auth, "cid".into(), pool)
+            .with_helix_url(format!("{}/helix/chat/messages", server.uri()));
+
+        assert_eq!(sender.send("123", "kein_partner", "hallo").await, Some(false));
+    }
+
+    #[tokio::test]
+    async fn aktiver_partner_sendet() {
         let Some(pool) = make_pool("t_eng_stealth_sent").await else { return };
+        add_active_partner(&pool, "partner").await;
         let c = cipher();
-        let auth = auth_with_token(pool, c).await;
+        let auth = auth_with_token(pool.clone(), c).await;
         let server = MockServer::start().await;
         Mock::given(method("POST"))
             .and(path("/helix/chat/messages"))
@@ -196,17 +250,22 @@ mod tests {
             .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
                 "data": [{"message_id": "m", "is_sent": true}]
             })))
+            .expect(1)
             .mount(&server)
             .await;
-        let sender = StealthSender::new(auth, "cid".into())
+        let sender = StealthSender::new(auth, "cid".into(), pool)
             .with_helix_url(format!("{}/helix/chat/messages", server.uri()));
-        assert_eq!(sender.send("123", "hallo 😭 — welt!").await, Some(true));
+        assert_eq!(
+            sender.send("123", "partner", "hallo 😭 — welt!").await,
+            Some(true)
+        );
     }
 
     #[tokio::test]
     async fn is_sent_false_ist_drop() {
         let Some(pool) = make_pool("t_eng_stealth_drop").await else { return };
-        let auth = auth_with_token(pool, cipher()).await;
+        add_active_partner(&pool, "partner").await;
+        let auth = auth_with_token(pool.clone(), cipher()).await;
         let server = MockServer::start().await;
         Mock::given(method("POST"))
             .and(path("/helix/chat/messages"))
@@ -215,23 +274,24 @@ mod tests {
             })))
             .mount(&server)
             .await;
-        let sender = StealthSender::new(auth, "cid".into())
+        let sender = StealthSender::new(auth, "cid".into(), pool)
             .with_helix_url(format!("{}/helix/chat/messages", server.uri()));
-        assert_eq!(sender.send("123", "hallo").await, Some(false));
+        assert_eq!(sender.send("123", "partner", "hallo").await, Some(false));
     }
 
     #[tokio::test]
     async fn http_error_ist_false() {
         let Some(pool) = make_pool("t_eng_stealth_err").await else { return };
-        let auth = auth_with_token(pool, cipher()).await;
+        add_active_partner(&pool, "partner").await;
+        let auth = auth_with_token(pool.clone(), cipher()).await;
         let server = MockServer::start().await;
         Mock::given(method("POST"))
             .and(path("/helix/chat/messages"))
             .respond_with(ResponseTemplate::new(401).set_body_string("unauthorized"))
             .mount(&server)
             .await;
-        let sender = StealthSender::new(auth, "cid".into())
+        let sender = StealthSender::new(auth, "cid".into(), pool)
             .with_helix_url(format!("{}/helix/chat/messages", server.uri()));
-        assert_eq!(sender.send("123", "hallo").await, Some(false));
+        assert_eq!(sender.send("123", "partner", "hallo").await, Some(false));
     }
 }
