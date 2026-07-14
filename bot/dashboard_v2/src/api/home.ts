@@ -177,6 +177,7 @@ export interface InternalHomeData {
   greeting?: string | null;
   twitchLogin?: string | null;
   displayName?: string | null;
+  avatarUrl?: string | null;
   loginUrl?: string | null;
   oauth?: InternalHomeOAuthStatus | null;
   discord?: InternalHomeDiscordStatus | null;
@@ -226,6 +227,7 @@ interface InternalHomeRawProfile {
   twitch_login?: string | null;
   twitch_user_id?: string | null;
   display_name?: string | null;
+  avatar_url?: string | null;
 }
 
 interface InternalHomeRawKpis {
@@ -517,6 +519,7 @@ export async function fetchInternalHome(streamer?: string | null): Promise<Inter
         : null,
     twitchLogin: profile.twitch_login || null,
     displayName: profile.display_name || profile.twitch_login || null,
+    avatarUrl: profile.avatar_url?.trim() || null,
     loginUrl,
     oauth: {
       connected,

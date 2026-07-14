@@ -11,11 +11,11 @@ export default function TrialCallout() {
       className="relative mb-12"
     >
       {/* Animated border glow */}
-      <div className="absolute -inset-0.5 rounded-2xl bg-gradient-to-r from-[#C5A059] via-[#00D9FF] to-[#C5A059] opacity-60 blur-sm animate-pulse" />
-      <div className="absolute -inset-[1px] rounded-2xl bg-gradient-to-r from-[#C5A059] via-[#00D9FF] to-[#C5A059] opacity-80" />
+      <div className="absolute -inset-0.5 rounded-2xl bg-gradient-to-r from-[#C5A059] via-[#F1D299] to-[#C5A059] opacity-60 blur-sm animate-pulse" />
+      <div className="absolute -inset-[1px] rounded-2xl bg-gradient-to-r from-[#C5A059] via-[#F1D299] to-[#C5A059] opacity-80" />
 
       {/* Main card */}
-      <div className="relative rounded-2xl bg-[#1F1815] p-6 md:p-8">
+      <div className="relative rounded-2xl bg-card p-6 md:p-8">
         <div className="flex flex-col md:flex-row items-center justify-between gap-6">
           {/* Left: Content */}
           <div className="flex items-center gap-4">

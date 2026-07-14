@@ -194,8 +194,8 @@ export function VerwaltungPage() {
             <div className="flex items-start gap-3">
               <div className="w-10 h-10 rounded-lg gradient-accent flex items-center justify-center shrink-0">
                 {oauthConnected
-                  ? <ShieldCheck className="h-5 w-5 text-white" />
-                  : <ShieldAlert className="h-5 w-5 text-white" />}
+                  ? <ShieldCheck className="h-5 w-5 text-on-gold" />
+                  : <ShieldAlert className="h-5 w-5 text-on-gold" />}
               </div>
               <div className="min-w-0 flex-1">
                 <p className={`text-base font-bold ${oauthStatusClass}`}>{oauthStatusText}</p>
@@ -259,7 +259,7 @@ export function VerwaltungPage() {
           <div className="soft-elevate rounded-xl border border-border bg-background/60 p-4 mb-5">
             <div className="flex items-start gap-3">
               <div className="w-10 h-10 rounded-lg gradient-accent flex items-center justify-center shrink-0">
-                <MessageSquare className="h-5 w-5 text-white" />
+                <MessageSquare className="h-5 w-5 text-on-gold" />
               </div>
               <div className="min-w-0 flex-1">
                 <p className={`text-base font-bold ${discordConnected ? 'text-success' : 'text-warning'}`}>
@@ -315,7 +315,7 @@ export function VerwaltungPage() {
           <div className="soft-elevate rounded-xl border border-border bg-background/60 p-4 mb-5">
             <div className="flex items-start gap-3">
               <div className="w-10 h-10 rounded-lg gradient-accent flex items-center justify-center shrink-0">
-                <Gamepad2 className="h-5 w-5 text-white" />
+                <Gamepad2 className="h-5 w-5 text-on-gold" />
               </div>
               <div className="min-w-0 flex-1">
                 <p className={`text-base font-bold ${steamConnected ? 'text-success' : 'text-warning'}`}>

@@ -134,7 +134,7 @@ export function ViewerTimelineChart({ data, title = 'Viewer Timeline' }: ViewerT
                 dataKey="label"
                 height={30}
                 stroke="var(--color-primary)"
-                fill="#1F1815"
+                fill="var(--color-card)"
                 travellerWidth={10}
               />
             )}

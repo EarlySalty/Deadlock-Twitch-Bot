@@ -19,11 +19,19 @@ const APPS = [
 ];
 
 const ALLOWED_HEX = new Set([
-  // Grund + Gusseisen
+  // Grund + Gusseisen (dashboard_v2 seit 2026-07-14 eine Stufe heller: der alte
+  // Satz hob die Kachel nur um 0.54% Luminanz vom Grund ab, die Seite verschmolz
+  // zu einem schwarzen Block. admin_dashboard + shared-theme stehen noch auf den
+  // dunklen Toenen, deshalb bleiben beide Saetze erlaubt.)
   '#0d0806', '#140d0a', '#1a1210', '#16100d', '#1f1815', '#2a211b', '#3a2e25',
-  // Gold
-  '#c5a059', '#f1d299', '#9a7c42',
-  // Plasma (Status)
+  '#1a1310', '#221a15', '#2a221c', '#362c23',
+  // Gold + Messing. Messing ist der CHROME-Akzent (Buttons, Icon-Kacheln, Auren).
+  // Vorher stand dort Plasma-Blau — Chrome und Status trugen dieselbe Farbe, und
+  // das Neon brach neben dem Gold. Plasma ist jetzt ausschliesslich Status.
+  '#c5a059', '#f1d299', '#9a7c42', '#e0be86', '#f3d9ae',
+  // Tinte fuer Gold-/Messingflaechen (Weiss liegt dort bei 1.77:1, siehe Test unten)
+  '#241a12',
+  // Plasma (Status + Chart-Serien)
   '#00ff88', '#00c46a', '#00d9ff', '#5ce7ff', '#0093ad',
   // Schmiedefeuer / heisses Eisen
   '#e8a33d', '#d98a33', '#ff5a3c', '#ffc9b8',
@@ -89,21 +97,49 @@ test('kein weisser Text auf heller Markenflaeche', () => {
    * Grund) enthalten darf.
    */
   const BRIGHT_SURFACE =
-    /\b(bg|from|to)-(\[#(00d9ff|00ff88|c5a059|f1d299|5ce7ff)\]|accent|primary|success)(\/(100|[7-9]\d))?(?=[\s"'`])/i;
+    /\b(gradient-accent|(bg|from|to)-(\[#(00d9ff|00ff88|c5a059|f1d299|5ce7ff|e0be86|f3d9ae)\]|accent|primary|success)(\/(100|[7-9]\d))?)(?=[\s"'`])/i;
   // bg-primary/60 ist nachgerechnet: zu 60% deckendes Gold auf dunklem Grund
   // ist selbst dunkel — Weiss 5.16:1 schlaegt dort Dunkel 3.73:1.
   const ALLOWED = /bg-(primary|accent|success)\/[1-6]\d?\b/;
   const WHITE_TEXT = /(?<!hover:)(?<!focus:)(?<!group-hover:)\btext-white\b/;
+
+  /* Zwei Muster, zwei Regeln — und sie duerfen sich nicht vermischen:
+   *
+   * (a) Ternary-Zweig: Flaeche und Textfarbe stehen IMMER zusammen auf einer Zeile.
+   *         ? 'bg-primary text-white'
+   *         : 'bg-white/15 text-white'   <- legitim: weisse Transparenz auf dunklem Grund
+   *     Ein Zeilenfenster wuerde Zweig A mit Zweig B verheiraten und Fehlalarm schlagen.
+   *
+   * (b) JSX-Eltern/Kind: Flaeche am oeffnenden Tag, weisser Text erst am Kind darunter.
+   *         <div className="gradient-accent ...">
+   *           <Heart className="h-4 w-4 text-white" />
+   *     Rein zeilenweise bleibt das unsichtbar — so ueberlebte weisser Text auf Gold.
+   *
+   * Also: Zeile selbst immer pruefen; in die Folgezeilen nur schauen, wenn die
+   * Flaeche ein oeffnendes Tag ist und die naechste Zeile ein echtes JSX-Kind. */
+  const CHILD_WINDOW = 2;
 
   const strays: string[] = [];
   for (const app of APPS) {
     for (const file of sourceFiles(app)) {
       const lines = readFileSync(file, 'utf8').split('\n');
       lines.forEach((line, i) => {
-        if (!WHITE_TEXT.test(line)) return;
-        if (!BRIGHT_SURFACE.test(line)) return;
-        if (ALLOWED.test(line)) return;
-        strays.push(`${file}:${i + 1}: ${line.trim().slice(0, 90)}`);
+        if (!BRIGHT_SURFACE.test(line) || ALLOWED.test(line)) return;
+
+        if (WHITE_TEXT.test(line)) {
+          strays.push(`${file}:${i + 1}: ${line.trim().slice(0, 90)}`);
+          return;
+        }
+
+        const surface = line.trimEnd();
+        if (!surface.endsWith('>') || surface.endsWith('/>')) return;
+
+        for (let j = i + 1; j <= Math.min(i + CHILD_WINDOW, lines.length - 1); j += 1) {
+          if (!lines[j].trim().startsWith('<')) break;
+          if (WHITE_TEXT.test(lines[j]) && !ALLOWED.test(lines[j])) {
+            strays.push(`${file}:${j + 1}: ${lines[j].trim().slice(0, 90)}`);
+          }
+        }
       });
     }
   }

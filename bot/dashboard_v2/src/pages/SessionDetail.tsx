@@ -285,7 +285,7 @@ export function SessionDetail({ sessionId, streamer: _streamer, onBack }: Sessio
                 <YAxis tick={{ fill: '#B5A488', fontSize: 12 }} />
                 <Tooltip
                   contentStyle={{
-                    backgroundColor: '#1A1210',
+                    backgroundColor: 'var(--color-card)',
                     border: '1px solid rgba(255,255,255,0.1)',
                     borderRadius: '8px',
                     color: '#fff',

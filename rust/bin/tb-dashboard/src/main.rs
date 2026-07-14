@@ -329,6 +329,9 @@ async fn main() {
     spawn_affiliate_gutschrift_loop(pool.clone());
     let mut app = build_router(pool.clone(), token);
     app = app.layer(axum::Extension(readiness_fingerprint));
+    if let Some(avatar_cache) = tb_dashboard_api::handlers::internal_home::AvatarCache::from_env() {
+        app = app.layer(axum::Extension(avatar_cache));
+    }
 
     // Welle D: Strangler-Fallback-Proxy → Python (8765) für noch nicht
     // portierte Dashboard-Routen. Ohne konfigurierte URL bleibt der Proxy

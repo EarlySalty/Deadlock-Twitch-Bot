@@ -43,7 +43,7 @@ export function FeatureTooltip({
         />
         {Icon && (
           <div className="w-8 h-8 rounded-lg gradient-accent flex items-center justify-center mb-3">
-            <Icon className="w-4 h-4 text-white" />
+            <Icon className="w-4 h-4 text-on-gold" />
           </div>
         )}
         <h3 className="text-sm font-bold text-white mb-1">{title}</h3>

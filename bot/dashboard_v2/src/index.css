@@ -1,18 +1,33 @@
 @import "tailwindcss";
 @import "../../shared-theme/industrial-gold.css";
 
-/* Brand Theme — Deutsche Deadlock Community (Industrial Gold) */
+/* Brand Theme — Deutsche Deadlock Community (Industrial Gold)
+ *
+ * Zwei Ebenen, die nie vermischt werden:
+ *   CHROME  (Flaechen, Buttons, Rahmen, Auren) → Gold/Messing. Ruhig, warm, eine Familie.
+ *   STATUS  (live/gut/schlecht, Chart-Serien)  → Plasma-Gruen/-Blau, Warn-Amber, Danger-Rot.
+ *
+ * Plasma-Blau war vorher AUCH die Chrome-Akzentfarbe (--color-accent). Dadurch wurde jeder
+ * Button, jede Icon-Kachel und jede Aura neonblau — neben dem Gold ein harter Bruch. Plasma
+ * ist jetzt ausschliesslich Status; das Chrome traegt ein zweites Metall (helles Messing).
+ * Chart-Serienfarben (#00D9FF & Co. in den Chart-Seiten) bleiben bewusst unberuehrt: dort
+ * ist Farbe Datenkodierung, keine Deko — monochrome Diagramme waeren unlesbar.
+ */
 @theme {
-  --color-bg: #140D0A;
-  --color-background: #1A1210;
-  --color-card: #1F1815;
-  --color-card-hover: #2A211B;
+  /* Grundtoene: eine Stufe heller als vorher. Die Kachel hob sich nur ~4% vom Grund ab,
+     dadurch verschmolz die Seite zu einem schwarzen Block. Jetzt liest man die Kanten. */
+  --color-bg: #1A1310;
+  --color-background: #221A15;
+  --color-card: #2A221C;
+  --color-card-hover: #362C23;
   --color-primary: #C5A059;
   --color-primary-hover: #F1D299;
   --color-primary-soft: rgba(197, 160, 89, 0.20);
-  --color-accent: #00D9FF;
-  --color-accent-hover: #5CE7FF;
-  --color-accent-soft: rgba(0, 217, 255, 0.20);
+  /* Chrome-Akzent: helles Messing. Zweites Metall neben Antik-Gold — genug Abstand fuer
+     Hierarchie, kein Farbbruch. */
+  --color-accent: #E0BE86;
+  --color-accent-hover: #F3D9AE;
+  --color-accent-soft: rgba(224, 190, 134, 0.18);
   --color-orange: #C5A059;
   --color-orange-hover: #F1D299;
   --color-teal: #00D9FF;
@@ -28,16 +43,19 @@
   --color-secondary: #B5A488;
   --color-text-primary: #EDE0C4;
   --color-text-secondary: #B5A488;
+  /* Tinte fuer helle Gold-/Messingflaechen. Weiss auf Gold liegt bei ~1.8:1 und ist
+     unlesbar — auf Metall wird mit dunkler Tinte geschrieben. */
+  --color-on-gold: #241A12;
   --color-border: rgba(197, 160, 89, 0.24);
   --color-border-strong: rgba(197, 160, 89, 0.52);
   --color-border-hover: rgba(197, 160, 89, 0.42);
-  --color-popover: #1F1815;
+  --color-popover: #2A221C;
   --font-sans: "Manrope", "Segoe UI", sans-serif;
   --font-display: "Sora", "Manrope", sans-serif;
-  --gradient-brand: linear-gradient(120deg, #F1D299 10%, #C5A059 55%, #00D9FF);
-  --gradient-dash: linear-gradient(135deg, #C5A059, #00D9FF);
-  --gradient-bg: linear-gradient(160deg, #1A1210 0%, #140D0A 55%, #1A1210 100%);
-  --gradient-hero: linear-gradient(160deg, #140D0A 0%, #1A1210 55%, #1F1815 100%);
+  --gradient-brand: linear-gradient(120deg, #F1D299 10%, #C5A059 55%, #9A7C42);
+  --gradient-dash: linear-gradient(135deg, #C5A059, #E0BE86);
+  --gradient-bg: linear-gradient(160deg, #221A15 0%, #1A1310 55%, #221A15 100%);
+  --gradient-hero: linear-gradient(160deg, #1A1310 0%, #221A15 55%, #2A221C 100%);
   --shadow-primary-glow: 0 12px 28px rgba(197, 160, 89, 0.22);
   --shadow-primary-glow-hover: 0 16px 36px rgba(197, 160, 89, 0.35), 0 0 20px rgba(197, 160, 89, 0.12);
 }
@@ -55,12 +73,11 @@ body {
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
   min-height: 100vh;
-  /* Schmiede-Grund: Gold-Schein von oben, kalter Plasma-Anflug seitlich,
-     darunter die Holzmaserung. Plasma bleibt bewusst sparsam — es ist
-     Statusfarbe, kein Dekor. */
+  /* Schmiede-Grund: Gold-Schein von oben, warmer Messing-Anflug seitlich,
+     darunter die Holzmaserung. Kein Plasma im Grund — Plasma ist Status. */
   background:
     radial-gradient(1200px 540px at 88% -12%, rgba(197, 160, 89, 0.16), transparent 64%),
-    radial-gradient(900px 480px at 8% -16%, rgba(0, 217, 255, 0.07), transparent 62%),
+    radial-gradient(900px 480px at 8% -16%, rgba(224, 190, 134, 0.08), transparent 62%),
     radial-gradient(1040px 540px at 52% 108%, rgba(197, 160, 89, 0.09), transparent 68%),
     repeating-linear-gradient(
       92deg,
@@ -165,8 +182,15 @@ h4,
     0 16px 40px rgba(0, 0, 0, 0.4);
 }
 
+/* Gold-Flaeche. Traegt IMMER dunkle Tinte — Kinder erben die Farbe, damit niemand
+   versehentlich weissen Text auf Messing setzt (Kontrast ~1.8:1, faellt keinem Build auf). */
 .gradient-accent {
   background: linear-gradient(135deg, var(--color-primary) 0%, var(--color-accent) 100%);
+  color: var(--color-on-gold);
+}
+
+.gradient-accent svg {
+  color: var(--color-on-gold);
 }
 
 /* Gusseisen-Platte: Lichtabfall von oben links + Schleifspuren + Bevel */
@@ -284,9 +308,9 @@ h4,
 .card-glow-accent {
   background: linear-gradient(
     160deg,
-    rgba(0, 217, 255, 0.18) 0%,
+    rgba(224, 190, 134, 0.16) 0%,
     rgba(197, 160, 89, 0.12) 45%,
-    rgba(26, 18, 16, 0.94) 100%
+    rgba(34, 26, 21, 0.94) 100%
   );
 }
 
@@ -309,7 +333,7 @@ h4,
 
 /* Soft variant: deutlich gedaempftes Glow, fuer Cards wo der Glow sonst ueberstrahlt */
 .card-glow-soft {
-  background: linear-gradient(160deg, rgba(31, 24, 21, 0.94) 0%, rgba(26, 18, 16, 0.94) 100%);
+  background: linear-gradient(160deg, rgba(42, 34, 28, 0.94) 0%, rgba(34, 26, 21, 0.94) 100%);
 }
 
 .card-glow-soft::before {
@@ -393,13 +417,13 @@ h4,
   background: conic-gradient(
     from 0deg,
     rgba(197, 160, 89, 0.18),
-    rgba(0, 217, 255, 0.22),
-    rgba(197, 160, 89, 0.16),
-    rgba(0, 255, 136, 0.16),
+    rgba(224, 190, 134, 0.20),
+    rgba(154, 124, 66, 0.16),
+    rgba(241, 210, 153, 0.14),
     rgba(197, 160, 89, 0.18)
   );
   filter: blur(60px);
-  opacity: 0.45;
+  opacity: 0.38;
   animation: hero-aura-spin 28s linear infinite;
 }
 
@@ -574,9 +598,9 @@ h4,
   pointer-events: none;
   background:
     radial-gradient(1520px 780px at 50% 44%, rgba(197, 160, 89, 0.18), transparent 74%),
-    radial-gradient(1240px 620px at 22% 22%, rgba(0, 217, 255, 0.12), transparent 76%),
-    radial-gradient(1120px 560px at 78% 22%, rgba(0, 217, 255, 0.1), transparent 78%),
-    radial-gradient(980px 620px at 70% 82%, rgba(0, 255, 136, 0.06), transparent 80%);
+    radial-gradient(1240px 620px at 22% 22%, rgba(224, 190, 134, 0.12), transparent 76%),
+    radial-gradient(1120px 560px at 78% 22%, rgba(241, 210, 153, 0.1), transparent 78%),
+    radial-gradient(980px 620px at 70% 82%, rgba(154, 124, 66, 0.1), transparent 80%);
   background-repeat: no-repeat;
   background-size:
     175% 175%,
@@ -596,15 +620,15 @@ h4,
   pointer-events: none;
   background:
     radial-gradient(920px 450px at 18% 24%, rgba(197, 160, 89, 0.18), transparent 72%),
-    radial-gradient(920px 450px at 82% 22%, rgba(0, 217, 255, 0.18), transparent 72%),
+    radial-gradient(920px 450px at 82% 22%, rgba(224, 190, 134, 0.16), transparent 72%),
     radial-gradient(1380px 700px at 50% 50%, rgba(197, 160, 89, 0.20), transparent 76%),
     radial-gradient(
       155% 145% at 50% 50%,
-      rgba(20, 13, 10, 0) 54%,
-      rgba(20, 13, 10, 0.44) 86%,
-      rgba(20, 13, 10, 0.72) 100%
+      rgba(26, 19, 16, 0) 54%,
+      rgba(26, 19, 16, 0.44) 86%,
+      rgba(26, 19, 16, 0.72) 100%
     ),
-    linear-gradient(180deg, rgba(20, 13, 10, 0.12) 0%, rgba(20, 13, 10, 0.05) 40%, rgba(20, 13, 10, 0.32) 100%);
+    linear-gradient(180deg, rgba(26, 19, 16, 0.12) 0%, rgba(26, 19, 16, 0.05) 40%, rgba(26, 19, 16, 0.32) 100%);
   background-repeat: no-repeat;
   background-size: 145% 145%, 145% 145%, 165% 165%, 100% 100%, 100% 100%;
   mix-blend-mode: normal;
@@ -618,15 +642,15 @@ h4,
     linear-gradient(rgba(255, 255, 255, 0.04) 1px, transparent 1px),
     linear-gradient(90deg, rgba(255, 255, 255, 0.04) 1px, transparent 1px),
     radial-gradient(920px 450px at 18% 24%, rgba(197, 160, 89, 0.18), transparent 72%),
-    radial-gradient(920px 450px at 82% 22%, rgba(0, 217, 255, 0.18), transparent 72%),
+    radial-gradient(920px 450px at 82% 22%, rgba(224, 190, 134, 0.16), transparent 72%),
     radial-gradient(1380px 700px at 50% 50%, rgba(197, 160, 89, 0.18), transparent 76%),
     radial-gradient(
       155% 145% at 50% 50%,
-      rgba(20, 13, 10, 0) 54%,
-      rgba(20, 13, 10, 0.42) 86%,
-      rgba(20, 13, 10, 0.7) 100%
+      rgba(26, 19, 16, 0) 54%,
+      rgba(26, 19, 16, 0.42) 86%,
+      rgba(26, 19, 16, 0.7) 100%
     ),
-    linear-gradient(180deg, rgba(20, 13, 10, 0.1) 0%, rgba(20, 13, 10, 0.05) 40%, rgba(20, 13, 10, 0.3) 100%);
+    linear-gradient(180deg, rgba(26, 19, 16, 0.1) 0%, rgba(26, 19, 16, 0.05) 40%, rgba(26, 19, 16, 0.3) 100%);
   background-repeat: repeat, repeat, no-repeat, no-repeat, no-repeat, no-repeat, no-repeat;
   background-size:
     44px 44px,
@@ -687,7 +711,7 @@ h4,
 
 .internal-home-stream:hover {
   border-color: var(--color-border-hover);
-  background: rgba(31, 24, 21, 0.7);
+  background: rgba(42, 34, 28, 0.7);
 }
 
 .internal-home-quick-action {
@@ -715,7 +739,7 @@ h4,
   isolation: isolate;
   background:
     radial-gradient(circle at top right, rgba(255, 255, 255, 0.08), transparent 38%),
-    linear-gradient(160deg, rgba(31, 24, 21, 0.96) 0%, rgba(26, 18, 16, 0.92) 100%);
+    linear-gradient(160deg, rgba(42, 34, 28, 0.96) 0%, rgba(34, 26, 21, 0.92) 100%);
   transition: transform 180ms ease, border-color 180ms ease, box-shadow 180ms ease;
 }
 
@@ -745,13 +769,13 @@ h4,
   border-color: rgba(232, 163, 61, 0.36);
   box-shadow:
     inset 0 0 0 1px rgba(232, 163, 61, 0.08),
-    0 16px 30px rgba(20, 13, 10, 0.18);
+    0 16px 30px rgba(26, 19, 16, 0.18);
 }
 
 .internal-home-log-card:hover {
   transform: translateY(-3px);
   border-color: var(--color-border-hover);
-  box-shadow: 0 18px 32px rgba(20, 13, 10, 0.24);
+  box-shadow: 0 18px 32px rgba(26, 19, 16, 0.24);
 }
 
 .internal-home-changelog-entry {
@@ -761,7 +785,7 @@ h4,
 .internal-home-changelog-entry:hover {
   transform: translateY(-2px);
   border-color: var(--color-border-hover);
-  background: rgba(31, 24, 21, 0.78);
+  background: rgba(42, 34, 28, 0.78);
 }
 
 @media (min-width: 900px) {
