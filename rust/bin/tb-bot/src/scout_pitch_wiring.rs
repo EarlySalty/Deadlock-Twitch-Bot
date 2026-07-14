@@ -752,11 +752,12 @@ fn build_discord_payload(
     lines: &[ChatLine],
     messages: &[String],
 ) -> SendRichMessage {
-    let viewer = viewer_count
-        .map(|value| value.to_string())
-        .unwrap_or_else(|| "PLATZHALTER: unbekannt".to_string());
+    let streamer_line = match viewer_count {
+        Some(viewer) => format!("**Streamer:** {login} ({viewer} Zuschauer)"),
+        None => format!("**Streamer:** {login}"),
+    };
     let mut body = vec![
-        format!("**Streamer:** {login} ({viewer} Zuschauer)"),
+        streamer_line,
         format!("**Trigger:** {}: {quote}", trigger_type.label()),
         "**Letzte Chatzeilen:**".to_string(),
     ];
