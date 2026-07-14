@@ -7,6 +7,7 @@ edition.workspace = true
 arc-swap    = { workspace = true }
 async-trait = { workspace = true }
 chrono      = { workspace = true }
+chrono-tz   = { workspace = true }
 dashmap     = { workspace = true }
 rand        = { workspace = true }
 regex       = { workspace = true }

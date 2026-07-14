@@ -45,6 +45,7 @@ pub mod secret_sink;
 pub mod spam_filter;
 pub mod stats;
 pub mod steam_lookup;
+pub mod style_score;
 pub mod suppression_guard;
 pub mod sus_invite;
 pub mod timeout_tracking;
@@ -90,7 +91,7 @@ pub use moderation::{
     OutboundSuppressionStore, TimeoutGuard,
 };
 pub use pipeline::{
-    ChatPipeline, ChatPipelineParts, ModAlerter, PgHelixMentionResolver, ReviewLog,
+    ChatPipeline, ChatPipelineParts, CrewRadarAlert, ModAlerter, PgHelixMentionResolver, ReviewLog,
     SCAM_PITCH_TIMEOUT_REASON,
 };
 pub use promos::{

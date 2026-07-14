@@ -36,6 +36,7 @@ use tb_chat::promos::{
 };
 use tb_chat::scam_pitch::{AccountAgePort, ScamPitchDetector, SpamAiReviewer};
 use tb_chat::spam_filter::{LearnedPatterns, SpamFilter};
+use tb_chat::style_score::{build_centroid, Centroid};
 use tb_chat::timeout_tracking::{
     BotBannedChannelHandler, CombinedSuppression, TimeoutTrackingChatApi,
 };
@@ -642,6 +643,15 @@ pub async fn build_runtime(
 
     // Lern-Muster einmalig laden (Python lädt sie beim Bot-Start).
     let learned = LearnedPatterns::load(&pool).await;
+    let crew_centroid = Arc::new(
+        match build_centroid(&pool, &tb_chat::crew_guard::evidence_logins()).await {
+            Ok(centroid) => centroid,
+            Err(error) => {
+                tracing::warn!(%error, "crew_guard: Stil-Zentroid konnte nicht gebaut werden");
+                Centroid::default()
+            }
+        },
+    );
     let http = reqwest::Client::builder()
         .timeout(Duration::from_secs(15))
         .build()
@@ -792,6 +802,7 @@ pub async fn build_runtime(
         mention_resolver: Arc::new(PgHelixMentionResolver::new(pool.clone(), Arc::clone(&api))),
         review_log: Arc::new(ReviewLog::new(review_log_dir)),
         alerter: Arc::new(ModAlerter::new(http)),
+        crew_centroid,
     }));
 
     let sweeper = Arc::new(GlobalBanSweeper::new(pool.clone(), Arc::clone(&api)));
@@ -2610,6 +2621,7 @@ mod chat_notification_tests {
                 http,
                 "http://127.0.0.1:1/changelog",
             )),
+            crew_centroid: Arc::new(Centroid::default()),
         })
     }
 
