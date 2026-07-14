@@ -150,8 +150,10 @@ impl RaidGreetingMonitor {
                 return;
             };
 
-            let message = whisper_reminder_message(&item.from_broadcaster_login);
-            match chat.send_whisper(&item.from_broadcaster_id, &message).await {
+            match chat
+                .send_whisper(&item.from_broadcaster_id, WHISPER_REMINDER)
+                .await
+            {
                 Ok(true) => tracing::info!(
                     from = %item.from_broadcaster_login,
                     to = %item.to_broadcaster_login,
@@ -198,14 +200,8 @@ fn source_hint_message(to_login: &str) -> String {
     }
 }
 
-fn whisper_reminder_message(from_login: &str) -> String {
-    let login = clean_login(from_login);
-    if login.is_empty() {
-        "Hey, kleiner Reminder: Sag nach einem Raid im Zielchat bitte kurz Hallo. Das wirkt persönlicher und hilft dem Netzwerk.".to_string()
-    } else {
-        format!("Hey @{login}, kleiner Reminder: Sag nach einem Raid im Zielchat bitte kurz Hallo. Das wirkt persönlicher und hilft dem Netzwerk.")
-    }
-}
+/// Der Whisper geht als DM direkt an den Raider, ein @-Mention wäre doppelt gemoppelt.
+const WHISPER_REMINDER: &str = "Hey, denk nach dem Raid dran: Ein kurzes Hallo und Tschüss im Chat gehört zum guten Ton :) Das macht den Raid viel persönlicher, so bleibt man am besten im Kopf und stärkt die Connection!";
 
 fn contains_greeting(text: &str) -> bool {
     let lower = text.trim().to_lowercase();
@@ -404,7 +400,16 @@ mod tests {
         let whispers = fake.whispers.lock().unwrap();
         assert_eq!(whispers.len(), 1);
         assert_eq!(whispers[0].0, "from1");
-        assert!(whispers[0].1.contains("Hallo"));
+        assert!(whispers[0].1.to_lowercase().contains("hallo"));
+    }
+
+    #[test]
+    fn whisper_reminder_bittet_freundlich_um_hallo_und_tschuess() {
+        let lower = WHISPER_REMINDER.to_lowercase();
+        assert!(lower.contains("hallo"), "{WHISPER_REMINDER}");
+        assert!(lower.contains("tschüss"), "{WHISPER_REMINDER}");
+        // DM an den Raider: ein @-Mention wäre doppelt gemoppelt
+        assert!(!WHISPER_REMINDER.contains('@'), "{WHISPER_REMINDER}");
     }
 
     #[test]
