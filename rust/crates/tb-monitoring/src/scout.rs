@@ -600,14 +600,14 @@ impl ScoutTask {
             }
         }
 
-        let mut desired_channels: Vec<String> = current_streams
-            .keys()
-            .filter(|login| {
-                existing_monitored.contains(login.as_str()) || new_set.contains(login.as_str())
-            })
+        let mut desired_channels: Vec<String> = existing_monitored
+            .iter()
+            .chain(new_logins)
+            .filter(|login| !remove_set.contains(login.as_str()))
             .cloned()
             .collect();
         desired_channels.sort_unstable();
+        desired_channels.dedup();
         self.chat.set_monitored_channels(&desired_channels).await;
 
         if !join_targets.is_empty() {
@@ -770,6 +770,26 @@ mod tests {
             *chat.joined.lock().unwrap(),
             vec![vec!["partner".to_string()]]
         );
+    }
+
+    #[tokio::test]
+    async fn sync_chat_behaelt_entprellten_roster_bei_leerem_fetch() {
+        let chat = Arc::new(RecordingChatSink::default());
+        let task = task_with_chat(chat.clone());
+        let current: HashMap<String, StreamSnapshot> = HashMap::new();
+        let existing: HashSet<String> = ["bleibt".to_string()].into_iter().collect();
+
+        task.sync_chat(
+            &current,
+            &existing,
+            &[],
+            &[],
+            &HashSet::new(),
+            &HashSet::new(),
+        )
+        .await;
+
+        assert_eq!(*chat.set.lock().unwrap(), vec![vec!["bleibt".to_string()]]);
     }
 
     #[tokio::test]
