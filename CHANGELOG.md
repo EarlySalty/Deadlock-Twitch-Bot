@@ -1,3 +1,11 @@
+## #377 — Persönliche Bestwerte und Vergleich zum letzten Stream
+
+**Problem:** Die Übersicht zeigte den letzten Stream und den Wochenvergleich, aber nirgends deine Rekorde, keinen direkten Vergleich zum Stream davor und keine Zuschauerkurve der letzten Session.
+
+**Änderung:** Neuer Block "Persönliche Bestwerte" mit deinen Rekorden (Peak, Ø-Viewer, meiste neue Follower und Chatter in einem Stream, längster Stream). Dazu ein Vergleich zum vorherigen Stream mit grünen und roten Prozentwerten und eine Zuschauerkurve der letzten Session. Die großen Zahlen und die Gesundheitsbalken wurden optisch aufgeräumt.
+
+**Aktuelles Verhalten:** Die Übersicht zeigt jetzt deine Bestwerte, wie der letzte Stream im Vergleich zum vorigen lief und den Zuschauerverlauf. Ein Rekord bekommt ein Neuer-Rekord-Zeichen, wenn der letzte Stream ihn geknackt hat. Die Bestwerte zählen ab dem Zeitpunkt, seit dem der Bot mitschreibt.
+
 ## #376 — Lurk-Befehl im Chat
 
 **Problem:** Wer nur zuschauen und gerade nichts schreiben wollte, hatte keine kurze Art, sich im Chat abzumelden.
