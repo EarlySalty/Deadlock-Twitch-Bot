@@ -1085,6 +1085,7 @@ async fn main() {
     // die Hooks, damit channel.chat.message in die tb-chat-Pipeline läuft;
     // startet Token-Loop, Promo-Loop, Global-Ban-Sweeper und den
     // 30-min-Subscription-Reconcile.
+    let mut scout_crew_guard = None;
     let eventsub_hooks: Arc<dyn EventSubHooks> = match chat_api_handle {
         Some(handle) => {
             // !clip: Broadcaster-Token-Clip-Port (Fallback: Bot-Token), nur mit
@@ -1120,6 +1121,7 @@ async fn main() {
                 supervisor.clone(),
             )
             .await;
+            scout_crew_guard = Some(runtime.scout_crew_guard());
             runtime.start_background(
                 subscription_manager.clone(),
                 Arc::clone(&chat_subscription_reconcile),
@@ -1558,6 +1560,10 @@ async fn main() {
         let scout_game =
             std::env::var("TWITCH_TARGET_GAME_NAME").unwrap_or_else(|_| "Deadlock".to_string());
         let scout_lang_filters: Vec<String> = language_filters_from_env();
+        let scout_chat_adapter = scout_crew_guard.as_ref().map_or_else(
+            || scout_chat::ScoutChatAdapter::storage_only(pool.clone()),
+            |crew_guard| scout_chat::ScoutChatAdapter::new(pool.clone(), Arc::clone(crew_guard)),
+        );
         let scout_task = tb_monitoring::build_scout_task(
             pool.clone(),
             std::sync::Arc::new(h.clone()),
@@ -1569,9 +1575,7 @@ async fn main() {
         // verdrahtet über den bestehenden SessionTracker.
         .with_session_tracker(scout_tracker)
         // Anonymer Read-only-Chat-Harvester für die Scout-Roster-Kanäle.
-        .with_chat_sink(std::sync::Arc::new(scout_chat::ScoutChatAdapter::new(
-            pool.clone(),
-        )));
+        .with_chat_sink(std::sync::Arc::new(scout_chat_adapter));
         scout_task.start_if_enabled();
     }
 

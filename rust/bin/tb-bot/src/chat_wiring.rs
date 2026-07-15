@@ -45,10 +45,10 @@ use tb_chat::token::BotTokenManager;
 use tb_chat::types::ChatMessageEvent;
 use tb_chat::{
     lfg_pitch_enabled_from_env, promo_invite_fallback, ChannelClassifier, ChatApi, ChatPipeline,
-    ChatPipelineParts, ChatterTracker, FunResponses, GlobalBanSweeper, GlobalChatterBanEnforcer,
-    InviteQuestionInviteUrlPort, InviteQuestionResponder, LfgPitchResponder,
-    MiniMaxInviteQuestionJudge, MiniMaxLfgJudge, ModAlerter, PartnerRoster, PgHelixMentionResolver,
-    PgInviteQuestionStore, ReviewLog, SusInviteCheck,
+    ChatPipelineParts, ChatterTracker, CrewGuard, CrewJudge, FunResponses, GlobalBanSweeper,
+    GlobalChatterBanEnforcer, InviteQuestionInviteUrlPort, InviteQuestionResponder,
+    LfgPitchResponder, MiniMaxInviteQuestionJudge, MiniMaxLfgJudge, ModAlerter, OpenAiCrewJudge,
+    PartnerRoster, PgHelixMentionResolver, PgInviteQuestionStore, ReviewLog, SusInviteCheck,
 };
 use tb_crypto::FieldCipher;
 use tb_engagement::irc_reader::EngagementIrcReader;
@@ -529,6 +529,7 @@ pub struct ChatRuntime {
     /// Bot-Self-Timeouts (`channel.ban` mit `ends_at`) dieselbe Stumm-Zählung
     /// füttern wie der ausgehende Send-Pfad.
     timeout_guard: Arc<TimeoutGuard>,
+    scout_crew_guard: Arc<CrewGuard>,
     supervisor: TaskSupervisor,
 }
 
@@ -783,6 +784,21 @@ pub async fn build_runtime(
         });
     }
 
+    let account_age: Arc<dyn AccountAgePort> = Arc::new(HelixAccountAge {
+        api: Arc::clone(&api),
+    });
+    let alerter = Arc::new(ModAlerter::new(http.clone()));
+    let crew_judge: Arc<dyn CrewJudge> = Arc::new(OpenAiCrewJudge::from_env());
+    let scout_crew_guard = Arc::new(CrewGuard::new(
+        tb_chat::crew_guard::crew_guard_enabled(),
+        Arc::clone(&crew_judge),
+        Arc::clone(&alerter),
+        pool.clone(),
+        bot_user_id.clone(),
+        Arc::clone(&account_age),
+        Arc::clone(&crew_centroid),
+        true,
+    ));
     let pipeline = Arc::new(ChatPipeline::new(ChatPipelineParts {
         bot_user_id: bot_user_id.clone(),
         api: Arc::clone(&api),
@@ -792,9 +808,7 @@ pub async fn build_runtime(
         global_ban: Arc::new(GlobalChatterBanEnforcer::new(pool.clone())),
         scam_pitch: Arc::new(ScamPitchDetector::new(
             Arc::clone(&api),
-            Arc::new(HelixAccountAge {
-                api: Arc::clone(&api),
-            }),
+            Arc::clone(&account_age),
             pool.clone(),
         )),
         conversation_scam,
@@ -828,7 +842,9 @@ pub async fn build_runtime(
         commands,
         mention_resolver: Arc::new(PgHelixMentionResolver::new(pool.clone(), Arc::clone(&api))),
         review_log: Arc::new(ReviewLog::new(review_log_dir)),
-        alerter: Arc::new(ModAlerter::new(http)),
+        alerter,
+        account_age,
+        crew_judge,
         crew_centroid,
     }));
 
@@ -889,6 +905,7 @@ pub async fn build_runtime(
         pool,
         bot_user_id,
         timeout_guard,
+        scout_crew_guard,
         supervisor,
     }
 }
@@ -912,6 +929,10 @@ impl ChatRuntime {
     /// erkannten Bot-Self-Timeouts.
     pub fn timeout_guard(&self) -> Arc<TimeoutGuard> {
         Arc::clone(&self.timeout_guard)
+    }
+
+    pub fn scout_crew_guard(&self) -> Arc<CrewGuard> {
+        Arc::clone(&self.scout_crew_guard)
     }
 
     /// Startet alle Hintergrund-Loops: Token-Refresh (30 min), Promo-Loop
@@ -2656,6 +2677,8 @@ mod chat_notification_tests {
                 http,
                 "http://127.0.0.1:1/changelog",
             )),
+            account_age: Arc::new(NoopAccountAge),
+            crew_judge: Arc::new(OpenAiCrewJudge::from_env()),
             crew_centroid: Arc::new(Centroid::default()),
         })
     }

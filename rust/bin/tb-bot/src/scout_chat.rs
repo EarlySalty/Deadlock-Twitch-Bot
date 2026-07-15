@@ -7,7 +7,7 @@ use std::time::Duration;
 
 use sqlx::PgPool;
 use tb_chat::types::ChatMessageBody;
-use tb_chat::{ChatMessageEvent, ChatterTracker};
+use tb_chat::{ChatMessageEvent, ChatterTracker, CrewGuard};
 use tb_engagement::irc_message::parse_privmsg;
 use tb_monitoring::scout::ScoutChatSink;
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
@@ -35,10 +35,10 @@ struct ScoutIrcMembership {
 }
 
 impl ScoutIrcMembership {
-    fn start(pool: PgPool) -> Self {
+    fn start(pool: PgPool, crew_guard: Option<Arc<CrewGuard>>) -> Self {
         let (tx, rx) = mpsc::unbounded_channel();
         let tracker = Arc::new(ChatterTracker::with_persist_all_games(pool, false));
-        tokio::spawn(run_membership(rx, tracker));
+        tokio::spawn(run_membership(rx, tracker, crew_guard));
         Self { tx }
     }
 
@@ -55,9 +55,15 @@ pub struct ScoutChatAdapter {
 }
 
 impl ScoutChatAdapter {
-    pub fn new(pool: PgPool) -> Self {
+    pub fn new(pool: PgPool, crew_guard: Arc<CrewGuard>) -> Self {
         Self {
-            membership: ScoutIrcMembership::start(pool),
+            membership: ScoutIrcMembership::start(pool, Some(crew_guard)),
+        }
+    }
+
+    pub fn storage_only(pool: PgPool) -> Self {
+        Self {
+            membership: ScoutIrcMembership::start(pool, None),
         }
     }
 
@@ -114,6 +120,7 @@ fn normalize_channels(logins: &[String]) -> Vec<String> {
 async fn run_membership(
     mut rx: mpsc::UnboundedReceiver<MembershipCommand>,
     tracker: Arc<ChatterTracker>,
+    crew_guard: Option<Arc<CrewGuard>>,
 ) {
     let mut channels = HashSet::new();
     loop {
@@ -125,7 +132,17 @@ async fn run_membership(
         }
 
         match connect().await {
-            Some((reader, writer)) => serve(reader, writer, &mut rx, &mut channels, &tracker).await,
+            Some((reader, writer)) => {
+                serve(
+                    reader,
+                    writer,
+                    &mut rx,
+                    &mut channels,
+                    &tracker,
+                    crew_guard.as_deref(),
+                )
+                .await
+            }
             None => {
                 tokio::select! {
                     _ = tokio::time::sleep(CONNECT_BACKOFF) => {}
@@ -220,6 +237,7 @@ async fn serve(
     rx: &mut mpsc::UnboundedReceiver<MembershipCommand>,
     channels: &mut HashSet<String>,
     tracker: &ChatterTracker,
+    crew_guard: Option<&CrewGuard>,
 ) {
     let mut initial: Vec<String> = channels.iter().cloned().collect();
     initial.sort_unstable();
@@ -239,7 +257,10 @@ async fn serve(
                     return;
                 }
                 Ok(_) if line.trim_end().starts_with("PING") => pong(&mut writer, line.trim_end()).await,
-                Ok(_) => track_privmsg(tracker, line.trim_end()).await,
+                Ok(_) => match crew_guard {
+                    Some(crew_guard) => track_privmsg(tracker, crew_guard, line.trim_end()).await,
+                    None => track_privmsg_storage_only(tracker, line.trim_end()).await,
+                },
             },
             command = rx.recv() => match command {
                 Some(command) => apply_connected(command, channels, &mut writer).await,
@@ -249,7 +270,15 @@ async fn serve(
     }
 }
 
-async fn track_privmsg(tracker: &ChatterTracker, line: &str) {
+async fn track_privmsg(tracker: &ChatterTracker, crew_guard: &CrewGuard, line: &str) {
+    track_privmsg_inner(tracker, Some(crew_guard), line).await;
+}
+
+async fn track_privmsg_storage_only(tracker: &ChatterTracker, line: &str) {
+    track_privmsg_inner(tracker, None, line).await;
+}
+
+async fn track_privmsg_inner(tracker: &ChatterTracker, crew_guard: Option<&CrewGuard>, line: &str) {
     let Some(parsed) = parse_privmsg(line) else {
         return;
     };
@@ -279,6 +308,9 @@ async fn track_privmsg(tracker: &ChatterTracker, line: &str) {
         ..Default::default()
     };
     tracker.track(&event).await;
+    if let Some(crew_guard) = crew_guard {
+        crew_guard.observe(&event);
+    }
 }
 
 async fn apply_connected(
@@ -339,6 +371,12 @@ mod tests {
     use super::*;
     use sqlx::postgres::{PgConnectOptions, PgPoolOptions};
     use std::str::FromStr;
+    use tb_chat::scam_pitch::AccountAgePort;
+    use tb_chat::style_score::Centroid;
+    use tb_chat::{CrewGuard, CrewJudge, CrewVerdict, ModAlerter};
+    use tokio::time::{sleep, Duration};
+    use wiremock::matchers::{method, path};
+    use wiremock::{Mock, MockServer, ResponseTemplate};
 
     macro_rules! pool_or_skip {
         ($schema:expr) => {{
@@ -381,6 +419,7 @@ mod tests {
             "CREATE TABLE twitch_session_chatters (session_id BIGINT, streamer_login TEXT, chatter_login TEXT, chatter_id TEXT, first_message_at TIMESTAMPTZ, messages INT, is_first_time_streamer BOOL, seen_via_chatters_api BOOL, last_seen_at TIMESTAMPTZ)",
             "CREATE TABLE twitch_chatter_rollup (streamer_login TEXT, chatter_login TEXT, chatter_id TEXT, first_seen_at TIMESTAMPTZ, last_seen_at TIMESTAMPTZ, total_messages INT, total_sessions INT)",
             "CREATE TABLE twitch_raw_chat_ingest_health (streamer_login TEXT PRIMARY KEY, last_raw_chat_message_at TEXT, last_raw_chat_insert_ok_at TEXT, last_raw_chat_insert_error_at TEXT, last_raw_chat_error TEXT, raw_chat_lag_seconds INT, updated_at TEXT)",
+            "CREATE TABLE twitch_crew_radar_log (id BIGSERIAL PRIMARY KEY, created_at TIMESTAMPTZ NOT NULL DEFAULT now(), channel_login TEXT NOT NULL, chatter_login TEXT NOT NULL, chatter_id TEXT, account_age_days BIGINT, style_score SMALLINT NOT NULL, style_breakdown JSONB NOT NULL, time_window_match BOOLEAN NOT NULL, messages JSONB NOT NULL, llm_verdict TEXT NOT NULL, llm_confidence REAL, llm_reasoning TEXT, action_taken TEXT NOT NULL DEFAULT 'none', source TEXT NOT NULL DEFAULT 'network')",
         ] {
             sqlx::query(ddl)
                 .execute(&pool)
@@ -415,6 +454,25 @@ mod tests {
     }
 
     const PRIVMSG: &str = "@room-id=99;user-id=42;id=m1;tmi-sent-ts=1784138400123 :viewer!viewer@viewer.tmi.twitch.tv PRIVMSG #monitored :hallo welt";
+    const RICKY_PRIVMSG: &str = "@room-id=99;user-id=147713656;id=m2;tmi-sent-ts=1784138400123 :helmbombenricky!helmbombenricky@helmbombenricky.tmi.twitch.tv PRIVMSG #monitored :hallo zusammen";
+
+    struct NoopJudge;
+
+    #[async_trait::async_trait]
+    impl CrewJudge for NoopJudge {
+        async fn judge(&self, _content: &str, _recent_context: &[String]) -> CrewVerdict {
+            CrewVerdict::unsure()
+        }
+    }
+
+    struct FixedAccountAge;
+
+    #[async_trait::async_trait]
+    impl AccountAgePort for FixedAccountAge {
+        async fn user_created_at_days(&self, _user_id: &str, _login: &str) -> Option<i64> {
+            Some(42)
+        }
+    }
 
     #[tokio::test]
     async fn join_channels_ruft_membership_real() {
@@ -433,8 +491,9 @@ mod tests {
     }
 
     #[test]
-    fn sink_konstruktion_braucht_nur_db_pool_keine_schreib_api() {
-        let _constructor: fn(sqlx::PgPool) -> ScoutChatAdapter = ScoutChatAdapter::new;
+    fn sink_konstruktion_braucht_nur_db_pool_und_crew_guard_keine_schreib_api() {
+        let _constructor: fn(sqlx::PgPool, Arc<CrewGuard>) -> ScoutChatAdapter =
+            ScoutChatAdapter::new;
     }
 
     #[test]
@@ -455,7 +514,7 @@ mod tests {
         seed_session(&pool, "Deadlock").await;
         let tracker = tb_chat::ChatterTracker::with_persist_all_games(pool.clone(), false);
 
-        track_privmsg(&tracker, PRIVMSG).await;
+        track_privmsg_storage_only(&tracker, PRIVMSG).await;
 
         assert_eq!(message_count(&pool).await, 1);
     }
@@ -466,8 +525,58 @@ mod tests {
         seed_session(&pool, "Arc Raiders").await;
         let tracker = tb_chat::ChatterTracker::with_persist_all_games(pool.clone(), false);
 
-        track_privmsg(&tracker, PRIVMSG).await;
+        track_privmsg_storage_only(&tracker, PRIVMSG).await;
 
         assert_eq!(message_count(&pool).await, 0);
+    }
+
+    #[tokio::test]
+    async fn monitored_only_hard_id_wird_notify_only_geloggt_und_gemeldet() {
+        let pool = pool_or_skip!("scout_chat_ricky_radar");
+        seed_session(&pool, "Deadlock").await;
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/changelog"))
+            .respond_with(ResponseTemplate::new(204))
+            .expect(1)
+            .mount(&server)
+            .await;
+        let guard = CrewGuard::new(
+            true,
+            Arc::new(NoopJudge),
+            Arc::new(ModAlerter::with_endpoint(
+                reqwest::Client::new(),
+                format!("{}/changelog", server.uri()),
+            )),
+            pool.clone(),
+            "bot-id".to_string(),
+            Arc::new(FixedAccountAge),
+            Arc::new(Centroid::default()),
+            true,
+        );
+        let tracker = ChatterTracker::with_persist_all_games(pool.clone(), false);
+
+        track_privmsg(&tracker, &guard, RICKY_PRIVMSG).await;
+
+        for _ in 0..50 {
+            let row = sqlx::query_as::<_, (String, Option<i64>)>(
+                "SELECT llm_verdict, account_age_days FROM twitch_crew_radar_log LIMIT 1",
+            )
+            .fetch_optional(&pool)
+            .await
+            .expect("Radar-Ledger lesen");
+            let requests = server.received_requests().await.expect("Requests");
+            if let (Some((verdict, account_age_days)), Some(request)) = (row, requests.first()) {
+                let body: serde_json::Value =
+                    serde_json::from_slice(&request.body).expect("JSON-Payload");
+                assert_eq!(verdict, "hard_id");
+                assert_eq!(account_age_days, Some(42));
+                assert_eq!(body["crew_radar"]["notify_only"], true);
+                assert_eq!(message_count(&pool).await, 1);
+                return;
+            }
+            sleep(Duration::from_millis(20)).await;
+        }
+        panic!("HardId wurde nicht geloggt und gemeldet");
     }
 }
