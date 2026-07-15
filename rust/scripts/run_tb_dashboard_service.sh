@@ -79,4 +79,14 @@ export TWITCH_DASHBOARD_AUTH_REDIRECT_URI="${TWITCH_DASHBOARD_AUTH_REDIRECT_URI:
 # Weiterleitung). Wird erst wirksam, wenn Caddy v2-Pfade auf 8769 flippt.
 export TB_DASHBOARD_LEGACY_FALLBACK_URL="${TB_DASHBOARD_LEGACY_FALLBACK_URL:-}"
 
+# self-explainer + SiteChatbot nutzen den EngagementMinimaxClient. Dessen
+# Code-Default MiniMax-M3 ist ein Reasoning-Modell: es liefert die Antwort nur
+# als <think>-Block, den process_response_text entfernt -> leerer Text ->
+# grounded:false -> Dauer-Fallback ("Das kann ich dir hier nicht sicher sagen").
+# MiniMax-Text-01 antwortet direkt (kein <think>) und ist das passende Modell.
+# HART gesetzt (kein :- Default): der Infisical-Bulk-Load oben setzt
+# ENGAGEMENT_MINIMAX_MODEL bereits auf das Reasoning-Modell; hier bewusst
+# uebersteuert, weil es den self-explainer sonst dauerhaft verstummen laesst.
+export ENGAGEMENT_MINIMAX_MODEL="MiniMax-Text-01"
+
 exec "$ROOT_DIR/rust/target/release/tb-dashboard"

@@ -61,17 +61,43 @@ pub(crate) fn strip_think(text: &str) -> String {
 /// Sanitize. `None` = Schweigen (leer oder `<silent>`-Marker oder leer nach
 /// Sanitize). Reiner Port der Logik aus `generate` (Zeilen 123–137).
 pub fn process_response_text(raw_text: &str, max_answer_len: usize) -> Option<String> {
+    process_text(raw_text, max_answer_len, sanitize_chat_text)
+}
+
+/// Nachbearbeitung für längere Antworten außerhalb des Twitch-Chats.
+pub fn process_answer_text(raw_text: &str, max_answer_len: usize) -> Option<String> {
+    process_text(raw_text, max_answer_len, sanitize_answer_text)
+}
+
+fn process_text(
+    raw_text: &str,
+    max_answer_len: usize,
+    sanitize: fn(&str, usize) -> Option<String>,
+) -> Option<String> {
     let without_think = strip_think(raw_text.trim());
     let without_think = without_think.trim();
     if without_think.is_empty() || without_think.to_lowercase().contains(SILENT_MARKER) {
         return None;
     }
-    sanitize_chat_text(without_think, max_answer_len)
+    sanitize(without_think, max_answer_len)
 }
 
 /// Säubert Bot-Text vor dem Senden an Twitch. `None` verwirft leere oder mehr
 /// als 120 Zeichen lange Ergebnisse; zu lange Nachrichten werden nie gekürzt.
 pub fn sanitize_chat_text(text: &str, max_len: usize) -> Option<String> {
+    let max_len = if max_len == 0 {
+        MAX_CHAT_TEXT_CHARS
+    } else {
+        max_len.min(MAX_CHAT_TEXT_CHARS)
+    };
+    sanitize_text(text, max_len)
+}
+
+fn sanitize_answer_text(text: &str, max_len: usize) -> Option<String> {
+    sanitize_text(text, max_len)
+}
+
+fn sanitize_text(text: &str, max_len: usize) -> Option<String> {
     let without_emoji: Vec<char> = text.chars().filter(|c| !is_emoji_component(*c)).collect();
     let mut transformed = String::with_capacity(text.len());
     let mut chars = without_emoji.into_iter().peekable();
@@ -99,11 +125,6 @@ pub fn sanitize_chat_text(text: &str, max_len: usize) -> Option<String> {
     }
     cleaned = cleaned.replace("@everyone", "everyone");
     let cleaned = cleaned.trim();
-    let max_len = if max_len == 0 {
-        MAX_CHAT_TEXT_CHARS
-    } else {
-        max_len.min(MAX_CHAT_TEXT_CHARS)
-    };
     if cleaned.is_empty() || cleaned.chars().count() > max_len {
         None
     } else {
@@ -325,6 +346,42 @@ impl EngagementMinimaxClient {
         max_output_tokens: i64,
         max_answer_len: usize,
     ) -> Result<ChatResponse, GenerateError> {
+        self.generate_with_processor(
+            system_prompt,
+            history,
+            max_output_tokens,
+            max_answer_len,
+            process_response_text,
+        )
+        .await
+    }
+
+    /// Generiert eine längere Antwort außerhalb des Twitch-Chats.
+    pub async fn generate_answer(
+        &self,
+        system_prompt: &str,
+        history: &[ChatMessage],
+        max_output_tokens: i64,
+        max_answer_len: usize,
+    ) -> Result<ChatResponse, GenerateError> {
+        self.generate_with_processor(
+            system_prompt,
+            history,
+            max_output_tokens,
+            max_answer_len,
+            process_answer_text,
+        )
+        .await
+    }
+
+    async fn generate_with_processor(
+        &self,
+        system_prompt: &str,
+        history: &[ChatMessage],
+        max_output_tokens: i64,
+        max_answer_len: usize,
+        process: fn(&str, usize) -> Option<String>,
+    ) -> Result<ChatResponse, GenerateError> {
         let mut messages = vec![serde_json::json!({"role": "system", "content": system_prompt})];
         for turn in history {
             // Sprecher in den Content falten statt ins name-Feld: MiniMax verlangt
@@ -353,7 +410,7 @@ impl EngagementMinimaxClient {
         )
         .await;
 
-        let text = process_response_text(&raw_text, max_answer_len);
+        let text = process(&raw_text, max_answer_len);
         Ok(ChatResponse {
             text,
             model: self.model.clone(),
@@ -609,6 +666,7 @@ mod tests {
     #[test]
     fn sanitize_verwirft_mehr_als_120_zeichen() {
         assert_eq!(sanitize_chat_text(&"a".repeat(121), 120), None);
+        assert_eq!(process_response_text(&"a".repeat(121), 2_000), None);
     }
 
     #[test]
@@ -627,6 +685,7 @@ mod tests {
         );
         // <silent> case-insensitive.
         assert_eq!(process_response_text("<SILENT>", 480), None);
+        assert_eq!(process_answer_text("<SILENT>", 2_000), None);
     }
 
     #[test]
@@ -670,6 +729,28 @@ mod tests {
         assert_eq!(resp.prompt_tokens, Some(42));
         assert_eq!(resp.completion_tokens, Some(7));
         assert_eq!(resp.model, "MiniMax-M3");
+    }
+
+    #[tokio::test]
+    async fn generate_answer_laesst_217_zeichen_durch() {
+        redirect_ledger_for_tests();
+        let server = MockServer::start().await;
+        let answer = "a".repeat(217);
+        Mock::given(method("POST"))
+            .and(path("/chat/completions"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "choices": [{"message": {"content": format!("<think>reasoning</think>{answer}")}}],
+                "usage": {"prompt_tokens": 42, "completion_tokens": 60}
+            })))
+            .mount(&server)
+            .await;
+
+        let resp = client_for(&server)
+            .generate_answer("system", &history(), 500, 2_000)
+            .await
+            .unwrap();
+
+        assert_eq!(resp.text.as_deref(), Some(answer.as_str()));
     }
 
     #[tokio::test]
