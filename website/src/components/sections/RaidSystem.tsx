@@ -133,7 +133,7 @@ export function RaidSystem() {
                     <motion.div
                       key={step.title}
                       variants={rowVariants}
-                      className="bg-[#1c150d80] rounded-lg p-4 flex items-start gap-4"
+                      className="bg-[var(--color-card)] rounded-lg p-4 flex items-start gap-4"
                       style={{
                         border: step.highlight
                           ? "1px solid rgba(85, 151, 143, 0.35)"
