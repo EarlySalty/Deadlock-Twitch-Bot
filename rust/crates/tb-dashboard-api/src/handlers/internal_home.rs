@@ -80,6 +80,204 @@ struct CachedAvatar {
     expires_at: Instant,
 }
 
+#[cfg(test)]
+mod pb_recap_tests {
+    use super::*;
+    use sqlx::postgres::PgPoolOptions;
+
+    async fn pool_or_skip(schema: &str) -> Option<PgPool> {
+        let dsn = std::env::var("TB_TEST_DATABASE_URL").ok()?;
+        let pool = PgPoolOptions::new()
+            .max_connections(1)
+            .connect(&dsn)
+            .await
+            .unwrap();
+        sqlx::query(&format!("DROP SCHEMA IF EXISTS {schema} CASCADE"))
+            .execute(&pool)
+            .await
+            .unwrap();
+        sqlx::query(&format!("CREATE SCHEMA {schema}"))
+            .execute(&pool)
+            .await
+            .unwrap();
+        sqlx::query(&format!("SET search_path TO {schema}"))
+            .execute(&pool)
+            .await
+            .unwrap();
+        Some(pool)
+    }
+
+    async fn create_tables(pool: &PgPool) {
+        sqlx::query(
+            r#"CREATE TABLE twitch_stream_sessions (
+                id BIGINT PRIMARY KEY,
+                streamer_login TEXT NOT NULL,
+                started_at TIMESTAMPTZ NOT NULL,
+                ended_at TIMESTAMPTZ,
+                peak_viewers INT,
+                avg_viewers FLOAT8,
+                follower_delta INT,
+                followers_start INT,
+                followers_end INT,
+                duration_seconds INT,
+                stream_title TEXT
+            )"#,
+        )
+        .execute(pool)
+        .await
+        .unwrap();
+        sqlx::query(
+            r#"CREATE TABLE twitch_session_chatters (
+                session_id BIGINT NOT NULL,
+                chatter_login TEXT NOT NULL,
+                streamer_login TEXT NOT NULL
+            )"#,
+        )
+        .execute(pool)
+        .await
+        .unwrap();
+        sqlx::query(
+            r#"CREATE TABLE twitch_stats_tracked (
+                streamer TEXT NOT NULL,
+                ts_utc TIMESTAMPTZ NOT NULL,
+                viewer_count INT NOT NULL
+            )"#,
+        )
+        .execute(pool)
+        .await
+        .unwrap();
+    }
+
+    #[test]
+    fn percentage_change_null_bei_nullbasis_und_negativ_bei_rueckgang() {
+        assert_eq!(percentage_change(5, Some(0)), None);
+        assert_eq!(percentage_change(50, Some(100)), Some(-50.0));
+    }
+
+    #[test]
+    fn downsampling_bleibt_unter_240_punkten() {
+        let points = (0..481).map(|n| json!({ "n": n })).collect();
+        let sampled = downsample_viewer_points(points);
+        assert!(sampled.len() <= 240);
+        assert_eq!(sampled[0]["n"], 0);
+        assert_eq!(sampled[1]["n"], 3);
+    }
+
+    #[tokio::test]
+    async fn personal_bests_waehlt_maxima_ueber_mehrere_sessions() {
+        let Some(pool) = pool_or_skip("t_internal_home_personal_bests").await else {
+            return;
+        };
+        create_tables(&pool).await;
+        sqlx::query(
+            r#"INSERT INTO twitch_stream_sessions
+                (id, streamer_login, started_at, ended_at, peak_viewers, avg_viewers,
+                 follower_delta, followers_start, followers_end, duration_seconds, stream_title)
+               VALUES
+                (1, 'TestStreamer', '2026-01-01T10:00:00Z', '2026-01-01T11:00:00Z', 100, 20.25, 10, 100, 110, 3600, 'Erster'),
+                (2, 'teststreamer', '2026-01-02T10:00:00Z', '2026-01-02T12:00:00Z', 150, 15.0, 99, 200, 0, 7200, 'Zweiter'),
+                (3, 'TESTSTREAMER', '2026-01-03T10:00:00Z', '2026-01-03T11:30:00Z', 120, 30.26, 20, 110, 130, 5400, 'Dritter')"#,
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+        sqlx::query(
+            r#"INSERT INTO twitch_session_chatters (session_id, chatter_login, streamer_login)
+               VALUES (1, 'a', 'teststreamer'), (1, 'b', 'teststreamer'),
+                      (2, 'a', 'teststreamer'), (2, 'b', 'teststreamer'),
+                      (2, 'c', 'teststreamer'), (2, 'c', 'teststreamer'),
+                      (3, 'a', 'teststreamer')"#,
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+
+        let got = personal_bests_block(&pool, "teststreamer").await;
+        assert_eq!(got["peak_viewers"]["value"], 150);
+        assert_eq!(got["peak_viewers"]["title"], "Zweiter");
+        assert_eq!(got["avg_viewers"]["value"], 30.3);
+        assert_eq!(got["follower_gain"]["value"], 20);
+        assert_eq!(got["unique_chatters"]["value"], 3);
+        assert_eq!(got["longest_stream_seconds"]["value"], 7200);
+        assert_eq!(
+            got["longest_stream_seconds"]["achieved_at"],
+            "2026-01-02T10:00:00+00:00"
+        );
+    }
+
+    #[tokio::test]
+    async fn stream_comparison_hat_nullbasis_und_negatives_vorzeichen() {
+        let Some(pool) = pool_or_skip("t_internal_home_stream_comparison").await else {
+            return;
+        };
+        create_tables(&pool).await;
+        sqlx::query(
+            r#"INSERT INTO twitch_stream_sessions
+                (id, streamer_login, started_at, ended_at, peak_viewers, avg_viewers,
+                 follower_delta, followers_start, followers_end, duration_seconds, stream_title)
+               VALUES
+                (1, 'compare', '2026-02-01T10:00:00Z', '2026-02-01T11:00:00Z', 100, 20, 0, 100, 100, 3600, 'Vorher'),
+                (2, 'COMPARE', '2026-02-02T10:00:00Z', '2026-02-02T11:00:00Z', 50, 10, 5, 100, 105, 3600, 'Aktuell')"#,
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+        sqlx::query(
+            r#"INSERT INTO twitch_session_chatters (session_id, chatter_login, streamer_login)
+               VALUES (1, 'a', 'compare'), (1, 'b', 'compare'), (2, 'a', 'compare')"#,
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+
+        let got = stream_comparison_block(&pool, "compare").await;
+        assert_eq!(got["current_started_at"], "2026-02-02T10:00:00+00:00");
+        assert_eq!(
+            got["peak_viewers"],
+            json!({ "current": 50, "previous": 100, "pct": -50.0 })
+        );
+        assert_eq!(
+            got["new_followers"],
+            json!({ "current": 5, "previous": 0, "pct": null })
+        );
+        assert_eq!(
+            got["unique_chatters"],
+            json!({ "current": 1, "previous": 2, "pct": -50.0 })
+        );
+    }
+
+    #[tokio::test]
+    async fn viewers_over_time_cappt_und_leere_session_bleibt_leer() {
+        let Some(pool) = pool_or_skip("t_internal_home_viewers_over_time").await else {
+            return;
+        };
+        create_tables(&pool).await;
+        sqlx::query(
+            r#"INSERT INTO twitch_stream_sessions
+                (id, streamer_login, started_at, ended_at, peak_viewers, duration_seconds)
+               VALUES
+                (1, 'dense', '2026-03-01T10:00:00Z', '2026-03-01T12:00:00Z', 500, 7200),
+                (2, 'empty', '2026-03-02T10:00:00Z', '2026-03-02T11:00:00Z', 0, 3600)"#,
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+        sqlx::query(
+            r#"INSERT INTO twitch_stats_tracked (streamer, ts_utc, viewer_count)
+               SELECT 'DENSE', '2026-03-01T10:00:00Z'::timestamptz + n * interval '10 seconds', n
+               FROM generate_series(0, 480) AS n"#,
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+
+        let dense = viewers_over_time_block(&pool, "dense").await;
+        assert!(dense.as_array().unwrap().len() <= 240);
+        assert_eq!(dense[0], json!({ "t_seconds": 0, "viewers": 0 }));
+        assert_eq!(viewers_over_time_block(&pool, "empty").await, json!([]));
+    }
+}
+
 /// Prozesslokaler Cache für Twitch-Profilbilder. Auch fehlende/fehlgeschlagene
 /// Lookups werden gecacht, damit ein Helix-Ausfall nicht pro Request wiederholt wird.
 #[derive(Clone)]
@@ -428,6 +626,9 @@ pub async fn get_handler(
     let last_stream = last_stream_summary(&pool, &resolved_login, &kpis.recent_streams).await;
     let health_score = health_score_block(&pool, &resolved_login).await;
     let week_comparison = week_comparison_block(&pool, &resolved_login).await;
+    let personal_bests = personal_bests_block(&pool, &resolved_login).await;
+    let stream_comparison = stream_comparison_block(&pool, &resolved_login).await;
+    let viewers_over_time = viewers_over_time_block(&pool, &resolved_login).await;
     let live_status = live_status_block(&pool, &resolved_login, &resolved_user_id).await;
 
     // Steam-Verknüpfung läuft über die Discord-ID (Vorbild: onboarding.rs).
@@ -547,6 +748,9 @@ pub async fn get_handler(
         "last_stream_summary": last_stream,
         "health_score": health_score,
         "week_comparison": week_comparison,
+        "personal_bests": personal_bests,
+        "stream_comparison": stream_comparison,
+        "viewers_over_time": viewers_over_time,
         "live_status": live_status,
         "bot_impact": {
             "events": bot_events,
@@ -2170,6 +2374,205 @@ async fn compute_week_comparison(pool: &PgPool, login: &str) -> Value {
             "stream_hours": hours_series,
         },
     })
+}
+
+// ── Additive recap blocks ───────────────────────────────────────────────────
+
+fn percentage_change(current: i64, previous: Option<i64>) -> Option<f64> {
+    previous
+        .filter(|previous| *previous != 0)
+        .map(|previous| round1((current - previous) as f64 / previous as f64 * 100.0))
+}
+
+fn downsample_viewer_points(points: Vec<Value>) -> Vec<Value> {
+    if points.len() <= 240 {
+        return points;
+    }
+    // ponytail: cap 240 points, refine if UI needs more
+    let step = points.len().div_ceil(240);
+    points.into_iter().step_by(step).collect()
+}
+
+async fn personal_bests_block(pool: &PgPool, login: &str) -> Value {
+    let empty = || json!({ "value": null, "achieved_at": null, "title": null });
+    let mut result = json!({
+        "peak_viewers": empty(),
+        "avg_viewers": empty(),
+        "follower_gain": empty(),
+        "unique_chatters": empty(),
+        "longest_stream_seconds": empty(),
+    });
+    if login.is_empty() {
+        return result;
+    }
+
+    let sql = r#"
+        WITH sessions AS (
+            SELECT * FROM twitch_stream_sessions
+            WHERE ended_at IS NOT NULL AND LOWER(streamer_login) = LOWER($1)
+        ), chatter_counts AS (
+            SELECT s.id, s.started_at, s.stream_title,
+                   COUNT(DISTINCT c.chatter_login)::bigint AS unique_chatters
+            FROM sessions s
+            LEFT JOIN twitch_session_chatters c ON c.session_id = s.id
+            GROUP BY s.id, s.started_at, s.stream_title
+        )
+        SELECT 'peak_viewers' AS metric, ranked.peak_viewers::bigint AS int_value,
+               NULL::float8 AS float_value, ranked.started_at, ranked.stream_title
+        FROM (SELECT * FROM sessions WHERE peak_viewers IS NOT NULL
+              ORDER BY peak_viewers DESC, started_at DESC LIMIT 1) ranked
+        UNION ALL
+        SELECT 'avg_viewers', NULL::bigint, ranked.avg_viewers::float8,
+               ranked.started_at, ranked.stream_title
+        FROM (SELECT * FROM sessions WHERE avg_viewers IS NOT NULL
+              ORDER BY avg_viewers DESC, started_at DESC LIMIT 1) ranked
+        UNION ALL
+        SELECT 'follower_gain', ranked.follower_delta::bigint, NULL::float8,
+               ranked.started_at, ranked.stream_title
+        FROM (SELECT * FROM sessions
+              WHERE follower_delta IS NOT NULL
+                AND NOT (followers_end = 0 AND followers_start > 0)
+              ORDER BY follower_delta DESC, started_at DESC LIMIT 1) ranked
+        UNION ALL
+        SELECT 'unique_chatters', ranked.unique_chatters, NULL::float8,
+               ranked.started_at, ranked.stream_title
+        FROM (SELECT * FROM chatter_counts
+              ORDER BY unique_chatters DESC, started_at DESC LIMIT 1) ranked
+        UNION ALL
+        SELECT 'longest_stream_seconds', ranked.duration_seconds::bigint, NULL::float8,
+               ranked.started_at, ranked.stream_title
+        FROM (SELECT * FROM sessions WHERE duration_seconds IS NOT NULL
+              ORDER BY duration_seconds DESC, started_at DESC LIMIT 1) ranked
+    "#;
+
+    match sqlx::query(sql).bind(login).fetch_all(pool).await {
+        Ok(rows) => {
+            for row in &rows {
+                let metric = row.try_get::<String, _>("metric").unwrap_or_default();
+                let value = if metric == "avg_viewers" {
+                    json!(round1(read_f64(row, "float_value")))
+                } else {
+                    json!(read_i64(row, "int_value"))
+                };
+                if let Some(map) = result.as_object_mut() {
+                    map.insert(
+                        metric,
+                        json!({
+                            "value": value,
+                            "achieved_at": row_ts_iso(row, "started_at"),
+                            "title": row.try_get::<Option<String>, _>("stream_title").unwrap_or(None),
+                        }),
+                    );
+                }
+            }
+        }
+        Err(e) => tracing::warn!("internal-home personal-bests query: {e}"),
+    }
+    result
+}
+
+async fn stream_comparison_block(pool: &PgPool, login: &str) -> Value {
+    if login.is_empty() {
+        return Value::Null;
+    }
+    let sql = r#"
+        SELECT s.started_at,
+               COALESCE(s.peak_viewers, 0)::bigint AS peak_viewers,
+               CASE WHEN s.follower_delta IS NOT NULL
+                          AND NOT (s.followers_end = 0 AND s.followers_start > 0)
+                    THEN s.follower_delta ELSE 0 END::bigint AS new_followers,
+               (SELECT COUNT(DISTINCT c.chatter_login)
+                FROM twitch_session_chatters c WHERE c.session_id = s.id)::bigint AS unique_chatters
+        FROM twitch_stream_sessions s
+        WHERE s.ended_at IS NOT NULL AND LOWER(s.streamer_login) = LOWER($1)
+        ORDER BY s.started_at DESC
+        LIMIT 2
+    "#;
+    let rows = match sqlx::query(sql).bind(login).fetch_all(pool).await {
+        Ok(rows) => rows,
+        Err(e) => {
+            tracing::warn!("internal-home stream-comparison query: {e}");
+            return Value::Null;
+        }
+    };
+    let Some(current) = rows.first() else {
+        return Value::Null;
+    };
+    let previous = rows.get(1);
+    let comparison = |column: &str| {
+        let current_value = read_i64(current, column);
+        let previous_value = previous.map(|row| read_i64(row, column));
+        json!({
+            "current": current_value,
+            "previous": previous_value,
+            "pct": percentage_change(current_value, previous_value),
+        })
+    };
+    json!({
+        "current_started_at": row_ts_iso(current, "started_at"),
+        "peak_viewers": comparison("peak_viewers"),
+        "new_followers": comparison("new_followers"),
+        "unique_chatters": comparison("unique_chatters"),
+    })
+}
+
+async fn viewers_over_time_block(pool: &PgPool, login: &str) -> Value {
+    if login.is_empty() {
+        return json!([]);
+    }
+    let session = match sqlx::query(
+        r#"SELECT started_at, ended_at FROM twitch_stream_sessions
+           WHERE ended_at IS NOT NULL AND LOWER(streamer_login) = LOWER($1)
+           ORDER BY started_at DESC LIMIT 1"#,
+    )
+    .bind(login)
+    .fetch_optional(pool)
+    .await
+    {
+        Ok(Some(row)) => row,
+        Ok(None) => return json!([]),
+        Err(e) => {
+            tracing::warn!("internal-home viewers-over-time session query: {e}");
+            return json!([]);
+        }
+    };
+    let Ok(started_at) = session.try_get::<DateTime<Utc>, _>("started_at") else {
+        tracing::warn!("internal-home viewers-over-time: invalid session start");
+        return json!([]);
+    };
+    let Ok(Some(ended_at)) = session.try_get::<Option<DateTime<Utc>>, _>("ended_at") else {
+        tracing::warn!("internal-home viewers-over-time: invalid session end");
+        return json!([]);
+    };
+    let rows = match sqlx::query(
+        r#"SELECT ts_utc, viewer_count FROM twitch_stats_tracked
+           WHERE LOWER(streamer) = LOWER($1) AND ts_utc BETWEEN $2 AND $3
+           ORDER BY ts_utc"#,
+    )
+    .bind(login)
+    .bind(started_at)
+    .bind(ended_at)
+    .fetch_all(pool)
+    .await
+    {
+        Ok(rows) => rows,
+        Err(e) => {
+            tracing::warn!("internal-home viewers-over-time samples query: {e}");
+            return json!([]);
+        }
+    };
+    let mut points = Vec::with_capacity(rows.len());
+    for row in &rows {
+        let Ok(ts) = row.try_get::<DateTime<Utc>, _>("ts_utc") else {
+            tracing::warn!("internal-home viewers-over-time: invalid sample timestamp");
+            continue;
+        };
+        points.push(json!({
+            "t_seconds": (ts - started_at).num_seconds(),
+            "viewers": read_i64(row, "viewer_count"),
+        }));
+    }
+    json!(downsample_viewer_points(points))
 }
 
 // ── Block 2i: live_status (internal_home.py:880-933) ─────────────────────────
