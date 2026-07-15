@@ -389,6 +389,10 @@ impl CommandEngine {
                 self.cmd_ping(event).await;
                 true
             }
+            "!lurk" => {
+                self.cmd_lurk(event).await;
+                true
+            }
             "!raid_history" | "!raidbot_history" => {
                 self.cmd_raid_history(event).await;
                 true
@@ -1024,6 +1028,14 @@ impl CommandEngine {
                 .unwrap_or(PING_REPLIES[0])
         };
         self.reply(event, reply).await;
+    }
+
+    // -----------------------------------------------------------------------
+    // !lurk — statische Lurk-Ansage (Streamlabs-Parität)
+    // -----------------------------------------------------------------------
+
+    async fn cmd_lurk(&self, event: &ChatMessageEvent) {
+        self.reply(event, "verschwindet in den lurk 🐒").await;
     }
 
     // -----------------------------------------------------------------------
