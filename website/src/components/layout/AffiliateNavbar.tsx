@@ -8,10 +8,17 @@ export function AffiliateNavbar() {
         <div className="flex items-center gap-4 min-w-0">
           <a
             href={WEBSITE_HOME_PATH}
-            className="font-display font-bold text-xl bg-gradient-to-r from-primary to-accent bg-clip-text text-transparent select-none shrink-0"
+            className="flex items-center gap-2.5 select-none shrink-0"
           >
-            Deutsche Deadlock Community
-</a>
+            <img
+              src={`${import.meta.env.BASE_URL}brand/deadlock-d-logo.png`}
+              alt=""
+              className="h-8 w-8"
+            />
+            <span className="font-display font-bold text-xl bg-gradient-to-r from-primary to-accent bg-clip-text text-transparent">
+              Deutsche Deadlock Community
+            </span>
+          </a>
           <a
             href={WEBSITE_HOME_PATH}
             className="hidden sm:inline-flex items-center gap-2 text-sm text-text-secondary hover:text-text-primary transition-colors duration-200"
