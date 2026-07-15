@@ -70,7 +70,7 @@ export function Hero() {
           </a>
           <a
             href="#raid"
-            className="rounded-xl px-7 py-3.5 font-semibold text-[var(--color-text-primary)] border border-[var(--color-border)] inline-flex items-center gap-2 transition-all duration-200 hover:border-[var(--color-accent)] hover:text-[var(--color-accent)]"
+            className="rounded-xl px-7 py-3.5 font-semibold text-[var(--color-text-primary)] border border-[rgba(255,255,255,0.14)] inline-flex items-center gap-2 transition-all duration-200 hover:border-[var(--color-accent)] hover:text-[var(--color-accent)]"
           >
             Mehr erfahren
           </a>

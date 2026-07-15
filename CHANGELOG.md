@@ -1,3 +1,11 @@
+## #367 — Die Raid-Kette zeigt, wo sie gerade steht
+
+**Problem:** Auf der Streamer-Seite sahen alle vier Schritte der Raid-Kette gleich wichtig aus, jeder hatte denselben goldenen Rahmen. Das Auge fand den aktuellen Schritt nicht auf Anhieb, und die beiden Knöpfe darunter konkurrierten ebenfalls um Aufmerksamkeit.
+
+**Änderung:** Inaktive Schritte treten jetzt sichtbar zurück, sie werden blasser und verlieren ihren Rahmen. Nur der gerade laufende Schritt trägt Farbe. Der Knopf zum Mehr-Erfahren hat seinen Goldrahmen abgegeben, damit der Partner-Knopf die einzige goldene Fläche bleibt.
+
+**Aktuelles Verhalten:** Wer die Raid-Demo anschaut, sieht sofort, welcher Schritt gerade läuft, und der Blick landet danach direkt auf dem Partner-Knopf.
+
 ## #366 — Der Portier zeigt sich am Empfang
 
 **Problem:** Der Empfang (die FAQ-Seite) hatte zwar schon Tresen und Hausbuch, aber vom Portier selbst war nichts zu sehen. Die Halle wirkte unbesetzt. Außerdem war das Vorschaubild, das beim Teilen der Streamer-Seite in Discord und Co. erscheinen sollte, seit jeher kaputt und zeigte einfach nichts.
