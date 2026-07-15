@@ -1,0 +1,75 @@
+/* Streamer-Landing V2-Preview: Patch-Schwarz statt Streamer-Braun.
+   Nur Flaechen/Grund/Grid/geteilte Klassen getauscht — Gold+Teal-Akzente
+   bleiben. Kompletter Block ist inert ohne data-theme="v2", die Haupt-Landing
+   (/streamer/) bleibt also unberuehrt.
+   Referenz-Palette: Website/dl-patch/src/patch.css (:root). */
+:root[data-theme="v2"] {
+  /* Flaechen: warm-braun -> neutral-schwarz (Patch #0b0b0b / #101010 / #161616) */
+  --color-bg:             #0b0b0b;
+  --color-background:     #101010;
+  --color-card:           rgba(20, 20, 20, 0.82);
+  --color-card-hover:     rgba(32, 32, 32, 0.88);
+  /* Rahmen generell einen Tick goldiger/praesenter, damit neutrale Elemente
+     nicht in reines Grau kippen ("alles leicht goldig"). */
+  --color-border:         rgba(239, 212, 157, 0.16);
+  --color-border-strong:  rgba(239, 212, 157, 0.34);
+  --color-border-hover:   rgba(239, 212, 157, 0.28);
+  --color-text-primary:   #f2eee6;
+  --color-text-secondary: #9d968a;
+  --color-secondary:      #9d968a;
+
+  /* Verlaeufe entwaermen: neutrales Schwarz statt Braun-Ink */
+  --gradient-bg:      linear-gradient(180deg, #0f0f0e 0%, #0b0b0b 55%, #101010 100%);
+  --gradient-hero:    linear-gradient(160deg, #0b0b0b 0%, #101010 55%, #161616 100%);
+  --shadow-card:      0 26px 70px rgba(0, 0, 0, 0.62), inset 0 1px 0 rgba(255, 255, 255, 0.04);
+  --shadow-card-soft: 0 16px 45px rgba(0, 0, 0, 0.5), inset 0 1px 0 rgba(255, 255, 255, 0.035);
+
+  /* --theme-* Fallbacks der Landing-Komponenten (Titlebar/Chatbot/Demo) auf Schwarz */
+  --theme-titlebar-bg:   rgba(34, 34, 34, 0.9);
+  --theme-chatbot-bg:    rgba(15, 15, 14, 0.96);
+  --theme-token-demo-bg: #101010;
+}
+
+/* "Globale Beleuchtung" raus: die drei animierten GlowOrb-Lichtkugeln
+   (Gold/Teal, blur-120px, fix ueber dem ganzen Viewport) gibt es im flachen
+   Patch-Look nicht. Auf der Haupt-Landing bleiben sie (Attribut ist inert). */
+:root[data-theme="v2"] [data-glow-orb] {
+  display: none;
+}
+
+/* Body: kein Gold-Glow-Radial mehr -> Patch-typischer flach-schwarzer Grund */
+:root[data-theme="v2"] body {
+  background: var(--gradient-bg);
+}
+
+/* Gitternetz wie Patch, aber ein paar % praesenter (0.025 -> 0.045, 0.55 -> 0.72) */
+:root[data-theme="v2"] body::before {
+  background-image:
+    linear-gradient(rgba(255, 255, 255, 0.045) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(255, 255, 255, 0.045) 1px, transparent 1px);
+  opacity: 0.72;
+}
+
+/* Boxen mit mattem, dezentem Gold versetzen: flacher Gold-Film (kein
+   Verlauf-Schimmer = matt) ueber neutralem Dunkel, damit die Karten warm
+   getoent sind ohne ins alte Braun zu kippen. Gilt auch fuer die Stream-
+   Vorschau-Karten der Raid-Demo (.rd-twitch-embed, laeuft ueber --color-card).
+   Buttons (.gradient-accent) bewusst NICHT angefasst — die bleiben shiny gold. */
+:root[data-theme="v2"] .panel-card,
+:root[data-theme="v2"] .glass,
+:root[data-theme="v2"] .rd-twitch-embed {
+  background:
+    linear-gradient(0deg, rgba(201, 168, 106, 0.05), rgba(201, 168, 106, 0.05)),
+    rgba(18, 18, 18, 0.86);
+  border-color: rgba(239, 212, 157, 0.18);
+  box-shadow: 0 14px 40px rgba(0, 0, 0, 0.5);
+}
+
+/* Clip-Rahmen: hardcoded brauner Inline-Gradient -> neutrales Schwarz, dazu
+   ein goldener Halo dahinter, damit die Clips vor dem Schwarz "leuchten". */
+:root[data-theme="v2"] [data-clip-frame] {
+  background: linear-gradient(160deg, rgba(28, 28, 28, 0.92), rgba(17, 17, 17, 0.92));
+  box-shadow:
+    0 0 64px -14px rgba(201, 168, 106, 0.3),
+    0 22px 52px rgba(0, 0, 0, 0.55);
+}

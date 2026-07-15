@@ -249,8 +249,10 @@ export function RaidDemo() {
       if (sourceStreamerRef.current) sourceStreamerRef.current.textContent = src.name
       if (sourceViewersRef.current) sourceViewersRef.current.textContent = `${src.viewers} Zuschauer`
       if (sourceAvatarRef.current) {
-        sourceAvatarRef.current.textContent = src.avatar
-        sourceAvatarRef.current.style.background = src.color
+        // Echtes Twitch-Profilbild (self-hosted: public/clips/pfp/<login>.png,
+        // Dateiname = Streamer-Login). Farbe bleibt Fallback-Flaeche.
+        sourceAvatarRef.current.textContent = ''
+        sourceAvatarRef.current.style.background = `url("${BASE}/clips/pfp/${src.name}.png") center/cover no-repeat, ${src.color}`
       }
       if (sourceInfoNameRef.current) { sourceInfoNameRef.current.textContent = src.name; sourceInfoNameRef.current.href = `https://twitch.tv/${src.name}` }
       if (sourceLiveTextRef.current) sourceLiveTextRef.current.textContent = 'LIVE'
@@ -267,8 +269,9 @@ export function RaidDemo() {
       if (targetStreamerRef.current) targetStreamerRef.current.textContent = tgt.name
       if (targetViewersRef.current) targetViewersRef.current.textContent = `${tgt.viewers} Zuschauer`
       if (targetAvatarRef.current) {
-        targetAvatarRef.current.textContent = tgt.avatar
-        targetAvatarRef.current.style.background = tgt.color
+        // Echtes Twitch-Profilbild (self-hosted, Dateiname = Login); color = Fallback.
+        targetAvatarRef.current.textContent = ''
+        targetAvatarRef.current.style.background = `url("${BASE}/clips/pfp/${tgt.name}.png") center/cover no-repeat, ${tgt.color}`
       }
       if (targetInfoNameRef.current) { targetInfoNameRef.current.textContent = tgt.name; targetInfoNameRef.current.href = `https://twitch.tv/${tgt.name}` }
       if (targetLiveTextRef.current) targetLiveTextRef.current.textContent = 'LIVE'
