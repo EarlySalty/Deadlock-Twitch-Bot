@@ -1568,11 +1568,10 @@ async fn main() {
         // `_prime_monitored_only_sessions`) — der wertschöpfende Hook, voll
         // verdrahtet über den bestehenden SessionTracker.
         .with_session_tracker(scout_tracker)
-        // Chat-Sync-Port: hält die Heal-Prädikate (monitoring-only ⇒ kein Heal)
-        // und meldet den fehlenden anonymen Read-Membership-Handle als Handoff
-        // (EventSub-Modell, s. scout_chat.rs). Kein Override der Defaults ⇒ kein
-        // An/Aus-Zustandswechsel ggü. dem bisherigen NoopScoutChatSink.
-        .with_chat_sink(std::sync::Arc::new(scout_chat::ScoutChatAdapter::new()));
+        // Anonymer Read-only-Chat-Harvester für die Scout-Roster-Kanäle.
+        .with_chat_sink(std::sync::Arc::new(scout_chat::ScoutChatAdapter::new(
+            pool.clone(),
+        )));
         scout_task.start_if_enabled();
     }
 

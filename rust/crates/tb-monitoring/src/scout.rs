@@ -600,8 +600,17 @@ impl ScoutTask {
             }
         }
 
+        let mut desired_channels: Vec<String> = current_streams
+            .keys()
+            .filter(|login| {
+                existing_monitored.contains(login.as_str()) || new_set.contains(login.as_str())
+            })
+            .cloned()
+            .collect();
+        desired_channels.sort_unstable();
+        self.chat.set_monitored_channels(&desired_channels).await;
+
         if !join_targets.is_empty() {
-            self.chat.set_monitored_channels(&join_targets).await;
             self.chat.join_channels(&join_targets).await;
             tracing::info!(
                 "scout: {} Kanäle gejoint ({} neu, {} geheilt)",
@@ -719,8 +728,12 @@ mod tests {
             .await;
 
         assert_eq!(healed, 0, "monitoring-only Kanäle werden nicht geheilt");
-        // set_monitored_channels läuft vor join, beide mit den neuen Logins.
-        assert_eq!(*chat.set.lock().unwrap(), vec![vec!["neu".to_string()]]);
+        // Der vollständige Soll-Roster läuft vor join, damit bestehende live
+        // monitoring-only Kanäle nach einem Prozessstart wieder gejoint werden.
+        assert_eq!(
+            *chat.set.lock().unwrap(),
+            vec![vec!["bleibt".to_string(), "neu".to_string()]]
+        );
         assert_eq!(*chat.joined.lock().unwrap(), vec![vec!["neu".to_string()]]);
         // entfernte Kanäle werden gepartet.
         assert_eq!(*chat.parted.lock().unwrap(), vec![vec!["weg".to_string()]]);
@@ -760,7 +773,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn sync_chat_noop_ohne_aenderungen() {
+    async fn sync_chat_leert_roster_ohne_kanaele() {
         let chat = Arc::new(RecordingChatSink::default());
         let task = task_with_chat(chat.clone());
         let current: HashMap<String, StreamSnapshot> = HashMap::new();
@@ -778,7 +791,7 @@ mod tests {
             .await;
 
         assert_eq!(healed, 0);
-        assert!(chat.set.lock().unwrap().is_empty());
+        assert_eq!(*chat.set.lock().unwrap(), vec![Vec::<String>::new()]);
         assert!(chat.joined.lock().unwrap().is_empty());
         assert!(chat.parted.lock().unwrap().is_empty());
     }
