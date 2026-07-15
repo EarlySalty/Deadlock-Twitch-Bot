@@ -1,7 +1,7 @@
 import { StrictMode } from 'react'
 import { createRoot, hydrateRoot } from 'react-dom/client'
 import './index.css'
-// Inert ohne data-theme="v2" (nur die /streamer/v2/-Preview setzt das Attribut).
+// Standard-Streamer-Theme (Patch-Schwarz), global ueber index.css gelegt.
 import './theme-v2.css'
 import App from './App'
 

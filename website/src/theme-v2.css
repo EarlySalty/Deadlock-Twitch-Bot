@@ -1,8 +1,12 @@
-/* Streamer-Landing V2-Preview: Patch-Schwarz statt Streamer-Braun.
-   Nur Flaechen/Grund/Grid/geteilte Klassen getauscht — Gold+Teal-Akzente
-   bleiben. Kompletter Block ist inert ohne data-theme="v2", die Haupt-Landing
-   (/streamer/) bleibt also unberuehrt.
-   Referenz-Palette: Website/dl-patch/src/patch.css (:root). */
+/* Streamer-Landing Standard-Theme: Patch-Schwarz statt Streamer-Braun.
+   Nur Flaechen/Grund/Grid/geteilte Klassen getauscht — Gold+Teal-Akzente bleiben.
+   Bewusst auf [data-theme="v2"] gescoped: Vite bundelt diese Datei ins geteilte
+   CSS, das AUCH faq/onboarding/affiliate-portal/vertriebler laden — ohne Scope
+   wuerden die schwarzen Tokens dorthin leaken. Nur die Landing-index.html traegt
+   das Attribut, also greift das Theme genau dort.
+   Referenz-Palette: Website/dl-patch/src/patch.css (:root).
+   ponytail: laege sauberer direkt in index.css statt als Override-Ebene —
+   Zusammenlegung offen, sobald die parallele Brand-Arbeit (dl-brand) durch ist. */
 :root[data-theme="v2"] {
   /* Flaechen: warm-braun -> neutral-schwarz (Patch #0b0b0b / #101010 / #161616) */
   --color-bg:             #0b0b0b;
@@ -32,7 +36,7 @@
 
 /* "Globale Beleuchtung" raus: die drei animierten GlowOrb-Lichtkugeln
    (Gold/Teal, blur-120px, fix ueber dem ganzen Viewport) gibt es im flachen
-   Patch-Look nicht. Auf der Haupt-Landing bleiben sie (Attribut ist inert). */
+   Patch-Look nicht. */
 :root[data-theme="v2"] [data-glow-orb] {
   display: none;
 }
