@@ -164,6 +164,38 @@ export interface InternalHomeWeekComparison {
   } | null;
 }
 
+export interface InternalHomePersonalBestEntry {
+  value: number | null;
+  achieved_at: string | null;
+  title: string | null;
+}
+
+export interface InternalHomePersonalBests {
+  peak_viewers: InternalHomePersonalBestEntry;
+  avg_viewers: InternalHomePersonalBestEntry;
+  follower_gain: InternalHomePersonalBestEntry;
+  unique_chatters: InternalHomePersonalBestEntry;
+  longest_stream_seconds: InternalHomePersonalBestEntry;
+}
+
+export interface InternalHomeComparisonMetric {
+  current: number | null;
+  previous: number | null;
+  pct: number | null;
+}
+
+export interface InternalHomeStreamComparison {
+  current_started_at: string | null;
+  peak_viewers: InternalHomeComparisonMetric;
+  new_followers: InternalHomeComparisonMetric;
+  unique_chatters: InternalHomeComparisonMetric;
+}
+
+export interface InternalHomeViewersOverTimePoint {
+  t_seconds: number;
+  viewers: number;
+}
+
 export interface InternalHomeLiveStatus {
   is_live: boolean;
   viewer_count: number;
@@ -191,6 +223,9 @@ export interface InternalHomeData {
   healthScore?: InternalHomeHealthScore | null;
   lastStreamSummary?: InternalHomeLastStreamSummary | null;
   weekComparison?: InternalHomeWeekComparison | null;
+  personalBests?: InternalHomePersonalBests | null;
+  streamComparison?: InternalHomeStreamComparison | null;
+  viewersOverTime?: InternalHomeViewersOverTimePoint[] | null;
   liveStatus?: InternalHomeLiveStatus | null;
   generatedAt?: string | null;
 }
@@ -305,6 +340,9 @@ interface InternalHomeRawResponse {
   health_score?: InternalHomeHealthScore | null;
   last_stream_summary?: InternalHomeLastStreamSummary | null;
   week_comparison?: InternalHomeWeekComparison | null;
+  personal_bests?: InternalHomePersonalBests | null;
+  stream_comparison?: InternalHomeStreamComparison | null;
+  viewers_over_time?: InternalHomeViewersOverTimePoint[] | null;
   live_status?: InternalHomeLiveStatus | null;
   generated_at?: string | null;
 }
@@ -577,6 +615,9 @@ export async function fetchInternalHome(streamer?: string | null): Promise<Inter
     healthScore: raw.health_score ?? null,
     lastStreamSummary: raw.last_stream_summary ?? null,
     weekComparison: raw.week_comparison ?? null,
+    personalBests: raw.personal_bests ?? null,
+    streamComparison: raw.stream_comparison ?? null,
+    viewersOverTime: raw.viewers_over_time ?? null,
     liveStatus: raw.live_status ?? null,
     generatedAt: raw.generated_at || null,
   };
