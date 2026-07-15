@@ -28,11 +28,16 @@
   --theme-token-demo-bg: #101010;
 }
 
-/* Body: warme Gold-Glows fast raus -> Patch-typischer flach-schwarzer Grund */
+/* "Globale Beleuchtung" raus: die drei animierten GlowOrb-Lichtkugeln
+   (Gold/Teal, blur-120px, fix ueber dem ganzen Viewport) gibt es im flachen
+   Patch-Look nicht. Auf der Haupt-Landing bleiben sie (Attribut ist inert). */
+:root[data-theme="v2"] [data-glow-orb] {
+  display: none;
+}
+
+/* Body: kein Gold-Glow-Radial mehr -> Patch-typischer flach-schwarzer Grund */
 :root[data-theme="v2"] body {
-  background:
-    radial-gradient(95% 75% at 50% 8%, rgba(201, 168, 106, 0.05), transparent 74%),
-    var(--gradient-bg);
+  background: var(--gradient-bg);
 }
 
 /* Gitternetz wie Patch: neutrales Weiss statt Gold */
