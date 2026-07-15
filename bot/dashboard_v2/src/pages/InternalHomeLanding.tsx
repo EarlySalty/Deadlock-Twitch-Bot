@@ -1,7 +1,6 @@
 import { useEffect, useMemo, useState } from 'react';
 import { motion } from 'framer-motion';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { Line, LineChart, ResponsiveContainer } from 'recharts';
 import {
   fetchInternalHome,
   type InternalHomeActionEntry,
@@ -43,12 +42,14 @@ function MiniStat({
   label,
   value,
   prefix = '',
+  suffix = '',
   icon: Icon,
   accent = 'primary',
 }: {
   label: string;
   value: number | null | undefined;
   prefix?: string;
+  suffix?: string;
   icon?: LucideIcon;
   accent?: 'primary' | 'accent' | 'success' | 'warning';
 }) {
@@ -85,79 +86,8 @@ function MiniStat({
         className="mt-0.5 text-xl font-bold text-white"
         style={{ textShadow: `0 0 18px rgba(${glowRgb}, 0.55)` }}
       >
-        {value != null ? `${prefix}${formatNumber(value)}` : '\u2013'}
+        {value != null ? `${prefix}${formatNumber(value)}${suffix}` : '\u2013'}
       </div>
-    </div>
-  );
-}
-
-const WEEK_KPI_META: Record<string, { icon: LucideIcon }> = {
-  '\u00D8 Viewer': { icon: Users },
-  Follower: { icon: TrendingUp },
-  'Chat-Aktivitaet': { icon: MessageSquare },
-  'Stream-Stunden': { icon: BarChart3 },
-};
-
-function WeekKpi({
-  label,
-  current,
-  change,
-  suffix = '',
-  series,
-}: {
-  label: string;
-  current: number | null | undefined;
-  change: number | null | undefined;
-  suffix?: string;
-  series?: number[];
-}) {
-  const meta = WEEK_KPI_META[label];
-  const Icon = meta?.icon ?? BarChart3;
-  const sparkData =
-    series && series.length > 0 ? series.map((value, index) => ({ index, value })) : null;
-  const trendUp = (change ?? 0) >= 0;
-  const sparkColor = trendUp ? 'var(--color-success)' : 'var(--color-danger)';
-
-  const glowToneClass = trendUp ? 'card-glow-success kpi-glow-success' : 'card-glow-danger kpi-glow-danger';
-  return (
-    <div className={`panel-card card-glow ${glowToneClass} kpi-glow-always internal-home-kpi rounded-xl p-4`}>
-      <div className="mb-3 flex items-center gap-2.5">
-        <div
-          className={`flex h-8 w-8 shrink-0 items-center justify-center rounded-lg ${
-            trendUp
-              ? 'bg-gradient-to-br from-success/40 to-teal/35 shadow-[0_0_18px_rgba(63, 166, 107, 0.4)]'
-              : 'bg-gradient-to-br from-danger/45 to-orange/35 shadow-[0_0_18px_rgba(221, 106, 77, 0.4)]'
-          }`}
-        >
-          <Icon className="h-4 w-4 text-white" />
-        </div>
-        <div className="text-[11px] font-semibold uppercase tracking-wider text-text-secondary">{label}</div>
-      </div>
-      <div className="text-2xl font-bold text-white kpi-value-glow">
-        {current != null ? `${formatNumber(current)}${suffix}` : '\u2013'}
-      </div>
-      {change != null ? (
-        <div className={`mt-1.5 text-xs font-semibold ${trendUp ? 'text-success' : 'text-danger'}`}>
-          {trendUp ? '\u2191' : '\u2193'} {Math.abs(change).toFixed(1)}% vs. Vorwoche
-        </div>
-      ) : null}
-      {sparkData ? (
-        <div className="mt-3 h-9 w-full">
-          <ResponsiveContainer width="100%" height="100%">
-            <LineChart data={sparkData} margin={{ top: 2, right: 2, bottom: 2, left: 2 }}>
-              <Line
-                type="monotone"
-                dataKey="value"
-                stroke={sparkColor}
-                strokeWidth={2.2}
-                dot={false}
-                isAnimationActive={false}
-                style={{ filter: `drop-shadow(0 0 6px ${sparkColor})` }}
-              />
-            </LineChart>
-          </ResponsiveContainer>
-        </div>
-      ) : null}
     </div>
   );
 }
@@ -1306,32 +1236,32 @@ export function InternalHomeLanding() {
                     <div className="mb-3 text-[11px] font-semibold uppercase tracking-[0.18em] text-text-secondary">
                       Woche vs. Vorwoche
                     </div>
-                    <div className="grid grid-cols-2 gap-3">
-                      <WeekKpi
+                    <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
+                      <MiniStat
                         label={'\u00D8 Viewer'}
-                        current={weekComp.current_week.avg_viewers}
-                        change={weekComp.changes.avg_viewers_pct}
-                        series={weekComp.daily_series?.avg_viewers}
+                        value={weekComp.current_week.avg_viewers}
+                        icon={Users}
+                        accent="primary"
                       />
-                      <WeekKpi
+                      <MiniStat
                         label="Follower"
-                        current={weekComp.current_week.total_followers}
-                        change={weekComp.changes.followers_pct}
-                        series={weekComp.daily_series?.followers}
+                        value={weekComp.current_week.total_followers}
+                        icon={TrendingUp}
+                        accent="success"
                       />
-                      <WeekKpi
+                      <MiniStat
                         label="Chat-Aktivitaet"
-                        current={weekComp.current_week.chat_activity}
-                        change={weekComp.changes.chat_activity_pct}
+                        value={weekComp.current_week.chat_activity}
                         suffix="/h"
-                        series={weekComp.daily_series?.chat_activity}
+                        icon={MessageSquare}
+                        accent="warning"
                       />
-                      <WeekKpi
+                      <MiniStat
                         label="Stream-Stunden"
-                        current={weekComp.current_week.stream_hours}
-                        change={weekComp.changes.stream_hours_pct}
+                        value={weekComp.current_week.stream_hours}
                         suffix="h"
-                        series={weekComp.daily_series?.stream_hours}
+                        icon={BarChart3}
+                        accent="accent"
                       />
                     </div>
                   </div>
