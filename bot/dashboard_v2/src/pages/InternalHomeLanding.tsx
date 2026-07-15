@@ -37,6 +37,7 @@ import {
   type LucideIcon,
 } from 'lucide-react';
 import { WelcomeTour, resetWelcomeTour } from '@/components/onboarding/WelcomeTour';
+import { StreamRecapCard } from '@/components/cards/StreamRecapCard';
 
 function MiniStat({
   label,
@@ -721,6 +722,9 @@ export function InternalHomeLanding() {
   const healthScore = data?.healthScore ?? null;
   const lastStream = data?.lastStreamSummary ?? null;
   const weekComp = data?.weekComparison ?? null;
+  const personalBests = data?.personalBests ?? null;
+  const streamComparison = data?.streamComparison ?? null;
+  const viewersOverTime = data?.viewersOverTime ?? null;
   const liveStatus = data?.liveStatus ?? null;
 
   const score = Math.max(0, Math.min(100, healthScore?.overall ?? 0));
@@ -1268,6 +1272,14 @@ export function InternalHomeLanding() {
                 ) : null}
               </div>
             </motion.section>
+
+            <StreamRecapCard
+              personalBests={personalBests}
+              streamComparison={streamComparison}
+              viewersOverTime={viewersOverTime}
+              lastStream={lastStream}
+              delay={0.1}
+            />
 
             {recentStreams.length > 0 ? (
               <motion.section
