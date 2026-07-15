@@ -50,7 +50,7 @@ use crate::channel_classifier::{ChannelClass, ChannelClassifier};
 use crate::chatter_tracking::ChatterTracker;
 use crate::commands::CommandEngine;
 use crate::conversation_scam::ConversationScamGuard;
-use crate::crew_guard::CrewGuard;
+use crate::crew_guard::{crew_guard_enabled, CrewGuard, CrewJudge};
 use crate::fun_responses::FunResponses;
 use crate::global_chatter_ban::GlobalChatterBanEnforcer;
 use crate::invite_question::InviteQuestionResponder;
@@ -61,7 +61,9 @@ use crate::moderation::{
     NOTICE_GLOBAL_BAN,
 };
 use crate::promos::PromoEngine;
-use crate::scam_pitch::{AiReviewOutcome, PitchDecision, ScamPitchDetector, SpamAiReviewer};
+use crate::scam_pitch::{
+    AccountAgePort, AiReviewOutcome, PitchDecision, ScamPitchDetector, SpamAiReviewer,
+};
 use crate::spam_filter::{SpamAction, SpamContext, SpamFilter, SPAM_MIN_MATCHES};
 use crate::sus_invite::SusInviteCheck;
 use crate::types::ChatMessageEvent;
@@ -194,6 +196,7 @@ pub struct CrewRadarAlert {
     pub channel_login: String,
     pub style_score: u8,
     pub verdict: String,
+    pub notify_only: bool,
 }
 
 /// Timeout-Dauer bei AI-bestätigtem Spam: 24h — bewusst reversibel statt Ban,
@@ -434,6 +437,7 @@ impl ModAlerter {
                 "channel": alert.channel_login,
                 "style_score": alert.style_score,
                 "verdict": alert.verdict,
+                "notify_only": alert.notify_only,
             },
         });
         self.post("crew_guard", payload);
@@ -641,6 +645,8 @@ pub struct ChatPipelineParts {
     pub mention_resolver: Arc<dyn MentionResolver>,
     pub review_log: Arc<ReviewLog>,
     pub alerter: Arc<ModAlerter>,
+    pub account_age: Arc<dyn AccountAgePort>,
+    pub crew_judge: Arc<dyn CrewJudge>,
     pub crew_centroid: Arc<crate::style_score::Centroid>,
 }
 
@@ -657,12 +663,15 @@ pub struct ChatPipeline {
 
 impl ChatPipeline {
     pub fn new(parts: ChatPipelineParts) -> Self {
-        let crew_guard = Arc::new(CrewGuard::from_env(
+        let crew_guard = Arc::new(CrewGuard::new(
+            crew_guard_enabled(),
+            Arc::clone(&parts.crew_judge),
             Arc::clone(&parts.alerter),
             parts.pool.clone(),
             parts.bot_user_id.clone(),
-            Arc::clone(&parts.api),
+            Arc::clone(&parts.account_age),
             Arc::clone(&parts.crew_centroid),
+            false,
         ));
         Self {
             parts,
@@ -1683,8 +1692,7 @@ mod tests {
     use wiremock::matchers::{method, path};
     use wiremock::{Mock, MockServer, ResponseTemplate};
 
-    #[tokio::test]
-    async fn crew_radar_payload_enthaelt_ban_button_vertrag_auch_bei_clean() {
+    async fn assert_crew_radar_payload_notify_only(notify_only: bool) {
         let server = MockServer::start().await;
         Mock::given(method("POST"))
             .and(path("/changelog"))
@@ -1704,6 +1712,7 @@ mod tests {
             channel_login: "kanal".to_string(),
             style_score: 5,
             verdict: "clean".to_string(),
+            notify_only,
         });
 
         for _ in 0..20 {
@@ -1724,6 +1733,7 @@ mod tests {
                         "channel": "kanal",
                         "style_score": 5,
                         "verdict": "clean",
+                        "notify_only": notify_only,
                     })
                 );
                 return;
@@ -1731,6 +1741,16 @@ mod tests {
             sleep(Duration::from_millis(25)).await;
         }
         panic!("kein Crew-Radar-Payload empfangen");
+    }
+
+    #[tokio::test]
+    async fn crew_radar_payload_partner_behaelt_ban_button_vertrag() {
+        assert_crew_radar_payload_notify_only(false).await;
+    }
+
+    #[tokio::test]
+    async fn crew_radar_payload_lurker_ist_notify_only() {
+        assert_crew_radar_payload_notify_only(true).await;
     }
 
     #[derive(Default)]
@@ -2106,6 +2126,8 @@ mod tests {
                 http,
                 "http://127.0.0.1:1/changelog",
             )),
+            account_age: Arc::new(NoopAccountAge),
+            crew_judge: Arc::new(crate::crew_guard::OpenAiCrewJudge::from_env()),
             crew_centroid: Arc::new(crate::style_score::Centroid::default()),
         })
     }
@@ -2288,6 +2310,8 @@ mod tests {
                 http,
                 "http://127.0.0.1:1/changelog",
             )),
+            account_age: Arc::new(NoopAccountAge),
+            crew_judge: Arc::new(crate::crew_guard::OpenAiCrewJudge::from_env()),
             crew_centroid: Arc::new(crate::style_score::Centroid::default()),
         });
         (pipeline, invite_api)

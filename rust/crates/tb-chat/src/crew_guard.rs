@@ -27,9 +27,9 @@ use serde::Deserialize;
 use sqlx::PgPool;
 use tracing::{debug, error, warn};
 
-use crate::api::ChatApi;
 use crate::conversation_scam::{should_consider_event, DialogState, FirstTimeContext};
 use crate::pipeline::{CrewRadarAlert, ModAlerter};
+use crate::scam_pitch::AccountAgePort;
 use crate::style_score::{score as style_score, Centroid, StyleBreakdown, StyleScore};
 use crate::types::ChatMessageEvent;
 
@@ -882,7 +882,7 @@ fn context_identity<'a>(chatter_id: &'a str, login: &'a str) -> &'a str {
 const JUDGE_CONFIDENCE_THRESHOLD: f32 = 0.7;
 
 /// Feature-Flag `CREW_GUARD_ENABLED` (default AUS).
-fn crew_guard_enabled() -> bool {
+pub fn crew_guard_enabled() -> bool {
     std::env::var("CREW_GUARD_ENABLED")
         .map(|value| {
             matches!(
@@ -950,8 +950,9 @@ pub struct CrewGuard {
     alerter: Arc<ModAlerter>,
     pool: PgPool,
     bot_user_id: String,
-    api: Arc<dyn ChatApi>,
+    account_age: Arc<dyn AccountAgePort>,
     centroid: Arc<Centroid>,
+    notify_only: bool,
     context: Arc<ChatterContextBuffer>,
     radar_checked: Arc<Mutex<RadarChecks>>,
 }
@@ -964,8 +965,9 @@ impl CrewGuard {
         alerter: Arc<ModAlerter>,
         pool: PgPool,
         bot_user_id: String,
-        api: Arc<dyn ChatApi>,
+        account_age: Arc<dyn AccountAgePort>,
         centroid: Arc<Centroid>,
+        notify_only: bool,
     ) -> Self {
         Self {
             enabled,
@@ -974,8 +976,9 @@ impl CrewGuard {
             alerter,
             pool,
             bot_user_id,
-            api,
+            account_age,
             centroid,
+            notify_only,
             context: Arc::new(ChatterContextBuffer::new()),
             radar_checked: Arc::new(Mutex::new(HashMap::new())),
         }
@@ -986,7 +989,7 @@ impl CrewGuard {
         alerter: Arc<ModAlerter>,
         pool: PgPool,
         bot_user_id: String,
-        api: Arc<dyn ChatApi>,
+        account_age: Arc<dyn AccountAgePort>,
         centroid: Arc<Centroid>,
     ) -> Self {
         Self::new(
@@ -995,8 +998,9 @@ impl CrewGuard {
             alerter,
             pool,
             bot_user_id,
-            api,
+            account_age,
             centroid,
+            false,
         )
     }
 
@@ -1028,10 +1032,11 @@ impl CrewGuard {
         let alerter = Arc::clone(&self.alerter);
         let pool = self.pool.clone();
         let bot_user_id = self.bot_user_id.clone();
-        let api = Arc::clone(&self.api);
+        let account_age = Arc::clone(&self.account_age);
         let centroid = Arc::clone(&self.centroid);
         let radar_checked = Arc::clone(&self.radar_checked);
         let threshold = self.threshold;
+        let notify_only = self.notify_only;
 
         tokio::spawn(async move {
             if matches!(screen(&content, Some(&chatter_id)), CrewSignal::None) {
@@ -1077,11 +1082,7 @@ impl CrewGuard {
             let account_age_days = if chatter_id.is_empty() {
                 None
             } else {
-                api.user_created_at(&chatter_id)
-                    .await
-                    .ok()
-                    .flatten()
-                    .map(|created| (Utc::now() - created).num_days())
+                account_age.user_created_at_days(&chatter_id, &login).await
             };
             let time_window_match = is_ricky_hour(Utc::now().with_timezone(&Berlin).hour());
             if let Some(decision) = decide(
@@ -1108,6 +1109,7 @@ impl CrewGuard {
                     channel_login: decision.log.channel_login,
                     style_score: decision.log.style_score,
                     verdict: decision.log.llm_verdict,
+                    notify_only,
                 });
             }
         });

@@ -2,13 +2,13 @@ use std::str::FromStr;
 use std::sync::{Arc, Mutex};
 
 use async_trait::async_trait;
-use chrono::{DateTime, Utc};
 use sqlx::postgres::{PgConnectOptions, PgPoolOptions};
 use sqlx::PgPool;
 use tb_chat::crew_guard::{persist_radar_log, CrewJudge, CrewRadarLog, CrewVerdict};
+use tb_chat::scam_pitch::AccountAgePort;
 use tb_chat::style_score::{build_centroid, score, StyleBreakdown};
 use tb_chat::types::{ChatBadge, ChatMessageBody};
-use tb_chat::{BanOutcome, ChatApi, ChatMessageEvent, CrewGuard, ModAlerter, SendOutcome};
+use tb_chat::{ChatMessageEvent, CrewGuard, ModAlerter};
 use tokio::sync::Semaphore;
 use tokio::time::{sleep, timeout, Duration};
 use wiremock::matchers::{method, path};
@@ -237,72 +237,12 @@ impl CrewJudge for RecordingJudge {
     }
 }
 
-struct StubApi;
+struct StubAccountAge;
 
 #[async_trait]
-impl ChatApi for StubApi {
-    async fn send_message(
-        &self,
-        _broadcaster_id: &str,
-        _message: &str,
-    ) -> Result<SendOutcome, String> {
-        unreachable!("CrewGuard darf keine Chat-Nachricht senden")
-    }
-
-    async fn send_announcement(
-        &self,
-        _broadcaster_id: &str,
-        _message: &str,
-        _color: &str,
-    ) -> Result<bool, String> {
-        unreachable!("CrewGuard darf kein Announcement senden")
-    }
-
-    async fn ban_user(
-        &self,
-        _broadcaster_id: &str,
-        _target_user_id: &str,
-        _reason: &str,
-    ) -> Result<BanOutcome, String> {
-        unreachable!("CrewGuard darf nicht bannen")
-    }
-
-    async fn timeout_user(
-        &self,
-        _broadcaster_id: &str,
-        _target_user_id: &str,
-        _duration_secs: u32,
-        _reason: &str,
-    ) -> Result<BanOutcome, String> {
-        unreachable!("CrewGuard darf keinen Timeout setzen")
-    }
-
-    async fn unban_user(
-        &self,
-        _broadcaster_id: &str,
-        _target_user_id: &str,
-    ) -> Result<bool, String> {
-        unreachable!("CrewGuard darf nicht entbannen")
-    }
-
-    async fn delete_message(
-        &self,
-        _broadcaster_id: &str,
-        _message_id: &str,
-    ) -> Result<bool, String> {
-        unreachable!("CrewGuard darf keine Nachricht loeschen")
-    }
-
-    async fn user_created_at(&self, _user_id: &str) -> Result<Option<DateTime<Utc>>, String> {
-        Ok(None)
-    }
-
-    async fn resolve_user_id(&self, _login: &str) -> Result<Option<String>, String> {
-        unreachable!("CrewGuard darf keine User-ID aufloesen")
-    }
-
-    async fn bot_user_id(&self) -> String {
-        "bot-id".to_string()
+impl AccountAgePort for StubAccountAge {
+    async fn user_created_at_days(&self, _user_id: &str, _login: &str) -> Option<i64> {
+        None
     }
 }
 
@@ -346,8 +286,9 @@ fn crew_guard(pool: PgPool, server: &MockServer) -> CrewGuard {
         )),
         pool,
         "bot-id".to_string(),
-        Arc::new(StubApi),
+        Arc::new(StubAccountAge),
         Arc::new(Default::default()),
+        false,
     )
 }
 
@@ -654,8 +595,9 @@ async fn observe_gibt_zweitem_aufruf_den_kontext_des_ersten_mit() {
         )),
         pool.clone(),
         "bot-id".to_string(),
-        Arc::new(StubApi),
+        Arc::new(StubAccountAge),
         Arc::new(Default::default()),
+        false,
     );
 
     let connection_one = pool.acquire().await.expect("erste DB-Verbindung halten");
