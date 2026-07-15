@@ -582,6 +582,26 @@ fn round1(v: f64) -> f64 {
     (v * 10.0).round() / 10.0
 }
 
+fn chat_activity_per_hour(messages: i64, hours: Option<f64>) -> Option<f64> {
+    hours
+        .filter(|hours| *hours > 0.0)
+        .map(|hours| round1(messages as f64 / hours))
+}
+
+#[cfg(test)]
+mod chat_activity_tests {
+    use super::chat_activity_per_hour;
+
+    #[test]
+    fn messages_pro_streamstunde() {
+        assert_eq!(chat_activity_per_hour(300, Some(5.0)), Some(60.0));
+        assert_eq!(chat_activity_per_hour(300, None), None);
+        assert_eq!(chat_activity_per_hour(300, Some(0.0)), None);
+        // Bei vorhandenen Streamstunden sind null Nachrichten ein echter Messwert.
+        assert_eq!(chat_activity_per_hour(0, Some(5.0)), Some(0.0));
+    }
+}
+
 // ── Block 0: Identity-Resolve (internal_home.py:403-446) ─────────────────────
 
 async fn identity_block(
@@ -1969,7 +1989,7 @@ async fn week_stats(pool: &PgPool, login: &str, start: DateTime<Utc>, end: DateT
         FROM twitch_stats_tracked
         WHERE LOWER(streamer) = LOWER($1) AND ts_utc >= $2 AND ts_utc < $3
     "#;
-    let (avg_v, hours): (Value, Value) = match sqlx::query(stats_sql)
+    let (avg_v, hours, hours_raw): (Value, Value, Option<f64>) = match sqlx::query(stats_sql)
         .bind(login)
         .bind(start)
         .bind(end)
@@ -1986,9 +2006,28 @@ async fn week_stats(pool: &PgPool, login: &str, start: DateTime<Utc>, end: DateT
                 h.filter(|v| *v != 0.0)
                     .map(|v| json!(round1(v)))
                     .unwrap_or(Value::Null),
+                h,
             )
         }
-        _ => (Value::Null, Value::Null),
+        _ => (Value::Null, Value::Null, None),
+    };
+
+    let chat_sql = r#"
+        SELECT COUNT(*) AS c FROM twitch_chat_messages
+        WHERE LOWER(streamer_login) = LOWER($1)
+          AND message_ts >= $2 AND message_ts < $3
+    "#;
+    let chat_activity = match sqlx::query(chat_sql)
+        .bind(login)
+        .bind(start)
+        .bind(end)
+        .fetch_optional(pool)
+        .await
+    {
+        Ok(Some(row)) => chat_activity_per_hour(row.try_get::<i64, _>("c").unwrap_or(0), hours_raw)
+            .map(|value| json!(value))
+            .unwrap_or(Value::Null),
+        _ => Value::Null,
     };
 
     let foll_sql = r#"
@@ -2015,7 +2054,7 @@ async fn week_stats(pool: &PgPool, login: &str, start: DateTime<Utc>, end: DateT
     json!({
         "avg_viewers": avg_v,
         "total_followers": followers,
-        "chat_activity": Value::Null,
+        "chat_activity": chat_activity,
         "stream_hours": hours,
     })
 }
@@ -2038,7 +2077,7 @@ async fn compute_week_comparison(pool: &PgPool, login: &str) -> Value {
     let changes = json!({
         "avg_viewers_pct": pct(&current["avg_viewers"], &previous["avg_viewers"]),
         "followers_pct": pct(&current["total_followers"], &previous["total_followers"]),
-        "chat_activity_pct": Value::Null,
+        "chat_activity_pct": pct(&current["chat_activity"], &previous["chat_activity"]),
         "stream_hours_pct": pct(&current["stream_hours"], &previous["stream_hours"]),
     });
 
@@ -2046,7 +2085,7 @@ async fn compute_week_comparison(pool: &PgPool, login: &str) -> Value {
     let mut avg_series = vec![0.0_f64; 7];
     let mut foll_series = vec![0.0_f64; 7];
     let mut hours_series = vec![0.0_f64; 7];
-    let chat_series = vec![0.0_f64; 7];
+    let mut chat_series = vec![0.0_f64; 7];
 
     for day_offset in 0..7usize {
         let day_start = (now - Duration::days(6 - day_offset as i64))
@@ -2096,6 +2135,26 @@ async fn compute_week_comparison(pool: &PgPool, login: &str) -> Value {
                 if f != 0 {
                     foll_series[day_offset] = f as f64;
                 }
+            }
+        }
+
+        let day_chat_sql = r#"
+            SELECT COUNT(*) AS c FROM twitch_chat_messages
+            WHERE LOWER(streamer_login) = LOWER($1)
+              AND message_ts >= $2 AND message_ts < $3
+        "#;
+        if let Ok(Some(row)) = sqlx::query(day_chat_sql)
+            .bind(login)
+            .bind(day_start)
+            .bind(day_end)
+            .fetch_optional(pool)
+            .await
+        {
+            if let Some(activity) = chat_activity_per_hour(
+                row.try_get::<i64, _>("c").unwrap_or(0),
+                Some(hours_series[day_offset]),
+            ) {
+                chat_series[day_offset] = activity;
             }
         }
     }

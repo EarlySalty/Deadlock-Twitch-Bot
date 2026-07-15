@@ -1,3 +1,11 @@
+## #374 — Übersicht aufgeräumt, Chat-Wert wieder da
+
+**Problem:** Im Browser-Tab stand ein fremdes Platzhalter-Logo. Auf der Übersicht lagen die vier Wochen-Kacheln als eigene Reihe unter der Zusammenfassung des letzten Streams und kosteten viel Platz. Und die Kachel "Chat-Aktivität" zeigte dauerhaft nur einen Strich, obwohl Chatzahlen vorliegen.
+
+**Änderung:** Der Tab zeigt jetzt das Community-Logo. Die vier Wochen-Kacheln sind in die Box der letzten Stream-Zusammenfassung gewandert, wodurch die Seite kompakter wird und der Rest nach oben rückt. Die Chat-Aktivität rechnet jetzt die Nachrichten pro Streamstunde aus und füllt Wert, Vergleich zur Vorwoche und Verlaufslinie.
+
+**Aktuelles Verhalten:** Die Übersicht ist aufgeräumter, das Tab-Logo stimmt, und die Chat-Aktivität zeigt echte Zahlen samt Trend statt einem Strich. Wurde im Zeitraum nicht gestreamt, bleibt der Wert leer, weil "pro Stunde" ohne Streamstunden nicht definiert ist.
+
 ## #373 — FAQ-Box auf der Streamer-Seite antwortet wieder
 
 **Problem:** Die Frage-Box auf der Streamer-Seite gab auf jede Frage nur die Ausweichantwort "das kann ich dir hier nicht sicher sagen", egal was man fragte. Echte Antworten kamen gar nicht mehr durch.
