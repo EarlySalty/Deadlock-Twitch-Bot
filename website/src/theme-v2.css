@@ -1,17 +1,19 @@
 /* Streamer-Landing V2-Preview: Patch-Schwarz statt Streamer-Braun.
-   Nur Flaechen/Grund/Grid getauscht — Gold+Teal-Akzente bleiben (beide
-   Themes teilen sie). Kompletter Block ist inert ohne data-theme="v2",
-   die Haupt-Landing (/streamer/) bleibt also unberuehrt.
+   Nur Flaechen/Grund/Grid/geteilte Klassen getauscht — Gold+Teal-Akzente
+   bleiben. Kompletter Block ist inert ohne data-theme="v2", die Haupt-Landing
+   (/streamer/) bleibt also unberuehrt.
    Referenz-Palette: Website/dl-patch/src/patch.css (:root). */
 :root[data-theme="v2"] {
   /* Flaechen: warm-braun -> neutral-schwarz (Patch #0b0b0b / #101010 / #161616) */
   --color-bg:             #0b0b0b;
   --color-background:     #101010;
-  --color-card:           rgba(22, 22, 22, 0.72);
-  --color-card-hover:     rgba(34, 34, 34, 0.82);
-  --color-border:         rgba(239, 212, 157, 0.12);
-  --color-border-strong:  rgba(239, 212, 157, 0.30);
-  --color-border-hover:   rgba(239, 212, 157, 0.22);
+  --color-card:           rgba(20, 20, 20, 0.82);
+  --color-card-hover:     rgba(32, 32, 32, 0.88);
+  /* Rahmen generell einen Tick goldiger/praesenter, damit neutrale Elemente
+     nicht in reines Grau kippen ("alles leicht goldig"). */
+  --color-border:         rgba(239, 212, 157, 0.16);
+  --color-border-strong:  rgba(239, 212, 157, 0.34);
+  --color-border-hover:   rgba(239, 212, 157, 0.28);
   --color-text-primary:   #f2eee6;
   --color-text-secondary: #9d968a;
   --color-secondary:      #9d968a;
@@ -19,8 +21,8 @@
   /* Verlaeufe entwaermen: neutrales Schwarz statt Braun-Ink */
   --gradient-bg:      linear-gradient(180deg, #0f0f0e 0%, #0b0b0b 55%, #101010 100%);
   --gradient-hero:    linear-gradient(160deg, #0b0b0b 0%, #101010 55%, #161616 100%);
-  --shadow-card:      0 26px 70px rgba(0, 0, 0, 0.62), inset 0 1px 0 rgba(255, 255, 255, 0.03);
-  --shadow-card-soft: 0 16px 45px rgba(0, 0, 0, 0.45), inset 0 1px 0 rgba(255, 255, 255, 0.025);
+  --shadow-card:      0 26px 70px rgba(0, 0, 0, 0.62), inset 0 1px 0 rgba(255, 255, 255, 0.04);
+  --shadow-card-soft: 0 16px 45px rgba(0, 0, 0, 0.5), inset 0 1px 0 rgba(255, 255, 255, 0.035);
 
   /* --theme-* Fallbacks der Landing-Komponenten (Titlebar/Chatbot/Demo) auf Schwarz */
   --theme-titlebar-bg:   rgba(34, 34, 34, 0.9);
@@ -40,10 +42,41 @@
   background: var(--gradient-bg);
 }
 
-/* Gitternetz wie Patch: neutrales Weiss statt Gold */
+/* Gitternetz wie Patch, aber ein paar % praesenter (0.025 -> 0.045, 0.55 -> 0.72) */
 :root[data-theme="v2"] body::before {
   background-image:
-    linear-gradient(rgba(255, 255, 255, 0.025) 1px, transparent 1px),
-    linear-gradient(90deg, rgba(255, 255, 255, 0.025) 1px, transparent 1px);
-  opacity: 0.55;
+    linear-gradient(rgba(255, 255, 255, 0.045) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(255, 255, 255, 0.045) 1px, transparent 1px);
+  opacity: 0.72;
+}
+
+/* Boxen (panel-card/glass) heben sich sonst kaum vom Schwarz ab: leichter
+   Gold-Schimmer oben + definiertere goldige Kante + tieferer Schatten,
+   damit die Karten "stehen" statt mit dem Grund zu verschwimmen. */
+:root[data-theme="v2"] .panel-card,
+:root[data-theme="v2"] .glass {
+  background:
+    linear-gradient(180deg, rgba(239, 212, 157, 0.06) 0%, transparent 44%),
+    rgba(20, 20, 20, 0.82);
+  border-color: rgba(239, 212, 157, 0.16);
+  box-shadow: 0 18px 44px rgba(0, 0, 0, 0.52), inset 0 1px 0 rgba(255, 255, 255, 0.045);
+}
+
+/* Hero-/Haupt-CTA (gradient-accent): mattes, satteres Gold statt Hochglanz-
+   Verlauf — kein heller #f6ddb0-Glanzstart, dafuer klare Kante + dunkler Text
+   = mehr Kontrast. Der Hover-Glow (inline) bleibt fuer den "wichtig"-Moment. */
+:root[data-theme="v2"] .gradient-accent {
+  background: linear-gradient(135deg, #d4b478 0%, #c8a86b 58%, #ad8c4c 100%);
+  color: #14100a;
+  border-color: rgba(239, 212, 157, 0.4);
+  box-shadow: 0 8px 22px rgba(0, 0, 0, 0.5);
+}
+
+/* Clip-Rahmen: hardcoded brauner Inline-Gradient -> neutrales Schwarz, dazu
+   ein goldener Halo dahinter, damit die Clips vor dem Schwarz "leuchten". */
+:root[data-theme="v2"] [data-clip-frame] {
+  background: linear-gradient(160deg, rgba(28, 28, 28, 0.92), rgba(17, 17, 17, 0.92));
+  box-shadow:
+    0 0 64px -14px rgba(201, 168, 106, 0.3),
+    0 22px 52px rgba(0, 0, 0, 0.55);
 }
