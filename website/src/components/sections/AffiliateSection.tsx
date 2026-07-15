@@ -40,11 +40,11 @@ export function AffiliateSection({ standalone = false }: AffiliateSectionProps) 
             return (
               <ScrollReveal key={feature.title} delay={index * 0.1}>
                 <div className="bg-[var(--color-card)] rounded-xl border border-[var(--color-border)] p-6 soft-elevate h-full">
-                  <div className="w-12 h-12 rounded-lg gradient-accent flex items-center justify-center mb-4">
+                  <div className="w-12 h-12 rounded-lg icon-tile flex items-center justify-center mb-4">
                     {IconComponent ? (
-                      <IconComponent size={22} className="text-white" />
+                      <IconComponent size={22} />
                     ) : (
-                      <span className="text-white text-sm font-bold">
+                      <span className="text-sm font-bold">
                         {feature.icon[0]}
                       </span>
                     )}

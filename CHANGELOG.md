@@ -1,3 +1,11 @@
+## #368 — Weniger Goldplatten, mehr Ruhe auf der Streamer-Seite
+
+**Problem:** Jede Icon-Kachel in den Bereichen Features, Community und Affiliate war eine voll leuchtende Goldfläche. Bei sechs Kacheln nebeneinander wirkte das erdrückend, und die weißen Icons darauf waren kaum lesbar. Die Discord-Box darunter fiel mit ihrer lila Vollfläche komplett aus dem Look der Seite.
+
+**Änderung:** Icon-Kacheln liegen jetzt auf einer gedeckten Goldfläche mit goldenem Icon, voll leuchtendes Gold gibt es nur noch auf den großen Knöpfen. Die Discord-Box nutzt die normale Kartenoberfläche der Seite, die Discord-Farbe bleibt auf dem Logo und dem Beitreten-Knopf erhalten.
+
+**Aktuelles Verhalten:** Die Abschnitte wirken ruhiger und aufgeräumter, das Auge landet zuerst auf den Überschriften und Knöpfen. Die Discord-Box fügt sich ins Design ein und bleibt trotzdem sofort als Discord erkennbar.
+
 ## #367 — Die Raid-Kette zeigt, wo sie gerade steht
 
 **Problem:** Auf der Streamer-Seite sahen alle vier Schritte der Raid-Kette gleich wichtig aus, jeder hatte denselben goldenen Rahmen. Das Auge fand den aktuellen Schritt nicht auf Anhieb, und die beiden Knöpfe darunter konkurrierten ebenfalls um Aufmerksamkeit.
