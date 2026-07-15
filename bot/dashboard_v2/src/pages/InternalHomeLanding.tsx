@@ -78,13 +78,13 @@ function MiniStat({
         }}
       />
       {Icon ? (
-        <div className={`mb-2 flex h-7 w-7 items-center justify-center rounded-lg border ${accentColor}`}>
+        <div className={`icon-duotone mb-2 flex h-7 w-7 items-center justify-center rounded-lg border ${accentColor}`}>
           <Icon className="h-3.5 w-3.5" />
         </div>
       ) : null}
-      <div className="text-[11px] font-semibold uppercase tracking-wider text-text-secondary">{label}</div>
+      <div className="text-[11px] font-semibold uppercase tracking-[0.14em] text-text-secondary">{label}</div>
       <div
-        className="mt-0.5 text-xl font-bold text-white"
+        className="kpi-number mt-1 text-xl font-bold text-white"
         style={{ textShadow: `0 0 18px rgba(${glowRgb}, 0.55)` }}
       >
         {value != null ? `${prefix}${formatNumber(value)}${suffix}` : '\u2013'}
@@ -1134,7 +1134,7 @@ export function InternalHomeLanding() {
                         />
                       </svg>
                       <div className="absolute inset-0 flex flex-col items-center justify-center">
-                        <span className={`text-3xl font-bold ${scoreColorClass} kpi-value-glow`}>{score}</span>
+                        <span className={`kpi-number text-3xl font-bold ${scoreColorClass} kpi-value-glow`}>{score}</span>
                         <span className="text-xs text-white/45">/ 100</span>
                       </div>
                     </div>
@@ -1166,16 +1166,19 @@ export function InternalHomeLanding() {
                               {item.value}
                             </span>
                           </div>
-                          <div className="mt-2 h-1.5 overflow-hidden rounded-full bg-white/6">
+                          <div className="mt-2 h-2 overflow-hidden rounded-full bg-white/6">
                             <div
-                              className={`h-full rounded-full ${
-                                item.value >= 70
-                                  ? 'bg-success'
-                                  : item.value >= 40
-                                    ? 'bg-warning'
-                                    : 'bg-danger'
-                              }`}
-                              style={{ width: `${Math.max(0, Math.min(100, item.value))}%` }}
+                              className="h-full rounded-full transition-[width] duration-500"
+                              style={{
+                                width: `${Math.max(0, Math.min(100, item.value))}%`,
+                                background: `linear-gradient(90deg, var(--color-primary) 0%, ${
+                                  item.value >= 70
+                                    ? 'var(--color-success)'
+                                    : item.value >= 40
+                                      ? 'var(--color-warning)'
+                                      : 'var(--color-danger)'
+                                } 100%)`,
+                              }}
                             />
                           </div>
                         </div>

@@ -70,13 +70,13 @@ function ComparisonRow({
   return (
     <div className="flex items-center justify-between gap-3 py-2.5">
       <div className="flex items-center gap-2.5">
-        <div className="flex h-7 w-7 items-center justify-center rounded-lg border border-border bg-background/60 text-text-secondary">
+        <div className="icon-duotone flex h-7 w-7 items-center justify-center rounded-lg border border-border bg-background/60 text-text-secondary">
           <Icon className="h-3.5 w-3.5" />
         </div>
         <span className="text-sm font-medium text-text-secondary">{label}</span>
       </div>
       <div className="flex items-center gap-3">
-        <span className="text-lg font-bold text-white">
+        <span className="kpi-number text-lg font-bold text-white">
           {metric.current != null ? formatNumber(metric.current) : '–'}
         </span>
         <DeltaBadge pct={metric.pct} />
@@ -107,7 +107,7 @@ function BestTile({
       />
       <div className="mb-2 flex items-center justify-between">
         <div
-          className="flex h-7 w-7 items-center justify-center rounded-lg border"
+          className="icon-duotone flex h-7 w-7 items-center justify-center rounded-lg border"
           style={{
             background: `rgba(${GOLD}, 0.14)`,
             borderColor: `rgba(${GOLD}, 0.28)`,
@@ -128,7 +128,7 @@ function BestTile({
       </div>
       <div className="text-[11px] font-semibold uppercase tracking-wider text-text-secondary">{label}</div>
       <div
-        className="mt-0.5 text-xl font-bold text-white"
+        className="kpi-number mt-0.5 text-xl font-bold text-white"
         style={{ textShadow: `0 0 18px rgba(${GOLD}, 0.5)` }}
       >
         {display}

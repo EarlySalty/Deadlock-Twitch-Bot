@@ -52,6 +52,9 @@
   --color-popover: #2A221C;
   --font-sans: "Manrope", "Segoe UI", sans-serif;
   --font-display: "Sora", "Manrope", sans-serif;
+  /* KPI-Zahlen: geometrische Grotesk (Outfit) fuer markante Key-Performance-
+     Werte, faellt auf die Display-Font zurueck bis der CDN-Font geladen ist. */
+  --font-kpi: "Outfit", "Sora", "Manrope", sans-serif;
   --gradient-brand: linear-gradient(120deg, #F1D299 10%, #C5A059 55%, #9A7C42);
   --gradient-dash: linear-gradient(135deg, #C5A059, #E0BE86);
   --gradient-bg: linear-gradient(160deg, #221A15 0%, #1A1310 55%, #221A15 100%);
@@ -134,6 +137,22 @@ h4,
 .display-font {
   font-family: var(--font-display);
   letter-spacing: -0.02em;
+}
+
+/* KPI-Zahlen: geometrische Outfit-Ziffern, tabellarisch (springen beim Zaehlen
+   nicht), fuer die grossen Key-Werte (Viewer, Peak, Score, Bestwerte). */
+.kpi-number {
+  font-family: var(--font-kpi);
+  font-variant-numeric: tabular-nums;
+  letter-spacing: -0.01em;
+}
+
+/* Duo-Tone-Icon: Lucide-Outline bekommt eine dezente Gold-Fuellung, damit die
+   Icons zweitonig/hochwertiger wirken statt flach umrissen. */
+.icon-duotone svg,
+svg.icon-duotone {
+  fill: color-mix(in srgb, currentColor 20%, transparent);
+  stroke: currentColor;
 }
 
 ::selection {
