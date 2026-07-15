@@ -593,6 +593,7 @@ struct Recorder {
     calls: Mutex<Vec<String>>,
     resolve_result: Option<String>,
     greeter_ok: bool,
+    moderator_error: Option<String>,
 }
 
 impl Recorder {
@@ -627,7 +628,10 @@ impl ModeratorInstallPort for Recorder {
         _streamer_access_token: &str,
     ) -> Result<(), String> {
         self.log(format!("mod:{broadcaster_id}:{bot_user_id}"));
-        Ok(())
+        match &self.moderator_error {
+            Some(error) => Err(error.clone()),
+            None => Ok(()),
+        }
     }
 }
 
@@ -759,10 +763,10 @@ async fn complete_setup_ohne_bot_id_ueberspringt_mod_und_chat() {
         .complete_setup_for_streamer("904", "kein_bot", "token", None)
         .await;
 
-    assert!(matches!(
-        result,
-        Err(PartnerSetupError::BotUserIdUnavailable)
-    ));
+    assert!(
+        result.is_ok(),
+        "erfolgreicher Partner-Sync bestimmt das Ergebnis"
+    );
 
     let calls = recorder.calls();
     assert!(
@@ -778,6 +782,36 @@ async fn complete_setup_ohne_bot_id_ueberspringt_mod_und_chat() {
             .await
             .unwrap();
     assert_eq!(status, "active");
+}
+
+#[tokio::test]
+async fn complete_setup_bleibt_bei_moderator_fehler_erfolgreich() {
+    let pool = pool_or_skip!("ps_mod_error");
+    let recorder = Arc::new(Recorder {
+        moderator_error: Some("keine Moderator-Rechte".to_string()),
+        ..Default::default()
+    });
+    let svc = service(pool, recorder, Some("botid"));
+
+    let result = svc
+        .complete_setup_for_streamer("907", "mod_fehler", "token", None)
+        .await;
+
+    assert!(
+        result.is_ok(),
+        "erfolgreicher Partner-Sync bestimmt das Ergebnis"
+    );
+}
+
+#[tokio::test]
+async fn complete_setup_gibt_partner_sync_fehler_zurueck() {
+    let pool = pool_or_skip!("ps_sync_error");
+    let recorder = Arc::new(Recorder::default());
+    let svc = service(pool, recorder, Some("botid"));
+
+    let result = svc.complete_setup_for_streamer("", "", "token", None).await;
+
+    assert!(matches!(result, Err(PartnerSetupError::InvalidIdentity)));
 }
 
 #[tokio::test]
