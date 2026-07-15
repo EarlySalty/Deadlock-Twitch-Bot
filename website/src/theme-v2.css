@@ -1,0 +1,44 @@
+/* Streamer-Landing V2-Preview: Patch-Schwarz statt Streamer-Braun.
+   Nur Flaechen/Grund/Grid getauscht — Gold+Teal-Akzente bleiben (beide
+   Themes teilen sie). Kompletter Block ist inert ohne data-theme="v2",
+   die Haupt-Landing (/streamer/) bleibt also unberuehrt.
+   Referenz-Palette: Website/dl-patch/src/patch.css (:root). */
+:root[data-theme="v2"] {
+  /* Flaechen: warm-braun -> neutral-schwarz (Patch #0b0b0b / #101010 / #161616) */
+  --color-bg:             #0b0b0b;
+  --color-background:     #101010;
+  --color-card:           rgba(22, 22, 22, 0.72);
+  --color-card-hover:     rgba(34, 34, 34, 0.82);
+  --color-border:         rgba(239, 212, 157, 0.12);
+  --color-border-strong:  rgba(239, 212, 157, 0.30);
+  --color-border-hover:   rgba(239, 212, 157, 0.22);
+  --color-text-primary:   #f2eee6;
+  --color-text-secondary: #9d968a;
+  --color-secondary:      #9d968a;
+
+  /* Verlaeufe entwaermen: neutrales Schwarz statt Braun-Ink */
+  --gradient-bg:      linear-gradient(180deg, #0f0f0e 0%, #0b0b0b 55%, #101010 100%);
+  --gradient-hero:    linear-gradient(160deg, #0b0b0b 0%, #101010 55%, #161616 100%);
+  --shadow-card:      0 26px 70px rgba(0, 0, 0, 0.62), inset 0 1px 0 rgba(255, 255, 255, 0.03);
+  --shadow-card-soft: 0 16px 45px rgba(0, 0, 0, 0.45), inset 0 1px 0 rgba(255, 255, 255, 0.025);
+
+  /* --theme-* Fallbacks der Landing-Komponenten (Titlebar/Chatbot/Demo) auf Schwarz */
+  --theme-titlebar-bg:   rgba(34, 34, 34, 0.9);
+  --theme-chatbot-bg:    rgba(15, 15, 14, 0.96);
+  --theme-token-demo-bg: #101010;
+}
+
+/* Body: warme Gold-Glows fast raus -> Patch-typischer flach-schwarzer Grund */
+:root[data-theme="v2"] body {
+  background:
+    radial-gradient(95% 75% at 50% 8%, rgba(201, 168, 106, 0.05), transparent 74%),
+    var(--gradient-bg);
+}
+
+/* Gitternetz wie Patch: neutrales Weiss statt Gold */
+:root[data-theme="v2"] body::before {
+  background-image:
+    linear-gradient(rgba(255, 255, 255, 0.025) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(255, 255, 255, 0.025) 1px, transparent 1px);
+  opacity: 0.55;
+}
