@@ -698,6 +698,7 @@ async fn main() {
     // Raid-Verdrahtung: mit Manager + Helix + Krypto-Key sind alle vier
     // Raid-Kopplungen echt (Auto-Raid, Arrival, Score-Refresh, Blacklist-Guard).
     let suppression = Arc::new(std::sync::Mutex::new(ManualRaidSuppression::new()));
+    let chat_subscription_reconcile = Arc::new(tokio::sync::Notify::new());
     let mut manual_raid_port: Option<Arc<dyn tb_internal_api::ManualRaidPort>> = None;
     let mut raid_oauth_port: Option<Arc<dyn tb_internal_api::RaidOAuthPort>> = None;
     let mut poll_offline_raid_handler: Option<Arc<OfflineRaidHandler>> = None;
@@ -755,6 +756,7 @@ async fn main() {
                     client_id,
                     raid_redirect_uri.clone(),
                     partner_setup,
+                    Some(Arc::clone(&chat_subscription_reconcile)),
                 )
                 .with_requirements_relay(followup_relay);
                 raid_oauth_port = Some(Arc::new(raid_oauth_impl));
@@ -1118,7 +1120,10 @@ async fn main() {
                 supervisor.clone(),
             )
             .await;
-            runtime.start_background(subscription_manager.clone());
+            runtime.start_background(
+                subscription_manager.clone(),
+                Arc::clone(&chat_subscription_reconcile),
+            );
             // P2.14: einmaliger Eager-Partner-Invite-Backfill (inkl. 60s-Retry,
             // danach Ende). Spawnt selbst einen Task und kehrt sofort zurück;
             // NACH start_background, damit der Promo-Pfad parallel läuft.

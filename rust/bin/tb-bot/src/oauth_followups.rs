@@ -191,27 +191,45 @@ impl ModeratorInstallPort for HelixModeratorInstaller {
         broadcaster_id: &str,
         bot_user_id: &str,
         streamer_access_token: &str,
-    ) {
+    ) -> Result<(), String> {
         match self
             .helix
             .add_channel_moderator(broadcaster_id, bot_user_id, streamer_access_token)
             .await
         {
-            Ok(AddModeratorOutcome::Added) => tracing::info!(
-                "Bot (ID: {bot_user_id}) is now moderator in channel {broadcaster_id}"
-            ),
-            Ok(AddModeratorOutcome::AlreadyModerator) => tracing::info!(
-                "Bot (ID: {bot_user_id}) is already moderator in channel {broadcaster_id}"
-            ),
-            Ok(AddModeratorOutcome::BotBanned) => tracing::warn!(
-                "Bot (ID: {bot_user_id}) is banned in channel {broadcaster_id}; moderator setup skipped"
-            ),
-            Ok(AddModeratorOutcome::Failed { status, body }) => tracing::warn!(
-                "Failed to add bot as moderator in channel {broadcaster_id}: HTTP {status}: {body}"
-            ),
-            Err(e) => tracing::error!(
-                "Error adding bot as moderator in channel {broadcaster_id}: {e}"
-            ),
+            Ok(AddModeratorOutcome::Added) => {
+                tracing::info!(
+                    "Bot (ID: {bot_user_id}) is now moderator in channel {broadcaster_id}"
+                );
+                Ok(())
+            }
+            Ok(AddModeratorOutcome::AlreadyModerator) => {
+                tracing::info!(
+                    "Bot (ID: {bot_user_id}) is already moderator in channel {broadcaster_id}"
+                );
+                Ok(())
+            }
+            Ok(AddModeratorOutcome::BotBanned) => {
+                let error = format!(
+                    "Bot (ID: {bot_user_id}) is banned in channel {broadcaster_id}; moderator setup skipped"
+                );
+                tracing::warn!("{error}");
+                Err(error)
+            }
+            Ok(AddModeratorOutcome::Failed { status, body }) => {
+                let error = format!(
+                    "Failed to add bot as moderator in channel {broadcaster_id}: HTTP {status}: {body}"
+                );
+                tracing::warn!("{error}");
+                Err(error)
+            }
+            Err(e) => {
+                let error = format!(
+                    "Error adding bot as moderator in channel {broadcaster_id}: {e}"
+                );
+                tracing::error!("{error}");
+                Err(error)
+            }
         }
     }
 }

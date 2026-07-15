@@ -1,3 +1,11 @@
+## #372 — Nach der Anmeldung sofort einsatzbereit
+
+**Problem:** Wer den Raid-Bot mitten im Stream freigeschaltet hat, musste teils bis zu einer halben Stunde warten, bis der Bot im Chat wirklich zuhörte. In der Zeit passierte auf Befehle wie !raid einfach nichts, obwohl die Anmeldung längst durch war.
+
+**Änderung:** Sobald die Freischaltung durch ist, klinkt sich der Bot jetzt sofort in den Chat ein, statt auf das nächste turnusmäßige Fenster zu warten.
+
+**Aktuelles Verhalten:** Direkt nach der Autorisierung reagiert der Bot auf Chat-Befehle. Der automatische Raid beim Offlinegehen lief schon immer, jetzt zieht der manuelle Teil sofort nach.
+
 ## #371 — Logo in der Leiste, Rand-Blitzer weg
 
 **Problem:** Oben in der Navigationsleiste stand nur der Schriftzug, das Community-Logo fehlte. Außerdem blitzte beim Scrollen ein heller Rand um die Leiste auf, sobald sie ihren Glas-Hintergrund bekam.

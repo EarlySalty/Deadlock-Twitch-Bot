@@ -14,7 +14,7 @@ use sqlx::postgres::{PgConnectOptions, PgPoolOptions};
 use sqlx::PgPool;
 use tb_raid::partner_setup::{
     promote_streamer_to_partner, record_first_login, ChatGreeterPort, DiscordDirectoryPort,
-    ModeratorInstallPort, PartnerSetupService, PromotePartnerArgs,
+    ModeratorInstallPort, PartnerSetupError, PartnerSetupService, PromotePartnerArgs,
 };
 
 macro_rules! pool_or_skip {
@@ -593,6 +593,7 @@ struct Recorder {
     calls: Mutex<Vec<String>>,
     resolve_result: Option<String>,
     greeter_ok: bool,
+    moderator_error: Option<String>,
 }
 
 impl Recorder {
@@ -625,8 +626,12 @@ impl ModeratorInstallPort for Recorder {
         broadcaster_id: &str,
         bot_user_id: &str,
         _streamer_access_token: &str,
-    ) {
+    ) -> Result<(), String> {
         self.log(format!("mod:{broadcaster_id}:{bot_user_id}"));
+        match &self.moderator_error {
+            Some(error) => Err(error.clone()),
+            None => Ok(()),
+        }
     }
 }
 
@@ -717,7 +722,8 @@ async fn complete_setup_voller_ablauf() {
     let svc = service(pool.clone(), recorder.clone(), Some("botid"));
 
     svc.complete_setup_for_streamer("903", "vollkanal", "token-abc", None)
-        .await;
+        .await
+        .expect("vollständiges Setup");
 
     let calls = recorder.calls();
     assert!(
@@ -753,8 +759,14 @@ async fn complete_setup_ohne_bot_id_ueberspringt_mod_und_chat() {
     });
     let svc = service(pool.clone(), recorder.clone(), None);
 
-    svc.complete_setup_for_streamer("904", "kein_bot", "token", None)
+    let result = svc
+        .complete_setup_for_streamer("904", "kein_bot", "token", None)
         .await;
+
+    assert!(
+        result.is_ok(),
+        "erfolgreicher Partner-Sync bestimmt das Ergebnis"
+    );
 
     let calls = recorder.calls();
     assert!(
@@ -773,6 +785,36 @@ async fn complete_setup_ohne_bot_id_ueberspringt_mod_und_chat() {
 }
 
 #[tokio::test]
+async fn complete_setup_bleibt_bei_moderator_fehler_erfolgreich() {
+    let pool = pool_or_skip!("ps_mod_error");
+    let recorder = Arc::new(Recorder {
+        moderator_error: Some("keine Moderator-Rechte".to_string()),
+        ..Default::default()
+    });
+    let svc = service(pool, recorder, Some("botid"));
+
+    let result = svc
+        .complete_setup_for_streamer("907", "mod_fehler", "token", None)
+        .await;
+
+    assert!(
+        result.is_ok(),
+        "erfolgreicher Partner-Sync bestimmt das Ergebnis"
+    );
+}
+
+#[tokio::test]
+async fn complete_setup_gibt_partner_sync_fehler_zurueck() {
+    let pool = pool_or_skip!("ps_sync_error");
+    let recorder = Arc::new(Recorder::default());
+    let svc = service(pool, recorder, Some("botid"));
+
+    let result = svc.complete_setup_for_streamer("", "", "token", None).await;
+
+    assert!(matches!(result, Err(PartnerSetupError::InvalidIdentity)));
+}
+
+#[tokio::test]
 async fn greeter_nicht_verfuegbar_bricht_restliche_nachrichten_ab() {
     let pool = pool_or_skip!("ps_greeter_off");
     let recorder = Arc::new(Recorder {
@@ -782,7 +824,8 @@ async fn greeter_nicht_verfuegbar_bricht_restliche_nachrichten_ab() {
     let svc = service(pool.clone(), recorder.clone(), Some("botid"));
 
     svc.complete_setup_for_streamer("905", "stiller_kanal", "token", None)
-        .await;
+        .await
+        .expect("Moderator-Setup bleibt trotz fehlender Begrüßung erfolgreich");
 
     let chat_calls = recorder
         .calls()

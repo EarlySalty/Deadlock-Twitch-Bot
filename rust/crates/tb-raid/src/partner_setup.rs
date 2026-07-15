@@ -804,8 +804,7 @@ pub trait DiscordDirectoryPort: Send + Sync {
 
 /// Moderator-Einsetzung via Helix (Python `complete_setup` Schritt 4).
 /// Die Implementierung behandelt 200/204 (Erfolg), 422 und 400+"already a mod"
-/// (bereits Mod) sowie alle übrigen Fälle (Warning) selbst — kein Fehler nach
-/// außen (Python-Parität: nur Logging, kein Abbruch).
+/// als Erfolg. Alle übrigen Ausgänge werden geloggt und als Fehler geliefert.
 #[async_trait]
 pub trait ModeratorInstallPort: Send + Sync {
     async fn add_channel_moderator(
@@ -813,7 +812,7 @@ pub trait ModeratorInstallPort: Send + Sync {
         broadcaster_id: &str,
         bot_user_id: &str,
         streamer_access_token: &str,
-    );
+    ) -> Result<(), String>;
 }
 
 /// Chat-Nachricht in einen Partner-Kanal senden. Interim: Delegation an den
@@ -963,19 +962,19 @@ impl PartnerSetupService {
         twitch_login: &str,
         streamer_access_token: &str,
         state_discord_user_id: Option<&str>,
-    ) {
+    ) -> Result<(), PartnerSetupError> {
         tracing::info!("Completing setup for streamer {twitch_login} ({twitch_user_id})");
 
         // Schritt 1: Partner-State-Sync.
-        if let Err(e) = self
+        let partner_sync_result = self
             .sync_partner_state_after_auth(
                 twitch_user_id,
                 twitch_login,
                 state_discord_user_id,
                 true,
             )
-            .await
-        {
+            .await;
+        if let Err(e) = &partner_sync_result {
             tracing::error!("sync_partner_state_after_auth failed for {twitch_login}: {e}");
         }
 
@@ -988,11 +987,12 @@ impl PartnerSetupService {
             tracing::warn!(
                 "complete_setup: Keine Bot-ID verfügbar — Moderator-Setup und Begrüßung entfallen für {twitch_login}"
             );
-            return;
+            return partner_sync_result.map(|_| ());
         };
 
         // Schritt 4: Bot als Moderator einsetzen (Impl loggt alle Ausgänge).
-        self.moderator
+        let _ = self
+            .moderator
             .add_channel_moderator(twitch_user_id, bot_user_id, streamer_access_token)
             .await;
 
@@ -1034,6 +1034,7 @@ impl PartnerSetupService {
 
         // Schritt 6 (Python stream_went_live_fn): entfällt — der native
         // Poll-Loop (15 s) registriert stream.offline beim nächsten Tick.
+        partner_sync_result.map(|_| ())
     }
 }
 
