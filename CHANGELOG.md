@@ -1,3 +1,11 @@
+## #376 — Lurk-Befehl im Chat
+
+**Problem:** Wer nur zuschauen und gerade nichts schreiben wollte, hatte keine kurze Art, sich im Chat abzumelden.
+
+**Änderung:** Der Bot kennt jetzt !lurk. Wer das tippt, bekommt eine kurze Ansage, dass er in den Lurk geht.
+
+**Aktuelles Verhalten:** !lurk läuft in jedem Kanal des Bots, egal ob gerade Deadlock gestreamt wird oder nicht.
+
 ## #375 — Kacheln vereinheitlicht, echtes Tab-Logo
 
 **Problem:** Die vier Wochen-Kacheln auf der Übersicht waren deutlich größer als die Kacheln direkt darüber und mit auffälligen grünen Trendkurven versehen. Und im Browser-Tab klebte noch ein Platzhalter-Zeichen statt dem Community-Logo.

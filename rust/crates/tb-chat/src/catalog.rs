@@ -140,6 +140,13 @@ pub fn catalog() -> &'static [CommandInfo] {
             summary: "Prüft, ob der Bot gerade antwortet.",
         },
         CommandInfo {
+            name: "!lurk",
+            aliases: &[],
+            group: Fun,
+            deadlock_only: false,
+            summary: "Sagt dem Chat, dass du still weiter zuschaust.",
+        },
+        CommandInfo {
             name: "!engagement_ignore_me",
             aliases: &[],
             group: Fun,
