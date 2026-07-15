@@ -59,11 +59,11 @@ export function BanFeed() {
                       className="w-11 h-11 rounded-xl shrink-0 flex items-center justify-center"
                       style={{
                         background:
-                          "linear-gradient(135deg, rgba(201,168,106,0.22), rgba(85, 151, 143, 0.2))",
-                        border: "1px solid rgba(85, 151, 143, 0.24)",
+                          "linear-gradient(135deg, rgba(201,168,106,0.26), rgba(85, 151, 143, 0.34))",
+                        border: "1px solid rgba(85, 151, 143, 0.45)",
                       }}
                     >
-                      <Icon size={18} className="text-[var(--color-accent)]" />
+                      <Icon size={18} className="text-[var(--color-accent-hover)]" />
                     </div>
                     <div className="min-w-0 flex-1">
                       <p className="text-xs text-[var(--color-text-secondary)] uppercase tracking-wider">
