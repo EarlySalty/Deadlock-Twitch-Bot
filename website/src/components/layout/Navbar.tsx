@@ -51,12 +51,19 @@ export function Navbar() {
 
   return (
     <header
-      className={`fixed top-0 left-0 right-0 z-50 transition-all duration-300 ${glassy ? 'glass' : ''}`}
+      className={`fixed top-0 left-0 right-0 z-50 transition-all duration-300 ${glassy ? 'glass-bar' : ''}`}
     >
       <div className="max-w-[1440px] mx-auto px-6 flex justify-between items-center h-16 gap-4">
         {/* Logo */}
-        <span className="font-display font-bold text-lg bg-gradient-to-r from-primary to-accent bg-clip-text text-transparent select-none shrink-0">
-          Deutsche Deadlock Community
+        <span className="flex items-center gap-2.5 select-none shrink-0">
+          <img
+            src={`${import.meta.env.BASE_URL}brand/deadlock-d-logo.png`}
+            alt=""
+            className="h-8 w-8"
+          />
+          <span className="font-display font-bold text-lg bg-gradient-to-r from-primary to-accent bg-clip-text text-transparent">
+            Deutsche Deadlock Community
+          </span>
         </span>
 
         {/* Center nav – desktop only */}

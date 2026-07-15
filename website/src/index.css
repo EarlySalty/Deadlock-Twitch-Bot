@@ -190,6 +190,16 @@ h1, h2, h3, h4, .display-font {
   box-shadow: var(--shadow-card-soft);
 }
 
+/* Navbar-Variante von .glass: ohne Rundum-Border — die blitzte beim
+   Einscrollen als heller Rand um die Leiste auf. Trennung nur per Schatten. */
+.glass-bar {
+  background:
+    linear-gradient(180deg, rgba(239, 212, 157, 0.045) 0%, transparent 46%),
+    var(--color-card);
+  backdrop-filter: blur(16px);
+  box-shadow: 0 10px 30px rgba(0, 0, 0, 0.35);
+}
+
 /* Primary-Fläche: Gold auf Gold mit dunkler Schrift — der frühere Gold→Teal-Verlauf
    kippte in der Mitte nach Graugrün. Farbe hier statt in den Komponenten, damit
    jede Nutzung automatisch lesbaren Text bekommt. */
