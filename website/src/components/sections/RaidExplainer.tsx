@@ -357,7 +357,7 @@ export function RaidExplainer() {
                     <motion.div
                       key={step.title}
                       variants={rowVariants}
-                      className="bg-[#1c150d80] rounded-lg p-4 flex items-start gap-4"
+                      className="bg-[var(--color-card)] rounded-lg p-4 flex items-start gap-4"
                       style={{
                         border: "1px solid rgba(85, 151, 143, 0.35)",
                       }}
@@ -404,15 +404,15 @@ export function RaidExplainer() {
                   <div className="relative">
                     <AnimatedFlowLine />
                     <div className="relative z-10 flex flex-wrap items-center gap-2 text-[11px] font-semibold uppercase tracking-[0.12em] text-[var(--color-accent)]">
-                      <span className="bg-[#1c150dcc] px-2 py-0.5 rounded">
+                      <span className="bg-[rgba(16,11,7,0.85)] px-2 py-0.5 rounded">
                         Offline
                       </span>
                       <ArrowRight size={14} />
-                      <span className="bg-[#1c150dcc] px-2 py-0.5 rounded">
+                      <span className="bg-[rgba(16,11,7,0.85)] px-2 py-0.5 rounded">
                         Partner
                       </span>
                       <ArrowRight size={14} />
-                      <span className="bg-[#1c150dcc] px-2 py-0.5 rounded">
+                      <span className="bg-[rgba(16,11,7,0.85)] px-2 py-0.5 rounded">
                         Raid
                       </span>
                     </div>
