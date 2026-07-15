@@ -27,6 +27,7 @@ const FEEDBACK_SYNC_INTERVAL: Duration = Duration::from_secs(10 * 60);
 const JUDGE_COOLDOWN: Duration = Duration::from_secs(5 * 60);
 const RECONNECT_DELAY: Duration = Duration::from_secs(30);
 const SCOUT_COLOR: i64 = 0xC8_A8_6B;
+const OWNER_LOGIN: &str = "earlysalty";
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct IrcPrivmsg {
@@ -383,6 +384,7 @@ struct ScoutPitchRuntime {
     channels: HashMap<String, LiveScoutChannel>,
     windows: HashMap<String, VecDeque<ChatLine>>,
     last_judge: HashMap<String, Instant>,
+    owner_seen: HashMap<String, String>,
 }
 
 impl ScoutPitchRuntime {
@@ -429,6 +431,7 @@ impl ScoutPitchRuntime {
     }
 
     async fn handle_chat(&mut self, message: IrcPrivmsg) {
+        let is_owner = message.chatter == OWNER_LOGIN;
         let window = self.windows.entry(message.channel.clone()).or_default();
         window.push_back(ChatLine::new(message.chatter, message.text));
         while window.len() > 20 {
@@ -438,6 +441,10 @@ impl ScoutPitchRuntime {
         let Some(channel) = self.channels.get(&message.channel).cloned() else {
             return;
         };
+        if is_owner {
+            self.owner_seen
+                .insert(message.channel.clone(), channel.stream_key.clone());
+        }
         if self
             .last_judge
             .get(&message.channel)
@@ -551,6 +558,13 @@ impl ScoutPitchRuntime {
         .await;
     }
 
+    // ponytail: Stale stream keys are harmless because only the current stream key matches.
+    fn owner_present(&self, channel: &LiveScoutChannel) -> bool {
+        self.owner_seen
+            .get(&channel.login)
+            .is_some_and(|key| key == &channel.stream_key)
+    }
+
     #[allow(clippy::too_many_arguments)]
     async fn handle_trigger(
         &self,
@@ -583,6 +597,7 @@ impl ScoutPitchRuntime {
         let first = decide(&DecisionInput {
             trigger_type,
             blacklisted,
+            owner_present: self.owner_present(channel),
             cooldown_active: false,
             posted_for_stream: posted,
             judge,
@@ -644,6 +659,7 @@ impl ScoutPitchRuntime {
         match decide(&DecisionInput {
             trigger_type,
             blacklisted,
+            owner_present: self.owner_present(channel),
             cooldown_active: false,
             posted_for_stream: posted,
             judge,
@@ -902,6 +918,7 @@ pub fn spawn_scout_pitch_pipeline(
         channels: HashMap::new(),
         windows: HashMap::new(),
         last_judge: HashMap::new(),
+        owner_seen: HashMap::new(),
     };
     supervisor.spawn("scout_pitch_runtime", runtime.run(event_rx));
     supervisor.spawn(

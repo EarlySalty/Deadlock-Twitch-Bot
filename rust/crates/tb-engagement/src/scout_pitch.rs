@@ -42,6 +42,10 @@ impl TriggerType {
     pub const fn requires_pitch(self) -> bool {
         !matches!(self, Self::NewStreamer)
     }
+
+    pub const fn is_presence_greeting(self) -> bool {
+        matches!(self, Self::NewStreamer | Self::OfflineMoment)
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -79,6 +83,7 @@ pub enum JudgeState {
 pub struct DecisionInput {
     pub trigger_type: TriggerType,
     pub blacklisted: bool,
+    pub owner_present: bool,
     pub cooldown_active: bool,
     pub posted_for_stream: bool,
     pub judge: JudgeState,
@@ -99,6 +104,7 @@ pub enum LedgerAction {
     SuppressedBlacklist,
     SuppressedLowConfidence,
     SuppressedSanitizer,
+    SuppressedOwnerPresent,
     JudgeNone,
     JudgeError,
     JudgeTimeout,
@@ -106,13 +112,14 @@ pub enum LedgerAction {
 }
 
 impl LedgerAction {
-    pub const ALL: [Self; 10] = [
+    pub const ALL: [Self; 11] = [
         Self::Posted,
         Self::SuppressedCooldown,
         Self::SuppressedPerStreamLimit,
         Self::SuppressedBlacklist,
         Self::SuppressedLowConfidence,
         Self::SuppressedSanitizer,
+        Self::SuppressedOwnerPresent,
         Self::JudgeNone,
         Self::JudgeError,
         Self::JudgeTimeout,
@@ -127,6 +134,7 @@ impl LedgerAction {
             Self::SuppressedBlacklist => "suppressed_blacklist",
             Self::SuppressedLowConfidence => "suppressed_low_confidence",
             Self::SuppressedSanitizer => "suppressed_sanitizer",
+            Self::SuppressedOwnerPresent => "suppressed_owner_present",
             Self::JudgeNone => "judge_none",
             Self::JudgeError => "judge_error",
             Self::JudgeTimeout => "judge_timeout",
@@ -138,6 +146,10 @@ impl LedgerAction {
 pub fn decide(input: &DecisionInput) -> Decision {
     if input.blacklisted {
         return Decision::Record(LedgerAction::SuppressedBlacklist);
+    }
+    // Owner presence only suppresses the greeting/farewell gestures.
+    if input.owner_present && input.trigger_type.is_presence_greeting() {
+        return Decision::Record(LedgerAction::SuppressedOwnerPresent);
     }
     if input.posted_for_stream {
         return Decision::Record(LedgerAction::SuppressedPerStreamLimit);

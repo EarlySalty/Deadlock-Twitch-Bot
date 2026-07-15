@@ -10,6 +10,7 @@ fn input() -> DecisionInput {
     DecisionInput {
         trigger_type: TriggerType::SpamBots,
         blacklisted: false,
+        owner_present: false,
         cooldown_active: false,
         posted_for_stream: false,
         judge: JudgeState::Triggered { confidence: 0.9 },
@@ -39,6 +40,29 @@ fn decide_contract_covers_every_suppression_gate() {
         decide(&case),
         Decision::Record(LedgerAction::SuppressedBlacklist)
     );
+
+    let mut case = input();
+    case.owner_present = true;
+    case.trigger_type = TriggerType::NewStreamer;
+    case.judge = JudgeState::NotNeeded;
+    case.sanitized_message_count = 0;
+    assert_eq!(
+        decide(&case),
+        Decision::Record(LedgerAction::SuppressedOwnerPresent)
+    );
+
+    let mut case = input();
+    case.owner_present = true;
+    case.trigger_type = TriggerType::OfflineMoment;
+    case.judge = JudgeState::NotNeeded;
+    assert_eq!(
+        decide(&case),
+        Decision::Record(LedgerAction::SuppressedOwnerPresent)
+    );
+
+    let mut case = input();
+    case.owner_present = true;
+    assert_eq!(decide(&case), Decision::Post);
 
     let mut case = input();
     case.judge = JudgeState::Triggered { confidence: 0.69 };
