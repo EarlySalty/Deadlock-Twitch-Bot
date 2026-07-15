@@ -50,26 +50,19 @@
   opacity: 0.72;
 }
 
-/* Boxen (panel-card/glass) heben sich sonst kaum vom Schwarz ab: leichter
-   Gold-Schimmer oben + definiertere goldige Kante + tieferer Schatten,
-   damit die Karten "stehen" statt mit dem Grund zu verschwimmen. */
+/* Boxen mit mattem, dezentem Gold versetzen: flacher Gold-Film (kein
+   Verlauf-Schimmer = matt) ueber neutralem Dunkel, damit die Karten warm
+   getoent sind ohne ins alte Braun zu kippen. Gilt auch fuer die Stream-
+   Vorschau-Karten der Raid-Demo (.rd-twitch-embed, laeuft ueber --color-card).
+   Buttons (.gradient-accent) bewusst NICHT angefasst — die bleiben shiny gold. */
 :root[data-theme="v2"] .panel-card,
-:root[data-theme="v2"] .glass {
+:root[data-theme="v2"] .glass,
+:root[data-theme="v2"] .rd-twitch-embed {
   background:
-    linear-gradient(180deg, rgba(239, 212, 157, 0.06) 0%, transparent 44%),
-    rgba(20, 20, 20, 0.82);
-  border-color: rgba(239, 212, 157, 0.16);
-  box-shadow: 0 18px 44px rgba(0, 0, 0, 0.52), inset 0 1px 0 rgba(255, 255, 255, 0.045);
-}
-
-/* Hero-/Haupt-CTA (gradient-accent): mattes, satteres Gold statt Hochglanz-
-   Verlauf — kein heller #f6ddb0-Glanzstart, dafuer klare Kante + dunkler Text
-   = mehr Kontrast. Der Hover-Glow (inline) bleibt fuer den "wichtig"-Moment. */
-:root[data-theme="v2"] .gradient-accent {
-  background: linear-gradient(135deg, #d4b478 0%, #c8a86b 58%, #ad8c4c 100%);
-  color: #14100a;
-  border-color: rgba(239, 212, 157, 0.4);
-  box-shadow: 0 8px 22px rgba(0, 0, 0, 0.5);
+    linear-gradient(0deg, rgba(201, 168, 106, 0.05), rgba(201, 168, 106, 0.05)),
+    rgba(18, 18, 18, 0.86);
+  border-color: rgba(239, 212, 157, 0.18);
+  box-shadow: 0 14px 40px rgba(0, 0, 0, 0.5);
 }
 
 /* Clip-Rahmen: hardcoded brauner Inline-Gradient -> neutrales Schwarz, dazu
