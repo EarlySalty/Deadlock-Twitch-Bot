@@ -500,7 +500,9 @@ export function RaidDemo() {
         }
         .rd-live-badge {
           display: flex; align-items: center; gap: 5px;
-          background: #dd6a4d; color: #fff;
+          /* Twitch-Original-Rot: authentisch für die Player-Simulation und
+             leuchtender als das alte Terracotta. */
+          background: #eb0400; color: #fff;
           padding: 2px 8px; border-radius: 4px;
           font-size: 11px; font-weight: 700; letter-spacing: 1px;
           transition: opacity 0.4s;
