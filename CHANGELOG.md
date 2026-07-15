@@ -1,3 +1,11 @@
+## #371 — Logo in der Leiste, Rand-Blitzer weg
+
+**Problem:** Oben in der Navigationsleiste stand nur der Schriftzug, das Community-Logo fehlte. Außerdem blitzte beim Scrollen ein heller Rand um die Leiste auf, sobald sie ihren Glas-Hintergrund bekam.
+
+**Änderung:** Das D-Logo der Community steht jetzt links neben dem Schriftzug, dasselbe wie auf den anderen Seiten. Die eingescrollte Leiste trennt sich vom Inhalt nur noch über einen weichen Schatten, der helle Rahmen ist entfernt. Alte Platzhalter-Logos wurden aus dem Bestand entfernt.
+
+**Aktuelles Verhalten:** Beim Scrollen legt sich die Leiste sauber als mattes Glas über die Seite, ohne aufblitzende Kante, und die Marke ist oben immer sichtbar.
+
 ## #370 — Grün heißt wieder grün, rot heißt wieder rot
 
 **Problem:** Die Statusfarben auf der Streamer-Seite waren zu erdig gewählt. Das gedämpfte Grün der Flow-Schritte und das Terracotta der Banned-Marken im Live-Feed verschmolzen mit dem warmen Braun der Seite, Status war kaum noch als Status erkennbar.
