@@ -38,9 +38,10 @@
 @theme {
   --color-bg: #1c150d;
   --color-background: #241c11;
-  /* Karten heben sich vom Ink ab (warm + halbtransparent, wie dl-brand --bg-card). */
-  --color-card: rgba(59, 47, 30, 0.86);
-  --color-card-hover: rgba(74, 59, 38, 0.92);
+  /* Rauchglas: Karten deutlich transparenter, damit das Gold-Hinterlicht
+     durchscheint; Tiefe kommt aus backdrop-blur statt Deckkraft. */
+  --color-card: rgba(59, 47, 30, 0.60);
+  --color-card-hover: rgba(74, 59, 38, 0.70);
   --color-primary: #c8a86b;
   --color-primary-hover: #efd49d;
   --color-primary-soft: rgba(201, 168, 106, 0.20);
@@ -69,7 +70,8 @@
      Text zu Grau-Beige. Vier Stopps ergeben den Metall-Verlauf der Coaching-Seite. */
   --gradient-brand: linear-gradient(120deg, #f6ddb0 0%, #efd49d 28%, #c8a86b 66%, #a98746 100%);
   --gradient-dash: linear-gradient(135deg, #c8a86b, #55978f);
-  --gradient-bg: linear-gradient(180deg, #271f12 0%, #241c11 45%, #1c150d 100%);
+  /* Fast schwarz, warm getönt: Tiefe kommt aus den zwei Body-Glows, nicht aus dem Verlauf. */
+  --gradient-bg: linear-gradient(180deg, #17110a 0%, #110c07 45%, #0b0805 100%);
   --gradient-hero: linear-gradient(160deg, #1c150d 0%, #241c11 55%, #2c2318 100%);
   --shadow-card: 0 26px 70px rgba(0, 0, 0, 0.56), inset 0 1px 0 rgba(255, 255, 255, 0.025);
   --shadow-card-soft: 0 16px 45px rgba(0, 0, 0, 0.38), inset 0 1px 0 rgba(255, 255, 255, 0.02);
@@ -95,14 +97,11 @@ body {
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
   min-height: 100vh;
-  /* Gestapelte Glows statt flachem Verlauf: Gold von oben, Teal in die Flanken. */
+  /* Rauchglas-Hinterlicht: zwei riesige, extrem weiche Gold-Glows — sechs
+     gestapelte Mini-Glows addierten sich vorher zu einem flachen Schleier. */
   background:
-    radial-gradient(100% 60% at 50% -5%, rgba(201, 168, 106, 0.13), transparent 60%),
-    radial-gradient(70% 52% at 86% 32%, rgba(85, 151, 143, 0.095), transparent 72%),
-    radial-gradient(66% 44% at 12% 28%, rgba(85, 151, 143, 0.068), transparent 70%),
-    radial-gradient(72% 46% at 86% 86%, rgba(85, 151, 143, 0.055), transparent 74%),
-    radial-gradient(62% 42% at 8% 78%, rgba(85, 151, 143, 0.045), transparent 72%),
-    radial-gradient(72% 38% at 52% 98%, rgba(201, 168, 106, 0.046), transparent 76%),
+    radial-gradient(85% 65% at 50% 10%, rgba(201, 168, 106, 0.14), transparent 62%),
+    radial-gradient(75% 60% at 82% 80%, rgba(224, 145, 47, 0.07), transparent 70%),
     var(--gradient-bg);
   background-attachment: fixed;
   color: var(--color-text-primary);
@@ -213,7 +212,7 @@ h1, h2, h3, h4, .display-font {
     var(--color-card);
   border: 1px solid var(--color-border);
   box-shadow: var(--shadow-card-soft);
-  backdrop-filter: blur(8px);
+  backdrop-filter: blur(10px);
 }
 
 .panel-card::after {

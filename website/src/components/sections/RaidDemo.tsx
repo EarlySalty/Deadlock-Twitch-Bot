@@ -461,6 +461,7 @@ export function RaidDemo() {
           overflow: hidden;
           border: 1px solid var(--color-border);
           background: var(--color-card);
+          backdrop-filter: blur(10px);
           box-shadow: 0 4px 24px rgba(0,0,0,0.4);
         }
         .rd-player {
