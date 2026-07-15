@@ -25,6 +25,11 @@ const ALLOWED_HEX = new Set([
   // dunklen Toenen, deshalb bleiben beide Saetze erlaubt.)
   '#0d0806', '#140d0a', '#1a1210', '#16100d', '#1f1815', '#2a211b', '#3a2e25',
   '#1a1310', '#221a15', '#2a221c', '#362c23',
+  // Patch-Schwarz: /streamer-Flaechen (theme-v2.css) auf dashboard_v2 gespiegelt.
+  // Nur die Flaechen wurden neutral-schwarz; der Gold-Akzent oben bleibt.
+  '#0b0b0b', '#101010', '#0f0f0e', '#161616',
+  // Text auf Schwarz (heller als das warme #ede0c4, damit es auf #0b0b0b traegt).
+  '#f2eee6', '#9d968a',
   // Gold + Messing. Messing ist der CHROME-Akzent (Buttons, Icon-Kacheln, Auren).
   // Vorher stand dort Plasma-Blau — Chrome und Status trugen dieselbe Farbe, und
   // das Neon brach neben dem Gold. Plasma ist jetzt ausschliesslich Status.
@@ -33,6 +38,8 @@ const ALLOWED_HEX = new Set([
   '#241a12',
   // Plasma (Status + Chart-Serien)
   '#00ff88', '#00c46a', '#00d9ff', '#5ce7ff', '#0093ad',
+  // Mattes Status-Gruen (ersetzt Neon #00ff88 bei Score-Ring/Balken/Sparkline)
+  '#43b581',
   // Schmiedefeuer / heisses Eisen
   '#e8a33d', '#d98a33', '#ff5a3c', '#ffc9b8',
   // Pergament + Tinten + Text

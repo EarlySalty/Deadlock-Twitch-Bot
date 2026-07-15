@@ -340,12 +340,24 @@ impl AvatarCache {
         }
 
         let value = match self.helix.get_users(&[&login]).await {
-            Ok(users) => users
-                .get(&login)
-                .and_then(|user| user.profile_image_url.as_deref())
-                .map(str::trim)
-                .filter(|url| !url.is_empty())
-                .map(str::to_string),
+            Ok(users) => {
+                let url = users
+                    .get(&login)
+                    .and_then(|user| user.profile_image_url.as_deref())
+                    .map(str::trim)
+                    .filter(|url| !url.is_empty())
+                    .map(str::to_string);
+                if url.is_none() {
+                    // Silent-failure sichtbar: Helix antwortete, lieferte aber kein Bild.
+                    tracing::warn!(
+                        twitch_login = %login,
+                        users_returned = users.len(),
+                        login_found = users.contains_key(&login),
+                        "Twitch-Profilbild leer trotz erfolgreicher get_users-Antwort"
+                    );
+                }
+                url
+            }
             Err(error) => {
                 tracing::warn!(%error, twitch_login = %login, "Twitch-Profilbild nicht abrufbar");
                 None
@@ -628,8 +640,16 @@ pub async fn get_handler(
         identity_block(&pool, &identity.twitch_login, &identity.twitch_user_id).await;
     let avatar_url = match avatar_cache {
         Some(Extension(cache)) => cache.profile_image_url(&resolved_login).await,
-        None => None,
+        None => {
+            tracing::warn!("AvatarCache-Extension nicht registriert (from_env war None)");
+            None
+        }
     };
+    tracing::info!(
+        twitch_login = %resolved_login,
+        avatar_present = avatar_url.is_some(),
+        "internal-home: Avatar-Aufloesung"
+    );
 
     let generated_at = Utc::now().to_rfc3339();
     let since: DateTime<Utc> = Utc::now() - Duration::days(days);
@@ -2458,7 +2478,11 @@ async fn personal_bests_block(pool: &PgPool, login: &str) -> Value {
         UNION ALL
         SELECT 'longest_stream_seconds', ranked.duration_seconds::bigint, NULL::float8,
                ranked.started_at, ranked.stream_title
-        FROM (SELECT * FROM sessions WHERE duration_seconds IS NOT NULL
+        FROM (SELECT * FROM sessions
+              WHERE duration_seconds IS NOT NULL
+                -- ponytail: >7 Tage = Datenmuell (duration_seconds als Unix-Epoch ~1.78e9
+                -- statt Dauer); 7 Tage laesst reale Subathons zu. Cap anheben wenn noetig.
+                AND duration_seconds BETWEEN 0 AND 604800
               ORDER BY duration_seconds DESC, started_at DESC LIMIT 1) ranked
     "#;
 

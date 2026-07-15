@@ -16,10 +16,12 @@
 @theme {
   /* Grundtoene: eine Stufe heller als vorher. Die Kachel hob sich nur ~4% vom Grund ab,
      dadurch verschmolz die Seite zu einem schwarzen Block. Jetzt liest man die Kanten. */
-  --color-bg: #1A1310;
-  --color-background: #221A15;
-  --color-card: #2A221C;
-  --color-card-hover: #362C23;
+  /* Patch-Schwarz (#0b0b0b / #101010 / #161616), abgestimmt auf website/theme-v2.css.
+     Nur die Flaechen sind schwarz; der Gold-Akzent (--color-primary) bleibt. */
+  --color-bg: #0b0b0b;
+  --color-background: #101010;
+  --color-card: rgba(20, 20, 20, 0.82);
+  --color-card-hover: rgba(32, 32, 32, 0.88);
   --color-primary: #C5A059;
   --color-primary-hover: #F1D299;
   --color-primary-soft: rgba(197, 160, 89, 0.20);
@@ -32,24 +34,25 @@
   --color-orange-hover: #F1D299;
   --color-teal: #00D9FF;
   --color-teal-hover: #5CE7FF;
-  --color-success: #00FF88;
+  /* Status-Gruen: mattes Smaragd statt Neon (#00FF88 leuchtet auf Schwarz zu grell). */
+  --color-success: #43b581;
   --color-warning: #E8A33D;
   --color-danger: #FF5A3C;
   --color-error: #FF5A3C;
   --color-info: #00D9FF;
-  --color-success-soft: rgba(0, 255, 136, 0.15);
+  --color-success-soft: rgba(67, 181, 129, 0.15);
   --color-warning-soft: rgba(232, 163, 61, 0.15);
   --color-danger-soft: rgba(255, 90, 60, 0.15);
-  --color-secondary: #B5A488;
-  --color-text-primary: #EDE0C4;
-  --color-text-secondary: #B5A488;
+  --color-secondary: #9d968a;
+  --color-text-primary: #f2eee6;
+  --color-text-secondary: #9d968a;
   /* Tinte fuer helle Gold-/Messingflaechen. Weiss auf Gold liegt bei ~1.8:1 und ist
      unlesbar — auf Metall wird mit dunkler Tinte geschrieben. */
   --color-on-gold: #241A12;
-  --color-border: rgba(197, 160, 89, 0.24);
-  --color-border-strong: rgba(197, 160, 89, 0.52);
-  --color-border-hover: rgba(197, 160, 89, 0.42);
-  --color-popover: #2A221C;
+  --color-border: rgba(239, 212, 157, 0.22);
+  --color-border-strong: rgba(239, 212, 157, 0.40);
+  --color-border-hover: rgba(239, 212, 157, 0.34);
+  --color-popover: #161616;
   --font-sans: "Manrope", "Segoe UI", sans-serif;
   --font-display: "Sora", "Manrope", sans-serif;
   /* KPI-Zahlen: geometrische Grotesk (Outfit) fuer markante Key-Performance-
@@ -57,8 +60,8 @@
   --font-kpi: "Outfit", "Sora", "Manrope", sans-serif;
   --gradient-brand: linear-gradient(120deg, #F1D299 10%, #C5A059 55%, #9A7C42);
   --gradient-dash: linear-gradient(135deg, #C5A059, #E0BE86);
-  --gradient-bg: linear-gradient(160deg, #221A15 0%, #1A1310 55%, #221A15 100%);
-  --gradient-hero: linear-gradient(160deg, #1A1310 0%, #221A15 55%, #2A221C 100%);
+  --gradient-bg: linear-gradient(180deg, #0f0f0e 0%, #0b0b0b 55%, #101010 100%);
+  --gradient-hero: linear-gradient(160deg, #0b0b0b 0%, #101010 55%, #161616 100%);
   --shadow-primary-glow: 0 12px 28px rgba(197, 160, 89, 0.22);
   --shadow-primary-glow-hover: 0 16px 36px rgba(197, 160, 89, 0.35), 0 0 20px rgba(197, 160, 89, 0.12);
 }
@@ -329,7 +332,7 @@ svg.icon-duotone {
     160deg,
     rgba(224, 190, 134, 0.16) 0%,
     rgba(197, 160, 89, 0.12) 45%,
-    rgba(34, 26, 21, 0.94) 100%
+    rgba(17, 17, 17, 0.94) 100%
   );
 }
 
@@ -352,7 +355,7 @@ svg.icon-duotone {
 
 /* Soft variant: deutlich gedaempftes Glow, fuer Cards wo der Glow sonst ueberstrahlt */
 .card-glow-soft {
-  background: linear-gradient(160deg, rgba(42, 34, 28, 0.94) 0%, rgba(34, 26, 21, 0.94) 100%);
+  background: linear-gradient(160deg, rgba(28, 28, 28, 0.94) 0%, rgba(17, 17, 17, 0.94) 100%);
 }
 
 .card-glow-soft::before {
@@ -643,11 +646,11 @@ svg.icon-duotone {
     radial-gradient(1380px 700px at 50% 50%, rgba(197, 160, 89, 0.20), transparent 76%),
     radial-gradient(
       155% 145% at 50% 50%,
-      rgba(26, 19, 16, 0) 54%,
-      rgba(26, 19, 16, 0.44) 86%,
-      rgba(26, 19, 16, 0.72) 100%
+      rgba(11, 11, 11, 0) 54%,
+      rgba(11, 11, 11, 0.44) 86%,
+      rgba(11, 11, 11, 0.72) 100%
     ),
-    linear-gradient(180deg, rgba(26, 19, 16, 0.12) 0%, rgba(26, 19, 16, 0.05) 40%, rgba(26, 19, 16, 0.32) 100%);
+    linear-gradient(180deg, rgba(11, 11, 11, 0.12) 0%, rgba(11, 11, 11, 0.05) 40%, rgba(11, 11, 11, 0.32) 100%);
   background-repeat: no-repeat;
   background-size: 145% 145%, 145% 145%, 165% 165%, 100% 100%, 100% 100%;
   mix-blend-mode: normal;
@@ -665,11 +668,11 @@ svg.icon-duotone {
     radial-gradient(1380px 700px at 50% 50%, rgba(197, 160, 89, 0.18), transparent 76%),
     radial-gradient(
       155% 145% at 50% 50%,
-      rgba(26, 19, 16, 0) 54%,
-      rgba(26, 19, 16, 0.42) 86%,
-      rgba(26, 19, 16, 0.7) 100%
+      rgba(11, 11, 11, 0) 54%,
+      rgba(11, 11, 11, 0.42) 86%,
+      rgba(11, 11, 11, 0.7) 100%
     ),
-    linear-gradient(180deg, rgba(26, 19, 16, 0.1) 0%, rgba(26, 19, 16, 0.05) 40%, rgba(26, 19, 16, 0.3) 100%);
+    linear-gradient(180deg, rgba(11, 11, 11, 0.1) 0%, rgba(11, 11, 11, 0.05) 40%, rgba(11, 11, 11, 0.3) 100%);
   background-repeat: repeat, repeat, no-repeat, no-repeat, no-repeat, no-repeat, no-repeat;
   background-size:
     44px 44px,
@@ -730,7 +733,7 @@ svg.icon-duotone {
 
 .internal-home-stream:hover {
   border-color: var(--color-border-hover);
-  background: rgba(42, 34, 28, 0.7);
+  background: rgba(28, 28, 28, 0.7);
 }
 
 .internal-home-quick-action {
@@ -758,7 +761,7 @@ svg.icon-duotone {
   isolation: isolate;
   background:
     radial-gradient(circle at top right, rgba(255, 255, 255, 0.08), transparent 38%),
-    linear-gradient(160deg, rgba(42, 34, 28, 0.96) 0%, rgba(34, 26, 21, 0.92) 100%);
+    linear-gradient(160deg, rgba(28, 28, 28, 0.96) 0%, rgba(17, 17, 17, 0.92) 100%);
   transition: transform 180ms ease, border-color 180ms ease, box-shadow 180ms ease;
 }
 
@@ -788,13 +791,13 @@ svg.icon-duotone {
   border-color: rgba(232, 163, 61, 0.36);
   box-shadow:
     inset 0 0 0 1px rgba(232, 163, 61, 0.08),
-    0 16px 30px rgba(26, 19, 16, 0.18);
+    0 16px 30px rgba(11, 11, 11, 0.18);
 }
 
 .internal-home-log-card:hover {
   transform: translateY(-3px);
   border-color: var(--color-border-hover);
-  box-shadow: 0 18px 32px rgba(26, 19, 16, 0.24);
+  box-shadow: 0 18px 32px rgba(11, 11, 11, 0.24);
 }
 
 .internal-home-changelog-entry {
@@ -804,7 +807,7 @@ svg.icon-duotone {
 .internal-home-changelog-entry:hover {
   transform: translateY(-2px);
   border-color: var(--color-border-hover);
-  background: rgba(42, 34, 28, 0.78);
+  background: rgba(28, 28, 28, 0.78);
 }
 
 @media (min-width: 900px) {
