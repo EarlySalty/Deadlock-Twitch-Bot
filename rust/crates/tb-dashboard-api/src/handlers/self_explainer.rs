@@ -292,7 +292,7 @@ async fn minimax_generate(facts: &str, question_clean: &str) -> Option<String> {
         name: None,
     }];
     match client
-        .generate(
+        .generate_answer(
             &build_system_prompt(facts),
             &history,
             ANSWER_TOKEN_CEILING,
@@ -304,7 +304,10 @@ async fn minimax_generate(facts: &str, question_clean: &str) -> Option<String> {
             .text
             .map(|t| t.trim().to_string())
             .filter(|t| !t.is_empty()),
-        Err(_) => None,
+        Err(e) => {
+            tracing::warn!(error = %e, "self_explainer: MiniMax-Generierung fehlgeschlagen");
+            None
+        }
     }
 }
 
@@ -328,6 +331,17 @@ async fn answer_question(kb: &KnowledgeBase, question: &str) -> SelfExplainerAns
 
     let grounding = assemble_grounding(&hits);
     let generated = minimax_generate(&grounding.facts, &q_clean).await;
+    match generated.as_deref() {
+        None => tracing::warn!(
+            hits = hits.len(),
+            facts_len = grounding.facts.len(),
+            "self_explainer: Modellausgabe leer; Fallback wird verwendet"
+        ),
+        Some(t) if output_unusable(t) => {
+            tracing::warn!(preview = %t.chars().take(120).collect::<String>(), "self_explainer: Modellausgabe unbrauchbar; Fallback wird verwendet")
+        }
+        Some(t) => tracing::info!(len = t.len(), "self_explainer: Modellausgabe akzeptiert"),
+    }
     let mut answer = evaluate_answer(q, generated.as_deref());
     if answer.grounded {
         answer.sources = grounding.sources;
@@ -568,12 +582,15 @@ pub async fn self_explainer_ask(
     .await
     {
         Ok(r) => r,
-        Err(_) => SelfExplainerAnswer {
-            answer: FALLBACK_UNSURE.to_string(),
-            grounded: false,
-            flagged_injection: false,
-            sources: Vec::new(),
-        },
+        Err(e) => {
+            tracing::warn!(error = %e, "self_explainer: MiniMax-Generierung wegen Zeitlimit abgebrochen");
+            SelfExplainerAnswer {
+                answer: FALLBACK_UNSURE.to_string(),
+                grounded: false,
+                flagged_injection: false,
+                sources: Vec::new(),
+            }
+        }
     };
 
     // Best-effort-Logging: DB-Insert awaiten (Fehler schlucken), Discord-Relay
@@ -773,5 +790,28 @@ mod tests {
             build_discord_embed("q", &fallback, "x")["color"],
             COLOR_GOLD
         );
+    }
+
+    #[test]
+    fn minimax_fehlerpfade_werden_geloggt() {
+        let production = include_str!("self_explainer.rs")
+            .split("// ── Tests")
+            .next()
+            .expect("Produktionscode steht vor dem Testmodul");
+        let minimax = production
+            .split("async fn minimax_generate")
+            .nth(1)
+            .and_then(|source| source.split("async fn answer_question").next())
+            .expect("minimax_generate ist vorhanden");
+        let timeout = production
+            .split("let result = match tokio::time::timeout")
+            .nth(1)
+            .and_then(|source| source.split("// Best-effort-Logging").next())
+            .expect("Timeout-Behandlung ist vorhanden");
+
+        assert!(!minimax.contains("Err(_) => None"));
+        assert!(minimax.contains("MiniMax-Generierung fehlgeschlagen"));
+        assert!(!timeout.contains("Err(_) => SelfExplainerAnswer"));
+        assert!(timeout.contains("MiniMax-Generierung wegen Zeitlimit abgebrochen"));
     }
 }

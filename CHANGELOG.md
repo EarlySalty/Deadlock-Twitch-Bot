@@ -1,3 +1,11 @@
+## #373 — FAQ-Box auf der Streamer-Seite antwortet wieder
+
+**Problem:** Die Frage-Box auf der Streamer-Seite gab auf jede Frage nur die Ausweichantwort "das kann ich dir hier nicht sicher sagen", egal was man fragte. Echte Antworten kamen gar nicht mehr durch.
+
+**Änderung:** Zwei Ursachen behoben. Das Sprachmodell dahinter war auf eine Variante umgestellt, die intern nur nachdachte statt zu antworten. Zusätzlich lief die fertige Antwort durch eine Längengrenze, die eigentlich für kurze Chat-Nachrichten gedacht ist und alles über zwei Sätze verwarf.
+
+**Aktuelles Verhalten:** Die Box beantwortet Fragen zum Bot wieder mit echten, ausführlichen Antworten samt Quellen. Deckt die Doku eine Frage nicht ab, sagt sie das ehrlich, statt einfach zu schweigen.
+
 ## #372 — Nach der Anmeldung sofort einsatzbereit
 
 **Problem:** Wer den Raid-Bot mitten im Stream freigeschaltet hat, musste teils bis zu einer halben Stunde warten, bis der Bot im Chat wirklich zuhörte. In der Zeit passierte auf Befehle wie !raid einfach nichts, obwohl die Anmeldung längst durch war.
