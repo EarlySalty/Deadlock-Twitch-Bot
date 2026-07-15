@@ -19,7 +19,7 @@
 //! `self.writer`) läuft hier **ein** Task mit `tokio::select!` über Read vs.
 //! Refresh-Tick — der Task besitzt die Stream-Hälften exklusiv (kein Mutex).
 
-use std::collections::{HashMap, HashSet};
+use std::collections::HashSet;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -28,9 +28,9 @@ use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::net::tcp::{OwnedReadHalf, OwnedWriteHalf};
 use tokio::net::TcpStream;
 
+use crate::irc_message::{build_incoming, parse_privmsg};
 use crate::pipeline::EngagementPipeline;
 use crate::sender_auth::SENDER_LOGIN;
-use crate::types::IncomingMessage;
 
 const IRC_HOST: &str = "irc.chat.twitch.tv";
 const IRC_PORT: u16 = 6667;
@@ -38,25 +38,6 @@ const ANON_NICK: &str = "justinfan13371337";
 const CHANNEL_REFRESH_SECONDS: u64 = 300;
 const CONNECT_BACKOFF_SECONDS: u64 = 30;
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
-
-/// Known-Chat-Bots (chat_bots.py Z. 8–19 `KNOWN_CHAT_BOTS`). Lokale Kopie wie in
-/// tb-chat/tb-dashboard-api — der Reader hängt nicht an der Chat-Crate.
-const KNOWN_CHAT_BOTS: &[&str] = &[
-    "botrix",
-    "deutschedeadlockcommunity",
-    "fossabot",
-    "moobot",
-    "nightbot",
-    "pretzelrocks",
-    "soundalerts",
-    "streamlabs",
-    "streamelements",
-    "wizebot",
-];
-
-fn is_known_chat_bot(login: &str) -> bool {
-    KNOWN_CHAT_BOTS.contains(&login)
-}
 
 /// Fügt die `irc_read`-Spalte lazy hinzu (kein Eingriff in den Settings-Flow).
 async fn ensure_schema(pool: &PgPool) {
@@ -83,94 +64,6 @@ async fn load_irc_channels(pool: &PgPool) -> HashSet<String> {
     .map(|c| c.trim().to_lowercase())
     .filter(|c| !c.is_empty())
     .collect()
-}
-
-/// Parst die IRCv3-Tags (`key=value;key2=value2`).
-fn parse_tags(raw: &str) -> HashMap<String, String> {
-    let mut out = HashMap::new();
-    for kv in raw.split(';') {
-        if let Some((key, value)) = kv.split_once('=') {
-            out.insert(key.to_string(), value.to_string());
-        }
-    }
-    out
-}
-
-/// Eine geparste PRIVMSG-Zeile: Tags + Absender + Kanal + Text.
-struct ParsedPrivmsg {
-    tags: HashMap<String, String>,
-    login: String,
-    channel: String,
-    text: String,
-}
-
-/// Zerlegt eine IRC-Zeile in eine PRIVMSG, falls es eine ist (sonst `None`).
-/// Format mit optionalem Tag-Präfix:
-/// `@tags :nick!user@host PRIVMSG #channel :text`.
-fn parse_privmsg(line: &str) -> Option<ParsedPrivmsg> {
-    let (tags, rest) = if let Some(stripped) = line.strip_prefix('@') {
-        let (tag_part, rest) = stripped.split_once(' ')?;
-        (parse_tags(tag_part), rest)
-    } else {
-        (HashMap::new(), line)
-    };
-
-    // :nick!user@host PRIVMSG #channel :text
-    let rest = rest.strip_prefix(':')?;
-    let (prefix, after) = rest.split_once(' ')?;
-    let login = prefix.split('!').next()?.to_string();
-    let after = after.strip_prefix("PRIVMSG #")?;
-    let (channel, text) = after.split_once(' ')?;
-    let text = text.strip_prefix(':')?;
-    Some(ParsedPrivmsg {
-        tags,
-        login,
-        channel: channel.to_string(),
-        text: text.to_string(),
-    })
-}
-
-/// Baut aus einer geparsten PRIVMSG die [`IncomingMessage`] — oder `None`,
-/// wenn übersprungen werden soll (leer, eigener
-/// Account, bekannter Bot, fehlende room-id/user-id). Pure (ohne I/O testbar).
-fn build_incoming(parsed: &ParsedPrivmsg, self_login: &str) -> Option<IncomingMessage> {
-    let login = parsed.login.trim().to_lowercase();
-    let channel = parsed.channel.trim().to_lowercase();
-    let text = parsed.text.trim().to_string();
-    if login.is_empty() || channel.is_empty() || text.is_empty() {
-        return None;
-    }
-    // Eigene Nachrichten und bekannte Bots ignorieren (keine Selbst-Antwort-Loops).
-    if login == self_login || is_known_chat_bot(&login) {
-        return None;
-    }
-    let room_id = parsed
-        .tags
-        .get("room-id")
-        .map(|s| s.trim())
-        .unwrap_or("")
-        .to_string();
-    let user_id = parsed
-        .tags
-        .get("user-id")
-        .map(|s| s.trim())
-        .unwrap_or("")
-        .to_string();
-    if room_id.is_empty() || user_id.is_empty() {
-        return None;
-    }
-    let message_id = parsed
-        .tags
-        .get("id")
-        .map(|s| s.trim().to_string())
-        .filter(|s| !s.is_empty());
-    Some(IncomingMessage {
-        channel_login: channel,
-        twitch_user_id: user_id,
-        twitch_login: login,
-        content: text,
-        message_id,
-    })
 }
 
 /// Anonymer IRC-Reader, der Chat in die Engagement-Pipeline speist.
@@ -361,6 +254,7 @@ fn sorted(channels: &HashSet<String>) -> Vec<&String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::irc_message::parse_tags;
 
     #[test]
     fn tags_parse() {
