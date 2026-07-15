@@ -48,13 +48,15 @@
   --color-accent: #55978f;
   --color-accent-hover: #6fb3aa;
   --color-accent-soft: rgba(85, 151, 143, 0.20);
-  --color-success: #3fa66b;
+  /* Status darf leuchten (Chrome bleibt Gold): die alten Erdtöne
+     (#3fa66b Waldgrün, #dd6a4d Terracotta) soffen im warmen Braunglas ab. */
+  --color-success: #46c07b;
   --color-warning: #e0912f;
-  --color-danger: #dd6a4d;
+  --color-danger: #ff7a5c;
   --color-info: #55978f;
-  --color-success-soft: rgba(63, 166, 107, 0.15);
+  --color-success-soft: rgba(70, 192, 123, 0.16);
   --color-warning-soft: rgba(224, 145, 47, 0.15);
-  --color-danger-soft: rgba(221, 106, 77, 0.15);
+  --color-danger-soft: rgba(255, 122, 92, 0.17);
   --color-secondary: #b7aa91;
   --color-text-primary: #ece0c8;
   --color-text-secondary: #b7aa91;

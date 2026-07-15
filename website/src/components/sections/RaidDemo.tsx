@@ -204,7 +204,7 @@ export function RaidDemo() {
     function spawnConfetti(originX: number, originY: number, count: number) {
       const container = middleAreaRef.current
       if (!container) return
-      const colors = ['#c8a86b', '#55978f', '#e0912f', '#55978f', '#3fa66b', '#dd6a4d']
+      const colors = ['#c8a86b', '#55978f', '#e0912f', '#55978f', '#46c07b', '#ff7a5c']
       for (let i = 0; i < count; i++) {
         const c = document.createElement('div')
         const color = colors[Math.floor(Math.random() * colors.length)]
@@ -617,7 +617,7 @@ export function RaidDemo() {
         }
         .rd-final-text {
           font-size: 14px; font-weight: 700;
-          color: #3fa66b; text-align: center;
+          color: var(--color-success); text-align: center;
           transition: opacity 0.4s;
         }
         .rd-energy-beam {
@@ -651,9 +651,9 @@ export function RaidDemo() {
           color: var(--color-primary);
         }
         .rd-pill-done {
-          background: rgba(63, 166, 107,0.1);
-          border-color: #3fa66b;
-          color: #3fa66b;
+          background: var(--color-success-soft);
+          border-color: var(--color-success);
+          color: var(--color-success);
         }
         .rd-pill-active-raid {
           background: rgba(85, 151, 143, 0.15);
@@ -662,9 +662,9 @@ export function RaidDemo() {
           animation: rd-glow-pulse 1s infinite alternate;
         }
         .rd-pill-active-success {
-          background: rgba(63, 166, 107,0.2);
-          border-color: #3fa66b;
-          color: #3fa66b;
+          background: var(--color-success-soft);
+          border-color: var(--color-success);
+          color: var(--color-success);
           animation: rd-bounce-in 0.4s cubic-bezier(0.4,0,0.2,1);
         }
         .rd-pill-arrow {

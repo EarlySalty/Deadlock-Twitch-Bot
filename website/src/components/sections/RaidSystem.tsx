@@ -136,7 +136,7 @@ export function RaidSystem() {
                       className="bg-[var(--color-card)] rounded-lg p-4 flex items-start gap-4"
                       style={{
                         border: step.highlight
-                          ? "1px solid rgba(85, 151, 143, 0.35)"
+                          ? "1px solid rgba(85, 151, 143, 0.55)"
                           : "1px solid var(--color-border)",
                       }}
                     >
@@ -144,10 +144,10 @@ export function RaidSystem() {
                         className="w-11 h-11 rounded-xl shrink-0 flex items-center justify-center"
                         style={{
                           background: step.highlight
-                            ? "linear-gradient(135deg, rgba(201,168,106,0.22), rgba(85, 151, 143, 0.2))"
+                            ? "linear-gradient(135deg, rgba(201,168,106,0.26), rgba(85, 151, 143, 0.34))"
                             : "rgba(183, 170, 145,0.08)",
                           border: step.highlight
-                            ? "1px solid rgba(85, 151, 143, 0.24)"
+                            ? "1px solid rgba(85, 151, 143, 0.45)"
                             : "1px solid rgba(183, 170, 145,0.12)",
                         }}
                       >
@@ -155,7 +155,7 @@ export function RaidSystem() {
                           size={18}
                           className={
                             step.highlight
-                              ? "text-[var(--color-accent)]"
+                              ? "text-[var(--color-accent-hover)]"
                               : "text-[var(--color-text-secondary)]"
                           }
                         />
@@ -177,7 +177,7 @@ export function RaidSystem() {
                   variants={rowVariants}
                   className="rounded-xl p-4"
                   style={{
-                    border: "1px solid rgba(85, 151, 143, 0.2)",
+                    border: "1px solid rgba(85, 151, 143, 0.35)",
                     background:
                       "linear-gradient(135deg, rgba(201,168,106,0.1), rgba(85, 151, 143, 0.08))",
                   }}

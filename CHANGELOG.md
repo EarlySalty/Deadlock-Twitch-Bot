@@ -1,3 +1,11 @@
+## #370 — Grün heißt wieder grün, rot heißt wieder rot
+
+**Problem:** Die Statusfarben auf der Streamer-Seite waren zu erdig gewählt. Das gedämpfte Grün der Flow-Schritte und das Terracotta der Banned-Marken im Live-Feed verschmolzen mit dem warmen Braun der Seite, Status war kaum noch als Status erkennbar.
+
+**Änderung:** Grün und Rot sind jetzt kräftige, leuchtende Töne, und die türkisen Rahmen und Icon-Flächen in den Info-Boxen wurden deutlich angehoben. Die goldene Grundstimmung der Seite bleibt unverändert, nur Statusinformationen dürfen jetzt herausstechen.
+
+**Aktuelles Verhalten:** Im Live-Ban-Feed springen die Banned-Marken sofort ins Auge, in der Raid-Übersicht sind aktive und erledigte Schritte auf einen Blick unterscheidbar.
+
 ## #369 — Rauchglas mit goldenem Hinterlicht
 
 **Problem:** Der Hintergrund der Streamer-Seite wirkte flach. Viele kleine, übereinander gelegte Leuchtflecken addierten sich zu einem gleichmäßigen Schleier, und die Karten lagen als fast deckende Flächen darauf.
