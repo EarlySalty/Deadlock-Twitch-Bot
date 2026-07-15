@@ -196,6 +196,14 @@ h1, h2, h3, h4, .display-font {
   border: 1px solid #efd49d;
 }
 
+/* Icon-Kacheln: gedeckte Goldfläche mit goldenem Icon — volle Goldflächen
+   bleiben den CTAs vorbehalten, sonst konkurriert jede Kachel mit dem Anker. */
+.icon-tile {
+  background: var(--color-primary-soft);
+  border: 1px solid var(--color-border);
+  color: var(--color-primary);
+}
+
 .panel-card {
   position: relative;
   overflow: hidden;

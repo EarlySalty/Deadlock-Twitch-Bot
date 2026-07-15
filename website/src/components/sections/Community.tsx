@@ -16,7 +16,7 @@ function CommunityCard({ icon, title, description, delay = 0 }: CommunityCardPro
   return (
     <ScrollReveal delay={delay}>
       <div className="panel-card rounded-xl p-6 flex items-start gap-4 h-full">
-        <div className="w-10 h-10 rounded-lg gradient-accent flex items-center justify-center shrink-0">
+        <div className="w-10 h-10 rounded-lg icon-tile flex items-center justify-center shrink-0">
           {icon}
         </div>
         <div>
@@ -44,25 +44,25 @@ export function Community() {
 
         <div className="grid grid-cols-1 md:grid-cols-2 gap-6 mt-16">
           <CommunityCard
-            icon={<Trophy size={20} className="text-white" />}
+            icon={<Trophy size={20} />}
             title="Leaderboard"
             description="Automatisches Ranking basierend auf Watch-Time, Aktivität und Treue"
             delay={0}
           />
           <CommunityCard
-            icon={<Link size={20} className="text-white" />}
+            icon={<Link size={20} />}
             title="Discord-Integration"
             description="Nahtlose Verbindung zwischen Twitch-Chat und Discord-Server"
             delay={0.1}
           />
           <CommunityCard
-            icon={<Award size={20} className="text-white" />}
+            icon={<Award size={20} />}
             title="Rollen-System"
             description="Automatische Rollenvergabe basierend auf Abonnement und Aktivität"
             delay={0.2}
           />
           <CommunityCard
-            icon={<Bell size={20} className="text-white" />}
+            icon={<Bell size={20} />}
             title="Live-Benachrichtigungen"
             description="Automatische Benachrichtigungen in Discord, wenn du live gehst"
             delay={0.3}
@@ -71,14 +71,9 @@ export function Community() {
 
         {/* Discord-Beitritt — prominent, weil das Herz der Community dort schlägt */}
         <ScrollReveal delay={0.1}>
-          <div
-            className="mt-10 rounded-2xl p-8 md:p-10 flex flex-col md:flex-row items-center gap-8 justify-between relative overflow-hidden"
-            style={{
-              background:
-                "linear-gradient(135deg, rgba(88,101,242,0.18), rgba(88,101,242,0.06))",
-              border: "1px solid rgba(88,101,242,0.35)",
-            }}
-          >
+          {/* Marken-Oberfläche statt Blurple-Fläche: Discord-Farbe trägt nur
+              Icon-Quadrat und Button, damit die Box im Design bleibt. */}
+          <div className="panel-card mt-10 rounded-2xl p-8 md:p-10 flex flex-col md:flex-row items-center gap-8 justify-between relative overflow-hidden">
             <div className="flex items-center gap-5 text-center md:text-left flex-col md:flex-row">
               <div
                 className="w-16 h-16 rounded-2xl flex items-center justify-center shrink-0"
@@ -104,7 +99,7 @@ export function Community() {
               className="shrink-0 inline-flex items-center gap-2 whitespace-nowrap rounded-xl px-7 py-3.5 font-semibold text-white transition-opacity duration-200 hover:opacity-90"
               style={{ background: "#5865F2" }}
             >
-              <DiscordLogo size={20} className="text-white" />
+              <DiscordLogo size={20} />
               Discord beitreten
               <ArrowRight size={18} />
             </a>

@@ -33,8 +33,8 @@ export function FeatureHighlight({
   return (
     <article className="panel-card rounded-xl p-5 border border-border bg-[rgba(28, 21, 13, 0.46)]">
       <div className="flex items-start gap-4">
-        <div className="w-10 h-10 rounded-lg gradient-accent flex items-center justify-center shrink-0">
-          <IconComponent size={18} className="text-white" />
+        <div className="w-10 h-10 rounded-lg icon-tile flex items-center justify-center shrink-0">
+          <IconComponent size={18} />
         </div>
         <div>
           <h4 className="text-base font-semibold text-text-primary">
