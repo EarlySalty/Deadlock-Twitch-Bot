@@ -1,3 +1,11 @@
+## #375 — Kacheln vereinheitlicht, echtes Tab-Logo
+
+**Problem:** Die vier Wochen-Kacheln auf der Übersicht waren deutlich größer als die Kacheln direkt darüber und mit auffälligen grünen Trendkurven versehen. Und im Browser-Tab klebte noch ein Platzhalter-Zeichen statt dem Community-Logo.
+
+**Änderung:** Die Wochen-Kacheln sind jetzt genauso kompakt wie die vier Kacheln darüber und zeigen nur Wert und Bezeichnung, ohne Kurve. Der Tab zeigt jetzt das D-Logo der Community, dasselbe wie auf den anderen Seiten.
+
+**Aktuelles Verhalten:** Die Übersicht wirkt aufgeräumter und einheitlicher, und das Tab-Logo passt zum Rest der Website.
+
 ## #374 — Übersicht aufgeräumt, Chat-Wert wieder da
 
 **Problem:** Im Browser-Tab stand ein fremdes Platzhalter-Logo. Auf der Übersicht lagen die vier Wochen-Kacheln als eigene Reihe unter der Zusammenfassung des letzten Streams und kosteten viel Platz. Und die Kachel "Chat-Aktivität" zeigte dauerhaft nur einen Strich, obwohl Chatzahlen vorliegen.
