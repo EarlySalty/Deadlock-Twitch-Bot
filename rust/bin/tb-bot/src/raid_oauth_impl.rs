@@ -673,6 +673,8 @@ pub struct TbRaidOAuthImpl {
     /// `sync_partner_state_after_auth`). `None` → Followups entfallen mit
     /// Warning (z. B. Token-Env fehlt) — der Callback persistiert trotzdem.
     partner_setup: Option<Arc<PartnerSetupService>>,
+    /// Fordert nach erfolgreichem Erst-Setup sofort den vollen Chat-Sub-Reconcile an.
+    chat_subscription_reconcile: Option<Arc<tokio::sync::Notify>>,
     /// Broker-Relay fuer Raid-Requirements-DMs.
     requirements_relay: Option<BrokerRelay>,
     client_id: String,
@@ -708,6 +710,7 @@ impl TbRaidOAuthImpl {
         client_id: String,
         redirect_uri: String,
         partner_setup: Option<Arc<PartnerSetupService>>,
+        chat_subscription_reconcile: Option<Arc<tokio::sync::Notify>>,
     ) -> Self {
         // Fail-closed: gesetzte (auch leere) Variable aktiviert den Guard —
         // nur eine NICHT gesetzte Variable bedeutet guard-aus (policy.py).
@@ -731,6 +734,7 @@ impl TbRaidOAuthImpl {
             auth_writer,
             token_client,
             partner_setup,
+            chat_subscription_reconcile,
             requirements_relay: None,
             client_id,
             redirect_uri,
@@ -1372,8 +1376,9 @@ impl RaidOAuthPort for TbRaidOAuthImpl {
                 let login = twitch_login.clone();
                 let access_token = token_response.access_token.clone();
                 let trial_pool = self.pool.clone();
+                let chat_subscription_reconcile = self.chat_subscription_reconcile.clone();
                 tokio::spawn(async move {
-                    setup
+                    let setup_result = setup
                         .complete_setup_for_streamer(
                             &uid,
                             &login,
@@ -1381,6 +1386,10 @@ impl RaidOAuthPort for TbRaidOAuthImpl {
                             state_discord_user_id.as_deref(),
                         )
                         .await;
+                    request_chat_subscription_reconcile(
+                        &setup_result,
+                        chat_subscription_reconcile.as_deref(),
+                    );
                     // „Mitbringsel": neuer Partner bekommt beim Onboarding den
                     // einmaligen 30-Tage-Analytics-Trial. Idempotent über
                     // trial_ever_granted; überschreibt keinen Bezahlplan.
@@ -1500,6 +1509,17 @@ fn should_sync_existing_auth_followup(state_discord_user_id: Option<&str>) -> bo
     state_discord_user_id
         .map(str::trim)
         .is_some_and(|discord_id| !discord_id.is_empty())
+}
+
+fn request_chat_subscription_reconcile<T, E>(
+    setup_result: &Result<T, E>,
+    notify: Option<&tokio::sync::Notify>,
+) {
+    if setup_result.is_ok() {
+        if let Some(notify) = notify {
+            notify.notify_one();
+        }
+    }
 }
 
 /// Minimales HTML-Escaping für Attribut- und Textwerte.
@@ -1645,6 +1665,30 @@ mod tests {
         assert!(!should_sync_existing_auth_followup(None));
         assert!(!should_sync_existing_auth_followup(Some("")));
         assert!(!should_sync_existing_auth_followup(Some("   ")));
+    }
+
+    #[tokio::test]
+    async fn reconcile_signal_follows_partner_setup_result() {
+        let notify = tokio::sync::Notify::new();
+
+        request_chat_subscription_reconcile(&Ok::<(), ()>(()), Some(&notify));
+        tokio::time::timeout(
+            std::time::Duration::from_millis(20),
+            notify.notified(),
+        )
+        .await
+        .expect("erfolgreiches Setup muss Reconcile auslösen");
+
+        request_chat_subscription_reconcile(&Err::<(), ()>(()), Some(&notify));
+        assert!(
+            tokio::time::timeout(
+                std::time::Duration::from_millis(20),
+                notify.notified(),
+            )
+            .await
+            .is_err(),
+            "fehlgeschlagenes Setup darf kein Reconcile auslösen"
+        );
     }
 }
 
@@ -1882,6 +1926,7 @@ mod db_tests {
             Arc::new(UnusedTokenClient),
             "cid".to_string(),
             "https://example.test/callback".to_string(),
+            None,
             None,
         )
         .with_requirements_relay(Some(relay))
@@ -2584,7 +2629,8 @@ mod callback_tests {
             _broadcaster_id: &str,
             _bot_user_id: &str,
             _streamer_access_token: &str,
-        ) {
+        ) -> Result<(), String> {
+            Ok(())
         }
     }
 
@@ -2667,6 +2713,7 @@ mod callback_tests {
             "cid".to_string(),
             "https://example.test/callback".to_string(),
             partner_setup,
+            None,
         )
     }
 

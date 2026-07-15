@@ -14,7 +14,7 @@ use sqlx::postgres::{PgConnectOptions, PgPoolOptions};
 use sqlx::PgPool;
 use tb_raid::partner_setup::{
     promote_streamer_to_partner, record_first_login, ChatGreeterPort, DiscordDirectoryPort,
-    ModeratorInstallPort, PartnerSetupService, PromotePartnerArgs,
+    ModeratorInstallPort, PartnerSetupError, PartnerSetupService, PromotePartnerArgs,
 };
 
 macro_rules! pool_or_skip {
@@ -625,8 +625,9 @@ impl ModeratorInstallPort for Recorder {
         broadcaster_id: &str,
         bot_user_id: &str,
         _streamer_access_token: &str,
-    ) {
+    ) -> Result<(), String> {
         self.log(format!("mod:{broadcaster_id}:{bot_user_id}"));
+        Ok(())
     }
 }
 
@@ -717,7 +718,8 @@ async fn complete_setup_voller_ablauf() {
     let svc = service(pool.clone(), recorder.clone(), Some("botid"));
 
     svc.complete_setup_for_streamer("903", "vollkanal", "token-abc", None)
-        .await;
+        .await
+        .expect("vollständiges Setup");
 
     let calls = recorder.calls();
     assert!(
@@ -753,8 +755,14 @@ async fn complete_setup_ohne_bot_id_ueberspringt_mod_und_chat() {
     });
     let svc = service(pool.clone(), recorder.clone(), None);
 
-    svc.complete_setup_for_streamer("904", "kein_bot", "token", None)
+    let result = svc
+        .complete_setup_for_streamer("904", "kein_bot", "token", None)
         .await;
+
+    assert!(matches!(
+        result,
+        Err(PartnerSetupError::BotUserIdUnavailable)
+    ));
 
     let calls = recorder.calls();
     assert!(
@@ -782,7 +790,8 @@ async fn greeter_nicht_verfuegbar_bricht_restliche_nachrichten_ab() {
     let svc = service(pool.clone(), recorder.clone(), Some("botid"));
 
     svc.complete_setup_for_streamer("905", "stiller_kanal", "token", None)
-        .await;
+        .await
+        .expect("Moderator-Setup bleibt trotz fehlender Begrüßung erfolgreich");
 
     let chat_calls = recorder
         .calls()

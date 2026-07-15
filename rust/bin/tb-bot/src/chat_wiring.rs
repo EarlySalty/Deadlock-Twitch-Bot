@@ -917,12 +917,17 @@ impl ChatRuntime {
     /// Startet alle Hintergrund-Loops: Token-Refresh (30 min), Promo-Loop
     /// (60 s), Global-Ban-Sweeper (120 s + 6-Uhr-Vollsweep) und den
     /// Chat-Subscription-Reconcile (Start + alle 30 min — der Python-Join).
-    pub fn start_background(&self, subscriptions: Option<Arc<SubscriptionManager>>) {
+    pub fn start_background(
+        &self,
+        subscriptions: Option<Arc<SubscriptionManager>>,
+        reconcile_now: Arc<tokio::sync::Notify>,
+    ) {
         self.token_manager.spawn_refresh_loop();
         Arc::clone(&self.promos).spawn_periodic_loop();
         Arc::clone(&self.sweeper).spawn(Arc::clone(&self.roster) as Arc<dyn PartnerRoster>);
 
         let Some(manager) = subscriptions else {
+            // Ohne Manager gibt es keinen Reconcile-Loop; Signale dürfen verfallen.
             tracing::warn!(
                 "Kein SubscriptionManager — Chat-Subscriptions werden nicht angelegt \
                  (Webhook-Config/Helix fehlt)"
@@ -940,7 +945,10 @@ impl ChatRuntime {
                 let mut tick = tokio::time::interval(CHAT_SUB_RECONCILE_INTERVAL);
                 tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
                 loop {
-                    tick.tick().await;
+                    tokio::select! {
+                        _ = tick.tick() => {}
+                        _ = reconcile_now.notified() => {}
+                    }
                     reconcile_chat_subscriptions(&manager, &pool, &bot_user_id, &token_manager)
                         .await;
                 }
