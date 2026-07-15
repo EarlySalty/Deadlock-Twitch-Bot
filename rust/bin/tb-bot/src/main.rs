@@ -31,8 +31,6 @@
 //!                                   (default aus; benötigt Helix-Client)
 //!   TB_SCOUT_ENABLED              — "1" startet den Scout-Task für live Deadlock-DE-Streams
 //!                                   (default aus; benötigt Helix-Client)
-//!   TB_SCOUT_PITCH_ENABLED        — "1" startet den read-only Scout-Copiloten
-//!                                   (default aus; nur Discord-Ausgang)
 //!   ENGAGEMENT_SHADOW_REVIEW_CHANNEL_ID — Discord-Kanal-ID für den Shadow-KI-
 //!                                   Review-Ausgang (B19). Fehlt sie, bleibt der
 //!                                   Forward-Loop aus (default aus, opt-in)
@@ -58,7 +56,6 @@ mod scam_notify_impl;
 mod scam_revoke_impl;
 mod score_refresh;
 mod scout_chat;
-mod scout_pitch_wiring;
 mod shadow_review_wiring;
 mod streamer_link;
 mod task_supervisor;
@@ -1550,19 +1547,13 @@ async fn main() {
         tracing::info!("clip_fetch deaktiviert (TB_CLIP_FETCHER_ENABLED != 1)");
     }
 
-    let scout_pitch_events = scout_pitch_wiring::spawn_scout_pitch_pipeline(
-        &supervisor,
-        pool.clone(),
-        &settings.broker,
-    );
-
     // Scout-Task: entdeckt live Deadlock-Streamer und registriert sie als monitoring-only.
     // Deaktiviert bis TB_SCOUT_ENABLED=1 gesetzt ist.
     if let Some(ref h) = *helix {
         let scout_game =
             std::env::var("TWITCH_TARGET_GAME_NAME").unwrap_or_else(|_| "Deadlock".to_string());
         let scout_lang_filters: Vec<String> = language_filters_from_env();
-        let mut scout_task = tb_monitoring::build_scout_task(
+        let scout_task = tb_monitoring::build_scout_task(
             pool.clone(),
             std::sync::Arc::new(h.clone()),
             scout_game,
@@ -1577,9 +1568,6 @@ async fn main() {
         // (EventSub-Modell, s. scout_chat.rs). Kein Override der Defaults ⇒ kein
         // An/Aus-Zustandswechsel ggü. dem bisherigen NoopScoutChatSink.
         .with_chat_sink(std::sync::Arc::new(scout_chat::ScoutChatAdapter::new()));
-        if let Some(events) = scout_pitch_events.clone() {
-            scout_task = scout_task.with_event_sink(events);
-        }
         scout_task.start_if_enabled();
     }
 
