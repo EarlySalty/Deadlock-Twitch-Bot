@@ -634,13 +634,14 @@ export function RaidDemo() {
           margin-top: 16px;
         }
         /* Inaktive Schritte treten zurück (kaum Border, gedämpfter Text),
-           damit nur der aktive Schritt Farbe trägt. */
+           damit nur der aktive Schritt Farbe trägt.
+           #a2977f = 4.7:1 auf der Kartenfläche, WCAG-Minimum für 12px bleibt gewahrt. */
         .rd-pill {
           padding: 6px 14px; border-radius: 20px;
           font-size: 12px; font-weight: 600;
           background: var(--color-card);
           border: 1px solid rgba(255, 255, 255, 0.07);
-          color: #746a57;
+          color: #a2977f;
           transition: all 0.35s cubic-bezier(0.4,0,0.2,1);
         }
         .rd-pill-active {
@@ -666,7 +667,7 @@ export function RaidDemo() {
           animation: rd-bounce-in 0.4s cubic-bezier(0.4,0,0.2,1);
         }
         .rd-pill-arrow {
-          color: #746a57; font-size: 14px;
+          color: #a2977f; font-size: 14px;
         }
         .rd-raid-display {
           text-align: center; margin-top: 10px;
