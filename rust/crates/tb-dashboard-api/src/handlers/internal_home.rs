@@ -292,14 +292,31 @@ impl AvatarCache {
         let client_id = std::env::var("TWITCH_CLIENT_ID")
             .ok()
             .map(|value| value.trim().to_string())
-            .filter(|value| !value.is_empty())?;
+            .filter(|value| !value.is_empty());
         let client_secret = std::env::var("TWITCH_CLIENT_SECRET")
             .ok()
             .map(|value| value.trim().to_string())
-            .filter(|value| !value.is_empty())?;
-        HelixClient::new(HelixConfig::new(client_id, client_secret))
-            .ok()
-            .map(|helix| Self::new(helix, AVATAR_CACHE_TTL))
+            .filter(|value| !value.is_empty());
+        // Silent-failure sichtbar machen: ohne Log sah ein fehlender Twitch-Client
+        // wie "Avatar existiert nicht" aus (Dauer-Fallback auf die Initiale). Nur
+        // Presence-Booleans loggen, NIE die Werte selbst.
+        let client_id_present = client_id.is_some();
+        let client_secret_present = client_secret.is_some();
+        let (Some(client_id), Some(client_secret)) = (client_id, client_secret) else {
+            tracing::warn!(
+                client_id_present,
+                client_secret_present,
+                "AvatarCache deaktiviert: TWITCH_CLIENT_ID/SECRET fehlen in der tb-dashboard-Env"
+            );
+            return None;
+        };
+        match HelixClient::new(HelixConfig::new(client_id, client_secret)) {
+            Ok(helix) => Some(Self::new(helix, AVATAR_CACHE_TTL)),
+            Err(error) => {
+                tracing::warn!(%error, "AvatarCache deaktiviert: HelixClient-Konstruktion fehlgeschlagen");
+                None
+            }
+        }
     }
 
     fn new(helix: HelixClient, ttl: StdDuration) -> Self {
