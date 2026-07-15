@@ -1300,45 +1300,44 @@ export function InternalHomeLanding() {
                     />
                   </div>
                 ) : null}
+
+                {weekComp ? (
+                  <div data-tour-id="tour-week" className="mt-5 border-t border-border pt-5">
+                    <div className="mb-3 text-[11px] font-semibold uppercase tracking-[0.18em] text-text-secondary">
+                      Woche vs. Vorwoche
+                    </div>
+                    <div className="grid grid-cols-2 gap-3">
+                      <WeekKpi
+                        label={'\u00D8 Viewer'}
+                        current={weekComp.current_week.avg_viewers}
+                        change={weekComp.changes.avg_viewers_pct}
+                        series={weekComp.daily_series?.avg_viewers}
+                      />
+                      <WeekKpi
+                        label="Follower"
+                        current={weekComp.current_week.total_followers}
+                        change={weekComp.changes.followers_pct}
+                        series={weekComp.daily_series?.followers}
+                      />
+                      <WeekKpi
+                        label="Chat-Aktivitaet"
+                        current={weekComp.current_week.chat_activity}
+                        change={weekComp.changes.chat_activity_pct}
+                        suffix="/h"
+                        series={weekComp.daily_series?.chat_activity}
+                      />
+                      <WeekKpi
+                        label="Stream-Stunden"
+                        current={weekComp.current_week.stream_hours}
+                        change={weekComp.changes.stream_hours_pct}
+                        suffix="h"
+                        series={weekComp.daily_series?.stream_hours}
+                      />
+                    </div>
+                  </div>
+                ) : null}
               </div>
             </motion.section>
-
-            {weekComp ? (
-              <motion.section
-                data-tour-id="tour-week"
-                className="grid grid-cols-2 gap-4 md:grid-cols-4"
-                initial={{ opacity: 0, y: 16 }}
-                animate={{ opacity: 1, y: 0 }}
-                transition={{ duration: 0.32, delay: 0.12 }}
-              >
-                <WeekKpi
-                  label={'\u00D8 Viewer'}
-                  current={weekComp.current_week.avg_viewers}
-                  change={weekComp.changes.avg_viewers_pct}
-                  series={weekComp.daily_series?.avg_viewers}
-                />
-                <WeekKpi
-                  label="Follower"
-                  current={weekComp.current_week.total_followers}
-                  change={weekComp.changes.followers_pct}
-                  series={weekComp.daily_series?.followers}
-                />
-                <WeekKpi
-                  label="Chat-Aktivitaet"
-                  current={weekComp.current_week.chat_activity}
-                  change={weekComp.changes.chat_activity_pct}
-                  suffix="/h"
-                  series={weekComp.daily_series?.chat_activity}
-                />
-                <WeekKpi
-                  label="Stream-Stunden"
-                  current={weekComp.current_week.stream_hours}
-                  change={weekComp.changes.stream_hours_pct}
-                  suffix="h"
-                  series={weekComp.daily_series?.stream_hours}
-                />
-              </motion.section>
-            ) : null}
 
             {recentStreams.length > 0 ? (
               <motion.section
