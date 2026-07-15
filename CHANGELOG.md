@@ -1,3 +1,11 @@
+## #369 — Rauchglas mit goldenem Hinterlicht
+
+**Problem:** Der Hintergrund der Streamer-Seite wirkte flach. Viele kleine, übereinander gelegte Leuchtflecken addierten sich zu einem gleichmäßigen Schleier, und die Karten lagen als fast deckende Flächen darauf.
+
+**Änderung:** Der Grund ist jetzt fast schwarz und wird nur noch von zwei großen, sehr weichen goldenen Lichtkreisen hinterleuchtet. Die Karten und Stream-Fenster sind transparenter geworden und zeichnen den Hintergrund weich, wie mattiertes Glas.
+
+**Aktuelles Verhalten:** Die Seite wirkt tiefer und edler. Inhalte scheinen auf Rauchglas zu liegen, das von hinten sanft golden angeleuchtet wird, und die Texte bleiben dabei besser lesbar als vorher.
+
 ## #368 — Weniger Goldplatten, mehr Ruhe auf der Streamer-Seite
 
 **Problem:** Jede Icon-Kachel in den Bereichen Features, Community und Affiliate war eine voll leuchtende Goldfläche. Bei sechs Kacheln nebeneinander wirkte das erdrückend, und die weißen Icons darauf waren kaum lesbar. Die Discord-Box darunter fiel mit ihrer lila Vollfläche komplett aus dem Look der Seite.
