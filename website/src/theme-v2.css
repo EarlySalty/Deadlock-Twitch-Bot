@@ -1,9 +1,12 @@
-/* Streamer-Landing V2-Preview: Patch-Schwarz statt Streamer-Braun.
+/* Streamer-Landing Standard-Theme: Patch-Schwarz statt Streamer-Braun.
    Nur Flaechen/Grund/Grid/geteilte Klassen getauscht — Gold+Teal-Akzente
-   bleiben. Kompletter Block ist inert ohne data-theme="v2", die Haupt-Landing
-   (/streamer/) bleibt also unberuehrt.
-   Referenz-Palette: Website/dl-patch/src/patch.css (:root). */
-:root[data-theme="v2"] {
+   bleiben. Gilt global (die Landing laedt main.tsx, das diese Datei nach
+   index.css importiert -> `:root`-Regeln ueberschreiben die Tailwind-@theme-
+   Tokens). Referenz-Palette: Website/dl-patch/src/patch.css (:root).
+   ponytail: laege sauberer direkt in index.css/ddc-design-tokens.css statt als
+   Override-Ebene — Zusammenlegung offen, sobald die parallele Brand-Arbeit
+   (dl-brand tokens.css) durch ist. Dann auch Datei passend umbenennen. */
+:root {
   /* Flaechen: warm-braun -> neutral-schwarz (Patch #0b0b0b / #101010 / #161616) */
   --color-bg:             #0b0b0b;
   --color-background:     #101010;
@@ -32,18 +35,18 @@
 
 /* "Globale Beleuchtung" raus: die drei animierten GlowOrb-Lichtkugeln
    (Gold/Teal, blur-120px, fix ueber dem ganzen Viewport) gibt es im flachen
-   Patch-Look nicht. Auf der Haupt-Landing bleiben sie (Attribut ist inert). */
-:root[data-theme="v2"] [data-glow-orb] {
+   Patch-Look nicht. */
+:root [data-glow-orb] {
   display: none;
 }
 
 /* Body: kein Gold-Glow-Radial mehr -> Patch-typischer flach-schwarzer Grund */
-:root[data-theme="v2"] body {
+:root body {
   background: var(--gradient-bg);
 }
 
 /* Gitternetz wie Patch, aber ein paar % praesenter (0.025 -> 0.045, 0.55 -> 0.72) */
-:root[data-theme="v2"] body::before {
+:root body::before {
   background-image:
     linear-gradient(rgba(255, 255, 255, 0.045) 1px, transparent 1px),
     linear-gradient(90deg, rgba(255, 255, 255, 0.045) 1px, transparent 1px);
@@ -55,9 +58,9 @@
    getoent sind ohne ins alte Braun zu kippen. Gilt auch fuer die Stream-
    Vorschau-Karten der Raid-Demo (.rd-twitch-embed, laeuft ueber --color-card).
    Buttons (.gradient-accent) bewusst NICHT angefasst — die bleiben shiny gold. */
-:root[data-theme="v2"] .panel-card,
-:root[data-theme="v2"] .glass,
-:root[data-theme="v2"] .rd-twitch-embed {
+:root .panel-card,
+:root .glass,
+:root .rd-twitch-embed {
   background:
     linear-gradient(0deg, rgba(201, 168, 106, 0.05), rgba(201, 168, 106, 0.05)),
     rgba(18, 18, 18, 0.86);
@@ -67,7 +70,7 @@
 
 /* Clip-Rahmen: hardcoded brauner Inline-Gradient -> neutrales Schwarz, dazu
    ein goldener Halo dahinter, damit die Clips vor dem Schwarz "leuchten". */
-:root[data-theme="v2"] [data-clip-frame] {
+:root [data-clip-frame] {
   background: linear-gradient(160deg, rgba(28, 28, 28, 0.92), rgba(17, 17, 17, 0.92));
   box-shadow:
     0 0 64px -14px rgba(201, 168, 106, 0.3),
