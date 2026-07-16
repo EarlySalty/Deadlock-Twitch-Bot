@@ -1,10 +1,10 @@
-## #380 — PLATZHALTER: Bot-Ban-Lifecycle
+## #380 — Bot merkt jetzt selbst, wenn er in einem Kanal gebannt ist
 
-**Problem:** PLATZHALTER: Gebannte Kanäle wurden trotz erkanntem Bot-Ban weiter beworben.
+**Problem:** Wurde der Bot in einem Partner-Kanal gebannt, lief die Live-Ankündigung auf Discord trotzdem weiter — wir haben also für Kanäle geworben, in denen wir gar nicht mehr erwünscht waren. Der Bot hat den Ban stündlich korrekt erkannt, das Wissen aber nur ins Protokoll geschrieben und danach verworfen. Zusätzlich hätte selbst eine gesetzte Pause nicht gehalten: Sie wurde wieder aufgehoben, sobald der Zugriff des Streamers gültig war — und der hat mit einem Ban nichts zu tun.
 
-**Änderung:** PLATZHALTER: Ban-Erkennung, sichere Wiederherstellung und aktive Twitch-Ausschlüsse wurden verdrahtet.
+**Änderung:** Der erkannte Ban löst jetzt die schon vorhandene Reaktion aus: Werbung und Bot-Funktionen für diesen Kanal pausieren, der Streamer bekommt einmalig eine Hinweis-Nachricht. Die Rückkehr hängt nicht mehr am Zugriffsstatus, sondern am echten Ban: Der Bot prüft, ob er im Kanal wieder arbeiten kann, und hebt die Pause nur dann auf. Ist die Lage unklar, bleibt sie bestehen. Jede dieser Entscheidungen wird protokolliert, auch die ablehnenden. Streamer, die dauerhaft ausgeschlossen sind oder sich abgemeldet haben, werden jetzt ebenfalls zuverlässig von der Werbung ausgenommen.
 
-**Aktuelles Verhalten:** PLATZHALTER: Werbung pausiert bei einem Bot-Ban und kehrt erst nach bestätigter Aufhebung zurück.
+**Aktuelles Verhalten:** Ein Ban pausiert die Werbung für den betroffenen Kanal von allein. Hebt der Streamer den Ban auf, kehrt der Bot ohne Zutun zurück. Zwei Kanäle waren betroffen und sind jetzt sauber pausiert.
 
 ## #379 — Feature-Vergleich liegt jetzt auf einer Schriftrolle
 
