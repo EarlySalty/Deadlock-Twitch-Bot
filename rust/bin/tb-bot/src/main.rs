@@ -578,6 +578,8 @@ async fn main() {
         .ok()
         .map(|v| v.trim().to_string())
         .filter(|v| !v.is_empty());
+    let bot_ban_handler =
+        token_lifecycle_wiring::build_bot_ban_handler(pool.clone(), &settings.broker);
     let subscription_manager: Option<Arc<SubscriptionManager>> =
         match (webhook_secret, callback_url, helix.as_ref().clone()) {
             (Some(secret), Some(callback_url), Some(helix_client)) => {
@@ -590,7 +592,8 @@ async fn main() {
                         secret,
                     },
                     CapacitySnapshotStore::new(pool.clone()),
-                );
+                )
+                .with_bot_ban_handler(bot_ban_handler.clone());
                 // P1.2: Mod-Provisioner für die 403-Selbstheilung im Chat-/Sub-Pfad
                 // (Python `_ensure_bot_is_mod`). Braucht den Streamer-Token-Resolver
                 // (cipher-gated) + die Bot-User-ID aus dem gebooteten Chat-Handle.
@@ -687,9 +690,8 @@ async fn main() {
     // da `chat_api_handle` weiter unten beim Pipeline-Aufbau konsumiert wird.
     let chatters_bot_token_manager: Option<Arc<tb_chat::token::BotTokenManager>> =
         chat_api_handle.as_ref().map(|h| h.bot_token_manager());
-    let raid_greeting_monitor: Option<Arc<raid_greeting::RaidGreetingMonitor>> = chat_api_handle
-        .as_ref()
-        .map(|h| {
+    let raid_greeting_monitor: Option<Arc<raid_greeting::RaidGreetingMonitor>> =
+        chat_api_handle.as_ref().map(|h| {
             Arc::new(raid_greeting::RaidGreetingMonitor::new(
                 h.api_for_context(tb_chat::channel_policy::PolicyContext::Raid),
             ))
@@ -1109,10 +1111,7 @@ async fn main() {
                 chat_wiring::ChatRuntimePorts {
                     manual_raid: manual_raid_port.clone(),
                     clip_port,
-                    bot_ban_handler: Some(token_lifecycle_wiring::build_bot_ban_handler(
-                        pool.clone(),
-                        &settings.broker,
-                    )),
+                    bot_ban_handler: Some(bot_ban_handler.clone()),
                     invite_relay: BrokerRelay::new(&settings.broker).ok(),
                     scam_notifier,
                     raid_greeting: raid_greeting_monitor.clone(),
@@ -1225,20 +1224,20 @@ async fn main() {
                 tb_analytics::post_stream::schedule_report_retry_job(pool.clone(), 1800),
             );
         }
-        supervisor.spawn("title_nightly_knowledge", tb_chat::title_jobs::schedule_nightly_knowledge_job(
-            pool.clone(),
-            300,
-        ));
-        supervisor.spawn("title_weekly_insight", tb_chat::title_jobs::schedule_weekly_insight_job(
-            pool.clone(),
-            600,
-        ));
+        supervisor.spawn(
+            "title_nightly_knowledge",
+            tb_chat::title_jobs::schedule_nightly_knowledge_job(pool.clone(), 300),
+        );
+        supervisor.spawn(
+            "title_weekly_insight",
+            tb_chat::title_jobs::schedule_weekly_insight_job(pool.clone(), 600),
+        );
         // Self-Learning des Conversation-Scam-Guards: erstmals nach 900s, danach
         // alle 6h aus bestätigten Scams + aufgehobenen Fehlalarmen destillieren.
-        supervisor.spawn("conversation_scam_learning", tb_chat::conversation_scam::schedule_scam_learnings(
-            pool.clone(),
-            900,
-        ));
+        supervisor.spawn(
+            "conversation_scam_learning",
+            tb_chat::conversation_scam::schedule_scam_learnings(pool.clone(), 900),
+        );
     }
 
     // P1.21/P1.22/P2.63: 6h-Subs+Ads-Snapshot-Collector (Python
@@ -1368,11 +1367,20 @@ async fn main() {
     {
         // Cipher-freie Worker: Retention-Cleanup, Approval-Queue, Report-Dispatcher.
         let retention = tb_social_media::retention_worker::RetentionWorker::new(pool.clone());
-        supervisor.spawn("social_retention_worker", async move { retention.run().await });
+        supervisor.spawn(
+            "social_retention_worker",
+            async move { retention.run().await },
+        );
         let approval = tb_social_media::approval_worker::ApprovalWorker::new(pool.clone());
-        supervisor.spawn("social_approval_worker", async move { approval.run().await });
+        supervisor.spawn(
+            "social_approval_worker",
+            async move { approval.run().await },
+        );
         let reports = tb_social_media::report_dispatcher::ReportDispatcher::new(pool.clone());
-        supervisor.spawn("social_report_dispatcher", async move { reports.run().await });
+        supervisor.spawn(
+            "social_report_dispatcher",
+            async move { reports.run().await },
+        );
 
         // Enrichment: LLM-Dispatcher (Consent aus Settings). Transkription ist
         // entfernt (B15-OFF-transcription: OpenAI-Whisper raus, kein Ersatz) —
@@ -1383,7 +1391,10 @@ async fn main() {
         );
         let enrichment =
             tb_social_media::enrichment_worker::EnrichmentWorker::new(pool.clone(), llm);
-        supervisor.spawn("social_enrichment_worker", async move { enrichment.run().await });
+        supervisor.spawn(
+            "social_enrichment_worker",
+            async move { enrichment.run().await },
+        );
 
         // Upload + Token-Refresh + Insights brauchen den Field-Cipher
         // (verschlüsselte Plattform-Tokens). Fehlt DB_MASTER_KEY_V1, laufen nur
@@ -1411,7 +1422,10 @@ async fn main() {
                     cipher.clone(),
                     refresh_oauth,
                 );
-                supervisor.spawn("social_token_refresh_worker", async move { refresh.run().await });
+                supervisor.spawn(
+                    "social_token_refresh_worker",
+                    async move { refresh.run().await },
+                );
 
                 let insights_creds =
                     tb_social_media::credentials::CredentialManager::new(pool.clone(), cipher);
@@ -1419,7 +1433,10 @@ async fn main() {
                     pool.clone(),
                     insights_creds,
                 );
-                supervisor.spawn("social_insights_worker", async move { insights.run().await });
+                supervisor.spawn(
+                    "social_insights_worker",
+                    async move { insights.run().await },
+                );
             }
             Err(e) => {
                 tracing::warn!(
@@ -1606,9 +1623,10 @@ async fn main() {
         let sl_pool = pool.clone();
         let sl_base = format!("http://127.0.0.1:{port}");
         let sl_token = settings.internal_api.token.clone();
-        supervisor.spawn("streamer_link_matcher", streamer_link::streamer_link_task(
-            sl_pool, sl_relay, sl_config, sl_base, sl_token,
-        ));
+        supervisor.spawn(
+            "streamer_link_matcher",
+            streamer_link::streamer_link_task(sl_pool, sl_relay, sl_config, sl_base, sl_token),
+        );
     }
 
     // Chatters-Poller (#11): 30s-Collect (Helix `GET /chat/chatters` → Lurker-/
