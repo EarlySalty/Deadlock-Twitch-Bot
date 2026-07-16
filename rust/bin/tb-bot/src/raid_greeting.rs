@@ -6,7 +6,8 @@ use tb_chat::types::{ChatMessageEvent, SendOutcome};
 use tb_chat::ChatApi;
 use tb_raid::{RaidGreetingMonitorPort, RaidGreetingRegistration};
 
-const GREETING_WINDOW: Duration = Duration::from_secs(5 * 60);
+// ponytail: 20 Min Kulanz; Pending ist prozess-lokal, Neustart verwirft es konservativ: lieber kein Whisper als ein falscher Vorwurf.
+const GREETING_WINDOW: Duration = Duration::from_secs(20 * 60);
 
 #[derive(Debug, Clone)]
 struct PendingGreeting {
@@ -19,7 +20,6 @@ struct PendingGreeting {
 
 pub struct RaidGreetingMonitor {
     chat: Arc<dyn ChatApi>,
-    // ponytail: process-local; persistieren, wenn Begrüßungs-Compliance Restarts überleben soll.
     pending: Arc<Mutex<HashMap<String, PendingGreeting>>>,
     greeting_window: Duration,
 }
@@ -43,10 +43,6 @@ impl RaidGreetingMonitor {
     }
 
     pub fn observe_chat(&self, event: &ChatMessageEvent) {
-        if !contains_greeting(event.text()) {
-            return;
-        }
-
         let event = event.with_effective_channel();
         let target_id = event.broadcaster_user_id.trim();
         let chatter_id = event.chatter_user_id.trim();
@@ -76,7 +72,7 @@ impl RaidGreetingMonitor {
                 tracing::info!(
                     from = %item.from_broadcaster_login,
                     to = %item.to_broadcaster_login,
-                    "Raid-Begrüßung im Zielchat erkannt"
+                    "Raider hat im Zielchat geschrieben"
                 );
             }
         }
@@ -202,39 +198,6 @@ fn source_hint_message(to_login: &str) -> String {
 
 /// Der Whisper geht als DM direkt an den Raider, ein @-Mention wäre doppelt gemoppelt.
 const WHISPER_REMINDER: &str = "Hey, denk nach dem Raid dran: Ein kurzes Hallo und Tschüss im Chat gehört zum guten Ton :) Das macht den Raid viel persönlicher, so bleibt man am besten im Kopf und stärkt die Connection!";
-
-fn contains_greeting(text: &str) -> bool {
-    let lower = text.trim().to_lowercase();
-    if lower.is_empty() {
-        return false;
-    }
-    if lower.contains("guten morgen")
-        || lower.contains("guten tag")
-        || lower.contains("guten abend")
-    {
-        return true;
-    }
-    lower
-        .split(|c: char| !c.is_alphanumeric())
-        .filter(|word| !word.is_empty())
-        .any(|word| {
-            matches!(
-                word,
-                "hallo"
-                    | "halli"
-                    | "hi"
-                    | "hey"
-                    | "hello"
-                    | "moin"
-                    | "servus"
-                    | "gude"
-                    | "huhu"
-                    | "tach"
-            ) || word.starts_with("grü")
-                || word.starts_with("grue")
-                || word.starts_with("gruss")
-        })
-}
 
 #[cfg(test)]
 mod tests {
@@ -362,23 +325,14 @@ mod tests {
         }
     }
 
-    #[test]
-    fn erkennt_typische_begruessungen() {
-        assert!(contains_greeting("Hallo zusammen"));
-        assert!(contains_greeting("moin moin"));
-        assert!(contains_greeting("guten Abend euch"));
-        assert!(contains_greeting("grüße in die Runde"));
-        assert!(!contains_greeting("gg danke fuer den raid"));
-    }
-
     #[tokio::test]
-    async fn raider_begruessung_erfuellt_pending_ohne_whisper() {
+    async fn beliebige_raider_nachricht_erfuellt_pending_ohne_whisper() {
         let fake = Arc::new(FakeChatApi::default());
         let chat: Arc<dyn ChatApi> = fake.clone();
         let monitor = RaidGreetingMonitor::with_window(chat, Duration::from_millis(20));
 
         monitor.raid_started(registration()).await;
-        monitor.observe_chat(&chat_event("Hallo Zielchat"));
+        monitor.observe_chat(&chat_event("gg wp starker stream"));
         tokio::time::sleep(Duration::from_millis(40)).await;
 
         assert_eq!(fake.whispers.lock().unwrap().len(), 0);
@@ -386,6 +340,41 @@ mod tests {
         assert_eq!(messages.len(), 1);
         assert_eq!(messages[0].0, "from1");
         assert!(messages[0].1.contains("@ziel"));
+    }
+
+    #[tokio::test]
+    async fn fremder_chatter_erfuellt_pending_nicht() {
+        let fake = Arc::new(FakeChatApi::default());
+        let chat: Arc<dyn ChatApi> = fake.clone();
+        let monitor = RaidGreetingMonitor::with_window(chat, Duration::from_millis(5));
+
+        monitor.raid_started(registration()).await;
+        let mut event = chat_event("gg wp starker stream");
+        event.chatter_user_id = "other1".into();
+        event.chatter_user_login = "someone_else".into();
+        monitor.observe_chat(&event);
+        tokio::time::sleep(Duration::from_millis(30)).await;
+
+        let whispers = fake.whispers.lock().unwrap();
+        assert_eq!(whispers.len(), 1);
+        assert_eq!(whispers[0].0, "from1");
+    }
+
+    #[tokio::test]
+    async fn falscher_zielkanal_erfuellt_pending_nicht() {
+        let fake = Arc::new(FakeChatApi::default());
+        let chat: Arc<dyn ChatApi> = fake.clone();
+        let monitor = RaidGreetingMonitor::with_window(chat, Duration::from_millis(5));
+
+        monitor.raid_started(registration()).await;
+        let mut event = chat_event("gg wp starker stream");
+        event.broadcaster_user_id = "to2".into();
+        monitor.observe_chat(&event);
+        tokio::time::sleep(Duration::from_millis(30)).await;
+
+        let whispers = fake.whispers.lock().unwrap();
+        assert_eq!(whispers.len(), 1);
+        assert_eq!(whispers[0].0, "from1");
     }
 
     #[tokio::test]

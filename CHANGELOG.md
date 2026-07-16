@@ -1,3 +1,11 @@
+## #381 — Jede Nachricht zählt nach einem Raid
+
+**Problem:** Die Erinnerung nach einem Raid kam auch dann, wenn der Raider im Zielchat längst geschrieben hatte, weil nur bestimmte Grußwörter zählten.
+
+**Änderung:** Die Erkennung zählt jetzt jede beliebige Nachricht des Raiders im Zielchat und lässt dafür 20 Minuten statt 5.
+
+**Aktuelles Verhalten:** Wer innerhalb des Kulanzfensters im Zielchat schreibt, bekommt keinen falschen Vorwurf per Whisper.
+
 ## #380 — Analyse-Dashboard rechnet wieder mit echten Zahlen
 
 **Problem:** Mehrere Ansichten zeigten Unsinn: Millionen Watchtime-Stunden im Juni, Wochentage mit über 100.000 Stunden Durchschnittsdauer, Raid-Retention bis 600%, internationale Streamer im deutschen Markt-Vergleich, kaputte Sonderzeichen in der Tag-Karte, eine dauerhafte Roh-Chat-Warnung und Ad-Verluste, die wie Zuwächse aussahen.
