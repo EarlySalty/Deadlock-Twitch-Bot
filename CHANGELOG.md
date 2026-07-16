@@ -1,3 +1,11 @@
+## #380 — PLATZHALTER: Bot-Ban-Lifecycle
+
+**Problem:** PLATZHALTER: Gebannte Kanäle wurden trotz erkanntem Bot-Ban weiter beworben.
+
+**Änderung:** PLATZHALTER: Ban-Erkennung, sichere Wiederherstellung und aktive Twitch-Ausschlüsse wurden verdrahtet.
+
+**Aktuelles Verhalten:** PLATZHALTER: Werbung pausiert bei einem Bot-Ban und kehrt erst nach bestätigter Aufhebung zurück.
+
 ## #379 — Feature-Vergleich liegt jetzt auf einer Schriftrolle
 
 **Problem:** Der Feature-Vergleich auf der Preisseite lag zwar auf Pergament, wirkte durch Rahmen und runde Ecken aber wie ein gewöhnliches Blatt Papier.
