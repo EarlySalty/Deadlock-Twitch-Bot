@@ -101,6 +101,12 @@ clip_templates_streamer|is_default|boolean|YES|false
 clip_templates_streamer|streamer_login|text|NO|
 clip_templates_streamer|template_name|text|NO|
 clip_templates_streamer|updated_at|timestamp with time zone|YES|now()
+dashboard_admin_audit_events|actor|text|NO|
+dashboard_admin_audit_events|id|bigint|NO|nextval('dashboard_admin_audit_events_id_seq'::regclass)
+dashboard_admin_audit_events|method|text|NO|
+dashboard_admin_audit_events|occurred_at|timestamp with time zone|NO|now()
+dashboard_admin_audit_events|path|text|NO|
+dashboard_admin_audit_events|status_code|integer|NO|
 dashboard_sessions|created_at|double precision|NO|
 dashboard_sessions|expires_at|double precision|NO|
 dashboard_sessions|payload_enc|bytea|NO|
@@ -271,12 +277,17 @@ streamer_plans|raid_boost_enabled|integer|NO|0
 streamer_plans|trial_ever_granted|integer|NO|0
 streamer_plans|twitch_login|text|YES|
 streamer_plans|twitch_user_id|text|NO|
+tb_chat_autoban_log|account_age_days|bigint|YES|
+tb_chat_autoban_log|action|text|YES|
 tb_chat_autoban_log|banned_at|timestamp with time zone|NO|now()
-tb_chat_autoban_log|channel_login|text|NO|
+tb_chat_autoban_log|channel_login|text|YES|
 tb_chat_autoban_log|chatter_id|text|NO|
-tb_chat_autoban_log|chatter_login|text|NO|
+tb_chat_autoban_log|chatter_login|text|YES|
 tb_chat_autoban_log|content|text|YES|
 tb_chat_autoban_log|id|bigint|NO|nextval('tb_chat_autoban_log_id_seq'::regclass)
+tb_chat_autoban_log|reason|text|YES|
+tb_chat_autoban_log|score|real|YES|
+tb_chat_autoban_log|source_path|text|YES|
 tb_schema_ownership|component|text|NO|
 tb_schema_ownership|details_json|jsonb|NO|'{}'::jsonb
 tb_schema_ownership|marker_version|integer|NO|
@@ -413,6 +424,8 @@ twitch_chat_messages|id|bigint|NO|nextval('twitch_chat_messages_id_seq'::regclas
 twitch_chat_messages|is_command|boolean|YES|false
 twitch_chat_messages|message_id|text|YES|
 twitch_chat_messages|message_ts|timestamp with time zone|NO|
+twitch_chat_messages|moderation_action|text|YES|
+twitch_chat_messages|moderation_reason|text|YES|
 twitch_chat_messages|session_id|bigint|NO|
 twitch_chat_messages|streamer_login|text|NO|
 twitch_chat_word_groups|created_at|timestamp with time zone|YES|now()
@@ -437,6 +450,14 @@ twitch_chatter_rollup|last_seen_at|timestamp with time zone|NO|
 twitch_chatter_rollup|streamer_login|text|NO|
 twitch_chatter_rollup|total_messages|integer|YES|0
 twitch_chatter_rollup|total_sessions|integer|YES|0
+twitch_clip_form_submissions|clip_id|integer|NO|
+twitch_clip_form_submissions|created_at|timestamp with time zone|NO|now()
+twitch_clip_form_submissions|error|text|YES|
+twitch_clip_form_submissions|form_key|text|NO|
+twitch_clip_form_submissions|http_status|integer|YES|
+twitch_clip_form_submissions|id|integer|NO|nextval('twitch_clip_form_submissions_id_seq'::regclass)
+twitch_clip_form_submissions|status|text|NO|'pending'::text
+twitch_clip_form_submissions|submitted_at|timestamp with time zone|YES|
 twitch_clips_social_analytics|bucket|text|YES|
 twitch_clips_social_analytics|clip_id|bigint|NO|
 twitch_clips_social_analytics|comments|integer|YES|0
@@ -516,6 +537,21 @@ twitch_confirmed_external_recruitment_raids|raid_flow_id|text|YES|
 twitch_confirmed_external_recruitment_raids|to_broadcaster_id|text|NO|
 twitch_confirmed_external_recruitment_raids|to_broadcaster_login|text|NO|
 twitch_confirmed_external_recruitment_raids|viewer_count|integer|YES|0
+twitch_crew_radar_log|account_age_days|bigint|YES|
+twitch_crew_radar_log|action_taken|text|NO|'none'::text
+twitch_crew_radar_log|channel_login|text|NO|
+twitch_crew_radar_log|chatter_id|text|YES|
+twitch_crew_radar_log|chatter_login|text|NO|
+twitch_crew_radar_log|created_at|timestamp with time zone|NO|now()
+twitch_crew_radar_log|id|bigint|NO|nextval('twitch_crew_radar_log_id_seq'::regclass)
+twitch_crew_radar_log|llm_confidence|real|YES|
+twitch_crew_radar_log|llm_reasoning|text|YES|
+twitch_crew_radar_log|llm_verdict|text|NO|
+twitch_crew_radar_log|messages|jsonb|NO|
+twitch_crew_radar_log|source|text|NO|'network'::text
+twitch_crew_radar_log|style_breakdown|jsonb|NO|
+twitch_crew_radar_log|style_score|smallint|NO|
+twitch_crew_radar_log|time_window_match|boolean|NO|
 twitch_engagement_channel_profile|channel_login|text|NO|
 twitch_engagement_channel_profile|msg_count|integer|NO|0
 twitch_engagement_channel_profile|profile_text|text|NO|
@@ -975,6 +1011,22 @@ twitch_scam_guard_verdicts|id|bigint|NO|nextval('twitch_scam_guard_verdicts_id_s
 twitch_scam_guard_verdicts|reasoning|text|NO|
 twitch_scam_guard_verdicts|transcript_snapshot|text|NO|
 twitch_scam_guard_verdicts|verdict|text|NO|
+twitch_scout_pitch_blacklist|created_at|timestamp with time zone|YES|now()
+twitch_scout_pitch_blacklist|reason|text|YES|
+twitch_scout_pitch_blacklist|streamer_login|text|NO|
+twitch_scout_pitch_ledger|action|text|NO|
+twitch_scout_pitch_ledger|confidence|real|YES|
+twitch_scout_pitch_ledger|created_at|timestamp with time zone|NO|now()
+twitch_scout_pitch_ledger|detail|text|YES|
+twitch_scout_pitch_ledger|discord_message_id|text|YES|
+twitch_scout_pitch_ledger|feedback_down|integer|YES|
+twitch_scout_pitch_ledger|feedback_synced_at|timestamp with time zone|YES|
+twitch_scout_pitch_ledger|feedback_up|integer|YES|
+twitch_scout_pitch_ledger|id|bigint|NO|nextval('twitch_scout_pitch_ledger_id_seq'::regclass)
+twitch_scout_pitch_ledger|judge_input_excerpt|text|YES|
+twitch_scout_pitch_ledger|judge_verdict|text|NO|
+twitch_scout_pitch_ledger|streamer_login|text|NO|
+twitch_scout_pitch_ledger|trigger_type|text|NO|
 twitch_self_explainer_log|answer|text|NO|
 twitch_self_explainer_log|created_at|timestamp with time zone|NO|now()
 twitch_self_explainer_log|flagged_injection|boolean|NO|false
@@ -1004,6 +1056,15 @@ twitch_shoutout_events|other_broadcaster_login|text|YES|
 twitch_shoutout_events|received_at|timestamp with time zone|NO|now()
 twitch_shoutout_events|twitch_user_id|text|NO|
 twitch_shoutout_events|viewer_count|integer|YES|0
+twitch_spam_review_decisions|channel_login|text|NO|
+twitch_spam_review_decisions|chatter_id|text|YES|
+twitch_spam_review_decisions|chatter_login|text|NO|
+twitch_spam_review_decisions|confidence|real|YES|
+twitch_spam_review_decisions|created_at|timestamp with time zone|NO|now()
+twitch_spam_review_decisions|id|bigint|NO|nextval('twitch_spam_review_decisions_id_seq'::regclass)
+twitch_spam_review_decisions|reason|text|NO|
+twitch_spam_review_decisions|source_message|text|NO|
+twitch_spam_review_decisions|verdict|text|NO|
 twitch_stats_category|game_name|text|YES|
 twitch_stats_category|is_partner|boolean|YES|false
 twitch_stats_category|language|text|YES|
