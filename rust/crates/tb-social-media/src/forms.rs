@@ -121,6 +121,7 @@ async fn submit_to(
         .post(url)
         .header(reqwest::header::USER_AGENT, USER_AGENT)
         .form(&payload)
+        .timeout(std::time::Duration::from_secs(30))
         .send()
         .await
     {
@@ -180,13 +181,16 @@ pub async fn persist_submission_attempt(
     clip_id: i32,
     form: FormKey,
 ) -> Result<SubmissionAttempt, sqlx::Error> {
-    // ponytail: 'pending' blockt Concurrent-Doppel-POST; ein crash-hinterlassenes stale 'pending' bleibt blockiert bis es auf 'failed' geht — Stale-Timeout nachruesten falls Submits haengen.
+    // ponytail: created_at = Reservierungs-Freshness (bei Retry zurueckgesetzt). Stale-'pending' (>15min, Crash) wird retrybar; frisches 'pending' blockt Concurrent-Doppel-POST; 'submitted' blockt endgueltig.
     let pending = sqlx::query_scalar::<_, i32>(
         "INSERT INTO twitch_clip_form_submissions (clip_id, form_key, status) \
          VALUES ($1, $2, 'pending') \
          ON CONFLICT (clip_id, form_key) DO UPDATE \
-         SET status = 'pending', http_status = NULL, error = NULL, submitted_at = NULL \
+         SET status = 'pending', http_status = NULL, error = NULL, submitted_at = NULL, \
+             created_at = now() \
          WHERE twitch_clip_form_submissions.status = 'failed' \
+            OR (twitch_clip_form_submissions.status = 'pending' \
+                AND twitch_clip_form_submissions.created_at < now() - interval '15 minutes') \
          RETURNING id",
     )
     .bind(clip_id)
@@ -530,7 +534,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn submitted_attempt_is_skipped_and_failed_attempt_is_retried() {
+    async fn submission_attempt_recovers_failed_and_stale_pending_rows() {
         let Some(pool) = make_pool("t_sm_forms").await else {
             return;
         };
@@ -548,7 +552,7 @@ mod tests {
         let first = persist_submission_attempt(&pool, 42, FormKey::DeadlockHigh)
             .await
             .unwrap();
-        let in_flight = persist_submission_attempt(&pool, 42, FormKey::DeadlockHigh)
+        let fresh_pending = persist_submission_attempt(&pool, 42, FormKey::DeadlockHigh)
             .await
             .unwrap();
         sqlx::query(
@@ -557,16 +561,17 @@ mod tests {
         .execute(&pool)
         .await
         .unwrap();
-        let second = persist_submission_attempt(&pool, 42, FormKey::DeadlockHigh)
+        let submitted = persist_submission_attempt(&pool, 42, FormKey::DeadlockHigh)
             .await
             .unwrap();
 
         assert_eq!(first, SubmissionAttempt::Pending);
-        assert_eq!(in_flight, SubmissionAttempt::Skipped);
-        assert_eq!(second, SubmissionAttempt::Skipped);
+        assert_eq!(fresh_pending, SubmissionAttempt::Skipped);
+        assert_eq!(submitted, SubmissionAttempt::Skipped);
         sqlx::query(
             "UPDATE twitch_clip_form_submissions \
-             SET status = 'failed', http_status = 500, error = 'rejected', submitted_at = now() \
+             SET status = 'failed', http_status = 500, error = 'rejected', \
+                 submitted_at = now(), created_at = now() - interval '20 minutes' \
              WHERE clip_id = 42",
         )
         .execute(&pool)
@@ -577,6 +582,37 @@ mod tests {
             .unwrap();
 
         assert_eq!(retry, SubmissionAttempt::Pending);
+        let failed_retry_is_fresh: bool = sqlx::query_scalar(
+            "SELECT created_at > now() - interval '1 minute' \
+             FROM twitch_clip_form_submissions WHERE clip_id = 42",
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert!(failed_retry_is_fresh);
+        let fresh_retry = persist_submission_attempt(&pool, 42, FormKey::DeadlockHigh)
+            .await
+            .unwrap();
+        assert_eq!(fresh_retry, SubmissionAttempt::Skipped);
+        sqlx::query(
+            "UPDATE twitch_clip_form_submissions \
+             SET created_at = now() - interval '20 minutes' WHERE clip_id = 42",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+        let stale_retry = persist_submission_attempt(&pool, 42, FormKey::DeadlockHigh)
+            .await
+            .unwrap();
+        assert_eq!(stale_retry, SubmissionAttempt::Pending);
+        let stale_retry_is_fresh: bool = sqlx::query_scalar(
+            "SELECT created_at > now() - interval '1 minute' \
+             FROM twitch_clip_form_submissions WHERE clip_id = 42",
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert!(stale_retry_is_fresh);
         let row: (String, String) = sqlx::query_as(
             "SELECT form_key, status FROM twitch_clip_form_submissions WHERE clip_id = 42",
         )
