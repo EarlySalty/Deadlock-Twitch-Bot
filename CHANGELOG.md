@@ -1,10 +1,10 @@
 ## #381 — Jede Nachricht zählt nach einem Raid
 
-**Problem:** Die Erinnerung nach einem Raid kam auch dann, wenn der Raider im Zielchat längst geschrieben hatte, weil nur bestimmte Grußwörter zählten.
+**Problem:** Die Erinnerung nach einem Raid kam auch dann, wenn man im Zielchat längst geschrieben hatte. Der Bot zählte nur ein paar feste Grußwörter, ein "gg wp" oder "Hallöchen" fiel durch.
 
-**Änderung:** Die Erkennung zählt jetzt jede beliebige Nachricht des Raiders im Zielchat und lässt dafür 20 Minuten statt 5.
+**Änderung:** Jetzt zählt jede Nachricht im Zielchat, egal was drinsteht. Statt 5 Minuten bleiben dafür 20 Minuten Zeit.
 
-**Aktuelles Verhalten:** Wer innerhalb des Kulanzfensters im Zielchat schreibt, bekommt keinen falschen Vorwurf per Whisper.
+**Aktuelles Verhalten:** Wer sich nach dem Raid im Zielchat kurz meldet, bekommt keine Erinnerung mehr. Sie kommt nur noch, wenn dort wirklich nichts kam.
 
 ## #380 — Analyse-Dashboard rechnet wieder mit echten Zahlen
 

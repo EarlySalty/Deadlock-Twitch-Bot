@@ -42,6 +42,6 @@ unicode-normalization    = { workspace = true }
 integration = []
 
 [dev-dependencies]
-tokio = { workspace = true, features = ["rt", "macros"] }
+tokio = { workspace = true, features = ["rt", "macros", "test-util"] }
 sqlx  = { workspace = true }
 wiremock = { workspace = true }

@@ -325,7 +325,7 @@ mod tests {
         }
     }
 
-    #[tokio::test]
+    #[tokio::test(start_paused = true)]
     async fn beliebige_raider_nachricht_erfuellt_pending_ohne_whisper() {
         let fake = Arc::new(FakeChatApi::default());
         let chat: Arc<dyn ChatApi> = fake.clone();
@@ -342,7 +342,7 @@ mod tests {
         assert!(messages[0].1.contains("@ziel"));
     }
 
-    #[tokio::test]
+    #[tokio::test(start_paused = true)]
     async fn fremder_chatter_erfuellt_pending_nicht() {
         let fake = Arc::new(FakeChatApi::default());
         let chat: Arc<dyn ChatApi> = fake.clone();
@@ -360,7 +360,7 @@ mod tests {
         assert_eq!(whispers[0].0, "from1");
     }
 
-    #[tokio::test]
+    #[tokio::test(start_paused = true)]
     async fn falscher_zielkanal_erfuellt_pending_nicht() {
         let fake = Arc::new(FakeChatApi::default());
         let chat: Arc<dyn ChatApi> = fake.clone();
@@ -377,7 +377,7 @@ mod tests {
         assert_eq!(whispers[0].0, "from1");
     }
 
-    #[tokio::test]
+    #[tokio::test(start_paused = true)]
     async fn fehlende_begruessung_sendet_whisper() {
         let fake = Arc::new(FakeChatApi::default());
         let chat: Arc<dyn ChatApi> = fake.clone();
