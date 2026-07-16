@@ -322,14 +322,8 @@ pub async fn process_commission(
 
     // 3. Der zum Zahlungszeitpunkt hinterlegte Satz gilt; er wird nicht beim
     // Claim eingefroren. Arithmetik in i64, gespeichert wird in INTEGER-Spalten.
-    if invoice.amount_paid_cents <= 0 {
-        return Ok(CommissionOutcome::Skipped);
-    }
     let rate_pct = commission_rate_for_affiliate(pool, &affiliate_login).await?;
     let commission_cents = invoice.amount_paid_cents * rate_pct / COMMISSION_RATE_DEN;
-    if commission_cents <= 0 {
-        return Ok(CommissionOutcome::Skipped);
-    }
     // `brutto_cents`/`commission_cents` sind INTEGER (INT4) → für den Bind nach
     // i32 verengen. Cent-Beträge realer Invoices passen weit in i32.
     let brutto_cents_i32 = cents_to_int4(invoice.amount_paid_cents, "brutto_cents")?;
@@ -355,7 +349,11 @@ pub async fn process_commission(
     .to_string();
 
     // Ohne Connect-Konto: Deckel auf offene Provisionssumme anwenden.
-    let mut initial_status = "pending";
+    let mut initial_status = if commission_cents <= 0 {
+        "skipped"
+    } else {
+        "pending"
+    };
     if stripe_account_id.is_empty() {
         let pending_total: i64 = sqlx::query_scalar!(
             r#"
@@ -1009,28 +1007,60 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn zero_commission_rate_skips_without_ledger_entry() {
+    async fn zero_commission_rate_records_once_without_transfer() {
         let Some(pool) = connect("comm_rate_zero").await else {
             return;
         };
         seed_claim(&pool).await;
         add_commission_rate_column(&pool).await;
         sqlx::query(
-            "INSERT INTO affiliate_accounts (twitch_login, commission_rate_pct) VALUES ('aff1', 0)",
+            "INSERT INTO affiliate_accounts (twitch_login, stripe_account_id, commission_rate_pct) \
+             VALUES ('aff1', 'acct_123', 0)",
         )
         .execute(&pool)
         .await
         .unwrap();
+        let server = start_dedupe_stripe_server(None).await;
+        let client = StripeClient::new("sk_test_secret")
+            .unwrap()
+            .with_api_base(server.base_url.clone());
 
-        let out = process_commission(&pool, None, &invoice("evt_zero", "cus_1", 1000))
+        let first = process_commission(&pool, Some(&client), &invoice("evt_zero", "cus_1", 1000))
             .await
             .unwrap();
-        assert_eq!(out, CommissionOutcome::Skipped);
-        let count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM affiliate_commissions")
+        assert_eq!(first, CommissionOutcome::Recorded("skipped".into()));
+        let (commission_cents, status, transfer_id): (i32, String, Option<String>) =
+            sqlx::query_as(
+                "SELECT commission_cents, status, stripe_transfer_id \
+                 FROM affiliate_commissions WHERE stripe_event_id = 'evt_zero'",
+            )
             .fetch_one(&pool)
             .await
             .unwrap();
-        assert_eq!(count, 0);
+        assert_eq!(commission_cents, 0);
+        assert_eq!(status, "skipped");
+        assert!(transfer_id.is_none());
+
+        sqlx::query(
+            "UPDATE affiliate_accounts SET commission_rate_pct = 30 WHERE twitch_login = 'aff1'",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+        let replay = process_commission(&pool, Some(&client), &invoice("evt_zero", "cus_1", 1000))
+            .await
+            .unwrap();
+        assert_eq!(replay, CommissionOutcome::Duplicate);
+
+        let count: i64 = sqlx::query_scalar(
+            "SELECT COUNT(*) FROM affiliate_commissions WHERE stripe_event_id = 'evt_zero'",
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert_eq!(count, 1);
+        assert_eq!(server.requests.load(Ordering::SeqCst), 0);
+        assert_eq!(server.effective_transfers.load(Ordering::SeqCst), 0);
     }
 
     #[tokio::test]
@@ -1244,7 +1274,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn zero_or_negative_amount_skipped() {
+    async fn zero_amount_or_floor_records_skipped() {
         let Some(pool) = connect("comm_zero").await else {
             return;
         };
@@ -1253,14 +1283,28 @@ mod tests {
             process_commission(&pool, None, &invoice("e0", "cus_1", 0))
                 .await
                 .unwrap(),
-            CommissionOutcome::Skipped
+            CommissionOutcome::Recorded("skipped".into())
         );
         // commission floor 0 (1 Cent → 0.3 → 0) ist ebenfalls skipped.
         assert_eq!(
             process_commission(&pool, None, &invoice("e1", "cus_1", 1))
                 .await
                 .unwrap(),
-            CommissionOutcome::Skipped
+            CommissionOutcome::Recorded("skipped".into())
+        );
+        let rows: Vec<(String, i32, String)> = sqlx::query_as(
+            "SELECT stripe_event_id, commission_cents, status \
+             FROM affiliate_commissions ORDER BY stripe_event_id",
+        )
+        .fetch_all(&pool)
+        .await
+        .unwrap();
+        assert_eq!(
+            rows,
+            vec![
+                ("e0".into(), 0, "skipped".into()),
+                ("e1".into(), 0, "skipped".into()),
+            ]
         );
     }
 
