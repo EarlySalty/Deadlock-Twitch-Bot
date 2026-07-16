@@ -2,6 +2,7 @@ affiliate_accounts|address_city|text|NO|
 affiliate_accounts|address_country|text|NO|'DE'::text
 affiliate_accounts|address_line1|text|NO|
 affiliate_accounts|address_zip|text|NO|
+affiliate_accounts|commission_rate_pct|smallint|NO|30
 affiliate_accounts|created_at|text|NO|
 affiliate_accounts|display_name|text|YES|
 affiliate_accounts|email|text|NO|
