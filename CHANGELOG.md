@@ -1,3 +1,11 @@
+## #378 — Clips aus dem Dashboard auf Social Media planen
+
+**Problem:** Clips ließen sich im Dashboard ansehen, aber nicht gezielt für Social Media auswählen und zeitlich geplant posten. Alles Weitere war Handarbeit.
+
+**Änderung:** Im Clip-Dashboard hat jeder Clip jetzt einen Aktivieren-Knopf. Dort wählst du die Ziele (TikTok, YouTube Shorts, Instagram sowie drei Deadlock-Montage-Kanäle) und den Zeitpunkt: sofort, automatisch auf den nächsten freien Slot oder ein fester Termin. Der Bot übernimmt das Einreihen und Posten.
+
+**Aktuelles Verhalten:** Aktivierte Clips wandern in die Plan-Warteschlange und gehen zur gewählten Zeit raus. Für die eigenen Kanäle müssen die Plattform-Konten einmalig verbunden werden; die Einreichung bei den Montage-Kanälen ist getrennt zuschaltbar.
+
 ## #377 — Persönliche Bestwerte und Vergleich zum letzten Stream
 
 **Problem:** Die Übersicht zeigte den letzten Stream und den Wochenvergleich, aber nirgends deine Rekorde, keinen direkten Vergleich zum Stream davor und keine Zuschauerkurve der letzten Session.
