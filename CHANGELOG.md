@@ -1,3 +1,11 @@
+## #380 — Analyse-Dashboard rechnet wieder mit echten Zahlen
+
+**Problem:** Mehrere Ansichten zeigten Unsinn: Millionen Watchtime-Stunden im Juni, Wochentage mit über 100.000 Stunden Durchschnittsdauer, Raid-Retention bis 600%, internationale Streamer im deutschen Markt-Vergleich, kaputte Sonderzeichen in der Tag-Karte, eine dauerhafte Roh-Chat-Warnung und Ad-Verluste, die wie Zuwächse aussahen.
+
+**Änderung:** Fehlerhafte Altdaten aus einem früheren Zeitstempel-Bug wurden repariert und alle Watchtime-Auswertungen dagegen abgesichert. Raid-Retention zählt jetzt nur noch echte Raid-Ankömmlinge und ist bei 100% gedeckelt, der Markt-Vergleich filtert auf deutschsprachige Streams, das Labor sammelt wieder Viewer-Daten pro Spiel. Die Ad-Analyse zeigt Verluste und Zuwächse mit klaren Vorzeichen samt echten Viewer-Zahlen, und der Tag-Trend wird jetzt wirklich berechnet statt immer 0% zu melden.
+
+**Aktuelles Verhalten:** Trends, Planung, Raids, Markt, Labor, Chat-Tiefe und Monetarisierung zeigen plausible Werte. Wo Chat-Daten erst seit Kurzem erfasst werden, steht ein Hinweis mit dem Startdatum statt einer Dauerwarnung.
+
 ## #379 — Feature-Vergleich liegt jetzt auf einer Schriftrolle
 
 **Problem:** Der Feature-Vergleich auf der Preisseite lag zwar auf Pergament, wirkte durch Rahmen und runde Ecken aber wie ein gewöhnliches Blatt Papier.

@@ -17,6 +17,7 @@ use crate::auth::level::DashboardAuthLevel;
 
 const EXTERNAL_REACH_AVG_THRESHOLD: f64 = 100.0;
 const PARTNER_AGGREGATE_SQL: &str = "BOOL_OR(COALESCE(c.is_partner, FALSE)) AS is_partner";
+const GERMAN_CATEGORY_PREDICATE_SQL: &str = "AND (c.language IN ('de','de-de','de-at','de-ch') OR (c.language IS NULL AND (c.ts_utc < '2026-06-10T00:00:00+00' OR c.tags ILIKE '%deutsch%' OR c.tags ILIKE '%german%')))";
 
 fn tier_range(tier: &str) -> Option<(f64, f64)> {
     match tier {
@@ -83,6 +84,7 @@ pub async fn category_leaderboard_handler(
                    {PARTNER_AGGREGATE_SQL}
             FROM twitch_stats_category c
             WHERE c.ts_utc >= $1
+              {GERMAN_CATEGORY_PREDICATE_SQL}
             GROUP BY c.streamer
             HAVING AVG(c.viewer_count) <= $2
             ORDER BY {order}
@@ -102,6 +104,7 @@ pub async fn category_leaderboard_handler(
                    {PARTNER_AGGREGATE_SQL}
             FROM twitch_stats_category c
             WHERE c.ts_utc >= $1
+              {GERMAN_CATEGORY_PREDICATE_SQL}
             GROUP BY c.streamer
             ORDER BY {order}
         "#
@@ -212,6 +215,9 @@ pub async fn category_leaderboard_handler(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use axum::{body::to_bytes, extract::State, response::IntoResponse};
+    use sqlx::postgres::{PgConnectOptions, PgPoolOptions};
+    use std::str::FromStr;
 
     #[test]
     fn partner_aggregate_uses_boolean_schema() {
@@ -220,5 +226,74 @@ mod tests {
             "BOOL_OR(COALESCE(c.is_partner, FALSE)) AS is_partner"
         );
         assert!(!PARTNER_AGGREGATE_SQL.contains("<> 0"));
+    }
+
+    #[tokio::test]
+    async fn leaderboard_filtert_nicht_deutsche_streamer_in_beiden_zweigen() {
+        let Ok(dsn) = std::env::var("TB_TEST_DATABASE_URL") else {
+            return;
+        };
+        let admin = PgPoolOptions::new().connect(&dsn).await.unwrap();
+        sqlx::query("DROP SCHEMA IF EXISTS t_category_leaderboard_de CASCADE")
+            .execute(&admin)
+            .await
+            .unwrap();
+        sqlx::query("CREATE SCHEMA t_category_leaderboard_de")
+            .execute(&admin)
+            .await
+            .unwrap();
+        admin.close().await;
+        let options = PgConnectOptions::from_str(&dsn)
+            .unwrap()
+            .options([("search_path", "t_category_leaderboard_de")]);
+        let pool = PgPoolOptions::new().connect_with(options).await.unwrap();
+        sqlx::query(
+            "CREATE TABLE twitch_stats_category (\
+                 streamer TEXT, viewer_count INTEGER, is_partner BOOLEAN, \
+                 ts_utc TIMESTAMPTZ, language TEXT, tags TEXT)",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+        sqlx::query(
+            "INSERT INTO twitch_stats_category \
+             (streamer, viewer_count, is_partner, ts_utc, language, tags) VALUES \
+             ('de_streamer', 50, FALSE, NOW(), 'de', ''), \
+             ('xqc', 500, FALSE, NOW(), 'en', '')",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+
+        for exclude_external in ["0", "1"] {
+            let response = category_leaderboard_handler(
+                DashboardAuthLevel::admin(),
+                State(pool.clone()),
+                Query(LeaderboardQuery {
+                    streamer: None,
+                    days: Some(30),
+                    limit: Some(25),
+                    sort: None,
+                    tier: None,
+                    exclude_external: Some(exclude_external.into()),
+                }),
+            )
+            .await
+            .into_response();
+            let body: serde_json::Value =
+                serde_json::from_slice(&to_bytes(response.into_body(), usize::MAX).await.unwrap())
+                    .unwrap();
+            let names: Vec<_> = body["leaderboard"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .filter_map(|entry| entry["streamer"].as_str())
+                .collect();
+            assert_eq!(
+                names,
+                ["de_streamer"],
+                "Zweig exclude_external={exclude_external}"
+            );
+        }
     }
 }

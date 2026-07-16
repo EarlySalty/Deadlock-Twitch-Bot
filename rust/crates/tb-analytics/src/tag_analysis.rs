@@ -18,11 +18,24 @@ use sqlx::PgPool;
 #[derive(Default)]
 struct TagBucket {
     viewers: Vec<f64>,
+    old_viewers: Vec<f64>,
+    new_viewers: Vec<f64>,
     retention: Vec<f64>,
     followers: Vec<f64>,
     durations: Vec<f64>,
     hours: Vec<i32>,
     samples: i64,
+}
+
+#[derive(sqlx::FromRow)]
+struct TagSessionRow {
+    tags: Option<String>,
+    avg_viewers: Option<f64>,
+    retention_10m: Option<f64>,
+    follower_delta: Option<f64>,
+    duration_seconds: Option<f64>,
+    start_hour: Option<i32>,
+    started_at: DateTime<Utc>,
 }
 
 fn median(values: &[f64]) -> f64 {
@@ -42,6 +55,25 @@ fn median(values: &[f64]) -> f64 {
 
 fn round1(value: f64) -> f64 {
     (value * 10.0).round() / 10.0
+}
+
+fn calculate_trend(old_viewers: &[f64], new_viewers: &[f64]) -> (&'static str, f64) {
+    if old_viewers.is_empty() || new_viewers.is_empty() {
+        return ("stable", 0.0);
+    }
+    let old_median = median(old_viewers);
+    if old_median == 0.0 {
+        return ("stable", 0.0);
+    }
+    let value = round1((median(new_viewers) - old_median) / old_median * 100.0);
+    let trend = if value >= 10.0 {
+        "up"
+    } else if value <= -10.0 {
+        "down"
+    } else {
+        "stable"
+    };
+    (trend, value)
 }
 
 /// Tags aus dem Spaltenwert parsen (JSON-Array oder Komma-Liste).
@@ -194,20 +226,22 @@ pub async fn load_tag_analysis_extended(
     limit: i64,
 ) -> Result<Value, sqlx::Error> {
     let since: DateTime<Utc> = Utc::now() - Duration::days(days);
+    let midpoint = since + Duration::seconds(days.saturating_mul(86_400) / 2);
     let streamer_login = streamer.map(|s| s.to_lowercase());
 
-    let rows = sqlx::query!(
-        "SELECT s.id::bigint AS \"id!\", s.tags, s.avg_viewers::float8 AS avg_viewers, \
+    let rows = sqlx::query_as::<_, TagSessionRow>(
+        "SELECT s.tags, s.avg_viewers::float8 AS avg_viewers, \
                 s.retention_10m::float8 AS retention_10m, \
                 CASE WHEN s.follower_delta IS NOT NULL AND NOT (s.followers_end = 0 AND s.followers_start > 0) \
                      THEN s.follower_delta ELSE NULL END::float8 AS follower_delta, \
-                s.duration_seconds::float8, EXTRACT(HOUR FROM s.started_at)::int AS start_hour \
+                s.duration_seconds::float8, EXTRACT(HOUR FROM s.started_at)::int AS start_hour, \
+                s.started_at \
          FROM twitch_stream_sessions s \
          WHERE s.started_at >= $1 AND s.ended_at IS NOT NULL AND s.tags IS NOT NULL \
            AND (COALESCE($2, '') = '' OR LOWER(s.streamer_login) = $2)",
-        since,
-        streamer_login.as_deref()
     )
+    .bind(since)
+    .bind(streamer_login.as_deref())
     .fetch_all(pool)
     .await?;
 
@@ -221,7 +255,13 @@ pub async fn load_tag_analysis_extended(
             }
             seen.push(tag.clone());
             let bucket = tag_stats.entry(tag).or_default();
-            bucket.viewers.push(row.avg_viewers.unwrap_or(0.0));
+            let viewers = row.avg_viewers.unwrap_or(0.0);
+            bucket.viewers.push(viewers);
+            if row.started_at < midpoint {
+                bucket.old_viewers.push(viewers);
+            } else {
+                bucket.new_viewers.push(viewers);
+            }
             if let Some(r) = row.retention_10m {
                 bucket.retention.push(r * 100.0);
             }
@@ -259,14 +299,15 @@ pub async fn load_tag_analysis_extended(
         .take(limit.max(0) as usize)
         .enumerate()
         .map(|(idx, (tag, data))| {
+            let (trend, trend_value) = calculate_trend(&data.old_viewers, &data.new_viewers);
             json!({
                 "tagName": tag,
                 "usageCount": data.samples,
                 "avgViewers": round1(median(&data.viewers)),
                 "avgRetention10m": round1(median(&data.retention)),
                 "avgFollowerGain": round1(median(&data.followers)),
-                "trend": "stable",
-                "trendValue": 0,
+                "trend": trend,
+                "trendValue": trend_value,
                 "bestTimeSlot": best_time_slot(&data.hours),
                 "avgStreamDuration": median(&data.durations).round(),
                 "categoryRank": idx + 1,
@@ -357,30 +398,61 @@ mod tests {
         let Some(pool) = make_pool("t_tagx").await else {
             return;
         };
-        // 3 Sessions mit Tag "Deadlock" (samples>=3 → erscheint), Viewer 100/200/300.
-        for v in [100, 200, 300] {
-            sqlx::query("INSERT INTO twitch_stream_sessions (streamer_login, tags, avg_viewers, retention_10m, follower_delta, followers_start, followers_end, duration_seconds, started_at, ended_at) VALUES ('nani', '[\"Deadlock\",\"Deutsch\"]', $1, 0.5, 10, 100, 110, 7200, CURRENT_DATE - INTERVAL '1 day' + TIME '20:00', NOW())")
-                .bind(v as f32).execute(&pool).await.unwrap();
+        // Beide Fensterhälften haben denselben Median → stabiler Trend.
+        for (v, days_ago) in [(100, 20), (200, 19), (100, 5), (200, 4)] {
+            let started = Utc::now()
+                .date_naive()
+                .and_hms_opt(20, 0, 0)
+                .unwrap()
+                .and_utc()
+                - Duration::days(days_ago);
+            sqlx::query("INSERT INTO twitch_stream_sessions (streamer_login, tags, avg_viewers, retention_10m, follower_delta, followers_start, followers_end, duration_seconds, started_at, ended_at) VALUES ('nani', '[\"Deadlock\",\"Deutsch\"]', $1, 0.5, 10, 100, 110, 7200, $2, $3)")
+                .bind(v as f32).bind(started).bind(started + Duration::hours(2)).execute(&pool).await.unwrap();
         }
         // 1 Session mit Tag "Solo" → samples=1 < 3 → gefiltert.
         sqlx::query("INSERT INTO twitch_stream_sessions (streamer_login, tags, avg_viewers, retention_10m, duration_seconds, started_at, ended_at) VALUES ('nani', 'Solo', 5, 0.1, 100, NOW() - INTERVAL '1 day', NOW())")
             .execute(&pool).await.unwrap();
 
-        let v = load_tag_analysis_extended(&pool, Some("nani"), 3650, 20)
+        let v = load_tag_analysis_extended(&pool, Some("nani"), 30, 20)
             .await
             .unwrap();
         assert!(v["peerBenchmark"].is_null());
         let tags = v["tags"].as_array().unwrap();
-        // "Deadlock" + "Deutsch" haben je 3 samples; "Solo" gefiltert.
+        // "Deadlock" + "Deutsch" haben je 4 samples; "Solo" gefiltert.
         assert_eq!(tags.len(), 2);
         let dl = tags.iter().find(|t| t["tagName"] == "Deadlock").unwrap();
-        assert_eq!(dl["usageCount"], 3);
-        assert_eq!(dl["avgViewers"], 200.0); // median(100,200,300)
+        assert_eq!(dl["usageCount"], 4);
+        assert_eq!(dl["avgViewers"], 150.0);
         assert_eq!(dl["avgRetention10m"], 50.0); // 0.5*100
         assert_eq!(dl["avgFollowerGain"], 10.0);
         assert_eq!(dl["bestTimeSlot"], "20:00");
         assert_eq!(dl["categoryRank"], 1);
         assert_eq!(dl["trend"], "stable");
+        assert_eq!(dl["trendValue"], 0.0);
+    }
+
+    #[tokio::test]
+    async fn tag_trend_steigende_zweite_fensterhaelfte_ist_up() {
+        let Some(pool) = make_pool("t_tagx_trend_up").await else {
+            return;
+        };
+        for (viewer, days_ago) in [(10, 22), (20, 21), (30, 20), (40, 7), (50, 6), (60, 5)] {
+            let started = Utc::now() - Duration::days(days_ago);
+            sqlx::query("INSERT INTO twitch_stream_sessions (streamer_login, tags, avg_viewers, duration_seconds, started_at, ended_at) VALUES ('nani', 'Growth', $1, 3600, $2, $3)")
+                .bind(viewer as f32)
+                .bind(started)
+                .bind(started + Duration::hours(1))
+                .execute(&pool)
+                .await
+                .unwrap();
+        }
+
+        let value = load_tag_analysis_extended(&pool, None, 30, 20)
+            .await
+            .unwrap();
+        let tag = &value["tags"][0];
+        assert_eq!(tag["trend"], "up");
+        assert_eq!(tag["trendValue"], 150.0);
     }
 
     #[tokio::test]

@@ -71,7 +71,7 @@ fn iso_or_none_str(text: Option<String>) -> Value {
 
 struct PresenceStats {
     presence_rows: i64,
-    sessions_with_presence: i64,
+    gap_sessions: i64,
     gap_start: Value,
 }
 
@@ -79,64 +79,75 @@ async fn query_scope_presence(
     pool: &PgPool,
     streamer: &str,
     scope: &Scope<'_>,
+    coverage_start: Option<DateTime<Utc>>,
 ) -> Result<PresenceStats, sqlx::Error> {
+    let empty = || PresenceStats {
+        presence_rows: 0,
+        gap_sessions: 0,
+        gap_start: Value::Null,
+    };
+    let Some(coverage_start) = coverage_start else {
+        return Ok(empty());
+    };
     match scope {
-        Scope::Sessions([]) => Ok(PresenceStats {
-            presence_rows: 0,
-            sessions_with_presence: 0,
-            gap_start: Value::Null,
-        }),
+        Scope::Sessions([]) => Ok(empty()),
         Scope::Sessions(ids) => {
-            let stats = sqlx::query!(
-                "SELECT COUNT(*)::bigint AS \"rows!\", COUNT(DISTINCT sc.session_id)::bigint AS \"sessions!\" \
+            let stats: (i64, i64) = sqlx::query_as(
+                "SELECT COUNT(*)::bigint, COUNT(DISTINCT sc.session_id)::bigint \
                    FROM twitch_session_chatters sc \
-                  WHERE LOWER(sc.streamer_login) = $1 AND sc.session_id = ANY($2::bigint[])",
-                streamer,
-                ids
+                   JOIN twitch_stream_sessions s ON s.id = sc.session_id \
+                  WHERE LOWER(s.streamer_login) = $1 AND sc.session_id = ANY($2::bigint[]) \
+                    AND s.started_at >= $3",
             )
+            .bind(streamer)
+            .bind(ids)
+            .bind(coverage_start)
             .fetch_one(pool)
             .await?;
-            let gap = sqlx::query_scalar!(
-                "SELECT MIN(s.started_at) AS started_at FROM twitch_stream_sessions s \
+            let gap: (i64, Option<DateTime<Utc>>) = sqlx::query_as(
+                "SELECT COUNT(*)::bigint, MIN(s.started_at) FROM twitch_stream_sessions s \
                   WHERE LOWER(s.streamer_login) = $1 AND s.id = ANY($2::bigint[]) \
+                    AND s.started_at >= $3 \
                     AND EXISTS (SELECT 1 FROM twitch_session_chatters sc WHERE sc.session_id = s.id) \
                     AND NOT EXISTS (SELECT 1 FROM twitch_chat_messages m WHERE m.session_id = s.id)",
-                streamer,
-                ids
             )
+            .bind(streamer)
+            .bind(ids)
+            .bind(coverage_start)
             .fetch_one(pool)
             .await?;
             Ok(PresenceStats {
-                presence_rows: stats.rows,
-                sessions_with_presence: stats.sessions,
-                gap_start: iso_or_none_dt(gap),
+                presence_rows: stats.0,
+                gap_sessions: gap.0,
+                gap_start: iso_or_none_dt(gap.1),
             })
         }
         Scope::Since(since) => {
-            let stats = sqlx::query!(
-                "SELECT COUNT(*)::bigint AS \"rows!\", COUNT(DISTINCT sc.session_id)::bigint AS \"sessions!\" \
+            let effective_since = (*since).max(coverage_start);
+            let stats: (i64, i64) = sqlx::query_as(
+                "SELECT COUNT(*)::bigint, COUNT(DISTINCT sc.session_id)::bigint \
                    FROM twitch_session_chatters sc \
                    JOIN twitch_stream_sessions s ON s.id = sc.session_id \
                   WHERE LOWER(s.streamer_login) = $1 AND s.started_at >= $2",
-                streamer,
-                since
             )
+            .bind(streamer)
+            .bind(effective_since)
             .fetch_one(pool)
             .await?;
-            let gap = sqlx::query_scalar!(
-                "SELECT MIN(s.started_at) AS started_at FROM twitch_stream_sessions s \
+            let gap: (i64, Option<DateTime<Utc>>) = sqlx::query_as(
+                "SELECT COUNT(*)::bigint, MIN(s.started_at) FROM twitch_stream_sessions s \
                   WHERE LOWER(s.streamer_login) = $1 AND s.started_at >= $2 \
                     AND EXISTS (SELECT 1 FROM twitch_session_chatters sc WHERE sc.session_id = s.id) \
                     AND NOT EXISTS (SELECT 1 FROM twitch_chat_messages m WHERE m.session_id = s.id)",
-                streamer,
-                since
             )
+            .bind(streamer)
+            .bind(effective_since)
             .fetch_one(pool)
             .await?;
             Ok(PresenceStats {
-                presence_rows: stats.rows,
-                sessions_with_presence: stats.sessions,
-                gap_start: iso_or_none_dt(gap),
+                presence_rows: stats.0,
+                gap_sessions: gap.0,
+                gap_start: iso_or_none_dt(gap.1),
             })
         }
     }
@@ -203,6 +214,7 @@ pub async fn build_raw_chat_status(
     if streamer.is_empty() {
         return Ok(json!({
             "available": false,
+            "coverageStart": Value::Null,
             "lastMessageAt": Value::Null,
             "gapStart": Value::Null,
             "suspectedIngestionIssue": false,
@@ -210,6 +222,13 @@ pub async fn build_raw_chat_status(
             "note": Value::Null,
         }));
     }
+
+    let coverage_start: Option<DateTime<Utc>> = sqlx::query_scalar(
+        "SELECT MIN(message_ts) FROM twitch_chat_messages WHERE LOWER(streamer_login) = $1",
+    )
+    .bind(&streamer)
+    .fetch_one(pool)
+    .await?;
 
     // Health-Tabelle (live, aber graceful wie Pythons try/except).
     let health = sqlx::query!(
@@ -254,12 +273,13 @@ pub async fn build_raw_chat_status(
         .map(|s| s.trim().to_string())
         .filter(|s| !s.is_empty());
 
-    let presence = query_scope_presence(pool, &streamer, &scope).await?;
+    let presence = query_scope_presence(pool, &streamer, &scope, coverage_start).await?;
     let raw = query_scope_raw(pool, &streamer, &scope).await?;
 
     // Vermutete Ingestion-Lücke.
     let suspected_issue = (presence.presence_rows > 0 && raw.raw_rows == 0)
-        || (presence.sessions_with_presence > raw.sessions_with_raw && raw.sessions_with_raw > 0);
+        // ponytail: Eine einzelne Gap-Session kann Session-/Poll-Randrauschen sein; bei präziserem Ingestion-Signal wieder verschärfen.
+        || (presence.gap_sessions > 1 && raw.sessions_with_raw > 0);
 
     // Backfill-Status (Legacy-Tabelle, graceful).
     let backfill_row = sqlx::query!(
@@ -310,6 +330,7 @@ pub async fn build_raw_chat_status(
 
     Ok(json!({
         "available": raw.raw_rows > 0,
+        "coverageStart": iso_or_none_dt(coverage_start),
         "lastMessageAt": last_message_at,
         "gapStart": presence.gap_start,
         "suspectedIngestionIssue": suspected_issue,
@@ -384,22 +405,45 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn presence_ohne_raw_meldet_luecke() {
-        let Some(pool) = make_pool("t_rcs_gap", true).await else {
+    async fn presence_vor_coverage_meldet_keine_luecke() {
+        let Some(pool) = make_pool("t_rcs_precoverage", true).await else {
             return;
         };
-        sqlx::query("INSERT INTO twitch_stream_sessions (id, streamer_login, started_at) VALUES (1,'nani',NOW()-INTERVAL '1 day')").execute(&pool).await.unwrap();
+        sqlx::query("INSERT INTO twitch_stream_sessions (id, streamer_login, started_at) VALUES (1,'nani',NOW()-INTERVAL '10 days'),(2,'nani',NOW()-INTERVAL '1 day')").execute(&pool).await.unwrap();
         sqlx::query("INSERT INTO twitch_session_chatters (session_id, streamer_login, chatter_login) VALUES (1,'nani','viewer')").execute(&pool).await.unwrap();
-        // KEINE chat_messages → Presence vorhanden, Raw fehlt → suspectedIngestionIssue.
+        sqlx::query("INSERT INTO twitch_chat_messages (session_id, streamer_login, chatter_login, content, message_ts) VALUES (2,'nani','viewer','hi',NOW()-INTERVAL '12 hours')").execute(&pool).await.unwrap();
         let since = Utc::now() - chrono::Duration::days(30);
         let v = build_raw_chat_status(&pool, "nani", Scope::Since(since))
             .await
             .unwrap();
-        assert_eq!(v["available"], false);
+        assert_eq!(v["available"], true);
+        assert_eq!(v["suspectedIngestionIssue"], false);
+        assert_eq!(v["backfillState"], "not_needed");
+        assert!(v["gapStart"].is_null());
+        assert!(!v["coverageStart"].is_null());
+    }
+
+    #[tokio::test]
+    async fn mehrere_luecken_nach_coverage_werden_gemeldet() {
+        let Some(pool) = make_pool("t_rcs_multi_gap", true).await else {
+            return;
+        };
+        sqlx::query("INSERT INTO twitch_stream_sessions (id, streamer_login, started_at) VALUES (1,'nani',NOW()-INTERVAL '4 days'),(2,'nani',NOW()-INTERVAL '2 days'),(3,'nani',NOW()-INTERVAL '1 day')").execute(&pool).await.unwrap();
+        sqlx::query("INSERT INTO twitch_chat_messages (session_id, streamer_login, chatter_login, content, message_ts) VALUES (1,'nani','viewer','hi',NOW()-INTERVAL '3 days')").execute(&pool).await.unwrap();
+        sqlx::query("INSERT INTO twitch_session_chatters (session_id, streamer_login, chatter_login) VALUES (2,'nani','viewer'),(3,'nani','viewer')").execute(&pool).await.unwrap();
+
+        let v = build_raw_chat_status(
+            &pool,
+            "nani",
+            Scope::Since(Utc::now() - chrono::Duration::days(30)),
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(v["available"], true);
         assert_eq!(v["suspectedIngestionIssue"], true);
         assert_eq!(v["backfillState"], "not_started");
-        assert_eq!(v["note"], "Presence-/Rollup-Daten vorhanden, aber keine Roh-Chat-Nachrichten im gewählten Zeitraum.");
-        assert!(!v["gapStart"].is_null()); // Session ohne Roh-Chat → gapStart gesetzt
+        assert!(!v["gapStart"].is_null());
     }
 
     #[tokio::test]

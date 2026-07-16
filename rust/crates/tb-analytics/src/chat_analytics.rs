@@ -134,53 +134,58 @@ pub async fn load_chat_analytics_snapshot(
     since: DateTime<Utc>,
 ) -> Result<ChatAnalyticsSnapshot, sqlx::Error> {
     let bots = bots_vec();
+    let coverage_start: Option<DateTime<Utc>> = sqlx::query_scalar(
+        "SELECT MIN(message_ts) FROM twitch_chat_messages WHERE LOWER(streamer_login) = $1",
+    )
+    .bind(streamer)
+    .fetch_one(pool)
+    .await?;
+    let effective_since = coverage_start.map_or(since, |start| start.max(since));
 
-    let session_stats = sqlx::query!(
+    let session_stats: (i64, f64, Option<f64>, f64) = sqlx::query_as(
         r#"
-        SELECT COUNT(*)::bigint AS "session_count!",
-               COALESCE(SUM(s.duration_seconds), 0)::float8 AS "total_duration_seconds!",
-               AVG(s.avg_viewers)::float8 AS avg_viewers,
-               COALESCE(SUM(COALESCE(s.avg_viewers, 0) * GREATEST(COALESCE(s.duration_seconds, 0), 0) / 60.0), 0)::float8 AS "viewer_minutes_fallback!"
+        SELECT COUNT(*)::bigint,
+               COALESCE(SUM(GREATEST(EXTRACT(EPOCH FROM (s.ended_at - GREATEST(s.started_at, $1))), 0)), 0)::float8,
+               AVG(s.avg_viewers)::float8,
+               COALESCE(SUM(COALESCE(s.avg_viewers, 0) *
+                   GREATEST(EXTRACT(EPOCH FROM (s.ended_at - GREATEST(s.started_at, $1))), 0) / 60.0), 0)::float8
         FROM twitch_stream_sessions s
-        WHERE s.started_at >= $1
+        WHERE s.ended_at >= $1
           AND LOWER(s.streamer_login) = $2
           AND s.ended_at IS NOT NULL
         "#,
-        since,
-        streamer
     )
+    .bind(effective_since)
+    .bind(streamer)
     .fetch_one(pool)
     .await?;
-    let session_count = session_stats.session_count;
-    let total_duration_seconds = session_stats.total_duration_seconds;
-    let avg_viewers = session_stats.avg_viewers;
-    let viewer_minutes_fallback = session_stats.viewer_minutes_fallback;
+    let (session_count, total_duration_seconds, avg_viewers, viewer_minutes_fallback) =
+        session_stats;
 
-    let viewer_samples = sqlx::query!(
+    let viewer_samples: (i64, f64) = sqlx::query_as(
         r#"
-        SELECT COUNT(*)::bigint AS "viewer_sample_count!",
-               COALESCE(SUM(GREATEST(sv.viewer_count, 0)), 0)::float8 AS "viewer_minutes_samples!"
+        SELECT COUNT(*)::bigint,
+               COALESCE(SUM(GREATEST(sv.viewer_count, 0)), 0)::float8
         FROM twitch_session_viewers sv
         JOIN twitch_stream_sessions s ON s.id = sv.session_id
-        WHERE s.started_at >= $1
+        WHERE sv.ts_utc >= $1
           AND LOWER(s.streamer_login) = $2
           AND s.ended_at IS NOT NULL
         "#,
-        since,
-        streamer
     )
+    .bind(effective_since)
+    .bind(streamer)
     .fetch_one(pool)
     .await?;
-    let viewer_sample_count = viewer_samples.viewer_sample_count;
-    let viewer_minutes_samples = viewer_samples.viewer_minutes_samples;
+    let (viewer_sample_count, viewer_minutes_samples) = viewer_samples;
 
-    let session_benchmark_rows: Vec<(i64, i64, f64)> = sqlx::query!(
+    let session_benchmark_rows: Vec<(i64, i64, f64)> = sqlx::query_as(
         r#"
         WITH session_messages AS (
             SELECT cm.session_id, COUNT(*) AS message_count
             FROM twitch_chat_messages cm
             JOIN twitch_stream_sessions s ON s.id = cm.session_id
-            WHERE s.started_at >= $1
+            WHERE cm.message_ts >= $1
               AND LOWER(s.streamer_login) = $2
               AND s.ended_at IS NOT NULL
               AND (cm.chatter_login IS NULL OR cm.chatter_login = '' OR LOWER(cm.chatter_login) <> ALL($3))
@@ -191,31 +196,29 @@ pub async fn load_chat_analytics_snapshot(
                    COALESCE(SUM(GREATEST(sv.viewer_count, 0)), 0) AS viewer_minutes
             FROM twitch_session_viewers sv
             JOIN twitch_stream_sessions s ON s.id = sv.session_id
-            WHERE s.started_at >= $1
+            WHERE sv.ts_utc >= $1
               AND LOWER(s.streamer_login) = $2
               AND s.ended_at IS NOT NULL
             GROUP BY sv.session_id
         )
-        SELECT s.id::bigint AS "session_id!",
-               COALESCE(sm.message_count, 0)::bigint AS "message_count!",
+        SELECT s.id::bigint,
+               COALESCE(sm.message_count, 0)::bigint,
                (CASE WHEN COALESCE(svs.sample_count, 0) > 0 THEN COALESCE(svs.viewer_minutes, 0)
-                     ELSE COALESCE(s.avg_viewers, 0) * GREATEST(COALESCE(s.duration_seconds, 0), 0) / 60.0 END)::float8 AS "viewer_minutes!"
+                     ELSE COALESCE(s.avg_viewers, 0) *
+                        GREATEST(EXTRACT(EPOCH FROM (s.ended_at - GREATEST(s.started_at, $1))), 0) / 60.0 END)::float8
         FROM twitch_stream_sessions s
         LEFT JOIN session_messages sm ON sm.session_id = s.id
         LEFT JOIN session_viewer_samples svs ON svs.session_id = s.id
-        WHERE s.started_at >= $1
+        WHERE s.ended_at >= $1
           AND LOWER(s.streamer_login) = $2
           AND s.ended_at IS NOT NULL
         "#,
-        since,
-        streamer,
-        &bots
     )
+    .bind(effective_since)
+    .bind(streamer)
+    .bind(&bots)
     .fetch_all(pool)
-    .await?
-    .into_iter()
-    .map(|row| (row.session_id, row.message_count, row.viewer_minutes))
-    .collect();
+    .await?;
 
     let all_messages: Vec<MessageRow> = sqlx::query_as!(
         MessageRow,
@@ -230,7 +233,7 @@ pub async fn load_chat_analytics_snapshot(
           AND LOWER(streamer_login) = $2
           AND (chatter_login IS NULL OR chatter_login = '' OR LOWER(chatter_login) <> ALL($3))
         "#,
-        since,
+        effective_since,
         streamer,
         &bots
     )
@@ -322,7 +325,7 @@ pub async fn load_chat_analytics_snapshot(
         ORDER BY COUNT(*) DESC
         LIMIT 20
         "#,
-        since,
+        effective_since,
         streamer,
         &bots
     )
@@ -768,7 +771,7 @@ mod tests {
             .unwrap();
         for ddl in [
             "CREATE TABLE twitch_stream_sessions (id BIGSERIAL PRIMARY KEY, streamer_login TEXT, started_at TIMESTAMPTZ, ended_at TIMESTAMPTZ, duration_seconds INTEGER, avg_viewers REAL)",
-            "CREATE TABLE twitch_session_viewers (session_id BIGINT, minutes_from_start INTEGER, viewer_count INTEGER)",
+            "CREATE TABLE twitch_session_viewers (session_id BIGINT, ts_utc TIMESTAMPTZ, minutes_from_start INTEGER, viewer_count INTEGER)",
             "CREATE TABLE twitch_chat_messages (id BIGSERIAL PRIMARY KEY, session_id BIGINT, streamer_login TEXT, chatter_login TEXT, chatter_id TEXT, content TEXT, is_command BOOLEAN, message_ts TIMESTAMPTZ)",
             "CREATE TABLE twitch_session_chatters (session_id BIGINT, streamer_login TEXT, chatter_login TEXT, chatter_id TEXT, messages INTEGER DEFAULT 0, seen_via_chatters_api BOOLEAN DEFAULT FALSE, is_first_time_streamer BOOLEAN DEFAULT FALSE)",
             "CREATE TABLE twitch_chatter_rollup (streamer_login TEXT, chatter_login TEXT, chatter_id TEXT, first_seen_at TIMESTAMPTZ, last_seen_at TIMESTAMPTZ)",
@@ -791,11 +794,13 @@ mod tests {
             .execute(&pool).await.unwrap();
         sqlx::query("INSERT INTO twitch_chatter_rollup (streamer_login, chatter_login, first_seen_at, last_seen_at) VALUES ('nani','viewer',NOW()-INTERVAL '60 days',NOW())")
             .execute(&pool).await.unwrap();
+        sqlx::query("INSERT INTO twitch_chat_messages (session_id, streamer_login, chatter_login, content, is_command, message_ts) VALUES (0,'nani','nightbot','coverage',FALSE,NOW()-INTERVAL '2 days')")
+            .execute(&pool).await.unwrap();
         for (c, cmd) in [("hallo", false), ("!uptime", true), ("haze build", false)] {
             sqlx::query("INSERT INTO twitch_chat_messages (session_id, streamer_login, chatter_login, content, is_command, message_ts) VALUES (1,'nani','viewer',$1,$2,NOW()-INTERVAL '12 hours')")
                 .bind(c).bind(cmd).execute(&pool).await.unwrap();
         }
-        sqlx::query("INSERT INTO twitch_session_viewers (session_id, minutes_from_start, viewer_count) VALUES (1,0,40),(1,1,60)").execute(&pool).await.unwrap();
+        sqlx::query("INSERT INTO twitch_session_viewers (session_id, ts_utc, minutes_from_start, viewer_count) VALUES (1,NOW()-INTERVAL '11 hours',0,40),(1,NOW()-INTERVAL '11 hours',1,60)").execute(&pool).await.unwrap();
 
         let since = Utc::now() - chrono::Duration::days(30);
         let snap = load_chat_analytics_snapshot(&pool, "nani", since)
@@ -822,6 +827,49 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn coverage_mitten_in_session_schneidet_nachrichten_und_viewer_gleich() {
+        let Some(pool) = make_pool("t_ca_partial_coverage").await else {
+            return;
+        };
+        sqlx::query(
+            "INSERT INTO twitch_stream_sessions
+                (id, streamer_login, started_at, ended_at, duration_seconds, avg_viewers)
+             VALUES (1, 'nani', NOW()-INTERVAL '2 hours', NOW(), 7200, 10)",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+        sqlx::query(
+            "INSERT INTO twitch_chat_messages
+                (session_id, streamer_login, chatter_login, content, is_command, message_ts)
+             VALUES (1, 'nani', 'viewer', 'hallo', FALSE, NOW()-INTERVAL '1 hour')",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+        sqlx::query(
+            "INSERT INTO twitch_session_viewers
+                (session_id, ts_utc, minutes_from_start, viewer_count)
+             VALUES (1, NOW()-INTERVAL '90 minutes', 30, 10),
+                    (1, NOW()-INTERVAL '30 minutes', 90, 20)",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+
+        let snap =
+            load_chat_analytics_snapshot(&pool, "nani", Utc::now() - chrono::Duration::days(30))
+                .await
+                .unwrap();
+
+        assert_eq!(snap.session_count, 1);
+        assert_eq!(snap.all_messages.len(), 1);
+        assert_eq!(snap.viewer_sample_count, 1);
+        assert_eq!(snap.viewer_minutes_samples, 20.0);
+        assert_eq!(snap.session_benchmark_rows, vec![(1, 1, 20.0)]);
+    }
+
+    #[tokio::test]
     async fn payload_aggregiert() {
         let Some(pool) = make_pool("t_ca_payload").await else {
             return;
@@ -830,13 +878,15 @@ mod tests {
             .execute(&pool).await.unwrap();
         sqlx::query("INSERT INTO twitch_session_chatters (session_id, streamer_login, chatter_login, messages, seen_via_chatters_api) VALUES (1,'nani','viewer',5,TRUE)")
             .execute(&pool).await.unwrap();
+        sqlx::query("INSERT INTO twitch_chat_messages (session_id, streamer_login, chatter_login, content, is_command, message_ts) VALUES (0,'nani','nightbot','coverage',FALSE,NOW()-INTERVAL '2 days')")
+            .execute(&pool).await.unwrap();
         for (c, cmd) in [
             ("hallo zusammen", false),
             ("!uptime", true),
             ("haze ist op", false),
             ("lol haha", false),
         ] {
-            sqlx::query("INSERT INTO twitch_chat_messages (session_id, streamer_login, chatter_login, content, is_command, message_ts) VALUES (1,'nani','viewer',$1,$2,'2026-06-14 18:30:00+00')")
+            sqlx::query("INSERT INTO twitch_chat_messages (session_id, streamer_login, chatter_login, content, is_command, message_ts) VALUES (1,'nani','viewer',$1,$2,CURRENT_DATE - INTERVAL '1 day' + TIME '18:30')")
                 .bind(c).bind(cmd).execute(&pool).await.unwrap();
         }
         let v = load_chat_analytics_payload(&pool, "nani", 30, Some("UTC"))
@@ -865,7 +915,9 @@ mod tests {
         };
         sqlx::query("INSERT INTO twitch_stream_sessions (id, streamer_login, started_at, ended_at, duration_seconds, avg_viewers) VALUES (1,'nani',NOW()-INTERVAL '1 day',NOW(),3600,10)")
             .execute(&pool).await.unwrap();
-        sqlx::query("INSERT INTO twitch_chat_messages (session_id, streamer_login, chatter_login, content, is_command, message_ts) VALUES (1,'nani','v','hi',FALSE,'2026-06-14 23:30:00+00')")
+        sqlx::query("INSERT INTO twitch_chat_messages (session_id, streamer_login, chatter_login, content, is_command, message_ts) VALUES (0,'nani','nightbot','coverage',FALSE,NOW()-INTERVAL '2 days')")
+            .execute(&pool).await.unwrap();
+        sqlx::query("INSERT INTO twitch_chat_messages (session_id, streamer_login, chatter_login, content, is_command, message_ts) VALUES (1,'nani','v','hi',FALSE,CURRENT_DATE - INTERVAL '1 day' + TIME '23:30')")
             .execute(&pool).await.unwrap();
         // 23:30 UTC → Europe/Berlin (Sommerzeit +2) = 01:30 → Stunde 1.
         let v = load_chat_analytics_payload(&pool, "nani", 30, Some("Europe/Berlin"))

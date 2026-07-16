@@ -349,6 +349,52 @@ async fn session_lifecycle_start_sample_finalize() {
 }
 
 #[tokio::test]
+async fn adoptierte_session_reaktiviert_exp_snapshots() {
+    let pool = pool_or_skip!("t4b_adopt_exp");
+    let started = Utc::now() - Duration::minutes(20);
+    sqlx::query(
+        "INSERT INTO twitch_stream_sessions
+            (streamer_login, stream_id, started_at, start_viewers, game_name)
+         VALUES ('drag', 's-adopt', $1, 12, NULL)",
+    )
+    .bind(started.to_rfc3339())
+    .execute(&pool)
+    .await
+    .unwrap();
+
+    let tracker = tracker_with(&pool, Arc::new(NoFollowerSource));
+    let mut stream = deadlock_stream("s-adopt", "drag", 12);
+    stream.started_at = Some(started.to_rfc3339());
+
+    tracker
+        .ensure_session("drag", &stream, None, None, Utc::now())
+        .await
+        .expect("offene Session adoptiert");
+    tracker.record_sample("drag", &stream, Utc::now()).await;
+
+    let (samples, avg_viewers, peak_viewers): (i32, f32, i32) = sqlx::query_as(
+        "SELECT samples, avg_viewers, peak_viewers
+           FROM exp_sessions WHERE stream_id = 's-adopt'",
+    )
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    let snapshots: i64 = sqlx::query_scalar(
+        "SELECT COUNT(*) FROM exp_snapshots sn
+           JOIN exp_sessions es ON es.id = sn.exp_session_id
+          WHERE es.stream_id = 's-adopt'",
+    )
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+
+    assert_eq!(snapshots, 1, "Adopt-Pfad schreibt wieder Snapshots");
+    assert_eq!(samples, 1);
+    assert_eq!(avg_viewers, 12.0);
+    assert_eq!(peak_viewers, 12);
+}
+
+#[tokio::test]
 async fn session_doppel_start_wird_db_seitig_verhindert() {
     let pool = pool_or_skip!("t4b_double_start");
     let store = SessionStore::new(pool.clone());

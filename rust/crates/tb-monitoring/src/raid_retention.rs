@@ -10,6 +10,8 @@ use chrono::{DateTime, Utc};
 use sqlx::PgPool;
 use tb_chat::WHITELISTED_BOTS;
 
+const CHATTERS_POLL_INTERVAL_SECONDS: i32 = 30;
+
 /// Ein Raid-Datensatz aus `twitch_raid_history`.
 #[derive(Debug, Clone)]
 struct RaidRow {
@@ -144,7 +146,7 @@ async fn compute_one(pool: &PgPool, raid: &RaidRow) -> Result<Outcome, sqlx::Err
     Ok(Outcome::Computed)
 }
 
-/// COUNT(DISTINCT chatter) im Ziel-Fenster `[executed, executed + offset min]`.
+/// COUNT(DISTINCT Raid-Ankömmlinge), die am Zielzeitpunkt noch anwesend waren.
 async fn window_count(
     pool: &PgPool,
     target_session_id: i64,
@@ -156,10 +158,14 @@ async fn window_count(
         "SELECT COUNT(DISTINCT COALESCE(NULLIF(chatter_login, ''), chatter_id)) \
          FROM twitch_session_chatters \
          WHERE session_id = $1 \
-           AND last_seen_at >= $2 \
-           AND last_seen_at <= $2 + INTERVAL '{offset_min} minutes' \
+           AND first_message_at >= $2 \
+           AND first_message_at <= $2 + INTERVAL '{arrival_cutoff_min} minutes' \
+           AND last_seen_at >= $2 + INTERVAL '{offset_min} minutes' \
+               - INTERVAL '{poll_seconds} seconds' \
            {bot}",
+        arrival_cutoff_min = offset_min.min(10),
         offset_min = offset_min,
+        poll_seconds = CHATTERS_POLL_INTERVAL_SECONDS,
         bot = bot_not_in_clause("chatter_login", 3),
     ))
     .bind(target_session_id)
@@ -282,7 +288,9 @@ trait BindBots<'q> {
     fn bind_bots(self) -> Self;
 }
 
-impl<'q> BindBots<'q> for sqlx::query::QueryScalar<'q, sqlx::Postgres, i64, sqlx::postgres::PgArguments> {
+impl<'q> BindBots<'q>
+    for sqlx::query::QueryScalar<'q, sqlx::Postgres, i64, sqlx::postgres::PgArguments>
+{
     fn bind_bots(mut self) -> Self {
         for bot in WHITELISTED_BOTS {
             self = self.bind(*bot);

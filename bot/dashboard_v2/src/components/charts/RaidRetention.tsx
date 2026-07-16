@@ -44,7 +44,7 @@ export function RaidRetention({ data }: RaidRetentionProps) {
           icon={<UserPlus className="w-5 h-5" />}
           label="Neue Zuschauer aus Raids"
           value={summary.totalNewChatters.toLocaleString('de-DE')}
-          sublabel={`aus ${summary.raidCount} Raids`}
+          sublabel={`über ${summary.raidCount} Raids`}
           color="accent"
         />
       </motion.div>

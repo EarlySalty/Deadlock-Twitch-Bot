@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
-import { Tag, TrendingUp, TrendingDown, Minus, Users, Clock, UserPlus, ChevronDown, ChevronUp, Trophy, Target } from 'lucide-react';
+import { Tag, TrendingUp, TrendingDown, Minus, Users, Clock, UserPlus, ChevronDown, ChevronUp, Trophy, Target, Info } from 'lucide-react';
 import type { TagPerformanceExtended, TitlePerformance, PeerBenchmark } from '@/types/analytics';
 
 interface TagPerformanceProps {
@@ -17,6 +17,9 @@ export function TagPerformanceChart({ tagData, titleData, peerBenchmark }: TagPe
   const sortedTags = [...tagData].sort((a, b) => b.avgViewers - a.avgViewers);
   const sortedTitles = titleData && titleData.length > 0 ? [...titleData].sort((a, b) => b.avgViewers - a.avgViewers) : [];
   const strongestGrowingTag = sortedTags.find(t => t.trend === 'up' && (t.trendValue ?? 0) > 10);
+  const allTagsIdentical = sortedTags.length > 1 && sortedTags.every(
+    tag => tag.avgViewers === sortedTags[0].avgViewers && tag.avgRetention10m === sortedTags[0].avgRetention10m,
+  );
 
   const maxViewers = Math.max(...sortedTags.map(t => t.avgViewers), 1);
   const maxTitleViewers = sortedTitles.length > 0 ? Math.max(...sortedTitles.map(t => t.avgViewers), 1) : 1;
@@ -91,13 +94,21 @@ export function TagPerformanceChart({ tagData, titleData, peerBenchmark }: TagPe
               <div className="flex items-center gap-3 mb-3 text-xs text-text-secondary">
                 <span className="flex items-center gap-1">
                   <span className="w-2 h-2 rounded-full bg-success inline-block" />
-                  \u00dcber Peer-Median ({peerBenchmark.avgViewers.toFixed(0)} \u00d8)
+                  Über Peer-Median ({peerBenchmark.avgViewers.toFixed(0)} Ø)
                 </span>
                 <span className="flex items-center gap-1">
                   <span className="w-2 h-2 rounded-full bg-error inline-block" />
                   Unter Peer-Median
                 </span>
               </div>
+            )}
+
+            {allTagsIdentical && (
+              <InsightBadge
+                type="info"
+                icon={<Info className="w-4 h-4" />}
+                text="Alle Streams nutzen aktuell dieselben Tags, darum zeigen alle Tags identische Werte."
+              />
             )}
 
             {/* Full List */}
@@ -272,7 +283,7 @@ function TagRow({ tag, index, maxViewers, isExpanded, onToggle, peerBenchmark }:
             abovePeerMedian === true ? 'text-success' : abovePeerMedian === false ? 'text-error' : ''
           }`}>
             <Users className="w-3 h-3" />
-            \u00d8 {tag.avgViewers.toFixed(0)}
+            Ø {tag.avgViewers.toFixed(0)}
           </span>
           <span className="flex items-center gap-1">
             <Target className="w-3 h-3" />
