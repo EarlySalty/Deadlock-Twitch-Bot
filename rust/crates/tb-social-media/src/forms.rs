@@ -180,12 +180,13 @@ pub async fn persist_submission_attempt(
     clip_id: i32,
     form: FormKey,
 ) -> Result<SubmissionAttempt, sqlx::Error> {
+    // ponytail: 'pending' blockt Concurrent-Doppel-POST; ein crash-hinterlassenes stale 'pending' bleibt blockiert bis es auf 'failed' geht — Stale-Timeout nachruesten falls Submits haengen.
     let pending = sqlx::query_scalar::<_, i32>(
         "INSERT INTO twitch_clip_form_submissions (clip_id, form_key, status) \
          VALUES ($1, $2, 'pending') \
          ON CONFLICT (clip_id, form_key) DO UPDATE \
          SET status = 'pending', http_status = NULL, error = NULL, submitted_at = NULL \
-         WHERE twitch_clip_form_submissions.status <> 'submitted' \
+         WHERE twitch_clip_form_submissions.status = 'failed' \
          RETURNING id",
     )
     .bind(clip_id)
@@ -547,6 +548,9 @@ mod tests {
         let first = persist_submission_attempt(&pool, 42, FormKey::DeadlockHigh)
             .await
             .unwrap();
+        let in_flight = persist_submission_attempt(&pool, 42, FormKey::DeadlockHigh)
+            .await
+            .unwrap();
         sqlx::query(
             "UPDATE twitch_clip_form_submissions SET status = 'submitted' WHERE clip_id = 42",
         )
@@ -558,6 +562,7 @@ mod tests {
             .unwrap();
 
         assert_eq!(first, SubmissionAttempt::Pending);
+        assert_eq!(in_flight, SubmissionAttempt::Skipped);
         assert_eq!(second, SubmissionAttempt::Skipped);
         sqlx::query(
             "UPDATE twitch_clip_form_submissions \

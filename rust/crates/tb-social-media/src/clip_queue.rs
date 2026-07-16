@@ -82,6 +82,18 @@ where
     .fetch_optional(pool)
     .await?
     {
+        sqlx::query(
+            "UPDATE twitch_clips_upload_queue SET title = $1, description = $2, hashtags = $3, \
+             scheduled_at = $4::text::timestamptz, priority = $5, last_error = NULL WHERE id = $6",
+        )
+        .bind(title)
+        .bind(description)
+        .bind(tags.as_deref())
+        .bind(scheduled_at)
+        .bind(priority)
+        .bind(id)
+        .execute(pool)
+        .await?;
         return Ok(id);
     }
 
@@ -345,28 +357,64 @@ mod tests {
             Err(QueueError::InvalidPlatform(_))
         ));
 
-        let tags = vec!["#deadlock".to_string()];
-        let id1 = queue_upload(&pool, clip, "tiktok", Some("T"), None, Some(&tags), None, 5)
+        let old_tags = vec!["#old".to_string()];
+        let id1 = queue_upload(
+            &pool,
+            clip,
+            "tiktok",
+            Some("Alt"),
+            Some("Altbeschreibung"),
+            Some(&old_tags),
+            Some("2030-01-01T00:00:00Z"),
+            5,
+        )
+        .await
+        .unwrap();
+        sqlx::query("UPDATE twitch_clips_upload_queue SET last_error = 'alt' WHERE id = $1")
+            .bind(id1)
+            .execute(&pool)
             .await
             .unwrap();
-        // Zweiter Aufruf für denselben pending → gleiche ID.
-        let id2 = queue_upload(&pool, clip, "tiktok", None, None, None, None, 0)
-            .await
-            .unwrap();
+        // Zweiter Aufruf für denselben pending → gleiche ID mit aktualisierten Werten.
+        let new_tags = vec!["#deadlock".to_string()];
+        let id2 = queue_upload(
+            &pool,
+            clip,
+            "tiktok",
+            Some("Neu"),
+            Some("Neubeschreibung"),
+            Some(&new_tags),
+            Some("2031-02-03T04:05:06Z"),
+            9,
+        )
+        .await
+        .unwrap();
         assert_eq!(id1, id2);
         let n: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM twitch_clips_upload_queue")
             .fetch_one(&pool)
             .await
             .unwrap();
         assert_eq!(n, 1);
-        // hashtags als JSON gespeichert.
-        let tags_raw: Option<String> =
-            sqlx::query_scalar("SELECT hashtags FROM twitch_clips_upload_queue WHERE id = $1")
-                .bind(id1)
-                .fetch_one(&pool)
-                .await
-                .unwrap();
-        assert_eq!(tags_raw.as_deref(), Some("[\"#deadlock\"]"));
+        let row: (String, String, String, bool, i32, Option<String>) = sqlx::query_as(
+            "SELECT title, description, hashtags, \
+             scheduled_at = '2031-02-03T04:05:06Z'::timestamptz, priority, last_error \
+             FROM twitch_clips_upload_queue WHERE id = $1",
+        )
+        .bind(id1)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert_eq!(
+            row,
+            (
+                "Neu".to_string(),
+                "Neubeschreibung".to_string(),
+                "[\"#deadlock\"]".to_string(),
+                true,
+                9,
+                None,
+            )
+        );
     }
 
     #[tokio::test]
