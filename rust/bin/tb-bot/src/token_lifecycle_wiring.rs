@@ -22,7 +22,7 @@ use async_trait::async_trait;
 use sqlx::PgPool;
 use tb_chat::timeout_tracking::{BotBannedChannelHandler, BotBannedChannelSignal};
 use tb_raid::token_lifecycle::TokenLifecycleNotifier;
-use tb_raid::TokenLifecycleReactor;
+use tb_raid::{BotBanStatusProbe, TokenLifecycleReactor};
 use tb_transport_discord::{BrokerRelay, DiscordBackend, SendAlertEmbed, SendUserDm};
 
 use crate::task_supervisor::TaskSupervisor;
@@ -212,6 +212,7 @@ pub fn spawn_token_lifecycle_schedulers(
     supervisor: &TaskSupervisor,
     pool: PgPool,
     broker: &tb_config::BrokerConfig,
+    bot_ban_status_probe: Option<Arc<dyn BotBanStatusProbe>>,
 ) {
     let (notifier, discord_enabled) = match BrokerRelay::new(broker) {
         Ok(relay) => (BrokerTokenLifecycleNotifier::from_env(relay), true),
@@ -222,7 +223,11 @@ pub fn spawn_token_lifecycle_schedulers(
             (BrokerTokenLifecycleNotifier::disabled(), false)
         }
     };
-    let reactor = Arc::new(TokenLifecycleReactor::new(pool, notifier));
+    let mut reactor = TokenLifecycleReactor::new(pool, notifier);
+    if let Some(probe) = bot_ban_status_probe {
+        reactor = reactor.with_bot_ban_status_probe(probe);
+    }
+    let reactor = Arc::new(reactor);
     spawn_token_lifecycle_tasks(supervisor, reactor, discord_enabled);
 }
 

@@ -580,6 +580,7 @@ async fn main() {
         .filter(|v| !v.is_empty());
     let bot_ban_handler =
         token_lifecycle_wiring::build_bot_ban_handler(pool.clone(), &settings.broker);
+    let mut bot_ban_status_probe: Option<Arc<dyn tb_raid::BotBanStatusProbe>> = None;
     let subscription_manager: Option<Arc<SubscriptionManager>> =
         match (webhook_secret, callback_url, helix.as_ref().clone()) {
             (Some(secret), Some(callback_url), Some(helix_client)) => {
@@ -606,13 +607,14 @@ async fn main() {
                     if let Some(token_provider) =
                         build_moderator_token_provider(pool.clone(), helix_client.clone())
                     {
-                        manager_builder = manager_builder.with_moderator_provisioner(Arc::new(
-                            eventsub_hooks::HelixModeratorProvisioner::new(
-                                token_provider,
-                                helix_client.clone(),
-                                bot_user_id,
-                            ),
+                        let provisioner = Arc::new(eventsub_hooks::HelixModeratorProvisioner::new(
+                            token_provider,
+                            helix_client.clone(),
+                            bot_user_id,
                         ));
+                        manager_builder =
+                            manager_builder.with_moderator_provisioner(provisioner.clone());
+                        bot_ban_status_probe = Some(provisioner);
                         tracing::info!(
                         "Mod-Provisioner aktiv (403-Selbstheilung: Bot-Remod via Streamer-Token)"
                     );
@@ -1604,6 +1606,7 @@ async fn main() {
         &supervisor,
         pool.clone(),
         &settings.broker,
+        bot_ban_status_probe,
     );
 
     // Shadow-Review-Ausgang (B19): leitet gestagte Shadow-KI-Antworten periodisch

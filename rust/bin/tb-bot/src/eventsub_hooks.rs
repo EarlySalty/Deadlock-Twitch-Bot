@@ -25,9 +25,9 @@ use tb_monitoring::{
 use tb_raid::pending_raids::normalize_broadcaster_login;
 use tb_raid::signal_correlation::{ChatNotificationInput, ChatUnraidInput};
 use tb_raid::{
-    classify_partner_raid_arrival, ArrivalTrackingStore, PendingRaidStore, RaidArrivalInput,
-    RaidArrivalRuntime, RaidBlacklistStore, RaidSignalCorrelationService, RaidSignalOutcome,
-    TokenProvider,
+    classify_partner_raid_arrival, ArrivalTrackingStore, BotBanStatus, BotBanStatusProbe,
+    PendingRaidStore, RaidArrivalInput, RaidArrivalRuntime, RaidBlacklistStore,
+    RaidSignalCorrelationService, RaidSignalOutcome, TokenProvider,
 };
 use tb_transport_twitch::{AddModeratorOutcome, HelixClient};
 
@@ -600,6 +600,20 @@ impl ModeratorProvisioner for HelixModeratorProvisioner {
                 );
                 ModeratorProvisionOutcome::RetryLater
             }
+        }
+    }
+}
+
+#[async_trait::async_trait]
+impl BotBanStatusProbe for HelixModeratorProvisioner {
+    async fn bot_ban_status(&self, twitch_user_id: &str, twitch_login: &str) -> BotBanStatus {
+        match self
+            .ensure_bot_is_mod_outcome(twitch_user_id, twitch_login)
+            .await
+        {
+            ModeratorProvisionOutcome::Ready => BotBanStatus::NotBanned,
+            ModeratorProvisionOutcome::BotBanned => BotBanStatus::Banned,
+            ModeratorProvisionOutcome::RetryLater => BotBanStatus::Unknown,
         }
     }
 }
