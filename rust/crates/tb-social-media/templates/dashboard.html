@@ -761,7 +761,15 @@
                 const result = await response.json().catch(() => ({}));
                 if (response.ok) {
                     const when = mode === 'now' ? 'sofort' : (mode === 'auto' ? 'nächster freier Slot' : 'geplant');
-                    alert(`Clip aktiviert: ${platforms.length} Kanäle (${when}) + ${forms.length} Montage-Forms.`);
+                    const outcomes = Array.isArray(result.forms) ? result.forms : [];
+                    const n = s => outcomes.filter(f => f.status === s).length;
+                    const parts = [];
+                    if (n('submitted')) parts.push(`${n('submitted')} gesendet`);
+                    if (n('failed')) parts.push(`${n('failed')} fehlgeschlagen`);
+                    if (n('skipped_disabled')) parts.push(`${n('skipped_disabled')} übersprungen (Versand aus)`);
+                    if (n('skipped_duplicate')) parts.push(`${n('skipped_duplicate')} schon eingereicht`);
+                    const formsMsg = outcomes.length ? ` Montage-Forms: ${parts.join(', ')}.` : '';
+                    alert(`Clip aktiviert: ${platforms.length} Kanäle eingeplant (${when}).${formsMsg}`);
                     panel.style.display = 'none';
                     await loadClips();
                 } else {
