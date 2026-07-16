@@ -951,14 +951,15 @@ fn scheduled_at_value(
     already_taken: &[DateTime<Utc>],
     posting_schedule: &PostingSchedule,
 ) -> Result<Option<String>, &'static str> {
-    match schedule.unwrap_or("now") {
-        "now" => Ok(None),
-        "auto" => Ok(Some(
+    match schedule {
+        Some("now") => Ok(Some(now.to_rfc3339())),
+        Some("auto") => Ok(Some(
             next_free_slot(now, already_taken, posting_schedule).to_rfc3339(),
         )),
-        timestamp if DateTime::parse_from_rfc3339(timestamp).is_ok() => {
+        Some(timestamp) if DateTime::parse_from_rfc3339(timestamp).is_ok() => {
             Ok(Some(timestamp.to_string()))
         }
+        None => Ok(None),
         _ => Err("invalid_schedule"),
     }
 }
@@ -3393,7 +3394,7 @@ mod tests {
     }
 
     #[test]
-    fn auto_schedule_builds_next_slot_as_rfc3339() {
+    fn scheduled_at_value_maps_each_schedule_mode() {
         let now = chrono::DateTime::parse_from_rfc3339("2026-07-16T10:00:00Z")
             .unwrap()
             .with_timezone(&chrono::Utc);
@@ -3414,6 +3415,16 @@ mod tests {
         assert_eq!(
             scheduled_at_value(
                 Some("now"),
+                now,
+                &taken,
+                &tb_social_media::settings::PostingSchedule::default(),
+            )
+            .unwrap(),
+            Some("2026-07-16T10:00:00+00:00".to_string())
+        );
+        assert_eq!(
+            scheduled_at_value(
+                None,
                 now,
                 &taken,
                 &tb_social_media::settings::PostingSchedule::default(),
