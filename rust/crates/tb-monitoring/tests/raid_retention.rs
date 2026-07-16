@@ -173,6 +173,37 @@ async fn windows_and_splits_computed() {
 }
 
 #[tokio::test]
+async fn late_arrival_only_counts_in_later_retention_windows() {
+    let Some(pool) = support::pool_with_chatters_schema("t_raid_late_arrival").await else {
+        return;
+    };
+    let executed = Utc::now() - Duration::hours(2);
+    let session = seed_session(&pool, "target", executed - Duration::minutes(5), None).await;
+    seed_raid(&pool, 25, "raider", "target", 10, executed).await;
+    seed_chatter(
+        &pool,
+        session,
+        "target",
+        "latecomer",
+        executed + Duration::minutes(30),
+        executed + Duration::minutes(9),
+        1,
+    )
+    .await;
+
+    compute_raid_retention(&pool).await.unwrap();
+    let counts: (i32, i32, i32) = sqlx::query_as(
+        "SELECT chatters_at_plus5m, chatters_at_plus15m, chatters_at_plus30m \
+         FROM twitch_raid_retention WHERE raid_id = 25",
+    )
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+
+    assert_eq!(counts, (0, 1, 1));
+}
+
+#[tokio::test]
 async fn chatter_von_vor_dem_raid_zaehlt_nicht_zur_retention() {
     let Some(pool) = support::pool_with_chatters_schema("t_raid_preexisting").await else {
         return;

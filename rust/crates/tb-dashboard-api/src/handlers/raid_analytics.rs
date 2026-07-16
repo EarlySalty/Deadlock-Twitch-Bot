@@ -84,13 +84,16 @@ async fn recalculate_raid_chat_metrics(
                )
            )
            SELECT ri.raid_id, ri.executed_at_key,
-                  COUNT(DISTINCT CASE WHEN sc.last_seen_at >= ri.executed_at + INTERVAL '5 minutes'
+                  COUNT(DISTINCT CASE WHEN sc.first_message_at <= ri.executed_at + INTERVAL '5 minutes'
+                          AND sc.last_seen_at >= ri.executed_at + INTERVAL '5 minutes'
                           - INTERVAL '{poll_seconds} seconds'
                       THEN COALESCE(NULLIF(sc.chatter_login, ''), sc.chatter_id) ELSE NULL END) AS plus5m,
-                  COUNT(DISTINCT CASE WHEN sc.last_seen_at >= ri.executed_at + INTERVAL '15 minutes'
+                  COUNT(DISTINCT CASE WHEN sc.first_message_at <= ri.executed_at + INTERVAL '10 minutes'
+                          AND sc.last_seen_at >= ri.executed_at + INTERVAL '15 minutes'
                           - INTERVAL '{poll_seconds} seconds'
                       THEN COALESCE(NULLIF(sc.chatter_login, ''), sc.chatter_id) ELSE NULL END) AS plus15m,
-                  COUNT(DISTINCT CASE WHEN sc.last_seen_at >= ri.executed_at + INTERVAL '30 minutes'
+                  COUNT(DISTINCT CASE WHEN sc.first_message_at <= ri.executed_at + INTERVAL '10 minutes'
+                          AND sc.last_seen_at >= ri.executed_at + INTERVAL '30 minutes'
                           - INTERVAL '{poll_seconds} seconds'
                       THEN COALESCE(NULLIF(sc.chatter_login, ''), sc.chatter_id) ELSE NULL END) AS plus30m
            FROM raid_inputs ri
@@ -1021,6 +1024,30 @@ mod tests {
             m.new_chatters, 1,
             "NULL-Login-Chatter muss als new_chatter zählen"
         );
+    }
+
+    #[tokio::test]
+    async fn late_arrival_only_counts_in_later_retention_windows() {
+        let Some(pool) = make_pool("t_raid_late_arrival_api").await else {
+            return;
+        };
+        let executed = Utc::now() - chrono::Duration::minutes(60);
+
+        sqlx::query(
+            "INSERT INTO twitch_session_chatters \
+             (session_id, chatter_id, chatter_login, last_seen_at, first_message_at, messages) \
+             VALUES (42, 'late-1', 'latecomer', $1, $2, 1)",
+        )
+        .bind(executed + chrono::Duration::minutes(30))
+        .bind(executed + chrono::Duration::minutes(9))
+        .execute(&pool)
+        .await
+        .unwrap();
+
+        let metrics = recalculate_raid_chat_metrics(&pool, &[raid_input(executed)]).await;
+        let m = metrics.get(&(1, "k1".to_string())).expect("metric");
+
+        assert_eq!((m.plus5m, m.plus15m, m.plus30m), (0, 1, 1));
     }
 
     /// Gegenprobe: ein bekannter Bot-Login wird weiterhin ausgefiltert.

@@ -159,10 +159,11 @@ async fn window_count(
          FROM twitch_session_chatters \
          WHERE session_id = $1 \
            AND first_message_at >= $2 \
-           AND first_message_at <= $2 + INTERVAL '10 minutes' \
+           AND first_message_at <= $2 + INTERVAL '{arrival_cutoff_min} minutes' \
            AND last_seen_at >= $2 + INTERVAL '{offset_min} minutes' \
                - INTERVAL '{poll_seconds} seconds' \
            {bot}",
+        arrival_cutoff_min = offset_min.min(10),
         offset_min = offset_min,
         poll_seconds = CHATTERS_POLL_INTERVAL_SECONDS,
         bot = bot_not_in_clause("chatter_login", 3),
