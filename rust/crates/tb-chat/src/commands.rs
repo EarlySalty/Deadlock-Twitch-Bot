@@ -32,7 +32,6 @@ use tb_knowledge::{KnowledgeBase, Namespace};
 use tokio::sync::Mutex;
 
 use crate::api::ChatApi;
-use crate::catalog::{self, CommandGroup};
 use crate::types::{ChatMessageEvent, SendOutcome};
 
 // ---------------------------------------------------------------------------
@@ -96,17 +95,10 @@ fn knowledge_base() -> &'static KnowledgeBase {
     KB.get_or_init(|| KnowledgeBase::load_from_dir(&knowledge_dir()).unwrap_or_default())
 }
 
+/// `!commands` schickt nur den Link — die Befehlsliste im Chat war eine
+/// unlesbare Textwand, die Website erklärt jeden Befehl richtig.
 fn commands_reply() -> String {
-    let groups = catalog::grouped()
-        .into_iter()
-        .filter(|(group, _)| *group != CommandGroup::Mod)
-        .map(|(group, items)| {
-            let names = items.iter().map(|c| c.name).collect::<Vec<_>>().join(" ");
-            format!("{}: {names}", group.label())
-        })
-        .collect::<Vec<_>>()
-        .join(" · ");
-    format!("{groups} · Alle Befehle: {COMMANDS_URL}")
+    format!("Alle Befehle mit Erklärung findest du hier: {COMMANDS_URL}")
 }
 
 fn help_reply(kb: &KnowledgeBase, topic: &str) -> String {
@@ -2226,7 +2218,7 @@ mod tests {
     }
 
     #[test]
-    fn commands_reply_kommt_aus_oeffentlichem_katalog() {
+    fn commands_reply_listet_keine_befehle_auf() {
         let reply = commands_reply();
         assert!(
             reply.len() <= 480,
@@ -2234,8 +2226,10 @@ mod tests {
             reply.len()
         );
         assert!(reply.contains("/streamer/commands"), "{reply}");
-        assert!(reply.contains("!rank"), "{reply}");
-        assert!(!reply.contains("!uban"), "{reply}");
+        assert!(
+            !reply.contains('!'),
+            "Befehlsliste gehört auf die Website, nicht in den Chat: {reply}"
+        );
     }
 
     #[test]
