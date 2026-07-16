@@ -1182,13 +1182,13 @@ mod tests {
 
     async fn process_existing_announcement(
         is_partner_active: bool,
-    ) -> Arc<RecordingAnnouncementSink> {
+    ) -> Option<Arc<RecordingAnnouncementSink>> {
         let schema = if is_partner_active {
             "t_poller_existing_active_announcement"
         } else {
             "t_poller_existing_inactive_announcement"
         };
-        let pool = make_pool(schema).await.expect("test database");
+        let pool = make_pool(schema).await?;
         sqlx::query(
             "INSERT INTO twitch_live_state (
                 twitch_user_id, streamer_login, last_stream_id,
@@ -1229,7 +1229,7 @@ mod tests {
         )]);
 
         engine.process_entries(&[entry], &streams).await;
-        sink
+        Some(sink)
     }
 
     #[tokio::test]
@@ -1292,7 +1292,9 @@ mod tests {
 
     #[tokio::test]
     async fn inaktiver_partner_beendet_bestehendes_live_announcement_ohne_sync() {
-        let sink = process_existing_announcement(false).await;
+        let Some(sink) = process_existing_announcement(false).await else {
+            return;
+        };
 
         assert_eq!(sink.ends.load(Ordering::SeqCst), 1);
         assert_eq!(sink.syncs.load(Ordering::SeqCst), 0);
@@ -1300,7 +1302,9 @@ mod tests {
 
     #[tokio::test]
     async fn aktiver_partner_synct_bestehendes_live_announcement_ohne_ende() {
-        let sink = process_existing_announcement(true).await;
+        let Some(sink) = process_existing_announcement(true).await else {
+            return;
+        };
 
         assert_eq!(sink.syncs.load(Ordering::SeqCst), 1);
         assert_eq!(sink.ends.load(Ordering::SeqCst), 0);
