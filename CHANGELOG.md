@@ -1,3 +1,11 @@
+## #381 — !commands schickt nur noch den Link
+
+**Problem:** Die Antwort auf !commands war eine Textwand aus rund 20 Befehlsnamen, die im Chat niemand lesen konnte und die trotzdem nicht erklärte, was die Befehle tun.
+
+**Änderung:** Die Aufzählung im Chat entfällt. Es kommt nur noch der Link auf die Befehlsseite, wo jeder Befehl mit Erklärung steht.
+
+**Aktuelles Verhalten:** !commands antwortet mit einer Zeile und dem Link. Die Befehlsseite bleibt die vollständige Übersicht.
+
 ## #380 — Analyse-Dashboard rechnet wieder mit echten Zahlen
 
 **Problem:** Mehrere Ansichten zeigten Unsinn: Millionen Watchtime-Stunden im Juni, Wochentage mit über 100.000 Stunden Durchschnittsdauer, Raid-Retention bis 600%, internationale Streamer im deutschen Markt-Vergleich, kaputte Sonderzeichen in der Tag-Karte, eine dauerhafte Roh-Chat-Warnung und Ad-Verluste, die wie Zuwächse aussahen.
