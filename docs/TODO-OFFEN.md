@@ -76,9 +76,47 @@ faktisch wirkungslos. Nicht neu durch die !commands-Änderung, aber offen.
 Erster Schritt: Index/Constraint der Zieltabelle gegen die `ON CONFLICT`-Spalten in
 `rust/crates/tb-monitoring/src/exp_sessions.rs` vergleichen.
 
-## 3. Aufräumen
+**Achtung beim Nachprüfen (Stand 16.07., nach dem Restart um 16:44):** Seit dem Neustart
+steht **keine** exp-Warnung mehr im Journal — aber auch sonst **keine** exp-Zeile. Der
+Sampler hatte schlicht noch keinen Lauf. Das ist kein Beleg dafür, dass der Bug weg ist.
+Vor einer Entwarnung muss ein echter Sampler-Lauf im Journal stehen oder ein frischer
+Datensatz in der Zieltabelle liegen.
+
+## 3. Raid-Erinnerung: verbleibende Lücken
+
+Gefixt und live seit 16.07. (CHANGELOG #382, Merge `0d88b73f`): Die Erinnerung prüfte
+vorher eine Liste fester Grußwörter, wer „gg wp" schrieb galt als abwesend. Jetzt zählt
+jede Nachricht des Raiders im Zielchat, Fenster 20 statt 5 Minuten. Offen bleibt:
+
+**a) Der Bot bestraft Kanäle, die er gar nicht hören kann.** Chat empfängt er nur, wo
+`channel:bot` erteilt ist (`chat-sub-reconcile` am 16.07.: 51 Kanäle, 49 ok, 2 blocked).
+Raidet jemand auf ein Ziel außerhalb dieser Liste — beim Kategorie-Fallback in Deadlock-DE
+durchaus normal — sieht der Bot die Antwort **nie** und whispert grundsätzlich, egal was
+der Raider tut. Das ist ein falscher Vorwurf per Konstruktion.
+Fix-Idee (klein): Beim Ablauf der Frist prüfen, ob aus dem Zielkanal überhaupt Chat
+ankommt. Wenn nein, keinen Whisper senden, sondern die Blindheit loggen. Der Monitor sieht
+alle Chat-Events selbst, er braucht dafür keine neue Abhängigkeit.
+
+**b) Offene Fristen überleben keinen Neustart.** Die Pending-Liste lebt nur im Prozess
+(`raid_greeting.rs`, `pending`-HashMap). Ein Deploy innerhalb der 20 Minuten verwirft sie,
+die Erinnerung entfällt. Fehlerrichtung ist bewusst konservativ (lieber keine Erinnerung
+als eine falsche), mit 20 statt 5 Minuten trifft es aber häufiger. Persistieren nur, falls
+die Erinnerung wirklich Deploys überleben soll.
+
+**c) Der Beweis am echten Raid steht aus.** Seit dem Deploy gab es keinen Raid mehr. Zu
+erwarten ist bei der nächsten Begegnung die Journal-Zeile `Raider hat im Zielchat
+geschrieben` statt einer Whisper-Zeile.
+Nachmessen lohnt: In den 7 Tagen **vor** dem Fix stand im Journal genau **eine** erkannte
+Begrüßung gegen rund **zehn** Whisper-Erinnerungen. Dreht sich das Verhältnis nicht um,
+ist Ursache (a) der nächste Verdächtige.
+
+## 4. Aufräumen
 
 - Branch `fix/commands-link-only` ist nach `main` gemergt und kann weg (lokal + remote),
   nachdem `git merge-base --is-ancestor fix/commands-link-only main` sauber durchläuft.
 - Mehrere Worktrees offen (`git worktree list`): `analytics-fixes`, `botban`, `secfix`.
   Nach Merge jeweils `git worktree remove` + `git worktree prune`.
+- Das Deploy-Repo `Documents/Deadlock-Twitch-Bot` steht auf **detached HEAD**, weil der
+  Worktree `Deadlock-Twitch-Bot-main` den Branch `main` belegt. Deploys dort laufen per
+  `git checkout --detach origin/main`. Wer `main` auschecken will, muss vorher den
+  main-Worktree entfernen. Kein Fehler, aber eine Stolperfalle bei jedem Deploy.
