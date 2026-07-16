@@ -591,8 +591,8 @@
                         </div>
 
                         <div class="clip-actions">
-                            <button class="btn btn-primary btn-small" onclick="queueSingleClip(${clip.id})">
-                                📤 Upload
+                            <button class="btn btn-primary btn-small" onclick="toggleActivate(${clip.id})">
+                                🚀 Aktivieren
                             </button>
                             <button class="btn btn-secondary btn-small" onclick="markAsUploaded(${clip.id})">
                                 ✓ Mark
@@ -600,6 +600,28 @@
                             <a href="${escapeHtml(clip.clip_url)}" target="_blank" class="btn btn-secondary btn-small">
                                 🔗 View
                             </a>
+                        </div>
+
+                        <div class="activate-panel" id="activate-panel-${clip.id}" style="display:none; margin-top:8px; padding:10px; background:#18181b; border:1px solid #2a2a2d; border-radius:6px;">
+                            <div style="font-size:12px; color:#adadb8; margin-bottom:4px;">Eigene Kanäle</div>
+                            <label style="display:inline-block; margin-right:12px; font-size:13px; cursor:pointer;"><input type="checkbox" data-kind="platform" value="tiktok" checked> TikTok</label>
+                            <label style="display:inline-block; margin-right:12px; font-size:13px; cursor:pointer;"><input type="checkbox" data-kind="platform" value="youtube" checked> YT Shorts</label>
+                            <label style="display:inline-block; margin-right:12px; font-size:13px; cursor:pointer;"><input type="checkbox" data-kind="platform" value="instagram" checked> Instagram</label>
+                            <div style="font-size:12px; color:#adadb8; margin:8px 0 4px;">Montage-Forms (Reichweite)</div>
+                            <label style="display:inline-block; margin-right:12px; font-size:13px; cursor:pointer;"><input type="checkbox" data-kind="form" value="vindicta_eclipse" checked> Vindicta Eclipse</label>
+                            <label style="display:inline-block; margin-right:12px; font-size:13px; cursor:pointer;"><input type="checkbox" data-kind="form" value="deadlock_high" checked> Deadlock High</label>
+                            <label style="display:inline-block; margin-right:12px; font-size:13px; cursor:pointer;"><input type="checkbox" data-kind="form" value="deadlock_pirate" checked> deadlock_pirate</label>
+                            <div style="margin-top:8px;">
+                                <select class="schedule-mode" onchange="toggleScheduleTime(${clip.id})" style="font-size:13px; background:#0e0e10; color:#efeff1; border:1px solid #2a2a2d; border-radius:4px; padding:3px 6px;">
+                                    <option value="auto">⏱ Automatisch (nächster Slot)</option>
+                                    <option value="now">⚡ Sofort</option>
+                                    <option value="at">📅 Zeitpunkt…</option>
+                                </select>
+                                <input type="datetime-local" class="schedule-at" style="display:none; font-size:13px; margin-left:6px; background:#0e0e10; color:#efeff1; border:1px solid #2a2a2d; border-radius:4px; padding:3px 6px;">
+                            </div>
+                            <button class="btn btn-primary btn-small" style="margin-top:8px;" onclick="activateClip(${clip.id})">
+                                ✅ Aktivieren &amp; Planen
+                            </button>
                         </div>
                     </div>
                 </div>
@@ -698,6 +720,56 @@
             } catch (error) {
                 console.error('Failed to queue upload:', error);
                 alert('Fehler beim Hinzufügen zur Queue');
+            }
+        }
+
+        // ========== Aktivierung (Ziele + Zeitplanung) ==========
+        function toggleActivate(clipId) {
+            const panel = document.getElementById('activate-panel-' + clipId);
+            if (panel) panel.style.display = panel.style.display === 'none' ? 'block' : 'none';
+        }
+
+        function toggleScheduleTime(clipId) {
+            const panel = document.getElementById('activate-panel-' + clipId);
+            if (!panel) return;
+            const mode = panel.querySelector('.schedule-mode').value;
+            panel.querySelector('.schedule-at').style.display = mode === 'at' ? 'inline-block' : 'none';
+        }
+
+        async function activateClip(clipId) {
+            const panel = document.getElementById('activate-panel-' + clipId);
+            if (!panel) return;
+            const platforms = Array.from(panel.querySelectorAll('input[data-kind="platform"]:checked')).map(c => c.value);
+            const forms = Array.from(panel.querySelectorAll('input[data-kind="form"]:checked')).map(c => c.value);
+            const mode = panel.querySelector('.schedule-mode').value;
+            let schedule = mode;
+            if (mode === 'at') {
+                const dt = panel.querySelector('.schedule-at').value;
+                if (!dt) { alert('Bitte einen Zeitpunkt wählen.'); return; }
+                schedule = new Date(dt).toISOString();
+            }
+            if (platforms.length === 0 && forms.length === 0) {
+                alert('Bitte mindestens ein Ziel auswählen.');
+                return;
+            }
+            try {
+                const response = await fetch('/social-media/api/upload', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ clip_id: clipId, platforms, forms, schedule })
+                });
+                const result = await response.json().catch(() => ({}));
+                if (response.ok) {
+                    const when = mode === 'now' ? 'sofort' : (mode === 'auto' ? 'nächster freier Slot' : 'geplant');
+                    alert(`Clip aktiviert: ${platforms.length} Kanäle (${when}) + ${forms.length} Montage-Forms.`);
+                    panel.style.display = 'none';
+                    await loadClips();
+                } else {
+                    alert('Fehler beim Aktivieren: ' + (result.error || response.status));
+                }
+            } catch (error) {
+                console.error('Failed to activate clip:', error);
+                alert('Fehler beim Aktivieren des Clips.');
             }
         }
 
