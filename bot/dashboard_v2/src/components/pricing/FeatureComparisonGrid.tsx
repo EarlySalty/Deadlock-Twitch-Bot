@@ -85,7 +85,7 @@ export default function FeatureComparisonGrid() {
       initial={{ opacity: 0, y: 20 }}
       animate={{ opacity: 1, y: 0 }}
       transition={{ duration: 0.4, delay: 0.4 }}
-      className="parchment rounded-2xl p-6 md:p-8 mb-12"
+      className="parchment p-6 md:p-8 mt-6 mb-14"
     >
       <div className="flex items-center justify-between mb-6">
         <h2 className="text-xl font-bold" style={{ color: 'var(--parchment-ink)' }}>Feature-Vergleich</h2>
