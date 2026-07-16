@@ -578,6 +578,9 @@ async fn main() {
         .ok()
         .map(|v| v.trim().to_string())
         .filter(|v| !v.is_empty());
+    let bot_ban_handler =
+        token_lifecycle_wiring::build_bot_ban_handler(pool.clone(), &settings.broker);
+    let mut bot_ban_status_probe: Option<Arc<dyn tb_raid::BotBanStatusProbe>> = None;
     let subscription_manager: Option<Arc<SubscriptionManager>> =
         match (webhook_secret, callback_url, helix.as_ref().clone()) {
             (Some(secret), Some(callback_url), Some(helix_client)) => {
@@ -590,7 +593,8 @@ async fn main() {
                         secret,
                     },
                     CapacitySnapshotStore::new(pool.clone()),
-                );
+                )
+                .with_bot_ban_handler(bot_ban_handler.clone());
                 // P1.2: Mod-Provisioner für die 403-Selbstheilung im Chat-/Sub-Pfad
                 // (Python `_ensure_bot_is_mod`). Braucht den Streamer-Token-Resolver
                 // (cipher-gated) + die Bot-User-ID aus dem gebooteten Chat-Handle.
@@ -603,13 +607,14 @@ async fn main() {
                     if let Some(token_provider) =
                         build_moderator_token_provider(pool.clone(), helix_client.clone())
                     {
-                        manager_builder = manager_builder.with_moderator_provisioner(Arc::new(
-                            eventsub_hooks::HelixModeratorProvisioner::new(
-                                token_provider,
-                                helix_client.clone(),
-                                bot_user_id,
-                            ),
+                        let provisioner = Arc::new(eventsub_hooks::HelixModeratorProvisioner::new(
+                            token_provider,
+                            helix_client.clone(),
+                            bot_user_id,
                         ));
+                        manager_builder =
+                            manager_builder.with_moderator_provisioner(provisioner.clone());
+                        bot_ban_status_probe = Some(provisioner);
                         tracing::info!(
                         "Mod-Provisioner aktiv (403-Selbstheilung: Bot-Remod via Streamer-Token)"
                     );
@@ -1109,10 +1114,7 @@ async fn main() {
                 chat_wiring::ChatRuntimePorts {
                     manual_raid: manual_raid_port.clone(),
                     clip_port,
-                    bot_ban_handler: Some(token_lifecycle_wiring::build_bot_ban_handler(
-                        pool.clone(),
-                        &settings.broker,
-                    )),
+                    bot_ban_handler: Some(bot_ban_handler.clone()),
                     invite_relay: BrokerRelay::new(&settings.broker).ok(),
                     scam_notifier,
                     raid_greeting: raid_greeting_monitor.clone(),
@@ -1587,6 +1589,7 @@ async fn main() {
         &supervisor,
         pool.clone(),
         &settings.broker,
+        bot_ban_status_probe,
     );
 
     // Shadow-Review-Ausgang (B19): leitet gestagte Shadow-KI-Antworten periodisch

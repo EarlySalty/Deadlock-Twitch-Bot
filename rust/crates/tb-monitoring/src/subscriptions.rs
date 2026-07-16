@@ -15,6 +15,7 @@ use std::time::Duration as StdDuration;
 use chrono::{DateTime, Duration, Utc};
 use serde_json::Value;
 use sqlx::PgPool;
+use tb_chat::timeout_tracking::{BotBannedChannelHandler, BotBannedChannelSignal};
 use tb_chat::{is_passive_lurker_channel, PASSIVE_LURKER_DETAIL, PASSIVE_LURKER_STATE};
 use thiserror::Error;
 
@@ -603,6 +604,8 @@ pub struct SubscriptionManager {
     /// Optionaler Mod-Provisioner für die 403-Selbstheilung im Chat-Pfad
     /// (Python `_ensure_bot_is_mod`). `None` → 403-Cooldown statt Re-Mod.
     moderator_provisioner: Option<Arc<dyn ModeratorProvisioner>>,
+    /// Meldet einen bestätigten Kanal-Ban an den bestehenden Lifecycle-Port.
+    bot_ban_handler: Option<Arc<dyn BotBannedChannelHandler>>,
     /// Optionaler Broadcaster-Token-Provider für Moderator-Telemetrie-Fallbacks
     /// (Python `auth_attempts = [bot-token, broadcaster-token]`).
     broadcaster_token_provider: Option<Arc<dyn BroadcasterEventSubTokenProvider>>,
@@ -633,6 +636,7 @@ impl SubscriptionManager {
             capacity_throttle: Mutex::new(CapacityThrottle::default()),
             clock: Arc::new(epoch_clock),
             moderator_provisioner: None,
+            bot_ban_handler: None,
             broadcaster_token_provider: None,
             mod_retry_cooldown: Mutex::new(HashMap::new()),
             retry_config: SubscriptionRetryConfig::default(),
@@ -662,6 +666,12 @@ impl SubscriptionManager {
         provisioner: Arc<dyn ModeratorProvisioner>,
     ) -> Self {
         self.moderator_provisioner = Some(provisioner);
+        self
+    }
+
+    #[must_use]
+    pub fn with_bot_ban_handler(mut self, handler: Arc<dyn BotBannedChannelHandler>) -> Self {
+        self.bot_ban_handler = Some(handler);
         self
     }
 
@@ -2000,6 +2010,15 @@ impl SubscriptionManager {
             }
             ModeratorProvisionOutcome::BotBanned => {
                 self.mark_perm_failed(sub_type, broadcaster_id);
+                if let Some(handler) = &self.bot_ban_handler {
+                    handler
+                        .on_bot_banned_channel(BotBannedChannelSignal {
+                            broadcaster_id: broadcaster_id.to_string(),
+                            broadcaster_login: login.to_string(),
+                            reason: "eventsub_bot_banned_in_channel".to_string(),
+                        })
+                        .await;
+                }
                 tracing::info!(
                     sub_type,
                     login,
@@ -2336,6 +2355,7 @@ mod tests {
     use std::sync::atomic::{AtomicU64, Ordering};
 
     use sqlx::postgres::{PgConnectOptions, PgPoolOptions};
+    use tb_chat::timeout_tracking::{BotBannedChannelHandler, BotBannedChannelSignal};
 
     async fn pool_in_schema(schema: &str) -> Option<PgPool> {
         let Some(dsn) = std::env::var("TB_TEST_DATABASE_URL").ok() else {
@@ -2493,6 +2513,35 @@ mod tests {
         }
     }
 
+    struct BannedModeratorProvisioner;
+
+    #[async_trait::async_trait]
+    impl ModeratorProvisioner for BannedModeratorProvisioner {
+        async fn ensure_bot_is_mod(&self, _broadcaster_id: &str, _login: &str) -> bool {
+            false
+        }
+
+        async fn ensure_bot_is_mod_outcome(
+            &self,
+            _broadcaster_id: &str,
+            _login: &str,
+        ) -> ModeratorProvisionOutcome {
+            ModeratorProvisionOutcome::BotBanned
+        }
+    }
+
+    #[derive(Default)]
+    struct CapturingBotBanHandler {
+        signals: Mutex<Vec<BotBannedChannelSignal>>,
+    }
+
+    #[async_trait::async_trait]
+    impl BotBannedChannelHandler for CapturingBotBanHandler {
+        async fn on_bot_banned_channel(&self, signal: BotBannedChannelSignal) {
+            self.signals.lock().expect("signals lock").push(signal);
+        }
+    }
+
     fn lazy_test_pool() -> PgPool {
         sqlx::PgPool::connect_lazy("postgres://invalid:invalid@127.0.0.1:1/unused")
             .expect("lazy pool")
@@ -2506,6 +2555,40 @@ mod tests {
             max_retry_after: StdDuration::ZERO,
             jitter_ms: 0,
         }
+    }
+
+    #[tokio::test]
+    async fn bot_banned_mod_retry_meldet_jeden_subtyp_an_lifecycle_port() {
+        let handler = Arc::new(CapturingBotBanHandler::default());
+        let manager = SubscriptionManager::new(
+            Arc::new(UnitTransport::default()),
+            SubscriptionConfig {
+                callback_url: "https://cb/test".to_string(),
+                secret: "secret".to_string(),
+            },
+            CapacitySnapshotStore::new(lazy_test_pool()),
+        )
+        .with_moderator_provisioner(Arc::new(BannedModeratorProvisioner))
+        .with_bot_ban_handler(handler.clone());
+        let condition = serde_json::json!({"broadcaster_user_id": "500"});
+
+        for sub_type in ["channel.chat.message", "channel.chat.notification"] {
+            assert!(
+                !manager
+                    .retry_chat_subscription_after_mod(
+                        sub_type, "1", &condition, "500", "banme", None,
+                    )
+                    .await
+            );
+        }
+
+        let signals = handler.signals.lock().expect("signals lock");
+        assert_eq!(signals.len(), 2);
+        assert!(signals.iter().all(|signal| {
+            signal.broadcaster_id == "500"
+                && signal.broadcaster_login == "banme"
+                && signal.reason == "eventsub_bot_banned_in_channel"
+        }));
     }
 
     #[tokio::test]

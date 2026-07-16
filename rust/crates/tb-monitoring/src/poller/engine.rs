@@ -665,7 +665,12 @@ impl PollEngine {
                 }
             }
 
-            if self.sink.ready() && is_deadlock && message_id_previous.is_some() && !should_post {
+            if self.sink.ready()
+                && is_deadlock
+                && message_id_previous.is_some()
+                && !should_post
+                && entry.is_partner_active
+            {
                 if let Some(stream) = stream {
                     let _ = self
                         .sink
@@ -684,9 +689,10 @@ impl PollEngine {
                 }
             }
 
-            // Posting beenden, wenn offline oder Kategorie verlassen.
-            let ended_posting =
-                self.sink.ready() && message_id_previous.is_some() && (!is_live || !is_deadlock);
+            // Posting beenden, wenn offline, Kategorie verlassen oder Partner inaktiv.
+            let ended_posting = self.sink.ready()
+                && message_id_previous.is_some()
+                && (!is_live || !is_deadlock || !entry.is_partner_active);
             if ended_posting {
                 let message_id = message_id_previous.clone().expect("geprüft");
                 let display_name = stream
@@ -928,7 +934,7 @@ mod tests {
 
     use super::*;
     use crate::exp_sessions::{ExpSessionStore, ExpSessionTracker};
-    use crate::poller::hooks::{NoopAnnouncementSink, NoopPollHooks};
+    use crate::poller::hooks::{AnnounceLiveResult, NoopAnnouncementSink, NoopPollHooks};
     use crate::sessions::tracker::NoFollowerSource;
 
     /// Quelle mit Auth-Block-Schalter: zählt jeden Helix-Aufruf, damit der Test
@@ -998,6 +1004,39 @@ mod tests {
         }
     }
 
+    #[derive(Default)]
+    struct RecordingAnnouncementSink {
+        syncs: AtomicU64,
+        ends: AtomicU64,
+    }
+
+    #[async_trait::async_trait]
+    impl AnnouncementSink for RecordingAnnouncementSink {
+        fn ready(&self) -> bool {
+            true
+        }
+
+        async fn announce_live(&self, _request: AnnounceLiveRequest) -> Option<AnnounceLiveResult> {
+            None
+        }
+
+        async fn end_announcement(
+            &self,
+            _request: EndAnnouncementRequest,
+        ) -> EndAnnouncementOutcome {
+            self.ends.fetch_add(1, Ordering::SeqCst);
+            EndAnnouncementOutcome::Updated
+        }
+
+        async fn sync_live_announcement(
+            &self,
+            _request: AnnounceLiveRequest,
+        ) -> EndAnnouncementOutcome {
+            self.syncs.fetch_add(1, Ordering::SeqCst);
+            EndAnnouncementOutcome::Updated
+        }
+    }
+
     /// Engine mit lazy-Pool (verbindet NIE, weil der Tick vor jedem DB-Zugriff
     /// abbricht) auf der gegebenen Quelle.
     fn engine_on(source: Arc<BlockableSource>) -> PollEngine {
@@ -1011,6 +1050,14 @@ mod tests {
     }
 
     fn engine_with_pool(source: Arc<dyn StreamSource>, pool: sqlx::PgPool) -> PollEngine {
+        engine_with_sink(source, pool, Arc::new(NoopAnnouncementSink))
+    }
+
+    fn engine_with_sink(
+        source: Arc<dyn StreamSource>,
+        pool: sqlx::PgPool,
+        sink: Arc<dyn AnnouncementSink>,
+    ) -> PollEngine {
         let tracker = Arc::new(SessionTracker::new(
             SessionStore::new(pool.clone()),
             LiveStateStore::new(pool.clone()),
@@ -1026,7 +1073,7 @@ mod tests {
             tracker,
             StatsStore::new(pool.clone()),
             GuardStore::new(pool.clone()),
-            Arc::new(NoopAnnouncementSink),
+            sink,
             Arc::new(NoopPollHooks),
             PollIntervalStore::new(pool.clone()),
             PollConfig::default(),
@@ -1083,23 +1130,106 @@ mod tests {
         .execute(&pool)
         .await
         .unwrap();
-        sqlx::query("CREATE TABLE twitch_partners (twitch_user_id TEXT, twitch_login TEXT)")
-            .execute(&pool)
-            .await
-            .unwrap();
+        sqlx::query(
+            "CREATE TABLE twitch_partners (
+                id BIGSERIAL PRIMARY KEY,
+                twitch_user_id TEXT,
+                twitch_login TEXT,
+                status TEXT,
+                raid_bot_enabled INTEGER DEFAULT 0
+            )",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+        sqlx::query(
+            "CREATE TABLE twitch_exclusions (
+                twitch_user_id TEXT,
+                kind TEXT,
+                reason TEXT,
+                excluded_at TIMESTAMPTZ,
+                reactivated_at TIMESTAMPTZ
+            )",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
         sqlx::query(
             "CREATE TABLE twitch_live_state (
                 twitch_user_id TEXT PRIMARY KEY,
                 streamer_login TEXT NOT NULL,
+                last_stream_id TEXT,
+                last_started_at TEXT,
+                last_title TEXT,
+                last_game_id TEXT,
+                last_discord_message_id TEXT,
+                last_notified_at TEXT,
                 is_live INTEGER DEFAULT 0,
                 last_seen_at TEXT,
-                active_session_id BIGINT
+                last_game TEXT,
+                last_viewer_count INTEGER DEFAULT 0,
+                last_tracking_token TEXT,
+                active_session_id BIGINT,
+                had_deadlock_in_session INTEGER DEFAULT 0,
+                last_deadlock_seen_at TEXT
             )",
         )
         .execute(&pool)
         .await
         .unwrap();
         Some(pool)
+    }
+
+    async fn process_existing_announcement(
+        is_partner_active: bool,
+    ) -> Option<Arc<RecordingAnnouncementSink>> {
+        let schema = if is_partner_active {
+            "t_poller_existing_active_announcement"
+        } else {
+            "t_poller_existing_inactive_announcement"
+        };
+        let pool = make_pool(schema).await?;
+        sqlx::query(
+            "INSERT INTO twitch_live_state (
+                twitch_user_id, streamer_login, last_stream_id,
+                last_discord_message_id, is_live, last_seen_at, last_game
+             ) VALUES ('701', 'banned', 'stream-1', 'message-1', 1, 'now', 'Deadlock')",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+
+        let sink = Arc::new(RecordingAnnouncementSink::default());
+        let engine = engine_with_sink(
+            Arc::new(FailingTrackedSource),
+            pool,
+            sink.clone() as Arc<dyn AnnouncementSink>,
+        );
+        let entry = TrackedEntry {
+            login: "banned".to_string(),
+            twitch_user_id: Some("701".to_string()),
+            require_link: false,
+            is_partner_active,
+            is_archived: false,
+            is_inactivity_flagged: false,
+            discord_user_id: None,
+            live_ping_role_id: None,
+            live_ping_enabled: true,
+        };
+        let streams = HashMap::from([(
+            "banned".to_string(),
+            StreamSnapshot {
+                id: Some("stream-1".to_string()),
+                user_login: "banned".to_string(),
+                user_id: "701".to_string(),
+                user_name: "Banned".to_string(),
+                game_name: "Deadlock".to_string(),
+                ..Default::default()
+            },
+        )]);
+
+        engine.process_entries(&[entry], &streams).await;
+        Some(sink)
     }
 
     #[tokio::test]
@@ -1117,6 +1247,67 @@ mod tests {
             0,
             "bei Auth-Block darf kein Helix-Request laufen"
         );
+    }
+
+    #[tokio::test]
+    async fn aktive_twitch_exclusion_sperrt_das_announcement_gate() {
+        let Some(pool) = make_pool("t_poller_active_exclusion").await else {
+            return;
+        };
+        sqlx::query(
+            "INSERT INTO twitch_streamers_partner_state
+                (twitch_login, twitch_user_id, is_partner_active, operational_state)
+             VALUES ('banned', '701', 1, 'active'),
+                    ('optedout', '702', 1, 'active'),
+                    ('reactivated', '703', 1, 'active')",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+        sqlx::query(
+            "INSERT INTO twitch_exclusions
+                (twitch_user_id, kind, reason, excluded_at, reactivated_at)
+             VALUES ('701', 'banned', 'test', NOW(), NULL),
+                    ('702', 'opt_out', 'test', NOW(), NULL),
+                    ('703', 'opt_out', 'test', NOW(), NOW())",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+
+        let (tracked, partner_logins) = TrackedStore::new(pool).load().await.unwrap();
+        let is_active = |login: &str| {
+            tracked
+                .iter()
+                .find(|entry| entry.login == login)
+                .expect("tracked partner")
+                .is_partner_active
+        };
+
+        assert!(!is_active("banned"));
+        assert!(!is_active("optedout"));
+        assert!(is_active("reactivated"));
+        assert_eq!(partner_logins, HashSet::from(["reactivated".to_string()]));
+    }
+
+    #[tokio::test]
+    async fn inaktiver_partner_beendet_bestehendes_live_announcement_ohne_sync() {
+        let Some(sink) = process_existing_announcement(false).await else {
+            return;
+        };
+
+        assert_eq!(sink.ends.load(Ordering::SeqCst), 1);
+        assert_eq!(sink.syncs.load(Ordering::SeqCst), 0);
+    }
+
+    #[tokio::test]
+    async fn aktiver_partner_synct_bestehendes_live_announcement_ohne_ende() {
+        let Some(sink) = process_existing_announcement(true).await else {
+            return;
+        };
+
+        assert_eq!(sink.syncs.load(Ordering::SeqCst), 1);
+        assert_eq!(sink.ends.load(Ordering::SeqCst), 0);
     }
 
     #[tokio::test]

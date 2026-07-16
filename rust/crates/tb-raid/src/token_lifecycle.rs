@@ -19,6 +19,8 @@
 //! deduplizieren jede Reaktion: Admin-Embed + User-DM genau **1×/Streamer**,
 //! Reminder + Rollen-Entzug genau **1×** je abgelaufener Grace-Period.
 
+use std::sync::Arc;
+
 use chrono::{DateTime, SecondsFormat, Utc};
 use sqlx::PgPool;
 
@@ -56,6 +58,18 @@ pub trait TokenLifecycleNotifier: Send + Sync {
     /// Streamer-Rolle entziehen (Python `schedule_streamer_role_sync(False)`).
     /// Best-effort; `false` wenn nicht zugestellt.
     async fn revoke_streamer_role(&self, discord_user_id: &str, reason: &str) -> bool;
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum BotBanStatus {
+    NotBanned,
+    Banned,
+    Unknown,
+}
+
+#[async_trait::async_trait]
+pub trait BotBanStatusProbe: Send + Sync {
+    async fn bot_ban_status(&self, twitch_user_id: &str, twitch_login: &str) -> BotBanStatus;
 }
 
 // ---------------------------------------------------------------------------
@@ -213,6 +227,7 @@ pub struct TokenLifecycleReactor<N: TokenLifecycleNotifier> {
     pool: PgPool,
     notifier: N,
     reauth_url: String,
+    bot_ban_status_probe: Option<Arc<dyn BotBanStatusProbe>>,
 }
 
 impl<N: TokenLifecycleNotifier> TokenLifecycleReactor<N> {
@@ -226,7 +241,14 @@ impl<N: TokenLifecycleNotifier> TokenLifecycleReactor<N> {
             pool,
             notifier,
             reauth_url,
+            bot_ban_status_probe: None,
         }
+    }
+
+    #[must_use]
+    pub fn with_bot_ban_status_probe(mut self, probe: Arc<dyn BotBanStatusProbe>) -> Self {
+        self.bot_ban_status_probe = Some(probe);
+        self
     }
 
     fn iso(dt: DateTime<Utc>) -> String {
@@ -438,31 +460,107 @@ impl<N: TokenLifecycleNotifier> TokenLifecycleReactor<N> {
         }
     }
 
-    /// Restore nach Health-Restore (Python `restore_bot_banned_channel`, Kern):
-    /// hebt den technischen Bot-Ban-Opt-out wieder auf, sobald der Kanal wieder
-    /// gesund ist (`needs_reauth = FALSE`). Liefert `true`, wenn etwas restauriert
-    /// wurde. Bewusst auf den technischen Bot-Ban-Pfad fokussiert; manueller
-    /// Opt-out bleibt unangetastet.
+    /// Restore nach aufgehobenem Kanal-Ban. Ein gesunder Streamer-Token ist nur
+    /// Vorbedingung fuer die echte Ban-Pruefung, nie selbst der Restore-Beweis.
     pub async fn restore_bot_banned_channel(
         &self,
         twitch_user_id: &str,
         twitch_login: &str,
     ) -> bool {
+        let needs_reauth = match sqlx::query_scalar::<_, Option<bool>>(
+            "SELECT needs_reauth FROM twitch_raid_auth WHERE twitch_user_id = $1 LIMIT 1",
+        )
+        .bind(twitch_user_id)
+        .fetch_optional(&self.pool)
+        .await
+        {
+            Ok(Some(needs_reauth)) => needs_reauth.unwrap_or(true),
+            Ok(None) => {
+                tracing::info!(
+                    login = twitch_login,
+                    urteil = "unsicher",
+                    grund = "keine Auth-Zeile",
+                    "Bot-Ban-Restore-Entscheidung"
+                );
+                return false;
+            }
+            Err(error) => {
+                tracing::warn!(
+                    %error,
+                    login = twitch_login,
+                    urteil = "fehler",
+                    grund = "Auth-Status nicht lesbar",
+                    "Bot-Ban-Restore-Entscheidung"
+                );
+                return false;
+            }
+        };
+        if needs_reauth {
+            tracing::info!(
+                login = twitch_login,
+                urteil = "nein",
+                grund = "Streamer-Token braucht Reauth",
+                "Bot-Ban-Restore-Entscheidung"
+            );
+            return false;
+        }
+
+        let Some(probe) = &self.bot_ban_status_probe else {
+            tracing::info!(
+                login = twitch_login,
+                urteil = "unsicher",
+                grund = "kein Ban-Status-Provisioner verdrahtet",
+                "Bot-Ban-Restore-Entscheidung"
+            );
+            return false;
+        };
+        match probe.bot_ban_status(twitch_user_id, twitch_login).await {
+            BotBanStatus::Banned => {
+                tracing::info!(
+                    login = twitch_login,
+                    urteil = "nein",
+                    grund = "Bot ist weiterhin im Kanal gebannt",
+                    "Bot-Ban-Restore-Entscheidung"
+                );
+                return false;
+            }
+            BotBanStatus::Unknown => {
+                tracing::info!(
+                    login = twitch_login,
+                    urteil = "unsicher",
+                    grund = "Ban-Status konnte nicht sicher bestimmt werden",
+                    "Bot-Ban-Restore-Entscheidung"
+                );
+                return false;
+            }
+            BotBanStatus::NotBanned => {}
+        }
+
         match self
             .restore_bot_banned_inner(twitch_user_id, twitch_login)
             .await
         {
             Ok(restored) => {
-                if restored {
-                    tracing::info!(
-                        user = %mask(twitch_login),
-                        "Technischer Bot-Ban-Opt-out wiederhergestellt"
-                    );
-                }
+                tracing::info!(
+                    login = twitch_login,
+                    urteil = if restored { "ja" } else { "nein" },
+                    grund = if restored {
+                        "Bot ist nicht mehr gebannt"
+                    } else {
+                        "Zustand nicht mehr fuer Bot-Ban-Restore geeignet"
+                    },
+                    "Bot-Ban-Restore-Entscheidung"
+                );
                 restored
             }
             Err(error) => {
-                tracing::warn!(%error, user = %mask(twitch_user_id), "Bot-Ban-Restore fehlgeschlagen");
+                tracing::warn!(
+                    %error,
+                    login = twitch_login,
+                    urteil = "fehler",
+                    grund = "DB-Restore fehlgeschlagen",
+                    "Bot-Ban-Restore-Entscheidung"
+                );
                 false
             }
         }
@@ -543,8 +641,7 @@ impl<N: TokenLifecycleNotifier> TokenLifecycleReactor<N> {
                           )
                    )
                AND LOWER(COALESCE(rb.reason, '')) LIKE '%bot_banned%'
-             WHERE COALESCE(ra.needs_reauth, TRUE) = FALSE
-               AND (
+             WHERE (
                     LOWER(TRIM(COALESCE(p.technical_pause_reason, ''))) = 'bot_banned'
                     OR rb.target_login IS NOT NULL
                     OR (
@@ -1099,6 +1196,15 @@ mod tests {
         }
     }
 
+    struct FixedBotBanStatus(BotBanStatus);
+
+    #[async_trait::async_trait]
+    impl BotBanStatusProbe for FixedBotBanStatus {
+        async fn bot_ban_status(&self, _twitch_user_id: &str, _twitch_login: &str) -> BotBanStatus {
+            self.0
+        }
+    }
+
     // --- Reine Logik (kein DB nötig) ------------------------------------
 
     #[tokio::test]
@@ -1493,7 +1599,8 @@ mod tests {
             .execute(&pool).await.unwrap();
 
         let notifier = Arc::new(CountingNotifier::default());
-        let reactor = TokenLifecycleReactor::new(pool.clone(), notifier);
+        let reactor = TokenLifecycleReactor::new(pool.clone(), notifier)
+            .with_bot_ban_status_probe(Arc::new(FixedBotBanStatus(BotBanStatus::NotBanned)));
 
         // Kanal noch nicht gesund → kein Restore.
         assert!(!reactor.restore_bot_banned_channel("300", "baz").await);
@@ -1521,6 +1628,66 @@ mod tests {
         .await
         .unwrap();
         assert_eq!(raid, Some(true));
+    }
+
+    #[tokio::test]
+    async fn restore_bot_banned_bleibt_ohne_echten_ban_status_fail_closed() {
+        let Some(_) = test_db_url() else {
+            eprintln!("SKIP: TB_TEST_DATABASE_URL nicht gesetzt");
+            return;
+        };
+        let pool = setup_db("tl_restore_fail_closed").await;
+        sqlx::query("INSERT INTO twitch_partners (twitch_user_id, twitch_login, technical_pause_reason, raid_bot_enabled) VALUES ('305', 'stillbanned', 'bot_banned', 0)")
+            .execute(&pool).await.unwrap();
+        sqlx::query("INSERT INTO twitch_raid_auth (twitch_user_id, twitch_login, raid_enabled, needs_reauth) VALUES ('305', 'stillbanned', false, false)")
+            .execute(&pool).await.unwrap();
+
+        let reactor =
+            TokenLifecycleReactor::new(pool.clone(), Arc::new(CountingNotifier::default()));
+
+        assert!(
+            !reactor
+                .restore_bot_banned_channel("305", "stillbanned")
+                .await,
+            "ein gesunder OAuth-Token beweist nicht, dass der Chat-Ban aufgehoben ist"
+        );
+        let reason: Option<String> = sqlx::query_scalar(
+            "SELECT technical_pause_reason FROM twitch_partners WHERE twitch_user_id = '305'",
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert_eq!(reason.as_deref(), Some("bot_banned"));
+    }
+
+    #[tokio::test]
+    async fn restore_bot_banned_bleibt_bei_ban_oder_unklarem_status_pausiert() {
+        let Some(_) = test_db_url() else {
+            eprintln!("SKIP: TB_TEST_DATABASE_URL nicht gesetzt");
+            return;
+        };
+        let pool = setup_db("tl_restore_status").await;
+        sqlx::query("INSERT INTO twitch_partners (twitch_user_id, twitch_login, technical_pause_reason, raid_bot_enabled) VALUES ('306', 'banned', 'bot_banned', 0), ('307', 'unknown', 'bot_banned', 0)")
+            .execute(&pool).await.unwrap();
+        sqlx::query("INSERT INTO twitch_raid_auth (twitch_user_id, twitch_login, raid_enabled, needs_reauth) VALUES ('306', 'banned', false, false), ('307', 'unknown', false, false)")
+            .execute(&pool).await.unwrap();
+
+        let banned =
+            TokenLifecycleReactor::new(pool.clone(), Arc::new(CountingNotifier::default()))
+                .with_bot_ban_status_probe(Arc::new(FixedBotBanStatus(BotBanStatus::Banned)));
+        let unknown =
+            TokenLifecycleReactor::new(pool.clone(), Arc::new(CountingNotifier::default()))
+                .with_bot_ban_status_probe(Arc::new(FixedBotBanStatus(BotBanStatus::Unknown)));
+
+        assert!(!banned.restore_bot_banned_channel("306", "banned").await);
+        assert!(!unknown.restore_bot_banned_channel("307", "unknown").await);
+        let active_pauses: i64 = sqlx::query_scalar(
+            "SELECT COUNT(*) FROM twitch_partners WHERE technical_pause_reason = 'bot_banned'",
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert_eq!(active_pauses, 2);
     }
 
     #[tokio::test]
@@ -1614,7 +1781,8 @@ mod tests {
         .unwrap();
 
         let notifier = Arc::new(CountingNotifier::default());
-        let reactor = TokenLifecycleReactor::new(pool.clone(), notifier);
+        let reactor = TokenLifecycleReactor::new(pool.clone(), notifier)
+            .with_bot_ban_status_probe(Arc::new(FixedBotBanStatus(BotBanStatus::NotBanned)));
         assert_eq!(reactor.restore_ready_bot_banned_channels().await, 3);
 
         let ready_reason: Option<String> = sqlx::query_scalar(

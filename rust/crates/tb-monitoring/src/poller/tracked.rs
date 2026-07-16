@@ -59,15 +59,24 @@ impl TrackedStore {
         let rows: Vec<TrackedRow> = sqlx::query_as!(
             TrackedRow,
             r#"
-            SELECT twitch_login AS "twitch_login!", twitch_user_id,
-                   require_discord_link AS "require_discord_link?",
-                   archived_at::text AS "archived_at?",
-                   is_partner_active AS "is_partner_active?",
-                   discord_user_id,
-                   operational_state AS "operational_state?",
-                   live_ping_role_id,
-                   COALESCE(live_ping_enabled, 1) AS "live_ping_enabled?"
-              FROM twitch_streamers_partner_state
+            SELECT partner.twitch_login AS "twitch_login!", partner.twitch_user_id,
+                   partner.require_discord_link AS "require_discord_link?",
+                   partner.archived_at::text AS "archived_at?",
+                   CASE
+                       WHEN COALESCE(partner.is_partner_active, 0) <> 0
+                        AND NOT EXISTS (
+                            SELECT 1
+                              FROM twitch_exclusions exclusion
+                             WHERE exclusion.twitch_user_id = partner.twitch_user_id
+                               AND exclusion.reactivated_at IS NULL
+                        )
+                       THEN 1 ELSE 0
+                   END AS "is_partner_active?: i32",
+                   partner.discord_user_id,
+                   partner.operational_state AS "operational_state?",
+                   partner.live_ping_role_id,
+                   COALESCE(partner.live_ping_enabled, 1) AS "live_ping_enabled?"
+              FROM twitch_streamers_partner_state partner
             UNION ALL
             -- Monitored-only Kanäle sind keine Partner: Partner-Config als
             -- Spalten-Default, Archive-Status ist partner-spezifisch.
