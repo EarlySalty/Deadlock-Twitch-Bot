@@ -203,6 +203,10 @@ impl SessionTracker {
             {
                 tracing::warn!(%error, login, "Konnte unvollständige Session nicht adoptieren");
             }
+            let started_at =
+                extract_stream_start(stream.started_at.as_deref(), previous_started_at)
+                    .unwrap_or(now);
+            self.exp.on_session_start(&login, stream, started_at).await;
             return Some(id);
         }
 

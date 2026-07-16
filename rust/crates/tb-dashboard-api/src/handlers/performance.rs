@@ -10,10 +10,10 @@
 //! Auth: `DashboardAuthLevel::None` → 401; sonst erlaubt.
 
 use axum::{
-    Json,
     extract::{Query, State},
     http::StatusCode,
     response::IntoResponse,
+    Json,
 };
 use chrono::{DateTime, Duration, Utc};
 use serde::Deserialize;
@@ -108,12 +108,28 @@ pub async fn monthly_stats_handler(
             SELECT session_id, 1 AS has_any_chatters
             FROM twitch_session_chatters
             GROUP BY session_id
+        ),
+        sessions AS (
+            SELECT
+                s.*,
+                CASE
+                    WHEN s.started_at IS NOT NULL AND s.ended_at IS NOT NULL
+                    THEN GREATEST(
+                        0.0::FLOAT8,
+                        EXTRACT(EPOCH FROM (
+                            s.ended_at::text::TIMESTAMPTZ
+                            - s.started_at::text::TIMESTAMPTZ
+                        ))::FLOAT8
+                    )
+                    ELSE GREATEST(COALESCE(s.duration_seconds, 0)::FLOAT8, 0.0::FLOAT8)
+                END AS effective_duration_seconds
+            FROM twitch_stream_sessions s
         )
         SELECT
             EXTRACT(YEAR  FROM s.started_at)::integer AS "year",
             EXTRACT(MONTH FROM s.started_at)::integer AS "month",
-            SUM(s.avg_viewers * s.duration_seconds / 3600.0) AS "hours_watched",
-            SUM(s.duration_seconds / 3600.0)::float8 AS "airtime",
+            SUM(s.avg_viewers * s.effective_duration_seconds / 3600.0) AS "hours_watched",
+            SUM(s.effective_duration_seconds / 3600.0)::float8 AS "airtime",
             AVG(s.avg_viewers) AS "avg_viewers",
             MAX(s.peak_viewers)::bigint AS "peak_viewers",
             SUM(CASE WHEN s.follower_delta IS NOT NULL
@@ -122,7 +138,7 @@ pub async fn monthly_stats_handler(
             SUM(CASE WHEN scp.has_any_chatters = 1 THEN COALESCE(fc.active_chatters, 0)
                      ELSE COALESCE(s.unique_chatters, 0) END)::BIGINT AS "total_chatter_sessions",
             COUNT(*) AS "stream_count"
-        FROM twitch_stream_sessions s
+        FROM sessions s
         LEFT JOIN filtered_chatters fc ON fc.session_id = s.id
         LEFT JOIN session_chatter_presence scp ON scp.session_id = s.id
         WHERE s.started_at >= $1
@@ -195,17 +211,27 @@ pub async fn weekly_stats_handler(
             Err(resp) => return resp,
         };
 
-    let rows = sqlx::query!(
+    let rows = sqlx::query(
         r#"
         SELECT
-            EXTRACT(DOW FROM s.started_at)::integer AS "weekday!",
-            COUNT(*) AS "stream_count!",
-            AVG(s.duration_seconds / 3600.0)::float8 AS "avg_hours?",
-            AVG(s.avg_viewers) AS "avg_viewers?",
-            AVG(s.peak_viewers)::float8 AS "avg_peak?",
+            EXTRACT(DOW FROM s.started_at)::integer AS weekday,
+            COUNT(*) AS stream_count,
+            AVG(CASE
+                    WHEN s.started_at IS NOT NULL AND s.ended_at IS NOT NULL
+                    THEN GREATEST(
+                        0.0::FLOAT8,
+                        EXTRACT(EPOCH FROM (
+                            s.ended_at::text::TIMESTAMPTZ
+                            - s.started_at::text::TIMESTAMPTZ
+                        ))::FLOAT8
+                    )
+                    ELSE GREATEST(COALESCE(s.duration_seconds, 0)::FLOAT8, 0.0::FLOAT8)
+                END / 3600.0)::float8 AS avg_hours,
+            AVG(s.avg_viewers) AS avg_viewers,
+            AVG(s.peak_viewers)::float8 AS avg_peak,
             SUM(CASE WHEN s.follower_delta IS NOT NULL
                      AND NOT (s.followers_end = 0 AND s.followers_start > 0)
-                     THEN s.follower_delta ELSE 0 END) AS "total_followers!"
+                     THEN s.follower_delta ELSE 0 END) AS total_followers
         FROM twitch_stream_sessions s
         WHERE s.started_at >= $1
           AND s.ended_at IS NOT NULL
@@ -213,9 +239,9 @@ pub async fn weekly_stats_handler(
         GROUP BY 1
         ORDER BY 1
         "#,
-        since,
-        streamer.as_deref()
     )
+    .bind(since)
+    .bind(streamer.as_deref())
     .fetch_all(&pool)
     .await;
 
@@ -228,16 +254,16 @@ pub async fn weekly_stats_handler(
             let items: Vec<serde_json::Value> = rows
                 .into_iter()
                 .map(|r| {
-                    let wd = r.weekday;
+                    let wd: i32 = r.try_get("weekday").unwrap_or(0);
                     let label = WEEKDAY_LABELS.get(wd as usize).copied().unwrap_or("");
                     json!({
                         "weekday": wd,
                         "weekdayLabel": label,
-                        "streamCount": r.stream_count,
-                        "avgHours": r.avg_hours.unwrap_or(0.0),
-                        "avgViewers": r.avg_viewers.unwrap_or(0.0),
-                        "avgPeak": r.avg_peak.unwrap_or(0.0),
-                        "totalFollowers": r.total_followers,
+                        "streamCount": r.try_get::<i64, _>("stream_count").unwrap_or(0),
+                        "avgHours": r.try_get::<Option<f64>, _>("avg_hours").ok().flatten().unwrap_or(0.0),
+                        "avgViewers": r.try_get::<Option<f64>, _>("avg_viewers").ok().flatten().unwrap_or(0.0),
+                        "avgPeak": r.try_get::<Option<f64>, _>("avg_peak").ok().flatten().unwrap_or(0.0),
+                        "totalFollowers": r.try_get::<i64, _>("total_followers").unwrap_or(0),
                     })
                 })
                 .collect();
@@ -337,12 +363,22 @@ pub async fn calendar_heatmap_handler(
             Err(resp) => return resp,
         };
 
-    let rows = sqlx::query!(
+    let rows = sqlx::query(
         r#"
         SELECT
-            DATE(s.started_at) AS "date!",
-            COUNT(*) AS "stream_count!",
-            SUM(s.avg_viewers * s.duration_seconds / 3600.0) AS "hours_watched?"
+            DATE(s.started_at) AS date,
+            COUNT(*) AS stream_count,
+            SUM(s.avg_viewers * CASE
+                    WHEN s.started_at IS NOT NULL AND s.ended_at IS NOT NULL
+                    THEN GREATEST(
+                        0.0::FLOAT8,
+                        EXTRACT(EPOCH FROM (
+                            s.ended_at::text::TIMESTAMPTZ
+                            - s.started_at::text::TIMESTAMPTZ
+                        ))::FLOAT8
+                    )
+                    ELSE GREATEST(COALESCE(s.duration_seconds, 0)::FLOAT8, 0.0::FLOAT8)
+                END / 3600.0) AS hours_watched
         FROM twitch_stream_sessions s
         WHERE s.started_at >= $1
           AND s.ended_at IS NOT NULL
@@ -350,9 +386,9 @@ pub async fn calendar_heatmap_handler(
         GROUP BY DATE(s.started_at)
         ORDER BY DATE(s.started_at)
         "#,
-        since,
-        streamer.as_deref()
     )
+    .bind(since)
+    .bind(streamer.as_deref())
     .fetch_all(&pool)
     .await;
 
@@ -365,11 +401,17 @@ pub async fn calendar_heatmap_handler(
             let items: Vec<serde_json::Value> = rows
                 .into_iter()
                 .map(|r| {
-                    let date = r.date;
-                    let hw = r.hours_watched.unwrap_or(0.0);
+                    let date = r
+                        .try_get::<chrono::NaiveDate, _>("date")
+                        .unwrap_or_default();
+                    let hw = r
+                        .try_get::<Option<f64>, _>("hours_watched")
+                        .ok()
+                        .flatten()
+                        .unwrap_or(0.0);
                     json!({
                         "date": date.to_string(),
-                        "streamCount": r.stream_count,
+                        "streamCount": r.try_get::<i64, _>("stream_count").unwrap_or(0),
                         "hoursWatched": hw,
                         "value": hw,
                     })
@@ -589,6 +631,83 @@ mod tests {
         assert_eq!(item["followerDelta"].as_i64(), Some(5));
         assert_eq!(item["totalChatterSessions"].as_i64(), Some(20));
         assert_eq!(item["streamCount"].as_i64(), Some(1));
+    }
+
+    #[tokio::test]
+    async fn performance_nutzt_zeitspanne_statt_korrupter_duration_seconds() {
+        let Some(pool) = make_pool("t_perf_duration_corrupt").await else {
+            return;
+        };
+        sqlx::query(
+            "CREATE TABLE twitch_stream_sessions (\
+                 id BIGSERIAL PRIMARY KEY, streamer_login TEXT, \
+                 avg_viewers REAL, peak_viewers INTEGER, duration_seconds REAL, \
+                 follower_delta INTEGER, followers_start INTEGER, followers_end INTEGER, \
+                 unique_chatters INTEGER, \
+                 started_at TIMESTAMPTZ, ended_at TIMESTAMPTZ)",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+        sqlx::query(
+            "CREATE TABLE twitch_session_chatters (\
+                 session_id BIGINT, chatter_login TEXT, chatter_id TEXT, messages INTEGER)",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+        let started = Utc::now() - Duration::days(5);
+        let ended = started + Duration::hours(1);
+        sqlx::query(
+            "INSERT INTO twitch_stream_sessions \
+             (streamer_login, avg_viewers, peak_viewers, duration_seconds, started_at, ended_at) \
+             VALUES ('host', 100.0, 150, 1783000000.0, $1, $2)",
+        )
+        .bind(started)
+        .bind(ended)
+        .execute(&pool)
+        .await
+        .unwrap();
+
+        let monthly = monthly_stats_handler(
+            DashboardAuthLevel::admin(),
+            State(pool.clone()),
+            Query(MonthlyQuery {
+                streamer: Some("host".into()),
+                months: None,
+            }),
+        )
+        .await
+        .into_response();
+        let body: serde_json::Value = serde_json::from_slice(
+            &axum::body::to_bytes(monthly.into_body(), usize::MAX)
+                .await
+                .unwrap(),
+        )
+        .unwrap();
+        assert!((body[0]["totalHoursWatched"].as_f64().unwrap() - 100.0).abs() < 0.01);
+        assert!((body[0]["totalAirtime"].as_f64().unwrap() - 1.0).abs() < 0.01);
+
+        let weekly = weekly_stats_handler(
+            DashboardAuthLevel::admin(),
+            State(pool),
+            Query(DaysQuery {
+                streamer: Some("host".into()),
+                days: None,
+            }),
+        )
+        .await
+        .into_response();
+        let body: serde_json::Value = serde_json::from_slice(
+            &axum::body::to_bytes(weekly.into_body(), usize::MAX)
+                .await
+                .unwrap(),
+        )
+        .unwrap();
+        assert!(
+            (body[0]["avgHours"].as_f64().unwrap() - 1.0).abs() < 0.01,
+            "{body}"
+        );
     }
 
     /// IDOR: Ein eingeloggter Partner darf via `?streamer=<fremd>` NICHT die

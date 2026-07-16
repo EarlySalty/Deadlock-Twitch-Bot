@@ -1,20 +1,32 @@
-import { AlertCircle } from 'lucide-react';
+import { AlertCircle, Info } from 'lucide-react';
 
 import type { RawChatStatus } from '@/types/analytics';
+import { formatDateFull } from '@/utils/formatters';
 
 export function RawChatStatusBanner({
   status,
   compact = false,
+  windowStart,
 }: {
   status?: RawChatStatus;
   compact?: boolean;
+  windowStart?: Date;
 }) {
   if (!status) {
     return null;
   }
-  if (!status.suspectedIngestionIssue && status.available !== false && !status.note) {
+  const coverageStart = status.coverageStart ? new Date(status.coverageStart) : null;
+  const partialCoverage =
+    !status.suspectedIngestionIssue &&
+    coverageStart !== null &&
+    !Number.isNaN(coverageStart.getTime()) &&
+    windowStart !== undefined &&
+    coverageStart > windowStart;
+  if (!partialCoverage && !status.suspectedIngestionIssue && status.available !== false && !status.note) {
     return null;
   }
+  const date = partialCoverage ? formatDateFull(status.coverageStart as string) : null;
+  const StatusIcon = status.suspectedIngestionIssue ? AlertCircle : Info;
 
   return (
     <div
@@ -25,15 +37,19 @@ export function RawChatStatusBanner({
       } ${compact ? 'mb-4 px-4 py-3 text-sm' : 'px-5 py-4 text-sm'}`}
     >
       <div className="flex items-start gap-3">
-        <AlertCircle className={`${compact ? 'mt-0.5 h-4 w-4' : 'mt-0.5 h-5 w-5'} shrink-0`} />
+        <StatusIcon className={`${compact ? 'mt-0.5 h-4 w-4' : 'mt-0.5 h-5 w-5'} shrink-0 ${partialCoverage ? 'text-primary' : ''}`} />
         <div>
           <p className="font-medium text-white">
             {status.suspectedIngestionIssue
               ? 'Roh-Chat-Lücke erkannt'
-              : 'Keine Roh-Chat-Nachrichten im Zeitraum'}
+              : partialCoverage
+                ? `Roh-Chat-Daten ab ${date}`
+                : 'Keine Roh-Chat-Nachrichten im Zeitraum'}
           </p>
           <p className="mt-1 leading-5">
-            {status.note || 'Message-basierte KPIs und Charts sind für diesen Zeitraum eingeschränkt.'}
+            {partialCoverage
+              ? `Chat-Nachrichten werden erst seit ${date} erfasst. Kennzahlen auf Nachrichtenbasis beziehen sich auf den Zeitraum ab diesem Datum.`
+              : status.note || 'Message-basierte KPIs und Charts sind für diesen Zeitraum eingeschränkt.'}
           </p>
         </div>
       </div>

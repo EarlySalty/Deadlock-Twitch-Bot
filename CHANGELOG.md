@@ -1,10 +1,26 @@
-## #380 — Bot merkt jetzt selbst, wenn er in einem Kanal gebannt ist
+## #382 — Bot merkt jetzt selbst, wenn er in einem Kanal gebannt ist
 
 **Problem:** Wurde der Bot in einem Partner-Kanal gebannt, lief die Live-Ankündigung auf Discord trotzdem weiter — wir haben also für Kanäle geworben, in denen wir gar nicht mehr erwünscht waren. Der Bot hat den Ban stündlich korrekt erkannt, das Wissen aber nur ins Protokoll geschrieben und danach verworfen. Zusätzlich hätte selbst eine gesetzte Pause nicht gehalten: Sie wurde wieder aufgehoben, sobald der Zugriff des Streamers gültig war — und der hat mit einem Ban nichts zu tun.
 
 **Änderung:** Der erkannte Ban löst jetzt die schon vorhandene Reaktion aus: Werbung und Bot-Funktionen für diesen Kanal pausieren, der Streamer bekommt einmalig eine Hinweis-Nachricht. Die Rückkehr hängt nicht mehr am Zugriffsstatus, sondern am echten Ban: Der Bot prüft, ob er im Kanal wieder arbeiten kann, und hebt die Pause nur dann auf. Ist die Lage unklar, bleibt sie bestehen. Jede dieser Entscheidungen wird protokolliert, auch die ablehnenden. Streamer, die dauerhaft ausgeschlossen sind oder sich abgemeldet haben, werden jetzt ebenfalls zuverlässig von der Werbung ausgenommen.
 
 **Aktuelles Verhalten:** Ein Ban pausiert die Werbung für den betroffenen Kanal von allein. Hebt der Streamer den Ban auf, kehrt der Bot ohne Zutun zurück. Zwei Kanäle waren betroffen und sind jetzt sauber pausiert.
+
+## #381 — !commands schickt nur noch den Link
+
+**Problem:** Die Antwort auf !commands war eine Textwand aus rund 20 Befehlsnamen, die im Chat niemand lesen konnte und die trotzdem nicht erklärte, was die Befehle tun.
+
+**Änderung:** Die Aufzählung im Chat entfällt. Es kommt nur noch der Link auf die Befehlsseite, wo jeder Befehl mit Erklärung steht.
+
+**Aktuelles Verhalten:** !commands antwortet mit einer Zeile und dem Link. Die Befehlsseite bleibt die vollständige Übersicht.
+
+## #380 — Analyse-Dashboard rechnet wieder mit echten Zahlen
+
+**Problem:** Mehrere Ansichten zeigten Unsinn: Millionen Watchtime-Stunden im Juni, Wochentage mit über 100.000 Stunden Durchschnittsdauer, Raid-Retention bis 600%, internationale Streamer im deutschen Markt-Vergleich, kaputte Sonderzeichen in der Tag-Karte, eine dauerhafte Roh-Chat-Warnung und Ad-Verluste, die wie Zuwächse aussahen.
+
+**Änderung:** Fehlerhafte Altdaten aus einem früheren Zeitstempel-Bug wurden repariert und alle Watchtime-Auswertungen dagegen abgesichert. Raid-Retention zählt jetzt nur noch echte Raid-Ankömmlinge und ist bei 100% gedeckelt, der Markt-Vergleich filtert auf deutschsprachige Streams, das Labor sammelt wieder Viewer-Daten pro Spiel. Die Ad-Analyse zeigt Verluste und Zuwächse mit klaren Vorzeichen samt echten Viewer-Zahlen, und der Tag-Trend wird jetzt wirklich berechnet statt immer 0% zu melden.
+
+**Aktuelles Verhalten:** Trends, Planung, Raids, Markt, Labor, Chat-Tiefe und Monetarisierung zeigen plausible Werte. Wo Chat-Daten erst seit Kurzem erfasst werden, steht ein Hinweis mit dem Startdatum statt einer Dauerwarnung.
 
 ## #379 — Feature-Vergleich liegt jetzt auf einer Schriftrolle
 

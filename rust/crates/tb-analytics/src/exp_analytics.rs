@@ -28,14 +28,20 @@ pub async fn load_exp_overview(
     let streamer = streamer.to_lowercase();
 
     // max_avg_viewers wird in Python SELECTed, aber nicht ausgegeben → weggelassen.
-    let overview = sqlx::query!(
-        "SELECT COUNT(*)::bigint AS \"total_sessions!\", \
-                COUNT(DISTINCT game_name)::bigint AS \"games_played!\", \
-                COALESCE(AVG(avg_viewers), 0)::float8 AS \"avg_viewers!\" \
+    #[derive(sqlx::FromRow)]
+    struct OverviewRow {
+        total_sessions: i64,
+        games_played: i64,
+        avg_viewers: f64,
+    }
+    let overview: OverviewRow = sqlx::query_as(
+        "SELECT COUNT(*)::bigint AS total_sessions, \
+                COUNT(DISTINCT COALESCE(NULLIF(game_name, ''), '(unbekannt)'))::bigint AS games_played, \
+                COALESCE(AVG(avg_viewers), 0)::float8 AS avg_viewers \
          FROM exp_sessions WHERE LOWER(streamer) = $1 AND started_at >= $2 AND ended_at IS NOT NULL",
-        &streamer,
-        &since
     )
+    .bind(&streamer)
+    .bind(&since)
     .fetch_one(pool)
     .await?;
 
@@ -317,20 +323,20 @@ mod tests {
         let Some(pool) = make_pool("t_exp_ov").await else {
             return;
         };
-        // 3 Sessions, 2 Spiele; Deadlock Ø (100+200)/2=150, andere 50 → bestGame=Deadlock.
+        // 4 Sessions, 3 Buckets inkl. "(unbekannt)"; Deadlock Ø 150 → bestGame.
         sqlx::query("INSERT INTO exp_sessions (streamer, started_at, ended_at, game_name, avg_viewers) VALUES \
             ('Nani','2026-06-10T00:00:00+00:00','2026-06-10T02:00:00+00:00','Deadlock',100), \
             ('nani','2026-06-11T00:00:00+00:00','2026-06-11T02:00:00+00:00','Deadlock',200), \
-            ('nani','2026-06-12T00:00:00+00:00','2026-06-12T02:00:00+00:00','CS2',50)")
+            ('nani','2026-06-12T00:00:00+00:00','2026-06-12T02:00:00+00:00','CS2',50), \
+            ('nani','2026-06-12T03:00:00+00:00','2026-06-12T04:00:00+00:00',NULL,30)")
             .execute(&pool).await.unwrap();
         // laufende Session (ended_at NULL) → ignoriert.
         sqlx::query("INSERT INTO exp_sessions (streamer, started_at, ended_at, game_name, avg_viewers) VALUES ('nani','2026-06-13T00:00:00+00:00',NULL,'Deadlock',999)").execute(&pool).await.unwrap();
 
         let v = load_exp_overview(&pool, "nani", 3650).await.unwrap();
-        assert_eq!(v["totalSessions"], 3); // laufende ignoriert
-        assert_eq!(v["gamesPlayed"], 2);
-        // Gesamt-Ø (100+200+50)/3 = 116.666 → 116.7.
-        assert_eq!(v["avgViewers"], 116.7);
+        assert_eq!(v["totalSessions"], 4); // laufende ignoriert
+        assert_eq!(v["gamesPlayed"], 3);
+        assert_eq!(v["avgViewers"], 95.0);
         assert_eq!(v["bestGame"], "Deadlock");
         assert_eq!(v["bestGameAvgViewers"], 150.0);
     }

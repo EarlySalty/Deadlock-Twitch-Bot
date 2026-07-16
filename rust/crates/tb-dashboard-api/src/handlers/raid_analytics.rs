@@ -31,6 +31,7 @@ const KNOWN_CHAT_BOTS: &[&str] = &[
     "streamelements",
     "wizebot",
 ];
+const CHATTERS_POLL_INTERVAL_SECONDS: i64 = 30;
 
 // ─────────────────────────────────────────────────────────────────────────────
 // recalculate_raid_chat_metrics (Parität zu raid_metrics.py)
@@ -70,7 +71,7 @@ async fn recalculate_raid_chat_metrics(
 
     // Query 1: Retention (plus5m/15m/30m)
     let bot_not_in_sc: Vec<String> = (3..=bots.len() + 2).map(|i| format!("${i}")).collect();
-    let ret_sql = String::from(
+    let ret_sql = format!(
         r#"WITH raid_inputs AS (
                SELECT CAST(r.raid_id AS BIGINT) AS raid_id,
                       COALESCE(r.executed_at_key, '') AS executed_at_key,
@@ -83,19 +84,28 @@ async fn recalculate_raid_chat_metrics(
                )
            )
            SELECT ri.raid_id, ri.executed_at_key,
-                  COUNT(DISTINCT CASE WHEN sc.last_seen_at <= ri.executed_at + INTERVAL '5 minutes'
+                  COUNT(DISTINCT CASE WHEN sc.first_message_at <= ri.executed_at + INTERVAL '5 minutes'
+                          AND sc.last_seen_at >= ri.executed_at + INTERVAL '5 minutes'
+                          - INTERVAL '{poll_seconds} seconds'
                       THEN COALESCE(NULLIF(sc.chatter_login, ''), sc.chatter_id) ELSE NULL END) AS plus5m,
-                  COUNT(DISTINCT CASE WHEN sc.last_seen_at <= ri.executed_at + INTERVAL '15 minutes'
+                  COUNT(DISTINCT CASE WHEN sc.first_message_at <= ri.executed_at + INTERVAL '10 minutes'
+                          AND sc.last_seen_at >= ri.executed_at + INTERVAL '15 minutes'
+                          - INTERVAL '{poll_seconds} seconds'
                       THEN COALESCE(NULLIF(sc.chatter_login, ''), sc.chatter_id) ELSE NULL END) AS plus15m,
-                  COUNT(DISTINCT COALESCE(NULLIF(sc.chatter_login, ''), sc.chatter_id)) AS plus30m
+                  COUNT(DISTINCT CASE WHEN sc.first_message_at <= ri.executed_at + INTERVAL '10 minutes'
+                          AND sc.last_seen_at >= ri.executed_at + INTERVAL '30 minutes'
+                          - INTERVAL '{poll_seconds} seconds'
+                      THEN COALESCE(NULLIF(sc.chatter_login, ''), sc.chatter_id) ELSE NULL END) AS plus30m
            FROM raid_inputs ri
            LEFT JOIN twitch_session_chatters sc
                ON sc.session_id = ri.target_session_id
               AND ri.executed_at IS NOT NULL
+              AND sc.first_message_at >= ri.executed_at
+              AND sc.first_message_at <= ri.executed_at + INTERVAL '10 minutes'
               AND sc.last_seen_at >= ri.executed_at
-              AND sc.last_seen_at <= ri.executed_at + INTERVAL '30 minutes'
               AND (sc.chatter_login IS NULL OR sc.chatter_login = '' OR LOWER(sc.chatter_login) != ALL($2))
            GROUP BY ri.raid_id, ri.executed_at_key"#,
+        poll_seconds = CHATTERS_POLL_INTERVAL_SECONDS,
     );
 
     let q = sqlx::query(&ret_sql).bind(&payload).bind(&bots);
@@ -347,11 +357,7 @@ pub async fn raid_retention_handler(
             };
         let _ = used_recalc;
 
-        let ret_pct = if viewers_sent > 0 {
-            c30m as f64 / viewers_sent as f64 * 100.0
-        } else {
-            0.0
-        };
+        let ret_pct = retention_pct(c30m, viewers_sent);
         let conv_pct = if viewers_sent > 0 {
             new_ch as f64 / viewers_sent as f64 * 100.0
         } else {
@@ -409,6 +415,14 @@ pub async fn raid_retention_handler(
         },
     }))
     .into_response()
+}
+
+fn retention_pct(chatters: i64, viewers_sent: i64) -> f64 {
+    if viewers_sent > 0 {
+        (chatters as f64 / viewers_sent as f64 * 100.0).min(100.0)
+    } else {
+        0.0
+    }
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -968,6 +982,13 @@ mod tests {
         })
     }
 
+    #[test]
+    fn retention_prozent_ist_auf_hundert_begrenzt() {
+        assert_eq!(retention_pct(6, 1), 100.0);
+        assert_eq!(retention_pct(1, 2), 50.0);
+        assert_eq!(retention_pct(1, 0), 0.0);
+    }
+
     /// P1.33: Chatter mit chatter_id aber NULL chatter_login muss in
     /// plus30m UND new_chatters mitgezählt werden (vorher fälschlich gefiltert).
     #[tokio::test]
@@ -976,15 +997,17 @@ mod tests {
             return;
         };
         let executed = Utc::now() - chrono::Duration::minutes(60);
-        let after = executed + chrono::Duration::minutes(2);
+        let first_seen = executed + chrono::Duration::minutes(2);
+        let last_seen = executed + chrono::Duration::minutes(45);
 
         // Anonymer Chatter: chatter_id gesetzt, chatter_login NULL.
         sqlx::query(
             "INSERT INTO twitch_session_chatters \
              (session_id, chatter_id, chatter_login, last_seen_at, first_message_at, messages) \
-             VALUES (42, 'anon-1', NULL, $1, $1, 3)",
+             VALUES (42, 'anon-1', NULL, $1, $2, 3)",
         )
-        .bind(after)
+        .bind(last_seen)
+        .bind(first_seen)
         .execute(&pool)
         .await
         .unwrap();
@@ -993,11 +1016,38 @@ mod tests {
         let metrics = recalculate_raid_chat_metrics(&pool, &raids).await;
         let m = metrics.get(&(1, "k1".to_string())).expect("metric");
 
-        assert_eq!(m.plus30m, 1, "NULL-Login-Chatter muss in plus30m zählen");
+        assert_eq!(
+            m.plus30m, 1,
+            "bei +45min weiter anwesender Chatter muss in plus30m zählen"
+        );
         assert_eq!(
             m.new_chatters, 1,
             "NULL-Login-Chatter muss als new_chatter zählen"
         );
+    }
+
+    #[tokio::test]
+    async fn late_arrival_only_counts_in_later_retention_windows() {
+        let Some(pool) = make_pool("t_raid_late_arrival_api").await else {
+            return;
+        };
+        let executed = Utc::now() - chrono::Duration::minutes(60);
+
+        sqlx::query(
+            "INSERT INTO twitch_session_chatters \
+             (session_id, chatter_id, chatter_login, last_seen_at, first_message_at, messages) \
+             VALUES (42, 'late-1', 'latecomer', $1, $2, 1)",
+        )
+        .bind(executed + chrono::Duration::minutes(30))
+        .bind(executed + chrono::Duration::minutes(9))
+        .execute(&pool)
+        .await
+        .unwrap();
+
+        let metrics = recalculate_raid_chat_metrics(&pool, &[raid_input(executed)]).await;
+        let m = metrics.get(&(1, "k1".to_string())).expect("metric");
+
+        assert_eq!((m.plus5m, m.plus15m, m.plus30m), (0, 1, 1));
     }
 
     /// Gegenprobe: ein bekannter Bot-Login wird weiterhin ausgefiltert.
@@ -1007,15 +1057,17 @@ mod tests {
             return;
         };
         let executed = Utc::now() - chrono::Duration::minutes(60);
-        let after = executed + chrono::Duration::minutes(2);
+        let first_seen = executed + chrono::Duration::minutes(2);
+        let last_seen = executed + chrono::Duration::minutes(30);
 
         sqlx::query(
             "INSERT INTO twitch_session_chatters \
              (session_id, chatter_id, chatter_login, last_seen_at, first_message_at, messages) \
-             VALUES (42, 'bot-1', 'nightbot', $1, $1, 3), \
-                    (42, 'human-1', 'echtuser', $1, $1, 3)",
+             VALUES (42, 'bot-1', 'nightbot', $1, $2, 3), \
+                    (42, 'human-1', 'echtuser', $1, $2, 3)",
         )
-        .bind(after)
+        .bind(last_seen)
+        .bind(first_seen)
         .execute(&pool)
         .await
         .unwrap();

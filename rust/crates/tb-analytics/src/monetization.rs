@@ -199,7 +199,8 @@ async fn compute_drop_analysis(
         if pre_avg <= 0.0 {
             continue;
         }
-        let drop = (pre_avg - mean(&post)) / pre_avg * 100.0;
+        let post_avg = mean(&post);
+        let drop = (pre_avg - post_avg) / pre_avg * 100.0;
         drop_pcts.push(drop);
 
         // Recovery: erstes Timeline-Sample nach Ad-Ende mit >= 95 % des Pre-Schnitts.
@@ -234,6 +235,9 @@ async fn compute_drop_analysis(
                 "started_at": row.started_at.format("%Y-%m-%d %H:%M").to_string(),
                 "duration_s": duration_seconds as i64,
                 "drop_pct": drop_pct_round,
+                "pre_avg_viewers": round1(pre_avg),
+                "post_avg_viewers": round1(post_avg),
+                "low_sample": pre_avg < 5.0,
                 "is_automatic": is_auto,
                 "min_into_stream": round1(minutes_into),
                 "recovery_min": recovery_min.map(|v| json!(v)).unwrap_or(Value::Null),
@@ -277,7 +281,7 @@ async fn compute_drop_analysis(
 
     let best_ad_time = match (min_mean_index(&position), max_mean_index(&position)) {
         (Some(best), Some(worst)) => Value::String(format!(
-            "Nach {} (Ø -{:.1}% statt -{:.1}% {})",
+            "Nach {} (Ø {:.1}% statt {:.1}% {})",
             POSITION_LABELS_SLOT[best],
             mean(&position[best]),
             mean(&position[worst]),
@@ -595,6 +599,9 @@ mod tests {
         assert_eq!(w["started_at"], "2026-06-14 12:10");
         assert_eq!(w["duration_s"], 60);
         assert_eq!(w["drop_pct"], 50.0);
+        assert_eq!(w["pre_avg_viewers"], 100.0);
+        assert_eq!(w["post_avg_viewers"], 50.0);
+        assert_eq!(w["low_sample"], false);
         assert_eq!(w["is_automatic"], false);
         assert_eq!(w["min_into_stream"], 10.0);
         assert_eq!(w["recovery_min"], 2.0); // Min 13 − post_start 11
@@ -622,7 +629,7 @@ mod tests {
         );
         assert_eq!(
             ads["best_ad_time"],
-            "Nach ersten 30 Min (Ø -50.0% statt -50.0% ersten 30 Min)"
+            "Nach ersten 30 Min (Ø 50.0% statt 50.0% ersten 30 Min)"
         );
         assert_eq!(
             ads["recommendations"],

@@ -497,26 +497,26 @@ pub async fn demo_monetization(Query(q): Query<DemoAnalyticsQuery>) -> Response 
             "manual": 6,
             "sessions_with_ads": 7,
             "avg_duration_s": 63.3,
-            "avg_viewer_drop_pct": -4.8,
+            "avg_viewer_drop_pct": 4.8,
             "worst_ads": [
-                { "started_at": "2026-06-12T20:48:00Z", "duration_s": 90, "drop_pct": -11.4, "is_automatic": true, "min_into_stream": 48, "recovery_min": 8 },
-                { "started_at": "2026-06-10T21:05:00Z", "duration_s": 60, "drop_pct": -8.2, "is_automatic": false, "min_into_stream": 95, "recovery_min": 6 }
+                { "started_at": "2026-06-12T20:48:00Z", "duration_s": 90, "drop_pct": 11.4, "pre_avg_viewers": 114.0, "post_avg_viewers": 101.0, "low_sample": false, "is_automatic": true, "min_into_stream": 48, "recovery_min": 8 },
+                { "started_at": "2026-06-10T21:05:00Z", "duration_s": 60, "drop_pct": 8.2, "pre_avg_viewers": 98.0, "post_avg_viewers": 90.0, "low_sample": false, "is_automatic": false, "min_into_stream": 95, "recovery_min": 6 }
             ],
             "duration_impact": {
-                "30s": { "avg_drop": -2.4, "count": 5 },
-                "60s": { "avg_drop": -4.9, "count": 9 },
-                "90s": { "avg_drop": -8.1, "count": 4 },
+                "30s": { "avg_drop": 2.4, "count": 5 },
+                "60s": { "avg_drop": 4.9, "count": 9 },
+                "90s": { "avg_drop": 8.1, "count": 4 },
                 "120s_plus": { "avg_drop": null, "count": 0 }
             },
             "position_impact": {
-                "early_0_30m": { "avg_drop": -3.1, "count": 3 },
-                "mid_30_60m": { "avg_drop": -5.7, "count": 6 },
-                "late_60_90m": { "avg_drop": -4.2, "count": 5 },
-                "endgame_90m": { "avg_drop": -6.8, "count": 4 }
+                "early_0_30m": { "avg_drop": 3.1, "count": 3 },
+                "mid_30_60m": { "avg_drop": 5.7, "count": 6 },
+                "late_60_90m": { "avg_drop": 4.2, "count": 5 },
+                "endgame_90m": { "avg_drop": 6.8, "count": 4 }
             },
             "auto_vs_manual": {
-                "auto_avg_drop": -5.2,
-                "manual_avg_drop": -3.9,
+                "auto_avg_drop": 5.2,
+                "manual_avg_drop": 3.9,
                 "auto_count": 12,
                 "manual_count": 6
             },

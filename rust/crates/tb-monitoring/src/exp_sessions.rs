@@ -4,7 +4,7 @@
 //! Erweiterung — die Tabellen haben echte Konsumenten (AI-Reports,
 //! `/exp/game-transitions`), das Doppelsystem wird nach dem Cutover
 //! konsolidiert (`05-cleanup-decisions.md` #12). Alle Hooks sind
-//! best-effort: Fehler werden debug-geloggt, nie propagiert (wie Python).
+//! best-effort: Fehler werden als Warnung geloggt, nie propagiert (wie Python).
 //!
 //! Prod-Typen: IDs bigint, Timestamps TEXT (ISO), `avg_viewers`/
 //! `minutes_from_start`/`duration_min` REAL (f32).
@@ -254,7 +254,7 @@ impl ExpSessionTracker {
                 }
                 Ok(None) => {}
                 Err(error) => {
-                    tracing::debug!(%error, login, "exp: Konnte offene Session nicht prüfen");
+                    tracing::warn!(%error, login, "exp: Konnte offene Session nicht prüfen");
                 }
             }
         }
@@ -275,7 +275,7 @@ impl ExpSessionTracker {
             }
             Ok(None) => {}
             Err(error) => {
-                tracing::debug!(%error, login, "exp: Konnte exp_session nicht anlegen");
+                tracing::warn!(%error, login, "exp: Konnte exp_session nicht anlegen");
             }
         }
     }
@@ -296,7 +296,7 @@ impl ExpSessionTracker {
             .record_snapshot(exp_id, now, stream.viewer_count)
             .await
         {
-            tracing::debug!(%error, login, "exp: Konnte Sample nicht schreiben");
+            tracing::warn!(%error, login, "exp: Konnte Sample nicht schreiben");
         }
     }
 
@@ -320,7 +320,7 @@ impl ExpSessionTracker {
             .record_transition(exp_id, &login, from_game, to_game, viewer_count, now)
             .await
         {
-            tracing::debug!(%error, login, "exp: Konnte game_transition nicht schreiben");
+            tracing::warn!(%error, login, "exp: Konnte game_transition nicht schreiben");
         }
     }
 
@@ -334,7 +334,7 @@ impl ExpSessionTracker {
         let login = login.to_lowercase();
         if let Some(exp_id) = self.cached_id(&login) {
             if let Err(error) = self.store.finalize(exp_id, now, follower_delta).await {
-                tracing::debug!(%error, login, "exp: Konnte Session nicht finalisieren");
+                tracing::warn!(%error, login, "exp: Konnte Session nicht finalisieren");
             }
         }
         self.cache.lock().expect("exp cache lock").remove(&login);

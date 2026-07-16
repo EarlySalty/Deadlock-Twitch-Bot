@@ -6,7 +6,12 @@ use chrono::{DateTime, Duration, Utc};
 use sqlx::PgPool;
 use tb_monitoring::compute_raid_retention;
 
-async fn seed_session(pool: &PgPool, login: &str, started: DateTime<Utc>, ended: Option<DateTime<Utc>>) -> i64 {
+async fn seed_session(
+    pool: &PgPool,
+    login: &str,
+    started: DateTime<Utc>,
+    ended: Option<DateTime<Utc>>,
+) -> i64 {
     sqlx::query_scalar(
         "INSERT INTO twitch_stream_sessions (streamer_login, started_at, ended_at) \
          VALUES ($1, $2, $3) RETURNING id",
@@ -69,12 +74,7 @@ async fn seed_chatter(
     .unwrap();
 }
 
-async fn seed_rollup(
-    pool: &PgPool,
-    streamer: &str,
-    login: &str,
-    first_seen: DateTime<Utc>,
-) {
+async fn seed_rollup(pool: &PgPool, streamer: &str, login: &str, first_seen: DateTime<Utc>) {
     sqlx::query(
         "INSERT INTO twitch_chatter_rollup \
          (streamer_login, chatter_login, first_seen_at, last_seen_at, total_messages, total_sessions) \
@@ -97,16 +97,52 @@ async fn windows_and_splits_computed() {
     let session = seed_session(&pool, "target", executed - Duration::minutes(5), None).await;
     seed_raid(&pool, 1, "raider", "target", 10, executed).await;
 
-    // alice: +3min (in allen Fenstern), bekannt vom Raider, schreibt → new_chatter.
-    seed_chatter(&pool, session, "target", "alice", executed + Duration::minutes(3), executed + Duration::minutes(3), 2).await;
+    // alice: kommt +3min und bleibt bis +30min (in allen Fenstern).
+    seed_chatter(
+        &pool,
+        session,
+        "target",
+        "alice",
+        executed + Duration::minutes(30),
+        executed + Duration::minutes(3),
+        2,
+    )
+    .await;
     seed_rollup(&pool, "raider", "alice", executed - Duration::days(2)).await;
-    // bob: +12min (in 15/30), unbekannt, Lurker (messages=0) → new_to_target aber nicht new_chatter.
-    seed_chatter(&pool, session, "target", "bob", executed + Duration::minutes(12), executed + Duration::minutes(12), 0).await;
-    // carol: +25min (nur 30), war schon vor Raid Stammgast des targets → nicht new.
-    seed_chatter(&pool, session, "target", "carol", executed + Duration::minutes(25), executed + Duration::minutes(25), 4).await;
+    // bob: kommt +4min und bleibt bis +15min (5/15, nicht 30).
+    seed_chatter(
+        &pool,
+        session,
+        "target",
+        "bob",
+        executed + Duration::minutes(15),
+        executed + Duration::minutes(4),
+        0,
+    )
+    .await;
+    // carol: kommt +5min und geht danach (nur 5), war schon Stammgast des targets.
+    seed_chatter(
+        &pool,
+        session,
+        "target",
+        "carol",
+        executed + Duration::minutes(5),
+        executed + Duration::minutes(5),
+        4,
+    )
+    .await;
     seed_rollup(&pool, "target", "carol", executed - Duration::days(3)).await;
     // nightbot: muss gefiltert werden.
-    seed_chatter(&pool, session, "target", "nightbot", executed + Duration::minutes(2), executed + Duration::minutes(2), 9).await;
+    seed_chatter(
+        &pool,
+        session,
+        "target",
+        "nightbot",
+        executed + Duration::minutes(2),
+        executed + Duration::minutes(2),
+        9,
+    )
+    .await;
 
     let stats = compute_raid_retention(&pool).await.unwrap();
     assert_eq!(stats.raids_computed, 1);
@@ -121,13 +157,81 @@ async fn windows_and_splits_computed() {
         .await
         .unwrap();
 
-    assert_eq!(at5, 1, "+5: nur alice (nightbot gefiltert)");
+    assert_eq!(at5, 3, "+5: alice + bob + carol (nightbot gefiltert)");
     assert_eq!(at15, 2, "+15: alice + bob");
-    assert_eq!(at30, 3, "+30: alice + bob + carol");
+    assert_eq!(at30, 1, "+30: nur alice");
     assert_eq!(known, 1, "alice kommt aus raider-rollup");
-    assert_eq!(new_to, 2, "alice + bob neu für target (carol war Stammgast)");
+    assert_eq!(
+        new_to, 2,
+        "alice + bob neu für target (carol war Stammgast)"
+    );
     assert_eq!(new_ch, 1, "nur alice schreibt neu (bob ist Lurker)");
-    assert_eq!(tsid as i64, session, "target_session_id aufgelöst (int4-Cast)");
+    assert_eq!(
+        tsid as i64, session,
+        "target_session_id aufgelöst (int4-Cast)"
+    );
+}
+
+#[tokio::test]
+async fn late_arrival_only_counts_in_later_retention_windows() {
+    let Some(pool) = support::pool_with_chatters_schema("t_raid_late_arrival").await else {
+        return;
+    };
+    let executed = Utc::now() - Duration::hours(2);
+    let session = seed_session(&pool, "target", executed - Duration::minutes(5), None).await;
+    seed_raid(&pool, 25, "raider", "target", 10, executed).await;
+    seed_chatter(
+        &pool,
+        session,
+        "target",
+        "latecomer",
+        executed + Duration::minutes(30),
+        executed + Duration::minutes(9),
+        1,
+    )
+    .await;
+
+    compute_raid_retention(&pool).await.unwrap();
+    let counts: (i32, i32, i32) = sqlx::query_as(
+        "SELECT chatters_at_plus5m, chatters_at_plus15m, chatters_at_plus30m \
+         FROM twitch_raid_retention WHERE raid_id = 25",
+    )
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+
+    assert_eq!(counts, (0, 1, 1));
+}
+
+#[tokio::test]
+async fn chatter_von_vor_dem_raid_zaehlt_nicht_zur_retention() {
+    let Some(pool) = support::pool_with_chatters_schema("t_raid_preexisting").await else {
+        return;
+    };
+    let executed = Utc::now() - Duration::hours(2);
+    let session = seed_session(&pool, "target", executed - Duration::minutes(5), None).await;
+    seed_raid(&pool, 24, "raider", "target", 10, executed).await;
+    seed_chatter(
+        &pool,
+        session,
+        "target",
+        "organic",
+        executed + Duration::minutes(30),
+        executed - Duration::minutes(1),
+        1,
+    )
+    .await;
+
+    compute_raid_retention(&pool).await.unwrap();
+    let counts: (i32, i32, i32) = sqlx::query_as(
+        "SELECT chatters_at_plus5m, chatters_at_plus15m, chatters_at_plus30m \
+         FROM twitch_raid_retention WHERE raid_id = 24",
+    )
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+
+    assert_eq!(counts, (0, 0, 0));
 }
 
 #[tokio::test]
@@ -142,15 +246,14 @@ async fn late_seen_counted_in_known_and_new_to_target() {
     let session = seed_session(&pool, "target", executed - Duration::minutes(5), None).await;
     seed_raid(&pool, 21, "raider", "target", 10, executed).await;
 
-    // dave: zuletzt gesehen +45min (außerhalb des 30-min-Fensters), kommt aus
-    // dem Raider-Rollup und ist neu für target → known + new_to_target = 1.
+    // dave: kommt im Raid-Fenster an und ist bei +45min weiterhin da.
     seed_chatter(
         &pool,
         session,
         "target",
         "dave",
         executed + Duration::minutes(45),
-        executed + Duration::minutes(45),
+        executed + Duration::minutes(2),
         0,
     )
     .await;
@@ -167,8 +270,14 @@ async fn late_seen_counted_in_known_and_new_to_target() {
     .await
     .unwrap();
 
-    assert_eq!(at30, 0, "+30-Fenster zählt dave NICHT (last_seen +45min)");
-    assert_eq!(known, 1, "known_from_raider hat KEINE Obergrenze → dave zählt");
+    assert_eq!(
+        at30, 1,
+        "+30-Retention zählt dave auch bei last_seen +45min"
+    );
+    assert_eq!(
+        known, 1,
+        "known_from_raider hat KEINE Obergrenze → dave zählt"
+    );
     assert_eq!(new_to, 1, "new_to_target hat KEINE Obergrenze → dave zählt");
 }
 
@@ -220,8 +329,7 @@ async fn new_chatter_independent_of_last_seen() {
     let session = seed_session(&pool, "target", executed - Duration::minutes(5), None).await;
     seed_raid(&pool, 22, "raider", "target", 10, executed).await;
 
-    // erin: schreibt erstmals +10min (messages>0), zuletzt gesehen aber erst
-    // +50min → außerhalb jedes Fensters, muss in new_chatters TROTZDEM zählen.
+    // erin: schreibt erstmals +10min (messages>0) und ist bei +50min noch da.
     seed_chatter(
         &pool,
         session,
@@ -244,7 +352,7 @@ async fn new_chatter_independent_of_last_seen() {
     .await
     .unwrap();
 
-    assert_eq!(at30, 0, "+30-Fenster zählt erin NICHT (last_seen +50min)");
+    assert_eq!(at30, 1, "+30-Retention zählt erin bei last_seen +50min");
     assert_eq!(
         new_ch, 1,
         "new_chatters ignoriert last_seen_at → erin (first_message +10, messages>0) zählt"
@@ -259,7 +367,16 @@ async fn skip_if_already_computed() {
     let executed = Utc::now() - Duration::hours(1);
     let session = seed_session(&pool, "target", executed - Duration::minutes(1), None).await;
     seed_raid(&pool, 5, "raider", "target", 3, executed).await;
-    seed_chatter(&pool, session, "target", "alice", executed + Duration::minutes(2), executed + Duration::minutes(2), 1).await;
+    seed_chatter(
+        &pool,
+        session,
+        "target",
+        "alice",
+        executed + Duration::minutes(2),
+        executed + Duration::minutes(2),
+        1,
+    )
+    .await;
 
     // Bereits berechnete Zeile (manuell), abweichende Werte → muss UNBERÜHRT bleiben.
     sqlx::query(
@@ -293,7 +410,13 @@ async fn skip_if_no_target_session() {
     };
     let executed = Utc::now() - Duration::hours(1);
     // Session des targets endete VOR dem Raid → keine passende Session.
-    seed_session(&pool, "target", executed - Duration::hours(3), Some(executed - Duration::hours(2))).await;
+    seed_session(
+        &pool,
+        "target",
+        executed - Duration::hours(3),
+        Some(executed - Duration::hours(2)),
+    )
+    .await;
     seed_raid(&pool, 9, "raider", "target", 5, executed).await;
 
     let stats = compute_raid_retention(&pool).await.unwrap();
