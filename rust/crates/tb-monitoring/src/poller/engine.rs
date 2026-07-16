@@ -1088,6 +1088,18 @@ mod tests {
             .await
             .unwrap();
         sqlx::query(
+            "CREATE TABLE twitch_exclusions (
+                twitch_user_id TEXT,
+                kind TEXT,
+                reason TEXT,
+                excluded_at TIMESTAMPTZ,
+                reactivated_at TIMESTAMPTZ
+            )",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+        sqlx::query(
             "CREATE TABLE twitch_live_state (
                 twitch_user_id TEXT PRIMARY KEY,
                 streamer_login TEXT NOT NULL,
@@ -1117,6 +1129,47 @@ mod tests {
             0,
             "bei Auth-Block darf kein Helix-Request laufen"
         );
+    }
+
+    #[tokio::test]
+    async fn aktive_twitch_exclusion_sperrt_das_announcement_gate() {
+        let Some(pool) = make_pool("t_poller_active_exclusion").await else {
+            return;
+        };
+        sqlx::query(
+            "INSERT INTO twitch_streamers_partner_state
+                (twitch_login, twitch_user_id, is_partner_active, operational_state)
+             VALUES ('banned', '701', 1, 'active'),
+                    ('optedout', '702', 1, 'active'),
+                    ('reactivated', '703', 1, 'active')",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+        sqlx::query(
+            "INSERT INTO twitch_exclusions
+                (twitch_user_id, kind, reason, excluded_at, reactivated_at)
+             VALUES ('701', 'banned', 'test', NOW(), NULL),
+                    ('702', 'opt_out', 'test', NOW(), NULL),
+                    ('703', 'opt_out', 'test', NOW(), NOW())",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+
+        let (tracked, partner_logins) = TrackedStore::new(pool).load().await.unwrap();
+        let is_active = |login: &str| {
+            tracked
+                .iter()
+                .find(|entry| entry.login == login)
+                .expect("tracked partner")
+                .is_partner_active
+        };
+
+        assert!(!is_active("banned"));
+        assert!(!is_active("optedout"));
+        assert!(is_active("reactivated"));
+        assert_eq!(partner_logins, HashSet::from(["reactivated".to_string()]));
     }
 
     #[tokio::test]
