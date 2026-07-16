@@ -48,7 +48,7 @@ use tb_social_media::enrich_pipeline::{ClipEnrichmentPipeline, PipelineError};
 use tb_social_media::enrichment::{
     ensure_enrichment_row, get_enrichment, update_manual_edit, EnrichmentRecord,
 };
-use tb_social_media::forms::{submit_clip_form, FormKey};
+use tb_social_media::forms::{submit_clip_form, FormKey, FormSubmissionOutcome};
 use tb_social_media::layout::{
     default_streamer_layout, get_clip_effective_layout, get_streamer_layout,
     set_clip_layout_override, upsert_streamer_layout, StreamerLayout,
@@ -963,6 +963,20 @@ fn scheduled_at_value(
     }
 }
 
+fn form_submission_response(form: FormKey, outcome: FormSubmissionOutcome) -> Value {
+    let (status, http_status) = match outcome {
+        FormSubmissionOutcome::Submitted(status) => ("submitted", Some(status)),
+        FormSubmissionOutcome::Failed(status) => ("failed", status),
+        FormSubmissionOutcome::SkippedDisabled => ("skipped_disabled", None),
+        FormSubmissionOutcome::SkippedDuplicate => ("skipped_duplicate", None),
+    };
+    json!({
+        "form": form.as_str(),
+        "status": status,
+        "http_status": http_status,
+    })
+}
+
 /// `POST /social-media/api/upload` — Clip auf eine oder mehrere Plattformen in
 /// die Upload-Queue legen.
 pub async fn queue_upload_handler(
@@ -1073,24 +1087,31 @@ pub async fn queue_upload_handler(
             Err(_) => queued.push(json!({ "platform": platform, "error": "queue_failed" })),
         }
     }
+    let mut forms = Vec::new();
     if let Some(form_clip_id) = form_clip_id {
         let client = reqwest::Client::new();
         for form in body.forms {
-            if let Err(error) =
-                submit_clip_form(&pool, &client, form_clip_id, form, body.title.as_deref()).await
-            {
-                tracing::error!(
-                    clip_id = form_clip_id,
-                    form_key = form.as_str(),
-                    http_status = ?Option::<u16>::None,
-                    outcome = "failed",
-                    %error,
-                    "Formular-Submit fehlgeschlagen"
-                );
-            }
+            let outcome =
+                match submit_clip_form(&pool, &client, form_clip_id, form, body.title.as_deref())
+                    .await
+                {
+                    Ok(outcome) => outcome,
+                    Err(error) => {
+                        tracing::error!(
+                            clip_id = form_clip_id,
+                            form_key = form.as_str(),
+                            http_status = ?Option::<u16>::None,
+                            outcome = "failed",
+                            %error,
+                            "Formular-Submit fehlgeschlagen"
+                        );
+                        FormSubmissionOutcome::Failed(None)
+                    }
+                };
+            forms.push(form_submission_response(form, outcome));
         }
     }
-    Json(json!({ "queued": queued })).into_response()
+    Json(json!({ "queued": queued, "forms": forms })).into_response()
 }
 
 /// Baut den Clip-Fetcher inline aus den Twitch-App-Credentials (`None`, wenn
@@ -2615,6 +2636,44 @@ mod tests {
     use super::*;
     use std::sync::Mutex;
 
+    #[test]
+    fn form_submission_response_maps_all_outcomes() {
+        use tb_social_media::forms::FormSubmissionOutcome;
+
+        for (outcome, status, http_status) in [
+            (
+                FormSubmissionOutcome::Submitted(201),
+                "submitted",
+                json!(201),
+            ),
+            (
+                FormSubmissionOutcome::Failed(Some(500)),
+                "failed",
+                json!(500),
+            ),
+            (FormSubmissionOutcome::Failed(None), "failed", Value::Null),
+            (
+                FormSubmissionOutcome::SkippedDisabled,
+                "skipped_disabled",
+                Value::Null,
+            ),
+            (
+                FormSubmissionOutcome::SkippedDuplicate,
+                "skipped_duplicate",
+                Value::Null,
+            ),
+        ] {
+            assert_eq!(
+                form_submission_response(FormKey::DeadlockHigh, outcome),
+                json!({
+                    "form": "deadlock_high",
+                    "status": status,
+                    "http_status": http_status,
+                })
+            );
+        }
+    }
+
     /// Serialisiert die Tests, die `OLLAMA_HOST` per `set_var` auf einen toten
     /// Port zeigen (erzwingt deterministischen LLM-Fallback). Ohne den Lock
     /// schreiben parallele Tests gleichzeitig dieselbe Prozess-Env-Var (Race).
@@ -3454,7 +3513,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn queue_upload_handler_reserves_requested_form_when_submits_are_disabled() {
+    async fn queue_upload_handler_reports_disabled_form_without_reserving_it() {
         let Some(pool) = make_pool("t_dash_sm_queue_forms").await else {
             return;
         };
@@ -3474,18 +3533,24 @@ mod tests {
         .await;
 
         assert_eq!(resp.status(), StatusCode::OK);
-        assert!(body_json(resp).await["queued"]
-            .as_array()
-            .unwrap()
-            .is_empty());
-        let status: String = sqlx::query_scalar(
-            "SELECT status FROM twitch_clip_form_submissions WHERE clip_id = $1 AND form_key = 'deadlock_high'",
+        let body = body_json(resp).await;
+        assert!(body["queued"].as_array().unwrap().is_empty());
+        assert_eq!(
+            body["forms"],
+            json!([{
+                "form": "deadlock_high",
+                "status": "skipped_disabled",
+                "http_status": null,
+            }])
+        );
+        let count: i64 = sqlx::query_scalar(
+            "SELECT COUNT(*) FROM twitch_clip_form_submissions WHERE clip_id = $1 AND form_key = 'deadlock_high'",
         )
         .bind(clip as i32)
         .fetch_one(&pool)
         .await
         .unwrap();
-        assert_eq!(status, "pending");
+        assert_eq!(count, 0);
     }
 
     fn clips_query(status: Option<&str>) -> AdminClipsQuery {

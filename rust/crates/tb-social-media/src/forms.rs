@@ -180,16 +180,20 @@ pub async fn persist_submission_attempt(
     clip_id: i32,
     form: FormKey,
 ) -> Result<SubmissionAttempt, sqlx::Error> {
-    let inserted = sqlx::query_scalar::<_, i32>(
-        "INSERT INTO twitch_clip_form_submissions (clip_id, form_key) \
-         VALUES ($1, $2) ON CONFLICT (clip_id, form_key) DO NOTHING RETURNING id",
+    let pending = sqlx::query_scalar::<_, i32>(
+        "INSERT INTO twitch_clip_form_submissions (clip_id, form_key, status) \
+         VALUES ($1, $2, 'pending') \
+         ON CONFLICT (clip_id, form_key) DO UPDATE \
+         SET status = 'pending', http_status = NULL, error = NULL, submitted_at = NULL \
+         WHERE twitch_clip_form_submissions.status <> 'submitted' \
+         RETURNING id",
     )
     .bind(clip_id)
     .bind(form.as_str())
     .fetch_optional(pool)
     .await?
     .is_some();
-    let outcome = if inserted {
+    let outcome = if pending {
         SubmissionAttempt::Pending
     } else {
         SubmissionAttempt::Skipped
@@ -525,7 +529,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn duplicate_submission_attempt_is_skipped() {
+    async fn submitted_attempt_is_skipped_and_failed_attempt_is_retried() {
         let Some(pool) = make_pool("t_sm_forms").await else {
             return;
         };
@@ -543,21 +547,46 @@ mod tests {
         let first = persist_submission_attempt(&pool, 42, FormKey::DeadlockHigh)
             .await
             .unwrap();
+        sqlx::query(
+            "UPDATE twitch_clip_form_submissions SET status = 'submitted' WHERE clip_id = 42",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
         let second = persist_submission_attempt(&pool, 42, FormKey::DeadlockHigh)
             .await
             .unwrap();
 
         assert_eq!(first, SubmissionAttempt::Pending);
         assert_eq!(second, SubmissionAttempt::Skipped);
-        let rows: Vec<(String, String)> =
-            sqlx::query_as("SELECT form_key, status FROM twitch_clip_form_submissions")
-                .fetch_all(&pool)
-                .await
-                .unwrap();
-        assert_eq!(
-            rows,
-            vec![("deadlock_high".to_string(), "pending".to_string())]
-        );
+        sqlx::query(
+            "UPDATE twitch_clip_form_submissions \
+             SET status = 'failed', http_status = 500, error = 'rejected', submitted_at = now() \
+             WHERE clip_id = 42",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+        let retry = persist_submission_attempt(&pool, 42, FormKey::DeadlockHigh)
+            .await
+            .unwrap();
+
+        assert_eq!(retry, SubmissionAttempt::Pending);
+        let row: (String, String) = sqlx::query_as(
+            "SELECT form_key, status FROM twitch_clip_form_submissions WHERE clip_id = 42",
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        let retry_metadata_cleared: bool = sqlx::query_scalar(
+            "SELECT http_status IS NULL AND error IS NULL AND submitted_at IS NULL \
+             FROM twitch_clip_form_submissions WHERE clip_id = 42",
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert_eq!(row, ("deadlock_high".to_string(), "pending".to_string()));
+        assert!(retry_metadata_cleared);
     }
 
     async fn setup_submission_pool(schema: &str) -> Option<PgPool> {
