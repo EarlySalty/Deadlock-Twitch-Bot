@@ -82,6 +82,21 @@ where
     .fetch_optional(pool)
     .await?
     {
+        sqlx::query(
+            "UPDATE twitch_clips_upload_queue SET title = COALESCE($1, title), \
+             description = COALESCE($2, description), hashtags = COALESCE($3, hashtags), \
+             scheduled_at = COALESCE($4::text::timestamptz, scheduled_at), \
+             priority = GREATEST(twitch_clips_upload_queue.priority, $5), last_error = NULL \
+             WHERE id = $6",
+        )
+        .bind(title)
+        .bind(description)
+        .bind(tags.as_deref())
+        .bind(scheduled_at)
+        .bind(priority)
+        .bind(id)
+        .execute(pool)
+        .await?;
         return Ok(id);
     }
 
@@ -171,6 +186,9 @@ pub async fn get_upload_queue(
     );
     if platform.is_some() {
         sql.push_str(" AND q.platform = $2");
+    }
+    if status == "pending" {
+        sql.push_str(" AND (q.scheduled_at IS NULL OR q.scheduled_at <= now())");
     }
     sql.push_str(" ORDER BY q.priority DESC, q.created_at ASC LIMIT ");
     sql.push_str(&limit.max(0).to_string());
@@ -342,28 +360,85 @@ mod tests {
             Err(QueueError::InvalidPlatform(_))
         ));
 
-        let tags = vec!["#deadlock".to_string()];
-        let id1 = queue_upload(&pool, clip, "tiktok", Some("T"), None, Some(&tags), None, 5)
+        let old_tags = vec!["#old".to_string()];
+        let id1 = queue_upload(
+            &pool,
+            clip,
+            "tiktok",
+            Some("Alt"),
+            Some("Altbeschreibung"),
+            Some(&old_tags),
+            Some("2030-01-01T00:00:00Z"),
+            5,
+        )
+        .await
+        .unwrap();
+        sqlx::query("UPDATE twitch_clips_upload_queue SET last_error = 'alt' WHERE id = $1")
+            .bind(id1)
+            .execute(&pool)
             .await
             .unwrap();
-        // Zweiter Aufruf für denselben pending → gleiche ID.
-        let id2 = queue_upload(&pool, clip, "tiktok", None, None, None, None, 0)
-            .await
-            .unwrap();
+        // Zweiter Aufruf für denselben pending → gleiche ID mit aktualisierten Werten.
+        let new_tags = vec!["#deadlock".to_string()];
+        let id2 = queue_upload(
+            &pool,
+            clip,
+            "tiktok",
+            Some("Neu"),
+            Some("Neubeschreibung"),
+            Some(&new_tags),
+            Some("2031-02-03T04:05:06Z"),
+            9,
+        )
+        .await
+        .unwrap();
         assert_eq!(id1, id2);
+        let id3 = queue_upload(&pool, clip, "tiktok", None, None, None, None, 0)
+            .await
+            .unwrap();
+        assert_eq!(id1, id3);
         let n: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM twitch_clips_upload_queue")
             .fetch_one(&pool)
             .await
             .unwrap();
         assert_eq!(n, 1);
-        // hashtags als JSON gespeichert.
-        let tags_raw: Option<String> =
-            sqlx::query_scalar("SELECT hashtags FROM twitch_clips_upload_queue WHERE id = $1")
-                .bind(id1)
-                .fetch_one(&pool)
-                .await
-                .unwrap();
-        assert_eq!(tags_raw.as_deref(), Some("[\"#deadlock\"]"));
+        let row = sqlx::query(
+            "SELECT title, description, hashtags, \
+             scheduled_at = '2031-02-03T04:05:06Z'::timestamptz AS scheduled_matches, \
+             priority, last_error \
+             FROM twitch_clips_upload_queue WHERE id = $1",
+        )
+        .bind(id1)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert_eq!(
+            row.try_get::<Option<String>, _>("title")
+                .unwrap()
+                .as_deref(),
+            Some("Neu")
+        );
+        assert_eq!(
+            row.try_get::<Option<String>, _>("description")
+                .unwrap()
+                .as_deref(),
+            Some("Neubeschreibung")
+        );
+        assert_eq!(
+            row.try_get::<Option<String>, _>("hashtags")
+                .unwrap()
+                .as_deref(),
+            Some("[\"#deadlock\"]")
+        );
+        assert_eq!(
+            row.try_get::<Option<bool>, _>("scheduled_matches").unwrap(),
+            Some(true)
+        );
+        assert_eq!(row.try_get::<i32, _>("priority").unwrap(), 9);
+        assert_eq!(
+            row.try_get::<Option<String>, _>("last_error").unwrap(),
+            None
+        );
     }
 
     #[tokio::test]
@@ -402,6 +477,30 @@ mod tests {
         assert_eq!(cstatus, "published_all"); // einzige aktive Plattform hochgeladen
 
         // Pending-Queue jetzt leer.
+        assert!(get_upload_queue(&pool, None, "pending", 10, None)
+            .await
+            .is_empty());
+    }
+
+    #[tokio::test]
+    async fn get_queue_skips_future_scheduled_jobs() {
+        let Some(pool) = make_pool("t_sm_queue_schedule_gate").await else {
+            return;
+        };
+        let clip = seed_clip(&pool).await;
+        queue_upload(
+            &pool,
+            clip,
+            "tiktok",
+            None,
+            None,
+            None,
+            Some("2999-01-01T00:00:00Z"),
+            0,
+        )
+        .await
+        .unwrap();
+
         assert!(get_upload_queue(&pool, None, "pending", 10, None)
             .await
             .is_empty());

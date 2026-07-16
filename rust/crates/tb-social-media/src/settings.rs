@@ -6,6 +6,7 @@
 //! einen externen LLM-Provider geschickt. JSONB wird wie im Rest der Codebase über
 //! `value::text` gelesen und `$N::jsonb` geschrieben (kein sqlx-`json`-Feature).
 
+use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use sqlx::PgPool;
 
@@ -13,6 +14,10 @@ pub const KEY_EXTERNAL_LLM_CONSENT: &str = "external_llm_consent";
 pub const KEY_AUTO_APPROVE_YOUTUBE: &str = "auto_approve_youtube";
 pub const KEY_AUTO_APPROVE_TIKTOK: &str = "auto_approve_tiktok";
 pub const KEY_AUTO_APPROVE_INSTAGRAM: &str = "auto_approve_instagram";
+pub const KEY_POSTING_SCHEDULE: &str = "posting_schedule";
+pub const KEY_FORMS_CONTACT_EMAIL: &str = "forms_contact_email";
+pub const KEY_FORMS_SUBMIT_ENABLED: &str = "forms_submit_enabled";
+pub const DEFAULT_FORMS_CONTACT_EMAIL: &str = "deadlockclips.dl@mailinator.com";
 
 /// Auto-Approve-Flags je Plattform.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -20,6 +25,26 @@ pub struct AutoApprove {
     pub youtube: bool,
     pub tiktok: bool,
     pub instagram: bool,
+}
+
+/// Tägliche Posting-Slots in der angegebenen Zeitzone.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PostingSchedule {
+    pub times: Vec<String>,
+    pub timezone: String,
+}
+
+impl Default for PostingSchedule {
+    fn default() -> Self {
+        Self {
+            times: vec![
+                "14:00".to_string(),
+                "18:00".to_string(),
+                "21:00".to_string(),
+            ],
+            timezone: "Europe/Berlin".to_string(),
+        }
+    }
 }
 
 /// Liest einen Setting-Wert (JSONB → [`Value`]). `None` bei fehlendem Key, NULL
@@ -131,6 +156,75 @@ pub async fn set_auto_approve_settings(
     Ok(values)
 }
 
+/// Liest die tägliche Posting-Kadenz; fehlende oder ungültige Werte nutzen den Default.
+pub async fn get_posting_schedule(pool: &PgPool) -> PostingSchedule {
+    get_setting(pool, KEY_POSTING_SCHEDULE)
+        .await
+        .and_then(|value| serde_json::from_value(value).ok())
+        .unwrap_or_default()
+}
+
+/// Setzt die tägliche Posting-Kadenz.
+pub async fn set_posting_schedule(
+    pool: &PgPool,
+    values: PostingSchedule,
+    updated_by: Option<&str>,
+) -> Result<PostingSchedule, sqlx::Error> {
+    set_setting(
+        pool,
+        KEY_POSTING_SCHEDULE,
+        &serde_json::json!(&values),
+        updated_by,
+    )
+    .await?;
+    Ok(values)
+}
+
+/// Kontaktadresse für externe Clip-Formulare.
+pub async fn get_forms_contact_email(pool: &PgPool) -> String {
+    get_setting(pool, KEY_FORMS_CONTACT_EMAIL)
+        .await
+        .and_then(|value| value.as_str().map(str::to_owned))
+        .unwrap_or_else(|| DEFAULT_FORMS_CONTACT_EMAIL.to_string())
+}
+
+/// Setzt die Kontaktadresse für externe Clip-Formulare.
+pub async fn set_forms_contact_email(
+    pool: &PgPool,
+    value: &str,
+    updated_by: Option<&str>,
+) -> Result<String, sqlx::Error> {
+    set_setting(
+        pool,
+        KEY_FORMS_CONTACT_EMAIL,
+        &Value::String(value.to_string()),
+        updated_by,
+    )
+    .await?;
+    Ok(value.to_string())
+}
+
+/// Externe Formular-Submits sind bis zur expliziten Aktivierung aus.
+pub async fn forms_submit_enabled(pool: &PgPool) -> bool {
+    get_bool(pool, KEY_FORMS_SUBMIT_ENABLED).await
+}
+
+/// Aktiviert oder deaktiviert externe Formular-Submits.
+pub async fn set_forms_submit_enabled(
+    pool: &PgPool,
+    value: bool,
+    updated_by: Option<&str>,
+) -> Result<bool, sqlx::Error> {
+    set_setting(
+        pool,
+        KEY_FORMS_SUBMIT_ENABLED,
+        &Value::Bool(value),
+        updated_by,
+    )
+    .await?;
+    Ok(value)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -150,6 +244,21 @@ mod tests {
         assert!(coerce_bool(&json!(1)));
         assert!(!coerce_bool(&json!(0)));
         assert!(!coerce_bool(&json!(null)));
+    }
+
+    #[test]
+    fn posting_schedule_default() {
+        assert_eq!(
+            PostingSchedule::default(),
+            PostingSchedule {
+                times: vec![
+                    "14:00".to_string(),
+                    "18:00".to_string(),
+                    "21:00".to_string()
+                ],
+                timezone: "Europe/Berlin".to_string(),
+            }
+        );
     }
 
     async fn make_pool(schema: &str) -> Option<PgPool> {
@@ -243,5 +352,50 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(get_auto_approve_settings(&pool).await, set);
+    }
+
+    #[tokio::test]
+    async fn posting_schedule_roundtrip() {
+        let Some(pool) = make_pool("t_sm_posting_schedule").await else {
+            return;
+        };
+        assert_eq!(
+            get_posting_schedule(&pool).await,
+            PostingSchedule::default()
+        );
+        let schedule = PostingSchedule {
+            times: vec!["09:30".to_string(), "16:45".to_string()],
+            timezone: "UTC".to_string(),
+        };
+        set_posting_schedule(&pool, schedule.clone(), Some("admin"))
+            .await
+            .unwrap();
+        assert_eq!(get_posting_schedule(&pool).await, schedule);
+    }
+
+    #[tokio::test]
+    async fn forms_settings_have_safe_defaults_and_roundtrip() {
+        let Some(pool) = make_pool("t_sm_forms_settings").await else {
+            return;
+        };
+
+        assert_eq!(
+            get_forms_contact_email(&pool).await,
+            "deadlockclips.dl@mailinator.com"
+        );
+        assert!(!forms_submit_enabled(&pool).await);
+
+        set_forms_contact_email(&pool, "forms@example.invalid", Some("admin"))
+            .await
+            .unwrap();
+        set_forms_submit_enabled(&pool, true, Some("admin"))
+            .await
+            .unwrap();
+
+        assert_eq!(
+            get_forms_contact_email(&pool).await,
+            "forms@example.invalid"
+        );
+        assert!(forms_submit_enabled(&pool).await);
     }
 }

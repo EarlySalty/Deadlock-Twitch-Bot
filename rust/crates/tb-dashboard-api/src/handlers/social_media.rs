@@ -19,6 +19,7 @@ use axum::{
     response::{Html, IntoResponse, Response},
     Json,
 };
+use chrono::{DateTime, Utc};
 use std::sync::Arc;
 
 use serde::Deserialize;
@@ -47,6 +48,7 @@ use tb_social_media::enrich_pipeline::{ClipEnrichmentPipeline, PipelineError};
 use tb_social_media::enrichment::{
     ensure_enrichment_row, get_enrichment, update_manual_edit, EnrichmentRecord,
 };
+use tb_social_media::forms::{submit_clip_form, FormKey, FormSubmissionOutcome};
 use tb_social_media::layout::{
     default_streamer_layout, get_clip_effective_layout, get_streamer_layout,
     set_clip_layout_override, upsert_streamer_layout, StreamerLayout,
@@ -56,9 +58,11 @@ use tb_social_media::oauth::{OAuthError, OAuthManager};
 use tb_social_media::rendering::{render_dashboard, render_privacy, render_terms};
 use tb_social_media::report_writer::SocialMediaReportWriter;
 use tb_social_media::retention::mark_clip_discarded;
+use tb_social_media::scheduler::next_free_slot;
 use tb_social_media::seed_vocab::seed_vocab;
 use tb_social_media::settings::{
-    coerce_bool, get_auto_approve_settings, set_auto_approve_settings, AutoApprove,
+    coerce_bool, get_auto_approve_settings, get_posting_schedule, set_auto_approve_settings,
+    AutoApprove, PostingSchedule,
 };
 use tb_social_media::video_processor::VideoProcessor;
 use tb_social_media::vocab::{delete_vocab_entry, list_vocab, upsert_vocab_entry, VocabEntry};
@@ -924,7 +928,7 @@ pub async fn clip_layout_put_handler(
 }
 
 /// POST-Body von `…/api/upload` (Queue-Upload). `platforms` ist Array ODER
-/// der String `"all"`.
+/// der String `"all"`; `schedule` und `forms` sind optional.
 #[derive(Debug, Deserialize)]
 pub struct QueueUploadBody {
     pub clip_id: Option<Value>,
@@ -936,6 +940,42 @@ pub struct QueueUploadBody {
     #[serde(default)]
     pub priority: i32,
     pub streamer: Option<String>,
+    pub schedule: Option<String>,
+    #[serde(default)]
+    pub forms: Vec<FormKey>,
+}
+
+fn scheduled_at_value(
+    schedule: Option<&str>,
+    now: DateTime<Utc>,
+    already_taken: &[DateTime<Utc>],
+    posting_schedule: &PostingSchedule,
+) -> Result<Option<String>, &'static str> {
+    match schedule {
+        Some("now") => Ok(Some(now.to_rfc3339())),
+        Some("auto") => Ok(Some(
+            next_free_slot(now, already_taken, posting_schedule).to_rfc3339(),
+        )),
+        Some(timestamp) if DateTime::parse_from_rfc3339(timestamp).is_ok() => {
+            Ok(Some(timestamp.to_string()))
+        }
+        None => Ok(None),
+        _ => Err("invalid_schedule"),
+    }
+}
+
+fn form_submission_response(form: FormKey, outcome: FormSubmissionOutcome) -> Value {
+    let (status, http_status) = match outcome {
+        FormSubmissionOutcome::Submitted(status) => ("submitted", Some(status)),
+        FormSubmissionOutcome::Failed(status) => ("failed", status),
+        FormSubmissionOutcome::SkippedDisabled => ("skipped_disabled", None),
+        FormSubmissionOutcome::SkippedDuplicate => ("skipped_duplicate", None),
+    };
+    json!({
+        "form": form.as_str(),
+        "status": status,
+        "http_status": http_status,
+    })
 }
 
 /// `POST /social-media/api/upload` — Clip auf eine oder mehrere Plattformen in
@@ -972,6 +1012,20 @@ pub async fn queue_upload_handler(
                 .into_response();
         }
     }
+    let form_clip_id = if body.forms.is_empty() {
+        None
+    } else {
+        match i32::try_from(clip_id) {
+            Ok(id) => Some(id),
+            Err(_) => {
+                return (
+                    StatusCode::BAD_REQUEST,
+                    Json(json!({ "error": "invalid_clip_id" })),
+                )
+                    .into_response();
+            }
+        }
+    };
     // platforms: Array oder "all".
     let platforms: Vec<String> = match &body.platforms {
         Value::String(s) if s == "all" => ["tiktok", "youtube", "instagram"]
@@ -984,6 +1038,38 @@ pub async fn queue_upload_handler(
             .collect(),
         _ => Vec::new(),
     };
+    let (already_taken, posting_schedule) = if body.schedule.as_deref() == Some("auto") {
+        let taken = match sqlx::query_scalar::<_, DateTime<Utc>>(
+            "SELECT scheduled_at FROM twitch_clips_upload_queue \
+             WHERE status = 'pending' AND scheduled_at IS NOT NULL",
+        )
+        .fetch_all(&pool)
+        .await
+        {
+            Ok(taken) => taken,
+            Err(_) => {
+                return (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    Json(json!({ "error": "schedule_failed" })),
+                )
+                    .into_response();
+            }
+        };
+        (taken, get_posting_schedule(&pool).await)
+    } else {
+        (Vec::new(), PostingSchedule::default())
+    };
+    let scheduled_at = match scheduled_at_value(
+        body.schedule.as_deref(),
+        Utc::now(),
+        &already_taken,
+        &posting_schedule,
+    ) {
+        Ok(value) => value,
+        Err(error) => {
+            return (StatusCode::BAD_REQUEST, Json(json!({ "error": error }))).into_response();
+        }
+    };
     let mut queued: Vec<Value> = Vec::new();
     for platform in &platforms {
         match queue_upload(
@@ -993,7 +1079,7 @@ pub async fn queue_upload_handler(
             body.title.as_deref(),
             body.description.as_deref(),
             body.hashtags.as_deref(),
-            None,
+            scheduled_at.as_deref(),
             body.priority,
         )
         .await
@@ -1002,7 +1088,31 @@ pub async fn queue_upload_handler(
             Err(_) => queued.push(json!({ "platform": platform, "error": "queue_failed" })),
         }
     }
-    Json(json!({ "queued": queued })).into_response()
+    let mut forms = Vec::new();
+    if let Some(form_clip_id) = form_clip_id {
+        let client = reqwest::Client::new();
+        for form in body.forms {
+            let outcome =
+                match submit_clip_form(&pool, &client, form_clip_id, form, body.title.as_deref())
+                    .await
+                {
+                    Ok(outcome) => outcome,
+                    Err(error) => {
+                        tracing::error!(
+                            clip_id = form_clip_id,
+                            form_key = form.as_str(),
+                            http_status = ?Option::<u16>::None,
+                            outcome = "failed",
+                            %error,
+                            "Formular-Submit fehlgeschlagen"
+                        );
+                        FormSubmissionOutcome::Failed(None)
+                    }
+                };
+            forms.push(form_submission_response(form, outcome));
+        }
+    }
+    Json(json!({ "queued": queued, "forms": forms })).into_response()
 }
 
 /// Baut den Clip-Fetcher inline aus den Twitch-App-Credentials (`None`, wenn
@@ -1460,13 +1570,10 @@ async fn load_clip_row(pool: &PgPool, clip_db_id: i64) -> Result<Option<ClipRow>
         tracing::error!(clip_db_id, error = %e, "failed to query social media clip row");
         e
     })?;
-    row.as_ref()
-        .map(row_to_clip)
-        .transpose()
-        .map_err(|e| {
-            tracing::error!(clip_db_id, error = %e, "failed to decode social media clip row");
-            e
-        })
+    row.as_ref().map(row_to_clip).transpose().map_err(|e| {
+        tracing::error!(clip_db_id, error = %e, "failed to decode social media clip row");
+        e
+    })
 }
 
 /// Baut den Clip-Detail-JSON inkl. Effective-Layout, Enrichment-Summary und
@@ -1589,7 +1696,11 @@ async fn require_clip_row(pool: &PgPool, clip_db_id: i64) -> Result<ClipRow, Res
     }
 }
 
-async fn require_clip_child_id(pool: &PgPool, clip_db_id: i64, operation: &str) -> Result<i32, Response> {
+async fn require_clip_child_id(
+    pool: &PgPool,
+    clip_db_id: i64,
+    operation: &str,
+) -> Result<i32, Response> {
     require_clip_row(pool, clip_db_id).await?;
     child_clip_db_id_or_500(clip_db_id, operation)
 }
@@ -1690,11 +1801,7 @@ pub async fn admin_clips_handler(
     let mut qb_total =
         QueryBuilder::<Postgres>::new("SELECT COUNT(*) FROM twitch_clips_social_media WHERE 1=1");
     push_clips_where(&mut qb_total, streamer.as_deref(), status.as_deref());
-    let total: i64 = match qb_total
-        .build_query_scalar()
-        .fetch_one(&pool)
-        .await
-    {
+    let total: i64 = match qb_total.build_query_scalar().fetch_one(&pool).await {
         Ok(total) => total,
         Err(e) => {
             tracing::error!(error = %e, "failed to count social media clips");
@@ -2252,7 +2359,8 @@ pub async fn approval_decision_handler(
     let Some(clip_db_id) = normalize_id(Some(&Value::String(raw))) else {
         return invalid_clip_db_id();
     };
-    let child_clip_db_id = match require_clip_child_id(&pool, clip_db_id, "approval_decision").await {
+    let child_clip_db_id = match require_clip_child_id(&pool, clip_db_id, "approval_decision").await
+    {
         Ok(id) => id,
         Err(e) => return e,
     };
@@ -2275,7 +2383,15 @@ pub async fn approval_decision_handler(
     };
     // user_id (B15-FIX): Session-Actor für das Approval-Audit (sonst NULL).
     let actor = editor_user_id(&auth);
-    match handle_decision(&pool, child_clip_db_id, &decision, &platforms, actor.as_deref()).await {
+    match handle_decision(
+        &pool,
+        child_clip_db_id,
+        &decision,
+        &platforms,
+        actor.as_deref(),
+    )
+    .await
+    {
         Ok(record) => {
             let clip = match load_clip_row(&pool, clip_db_id).await {
                 Ok(Some(c)) => serialize_clip_record(&pool, &c).await,
@@ -2521,6 +2637,44 @@ mod tests {
     use super::*;
     use std::sync::Mutex;
 
+    #[test]
+    fn form_submission_response_maps_all_outcomes() {
+        use tb_social_media::forms::FormSubmissionOutcome;
+
+        for (outcome, status, http_status) in [
+            (
+                FormSubmissionOutcome::Submitted(201),
+                "submitted",
+                json!(201),
+            ),
+            (
+                FormSubmissionOutcome::Failed(Some(500)),
+                "failed",
+                json!(500),
+            ),
+            (FormSubmissionOutcome::Failed(None), "failed", Value::Null),
+            (
+                FormSubmissionOutcome::SkippedDisabled,
+                "skipped_disabled",
+                Value::Null,
+            ),
+            (
+                FormSubmissionOutcome::SkippedDuplicate,
+                "skipped_duplicate",
+                Value::Null,
+            ),
+        ] {
+            assert_eq!(
+                form_submission_response(FormKey::DeadlockHigh, outcome),
+                json!({
+                    "form": "deadlock_high",
+                    "status": status,
+                    "http_status": http_status,
+                })
+            );
+        }
+    }
+
     /// Serialisiert die Tests, die `OLLAMA_HOST` per `set_var` auf einen toten
     /// Port zeigen (erzwingt deterministischen LLM-Fallback). Ohne den Lock
     /// schreiben parallele Tests gleichzeitig dieselbe Prozess-Env-Var (Race).
@@ -2697,6 +2851,7 @@ mod tests {
             "CREATE TABLE social_media_streamer_layout (streamer_login TEXT PRIMARY KEY, layout_json JSONB NOT NULL, cam_enabled BOOLEAN NOT NULL DEFAULT TRUE, mode TEXT NOT NULL DEFAULT 'pip', updated_at TIMESTAMPTZ DEFAULT NOW(), updated_by TEXT)",
             "CREATE TABLE deadlock_vocab (term TEXT PRIMARY KEY, canonical TEXT NOT NULL, category TEXT NOT NULL, source TEXT NOT NULL DEFAULT 'manual', aliases JSONB NOT NULL DEFAULT '[]'::jsonb, weight INTEGER NOT NULL DEFAULT 1, updated_at TIMESTAMPTZ DEFAULT NOW())",
             "CREATE TABLE social_media_settings (key TEXT PRIMARY KEY, value JSONB, updated_at TIMESTAMPTZ, updated_by TEXT)",
+            "CREATE TABLE twitch_clip_form_submissions (id SERIAL PRIMARY KEY, clip_id INTEGER NOT NULL, form_key TEXT NOT NULL, status TEXT NOT NULL DEFAULT 'pending', http_status INTEGER, error TEXT, submitted_at TIMESTAMPTZ, created_at TIMESTAMPTZ NOT NULL DEFAULT now(), UNIQUE (clip_id, form_key))",
             "CREATE TABLE twitch_clips_social_analytics (id BIGSERIAL PRIMARY KEY, clip_id BIGINT, platform TEXT, bucket TEXT, views INTEGER, likes INTEGER, comments INTEGER, shares INTEGER, watch_time_seconds INTEGER, ctr_percent NUMERIC(5,2), engagement_rate DOUBLE PRECISION, provider TEXT, synced_at TIMESTAMPTZ, next_pull_at TIMESTAMPTZ)",
             "CREATE TABLE social_media_reports (id SERIAL PRIMARY KEY, kind TEXT NOT NULL, streamer_login TEXT, period_start TIMESTAMPTZ NOT NULL, period_end TIMESTAMPTZ NOT NULL, content_md TEXT NOT NULL, model TEXT, created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP)",
             "CREATE TABLE social_media_platform_auth (id SERIAL PRIMARY KEY, platform TEXT, streamer_login TEXT, enabled INTEGER DEFAULT 1)",
@@ -3233,7 +3388,67 @@ mod tests {
             hashtags: None,
             priority: 0,
             streamer: None,
+            schedule: None,
+            forms: Vec::new(),
         }
+    }
+
+    #[test]
+    fn scheduled_at_value_maps_each_schedule_mode() {
+        let now = chrono::DateTime::parse_from_rfc3339("2026-07-16T10:00:00Z")
+            .unwrap()
+            .with_timezone(&chrono::Utc);
+        let taken = [chrono::DateTime::parse_from_rfc3339("2026-07-16T12:00:00Z")
+            .unwrap()
+            .with_timezone(&chrono::Utc)];
+
+        assert_eq!(
+            scheduled_at_value(
+                Some("auto"),
+                now,
+                &taken,
+                &tb_social_media::settings::PostingSchedule::default(),
+            )
+            .unwrap(),
+            Some("2026-07-16T16:00:00+00:00".to_string())
+        );
+        assert_eq!(
+            scheduled_at_value(
+                Some("now"),
+                now,
+                &taken,
+                &tb_social_media::settings::PostingSchedule::default(),
+            )
+            .unwrap(),
+            Some("2026-07-16T10:00:00+00:00".to_string())
+        );
+        assert_eq!(
+            scheduled_at_value(
+                None,
+                now,
+                &taken,
+                &tb_social_media::settings::PostingSchedule::default(),
+            )
+            .unwrap(),
+            None
+        );
+        assert_eq!(
+            scheduled_at_value(
+                Some("2026-07-20T08:15:00Z"),
+                now,
+                &taken,
+                &tb_social_media::settings::PostingSchedule::default(),
+            )
+            .unwrap(),
+            Some("2026-07-20T08:15:00Z".to_string())
+        );
+        assert!(scheduled_at_value(
+            Some("later"),
+            now,
+            &taken,
+            &tb_social_media::settings::PostingSchedule::default(),
+        )
+        .is_err());
     }
 
     #[tokio::test]
@@ -3290,6 +3505,8 @@ mod tests {
                 hashtags: None,
                 priority: 0,
                 streamer: None,
+                schedule: None,
+                forms: Vec::new(),
             }),
         )
         .await;
@@ -3304,6 +3521,47 @@ mod tests {
         )
         .await;
         assert_eq!(resp.status(), StatusCode::FORBIDDEN);
+    }
+
+    #[tokio::test]
+    async fn queue_upload_handler_reports_disabled_form_without_reserving_it() {
+        let Some(pool) = make_pool("t_dash_sm_queue_forms").await else {
+            return;
+        };
+        let clip: i64 = sqlx::query_scalar("INSERT INTO twitch_clips_social_media (clip_id, clip_url, streamer_login, clip_title) VALUES ('forms-c1', 'https://clips.twitch.tv/forms-c1', 'nani', 'Resolved title') RETURNING id")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+        let mut body = queue_body(clip, json!([]));
+        body.forms = vec![tb_social_media::forms::FormKey::DeadlockHigh];
+
+        let resp = queue_upload_handler(
+            DashboardAuthLevel::admin(),
+            State(pool.clone()),
+            Query(StreamerQuery { streamer: None }),
+            Json(body),
+        )
+        .await;
+
+        assert_eq!(resp.status(), StatusCode::OK);
+        let body = body_json(resp).await;
+        assert!(body["queued"].as_array().unwrap().is_empty());
+        assert_eq!(
+            body["forms"],
+            json!([{
+                "form": "deadlock_high",
+                "status": "skipped_disabled",
+                "http_status": null,
+            }])
+        );
+        let count: i64 = sqlx::query_scalar(
+            "SELECT COUNT(*) FROM twitch_clip_form_submissions WHERE clip_id = $1 AND form_key = 'deadlock_high'",
+        )
+        .bind(clip as i32)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert_eq!(count, 0);
     }
 
     fn clips_query(status: Option<&str>) -> AdminClipsQuery {

@@ -10,6 +10,7 @@ tracing           = { workspace = true }
 serde             = { workspace = true }
 serde_json        = { workspace = true }
 chrono            = { workspace = true }
+chrono-tz         = { workspace = true }
 tb-transport-twitch = { workspace = true }
 tb-crypto         = { workspace = true }
 url               = { workspace = true }
