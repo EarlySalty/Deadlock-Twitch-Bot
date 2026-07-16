@@ -245,16 +245,7 @@ async fn submit_clip_form_to(
     resolved_title: Option<&str>,
     url: &str,
 ) -> Result<FormSubmissionOutcome, sqlx::Error> {
-    if persist_submission_attempt(pool, clip_id, form).await? == SubmissionAttempt::Skipped {
-        tracing::info!(
-            clip_id,
-            form_key = form.as_str(),
-            http_status = ?Option::<u16>::None,
-            outcome = "skipped_duplicate",
-            "Formular-Submit übersprungen"
-        );
-        return Ok(FormSubmissionOutcome::SkippedDuplicate);
-    }
+    // Flag-Check VOR Reservierung: sonst vergiftet eine Disabled-Aktivierung die spätere Idempotenz-Zeile.
     if !forms_submit_enabled(pool).await {
         tracing::info!(
             clip_id,
@@ -264,6 +255,16 @@ async fn submit_clip_form_to(
             "Formular-Submit übersprungen"
         );
         return Ok(FormSubmissionOutcome::SkippedDisabled);
+    }
+    if persist_submission_attempt(pool, clip_id, form).await? == SubmissionAttempt::Skipped {
+        tracing::info!(
+            clip_id,
+            form_key = form.as_str(),
+            http_status = ?Option::<u16>::None,
+            outcome = "skipped_duplicate",
+            "Formular-Submit übersprungen"
+        );
+        return Ok(FormSubmissionOutcome::SkippedDuplicate);
     }
 
     let clip = sqlx::query_as::<_, (Option<String>, String, Option<String>)>(
@@ -576,7 +577,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn disabled_submit_stays_pending_without_http_request() {
+    async fn disabled_submit_reserves_nothing_and_makes_no_request() {
         let Some(pool) = setup_submission_pool("t_sm_forms_disabled").await else {
             return;
         };
@@ -595,13 +596,13 @@ mod tests {
 
         assert_eq!(outcome, FormSubmissionOutcome::SkippedDisabled);
         assert!(server.received_requests().await.unwrap().is_empty());
-        let status: String = sqlx::query_scalar(
-            "SELECT status FROM twitch_clip_form_submissions WHERE clip_id = 42",
+        let count: i64 = sqlx::query_scalar(
+            "SELECT COUNT(*) FROM twitch_clip_form_submissions WHERE clip_id = 42",
         )
         .fetch_one(&pool)
         .await
         .unwrap();
-        assert_eq!(status, "pending");
+        assert_eq!(count, 0);
     }
 
     #[tokio::test]
