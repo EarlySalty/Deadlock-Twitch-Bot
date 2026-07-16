@@ -1,3 +1,11 @@
+## #379 — Feature-Vergleich liegt jetzt auf einer Schriftrolle
+
+**Problem:** Der Feature-Vergleich auf der Preisseite lag zwar auf Pergament, wirkte durch Rahmen und runde Ecken aber wie ein gewöhnliches Blatt Papier.
+
+**Änderung:** Die Papierbahn hängt jetzt zwischen zwei goldenen Wickelstäben mit Endknäufen. Sie hat gerade Schnittkanten, läuft oben und unten in die Rollen hinein und wölbt sich leicht zu den Seiten.
+
+**Aktuelles Verhalten:** Der Feature-Vergleich liest sich als ausgerollte Schriftrolle. Auf schmalen Bildschirmen bleibt die Rolle vollständig im Bild, die Tabelle selbst scrollt wie bisher seitlich.
+
 ## #378 — Clips aus dem Dashboard auf Social Media planen
 
 **Problem:** Clips ließen sich im Dashboard ansehen, aber nicht gezielt für Social Media auswählen und zeitlich geplant posten. Alles Weitere war Handarbeit.

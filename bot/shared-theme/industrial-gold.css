@@ -194,8 +194,9 @@
   animation: plasma-breathe 2.4s ease-in-out infinite;
 }
 
-/* ── Pergament: gealtertes Papier fuer Tabellen/Datenblaetter ──────────── */
+/* ── Schriftrolle: Pergamentbahn zwischen zwei Wickelstaeben ───────────── */
 .parchment {
+  position: relative;
   background-color: var(--parchment);
   background-image:
     radial-gradient(circle at 18% 12%, rgba(154, 124, 66, 0.1), transparent 42%),
@@ -208,11 +209,54 @@
       rgba(122, 108, 87, 0) 9px
     );
   color: var(--parchment-ink);
-  border: 1px solid var(--gold-deep);
+  /* Bewusst ohne Rahmen und ohne runde Ecken: eine abgerollte Bahn hat gerade
+     Schnittkanten. Den Abschluss machen die Staebe in ::before/::after. */
   box-shadow:
     inset 0 0 42px rgba(154, 124, 66, 0.22),
+    /* Papier laeuft oben und unten in die Rolle hinein */
+    inset 0 13px 16px -11px rgba(42, 33, 27, 0.6),
+    inset 0 -13px 16px -11px rgba(42, 33, 27, 0.6),
+    /* leichte Zylinderwoelbung zu den Seiten */
+    inset 14px 0 22px -16px rgba(42, 33, 27, 0.35),
+    inset -14px 0 22px -16px rgba(42, 33, 27, 0.35),
     0 14px 34px rgba(0, 0, 0, 0.45);
 }
+
+/* Wickelstaebe: der Zylinder ist rein per Gradient modelliert (dunkle Kante →
+   Glanzlicht → dunkle Kante). Sie stehen seitlich ueber wie echte Achsen; der
+   Ueberstand bleibt unter dem px-4 der Seite, sonst scrollt die Seite quer. */
+.parchment::before,
+.parchment::after {
+  content: '';
+  position: absolute;
+  left: -0.85rem;
+  right: -0.85rem;
+  height: 1.3rem;
+  border-radius: 999px;
+  background:
+    /* Endknaeufe: die aeusseren ~1rem dunkler absetzen */
+    linear-gradient(
+      90deg,
+      var(--iron-deep) 0,
+      rgba(20, 13, 10, 0) 1.05rem,
+      rgba(20, 13, 10, 0) calc(100% - 1.05rem),
+      var(--iron-deep) 100%
+    ),
+    /* Zylinder */
+    linear-gradient(
+      180deg,
+      var(--iron-deep) 0%,
+      var(--gold-deep) 26%,
+      var(--gold-bright) 48%,
+      var(--gold-deep) 72%,
+      var(--iron-deep) 100%
+    );
+  box-shadow: 0 3px 12px rgba(0, 0, 0, 0.55);
+  pointer-events: none;
+}
+
+.parchment::before { top: -0.65rem; }
+.parchment::after { bottom: -0.65rem; }
 
 .parchment th {
   color: var(--parchment-ink);
