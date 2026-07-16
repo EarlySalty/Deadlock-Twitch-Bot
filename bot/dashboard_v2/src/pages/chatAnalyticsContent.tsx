@@ -82,7 +82,10 @@ export function ChatTreueContent({
 
   return (
     <div className="space-y-6">
-      <RawChatStatusBanner status={data.rawChatStatus} />
+      <RawChatStatusBanner
+        status={data.rawChatStatus}
+        windowStart={new Date(Date.now() - days * 86_400_000)}
+      />
 
       {dataMethod !== 'real_samples' && (
         <div className="panel-card rounded-2xl p-4 text-sm text-text-secondary">
@@ -337,6 +340,7 @@ export function ChatAktivitaetContent({
 
 export function ChatTiefeContent({
   streamer,
+  days,
   selectedSessionId,
   setSelectedSessionId,
   hypeData,
@@ -344,14 +348,15 @@ export function ChatTiefeContent({
   socialData,
   chatSocialGraphEnabled,
 }: ChatAnalyticsContentProps) {
+  const windowStart = new Date(Date.now() - days * 86_400_000);
   return (
     <div className="space-y-6">
       <PlanGateCard featureId="hype_timeline" title="Hype-Timeline">
-        {hypeData && <HypeMomenteSection data={hypeData} selectedSessionId={selectedSessionId} onSessionChange={setSelectedSessionId} />}
+        {hypeData && <HypeMomenteSection data={hypeData} selectedSessionId={selectedSessionId} onSessionChange={setSelectedSessionId} windowStart={windowStart} />}
       </PlanGateCard>
 
       <PlanGateCard featureId="chat_content_analysis" title="Chat-Inhaltsanalyse">
-        {contentData && <StimmungTopicsSection data={contentData} />}
+        {contentData && <StimmungTopicsSection data={contentData} windowStart={windowStart} />}
       </PlanGateCard>
 
       <PlanGateCard featureId="chat_content_analysis" title="KI Chat-Analyse">
@@ -363,7 +368,7 @@ export function ChatTiefeContent({
 
       {chatSocialGraphEnabled && (
         <PlanGateCard featureId="chat_social_graph" title="Chat Social Graph">
-          {socialData && <ChatNetzwerkSection data={socialData} />}
+          {socialData && <ChatNetzwerkSection data={socialData} windowStart={windowStart} />}
         </PlanGateCard>
       )}
     </div>

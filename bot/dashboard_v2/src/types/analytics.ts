@@ -84,6 +84,7 @@ export interface CalendarHeatmapData {
 
 export interface RawChatStatus {
   available: boolean;
+  coverageStart: string | null;
   lastMessageAt: string | null;
   gapStart: string | null;
   suspectedIngestionIssue: boolean;

@@ -186,10 +186,12 @@ export function HypeMomenteSection({
   data,
   selectedSessionId,
   onSessionChange,
+  windowStart,
 }: {
   data: ChatHypeTimeline;
   selectedSessionId?: number;
   onSessionChange: (id: number | undefined) => void;
+  windowStart?: Date;
 }) {
   const correlationLabel =
     Math.abs(data.correlation.chatViewerR) >= 0.4 ? `${data.correlation.chatViewerR.toFixed(2)} r` : 'schwach';
@@ -201,7 +203,7 @@ export function HypeMomenteSection({
       transition={{ delay: 0.35 }}
       className="panel-card rounded-2xl p-6"
     >
-      <RawChatStatusBanner status={data.rawChatStatus} compact />
+      <RawChatStatusBanner status={data.rawChatStatus} compact windowStart={windowStart} />
 
       <div className="mb-6 flex items-center justify-between">
         <div className="flex items-center gap-3">
@@ -289,7 +291,7 @@ export function HypeMomenteSection({
   );
 }
 
-export function StimmungTopicsSection({ data }: { data: ChatContentAnalysis }) {
+export function StimmungTopicsSection({ data, windowStart }: { data: ChatContentAnalysis; windowStart?: Date }) {
   const sentimentColor =
     data.overallSentiment.score > 0.2
       ? 'text-success'
@@ -317,7 +319,7 @@ export function StimmungTopicsSection({ data }: { data: ChatContentAnalysis }) {
       transition={{ delay: 0.4 }}
       className="panel-card rounded-2xl p-6"
     >
-      <RawChatStatusBanner status={data.rawChatStatus} compact />
+      <RawChatStatusBanner status={data.rawChatStatus} compact windowStart={windowStart} />
 
       <div className="mb-6 flex items-center gap-3">
         <Smile className="h-6 w-6 text-success" />
@@ -487,7 +489,7 @@ export function StimmungTopicsSection({ data }: { data: ChatContentAnalysis }) {
   );
 }
 
-export function ChatNetzwerkSection({ data }: { data: ChatSocialGraph }) {
+export function ChatNetzwerkSection({ data, windowStart }: { data: ChatSocialGraph; windowStart?: Date }) {
   const shouldRenderEmptyState =
     data.totalMentions === 0 &&
     (data.rawChatStatus?.suspectedIngestionIssue ||
@@ -503,7 +505,7 @@ export function ChatNetzwerkSection({ data }: { data: ChatSocialGraph }) {
       transition={{ delay: 0.45 }}
       className="panel-card rounded-2xl p-6"
     >
-      <RawChatStatusBanner status={data.rawChatStatus} compact />
+      <RawChatStatusBanner status={data.rawChatStatus} compact windowStart={windowStart} />
 
       <div className="mb-6 flex items-center gap-3">
         <AtSign className="h-6 w-6 text-accent" />
