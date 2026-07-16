@@ -398,6 +398,7 @@ function parseAffiliateListItem(record: Record<string, unknown>): AffiliateListI
     login: readString(record, 'login', 'twitchLogin', 'twitch_login') || '—',
     displayName: readString(record, 'displayName', 'display_name') || undefined,
     active,
+    commissionRatePct: readNumber(record, 'commissionRatePct', 'commission_rate_pct') ?? 0,
     totalClaims: readNumber(record, 'totalClaims', 'total_claims') ?? 0,
     totalProvisionEuro:
       readNumber(record, 'totalProvisionEuro', 'total_provision_euro', 'totalProvision', 'total_provision') ?? 0,
@@ -432,6 +433,7 @@ function parseAffiliateDetail(payload: unknown, fallbackLogin: string): Affiliat
     login: fallbackAffiliateLogin,
     displayName: fallbackDisplayName,
     active: readBoolean(merged, 'active', 'isActive', 'is_active') ?? false,
+    commissionRatePct: readNumber(merged, 'commissionRatePct', 'commission_rate_pct') ?? 0,
     email: readString(merged, 'email', 'payoutEmail', 'payout_email') || undefined,
     fullName: readString(merged, 'fullName', 'full_name') || undefined,
     addressLine1: readString(merged, 'addressLine1', 'address_line1') || undefined,
@@ -962,6 +964,7 @@ export async function fetchAffiliateDetail(login: string): Promise<AffiliateDeta
       return {
         login,
         active: false,
+        commissionRatePct: 0,
         stats: emptyAffiliateStats(),
         claims: [],
         readiness: emptyReadiness(),
@@ -978,6 +981,20 @@ export async function toggleAffiliateActive(login: string): Promise<{ login: str
   return {
     login: readString(payload, 'login', 'twitchLogin', 'twitch_login') || login,
     active: readBoolean(payload, 'active', 'isActive', 'is_active') ?? false,
+  };
+}
+
+export async function setAffiliateCommissionRate(
+  login: string,
+  commissionRatePct: number,
+): Promise<{ login: string; commissionRatePct: number }> {
+  const payload = await postAdminJson<Record<string, unknown>, { commission_rate_pct: number }>(
+    `/affiliates/${encodeURIComponent(login)}/commission-rate`,
+    { commission_rate_pct: commissionRatePct },
+  );
+  return {
+    login: readString(payload, 'login', 'twitchLogin', 'twitch_login') || login,
+    commissionRatePct: readNumber(payload, 'commissionRatePct', 'commission_rate_pct') ?? commissionRatePct,
   };
 }
 

@@ -335,6 +335,7 @@ export interface AffiliateListItem {
   login: string;
   displayName?: string;
   active: boolean;
+  commissionRatePct: number;
   totalClaims: number;
   totalProvisionEuro: number;
   createdAt?: string | null;
@@ -404,6 +405,7 @@ export interface AffiliateDetail {
   login: string;
   displayName?: string;
   active: boolean;
+  commissionRatePct: number;
   email?: string;
   fullName?: string;
   addressLine1?: string;

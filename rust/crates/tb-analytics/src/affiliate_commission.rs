@@ -1,4 +1,4 @@
-//! Affiliate-Provisions-Verbuchung (30 % bei bezahlter Stripe-Invoice).
+//! Affiliate-Provisions-Verbuchung bei bezahlter Stripe-Invoice.
 //!
 //! Port von `bot/dashboard/affiliate/affiliate_mixin.py:_affiliate_process_commission`
 //! (+ `_affiliate_replay_pending_commissions`, `_affiliate_transfer_commission`).
@@ -8,7 +8,8 @@
 //! 1. Streamer aus `twitch_billing_subscriptions` per `stripe_customer_id` lösen
 //!    (Identifier ist `customer_reference`, ein Twitch-Login).
 //! 2. Werbenden Affiliate aus `affiliate_streamer_claims` lösen.
-//! 3. 30 % des bezahlten Brutto als `commission_cents` (Floor) berechnen.
+//! 3. Den zum Zahlungszeitpunkt hinterlegten Provisionssatz auf das bezahlte
+//!    Brutto anwenden und `commission_cents` per Floor berechnen.
 //! 4. Unter Affiliate-Advisory-Lock idempotent in `affiliate_commissions`
 //!    einfügen und committen (UNIQUE auf `stripe_event_id` → Replays sind
 //!    `duplicate`).
@@ -26,8 +27,8 @@ use sqlx::{PgPool, Postgres, Transaction};
 use crate::affiliate_claim_window::claim_in_activation_window;
 use crate::stripe::StripeClient;
 
-/// 30 % Provision auf das bezahlte Brutto (Python `_COMMISSION_RATE`).
-const COMMISSION_RATE_NUM: i64 = 30;
+/// Standard-Provision bei fehlendem Konto oder altem Schema.
+const DEFAULT_COMMISSION_RATE_PCT: i64 = 30;
 const COMMISSION_RATE_DEN: i64 = 100;
 /// Sicherheitsdeckel offener Provisionen ohne Connect-Konto (Python
 /// `_MAX_PENDING_COMMISSION_CENTS`): darüber wird neu Erfasstes `skipped`.
@@ -102,6 +103,49 @@ fn cents_to_int4(value: i64, field: &str) -> Result<i32, sqlx::Error> {
 
 fn parse_rfc3339_utc(value: &str) -> Result<DateTime<Utc>, chrono::ParseError> {
     DateTime::parse_from_rfc3339(value).map(|parsed| parsed.with_timezone(&Utc))
+}
+
+fn is_missing_schema_error(error: &sqlx::Error) -> bool {
+    let message = error.to_string().to_lowercase();
+    [
+        "does not exist",
+        "no such table",
+        "undefined table",
+        "no such column",
+        "undefined column",
+    ]
+    .iter()
+    .any(|marker| message.contains(marker))
+}
+
+async fn commission_rate_for_affiliate(
+    pool: &PgPool,
+    affiliate_login: &str,
+) -> Result<i64, sqlx::Error> {
+    let rate = match sqlx::query_scalar::<_, i16>(
+        "SELECT commission_rate_pct FROM affiliate_accounts WHERE twitch_login = $1",
+    )
+    .bind(affiliate_login)
+    .fetch_optional(pool)
+    .await
+    {
+        Ok(Some(rate)) => i64::from(rate),
+        Ok(None) => DEFAULT_COMMISSION_RATE_PCT,
+        Err(error) if is_missing_schema_error(&error) => DEFAULT_COMMISSION_RATE_PCT,
+        Err(error) => return Err(error),
+    };
+
+    if !(0..=100).contains(&rate) {
+        tracing::warn!(
+            commission_rate_pct = rate,
+            affiliate_login,
+            used_rate_pct = DEFAULT_COMMISSION_RATE_PCT,
+            "Ungültiger Affiliate-Provisionssatz; Standardwert wird verwendet"
+        );
+        return Ok(DEFAULT_COMMISSION_RATE_PCT);
+    }
+
+    Ok(rate)
 }
 
 async fn existing_commission_for_event(
@@ -276,12 +320,13 @@ pub async fn process_commission(
         return Ok(CommissionOutcome::NoAffiliate);
     }
 
-    // 3. Provision (Floor von 30 %). Arithmetik in i64 (wie Pythons unbeschränktes
-    // int), gespeichert wird in INTEGER-Spalten (siehe `commission_cents_i32`).
+    // 3. Der zum Zahlungszeitpunkt hinterlegte Satz gilt; er wird nicht beim
+    // Claim eingefroren. Arithmetik in i64, gespeichert wird in INTEGER-Spalten.
     if invoice.amount_paid_cents <= 0 {
         return Ok(CommissionOutcome::Skipped);
     }
-    let commission_cents = invoice.amount_paid_cents * COMMISSION_RATE_NUM / COMMISSION_RATE_DEN;
+    let rate_pct = commission_rate_for_affiliate(pool, &affiliate_login).await?;
+    let commission_cents = invoice.amount_paid_cents * rate_pct / COMMISSION_RATE_DEN;
     if commission_cents <= 0 {
         return Ok(CommissionOutcome::Skipped);
     }
@@ -831,6 +876,15 @@ mod tests {
         .await;
     }
 
+    async fn add_commission_rate_column(pool: &PgPool) {
+        sqlx::query(
+            "ALTER TABLE affiliate_accounts ADD COLUMN commission_rate_pct SMALLINT NOT NULL DEFAULT 30",
+        )
+        .execute(pool)
+        .await
+        .unwrap();
+    }
+
     async fn seed_claim_with_times(pool: &PgPool, claimed_at: &str, partnered_at: Option<&str>) {
         // customer_reference trägt den Streamer-Login (gemischte Groß-/Kleinschreibung
         // → der Code normalisiert per LOWER/TRIM auf 'streamerx').
@@ -898,6 +952,110 @@ mod tests {
             "SELECT status, commission_cents FROM affiliate_commissions WHERE stripe_event_id = 'evt_1'",
         ).fetch_one(&pool).await.unwrap();
         assert_eq!(status, "pending");
+        assert_eq!(commission, 300);
+    }
+
+    #[tokio::test]
+    async fn commission_rate_forty_percent() {
+        let Some(pool) = connect("comm_rate_40").await else {
+            return;
+        };
+        seed_claim(&pool).await;
+        add_commission_rate_column(&pool).await;
+        sqlx::query(
+            "INSERT INTO affiliate_accounts (twitch_login, commission_rate_pct) VALUES ('aff1', 40)",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+
+        let out = process_commission(&pool, None, &invoice("evt_40", "cus_1", 1000))
+            .await
+            .unwrap();
+        assert_eq!(out, CommissionOutcome::Recorded("pending".into()));
+        let commission: i32 = sqlx::query_scalar(
+            "SELECT commission_cents FROM affiliate_commissions WHERE stripe_event_id = 'evt_40'",
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert_eq!(commission, 400);
+    }
+
+    #[tokio::test]
+    async fn floor_rounding_forty_percent() {
+        let Some(pool) = connect("comm_rate_40_floor").await else {
+            return;
+        };
+        seed_claim(&pool).await;
+        add_commission_rate_column(&pool).await;
+        sqlx::query(
+            "INSERT INTO affiliate_accounts (twitch_login, commission_rate_pct) VALUES ('aff1', 40)",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+
+        process_commission(&pool, None, &invoice("evt_40_floor", "cus_1", 999))
+            .await
+            .unwrap();
+        let commission: i32 = sqlx::query_scalar(
+            "SELECT commission_cents FROM affiliate_commissions WHERE stripe_event_id = 'evt_40_floor'",
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert_eq!(commission, 399);
+    }
+
+    #[tokio::test]
+    async fn zero_commission_rate_skips_without_ledger_entry() {
+        let Some(pool) = connect("comm_rate_zero").await else {
+            return;
+        };
+        seed_claim(&pool).await;
+        add_commission_rate_column(&pool).await;
+        sqlx::query(
+            "INSERT INTO affiliate_accounts (twitch_login, commission_rate_pct) VALUES ('aff1', 0)",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+
+        let out = process_commission(&pool, None, &invoice("evt_zero", "cus_1", 1000))
+            .await
+            .unwrap();
+        assert_eq!(out, CommissionOutcome::Skipped);
+        let count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM affiliate_commissions")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+        assert_eq!(count, 0);
+    }
+
+    #[tokio::test]
+    async fn invalid_commission_rate_uses_default() {
+        let Some(pool) = connect("comm_rate_invalid").await else {
+            return;
+        };
+        seed_claim(&pool).await;
+        add_commission_rate_column(&pool).await;
+        sqlx::query(
+            "INSERT INTO affiliate_accounts (twitch_login, commission_rate_pct) VALUES ('aff1', 101)",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+
+        process_commission(&pool, None, &invoice("evt_invalid", "cus_1", 1000))
+            .await
+            .unwrap();
+        let commission: i32 = sqlx::query_scalar(
+            "SELECT commission_cents FROM affiliate_commissions WHERE stripe_event_id = 'evt_invalid'",
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap();
         assert_eq!(commission, 300);
     }
 

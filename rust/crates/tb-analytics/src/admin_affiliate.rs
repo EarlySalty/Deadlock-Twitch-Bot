@@ -10,6 +10,7 @@
 use chrono::{SecondsFormat, Utc};
 use serde_json::{json, Value};
 use sqlx::{PgPool, Row};
+use std::collections::HashMap;
 use tb_crypto::FieldCipher;
 
 use crate::affiliate_gutschrift::{self, GutschriftError};
@@ -194,6 +195,27 @@ fn map_list_rows(rows: Vec<ListRow>) -> Value {
     json!({ "affiliates": affiliates })
 }
 
+async fn add_commission_rates(pool: &PgPool, mut payload: Value) -> Result<Value, sqlx::Error> {
+    let rates = match sqlx::query_as::<_, (String, i16)>(
+        "SELECT twitch_login, commission_rate_pct FROM affiliate_accounts",
+    )
+    .fetch_all(pool)
+    .await
+    {
+        Ok(rows) => rows.into_iter().collect::<HashMap<_, _>>(),
+        Err(error) if is_missing_schema_error(&error) => HashMap::new(),
+        Err(error) => return Err(error),
+    };
+
+    if let Some(affiliates) = payload["affiliates"].as_array_mut() {
+        for affiliate in affiliates {
+            let login = affiliate["login"].as_str().unwrap_or_default();
+            affiliate["commission_rate_pct"] = json!(rates.get(login).copied().unwrap_or(30));
+        }
+    }
+    Ok(payload)
+}
+
 /// Affiliate-Liste mit Claims- + Provisions-Summen (Python `load_admin_affiliates_list`).
 /// Zwei-stufiger Fallback: Vollquery (mit affiliate_pii) → ohne PII → leer.
 pub async fn load_affiliates_list(pool: &PgPool) -> Result<Value, sqlx::Error> {
@@ -209,7 +231,7 @@ pub async fn load_affiliates_list(pool: &PgPool) -> Result<Value, sqlx::Error> {
         .fetch_all(pool)
         .await
     {
-        Ok(rows) => return Ok(map_list_rows(rows)),
+        Ok(rows) => return add_commission_rates(pool, map_list_rows(rows)).await,
         Err(e) if !is_missing_schema_error(&e) => return Err(e),
         Err(_) => {} // fehlendes Schema (z. B. affiliate_pii) → Fallback ohne PII.
     }
@@ -224,8 +246,10 @@ pub async fn load_affiliates_list(pool: &PgPool) -> Result<Value, sqlx::Error> {
         .fetch_all(pool)
         .await
     {
-        Ok(rows) => Ok(map_list_rows(rows)),
-        Err(e) if is_missing_schema_error(&e) => Ok(json!({ "affiliates": [] })),
+        Ok(rows) => add_commission_rates(pool, map_list_rows(rows)).await,
+        Err(e) if is_missing_schema_error(&e) => {
+            add_commission_rates(pool, json!({ "affiliates": [] })).await
+        }
         Err(e) => Err(e),
     }
 }
@@ -618,6 +642,41 @@ pub async fn toggle_affiliate(pool: &PgPool, login: &str) -> Result<Value, Toggl
     Ok(json!({ "login": login, "active": new_status != 0 }))
 }
 
+/// Fehler beim Setzen des Affiliate-Provisionssatzes.
+#[derive(Debug)]
+pub enum RateError {
+    /// Kein Konto (oder fehlendes Schema) → 404.
+    NotFound,
+    Db(sqlx::Error),
+}
+
+/// Setzt den Provisionssatz und pflegt `updated_at`.
+pub async fn set_commission_rate(
+    pool: &PgPool,
+    login: &str,
+    rate_pct: i16,
+) -> Result<Value, RateError> {
+    let now = Utc::now().to_rfc3339_opts(SecondsFormat::Micros, false);
+    let updated = sqlx::query_scalar::<_, i16>(
+        "UPDATE affiliate_accounts \
+         SET commission_rate_pct = $1, updated_at = $2 \
+         WHERE twitch_login = $3 \
+         RETURNING commission_rate_pct",
+    )
+    .bind(rate_pct)
+    .bind(&now)
+    .bind(login)
+    .fetch_optional(pool)
+    .await;
+
+    match updated {
+        Ok(Some(_)) => Ok(json!({ "login": login, "commission_rate_pct": rate_pct })),
+        Ok(None) => Err(RateError::NotFound),
+        Err(error) if is_missing_schema_error(&error) => Err(RateError::NotFound),
+        Err(error) => Err(RateError::Db(error)),
+    }
+}
+
 /// Lädt das gespeicherte PDF einer Gutschrift (Python
 /// `load_admin_affiliate_gutschrift_pdf` + `AffiliateGutschriftService.get_pdf`).
 /// Gibt `(Dateiname-Basis, PDF-Bytes)` zurück, oder `None` wenn die Gutschrift
@@ -755,6 +814,19 @@ pub async fn load_affiliate_detail(
         return Err(DetailError::NotFound);
     };
 
+    let commission_rate_pct = match sqlx::query_scalar::<_, i16>(
+        "SELECT commission_rate_pct FROM affiliate_accounts WHERE twitch_login = $1",
+    )
+    .bind(login)
+    .fetch_optional(pool)
+    .await
+    {
+        Ok(Some(rate)) => rate,
+        Ok(None) => 30,
+        Err(error) if is_missing_schema_error(&error) => 30,
+        Err(error) => return Err(DetailError::Db(error)),
+    };
+
     // Claims mit Provisions-Summe je Claim (nur Umsatz-Status).
     let claim_rows = sqlx::query!(
         r#"
@@ -859,6 +931,7 @@ pub async fn load_affiliate_detail(
             "login": account.twitch_login.trim(),
             "display_name": account.display_name,
             "active": account.is_active != 0,
+            "commission_rate_pct": commission_rate_pct,
             "created_at": account.created_at,
             "email": account.email,
             "stripe_connect_status": account.stripe_connect_status,
@@ -914,7 +987,7 @@ mod tests {
 
     async fn with_tables(pool: &PgPool) {
         for ddl in [
-            "CREATE TABLE affiliate_accounts (twitch_login TEXT PRIMARY KEY, display_name TEXT, is_active INTEGER NOT NULL DEFAULT 1, created_at TEXT)",
+            "CREATE TABLE affiliate_accounts (twitch_login TEXT PRIMARY KEY, display_name TEXT, is_active INTEGER NOT NULL DEFAULT 1, commission_rate_pct SMALLINT NOT NULL DEFAULT 30, created_at TEXT)",
             "CREATE TABLE affiliate_pii (twitch_login TEXT PRIMARY KEY, ust_status TEXT NOT NULL DEFAULT 'unknown')",
             "CREATE TABLE affiliate_streamer_claims (id INTEGER GENERATED BY DEFAULT AS IDENTITY PRIMARY KEY, affiliate_twitch_login TEXT, claimed_at TEXT)",
             "CREATE TABLE affiliate_commissions (id INTEGER GENERATED BY DEFAULT AS IDENTITY PRIMARY KEY, affiliate_twitch_login TEXT, commission_cents INTEGER, status TEXT, created_at TEXT)",
@@ -930,7 +1003,7 @@ mod tests {
             return;
         };
         with_tables(&pool).await;
-        sqlx::query("INSERT INTO affiliate_accounts (twitch_login, display_name, is_active, created_at) VALUES ('nani','Nani',1,'2026-06-01T00:00:00+00:00'), ('foo',NULL,0,'2026-05-01T00:00:00+00:00')").execute(&pool).await.unwrap();
+        sqlx::query("INSERT INTO affiliate_accounts (twitch_login, display_name, is_active, commission_rate_pct, created_at) VALUES ('nani','Nani',1,40,'2026-06-01T00:00:00+00:00'), ('foo',NULL,0,30,'2026-05-01T00:00:00+00:00')").execute(&pool).await.unwrap();
         sqlx::query("INSERT INTO affiliate_pii (twitch_login, ust_status) VALUES ('nani','kleinunternehmer')").execute(&pool).await.unwrap();
         sqlx::query("INSERT INTO affiliate_streamer_claims (affiliate_twitch_login, claimed_at) VALUES ('nani','2026-06-10T00:00:00+00:00'), ('nani','2026-06-12T00:00:00+00:00')").execute(&pool).await.unwrap();
         sqlx::query("INSERT INTO affiliate_commissions (affiliate_twitch_login, commission_cents, status, created_at) VALUES ('nani', 2000, 'pending', '2026-06-05T00:00:00+00:00'), ('nani', 999, 'refunded', '2026-06-06T00:00:00+00:00')").execute(&pool).await.unwrap();
@@ -948,6 +1021,7 @@ mod tests {
         assert_eq!(nani["last_claim_at"], "2026-06-12T00:00:00+00:00");
         assert_eq!(nani["ust_status"], "kleinunternehmer");
         assert_eq!(nani["has_pii"], true);
+        assert_eq!(nani["commission_rate_pct"], 40);
         // foo: kein PII, inaktiv, keine Claims/Provision.
         let foo = &items[1];
         assert_eq!(foo["active"], false);
@@ -956,6 +1030,7 @@ mod tests {
         assert_eq!(foo["total_provision"], 0.0);
         assert_eq!(foo["ust_status"], "unknown");
         assert_eq!(foo["has_pii"], false);
+        assert_eq!(foo["commission_rate_pct"], 30);
     }
 
     #[tokio::test]
@@ -977,6 +1052,7 @@ mod tests {
         assert_eq!(items.len(), 1);
         assert_eq!(items[0]["ust_status"], "unknown"); // Fallback ohne PII
         assert_eq!(items[0]["has_pii"], false);
+        assert_eq!(items[0]["commission_rate_pct"], 30);
     }
 
     #[tokio::test]
@@ -1105,6 +1181,47 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn set_commission_rate_updates_value_and_timestamp() {
+        let Some(pool) = connect("t_aff_rate").await else {
+            return;
+        };
+        sqlx::query("CREATE TABLE affiliate_accounts (twitch_login TEXT PRIMARY KEY, commission_rate_pct SMALLINT NOT NULL DEFAULT 30, updated_at TEXT)")
+            .execute(&pool)
+            .await
+            .unwrap();
+        sqlx::query("INSERT INTO affiliate_accounts (twitch_login) VALUES ('nani')")
+            .execute(&pool)
+            .await
+            .unwrap();
+
+        let v = set_commission_rate(&pool, "nani", 40).await.unwrap();
+        assert_eq!(v, json!({ "login": "nani", "commission_rate_pct": 40 }));
+        let stored: (i16, Option<String>) = sqlx::query_as(
+            "SELECT commission_rate_pct, updated_at FROM affiliate_accounts WHERE twitch_login = 'nani'",
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert_eq!(stored.0, 40);
+        assert!(stored.1.is_some());
+        assert!(matches!(
+            set_commission_rate(&pool, "ghost", 40).await,
+            Err(RateError::NotFound)
+        ));
+    }
+
+    #[tokio::test]
+    async fn set_commission_rate_missing_schema_is_not_found() {
+        let Some(pool) = connect("t_aff_rate_empty").await else {
+            return;
+        };
+        assert!(matches!(
+            set_commission_rate(&pool, "nani", 40).await,
+            Err(RateError::NotFound)
+        ));
+    }
+
+    #[tokio::test]
     async fn for_login_gutschriften_und_not_found() {
         let Some(pool) = connect("t_aff_forlogin").await else {
             return;
@@ -1220,7 +1337,7 @@ mod tests {
         };
         let cipher = FieldCipher::from_hex_key(&"ab".repeat(32), "v1").unwrap();
         for ddl in [
-            "CREATE TABLE affiliate_accounts (twitch_login TEXT PRIMARY KEY, display_name TEXT, is_active INTEGER NOT NULL DEFAULT 1, created_at TEXT, email TEXT, stripe_connect_status TEXT, stripe_account_id TEXT, updated_at TEXT)",
+            "CREATE TABLE affiliate_accounts (twitch_login TEXT PRIMARY KEY, display_name TEXT, is_active INTEGER NOT NULL DEFAULT 1, commission_rate_pct SMALLINT NOT NULL DEFAULT 30, created_at TEXT, email TEXT, stripe_connect_status TEXT, stripe_account_id TEXT, updated_at TEXT)",
             "CREATE TABLE affiliate_pii (twitch_login TEXT PRIMARY KEY, full_name_enc BYTEA, email_enc BYTEA, address_line1_enc BYTEA, address_city_enc BYTEA, address_zip_enc BYTEA, tax_id_enc BYTEA, address_country TEXT NOT NULL DEFAULT 'DE', ust_status TEXT NOT NULL DEFAULT 'unknown', updated_at TEXT NOT NULL DEFAULT '2026-06-30T00:00:00+00:00')",
             "CREATE TABLE affiliate_streamer_claims (id INTEGER GENERATED BY DEFAULT AS IDENTITY PRIMARY KEY, affiliate_twitch_login TEXT, claimed_streamer_login TEXT, claimed_at TEXT)",
             "CREATE TABLE affiliate_commissions (id INTEGER GENERATED BY DEFAULT AS IDENTITY PRIMARY KEY, affiliate_twitch_login TEXT, streamer_login TEXT, commission_cents INTEGER, status TEXT)",
@@ -1228,7 +1345,7 @@ mod tests {
         ] {
             sqlx::query(ddl).execute(&pool).await.unwrap();
         }
-        sqlx::query("INSERT INTO affiliate_accounts (twitch_login, display_name, is_active, created_at, email, stripe_connect_status, stripe_account_id, updated_at) VALUES ('nani','Nani',1,'2026-06-01T00:00:00+00:00','a@b.de','active','acct_1234567890XY','2026-06-02T00:00:00+00:00')").execute(&pool).await.unwrap();
+        sqlx::query("INSERT INTO affiliate_accounts (twitch_login, display_name, is_active, commission_rate_pct, created_at, email, stripe_connect_status, stripe_account_id, updated_at) VALUES ('nani','Nani',1,40,'2026-06-01T00:00:00+00:00','a@b.de','active','acct_1234567890XY','2026-06-02T00:00:00+00:00')").execute(&pool).await.unwrap();
         // PII vollständig → can_generate.
         let enc = |field: &str, v: &str| {
             cipher
@@ -1247,6 +1364,7 @@ mod tests {
         assert_eq!(v["affiliate"]["login"], "nani");
         assert_eq!(v["affiliate"]["email"], "a@b.de"); // Plaintext aus accounts
         assert_eq!(v["affiliate"]["stripe_account_id"], "acct_123...90XY"); // maskiert (>12)
+        assert_eq!(v["affiliate"]["commission_rate_pct"], 40);
         assert_eq!(v["claims"].as_array().unwrap().len(), 1);
         assert_eq!(v["claims"][0]["commission_cents"], 2000);
         assert_eq!(v["stats"]["total_claims"], 1);
@@ -1285,6 +1403,7 @@ mod tests {
 
         let v = load_affiliate_detail(&pool, &cipher, "nani").await.unwrap();
         assert_eq!(v["affiliate"]["login"], "nani");
+        assert_eq!(v["affiliate"]["commission_rate_pct"], 30);
         assert_eq!(v["ust_status"], "unknown");
         assert_eq!(v["pii_readiness"]["can_generate"], false);
         assert_eq!(v["gutschriften_summary"]["count"], 0);
