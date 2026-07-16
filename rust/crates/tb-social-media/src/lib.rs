@@ -76,6 +76,7 @@ pub mod retention_worker;
 pub mod schema;
 pub mod seed_vocab;
 pub mod settings;
+pub mod title_gate;
 pub mod upload_worker;
 pub mod uploaders;
 pub mod video_processor;
