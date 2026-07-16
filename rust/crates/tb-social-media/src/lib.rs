@@ -61,6 +61,7 @@ pub mod credentials;
 pub mod enrich_pipeline;
 pub mod enrichment;
 pub mod enrichment_worker;
+pub mod forms;
 pub mod insights_worker;
 pub mod layout;
 pub mod llm;

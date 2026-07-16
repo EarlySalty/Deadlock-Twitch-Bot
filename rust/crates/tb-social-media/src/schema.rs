@@ -109,6 +109,12 @@ const STATEMENTS: &[&str] = &[
         ON social_media_clip_approval(state)",
     "CREATE INDEX IF NOT EXISTS idx_social_media_clip_approval_last_sent_at \
         ON social_media_clip_approval(last_sent_at DESC)",
+    // Externe Google-Forms-Einreichungen (Dedupe pro Clip/Formular).
+    "CREATE TABLE IF NOT EXISTS twitch_clip_form_submissions (\
+        id SERIAL PRIMARY KEY, clip_id INTEGER NOT NULL, form_key TEXT NOT NULL, \
+        status TEXT NOT NULL DEFAULT 'pending', http_status INTEGER, error TEXT, \
+        submitted_at TIMESTAMPTZ, created_at TIMESTAMPTZ NOT NULL DEFAULT now(), \
+        UNIQUE (clip_id, form_key))",
     // Analytics-Spalten (Phase 3) — neue Spalten idempotent.
     "ALTER TABLE twitch_clips_social_analytics \
         ADD COLUMN IF NOT EXISTS bucket TEXT, \
@@ -171,6 +177,7 @@ mod tests {
             "social_media_reports",
             "social_media_clip_enrichment",
             "social_media_clip_approval",
+            "twitch_clip_form_submissions",
         ] {
             let exists: bool = sqlx::query_scalar(
                 "SELECT EXISTS (SELECT 1 FROM information_schema.tables \
