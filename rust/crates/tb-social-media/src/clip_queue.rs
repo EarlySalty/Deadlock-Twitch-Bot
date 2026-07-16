@@ -83,8 +83,11 @@ where
     .await?
     {
         sqlx::query(
-            "UPDATE twitch_clips_upload_queue SET title = $1, description = $2, hashtags = $3, \
-             scheduled_at = $4::text::timestamptz, priority = $5, last_error = NULL WHERE id = $6",
+            "UPDATE twitch_clips_upload_queue SET title = COALESCE($1, title), \
+             description = COALESCE($2, description), hashtags = COALESCE($3, hashtags), \
+             scheduled_at = COALESCE($4::text::timestamptz, scheduled_at), \
+             priority = GREATEST(twitch_clips_upload_queue.priority, $5), last_error = NULL \
+             WHERE id = $6",
         )
         .bind(title)
         .bind(description)
@@ -390,14 +393,19 @@ mod tests {
         .await
         .unwrap();
         assert_eq!(id1, id2);
+        let id3 = queue_upload(&pool, clip, "tiktok", None, None, None, None, 0)
+            .await
+            .unwrap();
+        assert_eq!(id1, id3);
         let n: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM twitch_clips_upload_queue")
             .fetch_one(&pool)
             .await
             .unwrap();
         assert_eq!(n, 1);
-        let row: (String, String, String, bool, i32, Option<String>) = sqlx::query_as(
+        let row = sqlx::query(
             "SELECT title, description, hashtags, \
-             scheduled_at = '2031-02-03T04:05:06Z'::timestamptz, priority, last_error \
+             scheduled_at = '2031-02-03T04:05:06Z'::timestamptz AS scheduled_matches, \
+             priority, last_error \
              FROM twitch_clips_upload_queue WHERE id = $1",
         )
         .bind(id1)
@@ -405,15 +413,31 @@ mod tests {
         .await
         .unwrap();
         assert_eq!(
-            row,
-            (
-                "Neu".to_string(),
-                "Neubeschreibung".to_string(),
-                "[\"#deadlock\"]".to_string(),
-                true,
-                9,
-                None,
-            )
+            row.try_get::<Option<String>, _>("title")
+                .unwrap()
+                .as_deref(),
+            Some("Neu")
+        );
+        assert_eq!(
+            row.try_get::<Option<String>, _>("description")
+                .unwrap()
+                .as_deref(),
+            Some("Neubeschreibung")
+        );
+        assert_eq!(
+            row.try_get::<Option<String>, _>("hashtags")
+                .unwrap()
+                .as_deref(),
+            Some("[\"#deadlock\"]")
+        );
+        assert_eq!(
+            row.try_get::<Option<bool>, _>("scheduled_matches").unwrap(),
+            Some(true)
+        );
+        assert_eq!(row.try_get::<i32, _>("priority").unwrap(), 9);
+        assert_eq!(
+            row.try_get::<Option<String>, _>("last_error").unwrap(),
+            None
         );
     }
 
