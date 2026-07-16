@@ -981,6 +981,9 @@ export interface WorstAd {
   started_at: string;
   duration_s: number;
   drop_pct: number;
+  pre_avg_viewers: number;
+  post_avg_viewers: number;
+  low_sample: boolean;
   is_automatic: boolean;
   min_into_stream?: number;
   recovery_min?: number | null;

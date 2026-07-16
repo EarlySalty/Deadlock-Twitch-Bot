@@ -2,17 +2,18 @@ import { TrendingDown, Zap, Gift, Radio, AlertCircle, Loader2, Clock, BarChart3,
 import { motion } from 'framer-motion';
 import { useMonetization, useAdsSchedule } from '@/hooks/useAnalytics';
 import type { TimeRange, AdBucketData, RecoveryBucketData, AdsSchedule } from '@/types/analytics';
+import { fmtDrop } from '@/utils/monetization';
 
 interface MonetizationProps {
   streamer: string | null;
   days: TimeRange;
 }
 
-function StatTile({ label, value, sub }: { label: string; value: string; sub?: string }) {
+function StatTile({ label, value, sub, valueClassName = 'text-white' }: { label: string; value: string; sub?: string; valueClassName?: string }) {
   return (
     <div className="bg-card border border-border rounded-xl p-4 flex flex-col gap-1">
       <span className="text-xs text-text-secondary uppercase tracking-wide">{label}</span>
-      <span className="text-2xl font-bold text-white">{value}</span>
+      <span className={`text-2xl font-bold ${valueClassName}`}>{value}</span>
       {sub && <span className="text-xs text-text-secondary">{sub}</span>}
     </div>
   );
@@ -23,10 +24,16 @@ function fmt(n: number | null | undefined, fallback = '-'): string {
   return n.toLocaleString('de-DE');
 }
 
-function fmtPct(n: number | null | undefined): string {
-  if (n === null || n === undefined) return '-';
-  const sign = n > 0 ? '+' : '';
-  return `${sign}${n.toFixed(1)}%`;
+function dropTextClass(n: number): string {
+  if (n > 0) return 'text-error';
+  if (n < 0) return 'text-success';
+  return 'text-text-secondary';
+}
+
+function formatRecovery(minutes: number | null | undefined): string {
+  if (minutes === null || minutes === undefined) return 'nicht erreicht';
+  if (minutes < 1) return '<1 Min';
+  return `${minutes} Min`;
 }
 
 function DropBar({ label, avgDrop, count, maxDrop }: { label: string; avgDrop: number | null; count: number; maxDrop: number }) {
@@ -41,15 +48,15 @@ function DropBar({ label, avgDrop, count, maxDrop }: { label: string; avgDrop: n
     );
   }
   const width = maxDrop > 0 ? Math.max(4, (Math.abs(avgDrop) / maxDrop) * 100) : 0;
-  const color = Math.abs(avgDrop) > 15 ? 'bg-error/70' : Math.abs(avgDrop) > 8 ? 'bg-warning/70' : 'bg-success/70';
+  const color = avgDrop > 0 ? 'bg-error/20' : avgDrop < 0 ? 'bg-success/20' : 'bg-text-secondary/20';
 
   return (
     <div className="flex items-center gap-3">
       <span className="text-xs text-text-secondary w-16 text-right shrink-0">{label}</span>
       <div className="flex-1 h-6 bg-background rounded overflow-hidden relative">
         <div className={`h-full ${color} rounded`} style={{ width: `${width}%` }} />
-        <span className="absolute inset-0 flex items-center px-2 text-xs font-medium text-white">
-          {fmtPct(avgDrop)} ({count}x)
+        <span className={`absolute inset-0 flex items-center px-2 text-xs font-medium ${dropTextClass(avgDrop)}`}>
+          {fmtDrop(avgDrop)} ({count}x)
         </span>
       </div>
     </div>
@@ -285,7 +292,7 @@ export function Monetization({ streamer, days }: MonetizationProps) {
 
   const { ads, hype_train, bits, subs, window_days } = data;
   const noAds = ads.total === 0;
-  const viewerDropValue = ads.avg_viewer_drop_pct !== null ? fmtPct(ads.avg_viewer_drop_pct) : 'Keine Viewer-Timeline Daten';
+  const viewerDropValue = ads.avg_viewer_drop_pct !== null ? fmtDrop(ads.avg_viewer_drop_pct) : 'Keine Viewer-Timeline Daten';
 
   // Get max drop across all buckets for consistent bar scaling
   const allDropValues = [
@@ -329,6 +336,7 @@ export function Monetization({ streamer, days }: MonetizationProps) {
               <StatTile
                 label="Ø Viewer-Drop"
                 value={viewerDropValue}
+                valueClassName={ads.avg_viewer_drop_pct !== null ? dropTextClass(ads.avg_viewer_drop_pct) : 'text-text-secondary'}
                 sub={ads.avg_viewer_drop_pct !== null ? 'nach Ad-Break' : undefined}
               />
               <StatTile
@@ -462,12 +470,21 @@ export function Monetization({ streamer, days }: MonetizationProps) {
                         <th className="text-right py-2 pr-4 font-medium">Dauer</th>
                         <th className="text-center py-2 pr-4 font-medium">Typ</th>
                         <th className="text-right py-2 pr-4 font-medium">Viewer-Drop</th>
-                        <th className="text-right py-2 font-medium">Recovery</th>
+                        <th
+                          className="text-right py-2 font-medium"
+                          title="Minuten bis der Viewer-Schnitt wieder 95% des Niveaus vor der Ad erreicht"
+                        >
+                          Recovery
+                        </th>
                       </tr>
                     </thead>
                     <tbody>
                       {ads.worst_ads.map((ad, i) => (
-                        <tr key={i} className="border-b border-border/50 hover:bg-card/50">
+                        <tr
+                          key={i}
+                          className={`border-b border-border/50 hover:bg-card/50 ${ad.low_sample ? 'opacity-50' : ''}`}
+                          title={ad.low_sample ? 'Zu wenige Viewer für eine belastbare Prozentangabe' : undefined}
+                        >
                           <td className="py-2 pr-4 text-white font-mono text-xs">{ad.started_at}</td>
                           <td className="py-2 pr-4 text-right text-text-secondary">{ad.duration_s} s</td>
                           <td className="py-2 pr-4 text-center">
@@ -475,11 +492,14 @@ export function Monetization({ streamer, days }: MonetizationProps) {
                               {ad.is_automatic ? 'Auto' : 'Manuell'}
                             </span>
                           </td>
-                          <td className="py-2 pr-4 text-right font-semibold text-error">
-                            {fmtPct(ad.drop_pct)}
+                          <td className={`py-2 pr-4 text-right font-semibold ${dropTextClass(ad.drop_pct)}`}>
+                            <div>{fmtDrop(ad.drop_pct)}</div>
+                            <div className="text-xs font-normal text-text-secondary">
+                              {Math.round(ad.pre_avg_viewers)} → {Math.round(ad.post_avg_viewers)} Viewer
+                            </div>
                           </td>
                           <td className="py-2 text-right text-text-secondary">
-                            {ad.recovery_min != null ? `${ad.recovery_min} Min` : '-'}
+                            {formatRecovery(ad.recovery_min)}
                           </td>
                         </tr>
                       ))}
