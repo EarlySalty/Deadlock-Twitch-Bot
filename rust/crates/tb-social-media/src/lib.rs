@@ -73,6 +73,7 @@ pub mod report_dispatcher;
 pub mod report_writer;
 pub mod retention;
 pub mod retention_worker;
+pub mod scheduler;
 pub mod schema;
 pub mod seed_vocab;
 pub mod settings;

@@ -172,6 +172,9 @@ pub async fn get_upload_queue(
     if platform.is_some() {
         sql.push_str(" AND q.platform = $2");
     }
+    if status == "pending" {
+        sql.push_str(" AND (q.scheduled_at IS NULL OR q.scheduled_at <= now())");
+    }
     sql.push_str(" ORDER BY q.priority DESC, q.created_at ASC LIMIT ");
     sql.push_str(&limit.max(0).to_string());
 
@@ -402,6 +405,30 @@ mod tests {
         assert_eq!(cstatus, "published_all"); // einzige aktive Plattform hochgeladen
 
         // Pending-Queue jetzt leer.
+        assert!(get_upload_queue(&pool, None, "pending", 10, None)
+            .await
+            .is_empty());
+    }
+
+    #[tokio::test]
+    async fn get_queue_skips_future_scheduled_jobs() {
+        let Some(pool) = make_pool("t_sm_queue_schedule_gate").await else {
+            return;
+        };
+        let clip = seed_clip(&pool).await;
+        queue_upload(
+            &pool,
+            clip,
+            "tiktok",
+            None,
+            None,
+            None,
+            Some("2999-01-01T00:00:00Z"),
+            0,
+        )
+        .await
+        .unwrap();
+
         assert!(get_upload_queue(&pool, None, "pending", 10, None)
             .await
             .is_empty());
