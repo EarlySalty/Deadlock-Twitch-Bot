@@ -1,11 +1,15 @@
+use serde::Deserialize;
 use sqlx::PgPool;
+
+use crate::settings::{forms_submit_enabled, get_forms_contact_email};
 
 const USER_AGENT: &str = "Deadlock-Twitch-Bot/1.0";
 const VINDICTA_ECLIPSE_URL: &str = "https://docs.google.com/forms/d/e/1FAIpQLSe6Q0nHYVQSSBaAhSyvOeBzI97f0OB3wIJpYuwZ3ZqRsxmH3Q/formResponse";
 const DEADLOCK_HIGH_URL: &str = "https://docs.google.com/forms/d/e/1FAIpQLSeVOlCAmjIVr-GPyoq1D0kp5YjUKDF8U9JglWw-5LsaClV05A/formResponse";
 const DEADLOCK_PIRATE_URL: &str = "https://docs.google.com/forms/d/e/1FAIpQLSdiyrvA_1vLFJf2CribM3fSi4ww-5oRd5IPOUFeTwVwURsUVQ/formResponse";
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum FormKey {
     VindictaEclipse,
     DeadlockHigh,
@@ -163,6 +167,14 @@ pub enum SubmissionAttempt {
     Skipped,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FormSubmissionOutcome {
+    Submitted(u16),
+    Failed(Option<u16>),
+    SkippedDisabled,
+    SkippedDuplicate,
+}
+
 pub async fn persist_submission_attempt(
     pool: &PgPool,
     clip_id: i32,
@@ -189,6 +201,141 @@ pub async fn persist_submission_attempt(
         "Google-Forms-Submit-Versuch reserviert"
     );
     Ok(outcome)
+}
+
+/// Reserviert und verarbeitet genau einen externen Formular-Submit.
+pub async fn submit_clip_form(
+    pool: &PgPool,
+    client: &reqwest::Client,
+    clip_id: i32,
+    form: FormKey,
+    resolved_title: Option<&str>,
+) -> Result<FormSubmissionOutcome, sqlx::Error> {
+    submit_clip_form_to(pool, client, clip_id, form, resolved_title, form.url()).await
+}
+
+async fn finish_submission(
+    pool: &PgPool,
+    clip_id: i32,
+    form: FormKey,
+    status: &str,
+    http_status: Option<u16>,
+    error: Option<&str>,
+) -> Result<(), sqlx::Error> {
+    sqlx::query(
+        "UPDATE twitch_clip_form_submissions \
+         SET status = $1, http_status = $2, submitted_at = CURRENT_TIMESTAMP, error = $3 \
+         WHERE clip_id = $4 AND form_key = $5",
+    )
+    .bind(status)
+    .bind(http_status.map(i32::from))
+    .bind(error)
+    .bind(clip_id)
+    .bind(form.as_str())
+    .execute(pool)
+    .await?;
+    Ok(())
+}
+
+async fn submit_clip_form_to(
+    pool: &PgPool,
+    client: &reqwest::Client,
+    clip_id: i32,
+    form: FormKey,
+    resolved_title: Option<&str>,
+    url: &str,
+) -> Result<FormSubmissionOutcome, sqlx::Error> {
+    if persist_submission_attempt(pool, clip_id, form).await? == SubmissionAttempt::Skipped {
+        tracing::info!(
+            clip_id,
+            form_key = form.as_str(),
+            http_status = ?Option::<u16>::None,
+            outcome = "skipped_duplicate",
+            "Formular-Submit übersprungen"
+        );
+        return Ok(FormSubmissionOutcome::SkippedDuplicate);
+    }
+    if !forms_submit_enabled(pool).await {
+        tracing::info!(
+            clip_id,
+            form_key = form.as_str(),
+            http_status = ?Option::<u16>::None,
+            outcome = "skipped_disabled",
+            "Formular-Submit übersprungen"
+        );
+        return Ok(FormSubmissionOutcome::SkippedDisabled);
+    }
+
+    let clip = sqlx::query_as::<_, (Option<String>, String, Option<String>)>(
+        "SELECT clip_url, streamer_login, clip_title \
+         FROM twitch_clips_social_media WHERE id = $1",
+    )
+    .bind(clip_id)
+    .fetch_optional(pool)
+    .await?;
+    let Some((clip_url, streamer_login, clip_title)) = clip else {
+        let error = "clip_not_found";
+        finish_submission(pool, clip_id, form, "failed", None, Some(error)).await?;
+        tracing::error!(
+            clip_id,
+            form_key = form.as_str(),
+            http_status = ?Option::<u16>::None,
+            outcome = "failed",
+            error,
+            "Formular-Submit fehlgeschlagen"
+        );
+        return Ok(FormSubmissionOutcome::Failed(None));
+    };
+    let input = ClipFormInput {
+        clip_url: clip_url.unwrap_or_default(),
+        credit: streamer_login,
+        hero: None,
+        ai_description: resolved_title
+            .map(str::to_owned)
+            .or(clip_title)
+            .unwrap_or_default(),
+        clip_type: None,
+        contact_email: get_forms_contact_email(pool).await,
+    };
+
+    match submit_to(client, url, form, &input).await {
+        Ok(http_status) => {
+            finish_submission(pool, clip_id, form, "submitted", Some(http_status), None).await?;
+            tracing::info!(
+                clip_id,
+                form_key = form.as_str(),
+                http_status,
+                outcome = "submitted",
+                "Formular-Submit abgeschlossen"
+            );
+            Ok(FormSubmissionOutcome::Submitted(http_status))
+        }
+        Err(error) => {
+            let http_status = match &error {
+                FormsError::HttpStatus(status) => Some(*status),
+                FormsError::Request(_) => None,
+            };
+            let error_message = error.to_string();
+            finish_submission(
+                pool,
+                clip_id,
+                form,
+                "failed",
+                http_status,
+                Some(&error_message),
+            )
+            .await?;
+            tracing::error!(
+                clip_id,
+                form_key = form.as_str(),
+                ?http_status,
+                outcome = "failed",
+                error = %error_message,
+                "Formular-Submit fehlgeschlagen"
+            );
+            Ok(FormSubmissionOutcome::Failed(http_status))
+        }
+    }
 }
 
 #[cfg(test)]
@@ -237,6 +384,14 @@ mod tests {
         );
         assert_eq!(fields["entry.1478183538"], "A precise airshot");
         assert_eq!(fields["entry.1585060458"], "configured@example.invalid");
+    }
+
+    #[test]
+    fn form_key_deserializes_api_values() {
+        assert_eq!(
+            serde_json::from_str::<FormKey>("\"deadlock_high\"").unwrap(),
+            FormKey::DeadlockHigh
+        );
     }
 
     #[test]
@@ -402,5 +557,137 @@ mod tests {
             rows,
             vec![("deadlock_high".to_string(), "pending".to_string())]
         );
+    }
+
+    async fn setup_submission_pool(schema: &str) -> Option<PgPool> {
+        let pool = make_pool(schema).await?;
+        for ddl in [
+            "CREATE TABLE social_media_settings (key TEXT PRIMARY KEY, value JSONB)",
+            "CREATE TABLE twitch_clips_social_media (id INTEGER PRIMARY KEY, clip_url TEXT, streamer_login TEXT NOT NULL, clip_title TEXT)",
+            "CREATE TABLE twitch_clip_form_submissions (id SERIAL PRIMARY KEY, clip_id INTEGER NOT NULL, form_key TEXT NOT NULL, status TEXT NOT NULL DEFAULT 'pending', http_status INTEGER, error TEXT, submitted_at TIMESTAMPTZ, created_at TIMESTAMPTZ NOT NULL DEFAULT now(), UNIQUE (clip_id, form_key))",
+        ] {
+            sqlx::query(ddl).execute(&pool).await.unwrap();
+        }
+        sqlx::query("INSERT INTO twitch_clips_social_media (id, clip_url, streamer_login, clip_title) VALUES (42, 'https://clips.twitch.tv/example', 'streamer_login', 'DB title')")
+            .execute(&pool)
+            .await
+            .unwrap();
+        Some(pool)
+    }
+
+    #[tokio::test]
+    async fn disabled_submit_stays_pending_without_http_request() {
+        let Some(pool) = setup_submission_pool("t_sm_forms_disabled").await else {
+            return;
+        };
+        let server = MockServer::start().await;
+
+        let outcome = submit_clip_form_to(
+            &pool,
+            &reqwest::Client::new(),
+            42,
+            FormKey::DeadlockHigh,
+            Some("Resolved title"),
+            &server.uri(),
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(outcome, FormSubmissionOutcome::SkippedDisabled);
+        assert!(server.received_requests().await.unwrap().is_empty());
+        let status: String = sqlx::query_scalar(
+            "SELECT status FROM twitch_clip_form_submissions WHERE clip_id = 42",
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert_eq!(status, "pending");
+    }
+
+    #[tokio::test]
+    async fn enabled_submit_posts_to_mock_and_persists_success() {
+        let Some(pool) = setup_submission_pool("t_sm_forms_enabled").await else {
+            return;
+        };
+        sqlx::query("INSERT INTO social_media_settings (key, value) VALUES ('forms_submit_enabled', 'true'::jsonb), ('forms_contact_email', '\"forms@example.invalid\"'::jsonb)")
+            .execute(&pool)
+            .await
+            .unwrap();
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .respond_with(ResponseTemplate::new(201))
+            .mount(&server)
+            .await;
+
+        let outcome = submit_clip_form_to(
+            &pool,
+            &reqwest::Client::new(),
+            42,
+            FormKey::DeadlockHigh,
+            Some("Resolved title"),
+            &server.uri(),
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(outcome, FormSubmissionOutcome::Submitted(201));
+        let requests = server.received_requests().await.unwrap();
+        assert_eq!(requests.len(), 1);
+        let fields: HashMap<String, String> = url::form_urlencoded::parse(&requests[0].body)
+            .into_owned()
+            .collect();
+        assert_eq!(fields["entry.652511119"], "forms@example.invalid");
+        assert_eq!(fields["entry.1933051763"], "streamer_login");
+        assert_eq!(
+            fields["entry.1338784444"],
+            "https://clips.twitch.tv/example"
+        );
+        assert_eq!(fields["entry.284507193"], "");
+        assert_eq!(fields["entry.1930240104"], "Resolved title");
+        assert_eq!(fields["entry.1950414210"], "EPIC");
+
+        let row: (String, Option<i32>, bool, Option<String>) = sqlx::query_as(
+            "SELECT status, http_status, submitted_at IS NOT NULL, error FROM twitch_clip_form_submissions WHERE clip_id = 42",
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert_eq!(row, ("submitted".to_string(), Some(201), true, None));
+    }
+
+    #[tokio::test]
+    async fn failed_submit_persists_http_status_and_error() {
+        let Some(pool) = setup_submission_pool("t_sm_forms_failed").await else {
+            return;
+        };
+        sqlx::query("INSERT INTO social_media_settings (key, value) VALUES ('forms_submit_enabled', 'true'::jsonb)")
+            .execute(&pool)
+            .await
+            .unwrap();
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .respond_with(ResponseTemplate::new(500))
+            .mount(&server)
+            .await;
+
+        let outcome = submit_clip_form_to(
+            &pool,
+            &reqwest::Client::new(),
+            42,
+            FormKey::VindictaEclipse,
+            Some("Resolved title"),
+            &server.uri(),
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(outcome, FormSubmissionOutcome::Failed(Some(500)));
+        let row: (String, Option<i32>, bool, bool) = sqlx::query_as(
+            "SELECT status, http_status, submitted_at IS NOT NULL, error IS NOT NULL FROM twitch_clip_form_submissions WHERE clip_id = 42",
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert_eq!(row, ("failed".to_string(), Some(500), true, true));
     }
 }

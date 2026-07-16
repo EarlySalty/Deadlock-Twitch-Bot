@@ -15,6 +15,9 @@ pub const KEY_AUTO_APPROVE_YOUTUBE: &str = "auto_approve_youtube";
 pub const KEY_AUTO_APPROVE_TIKTOK: &str = "auto_approve_tiktok";
 pub const KEY_AUTO_APPROVE_INSTAGRAM: &str = "auto_approve_instagram";
 pub const KEY_POSTING_SCHEDULE: &str = "posting_schedule";
+pub const KEY_FORMS_CONTACT_EMAIL: &str = "forms_contact_email";
+pub const KEY_FORMS_SUBMIT_ENABLED: &str = "forms_submit_enabled";
+pub const DEFAULT_FORMS_CONTACT_EMAIL: &str = "deadlockclips.dl@mailinator.com";
 
 /// Auto-Approve-Flags je Plattform.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -177,6 +180,51 @@ pub async fn set_posting_schedule(
     Ok(values)
 }
 
+/// Kontaktadresse für externe Clip-Formulare.
+pub async fn get_forms_contact_email(pool: &PgPool) -> String {
+    get_setting(pool, KEY_FORMS_CONTACT_EMAIL)
+        .await
+        .and_then(|value| value.as_str().map(str::to_owned))
+        .unwrap_or_else(|| DEFAULT_FORMS_CONTACT_EMAIL.to_string())
+}
+
+/// Setzt die Kontaktadresse für externe Clip-Formulare.
+pub async fn set_forms_contact_email(
+    pool: &PgPool,
+    value: &str,
+    updated_by: Option<&str>,
+) -> Result<String, sqlx::Error> {
+    set_setting(
+        pool,
+        KEY_FORMS_CONTACT_EMAIL,
+        &Value::String(value.to_string()),
+        updated_by,
+    )
+    .await?;
+    Ok(value.to_string())
+}
+
+/// Externe Formular-Submits sind bis zur expliziten Aktivierung aus.
+pub async fn forms_submit_enabled(pool: &PgPool) -> bool {
+    get_bool(pool, KEY_FORMS_SUBMIT_ENABLED).await
+}
+
+/// Aktiviert oder deaktiviert externe Formular-Submits.
+pub async fn set_forms_submit_enabled(
+    pool: &PgPool,
+    value: bool,
+    updated_by: Option<&str>,
+) -> Result<bool, sqlx::Error> {
+    set_setting(
+        pool,
+        KEY_FORMS_SUBMIT_ENABLED,
+        &Value::Bool(value),
+        updated_by,
+    )
+    .await?;
+    Ok(value)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -323,5 +371,31 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(get_posting_schedule(&pool).await, schedule);
+    }
+
+    #[tokio::test]
+    async fn forms_settings_have_safe_defaults_and_roundtrip() {
+        let Some(pool) = make_pool("t_sm_forms_settings").await else {
+            return;
+        };
+
+        assert_eq!(
+            get_forms_contact_email(&pool).await,
+            "deadlockclips.dl@mailinator.com"
+        );
+        assert!(!forms_submit_enabled(&pool).await);
+
+        set_forms_contact_email(&pool, "forms@example.invalid", Some("admin"))
+            .await
+            .unwrap();
+        set_forms_submit_enabled(&pool, true, Some("admin"))
+            .await
+            .unwrap();
+
+        assert_eq!(
+            get_forms_contact_email(&pool).await,
+            "forms@example.invalid"
+        );
+        assert!(forms_submit_enabled(&pool).await);
     }
 }
