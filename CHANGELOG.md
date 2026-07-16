@@ -1,3 +1,11 @@
+## #382 — Jede Nachricht zählt nach einem Raid
+
+**Problem:** Die Erinnerung nach einem Raid kam auch dann, wenn man im Zielchat längst geschrieben hatte. Der Bot zählte nur ein paar feste Grußwörter, ein "gg wp" oder "Hallöchen" fiel durch.
+
+**Änderung:** Jetzt zählt jede Nachricht im Zielchat, egal was drinsteht. Statt 5 Minuten bleiben dafür 20 Minuten Zeit.
+
+**Aktuelles Verhalten:** Wer sich nach dem Raid im Zielchat kurz meldet, bekommt keine Erinnerung mehr. Sie kommt nur noch, wenn dort wirklich nichts kam.
+
 ## #381 — !commands schickt nur noch den Link
 
 **Problem:** Die Antwort auf !commands war eine Textwand aus rund 20 Befehlsnamen, die im Chat niemand lesen konnte und die trotzdem nicht erklärte, was die Befehle tun.
