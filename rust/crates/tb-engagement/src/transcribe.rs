@@ -68,6 +68,7 @@ impl OpenAiTranscriber {
             ffmpeg_bin: nonempty_env("FFMPEG_BIN").unwrap_or_else(|| "ffmpeg".to_string()),
             http: reqwest::Client::builder()
                 .timeout(REQUEST_TIMEOUT)
+                .redirect(reqwest::redirect::Policy::none())
                 .build()
                 .ok()?,
         })
@@ -243,7 +244,11 @@ mod tests {
             model: DEFAULT_MODEL.to_string(),
             base_url: base.to_string(),
             ffmpeg_bin: "ffmpeg".to_string(),
-            http: reqwest::Client::builder().timeout(timeout).build().unwrap(),
+            http: reqwest::Client::builder()
+                .timeout(timeout)
+                .redirect(reqwest::redirect::Policy::none())
+                .build()
+                .unwrap(),
         }
     }
 
@@ -449,6 +454,24 @@ mod tests {
             assert!(!err.to_string().contains("SENSITIVE_PROVIDER_BODY_MARKER"));
             assert!(!format!("{err:?}").contains("SENSITIVE_PROVIDER_BODY_MARKER"));
         }
+    }
+
+    #[tokio::test]
+    async fn transcribe_bytes_folgt_keinen_redirects() {
+        let target = successful_server("darf nicht erreicht werden").await;
+        let source = MockServer::start().await;
+        let target_url = format!("{}/v1/audio/transcriptions", target.uri());
+        Mock::given(method("POST"))
+            .and(path("/v1/audio/transcriptions"))
+            .respond_with(ResponseTemplate::new(307).insert_header("Location", target_url.as_str()))
+            .mount(&source)
+            .await;
+        let transcriber = transcriber(&format!("{}/v1/audio/transcriptions", source.uri()));
+
+        let result = transcriber.transcribe_bytes(b"RIFF....WAVE".to_vec()).await;
+
+        assert_eq!(result.unwrap_err(), TranscribeError::HttpStatus(307));
+        assert_eq!(target.received_requests().await.unwrap().len(), 0);
     }
 
     #[tokio::test]
