@@ -38,9 +38,9 @@ pub mod soul_store;
 pub mod stealth_sender;
 pub mod stream_state;
 pub mod stream_transcripts;
-pub mod transcribe;
 pub mod style_examples;
 pub mod threads;
+pub mod transcribe;
 pub mod types;
 
 pub use crew_review::CrewReviewTrigger;
