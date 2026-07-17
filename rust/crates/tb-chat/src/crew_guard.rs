@@ -25,6 +25,7 @@ use chrono_tz::Europe::Berlin;
 use regex::Regex;
 use serde::Deserialize;
 use sqlx::PgPool;
+use tb_engagement::crew_review::{CrewReviewTrigger, RickyChatInput, RICKY_TWITCH_USER_ID};
 use tracing::{debug, error, warn};
 
 use crate::conversation_scam::{should_consider_event, DialogState, FirstTimeContext};
@@ -955,6 +956,7 @@ pub struct CrewGuard {
     notify_only: bool,
     context: Arc<ChatterContextBuffer>,
     radar_checked: Arc<Mutex<RadarChecks>>,
+    crew_review_trigger: Option<Arc<dyn CrewReviewTrigger>>,
 }
 
 impl CrewGuard {
@@ -981,7 +983,16 @@ impl CrewGuard {
             notify_only,
             context: Arc::new(ChatterContextBuffer::new()),
             radar_checked: Arc::new(Mutex::new(HashMap::new())),
+            crew_review_trigger: None,
         }
+    }
+
+    pub fn with_crew_review_trigger(
+        mut self,
+        crew_review_trigger: Option<Arc<dyn CrewReviewTrigger>>,
+    ) -> Self {
+        self.crew_review_trigger = crew_review_trigger;
+        self
     }
 
     /// Baut den Wächter aus der Umgebung: Feature-Flag + OpenAI-Judge.
@@ -1004,9 +1015,28 @@ impl CrewGuard {
         )
     }
 
-    /// Fire-and-forget: blockiert die Chat-Pipeline nie. Bei ausgeschaltetem
-    /// Feature-Flag ein sofortiger No-op (kein Spawn, keine Kosten).
+    /// Fire-and-forget: blockiert die Chat-Pipeline nie. Der synchrone Review-
+    /// Trigger läuft unabhängig vom Feature-Flag; nur das Radar bleibt dann aus.
     pub fn observe(&self, event: &ChatMessageEvent) {
+        if event.chatter_user_id == RICKY_TWITCH_USER_ID {
+            if let Some(trigger) = &self.crew_review_trigger {
+                let source_message_id = event
+                    .source_message_id
+                    .as_deref()
+                    .filter(|id| !id.trim().is_empty())
+                    .or_else(|| {
+                        (!event.message_id.trim().is_empty()).then_some(event.message_id.as_str())
+                    })
+                    .map(|id| id.trim().to_string());
+                trigger.observe(RickyChatInput {
+                    channel_login: event.broadcaster_user_login.clone(),
+                    subject_twitch_user_id: RICKY_TWITCH_USER_ID.to_string(),
+                    source_message_id,
+                    occurred_at: Utc::now(),
+                    content: event.text().to_string(),
+                });
+            }
+        }
         if !self.enabled {
             return;
         }
@@ -1210,8 +1240,112 @@ async fn decide(
 mod tests {
     use super::*;
     use crate::style_score::{Centroid, StyleBreakdown, StyleScore};
+    use crate::types::ChatMessageBody;
+    use tb_engagement::crew_review::{CrewReviewTrigger, RickyChatInput, RICKY_TWITCH_USER_ID};
     use wiremock::matchers::method;
     use wiremock::{Mock, MockServer, ResponseTemplate};
+
+    mod crew_review_trigger {
+        use super::*;
+
+        #[derive(Default)]
+        struct RecordingCrewReviewTrigger(Mutex<Vec<RickyChatInput>>);
+
+        impl CrewReviewTrigger for RecordingCrewReviewTrigger {
+            fn observe(&self, input: RickyChatInput) {
+                self.0.lock().expect("Recording-Lock").push(input);
+            }
+        }
+
+        struct NoopAccountAge;
+
+        #[async_trait]
+        impl AccountAgePort for NoopAccountAge {
+            async fn user_created_at_days(&self, _user_id: &str, _login: &str) -> Option<i64> {
+                None
+            }
+        }
+
+        fn event(chatter_user_id: &str, source_message_id: Option<&str>) -> ChatMessageEvent {
+            ChatMessageEvent {
+                broadcaster_user_login: "partner_one".to_string(),
+                chatter_user_id: chatter_user_id.to_string(),
+                chatter_user_login: "helmbombenricky".to_string(),
+                message_id: "eventsub-copy-17".to_string(),
+                message: ChatMessageBody {
+                    text: "hallo".to_string(),
+                    fragments: Vec::new(),
+                },
+                source_message_id: source_message_id.map(str::to_string),
+                ..Default::default()
+            }
+        }
+
+        fn guard(trigger: Arc<RecordingCrewReviewTrigger>) -> CrewGuard {
+            CrewGuard::new(
+                false,
+                Arc::new(judge_nein()),
+                Arc::new(ModAlerter::new(reqwest::Client::new())),
+                sqlx::PgPool::connect_lazy("postgres://x:x@127.0.0.1:1/x").expect("Lazy-Test-Pool"),
+                "bot-id".to_string(),
+                Arc::new(NoopAccountAge),
+                Arc::new(Centroid::default()),
+                false,
+            )
+            .with_crew_review_trigger(Some(trigger))
+        }
+
+        #[test]
+        fn exakte_ricky_id_triggert_auch_wenn_crew_guard_aus_ist() {
+            let runtime = tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()
+                .expect("Test-Runtime");
+            let _runtime_guard = runtime.enter();
+            let trigger = Arc::new(RecordingCrewReviewTrigger::default());
+
+            guard(Arc::clone(&trigger)).observe(&event(RICKY_TWITCH_USER_ID, Some("origin-42")));
+
+            let inputs = trigger.0.lock().expect("Recording-Lock");
+            assert_eq!(inputs.len(), 1);
+            assert_eq!(inputs[0].channel_login, "partner_one");
+            assert_eq!(inputs[0].subject_twitch_user_id, RICKY_TWITCH_USER_ID);
+            assert_eq!(inputs[0].source_message_id.as_deref(), Some("origin-42"));
+            assert_eq!(inputs[0].content, "hallo");
+        }
+
+        #[test]
+        fn gleicher_login_mit_anderer_id_triggert_nicht() {
+            let runtime = tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()
+                .expect("Test-Runtime");
+            let _runtime_guard = runtime.enter();
+            let trigger = Arc::new(RecordingCrewReviewTrigger::default());
+
+            guard(Arc::clone(&trigger)).observe(&event("999999", Some("origin-42")));
+
+            assert!(trigger.0.lock().expect("Recording-Lock").is_empty());
+        }
+
+        #[test]
+        fn leere_source_id_faellt_auf_message_id_zurueck() {
+            let runtime = tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()
+                .expect("Test-Runtime");
+            let _runtime_guard = runtime.enter();
+            let trigger = Arc::new(RecordingCrewReviewTrigger::default());
+            let mut event = event(RICKY_TWITCH_USER_ID, Some("  "));
+            event.message_id = "fallback-7".to_string();
+
+            guard(Arc::clone(&trigger)).observe(&event);
+
+            let inputs = trigger.0.lock().expect("Recording-Lock");
+            assert_eq!(inputs.len(), 1);
+            assert_eq!(inputs[0].source_message_id.as_deref(), Some("fallback-7"));
+        }
+    }
 
     #[test]
     fn radar_slot_claims_fresh_key() {

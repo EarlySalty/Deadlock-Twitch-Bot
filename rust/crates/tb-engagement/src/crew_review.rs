@@ -472,6 +472,10 @@ fn draft_matches_selected_claims(draft: &str, selected_facts: &[&ReviewFact]) ->
     remainder.is_empty()
 }
 
+pub trait CrewReviewTrigger: Send + Sync {
+    fn observe(&self, input: RickyChatInput);
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct RickyChatInput {
     pub channel_login: String,
