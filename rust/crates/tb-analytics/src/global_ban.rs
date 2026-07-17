@@ -18,6 +18,13 @@ pub struct GlobalBanEntry {
     pub added_at: Option<DateTime<Utc>>,
 }
 
+/// Kanalbezogene Einstellung für die Anwendung globaler Bans.
+#[derive(Debug, sqlx::FromRow)]
+pub struct ChannelEnforcement {
+    pub twitch_login: String,
+    pub global_ban_enforcement_enabled: bool,
+}
+
 // ── Fingerprint für healthz ───────────────────────────────────────────────────
 
 /// Berechnet SHA-256 über `information_schema.tables`-Metadaten.
@@ -162,6 +169,43 @@ pub async fn list_bans(pool: &PgPool) -> Result<Vec<GlobalBanEntry>, sqlx::Error
         "#,
     )
     .fetch_all(pool)
+    .await
+}
+
+/// Aktive Kanäle samt Global-Ban-Enforcement-Flag.
+pub async fn list_channel_enforcement(
+    pool: &PgPool,
+) -> Result<Vec<ChannelEnforcement>, sqlx::Error> {
+    sqlx::query_as::<_, ChannelEnforcement>(
+        "SELECT LOWER(twitch_login) AS twitch_login, global_ban_enforcement_enabled \
+         FROM twitch_partners \
+         WHERE status = 'active' \
+           AND admin_archived_at IS NULL \
+           AND departnered_at IS NULL \
+         ORDER BY LOWER(twitch_login)",
+    )
+    .fetch_all(pool)
+    .await
+}
+
+/// Setzt das Global-Ban-Enforcement-Flag eines aktiven Kanals.
+pub async fn set_channel_enforcement(
+    pool: &PgPool,
+    login: &str,
+    enabled: bool,
+) -> Result<Option<ChannelEnforcement>, sqlx::Error> {
+    sqlx::query_as::<_, ChannelEnforcement>(
+        "UPDATE twitch_partners \
+         SET global_ban_enforcement_enabled = $2 \
+         WHERE LOWER(twitch_login) = LOWER($1) \
+           AND status = 'active' \
+           AND admin_archived_at IS NULL \
+           AND departnered_at IS NULL \
+         RETURNING LOWER(twitch_login) AS twitch_login, global_ban_enforcement_enabled",
+    )
+    .bind(login)
+    .bind(enabled)
+    .fetch_optional(pool)
     .await
 }
 

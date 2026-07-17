@@ -1,3 +1,11 @@
+## #385 — Globale Ban-Liste im Dashboard, pro Kanal abschaltbar
+
+**Problem:** Die server-weite Ban-Liste ließ sich nur über die interne Schnittstelle pflegen und griff in jedem betreuten Kanal, ohne Möglichkeit, das für einzelne Kanäle abzuschalten.
+
+**Änderung:** Die globale Ban-Liste ist jetzt im Verwaltungs-Dashboard einseh- und pflegbar. Zusätzlich lässt sich pro Kanal festlegen, ob die globalen Bans dort angewendet werden.
+
+**Aktuelles Verhalten:** Standardmäßig greifen die globalen Bans in jedem Kanal; wer möchte, schaltet sie für einen Kanal im Dashboard ab.
+
 ## #386 — Raid-Erinnerung nur noch bei wirklich fehlender Begrüßung
 
 **Problem:** Nach einem Raid bekam der raidende Streamer die Erinnerung, im Zielkanal Hallo zu sagen, oft auch dann, wenn er längst geschrieben hatte. Der Bot konnte fremde Zielkanäle gar nicht mitlesen und hat die Begrüßung deshalb schlicht nicht mitbekommen.

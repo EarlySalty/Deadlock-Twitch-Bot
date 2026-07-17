@@ -104,6 +104,14 @@ pub fn build_internal_router(
             &format!("{base}/globalban/check"),
             get(global_ban::check_handler),
         )
+        .route(
+            &format!("{base}/globalban/channels"),
+            get(global_ban::list_channels_handler),
+        )
+        .route(
+            &format!("{base}/globalban/channels/:login"),
+            post(global_ban::set_channel_handler),
+        )
         // Read-only Auth/Scope-Diagnose zu einer Discord-User-ID (Self-Service-Support).
         .route(&format!("{base}/diagnose"), get(diagnose::handler))
         // Raid-Blacklist: nativer Port der bislang an Python 8779 proxied

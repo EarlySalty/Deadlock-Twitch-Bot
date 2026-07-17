@@ -4,8 +4,8 @@
 //! Kein Auth, kein Loopback-Gate bei public-Routen — explizit `CORS: *`.
 //! Auth-Routen nutzen `AuthLevel`-Extractor aus tb-http-core.
 
-pub mod ai_state;
 pub mod admin_audit;
+pub mod ai_state;
 pub mod auth;
 pub mod handlers;
 pub mod process_info;
@@ -751,7 +751,7 @@ pub fn build_admin_streamers_router(pool: PgPool, token: String) -> Router {
 pub fn build_admin_config_router(pool: PgPool, token: String) -> Router {
     use handlers::{
         admin_affiliate, admin_announcements, admin_audit_log, admin_billing, admin_config,
-        admin_legal, admin_promo_mode, admin_roadmap,
+        admin_global_ban, admin_legal, admin_promo_mode, admin_roadmap,
     };
 
     Router::new()
@@ -807,6 +807,22 @@ pub fn build_admin_config_router(pool: PgPool, token: String) -> Router {
         .route(
             "/twitch/api/admin/announcements",
             get(admin_announcements::get_handler).post(admin_announcements::save_handler),
+        )
+        .route(
+            "/twitch/api/admin/global-bans",
+            get(admin_global_ban::list_handler),
+        )
+        .route(
+            "/twitch/api/admin/global-bans/add",
+            post(admin_global_ban::add_handler),
+        )
+        .route(
+            "/twitch/api/admin/global-bans/remove",
+            post(admin_global_ban::remove_handler),
+        )
+        .route(
+            "/twitch/api/admin/global-bans/channels/:login",
+            post(admin_global_ban::set_channel_handler),
         )
         .route(
             "/twitch/api/admin/roadmap",

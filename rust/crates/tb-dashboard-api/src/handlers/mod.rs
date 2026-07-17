@@ -7,6 +7,7 @@ pub mod admin_billing;
 pub mod admin_chat_action;
 pub mod admin_config;
 pub mod admin_form_aliases;
+pub mod admin_global_ban;
 pub mod admin_legacy_streamers;
 pub mod admin_legal;
 pub mod admin_manual_plan;

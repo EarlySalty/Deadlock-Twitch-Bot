@@ -70,6 +70,33 @@ pub trait PartnerRoster: Send + Sync {
     /// Prüft ob `login` ein operativer Partner-Kanal ist (Selbstschutz-Guard).
     /// `partner_utils.is_operational_partner_channel()`, `global_ban_sweep.py:196–197`.
     async fn is_operational_partner_channel(&self, login: &str) -> bool;
+
+    /// `true` (Default) wendet globale Bans im Kanal an; `false` ist Opt-out.
+    async fn global_ban_enforcement_enabled(&self, login: &str) -> bool;
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ChannelDecision {
+    Apply,
+    SkipNotOperational,
+    SkipGlobalBanOptout,
+    SkipLive,
+}
+
+fn decide_channel_enforcement(
+    operational: bool,
+    enforcement_enabled: bool,
+    live: bool,
+) -> ChannelDecision {
+    if !operational {
+        ChannelDecision::SkipNotOperational
+    } else if !enforcement_enabled {
+        ChannelDecision::SkipGlobalBanOptout
+    } else if live {
+        ChannelDecision::SkipLive
+    } else {
+        ChannelDecision::Apply
+    }
 }
 
 // ── Sweep-Executor ─────────────────────────────────────────────────────────────
@@ -187,11 +214,23 @@ impl GlobalBanSweeper {
         for (login, bid) in &due {
             // Leere Login/BID → Eintrag bereinigen, skip
             if login.is_empty() || bid.is_empty() {
+                tracing::warn!(
+                    channel = login,
+                    urteil = "übersprungen",
+                    grund = "invalid_due_sweep_identity",
+                    "GlobalBanSweep Kanalentscheidung"
+                );
                 delete_sweep_due(&self.pool, login).await;
                 continue;
             }
             // Kanal wieder live → Fälligkeit bewahren, nicht löschen
             if live_ids.contains(bid.as_str()) {
+                tracing::info!(
+                    channel = login,
+                    urteil = "übersprungen",
+                    grund = "channel_live",
+                    "GlobalBanSweep Kanalentscheidung"
+                );
                 continue;
             }
 
@@ -214,20 +253,64 @@ impl GlobalBanSweeper {
         roster: &dyn PartnerRoster,
         applied_pairs: &mut HashSet<(String, String)>,
     ) -> usize {
-        // Guard: leere IDs
         if broadcaster_login.is_empty() || broadcaster_id.is_empty() {
+            tracing::warn!(
+                channel = broadcaster_login,
+                urteil = "übersprungen",
+                grund = "invalid_channel_identity",
+                "GlobalBanSweep Kanalentscheidung"
+            );
             return 0;
         }
-        // Guard: operativer Partner-Kanal
-        if !roster
+
+        let operational = roster
             .is_operational_partner_channel(broadcaster_login)
-            .await
-        {
-            return 0;
-        }
-        // Guard: live-Check (`global_ban_sweep.py:196`)
-        if roster.live_broadcaster_ids().await.contains(broadcaster_id) {
-            return 0;
+            .await;
+        let enforcement_enabled = if operational {
+            roster
+                .global_ban_enforcement_enabled(broadcaster_login)
+                .await
+        } else {
+            true
+        };
+        let live = operational
+            && enforcement_enabled
+            && roster.live_broadcaster_ids().await.contains(broadcaster_id);
+
+        match decide_channel_enforcement(operational, enforcement_enabled, live) {
+            ChannelDecision::Apply => tracing::info!(
+                channel = broadcaster_login,
+                urteil = "anwenden",
+                grund = "global_ban_enforcement_enabled",
+                "GlobalBanSweep Kanalentscheidung"
+            ),
+            ChannelDecision::SkipNotOperational => {
+                tracing::info!(
+                    channel = broadcaster_login,
+                    urteil = "übersprungen",
+                    grund = "not_operational_partner",
+                    "GlobalBanSweep Kanalentscheidung"
+                );
+                return 0;
+            }
+            ChannelDecision::SkipGlobalBanOptout => {
+                tracing::info!(
+                    channel = broadcaster_login,
+                    urteil = "übersprungen",
+                    grund = "global_ban_optout",
+                    "GlobalBanSweep Kanalentscheidung"
+                );
+                return 0;
+            }
+            ChannelDecision::SkipLive => {
+                tracing::info!(
+                    channel = broadcaster_login,
+                    urteil = "übersprungen",
+                    grund = "channel_live",
+                    "GlobalBanSweep Kanalentscheidung"
+                );
+                return 0;
+            }
         }
 
         let entries = list_bans(&self.pool).await;
@@ -239,10 +322,24 @@ impl GlobalBanSweeper {
 
             // Schon gebannt (Applied-Ledger-Dedup)
             if applied_pairs.contains(&pair) {
+                tracing::info!(
+                    channel = broadcaster_login,
+                    chatter = %login_lower,
+                    urteil = "übersprungen",
+                    grund = "already_applied",
+                    "GlobalBanSweep Enforcement-Entscheidung"
+                );
                 continue;
             }
             // Partner schützen: Ziel ist selbst Partner
             if roster.is_operational_partner_channel(&login_lower).await {
+                tracing::info!(
+                    channel = broadcaster_login,
+                    chatter = %login_lower,
+                    urteil = "übersprungen",
+                    grund = "target_is_operational_partner",
+                    "GlobalBanSweep Enforcement-Entscheidung"
+                );
                 continue;
             }
 
@@ -265,12 +362,25 @@ impl GlobalBanSweeper {
             };
 
             let Some(target_id) = target_id else {
-                // Kein ID auflösbar → überspringen
+                tracing::info!(
+                    channel = broadcaster_login,
+                    chatter = %login_lower,
+                    urteil = "übersprungen",
+                    grund = "target_id_unresolved",
+                    "GlobalBanSweep Enforcement-Entscheidung"
+                );
                 continue;
             };
 
             // Selbstschutz: Ziel == Broadcaster (moderator_id kommt intern aus ban_user)
             if target_id == broadcaster_id {
+                tracing::info!(
+                    channel = broadcaster_login,
+                    chatter = %login_lower,
+                    urteil = "übersprungen",
+                    grund = "target_is_broadcaster",
+                    "GlobalBanSweep Enforcement-Entscheidung"
+                );
                 continue;
             }
 
@@ -279,7 +389,10 @@ impl GlobalBanSweeper {
             // sitzt unmittelbar vor der Aktion, damit ihn kein Pfad umgeht.
             if crate::safe_list::is_safe(Some(&target_id), &login_lower) {
                 tracing::warn!(
+                    channel = broadcaster_login,
                     chatter = %login_lower,
+                    urteil = "übersprungen",
+                    grund = "safe_list",
                     "GlobalBanSweep: Safe-List-Konto steht auf der Banliste, kein Ban"
                 );
                 continue;
@@ -294,29 +407,52 @@ impl GlobalBanSweeper {
                     record_applied(&self.pool, &login_lower, broadcaster_id).await;
                     applied_pairs.insert(pair);
                     count += 1;
+                    tracing::info!(
+                        channel = broadcaster_login,
+                        chatter = %login_lower,
+                        urteil = "gebannt",
+                        grund = "global_ban_list",
+                        "GlobalBanSweep Enforcement-Entscheidung"
+                    );
                 }
                 Ok(BanOutcome::Forbidden) => {
                     // 403: kein Ledger-Eintrag → nächster Sweep versucht erneut
                     tracing::warn!(
                         broadcaster = broadcaster_login,
+                        channel = broadcaster_login,
                         chatter = %login_lower,
+                        urteil = "übersprungen",
+                        grund = "moderator_forbidden",
                         "GlobalBanSweep: Bot kein Moderator (403) — Ban übersprungen"
                     );
                 }
                 Ok(BanOutcome::Failed { status, ref body }) => {
                     tracing::warn!(
                         broadcaster = broadcaster_login,
+                        channel = broadcaster_login,
                         chatter = %login_lower,
+                        urteil = "fehlgeschlagen",
+                        grund = "ban_api_failed",
                         status,
                         body = %body.chars().take(120).collect::<String>(),
                         "GlobalBanSweep: Ban fehlgeschlagen"
                     );
                 }
                 Ok(BanOutcome::Unbanned) => {
-                    // Sollte bei ban_user nicht vorkommen, ignorieren
+                    tracing::warn!(
+                        channel = broadcaster_login,
+                        chatter = %login_lower,
+                        urteil = "fehlgeschlagen",
+                        grund = "unexpected_unbanned_outcome",
+                        "GlobalBanSweep Enforcement-Entscheidung"
+                    );
                 }
                 Err(e) => {
                     tracing::debug!(
+                        channel = broadcaster_login,
+                        chatter = %login_lower,
+                        urteil = "fehlgeschlagen",
+                        grund = "ban_api_error",
                         error = %e,
                         "GlobalBanSweep: Ban-Call Exception"
                     );
@@ -336,12 +472,38 @@ async fn offline_partner_targets(roster: &dyn PartnerRoster) -> Vec<(String, Str
     let all = roster.all_active_partners().await;
     let live_ids = roster.live_broadcaster_ids().await;
     let valid_auth = roster.valid_auth_ids().await;
+    let mut targets = Vec::new();
 
-    all.into_iter()
-        .filter(|(_, bid)| !bid.is_empty())
-        .filter(|(_, bid)| !live_ids.contains(bid.as_str()))
-        .filter(|(_, bid)| valid_auth.contains(bid.as_str()))
-        .collect()
+    for (login, broadcaster_id) in all {
+        let reason = if broadcaster_id.is_empty() {
+            Some("missing_broadcaster_id")
+        } else if live_ids.contains(broadcaster_id.as_str()) {
+            Some("channel_live")
+        } else if !valid_auth.contains(broadcaster_id.as_str()) {
+            Some("oauth_invalid")
+        } else {
+            None
+        };
+
+        if let Some(grund) = reason {
+            tracing::info!(
+                channel = login,
+                urteil = "übersprungen",
+                grund,
+                "GlobalBanSweep Zielentscheidung"
+            );
+        } else {
+            tracing::info!(
+                channel = login,
+                urteil = "ausgewählt",
+                grund = "offline_with_valid_oauth",
+                "GlobalBanSweep Zielentscheidung"
+            );
+            targets.push((login, broadcaster_id));
+        }
+    }
+
+    targets
 }
 
 /// Reason mit Truncation auf 500 Zeichen. `global_ban_sweep.py:100`.
@@ -741,6 +903,7 @@ mod tests {
         live_ids: HashSet<String>,
         valid_auth: HashSet<String>,
         operational: HashSet<String>,
+        enforcement_disabled: HashSet<String>,
     }
 
     impl MockRoster {
@@ -758,7 +921,13 @@ mod tests {
                 live_ids: live_ids.into_iter().map(str::to_string).collect(),
                 valid_auth: valid_auth.into_iter().map(str::to_string).collect(),
                 operational: operational.into_iter().map(str::to_string).collect(),
+                enforcement_disabled: HashSet::new(),
             }
+        }
+
+        fn with_enforcement_disabled(mut self, channels: Vec<&str>) -> Self {
+            self.enforcement_disabled = channels.into_iter().map(str::to_string).collect();
+            self
         }
     }
 
@@ -775,6 +944,9 @@ mod tests {
         }
         async fn is_operational_partner_channel(&self, login: &str) -> bool {
             self.operational.contains(login)
+        }
+        async fn global_ban_enforcement_enabled(&self, login: &str) -> bool {
+            !self.enforcement_disabled.contains(login)
         }
     }
 
@@ -800,6 +972,18 @@ mod tests {
         let lang: String = "x".repeat(600);
         let r = build_reason(Some(&lang));
         assert_eq!(r.len(), 500);
+    }
+
+    #[test]
+    fn kanalentscheidung_respektiert_optout_und_default() {
+        assert_eq!(
+            decide_channel_enforcement(true, true, false),
+            ChannelDecision::Apply
+        );
+        assert_eq!(
+            decide_channel_enforcement(true, false, false),
+            ChannelDecision::SkipGlobalBanOptout
+        );
     }
 
     // ── DB-Tests ───────────────────────────────────────────────────────────────
@@ -903,6 +1087,31 @@ mod tests {
                 .await
                 .unwrap();
         assert_eq!(ledger, 1, "Ledger-Eintrag gesetzt");
+    }
+
+    #[tokio::test]
+    async fn apply_bans_ueberspringt_optout_kanal() {
+        let pool = pool_or_skip!("gbs_optout");
+        sqlx::query(
+            "INSERT INTO twitch_chatter_global_ban (chatter_login, chatter_id) \
+             VALUES ('boser_user', 'uid_boser')",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+
+        let api = Arc::new(MockApi::default());
+        let roster = MockRoster::new(vec![("kanal", "bid1")], vec![], vec!["bid1"], vec!["kanal"])
+            .with_enforcement_disabled(vec!["kanal"]);
+        let sw = sweeper(pool.clone(), api.clone());
+        let mut applied = load_applied_pairs(&pool).await;
+
+        let count = sw
+            .apply_bans_to_channel("kanal", "bid1", &roster, &mut applied)
+            .await;
+
+        assert_eq!(count, 0);
+        assert!(api.ban_calls.lock().unwrap().is_empty());
     }
 
     #[tokio::test]

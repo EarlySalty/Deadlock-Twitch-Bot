@@ -115,6 +115,10 @@ impl PartnerRoster for StaticRoster {
     async fn is_operational_partner_channel(&self, _: &str) -> bool {
         self.partner
     }
+
+    async fn global_ban_enforcement_enabled(&self, _: &str) -> bool {
+        true
+    }
 }
 
 fn policy(partner: bool) -> (Arc<RecordingApi>, ChannelPolicyChatApi) {
