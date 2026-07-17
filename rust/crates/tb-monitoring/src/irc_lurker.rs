@@ -514,6 +514,9 @@ impl IrcLurkerTracker {
                 .remove(&channel)
                 .is_some_and(|watch| watch.owns_tracking)
         };
+        // Raid-Beobachtung beendet: Schreiber-Puffer dieses Ziels freigeben (auch
+        // wenn der Kanal als Partner weiter getrackt bleibt und nicht gepartet wird).
+        lock_or_recover(&self.writers, "writers").remove(&channel);
         if owns_tracking
             && !lock_or_recover(&self.partner_channels, "partner_channels").contains(&channel)
         {
@@ -560,10 +563,14 @@ impl IrcLurkerTracker {
             return false;
         }
         lock_or_recover(&self.ready_channels, "ready_channels").insert(channel.clone());
-        lock_or_recover(&self.writers, "writers")
-            .entry(channel)
-            .or_default()
-            .insert(nick.to_lowercase(), Instant::now());
+        // ponytail: Schreiber nur für aktive Raid-Ziele puffern; sonst wüchse die
+        // writers-Map für dauerhaft getrackte Kanäle je Schreiber unbegrenzt (24/7-Prozess).
+        if lock_or_recover(&self.raid_watches, "raid_watches").contains_key(&channel) {
+            lock_or_recover(&self.writers, "writers")
+                .entry(channel)
+                .or_default()
+                .insert(nick.to_lowercase(), Instant::now());
+        }
         true
     }
 
@@ -861,7 +868,7 @@ mod tests {
     async fn privmsg_markiert_writer_ohne_presence_zu_veraendern() {
         let pool = PgPoolOptions::new().connect_lazy_with(PgConnectOptions::new());
         let tracker = IrcLurkerTracker::new(pool, String::new(), String::new(), None);
-        tracker.track_channel("ziel", TrackMode::Category);
+        tracker.watch_raid_channel("ziel");
 
         assert!(!tracker.has_written("ziel", "raider"));
         assert!(tracker.record_privmsg(":Raider!raider@raider.tmi.twitch.tv PRIVMSG #Ziel :Hallo!"));

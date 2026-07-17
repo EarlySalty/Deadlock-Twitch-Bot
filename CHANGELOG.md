@@ -1,3 +1,11 @@
+## #386 — Raid-Erinnerung nur noch bei wirklich fehlender Begrüßung
+
+**Problem:** Nach einem Raid bekam der raidende Streamer die Erinnerung, im Zielkanal Hallo zu sagen, oft auch dann, wenn er längst geschrieben hatte. Der Bot konnte fremde Zielkanäle gar nicht mitlesen und hat die Begrüßung deshalb schlicht nicht mitbekommen.
+
+**Änderung:** Der Bot liest den Zielkanal nach dem Raid kurz anonym mit und prüft, ob der Streamer dort wirklich schreibt. Nur wenn die Begrüßung nachweislich ausbleibt, kommt die Erinnerung. Kann er nicht sicher mithören, verschickt er lieber nichts.
+
+**Aktuelles Verhalten:** Die Erinnerung kommt nur, wenn der Bot durchgehend mitgelesen hat und der Streamer im Zielkanal wirklich stumm blieb.
+
 ## #383 — Bot merkt jetzt selbst, wenn er in einem Kanal gebannt ist
 
 **Problem:** Wurde der Bot in einem Partner-Kanal gebannt, lief die Live-Ankündigung auf Discord trotzdem weiter — wir haben also für Kanäle geworben, in denen wir gar nicht mehr erwünscht waren. Der Bot hat den Ban stündlich korrekt erkannt, das Wissen aber nur ins Protokoll geschrieben und danach verworfen. Zusätzlich hätte selbst eine gesetzte Pause nicht gehalten: Sie wurde wieder aufgehoben, sobald der Zugriff des Streamers gültig war — und der hat mit einem Ban nichts zu tun.
