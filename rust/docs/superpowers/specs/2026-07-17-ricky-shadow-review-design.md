@@ -78,8 +78,10 @@ genannt werden; daraus darf keine innere Motivation abgeleitet werden.
 
 - Der Bot öffnet den öffentlichen Stream-Audiopfad erst nach dem ID-Trigger.
 - Audio wird in kurzen Segmenten verarbeitet und nur im Arbeitsspeicher gehalten.
-- `streamlink` und `ffmpeg` reichen die Bytes über Pipes weiter; weder das
-  Quellsegment noch eine konvertierte WAV-Datei wird im Dateisystem angelegt.
+- Das vorhandene `yt-dlp` löst den öffentlichen HLS-Pfad auf; `ffmpeg` schreibt
+  das kurze 16-kHz-Mono-Segment ausschließlich nach stdout in einen
+  Arbeitsspeicher-Puffer. Weder Quellsegment noch WAV-Datei landen im
+  Dateisystem.
 - Die Transkription erfolgt über `POST /v1/audio/transcriptions` mit
   `model=whisper-1` und deutscher Sprachvorgabe.
 - Ein Segment wird nach erfolgreicher oder fehlgeschlagener Übertragung sofort
@@ -135,6 +137,8 @@ Kernfelder:
 - `confidence DOUBLE PRECISION NULL`
 - `discord_message_id TEXT NULL`
 - `discord_deleted_at TIMESTAMPTZ NULL`
+- `last_delete_error TEXT NULL`
+- `tombstoned_at TIMESTAMPTZ NULL`
 - `created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()`
 - `expires_at TIMESTAMPTZ NOT NULL DEFAULT (NOW() + INTERVAL '6 months')`
 
@@ -162,9 +166,9 @@ und Roh-Audio sind verboten.
   idempotent.
 - Danach wird der DB-Datensatz gelöscht.
 - Ist Discord vorübergehend nicht erreichbar, werden `content`, `metadata`,
-  Provider-/Modellfelder und Confidence fristgerecht geleert. Nur Session-ID,
-  technische Discord-Nachrichten-ID, Ablaufzeit und letzter Löschfehler bleiben
-  als Tombstone für den nächsten Retry erhalten.
+  Provider-/Modellfelder und Confidence fristgerecht geleert. Nur technische
+  Identifikatoren, Ereignisart und -zeit, Ablaufzeit sowie der letzte
+  Löschfehler bleiben als Tombstone für den nächsten Retry erhalten.
 - Nach erfolgreichem Retry wird auch der Tombstone gelöscht.
 - Der Cleanup löscht niemals Einträge aus `twitch_chat_messages` oder anderen
   bestehenden Tabellen.
@@ -184,6 +188,10 @@ und Roh-Audio sind verboten.
   auslösen.
 - Lange Inhalte werden deterministisch in mehrere Karten geteilt. Jede erzeugte
   Discord-Nachrichten-ID wird den enthaltenen Review-Ereignissen zugeordnet.
+- Ein einzelner langer Transkripttext wird bereits beim Speichern an
+  Wortgrenzen in fortlaufend nummerierte `streamer_transcript`-Ereignisse
+  geteilt. Dadurch gehört jedes Ereignis genau zu einer Discord-Karte und die
+  einzelne `discord_message_id` bleibt eindeutig.
 - Fehlgeschlagene Posts bleiben mit `discord_message_id = NULL` in der DB und
   werden durch einen begrenzten Hintergrund-Retry erneut versucht. Seltene
   Duplikate nach einem Crash zwischen Discord-POST und DB-Update sind im
