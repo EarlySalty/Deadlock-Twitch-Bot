@@ -155,7 +155,7 @@ impl CrewReviewStore {
         let cycle_id = cycle_id(&event.metadata)?;
         let mut transaction = self.pool.begin().await?;
         lock_event_session(&mut transaction, &event).await?;
-        lock_cycle(&mut transaction, cycle_id).await?;
+        lock_cycle(&mut transaction, event.session_id, cycle_id).await?;
         if changes_session_state(&event) {
             reject_stale_session(&mut transaction, &event).await?;
         }
@@ -198,10 +198,7 @@ impl CrewReviewStore {
         let cycle_id = cycle_id(&event.metadata)?;
         let mut transaction = self.pool.begin().await?;
         lock_event_session(&mut transaction, &event).await?;
-        lock_cycle(&mut transaction, cycle_id).await?;
-        if changes_session_state(&event) {
-            reject_stale_session(&mut transaction, &event).await?;
-        }
+        lock_cycle(&mut transaction, event.session_id, cycle_id).await?;
         reject_sealed_discord_cycle(&mut transaction, &event, cycle_id).await?;
         let claim_checks: Vec<bool> = sqlx::query_scalar(
             "SELECT COALESCE(
@@ -303,32 +300,84 @@ impl CrewReviewStore {
     ) -> Result<Option<ClaimedModelInputs>, StoreError> {
         let claim_id = Uuid::new_v4();
         let mut transaction = self.pool.begin().await?;
+        let cycle_ids: Vec<String> = sqlx::query_scalar(
+            "SELECT pending.metadata->>'cycle_id'
+               FROM twitch_crew_review_events pending
+              WHERE pending.review_session_id = $1
+                AND pending.event_kind IN ('ricky_message', 'streamer_transcript')
+                AND pending.metadata ? 'cycle_id'
+                AND NOT EXISTS (
+                    SELECT 1
+                      FROM twitch_crew_review_events completed
+                     WHERE completed.review_session_id = pending.review_session_id
+                       AND completed.metadata->>'cycle_id' = pending.metadata->>'cycle_id'
+                       AND completed.event_kind IN ('ai_decision', 'provider_error')
+                )
+              GROUP BY pending.review_session_id, pending.metadata->>'cycle_id'
+             HAVING BOOL_AND(pending.expires_at > NOW() + INTERVAL '5 minutes')
+                AND BOOL_AND(
+                    pending.model_claim_until IS NULL
+                    OR pending.model_claim_until <= NOW()
+                )
+              ORDER BY MIN(pending.occurred_at), MIN(pending.id),
+                       pending.metadata->>'cycle_id'",
+        )
+        .bind(session_id)
+        .fetch_all(&mut *transaction)
+        .await?;
+        if cycle_ids.is_empty() {
+            transaction.commit().await?;
+            return Ok(None);
+        }
+        let mut lock_ids = cycle_ids.clone();
+        lock_ids.sort_unstable();
+        for cycle_id in lock_ids {
+            lock_cycle(
+                &mut transaction,
+                session_id,
+                Uuid::parse_str(&cycle_id).map_err(|_| StoreError::InvalidMetadata)?,
+            )
+            .await?;
+        }
         let claimed_ids: Vec<i64> = sqlx::query_scalar(
-            "WITH candidates AS (
-                SELECT e.id
-                  FROM twitch_crew_review_events e
-                 WHERE e.review_session_id = $1
-                   AND e.event_kind IN ('ricky_message', 'streamer_transcript')
-                   AND e.metadata ? 'cycle_id'
-                   AND e.expires_at > NOW() + INTERVAL '5 minutes'
-                   AND (e.model_claim_until IS NULL OR e.model_claim_until <= NOW())
+            "WITH eligible_cycles AS (
+                SELECT pending.review_session_id,
+                       pending.metadata->>'cycle_id' AS cycle_id
+                  FROM twitch_crew_review_events pending
+                 WHERE pending.review_session_id = $1
+                   AND pending.event_kind IN ('ricky_message', 'streamer_transcript')
+                   AND pending.metadata ? 'cycle_id'
+                   AND pending.metadata->>'cycle_id' = ANY($2::text[])
                    AND NOT EXISTS (
                        SELECT 1
                          FROM twitch_crew_review_events completed
-                        WHERE completed.metadata->>'cycle_id' = e.metadata->>'cycle_id'
+                        WHERE completed.review_session_id = pending.review_session_id
+                          AND completed.metadata->>'cycle_id' = pending.metadata->>'cycle_id'
                           AND completed.event_kind IN ('ai_decision', 'provider_error')
                    )
-                 ORDER BY e.occurred_at, e.id
-                 FOR UPDATE SKIP LOCKED
+                 GROUP BY pending.review_session_id, pending.metadata->>'cycle_id'
+                HAVING BOOL_AND(pending.expires_at > NOW() + INTERVAL '5 minutes')
+                   AND BOOL_AND(
+                       pending.model_claim_until IS NULL
+                       OR pending.model_claim_until <= NOW()
+                   )
+            ), candidates AS (
+                SELECT event.id
+                  FROM twitch_crew_review_events event
+                  JOIN eligible_cycles eligible
+                    ON eligible.review_session_id = event.review_session_id
+                   AND eligible.cycle_id = event.metadata->>'cycle_id'
+                 WHERE event.event_kind IN ('ricky_message', 'streamer_transcript')
             )
             UPDATE twitch_crew_review_events claimed
-               SET model_claim_id = $2,
+               SET model_claim_id = $3,
                    model_claim_until = NOW() + INTERVAL '5 minutes'
               FROM candidates
              WHERE claimed.id = candidates.id
             RETURNING claimed.id",
         )
         .bind(session_id)
+        .bind(&cycle_ids)
         .bind(claim_id)
         .fetch_all(&mut *transaction)
         .await?;
@@ -370,13 +419,13 @@ impl CrewReviewStore {
         }
         let claim_id = Uuid::new_v4();
         let mut transaction = self.pool.begin().await?;
-        let cycle_ids: Vec<String> = sqlx::query_scalar(
-            "SELECT pending.metadata->>'cycle_id'
+        let cycle_keys: Vec<(Uuid, String)> = sqlx::query_as(
+            "SELECT pending.review_session_id, pending.metadata->>'cycle_id'
                FROM twitch_crew_review_events pending
-              WHERE pending.discord_message_id IS NULL
-                AND pending.metadata ? 'cycle_id'
-              GROUP BY pending.metadata->>'cycle_id'
-             HAVING BOOL_AND(pending.expires_at > NOW() + INTERVAL '5 minutes')
+              WHERE pending.metadata ? 'cycle_id'
+              GROUP BY pending.review_session_id, pending.metadata->>'cycle_id'
+             HAVING BOOL_AND(pending.discord_message_id IS NULL)
+                AND BOOL_AND(pending.expires_at > NOW() + INTERVAL '5 minutes')
                 AND BOOL_AND(
                     pending.discord_claim_until IS NULL
                     OR pending.discord_claim_until <= NOW()
@@ -384,34 +433,44 @@ impl CrewReviewStore {
                 AND BOOL_OR(pending.event_kind IN (
                     'ai_decision', 'provider_error', 'session_ended'
                 ))
-              ORDER BY MIN(pending.occurred_at), MIN(pending.id)
+              ORDER BY MIN(pending.occurred_at), MIN(pending.id),
+                       pending.review_session_id, pending.metadata->>'cycle_id'
               LIMIT $1",
         )
         .bind(limit)
         .fetch_all(&mut *transaction)
         .await?;
-        if cycle_ids.is_empty() {
+        if cycle_keys.is_empty() {
             transaction.commit().await?;
             return Ok(Vec::new());
         }
-        let mut lock_ids = cycle_ids.clone();
+        let mut lock_ids = cycle_keys.clone();
         lock_ids.sort_unstable();
-        for cycle_id in lock_ids {
+        for (session_id, cycle_id) in lock_ids {
             lock_cycle(
                 &mut transaction,
+                session_id,
                 Uuid::parse_str(&cycle_id).map_err(|_| StoreError::InvalidMetadata)?,
             )
             .await?;
         }
+        let (session_ids, cycle_ids): (Vec<Uuid>, Vec<String>) = cycle_keys.into_iter().unzip();
         let claimed_ids: Vec<i64> = sqlx::query_scalar(
-            "WITH eligible_cycles AS (
-                SELECT pending.metadata->>'cycle_id' AS cycle_id
+            "WITH selected_cycles AS (
+                SELECT *
+                  FROM UNNEST($1::uuid[], $2::text[])
+                       AS selected(review_session_id, cycle_id)
+            ), eligible_cycles AS (
+                SELECT pending.review_session_id,
+                       pending.metadata->>'cycle_id' AS cycle_id
                   FROM twitch_crew_review_events pending
-                 WHERE pending.discord_message_id IS NULL
-                   AND pending.metadata ? 'cycle_id'
-                   AND pending.metadata->>'cycle_id' = ANY($1::text[])
-                 GROUP BY pending.metadata->>'cycle_id'
-                HAVING BOOL_AND(pending.expires_at > NOW() + INTERVAL '5 minutes')
+                  JOIN selected_cycles selected
+                    ON selected.review_session_id = pending.review_session_id
+                   AND selected.cycle_id = pending.metadata->>'cycle_id'
+                 WHERE pending.metadata ? 'cycle_id'
+                 GROUP BY pending.review_session_id, pending.metadata->>'cycle_id'
+                HAVING BOOL_AND(pending.discord_message_id IS NULL)
+                   AND BOOL_AND(pending.expires_at > NOW() + INTERVAL '5 minutes')
                    AND BOOL_AND(
                        pending.discord_claim_until IS NULL
                        OR pending.discord_claim_until <= NOW()
@@ -423,16 +482,17 @@ impl CrewReviewStore {
                 SELECT event.id
                   FROM twitch_crew_review_events event
                   JOIN eligible_cycles eligible
-                    ON eligible.cycle_id = event.metadata->>'cycle_id'
-                 WHERE event.discord_message_id IS NULL
+                    ON eligible.review_session_id = event.review_session_id
+                   AND eligible.cycle_id = event.metadata->>'cycle_id'
             )
             UPDATE twitch_crew_review_events claimed
-               SET discord_claim_id = $2,
+               SET discord_claim_id = $3,
                    discord_claim_until = NOW() + INTERVAL '5 minutes'
               FROM candidates
              WHERE claimed.id = candidates.id
             RETURNING claimed.id",
         )
+        .bind(&session_ids)
         .bind(&cycle_ids)
         .bind(claim_id)
         .fetch_all(&mut *transaction)
@@ -446,8 +506,14 @@ impl CrewReviewStore {
               FROM twitch_crew_review_events e
               WHERE e.discord_claim_id = $1
               ORDER BY
-                  MIN(e.occurred_at) OVER (PARTITION BY e.metadata->>'cycle_id'),
-                  MIN(e.id) OVER (PARTITION BY e.metadata->>'cycle_id'),
+                  MIN(e.occurred_at) OVER (
+                      PARTITION BY e.review_session_id, e.metadata->>'cycle_id'
+                  ),
+                  MIN(e.id) OVER (
+                      PARTITION BY e.review_session_id, e.metadata->>'cycle_id'
+                  ),
+                  e.review_session_id,
+                  e.metadata->>'cycle_id',
                   e.occurred_at,
                   e.id"
         );
@@ -469,7 +535,11 @@ impl CrewReviewStore {
         let mut cycles: Vec<ReviewCycle> = Vec::new();
         for event in events {
             let cycle_id = cycle_id(&event.metadata)?;
-            if cycles.last().map(|cycle| cycle.cycle_id) != Some(cycle_id) {
+            if cycles
+                .last()
+                .map(|cycle| (cycle.session_id, cycle.cycle_id))
+                != Some((event.session_id, cycle_id))
+            {
                 cycles.push(ReviewCycle {
                     cycle_id,
                     session_id: event.session_id,
@@ -501,8 +571,8 @@ impl CrewReviewStore {
             return Err(StoreError::InvalidClaim);
         }
         let mut transaction = self.pool.begin().await?;
-        let requested_rows: Vec<(i64, Option<String>)> = sqlx::query_as(
-            "SELECT id, metadata->>'cycle_id'
+        let requested_rows: Vec<(i64, Uuid, Option<String>)> = sqlx::query_as(
+            "SELECT id, review_session_id, metadata->>'cycle_id'
                FROM twitch_crew_review_events
               WHERE id = ANY($1::bigint[])
                 AND discord_claim_id = $2
@@ -518,20 +588,35 @@ impl CrewReviewStore {
         if requested_rows.len() != requested_ids.len() {
             return Err(StoreError::InvalidClaim);
         }
-        let cycle_ids: HashSet<String> = requested_rows
+        let mut cycle_keys: Vec<(Uuid, String)> = requested_rows
             .into_iter()
-            .map(|(_, cycle_id)| cycle_id.ok_or(StoreError::InvalidClaim))
-            .collect::<Result<_, _>>()?;
-        let cycle_ids: Vec<String> = cycle_ids.into_iter().collect();
+            .map(|(_, session_id, cycle_id)| {
+                cycle_id
+                    .map(|cycle_id| (session_id, cycle_id))
+                    .ok_or(StoreError::InvalidClaim)
+            })
+            .collect::<Result<HashSet<_>, _>>()?
+            .into_iter()
+            .collect();
+        cycle_keys.sort_unstable();
+        let (session_ids, cycle_ids): (Vec<Uuid>, Vec<String>) = cycle_keys.into_iter().unzip();
         let claimed_ids: HashSet<i64> = sqlx::query_scalar(
-            "SELECT id
-               FROM twitch_crew_review_events
-              WHERE discord_claim_id = $1
-                AND discord_message_id IS NULL
-                AND metadata->>'cycle_id' = ANY($2::text[])
-              FOR UPDATE",
+            "WITH requested_cycles AS (
+                SELECT *
+                  FROM UNNEST($2::uuid[], $3::text[])
+                       AS requested(review_session_id, cycle_id)
+            )
+            SELECT event.id
+              FROM twitch_crew_review_events event
+              JOIN requested_cycles requested
+                ON requested.review_session_id = event.review_session_id
+               AND requested.cycle_id = event.metadata->>'cycle_id'
+             WHERE event.discord_claim_id = $1
+               AND event.discord_message_id IS NULL
+             FOR UPDATE",
         )
         .bind(claim_id)
+        .bind(&session_ids)
         .bind(&cycle_ids)
         .fetch_all(&mut *transaction)
         .await?
@@ -569,7 +654,7 @@ impl CrewReviewStore {
 
     pub async fn expired_discord_groups(
         &self,
-        now: DateTime<Utc>,
+        _now: DateTime<Utc>,
         limit: i64,
     ) -> Result<Vec<ExpiredDiscordGroup>, StoreError> {
         if limit <= 0 {
@@ -580,13 +665,12 @@ impl CrewReviewStore {
                FROM twitch_crew_review_events
               WHERE discord_message_id IS NOT NULL
               GROUP BY discord_message_id
-             HAVING BOOL_AND(expires_at <= $1)
-                AND BOOL_AND(model_claim_until IS NULL OR model_claim_until <= $1)
-                AND BOOL_AND(discord_claim_until IS NULL OR discord_claim_until <= $1)
+             HAVING BOOL_AND(expires_at <= NOW())
+                AND BOOL_AND(model_claim_until IS NULL OR model_claim_until <= NOW())
+                AND BOOL_AND(discord_claim_until IS NULL OR discord_claim_until <= NOW())
               ORDER BY MIN(expires_at), discord_message_id
-              LIMIT $2",
+              LIMIT $1",
         )
-        .bind(now)
         .bind(limit)
         .fetch_all(&self.pool)
         .await?;
@@ -660,15 +744,14 @@ impl CrewReviewStore {
         .rows_affected())
     }
 
-    pub async fn delete_expired_unposted(&self, now: DateTime<Utc>) -> Result<u64, StoreError> {
+    pub async fn delete_expired_unposted(&self, _now: DateTime<Utc>) -> Result<u64, StoreError> {
         Ok(sqlx::query(
             "DELETE FROM twitch_crew_review_events
               WHERE discord_message_id IS NULL
-                AND expires_at <= $1
-                AND (model_claim_until IS NULL OR model_claim_until <= $1)
-                AND (discord_claim_until IS NULL OR discord_claim_until <= $1)",
+                AND expires_at <= NOW()
+                AND (model_claim_until IS NULL OR model_claim_until <= NOW())
+                AND (discord_claim_until IS NULL OR discord_claim_until <= NOW())",
         )
-        .bind(now)
         .execute(&self.pool)
         .await?
         .rows_affected())
@@ -743,9 +826,11 @@ async fn lock_channel(
 
 async fn lock_cycle(
     transaction: &mut Transaction<'_, Postgres>,
+    session_id: Uuid,
     cycle_id: Uuid,
 ) -> Result<(), StoreError> {
-    sqlx::query("SELECT pg_advisory_xact_lock(hashtextextended($1, 1))")
+    sqlx::query("SELECT pg_advisory_xact_lock(hashtextextended($1 || ':' || $2, 1))")
+        .bind(session_id.to_string())
         .bind(cycle_id.to_string())
         .execute(&mut **transaction)
         .await?;

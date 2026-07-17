@@ -154,6 +154,32 @@ async fn wait_for_advisory_query(pool: &PgPool, query_fragment: &str) {
     }
 }
 
+async fn wait_for_lock_query(pool: &PgPool, query_fragment: &str) {
+    tokio::time::timeout(std::time::Duration::from_secs(5), async {
+        loop {
+            let waiting: bool = sqlx::query_scalar(
+                "SELECT EXISTS (
+                    SELECT 1
+                      FROM pg_stat_activity
+                     WHERE datname = current_database()
+                       AND wait_event_type = 'Lock'
+                       AND query LIKE '%' || $1 || '%'
+                )",
+            )
+            .bind(query_fragment)
+            .fetch_one(pool)
+            .await
+            .expect("inspect lock waiters");
+            if waiting {
+                return;
+            }
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .expect("query did not reach lock barrier");
+}
+
 #[test]
 fn ricky_trigger_verwendet_die_stabile_twitch_id() {
     assert_eq!(RICKY_TWITCH_USER_ID, "147713656");
@@ -639,7 +665,7 @@ async fn geloeschte_discord_gruppe_entfernt_erst_danach_db_zeilen() {
     .unwrap();
 
     assert!(store
-        .expired_discord_groups(Utc::now(), 10)
+        .expired_discord_groups(Utc::now() + chrono::Duration::days(3_650), 10)
         .await
         .unwrap()
         .is_empty());
@@ -661,7 +687,10 @@ async fn geloeschte_discord_gruppe_entfernt_erst_danach_db_zeilen() {
         .execute(&pool)
         .await
         .unwrap();
-    let groups = store.expired_discord_groups(Utc::now(), 10).await.unwrap();
+    let groups = store
+        .expired_discord_groups(Utc.timestamp_opt(0, 0).unwrap(), 10)
+        .await
+        .unwrap();
     assert_eq!(groups.len(), 1);
     assert_eq!(groups[0].discord_message_id, "discord-mixed");
     assert_eq!(groups[0].event_ids, vec![expired_id, fresh_id]);
@@ -697,7 +726,7 @@ async fn pending_queues_gruppieren_nur_unverarbeitete_und_ungepostete_events() {
         .await
         .unwrap()
         .unwrap();
-    let decision = store
+    store
         .append_claimed_model_event(
             completed_claim.claim_id,
             event(
@@ -755,14 +784,7 @@ async fn pending_queues_gruppieren_nur_unverarbeitete_und_ungepostete_events() {
     .execute(&pool)
     .await
     .unwrap();
-    let cycles = store.pending_discord_cycles(10).await.unwrap();
-    assert_eq!(cycles.len(), 1);
-    assert_eq!(cycles[0].cycle_id, completed_cycle);
-    assert_eq!(cycles[0].session_id, session_id);
-    assert_eq!(cycles[0].channel_login, "pending");
-    assert_eq!(cycles[0].events.len(), 1);
-    assert_eq!(cycles[0].events[0].id, decision);
-    assert!(cycles[0].claim_until < cycles[0].events[0].expires_at);
+    assert!(store.pending_discord_cycles(10).await.unwrap().is_empty());
 }
 
 #[tokio::test]
@@ -885,6 +907,241 @@ async fn model_inputs_werden_atomar_geclaimt_und_nach_timeout_freigegeben() {
     .await
     .unwrap();
     assert_eq!(remaining_claims, 0);
+}
+
+#[tokio::test]
+async fn modellcycle_wird_trotz_konkurrierender_chunk_locks_nur_einmal_geclaimt() {
+    let Some(pool) = test_pool("crew_review_model_cycle_claim").await else {
+        return;
+    };
+    let store = CrewReviewStore::new(pool.clone());
+    let now = Utc::now();
+    let session_id = seed_session(&pool, "model-cycle-claim", now).await;
+    let cycle_id = Uuid::new_v4();
+    let mut chunked = event(
+        session_id,
+        "model-cycle-claim",
+        ReviewEventKind::StreamerTranscript,
+        now,
+        cycle_id,
+    );
+    chunked.content = Some("wort ".repeat(260));
+    store.append_event(chunked).await.unwrap();
+    let input_ids: Vec<i64> = sqlx::query_scalar(
+        "SELECT id
+           FROM twitch_crew_review_events
+          WHERE review_session_id = $1
+            AND metadata->>'cycle_id' = $2
+            AND event_kind = 'streamer_transcript'
+          ORDER BY id",
+    )
+    .bind(session_id)
+    .bind(cycle_id.to_string())
+    .fetch_all(&pool)
+    .await
+    .unwrap();
+    assert_eq!(input_ids.len(), 2);
+
+    let mut gate = pool.begin().await.unwrap();
+    sqlx::query("SELECT id FROM twitch_crew_review_events WHERE id = $1 FOR UPDATE")
+        .bind(input_ids[1])
+        .execute(&mut *gate)
+        .await
+        .unwrap();
+
+    let first_store = store.clone();
+    let mut first_task =
+        tokio::spawn(async move { first_store.pending_model_inputs(session_id).await });
+    let early_first = tokio::select! {
+        result = &mut first_task => Some(result.unwrap()),
+        () = wait_for_lock_query(&pool, "WITH eligible_cycles AS") => None,
+    };
+    assert!(
+        early_first.is_none(),
+        "erster Worker hat einen Teilcycle geclaimt: {early_first:?}"
+    );
+
+    let second_store = store.clone();
+    let mut second_task =
+        tokio::spawn(async move { second_store.pending_model_inputs(session_id).await });
+    let early_second = tokio::select! {
+        result = &mut second_task => Some(result.unwrap()),
+        () = wait_for_advisory_query(&pool, "pg_advisory_xact_lock") => None,
+    };
+    assert!(
+        early_second.is_none(),
+        "zweiter Worker hat den gesperrten Cycle konkurrierend geclaimt: {early_second:?}"
+    );
+
+    gate.rollback().await.unwrap();
+    let claims = [
+        first_task.await.unwrap().unwrap(),
+        second_task.await.unwrap().unwrap(),
+    ];
+    assert_eq!(claims.iter().filter(|claim| claim.is_some()).count(), 1);
+    let claimed_ids = claims
+        .into_iter()
+        .flatten()
+        .next()
+        .unwrap()
+        .events
+        .into_iter()
+        .map(|event| event.id)
+        .collect::<Vec<_>>();
+    assert_eq!(claimed_ids, input_ids);
+}
+
+#[tokio::test]
+async fn authentifizierter_modellabschluss_ueberlebt_sessionende_und_reclaim() {
+    let Some(pool) = test_pool("crew_review_model_completion_after_end").await else {
+        return;
+    };
+    let store = CrewReviewStore::new(pool.clone());
+    let now = Utc::now();
+
+    let first_session = seed_session(&pool, "completion-before-end", now).await;
+    let first_cycle = Uuid::new_v4();
+    store
+        .append_event(event(
+            first_session,
+            "completion-before-end",
+            ReviewEventKind::RickyMessage,
+            now,
+            first_cycle,
+        ))
+        .await
+        .unwrap();
+    let first_claim = store
+        .pending_model_inputs(first_session)
+        .await
+        .unwrap()
+        .unwrap();
+    let mut first_decision = event(
+        first_session,
+        "completion-before-end",
+        ReviewEventKind::AiDecision,
+        now + chrono::Duration::seconds(1),
+        first_cycle,
+    );
+    first_decision.metadata["topic_active"] = json!(true);
+    store
+        .append_claimed_model_event(first_claim.claim_id, first_decision)
+        .await
+        .unwrap();
+    store
+        .append_event(event(
+            first_session,
+            "completion-before-end",
+            ReviewEventKind::SessionEnded,
+            now + chrono::Duration::seconds(2),
+            Uuid::new_v4(),
+        ))
+        .await
+        .unwrap();
+
+    let second_session = seed_session(&pool, "completion-after-end", now).await;
+    let second_cycle = Uuid::new_v4();
+    store
+        .append_event(event(
+            second_session,
+            "completion-after-end",
+            ReviewEventKind::RickyMessage,
+            now,
+            second_cycle,
+        ))
+        .await
+        .unwrap();
+    let second_claim = store
+        .pending_model_inputs(second_session)
+        .await
+        .unwrap()
+        .unwrap();
+    store
+        .append_event(event(
+            second_session,
+            "completion-after-end",
+            ReviewEventKind::SessionEnded,
+            now + chrono::Duration::seconds(1),
+            Uuid::new_v4(),
+        ))
+        .await
+        .unwrap();
+    let mut second_decision = event(
+        second_session,
+        "completion-after-end",
+        ReviewEventKind::AiDecision,
+        now + chrono::Duration::seconds(2),
+        second_cycle,
+    );
+    second_decision.metadata["topic_active"] = json!(true);
+    store
+        .append_claimed_model_event(second_claim.claim_id, second_decision)
+        .await
+        .unwrap();
+
+    let reclaim_session = seed_session(&pool, "completion-reclaim-after-end", now).await;
+    let reclaim_cycle = Uuid::new_v4();
+    store
+        .append_event(event(
+            reclaim_session,
+            "completion-reclaim-after-end",
+            ReviewEventKind::StreamerTranscript,
+            now,
+            reclaim_cycle,
+        ))
+        .await
+        .unwrap();
+    let stale_claim = store
+        .pending_model_inputs(reclaim_session)
+        .await
+        .unwrap()
+        .unwrap();
+    store
+        .append_event(event(
+            reclaim_session,
+            "completion-reclaim-after-end",
+            ReviewEventKind::SessionEnded,
+            now + chrono::Duration::seconds(1),
+            Uuid::new_v4(),
+        ))
+        .await
+        .unwrap();
+    sqlx::query(
+        "UPDATE twitch_crew_review_events
+            SET model_claim_until = NOW() - INTERVAL '1 second'
+          WHERE model_claim_id = $1",
+    )
+    .bind(stale_claim.claim_id)
+    .execute(&pool)
+    .await
+    .unwrap();
+    let reclaimed = store
+        .pending_model_inputs(reclaim_session)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_ne!(reclaimed.claim_id, stale_claim.claim_id);
+    let mut reclaimed_decision = event(
+        reclaim_session,
+        "completion-reclaim-after-end",
+        ReviewEventKind::AiDecision,
+        now + chrono::Duration::seconds(2),
+        reclaim_cycle,
+    );
+    reclaimed_decision.metadata["topic_active"] = json!(true);
+    store
+        .append_claimed_model_event(reclaimed.claim_id, reclaimed_decision)
+        .await
+        .unwrap();
+
+    assert!(store.active_sessions(Utc::now()).await.unwrap().is_empty());
+    let session_starts: i64 = sqlx::query_scalar(
+        "SELECT COUNT(*) FROM twitch_crew_review_events WHERE event_kind = 'session_started'",
+    )
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!(session_starts, 3);
 }
 
 #[tokio::test]
@@ -1267,6 +1524,65 @@ async fn discord_claimt_keinen_nur_teilweise_claimbaren_cycle() {
 }
 
 #[tokio::test]
+async fn discord_claim_gruppiert_ungepostete_zeilen_nach_session_und_cycle() {
+    let Some(pool) = test_pool("crew_review_discord_session_cycle").await else {
+        return;
+    };
+    let store = CrewReviewStore::new(pool.clone());
+    let now = Utc::now();
+    let cycle_id = Uuid::new_v4();
+    let mixed_session = seed_session(&pool, "discord-mixed-cycle", now).await;
+    let posted_id = store
+        .append_event(event(
+            mixed_session,
+            "discord-mixed-cycle",
+            ReviewEventKind::AiDecision,
+            now,
+            cycle_id,
+        ))
+        .await
+        .unwrap();
+    store
+        .append_event(event(
+            mixed_session,
+            "discord-mixed-cycle",
+            ReviewEventKind::AiDraft,
+            now + chrono::Duration::seconds(1),
+            cycle_id,
+        ))
+        .await
+        .unwrap();
+    sqlx::query(
+        "UPDATE twitch_crew_review_events
+            SET discord_message_id = 'discord-already-posted'
+          WHERE id = $1",
+    )
+    .bind(posted_id)
+    .execute(&pool)
+    .await
+    .unwrap();
+
+    let eligible_session = seed_session(&pool, "discord-eligible-cycle", now).await;
+    let eligible_id = store
+        .append_event(event(
+            eligible_session,
+            "discord-eligible-cycle",
+            ReviewEventKind::ProviderError,
+            now + chrono::Duration::seconds(2),
+            cycle_id,
+        ))
+        .await
+        .unwrap();
+
+    let cycles = store.pending_discord_cycles(10).await.unwrap();
+    assert_eq!(cycles.len(), 1);
+    assert_eq!(cycles[0].session_id, eligible_session);
+    assert_eq!(cycles[0].cycle_id, cycle_id);
+    assert_eq!(cycles[0].events.len(), 1);
+    assert_eq!(cycles[0].events[0].id, eligible_id);
+}
+
+#[tokio::test]
 async fn discord_claim_und_late_append_versiegeln_den_cycle_atomar() {
     let Some(pool) = test_pool("crew_review_discord_late_append").await else {
         return;
@@ -1313,7 +1629,7 @@ async fn discord_claim_und_late_append_versiegeln_den_cycle_atomar() {
     let mut claim_task = tokio::spawn(async move { claim_store.pending_discord_cycles(1).await });
     let early_claim = tokio::select! {
         result = &mut claim_task => Some(result.unwrap()),
-        () = wait_for_advisory_query(&pool, "WITH eligible_cycles AS") => None,
+        () = wait_for_advisory_query(&pool, "WITH selected_cycles AS") => None,
     };
     assert!(
         early_claim.is_none(),
@@ -1334,7 +1650,7 @@ async fn discord_claim_und_late_append_versiegeln_den_cycle_atomar() {
     });
     let early_append = tokio::select! {
         result = &mut append_task => Some(result.unwrap()),
-        () = wait_for_advisory_query(&pool, "hashtextextended($1, 1)") => None,
+        () = wait_for_advisory_query(&pool, "hashtextextended($1 || ':' || $2, 1)") => None,
     };
 
     gate.rollback().await.unwrap();
@@ -1452,12 +1768,28 @@ async fn cleanup_und_claim_treffen_sich_nie_ueber_der_loeschfrist() {
     assert!(claim.claim_until < expires_at);
     assert_eq!(
         store
-            .delete_expired_unposted(expires_at - chrono::Duration::microseconds(1))
+            .delete_expired_unposted(now + chrono::Duration::days(3_650))
             .await
             .unwrap(),
         0
     );
-    assert_eq!(store.delete_expired_unposted(expires_at).await.unwrap(), 1);
+    sqlx::query(
+        "UPDATE twitch_crew_review_events
+            SET expires_at = occurred_at,
+                model_claim_until = NOW() - INTERVAL '1 second'
+          WHERE id = $1",
+    )
+    .bind(event_id)
+    .execute(&pool)
+    .await
+    .unwrap();
+    assert_eq!(
+        store
+            .delete_expired_unposted(Utc.timestamp_opt(0, 0).unwrap())
+            .await
+            .unwrap(),
+        1
+    );
 }
 
 #[tokio::test]
