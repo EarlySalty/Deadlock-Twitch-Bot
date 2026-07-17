@@ -320,8 +320,8 @@ impl CrewReviewStore {
         let claim_checks: Vec<bool> = sqlx::query_scalar(
             "SELECT COALESCE(
                        model_claim_id = $3
-                       AND model_claim_until > NOW()
-                       AND expires_at > NOW(),
+                       AND model_claim_until > clock_timestamp()
+                       AND expires_at > clock_timestamp(),
                        FALSE
                    )
                FROM twitch_crew_review_events
@@ -344,19 +344,25 @@ impl CrewReviewStore {
             event.event_kind,
             ReviewEventKind::AiDecision | ReviewEventKind::ProviderError
         ) {
-            sqlx::query(
+            let cleared = sqlx::query(
                 "UPDATE twitch_crew_review_events
                     SET model_claim_id = NULL,
                         model_claim_until = NULL
                   WHERE review_session_id = $1
                     AND metadata->>'cycle_id' = $2
-                    AND model_claim_id = $3",
+                    AND model_claim_id = $3
+                    AND model_claim_until > clock_timestamp()
+                    AND expires_at > clock_timestamp()",
             )
             .bind(event.session_id)
             .bind(cycle_id.to_string())
             .bind(claim_id)
             .execute(&mut *transaction)
-            .await?;
+            .await?
+            .rows_affected();
+            if cleared != claim_checks.len() as u64 {
+                return Err(StoreError::InvalidClaim);
+            }
         }
         transaction.commit().await?;
         Ok(first_id)
@@ -393,8 +399,8 @@ impl CrewReviewStore {
         let claim_checks: Vec<bool> = sqlx::query_scalar(
             "SELECT COALESCE(
                        model_claim_id = $3
-                       AND model_claim_until > NOW()
-                       AND expires_at > NOW(),
+                       AND model_claim_until > clock_timestamp()
+                       AND expires_at > clock_timestamp(),
                        FALSE
                    )
                FROM twitch_crew_review_events
@@ -421,7 +427,9 @@ impl CrewReviewStore {
                     model_claim_until = NULL
               WHERE review_session_id = $1
                 AND metadata->>'cycle_id' = $2
-                AND model_claim_id = $3",
+                AND model_claim_id = $3
+                AND model_claim_until > clock_timestamp()
+                AND expires_at > clock_timestamp()",
         )
         .bind(terminal.session_id)
         .bind(terminal_cycle_id.to_string())
@@ -527,10 +535,12 @@ impl CrewReviewStore {
                 AND pending.metadata ? 'cycle_id'
                 AND terminal.cycle_id IS NULL
               GROUP BY pending.review_session_id, pending.metadata->>'cycle_id'
-             HAVING BOOL_AND(pending.expires_at > NOW() + INTERVAL '5 minutes')
+             HAVING BOOL_AND(
+                    pending.expires_at > clock_timestamp() + INTERVAL '5 minutes'
+                )
                 AND BOOL_AND(
                     pending.model_claim_until IS NULL
-                    OR pending.model_claim_until <= NOW()
+                    OR pending.model_claim_until <= clock_timestamp()
                 )
               ORDER BY MIN(pending.occurred_at), MIN(pending.id),
                        pending.metadata->>'cycle_id'",
@@ -576,10 +586,12 @@ impl CrewReviewStore {
                    AND pending.metadata->>'cycle_id' = ANY($2::text[])
                    AND terminal.cycle_id IS NULL
                  GROUP BY pending.review_session_id, pending.metadata->>'cycle_id'
-                HAVING BOOL_AND(pending.expires_at > NOW() + INTERVAL '5 minutes')
+                HAVING BOOL_AND(
+                       pending.expires_at > clock_timestamp() + INTERVAL '5 minutes'
+                   )
                    AND BOOL_AND(
                        pending.model_claim_until IS NULL
-                       OR pending.model_claim_until <= NOW()
+                       OR pending.model_claim_until <= clock_timestamp()
                    )
             ), candidates AS (
                 SELECT event.id
@@ -591,7 +603,7 @@ impl CrewReviewStore {
             )
             UPDATE twitch_crew_review_events claimed
                SET model_claim_id = $3,
-                   model_claim_until = NOW() + INTERVAL '5 minutes'
+                   model_claim_until = clock_timestamp() + INTERVAL '5 minutes'
               FROM candidates
              WHERE claimed.id = candidates.id
             RETURNING claimed.id",
@@ -645,10 +657,12 @@ impl CrewReviewStore {
               WHERE pending.metadata ? 'cycle_id'
               GROUP BY pending.review_session_id, pending.metadata->>'cycle_id'
              HAVING BOOL_AND(pending.discord_message_id IS NULL)
-                AND BOOL_AND(pending.expires_at > NOW() + INTERVAL '5 minutes')
+                AND BOOL_AND(
+                    pending.expires_at > clock_timestamp() + INTERVAL '5 minutes'
+                )
                 AND BOOL_AND(
                     pending.discord_claim_until IS NULL
-                    OR pending.discord_claim_until <= NOW()
+                    OR pending.discord_claim_until <= clock_timestamp()
                 )
                 AND BOOL_OR(pending.event_kind IN (
                     'ai_decision', 'provider_error', 'session_ended'
@@ -690,10 +704,12 @@ impl CrewReviewStore {
                  WHERE pending.metadata ? 'cycle_id'
                  GROUP BY pending.review_session_id, pending.metadata->>'cycle_id'
                 HAVING BOOL_AND(pending.discord_message_id IS NULL)
-                   AND BOOL_AND(pending.expires_at > NOW() + INTERVAL '5 minutes')
+                   AND BOOL_AND(
+                       pending.expires_at > clock_timestamp() + INTERVAL '5 minutes'
+                   )
                    AND BOOL_AND(
                        pending.discord_claim_until IS NULL
-                       OR pending.discord_claim_until <= NOW()
+                       OR pending.discord_claim_until <= clock_timestamp()
                    )
                    AND BOOL_OR(pending.event_kind IN (
                        'ai_decision', 'provider_error', 'session_ended'
@@ -707,7 +723,7 @@ impl CrewReviewStore {
             )
             UPDATE twitch_crew_review_events claimed
                SET discord_claim_id = $3,
-                   discord_claim_until = NOW() + INTERVAL '5 minutes'
+                   discord_claim_until = clock_timestamp() + INTERVAL '5 minutes'
               FROM candidates
              WHERE claimed.id = candidates.id
             RETURNING claimed.id",
@@ -796,8 +812,8 @@ impl CrewReviewStore {
                FROM twitch_crew_review_events
               WHERE id = ANY($1::bigint[])
                 AND discord_claim_id = $2
-                AND discord_claim_until > NOW()
-                AND expires_at > NOW()
+                AND discord_claim_until > clock_timestamp()
+                AND expires_at > clock_timestamp()
                 AND discord_message_id IS NULL
               FOR UPDATE",
         )
@@ -854,8 +870,8 @@ impl CrewReviewStore {
                     discord_claim_until = NULL
               WHERE id = ANY($2::bigint[])
                 AND discord_claim_id = $3
-                AND discord_claim_until > NOW()
-                AND expires_at > NOW()
+                AND discord_claim_until > clock_timestamp()
+                AND expires_at > clock_timestamp()
                 AND discord_message_id IS NULL",
         )
         .bind(message_id)
@@ -899,8 +915,8 @@ impl CrewReviewStore {
                FROM twitch_crew_review_events
               WHERE id = ANY($1::bigint[])
                 AND discord_claim_id = $2
-                AND discord_claim_until > NOW()
-                AND expires_at > NOW()
+                AND discord_claim_until > clock_timestamp()
+                AND expires_at > clock_timestamp()
                 AND discord_message_id IS NULL
               FOR UPDATE",
         )
@@ -929,8 +945,8 @@ impl CrewReviewStore {
             "SELECT id,
                     COALESCE(
                         discord_claim_id = $3
-                        AND discord_claim_until > NOW()
-                        AND expires_at > NOW(),
+                        AND discord_claim_until > clock_timestamp()
+                        AND expires_at > clock_timestamp(),
                         FALSE
                     )
                FROM twitch_crew_review_events
@@ -959,8 +975,8 @@ impl CrewReviewStore {
                         discord_claim_until = NULL
                   WHERE id = ANY($2::bigint[])
                     AND discord_claim_id = $3
-                    AND discord_claim_until > NOW()
-                    AND expires_at > NOW()
+                    AND discord_claim_until > clock_timestamp()
+                    AND expires_at > clock_timestamp()
                     AND discord_message_id IS NULL",
             )
             .bind(&card.message_id)
@@ -1283,7 +1299,7 @@ async fn reject_sealed_discord_cycle(
                    discord_message_id IS NOT NULL
                    OR (
                        discord_claim_id IS NOT NULL
-                       AND discord_claim_until > NOW()
+                       AND discord_claim_until > clock_timestamp()
                    )
                )
         )",
@@ -1302,6 +1318,16 @@ async fn insert_event_chunks(
     transaction: &mut Transaction<'_, Postgres>,
     event: &NewReviewEvent,
 ) -> Result<i64, StoreError> {
+    if matches!(
+        event.event_kind,
+        ReviewEventKind::AiDecision | ReviewEventKind::ProviderError
+    ) && event
+        .content
+        .as_deref()
+        .is_some_and(|content| content.chars().count() > MAX_CONTENT_CHARS)
+    {
+        return Err(StoreError::InvalidClaim);
+    }
     validate_metadata(&event.metadata)?;
     let chunks = content_chunks(event.content.as_deref());
     let chunk_count = chunks.len();

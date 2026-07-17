@@ -2784,3 +2784,361 @@ async fn discord_mehrkarten_markierung_rollt_ungueltige_mengen_vollstaendig_zuru
         .await
         .unwrap();
 }
+
+#[tokio::test]
+async fn modellabschluss_schreibt_nach_lease_ablauf_im_advisory_lock_nichts() {
+    let Some(pool) = test_pool("crew_review_model_lease_lock_wait").await else {
+        return;
+    };
+    let store = CrewReviewStore::new(pool.clone());
+    let now = Utc::now();
+    let channel = "model-lease-lock-wait";
+    let session_id = seed_session(&pool, channel, now).await;
+    let cycle_id = Uuid::new_v4();
+    store
+        .append_event(event(
+            session_id,
+            channel,
+            ReviewEventKind::RickyMessage,
+            now,
+            cycle_id,
+        ))
+        .await
+        .unwrap();
+    let claim = store
+        .pending_model_inputs(session_id)
+        .await
+        .unwrap()
+        .unwrap();
+    let mut blocker = pool.begin().await.unwrap();
+    sqlx::query("SELECT pg_advisory_xact_lock(hashtextextended($1, 0))")
+        .bind(channel)
+        .execute(&mut *blocker)
+        .await
+        .unwrap();
+    let completion_store = store.clone();
+    let completion = tokio::spawn(async move {
+        completion_store
+            .complete_claimed_model_cycle(
+                claim.claim_id,
+                Some(event(
+                    session_id,
+                    channel,
+                    ReviewEventKind::AiDraft,
+                    now + chrono::Duration::seconds(1),
+                    cycle_id,
+                )),
+                event(
+                    session_id,
+                    channel,
+                    ReviewEventKind::AiDecision,
+                    now + chrono::Duration::seconds(2),
+                    cycle_id,
+                ),
+            )
+            .await
+    });
+    wait_for_advisory_query(&pool, "hashtextextended($1, 0)").await;
+    let active_during_wait: bool = sqlx::query_scalar(
+        "UPDATE twitch_crew_review_events
+            SET model_claim_until = clock_timestamp() + INTERVAL '200 milliseconds'
+          WHERE model_claim_id = $1
+        RETURNING model_claim_until > clock_timestamp()",
+    )
+    .bind(claim.claim_id)
+    .fetch_one(&mut *blocker)
+    .await
+    .unwrap();
+    assert!(active_during_wait);
+    tokio::time::sleep(std::time::Duration::from_millis(300)).await;
+    let expired_during_wait: bool = sqlx::query_scalar(
+        "SELECT BOOL_AND(model_claim_until <= clock_timestamp())
+           FROM twitch_crew_review_events
+          WHERE model_claim_id = $1",
+    )
+    .bind(claim.claim_id)
+    .fetch_one(&mut *blocker)
+    .await
+    .unwrap();
+    assert!(expired_during_wait);
+    blocker.commit().await.unwrap();
+
+    let result = completion.await.unwrap();
+    assert!(matches!(result, Err(StoreError::InvalidClaim)));
+    let generated: i64 = sqlx::query_scalar(
+        "SELECT COUNT(*)
+           FROM twitch_crew_review_events
+          WHERE review_session_id = $1
+            AND metadata->>'cycle_id' = $2
+            AND event_kind IN ('ai_draft', 'ai_decision', 'provider_error')",
+    )
+    .bind(session_id)
+    .bind(cycle_id.to_string())
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!(generated, 0);
+    let retained_claim: Option<Uuid> = sqlx::query_scalar(
+        "SELECT model_claim_id
+           FROM twitch_crew_review_events
+          WHERE review_session_id = $1
+            AND metadata->>'cycle_id' = $2
+            AND event_kind = 'ricky_message'",
+    )
+    .bind(session_id)
+    .bind(cycle_id.to_string())
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!(retained_claim, Some(claim.claim_id));
+    let retried = store
+        .pending_model_inputs(session_id)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_ne!(retried.claim_id, claim.claim_id);
+}
+
+#[tokio::test]
+async fn discord_markierung_schreibt_nach_lease_ablauf_im_row_lock_nichts() {
+    let Some(pool) = test_pool("crew_review_discord_lease_lock_wait").await else {
+        return;
+    };
+    let store = CrewReviewStore::new(pool.clone());
+    let now = Utc::now();
+    let channel = "discord-lease-lock-wait";
+    let session_id = seed_session(&pool, channel, now).await;
+    let cycle_id = Uuid::new_v4();
+    let first_id = store
+        .append_event(event(
+            session_id,
+            channel,
+            ReviewEventKind::AiDraft,
+            now,
+            cycle_id,
+        ))
+        .await
+        .unwrap();
+    let second_id = store
+        .append_event(event(
+            session_id,
+            channel,
+            ReviewEventKind::ProviderError,
+            now + chrono::Duration::seconds(1),
+            cycle_id,
+        ))
+        .await
+        .unwrap();
+    let cycle = store.pending_discord_cycles(1).await.unwrap().remove(0);
+    let event_ids = vec![first_id, second_id];
+    let mut blocker = pool.begin().await.unwrap();
+    sqlx::query("SELECT id FROM twitch_crew_review_events WHERE id = ANY($1::bigint[]) FOR UPDATE")
+        .bind(&event_ids)
+        .fetch_all(&mut *blocker)
+        .await
+        .unwrap();
+    let marking_store = store.clone();
+    let marking_ids = event_ids.clone();
+    let marking = tokio::spawn(async move {
+        marking_store
+            .mark_discord_cards_sent(
+                &[
+                    DiscordCard {
+                        event_ids: vec![marking_ids[0]],
+                        message_id: "discord-lock-first".to_owned(),
+                    },
+                    DiscordCard {
+                        event_ids: vec![marking_ids[1]],
+                        message_id: "discord-lock-second".to_owned(),
+                    },
+                ],
+                cycle.claim_id,
+            )
+            .await
+    });
+    wait_for_lock_query(&pool, "SELECT id, review_session_id").await;
+    let active_during_wait: bool = sqlx::query_scalar(
+        "UPDATE twitch_crew_review_events
+            SET discord_claim_until = clock_timestamp() + INTERVAL '200 milliseconds'
+          WHERE discord_claim_id = $1
+        RETURNING discord_claim_until > clock_timestamp()",
+    )
+    .bind(cycle.claim_id)
+    .fetch_one(&mut *blocker)
+    .await
+    .unwrap();
+    assert!(active_during_wait);
+    tokio::time::sleep(std::time::Duration::from_millis(300)).await;
+    let expired_during_wait: bool = sqlx::query_scalar(
+        "SELECT BOOL_AND(discord_claim_until <= clock_timestamp())
+           FROM twitch_crew_review_events
+          WHERE discord_claim_id = $1",
+    )
+    .bind(cycle.claim_id)
+    .fetch_one(&mut *blocker)
+    .await
+    .unwrap();
+    assert!(expired_during_wait);
+    blocker.commit().await.unwrap();
+
+    let result = marking.await.unwrap();
+    assert!(matches!(result, Err(StoreError::InvalidClaim)));
+    let rows: Vec<(Option<String>, Option<Uuid>)> = sqlx::query_as(
+        "SELECT discord_message_id, discord_claim_id
+           FROM twitch_crew_review_events
+          WHERE id = ANY($1::bigint[])
+          ORDER BY id",
+    )
+    .bind(&event_ids)
+    .fetch_all(&pool)
+    .await
+    .unwrap();
+    assert_eq!(
+        rows,
+        vec![(None, Some(cycle.claim_id)), (None, Some(cycle.claim_id))]
+    );
+    let retried = store.pending_discord_cycles(1).await.unwrap().remove(0);
+    assert_ne!(retried.claim_id, cycle.claim_id);
+}
+
+#[tokio::test]
+async fn ueberlanges_terminal_rollt_draft_zurueck_und_behaelt_claim() {
+    let Some(pool) = test_pool("crew_review_oversized_terminal_completion").await else {
+        return;
+    };
+    let store = CrewReviewStore::new(pool.clone());
+    let now = Utc::now();
+    let channel = "oversized-terminal-completion";
+    let session_id = seed_session(&pool, channel, now).await;
+    let cycle_id = Uuid::new_v4();
+    store
+        .append_event(event(
+            session_id,
+            channel,
+            ReviewEventKind::RickyMessage,
+            now,
+            cycle_id,
+        ))
+        .await
+        .unwrap();
+    let claim = store
+        .pending_model_inputs(session_id)
+        .await
+        .unwrap()
+        .unwrap();
+    let mut terminal = event(
+        session_id,
+        channel,
+        ReviewEventKind::AiDecision,
+        now + chrono::Duration::seconds(2),
+        cycle_id,
+    );
+    terminal.content = Some("x".repeat(1_201));
+
+    let result = store
+        .complete_claimed_model_cycle(
+            claim.claim_id,
+            Some(event(
+                session_id,
+                channel,
+                ReviewEventKind::AiDraft,
+                now + chrono::Duration::seconds(1),
+                cycle_id,
+            )),
+            terminal,
+        )
+        .await;
+    assert!(matches!(result, Err(StoreError::InvalidClaim)));
+    let generated: i64 = sqlx::query_scalar(
+        "SELECT COUNT(*)
+           FROM twitch_crew_review_events
+          WHERE review_session_id = $1
+            AND metadata->>'cycle_id' = $2
+            AND event_kind IN ('ai_draft', 'ai_decision', 'provider_error')",
+    )
+    .bind(session_id)
+    .bind(cycle_id.to_string())
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!(generated, 0);
+    let retained_claim: Option<Uuid> = sqlx::query_scalar(
+        "SELECT model_claim_id
+           FROM twitch_crew_review_events
+          WHERE review_session_id = $1
+            AND metadata->>'cycle_id' = $2
+            AND event_kind = 'ricky_message'",
+    )
+    .bind(session_id)
+    .bind(cycle_id.to_string())
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!(retained_claim, Some(claim.claim_id));
+}
+
+#[tokio::test]
+async fn ueberlanges_terminal_wird_auch_beim_einzelappend_fail_closed_abgelehnt() {
+    let Some(pool) = test_pool("crew_review_oversized_terminal_append").await else {
+        return;
+    };
+    let store = CrewReviewStore::new(pool.clone());
+    let now = Utc::now();
+    let channel = "oversized-terminal-append";
+    let session_id = seed_session(&pool, channel, now).await;
+    let cycle_id = Uuid::new_v4();
+    store
+        .append_event(event(
+            session_id,
+            channel,
+            ReviewEventKind::StreamerTranscript,
+            now,
+            cycle_id,
+        ))
+        .await
+        .unwrap();
+    let claim = store
+        .pending_model_inputs(session_id)
+        .await
+        .unwrap()
+        .unwrap();
+    let mut terminal = event(
+        session_id,
+        channel,
+        ReviewEventKind::ProviderError,
+        now + chrono::Duration::seconds(1),
+        cycle_id,
+    );
+    terminal.content = Some("x".repeat(1_201));
+
+    let result = store
+        .append_claimed_model_event(claim.claim_id, terminal)
+        .await;
+    assert!(matches!(result, Err(StoreError::InvalidClaim)));
+    let terminal_count: i64 = sqlx::query_scalar(
+        "SELECT COUNT(*)
+           FROM twitch_crew_review_events
+          WHERE review_session_id = $1
+            AND metadata->>'cycle_id' = $2
+            AND event_kind IN ('ai_decision', 'provider_error')",
+    )
+    .bind(session_id)
+    .bind(cycle_id.to_string())
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!(terminal_count, 0);
+    let retained_claim: Option<Uuid> = sqlx::query_scalar(
+        "SELECT model_claim_id
+           FROM twitch_crew_review_events
+          WHERE review_session_id = $1
+            AND metadata->>'cycle_id' = $2
+            AND event_kind = 'streamer_transcript'",
+    )
+    .bind(session_id)
+    .bind(cycle_id.to_string())
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!(retained_claim, Some(claim.claim_id));
+}
