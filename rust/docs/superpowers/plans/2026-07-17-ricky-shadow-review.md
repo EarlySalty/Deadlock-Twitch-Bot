@@ -646,8 +646,9 @@ export FIREWORKS_RICKY_REVIEW_MODEL="${FIREWORKS_RICKY_REVIEW_MODEL:-accounts/fi
 
 Keine Secret-Werte oder Secret-Defaults ergänzen. Vor Deploy wird über den
 erlaubten Loader-`--list`-Pfad ausschließlich geprüft, dass `OPENAI_API_KEY`
-und `FIREWORKS_API_KEY` als Secret-Namen vorhanden sind. Werte werden weder
-gelesen noch ausgegeben.
+und entweder `FIREWORKS_API_KEY` oder der bereits vorhandene Legacy-Name
+`FIREWORK_API_KEY` als Secret-Namen vorhanden sind. Werte werden weder gelesen
+noch ausgegeben.
 
 - [ ] **Step 2: Deterministische Eval-Fälle ergänzen**
 

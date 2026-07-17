@@ -1,3 +1,11 @@
+## #384 — Ein Schutzfall bleibt intern vollständig prüfbar
+
+**Problem:** Hinweise zu einem auffälligen Account lagen bisher getrennt in Chat, Stream und Moderationskontext; Entwürfe ließen sich dadurch nicht zusammenhängend prüfen, und Discord-Kopien hatten keine eigene Löschfrist.
+
+**Änderung:** Schreibt exakt der hinterlegte Twitch-Account, sammelt ein interner Shadow-Lauf die neue Nachricht, kurzzeitig transkribierte Stream-Reaktionen und beleggebundene Antwortentwürfe in einer eigenen Review-Ablage. Jeder Zyklus wird zusätzlich in den internen Discord-Kanal gespiegelt; Datenbankeinträge und die zugehörigen Discord-Nachrichten werden nach sechs Monaten einzeln entfernt.
+
+**Aktuelles Verhalten:** Der Lauf dient ausschließlich der internen Prüfung und sendet selbst nichts auf Twitch. Roh-Audio wird nie gespeichert, und bei einem Providerfehler bleibt der Bot still.
+
 ## #383 — Bot merkt jetzt selbst, wenn er in einem Kanal gebannt ist
 
 **Problem:** Wurde der Bot in einem Partner-Kanal gebannt, lief die Live-Ankündigung auf Discord trotzdem weiter — wir haben also für Kanäle geworben, in denen wir gar nicht mehr erwünscht waren. Der Bot hat den Ban stündlich korrekt erkannt, das Wissen aber nur ins Protokoll geschrieben und danach verworfen. Zusätzlich hätte selbst eine gesetzte Pause nicht gehalten: Sie wurde wieder aufgehoben, sobald der Zugriff des Streamers gültig war — und der hat mit einem Ban nichts zu tun.
