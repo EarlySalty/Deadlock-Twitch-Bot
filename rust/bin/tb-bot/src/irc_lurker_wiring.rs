@@ -2,12 +2,13 @@
 
 use std::collections::HashMap;
 use std::sync::Arc;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use sqlx::PgPool;
 use sqlx::Row;
 use tb_monitoring::{IrcLurkerTracker, TrackMode};
 
+use crate::raid_greeting::RaidTargetChatProbe;
 use crate::task_supervisor::TaskSupervisor;
 
 const SYNC_INTERVAL: Duration = Duration::from_secs(60);
@@ -15,20 +16,29 @@ const SYNC_INTERVAL: Duration = Duration::from_secs(60);
 const TRACK_STAGGER: Duration = Duration::from_millis(600);
 const MAX_TRACKED_CHANNELS: usize = 250;
 
-pub fn spawn_irc_lurker(supervisor: &TaskSupervisor, pool: PgPool) {
+pub fn build_irc_lurker(pool: PgPool) -> Option<Arc<IrcLurkerTracker>> {
     if std::env::var("TB_IRC_LURKER_ENABLED").as_deref() != Ok("1") {
         tracing::info!("IRC-Lurker (anon Presence) deaktiviert (TB_IRC_LURKER_ENABLED!=1)");
-        return;
+        return None;
     }
 
     tracing::info!("IRC-Lurker anon Presence-Harvester aktiv");
-
-    let tracker = Arc::new(IrcLurkerTracker::new(
-        pool.clone(),
+    Some(Arc::new(IrcLurkerTracker::new(
+        pool,
         String::new(),
         String::new(),
         None,
-    ));
+    )))
+}
+
+pub fn spawn_irc_lurker(
+    supervisor: &TaskSupervisor,
+    pool: PgPool,
+    tracker: Option<Arc<IrcLurkerTracker>>,
+) {
+    let Some(tracker) = tracker else {
+        return;
+    };
 
     let runner = Arc::clone(&tracker);
     supervisor.spawn("irc_lurker_runner", async move {
@@ -36,6 +46,20 @@ pub fn spawn_irc_lurker(supervisor: &TaskSupervisor, pool: PgPool) {
     });
 
     supervisor.spawn("irc_lurker_sync", sync_loop(pool, tracker));
+}
+
+impl RaidTargetChatProbe for IrcLurkerTracker {
+    fn watch(&self, channel: &str) {
+        self.watch_raid_channel(channel);
+    }
+
+    fn unwatch(&self, channel: &str) {
+        self.unwatch_raid_channel(channel);
+    }
+
+    fn has_written(&self, channel: &str, nick: &str, since: Instant) -> Option<bool> {
+        self.has_written_since(channel, nick, since)
+    }
 }
 
 async fn sync_loop(pool: PgPool, tracker: Arc<IrcLurkerTracker>) {

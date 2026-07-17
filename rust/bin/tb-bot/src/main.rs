@@ -692,11 +692,17 @@ async fn main() {
     // da `chat_api_handle` weiter unten beim Pipeline-Aufbau konsumiert wird.
     let chatters_bot_token_manager: Option<Arc<tb_chat::token::BotTokenManager>> =
         chat_api_handle.as_ref().map(|h| h.bot_token_manager());
+    let irc_lurker_tracker = irc_lurker_wiring::build_irc_lurker(pool.clone());
     let raid_greeting_monitor: Option<Arc<raid_greeting::RaidGreetingMonitor>> = chat_api_handle
         .as_ref()
         .map(|h| {
+            let probe = irc_lurker_tracker.as_ref().map(|tracker| {
+                let probe: Arc<dyn raid_greeting::RaidTargetChatProbe> = tracker.clone();
+                probe
+            });
             Arc::new(raid_greeting::RaidGreetingMonitor::new(
                 h.api_for_context(tb_chat::channel_policy::PolicyContext::Raid),
+                probe,
             ))
         });
 
@@ -1660,7 +1666,7 @@ async fn main() {
         );
     }
 
-    irc_lurker_wiring::spawn_irc_lurker(&supervisor, pool.clone());
+    irc_lurker_wiring::spawn_irc_lurker(&supervisor, pool.clone(), irc_lurker_tracker);
 
     let addr = SocketAddr::from(([127, 0, 0, 1], port));
     let token = settings.internal_api.token.clone();

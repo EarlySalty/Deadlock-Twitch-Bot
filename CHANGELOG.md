@@ -1,3 +1,11 @@
+## #386 — Raid-Erinnerung nur noch bei wirklich fehlender Begrüßung
+
+**Problem:** Nach einem Raid bekam der raidende Streamer die Erinnerung, im Zielkanal Hallo zu sagen, oft auch dann, wenn er längst geschrieben hatte. Der Bot konnte fremde Zielkanäle gar nicht mitlesen und hat die Begrüßung deshalb schlicht nicht mitbekommen.
+
+**Änderung:** Der Bot liest den Zielkanal nach dem Raid kurz anonym mit und prüft, ob der Streamer dort wirklich schreibt. Nur wenn die Begrüßung nachweislich ausbleibt, kommt die Erinnerung. Kann er nicht sicher mithören, verschickt er lieber nichts.
+
+**Aktuelles Verhalten:** Die Erinnerung kommt nur, wenn der Bot durchgehend mitgelesen hat und der Streamer im Zielkanal wirklich stumm blieb.
+
 ## #384 — Fremde Discord-Werbung im Chat gibt jetzt Timeout
 
 **Problem:** Postet ein fremder Account einen Discord-Invite im Chat, wurde das bisher nur intern gemeldet, aber nicht moderiert.

@@ -1,5 +1,4 @@
-//! FromRow-Structs für read-only Zugriffe. Typen folgen dem **echten** Prod-Schema
-//! (Timestamps = text → String; Bool = integer → i32; bigint → i64).
+//! FromRow-Structs für read-only Zugriffe. Typen folgen dem **echten** Prod-Schema.
 
 use sqlx::FromRow;
 
@@ -8,7 +7,7 @@ use sqlx::FromRow;
 pub struct TwitchStreamerRow {
     pub twitch_login: String,
     pub twitch_user_id: Option<String>,
-    pub created_at: Option<String>,
+    pub created_at: Option<chrono::DateTime<chrono::Utc>>,
 }
 
 /// Auszug aus `twitch_partners` (PK `id` bigserial).
