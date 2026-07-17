@@ -1,10 +1,10 @@
-## PLATZHALTER: <Changelog-Nummer und Titel für globale Ban-Verwaltung>
+## #385 — Globale Ban-Liste im Dashboard, pro Kanal abschaltbar
 
-**Problem:** PLATZHALTER: <Ausgangslage ohne Dashboard-Pflege und Kanal-Opt-out>
+**Problem:** Die server-weite Ban-Liste ließ sich nur über die interne Schnittstelle pflegen und griff in jedem betreuten Kanal, ohne Möglichkeit, das für einzelne Kanäle abzuschalten.
 
-**Änderung:** PLATZHALTER: <Globale Ban-Liste im Admin-Dashboard und Toggle pro Kanal>
+**Änderung:** Die globale Ban-Liste ist jetzt im Verwaltungs-Dashboard einseh- und pflegbar. Zusätzlich lässt sich pro Kanal festlegen, ob die globalen Bans dort angewendet werden.
 
-**Aktuelles Verhalten:** PLATZHALTER: <Standard aktiv und optionales Abschalten pro Kanal>
+**Aktuelles Verhalten:** Standardmäßig greifen die globalen Bans in jedem Kanal; wer möchte, schaltet sie für einen Kanal im Dashboard ab.
 
 ## #383 — Bot merkt jetzt selbst, wenn er in einem Kanal gebannt ist
 
