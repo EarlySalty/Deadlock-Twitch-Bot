@@ -17,6 +17,8 @@ pub mod background;
 pub mod channel_background;
 pub mod claude_chat;
 pub mod conversation;
+pub mod crew_review;
+pub mod crew_review_store;
 pub mod deadlock_patches;
 pub mod deadlock_stats;
 pub mod deadlock_wiki;

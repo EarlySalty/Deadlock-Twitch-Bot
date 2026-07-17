@@ -552,6 +552,24 @@ twitch_crew_radar_log|source|text|NO|'network'::text
 twitch_crew_radar_log|style_breakdown|jsonb|NO|
 twitch_crew_radar_log|style_score|smallint|NO|
 twitch_crew_radar_log|time_window_match|boolean|NO|
+twitch_crew_review_events|channel_login|text|NO|
+twitch_crew_review_events|confidence|double precision|YES|
+twitch_crew_review_events|content|text|YES|
+twitch_crew_review_events|created_at|timestamp with time zone|NO|now()
+twitch_crew_review_events|discord_deleted_at|timestamp with time zone|YES|
+twitch_crew_review_events|discord_message_id|text|YES|
+twitch_crew_review_events|event_kind|text|NO|
+twitch_crew_review_events|expires_at|timestamp with time zone|NO|(now() + '6 mons'::interval)
+twitch_crew_review_events|id|bigint|NO|nextval('twitch_crew_review_events_id_seq'::regclass)
+twitch_crew_review_events|last_delete_error|text|YES|
+twitch_crew_review_events|metadata|jsonb|NO|'{}'::jsonb
+twitch_crew_review_events|model|text|YES|
+twitch_crew_review_events|occurred_at|timestamp with time zone|NO|
+twitch_crew_review_events|provider|text|YES|
+twitch_crew_review_events|review_session_id|uuid|NO|
+twitch_crew_review_events|source_message_id|text|YES|
+twitch_crew_review_events|subject_twitch_user_id|text|NO|
+twitch_crew_review_events|tombstoned_at|timestamp with time zone|YES|
 twitch_engagement_channel_profile|channel_login|text|NO|
 twitch_engagement_channel_profile|msg_count|integer|NO|0
 twitch_engagement_channel_profile|profile_text|text|NO|
@@ -1114,6 +1132,8 @@ twitch_stream_report_ratings|report_variant|text|NO|'compact'::text
 twitch_stream_report_ratings|session_id|bigint|NO|
 twitch_stream_report_ratings|streamer_login|text|NO|
 twitch_stream_report_ratings|updated_at|timestamp with time zone|YES|now()
+twitch_stream_sessions_duration_repair_backup|duration_seconds|integer|YES|
+twitch_stream_sessions_duration_repair_backup|id|bigint|YES|
 twitch_stream_sessions|avg_viewers|double precision|YES|0
 twitch_stream_sessions|dropoff_label|text|YES|
 twitch_stream_sessions|dropoff_pct|double precision|YES|
