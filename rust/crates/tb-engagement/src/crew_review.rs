@@ -5,6 +5,10 @@ use uuid::Uuid;
 
 pub const RICKY_TWITCH_USER_ID: &str = "147713656";
 
+pub trait CrewReviewTrigger: Send + Sync {
+    fn observe(&self, input: RickyChatInput);
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct RickyChatInput {
     pub channel_login: String,

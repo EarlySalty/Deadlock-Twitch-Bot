@@ -43,6 +43,7 @@ use std::sync::Arc;
 use chrono::Utc;
 use dashmap::DashMap;
 use sqlx::PgPool;
+use tb_engagement::CrewReviewTrigger;
 use tracing::{debug, info, warn};
 
 use crate::api::ChatApi;
@@ -648,6 +649,7 @@ pub struct ChatPipelineParts {
     pub account_age: Arc<dyn AccountAgePort>,
     pub crew_judge: Arc<dyn CrewJudge>,
     pub crew_centroid: Arc<crate::style_score::Centroid>,
+    pub crew_review_trigger: Option<Arc<dyn CrewReviewTrigger>>,
 }
 
 /// Orchestriert die 15 Pipeline-Schritte für jedes `channel.chat.message`-Event.
@@ -663,16 +665,19 @@ pub struct ChatPipeline {
 
 impl ChatPipeline {
     pub fn new(parts: ChatPipelineParts) -> Self {
-        let crew_guard = Arc::new(CrewGuard::new(
-            crew_guard_enabled(),
-            Arc::clone(&parts.crew_judge),
-            Arc::clone(&parts.alerter),
-            parts.pool.clone(),
-            parts.bot_user_id.clone(),
-            Arc::clone(&parts.account_age),
-            Arc::clone(&parts.crew_centroid),
-            false,
-        ));
+        let crew_guard = Arc::new(
+            CrewGuard::new(
+                crew_guard_enabled(),
+                Arc::clone(&parts.crew_judge),
+                Arc::clone(&parts.alerter),
+                parts.pool.clone(),
+                parts.bot_user_id.clone(),
+                Arc::clone(&parts.account_age),
+                Arc::clone(&parts.crew_centroid),
+                false,
+            )
+            .with_crew_review_trigger(parts.crew_review_trigger.clone()),
+        );
         Self {
             parts,
             crew_guard,
@@ -2129,6 +2134,7 @@ mod tests {
             account_age: Arc::new(NoopAccountAge),
             crew_judge: Arc::new(crate::crew_guard::OpenAiCrewJudge::from_env()),
             crew_centroid: Arc::new(crate::style_score::Centroid::default()),
+            crew_review_trigger: None,
         })
     }
 
@@ -2313,6 +2319,7 @@ mod tests {
             account_age: Arc::new(NoopAccountAge),
             crew_judge: Arc::new(crate::crew_guard::OpenAiCrewJudge::from_env()),
             crew_centroid: Arc::new(crate::style_score::Centroid::default()),
+            crew_review_trigger: None,
         });
         (pipeline, invite_api)
     }
