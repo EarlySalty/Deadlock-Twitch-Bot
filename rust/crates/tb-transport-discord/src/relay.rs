@@ -594,11 +594,13 @@ mod tests {
                 "delete-b327ea2ca5251b1edb1c53de25e8137505f21173d785600b",
             ))
             .respond_with(ResponseTemplate::new(200))
+            .expect(1)
             .mount(&server)
             .await;
 
         let relay = BrokerRelay::new(&test_config(&server.uri())).unwrap();
         relay.delete_message(payload).await.unwrap();
+        server.verify().await;
 
         let received = server.received_requests().await.unwrap();
         assert_eq!(received.len(), 1);
