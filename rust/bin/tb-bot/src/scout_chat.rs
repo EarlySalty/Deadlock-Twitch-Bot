@@ -2,6 +2,7 @@
 //! des Scouts. Der Sink besitzt bewusst weder `ChatApi` noch Helix-Handle.
 
 use std::collections::HashSet;
+use std::panic::{catch_unwind, AssertUnwindSafe};
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -356,13 +357,22 @@ async fn track_privmsg_inner(
                 .source_message_id
                 .clone()
                 .or_else(|| (!event.message_id.is_empty()).then(|| event.message_id.clone()));
-            trigger.observe(RickyChatInput {
-                channel_login: event.broadcaster_user_login.clone(),
-                subject_twitch_user_id: RICKY_TWITCH_USER_ID.to_string(),
-                source_message_id,
-                occurred_at: chrono::Utc::now(),
-                content: event.text().to_string(),
-            });
+            let trigger_observe = || {
+                trigger.observe(RickyChatInput {
+                    channel_login: event.broadcaster_user_login.clone(),
+                    subject_twitch_user_id: RICKY_TWITCH_USER_ID.to_string(),
+                    source_message_id,
+                    occurred_at: chrono::Utc::now(),
+                    content: event.text().to_string(),
+                });
+            };
+            if catch_unwind(AssertUnwindSafe(trigger_observe)).is_err() {
+                tracing::warn!(
+                    channel = %event.broadcaster_user_login,
+                    chatter = %event.chatter_user_login,
+                    "scout-chat: Crew-Review-Trigger panicked"
+                );
+            }
         }
     }
     tracker.track(&event).await;
@@ -548,6 +558,14 @@ mod tests {
             }
         }
 
+        struct PanickingCrewReviewTrigger;
+
+        impl CrewReviewTrigger for PanickingCrewReviewTrigger {
+            fn observe(&self, _input: RickyChatInput) {
+                panic!("Trigger-Test-Panik");
+            }
+        }
+
         #[tokio::test]
         async fn storage_only_triggert_exakte_id_direkt() {
             let pool = pool_or_skip!("scout_review_trigger_storage_only");
@@ -557,13 +575,31 @@ mod tests {
 
             track_privmsg_inner(&tracker, None, Some(&trigger), RICKY_WITH_SOURCE_ID).await;
 
-            let inputs = trigger.0.lock().expect("Recording-Lock");
-            assert_eq!(inputs.len(), 1);
-            assert_eq!(inputs[0].channel_login, "monitored");
-            assert_eq!(inputs[0].subject_twitch_user_id, RICKY_TWITCH_USER_ID);
-            assert_eq!(inputs[0].source_message_id.as_deref(), Some("origin-42"));
-            assert_eq!(inputs[0].content, "hallo zusammen");
-            drop(inputs);
+            {
+                let inputs = trigger.0.lock().expect("Recording-Lock");
+                assert_eq!(inputs.len(), 1);
+                assert_eq!(inputs[0].channel_login, "monitored");
+                assert_eq!(inputs[0].subject_twitch_user_id, RICKY_TWITCH_USER_ID);
+                assert_eq!(inputs[0].source_message_id.as_deref(), Some("origin-42"));
+                assert_eq!(inputs[0].content, "hallo zusammen");
+            }
+            assert_eq!(message_count(&pool).await, 1);
+        }
+
+        #[tokio::test]
+        async fn trigger_panik_wird_isoliert_und_storage_laeuft_weiter() {
+            let pool = pool_or_skip!("scout_review_trigger_panic");
+            seed_session(&pool, "Deadlock").await;
+            let tracker = ChatterTracker::with_persist_all_games(pool.clone(), false);
+
+            track_privmsg_inner(
+                &tracker,
+                None,
+                Some(&PanickingCrewReviewTrigger),
+                RICKY_WITH_SOURCE_ID,
+            )
+            .await;
+
             assert_eq!(message_count(&pool).await, 1);
         }
 
