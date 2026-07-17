@@ -45,7 +45,7 @@ use dashmap::DashMap;
 use sqlx::PgPool;
 use tracing::{debug, info, warn};
 
-use crate::api::ChatApi;
+use crate::api::{BanOutcome, ChatApi};
 use crate::channel_classifier::{ChannelClass, ChannelClassifier};
 use crate::chatter_tracking::ChatterTracker;
 use crate::commands::CommandEngine;
@@ -80,6 +80,9 @@ use crate::types::ChatMessageEvent;
 /// Test `scam_pitch_timeout_reason_ist_bewusst_klarer_als_python`).
 pub const SCAM_PITCH_TIMEOUT_REASON: &str =
     "Account-Takeover-Verdacht / wiederholter Service-Pitch";
+
+const SUS_INVITE_TIMEOUT_SECS: u32 = 600;
+const SUS_INVITE_TIMEOUT_REASON: &str = "Fremde Discord-Werbung ist hier nicht erlaubt";
 
 const SPAM_META_REPLY_COOLDOWN_SECS: u64 = 60 * 60;
 const SPAM_META_REPLIES: [&str; 3] = [
@@ -949,33 +952,8 @@ impl ChatPipeline {
         }
 
         // Schritt 8: Sus-Discord-Invite (Z. 1741–1743)
-        let sus_invite = Arc::clone(&p.sus_invite);
-        let event_for_step = event.clone();
-        let sus_channel = channel_login.clone();
-        if let Some(hit) =
-            run_pipeline_step("sus_invite", &channel_login, &chatter_login, async move {
-                sus_invite.check(&event_for_step, &sus_channel).await
-            })
-            .await
-            .flatten()
-        {
-            p.review_log.record(
-                &channel_login,
-                &hit.chatter_login,
-                &hit.chatter_id,
-                &hit.content,
-                "SUSPICIOUS_DISCORD_INVITE",
-                "discord.gg link in partner chat",
-            );
-            p.alerter.send(
-                "sus_invite",
-                &channel_login,
-                &hit.chatter_login,
-                &hit.chatter_id,
-                &hit.content,
-                "",
-            );
-        }
+        self.handle_sus_invite(event, &channel_login, &chatter_login)
+            .await;
 
         // Schritt 9/10: Deadlock-live-Detektoren.
         if class.is_deadlock_live {
@@ -1026,6 +1004,87 @@ impl ChatPipeline {
         })
         .await;
         should_spawn_engagement
+    }
+
+    async fn handle_sus_invite(
+        &self,
+        event: &ChatMessageEvent,
+        channel_login: &str,
+        chatter_login: &str,
+    ) {
+        let p = &self.parts;
+        let sus_invite = Arc::clone(&p.sus_invite);
+        let event_for_step = event.clone();
+        let sus_channel = channel_login.to_string();
+        let Some(hit) = run_pipeline_step(
+            "sus_invite",
+            channel_login,
+            chatter_login,
+            async move { sus_invite.check(&event_for_step, &sus_channel).await },
+        )
+        .await
+        .flatten() else {
+            return;
+        };
+
+        p.review_log.record(
+            channel_login,
+            &hit.chatter_login,
+            &hit.chatter_id,
+            &hit.content,
+            "SUSPICIOUS_DISCORD_INVITE",
+            "discord.gg link in partner chat",
+        );
+        p.alerter.send(
+            "sus_invite",
+            channel_login,
+            &hit.chatter_login,
+            &hit.chatter_id,
+            &hit.content,
+            "",
+        );
+
+        let input = hit.content.chars().take(200).collect::<String>();
+        match p
+            .api
+            .timeout_user(
+                &event.broadcaster_user_id,
+                &hit.chatter_id,
+                SUS_INVITE_TIMEOUT_SECS,
+                SUS_INVITE_TIMEOUT_REASON,
+            )
+            .await
+        {
+            Ok(BanOutcome::Banned | BanOutcome::AlreadyBanned) => info!(
+                input = %input,
+                channel = channel_login,
+                chatter = %hit.chatter_login,
+                verdict = "timeout",
+                reason = SUS_INVITE_TIMEOUT_REASON,
+                result = "ok",
+                "Sus-Invite-Enforcement entschieden"
+            ),
+            Ok(outcome) => warn!(
+                input = %input,
+                channel = channel_login,
+                chatter = %hit.chatter_login,
+                verdict = "timeout",
+                reason = SUS_INVITE_TIMEOUT_REASON,
+                result = "dropped",
+                ?outcome,
+                "Sus-Invite-Enforcement entschieden"
+            ),
+            Err(error) => warn!(
+                input = %input,
+                channel = channel_login,
+                chatter = %hit.chatter_login,
+                verdict = "timeout",
+                reason = SUS_INVITE_TIMEOUT_REASON,
+                result = "err",
+                %error,
+                "Sus-Invite-Enforcement entschieden"
+            ),
+        }
     }
 
     /// Deadlock-live Chat-Detektoren, die selbst entscheiden, ob sie antworten.
@@ -2620,6 +2679,79 @@ mod tests {
         let (action, reason) = message_moderation(&pool, &event.message_id).await;
         assert_eq!(action, "delete_only");
         assert!(reason.as_deref().unwrap().contains("streamboo"));
+    }
+
+    #[tokio::test]
+    async fn fremder_discord_invite_timeoutet_neuen_chatter_genau_einmal() {
+        let Some(pool) = moderation_test_pool("pipeline_sus_invite_timeout").await else {
+            return;
+        };
+        let api = Arc::new(RecordingChatApi::default());
+        let pipeline = pipeline_for_non_partner(Arc::clone(&api), pool);
+        let mut event = strong_timeout_event();
+        event.message.text = "discord.gg/fremd123".to_string();
+
+        pipeline
+            .handle_sus_invite(&event, "channel", "seller")
+            .await;
+
+        let timeout_calls: Vec<_> = api
+            .calls()
+            .into_iter()
+            .filter(|call| call.starts_with("timeout:"))
+            .collect();
+        assert_eq!(timeout_calls.len(), 1, "{timeout_calls:?}");
+        assert_eq!(
+            timeout_calls[0],
+            format!(
+                "timeout:broadcaster-id:chatter-id:{SUS_INVITE_TIMEOUT_SECS}:{SUS_INVITE_TIMEOUT_REASON}"
+            )
+        );
+    }
+
+    #[tokio::test]
+    async fn fremder_discord_invite_timeoutet_etablierten_chatter_nicht() {
+        let Some(pool) = moderation_test_pool("pipeline_sus_invite_established").await else {
+            return;
+        };
+        sqlx::query(
+            "INSERT INTO twitch_chatter_rollup \
+             (streamer_login, chatter_login, chatter_id, first_seen_at, last_seen_at, total_messages, total_sessions) \
+             VALUES ('channel', 'seller', 'chatter-id', NOW(), NOW(), 40, 1)",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+        let api = Arc::new(RecordingChatApi::default());
+        let pipeline = pipeline_for_non_partner(Arc::clone(&api), pool);
+        let mut event = strong_timeout_event();
+        event.message.text = "discord.gg/fremd123".to_string();
+
+        pipeline
+            .handle_sus_invite(&event, "channel", "seller")
+            .await;
+
+        assert!(!api.calls().iter().any(|call| call.starts_with("timeout:")));
+    }
+
+    #[tokio::test]
+    async fn fremder_discord_invite_timeoutet_mod_nicht() {
+        let pool = sqlx::PgPool::connect_lazy("postgres://x:x@127.0.0.1:1/x").unwrap();
+        let api = Arc::new(RecordingChatApi::default());
+        let pipeline = pipeline_for_non_partner(Arc::clone(&api), pool);
+        let mut event = strong_timeout_event();
+        event.message.text = "discord.gg/fremd123".to_string();
+        event.badges.push(crate::types::ChatBadge {
+            set_id: "moderator".to_string(),
+            id: String::new(),
+            info: String::new(),
+        });
+
+        pipeline
+            .handle_sus_invite(&event, "channel", "seller")
+            .await;
+
+        assert!(!api.calls().iter().any(|call| call.starts_with("timeout:")));
     }
 
     /// Safe-List: `handle_strong_timeout` timeoutet direkt, ohne

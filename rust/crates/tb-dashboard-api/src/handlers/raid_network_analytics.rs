@@ -380,6 +380,7 @@ mod tests {
             .oneshot(
                 Request::builder()
                     .uri("/twitch/api/raid/analytics")
+                    .header("x-dashboard-context", "admin")
                     .header(
                         header::COOKIE,
                         format!("{ADMIN_COOKIE_NAME}={}", session.session_id),

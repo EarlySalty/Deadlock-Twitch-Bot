@@ -1,3 +1,11 @@
+## #384 — Fremde Discord-Werbung im Chat gibt jetzt Timeout
+
+**Problem:** Postet ein fremder Account einen Discord-Invite im Chat, wurde das bisher nur intern gemeldet, aber nicht moderiert.
+
+**Änderung:** Fremde Discord-Invite-Links lösen jetzt automatisch einen Timeout aus. Der eigene Community-Discord, Mods, der Streamer selbst und Stammzuschauer bleiben ausgenommen.
+
+**Aktuelles Verhalten:** In betreuten Kanälen bekommt ein fremder Discord-Link 10 Minuten Timeout.
+
 ## #383 — Bot merkt jetzt selbst, wenn er in einem Kanal gebannt ist
 
 **Problem:** Wurde der Bot in einem Partner-Kanal gebannt, lief die Live-Ankündigung auf Discord trotzdem weiter — wir haben also für Kanäle geworben, in denen wir gar nicht mehr erwünscht waren. Der Bot hat den Ban stündlich korrekt erkannt, das Wissen aber nur ins Protokoll geschrieben und danach verworfen. Zusätzlich hätte selbst eine gesetzte Pause nicht gehalten: Sie wurde wieder aufgehoben, sobald der Zugriff des Streamers gültig war — und der hat mit einem Ban nichts zu tun.

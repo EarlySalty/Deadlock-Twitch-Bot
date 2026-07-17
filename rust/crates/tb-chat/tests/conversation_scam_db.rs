@@ -90,8 +90,10 @@ async fn apply_ddl(pool: &PgPool) {
             is_first_time_streamer BOOLEAN)",
         "CREATE TABLE twitch_chatter_rollup (\
             streamer_login TEXT NOT NULL, chatter_login TEXT NOT NULL)",
-        "CREATE TABLE twitch_chat_messages \
-            (LIKE public.twitch_chat_messages INCLUDING ALL)",
+        "CREATE TABLE twitch_chat_messages (\
+            id BIGINT PRIMARY KEY, session_id BIGINT NOT NULL, streamer_login TEXT NOT NULL, \
+            chatter_login TEXT, message_ts TIMESTAMPTZ NOT NULL, is_command BOOLEAN DEFAULT FALSE, \
+            content TEXT)",
         "CREATE TABLE twitch_scam_guard_learnings (\
             id BOOLEAN PRIMARY KEY DEFAULT TRUE, guidance TEXT NOT NULL, \
             source_count INTEGER NOT NULL DEFAULT 0, \
@@ -522,10 +524,10 @@ async fn auto_ban_timeoutet_bei_unbekanntem_account_alter() {
     let calls = run_action_guard(&pool, None).await;
     let action_taken = wait_action_taken(&pool).await;
 
-    let calls = calls.lock().unwrap();
-    let ban_count = calls.bans.len();
-    let timeout_count = calls.timeouts.len();
-    drop(calls);
+    let (ban_count, timeout_count) = {
+        let calls = calls.lock().unwrap();
+        (calls.bans.len(), calls.timeouts.len())
+    };
     drop_schema(&pool, "tb_conversation_scam_unknown_age_autoban").await;
 
     assert_eq!(action_taken, "timed_out");
