@@ -2236,11 +2236,13 @@ mod tests {
         }
     }
 
+    type TimeoutEvidence = (Option<String>, Option<String>, Option<String>);
+
     struct MockModeration {
         succeeds: StdMutex<bool>,
         reasons: StdMutex<Vec<String>>,
         timeout_reasons: StdMutex<Vec<String>>,
-        timeout_evidence: StdMutex<Vec<(Option<String>, Option<String>, Option<String>)>>,
+        timeout_evidence: StdMutex<Vec<TimeoutEvidence>>,
     }
 
     #[async_trait]

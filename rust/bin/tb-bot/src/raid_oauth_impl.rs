@@ -702,6 +702,7 @@ impl TbRaidOAuthImpl {
     /// - `TWITCH_INTERNAL_API_ALLOWED_GUILD_IDS`
     /// - `TWITCH_INTERNAL_API_ALLOWED_CHANNEL_IDS`
     /// - `TWITCH_INTERNAL_API_ALLOWED_ROLE_IDS`
+    #[allow(clippy::too_many_arguments)] // Composition-Root: alle Parameter sind echte Abhängigkeiten.
     pub fn new(
         pool: PgPool,
         state_store: StateStore,
