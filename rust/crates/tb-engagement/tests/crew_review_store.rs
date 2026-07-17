@@ -170,6 +170,122 @@ async fn trigger_legt_session_und_nachricht_atomar_und_dedupliziert() {
 }
 
 #[tokio::test]
+async fn session_aktivitaet_folgt_dem_metadata_vertrag_und_wird_wiederverwendet() {
+    let Some(pool) = test_pool("crew_review_session_activity").await else {
+        return;
+    };
+    let store = CrewReviewStore::new(pool.clone());
+    let started_at = Utc.with_ymd_and_hms(2026, 7, 17, 12, 0, 0).unwrap();
+    let first_cycle = store
+        .record_trigger(&input("activity", "activity-1", started_at))
+        .await
+        .unwrap()
+        .unwrap();
+    let session_id: Uuid = sqlx::query_scalar(
+        "SELECT review_session_id
+           FROM twitch_crew_review_events
+          WHERE metadata->>'cycle_id' = $1
+            AND event_kind = 'ricky_message'",
+    )
+    .bind(first_cycle.to_string())
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+
+    let transcript_at = started_at + chrono::Duration::minutes(9);
+    let mut transcript = event(
+        session_id,
+        "activity",
+        ReviewEventKind::StreamerTranscript,
+        transcript_at,
+        Uuid::new_v4(),
+    );
+    transcript.metadata["subject_mentioned"] = json!(true);
+    store.append_event(transcript).await.unwrap();
+
+    let sessions = store
+        .active_sessions(started_at + chrono::Duration::minutes(18))
+        .await
+        .unwrap();
+    assert_eq!(sessions.len(), 1);
+    assert_eq!(sessions[0].last_activity_at, transcript_at);
+
+    let decision_at = started_at + chrono::Duration::minutes(18);
+    let mut decision = event(
+        session_id,
+        "activity",
+        ReviewEventKind::AiDecision,
+        decision_at,
+        Uuid::new_v4(),
+    );
+    decision.metadata["topic_active"] = json!(true);
+    store.append_event(decision).await.unwrap();
+
+    for (event_kind, metadata, minute) in [
+        (
+            ReviewEventKind::StreamerTranscript,
+            json!({"cycle_id": Uuid::new_v4().to_string(), "subject_mentioned": false}),
+            19,
+        ),
+        (
+            ReviewEventKind::StreamerTranscript,
+            json!({"cycle_id": Uuid::new_v4().to_string(), "subject_mentioned": "true"}),
+            20,
+        ),
+        (
+            ReviewEventKind::StreamerTranscript,
+            json!({"cycle_id": Uuid::new_v4().to_string()}),
+            21,
+        ),
+        (
+            ReviewEventKind::AiDecision,
+            json!({"cycle_id": Uuid::new_v4().to_string(), "topic_active": false}),
+            22,
+        ),
+        (
+            ReviewEventKind::AiDecision,
+            json!({"cycle_id": Uuid::new_v4().to_string(), "topic_active": "true"}),
+            23,
+        ),
+        (
+            ReviewEventKind::AiDecision,
+            json!({"cycle_id": Uuid::new_v4().to_string()}),
+            24,
+        ),
+    ] {
+        let mut inactive = event(
+            session_id,
+            "activity",
+            event_kind,
+            started_at + chrono::Duration::minutes(minute),
+            Uuid::new_v4(),
+        );
+        inactive.metadata = metadata;
+        store.append_event(inactive).await.unwrap();
+    }
+
+    let trigger_at = started_at + chrono::Duration::minutes(27);
+    let sessions = store.active_sessions(trigger_at).await.unwrap();
+    assert_eq!(sessions.len(), 1);
+    assert_eq!(sessions[0].last_activity_at, decision_at);
+
+    store
+        .record_trigger(&input("activity", "activity-2", trigger_at))
+        .await
+        .unwrap()
+        .unwrap();
+    let reused_session: Uuid = sqlx::query_scalar(
+        "SELECT review_session_id
+           FROM twitch_crew_review_events
+          WHERE source_message_id = 'activity-2'",
+    )
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!(reused_session, session_id);
+}
+
+#[tokio::test]
 async fn expires_at_sind_sechs_kalendermonate() {
     let Some(pool) = test_pool("crew_review_expiry").await else {
         return;

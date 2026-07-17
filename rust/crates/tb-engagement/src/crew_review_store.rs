@@ -17,6 +17,23 @@ const EVENT_COLUMNS: &str = "e.id, e.review_session_id, e.channel_login,
     e.content, e.metadata, e.provider, e.model, e.confidence,
     e.discord_message_id, e.discord_deleted_at, e.last_delete_error,
     e.tombstoned_at, e.created_at, e.expires_at";
+const SESSION_ACTIVITY_CTE: &str = "WITH session_activity AS (
+    SELECT review_session_id,
+           MIN(channel_login) AS channel_login,
+           MIN(subject_twitch_user_id) AS subject_twitch_user_id,
+           MIN(occurred_at) FILTER (WHERE event_kind = 'session_started') AS started_at,
+           MAX(occurred_at) FILTER (
+               WHERE event_kind = 'ricky_message'
+                  OR (event_kind = 'streamer_transcript'
+                      AND metadata->'subject_mentioned' = 'true'::jsonb)
+                  OR (event_kind = 'ai_decision'
+                      AND metadata->'topic_active' = 'true'::jsonb)
+           ) AS last_activity_at,
+           BOOL_OR(event_kind = 'session_started') AS has_started,
+           BOOL_OR(event_kind = 'session_ended') AS has_ended
+      FROM twitch_crew_review_events
+     GROUP BY review_session_id
+)";
 
 #[derive(Debug, thiserror::Error)]
 pub enum StoreError {
@@ -51,22 +68,22 @@ impl CrewReviewStore {
             .execute(&mut *transaction)
             .await?;
 
-        let session_id: Option<Uuid> = sqlx::query_scalar(
-            "SELECT review_session_id
-               FROM twitch_crew_review_events
+        let session_sql = format!(
+            "{SESSION_ACTIVITY_CTE}
+             SELECT review_session_id
+               FROM session_activity
               WHERE channel_login = $1
-              GROUP BY review_session_id
-             HAVING BOOL_OR(event_kind = 'session_started')
-                AND NOT BOOL_OR(event_kind = 'session_ended')
-                AND MAX(occurred_at) FILTER (WHERE event_kind = 'ricky_message')
-                    >= $2 - INTERVAL '10 minutes'
-              ORDER BY MAX(occurred_at) FILTER (WHERE event_kind = 'ricky_message') DESC
-              LIMIT 1",
-        )
-        .bind(&input.channel_login)
-        .bind(input.occurred_at)
-        .fetch_optional(&mut *transaction)
-        .await?;
+                AND has_started
+                AND NOT has_ended
+                AND last_activity_at >= $2 - INTERVAL '10 minutes'
+              ORDER BY last_activity_at DESC
+              LIMIT 1"
+        );
+        let session_id: Option<Uuid> = sqlx::query_scalar(&session_sql)
+            .bind(&input.channel_login)
+            .bind(input.occurred_at)
+            .fetch_optional(&mut *transaction)
+            .await?;
 
         let cycle_id = Uuid::new_v4();
         let metadata = json!({"cycle_id": cycle_id.to_string()});
@@ -130,24 +147,20 @@ impl CrewReviewStore {
         &self,
         now: DateTime<Utc>,
     ) -> Result<Vec<ReviewSession>, StoreError> {
-        let rows: Vec<SessionRow> = sqlx::query_as(
-            "SELECT review_session_id,
-                        MIN(channel_login),
-                        MIN(subject_twitch_user_id),
-                        MIN(occurred_at) FILTER (WHERE event_kind = 'session_started'),
-                        MAX(occurred_at) FILTER (WHERE event_kind = 'ricky_message')
-                   FROM twitch_crew_review_events
-                  GROUP BY review_session_id
-                 HAVING BOOL_OR(event_kind = 'session_started')
-                    AND NOT BOOL_OR(event_kind = 'session_ended')
-                    AND MAX(occurred_at) FILTER (WHERE event_kind = 'ricky_message')
-                        >= $1 - INTERVAL '10 minutes'
-                  ORDER BY MAX(occurred_at) FILTER (WHERE event_kind = 'ricky_message'),
-                           review_session_id",
-        )
-        .bind(now)
-        .fetch_all(&self.pool)
-        .await?;
+        let sql = format!(
+            "{SESSION_ACTIVITY_CTE}
+             SELECT review_session_id,
+                    channel_login,
+                    subject_twitch_user_id,
+                    started_at,
+                    last_activity_at
+               FROM session_activity
+              WHERE has_started
+                AND NOT has_ended
+                AND last_activity_at >= $1 - INTERVAL '10 minutes'
+              ORDER BY last_activity_at, review_session_id"
+        );
+        let rows: Vec<SessionRow> = sqlx::query_as(&sql).bind(now).fetch_all(&self.pool).await?;
 
         Ok(rows
             .into_iter()
