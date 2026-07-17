@@ -7,7 +7,7 @@ use sqlx::PgPool;
 use tb_engagement::crew_review::{
     NewReviewEvent, ReviewEventKind, RickyChatInput, RICKY_TWITCH_USER_ID,
 };
-use tb_engagement::crew_review_store::CrewReviewStore;
+use tb_engagement::crew_review_store::{CrewReviewStore, StoreError};
 use uuid::Uuid;
 
 const MIGRATION: &str =
@@ -64,6 +64,25 @@ async fn test_pool(schema: &str) -> Option<PgPool> {
     Some(pool)
 }
 
+async fn seed_session(pool: &PgPool, channel: &str, occurred_at: chrono::DateTime<Utc>) -> Uuid {
+    let session_id = Uuid::new_v4();
+    sqlx::query(
+        "INSERT INTO twitch_crew_review_events (
+            review_session_id, channel_login, subject_twitch_user_id,
+            event_kind, occurred_at, metadata, expires_at
+         ) VALUES ($1, $2, $3, 'session_started', $4, $5, $4 + INTERVAL '6 months')",
+    )
+    .bind(session_id)
+    .bind(channel)
+    .bind(RICKY_TWITCH_USER_ID)
+    .bind(occurred_at)
+    .bind(json!({"cycle_id": Uuid::new_v4().to_string()}))
+    .execute(pool)
+    .await
+    .unwrap();
+    session_id
+}
+
 fn input(
     channel: &str,
     source_message_id: &str,
@@ -97,6 +116,41 @@ fn event(
         provider: Some("provider".to_owned()),
         model: Some("model".to_owned()),
         confidence: Some(0.75),
+    }
+}
+
+async fn wait_for_advisory_query(pool: &PgPool, query_fragment: &str) {
+    let reached = tokio::time::timeout(std::time::Duration::from_secs(5), async {
+        loop {
+            let waiting: bool = sqlx::query_scalar(
+                "SELECT EXISTS (
+                    SELECT 1
+                      FROM pg_stat_activity
+                     WHERE datname = current_database()
+                       AND wait_event = 'advisory'
+                       AND query LIKE '%' || $1 || '%'
+                )",
+            )
+            .bind(query_fragment)
+            .fetch_one(pool)
+            .await
+            .expect("inspect advisory waiters");
+            if waiting {
+                return;
+            }
+            tokio::task::yield_now().await;
+        }
+    })
+    .await;
+    if reached.is_err() {
+        let waiting: Vec<String> = sqlx::query_scalar(
+            "SELECT query FROM pg_stat_activity
+              WHERE datname = current_database() AND wait_event = 'advisory'",
+        )
+        .fetch_all(pool)
+        .await
+        .unwrap();
+        panic!("advisory waiter did not reach barrier {query_fragment}: {waiting:?}");
     }
 }
 
@@ -286,6 +340,190 @@ async fn session_aktivitaet_folgt_dem_metadata_vertrag_und_wird_wiederverwendet(
 }
 
 #[tokio::test]
+async fn trigger_und_aktivitaets_append_erzeugen_nie_zwei_aktive_sessions() {
+    let Some(pool) = test_pool("crew_review_session_race").await else {
+        return;
+    };
+    let store = CrewReviewStore::new(pool.clone());
+    let started_at = Utc.with_ymd_and_hms(2026, 7, 17, 12, 0, 0).unwrap();
+    let first_cycle = store
+        .record_trigger(&input("session-race", "race-1", started_at))
+        .await
+        .unwrap()
+        .unwrap();
+    let old_session_id: Uuid = sqlx::query_scalar(
+        "SELECT review_session_id
+           FROM twitch_crew_review_events
+          WHERE metadata->>'cycle_id' = $1
+            AND event_kind = 'ricky_message'",
+    )
+    .bind(first_cycle.to_string())
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+
+    sqlx::raw_sql(
+        "CREATE FUNCTION block_new_review_session() RETURNS trigger AS $$
+         BEGIN
+             PERFORM pg_advisory_xact_lock(2026071703);
+             RETURN NEW;
+         END
+         $$ LANGUAGE plpgsql;
+         CREATE TRIGGER block_new_review_session
+         BEFORE INSERT ON twitch_crew_review_events
+         FOR EACH ROW WHEN (NEW.event_kind = 'session_started')
+         EXECUTE FUNCTION block_new_review_session();",
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
+
+    let mut gate = pool.begin().await.unwrap();
+    sqlx::query("SELECT pg_advisory_xact_lock(2026071703)")
+        .execute(&mut *gate)
+        .await
+        .unwrap();
+
+    let trigger_at = started_at + chrono::Duration::minutes(11);
+    let trigger_store = store.clone();
+    let trigger_task = tokio::spawn(async move {
+        trigger_store
+            .record_trigger(&input("session-race", "race-2", trigger_at))
+            .await
+    });
+    wait_for_advisory_query(&pool, "INSERT INTO twitch_crew_review_events").await;
+
+    let mut activity = event(
+        old_session_id,
+        "session-race",
+        ReviewEventKind::StreamerTranscript,
+        started_at + chrono::Duration::minutes(9),
+        Uuid::new_v4(),
+    );
+    activity.metadata["subject_mentioned"] = json!(true);
+    let append_store = store.clone();
+    let mut append_task = tokio::spawn(async move { append_store.append_event(activity).await });
+    let append_result = tokio::select! {
+        result = &mut append_task => Some(result.unwrap()),
+        () = wait_for_advisory_query(&pool, "SELECT pg_advisory_xact_lock") => None,
+    };
+
+    gate.rollback().await.unwrap();
+    let new_cycle = trigger_task.await.unwrap().unwrap().unwrap();
+    let append_result = match append_result {
+        Some(result) => result,
+        None => append_task.await.unwrap(),
+    };
+    assert!(
+        append_result.is_err(),
+        "stale activity append must not bypass the channel lock"
+    );
+
+    let sessions = store.active_sessions(trigger_at).await.unwrap();
+    assert_eq!(sessions.len(), 1);
+
+    let new_session_id: Uuid = sqlx::query_scalar(
+        "SELECT review_session_id
+           FROM twitch_crew_review_events
+          WHERE metadata->>'cycle_id' = $1
+            AND event_kind = 'ricky_message'",
+    )
+    .bind(new_cycle.to_string())
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    let mut current_activity = event(
+        new_session_id,
+        "session-race",
+        ReviewEventKind::StreamerTranscript,
+        trigger_at + chrono::Duration::minutes(1),
+        Uuid::new_v4(),
+    );
+    current_activity.metadata["subject_mentioned"] = json!(true);
+    store.append_event(current_activity).await.unwrap();
+}
+
+#[tokio::test]
+async fn beendete_neueste_session_laesst_keine_aeltere_wiederauferstehen() {
+    let Some(pool) = test_pool("crew_review_latest_session_by_id").await else {
+        return;
+    };
+    let store = CrewReviewStore::new(pool.clone());
+    let now = Utc::now();
+    let old_session_id = seed_session(&pool, "latest-session", now).await;
+    let latest_session_id =
+        seed_session(&pool, "latest-session", now - chrono::Duration::days(1)).await;
+    sqlx::query(
+        "INSERT INTO twitch_crew_review_events (
+            review_session_id, channel_login, subject_twitch_user_id,
+            event_kind, occurred_at, metadata, expires_at
+         ) VALUES ($1, $2, $3, 'session_ended', $4, $5, $4 + INTERVAL '6 months')",
+    )
+    .bind(latest_session_id)
+    .bind("latest-session")
+    .bind(RICKY_TWITCH_USER_ID)
+    .bind(now - chrono::Duration::hours(23))
+    .bind(json!({"cycle_id": Uuid::new_v4().to_string()}))
+    .execute(&pool)
+    .await
+    .unwrap();
+
+    let mut transcript = event(
+        old_session_id,
+        "latest-session",
+        ReviewEventKind::StreamerTranscript,
+        now + chrono::Duration::minutes(1),
+        Uuid::new_v4(),
+    );
+    transcript.metadata["subject_mentioned"] = json!(true);
+    assert!(matches!(
+        store.append_event(transcript).await,
+        Err(StoreError::StaleSession)
+    ));
+    assert!(matches!(
+        store
+            .append_event(event(
+                old_session_id,
+                "latest-session",
+                ReviewEventKind::RickyMessage,
+                now + chrono::Duration::minutes(2),
+                Uuid::new_v4(),
+            ))
+            .await,
+        Err(StoreError::StaleSession)
+    ));
+    assert!(store.active_sessions(now).await.unwrap().is_empty());
+}
+
+#[tokio::test]
+async fn append_event_akzeptiert_keinen_erfundenen_session_kanal() {
+    let Some(pool) = test_pool("crew_review_session_identity").await else {
+        return;
+    };
+    let store = CrewReviewStore::new(pool.clone());
+    let now = Utc::now();
+    let session_id = seed_session(&pool, "stored-channel", now).await;
+    let forged = event(
+        session_id,
+        "invented-channel",
+        ReviewEventKind::AiDraft,
+        now,
+        Uuid::new_v4(),
+    );
+
+    assert!(store.append_event(forged).await.is_err());
+    let forged_rows: i64 = sqlx::query_scalar(
+        "SELECT COUNT(*)
+           FROM twitch_crew_review_events
+          WHERE channel_login = 'invented-channel'",
+    )
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!(forged_rows, 0);
+}
+
+#[tokio::test]
 async fn expires_at_sind_sechs_kalendermonate() {
     let Some(pool) = test_pool("crew_review_expiry").await else {
         return;
@@ -314,7 +552,7 @@ async fn tombstone_entfernt_inhalt_aber_behaelt_delete_retry() {
     };
     let store = CrewReviewStore::new(pool.clone());
     let now = Utc::now();
-    let session_id = Uuid::new_v4();
+    let session_id = seed_session(&pool, "tombstone", now).await;
     let event_id = store
         .append_event(event(
             session_id,
@@ -325,8 +563,10 @@ async fn tombstone_entfernt_inhalt_aber_behaelt_delete_retry() {
         ))
         .await
         .unwrap();
-    store
-        .mark_discord_sent(&[event_id], "discord-tombstone")
+    sqlx::query("UPDATE twitch_crew_review_events SET discord_message_id = $1 WHERE id = $2")
+        .bind("discord-tombstone")
+        .bind(event_id)
+        .execute(&pool)
         .await
         .unwrap();
 
@@ -364,7 +604,7 @@ async fn geloeschte_discord_gruppe_entfernt_erst_danach_db_zeilen() {
         return;
     };
     let store = CrewReviewStore::new(pool.clone());
-    let session_id = Uuid::new_v4();
+    let session_id = seed_session(&pool, "cleanup", Utc::now()).await;
     let cycle_id = Uuid::new_v4();
     let expired = Utc::now() - chrono::Duration::days(200);
     let fresh = Utc::now();
@@ -388,10 +628,15 @@ async fn geloeschte_discord_gruppe_entfernt_erst_danach_db_zeilen() {
         ))
         .await
         .unwrap();
-    store
-        .mark_discord_sent(&[expired_id, fresh_id], "discord-mixed")
-        .await
-        .unwrap();
+    sqlx::query(
+        "UPDATE twitch_crew_review_events
+            SET discord_message_id = 'discord-mixed'
+          WHERE id = ANY($1::bigint[])",
+    )
+    .bind(vec![expired_id, fresh_id])
+    .execute(&pool)
+    .await
+    .unwrap();
 
     assert!(store
         .expired_discord_groups(Utc::now(), 10)
@@ -431,18 +676,46 @@ async fn pending_queues_gruppieren_nur_unverarbeitete_und_ungepostete_events() {
     let Some(pool) = test_pool("crew_review_pending").await else {
         return;
     };
-    let store = CrewReviewStore::new(pool);
+    let store = CrewReviewStore::new(pool.clone());
     let now = Utc::now();
-    let session_id = Uuid::new_v4();
+    let session_id = seed_session(&pool, "pending", now).await;
     let pending_cycle = Uuid::new_v4();
     let completed_cycle = Uuid::new_v4();
 
-    let pending_ricky = store
+    let completed_input = store
         .append_event(event(
             session_id,
             "pending",
             ReviewEventKind::RickyMessage,
             now,
+            completed_cycle,
+        ))
+        .await
+        .unwrap();
+    let completed_claim = store
+        .pending_model_inputs(session_id)
+        .await
+        .unwrap()
+        .unwrap();
+    let decision = store
+        .append_claimed_model_event(
+            completed_claim.claim_id,
+            event(
+                session_id,
+                "pending",
+                ReviewEventKind::AiDecision,
+                now + chrono::Duration::seconds(1),
+                completed_cycle,
+            ),
+        )
+        .await
+        .unwrap();
+    let pending_ricky = store
+        .append_event(event(
+            session_id,
+            "pending",
+            ReviewEventKind::RickyMessage,
+            now + chrono::Duration::seconds(2),
             pending_cycle,
         ))
         .await
@@ -452,45 +725,36 @@ async fn pending_queues_gruppieren_nur_unverarbeitete_und_ungepostete_events() {
             session_id,
             "pending",
             ReviewEventKind::StreamerTranscript,
-            now + chrono::Duration::seconds(1),
+            now + chrono::Duration::seconds(3),
             pending_cycle,
         ))
         .await
         .unwrap();
-    let completed_input = store
-        .append_event(event(
-            session_id,
-            "pending",
-            ReviewEventKind::RickyMessage,
-            now + chrono::Duration::seconds(2),
-            completed_cycle,
-        ))
-        .await
-        .unwrap();
-    let decision = store
-        .append_event(event(
-            session_id,
-            "pending",
-            ReviewEventKind::AiDecision,
-            now + chrono::Duration::seconds(3),
-            completed_cycle,
-        ))
-        .await
-        .unwrap();
 
-    let model_inputs = store.pending_model_inputs(session_id).await.unwrap();
+    let model_inputs = store
+        .pending_model_inputs(session_id)
+        .await
+        .unwrap()
+        .unwrap();
     assert_eq!(
         model_inputs
+            .events
             .iter()
             .map(|event| event.id)
             .collect::<Vec<_>>(),
         vec![pending_ricky, pending_transcript]
     );
+    assert!(model_inputs.claim_until < model_inputs.events[0].expires_at);
 
-    store
-        .mark_discord_sent(&[pending_ricky, completed_input], "discord-posted")
-        .await
-        .unwrap();
+    sqlx::query(
+        "UPDATE twitch_crew_review_events
+            SET discord_message_id = 'discord-posted'
+          WHERE id = ANY($1::bigint[])",
+    )
+    .bind(vec![pending_ricky, completed_input])
+    .execute(&pool)
+    .await
+    .unwrap();
     let cycles = store.pending_discord_cycles(10).await.unwrap();
     assert_eq!(cycles.len(), 1);
     assert_eq!(cycles[0].cycle_id, completed_cycle);
@@ -498,6 +762,845 @@ async fn pending_queues_gruppieren_nur_unverarbeitete_und_ungepostete_events() {
     assert_eq!(cycles[0].channel_login, "pending");
     assert_eq!(cycles[0].events.len(), 1);
     assert_eq!(cycles[0].events[0].id, decision);
+    assert!(cycles[0].claim_until < cycles[0].events[0].expires_at);
+}
+
+#[tokio::test]
+async fn abgelaufene_events_verlassen_keine_pending_queue() {
+    let Some(pool) = test_pool("crew_review_expired_queues").await else {
+        return;
+    };
+    let store = CrewReviewStore::new(pool.clone());
+    let expired_at = Utc::now() - chrono::Duration::days(200);
+    let session_id = seed_session(&pool, "expired-queues", expired_at).await;
+    let model_cycle_id = Uuid::new_v4();
+    store
+        .append_event(event(
+            session_id,
+            "expired-queues",
+            ReviewEventKind::RickyMessage,
+            expired_at,
+            model_cycle_id,
+        ))
+        .await
+        .unwrap();
+    let discord_cycle_id = Uuid::new_v4();
+    store
+        .append_event(event(
+            session_id,
+            "expired-queues",
+            ReviewEventKind::ProviderError,
+            expired_at + chrono::Duration::seconds(1),
+            discord_cycle_id,
+        ))
+        .await
+        .unwrap();
+
+    assert!(store
+        .pending_model_inputs(session_id)
+        .await
+        .unwrap()
+        .is_none());
+    assert!(store.pending_discord_cycles(10).await.unwrap().is_empty());
+}
+
+#[tokio::test]
+async fn model_inputs_werden_atomar_geclaimt_und_nach_timeout_freigegeben() {
+    let Some(pool) = test_pool("crew_review_model_claim").await else {
+        return;
+    };
+    let store = CrewReviewStore::new(pool.clone());
+    let now = Utc::now();
+    let session_id = seed_session(&pool, "model-claim", now).await;
+    let cycle_id = Uuid::new_v4();
+    let event_id = store
+        .append_event(event(
+            session_id,
+            "model-claim",
+            ReviewEventKind::StreamerTranscript,
+            now,
+            cycle_id,
+        ))
+        .await
+        .unwrap();
+
+    let (left, right) = tokio::join!(
+        store.pending_model_inputs(session_id),
+        store.pending_model_inputs(session_id)
+    );
+    let claims = [left.unwrap(), right.unwrap()];
+    assert_eq!(claims.iter().filter(|claim| claim.is_some()).count(), 1);
+    let first = claims.into_iter().flatten().next().unwrap();
+    assert_eq!(
+        first
+            .events
+            .iter()
+            .map(|event| event.id)
+            .collect::<Vec<_>>(),
+        vec![event_id]
+    );
+    assert!(first.claim_until < first.events[0].expires_at);
+
+    sqlx::query(
+        "UPDATE twitch_crew_review_events
+            SET model_claim_until = NOW() - INTERVAL '1 second'
+          WHERE model_claim_id = $1",
+    )
+    .bind(first.claim_id)
+    .execute(&pool)
+    .await
+    .unwrap();
+    let retried = store
+        .pending_model_inputs(session_id)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_ne!(retried.claim_id, first.claim_id);
+    assert_eq!(retried.events[0].id, event_id);
+
+    store
+        .append_claimed_model_event(
+            retried.claim_id,
+            event(
+                session_id,
+                "model-claim",
+                ReviewEventKind::ProviderError,
+                now + chrono::Duration::seconds(1),
+                cycle_id,
+            ),
+        )
+        .await
+        .unwrap();
+    assert!(store
+        .pending_model_inputs(session_id)
+        .await
+        .unwrap()
+        .is_none());
+    let remaining_claims: i64 = sqlx::query_scalar(
+        "SELECT COUNT(*)
+           FROM twitch_crew_review_events
+          WHERE model_claim_id IS NOT NULL",
+    )
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!(remaining_claims, 0);
+}
+
+#[tokio::test]
+async fn modellabschluss_akzeptiert_nur_den_aktiven_claim_desselben_cycles() {
+    let Some(pool) = test_pool("crew_review_model_completion_claim").await else {
+        return;
+    };
+    let store = CrewReviewStore::new(pool.clone());
+    let now = Utc::now();
+    let session_id = seed_session(&pool, "model-completion", now).await;
+    let other_session_id = seed_session(&pool, "model-completion-other", now).await;
+    let cycle_id = Uuid::new_v4();
+    let target_input_id = store
+        .append_event(event(
+            session_id,
+            "model-completion",
+            ReviewEventKind::RickyMessage,
+            now,
+            cycle_id,
+        ))
+        .await
+        .unwrap();
+    let other_cycle_id = Uuid::new_v4();
+    let other_input_id = store
+        .append_event(event(
+            session_id,
+            "model-completion",
+            ReviewEventKind::StreamerTranscript,
+            now + chrono::Duration::milliseconds(100),
+            other_cycle_id,
+        ))
+        .await
+        .unwrap();
+
+    let claim_a = store
+        .pending_model_inputs(session_id)
+        .await
+        .unwrap()
+        .unwrap();
+    sqlx::query(
+        "UPDATE twitch_crew_review_events
+            SET model_claim_until = NOW() - INTERVAL '1 second'
+          WHERE model_claim_id = $1",
+    )
+    .bind(claim_a.claim_id)
+    .execute(&pool)
+    .await
+    .unwrap();
+    let claim_b = store
+        .pending_model_inputs(session_id)
+        .await
+        .unwrap()
+        .unwrap();
+
+    let stale = store
+        .append_claimed_model_event(
+            claim_a.claim_id,
+            event(
+                session_id,
+                "model-completion",
+                ReviewEventKind::AiDecision,
+                now + chrono::Duration::seconds(1),
+                cycle_id,
+            ),
+        )
+        .await;
+    assert!(matches!(stale, Err(StoreError::InvalidClaim)));
+    let foreign_cycle = store
+        .append_claimed_model_event(
+            claim_b.claim_id,
+            event(
+                session_id,
+                "model-completion",
+                ReviewEventKind::ProviderError,
+                now + chrono::Duration::seconds(2),
+                Uuid::new_v4(),
+            ),
+        )
+        .await;
+    assert!(matches!(foreign_cycle, Err(StoreError::InvalidClaim)));
+    let foreign_session = store
+        .append_claimed_model_event(
+            claim_b.claim_id,
+            event(
+                other_session_id,
+                "model-completion-other",
+                ReviewEventKind::ProviderError,
+                now + chrono::Duration::seconds(3),
+                cycle_id,
+            ),
+        )
+        .await;
+    assert!(matches!(foreign_session, Err(StoreError::InvalidClaim)));
+
+    let stale_terminals: i64 = sqlx::query_scalar(
+        "SELECT COUNT(*)
+           FROM twitch_crew_review_events
+          WHERE review_session_id = $1
+            AND metadata->>'cycle_id' = $2
+            AND event_kind IN ('ai_decision', 'provider_error')",
+    )
+    .bind(session_id)
+    .bind(cycle_id.to_string())
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!(stale_terminals, 0);
+    let active_claim: Option<Uuid> = sqlx::query_scalar(
+        "SELECT model_claim_id
+           FROM twitch_crew_review_events
+          WHERE review_session_id = $1
+            AND metadata->>'cycle_id' = $2
+            AND event_kind = 'ricky_message'",
+    )
+    .bind(session_id)
+    .bind(cycle_id.to_string())
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!(active_claim, Some(claim_b.claim_id));
+
+    store
+        .append_claimed_model_event(
+            claim_b.claim_id,
+            event(
+                session_id,
+                "model-completion",
+                ReviewEventKind::AiDraft,
+                now + chrono::Duration::seconds(4),
+                cycle_id,
+            ),
+        )
+        .await
+        .unwrap();
+    let active_after_draft: Option<Uuid> = sqlx::query_scalar(
+        "SELECT model_claim_id
+           FROM twitch_crew_review_events
+          WHERE review_session_id = $1
+            AND metadata->>'cycle_id' = $2
+            AND event_kind = 'ricky_message'",
+    )
+    .bind(session_id)
+    .bind(cycle_id.to_string())
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!(active_after_draft, Some(claim_b.claim_id));
+
+    store
+        .append_claimed_model_event(
+            claim_b.claim_id,
+            event(
+                session_id,
+                "model-completion",
+                ReviewEventKind::AiDecision,
+                now + chrono::Duration::seconds(5),
+                cycle_id,
+            ),
+        )
+        .await
+        .unwrap();
+    let remaining_claims: Vec<Option<Uuid>> = sqlx::query_scalar(
+        "SELECT model_claim_id
+           FROM twitch_crew_review_events
+          WHERE id = ANY($1::bigint[])
+          ORDER BY id",
+    )
+    .bind(vec![target_input_id, other_input_id])
+    .fetch_all(&pool)
+    .await
+    .unwrap();
+    assert_eq!(remaining_claims, vec![None, Some(claim_b.claim_id)]);
+    assert!(store
+        .pending_model_inputs(session_id)
+        .await
+        .unwrap()
+        .is_none());
+}
+
+#[tokio::test]
+async fn normaler_append_umgeht_keinen_modellclaim() {
+    let Some(pool) = test_pool("crew_review_model_completion_bypass").await else {
+        return;
+    };
+    let store = CrewReviewStore::new(pool.clone());
+    let now = Utc::now();
+    let session_id = seed_session(&pool, "model-bypass", now).await;
+    let cycle_id = Uuid::new_v4();
+    store
+        .append_event(event(
+            session_id,
+            "model-bypass",
+            ReviewEventKind::StreamerTranscript,
+            now,
+            cycle_id,
+        ))
+        .await
+        .unwrap();
+    let claim = store
+        .pending_model_inputs(session_id)
+        .await
+        .unwrap()
+        .unwrap();
+
+    let result = store
+        .append_event(event(
+            session_id,
+            "model-bypass",
+            ReviewEventKind::ProviderError,
+            now + chrono::Duration::seconds(1),
+            cycle_id,
+        ))
+        .await;
+    assert!(matches!(result, Err(StoreError::InvalidClaim)));
+    let active_claim: Option<Uuid> = sqlx::query_scalar(
+        "SELECT model_claim_id
+           FROM twitch_crew_review_events
+          WHERE review_session_id = $1
+            AND metadata->>'cycle_id' = $2
+            AND event_kind = 'streamer_transcript'",
+    )
+    .bind(session_id)
+    .bind(cycle_id.to_string())
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!(active_claim, Some(claim.claim_id));
+
+    let audit_cycle = Uuid::new_v4();
+    store
+        .append_event(event(
+            session_id,
+            "model-bypass",
+            ReviewEventKind::ProviderError,
+            now + chrono::Duration::seconds(2),
+            audit_cycle,
+        ))
+        .await
+        .unwrap();
+}
+
+#[tokio::test]
+async fn discord_cycles_werden_atomar_geclaimt_und_nach_timeout_freigegeben() {
+    let Some(pool) = test_pool("crew_review_discord_claim").await else {
+        return;
+    };
+    let store = CrewReviewStore::new(pool.clone());
+    let now = Utc::now();
+    let session_id = seed_session(&pool, "discord-claim", now).await;
+    let cycle_id = Uuid::new_v4();
+    let event_id = store
+        .append_event(event(
+            session_id,
+            "discord-claim",
+            ReviewEventKind::AiDecision,
+            now,
+            cycle_id,
+        ))
+        .await
+        .unwrap();
+
+    let (left, right) = tokio::join!(
+        store.pending_discord_cycles(10),
+        store.pending_discord_cycles(10)
+    );
+    let mut batches = [left.unwrap(), right.unwrap()];
+    assert_eq!(batches.iter().filter(|batch| !batch.is_empty()).count(), 1);
+    let first = batches.iter_mut().find_map(|batch| batch.pop()).unwrap();
+    assert_eq!(first.events[0].id, event_id);
+    assert!(first.claim_until < first.events[0].expires_at);
+    assert_eq!(
+        store
+            .delete_expired_unposted(first.events[0].expires_at - chrono::Duration::microseconds(1))
+            .await
+            .unwrap(),
+        0
+    );
+
+    sqlx::query(
+        "UPDATE twitch_crew_review_events
+            SET discord_claim_until = NOW() - INTERVAL '1 second'
+          WHERE discord_claim_id = $1",
+    )
+    .bind(first.claim_id)
+    .execute(&pool)
+    .await
+    .unwrap();
+    let retried = store.pending_discord_cycles(10).await.unwrap();
+    assert_eq!(retried.len(), 1);
+    assert_ne!(retried[0].claim_id, first.claim_id);
+    assert_eq!(retried[0].events[0].id, event_id);
+}
+
+#[tokio::test]
+async fn discord_claimt_keinen_nur_teilweise_claimbaren_cycle() {
+    let Some(pool) = test_pool("crew_review_discord_complete_cycle").await else {
+        return;
+    };
+    let store = CrewReviewStore::new(pool.clone());
+    let now = Utc::now();
+    let session_id = seed_session(&pool, "discord-complete", now).await;
+
+    let expiring_cycle = Uuid::new_v4();
+    let expiring_id = store
+        .append_event(event(
+            session_id,
+            "discord-complete",
+            ReviewEventKind::ProviderError,
+            now,
+            expiring_cycle,
+        ))
+        .await
+        .unwrap();
+    let fresh_id = store
+        .append_event(event(
+            session_id,
+            "discord-complete",
+            ReviewEventKind::AiDraft,
+            now + chrono::Duration::seconds(1),
+            expiring_cycle,
+        ))
+        .await
+        .unwrap();
+    sqlx::query(
+        "UPDATE twitch_crew_review_events
+            SET expires_at = NOW() + INTERVAL '5 minutes'
+          WHERE id = $1",
+    )
+    .bind(expiring_id)
+    .execute(&pool)
+    .await
+    .unwrap();
+
+    let foreign_cycle = Uuid::new_v4();
+    let foreign_id = store
+        .append_event(event(
+            session_id,
+            "discord-complete",
+            ReviewEventKind::ProviderError,
+            now + chrono::Duration::seconds(2),
+            foreign_cycle,
+        ))
+        .await
+        .unwrap();
+    let free_id = store
+        .append_event(event(
+            session_id,
+            "discord-complete",
+            ReviewEventKind::AiDraft,
+            now + chrono::Duration::seconds(3),
+            foreign_cycle,
+        ))
+        .await
+        .unwrap();
+    let foreign_claim_id = Uuid::new_v4();
+    sqlx::query(
+        "UPDATE twitch_crew_review_events
+            SET discord_claim_id = $1,
+                discord_claim_until = NOW() + INTERVAL '4 minutes'
+          WHERE id = $2",
+    )
+    .bind(foreign_claim_id)
+    .bind(foreign_id)
+    .execute(&pool)
+    .await
+    .unwrap();
+
+    assert!(store.pending_discord_cycles(10).await.unwrap().is_empty());
+    let claims: Vec<Option<Uuid>> = sqlx::query_scalar(
+        "SELECT discord_claim_id
+           FROM twitch_crew_review_events
+          WHERE id = ANY($1::bigint[])
+          ORDER BY id",
+    )
+    .bind(vec![expiring_id, fresh_id, foreign_id, free_id])
+    .fetch_all(&pool)
+    .await
+    .unwrap();
+    assert_eq!(claims, vec![None, None, Some(foreign_claim_id), None]);
+}
+
+#[tokio::test]
+async fn discord_claim_und_late_append_versiegeln_den_cycle_atomar() {
+    let Some(pool) = test_pool("crew_review_discord_late_append").await else {
+        return;
+    };
+    let store = CrewReviewStore::new(pool.clone());
+    let now = Utc::now();
+    let session_id = seed_session(&pool, "discord-late", now).await;
+    let cycle_id = Uuid::new_v4();
+    let original_id = store
+        .append_event(event(
+            session_id,
+            "discord-late",
+            ReviewEventKind::ProviderError,
+            now,
+            cycle_id,
+        ))
+        .await
+        .unwrap();
+
+    sqlx::raw_sql(
+        "CREATE FUNCTION block_discord_claim() RETURNS trigger AS $$
+         BEGIN
+             PERFORM pg_advisory_xact_lock(2026071704);
+             RETURN NEW;
+         END
+         $$ LANGUAGE plpgsql;
+         CREATE TRIGGER block_discord_claim
+         BEFORE UPDATE ON twitch_crew_review_events
+         FOR EACH ROW WHEN (
+             OLD.discord_claim_id IS NULL AND NEW.discord_claim_id IS NOT NULL
+         )
+         EXECUTE FUNCTION block_discord_claim();",
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
+    let mut gate = pool.begin().await.unwrap();
+    sqlx::query("SELECT pg_advisory_xact_lock(2026071704)")
+        .execute(&mut *gate)
+        .await
+        .unwrap();
+
+    let claim_store = store.clone();
+    let mut claim_task = tokio::spawn(async move { claim_store.pending_discord_cycles(1).await });
+    let early_claim = tokio::select! {
+        result = &mut claim_task => Some(result.unwrap()),
+        () = wait_for_advisory_query(&pool, "WITH eligible_cycles AS") => None,
+    };
+    assert!(
+        early_claim.is_none(),
+        "discord claim returned before barrier: {early_claim:?}"
+    );
+
+    let append_store = store.clone();
+    let mut append_task = tokio::spawn(async move {
+        append_store
+            .append_event(event(
+                session_id,
+                "discord-late",
+                ReviewEventKind::AiDraft,
+                now + chrono::Duration::seconds(1),
+                cycle_id,
+            ))
+            .await
+    });
+    let early_append = tokio::select! {
+        result = &mut append_task => Some(result.unwrap()),
+        () = wait_for_advisory_query(&pool, "hashtextextended($1, 1)") => None,
+    };
+
+    gate.rollback().await.unwrap();
+    let claimed = claim_task.await.unwrap().unwrap();
+    let append_result = match early_append {
+        Some(result) => result,
+        None => append_task.await.unwrap(),
+    };
+    assert!(matches!(append_result, Err(StoreError::InvalidClaim)));
+    assert_eq!(claimed.len(), 1);
+    assert_eq!(claimed[0].events.len(), 1);
+    assert_eq!(claimed[0].events[0].id, original_id);
+    let cycle_rows: i64 = sqlx::query_scalar(
+        "SELECT COUNT(*)
+           FROM twitch_crew_review_events
+          WHERE review_session_id = $1
+            AND metadata->>'cycle_id' = $2",
+    )
+    .bind(session_id)
+    .bind(cycle_id.to_string())
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!(cycle_rows, 1);
+}
+
+#[tokio::test]
+async fn fuenf_minuten_restlaufzeit_reichen_fuer_keinen_claim() {
+    let Some(pool) = test_pool("crew_review_claim_boundary").await else {
+        return;
+    };
+    let store = CrewReviewStore::new(pool.clone());
+    let now = Utc::now();
+    let session_id = seed_session(&pool, "claim-boundary", now).await;
+    let model_id = store
+        .append_event(event(
+            session_id,
+            "claim-boundary",
+            ReviewEventKind::RickyMessage,
+            now,
+            Uuid::new_v4(),
+        ))
+        .await
+        .unwrap();
+    let discord_id = store
+        .append_event(event(
+            session_id,
+            "claim-boundary",
+            ReviewEventKind::ProviderError,
+            now + chrono::Duration::seconds(1),
+            Uuid::new_v4(),
+        ))
+        .await
+        .unwrap();
+    sqlx::query(
+        "UPDATE twitch_crew_review_events
+            SET expires_at = NOW() + INTERVAL '5 minutes'
+          WHERE id = ANY($1::bigint[])",
+    )
+    .bind(vec![model_id, discord_id])
+    .execute(&pool)
+    .await
+    .unwrap();
+
+    assert!(store
+        .pending_model_inputs(session_id)
+        .await
+        .unwrap()
+        .is_none());
+    assert!(store.pending_discord_cycles(10).await.unwrap().is_empty());
+    let claims: Vec<(Option<Uuid>, Option<Uuid>)> = sqlx::query_as(
+        "SELECT model_claim_id, discord_claim_id
+           FROM twitch_crew_review_events
+          WHERE id = ANY($1::bigint[])
+          ORDER BY id",
+    )
+    .bind(vec![model_id, discord_id])
+    .fetch_all(&pool)
+    .await
+    .unwrap();
+    assert_eq!(claims, vec![(None, None), (None, None)]);
+}
+
+#[tokio::test]
+async fn cleanup_und_claim_treffen_sich_nie_ueber_der_loeschfrist() {
+    let Some(pool) = test_pool("crew_review_claim_cleanup").await else {
+        return;
+    };
+    let store = CrewReviewStore::new(pool.clone());
+    let now = Utc::now();
+    let session_id = seed_session(&pool, "claim-cleanup", now).await;
+    let event_id = store
+        .append_event(event(
+            session_id,
+            "claim-cleanup",
+            ReviewEventKind::RickyMessage,
+            now,
+            Uuid::new_v4(),
+        ))
+        .await
+        .unwrap();
+    let expires_at = now + chrono::Duration::minutes(10);
+    sqlx::query("UPDATE twitch_crew_review_events SET expires_at = $1 WHERE id = $2")
+        .bind(expires_at)
+        .bind(event_id)
+        .execute(&pool)
+        .await
+        .unwrap();
+
+    let claim = store
+        .pending_model_inputs(session_id)
+        .await
+        .unwrap()
+        .unwrap();
+    assert!(claim.claim_until < expires_at);
+    assert_eq!(
+        store
+            .delete_expired_unposted(expires_at - chrono::Duration::microseconds(1))
+            .await
+            .unwrap(),
+        0
+    );
+    assert_eq!(store.delete_expired_unposted(expires_at).await.unwrap(), 1);
+}
+
+#[tokio::test]
+async fn mark_discord_sent_ist_fuer_unvollstaendige_oder_fremde_claims_atomar() {
+    let Some(pool) = test_pool("crew_review_mark_claim").await else {
+        return;
+    };
+    let store = CrewReviewStore::new(pool.clone());
+    let now = Utc::now();
+    let session_id = seed_session(&pool, "mark-claim", now).await;
+    let cycle_id = Uuid::new_v4();
+    let first_id = store
+        .append_event(event(
+            session_id,
+            "mark-claim",
+            ReviewEventKind::AiDecision,
+            now,
+            cycle_id,
+        ))
+        .await
+        .unwrap();
+    let second_id = store
+        .append_event(event(
+            session_id,
+            "mark-claim",
+            ReviewEventKind::AiDraft,
+            now + chrono::Duration::seconds(1),
+            cycle_id,
+        ))
+        .await
+        .unwrap();
+    let cycle = store
+        .pending_discord_cycles(1)
+        .await
+        .unwrap()
+        .pop()
+        .unwrap();
+
+    assert!(store
+        .mark_discord_sent(&[first_id], cycle.claim_id, "discord-incomplete")
+        .await
+        .is_err());
+    let posted: Vec<Option<String>> = sqlx::query_scalar(
+        "SELECT discord_message_id
+           FROM twitch_crew_review_events
+          WHERE id = ANY($1::bigint[])
+          ORDER BY id",
+    )
+    .bind(vec![first_id, second_id])
+    .fetch_all(&pool)
+    .await
+    .unwrap();
+    assert_eq!(posted, vec![None, None]);
+
+    assert!(store
+        .mark_discord_sent(&[first_id, second_id], Uuid::new_v4(), "discord-foreign")
+        .await
+        .is_err());
+    store
+        .mark_discord_sent(&[first_id, second_id], cycle.claim_id, "discord-valid")
+        .await
+        .unwrap();
+
+    let expired_cycle = Uuid::new_v4();
+    let expired_id = store
+        .append_event(event(
+            session_id,
+            "mark-claim",
+            ReviewEventKind::ProviderError,
+            now + chrono::Duration::seconds(2),
+            expired_cycle,
+        ))
+        .await
+        .unwrap();
+    let expired_claim = store
+        .pending_discord_cycles(1)
+        .await
+        .unwrap()
+        .pop()
+        .unwrap();
+    sqlx::query(
+        "UPDATE twitch_crew_review_events
+            SET discord_claim_until = NOW() - INTERVAL '2 seconds',
+                expires_at = NOW() - INTERVAL '1 second'
+          WHERE id = $1",
+    )
+    .bind(expired_id)
+    .execute(&pool)
+    .await
+    .unwrap();
+    assert!(store
+        .mark_discord_sent(&[expired_id], expired_claim.claim_id, "discord-expired")
+        .await
+        .is_err());
+}
+
+#[tokio::test]
+async fn vollstaendige_cycles_desselben_discord_batches_lassen_sich_getrennt_markieren() {
+    let Some(pool) = test_pool("crew_review_mark_packed_cycles").await else {
+        return;
+    };
+    let store = CrewReviewStore::new(pool.clone());
+    let now = Utc::now();
+    let session_id = seed_session(&pool, "mark-packed", now).await;
+    let first_id = store
+        .append_event(event(
+            session_id,
+            "mark-packed",
+            ReviewEventKind::ProviderError,
+            now,
+            Uuid::new_v4(),
+        ))
+        .await
+        .unwrap();
+    let second_id = store
+        .append_event(event(
+            session_id,
+            "mark-packed",
+            ReviewEventKind::ProviderError,
+            now + chrono::Duration::seconds(1),
+            Uuid::new_v4(),
+        ))
+        .await
+        .unwrap();
+    let cycles = store.pending_discord_cycles(2).await.unwrap();
+    assert_eq!(cycles.len(), 2);
+    assert_eq!(cycles[0].claim_id, cycles[1].claim_id);
+
+    store
+        .mark_discord_sent(&[first_id], cycles[0].claim_id, "discord-first")
+        .await
+        .unwrap();
+    let second_claim: Option<Uuid> =
+        sqlx::query_scalar("SELECT discord_claim_id FROM twitch_crew_review_events WHERE id = $1")
+            .bind(second_id)
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+    assert_eq!(second_claim, Some(cycles[1].claim_id));
+    store
+        .mark_discord_sent(&[second_id], cycles[1].claim_id, "discord-second")
+        .await
+        .unwrap();
 }
 
 #[tokio::test]
@@ -509,8 +1612,9 @@ async fn lange_inhalte_werden_an_wortgrenzen_geteilt() {
     let mut long = "wort ".repeat(260);
     long.push_str("ende");
     let cycle_id = Uuid::new_v4();
+    let session_id = seed_session(&pool, "chunks", Utc::now()).await;
     let mut new_event = event(
-        Uuid::new_v4(),
+        session_id,
         "chunks",
         ReviewEventKind::RickyMessage,
         Utc::now(),
@@ -522,7 +1626,9 @@ async fn lange_inhalte_werden_an_wortgrenzen_geteilt() {
 
     let chunks: Vec<(Option<String>, String, serde_json::Value)> = sqlx::query_as(
         "SELECT source_message_id, content, metadata
-           FROM twitch_crew_review_events ORDER BY id",
+           FROM twitch_crew_review_events
+          WHERE event_kind = 'ricky_message'
+          ORDER BY id",
     )
     .fetch_all(&pool)
     .await

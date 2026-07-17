@@ -91,10 +91,19 @@ pub struct ReviewEvent {
 }
 
 #[derive(Clone, Debug, PartialEq)]
+pub struct ClaimedModelInputs {
+    pub claim_id: Uuid,
+    pub claim_until: DateTime<Utc>,
+    pub events: Vec<ReviewEvent>,
+}
+
+#[derive(Clone, Debug, PartialEq)]
 pub struct ReviewCycle {
     pub cycle_id: Uuid,
     pub session_id: Uuid,
     pub channel_login: String,
+    pub claim_id: Uuid,
+    pub claim_until: DateTime<Utc>,
     pub events: Vec<ReviewEvent>,
 }
 

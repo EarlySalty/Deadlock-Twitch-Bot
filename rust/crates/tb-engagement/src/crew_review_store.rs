@@ -1,11 +1,13 @@
+use std::collections::HashSet;
+
 use chrono::{DateTime, Utc};
 use serde_json::{json, Value};
 use sqlx::{PgPool, Postgres, Transaction};
 use uuid::Uuid;
 
 use crate::crew_review::{
-    ExpiredDiscordGroup, NewReviewEvent, ReviewCycle, ReviewEvent, ReviewEventKind, ReviewSession,
-    RickyChatInput, RICKY_TWITCH_USER_ID,
+    ClaimedModelInputs, ExpiredDiscordGroup, NewReviewEvent, ReviewCycle, ReviewEvent,
+    ReviewEventKind, ReviewSession, RickyChatInput, RICKY_TWITCH_USER_ID,
 };
 
 const MAX_CONTENT_CHARS: usize = 1_200;
@@ -45,6 +47,14 @@ pub enum StoreError {
     InvalidEventKind(String),
     #[error("crew review insert returned no row")]
     MissingInsertedEvent,
+    #[error("crew review session does not exist")]
+    MissingSession,
+    #[error("crew review event does not match its stored session identity")]
+    SessionMismatch,
+    #[error("crew review event targets a stale session")]
+    StaleSession,
+    #[error("crew review claim is missing, stale, expired, or incomplete")]
+    InvalidClaim,
 }
 
 #[derive(Clone)]
@@ -63,16 +73,21 @@ impl CrewReviewStore {
         }
 
         let mut transaction = self.pool.begin().await?;
-        sqlx::query("SELECT pg_advisory_xact_lock(hashtextextended($1, 0))")
-            .bind(&input.channel_login)
-            .execute(&mut *transaction)
-            .await?;
+        lock_channel(&mut transaction, &input.channel_login).await?;
 
         let session_sql = format!(
             "{SESSION_ACTIVITY_CTE}
              SELECT review_session_id
                FROM session_activity
               WHERE channel_login = $1
+                AND review_session_id = (
+                    SELECT latest.review_session_id
+                      FROM twitch_crew_review_events latest
+                     WHERE latest.channel_login = $1
+                       AND latest.event_kind = 'session_started'
+                     ORDER BY latest.id DESC
+                     LIMIT 1
+                )
                 AND has_started
                 AND NOT has_ended
                 AND last_activity_at >= $2 - INTERVAL '10 minutes'
@@ -137,8 +152,98 @@ impl CrewReviewStore {
     }
 
     pub async fn append_event(&self, event: NewReviewEvent) -> Result<i64, StoreError> {
+        let cycle_id = cycle_id(&event.metadata)?;
         let mut transaction = self.pool.begin().await?;
+        lock_event_session(&mut transaction, &event).await?;
+        lock_cycle(&mut transaction, cycle_id).await?;
+        if changes_session_state(&event) {
+            reject_stale_session(&mut transaction, &event).await?;
+        }
+        reject_sealed_discord_cycle(&mut transaction, &event, cycle_id).await?;
+        if matches!(
+            event.event_kind,
+            ReviewEventKind::AiDecision | ReviewEventKind::ProviderError
+        ) && sqlx::query_scalar::<_, bool>(
+            "SELECT EXISTS (
+                SELECT 1
+                  FROM twitch_crew_review_events
+                 WHERE review_session_id = $1
+                   AND metadata->>'cycle_id' = $2
+                   AND event_kind IN ('ricky_message', 'streamer_transcript')
+            )",
+        )
+        .bind(event.session_id)
+        .bind(cycle_id.to_string())
+        .fetch_one(&mut *transaction)
+        .await?
+        {
+            return Err(StoreError::InvalidClaim);
+        }
         let first_id = insert_event_chunks(&mut transaction, &event).await?;
+        transaction.commit().await?;
+        Ok(first_id)
+    }
+
+    pub async fn append_claimed_model_event(
+        &self,
+        claim_id: Uuid,
+        event: NewReviewEvent,
+    ) -> Result<i64, StoreError> {
+        if !matches!(
+            event.event_kind,
+            ReviewEventKind::AiDecision | ReviewEventKind::AiDraft | ReviewEventKind::ProviderError
+        ) {
+            return Err(StoreError::InvalidClaim);
+        }
+        let cycle_id = cycle_id(&event.metadata)?;
+        let mut transaction = self.pool.begin().await?;
+        lock_event_session(&mut transaction, &event).await?;
+        lock_cycle(&mut transaction, cycle_id).await?;
+        if changes_session_state(&event) {
+            reject_stale_session(&mut transaction, &event).await?;
+        }
+        reject_sealed_discord_cycle(&mut transaction, &event, cycle_id).await?;
+        let claim_checks: Vec<bool> = sqlx::query_scalar(
+            "SELECT COALESCE(
+                       model_claim_id = $3
+                       AND model_claim_until > NOW()
+                       AND expires_at > NOW(),
+                       FALSE
+                   )
+               FROM twitch_crew_review_events
+              WHERE review_session_id = $1
+                AND metadata->>'cycle_id' = $2
+                AND event_kind IN ('ricky_message', 'streamer_transcript')
+              FOR UPDATE",
+        )
+        .bind(event.session_id)
+        .bind(cycle_id.to_string())
+        .bind(claim_id)
+        .fetch_all(&mut *transaction)
+        .await?;
+        if claim_checks.is_empty() || claim_checks.iter().any(|valid| !valid) {
+            return Err(StoreError::InvalidClaim);
+        }
+
+        let first_id = insert_event_chunks(&mut transaction, &event).await?;
+        if matches!(
+            event.event_kind,
+            ReviewEventKind::AiDecision | ReviewEventKind::ProviderError
+        ) {
+            sqlx::query(
+                "UPDATE twitch_crew_review_events
+                    SET model_claim_id = NULL,
+                        model_claim_until = NULL
+                  WHERE review_session_id = $1
+                    AND metadata->>'cycle_id' = $2
+                    AND model_claim_id = $3",
+            )
+            .bind(event.session_id)
+            .bind(cycle_id.to_string())
+            .bind(claim_id)
+            .execute(&mut *transaction)
+            .await?;
+        }
         transaction.commit().await?;
         Ok(first_id)
     }
@@ -157,6 +262,14 @@ impl CrewReviewStore {
                FROM session_activity
               WHERE has_started
                 AND NOT has_ended
+                AND review_session_id = (
+                    SELECT latest.review_session_id
+                      FROM twitch_crew_review_events latest
+                     WHERE latest.channel_login = session_activity.channel_login
+                       AND latest.event_kind = 'session_started'
+                     ORDER BY latest.id DESC
+                     LIMIT 1
+                )
                 AND last_activity_at >= $1 - INTERVAL '10 minutes'
               ORDER BY last_activity_at, review_session_id"
         );
@@ -187,66 +300,172 @@ impl CrewReviewStore {
     pub async fn pending_model_inputs(
         &self,
         session_id: Uuid,
-    ) -> Result<Vec<ReviewEvent>, StoreError> {
+    ) -> Result<Option<ClaimedModelInputs>, StoreError> {
+        let claim_id = Uuid::new_v4();
+        let mut transaction = self.pool.begin().await?;
+        let claimed_ids: Vec<i64> = sqlx::query_scalar(
+            "WITH candidates AS (
+                SELECT e.id
+                  FROM twitch_crew_review_events e
+                 WHERE e.review_session_id = $1
+                   AND e.event_kind IN ('ricky_message', 'streamer_transcript')
+                   AND e.metadata ? 'cycle_id'
+                   AND e.expires_at > NOW() + INTERVAL '5 minutes'
+                   AND (e.model_claim_until IS NULL OR e.model_claim_until <= NOW())
+                   AND NOT EXISTS (
+                       SELECT 1
+                         FROM twitch_crew_review_events completed
+                        WHERE completed.metadata->>'cycle_id' = e.metadata->>'cycle_id'
+                          AND completed.event_kind IN ('ai_decision', 'provider_error')
+                   )
+                 ORDER BY e.occurred_at, e.id
+                 FOR UPDATE SKIP LOCKED
+            )
+            UPDATE twitch_crew_review_events claimed
+               SET model_claim_id = $2,
+                   model_claim_until = NOW() + INTERVAL '5 minutes'
+              FROM candidates
+             WHERE claimed.id = candidates.id
+            RETURNING claimed.id",
+        )
+        .bind(session_id)
+        .bind(claim_id)
+        .fetch_all(&mut *transaction)
+        .await?;
+        if claimed_ids.is_empty() {
+            transaction.commit().await?;
+            return Ok(None);
+        }
         let sql = format!(
             "SELECT {EVENT_COLUMNS}
                FROM twitch_crew_review_events e
-              WHERE e.review_session_id = $1
-                AND e.event_kind IN ('ricky_message', 'streamer_transcript')
-                AND e.metadata ? 'cycle_id'
-                AND NOT EXISTS (
-                    SELECT 1
-                      FROM twitch_crew_review_events completed
-                     WHERE completed.metadata->>'cycle_id' = e.metadata->>'cycle_id'
-                       AND completed.event_kind IN ('ai_decision', 'provider_error')
-                )
+              WHERE e.model_claim_id = $1
               ORDER BY e.occurred_at, e.id"
         );
-        event_rows(
+        let events = event_rows(
             sqlx::query_as(&sql)
-                .bind(session_id)
-                .fetch_all(&self.pool)
+                .bind(claim_id)
+                .fetch_all(&mut *transaction)
                 .await?,
+        )?;
+        let claim_until: DateTime<Utc> = sqlx::query_scalar(
+            "SELECT MIN(model_claim_until)
+               FROM twitch_crew_review_events
+              WHERE model_claim_id = $1",
         )
+        .bind(claim_id)
+        .fetch_one(&mut *transaction)
+        .await?;
+        transaction.commit().await?;
+        Ok(Some(ClaimedModelInputs {
+            claim_id,
+            claim_until,
+            events,
+        }))
     }
 
     pub async fn pending_discord_cycles(&self, limit: i64) -> Result<Vec<ReviewCycle>, StoreError> {
         if limit <= 0 {
             return Ok(Vec::new());
         }
-        let sql = format!(
-            "WITH pending_cycles AS (
-                SELECT pending.metadata->>'cycle_id' AS cycle_id,
-                       MIN(pending.occurred_at) AS first_at,
-                       MIN(pending.id) AS first_id
+        let claim_id = Uuid::new_v4();
+        let mut transaction = self.pool.begin().await?;
+        let cycle_ids: Vec<String> = sqlx::query_scalar(
+            "SELECT pending.metadata->>'cycle_id'
+               FROM twitch_crew_review_events pending
+              WHERE pending.discord_message_id IS NULL
+                AND pending.metadata ? 'cycle_id'
+              GROUP BY pending.metadata->>'cycle_id'
+             HAVING BOOL_AND(pending.expires_at > NOW() + INTERVAL '5 minutes')
+                AND BOOL_AND(
+                    pending.discord_claim_until IS NULL
+                    OR pending.discord_claim_until <= NOW()
+                )
+                AND BOOL_OR(pending.event_kind IN (
+                    'ai_decision', 'provider_error', 'session_ended'
+                ))
+              ORDER BY MIN(pending.occurred_at), MIN(pending.id)
+              LIMIT $1",
+        )
+        .bind(limit)
+        .fetch_all(&mut *transaction)
+        .await?;
+        if cycle_ids.is_empty() {
+            transaction.commit().await?;
+            return Ok(Vec::new());
+        }
+        let mut lock_ids = cycle_ids.clone();
+        lock_ids.sort_unstable();
+        for cycle_id in lock_ids {
+            lock_cycle(
+                &mut transaction,
+                Uuid::parse_str(&cycle_id).map_err(|_| StoreError::InvalidMetadata)?,
+            )
+            .await?;
+        }
+        let claimed_ids: Vec<i64> = sqlx::query_scalar(
+            "WITH eligible_cycles AS (
+                SELECT pending.metadata->>'cycle_id' AS cycle_id
                   FROM twitch_crew_review_events pending
                  WHERE pending.discord_message_id IS NULL
                    AND pending.metadata ? 'cycle_id'
-                   AND EXISTS (
-                       SELECT 1
-                         FROM twitch_crew_review_events terminal
-                        WHERE terminal.metadata->>'cycle_id' = pending.metadata->>'cycle_id'
-                          AND terminal.event_kind IN (
-                              'ai_decision', 'provider_error', 'session_ended'
-                          )
-                   )
+                   AND pending.metadata->>'cycle_id' = ANY($1::text[])
                  GROUP BY pending.metadata->>'cycle_id'
-                 ORDER BY MIN(pending.occurred_at), MIN(pending.id)
-                 LIMIT $1
+                HAVING BOOL_AND(pending.expires_at > NOW() + INTERVAL '5 minutes')
+                   AND BOOL_AND(
+                       pending.discord_claim_until IS NULL
+                       OR pending.discord_claim_until <= NOW()
+                   )
+                   AND BOOL_OR(pending.event_kind IN (
+                       'ai_decision', 'provider_error', 'session_ended'
+                   ))
+            ), candidates AS (
+                SELECT event.id
+                  FROM twitch_crew_review_events event
+                  JOIN eligible_cycles eligible
+                    ON eligible.cycle_id = event.metadata->>'cycle_id'
+                 WHERE event.discord_message_id IS NULL
             )
-            SELECT {EVENT_COLUMNS}
+            UPDATE twitch_crew_review_events claimed
+               SET discord_claim_id = $2,
+                   discord_claim_until = NOW() + INTERVAL '5 minutes'
+              FROM candidates
+             WHERE claimed.id = candidates.id
+            RETURNING claimed.id",
+        )
+        .bind(&cycle_ids)
+        .bind(claim_id)
+        .fetch_all(&mut *transaction)
+        .await?;
+        if claimed_ids.is_empty() {
+            transaction.commit().await?;
+            return Ok(Vec::new());
+        }
+        let sql = format!(
+            "SELECT {EVENT_COLUMNS}
               FROM twitch_crew_review_events e
-              JOIN pending_cycles pending
-                ON pending.cycle_id = e.metadata->>'cycle_id'
-             WHERE e.discord_message_id IS NULL
-             ORDER BY pending.first_at, pending.first_id, e.occurred_at, e.id"
+              WHERE e.discord_claim_id = $1
+              ORDER BY
+                  MIN(e.occurred_at) OVER (PARTITION BY e.metadata->>'cycle_id'),
+                  MIN(e.id) OVER (PARTITION BY e.metadata->>'cycle_id'),
+                  e.occurred_at,
+                  e.id"
         );
         let events = event_rows(
             sqlx::query_as(&sql)
-                .bind(limit)
-                .fetch_all(&self.pool)
+                .bind(claim_id)
+                .fetch_all(&mut *transaction)
                 .await?,
         )?;
+        let claim_until: DateTime<Utc> = sqlx::query_scalar(
+            "SELECT MIN(discord_claim_until)
+               FROM twitch_crew_review_events
+              WHERE discord_claim_id = $1",
+        )
+        .bind(claim_id)
+        .fetch_one(&mut *transaction)
+        .await?;
+        transaction.commit().await?;
         let mut cycles: Vec<ReviewCycle> = Vec::new();
         for event in events {
             let cycle_id = cycle_id(&event.metadata)?;
@@ -255,6 +474,8 @@ impl CrewReviewStore {
                     cycle_id,
                     session_id: event.session_id,
                     channel_login: event.channel_login.clone(),
+                    claim_id,
+                    claim_until,
                     events: Vec::new(),
                 });
             }
@@ -269,22 +490,80 @@ impl CrewReviewStore {
     pub async fn mark_discord_sent(
         &self,
         event_ids: &[i64],
+        claim_id: Uuid,
         message_id: &str,
     ) -> Result<(), StoreError> {
-        if event_ids.is_empty() {
-            return Ok(());
+        if event_ids.is_empty() || message_id.trim().is_empty() {
+            return Err(StoreError::InvalidClaim);
         }
-        sqlx::query(
+        let requested_ids: HashSet<i64> = event_ids.iter().copied().collect();
+        if requested_ids.len() != event_ids.len() {
+            return Err(StoreError::InvalidClaim);
+        }
+        let mut transaction = self.pool.begin().await?;
+        let requested_rows: Vec<(i64, Option<String>)> = sqlx::query_as(
+            "SELECT id, metadata->>'cycle_id'
+               FROM twitch_crew_review_events
+              WHERE id = ANY($1::bigint[])
+                AND discord_claim_id = $2
+                AND discord_claim_until > NOW()
+                AND expires_at > NOW()
+                AND discord_message_id IS NULL
+              FOR UPDATE",
+        )
+        .bind(event_ids)
+        .bind(claim_id)
+        .fetch_all(&mut *transaction)
+        .await?;
+        if requested_rows.len() != requested_ids.len() {
+            return Err(StoreError::InvalidClaim);
+        }
+        let cycle_ids: HashSet<String> = requested_rows
+            .into_iter()
+            .map(|(_, cycle_id)| cycle_id.ok_or(StoreError::InvalidClaim))
+            .collect::<Result<_, _>>()?;
+        let cycle_ids: Vec<String> = cycle_ids.into_iter().collect();
+        let claimed_ids: HashSet<i64> = sqlx::query_scalar(
+            "SELECT id
+               FROM twitch_crew_review_events
+              WHERE discord_claim_id = $1
+                AND discord_message_id IS NULL
+                AND metadata->>'cycle_id' = ANY($2::text[])
+              FOR UPDATE",
+        )
+        .bind(claim_id)
+        .bind(&cycle_ids)
+        .fetch_all(&mut *transaction)
+        .await?
+        .into_iter()
+        .collect();
+        if claimed_ids != requested_ids {
+            return Err(StoreError::InvalidClaim);
+        }
+        let updated = sqlx::query(
             "UPDATE twitch_crew_review_events
                 SET discord_message_id = $1,
                     discord_deleted_at = NULL,
-                    last_delete_error = NULL
-              WHERE id = ANY($2::bigint[])",
+                    last_delete_error = NULL,
+                    discord_claim_id = NULL,
+                    discord_claim_until = NULL
+              WHERE id = ANY($2::bigint[])
+                AND discord_claim_id = $3
+                AND discord_claim_until > NOW()
+                AND expires_at > NOW()
+                AND discord_message_id IS NULL",
         )
         .bind(message_id)
         .bind(event_ids)
-        .execute(&self.pool)
-        .await?;
+        .bind(claim_id)
+        .execute(&mut *transaction)
+        .await?
+        .rows_affected();
+        if updated != requested_ids.len() as u64 {
+            transaction.rollback().await?;
+            return Err(StoreError::InvalidClaim);
+        }
+        transaction.commit().await?;
         Ok(())
     }
 
@@ -302,6 +581,8 @@ impl CrewReviewStore {
               WHERE discord_message_id IS NOT NULL
               GROUP BY discord_message_id
              HAVING BOOL_AND(expires_at <= $1)
+                AND BOOL_AND(model_claim_until IS NULL OR model_claim_until <= $1)
+                AND BOOL_AND(discord_claim_until IS NULL OR discord_claim_until <= $1)
               ORDER BY MIN(expires_at), discord_message_id
               LIMIT $2",
         )
@@ -337,6 +618,8 @@ impl CrewReviewStore {
                     last_delete_error = $2,
                     tombstoned_at = NOW()
               WHERE event.discord_message_id = $1
+                AND (event.model_claim_until IS NULL OR event.model_claim_until <= NOW())
+                AND (event.discord_claim_until IS NULL OR event.discord_claim_until <= NOW())
                 AND NOT EXISTS (
                     SELECT 1
                       FROM twitch_crew_review_events fresh
@@ -356,6 +639,14 @@ impl CrewReviewStore {
             "DELETE FROM twitch_crew_review_events expired
               WHERE expired.discord_message_id = $1
                 AND expired.expires_at <= NOW()
+                AND (
+                    expired.model_claim_until IS NULL
+                    OR expired.model_claim_until <= NOW()
+                )
+                AND (
+                    expired.discord_claim_until IS NULL
+                    OR expired.discord_claim_until <= NOW()
+                )
                 AND NOT EXISTS (
                     SELECT 1
                       FROM twitch_crew_review_events fresh
@@ -373,7 +664,9 @@ impl CrewReviewStore {
         Ok(sqlx::query(
             "DELETE FROM twitch_crew_review_events
               WHERE discord_message_id IS NULL
-                AND expires_at <= $1",
+                AND expires_at <= $1
+                AND (model_claim_until IS NULL OR model_claim_until <= $1)
+                AND (discord_claim_until IS NULL OR discord_claim_until <= $1)",
         )
         .bind(now)
         .execute(&self.pool)
@@ -435,6 +728,142 @@ impl TryFrom<ReviewEventRow> for ReviewEvent {
 
 fn event_rows(rows: Vec<ReviewEventRow>) -> Result<Vec<ReviewEvent>, StoreError> {
     rows.into_iter().map(ReviewEvent::try_from).collect()
+}
+
+async fn lock_channel(
+    transaction: &mut Transaction<'_, Postgres>,
+    channel_login: &str,
+) -> Result<(), StoreError> {
+    sqlx::query("SELECT pg_advisory_xact_lock(hashtextextended($1, 0))")
+        .bind(channel_login)
+        .execute(&mut **transaction)
+        .await?;
+    Ok(())
+}
+
+async fn lock_cycle(
+    transaction: &mut Transaction<'_, Postgres>,
+    cycle_id: Uuid,
+) -> Result<(), StoreError> {
+    sqlx::query("SELECT pg_advisory_xact_lock(hashtextextended($1, 1))")
+        .bind(cycle_id.to_string())
+        .execute(&mut **transaction)
+        .await?;
+    Ok(())
+}
+
+async fn lock_event_session(
+    transaction: &mut Transaction<'_, Postgres>,
+    event: &NewReviewEvent,
+) -> Result<(), StoreError> {
+    let identity: Option<(String, String)> = sqlx::query_as(
+        "SELECT channel_login, subject_twitch_user_id
+           FROM twitch_crew_review_events
+          WHERE review_session_id = $1
+          ORDER BY id
+          LIMIT 1",
+    )
+    .bind(event.session_id)
+    .fetch_optional(&mut **transaction)
+    .await?;
+    let Some((channel_login, subject_twitch_user_id)) = identity else {
+        return Err(StoreError::MissingSession);
+    };
+    lock_channel(transaction, &channel_login).await?;
+    if event.channel_login != channel_login
+        || event.subject_twitch_user_id != subject_twitch_user_id
+    {
+        return Err(StoreError::SessionMismatch);
+    }
+    let identity_is_consistent: bool = sqlx::query_scalar(
+        "SELECT BOOL_AND(channel_login = $2 AND subject_twitch_user_id = $3)
+           FROM twitch_crew_review_events
+          WHERE review_session_id = $1",
+    )
+    .bind(event.session_id)
+    .bind(&channel_login)
+    .bind(&subject_twitch_user_id)
+    .fetch_one(&mut **transaction)
+    .await?;
+    if !identity_is_consistent {
+        return Err(StoreError::SessionMismatch);
+    }
+    Ok(())
+}
+
+fn changes_session_state(event: &NewReviewEvent) -> bool {
+    match event.event_kind {
+        ReviewEventKind::SessionStarted
+        | ReviewEventKind::RickyMessage
+        | ReviewEventKind::SessionEnded => true,
+        ReviewEventKind::StreamerTranscript => {
+            event.metadata.get("subject_mentioned") == Some(&Value::Bool(true))
+        }
+        ReviewEventKind::AiDecision => {
+            event.metadata.get("topic_active") == Some(&Value::Bool(true))
+        }
+        ReviewEventKind::AiDraft | ReviewEventKind::ProviderError => false,
+    }
+}
+
+async fn reject_stale_session(
+    transaction: &mut Transaction<'_, Postgres>,
+    event: &NewReviewEvent,
+) -> Result<(), StoreError> {
+    let current_session: Option<Uuid> = sqlx::query_scalar(
+        "SELECT latest.review_session_id
+           FROM (
+               SELECT review_session_id
+                 FROM twitch_crew_review_events
+                WHERE channel_login = $1
+                  AND event_kind = 'session_started'
+                ORDER BY id DESC
+                LIMIT 1
+           ) latest
+          WHERE NOT EXISTS (
+                SELECT 1
+                  FROM twitch_crew_review_events ended
+                 WHERE ended.review_session_id = latest.review_session_id
+                   AND ended.event_kind = 'session_ended'
+          )",
+    )
+    .bind(&event.channel_login)
+    .fetch_optional(&mut **transaction)
+    .await?;
+    if current_session != Some(event.session_id) {
+        return Err(StoreError::StaleSession);
+    }
+    Ok(())
+}
+
+async fn reject_sealed_discord_cycle(
+    transaction: &mut Transaction<'_, Postgres>,
+    event: &NewReviewEvent,
+    cycle_id: Uuid,
+) -> Result<(), StoreError> {
+    let sealed: bool = sqlx::query_scalar(
+        "SELECT EXISTS (
+            SELECT 1
+              FROM twitch_crew_review_events
+             WHERE review_session_id = $1
+               AND metadata->>'cycle_id' = $2
+               AND (
+                   discord_message_id IS NOT NULL
+                   OR (
+                       discord_claim_id IS NOT NULL
+                       AND discord_claim_until > NOW()
+                   )
+               )
+        )",
+    )
+    .bind(event.session_id)
+    .bind(cycle_id.to_string())
+    .fetch_one(&mut **transaction)
+    .await?;
+    if sealed {
+        return Err(StoreError::InvalidClaim);
+    }
+    Ok(())
 }
 
 async fn insert_event_chunks(

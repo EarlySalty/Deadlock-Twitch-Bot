@@ -21,12 +21,20 @@ CREATE TABLE twitch_crew_review_events (
     model TEXT,
     confidence DOUBLE PRECISION
         CHECK (confidence IS NULL OR confidence BETWEEN 0.0 AND 1.0),
+    model_claim_id UUID,
+    model_claim_until TIMESTAMPTZ,
+    discord_claim_id UUID,
+    discord_claim_until TIMESTAMPTZ,
     discord_message_id TEXT,
     discord_deleted_at TIMESTAMPTZ,
     last_delete_error TEXT,
     tombstoned_at TIMESTAMPTZ,
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-    expires_at TIMESTAMPTZ NOT NULL DEFAULT (NOW() + INTERVAL '6 months')
+    expires_at TIMESTAMPTZ NOT NULL DEFAULT (NOW() + INTERVAL '6 months'),
+    CHECK ((model_claim_id IS NULL) = (model_claim_until IS NULL)),
+    CHECK (model_claim_until IS NULL OR model_claim_until < expires_at),
+    CHECK ((discord_claim_id IS NULL) = (discord_claim_until IS NULL)),
+    CHECK (discord_claim_until IS NULL OR discord_claim_until < expires_at)
 );
 
 CREATE UNIQUE INDEX twitch_crew_review_events_ricky_source_uidx

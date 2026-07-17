@@ -556,6 +556,8 @@ twitch_crew_review_events|channel_login|text|NO|
 twitch_crew_review_events|confidence|double precision|YES|
 twitch_crew_review_events|content|text|YES|
 twitch_crew_review_events|created_at|timestamp with time zone|NO|now()
+twitch_crew_review_events|discord_claim_id|uuid|YES|
+twitch_crew_review_events|discord_claim_until|timestamp with time zone|YES|
 twitch_crew_review_events|discord_deleted_at|timestamp with time zone|YES|
 twitch_crew_review_events|discord_message_id|text|YES|
 twitch_crew_review_events|event_kind|text|NO|
@@ -564,6 +566,8 @@ twitch_crew_review_events|id|bigint|NO|nextval('twitch_crew_review_events_id_seq
 twitch_crew_review_events|last_delete_error|text|YES|
 twitch_crew_review_events|metadata|jsonb|NO|'{}'::jsonb
 twitch_crew_review_events|model|text|YES|
+twitch_crew_review_events|model_claim_id|uuid|YES|
+twitch_crew_review_events|model_claim_until|timestamp with time zone|YES|
 twitch_crew_review_events|occurred_at|timestamp with time zone|NO|
 twitch_crew_review_events|provider|text|YES|
 twitch_crew_review_events|review_session_id|uuid|NO|
