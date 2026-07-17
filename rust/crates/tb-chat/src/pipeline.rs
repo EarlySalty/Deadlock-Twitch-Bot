@@ -82,7 +82,7 @@ pub const SCAM_PITCH_TIMEOUT_REASON: &str =
     "Account-Takeover-Verdacht / wiederholter Service-Pitch";
 
 const SUS_INVITE_TIMEOUT_SECS: u32 = 600;
-const SUS_INVITE_TIMEOUT_REASON: &str = "PLATZHALTER: Timeout-Grund fremder Discord-Link";
+const SUS_INVITE_TIMEOUT_REASON: &str = "Fremde Discord-Werbung ist hier nicht erlaubt";
 
 const SPAM_META_REPLY_COOLDOWN_SECS: u64 = 60 * 60;
 const SPAM_META_REPLIES: [&str; 3] = [
