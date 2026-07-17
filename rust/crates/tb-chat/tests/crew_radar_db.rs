@@ -98,6 +98,7 @@ async fn ledger_speichert_auch_clean_entscheidung_vollstaendig() {
     .await
     .expect("Ledger schreiben");
 
+    #[allow(clippy::type_complexity)]
     let row: (String, String, Option<String>, i64, i16, serde_json::Value, bool, serde_json::Value, String, Option<f32>, Option<String>, String, String) =
         sqlx::query_as("SELECT channel_login, chatter_login, chatter_id, account_age_days, style_score, style_breakdown, time_window_match, messages, llm_verdict, llm_confidence, llm_reasoning, action_taken, source FROM twitch_crew_radar_log")
             .fetch_one(&pool)

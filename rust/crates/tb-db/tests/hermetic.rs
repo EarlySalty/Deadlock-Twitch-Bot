@@ -497,9 +497,14 @@ async fn row_structs_map_real_columns() {
     let dsn = skip_without_db!();
     let pool = tb_db::connect(&cfg(dsn)).await.expect("connect");
 
+    sqlx::raw_sql("DROP SCHEMA IF EXISTS tb_db_rows CASCADE; CREATE SCHEMA tb_db_rows")
+        .execute(&pool)
+        .await
+        .unwrap();
+
     // Kontrolliertes DDL, das das Prod-Schema nachbildet (Timestamps als text!).
     sqlx::query(
-        "CREATE TABLE IF NOT EXISTS twitch_streamers (
+        "CREATE TABLE tb_db_rows.twitch_streamers (
             twitch_login TEXT PRIMARY KEY,
             twitch_user_id TEXT,
             created_at TEXT DEFAULT CURRENT_TIMESTAMP
@@ -509,7 +514,7 @@ async fn row_structs_map_real_columns() {
     .await
     .unwrap();
     sqlx::query(
-        "CREATE TABLE IF NOT EXISTS streamer_plans (
+        "CREATE TABLE tb_db_rows.streamer_plans (
             twitch_user_id TEXT PRIMARY KEY,
             twitch_login TEXT,
             plan_name TEXT NOT NULL DEFAULT 'free',
@@ -523,21 +528,30 @@ async fn row_structs_map_real_columns() {
     .await
     .unwrap();
 
-    sqlx::query("INSERT INTO twitch_streamers (twitch_login, twitch_user_id) VALUES ('dragskope', '42') ON CONFLICT DO NOTHING")
+    sqlx::query("INSERT INTO tb_db_rows.twitch_streamers (twitch_login, twitch_user_id) VALUES ('dragskope', '42')")
         .execute(&pool).await.unwrap();
-    sqlx::query("INSERT INTO streamer_plans (twitch_user_id, plan_name) VALUES ('42', 'pro') ON CONFLICT DO NOTHING")
-        .execute(&pool).await.unwrap();
+    sqlx::query(
+        "INSERT INTO tb_db_rows.streamer_plans (twitch_user_id, plan_name) VALUES ('42', 'pro')",
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
 
     let s: TwitchStreamerRow =
-        sqlx::query_as("SELECT twitch_login, twitch_user_id, created_at FROM twitch_streamers WHERE twitch_login = 'dragskope'")
+        sqlx::query_as("SELECT twitch_login, twitch_user_id, created_at FROM tb_db_rows.twitch_streamers WHERE twitch_login = 'dragskope'")
             .fetch_one(&pool).await.unwrap();
     assert_eq!(s.twitch_login, "dragskope");
     assert_eq!(s.twitch_user_id.as_deref(), Some("42"));
     assert!(s.created_at.is_some()); // text-Timestamp, kein timestamptz
 
     let p: StreamerPlanRow =
-        sqlx::query_as("SELECT twitch_user_id, twitch_login, plan_name, promo_disabled, activated_at, expires_at, trial_ever_granted FROM streamer_plans WHERE twitch_user_id = '42'")
+        sqlx::query_as("SELECT twitch_user_id, twitch_login, plan_name, promo_disabled, activated_at, expires_at, trial_ever_granted FROM tb_db_rows.streamer_plans WHERE twitch_user_id = '42'")
             .fetch_one(&pool).await.unwrap();
     assert_eq!(p.plan_name, "pro");
     assert_eq!(p.promo_disabled, 0);
+
+    sqlx::query("DROP SCHEMA tb_db_rows CASCADE")
+        .execute(&pool)
+        .await
+        .unwrap();
 }

@@ -1115,6 +1115,8 @@ twitch_stream_report_ratings|report_variant|text|NO|'compact'::text
 twitch_stream_report_ratings|session_id|bigint|NO|
 twitch_stream_report_ratings|streamer_login|text|NO|
 twitch_stream_report_ratings|updated_at|timestamp with time zone|YES|now()
+twitch_stream_sessions_duration_repair_backup|duration_seconds|integer|YES|
+twitch_stream_sessions_duration_repair_backup|id|bigint|YES|
 twitch_stream_sessions|avg_viewers|double precision|YES|0
 twitch_stream_sessions|dropoff_label|text|YES|
 twitch_stream_sessions|dropoff_pct|double precision|YES|

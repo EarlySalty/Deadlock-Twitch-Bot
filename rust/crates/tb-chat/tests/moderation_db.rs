@@ -505,6 +505,7 @@ async fn conversation_scam_timeout_schreibt_echte_evidence_und_message_action() 
         .await;
 
     assert!(enforced);
+    #[allow(clippy::type_complexity)]
     let (channel, chatter, content, action, reason): (
         Option<String>,
         Option<String>,

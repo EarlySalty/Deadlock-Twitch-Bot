@@ -2240,6 +2240,7 @@ mod tests {
         succeeds: StdMutex<bool>,
         reasons: StdMutex<Vec<String>>,
         timeout_reasons: StdMutex<Vec<String>>,
+        #[allow(clippy::type_complexity)]
         timeout_evidence: StdMutex<Vec<(Option<String>, Option<String>, Option<String>)>>,
     }
 
