@@ -58,6 +58,7 @@ pub mod leaderboard;
 pub(crate) mod legacy_form;
 pub mod legal;
 pub mod loyalty_curve;
+pub mod lurk_command_settings;
 pub mod lurker_analysis;
 pub mod lurker_tax_settings;
 pub mod market;

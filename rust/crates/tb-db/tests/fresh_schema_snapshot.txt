@@ -264,6 +264,7 @@ streamer_onboarding|updated_at|timestamp with time zone|NO|now()
 streamer_plans|activated_at|text|NO|CURRENT_TIMESTAMP
 streamer_plans|expires_at|text|YES|
 streamer_plans|first_login_at|text|YES|
+streamer_plans|lurk_command_enabled|integer|NO|1
 streamer_plans|lurker_tax_enabled|integer|NO|0
 streamer_plans|manual_plan_expires_at|text|YES|
 streamer_plans|manual_plan_id|text|YES|

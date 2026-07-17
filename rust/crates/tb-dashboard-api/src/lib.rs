@@ -147,7 +147,8 @@ pub fn build_authed_router(pool: PgPool, token: String, rate_limiter: RateLimite
         category_leaderboard, category_timings, chat_analytics, chat_content_analysis,
         chat_deep_minimax, chat_hype_timeline, chat_social_graph, coaching, engagement_mode,
         engagement_settings, exp_analytics, follower_funnel, internal_home, leaderboard,
-        loyalty_curve, lurker_analysis, lurker_tax_settings, monetization, onboarding, overview,
+        loyalty_curve, lurk_command_settings, lurker_analysis, lurker_tax_settings, monetization,
+        onboarding, overview,
         performance, raid_analytics, raid_history, rankings, retention_curve, scam_guard_queue,
         scam_guard_settings, session_detail, silent_settings, social_media, spa, stream_report,
         streamers, tag_analysis, tip_settings, title, title_performance, viewer_timeline, viewers,
@@ -364,6 +365,12 @@ pub fn build_authed_router(pool: PgPool, token: String, rate_limiter: RateLimite
         .route(
             "/twitch/api/v2/streamer/lurker-tax-settings",
             get(lurker_tax_settings::get_handler).post(lurker_tax_settings::post_handler),
+        )
+        // Streamer-Selbstbedienung: !lurk-Command-Toggle. Default aktiviert
+        // (bestehendes Verhalten), Spalte streamer_plans.lurk_command_enabled.
+        .route(
+            "/twitch/api/v2/streamer/lurk-command-settings",
+            get(lurk_command_settings::get_handler).post(lurk_command_settings::post_handler),
         )
         // AI-Engagement-Dashboard: Admin/Super-Mod sieht alle Kanäle, Partner nur
         // den eigenen. settings (Liste), toggle (an/aus), update (steam/persona/

@@ -1,3 +1,11 @@
+## #387 — !lurk im Dashboard abschaltbar
+
+**Problem:** Der Chat-Command !lurk lief immer mit fester Antwort, ohne dass Streamer das für ihren eigenen Kanal ausschalten konnten.
+
+**Änderung:** Im Verwaltungs-Dashboard gibt's jetzt einen Schalter für !lurk. Aus lässt den Befehl technisch bestehen, der Bot antwortet dann einfach nicht mehr darauf.
+
+**Aktuelles Verhalten:** Standardmäßig bleibt !lurk wie bisher aktiv; wer will, schaltet es im Dashboard für den eigenen Kanal ab.
+
 ## #385 — Globale Ban-Liste im Dashboard, pro Kanal abschaltbar
 
 **Problem:** Die server-weite Ban-Liste ließ sich nur über die interne Schnittstelle pflegen und griff in jedem betreuten Kanal, ohne Möglichkeit, das für einzelne Kanäle abzuschalten.
