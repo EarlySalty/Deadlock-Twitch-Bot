@@ -1031,8 +1031,7 @@ mod tests {
         Mock::given(method("POST"))
             .and(path("/chat/completions"))
             .respond_with(
-                ResponseTemplate::new(307)
-                    .insert_header("location", redirected_url.as_str()),
+                ResponseTemplate::new(307).insert_header("location", redirected_url.as_str()),
             )
             .expect(1)
             .mount(&source)
