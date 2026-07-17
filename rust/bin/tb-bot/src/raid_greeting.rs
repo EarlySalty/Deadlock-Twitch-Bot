@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use tb_chat::types::{ChatMessageEvent, SendOutcome};
 use tb_chat::ChatApi;
@@ -9,6 +9,12 @@ use tb_raid::{RaidGreetingMonitorPort, RaidGreetingRegistration};
 // ponytail: 20 Min Kulanz; Pending ist prozess-lokal, Neustart verwirft es konservativ: lieber kein Whisper als ein falscher Vorwurf.
 const GREETING_WINDOW: Duration = Duration::from_secs(20 * 60);
 
+pub trait RaidTargetChatProbe: Send + Sync {
+    fn watch(&self, channel: &str);
+    fn unwatch(&self, channel: &str);
+    fn has_written(&self, channel: &str, nick: &str, since: Instant) -> Option<bool>;
+}
+
 #[derive(Debug, Clone)]
 struct PendingGreeting {
     key: String,
@@ -16,27 +22,36 @@ struct PendingGreeting {
     from_broadcaster_login: String,
     to_broadcaster_id: String,
     to_broadcaster_login: String,
+    probe_watched: bool,
+    probe_started_at: Instant,
 }
 
 pub struct RaidGreetingMonitor {
     chat: Arc<dyn ChatApi>,
+    probe: Option<Arc<dyn RaidTargetChatProbe>>,
     pending: Arc<Mutex<HashMap<String, PendingGreeting>>>,
     greeting_window: Duration,
 }
 
 impl RaidGreetingMonitor {
-    pub fn new(chat: Arc<dyn ChatApi>) -> Self {
+    pub fn new(chat: Arc<dyn ChatApi>, probe: Option<Arc<dyn RaidTargetChatProbe>>) -> Self {
         Self {
             chat,
+            probe,
             pending: Arc::new(Mutex::new(HashMap::new())),
             greeting_window: GREETING_WINDOW,
         }
     }
 
     #[cfg(test)]
-    fn with_window(chat: Arc<dyn ChatApi>, greeting_window: Duration) -> Self {
+    fn with_window(
+        chat: Arc<dyn ChatApi>,
+        probe: Option<Arc<dyn RaidTargetChatProbe>>,
+        greeting_window: Duration,
+    ) -> Self {
         Self {
             chat,
+            probe,
             pending: Arc::new(Mutex::new(HashMap::new())),
             greeting_window,
         }
@@ -69,9 +84,16 @@ impl RaidGreetingMonitor {
                 .unwrap_or_else(|poisoned| poisoned.into_inner())
                 .remove(&key);
             if let Some(item) = removed {
+                if item.probe_watched {
+                    if let Some(probe) = &self.probe {
+                        probe.unwatch(&item.to_broadcaster_login);
+                    }
+                }
                 tracing::info!(
                     from = %item.from_broadcaster_login,
                     to = %item.to_broadcaster_login,
+                    whisper = false,
+                    reason = "eventsub_chat_observed",
                     "Raider hat im Zielchat geschrieben"
                 );
             }
@@ -86,6 +108,11 @@ impl RaidGreetingMonitor {
         }
         let from_broadcaster_login = clean_login(&registration.from_broadcaster_login);
         let to_broadcaster_login = clean_login(&registration.to_broadcaster_login);
+        let probe_watched = self.probe.is_some();
+        let probe_started_at = Instant::now();
+        if let Some(probe) = &self.probe {
+            probe.watch(&to_broadcaster_login);
+        }
         let key = format!("{to_broadcaster_id}:{from_broadcaster_id}");
         let pending = PendingGreeting {
             key: key.clone(),
@@ -93,6 +120,8 @@ impl RaidGreetingMonitor {
             from_broadcaster_login,
             to_broadcaster_id,
             to_broadcaster_login,
+            probe_watched,
+            probe_started_at,
         };
         self.pending
             .lock()
@@ -135,6 +164,7 @@ impl RaidGreetingMonitor {
     fn spawn_deadline(&self, key: String) {
         let pending = Arc::clone(&self.pending);
         let chat = Arc::clone(&self.chat);
+        let probe = self.probe.clone();
         let greeting_window = self.greeting_window;
         tokio::spawn(async move {
             tokio::time::sleep(greeting_window).await;
@@ -145,6 +175,53 @@ impl RaidGreetingMonitor {
             let Some(item) = item else {
                 return;
             };
+
+            let probe_result = if item.probe_watched {
+                probe.as_ref().and_then(|probe| {
+                    probe.has_written(
+                        &item.to_broadcaster_login,
+                        &item.from_broadcaster_login,
+                        item.probe_started_at,
+                    )
+                })
+            } else {
+                None
+            };
+            if item.probe_watched {
+                if let Some(probe) = &probe {
+                    probe.unwatch(&item.to_broadcaster_login);
+                }
+            }
+
+            match probe_result {
+                Some(true) => {
+                    tracing::info!(
+                        from = %item.from_broadcaster_login,
+                        to = %item.to_broadcaster_login,
+                        whisper = false,
+                        reason = "irc_privmsg_observed",
+                        "Raid-Begrüßungs-Erinnerung nicht gesendet"
+                    );
+                    return;
+                }
+                Some(false) => tracing::info!(
+                    from = %item.from_broadcaster_login,
+                    to = %item.to_broadcaster_login,
+                    whisper = true,
+                    reason = "irc_probe_verified_silent",
+                    "Raid-Begrüßungs-Erinnerung wird gesendet"
+                ),
+                None => {
+                    tracing::info!(
+                        from = %item.from_broadcaster_login,
+                        to = %item.to_broadcaster_login,
+                        whisper = false,
+                        reason = "irc_probe_unavailable",
+                        "Raid-Begrüßungs-Erinnerung nicht gesendet"
+                    );
+                    return;
+                }
+            }
 
             match chat
                 .send_whisper(&item.from_broadcaster_id, WHISPER_REMINDER)
@@ -175,6 +252,11 @@ impl RaidGreetingMonitor {
 impl RaidGreetingMonitorPort for RaidGreetingMonitor {
     async fn raid_started(&self, registration: RaidGreetingRegistration) {
         let Some(pending) = self.register(registration) else {
+            tracing::info!(
+                whisper = false,
+                reason = "invalid_raid_registration",
+                "Raid-Begrüßungs-Erinnerung nicht geplant"
+            );
             return;
         };
         self.send_source_hint(&pending);
@@ -211,6 +293,36 @@ mod tests {
     struct FakeChatApi {
         messages: Mutex<Vec<(String, String)>>,
         whispers: Mutex<Vec<(String, String)>>,
+    }
+
+    struct FakeProbe {
+        result: Option<bool>,
+        watched: Mutex<Vec<String>>,
+        unwatched: Mutex<Vec<String>>,
+    }
+
+    impl FakeProbe {
+        fn new(result: Option<bool>) -> Self {
+            Self {
+                result,
+                watched: Mutex::new(Vec::new()),
+                unwatched: Mutex::new(Vec::new()),
+            }
+        }
+    }
+
+    impl RaidTargetChatProbe for FakeProbe {
+        fn watch(&self, channel: &str) {
+            self.watched.lock().unwrap().push(channel.to_string());
+        }
+
+        fn unwatch(&self, channel: &str) {
+            self.unwatched.lock().unwrap().push(channel.to_string());
+        }
+
+        fn has_written(&self, _channel: &str, _nick: &str, _since: Instant) -> Option<bool> {
+            self.result
+        }
     }
 
     #[async_trait::async_trait]
@@ -329,7 +441,9 @@ mod tests {
     async fn beliebige_raider_nachricht_erfuellt_pending_ohne_whisper() {
         let fake = Arc::new(FakeChatApi::default());
         let chat: Arc<dyn ChatApi> = fake.clone();
-        let monitor = RaidGreetingMonitor::with_window(chat, Duration::from_millis(20));
+        let probe = Arc::new(FakeProbe::new(Some(false)));
+        let monitor =
+            RaidGreetingMonitor::with_window(chat, Some(probe.clone()), Duration::from_millis(20));
 
         monitor.raid_started(registration()).await;
         monitor.observe_chat(&chat_event("gg wp starker stream"));
@@ -340,13 +454,15 @@ mod tests {
         assert_eq!(messages.len(), 1);
         assert_eq!(messages[0].0, "from1");
         assert!(messages[0].1.contains("@ziel"));
+        assert_eq!(probe.unwatched.lock().unwrap().as_slice(), ["ziel"]);
     }
 
     #[tokio::test(start_paused = true)]
     async fn fremder_chatter_erfuellt_pending_nicht() {
         let fake = Arc::new(FakeChatApi::default());
         let chat: Arc<dyn ChatApi> = fake.clone();
-        let monitor = RaidGreetingMonitor::with_window(chat, Duration::from_millis(5));
+        let probe = Arc::new(FakeProbe::new(Some(false)));
+        let monitor = RaidGreetingMonitor::with_window(chat, Some(probe), Duration::from_millis(5));
 
         monitor.raid_started(registration()).await;
         let mut event = chat_event("gg wp starker stream");
@@ -364,7 +480,8 @@ mod tests {
     async fn falscher_zielkanal_erfuellt_pending_nicht() {
         let fake = Arc::new(FakeChatApi::default());
         let chat: Arc<dyn ChatApi> = fake.clone();
-        let monitor = RaidGreetingMonitor::with_window(chat, Duration::from_millis(5));
+        let probe = Arc::new(FakeProbe::new(Some(false)));
+        let monitor = RaidGreetingMonitor::with_window(chat, Some(probe), Duration::from_millis(5));
 
         monitor.raid_started(registration()).await;
         let mut event = chat_event("gg wp starker stream");
@@ -381,7 +498,9 @@ mod tests {
     async fn fehlende_begruessung_sendet_whisper() {
         let fake = Arc::new(FakeChatApi::default());
         let chat: Arc<dyn ChatApi> = fake.clone();
-        let monitor = RaidGreetingMonitor::with_window(chat, Duration::from_millis(5));
+        let probe = Arc::new(FakeProbe::new(Some(false)));
+        let monitor =
+            RaidGreetingMonitor::with_window(chat, Some(probe.clone()), Duration::from_millis(5));
 
         monitor.raid_started(registration()).await;
         tokio::time::sleep(Duration::from_millis(30)).await;
@@ -390,6 +509,50 @@ mod tests {
         assert_eq!(whispers.len(), 1);
         assert_eq!(whispers[0].0, "from1");
         assert!(whispers[0].1.to_lowercase().contains("hallo"));
+        assert_eq!(probe.watched.lock().unwrap().as_slice(), ["ziel"]);
+        assert_eq!(probe.unwatched.lock().unwrap().as_slice(), ["ziel"]);
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn geschriebener_privmsg_verhindert_whisper() {
+        let fake = Arc::new(FakeChatApi::default());
+        let chat: Arc<dyn ChatApi> = fake.clone();
+        let probe = Arc::new(FakeProbe::new(Some(true)));
+        let monitor =
+            RaidGreetingMonitor::with_window(chat, Some(probe.clone()), Duration::from_millis(5));
+
+        monitor.raid_started(registration()).await;
+        tokio::time::sleep(Duration::from_millis(30)).await;
+
+        assert!(fake.whispers.lock().unwrap().is_empty());
+        assert_eq!(probe.unwatched.lock().unwrap().as_slice(), ["ziel"]);
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn fehlende_probe_verhindert_whisper() {
+        let fake = Arc::new(FakeChatApi::default());
+        let chat: Arc<dyn ChatApi> = fake.clone();
+        let monitor = RaidGreetingMonitor::with_window(chat, None, Duration::from_millis(5));
+
+        monitor.raid_started(registration()).await;
+        tokio::time::sleep(Duration::from_millis(30)).await;
+
+        assert!(fake.whispers.lock().unwrap().is_empty());
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn nicht_aussagefaehige_probe_verhindert_whisper_und_wird_beendet() {
+        let fake = Arc::new(FakeChatApi::default());
+        let chat: Arc<dyn ChatApi> = fake.clone();
+        let probe = Arc::new(FakeProbe::new(None));
+        let monitor =
+            RaidGreetingMonitor::with_window(chat, Some(probe.clone()), Duration::from_millis(5));
+
+        monitor.raid_started(registration()).await;
+        tokio::time::sleep(Duration::from_millis(30)).await;
+
+        assert!(fake.whispers.lock().unwrap().is_empty());
+        assert_eq!(probe.unwatched.lock().unwrap().as_slice(), ["ziel"]);
     }
 
     #[test]

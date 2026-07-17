@@ -10,7 +10,7 @@ use std::collections::{HashMap, HashSet};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::MutexGuard;
 use std::sync::{Arc, Mutex};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use chrono::{DateTime, Utc};
 use sqlx::PgPool;
@@ -49,6 +49,11 @@ pub fn parse_part(line: &str) -> Option<(String, String)> {
     parse_membership(line, "PART")
 }
 
+/// `:nick!user@host PRIVMSG #channel :text` → `(nick, channel)`.
+pub fn parse_privmsg(line: &str) -> Option<(String, String)> {
+    parse_membership(line, "PRIVMSG")
+}
+
 fn parse_membership(line: &str, verb: &str) -> Option<(String, String)> {
     let rest = line.strip_prefix(':')?;
     let (nick, after) = rest.split_once('!')?;
@@ -85,6 +90,14 @@ pub fn parse_names(line: &str) -> Option<(String, Vec<String>)> {
 
 fn is_irc_word(c: char) -> bool {
     c.is_alphanumeric() || c == '_'
+}
+
+fn normalize_channel(channel: &str) -> String {
+    channel
+        .trim()
+        .to_lowercase()
+        .trim_start_matches('#')
+        .to_string()
 }
 
 // ---- DB-Layer --------------------------------------------------------------
@@ -330,6 +343,11 @@ enum Cmd {
     Stop,
 }
 
+struct RaidWatch {
+    refs: usize,
+    owns_tracking: bool,
+}
+
 /// Experimenteller IRC-Lurker-Tracker. Erst nach `run()` aktiv; `track_channel`
 /// kann jederzeit (auch vor `run`) Kanäle setzen.
 pub struct IrcLurkerTracker {
@@ -345,6 +363,10 @@ pub struct IrcLurkerTracker {
     partner_channels: Arc<Mutex<HashSet<String>>>,
     category_channels: Arc<Mutex<HashSet<String>>>,
     chatters: Arc<Mutex<HashMap<String, HashSet<String>>>>,
+    writers: Arc<Mutex<HashMap<String, HashMap<String, Instant>>>>,
+    raid_watches: Arc<Mutex<HashMap<String, RaidWatch>>>,
+    connected_since: Arc<Mutex<Option<Instant>>>,
+    ready_channels: Arc<Mutex<HashSet<String>>>,
     cmd_tx: mpsc::UnboundedSender<Cmd>,
     cmd_rx: Mutex<Option<mpsc::UnboundedReceiver<Cmd>>>,
     stop_requested: Arc<AtomicBool>,
@@ -374,6 +396,10 @@ impl IrcLurkerTracker {
             partner_channels: Arc::new(Mutex::new(HashSet::new())),
             category_channels: Arc::new(Mutex::new(HashSet::new())),
             chatters: Arc::new(Mutex::new(HashMap::new())),
+            writers: Arc::new(Mutex::new(HashMap::new())),
+            raid_watches: Arc::new(Mutex::new(HashMap::new())),
+            connected_since: Arc::new(Mutex::new(None)),
+            ready_channels: Arc::new(Mutex::new(HashSet::new())),
             cmd_tx,
             cmd_rx: Mutex::new(Some(cmd_rx)),
             stop_requested: Arc::new(AtomicBool::new(false)),
@@ -423,6 +449,8 @@ impl IrcLurkerTracker {
         lock_or_recover(&self.partner_channels, "partner_channels").remove(&channel);
         lock_or_recover(&self.category_channels, "category_channels").remove(&channel);
         lock_or_recover(&self.chatters, "chatters").remove(&channel);
+        lock_or_recover(&self.writers, "writers").remove(&channel);
+        lock_or_recover(&self.ready_channels, "ready_channels").remove(&channel);
         let _ = self.cmd_tx.send(Cmd::Part(channel));
     }
 
@@ -447,6 +475,98 @@ impl IrcLurkerTracker {
             .unwrap_or_default()
     }
 
+    pub fn watch_raid_channel(&self, channel: &str) {
+        let channel = normalize_channel(channel);
+        if channel.is_empty() {
+            return;
+        }
+        let mut watches = lock_or_recover(&self.raid_watches, "raid_watches");
+        if let Some(watch) = watches.get_mut(&channel) {
+            watch.refs += 1;
+            return;
+        }
+        let owns_tracking = !lock_or_recover(&self.channels, "channels").contains(&channel);
+        watches.insert(
+            channel.clone(),
+            RaidWatch {
+                refs: 1,
+                owns_tracking,
+            },
+        );
+        drop(watches);
+        if owns_tracking {
+            self.track_channel(&channel, TrackMode::Category);
+        }
+    }
+
+    pub fn unwatch_raid_channel(&self, channel: &str) {
+        let channel = normalize_channel(channel);
+        let owns_tracking = {
+            let mut watches = lock_or_recover(&self.raid_watches, "raid_watches");
+            let Some(watch) = watches.get_mut(&channel) else {
+                return;
+            };
+            if watch.refs > 1 {
+                watch.refs -= 1;
+                return;
+            }
+            watches
+                .remove(&channel)
+                .is_some_and(|watch| watch.owns_tracking)
+        };
+        if owns_tracking
+            && !lock_or_recover(&self.partner_channels, "partner_channels").contains(&channel)
+        {
+            self.untrack_channel(&channel);
+        }
+    }
+
+    /// Ob der Nick seit Beginn des Trackings im Kanal geschrieben hat.
+    pub fn has_written(&self, channel: &str, nick: &str) -> bool {
+        let channel = channel
+            .trim()
+            .to_lowercase()
+            .trim_start_matches('#')
+            .to_string();
+        let nick = nick.trim().to_lowercase();
+        lock_or_recover(&self.writers, "writers")
+            .get(&channel)
+            .is_some_and(|writers| writers.contains_key(&nick))
+    }
+
+    pub fn has_written_since(&self, channel: &str, nick: &str, since: Instant) -> Option<bool> {
+        let channel = normalize_channel(channel);
+        let connected = lock_or_recover(&self.connected_since, "connected_since")
+            .is_some_and(|connected_at| connected_at <= since);
+        if !connected || !lock_or_recover(&self.ready_channels, "ready_channels").contains(&channel)
+        {
+            return None;
+        }
+        let nick = nick.trim().to_lowercase();
+        Some(
+            lock_or_recover(&self.writers, "writers")
+                .get(&channel)
+                .and_then(|writers| writers.get(&nick))
+                .is_some_and(|written_at| *written_at >= since),
+        )
+    }
+
+    fn record_privmsg(&self, msg: &str) -> bool {
+        let Some((nick, channel)) = parse_privmsg(msg) else {
+            return false;
+        };
+        let channel = channel.to_lowercase();
+        if !lock_or_recover(&self.channels, "channels").contains(&channel) {
+            return false;
+        }
+        lock_or_recover(&self.ready_channels, "ready_channels").insert(channel.clone());
+        lock_or_recover(&self.writers, "writers")
+            .entry(channel)
+            .or_default()
+            .insert(nick.to_lowercase(), Instant::now());
+        true
+    }
+
     /// Fordert einen sauberen Stopp des Verbindungs-Loops an.
     ///
     /// Python `IRCLurkerTracker.stop()` cancelt Connection-/Read-/Poll-Tasks und
@@ -465,7 +585,14 @@ impl IrcLurkerTracker {
         };
         while !self.stop_requested.load(Ordering::SeqCst) {
             match self.connect().await {
-                Some((reader, writer)) => self.serve(reader, writer, &mut rx).await,
+                Some((reader, writer)) => {
+                    *lock_or_recover(&self.connected_since, "connected_since") =
+                        Some(Instant::now());
+                    lock_or_recover(&self.ready_channels, "ready_channels").clear();
+                    self.serve(reader, writer, &mut rx).await;
+                    *lock_or_recover(&self.connected_since, "connected_since") = None;
+                    lock_or_recover(&self.ready_channels, "ready_channels").clear();
+                }
                 None => {
                     tokio::select! {
                         _ = tokio::time::sleep(Duration::from_secs(CONNECT_BACKOFF_SECONDS)) => {}
@@ -594,6 +721,7 @@ impl IrcLurkerTracker {
         let now = Utc::now();
         if let Some((nick, channel)) = parse_join(msg) {
             let (channel, nick) = (channel.to_lowercase(), nick.to_lowercase());
+            lock_or_recover(&self.ready_channels, "ready_channels").insert(channel.clone());
             lock_or_recover(&self.chatters, "chatters")
                 .entry(channel.clone())
                 .or_default()
@@ -606,6 +734,7 @@ impl IrcLurkerTracker {
             }
         } else if let Some((channel, nicks)) = parse_names(msg) {
             let channel = channel.to_lowercase();
+            lock_or_recover(&self.ready_channels, "ready_channels").insert(channel.clone());
             let nicks_lower: Vec<String> = nicks.iter().map(|n| n.to_lowercase()).collect();
             // NAMES nur für Partner-Kanäle im Speicher halten (RAM-Schonung).
             if lock_or_recover(&self.partner_channels, "partner_channels").contains(&channel) {
@@ -615,6 +744,8 @@ impl IrcLurkerTracker {
                 lock_or_recover(&self.chatters, "chatters").remove(&channel);
             }
             upsert_names_batch(&self.pool, &channel, &nicks_lower, now).await;
+        } else {
+            self.record_privmsg(msg);
         }
     }
 
@@ -715,6 +846,72 @@ mod tests {
         assert_eq!(nicks, vec!["alice", "bob", "carol"]);
         // Kein 353 → None.
         assert!(parse_names(":tmi.twitch.tv 366 nick #nani :End of NAMES").is_none());
+    }
+
+    #[test]
+    fn privmsg_parse() {
+        let (nick, channel) =
+            parse_privmsg(":Raider!raider@raider.tmi.twitch.tv PRIVMSG #Ziel :Hallo!").unwrap();
+        assert_eq!(nick, "Raider");
+        assert_eq!(channel, "Ziel");
+        assert!(parse_privmsg(":viewer!x@y JOIN #ziel").is_none());
+    }
+
+    #[tokio::test]
+    async fn privmsg_markiert_writer_ohne_presence_zu_veraendern() {
+        let pool = PgPoolOptions::new().connect_lazy_with(PgConnectOptions::new());
+        let tracker = IrcLurkerTracker::new(pool, String::new(), String::new(), None);
+        tracker.track_channel("ziel", TrackMode::Category);
+
+        assert!(!tracker.has_written("ziel", "raider"));
+        assert!(tracker.record_privmsg(":Raider!raider@raider.tmi.twitch.tv PRIVMSG #Ziel :Hallo!"));
+        assert!(tracker.has_written(" #ZIEL ", "RAIDER"));
+        assert!(tracker.get_chatters("ziel").is_empty());
+    }
+
+    #[tokio::test]
+    async fn raid_probe_braucht_ununterbrochene_bestaetigte_verbindung() {
+        let pool = PgPoolOptions::new().connect_lazy_with(PgConnectOptions::new());
+        let tracker = IrcLurkerTracker::new(pool, String::new(), String::new(), None);
+        let connected_at = std::time::Instant::now();
+        *tracker.connected_since.lock().unwrap() = Some(connected_at);
+        tracker.watch_raid_channel("ziel");
+        let raid_started_at = std::time::Instant::now();
+
+        assert_eq!(
+            tracker.has_written_since("ziel", "raider", raid_started_at),
+            None
+        );
+        tracker.ready_channels.lock().unwrap().insert("ziel".into());
+
+        assert!(tracker.record_privmsg(":Raider!raider@raider.tmi.twitch.tv PRIVMSG #Ziel :Hallo!"));
+        assert_eq!(
+            tracker.has_written_since("ziel", "raider", raid_started_at),
+            Some(true)
+        );
+        assert_eq!(
+            tracker.has_written_since("ziel", "anderer", raid_started_at),
+            Some(false)
+        );
+
+        *tracker.connected_since.lock().unwrap() = Some(std::time::Instant::now());
+        assert_eq!(
+            tracker.has_written_since("ziel", "raider", raid_started_at),
+            None
+        );
+    }
+
+    #[tokio::test]
+    async fn raid_unwatch_erhaelt_partner_tracking() {
+        let pool = PgPoolOptions::new().connect_lazy_with(PgConnectOptions::new());
+        let tracker = IrcLurkerTracker::new(pool, String::new(), String::new(), None);
+        tracker.track_channel("partner", TrackMode::Partner);
+
+        tracker.watch_raid_channel("partner");
+        tracker.unwatch_raid_channel("partner");
+
+        assert!(tracker.channels.lock().unwrap().contains("partner"));
+        assert!(tracker.partner_channels.lock().unwrap().contains("partner"));
     }
 
     async fn make_pool(schema: &str) -> Option<PgPool> {
