@@ -1,8 +1,8 @@
 //! HeadlessNoop — kein Netz, kein Panic. Für Tests und headless Builds.
 
 use crate::backend::{
-    DiscordBackend, DiscordError, EditRichMessage, SendAlertEmbed, SendResult, SendResultInner,
-    SendRichMessage, SendUserDm,
+    DeleteMessage, DiscordBackend, DiscordError, EditRichMessage, SendAlertEmbed, SendResult,
+    SendResultInner, SendRichMessage, SendUserDm,
 };
 
 /// Verwirft alle Discord-Nachrichten stillschweigend. Nützlich in Tests
@@ -25,6 +25,10 @@ impl DiscordBackend for HeadlessNoop {
     }
 
     async fn edit_rich_message(&self, _payload: EditRichMessage) -> Result<(), DiscordError> {
+        Ok(())
+    }
+
+    async fn delete_message(&self, _payload: DeleteMessage) -> Result<(), DiscordError> {
         Ok(())
     }
 

@@ -28,6 +28,14 @@ pub struct EditRichMessage {
     pub view_spec: Option<serde_json::Value>,
 }
 
+/// Payload für `/internal/master/v1/discord/delete-message`.
+#[derive(Debug, Clone, Serialize)]
+pub struct DeleteMessage {
+    pub channel_id: i64,
+    pub message_id: String,
+    pub reason: String,
+}
+
 /// Payload für `/internal/master/v1/discord/send-dm` (Token-Lifecycle-DMs).
 /// Der Broker-Endpunkt nimmt ausschließlich `user_id` + Text-`content`
 /// entgegen (kein Embed) und öffnet selbst den DM-Channel.
@@ -104,6 +112,9 @@ pub trait DiscordBackend: Send + Sync {
 
     /// Bearbeitet eine bestehende Rich-Message.
     async fn edit_rich_message(&self, payload: EditRichMessage) -> Result<(), DiscordError>;
+
+    /// Löscht eine bestehende Discord-Nachricht.
+    async fn delete_message(&self, payload: DeleteMessage) -> Result<(), DiscordError>;
 
     /// Sendet dem Streamer eine Direktnachricht (Token-Lifecycle-DMs). Der
     /// Broker öffnet den DM-Channel selbst und liefert die `message_id`.

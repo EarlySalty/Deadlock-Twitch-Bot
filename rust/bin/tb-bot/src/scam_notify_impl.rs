@@ -119,7 +119,7 @@ mod tests {
     use super::*;
     use std::sync::Mutex;
     use tb_transport_discord::backend::{
-        EditRichMessage, SendAlertEmbed, SendResult, SendResultInner, SendUserDm,
+        DeleteMessage, EditRichMessage, SendAlertEmbed, SendResult, SendResultInner, SendUserDm,
     };
     use tb_transport_discord::DiscordError;
 
@@ -148,6 +148,9 @@ mod tests {
             Ok(ok_result())
         }
         async fn edit_rich_message(&self, _: EditRichMessage) -> Result<(), DiscordError> {
+            Ok(())
+        }
+        async fn delete_message(&self, _: DeleteMessage) -> Result<(), DiscordError> {
             Ok(())
         }
         async fn send_user_dm(&self, _: SendUserDm) -> Result<SendResult, DiscordError> {
