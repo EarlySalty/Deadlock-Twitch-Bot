@@ -78,6 +78,8 @@ genannt werden; daraus darf keine innere Motivation abgeleitet werden.
 
 - Der Bot öffnet den öffentlichen Stream-Audiopfad erst nach dem ID-Trigger.
 - Audio wird in kurzen Segmenten verarbeitet und nur im Arbeitsspeicher gehalten.
+- `streamlink` und `ffmpeg` reichen die Bytes über Pipes weiter; weder das
+  Quellsegment noch eine konvertierte WAV-Datei wird im Dateisystem angelegt.
 - Die Transkription erfolgt über `POST /v1/audio/transcriptions` mit
   `model=whisper-1` und deutscher Sprachvorgabe.
 - Ein Segment wird nach erfolgreicher oder fehlgeschlagener Übertragung sofort
@@ -138,6 +140,10 @@ Kernfelder:
 
 Indizes liegen auf `(review_session_id, occurred_at)`,
 `(channel_login, occurred_at DESC)` und `expires_at`.
+Eine partielle Unique-Constraint auf
+`(subject_twitch_user_id, source_message_id)` für nichtleere Nachrichten-IDs
+verhindert, dass dieselbe Twitch-Nachricht über EventSub und Scout-IRC zwei
+Sitzungen beziehungsweise zwei Review-Zyklen auslöst.
 
 `metadata` enthält nur strukturierte Review-Daten wie Fakten-IDs, Aktion,
 Latenz, Tokenzählung und Fehlercode. Secrets, Header, Rohantworten des Providers
@@ -149,6 +155,11 @@ und Roh-Audio sind verboten.
 - Für abgelaufene Datensätze werden zuerst alle unterschiedlichen
   `discord_message_id` einzeln aus Discord gelöscht; Discord `404` gilt als
   bereits gelöscht.
+- Der Twitch-Bot erhält dafür keinen Discord-Token. Er ruft den authentifizierten
+  Master-Broker-Endpunkt
+  `/internal/master/v1/discord/delete-message` auf; der Broker führt die
+  eigentliche Discord-Löschung aus und behandelt eine fehlende Nachricht
+  idempotent.
 - Danach wird der DB-Datensatz gelöscht.
 - Ist Discord vorübergehend nicht erreichbar, werden `content`, `metadata`,
   Provider-/Modellfelder und Confidence fristgerecht geleert. Nur Session-ID,
@@ -161,6 +172,9 @@ und Roh-Audio sind verboten.
 ## Discord-Review
 
 - Zielkanal: `1374364800817303632` im Guild `1289721245281292288`.
+- Versand und spätere Einzellöschung laufen ausschließlich über den bestehenden
+  `BrokerRelay` zum Master-Broker. Dadurch bleibt die Discord-Berechtigung an
+  einer Prozessgrenze und wird nicht in den Twitch-Bot kopiert.
 - Pro Modellzyklus wird eine kompakte Components-V2-Karte mit Gold-Akzent
   `0xC8A86B` erzeugt.
 - Die Karte enthält Session-ID, Kanal, Zeit, neue Ricky-Nachrichten, neue
@@ -252,4 +266,3 @@ Nach Merge und Release werden belegt:
 5. Im Test wird keine Twitch-Nachricht durch das dedizierte Konto gesendet.
 6. Ein künstlich abgelaufener Testdatensatz beweist Cleanup und Discord-Löschung,
    ohne Produktionsdaten zu verändern.
-
