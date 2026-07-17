@@ -28,6 +28,7 @@ const PASSIVE_ALLOWED_EXACT_PATHS: &[&str] = &[
     "/twitch/abbo",
     "/twitch/abbo/bezahlen",
     "/twitch/abbo/kündigen",
+    "/twitch/abbo/lurk-command-settings",
     "/twitch/abbo/lurker-tax-settings",
     "/twitch/abbo/promo-message",
     "/twitch/abbo/promo-settings",
