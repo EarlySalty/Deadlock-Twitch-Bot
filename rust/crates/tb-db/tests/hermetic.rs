@@ -476,12 +476,12 @@ async fn row_structs_map_real_columns() {
     let dsn = skip_without_db!();
     let pool = tb_db::connect(&cfg(dsn)).await.expect("connect");
 
-    // Kontrolliertes DDL, das das Prod-Schema nachbildet (Timestamps als text!).
+    // Kontrolliertes DDL, das das Prod-Schema nachbildet.
     sqlx::query(
         "CREATE TABLE IF NOT EXISTS twitch_streamers (
             twitch_login TEXT PRIMARY KEY,
             twitch_user_id TEXT,
-            created_at TEXT DEFAULT CURRENT_TIMESTAMP
+            created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
         )",
     )
     .execute(&pool)
@@ -512,7 +512,7 @@ async fn row_structs_map_real_columns() {
             .fetch_one(&pool).await.unwrap();
     assert_eq!(s.twitch_login, "dragskope");
     assert_eq!(s.twitch_user_id.as_deref(), Some("42"));
-    assert!(s.created_at.is_some()); // text-Timestamp, kein timestamptz
+    assert!(s.created_at.is_some());
 
     let p: StreamerPlanRow =
         sqlx::query_as("SELECT twitch_user_id, twitch_login, plan_name, promo_disabled, activated_at, expires_at, trial_ever_granted FROM streamer_plans WHERE twitch_user_id = '42'")

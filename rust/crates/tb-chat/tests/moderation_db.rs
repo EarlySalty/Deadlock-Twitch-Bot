@@ -505,13 +505,14 @@ async fn conversation_scam_timeout_schreibt_echte_evidence_und_message_action() 
         .await;
 
     assert!(enforced);
-    let (channel, chatter, content, action, reason): (
+    type ModerationLogRow = (
         Option<String>,
         Option<String>,
         Option<String>,
         Option<String>,
         Option<String>,
-    ) = sqlx::query_as(
+    );
+    let (channel, chatter, content, action, reason): ModerationLogRow = sqlx::query_as(
         "SELECT channel_login, chatter_login, content, action, reason \
          FROM tb_chat_autoban_log WHERE chatter_id = '987654321'",
     )

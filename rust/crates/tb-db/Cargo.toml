@@ -8,6 +8,7 @@ tb-error = { workspace = true }
 tb-config = { workspace = true }
 tb-domain = { workspace = true }
 sqlx = { workspace = true }
+chrono = { workspace = true }
 thiserror = { workspace = true }
 tracing = { workspace = true }
 # Retry-Backoff braucht tokio::time::sleep im Prod-Pfad.
