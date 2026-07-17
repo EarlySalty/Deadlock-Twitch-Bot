@@ -160,6 +160,7 @@ impl FireworksReviewClient {
         }
         let client = reqwest::Client::builder()
             .timeout(timeout)
+            .redirect(reqwest::redirect::Policy::none())
             .build()
             .map_err(|_| ReviewError::Unavailable)?;
         Ok(Self {
@@ -1020,6 +1021,38 @@ mod tests {
         assert!(!rendered.contains(prompt_sentinel));
         assert!(!rendered.contains("dummy-test-key"));
         assert!(!rendered.to_lowercase().contains("authorization"));
+    }
+
+    #[tokio::test]
+    async fn fireworks_folgt_keinen_redirects() {
+        let destination = MockServer::start().await;
+        let source = MockServer::start().await;
+        let redirected_url = format!("{}/stolen", destination.uri());
+        Mock::given(method("POST"))
+            .and(path("/chat/completions"))
+            .respond_with(
+                ResponseTemplate::new(307)
+                    .insert_header("location", redirected_url.as_str()),
+            )
+            .expect(1)
+            .mount(&source)
+            .await;
+
+        let error = client_for(&source, Duration::from_secs(1))
+            .decide(&input_with_sentinel("REDIRECTED_REVIEW_DATA"))
+            .await
+            .expect_err("Redirect muss als HTTP-Fehler enden");
+
+        assert_eq!(error, ReviewError::HttpStatus);
+        assert_eq!(
+            destination
+                .received_requests()
+                .await
+                .unwrap_or_default()
+                .len(),
+            0,
+            "Reviewdaten dürfen keinen Redirect-Zielserver erreichen"
+        );
     }
 
     #[tokio::test]
